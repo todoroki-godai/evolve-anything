@@ -1,0 +1,10 @@
+schema: spec-driven
+created: 2026-03-01
+archived: 2026-03-01
+origin: atlas-breeaders
+note: |
+  rl-anything plugin の元設計仕様。atlas-breeaders/openspec/changes/rl-pipeline-all/ から移行。
+  Layer 1（rl-session-log-analyzer）は claude-reflect 固有のため atlas-breeaders に残留。
+  Layer 2-3 は rl-anything plugin として実装済み。
+  後続の active changes（evaluate-pipeline-upgrade, generate-fitness-skill, skill-ux-and-readme）が
+  この設計を拡張・改善している。
