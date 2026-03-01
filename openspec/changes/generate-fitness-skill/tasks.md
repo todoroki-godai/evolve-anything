@@ -7,8 +7,11 @@
 
 - [ ] 2.1 `scripts/analyze-project.py` を作成: CLAUDE.md・rules・skills の自動検出と読み込み
 - [ ] 2.2 ドメイン推定ロジックを実装: キーワード頻度分析で game/documentation/bot/general を判定
-- [ ] 2.3 品質基準（criteria）抽出ロジックを実装: rules/skills の内容から評価軸・weight・keywords・anti_patterns をJSON出力
-- [ ] 2.4 analyze-project.py のテストを作成（各ドメインのサンプル CLAUDE.md でテスト）
+- [ ] 2.3 keywords 抽出: CLAUDE.md・rules・skills からキーワード頻度分析を実装
+- [ ] 2.4 criteria 構築: ドメインに応じた品質軸・重み・アンチパターン定義を実装
+- [ ] 2.5 JSON 出力統合: keywords + criteria をJSON形式で統合出力するロジックを実装
+- [ ] 2.6 pitfalls.md 検出: `.claude/skills/*/references/pitfalls.md` の存在確認と内容パース → anti_patterns へのマージを実装
+- [ ] 2.7 analyze-project.py のテストを作成（各ドメインのサンプル CLAUDE.md でテスト、pitfalls.md あり/なしの両ケース含む）
 
 ## 3. fitness 関数生成（fitness-generator）
 
