@@ -5,5 +5,8 @@
   "author": {
     "name": "todoroki-godai"
   },
-  "keywords": ["optimization", "skill-evolution", "rl-loop"]
+  "repository": "https://github.com/todoroki-godai/evolve-anything",
+  "homepage": "https://github.com/todoroki-godai/evolve-anything",
+  "license": "MIT",
+  "keywords": ["optimization", "genetic-algorithm", "skill-evolution", "rl-loop", "claude-code"]
 }
