@@ -37,28 +37,16 @@ python3 <PLUGIN_DIR>/skills/genetic-prompt-optimizer/scripts/optimize.py \
 
 ## 適応度関数
 
-### 組み込み関数
+組み込み: `default`（LLM汎用評価）、`skill_quality`（ルールベース構造品質）。
+プロジェクト固有: `scripts/rl/fitness/{name}.py` に配置 → `--fitness {name}` で使用。
+インターフェース: stdin でスキル内容を受け取り、0.0〜1.0 を stdout に出力。
 
-| 関数 | 説明 |
-|------|------|
-| `default` | LLM による汎用評価 |
-| `skill_quality` | ルールベースの汎用品質評価（Plugin内蔵） |
-
-### プロジェクト固有の適応度関数
-
-プロジェクトの `scripts/rl/fitness/{name}.py` に配置すると、`--fitness {name}` で使用可能。
-
-**インターフェース**: stdin からスキル内容を受け取り、0.0〜1.0 のスコアを stdout に出力。
+詳細は [README.md](README.md#適応度関数) を参照。
 
 ## rl-scorer のドメイン自動判定
 
-rl-scorer エージェントはプロジェクトの CLAUDE.md を読んでドメインを推定し、
-評価軸を自動切替します:
-
-- **ゲーム** → 没入感・面白さ・バランス・具体性
-- **API/バックエンド** → 正確性・堅牢性・保守性・セキュリティ
-- **Bot/対話** → パーソナリティ適合・有用性・トーン一貫性
-- **ドキュメント** → 正確性・可読性・実行可能性・完全性
+CLAUDE.md からドメイン（ゲーム/API/Bot/ドキュメント）を推定し評価軸を自動切替。
+詳細は [README.md](README.md#rl-scorer-のドメイン自動判定) を参照。
 
 ## テスト
 
