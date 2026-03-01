@@ -4,7 +4,7 @@
 
 ## What Changes
 
-- **SKILL.md のスキル名変更**: `genetic-prompt-optimizer` → `optimize`、SKILL.md の instructions を「Claude がスクリプトを自動実行する」形式に書き換え（実施済み）
+- **SKILL.md のスキル名変更**: `genetic-prompt-optimizer` → `optimize`、SKILL.md の instructions を「Claude がスクリプトを自動実行する」形式に書き換え（予定）
 - **README.md の全面更新**: 使い方をスラッシュコマンド中心に書き直し、導入ストーリー（Before/After の物語）を追加
 - **CLAUDE.md の同期更新**: README と齟齬がないよう CLAUDE.md のクイックスタートもスラッシュコマンド形式に更新
 
@@ -21,7 +21,7 @@
 
 ## Impact
 
-- `skills/genetic-prompt-optimizer/SKILL.md`: スキル名・instructions 変更（実施済み）
-- `skills/rl-loop-orchestrator/SKILL.md`: instructions 変更（実施済み）
+- `skills/genetic-prompt-optimizer/SKILL.md`: スキル名・instructions 変更（予定）
+- `skills/rl-loop-orchestrator/SKILL.md`: instructions 変更（予定）
 - `README.md`: 全面更新
 - `CLAUDE.md`: クイックスタート部分の更新
