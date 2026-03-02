@@ -27,6 +27,51 @@ ARCHIVE_DIR = DATA_DIR / "archive"
 ZERO_INVOCATION_DAYS = 30
 
 
+def _expand_glob_pattern(pattern: str) -> List[str]:
+    """ブレース展開とカンマ区切りを処理して個別パターンのリストを返す。
+
+    例: "src/**/*.{ts,tsx}" → ["src/**/*.ts", "src/**/*.tsx"]
+    例: "a/*.ts, b/*.ts" → ["a/*.ts", "b/*.ts"]
+    """
+    import re
+
+    # 1. まずブレース展開（カンマ分割より先に処理）
+    def expand_braces(s: str) -> List[str]:
+        m = re.search(r"\{([^}]+)\}", s)
+        if not m:
+            return [s]
+        alternatives = m.group(1).split(",")
+        results = []
+        for alt in alternatives:
+            results.append(s[: m.start()] + alt.strip() + s[m.end() :])
+        return results
+
+    # 2. ブレースを含まないカンマでのみ分割
+    # ブレース内のカンマは分割しない
+    parts = []
+    depth = 0
+    current = []
+    for ch in pattern:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    parts.append("".join(current).strip())
+
+    # 3. 各パートでブレース展開
+    expanded = []
+    for part in parts:
+        if not part:
+            continue
+        expanded.extend(expand_braces(part))
+    return expanded
+
+
 def detect_dead_globs(project_dir: Path) -> List[Dict[str, Any]]:
     """rules の paths 対象がマッチするファイルが存在しないものを検出。"""
     dead = []
@@ -35,17 +80,21 @@ def detect_dead_globs(project_dir: Path) -> List[Dict[str, Any]]:
         return dead
 
     for rule_file in rules_dir.glob("*.md"):
-        # rule ファイル名がパスパターンを示唆しているか簡易チェック
-        # (実際の paths マッチは Claude Code の glob 指定に依存)
         content = rule_file.read_text(encoding="utf-8")
-        # paths: の行を検出
         for line in content.splitlines():
             if line.strip().startswith("paths:"):
-                pattern = line.split("paths:", 1)[1].strip()
-                if pattern and not list(project_dir.glob(pattern)):
+                raw_pattern = line.split("paths:", 1)[1].strip()
+                if not raw_pattern:
+                    continue
+                patterns = _expand_glob_pattern(raw_pattern)
+                # いずれかのパターンがマッチすればOK
+                any_match = any(
+                    list(project_dir.glob(p))[:1] for p in patterns
+                )
+                if not any_match:
                     dead.append({
                         "file": str(rule_file),
-                        "pattern": pattern,
+                        "pattern": raw_pattern,
                         "reason": "dead_glob",
                     })
     return dead
