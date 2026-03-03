@@ -10,6 +10,7 @@
       "name": "rl-anything",
       "source": "./",
       "description": "Automatic skill/rule optimization using genetic algorithms with fitness evaluation and human approval workflow",
+      "version": "0.3.3",
       "author": {
         "name": "todoroki-godai"
       },
