@@ -40,9 +40,10 @@ python3 <PLUGIN_DIR>/skills/evolve/scripts/evolve.py --project-dir "$(pwd)" --dr
 evolve.py の出力に含まれる `fitness` フェーズを確認する。
 
 - `has_fitness: false` の場合:
-  - 「プロジェクト固有の評価関数が未生成です」と表示（MUST）
-  - AskUserQuestion で `/rl-anything:generate-fitness --ask` を実行するか選択させる
-  - ユーザーが「生成する」を選んだ場合: `/rl-anything:generate-fitness --ask` を実行してから Step 3 に進む
+  - AskUserQuestion ツールで以下を質問する（MUST — テキスト表示だけで済ませてはならない）:
+    - question: 「プロジェクト固有の評価関数が未生成です。生成しますか？」
+    - options: 「生成する（generate-fitness --ask）」「スキップ（組み込み default で続行）」
+  - ユーザーが「生成する」を選んだ場合: `/rl-anything:generate-fitness --ask` を実行してから Step 3 に進む（MUST）
   - ユーザーが「スキップ」を選んだ場合: 組み込み評価関数（default）で続行
 - `has_fitness: true` の場合: 利用可能な fitness 関数名を表示して次へ
 
