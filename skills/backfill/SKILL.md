@@ -33,28 +33,49 @@ python3 <PLUGIN_DIR>/skills/backfill/scripts/backfill.py --project-dir "$(pwd)"
 - `workflows.jsonl` — ワークフロー単位のシーケンスレコード（Skill → Agent の構造）
 - `sessions.jsonl` — セッション単位のメタデータ（全ツール名+順序、ツール種別カウント、セッション長、エラー数、ユーザー意図分類）
 
-### Step 2: Intent 再分類（LLM Hybrid）
+### Step 2: Intent 再分類（Claude Code ネイティブ LLM）
 
-キーワード分類で "other" に残ったプロンプトを Claude 自身が再分類する。
+キーワード分類で "other" に残ったプロンプトを Claude Code セッション内の LLM で再分類する。
 
-1. "other" プロンプトを抽出する:
+#### Step 2a: "other" プロンプトを抽出
 
 ```bash
-python3 <PLUGIN_DIR>/skills/backfill/scripts/reclassify.py extract --project "$(basename $(pwd))"
+python3 <PLUGIN_DIR>/skills/backfill/scripts/reclassify.py extract --project "$(basename $(pwd))" --include-reclassified
 ```
 
-2. 出力された JSON を確認し、各プロンプトを以下のカテゴリに分類する:
-   `spec-review`, `code-review`, `git-ops`, `deploy`, `debug`, `test`, `code-exploration`, `research`, `implementation`, `config`, `conversation`, `other`
+出力 JSON の `total_other_prompts` を確認する。0 件の場合は Step 3 に進む。
 
-3. 分類結果を JSON ファイルに書き出す（形式: `{"reclassified": [{"session_id": "...", "intent_index": N, "category": "..."}]}`）
+#### Step 2b: 各プロンプトを分類
 
-4. 結果を書き戻す:
+抽出された各プロンプトを以下のカテゴリに分類する:
+
+- `spec-review`: 仕様レビュー、要件確認
+- `code-review`: コードレビュー、変更確認
+- `git-ops`: git 操作（commit, push, merge 等）
+- `deploy`: デプロイ、リリース
+- `debug`: デバッグ、バグ修正、エラー調査
+- `test`: テスト実行、検証
+- `code-exploration`: コード探索、ファイル確認
+- `research`: 調査、ベストプラクティス
+- `implementation`: 実装、機能追加
+- `config`: 設定、構成
+- `conversation`: 会話的応答（挨拶、確認、指示）
+- `skill-invocation`: スキル/コマンド呼び出し
+- `other`: 上記に該当しない場合のみ
+
+分類結果を JSON ファイルに書き出す（MUST）:
+
+```json
+{"reclassified": [{"session_id": "...", "intent_index": N, "category": "..."}]}
+```
+
+#### Step 2c: 結果を書き戻す
 
 ```bash
 python3 <PLUGIN_DIR>/skills/backfill/scripts/reclassify.py apply --input <reclassified.json>
 ```
 
-結果サマリ（updated_sessions, updated_intents）を表示する（MUST）。
+結果サマリ（updated_sessions, updated_intents, invalid_categories）を表示する（MUST）。
 
 ### Step 3: 分析レポート出力
 

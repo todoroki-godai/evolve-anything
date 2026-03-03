@@ -8,13 +8,14 @@ observe hooks と同形式で usage.jsonl に追記する。
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 # プラグインルートを sys.path に追加して hooks/common.py を import
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -23,7 +24,46 @@ sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
 import common
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
-MAX_PROMPT_LENGTH = 200
+MAX_PROMPT_LENGTH = 500
+
+# <command-name> タグからコマンド名を抽出する正規表現
+_COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>")
+
+
+def _classify_system_message(
+    content: str,
+) -> Union[None, Tuple[str, str]]:
+    """human メッセージをシステムメッセージかどうか分類する。
+
+    Returns:
+        None — 除外（user_prompts / user_intents に記録しない）
+        ("skill-invocation", name) — コマンド名を抽出して記録
+        ("passthrough", content) — 通常のユーザープロンプトとして処理
+    """
+    stripped = content.strip()
+
+    # 中断シグナル（prefix マッチ）
+    if stripped.startswith("[Request interrupted"):
+        return None
+
+    # ローカルコマンド出力
+    if "<local-command-" in stripped:
+        return None
+
+    # タスク通知
+    if "<task-notification>" in stripped:
+        return None
+
+    # コマンドタグ → スキル名抽出
+    if "<command-name>" in stripped:
+        m = _COMMAND_NAME_RE.search(stripped)
+        if m and m.group(1).strip():
+            return ("skill-invocation", m.group(1).strip())
+        # パース失敗 → 除外
+        return None
+
+    # 通常のユーザープロンプト
+    return ("passthrough", content)
 
 
 @dataclass
@@ -184,6 +224,8 @@ def parse_transcript(filepath: Path) -> ParseResult:
     error_count = 0
     human_message_count = 0
     user_intents: List[str] = []
+    user_prompts: List[str] = []
+    filtered_messages = 0
     session_id = ""
 
     for line in filepath.read_text(encoding="utf-8").splitlines():
@@ -211,17 +253,32 @@ def parse_transcript(filepath: Path) -> ParseResult:
             message = record.get("message", {})
             if isinstance(message, dict):
                 content = message.get("content", "")
-                # content が文字列の場合
+                # content からテキストを取り出す
+                raw_text = ""
                 if isinstance(content, str) and content.strip():
-                    user_intents.append(common.classify_prompt(content[:MAX_PROMPT_LENGTH]))
-                # content がリストの場合（text ブロック）
+                    raw_text = content
                 elif isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "text":
                             text = block.get("text", "")
                             if text.strip():
-                                user_intents.append(common.classify_prompt(text[:MAX_PROMPT_LENGTH]))
+                                raw_text = text
                                 break  # 最初の text ブロックのみ
+
+                if raw_text:
+                    classification = _classify_system_message(raw_text)
+                    if classification is None:
+                        # システムメッセージ → 除外
+                        filtered_messages += 1
+                    elif classification[0] == "skill-invocation":
+                        # コマンドタグ → スキル名を記録
+                        user_intents.append("skill-invocation")
+                        user_prompts.append(classification[1])
+                    else:
+                        # 通常プロンプト → 従来どおり分類
+                        truncated = classification[1][:MAX_PROMPT_LENGTH]
+                        user_intents.append(common.classify_prompt(truncated))
+                        user_prompts.append(truncated)
             continue
 
         # tool_result の is_error チェック
@@ -341,6 +398,8 @@ def parse_transcript(filepath: Path) -> ParseResult:
             "error_count": error_count,
             "human_message_count": human_message_count,
             "user_intents": user_intents,
+            "user_prompts": user_prompts,
+            "filtered_messages": filtered_messages,
             "source": "backfill",
         }
 
@@ -374,6 +433,7 @@ def backfill(project_dir: Optional[str] = None, force: bool = False) -> Dict[str
         "sessions": 0,
         "errors": 0,
         "skipped_sessions": 0,
+        "filtered_messages": 0,
     }
 
     # トランスクリプト JSONL ファイルを収集
@@ -410,6 +470,7 @@ def backfill(project_dir: Optional[str] = None, force: bool = False) -> Dict[str
         if parse_result.session_meta is not None:
             parse_result.session_meta["project_name"] = proj_name
             summary["sessions"] += 1
+            summary["filtered_messages"] += parse_result.session_meta.get("filtered_messages", 0)
             common.append_jsonl(common.DATA_DIR / "sessions.jsonl", parse_result.session_meta)
 
     return summary

@@ -114,8 +114,8 @@ class TestParseTranscript:
         assert result.usage_records[0]["source"] == "backfill"
 
     def test_agent_prompt_truncated(self, transcript_dir):
-        """Agent の prompt が 200 文字に切り詰められる。"""
-        long_prompt = "あ" * 300
+        """Agent の prompt が 500 文字に切り詰められる。"""
+        long_prompt = "あ" * 600
         tf = transcript_dir / "sess-003.jsonl"
         lines = [
             make_assistant_record("sess-003", [make_agent_tool_use("Explore", long_prompt)])
@@ -123,7 +123,7 @@ class TestParseTranscript:
         tf.write_text("\n".join(lines), encoding="utf-8")
 
         result = backfill.parse_transcript(tf)
-        assert len(result.usage_records[0]["prompt"]) == 200
+        assert len(result.usage_records[0]["prompt"]) == 500
 
     def test_agent_missing_subagent_type(self, transcript_dir):
         """subagent_type が未指定の場合 'unknown' になる。"""
@@ -873,6 +873,56 @@ class TestSessionMeta:
         assert result.session_meta["human_message_count"] == 1
         assert result.session_meta["user_intents"] == ["implementation"]
 
+    def test_user_prompts_collected(self, transcript_dir):
+        """user_prompts がプロンプト原文を収集する。"""
+        tf = transcript_dir / "sess-meta-009.jsonl"
+        lines = [
+            make_human_record("sess-meta-009", "explore the codebase structure", "2025-06-15T10:00:00Z"),
+            make_assistant_record(
+                "sess-meta-009",
+                [make_other_tool_use("Read")],
+                "2025-06-15T10:00:30Z",
+            ),
+            make_human_record("sess-meta-009", "implement the feature", "2025-06-15T10:01:00Z"),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert result.session_meta["user_prompts"] == [
+            "explore the codebase structure",
+            "implement the feature",
+        ]
+        assert len(result.session_meta["user_prompts"]) == len(result.session_meta["user_intents"])
+
+    def test_user_prompts_truncated(self, transcript_dir):
+        """user_prompts が MAX_PROMPT_LENGTH で切り詰められる。"""
+        long_text = "x" * 600
+        tf = transcript_dir / "sess-meta-010.jsonl"
+        record = {
+            "type": "human",
+            "message": {"content": long_text},
+            "timestamp": "2025-06-15T10:00:00Z",
+            "sessionId": "sess-meta-010",
+        }
+        tf.write_text(json.dumps(record), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert len(result.session_meta["user_prompts"][0]) == 500
+
+    def test_user_prompts_from_content_list(self, transcript_dir):
+        """content がリスト形式の場合も user_prompts に記録される。"""
+        tf = transcript_dir / "sess-meta-011.jsonl"
+        lines = [
+            make_human_record("sess-meta-011", "debug the login error", "2025-06-15T10:00:00Z"),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert result.session_meta["user_prompts"] == ["debug the login error"]
+
 
 class TestSessionsIntegration:
     """sessions.jsonl 統合テスト。"""
@@ -979,3 +1029,199 @@ class TestResolveProjectDir:
         with mock.patch.object(backfill, "CLAUDE_PROJECTS_DIR", projects_dir):
             with pytest.raises(FileNotFoundError):
                 backfill.resolve_project_dir("/nonexistent/path")
+
+
+class TestClassifySystemMessage:
+    """_classify_system_message() のユニットテスト。"""
+
+    def test_interrupt_signal_excluded(self):
+        """中断シグナルは除外される。"""
+        assert backfill._classify_system_message("[Request interrupted by user]") is None
+
+    def test_interrupt_signal_variant_excluded(self):
+        """中断シグナルのバリエーションも除外される（prefix マッチ）。"""
+        assert backfill._classify_system_message("[Request interrupted by user for tool use]") is None
+
+    def test_local_command_stdout_excluded(self):
+        """local-command-stdout は除外される。"""
+        assert backfill._classify_system_message("<local-command-stdout>some output</local-command-stdout>") is None
+
+    def test_local_command_caveat_excluded(self):
+        """local-command-caveat は除外される。"""
+        assert backfill._classify_system_message("<local-command-caveat>Caveat: ...</local-command-caveat>") is None
+
+    def test_task_notification_excluded(self):
+        """task-notification は除外される。"""
+        assert backfill._classify_system_message("<task-notification>Agent completed</task-notification>") is None
+
+    def test_command_name_slash_command(self):
+        """スラッシュコマンドが抽出される。"""
+        result = backfill._classify_system_message("<command-name>/commit</command-name> some args")
+        assert result == ("skill-invocation", "/commit")
+
+    def test_command_name_plugin_command(self):
+        """プラグインコマンドが抽出される。"""
+        result = backfill._classify_system_message("<command-name>/rl-anything:backfill</command-name>")
+        assert result == ("skill-invocation", "/rl-anything:backfill")
+
+    def test_command_name_parse_failure(self):
+        """command-name タグのパース失敗は除外される。"""
+        assert backfill._classify_system_message("<command-name></command-name>") is None
+
+    def test_normal_prompt_passthrough(self):
+        """通常プロンプトは passthrough される。"""
+        result = backfill._classify_system_message("Fix the login bug")
+        assert result == ("passthrough", "Fix the login bug")
+
+    def test_bracket_non_interrupt_passthrough(self):
+        """角括弧で始まるが中断シグナルではないプロンプトは passthrough される。"""
+        result = backfill._classify_system_message("[重要] この関数を修正して")
+        assert result == ("passthrough", "[重要] この関数を修正して")
+
+
+class TestFilterIntegration:
+    """parse_transcript() のフィルタ統合テスト。"""
+
+    def test_interrupt_signal_filtered(self, transcript_dir):
+        """中断シグナルがフィルタされ user_prompts/user_intents に含まれない。"""
+        tf = transcript_dir / "sess-filter-001.jsonl"
+        record = {
+            "type": "human",
+            "message": {"content": "[Request interrupted by user]"},
+            "timestamp": "2025-06-15T10:00:00Z",
+            "sessionId": "sess-filter-001",
+        }
+        tf.write_text(json.dumps(record), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert result.session_meta["user_prompts"] == []
+        assert result.session_meta["user_intents"] == []
+        assert result.session_meta["filtered_messages"] == 1
+
+    def test_command_name_extracted(self, transcript_dir):
+        """command-name タグからスキル名が抽出される。"""
+        tf = transcript_dir / "sess-filter-002.jsonl"
+        record = {
+            "type": "human",
+            "message": {"content": "<command-name>/commit</command-name> fix typo"},
+            "timestamp": "2025-06-15T10:00:00Z",
+            "sessionId": "sess-filter-002",
+        }
+        tf.write_text(json.dumps(record), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert result.session_meta["user_intents"] == ["skill-invocation"]
+        assert result.session_meta["user_prompts"] == ["/commit"]
+        assert result.session_meta["filtered_messages"] == 0
+
+    def test_filtered_messages_count(self, transcript_dir):
+        """複数のフィルタ対象がカウントされる。"""
+        tf = transcript_dir / "sess-filter-003.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "[Request interrupted by user]"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-filter-003",
+            }),
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<local-command-stdout>output</local-command-stdout>"},
+                "timestamp": "2025-06-15T10:00:01Z",
+                "sessionId": "sess-filter-003",
+            }),
+            json.dumps({
+                "type": "human",
+                "message": {"content": "Fix the bug"},
+                "timestamp": "2025-06-15T10:00:02Z",
+                "sessionId": "sess-filter-003",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert result.session_meta["filtered_messages"] == 2
+        assert result.session_meta["user_prompts"] == ["Fix the bug"]
+        assert result.session_meta["user_intents"] == ["debug"]
+
+    def test_content_list_format_filtered(self, transcript_dir):
+        """content がリスト形式の場合もフィルタが適用される。"""
+        tf = transcript_dir / "sess-filter-004.jsonl"
+        record = {
+            "type": "human",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "[Request interrupted by user]"}
+                ]
+            },
+            "timestamp": "2025-06-15T10:00:00Z",
+            "sessionId": "sess-filter-004",
+        }
+        tf.write_text(json.dumps(record), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert result.session_meta["user_prompts"] == []
+        assert result.session_meta["user_intents"] == []
+        assert result.session_meta["filtered_messages"] == 1
+
+    def test_content_list_command_name_extracted(self, transcript_dir):
+        """content リスト形式でもコマンドタグが抽出される。"""
+        tf = transcript_dir / "sess-filter-005.jsonl"
+        record = {
+            "type": "human",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "<command-name>/rl-anything:backfill</command-name> run it"}
+                ]
+            },
+            "timestamp": "2025-06-15T10:00:00Z",
+            "sessionId": "sess-filter-005",
+        }
+        tf.write_text(json.dumps(record), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert result.session_meta["user_intents"] == ["skill-invocation"]
+        assert result.session_meta["user_prompts"] == ["/rl-anything:backfill"]
+
+    def test_mixed_patterns_in_session(self, transcript_dir):
+        """同一セッション内に command-name + 通常テキスト + 中断シグナルが混在。"""
+        tf = transcript_dir / "sess-filter-006.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/commit</command-name> initial"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-filter-006",
+            }),
+            json.dumps({
+                "type": "human",
+                "message": {"content": "implement the feature"},
+                "timestamp": "2025-06-15T10:01:00Z",
+                "sessionId": "sess-filter-006",
+            }),
+            json.dumps({
+                "type": "human",
+                "message": {"content": "[Request interrupted by user]"},
+                "timestamp": "2025-06-15T10:02:00Z",
+                "sessionId": "sess-filter-006",
+            }),
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<task-notification>done</task-notification>"},
+                "timestamp": "2025-06-15T10:03:00Z",
+                "sessionId": "sess-filter-006",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta is not None
+        assert result.session_meta["user_intents"] == ["skill-invocation", "implementation"]
+        assert result.session_meta["user_prompts"] == ["/commit", "implement the feature"]
+        assert result.session_meta["filtered_messages"] == 2
+        assert result.session_meta["human_message_count"] == 4

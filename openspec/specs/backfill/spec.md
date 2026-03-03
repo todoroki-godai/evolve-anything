@@ -15,11 +15,11 @@ TBD - created by archiving change backfill-session-history. Update Purpose after
 - **THEN** usage.jsonl には何も追記されない
 
 ### Requirement: セッショントランスクリプトから Agent ツール呼び出しを抽出しなければならない（MUST）
-`tool_use` ブロック（`name: "Agent"`）から `subagent_type`, `prompt`（200文字上限）, `session_id`, `timestamp` を usage.jsonl に追記しなければならない（MUST）。`skill_name` は `Agent:{subagent_type}` 形式とする。timestamp はトランスクリプトレコードのトップレベル `timestamp` フィールドから取得する（MUST）。
+`tool_use` ブロック（`name: "Agent"`）から `subagent_type`, `prompt`（500文字上限）, `session_id`, `timestamp` を usage.jsonl に追記しなければならない（MUST）。`skill_name` は `Agent:{subagent_type}` 形式とする。timestamp はトランスクリプトレコードのトップレベル `timestamp` フィールドから取得する（MUST）。
 
 #### Scenario: Agent ツール呼び出しの抽出
 - **WHEN** トランスクリプトに `name: "Agent"`, `input.subagent_type: "Explore"` の tool_use ブロックが存在し、レコードの `timestamp` が `"2025-06-15T11:00:00Z"` である
-- **THEN** usage.jsonl に `skill_name: "Agent:Explore"`, `subagent_type: "Explore"`, `prompt`（200文字以内）, `timestamp: "2025-06-15T11:00:00Z"`, `source: "backfill"` が追記される
+- **THEN** usage.jsonl に `skill_name: "Agent:Explore"`, `subagent_type: "Explore"`, `prompt`（500文字以内）, `timestamp: "2025-06-15T11:00:00Z"`, `source: "backfill"` が追記される
 
 #### Scenario: subagent_type が未指定の Agent 呼び出し
 - **WHEN** `input.subagent_type` が存在しないまたは null である
@@ -81,9 +81,9 @@ TBD - created by archiving change backfill-session-history. Update Purpose after
 - **THEN** 指定パスに対応するトランスクリプトが処理される
 
 ### Requirement: バックフィル結果のサマリを出力しなければならない（MUST）
-処理完了後、抽出した Skill 呼び出し数・Agent 呼び出し数・エラー数・スキップしたセッション数を JSON で出力しなければならない（MUST）。
+処理完了後、抽出した Skill 呼び出し数・Agent 呼び出し数・エラー数・スキップしたセッション数・フィルタしたメッセージ数を JSON で出力しなければならない（MUST）。
 
 #### Scenario: サマリ出力
 - **WHEN** バックフィルが完了する
-- **THEN** `{"sessions_processed": N, "skill_calls": N, "agent_calls": N, "errors": N, "skipped_sessions": N}` 形式の JSON が stdout に出力される
+- **THEN** `{"sessions_processed": N, "skill_calls": N, "agent_calls": N, "errors": N, "skipped_sessions": N, "filtered_messages": N}` 形式の JSON が stdout に出力される
 

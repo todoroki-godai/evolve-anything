@@ -9,6 +9,9 @@ Usage:
     # Step 1: "other" プロンプトを抽出
     python3 reclassify.py extract --project <project_name>
 
+    # Step 1b: 既分類セッションの残 "other" も抽出
+    python3 reclassify.py extract --project <project_name> --include-reclassified
+
     # Step 2: 再分類結果を書き戻し
     python3 reclassify.py apply --input <reclassified.json>
 """
@@ -25,7 +28,7 @@ sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
 import common
 
 # 有効なカテゴリ一覧
-VALID_CATEGORIES = list(common.PROMPT_CATEGORIES.keys()) + ["other"]
+VALID_CATEGORIES = list(common.PROMPT_CATEGORIES.keys()) + ["other", "skill-invocation"]
 
 
 def get_project_session_ids(project_name: str) -> Set[str]:
@@ -48,8 +51,15 @@ def get_project_session_ids(project_name: str) -> Set[str]:
 
 def extract_other_intents(
     project_name: Optional[str] = None,
+    include_reclassified: bool = False,
 ) -> List[Dict[str, Any]]:
     """sessions.jsonl から "other" intent を持つプロンプトを抽出する。
+
+    Args:
+        project_name: フィルタ対象のプロジェクト名
+        include_reclassified: True の場合、reclassified_intents が存在するセッションでも
+            残 "other" を抽出する。reclassified_intents の値を参照し、
+            存在しない場合は user_intents を参照する。
 
     Returns:
         各要素: {"session_id": str, "intent_index": int, "prompt": str}
@@ -73,14 +83,21 @@ def extract_other_intents(
         if session_ids is not None and sid not in session_ids:
             continue
 
-        # 既に reclassified_intents がある場合はスキップ
-        if record.get("reclassified_intents"):
+        has_reclassified = bool(record.get("reclassified_intents"))
+
+        if has_reclassified and not include_reclassified:
+            # 既に reclassified_intents がある場合はスキップ（既存動作維持）
             continue
 
-        user_intents = record.get("user_intents", [])
+        # 参照する intents を決定
+        if has_reclassified:
+            intents_to_check = record.get("reclassified_intents", [])
+        else:
+            intents_to_check = record.get("user_intents", [])
+
         user_prompts = record.get("user_prompts", [])
 
-        for i, intent in enumerate(user_intents):
+        for i, intent in enumerate(intents_to_check):
             if intent == "other":
                 prompt = user_prompts[i] if i < len(user_prompts) else ""
                 if prompt:
@@ -166,6 +183,11 @@ def main() -> None:
         default=None,
         help="フィルタ対象のプロジェクト名",
     )
+    extract_parser.add_argument(
+        "--include-reclassified",
+        action="store_true",
+        help="reclassified_intents が存在するセッションでも残 other を抽出",
+    )
 
     # apply サブコマンド
     apply_parser = subparsers.add_parser("apply", help="再分類結果を書き戻し")
@@ -178,7 +200,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "extract":
-        others = extract_other_intents(project_name=args.project)
+        others = extract_other_intents(
+            project_name=args.project,
+            include_reclassified=args.include_reclassified,
+        )
         output = {
             "total_other_prompts": len(others),
             "valid_categories": VALID_CATEGORIES,
