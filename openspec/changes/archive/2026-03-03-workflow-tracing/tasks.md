@@ -76,22 +76,22 @@
 
 ### 11a. ワークフロー構造の一貫性分析
 
-- [ ] 11.1 同一 `skill_name` の workflows.jsonl レコードを比較し、ステップ構成の一貫性を評価する（例: `opsx:refine` は毎回「Explore → Explore → general-purpose」なのか、ばらつくのか）
-- [ ] 11.2 一貫性が高いスキル / 低いスキルのリストを作成（→ Phase C: 構造化表現の要否判断に使用）
+- [x] 11.1 同一 `skill_name` の workflows.jsonl レコードを比較し、ステップ構成の一貫性を評価する（例: `opsx:refine` は毎回「Explore → Explore → general-purpose」なのか、ばらつくのか）
+- [x] 11.2 一貫性が高いスキル / 低いスキルのリストを作成（→ Phase C: 構造化表現の要否判断に使用）
 
 ### 11b. ステップバリエーション分析
 
-- [ ] 11.3 同一スキルの workflow シーケンスで、ステップの順序・種類・回数にどんなバリエーションがあるか集計（→ Phase C: mutation 操作セットの設計に使用）
-- [ ] 11.4 「途中でユーザーが手動介入したワークフロー」と「一発で完了したワークフロー」のステップ構造の差分を分析（→ Phase C: fitness 測定の特徴量候補）
+- [x] 11.3 同一スキルの workflow シーケンスで、ステップの順序・種類・回数にどんなバリエーションがあるか集計（→ Phase C: mutation 操作セットの設計に使用）
+- [x] 11.4 「途中でユーザーが手動介入したワークフロー」と「一発で完了したワークフロー」のステップ構造の差分を分析（→ Phase C: fitness 測定の特徴量候補）
 
 ### 11c. Discover / Prune 精度の定量評価
 
-- [ ] 11.5 トレーシング導入前後で Discover の提案内容を比較（的外れな提案が減ったか定量的に確認）
-- [ ] 11.6 トレーシング導入前後で Prune の誤検出を比較（`opsx:refine` 等の false positive が解消したか確認）
+- [x] 11.5 トレーシング導入前後で Discover の提案内容を比較（的外れな提案が減ったか定量的に確認）
+- [x] 11.6 トレーシング導入前後で Prune の誤検出を比較（`opsx:refine` 等の false positive が解消したか確認）
 
 ## 12. Phase C proposal 作成
 
-- [ ] 12.1 11章の分析結果を踏まえ、Phase C（ワークフロー構造進化）の change を `opsx:propose` で作成する。proposal に含めるべき定量データ:
+- [x] 12.1 11章の分析結果を踏まえ、Phase C（ワークフロー構造進化）の change を `opsx:propose` で作成する。proposal に含めるべき定量データ:
   - workflows.jsonl のレコード数・スキル別内訳
   - ステップ構成の一貫性スコア（11.1-11.2 の結果）
   - mutation 候補の具体例（11.3-11.4 の結果）
@@ -140,7 +140,7 @@ Phase C proposal に含めるべき設計入力（アイデア記録）:
 
 - [x] 14.1 `skills/backfill/scripts/analyze.py` 作成（一貫性・バリエーション・介入・Discover/Prune 分析）
 - [x] 14.2 `skills/backfill/scripts/tests/test_analyze.py` 作成（13テスト）
-- [ ] 14.3 分析実行 → 結果を Phase C proposal の `## Context` に反映
+- [x] 14.3 分析実行 → 結果を Phase C proposal の `## Context` に反映
 
 ## 15. Backfill データ収集範囲の拡張
 
