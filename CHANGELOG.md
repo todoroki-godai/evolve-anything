@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.0] - 2026-03-04
+
+### Added
+- **Enrich Phase**: Discover のパターンを既存スキルに Jaccard 係数で照合し、改善提案を生成する新フェーズ（型A パターン: Python→JSON + SKILL.md→Claude 対話）
+- **Merge サブステップ**: Prune 内で重複スキルの統合版生成→ユーザー承認→アーカイブの流れを追加。Reorganize の merge_groups と duplicate_candidates の和集合（重複排除済み）を入力
+- **Reorganize Phase**: TF-IDF + 階層クラスタリングでスキル群を分析し、統合候補・分割候補を提案する新フェーズ（scipy/sklearn 依存、graceful degradation 対応）
+- evolve パイプライン順序を拡張: Discover → **Enrich** → Optimize → **Reorganize** → **Prune(+Merge)** → Fitness Evolution → Report
+- behavior_patterns のフォールバック照合: errors.jsonl / history.jsonl が未生成でも usage.jsonl の行動パターンから Enrich 照合を実行
+
 ## [0.10.3] - 2026-03-03
 
 ### Added

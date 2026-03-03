@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Evolve オーケストレーター。
 
-Observe データ確認 → Discover → Optimize → Prune → Report の全フェーズを
-1つのコマンドで実行する。
-
-前提: セクション 1-6 のコンポーネントが全て実装されていること。
+Observe データ確認 → Discover → Enrich → Optimize → Reorganize → Prune(+Merge) →
+Fitness Evolution → Report の全フェーズを1つのコマンドで実行する。
 """
 import json
 import sys
@@ -15,6 +13,8 @@ from typing import Any, Dict, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "skills" / "prune" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "skills" / "evolve-fitness" / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "skills" / "enrich" / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "skills" / "reorganize" / "scripts"))
 
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 EVOLVE_STATE_FILE = DATA_DIR / "evolve-state.json"
@@ -201,6 +201,15 @@ def run_evolve(
     except Exception as e:
         result["phases"]["discover"] = {"error": str(e)}
 
+    # Phase 2.5: Enrich（Discover の直後）
+    try:
+        from enrich import run_enrich
+        discover_data = result["phases"].get("discover", {})
+        enrich_result = run_enrich(discover_data, project_dir)
+        result["phases"]["enrich"] = enrich_result
+    except Exception as e:
+        result["phases"]["enrich"] = {"error": str(e)}
+
     # Phase 3: Audit
     try:
         from audit import run_audit
@@ -209,10 +218,21 @@ def run_evolve(
     except Exception as e:
         result["phases"]["audit"] = {"error": str(e)}
 
+    # Phase 3.5: Reorganize（Prune の前）
+    try:
+        from reorganize import run_reorganize
+        reorganize_result = run_reorganize(project_dir)
+        result["phases"]["reorganize"] = reorganize_result
+    except Exception as e:
+        result["phases"]["reorganize"] = {"error": str(e)}
+
     # Phase 4: Prune（dry-run 時は候補のみ）
     try:
         from prune import run_prune
-        prune_result = run_prune(project_dir)
+        # Reorganize の merge_groups を Prune に渡す
+        reorganize_data = result["phases"].get("reorganize", {})
+        merge_groups = reorganize_data.get("merge_groups", []) if not reorganize_data.get("skipped") else []
+        prune_result = run_prune(project_dir, reorganize_merge_groups=merge_groups)
         result["phases"]["prune"] = prune_result
     except Exception as e:
         result["phases"]["prune"] = {"error": str(e)}

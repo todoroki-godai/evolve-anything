@@ -377,7 +377,136 @@ def detect_decay_candidates(
     return candidates
 
 
-def run_prune(project_dir: Optional[str] = None) -> Dict[str, Any]:
+def determine_primary(skill_a: str, skill_b: str) -> tuple:
+    """どちらのスキルが primary（使用頻度が高い）かを判定する。
+
+    Returns:
+        (primary_path, secondary_path, primary_count, secondary_count)
+    """
+    usage_records = load_usage_data()
+    usage_counts = aggregate_usage(usage_records)
+
+    count_a = usage_counts.get(skill_a, 0)
+    count_b = usage_counts.get(skill_b, 0)
+
+    if count_a > count_b:
+        return (skill_a, skill_b, count_a, count_b)
+    elif count_b > count_a:
+        return (skill_b, skill_a, count_b, count_a)
+    else:
+        # 同数の場合はアルファベット順（早い方が primary）
+        if skill_a <= skill_b:
+            return (skill_a, skill_b, count_a, count_b)
+        else:
+            return (skill_b, skill_a, count_b, count_a)
+
+
+def merge_duplicates(
+    duplicate_candidates: List[Dict[str, Any]],
+    reorganize_merge_groups: Optional[List[Dict[str, Any]]] = None,
+    project_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """重複候補とreorganizeマージグループを統合し、マージ提案を生成する。
+
+    Args:
+        duplicate_candidates: detect_duplicates() の結果。各要素は path_a, path_b を持つ。
+        reorganize_merge_groups: reorganize フェーズからのマージグループ。
+            各要素は skills: [name_list] を持つ。
+        project_dir: プロジェクトディレクトリ。
+
+    Returns:
+        merge_proposals と total_proposals を含む辞書。
+    """
+    proj = Path(project_dir) if project_dir else Path.cwd()
+    artifacts = find_artifacts(proj)
+
+    # スキル名→パスのマッピングを構築
+    skill_path_map: Dict[str, str] = {}
+    for path in artifacts.get("skills", []):
+        skill_name = path.parent.name
+        skill_path_map[skill_name] = str(path)
+
+    # 重複ペアを frozenset で収集（重複排除）
+    pairs: set = set()
+
+    # duplicate_candidates からペアを抽出
+    for item in duplicate_candidates:
+        path_a = item.get("path_a", "")
+        path_b = item.get("path_b", "")
+        # パスからスキル名を取得
+        name_a = Path(path_a).parent.name if path_a else ""
+        name_b = Path(path_b).parent.name if path_b else ""
+        if name_a and name_b and name_a != name_b:
+            pairs.add(frozenset([name_a, name_b]))
+
+    # reorganize_merge_groups からペアを抽出
+    if reorganize_merge_groups:
+        for group in reorganize_merge_groups:
+            skills = group.get("skills", [])
+            for i in range(len(skills)):
+                for j in range(i + 1, len(skills)):
+                    if skills[i] != skills[j]:
+                        pairs.add(frozenset([skills[i], skills[j]]))
+
+    # 各ペアに対してマージ提案を生成
+    merge_proposals: List[Dict[str, Any]] = []
+    for pair in sorted(pairs, key=lambda p: sorted(p)):
+        names = sorted(pair)
+        skill_a, skill_b = names[0], names[1]
+
+        path_a_str = skill_path_map.get(skill_a, "")
+        path_b_str = skill_path_map.get(skill_b, "")
+
+        # .pin チェック
+        if (path_a_str and is_pinned(Path(path_a_str))) or (
+            path_b_str and is_pinned(Path(path_b_str))
+        ):
+            merge_proposals.append({
+                "primary": {"path": path_a_str, "skill_name": skill_a, "usage_count": 0},
+                "secondary": {"path": path_b_str, "skill_name": skill_b, "usage_count": 0},
+                "status": "skipped_pinned",
+            })
+            continue
+
+        # プラグイン由来チェック
+        origin_a = classify_artifact_origin(Path(path_a_str)) if path_a_str else "custom"
+        origin_b = classify_artifact_origin(Path(path_b_str)) if path_b_str else "custom"
+        if origin_a == "plugin" or origin_b == "plugin":
+            merge_proposals.append({
+                "primary": {"path": path_a_str, "skill_name": skill_a, "usage_count": 0},
+                "secondary": {"path": path_b_str, "skill_name": skill_b, "usage_count": 0},
+                "status": "skipped_plugin",
+            })
+            continue
+
+        # primary/secondary を判定
+        primary_name, secondary_name, primary_count, secondary_count = determine_primary(
+            skill_a, skill_b
+        )
+        merge_proposals.append({
+            "primary": {
+                "path": skill_path_map.get(primary_name, ""),
+                "skill_name": primary_name,
+                "usage_count": primary_count,
+            },
+            "secondary": {
+                "path": skill_path_map.get(secondary_name, ""),
+                "skill_name": secondary_name,
+                "usage_count": secondary_count,
+            },
+            "status": "proposed",
+        })
+
+    return {
+        "merge_proposals": merge_proposals,
+        "total_proposals": len(merge_proposals),
+    }
+
+
+def run_prune(
+    project_dir: Optional[str] = None,
+    reorganize_merge_groups: Optional[list] = None,
+) -> Dict[str, Any]:
     """Prune を実行して候補を返す。"""
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
@@ -402,6 +531,14 @@ def run_prune(project_dir: Optional[str] = None) -> Dict[str, Any]:
         {"name": p.stem, "scope": "global" if ".claude/rules" in str(p) and "projects" not in str(p) else "project"}
         for p in rules
     ]
+
+    # マージ提案を生成
+    merge_result = merge_duplicates(
+        candidates["duplicate_candidates"],
+        reorganize_merge_groups=reorganize_merge_groups,
+        project_dir=project_dir,
+    )
+    candidates["merge_result"] = merge_result
 
     return candidates
 

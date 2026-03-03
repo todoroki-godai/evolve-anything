@@ -161,6 +161,159 @@ class TestClassifyArtifactOrigin:
             audit._plugin_skill_names_cache = None
 
 
+class TestMergeDuplicates:
+    """merge_duplicates のユニットテスト。"""
+
+    @pytest.fixture
+    def patch_data_dir(self, tmp_path):
+        """テスト用の DATA_DIR を作成。"""
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        with mock.patch.object(audit, "DATA_DIR", data_dir):
+            yield data_dir
+
+    @pytest.fixture
+    def project_with_skills(self, tmp_path):
+        """テスト用プロジェクトとスキルを作成。"""
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+
+        # スキルを作成
+        for name in ["alpha", "beta", "gamma", "delta"]:
+            skill_dir = skills_dir / name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(f"# {name}")
+
+        (project_dir / ".claude" / "rules").mkdir(parents=True)
+        return project_dir
+
+    def _write_usage(self, data_dir, entries):
+        """usage.jsonl にエントリを書き込むヘルパー。"""
+        lines = [json.dumps(e) for e in entries]
+        (data_dir / "usage.jsonl").write_text("\n".join(lines))
+
+    def test_primary_by_usage_count(self, patch_data_dir, project_with_skills):
+        """使用回数が多いスキルが primary になる。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "beta", "timestamp": now},
+        ])
+
+        primary, secondary, p_count, s_count = prune.determine_primary("alpha", "beta")
+        assert primary == "alpha"
+        assert secondary == "beta"
+        assert p_count == 3
+        assert s_count == 1
+
+    def test_primary_alphabetical_on_equal_count(self, patch_data_dir, project_with_skills):
+        """使用回数が同じ場合、アルファベット順で早い方が primary。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "beta", "timestamp": now},
+            {"skill_name": "gamma", "timestamp": now},
+        ])
+
+        primary, secondary, p_count, s_count = prune.determine_primary("gamma", "beta")
+        assert primary == "beta"
+        assert secondary == "gamma"
+        assert p_count == 1
+        assert s_count == 1
+
+    def test_pinned_skill_skipped(self, patch_data_dir, project_with_skills):
+        """pin されたスキルのペアは skipped_pinned になる。"""
+        # alpha に .pin を作成
+        pin_file = project_with_skills / ".claude" / "skills" / "alpha" / ".pin"
+        pin_file.write_text("")
+
+        self._write_usage(patch_data_dir, [])
+
+        duplicate_candidates = [
+            {
+                "path_a": str(project_with_skills / ".claude" / "skills" / "alpha" / "SKILL.md"),
+                "path_b": str(project_with_skills / ".claude" / "skills" / "beta" / "SKILL.md"),
+                "threshold": 0.80,
+            }
+        ]
+
+        result = prune.merge_duplicates(
+            duplicate_candidates, project_dir=str(project_with_skills)
+        )
+        assert len(result["merge_proposals"]) == 1
+        assert result["merge_proposals"][0]["status"] == "skipped_pinned"
+
+    def test_plugin_skill_skipped(self, patch_data_dir, project_with_skills):
+        """プラグイン由来スキルのペアは skipped_plugin になる。"""
+        self._write_usage(patch_data_dir, [])
+
+        audit._plugin_skill_names_cache = frozenset({"alpha"})
+        try:
+            duplicate_candidates = [
+                {
+                    "path_a": str(project_with_skills / ".claude" / "skills" / "alpha" / "SKILL.md"),
+                    "path_b": str(project_with_skills / ".claude" / "skills" / "beta" / "SKILL.md"),
+                    "threshold": 0.80,
+                }
+            ]
+
+            result = prune.merge_duplicates(
+                duplicate_candidates, project_dir=str(project_with_skills)
+            )
+            assert len(result["merge_proposals"]) == 1
+            assert result["merge_proposals"][0]["status"] == "skipped_plugin"
+        finally:
+            audit._plugin_skill_names_cache = None
+
+    def test_reorganize_dedup(self, patch_data_dir, project_with_skills):
+        """同じペアが duplicate_candidates と reorganize の両方に含まれる場合、1回だけ処理される。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+        ])
+
+        duplicate_candidates = [
+            {
+                "path_a": str(project_with_skills / ".claude" / "skills" / "alpha" / "SKILL.md"),
+                "path_b": str(project_with_skills / ".claude" / "skills" / "beta" / "SKILL.md"),
+                "threshold": 0.80,
+            }
+        ]
+        reorganize_merge_groups = [
+            {"skills": ["alpha", "beta"]}
+        ]
+
+        result = prune.merge_duplicates(
+            duplicate_candidates,
+            reorganize_merge_groups=reorganize_merge_groups,
+            project_dir=str(project_with_skills),
+        )
+        # 同じペアなので 1 件のみ
+        assert result["total_proposals"] == 1
+        assert len(result["merge_proposals"]) == 1
+
+    def test_run_prune_includes_merge_result(self, patch_data_dir, tmp_path):
+        """run_prune の戻り値に merge_result キーが存在する。"""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / ".claude" / "skills").mkdir(parents=True)
+        (project_dir / ".claude" / "rules").mkdir(parents=True)
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        result = prune.run_prune(str(project_dir))
+        assert "merge_result" in result
+        assert "merge_proposals" in result["merge_result"]
+        assert "total_proposals" in result["merge_result"]
+
+
 class TestPrunePluginExclusion:
     """プラグインスキルが淘汰対象から除外されるテスト。"""
 
