@@ -201,15 +201,8 @@ def detect_zero_invocations(
                     "days": days,
                 })
 
-    for path in artifacts.get("rules", []):
-        rule_name = path.stem
-        if rule_name not in used_skills:
-            zero.append({
-                "file": str(path),
-                "skill_name": rule_name,
-                "reason": "zero_invocation",
-                "days": days,
-            })
+    # rules は毎ターン system prompt に注入されるため使用回数を測定できない。
+    # 淘汰対象にしない。
 
     return zero, plugin_unused
 
@@ -402,6 +395,13 @@ def run_prune(project_dir: Optional[str] = None) -> Dict[str, Any]:
 
     total = sum(len(v) for v in candidates.values() if isinstance(v, list))
     candidates["total_candidates"] = total
+
+    # rules は淘汰対象外。情報提供のみ。
+    rules = artifacts.get("rules", [])
+    candidates["rules_info"] = [
+        {"name": p.stem, "scope": "global" if ".claude/rules" in str(p) and "projects" not in str(p) else "project"}
+        for p in rules
+    ]
 
     return candidates
 

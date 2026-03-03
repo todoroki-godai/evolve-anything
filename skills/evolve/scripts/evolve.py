@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "skills" / "prune" / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "skills" / "evolve-fitness" / "scripts"))
 
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 EVOLVE_STATE_FILE = DATA_DIR / "evolve-state.json"
@@ -141,6 +142,24 @@ def _count_total_observations() -> int:
     )
 
 
+def check_fitness_function(project_dir: Optional[str] = None) -> Dict[str, Any]:
+    """プロジェクト固有の fitness 関数の有無をチェックする。"""
+    proj = Path(project_dir) if project_dir else Path.cwd()
+    fitness_dir = proj / "scripts" / "rl" / "fitness"
+    criteria_file = proj / ".claude" / "fitness-criteria.md"
+
+    fitness_files = []
+    if fitness_dir.exists():
+        fitness_files = [f.stem for f in fitness_dir.glob("*.py") if f.name != "__init__.py"]
+
+    return {
+        "has_fitness": len(fitness_files) > 0,
+        "has_criteria": criteria_file.exists(),
+        "fitness_functions": fitness_files,
+        "fitness_dir": str(fitness_dir),
+    }
+
+
 def run_evolve(
     project_dir: Optional[str] = None,
     dry_run: bool = False,
@@ -170,6 +189,10 @@ def run_evolve(
         print(f"データ不足: {sufficiency['message']}")
         print("スキップ推奨。--force で強制実行可能。")
 
+    # Phase 1.5: Fitness 関数チェック
+    fitness_check = check_fitness_function(project_dir)
+    result["phases"]["fitness"] = fitness_check
+
     # Phase 2: Discover
     try:
         from discover import run_discover
@@ -193,6 +216,14 @@ def run_evolve(
         result["phases"]["prune"] = prune_result
     except Exception as e:
         result["phases"]["prune"] = {"error": str(e)}
+
+    # Phase 5: Fitness Evolution（評価関数の改善チェック）
+    try:
+        from fitness_evolution import run_fitness_evolution
+        fitness_evo_result = run_fitness_evolution()
+        result["phases"]["fitness_evolution"] = fitness_evo_result
+    except Exception as e:
+        result["phases"]["fitness_evolution"] = {"error": str(e)}
 
     # State 更新（dry-run でない場合）
     if not dry_run:

@@ -35,15 +35,27 @@ python3 <PLUGIN_DIR>/skills/evolve/scripts/evolve.py --project-dir "$(pwd)" --dr
   - 「データ不足のためスキップ推奨」メッセージを表示（MUST）
   - AskUserQuestion で実行/スキップを選択させる
 
-### Step 2: Discover フェーズ
+### Step 2: Fitness 関数チェック
+
+evolve.py の出力に含まれる `fitness` フェーズを確認する。
+
+- `has_fitness: false` の場合:
+  - 「プロジェクト固有の評価関数が未生成です」と表示（MUST）
+  - AskUserQuestion で `/rl-anything:generate-fitness --ask` を実行するか選択させる
+  - ユーザーが「生成する」を選んだ場合: `/rl-anything:generate-fitness --ask` を実行してから Step 3 に進む
+  - ユーザーが「スキップ」を選んだ場合: 組み込み評価関数（default）で続行
+- `has_fitness: true` の場合: 利用可能な fitness 関数名を表示して次へ
+
+### Step 3: Discover フェーズ
 
 パターン検出結果を表示。候補があれば生成を提案。
 
-### Step 3: Optimize フェーズ（オプション）
+### Step 4: Optimize フェーズ（オプション）
 
 Discover で生成された候補、または既存スキルの改善を `/rl-anything:optimize` で実行。
+Step 2 で生成した fitness 関数がある場合は `--fitness {name}` を付与。
 
-### Step 4: Prune フェーズ
+### Step 5: Prune フェーズ
 
 淘汰候補をスキルの出自別に3セクションで表示する（MUST）:
 
@@ -58,7 +70,20 @@ Discover で生成された候補、または既存スキルの改善を `/rl-an
 #### Global Skills（既存ロジック維持）
 Usage Registry の cross-PJ 使用状況を確認し、既存の `safe_global_check` で処理。
 
-### Step 5: Report フェーズ
+### Step 6: Fitness Evolution — 評価関数の改善チェック
+
+evolve.py の出力に含まれる `fitness_evolution` フェーズを確認する。
+
+- `status: "insufficient_data"` の場合:
+  - 「データ不足: N/30件」と表示
+  - optimize で accept/reject を蓄積する旨を案内
+- `status: "ready"` の場合:
+  - score-acceptance 相関を表示（相関 < 0.50 なら警告）
+  - 頻出 rejection_reason があれば新軸追加を提案
+  - 提案がある場合、AskUserQuestion で承認を求める（MUST）
+  - 承認されたもののみ fitness 関数に反映
+
+### Step 7: Report フェーズ
 
 Audit レポートを表示。全体の進捗サマリを出力。
 

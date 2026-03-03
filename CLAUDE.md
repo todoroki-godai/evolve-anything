@@ -22,16 +22,19 @@
 ## クイックスタート
 
 ```
-# 1. 構造テスト（LLM 呼び出しなし）
+# 1. プロジェクト固有の評価関数を生成（初回のみ）
+/rl-anything:generate-fitness --ask
+
+# 2. 構造テスト（LLM 呼び出しなし）
 /rl-anything:optimize my-skill --dry-run
 
-# 2. 最適化実行（3世代 x 集団3）
+# 3. 最適化実行（3世代 x 集団3）
 /rl-anything:optimize my-skill --generations 3 --population 3
 
-# 3. 自律進化パイプライン（日次運用）
+# 4. 自律進化パイプライン（日次運用）
 /rl-anything:evolve --dry-run
 
-# 4. バックアップから復元
+# 5. バックアップから復元
 /rl-anything:optimize my-skill --restore
 ```
 

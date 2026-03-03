@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.3] - 2026-03-03
+
+### Added
+- evolve パイプラインに fitness 関数チェックステップを追加: 未生成時に `generate-fitness --ask` を促す
+- evolve パイプラインに fitness evolution ステップを追加: accept/reject データから評価関数の改善を提案
+- `check_fitness_function()`: プロジェクト固有 fitness 関数と fitness-criteria.md の有無を検出
+- クイックスタートに `generate-fitness --ask`（初回セットアップ）を追加
+- rules を淘汰対象から除外し情報提供のみに変更
+
 ## [0.10.2] - 2026-03-03
 
 ### Fixed
