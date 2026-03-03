@@ -30,6 +30,14 @@ AGENT_BURST_GAP_SECONDS = 300
 # <command-name> タグからコマンド名を抽出する正規表現
 _COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>")
 
+# ビルトイン CLI コマンド（スキルではない）
+_BUILTIN_COMMANDS = frozenset({
+    "clear", "compact", "mcp", "init", "model", "login", "logout",
+    "help", "config", "cost", "doctor", "memory", "permissions",
+    "status", "terminal-setup", "bug", "listen", "review", "fast",
+    "vim", "tasks",
+})
+
 
 def _classify_system_message(
     content: str,
@@ -59,6 +67,10 @@ def _classify_system_message(
     if "<command-name>" in stripped:
         m = _COMMAND_NAME_RE.search(stripped)
         if m and m.group(1).strip():
+            cmd = m.group(1).strip().lstrip("/")
+            # ビルトイン CLI コマンドはスキルではない
+            if cmd in _BUILTIN_COMMANDS:
+                return None
             return ("skill-invocation", m.group(1).strip())
         # パース失敗 → 除外
         return None
@@ -255,6 +267,8 @@ def parse_transcript(filepath: Path) -> ParseResult:
     user_intents: List[str] = []
     user_prompts: List[str] = []
     filtered_messages = 0
+    thinking_count = 0
+    compact_count = 0
     session_id = ""
 
     for line in filepath.read_text(encoding="utf-8").splitlines():
@@ -303,6 +317,42 @@ def parse_transcript(filepath: Path) -> ParseResult:
                         # コマンドタグ → スキル名を記録
                         user_intents.append("skill-invocation")
                         user_prompts.append(classification[1])
+
+                        # ワークフローアンカー: command-name もスキル起動として扱う
+                        cmd_skill = classification[1].lstrip("/")
+                        if cmd_skill and not in_team:
+                            # pending burst を確定
+                            burst_wf = _finalize_burst(burst_buffer, session_id)
+                            if burst_wf is not None:
+                                result.workflow_records.append(burst_wf)
+                            burst_buffer = []
+
+                            # 前の skill-driven ワークフローを確定
+                            if current_workflow is not None:
+                                wf_rec = _finalize_workflow(current_workflow, current_steps)
+                                if wf_rec is not None:
+                                    result.workflow_records.append(wf_rec)
+
+                            # 新しい skill-driven ワークフロー開始
+                            current_workflow_id = _generate_workflow_id()
+                            current_skill_name = cmd_skill
+                            current_workflow = {
+                                "workflow_id": current_workflow_id,
+                                "workflow_type": "skill-driven",
+                                "skill_name": cmd_skill,
+                                "session_id": session_id,
+                                "started_at": timestamp,
+                            }
+                            current_steps = []
+
+                            # usage レコード
+                            result.usage_records.append({
+                                "skill_name": cmd_skill,
+                                "timestamp": timestamp,
+                                "session_id": session_id,
+                                "file_path": "",
+                                "source": "backfill",
+                            })
                     else:
                         # 通常プロンプト → 従来どおり分類
                         truncated = classification[1][:MAX_PROMPT_LENGTH]
@@ -310,7 +360,16 @@ def parse_transcript(filepath: Path) -> ParseResult:
                         user_prompts.append(truncated)
             continue
 
-        # tool_result の is_error チェック
+        # system レコードからエラー・コンパクト情報を収集
+        if record_type == "system":
+            subtype = record.get("subtype", "")
+            if subtype == "api_error":
+                error_count += 1
+            elif subtype == "compact_boundary":
+                compact_count += 1
+            continue
+
+        # tool_result の is_error チェック（旧フォーマット互換）
         if record_type == "tool_result":
             if record.get("is_error"):
                 error_count += 1
@@ -328,7 +387,12 @@ def parse_transcript(filepath: Path) -> ParseResult:
             continue
 
         for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_use":
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "thinking":
+                thinking_count += 1
+                continue
+            if block.get("type") != "tool_use":
                 continue
 
             tool_name = block.get("name", "")
@@ -395,6 +459,11 @@ def parse_transcript(filepath: Path) -> ParseResult:
                         "file_path": tool_input.get("args", ""),
                         "source": "backfill",
                     })
+                elif (current_workflow is not None
+                      and current_skill_name == skill_name
+                      and not current_steps):
+                    # command-name で既にアンカー済み → 重複スキップ
+                    pass
                 else:
                     # pending burst を確定
                     burst_wf = _finalize_burst(burst_buffer, session_id)
@@ -429,7 +498,7 @@ def parse_transcript(filepath: Path) -> ParseResult:
                         "source": "backfill",
                     })
 
-            elif tool_name == "Agent":
+            elif tool_name in ("Agent", "Task"):
                 subagent_type = tool_input.get("subagent_type", "unknown") or "unknown"
                 prompt = tool_input.get("prompt", "") or ""
                 if len(prompt) > MAX_PROMPT_LENGTH:
@@ -525,6 +594,9 @@ def parse_transcript(filepath: Path) -> ParseResult:
             "user_intents": user_intents,
             "user_prompts": user_prompts,
             "filtered_messages": filtered_messages,
+            "thinking_count": thinking_count,
+            "compact_count": compact_count,
+            "plan_mode_count": tool_counts.get("EnterPlanMode", 0),
             "source": "backfill",
         }
 

@@ -70,6 +70,35 @@ def make_agent_tool_use(subagent_type: str, prompt: str = "test") -> dict:
     }
 
 
+def make_task_tool_use(subagent_type: str, prompt: str = "test") -> dict:
+    """旧 Claude Code の Task ツール（Agent と同一スキーマ）。"""
+    return {
+        "type": "tool_use",
+        "name": "Task",
+        "input": {"subagent_type": subagent_type, "prompt": prompt},
+    }
+
+
+def make_system_record(
+    session_id: str,
+    subtype: str,
+    timestamp: str = "2025-06-15T10:00:00Z",
+) -> str:
+    """system レコードの JSONL 行を生成する。"""
+    record = {
+        "type": "system",
+        "subtype": subtype,
+        "timestamp": timestamp,
+        "sessionId": session_id,
+    }
+    return json.dumps(record, ensure_ascii=False)
+
+
+def make_thinking_block(text: str = "thinking...") -> dict:
+    """thinking ブロックを生成する。"""
+    return {"type": "thinking", "thinking": text}
+
+
 class TestParseTranscript:
     """parse_transcript() のテスト。"""
 
@@ -1548,3 +1577,492 @@ class TestMixedPatterns:
         assert wf_team["step_count"] == 1
         assert wf_burst["workflow_type"] == "agent-burst"
         assert wf_burst["step_count"] == 2
+
+
+class TestCommandNameWorkflowAnchor:
+    """command-name タグからのワークフローアンカーテスト。"""
+
+    def test_command_name_anchors_workflow(self, transcript_dir):
+        """<command-name> → Agent がワークフローを生成する。"""
+        tf = transcript_dir / "sess-cmd-001.jsonl"
+        lines = [
+            # ユーザーが /opsx:apply を実行
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/opsx:apply</command-name> backfill"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-cmd-001",
+            }),
+            # Claude が Agent を起動（Skill tool_use なし）
+            make_assistant_record(
+                "sess-cmd-001",
+                [make_agent_tool_use("Explore", "explore codebase")],
+                "2025-06-15T10:01:00Z",
+            ),
+            make_assistant_record(
+                "sess-cmd-001",
+                [make_agent_tool_use("general-purpose", "implement changes")],
+                "2025-06-15T10:02:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "skill-driven"
+        assert wf["skill_name"] == "opsx:apply"
+        assert wf["step_count"] == 2
+
+    def test_command_name_then_skill_tool_use_dedup(self, transcript_dir):
+        """command-name + 同じスキルの Skill tool_use → 重複しない。"""
+        tf = transcript_dir / "sess-cmd-002.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/commit</command-name> fix typo"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-cmd-002",
+            }),
+            # Claude が同じスキルの Skill tool_use も呼ぶ
+            make_assistant_record(
+                "sess-cmd-002",
+                [make_skill_tool_use("commit", "fix typo")],
+                "2025-06-15T10:00:01Z",
+            ),
+            make_assistant_record(
+                "sess-cmd-002",
+                [make_agent_tool_use("general-purpose", "create commit")],
+                "2025-06-15T10:01:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        # ワークフローは1つだけ
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["skill_name"] == "commit"
+        assert wf["step_count"] == 1
+
+        # usage: command-name の1件のみ（Skill tool_use はスキップ）
+        skill_usage = [r for r in result.usage_records if not r["skill_name"].startswith("Agent:")]
+        assert len(skill_usage) == 1
+
+    def test_command_name_without_agent_no_workflow(self, transcript_dir):
+        """command-name の後に Agent がない → ワークフロー不生成。"""
+        tf = transcript_dir / "sess-cmd-003.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/clear</command-name>"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-cmd-003",
+            }),
+            make_assistant_record(
+                "sess-cmd-003",
+                [make_other_tool_use("Read", {"file_path": "/tmp/foo"})],
+                "2025-06-15T10:00:30Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.workflow_records) == 0
+
+    def test_multiple_command_names_separate_workflows(self, transcript_dir):
+        """複数の command-name が別々のワークフローを生成する。"""
+        tf = transcript_dir / "sess-cmd-004.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/opsx:ff</command-name> design"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-cmd-004",
+            }),
+            make_assistant_record(
+                "sess-cmd-004",
+                [make_agent_tool_use("Explore", "explore")],
+                "2025-06-15T10:01:00Z",
+            ),
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/opsx:apply</command-name> task1"},
+                "timestamp": "2025-06-15T10:05:00Z",
+                "sessionId": "sess-cmd-004",
+            }),
+            make_assistant_record(
+                "sess-cmd-004",
+                [make_agent_tool_use("general-purpose", "implement")],
+                "2025-06-15T10:06:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        assert len(result.workflow_records) == 2
+        assert result.workflow_records[0]["skill_name"] == "opsx:ff"
+        assert result.workflow_records[0]["step_count"] == 1
+        assert result.workflow_records[1]["skill_name"] == "opsx:apply"
+        assert result.workflow_records[1]["step_count"] == 1
+
+
+class TestTaskToolAlias:
+    """旧 Task ツール（= Agent）のエイリアス対応テスト。"""
+
+    def test_task_tool_treated_as_agent(self, transcript_dir):
+        """Task ツールが Agent と同等に処理される。"""
+        tf = transcript_dir / "sess-task-001.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-task-001",
+                [make_task_tool_use("Explore", "explore codebase")],
+                "2025-06-15T10:00:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.usage_records) == 1
+        assert result.usage_records[0]["skill_name"] == "Agent:Explore"
+        assert result.usage_records[0]["subagent_type"] == "Explore"
+        assert result.usage_records[0]["source"] == "backfill"
+
+    def test_task_tool_in_skill_workflow(self, transcript_dir):
+        """Skill → Task がワークフローステップとして記録される。"""
+        tf = transcript_dir / "sess-task-002.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-task-002",
+                [make_skill_tool_use("opsx:apply")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-task-002",
+                [make_task_tool_use("general-purpose", "implement changes")],
+                "2025-06-15T10:01:00Z",
+            ),
+            make_assistant_record(
+                "sess-task-002",
+                [make_task_tool_use("Explore", "verify output")],
+                "2025-06-15T10:02:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "skill-driven"
+        assert wf["skill_name"] == "opsx:apply"
+        assert wf["step_count"] == 2
+
+        # Task も parent_skill/workflow_id を持つ
+        assert result.usage_records[1]["parent_skill"] == "opsx:apply"
+        assert result.usage_records[2]["parent_skill"] == "opsx:apply"
+
+    def test_task_tool_in_team_workflow(self, transcript_dir):
+        """TeamCreate → Task がチームワークフローステップとして記録される。"""
+        tf = transcript_dir / "sess-task-003.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-task-003",
+                [make_team_create_tool_use("my-team")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-task-003",
+                [make_task_tool_use("general-purpose", "do work")],
+                "2025-06-15T10:01:00Z",
+            ),
+            make_assistant_record(
+                "sess-task-003",
+                [make_team_delete_tool_use()],
+                "2025-06-15T10:05:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "team-driven"
+        assert wf["team_name"] == "my-team"
+        assert wf["step_count"] == 1
+
+    def test_task_tool_agent_burst(self, transcript_dir):
+        """連続する Task ツールが agent-burst ワークフローを生成する。"""
+        tf = transcript_dir / "sess-task-004.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-task-004",
+                [make_task_tool_use("Explore", "explore 1")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-task-004",
+                [make_task_tool_use("general-purpose", "work 1")],
+                "2025-06-15T10:01:00Z",
+            ),
+            make_assistant_record(
+                "sess-task-004",
+                [make_task_tool_use("Explore", "explore 2")],
+                "2025-06-15T10:02:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "agent-burst"
+        assert wf["step_count"] == 3
+
+    def test_mixed_task_and_agent(self, transcript_dir):
+        """Task と Agent が混在してもワークフローに正しく含まれる。"""
+        tf = transcript_dir / "sess-task-005.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-task-005",
+                [make_skill_tool_use("opsx:refine")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-task-005",
+                [make_task_tool_use("Explore", "old agent call")],
+                "2025-06-15T10:01:00Z",
+            ),
+            make_assistant_record(
+                "sess-task-005",
+                [make_agent_tool_use("general-purpose", "new agent call")],
+                "2025-06-15T10:02:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["step_count"] == 2
+        assert wf["steps"][0]["tool"] == "Agent:Explore"
+        assert wf["steps"][1]["tool"] == "Agent:general-purpose"
+
+
+class TestBuiltinCommandFilter:
+    """ビルトイン CLI コマンドのフィルタリングテスト。"""
+
+    def test_clear_command_filtered(self, transcript_dir):
+        """/clear はスキル起動として扱わない。"""
+        tf = transcript_dir / "sess-builtin-001.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/clear</command-name>"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-builtin-001",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.usage_records) == 0
+        assert len(result.workflow_records) == 0
+        # intent に skill-invocation が含まれない
+        assert "skill-invocation" not in (result.session_meta or {}).get("user_intents", [])
+
+    def test_compact_command_filtered(self, transcript_dir):
+        """/compact はスキル起動として扱わない。"""
+        tf = transcript_dir / "sess-builtin-002.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/compact</command-name>"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-builtin-002",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.usage_records) == 0
+
+    def test_model_command_filtered(self, transcript_dir):
+        """/model はスキル起動として扱わない。"""
+        tf = transcript_dir / "sess-builtin-003.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/model</command-name> sonnet"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-builtin-003",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.usage_records) == 0
+
+    def test_skill_with_colon_not_filtered(self, transcript_dir):
+        """コロン付きスキル（opsx:apply等）はフィルタされない。"""
+        tf = transcript_dir / "sess-builtin-004.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/opsx:apply</command-name> task1"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-builtin-004",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.usage_records) == 1
+        assert result.usage_records[0]["skill_name"] == "opsx:apply"
+
+    def test_builtin_then_skill_no_interference(self, transcript_dir):
+        """/clear の後に /opsx:apply → clear はフィルタされ apply だけ記録される。"""
+        tf = transcript_dir / "sess-builtin-005.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/clear</command-name>"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-builtin-005",
+            }),
+            json.dumps({
+                "type": "human",
+                "message": {"content": "<command-name>/opsx:apply</command-name> task"},
+                "timestamp": "2025-06-15T10:01:00Z",
+                "sessionId": "sess-builtin-005",
+            }),
+            make_assistant_record(
+                "sess-builtin-005",
+                [make_agent_tool_use("general-purpose", "implement")],
+                "2025-06-15T10:02:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        skill_usage = [r for r in result.usage_records if not r["skill_name"].startswith("Agent:")]
+        assert len(skill_usage) == 1
+        assert skill_usage[0]["skill_name"] == "opsx:apply"
+        assert len(result.workflow_records) == 1
+        assert result.workflow_records[0]["skill_name"] == "opsx:apply"
+
+    def test_all_builtin_commands_filtered(self):
+        """_BUILTIN_COMMANDS の全コマンドがフィルタされることを確認。"""
+        for cmd in backfill._BUILTIN_COMMANDS:
+            result = backfill._classify_system_message(f"<command-name>/{cmd}</command-name>")
+            assert result is None, f"/{cmd} should be filtered but got {result}"
+
+
+class TestSessionMetaEnrichment:
+    """セッションメタデータ拡充のテスト。"""
+
+    def test_thinking_count(self, transcript_dir):
+        """thinking ブロックがカウントされる。"""
+        tf = transcript_dir / "sess-meta-001.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-meta-001",
+                [
+                    make_thinking_block("first thought"),
+                    make_other_tool_use("Read", {"file_path": "/tmp/a"}),
+                    make_thinking_block("second thought"),
+                ],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-meta-001",
+                [make_thinking_block("third thought")],
+                "2025-06-15T10:01:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta["thinking_count"] == 3
+
+    def test_api_error_count(self, transcript_dir):
+        """system api_error レコードがエラーとしてカウントされる。"""
+        tf = transcript_dir / "sess-meta-002.jsonl"
+        lines = [
+            make_system_record("sess-meta-002", "api_error", "2025-06-15T10:00:00Z"),
+            make_system_record("sess-meta-002", "api_error", "2025-06-15T10:01:00Z"),
+            make_assistant_record(
+                "sess-meta-002",
+                [make_other_tool_use("Read", {"file_path": "/tmp/a"})],
+                "2025-06-15T10:02:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta["error_count"] == 2
+
+    def test_compact_count(self, transcript_dir):
+        """compact_boundary レコードがカウントされる。"""
+        tf = transcript_dir / "sess-meta-003.jsonl"
+        lines = [
+            make_system_record("sess-meta-003", "compact_boundary", "2025-06-15T10:00:00Z"),
+            make_assistant_record(
+                "sess-meta-003",
+                [make_other_tool_use("Read", {"file_path": "/tmp/a"})],
+                "2025-06-15T10:30:00Z",
+            ),
+            make_system_record("sess-meta-003", "compact_boundary", "2025-06-15T11:00:00Z"),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta["compact_count"] == 2
+
+    def test_plan_mode_count(self, transcript_dir):
+        """EnterPlanMode のツール呼び出し数が plan_mode_count に記録される。"""
+        tf = transcript_dir / "sess-meta-004.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-meta-004",
+                [make_other_tool_use("EnterPlanMode", {})],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-meta-004",
+                [make_other_tool_use("ExitPlanMode", {})],
+                "2025-06-15T10:05:00Z",
+            ),
+            make_assistant_record(
+                "sess-meta-004",
+                [make_other_tool_use("EnterPlanMode", {})],
+                "2025-06-15T10:10:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert result.session_meta["plan_mode_count"] == 2
+
+    def test_session_meta_has_all_new_fields(self, transcript_dir):
+        """セッションメタデータに新フィールドが全て存在する。"""
+        tf = transcript_dir / "sess-meta-005.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-meta-005",
+                [make_other_tool_use("Read", {"file_path": "/tmp/a"})],
+                "2025-06-15T10:00:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        meta = result.session_meta
+        assert "thinking_count" in meta
+        assert "compact_count" in meta
+        assert "plan_mode_count" in meta
+        assert meta["thinking_count"] == 0
+        assert meta["compact_count"] == 0
+        assert meta["plan_mode_count"] == 0

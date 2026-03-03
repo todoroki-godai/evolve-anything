@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.8.0] - 2026-03-03
+
+### Added
+- `Task` ツール対応: 旧 Claude Code の `Task`（= 現 `Agent`）を同等に処理（5PJ で 750+ 呼び出し復活）
+- ビルトインコマンドフィルタ: `/clear`, `/compact`, `/model` 等 18 コマンドをスキル起動から除外
+- `system` レコードの `api_error` からエラーカウント（従来の `tool_result` は実データに不在）
+- session_meta 拡充: `thinking_count`, `compact_count`, `plan_mode_count`
+- テスト 16 件追加（Task エイリアス 5 件、ビルトインフィルタ 6 件、メタデータ 5 件）
+
+### Changed
+- ワークフロー捕捉率: 5PJ 合計 50 → 301 ワークフロー（6 倍増）
+
+## [0.7.0] - 2026-03-03
+
+### Added
+- team-driven ワークフロー検出: TeamCreate → Agent → TeamDelete パターンを追跡
+- agent-burst ワークフロー検出: 300 秒以内の連続 Agent 呼び出しを自動グルーピング
+- `command-name` ワークフローアンカー: `<command-name>` タグからもスキル起動を認識
+- Skill tool_use 重複排除: command-name で既にアンカー済みの場合はスキップ
+- `workflows_by_type` サマリー: skill-driven / team-driven / agent-burst の内訳
+- テスト 14 件追加（team-driven 3 件、agent-burst 5 件、mixed 2 件、command-name 4 件）
+
+### Changed
+- ワークフロー捕捉率: 4.2% → 26.2%（8 → 50 ワークフロー）
+
+## [0.6.0] - 2026-03-03
+
+### Added
+- `_classify_system_message()`: human メッセージのノイズフィルタ（中断シグナル、ローカルコマンド出力、タスク通知を除外）
+- `<command-name>` タグからスキル名を抽出し `skill-invocation` として分類
+- `user_prompts` 収集: user_intents と対になるプロンプトテキストを session_meta に記録
+- `filtered_messages` カウント: フィルタされたシステムメッセージ数を session_meta に記録
+- テスト 19 件追加（分類ロジック 6 件、統合テスト 6 件、既存テスト更新 7 件）
+
+### Changed
+- subprocess 廃止: `backfill.py` を直接 import して実行（セキュリティ改善）
+- `parse_transcript()` の human メッセージ処理を分類ベースに全面刷新
+
 ## [0.5.0] - 2026-03-03
 
 ### Added
