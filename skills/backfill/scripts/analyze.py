@@ -63,7 +63,8 @@ def analyze_consistency(workflows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     by_skill: Dict[str, List[List[str]]] = defaultdict(list)
     for wf in workflows:
-        skill = wf.get("skill_name", "unknown")
+        wf_type = wf.get("workflow_type", "skill-driven")
+        skill = wf.get("skill_name") or wf.get("team_name") or f"({wf_type})"
         steps = wf.get("steps", [])
         pattern = [s.get("tool", "") for s in steps]
         by_skill[skill].append(pattern)
@@ -93,7 +94,8 @@ def analyze_variations(workflows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """ステップの順序・種類・回数のばらつきを集計する。"""
     by_skill: Dict[str, List[Dict]] = defaultdict(list)
     for wf in workflows:
-        skill = wf.get("skill_name", "unknown")
+        wf_type = wf.get("workflow_type", "skill-driven")
+        skill = wf.get("skill_name") or wf.get("team_name") or f"({wf_type})"
         by_skill[skill].append(wf)
 
     results = {}

@@ -292,6 +292,7 @@ class TestWorkflowTracking:
         assert wf["steps"][1]["tool"] == "Agent:general-purpose"
         assert wf["steps"][1]["intent_category"] == "implementation"
         assert wf["source"] == "backfill"
+        assert wf["workflow_type"] == "skill-driven"
         assert wf["started_at"] == "2025-06-15T10:00:00Z"
         assert wf["ended_at"] == "2025-06-15T10:02:00Z"
 
@@ -370,6 +371,9 @@ class TestWorkflowTracking:
         # workflow_id が異なる
         assert wf1["workflow_id"] != wf2["workflow_id"]
 
+        assert wf1["workflow_type"] == "skill-driven"
+        assert wf2["workflow_type"] == "skill-driven"
+
     def test_ad_hoc_then_skill_workflow(self, transcript_dir):
         """ad-hoc Agent の後に Skill → Agent がある場合、混在パターン。"""
         tf = transcript_dir / "sess-wf-005.jsonl"
@@ -405,6 +409,7 @@ class TestWorkflowTracking:
         assert len(result.workflow_records) == 1
         assert result.workflow_records[0]["skill_name"] == "opsx:refine"
         assert result.workflow_records[0]["step_count"] == 1
+        assert result.workflow_records[0]["workflow_type"] == "skill-driven"
 
     def test_workflow_schema_matches_session_summary(self, transcript_dir):
         """workflow_records のスキーマが session_summary.py の trace レコードと同じ。"""
@@ -428,7 +433,7 @@ class TestWorkflowTracking:
 
         # 必須フィールドの存在確認
         required_fields = [
-            "workflow_id", "skill_name", "session_id",
+            "workflow_id", "workflow_type", "skill_name", "session_id",
             "steps", "step_count", "started_at", "ended_at", "source",
         ]
         for field in required_fields:
@@ -584,6 +589,9 @@ class TestSummaryOutput:
         assert "workflows" in summary
         # sess-a: Skill→Agent = 1 ワークフロー、sess-b: Skill のみ = 0 ワークフロー
         assert summary["workflows"] == 1
+        assert summary["workflows_by_type"]["skill-driven"] == 1
+        assert summary["workflows_by_type"]["team-driven"] == 0
+        assert summary["workflows_by_type"]["agent-burst"] == 0
 
     def test_workflows_written_to_jsonl(self, patch_data_dir, transcript_dir):
         """backfill() が workflows.jsonl にレコードを書き出す。"""
@@ -613,6 +621,7 @@ class TestSummaryOutput:
         assert wf["skill_name"] == "opsx:refine"
         assert wf["step_count"] == 1
         assert wf["source"] == "backfill"
+        assert wf["workflow_type"] == "skill-driven"
 
     def test_force_removes_backfill_workflows(self, patch_data_dir, transcript_dir):
         """--force で対象プロジェクトの backfill ワークフローが削除される（trace は保持）。"""
@@ -683,6 +692,22 @@ def make_tool_result_record(
         "sessionId": session_id,
     }
     return json.dumps(record, ensure_ascii=False)
+
+
+def make_team_create_tool_use(team_name: str = "test-team") -> dict:
+    return {
+        "type": "tool_use",
+        "name": "TeamCreate",
+        "input": {"team_name": team_name},
+    }
+
+
+def make_team_delete_tool_use() -> dict:
+    return {
+        "type": "tool_use",
+        "name": "TeamDelete",
+        "input": {},
+    }
 
 
 def make_other_tool_use(tool_name: str, tool_input: dict = None) -> dict:
@@ -1225,3 +1250,301 @@ class TestFilterIntegration:
         assert result.session_meta["user_prompts"] == ["/commit", "implement the feature"]
         assert result.session_meta["filtered_messages"] == 2
         assert result.session_meta["human_message_count"] == 4
+
+
+class TestTeamDrivenWorkflow:
+    """team-driven ワークフロー検出のテスト（タスク 4.1）。"""
+
+    def test_team_create_agent_team_delete(self, transcript_dir):
+        """TeamCreate→Agent→Agent→TeamDelete がワークフローを生成する。"""
+        tf = transcript_dir / "sess-team-001.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-team-001",
+                [make_team_create_tool_use("impl-team")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-team-001",
+                [make_agent_tool_use("Explore", "explore the codebase")],
+                "2025-06-15T10:01:00Z",
+            ),
+            make_assistant_record(
+                "sess-team-001",
+                [make_agent_tool_use("general-purpose", "implement feature")],
+                "2025-06-15T10:02:00Z",
+            ),
+            make_assistant_record(
+                "sess-team-001",
+                [make_team_delete_tool_use()],
+                "2025-06-15T10:03:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "team-driven"
+        assert wf["team_name"] == "impl-team"
+        assert wf["skill_name"] is None
+        assert wf["step_count"] == 2
+        assert wf["steps"][0]["tool"] == "Agent:Explore"
+        assert wf["steps"][1]["tool"] == "Agent:general-purpose"
+        assert wf["source"] == "backfill"
+
+        # Agent の usage レコードに workflow_id が付与される
+        agents = [r for r in result.usage_records if r["skill_name"].startswith("Agent:")]
+        assert len(agents) == 2
+        assert agents[0]["workflow_id"] == wf["workflow_id"]
+        assert agents[0]["parent_skill"] is None
+
+    def test_team_no_team_delete(self, transcript_dir):
+        """TeamDelete なしでトランスクリプト終了 → ワークフロー確定。"""
+        tf = transcript_dir / "sess-team-002.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-team-002",
+                [make_team_create_tool_use("open-team")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-team-002",
+                [make_agent_tool_use("Explore", "explore")],
+                "2025-06-15T10:01:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "team-driven"
+        assert wf["team_name"] == "open-team"
+        assert wf["step_count"] == 1
+
+    def test_team_no_agents(self, transcript_dir):
+        """TeamCreate→TeamDelete の間に Agent がない → ワークフロー不生成。"""
+        tf = transcript_dir / "sess-team-003.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-team-003",
+                [make_team_create_tool_use("empty-team")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-team-003",
+                [make_team_delete_tool_use()],
+                "2025-06-15T10:01:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.workflow_records) == 0
+
+
+class TestAgentBurst:
+    """agent-burst 検出のテスト（タスク 4.2）。"""
+
+    def test_two_agents_burst(self, transcript_dir):
+        """Skill/Team 外の 2 Agent が 5 分以内 → agent-burst ワークフロー。"""
+        tf = transcript_dir / "sess-burst-001.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-burst-001",
+                [make_agent_tool_use("Explore", "explore")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-burst-001",
+                [make_agent_tool_use("general-purpose", "implement")],
+                "2025-06-15T10:03:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "agent-burst"
+        assert wf["skill_name"] is None
+        assert wf["team_name"] is None
+        assert wf["step_count"] == 2
+
+    def test_gap_splits_burst(self, transcript_dir):
+        """5 分以上の gap → ワークフロー不生成（各 Agent は ad-hoc）。"""
+        tf = transcript_dir / "sess-burst-002.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-burst-002",
+                [make_agent_tool_use("Explore", "explore")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-burst-002",
+                [make_agent_tool_use("general-purpose", "implement")],
+                "2025-06-15T10:06:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.workflow_records) == 0
+
+    def test_single_ad_hoc(self, transcript_dir):
+        """Skill/Team 外で Agent 1 回 → ワークフロー不生成。"""
+        tf = transcript_dir / "sess-burst-003.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-burst-003",
+                [make_agent_tool_use("Explore", "explore")],
+                "2025-06-15T10:00:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+        assert len(result.workflow_records) == 0
+
+    def test_three_agents_mid_gap(self, transcript_dir):
+        """3 Agent で途中に gap → 最初の 2 が burst、3 つ目は ad-hoc。"""
+        tf = transcript_dir / "sess-burst-004.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-burst-004",
+                [make_agent_tool_use("Explore", "first")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-burst-004",
+                [make_agent_tool_use("general-purpose", "second")],
+                "2025-06-15T10:02:00Z",
+            ),
+            make_assistant_record(
+                "sess-burst-004",
+                [make_agent_tool_use("Explore", "third")],
+                "2025-06-15T10:09:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "agent-burst"
+        assert wf["step_count"] == 2
+        assert wf["steps"][0]["tool"] == "Agent:Explore"
+        assert wf["steps"][1]["tool"] == "Agent:general-purpose"
+
+    def test_exactly_300_seconds_boundary(self, transcript_dir):
+        """ちょうど 300 秒（5 分）の間隔 → 同一ワークフロー（閾値以内）。"""
+        tf = transcript_dir / "sess-burst-005.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-burst-005",
+                [make_agent_tool_use("Explore", "first")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-burst-005",
+                [make_agent_tool_use("general-purpose", "second")],
+                "2025-06-15T10:05:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "agent-burst"
+        assert wf["step_count"] == 2
+
+
+class TestMixedPatterns:
+    """混在パターンのテスト（タスク 4.3）。"""
+
+    def test_skill_in_team(self, transcript_dir):
+        """Team 内 Skill→Agent → team-driven のステップとして記録（skill-driven 不生成）。"""
+        tf = transcript_dir / "sess-mix-001.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-mix-001",
+                [make_team_create_tool_use("mix-team")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-mix-001",
+                [make_skill_tool_use("opsx:refine")],
+                "2025-06-15T10:01:00Z",
+            ),
+            make_assistant_record(
+                "sess-mix-001",
+                [make_agent_tool_use("Explore", "explore for refine")],
+                "2025-06-15T10:02:00Z",
+            ),
+            make_assistant_record(
+                "sess-mix-001",
+                [make_team_delete_tool_use()],
+                "2025-06-15T10:03:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        # ワークフローは team-driven のみ（skill-driven は生成されない）
+        assert len(result.workflow_records) == 1
+        wf = result.workflow_records[0]
+        assert wf["workflow_type"] == "team-driven"
+        assert wf["team_name"] == "mix-team"
+        assert wf["step_count"] == 1
+        assert wf["steps"][0]["tool"] == "Agent:Explore"
+
+    def test_team_then_agent_burst(self, transcript_dir):
+        """Team ワークフロー後に agent-burst が続く。"""
+        tf = transcript_dir / "sess-mix-002.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-mix-002",
+                [make_team_create_tool_use("first-team")],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-mix-002",
+                [make_agent_tool_use("Explore", "team explore")],
+                "2025-06-15T10:01:00Z",
+            ),
+            make_assistant_record(
+                "sess-mix-002",
+                [make_team_delete_tool_use()],
+                "2025-06-15T10:02:00Z",
+            ),
+            # Team 後の ad-hoc Agent 連続 → agent-burst
+            make_assistant_record(
+                "sess-mix-002",
+                [make_agent_tool_use("Explore", "burst explore")],
+                "2025-06-15T10:03:00Z",
+            ),
+            make_assistant_record(
+                "sess-mix-002",
+                [make_agent_tool_use("general-purpose", "burst implement")],
+                "2025-06-15T10:04:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        result = backfill.parse_transcript(tf)
+
+        assert len(result.workflow_records) == 2
+        wf_team = result.workflow_records[0]
+        wf_burst = result.workflow_records[1]
+        assert wf_team["workflow_type"] == "team-driven"
+        assert wf_team["step_count"] == 1
+        assert wf_burst["workflow_type"] == "agent-burst"
+        assert wf_burst["step_count"] == 2

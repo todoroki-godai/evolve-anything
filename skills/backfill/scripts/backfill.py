@@ -25,6 +25,7 @@ import common
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 MAX_PROMPT_LENGTH = 500
+AGENT_BURST_GAP_SECONDS = 300
 
 # <command-name> タグからコマンド名を抽出する正規表現
 _COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>")
@@ -189,6 +190,24 @@ def _parse_iso_timestamp(ts: str) -> Optional[datetime]:
         return None
 
 
+def _finalize_burst(
+    burst_buffer: List[Dict[str, Any]],
+    session_id: str,
+) -> Optional[Dict[str, Any]]:
+    """burst バッファからワークフローレコードを生成する。2 Agent 未満なら None。"""
+    if len(burst_buffer) < 2:
+        return None
+    workflow = {
+        "workflow_id": _generate_workflow_id(),
+        "workflow_type": "agent-burst",
+        "skill_name": None,
+        "team_name": None,
+        "session_id": session_id,
+        "started_at": burst_buffer[0].get("timestamp", ""),
+    }
+    return _finalize_workflow(workflow, burst_buffer)
+
+
 def parse_transcript(filepath: Path) -> ParseResult:
     """トランスクリプト JSONL をパースし、Skill/Agent ツール呼び出しを抽出する。
 
@@ -216,6 +235,16 @@ def parse_transcript(filepath: Path) -> ParseResult:
     current_steps: List[Dict[str, Any]] = []
     current_workflow_id: Optional[str] = None
     current_skill_name: Optional[str] = None
+
+    # Team-driven ワークフロー追跡
+    in_team: bool = False
+    team_name_val: Optional[str] = None
+    team_workflow: Optional[Dict[str, Any]] = None
+    team_steps: List[Dict[str, Any]] = []
+    team_workflow_id: Optional[str] = None
+
+    # Agent-burst 追跡
+    burst_buffer: List[Dict[str, Any]] = []
 
     # セッションメタデータ収集
     tool_sequence: List[str] = []
@@ -311,33 +340,94 @@ def parse_transcript(filepath: Path) -> ParseResult:
             tool_sequence.append(tool_name)
             tool_counts[tool_name] += 1
 
-            if tool_name == "Skill":
-                # 前のワークフローを確定
+            if tool_name == "TeamCreate":
+                # pending burst を確定
+                burst_wf = _finalize_burst(burst_buffer, session_id)
+                if burst_wf is not None:
+                    result.workflow_records.append(burst_wf)
+                burst_buffer = []
+
+                # skill-driven を確定
                 if current_workflow is not None:
                     wf_rec = _finalize_workflow(current_workflow, current_steps)
                     if wf_rec is not None:
                         result.workflow_records.append(wf_rec)
+                    current_workflow = None
+                    current_steps = []
+                    current_workflow_id = None
+                    current_skill_name = None
 
-                # 新しいワークフロー開始
-                skill_name = tool_input.get("skill", "unknown")
-                current_workflow_id = _generate_workflow_id()
-                current_skill_name = skill_name
-                current_workflow = {
-                    "workflow_id": current_workflow_id,
-                    "skill_name": skill_name,
+                # team-driven モード開始
+                in_team = True
+                team_name_val = tool_input.get("team_name", "unknown")
+                team_workflow_id = _generate_workflow_id()
+                team_workflow = {
+                    "workflow_id": team_workflow_id,
+                    "workflow_type": "team-driven",
+                    "skill_name": None,
+                    "team_name": team_name_val,
                     "session_id": session_id,
                     "started_at": timestamp,
                 }
-                current_steps = []
+                team_steps = []
 
-                # Skill 自身の usage レコード（parent_skill/workflow_id なし）
-                result.usage_records.append({
-                    "skill_name": skill_name,
-                    "timestamp": timestamp,
-                    "session_id": session_id,
-                    "file_path": tool_input.get("args", ""),
-                    "source": "backfill",
-                })
+            elif tool_name == "TeamDelete":
+                # team-driven を確定
+                if in_team and team_workflow is not None:
+                    wf_rec = _finalize_workflow(team_workflow, team_steps)
+                    if wf_rec is not None:
+                        result.workflow_records.append(wf_rec)
+                in_team = False
+                team_name_val = None
+                team_workflow = None
+                team_steps = []
+                team_workflow_id = None
+
+            elif tool_name == "Skill":
+                skill_name = tool_input.get("skill", "unknown")
+
+                if in_team:
+                    # Team 内の Skill → usage レコードのみ（skill-driven ワークフロー不生成）
+                    result.usage_records.append({
+                        "skill_name": skill_name,
+                        "timestamp": timestamp,
+                        "session_id": session_id,
+                        "file_path": tool_input.get("args", ""),
+                        "source": "backfill",
+                    })
+                else:
+                    # pending burst を確定
+                    burst_wf = _finalize_burst(burst_buffer, session_id)
+                    if burst_wf is not None:
+                        result.workflow_records.append(burst_wf)
+                    burst_buffer = []
+
+                    # 前の skill-driven ワークフローを確定
+                    if current_workflow is not None:
+                        wf_rec = _finalize_workflow(current_workflow, current_steps)
+                        if wf_rec is not None:
+                            result.workflow_records.append(wf_rec)
+
+                    # 新しい skill-driven ワークフロー開始
+                    current_workflow_id = _generate_workflow_id()
+                    current_skill_name = skill_name
+                    current_workflow = {
+                        "workflow_id": current_workflow_id,
+                        "workflow_type": "skill-driven",
+                        "skill_name": skill_name,
+                        "session_id": session_id,
+                        "started_at": timestamp,
+                    }
+                    current_steps = []
+
+                    # Skill 自身の usage レコード
+                    result.usage_records.append({
+                        "skill_name": skill_name,
+                        "timestamp": timestamp,
+                        "session_id": session_id,
+                        "file_path": tool_input.get("args", ""),
+                        "source": "backfill",
+                    })
 
             elif tool_name == "Agent":
                 subagent_type = tool_input.get("subagent_type", "unknown") or "unknown"
@@ -354,28 +444,63 @@ def parse_transcript(filepath: Path) -> ParseResult:
                     "source": "backfill",
                 }
 
-                if current_workflow is not None:
-                    # Skill ワークフロー内の Agent
+                step_info = {
+                    "tool": f"Agent:{subagent_type}",
+                    "intent_category": common.classify_prompt(prompt),
+                    "timestamp": timestamp,
+                }
+
+                if in_team:
+                    # Team-driven Agent
+                    agent_record["parent_skill"] = None
+                    agent_record["workflow_id"] = team_workflow_id
+                    team_steps.append(step_info)
+                elif current_workflow is not None:
+                    # Skill-driven Agent（既存動作）
                     agent_record["parent_skill"] = current_skill_name
                     agent_record["workflow_id"] = current_workflow_id
-                    # ステップとしても記録
-                    current_steps.append({
-                        "tool": f"Agent:{subagent_type}",
-                        "intent_category": common.classify_prompt(prompt),
-                        "timestamp": timestamp,
-                    })
+                    current_steps.append(step_info)
                 else:
-                    # ad-hoc Agent（Skill 前）
+                    # Ad-hoc Agent → burst 候補
                     agent_record["parent_skill"] = None
                     agent_record["workflow_id"] = None
 
+                    if burst_buffer:
+                        last_ts = _parse_iso_timestamp(burst_buffer[-1]["timestamp"])
+                        curr_ts = _parse_iso_timestamp(timestamp)
+                        if last_ts and curr_ts:
+                            gap = (curr_ts - last_ts).total_seconds()
+                            if gap > AGENT_BURST_GAP_SECONDS:
+                                # gap が閾値超過 → 現在の burst を確定
+                                burst_wf = _finalize_burst(burst_buffer, session_id)
+                                if burst_wf is not None:
+                                    result.workflow_records.append(burst_wf)
+                                burst_buffer = [step_info]
+                            else:
+                                burst_buffer.append(step_info)
+                        else:
+                            burst_buffer.append(step_info)
+                    else:
+                        burst_buffer.append(step_info)
+
                 result.usage_records.append(agent_record)
 
-    # 最後のワークフローを確定
+    # 最後の team-driven ワークフローを確定
+    if in_team and team_workflow is not None:
+        wf_rec = _finalize_workflow(team_workflow, team_steps)
+        if wf_rec is not None:
+            result.workflow_records.append(wf_rec)
+
+    # 最後の skill-driven ワークフローを確定
     if current_workflow is not None:
         wf_rec = _finalize_workflow(current_workflow, current_steps)
         if wf_rec is not None:
             result.workflow_records.append(wf_rec)
+
+    # 最後の agent-burst を確定
+    burst_wf = _finalize_burst(burst_buffer, session_id)
+    if burst_wf is not None:
+        result.workflow_records.append(burst_wf)
 
     # セッションメタデータを構築
     duration_seconds = 0.0
@@ -425,11 +550,12 @@ def backfill(project_dir: Optional[str] = None, force: bool = False) -> Dict[str
     else:
         backfilled_sessions = get_backfilled_session_ids()
 
-    summary = {
+    summary: Dict[str, Any] = {
         "sessions_processed": 0,
         "skill_calls": 0,
         "agent_calls": 0,
         "workflows": 0,
+        "workflows_by_type": {"skill-driven": 0, "team-driven": 0, "agent-burst": 0},
         "sessions": 0,
         "errors": 0,
         "skipped_sessions": 0,
@@ -465,6 +591,9 @@ def backfill(project_dir: Optional[str] = None, force: bool = False) -> Dict[str
 
         for wf_rec in parse_result.workflow_records:
             summary["workflows"] += 1
+            wf_type = wf_rec.get("workflow_type", "skill-driven")
+            if wf_type in summary["workflows_by_type"]:
+                summary["workflows_by_type"][wf_type] += 1
             common.append_jsonl(common.DATA_DIR / "workflows.jsonl", wf_rec)
 
         if parse_result.session_meta is not None:
