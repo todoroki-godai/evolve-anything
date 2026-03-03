@@ -1,15 +1,21 @@
 # Changelog
 
+## [0.3.3] - 2026-03-03
+
+### Added
+- `/rl-anything:version` スキル: インストール済みバージョンとコミットハッシュを確認
+
 ## [0.3.2] - 2026-03-03
 
 ### Added
 - Backfill データ収集範囲の拡張: 全 tool_use の名前+順序、セッションメタデータを `sessions.jsonl` に記録
-- セッションメタデータ: tool_sequence, tool_counts, session_duration_seconds, error_count, human_message_count, user_intents
-- `analyze.py` にセッション分析セクション追加（ツール分布、セッション長分布、intent 分布）
+- セッションメタデータ: tool_sequence, tool_counts, session_duration_seconds, error_count, human_message_count, user_intents, project_name
+- `analyze.py` にセッション分析・プロジェクト別セクション追加
 
 ### Changed
 - `backfill.py`: human メッセージの intent 分類、tool_result の error 検出、全 tool_use 名の収集を追加
 - `backfill.py`: Skill/Agent がないセッションでもメタデータを sessions.jsonl に記録
+- `--force` を project-scoped に変更（対象プロジェクトのみ再処理、他プロジェクトは保持）
 
 ## [0.3.1] - 2026-03-03
 
