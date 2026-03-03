@@ -42,18 +42,22 @@ claude plugin marketplace add todoroki-godai/rl-anything
 # Step 2: インストール
 claude plugin install rl-anything@rl-anything --scope user
 
-# Step 3: Claude Code を再起動
+# Step 3: バージョン確認
+claude plugin update rl-anything@rl-anything
+# ✔ rl-anything is already at the latest version (0.3.3).
 
-# Step 4: 既存セッション履歴からデータを収集＋分析
+# Step 4: Claude Code を再起動
+
+# Step 5: 既存セッション履歴からデータを収集＋分析
 /rl-anything:backfill
 
-# Step 5: プロジェクト固有の評価関数を生成
+# Step 6: プロジェクト固有の評価関数を生成
 /rl-anything:generate-fitness
 
-# Step 6: スキルを1つ最適化してみる
+# Step 7: スキルを1つ最適化してみる
 /rl-anything:optimize my-skill
 
-# Step 7: 結果に満足したら、自律進化ループで継続改善
+# Step 8: 結果に満足したら、自律進化ループで継続改善
 /rl-anything:rl-loop my-skill
 ```
 
