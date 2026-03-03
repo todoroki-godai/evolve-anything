@@ -1,3 +1,11 @@
+---
+name: feedback
+description: |
+  Collect feedback about the rl-anything plugin and submit as a GitHub Issue.
+  Supports bug reports, feature requests, and improvement suggestions.
+  Trigger: feedback, フィードバック, バグ報告, bug report, 機能提案, feature request
+---
+
 # /rl-anything:feedback — フィードバック収集
 
 rl-anything プラグインへのフィードバックを GitHub Issue として送信する。

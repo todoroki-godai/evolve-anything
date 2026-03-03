@@ -1,3 +1,11 @@
+---
+name: audit
+description: |
+  Run an environment health check: inventory all skills/rules/memory, check line limits,
+  aggregate usage stats, and generate a one-screen report with Scope Advisory.
+  Trigger: audit, 健康診断, health check, レポート, report, 棚卸し
+---
+
 # /rl-anything:audit — 環境の健康診断
 
 全 skills / rules / memory の棚卸し + 行数チェック + 使用状況集計 + Scope Advisory を含む1画面レポートを出力する。

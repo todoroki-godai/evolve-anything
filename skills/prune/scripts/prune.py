@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "s
 
 from audit import (
     DATA_DIR,
+    classify_artifact_origin,
     find_artifacts,
     load_usage_data,
     aggregate_usage,
@@ -119,18 +120,27 @@ def detect_zero_invocations(
             used_skills.add(parent)
 
     zero = []
+    plugin_unused = []
     for path in artifacts.get("skills", []):
         skill_name = path.parent.name
+        origin = classify_artifact_origin(path)
         # global スキルはここでは検出しない（safe_global_check で処理）
-        if str(path).startswith(str(Path.home() / ".claude" / "skills")):
+        if origin == "global":
             continue
         if skill_name not in used_skills:
-            zero.append({
-                "file": str(path),
-                "skill_name": skill_name,
-                "reason": "zero_invocation",
-                "days": days,
-            })
+            if origin == "plugin":
+                plugin_unused.append({
+                    "file": str(path),
+                    "skill_name": skill_name,
+                    "reason": "plugin_unused",
+                })
+            else:
+                zero.append({
+                    "file": str(path),
+                    "skill_name": skill_name,
+                    "reason": "zero_invocation",
+                    "days": days,
+                })
 
     for path in artifacts.get("rules", []):
         rule_name = path.stem
@@ -142,7 +152,7 @@ def detect_zero_invocations(
                 "days": days,
             })
 
-    return zero
+    return zero, plugin_unused
 
 
 def safe_global_check(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
@@ -258,14 +268,17 @@ def run_prune(project_dir: Optional[str] = None) -> Dict[str, Any]:
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
 
+    zero_invocations, plugin_unused = detect_zero_invocations(artifacts)
+
     candidates = {
         "dead_globs": detect_dead_globs(proj),
-        "zero_invocations": detect_zero_invocations(artifacts),
+        "zero_invocations": zero_invocations,
+        "plugin_unused": plugin_unused,
         "global_candidates": safe_global_check(artifacts),
         "duplicate_candidates": detect_duplicates(artifacts),
     }
 
-    total = sum(len(v) for v in candidates.values())
+    total = sum(len(v) for v in candidates.values() if isinstance(v, list))
     candidates["total_candidates"] = total
 
     return candidates

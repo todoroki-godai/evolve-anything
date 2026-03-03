@@ -1,3 +1,12 @@
+---
+name: evolve
+description: |
+  Run the full autonomous evolution pipeline: Observe → Discover → Optimize → Prune → Report.
+  Designed for daily execution to continuously improve skills and rules.
+  Trigger: evolve, 自律進化, evolution pipeline, 日次実行, daily run, パイプライン実行
+disable-model-invocation: true
+---
+
 # /rl-anything:evolve — 全フェーズ統合実行
 
 Observe データ確認 → Discover → Optimize → Prune → Report の全フェーズを
@@ -36,7 +45,18 @@ Discover で生成された候補、または既存スキルの改善を `/rl-an
 
 ### Step 4: Prune フェーズ
 
-淘汰候補を表示。承認されたもののみアーカイブ。
+淘汰候補をスキルの出自別に3セクションで表示する（MUST）:
+
+#### Custom Skills（淘汰候補）
+カスタムスキルのうち、ゼロ呼び出しのものをアーカイブ候補として表示。
+承認されたもののみアーカイブ。
+
+#### Plugin Skills（レポートのみ）
+プラグイン由来で未使用のスキルを表示。アーカイブはせず情報提供のみ。
+「未使用。`claude plugin uninstall` を検討？」と案内する。
+
+#### Global Skills（既存ロジック維持）
+Usage Registry の cross-PJ 使用状況を確認し、既存の `safe_global_check` で処理。
 
 ### Step 5: Report フェーズ
 

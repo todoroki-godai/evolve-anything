@@ -1,3 +1,11 @@
+---
+name: evolve-fitness
+description: |
+  Analyze accept/reject data to find score-acceptance correlation issues and propose
+  fitness function improvements. All changes require human approval.
+  Trigger: evolve-fitness, 評価関数改善, fitness improvement, calibration, キャリブレーション
+---
+
 # /rl-anything:evolve-fitness — 評価関数の改善提案
 
 accept/reject データから score-acceptance 相関を分析し、

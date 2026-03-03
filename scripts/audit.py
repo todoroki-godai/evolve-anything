@@ -22,6 +22,34 @@ LIMITS = {
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 
 
+def classify_artifact_origin(path: Path) -> str:
+    """スキル/ルールの出自を分類する。
+
+    Returns:
+        "plugin" — ~/.claude/plugins/cache/ 配下（または CLAUDE_PLUGINS_DIR）
+        "global" — ~/.claude/skills/ 配下
+        "custom" — その他（プロジェクトローカル等）
+    """
+    resolved = path.expanduser().resolve()
+    resolved_str = str(resolved)
+
+    # プラグインキャッシュパス（環境変数でオーバーライド可能）
+    plugins_dir = os.environ.get("CLAUDE_PLUGINS_DIR")
+    if plugins_dir:
+        plugins_path = str(Path(plugins_dir).resolve())
+    else:
+        plugins_path = str(Path.home() / ".claude" / "plugins" / "cache")
+
+    if resolved_str.startswith(plugins_path):
+        return "plugin"
+
+    global_skills_path = str(Path.home() / ".claude" / "skills")
+    if resolved_str.startswith(global_skills_path):
+        return "global"
+
+    return "custom"
+
+
 def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:
     """プロジェクト内のアーティファクトを一覧する。"""
     result: Dict[str, List[Path]] = {

@@ -1,3 +1,10 @@
+---
+name: version
+description: |
+  Display the installed rl-anything version, commit hash, scope, and update timestamp.
+  Trigger: version, バージョン, info, 情報, status, ステータス
+---
+
 # /rl-anything:version — バージョン確認
 
 インストール済み rl-anything のバージョンとコミットハッシュを表示する。

@@ -1,3 +1,11 @@
+---
+name: discover
+description: |
+  Detect repeating patterns from observation data (usage, errors, history) and generate
+  skill/rule candidates. Outputs structured artifacts meeting quality constraints.
+  Trigger: discover, パターン発見, pattern detection, skill generation, スキル生成
+---
+
 # /rl-anything:discover — パターン発見
 
 観測データ（usage.jsonl, errors.jsonl, history.jsonl）から繰り返しパターンを検出し、

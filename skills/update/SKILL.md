@@ -1,3 +1,12 @@
+---
+name: update
+description: |
+  Update the rl-anything plugin to the latest version. Runs install.sh and prompts
+  for Claude Code restart.
+  Trigger: update, 更新, アップデート, install, インストール
+disable-model-invocation: true
+---
+
 # /rl-anything:update — プラグインの更新
 
 rl-anything プラグインを最新版に更新する。Claude 内から実行可能。

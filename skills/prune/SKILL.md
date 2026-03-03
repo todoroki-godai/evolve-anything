@@ -1,3 +1,12 @@
+---
+name: prune
+description: |
+  Detect unused artifacts (dead globs, zero invocations, duplicates) and propose archiving.
+  Never deletes directly — all archiving requires human approval.
+  Trigger: prune, 淘汰, cleanup, archive, 未使用削除, unused
+disable-model-invocation: true
+---
+
 # /rl-anything:prune — 未使用アーティファクトの淘汰
 
 dead glob・zero invocation・重複の3基準でアーティファクトを検出し、アーカイブを提案する。
@@ -23,9 +32,13 @@ python3 <PLUGIN_DIR>/skills/prune/scripts/prune.py "$(pwd)"
 
 検出された候補を以下のカテゴリ別に表示:
 - **Dead Glob**: rules の paths 対象がマッチしないもの
-- **Zero Invocation**: 30日間使用記録がないもの
+- **Zero Invocation**: 30日間使用記録がないもの（カスタムスキルのみ）
+- **Plugin Unused**: プラグイン由来で未使用のスキル（レポートのみ、アーカイブ対象外）
 - **Global 候補**: Usage Registry で cross-PJ 使用状況を確認
 - **重複候補**: audit-report の意味的類似度検出結果
+
+Plugin Unused のスキルはアーカイブ対象外とする（MUST）。
+「未使用。`claude plugin uninstall` を検討？」とレポートのみ出力する。
 
 ### Step 3: 人間承認フロー（MUST）
 

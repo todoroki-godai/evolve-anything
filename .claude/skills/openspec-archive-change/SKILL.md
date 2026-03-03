@@ -1,6 +1,6 @@
 ---
 name: openspec-archive-change
-description: Archive a completed change in the experimental workflow. Use when the user wants to finalize and archive a change after implementation is complete.
+description: Archive a completed change in the experimental workflow. Use when the user wants to finalize and archive a change after implementation is complete. Also triggers on "opsx archive", "openspec archive", "アーカイブ", "完了アーカイブ".
 license: MIT
 compatibility: Requires openspec CLI.
 metadata:
