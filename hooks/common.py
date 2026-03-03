@@ -80,6 +80,79 @@ def classify_prompt(prompt: str) -> str:
     return "other"
 
 
+# 修正パターン: ユーザーのフィードバックを検出するための正規表現
+# (pattern, correction_type, confidence)
+CORRECTION_PATTERNS = [
+    (r"^いや[、,.\s]|^いや違", "iya", 0.85),
+    (r"^違う[、，,.\s]", "chigau", 0.85),
+    (r"そうじゃなく[てけ]", "souja-nakute", 0.80),
+    (r"^no[,. ]+", "no", 0.75),
+    (r"^don't\b|^do not\b", "dont", 0.75),
+    (r"^stop\b|^never\b", "stop", 0.80),
+]
+
+# 偽陽性フィルター: マッチしたら correction 検出を無効化
+FALSE_POSITIVE_FILTERS = [
+    r"[？\?]$",  # 末尾が疑問符
+]
+
+
+def detect_correction(text: str):
+    """テキストから修正パターンを検出する。
+
+    Returns:
+        (correction_type, confidence) のタプル、または None（検出なし）。
+    """
+    text_stripped = text.strip()
+    if not text_stripped:
+        return None
+
+    # 偽陽性チェック
+    for fp in FALSE_POSITIVE_FILTERS:
+        if re.search(fp, text_stripped):
+            return None
+
+    text_lower = text_stripped.lower()
+    for pattern, correction_type, confidence in CORRECTION_PATTERNS:
+        if re.search(pattern, text_lower) or re.search(pattern, text_stripped):
+            return (correction_type, confidence)
+
+    return None
+
+
+def last_skill_path(session_id: str) -> Path:
+    """直前スキル記録ファイルのパスを返す。"""
+    tmpdir = os.environ.get("TMPDIR", "/tmp")
+    return Path(tmpdir) / f"rl-anything-last-skill-{session_id}.json"
+
+
+def write_last_skill(session_id: str, skill_name: str) -> None:
+    """直前スキル名を一時ファイルに書き出す。"""
+    try:
+        path = last_skill_path(session_id)
+        data = {"skill_name": skill_name, "timestamp": datetime.now(timezone.utc).isoformat()}
+        path.write_text(json.dumps(data), encoding="utf-8")
+    except Exception as e:
+        print(f"[rl-anything] write_last_skill error: {e}", file=sys.stderr)
+
+
+def read_last_skill(session_id: str) -> str | None:
+    """直前スキル名を一時ファイルから読み取る。TTL 24時間。"""
+    try:
+        path = last_skill_path(session_id)
+        if not path.exists():
+            return None
+        mtime = path.stat().st_mtime
+        age = datetime.now(timezone.utc).timestamp() - mtime
+        if age > _WORKFLOW_CONTEXT_EXPIRE_SECONDS:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("skill_name")
+    except Exception as e:
+        print(f"[rl-anything] read_last_skill error: {e}", file=sys.stderr)
+        return None
+
+
 def project_name_from_dir(project_dir: str) -> str:
     """プロジェクトディレクトリパスから末尾のディレクトリ名を返す。"""
     return Path(project_dir).name

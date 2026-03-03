@@ -19,6 +19,119 @@ sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
 import common
 
 
+SEMANTIC_VALIDATION_PROMPT = """以下のユーザー発話が、直前に実行されたスキルへの修正フィードバックかどうかを判定してください。
+
+発話: {message}
+直前スキル: {last_skill}
+パターンマッチ confidence: {confidence}
+
+JSON で回答してください:
+{{"is_correction": bool, "confidence": float, "target_skill": string | null, "reason": string}}"""
+
+# routing 優先度テーブル（数値が小さいほど優先度が高い）
+ROUTING_PRIORITY = {
+    "skill": 1,    # correction_count > 0
+    "prune": 2,    # zero_invocation かつ global
+    "claude_md": 3,  # 高頻度パターン（10+ 回、3+ PJ）
+    "rule": 4,     # project 固有パターン（5+ 回、1 PJ）
+}
+
+
+def load_corrections(session_ids: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
+    """corrections.jsonl を読み込む。"""
+    corrections_file = common.DATA_DIR / "corrections.jsonl"
+    if not corrections_file.exists():
+        return []
+    records = []
+    for line in corrections_file.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+            if session_ids is not None and record.get("session_id") not in session_ids:
+                continue
+            records.append(record)
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def semantic_validate(corrections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """corrections を LLM で検証するための入力データを準備する。
+
+    実際の LLM 呼び出しはスキル側で行う。ここでは
+    検証に必要な (message, last_skill, confidence) を抽出し、
+    prompt template を付与して返す。
+    """
+    validation_items = []
+    for corr in corrections:
+        item = {
+            "message": corr.get("message", ""),
+            "last_skill": corr.get("last_skill"),
+            "confidence": corr.get("confidence", 0.0),
+            "prompt": SEMANTIC_VALIDATION_PROMPT.format(
+                message=corr.get("message", ""),
+                last_skill=corr.get("last_skill", "null"),
+                confidence=corr.get("confidence", 0.0),
+            ),
+            "original": corr,
+        }
+        validation_items.append(item)
+    return validation_items
+
+
+def route_recommendation(
+    skill_name: str,
+    correction_count: int = 0,
+    frequency: int = 0,
+    project_count: int = 0,
+    is_zero_invocation: bool = False,
+    is_global: bool = False,
+) -> Dict[str, Any]:
+    """correction_count / frequency / project_count に基づく target 振り分け。
+
+    優先度: correction > prune > claude_md > rule
+    """
+    targets = []
+
+    if correction_count > 0:
+        targets.append({
+            "target": "skill",
+            "priority": ROUTING_PRIORITY["skill"],
+            "action": "evolve で改善",
+            "reason": f"{correction_count} 件の correction",
+        })
+
+    if is_zero_invocation and is_global:
+        targets.append({
+            "target": "prune",
+            "priority": ROUTING_PRIORITY["prune"],
+            "action": "prune で淘汰",
+            "reason": "グローバルスキルで未使用",
+        })
+
+    if frequency >= 10 and project_count >= 3:
+        targets.append({
+            "target": "claude_md",
+            "priority": ROUTING_PRIORITY["claude_md"],
+            "action": "CLAUDE.md にパターンを追加",
+            "reason": f"{frequency} 回検出、{project_count} PJ で使用",
+        })
+
+    if frequency >= 5 and project_count == 1:
+        targets.append({
+            "target": "rule",
+            "priority": ROUTING_PRIORITY["rule"],
+            "action": "rules/ に追加",
+            "reason": f"{frequency} 回検出、1 PJ のみ",
+        })
+
+    if not targets:
+        return {"target": None, "action": None, "reason": "条件に該当しない"}
+
+    # 優先度の高い target を採用
+    best = min(targets, key=lambda t: t["priority"])
+    return {"target": best["target"], "action": best["action"], "reason": best["reason"]}
+
+
 def get_project_session_ids(project_name: str) -> Set[str]:
     """sessions.jsonl から該当 project_name の session_id セットを返す。
 
@@ -251,6 +364,50 @@ def analyze_sessions(sessions: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def analyze_corrections(
+    corrections: List[Dict[str, Any]],
+    usage: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """corrections を集計し、スキルごとの routing recommendation を生成する。"""
+    # スキルごとの correction_count
+    correction_counts: Counter = Counter()
+    for corr in corrections:
+        skill = corr.get("last_skill")
+        if skill:
+            correction_counts[skill] += 1
+
+    # スキルごとの使用頻度とプロジェクト数
+    skill_freq: Counter = Counter()
+    skill_projects: Dict[str, set] = defaultdict(set)
+    for rec in usage:
+        skill = rec.get("skill_name", "")
+        if skill.startswith("Agent:"):
+            continue
+        skill_freq[skill] += 1
+        project = rec.get("project_path", "") or rec.get("session_id", "")
+        if project:
+            skill_projects[skill].add(project)
+
+    recommendations = {}
+    all_skills = set(correction_counts.keys()) | set(skill_freq.keys())
+    for skill in all_skills:
+        rec = route_recommendation(
+            skill_name=skill,
+            correction_count=correction_counts.get(skill, 0),
+            frequency=skill_freq.get(skill, 0),
+            project_count=len(skill_projects.get(skill, set())),
+        )
+        if rec["target"]:
+            recommendations[skill] = rec
+            recommendations[skill]["correction_count"] = correction_counts.get(skill, 0)
+
+    return {
+        "total_corrections": len(corrections),
+        "skills_with_corrections": len(correction_counts),
+        "recommendations": recommendations,
+    }
+
+
 def format_report(
     consistency: Dict[str, Any],
     variations: Dict[str, Any],
@@ -260,6 +417,7 @@ def format_report(
     workflow_count: int,
     usage_count: int,
     session_count: int,
+    correction_analysis: Optional[Dict[str, Any]] = None,
 ) -> str:
     """マークダウンレポートを生成する。"""
     lines = []
@@ -368,14 +526,37 @@ def format_report(
                 lines.append(f"| {intent} | {count} |")
         lines.append("")
 
+    # Correction 分析 & Routing
+    if correction_analysis:
+        lines.append("## 6. Correction 分析 & Multi-Target Routing")
+        lines.append("")
+        lines.append(f"- **総 correction 数**: {correction_analysis['total_corrections']}")
+        lines.append(f"- **correction 対象スキル数**: {correction_analysis['skills_with_corrections']}")
+        lines.append("")
+        recs = correction_analysis.get("recommendations", {})
+        if recs:
+            lines.append("| Skill | Target | Action | Corrections | Reason |")
+            lines.append("|-------|--------|--------|-------------|--------|")
+            for skill, rec in sorted(recs.items()):
+                lines.append(
+                    f"| {skill} | {rec['target']} | {rec['action']} "
+                    f"| {rec.get('correction_count', 0)} | {rec['reason']} |"
+                )
+        else:
+            lines.append("*routing 対象なし*")
+        lines.append("")
+
     return "\n".join(lines)
 
 
-def run_analysis(project: Optional[str] = None) -> str:
+def run_analysis(project: Optional[str] = None, no_llm: bool = False) -> str:
     """分析を実行してマークダウンレポートを返す。
 
     project が指定された場合、sessions.jsonl から該当プロジェクトの
     session_id セットを取得し、全データをフィルタする。
+
+    no_llm=True の場合、LLM によるセマンティック検証をスキップし、
+    パターンマッチのみで高速に結果を返す。
     """
     if project is not None:
         session_ids: Optional[Set[str]] = get_project_session_ids(project)
@@ -384,12 +565,19 @@ def run_analysis(project: Optional[str] = None) -> str:
     workflows = load_jsonl(common.DATA_DIR / "workflows.jsonl", session_ids)
     usage = load_jsonl(common.DATA_DIR / "usage.jsonl", session_ids)
     sessions = load_jsonl(common.DATA_DIR / "sessions.jsonl", session_ids)
+    corrections = load_corrections(session_ids)
 
     consistency = analyze_consistency(workflows)
     variations = analyze_variations(workflows)
     intervention = analyze_intervention(usage)
     discover_prune = analyze_discover_prune(usage)
     session_analysis = analyze_sessions(sessions)
+    correction_analysis = analyze_corrections(corrections, usage) if corrections else None
+
+    # no_llm=False の場合、semantic_validate の入力を準備（呼び出し元が LLM を実行）
+    validation_items = None
+    if not no_llm and corrections:
+        validation_items = semantic_validate(corrections)
 
     return format_report(
         consistency=consistency,
@@ -400,6 +588,7 @@ def run_analysis(project: Optional[str] = None) -> str:
         workflow_count=len(workflows),
         usage_count=len(usage),
         session_count=len(sessions),
+        correction_analysis=correction_analysis,
     )
 
 
@@ -412,9 +601,14 @@ def main() -> None:
         default=common.project_name_from_dir(os.getcwd()),
         help="フィルタ対象のプロジェクト名（デフォルト: カレントディレクトリ名）",
     )
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="LLM セマンティック検証をスキップし、パターンマッチのみで高速に結果を返す",
+    )
     args = parser.parse_args()
 
-    report = run_analysis(project=args.project)
+    report = run_analysis(project=args.project, no_llm=args.no_llm)
     print(report)
 
 

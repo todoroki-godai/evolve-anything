@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.0] - 2026-03-03
+
+### Added
+- **Correction Detection**: `UserPromptSubmit` hook でユーザーの修正フィードバック（「いや、」「違う」「no,」等）をリアルタイム検出し `corrections.jsonl` に記録
+- **Confidence Decay**: `confidence = base_score * exp(-age_days / decay_days)` による時間減衰 + correction ペナルティで淘汰精度を向上
+- **Pin 保護**: `.pin` ファイル配置でスキルを淘汰対象から除外
+- **Multi-Target Routing**: correction > prune > claude_md > rule の優先度ベースで改善先を自動振り分け
+- **Semantic Validation**: corrections を LLM で検証するための prompt template と入力データ準備
+- **Backfill Corrections**: `--corrections` フラグで過去トランスクリプトから修正パターンを遡及抽出（confidence 0.60）
+- **Reclassify Correction Priority**: correction 紐付きセッションを優先抽出、LLM 分類に correction context を注入
+
+### Changed
+- `observe.py`: Skill 使用時に `$TMPDIR/rl-anything-last-skill-{session_id}.json` に直前スキル名を記録
+- `prune.py`: `detect_decay_candidates()` を追加、`detect_zero_invocations()` / `safe_global_check()` に pin チェックを統合
+- `analyze.py`: correction 分析セクション (#6) と `--no-llm` フラグを追加
+
+### Architecture
+- claude-reflect (MIT, Bayram Annakov) のアーキテクチャを参考にした correction detection パイプライン
+
 ## [0.9.1] - 2026-03-03
 
 ### Fixed

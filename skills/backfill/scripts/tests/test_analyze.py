@@ -345,6 +345,89 @@ class TestGetProjectSessionIds:
         assert result == set()
 
 
+class TestRouteRecommendation:
+    """route_recommendation() のテスト。"""
+
+    def test_correction_highest_priority(self):
+        """correction があるスキルは target: skill。"""
+        rec = analyze.route_recommendation("my-skill", correction_count=3)
+        assert rec["target"] == "skill"
+        assert "evolve" in rec["action"]
+
+    def test_prune_priority(self):
+        """zero_invocation かつ global → target: prune。"""
+        rec = analyze.route_recommendation("unused-skill", is_zero_invocation=True, is_global=True)
+        assert rec["target"] == "prune"
+
+    def test_claude_md_priority(self):
+        """高頻度パターン → target: claude_md。"""
+        rec = analyze.route_recommendation("common-pattern", frequency=15, project_count=4)
+        assert rec["target"] == "claude_md"
+
+    def test_rule_priority(self):
+        """project 固有パターン → target: rule。"""
+        rec = analyze.route_recommendation("local-pattern", frequency=8, project_count=1)
+        assert rec["target"] == "rule"
+
+    def test_correction_beats_other_targets(self):
+        """correction > prune > claude_md > rule の優先度。"""
+        rec = analyze.route_recommendation(
+            "my-skill",
+            correction_count=1,
+            frequency=15,
+            project_count=4,
+            is_zero_invocation=True,
+            is_global=True,
+        )
+        assert rec["target"] == "skill"
+
+    def test_no_match(self):
+        """条件に該当しない場合は target: None。"""
+        rec = analyze.route_recommendation("some-skill")
+        assert rec["target"] is None
+
+
+class TestSemanticValidate:
+    """semantic_validate() のテスト。"""
+
+    def test_prepares_validation_items(self):
+        corrections = [
+            {"message": "いや、違う", "last_skill": "evolve", "confidence": 0.85},
+        ]
+        items = analyze.semantic_validate(corrections)
+        assert len(items) == 1
+        assert items[0]["message"] == "いや、違う"
+        assert items[0]["last_skill"] == "evolve"
+        assert items[0]["confidence"] == 0.85
+        assert "prompt" in items[0]
+        assert "発話:" in items[0]["prompt"]
+
+
+class TestAnalyzeCorrections:
+    """analyze_corrections() のテスト。"""
+
+    def test_groups_and_routes(self):
+        corrections = [
+            {"last_skill": "evolve", "correction_type": "iya"},
+            {"last_skill": "evolve", "correction_type": "chigau"},
+            {"last_skill": "commit", "correction_type": "no"},
+        ]
+        usage = [
+            {"skill_name": "evolve", "session_id": "s1"},
+            {"skill_name": "evolve", "session_id": "s2"},
+            {"skill_name": "commit", "session_id": "s1"},
+        ]
+        result = analyze.analyze_corrections(corrections, usage)
+        assert result["total_corrections"] == 3
+        assert result["skills_with_corrections"] == 2
+        assert "evolve" in result["recommendations"]
+        assert result["recommendations"]["evolve"]["target"] == "skill"
+
+    def test_empty_corrections(self):
+        result = analyze.analyze_corrections([], [])
+        assert result["total_corrections"] == 0
+
+
 class TestLoadJsonlWithFilter:
     """load_jsonl() の session_ids フィルタテスト。"""
 

@@ -46,6 +46,9 @@ def handle_post_tool_use(event: dict) -> None:
         }
         common.append_jsonl(common.DATA_DIR / "usage.jsonl", usage_record)
 
+        # 直前スキル名を一時ファイルに記録（correction_detect.py が参照）
+        common.write_last_skill(session_id, skill_name)
+
         # global スキルの場合、Usage Registry にも記録
         if is_global_skill(skill_name, tool_input):
             project_path = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())

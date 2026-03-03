@@ -26,6 +26,7 @@ import common
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 MAX_PROMPT_LENGTH = 500
 AGENT_BURST_GAP_SECONDS = 300
+BACKFILL_CORRECTION_CONFIDENCE = 0.60
 
 # <command-name> タグからコマンド名を抽出する正規表現
 _COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>")
@@ -603,7 +604,77 @@ def parse_transcript(filepath: Path) -> ParseResult:
     return result
 
 
-def backfill(project_dir: Optional[str] = None, force: bool = False) -> Dict[str, int]:
+def extract_corrections_from_transcript(filepath: Path) -> List[Dict[str, Any]]:
+    """トランスクリプトから修正パターンを遡及抽出する。
+
+    human メッセージに修正パターンが検出された場合、直前の assistant ターンで
+    使われた Skill を特定して correction レコードを生成する。
+    backfill 由来のため confidence は 0.60 に設定する。
+    """
+    corrections = []
+    last_skill_name: Optional[str] = None
+    session_id = ""
+
+    for line in filepath.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        record_type = record.get("type", "")
+        timestamp = record.get("timestamp", "")
+        if not session_id:
+            session_id = record.get("sessionId", "")
+
+        # assistant ターンから最後の Skill 呼び出しを追跡
+        if record_type == "assistant":
+            message = record.get("message", {})
+            if isinstance(message, dict):
+                content = message.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            tool_name = block.get("name", "")
+                            tool_input = block.get("input", {})
+                            if tool_name == "Skill" and isinstance(tool_input, dict):
+                                last_skill_name = tool_input.get("skill")
+
+        # human メッセージから修正パターンを検出
+        elif record_type in ("human", "user"):
+            message = record.get("message", {})
+            raw_text = ""
+            if isinstance(message, dict):
+                content = message.get("content", "")
+                if isinstance(content, str) and content.strip():
+                    raw_text = content
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text.strip():
+                                raw_text = text
+                                break
+
+            if raw_text:
+                result = common.detect_correction(raw_text)
+                if result is not None:
+                    correction_type, _ = result
+                    corrections.append({
+                        "correction_type": correction_type,
+                        "message": raw_text.strip(),
+                        "last_skill": last_skill_name,
+                        "confidence": BACKFILL_CORRECTION_CONFIDENCE,
+                        "timestamp": timestamp,
+                        "session_id": session_id,
+                        "source": "backfill",
+                    })
+
+    return corrections
+
+
+def backfill(project_dir: Optional[str] = None, force: bool = False, corrections: bool = False) -> Dict[str, int]:
     """メインのバックフィル処理。"""
     common.ensure_data_dir()
 
@@ -632,6 +703,7 @@ def backfill(project_dir: Optional[str] = None, force: bool = False) -> Dict[str
         "errors": 0,
         "skipped_sessions": 0,
         "filtered_messages": 0,
+        "corrections_extracted": 0,
     }
 
     # トランスクリプト JSONL ファイルを収集
@@ -674,6 +746,13 @@ def backfill(project_dir: Optional[str] = None, force: bool = False) -> Dict[str
             summary["filtered_messages"] += parse_result.session_meta.get("filtered_messages", 0)
             common.append_jsonl(common.DATA_DIR / "sessions.jsonl", parse_result.session_meta)
 
+        # --corrections: 修正パターンの遡及抽出
+        if corrections:
+            corr_records = extract_corrections_from_transcript(tf)
+            for corr in corr_records:
+                common.append_jsonl(common.DATA_DIR / "corrections.jsonl", corr)
+                summary["corrections_extracted"] += 1
+
     return summary
 
 
@@ -691,10 +770,15 @@ def main() -> None:
         action="store_true",
         help="既存のバックフィルレコードを削除して全セッションを再処理する",
     )
+    parser.add_argument(
+        "--corrections",
+        action="store_true",
+        help="修正パターンを遡及抽出し corrections.jsonl に追記する",
+    )
     args = parser.parse_args()
 
     try:
-        summary = backfill(project_dir=args.project_dir, force=args.force)
+        summary = backfill(project_dir=args.project_dir, force=args.force, corrections=args.corrections)
         print(json.dumps(summary, ensure_ascii=False))
     except FileNotFoundError as e:
         print(json.dumps({"error": str(e)}, ensure_ascii=False), file=sys.stderr)

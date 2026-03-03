@@ -2066,3 +2066,98 @@ class TestSessionMetaEnrichment:
         assert meta["thinking_count"] == 0
         assert meta["compact_count"] == 0
         assert meta["plan_mode_count"] == 0
+
+
+class TestExtractCorrections:
+    """extract_corrections_from_transcript() のテスト。"""
+
+    def test_detects_correction_with_last_skill(self, transcript_dir):
+        """修正パターンと直前スキルが紐付けられる。"""
+        tf = transcript_dir / "sess-corr-001.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-corr-001",
+                [{"type": "tool_use", "name": "Skill", "input": {"skill": "evolve"}, "id": "tu-1"}],
+                "2025-06-15T10:00:00Z",
+            ),
+            json.dumps({
+                "type": "human",
+                "message": {"content": "そうじゃなくて optimize を使って"},
+                "timestamp": "2025-06-15T10:01:00Z",
+                "sessionId": "sess-corr-001",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        corrections = backfill.extract_corrections_from_transcript(tf)
+        assert len(corrections) == 1
+        assert corrections[0]["correction_type"] == "souja-nakute"
+        assert corrections[0]["last_skill"] == "evolve"
+        assert corrections[0]["confidence"] == 0.60
+        assert corrections[0]["source"] == "backfill"
+        assert corrections[0]["session_id"] == "sess-corr-001"
+
+    def test_no_prior_skill(self, transcript_dir):
+        """直前スキルがない場合は last_skill: null。"""
+        tf = transcript_dir / "sess-corr-002.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "いや、違う"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-corr-002",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        corrections = backfill.extract_corrections_from_transcript(tf)
+        assert len(corrections) == 1
+        assert corrections[0]["last_skill"] is None
+
+    def test_no_correction_patterns(self, transcript_dir):
+        """修正パターンがない場合は空リスト。"""
+        tf = transcript_dir / "sess-corr-003.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "ありがとう、完璧です"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-corr-003",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        corrections = backfill.extract_corrections_from_transcript(tf)
+        assert len(corrections) == 0
+
+    def test_question_excluded(self, transcript_dir):
+        """疑問文は除外される。"""
+        tf = transcript_dir / "sess-corr-004.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "いや、それでいいの？"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-corr-004",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        corrections = backfill.extract_corrections_from_transcript(tf)
+        assert len(corrections) == 0
+
+    def test_backfill_confidence(self, transcript_dir):
+        """backfill 由来は confidence 0.60。"""
+        tf = transcript_dir / "sess-corr-005.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "no, stop that"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-corr-005",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        corrections = backfill.extract_corrections_from_transcript(tf)
+        assert corrections[0]["confidence"] == 0.60

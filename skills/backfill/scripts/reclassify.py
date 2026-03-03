@@ -31,6 +31,23 @@ import common
 VALID_CATEGORIES = list(common.PROMPT_CATEGORIES.keys()) + ["other", "skill-invocation"]
 
 
+def load_corrections_by_session() -> Dict[str, List[Dict[str, Any]]]:
+    """corrections.jsonl を session_id ベースでグループ化して返す。"""
+    corrections_file = common.DATA_DIR / "corrections.jsonl"
+    if not corrections_file.exists():
+        return {}
+    by_session: Dict[str, List[Dict[str, Any]]] = {}
+    for line in corrections_file.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+            sid = record.get("session_id", "")
+            if sid:
+                by_session.setdefault(sid, []).append(record)
+        except json.JSONDecodeError:
+            continue
+    return by_session
+
+
 def get_project_session_ids(project_name: str) -> Set[str]:
     """sessions.jsonl から該当 project_name の session_id セットを返す。"""
     sessions_file = common.DATA_DIR / "sessions.jsonl"
@@ -55,6 +72,9 @@ def extract_other_intents(
 ) -> List[Dict[str, Any]]:
     """sessions.jsonl から "other" intent を持つプロンプトを抽出する。
 
+    corrections.jsonl のデータがある場合、correction が紐付いたセッションの
+    intent を優先的に抽出対象とする（結果の先頭に配置）。
+
     Args:
         project_name: フィルタ対象のプロジェクト名
         include_reclassified: True の場合、reclassified_intents が存在するセッションでも
@@ -72,7 +92,13 @@ def extract_other_intents(
     if project_name:
         session_ids = get_project_session_ids(project_name)
 
-    results: List[Dict[str, Any]] = []
+    # corrections.jsonl との session_id ベース join
+    corrections_by_session = load_corrections_by_session()
+    correction_session_ids = set(corrections_by_session.keys())
+
+    priority_results: List[Dict[str, Any]] = []  # correction 紐付き
+    normal_results: List[Dict[str, Any]] = []    # 通常
+
     for line in sessions_file.read_text(encoding="utf-8").splitlines():
         try:
             record = json.loads(line)
@@ -86,28 +112,48 @@ def extract_other_intents(
         has_reclassified = bool(record.get("reclassified_intents"))
 
         if has_reclassified and not include_reclassified:
-            # 既に reclassified_intents がある場合はスキップ（既存動作維持）
             continue
 
-        # 参照する intents を決定
         if has_reclassified:
             intents_to_check = record.get("reclassified_intents", [])
         else:
             intents_to_check = record.get("user_intents", [])
 
         user_prompts = record.get("user_prompts", [])
+        is_correction_session = sid in correction_session_ids
 
         for i, intent in enumerate(intents_to_check):
             if intent == "other":
                 prompt = user_prompts[i] if i < len(user_prompts) else ""
                 if prompt:
-                    results.append({
+                    item = {
                         "session_id": sid,
                         "intent_index": i,
                         "prompt": prompt[:500],
-                    })
+                    }
+                    if is_correction_session:
+                        priority_results.append(item)
+                    else:
+                        normal_results.append(item)
 
-    return results
+    # correction 紐付きセッションを先頭に配置
+    return priority_results + normal_results
+
+
+def build_correction_context(session_id: str) -> Optional[str]:
+    """セッションに紐付く correction 情報から LLM 分類用の context テキストを生成する。"""
+    corrections_by_session = load_corrections_by_session()
+    corrections = corrections_by_session.get(session_id, [])
+    if not corrections:
+        return None
+
+    contexts = []
+    for corr in corrections:
+        skill = corr.get("last_skill", "不明")
+        ctype = corr.get("correction_type", "")
+        contexts.append(f"ユーザーは {skill} スキルに対して修正を行った（type: {ctype}）")
+
+    return "。".join(contexts)
 
 
 def apply_reclassification(reclassified: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -204,6 +250,11 @@ def main() -> None:
             project_name=args.project,
             include_reclassified=args.include_reclassified,
         )
+        # correction context を付与
+        for item in others:
+            ctx = build_correction_context(item["session_id"])
+            if ctx:
+                item["correction_context"] = ctx
         output = {
             "total_other_prompts": len(others),
             "valid_categories": VALID_CATEGORIES,

@@ -130,6 +130,68 @@ class TestExtractOtherIntents:
         assert len(results) == 0
 
 
+class TestCorrectionPriority:
+    """corrections.jsonl を使った優先抽出のテスト。"""
+
+    def test_correction_sessions_first(self, patch_data_dir):
+        """correction 紐付きセッションが結果の先頭に含まれる。"""
+        sessions_file = patch_data_dir / "sessions.jsonl"
+        records = [
+            {"session_id": "s1", "user_intents": ["other"], "user_prompts": ["p1"]},
+            {"session_id": "s2", "user_intents": ["other"], "user_prompts": ["p2"]},
+        ]
+        sessions_file.write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n",
+            encoding="utf-8",
+        )
+
+        # s2 のみ corrections がある
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        corrections_file.write_text(
+            json.dumps({"session_id": "s2", "correction_type": "iya", "last_skill": "evolve"}) + "\n",
+            encoding="utf-8",
+        )
+
+        results = reclassify.extract_other_intents()
+        assert len(results) == 2
+        assert results[0]["session_id"] == "s2"  # correction 紐付きが先頭
+        assert results[1]["session_id"] == "s1"
+
+    def test_no_corrections_file(self, patch_data_dir):
+        """corrections.jsonl がない場合は通常の順序。"""
+        sessions_file = patch_data_dir / "sessions.jsonl"
+        records = [
+            {"session_id": "s1", "user_intents": ["other"], "user_prompts": ["p1"]},
+            {"session_id": "s2", "user_intents": ["other"], "user_prompts": ["p2"]},
+        ]
+        sessions_file.write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n",
+            encoding="utf-8",
+        )
+
+        results = reclassify.extract_other_intents()
+        assert len(results) == 2
+
+
+class TestBuildCorrectionContext:
+    """build_correction_context() のテスト。"""
+
+    def test_builds_context(self, patch_data_dir):
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        corrections_file.write_text(
+            json.dumps({"session_id": "s1", "correction_type": "iya", "last_skill": "evolve"}) + "\n",
+            encoding="utf-8",
+        )
+
+        ctx = reclassify.build_correction_context("s1")
+        assert ctx is not None
+        assert "evolve" in ctx
+
+    def test_no_corrections(self, patch_data_dir):
+        ctx = reclassify.build_correction_context("nonexistent")
+        assert ctx is None
+
+
 class TestApplyReclassification:
     """apply_reclassification() のテスト。"""
 
