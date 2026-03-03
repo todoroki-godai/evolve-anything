@@ -908,5 +908,92 @@ class TestPitfallAccumulator:
         assert passed is True
 
 
+# --- ワークフローヒント注入のテスト ---
+
+class TestWorkflowHints:
+    """ワークフロー統計ヒントの読み込みと mutation への注入テスト"""
+
+    def test_ヒントあり_mutationプロンプトに注入(self, sample_skill, tmp_path):
+        """workflow_stats.json が存在する場合、mutation プロンプトにヒントが含まれる"""
+        # workflow_stats.json を作成
+        stats_dir = tmp_path / ".claude" / "rl-anything"
+        stats_dir.mkdir(parents=True)
+        stats_data = {
+            "stats": {
+                "test-skill": {
+                    "workflow_count": 10,
+                    "consistency": 0.5,
+                    "dominant_pattern": "Explore",
+                }
+            },
+            "hints": {
+                "test-skill": "- ワークフロー安定性が中程度\n- Explore と Plan の使い分けを検討",
+            },
+        }
+        (stats_dir / "workflow_stats.json").write_text(
+            json.dumps(stats_data, ensure_ascii=False), encoding="utf-8"
+        )
+
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+        )
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            hint = optimizer._load_workflow_hints()
+
+        assert "ワークフロー安定性" in hint
+
+    def test_ヒントなし_空文字を返す(self, sample_skill, tmp_path):
+        """workflow_stats.json が存在しない場合、空文字を返す"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+        )
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            hint = optimizer._load_workflow_hints()
+
+        assert hint == ""
+
+    def test_ヒントなし_フォールバック動作(self, sample_skill, tmp_path):
+        """ヒントが空の場合、mutation プロンプトにワークフローセクションが含まれない"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+        )
+        ind = Individual("テスト", generation=0)
+
+        with patch("pathlib.Path.home", return_value=tmp_path), \
+             patch("optimize.subprocess.run", side_effect=FileNotFoundError):
+            result = optimizer.mutate(ind, 1)
+
+        # フォールバックで元の個体が返る
+        assert result.strategy == "mutation"
+
+    def test_SKILL_md_の場合_親ディレクトリ名でマッチ(self, tmp_path):
+        """SKILL.md の場合、親ディレクトリ名でヒントをマッチする"""
+        skill_dir = tmp_path / "my-skill"
+        skill_dir.mkdir()
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text("# test", encoding="utf-8")
+
+        stats_dir = tmp_path / ".claude" / "rl-anything"
+        stats_dir.mkdir(parents=True)
+        stats_data = {
+            "stats": {"opsx:my-skill": {}},
+            "hints": {"opsx:my-skill": "- ヒントテキスト"},
+        }
+        (stats_dir / "workflow_stats.json").write_text(
+            json.dumps(stats_data, ensure_ascii=False), encoding="utf-8"
+        )
+
+        optimizer = GeneticOptimizer(target_path=str(skill_path))
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            hint = optimizer._load_workflow_hints()
+
+        assert "ヒントテキスト" in hint
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

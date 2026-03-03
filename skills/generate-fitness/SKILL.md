@@ -12,6 +12,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 - `--name NAME`: 生成する fitness 関数名（省略時: ドメイン名を自動使用）
 - `--dry-run`: 分析のみ実行（fitness 関数は生成しない）
 - `--project-root DIR`: プロジェクトルート（デフォルト: カレントディレクトリ）
+- `--ask`: ユーザーに品質基準を対話的に質問し、`.claude/fitness-criteria.md` に保存してから生成を実行
 
 ## 概要
 
@@ -26,6 +27,29 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ```
 
 ## ワークフロー
+
+### Step 0: ユーザー品質基準の収集（--ask 指定時のみ）
+
+`--ask` が指定された場合、まずユーザーに品質基準を質問する。
+
+1. `.claude/fitness-criteria.md` が既に存在する場合:
+   - 既存の内容をユーザーに提示し、更新するか確認する
+   - ユーザーが更新を選択した場合は次のステップへ
+   - ユーザーが現状維持を選択した場合は Step 1 にスキップ
+
+2. AskUserQuestion ツールでユーザーに質問:
+   - 「このプロジェクトの品質基準は何ですか？以下の形式で記述してください:」
+   - 例: `- ゲーマーがワクワクする表現かどうか (weight: 0.4)`
+
+3. 回答を `.claude/fitness-criteria.md` に保存:
+```bash
+cat > .claude/fitness-criteria.md << 'EOF'
+## 品質基準
+{ユーザーの回答}
+EOF
+```
+
+`--ask` なしでも `.claude/fitness-criteria.md` が存在すれば自動的に読み込まれる。
 
 ### Step 1: プロジェクト分析
 

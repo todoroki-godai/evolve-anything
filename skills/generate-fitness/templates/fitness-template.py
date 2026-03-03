@@ -38,6 +38,13 @@ def evaluate(content: str) -> float:
     # scores["completeness"] = (check_completeness(content), 0.25)
     # scores["structure"] = (check_structure(content), 0.25)
     # scores["practicality"] = (check_practicality(content), 0.2)
+    #
+    # ワークフロー統計が利用可能な場合:
+    # workflow_stats = load_workflow_stats()  # ~/.claude/rl-anything/workflow_stats.json
+    # if workflow_stats and skill_name in workflow_stats:
+    #     ws = workflow_stats[skill_name]
+    #     consistency_bonus = 0.05 if ws.get("consistency", 0) >= 0.6 else 0
+    #     scores["workflow_efficiency"] = (consistency_bonus + 0.5, 0.1)
 
     # --- アンチパターンチェック ---
     penalty = check_anti_patterns(content)

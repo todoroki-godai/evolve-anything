@@ -19,6 +19,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+WORKFLOW_STATS_PATH = Path.home() / ".claude" / "rl-anything" / "workflow_stats.json"
+
 
 # --- ドメイン定義 ---
 
@@ -127,12 +129,24 @@ class ProjectAnalyzer:
         if pitfall_patterns:
             criteria["anti_patterns"].extend(pitfall_patterns)
 
-        return {
+        # 6. fitness-criteria.md の読み込み（存在時のみ）
+        user_criteria = self._load_fitness_criteria()
+        if user_criteria:
+            criteria["axes"].extend(user_criteria)
+
+        result: Dict[str, Any] = {
             "domain": domain,
             "keywords": keywords,
             "criteria": criteria,
             "sources": self.sources,
         }
+
+        # 7. ワークフロー統計のマージ（存在時のみ）
+        workflow_stats = self._load_workflow_stats()
+        if workflow_stats:
+            result["workflow_stats"] = workflow_stats
+
+        return result
 
     def _load_sources(self) -> List[str]:
         """CLAUDE.md, rules, skills を読み込む"""
@@ -221,6 +235,72 @@ class ProjectAnalyzer:
                     self.sources.append(rel)
 
         return patterns
+
+    def _load_workflow_stats(self) -> Optional[Dict[str, Any]]:
+        """ワークフロー統計 JSON を読み込む。存在しない場合は None。"""
+        if not WORKFLOW_STATS_PATH.exists():
+            return None
+
+        try:
+            data = json.loads(WORKFLOW_STATS_PATH.read_text(encoding="utf-8"))
+            # hints 付きの場合は stats のみ抽出
+            if "stats" in data:
+                return data["stats"]
+            # 直接 stats の場合はそのまま
+            if data and isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, OSError):
+            pass
+
+        return None
+
+    def _load_fitness_criteria(self) -> List[Dict[str, Any]]:
+        """ユーザー定義の品質基準を .claude/fitness-criteria.md から読み込む。
+
+        存在しない場合は空リスト。存在する場合は axes 形式に変換して返す。
+        """
+        criteria_path = self.project_root / ".claude" / "fitness-criteria.md"
+        if not criteria_path.exists():
+            return []
+
+        content = criteria_path.read_text(encoding="utf-8")
+        if criteria_path not in [Path(s) for s in self.sources]:
+            self.sources.append(str(criteria_path.relative_to(self.project_root)))
+
+        return self._parse_fitness_criteria(content)
+
+    @staticmethod
+    def _parse_fitness_criteria(content: str) -> List[Dict[str, Any]]:
+        """fitness-criteria.md からユーザー定義の評価軸を抽出する。
+
+        フォーマット例:
+            - ゲーマーがワクワクする表現かどうか (weight: 0.4)
+            - ブラウザ操作の具体性 (weight: 0.3)
+        """
+        axes: List[Dict[str, Any]] = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            match = re.match(
+                r"^[-*]\s+(.+?)\s*(?:\(weight:\s*([\d.]+)\))?$", stripped
+            )
+            if match:
+                description = match.group(1).strip()
+                weight_str = match.group(2)
+                weight = float(weight_str) if weight_str else 0.2
+
+                # 見出しっぽいもの（# で始まる）は除外
+                if description.startswith("#") or len(description) <= 3:
+                    continue
+
+                # name を description から生成
+                name = re.sub(r"[^\w]", "_", description)[:30].strip("_").lower()
+
+                axes.append({
+                    "name": f"user_{name}",
+                    "weight": weight,
+                    "description": description,
+                })
+        return axes
 
     @staticmethod
     def _parse_pitfalls(content: str) -> List[str]:

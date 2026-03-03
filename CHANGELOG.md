@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.0] - 2026-03-03
+
+### Added
+- `scripts/rl/workflow_analysis.py`: workflows.jsonl からスキル別ワークフロー統計を算出し JSON 出力
+  - 抽象パターン圧縮（連続同一エージェントを1つに集約）
+  - `--min-workflows`, `--hints`, `--for-fitness` オプション
+  - team-driven / agent-burst の統計キー対応
+- `generate-fitness --ask`: ユーザーに品質基準を対話的に質問し `.claude/fitness-criteria.md` に保存
+- rl-scorer にワークフロー効率性の補助シグナル（一貫性・ステップ効率・戦略明確さ）
+
+### Changed
+- `optimize.py`: mutation プロンプトにワークフロー分析ヒントを注入（統計がない場合はフォールバック）
+- `analyze_project.py`: ワークフロー統計 JSON + `.claude/fitness-criteria.md` のマージ対応
+- `fitness-template.py`: ワークフロー統計参照のスケルトンコメント追加
+
 ## [0.8.0] - 2026-03-03
 
 ### Added

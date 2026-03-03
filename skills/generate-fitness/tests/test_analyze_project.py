@@ -292,5 +292,86 @@ class TestParsePitfalls:
         assert result == []
 
 
+# --- fitness-criteria.md テスト ---
+
+class TestFitnessCriteria:
+    """ユーザー定義品質基準の読み込みテスト"""
+
+    def test_fitness_criteriaあり(self, game_project):
+        """fitness-criteria.md が存在する場合、criteria.axes にユーザー定義軸が追加される"""
+        criteria_dir = game_project / ".claude"
+        (criteria_dir / "fitness-criteria.md").write_text(
+            "## 品質基準\n"
+            "- ゲーマーがワクワクする表現 (weight: 0.4)\n"
+            "- ブラウザ操作の具体性 (weight: 0.3)\n",
+            encoding="utf-8",
+        )
+        analyzer = ProjectAnalyzer(str(game_project))
+        result = analyzer.analyze()
+        axis_names = [a["name"] for a in result["criteria"]["axes"]]
+        assert any(n.startswith("user_") for n in axis_names)
+        assert ".claude/fitness-criteria.md" in result["sources"]
+
+    def test_fitness_criteriaなし(self, game_project):
+        """fitness-criteria.md が存在しない場合、user_ 軸は追加されない"""
+        analyzer = ProjectAnalyzer(str(game_project))
+        result = analyzer.analyze()
+        axis_names = [a["name"] for a in result["criteria"]["axes"]]
+        assert not any(n.startswith("user_") for n in axis_names)
+
+    def test_parse_fitness_criteria(self):
+        """fitness-criteria.md のパース"""
+        content = (
+            "## 品質基準\n"
+            "- ゲーマーがワクワクする表現 (weight: 0.4)\n"
+            "- ブラウザ操作の具体性 (weight: 0.3)\n"
+            "- エラーハンドリングの網羅性\n"
+        )
+        axes = ProjectAnalyzer._parse_fitness_criteria(content)
+        assert len(axes) == 3
+        assert axes[0]["weight"] == 0.4
+        assert axes[1]["weight"] == 0.3
+        assert axes[2]["weight"] == 0.2  # デフォルト weight
+        assert all(a["name"].startswith("user_") for a in axes)
+
+
+# --- ワークフロー統計マージテスト ---
+
+class TestWorkflowStatsIntegration:
+    """ワークフロー統計のマージテスト"""
+
+    def test_workflow_statsあり(self, game_project, tmp_path, monkeypatch):
+        """workflow_stats.json が存在する場合、結果に workflow_stats が含まれる"""
+        stats_data = {
+            "opsx:apply": {
+                "workflow_count": 40,
+                "consistency": 0.475,
+                "avg_steps": 3.1,
+                "dominant_pattern": "Explore",
+            }
+        }
+        stats_path = tmp_path / "workflow_stats.json"
+        stats_path.write_text(json.dumps(stats_data), encoding="utf-8")
+        monkeypatch.setattr(
+            "analyze_project.WORKFLOW_STATS_PATH", stats_path
+        )
+
+        analyzer = ProjectAnalyzer(str(game_project))
+        result = analyzer.analyze()
+        assert "workflow_stats" in result
+        assert result["workflow_stats"]["opsx:apply"]["consistency"] == 0.475
+
+    def test_workflow_statsなし(self, game_project, tmp_path, monkeypatch):
+        """workflow_stats.json が存在しない場合、結果に workflow_stats は含まれない"""
+        monkeypatch.setattr(
+            "analyze_project.WORKFLOW_STATS_PATH",
+            tmp_path / "nonexistent.json",
+        )
+
+        analyzer = ProjectAnalyzer(str(game_project))
+        result = analyzer.analyze()
+        assert "workflow_stats" not in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

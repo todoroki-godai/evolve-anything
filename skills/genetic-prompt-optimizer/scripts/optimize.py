@@ -296,6 +296,44 @@ class GeneticOptimizer:
 
         return population
 
+    def _load_workflow_hints(self) -> str:
+        """ワークフロー統計からスキル向けの mutation ヒントを読み込む。
+
+        ~/.claude/rl-anything/workflow_stats.json が存在し、
+        対象スキル名のエントリがあればヒントテキストを生成する。
+        存在しない場合は空文字を返す（フォールバック）。
+        """
+        stats_path = Path.home() / ".claude" / "rl-anything" / "workflow_stats.json"
+        if not stats_path.exists():
+            return ""
+
+        try:
+            data = json.loads(stats_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return ""
+
+        # hints 付きの場合はそのまま使う
+        if "hints" in data and "stats" in data:
+            hints = data.get("hints", {})
+        else:
+            # stats のみの場合はここで簡易ヒント生成
+            return ""
+
+        # ターゲットのスキル名を推定
+        target_name = self.target_path.stem
+        # SKILL.md の場合は親ディレクトリ名を使う
+        if target_name == "SKILL":
+            target_name = self.target_path.parent.name
+
+        # スキル名でマッチするヒントを探す
+        for key, hint_text in hints.items():
+            # "opsx:apply" のようなキーの ":" 以降でもマッチ
+            key_parts = key.split(":")
+            if target_name in key_parts or key == target_name:
+                return hint_text
+
+        return ""
+
     def mutate(self, individual: Individual, generation: int) -> Individual:
         """LLM で突然変異を生成。
         claude -p で変異指示を与え、変異後のスキル内容を取得。
@@ -306,6 +344,15 @@ class GeneticOptimizer:
             f"\n\n**重要な制約**: 出力は {self._max_lines} 行以内に収めてください。"
             f"{'ルールは3行以内が原則です。詳細な手順は別ファイルに書きます。' if self._is_rule_file else '冗長な説明を避け、簡潔に保ってください。'}"
         )
+
+        # ワークフロー分析ヒントを読み込む（存在しない場合は空文字）
+        workflow_hint = self._load_workflow_hints()
+        workflow_section = ""
+        if workflow_hint:
+            workflow_section = (
+                f"\n\nワークフロー分析からの示唆:\n{workflow_hint}\n"
+            )
+
         prompt = (
             f"以下のClaude Code{file_type}定義を改善してください。\n\n"
             "改善方針（ランダムに1-2個選んで適用）:\n"
@@ -314,6 +361,7 @@ class GeneticOptimizer:
             "- 構造を整理\n"
             "- 不要な冗長性を削除\n"
             "- エッジケースの対処を追加\n\n"
+            f"{workflow_section}"
             "元のスキル:\n"
             f"```markdown\n{individual.content}\n```\n\n"
             "改善後のスキル全文をMarkdownで出力してください。"
