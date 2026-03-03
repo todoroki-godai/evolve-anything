@@ -20,7 +20,7 @@ rl-anything の evolve/prune パイプラインは、プロジェクト内の全
 **Non-Goals:**
 - observe.py の出自記録追加（Phase 2 で対応。現時点ではファイルパスベースの判定で十分）
 - commands → skills の統合（`.claude/commands/opsx/` の削除は tasks で対応。design スコープ外）
-- スキル推奨メカニズムの実装（別 change として提案）
+- スキル推奨メカニズムの実装（既存の discover + prune + frontmatter 自動マッチで十分。不要と判断）
 - 他プロジェクトのスキルへの影響
 
 ## Decisions

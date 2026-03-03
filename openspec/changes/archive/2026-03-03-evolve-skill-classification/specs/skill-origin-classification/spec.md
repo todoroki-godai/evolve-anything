@@ -34,6 +34,13 @@
 - **WHEN** `CLAUDE_PLUGINS_DIR=/custom/plugins` が設定されている
 - **THEN** `/custom/plugins/` 配下のパスは `"plugin"` と判定されなければならない (MUST)
 
+#### Scenario: プラグインがインストールしたスキルがプロジェクト .claude/skills/ に存在する場合
+- **GIVEN** `~/.claude/plugins/installed_plugins.json` にプラグインが登録されており、そのプラグインの `installPath/.claude/skills/` に `openspec-apply-change` スキルが存在する
+- **WHEN** `classify_artifact_origin(Path("/Users/user/project/.claude/skills/openspec-apply-change/SKILL.md"))` を呼び出す
+- **THEN** `"plugin"` を返さなければならない (MUST)
+- **NOTE** スキルのディレクトリ名（例: `openspec-apply-change`）が `installed_plugins.json` の各プラグインの `installPath/.claude/skills/` 配下に存在するかで判定する
+- **NOTE** `installed_plugins.json` が存在しない・不正な場合は従来通り `"custom"` にフォールバックしなければならない (MUST)
+
 ### Requirement: prune がプラグインスキルを淘汰対象から除外する
 prune はプラグイン由来スキルを淘汰候補から除外しなければならない (MUST)。
 `detect_zero_invocations()` はプラグイン由来のスキル（origin == "plugin"）を

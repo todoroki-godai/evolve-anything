@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0] - 2026-03-03
+
+### Added
+- `classify_artifact_origin(path)`: スキル/ルールの出自を custom / plugin / global に分類するユーティリティ関数
+- `_load_plugin_skill_names()`: `installed_plugins.json` からプラグインインストール済みスキル名を取得（キャッシュ付き）
+- `detect_zero_invocations()` がプラグイン由来スキルを淘汰候補から除外し `plugin_unused` として返す
+- `run_prune()` の戻り値に `plugin_unused` キーを追加
+- evolve レポートに Custom / Plugin / Global の出自別3セクション表示
+- 全9スキル SKILL.md に YAML frontmatter 追加（name, description, disable-model-invocation）
+- prune テスト 15 件追加（出自分類・プラグイン除外・installed_plugins.json フォールバック）
+
+### Changed
+- `/scripts/prune.py` を削除し `skills/prune/scripts/prune.py` に統一（DRY 違反解消）
+- `scripts/evolve.py`, `skills/evolve/scripts/evolve.py` の import パスを修正
+
+### Removed
+- `.claude/commands/opsx/` ディレクトリ（SKILL.md に一本化）
+- `/scripts/prune.py`（重複していた旧版）
+
 ## [0.4.1] - 2026-03-03
 
 ### Added
