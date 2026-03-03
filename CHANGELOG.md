@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.1] - 2026-03-03
+
+### Added
+- `classify_prompt()` のキーワード拡充: 6 新カテゴリ（git-ops, deploy, debug, test, config, conversation）+ 既存カテゴリへの日本語キーワード追加
+- カテゴリ優先順位制御（辞書順序で spec-review > code-review > git-ops > ... > conversation）
+- LLM Hybrid 再分類: `reclassify.py` でキーワード分類で "other" に残ったプロンプトを Claude が再分類
+- `analyze.py` が `reclassified_intents` フィールドを優先して使用
+- SKILL.md に Step 2（Intent 再分類）を追加
+- テスト 40+ 件追加（新カテゴリ・日本語・優先順位テスト）
+
+### Changed
+- `PROMPT_CATEGORIES` のカテゴリ数: 5 → 11（"other" 率 70% → 20-30% 目標）
+- SKILL.md のステップ番号を再整理（Step 2: 再分類、Step 3: 分析、Step 4: --force）
+
 ## [0.4.0] - 2026-03-03
 
 ### Added

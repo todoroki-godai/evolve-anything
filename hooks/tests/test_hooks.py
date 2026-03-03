@@ -165,6 +165,8 @@ class TestReadWorkflowContext:
 class TestClassifyPrompt:
     """common.classify_prompt() のテスト。"""
 
+    # --- 既存カテゴリ（英語） ---
+
     def test_spec_review(self):
         assert common.classify_prompt("review the spec requirements") == "spec-review"
 
@@ -188,6 +190,137 @@ class TestClassifyPrompt:
 
     def test_empty_prompt(self):
         assert common.classify_prompt("") == "other"
+
+    # --- 新カテゴリ（英語） ---
+
+    def test_git_ops_merge(self):
+        assert common.classify_prompt("merge the feature branch") == "git-ops"
+
+    def test_git_ops_rebase(self):
+        assert common.classify_prompt("rebase onto main") == "git-ops"
+
+    def test_deploy_release(self):
+        assert common.classify_prompt("deploy to production") == "deploy"
+
+    def test_deploy_staging(self):
+        assert common.classify_prompt("release to staging environment") == "deploy"
+
+    def test_debug_fix(self):
+        assert common.classify_prompt("fix the login bug") == "debug"
+
+    def test_debug_error(self):
+        assert common.classify_prompt("debug the error in auth") == "debug"
+
+    def test_test_pytest(self):
+        assert common.classify_prompt("run pytest on the module") == "test"
+
+    def test_test_assert(self):
+        assert common.classify_prompt("add assert for edge case") == "test"
+
+    def test_config_setup(self):
+        assert common.classify_prompt("update config for database") == "config"
+
+    def test_config_env(self):
+        assert common.classify_prompt("setup the env variables") == "config"
+
+    def test_conversation_ok(self):
+        assert common.classify_prompt("OK let's do it") == "conversation"
+
+    # --- 既存カテゴリ（日本語） ---
+
+    def test_spec_review_jp(self):
+        assert common.classify_prompt("仕様を確認してください") == "spec-review"
+
+    def test_spec_review_jp_requirements(self):
+        assert common.classify_prompt("要件を整理して") == "spec-review"
+
+    def test_code_review_jp(self):
+        assert common.classify_prompt("コードレビューして") == "code-review"
+
+    def test_code_review_jp_diff(self):
+        assert common.classify_prompt("差分を見て") == "code-review"
+
+    def test_code_exploration_jp(self):
+        assert common.classify_prompt("ファイル構造を教えて") == "code-exploration"
+
+    def test_code_exploration_jp_read(self):
+        assert common.classify_prompt("このファイル読んで") == "code-exploration"
+
+    def test_research_jp(self):
+        assert common.classify_prompt("ベストプラクティスを調べて") == "research"
+
+    def test_research_jp_latest(self):
+        assert common.classify_prompt("最新の方法を教えて") == "research"
+
+    def test_implementation_jp(self):
+        assert common.classify_prompt("この機能を実装して") == "implementation"
+
+    def test_implementation_jp_create(self):
+        assert common.classify_prompt("新しいコンポーネントを作って") == "implementation"
+
+    # --- 新カテゴリ（日本語） ---
+
+    def test_git_ops_jp_merge(self):
+        assert common.classify_prompt("mainにマージして") == "git-ops"
+
+    def test_git_ops_jp_commit(self):
+        assert common.classify_prompt("コミットしてください") == "git-ops"
+
+    def test_git_ops_jp_branch(self):
+        assert common.classify_prompt("ブランチを切って") == "git-ops"
+
+    def test_deploy_jp(self):
+        assert common.classify_prompt("本番にデプロイして") == "deploy"
+
+    def test_deploy_jp_release(self):
+        assert common.classify_prompt("リリースの準備をして") == "deploy"
+
+    def test_debug_jp_fix(self):
+        assert common.classify_prompt("このバグを修正して") == "debug"
+
+    def test_debug_jp_investigate(self):
+        assert common.classify_prompt("エラーの原因を調査して") == "debug"
+
+    def test_debug_jp_naose(self):
+        assert common.classify_prompt("これ直して") == "debug"
+
+    def test_test_jp(self):
+        assert common.classify_prompt("テストを実行して") == "test"
+
+    def test_test_jp_verify(self):
+        assert common.classify_prompt("動作を検証して") == "test"
+
+    def test_config_jp(self):
+        assert common.classify_prompt("設定を変更して") == "config"
+
+    def test_config_jp_readme(self):
+        assert common.classify_prompt("README.mdを更新") == "config"
+
+    def test_conversation_jp_please(self):
+        assert common.classify_prompt("お願いします") == "conversation"
+
+    def test_conversation_jp_continue(self):
+        assert common.classify_prompt("続けてください") == "conversation"
+
+    def test_conversation_jp_proceed(self):
+        assert common.classify_prompt("進めて") == "conversation"
+
+    def test_conversation_jp_thanks(self):
+        assert common.classify_prompt("ありがとう") == "conversation"
+
+    # --- 優先順位テスト ---
+
+    def test_priority_spec_over_code_review(self):
+        """spec-review は code-review より優先される。"""
+        assert common.classify_prompt("review the spec") == "spec-review"
+
+    def test_priority_debug_over_implementation(self):
+        """debug は implementation より優先される（'fix' キーワード）。"""
+        assert common.classify_prompt("fix this broken feature") == "debug"
+
+    def test_priority_git_ops_over_deploy(self):
+        """git-ops は deploy より優先される（'push' キーワード）。"""
+        assert common.classify_prompt("push to remote branch") == "git-ops"
 
 
 class TestObserve:

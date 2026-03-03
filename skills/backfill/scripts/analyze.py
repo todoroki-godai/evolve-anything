@@ -220,7 +220,9 @@ def analyze_sessions(sessions: List[Dict[str, Any]]) -> Dict[str, Any]:
         for tool, count in sess.get("tool_counts", {}).items():
             tool_dist[tool] += count
 
-        for intent in sess.get("user_intents", []):
+        # reclassified_intents があればそちらを優先して使用
+        intents = sess.get("reclassified_intents") or sess.get("user_intents", [])
+        for intent in intents:
             intent_dist[intent] += 1
 
         proj = sess.get("project_name", "unknown")

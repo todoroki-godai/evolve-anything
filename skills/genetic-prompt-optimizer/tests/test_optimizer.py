@@ -111,8 +111,9 @@ class TestTelemetry:
             dry_run=True,
         )
         ind = Individual("テスト", generation=0)
-        # dry_run でも mutate はフォールバックで返す
-        result = optimizer.mutate(ind, 1)
+        # subprocess.run をモックして CLI 呼び出しを回避（フォールバックで strategy 検証）
+        with patch("optimize.subprocess.run", side_effect=FileNotFoundError):
+            result = optimizer.mutate(ind, 1)
         assert result.strategy == "mutation"
 
     def test_crossover_sets_strategy(self, sample_skill, temp_dir):
@@ -125,7 +126,8 @@ class TestTelemetry:
         )
         p1 = Individual("親1", generation=0)
         p2 = Individual("親2", generation=0)
-        result = optimizer.crossover(p1, p2, 1)
+        with patch("optimize.subprocess.run", side_effect=FileNotFoundError):
+            result = optimizer.crossover(p1, p2, 1)
         assert result.strategy == "crossover"
 
     def test_elite_sets_strategy(self, sample_skill, temp_dir):
@@ -139,7 +141,13 @@ class TestTelemetry:
         pop = [Individual(f"個体{i}", generation=0) for i in range(3)]
         for i, ind in enumerate(pop):
             ind.fitness = 0.9 - i * 0.1
-        new_pop = optimizer.next_generation(pop, 1)
+        with patch.object(optimizer, "mutate") as mock_mutate, \
+             patch.object(optimizer, "crossover") as mock_cross:
+            mock_mutate.return_value = Individual("変異", generation=1)
+            mock_mutate.return_value.strategy = "mutation"
+            mock_cross.return_value = Individual("交叉", generation=1)
+            mock_cross.return_value.strategy = "crossover"
+            new_pop = optimizer.next_generation(pop, 1)
         assert new_pop[0].strategy == "elite"
 
     def test_history_jsonl_creation(self, sample_skill, temp_dir):
@@ -212,7 +220,9 @@ class TestGeneticOptimizer:
         # generations ディレクトリを temp_dir に変更
         optimizer.run_dir = temp_dir / "test_run"
 
-        result = optimizer.run()
+        # subprocess.run をモックして CLI 呼び出しを回避
+        with patch("optimize.subprocess.run", side_effect=FileNotFoundError):
+            result = optimizer.run()
 
         assert result["run_id"] is not None
         assert result["generations"] == 2

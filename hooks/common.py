@@ -54,12 +54,19 @@ def read_workflow_context(session_id: str) -> dict:
 
 
 # Agent prompt を簡易分類するキーワードマップ
+# 辞書の順序がカテゴリ優先順位を決定する（先にマッチした方が採用される）
 PROMPT_CATEGORIES = {
-    "spec-review": ["spec", "requirement", "MUST", "quality check", r"review.*spec"],
-    "code-exploration": ["structure", "explore", "codebase", "directory", r"find.*file"],
-    "research": ["research", "best practice", "latest", "how to", "pattern"],
-    "code-review": [r"review.*code", r"review.*change", r"review.*impl", "alignment", "verify"],
-    "implementation": ["implement", "create", "build", r"write.*code", r"add.*feature"],
+    "spec-review": ["spec", "requirement", "MUST", "quality check", r"review.*spec", "仕様", "要件"],
+    "code-review": [r"review.*code", r"review.*change", r"review.*impl", "alignment", "verify", "コードレビュー", "変更確認", "差分"],
+    "git-ops": ["merge", "commit", "push", "pull", "branch", "rebase", "cherry-pick", "revert", "stash", r"\btag\b", "マージ", "コミット", "プッシュ", "ブランチ", "取り込"],
+    "deploy": ["deploy", "release", "staging", "production", "stg", "prod", "ci/cd", "pipeline", "デプロイ", "リリース", "本番", "環境"],
+    "debug": ["debug", "log", "error", "fix", "issue", "bug", "修正", "バグ", "ログ", "エラー", "なおせ", "直せ", "直して", "原因", "調査"],
+    "test": ["test", "assert", "pytest", "確認", "テスト", "検証", "動作", "ブラウザ"],
+    "code-exploration": ["structure", "explore", "codebase", "directory", r"find.*file", "構造", "探索", "ファイル", "読んで", "見て"],
+    "research": ["research", "best practice", "latest", "how to", "pattern", "調べて", "ベストプラクティス", "最新", "方法"],
+    "implementation": ["implement", "create", "build", r"write.*code", r"add.*feature", "実装", "作成", "追加", "機能", "作って"],
+    "config": ["config", "setting", "setup", "env", "設定", "構成", "セットアップ", "readme"],
+    "conversation": ["お願い", "続けて", "ありがと", "よろしく", "はい", "いいえ", "ok", "いいよ", "やって", "進めて", "対応して"],
 }
 
 

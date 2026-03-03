@@ -846,7 +846,7 @@ class TestSessionMeta:
         tf = transcript_dir / "sess-meta-007.jsonl"
         record = {
             "type": "human",
-            "message": {"content": "research the best practices for testing"},
+            "message": {"content": "research the best practices for caching"},
             "timestamp": "2025-06-15T10:00:00Z",
             "sessionId": "sess-meta-007",
         }
