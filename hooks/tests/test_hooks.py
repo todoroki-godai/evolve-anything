@@ -842,13 +842,26 @@ sys.path.insert(0, str(_plugin_root / "skills" / "prune" / "scripts"))
 sys.path.insert(0, str(_plugin_root / "skills" / "discover" / "scripts"))
 
 
+def _load_skills_discover():
+    """skills/discover/scripts/discover.py を明示的にロードする。
+
+    scripts/discover.py との名前衝突を回避するため、ファイルパスを直接指定する。
+    """
+    import importlib.util
+    discover_path = _plugin_root / "skills" / "discover" / "scripts" / "discover.py"
+    spec = importlib.util.spec_from_file_location("discover", str(discover_path))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["discover"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class TestDiscoverContextualization:
     """discover.py の contextualized/ad-hoc 分類テスト。"""
 
     def test_ad_hoc_only_counted(self, patch_data_dir):
         """ad-hoc レコードのみがスキル候補としてカウントされる。"""
-        import discover
-        importlib.reload(discover)
+        discover = _load_skills_discover()
 
         usage_file = patch_data_dir / "usage.jsonl"
         records = []
@@ -880,8 +893,7 @@ class TestDiscoverContextualization:
 
     def test_backfill_excluded_as_unknown(self, patch_data_dir):
         """backfill データは unknown として除外される。"""
-        import discover
-        importlib.reload(discover)
+        discover = _load_skills_discover()
 
         usage_file = patch_data_dir / "usage.jsonl"
         records = []
