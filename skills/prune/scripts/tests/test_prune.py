@@ -482,6 +482,42 @@ class TestMergeDuplicates:
         gd_key = next(k for k in statuses if "gamma" in k and "delta" in k)
         assert statuses[gd_key] == "proposed"
 
+    def test_reorganize_pairs_filtered_by_similarity(self, patch_data_dir, project_with_skills):
+        """reorganize 由来ペアが類似度フィルタで skipped_low_similarity になる。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "beta", "timestamp": now},
+            {"skill_name": "gamma", "timestamp": now},
+        ])
+
+        reorganize_merge_groups = [
+            {"skills": ["alpha", "beta", "gamma"]}
+        ]
+
+        # filter_merge_group_pairs をモックして alpha-beta のみ通過させる
+        with mock.patch("prune.filter_merge_group_pairs") as mock_filter:
+            mock_filter.return_value = [frozenset(["alpha", "beta"])]
+            result = prune.merge_duplicates(
+                [],
+                reorganize_merge_groups=reorganize_merge_groups,
+                project_dir=str(project_with_skills),
+            )
+
+        # alpha-beta は proposed、alpha-gamma と beta-gamma は skipped_low_similarity
+        statuses = {}
+        for p in result["merge_proposals"]:
+            key = p["primary"]["skill_name"] + "::" + p["secondary"]["skill_name"]
+            statuses[key] = p["status"]
+
+        ab_key = next(k for k in statuses if "alpha" in k and "beta" in k)
+        assert statuses[ab_key] == "proposed"
+
+        skipped = [p for p in result["merge_proposals"] if p["status"] == "skipped_low_similarity"]
+        assert len(skipped) == 2  # alpha-gamma, beta-gamma
+
     def test_run_prune_includes_merge_result(self, patch_data_dir, tmp_path):
         """run_prune の戻り値に merge_result キーが存在する。"""
         project_dir = tmp_path / "project"

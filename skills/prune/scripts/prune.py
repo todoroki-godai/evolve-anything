@@ -19,6 +19,7 @@ sys.path.insert(0, str(_plugin_root / "skills" / "discover" / "scripts"))
 sys.path.insert(0, str(_plugin_root / "scripts"))
 
 from lib.frontmatter import extract_description
+from lib.similarity import filter_merge_group_pairs
 from discover import load_merge_suppression
 
 from audit import (
@@ -201,6 +202,21 @@ def cleanup_corrections() -> Dict[str, int]:
     )
 
     return {"removed": removed, "kept": len(kept_lines)}
+
+
+DEFAULT_MERGE_SIMILARITY_THRESHOLD = 0.60
+
+
+def load_merge_similarity_threshold() -> float:
+    """evolve-state.json から reorganize_merge_similarity_threshold を読み込む。未設定時はデフォルト 0.60。"""
+    state_file = DATA_DIR / "evolve-state.json"
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            return float(state.get("reorganize_merge_similarity_threshold", DEFAULT_MERGE_SIMILARITY_THRESHOLD))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+    return DEFAULT_MERGE_SIMILARITY_THRESHOLD
 
 
 def load_decay_threshold() -> float:
@@ -589,14 +605,26 @@ def merge_duplicates(
         if name_a and name_b and name_a != name_b:
             pairs.add(frozenset([name_a, name_b]))
 
-    # reorganize_merge_groups からペアを抽出
+    # reorganize_merge_groups からペアを抽出（類似度フィルタ適用）
+    reorg_filtered_pairs: set = set()
+    reorg_skipped_pairs: set = set()
     if reorganize_merge_groups:
+        merge_sim_threshold = load_merge_similarity_threshold()
         for group in reorganize_merge_groups:
-            skills = group.get("skills", [])
-            for i in range(len(skills)):
-                for j in range(i + 1, len(skills)):
-                    if skills[i] != skills[j]:
-                        pairs.add(frozenset([skills[i], skills[j]]))
+            group_skills = group.get("skills", [])
+            if len(group_skills) < 2:
+                continue
+            # ペア単位の類似度フィルタ
+            passed = filter_merge_group_pairs(
+                group_skills, skill_path_map, threshold=merge_sim_threshold
+            )
+            passed_set = set(passed)
+            reorg_filtered_pairs.update(passed_set)
+            # フィルタで除外されたペアを記録
+            from itertools import combinations
+            all_group_pairs = {frozenset(p) for p in combinations(group_skills, 2)}
+            reorg_skipped_pairs.update(all_group_pairs - passed_set)
+        pairs.update(reorg_filtered_pairs)
 
     # merge suppression セットをループ外で1回だけロード
     suppressed_pairs = load_merge_suppression()
@@ -658,6 +686,19 @@ def merge_duplicates(
                 "usage_count": secondary_count,
             },
             "status": "proposed",
+        })
+
+    # reorganize 由来でフィルタ除外されたペアを skipped_low_similarity で追加
+    # (duplicate_candidates 経由で既に pairs に含まれているものは除く)
+    for pair in sorted(reorg_skipped_pairs - pairs, key=lambda p: sorted(p)):
+        names = sorted(pair)
+        skill_a, skill_b = names[0], names[1]
+        path_a_str = skill_path_map.get(skill_a, "")
+        path_b_str = skill_path_map.get(skill_b, "")
+        merge_proposals.append({
+            "primary": {"path": path_a_str, "skill_name": skill_a, "usage_count": 0},
+            "secondary": {"path": path_b_str, "skill_name": skill_b, "usage_count": 0},
+            "status": "skipped_low_similarity",
         })
 
     return {

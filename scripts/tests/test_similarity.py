@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lib.similarity import (
     build_tfidf_matrix,
     compute_pairwise_similarity,
+    filter_merge_group_pairs,
     jaccard_coefficient,
     tokenize,
 )
@@ -192,6 +193,124 @@ def test_compute_pairwise_similarity_sklearn_not_installed(tmp_path):
         results = compute_pairwise_similarity(paths, threshold=0.50)
 
     assert results == []
+
+
+# --- filter_merge_group_pairs ---
+
+
+class TestFilterMergeGroupPairs:
+    """filter_merge_group_pairs のユニットテスト。"""
+
+    def test_high_similarity_pair_passes(self, tmp_path):
+        """類似度が閾値以上のペアがフィルタを通過する。"""
+        pytest.importorskip("sklearn")
+        pytest.importorskip("scipy")
+
+        # 非常に類似したコンテンツ
+        (tmp_path / "skill-a").mkdir()
+        file_a = tmp_path / "skill-a" / "SKILL.md"
+        file_a.write_text(
+            "Deploy application to AWS using CloudFormation templates. "
+            "AWS deployment configuration and infrastructure setup. "
+            "CloudFormation stack management and deployment pipeline."
+        )
+        (tmp_path / "skill-b").mkdir()
+        file_b = tmp_path / "skill-b" / "SKILL.md"
+        file_b.write_text(
+            "AWS infrastructure deployment and CloudFormation templates. "
+            "Deploy and manage AWS cloud infrastructure resources. "
+            "CloudFormation deployment automation and stack updates."
+        )
+
+        skill_path_map = {
+            "skill-a": str(file_a),
+            "skill-b": str(file_b),
+        }
+        result = filter_merge_group_pairs(
+            ["skill-a", "skill-b"], skill_path_map, threshold=0.30
+        )
+        assert len(result) == 1
+        assert frozenset(["skill-a", "skill-b"]) in result
+
+    def test_low_similarity_pair_filtered(self, tmp_path):
+        """類似度が閾値未満のペアが除外される。"""
+        pytest.importorskip("sklearn")
+        pytest.importorskip("scipy")
+
+        (tmp_path / "skill-x").mkdir()
+        file_x = tmp_path / "skill-x" / "SKILL.md"
+        file_x.write_text(
+            "Python testing framework pytest unittest mock assertion. "
+            "Test coverage analysis and continuous integration pipeline."
+        )
+        (tmp_path / "skill-y").mkdir()
+        file_y = tmp_path / "skill-y" / "SKILL.md"
+        file_y.write_text(
+            "Coral reef ecosystems and marine biodiversity conservation. "
+            "Ocean currents and deep sea organism adaptation patterns."
+        )
+
+        skill_path_map = {
+            "skill-x": str(file_x),
+            "skill-y": str(file_y),
+        }
+        result = filter_merge_group_pairs(
+            ["skill-x", "skill-y"], skill_path_map, threshold=0.60
+        )
+        assert len(result) == 0
+
+    def test_large_cluster_filters_false_positives(self, tmp_path):
+        """大規模クラスタで偽陽性が削減される。"""
+        pytest.importorskip("sklearn")
+        pytest.importorskip("scipy")
+
+        # 7つのスキルを作成: skill-a/b は類似、残りは無関係
+        contents = {
+            "skill-a": "AWS CloudFormation deployment infrastructure templates stack management pipeline.",
+            "skill-b": "AWS CloudFormation deployment infrastructure resources automation stack updates.",
+            "skill-c": "Python machine learning neural network training model optimization.",
+            "skill-d": "React frontend component rendering virtual DOM state management.",
+            "skill-e": "PostgreSQL database schema migration query optimization indexing.",
+            "skill-f": "Docker container orchestration Kubernetes pod deployment scaling.",
+            "skill-g": "GraphQL API schema resolver subscription real-time data fetching.",
+        }
+        skill_path_map = {}
+        for name, text in contents.items():
+            (tmp_path / name).mkdir()
+            path = tmp_path / name / "SKILL.md"
+            path.write_text(text)
+            skill_path_map[name] = str(path)
+
+        skills = list(contents.keys())
+        result = filter_merge_group_pairs(skills, skill_path_map, threshold=0.60)
+
+        # C(7,2)=21 ペアのうち、閾値通過は少数（a-b ペア程度）
+        assert len(result) < 21
+        # skill-a と skill-b のペアは通過するはず（類似度が高い）
+        # ただし TF-IDF のため確実ではないので、少なくとも大幅削減を確認
+        assert len(result) <= 5
+
+    def test_single_skill_returns_empty(self):
+        """スキルが1つの場合は空リストを返す。"""
+        result = filter_merge_group_pairs(["only-one"], {"only-one": "/path"})
+        assert result == []
+
+    def test_sklearn_not_installed_returns_all_pairs(self, tmp_path):
+        """sklearn 未インストール時は全ペアを返す（graceful degradation）。"""
+        (tmp_path / "a").mkdir()
+        file_a = tmp_path / "a" / "SKILL.md"
+        file_a.write_text("Content A")
+        (tmp_path / "b").mkdir()
+        file_b = tmp_path / "b" / "SKILL.md"
+        file_b.write_text("Content B")
+
+        skill_path_map = {"a": str(file_a), "b": str(file_b)}
+
+        with patch("lib.similarity.build_tfidf_matrix", return_value=(None, None, None)):
+            result = filter_merge_group_pairs(["a", "b"], skill_path_map, threshold=0.60)
+
+        assert len(result) == 1
+        assert frozenset(["a", "b"]) in result
 
 
 # --- tokenize ---

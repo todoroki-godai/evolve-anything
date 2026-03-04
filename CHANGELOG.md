@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.4] - 2026-03-04
+
+### Added
+- **merge-group-filter**: reorganize 由来 merge_groups のペア展開時に TF-IDF コサイン類似度フィルタを適用し偽陽性を排除
+- `filter_merge_group_pairs()` を `scripts/lib/similarity.py` に追加（共通エンジン再利用）
+- `load_merge_similarity_threshold()` を prune.py に追加（`evolve-state.json` で閾値設定可能、デフォルト 0.60）
+- `skipped_low_similarity` status を merge_proposals 出力に追加（フィルタ除外ペアの可視化）
+- sklearn 未インストール時の graceful degradation（全ペアをそのまま返す）
+- ユニットテスト 6 件追加（filter 単体テスト 5 件 + merge_duplicates 統合テスト 1 件）
+- OpenSpec specs 新規追加: merge-group-filter、merge spec 更新
+
 ## [0.15.3] - 2026-03-04
 
 ### Added
