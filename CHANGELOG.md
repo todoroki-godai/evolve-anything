@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.3] - 2026-03-04
+
+### Added
+- **quality_monitor.py**: 高頻度 global/plugin スキルの品質スコアを定期計測し劣化を検知する品質モニタリングエンジン
+- **audit 品質推移セクション**: audit レポートに "Skill Quality Trends" セクションを追加（スパークライン・DEGRADED/RESCORE NEEDED マーカー）
+- `--skip-rescore` オプション: audit 実行時の品質計測をスキップ可能に
+- `--dry-run` オプション: quality_monitor.py で LLM 評価なしに対象スキルのみ確認
+- 定数化: RESCORE_USAGE_THRESHOLD, RESCORE_DAYS_THRESHOLD, DEGRADATION_THRESHOLD, HIGH_FREQ_THRESHOLD, HIGH_FREQ_DAYS, MAX_RECORDS_PER_SKILL
+- OpenSpec specs 新規追加: quality-baseline, degradation-detector, audit-report
+- ユニットテスト 42 件追加（test_quality_monitor.py, test_audit_quality_trends.py）
+
 ## [0.15.2] - 2026-03-04
 
 ### Changed

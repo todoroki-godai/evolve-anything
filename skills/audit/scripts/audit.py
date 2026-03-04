@@ -9,7 +9,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
@@ -309,12 +309,117 @@ def scope_advisory(registry: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, 
     return advisories
 
 
+def load_quality_baselines() -> List[Dict[str, Any]]:
+    """quality-baselines.jsonl から全レコードを読み込む。"""
+    baselines_file = DATA_DIR / "quality-baselines.jsonl"
+    if not baselines_file.exists():
+        return []
+    records = []
+    for line in baselines_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def generate_sparkline(scores: List[float]) -> str:
+    """スコアリストからスパークライン文字列を生成する。"""
+    if not scores:
+        return ""
+    blocks = " ▁▂▃▄▅▆▇"
+    min_s = min(scores)
+    max_s = max(scores)
+    span = max_s - min_s if max_s > min_s else 1.0
+    result = ""
+    for s in scores:
+        idx = int((s - min_s) / span * (len(blocks) - 1))
+        idx = max(0, min(len(blocks) - 1, idx))
+        result += blocks[idx]
+    return result
+
+
+def build_quality_trends_section(
+    baselines: List[Dict[str, Any]],
+    usage: Dict[str, int],
+) -> List[str]:
+    """品質推移セクションの行リストを生成する。"""
+    if not baselines:
+        return []
+
+    # 遅延 import（循環参照回避）
+    _scripts_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
+    if str(_scripts_dir) not in sys.path:
+        sys.path.insert(0, str(_scripts_dir))
+    from quality_monitor import (
+        DEGRADATION_THRESHOLD,
+        RESCORE_DAYS_THRESHOLD,
+        RESCORE_USAGE_THRESHOLD,
+        compute_baseline_score,
+        compute_moving_average,
+        get_skill_records,
+        needs_rescore,
+    )
+
+    # スキル名を収集
+    skill_names = sorted(set(r.get("skill_name", "") for r in baselines if r.get("skill_name")))
+    if not skill_names:
+        return []
+
+    lines = ["## Skill Quality Trends", ""]
+
+    for skill_name in skill_names:
+        skill_recs = get_skill_records(baselines, skill_name)
+        if not skill_recs:
+            continue
+
+        scores = [r.get("score", 0.0) for r in skill_recs]
+        latest_score = scores[-1] if scores else 0.0
+
+        # スパークライン（2件以上必要）
+        if len(scores) >= 2:
+            sparkline = generate_sparkline(scores)
+        else:
+            sparkline = ""
+
+        # 劣化判定
+        degraded = False
+        if len(skill_recs) >= 2:
+            baseline = compute_baseline_score(skill_recs)
+            avg = compute_moving_average(skill_recs)
+            if baseline > 0:
+                decline_rate = (baseline - avg) / baseline
+                degraded = decline_rate >= DEGRADATION_THRESHOLD
+
+        # 再スコアリング判定
+        current_usage = usage.get(skill_name, 0)
+        rescore_needed = needs_rescore(skill_name, current_usage, baselines)
+
+        # 行を組み立て
+        parts = [f"- {skill_name}"]
+        if sparkline:
+            parts.append(f" {sparkline}")
+        parts.append(f" {latest_score:.2f}")
+        if degraded:
+            parts.append(f" DEGRADED → /optimize {skill_name}")
+        elif rescore_needed:
+            parts.append(" RESCORE NEEDED")
+        lines.append("".join(parts))
+
+    lines.append("")
+    return lines
+
+
 def generate_report(
     artifacts: Dict[str, List[Path]],
     violations: List[Dict[str, Any]],
     usage: Dict[str, int],
     duplicates: List[Dict[str, Any]],
     advisories: List[Dict[str, Any]],
+    quality_baselines: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """1画面レポートを生成する。"""
     lines = ["# Environment Audit Report", ""]
@@ -340,6 +445,12 @@ def generate_report(
             lines.append(f"- {skill}: {count} invocations")
         lines.append("")
 
+    # 品質推移
+    if quality_baselines is not None:
+        trends = build_quality_trends_section(quality_baselines, usage)
+        if trends:
+            lines.extend(trends)
+
     # 重複候補
     if duplicates:
         lines.append(f"## Potential Duplicates ({len(duplicates)})")
@@ -360,7 +471,7 @@ def generate_report(
     return "\n".join(lines)
 
 
-def run_audit(project_dir: Optional[str] = None) -> str:
+def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False) -> str:
     """Audit を実行してレポートを返す。"""
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
@@ -370,11 +481,32 @@ def run_audit(project_dir: Optional[str] = None) -> str:
     duplicates = detect_duplicates_simple(artifacts)
     registry = load_usage_registry()
     advisories = scope_advisory(registry)
-    return generate_report(artifacts, violations, usage, duplicates, advisories)
+
+    # 品質計測統合
+    quality_baselines = None
+    if not skip_rescore:
+        try:
+            _scripts_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
+            if str(_scripts_dir) not in sys.path:
+                sys.path.insert(0, str(_scripts_dir))
+            from quality_monitor import run_quality_monitor
+            run_quality_monitor()
+        except Exception as e:
+            print(f"品質計測スキップ: {e}", file=sys.stderr)
+
+    # ベースラインがあればレポートに含める
+    baselines = load_quality_baselines()
+    if baselines:
+        quality_baselines = baselines
+
+    return generate_report(artifacts, violations, usage, duplicates, advisories, quality_baselines)
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse as _argparse
 
-    project = sys.argv[1] if len(sys.argv) > 1 else None
-    print(run_audit(project))
+    _parser = _argparse.ArgumentParser(description="環境の健康診断")
+    _parser.add_argument("project", nargs="?", default=None, help="プロジェクトディレクトリ")
+    _parser.add_argument("--skip-rescore", action="store_true", help="品質計測をスキップ")
+    _args = _parser.parse_args()
+    print(run_audit(_args.project, skip_rescore=_args.skip_rescore))

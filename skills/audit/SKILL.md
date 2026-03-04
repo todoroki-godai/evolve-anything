@@ -34,7 +34,19 @@ optimize / rl-loop の実行履歴がある場合:
 python3 <PLUGIN_DIR>/skills/audit/scripts/aggregate_runs.py
 ```
 
-### Step 3: 意味的類似度の検出（オプション）
+### Step 3: 品質モニタリング（オプション）
+
+高頻度 global/plugin スキルの品質スコアを計測し劣化を検知する:
+
+```bash
+python3 <PLUGIN_DIR>/scripts/quality_monitor.py
+```
+
+- `--dry-run`: 実際の LLM 評価を行わず対象スキルのみ表示
+- audit レポートの "Skill Quality Trends" セクションで品質推移を確認
+- `--skip-rescore` を audit.py に渡すと品質計測をスキップ
+
+### Step 4: 意味的類似度の検出（オプション）
 
 行数超過や重複候補が検出された場合、改善アクションを提案する:
 - 行数超過 → 分割を提案
