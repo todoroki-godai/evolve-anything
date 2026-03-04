@@ -112,7 +112,14 @@ prune.py の `merge_duplicates()` は `reorganize.merge_groups` と `duplicate_c
   - `status: "proposed"` → Claude が primary と secondary の SKILL.md を読み込み、統合版を生成してユーザーに提示する（MUST）
     - AskUserQuestion で「承認（統合を適用）」「却下（変更なし）」を選択させる（MUST）
     - 承認された場合: 統合版を primary の SKILL.md に上書きし、secondary を `archive_file()` でアーカイブ
-    - 却下された場合: 当該ペアを `discover-suppression.jsonl` に追加して次回以降の提案を抑制
+    - 却下された場合: 当該ペアを merge suppression に登録して次回以降の提案を抑制する。以下のコマンドを実行する（MUST）:
+      ```bash
+      python3 -c "
+      import sys; sys.path.insert(0, '<PLUGIN_DIR>/skills/discover/scripts')
+      from discover import add_merge_suppression
+      add_merge_suppression('<primary_skill_name>', '<secondary_skill_name>')
+      "
+      ```
 
 ### Step 6: Fitness Evolution — 評価関数の改善チェック
 

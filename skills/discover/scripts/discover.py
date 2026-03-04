@@ -47,9 +47,32 @@ def load_jsonl(filepath: Path) -> List[Dict[str, Any]]:
 
 
 def load_suppression_list() -> set:
-    """抑制リスト（2回 reject されたパターン）を読み込む。"""
+    """抑制リスト（2回 reject されたパターン）を読み込む。
+
+    type: "merge" エントリは除外し、type 未指定エントリのみを返す。
+    """
     records = load_jsonl(SUPPRESSION_FILE)
-    return set(r.get("pattern", "") for r in records)
+    return set(r.get("pattern", "") for r in records if r.get("type") != "merge")
+
+
+def load_merge_suppression() -> set:
+    """merge suppression リスト（type: "merge" エントリ）を読み込み、ペアキーの set を返す。"""
+    records = load_jsonl(SUPPRESSION_FILE)
+    return set(r.get("pattern", "") for r in records if r.get("type") == "merge")
+
+
+def add_merge_suppression(skill_a: str, skill_b: str) -> None:
+    """merge suppression エントリを追加する。スキル名をソートし :: 結合で正規化。
+
+    書き込み失敗時は stderr にエラー出力し、例外を送出しない。
+    """
+    key = "::".join(sorted([skill_a, skill_b]))
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(SUPPRESSION_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"pattern": key, "type": "merge"}, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"[rl-anything] merge suppression write failed: {e}", file=sys.stderr)
 
 
 def add_to_suppression_list(pattern: str) -> None:

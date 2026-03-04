@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.15.0] - 2026-03-04
+
+### Added
+- **merge-suppression**: merge 統合候補の却下を記録し次回以降の再提案を抑制する機能 (GitHub Issue #2)
+- `load_merge_suppression()`: `type: "merge"` エントリのみ抽出してペアキー set を返す
+- `add_merge_suppression(skill_a, skill_b)`: スキル名をソート・正規化して suppression エントリを追記（書き込み失敗時は非致命的）
+- `merge_duplicates()` に suppression フィルタリング追加（`skipped_suppressed` status）
+- merge-suppression の OpenSpec spec を新規追加
+
+### Changed
+- `load_suppression_list()` が `type: "merge"` エントリを除外するように変更（後方互換性確保）
+- `evolve SKILL.md` の merge 却下フローに `add_merge_suppression()` の具体的な Bash コマンドを明記
+- merge spec の output schema に `skipped_suppressed` status と `merged_content_preview` 省略条件を追加
+
 ## [0.14.0] - 2026-03-04
 
 ### Added

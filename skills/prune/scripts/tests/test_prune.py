@@ -375,6 +375,113 @@ class TestMergeDuplicates:
         assert result["total_proposals"] == 1
         assert len(result["merge_proposals"]) == 1
 
+    def test_suppressed_pair_skipped(self, patch_data_dir, project_with_skills):
+        """suppression 済みペアが skipped_suppressed になる。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "beta", "timestamp": now},
+        ])
+
+        # suppression ファイルに alpha::beta を登録
+        suppression_file = patch_data_dir / "discover-suppression.jsonl"
+        suppression_file.write_text(
+            json.dumps({"pattern": "alpha::beta", "type": "merge"}) + "\n"
+        )
+
+        duplicate_candidates = [
+            {
+                "path_a": str(project_with_skills / ".claude" / "skills" / "alpha" / "SKILL.md"),
+                "path_b": str(project_with_skills / ".claude" / "skills" / "beta" / "SKILL.md"),
+                "threshold": 0.80,
+            }
+        ]
+
+        with mock.patch("discover.SUPPRESSION_FILE", suppression_file):
+            result = prune.merge_duplicates(
+                duplicate_candidates, project_dir=str(project_with_skills)
+            )
+        assert len(result["merge_proposals"]) == 1
+        assert result["merge_proposals"][0]["status"] == "skipped_suppressed"
+
+    def test_unsuppressed_pair_proposed(self, patch_data_dir, project_with_skills):
+        """suppression 未登録ペアが従来通り proposed になる。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "beta", "timestamp": now},
+        ])
+
+        # suppression ファイルは空（または別のペアのみ）
+        suppression_file = patch_data_dir / "discover-suppression.jsonl"
+        suppression_file.write_text(
+            json.dumps({"pattern": "gamma::delta", "type": "merge"}) + "\n"
+        )
+
+        duplicate_candidates = [
+            {
+                "path_a": str(project_with_skills / ".claude" / "skills" / "alpha" / "SKILL.md"),
+                "path_b": str(project_with_skills / ".claude" / "skills" / "beta" / "SKILL.md"),
+                "threshold": 0.80,
+            }
+        ]
+
+        with mock.patch("discover.SUPPRESSION_FILE", suppression_file):
+            result = prune.merge_duplicates(
+                duplicate_candidates, project_dir=str(project_with_skills)
+            )
+        assert len(result["merge_proposals"]) == 1
+        assert result["merge_proposals"][0]["status"] == "proposed"
+
+    def test_mixed_suppressed_and_proposed(self, patch_data_dir, project_with_skills):
+        """suppressed ペアと非 suppressed ペアが混在する結合テスト。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "beta", "timestamp": now},
+            {"skill_name": "gamma", "timestamp": now},
+            {"skill_name": "delta", "timestamp": now},
+        ])
+
+        # alpha::beta のみ suppression 登録
+        suppression_file = patch_data_dir / "discover-suppression.jsonl"
+        suppression_file.write_text(
+            json.dumps({"pattern": "alpha::beta", "type": "merge"}) + "\n"
+        )
+
+        duplicate_candidates = [
+            {
+                "path_a": str(project_with_skills / ".claude" / "skills" / "alpha" / "SKILL.md"),
+                "path_b": str(project_with_skills / ".claude" / "skills" / "beta" / "SKILL.md"),
+                "threshold": 0.80,
+            },
+            {
+                "path_a": str(project_with_skills / ".claude" / "skills" / "gamma" / "SKILL.md"),
+                "path_b": str(project_with_skills / ".claude" / "skills" / "delta" / "SKILL.md"),
+                "threshold": 0.80,
+            },
+        ]
+
+        with mock.patch("discover.SUPPRESSION_FILE", suppression_file):
+            result = prune.merge_duplicates(
+                duplicate_candidates, project_dir=str(project_with_skills)
+            )
+        assert result["total_proposals"] == 2
+        statuses = {p["primary"]["skill_name"] + "::" + p["secondary"]["skill_name"]: p["status"]
+                     for p in result["merge_proposals"]}
+        # alpha::beta は suppressed
+        ab_key = next(k for k in statuses if "alpha" in k and "beta" in k)
+        assert statuses[ab_key] == "skipped_suppressed"
+        # gamma::delta は proposed
+        gd_key = next(k for k in statuses if "gamma" in k and "delta" in k)
+        assert statuses[gd_key] == "proposed"
+
     def test_run_prune_includes_merge_result(self, patch_data_dir, tmp_path):
         """run_prune の戻り値に merge_result キーが存在する。"""
         project_dir = tmp_path / "project"

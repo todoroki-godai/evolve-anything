@@ -41,6 +41,10 @@ Merge は使用回数（usage.jsonl の invocation count）が多い方を prima
 - **WHEN** `duplicate_candidates` のペアの一方が `classify_artifact_origin() == "plugin"`
 - **THEN** 当該ペアは merge 対象から除外する
 
+#### Scenario: Suppressed pair is skipped
+- **WHEN** `discover-suppression.jsonl` にペアの suppression エントリ（`type: "merge"`）が存在する
+- **THEN** 当該ペアは `status: "skipped_suppressed"` として出力し、merge 対象から除外する
+
 ### Requirement: Merge output structure
 Merge の出力は以下の JSON 構造に従う（MUST）。
 
@@ -50,8 +54,8 @@ Merge の出力は以下の JSON 構造に従う（MUST）。
     {
       "primary": {"path": "string", "skill_name": "string", "usage_count": 0},
       "secondary": {"path": "string", "skill_name": "string", "usage_count": 0},
-      "merged_content_preview": "first 10 lines of merged SKILL.md",
-      "status": "proposed" | "approved" | "rejected" | "skipped_pinned" | "skipped_plugin"
+      "merged_content_preview": "first 10 lines of merged SKILL.md (status: proposed のみ。skipped_* では省略)",
+      "status": "proposed" | "approved" | "rejected" | "skipped_pinned" | "skipped_plugin" | "skipped_suppressed"
     }
   ],
   "total_proposals": 0

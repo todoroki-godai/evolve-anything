@@ -15,9 +15,11 @@ from typing import Any, Dict, List, Optional
 
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
+sys.path.insert(0, str(_plugin_root / "skills" / "discover" / "scripts"))
 sys.path.insert(0, str(_plugin_root / "scripts"))
 
 from lib.frontmatter import extract_description
+from discover import load_merge_suppression
 
 from audit import (
     DATA_DIR,
@@ -596,6 +598,9 @@ def merge_duplicates(
                     if skills[i] != skills[j]:
                         pairs.add(frozenset([skills[i], skills[j]]))
 
+    # merge suppression セットをループ外で1回だけロード
+    suppressed_pairs = load_merge_suppression()
+
     # 各ペアに対してマージ提案を生成
     merge_proposals: List[Dict[str, Any]] = []
     for pair in sorted(pairs, key=lambda p: sorted(p)):
@@ -624,6 +629,16 @@ def merge_duplicates(
                 "primary": {"path": path_a_str, "skill_name": skill_a, "usage_count": 0},
                 "secondary": {"path": path_b_str, "skill_name": skill_b, "usage_count": 0},
                 "status": "skipped_plugin",
+            })
+            continue
+
+        # merge suppression チェック
+        pair_key = "::".join([skill_a, skill_b])  # 既にソート済み
+        if pair_key in suppressed_pairs:
+            merge_proposals.append({
+                "primary": {"path": path_a_str, "skill_name": skill_a, "usage_count": 0},
+                "secondary": {"path": path_b_str, "skill_name": skill_b, "usage_count": 0},
+                "status": "skipped_suppressed",
             })
             continue
 
