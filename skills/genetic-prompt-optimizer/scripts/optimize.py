@@ -134,6 +134,7 @@ class GeneticOptimizer:
         Stage 2: 出力品質を別の claude -p 呼び出しで評価
         """
         if not self.test_tasks:
+            print("Warning: no test-tasks configured, execution score defaults to 0.5", file=sys.stderr)
             return 0.5
 
         scores = []
@@ -316,7 +317,8 @@ class GeneticOptimizer:
         if "hints" in data and "stats" in data:
             hints = data.get("hints", {})
         else:
-            # stats のみの場合はここで簡易ヒント生成
+            # stats のみの場合
+            print("Warning: no workflow hints found in stats-only data", file=sys.stderr)
             return ""
 
         # ターゲットのスキル名を推定
@@ -704,6 +706,7 @@ class GeneticOptimizer:
         if match:
             return float(match.group(1)), None
 
+        print("Warning: CoT response parse failed, score defaults to 0.5", file=sys.stderr)
         return 0.5, None
 
     def pairwise_compare(self, a: Individual, b: Individual) -> Individual:

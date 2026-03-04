@@ -19,15 +19,6 @@ sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
 import common
 
 
-SEMANTIC_VALIDATION_PROMPT = """以下のユーザー発話が、直前に実行されたスキルへの修正フィードバックかどうかを判定してください。
-
-発話: {message}
-直前スキル: {last_skill}
-パターンマッチ confidence: {confidence}
-
-JSON で回答してください:
-{{"is_correction": bool, "confidence": float, "target_skill": string | null, "reason": string}}"""
-
 # routing 優先度テーブル（数値が小さいほど優先度が高い）
 ROUTING_PRIORITY = {
     "skill": 1,    # correction_count > 0
@@ -52,30 +43,6 @@ def load_corrections(session_ids: Optional[Set[str]] = None) -> List[Dict[str, A
         except json.JSONDecodeError:
             continue
     return records
-
-
-def semantic_validate(corrections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """corrections を LLM で検証するための入力データを準備する。
-
-    実際の LLM 呼び出しはスキル側で行う。ここでは
-    検証に必要な (message, last_skill, confidence) を抽出し、
-    prompt template を付与して返す。
-    """
-    validation_items = []
-    for corr in corrections:
-        item = {
-            "message": corr.get("message", ""),
-            "last_skill": corr.get("last_skill"),
-            "confidence": corr.get("confidence", 0.0),
-            "prompt": SEMANTIC_VALIDATION_PROMPT.format(
-                message=corr.get("message", ""),
-                last_skill=corr.get("last_skill", "null"),
-                confidence=corr.get("confidence", 0.0),
-            ),
-            "original": corr,
-        }
-        validation_items.append(item)
-    return validation_items
 
 
 def route_recommendation(
@@ -573,11 +540,6 @@ def run_analysis(project: Optional[str] = None, no_llm: bool = False) -> str:
     discover_prune = analyze_discover_prune(usage)
     session_analysis = analyze_sessions(sessions)
     correction_analysis = analyze_corrections(corrections, usage) if corrections else None
-
-    # no_llm=False の場合、semantic_validate の入力を準備（呼び出し元が LLM を実行）
-    validation_items = None
-    if not no_llm and corrections:
-        validation_items = semantic_validate(corrections)
 
     return format_report(
         consistency=consistency,

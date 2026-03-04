@@ -85,19 +85,20 @@ def semantic_analyze(
                         "extracted_learning": item.get("extracted_learning"),
                     })
             else:
-                # 件数不一致 → フォールバック
+                # 件数不一致 → フォールバック（安全側: is_learning=False）
                 print(
-                    f"Warning: semantic response count mismatch "
-                    f"(expected {len(batch)}, got {len(parsed) if parsed else 0})",
+                    f"Warning: validate_corrections count mismatch "
+                    f"(expected {len(batch)}, got {len(parsed) if parsed else 0}), "
+                    f"defaulting to is_learning=False",
                     file=sys.stderr,
                 )
                 for _ in batch:
-                    results.append({"is_learning": True, "extracted_learning": None})
+                    results.append({"is_learning": False, "extracted_learning": None})
 
         except (subprocess.TimeoutExpired, OSError) as e:
             print(f"Warning: semantic analysis failed: {e}", file=sys.stderr)
             for _ in batch:
-                results.append({"is_learning": True, "extracted_learning": None})
+                results.append({"is_learning": False, "extracted_learning": None})
 
     return results
 
@@ -154,21 +155,82 @@ def validate_corrections(
         if len(results) == len(corrections):
             return results
     except Exception as e:
-        print(f"Warning: validate_corrections failed: {e}", file=sys.stderr)
+        print(f"Warning: validate_corrections failed, defaulting to is_learning=False", file=sys.stderr)
 
-    # フォールバック: 全件を is_learning=True として返す
-    return [{"is_learning": True, "extracted_learning": None} for _ in corrections]
+    # フォールバック: 全件を is_learning=False として返す（安全側）
+    return [{"is_learning": False, "extracted_learning": None} for _ in corrections]
+
+
+CONTRADICTION_PROMPT = """以下の corrections リストで、矛盾するペアを見つけてください。
+矛盾 = 同じ対象について相反する指示（例: 「日本語で応答して」と「英語で応答して」）
+
+corrections:
+{corrections_json}
+
+矛盾ペアがあれば以下の JSON 配列で回答してください（なければ空配列 []）:
+[{{"pair": [index_a, index_b], "reason": "矛盾の理由"}}]
+"""
 
 
 def detect_contradictions(
     corrections: List[Dict[str, Any]],
+    model: str = "sonnet",
 ) -> List[Dict[str, Any]]:
-    """矛盾する correction ペアを検出する（将来用スタブ）。
+    """corrections リスト内の矛盾するペアを検出する。
+
+    `claude -p` を使用してセマンティックに矛盾を判定する。
 
     Args:
-        corrections: correction レコードのリスト。
+        corrections: correction レコードのリスト。各レコードに message フィールドが必要。
+        model: 使用するモデル名。
 
     Returns:
-        矛盾ペアのリスト。現在は空リストを返す。
+        矛盾ペアのリスト。各要素は {"pair": [index_a, index_b], "reason": "矛盾理由"} 形式。
     """
-    return []
+    # 空入力ガード: 0件 or 1件以下は LLM 呼び出し不要
+    if len(corrections) <= 1:
+        return []
+
+    # corrections の message を抽出してサニタイズ
+    items = [
+        {"index": i, "message": sanitize_message(c.get("message", ""))}
+        for i, c in enumerate(corrections)
+    ]
+
+    prompt = CONTRADICTION_PROMPT.format(
+        corrections_json=json.dumps(items, ensure_ascii=False, indent=2)
+    )
+
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", "--model", model, prompt],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        response_text = proc.stdout.strip()
+        parsed = _extract_json_array(response_text)
+
+        if parsed is None:
+            return []
+
+        # 各エントリのバリデーション: pair と reason が存在するもののみ返す
+        validated = []
+        for item in parsed:
+            pair = item.get("pair")
+            reason = item.get("reason", "")
+            if (
+                isinstance(pair, list)
+                and len(pair) == 2
+                and all(isinstance(idx, int) for idx in pair)
+            ):
+                validated.append({"pair": pair, "reason": reason})
+
+        return validated
+
+    except (subprocess.TimeoutExpired, OSError) as e:
+        print("Warning: contradiction detection failed", file=sys.stderr)
+        return []
+    except Exception as e:
+        print("Warning: contradiction detection failed", file=sys.stderr)
+        return []

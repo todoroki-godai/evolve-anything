@@ -387,22 +387,6 @@ class TestRouteRecommendation:
         assert rec["target"] is None
 
 
-class TestSemanticValidate:
-    """semantic_validate() のテスト。"""
-
-    def test_prepares_validation_items(self):
-        corrections = [
-            {"message": "いや、違う", "last_skill": "evolve", "confidence": 0.85},
-        ]
-        items = analyze.semantic_validate(corrections)
-        assert len(items) == 1
-        assert items[0]["message"] == "いや、違う"
-        assert items[0]["last_skill"] == "evolve"
-        assert items[0]["confidence"] == 0.85
-        assert "prompt" in items[0]
-        assert "発話:" in items[0]["prompt"]
-
-
 class TestAnalyzeCorrections:
     """analyze_corrections() のテスト。"""
 

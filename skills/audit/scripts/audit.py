@@ -6,9 +6,13 @@
 """
 import json
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+_plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
 # 行数制限
 LIMITS = {
@@ -232,30 +236,31 @@ def detect_duplicates_simple(artifacts: Dict[str, List[Path]]) -> List[Dict[str,
 def semantic_similarity_check(
     artifacts: Dict[str, List[Path]], threshold: float = 0.80
 ) -> List[Dict[str, Any]]:
-    """LLM ベースの意味的類似度判定。閾値は 80%。
+    """TF-IDF + コサイン類似度による意味的類似度判定。閾値は 80%。
 
     audit-report spec の Single Source of Truth。
     prune はこの関数の結果を利用する。
 
-    Note: 実際の LLM 呼び出しは別途 Claude CLI で実行。
-    ここでは呼び出しインターフェースのみ定義。
+    Returns:
+        [{"path_a": str, "path_b": str, "similarity": float}, ...]
     """
-    # LLM 呼び出しのスタブ — 実行時は Claude CLI を使用
-    candidates = []
-    all_paths = []
-    for category in ["skills", "rules"]:
-        all_paths.extend(artifacts.get(category, []))
+    from similarity import compute_pairwise_similarity
 
-    # ペアワイズ比較のための候補リストを生成
-    for i in range(len(all_paths)):
-        for j in range(i + 1, len(all_paths)):
-            candidates.append({
-                "path_a": str(all_paths[i]),
-                "path_b": str(all_paths[j]),
-                "threshold": threshold,
-            })
+    # artifacts から skills と rules のパスを辞書に変換（プラグイン由来は除外）
+    path_dict: Dict[str, str] = {}
+    for path in artifacts.get("skills", []):
+        if classify_artifact_origin(path) == "plugin":
+            continue
+        skill_name = path.parent.name
+        path_dict[skill_name] = str(path)
 
-    return candidates
+    for path in artifacts.get("rules", []):
+        if classify_artifact_origin(path) == "plugin":
+            continue
+        rule_stem = path.stem
+        path_dict[rule_stem] = str(path)
+
+    return compute_pairwise_similarity(path_dict, threshold)
 
 
 def load_usage_registry() -> Dict[str, List[Dict[str, Any]]]:

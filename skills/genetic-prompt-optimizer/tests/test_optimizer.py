@@ -995,5 +995,56 @@ class TestWorkflowHints:
         assert "ヒントテキスト" in hint
 
 
+# --- 警告出力のテスト ---
+
+class TestWarningOutput:
+    """stderr への警告出力テスト。"""
+
+    def test_execution_evaluate_no_test_tasks_stderr(self, sample_skill, capsys):
+        """_execution_evaluate で test-tasks 未設定時に stderr 出力がある。"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+        )
+        ind = Individual("# テスト\nテスト内容")
+        score = optimizer._execution_evaluate(ind)
+
+        assert score == 0.5
+        captured = capsys.readouterr()
+        assert "Warning: no test-tasks configured" in captured.err
+
+    def test_parse_cot_response_failure_stderr(self, capsys):
+        """_parse_cot_response のパース失敗時に stderr 出力がある。"""
+        score, cot = GeneticOptimizer._parse_cot_response("no numbers or json here at all")
+        assert score == 0.5
+        assert cot is None
+
+        captured = capsys.readouterr()
+        assert "Warning: CoT response parse failed" in captured.err
+
+    def test_load_workflow_hints_stats_only_stderr(self, sample_skill, tmp_path, capsys):
+        """_load_workflow_hints の stats-only 時に stderr 出力がある。"""
+        stats_dir = tmp_path / ".claude" / "rl-anything"
+        stats_dir.mkdir(parents=True)
+        # hints キーなし、stats のみ
+        stats_data = {
+            "stats": {"some-skill": {"count": 10}},
+        }
+        (stats_dir / "workflow_stats.json").write_text(
+            json.dumps(stats_data, ensure_ascii=False), encoding="utf-8"
+        )
+
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+        )
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            hint = optimizer._load_workflow_hints()
+
+        assert hint == ""
+        captured = capsys.readouterr()
+        assert "Warning: no workflow hints found in stats-only data" in captured.err
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
 
 from audit import (
@@ -17,6 +18,7 @@ from audit import (
     classify_artifact_origin,
     find_artifacts,
 )
+from similarity import build_tfidf_matrix
 
 DEFAULT_REORGANIZE_THRESHOLD = 0.7
 SPLIT_LINE_THRESHOLD = 300
@@ -32,29 +34,6 @@ def load_reorganize_threshold() -> float:
         except (json.JSONDecodeError, ValueError, TypeError):
             pass
     return DEFAULT_REORGANIZE_THRESHOLD
-
-
-def build_tfidf_matrix(skill_texts: dict) -> tuple:
-    """スキルテキストから TF-IDF 行列を構築する。
-
-    Args:
-        skill_texts: {skill_name: text_content} の辞書
-
-    Returns:
-        (tfidf_matrix, feature_names, skill_names) のタプル。
-        sklearn がインストールされていない場合は (None, None, None)。
-    """
-    try:
-        from sklearn.feature_extraction.text import TfidfVectorizer
-    except ImportError:
-        return None, None, None
-
-    skill_names = list(skill_texts.keys())
-    texts = [skill_texts[name] for name in skill_names]
-
-    vectorizer = TfidfVectorizer(max_features=200, stop_words='english')
-    matrix = vectorizer.fit_transform(texts)
-    return matrix, vectorizer.get_feature_names_out(), skill_names
 
 
 def cluster_skills(tfidf_matrix, threshold: float = 0.7) -> list:

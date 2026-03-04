@@ -24,7 +24,7 @@ from reflect_utils import (
     suggest_auto_memory_topic,
     suggest_claude_file,
 )
-from semantic_detector import validate_corrections
+from semantic_detector import detect_contradictions, validate_corrections
 
 # hooks/common.py から偽陽性ユーティリティを import
 sys.path.insert(0, str(_plugin_root / "hooks"))
@@ -310,6 +310,7 @@ def build_output(
     project_root: Path | None = None,
     min_confidence: float = 0.85,
     apply_all: bool = False,
+    contradictions: list[dict] | None = None,
 ) -> dict:
     """最終出力 JSON を構築する。"""
     if not pending:
@@ -350,7 +351,7 @@ def build_output(
     # promotion candidates
     promotion = find_promotion_candidates(all_records, project_root)
 
-    return {
+    output = {
         "status": "has_pending",
         "corrections": corrections_out,
         "promotion_candidates": promotion,
@@ -360,6 +361,11 @@ def build_output(
             "duplicates": duplicates,
         },
     }
+
+    if contradictions:
+        output["contradictions"] = contradictions
+
+    return output
 
 
 def build_view_output(pending: list[dict], all_records: list[dict]) -> dict:
@@ -452,6 +458,13 @@ def main():
         # is_learning=False を除外
         pending = [c for c in pending if c.get("is_learning", True)]
 
+    # 矛盾検出
+    contradictions = []
+    if not args.skip_semantic and pending:
+        contradictions = detect_contradictions(pending, model=args.model)
+        if contradictions:
+            print(json.dumps({"contradictions_warning": contradictions}, ensure_ascii=False), file=sys.stderr)
+
     # プロジェクトフィルタリング
     filtered = []
     for c in pending:
@@ -478,6 +491,7 @@ def main():
         project_root=project_root,
         min_confidence=args.min_confidence,
         apply_all=args.apply_all,
+        contradictions=contradictions,
     )
 
     print(json.dumps(output, ensure_ascii=False, indent=2))

@@ -126,6 +126,7 @@ JSON形式で出力してください。
         pass
 
     # フォールバック
+    print("Warning: baseline scoring failed, defaulting to 0.50", file=sys.stderr)
     return {
         "target": target_path,
         "integrated_score": 0.50,
@@ -287,6 +288,9 @@ def run_loop(
                 })
                 print(f"  {ind.get('id', '?')}: スコア {score}")
 
+        if dry_run and variants:
+            print("  注意: dry-run モードのスコアは実際の品質を反映しません", file=sys.stderr)
+
         if not variants:
             print("  バリエーションが見つかりません。スキップ。")
             continue
@@ -297,6 +301,8 @@ def run_loop(
         print(f"  ベースライン: {baseline_score}")
         improvement = best["score"] - baseline_score
         print(f"  改善幅: {improvement:+.2f}")
+        if dry_run:
+            print("  注意: dry-run モードのスコアは実際の品質を反映しません", file=sys.stderr)
 
         # Step 4: 人間確認
         approved = False

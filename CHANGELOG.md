@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.15.1] - 2026-03-04
+
+### Added
+- **similarity-engine**: TF-IDF + コサイン類似度の共通計算エンジン (`scripts/lib/similarity.py`)
+- `compute_pairwise_similarity()`: 閾値フィルタ付きペアワイズ類似度計算（デフォルト 0.80）
+- `detect_contradictions()`: `claude -p` ベースの corrections 矛盾検出を実装
+- `reflect.py` から `detect_contradictions()` を呼び出し、矛盾ペア検出時に警告表示
+- 各フォールバック箇所に stderr 警告を追加（optimizer, run-loop, semantic_detector）
+- OpenSpec specs 新規追加: `similarity-engine`, `silent-fallback-safety`
+
+### Changed
+- `semantic_similarity_check()` を TF-IDF 実装に置換し誤検知 465 件を解消 (GitHub Issue #3)
+- `validate_corrections()` フォールバックを `is_learning=True` → `is_learning=False`（安全側）に変更
+- `reorganize.py` の `build_tfidf_matrix()` を `scripts/lib/similarity.py` からの共通 import に置換
+- dry-run スコアに `[dry-run]` マーカーと注意文を追加
+- OpenSpec merge spec を similarity_engine 閾値要件で更新
+
+### Removed
+- `backfill/analyze.py` の `semantic_validate()` dead code を削除
+
 ## [0.15.0] - 2026-03-04
 
 ### Added
