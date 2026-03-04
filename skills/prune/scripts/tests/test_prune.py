@@ -314,6 +314,106 @@ class TestMergeDuplicates:
         assert "total_proposals" in result["merge_result"]
 
 
+class TestCleanupCorrections:
+    """cleanup_corrections のユニットテスト。"""
+
+    @pytest.fixture
+    def patch_data_dir(self, tmp_path):
+        """テスト用の DATA_DIR を作成（audit と prune 両方をパッチ）。"""
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            yield data_dir
+
+    def _make_correction(self, reflect_status="pending", decay_days=90, age_days=0):
+        """テスト用 correction レコードを生成する。"""
+        from datetime import datetime, timezone, timedelta
+        ts = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
+        return json.dumps({
+            "correction_type": "test",
+            "matched_patterns": ["test"],
+            "message": "test message",
+            "last_skill": "my-skill",
+            "confidence": 0.70,
+            "decay_days": decay_days,
+            "sentiment": "negative",
+            "routing_hint": "correction",
+            "guardrail": False,
+            "reflect_status": reflect_status,
+            "extracted_learning": "",
+            "project_path": "/test",
+            "timestamp": ts,
+            "session_id": "sess-001",
+            "source": "backfill",
+        })
+
+    def test_expired_applied_removed(self, patch_data_dir):
+        """decay_days 超過の applied レコードが削除される。"""
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        corrections_file.write_text(
+            self._make_correction(reflect_status="applied", decay_days=30, age_days=60) + "\n"
+        )
+
+        result = prune.cleanup_corrections()
+        assert result["removed"] == 1
+        assert result["kept"] == 0
+
+    def test_expired_skipped_removed(self, patch_data_dir):
+        """decay_days 超過の skipped レコードが削除される。"""
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        corrections_file.write_text(
+            self._make_correction(reflect_status="skipped", decay_days=30, age_days=60) + "\n"
+        )
+
+        result = prune.cleanup_corrections()
+        assert result["removed"] == 1
+        assert result["kept"] == 0
+
+    def test_pending_preserved(self, patch_data_dir):
+        """pending レコードは decay_days 超過でも削除されない。"""
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        corrections_file.write_text(
+            self._make_correction(reflect_status="pending", decay_days=30, age_days=60) + "\n"
+        )
+
+        result = prune.cleanup_corrections()
+        assert result["removed"] == 0
+        assert result["kept"] == 1
+
+    def test_not_expired_preserved(self, patch_data_dir):
+        """decay_days 未超過のレコードは削除されない。"""
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        corrections_file.write_text(
+            self._make_correction(reflect_status="applied", decay_days=90, age_days=10) + "\n"
+        )
+
+        result = prune.cleanup_corrections()
+        assert result["removed"] == 0
+        assert result["kept"] == 1
+
+    def test_mixed_records(self, patch_data_dir):
+        """複数レコードが混在する場合の正しい処理。"""
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        lines = [
+            self._make_correction(reflect_status="applied", decay_days=30, age_days=60),  # 削除
+            self._make_correction(reflect_status="skipped", decay_days=30, age_days=60),  # 削除
+            self._make_correction(reflect_status="pending", decay_days=30, age_days=60),  # 保持
+            self._make_correction(reflect_status="applied", decay_days=90, age_days=10),  # 保持
+        ]
+        corrections_file.write_text("\n".join(lines) + "\n")
+
+        result = prune.cleanup_corrections()
+        assert result["removed"] == 2
+        assert result["kept"] == 2
+
+    def test_no_file(self, patch_data_dir):
+        """corrections.jsonl が存在しない場合。"""
+        result = prune.cleanup_corrections()
+        assert result["removed"] == 0
+        assert result["kept"] == 0
+
+
 class TestPrunePluginExclusion:
     """プラグインスキルが淘汰対象から除外されるテスト。"""
 

@@ -2072,7 +2072,7 @@ class TestExtractCorrections:
     """extract_corrections_from_transcript() のテスト。"""
 
     def test_detects_correction_with_last_skill(self, transcript_dir):
-        """修正パターンと直前スキルが紐付けられる。"""
+        """修正パターンと直前スキルが紐付けられる。拡張スキーマで出力される。"""
         tf = transcript_dir / "sess-corr-001.jsonl"
         lines = [
             make_assistant_record(
@@ -2091,11 +2091,21 @@ class TestExtractCorrections:
 
         corrections = backfill.extract_corrections_from_transcript(tf)
         assert len(corrections) == 1
-        assert corrections[0]["correction_type"] == "souja-nakute"
-        assert corrections[0]["last_skill"] == "evolve"
-        assert corrections[0]["confidence"] == 0.60
-        assert corrections[0]["source"] == "backfill"
-        assert corrections[0]["session_id"] == "sess-corr-001"
+        c = corrections[0]
+        assert c["correction_type"] == "souja-nakute"
+        assert c["last_skill"] == "evolve"
+        assert c["source"] == "backfill"
+        assert c["session_id"] == "sess-corr-001"
+        # 拡張スキーマフィールド
+        assert "matched_patterns" in c
+        assert "souja-nakute" in c["matched_patterns"]
+        assert "sentiment" in c
+        assert "decay_days" in c
+        assert "routing_hint" in c
+        assert "guardrail" in c
+        assert "reflect_status" in c and c["reflect_status"] == "pending"
+        assert "extracted_learning" in c
+        assert "project_path" in c
 
     def test_no_prior_skill(self, transcript_dir):
         """直前スキルがない場合は last_skill: null。"""
@@ -2146,13 +2156,13 @@ class TestExtractCorrections:
         corrections = backfill.extract_corrections_from_transcript(tf)
         assert len(corrections) == 0
 
-    def test_backfill_confidence(self, transcript_dir):
-        """backfill 由来は confidence 0.60。"""
+    def test_confidence_calculated_dynamically(self, transcript_dir):
+        """confidence は calculate_confidence() で動的に計算される。"""
         tf = transcript_dir / "sess-corr-005.jsonl"
         lines = [
             json.dumps({
                 "type": "human",
-                "message": {"content": "no, stop that"},
+                "message": {"content": "no, that's wrong"},
                 "timestamp": "2025-06-15T10:00:00Z",
                 "sessionId": "sess-corr-005",
             }),
@@ -2160,4 +2170,59 @@ class TestExtractCorrections:
         tf.write_text("\n".join(lines), encoding="utf-8")
 
         corrections = backfill.extract_corrections_from_transcript(tf)
-        assert corrections[0]["confidence"] == 0.60
+        # "no" と "thats-wrong" の2パターンマッチ → 動的信頼度
+        assert corrections[0]["confidence"] > 0
+        assert 0.0 <= corrections[0]["confidence"] <= 1.0
+        assert "matched_patterns" in corrections[0]
+        assert len(corrections[0]["matched_patterns"]) >= 2
+
+    def test_tool_rejection_detected(self, transcript_dir):
+        """ツール拒否パターンが correction として検出される。"""
+        tf = transcript_dir / "sess-corr-006.jsonl"
+        lines = [
+            make_assistant_record(
+                "sess-corr-006",
+                [{"type": "tool_use", "name": "Skill", "input": {"skill": "evolve"}, "id": "tu-1"}],
+                "2025-06-15T10:00:00Z",
+            ),
+            make_assistant_record(
+                "sess-corr-006",
+                [{"type": "text", "text": "The user doesn't want to proceed with this action. the user said: I don't want that"}],
+                "2025-06-15T10:01:00Z",
+            ),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        corrections = backfill.extract_corrections_from_transcript(tf)
+        assert len(corrections) == 1
+        c = corrections[0]
+        assert c["correction_type"] == "tool-rejection"
+        assert c["last_skill"] == "evolve"
+        assert c["guardrail"] is True
+        assert c["routing_hint"] == "guardrail"
+        assert c["source"] == "backfill"
+
+    def test_extended_schema_fields_present(self, transcript_dir):
+        """拡張スキーマの全フィールドが correction レコードに存在する。"""
+        tf = transcript_dir / "sess-corr-007.jsonl"
+        lines = [
+            json.dumps({
+                "type": "human",
+                "message": {"content": "いや、違う"},
+                "timestamp": "2025-06-15T10:00:00Z",
+                "sessionId": "sess-corr-007",
+            }),
+        ]
+        tf.write_text("\n".join(lines), encoding="utf-8")
+
+        corrections = backfill.extract_corrections_from_transcript(tf)
+        assert len(corrections) == 1
+        c = corrections[0]
+        required_fields = [
+            "correction_type", "matched_patterns", "message", "last_skill",
+            "confidence", "decay_days", "sentiment", "routing_hint",
+            "guardrail", "reflect_status", "extracted_learning",
+            "project_path", "timestamp", "session_id", "source",
+        ]
+        for field in required_fields:
+            assert field in c, f"Missing field: {field}"

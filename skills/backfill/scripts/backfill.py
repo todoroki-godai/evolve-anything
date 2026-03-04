@@ -604,16 +604,45 @@ def parse_transcript(filepath: Path) -> ParseResult:
     return result
 
 
+def _extract_human_text(record: Dict[str, Any]) -> str:
+    """human/user レコードからテキストを抽出する。"""
+    message = record.get("message", {})
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content", "")
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if text.strip():
+                    return text
+    return ""
+
+
+# ツール拒否検出マーカー
+_TOOL_REJECTION_MARKERS = [
+    "The user doesn't want to proceed",
+    "the user said:",
+]
+
+
 def extract_corrections_from_transcript(filepath: Path) -> List[Dict[str, Any]]:
     """トランスクリプトから修正パターンを遡及抽出する。
 
     human メッセージに修正パターンが検出された場合、直前の assistant ターンで
     使われた Skill を特定して correction レコードを生成する。
-    backfill 由来のため confidence は 0.60 に設定する。
+    拡張スキーマ: matched_patterns, project_path, sentiment, decay_days,
+    routing_hint, guardrail, reflect_status, extracted_learning を含む。
+
+    ツール拒否（"The user doesn't want to proceed" + "the user said:"）も
+    correction_type: "tool-rejection" として抽出する。
     """
     corrections = []
     last_skill_name: Optional[str] = None
     session_id = ""
+    project_path = str(filepath.parent)
 
     for line in filepath.read_text(encoding="utf-8").splitlines():
         if not line.strip():
@@ -628,48 +657,105 @@ def extract_corrections_from_transcript(filepath: Path) -> List[Dict[str, Any]]:
         if not session_id:
             session_id = record.get("sessionId", "")
 
-        # assistant ターンから最後の Skill 呼び出しを追跡
+        # assistant ターンから最後の Skill 呼び出しを追跡 + ツール拒否検出
         if record_type == "assistant":
             message = record.get("message", {})
             if isinstance(message, dict):
                 content = message.get("content", [])
                 if isinstance(content, list):
                     for block in content:
-                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "tool_use":
                             tool_name = block.get("name", "")
                             tool_input = block.get("input", {})
                             if tool_name == "Skill" and isinstance(tool_input, dict):
                                 last_skill_name = tool_input.get("skill")
+                        elif block.get("type") == "text":
+                            text_content = block.get("text", "")
+                            if all(marker in text_content for marker in _TOOL_REJECTION_MARKERS):
+                                corrections.append({
+                                    "correction_type": "tool-rejection",
+                                    "matched_patterns": ["tool-rejection"],
+                                    "message": text_content[:MAX_PROMPT_LENGTH].strip(),
+                                    "last_skill": last_skill_name,
+                                    "confidence": 0.80,
+                                    "decay_days": 60,
+                                    "sentiment": "negative",
+                                    "routing_hint": "guardrail",
+                                    "guardrail": True,
+                                    "reflect_status": "pending",
+                                    "extracted_learning": "",
+                                    "project_path": project_path,
+                                    "timestamp": timestamp,
+                                    "session_id": session_id,
+                                    "source": "backfill",
+                                })
 
         # human メッセージから修正パターンを検出
         elif record_type in ("human", "user"):
-            message = record.get("message", {})
-            raw_text = ""
-            if isinstance(message, dict):
-                content = message.get("content", "")
-                if isinstance(content, str) and content.strip():
-                    raw_text = content
-                elif isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            text = block.get("text", "")
-                            if text.strip():
-                                raw_text = text
-                                break
+            raw_text = _extract_human_text(record)
 
-            if raw_text:
-                result = common.detect_correction(raw_text)
-                if result is not None:
-                    correction_type, _ = result
-                    corrections.append({
-                        "correction_type": correction_type,
-                        "message": raw_text.strip(),
-                        "last_skill": last_skill_name,
-                        "confidence": BACKFILL_CORRECTION_CONFIDENCE,
-                        "timestamp": timestamp,
-                        "session_id": session_id,
-                        "source": "backfill",
-                    })
+            if raw_text and common.should_include_message(raw_text):
+                matched_patterns = common.detect_all_patterns(raw_text)
+                if matched_patterns:
+                    # 最初のマッチから correction_type を決定（後方互換）
+                    result = common.detect_correction(raw_text)
+                    if result is not None:
+                        correction_type, base_confidence = result
+
+                        # パターン情報を取得
+                        pattern_info = common.CORRECTION_PATTERNS.get(correction_type, {})
+                        pattern_type = pattern_info.get("type", "correction")
+                        has_strong = any(
+                            common.CORRECTION_PATTERNS.get(p, {}).get("strong", False)
+                            for p in matched_patterns
+                        )
+                        has_i_told_you = "I-told-you" in matched_patterns
+
+                        # 信頼度計算
+                        confidence, decay_days = common.calculate_confidence(
+                            base_confidence, raw_text,
+                            matched_count=len(matched_patterns),
+                            has_strong=has_strong,
+                            has_i_told_you=has_i_told_you,
+                        )
+
+                        # sentiment 判定
+                        if pattern_type == "positive":
+                            sentiment = "positive"
+                        elif pattern_type in ("guardrail", "explicit"):
+                            sentiment = "negative"
+                        else:
+                            sentiment = "negative"
+
+                        # routing_hint 判定
+                        if pattern_type == "guardrail":
+                            routing_hint = "guardrail"
+                        elif pattern_type == "explicit":
+                            routing_hint = "rule"
+                        elif pattern_type == "positive":
+                            routing_hint = "reinforce"
+                        else:
+                            routing_hint = "correction"
+
+                        corrections.append({
+                            "correction_type": correction_type,
+                            "matched_patterns": matched_patterns,
+                            "message": raw_text.strip(),
+                            "last_skill": last_skill_name,
+                            "confidence": confidence,
+                            "decay_days": decay_days,
+                            "sentiment": sentiment,
+                            "routing_hint": routing_hint,
+                            "guardrail": pattern_type == "guardrail",
+                            "reflect_status": "pending",
+                            "extracted_learning": "",
+                            "project_path": project_path,
+                            "timestamp": timestamp,
+                            "session_id": session_id,
+                            "source": "backfill",
+                        })
 
     return corrections
 
