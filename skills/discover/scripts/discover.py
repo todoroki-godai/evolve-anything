@@ -4,7 +4,9 @@
 usage.jsonl、errors.jsonl、sessions.jsonl、history.jsonl から
 繰り返しパターンを検出し、スキル/ルール候補を生成する。
 """
+import argparse
 import json
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -232,29 +234,119 @@ def load_claude_reflect_data() -> List[Dict[str, Any]]:
     return load_jsonl(learnings_file)
 
 
-def run_discover() -> Dict[str, Any]:
+# ---------- session-scan ----------
+
+CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+SESSION_SCAN_THRESHOLD = 5
+
+
+def _get_backfill_parse_transcript():
+    """backfill の parse_transcript を遅延インポートで取得する。"""
+    import sys as _sys
+    _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+    _backfill_scripts = _plugin_root / "skills" / "backfill" / "scripts"
+    if str(_backfill_scripts) not in _sys.path:
+        _sys.path.insert(0, str(_backfill_scripts))
+    from backfill import parse_transcript
+    return parse_transcript
+
+
+def detect_session_patterns(
+    threshold: int = SESSION_SCAN_THRESHOLD,
+    projects_dir: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """セッション JSONL のユーザーメッセージテキストを直接分析し、繰り返しパターンを検出する。
+
+    Args:
+        threshold: パターン検出閾値（デフォルト5回以上）
+        projects_dir: プロジェクトディレクトリのルート（テスト用）
+
+    Returns:
+        検出されたパターンのリスト
+    """
+    if projects_dir is None:
+        projects_dir = CLAUDE_PROJECTS_DIR
+
+    if not projects_dir.is_dir():
+        return []
+
+    parse_transcript = _get_backfill_parse_transcript()
+
+    # 全セッションからユーザーメッセージを収集
+    prompt_counter: Counter = Counter()
+
+    for session_file in projects_dir.glob("*/sessions/*.jsonl"):
+        try:
+            result = parse_transcript(session_file)
+        except Exception as e:
+            print(
+                f"[rl-anything:discover] session parse error: {session_file.name}: {e}",
+                file=sys.stderr,
+            )
+            continue
+
+        if result.session_meta and result.session_meta.get("user_prompts"):
+            for prompt in result.session_meta["user_prompts"]:
+                # 短すぎるプロンプトや空文字列はスキップ
+                prompt = prompt.strip()
+                if len(prompt) >= 5:
+                    prompt_counter[prompt] += 1
+
+    suppressed = load_suppression_list()
+    patterns = []
+    for prompt_text, count in prompt_counter.most_common():
+        if count >= threshold and prompt_text not in suppressed:
+            patterns.append({
+                "type": "session_text",
+                "pattern": prompt_text,
+                "count": count,
+                "suggestion": "skill_candidate",
+            })
+    return patterns
+
+
+def run_discover(session_scan: bool = False) -> Dict[str, Any]:
     """Discover を実行して候補を返す。"""
     behavior = detect_behavior_patterns()
     errors = detect_error_patterns()
     rejections = detect_rejection_patterns()
     reflect_data = load_claude_reflect_data()
 
-    # スコープ判断
-    all_patterns = behavior + errors + rejections
-    for p in all_patterns:
-        p["scope"] = determine_scope(p)
-
-    result = {
+    result: Dict[str, Any] = {
         "behavior_patterns": behavior,
         "error_patterns": errors,
         "rejection_patterns": rejections,
         "reflect_data_count": len(reflect_data),
-        "total_candidates": len(all_patterns),
     }
+
+    if session_scan:
+        session_patterns = detect_session_patterns()
+        result["session_patterns"] = session_patterns
+    else:
+        session_patterns = []
+
+    # スコープ判断
+    all_patterns = behavior + errors + rejections + session_patterns
+    for p in all_patterns:
+        p["scope"] = determine_scope(p)
+
+    result["total_candidates"] = len(all_patterns)
 
     return result
 
 
-if __name__ == "__main__":
-    result = run_discover()
+def main() -> None:
+    parser = argparse.ArgumentParser(description="パターン発見スクリプト")
+    parser.add_argument(
+        "--session-scan",
+        action="store_true",
+        help="セッション JSONL のユーザーメッセージテキストを直接分析して繰り返しパターンを検出する",
+    )
+    args = parser.parse_args()
+
+    result = run_discover(session_scan=args.session_scan)
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

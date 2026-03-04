@@ -14,20 +14,25 @@ description: |
 ## Usage
 
 ```
-/rl-anything:discover [--scope global|project]
+/rl-anything:discover [--scope global|project] [--session-scan]
 ```
+
+### オプション
+
+- `--session-scan`: セッション JSONL のユーザーメッセージテキストを直接分析し、繰り返しパターン（5回以上）をスキル候補として検出する。usage.jsonl ベースの行動パターン検出と補完的に機能し、ツール呼び出しに表れないテキストレベルの繰り返しを発見できる。
 
 ## 実行手順
 
 ### Step 1: パターン検出
 
 ```bash
-python3 <PLUGIN_DIR>/skills/discover/scripts/discover.py
+python3 <PLUGIN_DIR>/skills/discover/scripts/discover.py [--session-scan]
 ```
 
 ### Step 2: 検出結果の表示
 
-- **行動パターン** (5+回): スキル候補として提案
+- **行動パターン** (5+回): スキル候補として提案（usage.jsonl ベース）
+- **セッションテキストパターン** (5+回): スキル候補として提案（`--session-scan` 時のみ、セッション JSONL ベース）
 - **エラーパターン** (3+回): ルール候補（予防策）として提案
 - **却下理由パターン** (3+回): ルール候補（品質基準）として提案
 
