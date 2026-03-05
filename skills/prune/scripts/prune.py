@@ -205,6 +205,7 @@ def cleanup_corrections() -> Dict[str, int]:
 
 
 DEFAULT_MERGE_SIMILARITY_THRESHOLD = 0.60
+DEFAULT_INTERACTIVE_MERGE_THRESHOLD = 0.40
 
 
 def load_merge_similarity_threshold() -> float:
@@ -217,6 +218,18 @@ def load_merge_similarity_threshold() -> float:
         except (json.JSONDecodeError, ValueError, TypeError):
             pass
     return DEFAULT_MERGE_SIMILARITY_THRESHOLD
+
+
+def load_interactive_merge_threshold() -> float:
+    """evolve-state.json から interactive_merge_similarity_threshold を読み込む。未設定時はデフォルト 0.40。"""
+    state_file = DATA_DIR / "evolve-state.json"
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            return float(state.get("interactive_merge_similarity_threshold", DEFAULT_INTERACTIVE_MERGE_THRESHOLD))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+    return DEFAULT_INTERACTIVE_MERGE_THRESHOLD
 
 
 def load_decay_threshold() -> float:
@@ -608,22 +621,28 @@ def merge_duplicates(
     # reorganize_merge_groups からペアを抽出（類似度フィルタ適用）
     reorg_filtered_pairs: set = set()
     reorg_skipped_pairs: set = set()
+    reorg_interactive_pairs: list = []  # (frozenset, score) のリスト
     if reorganize_merge_groups:
         merge_sim_threshold = load_merge_similarity_threshold()
+        interactive_threshold = load_interactive_merge_threshold()
         for group in reorganize_merge_groups:
             group_skills = group.get("skills", [])
             if len(group_skills) < 2:
                 continue
-            # ペア単位の類似度フィルタ
-            passed = filter_merge_group_pairs(
-                group_skills, skill_path_map, threshold=merge_sim_threshold
+            # ペア単位の類似度フィルタ（新シグネチャ: タプル返却）
+            passed, interactive = filter_merge_group_pairs(
+                group_skills, skill_path_map,
+                threshold=merge_sim_threshold,
+                interactive_threshold=interactive_threshold,
             )
             passed_set = set(passed)
             reorg_filtered_pairs.update(passed_set)
-            # フィルタで除外されたペアを記録
+            reorg_interactive_pairs.extend(interactive)
+            # フィルタで除外されたペアを記録（interactive 範囲も除く）
             from itertools import combinations
             all_group_pairs = {frozenset(p) for p in combinations(group_skills, 2)}
-            reorg_skipped_pairs.update(all_group_pairs - passed_set)
+            interactive_set = {pair for pair, _score in interactive}
+            reorg_skipped_pairs.update(all_group_pairs - passed_set - interactive_set)
         pairs.update(reorg_filtered_pairs)
 
     # merge suppression セットをループ外で1回だけロード
@@ -686,6 +705,64 @@ def merge_duplicates(
                 "usage_count": secondary_count,
             },
             "status": "proposed",
+        })
+
+    # reorganize 由来の interactive candidate を追加
+    # (pin/plugin/suppression チェック済みペアのみ、duplicate_candidates 経由で既に pairs に含まれているものは除く)
+    for pair, score in sorted(reorg_interactive_pairs, key=lambda x: -x[1]):
+        if pair in pairs:
+            continue
+        names = sorted(pair)
+        skill_a, skill_b = names[0], names[1]
+        path_a_str = skill_path_map.get(skill_a, "")
+        path_b_str = skill_path_map.get(skill_b, "")
+
+        # pin/plugin/suppression チェック
+        if (path_a_str and is_pinned(Path(path_a_str))) or (
+            path_b_str and is_pinned(Path(path_b_str))
+        ):
+            merge_proposals.append({
+                "primary": {"path": path_a_str, "skill_name": skill_a, "usage_count": 0},
+                "secondary": {"path": path_b_str, "skill_name": skill_b, "usage_count": 0},
+                "status": "skipped_pinned",
+            })
+            continue
+
+        origin_a = classify_artifact_origin(Path(path_a_str)) if path_a_str else "custom"
+        origin_b = classify_artifact_origin(Path(path_b_str)) if path_b_str else "custom"
+        if origin_a == "plugin" or origin_b == "plugin":
+            merge_proposals.append({
+                "primary": {"path": path_a_str, "skill_name": skill_a, "usage_count": 0},
+                "secondary": {"path": path_b_str, "skill_name": skill_b, "usage_count": 0},
+                "status": "skipped_plugin",
+            })
+            continue
+
+        pair_key = "::".join([skill_a, skill_b])
+        if pair_key in suppressed_pairs:
+            merge_proposals.append({
+                "primary": {"path": path_a_str, "skill_name": skill_a, "usage_count": 0},
+                "secondary": {"path": path_b_str, "skill_name": skill_b, "usage_count": 0},
+                "status": "skipped_suppressed",
+            })
+            continue
+
+        primary_name, secondary_name, primary_count, secondary_count = determine_primary(
+            skill_a, skill_b
+        )
+        merge_proposals.append({
+            "primary": {
+                "path": skill_path_map.get(primary_name, ""),
+                "skill_name": primary_name,
+                "usage_count": primary_count,
+            },
+            "secondary": {
+                "path": skill_path_map.get(secondary_name, ""),
+                "skill_name": secondary_name,
+                "usage_count": secondary_count,
+            },
+            "similarity_score": score,
+            "status": "interactive_candidate",
         })
 
     # reorganize 由来でフィルタ除外されたペアを skipped_low_similarity で追加

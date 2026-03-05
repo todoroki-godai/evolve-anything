@@ -226,11 +226,11 @@ class TestFilterMergeGroupPairs:
             "skill-a": str(file_a),
             "skill-b": str(file_b),
         }
-        result = filter_merge_group_pairs(
+        passed, interactive = filter_merge_group_pairs(
             ["skill-a", "skill-b"], skill_path_map, threshold=0.30
         )
-        assert len(result) == 1
-        assert frozenset(["skill-a", "skill-b"]) in result
+        assert len(passed) == 1
+        assert frozenset(["skill-a", "skill-b"]) in passed
 
     def test_low_similarity_pair_filtered(self, tmp_path):
         """類似度が閾値未満のペアが除外される。"""
@@ -254,10 +254,10 @@ class TestFilterMergeGroupPairs:
             "skill-x": str(file_x),
             "skill-y": str(file_y),
         }
-        result = filter_merge_group_pairs(
+        passed, interactive = filter_merge_group_pairs(
             ["skill-x", "skill-y"], skill_path_map, threshold=0.60
         )
-        assert len(result) == 0
+        assert len(passed) == 0
 
     def test_large_cluster_filters_false_positives(self, tmp_path):
         """大規模クラスタで偽陽性が削減される。"""
@@ -282,21 +282,22 @@ class TestFilterMergeGroupPairs:
             skill_path_map[name] = str(path)
 
         skills = list(contents.keys())
-        result = filter_merge_group_pairs(skills, skill_path_map, threshold=0.60)
+        passed, interactive = filter_merge_group_pairs(skills, skill_path_map, threshold=0.60)
 
         # C(7,2)=21 ペアのうち、閾値通過は少数（a-b ペア程度）
-        assert len(result) < 21
+        assert len(passed) < 21
         # skill-a と skill-b のペアは通過するはず（類似度が高い）
         # ただし TF-IDF のため確実ではないので、少なくとも大幅削減を確認
-        assert len(result) <= 5
+        assert len(passed) <= 5
 
     def test_single_skill_returns_empty(self):
-        """スキルが1つの場合は空リストを返す。"""
-        result = filter_merge_group_pairs(["only-one"], {"only-one": "/path"})
-        assert result == []
+        """スキルが1つの場合は空タプルを返す。"""
+        passed, interactive = filter_merge_group_pairs(["only-one"], {"only-one": "/path"})
+        assert passed == []
+        assert interactive == []
 
     def test_sklearn_not_installed_returns_all_pairs(self, tmp_path):
-        """sklearn 未インストール時は全ペアを返す（graceful degradation）。"""
+        """sklearn 未インストール時は全ペアを返し、interactive は空（graceful degradation）。"""
         (tmp_path / "a").mkdir()
         file_a = tmp_path / "a" / "SKILL.md"
         file_a.write_text("Content A")
@@ -307,10 +308,67 @@ class TestFilterMergeGroupPairs:
         skill_path_map = {"a": str(file_a), "b": str(file_b)}
 
         with patch("lib.similarity.build_tfidf_matrix", return_value=(None, None, None)):
-            result = filter_merge_group_pairs(["a", "b"], skill_path_map, threshold=0.60)
+            passed, interactive = filter_merge_group_pairs(["a", "b"], skill_path_map, threshold=0.60)
 
-        assert len(result) == 1
-        assert frozenset(["a", "b"]) in result
+        assert len(passed) == 1
+        assert frozenset(["a", "b"]) in passed
+        assert interactive == []
+
+    def test_medium_similarity_becomes_interactive(self, tmp_path):
+        """medium similarity ペアが interactive リストに入る。"""
+        pytest.importorskip("sklearn")
+        pytest.importorskip("scipy")
+
+        # ある程度関連はあるが高類似度ではないコンテンツ
+        (tmp_path / "skill-c").mkdir()
+        file_c = tmp_path / "skill-c" / "SKILL.md"
+        file_c.write_text(
+            "Deploy application to AWS using CloudFormation templates. "
+            "AWS deployment configuration and infrastructure setup. "
+            "CloudFormation stack management and deployment pipeline."
+        )
+        (tmp_path / "skill-d").mkdir()
+        file_d = tmp_path / "skill-d" / "SKILL.md"
+        file_d.write_text(
+            "AWS Lambda function deployment serverless architecture. "
+            "API Gateway configuration REST endpoint management. "
+            "CloudWatch monitoring and logging AWS infrastructure."
+        )
+
+        skill_path_map = {
+            "skill-c": str(file_c),
+            "skill-d": str(file_d),
+        }
+        passed, interactive = filter_merge_group_pairs(
+            ["skill-c", "skill-d"], skill_path_map,
+            threshold=0.80, interactive_threshold=0.10,
+        )
+        # 0.80 を超えないので passed は空、interactive に入るはず
+        assert len(passed) == 0
+        assert len(interactive) >= 1
+        pair, score = interactive[0]
+        assert pair == frozenset(["skill-c", "skill-d"])
+        assert 0.10 <= score < 0.80
+
+    def test_sklearn_not_installed_interactive_empty(self, tmp_path):
+        """sklearn 未インストール時は interactive が空リスト。"""
+        (tmp_path / "x").mkdir()
+        file_x = tmp_path / "x" / "SKILL.md"
+        file_x.write_text("Content X")
+        (tmp_path / "y").mkdir()
+        file_y = tmp_path / "y" / "SKILL.md"
+        file_y.write_text("Content Y")
+
+        skill_path_map = {"x": str(file_x), "y": str(file_y)}
+
+        with patch("lib.similarity.build_tfidf_matrix", return_value=(None, None, None)):
+            passed, interactive = filter_merge_group_pairs(
+                ["x", "y"], skill_path_map,
+                threshold=0.60, interactive_threshold=0.40,
+            )
+
+        assert len(passed) == 1
+        assert interactive == []
 
 
 # --- tokenize ---

@@ -108,11 +108,24 @@ evolve.py の出力に含まれる `prune.merge_result` を確認する。
 prune.py の `merge_duplicates()` は `reorganize.merge_groups` と `duplicate_candidates` の和集合（重複排除済み）から統合候補を JSON で出力する（型A パターン: LLM 呼び出しなし）。
 
 - `merge_proposals` の各エントリについて:
-  - `status: "skipped_pinned"` / `"skipped_plugin"` → スキップ理由を表示
+  - `status: "skipped_pinned"` / `"skipped_plugin"` / `"skipped_suppressed"` / `"skipped_low_similarity"` → スキップ理由を表示
   - `status: "proposed"` → Claude が primary と secondary の SKILL.md を読み込み、統合版を生成してユーザーに提示する（MUST）
     - AskUserQuestion で「承認（統合を適用）」「却下（変更なし）」を選択させる（MUST）
     - 承認された場合: 統合版を primary の SKILL.md に上書きし、secondary を `archive_file()` でアーカイブ
     - 却下された場合: 当該ペアを merge suppression に登録して次回以降の提案を抑制する。以下のコマンドを実行する（MUST）:
+      ```bash
+      python3 -c "
+      import sys; sys.path.insert(0, '<PLUGIN_DIR>/skills/discover/scripts')
+      from discover import add_merge_suppression
+      add_merge_suppression('<primary_skill_name>', '<secondary_skill_name>')
+      "
+      ```
+  - `status: "interactive_candidate"` → 対話的統合提案（MUST）:
+    - `similarity_score` 降順で最大3件を処理する（1回の evolve あたりの上限）
+    - 各ペアについて、Claude が primary と secondary の SKILL.md を読み込み、統合案の概要を提示する
+    - AskUserQuestion で「承認（統合を適用）」「却下（次回以降も提案しない）」を選択させる（MUST）
+    - 承認された場合: proposed と同じフロー（統合版生成 → primary の SKILL.md に上書き → secondary を `archive_file()` でアーカイブ）を適用する
+    - 却下された場合: `add_merge_suppression()` で suppression 登録し、次回以降の再提案を抑制する:
       ```bash
       python3 -c "
       import sys; sys.path.insert(0, '<PLUGIN_DIR>/skills/discover/scripts')

@@ -496,9 +496,9 @@ class TestMergeDuplicates:
             {"skills": ["alpha", "beta", "gamma"]}
         ]
 
-        # filter_merge_group_pairs をモックして alpha-beta のみ通過させる
+        # filter_merge_group_pairs をモックして alpha-beta のみ通過させる（タプル返却）
         with mock.patch("prune.filter_merge_group_pairs") as mock_filter:
-            mock_filter.return_value = [frozenset(["alpha", "beta"])]
+            mock_filter.return_value = ([frozenset(["alpha", "beta"])], [])
             result = prune.merge_duplicates(
                 [],
                 reorganize_merge_groups=reorganize_merge_groups,
@@ -516,6 +516,112 @@ class TestMergeDuplicates:
 
         skipped = [p for p in result["merge_proposals"] if p["status"] == "skipped_low_similarity"]
         assert len(skipped) == 2  # alpha-gamma, beta-gamma
+
+    def test_interactive_candidate_output(self, patch_data_dir, project_with_skills):
+        """interactive candidate が similarity_score 付きで出力される。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "beta", "timestamp": now},
+            {"skill_name": "gamma", "timestamp": now},
+        ])
+
+        reorganize_merge_groups = [
+            {"skills": ["alpha", "beta", "gamma"]}
+        ]
+
+        # alpha-beta は passed、beta-gamma は interactive (score 0.48)
+        with mock.patch("prune.filter_merge_group_pairs") as mock_filter:
+            mock_filter.return_value = (
+                [frozenset(["alpha", "beta"])],
+                [(frozenset(["beta", "gamma"]), 0.48)],
+            )
+            result = prune.merge_duplicates(
+                [],
+                reorganize_merge_groups=reorganize_merge_groups,
+                project_dir=str(project_with_skills),
+            )
+
+        # alpha-beta は proposed
+        proposed = [p for p in result["merge_proposals"] if p["status"] == "proposed"]
+        assert len(proposed) == 1
+
+        # beta-gamma は interactive_candidate
+        interactive = [p for p in result["merge_proposals"] if p["status"] == "interactive_candidate"]
+        assert len(interactive) == 1
+        assert interactive[0]["similarity_score"] == 0.48
+
+        # alpha-gamma は skipped_low_similarity
+        skipped = [p for p in result["merge_proposals"] if p["status"] == "skipped_low_similarity"]
+        assert len(skipped) == 1
+
+    def test_interactive_candidate_respects_pinned(self, patch_data_dir, project_with_skills):
+        """interactive candidate でも pin されたスキルは skipped_pinned になる。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "beta", "timestamp": now},
+        ])
+
+        # beta に .pin を作成
+        pin_file = project_with_skills / ".claude" / "skills" / "beta" / ".pin"
+        pin_file.write_text("")
+
+        reorganize_merge_groups = [
+            {"skills": ["alpha", "beta"]}
+        ]
+
+        with mock.patch("prune.filter_merge_group_pairs") as mock_filter:
+            mock_filter.return_value = (
+                [],
+                [(frozenset(["alpha", "beta"]), 0.45)],
+            )
+            result = prune.merge_duplicates(
+                [],
+                reorganize_merge_groups=reorganize_merge_groups,
+                project_dir=str(project_with_skills),
+            )
+
+        assert len(result["merge_proposals"]) == 1
+        assert result["merge_proposals"][0]["status"] == "skipped_pinned"
+
+    def test_interactive_candidate_respects_suppression(self, patch_data_dir, project_with_skills):
+        """interactive candidate でも suppression 済みペアは skipped_suppressed になる。"""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        self._write_usage(patch_data_dir, [
+            {"skill_name": "alpha", "timestamp": now},
+            {"skill_name": "beta", "timestamp": now},
+        ])
+
+        suppression_file = patch_data_dir / "discover-suppression.jsonl"
+        suppression_file.write_text(
+            json.dumps({"pattern": "alpha::beta", "type": "merge"}) + "\n"
+        )
+
+        reorganize_merge_groups = [
+            {"skills": ["alpha", "beta"]}
+        ]
+
+        with mock.patch("prune.filter_merge_group_pairs") as mock_filter:
+            mock_filter.return_value = (
+                [],
+                [(frozenset(["alpha", "beta"]), 0.50)],
+            )
+            with mock.patch("discover.SUPPRESSION_FILE", suppression_file):
+                result = prune.merge_duplicates(
+                    [],
+                    reorganize_merge_groups=reorganize_merge_groups,
+                    project_dir=str(project_with_skills),
+                )
+
+        assert len(result["merge_proposals"]) == 1
+        assert result["merge_proposals"][0]["status"] == "skipped_suppressed"
 
     def test_run_prune_includes_merge_result(self, patch_data_dir, tmp_path):
         """run_prune の戻り値に merge_result キーが存在する。"""

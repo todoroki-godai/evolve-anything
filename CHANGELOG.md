@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.18.0] - 2026-03-06
+
+### Added
+- **cross-project-telemetry-isolation**: observe hooks の usage/errors レコードに `project` フィールド追加（CLAUDE_PROJECT_DIR 末尾名）
+- `scripts/lib/telemetry_query.py`: DuckDB 共通クエリ層（JSONL→SQL、DuckDB 未インストール時は Python フォールバック、project フィルタリング対応）
+- discover/audit: `--project-dir` によるプロジェクト単位フィルタリング（`--include-unknown` オプション付き）
+- `scripts/migrate_project_field.py`: 2層リカバリ（sessions + fs consensus）で既存 usage.jsonl に project フィールドをバックフィル
+- **interactive-merge-proposal**: reorganize 検出かつ merge 閾値未満（0.40〜0.60）のペアに対して AskUserQuestion で対話的統合提案
+- `filter_merge_group_pairs()` に `interactive_threshold` パラメータ追加、返り値を `(passed, interactive)` タプルに変更
+- `load_interactive_merge_threshold()`: `evolve-state.json` の `interactive_merge_similarity_threshold`（デフォルト 0.40）を読み込み
+- `merge_proposals` に `status: "interactive_candidate"` + `similarity_score` を出力
+- evolve SKILL.md Step 5 Merge に interactive candidate ハンドリング（最大3件/回、承認→統合、却下→suppression 登録）
+- テスト追加: telemetry_query 6件 + migrate 5件 + similarity 2件 + prune 3件
+
 ## [0.17.0] - 2026-03-05
 
 ### Added

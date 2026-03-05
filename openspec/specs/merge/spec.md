@@ -1,4 +1,4 @@
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Merge integrates duplicate skills into one
 Reorganize Phase の `merge_groups` と Prune Phase の `duplicate_candidates` の**和集合（重複排除済み）**に対して、2つのスキルを統合した1つの SKILL.md を生成する（MUST）。統合版はユーザー承認なしに適用してはならない（MUST NOT）。統合候補の JSON 出力は Python（prune.py）が行い、統合版 SKILL.md の生成は SKILL.md 経由で Claude に指示する（型A パターン）。
@@ -70,14 +70,21 @@ Merge の出力は以下の JSON 構造に従う（MUST）。
     {
       "primary": {"path": "string", "skill_name": "string", "usage_count": 0},
       "secondary": {"path": "string", "skill_name": "string", "usage_count": 0},
-      "merged_content_preview": "first 10 lines of merged SKILL.md (status: proposed のみ。skipped_* では省略)",
-      "status": "proposed" | "approved" | "rejected" | "skipped_pinned" | "skipped_plugin" | "skipped_suppressed" | "skipped_low_similarity"
+      "merged_content_preview": "first 10 lines of merged SKILL.md (status: proposed のみ。skipped_* / interactive_candidate では省略)",
+      "similarity_score": 0.0,
+      "status": "proposed" | "approved" | "rejected" | "skipped_pinned" | "skipped_plugin" | "skipped_suppressed" | "skipped_low_similarity" | "interactive_candidate"
     }
   ],
   "total_proposals": 0
 }
 ```
 
+`interactive_candidate` は reorganize 由来で merge 閾値未満かつ interactive 閾値以上のペアを示す。`similarity_score` は `interactive_candidate` では必須（MUST）、その他の status ではオプションとする。
+
 #### Scenario: Dry-run output
 - **WHEN** `--dry-run` フラグが設定されている
-- **THEN** 全ての `merge_proposals` の status は `"proposed"` のままとなり、ファイル変更は行わない
+- **THEN** 全ての `merge_proposals` の status は `"proposed"` または `"interactive_candidate"` のままとなり、ファイル変更は行わない
+
+#### Scenario: Interactive candidate in output
+- **WHEN** reorganize 由来ペアの類似度が 0.48（interactive 閾値 0.40 以上、merge 閾値 0.60 未満）
+- **THEN** `merge_proposals` に `status: "interactive_candidate"`, `similarity_score: 0.48` として含まれ、`merged_content_preview` は省略される

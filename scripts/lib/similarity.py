@@ -95,25 +95,29 @@ def filter_merge_group_pairs(
     skills: List[str],
     skill_path_map: Dict[str, str],
     threshold: float = 0.60,
-) -> List[FrozenSet[str]]:
+    interactive_threshold: float = 0.40,
+) -> tuple:
     """merge_group のスキルリストからペア単位の類似度フィルタを適用する。
 
     Args:
         skills: merge_group 内のスキル名リスト
         skill_path_map: {skill_name: file_path} のマッピング
         threshold: コサイン類似度の閾値（デフォルト 0.60）
+        interactive_threshold: interactive candidate の下限閾値（デフォルト 0.40）
 
     Returns:
-        閾値以上のペアの frozenset リスト。
-        sklearn 未インストール時は全ペアをそのまま返す（graceful degradation）。
+        (passed, interactive) のタプル。
+        passed: 閾値以上のペアの frozenset リスト。
+        interactive: interactive 閾値以上かつ merge 閾値未満のペアと類似度スコアのタプルリスト。
+        sklearn 未インストール時は passed に全ペア、interactive は空リストを返す（graceful degradation）。
     """
     if len(skills) < 2:
-        return []
+        return [], []
 
     # パスが存在するスキルのみ対象
     paths = {s: skill_path_map[s] for s in skills if s in skill_path_map}
     if len(paths) < 2:
-        return [frozenset(pair) for pair in combinations(skills, 2)]
+        return [frozenset(pair) for pair in combinations(skills, 2)], []
 
     # TF-IDF 行列を構築
     skill_texts: dict = {}
@@ -125,30 +129,34 @@ def filter_merge_group_pairs(
             print(f"Warning: failed to read {file_path}, skipping", file=sys.stderr)
 
     if len(skill_texts) < 2:
-        return [frozenset(pair) for pair in combinations(skills, 2)]
+        return [frozenset(pair) for pair in combinations(skills, 2)], []
 
     matrix, _feature_names, skill_names = build_tfidf_matrix(skill_texts)
     if matrix is None:
-        # sklearn 未インストール: graceful degradation — 全ペアを返す
-        return [frozenset(pair) for pair in combinations(skills, 2)]
+        # sklearn 未インストール: graceful degradation — 全ペアを返す、interactive は空
+        return [frozenset(pair) for pair in combinations(skills, 2)], []
 
     try:
         from scipy.spatial.distance import cosine as cosine_distance
     except ImportError:
-        return [frozenset(pair) for pair in combinations(skills, 2)]
+        return [frozenset(pair) for pair in combinations(skills, 2)], []
 
-    # ペアワイズ類似度を計算し、閾値以上のみ返す
-    result: List[FrozenSet[str]] = []
+    # ペアワイズ類似度を計算し、閾値以上と interactive 範囲を分類
+    passed: List[FrozenSet[str]] = []
+    interactive: list = []
     n = len(skill_names)
     for i in range(n):
         for j in range(i + 1, n):
             vec_a = matrix[i].toarray().flatten()
             vec_b = matrix[j].toarray().flatten()
             similarity = 1.0 - cosine_distance(vec_a, vec_b)
+            pair = frozenset([skill_names[i], skill_names[j]])
             if similarity >= threshold:
-                result.append(frozenset([skill_names[i], skill_names[j]]))
+                passed.append(pair)
+            elif similarity >= interactive_threshold:
+                interactive.append((pair, round(similarity, 4)))
 
-    return result
+    return passed, interactive
 
 
 # --- Jaccard 類似度 ---
