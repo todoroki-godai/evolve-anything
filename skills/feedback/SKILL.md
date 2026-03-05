@@ -73,7 +73,7 @@ AskUserQuestion ツールで以下を順に質問:
 ### Step 4: Issue 送信
 
 ```bash
-gh issue create --repo todoroki-godai/rl-anything --title "[Feedback] {category}: {summary}" --body "{body}" --label "feedback"
+gh issue create --repo todoroki-godai/evolve-anything --title "[Feedback] {category}: {summary}" --body "{body}" --label "feedback"
 ```
 
 送信失敗時のフォールバック:

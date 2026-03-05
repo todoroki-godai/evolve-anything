@@ -3,7 +3,7 @@ set -euo pipefail
 
 # rl-anything plugin installer / updater
 # Usage:
-#   curl -sL https://raw.githubusercontent.com/todoroki-godai/rl-anything/main/install.sh | bash
+#   curl -sL https://raw.githubusercontent.com/todoroki-godai/evolve-anything/main/install.sh | bash
 #   ./install.sh
 
 MARKETPLACE_NAME="rl-anything"

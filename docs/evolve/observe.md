@@ -199,7 +199,7 @@ class Individual:
 4. スコア変化（result.json / history.jsonl から自動取得、あれば）
 5. 良かった点 / 困った点（自由記述）
 6. Issue 本文をプレビュー表示
-7. ユーザー確認後に gh issue create -R todoroki-godai/rl-anything --label feedback
+7. ユーザー確認後に gh issue create -R todoroki-godai/evolve-anything --label feedback
 ```
 
 ### プライバシー保護
