@@ -617,12 +617,9 @@ def load_usage_data(days: int = 30) -> List[Dict[str, Any]]:
     return records
 
 
-_BUILTIN_TOOLS = {
-    "Agent:Explore",
-    "Agent:general-purpose",
-    "Agent:Plan",
-    "commit",
-}
+from agent_classifier import BUILTIN_AGENT_NAMES
+
+_BUILTIN_TOOLS = {f"Agent:{n}" for n in BUILTIN_AGENT_NAMES} | {"commit"}
 
 
 def _is_plugin_skill(skill_name: str) -> bool:

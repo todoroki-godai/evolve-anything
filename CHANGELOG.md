@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.17.0] - 2026-03-05
+
+### Added
+- **agent-type-classification**: 組み込み Agent（Explore, Plan, general-purpose）をメインランキングから除外し `agent_usage_summary` に分離
+- `scripts/lib/agent_classifier.py`: `BUILTIN_AGENT_NAMES` + `classify_agent_type()` 共通モジュール（builtin / custom_global / custom_project 判定）
+- `detect_behavior_patterns()` で処理順序を明確化: プラグイン → 組み込み Agent → カスタム Agent
+- カスタム Agent に `agent_type` フィールドを付与し `determine_scope()` でスコープ判定
+- `agent-type-classification` / `scope-detection` spec を main specs に同期
+- ユニットテスト 11 件（`test_agent_classifier.py`）+ 統合テスト 8 件（`test_agent_filter.py`）追加
+
+### Changed
+- `audit.py` の `_BUILTIN_TOOLS` を `BUILTIN_AGENT_NAMES` から派生する形にリファクタ（DRY）
+- `determine_scope()` が `agent_type` フィールドを優先参照するように拡張
+
 ## [0.16.0] - 2026-03-05
 
 ### Added

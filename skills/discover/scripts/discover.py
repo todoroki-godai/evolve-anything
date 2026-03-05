@@ -28,6 +28,7 @@ REJECTION_THRESHOLD = 3   # 却下理由検出閾値
 # 構造的制約は共通モジュールから取得
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+from agent_classifier import classify_agent_type
 from line_limit import MAX_RULE_LINES, MAX_SKILL_LINES
 
 # Discover 振動防止用抑制リスト
@@ -98,12 +99,19 @@ def _load_classify_usage_skill():
     return _is_plugin_skill, classify_usage_skill
 
 
-def detect_behavior_patterns(threshold: int = BEHAVIOR_THRESHOLD) -> List[Dict[str, Any]]:
+def detect_behavior_patterns(
+    threshold: int = BEHAVIOR_THRESHOLD,
+    *,
+    project_root: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
     """繰り返し行動パターンの検出（usage + sessions、5+閾値）。
 
     parent_skill の有無で contextualized / ad-hoc / unknown を分類し、
     ad-hoc パターンのみをスキル候補として提案する。
-    プラグインスキルはメインランキングから除外し、plugin_summary に集約する。
+    処理順序:
+    1. プラグインスキルはメインランキングから除外し、plugin_summary に集約
+    2. 組み込み Agent は agent_usage_summary に分離
+    3. カスタム Agent はメインランキングに残留
     """
     usage = load_jsonl(DATA_DIR / "usage.jsonl")
     _is_plugin, _classify = _load_classify_usage_skill()
@@ -118,7 +126,7 @@ def detect_behavior_patterns(threshold: int = BEHAVIOR_THRESHOLD) -> List[Dict[s
             continue
         all_counter[skill] += 1
 
-        # プラグインスキルは別集計
+        # (1) プラグインスキルは別集計
         if _is_plugin(skill):
             plugin_name = _classify(skill) or "openspec(legacy)"
             plugin_counter[plugin_name] += 1
@@ -138,28 +146,56 @@ def detect_behavior_patterns(threshold: int = BEHAVIOR_THRESHOLD) -> List[Dict[s
 
     suppressed = load_suppression_list()
     patterns = []
+    builtin_agent_counter: Counter = Counter()
+    builtin_agent_prompts: Dict[str, List[str]] = defaultdict(list)
+
     for skill, ad_hoc_count in ad_hoc_counter.most_common():
-        if ad_hoc_count >= threshold and skill not in suppressed:
+        if ad_hoc_count < threshold or skill in suppressed:
+            continue
+
+        # (2) Agent:XX パターンの分類
+        if skill.startswith("Agent:"):
+            agent_name = skill[len("Agent:"):]
+            agent_type = classify_agent_type(agent_name, project_root=project_root)
+
+            prompts = [
+                r.get("prompt", "") for r in usage
+                if r.get("skill_name") == skill
+                and r.get("prompt")
+                and r.get("parent_skill") is None
+                and r.get("source", "") != "backfill"
+            ]
+
+            if agent_type == "builtin":
+                # 組み込み Agent → builtin_agent_counter に分離
+                builtin_agent_counter[skill] = ad_hoc_count
+                builtin_agent_prompts[skill] = prompts
+                continue
+
+            # (3) カスタム Agent → メインランキングに残留
             pattern: Dict[str, Any] = {
                 "type": "behavior",
                 "pattern": skill,
                 "count": ad_hoc_count,
                 "total_count": all_counter.get(skill, 0),
                 "suggestion": "skill_candidate",
+                "agent_type": agent_type,
             }
-            # Agent パターンの場合、prompt を分析してサブカテゴリを付与
-            if skill.startswith("Agent:"):
-                prompts = [
-                    r.get("prompt", "") for r in usage
-                    if r.get("skill_name") == skill
-                    and r.get("prompt")
-                    and r.get("parent_skill") is None
-                    and r.get("source", "") != "backfill"
-                ]
-                subcategories = _classify_agent_prompts(prompts)
-                if subcategories:
-                    pattern["subcategories"] = subcategories
+            subcategories = _classify_agent_prompts(prompts)
+            if subcategories:
+                pattern["subcategories"] = subcategories
             patterns.append(pattern)
+            continue
+
+        # 非 Agent パターン
+        pattern = {
+            "type": "behavior",
+            "pattern": skill,
+            "count": ad_hoc_count,
+            "total_count": all_counter.get(skill, 0),
+            "suggestion": "skill_candidate",
+        }
+        patterns.append(pattern)
 
     # プラグイン利用サマリを末尾に付加
     if plugin_counter:
@@ -170,6 +206,25 @@ def detect_behavior_patterns(threshold: int = BEHAVIOR_THRESHOLD) -> List[Dict[s
             "suggestion": "info_only",
             "plugin_breakdown": dict(plugin_counter.most_common()),
         })
+
+    # 組み込み Agent 利用サマリを末尾に付加
+    if builtin_agent_counter:
+        agent_breakdown: Dict[str, Any] = {}
+        for agent_skill, count in builtin_agent_counter.most_common():
+            entry: Dict[str, Any] = {"count": count}
+            subcategories = _classify_agent_prompts(builtin_agent_prompts.get(agent_skill, []))
+            if subcategories:
+                entry["subcategories"] = subcategories
+            agent_breakdown[agent_skill] = entry
+
+        patterns.append({
+            "type": "agent_usage_summary",
+            "pattern": "builtin_agent_usage",
+            "count": sum(builtin_agent_counter.values()),
+            "suggestion": "info_only",
+            "agent_breakdown": agent_breakdown,
+        })
+
     return patterns
 
 
@@ -253,7 +308,17 @@ def detect_rejection_patterns(threshold: int = REJECTION_THRESHOLD) -> List[Dict
 
 
 def determine_scope(pattern: Dict[str, Any]) -> str:
-    """スコープ配置の判断（global / project / plugin）。"""
+    """スコープ配置の判断（global / project / plugin）。
+
+    カスタム Agent は agent_type フィールドから判定する。
+    """
+    # カスタム Agent: agent_type フィールドで判定
+    agent_type = pattern.get("agent_type")
+    if agent_type == "custom_global":
+        return "global"
+    if agent_type == "custom_project":
+        return "project"
+
     p = pattern.get("pattern", "").lower()
 
     # global 配置の兆候
