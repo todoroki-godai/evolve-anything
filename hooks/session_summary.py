@@ -6,6 +6,7 @@
 LLM 呼び出しは行わない（MUST NOT）。
 """
 import json
+import os
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -103,11 +104,20 @@ def cleanup_context_file(session_id: str) -> None:
         print(f"[rl-anything:session_summary] cleanup error: {e}", file=sys.stderr)
 
 
+def _get_project() -> str | None:
+    """CLAUDE_PROJECT_DIR から末尾ディレクトリ名を取得する。"""
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if not project_dir:
+        return None
+    return common.project_name_from_dir(project_dir)
+
+
 def handle_stop(event: dict) -> None:
     """Stop イベントを処理する。"""
     common.ensure_data_dir()
 
     session_id = event.get("session_id", "")
+    project = _get_project()
     stats = count_session_usage(session_id)
 
     session_record = {
@@ -115,12 +125,14 @@ def handle_stop(event: dict) -> None:
         "skill_count": stats["skill_count"],
         "error_count": stats["error_count"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "project": project,
     }
     common.append_jsonl(common.DATA_DIR / "sessions.jsonl", session_record)
 
     # ワークフローシーケンスを workflows.jsonl に書き出す
     sequences = build_workflow_sequences(session_id)
     for seq in sequences:
+        seq["project"] = project
         common.append_jsonl(common.DATA_DIR / "workflows.jsonl", seq)
 
     # 文脈ファイルのクリーンアップ

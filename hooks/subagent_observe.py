@@ -8,6 +8,7 @@ LLM 呼び出しは行わない（MUST NOT）。
 書き込み失敗時はセッションをブロックしない（MUST NOT）。
 """
 import json
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -27,6 +28,9 @@ def handle_subagent_stop(event: dict) -> None:
     session_id = event.get("session_id", "")
     wf_ctx = common.read_workflow_context(session_id)
 
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    project = common.project_name_from_dir(project_dir) if project_dir else None
+
     record = {
         "agent_type": event.get("agent_type", ""),
         "agent_id": event.get("agent_id", ""),
@@ -36,6 +40,7 @@ def handle_subagent_stop(event: dict) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "parent_skill": wf_ctx["parent_skill"],
         "workflow_id": wf_ctx["workflow_id"],
+        "project": project,
     }
     common.append_jsonl(common.DATA_DIR / "subagents.jsonl", record)
 

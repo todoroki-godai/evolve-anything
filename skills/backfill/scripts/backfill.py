@@ -813,6 +813,7 @@ def backfill(project_dir: Optional[str] = None, force: bool = False, corrections
         summary["sessions_processed"] += 1
 
         for rec in parse_result.usage_records:
+            rec["project"] = proj_name
             if rec.get("skill_name", "").startswith("Agent:"):
                 summary["agent_calls"] += 1
             else:
@@ -820,6 +821,7 @@ def backfill(project_dir: Optional[str] = None, force: bool = False, corrections
             common.append_jsonl(common.DATA_DIR / "usage.jsonl", rec)
 
         for wf_rec in parse_result.workflow_records:
+            wf_rec["project"] = proj_name
             summary["workflows"] += 1
             wf_type = wf_rec.get("workflow_type", "skill-driven")
             if wf_type in summary["workflows_by_type"]:
@@ -828,6 +830,7 @@ def backfill(project_dir: Optional[str] = None, force: bool = False, corrections
 
         if parse_result.session_meta is not None:
             parse_result.session_meta["project_name"] = proj_name
+            parse_result.session_meta["project"] = proj_name
             summary["sessions"] += 1
             summary["filtered_messages"] += parse_result.session_meta.get("filtered_messages", 0)
             common.append_jsonl(common.DATA_DIR / "sessions.jsonl", parse_result.session_meta)

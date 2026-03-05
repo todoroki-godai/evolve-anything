@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.1] - 2026-03-06
+
+### Fixed
+- backfill: usage/workflows/sessions レコードに `project` フィールドが欠落していた問題を修正
+- session_summary hook: sessions.jsonl / workflows.jsonl に `project` フィールドを付与
+- subagent_observe hook: subagents.jsonl に `project` フィールドを付与
+
+### Changed
+- commit-version ルール: バージョン種別を AskUserQuestion で確認、CHANGELOG に前回バージョンからの全変更を記載するよう改善
+
 ## [0.18.0] - 2026-03-06
 
 ### Added
