@@ -1,7 +1,7 @@
 ---
 name: optimize
 description: スキル/ルールの遺伝的最適化。/optimize で呼び出し。LLM でバリエーションを生成し、適応度関数で評価して進化させる。
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 ---
 
 # 遺伝的プロンプト最適化
@@ -47,6 +47,20 @@ python3 <PLUGIN_DIR>/skills/genetic-prompt-optimizer/scripts/optimize.py \
 - `--dry-run` の場合は構造チェック結果を表示する
 - `--restore` の場合は復元完了を報告する
 - エラーが発生した場合はエラー内容と対処法を提示する
+
+### 4. accept/reject を確認する（`--dry-run`・`--restore` 以外）
+
+最適化が正常に完了した場合（`--dry-run` および `--restore` を除く）、AskUserQuestion で結果の採否を確認する。
+
+1. AskUserQuestion で「この最適化結果を採用しますか？」と確認する（options: 「Accept（結果を採用）」「Reject（却下して理由を記録）」）
+2. **Accept の場合**: 以下を実行して `history.jsonl` に `human_accepted: true` を記録する
+   ```bash
+   python3 <PLUGIN_DIR>/skills/genetic-prompt-optimizer/scripts/optimize.py --target <TARGET> --accept
+   ```
+3. **Reject の場合**: AskUserQuestion（open-ended）で却下理由を確認し、以下を実行して `history.jsonl` に `human_accepted: false` と `rejection_reason` を記録する
+   ```bash
+   python3 <PLUGIN_DIR>/skills/genetic-prompt-optimizer/scripts/optimize.py --target <TARGET> --reject --reason "<理由>"
+   ```
 
 ## 使用例
 

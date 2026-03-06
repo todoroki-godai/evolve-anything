@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.19.4] - 2026-03-06
+
+### Fixed
+- **optimize**: 最適化結果の accept/reject 確認フローを SKILL.md に追加 — `history.jsonl` に `human_accepted` が記録されるようになり、evolve-fitness が機能する
+
 ## [0.19.3] - 2026-03-06
 
 ### Added
