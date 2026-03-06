@@ -1118,5 +1118,124 @@ class TestScopeDetection:
         assert "cwd" not in call_kwargs.kwargs
 
 
+# --- 統合テスト: 新モジュール統合 ---
+
+class TestModuleIntegration:
+    """optimize.py への新モジュール統合テスト"""
+
+    def test_individual_section_id(self):
+        """Individual に section_id フィールドが存在する"""
+        ind = Individual("テスト", section_id="h2-0")
+        assert ind.section_id == "h2-0"
+        d = ind.to_dict()
+        assert d["section_id"] == "h2-0"
+
+    def test_individual_section_id_default_none(self):
+        """section_id のデフォルトは None"""
+        ind = Individual("テスト")
+        assert ind.section_id is None
+
+    def test_select_strategy_auto(self, sample_skill):
+        """_select_strategy() がファイルサイズに応じて自動選択する"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+        )
+        strategy = optimizer._select_strategy()
+        # sample_skill は短いファイルなので self_refine
+        assert strategy == "self_refine"
+
+    def test_select_strategy_override(self, sample_skill):
+        """strategy 引数で上書きできる"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+            strategy="budget_mpo",
+        )
+        assert optimizer._select_strategy() == "budget_mpo"
+
+    def test_make_evaluator(self, sample_skill):
+        """_make_evaluator() が Callable[[str], float] を返す"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+        )
+        evaluator = optimizer._make_evaluator()
+        score = evaluator("# test\ncontent")
+        assert isinstance(score, float)
+        assert 0.0 <= score <= 1.0
+
+    def test_run_sectioned_small_file_fallback(self, sample_skill, temp_dir):
+        """小さいファイルは run_sectioned() が run() にフォールバック"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            generations=1,
+            population_size=2,
+            dry_run=True,
+        )
+        optimizer.run_dir = temp_dir / "test_run"
+
+        with patch("optimize.subprocess.run", side_effect=FileNotFoundError):
+            result = optimizer.run_sectioned()
+
+        # run() にフォールバックするので history がある
+        assert "history" in result
+
+    def test_run_sectioned_with_sections(self, temp_dir):
+        """セクション分割ベースの最適化が動作する"""
+        # 70行のファイルを作成 (h2_h3 レベル)
+        lines = ["# Title"]
+        lines.append("## Section A")
+        lines.extend([f"line {i}" for i in range(25)])
+        lines.append("## Section B")
+        lines.extend([f"line {i}" for i in range(25)])
+        lines.append("## Section C")
+        lines.extend([f"line {i}" for i in range(15)])
+
+        skill_path = temp_dir / "sectioned-skill.md"
+        skill_path.write_text("\n".join(lines), encoding="utf-8")
+
+        optimizer = GeneticOptimizer(
+            target_path=str(skill_path),
+            generations=1,
+            population_size=2,
+            dry_run=True,
+        )
+        optimizer.run_dir = temp_dir / "test_run"
+
+        with patch("optimize.subprocess.run", side_effect=FileNotFoundError):
+            result = optimizer.run_sectioned()
+
+        assert result["strategy"] == "self_refine"
+        assert result["sections"] >= 3
+        assert result["best_individual"] is not None
+
+    def test_cascade_disabled_by_default(self, sample_skill):
+        """cascade_config 未指定時は cascade が無効"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+        )
+        assert optimizer.cascade.enabled is False
+
+    def test_parallel_min_1(self, sample_skill):
+        """parallel は最低1"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+            parallel=0,
+        )
+        assert optimizer.parallel == 1
+
+    def test_early_stop_rule_default(self, sample_skill):
+        """early_stop_rule のデフォルト値"""
+        optimizer = GeneticOptimizer(
+            target_path=str(sample_skill),
+            dry_run=True,
+        )
+        assert optimizer.early_stop_rule.quality_threshold == 0.95
+        assert optimizer.early_stop_rule.plateau_count == 3
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

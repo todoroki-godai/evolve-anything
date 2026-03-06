@@ -19,7 +19,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import yaml
@@ -35,6 +35,16 @@ MAX_KEPT_RUNS = 5  # generations/ に保持する最大ラン数
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 from line_limit import MAX_RULE_LINES, MAX_SKILL_LINES, check_line_limit
+
+# 新モジュール (optimize-large-skill-mpo)
+_scripts_dir = Path(__file__).resolve().parent
+sys.path.insert(0, str(_scripts_dir))
+from strategy_router import select_strategy
+from granularity import determine_split_level, split_sections, merge_small_sections, Section
+from bandit_selector import BanditSectionSelector, estimate_importance
+from early_stopping import EarlyStopRule, should_stop
+from model_cascade import ModelCascade, load_cascade_config
+from parallel import build_plan, run_parallel, dedup_consolidate, OptimizeResult
 
 
 def detect_scope(target_path: Path) -> str:
@@ -60,7 +70,8 @@ class Individual:
     """最適化対象の個体（スキルのバリエーション）"""
 
     def __init__(
-        self, content: str, generation: int = 0, parent_ids: Optional[List[str]] = None
+        self, content: str, generation: int = 0, parent_ids: Optional[List[str]] = None,
+        section_id: Optional[str] = None,
     ):
         self.content = content
         self.generation = generation
@@ -68,6 +79,7 @@ class Individual:
         self.fitness: Optional[float] = None
         self.strategy: Optional[str] = None  # "elite", "mutation", "crossover"
         self.cot_reasons: Optional[Dict[str, Any]] = None
+        self.section_id: Optional[str] = section_id
         self.id = f"gen{generation}_{datetime.now().strftime('%H%M%S_%f')}"
 
     def to_dict(self) -> dict:
@@ -78,6 +90,7 @@ class Individual:
             "fitness": self.fitness,
             "strategy": self.strategy,
             "cot_reasons": self.cot_reasons,
+            "section_id": self.section_id,
             "content_length": len(self.content),
             "content": self.content,
         }
@@ -94,6 +107,11 @@ class GeneticOptimizer:
         fitness_func: str = "default",
         dry_run: bool = False,
         test_tasks: Optional[str] = None,
+        strategy: Optional[str] = None,
+        budget: Optional[int] = None,
+        parallel: int = 1,
+        cascade_config: Optional[str] = None,
+        early_stop_rule: Optional[EarlyStopRule] = None,
     ):
         self.target_path = Path(target_path)
         self.scope = detect_scope(self.target_path)
@@ -107,6 +125,18 @@ class GeneticOptimizer:
             self.test_tasks = self._load_test_tasks(test_tasks)
         self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.run_dir = GENERATIONS_DIR / self.run_id
+        self.parallel = max(1, parallel)
+        self.budget = budget
+        self.early_stop_rule = early_stop_rule or EarlyStopRule()
+        if budget is not None:
+            self.early_stop_rule.budget_limit = budget
+
+        # Strategy: auto-detect or user-specified
+        self._strategy_override = strategy
+
+        # Model cascade
+        config = load_cascade_config(cascade_config)
+        self.cascade = ModelCascade(config=config, enabled=cascade_config is not None)
 
     @property
     def _is_rule_file(self) -> bool:
@@ -239,6 +269,133 @@ class GeneticOptimizer:
         if self.scope == "global":
             return str(Path.home())
         return None
+
+    def _select_strategy(self) -> str:
+        """最適化手法を選択。override/budget 指定があればそれを使う。"""
+        if self._strategy_override:
+            return self._strategy_override
+        if self.budget is not None:
+            return "budget_mpo"
+        content = self.target_path.read_text(encoding="utf-8")
+        file_lines = content.count("\n") + 1
+        return select_strategy(file_lines)
+
+    def _make_evaluator(self) -> Callable[[str], float]:
+        """evaluate() を Callable[[str], float] インターフェースで返す。"""
+        def evaluator(content: str) -> float:
+            ind = Individual(content)
+            return self.evaluate(ind)
+        return evaluator
+
+    def run_sectioned(self) -> Dict[str, Any]:
+        """セクション分割ベースの最適化パイプライン。
+
+        Phase 0: 戦略選択 + セクション分割
+        Phase 1: LOO 重要度推定 + Bandit 初期化
+        Phase 2: セクション単位の反復最適化 (early stopping 付き)
+        Phase 3: 再結合 + De-dup
+        """
+        content = self.target_path.read_text(encoding="utf-8")
+        file_lines = content.count("\n") + 1
+        strategy = self._select_strategy()
+
+        # Phase 0: セクション分割
+        split_level = determine_split_level(file_lines)
+        sections = split_sections(content, split_level)
+        sections = merge_small_sections(sections)
+
+        print(f"Strategy: {strategy}, Split: {split_level}, Sections: {len(sections)}")
+
+        if len(sections) <= 1:
+            # 分割不要 → 従来の run() にフォールバック
+            return self.run()
+
+        # Phase 1: LOO 重要度推定 + Bandit 初期化
+        evaluator = self._make_evaluator()
+        section_dicts = [{"id": s.id, "content": "\n".join(s.lines)} for s in sections]
+        section_ids = [s.id for s in sections]
+
+        bandit = BanditSectionSelector.load_state(str(self.run_dir), section_ids)
+
+        if not self.dry_run:
+            importance = estimate_importance(section_dicts, evaluator, content)
+            if importance:
+                bandit.initialize_from_importance(importance)
+
+        # Phase 2: セクション単位の反復最適化
+        section_contents = {s.id: "\n".join(s.lines) for s in sections}
+        score_history: Dict[str, List[float]] = {sid: [] for sid in section_ids}
+        total_cost = 0.0
+
+        cumulative_cost = 0
+        for gen in range(self.generations):
+            # Bandit でトップ K セクションを選択
+            if self.budget is not None:
+                k = max(1, self.budget // 2)
+            else:
+                k = max(1, len(section_ids) // 2)
+            selected = bandit.select_top_k(k)
+            print(f"\n--- 世代 {gen}: sections {selected} ---")
+
+            for sid in selected:
+                # Early stopping チェック
+                stop, reason = should_stop(
+                    sid, score_history[sid], self.early_stop_rule,
+                    cumulative_cost=cumulative_cost,
+                )
+                if stop:
+                    print(f"  {sid}: early stop ({reason})")
+                    continue
+
+                # セクション最適化
+                old_content = section_contents[sid]
+                ind = Individual(old_content, generation=gen, section_id=sid)
+                if self.dry_run:
+                    ind.fitness = self.evaluate(ind)
+                    cumulative_cost += 1
+                else:
+                    mutated = self.mutate(ind, gen)
+                    mutated.fitness = self.evaluate(mutated)
+                    ind.fitness = self.evaluate(ind)
+                    cumulative_cost += 2  # evaluate + mutate
+
+                    if (mutated.fitness or 0) > (ind.fitness or 0):
+                        section_contents[sid] = mutated.content
+                        bandit.update(sid, improved=True)
+                        print(f"  {sid}: improved {ind.fitness:.3f} -> {mutated.fitness:.3f}")
+                    else:
+                        bandit.update(sid, improved=False)
+                        print(f"  {sid}: no improvement ({ind.fitness:.3f})")
+
+                score = ind.fitness if self.dry_run else max(ind.fitness or 0, mutated.fitness or 0)
+                score_history[sid].append(score)
+
+        # Phase 3: 再結合
+        final_content = "\n".join(section_contents[sid] for sid in section_ids)
+        final_ind = Individual(final_content, generation=self.generations - 1)
+        final_ind.fitness = evaluator(final_content)
+
+        # Bandit 状態保存
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        bandit.save_state(str(self.run_dir))
+
+        result = {
+            "run_id": self.run_id,
+            "target": str(self.target_path),
+            "strategy": strategy,
+            "split_level": split_level,
+            "sections": len(sections),
+            "generations": self.generations,
+            "population_size": self.population_size,
+            "fitness_func": self.fitness_func,
+            "dry_run": self.dry_run,
+            "best_individual": final_ind.to_dict(),
+            "score_history": score_history,
+        }
+
+        self.save_result(result)
+        self.save_history_entry(result)
+        return result
 
     def run(self) -> Dict[str, Any]:
         """最適化ループを実行"""
@@ -678,7 +835,9 @@ class GeneticOptimizer:
             (total_score, cot_result) のタプル。
             cot_result は各基準の score/reason を含む dict、またはパース失敗時 None。
         """
-        prompt = (
+        # Prefix Caching: 固定部分（ルーブリック）を先頭に配置し、
+        # API の KV キャッシュ再利用率を最大化する
+        rubric = (
             "以下のClaude Codeスキル定義を評価してください。\n\n"
             "各基準について、まず根拠（reason）を述べてから 0.0〜1.0 のスコアを付けてください。\n\n"
             "評価基準:\n"
@@ -686,13 +845,16 @@ class GeneticOptimizer:
             "- completeness: 必要な情報が全て含まれているか (25%)\n"
             "- structure: 論理的に整理されているか (25%)\n"
             "- practicality: 実際に使いやすいか (25%)\n\n"
-            f"スキル:\n```markdown\n{individual.content}\n```\n\n"
             "以下のJSON形式で回答してください:\n"
             '{"clarity": {"score": 0.8, "reason": "..."}, '
             '"completeness": {"score": 0.7, "reason": "..."}, '
             '"structure": {"score": 0.9, "reason": "..."}, '
             '"practicality": {"score": 0.75, "reason": "..."}, '
-            '"total": 0.79}'
+            '"total": 0.79}\n\n'
+        )
+        prompt = (
+            f"{rubric}"
+            f"スキル:\n```markdown\n{individual.content}\n```"
         )
 
         try:
@@ -1073,6 +1235,20 @@ def main():
     parser.add_argument(
         "--reason", default=None, help="却下理由（--reject 時のオプション）"
     )
+    parser.add_argument(
+        "--strategy", default=None, choices=["self_refine", "budget_mpo"],
+        help="最適化手法（未指定で自動選択）"
+    )
+    parser.add_argument(
+        "--parallel", type=int, default=1, help="references/ 並行最適化数"
+    )
+    parser.add_argument(
+        "--budget", type=int, default=None,
+        help="高価モデルのコール数上限（指定時は budget_mpo を強制）"
+    )
+    parser.add_argument(
+        "--cascade", default=None, help="モデルカスケード設定ファイル（YAML）"
+    )
 
     args = parser.parse_args()
 
@@ -1112,9 +1288,51 @@ def main():
         fitness_func=args.fitness,
         dry_run=args.dry_run,
         test_tasks=args.test_tasks,
+        strategy=args.strategy,
+        budget=args.budget,
+        parallel=args.parallel,
+        cascade_config=args.cascade,
     )
 
-    result = optimizer.run()
+    # 並行最適化（--parallel > 1 時）
+    if args.parallel > 1:
+        plan = build_plan(Path(args.target), parallel=args.parallel)
+        def _opt_fn(path):
+            sub = GeneticOptimizer(
+                target_path=str(path),
+                generations=args.generations,
+                population_size=args.population,
+                fitness_func=args.fitness,
+                dry_run=args.dry_run,
+                strategy=args.strategy,
+                budget=args.budget,
+                cascade_config=args.cascade,
+            )
+            selected = sub._select_strategy()
+            if selected == "budget_mpo":
+                sub_result = sub.run_sectioned()
+            else:
+                sub_result = sub.run()
+            best = sub_result.get("best_individual", {})
+            return OptimizeResult(
+                path=str(path),
+                best_fitness=best.get("fitness"),
+                best_content=best.get("content", ""),
+            )
+
+        par_results = run_parallel(plan, _opt_fn)
+        par_results = dedup_consolidate(par_results)
+        for pr in par_results:
+            status = f"fitness={pr.best_fitness:.3f}" if pr.best_fitness else pr.error
+            print(f"  {pr.path}: {status}")
+
+    # strategy に基づいて自動分岐
+    selected_strategy = optimizer._select_strategy()
+    print(f"Strategy: {selected_strategy}")
+    if selected_strategy == "budget_mpo":
+        result = optimizer.run_sectioned()
+    else:
+        result = optimizer.run()
 
     # サマリー出力
     print(f"\n=== 最適化結果 ===")
