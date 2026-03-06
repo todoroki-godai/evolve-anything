@@ -16,12 +16,17 @@ rl-anything プラグインへのフィードバックを GitHub Issue として
 /rl-anything:feedback
 ```
 
-## 対話フロー
+## 自動判定フロー
 
-1. **カテゴリ選択**: バグ報告 / 機能提案 / 改善要望 / その他
-2. **ドメイン選択**: optimize / rl-loop / discover / prune / audit / evolve / その他
-3. **スコア入力**: 1-5（1=不満, 5=大変満足）
-4. **自由記述**: 詳細な説明
+LLM が会話コンテキストから以下を自動判定する（ユーザーへの質問は不要）:
+
+- **カテゴリ**: バグ報告 / 機能提案 / 改善要望 / その他
+- **コンポーネント**: optimize / rl-loop / discover / prune / audit / evolve / reflect / その他
+- **満足度スコア**: 1-5（1=不満, 5=大変満足）
+- **詳細**: 会話内容から要約
+
+ユーザーが `/rl-anything:feedback` で明示的に起動した場合のみ、AskUserQuestion で補足情報を聞いてよい。
+それ以外（会話中に自動検出した場合）は LLM 判断で即起票する。
 
 ## 実行手順
 
@@ -35,18 +40,9 @@ gh auth status 2>&1
 - フィードバックを `~/.claude/rl-anything/feedback-drafts/` にローカル保存する（MUST）
 - 「gh auth login で認証後、再度 /rl-anything:feedback を実行してください」と案内
 
-### Step 2: 対話フロー
+### Step 2: Issue 本文生成
 
-AskUserQuestion ツールで以下を順に質問:
-
-1. カテゴリ（header: "Category", options: バグ報告/機能提案/改善要望/その他）
-2. 対象コンポーネント（header: "Component", options: optimize/rl-loop/discover/prune/audit/evolve/その他）
-3. 満足度スコア（header: "Score", options: 1/2/3/4/5）
-4. 自由記述の入力を促す
-
-### Step 3: Issue 本文生成 + プレビュー
-
-以下の形式で Issue 本文を生成:
+会話コンテキストから自動判定した内容で Issue 本文を生成:
 
 ```markdown
 ## フィードバック
@@ -68,7 +64,9 @@ AskUserQuestion ツールで以下を順に質問:
 - ローカルファイルパスを含めてはならない（MUST NOT）
 - プロジェクト固有の情報を含めてはならない（MUST NOT）
 
-生成した本文を **必ずプレビュー表示** し、ユーザーの承認を得る（MUST）。
+### Step 3: プレビュー確認
+
+生成した Issue 本文をユーザーに表示し、AskUserQuestion で送信の承認を得る（MUST）。
 
 ### Step 4: Issue 送信
 
