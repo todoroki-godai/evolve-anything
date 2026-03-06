@@ -1,6 +1,6 @@
 {
   "name": "rl-anything",
-  "version": "0.19.5",
+  "version": "0.19.6",
   "description": "スキル/ルールの遺伝的最適化と自律進化ループ",
   "author": {
     "name": "todoroki-godai"
