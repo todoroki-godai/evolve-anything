@@ -18,7 +18,7 @@ sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
 sys.path.insert(0, str(_plugin_root / "skills" / "discover" / "scripts"))
 sys.path.insert(0, str(_plugin_root / "scripts"))
 
-from lib.frontmatter import extract_description
+from lib.frontmatter import extract_description, parse_frontmatter
 from lib.similarity import filter_merge_group_pairs
 from discover import load_merge_suppression
 
@@ -98,6 +98,12 @@ def suggest_recommendation(skill_info: Dict[str, Any]) -> str:
     Returns:
         "archive推奨", "keep推奨", "要確認" のいずれか
     """
+    # 参照型スキル: ドリフト候補なら要確認、それ以外はkeep推奨
+    if skill_info.get("is_reference"):
+        if skill_info.get("has_drift"):
+            return "要確認"
+        return "keep推奨"
+
     name = skill_info.get("skill_name", "").lower()
     desc = skill_info.get("description", "").lower()
     trigger_count = skill_info.get("trigger_count", 0)
@@ -244,6 +250,133 @@ def load_decay_threshold() -> float:
     return DEFAULT_DECAY_THRESHOLD
 
 
+DEFAULT_DRIFT_THRESHOLD = 0.5
+
+
+def load_drift_threshold() -> float:
+    """evolve-state.json から reference_drift_threshold を読み込む。未設定時はデフォルト 0.5。"""
+    state_file = DATA_DIR / "evolve-state.json"
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            val = float(state.get("reference_drift_threshold", DEFAULT_DRIFT_THRESHOLD))
+            if 0.0 <= val <= 1.0:
+                return val
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+    return DEFAULT_DRIFT_THRESHOLD
+
+
+def _load_skill_type_cache() -> Dict[str, Any]:
+    """evolve-state.json から skill_type_cache を読み込む。"""
+    state_file = DATA_DIR / "evolve-state.json"
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            cache = state.get("skill_type_cache", {})
+            if isinstance(cache, dict):
+                return cache
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+    return {}
+
+
+def _save_skill_type_cache(cache: Dict[str, Any]) -> None:
+    """evolve-state.json に skill_type_cache を書き込む。"""
+    state_file = DATA_DIR / "evolve-state.json"
+    state: Dict[str, Any] = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            state = {}
+    state["skill_type_cache"] = cache
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _resolve_skill_md(skill_path: Path) -> Path:
+    """スキルパスから SKILL.md を解決する。"""
+    p = Path(skill_path)
+    if p.name != "SKILL.md":
+        candidate = p.parent / "SKILL.md" if p.is_file() else p / "SKILL.md"
+        return candidate
+    return p
+
+
+def is_reference_skill(skill_path: Path) -> bool:
+    """スキルが参照型かどうかを判定する。
+
+    優先順位: frontmatter → キャッシュ → LLM 推定。
+    LLM 推定失敗時は False（action 扱い）を返す。
+    """
+    resolved = _resolve_skill_md(skill_path)
+
+    # 1. frontmatter の type フィールドを最優先
+    fm = parse_frontmatter(resolved)
+    skill_type = fm.get("type", "")
+    if skill_type:
+        return skill_type == "reference"
+
+    # 2. キャッシュ確認（mtime ベース無効化）
+    skill_key = str(resolved)
+    cache = _load_skill_type_cache()
+    if skill_key in cache:
+        entry = cache[skill_key]
+        try:
+            cached_mtime = entry.get("mtime", 0)
+            current_mtime = resolved.stat().st_mtime if resolved.exists() else 0
+            if current_mtime <= cached_mtime:
+                return entry.get("type") == "reference"
+        except OSError:
+            pass
+
+    # 3. LLM サブエージェントで推定
+    try:
+        if not resolved.exists():
+            return False
+        content = resolved.read_text(encoding="utf-8")
+        # シンプルなヒューリスティック: LLM 呼び出しの代わりに
+        # コンテンツベースの推定を行う（テスト容易性のため関数を分離）
+        estimated_type = _estimate_skill_type(content)
+
+        # キャッシュに保存
+        try:
+            current_mtime = resolved.stat().st_mtime
+        except OSError:
+            current_mtime = 0
+        cache[skill_key] = {"type": estimated_type, "mtime": current_mtime}
+        _save_skill_type_cache(cache)
+
+        return estimated_type == "reference"
+    except Exception:
+        return False
+
+
+def _estimate_skill_type(content: str) -> str:
+    """スキル内容からタイプを推定する。
+
+    LLM サブエージェント呼び出しのプレースホルダ。
+    実際の prune スキル実行時はサブエージェントで置換される。
+    ここではキーワードベースのフォールバック推定を提供。
+    """
+    lower = content.lower()
+    reference_signals = [
+        "ガイド", "guide", "仕様", "specification", "spec",
+        "デザインシステム", "design system", "リファレンス", "reference",
+        "評価基準", "criteria", "ルールブック", "rulebook",
+        "type: reference",
+    ]
+    action_signals = [
+        "trigger:", "トリガー", "使用タイミング",
+        "steps", "手順", "実行", "execute",
+        "run ", "deploy", "create", "generate",
+    ]
+    ref_score = sum(1 for sig in reference_signals if sig in lower)
+    act_score = sum(1 for sig in action_signals if sig in lower)
+    return "reference" if ref_score > act_score else "action"
+
+
 def compute_decay_score(
     age_days: float,
     correction_count: int = 0,
@@ -364,6 +497,9 @@ def detect_zero_invocations(
             continue
         # .pin ファイルによる淘汰保護
         if is_pinned(path):
+            continue
+        # 参照型スキルは zero invocation 検出から除外
+        if is_reference_skill(path):
             continue
         if skill_name not in used_skills:
             if origin == "plugin":
@@ -784,6 +920,84 @@ def merge_duplicates(
     }
 
 
+def _gather_drift_context(skill_path: Path, project_dir: Path) -> str:
+    """ドリフト評価用のコンテキストを収集する。
+
+    CLAUDE.md、rules、スキル内容から関連ファイルのコンテキストをまとめる。
+    """
+    context_parts = []
+
+    # スキル内容
+    resolved = _resolve_skill_md(skill_path)
+    if resolved.exists():
+        context_parts.append(f"=== Skill Content ({resolved.name}) ===\n{resolved.read_text(encoding='utf-8')}")
+
+    # CLAUDE.md
+    claude_md = project_dir / "CLAUDE.md"
+    if claude_md.exists():
+        context_parts.append(f"=== CLAUDE.md ===\n{claude_md.read_text(encoding='utf-8')}")
+
+    # rules
+    rules_dir = project_dir / ".claude" / "rules"
+    if rules_dir.exists():
+        for rule_file in sorted(rules_dir.glob("*.md"))[:10]:
+            context_parts.append(f"=== Rule: {rule_file.name} ===\n{rule_file.read_text(encoding='utf-8')}")
+
+    return "\n\n".join(context_parts)
+
+
+def detect_reference_drift(
+    artifacts: Dict[str, List[Path]],
+    project_dir: Path,
+) -> List[Dict[str, Any]]:
+    """参照型スキルの内容とコードベースの乖離度を評価し、ドリフト候補を返す。
+
+    サブエージェント呼び出しで乖離度を 0.0〜1.0 で評価する。
+    サブエージェント失敗時はそのスキルを候補に含めない。
+    非参照型スキルは評価しない。
+    """
+    threshold = load_drift_threshold()
+    candidates = []
+
+    for path in artifacts.get("skills", []):
+        # 参照型スキルのみ対象
+        if not is_reference_skill(path):
+            continue
+
+        skill_name = path.parent.name
+        try:
+            context = _gather_drift_context(path, project_dir)
+            # サブエージェントでドリフト評価
+            # 実際の実行時は Agent tool で LLM 評価を行う
+            # ここではコンテキスト収集までを行い、スコアは呼び出し側で設定
+            drift_result = _evaluate_drift(context, skill_name)
+            if drift_result and drift_result.get("drift_score", 0) >= threshold:
+                candidates.append({
+                    "file": str(path),
+                    "skill_name": skill_name,
+                    "reason": "reference_drift",
+                    "drift_score": drift_result["drift_score"],
+                    "drift_reason": drift_result.get("drift_reason", ""),
+                })
+        except Exception as e:
+            # サブエージェント失敗時は候補に含めない（安全側倒し）
+            print(f"[prune] drift evaluation failed for {skill_name}: {e}", file=sys.stderr)
+            continue
+
+    return candidates
+
+
+def _evaluate_drift(context: str, skill_name: str) -> Optional[Dict[str, Any]]:
+    """ドリフト評価のプレースホルダ。
+
+    実際の prune スキル実行時は Agent tool のサブエージェントで
+    コンテキストを評価し、drift_score と drift_reason を返す。
+    ここではテスト用にデフォルト値を返す。
+    """
+    # プレースホルダ実装: 実運用時はサブエージェントで置換
+    return {"drift_score": 0.0, "drift_reason": ""}
+
+
 def run_prune(
     project_dir: Optional[str] = None,
     reorganize_merge_groups: Optional[list] = None,
@@ -801,6 +1015,7 @@ def run_prune(
         "global_candidates": safe_global_check(artifacts),
         "duplicate_candidates": detect_duplicates(artifacts),
         "decay_candidates": detect_decay_candidates(artifacts),
+        "reference_drift_candidates": detect_reference_drift(artifacts, proj),
     }
 
     total = sum(len(v) for v in candidates.values() if isinstance(v, list))

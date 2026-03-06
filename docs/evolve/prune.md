@@ -22,6 +22,28 @@ Prune 候補に対して以下のラベルを付与:
 | `keep` | 他スキル/ルールから参照あり、または cross-PJ で使用中 | 淘汰しない |
 | `downgrade` | global スキルだが1PJのみで使用 | project スコープへの降格を提案 |
 
+## 参照型スキルの扱い
+
+デザインシステムガイド・評価仕様・設定ガイド等の「参照型スキル」は `/skill-name` で直接呼び出されることが稀なため、Zero invocation とは別の基準で判断する。
+
+### 分類方法
+
+| 優先順位 | 方法 | 説明 |
+|----------|------|------|
+| 1 | frontmatter `type: reference` | SKILL.md の YAML frontmatter に明示 |
+| 2 | `skill_type_cache` | `evolve-state.json` にキャッシュされた推定結果（mtime ベース無効化） |
+| 3 | LLM 推定 | スキル内容からサブエージェントで reference/action を推定 |
+
+### 判断基準
+
+| 条件 | 判定 |
+|------|------|
+| 参照型 + コードベースと整合 | **keep推奨**（Zero invocation 検出から除外） |
+| 参照型 + コードベースと乖離（ドリフト検出） | **要確認**（`reference_drift_candidates` に出力） |
+| 参照型 + `type` 未設定 + ゼロ呼び出し | audit レポートで警告 |
+
+ドリフト閾値は `evolve-state.json` の `reference_drift_threshold`（デフォルト 0.5）で調整可能。
+
 ## 淘汰 ≠ 削除
 
 - 「削除」ではなく **「アーカイブ提案」**

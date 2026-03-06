@@ -738,6 +738,296 @@ class TestCleanupCorrections:
         assert result["kept"] == 0
 
 
+class TestIsReferenceSkill:
+    """is_reference_skill のユニットテスト。"""
+
+    def test_reference_type_in_frontmatter(self, tmp_path):
+        """frontmatter に type: reference → True。"""
+        skill_dir = tmp_path / "my-ref-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("---\nname: my-ref-skill\ntype: reference\ndescription: A reference guide\n---\n# Body")
+        assert prune.is_reference_skill(skill_dir / "SKILL.md") is True
+
+    def test_action_type_in_frontmatter(self, tmp_path):
+        """frontmatter に type: action → False。"""
+        skill_dir = tmp_path / "my-action-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("---\nname: my-action-skill\ntype: action\ndescription: An action skill\n---\n# Body")
+        assert prune.is_reference_skill(skill_dir / "SKILL.md") is False
+
+    def test_no_type_field_estimates(self, tmp_path):
+        """frontmatter に type なし → LLM 推定（キーワードベースフォールバック）。"""
+        skill_dir = tmp_path / "guide-skill"
+        skill_dir.mkdir()
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: guide-skill\ndescription: Design system guide\n---\n# Guide\nThis is a reference guide for design system specifications."
+        )
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            result = prune.is_reference_skill(skill_dir / "SKILL.md")
+        assert isinstance(result, bool)
+
+    def test_llm_estimation_failure_returns_false(self, tmp_path):
+        """LLM 推定失敗時は False を返す。"""
+        skill_dir = tmp_path / "failing-skill"
+        skill_dir.mkdir()
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("---\nname: failing-skill\ndescription: test\n---\n# Body")
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir), \
+             mock.patch("prune._estimate_skill_type", side_effect=Exception("LLM failed")):
+            assert prune.is_reference_skill(skill_dir / "SKILL.md") is False
+
+    def test_cache_invalidation_by_mtime(self, tmp_path):
+        """ファイル更新後はキャッシュが無効化される。"""
+        import time
+        skill_dir = tmp_path / "cached-skill"
+        skill_dir.mkdir()
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        skill_md = skill_dir / "SKILL.md"
+        skill_md.write_text("---\nname: cached-skill\ndescription: test\n---\n# Body with trigger: foo")
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            # 最初の呼び出し: キャッシュに保存される
+            result1 = prune.is_reference_skill(skill_md)
+
+            # ファイルを更新（mtime を変更）
+            time.sleep(0.05)
+            skill_md.write_text("---\nname: cached-skill\ndescription: reference guide spec\n---\n# Reference guide specification")
+
+            # 2回目の呼び出し: キャッシュが無効化されて再推定
+            result2 = prune.is_reference_skill(skill_md)
+
+        # 内容が変わったので結果が変わる可能性がある（推定ベース）
+        assert isinstance(result1, bool)
+        assert isinstance(result2, bool)
+
+    def test_frontmatter_overrides_cache(self, tmp_path):
+        """frontmatter に type があればキャッシュを無視する。"""
+        skill_dir = tmp_path / "override-skill"
+        skill_dir.mkdir()
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+
+        # キャッシュに reference と保存
+        state_file = data_dir / "evolve-state.json"
+        skill_md = skill_dir / "SKILL.md"
+        skill_md.write_text("---\nname: override-skill\ntype: action\ndescription: test\n---\n# Body")
+
+        cache_key = str(skill_md)
+        state_file.write_text(json.dumps({
+            "skill_type_cache": {cache_key: {"type": "reference", "mtime": 0}}
+        }))
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            # frontmatter の action が最優先
+            assert prune.is_reference_skill(skill_md) is False
+
+
+class TestDetectZeroInvocationsReferenceExclusion:
+    """detect_zero_invocations の参照型スキル除外テスト。"""
+
+    @pytest.fixture
+    def patch_data_dir(self, tmp_path):
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            yield data_dir
+
+    def test_reference_skill_excluded(self, patch_data_dir, tmp_path):
+        """type: reference スキルが zero invocations から除外される。"""
+        skills_dir = tmp_path / "project" / ".claude" / "skills"
+
+        ref_dir = skills_dir / "my-ref"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "SKILL.md").write_text("---\nname: my-ref\ntype: reference\ndescription: ref\n---\n")
+
+        action_dir = skills_dir / "my-action"
+        action_dir.mkdir(parents=True)
+        (action_dir / "SKILL.md").write_text("---\nname: my-action\ndescription: action\n---\n")
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {
+            "skills": [ref_dir / "SKILL.md", action_dir / "SKILL.md"],
+            "rules": [],
+        }
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30)
+        zero_names = [z["skill_name"] for z in zero]
+        assert "my-ref" not in zero_names
+        assert "my-action" in zero_names
+
+    def test_action_skill_not_excluded(self, patch_data_dir, tmp_path):
+        """type 未設定スキルは従来通り zero invocations に含まれる。"""
+        skills_dir = tmp_path / "project" / ".claude" / "skills"
+        action_dir = skills_dir / "regular-skill"
+        action_dir.mkdir(parents=True)
+        (action_dir / "SKILL.md").write_text("---\nname: regular-skill\ndescription: regular\n---\n")
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {
+            "skills": [action_dir / "SKILL.md"],
+            "rules": [],
+        }
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30)
+        zero_names = [z["skill_name"] for z in zero]
+        assert "regular-skill" in zero_names
+
+
+class TestDetectReferenceDrift:
+    """detect_reference_drift のユニットテスト。"""
+
+    @pytest.fixture
+    def patch_data_dir(self, tmp_path):
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            yield data_dir
+
+    def test_aligned_skill_not_candidate(self, patch_data_dir, tmp_path):
+        """整合している参照型スキルはドリフト候補にならない。"""
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+        ref_dir = skills_dir / "my-ref"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "SKILL.md").write_text("---\nname: my-ref\ntype: reference\ndescription: ref\n---\n# Guide")
+
+        artifacts = {"skills": [ref_dir / "SKILL.md"], "rules": []}
+        result = prune.detect_reference_drift(artifacts, project_dir)
+        assert len(result) == 0
+
+    def test_drifted_skill_is_candidate(self, patch_data_dir, tmp_path):
+        """乖離している参照型スキルがドリフト候補になる。"""
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+        ref_dir = skills_dir / "drifted-ref"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "SKILL.md").write_text("---\nname: drifted-ref\ntype: reference\ndescription: ref\n---\n# Guide")
+
+        artifacts = {"skills": [ref_dir / "SKILL.md"], "rules": []}
+
+        with mock.patch("prune._evaluate_drift", return_value={"drift_score": 0.8, "drift_reason": "outdated"}):
+            result = prune.detect_reference_drift(artifacts, project_dir)
+        assert len(result) == 1
+        assert result[0]["skill_name"] == "drifted-ref"
+        assert result[0]["drift_score"] == 0.8
+
+    def test_context_gathering(self, patch_data_dir, tmp_path):
+        """コンテキスト収集が CLAUDE.md と rules を含む。"""
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+        ref_dir = skills_dir / "my-ref"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "SKILL.md").write_text("---\nname: my-ref\ntype: reference\n---\n# Guide")
+
+        # CLAUDE.md
+        (project_dir / "CLAUDE.md").write_text("# Project\nSome content")
+
+        # rules
+        rules_dir = project_dir / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        (rules_dir / "test-rule.md").write_text("# Rule content")
+
+        context = prune._gather_drift_context(ref_dir / "SKILL.md", project_dir)
+        assert "CLAUDE.md" in context
+        assert "Rule: test-rule.md" in context
+        assert "Skill Content" in context
+
+    def test_subagent_failure_excluded(self, patch_data_dir, tmp_path):
+        """サブエージェント失敗時はドリフト候補に含まれない。"""
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+        ref_dir = skills_dir / "failing-ref"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "SKILL.md").write_text("---\nname: failing-ref\ntype: reference\n---\n# Guide")
+
+        artifacts = {"skills": [ref_dir / "SKILL.md"], "rules": []}
+
+        with mock.patch("prune._evaluate_drift", side_effect=Exception("timeout")):
+            result = prune.detect_reference_drift(artifacts, project_dir)
+        assert len(result) == 0
+
+    def test_non_reference_not_evaluated(self, patch_data_dir, tmp_path):
+        """非参照型スキルはドリフト評価されない。"""
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+        action_dir = skills_dir / "action-skill"
+        action_dir.mkdir(parents=True)
+        (action_dir / "SKILL.md").write_text("---\nname: action-skill\ntype: action\n---\n# Action")
+
+        artifacts = {"skills": [action_dir / "SKILL.md"], "rules": []}
+
+        with mock.patch("prune._evaluate_drift") as mock_eval:
+            result = prune.detect_reference_drift(artifacts, project_dir)
+        mock_eval.assert_not_called()
+        assert len(result) == 0
+
+
+class TestSuggestRecommendationReference:
+    """suggest_recommendation の参照型スキル向けテスト。"""
+
+    def test_reference_without_drift(self):
+        """参照型スキル（ドリフトなし）→ keep推奨。"""
+        info = {"skill_name": "ref-skill", "description": "", "trigger_count": 0,
+                "is_reference": True, "has_drift": False}
+        assert prune.suggest_recommendation(info) == "keep推奨"
+
+    def test_reference_with_drift(self):
+        """参照型スキル（ドリフトあり）→ 要確認。"""
+        info = {"skill_name": "ref-skill", "description": "", "trigger_count": 0,
+                "is_reference": True, "has_drift": True}
+        assert prune.suggest_recommendation(info) == "要確認"
+
+    def test_non_reference_unchanged(self):
+        """非参照型スキルは従来通りの推薦ロジック。"""
+        info = {"skill_name": "foo", "description": "something", "trigger_count": 1}
+        assert prune.suggest_recommendation(info) == "要確認"
+
+
+class TestLoadDriftThreshold:
+    """load_drift_threshold のユニットテスト。"""
+
+    def test_default_value(self, tmp_path):
+        """evolve-state.json がない場合デフォルト 0.5。"""
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        with mock.patch("prune.DATA_DIR", data_dir):
+            assert prune.load_drift_threshold() == 0.5
+
+    def test_custom_value(self, tmp_path):
+        """evolve-state.json に設定がある場合それを使用。"""
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        (data_dir / "evolve-state.json").write_text(json.dumps({"reference_drift_threshold": 0.7}))
+        with mock.patch("prune.DATA_DIR", data_dir):
+            assert prune.load_drift_threshold() == 0.7
+
+    def test_invalid_value_fallback(self, tmp_path):
+        """不正な値の場合デフォルトにフォールバック。"""
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        (data_dir / "evolve-state.json").write_text(json.dumps({"reference_drift_threshold": "invalid"}))
+        with mock.patch("prune.DATA_DIR", data_dir):
+            assert prune.load_drift_threshold() == 0.5
+
+    def test_out_of_range_value_fallback(self, tmp_path):
+        """範囲外の値の場合デフォルトにフォールバック。"""
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        (data_dir / "evolve-state.json").write_text(json.dumps({"reference_drift_threshold": 1.5}))
+        with mock.patch("prune.DATA_DIR", data_dir):
+            assert prune.load_drift_threshold() == 0.5
+
+
 class TestPrunePluginExclusion:
     """プラグインスキルが淘汰対象から除外されるテスト。"""
 

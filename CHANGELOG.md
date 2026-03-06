@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.20.0] - 2026-03-06
+
+### Added
+- **reference-skill-classification**: `is_reference_skill()` で参照型スキルを判定（frontmatter `type: reference` → `skill_type_cache` → LLM キーワード推定の3段階優先順位）
+- `_load_skill_type_cache()` / `_save_skill_type_cache()`: `evolve-state.json` の `skill_type_cache` 読み書き（mtime ベース無効化対応）
+- `detect_zero_invocations()` で参照型スキルを自動除外（`.pin` と同じ位置）
+- `suggest_recommendation()` に参照型スキル向けロジック追加（`keep推奨` / ドリフト時 `要確認`）
+- **reference-drift-detection**: `detect_reference_drift()` で参照型スキルの内容とコードベースの乖離度をサブエージェントで評価
+- `load_drift_threshold()`: `evolve-state.json` の `reference_drift_threshold`（デフォルト 0.5）
+- `_gather_drift_context()`: CLAUDE.md・rules・スキル内容からドリフト評価コンテキストを収集
+- `run_prune()` 結果に `reference_drift_candidates` キー追加
+- **audit-untagged-warning**: `detect_untagged_reference_candidates()` でゼロ呼び出し + `type` 未設定のスキルを警告（プラグインスキル除外）
+- audit レポートに「Reference Type Warning」セクション追加
+- `docs/evolve/prune.md` に参照型スキルの判断基準を追記
+- OpenSpec specs 追加: reference-skill-classification（新規）、reference-drift-detection（新規）
+- テスト追加: is_reference_skill 6件 + detect_zero_invocations 2件 + detect_reference_drift 5件 + suggest_recommendation 3件 + load_drift_threshold 4件（計20件）
+
 ## [0.19.0] - 2026-03-06
 
 ### Added

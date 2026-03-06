@@ -1012,6 +1012,35 @@ def build_openspec_analytics_section(
     return lines
 
 
+def detect_untagged_reference_candidates(
+    artifacts: Dict[str, List[Path]],
+    usage: Dict[str, int],
+) -> List[Dict[str, Any]]:
+    """ゼロ呼び出しだが reference 未設定のスキルを検出する。
+
+    frontmatter に type フィールドがなく、usage もゼロのスキルを警告候補として返す。
+    プラグインスキルは除外（プラグイン側で管理すべきため）。
+    ユーザーに type: reference タグの付与を促すためのもの。
+    """
+    from frontmatter import parse_frontmatter
+
+    candidates = []
+    for path in artifacts.get("skills", []):
+        skill_name = path.parent.name
+        if classify_artifact_origin(path) == "plugin":
+            continue
+        if skill_name in usage and usage[skill_name] > 0:
+            continue
+        # frontmatter に type がないスキルのみ
+        fm = parse_frontmatter(path)
+        if not fm.get("type"):
+            candidates.append({
+                "skill_name": skill_name,
+                "file": str(path),
+            })
+    return candidates
+
+
 def generate_report(
     artifacts: Dict[str, List[Path]],
     violations: List[Dict[str, Any]],
@@ -1022,6 +1051,7 @@ def generate_report(
     project_dir: Optional[Path] = None,
     plugin_usage: Optional[Dict[str, int]] = None,
     openspec_analytics: Optional[List[str]] = None,
+    untagged_reference_candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """1画面レポートを生成する。"""
     lines = ["# Environment Audit Report", ""]
@@ -1076,6 +1106,14 @@ def generate_report(
             lines.append(f"- {d['name']}: {', '.join(d['paths'])}")
         lines.append("")
 
+    # Reference Type 未設定警告
+    if untagged_reference_candidates:
+        lines.append(f"## Reference Type Warning ({len(untagged_reference_candidates)})")
+        lines.append("以下のスキルはゼロ呼び出しかつ `type` 未設定です。参照型スキルの場合は frontmatter に `type: reference` を追加してください。")
+        for c in untagged_reference_candidates:
+            lines.append(f"- {c['skill_name']}")
+        lines.append("")
+
     # Scope Advisory
     if advisories:
         lines.append("## Scope Advisory")
@@ -1121,11 +1159,15 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False) -> 
     # OpenSpec ワークフロー分析
     openspec_analytics = build_openspec_analytics_section(usage_records)
 
+    # Reference type 未設定警告
+    untagged = detect_untagged_reference_candidates(artifacts, usage)
+
     return generate_report(
         artifacts, violations, usage, duplicates, advisories,
         quality_baselines, project_dir=proj,
         plugin_usage=plugin_usage if plugin_usage else None,
         openspec_analytics=openspec_analytics if openspec_analytics else None,
+        untagged_reference_candidates=untagged if untagged else None,
     )
 
 
