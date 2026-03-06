@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.0] - 2026-03-07
+
+### Added
+- **optimize**: 大規模スキル向け budget_mpo パイプライン — 6モジュール+205テスト
+  - strategy_router: ファイルサイズに基づく self_refine/budget_mpo 自動選択
+  - granularity: 適応的粒度制御（none/h2_h3/h2_only 3段階分割）
+  - bandit_selector: Thompson Sampling によるセクション選択 + LOO 重要度推定
+  - model_cascade: FrugalGPT 3段カスケード（haiku→sonnet→opus）
+  - early_stopping: 4条件停止（品質到達/プラトー/バジェット/収穫逓減）
+  - parallel: references/ 並行最適化 + de-dup consolidation
+  - optimize.py に Phase 0-3 パイプライン統合、Prefix Caching 対応
+  - SKILL.md に `--budget`/`--strategy`/`--cascade`/`--parallel` オプション追加
+
 ## [0.19.6] - 2026-03-06
 
 ### Added
