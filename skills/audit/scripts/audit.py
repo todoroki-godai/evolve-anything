@@ -28,6 +28,9 @@ LIMITS = {
 
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 
+# 既知のプロジェクトディレクトリプレフィックス（2セグメントパスフィルタ用）
+KNOWN_DIR_PREFIXES = {"skills", "scripts", "hooks", ".claude", "openspec", "docs"}
+
 # セマンティック検証用ストップワード（英語冠詞・前置詞・助動詞 + 日本語助詞）
 _STOPWORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
@@ -402,6 +405,14 @@ def _extract_paths_outside_codeblocks(text: str) -> List[Tuple[int, str]]:
             # Python シンボル参照 (CONST/func) を除外 — 全大文字セグメントを含む場合
             segments = path_str.split("/")
             if not path_str.startswith("/") and any(s.isupper() for s in segments if s):
+                continue
+            # 拡張子なしの2セグメント相対パスは既知プレフィックスで検証
+            if (
+                not path_str.startswith("/")
+                and len(segments) == 2
+                and not any("." in s for s in segments)
+                and segments[0] not in KNOWN_DIR_PREFIXES
+            ):
                 continue
             results.append((i + 1, path_str))
     return results

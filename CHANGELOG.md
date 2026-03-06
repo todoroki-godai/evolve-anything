@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.19.5] - 2026-03-06
+
+### Fixed
+- **audit**: パス抽出の偽陽性を修正 — MEMORY 内の説明的スラッシュ表現（`usage/errors`, `discover/audit` 等）がファイルパスとして誤検出されなくなった
+
+### Added
+- **classify**: conversation を5サブカテゴリに細分化（approval/confirmation/question/direction/thanks）
+
 ## [0.19.4] - 2026-03-06
 
 ### Fixed
