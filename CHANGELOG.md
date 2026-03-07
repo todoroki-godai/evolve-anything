@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.21.0] - 2026-03-07
+
+### BREAKING CHANGES
+- **optimize**: 遺伝的アルゴリズム（世代ループ）を廃止し、直接パッチモードに置換
+  - `--generations`, `--population`, `--budget`, `--cascade`, `--parallel`, `--strategy` オプションを廃止（使用時にエラーメッセージ表示）
+  - `GeneticOptimizer` → `DirectPatchOptimizer` に置換
+  - 6モジュール削除: strategy_router, granularity, bandit_selector, early_stopping, model_cascade, parallel
+
+### Added
+- **optimize**: corrections/context ベースの LLM 1パス直接パッチ最適化
+  - `--mode auto|error_guided|llm_improve` オプション追加
+  - corrections.jsonl からエラー分類し直接パッチ（error_guided モード）
+  - usage 統計・audit issues・pitfalls をコンテキストに含めた汎用改善（llm_improve モード）
+  - history.jsonl に `strategy`/`corrections_used` フィールド追加
+  - `_extract_markdown` を複数ブロック対応に改善（最長ブロック返却）
+- LLM コール数を 6〜15+ → 1回に削減
+
+### Changed
+- README.md, CLAUDE.md, docs/evolve/optimize.md の遺伝的アルゴリズム記述を直接パッチに更新
+- rl-loop-orchestrator SKILL.md の説明を直接パッチに更新、API コスト目安更新
+
 ## [0.20.0] - 2026-03-07
 
 ### Added

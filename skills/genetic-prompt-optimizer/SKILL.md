@@ -19,15 +19,11 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 | 引数 | 説明 | デフォルト |
 |------|------|-----------|
 | `TARGET` | 最適化対象のスキルファイルパス（スキル名 or ファイルパス） | 必須 |
-| `--generations N` | 世代数 | 1 |
+| `--generations N` | 世代数 | 3 |
 | `--population N` | 集団サイズ | 3 |
 | `--fitness FUNC` | 適応度関数名 | default |
 | `--dry-run` | 構造テスト（LLM 評価なし） | false |
 | `--restore` | バックアップから復元 | false |
-| `--budget N` | 高価モデルのコール数上限（budget_mpo 強制） | なし |
-| `--strategy` | 最適化手法（`self_refine` / `budget_mpo`） | auto |
-| `--cascade PATH` | モデルカスケード設定ファイル（YAML） | なし |
-| `--parallel N` | references/ の並行最適化数 | 1 |
 
 TARGET がスキル名（例: `my-skill`）の場合、`.claude/skills/{name}/SKILL.md` に解決する。
 ファイルパスが直接指定された場合はそのまま使用する。
@@ -72,11 +68,8 @@ python3 <PLUGIN_DIR>/skills/genetic-prompt-optimizer/scripts/optimize.py \
 /optimize my-skill                          # 基本実行（3世代 x 集団3）
 /optimize my-skill --dry-run                # 構造テスト
 /optimize my-skill --fitness skill_quality  # カスタム適応度関数
-/optimize my-skill --generations 3          # 効果確認後に世代数を増やす
+/optimize my-skill --generations 5          # 5世代実行
 /optimize my-skill --restore               # バックアップから復元
-/optimize my-skill --budget 30             # 高価モデル30コールまで（budget_mpo）
-/optimize my-skill --parallel 4            # references/ を4並行で最適化
-/optimize my-skill --cascade config.yaml   # モデルカスケード有効化
 ```
 
 ## 適応度関数

@@ -1,6 +1,6 @@
 # rl-anything
 
-Claude Code のスキル/ルールを **自律的に観測・発見・淘汰・進化** させ、**遺伝的アルゴリズムで最適化** する Claude Code Plugin。
+Claude Code のスキル/ルールを **自律的に観測・発見・淘汰・進化** させ、**LLM 直接パッチで最適化** する Claude Code Plugin。
 
 ## クイックスタート
 
@@ -44,7 +44,7 @@ rl-anything は **3つの独立した柱** で構成される。
 │  柱2: 修正フィードバックループ                             │
 │  correction_detect(hook) → corrections.jsonl → Reflect   │
 ├─────────────────────────────────────────────────────────┤
-│  柱3: 遺伝的最適化                                       │
+│  柱3: 直接パッチ最適化                                     │
 │  Generate-Fitness → Optimize → RL-Loop → Evolve-Fitness  │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -53,7 +53,7 @@ rl-anything は **3つの独立した柱** で構成される。
 |----|-----------|--------------|
 | 自律進化 | 使用データからパターン検出→スキル生成→淘汰→進化 | `/rl-anything:evolve` |
 | フィードバック | ユーザーの修正（「いや、違う」等）を検出→ルールに反映 | `/rl-anything:reflect` |
-| 遺伝的最適化 | LLM でバリエーション生成→適応度評価→エリート選択 | `/rl-anything:optimize` |
+| 直接パッチ最適化 | corrections/context → LLM 1パスパッチ → regression gate | `/rl-anything:optimize` |
 
 ## やりたいこと別ガイド
 
@@ -80,10 +80,10 @@ rl-anything は **3つの独立した柱** で構成される。
 | `evolve` | 自律進化 | 全フェーズ統合実行（日次運用） |
 | `audit` | 自律進化 | 全 skills/rules/memory の棚卸し＋健康診断 |
 | `reflect` | フィードバック | corrections の修正フィードバックを CLAUDE.md/rules に反映 |
-| `optimize` | 遺伝的最適化 | 遺伝的アルゴリズムでスキル/ルールを最適化 |
-| `rl-loop` | 遺伝的最適化 | ベースライン→バリエーション→評価→人間確認ループ |
-| `generate-fitness` | 遺伝的最適化 | プロジェクト固有の評価関数を自動生成 |
-| `evolve-fitness` | 遺伝的最適化 | accept/reject データから評価関数を改善 |
+| `optimize` | 直接パッチ最適化 | corrections/context ベースの LLM 1パスパッチ |
+| `rl-loop` | 直接パッチ最適化 | ベースライン→直接パッチ→評価→人間確認ループ |
+| `generate-fitness` | 直接パッチ最適化 | プロジェクト固有の評価関数を自動生成 |
+| `evolve-fitness` | 直接パッチ最適化 | accept/reject データから評価関数を改善 |
 | `feedback` | ユーティリティ | GitHub Issue でフィードバック送信 |
 | `update` | ユーティリティ | プラグインを最新版に更新 |
 | `version` | ユーティリティ | バージョン・コミットハッシュを表示 |
@@ -299,7 +299,7 @@ CLAUDE.md からドメインを推定し、評価軸を自動切替。
 
 ### 第2幕: Discover → Optimize — パターンから改善へ
 
-`/rl-anything:discover` で「`/bot-create` 後に手動で personality を追加している」パターンを検出。ルール候補を自動生成。さらに遺伝的最適化でスキル自体を改善し、スコアが 0.62 → 0.84 に上昇。
+`/rl-anything:discover` で「`/bot-create` 後に手動で personality を追加している」パターンを検出。ルール候補を自動生成。さらに直接パッチ最適化でスキル自体を改善し、スコアが 0.62 → 0.84 に上昇。
 
 ### 第3幕: Reflect — フィードバックが活きる
 

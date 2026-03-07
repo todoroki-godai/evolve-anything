@@ -1,6 +1,6 @@
 # rl-anything Plugin
 
-スキル/ルールの **自律進化パイプライン**、**修正フィードバックループ**、**遺伝的最適化** を提供する Claude Code Plugin。
+スキル/ルールの **自律進化パイプライン**、**修正フィードバックループ**、**直接パッチ最適化** を提供する Claude Code Plugin。
 
 ## 3つの柱
 
@@ -8,7 +8,7 @@
 |----|--------|------|
 | 自律進化 | backfill, discover, enrich, reorganize, prune, evolve, audit | Observe→Discover→Enrich→Optimize→Reorganize→Prune→Reflect→Report のデータ駆動パイプライン |
 | フィードバック | reflect | 修正パターン検出 → corrections.jsonl → CLAUDE.md/rules に反映 |
-| 遺伝的最適化 | optimize, rl-loop, generate-fitness, evolve-fitness | LLM でバリエーション生成 → 適応度評価 → 進化 |
+| 直接パッチ最適化 | optimize, rl-loop, generate-fitness, evolve-fitness | corrections/context → LLM 1パスパッチ → regression gate |
 | ユーティリティ | feedback, update, version | フィードバック・更新・バージョン確認 |
 
 ## コンポーネント
@@ -16,7 +16,7 @@
 | コンポーネント | 説明 |
 |----------------|------|
 | Observe hooks (7個) | LLM コストゼロで使用・エラー・修正フィードバック・ワークフローを自動記録 |
-| `genetic-prompt-optimizer` | LLM でバリエーションを生成し、適応度関数で評価して進化 |
+| `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチで最適化 |
 | `rl-loop-orchestrator` | ベースライン取得→バリエーション生成→評価→人間確認のループ統合 |
 | `rl-scorer` エージェント | 技術品質 + ドメイン品質 + 構造品質の3軸で採点 |
 
