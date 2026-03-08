@@ -18,6 +18,17 @@ description: |
 
 ## 実行手順
 
+### Step 0.5: Coherence Score（オプション）
+
+`--coherence-score` が指定された場合、環境全体の構造的整合性スコアを算出してレポート先頭に表示する:
+
+```bash
+python3 <PLUGIN_DIR>/skills/audit/scripts/audit.py "$(pwd)" --coherence-score
+```
+
+4軸（Coverage / Consistency / Completeness / Efficiency）の重み付き平均で 0.0〜1.0 のスコアを算出。
+0.7 未満の軸には改善アドバイスを表示。
+
 ### Step 1: Audit スクリプト実行
 
 ```bash

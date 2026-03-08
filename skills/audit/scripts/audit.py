@@ -1149,9 +1149,14 @@ def generate_report(
     openspec_analytics: Optional[List[str]] = None,
     untagged_reference_candidates: Optional[List[Dict[str, Any]]] = None,
     hardcoded_values: Optional[List[Dict[str, Any]]] = None,
+    coherence_report: Optional[List[str]] = None,
 ) -> str:
     """1画面レポートを生成する。"""
     lines = ["# Environment Audit Report", ""]
+
+    # Coherence Score（指定時は先頭に表示）
+    if coherence_report:
+        lines.extend(coherence_report)
 
     # サマリ
     total = sum(len(v) for v in artifacts.values())
@@ -1236,7 +1241,7 @@ def generate_report(
     return "\n".join(lines)
 
 
-def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False) -> str:
+def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coherence_score: bool = False) -> str:
     """Audit を実行してレポートを返す。"""
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
@@ -1284,6 +1289,19 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False) -> 
                     "source": "detect_hardcoded_values",
                 })
 
+    # Coherence Score
+    coherence_report_lines = None
+    if coherence_score:
+        try:
+            _fitness_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "rl"
+            if str(_fitness_dir) not in sys.path:
+                sys.path.insert(0, str(_fitness_dir))
+            from fitness.coherence import compute_coherence_score, format_coherence_report
+            result = compute_coherence_score(proj)
+            coherence_report_lines = format_coherence_report(result)
+        except Exception as e:
+            print(f"Coherence Score スキップ: {e}", file=sys.stderr)
+
     return generate_report(
         artifacts, violations, usage, duplicates, advisories,
         quality_baselines, project_dir=proj,
@@ -1291,6 +1309,7 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False) -> 
         openspec_analytics=openspec_analytics if openspec_analytics else None,
         untagged_reference_candidates=untagged if untagged else None,
         hardcoded_values=hardcoded_values if hardcoded_values else None,
+        coherence_report=coherence_report_lines,
     )
 
 
@@ -1301,10 +1320,11 @@ if __name__ == "__main__":
     _parser.add_argument("project", nargs="?", default=None, help="プロジェクトディレクトリ")
     _parser.add_argument("--skip-rescore", action="store_true", help="品質計測をスキップ")
     _parser.add_argument("--memory-context", action="store_true", help="MEMORY 検証コンテキストを JSON 出力")
+    _parser.add_argument("--coherence-score", action="store_true", help="Coherence Score セクションを表示")
     _args = _parser.parse_args()
     if _args.memory_context:
         proj = Path(_args.project) if _args.project else Path.cwd()
         ctx = build_memory_verification_context(proj)
         print(json.dumps(ctx, ensure_ascii=False, indent=2))
     else:
-        print(run_audit(_args.project, skip_rescore=_args.skip_rescore))
+        print(run_audit(_args.project, skip_rescore=_args.skip_rescore, coherence_score=_args.coherence_score))

@@ -82,12 +82,12 @@ Phase 0        Phase 1        Phase 2        Phase 3
 
 「環境の品質をどう測るか？」— 10パターン (P1-P10) のフェーズドアプローチ。
 
-| Phase | 内容 | コスト | 状態 |
-|-------|------|--------|------|
-| 0 | 構造の整合性チェック（Coherence + KG Quality） | ゼロ | 未着手 |
-| 1 | テレメトリ駆動の効果測定（Telemetry + Implicit Reward） | ゼロ | 未着手 |
-| 2 | 原則ベースの自動評価（Constitutional + Chaos） | LLM | 未着手 |
-| 3 | タスク実行による成果測定（Task Exec + Eureka + Elo） | LLM | 未着手 |
+| Phase | 内容 | コスト | 状態 | change 名 |
+|-------|------|--------|------|-----------|
+| 0 | 構造の整合性チェック（Coherence + KG Quality） | ゼロ | **完了** | `env-coherence-score` |
+| 1 | テレメトリ駆動の効果測定（Telemetry + Implicit Reward） | ゼロ | 未着手 | `env-telemetry-score` (予定) |
+| 2 | 原則ベースの自動評価（Constitutional + Chaos） | LLM | 未着手 | Phase 0-1 運用後に計画 |
+| 3 | タスク実行による成果測定（Task Exec + Eureka + Elo） | LLM | 未着手 | Phase 0-2 安定後に計画 |
 
 詳細は [docs/fitness/](./fitness/) を参照。
 
@@ -95,13 +95,13 @@ Phase 0        Phase 1        Phase 2        Phase 3
 
 「環境をどう改善するか？」— Pattern B（Observe → Diagnose → Compile）ベースの段階的実装。
 
-| Phase | 内容 | パターン | 状態 |
-|-------|------|---------|------|
-| 1 | **パイプライン簡素化** — 8ステージ→3ステージ（Diagnose→Compile→Housekeeping） | #21 Pattern B | **実装中** |
-| 2 | **全層 Diagnose** — Skill 以外のレイヤー（Rules/Memory/Hooks）も診断対象に | E2 + E10 VSM | 未着手 |
-| 3 | **全層 Compile** — 診断結果から全レイヤーのパッチを生成 | E3 + E7 Compiler Pass | 未着手 |
-| 4 | **自己進化** — パイプライン自身の改善を自律的に提案 | E5-E10 | 未着手 |
-| 5 | **Graduated Autonomy** — 信頼度ベースの段階的自律化 | E1 Reflective + E4 Immune | 未着手 |
+| Phase | 内容 | パターン | 状態 | change 名 |
+|-------|------|---------|------|-----------|
+| 1 | **パイプライン簡素化** — 8ステージ→3ステージ（Diagnose→Compile→Housekeeping） | #21 Pattern B | **完了** | `2026-03-08-simplify-pipeline-pattern-b` |
+| 2 | **全層 Diagnose** — Skill 以外のレイヤー（Rules/Memory/Hooks）も診断対象に | E2 + E10 VSM | **次に着手** | `all-layer-diagnose` |
+| 3 | **全層 Compile** — 診断結果から全レイヤーのパッチを生成 | E3 + E7 Compiler Pass | 未着手 | Phase 2 完了後に計画 |
+| 4 | **自己進化** — パイプライン自身の改善を自律的に提案 | E5-E10 | 未着手 | Phase 3 完了後に計画 |
+| 5 | **Graduated Autonomy** — 信頼度ベースの段階的自律化 | E1 Reflective + E4 Immune | 未着手 | Phase 4 完了後に計画 |
 
 詳細は [docs/evolution/](./evolution/) を参照。
 
@@ -168,4 +168,35 @@ evolve が「常に一緒に使われるスキル群」を検出したら plugin
      └────────────┘
 ```
 
-**今すぐ始められること**: Gap 1 Phase 0（構造の整合性チェック）— LLM コストゼロ、既存の audit を拡張するだけ。
+**今すぐ始められること**: Gap 2 Phase 2（全層 Diagnose）— Gap 1 Ph0 の Coherence Score を活用し、Skill 以外のレイヤーも診断対象にする。
+
+---
+
+## Change 作成ガイド
+
+各 Gap/Phase を OpenSpec change として管理する。change の命名と作成順序は以下の通り。
+
+### 推奨する change 作成順序
+
+```
+1. env-coherence-score        ← Gap 1 Ph0 ✅ 完了
+2. all-layer-diagnose          ← Gap 2 Ph2 (Gap 1 Ph0 の Coherence Score を活用、次に着手)
+3. env-telemetry-score         ← Gap 1 Ph1 (Ph0 運用実績を積んでから)
+4. all-layer-compile           ← Gap 2 Ph3 (Ph2 完了後)
+5. env-constitutional-eval     ← Gap 1 Ph2 (Ph0-1 安定後、LLM コスト発生)
+6. auto-evolve-trigger         ← Gap 4 (Gap 1+2 安定後)
+7. auto-compression-trigger    ← Gap 5 (独立、いつでも可)
+8. env-task-exec-eval          ← Gap 1 Ph3 (Ph2 安定後)
+9. self-evolution              ← Gap 2 Ph4 (Ph3 完了後)
+10. graduated-autonomy         ← Gap 2 Ph5 (Ph4 完了後)
+11. plugin-bundling            ← Gap 6 (運用データ蓄積後)
+```
+
+### change 作成の判断基準
+
+| 条件 | アクション |
+|------|-----------|
+| 前の Phase の change が archive 済み | 次の Phase の change を `/openspec-propose` で作成 |
+| 前の Phase の運用で知見が得られた | 知見を反映して次の change の scope を調整 |
+| 独立した Gap（3, 5）| 依存なし、いつでも change 作成可能 |
+| Phase 2 以降（LLM コスト発生）| Phase 0-1 の運用実績を見てから scope を決定 |
