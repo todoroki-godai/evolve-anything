@@ -1,4 +1,4 @@
-## Requirements
+## ADDED Requirements
 
 ### Requirement: stale_rule の自動修正
 remediation は `stale_rule` issue（ルール内の参照先ファイルが不存在）に対して、該当参照行を削除する修正アクションを実行できなければならない（MUST）。

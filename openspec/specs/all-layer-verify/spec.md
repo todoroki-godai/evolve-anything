@@ -1,4 +1,4 @@
-## Requirements
+## ADDED Requirements
 
 ### Requirement: stale_rule の修正後検証
 verify_fix() は `stale_rule` 修正後にルールファイルから当該パス参照が消えていることを検証しなければならない（MUST）。

@@ -1,4 +1,4 @@
-## Requirements
+## ADDED Requirements
 
 ### Requirement: orphan_rule の修正提案を生成する
 generate_proposals() は `orphan_rule` issue に対して、ルールファイルの削除提案を生成しなければならない（MUST）。
