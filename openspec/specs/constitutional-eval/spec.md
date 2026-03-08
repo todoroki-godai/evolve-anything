@@ -1,5 +1,9 @@
-## ADDED Requirements
+# constitutional-eval Specification
 
+## Purpose
+PJ 固有の原則に対する全レイヤーの遵守度を LLM Judge で評価し、Constitutional Score（0.0〜1.0）を算出する。Coherence Score（静的構造品質）と Telemetry Score（行動実績）を補完する第3の評価軸。
+
+## Requirements
 ### Requirement: Coherence Coverage gate
 `compute_constitutional_score()` は評価前に Coherence Score の Coverage 軸を確認しなければならない（MUST）。`coverage < THRESHOLDS["min_coverage_for_eval"]`（デフォルト 0.5）の場合、Constitutional eval をスキップし `None` を返さなければならない（MUST）。返却 dict に `skip_reason: "low_coverage"` と `coverage_value` を含めなければならない（MUST）。
 

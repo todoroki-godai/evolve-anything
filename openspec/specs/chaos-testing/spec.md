@@ -1,5 +1,9 @@
-## ADDED Requirements
+# chaos-testing Specification
 
+## Purpose
+構成要素（Rules/Skills）の仮想除去による堅牢性測定。各構成要素を仮想的に除去して Coherence Score を再計算し、ΔScore から環境の堅牢性と各要素の重要度を定量化する。
+
+## Requirements
 ### Requirement: Chaos Score computation via virtual ablation
 `chaos.py` の `compute_chaos_score()` は各構成要素を仮想的に除去（ファイル内容を空として扱う）して Coherence Score を再計算し、ΔScore（除去時のスコア低下量）から環境の堅牢性を測定しなければならない（MUST）。実ファイルを変更してはならない（MUST NOT）。
 

@@ -1,5 +1,9 @@
-## ADDED Requirements
+# principle-extraction Specification
 
+## Purpose
+CLAUDE.md と Rules から PJ 固有の原則を LLM で抽出し、Constitutional Evaluation の入力として提供する。シード原則による Cold Start 解決、品質スコアリングによる低品質原則の除外、キャッシュによるコスト最小化を含む。
+
+## Requirements
 ### Requirement: Principle extraction from CLAUDE.md and Rules
 `principles.py` の `extract_principles()` は CLAUDE.md と Rules ファイルを入力として、`claude -p` 経由で LLM に PJ 固有の原則リストを抽出させなければならない（MUST）。各原則は `id`（kebab-case）、`text`（原則の記述）、`source`（抽出元ファイルパス）、`category`（quality/safety/performance/convention のいずれか）を含まなければならない（MUST）。
 
