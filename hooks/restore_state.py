@@ -10,9 +10,37 @@ from pathlib import Path
 
 import common
 
+# trigger_engine import (optional)
+_trigger_engine = None
+try:
+    _plugin_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+    from trigger_engine import read_and_delete_pending_trigger
+    _trigger_engine = True
+except ImportError:
+    pass
+
+
+def _deliver_pending_trigger() -> None:
+    """pending-trigger.json があれば読み取り、提案メッセージを stdout に出力する。"""
+    if _trigger_engine is None:
+        return
+    try:
+        data = read_and_delete_pending_trigger()
+        if data is None:
+            return
+        message = data.get("message", "")
+        if message:
+            print(f"[rl-anything:auto-trigger] {message}")
+    except Exception as e:
+        print(f"[rl-anything:restore_state] trigger delivery error: {e}", file=sys.stderr)
+
 
 def handle_session_start(event: dict) -> None:
     """SessionStart イベントを処理する。"""
+    # Deliver pending trigger messages first
+    _deliver_pending_trigger()
+
     checkpoint_file = common.DATA_DIR / "checkpoint.json"
 
     if not checkpoint_file.exists():

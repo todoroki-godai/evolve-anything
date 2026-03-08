@@ -103,6 +103,35 @@ rl-anything は **3つの独立した柱** で構成される。
 | `restore_state` | SessionStart | stdout |
 | `session_summary` | Stop | `sessions.jsonl`, `workflows.jsonl` |
 
+### Auto Trigger
+
+セッション終了時・corrections 蓄積時に、evolve/audit の実行を自動提案する（実行はしない）。
+
+| 条件 | デフォルト閾値 | 評価タイミング |
+|------|---------------|---------------|
+| 前回 evolve からのセッション数 | ≥ 10 | セッション終了時 |
+| 前回 evolve からの経過日数 | ≥ 7 | セッション終了時 |
+| corrections 蓄積件数 | ≥ 10 | correction 検出時 |
+| 前回 audit からの経過日数 | ≥ 30 | セッション終了時 |
+
+設定は `~/.claude/rl-anything/evolve-state.json` の `trigger_config` で上書き可能:
+
+```json
+{
+  "trigger_config": {
+    "enabled": true,
+    "triggers": {
+      "session_end": { "min_sessions": 10, "max_days": 7 },
+      "corrections": { "threshold": 10 },
+      "audit_overdue": { "interval_days": 30 }
+    },
+    "cooldown_hours": 24
+  }
+}
+```
+
+無効化: `"trigger_config": { "enabled": false }`
+
 ---
 
 以下は必要に応じて参照する詳細セクション。

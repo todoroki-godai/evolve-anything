@@ -103,6 +103,19 @@ def count_new_observations() -> int:
     return count
 
 
+def _build_trigger_summary() -> Dict[str, Any]:
+    """直近のトリガー発火回数・最終発火日時をまとめる。"""
+    state = load_evolve_state()
+    history = state.get("trigger_history", [])
+    if not history:
+        return {"total_fires": 0, "last_fired": None}
+    return {
+        "total_fires": len(history),
+        "last_fired": history[-1].get("timestamp"),
+        "recent_reasons": [h.get("reason") for h in history[-5:]],
+    }
+
+
 def check_data_sufficiency() -> Dict[str, Any]:
     """観測データの十分性をチェックする。
 
@@ -278,13 +291,18 @@ def run_evolve(
     except Exception as e:
         result["phases"]["fitness_evolution"] = {"error": str(e)}
 
+    # Trigger history summary for report
+    result["trigger_summary"] = _build_trigger_summary()
+
     # State 更新（dry-run でない場合）
     if not dry_run:
-        save_evolve_state({
+        state = load_evolve_state()
+        state.update({
             "last_run_timestamp": datetime.now(timezone.utc).isoformat(),
             "sessions_processed": sufficiency["sessions"],
             "observations_processed": sufficiency["observations"],
         })
+        save_evolve_state(state)
 
     return result
 
