@@ -85,6 +85,7 @@ class ParseResult:
     """parse_transcript() の戻り値。"""
     usage_records: list = field(default_factory=list)
     workflow_records: list = field(default_factory=list)
+    error_records: list = field(default_factory=list)
     session_meta: Optional[Dict[str, Any]] = None
     errors: int = 0
 
@@ -170,6 +171,11 @@ def remove_backfill_workflows(session_ids: Set[str]) -> None:
 def remove_backfill_sessions(session_ids: Set[str]) -> None:
     """sessions.jsonl から対象プロジェクトの backfill レコードを削除する。"""
     _remove_backfill_from_jsonl(common.DATA_DIR / "sessions.jsonl", session_ids)
+
+
+def remove_backfill_errors(session_ids: Set[str]) -> None:
+    """errors.jsonl から対象プロジェクトの backfill レコードを削除する。"""
+    _remove_backfill_from_jsonl(common.DATA_DIR / "errors.jsonl", session_ids)
 
 
 def _generate_workflow_id() -> str:
@@ -366,6 +372,14 @@ def parse_transcript(filepath: Path) -> ParseResult:
             subtype = record.get("subtype", "")
             if subtype == "api_error":
                 error_count += 1
+                result.error_records.append({
+                    "tool_name": "",
+                    "skill_name": "",
+                    "error": str(record.get("message", ""))[:500],
+                    "timestamp": timestamp,
+                    "session_id": session_id,
+                    "source": "backfill",
+                })
             elif subtype == "compact_boundary":
                 compact_count += 1
             continue
@@ -374,6 +388,21 @@ def parse_transcript(filepath: Path) -> ParseResult:
         if record_type == "tool_result":
             if record.get("is_error"):
                 error_count += 1
+                # tool_name は直前の assistant ターンの tool_use から推定
+                error_content = record.get("content", "")
+                if isinstance(error_content, list):
+                    error_content = " ".join(
+                        b.get("text", "") for b in error_content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                result.error_records.append({
+                    "tool_name": record.get("tool_use_id", ""),
+                    "skill_name": "",
+                    "error": str(error_content)[:500],
+                    "timestamp": timestamp,
+                    "session_id": session_id,
+                    "source": "backfill",
+                })
             continue
 
         if record_type != "assistant":
@@ -775,6 +804,7 @@ def backfill(project_dir: Optional[str] = None, force: bool = False, corrections
         remove_backfill_records(project_session_ids)
         remove_backfill_workflows(project_session_ids)
         remove_backfill_sessions(project_session_ids)
+        remove_backfill_errors(project_session_ids)
         backfilled_sessions: Set[str] = set()
     else:
         backfilled_sessions = get_backfilled_session_ids()
@@ -787,6 +817,7 @@ def backfill(project_dir: Optional[str] = None, force: bool = False, corrections
         "workflows_by_type": {"skill-driven": 0, "team-driven": 0, "agent-burst": 0},
         "sessions": 0,
         "errors": 0,
+        "error_records": 0,
         "skipped_sessions": 0,
         "filtered_messages": 0,
         "corrections_extracted": 0,
@@ -827,6 +858,11 @@ def backfill(project_dir: Optional[str] = None, force: bool = False, corrections
             if wf_type in summary["workflows_by_type"]:
                 summary["workflows_by_type"][wf_type] += 1
             common.append_jsonl(common.DATA_DIR / "workflows.jsonl", wf_rec)
+
+        for err_rec in parse_result.error_records:
+            err_rec["project"] = proj_name
+            summary["error_records"] += 1
+            common.append_jsonl(common.DATA_DIR / "errors.jsonl", err_rec)
 
         if parse_result.session_meta is not None:
             parse_result.session_meta["project_name"] = proj_name

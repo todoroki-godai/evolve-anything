@@ -14,6 +14,20 @@ from pathlib import Path
 
 import common
 
+# trigger_engine import (optional — fail silently)
+_trigger_engine = None
+try:
+    _plugin_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+    from trigger_engine import (
+        detect_skill_changes,
+        evaluate_session_end,
+        write_pending_trigger,
+    )
+    _trigger_engine = True
+except ImportError:
+    pass
+
 
 def count_session_usage(session_id: str) -> dict:
     """当該セッションの使用スキル数・エラー数を集計する。"""
@@ -137,6 +151,30 @@ def handle_stop(event: dict) -> None:
 
     # 文脈ファイルのクリーンアップ
     cleanup_context_file(session_id)
+
+    # Auto-evolve trigger evaluation
+    _evaluate_trigger()
+
+
+def _evaluate_trigger() -> None:
+    """trigger_engine を呼び出し、条件達成時に pending-trigger.json を書き出す。"""
+    if _trigger_engine is None:
+        return
+    try:
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or None
+        result = evaluate_session_end(project_dir=project_dir)
+        if not result.triggered:
+            return
+        # Skill change detection — append to message
+        changed_skills = detect_skill_changes()
+        if changed_skills:
+            skill_list = ", ".join(changed_skills)
+            result.message += f"\n変更されたスキル: {skill_list}。推奨: /rl-anything:optimize {changed_skills[0]}"
+            result.details["changed_skills"] = changed_skills
+        write_pending_trigger(result)
+    except Exception as e:
+        # Silent failure — session end processing must continue
+        print(f"[rl-anything:session_summary] trigger eval error: {e}", file=sys.stderr)
 
 
 def main() -> None:

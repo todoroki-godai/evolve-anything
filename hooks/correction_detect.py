@@ -15,6 +15,16 @@ from pathlib import Path
 
 import common
 
+# trigger_engine import (optional)
+_trigger_engine = None
+try:
+    _plugin_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+    from trigger_engine import evaluate_corrections
+    _trigger_engine = True
+except ImportError:
+    pass
+
 
 def handle_user_prompt_submit(event: dict) -> None:
     """UserPromptSubmit イベントを処理する。"""
@@ -97,6 +107,21 @@ def handle_user_prompt_submit(event: dict) -> None:
         "session_id": session_id,
     }
     common.append_jsonl(common.DATA_DIR / "corrections.jsonl", record)
+
+    # Corrections threshold trigger evaluation
+    _check_corrections_trigger()
+
+
+def _check_corrections_trigger() -> None:
+    """corrections 蓄積閾値を評価し、到達時に stdout に提案メッセージを出力する。"""
+    if _trigger_engine is None:
+        return
+    try:
+        result = evaluate_corrections()
+        if result.triggered and result.message:
+            print(f"[rl-anything:auto-trigger] {result.message}")
+    except Exception as e:
+        print(f"[rl-anything:correction] trigger eval error: {e}", file=sys.stderr)
 
 
 def main() -> None:

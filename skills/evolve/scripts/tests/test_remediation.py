@@ -18,6 +18,11 @@ from remediation import (
     compute_impact_scope,
     generate_rationale,
     fix_stale_references,
+    fix_stale_rules,
+    fix_claudemd_phantom_refs,
+    fix_claudemd_missing_section,
+    FIX_DISPATCH,
+    VERIFY_DISPATCH,
     generate_proposals,
     verify_fix,
     check_regression,
@@ -42,8 +47,8 @@ class TestClassification:
         assert result["confidence_score"] >= 0.9
         assert result["impact_scope"] == "file"
 
-    def test_stale_ref_in_claude_md_is_proposable(self):
-        """CLAUDE.md 内の陳腐化参照 → proposable に格上げ。"""
+    def test_stale_ref_in_claude_md_is_auto_fixable(self):
+        """CLAUDE.md 内の陳腐化参照 → auto_fixable（project scope + confidence >= 0.9）。"""
         issue = {
             "type": "stale_ref",
             "file": "/project/CLAUDE.md",
@@ -51,8 +56,33 @@ class TestClassification:
             "source": "build_memory_health_section",
         }
         result = classify_issue(issue)
-        assert result["category"] == "proposable"
+        assert result["category"] == "auto_fixable"
         assert result["impact_scope"] == "project"
+
+    def test_project_scope_high_confidence_is_auto_fixable(self):
+        """project scope + confidence >= 0.9 → auto_fixable。"""
+        issue = {
+            "type": "claudemd_missing_section",
+            "file": "/project/CLAUDE.md",
+            "detail": {"section": "skills", "skill_count": 5},
+            "source": "diagnose",
+        }
+        result = classify_issue(issue)
+        assert result["category"] == "auto_fixable"
+        assert result["impact_scope"] == "project"
+
+    def test_global_scope_high_confidence_is_manual_required(self):
+        """global scope → confidence 高くても manual_required。"""
+        home = str(Path.home())
+        issue = {
+            "type": "stale_rule",
+            "file": f"{home}/.claude/rules/test.md",
+            "detail": {"line": 1, "path": "nonexistent"},
+            "source": "diagnose",
+        }
+        result = classify_issue(issue)
+        assert result["category"] == "manual_required"
+        assert result["impact_scope"] == "global"
 
     def test_minor_line_excess_auto_fixable(self):
         """1行超過 → auto_fixable に格下げ。"""
@@ -275,3 +305,385 @@ class TestTelemetry:
         assert result is None
         outcomes_file = tmp_path / "remediation-outcomes.jsonl"
         assert not outcomes_file.exists()
+
+    def test_record_outcome_with_extended_metadata(self, tmp_path, monkeypatch):
+        """fix_detail, verify_result, duration_ms が記録される。"""
+        monkeypatch.setattr("remediation.DATA_DIR", tmp_path)
+        issue = {
+            "type": "stale_ref",
+            "confidence_score": 0.95,
+            "impact_scope": "file",
+            "file": "/project/.claude/memory/MEMORY.md",
+        }
+        fix_detail = {"changed_files": ["MEMORY.md"], "lines_removed": 1, "lines_added": 0}
+        verify_result = {"resolved": True}
+        result = record_outcome(
+            issue, "auto_fixable", "delete_line", "success", "approved",
+            "テスト理由",
+            fix_detail=fix_detail,
+            verify_result=verify_result,
+            duration_ms=150,
+        )
+        assert result is not None
+        assert result["fix_detail"] == fix_detail
+        assert result["verify_result"] == verify_result
+        assert result["duration_ms"] == 150
+
+        outcomes_file = tmp_path / "remediation-outcomes.jsonl"
+        records = [json.loads(l) for l in outcomes_file.read_text().splitlines()]
+        assert records[0]["fix_detail"]["lines_removed"] == 1
+        assert records[0]["duration_ms"] == 150
+
+    def test_record_outcome_fix_failed(self, tmp_path, monkeypatch):
+        """fix_failed result が正しく記録される。"""
+        monkeypatch.setattr("remediation.DATA_DIR", tmp_path)
+        issue = {"type": "stale_ref", "confidence_score": 0.95, "impact_scope": "file", "file": "x"}
+        result = record_outcome(
+            issue, "auto_fixable", "delete_line", "fix_failed", "approved",
+            "修正失敗",
+            verify_result={"resolved": False, "remaining": "参照がまだ存在"},
+        )
+        assert result["result"] == "fix_failed"
+        assert result["verify_result"]["resolved"] is False
+
+    def test_record_outcome_rejected(self, tmp_path, monkeypatch):
+        """rejected result が正しく記録される。"""
+        monkeypatch.setattr("remediation.DATA_DIR", tmp_path)
+        issue = {"type": "orphan_rule", "confidence_score": 0.5, "impact_scope": "file", "file": "x"}
+        result = record_outcome(
+            issue, "proposable", "propose_delete", "rejected", "rejected",
+            "ユーザーが却下",
+        )
+        assert result["result"] == "rejected"
+        assert result["user_decision"] == "rejected"
+
+    def test_record_outcome_without_optional_fields(self, tmp_path, monkeypatch):
+        """optional フィールド未指定時は record に含まれない。"""
+        monkeypatch.setattr("remediation.DATA_DIR", tmp_path)
+        issue = {"type": "stale_ref", "file": "x"}
+        result = record_outcome(
+            issue, "auto_fixable", "delete_line", "success", "approved", "理由",
+        )
+        assert "fix_detail" not in result
+        assert "verify_result" not in result
+        assert "duration_ms" not in result
+
+
+# ---------- 6.1: fix_stale_rules / fix_claudemd_phantom_refs / fix_claudemd_missing_section テスト ----------
+
+class TestFixStaleRules:
+    def test_removes_stale_path_line(self, tmp_path):
+        """ルール内の不存在パス参照行が削除される。"""
+        f = tmp_path / "test-rule.md"
+        f.write_text("# ルール\nSee scripts/old.py\nValid line\n")
+        issues = [{
+            "type": "stale_rule",
+            "file": str(f),
+            "detail": {"line": 2, "path": "scripts/old.py"},
+            "source": "diagnose",
+        }]
+        results = fix_stale_rules(issues)
+        assert len(results) == 1
+        assert results[0]["fixed"] is True
+        content = f.read_text()
+        assert "scripts/old.py" not in content
+        assert "Valid line" in content
+
+    def test_preserves_original(self, tmp_path):
+        """original_content が保持される。"""
+        f = tmp_path / "test-rule.md"
+        original = "# ルール\nSee scripts/old.py\n"
+        f.write_text(original)
+        issues = [{
+            "type": "stale_rule",
+            "file": str(f),
+            "detail": {"line": 2, "path": "scripts/old.py"},
+            "source": "diagnose",
+        }]
+        results = fix_stale_rules(issues)
+        assert results[0]["original_content"] == original
+
+    def test_ignores_non_stale_rule_type(self, tmp_path):
+        """stale_rule 以外の type は無視される。"""
+        f = tmp_path / "test.md"
+        f.write_text("content\n")
+        issues = [{
+            "type": "stale_ref",
+            "file": str(f),
+            "detail": {"line": 1},
+            "source": "s",
+        }]
+        results = fix_stale_rules(issues)
+        assert len(results) == 0
+
+    def test_file_not_found(self):
+        """存在しないファイル → error。"""
+        issues = [{
+            "type": "stale_rule",
+            "file": "/nonexistent/rule.md",
+            "detail": {"line": 1, "path": "x"},
+            "source": "diagnose",
+        }]
+        results = fix_stale_rules(issues)
+        assert len(results) == 1
+        assert results[0]["fixed"] is False
+        assert results[0]["error"] is not None
+
+
+class TestFixClaudemdPhantomRefs:
+    def test_removes_phantom_ref_line(self, tmp_path):
+        """phantom_ref の行が削除される。"""
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("# Project\n\n- old-skill: 説明\n\n- valid: 説明\n")
+        issues = [{
+            "type": "claudemd_phantom_ref",
+            "file": str(f),
+            "detail": {"line": 3, "name": "old-skill", "ref_type": "skill"},
+            "source": "diagnose",
+        }]
+        results = fix_claudemd_phantom_refs(issues)
+        assert len(results) == 1
+        assert results[0]["fixed"] is True
+        content = f.read_text()
+        assert "old-skill" not in content
+        assert "valid" in content
+
+    def test_normalizes_consecutive_blank_lines(self, tmp_path):
+        """連続空行が正規化される。"""
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("# Title\n\n\n\nContent\n")
+        issues = [{
+            "type": "claudemd_phantom_ref",
+            "file": str(f),
+            "detail": {"line": 3, "name": "x", "ref_type": "skill"},
+            "source": "diagnose",
+        }]
+        fix_claudemd_phantom_refs(issues)
+        content = f.read_text()
+        assert "\n\n\n" not in content
+
+
+class TestFixClaudemdMissingSection:
+    def test_adds_skills_section(self, tmp_path):
+        """Skills セクションヘッダが追加される。"""
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("# Project\n\nDescription\n")
+        issues = [{
+            "type": "claudemd_missing_section",
+            "file": str(f),
+            "detail": {"section": "skills", "skill_count": 3},
+            "source": "diagnose",
+        }]
+        results = fix_claudemd_missing_section(issues)
+        assert len(results) == 1
+        assert results[0]["fixed"] is True
+        content = f.read_text()
+        assert "## Skills" in content
+
+    def test_deduplicates_same_file(self, tmp_path):
+        """同一ファイルに対する複数 issue は1回だけ修正。"""
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("# Project\n")
+        issues = [
+            {"type": "claudemd_missing_section", "file": str(f),
+             "detail": {"section": "skills", "skill_count": 3}, "source": "d"},
+            {"type": "claudemd_missing_section", "file": str(f),
+             "detail": {"section": "skills", "skill_count": 3}, "source": "d"},
+        ]
+        results = fix_claudemd_missing_section(issues)
+        assert len(results) == 1
+
+
+# ---------- 6.2: FIX_DISPATCH テスト ----------
+
+class TestFixDispatch:
+    def test_stale_ref_dispatch(self):
+        assert FIX_DISPATCH["stale_ref"] is fix_stale_references
+
+    def test_stale_rule_dispatch(self):
+        assert FIX_DISPATCH["stale_rule"] is fix_stale_rules
+
+    def test_claudemd_phantom_ref_dispatch(self):
+        assert FIX_DISPATCH["claudemd_phantom_ref"] is fix_claudemd_phantom_refs
+
+    def test_claudemd_missing_section_dispatch(self):
+        assert FIX_DISPATCH["claudemd_missing_section"] is fix_claudemd_missing_section
+
+    def test_unknown_type_raises_key_error(self):
+        with pytest.raises(KeyError):
+            FIX_DISPATCH["unknown_type"]
+
+
+# ---------- 6.3: VERIFY_DISPATCH テスト ----------
+
+class TestVerifyDispatch:
+    def test_stale_ref_dispatch(self):
+        assert VERIFY_DISPATCH["stale_ref"] is not None
+
+    def test_stale_rule_dispatch(self):
+        assert VERIFY_DISPATCH["stale_rule"] is not None
+
+    def test_claudemd_phantom_ref_dispatch(self):
+        assert VERIFY_DISPATCH["claudemd_phantom_ref"] is not None
+
+    def test_claudemd_missing_section_dispatch(self):
+        assert VERIFY_DISPATCH["claudemd_missing_section"] is not None
+
+    def test_stale_memory_dispatch(self):
+        assert VERIFY_DISPATCH["stale_memory"] is not None
+
+    def test_unknown_type_not_in_dispatch(self):
+        assert "unknown_type" not in VERIFY_DISPATCH
+
+
+# ---------- 6.4: generate_proposals の全レイヤー対応テスト ----------
+
+class TestGenerateProposalsAllLayers:
+    def test_orphan_rule_proposal(self):
+        issues = [{
+            "type": "orphan_rule",
+            "file": "/project/.claude/rules/old.md",
+            "detail": {"name": "old-rule"},
+            "category": "proposable",
+        }]
+        proposals = generate_proposals(issues)
+        assert len(proposals) == 1
+        assert "old-rule" in proposals[0]["proposal"]
+        assert "削除" in proposals[0]["proposal"]
+
+    def test_stale_memory_proposal(self):
+        issues = [{
+            "type": "stale_memory",
+            "file": "/project/.claude/memory/MEMORY.md",
+            "detail": {"path": "scripts/old_module.py"},
+            "category": "proposable",
+        }]
+        proposals = generate_proposals(issues)
+        assert len(proposals) == 1
+        assert "scripts/old_module.py" in proposals[0]["proposal"]
+
+    def test_memory_duplicate_proposal(self):
+        issues = [{
+            "type": "memory_duplicate",
+            "file": "/project/.claude/memory/MEMORY.md",
+            "detail": {"sections": ["Section A", "Section B"], "similarity": 0.85},
+            "category": "proposable",
+        }]
+        proposals = generate_proposals(issues)
+        assert len(proposals) == 1
+        assert "Section A" in proposals[0]["proposal"]
+        assert "Section B" in proposals[0]["proposal"]
+        assert "統合" in proposals[0]["proposal"]
+
+    def test_line_limit_violation_still_works(self):
+        """既存の line_limit_violation もそのまま動作する。"""
+        issues = [{
+            "type": "line_limit_violation",
+            "file": "/project/.claude/skills/big/SKILL.md",
+            "detail": {"lines": 600, "limit": 500},
+            "category": "proposable",
+        }]
+        proposals = generate_proposals(issues)
+        assert len(proposals) == 1
+        assert "600" in proposals[0]["proposal"]
+
+
+# ---------- 6.5: verify_fix の全レイヤー対応テスト ----------
+
+class TestVerifyFixAllLayers:
+    def test_stale_rule_resolved(self, tmp_path):
+        f = tmp_path / "rule.md"
+        f.write_text("# Rule\nValid content\n")
+        issue = {"type": "stale_rule", "detail": {"path": "scripts/old.py"}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is True
+
+    def test_stale_rule_not_resolved(self, tmp_path):
+        f = tmp_path / "rule.md"
+        f.write_text("# Rule\nSee scripts/old.py\n")
+        issue = {"type": "stale_rule", "detail": {"path": "scripts/old.py"}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is False
+
+    def test_claudemd_phantom_ref_resolved(self, tmp_path):
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("# Project\n\nValid content\n")
+        issue = {"type": "claudemd_phantom_ref", "detail": {"name": "old-skill", "ref_type": "skill"}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is True
+
+    def test_claudemd_phantom_ref_not_resolved(self, tmp_path):
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("# Project\n\n- old-skill: desc\n")
+        issue = {"type": "claudemd_phantom_ref", "detail": {"name": "old-skill", "ref_type": "skill"}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is False
+
+    def test_claudemd_missing_section_resolved(self, tmp_path):
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("# Project\n\n## Skills\n\n- skill1\n")
+        issue = {"type": "claudemd_missing_section", "detail": {"section": "skills"}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is True
+
+    def test_claudemd_missing_section_not_resolved(self, tmp_path):
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("# Project\n\nNo skills section\n")
+        issue = {"type": "claudemd_missing_section", "detail": {"section": "skills"}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is False
+
+    def test_stale_memory_resolved(self, tmp_path):
+        f = tmp_path / "MEMORY.md"
+        f.write_text("# Memory\n\nValid content\n")
+        issue = {"type": "stale_memory", "detail": {"path": "old/module.py"}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is True
+
+    def test_stale_memory_not_resolved(self, tmp_path):
+        f = tmp_path / "MEMORY.md"
+        f.write_text("# Memory\n\nSee old/module.py here\n")
+        issue = {"type": "stale_memory", "detail": {"path": "old/module.py"}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is False
+
+    def test_unknown_type_skips(self, tmp_path):
+        f = tmp_path / "test.md"
+        f.write_text("content\n")
+        issue = {"type": "unknown_new_type", "detail": {}}
+        result = verify_fix(str(f), issue)
+        assert result["resolved"] is True
+
+
+# ---------- 6.6: check_regression の Rules 行数チェックテスト ----------
+
+class TestCheckRegressionRulesLineLimit:
+    def test_rules_within_limit(self, tmp_path):
+        """Rules ファイルが行数制限内 → pass。"""
+        rules_dir = tmp_path / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        f = rules_dir / "test.md"
+        f.write_text("# Rule\nLine 1\nLine 2\n")
+        original = "# Rule\nOriginal\n"
+        result = check_regression(str(f), original)
+        assert result["passed"] is True
+
+    def test_rules_exceeds_limit(self, tmp_path):
+        """Rules ファイルが行数制限超過 → fail。"""
+        rules_dir = tmp_path / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        f = rules_dir / "test.md"
+        # MAX_RULE_LINES=3 なので 4行以上で超過
+        f.write_text("# Rule\nLine 1\nLine 2\nLine 3\nLine 4\n")
+        original = "# Rule\nLine 1\nLine 2\nLine 3\nLine 4\n"
+        result = check_regression(str(f), original)
+        assert result["passed"] is False
+        assert any("行数制限" in i for i in result["issues"])
+
+    def test_non_rules_file_no_line_check(self, tmp_path):
+        """Rules 以外のファイルは行数チェックしない。"""
+        f = tmp_path / "MEMORY.md"
+        content = "\n".join([f"Line {i}" for i in range(100)]) + "\n"
+        f.write_text(content)
+        result = check_regression(str(f), content)
+        assert result["passed"] is True

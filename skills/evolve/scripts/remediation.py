@@ -46,14 +46,37 @@ def compute_impact_scope(file_path: str) -> str:
     return "file"
 
 
+def _load_calibration_overrides() -> Dict[str, float]:
+    """confidence-calibration.json から active なキャリブレーション値を読み込む。"""
+    cal_file = DATA_DIR / "confidence-calibration.json"
+    if not cal_file.exists():
+        return {}
+    try:
+        data = json.loads(cal_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    overrides: Dict[str, float] = {}
+    for it, cal in data.get("calibrations", {}).items():
+        if isinstance(cal, dict) and cal.get("status") == "active":
+            overrides[it] = cal.get("calibrated", cal.get("current", 0.5))
+    return overrides
+
+
 def compute_confidence_score(issue: Dict[str, Any]) -> float:
     """問題タイプと詳細から confidence_score を算出する。
+
+    confidence-calibration.json に active なキャリブレーション値があればそちらを使用。
 
     Returns:
         0.0 〜 1.0
     """
     issue_type = issue["type"]
     detail = issue.get("detail", {})
+
+    # Check calibration overrides first
+    overrides = _load_calibration_overrides()
+    if issue_type in overrides:
+        return overrides[issue_type]
 
     if issue_type == "stale_ref":
         # 陳腐化参照は削除の確実性が高い
@@ -126,7 +149,7 @@ def classify_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
     scope = compute_impact_scope(issue["file"])
 
     # 動的分類
-    if confidence >= AUTO_FIX_CONFIDENCE and scope == "file":
+    if confidence >= AUTO_FIX_CONFIDENCE and scope in ("file", "project"):
         category = "auto_fixable"
     elif confidence < PROPOSABLE_CONFIDENCE or scope == "global":
         category = "manual_required"
@@ -334,6 +357,196 @@ def fix_stale_references(
     return results
 
 
+def fix_stale_rules(
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """ルール内の不存在パス参照行を削除する。
+
+    Returns:
+        [{"issue": ..., "original_content": str, "fixed": bool, "error": str|None}, ...]
+    """
+    by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for issue in issues:
+        if issue["type"] != "stale_rule":
+            continue
+        f = issue["file"]
+        if f not in by_file:
+            by_file[f] = []
+        by_file[f].append(issue)
+
+    results = []
+    for file_path, file_issues in by_file.items():
+        path = Path(file_path)
+        try:
+            original_content = path.read_text(encoding="utf-8")
+        except OSError as e:
+            for issue in file_issues:
+                results.append({
+                    "issue": issue,
+                    "original_content": "",
+                    "fixed": False,
+                    "error": str(e),
+                })
+            continue
+
+        lines = original_content.splitlines(keepends=True)
+        lines_to_remove = set()
+        for issue in file_issues:
+            line_num = issue.get("detail", {}).get("line", 0)
+            if 0 < line_num <= len(lines):
+                lines_to_remove.add(line_num - 1)
+
+        new_lines = [l for i, l in enumerate(lines) if i not in lines_to_remove]
+        new_content = "".join(new_lines)
+
+        try:
+            path.write_text(new_content, encoding="utf-8")
+            for issue in file_issues:
+                results.append({
+                    "issue": issue,
+                    "original_content": original_content,
+                    "fixed": True,
+                    "error": None,
+                })
+        except OSError as e:
+            for issue in file_issues:
+                results.append({
+                    "issue": issue,
+                    "original_content": original_content,
+                    "fixed": False,
+                    "error": str(e),
+                })
+
+    return results
+
+
+def fix_claudemd_phantom_refs(
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """CLAUDE.md 内の phantom_ref 行を削除し、連続空行を正規化する。
+
+    Returns:
+        [{"issue": ..., "original_content": str, "fixed": bool, "error": str|None}, ...]
+    """
+    by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for issue in issues:
+        if issue["type"] != "claudemd_phantom_ref":
+            continue
+        f = issue["file"]
+        if f not in by_file:
+            by_file[f] = []
+        by_file[f].append(issue)
+
+    results = []
+    for file_path, file_issues in by_file.items():
+        path = Path(file_path)
+        try:
+            original_content = path.read_text(encoding="utf-8")
+        except OSError as e:
+            for issue in file_issues:
+                results.append({
+                    "issue": issue,
+                    "original_content": "",
+                    "fixed": False,
+                    "error": str(e),
+                })
+            continue
+
+        lines = original_content.splitlines(keepends=True)
+        lines_to_remove = set()
+        for issue in file_issues:
+            line_num = issue.get("detail", {}).get("line", 0)
+            if 0 < line_num <= len(lines):
+                lines_to_remove.add(line_num - 1)
+
+        new_lines = [l for i, l in enumerate(lines) if i not in lines_to_remove]
+        new_content = "".join(new_lines)
+        # 連続空行の正規化（3行以上の空行 → 2行に）
+        new_content = re.sub(r"\n{3,}", "\n\n", new_content)
+
+        try:
+            path.write_text(new_content, encoding="utf-8")
+            for issue in file_issues:
+                results.append({
+                    "issue": issue,
+                    "original_content": original_content,
+                    "fixed": True,
+                    "error": None,
+                })
+        except OSError as e:
+            for issue in file_issues:
+                results.append({
+                    "issue": issue,
+                    "original_content": original_content,
+                    "fixed": False,
+                    "error": str(e),
+                })
+
+    return results
+
+
+def fix_claudemd_missing_section(
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """CLAUDE.md に Skills セクションヘッダを追加する。
+
+    Returns:
+        [{"issue": ..., "original_content": str, "fixed": bool, "error": str|None}, ...]
+    """
+    results = []
+    seen_files: set = set()
+    for issue in issues:
+        if issue["type"] != "claudemd_missing_section":
+            continue
+        file_path = issue["file"]
+        if file_path in seen_files:
+            continue
+        seen_files.add(file_path)
+
+        path = Path(file_path)
+        try:
+            original_content = path.read_text(encoding="utf-8")
+        except OSError as e:
+            results.append({
+                "issue": issue,
+                "original_content": "",
+                "fixed": False,
+                "error": str(e),
+            })
+            continue
+
+        section_header = "\n\n## Skills\n\n<!-- スキル一覧をここに追加 -->\n"
+        new_content = original_content.rstrip() + section_header
+
+        try:
+            path.write_text(new_content, encoding="utf-8")
+            results.append({
+                "issue": issue,
+                "original_content": original_content,
+                "fixed": True,
+                "error": None,
+            })
+        except OSError as e:
+            results.append({
+                "issue": issue,
+                "original_content": original_content,
+                "fixed": False,
+                "error": str(e),
+            })
+
+    return results
+
+
+# ---------- FIX_DISPATCH ----------
+
+FIX_DISPATCH: Dict[str, Any] = {
+    "stale_ref": fix_stale_references,
+    "stale_rule": fix_stale_rules,
+    "claudemd_phantom_ref": fix_claudemd_phantom_refs,
+    "claudemd_missing_section": fix_claudemd_missing_section,
+}
+
+
 def generate_proposals(
     issues: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -361,6 +574,20 @@ def generate_proposals(
                 f"ファイル {issue['file']} ({detail.get('pct', 0)}%) を"
                 f"トピック別ファイルに分割する提案です。"
             )
+        elif issue["type"] == "orphan_rule":
+            detail = issue.get("detail", {})
+            name = detail.get("name", Path(issue["file"]).stem)
+            proposal = f"ルール「{name}」の削除"
+        elif issue["type"] == "stale_memory":
+            detail = issue.get("detail", {})
+            path = detail.get("path", "unknown")
+            proposal = f"MEMORY.md の「{path}」エントリの更新/削除"
+        elif issue["type"] == "memory_duplicate":
+            detail = issue.get("detail", {})
+            sections = detail.get("sections", ["unknown", "unknown"])
+            a = sections[0] if len(sections) > 0 else "unknown"
+            b = sections[1] if len(sections) > 1 else "unknown"
+            proposal = f"セクション「{a}」と「{b}」の統合"
         else:
             proposal = f"{issue['type']} に対する修正案を検討してください。"
 
@@ -375,6 +602,86 @@ def generate_proposals(
 
 # ---------- 検証エンジン ----------
 
+def _verify_stale_ref(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """stale_ref の検証。"""
+    import sys
+    _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+    sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
+    from audit import _extract_paths_outside_codeblocks
+
+    content = Path(fixed_file).read_text(encoding="utf-8")
+    extracted = _extract_paths_outside_codeblocks(content)
+    ref_path = detail.get("path", "")
+    for _, found_path in extracted:
+        if found_path == ref_path:
+            return {"resolved": False, "remaining": f"参照「{ref_path}」がまだ存在します"}
+    return {"resolved": True, "remaining": None}
+
+
+def _verify_line_limit_violation(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """line_limit_violation の検証。"""
+    content = Path(fixed_file).read_text(encoding="utf-8")
+    current_lines = content.count("\n") + 1
+    limit = detail.get("limit", 0)
+    if current_lines > limit:
+        return {
+            "resolved": False,
+            "remaining": f"行数 {current_lines}/{limit} — まだ超過しています",
+        }
+    return {"resolved": True, "remaining": None}
+
+
+def _verify_stale_rule(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """stale_rule の検証: 参照パスが消えているか。"""
+    content = Path(fixed_file).read_text(encoding="utf-8")
+    ref_path = detail.get("path", "")
+    if ref_path and ref_path in content:
+        return {"resolved": False, "remaining": f"参照「{ref_path}」がまだ存在します"}
+    return {"resolved": True, "remaining": None}
+
+
+def _verify_claudemd_phantom_ref(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """claudemd_phantom_ref の検証: 当該スキル/ルール名が消えているか。"""
+    content = Path(fixed_file).read_text(encoding="utf-8")
+    name = detail.get("name", "")
+    if not name:
+        return {"resolved": True, "remaining": None}
+    # リスト項目内での言及をチェック
+    for line in content.splitlines():
+        if name in line and line.strip().startswith("-"):
+            return {"resolved": False, "remaining": f"「{name}」のリスト項目がまだ存在します"}
+    return {"resolved": True, "remaining": None}
+
+
+def _verify_claudemd_missing_section(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """claudemd_missing_section の検証: Skills セクションが存在するか。"""
+    content = Path(fixed_file).read_text(encoding="utf-8")
+    if re.search(r"^##\s+Skills", content, re.MULTILINE):
+        return {"resolved": True, "remaining": None}
+    return {"resolved": False, "remaining": "Skills セクションが追加されていません"}
+
+
+def _verify_stale_memory(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """stale_memory の検証: 当該モジュール参照が消えているか。"""
+    content = Path(fixed_file).read_text(encoding="utf-8")
+    path = detail.get("path", "")
+    if path and path in content:
+        return {"resolved": False, "remaining": f"「{path}」への参照がまだ存在します"}
+    return {"resolved": True, "remaining": None}
+
+
+# ---------- VERIFY_DISPATCH ----------
+
+VERIFY_DISPATCH: Dict[str, Any] = {
+    "stale_ref": _verify_stale_ref,
+    "line_limit_violation": _verify_line_limit_violation,
+    "stale_rule": _verify_stale_rule,
+    "claudemd_phantom_ref": _verify_claudemd_phantom_ref,
+    "claudemd_missing_section": _verify_claudemd_missing_section,
+    "stale_memory": _verify_stale_memory,
+}
+
+
 def verify_fix(fixed_file: str, original_issue: Dict[str, Any]) -> Dict[str, Any]:
     """修正されたファイルに対して該当する検出関数を再実行し、元の問題の解消を確認する。
 
@@ -388,32 +695,13 @@ def verify_fix(fixed_file: str, original_issue: Dict[str, Any]) -> Dict[str, Any
     issue_type = original_issue["type"]
     detail = original_issue.get("detail", {})
 
-    if issue_type == "stale_ref":
-        # 元のパス参照がまだ存在するかチェック
-        import sys
-        _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
-        sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
-        from audit import _extract_paths_outside_codeblocks
+    verify_fn = VERIFY_DISPATCH.get(issue_type)
+    if verify_fn is not None:
+        return verify_fn(fixed_file, detail)
 
-        content = path.read_text(encoding="utf-8")
-        extracted = _extract_paths_outside_codeblocks(content)
-        ref_path = detail.get("path", "")
-        for _, found_path in extracted:
-            if found_path == ref_path:
-                return {"resolved": False, "remaining": f"参照「{ref_path}」がまだ存在します"}
-        return {"resolved": True, "remaining": None}
-
-    if issue_type == "line_limit_violation":
-        content = path.read_text(encoding="utf-8")
-        current_lines = content.count("\n") + 1
-        limit = detail.get("limit", 0)
-        if current_lines > limit:
-            return {
-                "resolved": False,
-                "remaining": f"行数 {current_lines}/{limit} — まだ超過しています",
-            }
-        return {"resolved": True, "remaining": None}
-
+    # 未登録 type はスキップ（warning）
+    import sys
+    print(f"  [warn] verify_fix: 未登録の issue type「{issue_type}」をスキップ", file=sys.stderr)
     return {"resolved": True, "remaining": None}
 
 
@@ -423,6 +711,7 @@ def check_regression(fixed_file: str, original_content: str) -> Dict[str, Any]:
     検証項目:
     - 見出し構造の保持
     - Markdown フォーマットの整合性
+    - Rules ファイルの行数制限
 
     Returns:
         {"passed": bool, "issues": [str, ...]}
@@ -452,6 +741,19 @@ def check_regression(fixed_file: str, original_content: str) -> Dict[str, Any]:
     # 空ファイルチェック
     if not new_content.strip():
         issues.append("ファイルが空になりました")
+
+    # Rules ファイルの行数制限チェック
+    if ".claude/rules/" in fixed_file:
+        import sys
+        _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from line_limit import MAX_RULE_LINES
+
+        line_count = new_content.count("\n") + (1 if new_content and not new_content.endswith("\n") else 0)
+        if line_count > MAX_RULE_LINES:
+            issues.append(
+                f"Rules ファイルが行数制限を超過しています ({line_count}行)"
+            )
 
     return {
         "passed": len(issues) == 0,
@@ -483,10 +785,18 @@ def record_outcome(
     rationale: str,
     *,
     dry_run: bool = False,
+    fix_detail: Optional[Dict[str, Any]] = None,
+    verify_result: Optional[Dict[str, Any]] = None,
+    duration_ms: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """修正結果を remediation-outcomes.jsonl に記録する。
 
     dry_run=True の場合は記録しない。
+
+    Args:
+        fix_detail: 修正の詳細 (changed_files, lines_removed, lines_added)
+        verify_result: 検証結果 (resolved, remaining)
+        duration_ms: 修正にかかった時間（ミリ秒）
 
     Returns:
         記録したレコード、または dry_run 時は None
@@ -506,6 +816,13 @@ def record_outcome(
         "rationale": rationale,
         "file": issue.get("file", ""),
     }
+
+    if fix_detail is not None:
+        record["fix_detail"] = fix_detail
+    if verify_result is not None:
+        record["verify_result"] = verify_result
+    if duration_ms is not None:
+        record["duration_ms"] = duration_ms
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     outcomes_file = DATA_DIR / "remediation-outcomes.jsonl"

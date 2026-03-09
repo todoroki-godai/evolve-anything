@@ -1150,6 +1150,44 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
     return issues
 
 
+def _format_constitutional_report(result: Optional[Dict[str, Any]]) -> Optional[List[str]]:
+    """Constitutional Score をレポート用にフォーマットする。"""
+    if result is None:
+        return ["## Constitutional Score", "", "LLM 評価に失敗しました", ""]
+
+    if result.get("overall") is None:
+        skip_reason = result.get("skip_reason", "unknown")
+        coverage = result.get("coverage_value", "N/A")
+        return [
+            "## Constitutional Score",
+            "",
+            f"Skipped: {skip_reason} (coverage={coverage})",
+            "",
+        ]
+
+    lines = [f"## Constitutional Score: {result['overall']:.2f}", ""]
+
+    # 原則別スコア
+    per_principle = result.get("per_principle", [])
+    if per_principle:
+        lines.append("### Per-Principle Scores")
+        for p in per_principle:
+            score = p.get("score", 0.0)
+            bar_filled = int(score * 20)
+            bar_empty = 20 - bar_filled
+            bar = "\u2588" * bar_filled + "\u2591" * bar_empty
+            lines.append(f"  {p.get('id', '?'):30s} {score:.2f} {bar}")
+        lines.append("")
+
+    # コスト情報
+    cost = result.get("estimated_cost_usd", 0)
+    calls = result.get("llm_calls_count", 0)
+    lines.append(f"LLM calls: {calls}, Estimated cost: ${cost:.4f}")
+    lines.append("")
+
+    return lines
+
+
 def generate_report(
     artifacts: Dict[str, List[Path]],
     violations: List[Dict[str, Any]],
@@ -1163,13 +1201,30 @@ def generate_report(
     untagged_reference_candidates: Optional[List[Dict[str, Any]]] = None,
     hardcoded_values: Optional[List[Dict[str, Any]]] = None,
     coherence_report: Optional[List[str]] = None,
+    telemetry_report: Optional[List[str]] = None,
+    constitutional_report: Optional[List[str]] = None,
+    environment_report: Optional[List[str]] = None,
+    pipeline_health_report: Optional[List[str]] = None,
 ) -> str:
     """1画面レポートを生成する。"""
     lines = ["# Environment Audit Report", ""]
 
-    # Coherence Score（指定時は先頭に表示）
+    # セクション順序: Environment Fitness → Constitutional → Coherence → Telemetry → Pipeline Health
+    if environment_report:
+        lines.extend(environment_report)
+
+    if constitutional_report:
+        lines.extend(constitutional_report)
+
     if coherence_report:
         lines.extend(coherence_report)
+
+    if telemetry_report:
+        lines.extend(telemetry_report)
+
+    # Pipeline Health（既存スコアセクションの後に配置）
+    if pipeline_health_report:
+        lines.extend(pipeline_health_report)
 
     # サマリ
     total = sum(len(v) for v in artifacts.values())
@@ -1254,7 +1309,108 @@ def generate_report(
     return "\n".join(lines)
 
 
-def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coherence_score: bool = False) -> str:
+_AUDIT_HISTORY_FILE = DATA_DIR / "audit-history.jsonl"
+_MAX_AUDIT_HISTORY = 100
+_DEGRADATION_THRESHOLD = 0.10  # 10% drop
+
+
+def _record_audit_completion(
+    coherence_report: Optional[List[str]] = None,
+    telemetry_report: Optional[List[str]] = None,
+    environment_report: Optional[List[str]] = None,
+) -> None:
+    """audit 完了時: last_audit_timestamp 更新 + audit-history.jsonl 記録 + 劣化検出。"""
+    try:
+        # Update last_audit_timestamp in evolve-state.json
+        state_file = DATA_DIR / "evolve-state.json"
+        state = {}
+        if state_file.exists():
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        now = datetime.now(timezone.utc).isoformat()
+        state["last_audit_timestamp"] = now
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        # Record to audit-history.jsonl
+        history_record: Dict[str, Any] = {"timestamp": now}
+        # Extract scores from report lines if available
+        for report_lines, key in [
+            (coherence_report, "coherence_score"),
+            (telemetry_report, "telemetry_score"),
+            (environment_report, "environment_score"),
+        ]:
+            if report_lines:
+                score = _extract_score_from_report(report_lines)
+                if score is not None:
+                    history_record[key] = score
+
+        _append_audit_history(history_record)
+
+        # Degradation detection
+        _check_degradation(history_record)
+    except Exception as e:
+        print(f"[rl-anything:audit] history recording error: {e}", file=sys.stderr)
+
+
+def _extract_score_from_report(lines: List[str]) -> Optional[float]:
+    """レポート行からスコア値を抽出する。"""
+    import re
+    for line in lines:
+        # Match patterns like "Score: 0.85" or "Overall: 0.72"
+        m = re.search(r'(?:Score|Overall|Total)[:\s]+(\d+\.?\d*)', line)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    return None
+
+
+def _append_audit_history(record: Dict[str, Any]) -> None:
+    """audit-history.jsonl にレコードを追記し、pruning する。"""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    lines = []
+    if _AUDIT_HISTORY_FILE.exists():
+        lines = _AUDIT_HISTORY_FILE.read_text(encoding="utf-8").strip().splitlines()
+    lines.append(json.dumps(record, ensure_ascii=False))
+    # Pruning
+    if len(lines) > _MAX_AUDIT_HISTORY:
+        lines = lines[-_MAX_AUDIT_HISTORY:]
+    _AUDIT_HISTORY_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _check_degradation(current: Dict[str, Any]) -> None:
+    """前回スコアとの比較で 10% 以上低下時に警告を出力する。"""
+    if not _AUDIT_HISTORY_FILE.exists():
+        return
+    lines = _AUDIT_HISTORY_FILE.read_text(encoding="utf-8").strip().splitlines()
+    if len(lines) < 2:
+        return
+    try:
+        prev = json.loads(lines[-2])
+    except (json.JSONDecodeError, IndexError):
+        return
+
+    for key in ("coherence_score", "telemetry_score", "environment_score"):
+        prev_val = prev.get(key)
+        curr_val = current.get(key)
+        if prev_val is not None and curr_val is not None and prev_val > 0:
+            drop = (prev_val - curr_val) / prev_val
+            if drop >= _DEGRADATION_THRESHOLD:
+                label = key.replace("_", " ").title()
+                print(
+                    f"⚠ {label} が {drop:.0%} 低下しています "
+                    f"({prev_val:.2f} → {curr_val:.2f})",
+                    file=sys.stderr,
+                )
+
+
+def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coherence_score: bool = False, telemetry_score: bool = False, constitutional_score: bool = False, pipeline_health: bool = False) -> str:
     """Audit を実行してレポートを返す。"""
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
@@ -1315,6 +1471,70 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
         except Exception as e:
             print(f"Coherence Score スキップ: {e}", file=sys.stderr)
 
+    # Telemetry Score
+    telemetry_report_lines = None
+    if telemetry_score:
+        try:
+            _fitness_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "rl"
+            if str(_fitness_dir) not in sys.path:
+                sys.path.insert(0, str(_fitness_dir))
+            from fitness.telemetry import compute_telemetry_score, format_telemetry_report
+            tel_result = compute_telemetry_score(proj)
+            telemetry_report_lines = format_telemetry_report(tel_result)
+        except Exception as e:
+            print(f"Telemetry Score スキップ: {e}", file=sys.stderr)
+
+    # Constitutional Score
+    constitutional_report_lines = None
+    if constitutional_score:
+        try:
+            _fitness_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "rl"
+            if str(_fitness_dir) not in sys.path:
+                sys.path.insert(0, str(_fitness_dir))
+            from fitness.constitutional import compute_constitutional_score
+            from fitness.chaos import compute_chaos_score, format_chaos_report
+            con_result = compute_constitutional_score(proj)
+            constitutional_report_lines = _format_constitutional_report(con_result)
+            # Chaos Testing
+            try:
+                chaos_result = compute_chaos_score(proj)
+                chaos_lines = format_chaos_report(chaos_result)
+                if constitutional_report_lines is not None:
+                    constitutional_report_lines.extend(chaos_lines)
+                else:
+                    constitutional_report_lines = chaos_lines
+            except Exception as e:
+                print(f"Chaos Testing スキップ: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"Constitutional Score スキップ: {e}", file=sys.stderr)
+
+    # Environment Fitness（複数スコア指定時）
+    environment_report_lines = None
+    score_count = sum([coherence_score, telemetry_score, constitutional_score])
+    if score_count >= 2:
+        try:
+            from fitness.environment import compute_environment_fitness, format_environment_report
+            env_result = compute_environment_fitness(proj)
+            environment_report_lines = format_environment_report(env_result)
+        except Exception as e:
+            print(f"Environment Fitness スキップ: {e}", file=sys.stderr)
+
+    # Pipeline Health（LLM 不使用）
+    pipeline_health_report_lines = None
+    if pipeline_health:
+        try:
+            from pipeline_reflector import build_pipeline_health_section
+            pipeline_health_report_lines = build_pipeline_health_section()
+        except Exception as e:
+            print(f"Pipeline Health スキップ: {e}", file=sys.stderr)
+
+    # Record audit completion: update last_audit_timestamp + audit-history.jsonl
+    _record_audit_completion(
+        coherence_report=coherence_report_lines,
+        telemetry_report=telemetry_report_lines,
+        environment_report=environment_report_lines,
+    )
+
     return generate_report(
         artifacts, violations, usage, duplicates, advisories,
         quality_baselines, project_dir=proj,
@@ -1323,6 +1543,10 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
         untagged_reference_candidates=untagged if untagged else None,
         hardcoded_values=hardcoded_values if hardcoded_values else None,
         coherence_report=coherence_report_lines,
+        telemetry_report=telemetry_report_lines,
+        constitutional_report=constitutional_report_lines,
+        environment_report=environment_report_lines,
+        pipeline_health_report=pipeline_health_report_lines,
     )
 
 
@@ -1334,10 +1558,13 @@ if __name__ == "__main__":
     _parser.add_argument("--skip-rescore", action="store_true", help="品質計測をスキップ")
     _parser.add_argument("--memory-context", action="store_true", help="MEMORY 検証コンテキストを JSON 出力")
     _parser.add_argument("--coherence-score", action="store_true", help="Coherence Score セクションを表示")
+    _parser.add_argument("--telemetry-score", action="store_true", help="Telemetry Score セクションを表示")
+    _parser.add_argument("--constitutional-score", action="store_true", help="Constitutional Score セクションを表示")
+    _parser.add_argument("--pipeline-health", action="store_true", help="Pipeline Health セクションを表示")
     _args = _parser.parse_args()
     if _args.memory_context:
         proj = Path(_args.project) if _args.project else Path.cwd()
         ctx = build_memory_verification_context(proj)
         print(json.dumps(ctx, ensure_ascii=False, indent=2))
     else:
-        print(run_audit(_args.project, skip_rescore=_args.skip_rescore, coherence_score=_args.coherence_score))
+        print(run_audit(_args.project, skip_rescore=_args.skip_rescore, coherence_score=_args.coherence_score, telemetry_score=_args.telemetry_score, constitutional_score=_args.constitutional_score, pipeline_health=_args.pipeline_health))

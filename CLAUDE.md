@@ -16,6 +16,7 @@
 | コンポーネント | 説明 |
 |----------------|------|
 | Observe hooks (7個) | LLM コストゼロで使用・エラー・修正フィードバック・ワークフローを自動記録 |
+| Auto Trigger | セッション終了・corrections 蓄積時に evolve/audit 実行を自動提案（`trigger_engine.py`） |
 | `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチで最適化 |
 | `rl-loop-orchestrator` | ベースライン取得→バリエーション生成→評価→人間確認のループ統合 |
 | `rl-scorer` エージェント | 技術品質 + ドメイン品質 + 構造品質の3軸で採点 |
@@ -38,9 +39,9 @@
 
 ## 適応度関数
 
-組み込み: `default`（LLM汎用評価）、`skill_quality`（ルールベース構造品質）。
+組み込み: `default`（LLM汎用評価）、`skill_quality`（ルールベース構造品質）、`coherence`（構造的整合性4軸）、`telemetry`（テレメトリ3軸）、`constitutional`（原則ベースLLM Judge評価）、`chaos`（仮想除去ロバストネス）、`environment`（coherence+telemetry+constitutional統合）。
 プロジェクト固有: `scripts/rl/fitness/{name}.py` に配置 → `--fitness {name}` で使用。
-インターフェース: stdin でスキル内容を受け取り、0.0〜1.0 を stdout に出力。
+環境スコア: `audit --coherence-score --telemetry-score --constitutional-score` で構造品質+行動実績+原則遵守の統合スコアを表示。
 
 詳細は [README.md](README.md#適応度関数) を参照。
 
