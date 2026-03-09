@@ -161,7 +161,8 @@ def _evaluate_trigger() -> None:
     if _trigger_engine is None:
         return
     try:
-        result = evaluate_session_end()
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or None
+        result = evaluate_session_end(project_dir=project_dir)
         if not result.triggered:
             return
         # Skill change detection — append to message

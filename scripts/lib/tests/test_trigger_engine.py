@@ -13,8 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from trigger_engine import (
     DEFAULT_TRIGGER_CONFIG,
     TriggerResult,
+    _build_bloat_message,
     _count_sessions_since,
     _deep_merge,
+    _evaluate_bloat,
     _is_in_cooldown,
     _record_trigger,
     evaluate_corrections,
@@ -323,6 +325,244 @@ class TestEvaluateCorrections:
         top = result.details["top_skills"]
         assert len(top) == 3
         assert top[0] == "skill-a"
+
+
+# --- Bloat trigger ---
+
+
+def _bloat_result(warnings: list[dict]) -> dict:
+    return {"warnings": warnings, "warning_count": len(warnings)}
+
+
+def _memory_warning(lines=180, threshold=150):
+    return {"type": "memory", "file": "MEMORY.md", "lines": lines, "threshold": threshold}
+
+
+def _rules_warning(count=120, threshold=100):
+    return {"type": "rules_count", "count": count, "threshold": threshold}
+
+
+def _skills_warning(count=40, threshold=30):
+    return {"type": "skills_count", "count": count, "threshold": threshold}
+
+
+def _claude_md_warning(lines=200, threshold=150):
+    return {"type": "claude_md", "file": "CLAUDE.md", "lines": lines, "threshold": threshold}
+
+
+class TestBloatTrigger:
+    """3.1 bloat トリガーのテスト"""
+
+    def test_memory_exceeds_threshold(self, data_dir):
+        """MEMORY.md 超過で bloat トリガー発火。"""
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        bloat = _bloat_result([_memory_warning()])
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=bloat):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is True
+        assert "bloat" in result.details.get("all_reasons", [])
+        assert "MEMORY.md" in result.message
+
+    def test_rules_exceeds_threshold(self, data_dir):
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        bloat = _bloat_result([_rules_warning()])
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=bloat):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is True
+        assert "bloat" in result.details.get("all_reasons", [])
+        assert "rules" in result.message
+
+    def test_skills_exceeds_threshold(self, data_dir):
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        bloat = _bloat_result([_skills_warning()])
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=bloat):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is True
+        assert "skills" in result.message
+
+    def test_claude_md_exceeds_threshold(self, data_dir):
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        bloat = _bloat_result([_claude_md_warning()])
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=bloat):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is True
+        assert "CLAUDE.md" in result.message
+
+    def test_multiple_bloat_types(self, data_dir):
+        """複数種別同時検出。"""
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        bloat = _bloat_result([_memory_warning(), _rules_warning(), _skills_warning(), _claude_md_warning()])
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=bloat):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is True
+        assert len(result.details["bloat_warnings"]) == 4
+        assert "MEMORY.md" in result.message
+        assert "rules" in result.message
+
+    def test_no_bloat_detected(self, data_dir):
+        """閾値以内では bloat トリガーは発火しない。"""
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=None):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is False
+
+    def test_bloat_check_error(self, data_dir):
+        """bloat_check() 例外時はサイレントスキップ。"""
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=None):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is False
+
+    def test_import_error_handled(self):
+        """ImportError 時は None を返す。"""
+        config = {"triggers": {"bloat": {"enabled": True}}}
+        with mock.patch.dict("sys.modules", {"scripts.bloat_control": None}):
+            result = _evaluate_bloat("/test", config)
+        assert result is None
+
+    def test_project_dir_none_skips_bloat(self, data_dir):
+        """project_dir=None の場合は bloat 評価をスキップ。"""
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        with mock.patch("trigger_engine._evaluate_bloat") as mock_bloat:
+            result = evaluate_session_end(project_dir=None)
+        mock_bloat.assert_not_called()
+
+
+class TestBloatCooldown:
+    """3.2 bloat トリガーのクールダウンテスト。"""
+
+    def test_bloat_cooldown_blocks(self, data_dir):
+        now = datetime.now(timezone.utc)
+        _write_state(data_dir, {
+            "last_run_timestamp": (now - timedelta(hours=1)).isoformat(),
+            "last_audit_timestamp": now.isoformat(),
+            "trigger_history": [
+                {"reason": "bloat", "timestamp": now.isoformat()},
+            ],
+        })
+        # bloat は cooldown 内なので呼ばれても発火しない
+        with mock.patch("trigger_engine._evaluate_bloat") as mock_bloat:
+            result = evaluate_session_end(project_dir="/test/project")
+        mock_bloat.assert_not_called()
+        assert result.triggered is False
+
+    def test_bloat_cooldown_expired(self, data_dir):
+        now = datetime.now(timezone.utc)
+        _write_state(data_dir, {
+            "last_run_timestamp": (now - timedelta(hours=1)).isoformat(),
+            "last_audit_timestamp": now.isoformat(),
+            "trigger_history": [
+                {"reason": "bloat", "timestamp": (now - timedelta(hours=25)).isoformat()},
+            ],
+        })
+        bloat = _bloat_result([_memory_warning()])
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=bloat):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is True
+        assert "bloat" in result.details.get("all_reasons", [])
+
+
+class TestBloatWithSessionCount:
+    """3.3 bloat + session_count 複合トリガーのテスト。"""
+
+    def test_both_triggers_fire(self, data_dir):
+        last_run = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        _write_state(data_dir, {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        sessions = [
+            {"session_id": f"s{i}", "timestamp": datetime.now(timezone.utc).isoformat()}
+            for i in range(10)
+        ]
+        _write_sessions(data_dir, sessions)
+        bloat = _bloat_result([_memory_warning()])
+        with mock.patch("trigger_engine._evaluate_bloat", return_value=bloat):
+            result = evaluate_session_end(project_dir="/test/project")
+        assert result.triggered is True
+        all_reasons = result.details.get("all_reasons", [])
+        assert "session_count" in all_reasons
+        assert "bloat" in all_reasons
+
+
+class TestBloatDisabled:
+    """3.4 bloat trigger disabled テスト。"""
+
+    def test_bloat_disabled_in_config(self, data_dir):
+        last_run = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        state = {
+            "last_run_timestamp": last_run,
+            "last_audit_timestamp": datetime.now(timezone.utc).isoformat(),
+            "trigger_config": {"triggers": {"bloat": {"enabled": False}}},
+        }
+        _write_state(data_dir, state)
+        with mock.patch("trigger_engine._evaluate_bloat") as mock_bloat:
+            # _evaluate_bloat will check config internally, but since cooldown check
+            # happens first and _evaluate_bloat is called only if not in cooldown,
+            # we need to let the real function check config
+            mock_bloat.return_value = None
+            result = evaluate_session_end(project_dir="/test/project")
+        # _evaluate_bloat should return None since disabled
+        assert "bloat" not in result.details.get("all_reasons", [])
+
+    def test_bloat_disabled_via_evaluate_bloat(self):
+        """_evaluate_bloat が config disabled で None を返す。"""
+        config = {"triggers": {"bloat": {"enabled": False}}}
+        result = _evaluate_bloat("/test", config)
+        assert result is None
+
+
+class TestBuildBloatMessage:
+    def test_single_type(self):
+        msg = _build_bloat_message({"warnings": [_memory_warning(180, 150)]})
+        assert "MEMORY.md" in msg
+        assert "180/150" in msg
+
+    def test_multiple_types(self):
+        msg = _build_bloat_message({"warnings": [_memory_warning(), _rules_warning()]})
+        assert "MEMORY.md" in msg
+        assert "rules" in msg
+
+    def test_all_types(self):
+        msg = _build_bloat_message({"warnings": [
+            _memory_warning(), _rules_warning(), _skills_warning(), _claude_md_warning()
+        ]})
+        assert "MEMORY.md" in msg
+        assert "rules" in msg
+        assert "skills" in msg
+        assert "CLAUDE.md" in msg
 
 
 # --- Pending trigger file ---

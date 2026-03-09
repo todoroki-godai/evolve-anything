@@ -25,6 +25,7 @@ DEFAULT_TRIGGER_CONFIG: dict[str, Any] = {
         "session_end": {"enabled": True, "min_sessions": 10, "max_days": 7},
         "corrections": {"enabled": True, "threshold": 10},
         "audit_overdue": {"enabled": True, "interval_days": 30},
+        "bloat": {"enabled": True},
     },
     "cooldown_hours": 24,
 }
@@ -147,7 +148,42 @@ def _count_sessions_since(last_run: str) -> int:
 # --- Evaluate: session end ---
 
 
-def evaluate_session_end(state: dict[str, Any] | None = None) -> TriggerResult:
+def _evaluate_bloat(project_dir: str, config: dict[str, Any]) -> dict[str, Any] | None:
+    """bloat_check() を呼び出し、警告を返す。ImportError/例外時は None。"""
+    triggers_cfg = config.get("triggers", {})
+    bloat_cfg = triggers_cfg.get("bloat", {})
+    if not bloat_cfg.get("enabled", True):
+        return None
+    try:
+        from scripts.bloat_control import bloat_check
+    except ImportError:
+        return None
+    try:
+        result = bloat_check(project_dir)
+        if result and result.get("warning_count", 0) > 0:
+            return result
+        return None
+    except Exception:
+        return None
+
+
+def _build_bloat_message(bloat_result: dict[str, Any]) -> str:
+    """bloat 警告から日本語メッセージを生成する。"""
+    parts: list[str] = []
+    for w in bloat_result.get("warnings", []):
+        t = w.get("type", "")
+        if t == "memory":
+            parts.append(f"MEMORY.md が {w['lines']}/{w['threshold']} 行で超過")
+        elif t == "claude_md":
+            parts.append(f"CLAUDE.md が {w['lines']}/{w['threshold']} 行で超過")
+        elif t == "rules_count":
+            parts.append(f"rules が {w['count']}/{w['threshold']} 件で超過")
+        elif t == "skills_count":
+            parts.append(f"skills が {w['count']}/{w['threshold']} 件で超過")
+    return "、".join(parts)
+
+
+def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: str | None = None) -> TriggerResult:
     """セッション終了時のトリガー条件を評価する。
 
     条件 (OR):
@@ -227,6 +263,14 @@ def evaluate_session_end(state: dict[str, Any] | None = None) -> TriggerResult:
             reasons.append("days_elapsed")
             actions.append("/rl-anything:evolve")
 
+    # --- bloat ---
+    if project_dir and not _is_in_cooldown(state, "bloat", cooldown_hours):
+        bloat_result = _evaluate_bloat(project_dir, config)
+        if bloat_result:
+            reasons.append("bloat")
+            actions.append("/rl-anything:evolve")
+            details["bloat_warnings"] = bloat_result["warnings"]
+
     if not reasons:
         return TriggerResult(triggered=False)
 
@@ -240,6 +284,8 @@ def evaluate_session_end(state: dict[str, Any] | None = None) -> TriggerResult:
         msg_parts.append(f"前回 evolve から {details.get('days_since_evolve', '?')} 日経過")
     if "audit_overdue" in reasons:
         msg_parts.append("前回 audit から規定日数を超過")
+    if "bloat" in reasons and "bloat_warnings" in details:
+        msg_parts.append(f"肥大化検出: {_build_bloat_message({'warnings': details['bloat_warnings']})}")
     message = "。".join(msg_parts) + f"。推奨: {', '.join(unique_actions)}"
 
     result = TriggerResult(
