@@ -226,29 +226,31 @@ Audit レポートを表示。全体の進捗サマリを出力。
 - **Plugin usage**: プラグイン別の総使用回数サマリ（例: `openspec(340) / rl-anything(30)`）
 - **OpenSpec Workflow Analytics**: openspec プラグインが検出された場合、ファネル（propose→archive の完走率）、フェーズ別効率、品質トレンド、最適化候補を表示
 
-### Step 10: 推奨アクション（MUST）
+### Step 10: 推奨アクション（MUST — スキップ厳禁）
 
-レポート末尾に **推奨アクション** セクションを必ず表示する。以下の条件を上から順にチェックし、該当するものを全て出力する。
+**このセクションは必ず出力すること。条件判定の結果によらず、セクション見出し「推奨アクション」を必ずレポート末尾に表示する。**
+該当項目がゼロの場合は「推奨アクション: なし」と1行表示する。1件でもあれば全件列挙する。
 
-#### 10.1: Reflect 推奨（corrections 蓄積時）
+#### 10.1: Reflect 推奨
 
-discover 結果の `reflect_data_count` を確認:
-- `reflect_data_count >= 1` → 「未処理の修正フィードバックが {N} 件あります。`/rl-anything:reflect` で反映すると optimize の精度が向上します」と表示（MUST）
-- dry-run 時も表示する（MUST）。通常実行時は Step 6 で対話的に提案済みだが、dry-run では Step 6 が実行されないため、ここで補完する
+discover 結果の `reflect_data_count` の値を確認し、**必ず**以下のいずれかを表示する:
+- `reflect_data_count >= 1` → 「⚠ 未処理の修正フィードバックが {N} 件あります。`/rl-anything:reflect` で反映すると optimize の精度が向上します」
+- `reflect_data_count == 0` → 「Reflect: 未処理なし」
 
-#### 10.2: ツール使用改善（Bash 代替・繰り返しパターン）
+#### 10.2: ツール使用改善
 
-discover 結果の `tool_usage_patterns` を確認し、以下を **具体的な数値付きで** 表示する:
+discover 結果の `tool_usage_patterns` から以下3項目を**必ず**チェックし、閾値を超えたものを表示する。全て閾値以下なら「ツール使用: 問題なし」と表示:
 
-- **Built-in 代替**: `builtin_replaceable` の合計件数が 10 以上の場合、上位パターンと「プロジェクトルールまたは hook で Bash の grep/cat/find を検出・警告する仕組みの導入」を提案
-- **sleep パターン**: `repeating_patterns` に `sleep` が含まれ 20 回以上の場合、「`run_in_background` + 完了通知待ちへの移行」を提案
-- **Bash 割合**: `bash_calls / total_tool_calls` が 40% 以上の場合、割合を表示し改善を推奨
+- **Built-in 代替**: `builtin_replaceable` の合計件数 ≥ 10 → 上位パターンと件数を表示し「プロジェクトルールまたは hook で Bash の grep/cat/find を検出・警告する仕組みの導入」を提案
+- **sleep パターン**: `repeating_patterns` に `sleep` を含むエントリの合計 ≥ 20 → 「`run_in_background` + 完了通知待ちへの移行」を提案
+- **Bash 割合**: `bash_calls / total_tool_calls` ≥ 0.40 → 「Bash割合 {X}% — Built-in ツール活用で改善余地あり」と表示
 
 #### 10.3: Remediation サマリ
 
-remediation 結果から:
-- `auto_fixable` 件数 → 「通常実行で自動修正可能: N件」
-- `manual_required` 件数 → 「手動対応推奨: N件」（概要リスト付き）
+remediation 結果から**必ず**以下を表示する:
+- `auto_fixable` ≥ 1 → 「通常実行で自動修正可能: {N}件」
+- `manual_required` ≥ 1 → 「手動対応推奨: {N}件」（issue type の概要リスト付き）
+- 両方 0 → 「Remediation: 対応不要」
 
 ### べき等性
 
