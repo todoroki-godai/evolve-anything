@@ -134,6 +134,12 @@ def compute_confidence_score(issue: Dict[str, Any]) -> float:
     if issue_type == "claudemd_missing_section":
         return 0.95  # セクション有無は確実に判定可能
 
+    if issue_type == "tool_usage_rule_candidate":
+        return 0.85  # パターンマッチは確実だが global 影響
+
+    if issue_type == "tool_usage_hook_candidate":
+        return 0.75  # hook テンプレートの汎用性にバリエーション
+
     return 0.5
 
 
@@ -151,7 +157,10 @@ def classify_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
     # 動的分類
     if confidence >= AUTO_FIX_CONFIDENCE and scope in ("file", "project"):
         category = "auto_fixable"
-    elif confidence < PROPOSABLE_CONFIDENCE or scope == "global":
+    elif scope == "global" and confidence >= PROPOSABLE_CONFIDENCE:
+        # global scope は auto_fixable にせず proposable に留める（ユーザー承認必須）
+        category = "proposable"
+    elif confidence < PROPOSABLE_CONFIDENCE:
         category = "manual_required"
     else:
         category = "proposable"
@@ -200,6 +209,8 @@ _RATIONALE_TEMPLATES = {
     "hooks_unconfigured": "hooks 設定が見つかりません。observe hooks の設定を検討してください。",
     "claudemd_phantom_ref": "CLAUDE.md 内で言及された{ref_type}「{name}」が存在しません。",
     "claudemd_missing_section": "CLAUDE.md に {section} セクションがありませんが、{skill_count} 個のスキルが存在します。セクションの追加を検討してください。",
+    "tool_usage_rule_candidate": "Bash で {commands} が計 {count} 回使用されています。{alternatives} ツールで代替可能です。global rule の追加を提案します。",
+    "tool_usage_hook_candidate": "Bash での Built-in 代替可能コマンド使用（{count} 回検出）を自動検出する PreToolUse hook の追加を提案します。",
 }
 
 
@@ -285,6 +296,18 @@ def generate_rationale(issue: Dict[str, Any], category: str) -> str:
         return _RATIONALE_TEMPLATES["claudemd_missing_section"].format(
             section=detail.get("section", "skills"),
             skill_count=detail.get("skill_count", 0),
+        )
+
+    if issue_type == "tool_usage_rule_candidate":
+        return _RATIONALE_TEMPLATES["tool_usage_rule_candidate"].format(
+            commands=", ".join(detail.get("target_commands", ["unknown"])),
+            count=detail.get("total_count", 0),
+            alternatives=", ".join(detail.get("alternative_tools", ["unknown"])),
+        )
+
+    if issue_type == "tool_usage_hook_candidate":
+        return _RATIONALE_TEMPLATES["tool_usage_hook_candidate"].format(
+            count=detail.get("total_count", 0),
         )
 
     return f"問題タイプ「{issue_type}」が検出されました。"
@@ -539,11 +562,102 @@ def fix_claudemd_missing_section(
 
 # ---------- FIX_DISPATCH ----------
 
+def fix_global_rule(
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """global rule ファイルを書き込む。
+
+    issue["detail"] に {"filename": str, "content": str} が含まれる前提。
+    """
+    results = []
+    for issue in issues:
+        if issue["type"] != "tool_usage_rule_candidate":
+            continue
+        detail = issue.get("detail", {})
+        filename = detail.get("filename", "")
+        content = detail.get("content", "")
+        if not filename or not content:
+            results.append({
+                "issue": issue, "original_content": "", "fixed": False,
+                "error": "filename or content missing",
+            })
+            continue
+
+        rules_dir = Path.home() / ".claude" / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        path = rules_dir / filename
+
+        try:
+            original = path.read_text(encoding="utf-8") if path.exists() else ""
+        except OSError:
+            original = ""
+
+        try:
+            path.write_text(content, encoding="utf-8")
+            results.append({
+                "issue": issue, "original_content": original, "fixed": True,
+                "error": None,
+            })
+        except OSError as e:
+            results.append({
+                "issue": issue, "original_content": original, "fixed": False,
+                "error": str(e),
+            })
+    return results
+
+
+def fix_hook_scaffold(
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """hook スクリプトを生成する。settings.json は書き換えない。
+
+    issue["detail"] に {"script_path": str, "script_content": str, "settings_diff": str} が含まれる前提。
+    """
+    results = []
+    for issue in issues:
+        if issue["type"] != "tool_usage_hook_candidate":
+            continue
+        detail = issue.get("detail", {})
+        script_path = detail.get("script_path", "")
+        script_content = detail.get("script_content", "")
+        if not script_path or not script_content:
+            results.append({
+                "issue": issue, "original_content": "", "fixed": False,
+                "error": "script_path or script_content missing",
+            })
+            continue
+
+        path = Path(script_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            original = path.read_text(encoding="utf-8") if path.exists() else ""
+        except OSError:
+            original = ""
+
+        try:
+            path.write_text(script_content, encoding="utf-8")
+            path.chmod(0o755)
+            results.append({
+                "issue": issue, "original_content": original, "fixed": True,
+                "error": None,
+                "settings_diff": detail.get("settings_diff", ""),
+            })
+        except OSError as e:
+            results.append({
+                "issue": issue, "original_content": original, "fixed": False,
+                "error": str(e),
+            })
+    return results
+
+
 FIX_DISPATCH: Dict[str, Any] = {
     "stale_ref": fix_stale_references,
     "stale_rule": fix_stale_rules,
     "claudemd_phantom_ref": fix_claudemd_phantom_refs,
     "claudemd_missing_section": fix_claudemd_missing_section,
+    "tool_usage_rule_candidate": fix_global_rule,
+    "tool_usage_hook_candidate": fix_hook_scaffold,
 }
 
 
@@ -588,6 +702,13 @@ def generate_proposals(
             a = sections[0] if len(sections) > 0 else "unknown"
             b = sections[1] if len(sections) > 1 else "unknown"
             proposal = f"セクション「{a}」と「{b}」の統合"
+        elif issue["type"] == "tool_usage_rule_candidate":
+            detail = issue.get("detail", {})
+            cmds = ", ".join(detail.get("target_commands", []))
+            proposal = f"~/.claude/rules/{detail.get('filename', 'avoid-bash-builtin.md')} に Bash {cmds} 禁止ルールを作成"
+        elif issue["type"] == "tool_usage_hook_candidate":
+            detail = issue.get("detail", {})
+            proposal = f"{detail.get('script_path', '~/.claude/hooks/check-bash-builtin.py')} に PreToolUse hook を生成"
         else:
             proposal = f"{issue['type']} に対する修正案を検討してください。"
 
@@ -672,6 +793,27 @@ def _verify_stale_memory(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, A
 
 # ---------- VERIFY_DISPATCH ----------
 
+def _verify_global_rule(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """global rule ファイルの存在確認 + 行数検証。"""
+    path = Path(fixed_file)
+    if not path.exists():
+        return {"resolved": False, "remaining": "rule ファイルが存在しません"}
+    content = path.read_text(encoding="utf-8")
+    lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+    if lines > 3:
+        return {"resolved": False, "remaining": f"rule が3行制限を超過しています ({lines}行)"}
+    return {"resolved": True, "remaining": None}
+
+
+def _verify_hook_scaffold(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """hook スクリプトの存在確認。"""
+    script_path = detail.get("script_path", fixed_file)
+    path = Path(script_path)
+    if not path.exists():
+        return {"resolved": False, "remaining": "hook スクリプトが存在しません"}
+    return {"resolved": True, "remaining": None}
+
+
 VERIFY_DISPATCH: Dict[str, Any] = {
     "stale_ref": _verify_stale_ref,
     "line_limit_violation": _verify_line_limit_violation,
@@ -679,6 +821,8 @@ VERIFY_DISPATCH: Dict[str, Any] = {
     "claudemd_phantom_ref": _verify_claudemd_phantom_ref,
     "claudemd_missing_section": _verify_claudemd_missing_section,
     "stale_memory": _verify_stale_memory,
+    "tool_usage_rule_candidate": _verify_global_rule,
+    "tool_usage_hook_candidate": _verify_hook_scaffold,
 }
 
 

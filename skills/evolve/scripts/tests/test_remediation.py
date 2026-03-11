@@ -21,6 +21,8 @@ from remediation import (
     fix_stale_rules,
     fix_claudemd_phantom_refs,
     fix_claudemd_missing_section,
+    fix_global_rule,
+    fix_hook_scaffold,
     FIX_DISPATCH,
     VERIFY_DISPATCH,
     generate_proposals,
@@ -71,8 +73,8 @@ class TestClassification:
         assert result["category"] == "auto_fixable"
         assert result["impact_scope"] == "project"
 
-    def test_global_scope_high_confidence_is_manual_required(self):
-        """global scope → confidence 高くても manual_required。"""
+    def test_global_scope_high_confidence_is_proposable(self):
+        """global scope → confidence 高くても proposable（auto_fixable にはならない）。"""
         home = str(Path.home())
         issue = {
             "type": "stale_rule",
@@ -81,7 +83,7 @@ class TestClassification:
             "source": "diagnose",
         }
         result = classify_issue(issue)
-        assert result["category"] == "manual_required"
+        assert result["category"] == "proposable"
         assert result["impact_scope"] == "global"
 
     def test_minor_line_excess_auto_fixable(self):
@@ -119,8 +121,8 @@ class TestClassification:
         result = classify_issue(issue)
         assert result["category"] == "proposable"
 
-    def test_global_scope_is_manual_required(self):
-        """グローバルスコープの問題 → manual_required。"""
+    def test_global_scope_is_proposable(self):
+        """グローバルスコープの問題 → proposable（ユーザー承認必須）。"""
         home = str(Path.home())
         issue = {
             "type": "stale_ref",
@@ -129,7 +131,7 @@ class TestClassification:
             "source": "build_memory_health_section",
         }
         result = classify_issue(issue)
-        assert result["category"] == "manual_required"
+        assert result["category"] == "proposable"
         assert result["impact_scope"] == "global"
 
     def test_classify_issues_groups_correctly(self):
@@ -687,3 +689,235 @@ class TestCheckRegressionRulesLineLimit:
         f.write_text(content)
         result = check_regression(str(f), content)
         assert result["passed"] is True
+
+
+# ---------- tool_usage 関連: confidence_score テスト ----------
+
+class TestToolUsageConfidenceScore:
+    def test_tool_usage_rule_candidate_score(self):
+        """tool_usage_rule_candidate → 0.85。"""
+        issue = {"type": "tool_usage_rule_candidate", "detail": {}}
+        score = compute_confidence_score(issue)
+        assert score == 0.85
+
+    def test_tool_usage_hook_candidate_score(self):
+        """tool_usage_hook_candidate → 0.75。"""
+        issue = {"type": "tool_usage_hook_candidate", "detail": {}}
+        score = compute_confidence_score(issue)
+        assert score == 0.75
+
+
+# ---------- tool_usage 関連: classify_issue テスト ----------
+
+class TestToolUsageClassification:
+    def test_tool_usage_rule_candidate_global_scope_is_proposable(self):
+        """global scope の tool_usage_rule_candidate → proposable。"""
+        home = str(Path.home())
+        issue = {
+            "type": "tool_usage_rule_candidate",
+            "file": f"{home}/.claude/rules/avoid-bash-builtin.md",
+            "detail": {
+                "filename": "avoid-bash-builtin.md",
+                "content": "# Rule\nContent\n",
+                "target_commands": ["grep", "cat"],
+                "total_count": 15,
+            },
+            "source": "tool_usage_analyzer",
+        }
+        result = classify_issue(issue)
+        assert result["category"] == "proposable"
+        assert result["impact_scope"] == "global"
+        assert result["confidence_score"] == 0.85
+
+    def test_tool_usage_hook_candidate_global_scope_is_proposable(self):
+        """global scope の tool_usage_hook_candidate → proposable。"""
+        home = str(Path.home())
+        issue = {
+            "type": "tool_usage_hook_candidate",
+            "file": f"{home}/.claude/hooks/check-bash-builtin.py",
+            "detail": {
+                "script_path": f"{home}/.claude/hooks/check-bash-builtin.py",
+                "script_content": "#!/usr/bin/env python3\n",
+                "total_count": 20,
+            },
+            "source": "tool_usage_analyzer",
+        }
+        result = classify_issue(issue)
+        assert result["category"] == "proposable"
+        assert result["impact_scope"] == "global"
+        assert result["confidence_score"] == 0.75
+
+
+# ---------- tool_usage 関連: rationale テスト ----------
+
+class TestToolUsageRationale:
+    def test_tool_usage_rule_candidate_rationale(self):
+        issue = {
+            "type": "tool_usage_rule_candidate",
+            "detail": {
+                "target_commands": ["grep", "cat"],
+                "total_count": 15,
+                "alternative_tools": ["Grep", "Read"],
+            },
+        }
+        r = generate_rationale(issue, "proposable")
+        assert "grep" in r
+        assert "cat" in r
+        assert "15" in r
+        assert "Grep" in r or "Read" in r
+
+    def test_tool_usage_hook_candidate_rationale(self):
+        issue = {
+            "type": "tool_usage_hook_candidate",
+            "detail": {"total_count": 20},
+        }
+        r = generate_rationale(issue, "proposable")
+        assert "20" in r
+        assert "hook" in r.lower() or "Hook" in r
+
+
+# ---------- tool_usage 関連: fix_global_rule テスト ----------
+
+class TestFixGlobalRule:
+    def test_writes_rule_file(self, tmp_path, monkeypatch):
+        """rule ファイルが正しく書き込まれる。"""
+        monkeypatch.setattr("remediation.Path.home", lambda: tmp_path)
+        rules_dir = tmp_path / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+
+        issues = [{
+            "type": "tool_usage_rule_candidate",
+            "file": str(rules_dir / "avoid-bash-builtin.md"),
+            "detail": {
+                "filename": "avoid-bash-builtin.md",
+                "content": "# Bash Built-in 代替コマンド禁止\ngrep は Grep を使用する。\nパイプは Bash で OK。\n",
+            },
+        }]
+        results = fix_global_rule(issues)
+        assert len(results) == 1
+        assert results[0]["fixed"] is True
+        written = (rules_dir / "avoid-bash-builtin.md").read_text()
+        assert "Bash Built-in" in written
+        assert "grep" in written
+
+    def test_skips_non_matching_type(self, tmp_path, monkeypatch):
+        """type が tool_usage_rule_candidate でない場合は無視。"""
+        monkeypatch.setattr("remediation.Path.home", lambda: tmp_path)
+        issues = [{
+            "type": "stale_ref",
+            "file": "/tmp/test.md",
+            "detail": {"filename": "test.md", "content": "content"},
+        }]
+        results = fix_global_rule(issues)
+        assert len(results) == 0
+
+    def test_error_on_missing_content(self, tmp_path, monkeypatch):
+        """filename or content 未指定 → error。"""
+        monkeypatch.setattr("remediation.Path.home", lambda: tmp_path)
+        issues = [{
+            "type": "tool_usage_rule_candidate",
+            "file": "/tmp/test.md",
+            "detail": {"filename": "", "content": ""},
+        }]
+        results = fix_global_rule(issues)
+        assert len(results) == 1
+        assert results[0]["fixed"] is False
+        assert "missing" in results[0]["error"]
+
+
+# ---------- tool_usage 関連: fix_hook_scaffold テスト ----------
+
+class TestFixHookScaffold:
+    def test_writes_hook_script(self, tmp_path):
+        """hook スクリプトが正しく書き込まれる。"""
+        script_path = tmp_path / "hooks" / "check-bash-builtin.py"
+        issues = [{
+            "type": "tool_usage_hook_candidate",
+            "file": str(script_path),
+            "detail": {
+                "script_path": str(script_path),
+                "script_content": "#!/usr/bin/env python3\n# hook script\nprint('hello')\n",
+                "settings_diff": '{"hooks": {}}',
+            },
+        }]
+        results = fix_hook_scaffold(issues)
+        assert len(results) == 1
+        assert results[0]["fixed"] is True
+        assert script_path.exists()
+        content = script_path.read_text()
+        assert "#!/usr/bin/env python3" in content
+        assert results[0]["settings_diff"] == '{"hooks": {}}'
+
+    def test_skips_non_matching_type(self):
+        """type が tool_usage_hook_candidate でない場合は無視。"""
+        issues = [{
+            "type": "stale_ref",
+            "file": "/tmp/test.py",
+            "detail": {"script_path": "/tmp/test.py", "script_content": "x"},
+        }]
+        results = fix_hook_scaffold(issues)
+        assert len(results) == 0
+
+    def test_error_on_missing_script_content(self, tmp_path):
+        """script_path or script_content 未指定 → error。"""
+        issues = [{
+            "type": "tool_usage_hook_candidate",
+            "file": "/tmp/test.py",
+            "detail": {"script_path": "", "script_content": ""},
+        }]
+        results = fix_hook_scaffold(issues)
+        assert len(results) == 1
+        assert results[0]["fixed"] is False
+        assert "missing" in results[0]["error"]
+
+
+# ---------- tool_usage 関連: FIX_DISPATCH / VERIFY_DISPATCH テスト ----------
+
+class TestToolUsageDispatch:
+    def test_fix_dispatch_rule_candidate(self):
+        assert FIX_DISPATCH["tool_usage_rule_candidate"] is fix_global_rule
+
+    def test_fix_dispatch_hook_candidate(self):
+        assert FIX_DISPATCH["tool_usage_hook_candidate"] is fix_hook_scaffold
+
+    def test_verify_dispatch_rule_candidate(self):
+        assert VERIFY_DISPATCH["tool_usage_rule_candidate"] is not None
+
+    def test_verify_dispatch_hook_candidate(self):
+        assert VERIFY_DISPATCH["tool_usage_hook_candidate"] is not None
+
+
+# ---------- tool_usage 関連: generate_proposals テスト ----------
+
+class TestToolUsageProposals:
+    def test_rule_candidate_proposal(self):
+        issues = [{
+            "type": "tool_usage_rule_candidate",
+            "file": "~/.claude/rules/avoid-bash-builtin.md",
+            "detail": {
+                "filename": "avoid-bash-builtin.md",
+                "target_commands": ["grep", "cat"],
+                "total_count": 15,
+            },
+            "category": "proposable",
+        }]
+        proposals = generate_proposals(issues)
+        assert len(proposals) == 1
+        assert "grep" in proposals[0]["proposal"]
+        assert "cat" in proposals[0]["proposal"]
+        assert "avoid-bash-builtin.md" in proposals[0]["proposal"]
+
+    def test_hook_candidate_proposal(self):
+        issues = [{
+            "type": "tool_usage_hook_candidate",
+            "file": "~/.claude/hooks/check-bash-builtin.py",
+            "detail": {
+                "script_path": "~/.claude/hooks/check-bash-builtin.py",
+                "total_count": 20,
+            },
+            "category": "proposable",
+        }]
+        proposals = generate_proposals(issues)
+        assert len(proposals) == 1
+        assert "hook" in proposals[0]["proposal"].lower() or "Hook" in proposals[0]["proposal"]
+        assert "check-bash-builtin.py" in proposals[0]["proposal"]

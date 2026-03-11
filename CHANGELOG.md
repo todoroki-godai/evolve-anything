@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.7] - 2026-03-11
+
+### Added
+- **discover**: global scope の rule/hook 自動提案機能 (#26)
+  - `tool_usage_analyzer` に `generate_rule_candidates()` / `generate_hook_template()` / `check_hook_installed()` 追加
+  - `RECOMMENDED_ARTIFACTS` に `avoid-bash-builtin`（rule + PreToolUse hook）追加
+  - `detect_installed_artifacts()` で導入済みアーティファクトのステータス表示
+- **remediation**: global scope を `proposable` に昇格（`manual_required` → ユーザー承認付き提案へ）
+  - `fix_global_rule()` / `fix_hook_scaffold()` を FIX_DISPATCH に追加
+  - `tool_usage_rule_candidate` / `tool_usage_hook_candidate` の confidence_score・rationale・proposals 対応
+
 ## [1.0.6] - 2026-03-11
 
 ### Fixed

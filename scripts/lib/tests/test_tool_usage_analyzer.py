@@ -243,3 +243,168 @@ class TestAnalyzeToolUsage:
         assert result["bash_calls"] == 9
         assert len(result["repeating_patterns"]) >= 1  # git status >= 5
         assert len(result["builtin_replaceable"]) >= 1  # cat
+
+
+# ---------- generate_rule_candidates ----------
+
+class TestGenerateRuleCandidates:
+    def test_empty_input_returns_empty(self, tmp_path):
+        from lib.tool_usage_analyzer import generate_rule_candidates
+
+        result = generate_rule_candidates([], rules_dir=tmp_path / "rules")
+        assert result == []
+
+    def test_generates_rule_from_builtin_replaceable(self, tmp_path):
+        from lib.tool_usage_analyzer import generate_rule_candidates
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        builtin_replaceable = [
+            {"pattern": "grep → Grep", "count": 10},
+            {"pattern": "cat → Read", "count": 5},
+        ]
+        result = generate_rule_candidates(builtin_replaceable, rules_dir=rules_dir)
+        assert len(result) == 1
+        candidate = result[0]
+        assert candidate["filename"] == "avoid-bash-builtin.md"
+        assert "grep" in candidate["target_commands"]
+        assert "cat" in candidate["target_commands"]
+        assert candidate["total_count"] == 15
+        assert "Grep" in candidate["alternative_tools"]
+        assert "Read" in candidate["alternative_tools"]
+
+    def test_deduplication_when_rule_exists(self, tmp_path):
+        from lib.tool_usage_analyzer import generate_rule_candidates
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "avoid-bash-builtin.md").write_text("# Existing rule\n")
+        builtin_replaceable = [
+            {"pattern": "grep → Grep", "count": 10},
+        ]
+        result = generate_rule_candidates(builtin_replaceable, rules_dir=rules_dir)
+        assert result == []
+
+    def test_content_is_3_lines_or_fewer(self, tmp_path):
+        from lib.tool_usage_analyzer import generate_rule_candidates
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        builtin_replaceable = [
+            {"pattern": "grep → Grep", "count": 10},
+            {"pattern": "cat → Read", "count": 5},
+            {"pattern": "find → Glob", "count": 3},
+        ]
+        result = generate_rule_candidates(builtin_replaceable, rules_dir=rules_dir)
+        assert len(result) == 1
+        content = result[0]["content"]
+        lines = [l for l in content.strip().split("\n") if l.strip()]
+        assert len(lines) <= 3
+
+
+# ---------- generate_hook_template ----------
+
+class TestGenerateHookTemplate:
+    def test_empty_input_returns_none(self, tmp_path):
+        from lib.tool_usage_analyzer import generate_hook_template
+
+        result = generate_hook_template([], output_dir=tmp_path)
+        assert result is None
+
+    def test_generates_hook_with_correct_structure(self, tmp_path):
+        from lib.tool_usage_analyzer import generate_hook_template
+
+        builtin_replaceable = [
+            {"pattern": "grep → Grep", "count": 10},
+            {"pattern": "cat → Read", "count": 5},
+        ]
+        result = generate_hook_template(builtin_replaceable, output_dir=tmp_path)
+        assert result is not None
+        assert "script_path" in result
+        assert "script_content" in result
+        assert "settings_diff" in result
+        assert "target_commands" in result
+        assert str(tmp_path / "check-bash-builtin.py") == result["script_path"]
+
+    def test_output_contains_replaceable_map(self, tmp_path):
+        from lib.tool_usage_analyzer import generate_hook_template
+
+        builtin_replaceable = [
+            {"pattern": "grep → Grep", "count": 10},
+        ]
+        result = generate_hook_template(builtin_replaceable, output_dir=tmp_path)
+        assert result is not None
+        content = result["script_content"]
+        assert "REPLACEABLE" in content
+        assert '"grep"' in content
+        assert '"Grep"' in content
+
+    def test_output_contains_legitimate_patterns(self, tmp_path):
+        from lib.tool_usage_analyzer import generate_hook_template
+
+        builtin_replaceable = [
+            {"pattern": "cat → Read", "count": 5},
+        ]
+        result = generate_hook_template(builtin_replaceable, output_dir=tmp_path)
+        assert result is not None
+        content = result["script_content"]
+        assert "LEGITIMATE_PATTERNS" in content
+
+
+# ---------- check_hook_installed ----------
+
+class TestCheckHookInstalled:
+    def test_installed_true_when_both_exist(self, tmp_path):
+        from lib.tool_usage_analyzer import check_hook_installed
+
+        hook_path = tmp_path / "check-bash-builtin.py"
+        hook_path.write_text("#!/usr/bin/env python3\n")
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(json.dumps({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": "python3 check-bash-builtin.py"}],
+                }],
+            },
+        }))
+        result = check_hook_installed(
+            hook_path=hook_path, settings_path=settings_path,
+        )
+        assert result["installed"] is True
+        assert result["hook_exists"] is True
+        assert result["settings_registered"] is True
+
+    def test_installed_false_when_hook_missing(self, tmp_path):
+        from lib.tool_usage_analyzer import check_hook_installed
+
+        hook_path = tmp_path / "check-bash-builtin.py"
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(json.dumps({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": "python3 check-bash-builtin.py"}],
+                }],
+            },
+        }))
+        result = check_hook_installed(
+            hook_path=hook_path, settings_path=settings_path,
+        )
+        assert result["installed"] is False
+        assert result["hook_exists"] is False
+        assert result["settings_registered"] is True
+
+    def test_installed_false_when_settings_not_registered(self, tmp_path):
+        from lib.tool_usage_analyzer import check_hook_installed
+
+        hook_path = tmp_path / "check-bash-builtin.py"
+        hook_path.write_text("#!/usr/bin/env python3\n")
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(json.dumps({"hooks": {}}))
+        result = check_hook_installed(
+            hook_path=hook_path, settings_path=settings_path,
+        )
+        assert result["installed"] is False
+        assert result["hook_exists"] is True
+        assert result["settings_registered"] is False

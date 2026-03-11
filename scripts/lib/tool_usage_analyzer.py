@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+GLOBAL_RULES_DIR = Path.home() / ".claude" / "rules"
+GLOBAL_HOOKS_DIR = Path.home() / ".claude" / "hooks"
+RL_HOOKS_DIR = Path.home() / ".claude" / "rl-anything" / "hooks"
 
 REPEATING_THRESHOLD = 5
 
@@ -23,6 +26,15 @@ BUILTIN_REPLACEABLE_MAP = {
     "wc": "Read",
     "sed": "Edit",
     "awk": "Edit",
+}
+
+# コマンド+オプションの除外パターン（Built-in では代替不可）
+LEGITIMATE_COMMAND_PATTERNS = {
+    ("tail", "-f"),
+    ("tail", "-F"),
+    ("find", "-exec"),
+    ("find", "-delete"),
+    ("sed", "-i"),
 }
 
 
@@ -253,6 +265,242 @@ def _classify_subcategory(head: str, key: str) -> str:
     return "cli"
 
 
+# ---------- rule / hook 候補生成 ----------
+
+
+def generate_rule_candidates(
+    builtin_replaceable: List[Dict[str, Any]],
+    *,
+    rules_dir: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """builtin_replaceable 検出結果から global rule 候補を生成する。
+
+    既存ルールとの重複は除外。3行以内制約。
+
+    Returns:
+        [{"filename": str, "content": str, "target_commands": [str],
+          "alternative_tools": [str], "total_count": int}]
+    """
+    if rules_dir is None:
+        rules_dir = GLOBAL_RULES_DIR
+
+    if not builtin_replaceable:
+        return []
+
+    # 既存ルールのファイル名を取得
+    existing_rules: set = set()
+    if rules_dir.is_dir():
+        existing_rules = {f.name for f in rules_dir.glob("*.md")}
+
+    # パターンを代替ツール別にグルーピング
+    # "grep → Grep" → tool="Grep", command="grep"
+    tool_groups: Dict[str, Dict[str, Any]] = {}  # alternative -> {commands, count}
+    for item in builtin_replaceable:
+        pattern = item.get("pattern", "")
+        count = item.get("count", 0)
+        parts = pattern.split(" → ")
+        if len(parts) != 2:
+            continue
+        cmd, alt = parts[0].strip(), parts[1].strip()
+        if alt not in tool_groups:
+            tool_groups[alt] = {"commands": [], "count": 0}
+        tool_groups[alt]["commands"].append(cmd)
+        tool_groups[alt]["count"] += count
+
+    # 候補の rule ファイル名が既に存在するかチェック
+    filename = "avoid-bash-builtin.md"
+    if filename in existing_rules:
+        return []
+
+    if not tool_groups:
+        return []
+
+    # 全コマンドをまとめた1つの rule を生成
+    all_commands = []
+    all_alternatives = []
+    total_count = 0
+    for alt, group in sorted(tool_groups.items(), key=lambda x: -x[1]["count"]):
+        all_commands.extend(group["commands"])
+        if alt not in all_alternatives:
+            all_alternatives.append(alt)
+        total_count += group["count"]
+
+    # コマンド→代替のマッピング文字列を生成
+    mapping_parts = []
+    for alt, group in sorted(tool_groups.items(), key=lambda x: -x[1]["count"]):
+        cmds = "/".join(sorted(set(group["commands"])))
+        mapping_parts.append(f"{cmds} は {alt}")
+
+    content = (
+        "# Bash Built-in 代替コマンド禁止\n"
+        f"{', '.join(mapping_parts)} を使用する。\n"
+        "パイプやリダイレクトを伴う複合コマンドは Bash で OK。\n"
+    )
+
+    return [{
+        "filename": filename,
+        "content": content,
+        "target_commands": sorted(set(all_commands)),
+        "alternative_tools": all_alternatives,
+        "total_count": total_count,
+    }]
+
+
+_HOOK_TEMPLATE = '''\
+#!/usr/bin/env python3
+"""PreToolUse hook: Bash で Built-in ツール代替可能なコマンドを検出して block する。"""
+import json
+import sys
+
+REPLACEABLE = {replaceable_map}
+
+LEGITIMATE_MARKERS = {{"<<", ">>", "|"}}
+LEGITIMATE_PATTERNS = {legitimate_patterns}
+
+
+def _get_command_head(command):
+    parts = command.strip().split()
+    idx = 0
+    while idx < len(parts) and parts[idx] in ("env", "sudo"):
+        idx += 1
+    return parts[idx] if idx < len(parts) else ""
+
+
+def check_command(command):
+    head = _get_command_head(command)
+    if head not in REPLACEABLE:
+        return None
+    for marker in LEGITIMATE_MARKERS:
+        if marker in command:
+            return None
+    for cmd, opt in LEGITIMATE_PATTERNS:
+        if head == cmd and opt in command:
+            return None
+    alternative = REPLACEABLE[head]
+    return {{
+        "decision": "block",
+        "reason": f"`{{head}}` の代わりに {{alternative}} ツールを使用してください。Built-in ツールの方がユーザー体験が良く、権限管理も適切です。",
+    }}
+
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+    except (json.JSONDecodeError, EOFError):
+        sys.exit(0)
+    if data.get("tool_name") != "Bash":
+        sys.exit(0)
+    command = data.get("tool_input", {{}}).get("command", "")
+    if not command:
+        sys.exit(0)
+    result = check_command(command)
+    if result:
+        json.dump(result, sys.stdout, ensure_ascii=False)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def generate_hook_template(
+    builtin_replaceable: List[Dict[str, Any]],
+    *,
+    output_dir: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    """builtin_replaceable パターンから PreToolUse hook スクリプトを生成する。
+
+    Returns:
+        {"script_path": str, "script_content": str,
+         "settings_diff": str, "target_commands": [str]} or None
+    """
+    if output_dir is None:
+        output_dir = GLOBAL_HOOKS_DIR
+
+    if not builtin_replaceable:
+        return None
+
+    # 検出されたコマンドから REPLACEABLE map を構築
+    replaceable: Dict[str, str] = {}
+    for item in builtin_replaceable:
+        pattern = item.get("pattern", "")
+        parts = pattern.split(" → ")
+        if len(parts) != 2:
+            continue
+        cmd, alt = parts[0].strip(), parts[1].strip()
+        replaceable[cmd] = alt
+
+    if not replaceable:
+        return None
+
+    # スクリプト生成
+    replaceable_repr = json.dumps(replaceable, ensure_ascii=False, indent=4)
+    legitimate_repr = repr(LEGITIMATE_COMMAND_PATTERNS)
+    script_content = _HOOK_TEMPLATE.format(
+        replaceable_map=replaceable_repr,
+        legitimate_patterns=legitimate_repr,
+    )
+
+    script_path = output_dir / "check-bash-builtin.py"
+
+    # settings.json の差分案
+    settings_diff = json.dumps({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    "command": f"python3 {script_path}",
+                }],
+            }],
+        },
+    }, ensure_ascii=False, indent=2)
+
+    return {
+        "script_path": str(script_path),
+        "script_content": script_content,
+        "settings_diff": settings_diff,
+        "target_commands": sorted(replaceable.keys()),
+    }
+
+
+def check_hook_installed(
+    *,
+    hook_path: Optional[Path] = None,
+    settings_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """check-bash-builtin hook の導入状態を確認する。
+
+    Returns:
+        {"installed": bool, "hook_exists": bool, "settings_registered": bool}
+    """
+    if hook_path is None:
+        hook_path = GLOBAL_HOOKS_DIR / "check-bash-builtin.py"
+    if settings_path is None:
+        settings_path = Path.home() / ".claude" / "settings.json"
+
+    hook_exists = hook_path.exists()
+
+    settings_registered = False
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            for hook_group in settings.get("hooks", {}).get("PreToolUse", []):
+                for hook in hook_group.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    if "check-bash-builtin" in cmd:
+                        settings_registered = True
+                        break
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return {
+        "installed": hook_exists and settings_registered,
+        "hook_exists": hook_exists,
+        "settings_registered": settings_registered,
+    }
+
+
 def analyze_tool_usage(
     project_root: Optional[Path] = None,
     threshold: int = REPEATING_THRESHOLD,
@@ -295,10 +543,25 @@ def analyze_tool_usage(
     for item in classified["cli_legitimate"]:
         cli_counter[item["head"]] += 1
 
-    return {
+    # rule / hook 候補の生成
+    rule_candidates = generate_rule_candidates(builtin_replaceable)
+    hook_candidate = generate_hook_template(builtin_replaceable)
+
+    # 導入状態の確認
+    hook_status = check_hook_installed()
+
+    result: Dict[str, Any] = {
         "builtin_replaceable": builtin_replaceable,
         "repeating_patterns": repeating,
         "cli_summary": dict(cli_counter.most_common(10)),
         "total_tool_calls": sum(tool_counts.values()),
         "bash_calls": tool_counts.get("Bash", 0),
+        "hook_status": hook_status,
     }
+
+    if rule_candidates:
+        result["rule_candidates"] = rule_candidates
+    if hook_candidate:
+        result["hook_candidate"] = hook_candidate
+
+    return result

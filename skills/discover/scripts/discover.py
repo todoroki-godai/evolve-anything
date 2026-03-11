@@ -582,11 +582,26 @@ RECOMMENDED_ARTIFACTS = [
         "hook_path": Path.home() / ".claude" / "hooks" / "detect-deferred-task.py",
         "hook_description": "Stop hook: 先送り表現検出 → 会話続行強制",
     },
+    {
+        "id": "avoid-bash-builtin",
+        "type": "rule+hook",
+        "path": Path.home() / ".claude" / "rules" / "avoid-bash-builtin.md",
+        "description": "Bash Built-in 代替コマンド禁止 — grep/cat/find 等を Built-in ツールに誘導",
+        "hook_path": Path.home() / ".claude" / "hooks" / "check-bash-builtin.py",
+        "hook_description": "PreToolUse hook: Bash で Built-in 代替可能コマンドを block",
+        "data_driven": True,  # tool_usage_patterns のデータで提案根拠を補強
+    },
 ]
 
 
-def detect_recommended_artifacts() -> List[Dict[str, Any]]:
-    """推奨ルール/hook が未導入かチェックし、未導入のものを返す。"""
+def detect_recommended_artifacts(
+    tool_usage_patterns: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """推奨ルール/hook の導入状態をチェックする。
+
+    Returns:
+        未導入 artifact のリスト。各エントリに evidence (検出データ) を含む。
+    """
     missing = []
     for artifact in RECOMMENDED_ARTIFACTS:
         rule_exists = artifact["path"].exists()
@@ -609,8 +624,58 @@ def detect_recommended_artifacts() -> List[Dict[str, Any]]:
                 "path": str(hook_path),
                 "description": artifact.get("hook_description", ""),
             })
+
+        # data_driven な artifact には tool_usage データを証拠として付加
+        if artifact.get("data_driven") and tool_usage_patterns:
+            builtin = tool_usage_patterns.get("builtin_replaceable", [])
+            if builtin:
+                entry["evidence"] = {
+                    "builtin_replaceable_count": sum(
+                        item.get("count", 0) for item in builtin
+                    ),
+                    "top_patterns": builtin[:5],
+                }
+                # rule/hook 候補も付加
+                if "rule_candidates" in tool_usage_patterns:
+                    entry["rule_candidates"] = tool_usage_patterns["rule_candidates"]
+                if "hook_candidate" in tool_usage_patterns:
+                    entry["hook_candidate"] = tool_usage_patterns["hook_candidate"]
+
         missing.append(entry)
     return missing
+
+
+def detect_installed_artifacts(
+    tool_usage_patterns: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """導入済み推奨 artifact の状態を返す。
+
+    Returns:
+        導入済み artifact のリスト。hook_status 含む。
+    """
+    installed = []
+    for artifact in RECOMMENDED_ARTIFACTS:
+        rule_exists = artifact["path"].exists()
+        hook_path = artifact.get("hook_path")
+        hook_exists = hook_path.exists() if hook_path else True
+
+        if not (rule_exists and hook_exists):
+            continue
+
+        entry: Dict[str, Any] = {
+            "id": artifact["id"],
+            "description": artifact["description"],
+            "status": "active",
+        }
+
+        # data_driven な artifact には hook_status を付加
+        if artifact.get("data_driven") and tool_usage_patterns:
+            hook_status = tool_usage_patterns.get("hook_status")
+            if hook_status:
+                entry["hook_status"] = hook_status
+
+        installed.append(entry)
+    return installed
 
 
 def run_discover(
@@ -662,16 +727,26 @@ def run_discover(
         result["matched_skills"] = enrich_result["matched_skills"]
         result["unmatched_patterns"] = enrich_result["unmatched_patterns"]
 
+    tool_result = None
     if tool_usage:
         from tool_usage_analyzer import analyze_tool_usage
         tool_result = analyze_tool_usage(project_root=project_root)
         if tool_result["total_tool_calls"] > 0:
             result["tool_usage_patterns"] = tool_result
 
-    # 推奨アーティファクト未導入チェック
-    recommended_missing = detect_recommended_artifacts()
+    # 推奨アーティファクト未導入チェック（tool_usage データを証拠として付加）
+    recommended_missing = detect_recommended_artifacts(
+        tool_usage_patterns=tool_result,
+    )
     if recommended_missing:
         result["recommended_artifacts"] = recommended_missing
+
+    # 導入済みアーティファクトの状態
+    installed = detect_installed_artifacts(
+        tool_usage_patterns=tool_result,
+    )
+    if installed:
+        result["installed_artifacts"] = installed
 
     return result
 
