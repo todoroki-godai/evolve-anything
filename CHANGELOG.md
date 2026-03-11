@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.5] - 2026-03-11
+
+### Added
+- **evolve**: dry-run レポートに「推奨アクション」セクション（Step 10）追加
+  - 10.1: reflect 未処理件数の警告と実行推奨
+  - 10.2: Built-in 代替可能な Bash コマンド・sleep パターン・Bash 割合の改善提案
+  - 10.3: Remediation の auto_fixable / manual_required サマリ
+
 ## [1.0.4] - 2026-03-11
 
 ### Fixed

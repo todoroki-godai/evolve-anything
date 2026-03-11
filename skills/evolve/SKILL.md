@@ -226,6 +226,30 @@ Audit レポートを表示。全体の進捗サマリを出力。
 - **Plugin usage**: プラグイン別の総使用回数サマリ（例: `openspec(340) / rl-anything(30)`）
 - **OpenSpec Workflow Analytics**: openspec プラグインが検出された場合、ファネル（propose→archive の完走率）、フェーズ別効率、品質トレンド、最適化候補を表示
 
+### Step 10: 推奨アクション（MUST）
+
+レポート末尾に **推奨アクション** セクションを必ず表示する。以下の条件を上から順にチェックし、該当するものを全て出力する。
+
+#### 10.1: Reflect 推奨（corrections 蓄積時）
+
+discover 結果の `reflect_data_count` を確認:
+- `reflect_data_count >= 1` → 「未処理の修正フィードバックが {N} 件あります。`/rl-anything:reflect` で反映すると optimize の精度が向上します」と表示（MUST）
+- dry-run 時も表示する（MUST）。通常実行時は Step 6 で対話的に提案済みだが、dry-run では Step 6 が実行されないため、ここで補完する
+
+#### 10.2: ツール使用改善（Bash 代替・繰り返しパターン）
+
+discover 結果の `tool_usage_patterns` を確認し、以下を **具体的な数値付きで** 表示する:
+
+- **Built-in 代替**: `builtin_replaceable` の合計件数が 10 以上の場合、上位パターンと「プロジェクトルールまたは hook で Bash の grep/cat/find を検出・警告する仕組みの導入」を提案
+- **sleep パターン**: `repeating_patterns` に `sleep` が含まれ 20 回以上の場合、「`run_in_background` + 完了通知待ちへの移行」を提案
+- **Bash 割合**: `bash_calls / total_tool_calls` が 40% 以上の場合、割合を表示し改善を推奨
+
+#### 10.3: Remediation サマリ
+
+remediation 結果から:
+- `auto_fixable` 件数 → 「通常実行で自動修正可能: N件」
+- `manual_required` 件数 → 「手動対応推奨: N件」（概要リスト付き）
+
 ### べき等性
 
 連続実行時、前回以降の新規データのみを対象に処理する（MUST）。
