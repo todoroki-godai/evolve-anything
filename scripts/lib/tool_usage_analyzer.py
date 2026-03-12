@@ -15,6 +15,12 @@ RL_HOOKS_DIR = Path.home() / ".claude" / "rl-anything" / "hooks"
 
 REPEATING_THRESHOLD = 5
 
+# evolve Step 10.2 閾値定数
+BUILTIN_THRESHOLD = 10
+SLEEP_THRESHOLD = 20
+BASH_RATIO_THRESHOLD = 0.40
+COMPLIANCE_GOOD_THRESHOLD = 0.90
+
 # Built-in 代替可能コマンド → 推奨ツール
 BUILTIN_REPLACEABLE_MAP = {
     "cat": "Read",
@@ -461,6 +467,70 @@ def generate_hook_template(
         "script_content": script_content,
         "settings_diff": settings_diff,
         "target_commands": sorted(replaceable.keys()),
+    }
+
+
+def check_artifact_installed(
+    artifact: Dict[str, Any],
+    *,
+    hooks_dir: Optional[Path] = None,
+    rules_dir: Optional[Path] = None,
+    settings_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """推奨 artifact の導入状態を確認する。
+
+    Returns:
+        {"installed": bool, "artifacts_found": list[str],
+         "content_matched": bool | None}
+    """
+    artifacts_found: List[str] = []
+    content_matched: Optional[bool] = None
+
+    # hook_path チェック
+    hook_path = artifact.get("hook_path")
+    if hook_path:
+        try:
+            if hook_path.exists():
+                artifacts_found.append("hook")
+        except OSError:
+            pass
+
+    # rule path チェック
+    rule_path = artifact.get("path")
+    if rule_path:
+        try:
+            if rule_path.exists():
+                artifacts_found.append("rule")
+        except OSError:
+            pass
+
+    # content_patterns チェック
+    content_patterns = artifact.get("content_patterns")
+    if content_patterns and hook_path:
+        try:
+            if hook_path.exists():
+                import re
+                hook_content = hook_path.read_text(encoding="utf-8")
+                all_matched = all(
+                    re.search(pattern, hook_content)
+                    for pattern in content_patterns
+                )
+                content_matched = all_matched
+            else:
+                content_matched = False
+        except OSError:
+            content_matched = None
+
+    # installed 判定: 必要な artifact が全て存在 + content_pattern マッチ
+    rule_ok = rule_path is None or "rule" in artifacts_found
+    hook_ok = hook_path is None or "hook" in artifacts_found
+    content_ok = content_matched is not False if content_patterns else True
+    installed = rule_ok and hook_ok and content_ok
+
+    return {
+        "installed": installed,
+        "artifacts_found": artifacts_found,
+        "content_matched": content_matched,
     }
 
 

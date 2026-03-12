@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.1.0] - 2026-03-13
+
+### Added
+- **discover**: evolve Step 10.2 の mitigation-awareness 機能
+  - `RECOMMENDED_ARTIFACTS` に `recommendation_id` + `content_patterns` フィールド拡張
+  - `sleep-polling-guard` エントリ新規追加（sleep ポーリング検出）
+  - `detect_installed_artifacts()` が `mitigation_metrics`（mitigated/recent_count/content_matched）を返却
+- **tool_usage_analyzer**: `check_artifact_installed()` 汎用対策検出関数
+  - hook/rule 存在チェック + content_patterns 正規表現マッチ
+  - 閾値定数: `BUILTIN_THRESHOLD=10`, `SLEEP_THRESHOLD=20`, `BASH_RATIO_THRESHOLD=0.40`, `COMPLIANCE_GOOD_THRESHOLD=0.90`
+
+### Changed
+- **evolve**: Step 10.2 のツール使用改善セクションを対策状態に応じた表示切替に更新
+  - 対策済み → 「対策済み (artifacts) — 直近 N 件検出」
+  - 未対策 → 従来通り件数と改善提案
+  - 全対策済みかつ検出ゼロ → 1行表示
+  - 閾値をハードコードからモジュール定数参照に移行
+
 ## [1.0.7] - 2026-03-11
 
 ### Added

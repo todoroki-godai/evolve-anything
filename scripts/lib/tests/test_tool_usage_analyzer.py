@@ -12,10 +12,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from lib.tool_usage_analyzer import (
     BUILTIN_REPLACEABLE_MAP,
+    BUILTIN_THRESHOLD,
+    SLEEP_THRESHOLD,
+    BASH_RATIO_THRESHOLD,
+    COMPLIANCE_GOOD_THRESHOLD,
     extract_tool_calls,
     classify_bash_commands,
     detect_repeating_commands,
     analyze_tool_usage,
+    check_artifact_installed,
     _is_cat_replaceable,
 )
 
@@ -408,3 +413,113 @@ class TestCheckHookInstalled:
         assert result["installed"] is False
         assert result["hook_exists"] is True
         assert result["settings_registered"] is False
+
+
+# ---------- check_artifact_installed ----------
+
+class TestCheckArtifactInstalled:
+    def test_hook_exists_and_content_matched(self, tmp_path):
+        hook = tmp_path / "hook.py"
+        hook.write_text("REPLACEABLE = {'cat': 'Read'}\n")
+        artifact = {
+            "id": "test",
+            "hook_path": hook,
+            "path": None,
+            "content_patterns": ["REPLACEABLE"],
+        }
+        result = check_artifact_installed(artifact)
+        assert result["installed"] is True
+        assert result["content_matched"] is True
+        assert "hook" in result["artifacts_found"]
+
+    def test_hook_missing(self, tmp_path):
+        artifact = {
+            "id": "test",
+            "hook_path": tmp_path / "nonexistent.py",
+            "path": None,
+            "content_patterns": ["REPLACEABLE"],
+        }
+        result = check_artifact_installed(artifact)
+        assert result["installed"] is False
+        assert result["content_matched"] is False
+
+    def test_hook_exists_content_not_matched(self, tmp_path):
+        hook = tmp_path / "hook.py"
+        hook.write_text("# no relevant content\n")
+        artifact = {
+            "id": "test",
+            "hook_path": hook,
+            "path": None,
+            "content_patterns": ["REPLACEABLE"],
+        }
+        result = check_artifact_installed(artifact)
+        assert result["installed"] is False
+        assert result["content_matched"] is False
+
+    def test_io_error(self, tmp_path):
+        artifact = {
+            "id": "test",
+            "hook_path": tmp_path / "nonexistent.py",
+            "path": tmp_path / "nonexistent.md",
+            "content_patterns": ["REPLACEABLE"],
+        }
+        result = check_artifact_installed(artifact)
+        assert result["installed"] is False
+        # content_matched is False (file doesn't exist)
+        assert result["content_matched"] is False
+
+    def test_no_content_patterns(self, tmp_path):
+        hook = tmp_path / "hook.py"
+        hook.write_text("test")
+        rule = tmp_path / "rule.md"
+        rule.write_text("test")
+        artifact = {
+            "id": "test",
+            "hook_path": hook,
+            "path": rule,
+        }
+        result = check_artifact_installed(artifact)
+        assert result["installed"] is True
+        assert result["content_matched"] is None
+        assert "hook" in result["artifacts_found"]
+        assert "rule" in result["artifacts_found"]
+
+    def test_io_error_returns_none_content_matched(self, tmp_path):
+        """ファイルが存在せず OSError の場合 content_matched=False。"""
+        artifact = {
+            "id": "test",
+            "hook_path": tmp_path / "no_such_file.py",
+            "path": tmp_path / "no_such_rule.md",
+            "content_patterns": ["TEST"],
+        }
+        result = check_artifact_installed(artifact)
+        assert result["installed"] is False
+
+    def test_regex_content_pattern(self, tmp_path):
+        hook = tmp_path / "hook.py"
+        hook.write_text("time.sleep(5)\n")
+        artifact = {
+            "id": "test",
+            "hook_path": hook,
+            "path": None,
+            "content_patterns": [r"\bsleep\b"],
+        }
+        result = check_artifact_installed(artifact)
+        assert result["installed"] is True
+        assert result["content_matched"] is True
+
+
+# ---------- threshold constants ----------
+
+class TestThresholdConstants:
+    def test_builtin_threshold(self):
+        assert BUILTIN_THRESHOLD == 10
+
+    def test_sleep_threshold(self):
+        assert SLEEP_THRESHOLD == 20
+
+    def test_bash_ratio_threshold(self):
+        assert BASH_RATIO_THRESHOLD == 0.40
+
+    def test_compliance_good_threshold(self):
+        assert COMPLIANCE_GOOD_THRESHOLD == 0.90

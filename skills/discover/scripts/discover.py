@@ -590,6 +590,18 @@ RECOMMENDED_ARTIFACTS = [
         "hook_path": Path.home() / ".claude" / "hooks" / "check-bash-builtin.py",
         "hook_description": "PreToolUse hook: Bash で Built-in 代替可能コマンドを block",
         "data_driven": True,  # tool_usage_patterns のデータで提案根拠を補強
+        "recommendation_id": "builtin_replaceable",
+        "content_patterns": ["REPLACEABLE"],
+    },
+    {
+        "id": "sleep-polling-guard",
+        "type": "hook",
+        "path": None,
+        "description": "sleep ポーリング検出 — run_in_background + 完了通知待ちを推奨",
+        "hook_path": Path.home() / ".claude" / "hooks" / "check-bash-builtin.py",
+        "hook_description": "PreToolUse hook: sleep コマンドを検出・警告",
+        "recommendation_id": "sleep_polling",
+        "content_patterns": [r"\bsleep\b"],
     },
 ]
 
@@ -604,7 +616,8 @@ def detect_recommended_artifacts(
     """
     missing = []
     for artifact in RECOMMENDED_ARTIFACTS:
-        rule_exists = artifact["path"].exists()
+        rule_path = artifact.get("path")
+        rule_exists = rule_path.exists() if rule_path else True
         hook_path = artifact.get("hook_path")
         hook_exists = hook_path.exists() if hook_path else True
 
@@ -616,8 +629,8 @@ def detect_recommended_artifacts(
             "description": artifact["description"],
             "missing": [],
         }
-        if not rule_exists:
-            entry["missing"].append({"type": "rule", "path": str(artifact["path"])})
+        if not rule_exists and rule_path:
+            entry["missing"].append({"type": "rule", "path": str(rule_path)})
         if not hook_exists and hook_path:
             entry["missing"].append({
                 "type": "hook",
@@ -652,14 +665,14 @@ def detect_installed_artifacts(
 
     Returns:
         導入済み artifact のリスト。hook_status 含む。
+        recommendation_id 付きエントリには mitigation_metrics を付加。
     """
+    from tool_usage_analyzer import check_artifact_installed
+
     installed = []
     for artifact in RECOMMENDED_ARTIFACTS:
-        rule_exists = artifact["path"].exists()
-        hook_path = artifact.get("hook_path")
-        hook_exists = hook_path.exists() if hook_path else True
-
-        if not (rule_exists and hook_exists):
+        check_result = check_artifact_installed(artifact)
+        if not check_result["installed"]:
             continue
 
         entry: Dict[str, Any] = {
@@ -674,8 +687,47 @@ def detect_installed_artifacts(
             if hook_status:
                 entry["hook_status"] = hook_status
 
+        # recommendation_id 付きエントリには mitigation_metrics を付加
+        rec_id = artifact.get("recommendation_id")
+        if rec_id:
+            entry["recommendation_id"] = rec_id
+            metrics = _compute_mitigation_metrics(
+                rec_id, tool_usage_patterns, check_result,
+            )
+            entry["mitigation_metrics"] = metrics
+
         installed.append(entry)
     return installed
+
+
+def _compute_mitigation_metrics(
+    recommendation_id: str,
+    tool_usage_patterns: Optional[Dict[str, Any]],
+    check_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """recommendation_id に応じた条件別メトリクスを算出する。"""
+    metrics: Dict[str, Any] = {
+        "mitigated": True,
+        "recent_count": 0,
+        "content_matched": check_result.get("content_matched"),
+    }
+
+    if not tool_usage_patterns:
+        return metrics
+
+    if recommendation_id == "builtin_replaceable":
+        builtin = tool_usage_patterns.get("builtin_replaceable", [])
+        metrics["recent_count"] = sum(
+            item.get("count", 0) for item in builtin
+        )
+    elif recommendation_id == "sleep_polling":
+        repeating = tool_usage_patterns.get("repeating_patterns", [])
+        metrics["recent_count"] = sum(
+            item.get("count", 0) for item in repeating
+            if "sleep" in item.get("pattern", "").lower()
+        )
+
+    return metrics
 
 
 def run_discover(

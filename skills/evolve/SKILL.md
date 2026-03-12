@@ -239,11 +239,19 @@ discover 結果の `reflect_data_count` の値を確認し、**必ず**以下の
 
 #### 10.2: ツール使用改善
 
-discover 結果の `tool_usage_patterns` から以下3項目を**必ず**チェックし、閾値を超えたものを表示する。全て閾値以下なら「ツール使用: 問題なし」と表示:
+discover 結果の `installed_artifacts` と `tool_usage_patterns` を参照し、対策済み/未対策に応じて表示を切り替える。
+閾値は `tool_usage_analyzer.py` のモジュール定数（`BUILTIN_THRESHOLD`, `SLEEP_THRESHOLD`, `BASH_RATIO_THRESHOLD`）を参照。
 
-- **Built-in 代替**: `builtin_replaceable` の合計件数 ≥ 10 → 上位パターンと件数を表示し「プロジェクトルールまたは hook で Bash の grep/cat/find を検出・警告する仕組みの導入」を提案
-- **sleep パターン**: `repeating_patterns` に `sleep` を含むエントリの合計 ≥ 20 → 「`run_in_background` + 完了通知待ちへの移行」を提案
-- **Bash 割合**: `bash_calls / total_tool_calls` ≥ 0.40 → 「Bash割合 {X}% — Built-in ツール活用で改善余地あり」と表示
+**全対策済みかつ検出ゼロ**: `installed_artifacts` の全 `recommendation_id` 付きエントリが `mitigation_metrics.mitigated=True` かつ `recent_count=0` → 「ツール使用: 全対策済み — 検出なし」と1行表示
+
+**対策済み（検出あり）**: `mitigation_metrics.mitigated=True` かつ `recent_count > 0` → 各項目で「対策済み (hook: {name}, rule: {name}) — 直近 {N} 件検出」形式で表示。件数ベースの提案は表示しない
+
+**未対策**: 対応する推奨の対策が未導入 → 従来通り件数と改善提案を表示:
+- **Built-in 代替**: `builtin_replaceable` の合計件数 ≥ `BUILTIN_THRESHOLD` → 上位パターンと件数を表示し「プロジェクトルールまたは hook で Bash の grep/cat/find を検出・警告する仕組みの導入」を提案
+- **sleep パターン**: `repeating_patterns` に `sleep` を含むエントリの合計 ≥ `SLEEP_THRESHOLD` → 「`run_in_background` + 完了通知待ちへの移行」を提案
+- **Bash 割合**: `bash_calls / total_tool_calls` ≥ `BASH_RATIO_THRESHOLD` → 「Bash割合 {X}% — Built-in ツール活用で改善余地あり」と表示
+
+全て閾値以下かつ未対策なら「ツール使用: 問題なし」と表示
 
 #### 10.3: Remediation サマリ
 
