@@ -335,6 +335,8 @@ def run_evolve(
             make_rule_candidate_issue,
             make_hook_candidate_issue,
             make_skill_evolve_issue,
+            VERIFICATION_RULE_CANDIDATE,
+            make_verification_rule_issue,
         )
         discover_data = result["phases"].get("discover", {})
         tool_usage = discover_data.get("tool_usage_patterns", {})
@@ -364,6 +366,15 @@ def run_evolve(
                 issues.append(make_skill_evolve_issue(
                     assessment, skill_md_path,
                 ))
+
+        # --- verification_needs を issue に変換 ---
+        verification_needs = discover_data.get("verification_needs", [])
+        for vn in verification_needs:
+            detection_result = vn.get("detection_result", {})
+            issues.append(make_verification_rule_issue(
+                vn, detection_result,
+                project_dir_str=str(proj),
+            ))
 
         classified = classify_remediation_issues(issues)
         remediation_data = {

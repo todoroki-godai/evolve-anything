@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 TOOL_USAGE_RULE_CANDIDATE = "tool_usage_rule_candidate"
 TOOL_USAGE_HOOK_CANDIDATE = "tool_usage_hook_candidate"
 SKILL_EVOLVE_CANDIDATE = "skill_evolve_candidate"
+VERIFICATION_RULE_CANDIDATE = "verification_rule_candidate"
 
 # ── tool_usage_rule_candidate detail フィールド ─────
 
@@ -26,6 +27,15 @@ HOOK_SCRIPT_CONTENT = "script_content"
 HOOK_SETTINGS_DIFF = "settings_diff"
 HOOK_TARGET_COMMANDS = "target_commands"
 HOOK_TOTAL_COUNT = "total_count"
+
+# ── verification_rule_candidate detail フィールド ──
+
+VRC_CATALOG_ID = "catalog_id"
+VRC_RULE_FILENAME = "rule_filename"
+VRC_RULE_TEMPLATE = "rule_template"
+VRC_DESCRIPTION = "description"
+VRC_EVIDENCE = "evidence"
+VRC_DETECTION_CONFIDENCE = "detection_confidence"
 
 # ── skill_evolve_candidate detail フィールド ────────
 
@@ -79,6 +89,30 @@ def make_hook_candidate_issue(
             HOOK_TOTAL_COUNT: total_count,
         },
         "source": "discover_tool_usage",
+    }
+
+
+def make_verification_rule_issue(
+    entry: Dict[str, Any],
+    detection_result: Dict[str, Any],
+    *,
+    project_dir_str: str = "",
+) -> Dict[str, Any]:
+    """verification_catalog のエントリ + 検出結果 → issue dict 変換。"""
+    rule_filename = entry.get("rule_filename", "")
+    file_path = f"{project_dir_str}/.claude/rules/{rule_filename}" if project_dir_str else rule_filename
+    return {
+        "type": VERIFICATION_RULE_CANDIDATE,
+        "file": file_path,
+        "detail": {
+            VRC_CATALOG_ID: entry.get("id", ""),
+            VRC_RULE_FILENAME: rule_filename,
+            VRC_RULE_TEMPLATE: entry.get("rule_template", ""),
+            VRC_DESCRIPTION: entry.get("description", ""),
+            VRC_EVIDENCE: detection_result.get("evidence", []),
+            VRC_DETECTION_CONFIDENCE: detection_result.get("confidence", 0.0),
+        },
+        "source": "verification_catalog",
     }
 
 

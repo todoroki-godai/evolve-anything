@@ -19,6 +19,7 @@ from issue_schema import (  # noqa: E402
     TOOL_USAGE_RULE_CANDIDATE,
     TOOL_USAGE_HOOK_CANDIDATE,
     SKILL_EVOLVE_CANDIDATE,
+    VERIFICATION_RULE_CANDIDATE,
     RULE_FILENAME,
     RULE_CONTENT,
     RULE_TARGET_COMMANDS,
@@ -33,6 +34,12 @@ from issue_schema import (  # noqa: E402
     SE_SUITABILITY,
     SE_TOTAL_SCORE,
     SE_SCORES,
+    VRC_CATALOG_ID,
+    VRC_RULE_FILENAME,
+    VRC_RULE_TEMPLATE,
+    VRC_DESCRIPTION,
+    VRC_EVIDENCE,
+    VRC_DETECTION_CONFIDENCE,
 )
 
 # 分類閾値
@@ -178,6 +185,10 @@ def compute_confidence_score(issue: Dict[str, Any]) -> float:
             return 0.60
         return 0.3  # low → 対象外
 
+    if issue_type == VERIFICATION_RULE_CANDIDATE:
+        # 検出関数の confidence を使用（regex のみなので proposable 止まり）
+        return min(0.85, detail.get(VRC_DETECTION_CONFIDENCE, 0.5))
+
     return 0.5
 
 
@@ -251,6 +262,7 @@ _RATIONALE_TEMPLATES = {
     TOOL_USAGE_HOOK_CANDIDATE: "Bash での Built-in 代替可能コマンド使用（{count} 回検出）を自動検出する PreToolUse hook の追加を提案します。",
     "untagged_reference_candidates": "スキル「{skill_name}」は呼び出し実績がなく reference type が未設定です。frontmatter に `type: reference` を追加します。",
     SKILL_EVOLVE_CANDIDATE: "スキル「{skill_name}」の自己進化適性: {suitability}（{total_score}/15点）。自己進化パターン（Pre-flight Check, pitfalls.md, Failure-triggered Learning）の組み込みを提案します。",
+    VERIFICATION_RULE_CANDIDATE: "プロジェクト内に {evidence_count} 箇所のモジュール間データ変換パターンが検出されました（confidence: {confidence}）。「{description}」ルールの追加を提案します。",
 }
 
 
@@ -360,6 +372,13 @@ def generate_rationale(issue: Dict[str, Any], category: str) -> str:
             skill_name=detail.get(SE_SKILL_NAME, "unknown"),
             suitability=detail.get(SE_SUITABILITY, "unknown"),
             total_score=detail.get(SE_TOTAL_SCORE, 0),
+        )
+
+    if issue_type == VERIFICATION_RULE_CANDIDATE:
+        return _RATIONALE_TEMPLATES[VERIFICATION_RULE_CANDIDATE].format(
+            evidence_count=len(detail.get(VRC_EVIDENCE, [])),
+            confidence=detail.get(VRC_DETECTION_CONFIDENCE, 0.0),
+            description=detail.get(VRC_DESCRIPTION, "unknown"),
         )
 
     return f"問題タイプ「{issue_type}」が検出されました。"
@@ -901,6 +920,52 @@ def fix_skill_evolve(
     return results
 
 
+def fix_verification_rule(
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """検証知見ルールをプロジェクトに作成する。"""
+    results = []
+    for issue in issues:
+        if issue["type"] != VERIFICATION_RULE_CANDIDATE:
+            continue
+        detail = issue.get("detail", {})
+        rule_filename = detail.get(VRC_RULE_FILENAME, "")
+        rule_template = detail.get(VRC_RULE_TEMPLATE, "")
+        if not rule_filename or not rule_template:
+            results.append({
+                "issue": issue, "original_content": "", "fixed": False,
+                "error": "missing rule_filename or rule_template",
+            })
+            continue
+
+        # issue["file"] からプロジェクトの rules ディレクトリを特定
+        file_path = Path(issue["file"])
+        rules_dir = file_path.parent
+        rules_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            original_content = file_path.read_text(encoding="utf-8") if file_path.exists() else ""
+        except OSError:
+            original_content = ""
+
+        try:
+            content = rule_template
+            if not content.endswith("\n"):
+                content += "\n"
+            file_path.write_text(content, encoding="utf-8")
+            results.append({
+                "issue": issue, "original_content": original_content,
+                "fixed": True, "error": None,
+            })
+        except OSError as e:
+            results.append({
+                "issue": issue, "original_content": original_content,
+                "fixed": False, "error": str(e),
+            })
+
+    return results
+
+
 FIX_DISPATCH: Dict[str, Any] = {
     "stale_ref": fix_stale_references,
     "stale_rule": fix_stale_rules,
@@ -911,6 +976,7 @@ FIX_DISPATCH: Dict[str, Any] = {
     TOOL_USAGE_RULE_CANDIDATE: fix_global_rule,
     TOOL_USAGE_HOOK_CANDIDATE: fix_hook_scaffold,
     SKILL_EVOLVE_CANDIDATE: fix_skill_evolve,
+    VERIFICATION_RULE_CANDIDATE: fix_verification_rule,
 }
 
 
@@ -971,6 +1037,10 @@ def generate_proposals(
             skill_name = detail.get(SE_SKILL_NAME, "unknown")
             score = detail.get(SE_TOTAL_SCORE, 0)
             proposal = f"スキル「{skill_name}」({score}/15点) に自己進化パターンを組み込み"
+        elif issue["type"] == VERIFICATION_RULE_CANDIDATE:
+            detail = issue.get("detail", {})
+            filename = detail.get(VRC_RULE_FILENAME, "unknown")
+            proposal = f".claude/rules/{filename} に検証ルール「{detail.get(VRC_DESCRIPTION, '')}」を作成"
         else:
             proposal = f"{issue['type']} に対する修正案を検討してください。"
 
@@ -1115,6 +1185,17 @@ def _verify_skill_evolve(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, A
     return {"resolved": True, "remaining": None}
 
 
+def _verify_verification_rule(fixed_file: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """verification_rule_candidate の検証: ルールファイルが存在するか。"""
+    path = Path(fixed_file)
+    if not path.exists():
+        return {"resolved": False, "remaining": "ルールファイルが存在しません"}
+    content = path.read_text(encoding="utf-8")
+    if len(content.strip()) == 0:
+        return {"resolved": False, "remaining": "ルールファイルが空です"}
+    return {"resolved": True, "remaining": None}
+
+
 VERIFY_DISPATCH: Dict[str, Any] = {
     "stale_ref": _verify_stale_ref,
     "line_limit_violation": _verify_line_limit_violation,
@@ -1126,6 +1207,7 @@ VERIFY_DISPATCH: Dict[str, Any] = {
     TOOL_USAGE_RULE_CANDIDATE: _verify_global_rule,
     TOOL_USAGE_HOOK_CANDIDATE: _verify_hook_scaffold,
     SKILL_EVOLVE_CANDIDATE: _verify_skill_evolve,
+    VERIFICATION_RULE_CANDIDATE: _verify_verification_rule,
 }
 
 

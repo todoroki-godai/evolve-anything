@@ -55,6 +55,14 @@ python3 <PLUGIN_DIR>/skills/discover/scripts/discover.py [--session-scan]
 生成された候補をユーザーに提示し、承認/却下を確認する。
 同一パターンが2回 reject された場合、抑制リストに追加し3回目以降は提案しない。
 
+### Step 5.5: 検証知見の検出
+
+discover.py は `verification_catalog.py` の `detect_verification_needs()` を呼び出し、プロジェクトに未導入の検証知見ルールを検出する。
+
+- `verification_needs` が存在する場合:
+  - 各エントリの `description` と `evidence`（検出箇所）を表示
+  - evolve の Remediation パイプラインに `verification_rule_candidate` issue として渡される
+
 ### Step 6: corrections.jsonl 連携（オプション）
 
 corrections.jsonl（`~/.claude/rl-anything/corrections.jsonl`）が存在する場合、修正フィードバックデータも入力ソースとして利用する。
