@@ -603,6 +603,13 @@ RECOMMENDED_ARTIFACTS = [
         "recommendation_id": "sleep_polling",
         "content_patterns": [r"\bsleep\b"],
     },
+    {
+        "id": "commit-version",
+        "type": "rule",
+        "path": Path.home() / ".claude" / "rules" / "commit-version.md",
+        "description": "コミット時バージョン管理 — feat!=major, feat=minor, fix=patch の自動判定提案",
+        "hook_path": None,
+    },
 ]
 
 
