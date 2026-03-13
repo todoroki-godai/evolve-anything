@@ -610,6 +610,13 @@ RECOMMENDED_ARTIFACTS = [
         "description": "コミット時バージョン管理 — feat!=major, feat=minor, fix=patch の自動判定提案",
         "hook_path": None,
     },
+    {
+        "id": "claude-md-style",
+        "type": "rule",
+        "path": Path.home() / ".claude" / "rules" / "claude-md-style.md",
+        "description": "CLAUDE.md vs MEMORY.md の使い分け — 動作情報/経緯/コードから分かる情報の記載先判断",
+        "hook_path": None,
+    },
 ]
 
 
@@ -785,6 +792,16 @@ def run_discover(
         enrich_result = _enrich_patterns(active_patterns, project_dir=project_root)
         result["matched_skills"] = enrich_result["matched_skills"]
         result["unmatched_patterns"] = enrich_result["unmatched_patterns"]
+
+    # 検証知見カタログの検出
+    try:
+        from verification_catalog import detect_verification_needs
+        proj = project_root or Path.cwd()
+        verification_needs = detect_verification_needs(proj)
+        if verification_needs:
+            result["verification_needs"] = verification_needs
+    except Exception as e:
+        result["verification_needs_error"] = str(e)
 
     tool_result = None
     if tool_usage:

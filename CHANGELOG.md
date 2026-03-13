@@ -8,6 +8,7 @@
   - detail フィールド定数（RULE_FILENAME, HOOK_SCRIPT_PATH, SE_SKILL_NAME 等）
   - `make_rule_candidate_issue()`, `make_hook_candidate_issue()`, `make_skill_evolve_issue()` factory 関数
 - **evolve**: skill_evolve assessment を Phase 3.4 に統合（remediation の前に実行）
+- **discover**: RECOMMENDED_ARTIFACTS に `commit-version`・`claude-md-style` エントリ追加（未導入PJへの提案）
 
 ### Fixed
 - **evolve**: discover → remediation のデータフロー断絶を修正（issue 変換のフィールド名不一致）
