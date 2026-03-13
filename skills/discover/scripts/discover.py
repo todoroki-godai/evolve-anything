@@ -611,6 +611,13 @@ RECOMMENDED_ARTIFACTS = [
         "hook_path": None,
     },
     {
+        "id": "commit-skill",
+        "type": "skill",
+        "path": Path.home() / ".claude" / "skills" / "commit" / "SKILL.md",
+        "description": "Conventional Commits + CHANGELOG 自動追記スキル — feat→Added, fix→Fixed, BREAKING CHANGE 対応",
+        "hook_path": None,
+    },
+    {
         "id": "claude-md-style",
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "claude-md-style.md",

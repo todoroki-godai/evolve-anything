@@ -8,7 +8,7 @@
   - detail フィールド定数（RULE_FILENAME, HOOK_SCRIPT_PATH, SE_SKILL_NAME 等）
   - `make_rule_candidate_issue()`, `make_hook_candidate_issue()`, `make_skill_evolve_issue()` factory 関数
 - **evolve**: skill_evolve assessment を Phase 3.4 に統合（remediation の前に実行）
-- **discover**: RECOMMENDED_ARTIFACTS に `commit-version`・`claude-md-style` エントリ追加（未導入PJへの提案）
+- **discover**: RECOMMENDED_ARTIFACTS に `commit-version`・`claude-md-style`・`commit-skill` エントリ追加（未導入PJへの提案）
 - **verification_catalog**: `scripts/lib/verification_catalog.py` — 検証知見カタログ（detect_verification_needs + detect_data_contract_verification）
   - VERIFICATION_CATALOG 定義、閾値定数（DATA_CONTRACT_MIN_PATTERNS=3, DETECTION_TIMEOUT_SECONDS=5, MAX_CATALOG_ENTRIES=10）
   - discover に verification_needs 検出統合、evolve Phase 3.5 に issue 変換
