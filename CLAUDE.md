@@ -19,7 +19,7 @@
 | Auto Trigger | セッション終了・corrections 蓄積時に evolve/audit 実行を自動提案（`trigger_engine.py`） |
 | `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチで最適化 |
 | `rl-loop-orchestrator` | ベースライン取得→バリエーション生成→評価→人間確認のループ統合 |
-| `rl-scorer` エージェント | 技術品質 + ドメイン品質 + 構造品質の3軸で採点 |
+| `rl-scorer` エージェント | オーケストレーター(haiku) + 3サブエージェント並列(tech/struct=haiku, domain=sonnet)で3軸採点 |
 
 ## クイックスタート
 

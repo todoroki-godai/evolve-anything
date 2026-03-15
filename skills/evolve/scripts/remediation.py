@@ -1464,7 +1464,10 @@ def record_outcome(
     dry_run=True の場合は記録しない。
 
     Args:
-        fix_detail: 修正の詳細 (changed_files, lines_removed, lines_added)
+        fix_detail: 修正の詳細。以下のキーを含む dict:
+            - changed_files (List[str]): 変更されたファイルパスのリスト（MUST）
+            - lines_removed (int): 削除行数
+            - lines_added (int): 追加行数
         verify_result: 検証結果 (resolved, remaining)
         duration_ms: 修正にかかった時間（ミリ秒）
 

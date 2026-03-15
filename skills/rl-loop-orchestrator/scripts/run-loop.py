@@ -18,9 +18,11 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -74,8 +76,7 @@ def _cleanup_old_runs(output_dir: Path):
 
 
 def get_baseline_score(target_path: str, dry_run: bool = False) -> Dict[str, Any]:
-    """ベースラインスコアを取得。
-    実際の実装では rl-scorer エージェントを呼び出す。
+    """ベースラインスコアを3軸並列で取得。
     dry-run 時はダミースコアを返す。
     """
     if dry_run:
@@ -90,38 +91,26 @@ def get_baseline_score(target_path: str, dry_run: bool = False) -> Dict[str, Any
             "summary": "[dry-run] ダミーベースラインスコア",
         }
 
-    # rl-scorer エージェントを claude CLI で呼び出す
-    prompt = f"""以下のスキルファイルを rl-scorer の基準で採点してください。
-JSON形式で出力してください。
-
-ファイル: {target_path}
-"""
     try:
         content = Path(target_path).read_text(encoding="utf-8")
-        prompt += f"\n内容:\n```markdown\n{content}\n```"
+    except FileNotFoundError:
+        print("Warning: target file not found, defaulting to 0.50", file=sys.stderr)
+        return {
+            "target": target_path,
+            "integrated_score": 0.50,
+            "summary": "対象ファイルが見つかりません。フォールバック値を使用。",
+        }
 
-        result = subprocess.run(
-            ["claude", "-p", "--output-format", "json"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            # claude の出力から result フィールドを抽出
-            if isinstance(data, dict) and "result" in data:
-                return json.loads(data["result"])
-            return data
-    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
-        pass
-
-    # フォールバック
-    print("Warning: baseline scoring failed, defaulting to 0.50", file=sys.stderr)
+    axis_scores = _parallel_score(content)
     return {
         "target": target_path,
-        "integrated_score": 0.50,
-        "summary": "スコア取得に失敗。フォールバック値を使用。",
+        "integrated_score": axis_scores["integrated"],
+        "scores": {
+            "technical": {"total": axis_scores.get("technical", FALLBACK_SCORE)},
+            "domain_quality": {"total": axis_scores.get("domain", FALLBACK_SCORE)},
+            "structure": {"total": axis_scores.get("structure", FALLBACK_SCORE)},
+        },
+        "summary": "3軸並列スコアリング",
     }
 
 
@@ -166,31 +155,63 @@ def generate_variants(
     return {"error": "バリエーション生成に失敗"}
 
 
-def score_variant(content: str, target_path: str, dry_run: bool = False) -> float:
-    """バリエーションをスコアリング"""
-    if dry_run:
-        # コンテンツ長に基づくダミースコア
-        import hashlib
-        h = int(hashlib.md5(content.encode()).hexdigest()[:8], 16)
-        return round(0.5 + (h % 50) / 100, 2)
+# --- 3軸並列スコアリング ---
+AXIS_WEIGHTS = {"technical": 0.40, "domain": 0.40, "structure": 0.20}
 
-    prompt = f"""以下のClaude Codeスキル定義を0.0〜1.0で評価してください。
+_AXIS_PROMPTS = {
+    "technical": """以下のClaude Codeスキル定義を技術品質の観点で評価してください。
 
-評価基準:
-- 明確性 (25%): 指示が明確で曖昧さがないか
-- 完全性 (25%): 必要な情報が全て含まれているか
-- 構造 (25%): 論理的に整理されているか
-- 実用性 (25%): 実際に使いやすいか
+評価項目（各0.0〜1.0）:
+- 明確性: 指示が明確で曖昧さがないか
+- 完全性: 必要な情報が全て含まれているか
+- 一貫性: 用語・スタイルが統一されているか
+- エッジケース: 例外や境界条件への対応があるか
+- テスト可能性: 指示の成果を検証できるか
 
 スキル:
 ```markdown
 {content}
 ```
 
-数値のみ回答してください（例: 0.75）"""
+5項目の平均を total として、数値のみ回答してください（例: 0.75）""",
+    "domain": """以下のClaude Codeスキル定義をドメイン品質の観点で評価してください。
 
+評価項目（各0.0〜1.0）:
+- 正確性: ドメイン知識が正しいか
+- 実用性: 実際のタスクに役立つか
+- 保守性: 変更・拡張が容易か
+- 完全性: ドメインの重要な側面を網羅しているか
+
+スキル:
+```markdown
+{content}
+```
+
+4項目の平均を total として、数値のみ回答してください（例: 0.75）""",
+    "structure": """以下のClaude Codeスキル定義を構造品質の観点で評価してください。
+
+評価項目（各0.0〜1.0）:
+- フォーマット: Markdownの構造が適切か
+- 長さ: 冗長でなく、かつ不足がないか
+- 例示: 具体例が適切に含まれているか
+- 参照: 関連リソースへの参照が適切か
+- 規約準拠: Claude Code スキルの慣習に沿っているか
+
+スキル:
+```markdown
+{content}
+```
+
+5項目の平均を total として、数値のみ回答してください（例: 0.75）""",
+}
+
+FALLBACK_SCORE = 0.5
+
+
+def _score_single_axis(axis: str, content: str) -> float:
+    """単一軸のスコアを claude -p で取得する。失敗時は FALLBACK_SCORE を返す。"""
+    prompt = _AXIS_PROMPTS[axis].format(content=content)
     try:
-        import re
         result = subprocess.run(
             ["claude", "-p", "--output-format", "text"],
             input=prompt,
@@ -204,8 +225,47 @@ def score_variant(content: str, target_path: str, dry_run: bool = False) -> floa
                 return float(match.group(1))
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+    return FALLBACK_SCORE
 
-    return 0.5
+
+def _parallel_score(content: str) -> Dict[str, float]:
+    """3軸を並列でスコアリングし、各軸スコアと統合スコアを返す。"""
+    axis_scores: Dict[str, float] = {}
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(_score_single_axis, axis, content): axis
+                for axis in AXIS_WEIGHTS
+            }
+            for future in as_completed(futures):
+                axis = futures[future]
+                try:
+                    axis_scores[axis] = future.result()
+                except Exception:
+                    axis_scores[axis] = FALLBACK_SCORE
+    except Exception:
+        # ThreadPoolExecutor が使えない場合は逐次実行
+        for axis in AXIS_WEIGHTS:
+            axis_scores[axis] = _score_single_axis(axis, content)
+
+    integrated = sum(
+        axis_scores.get(axis, FALLBACK_SCORE) * weight
+        for axis, weight in AXIS_WEIGHTS.items()
+    )
+    axis_scores["integrated"] = round(integrated, 4)
+    return axis_scores
+
+
+def score_variant(content: str, target_path: str, dry_run: bool = False) -> float:
+    """バリエーションを3軸並列でスコアリングし、統合スコアを返す。"""
+    if dry_run:
+        # コンテンツ長に基づくダミースコア
+        import hashlib
+        h = int(hashlib.md5(content.encode()).hexdigest()[:8], 16)
+        return round(0.5 + (h % 50) / 100, 2)
+
+    scores = _parallel_score(content)
+    return scores["integrated"]
 
 
 def run_loop(
