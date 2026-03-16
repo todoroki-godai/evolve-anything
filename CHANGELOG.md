@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-03-16
+
+### Added
+- **skill_triage**: テレメトリ+trigger evalで CREATE/UPDATE/SPLIT/MERGE/OK の5択スキルライフサイクル判定（Jaccard階層クラスタリング、D10 confidence計算式）
+- **trigger_eval_generator**: sessions.jsonl+usage.jsonl → skill-creator互換 evals.json 自動生成（near-miss優先、confidence_weight付き）
+- **issue_schema**: `SKILL_TRIAGE_CREATE`/`UPDATE`/`SPLIT`/`MERGE` 定数 + `make_skill_triage_issue()` factory関数
+- **evolve**: Diagnose Phase 2.6 に skill triage 統合（discover後、audit前）
+- **discover**: `detect_missed_skills()` に `eval_set_path`/`eval_set_status` フィールド追加
+
 ## [1.6.0] - 2026-03-16
 
 ### Added
