@@ -34,6 +34,16 @@
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/suggest_subagent_delegation.py\"",
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "SubagentStop": [
