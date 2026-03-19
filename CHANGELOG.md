@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- **verification_catalog**: `detect_iac_project()` — IaCプロジェクト判定ゲート（CDK/Serverless/SAM/CloudFormation対応）
+- **verification_catalog**: `detect_cross_layer_consistency()` — コード↔IaC間クロスレイヤー整合性検出（環境変数参照・AWS SDK使用 + detected_categories）
+- **verification_catalog**: `cross-layer-consistency` カタログエントリ + content-aware install check
 - **frontmatter**: `count_content_lines()` — YAML frontmatter を除外したコンテンツ行数カウント
 - **path_extractor**: `extract_paths_outside_codeblocks()` 共通モジュール化（audit.py から抽出）
 - **reflect_utils**: `PathsSuggestion` dataclass + `suggest_paths_frontmatter()` — correction テキストから paths frontmatter グロブパターンを自動提案
