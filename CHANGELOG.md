@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+- **frontmatter**: `count_content_lines()` — YAML frontmatter を除外したコンテンツ行数カウント
+- **path_extractor**: `extract_paths_outside_codeblocks()` 共通モジュール化（audit.py から抽出）
+- **reflect_utils**: `PathsSuggestion` dataclass + `suggest_paths_frontmatter()` — correction テキストから paths frontmatter グロブパターンを自動提案
+- **reflect**: `route_corrections()` に paths_suggestion 付与（globs 代替注記付き）
+- **optimize**: 最適化後の paths frontmatter 提案表示
+- **remediation**: `generate_proposals()` が rule_candidate issue に `paths_suggestion` フィールド付加
+
+### Changed
+- **line_limit**: `check_line_limit()` / `suggest_separation()` がルールファイルの frontmatter 除外カウントに対応
+- **audit**: `check_line_limits()` がルールの frontmatter 除外カウントに対応
+- **prune**: `detect_dead_globs()` を `parse_frontmatter()` ベースにリファクタ、`paths` / `globs` 両キー対応
+
 ## [1.10.0] - 2026-03-18
 
 ### Added
