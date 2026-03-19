@@ -4,6 +4,8 @@
 discover / audit 向けの分析結果を提供する。
 """
 import json
+import re
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,6 +22,29 @@ BUILTIN_THRESHOLD = 10
 SLEEP_THRESHOLD = 20
 BASH_RATIO_THRESHOLD = 0.40
 COMPLIANCE_GOOD_THRESHOLD = 0.90
+
+# ── Stall Recovery 検出定数 ──────────────────────────
+
+LONG_COMMAND_PATTERNS = [
+    r"\bcdk\s+deploy\b",
+    r"\bdocker\s+build\b",
+    r"\bnpm\s+install\b",
+    r"\byarn\s+install\b",
+    r"\bpip\s+install\b",
+    r"\bpip3\s+install\b",
+    r"\bcargo\s+build\b",
+    r"\bmake\b",
+    r"\bgradle\b",
+    r"\bmvn\b",
+    r"\bterraform\s+apply\b",
+]
+
+INVESTIGATION_COMMANDS = {"pgrep", "ps", "lsof", "fuser", "top", "htop"}
+
+RECOVERY_COMMANDS = {"kill", "pkill", "killall"}
+
+STALL_RECOVERY_MIN_SESSIONS = 2
+STALL_RECOVERY_RECENCY_DAYS = 30
 
 # Built-in 代替可能コマンド → 推奨ツール
 BUILTIN_REPLACEABLE_MAP = {
@@ -119,6 +144,213 @@ def extract_tool_calls(
                         bash_commands.append(cmd)
 
     return tool_counts, bash_commands
+
+
+def extract_tool_calls_by_session(
+    project_root: Optional[Path] = None,
+    *,
+    projects_dir: Optional[Path] = None,
+    max_age_days: Optional[int] = None,
+) -> Dict[str, List[str]]:
+    """セッション JSONL からセッション単位で Bash コマンドを抽出する。
+
+    Returns:
+        {session_id: [command_strings]} — セッション ID はファイル名 stem。
+    """
+    session_dir = _resolve_session_dir(project_root, projects_dir)
+    if session_dir is None:
+        return {}
+
+    result: Dict[str, List[str]] = {}
+    now = time.time()
+
+    for session_file in session_dir.glob("*.jsonl"):
+        # recency フィルタ
+        if max_age_days is not None:
+            try:
+                mtime = session_file.stat().st_mtime
+                if (now - mtime) > max_age_days * 86400:
+                    continue
+            except OSError:
+                continue
+
+        commands: List[str] = []
+        try:
+            text = session_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        for line in text.splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if rec.get("type") != "assistant":
+                continue
+
+            msg = rec.get("message", {})
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") != "tool_use":
+                    continue
+                if item.get("name") != "Bash":
+                    continue
+                cmd = item.get("input", {}).get("command", "")
+                if cmd:
+                    commands.append(cmd)
+
+        if commands:
+            result[session_file.stem] = commands
+
+    return result
+
+
+def _classify_stall_step(command: str) -> Optional[str]:
+    """コマンドを long/investigation/recovery に分類する。"""
+    head = _get_command_head(command)
+    if head in RECOVERY_COMMANDS:
+        return "recovery"
+    if head in INVESTIGATION_COMMANDS:
+        return "investigation"
+    for pattern in LONG_COMMAND_PATTERNS:
+        if re.search(pattern, command):
+            return "long"
+    return None
+
+
+def _detect_stall_in_session(commands: List[str]) -> Optional[Dict[str, Any]]:
+    """単一セッション内で Long→Investigation→Recovery→Long パターンを検出する。
+
+    Returns:
+        検出パターン dict or None。
+    """
+    # 分類済みステップ列を作成
+    classified = [(cmd, _classify_stall_step(cmd)) for cmd in commands]
+
+    # Long→Investigation→Recovery→Long の部分シーケンスを探す
+    i = 0
+    n = len(classified)
+    while i < n:
+        cmd_i, cls_i = classified[i]
+        if cls_i != "long":
+            i += 1
+            continue
+
+        # Long found at i — look for Investigation after i
+        j = i + 1
+        has_investigation = False
+        has_recovery = False
+        recovery_actions = set()
+
+        while j < n:
+            _, cls_j = classified[j]
+            if cls_j == "investigation":
+                has_investigation = True
+            elif cls_j == "recovery":
+                if has_investigation:
+                    has_recovery = True
+                    recovery_actions.add(_get_command_head(classified[j][0]))
+            elif cls_j == "long":
+                if has_investigation and has_recovery:
+                    # Long コマンドパターンの正規化
+                    cmd_pattern = _get_command_key(cmd_i)
+                    return {
+                        "command_pattern": cmd_pattern,
+                        "recovery_actions": sorted(recovery_actions),
+                    }
+                # この Long を新たな起点にする
+                break
+            j += 1
+
+        i = j if j > i + 1 else i + 1
+
+    return None
+
+
+def detect_stall_recovery_patterns(
+    session_commands: Dict[str, List[str]],
+) -> List[Dict[str, Any]]:
+    """セッション横断で停滞→リカバリパターンを検出する。
+
+    Args:
+        session_commands: {session_id: [command_strings]}
+
+    Returns:
+        検出パターンリスト。各パターンに command_pattern, session_count,
+        recovery_actions, confidence を含む。
+    """
+    if not session_commands:
+        return []
+
+    # セッションごとに検出
+    pattern_sessions: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for sid, commands in session_commands.items():
+        detected = _detect_stall_in_session(commands)
+        if detected:
+            pattern_sessions[detected["command_pattern"]].append({
+                "session_id": sid,
+                "recovery_actions": detected["recovery_actions"],
+            })
+
+    # 閾値フィルタ + confidence 算出
+    results = []
+    for cmd_pattern, sessions in pattern_sessions.items():
+        session_count = len(sessions)
+        if session_count < STALL_RECOVERY_MIN_SESSIONS:
+            continue
+        # recovery_actions を全セッションから集約
+        all_actions = set()
+        for s in sessions:
+            all_actions.update(s["recovery_actions"])
+        confidence = min(0.5 + session_count * 0.1, 0.95)
+        results.append({
+            "command_pattern": cmd_pattern,
+            "session_count": session_count,
+            "recovery_actions": sorted(all_actions),
+            "confidence": confidence,
+        })
+
+    # confidence 降順でソート
+    results.sort(key=lambda x: -x["confidence"])
+    return results
+
+
+def stall_pattern_to_pitfall_candidate(
+    pattern: Dict[str, Any],
+    existing_candidates: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """停滞パターンを pitfall candidate に変換する。
+
+    既存候補と Jaccard 重複排除し、重複なら既存の Occurrence-count を更新して None を返す。
+    """
+    cmd = pattern.get("command_pattern", "")
+    session_count = pattern.get("session_count", 0)
+    root_cause = f"stall_recovery — {cmd}: {session_count} sessions"
+
+    if existing_candidates:
+        try:
+            from pitfall_manager import find_matching_candidate
+            match_idx = find_matching_candidate(existing_candidates, root_cause)
+            if match_idx is not None:
+                existing_candidates[match_idx]["fields"]["Occurrence-count"] = str(session_count)
+                return None
+        except ImportError:
+            pass
+
+    return {
+        "root_cause": root_cause,
+        "fields": {
+            "Occurrence-count": str(session_count),
+            "Status": "Candidate",
+            "Source": "stall_recovery_detection",
+        },
+    }
 
 
 def _is_cat_replaceable(command: str) -> bool:

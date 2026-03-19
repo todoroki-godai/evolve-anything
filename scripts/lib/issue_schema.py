@@ -23,6 +23,9 @@ SKILL_TRIAGE_MERGE = "skill_triage_merge"
 # ── workflow_checkpoint_candidate 定数 ────────────────
 WORKFLOW_CHECKPOINT_CANDIDATE = "workflow_checkpoint_candidate"
 
+# ── stall_recovery_candidate 定数 ─────────────────────
+STALL_RECOVERY_CANDIDATE = "stall_recovery_candidate"
+
 # ── split_candidate 定数 ────────────────────────────
 
 SPLIT_CANDIDATE_CONFIDENCE = 0.70
@@ -61,6 +64,13 @@ SE_TOTAL_SCORE = "total_score"
 SE_SCORES = "scores"
 SE_ANTI_PATTERNS = "anti_patterns"
 SE_RECOMMENDATION = "recommendation"
+
+# ── stall_recovery_candidate detail フィールド ────────
+
+SRC_COMMAND_PATTERN = "command_pattern"
+SRC_SESSION_COUNT = "session_count"
+SRC_RECOVERY_ACTIONS = "recovery_actions"
+SRC_CONFIDENCE = "confidence"
 
 # ── workflow_checkpoint_candidate detail フィールド ──
 
@@ -225,6 +235,25 @@ def make_skill_evolve_issue(
             SE_RECOMMENDATION: assessment.get(SE_RECOMMENDATION, ""),
         },
         "source": "skill_evolve_assessment",
+    }
+
+
+def make_stall_recovery_issue(
+    pattern: Dict[str, Any],
+) -> Dict[str, Any]:
+    """stall recovery パターン → issue dict 変換。"""
+    command_pattern = pattern.get(SRC_COMMAND_PATTERN, "")
+    return {
+        "type": STALL_RECOVERY_CANDIDATE,
+        "file": "",
+        "detail": {
+            SRC_COMMAND_PATTERN: command_pattern,
+            SRC_SESSION_COUNT: pattern.get(SRC_SESSION_COUNT, 0),
+            SRC_RECOVERY_ACTIONS: pattern.get(SRC_RECOVERY_ACTIONS, []),
+            SRC_CONFIDENCE: pattern.get(SRC_CONFIDENCE, 0.0),
+            "scope": "project",
+        },
+        "source": "discover_stall_recovery",
     }
 
 

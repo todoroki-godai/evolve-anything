@@ -358,6 +358,7 @@ def run_evolve(
             VERIFICATION_RULE_CANDIDATE,
             make_verification_rule_issue,
             make_workflow_checkpoint_issue,
+            make_stall_recovery_issue,
         )
         discover_data = result["phases"].get("discover", {})
         tool_usage = discover_data.get("tool_usage_patterns", {})
@@ -405,6 +406,11 @@ def run_evolve(
                 vn, detection_result,
                 project_dir_str=str(proj),
             ))
+
+        # --- stall_recovery_patterns を issue に変換 ---
+        stall_patterns = discover_data.get("stall_recovery_patterns", [])
+        for sp in stall_patterns:
+            issues.append(make_stall_recovery_issue(sp))
 
         # --- workflow_checkpoint_gaps を issue に変換 ---
         workflow_gaps = discover_data.get("workflow_checkpoint_gaps", [])

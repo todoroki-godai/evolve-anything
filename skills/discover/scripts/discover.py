@@ -642,6 +642,15 @@ RECOMMENDED_ARTIFACTS = [
         "hook_path": None,
     },
     {
+        "id": "process-stall-guard",
+        "type": "rule",
+        "path": Path.home() / ".claude" / "rules" / "process-stall-guard.md",
+        "description": "長時間プロセス実行前に既存プロセスを確認 — CDK/Docker/npm 等の停滞→kill→リトライ防止",
+        "hook_path": None,
+        "recommendation_id": "process_stall_guard",
+        "content_patterns": [r"\bpgrep\b", r"\bkill\b", r"stall|停滞"],
+    },
+    {
         "id": "evidence-before-claims",
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "verify-before-claim.md",
@@ -873,6 +882,23 @@ def run_discover(
             result["pitfall_candidates"] = pitfall_result["candidates"]
     except Exception as e:
         result["pitfall_candidates_error"] = str(e)
+
+    # 停滞→リカバリパターン検出
+    try:
+        from tool_usage_analyzer import (
+            extract_tool_calls_by_session,
+            detect_stall_recovery_patterns,
+            STALL_RECOVERY_RECENCY_DAYS,
+        )
+        session_commands = extract_tool_calls_by_session(
+            project_root,
+            max_age_days=STALL_RECOVERY_RECENCY_DAYS,
+        )
+        stall_patterns = detect_stall_recovery_patterns(session_commands)
+        result["stall_recovery_patterns"] = stall_patterns
+    except Exception as e:
+        result["stall_recovery_patterns"] = []
+        result["stall_recovery_error"] = str(e)
 
     # ワークフローチェックポイントギャップ走査
     try:
