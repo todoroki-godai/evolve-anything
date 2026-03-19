@@ -8,6 +8,10 @@
 - **WHEN** `VERIFICATION_CATALOG` をインポートする
 - **THEN** `data-contract-verification` エントリが含まれなければならない（MUST）。`rule_template` は3行以内の Markdown ルールテンプレートであること
 
+#### Scenario: ハッピーパステスト検証エントリ
+- **WHEN** `VERIFICATION_CATALOG` をインポートする
+- **THEN** `happy-path-test-verification` エントリが含まれなければならない（MUST）。`detection_fn` は `"detect_happy_path_test_gap"` でなければならない（MUST）
+
 ### Requirement: 検出関数のインターフェース
 
 `detection_fn` で参照される検出関数は `detect_{id}(project_dir: Path) -> Dict[str, Any]` のシグネチャを持たなければならない（MUST）。返り値は `{"applicable": bool, "evidence": list[str], "confidence": float, "llm_escalation_prompt": Optional[str]}` とする。

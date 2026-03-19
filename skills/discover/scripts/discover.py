@@ -614,6 +614,13 @@ RECOMMENDED_ARTIFACTS = [
         "content_patterns": [r"\bsleep\b"],
     },
     {
+        "id": "test-happy-path-first",
+        "type": "rule",
+        "path": Path.home() / ".claude" / "rules" / "test-happy-path-first.md",
+        "description": "テストはハッピーパスから書く — パイプラインの正常系E2Eテストを最初に書くルール",
+        "hook_path": None,
+    },
+    {
         "id": "commit-version",
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "commit-version.md",

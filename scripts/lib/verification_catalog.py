@@ -17,6 +17,7 @@ DATA_CONTRACT_MIN_PATTERNS = 3
 SIDE_EFFECT_MIN_PATTERNS = 3
 EVIDENCE_MIN_PATTERNS = 3
 MIN_CROSS_LAYER_PATTERNS = 3
+HAPPY_PATH_MIN_PATTERNS = 2
 DETECTION_TIMEOUT_SECONDS = 5
 MAX_CATALOG_ENTRIES = 10
 LARGE_REPO_FILE_THRESHOLD = 1000
@@ -44,6 +45,10 @@ _EVIDENCE_RULE_TEMPLATE = """# 証拠提示義務
 
 _CROSS_LAYER_RULE_TEMPLATE = """# クロスレイヤー整合性確認
 コード変更時に IaC 定義（環境変数設定・IAM 権限）との整合性を確認する。新しい環境変数参照や AWS サービス利用を追加したら、対応する IaC 定義も更新する。
+"""
+
+_HAPPY_PATH_RULE_TEMPLATE = """# テストはハッピーパスから書く
+オーケストレーション・パイプライン等の複数ステップを持つコードは、全ステップを通る正常系E2Eテストを最初に書く。
 """
 
 # ── 副作用検出パターン（3カテゴリ）────────────────────
@@ -106,6 +111,18 @@ VERIFICATION_CATALOG: List[Dict[str, Any]] = [
         "content_patterns": [
             "証拠", "evidence", "verify", "確認して", "テスト実行",
             "動作確認", "before claim", "証拠提示",
+        ],
+    },
+    {
+        "id": "happy-path-test-verification",
+        "type": "rule",
+        "description": "パイプライン/オーケストレーションコードに正常系E2Eテストの欠落を検出する",
+        "rule_template": _HAPPY_PATH_RULE_TEMPLATE.strip(),
+        "rule_filename": "test-happy-path-first.md",
+        "detection_fn": "detect_happy_path_test_gap",
+        "applicability": "conditional",
+        "content_patterns": [
+            "ハッピーパス", "happy path", "E2Eテスト", "正常系テスト",
         ],
     },
     {
@@ -381,6 +398,171 @@ def detect_evidence_verification(project_dir: Path) -> Dict[str, Any]:
     }
 
 
+# ── ハッピーパステスト欠落検出 ──────────────────────────
+
+# Python: step_*() / phase_*() / stage_*() / layer_*() / process_*() 呼び出し
+_PIPELINE_CALL_PATTERN_PY = re.compile(
+    r"(?:step|phase|stage|layer|process)_\w+\s*\(",
+)
+# TypeScript: await stepValidate() / phaseInit() 等 (camelCase)
+_PIPELINE_CALL_PATTERN_TS = re.compile(
+    r"await\s+(?:step|phase|stage|layer|process)\w+\s*\(",
+)
+# ループ型パイプライン: for step in steps / for phase in phases 等
+_PIPELINE_LOOP_PATTERN = re.compile(
+    r"for\s+\w+\s+in\s+(?:steps|phases|stages|layers|processes)\s*:",
+)
+# Python 関数定義
+_PY_FUNC_DEF = re.compile(r"^def\s+(\w+)\s*\(", re.MULTILINE)
+# TypeScript/JS 関数定義 (async function / function / const = async)
+_TS_FUNC_DEF = re.compile(
+    r"(?:async\s+)?function\s+(\w+)\s*\(|(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?\(",
+    re.MULTILINE,
+)
+
+_MIN_PIPELINE_CALLS = 3  # 1 関数内に 3 つ以上のステップ呼び出しで検出
+
+
+def _detect_pipeline_functions(filepath: Path) -> List[str]:
+    """ファイル内のパイプライン関数名を検出して返す。"""
+    try:
+        content = filepath.read_text(encoding="utf-8", errors="ignore")
+    except (PermissionError, OSError):
+        return []
+
+    is_ts = filepath.suffix in (".ts", ".tsx")
+    call_pattern = _PIPELINE_CALL_PATTERN_TS if is_ts else _PIPELINE_CALL_PATTERN_PY
+    func_def_pattern = _TS_FUNC_DEF if is_ts else _PY_FUNC_DEF
+
+    pipeline_funcs: List[str] = []
+    lines = content.split("\n")
+
+    # 関数の範囲を特定して、呼び出しパターンを数える
+    func_starts: List[tuple] = []  # (name, line_idx)
+    for i, line in enumerate(lines):
+        m = func_def_pattern.search(line)
+        if m:
+            name = m.group(1) or (m.group(2) if m.lastindex >= 2 else None)
+            if name:
+                func_starts.append((name, i))
+
+    for idx, (name, start_line) in enumerate(func_starts):
+        # 関数の終了行を推定（次の関数定義 or EOF）
+        end_line = func_starts[idx + 1][1] if idx + 1 < len(func_starts) else len(lines)
+        func_body = "\n".join(lines[start_line:end_line])
+
+        call_count = len(call_pattern.findall(func_body))
+        loop_count = len(_PIPELINE_LOOP_PATTERN.findall(func_body))
+
+        if call_count >= _MIN_PIPELINE_CALLS or loop_count >= 1:
+            pipeline_funcs.append(name)
+
+    return pipeline_funcs
+
+
+def _find_test_files(source_file: Path, project_dir: Path) -> List[Path]:
+    """ソースファイルに対応するテストファイルを探索して返す。"""
+    stem = source_file.stem
+    suffix = source_file.suffix
+    parent = source_file.parent
+    found: List[Path] = []
+
+    if suffix == ".py":
+        candidates = [
+            parent / f"test_{stem}.py",
+            parent / f"{stem}_test.py",
+            parent / "tests" / f"test_{stem}.py",
+            parent / "tests" / f"{stem}_test.py",
+            project_dir / "tests" / f"test_{stem}.py",
+            project_dir / "tests" / f"{stem}_test.py",
+        ]
+    elif suffix in (".ts", ".tsx"):
+        candidates = [
+            parent / f"{stem}.test.ts",
+            parent / f"{stem}.test.tsx",
+            parent / "__tests__" / f"{stem}.test.ts",
+            parent / "__tests__" / f"{stem}.test.tsx",
+        ]
+    else:
+        return []
+
+    for c in candidates:
+        if c.exists():
+            found.append(c)
+    return found
+
+
+def _test_has_function_call(test_files: List[Path], func_name: str) -> bool:
+    """テストファイル内にパイプライン関数名の呼び出しがあるか判定する。"""
+    for tf in test_files:
+        try:
+            content = tf.read_text(encoding="utf-8", errors="ignore")
+            if func_name in content:
+                return True
+        except (PermissionError, OSError):
+            continue
+    return False
+
+
+def detect_happy_path_test_gap(project_dir: Path) -> Dict[str, Any]:
+    """happy-path-test-verification の検出関数。
+
+    パイプライン/オーケストレーションコードを走査し、
+    正常系E2Eテストが欠落しているケースを検出する。
+    """
+    if not project_dir.is_dir():
+        return _safe_result("project_dir does not exist")
+
+    evidence: List[str] = []
+    try:
+        for filepath in _iter_source_files(project_dir):
+            if _is_test_file(filepath):
+                continue
+            pipeline_funcs = _detect_pipeline_functions(filepath)
+            if not pipeline_funcs:
+                continue
+
+            # テストファイル探索
+            test_files = _find_test_files(filepath, project_dir)
+            # いずれかのパイプライン関数がテスト未呼び出しなら evidence に追加
+            has_gap = False
+            for fn in pipeline_funcs:
+                if not _test_has_function_call(test_files, fn):
+                    has_gap = True
+                    break
+
+            if has_gap:
+                try:
+                    rel = str(filepath.relative_to(project_dir))
+                except ValueError:
+                    rel = str(filepath)
+                evidence.append(rel)
+                if len(evidence) >= 10:
+                    break
+    except Exception as e:
+        return _safe_result(str(e))
+
+    count = len(evidence)
+    if count >= HAPPY_PATH_MIN_PATTERNS:
+        confidence = min(0.7, 0.5 + count * 0.04)
+        return {
+            "applicable": True,
+            "evidence": evidence,
+            "confidence": confidence,
+            "llm_escalation_prompt": (
+                f"以下のプロジェクトで {count} 箇所のパイプライン/オーケストレーションコードに"
+                f"正常系E2Eテストの欠落が検出されました。"
+                f"「テストはハッピーパスから書く」ルールは有用ですか？"
+                f"yes/no で回答してください。\n\n検出ファイル:\n" + "\n".join(evidence[:5])
+            ),
+        }
+    return {
+        "applicable": False,
+        "evidence": evidence,
+        "confidence": 0.0,
+    }
+
+
 # ── クロスレイヤー検出パターン ────────────────────────
 
 # 環境変数参照: Python (os.environ.get/os.environ[]/os.getenv) / TS (process.env.)
@@ -531,6 +713,7 @@ _DETECTION_FN_DISPATCH: Dict[str, Any] = {
     "detect_data_contract_verification": detect_data_contract_verification,
     "detect_side_effect_verification": detect_side_effect_verification,
     "detect_evidence_verification": detect_evidence_verification,
+    "detect_happy_path_test_gap": detect_happy_path_test_gap,
     "detect_cross_layer_consistency": detect_cross_layer_consistency,
 }
 
@@ -565,11 +748,13 @@ def _run_detection_fn(fn_name: str, project_dir: Path) -> Dict[str, Any]:
 _SIDE_EFFECT_CONTENT_KEYWORDS = ["副作用", "side effect"]
 _EVIDENCE_CONTENT_KEYWORDS = ["証拠", "evidence", "verify-before", "証拠提示", "before claim"]
 _CROSS_LAYER_CONTENT_KEYWORDS = ["cross-layer", "IaC", "クロスレイヤー", "環境変数", "IAM"]
+_HAPPY_PATH_CONTENT_KEYWORDS = ["ハッピーパス", "happy path", "E2Eテスト", "正常系テスト"]
 
 # エントリ ID → content-aware キーワードのマッピング
 _CONTENT_KEYWORDS_MAP: Dict[str, List[str]] = {
     "side-effect-verification": _SIDE_EFFECT_CONTENT_KEYWORDS,
     "evidence-before-claims": _EVIDENCE_CONTENT_KEYWORDS,
+    "happy-path-test-verification": _HAPPY_PATH_CONTENT_KEYWORDS,
     "cross-layer-consistency": _CROSS_LAYER_CONTENT_KEYWORDS,
 }
 
