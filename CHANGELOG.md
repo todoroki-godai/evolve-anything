@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- **skills**: 全15スキルに `effort` frontmatter 追加（CC v2.1.80対応、low/medium/high 3段階）
+
+### Fixed
+- **marketplace.json**: `claude plugin validate` で未サポートの `$schema`/`description` を除去
+
 ## [1.11.0] - 2026-03-19
 
 ### Added
