@@ -9,6 +9,7 @@
 | 自律進化 | evolve, discover, reorganize, prune, audit | Observe → Diagnose → Compile → Housekeeping → Report の3ステージパイプライン |
 | フィードバック | reflect | 修正パターン検出 → corrections.jsonl → CLAUDE.md/rules に反映 |
 | 直接パッチ最適化 | optimize, rl-loop, generate-fitness, evolve-fitness | corrections/context → LLM 1パスパッチ → regression gate（`scripts/lib/regression_gate.py` に共通化） |
+| エージェント管理 | agent-brushup | エージェント定義の品質診断・改善提案・新規作成・削除候補 |
 | ユーティリティ | feedback, update, version, backfill | フィードバック・更新・バージョン確認・初期セットアップ |
 
 ## コンポーネント
@@ -23,6 +24,7 @@
 | `skill-triage` | テレメトリ+trigger evalで CREATE/UPDATE/SPLIT/MERGE/OK の5択判定（`scripts/lib/skill_triage.py`） |
 | `trigger-eval-generator` | sessions.jsonl+usage.jsonl → skill-creator互換 evals.json 自動生成（`scripts/lib/trigger_eval_generator.py`） |
 | `evolve-skill` | 特定スキルに自己進化パターン（Pre-flight / pitfalls.md）をピンポイント組み込み（`assess_single_skill` + `apply_evolve_proposal`） |
+| `agent-brushup` | エージェント定義の品質診断・改善提案・upstream監視（`scripts/lib/agent_quality.py`） |
 
 ## クイックスタート
 
@@ -38,6 +40,9 @@
 
 # 環境の健康診断
 /rl-anything:audit
+
+# エージェント品質診断
+/rl-anything:agent-brushup
 ```
 
 ## 適応度関数

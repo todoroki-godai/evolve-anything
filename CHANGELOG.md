@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- **agent-brushup**: 新スキル `/rl-anything:agent-brushup` — エージェント定義（~/.claude/agents/）の品質診断・改善提案・新規作成・削除候補提示
+- **agent_quality**: `scan_agents()` — global/project エージェント走査（重複時 project 優先）
+- **agent_quality**: `check_quality()` — 7項目品質チェック + 6アンチパターン検出 + 6ベストプラクティス照合
+- **agent_quality**: `check_upstream()` — agency-agents リポジトリ更新監視（gh api、graceful degradation）
+- **observe**: Agent ツール使用時に `agent_name` フィールドを usage.jsonl に記録
+- **subagent_observe**: SubagentStop イベントに `agent_name` フィールドを subagents.jsonl に記録
 - **skills**: 全15スキルに `effort` frontmatter 追加（CC v2.1.80対応、low/medium/high 3段階）
 - **effort_detector**: `infer_effort_level()` — スキル特性から effort レベルを6段階ヒューリスティクスで推定（disable-model-invocation/Agent/行数/キーワード）
 - **effort_detector**: `detect_missing_effort_frontmatter()` — プロジェクトスキル走査で effort 未設定を検出+レベル提案

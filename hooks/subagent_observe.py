@@ -33,6 +33,7 @@ def handle_subagent_stop(event: dict) -> None:
 
     record = {
         "agent_type": event.get("agent_type", ""),
+        "agent_name": event.get("agent_name", ""),
         "agent_id": event.get("agent_id", ""),
         "last_assistant_message": last_message,
         "agent_transcript_path": event.get("agent_transcript_path", ""),

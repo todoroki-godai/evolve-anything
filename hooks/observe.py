@@ -79,9 +79,11 @@ def handle_post_tool_use(event: dict) -> None:
         if len(prompt) > MAX_PROMPT_LENGTH:
             prompt = prompt[:MAX_PROMPT_LENGTH]
         wf_ctx = common.read_workflow_context(session_id)
+        agent_name = tool_input.get("name", "") or ""
         usage_record = {
             "skill_name": f"Agent:{subagent_type}",
             "subagent_type": subagent_type,
+            "agent_name": agent_name,
             "agent_id": event.get("agent_id", ""),
             "prompt": prompt,
             "session_id": session_id,
