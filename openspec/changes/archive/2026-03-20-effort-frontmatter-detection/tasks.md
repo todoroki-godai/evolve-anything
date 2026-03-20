@@ -12,10 +12,10 @@
 ## 3. テスト
 
 - [x] 3.1 `scripts/tests/test_effort_frontmatter.py` 新規作成 — TestInferEffortLevel (7テスト) + TestDetectMissingEffortFrontmatter (5テスト) + TestFixMissingEffort (2テスト) + TestMakeEffortIssue (1テスト)
-- [ ] 3.2 全テストスイート回帰テスト実行
+- [x] 3.2 全テストスイート回帰テスト実行（1739 passed, 0 failed）
 
 ## 4. ドキュメント
 
-- [ ] 4.1 CLAUDE.md に effort_detector モジュール情報追記
-- [ ] 4.2 CHANGELOG 追記
-- [ ] 4.3 MEMORY.md に change エントリ追加
+- [x] 4.1 MEMORY.md にモジュール情報追記（CLAUDE.md はモジュール個別記載パターンなし、MEMORY.md で対応）
+- [x] 4.2 CHANGELOG 追記
+- [x] 4.3 MEMORY.md に change エントリ追加
