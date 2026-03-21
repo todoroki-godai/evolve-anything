@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### SPEC.md から移動（Recent Changes ローテーション）
+- 2026-03-18: rl-loop --evolve フラグ + evolve-skill 独立コマンド
+- 2026-03-18: Superpowers 知見 cherry-pick（合理化防止テーブル + CSO）
+- 2026-03-15: pitfall ライフサイクル自動化 + プラグインスキル編集保護
+- 2026-03-13: verification knowledge catalog + side-effect 検出
+- 2026-03-09: self-evolution + auto-evolve/compression trigger
+
+### Added
+- **gstack**: audit の Workflow Analytics を OpenSpec → gstack に移行（plan→refine→ship→document→spec→retro ファネル）
+- **gstack**: discover の RECOMMENDED_ARTIFACTS に gstack ツール5件追加（gstack-flow-chain, living-spec-awareness, spec-keeper, ship, gstack-refine）
+- **gstack**: aggregate_plugin_usage に gstack スキル分類追加
+
+### Removed
+- **openspec**: OpenSpec スキル5件を削除（propose/apply/explore/verify/archive）— 新規ユーザーに openspec コマンドが表示されなくなる
+
 ### Added
 - **agent-brushup**: 新スキル `/rl-anything:agent-brushup` — エージェント定義（~/.claude/agents/）の品質診断・改善提案・新規作成・削除候補提示
 - **agent_quality**: `scan_agents()` — global/project エージェント走査（重複時 project 優先）
