@@ -10,6 +10,9 @@
 - 2026-03-09: self-evolution + auto-evolve/compression trigger
 
 ### Added
+- **handover**: 新スキル `/rl-anything:handover` — セッション作業を構造化ノート（.claude/handovers/）に書き出し、別セッションへ引き継ぐ
+- **handover**: PreCompact hook でコンテキスト圧縮前に handover を自動提案（1h クールダウン）
+- **handover**: SessionStart hook で最新 handover ノートをプレビュー表示（48h staleness）
 - **gstack**: audit の Workflow Analytics を OpenSpec → gstack に移行（plan→refine→ship→document→spec→retro ファネル）
 - **gstack**: discover の RECOMMENDED_ARTIFACTS に gstack ツール5件追加（gstack-flow-chain, living-spec-awareness, spec-keeper, ship, gstack-refine）
 - **gstack**: aggregate_plugin_usage に gstack スキル分類追加
