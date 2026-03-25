@@ -1,9 +1,52 @@
 # Changelog
 
+## [1.15.0] - 2026-03-26
+
+### Added
+- **ファイル変更の即時検知**: CLAUDE.md や SKILL.md を編集すると、セッション終了を待たずに `/rl-anything:audit` を提案。rules ファイルも watchPaths で自動登録（CC v2.1.83 FileChanged hook）
+- **MEMORY.md 25KB ガード**: CC v2.1.83 の 25KB 切り詰め上限を事前検知。audit と bloat_check がバイトサイズを監視し、80%（20KB）到達で警告
+- **プラグイン設定の対話化**: plugin enable 時に evolve/audit の頻度やクールダウンを設定可能に。6項目の userConfig（CC v2.1.83 manifest.userConfig）
+
+### Changed
+- **トリガー設定の3層マージ**: デフォルト → evolve-state.json → userConfig（環境変数）の優先順位で設定を解決。明示的にセットされた値のみ上書きし、既存設定を潰さない
+- **auto_trigger ゲート**: session_summary と file_changed の両方で userConfig の auto_trigger=false を尊重
+
+## [1.14.2] - 2026-03-25
+
+### Fixed
+- **SPEC.md**: 構造突合リカバリーで未記載コンポーネントを修正 — hooks 7→11, scripts/lib 25+→27, fitness 7→8
+
+## [Unreleased]
+
+### Changed
+- **handover**: checkpoint.json 優先で重複データ収集を廃止 — テンプレートを判断記録 + 次アクションに特化（Summary/Related Files 廃止）。closes #43
+
+### Added
+- **handover**: Deploy State セクション追加 — デプロイ状態を構造化記録し、セッション復元時に Deploy State / Next Actions を優先表示。`--deploy-state` CLI で machine-readable アクセスも提供。closes #44
+- **second-opinion**: Claude Agent によるセカンドオピニオン機能 — codex 不要で Agent ツールのみで動作。startup/builder/general 3モード対応。gstack office-hours Phase 3.5 の codex 代替として、または汎用的に利用可能。closes #42
+- **critical-instruction-compliance**: スキルに書いた「必ず守れ」がちゃんと守られる — MUST/禁止等の重要指示を自動抽出し、穏やかな表現にリフレーズして注入。ユーザーの修正（corrections）とスキル指示を突合して違反を自動検出、pitfall に登録して次から守るよう自動学習。対立動詞検出（move↔delete）+ LLM Judge の2段階マッチング。closes #39
+- **remediation**: 修正の独立検証 — auto_fixable な修正に対してヒューリスティクスベースのダブルチェックを実施。見出し保持・コードブロック対応・空ファイル・行数制限を自動検証し、FP 率を低減
+- **remediation**: 12 パターンの FP 自動除外 — テストファイル・アーカイブパス・外部 URL・コードブロック内参照等を false positive として自動分類。`fp_excluded` カテゴリで明示的に追跡
+- **remediation**: 原則ベース自動昇格 — completeness/pragmatic/DRY/explicit_over_clever の 4 原則で、proposable な修正を auto_fixable に自動昇格。gstack /autoplan のパターンを移植
+- **layer_diagnose**: Skills セクションの synonym マッチ — "Key Skills", "Available Skills", "スキル" 等のバリエーションを自動認識。missing_section の false positive を削減
+- **evolve**: 環境規模の自動判定 — スキル/ルール数に応じて small/medium/large を判定し、evolve/audit の走査深度を自動調整。大規模環境でのパフォーマンス改善
+- **fitness**: 全 fitness モジュールの閾値を `config.py` に集約 — 1箇所で全閾値を管理可能に。各モジュールは config.py からの import + フォールバックで後方互換
+- **environment**: 動的重み計算 — 利用可能な軸に応じて重みを自動正規化。ハードコード 4 パターンを 1 つの `_normalize_weights()` に置換。skill_quality を 4 軸目として統合
+- **constitutional**: gstack /cso セキュリティ監査との連携 — /cso 実行結果があれば constitutional score に security 軸としてブレンド。結果がなければ graceful degradation
+- **audit**: gstack /retro global とのクロスプロジェクト連携 — `--cross-project` フラグで複数プロジェクトのテレメトリを集約表示。/retro global の結果を自動参照
+
 ## [1.13.0] — 2026-03-22
+
+### SPEC.md から移動（Recent Changes ローテーション）
+- 2026-03-24: gstack v0.10-v0.11 改善パターン6項目移植 — 独立検証、FP排除(12条件)、規模適応、fitness config.py集約、動的重み、/cso×fitness連携、/retro×audit cross-project、原則ベース昇格
+- 2026-03-23: handover に SPEC.md 同期ステップ追加（`/spec-keeper update` を自動実行）
+- 2026-03-22: v1.13.0 — 検証系スキルのテレメトリ非依存昇格
+- 2026-03-22: v1.12.0 — handover スキル追加 + OpenSpec→gstack 移行 Phase 1-2
+- 2026-03-20: agent-brushup スキル追加（品質診断 + upstream 監視）
 
 ### Added
 - **evolve-skill**: 検証系スキル（verify/validate/check/qa等）はテレメトリが少なくても suitability を medium に自動昇格 — 失敗インパクトが大きい検証系は常に自己進化を推奨
+- **handover**: Step 4 に SPEC.md 同期を追加 — SPEC.md があれば `/spec-keeper update` を自動実行し、次セッションの Next Actions を最新化
 
 ## [1.12.1] — 2026-03-22
 
@@ -13,6 +56,7 @@
 ## [1.12.0] — 2026-03-22
 
 ### SPEC.md から移動（Recent Changes ローテーション）
+- 2026-03-20: effort frontmatter 全15スキルに追加
 - 2026-03-18: rl-loop --evolve フラグ + evolve-skill 独立コマンド
 - 2026-03-18: Superpowers 知見 cherry-pick（合理化防止テーブル + CSO）
 - 2026-03-15: pitfall ライフサイクル自動化 + プラグインスキル編集保護

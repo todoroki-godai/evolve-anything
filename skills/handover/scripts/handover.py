@@ -5,6 +5,7 @@ git + テレメトリから handover ノート用のデータを収集する。
 LLM 呼び出しなし。SKILL.md が LLM にノート生成を指示する。
 """
 import json
+import re
 import subprocess
 import sys
 import time
@@ -57,22 +58,62 @@ def _load_session_records(jsonl_file: Path) -> list[dict]:
     return records
 
 
-def collect_handover_data(project_dir: str) -> dict:
-    """git + テレメトリからハンドオーバー用データを収集する。LLM 不使用。"""
-    # git status
-    status_out = _run_git(["status", "--short"])
-    uncommitted = [
-        line.strip() for line in status_out.strip().splitlines() if line.strip()
-    ] if status_out else []
+def _load_checkpoint() -> dict | None:
+    """checkpoint.json を読み込む。存在しないか壊れている場合は None。"""
+    checkpoint_file = DATA_DIR / "checkpoint.json"
+    if not checkpoint_file.exists():
+        return None
+    try:
+        return json.loads(checkpoint_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
 
-    # git log
+
+def _collect_work_context_from_git() -> dict:
+    """git から作業コンテキストを収集する（checkpoint がない場合のフォールバック）。"""
+    context: dict = {
+        "recent_commits": [],
+        "uncommitted_files": [],
+        "git_branch": "",
+    }
+
+    branch_out = _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    context["git_branch"] = branch_out.strip()
+
     log_out = _run_git(["log", "--oneline", f"-{_MAX_COMMITS}"])
-    commits = [
-        line for line in log_out.strip().splitlines() if line.strip()
-    ] if log_out else []
+    if log_out:
+        context["recent_commits"] = [
+            line for line in log_out.strip().splitlines() if line.strip()
+        ]
 
-    # git diff --stat
-    diff_stat = _run_git(["diff", "--stat"]).strip()
+    status_out = _run_git(["status", "--short"])
+    if status_out:
+        context["uncommitted_files"] = [
+            line.strip() for line in status_out.strip().splitlines() if line.strip()
+        ]
+
+    return context
+
+
+def collect_handover_data(project_dir: str) -> dict:
+    """checkpoint + テレメトリからハンドオーバー用データを収集する。LLM 不使用。
+
+    checkpoint.json があればそこから work_context/corrections を取得（git 再呼び出し不要）。
+    なければ git にフォールバックする。
+    """
+    checkpoint = _load_checkpoint()
+
+    # work_context: checkpoint 優先、なければ git フォールバック
+    if checkpoint and checkpoint.get("work_context"):
+        work_context = checkpoint["work_context"]
+    else:
+        work_context = _collect_work_context_from_git()
+
+    # corrections: checkpoint 優先、なければ corrections.jsonl フォールバック
+    if checkpoint and checkpoint.get("corrections_snapshot"):
+        corrections = checkpoint["corrections_snapshot"][-10:]
+    else:
+        corrections = _load_session_records(DATA_DIR / "corrections.jsonl")[-10:]
 
     # usage.jsonl — 当セッションのスキル使用
     usage_records = _load_session_records(DATA_DIR / "usage.jsonl")
@@ -80,34 +121,14 @@ def collect_handover_data(project_dir: str) -> dict:
         {"skill": r.get("skill_name", ""), "timestamp": r.get("timestamp", "")}
         for r in usage_records
         if r.get("skill_name")
-    ]
-    # 直近 20 件に絞る
-    skills_used = skills_used[-20:]
-
-    # corrections.jsonl
-    corrections = _load_session_records(DATA_DIR / "corrections.jsonl")
-    # 直近 10 件に絞る
-    corrections = corrections[-10:]
-
-    # checkpoint.json の work_context
-    work_context = {}
-    checkpoint_file = DATA_DIR / "checkpoint.json"
-    if checkpoint_file.exists():
-        try:
-            cp = json.loads(checkpoint_file.read_text(encoding="utf-8"))
-            work_context = cp.get("work_context", {})
-        except (json.JSONDecodeError, OSError):
-            pass
+    ][-20:]
 
     return {
         "project_dir": project_dir,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "uncommitted_files": uncommitted,
-        "recent_commits": commits,
-        "diff_stat": diff_stat,
+        "work_context": work_context,
         "skills_used": skills_used,
         "corrections": corrections,
-        "work_context": work_context,
     }
 
 
@@ -138,6 +159,31 @@ def latest_handover(project_dir: str, stale_hours: float = STALE_HOURS) -> str |
         return None
 
 
+def extract_section(content: str, section_name: str) -> str:
+    """Markdown の ## セクションを名前で抽出する。見つからなければ空文字列。"""
+    pattern = rf"^## {re.escape(section_name)}\s*\n"
+    match = re.search(pattern, content, re.MULTILINE)
+    if not match:
+        return ""
+    start = match.end()
+    # 次の ## ヘッダーまたは末尾まで
+    next_header = re.search(r"^## ", content[start:], re.MULTILINE)
+    if next_header:
+        body = content[start : start + next_header.start()]
+    else:
+        body = content[start:]
+    return body.strip()
+
+
+def extract_deploy_state(project_dir: str, stale_hours: float = STALE_HOURS) -> str | None:
+    """最新 handover から Deploy State セクションを抽出する。なければ None。"""
+    content = latest_handover(project_dir, stale_hours=stale_hours)
+    if content is None:
+        return None
+    section = extract_section(content, "Deploy State")
+    return section if section else None
+
+
 def main() -> None:
     """CLI エントリポイント。"""
     import argparse
@@ -146,9 +192,18 @@ def main() -> None:
     parser.add_argument("--project-dir", default=".", help="Project directory")
     parser.add_argument("--list", action="store_true", help="List existing handovers")
     parser.add_argument("--latest", action="store_true", help="Show latest handover")
+    parser.add_argument("--deploy-state", action="store_true", help="Extract deploy state from latest handover")
     args = parser.parse_args()
 
     project_dir = str(Path(args.project_dir).resolve())
+
+    if args.deploy_state:
+        state = extract_deploy_state(project_dir)
+        if state:
+            print(state)
+        else:
+            print(json.dumps({"status": "no_deploy_state"}, ensure_ascii=False))
+        return
 
     if args.list:
         entries = list_handovers(project_dir)

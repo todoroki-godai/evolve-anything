@@ -29,6 +29,12 @@ STALL_RECOVERY_CANDIDATE = "stall_recovery_candidate"
 # ── missing_effort_candidate 定数 ─────────────────────
 MISSING_EFFORT_CANDIDATE = "missing_effort_candidate"
 
+# ── skill_quality_pattern_gap 定数 ──────────────────────
+SKILL_QUALITY_PATTERN_GAP = "skill_quality_pattern_gap"
+
+# ── instruction_violation_candidate 定数 ──────────────
+INSTRUCTION_VIOLATION_CANDIDATE = "instruction_violation_candidate"
+
 # ── split_candidate 定数 ────────────────────────────
 
 SPLIT_CANDIDATE_CONFIDENCE = 0.70
@@ -85,6 +91,17 @@ WCC_CONFIDENCE = "confidence"
 WCC_TEMPLATE = "template"
 WCC_DESCRIPTION = "description"
 
+# ── skill_quality_pattern_gap detail フィールド ──────
+
+SQP_SKILL_NAME = "skill_name"
+SQP_SKILL_PATH = "skill_path"
+SQP_DOMAIN = "domain"
+SQP_MISSING_REQUIRED = "missing_required"
+SQP_MISSING_RECOMMENDED = "missing_recommended"
+SQP_PATTERN_SCORE = "pattern_score"
+SQP_OVERALL_SCORE = "overall_score"
+SQP_CONFIDENCE = "confidence"
+
 # ── missing_effort_candidate detail フィールド ────────
 
 MEC_SKILL_NAME = "skill_name"
@@ -92,6 +109,16 @@ MEC_SKILL_PATH = "skill_path"
 MEC_PROPOSED_EFFORT = "proposed_effort"
 MEC_CONFIDENCE = "confidence"
 MEC_REASON = "reason"
+
+# ── instruction_violation_candidate detail フィールド ──
+
+IVC_SKILL_NAME = "skill_name"
+IVC_INSTRUCTION_TEXT = "instruction_text"
+IVC_CORRECTION_MESSAGE = "correction_message"
+IVC_MATCH_TYPE = "match_type"
+IVC_CONFIDENCE = "confidence"
+IVC_REASON = "reason"
+IVC_NEEDS_REVIEW = "needs_review"
 
 
 # ── Factory 関数 ────────────────────────────────────
@@ -291,6 +318,30 @@ def make_workflow_checkpoint_issue(
     }
 
 
+def make_skill_quality_issue(
+    quality_result: Dict[str, Any],
+    *,
+    skill_path: str = "",
+) -> Dict[str, Any]:
+    """quality_engine のパターンギャップ検出結果 → issue dict 変換。"""
+    skill_name = quality_result.get(SQP_SKILL_NAME, "")
+    return {
+        "type": SKILL_QUALITY_PATTERN_GAP,
+        "file": skill_path or f".claude/skills/{skill_name}/SKILL.md",
+        "detail": {
+            SQP_SKILL_NAME: skill_name,
+            SQP_SKILL_PATH: skill_path,
+            SQP_DOMAIN: quality_result.get(SQP_DOMAIN, "default"),
+            SQP_MISSING_REQUIRED: quality_result.get(SQP_MISSING_REQUIRED, []),
+            SQP_MISSING_RECOMMENDED: quality_result.get(SQP_MISSING_RECOMMENDED, []),
+            SQP_PATTERN_SCORE: quality_result.get(SQP_PATTERN_SCORE, 0.0),
+            SQP_OVERALL_SCORE: quality_result.get(SQP_OVERALL_SCORE, 0.0),
+            SQP_CONFIDENCE: quality_result.get(SQP_CONFIDENCE, 0.0),
+        },
+        "source": "quality_engine",
+    }
+
+
 def make_missing_effort_issue(
     skill_name: str,
     skill_path: str,
@@ -310,4 +361,31 @@ def make_missing_effort_issue(
             MEC_REASON: reason,
         },
         "source": "effort_detector",
+    }
+
+
+def make_instruction_violation_issue(
+    skill_name: str,
+    skill_path: str,
+    instruction_text: str,
+    correction_message: str,
+    match_type: str,
+    confidence: float,
+    reason: str = "",
+    needs_review: bool = False,
+) -> Dict[str, Any]:
+    """instruction violation 検出結果 → issue dict 変換。"""
+    return {
+        "type": INSTRUCTION_VIOLATION_CANDIDATE,
+        "file": skill_path,
+        "detail": {
+            IVC_SKILL_NAME: skill_name,
+            IVC_INSTRUCTION_TEXT: instruction_text,
+            IVC_CORRECTION_MESSAGE: correction_message,
+            IVC_MATCH_TYPE: match_type,
+            IVC_CONFIDENCE: confidence,
+            IVC_REASON: reason,
+            IVC_NEEDS_REVIEW: needs_review,
+        },
+        "source": "instruction_violation_detection",
     }
