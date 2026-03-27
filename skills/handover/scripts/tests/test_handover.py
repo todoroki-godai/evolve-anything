@@ -248,3 +248,208 @@ class TestExtractDeployState:
 
         result = handover.extract_deploy_state(str(project_dir))
         assert result is None
+
+
+class TestRunGitCwd:
+    """_run_git() の cwd パラメータテスト。"""
+
+    def test_cwd_passed_to_subprocess(self):
+        """cwd が subprocess.run に渡される。"""
+        mock_result = mock.Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = "main\n"
+
+        with mock.patch("subprocess.run", return_value=mock_result) as mock_run:
+            handover._run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd="/some/project")
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["cwd"] == "/some/project"
+
+    def test_cwd_none_by_default(self):
+        """cwd 省略時は None（呼び出し元の CWD を使用）。"""
+        mock_result = mock.Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = "main\n"
+
+        with mock.patch("subprocess.run", return_value=mock_result) as mock_run:
+            handover._run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+
+        _, kwargs = mock_run.call_args
+        assert kwargs.get("cwd") is None
+
+
+class TestCollectWorkContextCwd:
+    """_collect_work_context_from_git() の project_dir 伝播テスト。"""
+
+    def test_project_dir_passed_to_run_git(self):
+        """project_dir が _run_git の cwd に伝播する。"""
+        with mock.patch("handover._run_git", return_value="") as mock_git:
+            handover._collect_work_context_from_git(project_dir="/my/project")
+
+        for call in mock_git.call_args_list:
+            _, kwargs = call
+            assert kwargs.get("cwd") == "/my/project"
+
+    def test_project_dir_none_default(self):
+        """project_dir 省略時は cwd=None。"""
+        with mock.patch("handover._run_git", return_value="") as mock_git:
+            handover._collect_work_context_from_git()
+
+        for call in mock_git.call_args_list:
+            _, kwargs = call
+            assert kwargs.get("cwd") is None
+
+
+class TestCollectHandoverDataCwd:
+    """collect_handover_data() → _collect_work_context_from_git() への project_dir 伝播。"""
+
+    def test_project_dir_flows_to_git_fallback(self, project_dir, data_dir):
+        """checkpoint なし時、project_dir が git フォールバックに伝播する。"""
+        with mock.patch("handover._run_git", return_value="") as mock_git:
+            handover.collect_handover_data(str(project_dir))
+
+        for call in mock_git.call_args_list:
+            _, kwargs = call
+            assert kwargs.get("cwd") == str(project_dir)
+
+
+class TestIsGithubRepoCwd:
+    """is_github_repo() の cwd パラメータテスト。"""
+
+    def test_cwd_passed_to_run_git(self):
+        """cwd が _run_git に伝播する。"""
+        with mock.patch("handover._run_git", return_value="git@github.com:user/repo.git\n") as mock_git:
+            handover.is_github_repo(cwd="/my/project")
+
+        _, kwargs = mock_git.call_args
+        assert kwargs.get("cwd") == "/my/project"
+
+
+class TestIsGithubRepo:
+    """is_github_repo() のテスト。"""
+
+    def test_github_ssh_remote(self):
+        """GitHub SSH リモートを検出する。"""
+        with mock.patch("handover._run_git", return_value="git@github.com:user/repo.git\n"):
+            assert handover.is_github_repo() is True
+
+    def test_github_https_remote(self):
+        """GitHub HTTPS リモートを検出する。"""
+        with mock.patch("handover._run_git", return_value="https://github.com/user/repo.git\n"):
+            assert handover.is_github_repo() is True
+
+    def test_non_github_remote(self):
+        """GitHub 以外のリモートは False。"""
+        with mock.patch("handover._run_git", return_value="git@gitlab.com:user/repo.git\n"):
+            assert handover.is_github_repo() is False
+
+    def test_no_remote(self):
+        """リモートなしは False。"""
+        with mock.patch("handover._run_git", return_value=""):
+            assert handover.is_github_repo() is False
+
+
+class TestFormatIssueTitle:
+    """format_issue_title() のテスト。"""
+
+    def test_includes_date_and_branch(self):
+        """タイトルにブランチ名と日付を含む。"""
+        data = {
+            "timestamp": "2026-03-27T10:00:00+00:00",
+            "work_context": {"git_branch": "feat/handover-issue"},
+        }
+        title = handover.format_issue_title(data)
+        assert "feat/handover-issue" in title
+        assert "2026-03-27" in title
+
+    def test_no_branch(self):
+        """ブランチなしでもエラーにならない。"""
+        data = {
+            "timestamp": "2026-03-27T10:00:00+00:00",
+            "work_context": {"git_branch": ""},
+        }
+        title = handover.format_issue_title(data)
+        assert "2026-03-27" in title
+
+
+class TestFormatIssueBody:
+    """format_issue_body() のテスト。"""
+
+    def test_includes_all_sections(self):
+        """必須セクション（Decisions 等のプレースホルダ + Context）を含む。"""
+        data = {
+            "project_dir": "/tmp/proj",
+            "timestamp": "2026-03-27T10:00:00+00:00",
+            "work_context": {
+                "git_branch": "feat/test",
+                "recent_commits": ["abc1234 feat: test"],
+                "uncommitted_files": ["M  src/app.py"],
+            },
+            "skills_used": [{"skill": "ship", "timestamp": "2026-03-27T10:00:00+00:00"}],
+            "corrections": [],
+        }
+        body = handover.format_issue_body(data)
+        assert "## Decisions" in body
+        assert "## Discarded Alternatives" in body
+        assert "## Deploy State" in body
+        assert "## Next Actions" in body
+        assert "## Context (auto)" in body
+        assert "feat/test" in body
+        assert "abc1234" in body
+
+    def test_empty_data(self):
+        """空データでもエラーにならない。"""
+        data = {
+            "project_dir": "/tmp/proj",
+            "timestamp": "2026-03-27T10:00:00+00:00",
+            "work_context": {
+                "git_branch": "",
+                "recent_commits": [],
+                "uncommitted_files": [],
+            },
+            "skills_used": [],
+            "corrections": [],
+        }
+        body = handover.format_issue_body(data)
+        assert "## Context (auto)" in body
+
+
+class TestCreateIssue:
+    """create_issue() のテスト。"""
+
+    def test_happy_path(self):
+        """gh issue create が成功し URL を返す。"""
+        mock_result = mock.Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = "https://github.com/user/repo/issues/42\n"
+
+        with mock.patch("subprocess.run", return_value=mock_result) as mock_run:
+            url = handover.create_issue("Test title", "Test body", ["handover"])
+            assert url == "https://github.com/user/repo/issues/42"
+            args = mock_run.call_args[0][0]
+            assert "gh" in args
+            assert "issue" in args
+            assert "create" in args
+            assert "--label" in args
+
+    def test_failure_returns_none(self):
+        """gh issue create が失敗したら None。"""
+        mock_result = mock.Mock()
+        mock_result.returncode = 1
+        mock_result.stderr = "error"
+
+        with mock.patch("subprocess.run", return_value=mock_result):
+            url = handover.create_issue("Test title", "Test body")
+            assert url is None
+
+    def test_no_labels(self):
+        """ラベルなしでも動く。"""
+        mock_result = mock.Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = "https://github.com/user/repo/issues/43\n"
+
+        with mock.patch("subprocess.run", return_value=mock_result) as mock_run:
+            url = handover.create_issue("Title", "Body")
+            assert url is not None
+            args = mock_run.call_args[0][0]
+            assert "--label" not in args

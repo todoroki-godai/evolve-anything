@@ -25,7 +25,76 @@ _GIT_TIMEOUT_SECONDS = 3
 _MAX_COMMITS = 10
 
 
-def _run_git(args: list[str]) -> str:
+_GH_TIMEOUT_SECONDS = 10
+
+
+def is_github_repo(*, cwd: str | None = None) -> bool:
+    """origin リモートが GitHub かどうかを判定する。"""
+    url = _run_git(["remote", "get-url", "origin"], cwd=cwd).strip()
+    return "github.com" in url
+
+
+def format_issue_title(data: dict) -> str:
+    """Issue のタイトルを生成する。"""
+    ts = data.get("timestamp", "")
+    date_part = ts[:10] if len(ts) >= 10 else "unknown"
+    branch = data.get("work_context", {}).get("git_branch", "")
+    if branch:
+        return f"Handover: {branch} ({date_part})"
+    return f"Handover: {date_part}"
+
+
+def format_issue_body(data: dict) -> str:
+    """Issue のボディを生成する（Context セクションのみ自動埋め、残りは LLM が埋める）。"""
+    wc = data.get("work_context", {})
+    branch = wc.get("git_branch", "") or "(none)"
+    commits = "\n".join(wc.get("recent_commits", [])) or "(none)"
+    uncommitted = "\n".join(wc.get("uncommitted_files", [])) or "(none)"
+    skills = ", ".join(s.get("skill", "") for s in data.get("skills_used", [])) or "(none)"
+    corrections = json.dumps(data.get("corrections", []), ensure_ascii=False) if data.get("corrections") else "(none)"
+
+    return f"""\
+## Decisions
+<!-- LLM: 会話コンテキストから決定事項とその理由を記入 -->
+
+## Discarded Alternatives
+<!-- LLM: 検討したが捨てた選択肢とその理由を記入。なければ「なし」 -->
+
+## Deploy State
+<!-- LLM: 会話コンテキストからデプロイ状態を記入 -->
+
+## Next Actions
+<!-- LLM: 次にやるべきことを優先順付きで記入 -->
+
+## Context (auto)
+branch: {branch}
+commits:
+{commits}
+uncommitted:
+{uncommitted}
+skills: {skills}
+corrections: {corrections}
+"""
+
+
+def create_issue(title: str, body: str, labels: list[str] | None = None) -> str | None:
+    """gh issue create で Issue を作成し、URL を返す。失敗時は None。"""
+    cmd = ["gh", "issue", "create", "--title", title, "--body", body]
+    if labels:
+        for label in labels:
+            cmd.extend(["--label", label])
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_GH_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def _run_git(args: list[str], *, cwd: str | None = None) -> str:
     """git コマンドを実行し stdout を返す。失敗時は空文字列。"""
     try:
         result = subprocess.run(
@@ -33,6 +102,7 @@ def _run_git(args: list[str]) -> str:
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
+            cwd=cwd,
         )
         if result.returncode != 0:
             return ""
@@ -69,7 +139,7 @@ def _load_checkpoint() -> dict | None:
         return None
 
 
-def _collect_work_context_from_git() -> dict:
+def _collect_work_context_from_git(*, project_dir: str | None = None) -> dict:
     """git から作業コンテキストを収集する（checkpoint がない場合のフォールバック）。"""
     context: dict = {
         "recent_commits": [],
@@ -77,16 +147,16 @@ def _collect_work_context_from_git() -> dict:
         "git_branch": "",
     }
 
-    branch_out = _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    branch_out = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=project_dir)
     context["git_branch"] = branch_out.strip()
 
-    log_out = _run_git(["log", "--oneline", f"-{_MAX_COMMITS}"])
+    log_out = _run_git(["log", "--oneline", f"-{_MAX_COMMITS}"], cwd=project_dir)
     if log_out:
         context["recent_commits"] = [
             line for line in log_out.strip().splitlines() if line.strip()
         ]
 
-    status_out = _run_git(["status", "--short"])
+    status_out = _run_git(["status", "--short"], cwd=project_dir)
     if status_out:
         context["uncommitted_files"] = [
             line.strip() for line in status_out.strip().splitlines() if line.strip()
@@ -107,7 +177,7 @@ def collect_handover_data(project_dir: str) -> dict:
     if checkpoint and checkpoint.get("work_context"):
         work_context = checkpoint["work_context"]
     else:
-        work_context = _collect_work_context_from_git()
+        work_context = _collect_work_context_from_git(project_dir=project_dir)
 
     # corrections: checkpoint 優先、なければ corrections.jsonl フォールバック
     if checkpoint and checkpoint.get("corrections_snapshot"):
@@ -193,6 +263,7 @@ def main() -> None:
     parser.add_argument("--list", action="store_true", help="List existing handovers")
     parser.add_argument("--latest", action="store_true", help="Show latest handover")
     parser.add_argument("--deploy-state", action="store_true", help="Extract deploy state from latest handover")
+    parser.add_argument("--issue", action="store_true", help="Output issue-ready JSON (title + body)")
     args = parser.parse_args()
 
     project_dir = str(Path(args.project_dir).resolve())
@@ -203,6 +274,17 @@ def main() -> None:
             print(state)
         else:
             print(json.dumps({"status": "no_deploy_state"}, ensure_ascii=False))
+        return
+
+    if args.issue:
+        data = collect_handover_data(project_dir)
+        issue_data = {
+            "title": format_issue_title(data),
+            "body": format_issue_body(data),
+            "is_github": is_github_repo(cwd=project_dir),
+            "data": data,
+        }
+        print(json.dumps(issue_data, ensure_ascii=False, indent=2))
         return
 
     if args.list:

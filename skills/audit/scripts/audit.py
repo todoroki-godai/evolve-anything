@@ -940,17 +940,53 @@ def build_gstack_analytics_section(
     return lines
 
 
+def _is_user_invocable_heuristic(content: str) -> bool:
+    """スキル内容からユーザー呼び出し型かどうかを推定する (#47)。
+
+    トリガーワード、使用タイミング等のアクション指標が
+    リファレンス指標を上回ればユーザー呼び出し型と判定。
+    """
+    lower = content.lower()
+    action_signals = [
+        "trigger:", "トリガー", "使用タイミング",
+        "steps", "手順", "実行", "execute",
+        "run ", "deploy", "create", "generate",
+    ]
+    reference_signals = [
+        "ガイド", "guide", "仕様", "specification",
+        "デザインシステム", "design system", "リファレンス", "reference",
+        "評価基準", "criteria", "ルールブック", "rulebook",
+        "type: reference",
+    ]
+    act_score = sum(1 for sig in action_signals if sig in lower)
+    ref_score = sum(1 for sig in reference_signals if sig in lower)
+    return act_score > ref_score
+
+
 def detect_untagged_reference_candidates(
     artifacts: Dict[str, List[Path]],
     usage: Dict[str, int],
+    *,
+    project_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """ゼロ呼び出しだが reference 未設定のスキルを検出する。
 
     frontmatter に type フィールドがなく、usage もゼロのスキルを警告候補として返す。
-    プラグインスキルは除外（プラグイン側で管理すべきため）。
-    ユーザーに type: reference タグの付与を促すためのもの。
+    以下は除外:
+    - プラグインスキル（プラグイン側で管理すべきため）
+    - CLAUDE.md Skills セクションに記載されたスキル (#47)
+    - コンテンツのヒューリスティックでユーザー呼び出し型と判定されたスキル (#47)
     """
     from frontmatter import parse_frontmatter
+
+    # CLAUDE.md Skills セクションに記載のスキル名を収集
+    claudemd_skills: set = set()
+    if project_dir:
+        from skill_triggers import extract_skill_triggers
+
+        triggers = extract_skill_triggers(project_root=project_dir)
+        for entry in triggers:
+            claudemd_skills.add(entry["skill"])
 
     candidates = []
     for path in artifacts.get("skills", []):
@@ -959,13 +995,24 @@ def detect_untagged_reference_candidates(
             continue
         if skill_name in usage and usage[skill_name] > 0:
             continue
+        # CLAUDE.md に記載済みなら除外 (#47)
+        if skill_name in claudemd_skills:
+            continue
         # frontmatter に type がないスキルのみ
         fm = parse_frontmatter(path)
-        if not fm.get("type"):
-            candidates.append({
-                "skill_name": skill_name,
-                "file": str(path),
-            })
+        if fm.get("type"):
+            continue
+        # ヒューリスティックでユーザー呼び出し型なら除外 (#47)
+        try:
+            content = path.read_text(encoding="utf-8")
+            if _is_user_invocable_heuristic(content):
+                continue
+        except (OSError, UnicodeDecodeError):
+            pass
+        candidates.append({
+            "skill_name": skill_name,
+            "file": str(path),
+        })
     return candidates
 
 
@@ -1099,7 +1146,7 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
     try:
         usage_records = load_usage_data(project_root=project_dir)
         usage = aggregate_usage(usage_records, exclude_plugins=True)
-        untagged = detect_untagged_reference_candidates(artifacts, usage)
+        untagged = detect_untagged_reference_candidates(artifacts, usage, project_dir=project_dir)
         for candidate in untagged:
             issues.append({
                 "type": "untagged_reference_candidates",
@@ -1169,9 +1216,14 @@ def generate_report(
     environment_report: Optional[List[str]] = None,
     pipeline_health_report: Optional[List[str]] = None,
     cross_project_report: Optional[List[str]] = None,
+    growth_report: Optional[List[str]] = None,
 ) -> str:
     """1画面レポートを生成する。"""
     lines = ["# Environment Audit Report", ""]
+
+    # Growth Report (NFD) — 最上部に表示
+    if growth_report:
+        lines.extend(growth_report)
 
     # セクション順序: Environment Fitness → Constitutional → Coherence → Telemetry → Pipeline Health
     if environment_report:
@@ -1404,7 +1456,7 @@ def _load_global_retro(gstack_dir: Path = None) -> Optional[Dict[str, Any]]:
         return None
 
 
-def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coherence_score: bool = False, telemetry_score: bool = False, constitutional_score: bool = False, pipeline_health: bool = False, cross_project: bool = False) -> str:
+def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coherence_score: bool = False, telemetry_score: bool = False, constitutional_score: bool = False, pipeline_health: bool = False, cross_project: bool = False, growth: bool = False) -> str:
     """Audit を実行してレポートを返す。"""
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
@@ -1437,7 +1489,7 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
     gstack_analytics = build_gstack_analytics_section(usage_records)
 
     # Reference type 未設定警告
-    untagged = detect_untagged_reference_candidates(artifacts, usage)
+    untagged = detect_untagged_reference_candidates(artifacts, usage, project_dir=proj)
 
     # Hardcoded values 検出
     hardcoded_values = []
@@ -1544,6 +1596,11 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
         environment_report=environment_report_lines,
     )
 
+    # ── NFD Growth Report ──────────────────────────────────────
+    growth_report_lines = None
+    if growth:
+        growth_report_lines = _build_growth_report(proj)
+
     return generate_report(
         artifacts, violations, usage, duplicates, advisories,
         quality_baselines, project_dir=proj,
@@ -1557,7 +1614,121 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
         environment_report=environment_report_lines,
         pipeline_health_report=pipeline_health_report_lines,
         cross_project_report=cross_project_report_lines,
+        growth_report=growth_report_lines,
     )
+
+
+def _build_growth_report(proj: Path) -> List[str]:
+    """NFD Growth Report セクションを生成する。"""
+    lines = ["## 🌱 Growth Report (NFD)", ""]
+    project_name = proj.resolve().name
+    try:
+        _scripts_lib = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "lib"
+        if str(_scripts_lib) not in sys.path:
+            sys.path.insert(0, str(_scripts_lib))
+
+        from growth_engine import read_cache, detect_phase, compute_phase_progress, update_cache, PHASE_DISPLAY_NAMES, Phase
+        from growth_journal import query_crystallizations, count_crystallized_rules
+        from growth_narrative import compute_profile, generate_story
+        from growth_level import compute_level
+
+        # テレメトリからフェーズ判定
+        from telemetry_query import query_sessions, query_corrections
+        sessions = query_sessions(project=project_name)
+        corrections = query_corrections(project=project_name)
+        crystallized = count_crystallized_rules(project=project_name)
+        sessions_count = len(sessions) if sessions else 0
+        corrections_count = len(corrections) if corrections else 0
+
+        # env_score 計算（coherence 含む正確なスコア）
+        _fitness_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "rl" / "fitness"
+        if str(_fitness_dir) not in sys.path:
+            sys.path.insert(0, str(_fitness_dir))
+        env_score = 0.0
+        coherence_score = 0.0
+        try:
+            from environment import compute_environment_fitness
+            env_result = compute_environment_fitness(proj)
+            env_score = env_result.get("overall", 0.0) if isinstance(env_result, dict) else 0.0
+            coherence_score = env_result.get("axes", {}).get("coherence", {}).get("score", 0.0) if isinstance(env_result, dict) else 0.0
+        except Exception:
+            pass
+
+        phase = detect_phase(sessions_count, corrections_count, crystallized, coherence_score)
+        progress = compute_phase_progress(phase, sessions_count, corrections_count, crystallized, coherence_score)
+        names = PHASE_DISPLAY_NAMES[phase]
+
+        # Level 計算
+        level_info = compute_level(env_score)
+
+        # キャッシュ更新（env_score + level を含む）
+        update_cache(project_name, phase, progress, {
+            "sessions_count": sessions_count,
+            "crystallizations_count": crystallized,
+            "env_score": round(env_score, 4),
+            "level": level_info.level,
+            "title_en": level_info.title_en,
+            "title_ja": level_info.title_ja,
+        })
+
+        progress_pct = int(progress * 100)
+        bar_filled = int(progress * 20)
+        bar = "█" * bar_filled + "░" * (20 - bar_filled)
+
+        lines.append(f"**Level:** Lv.{level_info.level} {level_info.title_en} ({level_info.title_ja})")
+        lines.append(f"**Environment Score:** {env_score:.2f}")
+        lines.append(f"**Phase:** {names['en']} ({names['ja']})")
+        lines.append(f"**Progress:** [{bar}] {progress_pct}%")
+        lines.append(f"**Sessions:** {sessions_count} | **Corrections:** {corrections_count} | **Crystallizations:** {crystallized}")
+        lines.append("")
+
+        # 結晶化ログ
+        events = query_crystallizations(project=project_name)
+        if events:
+            lines.append("### Crystallization Log")
+            for ev in events[-10:]:  # 最新10件
+                ts = ev.get("ts", "")[:10]
+                targets = ", ".join(ev.get("targets", [])[:3]) or "(no targets)"
+                lines.append(f"- {ts}: {targets}")
+            lines.append("")
+
+        # Environment Profile
+        profile = compute_profile(project_name)
+        if profile.strengths or profile.personality_traits:
+            lines.append("### Environment Profile")
+            if profile.strengths:
+                lines.append(f"**Strengths:** {', '.join(profile.strengths)}")
+            if profile.personality_traits:
+                lines.append(f"**Traits:** {', '.join(profile.personality_traits)}")
+            lines.append(f"**Style:** {profile.crystallization_style}")
+            lines.append("")
+
+        # Growth Story
+        story = generate_story(project_name)
+        if story and "まだ" not in story:
+            lines.append("### Growth Story")
+            lines.append(story)
+            lines.append("")
+
+        # Next Milestone
+        lines.append("### Next Milestone")
+        if phase == Phase.MATURE_OPERATION:
+            lines.append("最終フェーズに到達しています。")
+        else:
+            next_phases = {
+                Phase.BOOTSTRAP: ("Initial Nurturing", "sessions >= 10"),
+                Phase.INITIAL_NURTURING: ("Structured Nurturing", "sessions >= 50, corrections >= 10, crystallized_rules >= 3"),
+                Phase.STRUCTURED_NURTURING: ("Mature Operation", "sessions > 200, crystallized_rules >= 10, coherence >= 0.7"),
+            }
+            next_name, next_req = next_phases.get(phase, ("?", "?"))
+            lines.append(f"Next phase: **{next_name}** — requires: {next_req}")
+        lines.append("")
+
+    except Exception as e:
+        lines.append(f"Growth Report の生成に失敗しました: {e}")
+        lines.append("")
+
+    return lines
 
 
 if __name__ == "__main__":
@@ -1571,10 +1742,11 @@ if __name__ == "__main__":
     _parser.add_argument("--telemetry-score", action="store_true", help="Telemetry Score セクションを表示")
     _parser.add_argument("--constitutional-score", action="store_true", help="Constitutional Score セクションを表示")
     _parser.add_argument("--pipeline-health", action="store_true", help="Pipeline Health セクションを表示")
+    _parser.add_argument("--growth", action="store_true", help="NFD Growth Report セクションを表示")
     _args = _parser.parse_args()
     if _args.memory_context:
         proj = Path(_args.project) if _args.project else Path.cwd()
         ctx = build_memory_verification_context(proj)
         print(json.dumps(ctx, ensure_ascii=False, indent=2))
     else:
-        print(run_audit(_args.project, skip_rescore=_args.skip_rescore, coherence_score=_args.coherence_score, telemetry_score=_args.telemetry_score, constitutional_score=_args.constitutional_score, pipeline_health=_args.pipeline_health))
+        print(run_audit(_args.project, skip_rescore=_args.skip_rescore, coherence_score=_args.coherence_score, telemetry_score=_args.telemetry_score, constitutional_score=_args.constitutional_score, pipeline_health=_args.pipeline_health, growth=_args.growth))

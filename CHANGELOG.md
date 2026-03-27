@@ -1,5 +1,62 @@
 # Changelog
 
+## [1.19.0] - 2026-03-27
+
+### Added
+- **handover Issue モード**: `--issue` フラグで GitHub Issue として引き継ぎノートを作成可能に。GitHub リポ検出時は自動提案
+
+### Fixed
+- **handover --project-dir cwd 伝播**: `_run_git()` に `cwd` パラメータを追加し、`--project-dir` が git コマンドの実行ディレクトリに正しく反映されるように修正 (#49)
+- **synonym_verb テスト安定化**: LLM judge 実呼び出しを mock に変更し非決定的テストを修正
+
+_SPEC.md Recent Changes から移動（既存エントリへの参照）:_
+- _2026-03-26: v1.15.0 — [1.15.0] 参照_
+- _2026-03-25: handover Deploy State — [Unreleased] 参照_
+
+## [1.18.0] - 2026-03-26
+
+### Added
+- **NFD Level System**: env_score (0.0-1.0) を Lv.1-10 の 10段階レベル + 日英称号にマッピングする `growth_level.py` を追加。セッション greeting に `Lv.7 Experienced` 形式で表示
+- **Fast Shipper trait**: personality_traits に「速攻派」を追加。workflows.jsonl の commit スキル使用頻度 > 2/session で判定
+- **audit Growth Report にレベル表示**: `--growth` で env_score + Level + Phase を一覧表示。キャッシュに env_score/level/title を保存
+
+### Fixed
+- **η計算反転修正**: 結晶化効率 η が `events/targets` (値域 0-∞) だったのを `crystallized_rules/total_corrections` (0.0-1.0) に修正
+- **evolve フェーズ降格防止**: evolve が coherence_score=0.0 でフェーズ判定→キャッシュ上書きしていた問題を修正。audit を唯一のキャッシュ更新権威に変更、evolve は journal 記録のみ
+- **journal phase 精度向上**: evolve の emit_crystallization で phase をキャッシュからフォールバック取得するよう変更
+
+### Changed
+- **audit coherence_score 正確化**: `_build_growth_report()` が `compute_environment_fitness()` から実際の coherence_score を取得してフェーズ判定に使用
+
+## [1.17.2] - 2026-03-26
+
+### Added
+- **worktree 並行開発パターン提案**: discover の RECOMMENDED_ARTIFACTS に `worktree-parallel-work`（stash+checkout 事故防止）と `deploy-lock`（同一環境への並行デプロイ防止）を追加。未導入 PJ に自動提案
+
+## [1.17.1] - 2026-03-26
+
+### Fixed
+- **ルール行数カウント誤検出**: `count_content_lines()` が frontmatter 直後の空行をコンテンツ行としてカウントしていた問題を修正 (#47)
+- **untagged_reference 分類精度向上**: CLAUDE.md Skills セクション記載スキルの除外 + コンテンツヒューリスティックによるユーザー呼び出し型スキル除外を追加 (#47)
+
+## [1.17.0] - 2026-03-26
+
+### Added
+- **spec-keeper スキル同梱**: SPEC.md + ADR 管理スキルを rl-anything プラグインに同梱。`/rl-anything:spec-keeper init` でプロジェクトの仕様全体像を初期化、`update` で最新化
+- **Progressive Disclosure レイヤーシステム**: SPEC.md の段階的開示対応。PJ 規模に応じて L1（単一ファイル ~100行）/ L2（hot + cold 2層構造）を自動昇格。Context rot 防止
+- **SPEC.md L2 昇格**: rl-anything 自身の SPEC.md を L2 に昇格 — Architecture 詳細を spec/architecture.md に分離し hot 層を 166行→95行に圧縮
+
+## [1.16.0] - 2026-03-26
+
+### Added
+- **NFD Growth Engine**: NFD 論文 (arXiv:2603.10808) の Spiral Development Model を実装 — 環境の成熟度を 4 フェーズ（Bootstrap / Initial Nurturing / Structured Nurturing / Mature Operation）で自動判定し、進捗率を可視化
+- **結晶化イベント記録**: evolve/reflect が rule/skill を生成・更新するたびに growth-journal.jsonl に結晶化イベントを記録。成長ストーリーの素材に
+- **セッション開始時 Growth greeting**: InstructionsLoaded hook 拡張 — セッション開始時に `GROWTH: structured_nurturing 72%` のようなフェーズ情報を stdout 出力（LLM コストゼロ、キャッシュ読み取りのみ）
+- **audit --growth**: Growth Report セクション追加 — フェーズ・進捗率・結晶化ログ・環境プロファイル（得意分野・性格特性）・成長ストーリーを一画面表示
+- **環境プロファイル**: テレメトリから環境の個性を自動抽出 — 5 つの性格特性（慎重派・整理好き・速攻派・フィードバッカー・探検家）をデータドリブンで判定
+- **git log backfill**: 過去の evolve/reflect/remediation コミットから結晶化イベントを復元。既存ユーザーが即座に正しいフェーズ表示を得られる
+- **growth_display userConfig**: プラグイン設定で Growth greeting の表示/非表示を制御可能（default: true）
+
 ## [1.15.0] - 2026-03-26
 
 ### Added
@@ -25,6 +82,7 @@
 - **handover**: Deploy State セクション追加 — デプロイ状態を構造化記録し、セッション復元時に Deploy State / Next Actions を優先表示。`--deploy-state` CLI で machine-readable アクセスも提供。closes #44
 - **second-opinion**: Claude Agent によるセカンドオピニオン機能 — codex 不要で Agent ツールのみで動作。startup/builder/general 3モード対応。gstack office-hours Phase 3.5 の codex 代替として、または汎用的に利用可能。closes #42
 - **critical-instruction-compliance**: スキルに書いた「必ず守れ」がちゃんと守られる — MUST/禁止等の重要指示を自動抽出し、穏やかな表現にリフレーズして注入。ユーザーの修正（corrections）とスキル指示を突合して違反を自動検出、pitfall に登録して次から守るよう自動学習。対立動詞検出（move↔delete）+ LLM Judge の2段階マッチング。closes #39
+- instruction compliance — スキル指示の遵守保証サイクル（Extract→Inject→Detect→Learn 4フェーズ、対立動詞+LLM Judge 2段階マッチング）。closes #39
 - **remediation**: 修正の独立検証 — auto_fixable な修正に対してヒューリスティクスベースのダブルチェックを実施。見出し保持・コードブロック対応・空ファイル・行数制限を自動検証し、FP 率を低減
 - **remediation**: 12 パターンの FP 自動除外 — テストファイル・アーカイブパス・外部 URL・コードブロック内参照等を false positive として自動分類。`fp_excluded` カテゴリで明示的に追跡
 - **remediation**: 原則ベース自動昇格 — completeness/pragmatic/DRY/explicit_over_clever の 4 原則で、proposable な修正を auto_fixable に自動昇格。gstack /autoplan のパターンを移植
