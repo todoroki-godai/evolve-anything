@@ -659,6 +659,29 @@ RECOMMENDED_ARTIFACTS = [
         "recommendation_id": "evidence_before_claims",
         "content_patterns": ["verify-before-claim", "evidence", "証拠", r"完了.*確認"],
     },
+    # --- 構造化実装 ---
+    {
+        "id": "implement-skill",
+        "type": "skill",
+        "path": Path(__file__).resolve().parents[2] / "implement" / "SKILL.md",
+        "description": "implement — plan artifact → タスク分解 → 実装（Standard/Parallel）→ 計画準拠チェック → テレメトリ記録",
+        "hook_path": None,
+    },
+    {
+        "id": "suggest-implement-skill",
+        "type": "rule",
+        "path": Path.home() / ".claude" / "rules" / "suggest-implement-skill.md",
+        "description": "実装タスク時の implement スキル提案 — 「実装して」等で /rl-anything:implement を提案",
+        "hook_path": None,
+    },
+    {
+        "id": "implement-flow-chain",
+        "type": "config",
+        "path": Path.home() / ".gstack" / "flow-chain.json",
+        "description": "gstack フローチェーンに implement を追加 — plan-eng-review → /rl-anything:implement → /review",
+        "hook_path": None,
+        "content_patterns": ["implement"],
+    },
     # --- gstack ワークフローツール ---
     {
         "id": "gstack-flow-chain",
@@ -677,7 +700,7 @@ RECOMMENDED_ARTIFACTS = [
     {
         "id": "spec-keeper",
         "type": "skill",
-        "path": Path.home() / ".claude" / "skills" / "spec-keeper" / "SKILL.md",
+        "path": Path(__file__).resolve().parents[2] / "spec-keeper" / "SKILL.md",
         "description": "spec-keeper — SPEC.md + ADR 管理スキル（init/update/adr/status）",
         "hook_path": None,
     },
@@ -686,13 +709,6 @@ RECOMMENDED_ARTIFACTS = [
         "type": "skill",
         "path": Path.home() / ".claude" / "skills" / "ship" / "SKILL.md",
         "description": "ship — 実装→テスト→bump→CHANGELOG→PR の出荷ワークフロー",
-        "hook_path": None,
-    },
-    {
-        "id": "gstack-refine",
-        "type": "skill",
-        "path": Path.home() / ".claude" / "skills" / "gstack-refine" / "SKILL.md",
-        "description": "gstack-refine — build 前のプラン品質レビュー（設計+テスト計画の検証）",
         "hook_path": None,
     },
     {
@@ -707,17 +723,25 @@ RECOMMENDED_ARTIFACTS = [
         "id": "worktree-parallel-work",
         "type": "rule+hook",
         "path": Path.home() / ".claude" / "rules" / "worktree-parallel-work.md",
-        "description": "worktree 並行開発 — 複数ブランチの同時作業時に git worktree を使い、stash+checkout 事故を防止",
+        "description": "worktree 並行開発 — ブランチ作成時に worktree を使い、stash+checkout 事故と同一ディレクトリ並行作業を防止。feature-branch rule の PJ 上書きが必要",
         "hook_path": Path.home() / ".claude" / "hooks" / "check-worktree.py",
-        "hook_description": "PreToolUse hook: git stash+checkout パターンを検出し worktree を提案",
+        "hook_description": "PreToolUse hook: git stash+checkout および git checkout -b を検出し worktree を提案",
     },
     {
         "id": "deploy-lock",
         "type": "hook",
         "path": None,
-        "description": "デプロイ排他制御 — 同一環境への並行デプロイを lock ファイルで防止",
+        "description": "デプロイ排他制御 — 同一環境への並行デプロイを lock ファイルで防止（PreToolUse で取得 + PostToolUse で解放）",
         "hook_path": Path.home() / ".claude" / "hooks" / "deploy-lock.py",
-        "hook_description": "PreToolUse hook: deploy コマンド実行時に lock ファイルで排他制御",
+        "hook_description": "PreToolUse hook: deploy 時に環境別 lock 取得。PostToolUse hook: deploy 完了時に lock 解放",
+    },
+    {
+        "id": "kill-guard",
+        "type": "hook",
+        "path": None,
+        "description": "プロセス kill ガード — deploy-lock 保持中のプロセス kill をブロック",
+        "hook_path": Path.home() / ".claude" / "hooks" / "kill-guard.py",
+        "hook_description": "PreToolUse hook: kill/pkill/pgrep+kill が deploy 関連プロセスを対象とする場合、active lock があればブロック",
     },
 ]
 

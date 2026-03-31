@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.22.1] - 2026-03-31
+
+### Added
+- **evolve 通知スヌーズ機能**: `snooze_trigger(hours)` で通知を一時抑制。スヌーズ中は pending-trigger を配信せずファイルを保持。期限切れで自動解除、`clear_snooze()` で手動解除。closes #52
+
+## [1.22.0] - 2026-03-31
+
+### Added
+- **implement スキル追加**: plan artifact → タスク分解 → 実装（Standard/Parallel）→ 計画準拠チェック → テレメトリ記録の構造化実装スキル。gstack plan artifact 連携（オプション）、usage.jsonl + growth-journal 記録、worktree 並列対応
+- **implement backfill**: git log のリリースコミット間から実装セッションを推定し、テレメトリにバックフィル。冪等性保証付き
+
+## [1.21.3] - 2026-03-31
+
+### Fixed
+- **deploy-lock description に PostToolUse lock 解放要件を追記**: デプロイ完了後に lock を自動解放する仕組みが必要であることを明記。lock 未解放による次回 deploy ブロック問題の防止
+
+## [1.21.2] - 2026-03-31
+
+### Added
+- **kill-guard RECOMMENDED_ARTIFACT 追加**: deploy-lock 保持中のプロセス kill をブロックする独立エントリ。sys-bots 実運用フィードバックから追加
+
+### Changed
+- **worktree-parallel-work description 強化**: `git checkout -b` でのブランチ作成も worktree に誘導。feature-branch rule との PJ 上書き必要性を明記
+- **deploy-lock を deploy コマンド専用に分離**: kill ガードは kill-guard エントリに委譲
+
+## [1.21.1] - 2026-03-31
+
+### Fixed
+- **deploy-lock description 更新**: 実運用フィードバックを反映 — deploy コマンドだけでなく kill 系コマンドもガード対象であることを明記
+
+## [1.21.0] - 2026-03-30
+
+### Added
+- **release-notes-review グローバル環境対応**: `~/.claude/` 配下の rules/skills/agents/settings hooks/memory もスキャン・健康診断できるように。`--env-only` で環境診断だけ実行可能。レポートは Part 1 (Release Notes) + Part 2 (Global Environment Health) の2セクション構成
+- **spec-keeper プラグイン一本化**: グローバル版を廃止し、プラグイン版 `/rl-anything:spec-keeper` に統合。handover/discover のパス参照もプラグイン内に更新
+- **gstack flow chain 動的化**: `~/.gstack/flow-chain.json` から audit の gstack ワークフロー分析を動的構築。ファイル不在時は fallback 値を使用
+
+### Fixed
+- **release-notes-review `--env-only` ガード**: `--env-only` 時に Step 5 バージョン記録をスキップ（リリースノート未確認時の誤記録防止）
+- **adversarial review 対応**: phase 型チェック + テスト temp file 修正
+
+### Removed
+- **gstack-refine 全参照削除**: audit/discover/spec-keeper から gstack-refine 参照を削除
+
 ## [1.19.1] - 2026-03-31
 
 ### Fixed
@@ -21,6 +65,10 @@
 _SPEC.md Recent Changes から移動（既存エントリへの参照）:_
 - _2026-03-26: v1.15.0 — [1.15.0] 参照_
 - _2026-03-25: handover Deploy State — [Unreleased] 参照_
+- _2026-03-27: v1.19.0 — handover Issue モード — [1.19.0] 参照_
+- _2026-03-26: v1.18.0 — NFD Level System — [1.18.0] 参照_
+- _2026-03-26: v1.17.2 — worktree 並行開発パターン提案 — [1.17.2] 参照_
+- _2026-03-26: v1.16.0 — NFD Living Agent Identity — [1.16.0] 参照_
 
 ## [1.18.0] - 2026-03-26
 
