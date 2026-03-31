@@ -27,19 +27,32 @@ def project_dir(tmp_path):
 
 @pytest.fixture
 def data_dir(tmp_path):
-    """DATA_DIR をパッチする。"""
+    """DATA_DIR と common.CHECKPOINTS_DIR をパッチする。"""
     d = tmp_path / "data"
     d.mkdir()
-    with mock.patch("handover.DATA_DIR", d):
+    with mock.patch("handover.DATA_DIR", d), \
+         mock.patch("handover.common.CHECKPOINTS_DIR", d / "checkpoints"), \
+         mock.patch("handover.common.DATA_DIR", d):
         yield d
 
 
 class TestCollectHandoverData:
+
+    @staticmethod
+    def _write_checkpoint(data_dir, data, session_id=None):
+        """テストヘルパー: checkpoints/ にファイルを書き込む。"""
+        cp_dir = data_dir / "checkpoints"
+        cp_dir.mkdir(exist_ok=True)
+        sid = session_id or data.get("session_id", "unknown")
+        (cp_dir / f"{sid}.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+
     def test_happy_path_uses_checkpoint(self, project_dir, data_dir):
-        """checkpoint.json からコンテキストを取得し、work_context 用の git を再呼び出ししない。"""
-        # checkpoint.json にデータを用意
+        """checkpoint からコンテキストを取得し、work_context 用の git を再呼び出ししない。"""
         checkpoint = {
             "session_id": "s1",
+            "project_dir": str(project_dir),
             "timestamp": "2026-03-22T00:00:00Z",
             "work_context": {
                 "git_branch": "feat/handover",
@@ -50,9 +63,7 @@ class TestCollectHandoverData:
                 {"pattern": "test fix", "session_id": "s1"}
             ],
         }
-        (data_dir / "checkpoint.json").write_text(
-            json.dumps(checkpoint, ensure_ascii=False), encoding="utf-8"
-        )
+        self._write_checkpoint(data_dir, checkpoint)
 
         # usage.jsonl にダミーデータ（project フィールド付き）
         usage_file = data_dir / "usage.jsonl"
@@ -78,6 +89,33 @@ class TestCollectHandoverData:
             {"skill": "review", "timestamp": "2026-03-22T00:01:00Z"},
         ]
         assert result["project_dir"] == str(project_dir)
+
+    def test_checkpoint_filtered_by_project(self, project_dir, data_dir):
+        """別プロジェクトの checkpoint は使わず git フォールバックする。"""
+        checkpoint = {
+            "session_id": "s-other",
+            "project_dir": "/other/project",
+            "timestamp": "2026-03-31T00:00:00Z",
+            "work_context": {
+                "git_branch": "other-branch",
+                "recent_commits": ["other commit"],
+                "uncommitted_files": [],
+            },
+        }
+        self._write_checkpoint(data_dir, checkpoint)
+
+        with mock.patch("handover.is_github_repo", return_value=False):
+            with mock.patch("handover._run_git") as mock_git:
+                mock_git.side_effect = [
+                    "my-branch\n",
+                    "abc1234 my commit\n",
+                    "",
+                ]
+                result = handover.collect_handover_data(str(project_dir))
+
+        # git フォールバックが呼ばれる
+        assert mock_git.call_count == 3
+        assert result["work_context"]["git_branch"] == "my-branch"
 
     def test_fallback_to_git_when_no_checkpoint(self, project_dir, data_dir):
         """checkpoint.json がない場合は git にフォールバックする。"""
@@ -107,14 +145,15 @@ class TestCollectHandoverData:
     def test_corrections_from_checkpoint(self, project_dir, data_dir):
         """checkpoint の corrections_snapshot が使われる。"""
         checkpoint = {
+            "session_id": "s1",
+            "project_dir": str(project_dir),
+            "timestamp": "2026-03-22T00:00:00Z",
             "corrections_snapshot": [
                 {"pattern": "test fix", "session_id": "s1", "timestamp": "2026-03-22T00:00:00Z"}
             ],
             "work_context": {},
         }
-        (data_dir / "checkpoint.json").write_text(
-            json.dumps(checkpoint, ensure_ascii=False), encoding="utf-8"
-        )
+        self._write_checkpoint(data_dir, checkpoint)
 
         with mock.patch("handover._run_git", return_value=""):
             result = handover.collect_handover_data(str(project_dir))
@@ -145,15 +184,16 @@ class TestCollectHandoverData:
     def test_corrections_checkpoint_not_filtered(self, project_dir, data_dir):
         """checkpoint の corrections_snapshot はフィルタ不要（同セッションのため）。"""
         checkpoint = {
+            "session_id": "s1",
+            "project_dir": str(project_dir),
+            "timestamp": "2026-03-22T00:00:00Z",
             "corrections_snapshot": [
                 {"pattern": "fix A", "project_path": str(project_dir)},
                 {"pattern": "fix B", "project_path": "/other/project"},
             ],
             "work_context": {},
         }
-        (data_dir / "checkpoint.json").write_text(
-            json.dumps(checkpoint, ensure_ascii=False), encoding="utf-8"
-        )
+        self._write_checkpoint(data_dir, checkpoint)
 
         with mock.patch("handover._run_git", return_value=""):
             result = handover.collect_handover_data(str(project_dir))

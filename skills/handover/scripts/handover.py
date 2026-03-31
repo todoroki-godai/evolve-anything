@@ -15,6 +15,7 @@ from pathlib import Path
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "hooks"))
 
+import common
 from common import DATA_DIR
 
 # Constants
@@ -135,15 +136,9 @@ def _load_session_records(jsonl_file: Path) -> list[dict]:
     return records
 
 
-def _load_checkpoint() -> dict | None:
-    """checkpoint.json を読み込む。存在しないか壊れている場合は None。"""
-    checkpoint_file = DATA_DIR / "checkpoint.json"
-    if not checkpoint_file.exists():
-        return None
-    try:
-        return json.loads(checkpoint_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+def _load_checkpoint(project_dir: str | None = None) -> dict | None:
+    """プロジェクトに一致する最新の checkpoint を読み込む。"""
+    return common.find_latest_checkpoint(project_dir)
 
 
 def _collect_work_context_from_git(*, project_dir: str | None = None) -> dict:
@@ -178,7 +173,7 @@ def collect_handover_data(project_dir: str) -> dict:
     checkpoint.json があればそこから work_context/corrections を取得（git 再呼び出し不要）。
     なければ git にフォールバックする。
     """
-    checkpoint = _load_checkpoint()
+    checkpoint = _load_checkpoint(project_dir)
     resolved_dir = str(Path(project_dir).resolve())
 
     # work_context: checkpoint 優先、なければ git フォールバック

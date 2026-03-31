@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.22.2] - 2026-04-01
+
+### Fixed
+- **handover checkpoint セッション分離**: checkpoint.json がグローバル1ファイルだったため別プロジェクト・並行セッションのデータで汚染されていた問題を修正。`checkpoints/{session_id}.json` に分離し、`project_dir` フィールドで復元時にフィルタ。旧 checkpoint.json は後方互換で読み取り可能。48h TTL で自動 cleanup。closes #50
+
 ## [1.22.1] - 2026-03-31
 
 ### Added

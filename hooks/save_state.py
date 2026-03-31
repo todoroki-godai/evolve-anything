@@ -101,12 +101,18 @@ def _suggest_handover() -> None:
     )
 
 
+def _safe_session_id(session_id: str) -> str:
+    """session_id をファイル名に安全な形式にサニタイズする。"""
+    return session_id.replace("/", "_")[:64] if session_id else "unknown"
+
+
 def handle_pre_compact(event: dict) -> None:
     """PreCompact イベントを処理し、進化状態を保存する。"""
     common.ensure_data_dir()
 
     checkpoint = {
         "session_id": event.get("session_id", ""),
+        "project_dir": os.environ.get("CLAUDE_PROJECT_DIR", ""),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "evolve_state": event.get("evolve_state", {}),
         "context_summary": event.get("context_summary", ""),
@@ -114,13 +120,18 @@ def handle_pre_compact(event: dict) -> None:
         "work_context": _collect_work_context(),
     }
 
-    checkpoint_file = common.DATA_DIR / "checkpoint.json"
+    common.CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+    safe_id = _safe_session_id(event.get("session_id", ""))
+    checkpoint_file = common.CHECKPOINTS_DIR / f"{safe_id}.json"
     try:
         checkpoint_file.write_text(
             json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     except OSError as e:
         print(f"[rl-anything:save_state] write failed: {e}", file=sys.stderr)
+
+    # TTL cleanup
+    common.cleanup_old_checkpoints()
 
     # Handover 提案
     _suggest_handover()
