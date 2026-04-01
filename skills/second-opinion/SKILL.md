@@ -2,13 +2,8 @@
 name: second-opinion
 effort: low
 description: |
-  独立したセカンドオピニオンを Claude Agent 経由で取得するスキル。
-  問題定義・前提・設計案に対して、cold-read（事前情報なし）の構造化された独立見解を返す。
-  gstack office-hours Phase 3.5 の codex 代替として、または任意のタイミングで汎用的に使用可能。
-  トリガーワード: second-opinion, セカンドオピニオン, 独立レビュー, 別の視点, codex代替,
-  独立した意見, 別の意見がほしい, cross-model, セカンドオピニオンがほしい
-  office-hours の後や設計議論中に「別の視点がほしい」「独立した意見を聞きたい」と言われたら
-  このスキルを積極的に使うこと。codex が未インストールの環境でも動作する。
+  Claude Agent による cold-read セカンドオピニオン。問題定義・設計案に対し独立した構造化見解を返す。
+  Trigger: second-opinion, セカンドオピニオン, 独立レビュー, 別の視点, codex代替, 別の意見がほしい
 allowed-tools: Read, Grep, Glob, Agent, AskUserQuestion
 ---
 

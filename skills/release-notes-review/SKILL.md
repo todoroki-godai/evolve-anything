@@ -2,16 +2,8 @@
 name: release-notes-review
 effort: medium
 description: |
-  Claude Code のリリースノートを分析し、プロジェクト環境（CLAUDE.md, skills, hooks, agents）と
-  グローバル環境（~/.claude/rules, skills, agents, settings.json）の両方と突合して
-  適用可能な新機能・改善点を優先度別に報告する。高優先度の項目は ADR + 実装タスクとして提案する。
-  グローバル環境健康診断も実施し、CC 新機能で代替可能なカスタム設定や改善機会を検出する。
-  Trigger: release-notes, リリースノート確認, CC更新確認, バージョンアップ対応, release notes review,
-  新機能チェック, Claude Code アップデート確認, グローバル環境レビュー, 環境見直し
-  Use this skill whenever the user mentions Claude Code updates, version upgrades, release notes,
-  or wants to check if their project can benefit from new Claude Code features. Also trigger when
-  the user asks "何か新しい機能ある？" or "CC更新で使えるものは？" in the context of Claude Code.
-  Also trigger for global environment review requests like "環境の健康診断" or "rules 見直したい".
+  CC リリースノートをPJ環境+グローバル環境と突合し適用可能な新機能を優先度別に報告。環境健康診断も実施。
+  Trigger: release-notes, リリースノート確認, CC更新確認, 新機能チェック, 環境見直し, 環境の健康診断
 ---
 
 # /rl-anything:release-notes-review — リリースノート分析 & グローバル環境健康診断

@@ -2,12 +2,8 @@
 name: implement
 effort: medium
 description: |
-  plan-eng-review 等で作った計画を構造化実装するスキル。plan artifact 読み取り→タスク分解→
-  実装（single/parallel）→検証→テレメトリ記録を一貫して行う。
-  gstack plan artifact があれば自動読み取り、なくても会話コンテキストから動作する。
-  実装の軌跡を usage.jsonl + growth-journal に記録し、evolve/discover の分析対象になる。
-  Trigger: implement, 実装して, 実装開始, build this, start working, 計画を実装,
-  plan-eng-review の後, 実装に入る, コーディング開始
+  計画を構造化実装。plan artifact→タスク分解→実装(single/parallel)→検証→テレメトリ記録。
+  Trigger: implement, 実装して, 実装開始, build this, 計画を実装, コーディング開始
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion
 ---
 

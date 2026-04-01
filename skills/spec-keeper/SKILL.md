@@ -1,21 +1,8 @@
 ---
 name: spec-keeper
-description: >
-  プロジェクトの仕様全体像（SPEC.md）と設計判断記録（ADR）を管理するグローバルスキル。
-  gstack の /document-release 後や機能完了時に SPEC.md を最新化し、設計判断があれば
-  ADR を自動生成する。AI が新セッションで即座にプロジェクトを理解するための仕組み。
-
-  使用タイミング:
-  (1) 新PJで SPEC.md を初期化したい時
-  (2) /ship or /document-release 後に仕様を最新化したい時
-  (3) 設計判断を ADR として記録したい時
-  (4) 「仕様を更新して」「SPEC.md を最新にして」と言われた時
-
-  トリガーワード: spec-keeper, 仕様更新, SPEC.md, ADR, 仕様初期化, spec init,
-  spec update, 設計判断記録, decision record, recover, リカバリー, 乖離
-
-  gstack の /ship や /document-release の後に積極的に提案する。
-  また新PJで CLAUDE.md はあるが SPEC.md がない場合にも提案する。
+description: |
+  SPEC.md（仕様全体像）と ADR（設計判断記録）を管理。機能完了時に仕様を最新化し設計判断をADR化。
+  Trigger: spec-keeper, 仕様更新, SPEC.md, ADR, spec init, spec update, 設計判断記録, リカバリー
 ---
 
 # spec-keeper
