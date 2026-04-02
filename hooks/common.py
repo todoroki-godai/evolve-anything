@@ -106,7 +106,13 @@ def find_latest_checkpoint(project_dir: str | None = None) -> dict | None:
         candidates.append(data)
     if not candidates:
         return None if project_dir else _load_legacy_checkpoint()
-    candidates.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+    def _parse_ts(ts: str) -> "datetime":
+        try:
+            return datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    candidates.sort(key=lambda d: _parse_ts(d.get("timestamp", "")), reverse=True)
     return candidates[0]
 
 

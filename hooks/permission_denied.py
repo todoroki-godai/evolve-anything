@@ -47,7 +47,8 @@ def _summarize_input(tool_name: str, tool_input: dict) -> str:
         return cmd[:200] if cmd else ""
     if tool_name in ("Edit", "Write", "Read"):
         return tool_input.get("file_path", "")[:200]
-    return str(tool_input)[:200]
+    # 未知のツール: 入力内容は記録しない（API キー等の機密情報漏洩防止）
+    return ""
 
 
 def main() -> None:
