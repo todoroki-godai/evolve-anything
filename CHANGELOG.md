@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.24.0] - 2026-04-02
+
+### Added
+- **spec-keeper: README.md 管理対応（5層構造）**: README.md を外部向け（人間ファースト）の最外層として位置づけ。init で情報源に追加・存在しなければ生成提案、update で外部向け変化のみ README.md に反映、status で鮮度チェックを追加。README テンプレート（MVP積み上げ型・頻繁改善型）も同梱
+
 ## [1.23.0] - 2026-04-01
 
 ### Added
