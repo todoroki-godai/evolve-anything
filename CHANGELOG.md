@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.25.0] - 2026-04-03
+
+### Changed
+- **リリース**: v1.22.2-v1.24.0 の変更を main にマージ（checkpoint セッション分離 / PermissionDenied hook / spec-keeper 5層構造）
+
 ## [1.24.0] - 2026-04-02
 
 ### Added
