@@ -2,9 +2,9 @@
 name: evolve-skill
 effort: medium
 description: |
-  特定スキルに自己進化パターン（Pre-flight / Failure-triggered Learning / pitfalls.md）を
-  組み込む独立コマンド。適性判定→テンプレート組み込み→人間確認を1コマンドで実行。
-  トリガーワード: evolve-skill, スキル進化, 自己進化パターン, self-evolve
+  特定スキルに自己進化パターン（Pre-flight / pitfalls.md）を組み込む独立コマンド。
+  適性判定→テンプレート組み込み→人間確認を1コマンドで実行。
+  Trigger: evolve-skill, スキル進化, 自己進化パターン, self-evolve
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 ---
 

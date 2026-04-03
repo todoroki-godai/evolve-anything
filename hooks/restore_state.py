@@ -146,13 +146,13 @@ def handle_session_start(event: dict) -> None:
     # Handover ノート検出
     _detect_handover()
 
-    checkpoint_file = common.DATA_DIR / "checkpoint.json"
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
+    checkpoint = common.find_latest_checkpoint(project_dir)
 
-    if not checkpoint_file.exists():
+    if not checkpoint:
         return
 
     try:
-        checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8"))
         # 復元した状態を stdout に出力（Claude Code が利用可能）
         print(json.dumps({
             "restored": True,

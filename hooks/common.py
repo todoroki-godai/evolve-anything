@@ -5,11 +5,14 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+CHECKPOINTS_DIR = DATA_DIR / "checkpoints"
+CHECKPOINT_TTL_HOURS = 48.0
 
 # ワークフロー文脈ファイルの有効期限（秒）
 _WORKFLOW_CONTEXT_EXPIRE_SECONDS = 24 * 60 * 60  # 24時間
@@ -72,6 +75,69 @@ def ensure_data_dir() -> None:
         DATA_DIR.chmod(0o700)
     except OSError as e:
         print(f"[rl-anything] chmod data dir warning: {e}", file=sys.stderr)
+
+
+def find_latest_checkpoint(project_dir: str | None = None) -> dict | None:
+    """checkpoints/ から project_dir に一致する最新の checkpoint を返す。
+
+    project_dir が指定されている場合、一致する checkpoint のみを候補にする。
+    候補がなければ旧 DATA_DIR/checkpoint.json にフォールバック（後方互換）。
+    """
+    if not CHECKPOINTS_DIR.exists():
+        # 後方互換: project_dir 未指定時のみ旧ファイルにフォールバック
+        # (旧ファイルには project_dir がないため、特定 PJ 検索時は汚染リスクあり)
+        return None if project_dir else _load_legacy_checkpoint()
+    candidates = []
+    for f in CHECKPOINTS_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if project_dir:
+            cp_project = data.get("project_dir", "")
+            if not cp_project:
+                # project_dir 未設定の checkpoint は特定プロジェクト検索時にスキップ
+                continue
+            try:
+                if str(Path(cp_project).resolve()) != str(Path(project_dir).resolve()):
+                    continue
+            except OSError:
+                continue
+        candidates.append(data)
+    if not candidates:
+        return None if project_dir else _load_legacy_checkpoint()
+    def _parse_ts(ts: str) -> "datetime":
+        try:
+            return datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    candidates.sort(key=lambda d: _parse_ts(d.get("timestamp", "")), reverse=True)
+    return candidates[0]
+
+
+def _load_legacy_checkpoint() -> dict | None:
+    """旧 DATA_DIR/checkpoint.json を読み込む（後方互換）。"""
+    legacy = DATA_DIR / "checkpoint.json"
+    if not legacy.exists():
+        return None
+    try:
+        return json.loads(legacy.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def cleanup_old_checkpoints() -> None:
+    """TTL 超過の checkpoint ファイルを削除する。"""
+    if not CHECKPOINTS_DIR.exists():
+        return
+    cutoff = time.time() - CHECKPOINT_TTL_HOURS * 3600
+    for f in CHECKPOINTS_DIR.glob("*.json"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+        except OSError:
+            continue
 
 
 def workflow_context_path(session_id: str) -> Path:

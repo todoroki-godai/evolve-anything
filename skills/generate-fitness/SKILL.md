@@ -2,11 +2,8 @@
 name: generate-fitness
 effort: medium
 description: |
-  プロジェクト固有の fitness 関数を自動生成。CLAUDE.md・rules・skills を分析し、
-  ドメイン特性に基づいた評価関数を scripts/rl/fitness/ に出力する。
-  使用タイミング: (1) rl-anything をプロジェクトに導入した直後
-  (2) プロジェクト固有の品質基準で --fitness を使いたい
-  トリガーワード: generate-fitness, fitness生成, 評価関数生成
+  PJ固有 fitness 関数を自動生成。CLAUDE.md・rules・skills からドメイン特性を分析し評価関数を出力。
+  Trigger: generate-fitness, fitness生成, 評価関数生成
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
