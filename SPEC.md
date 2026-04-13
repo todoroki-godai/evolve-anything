@@ -1,6 +1,6 @@
 # SPEC.md — rl-anything
 
-Last updated: 2026-04-13 by /spec-keeper update
+Last updated: 2026-04-13 by /spec-keeper update (usage.jsonl ts fix)
 
 ## Overview
 
@@ -56,11 +56,10 @@ Observe hooks (14個, LLMコストゼロ) → テレメトリ JSONL → evolve/d
 
 直近5件のみ。過去の変更は [CHANGELOG.md](CHANGELOG.md) を参照。
 
+- 2026-04-13: **usage.jsonl カラム名統一** — `observe.py` の書き込みと DuckDB クエリ層の `timestamp` → `ts` に修正。`skill_evolve` フェーズの Binder Error 解消 (#59)
 - 2026-04-13: **PostCompact hook** — Compact 後に checkpoint から作業コンテキスト（ブランチ・直近コミット・未コミットファイル）を systemMessage 注入。hooks/ 14個体制。settings.json の suggest-subagent-delegation 重複解消
 - 2026-04-12: v1.27.0 — **CC v2.1.94+ 統合** — `correction_detect.py` で `explicit`/`guardrail` 系 correction 検出時に `hookSpecificOutput.sessionTitle` を JSON 出力。`implement` / `rl-loop-orchestrator` SKILL.md に CC v2.1.98+ `Monitor` tool ガイド追記（sleep ポーリング代替）
 - 2026-04-07: v1.26.0 — **bin/ 移行 (ADR-019)** — bareコマンド13個追加（`rl-audit` 等）、`scripts/lib/` に `audit.py/discover.py/prune.py/reorganize.py/rl_common.py/plugin_root.py` 移設、hooks/common.py re-exporter化、pytest P0解消
-- 2026-04-02: v1.24.0 — **spec-keeper README.md 5層構造** — README.md を外部向け最外層として位置づけ（init/update/status 対応）
-- 2026-04-01: v1.23.0 — **PermissionDenied hook** — CC v2.1.89 対応。hooks/ 13個体制
 
 ## Current Limitations / Known Issues
 
