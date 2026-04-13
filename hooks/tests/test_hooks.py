@@ -1302,7 +1302,7 @@ class TestPruneParentSkill:
         records = [
             {
                 "skill_name": "Agent:Explore",
-                "timestamp": "2026-03-03T10:00:00+00:00",
+                "ts": "2026-03-03T10:00:00+00:00",
             },
         ]
         usage_file.write_text(

@@ -146,9 +146,9 @@ def test_resolve_skill_path_global(tmp_path):
 def test_find_high_freq_skills():
     """高頻度 global/plugin スキルの検出。"""
     usage_data = [
-        {"skill_name": "commit", "timestamp": datetime.now(timezone.utc).isoformat()},
+        {"skill_name": "commit", "ts": datetime.now(timezone.utc).isoformat()},
     ] * 15 + [
-        {"skill_name": "rarely", "timestamp": datetime.now(timezone.utc).isoformat()},
+        {"skill_name": "rarely", "ts": datetime.now(timezone.utc).isoformat()},
     ] * 3
 
     mock_path = Path("/fake/.claude/skills/commit/SKILL.md")
