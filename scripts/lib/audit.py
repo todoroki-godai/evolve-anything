@@ -532,7 +532,7 @@ def load_usage_data(
 
     # 日数フィルタ
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    return [r for r in records if r.get("timestamp", "") >= cutoff]
+    return [r for r in records if r.get("ts", r.get("timestamp", "")) >= cutoff]
 
 
 from agent_classifier import BUILTIN_AGENT_NAMES

@@ -49,7 +49,7 @@ def handle_post_tool_use(event: dict) -> None:
         skill_name = tool_input.get("skill", "unknown")
         usage_record = {
             "skill_name": skill_name,
-            "timestamp": now,
+            "ts": now,
             "session_id": session_id,
             "file_path": tool_input.get("args", ""),
             "project": project,

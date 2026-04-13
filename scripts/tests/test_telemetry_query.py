@@ -15,11 +15,11 @@ def usage_file(tmp_path):
     """テスト用 usage.jsonl を作成する。"""
     filepath = tmp_path / "usage.jsonl"
     records = [
-        {"skill_name": "my-skill", "project": "atlas", "timestamp": "2026-03-01T00:00:00Z"},
-        {"skill_name": "my-skill", "project": "atlas", "timestamp": "2026-03-01T01:00:00Z"},
-        {"skill_name": "other-skill", "project": "beta", "timestamp": "2026-03-01T02:00:00Z"},
-        {"skill_name": "my-skill", "project": None, "timestamp": "2026-03-01T03:00:00Z"},
-        {"skill_name": "legacy-skill", "timestamp": "2026-03-01T04:00:00Z"},  # project フィールドなし
+        {"skill_name": "my-skill", "project": "atlas", "ts": "2026-03-01T00:00:00Z"},
+        {"skill_name": "my-skill", "project": "atlas", "ts": "2026-03-01T01:00:00Z"},
+        {"skill_name": "other-skill", "project": "beta", "ts": "2026-03-01T02:00:00Z"},
+        {"skill_name": "my-skill", "project": None, "ts": "2026-03-01T03:00:00Z"},
+        {"skill_name": "legacy-skill", "ts": "2026-03-01T04:00:00Z"},  # project フィールドなし
     ]
     filepath.write_text("\n".join(json.dumps(r) for r in records) + "\n")
     return filepath

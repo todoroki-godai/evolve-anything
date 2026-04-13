@@ -102,12 +102,12 @@ def query_usage(
         return []
 
     if HAS_DUCKDB:
-        return _duckdb_query_file(filepath, project=project, include_unknown=include_unknown, since=since, until=until)
+        return _duckdb_query_file(filepath, project=project, include_unknown=include_unknown, since=since, until=until, timestamp_field="ts")
 
     _warn_no_duckdb()
     records = _load_jsonl(filepath)
     records = _filter_by_project(records, project, include_unknown)
-    return _filter_by_time(records, since, until)
+    return _filter_by_time(records, since, until, timestamp_field="ts")
 
 
 def query_errors(
@@ -198,15 +198,16 @@ def query_sessions(
 
 def _build_time_where(
     since: Optional[str], until: Optional[str], params: Dict[str, Any],
+    timestamp_field: str = "timestamp",
 ) -> str:
     """since/until の WHERE 句断片を生成する。"""
     clauses = []
     if since:
         params["since"] = since
-        clauses.append("timestamp >= $since")
+        clauses.append(f"{timestamp_field} >= $since")
     if until:
         params["until"] = until
-        clauses.append("timestamp < $until")
+        clauses.append(f"{timestamp_field} < $until")
     return " AND ".join(clauses)
 
 
@@ -217,6 +218,7 @@ def _duckdb_query_file(
     include_unknown: bool = False,
     since: Optional[str] = None,
     until: Optional[str] = None,
+    timestamp_field: str = "timestamp",
 ) -> List[Dict[str, Any]]:
     """DuckDB で JSONL ファイルをクエリする。
 
@@ -246,7 +248,7 @@ def _duckdb_query_file(
                     where_parts.append("project = $project")
 
         # 時間範囲フィルタ
-        time_clause = _build_time_where(since, until, params)
+        time_clause = _build_time_where(since, until, params, timestamp_field=timestamp_field)
         if time_clause:
             where_parts.append(time_clause)
 
@@ -507,7 +509,7 @@ def _aggregate_skill_sessions(
     window_seconds = TRACE_WINDOW_MINUTES * 60
 
     for sid, session_records in by_session.items():
-        sorted_recs = sorted(session_records, key=lambda r: r.get("timestamp", ""))
+        sorted_recs = sorted(session_records, key=lambda r: r.get("ts", r.get("timestamp", "")))
 
         skill_fires = []
         for i, rec in enumerate(sorted_recs):
@@ -518,14 +520,14 @@ def _aggregate_skill_sessions(
             continue
 
         for fire_idx, (pos, fire_rec) in enumerate(skill_fires):
-            fire_ts = _parse_ts(fire_rec.get("timestamp", ""))
+            fire_ts = _parse_ts(fire_rec.get("ts", fire_rec.get("timestamp", "")))
             if fire_ts is None:
                 continue
 
             next_skill_ts = None
             for j in range(pos + 1, len(sorted_recs)):
                 if sorted_recs[j].get("tool_name") == "Skill":
-                    next_skill_ts = _parse_ts(sorted_recs[j].get("timestamp", ""))
+                    next_skill_ts = _parse_ts(sorted_recs[j].get("ts", sorted_recs[j].get("timestamp", "")))
                     break
 
             window_end_ts = fire_ts.timestamp() + window_seconds
@@ -536,18 +538,18 @@ def _aggregate_skill_sessions(
             errors = 0
             read_edit_cycles = 0
             last_was_read = False
-            last_ts_str = fire_rec.get("timestamp", "")
+            last_ts_str = fire_rec.get("ts", fire_rec.get("timestamp", ""))
 
             for j in range(pos + 1, len(sorted_recs)):
                 rec = sorted_recs[j]
-                rec_ts = _parse_ts(rec.get("timestamp", ""))
+                rec_ts = _parse_ts(rec.get("ts", rec.get("timestamp", "")))
                 if rec_ts is None:
                     continue
                 if rec_ts.timestamp() >= window_end_ts:
                     break
 
                 tool_calls += 1
-                last_ts_str = rec.get("timestamp", last_ts_str)
+                last_ts_str = rec.get("ts", rec.get("timestamp", last_ts_str))
 
                 if rec.get("error"):
                     errors += 1
