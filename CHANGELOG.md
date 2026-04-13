@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.27.1] - 2026-04-13
 
 ### Added
 - **PostCompact hook**: Compact 後に PreCompact で保存した checkpoint から作業コンテキスト（ブランチ・直近コミット・未コミットファイル）を systemMessage として注入。コンテキスト復元精度が向上
