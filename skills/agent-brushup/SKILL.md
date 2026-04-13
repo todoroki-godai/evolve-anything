@@ -28,6 +28,7 @@ description: |
 ### Step 1: エージェント走査
 
 ```bash
+rl-usage-log "agent-brushup"
 python3 <PLUGIN_DIR>/scripts/lib/agent_quality.py scan "$(pwd)" 2>&1
 ```
 

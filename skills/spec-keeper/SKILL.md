@@ -124,6 +124,7 @@ Claude Code の Glob→Grep→Read 階層戦略と同じ思想で、
 Bash grep のみで「設計判断を含む design.md」を高速抽出する。
 
 ```bash
+rl-usage-log "spec-keeper"
 # 設計判断セクションを含む design.md を抽出（数秒で完了）
 find openspec/changes/archive -name "design.md" \
   -exec grep -l "^## Decision\|^# Decision\|^## Risks\|Trade-off\|Approach" {} \;
