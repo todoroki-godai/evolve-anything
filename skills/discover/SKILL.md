@@ -27,6 +27,7 @@ description: |
 ### Step 1: パターン検出
 
 ```bash
+rl-usage-log "discover"
 rl-discover [--session-scan]
 ```
 

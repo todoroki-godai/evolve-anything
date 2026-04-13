@@ -24,6 +24,7 @@ description: |
 `--coherence-score` が指定された場合、環境全体の構造的整合性スコアを算出してレポート先頭に表示する:
 
 ```bash
+rl-usage-log "audit"
 rl-audit "$(pwd)" --coherence-score
 ```
 

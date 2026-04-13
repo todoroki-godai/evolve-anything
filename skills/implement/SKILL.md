@@ -30,6 +30,7 @@ plan → implement → ship の「implement」フェーズを構造化する。
 **gstack plan artifact がある場合:**
 
 ```bash
+rl-usage-log "implement"
 setopt +o nomatch 2>/dev/null || true  # zsh compat
 # gstack slug 解決（gstack 未インストールでもエラーにならない）
 GSTACK_SLUG=""

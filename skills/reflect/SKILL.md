@@ -29,6 +29,7 @@ corrections.jsonl に蓄積されたユーザー修正を分析し、
 ### Step 1: reflect.py を実行
 
 ```bash
+rl-usage-log "reflect"
 rl-reflect [オプション]
 ```
 

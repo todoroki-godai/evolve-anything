@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""bin/rl-usage-log — スキル使用を usage.jsonl に記録する。
+
+Usage: rl-usage-log <skill_name> [--project <name>] [--session <id>]
+
+PostToolUse hook が Skill ツールに対して発火しないため (#62)、
+各スキルの preamble から直接呼び出す self-report 方式を採用。
+"""
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print("Usage: rl-usage-log <skill_name> [--project <name>] [--session <id>]", file=sys.stderr)
+        sys.exit(1)
+
+    skill_name = sys.argv[1]
+
+    # Parse optional args
+    project = None
+    session_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    args = sys.argv[2:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--project" and i + 1 < len(args):
+            project = args[i + 1]
+            i += 2
+        elif args[i] == "--session" and i + 1 < len(args):
+            session_id = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    # Determine project from env if not provided
+    if project is None:
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        if project_dir:
+            project = Path(project_dir).name
+
+    data_dir = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".claude" / "rl-anything")))
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    record = {
+        "skill_name": skill_name,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "project": project,
+        "source": "self-report",
+    }
+
+    usage_file = data_dir / "usage.jsonl"
+    try:
+        with open(usage_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        pass  # サイレント失敗
+
+
+if __name__ == "__main__":
+    main()

@@ -28,6 +28,7 @@ Observe データ確認 → Diagnose → Compile → Housekeeping → Report の
 ### Step 1: データ十分性チェック
 
 ```bash
+rl-usage-log "evolve"
 rl-evolve --project-dir "$(pwd)" --dry-run
 ```
 

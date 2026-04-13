@@ -21,6 +21,7 @@ description: |
 ### Step 1: plugin.json を読み取り
 
 ```bash
+rl-usage-log "version"
 cat <PLUGIN_DIR>/.claude-plugin/plugin.json
 ```
 

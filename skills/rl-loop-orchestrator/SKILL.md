@@ -35,6 +35,7 @@ TARGET がスキル名（例: `my-skill`）の場合、`.claude/skills/{name}/SK
 ### 2. スクリプトを実行する
 
 ```bash
+rl-usage-log "rl-loop-orchestrator"
 rl-loop \
   --target <TARGET> [OPTIONS]
 ```

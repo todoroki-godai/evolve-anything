@@ -22,6 +22,7 @@ description: |
 ### Step 1: データ収集 + 出力モード判定
 
 ```bash
+rl-usage-log "handover"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/handover/scripts/handover.py" --issue --project-dir "$(pwd)"
 ```
 
