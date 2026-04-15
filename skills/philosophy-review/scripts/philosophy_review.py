@@ -26,15 +26,40 @@ DEFAULT_INJECT_CONFIDENCE = 0.85
 # Principles
 # ---------------------------------------------------------------------------
 
-def load_philosophy_principles(principles_path: Path) -> List[Dict[str, Any]]:
-    """principles.json から category=philosophy のエントリを返す。"""
-    if not principles_path.exists():
-        return []
+def _load_seed_philosophy() -> List[Dict[str, Any]]:
+    """principles.py の SEED_PRINCIPLES から philosophy カテゴリのみを返す。
+
+    cache が古い（SEED 追加前に生成）場合でも SEED 経由で配布された哲学原則を
+    評価対象にできるようにするためのフォールバック。
+    """
     try:
-        data = json.loads(principles_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        import importlib.util
+        fitness_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "rl" / "fitness"
+        spec = importlib.util.spec_from_file_location("principles", fitness_dir / "principles.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return [p for p in mod.SEED_PRINCIPLES if p.get("category") == "philosophy"]
+    except Exception:
         return []
-    return [p for p in data.get("principles", []) if p.get("category") == "philosophy"]
+
+
+def load_philosophy_principles(principles_path: Path) -> List[Dict[str, Any]]:
+    """principles.json cache + SEED_PRINCIPLES の philosophy を id 重複除去でマージして返す。
+
+    cache に philosophy が無くても SEED 経由の原則が使える。cache にユーザーが
+    user_defined: true で追加した philosophy があれば優先される。
+    """
+    from_cache: List[Dict[str, Any]] = []
+    if principles_path.exists():
+        try:
+            data = json.loads(principles_path.read_text(encoding="utf-8"))
+            from_cache = [p for p in data.get("principles", []) if p.get("category") == "philosophy"]
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    seen_ids = {p.get("id") for p in from_cache}
+    from_seed = [p for p in _load_seed_philosophy() if p.get("id") not in seen_ids]
+    return from_cache + from_seed
 
 
 # ---------------------------------------------------------------------------

@@ -85,19 +85,42 @@ def _make_session_jsonl(path: Path, *, lines: int = 5, msg_chars: int = 100) -> 
 # ---------------------------------------------------------------------------
 
 class TestLoadPhilosophyPrinciples:
-    def test_filters_only_philosophy_category(self, tmp_path):
+    def test_includes_cache_philosophy_and_merges_seed(self, tmp_path):
         principles_path = _make_principles_json(tmp_path)
         result = philosophy_review.load_philosophy_principles(principles_path)
         ids = {p["id"] for p in result}
-        assert ids == {"think-before-coding", "simplicity-first"}
+        # cache 2件 + SEED 4件（重複なし）= 少なくとも cache 2件は含まれる
+        assert {"think-before-coding", "simplicity-first"}.issubset(ids)
+        # SEED にしか無いものも含まれる（surgical-changes は fixture に無い）
+        assert "surgical-changes" in ids or "goal-driven-execution" in ids
 
-    def test_returns_empty_when_no_philosophy(self, tmp_path):
+    def test_seed_fallback_when_cache_has_no_philosophy(self, tmp_path):
         path = tmp_path / "p.json"
         path.write_text(json.dumps({"principles": [{"id": "x", "category": "quality"}]}))
-        assert philosophy_review.load_philosophy_principles(path) == []
+        result = philosophy_review.load_philosophy_principles(path)
+        # cache に philosophy が無くても SEED の4件が返る
+        ids = {p["id"] for p in result}
+        assert {"think-before-coding", "simplicity-first", "surgical-changes", "goal-driven-execution"}.issubset(ids)
 
-    def test_handles_missing_file(self, tmp_path):
-        assert philosophy_review.load_philosophy_principles(tmp_path / "nope.json") == []
+    def test_seed_fallback_when_file_missing(self, tmp_path):
+        # cache が無くても SEED 経由で philosophy が取得できる
+        result = philosophy_review.load_philosophy_principles(tmp_path / "nope.json")
+        ids = {p["id"] for p in result}
+        assert {"think-before-coding", "simplicity-first", "surgical-changes", "goal-driven-execution"}.issubset(ids)
+
+    def test_cache_user_defined_takes_priority_over_seed(self, tmp_path):
+        # cache に user_defined: true で think-before-coding を上書きした場合、cache 版が使われる
+        custom = {
+            "id": "think-before-coding",
+            "text": "CUSTOM OVERRIDE",
+            "category": "philosophy",
+            "user_defined": True,
+        }
+        path = tmp_path / "p.json"
+        path.write_text(json.dumps({"principles": [custom]}))
+        result = philosophy_review.load_philosophy_principles(path)
+        by_id = {p["id"]: p for p in result}
+        assert by_id["think-before-coding"]["text"] == "CUSTOM OVERRIDE"
 
 
 class TestEstimateTokens:
@@ -256,7 +279,9 @@ class TestE2E:
         assert result["violations_injected"] == 0
         assert corrections.read_text() == ""  # empty
 
-    def test_e2e_no_philosophy_principles(self, tmp_path):
+    def test_e2e_no_philosophy_principles_when_seed_monkeypatched(self, tmp_path, monkeypatch):
+        """SEED_PRINCIPLES に philosophy が存在しない状況では no-philosophy-principles を返す。"""
+        monkeypatch.setattr(philosophy_review, "_load_seed_philosophy", lambda: [])
         path = tmp_path / "p.json"
         path.write_text(json.dumps({"principles": [{"id": "x", "category": "quality"}]}))
         sessions_dir = tmp_path / "sessions"
