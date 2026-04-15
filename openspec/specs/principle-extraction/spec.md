@@ -5,7 +5,7 @@ CLAUDE.md と Rules から PJ 固有の原則を LLM で抽出し、Constitution
 
 ## Requirements
 ### Requirement: Principle extraction from CLAUDE.md and Rules
-`principles.py` の `extract_principles()` は CLAUDE.md と Rules ファイルを入力として、`claude -p` 経由で LLM に PJ 固有の原則リストを抽出させなければならない（MUST）。各原則は `id`（kebab-case）、`text`（原則の記述）、`source`（抽出元ファイルパス）、`category`（quality/safety/performance/convention のいずれか）を含まなければならない（MUST）。
+`principles.py` の `extract_principles()` は CLAUDE.md と Rules ファイルを入力として、`claude -p` 経由で LLM に PJ 固有の原則リストを抽出させなければならない（MUST）。各原則は `id`（kebab-case）、`text`（原則の記述）、`source`（抽出元ファイルパス）、`category`（quality/safety/performance/convention/philosophy のいずれか）を含まなければならない（MUST）。`philosophy` カテゴリは静的コンテンツでは検証不可能な会話・行動レベルの原則を表し、`user_defined: true` でユーザーが手動登録する用途を主とする。
 
 #### Scenario: CLAUDE.md から原則を抽出
 - **WHEN** CLAUDE.md に「LLMコール最小化」「べき等性保証」「ユーザー承認なしに変更しない」が記述されている
@@ -16,22 +16,25 @@ CLAUDE.md と Rules から PJ 固有の原則を LLM で抽出し、Constitution
 - **THEN** 該当 Rule から原則が抽出され、source にルールファイルのパスが含まれる
 
 ### Requirement: Seed principles
-`extract_principles()` は LLM 抽出結果に加え、5つの普遍的シード原則をデフォルトで含めなければならない（MUST）。シード原則は `"seed": true` フラグを持ち、`--refresh` 時にも常に含まれなければならない（MUST）。
+`extract_principles()` は LLM 抽出結果に加え、コード内の `SEED_PRINCIPLES` 配列を常にデフォルトで含めなければならない（MUST）。シード原則は `"seed": true` フラグを持ち、`--refresh` 時にも常に含まれなければならない（MUST）。
 
-シード原則:
-1. `single-responsibility` — 各スキル/ルールは単一の責務を持つ
-2. `graceful-degradation` — 外部依存の失敗時にフォールバックする
-3. `user-consent` — 破壊的操作の前にユーザー確認を取る
-4. `idempotency` — 同じ操作の繰り返しで副作用が増大しない
-5. `minimal-llm-cost` — LLM 呼び出しを最小化する
+シード原則は2系統に分類される:
+- **コア原則**（カテゴリ: `quality` / `safety` / `performance`）: `single-responsibility`, `graceful-degradation`, `user-consent`, `idempotency`, `minimal-llm-cost` 等。プラグイン全体の不変な動作原則
+- **哲学原則**（カテゴリ: `philosophy`）: `think-before-coding`, `simplicity-first`, `surgical-changes`, `goal-driven-execution` 等。会話・行動レベルの普遍的コーディング哲学。`philosophy-review` スキルの評価対象として利用される
+
+シード原則の追加・改訂は `SEED_PRINCIPLES` 配列の編集で行い、本 spec の更新を伴わない数の変更はテストと配列の二重管理を避けるためである。
 
 #### Scenario: CLAUDE.md が空でもシード原則が利用可能
 - **WHEN** CLAUDE.md が存在しない、または内容が空である
-- **THEN** 5つのシード原則が返され、各原則に `"seed": true` が含まれる
+- **THEN** `SEED_PRINCIPLES` 配列の全要素が返され、各原則に `"seed": true` が含まれる
 
 #### Scenario: LLM 抽出原則とシード原則のマージ
-- **WHEN** LLM が 3 つの原則を抽出する
-- **THEN** シード原則 5 + LLM 抽出 3 = 計 8 原則が返される（重複する場合は LLM 抽出が優先）
+- **WHEN** LLM が N 件の原則を抽出する
+- **THEN** シード原則全件 + LLM 抽出 N 件が返される（重複する場合は LLM 抽出が優先）
+
+#### Scenario: 哲学原則カテゴリの存在
+- **WHEN** `extract_principles()` の結果から `category == "philosophy"` でフィルタする
+- **THEN** Karpathy 由来の哲学原則（`think-before-coding` 等）が含まれる
 
 ### Requirement: Principle quality scoring
 `extract_principles()` は各抽出原則の品質を specificity（具体性: 0.0-1.0）と testability（検証可能性: 0.0-1.0）で評価しなければならない（MUST）。品質スコアが `THRESHOLDS["min_principle_quality"]`（デフォルト 0.3）未満の原則は Constitutional eval から除外しなければならない（MUST）。品質スコアは LLM 抽出と同一の呼び出し内で算出する（追加 LLM コストなし）。
