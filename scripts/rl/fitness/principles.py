@@ -79,6 +79,43 @@ SEED_PRINCIPLES: List[Dict[str, Any]] = [
         "testability": 0.6,
         "seed": True,
     },
+    # Philosophy seeds (Karpathy 4 principles, source: forrestchang/andrej-karpathy-skills)
+    {
+        "id": "think-before-coding",
+        "text": "要件が曖昧・矛盾・過剰と判断したら、着手前に解釈を複数提示して確認を取り、混乱したら止まる",
+        "source": "seed",
+        "category": "philosophy",
+        "specificity": 0.6,
+        "testability": 0.5,
+        "seed": True,
+    },
+    {
+        "id": "simplicity-first",
+        "text": "要求された最小コードのみ実装し、未要求の抽象化・柔軟性・防御的エラーハンドリングを追加しない",
+        "source": "seed",
+        "category": "philosophy",
+        "specificity": 0.7,
+        "testability": 0.6,
+        "seed": True,
+    },
+    {
+        "id": "surgical-changes",
+        "text": "編集対象は要求に直接紐づく行のみとし、隣接コード・コメント・フォーマットの『改善』は禁止する",
+        "source": "seed",
+        "category": "philosophy",
+        "specificity": 0.7,
+        "testability": 0.6,
+        "seed": True,
+    },
+    {
+        "id": "goal-driven-execution",
+        "text": "成功基準を最初に合意し、検証可能なゴールに変換してから実装する",
+        "source": "seed",
+        "category": "philosophy",
+        "specificity": 0.6,
+        "testability": 0.5,
+        "seed": True,
+    },
 ]
 
 
@@ -139,7 +176,7 @@ def _build_extraction_prompt(source_content: str) -> str:
     "id": "kebab-case-id",
     "text": "原則の説明文",
     "source": "抽出元ファイル名",
-    "category": "quality|safety|performance|convention",
+    "category": "quality|safety|performance|convention|philosophy",
     "specificity": 0.0-1.0,
     "testability": 0.0-1.0
   }}

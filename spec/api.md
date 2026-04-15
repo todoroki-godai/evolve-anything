@@ -3,7 +3,7 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-04-07
+Last updated: 2026-04-15
 
 ## スキルコマンド
 
@@ -24,10 +24,11 @@ Last updated: 2026-04-07
 | `/rl-anything:implement` | plan artifact → 構造化実装（Standard/Parallel）→ テレメトリ記録 | high |
 | `/rl-anything:version` | バージョン・ステータス表示 | low |
 | `/rl-anything:spec-keeper` | SPEC.md + ADR 管理（init/update/adr/status） | medium |
+| `/rl-anything:philosophy-review` | セッション履歴を Judge LLM で評価し哲学原則違反を corrections.jsonl 注入 | medium |
 | `/rl-anything:feedback` | フィードバック送信 | low |
 
 ## 適応度関数
 
-組み込み8個: `default`, `skill_quality`, `coherence`, `telemetry`, `constitutional`（+ /cso security軸）, `chaos`, `environment`（動的重み）, `plugin`（プラグイン統合）。`config.py` で閾値集約
+組み込み9個: `default`, `skill_quality`, `coherence`, `telemetry`, `constitutional`（+ /cso security軸）, `chaos`, `environment`（動的重み）, `plugin`（プラグイン統合）, `principles`。`config.py` で閾値集約
 
 PJ固有: `scripts/rl/fitness/{name}.py` に配置 → `--fitness {name}`

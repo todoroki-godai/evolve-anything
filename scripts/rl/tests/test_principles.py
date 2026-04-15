@@ -249,3 +249,45 @@ class TestComputeSourceHash:
         hash1 = principles._compute_source_hash(project)
         hash2 = principles._compute_source_hash(project)
         assert hash1 == hash2
+
+
+class TestExtractionPromptCategoryEnum:
+    """_build_extraction_prompt の category enum に philosophy が含まれること。"""
+
+    def test_prompt_includes_philosophy_category(self):
+        prompt = principles._build_extraction_prompt("# sample\n")
+        assert "quality|safety|performance|convention|philosophy" in prompt
+
+    def test_prompt_keeps_existing_categories(self):
+        prompt = principles._build_extraction_prompt("# sample\n")
+        for cat in ("quality", "safety", "performance", "convention"):
+            assert cat in prompt
+
+
+class TestSeedPrinciplesPhilosophy:
+    """SEED_PRINCIPLES に Karpathy 4原則が philosophy カテゴリで含まれること。"""
+
+    def test_seed_includes_karpathy_four(self):
+        ids = {p["id"] for p in principles.SEED_PRINCIPLES}
+        assert {
+            "think-before-coding",
+            "simplicity-first",
+            "surgical-changes",
+            "goal-driven-execution",
+        }.issubset(ids)
+
+    def test_karpathy_seeds_are_philosophy_category(self):
+        karpathy_ids = {
+            "think-before-coding",
+            "simplicity-first",
+            "surgical-changes",
+            "goal-driven-execution",
+        }
+        for p in principles.SEED_PRINCIPLES:
+            if p["id"] in karpathy_ids:
+                assert p["category"] == "philosophy"
+                assert p["seed"] is True
+
+    def test_seed_total_count(self):
+        # コア5 + philosophy 4 = 9
+        assert len(principles.SEED_PRINCIPLES) == 9
