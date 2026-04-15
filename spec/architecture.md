@@ -3,7 +3,7 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-04-07
+Last updated: 2026-04-15
 
 ## コンポーネント構成
 
@@ -29,7 +29,7 @@ bin/                    ← bareコマンド CLI（13個）[ADR-019]
   rl-reflect, rl-handover, rl-optimize, rl-loop
   rl-backfill, rl-backfill-analyze, rl-backfill-reclassify, rl-audit-aggregate
 
-skills/                 ← スキル定義（22個）
+skills/                 ← スキル定義（23個）
   evolve/               ← 3ステージ自律進化パイプライン
   discover/             ← パターン検出 + スキル候補生成
   reflect/              ← 修正フィードバック反映
@@ -39,6 +39,7 @@ skills/                 ← スキル定義（22個）
   second-opinion/       ← Claude Agent セカンドオピニオン（codex 代替）
   handover/             ← セッション引き継ぎ + Deploy State 構造化 + SPEC.md 同期 + PreCompact 自動提案
   implement/            ← 構造化実装スキル（plan → 実装 → 計画準拠チェック → テレメトリ）
+  philosophy-review/    ← 会話履歴を Judge LLM で評価し category=philosophy 違反を corrections 注入 [ADR-020]
 
 scripts/lib/            ← 共通ロジック（38 モジュール）[ADR-019]
   plugin_root.py        ← PLUGIN_ROOT 定数（depth ハードコード廃止）
@@ -66,7 +67,7 @@ scripts/lib/            ← 共通ロジック（38 モジュール）[ADR-019]
   growth_narrative.py   ← 環境プロファイル（性格特性5種）+ 成長ストーリー生成
   （他 15 モジュール: frontmatter, growth_level, skill_evolve, skill_triggers 等）
 
-scripts/rl/fitness/     ← 適応度関数（8個組み込み + config.py で閾値集約）
+scripts/rl/fitness/     ← 適応度関数（9個組み込み + config.py で閾値集約）
   config.py             ← 全モジュール共有閾値 + BASE_WEIGHTS
   coherence.py          ← 環境 Coherence Score（4軸）
   telemetry.py          ← テレメトリ駆動 Score（3軸）

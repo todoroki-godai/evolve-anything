@@ -62,6 +62,7 @@ rl-anything は **3つの独立した柱** で構成される。
 | エージェント管理 | エージェント定義の品質診断・改善提案 | `/rl-anything:agent-brushup` |
 | セカンドオピニオン | 独立した cold-read セカンドオピニオン | `/rl-anything:second-opinion` |
 | 仕様管理 | SPEC.md + ADR の管理、L1/L2 自動昇格 | `/rl-anything:spec-keeper` |
+| 哲学原則レビュー | セッション履歴を Judge LLM で評価し philosophy 原則違反を抽出 | `/rl-anything:philosophy-review` |
 | 成長可視化 (NFD) | Lv.1-10 レベルシステム + 4フェーズ自動判定 + 5 traits + 成長ストーリー | `/rl-anything:audit --growth` |
 
 ## やりたいこと別ガイド
@@ -79,6 +80,7 @@ rl-anything は **3つの独立した柱** で構成される。
 | エージェント定義を診断・改善 | `agent-brushup` |
 | 独立したセカンドオピニオンを取得 | `second-opinion` |
 | SPEC.md を初期化・更新 | `spec-keeper init` / `spec-keeper update` |
+| 会話の哲学原則違反を月1レビュー | `philosophy-review` |
 | セッションを引き継ぎ | `handover` |
 | 環境の成長レポート | `audit --growth` |
 
