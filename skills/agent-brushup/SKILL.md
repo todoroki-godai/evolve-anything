@@ -66,9 +66,11 @@ agents = scan_agents(project_root=Path("$(pwd)"))
 
 ### 検出された問題
 - **[agent-name]** missing_frontmatter: YAML frontmatter が欠落
+- **[agent-name]** knowledge_hardcoding: バージョン番号・具体パス・固有名詞のハードコード（陳腐化リスク）
 
 ### ベストプラクティス提案
 - **[agent-name]** に success_metrics セクション追加を推奨
+- **[agent-name]** に jit_file_references: JIT識別子戦略（回答前にファイル動的確認）の鉄則がない
 
 ### Upstream (agency-agents)
 - ステータス: 更新なし / N件の更新あり / チェックスキップ
