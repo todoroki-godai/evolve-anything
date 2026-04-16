@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.30.1] - 2026-04-17
+
+### Changed
+- **implement スキル: plan ファイル名仕様を追記**: `skills/implement/SKILL.md` — CC v2.1.111 以降、plan ファイル名がプロンプト内容由来（例: `fix-auth-race-snug-otter.md`）になった仕様と最新ファイル特定コマンドを追記
+
 ## [1.30.0] - 2026-04-16
 
 ### Added
