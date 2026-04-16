@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.31.0] - 2026-04-17
+
+### Added
+- **agent-brushup: 知識陳腐化防止パターン** — `agent_quality.py` に `knowledge_hardcoding` アンチパターン（閾値3/10で low/medium 分岐）と `jit_file_references` ベストプラクティスを追加。エージェントが知識をハードコードして陳腐化するパターンを診断で検出し、JIT識別子戦略（回答前にファイルを動的確認）の採用を促す。5テスト追加 (closes #67)
+
 ## [1.30.1] - 2026-04-17
 
 ### Changed

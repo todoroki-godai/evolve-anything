@@ -42,7 +42,7 @@ skills/                 ← スキル定義（23個）
   implement/            ← 構造化実装スキル（plan → 実装 → 計画準拠チェック → テレメトリ）。Standard モードはタスク境界で認知分離（context: fresh 相当）を宣言し、前タスクの実装詳細はメモリ参照でなく Read で確認する
   philosophy-review/    ← 会話履歴を Judge LLM で評価し category=philosophy 違反を corrections 注入 [ADR-020]
 
-scripts/lib/            ← 共通ロジック（39 モジュール）[ADR-019]
+scripts/lib/            ← 共通ロジック（40 モジュール）[ADR-019]
   plugin_root.py        ← PLUGIN_ROOT 定数（depth ハードコード廃止）
   rl_common.py          ← hooks 共通ユーティリティ（DATA_DIR, classify_prompt 等）
   audit.py              ← 環境健康診断ロジック（スキル/ルール/CLAUDE.md 診断）
