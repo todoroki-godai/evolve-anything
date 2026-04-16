@@ -55,9 +55,9 @@ class TestScoreUtilization:
         data_dir.mkdir()
         now = _now_iso()
         records = [
-            {"skill_name": "skill-a", "project": tmp_path.name, "timestamp": now, "session_id": "s1"},
-            {"skill_name": "skill-b", "project": tmp_path.name, "timestamp": now, "session_id": "s1"},
-            {"skill_name": "skill-c", "project": tmp_path.name, "timestamp": now, "session_id": "s1"},
+            {"skill_name": "skill-a", "project": tmp_path.name, "ts": now, "session_id": "s1"},
+            {"skill_name": "skill-b", "project": tmp_path.name, "ts": now, "session_id": "s1"},
+            {"skill_name": "skill-c", "project": tmp_path.name, "ts": now, "session_id": "s1"},
         ]
         usage_file = data_dir / "usage.jsonl"
         _write_jsonl(usage_file, records)
@@ -75,8 +75,8 @@ class TestScoreUtilization:
         data_dir.mkdir()
         now = _now_iso()
         records = [
-            {"skill_name": "skill-a", "project": tmp_path.name, "timestamp": now, "session_id": "s1"},
-            {"skill_name": "skill-b", "project": tmp_path.name, "timestamp": now, "session_id": "s1"},
+            {"skill_name": "skill-a", "project": tmp_path.name, "ts": now, "session_id": "s1"},
+            {"skill_name": "skill-b", "project": tmp_path.name, "ts": now, "session_id": "s1"},
         ]
         _write_jsonl(data_dir / "usage.jsonl", records)
 
@@ -177,7 +177,7 @@ class TestScoreImplicitReward:
 
         # 10 invocations, no corrections → 100% success
         records = [
-            {"skill_name": "skill-a", "project": tmp_path.name, "timestamp": now_ts, "session_id": "s1"}
+            {"skill_name": "skill-a", "project": tmp_path.name, "ts": now_ts, "session_id": "s1"}
             for _ in range(10)
         ]
         _write_jsonl(data_dir / "usage.jsonl", records)
@@ -197,7 +197,7 @@ class TestScoreImplicitReward:
         now_ts = _days_ago_iso(1)
 
         records = [
-            {"skill_name": "skill-a", "project": tmp_path.name, "timestamp": now_ts, "session_id": "s1"},
+            {"skill_name": "skill-a", "project": tmp_path.name, "ts": now_ts, "session_id": "s1"},
         ]
         _write_jsonl(data_dir / "usage.jsonl", records)
         _write_jsonl(data_dir / "corrections.jsonl", [])
@@ -220,7 +220,7 @@ class TestScoreImplicitReward:
         corr_ts = (base_dt + timedelta(seconds=30)).isoformat()
 
         records = [
-            {"skill_name": "skill-a", "project": tmp_path.name, "timestamp": base_ts, "session_id": "s1"},
+            {"skill_name": "skill-a", "project": tmp_path.name, "ts": base_ts, "session_id": "s1"},
         ]
         corrections = [
             {"correction_type": "stop", "timestamp": corr_ts, "session_id": "s1",

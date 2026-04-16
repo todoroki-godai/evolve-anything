@@ -201,7 +201,7 @@ def score_implicit_reward(project_dir: Path, days: int = 30) -> float:
         skill_usage_counts[skill] = skill_usage_counts.get(skill, 0) + 1
 
         session_id = rec.get("session_id", "")
-        invoke_ts = rec.get("timestamp", "")
+        invoke_ts = rec.get("ts", "")
         if not session_id or not invoke_ts:
             success_count += 1  # データ不足 → success とみなす
             continue
