@@ -3,7 +3,7 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-04-15
+Last updated: 2026-04-16 (recovery)
 
 ## コンポーネント構成
 
@@ -24,10 +24,11 @@ hooks/                  ← Observe 層（14個、LLMコストゼロ）[ADR-002]
   workflow_context.py   ← ワークフローコンテキスト記録
   file_changed.py       ← FileChanged hook（CC v2.1.83）CLAUDE.md/SKILL.md/rules 変更検知
 
-bin/                    ← bareコマンド CLI（13個）[ADR-019]
+bin/                    ← bareコマンド CLI（14個）[ADR-019]
   rl-evolve, rl-audit, rl-discover, rl-prune, rl-reorganize
   rl-reflect, rl-handover, rl-optimize, rl-loop
   rl-backfill, rl-backfill-analyze, rl-backfill-reclassify, rl-audit-aggregate
+  rl-usage-log          ← Skill self-report 用（CC Skill hook 非対応の回避策 #62）
 
 skills/                 ← スキル定義（23個）
   evolve/               ← 3ステージ自律進化パイプライン
@@ -66,6 +67,12 @@ scripts/lib/            ← 共通ロジック（38 モジュール）[ADR-019]
   growth_journal.py     ← 結晶化イベント記録・照会 + git log backfill
   growth_narrative.py   ← 環境プロファイル（性格特性5種）+ 成長ストーリー生成
   （他 15 モジュール: frontmatter, growth_level, skill_evolve, skill_triggers 等）
+
+scripts/bench/          ← TBench2-rl Harness Quality Benchmark（Week 1-2 実装済み）
+  golden_extractor.py   ← GoldenCase（正例/負例ペア）抽出 — usage.jsonl + corrections.jsonl
+  output_evaluator.py   ← AxisScores + OutputEvaluator — 3軸採点（技術/ドメイン/構造）
+  run_benchmark.py      ← BenchmarkRunner — 出力生成 → 採点 → benchmark_results.jsonl
+  spike_*.py/json/md    ← rl-scorer 転用可否スパイク（Week 1 末検証）
 
 scripts/rl/fitness/     ← 適応度関数（9個組み込み + config.py で閾値集約）
   config.py             ← 全モジュール共有閾値 + BASE_WEIGHTS

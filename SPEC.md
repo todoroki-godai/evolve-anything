@@ -1,6 +1,6 @@
 # SPEC.md — rl-anything
 
-Last updated: 2026-04-15 by /spec-keeper update (philosophy-review)
+Last updated: 2026-04-16 by /spec-keeper update (recovery)
 
 ## Overview
 
@@ -57,11 +57,11 @@ Observe hooks (14個, LLMコストゼロ) → テレメトリ JSONL → evolve/d
 
 直近5件のみ。過去の変更は [CHANGELOG.md](CHANGELOG.md) を参照。
 
-- 2026-04-15: **philosophy-review スキル新設** — Claude Code native セッション履歴を Judge LLM で評価し、`category: "philosophy"` 原則の違反を corrections.jsonl に注入。Karpathy 4原則を `SEED_PRINCIPLES` に追加しコード経由で全環境配布（ADR-020）。spec.md の seed セクションを「数値固定」から「カテゴリ別構造」に再構造化
+- 2026-04-16: **TBench2-rl Week 2** — `scripts/bench/run_benchmark.py` + `output_evaluator.py` 実装。golden_cases.jsonl → haiku 出力生成 → 3軸採点（技術/ドメイン/構造）→ benchmark_results.jsonl。score_pre/delta 差分追跡、--max-api-calls 100、pytest -m bench 分離
+- 2026-04-16: **TBench2-rl Week 1 + スパイク** — `scripts/bench/golden_extractor.py` で GoldenCase（正例/負例ペア）抽出基盤を TDD 実装。rl-scorer 3軸の出力評価転用可否を haiku で検証（結果: 転用可能、integrated 0.767）
+- 2026-04-15: **philosophy-review スキル新設** — Claude Code native セッション履歴を Judge LLM で評価し、`category: "philosophy"` 原則の違反を corrections.jsonl に注入。Karpathy 4原則を SEED_PRINCIPLES に追加しコード経由で全環境配布（ADR-020）
 - 2026-04-13: **Skill self-report 方式** — PostToolUse が Skill に非対応のため `bin/rl-usage-log` を新設、全17スキルの preamble から self-report (#62)。bin/ コマンド14個体制
-- 2026-04-13: **usage.jsonl カラム名統一** — `observe.py` の書き込みと DuckDB クエリ層の `timestamp` → `ts` に修正。`skill_evolve` フェーズの Binder Error 解消 (#59)
-- 2026-04-13: **PostCompact hook** — Compact 後に checkpoint から作業コンテキスト（ブランチ・直近コミット・未コミットファイル）を systemMessage 注入。hooks/ 14個体制。settings.json の suggest-subagent-delegation 重複解消
-- 2026-04-12: v1.27.0 — **CC v2.1.94+ 統合** — `correction_detect.py` で `explicit`/`guardrail` 系 correction 検出時に `hookSpecificOutput.sessionTitle` を JSON 出力。`implement` / `rl-loop-orchestrator` SKILL.md に CC v2.1.98+ `Monitor` tool ガイド追記（sleep ポーリング代替）
+- 2026-04-13: **PostCompact hook** — Compact 後に checkpoint から作業コンテキスト（ブランチ・直近コミット・未コミットファイル）を systemMessage 注入。hooks/ 14個体制
 
 ## Current Limitations / Known Issues
 
