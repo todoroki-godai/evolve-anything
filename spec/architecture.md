@@ -3,7 +3,7 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-04-16 (recovery)
+Last updated: 2026-04-16
 
 ## コンポーネント構成
 
@@ -68,10 +68,11 @@ scripts/lib/            ← 共通ロジック（38 モジュール）[ADR-019]
   growth_narrative.py   ← 環境プロファイル（性格特性5種）+ 成長ストーリー生成
   （他 15 モジュール: frontmatter, growth_level, skill_evolve, skill_triggers 等）
 
-scripts/bench/          ← TBench2-rl Harness Quality Benchmark（Week 1-2 実装済み）
+scripts/bench/          ← TBench2-rl Harness Quality Benchmark（Week 1-3 実装済み）
   golden_extractor.py   ← GoldenCase（正例/負例ペア）抽出 — usage.jsonl + corrections.jsonl
   output_evaluator.py   ← AxisScores + OutputEvaluator — 3軸採点（技術/ドメイン/構造）
   run_benchmark.py      ← BenchmarkRunner — 出力生成 → 採点 → benchmark_results.jsonl
+  mutation_injector.py  ← MutationInjector（rule_delete/trigger_invert/prompt_truncate）+ SentinelRunner
   spike_*.py/json/md    ← rl-scorer 転用可否スパイク（Week 1 末検証）
 
 scripts/rl/fitness/     ← 適応度関数（9個組み込み + config.py で閾値集約）
