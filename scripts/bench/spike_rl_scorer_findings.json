@@ -1,0 +1,65 @@
+{
+  "spike": "rl-scorer output eval feasibility",
+  "date": "2026-04-16",
+  "good_score": 0.767,
+  "poor_score": 0.0,
+  "delta": 0.767,
+  "feasible": true,
+  "conclusion": "✓ 転用可能。rl-scorer の3軸は LLM 出力評価に機能する。",
+  "recommendation": "Week 2: Approach A 完了 → rl-scorer を golden_cases.jsonl の評価に接続",
+  "good_result": {
+    "label": "良質な evolve 出力（golden 相当）",
+    "scores": {
+      "technical": {
+        "clarity": 0.72,
+        "completeness": 0.78,
+        "consistency": 0.72,
+        "edge_cases": 0.55,
+        "testability": 0.63,
+        "total": 0.7,
+        "rationale": "完全性は高いが、曖昧語（その他17、準拠率定義）が多く、エッジケース対応と実装詳細（具体的な diff、検証方法）が不足。confidence の活用が未記載。",
+        "error": false
+      },
+      "domain": {
+        "data_grounding": 0.9,
+        "diagnostic_accuracy": 0.85,
+        "proposal_utility": 0.75,
+        "scope_fit": 0.8,
+        "total": 0.825,
+        "rationale": "定量データ明確。パターン検出はプロファイル可能だが、根本原因対応か対症療法かが不明確。提案詳細度が低め。",
+        "error": false
+      },
+      "structure": {
+        "format": 0.9,
+        "length": 0.5,
+        "examples": 0.85,
+        "completeness": 0.9,
+        "total": 0.7875,
+        "rationale": "形式と完結性は優秀。目安(100-500行)より大幅に短く、before/after例が不足。",
+        "error": false
+      }
+    },
+    "integrated_score": 0.767
+  },
+  "poor_result": {
+    "label": "低品質な evolve 出力（correction あり相当）",
+    "scores": {
+      "technical": {
+        "total": 0.0,
+        "error": true,
+        "raw": "申し訳ありませんが、**評価対象となる evolve スキルの実行出力の内容が示されていません**。\n\n評価を進めるには、以下の情報が必要です：\n\n1. **evolve スキルが出力した内容**（提案、診断、改善案など）\n2. **対象となったプロジェクト/ファイル**（skill、rule、CLAUDE.md など）\n3. **evolve が検出した問題と提案の詳細**\n\n現在、お預かりしているのは「特に問題は見当たりません」というコメントだけなので、以下のいずれかをお願いします：\n\n- **evolve スキルの実行結果を全文コピー**して提示してください\n- または、**evolve 実行後の出力ファイル/ログ**へのパスを教えてください\n\nその後、技術品質基準（明確性・完全性・一貫性・エッジケース・実行可能性）で客観的に採点します。"
+      },
+      "domain": {
+        "total": 0.0,
+        "error": true,
+        "raw": "評価対象の evolve スキル実行出力が見当たりません。\n\n「特に問題は見当たりません」というメッセージは、ユーザーの評価コメント（指示）のように見えますが、実際の **evolve スキルの実行結果出力**（診断内容、検出パターン、提案の詳細など）が提供されていません。\n\n以下のいずれかをお願いします：\n\n1. **evolve スキルを実行して、その出力全文をコピー&ペースト**してください\n2. または、**既に実行済みなら、セッション履歴から evolve の出力結果を抽出**してください\n\n実行出力がなければ、以下の評価基準に基づいた採点ができません：\n- **データ根拠** — 見解の背景となったセッション数・correction件数などの定量データ\n- **診断精度** — 検出パターンの妥当性\n- **提案実用性** — 具体的で適用可能な改善案か\n- **範囲適切性** — 変更スコープの適切さ\n\n出力をお待ちしています。"
+      },
+      "structure": {
+        "total": 0.0,
+        "error": true,
+        "raw": "申し訳ありませんが、評価対象となる `evolve` スキルの実行出力が提示されていません。\n\n評価するには、以下のいずれかが必要です：\n\n1. **実行出力テキスト** — evolve スキルが生成したMarkdown形式の出力内容\n2. **ファイルパス** — 出力が保存されているファイルの場所（例：`scripts/output/evolve_result.md`）\n\n例えば、`/rl-anything:evolve` を実行後に生成されたレポートやサマリーを共有していただければ、構造品質（フォーマット・長さ・具体例・完結性）を評価できます。\n\nどちらをお持ちでしょうか？"
+      }
+    },
+    "integrated_score": 0.0
+  }
+}
