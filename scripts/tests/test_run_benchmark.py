@@ -249,6 +249,24 @@ class TestOutputEvaluator:
             evaluator.evaluate("evolve", "output")
         assert m.call_count == 3
 
+    def test_score_axis_missing_key_returns_none(self):
+        """_score_axis: haiku が 'total' キーを含まないJSONを返した場合 None を返す。
+
+        旧挙動: parsed.get('total', 0.0) でサイレントに 0.0 を返していた。
+        修正後: 'total' not in parsed → None を返し has_error=True に伝播する。
+        """
+        evaluator = OutputEvaluator(system_context=SYSTEM_CTX)
+        # total キーを含まないJSONを3軸全てで返す
+        missing_key_response = json.dumps({"clarity": 0.8, "other_key": 0.9})
+        with _make_subprocess_mock([
+            missing_key_response,
+            missing_key_response,
+            missing_key_response,
+        ]):
+            scores = evaluator.evaluate("evolve", "output")
+        # total キー欠落 → has_error=True、スコアは0.0フォールバック
+        assert scores.has_error is True
+
 
 # ─────────────────────────────────────────────────
 # BenchmarkRunner

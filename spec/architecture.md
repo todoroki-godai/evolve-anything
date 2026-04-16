@@ -39,10 +39,10 @@ skills/                 ← スキル定義（23個）
   agent-brushup/        ← エージェント品質診断
   second-opinion/       ← Claude Agent セカンドオピニオン（codex 代替）
   handover/             ← セッション引き継ぎ + Deploy State 構造化 + SPEC.md 同期 + PreCompact 自動提案
-  implement/            ← 構造化実装スキル（plan → 実装 → 計画準拠チェック → テレメトリ）
+  implement/            ← 構造化実装スキル（plan → 実装 → 計画準拠チェック → テレメトリ）。Standard モードはタスク境界で認知分離（context: fresh 相当）を宣言し、前タスクの実装詳細はメモリ参照でなく Read で確認する
   philosophy-review/    ← 会話履歴を Judge LLM で評価し category=philosophy 違反を corrections 注入 [ADR-020]
 
-scripts/lib/            ← 共通ロジック（38 モジュール）[ADR-019]
+scripts/lib/            ← 共通ロジック（39 モジュール）[ADR-019]
   plugin_root.py        ← PLUGIN_ROOT 定数（depth ハードコード廃止）
   rl_common.py          ← hooks 共通ユーティリティ（DATA_DIR, classify_prompt 等）
   audit.py              ← 環境健康診断ロジック（スキル/ルール/CLAUDE.md 診断）
@@ -66,6 +66,7 @@ scripts/lib/            ← 共通ロジック（38 モジュール）[ADR-019]
   growth_engine.py      ← NFD Growth Engine（Phase 4段階判定 + 進捗率 + PJ別キャッシュ）
   growth_journal.py     ← 結晶化イベント記録・照会 + git log backfill
   growth_narrative.py   ← 環境プロファイル（性格特性5種）+ 成長ストーリー生成
+  scorer_schema.py      ← ScorerOutput スキーマ — rl-scorer 出力の型付き検証（AxisResult / ScorerOutput / validate_scorer_output）
   （他 15 モジュール: frontmatter, growth_level, skill_evolve, skill_triggers 等）
 
 scripts/bench/          ← TBench2-rl Harness Quality Benchmark（Week 1-3 実装済み）
