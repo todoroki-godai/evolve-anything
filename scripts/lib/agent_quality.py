@@ -62,6 +62,25 @@ OUTPUT_SPEC_PATTERNS = [
 ]
 OUTPUT_SPEC_MIN_MATCHES = 2
 
+# 知識ハードコード検出パターン（バージョン番号・具体パス・プロジェクト固有名詞リスト）
+KNOWLEDGE_HARDCODING_PATTERNS = [
+    r"\b(?:v\d+\.\d+|\(\d+[-–]\d+\))",  # バージョン範囲: (13-15), v1.2.3
+    r"(?:~\/|https?:\/\/[^\s)]{10,}|\/[a-z][-a-z0-9/]{4,}(?:\.py|\.ts|\.md|\.json))",  # パス/URL
+    r"^\s*[-*]\s*\*\*[A-Za-z][-A-Za-z0-9_]+\*\*\s*:",  # **projectName**: 形式の固有名詞リスト
+]
+KNOWLEDGE_HARDCODING_LOW_THRESHOLD = 3
+KNOWLEDGE_HARDCODING_MEDIUM_THRESHOLD = 10
+
+# JIT識別子戦略の検出パターン
+JIT_PATTERNS = [
+    r"(?i)(read|grep|bash|確認|参照).*(before|前に|必ず|always)",
+    r"(?i)(ファイルを|file).*(確認|read|check)",
+    r"(?i)dynamic\s*knowledge",
+    r"(?i)jit|just.in.time",
+    r"(?i)記憶に頼らず",
+    r"(?i)実行時に.*確認",
+]
+
 # --- Anti-pattern catalog ---
 
 ANTI_PATTERNS = {
@@ -100,6 +119,10 @@ ANTI_PATTERNS = {
     "bloated_agent": {
         "description": f"定義が {BLOAT_LINE_THRESHOLD} 行を超えて肥大化",
         "severity": "medium",
+    },
+    "knowledge_hardcoding": {
+        "description": "バージョン番号・具体パス・プロジェクト固有名詞をハードコード（陳腐化リスク）",
+        "severity": "low",
     },
 }
 
@@ -157,6 +180,10 @@ BEST_PRACTICES = {
             r"(?i)\*\*(blocker|critical|suggestion|nit)\*\*",
             r"(?i)(P0|P1|P2|P3)",
         ],
+    },
+    "jit_file_references": {
+        "description": "JIT識別子戦略：回答前にファイルを動的確認する鉄則の明示",
+        "detect_patterns": JIT_PATTERNS,
     },
 }
 
@@ -331,6 +358,26 @@ def check_quality(agent: AgentInfo) -> Dict[str, Any]:
             "severity": "medium",
         })
         score -= 0.1
+
+    # 8b. Knowledge hardcoding check
+    hc_matches = sum(
+        len(re.findall(p, agent.content, re.MULTILINE))
+        for p in KNOWLEDGE_HARDCODING_PATTERNS
+    )
+    if hc_matches >= KNOWLEDGE_HARDCODING_MEDIUM_THRESHOLD:
+        issues.append({
+            "type": "knowledge_hardcoding",
+            "detail": f"ハードコード候補 {hc_matches} 箇所（閾値 {KNOWLEDGE_HARDCODING_MEDIUM_THRESHOLD}）。JIT識別子戦略を検討",
+            "severity": "medium",
+        })
+        score -= 0.1
+    elif hc_matches >= KNOWLEDGE_HARDCODING_LOW_THRESHOLD:
+        issues.append({
+            "type": "knowledge_hardcoding",
+            "detail": f"ハードコード候補 {hc_matches} 箇所。意図的なら無視可。陳腐化リスクがある場合はJIT化を検討",
+            "severity": "low",
+        })
+        score -= 0.05
 
     # 9. Best practice suggestions
     for bp_name, bp_info in BEST_PRACTICES.items():

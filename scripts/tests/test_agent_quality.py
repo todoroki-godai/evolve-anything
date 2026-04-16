@@ -17,6 +17,8 @@ sys.path.insert(0, str(_root / "lib"))
 from lib.agent_quality import (
     ANTI_PATTERNS,
     BEST_PRACTICES,
+    KNOWLEDGE_HARDCODING_LOW_THRESHOLD,
+    KNOWLEDGE_HARDCODING_MEDIUM_THRESHOLD,
     MIN_DESCRIPTION_LENGTH,
     AgentInfo,
     check_quality,
@@ -367,6 +369,107 @@ description: A very large agent.
 
         issue_types = {i["type"] for i in result["issues"]}
         assert "bloated_agent" in issue_types
+
+    def test_knowledge_hardcoding_low(self, global_agents_dir, tmp_path):
+        """ハードコード候補が low 閾値以上で issue が出る（severity=low）。"""
+        # **project**: ... 形式を閾値以上並べる
+        lines = "\n".join(
+            f"- **project-{i}**: NestJS service, uses Node.js v18, path /srv/app-{i}/index.ts"
+            for i in range(KNOWLEDGE_HARDCODING_LOW_THRESHOLD)
+        )
+        content = f"""\
+---
+name: hardcoded-bot
+description: Agent with hardcoded project knowledge. Use this for project-specific tasks.
+tools: Read
+---
+
+## Project Knowledge
+
+{lines}
+"""
+        path = _write_agent(global_agents_dir, "hardcoded", content)
+        agent = AgentInfo(name="hardcoded", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "knowledge_hardcoding" in issue_types
+        issue = next(i for i in result["issues"] if i["type"] == "knowledge_hardcoding")
+        assert issue["severity"] in ("low", "medium")
+
+    def test_knowledge_hardcoding_medium(self, global_agents_dir, tmp_path):
+        """ハードコード候補が medium 閾値以上で severity=medium になる。"""
+        lines = "\n".join(
+            f"- **project-{i}**: NestJS service (v{i}.0), path /srv/app-{i}/index.ts"
+            for i in range(KNOWLEDGE_HARDCODING_MEDIUM_THRESHOLD)
+        )
+        content = f"""\
+---
+name: heavy-hardcoded
+description: Agent with many hardcoded project-specific facts. Use for project tasks.
+tools: Read
+---
+
+## Project Knowledge
+
+{lines}
+"""
+        path = _write_agent(global_agents_dir, "heavy", content)
+        agent = AgentInfo(name="heavy", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "knowledge_hardcoding" in issue_types
+        issue = next(i for i in result["issues"] if i["type"] == "knowledge_hardcoding")
+        assert issue["severity"] == "medium"
+
+    def test_knowledge_hardcoding_absent_on_clean_agent(self, global_agents_dir, tmp_path):
+        """ハードコードが少ない正常なエージェントでは knowledge_hardcoding が出ない。"""
+        path = _write_agent(global_agents_dir, "clean", _good_agent())
+        agent = AgentInfo(name="clean", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "knowledge_hardcoding" not in issue_types
+
+    def test_jit_file_references_suggestion_on_minimal(self, global_agents_dir, tmp_path):
+        """JIT識別子戦略のベストプラクティスが欠けていれば suggestion に出る。"""
+        path = _write_agent(global_agents_dir, "minimal", _minimal_agent())
+        agent = AgentInfo(name="minimal", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        suggestion_patterns = {s["pattern"] for s in result["suggestions"]}
+        assert "jit_file_references" in suggestion_patterns
+
+    def test_jit_file_references_no_suggestion_when_present(self, global_agents_dir, tmp_path):
+        """JIT鉄則が明示されていれば suggestion に出ない。"""
+        content = """\
+---
+name: jit-bot
+description: Agent that checks files before answering. Use for codebase questions.
+tools: Read, Grep
+---
+
+## Dynamic Knowledge Protocol
+
+Before answering, always Read the relevant file to confirm identifiers.
+記憶に頼らず必ずファイルを確認してから回答すること。
+
+## Output
+
+Provide specific file paths and line numbers in feedback.
+"""
+        path = _write_agent(global_agents_dir, "jit", content)
+        agent = AgentInfo(name="jit", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        suggestion_patterns = {s["pattern"] for s in result["suggestions"]}
+        assert "jit_file_references" not in suggestion_patterns
 
 
 # --- check_upstream tests ---
