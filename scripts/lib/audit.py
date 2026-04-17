@@ -1774,7 +1774,8 @@ def _build_growth_report(proj: Path) -> List[str]:
     return lines
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """bin/rl-audit エントリポイント。"""
     import argparse as _argparse
 
     _parser = _argparse.ArgumentParser(description="環境の健康診断")
@@ -1793,3 +1794,7 @@ if __name__ == "__main__":
         print(json.dumps(ctx, ensure_ascii=False, indent=2))
     else:
         print(run_audit(_args.project, skip_rescore=_args.skip_rescore, coherence_score=_args.coherence_score, telemetry_score=_args.telemetry_score, constitutional_score=_args.constitutional_score, pipeline_health=_args.pipeline_health, growth=_args.growth))
+
+
+if __name__ == "__main__":
+    main()
