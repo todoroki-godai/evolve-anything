@@ -93,8 +93,36 @@ agents = scan_agents(project_root=Path("$(pwd)"))
 
 1. agency-agents のベストプラクティスに準拠した scaffold を生成
 2. 必須セクション: Identity, Core Mission, Critical Rules, Deliverables, Communication Style
-3. ユーザーに配置先を確認（global / project）
-4. frontmatter (name, description) を含めて生成
+3. **Self-Evolution Protocol セクションを必ず含める**（後述テンプレート参照）
+4. ユーザーに配置先を確認（global / project）
+5. frontmatter (name, description, memory: user) を含めて生成
+6. スコープが決まったら Self-Evolution Protocol の定義ファイルパスを実際のパスに置換:
+   - global → `~/.claude/agents/<agent-name>.md`
+   - project → `<project-root>/.claude/agents/<agent-name>.md`（絶対パス）
+
+**Self-Evolution Protocol テンプレート:**
+
+```markdown
+## Self-Evolution Protocol
+
+**トリガー条件（セッション末尾で確認）:**
+以下のいずれかを満たしたらプロトコルを起動:
+- 今セッションでユーザーから修正フィードバックを受けた
+- MEMORY.md の完了タスクが3件以上になった
+- 「効かなかった」知見が新たに記録された
+
+**手順:**
+1. `~/.claude/agent-memory/<agent-name>/MEMORY.md` を Read して今セッションの学びを整理
+   （memory は常に global に保存される）
+2. 自分の定義ファイルを Read:
+   - global agent: `~/.claude/agents/<agent-name>.md`
+   - project agent: `<project-root>/.claude/agents/<agent-name>.md`
+3. knowledge_hardcoding / jit_file_references / description 具体性の3軸で自己採点
+4. スコア改善が見込める箇所を特定してパッチ案を作成
+5. **Regression gate**: パッチ後スコア ≥ 現在スコアであることを確認
+6. ユーザーに diff を提示して承認を求める（自動適用しない）
+7. 承認後 Edit で自分の定義ファイルを更新
+```
 
 #### prune
 
