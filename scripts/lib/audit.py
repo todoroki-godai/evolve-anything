@@ -542,6 +542,8 @@ _BUILTIN_TOOLS = {f"Agent:{n}" for n in BUILTIN_AGENT_NAMES} | {"commit"}
 
 def _is_openspec_skill(skill_name: str) -> bool:
     """スキル名が OpenSpec 関連（レガシー）かどうかを判定する。"""
+    if not skill_name:
+        return False
     name_lower = skill_name.lower()
     base = name_lower[6:] if name_lower.startswith("agent:") else name_lower
     return "openspec" in base or base.startswith("opsx:")

@@ -278,6 +278,9 @@ def classify_usage_skill(skill_name: str) -> Optional[str]:
 
     audit.py の classify_usage_skill() と同等の機能を提供。
     """
+    if not skill_name:
+        return None
+
     plugin_map = _load_plugin_skill_map()
 
     # 1. 完全一致
