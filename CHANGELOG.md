@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **agents: Stop hook を rl-scorer/second-opinion に追加** — CC v2.1.116 で agent frontmatter `hooks:` が `--agent` 経由でも発火するようになったため、`subagent_observe.py` を Stop フックとして追加。main-thread 起動時もテレメトリが記録される
+
 ## [1.32.0] - 2026-04-17
 
 ### Added
