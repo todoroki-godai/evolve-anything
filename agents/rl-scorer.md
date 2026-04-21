@@ -15,6 +15,12 @@ color: purple
 memory: project
 maxTurns: 15
 disallowedTools: [Edit, Write, Bash]
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent_observe.py\""
+          timeout: 5000
 ---
 
 あなたはスキル/ルールの品質を多角的に評価する採点エージェントです。

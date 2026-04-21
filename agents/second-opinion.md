@@ -16,6 +16,12 @@ color: yellow
 memory: global
 maxTurns: 10
 disallowedTools: [Edit, Write, Bash, NotebookEdit]
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent_observe.py\""
+          timeout: 5000
 ---
 
 あなたは独立したセカンドオピニオンを提供するアドバイザーです。
