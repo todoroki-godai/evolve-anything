@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Repository を todoroki-godai org → todoroki-godai user account に移行** — todoroki-godai/evolve-anything を archive し、todoroki-godai/rl-anything を新正式ロケーションに。GitHub の組織→ユーザー直接 transfer は権限上不可だったため、stale な todoroki-godai/rl-anything へ main を fast-forward push + 100 tags 同期で移行。`plugin.json` / `marketplace.json` / `README.md` インストール手順 / docs 全体の URL 参照を一括更新。旧 todoroki-godai repo は read-only で保存
+
 ## [1.34.0] - 2026-04-24
 
 ### Added

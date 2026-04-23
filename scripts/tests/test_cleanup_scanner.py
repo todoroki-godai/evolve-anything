@@ -72,7 +72,7 @@ def test_scan_prunable_remote_refs_parses_dry_run_output():
     def fake_git(args):
         assert args == ["fetch", "--prune", "--dry-run"]
         return (
-            "From github.com:todoroki-godai/evolve-anything\n"
+            "From github.com:todoroki-godai/rl-anything\n"
             " - [would prune] origin/feat/merged-a\n"
             " - [would prune] origin/feat/merged-b\n"
         )
