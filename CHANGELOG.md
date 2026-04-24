@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.35.0] - 2026-04-24
+
 ### Added
 - **fleet: user-approved tracked projects list** — `bin/rl-fleet` の scan 対象を `~/tools/*` 固定から、ユーザーが明示承認した PJ 群に切り替え。他の配置（`~/work/`, `~/jomon/`, `~/games/` 等）にある PJ も fleet で一覧できるようになる。
   - **検出**: Claude Code native の `~/.claude/projects/-<slug>/**/*.jsonl` の `cwd` フィールドを読み取り、slug デコードの曖昧性（`-` がパス内文字 vs 分離子）を回避。subagent 配下の nested jsonl も `rglob` で拾う
