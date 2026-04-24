@@ -247,3 +247,82 @@ class TestThreeLayerBlend:
         assert result["sources"] == ["coherence"]
         assert abs(result["overall"] - 0.75) < 0.01
         assert result["weights"] == {"coherence": 1.0}
+
+
+class TestSkipLLM:
+    """skip_llm=True で constitutional 軸（LLM呼び出し）をスキップする動作のテスト。
+
+    rl-fleet status の 10s timeout で rl-anything 自身が TIMEOUT する問題 (#86) 対応。
+    """
+
+    def test_skip_llm_does_not_load_constitutional(self, tmp_path):
+        """skip_llm=True 時、constitutional モジュールが _load_sibling から呼ばれない。"""
+        project = _make_project(tmp_path)
+        coh = {"overall": 0.8, "coverage": 0.8}
+        tel = {"overall": 0.7, "data_sufficiency": True}
+
+        loaded = []
+
+        def loader(name):
+            loaded.append(name)
+            if name == "skill_quality":
+                raise ImportError("not available in test")
+            m = mock.MagicMock()
+            if name == "coherence":
+                m.compute_coherence_score.return_value = coh
+            elif name == "telemetry":
+                m.compute_telemetry_score.return_value = tel
+            elif name == "constitutional":
+                # 呼ばれたら SLEEP して hang シミュレート（本来は呼ばれないこと自体を検証）
+                m.compute_constitutional_score.side_effect = AssertionError(
+                    "constitutional must NOT be loaded when skip_llm=True"
+                )
+            return m
+
+        with mock.patch.object(environment, "_load_sibling", side_effect=loader):
+            result = environment.compute_environment_fitness(project, days=30, skip_llm=True)
+
+        # constitutional は読み込み自体されない
+        assert "constitutional" not in loaded
+        # constitutional 軸が sources に含まれない
+        assert "constitutional" not in result["sources"]
+        # 軽量軸（coherence / telemetry）のみで overall が算出される
+        assert "coherence" in result["sources"]
+        assert "telemetry" in result["sources"]
+        # overall が constitutional を除いた normalize weight で正しく計算される
+        # （test_constitutional_unavailable_fallback_two_layer と同じロジック）
+        weights = environment._normalize_weights(["coherence", "telemetry"])
+        expected = round(0.8 * weights["coherence"] + 0.7 * weights["telemetry"], 4)
+        assert abs(result["overall"] - expected) < 0.01
+
+    def test_skip_llm_false_default(self, tmp_path):
+        """skip_llm 未指定（デフォルト False）時は constitutional が呼ばれる。
+
+        後方互換性ガード: 既存呼び出しの挙動を変えないことを保証する。
+        """
+        project = _make_project(tmp_path)
+        coh = {"overall": 0.8, "coverage": 0.8}
+        tel = {"overall": 0.7, "data_sufficiency": True}
+        con = {"overall": 0.9, "skip_reason": None}
+
+        loaded = []
+
+        def loader(name):
+            loaded.append(name)
+            if name == "skill_quality":
+                raise ImportError("not available in test")
+            m = mock.MagicMock()
+            if name == "coherence":
+                m.compute_coherence_score.return_value = coh
+            elif name == "telemetry":
+                m.compute_telemetry_score.return_value = tel
+            elif name == "constitutional":
+                m.compute_constitutional_score.return_value = con
+            return m
+
+        with mock.patch.object(environment, "_load_sibling", side_effect=loader):
+            result = environment.compute_environment_fitness(project, days=30)
+
+        # デフォルトでは constitutional が読み込まれる
+        assert "constitutional" in loaded
+        assert "constitutional" in result["sources"]

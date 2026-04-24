@@ -173,7 +173,10 @@ def compute_profile(project: str) -> EnvironmentProfile:
     skill_counts = _query_skill_counts(project)
     if skill_counts:
         sorted_skills = sorted(skill_counts, key=lambda x: x.get("count", 0), reverse=True)
-        profile.strengths = [s["skill_name"] for s in sorted_skills[:3]]
+        # skill_name が None のレコード（classify_usage_skill 不一致）を除外
+        profile.strengths = [
+            s["skill_name"] for s in sorted_skills[:3] if s.get("skill_name")
+        ]
 
     # corrections stats
     corr_stats = _query_corrections_stats(project)

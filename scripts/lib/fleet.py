@@ -258,7 +258,9 @@ def run_audit_subprocess(
     except (json.JSONDecodeError, OSError) as e:
         return AuditResult(AUDIT_ERROR, message=f"state parse: {e}")
 
-    env_score = state.get("progress")
+    # env_score は「環境スコア」(`compute_environment_fitness` 結果)、
+    # progress は「phase 内の進捗」— 別物。fleet は env_score を表示する (#86)。
+    env_score = state.get("env_score")
     phase = state.get("phase")
     growth_level = _safe_compute_level(env_score)
     latest_audit = _parse_iso(state.get("updated_at"))

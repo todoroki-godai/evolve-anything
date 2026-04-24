@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`bin/rl-audit --growth --skip-rescore` の hang 解消 + fleet env_score 表示** (todoroki-godai#86) — fleet が rl-anything PJ のみ `TIMEOUT` で surface する根本修正。原因 2 件:
+  1. **`compute_environment_fitness` が `--skip-rescore` でも constitutional（LLM）軸を呼ぶ** — `claude -p` subprocess が 60s timeout × layer 数で fleet の 10s timeout を常に超過。`compute_environment_fitness(skip_llm=True)` を導入し、fleet 経由の `--skip-rescore` から伝播するよう `_build_growth_report(skip_llm=)` パラメータを追加。軽量軸（coherence / telemetry / skill_quality）のみで env_score を算出
+  2. **`fleet.py` が `growth-state-<slug>.json` の `progress` フィールドを `env_score` と誤読** — cache 実体は `progress`（phase 進捗）と `env_score`（環境スコア）が別フィールド。`state.get("progress")` → `state.get("env_score")` に修正。テストの fixture も区別するよう更新
+  3. **`growth_narrative.compute_profile` で `skill_name=None` record が strengths list に混入** — `', '.join([None])` で `sequence item 0: expected str instance, NoneType found` エラー。None 除外フィルタを追加
+  - 効果: rl-anything 自身の audit 時間 60s+（hang）→ **2.7s**、fleet status で `TIMEOUT` → `0.81 Lv.8 OK` 表示。tests 5 件追加（`TestSkipLLM` 2 件 + fleet fixture 更新）
+
 ### Changed
 - **Repository を todoroki-godai org → todoroki-godai user account に移行** — todoroki-godai/evolve-anything を archive し、todoroki-godai/rl-anything を新正式ロケーションに。GitHub の組織→ユーザー直接 transfer は権限上不可だったため、stale な todoroki-godai/rl-anything へ main を fast-forward push + 100 tags 同期で移行。`plugin.json` / `marketplace.json` / `README.md` インストール手順 / docs 全体の URL 参照を一括更新。旧 todoroki-godai repo は read-only で保存
 

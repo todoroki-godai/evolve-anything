@@ -252,11 +252,26 @@ class TestRunAuditSubprocess:
         return pj
 
     @staticmethod
-    def _write_growth_state(data_dir: Path, pj: Path, *, progress: float, phase: str) -> Path:
+    def _write_growth_state(
+        data_dir: Path,
+        pj: Path,
+        *,
+        env_score: float,
+        phase: str,
+        progress: float = 0.0,
+    ) -> Path:
+        """growth-state-{name}.json を書く。
+
+        Cache 実体スキーマ（scripts/lib/growth_engine.py::update_cache 参照）:
+        - `progress`: phase 内の進捗 (0.0-1.0)
+        - `env_score`: 環境スコア (0.0-1.0) — fleet が読むべき値 (#86 修正)
+        - `level`: env_score から導出した Lv.1-10
+        """
         data_dir.mkdir(parents=True, exist_ok=True)
         state_path = data_dir / f"growth-state-{pj.name}.json"
         state_path.write_text(json.dumps({
             "progress": progress,
+            "env_score": env_score,
             "phase": phase,
             "updated_at": "2026-04-22T00:00:00+00:00",
             "sessions_count": 10,
@@ -267,7 +282,7 @@ class TestRunAuditSubprocess:
     def test_正常系_growth_state_から読み取り(self, tmp_path):
         pj = self._make_pj(tmp_path)
         data_dir = tmp_path / "data"
-        self._write_growth_state(data_dir, pj, progress=0.65, phase="continuous_growth")
+        self._write_growth_state(data_dir, pj, env_score=0.65, phase="continuous_growth")
 
         fake = _FakePopen(returncode=0)
         with mock.patch("fleet.subprocess.Popen", return_value=fake) as m:

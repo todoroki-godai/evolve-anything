@@ -64,8 +64,18 @@ def _normalize_weights(available_axes: list) -> Dict[str, float]:
     return {k: round(v / total, 6) for k, v in raw.items()}
 
 
-def compute_environment_fitness(project_dir: Path, days: int = 30) -> Dict[str, Any]:
-    """利用可能な軸を動的に判定し、正規化重みでブレンドした統合 Environment Fitness を算出する。"""
+def compute_environment_fitness(
+    project_dir: Path, days: int = 30, *, skip_llm: bool = False
+) -> Dict[str, Any]:
+    """利用可能な軸を動的に判定し、正規化重みでブレンドした統合 Environment Fitness を算出する。
+
+    Args:
+        project_dir: プロジェクトディレクトリ
+        days: telemetry 集計期間
+        skip_llm: True の場合、LLM 呼び出しを伴う constitutional 軸をスキップする。
+            rl-fleet status の 10s timeout で LLM subprocess が完了しない問題 (#86) への対応。
+            軽量軸（coherence / telemetry / skill_quality）のみで overall を算出する。
+    """
     _ensure_paths()
     project_dir = Path(project_dir).resolve()
 
@@ -92,17 +102,19 @@ def compute_environment_fitness(project_dir: Path, days: int = 30) -> Dict[str, 
     except Exception:
         pass
 
-    # Constitutional
-    try:
-        constitutional_mod = _load_sibling("constitutional")
-        constitutional_result = constitutional_mod.compute_constitutional_score(project_dir)
-        if constitutional_result and constitutional_result.get("overall") is not None:
-            axis_scores["constitutional"] = constitutional_result["overall"]
-            axis_results["constitutional"] = constitutional_result
-        else:
-            axis_results["constitutional"] = constitutional_result
-    except Exception:
-        pass
+    # Constitutional (LLM)
+    # skip_llm=True の場合はモジュール読み込み自体を行わない（fleet 高速パス）
+    if not skip_llm:
+        try:
+            constitutional_mod = _load_sibling("constitutional")
+            constitutional_result = constitutional_mod.compute_constitutional_score(project_dir)
+            if constitutional_result and constitutional_result.get("overall") is not None:
+                axis_scores["constitutional"] = constitutional_result["overall"]
+                axis_results["constitutional"] = constitutional_result
+            else:
+                axis_results["constitutional"] = constitutional_result
+        except Exception:
+            pass
 
     # Skill Quality
     try:

@@ -1646,7 +1646,9 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
     # ── NFD Growth Report ──────────────────────────────────────
     growth_report_lines = None
     if growth:
-        growth_report_lines = _build_growth_report(proj)
+        # skip_rescore=True のとき LLM eval（constitutional）をスキップして
+        # fleet の 10s timeout 内で完了させる (#86)
+        growth_report_lines = _build_growth_report(proj, skip_llm=skip_rescore)
 
     return generate_report(
         artifacts, violations, usage, duplicates, advisories,
@@ -1665,8 +1667,15 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
     )
 
 
-def _build_growth_report(proj: Path) -> List[str]:
-    """NFD Growth Report セクションを生成する。"""
+def _build_growth_report(proj: Path, *, skip_llm: bool = False) -> List[str]:
+    """NFD Growth Report セクションを生成する。
+
+    Args:
+        proj: プロジェクトディレクトリ
+        skip_llm: True の場合、compute_environment_fitness に skip_llm=True を伝播し、
+            LLM（constitutional）軸をスキップして軽量軸のみで env_score を算出する。
+            rl-fleet status の 10s timeout 対応 (#86)。
+    """
     lines = ["## 🌱 Growth Report (NFD)", ""]
     project_name = proj.resolve().name
     try:
@@ -1695,7 +1704,7 @@ def _build_growth_report(proj: Path) -> List[str]:
         coherence_score = 0.0
         try:
             from environment import compute_environment_fitness
-            env_result = compute_environment_fitness(proj)
+            env_result = compute_environment_fitness(proj, skip_llm=skip_llm)
             env_score = env_result.get("overall", 0.0) if isinstance(env_result, dict) else 0.0
             coherence_score = env_result.get("axes", {}).get("coherence", {}).get("score", 0.0) if isinstance(env_result, dict) else 0.0
         except Exception:
