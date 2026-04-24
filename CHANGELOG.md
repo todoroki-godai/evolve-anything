@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- **fleet: user-approved tracked projects list** — `bin/rl-fleet` の scan 対象を `~/tools/*` 固定から、ユーザーが明示承認した PJ 群に切り替え。他の配置（`~/work/`, `~/jomon/`, `~/games/` 等）にある PJ も fleet で一覧できるようになる。
+  - **検出**: Claude Code native の `~/.claude/projects/-<slug>/**/*.jsonl` の `cwd` フィールドを読み取り、slug デコードの曖昧性（`-` がパス内文字 vs 分離子）を回避。subagent 配下の nested jsonl も `rglob` で拾う
+  - **承認 UX**: `bin/rl-fleet discover` サブコマンドで候補を列挙、各 PJ に対して `a` (track) / `i` (ignore) / `s` (skip=次回再提案) / `q` (quit) を対話入力。結果は `~/.claude/rl-anything/fleet-config.json` に atomic に保存
+  - **status 動作**: tracked_projects 設定時はそれを直接 `collect_fleet_status(projects=)` に渡し、未設定時は従来の `--root` 経由で fallback（後方互換）。新候補が検出された場合は status 末尾に hint を表示
+  - **home directory 除外**: `$HOME` 自体は CC 本体の `.claude/` を持つため PJ 候補から自動除外
+  - `scripts/lib/fleet_config.py` 新設（load/save/discover/filter/diff/track/ignore の 7 関数）+ 18 unit tests + `collect_fleet_status(projects=)` パラメータ追加 + 1 integration test
+
 ### Fixed
 - **`bin/rl-audit --growth --skip-rescore` の hang 解消 + fleet env_score 表示** (todoroki-godai#86) — fleet が rl-anything PJ のみ `TIMEOUT` で surface する根本修正。原因 2 件:
   1. **`compute_environment_fitness` が `--skip-rescore` でも constitutional（LLM）軸を呼ぶ** — `claude -p` subprocess が 60s timeout × layer 数で fleet の 10s timeout を常に超過。`compute_environment_fitness(skip_llm=True)` を導入し、fleet 経由の `--skip-rescore` から伝播するよう `_build_growth_report(skip_llm=)` パラメータを追加。軽量軸（coherence / telemetry / skill_quality）のみで env_score を算出

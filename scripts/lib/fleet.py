@@ -429,6 +429,7 @@ def collect_fleet_status(
     data_dir: Path | None = None,
     timeout: float = _DEFAULT_TIMEOUT_SEC,
     max_workers: int = _DEFAULT_MAX_WORKERS,
+    projects: list[Path] | None = None,
 ) -> list[FleetRow]:
     """全 PJ の fleet ステータスを並列収集して行リストを返す。
 
@@ -437,11 +438,16 @@ def collect_fleet_status(
 
     同じ basename の PJ が複数ある場合は growth-state cache が衝突するため、
     該当 PJ を AUDIT_ERROR 扱いにして誤ったスコア表示を防ぐ。
+
+    Args:
+        projects: 明示的な PJ リスト（fleet-config.json の tracked_projects 用）。
+            指定時は root での enumeration をスキップし、このリストを直接使う。
     """
-    root = root or _DEFAULT_PROJECTS_ROOT
     settings_path = settings_path or _DEFAULT_SETTINGS_PATH
     auto_memory_root = auto_memory_root or _DEFAULT_AUTO_MEMORY_ROOT
-    projects = enumerate_projects(root)
+    if projects is None:
+        root = root or _DEFAULT_PROJECTS_ROOT
+        projects = enumerate_projects(root)
     if not projects:
         return []
     dup_basenames = _find_duplicate_basenames(projects)
@@ -500,25 +506,131 @@ def main(argv: list[str] | None = None) -> int:
     """`bin/rl-fleet` エントリポイント。"""
     parser = argparse.ArgumentParser(
         prog="rl-fleet",
-        description="全 PJ 横断で rl-anything の健康状態を一覧表示する（Phase 1）",
+        description="全 PJ 横断で rl-anything の健康状態を一覧表示する",
     )
     sub = parser.add_subparsers(dest="command")
     status_p = sub.add_parser("status", help="各 PJ のステータスを表形式で表示（default）")
     for p in (parser, status_p):
-        p.add_argument("--root", type=Path, default=None, help="PJ 列挙のルート (default: ~/tools)")
+        p.add_argument("--root", type=Path, default=None, help="PJ 列挙のルート（config 未設定時の fallback、default: ~/tools）")
         p.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SEC, help="PJ 毎の audit タイムアウト秒 (default: 10)")
         p.add_argument("--max-workers", type=int, default=_DEFAULT_MAX_WORKERS, help="並列数 (default: 2)")
         p.add_argument("--no-write", action="store_true", help="fleet-runs/*.jsonl への追記をスキップ")
+
+    discover_p = sub.add_parser(
+        "discover",
+        help="Claude Code が認識している PJ を検出し、track/ignore を対話的に設定",
+    )
+    discover_p.add_argument("--non-interactive", action="store_true", help="候補を表示するのみ（承認なし）")
+
     args = parser.parse_args(argv)
+
+    if args.command == "discover":
+        return _run_discover(args)
+
+    # default: status
+    return _run_status(args)
+
+
+def _run_status(args) -> int:
+    """fleet-config.json の tracked_projects を優先、未設定時は --root で fallback。"""
+    import fleet_config
+
+    config = fleet_config.load_config()
+    tracked = config.get("tracked_projects", [])
+
+    projects: list[Path] | None = None
+    new_candidates: list[Path] = []
+    if tracked:
+        projects = [Path(p) for p in tracked]
+        # ついでに新候補を検出して hint 表示
+        discovered = fleet_config.filter_valid_projects(
+            fleet_config.discover_cc_projects()
+        )
+        new_candidates = fleet_config.diff_candidates(config, discovered)
 
     rows = collect_fleet_status(
         root=args.root,
         timeout=args.timeout,
         max_workers=args.max_workers,
+        projects=projects,
     )
     print(format_status_table(rows), end="")
+    if new_candidates:
+        print(
+            f"\n[fleet] 新しい PJ 候補を {len(new_candidates)} 件検出しました。"
+            f" `rl-fleet discover` で track/ignore を設定してください。",
+        )
     if not args.no_write:
         write_fleet_run(rows)
+    return 0
+
+
+def _run_discover(args) -> int:
+    """CC の `~/.claude/projects/` から PJ を検出し、対話的に track/ignore を決定。"""
+    import fleet_config
+
+    config = fleet_config.load_config()
+    discovered = fleet_config.filter_valid_projects(
+        fleet_config.discover_cc_projects()
+    )
+    candidates = fleet_config.diff_candidates(config, discovered)
+
+    tracked_count = len(config.get("tracked_projects", []))
+    ignored_count = len(config.get("ignored_projects", []))
+    print(f"[fleet] 既存設定: tracked={tracked_count}, ignored={ignored_count}")
+
+    if not candidates:
+        print("[fleet] 新しい PJ 候補はありません。")
+        return 0
+
+    print(f"[fleet] 新候補 {len(candidates)} 件:")
+    for i, pj in enumerate(candidates, 1):
+        markers = []
+        if (pj / "CLAUDE.md").is_file():
+            markers.append("CLAUDE.md")
+        if (pj / ".claude").is_dir():
+            markers.append(".claude/")
+        marker_str = ", ".join(markers) if markers else "(none)"
+        print(f"  [{i:>2}] {pj}  ({marker_str})")
+
+    if args.non_interactive:
+        print("[fleet] --non-interactive 指定のため承認せず終了。")
+        return 0
+
+    print()
+    print("各 PJ について 'a' (track), 'i' (ignore), 's' (skip=次回再提案) で回答。")
+    print("'q' で中断・保存。空入力は skip 扱い。")
+    print()
+
+    changed = False
+    for i, pj in enumerate(candidates, 1):
+        while True:
+            ans = input(f"  [{i}/{len(candidates)}] {pj}: [a/i/s/q] ").strip().lower()
+            if ans in ("a", "i", "s", "q", ""):
+                break
+            print("  → 'a' (track), 'i' (ignore), 's' (skip), 'q' (quit) のいずれかを入力")
+        if ans == "q":
+            print("[fleet] 中断しました。ここまでの変更を保存します。")
+            break
+        if ans == "a":
+            fleet_config.track_project(config, pj)
+            changed = True
+            print(f"    → tracked")
+        elif ans == "i":
+            fleet_config.ignore_project(config, pj)
+            changed = True
+            print(f"    → ignored")
+        # s or empty: skip (do nothing)
+
+    if changed:
+        from datetime import datetime, timezone
+        config["last_discovery"] = datetime.now(timezone.utc).isoformat()
+        fleet_config.save_config(config)
+        final_tracked = len(config.get("tracked_projects", []))
+        final_ignored = len(config.get("ignored_projects", []))
+        print(f"\n[fleet] 保存しました: tracked={final_tracked}, ignored={final_ignored}")
+    else:
+        print("\n[fleet] 変更なし（skip のみ）。")
     return 0
 
 

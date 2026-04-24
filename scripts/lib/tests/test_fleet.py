@@ -470,6 +470,31 @@ class TestCollectFleetStatus:
             rows = collect_fleet_status(root=tmp_path / "empty")
         assert rows == []
 
+    def test_projects_param_bypasses_enumerate(self, tmp_path):
+        """`projects=` 明示指定時は enumerate_projects を呼ばず直接使う。
+
+        fleet-config.json の tracked_projects 経路で、`~/tools` 以外の
+        場所にある PJ も扱えることを保証する。
+        """
+        # root とは無関係な場所に 2 PJ を置く
+        pj_1 = tmp_path / "updater" / "sys-bots"
+        pj_2 = tmp_path / "jomon" / "jomon-ec"
+        (pj_1 / ".claude").mkdir(parents=True)
+        (pj_2 / ".claude").mkdir(parents=True)
+
+        with mock.patch("fleet.enumerate_projects") as m_enum, \
+             mock.patch("fleet.classify_project", return_value=STATUS_ENABLED), \
+             mock.patch("fleet.run_audit_subprocess", return_value=AuditResult(
+                 status=AUDIT_OK, env_score=0.5, growth_level=5,
+             )):
+            rows = collect_fleet_status(projects=[pj_1, pj_2])
+
+        # enumerate_projects は呼ばれない（projects= を直接使う）
+        assert m_enum.call_count == 0
+        assert len(rows) == 2
+        pj_names = {r.pj_name for r in rows}
+        assert pj_names == {"sys-bots", "jomon-ec"}
+
     def test_同名basenameは_AUDIT_ERROR(self, tmp_path):
         """growth-state cache 衝突を防ぐため同一 basename の PJ は AUDIT_ERROR 扱い。"""
         root = tmp_path / "repos"
