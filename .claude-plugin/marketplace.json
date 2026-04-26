@@ -8,14 +8,20 @@
       "name": "rl-anything",
       "source": "./",
       "description": "Automatic skill/rule optimization using direct LLM patches with fitness evaluation and human approval workflow",
-      "version": "1.37.0",
+      "version": "1.38.0",
       "author": {
         "name": "todoroki-godai"
       },
       "homepage": "https://github.com/todoroki-godai/evolve-anything",
       "repository": "https://github.com/todoroki-godai/evolve-anything",
       "license": "MIT",
-      "keywords": ["optimization", "direct-patch", "skill-evolution", "rl-loop", "claude-code"],
+      "keywords": [
+        "optimization",
+        "direct-patch",
+        "skill-evolution",
+        "rl-loop",
+        "claude-code"
+      ],
       "category": "development"
     }
   ]

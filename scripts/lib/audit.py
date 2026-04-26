@@ -512,6 +512,90 @@ def build_memory_health_section(
     return lines
 
 
+def build_temporal_memory_warnings(
+    memory_dir: Path,
+    corrections_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """temporal frontmatter に基づいて stale / superseded memory を検出する。
+
+    APEX-MEM A++ 設計: decay_days 超過 or superseded_at 過去 のファイルを WARN。
+    source_correction_ids が全て reflect 済みなら deletion_candidate=True。
+
+    Args:
+        memory_dir: auto-memory ディレクトリ（~/.claude/projects/.../memory/）
+        corrections_path: corrections.jsonl のパス。None なら DATA_DIR 下のデフォルト。
+
+    Returns:
+        各警告の dict リスト。問題なければ空リスト。
+    """
+    try:
+        from memory_temporal import parse_memory_temporal, is_stale, is_superseded
+    except ImportError:
+        return []
+
+    if not memory_dir.is_dir():
+        return []
+
+    # corrections.jsonl を一度全読みして反映済みキーの set を作る（O(M) 一回のみ）
+    reflected_ids: set[str] = set()
+    _corrections_path = corrections_path or (DATA_DIR / "corrections.jsonl")
+    if _corrections_path.is_file():
+        try:
+            for line in _corrections_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    if rec.get("reflect_status") == "applied":
+                        sid = rec.get("session_id", "")
+                        ts = rec.get("timestamp", "")
+                        if sid and ts:
+                            from memory_temporal import make_source_correction_id
+                            reflected_ids.add(make_source_correction_id(sid, ts))
+                except json.JSONDecodeError:
+                    pass
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    warnings: List[Dict[str, Any]] = []
+    for md_file in sorted(memory_dir.glob("*.md")):
+        try:
+            temporal = parse_memory_temporal(md_file)
+        except Exception:
+            continue
+
+        # frontmatter なし → temporal は全 None → スキップ
+        if temporal["valid_from"] is None and temporal["superseded_at"] is None and not temporal["source_correction_ids"]:
+            continue
+
+        reason = None
+        if is_superseded(temporal):
+            reason = "superseded"
+        elif is_stale(temporal):
+            reason = "stale"
+
+        if reason is None:
+            continue
+
+        # deletion_candidate: source_correction_ids が全て reflected かどうか
+        source_ids = temporal["source_correction_ids"]
+        deletion_candidate = bool(source_ids) and all(sid in reflected_ids for sid in source_ids)
+
+        warnings.append({
+            "file": md_file.name,
+            "path": str(md_file),
+            "reason": reason,
+            "valid_from": temporal["valid_from"],
+            "superseded_at": temporal["superseded_at"],
+            "decay_days": temporal["decay_days"],
+            "source_correction_ids": source_ids,
+            "deletion_candidate": deletion_candidate,
+        })
+
+    return warnings
+
+
 def load_usage_data(
     days: int = 30,
     *,

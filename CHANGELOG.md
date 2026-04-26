@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.38.0] - 2026-04-27
+
+### Added
+- **memory: APEX-MEM A++ temporal validity + provenance** — APEX-MEM（arXiv:2604.14362）の追記型・有効期間・クエリ時解決の核心を既存スタックで実装。
+  - `scripts/lib/memory_temporal.py`: `parse_memory_temporal()` / `is_stale()` / `is_superseded()` / `make_source_correction_id()` — frontmatter なし既存ファイルを安全に処理（後方互換）
+  - `hooks/instructions_loaded.py`: `_emit_stale_memory_warnings()` — superseded/stale な memory ファイルを stdout に出力してソフト指示（token フィルタは将来の Event-Centric Rewrite に委ねる）
+  - `skills/reflect/scripts/reflect.py`: `build_output()` に `source_correction_id` を追加 — session_id#timestamp 複合キーで corrections の provenance を記録
+  - `scripts/lib/audit.py`: `build_temporal_memory_warnings()` — decay_days 超過 / superseded_at 過去の memory を WARN、全 sources が reflect 済み（applied）なら削除候補
+
 ## [1.37.0] - 2026-04-24
 
 ### Added

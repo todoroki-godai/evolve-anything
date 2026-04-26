@@ -14,6 +14,17 @@ from pathlib import Path
 
 import common
 
+# memory_temporal は scripts/lib にある（sys.path 経由でアクセス）
+_memory_temporal = None
+try:
+    _scripts_lib = str(Path(__file__).resolve().parent.parent / "scripts" / "lib")
+    if _scripts_lib not in sys.path:
+        sys.path.insert(0, _scripts_lib)
+    from memory_temporal import parse_memory_temporal, is_stale, is_superseded
+    _memory_temporal = True
+except ImportError:
+    pass
+
 
 def _flag_path(session_id: str) -> Path:
     """dedup フラグファイルのパスを返す。"""
@@ -66,8 +77,43 @@ def handle_instructions_loaded(event: dict) -> None:
     }
     common.append_jsonl(common.DATA_DIR / "sessions.jsonl", record)
 
+    # ── stale memory 警告（ソフト指示方式） ──────────────────────
+    if project_dir:
+        proj_encoded = project_dir.replace("/", "-")
+        for candidate in [proj_encoded, proj_encoded.lstrip("-")]:
+            memory_dir = Path.home() / ".claude" / "projects" / candidate / "memory"
+            if memory_dir.is_dir():
+                _emit_stale_memory_warnings(memory_dir)
+                break
+
     # ── NFD: Growth greeting 出力 ──────────────────────────────
     _emit_growth_greeting(project)
+
+
+def _emit_stale_memory_warnings(memory_dir: Path) -> None:
+    """superseded / stale な memory ファイルを stdout に出力する。
+
+    Claude が受け取り「このエントリは無視してください」と判断するソフト指示方式。
+    LLM 呼び出しなし。例外はサイレントに無視（hook の安定性優先）。
+
+    # TODO(APEX-MEM-C): この静的フィルタは将来 Event-Centric Rewrite（Approach C）で
+    # ReAct 型クエリ時解決エージェントに置き換える。参照: issue #13
+    """
+    if not _memory_temporal:
+        return
+    if not memory_dir.is_dir():
+        return
+
+    try:
+        for md_file in sorted(memory_dir.glob("*.md")):
+            try:
+                temporal = parse_memory_temporal(md_file)
+                if is_superseded(temporal) or is_stale(temporal):
+                    print(f"STALE MEMORY: {md_file.name}")
+            except Exception:
+                pass  # ファイル単位のエラーはスキップ
+    except Exception:
+        pass  # memory_dir スキャン失敗はサイレント
 
 
 def _emit_growth_greeting(project: str | None) -> None:

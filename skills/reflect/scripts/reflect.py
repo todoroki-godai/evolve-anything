@@ -19,6 +19,7 @@ _plugin_root = PLUGIN_ROOT
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
+from memory_temporal import make_source_correction_id
 from reflect_utils import (
     read_all_memory_entries,
     read_auto_memory,
@@ -436,6 +437,12 @@ def build_output(
 
         if c.get("line_limit_warning"):
             entry["line_limit_warning"] = c["line_limit_warning"]
+
+        # provenance: session_id#timestamp 複合キー（memory 書き込み時に source_correction_ids に使う）
+        sid = c.get("session_id", "")
+        ts = c.get("timestamp", "")
+        if sid and ts:
+            entry["source_correction_id"] = make_source_correction_id(sid, ts)
 
         if apply_all:
             entry["apply"] = c.get("confidence", 0.5) >= min_confidence
