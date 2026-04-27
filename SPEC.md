@@ -1,6 +1,6 @@
 # SPEC.md — rl-anything
 
-Last updated: 2026-04-23 by /spec-keeper update
+Last updated: 2026-04-27 by /spec-keeper update
 
 ## Overview
 
@@ -56,11 +56,11 @@ Observe hooks (14個, LLMコストゼロ) → テレメトリ JSONL → evolve/d
 
 直近5件のみ。過去の変更は [CHANGELOG.md](CHANGELOG.md) を参照。
 
+- 2026-04-27: **implement スキル: 複雑性適応型ワークフロー深度** — Step 0.5 で LLM がチェックリスト判定（新規 API / 3+ モジュール跨ぎ / 外部連携）し shallow/standard/deep を自動選択。shallow は分解テーブル・準拠チェックを省略して即実装、deep は Step 1.5 インターフェース契約確認 + ADR 起票推奨を挿入。テレメトリに `depth` フィールド追加。`CLAUDE.md` の `implement.complexity_hints` で PJ 固有ヒントを上書き可能
 - 2026-04-23: **fleet Phase 1 — `bin/rl-fleet status` CLI** — 全 PJ 横断の健康状態可視化を「4 本目の柱」として追加（[ADR-022](docs/decisions/022-fleet-observation-plus-intervention.md)）。`scripts/lib/fleet.py` に 5 コア関数（`enumerate_projects` / `classify_project` ハイブリッド 3 値判定 / `run_audit_subprocess` TIMEOUT/ERROR 区別 / `format_status_table` / `resolve_auto_memory_dir`）+ `collect_fleet_status` 並列化（`ThreadPoolExecutor(max_workers=2)`）+ fleet-run 履歴追記。post-review で HIGH 2 + MED 3 件の edge case 修正（duplicate basename cache 衝突ガード / argv `--` 分離 / subprocess grandchildren kill / CLAUDE_PLUGIN_DATA 動的解決 / symlink 除外）。33 unit tests（closes #68 Phase 1, PR #83）
 - 2026-04-22: **cleanup: tmp prefix userConfig 化** — `manifest.userConfig` に `cleanup_tmp_prefixes` (string, カンマ区切り, default `"rl-anything-"`) を追加。`scripts/lib/cleanup_scanner.py::parse_prefix_config` で list 化（trim / 空要素除去 / 重複排除 / `None` 許容）。SKILL.md 実行時に `[cleanup] tmp scan scope: [...]` を宣言表示し、scanner 側 `_DEFAULT_TMP_EXCLUDE_PATTERNS` の defense-in-depth は常時有効（closes #71）
 - 2026-04-22: **audit: DATA_DIR を rl_common に統一（fleet blocker 解消）** — `scripts/lib/audit.py` の DATA_DIR 独自解決を廃止し `rl_common` の共通実装に統一。fleet 構想 (#68) で前提となる PJ 間データ境界の一貫性を確保。リグレッションテスト 108 行追加（refs #68）
 - 2026-04-22: **cleanup スキル新設 + tmp prefix 安全設計** — `/rl-anything:cleanup` を追加し、PR マージ/デプロイ後の後片付け 6 カテゴリを候補提示→個別承認→実行で処理。同 PR の dogfood で wide prefix が Claude Code runtime (`/tmp/claude-<uid>`) / MCP bridge (`/tmp/claude-mcp-*`) を削除候補化する critical バグを検出し、default prefix を `rl-anything-` のみに narrow + scanner に `_DEFAULT_TMP_EXCLUDE_PATTERNS` の安全ネットを追加 ([ADR-021](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md))。24 tests (closes #69, refs #71)
-- 2026-04-17: **Stop hook を rl-scorer/second-opinion agent に追加** — CC v2.1.116 で agent frontmatter `hooks:` が `--agent` 経由でも発火するようになったため、`subagent_observe.py` を Stop フックとして agent 定義に追加。main-thread 起動時もテレメトリが記録される
 
 ## Current Limitations / Known Issues
 

@@ -21,7 +21,7 @@ Last updated: 2026-04-22 (userConfig: cleanup_tmp_prefixes 追加)
 | `/rl-anything:evolve-fitness` | 評価関数キャリブレーション | medium |
 | `/rl-anything:second-opinion` | Claude Agent セカンドオピニオン（startup/builder/general） | low |
 | `/rl-anything:handover` | セッション作業状態の構造化ノート書き出し | low |
-| `/rl-anything:implement` | plan artifact → 構造化実装（Standard/Parallel）→ テレメトリ記録 | high |
+| `/rl-anything:implement` | plan artifact → 複雑性アセスメント（shallow/standard/deep）→ 深度別実装（Standard/Parallel）→ テレメトリ記録 | high |
 | `/rl-anything:version` | バージョン・ステータス表示 | low |
 | `/rl-anything:spec-keeper` | SPEC.md + ADR 管理（init/update/adr/status） | medium |
 | `/rl-anything:philosophy-review` | セッション履歴を Judge LLM で評価し哲学原則違反を corrections.jsonl 注入 | medium |

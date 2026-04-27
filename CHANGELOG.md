@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **implement スキル: 複雑性適応型ワークフロー深度** — Step 0.5 で LLM がチェックリスト判定（新規 API / 3+ モジュール跨ぎ / 外部連携）し shallow/standard/deep を自動選択。shallow は分解テーブル・準拠チェックを省略して即実装、deep は Step 1.5 インターフェース契約確認 + ADR 起票推奨を挿入。テレメトリに `depth` フィールド追加。`CLAUDE.md` の `implement.complexity_hints` で PJ 固有ヒントを上書き可能（AWS AI-DLC tech-eval 由来）
+
 ## [1.38.0] - 2026-04-27
 
 ### Added
