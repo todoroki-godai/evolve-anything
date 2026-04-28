@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.40.0] - 2026-04-27
+
+### Added
+- **breakthrough スキル: 汎用ブレイクスルー問題解決** — 「惜しいがなかなか正解にたどりつけない」問題を5フェーズで解決。行き詰まりタイプ（A:評価曖昧 / B:同質盲点 / C:方向不定 / D:情報不足 / E:視点固着）を診断し、Tutor-Student 非対称ロール・MAgICoRe Solver→Reviewer→Refiner 反復ループ・Devil's Advocate 視点転換など研究実証済み戦略を自動選択して Agent 起動まで一貫実行。`/breakthrough <問題>` または「惜しい/ブレイクスルーしない/なかなか」で自動トリガー。戦略カタログ（`references/strategies.md`）とエージェントプロンプトテンプレート（`references/agent-templates.md`）を同梱
+
 ## [1.39.0] - 2026-04-27
 
 ### Changed

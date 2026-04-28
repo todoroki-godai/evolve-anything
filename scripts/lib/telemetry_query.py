@@ -320,25 +320,40 @@ def _duckdb_query_corrections(
     since: Optional[str] = None,
     until: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """DuckDB で corrections.jsonl をクエリする。project_path からの末尾名抽出でフィルタ。"""
+    """DuckDB で corrections.jsonl をクエリする。project_path からの末尾名抽出でフィルタ。
+
+    空ファイルや project_path カラム未存在の場合は project フィルタを安全にスキップする。
+    """
     conn = duckdb.connect()
     try:
         read_expr = f"read_json_auto('{filepath}', ignore_errors=true)"
         params: Dict[str, Any] = {}
         where_parts: List[str] = []
 
-        if project is not None:
-            params["project"] = project
-            if include_unknown:
-                where_parts.append(
-                    "(string_split(project_path, '/')[-1] = $project OR project_path IS NULL)"
-                )
-            else:
-                where_parts.append("string_split(project_path, '/')[-1] = $project")
+        # カラム存在チェック（空ファイル時は DuckDB が 'json' 単一カラムを返す）
+        cols_cursor = conn.execute(f"SELECT column_name FROM (DESCRIBE SELECT * FROM {read_expr})")
+        col_names = {row[0] for row in cols_cursor.fetchall()}
 
-        time_clause = _build_time_where(since, until, params)
-        if time_clause:
-            where_parts.append(time_clause)
+        if project is not None:
+            if "project_path" not in col_names:
+                # project_path カラムが存在しない場合（空ファイル・旧フォーマット）
+                if not include_unknown:
+                    return []
+                # include_unknown の場合は全レコード対象（フィルタなし）
+            else:
+                params["project"] = project
+                if include_unknown:
+                    where_parts.append(
+                        "(string_split(project_path, '/')[-1] = $project OR project_path IS NULL)"
+                    )
+                else:
+                    where_parts.append("string_split(project_path, '/')[-1] = $project")
+
+        # timestamp カラムが存在する場合のみ時間フィルタを適用
+        if "timestamp" in col_names:
+            time_clause = _build_time_where(since, until, params)
+            if time_clause:
+                where_parts.append(time_clause)
 
         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
         cursor = conn.execute(f"SELECT * FROM {read_expr}{where_sql}", params)
