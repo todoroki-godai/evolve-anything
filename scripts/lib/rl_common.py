@@ -44,6 +44,9 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # 受け取り、scripts/lib/cleanup_scanner.parse_prefix_config で list 化する。
     # 安全側デフォルト: rl-anything 名前空間のみ (ADR-021)。
     "cleanup_tmp_prefixes": "rl-anything-",
+    # tool_duration hook: Bash コマンドをスロー判定する閾値 (ミリ秒)。
+    # 短い値（例: 500）にすると検出数が増えるが JSONL が肥大化する。
+    "slow_threshold_ms": 1000,
 }
 
 

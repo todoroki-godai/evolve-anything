@@ -19,6 +19,16 @@ Observe データ確認 → Diagnose → Compile → Housekeeping → Report の
 /rl-anything:evolve --dry-run    # レポートのみ、変更なし
 ```
 
+## エフォートレベル対応
+
+現在のエフォートレベル: **${CLAUDE_EFFORT}**
+
+| レベル | 挙動 |
+|--------|------|
+| low | Step 1 でデータ不足時は即スキップ（確認なし）。LLM 分析はスキルのみ（rules/memory/hooks レイヤーをスキップ） |
+| medium | 通常実行（全 Step を実行） |
+| high / max | 通常実行 + Discover バリエーション生成数を最大化 |
+
 ## 前提
 
 セクション 1-6 のコンポーネント（Observe hooks, テレメトリ, Feedback, Audit, Prune, Discover）が全て利用可能であること。

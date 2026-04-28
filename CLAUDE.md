@@ -24,7 +24,7 @@
 |----------------|------|
 | Observe hooks (14個) | LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録 |
 | Auto Trigger | セッション終了・corrections 蓄積・ファイル変更時に evolve/audit 実行を自動提案（`trigger_engine.py`） |
-| `userConfig` | CC v2.1.83 manifest.userConfig で trigger 閾値（auto_trigger/interval/cooldown 等）と cleanup スキル prefix（`cleanup_tmp_prefixes`）を含む 8 項目をプラグイン有効化時に設定可能 |
+| `userConfig` | CC v2.1.83 manifest.userConfig で trigger 閾値（auto_trigger/interval/cooldown 等）と cleanup スキル prefix（`cleanup_tmp_prefixes`）・slow command 閾値（`slow_threshold_ms`）を含む 9 項目をプラグイン有効化時に設定可能 |
 | `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチで最適化 |
 | `rl-loop-orchestrator` | ベースライン取得→バリエーション生成→評価→人間確認のループ統合 |
 | `rl-scorer` エージェント | オーケストレーター(haiku) + 3サブエージェント並列(tech/struct=haiku, domain=sonnet)で3軸採点 |
@@ -63,6 +63,9 @@ bin/rl-fleet status
 # SPEC.md の初期化・更新
 /rl-anything:spec-keeper init
 /rl-anything:spec-keeper update
+
+# 孤立した依存プラグインのクリーンアップ
+claude plugin prune
 ```
 
 ## 適応度関数

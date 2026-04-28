@@ -1,6 +1,6 @@
 {
   "name": "rl-anything",
-  "version": "1.40.0",
+  "version": "1.41.0",
   "description": "スキル/ルールの直接パッチ最適化と自律進化ループ",
   "author": {
     "name": "todoroki-godai"
@@ -62,6 +62,12 @@
       "title": "Cleanup Tmp Prefixes",
       "type": "string",
       "description": "Comma-separated /tmp prefixes scanned by /rl-anything:cleanup. Defaults to 'rl-anything-' only for safety; claude-<uid> and claude-mcp-* are always excluded by scanner even if re-added (ADR-021).",
+      "sensitive": false
+    },
+    "slow_threshold_ms": {
+      "title": "Slow Threshold (ms)",
+      "type": "number",
+      "description": "Bash commands slower than this (ms) are logged to tool_durations.jsonl by tool_duration hook (default: 1000)",
       "sensitive": false
     }
   }

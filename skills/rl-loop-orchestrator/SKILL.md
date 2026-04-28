@@ -12,6 +12,12 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Agent
 
 ベースライン取得 → 直接パッチ → 評価 → 人間確認のサイクルを回し、スキル/ルールを自律的に改善する。
 
+現在のエフォートレベル: **${CLAUDE_EFFORT}**
+
+- `low`: `--loops` を 1 に固定。rl-scorer の採点は tech サブエージェントのみで実行（haiku のみ）
+- `medium` / `high`: 通常実行
+- `max`: 指定ループ数に +1 して実行（例: `--loops 3` → 4 ループ）
+
 ## 実行手順
 
 ユーザーが `/rl-loop` を呼び出したら、以下の手順で実行する。

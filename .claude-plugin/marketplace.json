@@ -8,7 +8,7 @@
       "name": "rl-anything",
       "source": "./",
       "description": "Automatic skill/rule optimization using direct LLM patches with fitness evaluation and human approval workflow",
-      "version": "1.40.0",
+      "version": "1.41.0",
       "author": {
         "name": "todoroki-godai"
       },
@@ -22,7 +22,15 @@
         "rl-loop",
         "claude-code"
       ],
-      "category": "development"
+      "category": "development",
+      "userConfig": {
+        "slow_threshold_ms": {
+          "title": "Slow Threshold (ms)",
+          "type": "number",
+          "description": "Bash commands slower than this (ms) are logged to tool_durations.jsonl (default: 1000)",
+          "sensitive": false
+        }
+      }
     }
   ]
 }

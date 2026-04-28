@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.41.0] - 2026-04-28
+
+### Added
+- **CC v2.1.121 対応: tool_duration hook + ${CLAUDE_EFFORT} スキル対応** — `hooks/tool_duration.py` 新設（Bash PostToolUse で `duration_ms` を受け取り、スロー Bash コマンドを `tool_durations.jsonl` に記録。CC v2.1.119+ 対応）。`hooks/hooks.json` の PostToolUse Bash に追加。`skills/evolve/SKILL.md` に `${CLAUDE_EFFORT}` エフォートレベル対応表を追加（low=軽量/medium=通常/high=最大化）。`skills/rl-loop-orchestrator/SKILL.md` に `${CLAUDE_EFFORT}` 対応（low=haiku単体/max=+1ループ。CC v2.1.120+）。`CLAUDE.md` Quick Start に `claude plugin prune` 追記
+- **slow_threshold_ms を userConfig 化** — `CLAUDE_PLUGIN_OPTION_slow_threshold_ms` でスロー Bash 判定閾値をユーザーごとに設定可能（デフォルト: 1000ms）。`plugin.json` / `marketplace.json` userConfig に追加
+
+### Fixed
+- `tool_duration.py`: `tool_input=None` → AttributeError を防ぐ型ガード追加
+- `tool_duration.py`: `duration_ms` が文字列型の場合の isinstance チェック追加
+- `tool_duration.py`: records に `project` フィールドを追加（observe.py に準拠）
+- `tool_duration.py`: dead code（非 Bash ブランチ）を除去し `handle_tool_duration()` に抽出
+
 ## [1.40.0] - 2026-04-27
 
 ### Added
@@ -52,6 +64,7 @@
 - **Repository を todoroki-godai org → todoroki-godai user account に移行** — todoroki-godai/evolve-anything を archive し、todoroki-godai/rl-anything を新正式ロケーションに。GitHub の組織→ユーザー直接 transfer は権限上不可だったため、stale な todoroki-godai/rl-anything へ main を fast-forward push + 100 tags 同期で移行。`plugin.json` / `marketplace.json` / `README.md` インストール手順 / docs 全体の URL 参照を一括更新。旧 todoroki-godai repo は read-only で保存
 
 ## [1.34.0] - 2026-04-24
+<!-- fleet Phase 1 実装: 2026-04-23 / PR #83 マージ: 2026-04-24 -->
 
 ### Added
 - **リリースフロー刷新（`claude plugin tag` 導入）** — `.claude/rules/commit-version.md` を更新し、bump 時は plugin.json + marketplace.json + CHANGELOG の三者同期 + main マージ後の `claude plugin tag --push` で `rl-anything--v<version>` タグ作成を明記。過去 chore(release)/feat(vX.Y.Z) コミット 54 件分（v0.4.0〜v1.33.0）の git tag 欠損を historical backfill で復元（release-notes-review v2.1.118 で検出）
