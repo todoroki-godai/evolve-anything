@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
 
@@ -294,17 +295,13 @@ def detect_missed_skills(
 
     project_name = project_root.name if project_root else None
 
-    # sessions.jsonl からセッションデータを取得
-    sessions_file = DATA_DIR / "sessions.jsonl"
+    # sessions テーブルからセッションデータを取得
     sessions = query_sessions(
         project=project_name,
         include_unknown=include_unknown,
-        sessions_file=sessions_file,
     )
     if not sessions:
-        if not sessions_file.exists():
-            return {"missed": [], "message": "No sessions.jsonl found (run backfill first), skipping missed skill detection"}
-        return {"missed": [], "message": None}
+        return {"missed": [], "message": "No session data (run backfill first), skipping missed skill detection"}
 
     # usage.jsonl からスキル使用実績を取得
     usage = query_usage(

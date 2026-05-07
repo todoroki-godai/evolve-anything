@@ -3,17 +3,17 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-04-22 (cleanup_scanner + userConfig 反映)
+Last updated: 2026-05-06 (skill_activation_log / cleanup Category 7)
 
 ## コンポーネント構成
 
 ```
-hooks/                  ← Observe 層（14個、LLMコストゼロ）[ADR-002]
+hooks/                  ← Observe 層（16個、LLMコストゼロ）[ADR-002]
   common.py             ← scripts/lib/rl_common の re-exporter（後方互換）[ADR-019]
   observe.py            ← usage/errors/corrections 記録
   correction_detect.py  ← corrections 自動検出
   subagent_observe.py   ← subagents.jsonl 記録
-  instructions_loaded.py← sessions.jsonl [ADR-015] + Growth greeting（LLMコストゼロ）
+  instructions_loaded.py← sessions テーブル [ADR-015] + Growth greeting（LLMコストゼロ）
   stop_failure.py       ← API エラー記録
   permission_denied.py  ← PermissionDenied hook（CC v2.1.89）errors.jsonl に記録
   save_state.py         ← Compaction 前の作業コンテキスト保存 [ADR-013]
@@ -23,14 +23,20 @@ hooks/                  ← Observe 層（14個、LLMコストゼロ）[ADR-002]
   suggest_subagent_delegation.py ← subagent 委譲提案
   workflow_context.py   ← ワークフローコンテキスト記録
   file_changed.py       ← FileChanged hook（CC v2.1.83）CLAUDE.md/SKILL.md/rules 変更検知
+  skill_triage_runner.py← Stop hook で skill-triage を非同期実行（Popen）
+  tool_duration.py      ← Bash 実行時間を tool_durations.jsonl に記録（CC v2.1.119+）
+  skill_activation_log.py← Skill PostToolUse — invocation_trigger（nested-skill/top-level）を skill_activations.jsonl に記録（CC v2.1.121+）
 
-bin/                    ← bareコマンド CLI（14個）[ADR-019]
+bin/                    ← bareコマンド CLI（18個）[ADR-019]
   rl-evolve, rl-audit, rl-discover, rl-prune, rl-reorganize
   rl-reflect, rl-handover, rl-optimize, rl-loop
   rl-backfill, rl-backfill-analyze, rl-backfill-reclassify, rl-audit-aggregate
-  rl-usage-log          ← Skill self-report 用（CC Skill hook 非対応の回避策 #62）
+  rl-fleet, rl-usage-log
+  rl-score-noise        ← 採点ノイズ計測（軸別σ + epsilon 推奨値出力）
+  rl-prompt-compare     ← Evaluator プロンプト A/B 比較
+  rl-gain               ← ROI 可視化（推定節約時間・Growth Level・Efficiency meter）
 
-skills/                 ← スキル定義（24個）
+skills/                 ← スキル定義（25個）
   evolve/               ← 3ステージ自律進化パイプライン
   discover/             ← パターン検出 + スキル候補生成
   reflect/              ← 修正フィードバック反映
@@ -43,7 +49,7 @@ skills/                 ← スキル定義（24個）
   philosophy-review/    ← 会話履歴を Judge LLM で評価し category=philosophy 違反を corrections 注入 [ADR-020]
   cleanup/              ← PR マージ・デプロイ後の後片付け（branches/worktrees/tmp dirs/Issues/Test plan）を個別承認→実行 [ADR-021]
 
-scripts/lib/            ← 共通ロジック（41 モジュール）[ADR-019]
+scripts/lib/            ← 共通ロジック（47 モジュール）[ADR-019]
   plugin_root.py        ← PLUGIN_ROOT 定数（depth ハードコード廃止）
   rl_common.py          ← hooks 共通ユーティリティ（DATA_DIR, classify_prompt 等）
   audit.py              ← 環境健康診断ロジック（スキル/ルール/CLAUDE.md 診断）
@@ -69,6 +75,9 @@ scripts/lib/            ← 共通ロジック（41 モジュール）[ADR-019]
   growth_narrative.py   ← 環境プロファイル（性格特性5種）+ 成長ストーリー生成
   scorer_schema.py      ← ScorerOutput スキーマ — rl-scorer 出力の型付き検証（AxisResult / ScorerOutput / validate_scorer_output）
   cleanup_scanner.py    ← cleanup スキル用スキャナ 6 関数（branches / remote refs / worktrees / tmp dirs / issue 抽出 / PR test plan 抽出）+ `parse_prefix_config` userConfig helper + `_DEFAULT_TMP_EXCLUDE_PATTERNS` 安全ネット [ADR-021]
+  session_store.py      ← SessionStore Repository — sessions DuckDB SoR（append/query/migrate）
+  score_noise.py        ← 採点ノイズ計測（compute_stats / recommend_epsilon / measure_noise）
+  scorer_prompts.py     ← _AXIS_PROMPTS 集約 + CLAUDE_PLUGIN_DATA オーバーライド対応
   （他 15 モジュール: frontmatter, growth_level, skill_evolve, skill_triggers 等）
 
 scripts/bench/          ← TBench2-rl Harness Quality Benchmark（Week 1-3 実装済み）

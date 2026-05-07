@@ -63,6 +63,18 @@ rl-audit "$(pwd)"
 
 出力されるレポートをユーザーに表示する。
 
+### Step 1.2: グローバルスキル使用状況サマリー（自動）
+
+`rl-audit` の出力に「未使用グローバルスキル」セクションが含まれる場合、
+その内容をレポートに表示し、`/rl-anything:prune` による整理を提案する。
+
+```python
+from skill_usage_stats import get_skill_activation_summary
+summary = get_skill_activation_summary(days=90)
+# summary["has_data"] が False の場合はスキップ（蓄積待ち）
+# summary["unused_count"] > 0 の場合: 未使用スキル名リストと /prune 提案を表示
+```
+
 ### Step 1.5: Memory Semantic Verification
 
 MEMORY のセクション内容がコードベースの実態と整合しているかを LLM で検証する。

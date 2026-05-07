@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Evaluator プロンプト A/B 比較ツール。
+
+現在のデフォルトプロンプト（A）と候補プロンプトファイル（B）を
+同じ参照スキルで N 回ずつ採点し、σ・mean drift を比較する。
+
+使用例:
+  rl-prompt-compare --axis technical --candidate new_prompt.txt skills/audit/SKILL.md
+  rl-prompt-compare --axis domain --candidate new.txt --runs 7 SKILL.md --json
+"""
+
+import argparse
+import json
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Dict, List
+
+_SCRIPTS_LIB = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_SCRIPTS_LIB))
+
+from scorer_prompts import DEFAULT_AXIS_PROMPTS, DEFAULT_AXIS_WEIGHTS
+from score_noise import compare_prompt_versions, _run_claude_prompt, FALLBACK_SCORE
+
+
+def _measure_with_prompt(
+    axis: str,
+    prompt_template: str,
+    other_prompts: Dict[str, str],
+    weights: Dict[str, float],
+    content: str,
+    runs: int,
+    label: str,
+) -> List[Dict[str, float]]:
+    """指定軸のみ prompt_template で、他軸は other_prompts でスコアを runs 回取得。"""
+    results: List[Dict[str, float]] = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        for i in range(runs):
+            print(f"  [{label}] 採点 {i + 1}/{runs}...", flush=True)
+            axis_scores: Dict[str, float] = {}
+
+            futures = {}
+            futures[executor.submit(_run_claude_prompt, prompt_template.format(content=content))] = axis
+            for other_axis, other_prompt in other_prompts.items():
+                if other_axis == axis:
+                    continue
+                futures[executor.submit(_run_claude_prompt, other_prompt.format(content=content))] = other_axis
+
+            for future in as_completed(futures):
+                ax = futures[future]
+                try:
+                    axis_scores[ax] = future.result()
+                except Exception:
+                    axis_scores[ax] = FALLBACK_SCORE
+
+            integrated = sum(
+                axis_scores.get(a, FALLBACK_SCORE) * w
+                for a, w in weights.items()
+            )
+            axis_scores["integrated"] = round(integrated, 4)
+            results.append(axis_scores)
+    return results
+
+
+def _print_report(axis: str, result: dict) -> None:
+    a_stats = result["a"]["stats"]["integrated"]
+    b_stats = result["b"]["stats"]["integrated"]
+
+    print(f"\n=== {axis} 軸 プロンプト A/B 比較 ===")
+    print(f"\n              A (現行)        B (候補)")
+    print(f"  mean:       {a_stats['mean']:.4f}        {b_stats['mean']:.4f}")
+    print(f"  std (σ):    {a_stats['std']:.4f}        {b_stats['std']:.4f}")
+    print(f"  min/max:    {a_stats['min']:.2f}/{a_stats['max']:.2f}    {b_stats['min']:.2f}/{b_stats['max']:.2f}")
+    print()
+    print(f"  mean drift:   {result['mean_drift']:.4f}")
+    print(f"  sigma delta:  {result['sigma_delta']:+.4f}  (負なら B のノイズが小さい)")
+    print()
+
+    if result["mean_drift_warning"]:
+        print(f"  ⚠️  平均ドリフト警告: 採点基準が大きく変わっている可能性あり")
+
+    rec = result["recommended"]
+    rec_label = {
+        "a": "A (現行) を維持",
+        "b": "B (候補) に切り替え",
+        "tie": "有意差なし — どちらでも可",
+    }[rec]
+    print(f"  推奨: {rec_label}")
+    print()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluator プロンプト A/B 比較")
+    parser.add_argument("target", help="参照スキル（評価対象）のファイルパス")
+    parser.add_argument("--axis", required=True, choices=list(DEFAULT_AXIS_PROMPTS.keys()),
+                        help="比較する軸 (technical/domain/structure)")
+    parser.add_argument("--candidate", required=True, help="候補プロンプトファイル（{content} placeholder 必須）")
+    parser.add_argument("--runs", type=int, default=5, help="A/B 各 N 回計測（デフォルト: 5）")
+    parser.add_argument("--json", action="store_true", help="JSON 出力")
+    args = parser.parse_args()
+
+    target = Path(args.target)
+    candidate = Path(args.candidate)
+    if not target.exists():
+        print(f"エラー: 参照スキルが見つかりません: {target}", file=sys.stderr)
+        sys.exit(1)
+    if not candidate.exists():
+        print(f"エラー: 候補プロンプトが見つかりません: {candidate}", file=sys.stderr)
+        sys.exit(1)
+
+    candidate_prompt = candidate.read_text(encoding="utf-8")
+    if "{content}" not in candidate_prompt:
+        print("エラー: 候補プロンプトに {content} placeholder が必要です", file=sys.stderr)
+        sys.exit(1)
+
+    content = target.read_text(encoding="utf-8")
+    current_prompt = DEFAULT_AXIS_PROMPTS[args.axis]
+
+    print(f"対象: {target}")
+    print(f"軸: {args.axis}")
+    print(f"候補: {candidate}")
+    print(f"試行: A={args.runs}回 / B={args.runs}回\n")
+
+    a_runs = _measure_with_prompt(
+        args.axis, current_prompt, DEFAULT_AXIS_PROMPTS, DEFAULT_AXIS_WEIGHTS,
+        content, args.runs, label="A",
+    )
+    b_runs = _measure_with_prompt(
+        args.axis, candidate_prompt, DEFAULT_AXIS_PROMPTS, DEFAULT_AXIS_WEIGHTS,
+        content, args.runs, label="B",
+    )
+
+    result = compare_prompt_versions(a_runs, b_runs)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        _print_report(args.axis, result)
+        if result["recommended"] == "b":
+            import os as _os
+            data_dir = _os.environ.get("CLAUDE_PLUGIN_DATA", "~/.claude/rl-anything")
+            print(f"  B を採用するには:")
+            print(f"    cp {candidate} {data_dir}/scorer_prompts/{args.axis}.txt")
+            print()
+
+
+if __name__ == "__main__":
+    main()

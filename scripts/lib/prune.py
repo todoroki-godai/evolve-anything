@@ -21,6 +21,7 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 from frontmatter import extract_description, parse_frontmatter
 from similarity import filter_merge_group_pairs
 from discover import load_merge_suppression
+from skill_usage_stats import find_unused_global_skills, find_rarely_used_global_skills, find_nested_only_skills
 
 from audit import (
     DATA_DIR,
@@ -533,21 +534,94 @@ def detect_zero_invocations(
 
 
 def safe_global_check(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
-    """global スキルの安全な判断。Usage Registry を参照して cross-PJ 使用状況を確認。
+    """global スキルの安全な判断。
 
-    usage-registry.jsonl（hooks が書き込む）のデータのみ使用する。
-    データがない場合は空リストを返し、蓄積を待つ。
+    優先順: skill_activations.jsonl（PostToolUse hook 蓄積データ）→ usage-registry.jsonl フォールバック。
+    どちらもデータがない場合は空リストを返し、蓄積を待つ。
     """
+    # skill_activations.jsonl ベースの未使用検出（90日間）
+    activation_unused = find_unused_global_skills(days=90)
+    activation_rarely = find_rarely_used_global_skills(days=90, threshold=3)
+    activation_nested_only = find_nested_only_skills(days=90)
+
+    if activation_unused or activation_rarely or activation_nested_only:
+        # skill_path マップ（audit の artifacts から逆引き）
+        path_map: Dict[str, Path] = {}
+        for path in artifacts.get("skills", []):
+            if str(path).startswith(str(Path.home() / ".claude" / "skills")):
+                path_map[path.parent.name] = path
+
+        candidates = []
+        seen: set = set()
+
+        for item in activation_unused:
+            name = item["skill_name"]
+            if name in seen:
+                continue
+            seen.add(name)
+            path = path_map.get(name)
+            if path and is_pinned(path):
+                continue
+            # 参照型スキルは削除候補から除外（ドリフトチェックは別途実施）
+            if path and is_reference_skill(path):
+                continue
+            candidates.append(_enrich_candidate({
+                "file": str(path) if path else f"~/.claude/skills/{name}/SKILL.md",
+                "skill_name": name,
+                "reason": "no_activation_90d",
+                "days_no_use": item["days_no_use"],
+            }))
+
+        for item in activation_rarely:
+            name = item["skill_name"]
+            if name in seen:
+                continue
+            seen.add(name)
+            path = path_map.get(name)
+            if path and is_pinned(path):
+                continue
+            # 参照型スキルは削除候補から除外
+            if path and is_reference_skill(path):
+                continue
+            candidates.append(_enrich_candidate({
+                "file": str(path) if path else f"~/.claude/skills/{name}/SKILL.md",
+                "skill_name": name,
+                "reason": "rarely_used_90d",
+                "count": item["count"],
+                "days_since": item["days_since"],
+                "top_level_count": item.get("top_level_count", 0),
+                "nested_count": item.get("nested_count", 0),
+            }))
+
+        # nested-only スキル → 削除でなくマージ提案
+        for item in activation_nested_only:
+            name = item["skill_name"]
+            if name in seen:
+                continue
+            seen.add(name)
+            path = path_map.get(name)
+            if path and is_pinned(path):
+                continue
+            candidates.append(_enrich_candidate({
+                "file": str(path) if path else f"~/.claude/skills/{name}/SKILL.md",
+                "skill_name": name,
+                "reason": "nested_only_merge_candidate",
+                "nested_count": item["nested_count"],
+                "days_since": item["days_since"],
+                "recommendation": "merge_into_caller",
+            }))
+
+        return candidates
+
+    # フォールバック: usage-registry.jsonl
     registry = load_usage_registry()
     if not registry:
         return []
 
     candidates = []
-
     for path in artifacts.get("skills", []):
         if not str(path).startswith(str(Path.home() / ".claude" / "skills")):
             continue
-        # .pin ファイルによる淘汰保護
         if is_pinned(path):
             continue
         skill_name = path.parent.name

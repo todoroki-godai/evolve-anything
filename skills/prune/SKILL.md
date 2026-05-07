@@ -13,6 +13,9 @@ disable-model-invocation: true
 dead glob・zero invocation・重複の3基準でアーティファクトを検出し、アーカイブを提案する。
 直接削除は行わない（MUST NOT）。全淘汰は人間承認が必須（MUST）。
 
+Global 候補の検出は `skill_activations.jsonl`（PostToolUse hook 蓄積）を優先する。
+データがない場合は usage-registry.jsonl にフォールバックし、それもなければ空リストを返す（蓄積待ち）。
+
 ## Usage
 
 ```
@@ -36,7 +39,7 @@ rl-prune "$(pwd)"
 - **Dead Glob**: rules の paths 対象がマッチしないもの
 - **Zero Invocation**: 30日間使用記録がないもの（カスタムスキルのみ）
 - **Plugin Unused**: プラグイン由来で未使用のスキル（レポートのみ、アーカイブ対象外）
-- **Global 候補**: Usage Registry で cross-PJ 使用状況を確認
+- **Global 候補**: `skill_activations.jsonl` で90日間未使用・低頻度のグローバルスキルを検出（データなし時は usage-registry.jsonl フォールバック）
 - **重複候補**: audit-report の意味的類似度検出結果
 
 Plugin Unused のスキルはアーカイブ対象外とする（MUST）。

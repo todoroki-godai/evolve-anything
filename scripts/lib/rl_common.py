@@ -158,6 +158,42 @@ def workflow_context_path(session_id: str) -> Path:
     return Path(tmpdir) / f"rl-anything-workflow-{session_id}.json"
 
 
+def skill_stack_path(session_id: str) -> Path:
+    """スキル呼び出しスタックファイルのパスを返す。
+
+    スタックは [{skill_name, workflow_id, started_at}, ...] のリスト。
+    末尾が現在実行中のスキル。PreToolUse で push、PostToolUse で pop。
+    観察対象: Skill ツールのみ（Bash/Read 等は含まない）。
+    """
+    tmpdir = os.environ.get("TMPDIR", "/tmp")
+    return Path(tmpdir) / f"rl-anything-skill-stack-{session_id}.json"
+
+
+def read_skill_stack(session_id: str) -> list:
+    """スキルスタックを読み込む。存在しない・破損時は空リストを返す。"""
+    path = skill_stack_path(session_id)
+    try:
+        if not path.exists():
+            return []
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def write_skill_stack(session_id: str, stack: list) -> None:
+    """スキルスタックをアトミックに書き込む。空の場合はファイルを削除する。"""
+    path = skill_stack_path(session_id)
+    if not stack:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(stack, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
 def read_workflow_context(session_id: str) -> dict:
     """ワークフロー文脈ファイルを読み取り parent_skill/workflow_id を返す。
 

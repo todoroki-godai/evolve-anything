@@ -1,6 +1,42 @@
 # Changelog
 
-## [Unreleased]
+## [1.42.0] - 2026-05-07
+
+### Removed
+- **スキル6個を削除（スリム化）** — `backfill`（初期セットアップ専用）、`version`（`claude plugin list` で代替可）、`update`（`claude plugin update` で代替可）、`feedback`（低頻度 GitHub Issue 投稿）、`philosophy-review`（月次レビュー、日常不要）、`genetic-prompt-optimizer`（`/optimize` 内部呼び出し専用、ユーザー向けでない） を削除。スキル総数 23 → 17 に削減
+
+### Fixed
+- **session_store.append DuckDB ロック競合による silent data loss** — instructions_loaded と session_summary が同時に append() すると一方がロック取得に失敗し JSONL フォールバックに流れていた。最大2回リトライ後に JSONL フォールバックするよう修正
+- **skill_triage_runner TRIAGE_CACHE_FILE 非アトミック書き込み** — Stop hook が連続発火すると複数インスタンスが同時に write_text() して JSON 破損が起きていた。tmp ファイル書き込み + os.replace() でアトミック化
+- **skill_triage_runner._load_jsonl 1行エラーで全件空** — try/except が list comprehension 全体を囲んでいたため、1行でも不正 JSON があると全件 [] に。行単位のエラーハンドリングに変更
+- **bin/rl-prompt-compare data_dir リテラルバグ** — `data_dir = "$CLAUDE_PLUGIN_DATA"` が Python 文字列リテラルのままで実際のパスが出力されなかった。os.environ.get() で修正
+- **run-loop.py H_best 初期化失敗時の silent skip** — target_path が見つからず global_best_content が None のままループ継続していた。FileNotFoundError 時は即 return [] でアボート
+- **run-loop.py NaN/inf スコア伝搬** — _parallel_score に math.isfinite() ガードを追加し、非有限スコアを FALLBACK_SCORE にクランプ
+- **rl-prompt-compare _score_with_custom_prompt DRY 違反** — score_noise._score_single_axis と本体を重複実装していた。_run_claude_prompt を score_noise に抽出し両者から利用
+
+### Added
+- **skill_activation_log: Skill invocation_trigger を skill_activations.jsonl に記録** — CC v2.1.121 PostToolUse 全ツール対応 + v2.1.126 `skill_activated` OTel invocation_trigger attribute に対応。`workflow_context.py` のコンテキストファイル存在チェックで `nested-skill` / `top-level` を判定し `skill_activations.jsonl` に追記。evolve/audit での誤発火率分析に活用可能。`hooks/hooks.json` に PostToolUse Skill matcher 追加。テスト 7件追加
+- **cleanup: claude project purge を Category 7 として追加** — CC v2.1.126 新コマンドに対応。会話履歴・タスク・ファイル変更履歴の一括削除。デフォルトスキップ・不可逆操作のためユーザー明示時のみ実行し、`--dry-run` で影響範囲確認後に個別承認
+- **rl-gain: rl-anything ROI 可視化コマンド** — `rtk gain` 風の ASCII レポートで rl-anything の効果を可視化。`usage.jsonl` のスキル呼び出し記録から推定節約時間を集計し、Growth Level・Efficiency meter・スキル別 Impact をワンビューで表示。`bin/rl-gain` で直接実行可能。`scripts/lib/growth_level.py` を import しセッション数は `sessions.db` から取得。テスト 25件（正常系 E2E + subprocess smoke test 含む）
+- **rl-score-noise: 採点ノイズ計測ツール** — 同一スキルを N 回採点して軸別スコアの標準偏差を算出し、H_best 比較に使う epsilon の推奨値（2σ）を出力。論文 "The Last Harness You'll Ever Build" (Sylph.AI, 2026) の知見に基づき、H_best 駆動実装の前提条件として整備。`bin/rl-score-noise <SKILL.md> [--runs N] [--json]` で実行。`scripts/lib/score_noise.py` に `compute_stats` / `recommend_epsilon` / `aggregate_runs` / `measure_noise` を実装（テスト 8件）
+- **rl-loop: H_best 駆動を実装** — `global_best_content/score` をループ間で保持し、2ループ目以降は H_best をディスクに復元してから optimizer を起動。承認時のみ H_best 更新。再採点ノイズを排除するため 2ループ目以降は H_best スコアを baseline に流用（再採点なし）。論文 "The Last Harness You'll Ever Build" Algorithm 1 `E.evolve(history, H_best)` に対応
+- **rl-loop: epsilon ベース verdict（IMPROVED/STABLE/REGRESSED）を追加** — 実測採点ノイズ（integrated σ = 0.012〜0.029）に基づき `SCORE_EPSILON=0.05` を設定。`_compute_verdict()` ヘルパーで判定し `history.jsonl` に記録。旧: `improvement <= 0` でスキップ → 新: `|improvement| < 0.05` は STABLE として採点ノイズ範囲と明示。テスト 7件追加
+- **rl-loop: REGRESSED verdict → pitfalls 自動転記** — 採点が大きく悪化した variant（improvement < -0.05）を `references/pitfalls.md` に `source=regression` で記録。次回ループで optimizer が同方向の variant を再生成することを抑制。`_record_pitfall` の重複検出により蓄積過多を防止。テスト 3件追加（合計 19件）
+- **rl-prompt-compare: Evaluator プロンプト A/B 比較ツール（C-限定版）** — 候補プロンプトを参照スキルで N 回計測し、現行プロンプトとの σ・mean drift を比較。`recommended: a/b/tie` を出力し、平均ドリフトが閾値超なら警告。`scripts/lib/scorer_prompts.py` に `_AXIS_PROMPTS` を集約し、`CLAUDE_PLUGIN_DATA/scorer_prompts/{axis}.txt` でオーバーライド可能。論文 "The Last Harness You'll Ever Build" Meta-Evolution Loop の `Λ.Evaluator prompt 進化` の限定版実装。`bin/rl-prompt-compare <SKILL.md> --axis <name> --candidate <prompt.txt>` で実行。テスト 11件追加（scorer_prompts 9件 + compare_prompt_versions 2件）
+- **rl-loop: Pareto dominance チェックを実装** — 軸別スコアを保持し、`_dominates(challenger, defender, tolerance=0.05)` で「全軸で同等以上 + 1軸以上で改善」を判定。integrated 改善でも軸別劣化（例: technical を犠牲にして domain を上げる）があれば IMPROVED → STABLE に格下げ。`_score_variant_axes()` で軸別スコア取得、`history.jsonl` に `best_axes` と `pareto_dominates` を記録。テスト 5件追加（合計 24件）
+
+### Fixed
+- **_score_single_axis: リトライ機構を追加** — `claude -p` のタイムアウト/失敗時に即 FALLBACK_SCORE (0.5) を返していたため採点ノイズが肥大化していた（integrated σ 最大 0.091）。max_retries=2 でリトライすることで FALLBACK 混入を排除し、σ を 0.012〜0.029 まで低減。`run-loop.py` と `score_noise.py` の両方に適用（テスト 6件追加）。実測 epsilon 推奨値: **0.05**
+
+### Changed
+- **Phase 1: SessionStore Repository 導入 — DuckDB を SoR に** — `scripts/lib/session_store.py` 新設し sessions の永続化を集約。`append` / `count_unique_since` / `query` / `migrate_from_jsonl` / `prune_jsonl` を提供。schema は `sessions(session_id, timestamp, project, type, skill_count, error_count, raw_json)` + timestamp/session_id index。trigger_engine の DATA_DIR ハードコードバグ修正（`CLAUDE_PLUGIN_DATA` 環境変数対応）と min_sessions: 10→3 への引き下げ、`_record_trigger` で全 reasons を history 記録（cooldown 多 reason 対応）。`hooks/session_summary.py` の skill_triage を `subprocess.Popen` で非同期化（Stop hook 5 秒制限対策）。実プロジェクトデータ 45,142 行 → DuckDB sessions テーブル（ユニーク 26,316 セッション、20MB）にマイグレーション完了
+- **Phase 2: SessionStore Repository を全 Read 側に展開** — DuckDB を真の SoR に
+  - `delete_by_session_ids(session_ids, source=None)` を session_store に追加（backfill rerun 用）
+  - `telemetry_query.query_sessions` を sessions テーブル直接参照に切り替え（sessions_file 指定時のみ後方互換 JSONL 読み）
+  - `discover.py` / `evolve.py` / `backfill.py` の sessions.jsonl 直読み・直書きを session_store 経由に統一
+  - dual-write 停止: `session_store.append` は HAS_DUCKDB=True 時 DuckDB のみに書き込み（HAS_DUCKDB=False のみ JSONL フォールバック）
+  - `prune_jsonl()` と `_prune_sessions_jsonl()` を廃止（DuckDB が SoR となり JSONL の rolling pruning が不要に）
+  - sessions.jsonl は `sessions.jsonl.legacy.20260430` にリネームしてバックアップ（参照されないが復旧用に残置）
 
 ## [1.41.0] - 2026-04-28
 

@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""rl-gain — rl-anything ROI 可視化コマンド。
+
+rtk gain 風の ASCII レポートで rl-anything の効果を可視化する。
+"""
+import json
+import os
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Dict, List, Optional
+
+# プロジェクトルートを sys.path に追加（scripts/lib を import するため）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+
+from scripts.lib.growth_level import compute_level, compute_xp_progress
+
+DATA_DIR = Path(os.environ.get("CLAUDE_PLUGIN_DATA", Path.home() / ".claude/rl-anything"))
+
+# スキル別推定節約時間 (分)
+SKILL_COST_MINUTES: Dict[str, int] = {
+    "evolve": 10,
+    "audit": 15,
+    "reflect": 5,
+    "implement": 10,
+    "handover": 3,
+    "spec-keeper": 5,
+    "second-opinion": 8,
+    "rl-loop-orchestrator": 20,
+    "rl-loop": 20,
+    "discover": 5,
+    "prune": 5,
+    "agent-brushup": 8,
+    "breakthrough": 10,
+    "cleanup": 3,
+    "generate-fitness": 8,
+    "evolve-fitness": 8,
+    "evolve-skill": 5,
+    "optimize": 8,
+    "genetic-prompt-optimizer": 8,
+    "philosophy-review": 10,
+    "release-notes-review": 5,
+    "reorganize": 5,
+    "feedback": 2,
+    "version": 1,
+    "update": 3,
+    "backfill": 5,
+}
+DEFAULT_COST_MINUTES = 2
+
+
+def is_rl_anything_skill(skill_name: str) -> bool:
+    return skill_name.startswith("rl-anything:")
+
+
+def get_skill_short_name(skill_name: str) -> str:
+    if skill_name.startswith("rl-anything:"):
+        return skill_name[len("rl-anything:"):]
+    return skill_name
+
+
+def load_usage_records(data_dir: Path) -> List[Dict]:
+    usage_file = data_dir / "usage.jsonl"
+    if not usage_file.exists():
+        return []
+    records = []
+    for line in usage_file.read_text(encoding="utf-8").strip().splitlines():
+        line = line.strip()
+        if line:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return records
+
+
+def get_rl_skill_counts(records: List[Dict]) -> Counter:
+    counts: Counter = Counter()
+    for rec in records:
+        skill = rec.get("skill_name", "")
+        if skill and is_rl_anything_skill(skill):
+            counts[get_skill_short_name(skill)] += 1
+    return counts
+
+
+def get_session_count(data_dir: Path) -> int:
+    db_path = data_dir / "sessions.db"
+    if not db_path.exists():
+        return 0
+    try:
+        import duckdb
+        conn = duckdb.connect(str(db_path), read_only=True)
+        result = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
+        conn.close()
+        return result[0] if result else 0
+    except Exception:
+        return 0
+
+
+def get_auto_triggered_count(data_dir: Path) -> int:
+    state_file = data_dir / "evolve-state.json"
+    if not state_file.exists():
+        return 0
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        return len(state.get("trigger_history", []))
+    except Exception:
+        return 0
+
+
+def get_env_score(data_dir: Path) -> Optional[float]:
+    history_file = data_dir / "audit-history.jsonl"
+    if not history_file.exists():
+        return None
+    try:
+        lines = history_file.read_text(encoding="utf-8").strip().splitlines()
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            score = rec.get("environment_score")
+            if score is not None:
+                return float(score)
+    except Exception:
+        pass
+    return None
+
+
+def get_since_date(records: List[Dict]) -> Optional[str]:
+    dates = []
+    for rec in records:
+        ts = rec.get("ts") or rec.get("timestamp")
+        if ts:
+            dates.append(ts)
+    if not dates:
+        return None
+    return sorted(dates)[0][:10]
+
+
+def compute_report(data_dir: Path) -> Dict:
+    records = load_usage_records(data_dir)
+    rl_records = [
+        r for r in records
+        if r.get("skill_name") and is_rl_anything_skill(r["skill_name"])
+    ]
+    skill_counts = get_rl_skill_counts(records)
+    total_invocations = sum(skill_counts.values())
+
+    saved_minutes = sum(
+        count * SKILL_COST_MINUTES.get(name, DEFAULT_COST_MINUTES)
+        for name, count in skill_counts.items()
+    )
+
+    session_count = get_session_count(data_dir)
+    auto_triggered = get_auto_triggered_count(data_dir)
+    env_score = get_env_score(data_dir)
+    since_date = get_since_date(rl_records) if rl_records else None
+
+    baseline_minutes = max(1, session_count) * 0.5
+    efficiency_pct = min(100, int(saved_minutes / baseline_minutes * 100))
+
+    growth_info = None
+    xp_info = None
+    if env_score is not None:
+        growth_info = compute_level(env_score)
+        xp_info = compute_xp_progress(env_score)
+
+    skill_breakdown = [
+        {
+            "name": name,
+            "count": count,
+            "est_saved_min": count * SKILL_COST_MINUTES.get(name, DEFAULT_COST_MINUTES),
+        }
+        for name, count in skill_counts.most_common(10)
+    ]
+
+    return {
+        "session_count": session_count,
+        "total_invocations": total_invocations,
+        "auto_triggered": auto_triggered,
+        "saved_minutes": saved_minutes,
+        "efficiency_pct": efficiency_pct,
+        "growth_info": growth_info,
+        "xp_info": xp_info,
+        "since_date": since_date,
+        "skill_breakdown": skill_breakdown,
+    }
+
+
+def _bar(value: float, width: int = 20) -> str:
+    filled = max(0, min(width, int(value * width)))
+    return "█" * filled + "░" * (width - filled)
+
+
+def print_report(report: Dict) -> None:
+    W = 60
+    SEP = "═" * W
+    SEP2 = "─" * W
+
+    print()
+    print("RL-Anything ROI Report")
+    print(SEP)
+
+    since_str = f"  (since {report['since_date']})" if report["since_date"] else ""
+    print(f"Sessions observed:  {report['session_count']:>8,}")
+    print(f"Skill invocations:  {report['total_invocations']:>8,}{since_str}")
+    print(f"Auto-triggered:     {report['auto_triggered']:>8,}")
+
+    gi = report["growth_info"]
+    xi = report["xp_info"]
+    if gi:
+        bar = _bar(xi.progress if xi else 0.0, 20)
+        pct = int((xi.progress if xi else 0.0) * 100)
+        next_lv = gi.level + 1 if gi.level < 10 else 10
+        score_str = f"{xi.score_needed:.2f}" if xi and xi.score_needed > 0 else "MAX"
+        print(f"Growth Level:       Lv.{gi.level} — {gi.title_en} / {gi.title_ja}")
+        print(f"                    {bar} {pct}% → Lv.{next_lv} まで {score_str}")
+    else:
+        print("Growth Level:       N/A（audit 実行後に表示）")
+
+    print()
+    saved_h = report["saved_minutes"] / 60
+    print(f"Est. manual work saved:  ~{saved_h:.1f}h")
+
+    bar_width = 24
+    filled = int(report["efficiency_pct"] / 100 * bar_width)
+    eff_bar = "█" * filled + "░" * (bar_width - filled)
+    print(f"Efficiency meter: {eff_bar} {report['efficiency_pct']}%")
+
+    if report["skill_breakdown"]:
+        print()
+        print("By Skill (rl-anything 系)")
+        print(SEP2)
+        print(f"  {'#':>2}  {'Skill':<25}  {'Count':>5}  {'Est. Saved':>10}  Impact")
+        print(SEP2)
+        max_saved = max(s["est_saved_min"] for s in report["skill_breakdown"])
+        for i, skill in enumerate(report["skill_breakdown"], 1):
+            bar_len = int(skill["est_saved_min"] / max(max_saved, 1) * 10)
+            print(
+                f"  {i:>2}. {skill['name']:<25}  {skill['count']:>5}"
+                f"  {skill['est_saved_min']:>8}min  {'█' * bar_len}"
+            )
+        print(SEP2)
+    else:
+        print()
+        print("No skill usage recorded yet.")
+        print("Run /rl-anything:evolve, /rl-anything:audit, or other skills to start tracking.")
+
+    print()
+
+
+def main() -> None:
+    report = compute_report(DATA_DIR)
+    print_report(report)
+
+
+if __name__ == "__main__":
+    main()

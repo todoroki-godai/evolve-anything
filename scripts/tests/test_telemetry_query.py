@@ -158,6 +158,58 @@ class TestTimeRangeFallback:
         assert len(result) == 1
         assert result[0]["session_id"] == "s2"
 
+    def test_query_sessions_reads_from_sessions_table(self, tmp_path, monkeypatch):
+        """sessions_file 未指定時は session_store の sessions テーブルから読む。"""
+        try:
+            import duckdb  # noqa
+        except ImportError:
+            pytest.skip("duckdb not installed")
+
+        import session_store
+        monkeypatch.setattr(session_store, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
+        monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
+
+        session_store.append({"session_id": "s1", "timestamp": "2026-02-01T00:00:00+00:00", "project": "atlas"})
+        session_store.append({"session_id": "s2", "timestamp": "2026-03-01T00:00:00+00:00", "project": "beta"})
+        session_store.append({"session_id": "s3", "timestamp": "2026-04-01T00:00:00+00:00", "project": "atlas"})
+
+        result = telemetry_query.query_sessions(project="atlas")
+        sids = sorted(r["session_id"] for r in result)
+        assert sids == ["s1", "s3"]
+
+    def test_query_sessions_table_with_since(self, tmp_path, monkeypatch):
+        try:
+            import duckdb  # noqa
+        except ImportError:
+            pytest.skip("duckdb not installed")
+
+        import session_store
+        monkeypatch.setattr(session_store, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
+        monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
+
+        session_store.append({"session_id": "s1", "timestamp": "2026-02-01T00:00:00+00:00", "project": "atlas"})
+        session_store.append({"session_id": "s2", "timestamp": "2026-03-01T00:00:00+00:00", "project": "atlas"})
+
+        result = telemetry_query.query_sessions(project="atlas", since="2026-02-15T00:00:00+00:00")
+        assert len(result) == 1
+        assert result[0]["session_id"] == "s2"
+
+    def test_query_sessions_table_returns_empty_when_db_missing(self, tmp_path, monkeypatch):
+        """sessions.db がない場合は空配列。"""
+        try:
+            import duckdb  # noqa
+        except ImportError:
+            pytest.skip("duckdb not installed")
+
+        import session_store
+        monkeypatch.setattr(session_store, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
+        monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
+
+        assert telemetry_query.query_sessions(project="atlas") == []
+
     def test_backward_compatible_no_time_params(self, usage_file):
         """since/until 未指定時は全レコード返却（後方互換）。"""
         with mock.patch.object(telemetry_query, "HAS_DUCKDB", False):

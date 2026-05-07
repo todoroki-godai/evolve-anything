@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""採点ノイズ計測 CLI。
+
+同一スキルを N 回採点し、軸別スコアの標準偏差と推奨 epsilon を出力する。
+
+使用例:
+  rl-score-noise path/to/SKILL.md
+  rl-score-noise path/to/SKILL.md --runs 7
+  rl-score-noise path/to/SKILL.md --json
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# scripts/lib を import パスに追加
+_SCRIPTS_LIB = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_SCRIPTS_LIB))
+
+from score_noise import measure_noise
+
+
+def _fmt_bar(value: float, width: int = 20) -> str:
+    filled = round(value * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _print_report(result: dict) -> None:
+    target = result["target"]
+    runs = result["runs"]
+    stats = result["stats"]
+    epsilon = result["recommended_epsilon"]
+
+    print(f"\n採点ノイズ計測レポート")
+    print(f"対象: {target}")
+    print(f"試行: {runs} 回\n")
+
+    axes = [("technical", "技術品質 (40%)"), ("domain", "ドメイン品質 (40%)"),
+            ("structure", "構造品質  (20%)"), ("integrated", "統合スコア")]
+
+    for key, label in axes:
+        s = stats[key]
+        bar = _fmt_bar(s["mean"])
+        print(f"  {label}")
+        print(f"    平均: {s['mean']:.4f}  {bar}")
+        print(f"    σ:   {s['std']:.4f}  範囲 [{s['min']:.4f}, {s['max']:.4f}]")
+
+    print()
+    print(f"推奨 epsilon (2σ): {epsilon}")
+    if epsilon <= 0.03:
+        level = "低ノイズ — H_best 比較は安定しています"
+    elif epsilon <= 0.06:
+        level = "中程度のノイズ — epsilon を設定して比較してください"
+    else:
+        level = "高ノイズ — epsilon を大きめに設定し、採点モデルの変更も検討してください"
+    print(f"評価: {level}")
+    print()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="rl-scorer の採点ノイズを計測する")
+    parser.add_argument("target", help="計測対象のスキルファイルパス")
+    parser.add_argument("--runs", type=int, default=5, help="採点回数（デフォルト: 5）")
+    parser.add_argument("--json", action="store_true", help="結果を JSON で出力")
+    args = parser.parse_args()
+
+    target = Path(args.target)
+    if not target.exists():
+        print(f"エラー: ファイルが見つかりません: {target}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"{target} を {args.runs} 回採点中...")
+    result = measure_noise(str(target), runs=args.runs)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        _print_report(result)
+
+
+if __name__ == "__main__":
+    main()

@@ -75,7 +75,7 @@ def handle_instructions_loaded(event: dict) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "project": project,
     }
-    common.append_jsonl(common.DATA_DIR / "sessions.jsonl", record)
+    _append_session(record)
 
     # ── stale memory 警告（ソフト指示方式） ──────────────────────
     if project_dir:
@@ -88,6 +88,9 @@ def handle_instructions_loaded(event: dict) -> None:
 
     # ── NFD: Growth greeting 出力 ──────────────────────────────
     _emit_growth_greeting(project)
+
+    # ── Auto-evolve pending trigger 表示 ────────────────────────
+    _emit_pending_trigger()
 
 
 def _emit_stale_memory_warnings(memory_dir: Path) -> None:
@@ -158,6 +161,70 @@ def _emit_growth_greeting(project: str | None) -> None:
         print(" ".join(parts))
     except Exception:
         pass  # greeting 失敗はサイレント（hook の安定性優先）
+
+
+def _append_session(record: dict) -> None:
+    """sessions レコードを session_store 経由で追記。失敗時は JSONL フォールバック。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "lib"))
+        import session_store
+        session_store.append(record)
+    except ImportError:
+        common.append_jsonl(common.DATA_DIR / "sessions.jsonl", record)
+
+
+def _emit_pending_trigger() -> None:
+    """pending-trigger.json を読み出し、skill-triage-cache があれば候補を追記して stdout に表示する。
+
+    スヌーズ中は配信しない（trigger_engine.read_and_delete_pending_trigger に委譲）。
+    LLM 呼び出しなし。例外はサイレント（hook の安定性優先）。
+    """
+    triage_cache_file = common.DATA_DIR / "skill-triage-cache.json"
+
+    # trigger_engine.read_and_delete_pending_trigger() はスヌーズ判定込みで読み取り・削除する
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "lib"))
+        from trigger_engine import read_and_delete_pending_trigger
+    except ImportError:
+        return
+
+    payload = read_and_delete_pending_trigger()
+    if payload is None:
+        return  # ファイルなし or スヌーズ中
+
+    message = payload.get("message", "")
+    action = payload.get("action", "/rl-anything:evolve")
+
+    # skill-triage-cache があれば候補リストをメッセージに追記
+    if triage_cache_file.exists():
+        try:
+            cache = json.loads(triage_cache_file.read_text(encoding="utf-8"))
+            candidates = cache.get("candidates", [])
+            if candidates:
+                skill = candidates[0].get("skill", "")
+                confidence = candidates[0].get("confidence", 0.0)
+                reason = candidates[0].get("reason", "")
+                candidate_lines = [f"  - {c['skill']} ({c['action']}, confidence: {c['confidence']:.2f})" for c in candidates[:3]]
+                message = (
+                    message.replace("推奨evolve候補はセッション開始時に表示されます。", "")
+                    + f"\n推奨evolve候補: {skill}（confidence: {confidence:.2f}）"
+                )
+                if reason:
+                    message += f"\n理由: {reason}"
+                if len(candidates) > 1:
+                    message += "\n上位候補:\n" + "\n".join(candidate_lines)
+                action = f"/rl-anything:evolve-skill {skill}" if skill else action
+        except (json.JSONDecodeError, OSError):
+            pass
+        try:
+            triage_cache_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    # stdout に出力（Claude が受け取りユーザーに提示する）
+    # pending_file 削除は read_and_delete_pending_trigger() で実施済み
+    print(f"AUTO_EVOLVE_TRIGGER: {message}")
+    print(f"推奨コマンド: {action}")
 
 
 def main() -> None:

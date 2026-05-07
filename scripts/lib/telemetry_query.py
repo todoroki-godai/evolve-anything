@@ -174,26 +174,84 @@ def query_sessions(
     since: Optional[str] = None,
     until: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """sessions.jsonl をクエリして結果を返す。
+    """sessions をクエリして結果を返す。
+
+    sessions_file 未指定: session_store の sessions テーブル (DuckDB) を参照。
+    sessions_file 指定:   後方互換のため指定された JSONL を読む（テスト用）。
 
     Args:
         project: フィルタするプロジェクト名。None の場合は全レコード。
         include_unknown: True の場合、project が null のレコードも含める。
-        sessions_file: sessions.jsonl のパス（テスト用）。
+        sessions_file: 明示的に JSONL パスを指定（後方互換、テスト用）。
         since: ISO 8601 文字列。この時刻以降のレコードのみ返す。
         until: ISO 8601 文字列。この時刻より前のレコードのみ返す。
     """
-    filepath = sessions_file or (DATA_DIR / "sessions.jsonl")
-    if not filepath.exists():
-        return []
+    if sessions_file is not None:
+        if not sessions_file.exists():
+            return []
+        if HAS_DUCKDB:
+            return _duckdb_query_file(sessions_file, project=project, include_unknown=include_unknown, since=since, until=until)
+        _warn_no_duckdb()
+        records = _load_jsonl(sessions_file)
+        records = _filter_by_project(records, project, include_unknown)
+        return _filter_by_time(records, since, until)
 
     if HAS_DUCKDB:
-        return _duckdb_query_file(filepath, project=project, include_unknown=include_unknown, since=since, until=until)
+        return _query_sessions_table(project=project, include_unknown=include_unknown, since=since, until=until)
 
+    # HAS_DUCKDB=False のフォールバック: 従来通り JSONL を読む
+    fallback = DATA_DIR / "sessions.jsonl"
+    if not fallback.exists():
+        return []
     _warn_no_duckdb()
-    records = _load_jsonl(filepath)
+    records = _load_jsonl(fallback)
     records = _filter_by_project(records, project, include_unknown)
     return _filter_by_time(records, since, until)
+
+
+def _query_sessions_table(
+    *,
+    project: Optional[str] = None,
+    include_unknown: bool = False,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """session_store の sessions テーブルを参照してレコードを返す。
+
+    raw_json をデコードして元の dict を返す（read_json_auto と同じ形式）。
+    """
+    import session_store
+    if not session_store.SESSIONS_DB.exists():
+        return []
+    conn = duckdb.connect(str(session_store.SESSIONS_DB), read_only=True)
+    try:
+        sql = "SELECT raw_json FROM sessions"
+        params: Dict[str, Any] = {}
+        where_parts: List[str] = []
+        if project is not None:
+            params["project"] = project
+            if include_unknown:
+                where_parts.append("(project = $project OR project IS NULL)")
+            else:
+                where_parts.append("project = $project")
+        if since:
+            params["since"] = since
+            where_parts.append("timestamp >= $since")
+        if until:
+            params["until"] = until
+            where_parts.append("timestamp < $until")
+        if where_parts:
+            sql += " WHERE " + " AND ".join(where_parts)
+        rows = conn.execute(sql, params).fetchall()
+        results: List[Dict[str, Any]] = []
+        for (raw,) in rows:
+            try:
+                results.append(json.loads(raw))
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return results
+    finally:
+        conn.close()
 
 
 def _build_time_where(

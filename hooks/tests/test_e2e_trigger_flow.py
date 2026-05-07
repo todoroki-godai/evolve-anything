@@ -13,6 +13,7 @@ sys.path.insert(0, str(_hooks_dir))
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
 import trigger_engine
+import session_store
 
 
 @pytest.fixture
@@ -23,6 +24,12 @@ def data_dir(tmp_path):
         "trigger_engine.PENDING_TRIGGER_FILE", tmp_path / "pending-trigger.json"
     ), mock.patch(
         "trigger_engine.SNOOZE_FILE", tmp_path / "trigger-snooze.json"
+    ), mock.patch.object(
+        session_store, "DATA_DIR", tmp_path
+    ), mock.patch.object(
+        session_store, "SESSIONS_DB", tmp_path / "sessions.db"
+    ), mock.patch.object(
+        session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl"
     ):
         yield tmp_path
 

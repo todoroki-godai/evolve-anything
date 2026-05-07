@@ -4,10 +4,8 @@
 stdin から Claude Code の PostToolUse イベント JSON を受け取り、
 ~/.claude/rl-anything/ 配下の JSONL ファイルに追記する。
 
-NOTE: Skill ツールは PostToolUse を発火しないため (#62)、
-スキル使用の記録は各スキルの preamble から bin/rl-usage-log を
-直接呼び出す self-report 方式に移行済み。
-本 hook は Agent ツール呼び出しとエラー記録のみを担当する。
+Skill PostToolUse は v2.1.121 以降対応。invocation_trigger の記録は
+skill_activation_log.py が担当。本 hook は Agent ツール呼び出しとエラー記録のみを担当する。
 
 LLM 呼び出しは行わない（MUST NOT）。
 書き込み失敗時はセッションをブロックしない（サイレント失敗）。

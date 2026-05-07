@@ -34,11 +34,18 @@ from trigger_engine import (
 
 @pytest.fixture
 def data_dir(tmp_path):
-    """DATA_DIR を tmp_path に差し替える。"""
+    """DATA_DIR を tmp_path に差し替える。session_store のパスも追従する。"""
+    import session_store
     with mock.patch("trigger_engine.DATA_DIR", tmp_path), mock.patch(
         "trigger_engine.EVOLVE_STATE_FILE", tmp_path / "evolve-state.json"
     ), mock.patch(
         "trigger_engine.PENDING_TRIGGER_FILE", tmp_path / "pending-trigger.json"
+    ), mock.patch.object(
+        session_store, "DATA_DIR", tmp_path
+    ), mock.patch.object(
+        session_store, "SESSIONS_DB", tmp_path / "sessions.db"
+    ), mock.patch.object(
+        session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl"
     ):
         yield tmp_path
 
@@ -66,7 +73,7 @@ class TestLoadTriggerConfig:
     def test_default_when_no_config(self, data_dir):
         config = load_trigger_config({})
         assert config["enabled"] is True
-        assert config["triggers"]["session_end"]["min_sessions"] == 10
+        assert config["triggers"]["session_end"]["min_sessions"] == 3
 
     def test_user_override(self, data_dir):
         state = {"trigger_config": {"triggers": {"session_end": {"min_sessions": 5}}}}
@@ -883,4 +890,4 @@ class TestUserConfigMerge:
         with mock.patch.dict("os.environ", clean_env, clear=True):
             config = load_trigger_config()
         assert config["cooldown_hours"] == 24
-        assert config["triggers"]["session_end"]["min_sessions"] == 10
+        assert config["triggers"]["session_end"]["min_sessions"] == 3

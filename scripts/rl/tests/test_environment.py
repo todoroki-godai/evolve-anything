@@ -82,7 +82,8 @@ class TestComputeEnvironmentFitness:
 
         with mock.patch("telemetry_query.DATA_DIR", data_dir), \
              mock.patch("telemetry_query.HAS_DUCKDB", False):
-            result = environment.compute_environment_fitness(project, days=30)
+            # skip_llm=True: constitutional 軸の LLM subprocess を回避（テスト hang 防止）
+            result = environment.compute_environment_fitness(project, days=30, skip_llm=True)
 
         assert "overall" in result
         assert "sources" in result
@@ -117,7 +118,7 @@ class TestComputeEnvironmentFitness:
 
         with mock.patch("telemetry_query.DATA_DIR", data_dir), \
              mock.patch("telemetry_query.HAS_DUCKDB", False):
-            result = environment.compute_environment_fitness(project, days=30)
+            result = environment.compute_environment_fitness(project, days=30, skip_llm=True)
 
         # telemetry が不十分なので sources に含まれない
         assert "telemetry" not in result["sources"]
@@ -141,7 +142,7 @@ class TestComputeEnvironmentFitness:
 
         with mock.patch("telemetry_query.DATA_DIR", data_dir), \
              mock.patch("telemetry_query.HAS_DUCKDB", False):
-            result = environment.compute_environment_fitness(tmp_path, days=30)
+            result = environment.compute_environment_fitness(tmp_path, days=30, skip_llm=True)
 
         # coherence は算出可能（低スコア）、telemetry は不足
         assert "overall" in result

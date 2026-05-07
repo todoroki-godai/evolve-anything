@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -14,6 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"
 
 import instructions_loaded
 
+# Why: growth_engine の staleness 判定（30 日超で None 返却）に引っかからないよう
+# 「いま」を基準にした更新タイムスタンプを使う。hardcode の日付はテストが時間で腐る。
+_RECENT_TS = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
 
 class TestGrowthGreeting:
     """_emit_growth_greeting のテスト。"""
@@ -23,7 +28,7 @@ class TestGrowthGreeting:
         cache_data = {
             "phase": "structured_nurturing",
             "progress": 0.72,
-            "updated_at": "2026-03-25T15:00:00+00:00",
+            "updated_at": _RECENT_TS,
             "level": 7,
             "title_en": "Experienced",
         }
@@ -46,7 +51,7 @@ class TestGrowthGreeting:
         cache_data = {
             "phase": "structured_nurturing",
             "progress": 0.72,
-            "updated_at": "2026-03-25T15:00:00+00:00",
+            "updated_at": _RECENT_TS,
         }
         cache_file = tmp_path / "growth-state-myproj.json"
         cache_file.write_text(json.dumps(cache_data))
@@ -71,7 +76,7 @@ class TestGrowthGreeting:
 
     def test_no_output_when_display_disabled(self, tmp_path, capsys):
         """growth_display=false → 出力なし。"""
-        cache_data = {"phase": "bootstrap", "progress": 0.5, "updated_at": "2026-03-25T15:00:00+00:00"}
+        cache_data = {"phase": "bootstrap", "progress": 0.5, "updated_at": _RECENT_TS}
         cache_file = tmp_path / "growth-state-proj.json"
         cache_file.write_text(json.dumps(cache_data))
 

@@ -91,26 +91,20 @@ def save_evolve_state(state: Dict[str, Any]) -> None:
 def count_new_sessions() -> int:
     """前回 evolve 実行以降のセッション数を数える。
 
-    sessions.jsonl と usage.jsonl 両方からユニーク session_id を集計する。
-    backfill データ（sessions.jsonl に書かれない）も含めてカウントできる。
+    sessions テーブル（DuckDB）と usage.jsonl 両方からユニーク session_id を集計する。
+    backfill データ（usage 経由）も含めてカウントできる。
     """
     state = load_evolve_state()
     last_run = state.get("last_run_timestamp", "")
     session_ids: set = set()
 
-    # sessions.jsonl から集計
-    sessions_file = DATA_DIR / "sessions.jsonl"
-    if sessions_file.exists():
-        for line in sessions_file.read_text(encoding="utf-8").splitlines():
-            try:
-                rec = json.loads(line)
-                ts = rec.get("timestamp", "")
-                if ts > last_run:
-                    sid = rec.get("session_id", "")
-                    if sid:
-                        session_ids.add(sid)
-            except json.JSONDecodeError:
-                continue
+    # sessions テーブルから集計
+    sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+    import session_store
+    for rec in session_store.query(since=last_run):
+        sid = rec.get("session_id", "")
+        if sid:
+            session_ids.add(sid)
 
     # usage.jsonl からもユニーク session_id を集計（backfill 対応）
     usage_file = DATA_DIR / "usage.jsonl"

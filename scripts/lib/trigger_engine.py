@@ -6,15 +6,23 @@ LLM 呼び出しは行わない（MUST NOT）。
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+_PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
 EVOLVE_STATE_FILE = DATA_DIR / "evolve-state.json"
 PENDING_TRIGGER_FILE = DATA_DIR / "pending-trigger.json"
 SNOOZE_FILE = DATA_DIR / "trigger-snooze.json"
+
+try:
+    import duckdb as _duckdb
+    HAS_DUCKDB = True
+except ImportError:
+    HAS_DUCKDB = False
 
 # History pruning limit
 _MAX_HISTORY_ENTRIES = 100
@@ -23,7 +31,7 @@ _MAX_HISTORY_ENTRIES = 100
 DEFAULT_TRIGGER_CONFIG: dict[str, Any] = {
     "enabled": True,
     "triggers": {
-        "session_end": {"enabled": True, "min_sessions": 10, "max_days": 7},
+        "session_end": {"enabled": True, "min_sessions": 3, "max_days": 7},
         "corrections": {"enabled": True, "threshold": 10},
         "audit_overdue": {"enabled": True, "interval_days": 30},
         "bloat": {"enabled": True},
@@ -152,15 +160,30 @@ def _is_in_cooldown(
 
 
 def _record_trigger(state: dict[str, Any], result: TriggerResult) -> dict[str, Any]:
-    """トリガー発火を trigger_history に記録し、pruning する。"""
+    """トリガー発火を trigger_history に記録し、pruning する。
+
+    primary reason と details["all_reasons"] の両方を記録する。
+    cooldown 判定は reason ごとに行うので、複数 reason 発火時に
+    primary 以外も記録しないと次回 cooldown が機能しない。
+    """
     history = state.get("trigger_history", [])
-    history.append(
-        {
-            "reason": result.reason,
-            "action": result.action,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-    )
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    # 全 reasons を記録（primary 重複を避けて dedup）
+    all_reasons = result.details.get("all_reasons") or [result.reason]
+    seen: set[str] = set()
+    for reason in all_reasons:
+        if not reason or reason in seen:
+            continue
+        seen.add(reason)
+        history.append(
+            {
+                "reason": reason,
+                "action": result.action,
+                "timestamp": timestamp,
+            }
+        )
+
     # Pruning: keep only the latest entries
     if len(history) > _MAX_HISTORY_ENTRIES:
         history = history[-_MAX_HISTORY_ENTRIES:]
@@ -172,22 +195,15 @@ def _record_trigger(state: dict[str, Any], result: TriggerResult) -> dict[str, A
 
 
 def _count_sessions_since(last_run: str) -> int:
-    """前回 evolve 以降のセッション数をカウントする。"""
-    sessions_file = DATA_DIR / "sessions.jsonl"
-    if not sessions_file.exists():
+    """前回 evolve 以降のユニークセッション数を session_store 経由でカウント。
+
+    session_store 内部で DuckDB / JSONL フォールバックを判断する。
+    """
+    try:
+        import session_store
+        return session_store.count_unique_since(last_run)
+    except ImportError:
         return 0
-    session_ids: set[str] = set()
-    for line in sessions_file.read_text(encoding="utf-8").splitlines():
-        try:
-            rec = json.loads(line)
-            ts = rec.get("timestamp", "")
-            if ts > last_run:
-                sid = rec.get("session_id", "")
-                if sid:
-                    session_ids.add(sid)
-        except json.JSONDecodeError:
-            continue
-    return len(session_ids)
 
 
 # --- Evaluate: session end ---
@@ -409,6 +425,7 @@ def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: st
     # Record and save
     state = _record_trigger(state, result)
     _save_state(state)
+
     return result
 
 

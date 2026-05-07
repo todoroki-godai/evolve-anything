@@ -14,11 +14,20 @@ _plugin_root = _discover_scripts.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
 import discover
+import session_store
 
 
 @pytest.fixture
-def project_dir(tmp_path):
-    """CLAUDE.md + sessions.jsonl + usage.jsonl を持つプロジェクト。"""
+def project_dir(tmp_path, monkeypatch):
+    """CLAUDE.md + sessions テーブル + usage.jsonl を持つプロジェクト。"""
+    # session_store のパスを tmp_path に向ける（本番 DATA_DIR を汚さない）
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(session_store, "DATA_DIR", data_dir)
+    monkeypatch.setattr(session_store, "SESSIONS_DB", data_dir / "sessions.db")
+    monkeypatch.setattr(session_store, "SESSIONS_JSONL", data_dir / "sessions.jsonl")
+    monkeypatch.setattr(discover, "DATA_DIR", data_dir)
+
     # CLAUDE.md
     claude_md = tmp_path / "CLAUDE.md"
     claude_md.write_text(
@@ -28,30 +37,25 @@ def project_dir(tmp_path):
         "- /my-skill: 説明のみ\n"
     )
 
-    # sessions.jsonl
+    # sessions（session_store 経由で投入）
     sessions = [
-        {"session_id": "s1", "user_prompts": ["Slackのチャンネル設定をしたい"], "project": tmp_path.name},
-        {"session_id": "s2", "user_prompts": ["チャンネルのbot追加をお願い"], "project": tmp_path.name},
-        {"session_id": "s3", "user_prompts": ["チャンネルの整理"], "project": tmp_path.name},
-        {"session_id": "s4", "user_prompts": ["デプロイ確認して"], "project": tmp_path.name},
+        {"session_id": "s1", "timestamp": "2026-04-01T10:00:00+00:00", "user_prompts": ["Slackのチャンネル設定をしたい"], "project": tmp_path.name},
+        {"session_id": "s2", "timestamp": "2026-04-01T10:01:00+00:00", "user_prompts": ["チャンネルのbot追加をお願い"], "project": tmp_path.name},
+        {"session_id": "s3", "timestamp": "2026-04-01T10:02:00+00:00", "user_prompts": ["チャンネルの整理"], "project": tmp_path.name},
+        {"session_id": "s4", "timestamp": "2026-04-01T10:03:00+00:00", "user_prompts": ["デプロイ確認して"], "project": tmp_path.name},
     ]
-    sessions_file = discover.DATA_DIR / "sessions.jsonl"
-    sessions_file.parent.mkdir(parents=True, exist_ok=True)
-    sessions_file.write_text("\n".join(json.dumps(s) for s in sessions) + "\n")
+    for s in sessions:
+        session_store.append(s)
 
     # usage.jsonl - s3 でのみ channel-routing が使われた
     usage = [
         {"session_id": "s3", "skill_name": "/channel-routing", "project": tmp_path.name},
         {"session_id": "s4", "skill_name": "other-skill", "project": tmp_path.name},
     ]
-    usage_file = discover.DATA_DIR / "usage.jsonl"
+    usage_file = data_dir / "usage.jsonl"
     usage_file.write_text("\n".join(json.dumps(u) for u in usage) + "\n")
 
     yield tmp_path
-
-    # cleanup
-    sessions_file.unlink(missing_ok=True)
-    usage_file.unlink(missing_ok=True)
 
 
 def test_detect_missed_skills_basic(project_dir):
@@ -103,24 +107,22 @@ def test_no_claude_md(tmp_path):
     assert "No CLAUDE.md found" in result["message"]
 
 
-def test_no_sessions_jsonl(tmp_path):
-    """sessions.jsonl がない場合はスキップメッセージ。"""
+def test_no_session_data(tmp_path, monkeypatch):
+    """sessions テーブルが空の場合はスキップメッセージ。"""
     (tmp_path / "CLAUDE.md").write_text("## Skills\n\n- /test: test. Trigger: test\n")
 
-    # sessions.jsonl が存在しないことを確認
-    sessions_file = discover.DATA_DIR / "sessions.jsonl"
-    if sessions_file.exists():
-        sessions_file.rename(sessions_file.with_suffix(".bak"))
+    # session_store を空ディレクトリに向ける
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(session_store, "DATA_DIR", data_dir)
+    monkeypatch.setattr(session_store, "SESSIONS_DB", data_dir / "sessions.db")
+    monkeypatch.setattr(session_store, "SESSIONS_JSONL", data_dir / "sessions.jsonl")
+    monkeypatch.setattr(discover, "DATA_DIR", data_dir)
 
-    try:
-        result = discover.detect_missed_skills(project_root=tmp_path)
-        assert result["missed"] == []
-        assert result["message"] is not None
-        assert "sessions.jsonl" in result["message"]
-    finally:
-        bak = sessions_file.with_suffix(".bak")
-        if bak.exists():
-            bak.rename(sessions_file)
+    result = discover.detect_missed_skills(project_root=tmp_path)
+    assert result["missed"] == []
+    assert result["message"] is not None
+    assert "session data" in result["message"]
 
 
 def test_report_integration(project_dir):

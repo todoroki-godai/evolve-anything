@@ -19,6 +19,7 @@ sys.path.insert(0, str(_hooks.parent / "scripts" / "lib"))
 
 import common
 import rl_common
+import session_store
 import observe
 import session_summary
 import save_state
@@ -45,12 +46,17 @@ def patch_data_dir(tmp_data_dir):
     """
     checkpoints = tmp_data_dir / "checkpoints"
     fp_file = tmp_data_dir / "false_positives.jsonl"
+    sessions_db = tmp_data_dir / "sessions.db"
+    sessions_jsonl = tmp_data_dir / "sessions.jsonl"
     with mock.patch.object(common, "DATA_DIR", tmp_data_dir), \
          mock.patch.object(common, "CHECKPOINTS_DIR", checkpoints), \
          mock.patch.object(common, "FALSE_POSITIVES_FILE", fp_file), \
          mock.patch.object(rl_common, "DATA_DIR", tmp_data_dir), \
          mock.patch.object(rl_common, "CHECKPOINTS_DIR", checkpoints), \
-         mock.patch.object(rl_common, "FALSE_POSITIVES_FILE", fp_file):
+         mock.patch.object(rl_common, "FALSE_POSITIVES_FILE", fp_file), \
+         mock.patch.object(session_store, "DATA_DIR", tmp_data_dir), \
+         mock.patch.object(session_store, "SESSIONS_DB", sessions_db), \
+         mock.patch.object(session_store, "SESSIONS_JSONL", sessions_jsonl):
         yield tmp_data_dir
 
 
@@ -122,6 +128,40 @@ class TestWorkflowContext:
             }
             workflow_context.handle_pre_tool_use(event)
             assert not list(tmp_path.glob("rl-anything-workflow-*"))
+
+    def test_invocation_trigger_top_level(self, tmp_path):
+        """最初の Skill 呼び出しは invocation_trigger = 'top-level'。"""
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            event = {
+                "tool_name": "Skill",
+                "tool_input": {"skill": "rl-anything:audit"},
+                "session_id": "sess-wf-trigger-01",
+            }
+            workflow_context.handle_pre_tool_use(event)
+            ctx_path = tmp_path / "rl-anything-workflow-sess-wf-trigger-01.json"
+            ctx = json.loads(ctx_path.read_text())
+            assert ctx["invocation_trigger"] == "top-level"
+
+    def test_invocation_trigger_nested(self, tmp_path):
+        """コンテキストファイルが存在する状態で呼ばれると invocation_trigger = 'nested-skill'。"""
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            # 1回目: top-level
+            event1 = {
+                "tool_name": "Skill",
+                "tool_input": {"skill": "rl-anything:evolve"},
+                "session_id": "sess-wf-trigger-02",
+            }
+            workflow_context.handle_pre_tool_use(event1)
+            # 2回目: nested (コンテキストファイル存在)
+            event2 = {
+                "tool_name": "Skill",
+                "tool_input": {"skill": "rl-anything:audit"},
+                "session_id": "sess-wf-trigger-02",
+            }
+            workflow_context.handle_pre_tool_use(event2)
+            ctx_path = tmp_path / "rl-anything-workflow-sess-wf-trigger-02.json"
+            ctx = json.loads(ctx_path.read_text())
+            assert ctx["invocation_trigger"] == "nested-skill"
 
 
 class TestReadWorkflowContext:
@@ -795,9 +835,9 @@ class TestSessionSummary:
         event = {"session_id": "sess-010"}
         session_summary.handle_stop(event)
 
-        sessions_file = patch_data_dir / "sessions.jsonl"
-        assert sessions_file.exists()
-        record = json.loads(sessions_file.read_text().strip())
+        records = session_store.query()
+        assert len(records) == 1
+        record = records[0]
         assert record["session_id"] == "sess-010"
         assert record["skill_count"] == 2
         assert record["error_count"] == 0
@@ -1662,13 +1702,13 @@ class TestInstructionsLoaded:
     """instructions_loaded.py のテスト。"""
 
     def test_first_call_records(self, patch_data_dir):
-        """初回呼び出しで sessions.jsonl に記録される。"""
+        """初回呼び出しで sessions テーブルに記録される。"""
         event = {"session_id": "sess-il-001"}
         instructions_loaded.handle_instructions_loaded(event)
 
-        sessions_file = patch_data_dir / "sessions.jsonl"
-        assert sessions_file.exists()
-        record = json.loads(sessions_file.read_text().strip())
+        records = session_store.query()
+        assert len(records) == 1
+        record = records[0]
         assert record["type"] == "instructions_loaded"
         assert record["session_id"] == "sess-il-001"
 
@@ -1678,18 +1718,16 @@ class TestInstructionsLoaded:
         instructions_loaded.handle_instructions_loaded(event)
         instructions_loaded.handle_instructions_loaded(event)
 
-        sessions_file = patch_data_dir / "sessions.jsonl"
-        lines = [l for l in sessions_file.read_text().strip().splitlines() if l.strip()]
-        assert len(lines) == 1
+        records = session_store.query()
+        assert len(records) == 1
 
     def test_different_sessions_both_record(self, patch_data_dir):
         """異なるセッションはそれぞれ記録される。"""
         instructions_loaded.handle_instructions_loaded({"session_id": "sess-il-003"})
         instructions_loaded.handle_instructions_loaded({"session_id": "sess-il-004"})
 
-        sessions_file = patch_data_dir / "sessions.jsonl"
-        lines = [l for l in sessions_file.read_text().strip().splitlines() if l.strip()]
-        assert len(lines) == 2
+        records = session_store.query()
+        assert len(records) == 2
 
     def test_empty_session_id_noop(self, patch_data_dir):
         """session_id が空の場合は何もしない。"""

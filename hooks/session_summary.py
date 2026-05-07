@@ -7,6 +7,7 @@ LLM 呼び出しは行わない（MUST NOT）。
 """
 import json
 import os
+import subprocess
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -14,11 +15,14 @@ from pathlib import Path
 
 import common
 
-# trigger_engine import (optional — fail silently)
+# session_store + trigger_engine import (optional — fail silently)
 _trigger_engine = None
+_session_store = None
 try:
     _plugin_root = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+    import session_store
+    _session_store = session_store
     from trigger_engine import (
         detect_skill_changes,
         evaluate_session_end,
@@ -151,7 +155,10 @@ def handle_stop(event: dict) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "project": project,
     }
-    common.append_jsonl(common.DATA_DIR / "sessions.jsonl", session_record)
+    if _session_store is not None:
+        _session_store.append(session_record)
+    else:
+        common.append_jsonl(common.DATA_DIR / "sessions.jsonl", session_record)
 
     # ワークフローシーケンスを workflows.jsonl に書き出す
     sequences = build_workflow_sequences(session_id)
@@ -191,10 +198,33 @@ def _evaluate_trigger() -> None:
             skill_list = ", ".join(changed_skills)
             result.message += f"\n変更されたスキル: {skill_list}。推奨: /rl-anything:optimize {changed_skills[0]}"
             result.details["changed_skills"] = changed_skills
+        # graceful degradation: skill-triage は非同期で別プロセス起動
+        # 結果は次回セッション開始時に instructions_loaded.py が skill-triage-cache.json を読む
+        result.message += "\n推奨evolve候補はセッション開始時に表示されます。"
         write_pending_trigger(result)
+        _launch_triage_async()
     except Exception as e:
         # Silent failure — session end processing must continue
         print(f"[rl-anything:session_summary] trigger eval error: {e}", file=sys.stderr)
+
+
+def _launch_triage_async() -> None:
+    """skill_triage_runner を非同期 subprocess で起動する。
+
+    Stop hook の 5 秒タイムアウト内に完了しなくてもよい設計。
+    """
+    runner = Path(__file__).resolve().parent / "skill_triage_runner.py"
+    if not runner.exists():
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, str(runner)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        pass
 
 
 def main() -> None:

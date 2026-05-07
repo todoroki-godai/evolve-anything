@@ -1,7 +1,8 @@
-"""E2E テスト: correction 検出 → prune decay → analyze routing の一気通貫フロー。
+"""E2E テスト: correction 検出 → prune decay の一気通貫フロー。
 
 Task 6.1: correction_detect が corrections.jsonl に書き込み、
-prune が decay スコアを計算し、analyze が routing 先を決定するフロー全体を検証する。
+prune が decay スコアを計算するフロー全体を検証する。
+Note: analyze (backfill) は削除済みのため関連テストを除去。
 """
 import json
 import os
@@ -18,14 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import common
 import correction_detect
 
-# prune / audit / analyze のパス
+# prune / audit のパス
 _plugin_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
 sys.path.insert(0, str(_plugin_root / "skills" / "prune" / "scripts"))
-sys.path.insert(0, str(_plugin_root / "skills" / "backfill" / "scripts"))
 
 import prune
-import analyze
 
 from datetime import datetime, timedelta, timezone
 
@@ -81,16 +80,6 @@ class TestCorrectionToPruneToAnalyze:
         # base_score = 1.0 - 0.15 * 1 = 0.85, decay = exp(-60/90) ≈ 0.513
         assert 0.43 < score < 0.44
 
-        # Step 4: analyze の routing で correction が最優先
-        routing = analyze.route_recommendation(
-            "evolve",
-            correction_count=len(corrections_by_skill["evolve"]),
-            frequency=3,
-            project_count=1,
-        )
-        assert routing["target"] == "skill"
-        assert routing["action"] == "evolve で改善"
-
     def test_multiple_corrections_lower_score(self, e2e_env):
         """複数 correction で decay スコアが下がる。"""
         data_dir = e2e_env
@@ -125,47 +114,6 @@ class TestCorrectionToPruneToAnalyze:
         (skill_dir / ".pin").touch()
 
         assert prune.is_pinned(skill_file) is True
-
-    def test_no_correction_routing_fallback(self, e2e_env):
-        """correction がないスキルは frequency ベースで routing される。"""
-        routing = analyze.route_recommendation(
-            "some-skill",
-            correction_count=0,
-            frequency=15,
-            project_count=4,
-        )
-        assert routing["target"] == "claude_md"
-        assert routing["action"] == "CLAUDE.md にパターンを追加"
-
-    def test_analyze_corrections_groups_by_skill(self, e2e_env):
-        """analyze_corrections がスキル別にグループ化する。"""
-        data_dir = e2e_env
-
-        # corrections.jsonl に手動書き込み
-        corrections = [
-            {"correction_type": "iya", "last_skill": "evolve", "confidence": 0.85, "session_id": "s1"},
-            {"correction_type": "no", "last_skill": "evolve", "confidence": 0.75, "session_id": "s2"},
-            {"correction_type": "stop", "last_skill": "commit", "confidence": 0.80, "session_id": "s3"},
-        ]
-        corrections_file = data_dir / "corrections.jsonl"
-        corrections_file.write_text(
-            "\n".join(json.dumps(c) for c in corrections) + "\n",
-            encoding="utf-8",
-        )
-
-        # usage データも必要（スキル使用頻度・プロジェクト数の判定に使う）
-        usage = [
-            {"skill_name": "evolve", "project_path": "/proj-a"},
-            {"skill_name": "evolve", "project_path": "/proj-b"},
-            {"skill_name": "commit", "project_path": "/proj-a"},
-        ]
-        result = analyze.analyze_corrections(corrections, usage)
-        assert result["total_corrections"] == 3
-        assert result["skills_with_corrections"] == 2
-        # correction のあるスキルは routing される
-        assert "evolve" in result["recommendations"]
-        assert result["recommendations"]["evolve"]["target"] == "skill"
-
 
 class TestDecayInPrune:
     """Task 6.2: decay が prune に反映されることの検証。

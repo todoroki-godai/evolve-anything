@@ -7,17 +7,30 @@ from unittest import mock
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+# 後の `import discover` が必ず shim 経由になるよう、shim ディレクトリを先頭へ。
+# Why: shim 未経由で scripts/lib/discover.py を直接 import すると、後続テストの
+# `from discover import ...` と spec が分裂し、reload が dict を入れ替えた瞬間に
+# 関数の __globals__ と sys.modules["discover"].__dict__ が乖離する（patch が効かない）。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "skills" / "discover" / "scripts"))
+
+
+@pytest.fixture
+def discover_module():
+    """テスト独立性を保つため毎回 sys.modules から discover を退避→復元する。"""
+    saved = sys.modules.pop("discover", None)
+    import discover as mod
+    yield mod
+    sys.modules.pop("discover", None)
+    if saved is not None:
+        sys.modules["discover"] = saved
 
 
 class TestDiscoverEvalSetFields:
     """Task 5.2: discover の eval_set_path/eval_set_status フィールド検証。"""
 
-    def test_missed_skill_has_eval_set_fields(self, tmp_path):
+    def test_missed_skill_has_eval_set_fields(self, tmp_path, discover_module):
         """eval set 未生成の missed skill にフィールドが付与される。"""
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "skills" / "discover" / "scripts"))
-        import discover
-        from importlib import reload
-        reload(discover)
+        discover = discover_module
 
         claude_md = tmp_path / "CLAUDE.md"
         claude_md.write_text(
@@ -40,12 +53,9 @@ class TestDiscoverEvalSetFields:
         assert "eval_set_path" in entry
         assert "eval_set_status" in entry
 
-    def test_eval_set_status_available_when_file_exists(self, tmp_path):
+    def test_eval_set_status_available_when_file_exists(self, tmp_path, discover_module):
         """eval set ファイルが存在する場合 status=available。"""
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "skills" / "discover" / "scripts"))
-        import discover
-        from importlib import reload
-        reload(discover)
+        discover = discover_module
 
         claude_md = tmp_path / "CLAUDE.md"
         claude_md.write_text(

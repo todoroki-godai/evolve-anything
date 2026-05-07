@@ -46,12 +46,62 @@ OPTIMIZER_SCRIPT = (
 )
 DEFAULT_OUTPUT_DIR = Path.cwd() / ".rl-loop"
 MAX_KEPT_RUNS = 10  # rl-loop 結果の保持数
+SCORE_EPSILON = 0.05  # 採点ノイズ実測値（2σ ≈ 0.05）に基づく IMPROVED/REGRESSED 判定閾値
 
 # 行数制限は共通モジュールから取得
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 from line_limit import check_line_limit as _check_line_limit
 from skill_evolve import assess_single_skill, evolve_skill_proposal, apply_evolve_proposal
+
+
+def _compute_verdict(improvement: float, epsilon: float = SCORE_EPSILON) -> str:
+    """改善幅と epsilon から verdict を返す。"""
+    if improvement > epsilon:
+        return "IMPROVED"
+    if improvement < -epsilon:
+        return "REGRESSED"
+    return "STABLE"
+
+
+def _dominates(
+    challenger: Dict[str, float],
+    defender: Dict[str, float],
+    tolerance: float = SCORE_EPSILON,
+) -> bool:
+    """challenger が defender を Pareto 優越するか判定する。
+
+    条件:
+    - 全軸で `challenger[axis] >= defender[axis] - tolerance`（tolerance 内劣化は許容）
+    - 1軸以上で `challenger[axis] > defender[axis] + tolerance`（厳密改善が1軸以上）
+    """
+    axes = [a for a in challenger.keys() if a != "integrated"]
+    has_strict_improvement = False
+    for axis in axes:
+        c = challenger.get(axis, 0.0)
+        d = defender.get(axis, 0.0)
+        if c < d - tolerance:
+            return False  # tolerance を超える劣化軸あり
+        if c > d + tolerance:
+            has_strict_improvement = True
+    return has_strict_improvement
+
+
+def _score_variant_axes(
+    content: str, target_path: str, dry_run: bool = False
+) -> Dict[str, float]:
+    """バリエーションを軸別にスコアリングして辞書を返す（Pareto 判定用）。"""
+    if dry_run:
+        import hashlib
+        h = int(hashlib.md5(content.encode()).hexdigest()[:8], 16)
+        base = 0.5 + (h % 50) / 100
+        return {
+            "technical": round(base, 2),
+            "domain": round(base, 2),
+            "structure": round(base, 2),
+            "integrated": round(base, 2),
+        }
+    return _parallel_score(content)
 
 
 def _get_output_dir(output_dir: Optional[str] = None) -> Path:
@@ -157,75 +207,31 @@ def generate_variants(
 
 
 # --- 3軸並列スコアリング ---
-AXIS_WEIGHTS = {"technical": 0.40, "domain": 0.40, "structure": 0.20}
-
-_AXIS_PROMPTS = {
-    "technical": """以下のClaude Codeスキル定義を技術品質の観点で評価してください。
-
-評価項目（各0.0〜1.0）:
-- 明確性: 指示が明確で曖昧さがないか
-- 完全性: 必要な情報が全て含まれているか
-- 一貫性: 用語・スタイルが統一されているか
-- エッジケース: 例外や境界条件への対応があるか
-- テスト可能性: 指示の成果を検証できるか
-
-スキル:
-```markdown
-{content}
-```
-
-5項目の平均を total として、数値のみ回答してください（例: 0.75）""",
-    "domain": """以下のClaude Codeスキル定義をドメイン品質の観点で評価してください。
-
-評価項目（各0.0〜1.0）:
-- 正確性: ドメイン知識が正しいか
-- 実用性: 実際のタスクに役立つか
-- 保守性: 変更・拡張が容易か
-- 完全性: ドメインの重要な側面を網羅しているか
-
-スキル:
-```markdown
-{content}
-```
-
-4項目の平均を total として、数値のみ回答してください（例: 0.75）""",
-    "structure": """以下のClaude Codeスキル定義を構造品質の観点で評価してください。
-
-評価項目（各0.0〜1.0）:
-- フォーマット: Markdownの構造が適切か
-- 長さ: 冗長でなく、かつ不足がないか
-- 例示: 具体例が適切に含まれているか
-- 参照: 関連リソースへの参照が適切か
-- 規約準拠: Claude Code スキルの慣習に沿っているか
-
-スキル:
-```markdown
-{content}
-```
-
-5項目の平均を total として、数値のみ回答してください（例: 0.75）""",
-}
+from scorer_prompts import DEFAULT_AXIS_WEIGHTS as AXIS_WEIGHTS, get_axis_prompts
 
 FALLBACK_SCORE = 0.5
 
 
-def _score_single_axis(axis: str, content: str) -> float:
-    """単一軸のスコアを claude -p で取得する。失敗時は FALLBACK_SCORE を返す。"""
-    prompt = _AXIS_PROMPTS[axis].format(content=content)
-    try:
-        result = subprocess.run(
-            ["claude", "-p", "--output-format", "text"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            match = re.search(r"(0\.\d+|1\.0|0|1)", result.stdout.strip())
-            if match:
-                return float(match.group(1))
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+def _score_single_axis(axis: str, content: str, max_retries: int = 2) -> float:
+    """単一軸のスコアを claude -p で取得する。失敗時は max_retries 回リトライ。"""
+    prompt = get_axis_prompts()[axis].format(content=content)
+    for _ in range(max_retries + 1):
+        try:
+            result = subprocess.run(
+                ["claude", "-p", "--output-format", "text"],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0:
+                match = re.search(r"(0\.\d+|1\.0|0|1)", result.stdout.strip())
+                if match:
+                    return float(match.group(1))
+        except subprocess.TimeoutExpired:
+            continue
+        except FileNotFoundError:
+            break
     return FALLBACK_SCORE
 
 
@@ -253,6 +259,9 @@ def _parallel_score(content: str) -> Dict[str, float]:
         axis_scores.get(axis, FALLBACK_SCORE) * weight
         for axis, weight in AXIS_WEIGHTS.items()
     )
+    import math as _math
+    if not _math.isfinite(integrated):
+        integrated = FALLBACK_SCORE
     axis_scores["integrated"] = round(integrated, 4)
     return axis_scores
 
@@ -365,14 +374,42 @@ def run_loop(
     print(f"出力先: {out_dir}")
     print()
 
+    # H_best 追跡: 常に最良ハーネスから進化する
+    global_best_score: float = -float("inf")
+    global_best_content: Optional[str] = None
+    global_best_axes: Dict[str, float] = {}
+    try:
+        global_best_content = Path(target_path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        sys.stderr.write(f"Error: target_path {target_path} not found. Cannot initialize H_best. Aborting.\n")
+        return []
+
     for loop_num in range(loops):
         print(f"--- ループ {loop_num + 1}/{loops} ---")
 
-        # Step 1: ベースラインスコア
+        # H_best をディスクに復元（2ループ目以降、optimizer が H_best から生成するため）
+        if loop_num > 0 and global_best_content is not None and not dry_run:
+            Path(target_path).write_text(global_best_content, encoding="utf-8")
+
+        # Step 1: ベースラインスコア（H_best スコアを再利用し採点ノイズを排除）
         print("Step 1: ベースラインスコア取得...")
-        baseline = get_baseline_score(target_path, dry_run=dry_run)
-        baseline_score = baseline.get("integrated_score", 0.5)
-        print(f"  ベースライン: {baseline_score}")
+        if global_best_score > -float("inf"):
+            baseline_score = global_best_score
+            baseline = {"integrated_score": baseline_score, "summary": "H_best スコアを使用（再採点なし）"}
+            print(f"  ベースライン (H_best): {baseline_score}")
+        else:
+            baseline = get_baseline_score(target_path, dry_run=dry_run)
+            baseline_score = baseline.get("integrated_score", FALLBACK_SCORE)
+            global_best_score = baseline_score
+            # 軸別スコアを保持（Pareto 判定用）
+            scores_obj = baseline.get("scores") or {}
+            global_best_axes = {
+                "technical": scores_obj.get("technical", {}).get("total", baseline_score),
+                "domain": scores_obj.get("domain_quality", {}).get("total", baseline_score),
+                "structure": scores_obj.get("structure", {}).get("total", baseline_score),
+                "integrated": baseline_score,
+            }
+            print(f"  ベースライン: {baseline_score}")
 
         # ベースライン保存
         baseline_file = run_dir / f"loop_{loop_num}_baseline.json"
@@ -399,14 +436,16 @@ def run_loop(
             last_gen = history[-1]
             for ind in last_gen.get("individuals", []):
                 content = ind.get("content", "")
-                score = score_variant(content, target_path, dry_run=dry_run)
+                axes = _score_variant_axes(content, target_path, dry_run=dry_run)
+                score = axes.get("integrated", FALLBACK_SCORE)
                 variants.append({
                     "id": ind.get("id", "unknown"),
                     "score": score,
+                    "axes": axes,
                     "content": content,
                     "content_length": len(content),
                 })
-                print(f"  {ind.get('id', '?')}: スコア {score}")
+                print(f"  {ind.get('id', '?')}: スコア {score} (tech={axes.get('technical', '-'):.2f} dom={axes.get('domain', '-'):.2f} struct={axes.get('structure', '-'):.2f})")
 
         if dry_run and variants:
             print("  注意: dry-run モードのスコアは実際の品質を反映しません", file=sys.stderr)
@@ -415,19 +454,38 @@ def run_loop(
             print("  バリエーションが見つかりません。スキップ。")
             continue
 
-        # 最良バリエーション選択
+        # 最良バリエーション選択（Pareto front を考慮）
+        # 1. integrated 改善は IMPROVED 候補
+        # 2. ただし Pareto 優越（軸別劣化なし）でなければ STABLE 扱いに格下げ
         best = max(variants, key=lambda v: v["score"])
+        improvement = best["score"] - global_best_score
+        verdict = _compute_verdict(improvement)
+        # Pareto チェック: IMPROVED でも軸別劣化があれば STABLE に格下げ
+        pareto_ok = True
+        if verdict == "IMPROVED" and global_best_axes:
+            best_axes = best.get("axes", {})
+            if best_axes and not _dominates(best_axes, global_best_axes):
+                pareto_ok = False
+                verdict = "STABLE"
+                print("  ⚠️  Pareto 非優越: 軸別劣化があるため STABLE に格下げ")
         print(f"\n  最良: {best['id']} (スコア {best['score']})")
-        print(f"  ベースライン: {baseline_score}")
-        improvement = best["score"] - baseline_score
-        print(f"  改善幅: {improvement:+.2f}")
+        print(f"  ベースライン (H_best): {global_best_score}")
+        print(f"  改善幅: {improvement:+.2f}  [{verdict}]")
         if dry_run:
             print("  注意: dry-run モードのスコアは実際の品質を反映しません", file=sys.stderr)
 
-        # Step 4: 人間確認
+        # Step 4: 人間確認（IMPROVED のみ適用候補）
         approved = False
-        if improvement <= 0:
-            print("\n  スコアが改善されていません。スキップ。")
+        if verdict != "IMPROVED":
+            print(f"\n  {verdict}: スコアがノイズ閾値（±{SCORE_EPSILON}）内または悪化。スキップ。")
+            # REGRESSED 時は次回ループで同方向の variant を抑制するため pitfalls に転記
+            if verdict == "REGRESSED" and not dry_run and _record_pitfall is not None:
+                _record_pitfall(
+                    target_path,
+                    "regression",
+                    f"regressed variant {best['id']} (improvement={improvement:+.2f})",
+                    best["score"],
+                )
         elif auto:
             print("\n  [自動承認] バリエーションを適用します。")
             approved = True
@@ -446,14 +504,14 @@ def run_loop(
         else:
             print("\n  [dry-run] 適用スキップ。")
 
-        # Step 5: 適用と記録
+        # Step 5: 適用と H_best 更新
         if approved and not dry_run:
             # 行数制限チェック
             if not _check_line_limit(target_path, best["content"]):
                 approved = False
                 print("  行数制限超過のため適用を拒否しました。")
             else:
-                # バックアップ
+                # バックアップ（初回のみ）
                 backup_path = Path(target_path).with_suffix(".md.pre-rl-backup")
                 if not backup_path.exists():
                     shutil.copy2(target_path, backup_path)
@@ -461,6 +519,11 @@ def run_loop(
                 # 適用
                 Path(target_path).write_text(best["content"], encoding="utf-8")
                 print(f"  適用完了: {target_path}")
+
+                # H_best を更新（軸別スコアも保持）
+                global_best_content = best["content"]
+                global_best_score = best["score"]
+                global_best_axes = best.get("axes", global_best_axes)
 
         # Step 5.5: 自己進化パターン組み込み (D4: 最適化後)
         evolve_result: Optional[Dict[str, Any]] = None
@@ -474,6 +537,10 @@ def run_loop(
             "baseline_score": baseline_score,
             "best_score": best["score"],
             "improvement": improvement,
+            "verdict": verdict,
+            "global_best_score": global_best_score,
+            "best_axes": best.get("axes", {}),
+            "pareto_dominates": pareto_ok,
             "approved": approved,
             "dry_run": dry_run,
             "timestamp": datetime.now().isoformat(),
@@ -497,8 +564,9 @@ def run_loop(
         print(
             f"  ループ {r['loop'] + 1}: "
             f"{r['baseline_score']:.2f} → {r['best_score']:.2f} "
-            f"({r['improvement']:+.2f}) [{status}]"
+            f"({r['improvement']:+.2f}) [{r.get('verdict', '?')}] [{status}]"
         )
+    print(f"  最終 H_best スコア: {global_best_score:.2f}")
 
     # 結果保存
     result_file = run_dir / "result.json"
