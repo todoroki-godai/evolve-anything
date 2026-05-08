@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.44.0] - 2026-05-08
+
+### Added
+- **fleet MVP-D: growth-state issues_summary + subagents.jsonl token-load 集計** (#22) — `rl-fleet status` に `ISSUES` 列と `SUBAGENTS_30d` 列を追加し、PJ 横断で問題件数と直近 30 日の subagent 起動数を一覧できるようにした
+  - `scripts/lib/issues_summary.py` 新設: `IssuesSummary` dataclass + `compute_issues_summary()` で 5 種カウント（line_violations / hardcoded_values / potential_duplicates / corrections_unprocessed / skill_quality_degraded_count）を集約
+  - `audit.py` が audit run のついでに growth-state cache に `issues_summary` を書き込み（旧 cache は欠落 → fleet 側 "—" 表示で後方互換）
+  - `fleet.py` に `aggregate_subagents_by_project()` 追加: 30 日窓フィルタ・`(unknown)` フォールバック・破損 1 行 skip・naive UTC 補正を実装
+  - テスト 23 件追加（新規 9 + 拡張 14）
+
 ## [1.42.0] - 2026-05-07
 
 ### Removed

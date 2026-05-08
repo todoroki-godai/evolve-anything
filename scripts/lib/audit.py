@@ -1742,7 +1742,22 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
     if growth:
         # skip_rescore=True のとき LLM eval（constitutional）をスキップして
         # fleet の 10s timeout 内で完了させる (#86)
-        growth_report_lines = _build_growth_report(proj, skip_llm=skip_rescore)
+        # issues_summary は audit run の検出結果から組み立てて growth-state に
+        # 書き込む（fleet status の ISSUES 列で読まれる、#22）
+        from issues_summary import compute_issues_summary
+        from telemetry_query import query_corrections
+        _project_name_for_issues = proj.resolve().name
+        _corrections = query_corrections(project=_project_name_for_issues)
+        _issues = compute_issues_summary(
+            violations=violations,
+            hardcoded_values=hardcoded_values,
+            duplicates=duplicates,
+            corrections=_corrections,
+            quality_baselines=quality_baselines,
+        )
+        growth_report_lines = _build_growth_report(
+            proj, skip_llm=skip_rescore, issues_summary=_issues,
+        )
 
     return generate_report(
         artifacts, violations, usage, duplicates, advisories,
@@ -1761,7 +1776,7 @@ def run_audit(project_dir: Optional[str] = None, skip_rescore: bool = False, coh
     )
 
 
-def _build_growth_report(proj: Path, *, skip_llm: bool = False) -> List[str]:
+def _build_growth_report(proj: Path, *, skip_llm: bool = False, issues_summary: Optional[Any] = None) -> List[str]:
     """NFD Growth Report セクションを生成する。
 
     Args:
@@ -1769,6 +1784,9 @@ def _build_growth_report(proj: Path, *, skip_llm: bool = False) -> List[str]:
         skip_llm: True の場合、compute_environment_fitness に skip_llm=True を伝播し、
             LLM（constitutional）軸をスキップして軽量軸のみで env_score を算出する。
             rl-fleet status の 10s timeout 対応 (#86)。
+        issues_summary: IssuesSummary instance — growth-state cache の `issues_summary`
+            キーに dict として書き込む。fleet status (#22) が読み取る。None なら
+            未書き込み（旧 cache 互換）。
     """
     lines = ["## 🌱 Growth Report (NFD)", ""]
     project_name = proj.resolve().name
@@ -1811,15 +1829,18 @@ def _build_growth_report(proj: Path, *, skip_llm: bool = False) -> List[str]:
         # Level 計算
         level_info = compute_level(env_score)
 
-        # キャッシュ更新（env_score + level を含む）
-        update_cache(project_name, phase, progress, {
+        # キャッシュ更新（env_score + level + issues_summary を含む）
+        _cache_extra = {
             "sessions_count": sessions_count,
             "crystallizations_count": crystallized,
             "env_score": round(env_score, 4),
             "level": level_info.level,
             "title_en": level_info.title_en,
             "title_ja": level_info.title_ja,
-        })
+        }
+        if issues_summary is not None and hasattr(issues_summary, "to_dict"):
+            _cache_extra["issues_summary"] = issues_summary.to_dict()
+        update_cache(project_name, phase, progress, _cache_extra)
 
         progress_pct = int(progress * 100)
         bar_filled = int(progress * 20)

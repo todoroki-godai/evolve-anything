@@ -14,7 +14,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 STATUS_ENABLED = "ENABLED"
@@ -59,6 +59,35 @@ class AuditResult:
     growth_level: int | None = None
     latest_audit: datetime | None = None
     message: str = ""
+    issues_summary: "IssuesSummary | None" = None
+
+
+@dataclass
+class IssuesSummary:
+    """fleet status 表示用の issues count（growth-state cache 由来、#22）。
+
+    cache に issues_summary キーが無い (旧 cache) 場合は None で扱い、表示は "—"。
+
+    Note: `scripts/lib/issues_summary.IssuesSummary` (audit 側、書込み用) とは
+    意図的に別クラス。両者は growth-state cache JSON のフィールド名を契約として
+    繋がる（同名 5 フィールドを共有）。display 側は read-only で `total()` のみ
+    持ち、compute ロジックは audit 側に寄せている。
+    """
+
+    line_violations: int = 0
+    hardcoded_values: int = 0
+    potential_duplicates: int = 0
+    corrections_unprocessed: int = 0
+    skill_quality_degraded_count: int = 0
+
+    def total(self) -> int:
+        return (
+            self.line_violations
+            + self.hardcoded_values
+            + self.potential_duplicates
+            + self.corrections_unprocessed
+            + self.skill_quality_degraded_count
+        )
 
 
 @dataclass
@@ -73,6 +102,8 @@ class FleetRow:
     latest_audit: datetime | None = None
     audit_status: str = AUDIT_OK
     message: str = ""
+    issues_summary: IssuesSummary | None = None  # None = 旧 cache (欠落) → 表示 "—"
+    subagents_30d: int = 0  # subagents.jsonl 30日窓のカウント、#22
 
 
 def _pj_safe_name(pj_path: Path) -> str:
@@ -264,12 +295,34 @@ def run_audit_subprocess(
     phase = state.get("phase")
     growth_level = _safe_compute_level(env_score)
     latest_audit = _parse_iso(state.get("updated_at"))
+    issues = _parse_issues_summary(state.get("issues_summary"))
     return AuditResult(
         status=AUDIT_OK,
         env_score=env_score if isinstance(env_score, (int, float)) else None,
         phase=phase if isinstance(phase, str) else None,
         growth_level=growth_level,
         latest_audit=latest_audit,
+        issues_summary=issues,
+    )
+
+
+def _parse_issues_summary(raw: object) -> IssuesSummary | None:
+    """growth-state cache の issues_summary dict を IssuesSummary に変換。
+
+    None / 欠落 / 非 dict はすべて None を返す（旧 cache 互換、UI 側で "—" 表示）。
+    未知キーは無視、欠損キーは 0、非数値も 0 で耐える。
+    """
+    if not isinstance(raw, dict):
+        return None
+    def _i(k: str) -> int:
+        v = raw.get(k)
+        return int(v) if isinstance(v, (int, float)) else 0
+    return IssuesSummary(
+        line_violations=_i("line_violations"),
+        hardcoded_values=_i("hardcoded_values"),
+        potential_duplicates=_i("potential_duplicates"),
+        corrections_unprocessed=_i("corrections_unprocessed"),
+        skill_quality_degraded_count=_i("skill_quality_degraded_count"),
     )
 
 
@@ -305,7 +358,7 @@ def _safe_compute_level(env_score: object) -> int | None:
     return compute_level(float(env_score)).level
 
 
-_TABLE_HEADERS = ["PJ", "STATUS", "SCORE", "LV", "PHASE", "LAST_AUDIT", "AUDIT"]
+_TABLE_HEADERS = ["PJ", "STATUS", "SCORE", "LV", "PHASE", "LAST_AUDIT", "AUDIT", "ISSUES", "SUBAGENTS_30d"]
 
 
 def _format_relative(dt: datetime, now: datetime) -> str:
@@ -358,6 +411,21 @@ def _format_cell_audit(row: FleetRow) -> str:
     return row.audit_status
 
 
+def _format_cell_issues(row: FleetRow) -> str:
+    """ISSUES 列。旧 cache (issues_summary 欠落) → "—"、ある場合は合計を表示。
+
+    内訳が必要なときは audit レポート / growth-state cache JSON を見るので
+    ここでは 1 数字に集約して列幅を抑える。
+    """
+    if row.issues_summary is None:
+        return "—"
+    return str(row.issues_summary.total())
+
+
+def _format_cell_subagents(row: FleetRow) -> str:
+    return str(row.subagents_30d)
+
+
 def format_status_table(rows: list[FleetRow], now: datetime | None = None) -> str:
     """fleet status 行を整列済みテキストテーブルに整形する。
 
@@ -375,6 +443,8 @@ def format_status_table(rows: list[FleetRow], now: datetime | None = None) -> st
             _format_cell_phase(row),
             _format_cell_last_audit(row, now),
             _format_cell_audit(row),
+            _format_cell_issues(row),
+            _format_cell_subagents(row),
         ])
     widths = [max(len(c) for c in col) for col in zip(*cells)]
     lines = []
@@ -391,10 +461,12 @@ def _collect_single(
     auto_memory_root: Path,
     data_dir: Path | None,
     timeout: float,
+    subagent_counts: dict[str, int] | None = None,
 ) -> FleetRow:
     status = classify_project(pj_path, settings_path, auto_memory_root)
+    subagents = (subagent_counts or {}).get(pj_path.name, 0)
     if status != STATUS_ENABLED:
-        return FleetRow(pj_name=pj_path.name, status=status)
+        return FleetRow(pj_name=pj_path.name, status=status, subagents_30d=subagents)
     audit = run_audit_subprocess(pj_path, timeout=timeout, data_dir=data_dir)
     return FleetRow(
         pj_name=pj_path.name,
@@ -405,6 +477,8 @@ def _collect_single(
         latest_audit=audit.latest_audit,
         audit_status=audit.status,
         message=audit.message,
+        issues_summary=audit.issues_summary,
+        subagents_30d=subagents,
     )
 
 
@@ -420,6 +494,67 @@ def _find_duplicate_basenames(projects: list[Path]) -> set[str]:
     for pj in projects:
         seen[pj.name] = seen.get(pj.name, 0) + 1
     return {name for name, count in seen.items() if count > 1}
+
+
+_UNKNOWN_PROJECT_LABEL = "(unknown)"
+_SUBAGENTS_DEFAULT_WINDOW_DAYS = 30
+
+
+def aggregate_subagents_by_project(
+    subagents_path: Path | None = None,
+    *,
+    window_days: int = _SUBAGENTS_DEFAULT_WINDOW_DAYS,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """subagents.jsonl を on-the-fly で project 別に group-by 集計する (#22)。
+
+    - timestamp が `window_days` 以内のレコードのみカウント
+    - 空 / 欠損 `project` は `(unknown)` に分類
+    - 行単位 try/except で破損 1 行が全件落ちないようにする
+    - timestamp 不正 / 欠損行も skip（カウント対象外）
+
+    Returns:
+        {project_name: count}。キーに `(unknown)` も含まれ得る。
+    """
+    if subagents_path is None:
+        subagents_path = _current_data_dir() / "subagents.jsonl"
+    if not subagents_path.is_file():
+        return {}
+
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=window_days)
+    counts: dict[str, int] = {}
+    try:
+        text = subagents_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            rec = json.loads(s)
+        except (json.JSONDecodeError, ValueError):
+            continue  # 破損 1 行を skip
+        if not isinstance(rec, dict):
+            continue
+        ts_raw = rec.get("timestamp")
+        if not isinstance(ts_raw, str):
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_raw)
+        except ValueError:
+            continue
+        # naive な timestamp は UTC とみなす（subagent_observe.py は aware で書き込む）
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts < cutoff:
+            continue
+        project = rec.get("project")
+        if not isinstance(project, str) or not project:
+            project = _UNKNOWN_PROJECT_LABEL
+        counts[project] = counts.get(project, 0) + 1
+    return counts
 
 
 def collect_fleet_status(
@@ -451,6 +586,8 @@ def collect_fleet_status(
     if not projects:
         return []
     dup_basenames = _find_duplicate_basenames(projects)
+    # subagents.jsonl を 1 回だけ読んで PJ 別に集計（fleet status 全体の追加コストは O(1)）
+    subagent_counts = aggregate_subagents_by_project()
 
     def _work(pj: Path) -> FleetRow:
         if pj.name in dup_basenames:
@@ -460,6 +597,7 @@ def collect_fleet_status(
                 status=status,
                 audit_status=AUDIT_ERROR,
                 message="duplicate basename (cache would collide)",
+                subagents_30d=subagent_counts.get(pj.name, 0),
             )
         return _collect_single(
             pj,
@@ -467,6 +605,7 @@ def collect_fleet_status(
             auto_memory_root=auto_memory_root,
             data_dir=data_dir,
             timeout=timeout,
+            subagent_counts=subagent_counts,
         )
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:

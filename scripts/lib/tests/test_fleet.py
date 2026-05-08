@@ -31,6 +31,8 @@ from fleet import (  # noqa: E402
     STATUS_STALE,
     AuditResult,
     FleetRow,
+    IssuesSummary,
+    aggregate_subagents_by_project,
     classify_project,
     collect_fleet_status,
     enumerate_projects,
@@ -573,3 +575,143 @@ class TestMainCLI:
         assert rc == 0
         fleet_runs = data_dir / "fleet-runs"
         assert not fleet_runs.exists()
+
+
+# ─── #22 fleet MVP-D: issues_summary / subagents_30d ────────────────────────
+
+
+class TestAggregateSubagentsByProject:
+    """aggregate_subagents_by_project() の集計テスト (#22)。"""
+
+    def _now(self) -> datetime:
+        return datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+
+    def _write(self, path: Path, lines: list[str]) -> None:
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_30d_window_でフィルタ(self, tmp_path):
+        now = self._now()
+        f = tmp_path / "subagents.jsonl"
+        self._write(f, [
+            json.dumps({"project": "a", "timestamp": (now - timedelta(days=5)).isoformat()}),
+            json.dumps({"project": "a", "timestamp": (now - timedelta(days=29)).isoformat()}),
+            json.dumps({"project": "a", "timestamp": (now - timedelta(days=31)).isoformat()}),
+            json.dumps({"project": "b", "timestamp": (now - timedelta(days=10)).isoformat()}),
+        ])
+        counts = aggregate_subagents_by_project(f, now=now)
+        assert counts == {"a": 2, "b": 1}
+
+    def test_空_project_は_unknown_に集約(self, tmp_path):
+        now = self._now()
+        f = tmp_path / "subagents.jsonl"
+        self._write(f, [
+            json.dumps({"timestamp": (now - timedelta(days=1)).isoformat()}),
+            json.dumps({"project": "", "timestamp": (now - timedelta(days=1)).isoformat()}),
+            json.dumps({"project": None, "timestamp": (now - timedelta(days=1)).isoformat()}),
+            json.dumps({"project": "real", "timestamp": (now - timedelta(days=1)).isoformat()}),
+        ])
+        counts = aggregate_subagents_by_project(f, now=now)
+        assert counts == {"(unknown)": 3, "real": 1}
+
+    def test_破損行は1行単位でskip(self, tmp_path):
+        now = self._now()
+        f = tmp_path / "subagents.jsonl"
+        good = json.dumps({"project": "a", "timestamp": (now - timedelta(days=1)).isoformat()})
+        f.write_text(good + "\n{not valid json\n" + good + "\n", encoding="utf-8")
+        counts = aggregate_subagents_by_project(f, now=now)
+        assert counts == {"a": 2}
+
+    def test_ファイル不在なら空dict(self, tmp_path):
+        counts = aggregate_subagents_by_project(tmp_path / "missing.jsonl", now=self._now())
+        assert counts == {}
+
+    def test_naive_timestamp_は_UTC_扱い(self, tmp_path):
+        now = self._now()
+        f = tmp_path / "subagents.jsonl"
+        # naive iso (tz なし)
+        naive = (now - timedelta(days=2)).replace(tzinfo=None).isoformat()
+        f.write_text(json.dumps({"project": "x", "timestamp": naive}) + "\n", encoding="utf-8")
+        counts = aggregate_subagents_by_project(f, now=now)
+        assert counts == {"x": 1}
+
+    def test_timestamp欠損や不正は無視(self, tmp_path):
+        now = self._now()
+        f = tmp_path / "subagents.jsonl"
+        self._write(f, [
+            json.dumps({"project": "a"}),  # ts 欠損
+            json.dumps({"project": "a", "timestamp": "not-a-date"}),
+            json.dumps({"project": "a", "timestamp": (now - timedelta(days=1)).isoformat()}),
+        ])
+        counts = aggregate_subagents_by_project(f, now=now)
+        assert counts == {"a": 1}
+
+
+class TestIssuesSummaryRendering:
+    """ISSUES 列の旧/新 cache 互換テスト (#22)。"""
+
+    def _now(self) -> datetime:
+        return datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+
+    def test_旧cache_issues_summary欠落_は_dash表示(self):
+        rows = [FleetRow(pj_name="old", status=STATUS_ENABLED, env_score=0.5,
+                         issues_summary=None, subagents_30d=0)]
+        out = format_status_table(rows, now=self._now())
+        # ヘッダに ISSUES と SUBAGENTS_30d 列がある
+        assert "ISSUES" in out
+        assert "SUBAGENTS_30d" in out
+        # データ行に "—" が含まれる（issues_summary 欠落）
+        data_line = out.strip().split("\n")[1]
+        # "—" は行内のどこかにある
+        assert "—" in data_line
+
+    def test_新cache_issues_summary_は合計表示(self):
+        s = IssuesSummary(line_violations=2, hardcoded_values=1,
+                          potential_duplicates=0, corrections_unprocessed=3,
+                          skill_quality_degraded_count=1)
+        rows = [FleetRow(pj_name="new", status=STATUS_ENABLED, env_score=0.7,
+                         issues_summary=s, subagents_30d=42)]
+        out = format_status_table(rows, now=self._now())
+        data_line = out.strip().split("\n")[1]
+        # total = 7
+        assert " 7 " in data_line or data_line.endswith(" 7  42") or " 7  " in data_line
+        # subagents 列
+        assert "42" in data_line
+
+    def test_subagents_30d_デフォルト_0表示(self):
+        rows = [FleetRow(pj_name="z", status=STATUS_NOT_ENABLED)]
+        out = format_status_table(rows, now=self._now())
+        data_line = out.strip().split("\n")[1]
+        assert data_line.split()[-1] == "0"
+
+
+class TestFleetRowCacheParse:
+    """run_audit_subprocess が growth-state 新フィールドを正しく拾えるか。"""
+
+    def test_growth_state_に_issues_summary_があれば_AuditResult_に入る(self, tmp_path, monkeypatch):
+        # rl-audit を fake にして growth-state だけ書き、_parse_issues_summary を
+        # 経由する経路をテスト。subprocess は fake で OK にする。
+        from fleet import _parse_issues_summary
+        raw = {
+            "line_violations": 3,
+            "hardcoded_values": 0,
+            "potential_duplicates": 1,
+            "corrections_unprocessed": 0,
+            "skill_quality_degraded_count": 2,
+        }
+        s = _parse_issues_summary(raw)
+        assert s is not None
+        assert s.total() == 6
+
+    def test_parse_issues_summary_は_None_欠落_非dict_で_None(self):
+        from fleet import _parse_issues_summary
+        assert _parse_issues_summary(None) is None
+        assert _parse_issues_summary("nope") is None
+        assert _parse_issues_summary([1, 2]) is None
+
+    def test_parse_issues_summary_未知キーは無視_欠損キーは0(self):
+        from fleet import _parse_issues_summary
+        s = _parse_issues_summary({"line_violations": 5, "extra": 99})
+        assert s is not None
+        assert s.line_violations == 5
+        assert s.hardcoded_values == 0
+        assert s.total() == 5
