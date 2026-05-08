@@ -30,12 +30,18 @@ from skill_origin import (
     invalidate_cache as _so_invalidate_cache,
 )
 
-# 行数制限
+# 行数制限 — line_limit.py を Single Source of Truth として参照
+from line_limit import (
+    MAX_PROJECT_RULE_LINES,
+    MAX_RULE_LINES,
+    MAX_SKILL_LINES,
+)
+
 LIMITS = {
     "CLAUDE.md": 200,  # warning のみ（violation としては扱わない）
-    "rules": 3,
-    "project_rules": 5,
-    "SKILL.md": 500,
+    "rules": MAX_RULE_LINES,
+    "project_rules": MAX_PROJECT_RULE_LINES,
+    "SKILL.md": MAX_SKILL_LINES,
     "MEMORY.md": 200,
     "memory": 120,
 }
@@ -229,6 +235,10 @@ def check_line_limits(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
             violations.append({"file": str(path), "lines": lines, "limit": limit})
 
     for path in artifacts.get("skills", []):
+        # custom (プロジェクトローカル) のみ行数制限対象。plugin / global は
+        # ダウンロード品なので除外する（ユーザーが管理するファイルではない）。
+        if classify_artifact_origin(path) != "custom":
+            continue
         lines = path.read_text(encoding="utf-8").count("\n") + 1
         if lines > LIMITS["SKILL.md"]:
             violations.append({"file": str(path), "lines": lines, "limit": LIMITS["SKILL.md"]})

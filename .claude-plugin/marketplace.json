@@ -8,7 +8,7 @@
       "name": "rl-anything",
       "source": "./",
       "description": "Automatic skill/rule optimization using direct LLM patches with fitness evaluation and human approval workflow",
-      "version": "1.42.0",
+      "version": "1.43.0",
       "author": {
         "name": "todoroki-godai"
       },
@@ -28,6 +28,12 @@
           "title": "Slow Threshold (ms)",
           "type": "number",
           "description": "Bash commands slower than this (ms) are logged to tool_durations.jsonl (default: 1000)",
+          "sensitive": false
+        },
+        "subagent_warning_threshold": {
+          "title": "Subagent Warning Threshold",
+          "type": "number",
+          "description": "Warn via systemMessage when session subagent count reaches this value (default: 5)",
           "sensitive": false
         }
       }

@@ -47,6 +47,8 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # tool_duration hook: Bash コマンドをスロー判定する閾値 (ミリ秒)。
     # 短い値（例: 500）にすると検出数が増えるが JSONL が肥大化する。
     "slow_threshold_ms": 1000,
+    # subagent_observe hook: セッション内 subagent 数がこの値に達したら警告。
+    "subagent_warning_threshold": 5,
 }
 
 

@@ -95,3 +95,16 @@ class TestLoadUserConfig:
         with mock.patch.dict(os.environ, env, clear=False):
             config = common.load_user_config()
         assert config["cleanup_tmp_prefixes"] == "rl-anything-,claude-sandbox-,gstack-scratch-"
+
+    def test_subagent_warning_threshold_default(self):
+        """subagent_warning_threshold のデフォルトは 5。"""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = common.load_user_config()
+        assert config["subagent_warning_threshold"] == 5
+
+    def test_subagent_warning_threshold_override(self):
+        """subagent_warning_threshold は環境変数で上書き可能。"""
+        env = {"CLAUDE_PLUGIN_OPTION_subagent_warning_threshold": "10"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            config = common.load_user_config()
+        assert config["subagent_warning_threshold"] == 10

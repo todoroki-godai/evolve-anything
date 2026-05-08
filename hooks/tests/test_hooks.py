@@ -820,6 +820,86 @@ class TestSubagentObserve:
         assert record["parent_skill"] is None
         assert record["workflow_id"] is None
 
+    def test_warning_emitted_when_threshold_exceeded(self, patch_data_dir, tmp_path, capsys):
+        """セッション内 subagent 数が閾値を超えたら systemMessage を stdout に出力する。"""
+        session_id = "sess-warn-001"
+        # 既存の subagents.jsonl に同一 session の記録を threshold-1 件追加
+        subagents_file = patch_data_dir / "subagents.jsonl"
+        for i in range(4):
+            subagents_file.write_text(
+                subagents_file.read_text() if subagents_file.exists() else ""
+            )
+            common.append_jsonl(
+                patch_data_dir / "subagents.jsonl",
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": "2026-01-01T00:00:00+00:00"},
+            )
+
+        # 5件目（閾値 = デフォルト 5）を追加 → 警告が出る
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            event = {
+                "agent_type": "Explore",
+                "agent_id": "agent-warn-01",
+                "last_assistant_message": "done",
+                "agent_transcript_path": "/tmp/t.jsonl",
+                "session_id": session_id,
+            }
+            subagent_observe.handle_subagent_stop(event)
+
+        out = capsys.readouterr().out
+        output = json.loads(out)
+        assert "systemMessage" in output
+        assert "5" in output["systemMessage"]
+
+    def test_no_warning_below_threshold(self, patch_data_dir, tmp_path, capsys):
+        """セッション内 subagent 数が閾値未満なら stdout は空。"""
+        session_id = "sess-no-warn-001"
+        # 4件追加（閾値 5 未満）
+        for i in range(3):
+            common.append_jsonl(
+                patch_data_dir / "subagents.jsonl",
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": "2026-01-01T00:00:00+00:00"},
+            )
+
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            event = {
+                "agent_type": "Explore",
+                "agent_id": "agent-no-warn-01",
+                "last_assistant_message": "done",
+                "agent_transcript_path": "/tmp/t.jsonl",
+                "session_id": session_id,
+            }
+            subagent_observe.handle_subagent_stop(event)
+
+        out = capsys.readouterr().out
+        assert out.strip() == ""
+
+    def test_warning_threshold_configurable(self, patch_data_dir, tmp_path, capsys):
+        """userConfig で閾値を変更できる。"""
+        session_id = "sess-warn-custom-001"
+        # 2件追加（カスタム閾値 = 3 に設定）
+        for i in range(2):
+            common.append_jsonl(
+                patch_data_dir / "subagents.jsonl",
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": "2026-01-01T00:00:00+00:00"},
+            )
+
+        with mock.patch.dict(
+            os.environ,
+            {"TMPDIR": str(tmp_path), "CLAUDE_PLUGIN_OPTION_subagent_warning_threshold": "3"},
+        ):
+            event = {
+                "agent_type": "Explore",
+                "agent_id": "agent-cust-01",
+                "last_assistant_message": "done",
+                "agent_transcript_path": "/tmp/t.jsonl",
+                "session_id": session_id,
+            }
+            subagent_observe.handle_subagent_stop(event)
+
+        out = capsys.readouterr().out
+        output = json.loads(out)
+        assert "systemMessage" in output
+
 
 class TestSessionSummary:
     """session_summary.py のテスト。"""

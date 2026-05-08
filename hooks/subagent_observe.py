@@ -17,6 +17,24 @@ import common
 MAX_MESSAGE_LENGTH = 500
 
 
+def _count_session_subagents(session_id: str) -> int:
+    """subagents.jsonl から同一セッションの記録数を返す。"""
+    subagents_file = common.DATA_DIR / "subagents.jsonl"
+    if not subagents_file.exists():
+        return 0
+    count = 0
+    for line in subagents_file.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            if json.loads(line).get("session_id") == session_id:
+                count += 1
+        except json.JSONDecodeError:
+            continue
+    return count
+
+
 def handle_subagent_stop(event: dict) -> None:
     """SubagentStop イベントを処理する。"""
     common.ensure_data_dir()
@@ -47,6 +65,19 @@ def handle_subagent_stop(event: dict) -> None:
     if wt:
         record["worktree"] = wt
     common.append_jsonl(common.DATA_DIR / "subagents.jsonl", record)
+
+    cfg = common.load_user_config()
+    threshold = int(cfg.get("subagent_warning_threshold", 5))
+    count = _count_session_subagents(session_id)
+    if count >= threshold:
+        warning = {
+            "systemMessage": (
+                f"[rl-anything] このセッションで {count} 個の subagent が生成されました。"
+                " 意図しないループが発生していないか確認してください。"
+                f"（閾値: {threshold}）"
+            )
+        }
+        print(json.dumps(warning, ensure_ascii=False))
 
 
 def main() -> None:

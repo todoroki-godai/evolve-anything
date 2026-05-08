@@ -143,6 +143,38 @@ def test_no_hardcoded_value(project_dir):
     assert len(hv_issues) == 0
 
 
+def test_plugin_skill_excluded_from_line_limit(project_dir, tmp_path, monkeypatch):
+    """plugin / global 由来スキルは行数超過でも violation に含まれない（custom のみ対象）。"""
+    import audit as audit_mod
+
+    # plugin 由来: plugins cache 配下
+    plugins_cache = tmp_path / "plugins" / "cache"
+    plugin_skill_md = plugins_cache / "gstack" / "skills" / "browse" / "SKILL.md"
+    plugin_skill_md.parent.mkdir(parents=True)
+    plugin_skill_md.write_text("\n".join(["line"] * 501))
+    monkeypatch.setenv("CLAUDE_PLUGINS_DIR", str(plugins_cache))
+
+    # global 由来: classify_artifact_origin が "global" を返すよう、
+    # _plugin_skill_map_cache のインライン分岐に乗せる。
+    # `~/.claude/skills/` 直下相当の path で "global" 判定をシミュレート。
+    global_skill_md = Path.home() / ".claude" / "skills" / "__test_fake_global_skill__" / "SKILL.md"
+
+    artifacts = _find_artifacts_local_only(project_dir)
+    artifacts["skills"].extend([plugin_skill_md])
+
+    orig_cache = audit_mod._plugin_skill_map_cache
+    audit_mod._plugin_skill_map_cache = {"browse": "gstack"}
+    try:
+        from audit import check_line_limits, classify_artifact_origin
+        # plugin 分類確認
+        assert classify_artifact_origin(plugin_skill_md) == "plugin"
+        violations = check_line_limits(artifacts)
+    finally:
+        audit_mod._plugin_skill_map_cache = orig_cache
+
+    assert len([v for v in violations if "browse" in v.get("file", "")]) == 0
+
+
 def test_no_issues(project_dir):
     """問題がなければ空リストを返す。"""
     with patch("audit.read_auto_memory", return_value=[]), \
@@ -188,8 +220,9 @@ def test_rule_with_frontmatter_violation(project_dir):
     """frontmatter 除外でもコンテンツ超過のルールは violation になる。"""
     rules_dir = project_dir / ".claude" / "rules"
     rule_file = rules_dir / "over-rule.md"
-    # 4行 frontmatter + 6行コンテンツ = 全体10行、コンテンツ6行 > project_rules 5
-    rule_file.write_text('---\npaths:\n  - "**/*.py"\n---\nLine 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6')
+    # 4行 frontmatter + 11行コンテンツ → コンテンツ 11 > project_rules 10
+    body = "\n".join([f"Line {i}" for i in range(11)])
+    rule_file.write_text(f'---\npaths:\n  - "**/*.py"\n---\n{body}')
 
     with patch("audit.read_auto_memory", return_value=[]):
         issues = collect_issues(project_dir)
@@ -199,8 +232,8 @@ def test_rule_with_frontmatter_violation(project_dir):
         if i["type"] == "line_limit_violation" and "over-rule.md" in i["file"]
     ]
     assert len(rule_violations) >= 1
-    assert rule_violations[0]["detail"]["lines"] == 6
-    assert rule_violations[0]["detail"]["limit"] == 5
+    assert rule_violations[0]["detail"]["lines"] == 11
+    assert rule_violations[0]["detail"]["limit"] == 10
 
 
 def test_rule_with_frontmatter_and_blank_line_no_violation(project_dir):

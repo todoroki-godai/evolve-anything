@@ -3,12 +3,12 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-05-06 (skill_activation_log / cleanup Category 7)
+Last updated: 2026-05-08 (v1.43.0: detect-deferred-task hook + audit plugin exclusion)
 
 ## コンポーネント構成
 
 ```
-hooks/                  ← Observe 層（16個、LLMコストゼロ）[ADR-002]
+hooks/                  ← Observe 層（17個、LLMコストゼロ）[ADR-002]
   common.py             ← scripts/lib/rl_common の re-exporter（後方互換）[ADR-019]
   observe.py            ← usage/errors/corrections 記録
   correction_detect.py  ← corrections 自動検出
@@ -20,8 +20,8 @@ hooks/                  ← Observe 層（16個、LLMコストゼロ）[ADR-002]
   post_compact.py       ← Compaction 後の作業コンテキスト復元（systemMessage 注入）
   restore_state.py      ← セッション開始時の状態復元
   session_summary.py    ← セッションサマリー記録 + auto_trigger ゲート
-  suggest_subagent_delegation.py ← subagent 委譲提案
   workflow_context.py   ← ワークフローコンテキスト記録
+  detect-deferred-task.py ← Stop hook: AI の先送り提案を検出し subagent 即時委譲を促す（CLAUDE_PLUGIN_DATA env var 対応、v1.43.0 で repo 取り込み）
   file_changed.py       ← FileChanged hook（CC v2.1.83）CLAUDE.md/SKILL.md/rules 変更検知
   skill_triage_runner.py← Stop hook で skill-triage を非同期実行（Popen）
   tool_duration.py      ← Bash 実行時間を tool_durations.jsonl に記録（CC v2.1.119+）
@@ -36,7 +36,7 @@ bin/                    ← bareコマンド CLI（18個）[ADR-019]
   rl-prompt-compare     ← Evaluator プロンプト A/B 比較
   rl-gain               ← ROI 可視化（推定節約時間・Growth Level・Efficiency meter）
 
-skills/                 ← スキル定義（25個）
+skills/                 ← スキル定義（21個）
   evolve/               ← 3ステージ自律進化パイプライン
   discover/             ← パターン検出 + スキル候補生成
   reflect/              ← 修正フィードバック反映
@@ -46,10 +46,9 @@ skills/                 ← スキル定義（25個）
   second-opinion/       ← Claude Agent セカンドオピニオン（codex 代替）
   handover/             ← セッション引き継ぎ + Deploy State 構造化 + SPEC.md 同期 + PreCompact 自動提案
   implement/            ← 構造化実装スキル（plan → 実装 → 計画準拠チェック → テレメトリ）。Standard モードはタスク境界で認知分離（context: fresh 相当）を宣言し、前タスクの実装詳細はメモリ参照でなく Read で確認する
-  philosophy-review/    ← 会話履歴を Judge LLM で評価し category=philosophy 違反を corrections 注入 [ADR-020]
   cleanup/              ← PR マージ・デプロイ後の後片付け（branches/worktrees/tmp dirs/Issues/Test plan）を個別承認→実行 [ADR-021]
 
-scripts/lib/            ← 共通ロジック（47 モジュール）[ADR-019]
+scripts/lib/            ← 共通ロジック（48 モジュール）[ADR-019]
   plugin_root.py        ← PLUGIN_ROOT 定数（depth ハードコード廃止）
   rl_common.py          ← hooks 共通ユーティリティ（DATA_DIR, classify_prompt 等）
   audit.py              ← 環境健康診断ロジック（スキル/ルール/CLAUDE.md 診断）

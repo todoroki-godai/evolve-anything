@@ -9,6 +9,11 @@ import pytest
 HOOK_SCRIPT = Path.home() / ".claude" / "hooks" / "detect-deferred-task.py"
 
 
+# 注: 本番 deferred_tasks.jsonl への書き込み防止は repo ルートの conftest.py
+# `_isolate_plugin_data` (autouse) が CLAUDE_PLUGIN_DATA を tmp_path に強制
+# しているため、ここでの fixture 追加は不要。
+
+
 def run_hook(input_data: dict) -> tuple[int, str]:
     """hook スクリプトを実行し (exit_code, stdout) を返す。"""
     proc = subprocess.run(

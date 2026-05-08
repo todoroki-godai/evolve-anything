@@ -24,8 +24,8 @@ from lib.line_limit import (
 def test_constants():
     """定数値が正しいことを確認。"""
     assert MAX_SKILL_LINES == 500
-    assert MAX_RULE_LINES == 3
-    assert MAX_PROJECT_RULE_LINES == 5
+    assert MAX_RULE_LINES == 10
+    assert MAX_PROJECT_RULE_LINES == 10
     assert CLAUDEMD_WARNING_LINES == 300
 
 
@@ -52,7 +52,7 @@ def test_rule_within_limit():
 
 def test_rule_exceeds_limit(capsys):
     """ルールファイルが行数超過で False + stderr 警告。"""
-    content = "line1\nline2\nline3\nline4\nline5\nline6"
+    content = "\n".join([f"line{i}" for i in range(11)])  # 11 lines > 10
     assert check_line_limit("/project/.claude/rules/my-rule.md", content) is False
     captured = capsys.readouterr()
     assert "行数超過" in captured.err
@@ -62,7 +62,7 @@ def test_rule_exceeds_limit(capsys):
 def test_rule_detection_by_path():
     """パスに .claude/rules/ を含む場合はルール判定。"""
     content = "\n".join(["line"] * 100)
-    # ルールパスなら制限（グローバル: 3行、プロジェクト: 5行）
+    # ルールパスなら制限（グローバル/プロジェクト共に 10 行）
     home = str(Path.home())
     assert check_line_limit(f"{home}/.claude/rules/foo.md", content) is False
     assert check_line_limit("/project/.claude/rules/foo.md", content) is False
@@ -71,18 +71,16 @@ def test_rule_detection_by_path():
 
 
 def test_project_rule_limit():
-    """プロジェクトルール（グローバルでない）は 5 行まで許容される。"""
-    content = "line1\nline2\nline3\nline4\nline5"
-    # プロジェクトルールは 5 行制限
+    """プロジェクトルール/グローバルルールともに 10 行まで許容される。"""
+    content = "\n".join([f"line{i}" for i in range(10)])  # 10 lines = limit
     assert check_line_limit("/project/.claude/rules/my-rule.md", content) is True
-    # グローバルルールは 3 行制限
     home = str(Path.home())
-    assert check_line_limit(f"{home}/.claude/rules/my-rule.md", content) is False
+    assert check_line_limit(f"{home}/.claude/rules/my-rule.md", content) is True
 
 
 def test_global_rule_limit():
-    """グローバルルール（~/.claude/rules/）は 3 行制限。"""
-    content = "line1\nline2\nline3\nline4"
+    """グローバルルール（~/.claude/rules/）は 10 行制限。"""
+    content = "\n".join([f"line{i}" for i in range(11)])  # 11 lines > 10
     home = str(Path.home())
     assert check_line_limit(f"{home}/.claude/rules/my-rule.md", content) is False
 
@@ -91,10 +89,10 @@ def test_global_rule_limit():
 
 
 def test_suggest_separation_global_rule_exceeds():
-    """グローバル rule が3行超過で SeparationProposal を返す。"""
+    """グローバル rule が10行超過で SeparationProposal を返す。"""
     home = str(Path.home())
     target = f"{home}/.claude/rules/foo.md"
-    content = "line1\nline2\nline3\nline4"  # 4 lines > 3
+    content = "\n".join([f"line{i}" for i in range(11)])  # 11 lines > 10
     result = suggest_separation(target, content)
     assert result is not None
     assert isinstance(result, SeparationProposal)
@@ -105,9 +103,9 @@ def test_suggest_separation_global_rule_exceeds():
 
 
 def test_suggest_separation_project_rule_exceeds():
-    """PJ rule が5行超過で SeparationProposal を返す。"""
+    """PJ rule が10行超過で SeparationProposal を返す。"""
     target = "/project/.claude/rules/bar.md"
-    content = "\n".join([f"line{i}" for i in range(6)])  # 6 lines > 5
+    content = "\n".join([f"line{i}" for i in range(11)])  # 11 lines > 10
     result = suggest_separation(target, content)
     assert result is not None
     assert "references/bar.md" in result.reference_path
@@ -117,7 +115,7 @@ def test_suggest_separation_project_rule_exceeds():
 def test_suggest_separation_within_limit():
     """行数制限内では None を返す。"""
     target = "/project/.claude/rules/ok.md"
-    content = "line1\nline2\nline3"  # 3 lines <= 5
+    content = "\n".join([f"line{i}" for i in range(10)])  # 10 lines = limit
     assert suggest_separation(target, content) is None
 
 
@@ -138,8 +136,9 @@ def test_rule_with_frontmatter_within_limit():
 
 def test_rule_with_frontmatter_exceeds_limit(capsys):
     """frontmatter 付きルールが frontmatter 除外でもコンテンツ超過なら False。"""
-    # 5行の frontmatter + 4行のコンテンツ = 全体9行、コンテンツ4行 > 3
-    content = '---\npaths:\n  - "**/*.py"\nname: test\n---\n# Rule\nLine 1\nLine 2\nLine 3'
+    # 5行の frontmatter + 11行のコンテンツ = コンテンツ 11 > 10
+    body_lines = "\n".join([f"Line {i}" for i in range(11)])
+    content = f'---\npaths:\n  - "**/*.py"\nname: test\n---\n{body_lines}'
     home = str(Path.home())
     assert check_line_limit(f"{home}/.claude/rules/my-rule.md", content) is False
     captured = capsys.readouterr()
@@ -164,8 +163,9 @@ def test_separation_with_frontmatter_within_limit():
 def test_separation_with_frontmatter_exceeds():
     """frontmatter 除外でもコンテンツ超過なら SeparationProposal を返す。"""
     home = str(Path.home())
-    # 5行 frontmatter + 5行コンテンツ = 全体10行、コンテンツ5行、超過2行
-    content = '---\npaths:\n  - "**/*.py"\nname: test\n---\n# Rule\nLine 1\nLine 2\nLine 3\nLine 4'
+    # frontmatter + 12行コンテンツ → コンテンツ 12 > 10、超過 2 行
+    body_lines = "\n".join([f"Line {i}" for i in range(12)])
+    content = f'---\npaths:\n  - "**/*.py"\nname: test\n---\n{body_lines}'
     result = suggest_separation(f"{home}/.claude/rules/foo.md", content)
     assert result is not None
     assert result.excess_lines == 2
@@ -181,7 +181,7 @@ def test_suggest_separation_deduplication(tmp_path):
     (refs_dir / "foo.md").write_text("existing", encoding="utf-8")
 
     target = str(rules_dir / "foo.md")
-    content = "\n".join([f"line{i}" for i in range(6)])  # 超過
+    content = "\n".join([f"line{i}" for i in range(11)])  # 11 行 > 10
     result = suggest_separation(target, content)
     assert result is not None
     assert result.reference_path.endswith("foo_2.md")

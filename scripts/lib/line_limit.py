@@ -10,8 +10,8 @@ from typing import Optional
 from frontmatter import count_content_lines
 
 MAX_SKILL_LINES = 500
-MAX_RULE_LINES = 3
-MAX_PROJECT_RULE_LINES = 5
+MAX_RULE_LINES = 10
+MAX_PROJECT_RULE_LINES = 10
 CLAUDEMD_WARNING_LINES = 300
 
 # MEMORY.md バイトサイズ制限（CC v2.1.83 で 25KB 切り詰め追加）
