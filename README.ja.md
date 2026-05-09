@@ -1,0 +1,412 @@
+[🇬🇧 English](README.md) | [🇯🇵 日本語](README.ja.md)
+
+# rl-anything
+
+Claude Code のスキル/ルールを **自律的に観測・発見・淘汰・進化** させ、**LLM 直接パッチで最適化** する Claude Code Plugin。
+
+## クイックスタート
+
+```bash
+# マーケットプレイスを登録（初回のみ）
+claude plugin marketplace add todoroki-godai/rl-anything
+
+# インストール
+claude plugin install rl-anything@rl-anything --scope user
+
+# Claude Code を再起動
+```
+
+再起動後、Observe hooks が自動で動き始め、スキル使用・エラー・修正フィードバックを記録する。
+
+`bin/` に bareコマンド（`rl-audit`, `rl-evolve` 等）も提供。PATH に追加すると CLI から直接実行できる:
+```bash
+export PATH="$(claude plugin path rl-anything)/bin:$PATH"
+rl-audit
+```
+
+```bash
+# 環境の健康診断
+/rl-anything:audit
+
+# 過去セッションからデータを一括収集
+/rl-anything:backfill
+
+# 日次運用（まず dry-run でプレビュー → 確認後に本実行）
+/rl-anything:evolve --dry-run
+/rl-anything:evolve
+```
+
+普段は **`evolve` を日に1回叩くだけ**。データが足りなければ自動でスキップを提案してくれる。
+
+## 全体像 — 4つの柱
+
+rl-anything は **4つの独立した柱** で構成される。
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  柱1: 自律進化パイプライン                                │
+│  Observe(hooks) → Diagnose → Compile → Housekeeping     │
+│  → evolve で一括実行                                      │
+├─────────────────────────────────────────────────────────┤
+│  柱2: 修正フィードバックループ                             │
+│  correction_detect(hook) → corrections.jsonl → Reflect   │
+├─────────────────────────────────────────────────────────┤
+│  柱3: 直接パッチ最適化                                     │
+│  Generate-Fitness → Optimize → RL-Loop → Evolve-Fitness  │
+├─────────────────────────────────────────────────────────┤
+│  柱4: fleet 観測・介入                                     │
+│  rl-fleet status → 全 PJ 横断で env_score / 導入状況可視化│
+└─────────────────────────────────────────────────────────┘
+```
+
+| 柱 | 何をするか | メインコマンド |
+|----|-----------|--------------|
+| 自律進化 | 使用データからパターン検出→スキル生成→淘汰→進化 | `/rl-anything:evolve` |
+| フィードバック | ユーザーの修正（「いや、違う」等）を検出→ルールに反映 | `/rl-anything:reflect` |
+| 直接パッチ最適化 | corrections/context → LLM 1パスパッチ → regression gate | `/rl-anything:rl-loop` |
+| **fleet 観測・介入** | 全 PJ 横断で env_score / 導入状況を一覧表示（Phase 1: status） | `bin/rl-fleet status` |
+| エージェント管理 | エージェント定義の品質診断・改善提案 | `/rl-anything:agent-brushup` |
+| セカンドオピニオン | 独立した cold-read セカンドオピニオン | `/rl-anything:second-opinion` |
+| 仕様管理 | SPEC.md + ADR の管理、L1/L2 自動昇格 | `/rl-anything:spec-keeper` |
+| 行き詰まり突破 | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動 | `/rl-anything:breakthrough` |
+| 成長可視化 (NFD) | Lv.1-10 レベルシステム + 4フェーズ自動判定 + 5 traits + 成長ストーリー | `/rl-anything:audit --growth` |
+
+## やりたいこと別ガイド
+
+| やりたいこと | コマンド |
+|-------------|---------|
+| 日次メンテナンス（プレビュー→本実行） | `evolve --dry-run` → `evolve` |
+| 特定スキルをピンポイント改善 | `rl-loop my-skill` |
+| 修正フィードバックをルールに反映 | `reflect` |
+| 蓄積されたフィードバックを確認 | `reflect --view` |
+| 全 skills/rules の棚卸し | `audit` |
+| プロジェクト固有の評価関数を作成 | `generate-fitness --ask` |
+| 過去セッションからデータ収集 | `backfill` |
+| 評価関数自体を改善 | `evolve-fitness` |
+| エージェント定義を診断・改善 | `agent-brushup` |
+| 独立したセカンドオピニオンを取得 | `second-opinion` |
+| SPEC.md を初期化・更新 | `spec-keeper init` / `spec-keeper update` |
+| 行き詰まり問題の突破 | `breakthrough` |
+| セッションを引き継ぎ | `handover` |
+| 環境の成長レポート | `audit --growth` |
+| マージ・デプロイ後の後片付け | `cleanup` |
+| 全 PJ 横断の fleet ステータス | `bin/rl-fleet status` |
+
+> すべてのコマンドは `/rl-anything:` プレフィックス付きで呼び出す（例: `/rl-anything:evolve`）
+
+## スキル一覧（全19スキル）
+
+| スキル | 柱 | 説明 |
+|--------|-----|------|
+| `evolve` | 自律進化 | 全フェーズ統合実行（日次運用） |
+| `discover` | 自律進化 | 観測データからパターン検出→スキル/ルール候補生成 |
+| `prune` | 自律進化 | 未使用・重複アーティファクトの淘汰（merge 統合対応） |
+| `audit` | 自律進化 | 全 skills/rules/memory の棚卸し＋健康診断＋Growth Report |
+| `backfill` | 自律進化 | 過去セッション履歴からデータ収集＋分析 |
+| `reflect` | フィードバック | corrections の修正フィードバックを CLAUDE.md/rules に反映 |
+| `rl-loop` | 直接パッチ最適化 | ベースライン→直接パッチ→評価→人間確認ループ |
+| `generate-fitness` | 直接パッチ最適化 | プロジェクト固有の評価関数を自動生成 |
+| `evolve-fitness` | 直接パッチ最適化 | accept/reject データから評価関数を改善 |
+| `evolve-skill` | 直接パッチ最適化 | 特定スキルに自己進化パターン組み込み |
+| `agent-brushup` | エージェント管理 | エージェント定義の品質診断・改善提案 |
+| `second-opinion` | セカンドオピニオン | Claude Agent による独立した cold-read セカンドオピニオン |
+| `breakthrough` | 行き詰まり突破 | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動 |
+| `implement` | 構造化実装 | plan artifact → タスク分解 → 実装（Standard/Parallel）→ 計画準拠チェック → テレメトリ記録 |
+| `spec-keeper` | 仕様管理 | SPEC.md + ADR 管理、Progressive Disclosure L1/L2 自動昇格 |
+| `handover` | セッション管理 | 作業状態を構造化ノートに書き出し、別セッションへ引き継ぎ。`--issue` で GitHub Issue 出力 |
+| `cleanup` | 後片付け | PR マージ・デプロイ後の branches / remote refs / worktrees / tmp dirs / close 候補 Issue / PR Test plan 残件を個別承認→実行で処理。tmp dir default prefix は `rl-anything-` のみ（詳細は [ADR-021](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)） |
+| `release-notes-review` | ユーティリティ | CC リリースノート分析＋グローバル環境健康診断（`--env-only` 対応） |
+| `feedback` | ユーティリティ | GitHub Issue でフィードバック送信 |
+
+内部スキル（evolve から自動呼出し）: `reorganize`（split 検出のみ）、`enrich`（discover に統合済み、deprecated）
+
+## Hooks（データ収集）
+
+14個の hooks が LLM コストゼロでセッションライフサイクル全体をカバーする。
+
+| Hook | イベント | 出力先 |
+|------|---------|--------|
+| `observe` | PostToolUse | `usage.jsonl`, `errors.jsonl` |
+| `correction_detect` | UserPromptSubmit | `corrections.jsonl` |
+| `subagent_observe` | SubagentStop | `subagents.jsonl` |
+| `instructions_loaded` | InstructionsLoaded | `sessions.jsonl` + Growth greeting |
+| `workflow_context` | PreToolUse | `$TMPDIR/rl-anything-workflow-*.json` |
+| `skill_activation_log` | PostToolUse | `skill_activations.jsonl`（スキル発火記録） |
+| `tool_duration` | PostToolUse | `tool_durations.jsonl`（slow command 記録） |
+| `file_changed` | FileChanged | stdout（audit 提案） |
+| `permission_denied` | PermissionDenied | `errors.jsonl`（パーミッション拒否記録） |
+| `stop_failure` | StopFailure | `errors.jsonl`（API エラー） |
+| `save_state` | PreCompact | `checkpoint.json` |
+| `post_compact` | PostCompact | stdout（compact 直後ガイダンス） |
+| `restore_state` | SessionStart | stdout |
+| `session_summary` | Stop | `sessions.jsonl`, `workflows.jsonl` |
+
+### Auto Trigger
+
+セッション終了時・corrections 蓄積時に、evolve/audit の実行を自動提案する（実行はしない）。
+
+| 条件 | デフォルト閾値 | 評価タイミング |
+|------|---------------|---------------|
+| 前回 evolve からのセッション数 | ≥ 10 | セッション終了時 |
+| 前回 evolve からの経過日数 | ≥ 7 | セッション終了時 |
+| corrections 蓄積件数 | ≥ 10 | correction 検出時 |
+| 前回 audit からの経過日数 | ≥ 30 | セッション終了時 |
+
+設定は `~/.claude/rl-anything/evolve-state.json` の `trigger_config` で上書き可能:
+
+```json
+{
+  "trigger_config": {
+    "enabled": true,
+    "triggers": {
+      "session_end": { "min_sessions": 10, "max_days": 7 },
+      "corrections": { "threshold": 10 },
+      "audit_overdue": { "interval_days": 30 }
+    },
+    "cooldown_hours": 24
+  }
+}
+```
+
+無効化: `"trigger_config": { "enabled": false }`
+
+---
+
+以下は必要に応じて参照する詳細セクション。
+
+<details>
+<summary><strong>各スキルの詳細オプション</strong></summary>
+
+### evolve
+
+```
+/rl-anything:evolve --dry-run    # プレビュー（推奨）
+/rl-anything:evolve              # 本実行
+```
+
+実行フェーズ: Diagnose(Discover+Audit+Reorganize) → Compile(Optimize+Remediation+Reflect) → Housekeeping(Prune+Fitness Evolution) → Report
+
+前回以降のセッション数が3未満 or 10観測未満の場合はスキップを推奨。
+
+### discover
+
+```
+/rl-anything:discover                    # パターン検出＋候補生成（enrich 統合済み）
+/rl-anything:discover --scope global     # グローバルスコープで検出
+```
+
+検出基準: 行動パターン（5+回）→スキル候補、エラーパターン（3+回）→ルール候補、却下理由（3+回）→ルール候補。組み込み Agent は `agent_usage_summary` に分離。推奨ルール/hook 未導入も検出。Jaccard 係数で既存スキルとの照合も実行（enrich 統合）。
+
+### prune
+
+```
+/rl-anything:prune                 # 淘汰候補を検出
+/rl-anything:prune --restore       # アーカイブから復元
+/rl-anything:prune --list-archive  # アーカイブ一覧
+```
+
+各候補に推薦ラベル（archive推奨 / keep推奨 / 要確認）と description を付与。TF-IDF 類似度フィルタで偽陽性を除外。参照型スキルは淘汰対象から除外。
+
+### reflect
+
+```
+/rl-anything:reflect                          # 対話レビュー
+/rl-anything:reflect --view                   # pending 一覧
+/rl-anything:reflect --dry-run                # プレビューのみ
+/rl-anything:reflect --apply-all              # 高信頼度を一括適用（>= 0.85）
+/rl-anything:reflect --apply-all --min-confidence 0.70  # 閾値変更
+/rl-anything:reflect --skip-semantic          # セマンティック検証を無効化
+```
+
+### rl-loop
+
+```
+/rl-anything:rl-loop my-skill              # 1ループ
+/rl-anything:rl-loop my-skill --loops 3    # 3ループ
+/rl-anything:rl-loop my-skill --auto       # 人間確認スキップ
+```
+
+### generate-fitness
+
+```
+/rl-anything:generate-fitness                # 基本
+/rl-anything:generate-fitness --ask          # 品質基準を質問してから生成
+/rl-anything:generate-fitness --name bot     # 関数名を指定
+```
+
+### audit
+
+```
+/rl-anything:audit [project-dir]
+/rl-anything:audit --skip-rescore    # 品質計測をスキップ
+/rl-anything:audit --memory-context  # MEMORY セマンティック検証用 JSON 出力
+```
+
+レポート内容: Skill Quality Trends / MEMORY Health / Plugin Usage / OpenSpec Workflow Analytics / ハードコード値検出
+
+### backfill
+
+```
+/rl-anything:backfill              # バックフィル＋分析
+/rl-anything:backfill --force      # 既存データを削除して再実行
+```
+
+</details>
+
+<details>
+<summary><strong>データフロー</strong></summary>
+
+すべてのデータは `~/.claude/rl-anything/` に保存される。
+
+```
+~/.claude/rl-anything/
+├── usage.jsonl           # スキル/エージェント使用記録
+├── errors.jsonl          # エラー記録
+├── sessions.jsonl        # セッションサマリ
+├── workflows.jsonl       # ワークフローシーケンス
+├── subagents.jsonl       # サブエージェント完了データ
+├── usage-registry.jsonl  # グローバルスキル使用レジストリ
+├── corrections.jsonl     # 修正フィードバック
+├── false_positives.jsonl # 偽陽性 corrections（SHA-256 管理）
+├── workflow_stats.json   # ワークフロー統計（workflow_analysis.py が出力）
+├── checkpoint.json       # 進化状態チェックポイント
+├── archive/              # prune でアーカイブされたファイル
+└── feedback-drafts/      # ローカル保存フィードバック
+```
+
+| ファイル | 書き込み元 | 読み取り先 |
+|---------|-----------|-----------|
+| `usage.jsonl` | observe hook, backfill | discover, prune, audit |
+| `errors.jsonl` | observe hook | discover, audit |
+| `sessions.jsonl` | session_summary hook, backfill | audit, evolve, discover |
+| `workflows.jsonl` | session_summary hook, backfill | audit, discover |
+| `corrections.jsonl` | correction_detect hook, backfill | reflect, discover, evolve, prune |
+| `false_positives.jsonl` | reflect | correction_detect |
+| `workflow_stats.json` | workflow_analysis.py | optimize, rl-scorer, generate-fitness |
+| `checkpoint.json` | save_state hook | restore_state hook |
+
+</details>
+
+<details>
+<summary><strong>適応度関数</strong></summary>
+
+### 組み込み
+
+| 関数 | 説明 |
+|------|------|
+| `default` | LLM による汎用評価（明確性・完全性・構造・実用性） |
+| `skill_quality` | ルールベースの構造品質チェック（+ CSO security 軸） |
+| `coherence` | 環境の構造的整合性（Coverage/Consistency/Completeness/Efficiency の4軸） |
+| `telemetry` | テレメトリ駆動の環境実効性（Utilization/Effectiveness/Implicit Reward の3軸） |
+| `constitutional` | 原則ベース LLM Judge 評価（PJ固有原則 × 4レイヤー） |
+| `chaos` | 仮想除去ロバストネス（Rules/Skills を仮想削除し Coherence ΔScore で SPOF 検出） |
+| `environment` | coherence + telemetry + constitutional の動的重み統合 |
+| `plugin` | プラグイン統合 fitness |
+
+`telemetry` / `environment` / `constitutional` は `--fitness` フラグでは使用しない（プロジェクトパスが必要なため）。`audit --coherence-score --telemetry-score --constitutional-score` で利用する。
+
+### プロジェクト固有（カスタム）
+
+`scripts/rl/fitness/{name}.py` に配置 → `--fitness {name}` で使用。
+
+インターフェース: stdin でスキル内容を受け取り、0.0〜1.0 を stdout に出力。
+
+```python
+#!/usr/bin/env python3
+import sys
+
+def evaluate(content: str) -> float:
+    score = 0.0
+    if "必須キーワード" in content:
+        score += 0.5
+    return score
+
+def main():
+    content = sys.stdin.read()
+    print(f"{evaluate(content)}")
+
+if __name__ == "__main__":
+    main()
+```
+
+### 評価関数の育成
+
+accept/reject データが30件以上溜まると `/rl-anything:evolve-fitness` で改善を提案:
+- score-acceptance 相関 < 0.50 → 再キャリブレーション推奨
+- 同じ rejection_reason が3回以上 → 新軸追加を提案
+
+</details>
+
+<details>
+<summary><strong>rl-scorer のドメイン自動判定</strong></summary>
+
+CLAUDE.md からドメインを推定し、評価軸を自動切替。
+
+| ドメイン | 評価軸 |
+|----------|--------|
+| ゲーム | 没入感・面白さ・バランス・具体性 |
+| API/バックエンド | 正確性・堅牢性・保守性・セキュリティ |
+| Bot/対話 | パーソナリティ適合・有用性・トーン一貫性 |
+| ドキュメント | 正確性・可読性・実行可能性・完全性 |
+
+スコア構成: 技術品質 (40%) + ドメイン品質 (40%) + 構造品質 (20%)
+
+</details>
+
+<details>
+<summary><strong>導入ストーリー（Slack Bot プロジェクトの例）</strong></summary>
+
+### 第1幕: Observe — データが貯まる
+
+インストール後、hooks が自動でスキル使用・エラー・修正フィードバックを記録。14個のスキルを運用中、`/bot-create` で personality 設定が抜け落ちる事故が起きていた。
+
+### 第2幕: Discover → Optimize — パターンから改善へ
+
+`/rl-anything:discover` で「`/bot-create` 後に手動で personality を追加している」パターンを検出。ルール候補を自動生成。さらに直接パッチ最適化でスキル自体を改善し、スコアが 0.62 → 0.84 に上昇。
+
+### 第3幕: Reflect — フィードバックが活きる
+
+「いや、personality を先に設定して」という修正フィードバックが `/rl-anything:reflect` で CLAUDE.md に自動反映され、同じミスが発生しなくなった。
+
+### 第4幕: 日次運用
+
+| タイミング | やること |
+|-----------|---------|
+| 新スキル追加時 | `optimize` で1回最適化 → diff レビュー |
+| 日次/週次 | `evolve --dry-run` → 確認 → `evolve` |
+| 修正が溜まったとき | `reflect` でフィードバック反映 |
+
+</details>
+
+<details>
+<summary><strong>claude-reflect からの移行</strong></summary>
+
+```bash
+# データ移行（冪等・二重追記防止）
+python3 <PLUGIN_DIR>/scripts/migrate_reflect_queue.py
+
+# 確認
+/rl-anything:reflect --view
+
+# アンインストール
+claude plugin uninstall claude-reflect
+```
+
+</details>
+
+## テスト
+
+```bash
+python3 -m pytest hooks/ skills/ scripts/tests/ scripts/rl/tests/ -v
+
+# プラグイン定義の整合性チェック
+claude plugin validate
+```
+
+## Acknowledgements
+
+correction detection・confidence decay・multi-target routing のアーキテクチャは [claude-reflect](https://github.com/bayramnnakov/claude-reflect)（MIT License, Bayram Annakov）を参考にしています。
+
+## ライセンス
+
+MIT

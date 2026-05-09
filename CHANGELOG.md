@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.44.1] - 2026-05-09
+
+### Fixed
+- **rl-loop の依存欠落** — `a9fa34a` で genetic-prompt-optimizer skill 削除時に `scripts/optimize.py` も同時削除されたが、`rl-loop-orchestrator` が `DirectPatchOptimizer` / `OPTIMIZER_SCRIPT` を依然として依存しており rl-loop が機能不全だった。`optimize.py` + tests を復元（SKILL.md は復元せず、内部専用方針を維持）
+- **optimize.py の result dict キー誤りで paths frontmatter 提案が発火しない問題** — main() の `result.get("target_path", "")` を `"target"` に修正（5箇所の生成元はすべて `"target"` キー）。CodeRabbit review #26 で検出、smoke test で動作確認
+
+### Docs
+- **README をバイリンガル化** — `README.ja.md` を一次 SoT、`README.md` を英訳版として分離。両ファイル冒頭に言語スイッチャーを追加
+- **README の実装乖離を修正** — スキル数 23→19、Hooks 数 12→14。存在しないスキル（optimize/update/version/philosophy-review）と hook（suggest_subagent_delegation）の記載を削除。breakthrough スキル、skill_activation_log/tool_duration/post_compact hooks を追加。stop_failure イベント名を Stop → StopFailure に修正
+- **SPEC.md update** — Recent Changes に v1.44.1 追記、philosophy-review 行削除、optimize の内部専用化を反映、hooks/skills カウント修正
+
 ## [1.44.0] - 2026-05-08
 
 ### Added

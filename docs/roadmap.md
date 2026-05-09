@@ -1,6 +1,6 @@
 # Roadmap
 
-rl-anything の将来計画。現在の実装状況は [README.md](../README.md) を参照。
+rl-anything の将来計画。現在の実装状況は [README.ja.md](../README.ja.md) を参照。
 
 ---
 

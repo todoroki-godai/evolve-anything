@@ -77,12 +77,12 @@ claude plugin prune
 プロジェクト固有: `scripts/rl/fitness/{name}.py` に配置 → `--fitness {name}` で使用。
 環境スコア: `audit --coherence-score --telemetry-score --constitutional-score` で構造品質+行動実績+原則遵守の統合スコアを表示。
 
-詳細は [README.md](README.md#適応度関数) を参照。
+詳細は [README.ja.md](README.ja.md#適応度関数) を参照。
 
 ## rl-scorer のドメイン自動判定
 
 CLAUDE.md からドメイン（ゲーム/API/Bot/ドキュメント）を推定し評価軸を自動切替。
-詳細は [README.md](README.md#rl-scorer-のドメイン自動判定) を参照。
+詳細は [README.ja.md](README.ja.md#rl-scorer-のドメイン自動判定) を参照。
 
 ## Superpowers 共存
 
