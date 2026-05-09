@@ -12,6 +12,7 @@ generations/
 .claude/agent-memory/
 .claude/constitutional_cache.json
 .claude/principles.json
+.claude/scheduled_tasks.lock
 release-notes-review-workspace/
 prompt-optimizer-bench/
 docs/slides/
