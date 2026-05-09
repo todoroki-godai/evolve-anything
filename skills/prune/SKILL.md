@@ -120,8 +120,34 @@ AskUserQuestion の options は常に **4つ以下** とする（MUST）。
 承認された候補のみ `~/.claude/rl-anything/archive/` に移動:
 
 ```python
-from scripts.prune import archive_file
+from scripts.prune import archive_file, check_import_dependencies, SkillDependencyError
 archive_file("/path/to/file", "zero_invocation")
+```
+
+#### 依存検査（skill ディレクトリ archive 時、MUST）
+
+スキルディレクトリ全体（`skills/<name>`）を archive する場合、`archive_file` は内部で
+`check_import_dependencies` を呼び、`scripts/<module>.py` の他スキル/CLI からの import や
+`skills/<name>/` パス参照を検出する。参照ありの場合は `SkillDependencyError` が raise され、
+archive は中断する（Issue #25 の再発防止）。
+
+検出された場合の対応:
+1. `check_import_dependencies(skill_path, repo_root)` の結果をユーザーに提示する
+2. **依存断ち切り PR を先行させる** ことを促す（参照側の import 削除 / パス参照差し替え）
+3. 依存断ち切り完了を確認してから再度 archive を実行する
+4. やむを得ず強制 archive する場合のみ `force=True` を渡す（warning は出るが archive は実行される）
+
+**注意（module 名衝突）**: `check_import_dependencies` は skill ディレクトリ配下の Python モジュール名（`scripts/*.py` の stem）で逆引きする。複数 skill が同名 module（例: `utils.py`）を持つ場合、別 skill 由来の参照を誤検出することがある。誤検出と判断した場合のみ `force=True` でバイパスする。
+
+提示テンプレート:
+```
+スキル `{skill_name}` は以下から参照されています:
+- {referrer_1} ({kind})
+- {referrer_2} ({kind})
+...
+
+archive する前に依存を断ち切る PR を先行させてください。
+強制 archive する場合: archive_file(path, reason, force=True)
 ```
 
 ### Step 5: 復元（--restore 時）

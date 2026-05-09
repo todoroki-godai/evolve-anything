@@ -3,7 +3,7 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-05-08 (v1.43.0: detect-deferred-task hook + audit plugin exclusion)
+Last updated: 2026-05-09 (v1.45.0: prune skill 削除時の import 依存検査)
 
 ## コンポーネント構成
 
@@ -53,7 +53,7 @@ scripts/lib/            ← 共通ロジック（48 モジュール）[ADR-019]
   rl_common.py          ← hooks 共通ユーティリティ（DATA_DIR, classify_prompt 等）
   audit.py              ← 環境健康診断ロジック（スキル/ルール/CLAUDE.md 診断）
   discover.py           ← パターン検出 + スキル/ルール候補生成
-  prune.py              ← スキル/ルール統廃合候補抽出
+  prune.py              ← スキル/ルール統廃合候補抽出 + archive 時 import 依存検査（#25）
   reorganize.py         ← スキル分割候補検出
   remediation.py        ← confidence-based 問題分類 + 修正 + FP排除 + 原則ベース昇格
   telemetry_query.py    ← DuckDB 共通クエリ層
