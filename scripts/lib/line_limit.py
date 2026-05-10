@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from frontmatter import count_content_lines
 
 MAX_SKILL_LINES = 500
