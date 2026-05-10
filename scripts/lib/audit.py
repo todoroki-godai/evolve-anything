@@ -1339,6 +1339,85 @@ def _format_constitutional_report(result: Optional[Dict[str, Any]]) -> Optional[
     return lines
 
 
+def _short_int(n: int | None) -> str:
+    if n is None:
+        return "--"
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(int(n))
+
+
+def build_token_consumption_section(days: int = 30) -> List[str]:
+    """Token Consumption セクションを生成する。
+
+    データ無し → 1 行ヒントのみ返す。
+    データあり → TOP 3 / Anomalies / Hints。
+    """
+    try:
+        import token_usage_query as tuq  # type: ignore
+        import token_usage_store as tus  # type: ignore
+    except ImportError:
+        return []
+
+    db_empty = (not tus.HAS_DUCKDB) or (not tus.USAGE_DB.exists())
+    if not db_empty:
+        try:
+            row = tus.query("SELECT COUNT(*) FROM token_usage")
+            db_empty = (not row) or (row[0][0] == 0)
+        except Exception:
+            db_empty = True
+
+    if db_empty:
+        return [
+            "## Token Consumption",
+            "",
+            "(Token tracking not initialized — run `rl-fleet tokens --backfill` to enable)",
+            "",
+        ]
+
+    try:
+        top = tuq.top_n_consumers(days=days, n=3)
+        wow = tuq.wow_anomalies()
+        cache = tuq.cache_hit_anomalies()
+    except Exception:
+        return []
+
+    lines: List[str] = [f"## Token Consumption (last {days} days)", ""]
+    if top:
+        lines.append("TOP 3 consumers:")
+        for i, c in enumerate(top, 1):
+            hit = (
+                f"  (cache hit {c['cache_hit_pct']:.0f}%)"
+                if c.get("cache_hit_pct") is not None
+                else ""
+            )
+            label = c.get("pj_slug") or c["pj_id"]
+            lines.append(f"  {i}. {label}\t{_short_int(c['tokens'])}{hit}")
+        lines.append("")
+    if wow or cache:
+        lines.append("Anomalies detected:")
+        for a in wow:
+            lines.append(
+                f"  • {a['pj_id']}: WoW +{a['wow_pct']:.0f}% "
+                f"({_short_int(a['last_week'])} → {_short_int(a['this_week'])})"
+            )
+        for a in cache:
+            lines.append(
+                f"  • {a['pj_id']}: cache hit {a['last_hit_pct']:.0f}% → "
+                f"{a['this_hit_pct']:.0f}% (drop {a['drop_pt']:.0f}pt)"
+            )
+        lines.append("")
+    lines.append("Hints:")
+    lines.append("  • Low cache hit (<40%) often means CLAUDE.md / system prompt changes per session")
+    lines.append("  • WoW spikes often correlate with subagent loops — check SUBAGENTS_30d column")
+    lines.append("")
+    return lines
+
+
 def generate_report(
     artifacts: Dict[str, List[Path]],
     violations: List[Dict[str, Any]],
@@ -1429,6 +1508,11 @@ def generate_report(
     # gstack ワークフロー分析
     if gstack_analytics:
         lines.extend(gstack_analytics)
+
+    # Token Consumption (PJ別 LLM トークン消費)
+    token_section = build_token_consumption_section(days=30)
+    if token_section:
+        lines.extend(token_section)
 
     # 重複候補
     if duplicates:

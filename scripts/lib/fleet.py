@@ -104,6 +104,8 @@ class FleetRow:
     message: str = ""
     issues_summary: IssuesSummary | None = None  # None = 旧 cache (欠落) → 表示 "—"
     subagents_30d: int = 0  # subagents.jsonl 30日窓のカウント、#22
+    tokens_30d: int | None = None  # token_usage 30日窓 SUM、None = データ無し → 表示 "--"
+    cache_hit_pct: float | None = None  # cache_read / (cache_creation + cache_read)、None = データ無し
 
 
 def _pj_safe_name(pj_path: Path) -> str:
@@ -358,7 +360,32 @@ def _safe_compute_level(env_score: object) -> int | None:
     return compute_level(float(env_score)).level
 
 
-_TABLE_HEADERS = ["PJ", "STATUS", "SCORE", "LV", "PHASE", "LAST_AUDIT", "AUDIT", "ISSUES", "SUBAGENTS_30d"]
+_TABLE_HEADERS = ["PJ", "STATUS", "SCORE", "LV", "PHASE", "LAST_AUDIT", "AUDIT", "ISSUES", "SUBAGENTS_30d", "TOKENS_30d", "CACHE_HIT"]
+
+
+def _format_short_int(n: int) -> str:
+    """1_234_567 → '1.2M', 12_345 → '12.3K'。負値は想定しない。"""
+    if n is None:
+        return "--"
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(int(n))
+
+
+def _format_cell_tokens(row: FleetRow) -> str:
+    if row.tokens_30d is None:
+        return "--"
+    return _format_short_int(row.tokens_30d)
+
+
+def _format_cell_cache_hit(row: FleetRow) -> str:
+    if row.cache_hit_pct is None:
+        return "--"
+    return f"{row.cache_hit_pct:.0f}%"
 
 
 def _format_relative(dt: datetime, now: datetime) -> str:
@@ -445,6 +472,8 @@ def format_status_table(rows: list[FleetRow], now: datetime | None = None) -> st
             _format_cell_audit(row),
             _format_cell_issues(row),
             _format_cell_subagents(row),
+            _format_cell_tokens(row),
+            _format_cell_cache_hit(row),
         ])
     widths = [max(len(c) for c in col) for col in zip(*cells)]
     lines = []
@@ -661,10 +690,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     discover_p.add_argument("--non-interactive", action="store_true", help="候補を表示するのみ（承認なし）")
 
+    tokens_p = sub.add_parser(
+        "tokens",
+        help="PJ別 LLM トークン消費 (TOP-N / anomaly / drill-down / backfill)",
+    )
+    tokens_p.add_argument("--days", type=int, default=30, help="集計期間（日）。default: 30")
+    tokens_p.add_argument("--pj", type=str, default=None, help="特定 PJ にドリルダウン (canonical pj_id)")
+    tokens_p.add_argument("--by", type=str, default="session", choices=["session", "model", "week"], help="--pj 指定時の分解軸")
+    tokens_p.add_argument("--anomaly", action="store_true", help="WoW + cache hit 異常のみ表示")
+    tokens_p.add_argument("--backfill", action="store_true", help="transcript JSONL を ingest")
+    tokens_p.add_argument("--all", action="store_true", help="--backfill 時に全期間 ingest（default 90 日）")
+    tokens_p.add_argument("--json", action="store_true", help="JSON 出力")
+
     args = parser.parse_args(argv)
 
     if args.command == "discover":
         return _run_discover(args)
+    if args.command == "tokens":
+        return _run_tokens(args)
 
     # default: status
     return _run_status(args)
@@ -693,6 +736,7 @@ def _run_status(args) -> int:
         max_workers=args.max_workers,
         projects=projects,
     )
+    _inject_token_metrics(rows, days=30)
     print(format_status_table(rows), end="")
     if new_candidates:
         print(
@@ -770,6 +814,137 @@ def _run_discover(args) -> int:
         print(f"\n[fleet] 保存しました: tracked={final_tracked}, ignored={final_ignored}")
     else:
         print("\n[fleet] 変更なし（skip のみ）。")
+    return 0
+
+
+def _inject_token_metrics(rows: list[FleetRow], days: int = 30) -> None:
+    """token_usage SoR から TOP-N 全体を引いて FleetRow に注入する。
+
+    Match key: FleetRow.pj_name (basename) と pj_slug (encoded path 末尾セグメント) を
+    末尾一致で照合する。データ無し PJ は None のまま。
+    """
+    try:
+        import token_usage_query as tuq  # type: ignore
+    except ImportError:
+        return
+    try:
+        # 1 回で十分大きな N を取得して全 PJ をカバー
+        consumers = tuq.top_n_consumers(days=days, n=10_000)
+    except Exception:
+        return
+    if not consumers:
+        return
+    # pj_slug → metric。同名衝突時は最初を採用
+    by_slug: dict[str, dict] = {}
+    for c in consumers:
+        slug = (c.get("pj_slug") or "").lower()
+        if slug and slug not in by_slug:
+            by_slug[slug] = c
+    for row in rows:
+        # row.pj_name 末尾セグメントは "-" で区切られた最後 (例: "rl-anything" → "anything")
+        # token_usage_ingest._pj_slug_from_id と同ロジック
+        last = row.pj_name.rstrip("-").split("-")[-1].lower() if row.pj_name else ""
+        c = by_slug.get(last)
+        if c is None:
+            continue
+        row.tokens_30d = c.get("tokens")
+        hit = c.get("cache_hit_pct")
+        row.cache_hit_pct = float(hit) if hit is not None else None
+
+
+def _run_tokens(args) -> int:
+    """`rl-fleet tokens` サブコマンド。"""
+    try:
+        import token_usage_query as tuq  # type: ignore
+        import token_usage_store as tus  # type: ignore
+    except ImportError:
+        print("token_usage modules not available", file=sys.stderr)
+        return 1
+
+    # backfill モード
+    if getattr(args, "backfill", False):
+        try:
+            import token_usage_ingest as tui  # type: ignore
+        except ImportError:
+            print("token_usage_ingest not available", file=sys.stderr)
+            return 1
+        days = None if getattr(args, "all", False) else getattr(args, "days", 90)
+        agg = tui.ingest_all_projects(days=days, progress=True)
+        if getattr(args, "json", False):
+            print(json.dumps(agg, ensure_ascii=False))
+        else:
+            print(
+                f"[fleet tokens] backfill done: inserted={agg['inserted']} "
+                f"skipped={agg['skipped']} files={agg['files_processed']} "
+                f"projects={agg.get('projects', 0)}"
+            )
+        return 0
+
+    days = getattr(args, "days", 30)
+
+    # 空 DB チェック
+    db_empty = (not tus.HAS_DUCKDB) or (not tus.USAGE_DB.exists())
+    if not db_empty:
+        try:
+            row = tus.query("SELECT COUNT(*) FROM token_usage")
+            db_empty = (not row) or (row[0][0] == 0)
+        except Exception:
+            db_empty = True
+
+    if db_empty:
+        msg = "[fleet tokens] No data. Run `rl-fleet tokens --backfill` to ingest transcripts."
+        print(msg, file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps({"empty": True}, ensure_ascii=False))
+        return 0
+
+    # PJ 別ドリルダウン
+    pj = getattr(args, "pj", None)
+    if pj:
+        by = getattr(args, "by", "session") or "session"
+        rows = tuq.pj_breakdown(pj, by=by, limit=10)
+        if getattr(args, "json", False):
+            print(json.dumps({"pj_id": pj, "by": by, "rows": rows}, ensure_ascii=False, default=str))
+        else:
+            print(f"## {pj} — breakdown by {by}")
+            for r in rows:
+                print(f"  {r['key']}\t{_format_short_int(r.get('tokens', 0))}")
+        return 0
+
+    # anomaly モード
+    if getattr(args, "anomaly", False):
+        wow = tuq.wow_anomalies()
+        cache = tuq.cache_hit_anomalies()
+        if getattr(args, "json", False):
+            print(json.dumps({"wow": wow, "cache_hit": cache}, ensure_ascii=False, default=str))
+        else:
+            print("## Anomalies")
+            for a in wow:
+                print(f"  WoW: {a['pj_id']} +{a['wow_pct']:.0f}% ({_format_short_int(a['last_week'])} → {_format_short_int(a['this_week'])})")
+            for a in cache:
+                print(f"  cache: {a['pj_id']} {a['last_hit_pct']:.0f}% → {a['this_hit_pct']:.0f}% (drop {a['drop_pt']:.0f}pt)")
+        return 0
+
+    # デフォルトサマリ: TOP 3 + anomaly
+    top = tuq.top_n_consumers(days=days, n=3)
+    wow = tuq.wow_anomalies()
+    cache = tuq.cache_hit_anomalies()
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "top": top, "wow": wow, "cache_hit": cache, "days": days,
+        }, ensure_ascii=False, default=str))
+        return 0
+    print(f"## Token Consumption (last {days} days)\n")
+    print("TOP 3 consumers:")
+    for i, c in enumerate(top, 1):
+        hit = f" (cache hit {c['cache_hit_pct']:.0f}%)" if c.get("cache_hit_pct") is not None else ""
+        print(f"  {i}. {c.get('pj_slug') or c['pj_id']}\t{_format_short_int(c['tokens'])}{hit}")
+    if wow or cache:
+        print("\nAnomalies detected:")
+        for a in wow:
+            print(f"  • {a['pj_id']}: WoW +{a['wow_pct']:.0f}% ({_format_short_int(a['last_week'])} → {_format_short_int(a['this_week'])})")
+        for a in cache:
+            print(f"  • {a['pj_id']}: cache hit {a['last_hit_pct']:.0f}% → {a['this_hit_pct']:.0f}% (drop {a['drop_pt']:.0f}pt)")
     return 0
 
 

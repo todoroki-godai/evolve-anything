@@ -680,8 +680,14 @@ class TestIssuesSummaryRendering:
     def test_subagents_30d_デフォルト_0表示(self):
         rows = [FleetRow(pj_name="z", status=STATUS_NOT_ENABLED)]
         out = format_status_table(rows, now=self._now())
+        # ヘッダから SUBAGENTS_30d 列の位置を逆引きして検証
+        header_line = out.strip().split("\n")[0]
         data_line = out.strip().split("\n")[1]
-        assert data_line.split()[-1] == "0"
+        headers = header_line.split()
+        cells = data_line.split()
+        assert "SUBAGENTS_30d" in headers
+        idx = headers.index("SUBAGENTS_30d")
+        assert cells[idx] == "0"
 
 
 class TestFleetRowCacheParse:

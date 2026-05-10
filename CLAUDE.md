@@ -35,6 +35,9 @@
 | `critical-instruction-compliance` | スキル指示の遵守保証サイクル — critical行抽出+calm/directリフレーズ+違反検出+pitfall自動学習（`scripts/lib/critical_instruction_extractor.py`） |
 | `second-opinion` エージェント | cold-read セカンドオピニオン（startup/builder/general 3モード）。codex 不要で Agent ツールのみで動作 |
 | `growth-level` | env_score (0.0-1.0) → Lv.1-10 + 日英称号マッピング。audit がキャッシュに保存、greeting で表示（`scripts/lib/growth_level.py`） |
+| `token_usage_store` | PJ 別 LLM トークン消費の DuckDB SoR — PK uuid で冪等 ingest、`token_usage.db` にスキーマ自動作成（`scripts/lib/token_usage_store.py`） |
+| `token_usage_ingest` | `~/.claude/projects/<pj>/*.jsonl` の `message.usage` を walker で取り込み、days mtime filter + batch insert（`scripts/lib/token_usage_ingest.py`） |
+| `token_usage_query` | TOP-N / WoW スパイク / cache hit 異常 / PJ ドリルダウン (session/model/week)。fleet status・tokens サブコマンド・audit セクションが利用（`scripts/lib/token_usage_query.py`） |
 
 ## クイックスタート
 
@@ -56,6 +59,12 @@
 
 # 全 PJ 横断の fleet ステータス
 bin/rl-fleet status
+
+# PJ 別 LLM トークン消費の初期取り込み（直近 90 日）
+bin/rl-fleet tokens --backfill
+
+# PJ 別 LLM トークン消費サマリ (TOP 3 + 異常)
+bin/rl-fleet tokens
 
 # エージェント品質診断
 /rl-anything:agent-brushup

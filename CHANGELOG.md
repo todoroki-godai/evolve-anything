@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.46.0] - 2026-05-11
+
+### Added
+- **token usage tracking — PJ 別 LLM トークン消費の SoR + 環境レビュー統合** (#24) — `~/.claude/projects/<pj>/*.jsonl` の `message.usage` を DuckDB SoR (`token_usage` テーブル、PK uuid で冪等 ingest) に取り込み、`rl-fleet status` に `TOKENS_30d` / `CACHE_HIT` 列を追加。`rl-fleet tokens` サブコマンドで TOP-N / WoW スパイク / cache hit 異常検出 / PJ ドリルダウン (session/model/week) / `--backfill` を提供。`audit` レポートに "Token Consumption" セクション追加（TOP 3 + 異常 + ヒント）。subagent token は CC 仕様により親メッセージに内包されるため v1 では分離追跡しない（既知制約として SPEC.md に明記）。
+  - 新規: `scripts/lib/token_usage_store.py` (DuckDB schema + idempotent batch ingest), `scripts/lib/token_usage_ingest.py` (transcript パーサ + walker), `scripts/lib/token_usage_query.py` (TOP-N / WoW / cache anomaly / pj_breakdown)
+  - 拡張: `scripts/lib/fleet.py` (FleetRow に tokens_30d/cache_hit_pct + tokens サブコマンド), `scripts/lib/audit.py` (Token Consumption セクション)
+  - テスト: 24 件追加（store 3 + ingest 9 + query 7 + fleet 5）
+
+### Fixed
+- **token usage ingest の write amplification + mtime 差分機能不全** (#28) — 上記 #24 の初期実装を実機検証 (M1 / 1 PJ / `--days 7`) したところ 60 秒+ 未完了で破綻。原因は `token_usage_store.append_batch` が file ごとに `_connect()/close()` を呼び DuckDB の close 時 checkpoint が O(N) で発火する write amplification、および active session の mtime ベース差分が機能しないこと
+  - **redesign**: `connection()` context manager で `ingest_all_projects` 全体を 1 connection 化 (checkpoint を 1 回に集約)、`session_progress(pj_id, session_id, last_uuid, last_ts)` テーブルで jsonl 単位の差分 ingest、100 jsonl ごとに transaction commit (クラッシュ時のロスト上限)、`_normalize_record_params()` で None → 0/False 正規化を DRY 化
+  - **計測**: rl-anything PJ 1 個 / `--days 7` = **41.2s** (budget 60s) / incremental = **15.7s** (budget 30s) / DB 411 bytes/row (write amplification 解消、575MB → 5MB) / parse/commit=0.20 → commit-bound 確定 (byte-offset seek は採用見送り)
+  - **テスト 5 件追加**: `_normalize_record_params` / `connection()` 例外時 close / `session_progress` 差分 ingest / last_uuid drift fallback / chunk commit persistence、加えて bench `pytest -m bench_ingest` opt-in
+
 ## [1.45.0] - 2026-05-09
 
 ### Added

@@ -21,3 +21,8 @@ def _isolate_plugin_data(tmp_path, monkeypatch):
         monkeypatch.setattr(ss, "DATA_DIR", tmp_path, raising=False)
         monkeypatch.setattr(ss, "SESSIONS_DB", tmp_path / "sessions.db", raising=False)
         monkeypatch.setattr(ss, "SESSIONS_JSONL", tmp_path / "sessions.jsonl", raising=False)
+    if "token_usage_store" in sys.modules:
+        tus = sys.modules["token_usage_store"]
+        monkeypatch.setattr(tus, "DATA_DIR", tmp_path, raising=False)
+        monkeypatch.setattr(tus, "USAGE_DB", tmp_path / "token_usage.db", raising=False)
+        monkeypatch.setattr(tus, "USAGE_JSONL", tmp_path / "token_usage.jsonl", raising=False)
