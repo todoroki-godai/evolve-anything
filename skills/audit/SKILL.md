@@ -115,7 +115,7 @@ rl-audit-aggregate
 高頻度 global/plugin スキルの品質スコアを計測し劣化を検知する:
 
 ```bash
-python3 <PLUGIN_DIR>/scripts/quality_monitor.py
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/quality_monitor.py
 ```
 
 - `--dry-run`: 実際の LLM 評価を行わず対象スキルのみ表示

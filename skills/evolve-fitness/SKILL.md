@@ -28,7 +28,7 @@ accept/reject が30件以上蓄積されていること（SHALL）。
 
 ```bash
 rl-usage-log "evolve-fitness"
-python3 <PLUGIN_DIR>/skills/evolve-fitness/scripts/fitness_evolution.py
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/evolve-fitness/scripts/fitness_evolution.py
 ```
 
 ### Step 2: データ不足時

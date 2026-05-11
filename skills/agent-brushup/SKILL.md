@@ -29,7 +29,7 @@ description: |
 
 ```bash
 rl-usage-log "agent-brushup"
-python3 <PLUGIN_DIR>/scripts/lib/agent_quality.py scan "$(pwd)" 2>&1
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lib/agent_quality.py scan "$(pwd)" 2>&1
 ```
 
 上記が CLI として使えない場合は、Python で直接:

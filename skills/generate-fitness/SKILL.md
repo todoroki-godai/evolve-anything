@@ -56,7 +56,7 @@ EOF
 analyze_project.py を実行して、プロジェクトの特性を JSON で取得する。
 
 ```bash
-python3 <PLUGIN_DIR>/skills/generate-fitness/scripts/analyze_project.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/generate-fitness/scripts/analyze_project.py \
   --project-root .
 ```
 
@@ -84,13 +84,13 @@ python3 <PLUGIN_DIR>/skills/generate-fitness/scripts/analyze_project.py \
 
 ```bash
 # 1. 分析結果を取得
-ANALYSIS=$(python3 <PLUGIN_DIR>/skills/generate-fitness/scripts/analyze_project.py --project-root .)
+ANALYSIS=$(python3 ${CLAUDE_PLUGIN_ROOT}/skills/generate-fitness/scripts/analyze_project.py --project-root .)
 
 # 2. ドメイン名を取得（--name 未指定の場合）
 DOMAIN=$(echo "$ANALYSIS" | python3 -c "import sys,json; print(json.load(sys.stdin)['domain'])")
 
 # 3. テンプレートを読み込み
-TEMPLATE=$(cat <PLUGIN_DIR>/skills/generate-fitness/templates/fitness-template.py)
+TEMPLATE=$(cat ${CLAUDE_PLUGIN_ROOT}/skills/generate-fitness/templates/fitness-template.py)
 
 # 4. Claude CLI で生成
 echo "以下の分析結果とテンプレートに基づいて、プロジェクト固有の fitness 関数を生成してください。
@@ -148,7 +148,7 @@ cat .claude/skills/my-skill/SKILL.md | python3 scripts/rl/fitness/${DOMAIN}.py
 # 0.0〜1.0 の数値が出力されれば OK
 
 # optimize.py から利用
-python3 <PLUGIN_DIR>/skills/genetic-prompt-optimizer/scripts/optimize.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/genetic-prompt-optimizer/scripts/optimize.py \
   --target .claude/skills/my-skill/SKILL.md \
   --fitness ${DOMAIN} --dry-run
 ```

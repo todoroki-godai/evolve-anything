@@ -30,9 +30,8 @@ PR マージ・デプロイ完了後に残る以下の「痕跡」を、**候補
 ```python
 # スキル内から Bash 経由で実行する想定のスニペット
 import os, subprocess, sys
-from pathlib import Path
-_lib = Path(__file__).resolve().parents[2] / "scripts" / "lib" if "__file__" in dir() else Path("scripts/lib")
-sys.path.insert(0, str(_lib))
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from cleanup_scanner import (
     scan_merged_branches, scan_prunable_remote_refs,
     scan_removable_worktrees, scan_tmp_dirs,

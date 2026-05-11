@@ -29,11 +29,9 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 ### 2. 適性判定を実行する
 
 ```python
-import sys
-from pathlib import Path
-
-plugin_root = Path("<PLUGIN_DIR>")
-sys.path.insert(0, str(plugin_root / "scripts" / "lib"))
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from skill_evolve import assess_single_skill
 
 result = assess_single_skill(skill_name, skill_dir)

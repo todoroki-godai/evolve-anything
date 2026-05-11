@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.46.1] - 2026-05-11
+
+### Fixed
+- **SKILL.md 内 sys.path / PLUGIN_DIR パターンの統一** (#32) — cleanup・evolve-skill の Python スニペットが `__file__` 未定義（heredoc 実行）時に cwd 依存にフォールバックしていた問題、および agent-brushup・audit・evolve-fitness・generate-fitness の Bash スニペット内 `<PLUGIN_DIR>` が shell 非展開で実行時 ImportError になっていた問題を修正。`CLAUDE_PLUGIN_ROOT` 環境変数優先・`os.getcwd()` フォールバックの統一パターン（Python）および `${CLAUDE_PLUGIN_ROOT}` 直接参照（Bash）に統一
+
 ## [1.46.0] - 2026-05-11
 
 ### Added
