@@ -683,6 +683,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SEC, help="PJ 毎の audit タイムアウト秒 (default: 10)")
         p.add_argument("--max-workers", type=int, default=_DEFAULT_MAX_WORKERS, help="並列数 (default: 2)")
         p.add_argument("--no-write", action="store_true", help="fleet-runs/*.jsonl への追記をスキップ")
+        p.add_argument("--all", dest="show_all", action="store_true", help="STALE/NOT_ENABLED PJ も含めて全表示（デフォルトは STALE 除外）")
 
     discover_p = sub.add_parser(
         "discover",
@@ -737,7 +738,15 @@ def _run_status(args) -> int:
         projects=projects,
     )
     _inject_token_metrics(rows, days=30)
+    show_all = getattr(args, "show_all", False)
+    if not show_all:
+        stale_count = sum(1 for r in rows if r.status == STATUS_STALE)
+        rows = [r for r in rows if r.status != STATUS_STALE]
+    else:
+        stale_count = 0
     print(format_status_table(rows), end="")
+    if not show_all and stale_count:
+        print(f"[fleet] STALE {stale_count} PJ を非表示にしています（--all で全表示）")
     if new_candidates:
         print(
             f"\n[fleet] 新しい PJ 候補を {len(new_candidates)} 件検出しました。"
