@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.46.2] - 2026-05-12
+
+### Fixed
+- **`load_user_config`: 空文字 env var が string 型 default を上書きできない非対称を修正** (#77) — `os.environ.get(..., "")` + `if not env_val` の組み合わせが未設定と空文字を区別できなかったため、`CLAUDE_PLUGIN_OPTION_cleanup_tmp_prefixes=""` で category 4 無効化を試みても silently 無視されていた。`os.environ.get(...)` + `if env_val is None` に変更し、**string 型キーのみ**空文字を意図的な override として許容するよう修正。bool / int キーへの空文字は非 string として `continue` し default fallback（`_parse_bool("") → False` で `auto_trigger` が silently 無効化されるリグレッションを防止）。`is_user_config_explicit` も `is not None` 判定に統一
+- **`test_rules_exceeds_limit`: `MAX_PROJECT_RULE_LINES=10` に合わせてテスト content を 11 行以上に修正** — コメントの「MAX_RULE_LINES=3」が古い値のまま残っており、5 行 content が制限以下として passed=True になりアサーション失敗していた
+
 ## [1.46.1] - 2026-05-11
 
 ### Fixed

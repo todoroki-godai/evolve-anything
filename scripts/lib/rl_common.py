@@ -65,8 +65,11 @@ def load_user_config() -> dict:
     """
     config = dict(USER_CONFIG_DEFAULTS)
     for key, default in USER_CONFIG_DEFAULTS.items():
-        env_val = os.environ.get(f"{_USER_CONFIG_PREFIX}{key}", "")
-        if not env_val:
+        env_val = os.environ.get(f"{_USER_CONFIG_PREFIX}{key}")
+        if env_val is None:
+            continue
+        # bool/int キーへの空文字は未設定として扱う。string 型のみ空文字を意図的な override として許容 (#77)
+        if not env_val and not isinstance(default, str):
             continue
         if isinstance(default, bool):
             config[key] = _parse_bool(env_val)
@@ -82,7 +85,7 @@ def load_user_config() -> dict:
 
 def is_user_config_explicit(key: str) -> bool:
     """指定キーの userConfig 環境変数が明示的にセットされているか判定する。"""
-    return bool(os.environ.get(f"{_USER_CONFIG_PREFIX}{key}", ""))
+    return os.environ.get(f"{_USER_CONFIG_PREFIX}{key}") is not None
 
 
 def ensure_data_dir() -> None:

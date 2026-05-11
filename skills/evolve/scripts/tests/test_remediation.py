@@ -700,9 +700,10 @@ class TestCheckRegressionRulesLineLimit:
         rules_dir = tmp_path / ".claude" / "rules"
         rules_dir.mkdir(parents=True)
         f = rules_dir / "test.md"
-        # MAX_RULE_LINES=3 なので 4行以上で超過
-        f.write_text("# Rule\nLine 1\nLine 2\nLine 3\nLine 4\n")
-        original = "# Rule\nLine 1\nLine 2\nLine 3\nLine 4\n"
+        # MAX_PROJECT_RULE_LINES=10 なので 11行以上で超過
+        content = "# Rule\n" + "\n".join([f"Line {i}" for i in range(11)]) + "\n"
+        f.write_text(content)
+        original = content
         result = check_regression(str(f), original)
         assert result["passed"] is False
         assert any("行数制限" in i for i in result["issues"])

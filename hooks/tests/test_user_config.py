@@ -108,3 +108,43 @@ class TestLoadUserConfig:
         with mock.patch.dict(os.environ, env, clear=False):
             config = common.load_user_config()
         assert config["subagent_warning_threshold"] == 10
+
+    def test_empty_string_overrides_default_for_string_keys(self):
+        """空文字 env var は string 型キーを空文字で上書きする（#77）。
+
+        cleanup_tmp_prefixes="" で category 4 無効化を意図するユーザーが
+        silently 無視されないことを保証する。
+        """
+        env = {"CLAUDE_PLUGIN_OPTION_cleanup_tmp_prefixes": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            config = common.load_user_config()
+        assert config["cleanup_tmp_prefixes"] == ""
+
+    def test_empty_string_does_not_override_int_key(self):
+        """空文字 env var は int 型キーに対してデフォルトを維持する（#77: 非 string 型は空文字を未設定として扱う）。"""
+        env = {"CLAUDE_PLUGIN_OPTION_min_sessions": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            config = common.load_user_config()
+        assert config["min_sessions"] == 10  # default
+
+    def test_empty_string_does_not_override_bool_key(self):
+        """空文字 env var は bool 型キーに対してデフォルトを維持する（#77）。
+
+        _parse_bool("") → False になるため、空文字を「未設定」として扱わないと
+        CLAUDE_PLUGIN_OPTION_auto_trigger="" で auto_trigger が silently 無効化される。
+        """
+        env = {"CLAUDE_PLUGIN_OPTION_auto_trigger": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            config = common.load_user_config()
+        assert config["auto_trigger"] is True  # default
+
+    def test_is_user_config_explicit_with_empty_string(self):
+        """空文字でセットした場合も is_user_config_explicit は True を返す（#77）。"""
+        env = {"CLAUDE_PLUGIN_OPTION_cleanup_tmp_prefixes": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            assert common.is_user_config_explicit("cleanup_tmp_prefixes") is True
+
+    def test_is_user_config_explicit_when_unset(self):
+        """未設定の場合は is_user_config_explicit は False を返す。"""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            assert common.is_user_config_explicit("cleanup_tmp_prefixes") is False
