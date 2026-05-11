@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.47.0] - 2026-05-12
+
+### Added
+- **並列セッション branch drift 対策ルール追加** (#79) — 複数 Claude セッション環境で current branch が予告なく切り替わる pitfall に対応。`.claude/rules/parallel-session-guard.md` を追加: `git commit` / `git add` 前に `git branch --show-current` で確認、drift 検知時は `git checkout <想定 branch>` で戻す、長時間作業では数分おきに branch を確認する
+- **インフラ変更 ship ゲートルール追加** (#40) — buildspec/CDK/Terraform/Lambda 等インフラファイル変更時に動作確認を怠ることへの対策。`.claude/rules/infra-ship-gate.md` を追加: diff にインフラファイルが含まれる場合は動作確認済みを確認してから /ship する
+- **`discover`: 繰り返し corrections パターンから hook 候補を自動検出** (#41) — `detect_repeated_correction_patterns()` を追加。同じ corrections パターンが閾値（デフォルト3）回以上繰り返されたものを `hook_candidate` として `run_discover()` 結果に含める。「ルールでは防げないが hook で防げる」パターンを自動的に surface する
+- **README.md スキル一覧を実態と一致させる** (#81) — "Skill Catalog (19 skills)" → "Skill Catalog (19 user-invocable skills)" に変更し、掲載ポリシー（ユーザー呼び出し型のみ）を明記。内部スキル注記に `rl-loop-orchestrator` と `genetic-prompt-optimizer` を追加して SPEC.md との不一致を解消
+- **gstack 協調開発フロー設計完了** (#36/#37) — gstack + rl-anything の2ツール体制を正式決定（gstack=開発実行、rl-anything=品質進化）。`gstack-refine` スキル（`~/.claude/skills/gstack-refine/`）により Plan フェーズ出力の品質ゲートを実現。本 issue は設計・スキル作成完了にて close
+
 ## [1.46.2] - 2026-05-12
 
 ### Fixed

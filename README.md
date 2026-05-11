@@ -96,7 +96,9 @@ rl-anything consists of **four independent pillars**.
 
 > All commands are invoked with the `/rl-anything:` prefix (e.g., `/rl-anything:evolve`).
 
-## Skill Catalog (19 skills)
+## Skill Catalog (19 user-invocable skills)
+
+> **Policy**: Only user-invocable skills (callable via `/rl-anything:<skill>`) are listed here. Internal skills called automatically by evolve are noted below the table.
 
 | Skill | Pillar | Description |
 |-------|--------|-------------|
@@ -106,7 +108,7 @@ rl-anything consists of **four independent pillars**.
 | `audit` | Autonomous Evolution | Inventory & health check of skills/rules/memory + Growth Report |
 | `backfill` | Autonomous Evolution | Collect & analyze data from past session history |
 | `reflect` | Feedback | Reflect corrections into CLAUDE.md / rules |
-| `rl-loop` | Direct-Patch Optimization | Baseline → direct patch → evaluation → human-confirmation loop |
+| `rl-loop` | Direct-Patch Optimization | Baseline → direct patch → evaluation → human-confirmation loop (backed by `rl-loop-orchestrator`) |
 | `generate-fitness` | Direct-Patch Optimization | Auto-generate project-specific fitness functions |
 | `evolve-fitness` | Direct-Patch Optimization | Improve fitness functions from accept/reject data |
 | `evolve-skill` | Direct-Patch Optimization | Inject self-evolution patterns into a specific skill |
@@ -120,7 +122,7 @@ rl-anything consists of **four independent pillars**.
 | `release-notes-review` | Utility | CC release-notes analysis + global environment health check (`--env-only` supported) |
 | `feedback` | Utility | Send feedback via GitHub Issue |
 
-Internal skills (called automatically by evolve): `reorganize` (split detection only), `enrich` (merged into discover, deprecated)
+**Internal skills** (called automatically, not user-invocable): `rl-loop-orchestrator` (rl-loop backend: baseline→patch→eval→confirm loop), `genetic-prompt-optimizer` (LLM direct-patch optimizer used by rl-loop), `reorganize` (split detection, called by evolve), `enrich` (merged into discover, deprecated)
 
 ## Hooks (Data Collection)
 

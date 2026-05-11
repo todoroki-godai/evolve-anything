@@ -398,6 +398,44 @@ def detect_error_patterns(
     return patterns
 
 
+HOOK_CANDIDATE_THRESHOLD = 3
+
+
+def detect_repeated_correction_patterns(
+    corrections: List[Dict[str, Any]],
+    threshold: int = HOOK_CANDIDATE_THRESHOLD,
+) -> List[Dict[str, Any]]:
+    """同じ corrections パターンが N 回繰り返されたものを hook 候補として返す (#41)。
+
+    ルールで防げない繰り返しパターンを検出し、PreToolUse/PostToolUse hook 候補として提案する。
+    """
+    counter: Counter = Counter()
+    sample: Dict[str, str] = {}
+
+    for rec in corrections:
+        msg = (rec.get("message") or "").strip()
+        if not msg:
+            continue
+        key = msg[:80]
+        counter[key] += 1
+        if key not in sample:
+            sample[key] = msg
+
+    suppressed = load_suppression_list()
+    candidates = []
+    for key, count in counter.most_common():
+        if count >= threshold and key not in suppressed:
+            candidates.append({
+                "type": "hook_candidate",
+                "pattern": key,
+                "full_message": sample[key],
+                "count": count,
+                "suggestion": "hook_candidate",
+                "reason": f"同じパターンが {count} 回繰り返された — ルールより hook での防止を推奨",
+            })
+    return candidates
+
+
 def detect_rejection_patterns(threshold: int = REJECTION_THRESHOLD) -> List[Dict[str, Any]]:
     """繰り返し却下理由の検出（rejection_reason、3+閾値）。"""
     history_file = HISTORY_DIR / "history.jsonl"
@@ -957,6 +995,11 @@ def run_discover(
         pitfall_result = extract_pitfall_candidates(corrections_data, errors=errors_data)
         if pitfall_result["candidates"]:
             result["pitfall_candidates"] = pitfall_result["candidates"]
+
+        # hook 候補検出: 同じ corrections パターンが N 回繰り返されたもの (#41)
+        hook_candidates = detect_repeated_correction_patterns(corrections_data)
+        if hook_candidates:
+            result["hook_candidates"] = hook_candidates
     except Exception as e:
         result["pitfall_candidates_error"] = str(e)
 
