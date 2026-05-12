@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/correction_detect.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/correction_detect.py"],
             "timeout": 5000
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/token_guard.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/token_guard.py"],
             "timeout": 3000
           }
         ]
@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/workflow_context.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/workflow_context.py"],
             "timeout": 5000
           }
         ]
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/skill_activation_log.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/skill_activation_log.py"],
             "timeout": 3000
           }
         ]
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/observe.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/observe.py"],
             "timeout": 5000
           }
         ]
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/tool_duration.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/tool_duration.py"],
             "timeout": 3000
           }
         ]
@@ -67,7 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent_observe.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/subagent_observe.py"],
             "timeout": 5000
           }
         ]
@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_summary.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/session_summary.py"],
             "timeout": 5000
           }
         ]
@@ -91,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop_failure.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/stop_failure.py"],
             "timeout": 5000
           }
         ]
@@ -103,7 +103,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/instructions_loaded.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/instructions_loaded.py"],
             "timeout": 5000
           }
         ]
@@ -115,7 +115,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/save_state.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/save_state.py"],
             "timeout": 5000
           }
         ]
@@ -127,7 +127,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_compact.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/post_compact.py"],
             "timeout": 5000
           }
         ]
@@ -139,7 +139,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/file_changed.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/file_changed.py"],
             "timeout": 5000
           }
         ]
@@ -151,7 +151,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/permission_denied.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/permission_denied.py"],
             "timeout": 5000
           }
         ]
@@ -163,7 +163,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/restore_state.py\"",
+            "args": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/restore_state.py"],
             "timeout": 5000
           }
         ]
