@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.49.1] - 2026-05-13
+
+### Fixed
+- **`hooks/hooks.json`: `args[]` exec form を `command` 文字列形式に revert** — CC v2.1.139 で runtime は `args: string[]` (exec form) を受け付けるようになったが、`claude plugin validate` の schema が `command` フィールドを必須としており validation がコケる（→ `claude plugin tag --push` が失敗する）。v1.49.0 で全 12 hook が validation を通らない状態だったため `command` 文字列形式に戻す。CC validator が `args` をサポートするまで保留。
+
 ## [1.49.0] - 2026-05-13
 
 ### Added
