@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.48.0] - 2026-05-12
+
+### Added
+- **LLM バッチ消費リアルタイム警告 `token_guard` hook** (closes #34) — `UserPromptSubmit` hook に `hooks/token_guard.py` を追加。セッションの `.jsonl` ファイルを byte-offset 差分読み（< 50ms）で追跡し、累積トークン消費が `token_warn_threshold`（デフォルト 50,000）を超えると警告 + 代替案リストを stdout に差し込む。5分クールダウンで重複警告を抑制。`CLAUDE_SESSION_ID` 未設定・セッションファイル不在・`/tmp` 書き込み失敗はすべて silent exit / fallback。
+- **`userConfig` に `token_warn_threshold` 追加** — `CLAUDE_PLUGIN_OPTION_token_warn_threshold=100000` でプロジェクト別に閾値変更可能（#77 修正済みの仕組みを活用）。
+- **`rules/llm-batch-guard.md` 追加** — LLM バッチ処理を提案・実装する前に件数と見積もりトークン数をユーザーに確認を取るルール（3行、10行制限内）。
+
 ## [1.47.1] - 2026-05-12
 
 ### Fixed
