@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.51.0] - 2026-05-14
+
+### Added
+- **`bin/rl-fleet test-guard status`** — 全 PJ 横断で no-llm-in-tests (pre-commit) と pytest-no-llm (runtime guard) の導入状況を一覧表示。LLM SDK 利用検出 + 言語検出 + テスト存在チェックで「要対応」「予防導入候補」を分けて出力。
+- **audit に Test Guard セクション** — LLM SDK 利用 PJ に対し L1/L2 guard 導入を推奨する診断セクションを追加（`scripts/lib/audit.py`）。
+- **3層 Test Guard アーキテクチャ完成** — L1 (静的検出 pre-commit, `todoroki-godai/no-llm-in-tests`) / L2 (pytest runtime guard, `todoroki-godai/pytest-no-llm`) / L3 (可視化, 本 PR)。L1/L2 は独立 OSS として別リポジトリに分離（CC plugin と Python ライブラリのライフサイクル分離）。
+
+### Removed
+- **CHANGELOG drift 整理** — [1.14.2] と [1.13.0] の間に misplaced されていた orphan `[Unreleased]` セクション（handover/second-opinion/critical-instruction-compliance 等 13 件、`closes #39/#42/#43/#44` の issue 番号も最近の PR と内容不一致）を削除。該当機能はすでに別バージョンで shipped 済み。
+
 ## [1.50.3] - 2026-05-13
 
 ### Fixed
@@ -499,26 +509,6 @@ _SPEC.md Recent Changes から移動（既存エントリへの参照）:_
 
 ### Fixed
 - **SPEC.md**: 構造突合リカバリーで未記載コンポーネントを修正 — hooks 7→11, scripts/lib 25+→27, fitness 7→8
-
-## [Unreleased]
-
-### Changed
-- **handover**: checkpoint.json 優先で重複データ収集を廃止 — テンプレートを判断記録 + 次アクションに特化（Summary/Related Files 廃止）。closes #43
-
-### Added
-- **handover**: Deploy State セクション追加 — デプロイ状態を構造化記録し、セッション復元時に Deploy State / Next Actions を優先表示。`--deploy-state` CLI で machine-readable アクセスも提供。closes #44
-- **second-opinion**: Claude Agent によるセカンドオピニオン機能 — codex 不要で Agent ツールのみで動作。startup/builder/general 3モード対応。gstack office-hours Phase 3.5 の codex 代替として、または汎用的に利用可能。closes #42
-- **critical-instruction-compliance**: スキルに書いた「必ず守れ」がちゃんと守られる — MUST/禁止等の重要指示を自動抽出し、穏やかな表現にリフレーズして注入。ユーザーの修正（corrections）とスキル指示を突合して違反を自動検出、pitfall に登録して次から守るよう自動学習。対立動詞検出（move↔delete）+ LLM Judge の2段階マッチング。closes #39
-- instruction compliance — スキル指示の遵守保証サイクル（Extract→Inject→Detect→Learn 4フェーズ、対立動詞+LLM Judge 2段階マッチング）。closes #39
-- **remediation**: 修正の独立検証 — auto_fixable な修正に対してヒューリスティクスベースのダブルチェックを実施。見出し保持・コードブロック対応・空ファイル・行数制限を自動検証し、FP 率を低減
-- **remediation**: 12 パターンの FP 自動除外 — テストファイル・アーカイブパス・外部 URL・コードブロック内参照等を false positive として自動分類。`fp_excluded` カテゴリで明示的に追跡
-- **remediation**: 原則ベース自動昇格 — completeness/pragmatic/DRY/explicit_over_clever の 4 原則で、proposable な修正を auto_fixable に自動昇格。gstack /autoplan のパターンを移植
-- **layer_diagnose**: Skills セクションの synonym マッチ — "Key Skills", "Available Skills", "スキル" 等のバリエーションを自動認識。missing_section の false positive を削減
-- **evolve**: 環境規模の自動判定 — スキル/ルール数に応じて small/medium/large を判定し、evolve/audit の走査深度を自動調整。大規模環境でのパフォーマンス改善
-- **fitness**: 全 fitness モジュールの閾値を `config.py` に集約 — 1箇所で全閾値を管理可能に。各モジュールは config.py からの import + フォールバックで後方互換
-- **environment**: 動的重み計算 — 利用可能な軸に応じて重みを自動正規化。ハードコード 4 パターンを 1 つの `_normalize_weights()` に置換。skill_quality を 4 軸目として統合
-- **constitutional**: gstack /cso セキュリティ監査との連携 — /cso 実行結果があれば constitutional score に security 軸としてブレンド。結果がなければ graceful degradation
-- **audit**: gstack /retro global とのクロスプロジェクト連携 — `--cross-project` フラグで複数プロジェクトのテレメトリを集約表示。/retro global の結果を自動参照
 
 ## [1.13.0] — 2026-03-22
 
