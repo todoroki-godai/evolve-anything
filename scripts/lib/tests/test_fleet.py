@@ -10,6 +10,7 @@ Phase 1 で必須の 5 関数をカバー:
 特殊文字を含むパスは Phase 3 で扱う（本テストは扱わない）。
 """
 
+import contextlib
 import json
 import os
 import subprocess
@@ -553,11 +554,28 @@ class TestWriteFleetRun:
 class TestMainCLI:
     """main() の CLI 統合。"""
 
+    def _fast_main_mocks(self, tmp_path):
+        """fleet.main() を 13s ではなく 0.1s 以下で実行するための mock セット。
+
+        - _DEFAULT_PROJECTS_ROOT: 空ディレクトリ
+        - fleet_config.load_config: tracked_projects 空（本番 PJ 走査を防ぐ）
+        - fleet_config.discover_cc_projects: 空（候補検出での実IO防止）
+        - _inject_token_metrics: token_usage SoR 読み込み防止
+        """
+        import fleet_config
+        return [
+            mock.patch("fleet._DEFAULT_PROJECTS_ROOT", tmp_path / "nope"),
+            mock.patch.object(fleet_config, "load_config", return_value={"tracked_projects": [], "ignored_projects": []}),
+            mock.patch.object(fleet_config, "discover_cc_projects", return_value=[]),
+            mock.patch("fleet._inject_token_metrics"),
+        ]
+
     def test_statusがデフォルトで表を出力しjsonlを書く(self, tmp_path, capsys, monkeypatch):
-        # 空ルートなので rows=[] でヘッダのみ出力される想定
         data_dir = tmp_path / "data"
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
-        with mock.patch("fleet._DEFAULT_PROJECTS_ROOT", tmp_path / "nope"):
+        with contextlib.ExitStack() as stack:
+            for m in self._fast_main_mocks(tmp_path):
+                stack.enter_context(m)
             rc = main([])
         assert rc == 0
         out = capsys.readouterr().out
@@ -570,7 +588,9 @@ class TestMainCLI:
     def test_no_writeでjsonlを書かない(self, tmp_path, capsys, monkeypatch):
         data_dir = tmp_path / "data"
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
-        with mock.patch("fleet._DEFAULT_PROJECTS_ROOT", tmp_path / "nope"):
+        with contextlib.ExitStack() as stack:
+            for m in self._fast_main_mocks(tmp_path):
+                stack.enter_context(m)
             rc = main(["--no-write"])
         assert rc == 0
         fleet_runs = data_dir / "fleet-runs"

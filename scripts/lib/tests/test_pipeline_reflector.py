@@ -35,8 +35,13 @@ def _make_outcome(
     impact_scope="file",
     **kwargs,
 ):
+    # Pipeline Health セクションは default で lookback_days=30 のため、
+    # 固定日付（2026-03-01）だと時間が経つと cutoff 外に落ちて「データ不足」になる。
+    # 現在時刻 - 1日 を使い、テスト実行時点に依存しない。
+    from datetime import datetime, timezone, timedelta
+    _ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     rec = {
-        "timestamp": "2026-03-01T00:00:00+00:00",
+        "timestamp": _ts,
         "issue_type": issue_type,
         "result": result,
         "user_decision": user_decision,

@@ -211,13 +211,15 @@ def test_run_loop_evolve_flag_calls_try_evolve(run_loop_mod, tmp_path):
 
     with mock.patch.object(run_loop_mod, "get_baseline_score") as mock_baseline, \
          mock.patch.object(run_loop_mod, "generate_variants") as mock_variants, \
-         mock.patch.object(run_loop_mod, "score_variant") as mock_score, \
+         mock.patch.object(run_loop_mod, "_score_variant_axes") as mock_axes, \
          mock.patch.object(run_loop_mod, "_try_evolve_skill") as mock_try_evolve:
         mock_baseline.return_value = {"integrated_score": 0.65}
         mock_variants.return_value = {
             "history": [{"individuals": [{"id": "v1", "content": "# Improved\n"}]}],
         }
-        mock_score.return_value = 0.70
+        mock_axes.return_value = {
+            "technical": 0.70, "domain": 0.70, "structure": 0.70, "integrated": 0.70,
+        }
         mock_try_evolve.return_value = {
             "evolve_suitability": "high",
             "evolve_applied": True,
@@ -244,13 +246,15 @@ def test_run_loop_no_evolve_flag(run_loop_mod, tmp_path):
 
     with mock.patch.object(run_loop_mod, "get_baseline_score") as mock_baseline, \
          mock.patch.object(run_loop_mod, "generate_variants") as mock_variants, \
-         mock.patch.object(run_loop_mod, "score_variant") as mock_score, \
+         mock.patch.object(run_loop_mod, "_score_variant_axes") as mock_axes, \
          mock.patch.object(run_loop_mod, "_try_evolve_skill") as mock_try_evolve:
         mock_baseline.return_value = {"integrated_score": 0.65}
         mock_variants.return_value = {
             "history": [{"individuals": [{"id": "v1", "content": "# Improved\n"}]}],
         }
-        mock_score.return_value = 0.70
+        mock_axes.return_value = {
+            "technical": 0.70, "domain": 0.70, "structure": 0.70, "integrated": 0.70,
+        }
 
         results = run_loop_mod.run_loop(
             target_path=target,

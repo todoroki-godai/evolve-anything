@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.50.3] - 2026-05-13
+
+### Fixed
+- **`test_run_loop_evolve_flag_calls_try_evolve` の 12 秒 mock 漏れを修正** — `run_loop` 内部は `score_variant` ではなく `_score_variant_axes` → `_parallel_score` → `_score_single_axis(claude -p)` の経路で実 LLM を叩いていたため、`score_variant` の mock がスルーされ 3 軸 × リトライで 11-12 秒消費していた。mock 位置を `_score_variant_axes` に修正して 0.04 秒に短縮（closes #41 A）。
+- **`test_fleet TestMainCLI` 2件の 13 秒問題を修正** — `fleet.main()` が `load_config` で tracked_projects を実走査 + `_inject_token_metrics` で token_usage SoR を読み込み 13s 消費していた。`_fast_main_mocks` ヘルパーで本番 IO を遮断し 0.05s に短縮。
+- **`test_pipeline_reflector` の `test_sufficient_data` / `test_degraded_marker` fail を修正** — `_make_outcome` の timestamp が固定日付 `2026-03-01` で、デフォルト `lookback_days=30` の cutoff から外れ「データ不足」判定になっていた。`datetime.now() - 1day` に変更。
+
+### Added
+- **`conftest.py` に LLM 呼び出し guard を追加** — テスト中に `subprocess.run(["claude", ...])` / `subprocess.Popen(["claude", ...])` が呼ばれた瞬間に `RuntimeError` を投げる。mock 漏れによる実 LLM 課金を構造的に防止（issue #41 で 1 セッション 1.5M token 消費の主要因と判明）。integration テスト等で正当に必要な場合は `RL_ALLOW_LLM_IN_TESTS=1` で解除可能（runtime 評価）。
+- **`.claude/rules/no-llm-in-tests.md` 追加 + global `~/.claude/rules/testing.md` 更新** — 単体テストで LLM を呼ばないルールを明文化。mock 位置は call graph を読んで「実際に呼ばれる関数」を選ぶことを規約化。
+
+### Performance
+- **テストスイート全体を 34.92s → 8.09s に短縮**（`scripts/* + hooks/* + bin/*` で 2036 件、4 倍速）。
+
 ## [1.50.2] - 2026-05-13
 
 ### Removed
