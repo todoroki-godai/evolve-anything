@@ -1,6 +1,6 @@
 {
   "name": "rl-anything",
-  "version": "1.50.1",
+  "version": "1.50.2",
   "description": "スキル/ルールの直接パッチ最適化と自律進化ループ",
   "author": {
     "name": "todoroki-godai"
@@ -74,12 +74,6 @@
       "title": "Subagent Warning Threshold",
       "type": "number",
       "description": "Warn via systemMessage when session subagent count reaches this value (default: 5)",
-      "sensitive": false
-    },
-    "token_warn_threshold": {
-      "title": "Token Warning Threshold",
-      "type": "number",
-      "description": "Warn when session cumulative token usage exceeds this value (default: 500000). This tracks API-billed cumulative input+output+cache_read across the session (rate limit / cost axis). For context window occupancy, see ctx_warn_percent. Set to 0 to disable.",
       "sensitive": false
     },
     "ctx_warn_percent": {

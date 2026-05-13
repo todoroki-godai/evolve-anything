@@ -2,7 +2,7 @@
 
 ctx_guard はセッション末尾の usage を見て
 (input_tokens + cache_read_input_tokens + cache_creation_input_tokens) / window
-が閾値%を超えたら警告する。token_guard とは独立した「context window 占有率」軸。
+が閾値%を超えたら警告する（context window 占有率軸）。
 """
 import json
 import os

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.50.2] - 2026-05-13
+
+### Removed
+- **`token_guard` hook を削除** — セッション累積トークン警告は Claude Code 公式の `/usage` および statusline 系コミュニティツール（ccusage 等）でカバーされている領域で、累積警告は既に消費済みのためアクション可能性も低かった。context window 占有率を監視する `ctx_guard` 一本に集約し、`token_warn_threshold` userConfig も削除（`hooks/token_guard.py`・テスト・hooks.json エントリ・rule 内参照を同時更新）。
+- **`PreCompact` 時の handover 提案を削除** — `/compact` はセッション継続が前提の操作のため、handover（次セッション引き継ぎ）を勧めるのは矛盾していた。`save_state.py` の `_suggest_handover()` および対応テストを削除。
+
 ## [1.50.1] - 2026-05-13
 
 ### Fixed

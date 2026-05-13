@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook: 直近メッセージの context window 占有率を監視する。
 
-token_guard との分担:
-- token_guard: セッション累積の API 課金トークン（rate limit / コスト軸）
-- ctx_guard:   最新 message の input_tokens + cache_read + cache_creation を
-               model window で割った占有率（compaction 軸）
+最新 message の input_tokens + cache_read + cache_creation を model window で割った
+占有率を計算し、閾値超過で compaction を促す（context rot 防止）。
+API 課金累計（rate limit / コスト軸）は Claude Code 公式の /usage と statusline で
+カバーされているため、本 hook では扱わない。
 
 設計原則:
 - 末尾から逆走して最初の usage エントリだけ読む（差分キャッシュは不要）

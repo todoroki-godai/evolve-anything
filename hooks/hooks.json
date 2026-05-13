@@ -11,11 +11,6 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/token_guard.py\"",
-            "timeout": 3000
-          },
-          {
-            "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/ctx_guard.py\"",
             "timeout": 3000
           }

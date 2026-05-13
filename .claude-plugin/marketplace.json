@@ -8,7 +8,7 @@
       "name": "rl-anything",
       "source": "./",
       "description": "Automatic skill/rule optimization using direct LLM patches with fitness evaluation and human approval workflow",
-      "version": "1.50.1",
+      "version": "1.50.2",
       "author": {
         "name": "todoroki-godai"
       },
@@ -36,10 +36,16 @@
           "description": "Warn via systemMessage when session subagent count reaches this value (default: 5)",
           "sensitive": false
         },
-        "token_warn_threshold": {
-          "title": "Token Warning Threshold",
+        "ctx_warn_percent": {
+          "title": "Context Window Warning (%)",
           "type": "number",
-          "description": "Warn when session cumulative token usage exceeds this value (default: 50000). Set to 0 to disable.",
+          "description": "Warn when latest message's context occupancy exceeds this percent of the model window (default: 20). Set to 0 to disable.",
+          "sensitive": false
+        },
+        "ctx_window_tokens": {
+          "title": "Context Window Size (tokens)",
+          "type": "number",
+          "description": "Model context window in tokens used by ctx_guard (default: 1000000 for Opus 1M).",
           "sensitive": false
         }
       }

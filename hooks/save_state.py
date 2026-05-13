@@ -90,17 +90,6 @@ def _load_corrections_snapshot() -> list:
     return records
 
 
-def _suggest_handover() -> None:
-    """PreCompact 時に handover を提案する。"""
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
-    if not project_dir:
-        return
-    print(
-        "[rl-anything] コンテキスト圧縮されます。"
-        "作業を引き継ぎノートに残しませんか？ → /rl-anything:handover"
-    )
-
-
 def _safe_session_id(session_id: str) -> str:
     """session_id をファイル名に安全な形式にサニタイズする。"""
     return session_id.replace("/", "_")[:64] if session_id else "unknown"
@@ -132,9 +121,6 @@ def handle_pre_compact(event: dict) -> None:
 
     # TTL cleanup
     common.cleanup_old_checkpoints()
-
-    # Handover 提案
-    _suggest_handover()
 
 
 def main() -> None:
