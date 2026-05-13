@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-_DEFAULT_THRESHOLD = 50000
+_DEFAULT_THRESHOLD = 500000
 _COOLDOWN_SECONDS = 300  # 5分
 _FALLBACK_TAIL_LINES = 500
 

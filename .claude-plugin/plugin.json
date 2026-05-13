@@ -1,6 +1,6 @@
 {
   "name": "rl-anything",
-  "version": "1.49.1",
+  "version": "1.50.0",
   "description": "スキル/ルールの直接パッチ最適化と自律進化ループ",
   "author": {
     "name": "todoroki-godai"
@@ -79,7 +79,19 @@
     "token_warn_threshold": {
       "title": "Token Warning Threshold",
       "type": "number",
-      "description": "Warn when session cumulative token usage exceeds this value (default: 50000). Set to 0 to disable.",
+      "description": "Warn when session cumulative token usage exceeds this value (default: 500000). This tracks API-billed cumulative input+output+cache_read across the session (rate limit / cost axis). For context window occupancy, see ctx_warn_percent. Set to 0 to disable.",
+      "sensitive": false
+    },
+    "ctx_warn_percent": {
+      "title": "Context Window Warning (%)",
+      "type": "number",
+      "description": "Warn when latest message's context occupancy (input_tokens + cache_read + cache_creation) exceeds this percent of the model window (default: 20). Set to 0 to disable.",
+      "sensitive": false
+    },
+    "ctx_window_tokens": {
+      "title": "Context Window Size (tokens)",
+      "type": "number",
+      "description": "Model context window in tokens used by ctx_guard (default: 1000000 for Opus 1M). Adjust if you primarily use a 200K-tier model.",
       "sensitive": false
     }
   }

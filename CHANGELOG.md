@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.50.0] - 2026-05-13
+
+### Added
+- **`ctx_guard` hook 追加** — `UserPromptSubmit` hook に `hooks/ctx_guard.py` を追加。token_guard とは別軸で、最新メッセージの context window 占有率（`input_tokens + cache_read_input_tokens + cache_creation_input_tokens` / window）を監視し、閾値%（デフォルト 20%）を超えると compaction 前提の代替案（`/compact`、`/handover`、Read→Grep 切り替え）を stdout に差し込む。5分クールダウン。`session_id` 未取得・閾値 0・window 0 は silent exit。
+- **`userConfig` に `ctx_warn_percent` / `ctx_window_tokens` 追加** — それぞれデフォルト 20 / 1,000,000 (Opus 1M)。200K-tier モデル中心なら `ctx_window_tokens=200000` に下げる。
+
+### Changed
+- **`token_guard` のデフォルト閾値を 50,000 → 500,000 に引き上げ** — 1M context モデルでは 50K は 1〜2 ターンで超えるため非現実的（`accumulated input + output + cache_read` の合算は cache hit ターンで急速に膨らむ）。rate limit / コスト軸の警告として実害が出る前のラインに調整。`CLAUDE_PLUGIN_OPTION_token_warn_threshold` で従来値に戻すことも可能。
+- **`token_warn_threshold` の userConfig description を明記** — token_guard が「累積課金」、ctx_guard が「window 占有率」と軸を分けて記述。
+
 ## [1.49.1] - 2026-05-13
 
 ### Fixed
