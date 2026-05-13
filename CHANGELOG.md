@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.50.1] - 2026-05-13
+
+### Fixed
+- **`bin/rl-fleet tokens --pj`: pj_slug / 部分一致での解決をサポート** — TOP-N 表示が短縮 slug（例 `anything`, `receipt`）なのに `--pj` 引数は DB の `pj_id` フルパス（例 `-Users-todoroki-tools-rl-anything`）と完全一致しないと空表示になっていた。`_resolve_pj_id()` を追加して exact → slug exact → endswith → contains の優先度で解決。曖昧な場合は候補一覧と共に非ゼロ終了、未発見も非ゼロ終了するように改善。
+
 ## [1.50.0] - 2026-05-13
 
 ### Added

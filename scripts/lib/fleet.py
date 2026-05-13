@@ -861,6 +861,51 @@ def _inject_token_metrics(rows: list[FleetRow], days: int = 30) -> None:
         row.cache_hit_pct = float(hit) if hit is not None else None
 
 
+def _resolve_pj_id(query: str) -> str | list[str] | None:
+    """`--pj` 引数を DB 上の pj_id に解決する。
+
+    - 完全一致 (pj_id or pj_slug) があればそれを返す
+    - 部分一致 (pj_id endswith / contains) を試す
+    - 候補 1 件 → str、複数 → list[str] (ambiguous)、ゼロ → None
+    """
+    try:
+        import token_usage_store as tus  # type: ignore
+    except ImportError:
+        return None
+    try:
+        rows = tus.query(
+            "SELECT pj_id, ANY_VALUE(pj_slug) FROM token_usage GROUP BY pj_id"
+        )
+    except Exception as e:
+        print(f"[fleet tokens] _resolve_pj_id query failed: {e}", file=sys.stderr)
+        return None
+    pairs = [(r[0], r[1] or "") for r in rows]
+    # 1. exact match (pj_id 優先 → 一意なら即返す)
+    for pj_id, _slug in pairs:
+        if query == pj_id:
+            return pj_id
+    # 1b. slug exact match (複数あり得るので集める)
+    slug_hits = [pj_id for pj_id, slug in pairs if query == slug]
+    if len(slug_hits) == 1:
+        return slug_hits[0]
+    if len(slug_hits) > 1:
+        return sorted(slug_hits)
+    # 2. endswith match (slug 形式の suffix)
+    suffix = f"-{query}" if not query.startswith("-") else query
+    endswith_hits = [pj_id for pj_id, _ in pairs if pj_id.endswith(suffix)]
+    if len(endswith_hits) == 1:
+        return endswith_hits[0]
+    if len(endswith_hits) > 1:
+        return sorted(endswith_hits)
+    # 3. contains match (fallback)
+    contains_hits = [pj_id for pj_id, _ in pairs if query in pj_id]
+    if len(contains_hits) == 1:
+        return contains_hits[0]
+    if len(contains_hits) > 1:
+        return sorted(contains_hits)
+    return None
+
+
 def _run_tokens(args) -> int:
     """`rl-fleet tokens` サブコマンド。"""
     try:
@@ -911,11 +956,23 @@ def _run_tokens(args) -> int:
     pj = getattr(args, "pj", None)
     if pj:
         by = getattr(args, "by", "session") or "session"
-        rows = tuq.pj_breakdown(pj, by=by, limit=10)
+        resolved = _resolve_pj_id(pj)
+        if resolved is None:
+            print(f"[fleet tokens] pj not found: {pj!r}", file=sys.stderr)
+            return 1
+        if isinstance(resolved, list):
+            print(
+                f"[fleet tokens] ambiguous --pj {pj!r}, multiple matches:",
+                file=sys.stderr,
+            )
+            for cand in resolved:
+                print(f"  {cand}", file=sys.stderr)
+            return 1
+        rows = tuq.pj_breakdown(resolved, by=by, limit=10)
         if getattr(args, "json", False):
-            print(json.dumps({"pj_id": pj, "by": by, "rows": rows}, ensure_ascii=False, default=str))
+            print(json.dumps({"pj_id": resolved, "by": by, "rows": rows}, ensure_ascii=False, default=str))
         else:
-            print(f"## {pj} — breakdown by {by}")
+            print(f"## {resolved} — breakdown by {by}")
             for r in rows:
                 print(f"  {r['key']}\t{_format_short_int(r.get('tokens', 0))}")
         return 0

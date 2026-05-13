@@ -115,6 +115,55 @@ class TestTokensSubcommand:
         assert "-pj-a" in out
         assert "breakdown" in out
 
+    def test_pj_breakdown_resolves_slug(self, store, capsys):
+        """--pj に pj_slug を渡しても解決される (TOP-N 表示の slug をコピペできる)。"""
+        try:
+            import duckdb  # noqa
+        except ImportError:
+            pytest.skip("duckdb not installed")
+        store.append_batch([
+            _rec("u1", 1, pj_id="-Users-foo-projects-anything", input_tokens=100),
+        ])
+        from fleet import main
+        rc = main(["tokens", "--pj", "anything", "--by", "session"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "breakdown" in out
+        assert "-Users-foo-projects-anything" in out
+
+    def test_pj_breakdown_ambiguous_slug_lists_candidates(self, store, capsys):
+        """slug が複数 pj_id に該当する場合は候補を出して非ゼロ。"""
+        try:
+            import duckdb  # noqa
+        except ImportError:
+            pytest.skip("duckdb not installed")
+        store.append_batch([
+            _rec("u1", 1, pj_id="-Users-foo-a-shared", input_tokens=100),
+            _rec("u2", 1, pj_id="-Users-bar-b-shared", input_tokens=200),
+        ])
+        from fleet import main
+        rc = main(["tokens", "--pj", "shared", "--by", "session"])
+        assert rc != 0
+        err = capsys.readouterr().err
+        assert "ambiguous" in err.lower() or "multiple" in err.lower()
+        assert "-Users-foo-a-shared" in err
+        assert "-Users-bar-b-shared" in err
+
+    def test_pj_breakdown_not_found(self, store, capsys):
+        """マッチしない場合は not found エラー。"""
+        try:
+            import duckdb  # noqa
+        except ImportError:
+            pytest.skip("duckdb not installed")
+        store.append_batch([
+            _rec("u1", 1, pj_id="-pj-a", input_tokens=100),
+        ])
+        from fleet import main
+        rc = main(["tokens", "--pj", "no-such-pj", "--by", "session"])
+        assert rc != 0
+        err = capsys.readouterr().err
+        assert "not found" in err.lower() or "no match" in err.lower()
+
     def test_json_schema_keys_stable(self, store, capsys):
         try:
             import duckdb  # noqa
