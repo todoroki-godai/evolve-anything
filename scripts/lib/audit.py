@@ -1418,6 +1418,37 @@ def build_token_consumption_section(days: int = 30) -> List[str]:
     return lines
 
 
+def _build_test_guard_section(project_dir: Path) -> Optional[List[str]]:
+    """PJ が LLM SDK を使うのに no-llm-in-tests / pytest-no-llm が未導入なら勧める。"""
+    try:
+        import test_guard
+    except ImportError:
+        return None
+    rows = test_guard.collect_test_guard_rows([project_dir])
+    if not rows:
+        return None
+    r = rows[0]
+    if not r.uses_llm:
+        return None
+    if not r.needs_attention and not r.preventive_candidate:
+        return None
+    lines = ["## Test Guard", ""]
+    lines.append(f"このPJはLLM SDKを利用しています ({', '.join(sorted(r.languages))})。")
+    if r.preventive_candidate:
+        lines.append("現在テストフレームワーク未導入のため即時の事故リスクは低いですが、")
+        lines.append("テスト追加時に備え以下のguardを予防的に導入することを推奨します:")
+    else:
+        lines.append("ユニットテストでLLMを誤って実呼び出ししないよう、以下のguardの導入を推奨します:")
+    if not r.has_precommit_hook:
+        lines.append("- pre-commit: `no-llm-in-tests` (静的検出、全言語)")
+    if "python" in r.languages and not r.has_pytest_no_llm:
+        lines.append("- pip: `pytest-no-llm` (実行時 guard、Python のみ)")
+    lines.append("")
+    lines.append("導入方法は ~/tools/no-llm-in-tests/README.md, ~/tools/pytest-no-llm/README.md を参照。")
+    lines.append("")
+    return lines
+
+
 def generate_report(
     artifacts: Dict[str, List[Path]],
     violations: List[Dict[str, Any]],
@@ -1485,6 +1516,12 @@ def generate_report(
         memory_health = build_memory_health_section(artifacts, project_dir)
         if memory_health:
             lines.extend(memory_health)
+
+    # Test Guard 導入状況
+    if project_dir is not None:
+        tg_section = _build_test_guard_section(project_dir)
+        if tg_section:
+            lines.extend(tg_section)
 
     # 使用状況（PJ 固有のみ）
     if usage:

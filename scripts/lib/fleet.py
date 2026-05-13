@@ -691,6 +691,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     discover_p.add_argument("--non-interactive", action="store_true", help="候補を表示するのみ（承認なし）")
 
+    tg_p = sub.add_parser(
+        "test-guard",
+        help="各 PJ で no-llm-in-tests / pytest-no-llm の導入状況を一覧",
+    )
+    tg_sub = tg_p.add_subparsers(dest="tg_command")
+    tg_status = tg_sub.add_parser("status", help="導入状況を表形式で表示（default）")
+    tg_status.add_argument("--root", type=Path, default=None,
+                           help="PJ 列挙のルート (fleet-config 未設定時の fallback)")
+    tg_status.add_argument("--json", action="store_true", help="JSON 出力")
+
     tokens_p = sub.add_parser(
         "tokens",
         help="PJ別 LLM トークン消費 (TOP-N / anomaly / drill-down / backfill)",
@@ -709,6 +719,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_discover(args)
     if args.command == "tokens":
         return _run_tokens(args)
+    if args.command == "test-guard":
+        return _run_test_guard(args)
 
     # default: status
     return _run_status(args)
@@ -754,6 +766,36 @@ def _run_status(args) -> int:
         )
     if not args.no_write:
         write_fleet_run(rows)
+    return 0
+
+
+def _run_test_guard(args) -> int:
+    """各 PJ の test-guard 導入状況を表示。tracked_projects 優先、未設定なら --root。"""
+    import json
+    import test_guard
+    import fleet_config
+
+    config = fleet_config.load_config()
+    tracked = config.get("tracked_projects", [])
+    if tracked:
+        projects = [Path(p) for p in tracked]
+    else:
+        root = args.root or Path.home() / "tools"
+        projects = enumerate_projects(root)
+
+    rows = test_guard.collect_test_guard_rows(projects)
+    if getattr(args, "json", False):
+        print(json.dumps([{
+            "pj_name": r.pj_name,
+            "pj_path": str(r.pj_path),
+            "languages": sorted(r.languages),
+            "uses_llm": r.uses_llm,
+            "has_precommit_hook": r.has_precommit_hook,
+            "has_pytest_no_llm": r.has_pytest_no_llm,
+            "needs_attention": r.needs_attention,
+        } for r in rows], indent=2, ensure_ascii=False))
+    else:
+        print(test_guard.format_test_guard_table(rows), end="")
     return 0
 
 
