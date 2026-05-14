@@ -1,0 +1,37 @@
+# Environment Audit Report
+
+## Growth
+- mock entry
+## Environment
+- mock entry
+## Constitutional
+- mock entry
+## Coherence
+- mock entry
+## Telemetry
+- mock entry
+## Pipeline Health
+- mock entry
+## Cross Project
+- mock entry
+## Summary: 2 artifacts found
+- skills: 1
+- rules: 1
+- memory: 0
+- claude_md: 0
+
+## Line Limit Violations (1)
+- /x/skill.md: 600/500 lines
+
+## Usage (last 30 days)
+- foo: 3 invocations
+- bar: 1 invocations
+
+## gstack analytics
+- mock entry
+## Token Consumption
+
+(Token tracking not initialized — run `rl-fleet tokens --backfill` to enable)
+
+## Potential Duplicates (1)
+- dup: /x/a, /y/a

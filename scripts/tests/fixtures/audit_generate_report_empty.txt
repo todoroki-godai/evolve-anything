@@ -1,0 +1,11 @@
+# Environment Audit Report
+
+## Summary: 0 artifacts found
+- skills: 0
+- rules: 0
+- memory: 0
+- claude_md: 0
+
+## Token Consumption
+
+(Token tracking not initialized — run `rl-fleet tokens --backfill` to enable)

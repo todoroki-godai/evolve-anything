@@ -1,0 +1,31 @@
+# audit module constants
+MAX_PROJECT_RULE_LINES = 10
+MAX_RULE_LINES = 10
+MAX_SKILL_LINES = 500
+NEAR_LIMIT_RATIO = 0.8
+
+# audit public function signatures
+aggregate_plugin_usage(records: List[Dict[str, Any]]) -> Dict[str, int]
+aggregate_usage(records: List[Dict[str, Any]], exclude_plugins: bool = False) -> Dict[str, int]
+build_gstack_analytics_section(records: List[Dict[str, Any]]) -> List[str]
+build_memory_health_section(artifacts: Dict[str, List[pathlib.Path]], project_dir: pathlib.Path) -> List[str]
+build_memory_verification_context(project_dir: pathlib.Path) -> Dict[str, Any]
+build_quality_trends_section(baselines: List[Dict[str, Any]], usage: Dict[str, int]) -> List[str]
+build_temporal_memory_warnings(memory_dir: pathlib.Path, corrections_path: pathlib.Path | None = None) -> List[Dict[str, Any]]
+build_token_consumption_section(days: int = 30) -> List[str]
+check_line_limits(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
+classify_artifact_origin(path: pathlib.Path) -> str
+classify_usage_skill(skill_name: str) -> str | None
+collect_issues(project_dir: pathlib.Path) -> List[Dict[str, Any]]
+detect_duplicates_simple(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
+detect_untagged_reference_candidates(artifacts: Dict[str, List[pathlib.Path]], usage: Dict[str, int], *, project_dir: pathlib.Path | None = None) -> List[Dict[str, Any]]
+find_artifacts(project_dir: pathlib.Path) -> Dict[str, List[pathlib.Path]]
+generate_report(artifacts: Dict[str, List[pathlib.Path]], violations: List[Dict[str, Any]], usage: Dict[str, int], duplicates: List[Dict[str, Any]], advisories: List[Dict[str, Any]], quality_baselines: List[Dict[str, Any]] | None = None, project_dir: pathlib.Path | None = None, plugin_usage: Dict[str, int] | None = None, gstack_analytics: List[str] | None = None, untagged_reference_candidates: List[Dict[str, Any]] | None = None, hardcoded_values: List[Dict[str, Any]] | None = None, coherence_report: List[str] | None = None, telemetry_report: List[str] | None = None, constitutional_report: List[str] | None = None, environment_report: List[str] | None = None, pipeline_health_report: List[str] | None = None, cross_project_report: List[str] | None = None, growth_report: List[str] | None = None) -> str
+generate_sparkline(scores: List[float]) -> str
+load_quality_baselines() -> List[Dict[str, Any]]
+load_usage_data(days: int = 30, *, project_root: pathlib.Path | None = None) -> List[Dict[str, Any]]
+load_usage_registry() -> Dict[str, List[Dict[str, Any]]]
+main() -> None
+run_audit(project_dir: str | None = None, skip_rescore: bool = False, coherence_score: bool = False, telemetry_score: bool = False, constitutional_score: bool = False, pipeline_health: bool = False, cross_project: bool = False, growth: bool = False) -> str
+scope_advisory(registry: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
+semantic_similarity_check(artifacts: Dict[str, List[pathlib.Path]], threshold: float = 0.8) -> List[Dict[str, Any]]
