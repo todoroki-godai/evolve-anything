@@ -288,7 +288,7 @@ class TestRunAuditSubprocess:
         self._write_growth_state(data_dir, pj, env_score=0.65, phase="continuous_growth")
 
         fake = _FakePopen(returncode=0)
-        with mock.patch("fleet.subprocess.Popen", return_value=fake) as m:
+        with mock.patch("fleet.audit_runner.subprocess.Popen", return_value=fake) as m:
             result = run_audit_subprocess(pj, data_dir=data_dir)
 
         assert result.status == AUDIT_OK
@@ -311,7 +311,7 @@ class TestRunAuditSubprocess:
         data_dir = tmp_path / "data"
         data_dir.mkdir()  # ディレクトリはあるがファイルなし
         fake = _FakePopen(returncode=0)
-        with mock.patch("fleet.subprocess.Popen", return_value=fake):
+        with mock.patch("fleet.audit_runner.subprocess.Popen", return_value=fake):
             result = run_audit_subprocess(pj, data_dir=data_dir)
         assert result.status == AUDIT_OK
         assert result.env_score is None
@@ -323,8 +323,8 @@ class TestRunAuditSubprocess:
         pj = self._make_pj(tmp_path)
         data_dir = tmp_path / "data"
         fake = _FakePopen(raise_timeout=True)
-        with mock.patch("fleet.subprocess.Popen", return_value=fake), \
-             mock.patch("fleet.os.killpg") as m_killpg:
+        with mock.patch("fleet.audit_runner.subprocess.Popen", return_value=fake), \
+             mock.patch("fleet.audit_runner.os.killpg") as m_killpg:
             result = run_audit_subprocess(pj, timeout=10, data_dir=data_dir)
         assert result.status == AUDIT_TIMEOUT
         assert "timeout" in result.message.lower()
@@ -338,7 +338,7 @@ class TestRunAuditSubprocess:
             returncode=1,
             stderr="Traceback (most recent call last)\nKeyError: 'foo'",
         )
-        with mock.patch("fleet.subprocess.Popen", return_value=fake):
+        with mock.patch("fleet.audit_runner.subprocess.Popen", return_value=fake):
             result = run_audit_subprocess(pj, data_dir=data_dir)
         assert result.status == AUDIT_ERROR
         assert "KeyError" in result.message
@@ -349,7 +349,7 @@ class TestRunAuditSubprocess:
         data_dir.mkdir()
         (data_dir / f"growth-state-{pj.name}.json").write_text("{ corrupted")
         fake = _FakePopen(returncode=0)
-        with mock.patch("fleet.subprocess.Popen", return_value=fake):
+        with mock.patch("fleet.audit_runner.subprocess.Popen", return_value=fake):
             result = run_audit_subprocess(pj, data_dir=data_dir)
         assert result.status == AUDIT_ERROR
         assert "state parse" in result.message
