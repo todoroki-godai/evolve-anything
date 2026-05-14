@@ -110,3 +110,55 @@ def check_line_limits(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
                 violations.append({"file": str(path), "bytes": byte_size, "bytes_limit": MEMORY_MAX_BYTES, "near_limit": True, "warning_only": True})
 
     return violations
+
+
+def check_python_source_budgets(project_dir: Path) -> List[Dict[str, Any]]:
+    """`scripts/**.py` / `hooks/**.py` の Python source 行数バジェット違反を検出する。
+
+    audit.py が 2046 行まで肥大化した反省から、500 行で warn、800 行で violation。
+    `__init__.py` / `conftest.py` 等の集約・テストファイルは除外
+    （PYTHON_SOURCE_BUDGET_EXCLUDE_BASENAMES）。
+
+    Returns:
+        violation dict のリスト。`hard=True` は要分割（issues に積まれる）、
+        `warning_only=True` は分割検討推奨（near-limit）。
+    """
+    from lib.line_limit import (
+        MAX_PYTHON_SOURCE_LINES,
+        MAX_PYTHON_SOURCE_HARD,
+        PYTHON_SOURCE_BUDGET_EXCLUDE_BASENAMES,
+    )
+
+    violations: List[Dict[str, Any]] = []
+    target_dirs = ["scripts", "hooks"]
+    for sub in target_dirs:
+        base = project_dir / sub
+        if not base.exists():
+            continue
+        for py in base.rglob("*.py"):
+            if py.name in PYTHON_SOURCE_BUDGET_EXCLUDE_BASENAMES:
+                continue
+            # tests/ 配下は除外（fixture や e2e で長大化することがある）
+            if "/tests/" in str(py):
+                continue
+            try:
+                lines = py.read_text(encoding="utf-8").count("\n") + 1
+            except (OSError, UnicodeDecodeError):
+                continue
+            if lines > MAX_PYTHON_SOURCE_HARD:
+                violations.append({
+                    "file": str(py),
+                    "lines": lines,
+                    "limit": MAX_PYTHON_SOURCE_HARD,
+                    "hard": True,
+                    "kind": "python_source_budget",
+                })
+            elif lines > MAX_PYTHON_SOURCE_LINES:
+                violations.append({
+                    "file": str(py),
+                    "lines": lines,
+                    "limit": MAX_PYTHON_SOURCE_LINES,
+                    "warning_only": True,
+                    "kind": "python_source_budget",
+                })
+    return violations

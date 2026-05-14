@@ -57,7 +57,7 @@ from .classification import (  # noqa: F401
 
 
 # find_artifacts / check_line_limits は audit/artifacts.py に集約済み（後方互換のため再エクスポート）
-from .artifacts import find_artifacts, check_line_limits  # noqa: F401
+from .artifacts import find_artifacts, check_line_limits, check_python_source_budgets  # noqa: F401
 
 
 # Memory verification functions are extracted to audit/memory.py

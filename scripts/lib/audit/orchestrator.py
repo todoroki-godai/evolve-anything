@@ -19,7 +19,7 @@ from plugin_root import PLUGIN_ROOT
 from rl_common import DATA_DIR
 from hardcoded_detector import detect_hardcoded_values
 
-from .artifacts import find_artifacts, check_line_limits
+from .artifacts import find_artifacts, check_line_limits, check_python_source_budgets
 from .usage import load_usage_data, aggregate_usage, aggregate_plugin_usage
 from .scope import detect_duplicates_simple, load_usage_registry, scope_advisory
 from .quality import load_quality_baselines
@@ -143,6 +143,8 @@ def run_audit(
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
     violations = check_line_limits(artifacts)
+    # Python source 行数バジェット (Slice 13 — 肥大化予防)
+    violations.extend(check_python_source_budgets(proj))
     usage_records = load_usage_data(project_root=proj)
     usage = aggregate_usage(usage_records, exclude_plugins=True)
     plugin_usage = aggregate_plugin_usage(usage_records)

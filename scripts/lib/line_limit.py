@@ -15,6 +15,13 @@ MAX_RULE_LINES = 10
 MAX_PROJECT_RULE_LINES = 10
 CLAUDEMD_WARNING_LINES = 300
 
+# Python source ファイルの行数バジェット（audit.py 2046行肥大化の反省、Slice 13）
+# warn: 分割検討を促す / hard: violation として issues に積む
+# __init__.py / migrations / 自動生成ファイルは除外（PYTHON_SOURCE_BUDGET_EXCLUDE_BASENAMES）
+MAX_PYTHON_SOURCE_LINES = 500
+MAX_PYTHON_SOURCE_HARD = 800
+PYTHON_SOURCE_BUDGET_EXCLUDE_BASENAMES = {"__init__.py", "conftest.py"}
+
 # 制限値の何割を超えたら「near-limit」警告を出すか。audit/discover/remediation で共用。
 NEAR_LIMIT_RATIO = 0.8
 

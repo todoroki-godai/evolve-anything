@@ -14,6 +14,7 @@ build_quality_trends_section(baselines: List[Dict[str, Any]], usage: Dict[str, i
 build_temporal_memory_warnings(memory_dir: pathlib.Path, corrections_path: pathlib.Path | None = None) -> List[Dict[str, Any]]
 build_token_consumption_section(days: int = 30) -> List[str]
 check_line_limits(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
+check_python_source_budgets(project_dir: pathlib.Path) -> List[Dict[str, Any]]
 classify_artifact_origin(path: pathlib.Path) -> str
 classify_usage_skill(skill_name: str) -> str | None
 collect_issues(project_dir: pathlib.Path) -> List[Dict[str, Any]]
