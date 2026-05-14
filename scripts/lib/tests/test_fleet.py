@@ -456,8 +456,8 @@ class TestCollectFleetStatus:
                 latest_audit=datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc),
             )
 
-        with mock.patch("fleet.classify_project", side_effect=fake_classify), \
-             mock.patch("fleet.run_audit_subprocess", side_effect=fake_audit) as m_audit:
+        with mock.patch("fleet.collectors.classify_project", side_effect=fake_classify), \
+             mock.patch("fleet.collectors.run_audit_subprocess", side_effect=fake_audit) as m_audit:
             rows = collect_fleet_status(root=root)
 
         assert [r.pj_name for r in rows] == ["a", "b"]
@@ -469,7 +469,7 @@ class TestCollectFleetStatus:
         assert m_audit.call_count == 1
 
     def test_rootに候補なしなら空リスト(self, tmp_path):
-        with mock.patch("fleet.classify_project"), mock.patch("fleet.run_audit_subprocess"):
+        with mock.patch("fleet.collectors.classify_project"), mock.patch("fleet.collectors.run_audit_subprocess"):
             rows = collect_fleet_status(root=tmp_path / "empty")
         assert rows == []
 
@@ -485,9 +485,9 @@ class TestCollectFleetStatus:
         (pj_1 / ".claude").mkdir(parents=True)
         (pj_2 / ".claude").mkdir(parents=True)
 
-        with mock.patch("fleet.enumerate_projects") as m_enum, \
-             mock.patch("fleet.classify_project", return_value=STATUS_ENABLED), \
-             mock.patch("fleet.run_audit_subprocess", return_value=AuditResult(
+        with mock.patch("fleet.collectors.enumerate_projects") as m_enum, \
+             mock.patch("fleet.collectors.classify_project", return_value=STATUS_ENABLED), \
+             mock.patch("fleet.collectors.run_audit_subprocess", return_value=AuditResult(
                  status=AUDIT_OK, env_score=0.5, growth_level=5,
              )):
             rows = collect_fleet_status(projects=[pj_1, pj_2])
@@ -508,9 +508,9 @@ class TestCollectFleetStatus:
 
         # enumerate_projects は直下のみ列挙するので、ns_a / ns_b を直接列挙されるよう
         # 疑似的に patch する
-        with mock.patch("fleet.enumerate_projects", return_value=[pj_a1, pj_a2]), \
-             mock.patch("fleet.classify_project", return_value=STATUS_ENABLED), \
-             mock.patch("fleet.run_audit_subprocess") as m_audit:
+        with mock.patch("fleet.collectors.enumerate_projects", return_value=[pj_a1, pj_a2]), \
+             mock.patch("fleet.collectors.classify_project", return_value=STATUS_ENABLED), \
+             mock.patch("fleet.collectors.run_audit_subprocess") as m_audit:
             rows = collect_fleet_status(root=root)
 
         assert len(rows) == 2
