@@ -1,0 +1,29 @@
+# discover module constants
+BEHAVIOR_THRESHOLD = 5
+ERROR_THRESHOLD = 3
+HOOK_CANDIDATE_THRESHOLD = 3
+JACCARD_THRESHOLD = 0.15
+MAX_RULE_LINES = 10
+MAX_SKILL_LINES = 500
+MISSED_SKILL_THRESHOLD = 2
+REJECTION_THRESHOLD = 3
+
+# discover public function / class signatures
+add_merge_suppression(skill_a: str, skill_b: str) -> None
+add_to_suppression_list(pattern: str) -> None
+detect_behavior_patterns(threshold: int = 5, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> List[Dict[str, Any]]
+detect_error_patterns(threshold: int = 3, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> List[Dict[str, Any]]
+detect_installed_artifacts(tool_usage_patterns: Dict[str, Any] | None = None) -> List[Dict[str, Any]]
+detect_missed_skills(threshold: int = 2, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> Dict[str, Any]
+detect_recommended_artifacts(tool_usage_patterns: Dict[str, Any] | None = None) -> List[Dict[str, Any]]
+detect_rejection_patterns(threshold: int = 3) -> List[Dict[str, Any]]
+detect_repeated_correction_patterns(corrections: List[Dict[str, Any]], threshold: int = 3) -> List[Dict[str, Any]]
+determine_scope(pattern: Dict[str, Any]) -> str
+load_claude_reflect_data() -> List[Dict[str, Any]]
+load_jsonl(filepath: pathlib.Path) -> List[Dict[str, Any]]
+load_merge_suppression() -> set
+load_suppression_list() -> set
+main() -> None
+run_discover(*, project_root: pathlib.Path | None = None, include_unknown: bool = False, tool_usage: bool = False) -> Dict[str, Any]
+validate_rule_content(content: str) -> bool
+validate_skill_content(content: str) -> bool
