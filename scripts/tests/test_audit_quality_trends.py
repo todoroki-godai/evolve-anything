@@ -169,7 +169,8 @@ def test_generate_report_empty_quality_baselines():
 
 def test_load_quality_baselines_missing_file(tmp_path):
     """ファイルが無ければ空リスト。"""
-    with patch("audit.DATA_DIR", tmp_path):
+    # load_quality_baselines は audit.quality に分離済み (Phase 2 第三弾)
+    with patch("audit.quality.DATA_DIR", tmp_path):
         assert load_quality_baselines() == []
 
 
@@ -184,7 +185,7 @@ def test_load_quality_baselines_valid(tmp_path):
         "\n".join(json.dumps(r) for r in records) + "\n",
         encoding="utf-8",
     )
-    with patch("audit.DATA_DIR", tmp_path):
+    with patch("audit.quality.DATA_DIR", tmp_path):
         result = load_quality_baselines()
         assert len(result) == 2
 

@@ -158,8 +158,7 @@ def build_gstack_analytics_section(
     lines.append("")
 
     # 品質トレンド（quality-baselines.jsonl から gstack スキルのみ）
-    # load_quality_baselines は audit/__init__.py に定義されているため遅延 import
-    from . import load_quality_baselines
+    from .quality import load_quality_baselines
 
     baselines = load_quality_baselines()
     if baselines:
