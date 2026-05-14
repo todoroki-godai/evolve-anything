@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- **fleet/ パッケージから PJ 列挙 / 導入状況判定を `fleet/project_loader.py` に分離 (Slice 13 dogfooding Phase 1 / Slice 2)** — `_pj_safe_name` / `resolve_auto_memory_dir` / `enumerate_projects` / `_load_settings_with_retry` / `_is_plugin_enabled` / `_latest_activity` / `_safe_compute_level` / `classify_project` (~150行) を切り出し。`__init__.py` は再エクスポートで `from fleet import classify_project, enumerate_projects, resolve_auto_memory_dir` の後方互換維持（snapshot test green）。`__init__.py` は 964 → 847 行（−117 行、累計 1069 → 847）。fleet Phase 1 design doc Slice 2。
 - **`scripts/lib/fleet.py` (1069行) を `scripts/lib/fleet/` パッケージに分割し、formatters を `fleet/formatters.py` に分離 (Slice 13 dogfooding Phase 1 / Slice 1)** — `fleet.py` → `fleet/__init__.py` にパッケージ化したうえで、`_TABLE_HEADERS` / `_format_short_int` / `_format_cell_*` 8 個 / `_format_relative` / `format_status_table` (~120行) を `fleet/formatters.py` に切り出し。`__init__.py` は再エクスポートで `from fleet import format_status_table` 等の後方互換維持（外部 importer 14 箇所すべて継続動作、snapshot test green）。`FleetRow` への参照は `from __future__ import annotations` + `TYPE_CHECKING` で循環 import 回避。`__init__.py` は 1069 → 964 行（−105 行）。fleet Phase 1 design doc Slice 1。
 
 ### Added
