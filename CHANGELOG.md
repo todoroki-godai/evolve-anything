@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **`scripts/lib/fleet.py` (1069行) を `scripts/lib/fleet/` パッケージに分割し、formatters を `fleet/formatters.py` に分離 (Slice 13 dogfooding Phase 1 / Slice 1)** — `fleet.py` → `fleet/__init__.py` にパッケージ化したうえで、`_TABLE_HEADERS` / `_format_short_int` / `_format_cell_*` 8 個 / `_format_relative` / `format_status_table` (~120行) を `fleet/formatters.py` に切り出し。`__init__.py` は再エクスポートで `from fleet import format_status_table` 等の後方互換維持（外部 importer 14 箇所すべて継続動作、snapshot test green）。`FleetRow` への参照は `from __future__ import annotations` + `TYPE_CHECKING` で循環 import 回避。`__init__.py` は 1069 → 964 行（−105 行）。fleet Phase 1 design doc Slice 1。
+
 ### Added
 - **`scripts/tests/test_fleet_snapshot.py`** — fleet リファクタのレグレッション防止 snapshot test を追加 (Slice 13 dogfooding Phase 1 / Slice 0)。`fleet` モジュールの公開関数/クラスシグネチャ + module-level constants の dump を fixture 化（`scripts/tests/fixtures/fleet_api_surface.txt`、13 シンボル + 6 定数）。後続の Phase 1 (fleet/ パッケージ分割) で外部 importer (bin/rl-fleet, prune.py, evolve.py, test_fleet_tokens.py 等) が依存する `from fleet import X` 互換性を byte レベルで保証する。fixture 更新は `UPDATE_SNAPSHOTS=1 pytest` で。
 - **Python source 行数バジェット guard を追加 (Slice 13)** — `scripts/lib/line_limit.py` に `MAX_PYTHON_SOURCE_LINES=500` (warn) / `MAX_PYTHON_SOURCE_HARD=800` (violation) を追加。`audit.check_python_source_budgets(project_dir)` が `scripts/**.py` / `hooks/**.py` をスキャンし、warn / hard の violation を `run_audit` の violations に積む（report に "Line Limit Violations" として表示）。`__init__.py` / `conftest.py` / `tests/` 配下は除外。`.claude/rules/file-size-budget.md` で運用ルール宣言。audit.py 2046行肥大化（PR #51-#61 で 178 行へ分割）の再発予防。本機能の追加で現リポジトリでも 15 件の既存違反（`fleet.py` 1070行 / `discover.py` 1131行 等）が可視化される。
