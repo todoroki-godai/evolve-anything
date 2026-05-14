@@ -306,7 +306,8 @@ def test_memory_health_auto_memory(tmp_path):
     }
 
     artifacts = {"memory": []}
-    with patch("audit.read_auto_memory", return_value=[auto_entry]):
+    # build_memory_health_section は audit.memory に分離済み (Phase 2)
+    with patch("audit.memory.read_auto_memory", return_value=[auto_entry]):
         lines = build_memory_health_section(artifacts, tmp_path)
 
     text = "\n".join(lines)

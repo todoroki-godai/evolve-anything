@@ -47,7 +47,9 @@ def _collect_api_surface() -> str:
         if name.startswith("_"):
             continue
         obj = getattr(audit, name)
-        if callable(obj) and getattr(obj, "__module__", "") == "audit":
+        # audit パッケージ化後は submodule (audit.memory 等) も公開 API に含める
+        mod = getattr(obj, "__module__", "")
+        if callable(obj) and (mod == "audit" or mod.startswith("audit.")):
             funcs.append(name)
     for name in sorted(funcs):
         sig = inspect.signature(getattr(audit, name))
