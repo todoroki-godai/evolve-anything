@@ -13,7 +13,9 @@ from typing import Any, Dict, List, Optional
 
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# パッケージ化後 (Phase 2): __file__ は scripts/lib/discover/__init__.py のため
+# scripts/lib/ を sys.path に追加して plugin_root / line_limit / similarity 等を解決
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
 
@@ -39,68 +41,19 @@ JACCARD_THRESHOLD = 0.15
 SUPPRESSION_FILE = DATA_DIR / "discover-suppression.jsonl"
 
 
-def load_jsonl(filepath: Path) -> List[Dict[str, Any]]:
-    """JSONL ファイルを読み込む。"""
-    if not filepath.exists():
-        return []
-    records = []
-    for line in filepath.read_text(encoding="utf-8").splitlines():
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
-
-
-def load_suppression_list() -> set:
-    """抑制リスト（2回 reject されたパターン）を読み込む。
-
-    type: "merge" エントリは除外し、type 未指定エントリのみを返す。
-    """
-    records = load_jsonl(SUPPRESSION_FILE)
-    return set(r.get("pattern", "") for r in records if r.get("type") != "merge")
-
-
-def load_merge_suppression() -> set:
-    """merge suppression リスト（type: "merge" エントリ）を読み込み、ペアキーの set を返す。"""
-    records = load_jsonl(SUPPRESSION_FILE)
-    return set(r.get("pattern", "") for r in records if r.get("type") == "merge")
-
-
-def add_merge_suppression(skill_a: str, skill_b: str) -> None:
-    """merge suppression エントリを追加する。スキル名をソートし :: 結合で正規化。
-
-    書き込み失敗時は stderr にエラー出力し、例外を送出しない。
-    """
-    key = "::".join(sorted([skill_a, skill_b]))
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(SUPPRESSION_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"pattern": key, "type": "merge"}, ensure_ascii=False) + "\n")
-    except OSError as e:
-        print(f"[rl-anything] merge suppression write failed: {e}", file=sys.stderr)
-
-
-def add_to_suppression_list(pattern: str) -> None:
-    """抑制リストにパターンを追加する。"""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with open(SUPPRESSION_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"pattern": pattern}, ensure_ascii=False) + "\n")
-
-
-def _load_classify_usage_skill():
-    """audit.py の _is_plugin_skill と classify_usage_skill を遅延インポートで取得する。
-
-    Returns:
-        _is_plugin_skill 関数（classify_usage_skill + _is_gstack_skill + _is_openspec_skill の併用）
-    """
-    import sys as _sys
-    _plugin_root = PLUGIN_ROOT
-    _audit_scripts = _plugin_root / "skills" / "audit" / "scripts"
-    if str(_audit_scripts) not in _sys.path:
-        _sys.path.insert(0, str(_audit_scripts))
-    from audit import _is_plugin_skill, classify_usage_skill
-    return _is_plugin_skill, classify_usage_skill
+# 抑制リスト / JSONL ローダ / バリデータ / トークン抽出は discover/suppression.py に集約済み（後方互換のため再エクスポート）
+from .suppression import (  # noqa: E402, F401
+    load_jsonl,
+    load_suppression_list,
+    load_merge_suppression,
+    add_merge_suppression,
+    add_to_suppression_list,
+    validate_skill_content,
+    validate_rule_content,
+    load_claude_reflect_data,
+    _load_skill_tokens,
+    _load_classify_usage_skill,
+)
 
 
 def detect_behavior_patterns(
@@ -487,52 +440,7 @@ def determine_scope(pattern: Dict[str, Any]) -> str:
     return "project"  # デフォルト
 
 
-def validate_skill_content(content: str) -> bool:
-    """スキル候補の構造バリデーション（MUST 500行以下）。"""
-    lines = content.count("\n") + 1
-    return lines <= MAX_SKILL_LINES
-
-
-def validate_rule_content(content: str) -> bool:
-    """ルール候補の構造バリデーション（MUST 3行以内）。"""
-    lines = content.count("\n") + 1
-    return lines <= MAX_RULE_LINES
-
-
-def load_claude_reflect_data() -> List[Dict[str, Any]]:
-    """corrections.jsonl から pending の修正データのみ取り込む。未生成時はスキップ。
-
-    reflect が処理するのは pending のみであるため、
-    evolve の reflect_data_count と reflect の認識を一致させる。
-    """
-    corrections_file = DATA_DIR / "corrections.jsonl"
-
-    if not corrections_file.exists():
-        return []
-
-    records = load_jsonl(corrections_file)
-    return [r for r in records if r.get("reflect_status", "pending") == "pending"]
-
-
 # ---------- enrich (Jaccard 照合、旧 enrich.py から統合) ----------
-
-
-def _load_skill_tokens(skill_path: Path) -> Dict[str, Any]:
-    """SKILL.md の先頭 50 行 + スキル名からトークン集合を生成する。"""
-    from typing import Set as _Set
-
-    tokens: _Set[str] = set()
-    skill_name = skill_path.parent.name
-    tokens |= tokenize(skill_name)
-
-    try:
-        lines = skill_path.read_text(encoding="utf-8").splitlines()[:50]
-        for line in lines:
-            tokens |= tokenize(line)
-    except OSError:
-        pass
-
-    return {"path": skill_path, "name": skill_name, "tokens": tokens}
 
 
 def _enrich_patterns(
