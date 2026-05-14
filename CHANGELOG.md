@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **`docs/refactoring/audit-coverage-baseline.md`** — Phase 2 (audit/ パッケージ分割) の事前計測。`scripts/lib/audit.py` の statement カバレッジ 52.8% (631/1177)、branch カバレッジ 80 partial / 570。missing line spans の上位 30 を記録。分割境界判断材料 + 切り出し前後の回帰チェック用ベースライン。
 - **`scripts/tests/test_audit_snapshot.py`** — audit リファクタのレグレッション防止 snapshot test を追加。`audit` モジュールの公開関数シグネチャ + module-level constants の dump と、`generate_report()` の empty / populated 入力に対する出力を fixture 化（`scripts/tests/fixtures/audit_*.txt`）。後続の PR0 (named constants 集約) / Phase 2 (audit/ パッケージ分割) で振る舞いが変わったら byte レベルで検知する。`HOME` / `CLAUDE_PLUGIN_DATA` を tmp に向けて完全決定論化。fixture 更新は `UPDATE_SNAPSHOTS=1 pytest` で。
 
 ### Changed
