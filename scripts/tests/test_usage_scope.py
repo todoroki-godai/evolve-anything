@@ -25,9 +25,9 @@ import discover
 @pytest.fixture(autouse=True)
 def reset_cache():
     """各テスト前にキャッシュをリセット。"""
-    audit._plugin_skill_map_cache = None
+    audit.classification._plugin_skill_map_cache = None
     yield
-    audit._plugin_skill_map_cache = None
+    audit.classification._plugin_skill_map_cache = None
 
 
 def _setup_fake_plugins(tmp_path):

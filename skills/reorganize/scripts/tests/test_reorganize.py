@@ -256,7 +256,7 @@ class TestPluginSkillsExcluded:
 
         # プラグインキャッシュにスキルを作成してプラグイン判定させる
         plugin_paths = []
-        audit._plugin_skill_map_cache = {"plugin-skill-a": "test-plugin", "plugin-skill-b": "test-plugin"}
+        audit.classification._plugin_skill_map_cache = {"plugin-skill-a": "test-plugin", "plugin-skill-b": "test-plugin"}
         try:
             for name in ["plugin-skill-a", "plugin-skill-b"]:
                 skill_dir = skills_dir / name
@@ -278,7 +278,7 @@ class TestPluginSkillsExcluded:
             assert result["reason"] == "insufficient_skills"
             assert result["count"] == 3
         finally:
-            audit._plugin_skill_map_cache = None
+            audit.classification._plugin_skill_map_cache = None
 
 
 class TestClustersOutput:

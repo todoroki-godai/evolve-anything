@@ -162,15 +162,15 @@ def test_plugin_skill_excluded_from_line_limit(project_dir, tmp_path, monkeypatc
     artifacts = _find_artifacts_local_only(project_dir)
     artifacts["skills"].extend([plugin_skill_md])
 
-    orig_cache = audit_mod._plugin_skill_map_cache
-    audit_mod._plugin_skill_map_cache = {"browse": "gstack"}
+    orig_cache = audit_mod.classification._plugin_skill_map_cache
+    audit_mod.classification._plugin_skill_map_cache = {"browse": "gstack"}
     try:
         from audit import check_line_limits, classify_artifact_origin
         # plugin 分類確認
         assert classify_artifact_origin(plugin_skill_md) == "plugin"
         violations = check_line_limits(artifacts)
     finally:
-        audit_mod._plugin_skill_map_cache = orig_cache
+        audit_mod.classification._plugin_skill_map_cache = orig_cache
 
     assert len([v for v in violations if "browse" in v.get("file", "")]) == 0
 

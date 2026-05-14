@@ -22,11 +22,7 @@ from hardcoded_detector import detect_hardcoded_values
 from frontmatter import count_content_lines
 from path_extractor import extract_paths_outside_codeblocks as _extract_paths_outside_codeblocks, KNOWN_DIR_PREFIXES
 from skill_origin import (
-    classify_skill_origin as _so_classify_skill_origin,
-    get_plugin_skill_map as _so_get_plugin_skill_map,
     get_plugin_skill_names as _so_get_plugin_skill_names,
-    build_plugin_prefixes as _so_build_plugin_prefixes,
-    classify_usage_skill as _so_classify_usage_skill,
     invalidate_cache as _so_invalidate_cache,
 )
 
@@ -48,96 +44,16 @@ from ._constants import LIMITS, _STOPWORDS  # noqa: F401
 
 # KNOWN_DIR_PREFIXES は path_extractor から import 済み
 
-# キャッシュ: skill_origin.py に委譲（後方互換ラッパー）
-# テスト後方互換: audit._plugin_skill_map_cache を直接セットするテスト向け
-_plugin_skill_map_cache: Optional[Dict[str, str]] = None
-
-
-def _load_plugin_skill_map() -> Dict[str, str]:
-    """installed_plugins.json → {skill_name: plugin_name} マッピングを構築。
-
-    skill_origin.py に委譲。後方互換のためラッパーとして残す。
-    テストが _plugin_skill_map_cache を直接セットした場合はそちらを優先。
-    """
-    if _plugin_skill_map_cache is not None:
-        _build_plugin_prefixes(_plugin_skill_map_cache)
-        return _plugin_skill_map_cache
-    mapping = _so_get_plugin_skill_map()
-    # prefix も構築（classify_usage_skill の後方互換用）
-    _build_plugin_prefixes(mapping)
-    return mapping
-
-
-# プラグイン名 → prefix パターンのキャッシュ
-_plugin_prefix_cache: Optional[Dict[str, List[str]]] = None
-
-
-def _build_plugin_prefixes(mapping: Dict[str, str]) -> None:
-    """skill_origin.py に委譲。後方互換ラッパー。"""
-    global _plugin_prefix_cache
-    _plugin_prefix_cache = _so_build_plugin_prefixes(mapping)
-
-
-def classify_usage_skill(skill_name: str) -> Optional[str]:
-    """usage レコードのスキル名をプラグインに分類する。
-
-    skill_origin.py に委譲。後方互換ラッパー。
-    """
-    # prefix キャッシュ初期化を保証
-    _load_plugin_skill_map()
-    return _so_classify_usage_skill(skill_name)
-
-
-def _load_plugin_skill_names() -> frozenset:
-    """後方互換ラッパー。テストが _plugin_skill_map_cache を直接セットした場合はそちらを優先。"""
-    if _plugin_skill_map_cache is not None:
-        return frozenset(_plugin_skill_map_cache.keys())
-    return frozenset(_load_plugin_skill_map().keys())
-
-
-def classify_artifact_origin(path: Path) -> str:
-    """スキル/ルールの出自を分類する。skill_origin.py に委譲。
-
-    テストが _plugin_skill_map_cache を直接セットした場合は、
-    そのキャッシュを使ってインライン判定する（後方互換）。
-
-    Returns:
-        "plugin" — プラグイン由来
-        "global" — ~/.claude/skills/ 配下
-        "custom" — その他（プロジェクトローカル等）
-    """
-    if _plugin_skill_map_cache is not None:
-        # テスト後方互換: ローカルキャッシュが設定されている場合はインライン判定
-        resolved = path.expanduser().resolve()
-        resolved_str = str(resolved)
-
-        plugins_dir = os.environ.get("CLAUDE_PLUGINS_DIR")
-        if plugins_dir:
-            plugins_path = str(Path(plugins_dir).resolve())
-        else:
-            plugins_path = str(Path.home() / ".claude" / "plugins" / "cache")
-
-        if resolved_str.startswith(plugins_path):
-            return "plugin"
-
-        global_skills_path = str(Path.home() / ".claude" / "skills")
-        if resolved_str.startswith(global_skills_path):
-            return "global"
-
-        if "/.claude/skills/" in resolved_str:
-            parts = resolved.parts
-            try:
-                skills_idx = len(parts) - 1 - list(reversed(parts)).index("skills")
-                if skills_idx + 1 < len(parts):
-                    skill_dir_name = parts[skills_idx + 1]
-                    if skill_dir_name in _plugin_skill_map_cache:
-                        return "plugin"
-            except ValueError:
-                pass
-
-        return "custom"
-
-    return _so_classify_skill_origin(path)
+# 分類ロジックは audit/classification.py に集約済み（後方互換のため再エクスポート）
+# テストが `audit._plugin_skill_map_cache` を直接セットしていた箇所は
+# `audit.classification._plugin_skill_map_cache` に追従させること（Phase 2 第五弾）。
+from .classification import (  # noqa: F401
+    _load_plugin_skill_map,
+    _build_plugin_prefixes,
+    _load_plugin_skill_names,
+    classify_usage_skill,
+    classify_artifact_origin,
+)
 
 
 def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:

@@ -16,9 +16,9 @@ import audit
 
 @pytest.fixture(autouse=True)
 def reset_cache():
-    audit._plugin_skill_map_cache = None
+    audit.classification._plugin_skill_map_cache = None
     yield
-    audit._plugin_skill_map_cache = None
+    audit.classification._plugin_skill_map_cache = None
 
 
 @pytest.fixture
