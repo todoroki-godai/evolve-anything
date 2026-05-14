@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **`hooks/tests/test_hooks.py` (2017行) を機能別 7 ファイルに分割** — `test_hooks_workflow.py` / `_observe.py` / `_session.py` / `_discover_prune.py` / `_safety.py` / `_worktree.py` / `_misc.py`。共有 fixture (`tmp_data_dir`, `patch_data_dir`) と sys.path 設定は `hooks/tests/conftest.py` に一元化。テスト件数・挙動は不変（160 passed）。大規模リファクタの一環で、巨大テストファイルによる Read コスト削減を狙う。
+
 ## [1.51.0] - 2026-05-14
 
 ### Added

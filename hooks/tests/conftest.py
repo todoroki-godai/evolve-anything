@@ -1,0 +1,50 @@
+"""hooks/tests/ 共通の sys.path 設定と fixture。
+
+旧 test_hooks.py から PR-A で分離。テーマ別ファイル (test_hooks_*.py) はここを参照する。
+"""
+import sys
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+# hooks/ をインポートパスに追加
+_hooks = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_hooks))
+# scripts/lib/ も追加（rl_common を直接パッチするため）
+sys.path.insert(0, str(_hooks.parent / "scripts" / "lib"))
+
+import common  # noqa: E402
+import rl_common  # noqa: E402
+import session_store  # noqa: E402
+
+
+@pytest.fixture
+def tmp_data_dir(tmp_path):
+    """テスト用の一時データディレクトリ。"""
+    data_dir = tmp_path / "rl-anything"
+    data_dir.mkdir()
+    return data_dir
+
+
+@pytest.fixture
+def patch_data_dir(tmp_data_dir):
+    """common.DATA_DIR / CHECKPOINTS_DIR と rl_common の同名変数を一時ディレクトリに差し替える。
+
+    common.py が rl_common の re-exporter になったため、関数内部で参照される
+    rl_common.DATA_DIR / CHECKPOINTS_DIR / FALSE_POSITIVES_FILE も同時にパッチする。
+    """
+    checkpoints = tmp_data_dir / "checkpoints"
+    fp_file = tmp_data_dir / "false_positives.jsonl"
+    sessions_db = tmp_data_dir / "sessions.db"
+    sessions_jsonl = tmp_data_dir / "sessions.jsonl"
+    with mock.patch.object(common, "DATA_DIR", tmp_data_dir), \
+         mock.patch.object(common, "CHECKPOINTS_DIR", checkpoints), \
+         mock.patch.object(common, "FALSE_POSITIVES_FILE", fp_file), \
+         mock.patch.object(rl_common, "DATA_DIR", tmp_data_dir), \
+         mock.patch.object(rl_common, "CHECKPOINTS_DIR", checkpoints), \
+         mock.patch.object(rl_common, "FALSE_POSITIVES_FILE", fp_file), \
+         mock.patch.object(session_store, "DATA_DIR", tmp_data_dir), \
+         mock.patch.object(session_store, "SESSIONS_DB", sessions_db), \
+         mock.patch.object(session_store, "SESSIONS_JSONL", sessions_jsonl):
+        yield tmp_data_dir
