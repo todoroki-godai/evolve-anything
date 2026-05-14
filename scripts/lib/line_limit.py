@@ -15,6 +15,9 @@ MAX_RULE_LINES = 10
 MAX_PROJECT_RULE_LINES = 10
 CLAUDEMD_WARNING_LINES = 300
 
+# 制限値の何割を超えたら「near-limit」警告を出すか。audit/discover/remediation で共用。
+NEAR_LIMIT_RATIO = 0.8
+
 # MEMORY.md バイトサイズ制限（CC v2.1.83 で 25KB 切り詰め追加）
 MEMORY_MAX_BYTES = 25_000
 MEMORY_NEAR_LIMIT_BYTES = 20_000  # 80% 警告閾値

@@ -35,6 +35,7 @@ from line_limit import (
     MAX_PROJECT_RULE_LINES,
     MAX_RULE_LINES,
     MAX_SKILL_LINES,
+    NEAR_LIMIT_RATIO,
 )
 
 LIMITS = {
@@ -66,10 +67,6 @@ _STOPWORDS = frozenset({
     "の", "は", "が", "を", "に", "で", "と", "も", "や", "か",
     "する", "した", "して", "です", "ます", "ある", "いる", "なる",
 })
-
-# 肥大化早期警告の閾値（行数上限に対する比率）
-NEAR_LIMIT_RATIO = 0.8
-
 
 # キャッシュ: skill_origin.py に委譲（後方互換ラッパー）
 # テスト後方互換: audit._plugin_skill_map_cache を直接セットするテスト向け
