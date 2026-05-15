@@ -10,6 +10,36 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# slice 1: helpers / templates 再エクスポート（後方互換）
+from .helpers import (  # noqa: F401
+    EXCLUDE_DIRS,
+    LARGE_REPO_FILE_THRESHOLD,
+    PRIORITY_DIRS,
+    _PY_DICT_BUILD_RE,
+    _PY_IMPORT_RE,
+    _TS_IMPORT_RE,
+    _TS_OBJ_BUILD_RE,
+    _detect_primary_language,
+    _has_cross_module_pattern,
+    _is_test_file,
+    _iter_source_files,
+    _safe_result,
+)
+from .templates import (  # noqa: F401
+    _CROSS_LAYER_RULE_TEMPLATE,
+    _EVIDENCE_RULE_TEMPLATE,
+    _HAPPY_PATH_RULE_TEMPLATE,
+    _PYTHON_RULE_TEMPLATE,
+    _SIDE_EFFECT_API_PATTERNS,
+    _SIDE_EFFECT_CATEGORIES,
+    _SIDE_EFFECT_DB_PATTERNS,
+    _SIDE_EFFECT_MQ_PATTERNS,
+    _SIDE_EFFECT_RULE_TEMPLATE,
+    _TEST_DIR_NAMES,
+    _TEST_FILE_PATTERNS,
+    _TYPESCRIPT_RULE_TEMPLATE,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── 閾値定数 ──────────────────────────────────────────
@@ -20,65 +50,6 @@ MIN_CROSS_LAYER_PATTERNS = 3
 HAPPY_PATH_MIN_PATTERNS = 2
 DETECTION_TIMEOUT_SECONDS = 5
 MAX_CATALOG_ENTRIES = 10
-LARGE_REPO_FILE_THRESHOLD = 1000
-
-# ── 除外ディレクトリ ──────────────────────────────────
-EXCLUDE_DIRS = {"node_modules", ".venv", "__pycache__", ".git", ".tox", "dist", "build"}
-PRIORITY_DIRS = ["scripts", "src", "lib", "skills"]
-
-# ── ルールテンプレート ────────────────────────────────
-_PYTHON_RULE_TEMPLATE = """# データ変換コードの契約確認
-モジュール間のデータ変換・統合コードを書く前に、ソース関数の返り値構造（dictキー・型）を Read で確認する。自作テストデータは自作の誤りを検出できないため、既存テストの fixture も参照する。
-"""
-
-_TYPESCRIPT_RULE_TEMPLATE = """# データ変換コードの契約確認
-モジュール間のデータ変換・統合コードを書く前に、ソース関数の戻り型（interface/type）を Read で確認する。自作テストデータは自作の誤りを検出できないため、既存テストの fixture も参照する。
-"""
-
-_SIDE_EFFECT_RULE_TEMPLATE = """# 副作用チェック
-テスト検証時、正パスに加えて副作用を確認する: 意図しない書き込み・状態残留・再帰的トリガー。
-"""
-
-_EVIDENCE_RULE_TEMPLATE = """# 証拠提示義務
-完了主張の前に検証コマンド（テスト実行・動作確認・ビルド成功）の実行結果を提示する。「できました」の前に証拠を示す。
-"""
-
-_CROSS_LAYER_RULE_TEMPLATE = """# クロスレイヤー整合性確認
-コード変更時に IaC 定義（環境変数設定・IAM 権限）との整合性を確認する。新しい環境変数参照や AWS サービス利用を追加したら、対応する IaC 定義も更新する。
-"""
-
-_HAPPY_PATH_RULE_TEMPLATE = """# テストはハッピーパスから書く
-オーケストレーション・パイプライン等の複数ステップを持つコードは、全ステップを通る正常系E2Eテストを最初に書く。
-"""
-
-# ── 副作用検出パターン（3カテゴリ）────────────────────
-_SIDE_EFFECT_DB_PATTERNS = re.compile(
-    r"(?:session\.add|cursor\.execute|\.commit\(\)|INSERT\s+INTO|UPDATE\s+\w|DELETE\s+FROM"
-    r"|prisma\.\w+\.create|\.save\(\)|knex\.\w*insert)",
-    re.IGNORECASE,
-)
-_SIDE_EFFECT_MQ_PATTERNS = re.compile(
-    r"(?:sqs\.send_message|\.publish\(|channel\.basic_publish"
-    r"|sendMessage|channel\.sendToQueue)",
-)
-_SIDE_EFFECT_API_PATTERNS = re.compile(
-    r"(?:requests\.post|httpx\.post|aiohttp\.\w*post"
-    r"|fetch\(|axios\.post|webhook)",
-    re.IGNORECASE,
-)
-
-_SIDE_EFFECT_CATEGORIES = {
-    "db": _SIDE_EFFECT_DB_PATTERNS,
-    "mq": _SIDE_EFFECT_MQ_PATTERNS,
-    "api": _SIDE_EFFECT_API_PATTERNS,
-}
-
-# テストファイル除外パターン
-_TEST_FILE_PATTERNS = re.compile(
-    r"(?:^test_.*\.py$|.*_test\.py$|.*\.test\.tsx?$)"
-)
-
-_TEST_DIR_NAMES = {"__tests__"}
 
 # ── カタログ定義 ──────────────────────────────────────
 VERIFICATION_CATALOG: List[Dict[str, Any]] = [
@@ -140,89 +111,6 @@ VERIFICATION_CATALOG: List[Dict[str, Any]] = [
 ]
 
 
-def _safe_result(error_msg: str = "") -> Dict[str, Any]:
-    """エラー/タイムアウト時の安全な返り値。"""
-    if error_msg:
-        logger.warning("verification detection error: %s", error_msg)
-    return {"applicable": False, "evidence": [], "confidence": 0.0}
-
-
-def _detect_primary_language(project_dir: Path) -> str:
-    """プロジェクトの主要言語を .py vs .ts/.tsx ファイル数で判定する。同数時は Python。"""
-    py_count = 0
-    ts_count = 0
-    for f in _iter_source_files(project_dir):
-        if f.suffix == ".py":
-            py_count += 1
-        elif f.suffix in (".ts", ".tsx"):
-            ts_count += 1
-    return "typescript" if ts_count > py_count else "python"
-
-
-def _iter_source_files(project_dir: Path):
-    """走査対象ファイルを yield する。大規模リポジトリでは優先ディレクトリに限定。"""
-    # ファイル数チェック（簡易）
-    all_files = []
-    try:
-        for p in project_dir.rglob("*"):
-            if any(part in EXCLUDE_DIRS for part in p.parts):
-                continue
-            if p.is_file() and p.suffix in (".py", ".ts", ".tsx"):
-                all_files.append(p)
-                if len(all_files) > LARGE_REPO_FILE_THRESHOLD:
-                    break
-    except (PermissionError, OSError):
-        pass
-
-    if len(all_files) > LARGE_REPO_FILE_THRESHOLD:
-        # 大規模リポジトリ → 優先ディレクトリのみ
-        for d in PRIORITY_DIRS:
-            dir_path = project_dir / d
-            if not dir_path.is_dir():
-                continue
-            try:
-                for p in dir_path.rglob("*"):
-                    if any(part in EXCLUDE_DIRS for part in p.parts):
-                        continue
-                    if p.is_file() and p.suffix in (".py", ".ts", ".tsx"):
-                        yield p
-            except (PermissionError, OSError):
-                continue
-    else:
-        yield from all_files
-
-
-# ── 検出パターン ─────────────────────────────────────
-
-# Python: from X import Y + dict 構築パターン
-_PY_IMPORT_RE = re.compile(r"^from\s+\w+(?:\.\w+)*\s+import\s+", re.MULTILINE)
-_PY_DICT_BUILD_RE = re.compile(
-    r'(?:\w+\s*=\s*\{[^}]*:[^}]*\}|\.append\(\s*\{|result\[|data\[)',
-    re.MULTILINE,
-)
-
-# TypeScript: import { X } from "Y" + オブジェクトリテラル
-_TS_IMPORT_RE = re.compile(r'^import\s+\{[^}]+\}\s+from\s+["\']', re.MULTILINE)
-_TS_OBJ_BUILD_RE = re.compile(
-    r'(?:const\s+\w+\s*[:=]\s*\{|\w+\s*=\s*\{[^}]*:[^}]*\})',
-    re.MULTILINE,
-)
-
-
-def _has_cross_module_pattern(filepath: Path) -> bool:
-    """ファイルがモジュール間変換パターンを持つか判定する。"""
-    try:
-        content = filepath.read_text(encoding="utf-8", errors="ignore")
-    except (PermissionError, OSError):
-        return False
-
-    if filepath.suffix == ".py":
-        return bool(_PY_IMPORT_RE.search(content) and _PY_DICT_BUILD_RE.search(content))
-    elif filepath.suffix in (".ts", ".tsx"):
-        return bool(_TS_IMPORT_RE.search(content) and _TS_OBJ_BUILD_RE.search(content))
-    return False
-
-
 def detect_data_contract_verification(project_dir: Path) -> Dict[str, Any]:
     """data-contract-verification の検出関数。
 
@@ -264,13 +152,6 @@ def detect_data_contract_verification(project_dir: Path) -> Dict[str, Any]:
         "evidence": evidence,
         "confidence": 0.0,
     }
-
-
-def _is_test_file(filepath: Path) -> bool:
-    """テストファイルかどうかを判定する。"""
-    if _TEST_FILE_PATTERNS.match(filepath.name):
-        return True
-    return any(part in _TEST_DIR_NAMES for part in filepath.parts)
 
 
 def detect_side_effect_verification(project_dir: Path) -> Dict[str, Any]:
