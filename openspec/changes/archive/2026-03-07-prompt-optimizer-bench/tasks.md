@@ -1,6 +1,6 @@
 ## 1. リポジトリ初期構築
 
-- [x] 1.1 todoroki-godai に `prompt-optimizer-bench` リポジトリを作成（README, .gitignore, pyproject.toml）
+- [x] 1.1 `prompt-optimizer-bench` リポジトリを作成（README, .gitignore, pyproject.toml）
 - [x] 1.2 ディレクトリ構成を作成（strategies/, tasks/, analysis/, results/）
 - [x] 1.3 `BaseStrategy` ABC と `MutationContext`, `MutationResult`, `EvaluationResult` のデータクラスを定義
 - [x] 1.4 Strategy の自動検出機構（strategies/ ディレクトリスキャン）を実装

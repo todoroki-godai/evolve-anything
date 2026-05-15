@@ -44,7 +44,7 @@ maxTurns: 30
 - **エージェント定義**: `~/.claude/agents/` (ambiguous-intent-resolver, senior-engineer, rl-anything-advisor)
 - **グローバルルール**: `~/.claude/rules/`
 - **プロジェクト仕様**: `SPEC.md` + `spec/` + `docs/decisions/`
-- **push アカウント**: `todoroki-godai` (todoroki-godai org)
+- **push アカウント**: `todoroki-godai` (rl-anything は public/todoroki-godai org)
 
 ---
 
