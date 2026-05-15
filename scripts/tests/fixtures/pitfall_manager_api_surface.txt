@@ -1,0 +1,36 @@
+# pitfall_manager module constants
+ACTIVE_PITFALL_CAP = 10
+CANDIDATE_PROMOTION_COUNT = 2
+CAP_EXCEEDED_CONFIDENCE = 0.9
+ERROR_FREQUENCY_THRESHOLD = 3
+GRADUATED_TTL_DAYS = 30
+HOT_TIER_MAX_ITEMS = 5
+INTEGRATION_JACCARD_THRESHOLD = 0.3
+PITFALL_MAX_LINES = 100
+PREFLIGHT_MATURITY_RATIO = 0.5
+RATIONALIZATION_MIN_CORRECTIONS = 3
+RATIONALIZATION_OUTCOME_WINDOW_DAYS = 30
+ROOT_CAUSE_JACCARD_THRESHOLD = 0.5
+SCRIPTIFIABLE_CATEGORIES = frozenset(['action', 'output', 'tool_use'])
+STALE_ESCALATION_MONTHS = 3
+STALE_KNOWLEDGE_MONTHS = 6
+
+# pitfall_manager public function / class signatures
+detect_archive_candidates(sections: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
+detect_integration(pitfall: Dict[str, Any], skill_dir: pathlib.Path) -> Dict[str, Any]
+detect_rationalization_patterns(corrections: List[Dict[str, Any]]) -> List[Dict[str, Any]]
+execute_archive(pitfalls_path: pathlib.Path, titles: List[str]) -> Dict[str, Any]
+extract_pitfall_candidates(corrections: List[Dict[str, Any]], errors: List[Dict[str, Any]] | None = None, skill_name: str | None = None, existing_candidates: List[Dict[str, Any]] | None = None) -> Dict[str, Any]
+extract_root_cause_keywords(root_cause: str) -> Set[str]
+find_matching_candidate(candidates: List[Dict[str, Any]], root_cause: str) -> int | None
+generate_rationalization_table(corrections: List[Dict[str, Any]], usage: List[Dict[str, Any]] | None = None, errors: List[Dict[str, Any]] | None = None, *, existing_pitfalls: Dict[str, List[Dict[str, Any]]] | None = None) -> Dict[str, Any]
+get_cold_tier(sections: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
+get_hot_tier(sections: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
+get_warm_tier(sections: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
+graduate_pitfall(pitfalls_path: pathlib.Path, title: str, integration_target: str = '') -> bool
+parse_pitfalls(content: str) -> Dict[str, List[Dict[str, Any]]]
+pitfall_hygiene(project_dir: pathlib.Path | None = None, *, frequency_scores: Dict[str, int] | None = None) -> Dict[str, Any]
+promote_to_active(pitfalls_path: pathlib.Path, title: str) -> bool
+record_pitfall(pitfalls_path: pathlib.Path, title: str, root_cause: str, *, is_user_correction: bool = False) -> Dict[str, Any]
+render_pitfalls(sections: Dict[str, List[Dict[str, Any]]]) -> str
+suggest_preflight_script(pitfall: Dict[str, Any], templates_dir: pathlib.Path | None = None) -> Dict[str, Any] | None
