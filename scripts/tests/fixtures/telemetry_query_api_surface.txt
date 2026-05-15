@@ -1,0 +1,12 @@
+# telemetry_query module constants
+HAS_DUCKDB = True
+TRACE_WINDOW_MINUTES = 5
+
+# telemetry_query public function / class signatures
+query_corrections(*, project: str | None = None, include_unknown: bool = False, corrections_file: pathlib.Path | None = None, since: str | None = None, until: str | None = None) -> List[Dict[str, Any]]
+query_errors(*, project: str | None = None, include_unknown: bool = False, errors_file: pathlib.Path | None = None, since: str | None = None, until: str | None = None) -> List[Dict[str, Any]]
+query_sessions(*, project: str | None = None, include_unknown: bool = False, sessions_file: pathlib.Path | None = None, since: str | None = None, until: str | None = None) -> List[Dict[str, Any]]
+query_skill_counts(*, project: str | None = None, include_unknown: bool = False, min_count: int = 1, usage_file: pathlib.Path | None = None) -> List[Dict[str, Any]]
+query_usage(*, project: str | None = None, include_unknown: bool = False, usage_file: pathlib.Path | None = None, since: str | None = None, until: str | None = None) -> List[Dict[str, Any]]
+query_usage_by_skill_session(skill_name: str, *, project: str | None = None, usage_file: pathlib.Path | None = None) -> List[Dict[str, Any]]
+query_workflows(*, workflows_file: pathlib.Path | None = None, since: str | None = None, until: str | None = None) -> List[Dict[str, Any]]
