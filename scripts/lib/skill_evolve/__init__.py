@@ -3,16 +3,18 @@
 
 テレメトリ3軸 + LLMキャッシュ2軸の5項目スコアリングで
 スキルの自己進化適性を判定する。
+
+Phase 8 で `skill_evolve.py` (754 行) をパッケージに分割:
+- `telemetry_scoring.py`: テレメトリ3軸 (frequency / diversity / evaluability)
 """
 import hashlib
 import json
-import os
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 # --- 定数 (design Decision 9) ---
 
@@ -39,9 +41,6 @@ STALE_ESCALATION_MONTHS = 3
 PITFALL_MAX_LINES = 100
 ERROR_FREQUENCY_THRESHOLD = 3
 
-# テレメトリの集計期間（日）
-TELEMETRY_LOOKBACK_DAYS = 30
-
 # 検証系スキル自動昇格キーワード
 VERIFICATION_SKILL_KEYWORDS = [
     "verify", "validate", "check", "lint", "test", "qa", "audit",
@@ -58,7 +57,8 @@ RATIONALIZATION_SKIP_KEYWORDS = [
 RATIONALIZATION_OUTCOME_WINDOW_DAYS = 30
 
 # LLMキャッシュ
-_plugin_root = Path(__file__).resolve().parent.parent
+# `<repo>/scripts/lib/skill_evolve/__init__.py` → `<repo>/scripts`
+_plugin_root = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 CACHE_FILE = DATA_DIR / "skill-evolve-cache.json"
 
@@ -147,84 +147,14 @@ def is_verification_skill(skill_name: str, skill_dir: Path) -> bool:
     return False
 
 
-# --- テレメトリ3軸 ---
-
-
-def _score_execution_frequency(usage_count: int) -> int:
-    """実行頻度スコア (1-3)。直近30日の呼び出し回数。"""
-    if usage_count >= 16:
-        return 3  # 日常的
-    if usage_count >= 4:
-        return 2  # 週数回
-    return 1  # 月3回以下
-
-
-def _score_failure_diversity(error_categories: Set[str]) -> int:
-    """失敗多様性スコア (1-3)。ユニーク根本原因カテゴリ数。"""
-    count = len(error_categories)
-    if count >= 4:
-        return 3
-    if count >= 2:
-        return 2
-    return 1
-
-
-def _score_output_evaluability(usage_count: int, error_count: int) -> int:
-    """出力評価可能性スコア (1-3)。成功率から推定。"""
-    if usage_count == 0:
-        return 1
-    success_rate = (usage_count - error_count) / usage_count
-    if success_rate <= 0.5:
-        return 3  # 明確な品質差がある
-    if success_rate <= 0.85:
-        return 2
-    return 1  # ほぼ成功＝評価困難
-
-
-def compute_telemetry_scores(
-    skill_name: str,
-    *,
-    project: Optional[str] = None,
-) -> Dict[str, Any]:
-    """テレメトリ3軸のスコアを計算する。
-
-    Returns:
-        {"frequency": int, "diversity": int, "evaluability": int,
-         "usage_count": int, "error_count": int, "error_categories": [...]}
-    """
-    sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-    from telemetry_query import query_usage, query_errors
-
-    since = (datetime.now(timezone.utc) - timedelta(days=TELEMETRY_LOOKBACK_DAYS)).isoformat()
-
-    usage_records = query_usage(project=project, since=since)
-    error_records = query_errors(project=project, since=since)
-
-    # スキル名でフィルタ
-    usage_count = sum(
-        1 for r in usage_records
-        if r.get("skill_name", "") == skill_name
-    )
-    skill_errors = [
-        r for r in error_records
-        if r.get("skill_name", "") == skill_name
-    ]
-    error_count = len(skill_errors)
-
-    # エラーの根本原因カテゴリ抽出
-    error_categories: Set[str] = set()
-    for err in skill_errors:
-        cat = err.get("root_cause_category", err.get("error_type", "unknown"))
-        error_categories.add(cat)
-
-    return {
-        "frequency": _score_execution_frequency(usage_count),
-        "diversity": _score_failure_diversity(error_categories),
-        "evaluability": _score_output_evaluability(usage_count, error_count),
-        "usage_count": usage_count,
-        "error_count": error_count,
-        "error_categories": sorted(error_categories),
-    }
+# --- テレメトリ3軸 (telemetry_scoring.py に分離 / Phase 8 Slice 1) ---
+from .telemetry_scoring import (  # noqa: E402,F401
+    TELEMETRY_LOOKBACK_DAYS,
+    _score_execution_frequency,
+    _score_failure_diversity,
+    _score_output_evaluability,
+    compute_telemetry_scores,
+)
 
 
 # --- LLM 2軸 ---
