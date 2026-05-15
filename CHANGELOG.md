@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **`docs/tech-eval/` 評価記録ディレクトリ** — `/tech-eval` 後の評価結果を `<slug>.md` として手動追記する慣習を導入。`README.md` で運用ガイド、初回適用例として `pageindex.md` (VectifyAI/PageIndex 不採用、再評価トリガー: ADR 100 本超) を同梱しテンプレ構造のリファレンスとする。3-4 件溜まり共通形が見えたら skill 化検討。
+
 ### Changed
 - **`scripts/lib/prune.py` (1411行) を `scripts/lib/prune/` パッケージに分割し、閾値定数 + evolve-state.json ロードを `prune/config.py` に分離 (Phase 4 / Slice 1)** — `prune.py` → `prune/__init__.py` にパッケージ化したうえで、`DEFAULT_DECAY_DAYS` / `DEFAULT_DECAY_THRESHOLD` / `CORRECTION_PENALTY` / `ZERO_INVOCATION_DAYS` / `DEFAULT_MERGE_SIMILARITY_THRESHOLD` / `DEFAULT_INTERACTIVE_MERGE_THRESHOLD` / `DEFAULT_DRIFT_THRESHOLD` の閾値定数 7 個 + `load_merge_similarity_threshold` / `load_interactive_merge_threshold` / `load_decay_threshold` / `load_drift_threshold` の 4 ローダ (~60 行) を切り出し。4 ローダは `_load_state_value` 共通ヘルパに集約し DRY 化（旧版は 4 関数で同じ try/except 構造を重複）。`__init__.py` は再エクスポートで `from prune import DEFAULT_DECAY_DAYS, load_decay_threshold` 等の後方互換維持（snapshot test green、103 件パス）。`DATA_DIR` は `from . import DATA_DIR` で package 経由の遅延参照（`mock.patch.object(prune, "DATA_DIR", ...)` 既存テスト追従）。`__init__.py` は 1411 → 1365 行（−46 行）。
 
