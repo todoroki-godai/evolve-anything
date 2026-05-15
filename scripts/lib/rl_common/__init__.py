@@ -49,134 +49,24 @@ def ensure_data_dir() -> None:
         print(f"[rl-anything] chmod data dir warning: {e}", file=sys.stderr)
 
 
-def find_latest_checkpoint(project_dir: str | None = None) -> dict | None:
-    """checkpoints/ から project_dir に一致する最新の checkpoint を返す。
-
-    project_dir が指定されている場合、一致する checkpoint のみを候補にする。
-    候補がなければ旧 DATA_DIR/checkpoint.json にフォールバック（後方互換）。
-    """
-    if not CHECKPOINTS_DIR.exists():
-        return None if project_dir else _load_legacy_checkpoint()
-    candidates = []
-    for f in CHECKPOINTS_DIR.glob("*.json"):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if project_dir:
-            cp_project = data.get("project_dir", "")
-            if not cp_project:
-                continue
-            try:
-                if str(Path(cp_project).resolve()) != str(Path(project_dir).resolve()):
-                    continue
-            except OSError:
-                continue
-        candidates.append(data)
-    if not candidates:
-        return None if project_dir else _load_legacy_checkpoint()
-    def _parse_ts(ts: str) -> "datetime":
-        try:
-            return datetime.fromisoformat(ts)
-        except (ValueError, TypeError):
-            return datetime.min.replace(tzinfo=timezone.utc)
-
-    candidates.sort(key=lambda d: _parse_ts(d.get("timestamp", "")), reverse=True)
-    return candidates[0]
-
-
-def _load_legacy_checkpoint() -> dict | None:
-    """旧 DATA_DIR/checkpoint.json を読み込む（後方互換）。"""
-    legacy = DATA_DIR / "checkpoint.json"
-    if not legacy.exists():
-        return None
-    try:
-        return json.loads(legacy.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-def cleanup_old_checkpoints() -> None:
-    """TTL 超過の checkpoint ファイルを削除する。"""
-    if not CHECKPOINTS_DIR.exists():
-        return
-    cutoff = time.time() - CHECKPOINT_TTL_HOURS * 3600
-    for f in CHECKPOINTS_DIR.glob("*.json"):
-        try:
-            if f.stat().st_mtime < cutoff:
-                f.unlink()
-        except OSError:
-            continue
-
-
-def workflow_context_path(session_id: str) -> Path:
-    """ワークフロー文脈ファイルのパスを返す。"""
-    tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return Path(tmpdir) / f"rl-anything-workflow-{session_id}.json"
-
-
-def skill_stack_path(session_id: str) -> Path:
-    """スキル呼び出しスタックファイルのパスを返す。
-
-    スタックは [{skill_name, workflow_id, started_at}, ...] のリスト。
-    末尾が現在実行中のスキル。PreToolUse で push、PostToolUse で pop。
-    観察対象: Skill ツールのみ（Bash/Read 等は含まない）。
-    """
-    tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return Path(tmpdir) / f"rl-anything-skill-stack-{session_id}.json"
-
-
-def read_skill_stack(session_id: str) -> list:
-    """スキルスタックを読み込む。存在しない・破損時は空リストを返す。"""
-    path = skill_stack_path(session_id)
-    try:
-        if not path.exists():
-            return []
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-
-def write_skill_stack(session_id: str, stack: list) -> None:
-    """スキルスタックをアトミックに書き込む。空の場合はファイルを削除する。"""
-    path = skill_stack_path(session_id)
-    if not stack:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(stack, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
-
-
-def read_workflow_context(session_id: str) -> dict:
-    """ワークフロー文脈ファイルを読み取り parent_skill/workflow_id を返す。
-
-    文脈ファイルが存在しない、24時間以上経過、破損の場合は
-    {"parent_skill": null, "workflow_id": null} を返す。
-    セッションをブロックしない（MUST NOT）。
-    """
-    null_result = {"parent_skill": None, "workflow_id": None}
-    try:
-        ctx_path = workflow_context_path(session_id)
-        if not ctx_path.exists():
-            return null_result
-
-        mtime = ctx_path.stat().st_mtime
-        age = datetime.now(timezone.utc).timestamp() - mtime
-        if age > _WORKFLOW_CONTEXT_EXPIRE_SECONDS:
-            return null_result
-
-        ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
-        return {
-            "parent_skill": ctx.get("skill_name"),
-            "workflow_id": ctx.get("workflow_id"),
-        }
-    except Exception as e:
-        print(f"[rl-anything] read_workflow_context error: {e}", file=sys.stderr)
-        return null_result
+# checkpoint 系は rl_common/checkpoint.py に集約済み (Phase 13 / Slice 2)
+# workflow_context / skill_stack / last_skill 系は rl_common/workflow.py に集約済み
+from .checkpoint import (  # noqa: F401, E402
+    _load_legacy_checkpoint,
+    cleanup_old_checkpoints,
+    find_latest_checkpoint,
+)
+from .workflow import (  # noqa: F401, E402
+    _WORKFLOW_CONTEXT_EXPIRE_SECONDS,
+    last_skill_path,
+    read_last_skill,
+    read_skill_stack,
+    read_workflow_context,
+    skill_stack_path,
+    workflow_context_path,
+    write_last_skill,
+    write_skill_stack,
+)
 
 
 # Agent prompt を簡易分類するキーワードマップ
@@ -356,37 +246,8 @@ def detect_all_patterns(text: str) -> list[str]:
     return matched
 
 
-def last_skill_path(session_id: str) -> Path:
-    """直前スキル記録ファイルのパスを返す。"""
-    tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return Path(tmpdir) / f"rl-anything-last-skill-{session_id}.json"
-
-
-def write_last_skill(session_id: str, skill_name: str) -> None:
-    """直前スキル名を一時ファイルに書き出す。"""
-    try:
-        path = last_skill_path(session_id)
-        data = {"skill_name": skill_name, "timestamp": datetime.now(timezone.utc).isoformat()}
-        path.write_text(json.dumps(data), encoding="utf-8")
-    except Exception as e:
-        print(f"[rl-anything] write_last_skill error: {e}", file=sys.stderr)
-
-
-def read_last_skill(session_id: str) -> str | None:
-    """直前スキル名を一時ファイルから読み取る。TTL 24時間。"""
-    try:
-        path = last_skill_path(session_id)
-        if not path.exists():
-            return None
-        mtime = path.stat().st_mtime
-        age = datetime.now(timezone.utc).timestamp() - mtime
-        if age > _WORKFLOW_CONTEXT_EXPIRE_SECONDS:
-            return None
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data.get("skill_name")
-    except Exception as e:
-        print(f"[rl-anything] read_last_skill error: {e}", file=sys.stderr)
-        return None
+# last_skill_path / write_last_skill / read_last_skill は rl_common/workflow.py に集約済み
+# （上部の re-export に集約）
 
 
 def project_name_from_dir(project_dir: str) -> str:
