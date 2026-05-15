@@ -1,0 +1,16 @@
+# trigger_engine module constants
+FILE_CHANGED_COOLDOWN_SECONDS = 300
+HAS_DUCKDB = True
+
+# trigger_engine public function / class signatures
+TriggerResult(triggered: 'bool' = False, reason: 'str' = '', action: 'str' = '', message: 'str' = '', details: 'dict[str, Any]' = <factory>) -> None
+clear_snooze() -> 'None'
+detect_skill_changes() -> 'list[str]'
+evaluate_corrections(state: 'dict[str, Any] | None' = None) -> 'TriggerResult'
+evaluate_file_changed(file_path: 'str', *, state: 'dict[str, Any] | None' = None, project_dir: 'str | None' = None) -> 'TriggerResult'
+evaluate_session_end(state: 'dict[str, Any] | None' = None, *, project_dir: 'str | None' = None) -> 'TriggerResult'
+is_watched_file(file_path: 'str') -> 'str | None'
+load_trigger_config(state: 'dict[str, Any] | None' = None) -> 'dict[str, Any]'
+read_and_delete_pending_trigger() -> 'dict[str, Any] | None'
+snooze_trigger(hours: 'float' = 24) -> 'None'
+write_pending_trigger(result: 'TriggerResult') -> 'None'
