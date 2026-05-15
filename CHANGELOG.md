@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **`scripts/lib/remediation.py` (2364行) を `scripts/lib/remediation/` パッケージに分割し、原則ベース判断 + FP 除外 + 独立検証を `remediation/principles.py` に分離 (Phase 3 / Slice 1)** — `remediation.py` → `remediation/__init__.py` にパッケージ化したうえで、`REMEDIATION_PRINCIPLES` (原則ベース判断辞書) / `_apply_principles` (issue type → bonus 加算) / `FP_EXCLUSIONS` (12 種類の FP 除外パターン) / `_should_exclude_fp` (issue → FP reason 判定) / `_independent_verify` (修正前後の差分ヒューリスティクス検証) (~165行) を `remediation/principles.py` に切り出し。`__init__.py` は再エクスポートで `from remediation import REMEDIATION_PRINCIPLES, _apply_principles, FP_EXCLUSIONS, _should_exclude_fp, _independent_verify` の後方互換維持（snapshot test green、外部 importer (evolve.py / scripts/tests/test_remediation_layers.py / scripts/tests/test_remediation_fp_verify.py / scripts/tests/test_gstack_integration.py / skills/evolve/scripts/tests/test_remediation.py 等) すべて継続動作）。`__init__.py` は 2364 → 2202 行（−162 行）。
+
 ### Added
 - **`scripts/tests/test_remediation_snapshot.py`** — remediation リファクタのレグレッション防止 snapshot test を追加 (Phase 3 / Slice 0)。`remediation` モジュールの公開関数/クラスシグネチャ + module-level constants の dump を fixture 化（`scripts/tests/fixtures/remediation_api_surface.txt`、49 シンボル + 40 定数）。後続の Phase 3 (remediation/ パッケージ分割、2364 行 → ≤200 行目標) で外部 importer (evolve.py / scripts/tests / skills/evolve/scripts/tests 等) が依存する `from remediation import X` 互換性を byte レベルで保証する。fixture 更新は `UPDATE_SNAPSHOTS=1 pytest` で。
 

@@ -16,3 +16,4 @@ generations/
 release-notes-review-workspace/
 prompt-optimizer-bench/
 docs/slides/
+.coverage
