@@ -46,107 +46,12 @@ from .state import (  # noqa: E402, F401
 )
 
 
+# Re-export bloat / file_change helpers (Phase 9 / Slice 2)
+from .bloat import _build_bloat_message, _evaluate_bloat  # noqa: E402, F401
+from .file_change import evaluate_file_changed, is_watched_file  # noqa: E402, F401
+
+
 # --- Evaluate: session end ---
-
-
-def _evaluate_bloat(project_dir: str, config: dict[str, Any]) -> dict[str, Any] | None:
-    """bloat_check() を呼び出し、警告を返す。ImportError/例外時は None。"""
-    triggers_cfg = config.get("triggers", {})
-    bloat_cfg = triggers_cfg.get("bloat", {})
-    if not bloat_cfg.get("enabled", True):
-        return None
-    try:
-        from scripts.bloat_control import bloat_check
-    except ImportError:
-        return None
-    try:
-        result = bloat_check(project_dir)
-        if result and result.get("warning_count", 0) > 0:
-            return result
-        return None
-    except Exception:
-        return None
-
-
-# --- FileChanged evaluation (CC v2.1.83) ---
-
-
-def is_watched_file(file_path: str) -> str | None:
-    """ファイルパスを rl-anything 関連カテゴリに分類する。
-
-    Returns:
-        "claude_md" / "skills" / "rules" / None
-    """
-    if file_path.endswith("/CLAUDE.md") or file_path == "CLAUDE.md":
-        return "claude_md"
-    if "/SKILL.md" in file_path and ".claude/skills/" in file_path:
-        return "skills"
-    if ".claude/rules/" in file_path and file_path.endswith(".md"):
-        return "rules"
-    return None
-
-
-def evaluate_file_changed(
-    file_path: str,
-    *,
-    state: dict[str, Any] | None = None,
-    project_dir: str | None = None,
-) -> TriggerResult:
-    """FileChanged イベントを評価し、audit 提案を生成する。
-
-    クールダウンは FILE_CHANGED_COOLDOWN_SECONDS (5分) をカテゴリ別に適用。
-    userConfig の auto_trigger=false で無効化可能。
-    """
-    category = is_watched_file(file_path)
-    if category is None:
-        return TriggerResult(triggered=False)
-
-    # userConfig gate
-    try:
-        user_config, _ = _load_user_config_with_explicit()
-    except Exception:
-        user_config = {"auto_trigger": True}
-
-    if not user_config.get("auto_trigger", True):
-        return TriggerResult(triggered=False)
-
-    if state is None:
-        state = _load_state()
-
-    reason = f"file_changed:{category}"
-    cooldown_hours = FILE_CHANGED_COOLDOWN_SECONDS / 3600
-
-    if _is_in_cooldown(state, reason, cooldown_hours):
-        return TriggerResult(triggered=False)
-
-    result = TriggerResult(
-        triggered=True,
-        reason=reason,
-        action="/rl-anything:audit",
-        message=f"{category} ファイルが変更されました。推奨: /rl-anything:audit",
-        details={"file_path": file_path, "category": category},
-    )
-    state = _record_trigger(state, result)
-    _save_state(state)
-    return result
-
-
-def _build_bloat_message(bloat_result: dict[str, Any]) -> str:
-    """bloat 警告から日本語メッセージを生成する。"""
-    parts: list[str] = []
-    for w in bloat_result.get("warnings", []):
-        t = w.get("type", "")
-        if t == "memory":
-            parts.append(f"MEMORY.md が {w['lines']}/{w['threshold']} 行で超過")
-        elif t == "claude_md":
-            parts.append(f"CLAUDE.md が {w['lines']}/{w['threshold']} 行で超過")
-        elif t == "rules_count":
-            parts.append(f"rules が {w['count']}/{w['threshold']} 件で超過")
-        elif t == "skills_count":
-            parts.append(f"skills が {w['count']}/{w['threshold']} 件で超過")
-        elif t == "memory_bytes":
-            parts.append(f"MEMORY.md が {w['bytes']}/{w['threshold']} bytes で 25KB 上限に近接")
-    return "、".join(parts)
 
 
 def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: str | None = None) -> TriggerResult:
