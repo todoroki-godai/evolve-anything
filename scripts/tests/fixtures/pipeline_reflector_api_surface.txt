@@ -1,0 +1,16 @@
+# pipeline_reflector module constants
+
+# pipeline_reflector public function / class signatures
+analyze_trajectory(outcomes: 'list[dict[str, Any]] | None' = None, config: 'dict[str, Any] | None' = None) -> 'dict[str, Any]'
+build_pipeline_health_section(config: 'dict[str, Any] | None' = None) -> 'list[str] | None'
+calibrate_confidence(outcomes: 'list[dict[str, Any]] | None' = None, config: 'dict[str, Any] | None' = None) -> 'dict[str, Any]'
+check_calibration_regression(calibrations: 'dict[str, dict[str, Any]]', outcomes: 'list[dict[str, Any]]', config: 'dict[str, Any] | None' = None) -> 'dict[str, Any]'
+check_control_chart(calibrations: 'dict[str, dict[str, Any]]') -> 'dict[str, dict[str, Any]]'
+detect_false_positives(outcomes: 'list[dict[str, Any]]', config: 'dict[str, Any] | None' = None) -> 'dict[str, Any]'
+generate_adjustment_proposals(calibrations: 'dict[str, dict[str, Any]]', control_chart: 'dict[str, dict[str, Any]]', regression_result: 'dict[str, Any]', config: 'dict[str, Any] | None' = None) -> 'list[dict[str, Any]]'
+load_calibration() -> 'dict[str, Any]'
+load_outcomes(*, lookback_days: 'int | None' = None) -> 'list[dict[str, Any]]'
+load_self_evolution_config(state: 'dict[str, Any] | None' = None) -> 'dict[str, Any]'
+record_proposal(proposal: 'dict[str, Any]', *, dry_run: 'bool' = False) -> 'dict[str, Any] | None'
+save_calibration(data: 'dict[str, Any]') -> 'None'
+update_proposal_status(issue_type: 'str', status: 'str') -> 'bool'
