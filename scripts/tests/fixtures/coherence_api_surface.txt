@@ -1,0 +1,9 @@
+# coherence module constants
+
+# coherence public function / class signatures
+compute_coherence_score(project_dir: pathlib.Path) -> Dict[str, Any]
+format_coherence_report(result: Dict[str, Any]) -> List[str]
+score_completeness(project_dir: pathlib.Path) -> Tuple[float, Dict[str, Any]]
+score_consistency(project_dir: pathlib.Path) -> Tuple[float, Dict[str, Any]]
+score_coverage(project_dir: pathlib.Path) -> Tuple[float, Dict[str, Any]]
+score_efficiency(project_dir: pathlib.Path, *, data_dir: pathlib.Path | None = None) -> Tuple[float, Dict[str, Any]]
