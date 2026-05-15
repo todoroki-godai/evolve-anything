@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- **`scripts/tests/test_tool_usage_analyzer_snapshot.py`** — tool_usage_analyzer リファクタのレグレッション防止 snapshot test を追加 (Phase 6 / Slice 0)。`tool_usage_analyzer` モジュールの公開関数/クラスシグネチャ + module-level constants の dump を fixture 化（`scripts/tests/fixtures/tool_usage_analyzer_api_surface.txt`）。後続の Phase 6 (tool_usage_analyzer/ パッケージ分割、867 行 → ≤200 行目標) で外部 importer (scripts/tests / scripts/lib/discover / skills/evolve 等) が依存する `from tool_usage_analyzer import X` 互換性を byte レベルで保証する。fixture 更新は `UPDATE_SNAPSHOTS=1 pytest` で。
+
 - **`docs/tech-eval/` 評価記録ディレクトリ** — `/tech-eval` 後の評価結果を `<slug>.md` として手動追記する慣習を導入。`README.md` で運用ガイド、初回適用例として `pageindex.md` (VectifyAI/PageIndex 不採用、再評価トリガー: ADR 100 本超) を同梱しテンプレ構造のリファレンスとする。3-4 件溜まり共通形が見えたら skill 化検討。
 
 ### Changed

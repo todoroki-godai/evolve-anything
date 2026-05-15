@@ -1,0 +1,21 @@
+# tool_usage_analyzer module constants
+BASH_RATIO_THRESHOLD = 0.4
+BUILTIN_THRESHOLD = 10
+COMPLIANCE_GOOD_THRESHOLD = 0.9
+REPEATING_THRESHOLD = 5
+SLEEP_THRESHOLD = 20
+STALL_RECOVERY_MIN_SESSIONS = 2
+STALL_RECOVERY_RECENCY_DAYS = 30
+
+# tool_usage_analyzer public function / class signatures
+analyze_tool_usage(project_root: pathlib.Path | None = None, threshold: int = 5, *, projects_dir: pathlib.Path | None = None) -> Dict[str, Any]
+check_artifact_installed(artifact: Dict[str, Any], *, hooks_dir: pathlib.Path | None = None, rules_dir: pathlib.Path | None = None, settings_path: pathlib.Path | None = None) -> Dict[str, Any]
+check_hook_installed(*, hook_path: pathlib.Path | None = None, settings_path: pathlib.Path | None = None) -> Dict[str, Any]
+classify_bash_commands(commands: List[str]) -> Dict[str, List[Dict[str, Any]]]
+detect_repeating_commands(commands: List[str], threshold: int = 5) -> List[Dict[str, Any]]
+detect_stall_recovery_patterns(session_commands: Dict[str, List[str]]) -> List[Dict[str, Any]]
+extract_tool_calls(project_root: pathlib.Path | None = None, *, projects_dir: pathlib.Path | None = None) -> Tuple[collections.Counter, List[str]]
+extract_tool_calls_by_session(project_root: pathlib.Path | None = None, *, projects_dir: pathlib.Path | None = None, max_age_days: int | None = None) -> Dict[str, List[str]]
+generate_hook_template(builtin_replaceable: List[Dict[str, Any]], *, output_dir: pathlib.Path | None = None) -> Dict[str, Any] | None
+generate_rule_candidates(builtin_replaceable: List[Dict[str, Any]], *, rules_dir: pathlib.Path | None = None) -> List[Dict[str, Any]]
+stall_pattern_to_pitfall_candidate(pattern: Dict[str, Any], existing_candidates: List[Dict[str, Any]] | None = None) -> Dict[str, Any] | None
