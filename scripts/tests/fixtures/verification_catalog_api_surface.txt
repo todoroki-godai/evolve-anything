@@ -1,0 +1,20 @@
+# verification_catalog module constants
+DATA_CONTRACT_MIN_PATTERNS = 3
+DETECTION_TIMEOUT_SECONDS = 5
+EVIDENCE_MIN_PATTERNS = 3
+HAPPY_PATH_MIN_PATTERNS = 2
+LARGE_REPO_FILE_THRESHOLD = 1000
+MAX_CATALOG_ENTRIES = 10
+MIN_CROSS_LAYER_PATTERNS = 3
+SIDE_EFFECT_MIN_PATTERNS = 3
+
+# verification_catalog public function / class signatures
+check_verification_installed(entry: Dict[str, Any], project_dir: pathlib.Path) -> bool
+detect_cross_layer_consistency(project_dir: pathlib.Path) -> Dict[str, Any]
+detect_data_contract_verification(project_dir: pathlib.Path) -> Dict[str, Any]
+detect_evidence_verification(project_dir: pathlib.Path) -> Dict[str, Any]
+detect_happy_path_test_gap(project_dir: pathlib.Path) -> Dict[str, Any]
+detect_iac_project(project_dir: pathlib.Path) -> Dict[str, Any]
+detect_side_effect_verification(project_dir: pathlib.Path) -> Dict[str, Any]
+detect_verification_needs(project_dir: pathlib.Path) -> List[Dict[str, Any]]
+get_rule_template(entry: Dict[str, Any], project_dir: pathlib.Path) -> str
