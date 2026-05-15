@@ -16,12 +16,8 @@ sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 sys.path.insert(0, str(_plugin_root / "scripts"))
 sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
 
-import importlib.util
-
-_coherence_path = _rl_dir / "fitness" / "coherence.py"
-_spec = importlib.util.spec_from_file_location("coherence", _coherence_path)
-coherence = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(coherence)
+# Phase 10 / Slice 1: coherence.py をパッケージ化したため通常 import に切り替え
+from fitness import coherence  # noqa: E402
 
 THRESHOLDS = coherence.THRESHOLDS
 WEIGHTS = coherence.WEIGHTS
