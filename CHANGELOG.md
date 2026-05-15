@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **`scripts/lib/prune.py` (1411行) を `scripts/lib/prune/` パッケージに分割し、閾値定数 + evolve-state.json ロードを `prune/config.py` に分離 (Phase 4 / Slice 1)** — `prune.py` → `prune/__init__.py` にパッケージ化したうえで、`DEFAULT_DECAY_DAYS` / `DEFAULT_DECAY_THRESHOLD` / `CORRECTION_PENALTY` / `ZERO_INVOCATION_DAYS` / `DEFAULT_MERGE_SIMILARITY_THRESHOLD` / `DEFAULT_INTERACTIVE_MERGE_THRESHOLD` / `DEFAULT_DRIFT_THRESHOLD` の閾値定数 7 個 + `load_merge_similarity_threshold` / `load_interactive_merge_threshold` / `load_decay_threshold` / `load_drift_threshold` の 4 ローダ (~60 行) を切り出し。4 ローダは `_load_state_value` 共通ヘルパに集約し DRY 化（旧版は 4 関数で同じ try/except 構造を重複）。`__init__.py` は再エクスポートで `from prune import DEFAULT_DECAY_DAYS, load_decay_threshold` 等の後方互換維持（snapshot test green、103 件パス）。`DATA_DIR` は `from . import DATA_DIR` で package 経由の遅延参照（`mock.patch.object(prune, "DATA_DIR", ...)` 既存テスト追従）。`__init__.py` は 1411 → 1365 行（−46 行）。
+
 ### Added
 - **`scripts/tests/test_prune_snapshot.py`** — prune リファクタのレグレッション防止 snapshot test を追加 (Phase 4 / Slice 0)。`prune` モジュールの公開関数/クラスシグネチャ + module-level constants の dump を fixture 化（`scripts/tests/fixtures/prune_api_surface.txt`）。後続の Phase 4 (prune/ パッケージ分割、1411 行 → ≤200 行目標) で外部 importer (hooks/tests / scripts/tests / skills/* 等) が依存する `from prune import X` 互換性を byte レベルで保証する。fixture 更新は `UPDATE_SNAPSHOTS=1 pytest` で。
 

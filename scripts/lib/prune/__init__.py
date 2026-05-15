@@ -34,10 +34,21 @@ from audit import (
 )
 
 ARCHIVE_DIR = DATA_DIR / "archive"
-ZERO_INVOCATION_DAYS = 30
-DEFAULT_DECAY_DAYS = 90
-DEFAULT_DECAY_THRESHOLD = 0.2
-CORRECTION_PENALTY = 0.15
+
+# 閾値定数 + evolve-state.json ロードは prune/config.py に集約済み（後方互換のため再エクスポート）
+from .config import (  # noqa: E402, F401
+    DEFAULT_DECAY_DAYS,
+    DEFAULT_DECAY_THRESHOLD,
+    CORRECTION_PENALTY,
+    ZERO_INVOCATION_DAYS,
+    DEFAULT_MERGE_SIMILARITY_THRESHOLD,
+    DEFAULT_INTERACTIVE_MERGE_THRESHOLD,
+    DEFAULT_DRIFT_THRESHOLD,
+    load_merge_similarity_threshold,
+    load_interactive_merge_threshold,
+    load_decay_threshold,
+    load_drift_threshold,
+)
 
 
 def _count_triggers(skill_path: Path) -> int:
@@ -207,63 +218,6 @@ def cleanup_corrections() -> Dict[str, int]:
     )
 
     return {"removed": removed, "kept": len(kept_lines)}
-
-
-DEFAULT_MERGE_SIMILARITY_THRESHOLD = 0.60
-DEFAULT_INTERACTIVE_MERGE_THRESHOLD = 0.40
-
-
-def load_merge_similarity_threshold() -> float:
-    """evolve-state.json から reorganize_merge_similarity_threshold を読み込む。未設定時はデフォルト 0.60。"""
-    state_file = DATA_DIR / "evolve-state.json"
-    if state_file.exists():
-        try:
-            state = json.loads(state_file.read_text(encoding="utf-8"))
-            return float(state.get("reorganize_merge_similarity_threshold", DEFAULT_MERGE_SIMILARITY_THRESHOLD))
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-    return DEFAULT_MERGE_SIMILARITY_THRESHOLD
-
-
-def load_interactive_merge_threshold() -> float:
-    """evolve-state.json から interactive_merge_similarity_threshold を読み込む。未設定時はデフォルト 0.40。"""
-    state_file = DATA_DIR / "evolve-state.json"
-    if state_file.exists():
-        try:
-            state = json.loads(state_file.read_text(encoding="utf-8"))
-            return float(state.get("interactive_merge_similarity_threshold", DEFAULT_INTERACTIVE_MERGE_THRESHOLD))
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-    return DEFAULT_INTERACTIVE_MERGE_THRESHOLD
-
-
-def load_decay_threshold() -> float:
-    """evolve-state.json から decay_threshold を読み込む。未設定時はデフォルト 0.2。"""
-    state_file = DATA_DIR / "evolve-state.json"
-    if state_file.exists():
-        try:
-            state = json.loads(state_file.read_text(encoding="utf-8"))
-            return float(state.get("decay_threshold", DEFAULT_DECAY_THRESHOLD))
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-    return DEFAULT_DECAY_THRESHOLD
-
-
-DEFAULT_DRIFT_THRESHOLD = 0.5
-
-
-def load_drift_threshold() -> float:
-    """evolve-state.json から reference_drift_threshold を読み込む。未設定時はデフォルト 0.5。"""
-    state_file = DATA_DIR / "evolve-state.json"
-    if state_file.exists():
-        try:
-            state = json.loads(state_file.read_text(encoding="utf-8"))
-            val = float(state.get("reference_drift_threshold", DEFAULT_DRIFT_THRESHOLD))
-            if 0.0 <= val <= 1.0:
-                return val
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-    return DEFAULT_DRIFT_THRESHOLD
 
 
 def _load_skill_type_cache() -> Dict[str, Any]:
