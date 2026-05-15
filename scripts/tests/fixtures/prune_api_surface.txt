@@ -1,0 +1,35 @@
+# prune module constants
+CORRECTION_PENALTY = 0.15
+DEFAULT_DECAY_DAYS = 90
+DEFAULT_DECAY_THRESHOLD = 0.2
+DEFAULT_DRIFT_THRESHOLD = 0.5
+DEFAULT_INTERACTIVE_MERGE_THRESHOLD = 0.4
+DEFAULT_MERGE_SIMILARITY_THRESHOLD = 0.6
+ZERO_INVOCATION_DAYS = 30
+
+# prune public function / class signatures
+SkillDependencyError(message: str, referrers: List[Dict[str, Any]] | None = None)
+archive_file(filepath: str, reason: str, *, force: bool = False, repo_root: pathlib.Path | None = None) -> str | None
+check_import_dependencies(skill_path: pathlib.Path, repo_root: pathlib.Path) -> List[Dict[str, Any]]
+cleanup_corrections() -> Dict[str, int]
+compute_decay_score(age_days: float, correction_count: int = 0, decay_days: float = 90) -> float
+detect_dead_globs(project_dir: pathlib.Path) -> List[Dict[str, Any]]
+detect_decay_candidates(artifacts: Dict[str, List[pathlib.Path]], decay_days: float = 90) -> List[Dict[str, Any]]
+detect_duplicates(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
+detect_reference_drift(artifacts: Dict[str, List[pathlib.Path]], project_dir: pathlib.Path) -> List[Dict[str, Any]]
+detect_zero_invocations(artifacts: Dict[str, List[pathlib.Path]], days: int = 30) -> List[Dict[str, Any]]
+determine_primary(skill_a: str, skill_b: str) -> tuple
+extract_skill_summary(skill_path: pathlib.Path) -> str
+is_pinned(skill_path: pathlib.Path) -> bool
+is_reference_skill(skill_path: pathlib.Path) -> bool
+list_archive() -> List[Dict[str, Any]]
+load_corrections() -> Dict[str, List[Dict]]
+load_decay_threshold() -> float
+load_drift_threshold() -> float
+load_interactive_merge_threshold() -> float
+load_merge_similarity_threshold() -> float
+merge_duplicates(duplicate_candidates: List[Dict[str, Any]], reorganize_merge_groups: List[Dict[str, Any]] | None = None, project_dir: str | None = None) -> Dict[str, Any]
+restore_file(archive_path: str) -> str | None
+run_prune(project_dir: str | None = None, reorganize_merge_groups: list | None = None) -> Dict[str, Any]
+safe_global_check(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
+suggest_recommendation(skill_info: Dict[str, Any]) -> str
