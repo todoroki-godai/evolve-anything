@@ -1,0 +1,54 @@
+# skill_evolve module constants
+ACTIVE_PITFALL_CAP = 10
+ANTI_PATTERN_REJECTION_COUNT = 2
+BAND_AID_THRESHOLD = 10
+CANDIDATE_PROMOTION_COUNT = 2
+ERROR_FREQUENCY_THRESHOLD = 3
+GRADUATED_TTL_DAYS = 30
+GRADUATION_THRESHOLDS = [(1, 3), (2, 5), (3, 10)]
+HIGH_CONFIDENCE = 0.85
+HIGH_SUITABILITY_THRESHOLD = 12
+HOT_TIER_MAX_ITEMS = 5
+HOT_TOKEN_BUDGET = 500
+INTEGRATION_JACCARD_THRESHOLD = 0.3
+MEDIUM_CONFIDENCE = 0.6
+MEDIUM_SUITABILITY_THRESHOLD = 8
+PITFALL_MAX_LINES = 100
+RATIONALIZATION_MIN_CORRECTIONS = 3
+RATIONALIZATION_OUTCOME_WINDOW_DAYS = 30
+RATIONALIZATION_SKIP_KEYWORDS = ['skip', 'スキップ', '省略', 'bypass', 'later', '後で', '不要', 'unnecessary', 'without', 'なし', 'いらない', '面倒', 'time', '時間がない', '急ぎ']
+ROOT_CAUSE_JACCARD_THRESHOLD = 0.5
+STALE_ESCALATION_MONTHS = 3
+STALE_KNOWLEDGE_MONTHS = 6
+SUCCESS_PATTERN_LIMIT = 2
+TELEMETRY_LOOKBACK_DAYS = 30
+VERIFICATION_SKILL_KEYWORDS = ['verify', 'validate', 'check', 'lint', 'test', 'qa', 'audit', 'assert', 'inspect', 'scan']
+WARM_TOKEN_BUDGET = 1000
+
+# skill_evolve public function / class signatures
+apply_evolve_proposal(proposal: Dict[str, Any]) -> Dict[str, Any]
+assess_single_skill(skill_name: str, skill_dir: pathlib.Path, *, project: str | None = None) -> Dict[str, Any]
+classify_suitability(total_score: int) -> str
+compute_llm_scores(skill_name: str, skill_dir: pathlib.Path) -> Dict[str, Any]
+compute_telemetry_scores(skill_name: str, *, project: str | None = None) -> Dict[str, Any]
+detect_anti_patterns(scores: Dict[str, int], skill_dir: pathlib.Path) -> List[Dict[str, str]]
+evolve_skill_proposal(skill_name: str, skill_dir: pathlib.Path) -> Dict[str, Any]
+is_self_evolved_skill(skill_dir: pathlib.Path) -> bool
+is_verification_skill(skill_name: str, skill_dir: pathlib.Path) -> bool
+skill_evolve_assessment(project_dir: pathlib.Path | None = None, *, project: str | None = None) -> List[Dict[str, Any]]
+
+# skill_evolve private helpers expected by tests / mock.patch
+_file_hash: present
+_load_cache: present
+_save_cache: present
+_score_execution_frequency: present
+_score_failure_diversity: present
+_score_output_evaluability: present
+_count_external_keywords: present
+_score_external_dependency: present
+_score_judgment_complexity_llm: present
+_customize_template: present
+_find_project_dir: present
+_plugin_root: present
+CACHE_FILE: present
+DATA_DIR: present
