@@ -22,6 +22,7 @@ TEMPORAL_DEFAULTS: dict[str, Any] = {
     "superseded_at": None,
     "decay_days": None,
     "source_correction_ids": [],
+    "update_count": 0,
 }
 
 
@@ -40,6 +41,12 @@ def parse_memory_temporal(filepath: Path) -> dict[str, Any]:
     result["decay_days"] = decay if (isinstance(decay, int) and decay > 0) else None
     ids = fm.get("source_correction_ids", [])
     result["source_correction_ids"] = ids if isinstance(ids, list) else []
+    update_count = fm.get("update_count", 0)
+    result["update_count"] = (
+        update_count
+        if (isinstance(update_count, int) and not isinstance(update_count, bool) and update_count >= 0)
+        else 0
+    )
     return result
 
 

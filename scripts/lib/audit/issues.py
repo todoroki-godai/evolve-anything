@@ -14,8 +14,14 @@ from reflect_utils import read_auto_memory
 from path_extractor import extract_paths_outside_codeblocks as _extract_paths_outside_codeblocks, KNOWN_DIR_PREFIXES
 from hardcoded_detector import detect_hardcoded_values
 from line_limit import NEAR_LIMIT_RATIO
+from memory_temporal import parse_memory_temporal
 
 from ._constants import LIMITS
+
+# update_count >= 3 で memory_heavy_update 警告を発火。
+# 根拠: arXiv:2605.12978 "Useful Memories Become Faulty When Continuously Updated by LLMs" は
+# 複数ラウンドの再要約で誤りが指数的に増幅することを示す (docs/research/faulty-updated-memories.md)。
+MEMORY_HEAVY_UPDATE_THRESHOLD = 3
 
 
 def _is_user_invocable_heuristic(content: str) -> bool:
@@ -174,6 +180,23 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
                 "detail": {"lines": line_count, "limit": limit, "pct": pct},
                 "source": "build_memory_health_section",
             })
+
+        # memory_heavy_update: LLM 自己更新が閾値超え (Issue #97 / arXiv:2605.12978)
+        try:
+            temporal = parse_memory_temporal(path)
+            update_count = temporal.get("update_count", 0)
+            if update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD:
+                issues.append({
+                    "type": "memory_heavy_update",
+                    "file": str(path),
+                    "detail": {
+                        "update_count": update_count,
+                        "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
+                    },
+                    "source": "build_memory_health_section",
+                })
+        except Exception:
+            pass  # frontmatter 不正は既存挙動を壊さない
 
     # duplicates（重複候補）
     duplicates = detect_duplicates_simple(artifacts)

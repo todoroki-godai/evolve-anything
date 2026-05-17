@@ -131,6 +131,72 @@ class TestIsSuperseded:
         assert is_superseded(fm) is False
 
 
+class TestUpdateCount:
+    """update_count — LLM 自己更新メモリの劣化警告 (Issue #97, arXiv:2605.12978)。
+
+    詳細: docs/research/faulty-updated-memories.md
+    """
+
+    def test_default_is_zero(self):
+        """TEMPORAL_DEFAULTS は update_count: 0 を含む。"""
+        assert TEMPORAL_DEFAULTS["update_count"] == 0
+
+    def test_no_frontmatter_returns_zero(self, tmp_path):
+        """frontmatter なしファイル → update_count: 0。"""
+        f = tmp_path / "old.md"
+        f.write_text("# Old memory\n", encoding="utf-8")
+        result = parse_memory_temporal(f)
+        assert result["update_count"] == 0
+
+    def test_explicit_update_count_parsed(self, tmp_path):
+        """frontmatter に update_count: 3 → 正しく読み取る。"""
+        f = tmp_path / "updated.md"
+        f.write_text(
+            "---\nname: x\nupdate_count: 3\n---\n# Body\n",
+            encoding="utf-8",
+        )
+        result = parse_memory_temporal(f)
+        assert result["update_count"] == 3
+
+    def test_negative_normalized_to_zero(self, tmp_path):
+        """負値は 0 に正規化（不正値サイレントフォールバック）。"""
+        f = tmp_path / "bad.md"
+        f.write_text(
+            "---\nname: x\nupdate_count: -5\n---\n",
+            encoding="utf-8",
+        )
+        result = parse_memory_temporal(f)
+        assert result["update_count"] == 0
+
+    def test_non_int_normalized_to_zero(self, tmp_path):
+        """型が int でない値も 0 に正規化。"""
+        f = tmp_path / "bad2.md"
+        f.write_text(
+            "---\nname: x\nupdate_count: 'three'\n---\n",
+            encoding="utf-8",
+        )
+        result = parse_memory_temporal(f)
+        assert result["update_count"] == 0
+
+    def test_bool_normalized_to_zero(self, tmp_path):
+        """bool は int のサブクラスだが 0 に正規化する（true/false は不正値）。"""
+        f = tmp_path / "bool_true.md"
+        f.write_text(
+            "---\nname: x\nupdate_count: true\n---\n",
+            encoding="utf-8",
+        )
+        result = parse_memory_temporal(f)
+        assert result["update_count"] == 0
+
+        f2 = tmp_path / "bool_false.md"
+        f2.write_text(
+            "---\nname: x\nupdate_count: false\n---\n",
+            encoding="utf-8",
+        )
+        result2 = parse_memory_temporal(f2)
+        assert result2["update_count"] == 0
+
+
 class TestMakeSourceCorrectionId:
     """make_source_correction_id — 複合キー生成。"""
 
