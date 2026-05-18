@@ -15,6 +15,8 @@ TELEMETRY_THRESHOLDS = {
     "min_sessions": 30,
     "min_days": 7,
     "implicit_reward_window_sec": 60,
+    "compression_weight": 0.10,   # r^comp (SkillOS) の重み
+    "fc_validity_weight": 0.05,   # r^fc (SkillOS) の重み
 }
 
 # Constitutional

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """テレメトリ駆動の環境実効性スコア。
 
-3軸（Utilization / Effectiveness / Implicit Reward）で
+5軸（Utilization / Effectiveness / Implicit Reward / Skill Compression / FC Validity）で
 LLM コストゼロの行動実績スコア（0.0〜1.0）を算出する。
 """
 import json
 import math
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -34,9 +35,11 @@ except ImportError:
     }
 
 WEIGHTS = {
-    "utilization": 0.30,
-    "effectiveness": 0.40,
-    "implicit_reward": 0.30,
+    "utilization": 0.25,
+    "effectiveness": 0.35,
+    "implicit_reward": 0.25,
+    "skill_compression": 0.10,
+    "fc_validity": 0.05,
 }
 
 _EFFECTIVENESS_WEIGHTS = {
@@ -237,6 +240,60 @@ def score_implicit_reward(project_dir: Path, days: int = 30) -> float:
     )
 
 
+def score_skill_compression(project_dir: Path, days: int = 30) -> float:
+    """r^comp: skill 利用効率（呼び出し回数 / skill 数）。"""
+    _ensure_paths()
+    from telemetry_query import query_usage
+    project_dir = Path(project_dir)
+    all_skills = _find_all_skills(project_dir)
+    n_skills = len(all_skills)
+    if n_skills == 0:
+        return 1.0
+    project_name = project_dir.name
+    since = _iso_days_ago(days)
+    records = query_usage(project=project_name, since=since, include_unknown=True)
+    n_invocations = len(records)
+    return round(min(1.0, n_invocations / n_skills), 4)
+
+
+def score_fc_validity(project_dir: Path, days: int = 30) -> float:
+    """r^fc 近似: skill 別エラー率から valid tool call 率を推定。"""
+    _ensure_paths()
+    from telemetry_query import query_usage, query_errors
+    project_dir = Path(project_dir)
+    project_name = project_dir.name
+    since = _iso_days_ago(days)
+    records = query_usage(project=project_name, since=since, include_unknown=True)
+    if not records:
+        return 1.0
+    errors = query_errors(project=project_name, since=since, include_unknown=True)
+
+    skill_errors: Counter = Counter()
+    for e in errors:
+        sk = e.get("skill_name", "")
+        if sk:
+            skill_errors[sk] += 1
+
+    skill_usage: Counter = Counter()
+    for r in records:
+        sk = r.get("skill_name", "")
+        if sk:
+            skill_usage[sk] += 1
+
+    if not skill_usage:
+        return 1.0
+
+    weighted_validity = 0.0
+    total_weight = 0
+    for skill, usage_count in skill_usage.items():
+        error_count = skill_errors.get(skill, 0)
+        validity = max(0.0, 1.0 - error_count / usage_count)
+        weighted_validity += validity * usage_count
+        total_weight += usage_count
+
+    return round(weighted_validity / total_weight, 4) if total_weight > 0 else 1.0
+
+
 def _get_session_timestamp(session: Dict[str, Any]) -> str:
     """セッションの timestamp を取得する（live: timestamp, backfill: first_timestamp）。"""
     return session.get("timestamp") or session.get("first_timestamp") or ""
@@ -295,18 +352,22 @@ def _check_data_sufficiency(project_dir: Path, days: int = 30) -> Dict[str, Any]
 
 
 def compute_telemetry_score(project_dir: Path, days: int = 30) -> Dict[str, Any]:
-    """3軸の重み付き平均で統合 Telemetry Score を算出する。"""
+    """5軸の重み付き平均で統合 Telemetry Score を算出する。"""
     project_dir = Path(project_dir)
 
     util = score_utilization(project_dir, days)
     effect = score_effectiveness(project_dir, days)
     implicit = score_implicit_reward(project_dir, days)
+    compression = score_skill_compression(project_dir, days)
+    fc_valid = score_fc_validity(project_dir, days)
     sufficiency = _check_data_sufficiency(project_dir, days)
 
     overall = (
         WEIGHTS["utilization"] * util
         + WEIGHTS["effectiveness"] * effect
         + WEIGHTS["implicit_reward"] * implicit
+        + WEIGHTS["skill_compression"] * compression
+        + WEIGHTS["fc_validity"] * fc_valid
     )
 
     return {
@@ -314,6 +375,8 @@ def compute_telemetry_score(project_dir: Path, days: int = 30) -> Dict[str, Any]
         "utilization": util,
         "effectiveness": effect,
         "implicit_reward": implicit,
+        "skill_compression": compression,
+        "fc_validity": fc_valid,
         "data_sufficiency": sufficiency["sufficient"],
         "data_details": sufficiency,
         "weights": WEIGHTS,
@@ -324,8 +387,8 @@ def format_telemetry_report(result: Dict[str, Any]) -> List[str]:
     """Telemetry Score を audit レポート用にフォーマットする。"""
     lines = [f"## Telemetry Score: {result['overall']:.2f}", ""]
 
-    for axis in ("utilization", "effectiveness", "implicit_reward"):
-        score = result[axis]
+    for axis in ("utilization", "effectiveness", "implicit_reward", "skill_compression", "fc_validity"):
+        score = result.get(axis, 0.0)
         bar_filled = int(score * 20)
         bar_empty = 20 - bar_filled
         bar = "\u2588" * bar_filled + "\u2591" * bar_empty

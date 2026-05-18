@@ -4,6 +4,9 @@
 
 - fix(persistence): append_jsonl の flock に明示的 LOCK_UN を追加し TOCTOU を解消 (#158)
 
+### Added
+- **`scripts/rl/fitness/telemetry.py` に r^comp / r^fc を telemetry fitness 5 軸に追加 (closes #67)** — SkillOS 論文の compression term (r^comp) と function-call validity (r^fc) を新関数 `score_skill_compression` / `score_fc_validity` として実装。WEIGHTS を 3 軸 (util/effect/implicit) から 5 軸 (+ compression 0.10 / fc_validity 0.05) に更新。`compute_telemetry_score` / `format_telemetry_report` に新軸を統合。
+
 ## [1.52.1] - 2026-05-18
 
 ### Fixed

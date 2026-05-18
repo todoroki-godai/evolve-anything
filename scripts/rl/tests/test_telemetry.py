@@ -303,3 +303,97 @@ class TestComputeTelemetryScore:
             result = telemetry.compute_telemetry_score(project, days=30)
 
         assert result["data_sufficiency"] is False
+
+
+class TestScoreSkillCompression:
+    def test_no_skills_returns_1(self, tmp_path):
+        project = tmp_path  # no .claude/skills/
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        (data_dir / "usage.jsonl").write_text("")
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            score = telemetry.score_skill_compression(project, days=30)
+        assert score == 1.0
+
+    def test_invocations_exceed_skills_caps_at_1(self, tmp_path):
+        project = _make_project(tmp_path, skill_names=["skill-a", "skill-b"])  # 2 skills
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        now = _now_iso()
+        records = [
+            {"skill_name": "skill-a", "project": tmp_path.name, "ts": now, "session_id": "s1"},
+            {"skill_name": "skill-a", "project": tmp_path.name, "ts": now, "session_id": "s2"},
+            {"skill_name": "skill-b", "project": tmp_path.name, "ts": now, "session_id": "s3"},
+            {"skill_name": "skill-b", "project": tmp_path.name, "ts": now, "session_id": "s4"},
+        ]  # 4 invocations, 2 skills -> min(1.0, 4/2) = 1.0
+        _write_jsonl(data_dir / "usage.jsonl", records)
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            score = telemetry.score_skill_compression(project, days=30)
+        assert score == 1.0
+
+    def test_fewer_invocations_than_skills(self, tmp_path):
+        project = _make_project(tmp_path, skill_names=["a", "b", "c", "d"])  # 4 skills
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        now = _now_iso()
+        records = [
+            {"skill_name": "a", "project": tmp_path.name, "ts": now, "session_id": "s1"},
+            {"skill_name": "b", "project": tmp_path.name, "ts": now, "session_id": "s2"},
+        ]  # 2 invocations, 4 skills -> 2/4 = 0.5
+        _write_jsonl(data_dir / "usage.jsonl", records)
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            score = telemetry.score_skill_compression(project, days=30)
+        assert abs(score - 0.5) < 0.01
+
+    def test_no_invocations_returns_0(self, tmp_path):
+        project = _make_project(tmp_path, skill_names=["skill-a"])  # 1 skill
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        (data_dir / "usage.jsonl").write_text("")
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            score = telemetry.score_skill_compression(project, days=30)
+        assert score == 0.0
+
+
+class TestScoreFcValidity:
+    def test_no_usage_returns_1(self, tmp_path):
+        project = _make_project(tmp_path)
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        (data_dir / "usage.jsonl").write_text("")
+        (data_dir / "errors.jsonl").write_text("")
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            score = telemetry.score_fc_validity(project, days=30)
+        assert score == 1.0
+
+    def test_no_errors_returns_1(self, tmp_path):
+        project = _make_project(tmp_path)
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        now = _now_iso()
+        records = [{"skill_name": "skill-a", "project": tmp_path.name, "ts": now, "session_id": "s1"}]
+        _write_jsonl(data_dir / "usage.jsonl", records)
+        (data_dir / "errors.jsonl").write_text("")
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            score = telemetry.score_fc_validity(project, days=30)
+        assert score == 1.0
+
+    def test_skill_with_all_errors_reduces_score(self, tmp_path):
+        project = _make_project(tmp_path)
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        now = _now_iso()
+        records = [{"skill_name": "skill-a", "project": tmp_path.name, "ts": now, "session_id": "s1"}]
+        errors = [{"skill_name": "skill-a", "project": tmp_path.name, "timestamp": now, "session_id": "s1"}]
+        _write_jsonl(data_dir / "usage.jsonl", records)
+        _write_jsonl(data_dir / "errors.jsonl", errors)
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            score = telemetry.score_fc_validity(project, days=30)
+        assert score == 0.0
