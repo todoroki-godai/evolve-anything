@@ -112,7 +112,7 @@ def update_frontmatter(filepath: Path, updates: Dict[str, Any]) -> Tuple[bool, s
             return False, "yaml_parse_error"
 
         parsed.update(updates)
-        new_yaml = yaml.dump(parsed, default_flow_style=False, allow_unicode=True).rstrip()
+        new_yaml = yaml.dump(parsed, default_flow_style=False, allow_unicode=True, sort_keys=False).rstrip()
         body = text[end + 3:]  # content after closing ---
         new_text = f"---\n{new_yaml}\n---{body}"
     else:
