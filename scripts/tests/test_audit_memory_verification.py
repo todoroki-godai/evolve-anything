@@ -11,8 +11,8 @@ import pytest
 # audit.py のパスを通す
 _audit_scripts = Path(__file__).resolve().parent.parent.parent / "skills" / "audit" / "scripts"
 sys.path.insert(0, str(_audit_scripts))
-# reflect_utils のパスを通す
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# reflect_utils は scripts/lib/ に移動済み。audit/__init__.py が scripts/lib を path に追加するため直接追加不要
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from audit import (
     _extract_section_keywords,

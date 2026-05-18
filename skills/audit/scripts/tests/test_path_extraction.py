@@ -26,7 +26,7 @@ def _paths(text: str) -> list[str]:
         pytest.param(".claude/rules", [".claude/rules"], id="known-prefix-dotclaude"),
         pytest.param("openspec/changes", ["openspec/changes"], id="known-prefix-openspec"),
         pytest.param("docs/guide", ["docs/guide"], id="known-prefix-docs"),
-        pytest.param("scripts/reflect_utils.py", ["scripts/reflect_utils.py"], id="known-prefix-with-ext"),
+        pytest.param("scripts/lib/reflect_utils.py", ["scripts/lib/reflect_utils.py"], id="known-prefix-with-ext"),
         pytest.param("config/settings.yaml", ["config/settings.yaml"], id="unknown-prefix-with-ext"),
         pytest.param("some/deep/nested/file.py", ["some/deep/nested/file.py"], id="deep-path-with-ext"),
         pytest.param("skills/audit/scripts", ["skills/audit/scripts"], id="three-segments-no-ext"),
@@ -68,11 +68,11 @@ def test_codeblock_paths_excluded():
 def test_mixed_content():
     text = """- discover/audit: telemetry_query で分析
 - skills/update/ — `/rl-anything:update` スキル
-- scripts/reflect_utils.py — 8層メモリルーティング
+- scripts/lib/reflect_utils.py — 8層メモリルーティング
 - usage/errors レコードに project フィールド追加"""
     paths = _paths(text)
     assert "skills/update" in paths
-    assert "scripts/reflect_utils.py" in paths
+    assert "scripts/lib/reflect_utils.py" in paths
     assert "usage/errors" not in paths
     assert "discover/audit" not in paths
 
