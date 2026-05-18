@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.52.1] - 2026-05-18
+
+### Fixed
+- **`scripts/lib/frontmatter.py` の `yaml.dump` に `sort_keys=False` を追加 (closes #154)** — `update_frontmatter` 呼び出しのたびに frontmatter キーがアルファベット順に reorder される問題を修正。`post_tool_use_memory` hook が毎 Edit/Write で `update_frontmatter` を呼ぶ実装になったことで顕在化 (PR #153 adversarial review F3)。
+
 ## [1.52.0] - 2026-05-18
 
 ### Changed
