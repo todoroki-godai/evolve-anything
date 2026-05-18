@@ -155,3 +155,26 @@ def check_cso_compliance(skill_path: Path) -> Dict[str, Any]:
         "penalties": penalties,
         "bonuses": bonuses,
     }
+
+
+def evaluate_skill_quality(content: str, skill_dir: str) -> Optional[Dict[str, Any]]:
+    """environment.py から呼ばれる CSO 品質評価のエントリポイント。
+
+    Args:
+        content: SKILL.md のテキスト内容
+        skill_dir: SKILL.md を含むスキルディレクトリのパス
+
+    Returns:
+        {"overall": float, "cso": dict} or None（評価不可の場合）
+    """
+    skill_path = Path(skill_dir) / "SKILL.md"
+    if not skill_path.exists():
+        return None
+    try:
+        cso_result = check_cso_compliance(skill_path)
+        return {
+            "overall": cso_result["score"],
+            "cso": cso_result,
+        }
+    except Exception:
+        return None

@@ -7,6 +7,9 @@
 ### Added
 - **`scripts/rl/fitness/telemetry.py` に r^comp / r^fc を telemetry fitness 5 軸に追加 (closes #67)** — SkillOS 論文の compression term (r^comp) と function-call validity (r^fc) を新関数 `score_skill_compression` / `score_fc_validity` として実装。WEIGHTS を 3 軸 (util/effect/implicit) から 5 軸 (+ compression 0.10 / fc_validity 0.05) に更新。`compute_telemetry_score` / `format_telemetry_report` に新軸を統合。
 
+### Fixed
+- **`skill_quality.py` に `evaluate_skill_quality()` を追加し skill_quality 軸を修正 (closes #68)** — `environment.py` が呼ぶ `evaluate_skill_quality()` が `skill_quality.py` に存在せず、skill_quality 軸がサイレントに 0.0 になっていたバグを修正。`check_cso_compliance()` のラッパーとして実装し、`{"overall": float, "cso": dict}` を返す。
+
 ## [1.52.1] - 2026-05-18
 
 ### Fixed

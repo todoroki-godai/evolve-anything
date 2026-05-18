@@ -193,3 +193,33 @@ class TestCsoNormalCase:
         )
         result = check_cso_compliance(skill_path)
         assert 0.0 <= result["score"] <= 1.0
+
+
+class TestEvaluateSkillQuality:
+    def test_valid_skill_returns_overall_score(self, tmp_path):
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir(parents=True)
+        content = (
+            '---\nname: test-skill\n'
+            'description: "Deploy infrastructure automatically when you want to ship."\n'
+            '---\n\n## Steps\n\nDo the deploy.\n'
+        )
+        (skill_dir / "SKILL.md").write_text(content)
+
+        from skill_quality import evaluate_skill_quality
+        result = evaluate_skill_quality(content, str(skill_dir))
+
+        assert result is not None
+        assert "overall" in result
+        assert isinstance(result["overall"], float)
+        assert 0.0 <= result["overall"] <= 1.0
+
+    def test_missing_skill_md_returns_none(self, tmp_path):
+        skill_dir = tmp_path / "nonexistent-skill"
+        skill_dir.mkdir(parents=True)
+        # SKILL.md は存在しない
+
+        from skill_quality import evaluate_skill_quality
+        result = evaluate_skill_quality("", str(skill_dir))
+
+        assert result is None
