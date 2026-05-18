@@ -34,15 +34,39 @@ fleet.py の `resolve_auto_memory_dir(pj_path) -> Path` ヘルパは、PJ 絶対
 
 ### P2
 
-**corrections.jsonl concurrent write に file lock を追加**
+**全 JSONL 書き込みに fcntl.flock を追加**
 
 **Priority:** P2
 
-philosophy-review / reflect / discover が同一 corrections.jsonl に同時 append する可能性あり。Python buffered text-mode の `f.write()` は > PIPE_BUF で atomic 保証なし、partial-line 混入で JSONL 破損リスク。
+`append_jsonl` (rl_common/persistence.py) の全 JSONL 書き込みに `fcntl.flock` が未適用。
+現在の concurrent writer:
+- `errors.jsonl`: 3本（observe.py / stop_failure.py / permission_denied.py）
+- `sessions.jsonl`: 2本（session_summary.py / instructions_loaded.py）
+- `corrections.jsonl`: 1本（correction_detect.py）—元の TODOS 記載
 
-**対応**: `fcntl.flock(f, LOCK_EX)` を追加、または専用 lockfile を介した atomic append。
+O_APPEND で短い記録は実用上問題ないが、バッファが溢れると行混入で JSONL 破損リスク。
+auto_trigger でフック同時発火が増えると顕在化する可能性あり。
 
-**背景**: /review の adversarial subagent で検出 (2026-04-15, feat/philosophy-review PR #64)。現状は手動 trigger で単独実行前提なので deferred。自動 trigger を導入する段階で必須化。
+**対応**: `fcntl.flock(f, LOCK_EX)` を `append_jsonl` に追加（`fix/append-jsonl-flock` ブランチで対応中）。
+
+---
+
+## Python source warn 超 5件の分割計画
+
+**Priority:** P3
+
+以下のファイルが warn 閾値 (500行) を超えており、800行 hard 到達で fleet パターン分割必須:
+
+| ファイル | 行数 | 優先度 |
+|---------|-----|-------|
+| scripts/lib/agent_quality.py | 531 | 高（既に warn 超） |
+| scripts/reflect_utils.py | 534 | 高（scripts/ ルート配置の不整合も解消予定） |
+| scripts/lib/workflow_checkpoint.py | 462 | 中 |
+| scripts/lib/skill_triage.py | 458 | 中 |
+| scripts/lib/layer_diagnose.py | 433 | 低 |
+| scripts/lib/audit/orchestrator.py | 420 | 低 |
+
+分割手順: fleet/audit Phase 2 パターン（snapshot test → 機能塊切り出し → re-export → squash PR）
 
 ---
 
