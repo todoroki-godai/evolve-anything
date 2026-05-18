@@ -5,6 +5,7 @@ PR-A: hooks/tests/test_hooks.py から機能別に分割。
 """
 import json
 import os
+import threading
 import time
 import tempfile
 from datetime import datetime, timezone
@@ -177,6 +178,40 @@ class TestFalsePositives:
             hashes = common.load_false_positives()
             assert isinstance(hashes, set)
             assert len(hashes) == 0
+
+
+# --- concurrent write safety テスト ---
+
+
+class TestAppendJsonlConcurrentWrite:
+    """append_jsonl の concurrent write 安全性テスト。"""
+
+    def test_append_jsonl_concurrent_write_safe(self, tmp_path):
+        """2スレッドが同一ファイルに同時書き込みしても行数・JSON 整合性が保たれる。"""
+        filepath = tmp_path / "concurrent.jsonl"
+        n_writes = 50
+        errors = []
+
+        def writer(thread_id: int) -> None:
+            for i in range(n_writes):
+                try:
+                    common.append_jsonl(filepath, {"thread": thread_id, "i": i})
+                except Exception as e:
+                    errors.append(e)
+
+        t1 = threading.Thread(target=writer, args=(1,))
+        t2 = threading.Thread(target=writer, args=(2,))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"write errors: {errors}"
+        lines = filepath.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == n_writes * 2, f"expected {n_writes * 2} lines, got {len(lines)}"
+        for lineno, line in enumerate(lines, 1):
+            parsed = json.loads(line)
+            assert "thread" in parsed and "i" in parsed, f"line {lineno} missing keys: {line!r}"
 
 
 # --- v2.1.78: extract_worktree_info テスト ---

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix(persistence): append_jsonl の flock に明示的 LOCK_UN を追加し TOCTOU を解消 (#158)
+
 ## [1.52.1] - 2026-05-18
 
 ### Fixed
