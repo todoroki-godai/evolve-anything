@@ -1,6 +1,6 @@
 {
   "name": "rl-anything",
-  "version": "1.53.0",
+  "version": "1.54.0",
   "description": "スキル/ルールの直接パッチ最適化と自律進化ループ",
   "author": {
     "name": "todoroki-godai"
