@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [1.55.0] - 2026-05-19
+
+### Added
+- **FORGE: `--mode population_broadcast` を optimize.py に追加 (#173)** — n=3 候補を ThreadPoolExecutor で並行生成し、最高スコアの winner を選択。`evolution_memory.save_winner()` でパターンを永続化。`generate_candidate()` helper を optimize_core.py に追加。
+- **FORGE: `evolution_memory.py` を新規追加 (#173)** — 最適化成功パターンを `~/.claude/rl-anything/evolution_memory.jsonl` に JSONL 永続化。`save_winner()` / `load_patterns()` の2関数 API、max 1000件ローテーション。
+- **LBYL: `regression_gate.pre_check()` を追加 (#173)** — warn-only のリスク評価。API シグネチャ消失 / 行数 2x 超 / frontmatter 削除を事前検出。実行はブロックしない。
+- **LBYL: `ConfidenceInterval` スキーマと `to_confidence_interval()` ヘルパーを追加 (#173)** — rl-scorer 出力に ±σ 信頼区間を付与。`scorer_schema.py` に `ConfidenceInterval` dataclass、`score_noise.py` に変換ヘルパーを追加。
+- **ALSO: rl-loop-orchestrator に対抗的マルチエージェント評価を追加 (#173)** — `run_adversarial_agent()` で攻撃者エージェントがスキルの弱点を探索。`compute_disagreement_score()` で評価者間不一致を定量化。disagreement > 0.15 で警告を出力。
+- **docs(spec): AIRA 長期ロードマップを SPEC.md に追記 (#173)** — arXiv:2605.15871 参照。スキル構造自動探索エンジンの設計構想を記録。
+
+### Fixed
+- **fix(optimize): `PopulationBroadcastOptimizer` の skill_name が "SKILL" になるバグを修正 (#173)** — SKILL.md を直接指定したとき stem が "SKILL" になる問題を `__init__` 内で親ディレクトリ名に自動補正。
+- **fix(fleet): `_DEFAULT_RL_AUDIT_BIN` パスずれ修正（全PJ AUDIT ERROR 解消）(#174)** — 再発防止テスト追加。
+
+### Changed
+- **refactor(optimize): `optimize_core.py` にコアロジックを分割 (#168)** — `optimize.py` を 813 行から 456 行に削減。純粋関数を `optimize_core.py` に切り出し。
+
 ## [1.54.0] - 2026-05-19
 
 ### Added
