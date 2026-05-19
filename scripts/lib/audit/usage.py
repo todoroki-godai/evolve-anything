@@ -45,7 +45,7 @@ def load_usage_data(
     )
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    return [r for r in records if r.get("ts", r.get("timestamp", "")) >= cutoff]
+    return [r for r in records if (r.get("ts") or r.get("timestamp") or "") >= cutoff]
 
 
 def _is_openspec_skill(skill_name: str) -> bool:

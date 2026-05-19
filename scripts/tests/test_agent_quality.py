@@ -483,7 +483,7 @@ class TestCheckUpstream:
         state_file = tmp_path / "agent-brushup-state.json"
 
         with mock.patch(
-            "lib.agent_quality._fetch_latest_commit_hash",
+            "lib.agent_quality_upstream._fetch_latest_commit_hash",
             return_value="abc123",
         ):
             result = check_upstream(state_file=state_file)
@@ -500,7 +500,7 @@ class TestCheckUpstream:
         state_file.write_text(json.dumps({"upstream_commit_hash": "abc123"}))
 
         with mock.patch(
-            "lib.agent_quality._fetch_latest_commit_hash",
+            "lib.agent_quality_upstream._fetch_latest_commit_hash",
             return_value="abc123",
         ):
             result = check_upstream(state_file=state_file)
@@ -513,7 +513,7 @@ class TestCheckUpstream:
         state_file.write_text(json.dumps({"upstream_commit_hash": "old123"}))
 
         with mock.patch(
-            "lib.agent_quality._fetch_latest_commit_hash",
+            "lib.agent_quality_upstream._fetch_latest_commit_hash",
             return_value="new456",
         ):
             result = check_upstream(state_file=state_file)
@@ -530,7 +530,7 @@ class TestCheckUpstream:
         state_file = tmp_path / "agent-brushup-state.json"
 
         with mock.patch(
-            "lib.agent_quality._fetch_latest_commit_hash",
+            "lib.agent_quality_upstream._fetch_latest_commit_hash",
             return_value=None,
         ):
             result = check_upstream(state_file=state_file)

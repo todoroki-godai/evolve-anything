@@ -28,12 +28,11 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 
-# --- optimize.py から _record_pitfall をインポート ---
+# --- optimize_core から record_pitfall をインポート ---
 _optimizer_scripts = Path(__file__).parent.parent.parent / "genetic-prompt-optimizer" / "scripts"
 sys.path.insert(0, str(_optimizer_scripts))
 try:
-    from optimize import DirectPatchOptimizer as _GO
-    _record_pitfall = _GO._record_pitfall
+    from optimize_core import record_pitfall as _record_pitfall
 except ImportError:
     _record_pitfall = None  # type: ignore
 

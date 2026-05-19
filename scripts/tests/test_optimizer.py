@@ -1,0 +1,381 @@
+"""optimize_core.py の単体テスト。
+
+extract_markdown / format_gate_reason / determine_strategy など純粋関数を中心に検証する。
+LLM 呼び出し（call_llm）は subprocess.run をモック。
+"""
+import json
+import sys
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+# sys.path は conftest.py が設定済み
+# optimize_core は skills/.../scripts/ にあるので手動追加
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+_OPTIMIZER_DIR = _SCRIPTS_DIR.parent / "skills" / "genetic-prompt-optimizer" / "scripts"
+if str(_OPTIMIZER_DIR) not in sys.path:
+    sys.path.insert(0, str(_OPTIMIZER_DIR))
+
+import optimize_core as core
+
+
+# ── extract_markdown ──────────────────────────────────────────────────
+
+
+def test_extract_markdown_code_block():
+    text = "some preamble\n```markdown\n# Hello\ncontent\n```\ntrailing"
+    result = core.extract_markdown(text)
+    assert result == "# Hello\ncontent"
+
+
+def test_extract_markdown_plain_code_block():
+    text = "```\n# Plain block\n```"
+    result = core.extract_markdown(text)
+    assert result == "# Plain block"
+
+
+def test_extract_markdown_no_block_falls_back():
+    text = "  raw content without fences  "
+    result = core.extract_markdown(text)
+    assert result == "raw content without fences"
+
+
+def test_extract_markdown_picks_longest():
+    text = "```markdown\nshort\n```\n```markdown\nlonger content here\n```"
+    result = core.extract_markdown(text)
+    assert result == "longer content here"
+
+
+def test_extract_markdown_empty_string():
+    assert core.extract_markdown("") is None
+
+
+# ── format_gate_reason ───────────────────────────────────────────────
+
+
+def test_format_gate_reason_none():
+    assert core.format_gate_reason(None) == "不明な理由"
+
+
+def test_format_gate_reason_empty():
+    assert core.format_gate_reason("empty") == "パッチ内容が空です"
+
+
+def test_format_gate_reason_line_limit():
+    reason = "line_limit_exceeded(200/150)"
+    result = core.format_gate_reason(reason)
+    assert "行数制限超過" in result
+    assert "line_limit_exceeded" in result
+
+
+def test_format_gate_reason_forbidden():
+    reason = "forbidden_pattern(TODO)"
+    result = core.format_gate_reason(reason)
+    assert "禁止パターン" in result
+
+
+def test_format_gate_reason_frontmatter():
+    assert core.format_gate_reason("frontmatter_lost") == "YAML frontmatter が消失しました"
+
+
+# ── determine_strategy ──────────────────────────────────────────────
+
+
+def test_determine_strategy_auto_with_corrections():
+    corrections = [{"message": "fix this"}]
+    assert core.determine_strategy("auto", corrections) == "error_guided"
+
+
+def test_determine_strategy_auto_no_corrections():
+    assert core.determine_strategy("auto", []) == "llm_improve"
+
+
+def test_determine_strategy_error_guided_fallback(capsys):
+    # corrections なしで error_guided を指定 → llm_improve にフォールバック
+    result = core.determine_strategy("error_guided", [])
+    assert result == "llm_improve"
+    captured = capsys.readouterr()
+    assert "フォールバック" in captured.out
+
+
+def test_determine_strategy_error_guided_with_corrections():
+    corrections = [{"message": "bug"}]
+    assert core.determine_strategy("error_guided", corrections) == "error_guided"
+
+
+def test_determine_strategy_llm_improve():
+    assert core.determine_strategy("llm_improve", []) == "llm_improve"
+
+
+# ── collect_corrections ─────────────────────────────────────────────
+
+
+def test_collect_corrections_filters_applied(tmp_path):
+    f = tmp_path / "corrections.jsonl"
+    records = [
+        {"last_skill": "my-skill", "reflect_status": "applied", "message": "skip me"},
+        {"last_skill": "my-skill", "message": "keep me"},
+        {"last_skill": "other-skill", "message": "irrelevant"},
+    ]
+    f.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+    result = core.collect_corrections("my-skill", f, max_items=10)
+    assert len(result) == 1
+    assert result[0]["message"] == "keep me"
+
+
+def test_collect_corrections_max_limit(tmp_path):
+    f = tmp_path / "corrections.jsonl"
+    records = [{"last_skill": "sk", "message": f"m{i}"} for i in range(20)]
+    f.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+    result = core.collect_corrections("sk", f, max_items=5)
+    assert len(result) == 5
+    # 直近 5 件であること
+    assert result[-1]["message"] == "m19"
+
+
+def test_collect_corrections_missing_file(tmp_path):
+    result = core.collect_corrections("sk", tmp_path / "nonexistent.jsonl", max_items=10)
+    assert result == []
+
+
+# ── collect_context ─────────────────────────────────────────────────
+
+
+def test_collect_context_reads_pitfalls(tmp_path):
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    refs = skill_dir / "references"
+    refs.mkdir()
+    pitfalls = refs / "pitfalls.md"
+    pitfalls.write_text("# pitfalls\n## foo\nbar", encoding="utf-8")
+
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text("---\nname: my-skill\n---\n", encoding="utf-8")
+
+    # plugin_root を tmp_path にして audit_script が見つからないようにする
+    ctx = core.collect_context(skill_file, tmp_path, "my-skill")
+    assert "pitfalls" in ctx
+    assert "# pitfalls" in ctx["pitfalls"]
+
+
+def test_collect_context_no_pitfalls(tmp_path):
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("---\nname: sk\n---\n", encoding="utf-8")
+
+    ctx = core.collect_context(skill_file, tmp_path, "sk")
+    assert "pitfalls" not in ctx
+
+
+# ── record_pitfall ───────────────────────────────────────────────────
+
+
+def test_record_pitfall_creates_file(tmp_path):
+    skill_file = tmp_path / "SKILL.md"
+    core.record_pitfall(str(skill_file), "gate", "forbidden_pattern(TODO)", 0.5)
+
+    pitfalls_file = tmp_path / "references" / "pitfalls.md"
+    assert pitfalls_file.exists()
+    content = pitfalls_file.read_text(encoding="utf-8")
+    assert "forbidden_pattern(TODO)" in content
+
+
+def test_record_pitfall_no_duplicate(tmp_path):
+    skill_file = tmp_path / "SKILL.md"
+    core.record_pitfall(str(skill_file), "gate", "some_pattern", None)
+    core.record_pitfall(str(skill_file), "gate", "some_pattern", None)
+
+    pitfalls_file = tmp_path / "references" / "pitfalls.md"
+    content = pitfalls_file.read_text(encoding="utf-8")
+    assert content.count("some_pattern") == 1
+
+
+def test_record_pitfall_rotation(tmp_path):
+    skill_file = tmp_path / "SKILL.md"
+    refs = tmp_path / "references"
+    refs.mkdir()
+    # 既存の 1001 行分のエントリを作る（ローテーションが起きること）
+    rows = [f"| gate | pattern_{i} | - |" for i in range(1001)]
+    existing = "| Source | Pattern | Score |\n|--------|---------|-------|\n" + "\n".join(rows) + "\n"
+    (refs / "pitfalls.md").write_text(existing, encoding="utf-8")
+
+    core.record_pitfall(str(skill_file), "gate", "new_pattern", None)
+
+    pitfalls_file = refs / "pitfalls.md"
+    content = pitfalls_file.read_text(encoding="utf-8")
+    data_rows = [l for l in content.strip().split("\n") if l.strip().startswith("|") and "Source" not in l and "---" not in l]
+    # 最大 PITFALLS_MAX_ROWS(50) に収まること
+    assert len(data_rows) <= core.PITFALLS_MAX_ROWS
+
+
+# ── call_llm (subprocess mock) ───────────────────────────────────────
+
+
+def test_call_llm_success():
+    fake_output = "```markdown\n# Patched\ncontent\n```\n"
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=0, stdout=fake_output)
+        result, error = core.call_llm("some prompt", claude_cwd=None)
+    assert error is None
+    assert result == "# Patched\ncontent"
+
+
+def test_call_llm_error_returncode():
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=1, stdout="", stderr="err")
+        result, error = core.call_llm("prompt", claude_cwd=None)
+    assert result is None
+    assert "エラーコード" in error
+
+
+def test_call_llm_timeout():
+    import subprocess
+    with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 180)):
+        result, error = core.call_llm("prompt", claude_cwd=None)
+    assert result is None
+    assert "タイムアウト" in error
+
+
+def test_call_llm_not_found():
+    with mock.patch("subprocess.run", side_effect=FileNotFoundError()):
+        result, error = core.call_llm("prompt", claude_cwd=None)
+    assert result is None
+    assert "見つかりません" in error
+
+
+# ── build_patch_prompt ───────────────────────────────────────────────
+
+
+def test_build_patch_prompt_error_guided():
+    corrections = [{"message": "fix X", "correction_type": "edit", "extracted_learning": "use Y"}]
+    prompt = core.build_patch_prompt(
+        skill_content="# skill content",
+        corrections=corrections,
+        context={},
+        strategy="error_guided",
+        is_rule_file=False,
+        max_lines=500,
+    )
+    assert "fix X" in prompt
+    assert "use Y" in prompt
+    assert "500 行以内" in prompt
+
+
+def test_build_patch_prompt_llm_improve():
+    prompt = core.build_patch_prompt(
+        skill_content="# skill",
+        corrections=[],
+        context={"pitfalls": "## known issues\nfoo"},
+        strategy="llm_improve",
+        is_rule_file=False,
+        max_lines=500,
+    )
+    assert "known issues" in prompt
+    assert "汎用改善" in prompt or "改善方針" in prompt
+
+
+def test_build_patch_prompt_rule_file_constraint():
+    prompt = core.build_patch_prompt(
+        skill_content="some rule",
+        corrections=[],
+        context={},
+        strategy="llm_improve",
+        is_rule_file=True,
+        max_lines=10,
+    )
+    assert "10 行以内" in prompt
+    assert "ルール" in prompt
+
+
+# ── run_regression_gate ──────────────────────────────────────────────
+
+
+def test_run_regression_gate_passes():
+    content = "---\nname: test\n---\n# content"
+    original = content
+    passed, reason = core.run_regression_gate(content, original, max_lines=500, pitfall_path=None)
+    assert passed is True
+    assert reason is None
+
+
+def test_run_regression_gate_fails_empty():
+    passed, reason = core.run_regression_gate("", None, max_lines=500, pitfall_path=None)
+    assert passed is False
+    assert reason is not None
+
+
+def test_run_regression_gate_standalone_import():
+    """optimize_core を単独 import しても regression_gate が解決できること。"""
+    # optimize.py を経由せずに optimize_core だけ import した場合も動くことを確認
+    # (sys.path 自己設定のテスト)
+    import importlib
+    import importlib.util
+    spec = importlib.util.find_spec("optimize_core")
+    assert spec is not None, "optimize_core が単独で見つかること"
+    # run_regression_gate を呼び出して ImportError が出ないこと
+    passed, reason = core.run_regression_gate("# content", None, max_lines=500, pitfall_path=None)
+    # ImportError が起きなければ OK（pass/fail の値は問わない）
+    assert isinstance(passed, bool)
+
+
+# ── run_custom_fitness ───────────────────────────────────────────────
+
+
+def test_run_custom_fitness_default_returns_none(tmp_path):
+    result = core.run_custom_fitness("content", "default", tmp_path)
+    assert result is None
+
+
+def test_run_custom_fitness_missing_file(tmp_path):
+    result = core.run_custom_fitness("content", "nonexistent_func", tmp_path)
+    assert result is None
+
+
+def test_run_custom_fitness_success(tmp_path):
+    fitness_dir = tmp_path / "scripts" / "rl" / "fitness"
+    fitness_dir.mkdir(parents=True)
+    (fitness_dir / "my_func.py").write_text(
+        "import sys; print('0.75'); sys.exit(0)", encoding="utf-8"
+    )
+    import os
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        result = core.run_custom_fitness("content", "my_func", tmp_path)
+    finally:
+        os.chdir(old_cwd)
+    assert result == pytest.approx(0.75)
+
+
+def test_run_custom_fitness_clamps_to_01(tmp_path):
+    fitness_dir = tmp_path / "scripts" / "rl" / "fitness"
+    fitness_dir.mkdir(parents=True)
+    (fitness_dir / "overflow.py").write_text(
+        "import sys; print('999.0'); sys.exit(0)", encoding="utf-8"
+    )
+    import os
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        result = core.run_custom_fitness("content", "overflow", tmp_path)
+    finally:
+        os.chdir(old_cwd)
+    assert result == pytest.approx(1.0)
+
+
+def test_run_custom_fitness_error_exit(tmp_path):
+    fitness_dir = tmp_path / "scripts" / "rl" / "fitness"
+    fitness_dir.mkdir(parents=True)
+    (fitness_dir / "bad.py").write_text(
+        "import sys; sys.exit(1)", encoding="utf-8"
+    )
+    import os
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        result = core.run_custom_fitness("content", "bad", tmp_path)
+    finally:
+        os.chdir(old_cwd)
+    assert result is None
