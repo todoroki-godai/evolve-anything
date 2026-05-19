@@ -522,3 +522,196 @@ class TestSessionTitle:
         data = json.loads(out)  # round-trip parse
         title = data["hookSpecificOutput"]["sessionTitle"]
         assert "bun" in title
+
+
+class TestGetPrecedingToolCalls:
+    """get_preceding_tool_calls() のユニットテスト。"""
+
+    def _make_session_jsonl(self, tmp_path: Path, session_id: str, tool_entries: list) -> Path:
+        """テスト用セッション JSONL ファイルを生成する。
+
+        tool_entries: [{"name": str, "is_error": bool}, ...]
+        各エントリに対して assistant (tool_use) + user (tool_result) の行ペアを書く。
+        """
+        lines = []
+        for i, entry in enumerate(tool_entries):
+            tool_id = f"toolu_{i:04d}"
+            # assistant: tool_use
+            assistant_rec = {
+                "type": "assistant",
+                "sessionId": session_id,
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "id": tool_id, "name": entry["name"], "input": {}}
+                    ]
+                },
+            }
+            lines.append(json.dumps(assistant_rec))
+            # user: tool_result
+            user_rec = {
+                "type": "user",
+                "sessionId": session_id,
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "is_error": entry.get("is_error", False),
+                            "content": "ok" if not entry.get("is_error") else "error",
+                        }
+                    ]
+                },
+            }
+            lines.append(json.dumps(user_rec))
+        # 本番構造: ~/.claude/projects/<slug>/<session_id>.jsonl（2階層）に合わせる
+        slug_dir = tmp_path / "test-slug"
+        slug_dir.mkdir(exist_ok=True)
+        session_file = slug_dir / f"{session_id}.jsonl"
+        session_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return session_file
+
+    def test_returns_last_n_tool_calls(self, tmp_path):
+        """直近 N 件のツール呼び出しを正しく返す。"""
+        session_id = "test-sess-ptc-001"
+        self._make_session_jsonl(tmp_path, session_id, [
+            {"name": "Bash", "is_error": False},
+            {"name": "Edit", "is_error": False},
+            {"name": "Bash", "is_error": True},
+            {"name": "Read", "is_error": False},
+        ])
+        result = common.get_preceding_tool_calls(
+            session_id, n=3, projects_dir=tmp_path
+        )
+        assert len(result) == 3
+        # 末尾 3 件: Edit(ok), Bash(err), Read(ok)
+        assert result[0] == {"tool": "Edit", "success": True}
+        assert result[1] == {"tool": "Bash", "success": False}
+        assert result[2] == {"tool": "Read", "success": True}
+
+    def test_returns_all_when_less_than_n(self, tmp_path):
+        """N 件未満のツール呼び出しは全件返す。"""
+        session_id = "test-sess-ptc-002"
+        self._make_session_jsonl(tmp_path, session_id, [
+            {"name": "Bash", "is_error": False},
+            {"name": "Edit", "is_error": False},
+        ])
+        result = common.get_preceding_tool_calls(
+            session_id, n=5, projects_dir=tmp_path
+        )
+        assert len(result) == 2
+
+    def test_returns_empty_when_session_not_found(self, tmp_path):
+        """該当セッションファイルがない場合は空リストを返す。"""
+        result = common.get_preceding_tool_calls(
+            "nonexistent-session", n=5, projects_dir=tmp_path
+        )
+        assert result == []
+
+    def test_returns_empty_when_projects_dir_not_found(self, tmp_path):
+        """projects_dir が存在しない場合は空リストを返す（graceful fallback）。"""
+        result = common.get_preceding_tool_calls(
+            "any-session", n=5, projects_dir=tmp_path / "nonexistent"
+        )
+        assert result == []
+
+    def test_filters_by_session_id(self, tmp_path):
+        """別 sessionId のレコードを混入しない。"""
+        session_id = "test-sess-ptc-004"
+        other_session = "other-sess-000"
+        self._make_session_jsonl(tmp_path, session_id, [
+            {"name": "Bash", "is_error": False},
+        ])
+        self._make_session_jsonl(tmp_path, other_session, [
+            {"name": "Edit", "is_error": False},
+            {"name": "Write", "is_error": False},
+        ])
+        result = common.get_preceding_tool_calls(
+            session_id, n=5, projects_dir=tmp_path
+        )
+        assert len(result) == 1
+        assert result[0]["tool"] == "Bash"
+
+    def test_is_error_false_when_no_is_error_field(self, tmp_path):
+        """tool_result に is_error がない場合は success=True とみなす。"""
+        session_id = "test-sess-ptc-005"
+        lines = []
+        tool_id = "toolu_0001"
+        lines.append(json.dumps({
+            "type": "assistant",
+            "sessionId": session_id,
+            "message": {"content": [
+                {"type": "tool_use", "id": tool_id, "name": "Bash", "input": {}}
+            ]},
+        }))
+        lines.append(json.dumps({
+            "type": "user",
+            "sessionId": session_id,
+            "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tool_id, "content": "ok"}
+                # is_error フィールドなし
+            ]},
+        }))
+        # 本番構造: ~/.claude/projects/<slug>/<session_id>.jsonl（2階層）に合わせる
+        slug_dir = tmp_path / "test-slug"
+        slug_dir.mkdir(exist_ok=True)
+        session_file = slug_dir / f"{session_id}.jsonl"
+        session_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result = common.get_preceding_tool_calls(
+            session_id, n=5, projects_dir=tmp_path
+        )
+        assert len(result) == 1
+        assert result[0] == {"tool": "Bash", "success": True}
+
+
+class TestCorrectionDetectPrecedingToolCalls:
+    """correction_detect.py が preceding_tool_calls を記録するテスト。"""
+
+    def test_preceding_tool_calls_in_record(self, patch_data_dir, tmp_path):
+        """correction record に preceding_tool_calls フィールドが含まれる。"""
+        session_id = "sess-ptc-hook-001"
+        # mock で get_preceding_tool_calls を stub する
+        mock_calls = [
+            {"tool": "Bash", "success": True},
+            {"tool": "Edit", "success": False},
+        ]
+        with mock.patch.object(common, "get_preceding_tool_calls", return_value=mock_calls):
+            event = {
+                "session_id": session_id,
+                "message": {"content": "いや、そうじゃなくて"},
+            }
+            correction_detect.handle_user_prompt_submit(event)
+
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        assert corrections_file.exists()
+        record = json.loads(corrections_file.read_text().strip())
+        assert "preceding_tool_calls" in record
+        assert record["preceding_tool_calls"] == mock_calls
+
+    def test_preceding_tool_calls_empty_when_no_session_data(self, patch_data_dir, tmp_path):
+        """get_preceding_tool_calls が空リストを返しても record は壊れない。"""
+        with mock.patch.object(common, "get_preceding_tool_calls", return_value=[]):
+            event = {
+                "session_id": "sess-ptc-hook-002",
+                "message": {"content": "いや、違う方向で"},
+            }
+            correction_detect.handle_user_prompt_submit(event)
+
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        record = json.loads(corrections_file.read_text().strip())
+        assert "preceding_tool_calls" in record
+        assert record["preceding_tool_calls"] == []
+
+    def test_schema_compliance_with_preceding_tool_calls(self, patch_data_dir):
+        """拡張スキーマ（preceding_tool_calls 追加後）の全フィールド存在確認。"""
+        with mock.patch.object(common, "get_preceding_tool_calls", return_value=[]):
+            event = {
+                "session_id": "sess-ptc-schema",
+                "message": {"content": "いや、そうじゃなくて"},
+            }
+            correction_detect.handle_user_prompt_submit(event)
+
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        record = json.loads(corrections_file.read_text().strip())
+        assert "preceding_tool_calls" in record
+        assert isinstance(record["preceding_tool_calls"], list)

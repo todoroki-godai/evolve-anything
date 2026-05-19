@@ -91,6 +91,9 @@ def handle_user_prompt_submit(event: dict) -> None:
     # 直前スキルを取得
     last_skill = common.read_last_skill(session_id)
 
+    # 修正直前のツール呼び出し履歴を取得（失敗時は空リストで継続）
+    preceding_tool_calls = common.get_preceding_tool_calls(session_id)
+
     # corrections.jsonl に拡張スキーマで追記
     now = datetime.now(timezone.utc).isoformat()
     record = {
@@ -98,6 +101,7 @@ def handle_user_prompt_submit(event: dict) -> None:
         "matched_patterns": matched_patterns,
         "message": message.strip(),
         "last_skill": last_skill,
+        "preceding_tool_calls": preceding_tool_calls,
         "confidence": round(confidence, 2),
         "sentiment": pattern_info.get("type", "correction"),
         "decay_days": decay_days,

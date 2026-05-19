@@ -95,6 +95,7 @@ from .detection import (  # noqa: F401, E402
 from .persistence import (  # noqa: F401, E402
     append_jsonl,
     extract_worktree_info,
+    get_preceding_tool_calls,
     project_name_from_dir,
 )
 
