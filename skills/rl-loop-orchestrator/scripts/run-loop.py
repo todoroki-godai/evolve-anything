@@ -52,6 +52,8 @@ _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 from line_limit import check_line_limit as _check_line_limit
 from skill_evolve import assess_single_skill, evolve_skill_proposal, apply_evolve_proposal
+from score_noise import compute_stats, to_confidence_interval
+from scorer_schema import ConfidenceInterval
 
 
 def _compute_verdict(improvement: float, epsilon: float = SCORE_EPSILON) -> str:
@@ -275,6 +277,109 @@ def score_variant(content: str, target_path: str, dry_run: bool = False) -> floa
 
     scores = _parallel_score(content)
     return scores["integrated"]
+
+
+# ─── ALSO: 攻撃者エージェント ───────────────────────────────────────────────
+
+
+def run_adversarial_agent(skill_content: str, evaluator_scores: list) -> str:
+    """攻撃者エージェント: スキルの弱点を探索する。
+
+    subprocess で `claude -p` を呼び出し、スキルの問題点を返す。
+    失敗した場合は空文字を返す（graceful degradation）。
+
+    Args:
+        skill_content: 評価対象のスキル内容
+        evaluator_scores: 評価者3人のスコアリスト
+
+    Returns:
+        攻撃者の指摘（失敗時は ""）
+    """
+    avg_score = sum(evaluator_scores) / len(evaluator_scores) if evaluator_scores else 0.5
+    prompt = (
+        f"あなたはスキル評価の攻撃者エージェントです。\n"
+        f"以下のスキル定義を批判的に分析し、弱点・改善点・潜在的な問題を指摘してください。\n"
+        f"評価者スコア平均: {avg_score:.2f}\n\n"
+        f"=== スキル内容 ===\n{skill_content}\n\n"
+        f"弱点と改善提案を簡潔に述べてください。"
+    )
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "--output-format", "text"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return ""
+    except Exception:
+        return ""
+
+
+def compute_disagreement_score(scores: list) -> float:
+    """評価者間の不一致スコアを計算する（標準偏差を使用）。
+
+    score_noise.compute_stats() を使って std を取得する。
+
+    Returns:
+        0.0〜1.0 の不一致スコア（std をそのまま返す）
+    """
+    if len(scores) < 2:
+        return 0.0
+    stats = compute_stats(scores)
+    return stats["std"]
+
+
+def run_loop_with_adversarial(
+    skill_path: str,
+    n_evaluators: int = 3,
+    adversarial: bool = True,
+) -> dict:
+    """評価者×n + 攻撃者エージェントで評価ループを実行。
+
+    フロー:
+    1. 既存の score_variant() を n_evaluators 回呼ぶ（スコア収集）
+    2. compute_disagreement_score() で不一致スコアを計算
+    3. disagreement > 0.15 なら「評価者間で意見が割れています (disagreement={:.2f})」を print
+    4. adversarial=True なら run_adversarial_agent() を呼ぶ
+    5. to_confidence_interval() で ConfidenceInterval を生成して返す
+
+    Returns:
+        {"scores": [...], "disagreement": float, "ci": ConfidenceInterval, "adversarial_findings": str}
+    """
+    try:
+        skill_content = Path(skill_path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        skill_content = ""
+
+    scores = []
+    for i in range(n_evaluators):
+        s = score_variant(skill_content, skill_path)
+        scores.append(s)
+
+    disagreement = compute_disagreement_score(scores)
+
+    if disagreement > 0.15:
+        print(f"評価者間で意見が割れています (disagreement={disagreement:.2f})")
+
+    adversarial_findings = ""
+    if adversarial:
+        adversarial_findings = run_adversarial_agent(skill_content, scores)
+
+    stats = compute_stats(scores)
+    ci = to_confidence_interval(stats)
+
+    return {
+        "scores": scores,
+        "disagreement": disagreement,
+        "ci": ci,
+        "adversarial_findings": adversarial_findings,
+    }
+
+
+# ─── ALSO: ここまで ──────────────────────────────────────────────────────────
 
 
 def _try_evolve_skill(

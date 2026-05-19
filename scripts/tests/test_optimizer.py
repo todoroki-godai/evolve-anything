@@ -19,6 +19,15 @@ if str(_OPTIMIZER_DIR) not in sys.path:
 
 import optimize_core as core
 
+# optimize.py (PopulationBroadcastOptimizer) のために追加
+if str(_OPTIMIZER_DIR) not in sys.path:
+    sys.path.insert(0, str(_OPTIMIZER_DIR))
+import importlib.util as _ilu
+_opt_spec = _ilu.spec_from_file_location("optimize", _OPTIMIZER_DIR / "optimize.py")
+_opt_mod = _ilu.module_from_spec(_opt_spec)
+_opt_spec.loader.exec_module(_opt_mod)
+PopulationBroadcastOptimizer = _opt_mod.PopulationBroadcastOptimizer
+
 
 # ── extract_markdown ──────────────────────────────────────────────────
 
@@ -379,3 +388,120 @@ def test_run_custom_fitness_error_exit(tmp_path):
     finally:
         os.chdir(old_cwd)
     assert result is None
+
+
+# ── PopulationBroadcastOptimizer ─────────────────────────────────────
+
+
+def _make_skill(tmp_path: Path) -> Path:
+    """テスト用スキルファイルを作成して返す。"""
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("# My Skill\nSome content.\n", encoding="utf-8")
+    return skill_file
+
+
+def test_population_broadcast_generate_variants(tmp_path):
+    """call_llm を mock して n=3 候補が生成されること。"""
+    skill_file = _make_skill(tmp_path)
+    fake_content = "# Improved Skill\nBetter content.\n"
+    fake_output = f"```markdown\n{fake_content}```\n"
+
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=0, stdout=fake_output)
+        optimizer = PopulationBroadcastOptimizer(
+            skill_path=str(skill_file),
+            plugin_root=str(tmp_path),
+            target_skill_name="SKILL",
+            n=3,
+        )
+        result = optimizer.run()
+
+    # subprocess.run が n=3 回呼ばれること（各候補で1回）
+    assert mock_run.call_count == 3
+    assert result["n_candidates"] == 3
+
+
+def test_population_broadcast_pre_check_warn(tmp_path, capsys):
+    """pre_check の warnings が出力されること（passed=True で続行）。
+
+    generate_candidate を直接呼んで pre_check の warn-only 動作を検証する。
+    """
+    # API シグネチャ消失を誘発: original に def bar があるが、候補には含めない
+    original = "def bar():\n    pass\n"
+    # 候補は "bar" を含まない
+    candidate_content = "# Completely rewritten skill\nNo original functions here.\n"
+
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(
+            returncode=0,
+            stdout=f"```markdown\n{candidate_content}```\n",
+        )
+        result = core.generate_candidate(
+            prompt="dummy prompt",
+            original_content=original,
+            claude_cwd=None,
+            max_lines=500,
+            pitfall_path=None,
+        )
+
+    captured = capsys.readouterr()
+    # pre_check warn が出力されること
+    assert "[pre_check warn]" in captured.out
+    assert "bar" in captured.out
+    # passed=True（warn-only なのでゲート通過）
+    assert result["passed"] is True
+    assert result["content"] is not None
+
+
+def test_population_broadcast_select_winner(tmp_path):
+    """スコアなし（fitness_func=default）時に最初の通過候補が winner となること。"""
+    skill_file = _make_skill(tmp_path)
+    fake_content = "# Improved\nContent.\n"
+    fake_output = f"```markdown\n{fake_content}```\n"
+
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=0, stdout=fake_output)
+        optimizer = PopulationBroadcastOptimizer(
+            skill_path=str(skill_file),
+            plugin_root=str(tmp_path),
+            target_skill_name="SKILL",
+            n=3,
+            fitness_func="default",
+        )
+        result = optimizer.run()
+
+    # スコアが None のとき winner が選ばれていること
+    assert result["winner"] is not None
+    assert result["winner"]["fitness"] is None
+    # ファイルが上書きされていること
+    assert skill_file.read_text(encoding="utf-8") == result["winner"]["content"]
+
+
+def test_population_broadcast_partial_failure(tmp_path):
+    """3候補中1件が regression gate 失敗でも残り2件で続行すること。"""
+    skill_file = _make_skill(tmp_path)
+
+    # 1件目は空（gate 失敗）、2件目・3件目は正常
+    good_content = "# Good content.\n"
+    call_count = [0]
+
+    def fake_subprocess_run(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # 空コンテンツ → gate 失敗
+            return mock.Mock(returncode=0, stdout="```markdown\n\n```\n")
+        return mock.Mock(returncode=0, stdout=f"```markdown\n{good_content}```\n")
+
+    with mock.patch("subprocess.run", side_effect=fake_subprocess_run):
+        optimizer = PopulationBroadcastOptimizer(
+            skill_path=str(skill_file),
+            plugin_root=str(tmp_path),
+            target_skill_name="SKILL",
+            n=3,
+        )
+        result = optimizer.run()
+
+    # gate 失敗した1件を除いた2件が通過すること
+    assert result["passed_count"] >= 1
+    # winner が存在すること
+    assert result["winner"] is not None

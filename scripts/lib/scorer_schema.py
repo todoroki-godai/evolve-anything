@@ -5,6 +5,25 @@ rl-scorer が返すべき JSON 構造を型付きで表現し、
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class ConfidenceInterval:
+    """±σ 信頼区間。スコアの分布を表現する。
+
+    Attributes:
+        mean:  スコアの平均値
+        std:   標準偏差（1件のみの場合は 0.0）
+        lower: mean - std
+        upper: mean + std
+        n:     サンプル数
+    """
+    mean: float
+    std: float
+    lower: float
+    upper: float
+    n: int
 
 
 class ScorerValidationError(ValueError):
@@ -39,6 +58,7 @@ class ScorerOutput:
     integrated_score: float
     summary: str
     improvements: list
+    confidence_interval: Optional[ConfidenceInterval] = None
 
     def __post_init__(self):
         if not (0.0 <= self.integrated_score <= 1.0):

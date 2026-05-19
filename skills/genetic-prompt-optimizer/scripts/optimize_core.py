@@ -366,3 +366,40 @@ def record_pitfall(
 
     output = PITFALLS_HEADER + "\n".join(existing_rows) + "\n"
     pitfalls_file.write_text(output, encoding="utf-8")
+
+
+# ── population broadcast helper ──────────────────────────────────────
+
+
+def generate_candidate(
+    prompt: str,
+    original_content: str,
+    claude_cwd: Optional[str],
+    max_lines: int,
+    pitfall_path: Optional[str],
+) -> Dict[str, Any]:
+    """1候補を生成してゲート判定まで行う（PopulationBroadcastOptimizer から利用）。
+
+    warn-only の pre_check を実行し、warnings を標準出力に出力する。
+    regression_gate を通過した場合のみ passed=True を返す。
+    """
+    from regression_gate import pre_check  # type: ignore[import]
+
+    content, error = call_llm(prompt, claude_cwd)
+    if error or not content:
+        return {"content": None, "passed": False, "error": error or "empty", "fitness": None}
+
+    # pre_check (warn-only): passed は常に True
+    pc = pre_check(content, original_content)
+    for w in pc.warnings:
+        print(f"[pre_check warn] {w}")
+
+    passed, gate_reason = run_regression_gate(
+        content, original_content, max_lines, pitfall_path
+    )
+    return {
+        "content": content,
+        "passed": passed,
+        "gate_reason": gate_reason,
+        "fitness": None,
+    }

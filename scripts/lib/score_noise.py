@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from scorer_prompts import DEFAULT_AXIS_WEIGHTS as AXIS_WEIGHTS, get_axis_prompts
+from scorer_schema import ConfidenceInterval
 
 FALLBACK_SCORE = 0.5
 
@@ -29,6 +30,28 @@ def compute_stats(scores: List[float]) -> Dict:
         "max": round(max(scores), 4),
         "n": n,
     }
+
+
+def to_confidence_interval(stats: Dict) -> ConfidenceInterval:
+    """compute_stats() の返り値から ConfidenceInterval を組み立てる。
+
+    スコアが 1 件のみの場合は std=0.0、lower==upper==mean、n=1 となる。
+
+    Args:
+        stats: compute_stats() が返した dict（mean/std/n を含む）
+
+    Returns:
+        ConfidenceInterval インスタンス
+    """
+    mean = stats["mean"]
+    std = stats["std"]
+    return ConfidenceInterval(
+        mean=mean,
+        std=std,
+        lower=round(mean - std, 4),
+        upper=round(mean + std, 4),
+        n=stats["n"],
+    )
 
 
 def recommend_epsilon(stats: Dict) -> float:
