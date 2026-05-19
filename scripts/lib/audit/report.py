@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from .memory import build_memory_health_section
 from .quality import build_quality_trends_section
-from .sections import _build_test_guard_section, build_token_consumption_section
+from .sections import _build_test_guard_section, build_lsp_suggestion_section, build_token_consumption_section
 
 
 def generate_report(
@@ -78,6 +78,11 @@ def generate_report(
         tg_section = _build_test_guard_section(project_dir)
         if tg_section:
             lines.extend(tg_section)
+
+    if project_dir is not None:
+        lsp_section = build_lsp_suggestion_section(project_dir)
+        if lsp_section:
+            lines.extend(lsp_section)
 
     if usage:
         lines.append("## Usage (last 30 days)")

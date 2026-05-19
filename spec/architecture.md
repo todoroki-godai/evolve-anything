@@ -3,12 +3,12 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-05-09 (v1.45.0: prune skill 削除時の import 依存検査)
+Last updated: 2026-05-19 (Phase 8-13 パッケージ化完了 + hooks 更新)
 
 ## コンポーネント構成
 
 ```
-hooks/                  ← Observe 層（17個、LLMコストゼロ）[ADR-002]
+hooks/                  ← Observe 層（15個 + helpers、LLMコストゼロ）[ADR-002]
   common.py             ← scripts/lib/rl_common の re-exporter（後方互換）[ADR-019]
   observe.py            ← usage/errors/corrections 記録
   correction_detect.py  ← corrections 自動検出
@@ -26,8 +26,9 @@ hooks/                  ← Observe 層（17個、LLMコストゼロ）[ADR-002]
   skill_triage_runner.py← Stop hook で skill-triage を非同期実行（Popen）
   tool_duration.py      ← Bash 実行時間を tool_durations.jsonl に記録（CC v2.1.119+）
   skill_activation_log.py← Skill PostToolUse — invocation_trigger（nested-skill/top-level）を skill_activations.jsonl に記録（CC v2.1.121+）
+  post_tool_use_memory.py← Write/Edit 後に memory update_count を自動インクリメント（closes #151）
 
-bin/                    ← bareコマンド CLI（18個）[ADR-019]
+bin/                    ← bareコマンド CLI（19個）[ADR-019]
   rl-evolve, rl-audit, rl-discover, rl-prune, rl-reorganize
   rl-reflect, rl-handover, rl-optimize, rl-loop
   rl-backfill, rl-backfill-analyze, rl-backfill-reclassify, rl-audit-aggregate
@@ -48,36 +49,22 @@ skills/                 ← スキル定義（21個）
   implement/            ← 構造化実装スキル（plan → 実装 → 計画準拠チェック → テレメトリ）。Standard モードはタスク境界で認知分離（context: fresh 相当）を宣言し、前タスクの実装詳細はメモリ参照でなく Read で確認する
   cleanup/              ← PR マージ・デプロイ後の後片付け（branches/worktrees/tmp dirs/Issues/Test plan）を個別承認→実行 [ADR-021]
 
-scripts/lib/            ← 共通ロジック（48 モジュール）[ADR-019]
-  plugin_root.py        ← PLUGIN_ROOT 定数（depth ハードコード廃止）
-  rl_common.py          ← hooks 共通ユーティリティ（DATA_DIR, classify_prompt 等）
-  audit.py              ← 環境健康診断ロジック（スキル/ルール/CLAUDE.md 診断）
-  discover.py           ← パターン検出 + スキル/ルール候補生成
-  prune.py              ← スキル/ルール統廃合候補抽出 + archive 時 import 依存検査（#25）
-  reorganize.py         ← スキル分割候補検出
-  remediation.py        ← confidence-based 問題分類 + 修正 + FP排除 + 原則ベース昇格
-  telemetry_query.py    ← DuckDB 共通クエリ層
-  layer_diagnose.py     ← 4レイヤー診断
-  regression_gate.py    ← 共通 regression gate
-  skill_triage.py       ← スキルライフサイクル 5択判定
-  pitfall_manager.py    ← pitfall 品質ゲート + ライフサイクル
-  verification_catalog.py ← 検証知見カタログ
-  pipeline_reflector.py ← Self-Evolution コアモジュール
-  trigger_engine.py     ← Auto-evolve trigger engine + FileChanged 評価 + userConfig マージ
-  agent_quality.py      ← エージェント品質診断
-  critical_instruction_extractor.py ← スキル指示の遵守保証（抽出+リフレーズ+違反検出）
-  quality_engine.py     ← Skill Quality 2.0（混乱度測定+パターン推奨+スコアボード）
-  instruction_patterns.py ← スキル内7パターン自動検出+context効率分析
-  semantic_detector.py  ← LLM セマンティック検証（corrections偽陽性除去）
-  growth_engine.py      ← NFD Growth Engine（Phase 4段階判定 + 進捗率 + PJ別キャッシュ）
-  growth_journal.py     ← 結晶化イベント記録・照会 + git log backfill
-  growth_narrative.py   ← 環境プロファイル（性格特性5種）+ 成長ストーリー生成
-  scorer_schema.py      ← ScorerOutput スキーマ — rl-scorer 出力の型付き検証（AxisResult / ScorerOutput / validate_scorer_output）
-  cleanup_scanner.py    ← cleanup スキル用スキャナ 6 関数（branches / remote refs / worktrees / tmp dirs / issue 抽出 / PR test plan 抽出）+ `parse_prefix_config` userConfig helper + `_DEFAULT_TMP_EXCLUDE_PATTERNS` 安全ネット [ADR-021]
-  session_store.py      ← SessionStore Repository — sessions DuckDB SoR（append/query/migrate）
-  score_noise.py        ← 採点ノイズ計測（compute_stats / recommend_epsilon / measure_noise）
-  scorer_prompts.py     ← _AXIS_PROMPTS 集約 + CLAUDE_PLUGIN_DATA オーバーライド対応
-  （他 15 モジュール: frontmatter, growth_level, skill_evolve, skill_triggers 等）
+scripts/lib/            ← 共通ロジック（14 パッケージ・116 モジュール）[ADR-019]
+  audit/                ← 環境健康診断（11 サブモジュール: memory/gstack/quality/issues/classification/artifacts/usage/scope/sections/report/orchestrator）
+  discover/             ← パターン検出 + スキル/ルール候補生成
+  fleet/                ← 全 PJ 横断観測
+  pipeline_reflector/   ← Self-Evolution コアモジュール（outcomes/calibration/proposals）
+  pitfall_manager/      ← pitfall 品質ゲート + ライフサイクル
+  prune/                ← スキル/ルール統廃合候補抽出 + import 依存検査（#25）
+  remediation/          ← confidence-based 問題分類 + 修正 + FP排除
+  rl_common/            ← hooks 共通ユーティリティ（persistence.py / config.py / detection.py / false_positive.py 等）
+  skill_evolve/         ← 自己進化パターン組み込み（llm_scoring / telemetry_scoring / classification / assessment / proposal）
+  telemetry_query/      ← DuckDB 共通クエリ層（helpers / usage_errors / sessions / corrections / workflows）
+  trigger_engine/       ← Auto-evolve trigger engine（state / session_corrections / file_change / bloat / self_evolution）
+  verification_catalog/ ← 検証知見カタログ
+  coherence/            ← 構造的整合性評価（scoring_basic / scoring_advanced / aggregation / artifacts）
+  tool_usage_analyzer/  ← ツール使用状況分析
+  （フラット単体モジュール: agent_quality, growth_engine, session_store, score_noise 等）
 
 scripts/bench/          ← TBench2-rl Harness Quality Benchmark（Week 1-3 実装済み）
   golden_extractor.py   ← GoldenCase（正例/負例ペア）抽出 — usage.jsonl + corrections.jsonl

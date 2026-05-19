@@ -2,14 +2,17 @@
 
 ## [Unreleased]
 
-- fix(persistence): append_jsonl の flock に明示的 LOCK_UN を追加し TOCTOU を解消 (#158)
+## [1.53.0] - 2026-05-19
 
 ### Added
+- **audit レポートに LSP Setup Recommendation セクションを追加 (closes #161)** — `.lsp.json` 未設定PJで Python/TS/JS/Go/Rust ファイルを検出した場合、言語サーバー名・インストール手順・`.lsp.json` 設定例を自動提示。Read ツール呼び出し削減を促す。
 - **`scripts/rl/fitness/telemetry.py` に r^comp / r^fc を telemetry fitness 5 軸に追加 (closes #67)** — SkillOS 論文の compression term (r^comp) と function-call validity (r^fc) を新関数 `score_skill_compression` / `score_fc_validity` として実装。WEIGHTS を 3 軸 (util/effect/implicit) から 5 軸 (+ compression 0.10 / fc_validity 0.05) に更新。`compute_telemetry_score` / `format_telemetry_report` に新軸を統合。
-- **docs(decisions): SkillOS ADR-023 と SPEC.md 引用を追加 (closes #69)** — SkillOS 論文（Ouyang et al., 2026, arXiv:2605.06614）を ADR-023 として記録し、frozen executor + trainable curator 設計の学術的根拠を確立。r^comp / r^fc の採用根拠を ADR に記録。SPEC.md の「Key Design Decisions」セクションに SkillOS 設計との同型性を追記（ADR 件数 22→23 更新）。
+- **docs(decisions): SkillOS ADR-023 と SPEC.md 引用を追加 (closes #69)** — SkillOS 論文（Ouyang et al., 2026, arXiv:2605.06614）を ADR-023 として記録し、frozen executor + trainable curator 設計の学術的根拠を確立。
 
 ### Fixed
-- **`skill_quality.py` に `evaluate_skill_quality()` を追加し skill_quality 軸を修正 (closes #68)** — `environment.py` が呼ぶ `evaluate_skill_quality()` が `skill_quality.py` に存在せず、skill_quality 軸がサイレントに 0.0 になっていたバグを修正。`check_cso_compliance()` のラッパーとして実装し、`{"overall": float, "cso": dict}` を返す。
+- **`skill_quality.py` に `evaluate_skill_quality()` を追加し skill_quality 軸を修正 (closes #68)** — `environment.py` が呼ぶ `evaluate_skill_quality()` が存在せず、skill_quality 軸がサイレントに 0.0 になっていたバグを修正。
+- **LSP suggestion の rglob PermissionError クラッシュを修正** — 除外判定を相対パスに変更、JS/TS 重複インストールコマンドを除去、壊れた `.lsp.json` を警告で区別。
+- **`append_jsonl` に明示的 `LOCK_UN` を追加し TOCTOU を解消 (#158)**
 
 ## [1.52.1] - 2026-05-18
 
@@ -280,7 +283,7 @@
 ### Fixed
 - **deferred_tasks.jsonl のテストデータ混入** — `detect-deferred-task` テストが `subprocess.run` 経由で hook 本体を呼び出す際、env var 未設定で本番 `~/.claude/rl-anything/deferred_tasks.jsonl` に書き込んでいた。hook を `CLAUDE_PLUGIN_DATA` 対応にすることで repo ルート `conftest.py` の autouse fixture が効くようになり、本番ファイル汚染を解消（既存 673 件のテスト残骸もクリーンアップ）
 
-## [1.42.0] - 2026-05-07
+## [1.42.0] - 2026-05-07 (CC v2.1.121/126 対応 2026-05-06)
 
 ### Removed
 - **スキル6個を削除（スリム化）** — `backfill`（初期セットアップ専用）、`version`(`claude plugin list` で代替可)、`update`(`claude plugin update` で代替可)、`feedback`（低頻度 GitHub Issue 投稿）、`philosophy-review`(月次レビュー、日常不要)、`genetic-prompt-optimizer`(`/optimize` 内部呼び出し専用、ユーザー向けでない) を削除。スキル総数 23 → 17 に削減

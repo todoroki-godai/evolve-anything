@@ -1,4 +1,4 @@
-"""レポートセクション生成（Constitutional Score / Token Consumption / Test Guard）。
+"""レポートセクション生成（Constitutional Score / Token Consumption / Test Guard / LSP）。
 
 audit パッケージから切り出された Sections モジュール。generate_report が呼ぶ
 セクション生成関数を集約。
@@ -6,7 +6,9 @@ audit パッケージから切り出された Sections モジュール。generat
 - _short_int: 大きい整数 → 短縮表記 (1.2K / 3.4M / 5.6B)
 - build_token_consumption_section: PJ別トークン消費 TOP3 + 異常検知
 - _build_test_guard_section: LLM SDK 利用 PJ への guard 導入推奨
+- build_lsp_suggestion_section: LSP未設定PJへの導入提案
 """
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -153,5 +155,162 @@ def _build_test_guard_section(project_dir: Path) -> Optional[List[str]]:
         lines.append("- pip: `pytest-no-llm` (実行時 guard、Python のみ)")
     lines.append("")
     lines.append("導入方法は ~/tools/no-llm-in-tests/README.md, ~/tools/pytest-no-llm/README.md を参照。")
+    lines.append("")
+    return lines
+
+
+# 言語 → (拡張子リスト, LSP コマンド, インストール方法, .lsp.json キー)
+_LSP_CATALOG: Dict[str, Dict[str, Any]] = {
+    "python": {
+        "extensions": [".py"],
+        "command": "pylsp",
+        "install": "pip install python-lsp-server",
+        "lsp_key": "python",
+        "config": {
+            "command": "pylsp",
+            "args": [],
+            "extensionToLanguage": {".py": "python"},
+        },
+    },
+    "typescript": {
+        "extensions": [".ts", ".tsx"],
+        "command": "typescript-language-server",
+        "install": "npm install -g typescript-language-server typescript",
+        "lsp_key": "typescript",
+        "config": {
+            "command": "typescript-language-server",
+            "args": ["--stdio"],
+            "extensionToLanguage": {".ts": "typescript", ".tsx": "typescriptreact"},
+        },
+    },
+    "javascript": {
+        "extensions": [".js", ".jsx"],
+        "command": "typescript-language-server",
+        "install": "npm install -g typescript-language-server typescript",
+        "lsp_key": "javascript",
+        "config": {
+            "command": "typescript-language-server",
+            "args": ["--stdio"],
+            "extensionToLanguage": {".js": "javascript", ".jsx": "javascriptreact"},
+        },
+    },
+    "go": {
+        "extensions": [".go"],
+        "command": "gopls",
+        "install": "go install golang.org/x/tools/gopls@latest",
+        "lsp_key": "go",
+        "config": {
+            "command": "gopls",
+            "args": [],
+            "extensionToLanguage": {".go": "go"},
+        },
+    },
+    "rust": {
+        "extensions": [".rs"],
+        "command": "rust-analyzer",
+        "install": "rustup component add rust-analyzer",
+        "lsp_key": "rust",
+        "config": {
+            "command": "rust-analyzer",
+            "args": [],
+            "extensionToLanguage": {".rs": "rust"},
+        },
+    },
+}
+_LSP_SCAN_EXCLUDE = {
+    ".git", "__pycache__", "node_modules", ".venv", "venv",
+    "vendor", "dist", "build", "target", ".tox", "bower_components",
+}
+_LSP_MIN_FILES = 3  # 提案を出す最低ファイル数
+
+
+def _detect_project_languages(project_dir: Path) -> List[str]:
+    """プロジェクトの主要言語をファイル拡張子から検出する。"""
+    ext_counts: Dict[str, int] = {}
+    for lang, info in _LSP_CATALOG.items():
+        for ext in info["extensions"]:
+            ext_counts[ext] = 0
+
+    try:
+        for path in project_dir.rglob("*"):
+            try:
+                rel_parts = path.relative_to(project_dir).parts
+            except ValueError:
+                continue
+            if any(part in _LSP_SCAN_EXCLUDE for part in rel_parts):
+                continue
+            if not path.is_file():
+                continue
+            suffix = path.suffix.lower()
+            if suffix in ext_counts:
+                ext_counts[suffix] = ext_counts.get(suffix, 0) + 1
+    except (PermissionError, OSError):
+        return []
+
+
+    detected = []
+    for lang, info in _LSP_CATALOG.items():
+        total = sum(ext_counts.get(ext, 0) for ext in info["extensions"])
+        if total >= _LSP_MIN_FILES:
+            detected.append(lang)
+    return detected
+
+
+def _load_lsp_json(project_dir: Path) -> Optional[Dict[str, Any]]:
+    lsp_path = project_dir / ".lsp.json"
+    if not lsp_path.exists():
+        return None
+    try:
+        return json.loads(lsp_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        import sys as _sys
+        print(f"[rl-anything:audit] .lsp.json が不正な JSON です: {lsp_path}", file=_sys.stderr)
+        return None
+    except OSError:
+        return None
+
+
+def build_lsp_suggestion_section(project_dir: Path) -> Optional[List[str]]:
+    """LSP未設定のPJに対して導入提案セクションを生成する。
+
+    - .lsp.json が存在しない場合 → 全検出言語の提案を生成
+    - .lsp.json が存在する場合 → None を返す（既設定）
+    - 対応言語ファイルが閾値未満の場合 → None を返す
+    """
+    existing = _load_lsp_json(project_dir)
+    if existing is not None:
+        return None
+
+    detected = _detect_project_languages(project_dir)
+    if not detected:
+        return None
+
+    lines = ["## LSP Setup Recommendation", ""]
+    lines.append(
+        f"このPJには {', '.join(detected)} のファイルが検出されましたが、"
+        "`.lsp.json` が設定されていません。"
+    )
+    lines.append(
+        "LSP（Language Server Protocol）を導入すると、"
+        "Claude Code が `goToDefinition` / `findReferences` 等のツールを活用でき、"
+        "Read ツールの呼び出し回数を削減できます。"
+    )
+    lines.append("")
+
+    seen_installs: set = set()
+    config_example: Dict[str, Any] = {}
+    for lang in detected:
+        info = _LSP_CATALOG[lang]
+        install_cmd = info["install"]
+        if install_cmd not in seen_installs:
+            lines.append(f"**{lang}**: `{install_cmd}`")
+            seen_installs.add(install_cmd)
+        config_example[info["lsp_key"]] = info["config"]
+
+    lines.append("")
+    lines.append("`.lsp.json` 設定例（プロジェクトルートに配置）:")
+    lines.append("```json")
+    lines.append(json.dumps(config_example, indent=2, ensure_ascii=False))
+    lines.append("```")
     lines.append("")
     return lines
