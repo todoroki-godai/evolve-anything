@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.55.1] - 2026-05-20
+
+### Fixed
+- **fix(optimize): `llm_improve` モードで frontmatter が消失するバグを修正 (PR #175)** — `build_patch_prompt()` に YAML frontmatter 保持指示を追加（プロンプトレベル防止）。`restore_frontmatter_if_lost()` を `generate_candidate()` / `DirectPatchOptimizer.run()` の両経路に適用（セーフティネット）。`_extract_frontmatter()` に `\r\n` 正規化と `startswith("---\n")` 厳格化を追加。既存テスト 34件のモジュール参照ずれを修正、新テスト 6件追加（CRLF 対応含む）。計 55 テスト pass。
+
 ## [1.55.0] - 2026-05-19
 
 ### Added
