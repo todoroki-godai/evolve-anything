@@ -44,6 +44,7 @@ from optimize_core import (
     format_gate_reason,
     generate_candidate,
     record_pitfall,
+    restore_frontmatter_if_lost,
     run_custom_fitness,
     run_regression_gate,
 )
@@ -162,6 +163,8 @@ class DirectPatchOptimizer:
             original_content, corrections, context, strategy, self._is_rule_file, self._max_lines
         )
         patched_content, error = call_llm(prompt, self._claude_cwd)
+        if patched_content:
+            patched_content = restore_frontmatter_if_lost(patched_content, original_content)
 
         if error:
             print(f"LLM コール失敗: {error}。元のスキルを維持します。")

@@ -22,6 +22,16 @@ from optimize import (
     _check_deprecated_options,
     detect_scope,
 )
+from optimize_core import (
+    build_patch_prompt,
+    collect_corrections,
+    determine_strategy,
+    extract_markdown,
+    format_gate_reason,
+    record_pitfall,
+    restore_frontmatter_if_lost,
+    run_regression_gate,
+)
 
 
 # --- フィクスチャ ---
@@ -84,32 +94,26 @@ class TestDetectScope:
         assert detect_scope(global_path) == "global"
 
 
-# --- _collect_corrections テスト (Task 1.3) ---
+# --- collect_corrections テスト ---
 
 class TestCollectCorrections:
-    def test_corrections_あり(self, sample_skill, corrections_file):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
-        with patch("optimize._CORRECTIONS_PATH", corrections_file):
-            result = optimizer._collect_corrections()
+    def test_corrections_あり(self, corrections_file):
+        result = collect_corrections("test-skill", corrections_file, MAX_CORRECTIONS_PER_PATCH)
         assert len(result) == 2
         assert result[0]["correction_type"] == "output_format"
 
-    def test_corrections_なし(self, sample_skill, temp_dir):
+    def test_corrections_なし(self, temp_dir):
         empty_path = temp_dir / "empty.jsonl"
         empty_path.write_text("", encoding="utf-8")
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
-        with patch("optimize._CORRECTIONS_PATH", empty_path):
-            result = optimizer._collect_corrections()
+        result = collect_corrections("test-skill", empty_path, MAX_CORRECTIONS_PER_PATCH)
         assert result == []
 
-    def test_corrections_ファイル不在(self, sample_skill, temp_dir):
+    def test_corrections_ファイル不在(self, temp_dir):
         missing_path = temp_dir / "missing.jsonl"
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
-        with patch("optimize._CORRECTIONS_PATH", missing_path):
-            result = optimizer._collect_corrections()
+        result = collect_corrections("test-skill", missing_path, MAX_CORRECTIONS_PER_PATCH)
         assert result == []
 
-    def test_corrections_大量_制限(self, sample_skill, temp_dir):
+    def test_corrections_大量_制限(self, temp_dir):
         path = temp_dir / "many.jsonl"
         records = []
         for i in range(20):
@@ -120,13 +124,10 @@ class TestCollectCorrections:
                 "reflect_status": "pending",
             }, ensure_ascii=False))
         path.write_text("\n".join(records) + "\n", encoding="utf-8")
-
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
-        with patch("optimize._CORRECTIONS_PATH", path):
-            result = optimizer._collect_corrections()
+        result = collect_corrections("test-skill", path, MAX_CORRECTIONS_PER_PATCH)
         assert len(result) == MAX_CORRECTIONS_PER_PATCH
 
-    def test_last_skill_が_None(self, sample_skill, temp_dir):
+    def test_last_skill_が_None(self, temp_dir):
         """Issue #24: last_skill が null の場合に AttributeError にならないこと"""
         path = temp_dir / "none_skill.jsonl"
         records = [
@@ -144,14 +145,11 @@ class TestCollectCorrections:
             }, ensure_ascii=False),
         ]
         path.write_text("\n".join(records) + "\n", encoding="utf-8")
-
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
-        with patch("optimize._CORRECTIONS_PATH", path):
-            result = optimizer._collect_corrections()
+        result = collect_corrections("test-skill", path, MAX_CORRECTIONS_PER_PATCH)
         assert len(result) == 1
         assert result[0]["message"] == "正常レコード"
 
-    def test_last_skill_キー不在(self, sample_skill, temp_dir):
+    def test_last_skill_キー不在(self, temp_dir):
         """last_skill キー自体がないレコードでもエラーにならないこと"""
         path = temp_dir / "no_key.jsonl"
         records = [
@@ -168,14 +166,11 @@ class TestCollectCorrections:
             }, ensure_ascii=False),
         ]
         path.write_text("\n".join(records) + "\n", encoding="utf-8")
-
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
-        with patch("optimize._CORRECTIONS_PATH", path):
-            result = optimizer._collect_corrections()
+        result = collect_corrections("test-skill", path, MAX_CORRECTIONS_PER_PATCH)
         assert len(result) == 1
         assert result[0]["message"] == "正常レコード"
 
-    def test_applied_は除外(self, sample_skill, temp_dir):
+    def test_applied_は除外(self, temp_dir):
         path = temp_dir / "applied.jsonl"
         records = [
             json.dumps({
@@ -192,46 +187,102 @@ class TestCollectCorrections:
             }, ensure_ascii=False),
         ]
         path.write_text("\n".join(records) + "\n", encoding="utf-8")
-
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
-        with patch("optimize._CORRECTIONS_PATH", path):
-            result = optimizer._collect_corrections()
+        result = collect_corrections("test-skill", path, MAX_CORRECTIONS_PER_PATCH)
         assert len(result) == 1
         assert result[0]["message"] == "未適用"
 
 
-# --- _build_patch_prompt テスト (Task 2.4) ---
+# --- build_patch_prompt テスト ---
 
 class TestBuildPatchPrompt:
-    def test_error_guided_prompt(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
+    def test_error_guided_prompt(self):
         corrections = [
             {"message": "出力が長い", "correction_type": "output_format", "extracted_learning": "簡潔に"},
         ]
-        prompt = optimizer._build_patch_prompt("# Test Skill", corrections, {}, "error_guided")
+        prompt = build_patch_prompt("# Test Skill", corrections, {}, "error_guided", False, 200)
         assert "修正すべき問題点" in prompt
         assert "出力が長い" in prompt
         assert "簡潔に" in prompt
-        assert "error_guided" not in prompt or True  # mode name may not appear in prompt
 
-    def test_llm_improve_prompt(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
-        prompt = optimizer._build_patch_prompt("# Test Skill", [], {}, "llm_improve")
+    def test_llm_improve_prompt(self):
+        prompt = build_patch_prompt("# Test Skill", [], {}, "llm_improve", False, 200)
         assert "改善方針" in prompt
         assert "具体的な例" in prompt
 
-    def test_context_included(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
+    def test_context_included(self):
         context = {
             "workflow_hint": "このスキルは週3回使用",
             "audit_issues": [{"type": "line_limit", "file": "test.md", "detail": "100行超過"}],
             "pitfalls": "| gate | forbidden_pattern(X) | 0.00 |",
         }
-        prompt = optimizer._build_patch_prompt("# Test", [], context, "llm_improve")
+        prompt = build_patch_prompt("# Test", [], context, "llm_improve", False, 200)
         assert "ワークフロー分析" in prompt
         assert "週3回" in prompt
         assert "構造的問題" in prompt
         assert "失敗パターン" in prompt
+
+    def test_frontmatter_preservation_note_added_when_frontmatter_exists(self):
+        """frontmatter を持つスキルには保持指示が追加されること。"""
+        skill_with_fm = "---\nname: test\n---\n\n# Test"
+        prompt = build_patch_prompt(skill_with_fm, [], {}, "llm_improve", False, 200)
+        assert "YAML frontmatter" in prompt
+        assert "保持" in prompt
+
+    def test_frontmatter_preservation_note_absent_when_no_frontmatter(self):
+        """frontmatter のないスキルには保持指示が追加されないこと。"""
+        skill_no_fm = "# Test Skill\n\nContent here."
+        prompt = build_patch_prompt(skill_no_fm, [], {}, "llm_improve", False, 200)
+        assert "YAML frontmatter" not in prompt
+
+
+# --- restore_frontmatter_if_lost テスト ---
+
+class TestRestoreFrontmatterIfLost:
+    def test_restores_when_candidate_lacks_frontmatter(self):
+        """LLM が frontmatter を消した場合に元の frontmatter を補完すること。"""
+        original = "---\nname: test\ndescription: テスト\n---\n\n# Test Skill"
+        candidate = "# Test Skill (improved)"
+        result = restore_frontmatter_if_lost(candidate, original)
+        assert result.startswith("---\nname: test")
+        assert "# Test Skill (improved)" in result
+
+    def test_no_change_when_candidate_has_frontmatter(self):
+        """candidate に frontmatter がある場合は変更しないこと。"""
+        original = "---\nname: test\n---\n\n# Original"
+        candidate = "---\nname: test\n---\n\n# Improved"
+        result = restore_frontmatter_if_lost(candidate, original)
+        assert result == candidate
+
+    def test_no_change_when_original_has_no_frontmatter(self):
+        """original に frontmatter がない場合は何もしないこと。"""
+        original = "# No frontmatter"
+        candidate = "# Improved without frontmatter"
+        result = restore_frontmatter_if_lost(candidate, original)
+        assert result == candidate
+
+    def test_restored_content_passes_regression_gate(self):
+        """auto-restore 後のコンテンツが regression gate を通過すること。"""
+        from regression_gate import check_gates  # optimize_core import 時に sys.path 追加済み
+        original = "---\nname: test\ndescription: テスト\n---\n\n# Test Skill\n\nContent."
+        candidate_without_fm = "# Test Skill\n\nImproved content."
+        restored = restore_frontmatter_if_lost(candidate_without_fm, original)
+        result = check_gates(candidate=restored, original=original, max_lines=200)
+        assert result.passed, f"gate failed: {result.reason}"
+
+    def test_restores_when_original_has_crlf_line_endings(self):
+        """`\r\n` 改行のファイルでも frontmatter を復元できること。"""
+        original = "---\r\nname: test\r\ndescription: テスト\r\n---\r\n\r\n# Test Skill"
+        candidate = "# Test Skill (improved)"
+        result = restore_frontmatter_if_lost(candidate, original)
+        assert "name: test" in result
+        assert "# Test Skill (improved)" in result
+
+    def test_no_change_when_original_has_crlf_but_no_closing_delimiter(self):
+        """`\r\n` でも閉じ `---` がない場合は変更しないこと。"""
+        original = "---\r\nname: test\r\n"  # 閉じなし（malformed）
+        candidate = "# Improved"
+        result = restore_frontmatter_if_lost(candidate, original)
+        assert result == candidate
 
 
 # --- DirectPatchOptimizer コアテスト (Task 3.4) ---
@@ -257,7 +308,7 @@ class TestDirectPatchOptimizer:
         mock_result.stdout = "```markdown\n---\nname: test\ndescription: 改善済み\n---\n\n# Improved Skill\n\nBetter content.\n```"
 
         with patch("optimize._CORRECTIONS_PATH", corrections_file), \
-             patch("optimize.subprocess.run", return_value=mock_result):
+             patch("optimize_core.subprocess.run", return_value=mock_result):
             result = optimizer.run()
 
         assert result["strategy"] == "error_guided"
@@ -273,7 +324,7 @@ class TestDirectPatchOptimizer:
         mock_result.stdout = "```markdown\n# Better Skill\n\nImproved.\n```"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"), \
-             patch("optimize.subprocess.run", return_value=mock_result):
+             patch("optimize_core.subprocess.run", return_value=mock_result):
             result = optimizer.run()
 
         assert result["strategy"] == "llm_improve"
@@ -290,48 +341,43 @@ class TestDirectPatchOptimizer:
         mock_result.stdout = f"```markdown\n{long_content}\n```"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"), \
-             patch("optimize.subprocess.run", return_value=mock_result):
+             patch("optimize_core.subprocess.run", return_value=mock_result):
             result = optimizer.run()
 
         assert result.get("gate_rejected") is True
         assert "line_limit_exceeded" in result.get("gate_reason", "")
 
     def test_regression_gate_空コンテンツ(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
-        passed, reason = optimizer._regression_gate("")
+        passed, reason = run_regression_gate("", None, 500, None)
         assert passed is False
         assert reason == "empty"
 
     def test_regression_gate_禁止パターン(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
-        passed, reason = optimizer._regression_gate("# Skill\n\nTODO: fix this")
+        passed, reason = run_regression_gate("# Skill\n\nTODO: fix this", None, 500, None)
         assert passed is False
         assert "forbidden_pattern(TODO)" in reason
 
     def test_regression_gate_正常通過(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
-        passed, reason = optimizer._regression_gate("# Good Skill\n\nThis is fine.")
+        passed, reason = run_regression_gate("# Good Skill\n\nThis is fine.", None, 500, None)
         assert passed is True
         assert reason is None
 
-    def test_regression_gate_frontmatter_保持(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
-        optimizer.original_content = "---\nname: test\n---\n\n# Original"
-        passed, reason = optimizer._regression_gate("---\nname: test\n---\n\n# Improved")
+    def test_regression_gate_frontmatter_保持(self):
+        original = "---\nname: test\n---\n\n# Original"
+        passed, reason = run_regression_gate("---\nname: test\n---\n\n# Improved", original, 500, None)
         assert passed is True
         assert reason is None
 
-    def test_regression_gate_frontmatter_消失(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
-        optimizer.original_content = "---\nname: test\n---\n\n# Original"
-        passed, reason = optimizer._regression_gate("# Improved without frontmatter")
+    def test_regression_gate_frontmatter_消失(self):
+        """ゲート自体は frontmatter 消失を検出すること（auto-restore より下のレイヤー）。"""
+        original = "---\nname: test\n---\n\n# Original"
+        passed, reason = run_regression_gate("# Improved without frontmatter", original, 500, None)
         assert passed is False
         assert reason == "frontmatter_lost"
 
-    def test_regression_gate_frontmatter_なし_スキップ(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill))
-        optimizer.original_content = "# No frontmatter skill"
-        passed, reason = optimizer._regression_gate("# Updated skill")
+    def test_regression_gate_frontmatter_なし_スキップ(self):
+        original = "# No frontmatter skill"
+        passed, reason = run_regression_gate("# Updated skill", original, 500, None)
         assert passed is True
         assert reason is None
 
@@ -345,14 +391,14 @@ class TestDirectPatchOptimizer:
         optimizer = DirectPatchOptimizer(target_path=str(rule_path))
         optimizer.run_dir = temp_dir / "test_run"
 
-        # 6行超過のパッチを返すモック
-        long_content = "\n".join([f"line {i}" for i in range(10)])
+        # MAX_RULE_LINES=10 を超える 11 行のパッチを返すモック
+        long_content = "\n".join([f"line {i}" for i in range(11)])
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = f"```markdown\n{long_content}\n```"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"), \
-             patch("optimize.subprocess.run", return_value=mock_result):
+             patch("optimize_core.subprocess.run", return_value=mock_result):
             result = optimizer.run()
 
         assert result.get("gate_rejected") is True
@@ -373,14 +419,14 @@ class TestDirectPatchOptimizer:
         mock_result.stdout = f"```markdown\n{long_content}\n```"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"), \
-             patch("optimize.subprocess.run", return_value=mock_result):
+             patch("optimize_core.subprocess.run", return_value=mock_result):
             result = optimizer.run()
 
         assert result.get("gate_rejected") is True
         assert result.get("suggestion") is None
 
     def test_format_gate_reason_frontmatter_lost(self):
-        msg = DirectPatchOptimizer._format_gate_reason("frontmatter_lost")
+        msg = format_gate_reason("frontmatter_lost")
         assert "frontmatter" in msg
         assert "消失" in msg
 
@@ -389,25 +435,22 @@ class TestDirectPatchOptimizer:
         optimizer.run_dir = temp_dir / "test_run"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"), \
-             patch("optimize.subprocess.run", side_effect=FileNotFoundError):
+             patch("optimize_core.subprocess.run", side_effect=FileNotFoundError):
             result = optimizer.run()
 
         assert result.get("error") is not None
         assert "claude CLI" in result["error"]
 
-    def test_error_guided_corrections_0件_フォールバック(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), mode="error_guided")
-        strategy = optimizer._determine_strategy([])
+    def test_error_guided_corrections_0件_フォールバック(self):
+        strategy = determine_strategy("error_guided", [])
         assert strategy == "llm_improve"
 
-    def test_auto_mode_corrections_あり(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), mode="auto")
-        strategy = optimizer._determine_strategy([{"message": "fix"}])
+    def test_auto_mode_corrections_あり(self):
+        strategy = determine_strategy("auto", [{"message": "fix"}])
         assert strategy == "error_guided"
 
-    def test_auto_mode_corrections_なし(self, sample_skill):
-        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), mode="auto")
-        strategy = optimizer._determine_strategy([])
+    def test_auto_mode_corrections_なし(self):
+        strategy = determine_strategy("auto", [])
         assert strategy == "llm_improve"
 
 
@@ -519,7 +562,7 @@ class TestPitfalls:
     def test_record_pitfall(self, temp_dir):
         skill_path = temp_dir / "SKILL.md"
         skill_path.touch()
-        DirectPatchOptimizer._record_pitfall(str(skill_path), "gate", "empty", 0.0)
+        record_pitfall(str(skill_path), "gate", "empty", 0.0)
 
         pitfalls = temp_dir / "references" / "pitfalls.md"
         assert pitfalls.exists()
@@ -529,34 +572,34 @@ class TestPitfalls:
     def test_pitfall_重複排除(self, temp_dir):
         skill_path = temp_dir / "SKILL.md"
         skill_path.touch()
-        DirectPatchOptimizer._record_pitfall(str(skill_path), "gate", "empty", 0.0)
-        DirectPatchOptimizer._record_pitfall(str(skill_path), "gate", "empty", 0.0)
+        record_pitfall(str(skill_path), "gate", "empty", 0.0)
+        record_pitfall(str(skill_path), "gate", "empty", 0.0)
 
         pitfalls = temp_dir / "references" / "pitfalls.md"
         content = pitfalls.read_text(encoding="utf-8")
         assert content.count("empty") == 1
 
 
-# --- _extract_markdown テスト ---
+# --- extract_markdown テスト ---
 
 class TestExtractMarkdown:
     def test_markdown_block(self):
         text = "Some text\n```markdown\n# Title\n\nContent\n```\nMore text"
-        result = DirectPatchOptimizer._extract_markdown(text)
+        result = extract_markdown(text)
         assert result == "# Title\n\nContent"
 
     def test_plain_code_block(self):
         text = "```\n# Title\n```"
-        result = DirectPatchOptimizer._extract_markdown(text)
+        result = extract_markdown(text)
         assert result == "# Title"
 
     def test_no_block(self):
         text = "# Just plain text"
-        result = DirectPatchOptimizer._extract_markdown(text)
+        result = extract_markdown(text)
         assert result == "# Just plain text"
 
     def test_empty(self):
-        result = DirectPatchOptimizer._extract_markdown("")
+        result = extract_markdown("")
         assert result is None
 
     def test_multiple_blocks_returns_longest(self):
@@ -566,7 +609,7 @@ class TestExtractMarkdown:
             "Full improved version:\n"
             "```markdown\n# Full Skill\n\nThis is the complete improved skill.\n\n## Section\n\nMore content.\n```\n"
         )
-        result = DirectPatchOptimizer._extract_markdown(text)
+        result = extract_markdown(text)
         assert "Full Skill" in result
         assert "More content" in result
         assert len(result) > len("short")

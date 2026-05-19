@@ -180,9 +180,16 @@ def build_patch_prompt(
     if context.get("pitfalls"):
         prompt_parts.append(f"\n## 過去の失敗パターン\n{context['pitfalls']}\n")
 
+    fm_note = (
+        "\n**重要**: ファイル先頭の `---` で始まる YAML frontmatter は"
+        "必ずそのまま保持してください（削除・変更禁止）。"
+        if skill_content.startswith("---")
+        else ""
+    )
     prompt_parts.append(
         f"改善後の{file_type}全文をMarkdownで出力してください。"
         "```markdown と ``` で囲んでください。"
+        f"{fm_note}"
         f"{line_constraint}"
     )
 
@@ -241,6 +248,41 @@ def extract_markdown(text: str) -> Optional[str]:
     if stripped:
         return stripped
     return None
+
+
+def _extract_frontmatter(content: str) -> Tuple[str, str]:
+    """YAML frontmatter と本文を分離する。
+
+    \r\n 改行を正規化してから処理する（Windows 環境対応）。
+
+    Returns:
+        (frontmatter, body) — frontmatter は "---\n...\n---\n" 形式。
+        frontmatter がない場合は ("", content)。
+    """
+    normalized = content.replace("\r\n", "\n")
+    if not normalized.startswith("---\n"):
+        return "", content
+    end = normalized.find("\n---\n", 4)
+    if end == -1:
+        return "", content
+    fm = normalized[: end + 5]  # "---\n" 末尾まで含む
+    body = normalized[end + 5 :]
+    return fm, body
+
+
+def restore_frontmatter_if_lost(candidate: str, original: str) -> str:
+    """LLM が frontmatter を消した場合に元の frontmatter を自動補完する。
+
+    original に frontmatter があり candidate に無い場合のみ補完。
+    """
+    if not original.startswith("---"):
+        return candidate
+    if candidate.startswith("---"):
+        return candidate
+    fm, _ = _extract_frontmatter(original)
+    if fm:
+        return fm + candidate
+    return candidate
 
 
 # ── ゲート / pitfall ─────────────────────────────────────────────────
@@ -388,6 +430,9 @@ def generate_candidate(
     content, error = call_llm(prompt, claude_cwd)
     if error or not content:
         return {"content": None, "passed": False, "error": error or "empty", "fitness": None}
+
+    # frontmatter が消えていれば元のものを自動補完
+    content = restore_frontmatter_if_lost(content, original_content)
 
     # pre_check (warn-only): passed は常に True
     pc = pre_check(content, original_content)
