@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - feat(hooks): stop_failure に `error_class` フィールドを追加 — AgentErrorTaxonomy 第1段階として全 error_type を `"tech"` に分類。behavioral 分類と `error_layer` は reflect スキルが遅延付与 (closes #148)
+- docs(decisions): MemOS L1→L4 結晶化アーキテクチャを ADR-024 として明文化。corrections→evolve 4層設計の学術的根拠を確立 (closes #149)
 
 ## [1.53.0] - 2026-05-19
 
