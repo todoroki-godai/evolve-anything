@@ -49,6 +49,8 @@ def _inject_token_metrics(rows: list[FleetRow], days: int = 30) -> None:
         row.tokens_30d = c.get("tokens")
         hit = c.get("cache_hit_pct")
         row.cache_hit_pct = float(hit) if hit is not None else None
+        reuse = c.get("cache_reuse_factor")
+        row.cache_reuse_factor = float(reuse) if reuse is not None else None
 
 
 def _resolve_pj_id(query: str) -> str | list[str] | None:

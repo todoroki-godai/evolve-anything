@@ -55,11 +55,13 @@ def top_n_consumers(days: int = 30, n: int = 3) -> list[dict]:
         cr = cr or 0
         denom = cc + cr
         hit_pct = (cr * 100.0 / denom) if denom > 0 else None
+        reuse_factor = (cr / cc) if cc > 0 else None
         out.append({
             "pj_id": pj_id,
             "pj_slug": pj_slug,
             "tokens": int(tokens or 0),
             "cache_hit_pct": hit_pct,
+            "cache_reuse_factor": reuse_factor,
             "sessions": int(sessions or 0),
         })
     return out

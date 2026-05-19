@@ -46,6 +46,7 @@ class FleetRow:
     subagents_30d: int = 0  # subagents.jsonl 30日窓のカウント、#22
     tokens_30d: int | None = None  # token_usage 30日窓 SUM、None = データ無し → 表示 "--"
     cache_hit_pct: float | None = None  # cache_read / (cache_creation + cache_read)、None = データ無し
+    cache_reuse_factor: float | None = None  # cache_read / cache_creation、None = データ無し
 
 
 def _collect_single(

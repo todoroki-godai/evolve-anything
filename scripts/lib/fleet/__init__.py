@@ -20,7 +20,7 @@ from rl_common import DATA_DIR as _DEFAULT_DATA_DIR  # honors CLAUDE_PLUGIN_DATA
 _DEFAULT_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 _DEFAULT_AUTO_MEMORY_ROOT = Path.home() / ".claude" / "projects"
 _DEFAULT_PROJECTS_ROOT = Path.home() / "tools"
-_DEFAULT_RL_AUDIT_BIN = Path(__file__).resolve().parent.parent.parent / "bin" / "rl-audit"
+_DEFAULT_RL_AUDIT_BIN = Path(__file__).resolve().parent.parent.parent.parent / "bin" / "rl-audit"
 _PLUGIN_KEY_PREFIX = "rl-anything@"
 _SETTINGS_RETRY_SLEEP_SEC = 0.1
 _DEFAULT_TIMEOUT_SEC = 10.0

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from . import STATUS_ENABLED, STATUS_NOT_ENABLED
 
-_TABLE_HEADERS = ["PJ", "STATUS", "SCORE", "LV", "PHASE", "LAST_AUDIT", "AUDIT", "ISSUES", "SUBAGENTS_30d", "TOKENS_30d", "CACHE_HIT"]
+_TABLE_HEADERS = ["PJ", "STATUS", "SCORE", "LV", "PHASE", "LAST_AUDIT", "AUDIT", "ISSUES", "SUBAGENTS_30d", "TOKENS_30d", "CACHE_HIT", "REUSE"]
 
 
 def _format_short_int(n: int) -> str:
@@ -39,6 +39,12 @@ def _format_cell_cache_hit(row: FleetRow) -> str:
     if row.cache_hit_pct is None:
         return "--"
     return f"{row.cache_hit_pct:.0f}%"
+
+
+def _format_cell_cache_reuse(row: FleetRow) -> str:
+    if row.cache_reuse_factor is None:
+        return "--"
+    return f"{row.cache_reuse_factor:.1f}x"
 
 
 def _format_relative(dt: datetime, now: datetime) -> str:
@@ -127,6 +133,7 @@ def format_status_table(rows: list[FleetRow], now: datetime | None = None) -> st
             _format_cell_subagents(row),
             _format_cell_tokens(row),
             _format_cell_cache_hit(row),
+            _format_cell_cache_reuse(row),
         ])
     widths = [max(len(c) for c in col) for col in zip(*cells)]
     lines = []

@@ -84,3 +84,15 @@ def test_fleet_api_surface_snapshot():
     """
     actual = _collect_api_surface()
     _assert_snapshot(actual, "fleet_api_surface.txt")
+
+
+def test_default_rl_audit_bin_exists():
+    """fleet/__init__.py の _DEFAULT_RL_AUDIT_BIN が実在のパスを指していること。
+
+    fleet/ パッケージの階層が変わると Path(__file__).parent の数がずれて
+    bin/rl-audit が見つからなくなり、全 PJ が AUDIT_ERROR になる（PR #65 での既発症）。
+    """
+    assert fleet._DEFAULT_RL_AUDIT_BIN.exists(), (
+        f"bin/rl-audit が見つかりません: {fleet._DEFAULT_RL_AUDIT_BIN}\n"
+        "fleet/__init__.py の .parent 数と __file__ の階層が合っているか確認してください"
+    )

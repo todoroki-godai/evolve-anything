@@ -171,3 +171,66 @@ def test_ingest_pj_dir_days_filter(ingest, tmp_path, store):
     res2 = ingest.ingest_pj_dir(pj_dir, days=None)
     assert res2["files_processed"] == 1
     assert res2["inserted"] == 1
+
+
+def test_ingest_pj_dir_includes_subagents(ingest, tmp_path, store):
+    """subagents/ 配下の JSONL も取り込まれること（con=None 旧パス）。"""
+    try:
+        import duckdb  # noqa
+    except ImportError:
+        pytest.skip("duckdb not installed")
+    pj_dir = tmp_path / "projects" / "-pj-foo"
+    pj_dir.mkdir(parents=True)
+
+    main_f = pj_dir / "main.jsonl"
+    main_f.write_text(_line(uuid="u-main") + "\n", encoding="utf-8")
+
+    sub_dir = pj_dir / "sess-abc123" / "subagents"
+    sub_dir.mkdir(parents=True)
+    sub_f = sub_dir / "agent-xyz.jsonl"
+    sub_f.write_text(
+        _line(uuid="u-sub1", is_sidechain=True) + "\n"
+        + _line(uuid="u-sub2", is_sidechain=True) + "\n",
+        encoding="utf-8",
+    )
+
+    res = ingest.ingest_pj_dir(pj_dir, days=None)
+    assert res["inserted"] == 3, f"main + subagent 2件 expected 3, got {res['inserted']}"
+    assert res["files_processed"] == 2
+
+    rows = store.query("SELECT is_sidechain, COUNT(*) FROM token_usage GROUP BY is_sidechain ORDER BY is_sidechain")
+    sidechain_map = {r[0]: r[1] for r in rows}
+    assert sidechain_map.get(False) == 1
+    assert sidechain_map.get(True) == 2
+
+
+def test_ingest_subagent_session_id_no_collision(ingest, tmp_path, store):
+    """異なる session の同名 subagent ファイルが session_progress で衝突しないこと（con パス）。"""
+    try:
+        import duckdb
+    except ImportError:
+        pytest.skip("duckdb not installed")
+
+    pj_dir = tmp_path / "projects" / "-pj-foo"
+    pj_dir.mkdir(parents=True)
+
+    # 2つの異なるセッションで同名 agent-xyz.jsonl を作成
+    for sess, uuid_a, uuid_b in [
+        ("sess-aaa", "u-a1", "u-a2"),
+        ("sess-bbb", "u-b1", "u-b2"),
+    ]:
+        d = pj_dir / sess / "subagents"
+        d.mkdir(parents=True)
+        (d / "agent-xyz.jsonl").write_text(
+            _line(uuid=uuid_a, is_sidechain=True) + "\n"
+            + _line(uuid=uuid_b, is_sidechain=True) + "\n",
+            encoding="utf-8",
+        )
+
+    with store.connection() as con:
+        res = ingest.ingest_pj_dir(pj_dir, days=None, con=con)
+        assert res["inserted"] == 4, f"4件期待, got {res['inserted']}"
+
+        # 2回目で重複 ingest が起きないことを確認（冪等性）
+        res2 = ingest.ingest_pj_dir(pj_dir, days=None, con=con)
+        assert res2["inserted"] == 0, f"2回目は0件期待, got {res2['inserted']}"

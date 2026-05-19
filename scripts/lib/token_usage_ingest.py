@@ -184,9 +184,10 @@ def ingest_pj_dir(
         return base
 
     # (a) glob + mtime filter
+    # トップレベル *.jsonl に加え <session-uuid>/subagents/*.jsonl も取り込む
     t0 = time.perf_counter()
     candidates: list[Path] = []
-    for jsonl in sorted(pj_dir.glob("*.jsonl")):
+    for jsonl in sorted(pj_dir.glob("*.jsonl")) + sorted(pj_dir.glob("*/subagents/*.jsonl")):
         try:
             mtime = jsonl.stat().st_mtime
         except OSError:
@@ -263,7 +264,8 @@ def ingest_pj_dir(
 
     for idx, jsonl in enumerate(candidates, 1):
         files_processed += 1
-        session_id = jsonl.stem
+        # subagents/ 配下は stem が衝突するため pj_dir からの相対パス（拡張子なし）を使う
+        session_id = str(jsonl.relative_to(pj_dir).with_suffix(""))
         last_uuid, _last_ts = progress_map.get(session_id, (None, None))
 
         t_p = time.perf_counter()
