@@ -11,6 +11,15 @@ from datetime import datetime, timezone
 
 import common
 
+def _classify_error_class(error_type: str) -> str:
+    """error_type から error_class を同期判定する。
+
+    hook では tech エラーのみ同期分類する。behavioral 分類は
+    reflect スキルが遅延付与するため、ここでは付与しない。
+    """
+    # 現時点では全 error_type を tech として記録する
+    return "tech"
+
 
 def handle_stop_failure(event: dict) -> None:
     """StopFailure イベントを処理する。"""
@@ -20,11 +29,16 @@ def handle_stop_failure(event: dict) -> None:
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
     project = common.project_name_from_dir(project_dir) if project_dir else None
 
+    error_type = event.get("error_type", "unknown")
+    error_class = _classify_error_class(error_type)
+
     record = {
         "type": "api_error",
         "tool_name": "",
         "skill_name": "",
-        "error_type": event.get("error_type", "unknown"),
+        "error_type": error_type,
+        "error_class": error_class,
+        # error_layer は tech エラーでは付与しない（behavioral 分類は reflect が遅延付与）
         "error": str(event.get("error_message", "") or event.get("error", ""))[:500],
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "session_id": session_id,

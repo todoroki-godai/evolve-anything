@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat(hooks): stop_failure に `error_class` フィールドを追加 — AgentErrorTaxonomy 第1段階として全 error_type を `"tech"` に分類。behavioral 分類と `error_layer` は reflect スキルが遅延付与 (closes #148)
+
 ## [1.53.0] - 2026-05-19
 
 ### Added

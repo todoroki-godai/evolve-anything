@@ -144,6 +144,88 @@ class TestStopFailure:
         record = json.loads(errors_file.read_text().strip())
         assert record["error_type"] == "unknown"
 
+    # --- error_class フィールド (AgentErrorTaxonomy #148) ---
+
+    def test_error_class_is_tech_for_rate_limit(self, patch_data_dir):
+        """rate_limit は error_class='tech' に分類される。"""
+        event = {
+            "session_id": "sess-sf-005",
+            "error_type": "rate_limit",
+            "error_message": "Rate limit exceeded",
+        }
+        stop_failure.handle_stop_failure(event)
+
+        errors_file = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_file.read_text().strip())
+        assert record["error_class"] == "tech"
+
+    def test_error_class_is_tech_for_auth_failure(self, patch_data_dir):
+        """auth_failure は error_class='tech' に分類される。"""
+        event = {
+            "session_id": "sess-sf-006",
+            "error_type": "auth_failure",
+            "error_message": "Invalid API key",
+        }
+        stop_failure.handle_stop_failure(event)
+
+        errors_file = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_file.read_text().strip())
+        assert record["error_class"] == "tech"
+
+    def test_error_class_is_tech_for_timeout(self, patch_data_dir):
+        """timeout は error_class='tech' に分類される。"""
+        event = {
+            "session_id": "sess-sf-007",
+            "error_type": "timeout",
+            "error_message": "Request timed out",
+        }
+        stop_failure.handle_stop_failure(event)
+
+        errors_file = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_file.read_text().strip())
+        assert record["error_class"] == "tech"
+
+    def test_error_class_is_tech_for_unknown(self, patch_data_dir):
+        """unknown error_type も error_class='tech' に分類される。"""
+        event = {
+            "session_id": "sess-sf-008",
+            "error_message": "Something went wrong",
+        }
+        stop_failure.handle_stop_failure(event)
+
+        errors_file = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_file.read_text().strip())
+        assert record["error_class"] == "tech"
+
+    def test_error_layer_absent_for_tech(self, patch_data_dir):
+        """tech エラーには error_layer フィールドが含まれない。"""
+        event = {
+            "session_id": "sess-sf-009",
+            "error_type": "rate_limit",
+            "error_message": "Rate limit exceeded",
+        }
+        stop_failure.handle_stop_failure(event)
+
+        errors_file = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_file.read_text().strip())
+        assert "error_layer" not in record
+
+    def test_existing_fields_preserved(self, patch_data_dir):
+        """既存フィールド (type, error_type, error, session_id) が互換維持される。"""
+        event = {
+            "session_id": "sess-sf-010",
+            "error_type": "rate_limit",
+            "error_message": "Rate limit exceeded",
+        }
+        stop_failure.handle_stop_failure(event)
+
+        errors_file = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_file.read_text().strip())
+        assert record["type"] == "api_error"
+        assert record["error_type"] == "rate_limit"
+        assert record["error"] == "Rate limit exceeded"
+        assert record["session_id"] == "sess-sf-010"
+
 
 # --- v2.1.78: DATA_DIR CLAUDE_PLUGIN_DATA フォールバック テスト ---
 
