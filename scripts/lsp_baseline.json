@@ -1,0 +1,109 @@
+{
+  "recorded_at": "2026-05-19",
+  "note": "LSP正式有効化後ベースライン（pyright+pylsp+typescript-lsp）",
+  "projects": {
+    "rl-anything": {
+      "sessions_sampled": 10,
+      "tool_calls": {
+        "ToolSearch": 7,
+        "Bash": 866,
+        "WebFetch": 11,
+        "Read": 140,
+        "AskUserQuestion": 23,
+        "Write": 25,
+        "Skill": 10,
+        "Edit": 110,
+        "Agent": 28,
+        "TaskCreate": 2,
+        "TaskUpdate": 4,
+        "WebSearch": 5,
+        "LSP": 3
+      },
+      "total": 1234,
+      "per_session": {
+        "Read": 14.0,
+        "Bash": 86.6,
+        "lsp_tools": 0
+      }
+    },
+    "docs-platform": {
+      "sessions_sampled": 10,
+      "tool_calls": {
+        "Bash": 1816,
+        "AskUserQuestion": 45,
+        "Write": 35,
+        "Edit": 263,
+        "Read": 273,
+        "Skill": 15,
+        "ScheduleWakeup": 14,
+        "ToolSearch": 15,
+        "Monitor": 7,
+        "TaskOutput": 1,
+        "ExitPlanMode": 2,
+        "Agent": 8,
+        "mcp__claude_ai_Google_Drive__create_file": 2,
+        "TaskCreate": 12,
+        "TaskUpdate": 21,
+        "CronCreate": 3,
+        "CronDelete": 3,
+        "mcp__claude_ai_Google_Drive__read_file_content": 1
+      },
+      "total": 2536,
+      "per_session": {
+        "Read": 27.3,
+        "Bash": 181.6,
+        "lsp_tools": 0
+      }
+    },
+    "sys-bots": {
+      "sessions_sampled": 10,
+      "tool_calls": {
+        "Bash": 563,
+        "Read": 65,
+        "Agent": 6,
+        "Write": 3,
+        "Edit": 39,
+        "Skill": 10,
+        "AskUserQuestion": 14,
+        "ToolSearch": 3,
+        "WebSearch": 4,
+        "WebFetch": 3,
+        "TaskCreate": 3,
+        "TaskUpdate": 6
+      },
+      "total": 719,
+      "per_session": {
+        "Read": 6.5,
+        "Bash": 56.3,
+        "lsp_tools": 0
+      }
+    },
+    "figma-to-code": {
+      "sessions_sampled": 10,
+      "tool_calls": {
+        "Bash": 2133,
+        "Read": 590,
+        "Edit": 689,
+        "AskUserQuestion": 41,
+        "Agent": 23,
+        "ToolSearch": 27,
+        "SendMessage": 2,
+        "ScheduleWakeup": 1,
+        "Skill": 13,
+        "Write": 78,
+        "Monitor": 12,
+        "ExitPlanMode": 1,
+        "TaskCreate": 24,
+        "TaskUpdate": 47,
+        "TaskOutput": 14,
+        "WebSearch": 8
+      },
+      "total": 3703,
+      "per_session": {
+        "Read": 59.0,
+        "Bash": 213.3,
+        "lsp_tools": 0
+      }
+    }
+  }
+}

@@ -46,6 +46,29 @@ rl-reflect [オプション]
 分析結果を表示するが Edit ツールを使わず終了する（MUST NOT edit）。
 各 correction のルーティング提案・重複状態・信頼度を一覧表示する。
 
+### Step 4.5: tool_call_analysis と error_class_summary を pitfall 生成コンテキストとして活用
+
+出力 JSON に `tool_call_analysis` と `error_class_summary` が含まれる場合、pitfall 生成プロンプトに以下を追加すること：
+
+**操作パターン軸（preceding_tool_calls より）:**
+- `tool_call_analysis.failure_patterns` に 2 件以上出現するシーケンスがある場合、「ツール A の後にツール B を試みるパターンで誤りが多い」形式の pitfall 候補として提示する
+- `tool_call_analysis.failure_rate_by_tool` で失敗率 0.3 以上のツールがある場合、そのツールに関連した注意事項を pitfall に含める
+
+**エラー文脈軸（error_class より）:**
+- `error_class_summary.by_class` の値を参照し、同セッションで API エラーが多発していた場合（tech: 3 以上）は、その後の修正が API 制約に起因する可能性があることを pitfall コンテキストとして注記する
+- `error_class_summary.by_type` で特定のエラータイプが頻出している場合、そのエラータイプに固有の behavioral パターンを pitfall 生成時に考慮する
+
+**pitfall 生成プロンプトに追加する軸:**
+```
+# 操作パターン軸（preceding_tool_calls より）
+- どのツール操作の連続が失敗を招いているか？
+- エラー直前に何を試みていたか？（例: Bash 失敗後に Edit を試みるパターン）
+
+# エラー文脈軸（error_class より）
+- behavioral エラー（将来: "behavioral" クラス）は行動パターンの pitfall 候補
+- tech エラーが多い場合、API 制約を意識せず操作を続けたことによる修正の可能性
+```
+
 ### Step 5: --apply-all の場合
 
 corrections の `apply: true` のものを確認なしで適用する:

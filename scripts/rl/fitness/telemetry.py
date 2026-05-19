@@ -387,13 +387,20 @@ def format_telemetry_report(result: Dict[str, Any]) -> List[str]:
     """Telemetry Score を audit レポート用にフォーマットする。"""
     lines = [f"## Telemetry Score: {result['overall']:.2f}", ""]
 
+    _LABELS = {
+        "utilization":      "\u5229\u7528\u7387",
+        "effectiveness":    "\u6709\u52b9\u6027",
+        "implicit_reward":  "\u6697\u9ed9\u5831\u916c",
+        "skill_compression": "\u30b9\u30ad\u30eb\u5727\u7e2e (r^comp)",
+        "fc_validity":      "\u547c\u51fa\u6709\u52b9\u7387 (r^fc)",
+    }
     for axis in ("utilization", "effectiveness", "implicit_reward", "skill_compression", "fc_validity"):
         score = result.get(axis, 0.0)
         bar_filled = int(score * 20)
         bar_empty = 20 - bar_filled
         bar = "\u2588" * bar_filled + "\u2591" * bar_empty
-        label = axis.replace("_", " ").capitalize()
-        lines.append(f"{label:18s} {score:.2f} {bar}")
+        label = _LABELS.get(axis, axis.replace("_", " ").capitalize())
+        lines.append(f"{label:20s} {score:.2f} {bar}")
 
     if not result["data_sufficiency"]:
         details = result["data_details"]

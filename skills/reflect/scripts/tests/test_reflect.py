@@ -607,3 +607,176 @@ class TestFindMemoryUpdateCandidates:
             result = reflect.find_memory_update_candidates(corrections)
         # "hello" と "world" の2語のみ（ストップワード除外後）→ MIN_KEYWORD_MATCH=3 未満
         assert len(result) == 0
+
+
+# --- Test: analyze_tool_call_patterns ---
+
+class TestAnalyzeToolCallPatterns:
+    def test_empty_corrections(self):
+        """preceding_tool_calls がない corrections → 空の分析結果。"""
+        corrections = [_make_correction()]
+        result = reflect.analyze_tool_call_patterns(corrections)
+        assert result["failure_patterns"] == []
+        assert result["failure_rate_by_tool"] == {}
+
+    def test_failure_rate_by_tool(self):
+        """失敗したツール呼び出しの failure_rate が計算される。"""
+        corrections = [
+            {**_make_correction(), "preceding_tool_calls": [
+                {"tool": "Bash", "success": False},
+                {"tool": "Bash", "success": True},
+                {"tool": "Edit", "success": True},
+            ]},
+        ]
+        result = reflect.analyze_tool_call_patterns(corrections)
+        assert "Bash" in result["failure_rate_by_tool"]
+        assert result["failure_rate_by_tool"]["Bash"] == 0.5
+        assert result["failure_rate_by_tool"]["Edit"] == 0.0
+
+    def test_sequence_pattern_detected(self):
+        """同一シーケンスが2件以上出現 → failure_patterns に記録される。"""
+        tool_calls = [
+            {"tool": "Bash", "success": False},
+            {"tool": "Edit", "success": True},
+        ]
+        corrections = [
+            {**_make_correction(), "preceding_tool_calls": tool_calls},
+            {**_make_correction(message="別の修正"), "preceding_tool_calls": tool_calls},
+        ]
+        result = reflect.analyze_tool_call_patterns(corrections)
+        assert len(result["failure_patterns"]) >= 1
+        assert result["failure_patterns"][0]["count"] >= 2
+        assert result["failure_patterns"][0]["sequence"] == ["Bash", "Edit"]
+
+    def test_sequence_below_threshold_not_included(self):
+        """シーケンス出現が1件のみ → failure_patterns に含まれない。"""
+        corrections = [
+            {**_make_correction(), "preceding_tool_calls": [
+                {"tool": "Bash", "success": True},
+                {"tool": "Read", "success": True},
+            ]},
+        ]
+        result = reflect.analyze_tool_call_patterns(corrections)
+        assert result["failure_patterns"] == []
+
+    def test_null_preceding_tool_calls_skipped(self):
+        """preceding_tool_calls が null や空のエントリはスキップされる。"""
+        corrections = [
+            {**_make_correction(), "preceding_tool_calls": None},
+            {**_make_correction(), "preceding_tool_calls": []},
+            {**_make_correction()},  # フィールドなし
+        ]
+        result = reflect.analyze_tool_call_patterns(corrections)
+        assert result["failure_patterns"] == []
+        assert result["failure_rate_by_tool"] == {}
+
+
+# --- Test: load_recent_error_classes ---
+
+class TestLoadRecentErrorClasses:
+    def test_nonexistent_file(self, tmp_path):
+        """errors.jsonl が存在しない場合、空の結果を返す。"""
+        result = reflect.load_recent_error_classes(errors_file=tmp_path / "errors.jsonl")
+        assert result == {"by_class": {}, "by_type": {}}
+
+    def test_load_and_count(self, tmp_path):
+        """errors.jsonl から error_class / error_type を集計する。"""
+        errors_file = tmp_path / "errors.jsonl"
+        records = [
+            {"error_class": "tech", "error_type": "rate_limit", "session_id": "s1"},
+            {"error_class": "tech", "error_type": "timeout", "session_id": "s2"},
+            {"error_class": "tech", "error_type": "rate_limit", "session_id": "s1"},
+        ]
+        errors_file.write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n",
+            encoding="utf-8",
+        )
+        result = reflect.load_recent_error_classes(errors_file=errors_file)
+        assert result["by_class"]["tech"] == 3
+        assert result["by_type"]["rate_limit"] == 2
+        assert result["by_type"]["timeout"] == 1
+
+    def test_session_filter(self, tmp_path):
+        """session_ids フィルタを指定した場合、一致するセッションのみ集計する。"""
+        errors_file = tmp_path / "errors.jsonl"
+        records = [
+            {"error_class": "tech", "error_type": "rate_limit", "session_id": "s1"},
+            {"error_class": "tech", "error_type": "timeout", "session_id": "s2"},
+        ]
+        errors_file.write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n",
+            encoding="utf-8",
+        )
+        result = reflect.load_recent_error_classes(
+            errors_file=errors_file, session_ids=["s1"]
+        )
+        assert result["by_class"]["tech"] == 1
+        assert result["by_type"]["rate_limit"] == 1
+        assert "timeout" not in result["by_type"]
+
+    def test_invalid_lines_skipped(self, tmp_path):
+        """不正な JSON 行はスキップされる。"""
+        errors_file = tmp_path / "errors.jsonl"
+        errors_file.write_text(
+            '{"error_class": "tech", "error_type": "rate_limit", "session_id": "s1"}\n'
+            "invalid json\n",
+            encoding="utf-8",
+        )
+        result = reflect.load_recent_error_classes(errors_file=errors_file)
+        assert result["by_class"]["tech"] == 1
+
+
+# --- Test: build_output includes tool_call_analysis and error_class_summary ---
+
+class TestBuildOutputNewFields:
+    def test_tool_call_analysis_in_output(self):
+        """build_output の出力に tool_call_analysis が含まれる。"""
+        pending = [_make_correction()]
+        for c in pending:
+            c["_scope"] = "same-project"
+            c["routing_hint"] = "project"
+            c["suggested_file"] = "/tmp/test.md"
+            c["duplicate_found"] = False
+            c["duplicate_in"] = None
+
+        with mock.patch("reflect.find_promotion_candidates", return_value=[]):
+            with mock.patch("reflect.load_recent_error_classes", return_value={"by_class": {}, "by_type": {}}):
+                result = reflect.build_output(pending, pending)
+
+        assert "tool_call_analysis" in result
+        assert "failure_patterns" in result["tool_call_analysis"]
+        assert "failure_rate_by_tool" in result["tool_call_analysis"]
+
+    def test_error_class_summary_in_output(self):
+        """build_output の出力に error_class_summary が含まれる。"""
+        pending = [_make_correction()]
+        for c in pending:
+            c["_scope"] = "same-project"
+            c["routing_hint"] = "project"
+            c["suggested_file"] = "/tmp/test.md"
+            c["duplicate_found"] = False
+            c["duplicate_in"] = None
+
+        with mock.patch("reflect.find_promotion_candidates", return_value=[]):
+            with mock.patch("reflect.load_recent_error_classes", return_value={"by_class": {"tech": 2}, "by_type": {}}):
+                result = reflect.build_output(pending, pending)
+
+        assert "error_class_summary" in result
+        assert result["error_class_summary"]["by_class"]["tech"] == 2
+
+    def test_preceding_tool_calls_forwarded(self):
+        """preceding_tool_calls がある correction は出力の corrections に含まれる。"""
+        calls = [{"tool": "Bash", "success": False}, {"tool": "Edit", "success": True}]
+        c = _make_correction()
+        c["_scope"] = "same-project"
+        c["routing_hint"] = "project"
+        c["suggested_file"] = "/tmp/test.md"
+        c["duplicate_found"] = False
+        c["duplicate_in"] = None
+        c["preceding_tool_calls"] = calls
+
+        with mock.patch("reflect.find_promotion_candidates", return_value=[]):
+            with mock.patch("reflect.load_recent_error_classes", return_value={"by_class": {}, "by_type": {}}):
+                result = reflect.build_output([c], [c])
+
+        assert result["corrections"][0]["preceding_tool_calls"] == calls

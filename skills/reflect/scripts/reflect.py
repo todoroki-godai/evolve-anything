@@ -33,8 +33,9 @@ from similarity import tokenize
 
 from rl_common import cleanup_false_positives
 
-# corrections.jsonl のデフォルトパス
+# corrections.jsonl / errors.jsonl のデフォルトパス
 CORRECTIONS_FILE = Path.home() / ".claude" / "rl-anything" / "corrections.jsonl"
+ERRORS_FILE = Path.home() / ".claude" / "rl-anything" / "errors.jsonl"
 
 # promotion 閾値
 PROMOTION_MIN_OCCURRENCES = 2
@@ -409,6 +410,100 @@ def update_reflect_status(
     filepath.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 
 
+def load_recent_error_classes(
+    errors_file: Path = ERRORS_FILE,
+    session_ids: list[str] | None = None,
+) -> dict:
+    """errors.jsonl から error_class サマリを返す。
+
+    corrections の session_ids と突合して関連エラーのみ抽出する。
+    pitfall 生成プロンプトの behavioral コンテキストとして使用する。
+
+    Returns:
+        {"by_class": {"tech": 5, ...}, "by_type": {"rate_limit": 2, ...}}
+    """
+    from collections import defaultdict
+
+    if not errors_file.exists():
+        return {"by_class": {}, "by_type": {}}
+
+    by_class: dict[str, int] = defaultdict(int)
+    by_type: dict[str, int] = defaultdict(int)
+    session_set = set(session_ids) if session_ids else None
+
+    for line in errors_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        # session_ids フィルタ（指定時のみ）
+        if session_set is not None:
+            sid = rec.get("session_id", "")
+            if sid not in session_set:
+                continue
+
+        ec = rec.get("error_class", "")
+        et = rec.get("error_type", "")
+        if ec:
+            by_class[ec] += 1
+        if et:
+            by_type[et] += 1
+
+    return {"by_class": dict(by_class), "by_type": dict(by_type)}
+
+
+def analyze_tool_call_patterns(corrections: list[dict]) -> dict:
+    """preceding_tool_calls から failure_patterns と preceding_sequences を集計する。
+
+    failure_patterns: ツール失敗（success=False）→次ツールのシーケンス
+    preceding_sequences: correction 前に頻出する 2-gram（success 問わず、count>=1）
+    """
+    from collections import Counter
+
+    tool_total: Counter = Counter()
+    tool_fail: Counter = Counter()
+    fail_seq: Counter = Counter()   # 失敗→次ツール
+    all_seq: Counter = Counter()    # correction 直前の 2-gram
+
+    for c in corrections:
+        calls = c.get("preceding_tool_calls") or []
+        if not calls:
+            continue
+        for call in calls:
+            tool = call.get("tool", "")
+            if tool:
+                tool_total[tool] += 1
+                if not call.get("success", True):
+                    tool_fail[tool] += 1
+
+        for i in range(len(calls) - 1):
+            if not calls[i].get("success", True):
+                fail_seq[f"{calls[i]['tool']}(fail) → {calls[i+1]['tool']}"] += 1
+            all_seq[f"{calls[i]['tool']} → {calls[i+1]['tool']}"] += 1
+
+    failure_rate = {
+        tool: round(tool_fail[tool] / total, 2)
+        for tool, total in tool_total.items() if total > 0
+    }
+
+    return {
+        "failure_patterns": [
+            {"sequence": seq, "count": cnt}
+            for seq, cnt in fail_seq.most_common()
+        ],
+        "preceding_sequences": [
+            {"sequence": seq, "count": cnt}
+            for seq, cnt in all_seq.most_common(10)
+            if cnt >= 1
+        ],
+        "failure_rate_by_tool": failure_rate,
+    }
+
+
 def build_output(
     pending: list[dict],
     all_records: list[dict],
@@ -434,6 +529,11 @@ def build_output(
             "duplicate_in": c.get("duplicate_in"),
             "extracted_learning": c.get("extracted_learning"),
         }
+
+        # preceding_tool_calls: pitfall 生成に使う直前ツール呼び出し履歴
+        preceding = c.get("preceding_tool_calls")
+        if preceding:
+            entry["preceding_tool_calls"] = preceding
 
         if c.get("line_limit_warning"):
             entry["line_limit_warning"] = c["line_limit_warning"]
@@ -468,11 +568,20 @@ def build_output(
     # memory update candidates
     memory_updates = find_memory_update_candidates(pending, project_root)
 
+    # preceding_tool_calls パターン分析（pitfall 生成コンテキスト用）
+    tool_call_analysis = analyze_tool_call_patterns(pending)
+
+    # error_class サマリ（errors.jsonl から、同セッションの API エラー文脈を提供）
+    session_ids = [c.get("session_id", "") for c in pending if c.get("session_id")]
+    error_class_summary = load_recent_error_classes(session_ids=session_ids or None)
+
     output = {
         "status": "has_pending",
         "corrections": corrections_out,
         "promotion_candidates": promotion,
         "memory_update_candidates": memory_updates,
+        "tool_call_analysis": tool_call_analysis,
+        "error_class_summary": error_class_summary,
         "summary": {
             "total": len(corrections_out),
             "by_type": dict(by_type),

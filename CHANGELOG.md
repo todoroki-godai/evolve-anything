@@ -5,6 +5,8 @@
 - feat(hooks): stop_failure に `error_class` フィールドを追加 — AgentErrorTaxonomy 第1段階として全 error_type を `"tech"` に分類。behavioral 分類と `error_layer` は reflect スキルが遅延付与 (closes #148)
 - docs(decisions): MemOS L1→L4 結晶化アーキテクチャを ADR-024 として明文化。corrections→evolve 4層設計の学術的根拠を確立 (closes #149)
 - feat(hooks): corrections.jsonl に `preceding_tool_calls[]` を追加 — 修正直前の直近5件ツール呼び出しを記録。reflect の pitfall 生成精度向上の基盤 (closes #150)
+- feat(reflect): `preceding_tool_calls` と `error_class` を pitfall 生成に統合 — `analyze_tool_call_patterns` でツール連続失敗パターンを集計し `tool_call_analysis` として出力。`load_recent_error_classes` で errors.jsonl の error_class サマリを `error_class_summary` として出力。SKILL.md に操作パターン軸・エラー文脈軸の pitfall 生成プロンプトを追加 (closes #165)
+- feat(reflect): 3PJ横断バックフィル分析で pitfall 登録・preceding_sequences 対応 — `scripts/backfill_preceding_tool_calls.py` 追加。`analyze_tool_call_patterns` に `preceding_sequences` 軸を追加。rl-anything/docs-platform/sys-bots の3PJ分析で「Bash連続実行→先送り」パターンを発見し pitfalls.md に登録
 
 ## [1.53.0] - 2026-05-19
 

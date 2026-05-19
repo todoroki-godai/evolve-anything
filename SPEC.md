@@ -98,6 +98,26 @@ L1→L4 結晶化アーキテクチャと同型の設計を採用する（[ADR-0
 - 2026-05-19: **feat(memory): update_count guard による LLM 自己更新メモリ劣化検出 (closes #97)** — `post_tool_use_memory.py` hook が Write/Edit 後に `update_count` を自動インクリメント（#151/#153）、`update_count_guard.py` が閾値超過メモリを警告 (#147)
 - 2026-05-14: **`scripts/lib/audit.py` 2046行モノリスを `audit/` パッケージに分割完了 (Phase 2、PR #51-#61)** — 11 サブモジュール に分離、`__init__.py` は 178 行の re-export 層のみに到達 (**-91%**)。Python source 行数バジェット guard (`MAX_PYTHON_SOURCE_LINES=500` warn / `MAX_PYTHON_SOURCE_HARD=800` violation) を `audit.check_python_source_budgets` として統合
 - 2026-05-11: **v1.46.0 リリース — Token Consumption Tracking + ingest redesign** — `token_usage.db` (DuckDB SoR) に PJ 別トークン消費を冪等取り込み。`rl-fleet tokens` サブコマンド、`audit` レポートに "Token Consumption" セクション統合。closes #24, #28
+### 4層メモリ結晶化（MemOS 対応設計）
+
+rl-anything の corrections→evolve パイプラインは MemOS / HiMem（arXiv:2601.06377）の
+L1→L4 結晶化アーキテクチャと同型の設計を採用する（[ADR-024](docs/decisions/024-memory-crystallization-memos-correspondence.md)）。
+
+| MemOS 層 | rl-anything 対応 |
+|---------|-----------------|
+| L1 トレース | `corrections.jsonl` / `sessions.jsonl` 等（Observe hooks が記録） |
+| L2 ポリシー | `MEMORY.md` (auto-memory、`/reflect` で更新) |
+| L3 ワールドモデル | `rules/*.md` + `CLAUDE.md`（`/evolve` で昇格） |
+| L4 結晶化スキル | `.claude/skills/*.md`（`skill_triage` / `/evolve-skill` で生成） |
+
+**ギャップマッピング（将来検討）**:
+
+- **未実装: 層間矛盾検出・自動 reconsolidation** — L2（MEMORY.md）と L3（rules）の
+  矛盾エントリを検出する仕組みがない。MemOS が定義する下向き伝播（上位層→下位層更新）も未実装
+- **未実装: ハイブリッド検索** — MEMORY.md は現状線形スキャン。MemOS/HiMem が提案する
+  ベクトル検索 + 構造検索のハイブリッドは未実装
+- **参照**: MemOS/HiMem (Zhang et al., 2026, arXiv:2601.06377)、[ADR-024](docs/decisions/024-memory-crystallization-memos-correspondence.md)
+
 ## Current Limitations / Known Issues
 
 - **Token usage v1: subagent token は分離追跡しない** — CC 仕様により subagent 呼び出しの token 消費は親メッセージの `message.usage` に内包される（281k メッセージ実測で `isSidechain=true` 0 件確認済）。CC 側で `isSidechain` がマークされる版が出れば v2 で対応
