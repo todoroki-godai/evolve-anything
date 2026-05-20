@@ -15,11 +15,11 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
 from audit import (
     DATA_DIR,
-    classify_artifact_origin,
     find_artifacts,
 )
 from similarity import build_tfidf_matrix
 from issue_schema import make_split_candidate_issue
+from artifact_scope import filter_artifacts_to_target
 
 DEFAULT_REORGANIZE_THRESHOLD = 0.7
 SPLIT_LINE_THRESHOLD = 300
@@ -58,11 +58,9 @@ def cluster_skills(tfidf_matrix, threshold: float = 0.7) -> list:
 
 def detect_split_candidates(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
     """SKILL.md が 300 行を超えるスキルを分割候補として検出する。"""
+    artifacts = filter_artifacts_to_target(artifacts)
     candidates = []
     for path in artifacts.get("skills", []):
-        origin = classify_artifact_origin(path)
-        if origin == "plugin":
-            continue
         try:
             line_count = path.read_text(encoding="utf-8").count("\n") + 1
         except OSError:
@@ -113,14 +111,11 @@ def run_reorganize(project_dir: str = None) -> dict:
         skipped=True で理由を返す。
     """
     proj = Path(project_dir) if project_dir else Path.cwd()
-    artifacts = find_artifacts(proj)
+    artifacts = filter_artifacts_to_target(find_artifacts(proj))
 
-    # プラグイン由来スキルを除外してテキストを収集
+    # 診断対象スキルのテキストを収集（plugin/global は filter_artifacts_to_target で除外済み）
     skill_texts: Dict[str, str] = {}
     for path in artifacts.get("skills", []):
-        origin = classify_artifact_origin(path)
-        if origin == "plugin":
-            continue
         skill_name = path.parent.name
         try:
             text = path.read_text(encoding="utf-8")

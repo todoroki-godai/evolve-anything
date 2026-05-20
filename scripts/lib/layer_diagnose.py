@@ -245,6 +245,10 @@ def diagnose_hooks(project_dir: Path) -> List[Dict[str, Any]]:
 
     - hooks_unconfigured: settings.json に hooks 設定がない
     """
+    # プラグイン本体リポジトリは hooks プロバイダー自身のため除外
+    if (project_dir / ".claude-plugin" / "plugin.json").exists():
+        return []
+
     settings_path = project_dir / ".claude" / "settings.json"
     if not settings_path.exists():
         return []

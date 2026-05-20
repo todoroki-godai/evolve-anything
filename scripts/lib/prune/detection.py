@@ -291,8 +291,10 @@ def detect_duplicates(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
     """audit-report の重複検出結果（意味的類似度判定、閾値 80%）を利用する。
 
     audit.py の semantic_similarity_check() を再利用。
+    plugin / global スキルは診断対象外のため事前に除外する。
     """
-    return semantic_similarity_check(artifacts, threshold=0.80)
+    from artifact_scope import filter_artifacts_to_target
+    return semantic_similarity_check(filter_artifacts_to_target(artifacts), threshold=0.80)
 
 
 def detect_decay_candidates(
