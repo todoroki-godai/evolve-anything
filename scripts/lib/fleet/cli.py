@@ -96,6 +96,37 @@ def main(argv: list[str] | None = None) -> int:
     return _run_status(args)
 
 
+def _show_active_agents() -> str | None:
+    """claude agents --json でアクティブセッション数と名前を取得して返す。
+
+    失敗・空・不正 JSON の場合は None を返す（表示しない）。
+    v2.1.145+ で利用可能。
+    """
+    try:
+        proc = subprocess.run(
+            ["claude", "agents", "--json"],
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+
+    try:
+        sessions: list = _json.loads(proc.stdout)
+    except _json.JSONDecodeError:
+        return None
+
+    if not sessions:
+        return None
+
+    names = [s.get("name") or s.get("id", "?") for s in sessions[:5]]
+    suffix = f" (…他 {len(sessions) - 5} 件)" if len(sessions) > 5 else ""
+    return f"[fleet] アクティブセッション: {len(sessions)} 件 — {', '.join(names)}{suffix}"
+
+
 def _run_status(args) -> int:
     """fleet-config.json の tracked_projects を優先、未設定時は --root で fallback。"""
     import fleet_config
@@ -134,6 +165,9 @@ def _run_status(args) -> int:
             f"\n[fleet] 新しい PJ 候補を {len(new_candidates)} 件検出しました。"
             f" `rl-fleet discover` で track/ignore を設定してください。",
         )
+    agent_line = _show_active_agents()
+    if agent_line:
+        print(agent_line)
     if not args.no_write:
         write_fleet_run(rows)
     return 0

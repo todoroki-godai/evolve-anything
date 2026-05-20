@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(fleet): `rl-fleet status` にアクティブセッション表示を追加** — `_show_active_agents()` が `claude agents --json` (CC v2.1.145+) を呼び出し、アクティブセッション数・名前を `[fleet]` 行として status 末尾に表示。失敗・空・不正 JSON は非表示でフォールバック。テスト 6件追加
+- **feat(hooks): `detect-deferred-task` が CC v2.1.145 の `background_tasks` / `session_crons` に対応** — 先送り検出時に実行中バックグラウンドタスク数を reason に付加。先送りなしでも残存タスクがあれば stderr に非ブロック警告を出力。テスト 8件追加
+
 ## [1.56.0] - 2026-05-20
 
 ### Added
