@@ -60,6 +60,25 @@ evolve.py の出力に含まれる `fitness` フェーズを確認する。
 
 ---
 
+### Step 2.5: 意図確認チェック（Intention Check）
+
+各スキルのパッチ候補に対して `intention_check(candidate, original)` を実行し、意図逸脱を検出する。
+
+- **BLOCK** 検出条件（パッチを適用せず次のスキルへスキップ）:
+  - Trigger 行削除率 ≥ 30%
+  - `description:` キー消失
+  - `disable-model-invocation: true` → `false` への変化
+  - `## Usage` セクション完全消失
+- **WARN** 検出条件（適用はするが注意喚起）:
+  - `effort:` 値の昇降（`low` ↔ `high`）
+  - Jaccard 係数 < 0.5（テキスト類似度が低い）
+
+パイプライン完了後サマリに出力する:
+- BLOCK: `BLOCKED: {skill} ({reason})`
+- WARN: `WARNED: {skill} ({reason})`
+
+---
+
 ## Stage 1: Diagnose（パターン検出 + 問題診断）
 
 ### Step 3: Discover フェーズ（enrich 統合済み）

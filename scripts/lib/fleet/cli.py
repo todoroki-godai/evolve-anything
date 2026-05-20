@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json as _json
+import subprocess
 from pathlib import Path
 
 from . import (
@@ -63,6 +64,23 @@ def main(argv: list[str] | None = None) -> int:
     tokens_p.add_argument("--all", action="store_true", help="--backfill 時に全期間 ingest（default 90 日）")
     tokens_p.add_argument("--json", action="store_true", help="JSON 出力")
 
+    import_p = sub.add_parser(
+        "import",
+        help="コミュニティスキルを GitHub またはローカルパスから import する",
+    )
+    import_p.add_argument(
+        "source",
+        help="スキルのソース: 'owner/repo', 'owner/repo/path', '/local/path', または GitHub URL",
+    )
+    import_p.add_argument("--force", action="store_true", help="名前衝突時に上書きする")
+    import_p.add_argument("--yes", "-y", action="store_true", help="確認プロンプトをスキップ（CI用）")
+    import_p.add_argument(
+        "--skills-dir",
+        type=Path,
+        default=None,
+        help="インストール先スキルディレクトリ（default: <plugin_root>/skills/）",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "discover":
@@ -71,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_tokens(args)
     if args.command == "test-guard":
         return _run_test_guard(args)
+    if args.command == "import":
+        return _run_import(args)
 
     # default: status
     return _run_status(args)
@@ -214,4 +234,100 @@ def _run_discover(args) -> int:
         print(f"\n[fleet] 保存しました: tracked={final_tracked}, ignored={final_ignored}")
     else:
         print("\n[fleet] 変更なし（skip のみ）。")
+    return 0
+
+
+def _run_import(args) -> int:
+    """コミュニティスキルを GitHub またはローカルパスから import する。
+
+    フロー:
+    1. parse_source() でソース解析
+    2. tmpdir に fetch_skill()
+    3. validate_skill() で検証 → エラーなら終了
+    4. preview_skill() を表示
+    5. [y/N] でユーザー確認（--yes でスキップ）
+    6. install_skill() でインストール
+    7. 完了メッセージ
+    """
+    import tempfile
+
+    from skill_importer import (
+        fetch_skill,
+        install_skill,
+        parse_source,
+        preview_skill,
+        validate_skill,
+    )
+
+    # デフォルトのスキルインストール先
+    if args.skills_dir is not None:
+        skills_dir = args.skills_dir
+    else:
+        # plugin root / skills/
+        plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+        skills_dir = plugin_root / "skills"
+
+    # Step 1: ソース解析
+    try:
+        source = parse_source(args.source)
+    except ValueError as e:
+        print(f"[import] エラー: {e}")
+        return 1
+
+    print(f"[import] ソース: {args.source}")
+
+    # Step 2: fetch（tmpdir に clone/copy）
+    with tempfile.TemporaryDirectory(prefix="rl-fleet-import-") as tmp:
+        tmp_dir = Path(tmp)
+        print("[import] スキルを取得中...")
+        try:
+            skill_path = fetch_skill(source, tmp_dir)
+        except subprocess.CalledProcessError as e:
+            print(f"[import] git clone 失敗 (exit code: {e.returncode})")
+            return 1
+        except Exception as e:
+            print(f"[import] 取得エラー: {type(e).__name__}")
+            return 1
+
+        # Step 3: validate
+        metadata, result = validate_skill(
+            skill_path,
+            skills_dir=skills_dir if not args.force else None,
+        )
+        if result.warnings:
+            for w in result.warnings:
+                print(f"[import] 警告: {w}")
+        if not result.valid:
+            for e in result.errors:
+                print(f"[import] エラー: {e}")
+            return 1
+
+        # Step 4: preview
+        print()
+        print(preview_skill(metadata))
+        print()
+
+        # Step 5: 確認
+        if not args.yes:
+            try:
+                ans = input("インストールしますか？ [y/N]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[import] キャンセルしました。")
+                return 1
+            if ans not in ("y", "yes"):
+                print("[import] キャンセルしました。")
+                return 1
+
+        # Step 6: install
+        try:
+            install_skill(metadata, skills_dir, force=args.force)
+        except FileExistsError as e:
+            print(f"[import] エラー: {e}")
+            return 1
+        except Exception as e:
+            print(f"[import] インストールエラー: {e}")
+            return 1
+
+    # Step 7: 完了
+    print(f"[import] スキル '{metadata.name}' を {skills_dir / metadata.name} にインストールしました。")
     return 0

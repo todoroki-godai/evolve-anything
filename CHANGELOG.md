@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.56.0] - 2026-05-20
+
+### Added
+- **feat: コミュニティスキル import 機能を追加** — `bin/rl-fleet import <source>` で `owner/repo`・ローカルパス（絶対・相対）・URL からスキルを取得・インストール。`skill_importer.py`（parse/fetch/validate/preview/install）+ パス・トラバーサル多層防御（`_SAFE_NAME_RE` / `_SAFE_SEGMENT_RE` / `dest.resolve().relative_to()`）。`/rl-anything:import` スキルラッパー追加。テスト 22件追加
+- **feat: evolve 意図確認層 (Intention Check) を regression_gate に追加** — `IntentionCheckResult` dataclass + `intention_check(candidate, original)` 関数を `regression_gate.py` に追加。evolve Step 2.5 でパッチ候補を検査。BLOCK 条件: Trigger 削除率 ≥30%・description 消失・disable-model-invocation 削除。WARN 条件: effort low↔high・Jaccard<0.5。evolve サマリに BLOCKED/WARNED を表示。テスト 7件追加
+- **feat(pipeline_eval): スキル生成3型比較評価フレームワーク PipelineEvalRunner を追加** — 型1（パターン抽出）・型2（プロンプト最適化）を横断比較する `PipelineEvalRunner` クラスを新規追加。`predicted_trigger` フィールドで FP/FN を実測値から算出。`compare()` で precision/recall スコアから winner を数値決定。テスト 34件追加
+- **fix(skill_importer): 実在する相対パスを LocalSource として解釈する** — `Path(spec).exists()` チェックを追加し、`skills/reflect` 形式の相対パスが `owner/repo` と誤判定されないよう修正
+
 ## [1.55.1] - 2026-05-20
 
 ### Fixed
