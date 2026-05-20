@@ -57,19 +57,53 @@ def skill_evolve_assessment(
     sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
     from audit import classify_artifact_origin, find_artifacts
 
+    from rl_common.config import load_user_config
+    _cfg = load_user_config()
+    _allowlist_raw = _cfg.get("evolve_global_allowlist", "")
+    _global_allowlist: set = {
+        s.strip() for s in _allowlist_raw.split(",") if s.strip()
+    }
+
     proj = project_dir or Path.cwd()
     artifacts = find_artifacts(proj)
 
+    # Pre-flight guard: LLM呼び出し件数の事前確認
+    # custom + allowlist に含まれる global の両方を対象件数に含める
+    _TOKENS_PER_SKILL = 47_000
+    _MAX_AUTO_SKILLS = 10
+    _all_llm_targets = [
+        p for p in artifacts.get("skills", [])
+        if (
+            (classify_artifact_origin(p) == "custom" and not Path(p).parent.is_symlink())
+            or (classify_artifact_origin(p) == "global" and p.parent.name in _global_allowlist)
+        )
+    ]
+    n = len(_all_llm_targets)
+    if n > _MAX_AUTO_SKILLS:
+        estimated = n * _TOKENS_PER_SKILL
+        raise RuntimeError(
+            f"[llm-batch-guard] skill_evolve_assessment: {n}件のスキルが対象です。\n"
+            f"推定トークン消費: {estimated:,} tokens ({n} × {_TOKENS_PER_SKILL:,})。\n"
+            f"evolve --skip-llm-evolve で LLM 評価をスキップできます。"
+        )
+
     results: List[Dict[str, Any]] = []
+    _excluded_global_count = 0
 
     for skill_path in artifacts.get("skills", []):
         skill_dir = skill_path.parent
         skill_name = skill_dir.name
 
-        # 対象フィルタ: custom/global のみ
+        # 対象フィルタ: ユーザー自作のプロジェクトローカルスキルのみ
+        # plugin = rl-anything 本体、global = gstack 等インストール済み → 除外
+        # ただし evolve_global_allowlist に含まれる global スキルは評価対象に含める
         origin = classify_artifact_origin(skill_path)
         if origin == "plugin":
             continue
+        if origin == "global":
+            if skill_name not in _global_allowlist:
+                _excluded_global_count += 1
+                continue
 
         # symlink 除外
         if skill_dir.is_symlink():
@@ -144,6 +178,18 @@ def skill_evolve_assessment(
         if verification_bypass:
             entry["verification_bypass"] = True
         results.append(entry)
+
+    # excluded_globals サマリ（evolve レポート用）
+    if _excluded_global_count > 0:
+        results.append({
+            "_meta": "excluded_globals",
+            "excluded_global_count": _excluded_global_count,
+            "hint": (
+                f"global スキル {_excluded_global_count} 件は評価対象外 "
+                f"(ダウンロード済みスキルは除外)。"
+                f" 自作グローバルスキルがあれば evolve_global_allowlist に追加してください。"
+            ),
+        })
 
     return results
 

@@ -145,6 +145,23 @@ def run_discover(
             c for c in corrections_data if c.get("last_skill")
         ]
 
+        # llm-batch-guard: 1件あたり最大 ~15 instruction × LLM呼び出しが発生するため上限を設ける
+        # 最新 corrections を優先するため timestamp 降順でソートしてからスライス
+        _MAX_CORRECTION_CHECKS = 20
+        skill_corrections = sorted(
+            skill_corrections,
+            key=lambda c: c.get("timestamp", ""),
+            reverse=True,
+        )
+        if len(skill_corrections) > _MAX_CORRECTION_CHECKS:
+            print(
+                f"[llm-batch-guard] instruction_violation: {len(skill_corrections)} corrections → "
+                f"最新 {_MAX_CORRECTION_CHECKS} 件のみ検査 (推定LLM呼び出し: "
+                f"{_MAX_CORRECTION_CHECKS * 15} 回)",
+                file=sys.stderr,
+            )
+            skill_corrections = skill_corrections[:_MAX_CORRECTION_CHECKS]
+
         violations = []
         for corr in skill_corrections:
             skill_name = corr["last_skill"]

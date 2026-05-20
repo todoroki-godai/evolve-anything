@@ -87,6 +87,12 @@
       "type": "number",
       "description": "Model context window in tokens used by ctx_guard (default: 1000000 for Opus 1M). Adjust if you primarily use a 200K-tier model.",
       "sensitive": false
+    },
+    "evolve_global_allowlist": {
+      "title": "Evolve Global Allowlist",
+      "type": "string",
+      "description": "Comma-separated list of global skill names (~/.claude/skills/) to include in LLM evolution assessment. Default empty = all global skills excluded. Add user-created global skills here (e.g. 'my-skill,another-skill').",
+      "sensitive": false
     }
   }
 }

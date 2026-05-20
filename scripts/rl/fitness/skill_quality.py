@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-_plugin_root = Path(__file__).resolve().parent.parent.parent
+_plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
 from similarity import jaccard_coefficient, tokenize

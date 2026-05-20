@@ -321,6 +321,10 @@ def detect_instruction_violation(
 
     correction_verbs = _extract_verbs_from_text(message)
 
+    # llm-batch-guard: Stage 2 LLM 呼び出しが instruction 数だけ発生するため上限を設ける
+    _MAX_INSTRUCTIONS = 15
+    instructions = instructions[:_MAX_INSTRUCTIONS]
+
     for instr in instructions:
         instruction_text = instr.original
         instruction_verbs = _extract_verbs_from_text(instruction_text)

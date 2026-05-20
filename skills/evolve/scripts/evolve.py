@@ -442,13 +442,18 @@ def run_evolve(
         from skill_evolve import skill_evolve_assessment
         proj = Path(project_dir) if project_dir else Path.cwd()
         se_assessment = skill_evolve_assessment(proj, project=proj.name)
+        # _meta エントリ（excluded_globals サマリ）を分離
+        _meta = next((a for a in se_assessment if a.get("_meta") == "excluded_globals"), {})
+        _assessments = [a for a in se_assessment if not a.get("_meta")]
         result["phases"]["skill_evolve"] = {
-            "assessments": se_assessment,
-            "total_skills": len(se_assessment),
-            "already_evolved": sum(1 for a in se_assessment if a.get("already_evolved")),
-            "high_suitability": sum(1 for a in se_assessment if a.get("suitability") == "high"),
-            "medium_suitability": sum(1 for a in se_assessment if a.get("suitability") == "medium"),
-            "rejected": sum(1 for a in se_assessment if a.get("suitability") == "rejected"),
+            "assessments": _assessments,
+            "total_skills": len(_assessments),
+            "already_evolved": sum(1 for a in _assessments if a.get("already_evolved")),
+            "high_suitability": sum(1 for a in _assessments if a.get("suitability") == "high"),
+            "medium_suitability": sum(1 for a in _assessments if a.get("suitability") == "medium"),
+            "rejected": sum(1 for a in _assessments if a.get("suitability") == "rejected"),
+            "excluded_global_count": _meta.get("excluded_global_count", 0),
+            "excluded_global_hint": _meta.get("hint", ""),
         }
     except Exception as e:
         result["phases"]["skill_evolve"] = {"error": str(e)}

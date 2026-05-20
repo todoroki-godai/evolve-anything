@@ -27,6 +27,9 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     "slow_threshold_ms": 1000,
     # subagent_observe hook: セッション内 subagent 数がこの値に達したら警告。
     "subagent_warning_threshold": 5,
+    # skill_evolve_assessment: LLM 評価に含めるグローバルスキル名（カンマ区切り）。
+    # デフォルト空 = global は全除外。自作グローバルスキルがある場合に追加する。
+    "evolve_global_allowlist": "",
 }
 
 
