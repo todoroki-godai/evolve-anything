@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rl-anything — 適応度関数 / クイックスタート / アーキテクチャ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="sidebar-toggle" id="sidebarToggle" aria-label="メニュー">☰</button>
+  <a href="index.html" class="site-logo">
+    <svg class="claude-mark" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#CF6B47" fill-opacity=".12"/><path d="M20 9C13.925 9 9 13.925 9 20s4.925 11 11 11 11-4.925 11-11S26.075 9 20 9zm0 2c4.97 0 9 4.03 9 9s-4.03 9-9 9-9-4.03-9-9 4.03-9 9-9z" fill="#CF6B47" fill-opacity=".5"/><path d="M16.5 17c0-.828.672-1.5 1.5-1.5h4c.828 0 1.5.672 1.5 1.5S22.828 18.5 22 18.5h-1.25V23c0 .828-.672 1.5-1.5 1.5S17.75 23.828 17.75 23v-4.5H18c-.828 0-1.5-.672-1.5-1.5z" fill="#CF6B47"/></svg>
+    <span>rl-anything</span>
+    <span class="badge">plugin</span>
+  </a>
+  <div class="header-right">
+    <a href="https://github.com/todoroki-godai/evolve-anything" class="header-gh" target="_blank" rel="noopener">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+    <span class="header-version">v1.57.0</span>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">はじめに</div>
+      <a href="index.html#intro"       class="sidebar-link"><span class="icon">🚀</span>概要・インストール</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">コアコンセプト</div>
+      <a href="index.html#pillars"     class="sidebar-link"><span class="icon">🏛</span>4つの柱</a>
+      <a href="pipeline.html#pipeline" class="sidebar-link"><span class="icon">⚙️</span>パイプライン</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">リファレンス</div>
+      <a href="pipeline.html#skills"      class="sidebar-link">                             <span class="icon">🛠</span>主要スキル</a>
+      <a href="reference.html#fitness"    class="sidebar-link" data-section="fitness">      <span class="icon">📊</span>適応度関数</a>
+      <a href="reference.html#quickstart" class="sidebar-link" data-section="quickstart">   <span class="icon">⚡</span>クイックスタート</a>
+      <a href="reference.html#arch"       class="sidebar-link" data-section="arch">         <span class="icon">🏗</span>アーキテクチャ</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">このドキュメントについて</div>
+      <a href="sources.html" class="sidebar-link"><span class="icon">📎</span>参考資料と反映箇所</a>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <section class="doc-section" id="fitness">
+      <h1>適応度関数</h1>
+      <p class="lead">rl-anything には8種類の組み込み fitness が含まれています。<code>--fitness &lt;name&gt;</code> フラグで使い分けます。プロジェクト固有の fitness は <code>scripts/rl/fitness/&lt;name&gt;.py</code> に配置することで追加できます。</p>
+
+      <div class="fitness-grid">
+        <div class="fitness-card">
+          <div class="fname">🤖 default</div>
+          <p>LLM 汎用評価。特定ドメインに依存しない汎用的な品質スコアを返す。新規プロジェクトのベースライン計測に最適。</p>
+        </div>
+        <div class="fitness-card">
+          <div class="fname">📐 skill_quality</div>
+          <p>ルールベースの構造品質評価。トリガー精度・ステップ明確度・エラー処理・ドキュメント品質を静的に採点する。</p>
+        </div>
+        <div class="fitness-card">
+          <div class="fname">🔗 coherence</div>
+          <p>構造的整合性を4軸（規則性・一貫性・完全性・簡潔性）で評価する。スキル間の依存関係矛盾を検出する。</p>
+        </div>
+        <div class="fitness-card">
+          <div class="fname">📈 telemetry</div>
+          <p>テレメトリ3軸（使用頻度・成功率・ユーザー修正率）で実際の動作実績を評価する。使われていないスキルを特定できる。</p>
+        </div>
+        <div class="fitness-card">
+          <div class="fname">⚖️ constitutional</div>
+          <p>原則ベース LLM Judge 評価 + <code>/cso</code> security 軸。安全性・倫理性・セキュリティを包括的に審査する。</p>
+        </div>
+        <div class="fitness-card">
+          <div class="fname">💥 chaos</div>
+          <p>仮想除去ロバストネス評価。スキルを一つずつ仮想的に除去してシステム全体への影響を測定する。依存関係の脆弱性を発見する。</p>
+        </div>
+        <div class="fitness-card">
+          <div class="fname">🌍 environment</div>
+          <p>coherence + telemetry + constitutional + skill_quality を動的重みで統合した総合スコア。重み: coherence 0.25 / telemetry 0.45 / constitutional 0.30。</p>
+        </div>
+        <div class="fitness-card">
+          <div class="fname">🔌 plugin</div>
+          <p>rl-anything プラグイン自身の統合 fitness。プラグインの自己評価に使用し、メタレベルの品質を計測する。</p>
+        </div>
+      </div>
+
+      <div class="callout callout-warn">
+        <span class="callout-icon">⚠️</span>
+        <span><strong>environment fitness の重み</strong>: coherence 0.25 / telemetry 0.45 / constitutional 0.30。<code>audit --coherence-score --telemetry-score --constitutional-score</code> で各軸のスコアを個別に確認できます。</span>
+      </div>
+
+      <h2>カスタム fitness の追加</h2>
+      <pre><span class="sh">$</span> cat scripts/rl/fitness/my_domain.py
+
+<span class="kw">def</span> <span class="fn">score</span>(skill_content: str, context: dict) <span class="op">-&gt;</span> float:
+    <span class="str">"""0.0 〜 1.0 のスコアを返す"""</span>
+    <span class="kw">return</span> <span class="nm">0.8</span>
+
+<span class="cm"># 使用する</span>
+<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">optimize</span> <span class="nm">my-skill</span> --fitness my_domain</pre>
+    </section>
+
+    <section class="doc-section" id="quickstart">
+      <h1>クイックスタート</h1>
+      <p class="lead">あなたとClaude Codeが毎日繰り返すやり取りが、スキルを育てていきます。<br>ここでは「導入初日」「毎日の運用」「困ったとき」という3つの場面でストーリーを追いながら、主要コマンドを紹介します。</p>
+
+      <!-- ===== Day 1 ===== -->
+      <h2>🌱 Day 1 — まず土台を作る</h2>
+      <p>インストール直後は、過去のセッション履歴が蓄積されていません。<code>backfill</code> を実行して既存の作業ログを取り込み、rl-anything に「あなたのプロジェクトの素性」を教えましょう。</p>
+
+      <div class="story-flow">
+        <div class="story-step">
+          <div class="story-step-num">1</div>
+          <div class="story-step-body">
+            <div class="story-step-title">過去ログを取り込む</div>
+            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">backfill</span></pre>
+            <p class="story-step-note">既存セッション履歴を解析し、よく使うパターン・修正傾向を学習します。初回のみ。</p>
+          </div>
+        </div>
+        <div class="story-arrow">↓</div>
+        <div class="story-step">
+          <div class="story-step-num">2</div>
+          <div class="story-step-body">
+            <div class="story-step-title">仕様書を初期化する</div>
+            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">spec-keeper</span> init</pre>
+            <p class="story-step-note">コードベースを読んで <code>SPEC.md</code> を生成します。次セッションへの引き継ぎ書の土台になります。</p>
+          </div>
+        </div>
+        <div class="story-arrow">↓</div>
+        <div class="story-step">
+          <div class="story-step-num">3</div>
+          <div class="story-step-body">
+            <div class="story-step-title">健康診断で現状を把握する</div>
+            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">audit</span></pre>
+            <p class="story-step-note">coherence / telemetry / constitutional の3軸でスコアを算出し、改善候補を一覧表示します。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 毎日の運用ループ図 ===== -->
+      <h2>🔄 毎日の運用 — 自律進化ループ</h2>
+      <p>Claude との作業中にフックが自動で観測を続け、セッション終了ごとにスキルを磨いていきます。あなたがすることは1コマンドだけです。</p>
+
+      <div class="loop-diagram">
+        <div class="loop-diagram-inner">
+          <div class="loop-node loop-node-you">
+            <div class="loop-node-icon">🧑‍💻</div>
+            <div class="loop-node-label">あなたが<br>Claude と作業</div>
+          </div>
+          <div class="loop-edge">
+            <div class="loop-edge-line"></div>
+            <div class="loop-edge-label">hooks が<br>自動記録</div>
+          </div>
+          <div class="loop-node loop-node-obs">
+            <div class="loop-node-icon">👁</div>
+            <div class="loop-node-label">Observe<br>（15 hooks）</div>
+          </div>
+          <div class="loop-edge">
+            <div class="loop-edge-line"></div>
+            <div class="loop-edge-label">corrections/<br>telemetry に蓄積</div>
+          </div>
+          <div class="loop-node loop-node-evolve">
+            <div class="loop-node-icon">⚙️</div>
+            <div class="loop-node-label">Evolve<br>（1コマンド）</div>
+          </div>
+          <div class="loop-edge">
+            <div class="loop-edge-line"></div>
+            <div class="loop-edge-label">スキルが<br>改善される</div>
+          </div>
+          <div class="loop-node loop-node-skill">
+            <div class="loop-node-icon">📈</div>
+            <div class="loop-node-label">スキルが<br>育つ</div>
+          </div>
+          <div class="loop-back-arrow">↺ 毎日繰り返す</div>
+        </div>
+      </div>
+
+      <pre><span class="cm"># 毎日これ1つで OK（Observe → Diagnose → Compile の全フェーズを自動実行）</span>
+<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">evolve</span></pre>
+
+      <div class="callout callout-info">
+        <span class="callout-icon">💡</span>
+        <span>Auto Trigger が有効なら、corrections が一定数を超えると <code>evolve</code> を自動で提案します。手動実行は不要なことが多いです。</span>
+      </div>
+
+      <!-- ===== シナリオ ===== -->
+      <h2>🎭 シナリオ別ガイド</h2>
+
+      <div class="scenario-grid">
+        <div class="scenario-card">
+          <div class="scenario-header">
+            <span class="scenario-icon">🤔</span>
+            <span class="scenario-title">「いつもClaude が同じミスをする」</span>
+          </div>
+          <p>修正パターンを <code>corrections.jsonl</code> に記録し、スキルとルールに反映します。</p>
+          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">reflect</span></pre>
+          <p class="scenario-note">何度もあなたが直した操作がパターン認識され、スキルの pitfall として自動追加されます。</p>
+        </div>
+
+        <div class="scenario-card">
+          <div class="scenario-header">
+            <span class="scenario-icon">🎯</span>
+            <span class="scenario-title">「このスキルだけ精度を上げたい」</span>
+          </div>
+          <p>全体 evolve を待たずにピンポイントで特定スキルを改善します。</p>
+          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">optimize</span> <span class="nm">my-skill</span>
+<span class="cm"># または自己進化パターンを組み込む</span>
+<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">evolve-skill</span> <span class="nm">my-skill</span></pre>
+        </div>
+
+        <div class="scenario-card">
+          <div class="scenario-header">
+            <span class="scenario-icon">🚧</span>
+            <span class="scenario-title">「なかなか解決しない問題がある」</span>
+          </div>
+          <p>行き詰まりを診断し、戦略提案 → Agent 起動まで一気に行います。</p>
+          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">breakthrough</span> <span class="nm">&lt;問題の説明&gt;</span></pre>
+          <p class="scenario-note">または独立した視点でのレビューが欲しいときは <code>/rl-anything:second-opinion</code></p>
+        </div>
+
+        <div class="scenario-card">
+          <div class="scenario-header">
+            <span class="scenario-icon">🗂</span>
+            <span class="scenario-title">「複数プロジェクトの状態を把握したい」</span>
+          </div>
+          <p>fleet コマンドで全プロジェクトを横断的に監視します。</p>
+          <pre><span class="sh">$</span> bin/rl-fleet status
+<span class="sh">$</span> bin/rl-fleet tokens
+<span class="sh">$</span> bin/rl-fleet test-guard status</pre>
+          <p class="scenario-note">env_score が低いプロジェクトには、表示されたコマンドをそのまま実行して改善できます。</p>
+        </div>
+
+        <div class="scenario-card">
+          <div class="scenario-header">
+            <span class="scenario-icon">📋</span>
+            <span class="scenario-title">「次のセッションに引き継ぎたい」</span>
+          </div>
+          <p>作業状態・未完了タスク・コンテキストをまとめて次セッション用に保存します。</p>
+          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">handover</span>
+<span class="cm"># 仕様書も最新化する</span>
+<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">spec-keeper</span> update</pre>
+        </div>
+
+        <div class="scenario-card">
+          <div class="scenario-header">
+            <span class="scenario-icon">🧹</span>
+            <span class="scenario-title">「PRマージ後に後片付けしたい」</span>
+          </div>
+          <p>ブランチ・worktree・tmp ディレクトリ・未クローズ Issue などの痕跡を候補提示しながら削除します。</p>
+          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">cleanup</span></pre>
+          <p class="scenario-note">個別承認方式なので、消したくないものは対話で除外できます。</p>
+        </div>
+      </div>
+
+      <!-- ===== 成長カーブ ===== -->
+      <h2>📊 使い続けるとどう変わるか</h2>
+      <p>rl-anything は env_score（0.0〜1.0）をレベルに変換して表示します。<code>audit</code> 後のグリーティングで現在のレベルと称号が確認できます。</p>
+
+      <div class="growth-track">
+        <div class="growth-item">
+          <div class="growth-lv">Lv 1–3</div>
+          <div class="growth-bar" style="width:30%"></div>
+          <div class="growth-desc">初期セットアップ完了。スキルが素朴な状態。</div>
+        </div>
+        <div class="growth-item">
+          <div class="growth-lv">Lv 4–6</div>
+          <div class="growth-bar" style="width:55%"></div>
+          <div class="growth-desc">修正フィードバックが蓄積され、pitfall が自動追加されはじめる。</div>
+        </div>
+        <div class="growth-item">
+          <div class="growth-lv">Lv 7–9</div>
+          <div class="growth-bar" style="width:78%"></div>
+          <div class="growth-desc">スキルが文脈を理解し、同じミスをほぼしなくなる。</div>
+        </div>
+        <div class="growth-item">
+          <div class="growth-lv">Lv 10</div>
+          <div class="growth-bar" style="width:100%"></div>
+          <div class="growth-desc">🏆 Constitutional / Telemetry / Coherence 全軸高スコア。自律運用の完成形。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="arch">
+      <h1>アーキテクチャ</h1>
+      <p class="lead">rl-anything の内部構造です。すべてのコンポーネントは独立して動作し、単一の <code>plugin.json</code> マニフェストで統合されています。</p>
+
+      <h2>観測レイヤー</h2>
+      <table class="arch-table">
+        <thead><tr><th>コンポーネント</th><th>説明</th></tr></thead>
+        <tbody>
+          <tr><td>Observe hooks (15個)</td><td>LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録する</td></tr>
+          <tr><td>Auto Trigger</td><td>セッション終了・corrections 蓄積・ファイル変更時に evolve/audit 実行を自動提案する (<code>trigger_engine.py</code>)</td></tr>
+          <tr><td>userConfig (12項目)</td><td>CC v2.1.83 manifest.userConfig でトリガー閾値・cleanup prefix・slow command 閾値・subagent 警告閾値を設定する</td></tr>
+        </tbody>
+      </table>
+
+      <h2>最適化レイヤー</h2>
+      <table class="arch-table">
+        <thead><tr><th>コンポーネント</th><th>説明</th></tr></thead>
+        <tbody>
+          <tr><td>genetic-prompt-optimizer</td><td>corrections/context ベースの LLM 1パス直接パッチで最適化する</td></tr>
+          <tr><td>rl-loop-orchestrator</td><td>ベースライン取得 → バリエーション生成 → 評価 → 人間確認のループを統合する</td></tr>
+          <tr><td>rl-scorer エージェント</td><td>オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点する</td></tr>
+          <tr><td>skill-triage</td><td>テレメトリ + trigger eval で CREATE/UPDATE/SPLIT/MERGE/OK の5択判定する</td></tr>
+          <tr><td>trigger-eval-generator</td><td>sessions.jsonl + usage.jsonl → skill-creator 互換 evals.json を自動生成する</td></tr>
+        </tbody>
+      </table>
+
+      <h2>データレイヤー（4層メモリ）</h2>
+      <div class="callout callout-info">
+        <span class="callout-icon">🧠</span>
+        <span>MemOS の L1→L4 結晶化アーキテクチャに対応した4層構造（<a href="sources.html">ADR-024、issue #149</a>）。</span>
+      </div>
+      <table class="arch-table">
+        <thead><tr><th>層</th><th>rl-anything</th><th>説明</th></tr></thead>
+        <tbody>
+          <tr><td>L1 トレース</td><td><code>corrections.jsonl</code></td><td>append-only の raw イベント蓄積（update_count guard で劣化防止）</td></tr>
+          <tr><td>L2 ポリシー</td><td><code>MEMORY.md</code></td><td>セッション横断の学習・判断メモ（auto-memory）</td></tr>
+          <tr><td>L3 ワールドモデル</td><td><code>rules/ + CLAUDE.md</code></td><td>プロジェクト全体の動作指示・制約</td></tr>
+          <tr><td>L4 結晶化スキル</td><td><code>skills/</code></td><td>再利用可能なスキルファイル群</td></tr>
+        </tbody>
+      </table>
+
+      <h2>評価・報告レイヤー</h2>
+      <table class="arch-table">
+        <thead><tr><th>コンポーネント</th><th>説明</th></tr></thead>
+        <tbody>
+          <tr><td>growth-level</td><td>env_score (0.0–1.0) → Lv.1–10 + 日英称号マッピング</td></tr>
+          <tr><td>critical-instruction-compliance</td><td>スキル指示の遵守保証サイクル — critical 行抽出 + 違反検出 + pitfall 自動学習</td></tr>
+          <tr><td>token_usage_store</td><td>プロジェクト別 LLM トークン消費の DuckDB SoR</td></tr>
+        </tbody>
+      </table>
+
+      <h2>テスト実行</h2>
+      <pre><span class="sh">$</span> python3 -m pytest hooks/ skills/ scripts/tests/ scripts/rl/tests/ -v
+<span class="sh">$</span> claude plugin validate</pre>
+
+      <div class="callout callout-info">
+        <span class="callout-icon">📁</span>
+        <span><strong>データ保存先</strong>: <code>CLAUDE_PLUGIN_DATA</code> 環境変数優先、未設定時は <code>~/.claude/rl-anything/</code> にフォールバックします。</span>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<a href="#fitness" class="scroll-top" id="scrollTop" aria-label="ページトップへ">↑</a>
+<script src="nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rl-anything — 参考資料と反映箇所</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="sidebar-toggle" id="sidebarToggle" aria-label="メニュー">☰</button>
+  <a href="index.html" class="site-logo">
+    <svg class="claude-mark" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#CF6B47" fill-opacity=".12"/><path d="M20 9C13.925 9 9 13.925 9 20s4.925 11 11 11 11-4.925 11-11S26.075 9 20 9zm0 2c4.97 0 9 4.03 9 9s-4.03 9-9 9-9-4.03-9-9 4.03-9 9-9z" fill="#CF6B47" fill-opacity=".5"/><path d="M16.5 17c0-.828.672-1.5 1.5-1.5h4c.828 0 1.5.672 1.5 1.5S22.828 18.5 22 18.5h-1.25V23c0 .828-.672 1.5-1.5 1.5S17.75 23.828 17.75 23v-4.5H18c-.828 0-1.5-.672-1.5-1.5z" fill="#CF6B47"/></svg>
+    <span>rl-anything</span>
+    <span class="badge">plugin</span>
+  </a>
+  <div class="header-right">
+    <a href="https://github.com/todoroki-godai/evolve-anything" class="header-gh" target="_blank" rel="noopener">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+    <span class="header-version">v1.57.0</span>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">はじめに</div>
+      <a href="index.html#intro"       class="sidebar-link"><span class="icon">🚀</span>概要・インストール</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">コアコンセプト</div>
+      <a href="index.html#pillars"     class="sidebar-link"><span class="icon">🏛</span>4つの柱</a>
+      <a href="pipeline.html#pipeline" class="sidebar-link"><span class="icon">⚙️</span>パイプライン</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">リファレンス</div>
+      <a href="pipeline.html#skills"      class="sidebar-link"><span class="icon">🛠</span>主要スキル</a>
+      <a href="reference.html#fitness"    class="sidebar-link"><span class="icon">📊</span>適応度関数</a>
+      <a href="reference.html#quickstart" class="sidebar-link"><span class="icon">⚡</span>クイックスタート</a>
+      <a href="reference.html#arch"       class="sidebar-link"><span class="icon">🏗</span>アーキテクチャ</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">このドキュメントについて</div>
+      <a href="sources.html" class="sidebar-link active"><span class="icon">📎</span>参考資料と反映箇所</a>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <section class="doc-section" id="sources">
+      <h1>参考資料と反映箇所</h1>
+      <p class="lead">このドキュメントは以下のソースファイルをもとに生成されています。各章がどの資料に基づいているかを示します。</p>
+
+      <h2>仕様ファイル</h2>
+      <div class="source-map">
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📄</span><span class="source-path">CLAUDE.md</span><span class="source-desc">プロジェクト中心仕様・動作指示</span></div>
+          <div class="source-links">
+            <a href="index.html#intro" class="source-tag">概要</a>
+            <a href="index.html#pillars" class="source-tag">4つの柱</a>
+            <a href="pipeline.html#skills" class="source-tag">主要スキル</a>
+            <a href="reference.html#fitness" class="source-tag">適応度関数</a>
+            <a href="reference.html#quickstart" class="source-tag">クイックスタート</a>
+          </div>
+          <p class="source-note">4つの柱の定義・スキル一覧・適応度関数の重みはすべてこのファイルの記述が直接の根拠です。</p>
+        </div>
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📘</span><span class="source-path">README.ja.md</span><span class="source-desc">日本語版詳細 README</span></div>
+          <div class="source-links">
+            <a href="pipeline.html#pipeline" class="source-tag">パイプライン</a>
+            <a href="reference.html#arch" class="source-tag">アーキテクチャ</a>
+          </div>
+          <p class="source-note">Observe→Diagnose→Compile→Housekeeping→Report の各ステージ説明と、rl-scorer の3軸採点・ドメイン自動判定の詳細はこのファイルが出典です。</p>
+        </div>
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📐</span><span class="source-path">SPEC.md / spec/</span><span class="source-desc">仕様全体像・詳細仕様</span></div>
+          <div class="source-links">
+            <a href="reference.html#arch" class="source-tag">アーキテクチャ</a>
+            <a href="pipeline.html#skills" class="source-tag">コンポーネント詳細</a>
+          </div>
+          <p class="source-note">token_usage_store・ingest・query などデータレイヤーのコンポーネント仕様は SPEC.md が根拠です。</p>
+        </div>
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📓</span><span class="source-path">memory/MEMORY.md</span><span class="source-desc">セッション横断の学習・判断メモ</span></div>
+          <div class="source-links">
+            <a href="reference.html#arch" class="source-tag">設計判断メモ</a>
+            <a href="reference.html#fitness" class="source-tag">environment 重み</a>
+          </div>
+          <p class="source-note">environment fitness の重みや DATA_DIR フォールバック挙動など、コードから自明でない設計判断はこのファイルに記録されています。</p>
+        </div>
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">⚙️</span><span class="source-path">.claude-plugin/plugin.json</span><span class="source-desc">プラグインマニフェスト</span></div>
+          <div class="source-links">
+            <a href="index.html#intro" class="source-tag">バージョン情報</a>
+            <a href="reference.html#arch" class="source-tag">userConfig 12項目</a>
+          </div>
+          <p class="source-note">v1.57.0 のバージョン番号と userConfig で設定可能な12項目の定義はこのファイルが根拠です。</p>
+        </div>
+      </div>
+
+      <h2>論文・OSS リファレンス（設計根拠）</h2>
+      <p>毎日の AI デイリーレポート（<code>~/ai-daily-report/</code>）で発見された arXiv 論文・GitHub OSS が tech-eval issue を経由して実装に反映されています。</p>
+
+      <div class="ref-flow-label">
+        発見の流れ:
+        <span class="flow-step">AI デイリーレポート</span> →
+        <span class="flow-step">tech-eval issue</span> →
+        <span class="flow-step">実装・commit</span> →
+        <span class="flow-step">本ドキュメントの章</span>
+      </div>
+
+      <div class="source-map">
+
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📄</span><span class="source-path">SkillOS — Learning Skill Curation for Self-Evolving Agents</span></div>
+          <div class="ref-meta">
+            <a href="https://arxiv.org/abs/2605.06614" class="ref-link" target="_blank">arXiv:2605.06614</a>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">Ouyang et al. (Google DeepMind, UIUC) · 2026-05-07</span>
+            <span class="ref-sep">·</span>
+            <span class="ref-issue"><a href="https://github.com/todoroki-godai/evolve-anything/issues/69" target="_blank">issue #69</a>, <a href="https://github.com/todoroki-godai/evolve-anything/issues/67" target="_blank">#67</a></span>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">発見元: <code>ai-github-trending-2026-05-15.md</code></span>
+          </div>
+          <div class="source-links">
+            <a href="index.html#pillars" class="source-tag">4つの柱</a>
+            <a href="reference.html#arch" class="source-tag">アーキテクチャ</a>
+            <a href="reference.html#fitness" class="source-tag">telemetry fitness</a>
+          </div>
+          <p class="source-note">frozen executor + trainable curator の分離設計を実証。<strong>Claude Code 本体は frozen、rl-anything は curator 側のみを進化対象とする</strong>という根本設計の理論的正当化（ADR-023）。また skill 肥大化を防ぐ圧縮度項 <code>r^comp</code> が telemetry fitness の compression term として実装された。</p>
+        </div>
+
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📄</span><span class="source-path">Useful Memories Become Faulty When Continuously Updated by LLMs</span></div>
+          <div class="ref-meta">
+            <a href="https://arxiv.org/abs/2605.12978" class="ref-link" target="_blank">arXiv:2605.12978</a>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">2026-05</span>
+            <span class="ref-sep">·</span>
+            <span class="ref-issue"><a href="https://github.com/todoroki-godai/evolve-anything/issues/97" target="_blank">issue #97</a></span>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">発見元: <code>ai-github-trending-2026-05-17.md</code></span>
+          </div>
+          <div class="source-links">
+            <a href="reference.html#arch" class="source-tag">データレイヤー</a>
+            <a href="pipeline.html#skills" class="source-tag">reflect</a>
+          </div>
+          <p class="source-note">LLM がメモリを繰り返し自己更新すると誤りが指数的に蓄積することを実証。<strong>memory frontmatter の <code>update_count</code> guard</strong>（3回以上の LLM 更新で警告）と corrections.jsonl の append-only 保持ポリシーの直接の根拠。</p>
+        </div>
+
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">🐙</span><span class="source-path">MemOS — Memory OS for LLM Agents</span></div>
+          <div class="ref-meta">
+            <a href="https://github.com/MemTensor/MemOS" class="ref-link" target="_blank">MemTensor/MemOS</a>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">HiMem: <a href="https://arxiv.org/abs/2601.06377" target="_blank" style="color:inherit">arXiv:2601.06377</a></span>
+            <span class="ref-sep">·</span>
+            <span class="ref-issue"><a href="https://github.com/todoroki-godai/evolve-anything/issues/149" target="_blank">issue #149</a></span>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">発見元: <code>ai-github-trending-2026-05-15.md</code></span>
+          </div>
+          <div class="source-links">
+            <a href="reference.html#arch" class="source-tag">データレイヤー（4層）</a>
+            <a href="index.html#pillars" class="source-tag">フィードバックループ</a>
+          </div>
+          <p class="source-note">L1トレース → L2ポリシー → L3ワールドモデル → L4結晶化スキルの4層メモリ設計。<strong>rl-anything の <code>corrections.jsonl</code>→<code>MEMORY.md</code>→<code>rules/</code>→<code>skills/</code> の4層構造</strong>がこのアーキテクチャと対応しており、ADR-024 として明文化された。</p>
+        </div>
+
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📄</span><span class="source-path">AgentErrorTaxonomy — Failure Taxonomy for LLM Agents</span></div>
+          <div class="ref-meta">
+            <a href="https://arxiv.org/abs/2509.25370" class="ref-link" target="_blank">arXiv:2509.25370</a>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">Jeevan et al. · 2025-09</span>
+            <span class="ref-sep">·</span>
+            <span class="ref-issue"><a href="https://github.com/todoroki-godai/evolve-anything/issues/148" target="_blank">issue #148</a></span>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">発見元: <code>ai-github-trending-2026-05-19.md</code></span>
+          </div>
+          <div class="source-links">
+            <a href="pipeline.html#pipeline" class="source-tag">パイプライン / Observe</a>
+            <a href="pipeline.html#skills" class="source-tag">reflect</a>
+          </div>
+          <p class="source-note">LLM エージェントの失敗を memory / reflection / planning / action / system の5レイヤーに分類し +26% 改善を実証。<strong>hooks の <code>error_class</code> フィールド</strong>（behavioral エラーの5分類）として実装され、reflect スキルが分類別 pitfall を生成できるようになった。</p>
+        </div>
+
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📄</span><span class="source-path">FORGE — Self-Evolving Agent Memory via Population Broadcast</span></div>
+          <div class="ref-meta">
+            <a href="https://arxiv.org/abs/2605.16233" class="ref-link" target="_blank">arXiv:2605.16233</a>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">2026-05-18</span>
+            <span class="ref-sep">·</span>
+            <span class="ref-issue"><a href="https://github.com/todoroki-godai/evolve-anything/issues/167" target="_blank">issue #167</a></span>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">発見元: <code>ai-github-trending-2026-05-19.md</code></span>
+          </div>
+          <div class="source-links">
+            <a href="pipeline.html#pipeline" class="source-tag">パイプライン / Compile</a>
+            <a href="pipeline.html#skills" class="source-tag">evolve-skill</a>
+          </div>
+          <p class="source-note">重み更新なしで複数スキル候補を競争的に進化させ最良を自動選択する集団放送メモリ進化。<strong>evolve-skill の variation 生成 → regression gate による自動選択</strong>パターンの設計根拠。</p>
+        </div>
+
+        <div class="source-block">
+          <div class="source-file"><span class="source-icon">📄</span><span class="source-path">Look Before You Leap — Autonomous Exploration for LLM Agents</span></div>
+          <div class="ref-meta">
+            <a href="https://arxiv.org/abs/2605.16143" class="ref-link" target="_blank">arXiv:2605.16143</a>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">2026-05-18</span>
+            <span class="ref-sep">·</span>
+            <span class="ref-issue"><a href="https://github.com/todoroki-godai/evolve-anything/issues/167" target="_blank">issue #167</a></span>
+            <span class="ref-sep">·</span>
+            <span class="ref-authors">発見元: <code>ai-github-trending-2026-05-19.md</code></span>
+          </div>
+          <div class="source-links">
+            <a href="pipeline.html#pipeline" class="source-tag">パイプライン / Compile</a>
+            <a href="pipeline.html#skills" class="source-tag">implement</a>
+          </div>
+          <p class="source-note">危険な変更を実行前にリスク評価する LBYL フレームワーク。<strong>evolve 時の regression gate と implement スキルの complexity assessment</strong> における「変更前リスク評価」ステップの設計根拠。</p>
+        </div>
+
+      </div>
+
+      <div class="callout callout-tip" style="margin-top:16px">
+        <span class="callout-icon">📂</span>
+        <span>全 tech-eval issue は <a href="https://github.com/todoroki-godai/evolve-anything/issues?q=tech-eval" target="_blank">GitHub issues (tech-eval)</a> で追跡しています。各 issue の本文に対応する AI デイリーレポートのファイル名と arXiv URL が記録されています。</span>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<a href="#sources" class="scroll-top" id="scrollTop" aria-label="ページトップへ">↑</a>
+<script src="nav.js"></script>
+</body>
+</html>
