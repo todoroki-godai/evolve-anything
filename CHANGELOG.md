@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.58.0] - 2026-05-21
+
+### Added
+- **feat(docs): rl-anything 説明サイトを docs/site/ に追加 (#179)** — claude.com スタイル（ライトクリームテーマ）の 4 ページ構成 HTML ドキュメントサイト。index / pipeline / reference / sources + 共有 CSS/JS。クイックスタートをストーリー仕立て・フロー図・シナリオカードで刷新。
+- **feat(docs): `docs-refresh` スキルを追加 (#179)** — バージョン番号・スキル一覧・4つの柱・アーキテクチャ表を自動更新。sources.html は手動管理対象のため対象外。リリースフロー (`commit-version.md`) に組み込み済み。
+
+### Fixed
+- **fix(evolve): reorganize/prune の global スキル混入と hooks false positive を修正 (#178)** — `artifact_scope.py` 廃止・`layer_diagnose` から `artifact_scope` 依存を除去。`prune/detection.py` の orphan フィルタを `global_skills` リストで補強。
+- **fix(skill-evolve): token 爆発防止 — global スキル除外 + LLM バッチ guard (#177)** — evolve-skill の global スキル（gstack / review 等）を対象外に。LLM バッチ処理前に件数・トークン見積もりをユーザーに提示。
+
 ## [1.57.0] - 2026-05-20
 
 ### Added
