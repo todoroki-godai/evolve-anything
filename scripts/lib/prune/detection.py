@@ -4,7 +4,7 @@ prune/__init__.py から re-export される（後方互換）。
 """
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from frontmatter import parse_frontmatter
 from skill_usage_stats import (
@@ -23,6 +23,8 @@ from audit import (
 from .config import (
     DEFAULT_DECAY_DAYS,
     ZERO_INVOCATION_DAYS,
+    RETIREMENT_CONTRIBUTION_THRESHOLD,
+    RETIREMENT_MIN_INVOCATIONS,
     load_decay_threshold,
 )
 from .skill_inspect import (
@@ -295,6 +297,46 @@ def detect_duplicates(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
     """
     from artifact_scope import filter_artifacts_to_target
     return semantic_similarity_check(filter_artifacts_to_target(artifacts), threshold=0.80)
+
+
+def detect_retirement_candidates(
+    artifacts: Dict[str, List[Path]],
+    contribution_scores: Optional[Dict[str, Any]] = None,
+    contribution_threshold: float = RETIREMENT_CONTRIBUTION_THRESHOLD,
+    min_invocations: int = RETIREMENT_MIN_INVOCATIONS,
+) -> List[Dict[str, Any]]:
+    """貢献スコアが閾値以下のスキルを Retirement 候補として返す。
+
+    zero_invocations で検出済みのスキルはここでは扱わない（invocations >= min_invocations が前提）。
+    contribution_scores が空または未渡しの場合は空リストを返す（データ蓄積待ち）。
+    """
+    if not contribution_scores:
+        return []
+
+    candidates = []
+    for path in artifacts.get("skills", []):
+        skill_name = path.parent.name
+        if is_pinned(path):
+            continue
+        entry = contribution_scores.get(skill_name)
+        if entry is None:
+            continue
+        score = entry.get("score")
+        total = entry.get("total", 0)
+        # データ不足 (score=None) または invocations < min_invocations はスキップ
+        if score is None or total < min_invocations:
+            continue
+        if score < contribution_threshold:
+            candidates.append(_enrich_candidate({
+                "file": str(path),
+                "skill_name": skill_name,
+                "reason": "low_contribution",
+                "contribution_score": round(score, 4),
+                "invocations": total,
+                "threshold": contribution_threshold,
+            }))
+
+    return candidates
 
 
 def detect_decay_candidates(

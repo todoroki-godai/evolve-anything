@@ -283,6 +283,12 @@ def run_audit(
             proj, skip_llm=skip_rescore, issues_summary=_issues,
         )
 
+    from rl_common.config import load_user_config
+    from .usage import aggregate_contribution_scores
+    _user_cfg = load_user_config()
+    _max_skill_count = int(_user_cfg.get("max_skill_count", 30))
+    _contribution_scores = aggregate_contribution_scores(usage_records)
+
     return generate_report(
         artifacts, violations, usage, duplicates, advisories,
         quality_baselines, project_dir=proj,
@@ -297,6 +303,8 @@ def run_audit(
         pipeline_health_report=pipeline_health_report_lines,
         cross_project_report=cross_project_report_lines,
         growth_report=growth_report_lines,
+        contribution_scores=_contribution_scores if _contribution_scores else None,
+        max_skill_count=_max_skill_count,
     )
 
 

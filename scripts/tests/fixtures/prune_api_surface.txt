@@ -17,6 +17,7 @@ detect_dead_globs(project_dir: pathlib.Path) -> List[Dict[str, Any]]
 detect_decay_candidates(artifacts: Dict[str, List[pathlib.Path]], decay_days: float = 90) -> List[Dict[str, Any]]
 detect_duplicates(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
 detect_reference_drift(artifacts: Dict[str, List[pathlib.Path]], project_dir: pathlib.Path) -> List[Dict[str, Any]]
+detect_retirement_candidates(artifacts: Dict[str, List[pathlib.Path]], contribution_scores: Dict[str, Any] | None = None, contribution_threshold: float = 0.3, min_invocations: int = 5) -> List[Dict[str, Any]]
 detect_zero_invocations(artifacts: Dict[str, List[pathlib.Path]], days: int = 30) -> List[Dict[str, Any]]
 determine_primary(skill_a: str, skill_b: str) -> tuple
 extract_skill_summary(skill_path: pathlib.Path) -> str

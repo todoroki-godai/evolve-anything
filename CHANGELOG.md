@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.59.0] - 2026-05-21
+
+### Added
+- **貢献スコア追跡**: `observe.py` が Skill 呼び出しの `outcome`（success/error）を `usage.jsonl` に記録。`aggregate_contribution_scores` で集計し audit レポートの Usage セクションに表示（Library Drift arXiv:2605.19576 対応）
+- **Retirement 機構**: `detect_retirement_candidates` が貢献スコア閾値以下のスキルを自動でアーカイブ候補として検出。`run_prune` の返り値に `retirement_candidates` セクションを追加。クロスプロジェクトスコープで集計しグローバルスキルの誤フラグを防止
+- **スキル数キャップ**: `max_skill_count`（デフォルト 30）を userConfig に追加。audit レポート Summary に「スキル数 / 推奨上限」と超過時の ⚠️ インジケータを表示
+- **Pre-flight ガードレール能動化**: `correction_preflight_threshold`（デフォルト 3）を userConfig に追加。`evaluate_corrections` でスキル単位の correction 集中を検出し `/rl-anything:evolve-skill` 提案を自動出力（HASP arXiv:2605.17734 対応）
+
 ## [1.58.1] - 2026-05-21
 
 ### Fixed

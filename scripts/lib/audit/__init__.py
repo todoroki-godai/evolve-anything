@@ -82,6 +82,7 @@ from .usage import (  # noqa: F401
     _is_plugin_skill,
     aggregate_usage,
     aggregate_plugin_usage,
+    aggregate_contribution_scores,
 )
 
 

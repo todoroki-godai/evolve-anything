@@ -1,6 +1,6 @@
 {
   "name": "rl-anything",
-  "version": "1.58.1",
+  "version": "1.59.0",
   "description": "スキル/ルールの直接パッチ最適化と自律進化ループ",
   "author": {
     "name": "todoroki-godai"
@@ -92,6 +92,18 @@
       "title": "Evolve Global Allowlist",
       "type": "string",
       "description": "Comma-separated list of global skill names (~/.claude/skills/) to include in LLM evolution assessment. Default empty = all global skills excluded. Add user-created global skills here (e.g. 'my-skill,another-skill').",
+      "sensitive": false
+    },
+    "max_skill_count": {
+      "title": "Max Skill Count",
+      "type": "number",
+      "description": "Recommended skill collection cap shown in audit report Summary (default: 30). Based on Library Drift research (arXiv:2605.19576).",
+      "sensitive": false
+    },
+    "correction_preflight_threshold": {
+      "title": "Correction Pre-flight Threshold",
+      "type": "number",
+      "description": "Trigger active Pre-flight warning when corrections for the same skill reach this count (default: 3). Set higher to reduce noise.",
       "sensitive": false
     }
   }

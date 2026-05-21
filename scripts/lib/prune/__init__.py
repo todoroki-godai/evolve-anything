@@ -91,6 +91,7 @@ from .detection import (  # noqa: E402, F401
     safe_global_check,
     detect_duplicates,
     detect_decay_candidates,
+    detect_retirement_candidates,
 )
 
 

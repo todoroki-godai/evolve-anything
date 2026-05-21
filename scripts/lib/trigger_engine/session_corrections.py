@@ -198,6 +198,14 @@ def evaluate_corrections(state: dict[str, Any] | None = None) -> TriggerResult:
     top_skills = sorted(skill_counts.items(), key=lambda x: x[1], reverse=True)[:3]
     skill_names = [s[0] for s in top_skills]
 
+    # Per-skill Pre-flight ガードレール: correction 集中スキルへの能動警告
+    from rl_common.config import load_user_config as _load_user_config
+    _cfg = _load_user_config()
+    per_skill_threshold = int(_cfg.get("correction_preflight_threshold", 3))
+    preflight_skills = [
+        skill for skill, cnt in skill_counts.items() if cnt >= per_skill_threshold
+    ]
+
     if skill_names:
         action = f"/rl-anything:optimize {skill_names[0]}"
         skill_list = ", ".join(skill_names)
@@ -205,6 +213,10 @@ def evaluate_corrections(state: dict[str, Any] | None = None) -> TriggerResult:
     else:
         action = "/rl-anything:evolve"
         message = f"Corrections が {count} 件蓄積。推奨: {action}"
+
+    if preflight_skills:
+        preflight_list = ", ".join(preflight_skills)
+        message += f"\n⚠️ Pre-flight 警告: {preflight_list} で {per_skill_threshold} 回以上の correction — `/rl-anything:evolve-skill <skill>` で自己進化パターンを組み込むことを推奨します"
 
     result = TriggerResult(
         triggered=True,
@@ -214,6 +226,7 @@ def evaluate_corrections(state: dict[str, Any] | None = None) -> TriggerResult:
         details={
             "corrections_count": count,
             "top_skills": skill_names,
+            "per_skill_preflight": preflight_skills,
         },
     )
 

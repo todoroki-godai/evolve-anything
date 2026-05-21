@@ -50,12 +50,12 @@ skills/                 ← スキル定義（21個）
   cleanup/              ← PR マージ・デプロイ後の後片付け（branches/worktrees/tmp dirs/Issues/Test plan）を個別承認→実行 [ADR-021]
 
 scripts/lib/            ← 共通ロジック（14 パッケージ・116 モジュール）[ADR-019]
-  audit/                ← 環境健康診断（11 サブモジュール: memory/gstack/quality/issues/classification/artifacts/usage/scope/sections/report/orchestrator）
+  audit/                ← 環境健康診断（11 サブモジュール: memory/gstack/quality/issues/classification/artifacts/usage/scope/sections/report/orchestrator）。`usage.py` に `aggregate_contribution_scores`（スキル別貢献スコア集計）を追加（v1.59.0）
   discover/             ← パターン検出 + スキル/ルール候補生成
   fleet/                ← 全 PJ 横断観測
   pipeline_reflector/   ← Self-Evolution コアモジュール（outcomes/calibration/proposals）
   pitfall_manager/      ← pitfall 品質ゲート + ライフサイクル
-  prune/                ← スキル/ルール統廃合候補抽出 + import 依存検査（#25）
+  prune/                ← スキル/ルール統廃合候補抽出 + import 依存検査（#25）。`detect_retirement_candidates` で貢献スコア閾値以下のスキルをアーカイブ候補として検出（v1.59.0）
   remediation/          ← confidence-based 問題分類 + 修正 + FP排除
   rl_common/            ← hooks 共通ユーティリティ（persistence.py / config.py / detection.py / false_positive.py 等）
   skill_evolve/         ← 自己進化パターン組み込み（llm_scoring / telemetry_scoring / classification / assessment / proposal）

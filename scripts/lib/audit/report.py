@@ -31,6 +31,8 @@ def generate_report(
     pipeline_health_report: Optional[List[str]] = None,
     cross_project_report: Optional[List[str]] = None,
     growth_report: Optional[List[str]] = None,
+    contribution_scores: Optional[Dict[str, Any]] = None,
+    max_skill_count: Optional[int] = None,
 ) -> str:
     """1画面レポートを生成する。"""
     lines = ["# Environment Audit Report", ""]
@@ -60,7 +62,12 @@ def generate_report(
     total = sum(len(v) for v in artifacts.values())
     lines.append(f"## Summary: {total} artifacts found")
     for category, paths in artifacts.items():
-        lines.append(f"- {category}: {len(paths)}")
+        count = len(paths)
+        if category == "skills" and max_skill_count is not None:
+            indicator = " ⚠️" if count > max_skill_count else ""
+            lines.append(f"- {category}: {count} / 推奨上限 {max_skill_count}{indicator}")
+        else:
+            lines.append(f"- {category}: {count}")
     lines.append("")
 
     if violations:
@@ -87,7 +94,13 @@ def generate_report(
     if usage:
         lines.append("## Usage (last 30 days)")
         for skill, count in list(usage.items())[:15]:
-            lines.append(f"- {skill}: {count} invocations")
+            score_info = ""
+            if contribution_scores:
+                entry = contribution_scores.get(skill)
+                if entry is not None:
+                    score = entry.get("score")
+                    score_info = f" | contribution: {score:.0%}" if score is not None else " | contribution: N/A"
+            lines.append(f"- {skill}: {count} invocations{score_info}")
         lines.append("")
 
     if plugin_usage:

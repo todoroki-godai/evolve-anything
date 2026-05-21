@@ -48,6 +48,7 @@ def handle_post_tool_use(event: dict) -> None:
     session_id = event.get("session_id", "")
 
     # Skill ツール呼び出し時の usage 記録
+    is_error = tool_result.get("is_error", False) if isinstance(tool_result, dict) else False
     if tool_name == "Skill":
         skill_name = tool_input.get("skill", "unknown")
         usage_record = {
@@ -56,6 +57,7 @@ def handle_post_tool_use(event: dict) -> None:
             "session_id": session_id,
             "file_path": tool_input.get("args", ""),
             "project": project,
+            "outcome": "error" if is_error else "success",
         }
         wt_skill = common.extract_worktree_info(event)
         if wt_skill:
@@ -101,7 +103,6 @@ def handle_post_tool_use(event: dict) -> None:
         common.append_jsonl(common.DATA_DIR / "usage.jsonl", usage_record)
 
     # エラーの記録
-    is_error = tool_result.get("is_error", False) if isinstance(tool_result, dict) else False
     if is_error:
         error_record = {
             "tool_name": tool_name,

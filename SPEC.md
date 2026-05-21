@@ -1,6 +1,6 @@
 # SPEC.md — rl-anything
 
-Last updated: 2026-05-20 by /spec-keeper update
+Last updated: 2026-05-21 by /spec-keeper update
 
 ## Overview
 
@@ -94,11 +94,11 @@ L1→L4 結晶化アーキテクチャと同型の設計を採用する（[ADR-0
 
 直近の変更概要。完全な履歴は [CHANGELOG.md](CHANGELOG.md) を参照。
 
-- 2026-05-20: **feat(fleet,hooks): CC v2.1.145 対応** — `rl-fleet status` 末尾にアクティブセッション表示（`_show_active_agents()` / `claude agents --json`）追加。`~/.claude/hooks/detect-deferred-task` が Stop フック入力の `background_tasks` / `session_crons` を処理（先送り時に実行中コンテキストを reason に付加、先送りなし+残存タスクは非ブロック stderr 警告）。テスト 14件追加
+- 2026-05-21: **feat(lifecycle): スキルライフサイクル管理の強化 v1.59.0 (#186)** — Library Drift (arXiv:2605.19576) / HASP (arXiv:2605.17734) 対応。① `observe.py` が `outcome`(success/error) を `usage.jsonl` に記録、`aggregate_contribution_scores` でスキル別貢献スコアを集計し audit レポートに表示。② `detect_retirement_candidates` が低貢献スキルをアーカイブ候補として検出（クロスプロジェクトスコープ）。③ `max_skill_count`(30) を userConfig に追加し audit Summary に「スキル数/推奨上限」を表示。④ `correction_preflight_threshold`(3) を userConfig に追加し `evaluate_corrections` でスキル単位の correction 集中時に `/evolve-skill` 提案を自動出力。テスト 1807件（+7件）
+- 2026-05-20: **feat(fleet,hooks): CC v2.1.145 対応** — `rl-fleet status` 末尾にアクティブセッション表示（`_show_active_agents()` / `claude agents --json`）追加。`~/.claude/hooks/detect-deferred-task` が Stop フック入力の `background_tasks` / `session_crons` を処理。テスト 14件追加
 - 2026-05-20: **feat: コミュニティスキル import 機能を追加** — `bin/rl-fleet import <source>` で `owner/repo`・ローカルパス・URL からスキルを取得・インストール。`skill_importer.py`（parse/fetch/validate/preview/install）+ パス・トラバーサル多層防御。`/rl-anything:import` スキルラッパー追加
 - 2026-05-20: **feat: evolve 意図確認層 (Intention Check) を追加** — `regression_gate.intention_check()` が evolve Step 2.5 でパッチ候補を検査。Trigger 削除率 ≥30%・description 消失・disable-model-invocation 削除を BLOCK、effort low↔high・Jaccard<0.5 を WARN。evolve サマリに BLOCKED/WARNED を表示
 - 2026-05-20: **feat(pipeline_eval): スキル生成3型比較評価フレームワーク PipelineEvalRunner を追加** — 型1（パターン抽出）・型2（プロンプト最適化）を横断比較。`predicted_trigger` フィールドで FP/FN を実測値から算出。`compare()` で winner を数値決定
-- 2026-05-20: **fix(optimize): `llm_improve` モードで frontmatter が消失するバグを修正 (PR #175)** — `build_patch_prompt()` にプロンプトレベル防止指示を追加、`restore_frontmatter_if_lost()` を両最適化経路に適用。テスト 55件 pass
 
 ## Current Limitations / Known Issues
 

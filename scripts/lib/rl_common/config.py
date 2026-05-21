@@ -30,6 +30,11 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # skill_evolve_assessment: LLM 評価に含めるグローバルスキル名（カンマ区切り）。
     # デフォルト空 = global は全除外。自作グローバルスキルがある場合に追加する。
     "evolve_global_allowlist": "",
+    # スキル数の推奨上限。audit レポートに「スキル数 / 推奨上限」として表示される。
+    # Library Drift 研究（arXiv:2605.19576）に基づく管理可能なコレクションの目安。
+    "max_skill_count": 30,
+    # Pre-flight ガードレール: 同一スキルで N 回以上 correction が発火した場合に能動警告。
+    "correction_preflight_threshold": 3,
 }
 
 

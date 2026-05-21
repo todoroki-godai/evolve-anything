@@ -93,6 +93,44 @@ def aggregate_usage(
     return dict(sorted(counts.items(), key=lambda x: x[1], reverse=True))
 
 
+def aggregate_contribution_scores(
+    records: List[Dict[str, Any]],
+    min_invocations: int = 3,
+) -> Dict[str, Dict[str, Any]]:
+    """スキル別の貢献スコアを算出する。
+
+    outcome フィールドを持つレコードのみを集計対象とする。
+    invocations が min_invocations 未満のスキルは score=None（データ不足）とする。
+
+    Returns:
+        {skill_name: {"score": float|None, "success": int, "error": int, "total": int}}
+    """
+    buckets: Dict[str, Dict[str, int]] = {}
+    for rec in records:
+        skill = rec.get("skill_name", "")
+        outcome = rec.get("outcome")
+        if not skill or outcome not in ("success", "error", "skip"):
+            continue
+        if skill in _BUILTIN_TOOLS:
+            continue
+        b = buckets.setdefault(skill, {"success": 0, "error": 0, "skip": 0})
+        b[outcome] = b.get(outcome, 0) + 1
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for skill, b in buckets.items():
+        total = b["success"] + b["error"] + b.get("skip", 0)
+        score: float | None = None
+        if total >= min_invocations:
+            score = b["success"] / total if total > 0 else None
+        result[skill] = {
+            "score": score,
+            "success": b["success"],
+            "error": b["error"],
+            "total": total,
+        }
+    return result
+
+
 def aggregate_plugin_usage(records: List[Dict[str, Any]]) -> Dict[str, int]:
     """プラグイン別の使用回数を集計する。
 

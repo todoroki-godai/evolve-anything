@@ -43,6 +43,42 @@ class TestObserve:
         assert record["skill_name"] == "my-skill"
         assert record["session_id"] == "sess-001"
 
+    def test_skill_outcome_success(self, patch_data_dir):
+        """Skill 呼び出し成功時は outcome="success" が記録される。"""
+        event = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "my-skill", "args": ""},
+            "tool_result": {"is_error": False},
+            "session_id": "sess-out-001",
+        }
+        observe.handle_post_tool_use(event)
+        record = json.loads((patch_data_dir / "usage.jsonl").read_text().strip())
+        assert record["outcome"] == "success"
+
+    def test_skill_outcome_error(self, patch_data_dir):
+        """Skill 呼び出しでエラー時は outcome="error" が記録される。"""
+        event = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "bad-skill", "args": ""},
+            "tool_result": {"is_error": True, "content": "skill failed"},
+            "session_id": "sess-out-002",
+        }
+        observe.handle_post_tool_use(event)
+        record = json.loads((patch_data_dir / "usage.jsonl").read_text().strip())
+        assert record["outcome"] == "error"
+
+    def test_skill_outcome_non_dict_tool_result(self, patch_data_dir):
+        """tool_result が dict でない場合は outcome="success" にフォールバック。"""
+        event = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "my-skill", "args": ""},
+            "tool_result": None,
+            "session_id": "sess-out-003",
+        }
+        observe.handle_post_tool_use(event)
+        record = json.loads((patch_data_dir / "usage.jsonl").read_text().strip())
+        assert record["outcome"] == "success"
+
     def test_skill_usage_project_field(self, patch_data_dir):
         """Skill usage にプロジェクト名が記録される。"""
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/Users/foo/atlas-breeaders"}):
