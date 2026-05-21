@@ -105,6 +105,12 @@
       "type": "number",
       "description": "Trigger active Pre-flight warning when corrections for the same skill reach this count (default: 3). Set higher to reduce noise.",
       "sensitive": false
+    },
+    "error_preflight_threshold": {
+      "title": "Error Pre-flight Threshold",
+      "type": "number",
+      "description": "Inject pitfall guidance when session error count reaches this value (default: 3). HASP-style failure detection — lower values increase sensitivity. Set higher to reduce noise.",
+      "sensitive": false
     }
   }
 }

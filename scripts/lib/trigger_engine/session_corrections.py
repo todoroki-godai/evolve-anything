@@ -207,7 +207,7 @@ def evaluate_corrections(state: dict[str, Any] | None = None) -> TriggerResult:
     ]
 
     if skill_names:
-        action = f"/rl-anything:optimize {skill_names[0]}"
+        action = f"/rl-anything:evolve-skill {skill_names[0]}"
         skill_list = ", ".join(skill_names)
         message = f"Corrections が {count} 件蓄積。関連スキル: {skill_list}。推奨: {action}"
     else:

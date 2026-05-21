@@ -92,3 +92,9 @@ from .rationalization import (  # noqa: E402,F401
 
 # --- Pitfall 剪定オーケストレータ (runner.py) ---
 from .runner import pitfall_hygiene  # noqa: E402,F401
+from .injector import (  # noqa: E402,F401
+    count_recent_errors,
+    get_pitfall_for_skill,
+    is_already_injected,
+    mark_injected,
+)

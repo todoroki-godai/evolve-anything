@@ -83,7 +83,7 @@ def test_build_quality_trends_degraded():
     text = "\n".join(lines)
     assert "## Skill Quality Trends" in text
     assert "DEGRADED" in text
-    assert "/optimize commit" in text
+    assert "/rl-anything:evolve-skill commit" in text
 
 
 def test_build_quality_trends_normal():

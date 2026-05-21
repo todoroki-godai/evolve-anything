@@ -155,6 +155,37 @@ class TestObserve:
         record = json.loads(errors_file.read_text().strip())
         assert record["tool_name"] == "Bash"
 
+    def test_error_last_skill_name(self, patch_data_dir, tmp_path):
+        """エラーレコードに last_skill_name が含まれる。"""
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            common.write_last_skill("sess-lsn-001", "evolve")
+            event = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "false"},
+                "tool_result": {"is_error": True, "content": "exit code 1"},
+                "session_id": "sess-lsn-001",
+            }
+            observe.handle_post_tool_use(event)
+
+        errors_file = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_file.read_text().strip())
+        assert record["last_skill_name"] == "evolve"
+
+    def test_error_last_skill_name_empty_when_no_skill(self, patch_data_dir, tmp_path):
+        """last_skill がない場合は last_skill_name が空文字列。"""
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            event = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "false"},
+                "tool_result": {"is_error": True, "content": "fail"},
+                "session_id": "sess-lsn-none",
+            }
+            observe.handle_post_tool_use(event)
+
+        errors_file = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_file.read_text().strip())
+        assert record["last_skill_name"] == ""
+
     def test_error_project_field(self, patch_data_dir):
         """errors にプロジェクト名が記録される。"""
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/Users/foo/error-proj"}):

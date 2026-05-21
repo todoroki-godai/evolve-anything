@@ -13,15 +13,32 @@ from typing import Any, Dict, List
 from .classification import classify_artifact_origin
 
 
+def _is_plugin_managed_path(path: Path) -> bool:
+    """プラグイン管理パス（gstack 等）かどうかを判定する。
+
+    gstack は同一スキルを複数サブディレクトリ（.hermes/.kiro/.openclaw 等）に
+    意図的にコピーするため、これらは重複候補から除外する。
+    """
+    parts = path.parts
+    return any(part in ("gstack",) for part in parts)
+
+
 def detect_duplicates_simple(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
-    """簡易的な重複検出（ファイル名ベース）。LLM ベースの意味的類似度判定は別途実行。"""
+    """簡易的な重複検出（ファイル名ベース）。LLM ベースの意味的類似度判定は別途実行。
+
+    プラグイン管理パス（gstack 等）は除外する。
+    意図的なコピーを誤って重複候補に含めないため。
+    """
     seen: Dict[str, List[str]] = {}
     duplicates = []
 
     for category in ["skills", "rules"]:
         for path in artifacts.get(category, []):
+            if _is_plugin_managed_path(path):
+                continue
             name = path.stem if category == "rules" else path.parent.name
-            key = name.lower().replace("-", "").replace("_", "")
+            # category を key に含めてスキルとルールを別 namespace で管理
+            key = f"{category}:{name.lower().replace('-', '').replace('_', '')}"
             if key not in seen:
                 seen[key] = []
             seen[key].append(str(path))

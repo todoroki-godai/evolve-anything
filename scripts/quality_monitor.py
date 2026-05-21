@@ -250,10 +250,14 @@ def compute_baseline_score(skill_recs: List[Dict[str, Any]]) -> float:
 
 
 def compute_moving_average(skill_recs: List[Dict[str, Any]], window: int = 3) -> float:
-    """直近 N 回の移動平均を算出する。"""
+    """直近 N 回の移動平均を算出する。criteria キーが存在して空のレコード（採点失敗）は除外する。"""
     if not skill_recs:
         return 0.0
-    recent = skill_recs[-window:]
+    # criteria キーがある場合のみ空チェック。キー自体がない旧フォーマットは有効扱い
+    valid = [r for r in skill_recs if not ("criteria" in r and not r["criteria"])]
+    if not valid:
+        return 0.0
+    recent = valid[-window:]
     scores = [r.get("score", 0.0) for r in recent]
     return sum(scores) / len(scores)
 

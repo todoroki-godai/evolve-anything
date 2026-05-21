@@ -78,7 +78,10 @@ def build_quality_trends_section(
         if not skill_recs:
             continue
 
-        scores = [r.get("score", 0.0) for r in skill_recs]
+        # criteria キーがあって空のレコード（採点失敗）を除いた valid レコードを使用
+        valid_recs = [r for r in skill_recs if not ("criteria" in r and not r["criteria"])]
+        display_recs = valid_recs if valid_recs else skill_recs
+        scores = [r.get("score", 0.0) for r in display_recs]
         latest_score = scores[-1] if scores else 0.0
 
         # スパークライン（2件以上必要）
@@ -106,7 +109,7 @@ def build_quality_trends_section(
             parts.append(f" {sparkline}")
         parts.append(f" {latest_score:.2f}")
         if degraded:
-            parts.append(f" DEGRADED → /optimize {skill_name}")
+            parts.append(f" DEGRADED → /rl-anything:evolve-skill {skill_name}")
         elif rescore_needed:
             parts.append(" RESCORE NEEDED")
         lines.append("".join(parts))

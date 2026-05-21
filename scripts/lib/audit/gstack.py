@@ -124,10 +124,10 @@ def build_gstack_analytics_section(
     if funnel_parts:
         lines.append(f"Funnel: {' → '.join(funnel_parts)}")
 
-    # plan → retro 比率
+    # plan → retro 比率（retro を一度も使っていない場合は表示しない）
     plan_count = phase_counts.get("plan", 0)
     retro_count = phase_counts.get("retro", 0)
-    if plan_count > 0:
+    if plan_count > 0 and retro_count > 0:
         ratio = retro_count / plan_count
         if ratio <= 1.0:
             lines.append(f"Completion rate: {int(ratio * 100)}% ({retro_count}/{plan_count})")

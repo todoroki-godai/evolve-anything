@@ -24,7 +24,7 @@
 |----------------|------|
 | Observe hooks (15個) | LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録 |
 | Auto Trigger | セッション終了・corrections 蓄積・ファイル変更時に evolve/audit 実行を自動提案（`trigger_engine.py`） |
-| `userConfig` | CC v2.1.83 manifest.userConfig で trigger 閾値（auto_trigger/interval/cooldown 等）と cleanup スキル prefix（`cleanup_tmp_prefixes`）・slow command 閾値（`slow_threshold_ms`）・subagent 警告閾値（`subagent_warning_threshold`）・スキル数上限（`max_skill_count`=30）・correction pre-flight 閾値（`correction_preflight_threshold`=3）を含む 14 項目をプラグイン有効化時に設定可能 |
+| `userConfig` | CC v2.1.83 manifest.userConfig で trigger 閾値（auto_trigger/interval/cooldown 等）と cleanup スキル prefix（`cleanup_tmp_prefixes`）・slow command 閾値（`slow_threshold_ms`）・subagent 警告閾値（`subagent_warning_threshold`）・スキル数上限（`max_skill_count`=30）・correction pre-flight 閾値（`correction_preflight_threshold`=3）・error pre-flight 閾値（`error_preflight_threshold`=3）を含む 15 項目をプラグイン有効化時に設定可能 |
 | `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチで最適化 |
 | `rl-loop-orchestrator` | ベースライン取得→バリエーション生成→評価→人間確認のループ統合 |
 | `rl-scorer` エージェント | オーケストレーター(haiku) + 3サブエージェント並列(tech/struct=haiku, domain=sonnet)で3軸採点 |
@@ -51,8 +51,8 @@
 # 修正フィードバックの反映
 /rl-anything:reflect
 
-# 特定スキルの最適化
-/rl-anything:optimize my-skill
+# 特定スキルの自己進化パターン組み込み
+/rl-anything:evolve-skill my-skill
 
 # 環境の健康診断
 /rl-anything:audit

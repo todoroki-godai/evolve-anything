@@ -107,6 +107,7 @@ def handle_post_tool_use(event: dict) -> None:
         error_record = {
             "tool_name": tool_name,
             "skill_name": tool_input.get("skill", "") if tool_name == "Skill" else "",
+            "last_skill_name": common.read_last_skill(session_id) or "",
             "error": str(tool_result.get("content", ""))[:500],
             "timestamp": now,
             "session_id": session_id,
