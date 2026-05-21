@@ -2,12 +2,15 @@
 
 ## [Unreleased]
 
+## [1.60.0] - 2026-05-21
+
 ### Added
 - **HASP-style 失敗状態検知フック** (#188): セッション内エラーが `error_preflight_threshold`（デフォルト 3）に達すると、次の UserPromptSubmit タイミングで `last_skill` の `pitfalls.md` Active セクションを Claude のコンテキストに自動 inject。同一 session × skill では 1 度のみ inject（重複防止）。`pitfall_manager/injector.py` に inject ロジックを新規追加
 - **`error_preflight_threshold` userConfig**: `error_preflight_threshold`（デフォルト 3）を plugin.json userConfig に追加。inject 感度をユーザーが調整可能
 
 ### Changed
 - `hooks/observe.py`: エラーレコードに `last_skill_name` フィールドを追加（HASP inject のスキルマッチに使用）
+- `hooks/pitfall_injector.py`: `threshold` を `max(1,...)` でクランプ、`mark_injected` を `print()` 後に移動、`skill_name` の改行文字をストリップ
 
 ## [1.59.0] - 2026-05-21
 
