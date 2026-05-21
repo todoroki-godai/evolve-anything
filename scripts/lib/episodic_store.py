@@ -63,11 +63,13 @@ def _connect():
     db_path = get_db_path()
     con = _duckdb.connect(str(db_path))
     con.execute(_SCHEMA_SQL)
-    # correction 内容を含む DB はオーナーのみ読み書き可能にする
-    try:
-        db_path.chmod(0o600)
-    except OSError:
-        pass
+    # correction 内容を含む DB / WAL はオーナーのみ読み書き可能にする
+    for _p in [db_path, Path(str(db_path) + ".wal")]:
+        if _p.exists():
+            try:
+                _p.chmod(0o600)
+            except OSError:
+                pass
     return con
 
 
@@ -78,20 +80,24 @@ def insert_event(
     correction_type: str | None = None,
     confidence: float | None = None,
     ttl_days: int = 30,
-) -> None:
+) -> bool:
     """修正を episodic_events に挿入する。INSERT OR IGNORE で冪等。
 
-    DuckDB 未インストール時は silent skip。
-    DB アクセスエラー時は stderr に warn を出して skip (critical gap 対処)。
+    DuckDB 未インストール時は silent skip (False)。
+    DB アクセスエラー時は stderr に warn を出して False を返す。
+
+    Returns:
+        True if the row was written, False on skip or error.
     """
     if not HAS_DUCKDB:
-        return
+        return False
 
     now = _utcnow()
     event_id = f"{session_id}#{now.isoformat()}"
     expires_at = now + timedelta(days=max(ttl_days, 1))
 
     con = None
+    success = False
     try:
         con = _connect()
         con.execute(
@@ -113,12 +119,14 @@ def insert_event(
                 expires_at,
             ],
         )
+        success = True
     except (OSError, PermissionError) as e:
         print(f"[episodic_store] DB アクセスエラー (skip): {e}", file=sys.stderr)
     except Exception as e:
         print(f"[episodic_store] insert_event 失敗 (skip): {e}", file=sys.stderr)
     finally:
         _close(con)
+    return success
 
 
 def query_relevant(
@@ -177,10 +185,19 @@ def query_relevant(
             content_lower = content.lower()
             # Jaccard スコア（英数字トークン向け）
             score = _jaccard(keywords, event_tokens) if event_tokens else 0.0
-            # 日本語など空白分割が粗い場合: keyword の substring match を補完スコアとして加算
-            # recall ベース: matched / total_keywords で [0, 1] に収まる (ZeroDivisionError 防止)
+            # 日本語など空白分割が粗い場合: recall ベースの補完スコア
+            # 英語トークン: \b word-boundary で "git"→"digit" 誤マッチを防ぐ
+            # 日本語トークン: \b が機能しないため substring match（_MIN_KEYWORDS>=2 で守る）
+            # recall ベース: matched / total_keywords で [0, 1] に収まる
             if score == 0.0 and keywords:
-                matched = sum(1 for kw in keywords if kw.lower() in content_lower)
+                import re as _re
+
+                def _kw_matches(kw: str, text: str) -> bool:
+                    if _re.fullmatch(r"[a-z0-9]+", kw):
+                        return bool(_re.search(r"\b" + _re.escape(kw) + r"\b", text))
+                    return kw in text
+
+                matched = sum(1 for kw in keywords if _kw_matches(kw.lower(), content_lower))
                 if matched:
                     score = matched / len(keywords)  # recall score, always in [0, 1]
             if score > 0:

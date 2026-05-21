@@ -42,16 +42,15 @@ class TestInsertEvent:
         store.insert_event("sess1", "/pj/foo", "git diff より git status を使う")
         assert store.count_events() == 1
 
-    def test_insert_is_idempotent(self, store):
-        """同一 id の重複 INSERT は無視される。"""
+    def test_insert_is_idempotent(self, store, monkeypatch):
+        """_utcnow を固定して同一 id の重複 INSERT は 1 件になることを検証する。"""
         if not store.HAS_DUCKDB:
             pytest.skip("DuckDB not installed")
+        fixed = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(store, "_utcnow", lambda: fixed)
         store.insert_event("sess1", "/pj/foo", "同じ修正")
-        store.insert_event("sess1", "/pj/foo", "同じ修正")
-        # id は session_id#timestamp で生成されるため別 id になる → 2件
-        # 実際には insert_event は毎回 _utcnow() を使うため id が変わる。
-        # 冪等性は PRIMARY KEY 制約でなく呼び出し側（promote_to_episodic）が保証する。
-        assert store.count_events() >= 1
+        store.insert_event("sess1", "/pj/foo", "同じ修正")  # 同一 id → INSERT OR IGNORE
+        assert store.count_events() == 1
 
     def test_insert_without_duckdb(self, store, monkeypatch):
         """HAS_DUCKDB=False のときはサイレントスキップ。"""
@@ -82,9 +81,10 @@ class TestInsertEvent:
         db_path = store.get_db_path()
         db_path.chmod(0o444)
         try:
-            store.insert_event("s2", None, "readonly test")
-            captured = capsys.readouterr()
-            assert "episodic_store" in captured.err or True  # chmod 後 DuckDB が別 path を使う場合もある
+            result = store.insert_event("s2", None, "readonly test")
+            # read-only 時: DuckDB が PermissionError を投げるか silent-skip する
+            # 不変条件: (a) 例外が伝播しない、(b) False が返る または count が保たれる
+            assert result is False or store.count_events() >= 1
         finally:
             db_path.chmod(0o644)
 
@@ -115,8 +115,8 @@ class TestQueryRelevant:
         # expires_at を過去に書き換え
         import duckdb
         con = duckdb.connect(str(store.get_db_path()))
-        past = (_utcnow() - timedelta(days=2)).isoformat()
-        con.execute(f"UPDATE episodic_events SET expires_at = '{past}'")
+        past = _utcnow() - timedelta(days=2)
+        con.execute("UPDATE episodic_events SET expires_at = ?", [past])
         con.close()
         results = store.query_relevant({"古い", "修正"}, None)
         assert results == []
@@ -154,9 +154,10 @@ class TestPruneExpired:
         store.insert_event("s2", None, "期限切れレコード", ttl_days=30)
         import duckdb
         con = duckdb.connect(str(store.get_db_path()))
-        past = (_utcnow() - timedelta(days=1)).isoformat()
+        past = _utcnow() - timedelta(days=1)
         con.execute(
-            f"UPDATE episodic_events SET expires_at = '{past}' WHERE session_id = 's2'"
+            "UPDATE episodic_events SET expires_at = ? WHERE session_id = ?",
+            [past, "s2"],
         )
         con.close()
         deleted = store.prune_expired()

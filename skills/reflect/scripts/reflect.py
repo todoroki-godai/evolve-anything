@@ -42,8 +42,8 @@ except ImportError:
     def find_episodic_duplicates(*_, **__):  # type: ignore[misc]
         return []
 
-    def promote_to_episodic(*_, **__):  # type: ignore[misc]
-        pass
+    def promote_to_episodic(*_, **__) -> bool:  # type: ignore[misc]
+        return False
 
 # corrections.jsonl / errors.jsonl のデフォルトパス
 CORRECTIONS_FILE = Path.home() / ".claude" / "rl-anything" / "corrections.jsonl"
@@ -695,8 +695,12 @@ def main():
             sys.exit(1)
         corr = matched[0]
         corr.setdefault("project_path", current_project)
-        promote_to_episodic(corr)
-        print(json.dumps({"status": "promoted", "session_id": args.session_id, "timestamp": args.timestamp}, ensure_ascii=False))
+        ok = promote_to_episodic(corr)
+        if ok:
+            print(json.dumps({"status": "promoted", "session_id": args.session_id, "timestamp": args.timestamp}, ensure_ascii=False))
+        else:
+            print(json.dumps({"status": "error", "message": "episodic 昇格に失敗しました（DuckDB 未インストールまたは DB エラー）"}, ensure_ascii=False))
+            sys.exit(1)
         return
 
     # 偽陽性の自動クリーンアップ（180日超）

@@ -862,8 +862,8 @@ class TestBuildOutputEpisodicContext:
 
 
 class TestPromoteEpisodicSubcommand:
-    def test_promote_episodic_not_found(self, tmp_path):
-        """--promote-episodic で対象 correction が見つからない場合 not_found を返す。"""
+    def test_promote_episodic_not_found(self, tmp_path, capsys):
+        """--promote-episodic で対象 correction が見つからない場合 exit(1) + not_found JSON を返す。"""
         filepath = _write_corrections(tmp_path, [_make_correction()])
         with mock.patch("sys.argv", [
             "reflect", "--promote-episodic",
@@ -872,9 +872,14 @@ class TestPromoteEpisodicSubcommand:
             "--corrections-file", str(filepath),
         ]):
             with mock.patch("reflect.promote_to_episodic") as mock_promote:
-                with pytest.raises(SystemExit):
+                with pytest.raises(SystemExit) as exc_info:
                     reflect.main()
+                assert exc_info.value.code == 1
                 mock_promote.assert_not_called()
+        captured = capsys.readouterr()
+        import json as _json
+        out = _json.loads(captured.out)
+        assert out["status"] == "not_found"
 
     def test_promote_episodic_calls_promote(self, tmp_path):
         """--promote-episodic で対象 correction が見つかると promote_to_episodic が呼ばれる。"""
@@ -889,7 +894,7 @@ class TestPromoteEpisodicSubcommand:
             "--timestamp", ts,
             "--corrections-file", str(filepath),
         ]):
-            with mock.patch("reflect.promote_to_episodic") as mock_promote:
+            with mock.patch("reflect.promote_to_episodic", return_value=True) as mock_promote:
                 reflect.main()
                 mock_promote.assert_called_once()
                 called_corr = mock_promote.call_args[0][0]
