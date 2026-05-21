@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.61.1] - 2026-05-21
+
+### Fixed
+- **episodic /review 指摘対応** — `promote_to_episodic` が DuckDB エラー時も `"promoted"` を返す不具合を修正（bool 返し + `{"status":"error"}` + exit 1）。`.db.wal` も `chmod(0o600)` に追加。英語トークンを `\b` word-boundary で substring recall 誤マッチ（git→digit 等）を防止。`find_episodic_duplicates` 内で `prune_expired()` を opportunistic 呼び出し。vacuous test 3件を意味ある assertion に修正（INSERT OR IGNORE 実証・exit code 検証・f-string SQL → parameterized）。471 tests passed
+
+### Changed
+- **SPEC.md 更新** — MemOS テーブルに Episodic 層（L1/L2 橋渡し）を追加、modules 数更新、Recent Changes 整備
+
 ## [1.61.0] - 2026-05-21
 
 ### Added
