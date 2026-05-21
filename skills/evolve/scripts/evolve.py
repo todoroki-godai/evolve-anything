@@ -561,10 +561,30 @@ def run_evolve(
                 ))
 
         classified = classify_remediation_issues(issues)
+
+        # proposable を custom/global スコープ別に集計（#183 false positive 可視化）
+        from audit import classify_artifact_origin  # artifact_scope は re-export しないため audit から直接 import
+        proposable_custom = []
+        proposable_global = []
+        for issue in classified["proposable"]:
+            file_path = issue.get("file", "")
+            origin = "custom"
+            if file_path:
+                try:
+                    origin = classify_artifact_origin(Path(file_path))
+                except Exception:
+                    pass
+            if origin == "global":
+                proposable_global.append(issue)
+            else:
+                proposable_custom.append(issue)
+
         remediation_data = {
             "total_issues": len(issues),
             "auto_fixable": len(classified["auto_fixable"]),
             "proposable": len(classified["proposable"]),
+            "proposable_custom": len(proposable_custom),
+            "proposable_global": len(proposable_global),
             "manual_required": len(classified["manual_required"]),
             "classified": classified,
         }

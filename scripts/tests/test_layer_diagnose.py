@@ -150,6 +150,23 @@ def test_rules_no_rules_dir(tmp_path):
     assert issues == []
 
 
+def test_rules_stale_rule_tech_term_no_false_positive(tmp_path):
+    """技術用語列（buildspec/CDK/Terraform/Lambda 等）は stale_rule の誤検知にならない。"""
+    rules_dir = tmp_path / ".claude" / "rules"
+    rules_dir.mkdir(parents=True)
+    # infra-ship-gate.md と同様のパターン — スラッシュ区切りの技術用語
+    (rules_dir / "infra-ship-gate.md").write_text(
+        "# インフラ変更\n"
+        "- diff に buildspec/CDK/Terraform/Lambda 等インフラファイルが含まれる場合、/ship する\n"
+        "- walk/ingest するコードは規模感を取ること\n"
+    )
+
+    issues = diagnose_rules(tmp_path)
+    stale_issues = [i for i in issues if i["type"] == "stale_rule"]
+    # 技術用語列はファイルパスとして扱わない
+    assert len(stale_issues) == 0
+
+
 # ── diagnose_memory ──────────────────────────────
 
 

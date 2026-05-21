@@ -209,8 +209,12 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
         })
 
     # hardcoded values（ハードコード値検出）
+    from . import classify_artifact_origin as _classify_origin  # noqa: E402
     for category in ("skills", "rules"):
         for path in artifacts.get(category, []):
+            # global/plugin スキルは外部管理のため除外
+            if _classify_origin(path) in ("global", "plugin"):
+                continue
             detections = detect_hardcoded_values(str(path))
             for det in detections:
                 issues.append({

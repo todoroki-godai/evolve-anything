@@ -27,9 +27,9 @@ _MODULE_PATTERN = re.compile(
     r"(?:^|\s)([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)(?:\s|$|[,、。])"
 )
 
-# ファイルパスパターン（coherence.py と同様）
+# ファイルパスパターン — 拡張子で終わるもののみ対象（スラッシュ終わりは技術用語列の誤検知を招くため除外）
 _PATH_PATTERN = re.compile(
-    r"(?:^|\s)([a-zA-Z_.][a-zA-Z0-9_./\-]*(?:\.(?:py|md|json|jsonl|yaml|yml|toml|sh|ts|js)|/))"
+    r"(?:^|\s)([a-zA-Z_.][a-zA-Z0-9_./\-]*\.(?:py|md|json|jsonl|yaml|yml|toml|sh|ts|js))"
 )
 
 
@@ -105,7 +105,7 @@ def diagnose_rules(project_dir: Path, *, coherence_result: Optional[Dict[str, An
 
         for line_num, line in enumerate(content.splitlines(), 1):
             for m in _PATH_PATTERN.finditer(line):
-                ref_path = m.group(1).rstrip("/")
+                ref_path = m.group(1)
                 if len(ref_path) < 5 or ref_path.startswith("http"):
                     continue
                 if "/" not in ref_path:
