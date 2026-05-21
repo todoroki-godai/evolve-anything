@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.58.1] - 2026-05-21
+
+### Fixed
+- **fix(evolve): レポートのノイズ除去と推奨アクションの actionability 改善 (#184)** — stale_rule 誤検知（技術用語列 `buildspec/CDK/Terraform/Lambda` 等）を `_PATH_PATTERN` 拡張子必須化で解消。hardcoded_value 検出で global/plugin スキルを除外。`proposable_custom`/`proposable_global` フィールド追加で scope 別件数を分離表示。推奨アクション出力を 🔴/🟡/✅ 判定カード形式に変更。`classify_artifact_origin` を `audit` から直接 import するよう修正（`artifact_scope` re-export 漏れによる ImportError を解消）。
+
 ## [1.58.0] - 2026-05-21
 
 ### Added
