@@ -7,7 +7,7 @@ from collections import defaultdict
 
 BASELINE_PATH = os.path.join(os.path.dirname(__file__), "lsp_baseline.json")
 BASE = os.path.expanduser("~/.claude/projects")
-LSP_TOOLS = {"goToDefinition", "findReferences", "hover", "documentSymbol",
+LSP_TOOLS = {"LSP", "goToDefinition", "findReferences", "hover", "documentSymbol",
              "workspaceSymbol", "goToImplementation", "prepareCallHierarchy",
              "incomingCalls", "outgoingCalls"}
 

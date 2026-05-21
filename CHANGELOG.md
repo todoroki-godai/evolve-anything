@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.62.0] - 2026-05-22
+
+### Added
+- **feat(implement): /implement スキルに depends_on グラフと Ready tasks 検出を追加** — タスク表の「依存」列を task # 列記に formal 化（自由テキスト廃止）。topological sort で循環依存を検出して ERR で停止（ユーザー承認前に実施）。Ralph Loop 開始前に `Ready: T1,T3 / Blocked: T2` 形式の依存状態を表示。各タスク前に depends_on チェック（step 0）を追加し、マルチパス再評価でデッドロック検出を強化。Parallel モードはクロスレーン depends_on を検出して Standard に自動デグレード。テレメトリ: `tasks_completed → list[str]` + `tasks_count(int)` 両建てでセッション再開に対応。
+
+### Fixed
+- **fix(implement): adversarial review 対応** — 循環依存チェックをユーザー承認前に移動。センチネル `—`（em-dash のみ）を明示仕様化。マルチパス Ralph Loop でブロック解消後の再評価を保証。
+- **fix(lsp): LSP ツール名を LSP_TOOLS セットに追加** — `lsp_measure.py` の LSP ツール呼び出し追跡に対応。
+
 ## [1.61.1] - 2026-05-21
 
 ### Fixed
