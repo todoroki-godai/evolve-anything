@@ -49,7 +49,7 @@ skills/                 ← スキル定義（21個）
   implement/            ← 構造化実装スキル（plan → 実装 → 計画準拠チェック → テレメトリ）。Standard モードはタスク境界で認知分離（context: fresh 相当）を宣言し、前タスクの実装詳細はメモリ参照でなく Read で確認する
   cleanup/              ← PR マージ・デプロイ後の後片付け（branches/worktrees/tmp dirs/Issues/Test plan）を個別承認→実行 [ADR-021]
 
-scripts/lib/            ← 共通ロジック（14 パッケージ・116 モジュール）[ADR-019]
+scripts/lib/            ← 共通ロジック（14 パッケージ・118 モジュール）[ADR-019]
   audit/                ← 環境健康診断（11 サブモジュール: memory/gstack/quality/issues/classification/artifacts/usage/scope/sections/report/orchestrator）。`usage.py` に `aggregate_contribution_scores`（スキル別貢献スコア集計）を追加（v1.59.0）
   discover/             ← パターン検出 + スキル/ルール候補生成
   fleet/                ← 全 PJ 横断観測
