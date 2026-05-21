@@ -79,16 +79,34 @@ corrections の `apply: true` のものを確認なしで適用する:
 
 ### Step 6: 各 correction を対話レビュー
 
-duplicate_found が true の correction は「既に記録済み」と表示し、自動スキップするか確認する。
+**3層メモリ参照 (issue #189)**:
+出力 JSON の各 correction を以下の順で確認し、表示を調整する:
+1. `duplicate_found: true` → 「semantic 層 (MEMORY.md) に記録済み」と表示し、自動スキップを提案する
+2. `duplicate_in: "episodic"` → 「episodic 層に記録済み（`episodic_context.days_ago`日前）: `episodic_context.content`」と表示し、スキップを提案する
+   - 例: 「3日前に適用済み: 'git diff で変更確認'」
+3. 上記いずれでもない → 新規修正として通常レビューに進む
 
 各 correction について AskUserQuestion で以下の選択肢を提供する:
-- **approve**: suggested_file に書き込み → reflect_status を "applied" に更新
-- **edit**: ユーザーの編集内容で書き込み
+- **approve**: suggested_file に書き込み → reflect_status を "applied" に更新 → **episodic 昇格 (後述)**
+- **edit**: ユーザーの編集内容で書き込み → reflect_status を "applied" に更新 → episodic 昇格
 - **false-positive**: 偽陽性として報告 → `false_positives.jsonl` に SHA-256 ハッシュを追記し、reflect_status を "skipped" に更新
 - **skip**: reflect_status を "skipped" に更新
 
 3件目以降は追加の選択肢を提供する:
 - **skip-remaining**: 残り全件を "skipped" に更新して終了
+
+#### episodic 昇格 (approve/edit 後に必ず実行)
+
+correction を approve または edit で適用した後、以下を実行して episodic 層に昇格する:
+
+```bash
+rl-reflect --promote-episodic \
+  --session-id "<correction の session_id>" \
+  --timestamp  "<correction の timestamp>"
+```
+
+出力 JSON の `{"status": "promoted", ...}` を確認してから次の correction に進む。
+`session_id` または `timestamp` がない correction は昇格をスキップする（silent ok）。
 
 #### 書き込み時のルール
 

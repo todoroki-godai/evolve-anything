@@ -217,7 +217,7 @@ class TestRouteCorrections:
         rules_dir = tmp_path / ".claude" / "rules"
         rules_dir.mkdir(parents=True)
         rule = rules_dir / "big-rule.md"
-        rule.write_text("line1\nline2\nline3\nline4\nline5\nline6\n")
+        rule.write_text("\n".join(f"line{i}" for i in range(1, 13)) + "\n")  # 12行 > MAX_RULE_LINES(10)
 
         corrections = [dict(_make_correction(), _scope="same-project")]
         with mock.patch("reflect.suggest_claude_file", return_value=(str(rule), 0.80)):
@@ -646,7 +646,7 @@ class TestAnalyzeToolCallPatterns:
         result = reflect.analyze_tool_call_patterns(corrections)
         assert len(result["failure_patterns"]) >= 1
         assert result["failure_patterns"][0]["count"] >= 2
-        assert result["failure_patterns"][0]["sequence"] == ["Bash", "Edit"]
+        assert result["failure_patterns"][0]["sequence"] == "Bash(fail) → Edit"
 
     def test_sequence_below_threshold_not_included(self):
         """シーケンス出現が1件のみ → failure_patterns に含まれない。"""
@@ -780,3 +780,117 @@ class TestBuildOutputNewFields:
                 result = reflect.build_output([c], [c])
 
         assert result["corrections"][0]["preceding_tool_calls"] == calls
+
+
+# --- Test: episodic integration (3層メモリ) ---
+
+def _pending_correction(**kwargs):
+    c = _make_correction(**kwargs)
+    c["_scope"] = "same-project"
+    c["routing_hint"] = "project"
+    c["suggested_file"] = "/tmp/test.md"
+    c["duplicate_found"] = False
+    c["duplicate_in"] = None
+    return c
+
+
+class TestBuildOutputEpisodicContext:
+    def test_no_episodic_when_disabled(self):
+        """_HAS_EPISODIC=False のとき episodic_context フィールドは付かない。"""
+        c = _pending_correction()
+        with mock.patch("reflect._HAS_EPISODIC", False):
+            with mock.patch("reflect.find_promotion_candidates", return_value=[]):
+                with mock.patch("reflect.load_recent_error_classes", return_value={"by_class": {}, "by_type": {}}):
+                    result = reflect.build_output([c], [c])
+        assert "episodic_context" not in result["corrections"][0]
+
+    def test_episodic_context_added_when_match(self):
+        """find_episodic_duplicates がマッチを返すと episodic_context が付く。"""
+        c = _pending_correction()
+        fake_match = [{
+            "correction_index": 0,
+            "episodic_id": "s1#ts1",
+            "episodic_content": "git diff で確認",
+            "days_ago": 3,
+            "score": 0.5,
+        }]
+        with mock.patch("reflect._HAS_EPISODIC", True):
+            with mock.patch("reflect.find_episodic_duplicates", return_value=fake_match):
+                with mock.patch("reflect.find_promotion_candidates", return_value=[]):
+                    with mock.patch("reflect.load_recent_error_classes", return_value={"by_class": {}, "by_type": {}}):
+                        result = reflect.build_output([c], [c])
+        entry = result["corrections"][0]
+        assert "episodic_context" in entry
+        assert entry["episodic_context"]["days_ago"] == 3
+        assert entry["episodic_context"]["score"] == 0.5
+
+    def test_episodic_sets_duplicate_in(self):
+        """episodic match があり duplicate_found=False の場合 duplicate_in が 'episodic' になる。"""
+        c = _pending_correction()
+        fake_match = [{
+            "correction_index": 0,
+            "episodic_id": "s1#ts1",
+            "episodic_content": "既出修正",
+            "days_ago": 5,
+            "score": 0.4,
+        }]
+        with mock.patch("reflect._HAS_EPISODIC", True):
+            with mock.patch("reflect.find_episodic_duplicates", return_value=fake_match):
+                with mock.patch("reflect.find_promotion_candidates", return_value=[]):
+                    with mock.patch("reflect.load_recent_error_classes", return_value={"by_class": {}, "by_type": {}}):
+                        result = reflect.build_output([c], [c])
+        assert result["corrections"][0]["duplicate_in"] == "episodic"
+
+    def test_existing_duplicate_not_overwritten(self):
+        """すでに duplicate_found=True の場合 duplicate_in は上書きしない。"""
+        c = _pending_correction()
+        c["duplicate_found"] = True
+        c["duplicate_in"] = "CLAUDE.md"
+        fake_match = [{
+            "correction_index": 0,
+            "episodic_id": "s1#ts1",
+            "episodic_content": "既出",
+            "days_ago": 1,
+            "score": 0.3,
+        }]
+        with mock.patch("reflect._HAS_EPISODIC", True):
+            with mock.patch("reflect.find_episodic_duplicates", return_value=fake_match):
+                with mock.patch("reflect.find_promotion_candidates", return_value=[]):
+                    with mock.patch("reflect.load_recent_error_classes", return_value={"by_class": {}, "by_type": {}}):
+                        result = reflect.build_output([c], [c])
+        assert result["corrections"][0]["duplicate_in"] == "CLAUDE.md"
+
+
+class TestPromoteEpisodicSubcommand:
+    def test_promote_episodic_not_found(self, tmp_path):
+        """--promote-episodic で対象 correction が見つからない場合 not_found を返す。"""
+        filepath = _write_corrections(tmp_path, [_make_correction()])
+        with mock.patch("sys.argv", [
+            "reflect", "--promote-episodic",
+            "--session-id", "nonexistent",
+            "--timestamp", "2099-01-01T00:00:00+00:00",
+            "--corrections-file", str(filepath),
+        ]):
+            with mock.patch("reflect.promote_to_episodic") as mock_promote:
+                with pytest.raises(SystemExit):
+                    reflect.main()
+                mock_promote.assert_not_called()
+
+    def test_promote_episodic_calls_promote(self, tmp_path):
+        """--promote-episodic で対象 correction が見つかると promote_to_episodic が呼ばれる。"""
+        ts = datetime.now(timezone.utc).isoformat()
+        sid = "session-abc"
+        c = _make_correction(timestamp=ts)
+        c["session_id"] = sid
+        filepath = _write_corrections(tmp_path, [c])
+        with mock.patch("sys.argv", [
+            "reflect", "--promote-episodic",
+            "--session-id", sid,
+            "--timestamp", ts,
+            "--corrections-file", str(filepath),
+        ]):
+            with mock.patch("reflect.promote_to_episodic") as mock_promote:
+                reflect.main()
+                mock_promote.assert_called_once()
+                called_corr = mock_promote.call_args[0][0]
+                assert called_corr["session_id"] == sid

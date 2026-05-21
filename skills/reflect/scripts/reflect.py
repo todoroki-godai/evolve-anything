@@ -33,6 +33,18 @@ from similarity import tokenize
 
 from rl_common import cleanup_false_positives
 
+try:
+    from episodic_retriever import find_episodic_duplicates, promote_to_episodic
+    _HAS_EPISODIC = True
+except ImportError:
+    _HAS_EPISODIC = False
+
+    def find_episodic_duplicates(*_, **__):  # type: ignore[misc]
+        return []
+
+    def promote_to_episodic(*_, **__):  # type: ignore[misc]
+        pass
+
 # corrections.jsonl / errors.jsonl のデフォルトパス
 CORRECTIONS_FILE = Path.home() / ".claude" / "rl-anything" / "corrections.jsonl"
 ERRORS_FILE = Path.home() / ".claude" / "rl-anything" / "errors.jsonl"
@@ -516,6 +528,13 @@ def build_output(
     if not pending:
         return {"status": "empty", "message": "未処理の修正はありません"}
 
+    # episodic 層の重複候補を事前取得（3層メモリ: working → episodic → semantic）
+    project_path = str(project_root) if project_root else None
+    episodic_matches: dict[int, dict] = {}
+    if _HAS_EPISODIC:
+        for m in find_episodic_duplicates(pending, project_path):
+            episodic_matches[m["correction_index"]] = m
+
     corrections_out = []
     for i, c in enumerate(pending):
         entry = {
@@ -546,6 +565,19 @@ def build_output(
 
         if apply_all:
             entry["apply"] = c.get("confidence", 0.5) >= min_confidence
+
+        # episodic_context: 直近セッションで同様の修正が適用済みか
+        if i in episodic_matches:
+            em = episodic_matches[i]
+            entry["episodic_context"] = {
+                "id": em["episodic_id"],
+                "content": em["episodic_content"],
+                "days_ago": em["days_ago"],
+                "score": em["score"],
+            }
+            # episodic で既出の場合は duplicate_in を上書き
+            if not entry.get("duplicate_found"):
+                entry["duplicate_in"] = "episodic"
 
         corrections_out.append(entry)
 
@@ -639,11 +671,33 @@ def main():
     parser.add_argument("--skip-semantic", action="store_true", help="セマンティック検証をスキップ")
     parser.add_argument("--model", default="sonnet", help="セマンティック検証のモデル")
     parser.add_argument("--corrections-file", type=str, default=None, help="corrections.jsonl のパス（テスト用）")
+    parser.add_argument("--promote-episodic", action="store_true", help="指定 correction を episodic 層に昇格")
+    parser.add_argument("--session-id", type=str, default=None, help="--promote-episodic: 昇格する correction の session_id")
+    parser.add_argument("--timestamp", type=str, default=None, help="--promote-episodic: 昇格する correction の timestamp")
     args = parser.parse_args()
 
     corrections_file = Path(args.corrections_file) if args.corrections_file else CORRECTIONS_FILE
     current_project = os.environ.get("CLAUDE_PROJECT_DIR")
     project_root = Path(current_project) if current_project else Path.cwd()
+
+    # --promote-episodic: 指定 session_id + timestamp の correction を episodic に昇格
+    if args.promote_episodic:
+        if not args.session_id or not args.timestamp:
+            print(json.dumps({"status": "error", "message": "--session-id と --timestamp が必要です"}, ensure_ascii=False))
+            sys.exit(1)
+        all_records = load_corrections(corrections_file)
+        matched = [
+            r for r in all_records
+            if r.get("session_id") == args.session_id and r.get("timestamp") == args.timestamp
+        ]
+        if not matched:
+            print(json.dumps({"status": "not_found", "message": "対象 correction が見つかりません"}, ensure_ascii=False))
+            sys.exit(1)
+        corr = matched[0]
+        corr.setdefault("project_path", current_project)
+        promote_to_episodic(corr)
+        print(json.dumps({"status": "promoted", "session_id": args.session_id, "timestamp": args.timestamp}, ensure_ascii=False))
+        return
 
     # 偽陽性の自動クリーンアップ（180日超）
     cleaned = cleanup_false_positives()
