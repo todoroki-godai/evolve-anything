@@ -30,6 +30,28 @@ except ImportError:
     pass
 
 
+def _classify_error_category(correction_type: str) -> str | None:
+    """correction_type から error_category を判定する。LLM コストゼロ（辞書ルックアップのみ）。
+
+    読み取り側は .get("error_category", None) でアクセスすること（T3 実装者への注記）。
+    positive パターンは失敗ではないため None を返す（フィールド自体を省略）。
+    """
+    info = common.CORRECTION_PATTERNS.get(correction_type)
+    if info is None:
+        return "unknown"
+    t = info.get("type", "")
+    if t == "guardrail":
+        return "guardrail"
+    elif t == "correction":
+        return "behavioral"
+    elif t == "positive":
+        return None
+    elif t == "explicit":
+        return "explicit"
+    else:
+        return "unknown"
+
+
 def handle_user_prompt_submit(event: dict) -> None:
     """UserPromptSubmit イベントを処理する。"""
     common.ensure_data_dir()
@@ -96,6 +118,7 @@ def handle_user_prompt_submit(event: dict) -> None:
 
     # corrections.jsonl に拡張スキーマで追記
     now = datetime.now(timezone.utc).isoformat()
+    error_category = _classify_error_category(correction_type)
     record = {
         "correction_type": correction_type,
         "matched_patterns": matched_patterns,
@@ -114,6 +137,8 @@ def handle_user_prompt_submit(event: dict) -> None:
         "timestamp": now,
         "session_id": session_id,
     }
+    if error_category is not None:
+        record["error_category"] = error_category
     common.append_jsonl(common.DATA_DIR / "corrections.jsonl", record)
 
     # Corrections threshold trigger evaluation (plain-text output)

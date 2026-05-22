@@ -270,6 +270,35 @@ def _load_lsp_json(project_dir: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def build_corrections_insights_section(
+    corrections_file: Path | None = None,
+    top_n: int = 5,
+) -> List[str]:
+    """繰り返し失敗パターン TOP-N セクションを生成する。
+
+    corrections が MIN_DISPLAY_RECORDS 件未満の場合はスキップ（空リスト返却）。
+    """
+    import sys as _sys
+    _LIB = Path(__file__).resolve().parent.parent
+    if str(_LIB) not in _sys.path:
+        _sys.path.insert(0, str(_LIB))
+
+    from corrections_insights import count_repeated_patterns  # noqa: PLC0415
+
+    # count_repeated_patterns 内部で MIN_DISPLAY_RECORDS チェック済み → 二重読み込み不要
+    patterns = count_repeated_patterns(corrections_file=corrections_file, top_n=top_n)
+    if not patterns:
+        return []
+
+    lines: List[str] = [f"## 繰り返し失敗パターン TOP-{top_n}", ""]
+    for i, p in enumerate(patterns, 1):
+        lines.append(f"{i}. `{p['correction_type']}` — {p['count']} 回")
+        if p.get("example_messages"):
+            lines.append(f"   例: 「{p['example_messages'][0]}」")
+    lines.append("")
+    return lines
+
+
 def build_lsp_suggestion_section(project_dir: Path) -> Optional[List[str]]:
     """LSP未設定のPJに対して導入提案セクションを生成する。
 

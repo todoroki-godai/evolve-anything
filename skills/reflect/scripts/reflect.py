@@ -68,6 +68,40 @@ _MEMORY_STOP_WORDS = frozenset({
 })
 
 
+def calculate_importance_score(correction: dict) -> float:
+    """correction レコードの重要度スコアを計算する。
+
+    heuristic: confidence × max(0, 1 - elapsed_days / decay_days)
+    結果は [0.0, 1.0] に clamp する。
+
+    LLM 呼び出しなしの純粋関数。外部依存なし。
+
+    Args:
+        correction: corrections.jsonl の1件のレコード
+    Returns:
+        float: 重要度スコア [0.0, 1.0]
+    """
+    try:
+        confidence = float(correction.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    decay_days = correction.get("decay_days", 90)
+    timestamp_str = correction.get("timestamp", "")
+
+    if not timestamp_str or decay_days <= 0:
+        return min(1.0, max(0.0, confidence))
+
+    try:
+        ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        elapsed_days = (now - ts).total_seconds() / 86400
+        decay_factor = max(0.0, 1.0 - elapsed_days / decay_days)
+        score = float(confidence) * decay_factor
+        return min(1.0, max(0.0, score))
+    except (ValueError, TypeError):
+        return float(confidence)
+
+
 def load_corrections(filepath: Path = CORRECTIONS_FILE) -> list[dict]:
     """corrections.jsonl を読み込む。"""
     if not filepath.exists():
@@ -542,6 +576,7 @@ def build_output(
             "message": c.get("message", ""),
             "correction_type": c.get("correction_type", ""),
             "confidence": c.get("confidence", 0.5),
+            "importance_score": calculate_importance_score(c),
             "routing_hint": c.get("routing_hint", "project"),
             "suggested_file": c.get("suggested_file"),
             "duplicate_found": c.get("duplicate_found", False),

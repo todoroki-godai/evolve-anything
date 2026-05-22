@@ -79,6 +79,22 @@ corrections の `apply: true` のものを確認なしで適用する:
 
 ### Step 6: 各 correction を対話レビュー
 
+#### importance_score フィルタ（Mem-π）
+
+reflect.py が各 correction に `importance_score` (0.0〜1.0) を付与する。
+
+**デフォルト動作:** `importance_score < 0.2` の correction は自動スキップ候補として表示し、
+ユーザーに確認してからスキップする（強制スキップではない）。
+
+importance_score の計算式:
+
+```
+confidence × max(0, 1 - elapsed_days / decay_days)
+```
+
+- elapsed_days: correction 記録からの経過日数
+- decay_days: correction レコードの decay_days フィールド（デフォルト 90 日）
+
 **3層メモリ参照 (issue #189)**:
 出力 JSON の各 correction を以下の順で確認し、表示を調整する:
 1. `duplicate_found: true` → 「semantic 層 (MEMORY.md) に記録済み」と表示し、自動スキップを提案する

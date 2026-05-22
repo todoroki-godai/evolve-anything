@@ -1,6 +1,6 @@
 # SPEC.md — rl-anything
 
-Last updated: 2026-05-21 by /spec-keeper update (feat/implement-depends-on)
+Last updated: 2026-05-22 by /spec-keeper update (feat/issue-194-agentAtlas-insights-mempi)
 
 ## Overview
 
@@ -95,11 +95,11 @@ L1→L4 結晶化アーキテクチャと同型の設計を採用する（[ADR-0
 
 直近の変更概要。完全な履歴は [CHANGELOG.md](CHANGELOG.md) を参照。
 
+- 2026-05-22: **feat(telemetry/audit/reflect): AgentAtlas / Insights Generator / Mem-π v1.63.0 (#194)** — ①`error_category` フィールドを corrections.jsonl に hook が自動付与（LLMコストゼロ分類: behavioral/guardrail/explicit/unknown）。②新モジュール `corrections_insights.py` で繰り返し失敗パターン TOP-N を集計し `/audit` レポートに自動表示（件数閾値10件）。③`score_failure_distribution()` を telemetry.py に追加し `compute_telemetry_score` の戻り値に `failure_distribution` キーを付与。④`calculate_importance_score()` を reflect.py に追加（Mem-π: `confidence × max(0, 1 - elapsed_days / decay_days)`、clamp [0.0, 1.0]）。⑤evolve-skill pre-flight に冪等性チェック追記（12-factor-agents Factor 5-6）。テスト +39件
 - 2026-05-21: **feat(implement): depends_on グラフと Ready tasks 検出** — `/implement` スキルに beads インスパイアのタスク依存グラフを追加。「依存」列を task # 列記に formal 化、topological sort で循環依存を検出（ERR で停止）、Ralph Loop 開始前に Ready/Blocked 一覧を表示、各タスク前に depends_on チェックを実施。Parallel モードはクロスレーン依存を検出して Standard に自動デグレード。テレメトリ: `tasks_completed → list[str]` + `tasks_count(int)` に変更
 - 2026-05-21: **feat(memory): 階層型クロスセッションメモリ v1.61.0 (#189)** — 同じ修正が繰り返されなくなる。`reflect` approve 時に `episodic.db`（DuckDB TTL 30d）に昇格し、次セッションで「N日前に対処済み」として surface。`episodic_store.py` / `episodic_retriever.py` 追加。`rl-reflect --promote-episodic` CLI で手動昇格も可能。471 tests passed
 - 2026-05-21: **feat(pitfall-inject): HASP-style 失敗状態検知 pitfall inject v1.60.0 (#188)** — セッション内エラーが `error_preflight_threshold`(デフォルト3) に達した時、`last_skill` の `pitfalls.md` Active セクションを UserPromptSubmit で自動 inject。`hooks/pitfall_injector.py` + `pitfall_manager/injector.py` 追加。重複防止 (`/tmp/rl-anything-injected-{session_id}.json`)。inject 遅延1ターンは CC API 制約（TODOS.md P3）。テスト +27件
 - 2026-05-21: **feat(lifecycle): スキルライフサイクル管理の強化 v1.59.0 (#186)** — Library Drift (arXiv:2605.19576) / HASP (arXiv:2605.17734) 対応。① `observe.py` が `outcome`(success/error) を `usage.jsonl` に記録、`aggregate_contribution_scores` でスキル別貢献スコアを集計し audit レポートに表示。② `detect_retirement_candidates` が低貢献スキルをアーカイブ候補として検出（クロスプロジェクトスコープ）。③ `max_skill_count`(30) を userConfig に追加し audit Summary に「スキル数/推奨上限」を表示。④ `correction_preflight_threshold`(3) を userConfig に追加し `evaluate_corrections` でスキル単位の correction 集中時に `/evolve-skill` 提案を自動出力。テスト 1807件（+7件）
-- 2026-05-20: **feat(fleet,hooks): CC v2.1.145 対応** — `rl-fleet status` 末尾にアクティブセッション表示（`_show_active_agents()` / `claude agents --json`）追加。`~/.claude/hooks/detect-deferred-task` が Stop フック入力の `background_tasks` / `session_crons` を処理。テスト 14件追加
 
 ## Current Limitations / Known Issues
 

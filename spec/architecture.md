@@ -64,7 +64,8 @@ scripts/lib/            ← 共通ロジック（14 パッケージ・118 モジ
   verification_catalog/ ← 検証知見カタログ
   coherence/            ← 構造的整合性評価（scoring_basic / scoring_advanced / aggregation / artifacts）
   tool_usage_analyzer/  ← ツール使用状況分析
-  （フラット単体モジュール: agent_quality, growth_engine, session_store, score_noise 等）
+  （フラット単体モジュール: agent_quality, growth_engine, session_store, score_noise, corrections_insights 等）
+    corrections_insights.py ← コーパスレベル診断。corrections.jsonl の繰り返し失敗パターン TOP-N 集計。audit セクションに自動表示（件数閾値 MIN_DISPLAY_RECORDS=10、_POSITIVE_TYPES を CORRECTION_PATTERNS から動的導出）
 
 scripts/bench/          ← TBench2-rl Harness Quality Benchmark（Week 1-3 実装済み）
   golden_extractor.py   ← GoldenCase（正例/負例ペア）抽出 — usage.jsonl + corrections.jsonl
@@ -95,7 +96,8 @@ scripts/rl/fitness/     ← 適応度関数（8個組み込み: default + 7 .py 
       → discover (パターン検出)
       → evolve (Diagnose → Compile → Housekeeping)
         → remediation (問題分類 → 修正 → 検証)
-      → reflect (corrections → rules/CLAUDE.md 反映)
+      → reflect (corrections → rules/CLAUDE.md 反映。importance_score で低重要度をフィルタ [Mem-π])
+      → corrections_insights (繰り返し失敗パターン TOP-N 集計 → audit セクションに自動表示)
       → audit (環境健康診断)
       → optimize (直接パッチ → regression gate)
       → instruction compliance (corrections × critical指示 → 違反検出 → pitfall学習)
@@ -107,7 +109,7 @@ scripts/rl/fitness/     ← 適応度関数（8個組み込み: default + 7 .py 
 
 ## Key Design Decisions カテゴリ別サマリ
 
-全 22 件の詳細は [docs/decisions/](../docs/decisions/) を参照。SPEC.md からの移動（2026-04-24）。
+全 24 件の詳細は [docs/decisions/](../docs/decisions/) を参照。SPEC.md からの移動（2026-04-24）。
 
 - **配布・観測**: Plugin 配布 ([001](../docs/decisions/001-plugin-distribution-model.md)), hooks+JSONL ([002](../docs/decisions/002-observe-hooks-jsonl-architecture.md)), hook enrichment ([015](../docs/decisions/015-hook-agent-enrichment.md)), Plugin bin/ 移行 ([019](../docs/decisions/019-plugin-bin-directory-migration.md)), philosophy seed 配布 ([020](../docs/decisions/020-philosophy-seed-distribution.md))
 - **パイプライン**: GA廃止→直接パッチ ([003](../docs/decisions/003-direct-patch-over-genetic-algorithm.md)), 全レイヤー診断/Compile ([007](../docs/decisions/007-all-layer-diagnose-adapter-pattern.md), [008](../docs/decisions/008-all-layer-compile-dispatch-pattern.md)), 3ステージ簡素化 ([009](../docs/decisions/009-simplify-pipeline-3-stage.md)), スキル自己進化 ([016](../docs/decisions/016-skill-self-evolution-pattern.md), [017](../docs/decisions/017-evolve-skill-independent-command.md))

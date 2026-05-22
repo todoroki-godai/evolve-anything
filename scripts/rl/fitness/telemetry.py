@@ -370,6 +370,8 @@ def compute_telemetry_score(project_dir: Path, days: int = 30) -> Dict[str, Any]
         + WEIGHTS["fc_validity"] * fc_valid
     )
 
+    failure_dist = score_failure_distribution(project_dir, days)
+
     return {
         "overall": round(overall, 4),
         "utilization": util,
@@ -380,6 +382,7 @@ def compute_telemetry_score(project_dir: Path, days: int = 30) -> Dict[str, Any]
         "data_sufficiency": sufficiency["sufficient"],
         "data_details": sufficiency,
         "weights": WEIGHTS,
+        "failure_distribution": failure_dist,
     }
 
 
@@ -414,6 +417,51 @@ def format_telemetry_report(result: Dict[str, Any]) -> List[str]:
 
     lines.append("")
     return lines
+
+
+def score_failure_distribution(project_dir: Path, days: int = 30) -> dict[str, Any]:
+    """corrections.jsonl の error_category 分布を集計する。
+
+    Returns:
+        {
+            "total": int,
+            "by_category": {"behavioral": 5, "guardrail": 3, "unknown": 1},
+            "dominant_category": "behavioral" | None,
+        }
+        データなし or error_category フィールドなし → {"total": 0, "by_category": {}, "dominant_category": None}
+    """
+    _ensure_paths()
+    from rl_common import DATA_DIR
+
+    corrections_path = DATA_DIR / "corrections.jsonl"
+    if not corrections_path.exists():
+        return {"total": 0, "by_category": {}, "dominant_category": None}
+
+    since = _iso_days_ago(days)
+    by_category: dict[str, int] = {}
+
+    try:
+        for line in corrections_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = record.get("timestamp", "").replace("Z", "+00:00")
+            if ts and ts < since:
+                continue
+            category = record.get("error_category")
+            if category is None:
+                continue
+            by_category[category] = by_category.get(category, 0) + 1
+    except OSError:
+        return {"total": 0, "by_category": {}, "dominant_category": None}
+
+    total = sum(by_category.values())
+    dominant = max(by_category, key=by_category.__getitem__) if by_category else None
+    return {"total": total, "by_category": by_category, "dominant_category": dominant}
 
 
 if __name__ == "__main__":

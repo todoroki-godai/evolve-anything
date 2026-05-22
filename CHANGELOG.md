@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.63.0] - 2026-05-22
+
+### Added
+- **feat(hooks): correction_detect に error_category 分類を追加** — correction_type から `behavioral` / `guardrail` / `explicit` / `unknown` への LLM コストゼロ分類。corrections.jsonl レコードに `error_category` フィールドを付与し、失敗原因のカテゴリ別解析を可能にする（AgentAtlas 軌跡分類の基盤）。
+- **feat(telemetry): score_failure_distribution() を追加** — corrections.jsonl の error_category 分布を集計する新関数。`by_category` / `dominant_category` を返し、どのカテゴリの失敗が多いかを数値で把握できる。
+- **feat(lib): corrections_insights モジュールを追加** — `scripts/lib/corrections_insights.py`。`count_repeated_patterns()` で繰り返し失敗パターン TOP-N を集計。lookback フィルタ・`.get()` fallback・閾値 10 件を実装。
+- **feat(audit): 繰り返し失敗パターンセクションを追加** — `/rl-anything:audit` の出力に「繰り返し失敗パターン TOP-N」セクションを追加。同一 correction_type が 3 回以上繰り返されると自動列挙。
+- **feat(reflect): importance_score heuristic を追加 (Mem-π)** — reflect.py が corrections の重要度スコアを計算。`confidence × max(0, 1 - elapsed_days / decay_days)` で低重要度修正をフィルタし、レビュー件数を抑制。
+- **docs(skills): reflect と evolve-skill の SKILL.md を更新** — reflect/SKILL.md に Mem-π フィルタ説明を追記。evolve-skill/SKILL.md の pre-flight セクションに冪等性チェック（12-factor-agents Factor 5-6）を追記。
+
 ## [1.62.0] - 2026-05-22
 
 ### Added

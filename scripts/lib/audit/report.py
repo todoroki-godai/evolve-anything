@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from .memory import build_memory_health_section
 from .quality import build_quality_trends_section
-from .sections import _build_test_guard_section, build_lsp_suggestion_section, build_token_consumption_section
+from .sections import _build_test_guard_section, build_corrections_insights_section, build_lsp_suggestion_section, build_token_consumption_section
 
 
 def generate_report(
@@ -119,6 +119,10 @@ def generate_report(
     token_section = build_token_consumption_section(days=30)
     if token_section:
         lines.extend(token_section)
+
+    corrections_insights_section = build_corrections_insights_section()
+    if corrections_insights_section:
+        lines.extend(corrections_insights_section)
 
     if duplicates:
         lines.append(f"## Potential Duplicates ({len(duplicates)})")
