@@ -814,7 +814,7 @@ def _emit_growth_crystallization(result: Dict[str, Any], project_dir: Optional[s
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Evolve オーケストレーター")
@@ -827,4 +827,9 @@ if __name__ == "__main__":
         project_dir=args.project_dir,
         dry_run=args.dry_run,
     )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
     print(json.dumps(result, ensure_ascii=False, indent=2))
