@@ -5,6 +5,11 @@
 ### Fixed
 - **fix(bin): bin/ スクリプトの import エラーを一括修正 (#215)** — `bin/rl-prune`（prune/__init__.py に main を re-export）、`bin/rl-reorganize`（reorganize.py に main() 追加）、`bin/rl-loop`（run-loop.py → run_loop.py リネームで Python import 不能を解消）の3本の起動エラーを修正。ソース .py 削除済みのデッドラッパー（bin/rl-backfill / rl-backfill-analyze / rl-backfill-reclassify）を削除。
 
+## [1.64.0-excerpt] - 2026-05-25
+
+### Added (SPEC.md Recent Changes から移動)
+- **feat(evolve-skill): bounded edit gate + LR budget + rejected pre-flight v1.64.0 (#196 #199 #200 #201)** — `_count_diff_lines()` で edit 差分行数を計測し `skill_lr_budget`(デフォルト30行、userConfig 設定可)超過時はテンプレートフォールバック。rejected 履歴(ユーザー否認3回以上)で pre-flight 警告。`reason_refs` フィールドで元セッション証拠を保持
+
 ## [1.65.0] - 2026-05-25
 
 ### Added
