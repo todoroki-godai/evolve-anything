@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.65.2] - 2026-05-26
+
+### Fixed
+- **fix(audit): aggregate_usage の None キーで quality_monitor がクラッシュする問題を修正 (#217)** — `implement` 等が `skill` フィールドで自己報告するレコードに対し `aggregate_usage` が `skill_name` のみを参照して `None` キーを生成し、`quality_monitor.resolve_skill_path(None)` が `TypeError`（PosixPath / NoneType）でクラッシュしていた。`skill_name → skill → "unknown"` のフォールバックと resolve_skill_path の None ガードを追加。evolve 実行時の「品質計測スキップ」エラーを解消。
+- **fix(docs): SPEC.md / CLAUDE.md / plugin.json の数値誤りを一括修正** — Observe hooks 数（15→21）・userConfig 項目数（15→17、`error_preflight_threshold` を manifest に追加）・bin/ コマンド数・スキル数の記載を実態に同期。`backfill` スキルと `bin/rl-backfill-turn-indices` の混同を解消。
+
+### Added
+- **test(bin): bin/ スクリプトの import smoke test を追加 (#216)** — `python3 bin/rl-XXX --help` を実行し stderr の ImportError/ModuleNotFoundError を検出する smoke test。publish 前に bin/ の起動不能を機械検出する。
+
 ## [1.65.1] - 2026-05-25
 
 ### Fixed
