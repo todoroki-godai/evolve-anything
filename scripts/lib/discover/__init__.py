@@ -56,10 +56,11 @@ from .suppression import (  # noqa: E402, F401
 )
 
 
-# 行動パターン検出 + Agent prompt 分類 + missed skill 検出は discover/patterns.py に集約済み（後方互換のため再エクスポート）
+# 行動パターン検出 + Agent prompt 分類 + missed skill 検出 + constraint decay 検出は discover/patterns.py に集約済み（後方互換のため再エクスポート）
 from .patterns import (  # noqa: E402, F401
     detect_behavior_patterns,
     detect_missed_skills,
+    detect_constraint_decay,
     _classify_agent_prompts,
 )
 

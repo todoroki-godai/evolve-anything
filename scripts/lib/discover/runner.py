@@ -196,6 +196,22 @@ def run_discover(
     except Exception as e:
         result["instruction_violations_error"] = str(e)
 
+    # constraint decay 検出 (arXiv 2605.06445)
+    try:
+        from .patterns import detect_constraint_decay  # noqa: PLC0415
+        from . import DATA_DIR as _data_dir  # noqa: PLC0415
+        decay_findings = detect_constraint_decay(
+            sessions_path=_data_dir / "sessions.jsonl",
+            corrections_path=_data_dir / "corrections.jsonl",
+        )
+        warnings = [f for f in decay_findings if f["severity"] == "WARNING"]
+        if warnings:
+            result["constraint_decay_warnings"] = warnings
+        if decay_findings:
+            result["constraint_decay_findings"] = decay_findings
+    except Exception as e:
+        result["constraint_decay_error"] = str(e)
+
     # 停滞→リカバリパターン検出
     try:
         from tool_usage_analyzer import (

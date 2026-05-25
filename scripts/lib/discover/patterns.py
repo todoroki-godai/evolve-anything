@@ -4,12 +4,124 @@ discover/__init__.py から re-export される（後方互換）。
 DATA_DIR / BEHAVIOR_THRESHOLD / MISSED_SKILL_THRESHOLD / PLUGIN_ROOT は
 package 経由で遅延参照する（テスト patch / DATA_DIR 差し替え追従）。
 """
+import json
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent_classifier import classify_agent_type
 from skill_triggers import extract_skill_triggers, normalize_skill_name
+
+# constraint decay: mtime フィルタ（30日）
+_THIRTY_DAYS_SEC = 30 * 24 * 3600
+
+
+def detect_constraint_decay(
+    sessions_path: Path,
+    corrections_path: Path,
+    decay_threshold: float = 0.3,
+) -> List[Dict[str, Any]]:
+    """セッション後半30%のターンに集中する correction を検出し decay_rate を返す。
+
+    arXiv 2605.06445 の知見: LLM はコンテキストが長くなると制約を忘れる (constraint decay)。
+    セッション後半30%での correction 密度を測定して decay_rate として記録する。
+
+    アルゴリズム:
+    1. sessions.jsonl を読み込み、session_id → max_turn_index の dict を作る
+       (O(N) pre-index、30日以内の mtime フィルタ付き)
+    2. corrections.jsonl を走査し、各 correction の session_id を引いて
+       turn_index / max_turn_index を計算
+    3. turn_ratio > 0.7（後半30%）の correction 数 / 全 correction 数 = session_decay_rate
+    4. session_decay_rate > decay_threshold → WARNING レコードを返す
+
+    返り値:
+        [{"type": "constraint_decay", "session_id": ..., "decay_rate": float,
+          "late_corrections": int, "total_corrections": int,
+          "severity": "WARNING"|"INFO", "message": str}]
+
+    エッジケース:
+    - sessions.jsonl が空 or 不在 → []
+    - corrections.jsonl が空 or 不在 → []
+    - max_turn_index == 0 → skip（ZeroDivision 防止）
+    - session_id が sessions.jsonl に存在しない correction → skip
+    """
+    # 30日 mtime フィルタ
+    if not sessions_path.exists():
+        return []
+    if time.time() - sessions_path.stat().st_mtime > _THIRTY_DAYS_SEC:
+        return []
+
+    if not corrections_path.exists():
+        return []
+
+    # Step 1: session_id → max_turn_index の pre-index（O(N)）
+    session_index: Dict[str, int] = {}
+    try:
+        for line in sessions_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            sid = rec.get("session_id", "")
+            max_turn = rec.get("max_turn_index")
+            if sid and max_turn is not None:
+                session_index[sid] = int(max_turn)
+    except Exception:
+        return []
+
+    if not session_index:
+        return []
+
+    # Step 2: corrections を走査して session 別に集計（O(M)）
+    # session_id → {"total": int, "late": int}
+    session_stats: Dict[str, Dict[str, int]] = defaultdict(lambda: {"total": 0, "late": 0})
+    try:
+        for line in corrections_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            sid = rec.get("session_id", "")
+            turn_index = rec.get("turn_index")
+            if not sid or turn_index is None:
+                continue
+            if sid not in session_index:
+                continue  # unknown session → skip
+            max_turn = session_index[sid]
+            if max_turn == 0:
+                continue  # ZeroDivision ガード
+
+            turn_ratio = int(turn_index) / max_turn
+            session_stats[sid]["total"] += 1
+            if turn_ratio > 0.7:
+                session_stats[sid]["late"] += 1
+    except Exception:
+        return []
+
+    # Step 3 & 4: decay_rate を計算して閾値超過を WARNING に
+    results: List[Dict[str, Any]] = []
+    for sid, stats in session_stats.items():
+        total = stats["total"]
+        late = stats["late"]
+        if total == 0:
+            continue
+        decay_rate = late / total
+        severity = "WARNING" if decay_rate > decay_threshold else "INFO"
+        results.append({
+            "type": "constraint_decay",
+            "session_id": sid,
+            "decay_rate": round(decay_rate, 4),
+            "late_corrections": late,
+            "total_corrections": total,
+            "severity": severity,
+            "message": (
+                f"Session {sid}: {late}/{total} corrections in the last 30% of turns "
+                f"(decay_rate={decay_rate:.2f})"
+            ),
+        })
+
+    return results
 
 
 def detect_behavior_patterns(

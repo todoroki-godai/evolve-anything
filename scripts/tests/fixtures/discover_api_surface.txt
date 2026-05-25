@@ -12,6 +12,7 @@ REJECTION_THRESHOLD = 3
 add_merge_suppression(skill_a: str, skill_b: str) -> None
 add_to_suppression_list(pattern: str) -> None
 detect_behavior_patterns(threshold: int = 5, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> List[Dict[str, Any]]
+detect_constraint_decay(sessions_path: pathlib.Path, corrections_path: pathlib.Path, decay_threshold: float = 0.3) -> List[Dict[str, Any]]
 detect_error_patterns(threshold: int = 3, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> List[Dict[str, Any]]
 detect_installed_artifacts(tool_usage_patterns: Dict[str, Any] | None = None) -> List[Dict[str, Any]]
 detect_missed_skills(threshold: int = 2, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> Dict[str, Any]

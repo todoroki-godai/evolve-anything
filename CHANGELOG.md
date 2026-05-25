@@ -5,6 +5,7 @@
 ### Added
 - **feat(hooks): auto_memory_runner + Stop hook L2 memory (#198 #204)** — `hooks/auto_memory_runner.py` 新規作成。Stop hook 終了時に corrections 直近 5 件から memory 候補を非同期生成（LLM 1 call 上限）。new-file-per-entry パターンで race condition 回避。MEMORY.md は append-only index。200 行超で最古エントリを archive.md に移動。`hooks/session_summary.py` に Popen バックグラウンド起動を追加。memory frontmatter v2 スキーマ（importance / detail_file）を ADR として確定。`scripts/lib/audit/memory.py` に broken detail_file リンク検出を追加。
 - **feat(triage): meta-skill 品質フィルタ (#203)** — `scripts/lib/meta_quality.py` に `meta_quality_check()` を追加。再利用頻度（trigger_count / session_count < 0.1 で低頻度フラグ）と単語 Jaccard 類似度（> 0.6 で重複候補フラグ）で CREATE/REVIEW/SKIP を判定。低頻度かつ重複ありで SKIP、重複ありのみで REVIEW、それ以外は CREATE。`triage_skill()` の CREATE 判定パスに組み込み、`meta_quality` フィールドを結果に付加。LLM 不使用。
+- **feat(discover): constraint decay 検出 (#197)** — `discover/patterns.py` に `detect_constraint_decay()` を追加。arXiv 2605.06445 の知見に基づき、セッション後半30%のターンに集中する correction を検出して decay_rate (0.0〜1.0) を算出。O(N+M) pre-index 最適化・30日 mtime フィルタ・ZeroDivision ガードを実装。`run_discover()` に統合し、decay_rate > 0.3 の場合 WARNING として `constraint_decay_warnings` キーで結果を返す。
 
 ## [1.63.0] - 2026-05-22
 
