@@ -120,7 +120,7 @@ def triage_skill(
             skill_content=" ".join(missed_info.get("triggers_matched", [])),
             usage_stats={
                 "trigger_count": missed_session_count,
-                "session_count": max(missed_session_count, 1),
+                "session_count": 0,  # total session 数不明 → reuse_rate は計算不能
             },
             all_skills=sorted(existing_skills),
         )
