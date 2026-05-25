@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.65.0] - 2026-05-25
+
+### Added
+- **feat(backfill): constraint_decay 用 turn_index backfill スクリプト (#214)** — `bin/rl-backfill-turn-indices` + `scripts/lib/backfill_turn_indices.py` を追加。`sessions.jsonl` に `max_turn_index (= human_message_count - 1)`、`corrections.jsonl` に `turn_index`（raw session JSONL の timestamp マッチング）を一度きり backfill する。安全設計: backup-first + tmpfile atomic rename + dry-run デフォルト。テスト 18 件。実機で constraint_decay が動作することを確認済み（WARNING 5 件検出）。
+
 ## [1.64.1] - 2026-05-25
 
 ### Fixed
