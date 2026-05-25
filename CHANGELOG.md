@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.64.0] - 2026-05-25
 
 ### Added
 - **feat(evolve-skill): bounded edit gate + LR budget + rejected pre-flight + reason_refs (#196 #199 #200 #201)** — `proposal.py` に difflib bounded edit gate を追加: LLM 出力の変更行数が `skill_lr_budget`（デフォルト 30 行）を超えた場合テンプレートにフォールバック。`trigger_engine/self_evolution.py` に `get_rejected_stats(skill_name)` を追加し remediation-outcomes.jsonl からスキル別 rejected_rate を集計。`evolve_skill_proposal()` 冒頭で rejected_rate > 30% なら `{"status": "skipped"}` を返す rejected pre-flight チェックを実装。`apply_evolve_proposal()` が `correction_ids` を受け取り SKILL.md に `<!-- reason_refs: [...] -->` を記録。plugin.json userConfig に `skill_lr_budget` フィールドを追加。
