@@ -350,7 +350,24 @@ def generate_proposals(
         category = issue.get("category", "proposable")
         rationale = generate_rationale(issue, category)
 
-        if issue["type"] == "line_limit_violation":
+        if issue["type"] == "stale_ref":
+            detail = issue.get("detail", {})
+            path = detail.get("path", "unknown")
+            proposal = f"{issue['file']} 内の陳腐化参照「{path}」を削除"
+        elif issue["type"] == "stale_rule":
+            detail = issue.get("detail", {})
+            path = detail.get("path", "unknown")
+            proposal = f"ルール {issue['file']} 内の不存在参照「{path}」を更新/削除"
+        elif issue["type"] == "claudemd_phantom_ref":
+            detail = issue.get("detail", {})
+            ref_type = detail.get("ref_type", "skill")
+            name = detail.get("name", "unknown")
+            proposal = f"CLAUDE.md 内の存在しない{ref_type}参照「{name}」を削除"
+        elif issue["type"] == "claudemd_missing_section":
+            detail = issue.get("detail", {})
+            section = detail.get("section", "skills")
+            proposal = f"CLAUDE.md に {section} セクションを追加"
+        elif issue["type"] == "line_limit_violation":
             detail = issue.get("detail", {})
             lines = detail.get("lines", 0)
             limit = detail.get("limit", 1)
@@ -441,3 +458,21 @@ def generate_proposals(
         proposals.append(entry)
 
     return proposals
+
+
+def generate_auto_fix_summaries(
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """auto_fixable に分類された issue を1件ずつ rationale 付きで列挙する。
+
+    evolve の Remediation フェーズで「一括修正しますか？」と尋ねる前に、
+    各 issue が「何をなぜどう直すのか」を1件単位で提示するために使う。
+    auto_fixable 以外の category は除外する。
+
+    Returns:
+        [{"issue": <classified issue>, "proposal": str, "rationale": str}, ...]
+    """
+    auto_fixable = [
+        issue for issue in issues if issue.get("category") == "auto_fixable"
+    ]
+    return generate_proposals(auto_fixable)

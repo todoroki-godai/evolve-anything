@@ -5,11 +5,17 @@ from pathlib import Path
 
 import pytest
 
-# remediation.py のパスを通す
-_evolve_scripts = Path(__file__).resolve().parent.parent.parent / "skills" / "evolve" / "scripts"
-sys.path.insert(0, str(_evolve_scripts))
+# remediation パッケージのパスを通す（scripts/lib/remediation/）
+_lib = Path(__file__).resolve().parent.parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_lib))
 
-from remediation import compute_confidence_score, generate_rationale, classify_issue
+from remediation import (
+    compute_confidence_score,
+    generate_rationale,
+    classify_issue,
+    generate_proposals,
+    generate_auto_fix_summaries,
+)
 
 
 # ── compute_confidence_score ──────────────────────────────
@@ -139,3 +145,115 @@ def test_classify_claudemd_phantom_ref():
     classified = classify_issue(issue)
     # confidence=0.9, scope=project → proposable
     assert classified["category"] in ("proposable", "auto_fixable")
+
+
+# ── generate_proposals: auto_fixable type の proposal/rationale ────────
+
+
+def test_generate_proposals_stale_ref_has_rationale():
+    """auto_fixable type stale_ref も具体的な proposal + rationale を持つ。"""
+    issue = {
+        "type": "stale_ref",
+        "file": ".claude/skills/foo/SKILL.md",
+        "category": "auto_fixable",
+        "detail": {"path": "missing/path.md"},
+    }
+    props = generate_proposals([issue])
+    assert len(props) == 1
+    entry = props[0]
+    # rationale には具体的なパスが含まれ、汎用フォールバックでない
+    assert "missing/path.md" in entry["rationale"]
+    # proposal も汎用フォールバック「修正案を検討してください」でないこと
+    assert "検討してください" not in entry["proposal"]
+    assert "missing/path.md" in entry["proposal"]
+
+
+def test_generate_proposals_stale_rule_has_specific_proposal():
+    issue = {
+        "type": "stale_rule",
+        "file": ".claude/rules/x.md",
+        "category": "auto_fixable",
+        "detail": {"path": "scripts/gone.sh"},
+    }
+    props = generate_proposals([issue])
+    entry = props[0]
+    assert "scripts/gone.sh" in entry["rationale"]
+    assert "検討してください" not in entry["proposal"]
+
+
+def test_generate_proposals_claudemd_phantom_ref_specific():
+    issue = {
+        "type": "claudemd_phantom_ref",
+        "file": "CLAUDE.md",
+        "category": "auto_fixable",
+        "detail": {"name": "ghost-skill", "ref_type": "skill"},
+    }
+    props = generate_proposals([issue])
+    entry = props[0]
+    assert "ghost-skill" in entry["proposal"]
+    assert "検討してください" not in entry["proposal"]
+
+
+def test_generate_proposals_claudemd_missing_section_specific():
+    issue = {
+        "type": "claudemd_missing_section",
+        "file": "CLAUDE.md",
+        "category": "auto_fixable",
+        "detail": {"section": "skills", "skill_count": 5},
+    }
+    props = generate_proposals([issue])
+    entry = props[0]
+    assert "skills" in entry["proposal"]
+    assert "検討してください" not in entry["proposal"]
+
+
+# ── generate_auto_fix_summaries: auto_fixable を1件ずつ列挙 ────────────
+
+
+def test_generate_auto_fix_summaries_per_issue_rationale():
+    """auto_fixable issue 群を渡すと各 issue ごとに rationale 付き entry を返す。"""
+    issues = [
+        {
+            "type": "stale_ref",
+            "file": ".claude/skills/a/SKILL.md",
+            "category": "auto_fixable",
+            "detail": {"path": "dead/link-a.md"},
+        },
+        {
+            "type": "stale_rule",
+            "file": ".claude/rules/b.md",
+            "category": "auto_fixable",
+            "detail": {"path": "scripts/dead-b.sh"},
+        },
+    ]
+    summaries = generate_auto_fix_summaries(issues)
+    assert len(summaries) == 2
+    # 各 entry に issue / proposal / rationale が揃っている
+    for s in summaries:
+        assert "issue" in s
+        assert "proposal" in s
+        assert s["rationale"]  # 非空
+    # 個別の detail が rationale に反映されている（1件ずつ独立した説明）
+    assert "dead/link-a.md" in summaries[0]["rationale"]
+    assert "scripts/dead-b.sh" in summaries[1]["rationale"]
+
+
+def test_generate_auto_fix_summaries_filters_non_auto_fixable():
+    """auto_fixable 以外の category は除外される。"""
+    issues = [
+        {
+            "type": "stale_ref",
+            "file": ".claude/skills/a/SKILL.md",
+            "category": "auto_fixable",
+            "detail": {"path": "dead.md"},
+        },
+        {
+            "type": "orphan_rule",
+            "file": ".claude/rules/c.md",
+            "category": "proposable",
+            "detail": {"name": "c"},
+        },
+    ]
+    summaries = generate_auto_fix_summaries(issues)
+    assert len(summaries) == 1
+    assert summaries[0]["issue"]["type"] == "stale_ref"

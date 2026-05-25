@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
 
 ### Added
+- **feat(remediation): auto_fixable issue を1件ずつ rationale 付きで列挙する `generate_auto_fix_summaries()` を追加** — evolve の Remediation フェーズで「auto_fixable N件を一括修正しますか？」と尋ねる前に、各 issue の「何を・なぜ・どう直すのか」を issue 単位で提示できるようにした。`generate_proposals()` が auto_fixable 専用 type（`stale_ref` / `stale_rule` / `claudemd_phantom_ref` / `claudemd_missing_section`）に対しても汎用フォールバックでなく具体的な proposal テキストを返すよう拡張。SKILL.md の auto_fixable 提示手順を「1件ずつ rationale 付き列挙 → 一括修正／個別承認／スキップ」に更新。
 - **feat(evolve): テレメトリ未取得（初回導入直後）を検知して backfill を提案** — `check_data_sufficiency()` が「単なるデータ不足」と「テレメトリが完全に空（観測0・セッション0）」を区別し、後者で `telemetry_empty` / `backfill_recommended` フラグを返す。`run_evolve` の Step1 出力（`observe.action`）に `backfill_recommended` 分岐を追加し、`/rl-anything:backfill` を先に実行するよう案内する。自動実行は副作用が大きいため提案にとどめる。SKILL.md の Step1 にも分岐を明記。
+
+### Fixed
+- **fix(evolve): `skills/evolve/scripts/remediation.py` shim が分割後の `scripts/lib/remediation/` パッケージを読めず ImportError になる問題を修正** — パッケージ化（旧 `remediation.py` → `remediation/`）後に shim が旧ファイルパスを参照したままで、`test_remediation_layers.py` 等が収集エラーになっていた。shim を `__init__.py` の file location 明示ロードに変更し、sys.path 先頭に shim 自身のディレクトリが来ても再帰ロードしないようにした。
+- **test(evolve): `test_fix_line_limit_rule_separation` のデータ契約不整合を修正** — テスト fixture が `{lines: 7, limit: 5}` という production では生成され得ない状態（rule の行数上限は `MAX_RULE_LINES = 10` 固定で、`suggest_separation` は detail.limit でなくこの定数で超過判定する）を使っており、7 行 < 10 行のため `separation_not_applicable` で正しく fail していた。テスト内容を実際に 10 行超（12 行）とし detail を `{lines: 12, limit: 10}` に修正。shim 修復で初めて collection が通り顕在化した既存テストバグ。
 
 ## [1.65.2] - 2026-05-26
 

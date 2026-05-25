@@ -160,6 +160,7 @@ from .fixers_quality import (  # noqa: E402, F401
     _verify_missing_effort,
     fix_instruction_violation,
     generate_proposals,
+    generate_auto_fix_summaries,
 )
 from .fixers_quality import _build_fix_dispatch as _build_fix_dispatch  # noqa: E402
 

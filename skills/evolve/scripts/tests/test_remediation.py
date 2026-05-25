@@ -966,12 +966,17 @@ class TestRuleSeparation:
         rules_dir = tmp_path / ".claude" / "rules"
         rules_dir.mkdir(parents=True)
         rule = rules_dir / "verbose-rule.md"
-        rule.write_text("# Rule\nLine 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\n")
+        # rule の行数上限は MAX_RULE_LINES = 10。suggest_separation は detail.limit でなく
+        # この定数で超過判定するため、テスト内容も実際に 10 行を超えさせる（12 行）。
+        # detail.lines/limit は production の check_line_limits が生成する契約に合わせる
+        # （rule の line_limit_violation は常に limit=10、lines>10）。
+        rule_body = "# Rule\n" + "".join(f"Line {i}\n" for i in range(1, 12))
+        rule.write_text(rule_body)
 
         issues = [{
             "type": "line_limit_violation",
             "file": str(rule),
-            "detail": {"lines": 7, "limit": 5},
+            "detail": {"lines": 12, "limit": 10},
             "category": "auto_fixable",
         }]
 
