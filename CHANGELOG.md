@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **feat(evolve): テレメトリ未取得（初回導入直後）を検知して backfill を提案** — `check_data_sufficiency()` が「単なるデータ不足」と「テレメトリが完全に空（観測0・セッション0）」を区別し、後者で `telemetry_empty` / `backfill_recommended` フラグを返す。`run_evolve` の Step1 出力（`observe.action`）に `backfill_recommended` 分岐を追加し、`/rl-anything:backfill` を先に実行するよう案内する。自動実行は副作用が大きいため提案にとどめる。SKILL.md の Step1 にも分岐を明記。
+
 ## [1.65.2] - 2026-05-26
 
 ### Fixed

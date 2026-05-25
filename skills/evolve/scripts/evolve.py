@@ -233,8 +233,19 @@ def check_data_sufficiency() -> Dict[str, Any]:
         or total_observations >= 20
     )
 
+    # テレメトリが完全に空（未取得）= 「単なるデータ不足」と区別する。
+    # 初回導入直後に observe hooks のデータがまだ無い状態。この場合は
+    # backfill で既存セッション履歴を取り込むのが正しい初手なので提案する。
+    telemetry_empty = total_observations == 0 and sessions == 0
+    backfill_recommended = telemetry_empty
+
     if sufficient:
         msg = f"{sessions} セッション, {observations} 新規観測 (全{total_observations}) — データ十分"
+    elif telemetry_empty:
+        msg = (
+            "テレメトリが空です（観測データ未取得）。"
+            "初回セットアップとして /rl-anything:backfill で既存セッション履歴を取り込んでください。"
+        )
     else:
         msg = f"前回 evolve 以降: {sessions} セッション, {observations} 観測 (全{total_observations})"
 
@@ -243,6 +254,8 @@ def check_data_sufficiency() -> Dict[str, Any]:
         "observations": observations,
         "total_observations": total_observations,
         "sufficient": sufficient,
+        "telemetry_empty": telemetry_empty,
+        "backfill_recommended": backfill_recommended,
         "message": msg,
     }
 
@@ -305,10 +318,17 @@ def run_evolve(
     result["phases"]["observe"] = sufficiency
 
     if not sufficiency["sufficient"]:
-        result["phases"]["observe"]["action"] = "skip_recommended"
-        # スキップ推奨だがユーザー選択に委ねる
-        print(f"データ不足: {sufficiency['message']}")
-        print("スキップ推奨。--force で強制実行可能。")
+        if sufficiency.get("backfill_recommended"):
+            # テレメトリ未取得 = 初回導入直後。backfill を先に実行するよう提案する
+            # （自動実行はせず、副作用が大きいためユーザー判断に委ねる）。
+            result["phases"]["observe"]["action"] = "backfill_recommended"
+            print(f"テレメトリ未取得: {sufficiency['message']}")
+            print("→ /rl-anything:backfill を先に実行してから evolve を回してください。")
+        else:
+            result["phases"]["observe"]["action"] = "skip_recommended"
+            # スキップ推奨だがユーザー選択に委ねる
+            print(f"データ不足: {sufficiency['message']}")
+            print("スキップ推奨。--force で強制実行可能。")
 
     # Phase 1.5: Fitness 関数チェック
     fitness_check = check_fitness_function(project_dir)

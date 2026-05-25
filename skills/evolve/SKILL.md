@@ -42,9 +42,13 @@ rl-usage-log "evolve"
 rl-evolve --project-dir "$(pwd)" --dry-run
 ```
 
-- 前回 evolve 実行以降のセッション数が3未満、または10観測未満の場合:
-  - 「データ不足のためスキップ推奨」メッセージを表示（MUST）
-  - AskUserQuestion で実行/スキップを選択させる
+- 出力 `observe` フェーズの `action` で分岐する:
+  - `action: "backfill_recommended"`（テレメトリ未取得＝初回導入直後、`telemetry_empty: true`）の場合:
+    - 「テレメトリが空。先に /rl-anything:backfill で既存セッション履歴を取り込んでください」と案内する（MUST）
+    - evolve を続行せず、backfill を先に実行するよう促す（自動実行はしない）
+  - `action: "skip_recommended"`（少量だが観測ありのデータ不足）の場合:
+    - 「データ不足のためスキップ推奨」メッセージを表示（MUST）
+    - AskUserQuestion で実行/スキップを選択させる
 
 ### Step 2: Fitness 関数チェック
 
