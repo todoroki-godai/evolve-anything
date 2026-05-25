@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.64.1] - 2026-05-25
+
+### Fixed
+- **fix(triage): meta_quality に session_count=0 を渡す** — `triage_skill()` が `session_count=max(missed_session_count, 1)` を渡していたため `reuse_rate` が常に 1.0 となり `low_reuse` フラグが発火しなかった。`session_count=0`（不明）を渡すよう修正。
+
 ## [1.64.0] - 2026-05-25
 
 ### Added
