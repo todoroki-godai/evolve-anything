@@ -38,6 +38,10 @@
 | `token_usage_store` | PJ 別 LLM トークン消費の DuckDB SoR — PK uuid で冪等 ingest、`token_usage.db` にスキーマ自動作成（`scripts/lib/token_usage_store.py`） |
 | `token_usage_ingest` | `~/.claude/projects/<pj>/*.jsonl` の `message.usage` を walker で取り込み、days mtime filter + batch insert（`scripts/lib/token_usage_ingest.py`） |
 | `token_usage_query` | TOP-N / WoW スパイク / cache hit 異常 / PJ ドリルダウン (session/model/week)。fleet status・tokens サブコマンド・audit セクションが利用（`scripts/lib/token_usage_query.py`） |
+| `auto_memory_runner` | Stop hook 終了時に corrections 直近 5 件から memory 候補を非同期生成（LLM 1 call 上限）。new-file-per-entry パターンで race condition 回避。MEMORY.md は append-only index（`hooks/auto_memory_runner.py`） |
+| `meta_quality` | スキル追加前の meta-skill 品質フィルタ — 再利用頻度と Jaccard 類似度で CREATE/REVIEW/SKIP を判定。`skill-triage` の CREATE 判定パスに組み込み（`scripts/lib/meta_quality.py`） |
+| `constraint_decay` | セッション後半 30% ターンに集中する correction を検出して decay_rate を算出。O(N+M) pre-index・30日 mtime フィルタ。`run_discover()` に統合（`scripts/lib/discover/patterns.py`） |
+| `negative_transfer` | スキル追加イベント前後の success rate delta を計測し `delta < -0.05` で負の転移フラグを付与（`scripts/lib/audit/usage.py`） |
 
 ## クイックスタート
 
