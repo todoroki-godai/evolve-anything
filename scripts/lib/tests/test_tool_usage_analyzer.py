@@ -214,6 +214,7 @@ class TestAnalyzeToolUsage:
         )
         assert result["total_tool_calls"] == 0
         assert result["bash_calls"] == 0
+        assert result["bash_ratio"] == 0.0
         assert result["builtin_replaceable"] == []
         assert result["repeating_patterns"] == []
 
@@ -246,6 +247,7 @@ class TestAnalyzeToolUsage:
 
         assert result["total_tool_calls"] == 10
         assert result["bash_calls"] == 9
+        assert result["bash_ratio"] == 0.9  # 9 Bash / 10 total
         assert len(result["repeating_patterns"]) >= 1  # git status >= 5
         assert len(result["builtin_replaceable"]) >= 1  # cat
 

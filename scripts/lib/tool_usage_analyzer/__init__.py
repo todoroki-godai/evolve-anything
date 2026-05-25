@@ -125,6 +125,7 @@ def analyze_tool_usage(
             "cli_summary": {},
             "total_tool_calls": 0,
             "bash_calls": 0,
+            "bash_ratio": 0.0,
         }
 
     classified = classify_bash_commands(bash_commands)
@@ -152,12 +153,15 @@ def analyze_tool_usage(
     # 導入状態の確認
     hook_status = check_hook_installed()
 
+    total_calls = sum(tool_counts.values())
+    bash_calls = tool_counts.get("Bash", 0)
     result: Dict[str, Any] = {
         "builtin_replaceable": builtin_replaceable,
         "repeating_patterns": repeating,
         "cli_summary": dict(cli_counter.most_common(10)),
-        "total_tool_calls": sum(tool_counts.values()),
-        "bash_calls": tool_counts.get("Bash", 0),
+        "total_tool_calls": total_calls,
+        "bash_calls": bash_calls,
+        "bash_ratio": bash_calls / total_calls if total_calls > 0 else 0.0,
         "hook_status": hook_status,
     }
 
