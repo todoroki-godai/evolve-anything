@@ -172,6 +172,65 @@ def build_memory_verification_context(
     return {"sections": sections_out}
 
 
+def _parse_frontmatter_fields(content: str) -> Dict[str, Any]:
+    """memory frontmatter v2 の重要フィールドを抽出する。
+
+    frontmatter がない場合はデフォルト値を返す。
+    importance 未指定時は "medium" をデフォルト値として返す。
+
+    Returns:
+        dict with keys: importance (str), detail_file (str | None)
+    """
+    result: Dict[str, Any] = {"importance": "medium", "detail_file": None}
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return result
+
+    for line in lines[1:]:
+        stripped = line.strip()
+        if stripped == "---":
+            break
+        if ":" in stripped:
+            key, _, value = stripped.partition(":")
+            key = key.strip()
+            value = value.strip()
+            if key == "importance" and value:
+                result["importance"] = value
+            elif key == "detail_file" and value:
+                result["detail_file"] = value
+
+    return result
+
+
+def _check_detail_file_links(
+    memory_files: List[Tuple[Path, str]],
+    project_dir: Path,
+) -> List[Dict[str, Any]]:
+    """memory frontmatter v2 の detail_file フィールドの broken link を検出する。
+
+    detail_file は参照元ファイルの親ディレクトリからの相対パス、または絶対パスとして解釈する。
+
+    Returns:
+        broken link 情報の dict リスト。問題なければ空リスト。
+    """
+    broken: List[Dict[str, Any]] = []
+    for path, content in memory_files:
+        fields = _parse_frontmatter_fields(content)
+        detail_file = fields.get("detail_file")
+        if not detail_file:
+            continue
+        if detail_file.startswith("/"):
+            check_path = Path(detail_file)
+        else:
+            check_path = path.parent / detail_file
+        if not check_path.exists():
+            broken.append({
+                "file": str(path),
+                "detail_file": detail_file,
+            })
+    return broken
+
+
 def build_memory_health_section(
     artifacts: Dict[str, List[Path]],
     project_dir: Path,
@@ -181,6 +240,7 @@ def build_memory_health_section(
     検出項目:
     - 陳腐化参照: MEMORY 内のパス参照がディスク上に存在しない
     - 肥大化警告: NEAR_LIMIT_RATIO 以上の行数
+    - broken detail_file リンク: frontmatter v2 の detail_file フィールドが存在しない
 
     問題がない場合は空リストを返す。
     """
@@ -202,6 +262,7 @@ def build_memory_health_section(
 
     stale_refs: List[Dict[str, Any]] = []
     near_limits: List[Dict[str, Any]] = []
+    broken_detail_files: List[Dict[str, Any]] = _check_detail_file_links(memory_files, project_dir)
 
     for path, content in memory_files:
         # 陳腐化参照の検出
@@ -243,7 +304,7 @@ def build_memory_health_section(
             })
 
     # 問題なしなら空リスト
-    if not stale_refs and not near_limits:
+    if not stale_refs and not near_limits and not broken_detail_files:
         return []
 
     lines = ["## Memory Health", ""]
@@ -252,6 +313,12 @@ def build_memory_health_section(
         lines.append(f"### Stale References ({len(stale_refs)})")
         for ref in stale_refs:
             lines.append(f"- {ref['file']}:{ref['line']} — \"{ref['path']}\" not found on disk")
+        lines.append("")
+
+    if broken_detail_files:
+        lines.append(f"### Broken detail_file Links ({len(broken_detail_files)})")
+        for bf in broken_detail_files:
+            lines.append(f"- {bf['file']} — detail_file \"{bf['detail_file']}\" not found on disk")
         lines.append("")
 
     if near_limits:
@@ -264,6 +331,8 @@ def build_memory_health_section(
     suggestions = []
     if stale_refs:
         suggestions.append("Remove or update stale references")
+    if broken_detail_files:
+        suggestions.append("Update or remove broken detail_file references in memory frontmatter")
     if near_limits:
         suggestions.append("Split large MEMORY.md entries into topic files")
     if suggestions:

@@ -175,6 +175,9 @@ def handle_stop(event: dict) -> None:
     # Auto-evolve trigger evaluation
     _evaluate_trigger()
 
+    # auto_memory_runner: corrections から memory 候補を非同期生成
+    _launch_auto_memory_async()
+
 
 def _evaluate_trigger() -> None:
     """trigger_engine を呼び出し、条件達成時に pending-trigger.json を書き出す。"""
@@ -221,6 +224,26 @@ def _launch_triage_async() -> None:
             [sys.executable, str(runner)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        pass
+
+
+def _launch_auto_memory_async() -> None:
+    """auto_memory_runner を非同期 subprocess で起動する。
+
+    corrections から memory 候補を生成する。Stop hook の 5 秒タイムアウトと切り離す。
+    """
+    runner = Path(__file__).resolve().parent / "auto_memory_runner.py"
+    if not runner.exists():
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, str(runner)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
             start_new_session=True,
         )
     except OSError:
