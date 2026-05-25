@@ -105,6 +105,12 @@
       "type": "number",
       "description": "Trigger active Pre-flight warning when corrections for the same skill reach this count (default: 3). Set higher to reduce noise.",
       "sensitive": false
+    },
+    "skill_lr_budget": {
+      "title": "Skill LR Budget (lines)",
+      "type": "number",
+      "description": "evolve-skill の1回の変更で許容する最大差分行数（デフォルト: 30）。LLM 出力がこの行数を超えた場合はテンプレートにフォールバックする。",
+      "sensitive": false
     }
   }
 }

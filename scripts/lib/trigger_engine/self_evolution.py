@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from .state import (
@@ -20,6 +21,51 @@ from .state import (
     _save_state,
     load_trigger_config,
 )
+
+
+def get_rejected_stats(skill_name: str) -> dict[str, Any]:
+    """指定スキルの evolve 提案に対する rejected 統計を返す。
+
+    remediation-outcomes.jsonl の skill_evolve_candidate 種別で、
+    file フィールドにスキル名を含むレコードを集計する。
+
+    Returns:
+        {"rejected_count": int, "total_count": int, "rejected_rate": float}
+        jsonl が存在しない場合: {"rejected_count": 0, "total_count": 0, "rejected_rate": 0.0}
+    """
+    from . import DATA_DIR  # noqa: PLC0415
+
+    _empty: dict[str, Any] = {"rejected_count": 0, "total_count": 0, "rejected_rate": 0.0}
+
+    outcomes_file = DATA_DIR / "remediation-outcomes.jsonl"
+    if not outcomes_file.exists():
+        return _empty
+
+    total = 0
+    rejected = 0
+    try:
+        for line in outcomes_file.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("issue_type") != "skill_evolve_candidate":
+                continue
+            # file フィールドにスキル名が含まれるか確認（パス境界で一致）
+            file_field = rec.get("file", "")
+            if f"/skills/{skill_name}/" not in file_field and not file_field.endswith(f"/skills/{skill_name}/SKILL.md"):
+                continue
+            total += 1
+            decision = rec.get("user_decision", rec.get("result", ""))
+            if decision == "rejected":
+                rejected += 1
+    except OSError:
+        return _empty
+
+    rate = rejected / total if total > 0 else 0.0
+    return {"rejected_count": rejected, "total_count": total, "rejected_rate": rate}
 
 
 def _evaluate_self_evolution(state: dict[str, Any] | None = None) -> TriggerResult:

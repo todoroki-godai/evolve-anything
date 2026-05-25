@@ -57,6 +57,7 @@ from .session_corrections import evaluate_corrections, evaluate_session_end  # n
 from .self_evolution import (  # noqa: E402, F401
     _evaluate_approval_rate_decline,
     _evaluate_self_evolution,
+    get_rejected_stats,
 )
 from .pending import (  # noqa: E402, F401
     _is_snoozed,

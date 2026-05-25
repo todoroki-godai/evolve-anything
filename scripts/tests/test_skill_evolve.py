@@ -10,6 +10,7 @@ import pytest
 _lib_dir = Path(__file__).resolve().parent.parent.parent / "scripts" / "lib"
 sys.path.insert(0, str(_lib_dir))
 
+from skill_evolve.proposal import _count_diff_lines
 from skill_evolve import (
     ANTI_PATTERN_REJECTION_COUNT,
     BAND_AID_THRESHOLD,
@@ -736,3 +737,318 @@ def test_assess_already_evolved_has_none_checkpoints(tmp_path):
     )
     result = assess_single_skill("my-skill", skill_dir)
     assert result["workflow_checkpoints"] is None
+
+
+# --- _count_diff_lines (#196) ---
+
+
+def test_count_diff_lines_small_change():
+    """少ない変更行数は正確にカウントされる。"""
+    original = "line1\nline2\nline3\n"
+    modified = "line1\nline2_changed\nline3\n"
+    count = _count_diff_lines(original, modified)
+    assert count == 2  # 1 removed + 1 added
+
+
+def test_count_diff_lines_no_change():
+    """変更なしは 0 を返す。"""
+    text = "line1\nline2\nline3\n"
+    assert _count_diff_lines(text, text) == 0
+
+
+def test_count_diff_lines_many_changes():
+    """多数の変更行数が正確にカウントされる。"""
+    original = "\n".join(f"line{i}" for i in range(40))
+    modified = "\n".join(f"changed{i}" for i in range(40))
+    count = _count_diff_lines(original, modified)
+    # 40 removed + 40 added = 80
+    assert count == 80
+
+
+# --- difflib bounded edit gate in _customize_template (#196, #199) ---
+
+
+def test_customize_template_within_budget(tmp_path, monkeypatch):
+    """diff 行数がバジェット以内なら LLM 出力をそのまま返す。"""
+    template = "## Pre-flight Check\n\n## Failure-triggered Learning\n"
+    # LLM が 2 行変更した出力（budget=30 以内）
+    customized_output = "## Pre-flight Check (custom)\n\n## Failure-triggered Learning\n"
+
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(
+            returncode=0, stdout=customized_output, stderr=""
+        )
+        with mock.patch("skill_evolve.proposal.get_skill_lr_budget", return_value=30):
+            from skill_evolve.proposal import _customize_template
+            result = _customize_template("test-skill", "", template)
+
+    assert "custom" in result
+
+
+def test_customize_template_exceeds_budget_fallback(tmp_path, monkeypatch):
+    """diff 行数がバジェットを超えた場合はテンプレートにフォールバックする (#196)。"""
+    template = "## Pre-flight Check\n\n## Failure-triggered Learning\n"
+    # LLM が多数の行を変更した出力（budget=5 を超える）
+    many_lines = "\n".join(f"changed line {i}" for i in range(20))
+    llm_output = many_lines
+
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(
+            returncode=0, stdout=llm_output, stderr=""
+        )
+        with mock.patch("skill_evolve.proposal.get_skill_lr_budget", return_value=5):
+            from skill_evolve.proposal import _customize_template
+            result = _customize_template("test-skill", "", template)
+
+    # フォールバックでテンプレートがそのまま返る
+    assert result == template
+
+
+def test_customize_template_budget_override(tmp_path):
+    """skill_lr_budget=10 の userConfig override が正しく判定に使われる (#199)。"""
+    template = "original line 1\noriginal line 2\noriginal line 3\n"
+    # 11 行変更 (budget=10 を 1 超)
+    changed_lines = "\n".join(f"changed {i}" for i in range(11))
+
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(
+            returncode=0, stdout=changed_lines, stderr=""
+        )
+        with mock.patch("skill_evolve.proposal.get_skill_lr_budget", return_value=10):
+            from skill_evolve.proposal import _customize_template
+            result = _customize_template("test-skill", "", template)
+
+    assert result == template  # fallback
+
+
+# --- get_rejected_stats (#200) ---
+
+
+def test_get_rejected_stats_no_file(tmp_path, monkeypatch):
+    """remediation-outcomes.jsonl が存在しない場合は graceful degradation。"""
+    import trigger_engine.self_evolution as se_mod
+    import trigger_engine as te_mod
+
+    # DATA_DIR は lazy lookup で `from . import DATA_DIR` を使う。
+    # trigger_engine パッケージの DATA_DIR をパッチする。
+    monkeypatch.setattr(te_mod, "DATA_DIR", tmp_path)
+    stats = se_mod.get_rejected_stats("my-skill")
+
+    assert stats["rejected_count"] == 0
+    assert stats["total_count"] == 0
+    assert stats["rejected_rate"] == 0.0
+
+
+def test_get_rejected_stats_with_data(tmp_path, monkeypatch):
+    """rejected_rate が正しく計算される。"""
+    import trigger_engine.self_evolution as se_mod
+    import trigger_engine as te_mod
+
+    outcomes_file = tmp_path / "remediation-outcomes.jsonl"
+    records = []
+    # 4 rejected, 6 total → rate 0.40
+    for i in range(4):
+        records.append(json.dumps({
+            "issue_type": "skill_evolve_candidate",
+            "file": ".claude/skills/my-skill/SKILL.md",
+            "user_decision": "rejected",
+            "result": "rejected",
+            "timestamp": "2026-05-01T00:00:00+00:00",
+        }))
+    for i in range(6):
+        records.append(json.dumps({
+            "issue_type": "skill_evolve_candidate",
+            "file": ".claude/skills/my-skill/SKILL.md",
+            "user_decision": "approved",
+            "result": "success",
+            "timestamp": "2026-05-01T00:00:00+00:00",
+        }))
+    outcomes_file.write_text("\n".join(records))
+
+    monkeypatch.setattr(te_mod, "DATA_DIR", tmp_path)
+    stats = se_mod.get_rejected_stats("my-skill")
+
+    assert stats["rejected_count"] == 4
+    assert stats["total_count"] == 10
+    assert abs(stats["rejected_rate"] - 0.4) < 0.01
+
+
+# --- rejected pre-flight in evolve_skill_proposal (#200) ---
+
+
+def test_evolve_skill_proposal_skip_when_high_rejected_rate(tmp_path, monkeypatch):
+    """rejected_rate > 30% のスキルは evolve をスキップする (#200)。"""
+    templates_dir = tmp_path / "skills" / "evolve" / "templates"
+    templates_dir.mkdir(parents=True)
+    (templates_dir / "self-evolve-sections.md").write_text(
+        "## Pre-flight Check\n\n## Failure-triggered Learning\n"
+    )
+    (templates_dir / "pitfalls.md").write_text("## Active Pitfalls\n")
+
+    skill_dir = tmp_path / "test-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Test Skill\n")
+
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
+
+    with mock.patch(
+        "skill_evolve.proposal.get_rejected_stats",
+        return_value={"rejected_rate": 0.40, "rejected_count": 4, "total_count": 10},
+    ):
+        result = evolve_skill_proposal("test-skill", skill_dir)
+
+    assert result.get("status") == "skipped"
+    assert "rejected_rate" in result.get("reason", "")
+
+
+def test_evolve_skill_proposal_proceed_when_low_rejected_rate(tmp_path, monkeypatch):
+    """rejected_rate <= 30% なら通常通り処理する (#200)。"""
+    templates_dir = tmp_path / "skills" / "evolve" / "templates"
+    templates_dir.mkdir(parents=True)
+    (templates_dir / "self-evolve-sections.md").write_text(
+        "## Pre-flight Check\n\n## Failure-triggered Learning\n"
+    )
+    (templates_dir / "pitfalls.md").write_text("## Active Pitfalls\n")
+
+    skill_dir = tmp_path / "test-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Test Skill\n")
+
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
+
+    with mock.patch(
+        "skill_evolve.proposal.get_rejected_stats",
+        return_value={"rejected_rate": 0.20, "rejected_count": 2, "total_count": 10},
+    ):
+        with mock.patch("skill_evolve._customize_template") as mock_custom:
+            mock_custom.return_value = (
+                "## Pre-flight Check\n\n## Failure-triggered Learning\n"
+            )
+            result = evolve_skill_proposal("test-skill", skill_dir)
+
+    assert result.get("error") is None
+    assert result.get("status") != "skipped"
+
+
+def test_evolve_skill_proposal_proceed_when_no_stats(tmp_path, monkeypatch):
+    """jsonl 不在 (stats 全0) でも skip にならない (#200 graceful degradation)。"""
+    templates_dir = tmp_path / "skills" / "evolve" / "templates"
+    templates_dir.mkdir(parents=True)
+    (templates_dir / "self-evolve-sections.md").write_text(
+        "## Pre-flight Check\n\n## Failure-triggered Learning\n"
+    )
+    (templates_dir / "pitfalls.md").write_text("## Active Pitfalls\n")
+
+    skill_dir = tmp_path / "test-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Test Skill\n")
+
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
+
+    with mock.patch(
+        "skill_evolve.proposal.get_rejected_stats",
+        return_value={"rejected_rate": 0.0, "rejected_count": 0, "total_count": 0},
+    ):
+        with mock.patch("skill_evolve._customize_template") as mock_custom:
+            mock_custom.return_value = (
+                "## Pre-flight Check\n\n## Failure-triggered Learning\n"
+            )
+            result = evolve_skill_proposal("test-skill", skill_dir)
+
+    # skipped にならない
+    assert result.get("status") != "skipped"
+
+
+# --- reason_refs in apply_evolve_proposal (#201) ---
+
+
+def test_apply_evolve_proposal_reason_refs_in_frontmatter(tmp_path, monkeypatch):
+    """apply_evolve_proposal 後の SKILL.md frontmatter に reason_refs が含まれる (#201)。"""
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# My Skill\n\nOriginal content.\n")
+
+    corrections_file = tmp_path / "corrections.jsonl"
+    corrections_file.write_text(
+        json.dumps({"id": "corr-001", "last_skill": "my-skill", "timestamp": "2026-05-01T00:00:00+00:00"}) + "\n" +
+        json.dumps({"id": "corr-002", "last_skill": "my-skill", "timestamp": "2026-05-01T01:00:00+00:00"}) + "\n"
+    )
+
+    proposal = {
+        "skill_name": "my-skill",
+        "sections_to_add": "## Pre-flight Check\n\n## Failure-triggered Learning\n",
+        "pitfalls_template": "## Active Pitfalls\n",
+        "skill_md_path": str(skill_dir / "SKILL.md"),
+        "pitfalls_path": str(skill_dir / "references" / "pitfalls.md"),
+        "error": None,
+        "correction_ids": ["corr-001", "corr-002"],
+    }
+
+    result = apply_evolve_proposal(proposal)
+    assert result["applied"] is True
+
+    updated = (skill_dir / "SKILL.md").read_text()
+    assert "reason_refs" in updated
+    assert "corr-001" in updated
+    assert "corr-002" in updated
+
+
+def test_apply_evolve_proposal_no_reason_refs_when_empty(tmp_path):
+    """correction_ids が空またはない場合は reason_refs なしでも正常適用できる (#201)。"""
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# My Skill\n\nOriginal content.\n")
+
+    proposal = {
+        "skill_name": "my-skill",
+        "sections_to_add": "## Pre-flight Check\n\n## Failure-triggered Learning\n",
+        "pitfalls_template": "## Active Pitfalls\n",
+        "skill_md_path": str(skill_dir / "SKILL.md"),
+        "pitfalls_path": str(skill_dir / "references" / "pitfalls.md"),
+        "error": None,
+        # correction_ids なし
+    }
+
+    result = apply_evolve_proposal(proposal)
+    assert result["applied"] is True
+
+
+# --- apply_evolve_proposal skipped guard (#P1) ---
+
+
+def test_apply_evolve_proposal_skipped_returns_early():
+    """proposal が status:skipped の場合は KeyError なく早期リターンする。"""
+    result = apply_evolve_proposal({"status": "skipped", "reason": "rejected_rate=35%"})
+    assert result["applied"] is False
+    assert result["skipped"] is True
+    assert result["reason"] == "rejected_rate=35%"
+
+
+# --- get_rejected_stats substring match fix (#P2) ---
+
+
+def test_get_rejected_stats_no_substring_match(tmp_path, monkeypatch):
+    """'review' スキルが 'code-review' のレコードにマッチしないことを確認 (#P2)。"""
+    import trigger_engine.self_evolution as se_mod
+    import trigger_engine as te_mod
+
+    outcomes_file = tmp_path / "remediation-outcomes.jsonl"
+    # "code-review" のレコードのみ存在（"review" スキルを検索しても 0 件になるべき）
+    records = [
+        json.dumps({
+            "issue_type": "skill_evolve_candidate",
+            "file": ".claude/skills/code-review/SKILL.md",
+            "user_decision": "rejected",
+            "timestamp": "2026-05-01T00:00:00+00:00",
+        }),
+    ]
+    outcomes_file.write_text("\n".join(records))
+
+    monkeypatch.setattr(te_mod, "DATA_DIR", tmp_path)
+    stats = se_mod.get_rejected_stats("review")
+
+    # "review" は "code-review" のパスにサブストリングとしては含まれるが
+    # パス境界チェックで除外されるべき
+    assert stats["total_count"] == 0
+    assert stats["rejected_count"] == 0
+    assert stats["rejected_rate"] == 0.0
