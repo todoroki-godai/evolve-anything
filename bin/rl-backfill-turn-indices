@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""bin/rl-backfill-turn-indices — sessions.jsonl と corrections.jsonl に turn 系フィールドを追記。
+
+constraint_decay が必要とする max_turn_index / turn_index を一度きり backfill する。
+
+Usage:
+    bin/rl-backfill-turn-indices [--apply] [--data-dir PATH] [--projects-dir PATH]
+
+Options:
+    --apply          実際に書き込む（デフォルトは dry-run）
+    --data-dir       rl-anything データディレクトリ（デフォルト: ~/.claude/rl-anything）
+    --projects-dir   Claude プロジェクトディレクトリ（デフォルト: ~/.claude/projects）
+    --verify         backfill 後の整合性確認のみ（--apply と併用）
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+_lib = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_lib))
+
+from backfill_turn_indices import backfill_corrections, backfill_missing_sessions, backfill_sessions, run_backfill
+
+
+def _verify(data_dir: Path) -> None:
+    sessions_path = data_dir / "sessions.jsonl"
+    corrections_path = data_dir / "corrections.jsonl"
+
+    total_sessions = 0
+    with_max_turn = 0
+    if sessions_path.exists():
+        for line in sessions_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            total_sessions += 1
+            if "max_turn_index" in rec:
+                with_max_turn += 1
+
+    total_corrections = 0
+    with_turn_idx = 0
+    if corrections_path.exists():
+        for line in corrections_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            total_corrections += 1
+            if "turn_index" in rec:
+                with_turn_idx += 1
+
+    print("\n=== verify ===")
+    print(f"sessions.jsonl  : {with_max_turn}/{total_sessions} に max_turn_index あり")
+    print(f"corrections.jsonl: {with_turn_idx}/{total_corrections} に turn_index あり")
+    if total_sessions > 0 and with_max_turn < total_sessions:
+        missing = total_sessions - with_max_turn
+        print(f"  WARNING: {missing} セッションに max_turn_index が未設定（human_message_count=0 のレコードは設定対象外）")
+    if total_corrections > 0 and with_turn_idx < total_corrections:
+        missing = total_corrections - with_turn_idx
+        print(f"  WARNING: {missing} corrections に turn_index が未設定（raw JSONL が見つからない場合はスキップ）")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--apply", action="store_true", help="実際に書き込む（デフォルトは dry-run）")
+    parser.add_argument("--data-dir", type=Path, default=Path.home() / ".claude" / "rl-anything")
+    parser.add_argument("--projects-dir", type=Path, default=Path.home() / ".claude" / "projects")
+    parser.add_argument("--verify", action="store_true", help="整合性確認を実行")
+    args = parser.parse_args()
+
+    dry_run = not args.apply
+    mode = "DRY-RUN" if dry_run else "APPLY"
+    print(f"[{mode}] backfill_turn_indices")
+    print(f"  data_dir    : {args.data_dir}")
+    print(f"  projects_dir: {args.projects_dir}")
+
+    if not args.data_dir.exists():
+        print(f"ERROR: data_dir が存在しません: {args.data_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    result = run_backfill(args.data_dir, args.projects_dir, dry_run=dry_run)
+
+    print(f"\n結果:")
+    print(f"  sessions 更新 (max_turn_index 追加): {result['sessions_updated']}")
+    print(f"  sessions 追加 (corrections の未登録セッション): {result['sessions_added']}")
+    print(f"  corrections 更新 (turn_index 追加): {result['corrections_updated']}")
+
+    if dry_run:
+        print("\n実際に書き込むには --apply を指定してください。")
+    else:
+        print("\n書き込み完了。バックアップファイル: *.bak-<timestamp>")
+
+    if args.verify or not dry_run:
+        _verify(args.data_dir)
+
+
+if __name__ == "__main__":
+    main()
