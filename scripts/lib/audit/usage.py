@@ -84,7 +84,8 @@ def aggregate_usage(
     """
     counts: Dict[str, int] = {}
     for rec in records:
-        skill = rec.get("skill_name", "unknown")
+        # implement 等は skill フィールドで自己報告するため skill_name → skill の順でフォールバック
+        skill = rec.get("skill_name") or rec.get("skill") or "unknown"
         if skill in _BUILTIN_TOOLS:
             continue
         if exclude_plugins and _is_plugin_skill(skill):

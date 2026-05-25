@@ -157,6 +157,18 @@ class TestAggregateUsage:
         assert "openspec-propose" not in result
         assert "openspec-refine" not in result
 
+    def test_skill_field_fallback(self, tmp_path):
+        """skill_name が無く skill フィールドのみ（implement 自己報告）でも集計される。None キーを作らない。"""
+        records = [
+            {"skill": "implement", "outcome": "success"},
+            {"skill": "implement", "outcome": "success"},
+            {"skill_name": "implement"},
+        ]
+        with _setup_fake_plugins(tmp_path):
+            result = audit.aggregate_usage(records, exclude_plugins=False)
+        assert None not in result
+        assert result.get("implement") == 3
+
     def test_aggregate_plugin_usage(self, tmp_path):
         with _setup_fake_plugins(tmp_path):
             result = audit.aggregate_plugin_usage(self._make_records())

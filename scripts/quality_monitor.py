@@ -108,6 +108,8 @@ def append_record(record: Dict[str, Any]) -> None:
 
 def resolve_skill_path(skill_name: str) -> Optional[Path]:
     """スキル名から SKILL.md のパスを解決する。"""
+    if not skill_name:
+        return None
     # ~/.claude/skills/{name}/SKILL.md
     global_path = Path.home() / ".claude" / "skills" / skill_name / "SKILL.md"
     if global_path.exists():

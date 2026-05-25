@@ -117,6 +117,12 @@ def test_append_record_respects_limit(tmp_path):
 # ── スキル検出 ──────────────────────────────────────────
 
 
+def test_resolve_skill_path_none_returns_none():
+    """skill_name が None/空でも例外を投げず None を返す（implement の skill フィールド由来）。"""
+    assert resolve_skill_path(None) is None
+    assert resolve_skill_path("") is None
+
+
 def test_resolve_skill_path_global(tmp_path):
     """~/.claude/skills/{name}/SKILL.md のパス解決。"""
     skill_dir = tmp_path / "skills" / "commit"
