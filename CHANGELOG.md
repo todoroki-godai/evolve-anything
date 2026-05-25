@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(triage): meta-skill 品質フィルタ (#203)** — `scripts/lib/meta_quality.py` に `meta_quality_check()` を追加。再利用頻度（trigger_count / session_count < 0.1 で低頻度フラグ）と単語 Jaccard 類似度（> 0.6 で重複候補フラグ）で CREATE/REVIEW/SKIP を判定。低頻度かつ重複ありで SKIP、重複ありのみで REVIEW、それ以外は CREATE。`triage_skill()` の CREATE 判定パスに組み込み、`meta_quality` フィールドを結果に付加。LLM 不使用。
+
 ## [1.63.0] - 2026-05-22
 
 ### Added

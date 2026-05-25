@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from meta_quality import meta_quality_check  # noqa: E402  # (#203)
 from similarity import jaccard_coefficient, tokenize
 from skill_triggers import extract_skill_triggers, normalize_skill_name
 from trigger_eval_generator import (
@@ -113,8 +114,19 @@ def triage_skill(
     # CREATE 判定: missed_skill 高 + 既存スキルなし
     if missed_info and missed_session_count >= MISSED_SKILL_THRESHOLD and skill_name not in existing_skills:
         confidence = compute_confidence("CREATE", session_count=missed_session_count)
+        # meta 品質フィルタ (#203): 重複・低頻度で SKIP/REVIEW に降格
+        meta = meta_quality_check(
+            skill_name=skill_name,
+            skill_content=" ".join(missed_info.get("triggers_matched", [])),
+            usage_stats={
+                "trigger_count": missed_session_count,
+                "session_count": max(missed_session_count, 1),
+            },
+            all_skills=sorted(existing_skills),
+        )
+        _action = meta["recommendation"] if meta["recommendation"] in ("CREATE", "SKIP", "REVIEW") else "CREATE"
         return {
-            "action": "CREATE",
+            "action": _action,
             "skill": skill_name,
             "confidence": round(confidence, 2),
             "evidence": {
@@ -122,6 +134,7 @@ def triage_skill(
                 "triggers_matched": missed_info.get("triggers_matched", []),
             },
             "eval_set_path": eval_set_path,
+            "meta_quality": meta,
         }
 
     # UPDATE 判定: missed_skill 高 + 既存スキルあり + near-miss
