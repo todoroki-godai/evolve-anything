@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.65.1] - 2026-05-25
+
+### Fixed
+- **fix(bin): bin/ スクリプトの import エラーを一括修正 (#215)** — `bin/rl-prune`（prune/__init__.py に main を re-export）、`bin/rl-reorganize`（reorganize.py に main() 追加）、`bin/rl-loop`（run-loop.py → run_loop.py リネームで Python import 不能を解消）の3本の起動エラーを修正。ソース .py 削除済みのデッドラッパー（bin/rl-backfill / rl-backfill-analyze / rl-backfill-reclassify）を削除。
+
 ## [1.65.0] - 2026-05-25
 
 ### Added

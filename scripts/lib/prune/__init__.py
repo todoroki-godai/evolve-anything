@@ -141,10 +141,8 @@ from .drift import (  # noqa: E402, F401
 
 
 # run_prune オーケストレータは prune/runner.py に集約済み（後方互換のため再エクスポート）
-# main は public API ではないため再エクスポートしない（snapshot 互換維持）
-from .runner import run_prune  # noqa: E402, F401
+from .runner import run_prune, main  # noqa: E402, F401
 
 
 if __name__ == "__main__":
-    from .runner import main
     main()

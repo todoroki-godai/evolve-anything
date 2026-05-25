@@ -21,7 +21,7 @@ import pytest
 # モジュールとしてインポートするためにファイル名から "-" を含むため importlib を使う
 import importlib.util
 
-_LOOP_PY = _LOOP_SCRIPTS_DIR / "run-loop.py"
+_LOOP_PY = _LOOP_SCRIPTS_DIR / "run_loop.py"
 _spec = importlib.util.spec_from_file_location("run_loop_mod", _LOOP_PY)
 _mod = importlib.util.module_from_spec(_spec)
 # scorer_prompts / line_limit / skill_evolve のインポートを事前にモック

@@ -29,6 +29,7 @@ load_decay_threshold() -> float
 load_drift_threshold() -> float
 load_interactive_merge_threshold() -> float
 load_merge_similarity_threshold() -> float
+main() -> None
 merge_duplicates(duplicate_candidates: List[Dict[str, Any]], reorganize_merge_groups: List[Dict[str, Any]] | None = None, project_dir: str | None = None) -> Dict[str, Any]
 restore_file(archive_path: str) -> str | None
 run_prune(project_dir: str | None = None, reorganize_merge_groups: list | None = None) -> Dict[str, Any]

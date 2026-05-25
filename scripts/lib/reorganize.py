@@ -199,7 +199,11 @@ def run_reorganize(project_dir: str = None) -> dict:
     }
 
 
-if __name__ == "__main__":
+def main() -> None:
     project = sys.argv[1] if len(sys.argv) > 1 else None
     result = run_reorganize(project)
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

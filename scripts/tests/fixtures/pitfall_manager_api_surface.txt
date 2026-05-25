@@ -16,6 +16,7 @@ STALE_ESCALATION_MONTHS = 3
 STALE_KNOWLEDGE_MONTHS = 6
 
 # pitfall_manager public function / class signatures
+count_recent_errors(session_id: 'str', tail_lines: 'int' = 200) -> 'int'
 detect_archive_candidates(sections: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
 detect_integration(pitfall: Dict[str, Any], skill_dir: pathlib.Path) -> Dict[str, Any]
 detect_rationalization_patterns(corrections: List[Dict[str, Any]]) -> List[Dict[str, Any]]
@@ -26,8 +27,11 @@ find_matching_candidate(candidates: List[Dict[str, Any]], root_cause: str) -> in
 generate_rationalization_table(corrections: List[Dict[str, Any]], usage: List[Dict[str, Any]] | None = None, errors: List[Dict[str, Any]] | None = None, *, existing_pitfalls: Dict[str, List[Dict[str, Any]]] | None = None) -> Dict[str, Any]
 get_cold_tier(sections: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
 get_hot_tier(sections: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
+get_pitfall_for_skill(skill_name: 'str') -> 'Optional[str]'
 get_warm_tier(sections: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]
 graduate_pitfall(pitfalls_path: pathlib.Path, title: str, integration_target: str = '') -> bool
+is_already_injected(session_id: 'str', skill_name: 'str') -> 'bool'
+mark_injected(session_id: 'str', skill_name: 'str') -> 'None'
 parse_pitfalls(content: str) -> Dict[str, List[Dict[str, Any]]]
 pitfall_hygiene(project_dir: pathlib.Path | None = None, *, frequency_scores: Dict[str, int] | None = None) -> Dict[str, Any]
 promote_to_active(pitfalls_path: pathlib.Path, title: str) -> bool

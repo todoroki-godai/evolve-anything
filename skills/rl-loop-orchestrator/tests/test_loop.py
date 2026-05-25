@@ -9,11 +9,11 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-# run-loop.py はハイフン入りなので importlib で読み込む
+# run_loop.py を importlib で読み込む（bin/rl-loop との一貫性）
 import importlib.util
 spec = importlib.util.spec_from_file_location(
     "run_loop",
-    Path(__file__).parent.parent / "scripts" / "run-loop.py",
+    Path(__file__).parent.parent / "scripts" / "run_loop.py",
 )
 run_loop_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run_loop_mod)

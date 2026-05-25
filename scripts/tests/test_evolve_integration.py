@@ -14,12 +14,12 @@ sys.path.insert(0, str(_lib_dir))
 
 _rl_loop_script = (
     Path(__file__).resolve().parent.parent.parent
-    / "skills" / "rl-loop-orchestrator" / "scripts" / "run-loop.py"
+    / "skills" / "rl-loop-orchestrator" / "scripts" / "run_loop.py"
 )
 
 
 def _import_run_loop():
-    """run-loop.py をモジュールとしてインポートする（ハイフン含みファイル名対策）。"""
+    """run_loop.py をモジュールとしてインポートする。"""
     spec = importlib.util.spec_from_file_location("run_loop", _rl_loop_script)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["run_loop"] = mod
@@ -104,7 +104,7 @@ def test_assess_then_apply(mock_telemetry, mock_llm, tmp_path):
 
 @pytest.fixture
 def run_loop_mod():
-    """run-loop.py をモジュールとしてロードする fixture。"""
+    """run_loop.py をモジュールとしてロードする fixture。"""
     return _import_run_loop()
 
 
