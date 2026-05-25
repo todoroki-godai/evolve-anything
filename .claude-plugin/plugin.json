@@ -106,6 +106,12 @@
       "description": "Trigger active Pre-flight warning when corrections for the same skill reach this count (default: 3). Set higher to reduce noise.",
       "sensitive": false
     },
+    "error_preflight_threshold": {
+      "title": "Error Pre-flight Threshold",
+      "type": "number",
+      "description": "Trigger active Pre-flight warning when session errors reach this count (default: 3). Set higher to reduce noise.",
+      "sensitive": false
+    },
     "skill_lr_budget": {
       "title": "Skill LR Budget (lines)",
       "type": "number",
