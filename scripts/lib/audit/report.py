@@ -33,6 +33,7 @@ def generate_report(
     growth_report: Optional[List[str]] = None,
     contribution_scores: Optional[Dict[str, Any]] = None,
     max_skill_count: Optional[int] = None,
+    negative_transfer_results: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """1画面レポートを生成する。"""
     lines = ["# Environment Audit Report", ""]
@@ -123,6 +124,26 @@ def generate_report(
     corrections_insights_section = build_corrections_insights_section()
     if corrections_insights_section:
         lines.extend(corrections_insights_section)
+
+    if negative_transfer_results:
+        flagged = [r for r in negative_transfer_results if r.get("negative_transfer")]
+        if flagged:
+            lines.append(f"## ⚠ Negative Transfer Detected ({len(flagged)} skills)")
+            lines.append("")
+            for r in flagged:
+                skill = r["skill_name"]
+                delta = r["delta_score"]
+                before = r["before_score"]
+                after = r["after_score"]
+                lines.append(
+                    f"- **{skill}**: before={before:.0%} → after={after:.0%} (Δ{delta:+.0%})"
+                )
+            lines.append("")
+            lines.append(
+                "  スキル追加がパフォーマンスを低下させた可能性があります。"
+                "`/rl-anything:evolve-skill` で見直しを検討してください。"
+            )
+            lines.append("")
 
     if duplicates:
         lines.append(f"## Potential Duplicates ({len(duplicates)})")
