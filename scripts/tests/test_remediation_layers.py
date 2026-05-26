@@ -257,3 +257,68 @@ def test_generate_auto_fix_summaries_filters_non_auto_fixable():
     summaries = generate_auto_fix_summaries(issues)
     assert len(summaries) == 1
     assert summaries[0]["issue"]["type"] == "stale_ref"
+
+
+# ── missing_effort: per-item proposal/rationale（件数に丸めない）────────
+
+
+def test_generate_proposals_missing_effort_per_skill_specific():
+    """missing_effort は各スキル名・推定 effort を持つ具体的 proposal を生成する。"""
+    issue = {
+        "type": "missing_effort",
+        "file": ".claude/skills/generate-docs/SKILL.md",
+        "category": "proposable",
+        "detail": {
+            "skill_name": "generate-docs",
+            "proposed_effort": "low",
+            "confidence": 0.75,
+            "reason": "content_lines=62 < 80",
+        },
+    }
+    props = generate_proposals([issue])
+    entry = props[0]
+    # 汎用フォールバックでなく、スキル名と推定 effort が proposal に出る
+    assert "検討してください" not in entry["proposal"]
+    assert "generate-docs" in entry["proposal"]
+    assert "low" in entry["proposal"]
+    # rationale に判断材料（reason の実値）が含まれる
+    assert "content_lines=62 < 80" in entry["rationale"]
+
+
+def test_generate_proposals_missing_effort_multiple_expands_per_item():
+    """複数スキル分の missing_effort は件数に丸めず per-item に展開される。"""
+    issues = [
+        {
+            "type": "missing_effort",
+            "file": f".claude/skills/skill-{i}/SKILL.md",
+            "category": "proposable",
+            "detail": {
+                "skill_name": f"skill-{i}",
+                "proposed_effort": "medium",
+                "confidence": 0.75,
+                "reason": "content_lines=120, default",
+            },
+        }
+        for i in range(3)
+    ]
+    props = generate_proposals(issues)
+    assert len(props) == 3
+    names = {p["issue"]["detail"]["skill_name"] for p in props}
+    assert names == {"skill-0", "skill-1", "skill-2"}
+
+
+def test_rationale_missing_effort_has_reason():
+    issue = {
+        "type": "missing_effort",
+        "detail": {
+            "skill_name": "orchestrate-x",
+            "proposed_effort": "high",
+            "confidence": 0.90,
+            "reason": "allowed-tools includes Agent",
+        },
+    }
+    r = generate_rationale(issue, "proposable")
+    assert "orchestrate-x" in r
+    assert "high" in r
+    assert "allowed-tools includes Agent" in r
+    assert "問題タイプ" not in r  # 汎用フォールバックでない

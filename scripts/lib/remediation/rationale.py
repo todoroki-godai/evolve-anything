@@ -46,6 +46,7 @@ _RATIONALE_TEMPLATES = {
     "line_guard": "pitfalls.md が {line_count}/{max_lines} 行で上限を超過しています。Cold 層から優先順にアーカイブします。",
     "split_candidate": "スキル「{skill_name}」({line_count}/{threshold}行) が分割閾値を超過しています。references/ への切り出しを提案します。",
     "preflight_scriptification": "pitfall「{pitfall_title}」(カテゴリ: {category}) のPre-flightスクリプト化を提案します。",
+    "missing_effort": "スキル「{skill_name}」は effort frontmatter が未設定です。特性から effort: {proposed_effort} と推定しました（confidence: {confidence}, 根拠: {reason}）。",
 }
 
 
@@ -187,6 +188,14 @@ def generate_rationale(issue: Dict[str, Any], category: str) -> str:
         return _RATIONALE_TEMPLATES["preflight_scriptification"].format(
             pitfall_title=detail.get("pitfall_title", "unknown"),
             category=detail.get("category", "unknown"),
+        )
+
+    if issue_type == "missing_effort":
+        return _RATIONALE_TEMPLATES["missing_effort"].format(
+            skill_name=detail.get("skill_name", "unknown"),
+            proposed_effort=detail.get("proposed_effort", "medium"),
+            confidence=detail.get("confidence", 0.0),
+            reason=detail.get("reason", ""),
         )
 
     return f"問題タイプ「{issue_type}」が検出されました。"

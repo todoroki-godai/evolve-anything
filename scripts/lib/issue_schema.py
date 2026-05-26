@@ -26,8 +26,11 @@ WORKFLOW_CHECKPOINT_CANDIDATE = "workflow_checkpoint_candidate"
 # ── stall_recovery_candidate 定数 ─────────────────────
 STALL_RECOVERY_CANDIDATE = "stall_recovery_candidate"
 
-# ── missing_effort_candidate 定数 ─────────────────────
-MISSING_EFFORT_CANDIDATE = "missing_effort_candidate"
+# ── missing_effort 定数 ─────────────────────
+# 検出側 (audit/issues.py) が生成する LIVE type に揃える。
+# 以前は "missing_effort_candidate" だったが、検出は "missing_effort" を生成しており
+# fix/verify ハンドラと dispatch が一致せず修正が no-op になっていた（type 不一致バグ）。
+MISSING_EFFORT_CANDIDATE = "missing_effort"
 
 # ── skill_quality_pattern_gap 定数 ──────────────────────
 SKILL_QUALITY_PATTERN_GAP = "skill_quality_pattern_gap"
@@ -102,7 +105,7 @@ SQP_PATTERN_SCORE = "pattern_score"
 SQP_OVERALL_SCORE = "overall_score"
 SQP_CONFIDENCE = "confidence"
 
-# ── missing_effort_candidate detail フィールド ────────
+# ── missing_effort detail フィールド ────────
 
 MEC_SKILL_NAME = "skill_name"
 MEC_SKILL_PATH = "skill_path"

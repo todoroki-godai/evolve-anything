@@ -431,6 +431,11 @@ def generate_proposals(
         elif issue["type"] == "duplicate":
             detail = issue.get("detail", {})
             proposal = f"アーティファクト「{detail.get('name', 'unknown')}」の統合提案"
+        elif issue["type"] == "missing_effort":
+            detail = issue.get("detail", {})
+            skill_name = detail.get("skill_name", "unknown")
+            proposed = detail.get("proposed_effort", "medium")
+            proposal = f"スキル「{skill_name}」の frontmatter に effort: {proposed} を追加（effort: なし → {proposed}）"
         else:
             proposal = f"{issue['type']} に対する修正案を検討してください。"
 

@@ -161,7 +161,7 @@ class TestFixMissingEffort:
 
         path = _make_skill(skills_dir, "target", ["name: target", "description: test"])
         issue = {
-            "type": "missing_effort_candidate",
+            "type": "missing_effort",
             "file": str(path),
             "detail": {
                 "skill_name": "target",
@@ -188,7 +188,7 @@ class TestFixMissingEffort:
         from remediation import fix_missing_effort
 
         issue = {
-            "type": "missing_effort_candidate",
+            "type": "missing_effort",
             "file": "/nonexistent/SKILL.md",
             "detail": {
                 "skill_name": "ghost",
@@ -217,3 +217,27 @@ class TestMakeEffortIssue:
         assert issue["detail"]["proposed_effort"] == "medium"
         assert issue["detail"]["confidence"] == 0.85
         assert issue["detail"]["skill_name"] == "test-skill"
+
+
+class TestMissingEffortTypeConsistency:
+    """type 不一致バグの回帰防止。
+
+    検出側 (audit/issues.py) は LIVE type "missing_effort" を生成する。
+    定数・fix/verify ハンドラ・dispatch がこの LIVE type と一致していないと
+    「追加する」を選んでも修正が no-op になる（過去に発生したバグ）。
+    """
+
+    def test_constant_matches_live_detection_type(self):
+        """定数は検出側が生成する LIVE type と一致する。"""
+        assert MISSING_EFFORT_CANDIDATE == "missing_effort"
+
+    def test_fix_and_verify_dispatch_keyed_on_live_type(self):
+        _remediation_root = (
+            Path(__file__).resolve().parent.parent.parent
+            / "skills" / "evolve" / "scripts"
+        )
+        sys.path.insert(0, str(_remediation_root))
+        from remediation import FIX_DISPATCH, VERIFY_DISPATCH
+
+        assert "missing_effort" in FIX_DISPATCH
+        assert "missing_effort" in VERIFY_DISPATCH

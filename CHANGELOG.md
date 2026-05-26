@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **fix(remediation): missing_effort の type 不一致で effort frontmatter の修正が no-op になる問題を修正** — 検出側（`audit/issues.py`）が生成する LIVE な issue type は `"missing_effort"` だが、`fix_missing_effort` のフィルタ・`FIX_DISPATCH`・`VERIFY_DISPATCH` が定数 `MISSING_EFFORT_CANDIDATE = "missing_effort_candidate"` でキーされており一致しなかった。このため evolve で「effort を追加する」を選んでも修正ハンドラが対象を弾いて何も適用されなかった。定数値を LIVE type `"missing_effort"` に統一。type 不一致を弾く回帰テスト（定数=LIVE一致 / FIX・VERIFY dispatch に LIVE key 存在）を追加。既存の `fix_missing_effort` テストはバグと同じ `"missing_effort_candidate"` を渡しておりバグをマスクしていたため LIVE type に修正。
+
+### Added
+- **feat(evolve): 全 AskUserQuestion 提案ポイントに「提案詳細プロトコル」を導入** — evolve の提案が「active スキル 10件 を追加しますか？」のように件数だけ出してユーザーが判断できない問題に対応。SKILL.md 冒頭に共通プロトコルを新設し、AskUserQuestion 前に各対象を per-item 展開して「対象（具体名）・根拠（detail の実値: 閾値/confidence/reason）・変更内容（before → after）」を必ず提示するよう統一した（最大10件、超過分は誘導）。判断材料が薄かった Step 2（fitness 生成）/ Step 5.5（proposable）/ Step 7（prune custom）/ Step 7.5（pitfall 卒業）に参照を追記。`generate_proposals()` と `generate_rationale()` に `missing_effort` 分岐を追加し、件数に丸めず各スキル名・推定 effort・推定根拠を per-item で返すようにした（proposable 対応 type にも `missing_effort` を追加）。
+
 ## [1.66.0] - 2026-05-26
 
 ### Added
