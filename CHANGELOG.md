@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **fix(discover): discover shim の `import_module` 自己再帰で test 収集が RecursionError になる問題を修正** — `skills/discover/scripts/discover.py`（shim）がファイル名 `discover.py` のため、pytest collection 中に shim 自身のディレクトリが `sys.path` 先頭に載ると `importlib.import_module("discover")` が shim 自身を再解決して無限再帰し、`test_hooks_discover_prune.py` / `test_e2e_workflow.py` の collection が RecursionError で落ちていた。v1.66.0 で remediation shim に適用した手法と同様に、名前解決 import をやめ `importlib.util.spec_from_file_location` で `scripts/lib/discover/__init__.py` を実ファイルパス指定でロードするよう変更した。
+
 ## [1.67.0] - 2026-05-26
 
 ### Fixed
