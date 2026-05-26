@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.67.0] - 2026-05-26
 
 ### Fixed
 - **fix(remediation): missing_effort の type 不一致で effort frontmatter の修正が no-op になる問題を修正** — 検出側（`audit/issues.py`）が生成する LIVE な issue type は `"missing_effort"` だが、`fix_missing_effort` のフィルタ・`FIX_DISPATCH`・`VERIFY_DISPATCH` が定数 `MISSING_EFFORT_CANDIDATE = "missing_effort_candidate"` でキーされており一致しなかった。このため evolve で「effort を追加する」を選んでも修正ハンドラが対象を弾いて何も適用されなかった。定数値を LIVE type `"missing_effort"` に統一。type 不一致を弾く回帰テスト（定数=LIVE一致 / FIX・VERIFY dispatch に LIVE key 存在）を追加。既存の `fix_missing_effort` テストはバグと同じ `"missing_effort_candidate"` を渡しておりバグをマスクしていたため LIVE type に修正。
