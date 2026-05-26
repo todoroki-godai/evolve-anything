@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 
+## [1.68.0] - 2026-05-26
+
 ### Added
 - **feat(fitness): 日次 evolve のスキル diff 提案 accept/reject を採点付きで蓄積する** (#223) — `fitness_evolution` がサンプル不足（0/30件）でデッドフィーチャー化していた問題に対応。母集団が optimize/rl-loop に限定され「1日1回 evolve」では永遠に貯まらなかった。(a) `insufficient_data` メッセージに母集団（optimize/rl-loop に加え evolve diff 提案）を明記。(b) 採点ブリッジ `record_evolve_diff_decision()` を追加 — evolve の skill diff を accept/reject した時点で after content を `evaluate_skill_quality` で採点し `fitness_func="skill_quality"` / `source="evolve_remediation"` で history.jsonl に正規記録（混合ではなく増量＝相関が壊れない）。冪等 ingest（id 重複排除）。(c) `analyze_correlations` を `fitness_func` でグループ化（異種採点の混合防止、`by_fitness_func` 構造を返す）。SKILL.md の matched_skills accept/reject 点に採点記録手順を追記。(d) `format_correlation_report()` を追加 — `by_fitness_func` を各 fitness_func グループ独立に整形（data_points / correlation 値 / グループ単位の <0.50 警告）し、SKILL.md Step 3 のレポート表示を新形状に追随。
+
+- **feat(evolve): batch guard をグループ単位スキップ + 永続 denylist に置き換え (#225)** — `skill_evolve_assessment()` が 10件超でRuntimeError を投げる all-or-nothing 方式を廃止。代わりに `_meta: batch_guard_trigger` sentinel を返し、evolve.py 経由で SKILL.md のインタラクティブフロー（グループ表示→AskUserQuestion→永続 denylist 保存→再実行）へ誘導する。`denylist.py`（`add_to_denylist` / `get_denied_skill_names` / `remove_from_denylist`）を新設し `~/.claude/rl-anything/skill-evolve-denylist.json` にグローバル保存。`skill_evolve_assessment()` に `skip_skills` / `skip_llm_evolve` パラメータを追加。`evolve.py` に `--skip-skills` / `--skip-llm-evolve` CLI arg を追加。
 
 ### Fixed
 - **fix(prune): prune shim が分割後の旧 `scripts/lib/prune.py` を spec ロードし FileNotFoundError になる問題を修正** — パッケージ化（`scripts/lib/prune.py` → `scripts/lib/prune/`）後も `skills/prune/scripts/prune.py`（shim）が旧ファイルパスを `spec_from_file_location` に渡しており、`test_e2e_correction_flow.py` の collection が FileNotFoundError で落ちていた。discover shim 修正と同手法で `scripts/lib/prune/__init__.py` を `submodule_search_locations` 付きで明示ロードするよう変更。これで `pytest hooks/ skills/ scripts/tests/ scripts/rl/tests/ --collect-only` が 0 error（2750 collected）で通るようになった。
@@ -15,7 +19,6 @@
 - **fix(remediation): missing_effort の type 不一致で effort frontmatter の修正が no-op になる問題を修正** — 検出側（`audit/issues.py`）が生成する LIVE な issue type は `"missing_effort"` だが、`fix_missing_effort` のフィルタ・`FIX_DISPATCH`・`VERIFY_DISPATCH` が定数 `MISSING_EFFORT_CANDIDATE = "missing_effort_candidate"` でキーされており一致しなかった。このため evolve で「effort を追加する」を選んでも修正ハンドラが対象を弾いて何も適用されなかった。定数値を LIVE type `"missing_effort"` に統一。type 不一致を弾く回帰テスト（定数=LIVE一致 / FIX・VERIFY dispatch に LIVE key 存在）を追加。既存の `fix_missing_effort` テストはバグと同じ `"missing_effort_candidate"` を渡しておりバグをマスクしていたため LIVE type に修正。
 
 ### Added
-- **feat(evolve): batch guard をグループ単位スキップ + 永続 denylist に置き換え (#225)** — `skill_evolve_assessment()` が 10件超でRuntimeError を投げる all-or-nothing 方式を廃止。代わりに `_meta: batch_guard_trigger` sentinel を返し、evolve.py 経由で SKILL.md のインタラクティブフロー（グループ表示→AskUserQuestion→永続 denylist 保存→再実行）へ誘導する。`denylist.py`（`add_to_denylist` / `get_denied_skill_names` / `remove_from_denylist`）を新設し `~/.claude/rl-anything/skill-evolve-denylist.json` にグローバル保存。`skill_evolve_assessment()` に `skip_skills` / `skip_llm_evolve` パラメータを追加。`evolve.py` に `--skip-skills` / `--skip-llm-evolve` CLI arg を追加。
 - **feat(evolve): 全 AskUserQuestion 提案ポイントに「提案詳細プロトコル」を導入** — evolve の提案が「active スキル 10件 を追加しますか？」のように件数だけ出してユーザーが判断できない問題に対応。SKILL.md 冒頭に共通プロトコルを新設し、AskUserQuestion 前に各対象を per-item 展開して「対象（具体名）・根拠（detail の実値: 閾値/confidence/reason）・変更内容（before → after）」を必ず提示するよう統一した（最大10件、超過分は誘導）。判断材料が薄かった Step 2（fitness 生成）/ Step 5.5（proposable）/ Step 7（prune custom）/ Step 7.5（pitfall 卒業）に参照を追記。`generate_proposals()` と `generate_rationale()` に `missing_effort` 分岐を追加し、件数に丸めず各スキル名・推定 effort・推定根拠を per-item で返すようにした（proposable 対応 type にも `missing_effort` を追加）。
 
 ## [1.66.0] - 2026-05-26
