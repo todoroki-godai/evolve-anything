@@ -41,7 +41,14 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/evolve-fitness/scripts/fitness_evolution.py
 ### Step 3: レポート表示
 
 十分なデータがある場合、以下を表示:
-1. **score-acceptance 相関**: 相関 < 0.50 なら「再キャリブレーション推奨」警告（MUST）
+1. **score-acceptance 相関（fitness_func グループ別）**: `correlation` は
+   `{"by_fitness_func": {<func名>: {data_points, correlation, sufficient_data, warning?}, ...}}`
+   形状で返る。異種 fitness_func（skill_quality / default / coherence ...）は混ぜず、
+   **各グループ独立に**相関と警告を表示する。グループ単位で相関 < 0.50 なら
+   そのグループに対し「再キャリブレーション推奨」警告（MUST、グループ単位で適用）。
+   整形は `fitness_evolution.format_correlation_report(correlation)` を使うこと
+   （per-fitness_func の data_points / correlation 値 / 警告を複数行で返す。
+   by_fitness_func が空なら「相関データなし」）。
 2. **欠落評価軸提案**: 同じ rejection_reason が3回以上なら新軸追加を提案（SHALL）
 3. **adversarial probe 結果**: ゲーミング脆弱性の検出
 

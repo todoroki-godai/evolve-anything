@@ -7,11 +7,15 @@ adversarial probe を行い、fitness function の改善を提案する。
 human_accepted / rejection_reason のデータは
 optimize スキルの history.jsonl（SSoT）を参照する。
 """
+import hashlib
 import json
 import math
+import sys
+import tempfile
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 HISTORY_DIR = (
     Path(__file__).parent.parent
@@ -28,9 +32,19 @@ CORRELATION_THRESHOLD = 0.50
 REJECTION_PATTERN_THRESHOLD = 3
 
 
-def load_history() -> List[Dict[str, Any]]:
-    """optimize スキルの history.jsonl（SSoT）を読み込む。"""
-    history_file = HISTORY_DIR / "history.jsonl"
+# evolve diff 提案の採点記録に使う固定値（issue #223）
+EVOLVE_DIFF_FITNESS_FUNC = "skill_quality"
+EVOLVE_DIFF_SOURCE = "evolve_remediation"
+
+
+def load_history(history_file: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """history.jsonl（SSoT）を読み込む。
+
+    optimize/rl-loop の SSoT に加え、evolve diff 提案の採点記録も
+    同じ history.jsonl に正規化して書き込まれる（issue #223）。
+    """
+    if history_file is None:
+        history_file = HISTORY_DIR / "history.jsonl"
     if not history_file.exists():
         return []
 
@@ -41,6 +55,81 @@ def load_history() -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return records
+
+
+def _score_skill_content(after_content: str, skill_name: str) -> Optional[float]:
+    """after_content を skill_quality fitness で採点する。
+
+    evaluate_skill_quality はディスク上の SKILL.md を読むため、
+    after_content を一時ディレクトリの SKILL.md に書いて採点する。
+    """
+    fitness_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "rl" / "fitness"
+    if str(fitness_dir) not in sys.path:
+        sys.path.insert(0, str(fitness_dir))
+    try:
+        from skill_quality import evaluate_skill_quality
+    except Exception:
+        return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        skill_dir = Path(tmp) / (skill_name or "skill")
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(after_content, encoding="utf-8")
+        result = evaluate_skill_quality(after_content, str(skill_dir))
+    if not result:
+        return None
+    return float(result.get("overall", 0.0))
+
+
+def record_evolve_diff_decision(
+    skill_name: str,
+    after_content: str,
+    diff_summary: str,
+    human_accepted: bool,
+    rejection_reason: Optional[str] = None,
+    history_file: Optional[Path] = None,
+    entry_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """evolve の Compile/remediation でスキル diff を accept/reject した時点で、
+    after content を skill_quality で採点し history.jsonl に正規記録する（issue #223）。
+
+    optimize/rl-loop と同一スキーマ（best_fitness/human_accepted/fitness_func）で
+    記録するため母集団が「混合ではなく増量」になり相関が壊れない。
+
+    冪等性: entry_id（未指定時は内容ハッシュ）で既存行と重複したら再書き込みしない。
+    """
+    if history_file is None:
+        history_file = HISTORY_DIR / "history.jsonl"
+
+    best_fitness = _score_skill_content(after_content, skill_name)
+
+    if entry_id is None:
+        digest = hashlib.sha1(
+            f"{skill_name}|{after_content}|{human_accepted}".encode("utf-8")
+        ).hexdigest()[:16]
+        entry_id = f"evolve_diff_{digest}"
+
+    entry = {
+        "id": entry_id,
+        "source": EVOLVE_DIFF_SOURCE,
+        "skill_name": skill_name,
+        "diff_summary": diff_summary,
+        "timestamp": datetime.now().isoformat(),
+        "fitness_func": EVOLVE_DIFF_FITNESS_FUNC,
+        "best_fitness": best_fitness,
+        "human_accepted": human_accepted,
+        "rejection_reason": rejection_reason,
+    }
+
+    # 冪等 ingest: 同一 id が既にあれば書き込まない
+    existing = load_history(history_file)
+    if any(rec.get("id") == entry_id for rec in existing):
+        return entry
+
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(history_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry
 
 
 def compute_correlation(
@@ -71,12 +160,14 @@ def compute_correlation(
     return cov / (std_x * std_y)
 
 
-def analyze_correlations(history: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """score-acceptance 相関を分析する。"""
-    scores = []
-    accepted = []
+def _correlation_for_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """単一 fitness_func グループの score-acceptance 相関を計算する。
 
-    for rec in history:
+    best_fitness=None / human_accepted=None は母集団から除外する（issue #223 (a)）。
+    """
+    scores: List[float] = []
+    accepted: List[bool] = []
+    for rec in records:
         fitness = rec.get("best_fitness")
         ha = rec.get("human_accepted")
         if fitness is not None and ha is not None:
@@ -84,20 +175,64 @@ def analyze_correlations(history: List[Dict[str, Any]]) -> Dict[str, Any]:
             accepted.append(ha)
 
     corr = compute_correlation(scores, accepted)
-
-    result: Dict[str, Any] = {
+    group: Dict[str, Any] = {
         "data_points": len(scores),
         "correlation": corr,
         "sufficient_data": len(scores) >= CORRELATION_WINDOW,
     }
-
     if corr is not None and corr < CORRELATION_THRESHOLD:
-        result["warning"] = (
+        group["warning"] = (
             f"score-acceptance 相関が {corr:.3f} (< {CORRELATION_THRESHOLD}) に低下。"
             "評価関数の再キャリブレーション推奨。"
         )
+    return group
 
-    return result
+
+def analyze_correlations(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """score-acceptance 相関を fitness_func でグループ化して分析する（issue #223 (c)）。
+
+    異種採点（skill_quality / default / coherence ...）の混合を防ぐため、
+    相関は必ず同一 fitness_func 内でのみ計算する。source ラベルは記録のみで
+    相関母集団の選別には使わない。
+    """
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for rec in history:
+        func = rec.get("fitness_func") or "unknown"
+        groups.setdefault(func, []).append(rec)
+
+    by_fitness_func = {
+        func: _correlation_for_records(recs) for func, recs in groups.items()
+    }
+    return {"by_fitness_func": by_fitness_func}
+
+
+def format_correlation_report(correlation: Dict[str, Any]) -> str:
+    """analyze_correlations の by_fitness_func 形状を人間可読の文字列に整形する。
+
+    異種 fitness_func は混ぜず、各グループ独立に
+    func名 / data_points / correlation 値 / 相関<0.50 の警告有無 を出力する。
+    by_fitness_func が空なら「相関データなし」を返す。
+    """
+    by_func = (correlation or {}).get("by_fitness_func", {})
+    if not by_func:
+        return "相関データなし"
+
+    lines: List[str] = []
+    for func in sorted(by_func):
+        group = by_func[func]
+        corr = group.get("correlation")
+        data_points = group.get("data_points", 0)
+        corr_str = f"{corr:.3f}" if isinstance(corr, (int, float)) else "N/A（データ不足）"
+        lines.append(f"[{func}] data_points={data_points} correlation={corr_str}")
+        warning = group.get("warning")
+        if warning:
+            lines.append(f"  ⚠ 警告: {warning}")
+        elif isinstance(corr, (int, float)) and corr < CORRELATION_THRESHOLD:
+            lines.append(
+                f"  ⚠ 警告: 相関が {corr:.3f} (< {CORRELATION_THRESHOLD})。"
+                "このグループの評価関数の再キャリブレーション推奨。"
+            )
+    return "\n".join(lines)
 
 
 def analyze_rejection_reasons(history: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -168,7 +303,9 @@ def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dic
             "data_count": len(decisions),
             "required": MIN_DATA_COUNT,
             "message": f"データ不足: {len(decisions)}/{MIN_DATA_COUNT}件。"
-                       f"あと {MIN_DATA_COUNT - len(decisions)} 件の accept/reject が必要。",
+                       f"あと {MIN_DATA_COUNT - len(decisions)} 件の accept/reject が必要。"
+                       "母集団は optimize/rl-loop の accept/reject に加え、"
+                       "evolve のスキル diff 提案の accept/reject（採点付き記録）も含む。",
         }
 
     if len(decisions) < MIN_DATA_COUNT:
