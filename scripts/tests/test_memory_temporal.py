@@ -17,6 +17,8 @@ from memory_temporal import (
     is_stale,
     is_superseded,
     make_source_correction_id,
+    compute_importance_score,
+    reinforce_memory,
 )
 
 
@@ -195,6 +197,106 @@ class TestUpdateCount:
         )
         result2 = parse_memory_temporal(f2)
         assert result2["update_count"] == 0
+
+
+class TestComputeImportanceScore:
+    """compute_importance_score — rule-based スコア計算。"""
+
+    def test_high_with_corrections_and_updates(self):
+        """high + 2 corrections + 3 updates → 0.8 + 0.06 + 0.06 = 0.92"""
+        fm = {
+            "importance": "high",
+            "source_correction_ids": ["a#1", "b#2"],
+            "update_count": 3,
+        }
+        result = compute_importance_score(fm)
+        assert abs(result - 0.92) < 1e-9
+
+    def test_defaults_empty_fm(self):
+        """fm={} → デフォルト medium base = 0.5"""
+        result = compute_importance_score({})
+        assert result == 0.5
+
+    def test_low_importance(self):
+        """low → base 0.2"""
+        result = compute_importance_score({"importance": "low"})
+        assert result == 0.2
+
+    def test_correction_bonus_capped(self):
+        """correction_bonus は 0.15 上限"""
+        fm = {"importance": "medium", "source_correction_ids": list(range(10))}
+        result = compute_importance_score(fm)
+        # 0.5 + 0.15 (cap) + 0 = 0.65
+        assert abs(result - 0.65) < 1e-9
+
+    def test_update_bonus_capped(self):
+        """update_bonus は 0.10 上限"""
+        fm = {"importance": "medium", "update_count": 100}
+        result = compute_importance_score(fm)
+        # 0.5 + 0 + 0.10 (cap) = 0.60
+        assert abs(result - 0.60) < 1e-9
+
+    def test_result_capped_at_1(self):
+        """合計が 1.0 を超える場合は 1.0 に切り捨て"""
+        fm = {
+            "importance": "high",
+            "source_correction_ids": list(range(10)),
+            "update_count": 100,
+        }
+        result = compute_importance_score(fm)
+        assert result == 1.0
+
+
+class TestReinforceMemory:
+    """reinforce_memory — frontmatter の更新テスト。"""
+
+    def test_reinforce_updates_fields(self, tmp_path):
+        """reinforce_memory を呼ぶと importance_score/last_reinforced_at/update_count が更新される。"""
+        f = tmp_path / "test_entry.md"
+        f.write_text(
+            "---\n"
+            "name: test-entry\n"
+            "importance: high\n"
+            "source_correction_ids:\n"
+            "  - 'sess#2026-01-01T00:00:00.000Z'\n"
+            "  - 'sess#2026-01-02T00:00:00.000Z'\n"
+            "update_count: 3\n"
+            "---\n"
+            "# Body\n",
+            encoding="utf-8",
+        )
+
+        reinforce_memory(f, reason="test reinforcement")
+
+        import yaml
+        text = f.read_text(encoding="utf-8")
+        end = text.find("---", 3)
+        fm = yaml.safe_load(text[3:end].strip())
+
+        assert fm["update_count"] == 4
+        assert isinstance(fm["importance_score"], float)
+        assert fm["importance_score"] > 0.0
+        # last_reinforced_at は ISO8601 形式
+        assert fm["last_reinforced_at"] is not None
+        from datetime import datetime
+        # パース可能であることを確認
+        dt = datetime.fromisoformat(fm["last_reinforced_at"])
+        assert dt is not None
+
+    def test_reinforce_no_frontmatter_is_noop(self, tmp_path):
+        """frontmatter なし → no-op（ファイル内容が変わらない）。"""
+        f = tmp_path / "no_fm.md"
+        original = "# No frontmatter\nSome content.\n"
+        f.write_text(original, encoding="utf-8")
+
+        reinforce_memory(f, reason="should be no-op")
+
+        assert f.read_text(encoding="utf-8") == original
+
+    def test_reinforce_nonexistent_file_is_noop(self, tmp_path):
+        """存在しないファイル → 例外なく no-op。"""
+        f = tmp_path / "nonexistent.md"
+        reinforce_memory(f, reason="no-op")  # should not raise
 
 
 class TestMakeSourceCorrectionId:

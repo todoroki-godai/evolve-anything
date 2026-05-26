@@ -179,9 +179,10 @@ def _parse_frontmatter_fields(content: str) -> Dict[str, Any]:
     importance 未指定時は "medium" をデフォルト値として返す。
 
     Returns:
-        dict with keys: importance (str), detail_file (str | None)
+        dict with keys: importance (str), detail_file (str | None),
+                        importance_score (float | None)
     """
-    result: Dict[str, Any] = {"importance": "medium", "detail_file": None}
+    result: Dict[str, Any] = {"importance": "medium", "detail_file": None, "importance_score": None}
     lines = content.splitlines()
     if not lines or lines[0].strip() != "---":
         return result
@@ -198,6 +199,11 @@ def _parse_frontmatter_fields(content: str) -> Dict[str, Any]:
                 result["importance"] = value
             elif key == "detail_file" and value:
                 result["detail_file"] = value
+            elif key == "importance_score" and value:
+                try:
+                    result["importance_score"] = float(value)
+                except (ValueError, TypeError):
+                    pass
 
     return result
 
@@ -263,6 +269,7 @@ def build_memory_health_section(
     stale_refs: List[Dict[str, Any]] = []
     near_limits: List[Dict[str, Any]] = []
     broken_detail_files: List[Dict[str, Any]] = _check_detail_file_links(memory_files, project_dir)
+    low_importance: List[Dict[str, Any]] = []
 
     for path, content in memory_files:
         # 陳腐化参照の検出
@@ -303,8 +310,24 @@ def build_memory_health_section(
                 "pct": pct,
             })
 
+        # 低重要度メモリ候補の検出 (importance_score ≤ 0.3)
+        fields = _parse_frontmatter_fields(content)
+        raw_score = fields.get("importance_score")
+        if raw_score is not None:
+            try:
+                score = float(raw_score)
+                if score <= 0.3:
+                    rel_path = (
+                        str(path.relative_to(project_dir))
+                        if str(path).startswith(str(project_dir))
+                        else str(path)
+                    )
+                    low_importance.append({"file": rel_path, "score": score})
+            except (TypeError, ValueError):
+                pass
+
     # 問題なしなら空リスト
-    if not stale_refs and not near_limits and not broken_detail_files:
+    if not stale_refs and not near_limits and not broken_detail_files and not low_importance:
         return []
 
     lines = ["## Memory Health", ""]
@@ -325,6 +348,12 @@ def build_memory_health_section(
         lines.append("### Near Limit")
         for nl in near_limits:
             lines.append(f"- {nl['file']}: {nl['lines']}/{nl['limit']} lines ({nl['pct']}%)")
+        lines.append("")
+
+    if low_importance:
+        lines.append("### 低重要度メモリ候補 (importance_score ≤ 0.3)")
+        for li in low_importance:
+            lines.append(f"- {li['file']}: {li['score']:.2f}")
         lines.append("")
 
     # Suggestions

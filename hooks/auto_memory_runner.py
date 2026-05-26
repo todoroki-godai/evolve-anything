@@ -37,6 +37,13 @@ import rl_common
 
 DATA_DIR: Path = rl_common.DATA_DIR
 
+try:
+    from memory_temporal import compute_importance_score as _compute_importance_score
+    from memory_temporal import write_importance_score as _write_importance_score
+    _HAS_MEMORY_TEMPORAL = True
+except ImportError:
+    _HAS_MEMORY_TEMPORAL = False
+
 # MEMORY.md の行数上限（超えたら archive）
 MEMORY_LINE_LIMIT = 200
 
@@ -187,6 +194,23 @@ def _append_index_line(memory_md_path: Path, filename: str, summary: str) -> Non
         pass
 
 
+def _apply_importance_score(entry_path: Path) -> None:
+    """エントリファイルの frontmatter に importance_score をアトミックに書き込む。
+
+    compute_importance_score() が利用可能な場合のみ実行する。
+    失敗してもサイレントに続行する（Stop hook への影響を与えない）。
+    """
+    if not _HAS_MEMORY_TEMPORAL:
+        return
+    try:
+        from frontmatter import parse_frontmatter
+        fm = parse_frontmatter(entry_path)
+        score = _compute_importance_score(fm)
+        _write_importance_score(entry_path, score)
+    except Exception:
+        pass  # サイレント継続
+
+
 def _archive_old_entries(memory_md_path: Path, memory_dir: Path) -> None:
     """MEMORY.md が MEMORY_LINE_LIMIT 行超の場合、古い index エントリを archive.md に移動する。
 
@@ -285,7 +309,10 @@ def run(
 
     # 4. 新規 .md ファイルに書き出す
     filename = _make_filename(llm_output)
-    _write_entry_file(_memory_dir, filename, llm_output)
+    entry_path = _write_entry_file(_memory_dir, filename, llm_output)
+
+    # 4a. importance_score を frontmatter に書き込む
+    _apply_importance_score(entry_path)
 
     # 5. MEMORY.md に index 追加
     _memory_md = memory_md_path or (_memory_dir.parent / "MEMORY.md")

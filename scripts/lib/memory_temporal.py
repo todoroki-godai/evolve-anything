@@ -11,9 +11,13 @@ APEX-MEM インスパイアの A++ 設計:
 # Memory ノードパーサーに置き換える。
 # 参照: issue #13
 """
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from frontmatter import parse_frontmatter
 
@@ -23,6 +27,15 @@ TEMPORAL_DEFAULTS: dict[str, Any] = {
     "decay_days": None,
     "source_correction_ids": [],
     "update_count": 0,
+    "importance_score": 0.5,
+    "last_reinforced_at": None,
+}
+
+# importance ラベル → base スコアのマッピング
+_IMPORTANCE_BASE: dict[str, float] = {
+    "high": 0.8,
+    "medium": 0.5,
+    "low": 0.2,
 }
 
 
@@ -91,6 +104,144 @@ def is_superseded(temporal: dict[str, Any]) -> bool:
         return superseded_at < datetime.now(timezone.utc)
     except (ValueError, TypeError):
         return False
+
+
+def compute_importance_score(fm: dict[str, Any]) -> float:
+    """frontmatter 辞書から rule-based で importance_score を計算する。
+
+    計算式:
+    - base: high=0.8 / medium=0.5 / low=0.2 (fm["importance"]、デフォルト medium)
+    - correction_bonus: min(0.15, len(source_correction_ids) * 0.03)
+    - update_bonus: min(0.10, update_count * 0.02)
+    - result: min(1.0, base + correction_bonus + update_bonus)
+
+    access_count は hook で取得不能なため除外。
+    """
+    importance_label = fm.get("importance", "medium")
+    if not isinstance(importance_label, str):
+        importance_label = "medium"
+    base = _IMPORTANCE_BASE.get(importance_label.lower(), 0.5)
+
+    source_ids = fm.get("source_correction_ids", [])
+    correction_count = len(source_ids) if isinstance(source_ids, list) else 0
+    correction_bonus = min(0.15, correction_count * 0.03)
+
+    update_count = fm.get("update_count", 0)
+    if not isinstance(update_count, int) or isinstance(update_count, bool):
+        update_count = 0
+    update_bonus = min(0.10, max(0, update_count) * 0.02)
+
+    return min(1.0, base + correction_bonus + update_bonus)
+
+
+def reinforce_memory(filepath: Path, reason: str) -> None:
+    """memory ファイルの importance_score・last_reinforced_at・update_count を更新する。
+
+    frontmatter がない場合は no-op。atomic write（tmp → os.replace）で書き戻す。
+
+    Args:
+        filepath: 対象 memory ファイルのパス
+        reason: 強化理由（ログ用、ファイルには書かない）
+    """
+    try:
+        text = filepath.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+
+    if not text.startswith("---"):
+        return  # frontmatter なし → no-op
+
+    end = text.find("---", 3)
+    if end == -1:
+        return
+
+    yaml_str = text[3:end].strip()
+    try:
+        fm: dict[str, Any] = yaml.safe_load(yaml_str) or {}
+        if not isinstance(fm, dict):
+            return
+    except yaml.YAMLError:
+        return
+
+    # update_count をインクリメント
+    current_count = fm.get("update_count", 0)
+    if not isinstance(current_count, int) or isinstance(current_count, bool):
+        current_count = 0
+    fm["update_count"] = current_count + 1
+
+    # importance_score を再計算
+    fm["importance_score"] = compute_importance_score(fm)
+
+    # last_reinforced_at を現在時刻で更新
+    fm["last_reinforced_at"] = datetime.now(timezone.utc).isoformat()
+
+    # frontmatter を再構築して atomic write
+    new_yaml = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False).rstrip()
+    body = text[end + 3:]  # 閉じ --- の後の本文
+    new_text = f"---\n{new_yaml}\n---{body}"
+
+    try:
+        dir_path = filepath.parent
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(new_text)
+            os.replace(tmp_path, filepath)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    except (OSError, PermissionError):
+        return
+
+
+def write_importance_score(filepath: Path, score: float) -> None:
+    """frontmatter の importance_score のみをアトミックに書き込む。
+
+    update_count / last_reinforced_at は変更しない（初回採点専用）。
+    frontmatter がない場合は no-op。atomic write（tmp → os.replace）で書き戻す。
+    """
+    try:
+        text = filepath.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+
+    if not text.startswith("---"):
+        return
+
+    end = text.find("---", 3)
+    if end == -1:
+        return
+
+    yaml_str = text[3:end].strip()
+    try:
+        fm: dict[str, Any] = yaml.safe_load(yaml_str) or {}
+        if not isinstance(fm, dict):
+            return
+    except yaml.YAMLError:
+        return
+
+    fm["importance_score"] = round(score, 4)
+
+    new_yaml = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False).rstrip()
+    body = text[end + 3:]
+    new_text = f"---\n{new_yaml}\n---{body}"
+
+    try:
+        dir_path = filepath.parent
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(new_text)
+            os.replace(tmp_path, filepath)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    except (OSError, PermissionError):
+        return
 
 
 def make_source_correction_id(session_id: str, timestamp: str) -> str:
