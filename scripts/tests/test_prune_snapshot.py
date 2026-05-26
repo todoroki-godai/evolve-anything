@@ -79,3 +79,74 @@ def test_prune_api_surface_snapshot():
     """
     actual = _collect_api_surface()
     _assert_snapshot(actual, "prune_api_surface.txt")
+
+
+# ─── _enrich_candidate: created_at / age_days フィールドのテスト ───────────
+
+def test_enrich_candidate_includes_created_at_from_git(tmp_path):
+    """`_enrich_candidate` が git リポジトリで `created_at` を返す。"""
+    import subprocess
+    from unittest import mock
+    from prune.skill_inspect import _enrich_candidate
+
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text("---\nname: my-skill\ndescription: test\n---\n# test\n")
+
+    fake_date = "2026-02-15"
+
+    def fake_run(cmd, **kwargs):
+        r = mock.MagicMock()
+        r.returncode = 0
+        r.stdout = f"{fake_date}\n"
+        return r
+
+    with mock.patch("prune.skill_inspect.subprocess.run", side_effect=fake_run):
+        result = _enrich_candidate({"file": str(skill_md), "skill_name": "my-skill",
+                                    "reason": "zero_invocation", "days": 30})
+
+    assert result["created_at"] == fake_date
+    assert isinstance(result["age_days"], int)
+    assert result["age_days"] >= 0
+
+
+def test_enrich_candidate_created_at_none_on_git_failure(tmp_path):
+    """`_enrich_candidate` が git コマンド失敗時に `created_at=None`, `age_days=None` を返す。"""
+    from unittest import mock
+    from prune.skill_inspect import _enrich_candidate
+
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text("---\nname: my-skill\ndescription: test\n---\n")
+
+    def fail_run(*args, **kwargs):
+        raise OSError("git not found")
+
+    with mock.patch("prune.skill_inspect.subprocess.run", side_effect=fail_run):
+        result = _enrich_candidate({"file": str(skill_md), "skill_name": "my-skill",
+                                    "reason": "zero_invocation", "days": 30})
+
+    assert result["created_at"] is None
+    assert result["age_days"] is None
+
+
+def test_enrich_candidate_includes_invocation_count_and_last_used(tmp_path):
+    """`_enrich_candidate` が `invocation_count: 0` と `last_used: null` を含む。"""
+    from unittest import mock
+    from prune.skill_inspect import _enrich_candidate
+
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text("---\nname: my-skill\ndescription: test\n---\n")
+
+    with mock.patch("prune.skill_inspect.subprocess.run", return_value=mock.MagicMock(returncode=1, stdout="")):
+        result = _enrich_candidate({"file": str(skill_md), "skill_name": "my-skill",
+                                    "reason": "zero_invocation", "days": 30})
+
+    assert "invocation_count" in result
+    assert result["invocation_count"] == 0
+    assert "last_used" in result
+    assert result["last_used"] is None

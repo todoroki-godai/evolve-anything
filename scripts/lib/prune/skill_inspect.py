@@ -12,8 +12,10 @@ DATA_DIR と LLM 推定関数は package 経由で遅延参照する
 """
 import json
 import math
+import subprocess
+from datetime import date
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from frontmatter import extract_description, parse_frontmatter
 
@@ -57,6 +59,28 @@ def extract_skill_summary(skill_path: Path) -> str:
     return extract_description(p)
 
 
+def _get_created_at_from_git(skill_path: Path) -> Optional[str]:
+    """git log から SKILL.md の初回コミット日（YYYY-MM-DD）を取得する。
+
+    mtime は git checkout でリセットされるため信頼できない。
+    git log --diff-filter=A が唯一の信頼できる手段。
+    """
+    try:
+        result = subprocess.run(
+            ["git", "log", "--follow", "--format=%as", "--diff-filter=A", "--", str(skill_path)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+            if line:
+                return line
+    except (OSError, subprocess.TimeoutExpired, IndexError):
+        pass
+    return None
+
+
 def _enrich_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
     """候補に description と recommendation を付与する。"""
     from . import extract_skill_summary, _count_triggers, suggest_recommendation  # noqa: PLC0415
@@ -65,6 +89,22 @@ def _enrich_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
     candidate["description"] = extract_skill_summary(path)
     candidate["trigger_count"] = _count_triggers(path)
     candidate["recommendation"] = suggest_recommendation(candidate)
+
+    skill_md = path if path.name == "SKILL.md" else path / "SKILL.md"
+    created_at = _get_created_at_from_git(skill_md)
+    candidate["created_at"] = created_at
+    if created_at:
+        try:
+            created_date = date.fromisoformat(created_at)
+            candidate["age_days"] = (date.today() - created_date).days
+        except ValueError:
+            candidate["age_days"] = None
+    else:
+        candidate["age_days"] = None
+
+    candidate.setdefault("invocation_count", 0)
+    candidate.setdefault("last_used", None)
+
     return candidate
 
 
