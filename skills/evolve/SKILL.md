@@ -154,6 +154,33 @@ issue があれば Compile ステージの remediation で対処する。
 evolve.py の出力に含まれる `skill_evolve` フェーズ結果を確認する。
 `skill_evolve_assessment()` は全カスタムスキルの自己進化適性を5項目（各1-3点、15点満点）でスコアリングする。
 
+**batch_guard_trigger 検出（優先処理）**:  
+`result.phases.skill_evolve.batch_guard_trigger` が `null` でない場合、LLM 評価対象スキルが多すぎるため  
+以下のインタラクティブフローを実行してから evolve を再実行する:
+
+1. グループ表を表示する（origin / スキル数 / 推定トークン / スキル名一覧）  
+   `already_denied` に含まれるスキルは「今回自動スキップ済み」と明示する
+2. AskUserQuestion でグループごとに選択させる:
+   - 「評価する（このまま続行）」
+   - 「今回のみスキップ」
+   - 「永続スキップ（denylist に追加）」
+3. 永続スキップを選んだスキルがある場合（`_plugin_root` は `~/.claude/rl-anything` または `plugin_root.py` で解決できる実際のパス）:
+   ```python
+   python3 -c "
+   import sys; sys.path.insert(0, str(__import__('plugin_root').PLUGIN_ROOT / 'scripts' / 'lib'))
+   from skill_evolve.denylist import add_to_denylist
+   add_to_denylist(['skill-a', 'skill-b'])
+   print('denylist に追加しました')
+   "
+   ```
+4. 「今回のみスキップ」と「永続スキップ」の両方のスキル名を `--skip-skills` に渡して evolve.py を再実行する:
+   ```
+   python3 evolve.py --skip-skills=skill-a,skill-b [既存の引数]
+   ```
+5. 新しい result で以降のステップを継続する
+
+`batch_guard_trigger` が `null` の場合は従来通り以下のサマリを確認する:
+
 - **already_evolved**: 既に自己進化パターンが組み込まれたスキル数
 - **high_suitability**: 適性高（12-15点）のスキル数 → Compile で変換を推奨
 - **medium_suitability**: 適性中（8-11点）のスキル数 → ユーザー判断に委ねる

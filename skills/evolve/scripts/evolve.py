@@ -19,6 +19,10 @@ sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "evolve-fitness" / "scripts"))
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 EVOLVE_STATE_FILE = DATA_DIR / "evolve-state.json"
 
+# Module-level references for testability (populated on first call)
+skill_evolve_assessment = None
+collect_issues = None
+
 ENV_TIER_THRESHOLDS = {"medium": 20, "large": 50}
 
 
@@ -292,6 +296,8 @@ def check_fitness_function(project_dir: Optional[str] = None) -> Dict[str, Any]:
 def run_evolve(
     project_dir: Optional[str] = None,
     dry_run: bool = False,
+    skip_skills: Optional[set] = None,
+    skip_llm_evolve: bool = False,
 ) -> Dict[str, Any]:
     """全フェーズを実行する。
 
@@ -458,12 +464,21 @@ def run_evolve(
 
     # Phase 3.4: Skill Self-Evolution Assessment（適性判定 — remediation の前に実行）
     try:
-        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-        from skill_evolve import skill_evolve_assessment
+        import evolve as _evolve_mod
+        if _evolve_mod.skill_evolve_assessment is None:
+            sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+            from skill_evolve import skill_evolve_assessment as _sea
+            _evolve_mod.skill_evolve_assessment = _sea
+        skill_evolve_assessment = _evolve_mod.skill_evolve_assessment
         proj = Path(project_dir) if project_dir else Path.cwd()
-        se_assessment = skill_evolve_assessment(proj, project=proj.name)
-        # _meta エントリ（excluded_globals サマリ）を分離
-        _meta = next((a for a in se_assessment if a.get("_meta") == "excluded_globals"), {})
+        se_assessment = skill_evolve_assessment(
+            proj, project=proj.name,
+            skip_skills=skip_skills,
+            skip_llm_evolve=skip_llm_evolve,
+        )
+        # _meta エントリを分離
+        _excluded_meta = next((a for a in se_assessment if a.get("_meta") == "excluded_globals"), {})
+        _batch_guard = next((a for a in se_assessment if a.get("_meta") == "batch_guard_trigger"), None)
         _assessments = [a for a in se_assessment if not a.get("_meta")]
         result["phases"]["skill_evolve"] = {
             "assessments": _assessments,
@@ -472,15 +487,20 @@ def run_evolve(
             "high_suitability": sum(1 for a in _assessments if a.get("suitability") == "high"),
             "medium_suitability": sum(1 for a in _assessments if a.get("suitability") == "medium"),
             "rejected": sum(1 for a in _assessments if a.get("suitability") == "rejected"),
-            "excluded_global_count": _meta.get("excluded_global_count", 0),
-            "excluded_global_hint": _meta.get("hint", ""),
+            "excluded_global_count": _excluded_meta.get("excluded_global_count", 0),
+            "excluded_global_hint": _excluded_meta.get("hint", ""),
+            "batch_guard_trigger": _batch_guard,
         }
     except Exception as e:
         result["phases"]["skill_evolve"] = {"error": str(e)}
 
     # Phase 3.5: Remediation（audit + discover + skill_evolve の結果を統合）
     try:
-        from audit import collect_issues
+        import evolve as _evolve_mod2
+        if _evolve_mod2.collect_issues is None:
+            from audit import collect_issues as _ci
+            _evolve_mod2.collect_issues = _ci
+        collect_issues = _evolve_mod2.collect_issues
         from remediation import classify_issues as classify_remediation_issues
         proj = Path(project_dir) if project_dir else Path.cwd()
         issues = collect_issues(proj)
@@ -840,12 +860,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evolve オーケストレーター")
     parser.add_argument("--project-dir", default=None, help="プロジェクトディレクトリ")
     parser.add_argument("--dry-run", action="store_true", help="レポートのみ、変更なし")
+    parser.add_argument("--skip-skills", default=None, help="評価をスキップするスキル名（カンマ区切り）")
+    parser.add_argument("--skip-llm-evolve", action="store_true", help="skill_evolve の LLM 評価を全スキップ")
 
     args = parser.parse_args()
+
+    _skip_skills = {s.strip() for s in args.skip_skills.split(",") if s.strip()} if args.skip_skills else None
 
     result = run_evolve(
         project_dir=args.project_dir,
         dry_run=args.dry_run,
+        skip_skills=_skip_skills,
+        skip_llm_evolve=args.skip_llm_evolve,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

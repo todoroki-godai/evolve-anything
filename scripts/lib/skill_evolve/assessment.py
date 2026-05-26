@@ -11,6 +11,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Lazy-initialized module-level references for testability (populated on first call)
+find_artifacts = None
+classify_artifact_origin = None
+load_user_config = None
+
 
 def _find_project_dir(skill_dir: Path) -> Optional[Path]:
     """skill_dir からプロジェクトルートを推定する。
@@ -32,6 +37,8 @@ def skill_evolve_assessment(
     project_dir: Optional[Path] = None,
     *,
     project: Optional[str] = None,
+    skip_skills: Optional[set] = None,
+    skip_llm_evolve: bool = False,
 ) -> List[Dict[str, Any]]:
     """全カスタムスキルの自己進化適性を判定する。
 
@@ -54,15 +61,27 @@ def skill_evolve_assessment(
         detect_anti_patterns,
         ANTI_PATTERN_REJECTION_COUNT,
     )
-    sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
-    from audit import classify_artifact_origin, find_artifacts
+    import skill_evolve.assessment as _self_mod
+    if _self_mod.find_artifacts is None:
+        sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
+        from audit import classify_artifact_origin as _ca, find_artifacts as _fa
+        _self_mod.find_artifacts = _fa
+        _self_mod.classify_artifact_origin = _ca
+    if _self_mod.load_user_config is None:
+        from rl_common.config import load_user_config as _luc
+        _self_mod.load_user_config = _luc
+    find_artifacts = _self_mod.find_artifacts
+    classify_artifact_origin = _self_mod.classify_artifact_origin
+    load_user_config = _self_mod.load_user_config
 
-    from rl_common.config import load_user_config
     _cfg = load_user_config()
     _allowlist_raw = _cfg.get("evolve_global_allowlist", "")
     _global_allowlist: set = {
         s.strip() for s in _allowlist_raw.split(",") if s.strip()
     }
+
+    if skip_llm_evolve:
+        return []
 
     proj = project_dir or Path.cwd()
     artifacts = find_artifacts(proj)
@@ -78,14 +97,35 @@ def skill_evolve_assessment(
             or (classify_artifact_origin(p) == "global" and p.parent.name in _global_allowlist)
         )
     ]
-    n = len(_all_llm_targets)
-    if n > _MAX_AUTO_SKILLS:
-        estimated = n * _TOKENS_PER_SKILL
-        raise RuntimeError(
-            f"[llm-batch-guard] skill_evolve_assessment: {n}件のスキルが対象です。\n"
-            f"推定トークン消費: {estimated:,} tokens ({n} × {_TOKENS_PER_SKILL:,})。\n"
-            f"evolve --skip-llm-evolve で LLM 評価をスキップできます。"
-        )
+
+    # denylist + 一時 skip_skills で effective targets を絞り込む
+    from .denylist import get_denied_skill_names
+    _denied = get_denied_skill_names()
+    if skip_skills:
+        _denied = _denied | set(skip_skills)
+
+    _effective_targets = [p for p in _all_llm_targets if p.parent.name not in _denied]
+    _already_denied = [p.parent.name for p in _all_llm_targets if p.parent.name in _denied]
+
+    n_effective = len(_effective_targets)
+    if n_effective > _MAX_AUTO_SKILLS:
+        _groups: List[Dict[str, Any]] = []
+        for _origin in ("custom", "global"):
+            _group_skills = [p for p in _effective_targets if classify_artifact_origin(p) == _origin]
+            if _group_skills:
+                _groups.append({
+                    "origin": _origin,
+                    "skills": [p.parent.name for p in _group_skills],
+                    "skill_dirs": [str(p.parent) for p in _group_skills],
+                    "estimated_tokens": len(_group_skills) * _TOKENS_PER_SKILL,
+                    "skill_count": len(_group_skills),
+                })
+        return [{
+            "_meta": "batch_guard_trigger",
+            "groups": _groups,
+            "total_effective": n_effective,
+            "already_denied": _already_denied,
+        }]
 
     results: List[Dict[str, Any]] = []
     _excluded_global_count = 0
@@ -107,6 +147,10 @@ def skill_evolve_assessment(
 
         # symlink 除外
         if skill_dir.is_symlink():
+            continue
+
+        # denylist / skip_skills 除外
+        if skill_name in _denied:
             continue
 
         # 既に自己進化済みは除外

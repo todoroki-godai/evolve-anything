@@ -35,7 +35,7 @@ detect_anti_patterns(scores: Dict[str, int], skill_dir: pathlib.Path) -> List[Di
 evolve_skill_proposal(skill_name: str, skill_dir: pathlib.Path) -> Dict[str, Any]
 is_self_evolved_skill(skill_dir: pathlib.Path) -> bool
 is_verification_skill(skill_name: str, skill_dir: pathlib.Path) -> bool
-skill_evolve_assessment(project_dir: pathlib.Path | None = None, *, project: str | None = None) -> List[Dict[str, Any]]
+skill_evolve_assessment(project_dir: pathlib.Path | None = None, *, project: str | None = None, skip_skills: set | None = None, skip_llm_evolve: bool = False) -> List[Dict[str, Any]]
 
 # skill_evolve private helpers expected by tests / mock.patch
 _file_hash: present
