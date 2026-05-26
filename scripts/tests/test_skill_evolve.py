@@ -10,7 +10,7 @@ import pytest
 _lib_dir = Path(__file__).resolve().parent.parent.parent / "scripts" / "lib"
 sys.path.insert(0, str(_lib_dir))
 
-from skill_evolve.proposal import _count_diff_lines
+from skill_evolve.proposal import count_diff_lines as _count_diff_lines
 from skill_evolve import (
     ANTI_PATTERN_REJECTION_COUNT,
     BAND_AID_THRESHOLD,

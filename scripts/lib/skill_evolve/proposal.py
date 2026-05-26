@@ -28,7 +28,7 @@ def get_skill_lr_budget() -> int:
         return _DEFAULT_LR_BUDGET
 
 
-def _count_diff_lines(original: str, modified: str) -> int:
+def count_diff_lines(original: str, modified: str) -> int:
     """unified diff で +/- 行数（ヘッダー除く）を返す。"""
     diff = list(difflib.unified_diff(
         original.splitlines(), modified.splitlines(), lineterm=""
@@ -107,14 +107,20 @@ def evolve_skill_proposal(
         # フォールバック: テンプレートをそのまま使用
         customized = sections_content
 
-    return {
+    proposal = {
         "skill_name": skill_name,
         "sections_to_add": customized,
         "pitfalls_template": pitfalls_content,
         "skill_md_path": str(skill_md),
         "pitfalls_path": str(skill_dir / "references" / "pitfalls.md"),
+        "diff_lines": count_diff_lines(sections_content, customized),
         "error": None,
     }
+    from .rubric import rubric_checkpoint
+    checkpoint = rubric_checkpoint("propose", proposal)
+    for line in checkpoint["stdout_lines"]:
+        print(line)
+    return proposal
 
 
 def _customize_template(
@@ -144,7 +150,7 @@ def _customize_template(
 
             # difflib bounded edit gate (#196, #199)
             budget = get_skill_lr_budget()
-            diff_lines = _count_diff_lines(template, output)
+            diff_lines = count_diff_lines(template, output)
             if diff_lines > budget:
                 logger.warning(
                     "[evolve-skill] diff %d lines > budget %d, fallback to template",
@@ -199,10 +205,15 @@ def apply_evolve_proposal(proposal: Dict[str, Any]) -> Dict[str, Any]:
         pitfalls_path.parent.mkdir(parents=True, exist_ok=True)
         pitfalls_path.write_text(proposal["pitfalls_template"], encoding="utf-8")
 
-        return {
+        result = {
             "applied": True,
             "backup_path": str(backup_path),
             "error": None,
         }
+        from .rubric import rubric_checkpoint
+        checkpoint = rubric_checkpoint("apply", proposal)
+        for line in checkpoint["stdout_lines"]:
+            print(line)
+        return result
     except OSError as e:
         return {"applied": False, "backup_path": None, "error": str(e)}

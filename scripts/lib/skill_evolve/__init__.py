@@ -96,6 +96,7 @@ from .proposal import (  # noqa: E402,F401
     evolve_skill_proposal,
     _customize_template,
     apply_evolve_proposal,
+    count_diff_lines,
 )
 
 # --- 自己進化適性判定 (assessment.py / Phase 8 Slice 4) ---

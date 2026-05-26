@@ -31,6 +31,7 @@ assess_single_skill(skill_name: str, skill_dir: pathlib.Path, *, project: str | 
 classify_suitability(total_score: int) -> str
 compute_llm_scores(skill_name: str, skill_dir: pathlib.Path) -> Dict[str, Any]
 compute_telemetry_scores(skill_name: str, *, project: str | None = None) -> Dict[str, Any]
+count_diff_lines(original: str, modified: str) -> int
 detect_anti_patterns(scores: Dict[str, int], skill_dir: pathlib.Path) -> List[Dict[str, str]]
 evolve_skill_proposal(skill_name: str, skill_dir: pathlib.Path) -> Dict[str, Any]
 is_self_evolved_skill(skill_dir: pathlib.Path) -> bool
