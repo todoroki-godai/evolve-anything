@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.68.0</span>
+    <span class="header-version">v1.69.0</span>
   </div>
 </header>
 
@@ -296,9 +296,9 @@
       <table class="arch-table">
         <thead><tr><th>コンポーネント</th><th>説明</th></tr></thead>
         <tbody>
-          <tr><td>Observe hooks (15個)</td><td>LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録する</td></tr>
+          <tr><td>Observe hooks (21個)</td><td>LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録する</td></tr>
           <tr><td>Auto Trigger</td><td>セッション終了・corrections 蓄積・ファイル変更時に evolve/audit 実行を自動提案する (<code>trigger_engine.py</code>)</td></tr>
-          <tr><td>userConfig (15項目)</td><td>CC v2.1.83 manifest.userConfig でトリガー閾値・cleanup prefix・slow command 閾値・subagent 警告閾値・スキル数上限 (<code>max_skill_count</code>=30)・correction pre-flight 閾値 (<code>correction_preflight_threshold</code>=3)・error pre-flight 閾値 (<code>error_preflight_threshold</code>=3) 等を設定する</td></tr>
+          <tr><td>userConfig (17項目)</td><td>CC v2.1.83 manifest.userConfig でトリガー閾値・cleanup prefix・slow command 閾値・subagent 警告閾値・スキル数上限 (<code>max_skill_count</code>=30)・correction pre-flight 閾値 (<code>correction_preflight_threshold</code>=3)・error pre-flight 閾値 (<code>error_preflight_threshold</code>=3) 等を設定する</td></tr>
         </tbody>
       </table>
 
@@ -311,6 +311,8 @@
           <tr><td>rl-scorer エージェント</td><td>オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点する</td></tr>
           <tr><td>skill-triage</td><td>テレメトリ + trigger eval で CREATE/UPDATE/SPLIT/MERGE/OK の5択判定する</td></tr>
           <tr><td>trigger-eval-generator</td><td>sessions.jsonl + usage.jsonl → skill-creator 互換 evals.json を自動生成する</td></tr>
+          <tr><td>evolve-skill</td><td>特定スキルに自己進化パターン（Pre-flight / pitfalls.md）をピンポイント組み込みする (<code>assess_single_skill</code> + <code>apply_evolve_proposal</code>)</td></tr>
+          <tr><td>agent-brushup</td><td>エージェント定義の品質診断・改善提案・upstream 監視 (<code>scripts/lib/agent_quality.py</code>)</td></tr>
           <tr><td>meta_quality</td><td>スキル追加前の品質フィルタ — 再利用頻度と Jaccard 類似度で CREATE/REVIEW/SKIP を判定し skill-triage に組み込む</td></tr>
           <tr><td>constraint_decay</td><td>セッション後半 30% に集中する correction を検出して decay_rate を算出し run_discover() に統合する</td></tr>
           <tr><td>negative_transfer</td><td>スキル追加前後の success rate delta を計測し delta &lt; −0.05 で負の転移フラグを付与する</td></tr>
@@ -338,7 +340,10 @@
         <tbody>
           <tr><td>growth-level</td><td>env_score (0.0–1.0) → Lv.1–10 + 日英称号マッピング</td></tr>
           <tr><td>critical-instruction-compliance</td><td>スキル指示の遵守保証サイクル — critical 行抽出 + 違反検出 + pitfall 自動学習</td></tr>
-          <tr><td>token_usage_store</td><td>プロジェクト別 LLM トークン消費の DuckDB SoR</td></tr>
+          <tr><td>second-opinion エージェント</td><td>cold-read セカンドオピニオン（startup/builder/general 3モード）。codex 不要で Agent ツールのみで動作する</td></tr>
+          <tr><td>token_usage_store</td><td>プロジェクト別 LLM トークン消費の DuckDB SoR — PK uuid で冪等 ingest</td></tr>
+          <tr><td>token_usage_ingest</td><td><code>~/.claude/projects/&lt;pj&gt;/*.jsonl</code> の message.usage を walker で取り込み、days mtime filter + batch insert する</td></tr>
+          <tr><td>token_usage_query</td><td>TOP-N / WoW スパイク / cache hit 異常 / PJ ドリルダウン。fleet status・tokens サブコマンド・audit セクションが利用する</td></tr>
           <tr><td>auto_memory_runner</td><td>Stop hook 終了時に corrections 直近 5 件から memory 候補を非同期生成（LLM 1 call 上限）。new-file-per-entry パターンで race condition 回避</td></tr>
         </tbody>
       </table>
