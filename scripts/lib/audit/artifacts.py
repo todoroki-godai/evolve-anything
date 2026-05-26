@@ -29,11 +29,12 @@ def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:
     if claude_md.exists():
         result["claude_md"].append(claude_md)
 
-    # Skills
+    # Skills (.archive/ 配下はアーカイブ済みのため除外)
     skills_dir = claude_dir / "skills"
     if skills_dir.exists():
         for skill_md in skills_dir.rglob("SKILL.md"):
-            result["skills"].append(skill_md)
+            if ".archive" not in skill_md.parts:
+                result["skills"].append(skill_md)
 
     # Rules
     rules_dir = claude_dir / "rules"
@@ -52,7 +53,8 @@ def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:
     global_skills = global_claude / "skills"
     if global_skills.exists():
         for skill_md in global_skills.rglob("SKILL.md"):
-            result["skills"].append(skill_md)
+            if ".archive" not in skill_md.parts:
+                result["skills"].append(skill_md)
 
     global_rules = global_claude / "rules"
     if global_rules.exists():

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.69.0] - 2026-05-26
+
+### Added
+- **feat(evolve): RPG 物語ナレーション — プロジェクト固有世界観で evolve を物語化** — `scripts/lib/world_context.py` を新設。CLAUDE.md から LLM で架空世界設定（setting / protagonist_title / environment_name / issue_name / improvement_name）を生成し `~/.claude/rl-anything/world-context.json` に永続保存。2回目以降は同じ世界観を再利用して物語の継続性を保つ。`total_evolve_count` / `last_evolve_date` / `current_level` / `previous_level` を自動更新（`save_world_context(env_score=...)` でレベルアップ判定）。`scripts/tests/test_world_context.py` で18テスト（LLM呼び出しは全てモック）。`skills/evolve/SKILL.md` に Step 0.5（世界観ロード/生成）と各ステージ後のナレーション指示（Discover 後・Remediation 後・Prune 後・Report 後のレベルアップクライマックス）を追加。
+
+### Fixed
+- **fix(audit): `.archive/` 配下のスキルを rglob から除外 + max_skill_count を custom スキルのみで判定** — `find_artifacts()` の `skills_dir.rglob("SKILL.md")` が `.archive/` 配下のアーカイブ済みスキルを拾って数カウントが過剰になる問題を修正。`bloat_control.py` の `skills_count` も `classify_artifact_origin(p) == "custom"` のみカウントするよう変更。
+- **fix(bloat): skills_count チェックを custom スキルのみで判定** — `bloat_control.py` の skills 数チェックが global/plugin スキルを混入してしまう問題を修正。`classify_artifact_origin` で custom のみフィルタ。
+
 ## [1.68.0] - 2026-05-26
 
 ### Added

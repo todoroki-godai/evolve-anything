@@ -7,6 +7,7 @@ audit パッケージから切り出された Report モジュール。
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .classification import classify_artifact_origin
 from .memory import build_memory_health_section
 from .quality import build_quality_trends_section
 from .sections import _build_test_guard_section, build_corrections_insights_section, build_lsp_suggestion_section, build_token_consumption_section
@@ -65,8 +66,21 @@ def generate_report(
     for category, paths in artifacts.items():
         count = len(paths)
         if category == "skills" and max_skill_count is not None:
-            indicator = " ⚠️" if count > max_skill_count else ""
-            lines.append(f"- {category}: {count} / 推奨上限 {max_skill_count}{indicator}")
+            origin_counts: Dict[str, int] = {"custom": 0, "global": 0, "plugin": 0}
+            for p in paths:
+                origin = classify_artifact_origin(p)
+                origin_counts[origin] = origin_counts.get(origin, 0) + 1
+            custom_count = origin_counts["custom"]
+            indicator = " ⚠️" if custom_count > max_skill_count else ""
+            if custom_count == count:
+                lines.append(f"- {category}: {count} / 推奨上限 {max_skill_count}{indicator}")
+            else:
+                lines.append(
+                    f"- {category}: {count}件"
+                    f"（custom: {custom_count} / global: {origin_counts['global']}"
+                    f" / plugin: {origin_counts['plugin']}）"
+                    f" / custom 推奨上限 {max_skill_count}{indicator}"
+                )
         else:
             lines.append(f"- {category}: {count}")
     lines.append("")

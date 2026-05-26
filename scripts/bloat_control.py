@@ -14,7 +14,7 @@ _this_dir = Path(__file__).resolve().parent
 _plugin_root = _this_dir.parent
 sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
 
-from audit import DATA_DIR, find_artifacts, load_usage_registry
+from audit import DATA_DIR, classify_artifact_origin, find_artifacts, load_usage_registry
 
 # 行数制限
 LIMITS = {
@@ -117,8 +117,11 @@ def bloat_check(project_dir: Optional[str] = None) -> Dict[str, Any]:
             "action": "統合またはアーカイブを推奨",
         })
 
-    # skills 数チェック
-    skills_count = len(artifacts.get("skills", []))
+    # skills 数チェック（custom スキルのみ。global/plugin は除外）
+    skills_count = sum(
+        1 for p in artifacts.get("skills", [])
+        if classify_artifact_origin(p) == "custom"
+    )
     if skills_count > BLOAT_THRESHOLDS["skills_count"]:
         warnings.append({
             "type": "skills_count",

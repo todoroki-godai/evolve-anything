@@ -334,3 +334,87 @@ def test_evaluate_corrections_no_preflight_below_threshold(tmp_path):
     assert result.triggered
     assert "Pre-flight 警告" not in result.message
     assert result.details.get("per_skill_preflight") == []
+
+
+# ─── Bug fix: .archive/ 除外 + max_skill_count を custom のみで判定 ──────────
+
+
+def test_find_artifacts_excludes_archive_dir(tmp_path):
+    """.archive/ 配下の SKILL.md は find_artifacts に含まれない。"""
+    from audit.artifacts import find_artifacts
+
+    skills_dir = tmp_path / ".claude" / "skills"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "active-skill").mkdir()
+    (skills_dir / "active-skill" / "SKILL.md").write_text("---\nname: active-skill\n---\n")
+
+    archive_dir = skills_dir / ".archive" / "old-skill"
+    archive_dir.mkdir(parents=True)
+    (archive_dir / "SKILL.md").write_text("---\nname: old-skill\n---\n")
+
+    artifacts = find_artifacts(tmp_path)
+    skill_paths = [str(p) for p in artifacts["skills"]]
+
+    assert any("active-skill" in p for p in skill_paths), "active skill が含まれるべき"
+    assert not any(".archive" in p for p in skill_paths), ".archive 配下は除外されるべき"
+
+
+def test_generate_report_skill_count_cap_uses_custom_only(tmp_path):
+    """global スキルが多数あっても custom のみで推奨上限を判定する。"""
+    from pathlib import Path
+    from audit.report import generate_report
+    from unittest import mock
+
+    # custom: 5件、global: 100件 → custom <= 30 なので ⚠️ なし
+    custom_paths = [tmp_path / f"proj/.claude/skills/s{i}/SKILL.md" for i in range(5)]
+    global_home = Path.home() / ".claude" / "skills"
+    global_paths = [global_home / f"g{i}" / "SKILL.md" for i in range(100)]
+
+    def fake_classify(path):
+        if str(path).startswith(str(global_home)):
+            return "global"
+        return "custom"
+
+    with mock.patch("audit.report.classify_artifact_origin", side_effect=fake_classify):
+        report = generate_report(
+            artifacts={"skills": custom_paths + global_paths},
+            violations=[],
+            usage={},
+            duplicates=[],
+            advisories=[],
+            max_skill_count=30,
+        )
+
+    assert "⚠️" not in report, f"custom が5件なので警告なしのはず"
+    assert "custom: 5" in report
+    assert "global: 100" in report
+
+
+def test_generate_report_skill_count_cap_warns_on_custom_excess(tmp_path):
+    """custom スキルが上限超過したら ⚠️ が付く（global があっても）。"""
+    from pathlib import Path
+    from audit.report import generate_report
+    from unittest import mock
+
+    # custom: 35件（>30）、global: 10件
+    custom_paths = [tmp_path / f"proj/.claude/skills/s{i}/SKILL.md" for i in range(35)]
+    global_home = Path.home() / ".claude" / "skills"
+    global_paths = [global_home / f"g{i}" / "SKILL.md" for i in range(10)]
+
+    def fake_classify(path):
+        if str(path).startswith(str(global_home)):
+            return "global"
+        return "custom"
+
+    with mock.patch("audit.report.classify_artifact_origin", side_effect=fake_classify):
+        report = generate_report(
+            artifacts={"skills": custom_paths + global_paths},
+            violations=[],
+            usage={},
+            duplicates=[],
+            advisories=[],
+            max_skill_count=30,
+        )
+
+    assert "⚠️" in report
+    assert "custom: 35" in report

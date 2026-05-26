@@ -106,3 +106,34 @@ def test_bloat_control_import_audit_data_dir_compat():
     )
     assert result.returncode == 0, f"bloat_control 経路が壊れた: {result.stderr}"
     assert result.stdout.strip()  # 空でないパス
+
+
+def test_bloat_check_skills_count_uses_custom_only(tmp_path):
+    """bloat_check の skills_count は global スキルを除外した custom 数で判定する。"""
+    import sys
+    from pathlib import Path
+    from unittest import mock
+
+    sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))
+    sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+    import bloat_control
+
+    global_home = Path.home() / ".claude" / "skills"
+    custom_paths = [tmp_path / f"proj/.claude/skills/s{i}/SKILL.md" for i in range(5)]
+    global_paths = [global_home / f"g{i}" / "SKILL.md" for i in range(100)]
+
+    def fake_classify(path):
+        return "global" if str(path).startswith(str(global_home)) else "custom"
+
+    with mock.patch.object(bloat_control, "classify_artifact_origin", side_effect=fake_classify), \
+         mock.patch.object(bloat_control, "find_artifacts", return_value={
+             "skills": custom_paths + global_paths,
+             "rules": [],
+             "memory": [],
+             "claude_md": [],
+         }):
+        result = bloat_control.bloat_check(str(tmp_path / "proj"))
+
+    skill_warnings = [w for w in result["warnings"] if w["type"] == "skills_count"]
+    assert skill_warnings == [], f"custom=5 なので skills_count 警告なしのはず: {skill_warnings}"
+    assert result["artifacts_summary"]["skills"] == 5

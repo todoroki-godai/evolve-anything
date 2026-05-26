@@ -4,7 +4,11 @@
 
 ### P0
 
-(なし)
+**`scripts/rl/fitness/coherence.py` 欠損による test_environment / test_fitness_config 失敗修正**
+
+**Priority:** P0
+
+`scripts/rl/tests/test_environment.py::TestComputeEnvironmentFitness::test_both_sources_available` など3件が `FileNotFoundError: coherence.py` で失敗。リファクタ時にファイルが移動/削除された際にテストのパスが未更新と思われる。v1.68.0 以前から存在する既存バグ（feat/evolve-rpg-narrative ブランチ変更とは無関係）。
 
 ---
 
