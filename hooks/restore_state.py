@@ -37,6 +37,21 @@ except ImportError:
     pass
 
 
+def _make_session_title(checkpoint: dict) -> str:
+    """checkpoint から claude agents 表示用のセッションタイトルを生成する。"""
+    work_context = checkpoint.get("work_context") or {}
+    branch = work_context.get("git_branch", "")
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    pj_name = Path(project_dir).name if project_dir else ""
+    if pj_name and branch:
+        return f"{pj_name} | {branch}"
+    if pj_name:
+        return pj_name
+    if branch:
+        return branch
+    return ""
+
+
 def _format_work_context_summary(work_context: dict) -> str:
     """work_context から人間可読なサマリーを生成する。"""
     parts = ["[rl-anything:restore_state] 作業コンテキスト復元:"]
@@ -154,10 +169,11 @@ def handle_session_start(event: dict) -> None:
 
     try:
         # 復元した状態を stdout に出力（Claude Code が利用可能）
-        print(json.dumps({
-            "restored": True,
-            "checkpoint": checkpoint,
-        }, ensure_ascii=False))
+        session_title = _make_session_title(checkpoint)
+        output: dict = {"restored": True, "checkpoint": checkpoint}
+        if session_title:
+            output["hookSpecificOutput"] = {"sessionTitle": session_title}
+        print(json.dumps(output, ensure_ascii=False))
 
         # work_context がある場合はサマリーも出力
         work_context = checkpoint.get("work_context")

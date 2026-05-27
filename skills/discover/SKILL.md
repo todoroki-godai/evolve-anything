@@ -1,6 +1,7 @@
 ---
 name: discover
 effort: medium
+disallowed-tools: [Edit, Write, MultiEdit]
 description: |
   Detect repeating patterns from observation data (usage, errors, history) and generate
   skill/rule candidates. Outputs structured artifacts meeting quality constraints.

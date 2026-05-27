@@ -1,6 +1,7 @@
 ---
 name: audit
 effort: medium
+disallowed-tools: [Edit, Write, MultiEdit]
 description: |
   Run an environment health check: inventory all skills/rules/memory, check line limits,
   aggregate usage stats, and generate a one-screen report with Scope Advisory.

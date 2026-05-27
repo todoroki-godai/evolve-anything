@@ -97,6 +97,50 @@ def test_parse_malformed_json(ingest):
     assert ingest.parse_transcript_line("") is None
 
 
+def test_parse_cache_creation_toplevel(ingest):
+    """cache_creation_input_tokens のトップレベル値が正常に読まれる。"""
+    line = _line(usage={
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_creation_input_tokens": 300,
+        "cache_read_input_tokens": 0,
+        "server_tool_use": {},
+    })
+    rec = ingest.parse_transcript_line(line)
+    assert rec is not None
+    assert rec["cache_creation_input_tokens"] == 300
+
+
+def test_parse_cache_creation_nested_fallback(ingest):
+    """CC v2.1.152 以前のバグ: toplevel=0 のとき nested cache_creation.input_tokens へフォールバック。"""
+    line = _line(usage={
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_creation_input_tokens": 0,  # バグで0だった
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"input_tokens": 200},  # 実値はここにあった
+        "server_tool_use": {},
+    })
+    rec = ingest.parse_transcript_line(line)
+    assert rec is not None
+    assert rec["cache_creation_input_tokens"] == 200
+
+
+def test_parse_cache_creation_nested_not_used_when_toplevel_nonzero(ingest):
+    """toplevel が非ゼロなら nested は使わない。"""
+    line = _line(usage={
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_creation_input_tokens": 150,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"input_tokens": 999},  # 無視されるべき
+        "server_tool_use": {},
+    })
+    rec = ingest.parse_transcript_line(line)
+    assert rec is not None
+    assert rec["cache_creation_input_tokens"] == 150
+
+
 def test_parse_sidechain_flag(ingest):
     rec = ingest.parse_transcript_line(_line(is_sidechain=True))
     assert rec is not None

@@ -40,6 +40,20 @@ def _pj_slug_from_id(pj_id: str) -> str:
     return last or pj_id
 
 
+def _parse_cache_creation_tokens(usage: dict) -> int:
+    """cache_creation_input_tokens を取得する。
+
+    CC v2.1.152 以前はトップレベルが 0 で nested usage.cache_creation.input_tokens に
+    実値が入るケースがあったため、フォールバックで読む。
+    """
+    value = int(usage.get("cache_creation_input_tokens") or 0)
+    if value == 0:
+        nested = usage.get("cache_creation")
+        if isinstance(nested, dict):
+            value = int(nested.get("input_tokens") or 0)
+    return value
+
+
 def parse_transcript_line(line: str, pj_id: str = "", pj_slug: str = "") -> dict | None:
     """transcript JSONL 1 行を token_usage record に変換する。
 
@@ -89,7 +103,7 @@ def parse_transcript_line(line: str, pj_id: str = "", pj_slug: str = "") -> dict
         "role": role,
         "input_tokens": int(usage.get("input_tokens") or 0),
         "output_tokens": int(usage.get("output_tokens") or 0),
-        "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),
+        "cache_creation_input_tokens": _parse_cache_creation_tokens(usage),
         "cache_read_input_tokens": int(usage.get("cache_read_input_tokens") or 0),
         "web_search_requests": int(server_tool_use.get("web_search_requests") or 0),
         "web_fetch_requests": int(server_tool_use.get("web_fetch_requests") or 0),

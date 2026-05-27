@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(hooks): CC v2.1.152 — SessionStart hookSpecificOutput.sessionTitle 対応** — `restore_state.py` がプロジェクト名+ブランチを `claude agents` のセッションタイトルとして設定するよう変更。
+- **feat(hooks): MessageDisplay フック新設** — アシスタント応答ごとに文字数・コードブロック数・pitfall ヒットを `message_display.jsonl` へ記録。将来の応答アノテーション基盤として設計（passthrough、変換なし）。
+- **feat(skills): audit/discover に disallowed-tools 追加** — CC v2.1.152 の `disallowed-tools` frontmatter を活用し、分析系スキルで `Edit`/`Write`/`MultiEdit` を防衛的に禁止。
+
+### Fixed
+- **fix(token_usage_ingest): cache_creation_input_tokens の nested fallback 追加** — CC v2.1.152 以前のバグ（トップレベルが 0 で `cache_creation.input_tokens` に実値が格納されていたケース）への後方互換対応。
+
 ## [1.72.0] - 2026-05-27
 
 ### Added
