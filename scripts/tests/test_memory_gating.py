@@ -226,6 +226,42 @@ class TestGatingDisabledEnv:
         # ゲーティング無効 → LLM 呼び出しが実行されること
         mock_llm.assert_called_once()
 
+    def test_gating_disabled_via_env_var_end_to_end(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RL_GATING_DISABLED=1 を実際に環境変数にセットすると _is_gating_enabled() が
+        False を返し、ゲーティングロジックがスキップされて LLM が呼ばれること。
+
+        _is_gating_enabled はモックせず、env var → 関数評価 → run() の経路を通す。
+        """
+        import json
+        import auto_memory_runner as amr
+
+        monkeypatch.setenv("RL_GATING_DISABLED", "1")
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        # 低スコア correction（ゲーティングが有効なら弾かれるはず）
+        correction_data = {"message": "同じ内容のメモリ", "type": "stop"}
+        (data_dir / "corrections.jsonl").write_text(json.dumps(correction_data) + "\n")
+
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+        memory_md = tmp_path / "MEMORY.md"
+        memory_md.write_text("# Memory\n")
+
+        # env var から _is_gating_enabled() → False の経路を実際に通す
+        # _call_llm のみモックして LLM 実呼び出しを防ぐ
+        with mock.patch.object(amr, "_HAS_MEMORY_GATING", True), \
+             mock.patch.object(amr, "_call_llm", return_value=None) as mock_llm:
+            amr.run(
+                memory_dir=memory_dir,
+                memory_md_path=memory_md,
+                data_dir=data_dir,
+            )
+        # RL_GATING_DISABLED=1 → ゲーティングスキップ → LLM が呼ばれること
+        mock_llm.assert_called_once()
+
     def test_gating_enabled_low_score_skips_llm(self, tmp_path: Path) -> None:
         """ゲーティング有効かつ低スコア correction では _call_llm が呼ばれないこと。
 

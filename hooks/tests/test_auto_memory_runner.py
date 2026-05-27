@@ -3,6 +3,7 @@
 すべてのテストは LLM を呼ばない。subprocess.run / subprocess.Popen はすべて mock する。
 """
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -68,7 +69,8 @@ def test_normal_creates_new_md_file(tmp_path, tmp_data_dir, tmp_memory_dir):
     mock_result.stdout = _make_mock_llm_output("auto memory entry")
 
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result):
+         mock.patch("subprocess.run", return_value=mock_result), \
+         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
         auto_memory_runner.run(memory_dir=tmp_memory_dir)
 
     md_files = list(tmp_memory_dir.glob("auto_*.md"))
@@ -88,7 +90,8 @@ def test_normal_appends_index_to_memory_md(tmp_path, tmp_data_dir, tmp_memory_di
     mock_result.stdout = _make_mock_llm_output("index test")
 
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result):
+         mock.patch("subprocess.run", return_value=mock_result), \
+         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
         auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
 
     content = memory_md.read_text()
@@ -116,7 +119,8 @@ def test_concurrent_writes_both_entries_survive(tmp_path, tmp_data_dir, tmp_memo
     def worker():
         try:
             with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-                 mock.patch("subprocess.run", return_value=mock_result):
+                 mock.patch("subprocess.run", return_value=mock_result), \
+                 mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
                 auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
         except Exception as e:
             errors.append(e)
@@ -157,7 +161,8 @@ def test_memory_md_over_200_lines_triggers_archive(tmp_path, tmp_data_dir, tmp_m
     mock_result.stdout = _make_mock_llm_output("archive trigger test")
 
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result):
+         mock.patch("subprocess.run", return_value=mock_result), \
+         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
         auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
 
     # After archive, MEMORY.md should be shorter
@@ -273,7 +278,8 @@ def test_generated_file_has_required_frontmatter(tmp_path, tmp_data_dir, tmp_mem
     mock_result.stdout = llm_body
 
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result):
+         mock.patch("subprocess.run", return_value=mock_result), \
+         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
         auto_memory_runner.run(memory_dir=tmp_memory_dir)
 
     md_files = list(tmp_memory_dir.glob("auto_*.md"))
@@ -297,7 +303,8 @@ def test_generated_filename_format(tmp_path, tmp_data_dir, tmp_memory_dir):
     mock_result.stdout = _make_mock_llm_output("filename format test")
 
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result):
+         mock.patch("subprocess.run", return_value=mock_result), \
+         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
         auto_memory_runner.run(memory_dir=tmp_memory_dir)
 
     md_files = list(tmp_memory_dir.glob("auto_*.md"))

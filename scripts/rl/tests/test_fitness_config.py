@@ -155,10 +155,16 @@ class TestFitnessConfigFallback:
 
         coherence.py が THRESHOLDS を保持していることを確認。
         """
-        # coherence.py を直接ロードし、THRESHOLDS が存在することを確認
-        coh_path = _fitness_dir / "coherence.py"
-        spec = importlib.util.spec_from_file_location("coherence_test", coh_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        # coherence パッケージをロードし、THRESHOLDS が存在することを確認
+        # coherence はパッケージ（__init__.py）なので fitness_dir を sys.path に追加して import
+        _fitness_dir_str = str(_fitness_dir)
+        _added = _fitness_dir_str not in sys.path
+        if _added:
+            sys.path.insert(0, _fitness_dir_str)
+        try:
+            mod = importlib.import_module("coherence")
+        finally:
+            if _added:
+                sys.path.remove(_fitness_dir_str)
         assert hasattr(mod, "THRESHOLDS")
         assert mod.THRESHOLDS["skill_min_lines"] == 50

@@ -122,20 +122,19 @@ def _parse_jsonl_file(jsonl_path: Path) -> List[TrajectoryRecord]:
     Returns:
         抽出された TrajectoryRecord のリスト。
     """
+    turns = []
     try:
-        lines = jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        with open(jsonl_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    turns.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
     except (OSError, PermissionError):
         return []
-
-    turns = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            turns.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
 
     if not turns:
         return []

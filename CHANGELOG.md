@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(fitness_history_store): DuckDB 構文・NaN ガード・テスト品質改善** — `INSERT OR IGNORE` → `INSERT INTO ... ON CONFLICT DO NOTHING` に修正（DuckDB 標準構文）。`math.isfinite` による NaN ガード追加（NaN スコアはスキップ）。`ORDER BY id DESC` に修正（timestamp 同秒衝突でも順序安定）。`environment.py` の `_load_sibling` を coherence パッケージ（`__init__.py`）対応に修正。`test_auto_memory_runner.py` に `RL_GATING_DISABLED=1` を付与して memory-gating 追加後のテスト失敗を解消。
 - **fix(evolve): Step 7 prune候補を個別調査・分類してから承認を求めるよう改善** — ゼロ呼び出しスキルを一括で「オンデマンドスキル」と決めつけて bulk 選択を提示する動作を修正。各候補について SKILL.md を Read + git log で調査し、オンデマンド型/一時目的完了型/統合済み型/日常用途・未発火型の4種別に分類して根拠をテキスト出力してから1件ずつ AskUserQuestion で承認を求めるよう変更。
 - **fix(evolve): auto_fixable の修正内容を AskUserQuestion の前に表示するよう指示を強化** — `generate_auto_fix_summaries` の proposal/rationale を明示フォーマット（ファイルパス・修正内容・理由を1件ずつ列挙）でテキスト出力してから AskUserQuestion を呼ぶよう SKILL.md に明記。proposable セクションの「Q&A前に補足説明」pitfall ルールを auto_fixable にも適用。
 

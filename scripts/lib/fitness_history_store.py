@@ -5,10 +5,11 @@ DuckDB 無: 記録をスキップ（query は空リストを返す）。
 
 設計: issue #240 Phase 1 参照。
 token_usage_store.py と同じ token_usage.db を共有。
-INSERT OR IGNORE で冪等（同 run_id の二重記録防止）。
+ON CONFLICT DO NOTHING で冪等（同 run_id の二重記録防止）。
 """
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,8 +41,9 @@ CREATE TABLE IF NOT EXISTS fitness_history (
 """
 
 _INSERT_SQL = """
-INSERT OR IGNORE INTO fitness_history (run_id, timestamp, axis, score, weight_used, source)
+INSERT INTO fitness_history (run_id, timestamp, axis, score, weight_used, source)
 VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
 """
 
 
@@ -70,6 +72,8 @@ def record_fitness_run(
     if not HAS_DUCKDB:
         return
     if not axis_scores:
+        return
+    if not all(math.isfinite(v) for v in axis_scores.values()):
         return
 
     ts = datetime.now(timezone.utc).isoformat()
@@ -113,7 +117,7 @@ def get_axis_history(axis: str, limit: int = 20) -> list[dict]:
     SELECT run_id, timestamp, axis, score, weight_used, source
     FROM fitness_history
     WHERE axis = ?
-    ORDER BY timestamp DESC, id DESC
+    ORDER BY id DESC
     LIMIT ?
     """
     c = None

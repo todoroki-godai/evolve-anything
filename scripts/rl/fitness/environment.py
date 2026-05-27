@@ -48,9 +48,21 @@ def _ensure_paths():
 
 
 def _load_sibling(name: str):
-    """同ディレクトリのモジュールを importlib で安全にロードする。"""
-    path = _fitness_dir / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"fitness_{name}", path)
+    """同ディレクトリのモジュール（ファイルまたはパッケージ）を importlib で安全にロードする。"""
+    pkg_init = _fitness_dir / name / "__init__.py"
+    if pkg_init.exists():
+        # パッケージの場合: fitness_dir を sys.path に一時追加して通常 import
+        _fitness_dir_str = str(_fitness_dir)
+        _added = _fitness_dir_str not in sys.path
+        if _added:
+            sys.path.insert(0, _fitness_dir_str)
+        try:
+            mod = importlib.import_module(name)
+        finally:
+            if _added:
+                sys.path.remove(_fitness_dir_str)
+        return mod
+    spec = importlib.util.spec_from_file_location(f"fitness_{name}", _fitness_dir / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

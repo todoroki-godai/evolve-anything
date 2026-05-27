@@ -115,6 +115,10 @@ def _write_all(session_id: str, hypotheses: List[Hypothesis]) -> None:
     Note:
         シングルプロセス・シングルスレッドからの呼び出しを前提とする。
         並行呼び出しは read-modify-write の競合を引き起こす可能性がある。
+
+    TODO(perf): 現在は O(N) 全量書き直し。セッションあたり仮説数が数百を超える場合は
+        append-only + 定期 compaction（例: 更新時に末尾追記し、load 時に重複排除）に
+        移行を検討する。Phase 1 スコープでは 10-20 件程度を想定しており問題ない。
     """
     path = _hypothesis_file(session_id)
     try:
