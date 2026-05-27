@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.74.0] - 2026-05-28
+
+### Added
+- **feat(skill_triggers): CLAUDE.md のテーブル形式スキル定義・`## Key Skills` 等の見出しに対応** — `_parse_skills_section` が `| `/skill-name` | ... |` 形式のテーブル行と、見出しに `skills` を含む任意のセクション（`## Key Skills` 等、大文字小文字不問）からスキルを抽出するよう拡張。テーブル区切り行はスキップ。
+
+### Fixed
+- **fix(skill_triggers): テーブルヘッダ行の phantom skill 誤抽出を修正** — 英語ヘッダ（`| Skill | ... |`）が区切り行より前に処理され、スキル名 "Skill" として誤抽出される問題を `table_body_started` フラグで修正。区切り行（`|---|`）通過後の body 行のみをスキル行として扱う。
+- **fix(trigger_engine): 毎発火 hook の duckdb eager import を除去しレイテンシ削減** — `trigger_engine/__init__.py` の `HAS_DUCKDB` フラグを `import duckdb`（cold ~100ms）から `importlib.util.find_spec("duckdb")`（~0.04ms、実モジュール非ロード）に変更。毎 UserPromptSubmit で発火する `correction_detect.py` の起動コストを 114ms → 73ms（-36%）に削減。実際の duckdb 利用は `state.py` 関数内 lazy import に委ねる（API 互換維持、未使用の `_duckdb` バインディング削除）。
+
 ## [1.73.0] - 2026-05-27
 
 ### Added

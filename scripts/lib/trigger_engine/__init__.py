@@ -8,6 +8,7 @@ Phase 9 で `trigger_engine.py` 751 行 → `trigger_engine/` パッケージに
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
 
@@ -17,11 +18,11 @@ EVOLVE_STATE_FILE = DATA_DIR / "evolve-state.json"
 PENDING_TRIGGER_FILE = DATA_DIR / "pending-trigger.json"
 SNOOZE_FILE = DATA_DIR / "trigger-snooze.json"
 
-try:
-    import duckdb as _duckdb
-    HAS_DUCKDB = True
-except ImportError:
-    HAS_DUCKDB = False
+# duckdb の利用可否フラグ。実モジュールは ~100ms かかる重い C 拡張のため、
+# eager import せず find_spec で存在確認のみ行う（correction_detect が毎
+# UserPromptSubmit で本パッケージを import するため）。実際の duckdb 利用は
+# session_store / state.py 側の関数内 lazy import に委ねる。
+HAS_DUCKDB = importlib.util.find_spec("duckdb") is not None
 
 # FileChanged hook cooldown (seconds) — CC v2.1.83
 FILE_CHANGED_COOLDOWN_SECONDS = 300  # 5 minutes

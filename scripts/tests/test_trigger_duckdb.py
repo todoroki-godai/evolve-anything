@@ -134,3 +134,49 @@ class TestCountSessionsSinceDuckDB:
         assert result.returncode == 0
         data = json.loads(result.stdout.strip())
         assert data["count"] == 0
+
+
+class TestLazyDuckDBImport:
+    """trigger_engine の import が duckdb を eager ロードしないことを検証。
+
+    correction_detect.py は毎 UserPromptSubmit で trigger_engine を import する。
+    duckdb の eager import は ~100ms のレイテンシを毎プロンプトに乗せるため、
+    HAS_DUCKDB は find_spec ベースの存在確認のみに留める（実モジュールはロードしない）。
+    """
+
+    def test_importing_trigger_engine_does_not_load_duckdb(self):
+        """trigger_engine import 後、sys.modules に duckdb が無いこと。"""
+        code = (
+            "import sys; "
+            f"sys.path.insert(0, {_LIB!r}); "
+            "import trigger_engine; "
+            "print('duckdb' in sys.modules)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert result.stdout.strip() == "False", (
+            "trigger_engine の import が duckdb を eager ロードしている"
+        )
+
+    def test_has_duckdb_flag_still_reflects_availability(self):
+        """HAS_DUCKDB は duckdb の利用可否を引き続き示す（API 互換）。"""
+        import importlib.util
+
+        expected = importlib.util.find_spec("duckdb") is not None
+        code = (
+            "import sys; "
+            f"sys.path.insert(0, {_LIB!r}); "
+            "import trigger_engine as te; "
+            "print(te.HAS_DUCKDB)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert result.stdout.strip() == str(expected)
