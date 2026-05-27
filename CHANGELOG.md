@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.70.0] - 2026-05-27
+
+### Added
+- **feat(skill-evolve): Co-ReAct-inspired rubric checkpoint visualization (#231)** — `rubric_checkpoint()` を proposal/apply フローに追加。ステップ実行時に rubric 各軸（pitfalls_template / pre_flight / sections_to_add / diff_lines）の充足度をチェックポイント表示し、visualize-as-you-go で evolve 品質の透明性を向上。`count_diff_lines` を public API として公開。
+- **feat(memory): AlphaSignal-inspired importance scoring for memory files (#233)** — `memory_temporal.py` に `importance_score` 計算（base / correction / update ボーナス）と `reinforce_memory()` アトミック更新を追加。`auto_memory_runner` が新規 memory 書き込み後に `importance_score` を frontmatter に自動付与。audit レポートに low-importance memory 候補セクション（score ≤ 0.3）を追加し剪定候補を可視化。
+
+### Changed
+- **refactor(evolve): evolve ナレーションを職人の一言メモスタイルに変更** — RPG 語彙（書架・司書・歪み）を除去し、件数ベースの短文（「{N}件の兆候を確認。一つずつ見ていく。」等）に置き換え。技術出力の流れを妨げない自然なコメントへ。
+
 ## [1.69.0] - 2026-05-26
 
 ### Added
