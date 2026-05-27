@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.73.0] - 2026-05-27
 
 ### Added
 - **feat(hooks): CC v2.1.152 — SessionStart hookSpecificOutput.sessionTitle 対応** — `restore_state.py` がプロジェクト名+ブランチを `claude agents` のセッションタイトルとして設定するよう変更。
