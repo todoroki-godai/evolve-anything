@@ -1262,3 +1262,36 @@ class TestBatchGuardAssessment:
 
         sentinel = next((r for r in result if r.get("_meta") == "batch_guard_trigger"), None)
         assert sentinel is None, "1件 denied で effective=10 → guard トリガーしないはず"
+
+    def test_confirmed_batch_bypasses_guard_in_assessment(self, monkeypatch, tmp_path):
+        """confirmed_batch=True のとき assessment.py の guard 条件が実際にスキップされる。"""
+        import importlib
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        import skill_evolve.denylist as dl_mod
+        importlib.reload(dl_mod)
+
+        skill_paths = [_make_skill_path(tmp_path, f"skill-{i}") for i in range(11)]
+        origins = ["custom"] * 11
+        cfg_mock = mock.MagicMock()
+        cfg_mock.get.return_value = ""
+        telemetry_ret = {
+            "frequency": 1, "diversity": 1, "evaluability": 1,
+            "error_count": 0, "usage_count": 1, "error_categories": {},
+        }
+        llm_ret = {"external_dependency": 1, "judgment_complexity": 1, "cached": False}
+
+        with mock.patch("skill_evolve.assessment.find_artifacts", return_value={"skills": skill_paths}), \
+             mock.patch("skill_evolve.assessment.classify_artifact_origin", side_effect=lambda p: origins[skill_paths.index(p)]), \
+             mock.patch("skill_evolve.assessment.load_user_config", return_value=cfg_mock), \
+             mock.patch("skill_evolve.denylist.DATA_DIR", tmp_path), \
+             mock.patch("skill_evolve.compute_telemetry_scores", return_value=telemetry_ret), \
+             mock.patch("skill_evolve.compute_llm_scores", return_value=llm_ret), \
+             mock.patch("skill_evolve.is_self_evolved_skill", return_value=False):
+            from skill_evolve.assessment import skill_evolve_assessment
+            result = skill_evolve_assessment(tmp_path, confirmed_batch=True)
+
+        # 11件あっても confirmed_batch=True なら sentinel が返らず通常評価が走る
+        sentinel = next((r for r in result if r.get("_meta") == "batch_guard_trigger"), None)
+        assert sentinel is None, "confirmed_batch=True では guard をスキップすべき"
+        non_meta = [r for r in result if not r.get("_meta")]
+        assert len(non_meta) == 11, "全 11 件が評価対象になるべき"

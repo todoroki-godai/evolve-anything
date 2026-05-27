@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(audit): stale_ref が AWS SSM / インラインバッククォート内パスを誤検知する問題を修正** — `path_extractor.py` の `extract_paths_outside_codeblocks()` でインラインコード（`` `...` ``）内パスをマスクしてから検出するよう変更。バッククォートを前置文字として扱っていた正規表現も修正。
+- **fix(audit): skill_quality_pattern_gap が日本語チェックリスト見出しを認識しない問題を修正** — `instruction_patterns.py` に `_CHECKLIST_HEADING_RE` を追加。`## 実行前チェックリスト` / `## 完了チェックリスト` / `## Checklist` 等の見出しを `checklist` パターンとして認識するよう拡張。
+
+### Added
+- **feat(evolve): --confirmed-batch フラグで batch_guard_trigger の再発火を防止** — `skill_evolve_assessment()` と `run_evolve()` に `confirmed_batch: bool = False` を追加。ユーザーがインタラクティブフロー（batch_guard_trigger 発火時の AskUserQuestion）を経て確認済みの場合、`--confirmed-batch` フラグで `_MAX_AUTO_SKILLS` 閾値超過でも LLM 評価を続行できる。`evolve.py:881` の重複 print（NameError バグ）も同時修正。`TestConfirmedBatchFlag` クラス（3テスト）追加。
+
 ## [1.70.0] - 2026-05-27
 
 ### Added

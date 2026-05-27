@@ -38,8 +38,12 @@ _GOTCHAS_RE = re.compile(r"^#+\s*(Gotchas|Pitfalls|注意点)\s*$", re.MULTILINE
 # ── Output Template: コードブロック ────────────────────
 _CODEBLOCK_RE = re.compile(r"```\w*\n[\s\S]*?```")
 
-# ── Checklist: 番号付き手順 ───────────────────────────
+# ── Checklist: 番号付き手順 or チェックリスト見出し ──────
 _NUMBERED_STEP_RE = re.compile(r"^\d+\.\s+", re.MULTILINE)
+_CHECKLIST_HEADING_RE = re.compile(
+    r"^#+\s+.*(?:チェックリスト|check[_\s-]?list|手順リスト|確認リスト)[\s\w（）()：:]*$",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 # ── Validation Loop ───────────────────────────────────
 _VALIDATE_RE = re.compile(r"(?:\b(?:validate|check|verify)\b|(?:validate|check|verify))", re.IGNORECASE)
@@ -101,9 +105,9 @@ def detect_patterns(skill_content: str) -> Dict[str, Any]:
     # 2. Output Template
     details["output_template"] = bool(_CODEBLOCK_RE.search(skill_content))
 
-    # 3. Checklist (3+ numbered steps)
+    # 3. Checklist (3+ numbered steps OR explicit checklist heading)
     numbered = _NUMBERED_STEP_RE.findall(skill_content)
-    details["checklist"] = len(numbered) >= 3
+    details["checklist"] = len(numbered) >= 3 or bool(_CHECKLIST_HEADING_RE.search(skill_content))
 
     # 4. Validation Loop (validate/check/verify AND fix/修正)
     has_validate = bool(_VALIDATE_RE.search(skill_content))

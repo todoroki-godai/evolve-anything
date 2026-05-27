@@ -39,6 +39,7 @@ def skill_evolve_assessment(
     project: Optional[str] = None,
     skip_skills: Optional[set] = None,
     skip_llm_evolve: bool = False,
+    confirmed_batch: bool = False,
 ) -> List[Dict[str, Any]]:
     """全カスタムスキルの自己進化適性を判定する。
 
@@ -108,7 +109,7 @@ def skill_evolve_assessment(
     _already_denied = [p.parent.name for p in _all_llm_targets if p.parent.name in _denied]
 
     n_effective = len(_effective_targets)
-    if n_effective > _MAX_AUTO_SKILLS:
+    if n_effective > _MAX_AUTO_SKILLS and not confirmed_batch:
         _groups: List[Dict[str, Any]] = []
         for _origin in ("custom", "global"):
             _group_skills = [p for p in _effective_targets if classify_artifact_origin(p) == _origin]

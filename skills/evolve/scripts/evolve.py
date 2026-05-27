@@ -298,6 +298,7 @@ def run_evolve(
     dry_run: bool = False,
     skip_skills: Optional[set] = None,
     skip_llm_evolve: bool = False,
+    confirmed_batch: bool = False,
 ) -> Dict[str, Any]:
     """全フェーズを実行する。
 
@@ -475,6 +476,7 @@ def run_evolve(
             proj, project=proj.name,
             skip_skills=skip_skills,
             skip_llm_evolve=skip_llm_evolve,
+            confirmed_batch=confirmed_batch,
         )
         # _meta エントリを分離
         _excluded_meta = next((a for a in se_assessment if a.get("_meta") == "excluded_globals"), {})
@@ -862,6 +864,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="レポートのみ、変更なし")
     parser.add_argument("--skip-skills", default=None, help="評価をスキップするスキル名（カンマ区切り）")
     parser.add_argument("--skip-llm-evolve", action="store_true", help="skill_evolve の LLM 評価を全スキップ")
+    parser.add_argument("--confirmed-batch", action="store_true", help="batch_guard_trigger 確認済み。件数が閾値を超えても LLM 評価を続行する")
 
     args = parser.parse_args()
 
@@ -872,10 +875,10 @@ def main() -> None:
         dry_run=args.dry_run,
         skip_skills=_skip_skills,
         skip_llm_evolve=args.skip_llm_evolve,
+        confirmed_batch=args.confirmed_batch,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
     main()
-    print(json.dumps(result, ensure_ascii=False, indent=2))

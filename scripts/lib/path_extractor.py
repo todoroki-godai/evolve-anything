@@ -31,13 +31,17 @@ def extract_paths_outside_codeblocks(text: str) -> List[Tuple[int, str]]:
 
     # コードブロック外の行からパスを抽出
     # 相対パス (skills/update/, scripts/lib/) または絶対パス (/path/to/file)
-    path_pattern = re.compile(r'(?:^|[\s`"\'])(/[a-zA-Z0-9_./-]{2,}|[a-zA-Z0-9_.-]+/[a-zA-Z0-9_./-]+)')
+    path_pattern = re.compile(r'(?:^|[\s"\'])(/[a-zA-Z0-9_./-]{2,}|[a-zA-Z0-9_.-]+/[a-zA-Z0-9_./-]+)')
+    inline_code_re = re.compile(r'`[^`\n]+`')
     results = []
     for i, line in enumerate(lines):
         if i in codeblock_lines:
             continue
-        for match in path_pattern.finditer(line):
-            path_str = match.group(1).rstrip("/.,;:)")
+        # インラインコード (`...`) 内のパスを除外するためマスクする
+        masked_line = inline_code_re.sub(lambda m: " " * len(m.group()), line)
+        for match in path_pattern.finditer(masked_line):
+            # マスク前の元行から実際のパス文字列を取得する
+            path_str = line[match.start(1):match.end(1)].rstrip("/.,;:)")
             # 短すぎるパスやURL風のものを除外
             if len(path_str) < 3 or path_str.startswith("http"):
                 continue
