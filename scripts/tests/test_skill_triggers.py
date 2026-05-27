@@ -126,3 +126,23 @@ def test_table_format_skills(tmp_path):
     assert "generate-docs" in skill_names
     assert "docs-qa" in skill_names
     assert "manage-repo" in skill_names
+
+
+def test_table_format_english_header_not_captured(tmp_path):
+    """英語ヘッダ行（| Skill | Description |）はスキルとして誤抽出されない。"""
+    content = (
+        "# Project\n\n## Skills\n\n"
+        "| Skill | Description |\n"
+        "|-------|-------------|\n"
+        "| `/generate-docs` | doc gen |\n"
+        "| `/docs-qa` | QA |\n\n"
+        "## Other\n\nstuff\n"
+    )
+    (tmp_path / "CLAUDE.md").write_text(content)
+    result = extract_skill_triggers(tmp_path / "CLAUDE.md")
+    skill_names = [r["skill"] for r in result]
+    assert "generate-docs" in skill_names
+    assert "docs-qa" in skill_names
+    # ヘッダ行 "Skill" が phantom skill として混入していないこと
+    assert "skill" not in [s.lower() for s in skill_names]
+    assert len(result) == 2

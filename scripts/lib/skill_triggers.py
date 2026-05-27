@@ -43,6 +43,7 @@ def _parse_skills_section(content: str) -> List[Dict[str, Any]]:
     """CLAUDE.md のコンテンツからスキルセクションをパースする。"""
     lines = content.splitlines()
     in_skills_section = False
+    table_body_started = False
     results: List[Dict[str, Any]] = []
     current_skill: Optional[str] = None
     current_triggers: List[str] = []
@@ -53,6 +54,7 @@ def _parse_skills_section(content: str) -> List[Dict[str, Any]]:
         # Skills セクション開始を検出（## Skills / ## Key Skills 等、見出しに skills を含む）
         if re.match(r"^#{1,3}\s+.*\bskills?\b", stripped, re.IGNORECASE):
             in_skills_section = True
+            table_body_started = False
             continue
 
         # 別のセクション開始で Skills セクション終了
@@ -61,6 +63,7 @@ def _parse_skills_section(content: str) -> List[Dict[str, Any]]:
             if current_skill:
                 results.append(_make_skill_entry(current_skill, current_triggers))
             in_skills_section = False
+            table_body_started = False
             current_skill = None
             current_triggers = []
             continue
@@ -68,21 +71,28 @@ def _parse_skills_section(content: str) -> List[Dict[str, Any]]:
         if not in_skills_section:
             continue
 
-        # テーブル区切り行はスキップ
+        # テーブル区切り行（|---|---|）。直前の行はヘッダなので、以降を body 扱いにする
         if re.match(r"^\|[-| ]+\|", stripped):
+            table_body_started = True
             continue
 
         # テーブル形式: | `/skill-name` | ... | or | /skill-name | ... |
-        table_match = re.match(r"^\|\s*`?/?([a-zA-Z0-9_:-]+)`?\s*\|", stripped)
-        if table_match and re.match(r"^[a-zA-Z]", table_match.group(1)):
-            if current_skill:
-                results.append(_make_skill_entry(current_skill, current_triggers))
-            current_skill = normalize_skill_name(table_match.group(1))
-            current_triggers = []
-            trigger_match = TRIGGER_PATTERN.search(stripped)
-            if trigger_match:
-                current_triggers = _parse_trigger_list(stripped[trigger_match.end():])
-            continue
+        # 区切り行を見た後の body 行のみ対象（ヘッダ行 `| Skill | ... |` の誤抽出を防ぐ）
+        if table_body_started and stripped.startswith("|"):
+            table_match = re.match(r"^\|\s*`?/?([a-zA-Z0-9_:-]+)`?\s*\|", stripped)
+            if table_match and re.match(r"^[a-zA-Z]", table_match.group(1)):
+                if current_skill:
+                    results.append(_make_skill_entry(current_skill, current_triggers))
+                current_skill = normalize_skill_name(table_match.group(1))
+                current_triggers = []
+                trigger_match = TRIGGER_PATTERN.search(stripped)
+                if trigger_match:
+                    current_triggers = _parse_trigger_list(stripped[trigger_match.end():])
+                continue
+
+        # テーブルブロックを抜けたら body フラグを解除
+        if table_body_started and not stripped.startswith("|"):
+            table_body_started = False
 
         # スキル行の検出: `- /skill-name: ...` or `- skill-name: ...`
         skill_match = re.match(r"^-\s+/?([a-zA-Z0-9_:-]+)\s*[:：]", stripped)
