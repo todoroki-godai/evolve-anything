@@ -83,7 +83,8 @@ class TestComputeEnvironmentFitness:
         with mock.patch("telemetry_query.DATA_DIR", data_dir), \
              mock.patch("telemetry_query.HAS_DUCKDB", False):
             # skip_llm=True: constitutional 軸の LLM subprocess を回避（テスト hang 防止）
-            result = environment.compute_environment_fitness(project, days=30, skip_llm=True)
+            # record=False: 実 DuckDB への書き込み副作用を防ぐ
+            result = environment.compute_environment_fitness(project, days=30, skip_llm=True, record=False)
 
         assert "overall" in result
         assert "sources" in result
@@ -118,7 +119,8 @@ class TestComputeEnvironmentFitness:
 
         with mock.patch("telemetry_query.DATA_DIR", data_dir), \
              mock.patch("telemetry_query.HAS_DUCKDB", False):
-            result = environment.compute_environment_fitness(project, days=30, skip_llm=True)
+            # record=False: 実 DuckDB への書き込み副作用を防ぐ
+            result = environment.compute_environment_fitness(project, days=30, skip_llm=True, record=False)
 
         # telemetry が不十分なので sources に含まれない
         assert "telemetry" not in result["sources"]
@@ -142,7 +144,8 @@ class TestComputeEnvironmentFitness:
 
         with mock.patch("telemetry_query.DATA_DIR", data_dir), \
              mock.patch("telemetry_query.HAS_DUCKDB", False):
-            result = environment.compute_environment_fitness(tmp_path, days=30, skip_llm=True)
+            # record=False: 実 DuckDB への書き込み副作用を防ぐ
+            result = environment.compute_environment_fitness(tmp_path, days=30, skip_llm=True, record=False)
 
         # coherence は算出可能（低スコア）、telemetry は不足
         assert "overall" in result
@@ -175,7 +178,7 @@ class TestThreeLayerBlend:
 
         loader = self._mock_load_sibling(coh, tel, con)
         with mock.patch.object(environment, "_load_sibling", side_effect=loader):
-            result = environment.compute_environment_fitness(project, days=30)
+            result = environment.compute_environment_fitness(project, days=30, record=False)
 
         assert set(result["sources"]) == {"coherence", "telemetry", "constitutional"}
         # 動的正規化: BASE_WEIGHTS の coherence/telemetry/constitutional を正規化
@@ -195,7 +198,7 @@ class TestThreeLayerBlend:
 
         loader = self._mock_load_sibling(coh, tel, con)
         with mock.patch.object(environment, "_load_sibling", side_effect=loader):
-            result = environment.compute_environment_fitness(project, days=30)
+            result = environment.compute_environment_fitness(project, days=30, record=False)
 
         assert "coherence" in result["sources"]
         assert "constitutional" in result["sources"]
@@ -214,7 +217,7 @@ class TestThreeLayerBlend:
 
         loader = self._mock_load_sibling(coh, tel, con)
         with mock.patch.object(environment, "_load_sibling", side_effect=loader):
-            result = environment.compute_environment_fitness(project, days=30)
+            result = environment.compute_environment_fitness(project, days=30, record=False)
 
         assert "coherence" in result["sources"]
         assert "telemetry" in result["sources"]
@@ -243,7 +246,7 @@ class TestThreeLayerBlend:
             return m
 
         with mock.patch.object(environment, "_load_sibling", side_effect=loader):
-            result = environment.compute_environment_fitness(project, days=30)
+            result = environment.compute_environment_fitness(project, days=30, record=False)
 
         assert result["sources"] == ["coherence"]
         assert abs(result["overall"] - 0.75) < 0.01
@@ -281,7 +284,7 @@ class TestSkipLLM:
             return m
 
         with mock.patch.object(environment, "_load_sibling", side_effect=loader):
-            result = environment.compute_environment_fitness(project, days=30, skip_llm=True)
+            result = environment.compute_environment_fitness(project, days=30, skip_llm=True, record=False)
 
         # constitutional は読み込み自体されない
         assert "constitutional" not in loaded
@@ -322,7 +325,7 @@ class TestSkipLLM:
             return m
 
         with mock.patch.object(environment, "_load_sibling", side_effect=loader):
-            result = environment.compute_environment_fitness(project, days=30)
+            result = environment.compute_environment_fitness(project, days=30, record=False)
 
         # デフォルトでは constitutional が読み込まれる
         assert "constitutional" in loaded

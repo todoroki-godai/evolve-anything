@@ -32,6 +32,38 @@ description: >
 
 ---
 
+## Phase 1.5: 仮説ツリー初期化（VeriTrace Phase 1）
+
+Phase 1 で状況を整理したら、**調査を開始する前に仮説を列挙する**。
+仮説を可視化することで「前半の仮説を忘れる」「調査方向が気づかずに変わる」問題を防ぐ。
+
+### 仮説リストの形式
+
+```
+## 現在の仮説リスト
+
+| ID | 仮説 | 確信度 | ステータス |
+|----|------|--------|----------|
+| h1 | [問題の主原因に関する仮説] | 0.5 | active |
+| h2 | [別の原因仮説] | 0.3 | active |
+| h3 | [前提条件に関する仮説] | 0.7 | active |
+```
+
+### 調査中の更新ルール
+- 新しい発見を得るたびに各仮説の確信度を更新する
+  - 支持証拠: confidence +0.1（最大 1.0）
+  - 反証: confidence -0.15（最低 0.0）
+- confidence が 0.3 未満になった仮説は `suspended` に変更し、その反証内容を記録する
+- `hypothesis_tracker.py`（`scripts/lib/hypothesis_tracker.py`）を使って JSONL に永続化することもできる
+  - セッションファイル: `~/.claude/rl-anything/hypothesis_{session_id}.jsonl`
+  - `detect_contradiction()` で evidence_against 3件以上の active 仮説ペアを検出できる
+
+### 調査完了時
+- 全仮説の最終 status を `confirmed` / `refuted` / `suspended` に更新する
+- Phase 5 の最終レポートに仮説の変遷を含める
+
+---
+
 ## Phase 2: Diagnosis — 行き詰まりタイプを判定する
 
 以下の4タイプから**主要タイプを1つ**選ぶ（複数混在している場合は最も根本的なものを選択）。

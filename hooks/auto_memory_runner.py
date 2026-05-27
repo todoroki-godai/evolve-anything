@@ -37,6 +37,17 @@ import rl_common
 
 DATA_DIR: Path = rl_common.DATA_DIR
 
+# ゲーティングモジュール（オプショナル — ImportError 時はゲーティング無効）
+try:
+    from memory_gating import score_correction as _score_correction
+    _HAS_MEMORY_GATING = True
+except ImportError:
+    _HAS_MEMORY_GATING = False
+
+# 環境変数でゲーティングを無効化できる（run() 内で毎回評価してテスト中の monkeypatch を有効にする）
+def _is_gating_enabled() -> bool:
+    return os.environ.get("RL_GATING_DISABLED", "0") != "1"
+
 try:
     from memory_temporal import compute_importance_score as _compute_importance_score
     from memory_temporal import write_importance_score as _write_importance_score
@@ -75,6 +86,62 @@ def read_recent_corrections(data_dir: Optional[Path] = None) -> List[dict]:
         return []
 
     return records[-MAX_CORRECTIONS:]
+
+
+def _load_existing_memory_texts(memory_dir: Optional[Path] = None) -> List[str]:
+    """memory ディレクトリ配下の .md ファイルのテキストを収集して返す。
+
+    ファイルが存在しない場合や読み取りエラーの場合は空リストを返す。
+    """
+    if memory_dir is None:
+        project_dir_str = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        if not project_dir_str:
+            return []
+        slug = rl_common.project_name_from_dir(project_dir_str)
+        memory_dir = Path.home() / ".claude" / "projects" / slug / "memory"
+
+    if not memory_dir.exists():
+        return []
+
+    texts: List[str] = []
+    try:
+        for md_file in memory_dir.glob("*.md"):
+            try:
+                text = md_file.read_text(encoding="utf-8")
+                if text.strip():
+                    texts.append(text)
+            except (OSError, UnicodeDecodeError):
+                continue
+    except OSError:
+        return []
+
+    return texts
+
+
+def _load_all_corrections(data_dir: Optional[Path] = None, max_records: int = 50) -> List[dict]:
+    """corrections.jsonl から最大 max_records 件を返す（ゲーティング用ウィンドウ）。
+
+    ファイル不在・空の場合は [] を返す。
+    """
+    _data_dir = data_dir or DATA_DIR
+    corrections_path = _data_dir / "corrections.jsonl"
+    if not corrections_path.exists():
+        return []
+
+    records = []
+    try:
+        for line in corrections_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    return records[-max_records:]
 
 
 def _build_prompt(corrections: List[dict]) -> str:
@@ -290,6 +357,22 @@ def run(
     corrections = read_recent_corrections(data_dir=_data_dir)
     if not corrections:
         return  # graceful exit
+
+    # 1a. ゲーティング: 重要度スコアが低い correction はスキップ
+    if _HAS_MEMORY_GATING and _is_gating_enabled():
+        try:
+            # all_corrections は重複検出のウィンドウ用（最大50件）
+            all_corrections = _load_all_corrections(data_dir=_data_dir)
+            existing_memories = _load_existing_memory_texts(memory_dir=memory_dir)
+            filtered = [
+                c for c in corrections
+                if _score_correction(c, existing_memories, all_corrections).should_store
+            ]
+            if not filtered:
+                return  # 全件ゲーティングでスキップ
+            corrections = filtered
+        except Exception:
+            pass  # ゲーティングは optional。例外時は元の corrections をそのまま使う
 
     # 2. memory_dir の決定
     if memory_dir is None:
