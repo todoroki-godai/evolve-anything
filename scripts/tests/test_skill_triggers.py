@@ -98,3 +98,31 @@ def test_no_skills_section(tmp_path):
     (tmp_path / "CLAUDE.md").write_text("# Project\n\nNo skills here.\n")
     result = extract_skill_triggers(tmp_path / "CLAUDE.md")
     assert result == []
+
+
+def test_key_skills_heading(tmp_path):
+    """## Key Skills のような 'Skills' を含む複合見出しも認識する。"""
+    content = "# Project\n\n## Key Skills\n\n- /docs-qa: QA workflow. Trigger: docs qa\n\n## Other\n\nstuff\n"
+    (tmp_path / "CLAUDE.md").write_text(content)
+    result = extract_skill_triggers(tmp_path / "CLAUDE.md")
+    assert len(result) == 1
+    assert result[0]["skill"] == "docs-qa"
+
+
+def test_table_format_skills(tmp_path):
+    """テーブル形式で記載されたスキルも認識する。"""
+    content = (
+        "# Project\n\n## Skills\n\n"
+        "| スキル | 用途 |\n"
+        "|--------|------|\n"
+        "| `/generate-docs` | ドキュメント生成 |\n"
+        "| `/docs-qa` | QA |\n"
+        "| `/manage-repo` | リポジトリ管理 |\n\n"
+        "## Other\n\nstuff\n"
+    )
+    (tmp_path / "CLAUDE.md").write_text(content)
+    result = extract_skill_triggers(tmp_path / "CLAUDE.md")
+    skill_names = [r["skill"] for r in result]
+    assert "generate-docs" in skill_names
+    assert "docs-qa" in skill_names
+    assert "manage-repo" in skill_names

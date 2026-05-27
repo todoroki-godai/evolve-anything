@@ -50,13 +50,13 @@ def _parse_skills_section(content: str) -> List[Dict[str, Any]]:
     for line in lines:
         stripped = line.strip()
 
-        # Skills セクション開始を検出（## Skills または類似の見出し）
-        if re.match(r"^#{1,3}\s+[Ss]kills?\b", stripped):
+        # Skills セクション開始を検出（## Skills / ## Key Skills 等、見出しに skills を含む）
+        if re.match(r"^#{1,3}\s+.*\bskills?\b", stripped, re.IGNORECASE):
             in_skills_section = True
             continue
 
         # 別のセクション開始で Skills セクション終了
-        if in_skills_section and re.match(r"^#{1,3}\s+", stripped) and not re.match(r"^#{1,3}\s+[Ss]kills?\b", stripped):
+        if in_skills_section and re.match(r"^#{1,3}\s+", stripped) and not re.match(r"^#{1,3}\s+.*\bskills?\b", stripped, re.IGNORECASE):
             # 最後のスキルを保存
             if current_skill:
                 results.append(_make_skill_entry(current_skill, current_triggers))
@@ -66,6 +66,22 @@ def _parse_skills_section(content: str) -> List[Dict[str, Any]]:
             continue
 
         if not in_skills_section:
+            continue
+
+        # テーブル区切り行はスキップ
+        if re.match(r"^\|[-| ]+\|", stripped):
+            continue
+
+        # テーブル形式: | `/skill-name` | ... | or | /skill-name | ... |
+        table_match = re.match(r"^\|\s*`?/?([a-zA-Z0-9_:-]+)`?\s*\|", stripped)
+        if table_match and re.match(r"^[a-zA-Z]", table_match.group(1)):
+            if current_skill:
+                results.append(_make_skill_entry(current_skill, current_triggers))
+            current_skill = normalize_skill_name(table_match.group(1))
+            current_triggers = []
+            trigger_match = TRIGGER_PATTERN.search(stripped)
+            if trigger_match:
+                current_triggers = _parse_trigger_list(stripped[trigger_match.end():])
             continue
 
         # スキル行の検出: `- /skill-name: ...` or `- skill-name: ...`
