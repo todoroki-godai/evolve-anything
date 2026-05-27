@@ -18,8 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 HISTORY_DIR = (
-    Path(__file__).parent.parent
-    / "skills"
+    Path(__file__).parent.parent.parent  # skills/
     / "genetic-prompt-optimizer"
     / "scripts"
     / "generations"

@@ -322,6 +322,50 @@ def test_untagged_reference_detects_actual_reference(project_dir):
     assert "design-guide" in skill_names
 
 
+def test_untagged_reference_excludes_code_block_skills(project_dir):
+    """コードブロックを含むスキルは action 型とみなして除外する。"""
+    from audit import detect_untagged_reference_candidates
+
+    skills_dir = project_dir / ".claude" / "skills" / "manage-repo"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(
+        "# Manage Repo\n\nRepos workflow.\n\n```bash\ngit status\n```\n"
+    )
+
+    artifacts = _find_artifacts_local_only(project_dir)
+    usage = {}
+
+    with patch("audit.classify_artifact_origin", return_value="project"):
+        candidates = detect_untagged_reference_candidates(
+            artifacts, usage, project_dir=project_dir,
+        )
+
+    skill_names = [c["skill_name"] for c in candidates]
+    assert "manage-repo" not in skill_names
+
+
+def test_untagged_reference_excludes_neutral_content(project_dir):
+    """action/reference 信号が同スコア（両ゼロ含む）の場合、action 型とみなして除外（安全側）。"""
+    from audit import detect_untagged_reference_candidates
+
+    skills_dir = project_dir / ".claude" / "skills" / "docs-qa"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(
+        "# Docs QA\n\nQA workflow for documentation.\n"
+    )
+
+    artifacts = _find_artifacts_local_only(project_dir)
+    usage = {}
+
+    with patch("audit.classify_artifact_origin", return_value="project"):
+        candidates = detect_untagged_reference_candidates(
+            artifacts, usage, project_dir=project_dir,
+        )
+
+    skill_names = [c["skill_name"] for c in candidates]
+    assert "docs-qa" not in skill_names
+
+
 def test_issue_format(project_dir):
     """各 issue が統一フォーマットを満たす。"""
     claude_md = project_dir / "CLAUDE.md"

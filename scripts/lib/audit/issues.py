@@ -35,6 +35,9 @@ def _is_user_invocable_heuristic(content: str) -> bool:
         "trigger:", "トリガー", "使用タイミング",
         "steps", "手順", "実行", "execute",
         "run ", "deploy", "create", "generate",
+        "```",         # コードブロックがあれば action 型とみなす
+        "## usage", "## step", "## preamble", "## how",
+        "check", "install", "setup", "update",
     ]
     reference_signals = [
         "ガイド", "guide", "仕様", "specification",
@@ -44,7 +47,8 @@ def _is_user_invocable_heuristic(content: str) -> bool:
     ]
     act_score = sum(1 for sig in action_signals if sig in lower)
     ref_score = sum(1 for sig in reference_signals if sig in lower)
-    return act_score > ref_score
+    # 同スコア（両ゼロ含む）の場合は安全側として action 型とみなす
+    return act_score >= ref_score
 
 
 def detect_untagged_reference_candidates(

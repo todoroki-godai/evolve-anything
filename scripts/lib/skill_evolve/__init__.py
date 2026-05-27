@@ -57,8 +57,8 @@ RATIONALIZATION_SKIP_KEYWORDS = [
 RATIONALIZATION_OUTCOME_WINDOW_DAYS = 30
 
 # LLMキャッシュ
-# `<repo>/scripts/lib/skill_evolve/__init__.py` → `<repo>/scripts`
-_plugin_root = Path(__file__).resolve().parent.parent.parent
+# plugin_root.py が <repo>/scripts/lib/ 基点で正確に解決するためそちらを使う
+from plugin_root import PLUGIN_ROOT as _plugin_root
 DATA_DIR = Path.home() / ".claude" / "rl-anything"
 CACHE_FILE = DATA_DIR / "skill-evolve-cache.json"
 

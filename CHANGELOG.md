@@ -8,6 +8,8 @@
 - **feat(skills): audit/discover に disallowed-tools 追加** — CC v2.1.152 の `disallowed-tools` frontmatter を活用し、分析系スキルで `Edit`/`Write`/`MultiEdit` を防衛的に禁止。
 
 ### Fixed
+- **fix(audit): `untagged_reference_candidates` 誤検知削減** — `_is_user_invocable_heuristic` にコードブロック/セクションヘッダ/汎用動詞シグナルを追加し、同スコア時に安全側（action 型）とみなすよう変更。SKILL.md が誤って `type: reference` 付与候補になるバグを修正。
+- **fix(evolve-fitness): `HISTORY_DIR` パスバグ修正** — `fitness_evolution.py` の `HISTORY_DIR` が存在しないパスを参照しており history.jsonl が常に 0 件と認識される問題を修正（`parent.parent` → `parent.parent.parent`）。
 - **fix(token_usage_ingest): cache_creation_input_tokens の nested fallback 追加** — CC v2.1.152 以前のバグ（トップレベルが 0 で `cache_creation.input_tokens` に実値が格納されていたケース）への後方互換対応。
 
 ## [1.72.0] - 2026-05-27
