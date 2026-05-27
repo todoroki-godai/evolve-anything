@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [1.72.0] - 2026-05-27
+
+### Added
+- **feat(memory-gating): correction 重要度スコアリングで auto_memory_runner のノイズ低減** — `memory_gating.py` に `score_correction()` を追加。`RL_GATING_DISABLED=1` で無効化可能（#238-#241）。
+- **feat(fitness-history): fitness スコア自動記録 + HISTORY_DIR パス修正** — `compute_environment_fitness()` に `record=True` パラメータを追加し audit 実行時に `fitness_history_store.record_fitness_run()` を自動呼び出し（#240）。
+- **feat(hypothesis-tracker): 仮説追跡ストア追加** — `hypothesis_tracker.py` を新設。仮説の記録・更新・クエリを提供（#241）。
 
 ### Fixed
 - **fix(fitness_history_store): DuckDB 構文・NaN ガード・テスト品質改善** — `INSERT OR IGNORE` → `INSERT INTO ... ON CONFLICT DO NOTHING` に修正（DuckDB 標準構文）。`math.isfinite` による NaN ガード追加（NaN スコアはスキップ）。`ORDER BY id DESC` に修正（timestamp 同秒衝突でも順序安定）。`environment.py` の `_load_sibling` を coherence パッケージ（`__init__.py`）対応に修正。`test_auto_memory_runner.py` に `RL_GATING_DISABLED=1` を付与して memory-gating 追加後のテスト失敗を解消。
