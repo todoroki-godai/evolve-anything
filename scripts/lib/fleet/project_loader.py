@@ -9,6 +9,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 from . import (
     STATUS_ENABLED,
@@ -65,6 +66,39 @@ def enumerate_projects(root: Path) -> list[Path]:
         if (child / ".claude").is_dir() or (child / "CLAUDE.md").is_file():
             projects.append(child)
     return projects
+
+
+class MemoryDir(NamedTuple):
+    """PJ 横断 recall の列挙単位。"""
+
+    memory_dir: Path  # ~/.claude/projects/<slug>/memory/
+    pj_display: str    # slug から先頭 `-` を除いた人間可読名
+
+
+def enumerate_memory_dirs(projects_root: Path | None = None) -> list[MemoryDir]:
+    """`*/memory/` に `*.md` を持つ全 PJ を列挙する（plugin 有効性で絞らない）。
+
+    `enumerate_projects()` は `_is_plugin_enabled` で rl-anything 有効 PJ に絞るため
+    横断 recall には使えない（未導入 PJ の memory が静かに消える）。recall は
+    auto-memory の `memory/` 存在だけを条件に列挙する別経路。
+
+    除外: ドットで始まるディレクトリ・シンボリックリンク（任意パス trampoline 防止）。
+    `projects_root` 未指定時は `~/.claude/projects`。返り値は pj_display でソート。
+    """
+    root = projects_root or _DEFAULT_AUTO_MEMORY_ROOT
+    if not root.is_dir():
+        return []
+    found: list[MemoryDir] = []
+    for child in root.iterdir():
+        if not child.is_dir() or child.name.startswith(".") or child.is_symlink():
+            continue
+        memory_dir = child / "memory"
+        if not memory_dir.is_dir():
+            continue
+        if not any(memory_dir.glob("*.md")):
+            continue
+        found.append(MemoryDir(memory_dir=memory_dir, pj_display=child.name.lstrip("-")))
+    return sorted(found, key=lambda m: m.pj_display)
 
 
 def _load_settings_with_retry(settings_path: Path) -> dict | None:
