@@ -14,7 +14,7 @@ Last updated: 2026-05-21 (implement スキルに depends_on グラフ追加)
 | `/rl-anything:reflect` | corrections → CLAUDE.md/rules 反映 | medium |
 | `/rl-anything:audit` | 環境健康診断レポート | medium |
 | `/rl-anything:optimize <skill>` | 特定スキルの直接パッチ最適化 | high |
-| `/rl-anything:rl-loop` | 自律進化ループオーケストレーター | high |
+| `/rl-anything:rl-loop` | 自律進化ループオーケストレーター。`--evolve-search` で BES 前向き進化探索（#256）を有効化し、subgoal fitness で重み付けした crossover/mutate の子候補を既存 variants に合流 | high |
 | `/rl-anything:agent-brushup` | エージェント品質診断 | medium |
 | `/rl-anything:evolve-skill <skill>` | 特定スキルに自己進化パターン組み込み | medium |
 | `/rl-anything:generate-fitness` | PJ固有 fitness 関数自動生成 | medium |
@@ -31,7 +31,7 @@ Last updated: 2026-05-21 (implement スキルに depends_on グラフ追加)
 
 ## 適応度関数
 
-組み込み8個: `default`, `skill_quality`, `coherence`, `telemetry`, `constitutional`（+ /cso security軸）, `chaos`, `environment`（動的重み）, `plugin`（プラグイン統合）。`config.py` / `principles.py` は supporting（閾値集約 / 原則抽出）
+組み込み8個: `default`, `skill_quality`, `coherence`, `telemetry`, `constitutional`（+ /cso security軸 + slop_detector 10% ブレンド #255）, `chaos`, `environment`（動的重み）, `plugin`（プラグイン統合）。`config.py` / `principles.py` は supporting（閾値集約 / 原則抽出）。BES サブゴールスコアラー（`subgoal_scorer.py` #253）と前向き進化探索（`evolution_operators.py` #256）は fitness 関数ではなく rl-loop / optimize が consume する補助層
 
 PJ固有: `scripts/rl/fitness/{name}.py` に配置 → `--fitness {name}`
 

@@ -50,7 +50,7 @@ skills/                 ← スキル定義（21個）
   implement/            ← 構造化実装スキル（plan → 実装 → 計画準拠チェック → テレメトリ）。Standard モードはタスク境界で認知分離（context: fresh 相当）を宣言し、前タスクの実装詳細はメモリ参照でなく Read で確認する
   cleanup/              ← PR マージ・デプロイ後の後片付け（branches/worktrees/tmp dirs/Issues/Test plan）を個別承認→実行 [ADR-021]
 
-scripts/lib/            ← 共通ロジック（14 パッケージ・118 モジュール）[ADR-019]
+scripts/lib/            ← 共通ロジック（14 パッケージ・122 モジュール）[ADR-019]
   audit/                ← 環境健康診断（11 サブモジュール: memory/gstack/quality/issues/classification/artifacts/usage/scope/sections/report/orchestrator）。`usage.py` に `aggregate_contribution_scores`（スキル別貢献スコア集計）を追加（v1.59.0）
   discover/             ← パターン検出 + スキル/ルール候補生成
   fleet/                ← 全 PJ 横断観測
@@ -74,6 +74,10 @@ scripts/lib/            ← 共通ロジック（14 パッケージ・118 モジ
     fitness_history_store.py← DuckDB 冪等 ingest（ON CONFLICT DO NOTHING）fitness スコア履歴 SoR。`record_fitness_run(run_id, axis_scores, weights)` が NaN ガード付きで各軸を記録し `environment.py` が `record=True` 時に呼び出す（v1.71.x）
     hypothesis_tracker.py   ← VeriTrace Phase 1。仮説ツリーを JSONL で永続化（save/load/update_confidence/detect_contradiction）。write-then-rename アトミックパターン（v1.71.x）
     skill_extractor/        ← trajectory_sampler.py: raw セッション JSONL から TrajectoryRecord 抽出。<command-name> タグ検出・ストリーミング読み込み・outcome 判定（success/unknown）（v1.71.x）
+    subgoal_scorer.py       ← BES 後ろ向き分解（#253）。候補テキストを 5 サブゴール（frontmatter_preserved / trigger_coverage / correction_addressed / line_budget / slop_free）に分解して密な中間フィードバックを返す。`optimize_core.run_subgoal_scoring` がラップ。LLM 非依存・決定論。slop_free は slop_detector に接続（#255）
+    evolution_operators.py  ← BES 前向き進化探索（#256）。crossover（## セクション単位結合・frontmatter は parent_a 保持）/ mutate（安定ソート + 連続重複行除去 + corrections 強調）/ select_parents（fitness-proportional ルーレット・全 0/負で一様 fallback・rng 注入で再現可能）/ evolve_generation。rl-loop の `--evolve-search` が consume。LLM 非依存・決定論
+    memory_trace.py         ← MemTrace 帰属診断（#254）。episodic memory 検索エラーを misretrieval（低スコア）/ context_drift（temporal staleness）/ corruption（検索直後 correction）の3類型に分類し発生源 event_id に帰属。LLM・外部 oracle 不使用、DuckDB 未インストール時は空返し。`audit/memory.py` が利用
+    slop_detector.py        ← AI slop 辞書検出（#255）。決定論 regex/ヒューリスティックで日英 10 パターン（過度な肯定・不要な謝罪・無意味な要約見出し・過剰な免責・空虚な接続句）を検出。`detect_slop(text) -> SlopResult(slop_score, hits)`（1.0=良 / 0.0=悪）。constitutional.py が 10% 加重ブレンド、subgoal_scorer が slop_free 判定に使用
 
 scripts/bench/          ← TBench2-rl Harness Quality Benchmark（Week 1-3 実装済み）
   golden_extractor.py   ← GoldenCase（正例/負例ペア）抽出 — usage.jsonl + corrections.jsonl
@@ -87,7 +91,7 @@ scripts/rl/fitness/     ← 適応度関数（8個組み込み: default + 7 .py 
   principles.py         ← PJ固有原則抽出 + キャッシュ (supporting、constitutional.py から呼び出し)
   coherence.py          ← 環境 Coherence Score（4軸）
   telemetry.py          ← テレメトリ駆動 Score（3軸）
-  constitutional.py     ← 原則ベース LLM Judge + /cso security 軸
+  constitutional.py     ← 原則ベース LLM Judge + /cso security 軸 + slop_detector 10% 加重ブレンド（#255、import 失敗時は overall 素通し）
   chaos.py              ← 仮想除去ロバストネス
   environment.py        ← 動的重み統合（_normalize_weights + skill_quality 4軸目）
   skill_quality.py      ← ルールベース構造品質

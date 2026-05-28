@@ -42,6 +42,10 @@
 | `meta_quality` | スキル追加前の meta-skill 品質フィルタ — 再利用頻度と Jaccard 類似度で CREATE/REVIEW/SKIP を判定。`skill-triage` の CREATE 判定パスに組み込み（`scripts/lib/meta_quality.py`） |
 | `constraint_decay` | セッション後半 30% ターンに集中する correction を検出して decay_rate を算出。O(N+M) pre-index・30日 mtime フィルタ。`run_discover()` に統合（`scripts/lib/discover/patterns.py`） |
 | `negative_transfer` | スキル追加イベント前後の success rate delta を計測し `delta < -0.05` で負の転移フラグを付与（`scripts/lib/audit/usage.py`） |
+| `subgoal_scorer` | BES 後ろ向き分解（#253）。候補を 5 サブゴール（frontmatter/trigger/correction/line_budget/slop_free）に分解し密な中間フィードバックを返す。`optimize_core.run_subgoal_scoring` がラップ、決定論・LLM 非依存（`scripts/lib/subgoal_scorer.py`） |
+| `evolution_operators` | BES 前向き進化探索（#256）。crossover/mutate/select_parents(fitness-proportional)/evolve_generation の決定論演算子。rl-loop の `--evolve-search` が subgoal fitness を consume（`scripts/lib/evolution_operators.py`） |
+| `memory_trace` | MemTrace 帰属診断（#254）。episodic 検索エラーを misretrieval/context_drift/corruption の3類型に分類し `event_id` 帰属。LLM/oracle 不使用、`audit/memory.py` が利用（`scripts/lib/memory_trace.py`） |
+| `slop_detector` | AI slop 辞書検出（#255）。日英 10 パターンを決定論 regex で検出、`detect_slop -> SlopResult(slop_score, hits)`。constitutional に 10% ブレンド + subgoal slop_free に接続（`scripts/lib/slop_detector.py`） |
 
 ## クイックスタート
 
