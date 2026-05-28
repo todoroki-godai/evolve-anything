@@ -210,10 +210,6 @@ def _score_line_budget(
             passed=True,
             detail=f"{lines}/{max_lines} 行以内",
         )
-    # 超過率に応じてスコアを線形に下げる（0.0 固定でなく超過幅を可視化）
-    # ただし passed=False は確定
-    over_ratio = lines / max_lines  # 例: 1.2 = 20% 超過
-    score = max(0.0, 1.0 - (over_ratio - 1.0))
     return SubgoalResult(
         goal="line_budget",
         score=0.0,  # hard fail → スコアは 0.0 固定
