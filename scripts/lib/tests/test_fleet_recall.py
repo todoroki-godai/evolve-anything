@@ -16,6 +16,7 @@ from pathlib import Path
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
+from fleet import main  # noqa: E402
 from fleet.project_loader import enumerate_memory_dirs  # noqa: E402
 from fleet.recall import (  # noqa: E402
     RecallHit,
@@ -208,3 +209,36 @@ class TestFormatHits:
     def test_空ヒットのメッセージ(self):
         out = format_hits([], as_json=False)
         assert out.strip() != ""
+
+
+class TestRecallCLI:
+    """rl-fleet recall サブコマンドの dispatch。"""
+
+    def _corpus(self, tmp_path):
+        root = tmp_path / "projects"
+        (root / "-pj-a" / "memory").mkdir(parents=True)
+        (root / "-pj-a" / "memory" / "c.md").write_text(
+            "---\nname: caching\ndescription: duckdb cache\n---\ncache body\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def test_recall_dispatch_json(self, tmp_path, capsys):
+        root = self._corpus(tmp_path)
+        rc = main(["recall", "cache", "--root", str(root), "--json"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data[0]["pj_display"] == "pj-a"
+
+    def test_recall_dispatch_human_limit(self, tmp_path, capsys):
+        root = self._corpus(tmp_path)
+        rc = main(["recall", "cache", "--root", str(root), "--limit", "5"])
+        assert rc == 0
+        assert "pj-a" in capsys.readouterr().out
+
+    def test_recall_ヒットなし(self, tmp_path, capsys):
+        root = self._corpus(tmp_path)
+        rc = main(["recall", "zzznotfound", "--root", str(root)])
+        assert rc == 0
+        assert "該当する memory" in capsys.readouterr().out
