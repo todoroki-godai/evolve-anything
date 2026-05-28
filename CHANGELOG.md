@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(memory): MemTrace 帰属診断 `memory_trace` モジュール追加** — episodic memory 検索エラーを `misretrieval`（低スコア上位返却）・`context_drift`（temporal staleness 超過）・`corruption`（検索直後 correction 発生）の3類型に分類し発生源 `event_id` に帰属させる決定論エンジン。LLM・外部 oracle 不使用。DuckDB 未インストール時は空返し。`audit/memory.py` に `build_memory_trace_audit_section` を追加（閾値: score_threshold=0.3、staleness_days=30、post_retrieval_window_sec=300）。closes #254
+
 ## [1.75.0] - 2026-05-28
 
 ### Added
