@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(optimize): BES サブゴールスコアラー導入** — `scripts/lib/subgoal_scorer.py` を新設し、候補テキストを 5 つのサブゴール（frontmatter_preserved / trigger_coverage / correction_addressed / line_budget / slop_free）に分解して密な中間フィードバックを返す。LLM 非依存・決定論。`optimize_core.py` に `run_subgoal_scoring(content, original, corrections, max_lines) -> dict` を追加（既存 `run_custom_fitness` は変更なし）。closes #253
+
 ## [1.75.0] - 2026-05-28
 
 ### Added

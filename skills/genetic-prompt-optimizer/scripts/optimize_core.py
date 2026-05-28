@@ -371,6 +371,66 @@ def run_custom_fitness(
     return None
 
 
+# ── subgoal scoring ──────────────────────────────────────────────────
+
+
+def run_subgoal_scoring(
+    content: str,
+    original: Optional[str],
+    corrections: List[Dict[str, Any]],
+    max_lines: int = 500,
+) -> Dict[str, Any]:
+    """サブゴール分解スコアリングを実行する（BES 中間フィードバック用）。
+
+    run_custom_fitness とは独立した呼び出しとして提供する。
+    LLM を呼ばない決定論的スコアリング。
+
+    Args:
+        content:     評価対象のテキスト（最適化候補）
+        original:    元のファイル内容。None なら origin 比較系サブゴールをスキップ
+        corrections: corrections.jsonl のレコードリスト
+        max_lines:   行数上限（デフォルト 500）
+
+    Returns:
+        {
+            "total": float,         # 0.0–1.0 集約スコア
+            "subgoals": [           # サブゴール一覧
+                {
+                    "goal": str,
+                    "score": float,
+                    "passed": bool,
+                    "detail": str,
+                },
+                ...
+            ],
+        }
+    """
+    try:
+        from subgoal_scorer import score_subgoals  # type: ignore[import]
+    except ImportError:
+        # subgoal_scorer が見つからない場合は空結果を返す（後方互換）
+        return {"total": 0.0, "subgoals": []}
+
+    result = score_subgoals(
+        candidate=content,
+        original=original,
+        corrections=corrections,
+        max_lines=max_lines,
+    )
+    return {
+        "total": result.total,
+        "subgoals": [
+            {
+                "goal": sg.goal,
+                "score": sg.score,
+                "passed": sg.passed,
+                "detail": sg.detail,
+            }
+            for sg in result.subgoals
+        ],
+    }
+
+
 # ── pitfall 記録 ─────────────────────────────────────────────────────
 
 
