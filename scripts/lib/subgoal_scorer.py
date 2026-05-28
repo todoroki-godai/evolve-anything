@@ -219,19 +219,33 @@ def _score_line_budget(
 
 
 def _score_slop_free(
-    _candidate: str,
+    candidate: str,
 ) -> SubgoalResult:
-    """slop 検出フック（現在は常に passed=True）。
+    """slop 検出サブゴール（slop_detector に接続）。
 
-    将来のスコアラー統合用のプレースホルダー。
-    実装が追加されたらここに組み込む。
+    detect_slop(candidate).slop_score（1.0=良い / 0.0=悪い）をスコアにする。
+    slop_detector が import できない / 失敗する場合は従来通り pass(1.0) に
+    フォールバックする（後方互換）。slop_score >= 0.7 で passed=True。
     """
-    return SubgoalResult(
-        goal="slop_free",
-        score=1.0,
-        passed=True,
-        detail="slop 検出器未実装（常に pass）",
-    )
+    try:
+        from slop_detector import detect_slop  # type: ignore[import]
+
+        result = detect_slop(candidate)
+        score = float(result.slop_score)
+        passed = score >= 0.7
+        return SubgoalResult(
+            goal="slop_free",
+            score=score,
+            passed=passed,
+            detail=f"slop_score {score:.2f} (hits={len(result.hits)})",
+        )
+    except Exception:
+        return SubgoalResult(
+            goal="slop_free",
+            score=1.0,
+            passed=True,
+            detail="slop 検出器が利用不可（フォールバック pass）",
+        )
 
 
 # ── アグリゲーター ────────────────────────────────────────────────────

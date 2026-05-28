@@ -308,6 +308,114 @@ class TestHBest:
             assert mock_baseline.call_count == 1
 
 
+class TestEvolveSearch:
+    """BES 前向き進化探索 (--evolve-search, #256) のテスト。
+
+    dry_run では _score_variant_axes / run_subgoal_scoring とも LLM 非依存
+    （決定論）のため mock 不要。念のため LLM 経路の _score_single_axis を
+    mock して、進化フェーズが LLM を呼ばないことを保証する。
+    """
+
+    SKILL = (
+        "---\ndescription: test\n---\n# Test\n\nintro\n\n"
+        "## Usage\n\nuse it\n\n## Notes\n\nnote\n"
+    )
+
+    def _mock_gen(self):
+        return {
+            "history": [{"generation": 0, "individuals": [
+                {"id": "v0", "content": self.SKILL + "\n## Examples\n\nex0\n"},
+                {"id": "v1", "content": self.SKILL + "\n## Tips\n\ntip1\n"},
+            ]}],
+        }
+
+    def test_evolve_search_dry_run_completes(self, tmp_path):
+        """--evolve-search 有りで dry-run が例外なく完走する。"""
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text(self.SKILL, encoding="utf-8")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_single_axis") as mock_axis:
+            mock_gen.return_value = self._mock_gen()
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=2,
+                dry_run=True,
+                output_dir=str(output_dir),
+                evolve_search=True,
+            )
+
+            assert len(results) == 1
+            # 進化フェーズで variant が増えている（元 2 + 子 2）
+            assert results[0]["variants_count"] >= 4
+            # dry_run なので LLM 経路は呼ばれない
+            mock_axis.assert_not_called()
+
+    def test_evolve_search_best_not_below_single_pass(self, tmp_path):
+        """進化版の best が 1パス版の best を下回らない経路が通る。
+
+        _score_variant_axes を決定論 mock し、同一ベースラインで
+        evolve_search なし版とあり版の best_score を比較する。
+        """
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text(self.SKILL, encoding="utf-8")
+
+        # content をキーに固定スコアを返す決定論 mock（LLM 非依存）
+        def axes_for(content, target_path, dry_run=False):
+            # 子（より長い結合テキスト）には高スコアを与える
+            base = 0.60 + min(len(content), 2000) / 20000.0
+            return {
+                "technical": base, "domain": base,
+                "structure": base, "integrated": round(base, 4),
+            }
+
+        def run_once(evolve_search, out):
+            out.mkdir()
+            with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+                 patch.object(run_loop_mod, "_score_variant_axes",
+                              side_effect=axes_for):
+                mock_gen.return_value = self._mock_gen()
+                return run_loop_mod.run_loop(
+                    target_path=str(skill_file),
+                    loops=1,
+                    population=2,
+                    dry_run=True,
+                    output_dir=str(out),
+                    evolve_search=evolve_search,
+                )
+
+        single = run_once(False, tmp_path / "single")
+        evolved = run_once(True, tmp_path / "evolved")
+
+        assert evolved[0]["best_score"] >= single[0]["best_score"]
+
+
+class TestEvolveVariantsHelper:
+    """_evolve_variants ヘルパーの単体テスト（LLM 非依存）。"""
+
+    def test_offspring_と同形のdictを返す(self):
+        variants = [
+            {"id": "v0", "score": 0.7, "axes": {}, "content": "---\nx: 1\n---\n# A\n\n## U\n\nu\n", "content_length": 10},
+            {"id": "v1", "score": 0.6, "axes": {}, "content": "---\nx: 1\n---\n# B\n\n## V\n\nv\n", "content_length": 10},
+        ]
+        out = run_loop_mod._evolve_variants(
+            variants, "/dummy", global_best_content=None, dry_run=True
+        )
+        assert len(out) == len(variants)
+        for ev in out:
+            assert set(["id", "score", "axes", "content", "content_length"]).issubset(ev)
+
+    def test_空variantsなら空を返す(self):
+        out = run_loop_mod._evolve_variants(
+            [], "/dummy", global_best_content=None, dry_run=True
+        )
+        assert out == []
+
+
 class TestParetoDominance:
     """Pareto dominance 判定のテスト"""
 
