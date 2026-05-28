@@ -19,6 +19,7 @@ from .cli_tokens import _inject_token_metrics, _run_tokens
 from .collectors import collect_fleet_status, write_fleet_run
 from .formatters import format_status_table
 from .project_loader import enumerate_projects
+from .recall import format_hits, recall
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -81,6 +82,16 @@ def main(argv: list[str] | None = None) -> int:
         help="インストール先スキルディレクトリ（default: <plugin_root>/skills/）",
     )
 
+    recall_p = sub.add_parser(
+        "recall",
+        help="全 PJ の memory を横断 keyword 検索（決定論・LLM 非依存）",
+    )
+    recall_p.add_argument("query", help="検索クエリ（空白区切りの token）")
+    recall_p.add_argument("--limit", type=int, default=10, help="表示件数の上限 (default: 10)")
+    recall_p.add_argument("--root", type=Path, default=None,
+                          help="projects ルート (default: ~/.claude/projects)")
+    recall_p.add_argument("--json", action="store_true", help="JSON 出力")
+
     args = parser.parse_args(argv)
 
     if args.command == "discover":
@@ -91,9 +102,18 @@ def main(argv: list[str] | None = None) -> int:
         return _run_test_guard(args)
     if args.command == "import":
         return _run_import(args)
+    if args.command == "recall":
+        return _run_recall(args)
 
     # default: status
     return _run_status(args)
+
+
+def _run_recall(args: argparse.Namespace) -> int:
+    """recall サブコマンド: 全 PJ memory を横断検索して結果を出力する。"""
+    hits = recall(args.query, limit=args.limit, projects_root=args.root)
+    print(format_hits(hits, as_json=args.json))
+    return 0
 
 
 def _show_active_agents() -> str | None:

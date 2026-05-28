@@ -44,11 +44,23 @@ from .project_loader import (  # noqa: E402, F401
     _pj_safe_name,
     resolve_auto_memory_dir,
     enumerate_projects,
+    enumerate_memory_dirs,
+    MemoryDir,
     _load_settings_with_retry,
     _is_plugin_enabled,
     _latest_activity,
     _safe_compute_level,
     classify_project,
+)
+
+
+# PJ 横断 memory recall engine は fleet/recall.py に集約（後方互換のため再エクスポート）
+from .recall import (  # noqa: E402, F401
+    Fact,
+    RecallHit,
+    parse_fact_file,
+    recall,
+    format_hits,
 )
 
 
@@ -107,6 +119,7 @@ from .cli_tokens import (  # noqa: E402, F401
 # fleet/cli.py に集約済み（後方互換のため再エクスポート、bin/rl-fleet は fleet.main を呼ぶ）
 from .cli import (  # noqa: E402, F401
     _run_discover,
+    _run_recall,
     _run_status,
     _run_test_guard,
     main,
