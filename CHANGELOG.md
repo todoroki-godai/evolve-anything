@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(fleet): `rl-fleet recall` — PJ 横断 memory recall** — 全 PJ の `~/.claude/projects/<pj>/memory/*.md` を keyword 横断検索する決定論 engine を追加（`query` / `--limit` / `--json` / `--root`）。`enumerate_memory_dirs()`（memory dir 存在ベースで plugin 有効性に依らず列挙）+ TF + frontmatter description/filename ブーストの 1 段ランク。LLM rerank / embedding は非採用（消費者の assistant 自身が reranker、コーパス極小で vector の前提が成立しないため）。frontmatter 不正は本文フォールバック + stderr 警告。MEMORY.md index 行は `[index]` タグ + スコア半減で fact 本体より下位。実装は `scripts/lib/fleet/recall.py` + `project_loader.py`、設計判断は ADR 025。
+
 ## [1.74.0] - 2026-05-28
 
 ### Added
