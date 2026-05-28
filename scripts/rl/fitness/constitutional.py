@@ -475,8 +475,9 @@ def compute_constitutional_score(
         overall = round(overall * (1 - SLOP_PENALTY_WEIGHT) + slop_score * SLOP_PENALTY_WEIGHT, 4)
         result["overall"] = overall
 
-    except Exception:
+    except Exception as e:
         # slop 検出失敗は graceful degradation — overall に影響させない
+        print(f"[constitutional] slop 検出スキップ: {e}", file=sys.stderr)
         result["slop_score"] = None
         result["slop_hits_count"] = 0
 

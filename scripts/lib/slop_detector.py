@@ -18,7 +18,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 _PATTERNS_PATH = Path(__file__).resolve().parent / "slop_patterns.json"
 
