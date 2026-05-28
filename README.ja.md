@@ -64,7 +64,7 @@ rl-anything は **4つの独立した柱** で構成される。
 | 自律進化 | 使用データからパターン検出→スキル生成→淘汰→進化 | `/rl-anything:evolve` |
 | フィードバック | ユーザーの修正（「いや、違う」等）を検出→ルールに反映 | `/rl-anything:reflect` |
 | 直接パッチ最適化 | corrections/context → LLM 1パスパッチ → regression gate | `/rl-anything:rl-loop` |
-| **fleet 観測・介入** | 全 PJ 横断で env_score / 導入状況を一覧表示（Phase 1: status） | `bin/rl-fleet status` |
+| **fleet 観測・介入** | 全 PJ 横断で env_score / 導入状況を一覧表示。全 PJ memory の keyword 横断検索 `recall` も提供 | `bin/rl-fleet status` / `bin/rl-fleet recall "<query>"` |
 | エージェント管理 | エージェント定義の品質診断・改善提案 | `/rl-anything:agent-brushup` |
 | セカンドオピニオン | 独立した cold-read セカンドオピニオン | `/rl-anything:second-opinion` |
 | 仕様管理 | SPEC.md + ADR の管理、L1/L2 自動昇格 | `/rl-anything:spec-keeper` |
@@ -91,6 +91,7 @@ rl-anything は **4つの独立した柱** で構成される。
 | 環境の成長レポート | `audit --growth` |
 | マージ・デプロイ後の後片付け | `cleanup` |
 | 全 PJ 横断の fleet ステータス | `bin/rl-fleet status` |
+| 全 PJ の memory を keyword 横断検索 | `bin/rl-fleet recall "<query>"` |
 
 > すべてのコマンドは `/rl-anything:` プレフィックス付きで呼び出す（例: `/rl-anything:evolve`）
 
