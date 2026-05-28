@@ -3,7 +3,7 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-05-27 (v1.71.x: fitness_history_store + hypothesis_tracker + trajectory_sampler + memory-gating)
+Last updated: 2026-05-28 (v1.75.0: fleet recall — PJ 横断 memory keyword 検索)
 
 ## コンポーネント構成
 
@@ -126,4 +126,4 @@ scripts/rl/fitness/     ← 適応度関数（8個組み込み: default + 7 .py 
 - **評価・スコアリング**: Coherence 4軸 ([004](../docs/decisions/004-coherence-score-4-axes.md)), Telemetry ([005](../docs/decisions/005-telemetry-score-architecture.md)), Constitutional Judge ([006](../docs/decisions/006-constitutional-eval-llm-judge.md)), CoT除去 ([018](../docs/decisions/018-evaluate-pipeline-cot-removal.md))
 - **運用・自動化**: Auto trigger ([010](../docs/decisions/010-auto-evolve-trigger-engine.md), [011](../docs/decisions/011-auto-compression-trigger.md)), Self-Evolution EWA ([012](../docs/decisions/012-self-evolution-trajectory-ewa.md)), Compaction復元 ([013](../docs/decisions/013-compaction-state-recovery.md)), CC v2適用 ([014](../docs/decisions/014-adopt-claude-code-v2-features.md))
 - **安全設計**: Cleanup tmp_dir prefix safety-first default ([021](../docs/decisions/021-cleanup-tmp-dir-prefix-safety.md))
-- **アーキテクチャ拡張**: fleet 観測＋介入を同一プラグインに統合（4 本目の柱）([022](../docs/decisions/022-fleet-observation-plus-intervention.md))
+- **アーキテクチャ拡張**: fleet 観測＋介入を同一プラグインに統合（4 本目の柱）([022](../docs/decisions/022-fleet-observation-plus-intervention.md)), PJ 横断 memory recall は keyword 決定論・vector 非採用 ([025](../docs/decisions/025-cross-pj-memory-recall-keyword-only.md))

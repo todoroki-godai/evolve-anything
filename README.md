@@ -66,7 +66,7 @@ rl-anything consists of **four independent pillars**.
 | Autonomous Evolution | Detect patterns from usage data → generate skills → prune → evolve | `/rl-anything:evolve` |
 | Feedback | Detect user corrections ("no, that's wrong" etc.) → reflect into rules | `/rl-anything:reflect` |
 | Direct-Patch Optimization | corrections/context → 1-pass LLM patch → regression gate | `/rl-anything:rl-loop` |
-| **Fleet Observation** | Cross-project env_score / adoption status (Phase 1: status) | `bin/rl-fleet status` |
+| **Fleet Observation** | Cross-project env_score / adoption status (Phase 1: status), cross-project memory keyword recall | `bin/rl-fleet status` / `bin/rl-fleet recall` |
 | Agent Management | Quality diagnosis & improvement proposals for agent definitions | `/rl-anything:agent-brushup` |
 | Second Opinion | Independent cold-read second opinion | `/rl-anything:second-opinion` |
 | Spec Management | Manage SPEC.md + ADRs, automatic L1/L2 promotion | `/rl-anything:spec-keeper` |
@@ -93,6 +93,7 @@ rl-anything consists of **four independent pillars**.
 | Environment growth report | `audit --growth` |
 | Post-merge / post-deploy cleanup | `cleanup` |
 | Cross-project fleet status | `bin/rl-fleet status` |
+| Cross-project memory recall (keyword) | `bin/rl-fleet recall "<query>"` |
 
 > All commands are invoked with the `/rl-anything:` prefix (e.g., `/rl-anything:evolve`).
 
