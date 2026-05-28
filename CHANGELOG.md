@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(fitness): slop 辞書検出器 `slop_detector.py` + `slop_patterns.json`** — 決定論 regex/ヒューリスティックで AI slop パターン（過度な肯定・不要な謝罪・無意味な要約見出し・過剰な免責・空虚な接続句）を日英 10 パターンで検出。`detect_slop(text)` は `SlopResult(slop_score, hits)` を返し、`slop_score` は 1.0=良い / 0.0=悪い の [0.0, 1.0] スコア。`constitutional.py` の overall スコアに 10% 加重ブレンド（slop hit は violations にも追記）。LLM 非依存・コストゼロ。closes #255
+
 ## [1.75.0] - 2026-05-28
 
 ### Added

@@ -1,0 +1,82 @@
+[
+  {
+    "id": "excessive_affirmation_en",
+    "name": "Excessive affirmation (EN)",
+    "regex": "(?i)\\b(certainly|absolutely|of course|sure thing|by all means|I'?d be happy to|I'?m happy to|I would be glad to|I'?m glad to|Great question|Excellent question)\\b",
+    "weight": 0.15,
+    "lang": "en",
+    "description": "Overly eager affirmations that add no information value"
+  },
+  {
+    "id": "excessive_affirmation_ja",
+    "name": "過度な肯定 (JA)",
+    "regex": "(もちろんです|もちろん(?:！|!)|喜んで(?:お手伝い|ご支援)|承知いたしました|かしこまりました|はい、もちろん|ええ、もちろん)",
+    "weight": 0.15,
+    "lang": "ja",
+    "description": "情報価値のない過度な肯定表現"
+  },
+  {
+    "id": "unnecessary_apology_en",
+    "name": "Unnecessary apology (EN)",
+    "regex": "(?i)\\b(I apologize for|I'?m sorry (if|for|that|about)|my apologies|forgive me|I regret (if|that))\\b",
+    "weight": 0.12,
+    "lang": "en",
+    "description": "Reflexive apologies without real cause"
+  },
+  {
+    "id": "unnecessary_apology_ja",
+    "name": "不要な謝罪 (JA)",
+    "regex": "(申し訳(?:ありません|ございません|なく思い|なかった)|ご不便を(?:おかけ|かけ)(?:し|して)|失礼(?:いたし|し)ました)",
+    "weight": 0.12,
+    "lang": "ja",
+    "description": "原因のない反射的な謝罪表現"
+  },
+  {
+    "id": "useless_summary_header_en",
+    "name": "Useless summary header (EN)",
+    "regex": "(?im)^#{1,3}\\s*(In Summary|Summary|In Conclusion|To Summarize|To Sum Up|Conclusion|Wrapping Up|Final Thoughts)\\s*$",
+    "weight": 0.10,
+    "lang": "en",
+    "description": "Vacuous section headers that state the obvious"
+  },
+  {
+    "id": "useless_summary_header_ja",
+    "name": "意味のない要約見出し (JA)",
+    "regex": "(?im)^#{1,3}\\s*(まとめ|おわりに|総まとめ|結論|まとめると|ご確認ください)\\s*$",
+    "weight": 0.10,
+    "lang": "ja",
+    "description": "当たり前のことを述べるだけのセクション見出し"
+  },
+  {
+    "id": "excessive_disclaimer_en",
+    "name": "Excessive AI disclaimer (EN)",
+    "regex": "(?i)\\b(as an AI (language model|assistant)|I am an AI|I'?m an AI|please note that I (am|'m) an? (AI|language model)|my (knowledge|training) (has a )?cut.?off|I may (not always|make mistakes|be wrong|have limitations))\\b",
+    "weight": 0.18,
+    "lang": "en",
+    "description": "Unsolicited AI-identity disclaimers and capability hedging"
+  },
+  {
+    "id": "excessive_disclaimer_ja",
+    "name": "過剰な免責 (JA)",
+    "regex": "(私はAI(?:です|ですので|なので)|AIとして(?:の限界|の制約|お答え)|必ずしも正確ではない(?:可能性|場合)|誤りが(?:含まれる|ある)可能性があ(?:り|る)ます|ご注意(?:ください|下さい)(?:[。！]|$))",
+    "weight": 0.18,
+    "lang": "ja",
+    "description": "求められていないAIの免責事項や能力の留保"
+  },
+  {
+    "id": "hollow_transition_en",
+    "name": "Hollow transition phrase (EN)",
+    "regex": "(?i)\\b(Without further ado|Let'?s dive (in|into)|Great(?: question)?!|That'?s a great (question|point)|Glad you asked|I'?ll walk you through|Let me break (it|this) down|Feel free to (ask|reach out))\\b",
+    "weight": 0.10,
+    "lang": "en",
+    "description": "Filler phrases that pad response length without adding value"
+  },
+  {
+    "id": "hollow_transition_ja",
+    "name": "無意味な接続句 (JA)",
+    "regex": "(それでは(?:、)?(?:詳しく|ご説明|説明させて|始め)|ご質問(?:ありがとう|いただき|くださり)(?:ございます|ます)(?:[。！]|、)|(?:詳しく|わかりやすく)説明させていただきたいと思います)",
+    "weight": 0.10,
+    "lang": "ja",
+    "description": "情報価値なく文章を水増しするフィラー表現"
+  }
+]

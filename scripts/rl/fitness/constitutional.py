@@ -23,6 +23,7 @@ except ImportError:
     }
 
 CSO_SIGNAL_WEIGHT = 0.1
+SLOP_PENALTY_WEIGHT = 0.1  # slop 減点の overall スコアへの影響度
 
 # Haiku pricing (per 1M tokens)
 _HAIKU_INPUT_COST_PER_M = 0.25
@@ -442,6 +443,42 @@ def compute_constitutional_score(
         "llm_calls_count": llm_calls,
         "from_cache": from_cache_count > 0,
     }
+
+    # --- Slop detection (deterministic, no LLM) ---
+    try:
+        _ensure_paths()
+        import importlib.util as _ilu
+        _slop_path = _plugin_root / "scripts" / "lib" / "slop_detector.py"
+        _slop_spec = _ilu.spec_from_file_location("slop_detector", _slop_path)
+        _slop_mod = _ilu.module_from_spec(_slop_spec)
+        _slop_spec.loader.exec_module(_slop_mod)
+
+        # 全レイヤーのテキストを結合して slop スコアを算出
+        all_layer_text = "\n\n".join(layer_contents.values())
+        slop_result = _slop_mod.detect_slop(all_layer_text)
+        slop_score = slop_result.slop_score  # 1.0=良い, 0.0=悪い
+        slop_hits = slop_result.hits
+
+        # slop violations を all_violations に追加
+        for hit in slop_hits:
+            all_violations.append({
+                "principle_id": "anti-slop",
+                "layer": "all",
+                "description": f"slop pattern '{hit['pattern_id']}': {hit['snippet']!r}",
+            })
+
+        result["slop_score"] = slop_score
+        result["slop_hits_count"] = len(slop_hits)
+
+        # overall スコアに slop 減点を合流（加重平均: existing * (1-w) + slop * w）
+        # CSO 統合前の overall にブレンドする
+        overall = round(overall * (1 - SLOP_PENALTY_WEIGHT) + slop_score * SLOP_PENALTY_WEIGHT, 4)
+        result["overall"] = overall
+
+    except Exception:
+        # slop 検出失敗は graceful degradation — overall に影響させない
+        result["slop_score"] = None
+        result["slop_hits_count"] = 0
 
     # --- CSO signal integration ---
     gstack_dir = Path.home() / ".gstack"
