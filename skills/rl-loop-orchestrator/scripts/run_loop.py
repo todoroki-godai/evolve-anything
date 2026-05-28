@@ -36,6 +36,12 @@ try:
 except ImportError:
     _record_pitfall = None  # type: ignore
 
+# BES 前向き進化探索: サブゴール fitness 信号 (#253) を consume する (#256)
+try:
+    from optimize_core import run_subgoal_scoring as _run_subgoal_scoring
+except ImportError:
+    _run_subgoal_scoring = None  # type: ignore
+
 # --- パス設定 ---
 OPTIMIZER_SCRIPT = (
     Path(__file__).parent.parent.parent
@@ -54,6 +60,7 @@ from line_limit import check_line_limit as _check_line_limit
 from skill_evolve import assess_single_skill, evolve_skill_proposal, apply_evolve_proposal
 from score_noise import compute_stats, to_confidence_interval
 from scorer_schema import ConfidenceInterval
+import evolution_operators as _evolution_operators
 
 
 def _compute_verdict(improvement: float, epsilon: float = SCORE_EPSILON) -> str:
@@ -449,6 +456,49 @@ def _try_evolve_skill(
     return result
 
 
+def _evolve_variants(
+    variants: List[Dict[str, Any]],
+    target_path: str,
+    global_best_content: Optional[str],
+    dry_run: bool = False,
+) -> List[Dict[str, Any]]:
+    """BES 前向き進化探索フェーズ (#256)。
+
+    既存 variants をサブゴール fitness で重み付けし、進化演算子
+    (crossover/mutate) で子候補を生成 → 既存スコアラーで採点して
+    variants と同形の dict のリストで返す。
+
+    fitness 信号は subgoal_scorer (#253) の total を使う。
+    """
+    if not variants or _run_subgoal_scoring is None:
+        return []
+
+    candidates = []
+    for v in variants:
+        content = v.get("content", "")
+        sg = _run_subgoal_scoring(
+            content, original=global_best_content, corrections=[], max_lines=500
+        )
+        candidates.append({"content": content, "fitness": float(sg.get("total", 0.0))})
+
+    offspring = _evolution_operators.evolve_generation(
+        candidates, offspring_count=len(variants), corrections=[]
+    )
+
+    evolved: List[Dict[str, Any]] = []
+    for i, child in enumerate(offspring):
+        child_content = child["content"]
+        axes = _score_variant_axes(child_content, target_path, dry_run=dry_run)
+        evolved.append({
+            "id": f"evolved_{i}",
+            "score": axes.get("integrated", FALLBACK_SCORE),
+            "axes": axes,
+            "content": child_content,
+            "content_length": len(child_content),
+        })
+    return evolved
+
+
 def run_loop(
     target_path: str,
     loops: int = 1,
@@ -457,6 +507,7 @@ def run_loop(
     dry_run: bool = False,
     output_dir: Optional[str] = None,
     evolve: bool = False,
+    evolve_search: bool = False,
 ) -> List[Dict[str, Any]]:
     """メインループを実行"""
     results = []
@@ -557,6 +608,16 @@ def run_loop(
         if not variants:
             print("  バリエーションが見つかりません。スキップ。")
             continue
+
+        # Step 3.5: BES 前向き進化探索（--evolve-search 時のみ）
+        if evolve_search:
+            print("Step 3.5: BES 前向き進化探索...")
+            evolved = _evolve_variants(
+                variants, target_path, global_best_content, dry_run=dry_run
+            )
+            for ev in evolved:
+                print(f"  {ev['id']}: スコア {ev['score']}")
+            variants.extend(evolved)
 
         # 最良バリエーション選択（Pareto front を考慮）
         # 1. integrated 改善は IMPROVED 候補
@@ -692,6 +753,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="構造テスト")
     parser.add_argument("--output-dir", help="出力ディレクトリ（デフォルト: .rl-loop/）")
     parser.add_argument("--evolve", action="store_true", help="自己進化パターン組み込みを有効化")
+    parser.add_argument("--evolve-search", action="store_true", help="BES 前向き進化探索を有効化 (#256)")
 
     args = parser.parse_args()
 
@@ -703,6 +765,7 @@ def main():
         dry_run=args.dry_run,
         output_dir=args.output_dir,
         evolve=args.evolve,
+        evolve_search=args.evolve_search,
     )
 
 

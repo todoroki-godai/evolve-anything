@@ -224,8 +224,8 @@ class TestScoreSubgoalsEdgeCases:
         assert budget_sg.passed is False
         assert budget_sg.score == 0.0
 
-    def test_slop_hookは存在するが常にpass(self):
-        """slop_free サブゴールが存在し、デフォルトは passed=True（後日実装予定）。"""
+    def test_slop_free_サブゴールが存在する(self):
+        """slop_free サブゴールが存在する。"""
         result = score_subgoals(
             candidate=CANDIDATE_FULL,
             original=None,
@@ -235,4 +235,32 @@ class TestScoreSubgoalsEdgeCases:
             (sg for sg in result.subgoals if sg.goal == "slop_free"), None
         )
         assert slop_sg is not None
-        assert slop_sg.passed is True  # 現時点ではフックのみ、常に pass
+        assert 0.0 <= slop_sg.score <= 1.0
+
+    def test_slop_free_クリーンテキストは満点(self):
+        """slop パターンを含まないテキストは slop_free score=1.0。"""
+        clean = FRONTMATTER + "# My Skill\n\nUse this to do a concrete task.\n"
+        result = score_subgoals(candidate=clean, original=None, corrections=[])
+        slop_sg = next(sg for sg in result.subgoals if sg.goal == "slop_free")
+        assert slop_sg.score == 1.0
+        assert slop_sg.passed is True
+
+    def test_slop_free_slopありで低スコア(self):
+        """slop パターンを含むテキストは slop_free score がクリーンより低い。"""
+        clean = FRONTMATTER + "# My Skill\n\nConcrete instructions only.\n"
+        slopful = (
+            FRONTMATTER
+            + "# My Skill\n\n"
+            + "Certainly! I'd be happy to help. Of course, "
+            + "as an AI language model I apologize for any confusion.\n\n"
+            + "## Conclusion\n\nLet me break this down for you.\n"
+        )
+        clean_sg = next(
+            sg for sg in score_subgoals(clean, None, []).subgoals
+            if sg.goal == "slop_free"
+        )
+        slop_sg = next(
+            sg for sg in score_subgoals(slopful, None, []).subgoals
+            if sg.goal == "slop_free"
+        )
+        assert slop_sg.score < clean_sg.score
