@@ -208,3 +208,19 @@ class TestScope:
         assert "rule-c" in names
         assert "skill-a" in names
         assert "skill-b" in names
+
+
+class TestLoadSiblingPackage:
+    """_load_sibling が package 化された coherence をロードできる回帰テスト（#277）。
+
+    coherence は #129〜#143 で coherence/__init__.py パッケージへ分割されたが、
+    chaos の _load_sibling は `{name}.py` 固定パスのままだったため、coherence
+    ベースの chaos ロバストネス計測が FileNotFoundError で壊れていた。
+    environment.py の package 対応版に追従したことを保証する。
+    """
+
+    def test_load_sibling_loads_coherence_package(self):
+        mod = chaos._load_sibling("coherence")
+        assert hasattr(mod, "compute_coherence_score"), (
+            "coherence パッケージ (coherence/__init__.py) がロードできていない"
+        )

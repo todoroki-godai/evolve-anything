@@ -317,3 +317,24 @@ class TestCostTracking:
         assert "llm_calls_count" in result
         assert result["estimated_cost_usd"] >= 0
         assert result["llm_calls_count"] >= 0
+
+
+class TestLoadSiblingPackage:
+    """_load_sibling が package 化された coherence をロードできる回帰テスト（#277）。
+
+    coherence は #129〜#143 で coherence/__init__.py パッケージへ分割されたが、
+    constitutional の _load_sibling は `{name}.py` 固定パスのままだったため
+    FileNotFoundError → constitutional スコアが silent skip していた。
+    environment.py の package 対応版に追従したことを保証する。
+    """
+
+    def test_load_sibling_loads_coherence_package(self):
+        mod = constitutional._load_sibling("coherence")
+        assert hasattr(mod, "compute_coherence_score"), (
+            "coherence パッケージ (coherence/__init__.py) がロードできていない"
+        )
+
+    def test_load_sibling_still_loads_flat_module(self):
+        # principles はファイルのまま（package でない）— 両方の経路を保証
+        mod = constitutional._load_sibling("principles")
+        assert mod is not None
