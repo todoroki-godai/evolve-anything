@@ -18,6 +18,7 @@ for _p in (_LIB, _SCRIPTS):
         sys.path.insert(0, str(_p))
 
 import pitfall_registry as reg  # noqa: E402
+from audit import sections  # noqa: E402
 from audit.sections import build_unmanaged_pitfalls_section  # noqa: E402
 
 _GROWN = """# Pitfalls
@@ -96,3 +97,28 @@ def test_non_utf8_file_does_not_crash(tmp_path):
     combined = "\n".join(result)
     assert "docs/pitfalls.md" in combined
     assert "legacy/pitfalls.md" not in combined
+
+
+def test_parser_unavailable_warns_for_unmanaged(tmp_path, monkeypatch):
+    # 正準パーサがロードできない時、未登録があれば liveness 判定不可を ⚠ で残し候補を列挙
+    _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
+    monkeypatch.setattr(sections, "_load_count_entries", lambda: None)
+    result = build_unmanaged_pitfalls_section(tmp_path)
+    assert result is not None
+    combined = "\n".join(result)
+    assert "⚠" in combined
+    assert "判定不可" in combined
+    assert "docs/pitfalls.md" in combined
+
+
+def test_parser_unavailable_reports_all_registered(tmp_path, monkeypatch):
+    # 正準パーサがロードできなくても、全登録済みなら ✓ を1行残す
+    pf = tmp_path / "docs" / "pitfalls.md"
+    _write(pf, _GROWN)
+    reg.add_managed(tmp_path, pf)
+    monkeypatch.setattr(sections, "_load_count_entries", lambda: None)
+    result = build_unmanaged_pitfalls_section(tmp_path)
+    assert result is not None
+    combined = "\n".join(result)
+    assert "✓" in combined
+    assert "登録済み" in combined
