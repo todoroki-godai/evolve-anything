@@ -24,6 +24,7 @@ from typing import List
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import core
+import pitfall_registry
 
 
 def _read(path: str) -> str:
@@ -75,6 +76,24 @@ def main(argv: List[str] | None = None) -> int:
     p_norm = sub.add_parser("normalize", help="既存ファイルを正準フォーマットへ変換")
     p_norm.add_argument("--pitfalls", required=True)
     p_norm.add_argument("--out", help="出力先（省略時は stdout。--pitfalls と同じパスで in-place）")
+    p_norm.add_argument(
+        "--check",
+        action="store_true",
+        help="書き換えず lint のみ（ok=0 / drift=1 / danger=2）。diff を提示する",
+    )
+
+    p_en = sub.add_parser(
+        "enable", help="pitfalls.md を管理対象に登録（以後 hook が自動 lint）"
+    )
+    p_en.add_argument("--pitfalls", required=True)
+    p_en.add_argument(
+        "--project-dir",
+        help="登録先 PJ ルート（省略時は CLAUDE_PROJECT_DIR / カレント）",
+    )
+
+    p_dis = sub.add_parser("disable", help="pitfalls.md を管理対象から外す")
+    p_dis.add_argument("--pitfalls", required=True)
+    p_dis.add_argument("--project-dir", help="対象 PJ ルート（省略時は CLAUDE_PROJECT_DIR / カレント）")
 
     p_sync = sub.add_parser("sync", help="3層 drift を検出")
     p_sync.add_argument("--pitfalls", required=True)
@@ -144,6 +163,21 @@ def main(argv: List[str] | None = None) -> int:
         return 0
 
     if args.cmd == "normalize":
+        if args.check:
+            res = core.check_normalized(_read(args.pitfalls))
+            if res["state"] == "ok":
+                print("✓ 正準フォーマットです")
+                return 0
+            if res["state"] == "danger":
+                print(f"✗ {res['reason']}", file=sys.stderr)
+                return 2
+            sys.stdout.write(res["diff"])
+            print(
+                "\n⚠ 正準フォーマットと差分があります。"
+                "`normalize --out <path>` で正準化できます（承認後）。",
+                file=sys.stderr,
+            )
+            return 1
         try:
             normalized = core.normalize(_read(args.pitfalls))
         except ValueError as e:
@@ -154,6 +188,47 @@ def main(argv: List[str] | None = None) -> int:
             print(f"✓ 正準フォーマットへ変換: {args.out}")
         else:
             sys.stdout.write(normalized)
+        return 0
+
+    if args.cmd == "enable":
+        project_dir = (
+            args.project_dir
+            or os.environ.get("CLAUDE_PROJECT_DIR")
+            or os.getcwd()
+        )
+        res = core.check_normalized(_read(args.pitfalls))
+        if res["state"] == "danger":
+            print(f"✗ 登録できません: {res['reason']}", file=sys.stderr)
+            print(
+                "  index/TOC ファイルは pitfalls エントリファイルではありません。"
+                "category ファイルを指定してください。",
+                file=sys.stderr,
+            )
+            return 2
+        added = pitfall_registry.add_managed(project_dir, args.pitfalls)
+        if added:
+            print(f"✓ 管理対象に登録: {args.pitfalls}")
+        else:
+            print(f"✓ 既に管理対象です: {args.pitfalls}")
+        if res["state"] == "drift":
+            print(
+                "⚠ 現在のフォーマットは正準形と差分があります。"
+                "`normalize --pitfalls <path> --out <path>` で正準化を推奨（承認後）。"
+            )
+        else:
+            print("  フォーマットは正準形です。以後 hook が自動で lint します。")
+        return 0
+
+    if args.cmd == "disable":
+        project_dir = (
+            args.project_dir
+            or os.environ.get("CLAUDE_PROJECT_DIR")
+            or os.getcwd()
+        )
+        if pitfall_registry.remove_managed(project_dir, args.pitfalls):
+            print(f"✓ 管理対象から外しました: {args.pitfalls}")
+        else:
+            print(f"管理対象ではありません: {args.pitfalls}")
         return 0
 
     if args.cmd == "sync":

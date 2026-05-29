@@ -119,6 +119,42 @@ atlas-browser でドッグフードして判明）。パーサは次のゆらぎ
   pitfall タイトル）は足切りされ前エントリ本文に折り込まれるため、手動で番号付きエントリ化が要る。
   変換前に必ず内容を確認し、ユーザーに diff を提示してから in-place 上書きする。
 
+## 自動強制（install + enable で以後ルールが当たる）
+
+pitfall は「agent が pitfalls.md を直接手編集 → 後で curate したら壊れる/拒否される」
+という経路で破綻する。これを防ぐため、**書き込み時に正準フォーマットを検査する hook** を
+プラグインに同梱している。仕組みは「最新版を install（hook が配られる）→ 各 PJ で `enable`
+を 1 回叩く（対象ファイルを登録）→ 以後その pitfalls.md の追加/修正/削除に自動でルールが
+当たる」。enable していないファイルには一切反応しない（オプトイン）。
+
+```bash
+# 1コマンド: カレント PJ の pitfalls.md を管理対象に登録
+python3 "$PFC" enable --pitfalls <path>          # --project-dir で PJ ルート指定可
+python3 "$PFC" disable --pitfalls <path>         # 管理対象から外す
+```
+
+`enable` は登録前に lint し、index/TOC（エントリ0件で実質コンテンツあり）は「pitfalls
+エントリファイルではない」として登録を拒否する。drift があれば登録しつつ `normalize` を促す。
+
+検査は決定論の `normalize --check`（lint）で行い、3状態を返す（**書き換えはしない**）:
+
+| 状態 | 意味 | 編集時 hook | commit時 gate |
+|------|------|------------|--------------|
+| ok | 既に正準形 | 無音 | 通す |
+| drift | 正準形と差分 | 警告 + 提案 diff | 警告のみで通す |
+| danger | index/TOC 等 wipe 危険 | 警告（非ブロック） | **commit をブロック**（exit 2）|
+
+```bash
+python3 "$PFC" normalize --pitfalls <path> --check   # ok=0 / drift=1 / danger=2、diff を提示
+```
+
+二段にしているのは、編集時（PostToolUse `pitfall_lint`）は編集途中の中間状態を踏むと
+誤検知するため**警告のみ**に留め、確定状態である commit 時（PreToolUse `pitfall_commit_gate`、
+staged 内容を `git show :path` で検査）に**だけ danger をブロック**するため。どちらも
+**自動書き換えはしない**（過去に normalize が preamble やインデックスを silent に wipe する
+バグを出したため、破壊的変換は人間/agent の承認を挟む。[ADR-027] 参照）。drift を揃えたい時は
+agent が diff を確認の上 `normalize --out` を承認実行する。
+
 ## ワークフロー
 
 ユーザーが `/rl-anything:pitfall-curate [pitfalls.mdのパス]` を呼んだら以下を実行する。

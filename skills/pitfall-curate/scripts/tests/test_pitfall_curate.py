@@ -477,6 +477,145 @@ def test_normalize_allows_empty_seed():
     assert "## Active Pitfalls" in out
 
 
+# --- check（lint: 書き換えずに正準形との差分状態を返す） -----------------------
+
+def test_check_normalized_ok_on_canonical():
+    """正準形（normalize 済み）は ok を返し diff は空。"""
+    canonical = pc.normalize(SAMPLE)
+    res = pc.check_normalized(canonical)
+    assert res["state"] == "ok"
+    assert res["diff"] == ""
+
+
+def test_check_normalized_ok_on_seed():
+    """正準ひな型を normalize したものは ok。"""
+    res = pc.check_normalized(pc.normalize(pc.render_seed()))
+    assert res["state"] == "ok"
+
+
+def test_check_normalized_drift_reports_diff_without_mutating():
+    """ドリフト（インラインパイプ・番号なし ### サブ見出し混在）は drift + diff を返す。"""
+    res = pc.check_normalized(NUMBERED_WITH_SUBSECTIONS)
+    assert res["state"] == "drift"
+    assert res["diff"]  # 非空の unified diff
+    # lint は提案を返すだけで入力を書き換えない（呼び出し側が承認時に normalize する）
+    assert "#### " in res["diff"]  # サブ見出し降格の提案が diff に出る
+
+
+def test_check_normalized_danger_on_index_does_not_raise():
+    """index/TOC は danger を返す。ValueError を投げず lint として扱う（hook が握り潰さない）。"""
+    res = pc.check_normalized(INDEX_FORMAT)
+    assert res["state"] == "danger"
+    assert res["reason"]  # 理由文がある
+    assert res["diff"] == ""
+
+
+def test_check_normalized_after_normalize_is_ok():
+    """drift なファイルも一度 normalize すれば ok になる（収束）。"""
+    once = pc.normalize(NUMBERED_WITH_SUBSECTIONS)
+    assert pc.check_normalized(once)["state"] == "ok"
+
+
+# --- check の CLI 終了コード契約（ok=0 / drift=1 / danger=2） -----------------
+
+def _write(tmp_path, content):
+    p = tmp_path / "pitfalls.md"
+    p.write_text(content, encoding="utf-8")
+    return str(p)
+
+
+def test_cli_check_exit_ok(tmp_path):
+    import pitfall_curate as cli
+    path = _write(tmp_path, pc.normalize(SAMPLE))
+    assert cli.main(["normalize", "--pitfalls", path, "--check"]) == 0
+
+
+def test_cli_check_exit_drift(tmp_path):
+    import pitfall_curate as cli
+    path = _write(tmp_path, NUMBERED_WITH_SUBSECTIONS)
+    assert cli.main(["normalize", "--pitfalls", path, "--check"]) == 1
+
+
+def test_cli_check_exit_danger(tmp_path):
+    import pitfall_curate as cli
+    path = _write(tmp_path, INDEX_FORMAT)
+    assert cli.main(["normalize", "--pitfalls", path, "--check"]) == 2
+
+
+def test_cli_check_does_not_write(tmp_path):
+    """--check は in-place 変換しない（lint なので元ファイルを保つ）。"""
+    import pitfall_curate as cli
+    path = _write(tmp_path, NUMBERED_WITH_SUBSECTIONS)
+    cli.main(["normalize", "--pitfalls", path, "--check"])
+    assert Path(path).read_text(encoding="utf-8") == NUMBERED_WITH_SUBSECTIONS
+
+
+# --- enable（管理対象に登録: install 後の「1コマンド」） ----------------------
+
+def _enable_setup(tmp_path, content):
+    """project_dir 配下に pitfalls.md を置きパスを返す。"""
+    pf = tmp_path / ".claude" / "skills" / "x" / "references" / "pitfalls.md"
+    pf.parent.mkdir(parents=True)
+    pf.write_text(content, encoding="utf-8")
+    return str(pf)
+
+
+def test_enable_registers_canonical_file(tmp_path):
+    import pitfall_curate as cli
+    import pitfall_registry as reg
+    path = _enable_setup(tmp_path, pc.normalize(SAMPLE))
+    assert cli.main(
+        ["enable", "--pitfalls", path, "--project-dir", str(tmp_path)]
+    ) == 0
+    assert reg.is_managed(tmp_path, path) is True
+
+
+def test_enable_drift_registers_with_warning(tmp_path):
+    import pitfall_curate as cli
+    import pitfall_registry as reg
+    path = _enable_setup(tmp_path, NUMBERED_WITH_SUBSECTIONS)
+    # drift でも登録はする（exit 0）。normalize を促すだけ。
+    assert cli.main(
+        ["enable", "--pitfalls", path, "--project-dir", str(tmp_path)]
+    ) == 0
+    assert reg.is_managed(tmp_path, path) is True
+
+
+def test_enable_refuses_index_file(tmp_path):
+    import pitfall_curate as cli
+    import pitfall_registry as reg
+    path = _enable_setup(tmp_path, INDEX_FORMAT)
+    # index/TOC は pitfalls エントリファイルではないので登録を拒否する（exit 2）
+    assert cli.main(
+        ["enable", "--pitfalls", path, "--project-dir", str(tmp_path)]
+    ) == 2
+    assert reg.is_managed(tmp_path, path) is False
+
+
+def test_enable_is_idempotent(tmp_path):
+    import pitfall_curate as cli
+    import pitfall_registry as reg
+    path = _enable_setup(tmp_path, pc.normalize(SAMPLE))
+    cli.main(["enable", "--pitfalls", path, "--project-dir", str(tmp_path)])
+    assert cli.main(
+        ["enable", "--pitfalls", path, "--project-dir", str(tmp_path)]
+    ) == 0
+    assert reg.load_managed(tmp_path).count(
+        ".claude/skills/x/references/pitfalls.md"
+    ) == 1
+
+
+def test_disable_removes_from_registry(tmp_path):
+    import pitfall_curate as cli
+    import pitfall_registry as reg
+    path = _enable_setup(tmp_path, pc.normalize(SAMPLE))
+    cli.main(["enable", "--pitfalls", path, "--project-dir", str(tmp_path)])
+    assert cli.main(
+        ["disable", "--pitfalls", path, "--project-dir", str(tmp_path)]
+    ) == 0
+    assert reg.is_managed(tmp_path, path) is False
+
+
 # --- sync --------------------------------------------------------------------
 
 def test_check_sync_detects_unclassified():

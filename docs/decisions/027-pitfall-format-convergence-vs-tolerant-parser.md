@@ -71,6 +71,17 @@ false confidence だった）、目的（重複排除・配布版生成）を果
 - **dedup は recall 寄り**: atlas で 6 ペア検出したが全て「クリック不能」の語彙を共有する別個の
   pitfall（対象要素・原因・対策が別）で、真の重複は0だった。閾値 0.12 は人間レビュー用候補出しで
   あり、語彙重複ドメインでは偽陽性が出る前提で運用する（supersede は agent が精読して判断）。
+- **収束の維持を「書き込み時の自動強制」で支える**: normalize は一度きりの寄せ込みで、
+  その後 agent が手編集するとまた drift する。これを防ぐため `normalize --check`（lint:
+  ok/drift/danger を返し**書き換えない**）を土台に、編集時 hook（`pitfall_lint`,
+  PostToolUse・**警告のみ**）と commit 時ゲート（`pitfall_commit_gate`, PreToolUse Bash・
+  staged を `git show :path` で検査し **danger は exit 2 でブロック**）の二段で検査する。
+  二段なのは、編集途中の中間状態を踏む per-Edit はブロックすると誤検知が痛いため警告に留め、
+  確定状態の commit 時にだけブロックするため。どちらも自動書き換えはしない（preamble/index
+  の silent wipe バグの反省）。`enable`/`disable` で管理対象を登録するオプトイン方式とし、
+  登録した pitfalls.md にのみ反応する（install しただけでは無反応）。台帳は PJ 直下
+  `.claude/rl-anything/pitfall-managed.json`（`scripts/lib/pitfall_registry.py`、決定論）。
+  `enable` は index/TOC を「エントリファイルでない」として登録拒否する。
 - figma の既存 TS / 3段階開示構造の置換は依然スコープ外（[ADR-026](026-pitfall-curate-vs-pitfall-manager.md) 踏襲）。
 
 ## References

@@ -32,6 +32,16 @@
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_commit_gate.py\"",
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -72,6 +82,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_memory.py\"",
             "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_lint.py\"",
+            "timeout": 3000
           }
         ]
       },
@@ -82,6 +97,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_memory.py\"",
             "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_lint.py\"",
+            "timeout": 3000
           }
         ]
       },
@@ -91,6 +111,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_memory.py\"",
+            "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_lint.py\"",
             "timeout": 3000
           }
         ]

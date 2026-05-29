@@ -32,7 +32,12 @@ for _p in (_here, _lib):
 
 from similarity import jaccard_coefficient, tokenize  # noqa: E402
 # フォーマット I/O 層は parse.py に分離。CLI から core 経由で呼べるよう re-export する。
-from parse import normalize, parse_pitfalls, render_seed  # noqa: E402,F401
+from parse import (  # noqa: E402,F401
+    check_normalized,
+    normalize,
+    parse_pitfalls,
+    render_seed,
+)
 
 TRANSFERABILITY = ("universal", "project", "instance")
 # 配布版選定スコアで universal/project/instance に与える重み（高いほど普遍的）
