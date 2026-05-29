@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(spec-keeper): CONTEXT.md 用語集（Ubiquitous Language）と drift 検出を導入** — PJ 固有 jargon を 1 語で decode する共有言語ドキュメント `CONTEXT.md` を新設（DDD の ubiquitous language）。鮮度は新規 `scripts/lib/glossary_drift.py`（決定論・LLM 非依存）が検出: テーブルをパースし `malformed`（スキーマ不一致）/ `duplicate`（重複定義）/ `missing_first_seen`（初出欠落）を **構造 drift** として gate（`has_drift`、CLI exit 1）、SoT（SPEC.md/CLAUDE.md）に出現する未登録 jargon 候補は **advisory**（`has_undefined`、gate しない — オオカミ少年化回避）。頭字語検出は ALLCAPS/CamelCase regex + stoplist で精度確保。spec-keeper の update フロー（通常更新 Step 5 / リカバリ突合表）に配線し、CONTEXT.md があれば自動でチェック。実 CONTEXT.md/SPEC.md でドッグフード（構造 drift 0・advisory 9 件の実 jargon を surface）。tech-eval `mattpocock/skills` の評価から着手。closes #268
+
 ## [1.76.1] - 2026-05-29
 
 ### Fixed

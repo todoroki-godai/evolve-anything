@@ -132,5 +132,6 @@ claude plugin validate
 
 ## Specification
 - 現在の仕様全体像: [SPEC.md](SPEC.md)
+- 用語集（Ubiquitous Language）: [CONTEXT.md](CONTEXT.md) — PJ 固有 jargon を 1 語で decode。鮮度は `scripts/lib/glossary_drift.py` が検出し spec-keeper update が advisory 提示。新概念を入れたら CONTEXT.md に 1 行追記する
 - 詳細仕様: [spec/](spec/)
 - 設計判断の記録: [docs/decisions/](docs/decisions/)
