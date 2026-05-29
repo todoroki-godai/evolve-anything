@@ -11,6 +11,9 @@
   classify-set  agent が判断した Transferability/Generality を書き戻す
   distill       配布版（Top-N）を生成
   sync          記録↔分類↔配布の3層 drift を検出（--check で未同期なら exit 1）
+  enable        pitfalls.md を自動強制 hook の管理対象に登録
+  disable       管理対象から外す
+  status        PJ 内の pitfalls.md を自動発見し enable 状態 + format を一覧
 """
 from __future__ import annotations
 
@@ -94,6 +97,12 @@ def main(argv: List[str] | None = None) -> int:
     p_dis = sub.add_parser("disable", help="pitfalls.md を管理対象から外す")
     p_dis.add_argument("--pitfalls", required=True)
     p_dis.add_argument("--project-dir", help="対象 PJ ルート（省略時は CLAUDE_PROJECT_DIR / カレント）")
+
+    p_st = sub.add_parser(
+        "status", help="PJ 内の pitfalls.md を自動発見し enable 状態と format を一覧"
+    )
+    p_st.add_argument("--project-dir", help="対象 PJ ルート（省略時は CLAUDE_PROJECT_DIR / カレント）")
+    p_st.add_argument("--json", action="store_true", help="機械可読 JSON で出力")
 
     p_sync = sub.add_parser("sync", help="3層 drift を検出")
     p_sync.add_argument("--pitfalls", required=True)
@@ -229,6 +238,49 @@ def main(argv: List[str] | None = None) -> int:
             print(f"✓ 管理対象から外しました: {args.pitfalls}")
         else:
             print(f"管理対象ではありません: {args.pitfalls}")
+        return 0
+
+    if args.cmd == "status":
+        project_dir = (
+            args.project_dir
+            or os.environ.get("CLAUDE_PROJECT_DIR")
+            or os.getcwd()
+        )
+        candidates = pitfall_registry.discover_pitfalls(project_dir)
+        managed = set(pitfall_registry.load_managed(project_dir))
+        items = []
+        for rel in candidates:
+            try:
+                state = core.check_normalized(
+                    _read(str(Path(project_dir) / rel))
+                )["state"]
+            except (OSError, UnicodeError):
+                # 読めない / 非 UTF-8 の1ファイルで全スキャンを落とさない
+                state = "unreadable"
+            items.append(
+                {"path": rel, "managed": rel in managed, "state": state}
+            )
+        # 自動発見に出てこない登録済みキー（PJ 外の絶対パス等）も漏らさず報告する
+        seen = {it["path"] for it in items}
+        for key in sorted(managed - seen):
+            items.append({"path": key, "managed": True, "state": "unknown"})
+        if args.json:
+            print(json.dumps(
+                {"project_dir": str(project_dir), "items": items},
+                ensure_ascii=False, indent=2,
+            ))
+        else:
+            if not items:
+                print("pitfalls.md が見つかりませんでした")
+            for it in items:
+                flag = "✓ enabled" if it["managed"] else "・ 未登録"
+                print(f"  [{flag}] {it['path']}  (format: {it['state']})")
+            unmanaged = [it for it in items if not it["managed"]]
+            if unmanaged:
+                print(
+                    f"\n{len(unmanaged)} 件が未登録です。"
+                    "enable で自動強制の対象にできます。"
+                )
         return 0
 
     if args.cmd == "sync":

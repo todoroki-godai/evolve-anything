@@ -4,10 +4,14 @@ effort: medium
 description: |
   任意PJの pitfalls.md を「育てる」PJ非依存スキル。類似 pitfall の重複排除、
   普遍性分類（universal/project/instance + 汎用度1-5）、三段階開示の配布版(Top-N)生成、
-  記録↔分類↔配布の同期ゲートを提供する。pitfall が貯まって重複・肥大化・配布漏れが
-  起きているとき、または新規PJで pitfall 運用の型を導入したいときに使う。
+  記録↔分類↔配布の同期ゲートを提供する。さらに pitfalls.md の編集/commit に正準フォーマット
+  ルールを自動適用する hook の **有効化（enable）も skill 1発で**行える — PJ 内の pitfalls.md
+  を自動発見し、未登録なら確認のうえ管理対象に登録する（コマンドを手で叩く必要なし）。
+  pitfall が貯まって重複・肥大化・配布漏れが起きているとき、新規PJで pitfall 運用の型を
+  導入したいとき、または「pitfalls の更新に自動でルールを当てたい / 有効化したい」ときに使う。
   Trigger: pitfall-curate, pitfalls 整理, pitfall 重複, pitfall 分類, pitfall 配布版,
-  pitfalls top-N, pitfall 同期, pitfall を育てる, pitfall 運用
+  pitfalls top-N, pitfall 同期, pitfall を育てる, pitfall 運用, pitfall 自動強制 有効化,
+  pitfall enable, pitfalls 自動ルール, pitfall ルール 適用, pitfalls 強制 オン
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 ---
 
@@ -123,13 +127,17 @@ atlas-browser でドッグフードして判明）。パーサは次のゆらぎ
 
 pitfall は「agent が pitfalls.md を直接手編集 → 後で curate したら壊れる/拒否される」
 という経路で破綻する。これを防ぐため、**書き込み時に正準フォーマットを検査する hook** を
-プラグインに同梱している。仕組みは「最新版を install（hook が配られる）→ 各 PJ で `enable`
-を 1 回叩く（対象ファイルを登録）→ 以後その pitfalls.md の追加/修正/削除に自動でルールが
+プラグインに同梱している。仕組みは「最新版を install（hook が配られる）→ 各 PJ で 1 回
+有効化（対象ファイルを登録）→ 以後その pitfalls.md の追加/修正/削除に自動でルールが
 当たる」。enable していないファイルには一切反応しない（オプトイン）。
 
+**有効化はこの skill を呼ぶだけでよい**（ユーザーがコマンドを手打ちする必要はない）。
+skill が `status` で PJ 内の pitfalls.md を自動発見し、未登録のものを 1 回確認して登録する
+（後述 Step 0）。内部で使う CLI は以下:
+
 ```bash
-# 1コマンド: カレント PJ の pitfalls.md を管理対象に登録
-python3 "$PFC" enable --pitfalls <path>          # --project-dir で PJ ルート指定可
+python3 "$PFC" status                            # 自動発見 + enable 状態 + format を一覧（--json で機械可読）
+python3 "$PFC" enable --pitfalls <path>          # 管理対象に登録（--project-dir で PJ ルート指定可）
 python3 "$PFC" disable --pitfalls <path>         # 管理対象から外す
 ```
 
@@ -168,6 +176,32 @@ agent が diff を確認の上 `normalize --out` を承認実行する。
 PFC="$CLAUDE_PLUGIN_ROOT/skills/pitfall-curate/scripts/pitfall_curate.py"
 # CLAUDE_PLUGIN_ROOT 未設定なら plugin リポジトリルートを使う
 ```
+
+### Step 0: 自動強制の有効化を確認する（enable）
+
+curate 本体に入る前に、まず **この PJ で自動強制 hook が有効か**を確認する。これは
+「pitfalls の更新に自動でルールを当てたい / 有効化して」という依頼の場合は単独で完結し、
+通常の整理依頼の場合も「ついでに有効化しておきますか？」と1度だけ確認する入口になる。
+
+```bash
+python3 "$PFC" status --json
+```
+
+出力の `items[]` は各 pitfalls.md について `{path, managed, state}` を持つ:
+
+- **未登録（`managed: false`）の候補がある場合** → AskUserQuestion で「これらを自動強制の
+  対象に登録しますか？」と確認する。提示時は各 path と `state`（ok / drift / danger）も見せる。
+  - `state: danger`（index/TOC）の候補は登録対象から外す（enable も拒否する）。理由を添える。
+  - 承認されたら未登録の各 path について `enable` を実行する:
+    ```bash
+    python3 "$PFC" enable --pitfalls <path>
+    ```
+  - `state: drift` のものは登録後に `normalize` を促す（diff 確認 → 承認 → `normalize --out`）。
+- **全て登録済み、または候補が0件の場合** → その旨を報告し、整理依頼なら Step 1 へ進む。
+  純粋に「有効化して」という依頼ならここで完了。
+
+ユーザーの依頼が「有効化」だけなら Step 0 で終える。dedup/distill 等の整理を伴う依頼なら
+Step 0 で有効化を確認したうえで Step 1 以降へ進む。
 
 ### Step 1: 未分類を解消する（classify）
 

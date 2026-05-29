@@ -15,6 +15,12 @@ from typing import List, Union
 
 _REGISTRY_REL = ".claude/rl-anything/pitfall-managed.json"
 
+# 探索時に降りない重いディレクトリ。pitfalls.md がここに紛れても監視対象ではない。
+_DISCOVERY_IGNORE = {
+    ".git", "node_modules", "dist", "build", "target",
+    ".venv", "venv", "__pycache__", ".next", ".cache",
+}
+
 PathLike = Union[str, Path]
 
 
@@ -74,3 +80,20 @@ def remove_managed(project_dir: PathLike, pitfalls_path: PathLike) -> bool:
         return False
     _write(project_dir, [k for k in current if k != key])
     return True
+
+
+def discover_pitfalls(project_dir: PathLike) -> List[str]:
+    """PJ 内の `pitfalls.md` 候補を project 相対パスでソートして返す（決定論）。
+
+    skill が `enable` 対象を自動発見するための入口。`_DISCOVERY_IGNORE` 配下は
+    監視対象になり得ないため降りない。配布版（pitfalls-top*.md）は別ファイル名なので
+    自然に除外される。
+    """
+    pd = Path(project_dir).resolve()
+    found: List[str] = []
+    for p in pd.rglob("pitfalls.md"):
+        rel = p.relative_to(pd)
+        if any(part in _DISCOVERY_IGNORE for part in rel.parts):
+            continue
+        found.append(str(rel))
+    return sorted(found)

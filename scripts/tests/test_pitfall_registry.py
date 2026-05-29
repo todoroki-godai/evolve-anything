@@ -73,3 +73,34 @@ def test_path_outside_project_kept_absolute(tmp_path):
     # プロジェクト外は絶対パスのまま記録され、is_managed で一致する
     assert reg.is_managed(tmp_path, outside) is True
     assert str(outside.resolve()) in reg.load_managed(tmp_path)
+
+
+def test_discover_finds_pitfalls_project_relative(tmp_path):
+    # 複数階層に散らばった pitfalls.md を project 相対パスで発見する
+    a = tmp_path / ".claude" / "skills" / "x" / "references"
+    a.mkdir(parents=True)
+    (a / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    b = tmp_path / "skills" / "y"
+    b.mkdir(parents=True)
+    (b / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    found = reg.discover_pitfalls(tmp_path)
+    assert found == [
+        ".claude/skills/x/references/pitfalls.md",
+        "skills/y/pitfalls.md",
+    ]  # ソート済み・決定論
+
+
+def test_discover_skips_noise_dirs(tmp_path):
+    # node_modules / .git 等の中の pitfalls.md は拾わない
+    noise = tmp_path / "node_modules" / "pkg"
+    noise.mkdir(parents=True)
+    (noise / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    real = tmp_path / "docs"
+    real.mkdir()
+    (real / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    found = reg.discover_pitfalls(tmp_path)
+    assert found == ["docs/pitfalls.md"]
+
+
+def test_discover_empty_when_none(tmp_path):
+    assert reg.discover_pitfalls(tmp_path) == []

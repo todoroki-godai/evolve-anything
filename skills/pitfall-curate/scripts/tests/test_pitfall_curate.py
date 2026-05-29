@@ -616,6 +616,51 @@ def test_disable_removes_from_registry(tmp_path):
     assert reg.is_managed(tmp_path, path) is False
 
 
+# --- status（skill が enable 状態を1発で把握する入口） ------------------------
+
+def test_status_json_reports_discovered_and_enable_state(tmp_path, capsys):
+    import json as _json
+    import pitfall_curate as cli
+    # 1件は canonical（未登録）、1件は drift（未登録）を配置
+    p1 = _enable_setup(tmp_path, pc.normalize(SAMPLE))
+    p2dir = tmp_path / "docs"
+    p2dir.mkdir()
+    p2 = p2dir / "pitfalls.md"
+    p2.write_text(NUMBERED_WITH_SUBSECTIONS, encoding="utf-8")
+    # canonical の方だけ enable
+    cli.main(["enable", "--pitfalls", p1, "--project-dir", str(tmp_path)])
+    capsys.readouterr()  # enable の出力を捨てる
+
+    assert cli.main(["status", "--project-dir", str(tmp_path), "--json"]) == 0
+    data = _json.loads(capsys.readouterr().out)
+    items = {it["path"]: it for it in data["items"]}
+    assert items[".claude/skills/x/references/pitfalls.md"]["managed"] is True
+    assert items[".claude/skills/x/references/pitfalls.md"]["state"] == "ok"
+    assert items["docs/pitfalls.md"]["managed"] is False
+    assert items["docs/pitfalls.md"]["state"] == "drift"
+
+
+def test_status_empty_when_no_pitfalls(tmp_path, capsys):
+    import json as _json
+    import pitfall_curate as cli
+    assert cli.main(["status", "--project-dir", str(tmp_path), "--json"]) == 0
+    data = _json.loads(capsys.readouterr().out)
+    assert data["items"] == []
+
+
+def test_status_survives_non_utf8_file(tmp_path, capsys):
+    # 非 UTF-8 の pitfalls.md が1件あっても全スキャンを落とさない（unreadable 扱い）
+    import json as _json
+    import pitfall_curate as cli
+    d = tmp_path / "docs"
+    d.mkdir()
+    (d / "pitfalls.md").write_bytes(b"\xff\xfe not utf-8 \x80\x81")
+    assert cli.main(["status", "--project-dir", str(tmp_path), "--json"]) == 0
+    data = _json.loads(capsys.readouterr().out)
+    items = {it["path"]: it for it in data["items"]}
+    assert items["docs/pitfalls.md"]["state"] == "unreadable"
+
+
 # --- sync --------------------------------------------------------------------
 
 def test_check_sync_detects_unclassified():
