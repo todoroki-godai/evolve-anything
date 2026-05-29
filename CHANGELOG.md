@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **feat(audit): glossary drift を audit に配線 — evolve のたびに用語集の鮮度が surface** — #268 で導入した `glossary_drift` を spec-keeper update（ユーザーが滅多に回さない）にだけ繋いでいたため、`/rl-anything:evolve` を回しても発火しない設計ミス（install ≠ enforcement の再発）を是正。`scripts/lib/audit/sections.py` に `build_glossary_drift_section(project_dir)` を新設（CONTEXT.md が無い PJ では None、構造 drift は ⚠ / 未登録 jargon は advisory ℹ で表示）、`report.generate_report` に配線。evolve は Diagnose 段で audit を消費するため、evolve だけで用語集の未登録 jargon が report に出るようになった。実リポジトリでドッグフード（実 jargon 9 件 surface、CONTEXT.md 自己参照ノイズを stoplist で除去）。テスト 3 件追加。再発防止として implement スキルに「配線先チェック（新機能は recurring ループ＝evolve/audit/trigger で発火するか）」を、tech-eval スキルに「採用概念は配線先を明示し既定で recurring ループに乗せる」観点を追加。#268
 - **feat(spec-keeper): CONTEXT.md 用語集（Ubiquitous Language）と drift 検出を導入** — PJ 固有 jargon を 1 語で decode する共有言語ドキュメント `CONTEXT.md` を新設（DDD の ubiquitous language）。鮮度は新規 `scripts/lib/glossary_drift.py`（決定論・LLM 非依存）が検出: テーブルをパースし `malformed`（スキーマ不一致）/ `duplicate`（重複定義）/ `missing_first_seen`（初出欠落）を **構造 drift** として gate（`has_drift`、CLI exit 1）、SoT（SPEC.md/CLAUDE.md）に出現する未登録 jargon 候補は **advisory**（`has_undefined`、gate しない — オオカミ少年化回避）。頭字語検出は ALLCAPS/CamelCase regex + stoplist で精度確保。spec-keeper の update フロー（通常更新 Step 5 / リカバリ突合表）に配線し、CONTEXT.md があれば自動でチェック。実 CONTEXT.md/SPEC.md でドッグフード（構造 drift 0・advisory 9 件の実 jargon を surface）。tech-eval `mattpocock/skills` の評価から着手。closes #268
 
 ## [1.76.1] - 2026-05-29

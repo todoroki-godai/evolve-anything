@@ -30,7 +30,7 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
         # 汎用テック頭字語
         "API", "CLI", "LLM", "JSON", "JSONL", "YAML", "HTML", "CSS", "HTTP",
         "HTTPS", "URL", "URI", "SQL", "DB", "ID", "UUID", "PK", "OK", "TODO",
-        "README", "SPEC", "CLAUDE", "ADR", "PR", "CI", "CD", "PJ", "SoT",
+        "README", "SPEC", "CLAUDE", "CONTEXT", "ADR", "PR", "CI", "CD", "PJ", "SoT",
         "MUST", "NOT", "AND", "OR", "TTL", "CPU", "OSS", "UX", "UI", "E2E",
         "TDD", "SDD", "MCP", "SDK", "CC", "WoW", "TOP", "N", "AI", "ASCII",
         "ROI", "CJK", "NFD", "NaN", "LR", "GitHub",

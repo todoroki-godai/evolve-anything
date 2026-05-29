@@ -343,3 +343,47 @@ def build_lsp_suggestion_section(project_dir: Path) -> Optional[List[str]]:
     lines.append("```")
     lines.append("")
     return lines
+
+
+def build_glossary_drift_section(project_dir: Path) -> Optional[List[str]]:
+    """CONTEXT.md（用語集）の drift を audit レポートに出す。
+
+    CONTEXT.md が無い PJ では None（spec-keeper init 前は対象外）。
+    evolve は audit を消費するため、evolve のたびに用語集の鮮度が可視化される
+    — 手動の spec-keeper update を待たずに発火する配線。
+    """
+    context_path = project_dir / "CONTEXT.md"
+    if not context_path.exists():
+        return None
+    try:
+        from glossary_drift import check_glossary
+    except ImportError:
+        return None
+
+    source_paths = [
+        str(project_dir / name)
+        for name in ("SPEC.md", "CLAUDE.md")
+        if (project_dir / name).exists()
+    ]
+    report = check_glossary(str(context_path), source_paths)
+
+    lines = ["## Glossary Drift (CONTEXT.md)", ""]
+    if report.has_drift():
+        lines.append("⚠ 構造 drift あり — 用語集自体の整合性が壊れています:")
+        if report.malformed_lines:
+            lines.append(f"  - スキーマ不一致行: {len(report.malformed_lines)}")
+        if report.duplicate_terms:
+            lines.append(f"  - 重複定義: {', '.join(report.duplicate_terms)}")
+        if report.missing_first_seen:
+            lines.append(f"  - 初出欠落: {', '.join(report.missing_first_seen)}")
+    else:
+        lines.append(f"✓ 構造 drift なし（用語集 {len(report.entries)} 件）")
+    if report.has_undefined():
+        lines.append("")
+        lines.append(
+            f"ℹ 用語集未登録の jargon 候補 ({len(report.undefined_terms)}) "
+            "— CONTEXT.md への追記を検討:"
+        )
+        lines.append(f"  {', '.join(report.undefined_terms)}")
+    lines.append("")
+    return lines

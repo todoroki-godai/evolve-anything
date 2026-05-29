@@ -111,3 +111,34 @@ def test_real_context_md_no_structural_drift():
     assert report.malformed_lines == []
     assert report.duplicate_terms == []
     assert report.missing_first_seen == []
+
+
+def test_audit_section_none_without_context_md(tmp_path):
+    """CONTEXT.md が無い PJ では audit section は None（spec-keeper init 前は対象外）。"""
+    from lib.audit.sections import build_glossary_drift_section
+
+    assert build_glossary_drift_section(tmp_path) is None
+
+
+def test_audit_section_surfaces_undefined(tmp_path):
+    """CONTEXT.md があれば evolve(audit) の section に未登録 jargon が出る。"""
+    from lib.audit.sections import build_glossary_drift_section
+
+    _write(tmp_path, "CONTEXT.md", _VALID)
+    _write(tmp_path, "SPEC.md", "BES に加えて NewJargon を導入した。")
+    section = build_glossary_drift_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "Glossary Drift" in body
+    assert "NewJargon" in body  # 未登録 jargon が advisory に出る
+
+
+def test_audit_section_flags_structural_drift(tmp_path):
+    """構造 drift（初出欠落）は section で ⚠ として明示される。"""
+    from lib.audit.sections import build_glossary_drift_section
+
+    broken = "# 用語集\n\n| 用語 | 意味 | 初出 |\n|------|------|------|\n| Foo | バー | |\n"
+    _write(tmp_path, "CONTEXT.md", broken)
+    section = build_glossary_drift_section(tmp_path)
+    assert section is not None
+    assert any("⚠" in ln for ln in section)
