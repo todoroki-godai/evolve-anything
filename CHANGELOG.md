@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(test): test_evolve_audit_flags の順序依存 flaky を根本修正（stale module 参照を解消）** — `test_run_evolve_passes_full_effect_flags_to_audit` がフルスイートでのみ FAIL（単独では PASS）していた。原因は `skills/audit/scripts/audit.py` が import 時に `sys.modules["audit"]` を本物のパッケージ（`scripts/lib/audit`）で **新しいオブジェクトに差し替える** shim であること。先行テスト（test_audit_memory_bytes / test_audit_quality_trends が `skills/audit/scripts` を sys.path 先頭に入れて import → shim 実行、test_audit_snapshot が reload）が走ると、本テストが module-level `import audit` で束縛したオブジェクトと runtime の `sys.modules["audit"]` が別オブジェクトになる。`evolve.py` の `from audit import run_audit` は後者を読むため、前者を `mock.patch.object` しても効かず `m.called == False` になっていた。テスト本体で `sys.modules["audit"]` から live オブジェクトを解決して patch するよう修正し、import 順に依存しないようにした（プロダクトコードは正しいためテスト側のみ修正）。
+
 ### Added
 - **feat(evolve): observability contract — 「必ず surface すべき observability 行」を audit↔evolve の構造化フィールドに昇格** — #272（Unmanaged Pitfalls の ✓ 行）は audit の **markdown 経路**だけを直したが、evolve は `run_audit` の 217KB markdown を `phases.audit.report` に丸ごと格納するだけで、assistant は名前付きフェーズ（fitness/skill_evolve/pitfall_hygiene…）を選択読みする運用のため、markdown 中盤に埋もれた observability 行が surface されなかった（docs-platform の evolve 実行 ev-v6 が v1.78.0 でも ✓ 行をログに出さず表面化。silence != evaluated 原則が観測性 fix 自身の配線で再発）。`scripts/lib/audit/observability.py` を新設し `_OBSERVABILITY_BUILDERS`（glossary_drift / unmanaged_pitfalls の **単一ソース**）+ `collect_observability(project_dir)` を定義。`report.py`(markdown) を個別呼び出し2つから `_OBSERVABILITY_BUILDERS` の消費に統一し、markdown 経路と構造化経路が同一ソースになるよう一本化（将来 observability 項目を足してもモグラ叩きにならない）。`run_evolve` は audit phase 直後に `result["observability"]` へ構造化格納し、SKILL.md に **Step 3.8: Observability（必ず surface する — MUST）** を新設。contract テスト7件（markdown/構造化の見出し一致を検査する単一ソース drift ガードを含む）+ API surface snapshot 更新。実 PJ docs-platform で `run_evolve(dry_run=True, skip_llm_evolve=True)` E2E 確認（`observability.unmanaged_pitfalls` に ✓ 行が surface、ev-v6 では消えていた行が構造化フィールドとして取り出せることを実証）。#272 後続。
 

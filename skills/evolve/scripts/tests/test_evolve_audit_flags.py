@@ -22,7 +22,19 @@ from evolve import run_evolve  # noqa: E402
 
 def test_run_evolve_passes_full_effect_flags_to_audit(tmp_path):
     """evolve は MemTrace + constitutional(slop 込み) を既定で audit に依頼する。"""
-    with mock.patch.object(audit, "run_audit", return_value="## audit report") as m:
+    # NOTE: `audit` module-level の参照を直接 patch すると順序依存 flaky になる。
+    # skills/audit/scripts/audit.py は import 時に `sys.modules["audit"]` を本物の
+    # パッケージ(scripts/lib/audit)で上書きする shim であり、他テスト
+    # (test_audit_memory_bytes / _quality_trends が `skills/audit/scripts` を
+    #  sys.path 先頭に入れて import → shim 実行) が走ると、本ファイルの
+    # module-level `import audit` で束縛したオブジェクトと runtime の
+    # `sys.modules["audit"]` が別オブジェクトになる。evolve.py の
+    # `from audit import run_audit` は後者を読むため、前者を patch しても効かず
+    # m.called == False になっていた（フルスイートでのみ FAIL する原因）。
+    # 文字列ターゲットで patch すると enter 時に sys.modules["audit"] を解決するため
+    # evolve.py が見る live オブジェクトと一致し、import 順に依存しなくなる。
+    live_audit = sys.modules.get("audit", audit)
+    with mock.patch.object(live_audit, "run_audit", return_value="## audit report") as m:
         run_evolve(project_dir=str(tmp_path))
 
     assert m.called, "run_evolve が run_audit を呼んでいない"
