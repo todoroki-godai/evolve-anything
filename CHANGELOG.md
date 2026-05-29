@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.76.0] - 2026-05-29
+
 ### Added
 - **feat(pitfall): pitfall-curate に enable モード追加 — skill 1発で自動強制を有効化** — 自動強制 hook の有効化を「ユーザーがコマンドを手打ちする」前提から「`/rl-anything:pitfall-curate` を呼ぶだけ」に引き上げた。`pitfall_registry.discover_pitfalls(project_dir)` で PJ 内の `pitfalls.md` を自動発見（`.git`/`node_modules`/`dist` 等のノイズ dir は降りない、決定論・ソート済み）。CLI に `status` サブコマンドを追加（発見した各ファイルの `{path, managed, state(ok/drift/danger)}` を `--json` で機械可読出力 / 人間向け一覧も）。SKILL.md に **Step 0: 自動強制の有効化** を新設し、curate 本体の前に `status` で未登録ファイルを検出 → AskUserQuestion で確認 → `enable` 実行（`danger`=index/TOC は対象外、`drift` は登録後 normalize 提案）するフローを定義。Trigger に「pitfall 自動強制 有効化 / pitfall enable / pitfalls 自動ルール」等を追加。決定論コアは LLM 非依存、テスト 5 件追加（discover 3 + status 2）。#265 の続き。
 - **feat(pitfall): pitfalls.md 自動強制フロー — install + enable で以後ルールが当たる** — agent が pitfalls.md を直接手編集して後で curate すると壊れる/拒否される問題への恒久対策。`normalize --check`（lint: 書き換えず ok/drift/danger を返し ok=0/drift=1/danger=2 で exit、diff 提示）を土台に、編集時 hook `pitfall_lint`（PostToolUse Edit/Write/MultiEdit・**警告のみ非ブロッキング**）と commit 時ゲート `pitfall_commit_gate`（PreToolUse Bash・`git commit` 検知 → staged を `git show :path` で検査 → **danger は exit 2 でブロック**、drift は警告のみで通す）の二段検査を追加。どちらも自動書き換えはしない（preamble/index の silent wipe バグの反省）。`enable`/`disable` CLI サブコマンドで管理対象 pitfalls.md を `.claude/rl-anything/pitfall-managed.json` に登録するオプトイン方式（`scripts/lib/pitfall_registry.py`、決定論・LLM非依存）。登録したファイルにのみ hook が反応し、`enable` は index/TOC を「エントリファイルでない」として登録拒否する。実 git での E2E（ok→通過 / drift→警告通過 / danger→exit 2 ブロック）を確認。hook はプラグイン同梱で install 時に配布、各 PJ で `enable` を1回叩けば以後自動。[ADR-027] 参照。
