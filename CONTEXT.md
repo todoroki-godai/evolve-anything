@@ -24,3 +24,5 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | cross-PJ recall | keyword 決定論で全 PJ memory を横断検索（vector 非採用） | ADR-025 |
 | pitfall-curate | PJ 非依存の pitfalls.md キュレーション（自己進化専用の manager とは別物） | ADR-026 |
 | 正準フォーマット収束 | pitfalls.md を寛容パーサでなく書式収束で扱う方針（無破壊 lint） | ADR-027 |
+| observability contract | 必ず surface すべき行を単一ソース `_OBSERVABILITY_BUILDERS` 化し markdown/構造化の両経路が消費する契約 | ADR-028 |
+| silence ≠ evaluated | 沈黙だと「評価して該当なし」か「配線漏れ」か区別できない。該当なしでも ✓ を1行残す原則 | ADR-028 |
