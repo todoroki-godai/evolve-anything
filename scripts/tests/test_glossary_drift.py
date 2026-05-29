@@ -113,11 +113,35 @@ def test_real_context_md_no_structural_drift():
     assert report.missing_first_seen == []
 
 
-def test_audit_section_none_without_context_md(tmp_path):
-    """CONTEXT.md が無い PJ では audit section は None（spec-keeper init 前は対象外）。"""
+def test_audit_section_none_without_context_md_when_jargon_thin(tmp_path):
+    """CONTEXT.md 不在 + jargon 候補が閾値未満なら None（薄い PJ に空の用語集を作らない）。
+
+    #275 で seed ケースを emit するようにしたが、候補が SEED_MIN_CANDIDATES 未満の
+    PJ では従来どおり沈黙する（オオカミ少年化回避）。
+    """
     from lib.audit.sections import build_glossary_drift_section
 
+    _write(tmp_path, "SPEC.md", "ふつうの日本語の文章です。特別な用語はありません。")
     assert build_glossary_drift_section(tmp_path) is None
+
+
+def test_audit_section_seeds_when_context_absent(tmp_path):
+    """CONTEXT.md 不在 + 未登録 jargon ≥ SEED_MIN_CANDIDATES なら seed 提案 section を出す（#275）。
+
+    #278 の observability contract に統合した形。glossary_seed を独立 phase でなく
+    build_glossary_drift_section が emit するため、markdown と result['observability']
+    の両経路に自動 surface する（whack-a-mole 回避）。creation→detection を一本化。
+    """
+    from lib.audit.sections import build_glossary_drift_section
+
+    _write(tmp_path, "SPEC.md", "FooBar と BazQux と MemTrace と QuuxThing を導入した。")
+    section = build_glossary_drift_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "Glossary Drift" in body
+    assert "CONTEXT.md" in body  # 不在を明示
+    assert "用語集未作成" in body  # seed 提案見出し
+    assert "4" in body  # 候補件数（FooBar/BazQux/MemTrace/QuuxThing）
 
 
 def test_audit_section_surfaces_undefined(tmp_path):

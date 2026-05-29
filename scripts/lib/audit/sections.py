@@ -451,23 +451,48 @@ def build_unmanaged_pitfalls_section(project_dir: Path) -> Optional[List[str]]:
 def build_glossary_drift_section(project_dir: Path) -> Optional[List[str]]:
     """CONTEXT.md（用語集）の drift を audit レポートに出す。
 
-    CONTEXT.md が無い PJ では None（spec-keeper init 前は対象外）。
-    evolve は audit を消費するため、evolve のたびに用語集の鮮度が可視化される
-    — 手動の spec-keeper update を待たずに発火する配線。
+    CONTEXT.md がある PJ では drift（構造/未検証/未登録）を surface する。
+    CONTEXT.md が無い PJ では、未登録 jargon 候補が SEED_MIN_CANDIDATES 以上なら
+    「用語集未作成 — seed 提案対象」section を emit する（#275）。creation→detection の
+    creation gap を埋める作成 trigger。候補が薄い PJ は None で沈黙（空の用語集を作らない）。
+
+    evolve は audit を消費するため、evolve のたびに用語集の鮮度（または未作成）が可視化される
+    — 手動の spec-keeper update / 散文ステップに依存しない配線。本 section は
+    `_OBSERVABILITY_BUILDERS`（#278）経由で markdown と result['observability'] の両経路へ
+    surface する（glossary_seed を独立 phase にしていた #275 初版を contract に統合）。
     """
     context_path = project_dir / "CONTEXT.md"
-    if not context_path.exists():
-        return None
-    try:
-        from glossary_drift import check_glossary
-    except ImportError:
-        return None
-
     source_paths = [
         str(project_dir / name)
         for name in ("SPEC.md", "CLAUDE.md")
         if (project_dir / name).exists()
     ]
+    try:
+        from glossary_drift import (
+            SEED_MIN_CANDIDATES,
+            check_glossary,
+            find_undefined_terms,
+        )
+    except ImportError:
+        return None
+
+    # CONTEXT.md 不在: 用語集ブートストラップの適格性を判定（決定論・LLM 非依存）。
+    if not context_path.exists():
+        try:
+            candidates = find_undefined_terms([], source_paths)
+        except Exception:
+            candidates = []
+        if len(candidates) < SEED_MIN_CANDIDATES:
+            return None  # jargon の薄い PJ には seed を勧めない
+        return [
+            "## Glossary Drift (CONTEXT.md)",
+            "",
+            f"ℹ 用語集未作成（CONTEXT.md 不在）— 未登録 jargon 候補 {len(candidates)} 件。"
+            " spec-keeper init / evolve Step 7.7 で seed 生成を検討:",
+            f"  {', '.join(candidates)}",
+            "",
+        ]
+
     report = check_glossary(str(context_path), source_paths)
 
     lines = ["## Glossary Drift (CONTEXT.md)", ""]

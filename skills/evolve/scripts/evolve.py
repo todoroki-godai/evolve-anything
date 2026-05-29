@@ -692,6 +692,10 @@ def run_evolve(
     if rt and not rt.get("data_insufficient"):
         result["phases"]["rationalization_table"] = rt
 
+    # 用語集 seed（CONTEXT.md 不在 + jargon ≥ 閾値）は #275 で独立 phase にしていたが、
+    # #278 の observability contract に統合済み（build_glossary_drift_section が emit し
+    # result["observability"]["glossary_drift"] に surface）。ここでの個別 emit は不要。
+
     # Phase 5: Fitness Evolution（評価関数の改善チェック）
     try:
         from fitness_evolution import run_fitness_evolution

@@ -456,29 +456,29 @@ evolve.py の出力に含まれる `rationalization_table` フェーズ結果を
 
 ### Step 7.7: 用語集ブートストラップ（CONTEXT.md が無い場合）
 
-audit の Glossary Drift section が **None**（= CONTEXT.md が存在しない）で、かつ SoT に
-未登録 jargon 候補が一定数ある PJ では、用語集（Ubiquitous Language）を最初に作る trigger が
-どこにも無いという穴がある。creation が手動依存だと detection（drift 検出）が永遠に発火しない。
-evolve はユーザーが明示的に回す per-project ループなので、ここで作成を提案する。
+**Step 3.8 で surface した `result.observability.glossary_drift` を確認する**（#275 を #278 の
+observability contract に統合）。この section に **`用語集未作成（CONTEXT.md 不在）`** で始まる行が
+あれば、用語集（Ubiquitous Language）を最初に作る trigger がどこにも無い PJ で、未登録 jargon 候補が
+`SEED_MIN_CANDIDATES` 以上ある状態。creation が手動依存だと detection（drift 検出）が永遠に発火しない
+ため、evolve（ユーザーが明示的に回す per-project ループ）でここに作成を提案する。
 
-**判定（決定論）**:
+> **なぜ contract 統合か（#275 → #278）**: #273 ではこの判定を散文ステップに書いたが phase 出力に
+> 裏打ちされず実 evolve（docs-platform ev-v6）で消えた。#275 初版は独立 `glossary_seed` phase に
+> 格上げしたが、#278 が「surface すべき行」を `_OBSERVABILITY_BUILDERS` 単一ソースに集約したため、
+> seed 判定も `build_glossary_drift_section` が emit する形に統合（surface パターンを1本化、
+> markdown と `result.observability` の両経路へ自動伝播）。決定論・LLM 非依存。
 
-```python
-import sys, os
-sys.path.insert(0, os.path.join(os.environ.get("CLAUDE_PLUGIN_ROOT", "."), "scripts", "lib"))
-import glossary_drift as gd
-context_path = os.path.join(PROJECT_DIR, "CONTEXT.md")
-candidates = []
-if not os.path.exists(context_path):
-    sources = [os.path.join(PROJECT_DIR, n) for n in ("SPEC.md", "CLAUDE.md") if os.path.exists(os.path.join(PROJECT_DIR, n))]
-    candidates = gd.find_undefined_terms([], sources)
-seed_eligible = (not os.path.exists(context_path)) and len(candidates) >= gd.SEED_MIN_CANDIDATES
-```
+**observability 出力の利用（判定は済んでいる — 再実行しない）**:
 
-`seed_eligible` が False（CONTEXT.md が既にある or 候補が `SEED_MIN_CANDIDATES` 未満）なら
-このステップは黙ってスキップする。jargon の薄い PJ に空の用語集を作らない。
+`result.observability.glossary_drift`（list[str]）を読む:
+- `用語集未作成（CONTEXT.md 不在）` 行がある → seed 適格。候補件数とリストは同じ行に含まれる
+- 行が無い / `✓ 構造 drift なし` 等 → CONTEXT.md は既にある or 候補が薄い → このステップは黙ってスキップ
 
-**True の場合のみ AskUserQuestion**（提案詳細プロトコルに従う）。LLM で意味を埋めるため、
+**seed 適格のとき**:
+- **`--dry-run` の場合**: 書き込みはせず、Step 3.8 で surface した行をそのままレポートに残す（MUST、観測可能性）。
+- **通常実行の場合**: 以下の AskUserQuestion 提案フローに進む。
+
+**通常実行 + seed 適格の場合のみ AskUserQuestion**（提案詳細プロトコルに従う）。LLM で意味を埋めるため、
 **件数とトークン見積もりを事前提示する**（プロジェクトの llm-batch-guard 準拠・MUST）:
 
 ```

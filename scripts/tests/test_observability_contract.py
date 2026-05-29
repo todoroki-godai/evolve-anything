@@ -75,6 +75,19 @@ def test_glossary_drift_key_when_context_exists(tmp_path):
     assert "Glossary Drift" in combined
 
 
+def test_glossary_drift_surfaces_seed_when_context_absent(tmp_path):
+    """CONTEXT.md 不在 + jargon ≥ 閾値なら glossary_drift に seed 提案行が surface する（#275）。
+
+    glossary_seed を独立 phase にしていた初版を observability contract に統合。
+    creation gap（用語集を作る trigger が無い）が evolve のたびに両経路で可視化される。
+    """
+    _write(tmp_path / "SPEC.md", "FooBar と BazQux と MemTrace と QuuxThing を導入した。")
+    result = collect_observability(tmp_path)
+    assert "glossary_drift" in result
+    combined = "\n".join(result["glossary_drift"])
+    assert "用語集未作成" in combined
+
+
 def test_both_keys_when_both_artifacts_present(tmp_path):
     """両アーティファクトがあれば両 key が surface される。"""
     _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
