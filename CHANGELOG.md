@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.76.1] - 2026-05-29
+
+### Fixed
+- **fix(evolve): MemTrace + slop(constitutional) を evolve のデフォルトで有効化** — `run_evolve` の Phase 3 が `run_audit(project_dir)` をフラグなしで呼んでいたため、MemTrace（#264）も slop_detector を 10% ブレンドした constitutional（#255）も「evolve するだけ」では発火せず、実装済みだが観測される挙動に現れなかった（install ≠ enforcement）。`run_audit(project_dir, memory_trace=True, constitutional_score=True)` に変更し evolve だけで両機能が効くようにした。MemTrace は決定論で LLM ゼロ、constitutional は haiku×最大4 だがレイヤ単位コンテンツハッシュキャッシュで通常 0〜1 コール（`constitutional_cache.json`）。constitutional 単独 ON のため `score_count=1` で environment fitness（≥2 で発火）は呼ばれず追加コストなし。両フラグの audit への伝播を保証する回帰テスト（`test_evolve_audit_flags.py`）を追加。
+
 ## [1.76.0] - 2026-05-29
 
 ### Added
@@ -16,7 +21,6 @@
 ### Fixed
 - **fix(audit): MemTrace 帰属診断を audit 出力に配線** — `build_memory_trace_audit_section`（#254）は実装済みだが orchestrator から呼ばれておらず audit 出力に現れなかった（実装漏れ）。`run_audit` に `memory_trace` パラメータと `--memory-trace` CLI フラグを追加し `generate_report` まで配線。「関数が呼ばれる」ことを保証する E2E 回帰テスト（`test_run_audit_memory_trace_wiring`）を追加。
 - **fix(rl-loop): `--evolve-search` を SKILL.md に記載** — run_loop.py に実装済みだが SKILL.md のオプション表に未記載で `/rl-loop` 経由から到達できなかった（doc 漏れ）。オプション表に `--evolve-search` 行を追加。
-- **fix(evolve): MemTrace + slop(constitutional) を evolve のデフォルトで有効化** — `run_evolve` の Phase 3 が `run_audit(project_dir)` をフラグなしで呼んでいたため、MemTrace（#264）も slop_detector を 10% ブレンドした constitutional（#255）も「evolve するだけ」では発火せず、実装済みだが観測される挙動に現れなかった（install ≠ enforcement）。`run_audit(project_dir, memory_trace=True, constitutional_score=True)` に変更し evolve だけで両機能が効くようにした。MemTrace は決定論で LLM ゼロ、constitutional は haiku×最大4 だがレイヤ単位コンテンツハッシュキャッシュで通常 0〜1 コール（`constitutional_cache.json`）。constitutional 単独 ON のため `score_count=1` で environment fitness（≥2 で発火）は呼ばれず追加コストなし。両フラグの audit への伝播を保証する回帰テスト（`test_evolve_audit_flags.py`）を追加。
 
 ## [1.75.0] - 2026-05-28
 
