@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.77.0] - 2026-05-29
 
 ### Added
 - **feat(audit): 未登録 pitfalls.md を Unmanaged Pitfalls advisory で可視化 — evolve のたびに enable 漏れが surface** — #265/#266 で pitfall 自動強制（lint/commit-gate）を導入したが、各 PJ で `enable` 登録するまで hook は無反応（install ≠ enforcement・オプトイン）。育っている `pitfalls.md` があるのに未登録だと、その事実がどこにも surface しない問題を是正。`pitfall_registry.unmanaged_candidates(project_dir)` を新設（`discover_pitfalls − load_managed` の純粋集合差・stdlib のみ）、`pitfall-curate parse.py` に `count_entries(content)`（正準パーサ再利用の liveness 指標）を追加。`scripts/lib/audit/sections.py` に `build_unmanaged_pitfalls_section(project_dir)` を新設（未登録 ∧ 実エントリ≥3 の「育っている」ファイルのみを path+件数で提示し `/rl-anything:pitfall-curate` の enable へ誘導、書きかけ・空はノイズ抑制で非表示、1件も無ければ None）。`count_entries` は generic 名（core/parse）で sys.path を汚さないよう importlib でファイル指定ロード。`report.generate_report` に glossary drift と同形で配線したため、evolve は Diagnose 段で audit を消費する＝evolve だけで未登録 pitfalls.md が report に出る。非 UTF-8 ファイル混在でも全体を落とさない。実リポジトリでドッグフード（発見3件すべて0-1エントリのテンプレ→正しく非表示、誤検出ゼロ）。テスト10件追加（parse 2 / registry 3 / section 5）。
