@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.78.0] - 2026-05-29
 
 ### Added
 - **feat(evolve): CONTEXT.md が無ければ evolve が LLM seed を提案生成（creation→detection を一本化）** — glossary drift 検出は evolve に配線済みだが、検出の前提である CONTEXT.md を**作る trigger がどこにも無く**、誰かが手で置くまで永遠に発火しない creation gap を是正（install ≠ enforcement の "もう一段上"）。evolve は per-project かつユーザーが明示的に回すループなので、Housekeeping に **Step 7.7: 用語集ブートストラップ**を新設。CONTEXT.md 無し ∧ 未登録 jargon 候補 ≥ `SEED_MIN_CANDIDATES`(=3) のときだけ AskUserQuestion で生成提案（トークン見積を提示し llm-batch-guard 準拠、silent で書かない）。承認時は LLM が SPEC/CLAUDE から各語の意味を1行生成し、決定論 writer `glossary_drift.write_context_seed`（整形のみ・LLM 非関与・既存は `FileExistsError` で非破壊）で書き出す。全行の初出列に `⚠UNVERIFIED` を付け、人間が意味確認 + 初出記入でマーカーを外すまで **drift gate に載せず** `unverified_terms` advisory で確認を促す。これにより「誤った意味の静かな混入（腐った用語集は無いより悪い）」と「SoT 全自動生成による drift 検出器の自滅」を両方回避。`GlossaryReport.unverified_terms` / `has_unverified()` を追加し audit section が未検証 advisory を surface。意味中の `|` は全角 ｜ に置換しテーブル破壊を防止。テスト6件追加（unverified パース / undefined 非二重計上 / 非破壊 / round-trip / pipe escape / audit section）。実リポジトリでドッグフード（seed→UNVERIFIED→advisory が一気通貫）。
