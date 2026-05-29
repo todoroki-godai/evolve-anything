@@ -2,7 +2,10 @@
 
 install != enforcement（オプトイン）のため、育っている pitfalls.md があっても enable
 しなければ hook は無反応。audit はこの「未登録だが育っている」状態を advisory 表示し、
-evolve のたびに enable 漏れを可視化する。ノイズ抑制のため実エントリ >= 3 のみ対象。
+evolve のたびに enable 漏れを可視化する。育った未登録（実エントリ >= 3）は advisory、
+それ以外でも pitfalls.md が1件でもあれば「評価したが該当なし ✓」を必ず1行残す
+（観測可能性: 沈黙 = 「評価した結果なし」か「配線漏れ」か区別できない問題への対策）。
+pitfalls.md が1件も無い PJ のみ None（対象外）。
 """
 import sys
 from pathlib import Path
@@ -55,21 +58,30 @@ def test_grown_unmanaged_pitfalls_are_reported(tmp_path):
     assert "pitfall-curate" in combined  # enable への誘導
 
 
-def test_thin_pitfalls_are_filtered_out(tmp_path):
-    # エントリ 1 件の書きかけ pitfalls.md はノイズなので出さない
+def test_thin_pitfalls_emit_evaluated_line(tmp_path):
+    # エントリ 1 件の書きかけは advisory に出さないが、評価した事実は 1 行残す
     _write(tmp_path / "docs" / "pitfalls.md", _THIN)
-    assert build_unmanaged_pitfalls_section(tmp_path) is None
+    result = build_unmanaged_pitfalls_section(tmp_path)
+    assert result is not None
+    combined = "\n".join(result)
+    assert "✓" in combined
+    assert "docs/pitfalls.md" not in combined  # path は出さない（advisory ではない）
 
 
-def test_managed_pitfalls_are_not_reported(tmp_path):
+def test_managed_pitfalls_emit_all_registered_line(tmp_path):
     pf = tmp_path / "docs" / "pitfalls.md"
     _write(pf, _GROWN)
     reg.add_managed(tmp_path, pf)
-    # 登録済みは advisory に出さない
-    assert build_unmanaged_pitfalls_section(tmp_path) is None
+    # 登録済みは advisory に出さないが、「すべて登録済み ✓」を 1 行残す
+    result = build_unmanaged_pitfalls_section(tmp_path)
+    assert result is not None
+    combined = "\n".join(result)
+    assert "✓" in combined
+    assert "登録済み" in combined
 
 
 def test_none_when_no_pitfalls(tmp_path):
+    # pitfalls.md が 1 件も無い PJ は対象外（CONTEXT.md 無しと同じ）→ None
     assert build_unmanaged_pitfalls_section(tmp_path) is None
 
 

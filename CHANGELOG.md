@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(audit): Unmanaged Pitfalls — 該当なしでも評価結果を1行残す（観測可能性）** — `build_unmanaged_pitfalls_section` は候補ゼロ時に `None` を返してセクションごと消えていたため、ログ上「評価して該当なし」と「配線が走っていない（配線漏れの再発）」が区別できなかった（docs-platform の evolve 実行 ev-v6 で表面化）。glossary drift と同じ方針に揃え、pitfalls.md が1件でもある PJ では該当なしでも `✓ enable すべき育った pitfalls.md なし（検査 N 件…）` を必ず1行出力するよう変更（全登録済み / 未登録だが全て書きかけ / parser ロード失敗 を文面で区別）。pitfalls.md が1件も無い PJ のみ従来どおり非表示。`discover_pitfalls` で総数を取り「評価した事実」を担保。実 PJ でドッグフード（docs-platform: 検査4件すべて登録済み / rl-anything 自身: 未登録3件すべて書きかけ）。テスト2件を「✓行が出る」検証へ更新。
+
 ## [1.77.0] - 2026-05-29
 
 ### Added

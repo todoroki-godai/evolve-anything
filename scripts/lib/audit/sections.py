@@ -380,21 +380,41 @@ def build_unmanaged_pitfalls_section(project_dir: Path) -> Optional[List[str]]:
     enable しなければ hook は無反応。evolve は audit を消費するので、evolve のたびに
     「登録すべき pitfalls.md」が advisory として出る。実際の登録は pitfall-curate に誘導。
 
-    ノイズ抑制: 実エントリ >= _PITFALL_MIN_ENTRIES の「育っている」ファイルだけ対象にする
-    （空・書きかけは出さない）。1 件も無ければ None（セクション非表示）。
+    観測可能性: pitfalls.md が 1 件でもある PJ では、該当なしでも「評価したが対象なし ✓」を
+    必ず 1 行残す（沈黙だと「評価して該当なし」か「配線漏れ」か区別できないため。
+    glossary drift と同じ方針）。pitfalls.md が 1 件も無い PJ のみ None（対象外）。
+    advisory 対象は実エントリ >= _PITFALL_MIN_ENTRIES の「育っている」未登録ファイルのみ
+    （空・書きかけはノイズ抑制で path を出さない）。
     """
     try:
         import pitfall_registry
     except ImportError:
         return None
 
-    candidates = pitfall_registry.unmanaged_candidates(project_dir)
-    if not candidates:
+    discovered = pitfall_registry.discover_pitfalls(project_dir)
+    if not discovered:
+        # pitfalls 運用のない PJ — 評価対象がそもそも無いので非表示
         return None
 
+    candidates = pitfall_registry.unmanaged_candidates(project_dir)
     count_entries = _load_count_entries()
+
+    header = ["## Unmanaged Pitfalls (自動強制 未登録)", ""]
+
     if count_entries is None:
-        return None
+        # 正準パーサをロードできない — liveness は判定できないが事実は残す
+        if candidates:
+            lines = header + [
+                f"⚠ 未登録 pitfalls.md {len(candidates)} 件あり"
+                "（エントリ数の liveness 判定不可・parser ロード失敗）:"
+            ]
+            lines += [f"  - {rel}" for rel in candidates]
+        else:
+            lines = header + [
+                f"✓ 未登録の pitfalls.md なし（検査 {len(discovered)} 件すべて登録済み）"
+            ]
+        lines.append("")
+        return lines
 
     live: List[tuple] = []
     for rel in candidates:
@@ -406,17 +426,24 @@ def build_unmanaged_pitfalls_section(project_dir: Path) -> Optional[List[str]]:
             continue
         if n >= _PITFALL_MIN_ENTRIES:
             live.append((rel, n))
-    if not live:
-        return None
 
-    lines = ["## Unmanaged Pitfalls (自動強制 未登録)", ""]
-    lines.append(
-        f"以下の pitfalls.md は育っています（エントリ {_PITFALL_MIN_ENTRIES}+ 件）が、"
-        "自動強制ルールに未登録です。`/rl-anything:pitfall-curate` で enable すると、"
-        "編集/commit 時に正準フォーマットが自動で当たります:"
-    )
-    for rel, n in live:
-        lines.append(f"  - {rel} ({n} entries)")
+    if live:
+        lines = header + [
+            f"以下の pitfalls.md は育っています（エントリ {_PITFALL_MIN_ENTRIES}+ 件）が、"
+            "自動強制ルールに未登録です。`/rl-anything:pitfall-curate` で enable すると、"
+            "編集/commit 時に正準フォーマットが自動で当たります:"
+        ]
+        lines += [f"  - {rel} ({n} entries)" for rel, n in live]
+    elif not candidates:
+        lines = header + [
+            f"✓ enable すべき育った pitfalls.md なし（検査 {len(discovered)} 件すべて登録済み）"
+        ]
+    else:
+        lines = header + [
+            f"✓ enable すべき育った pitfalls.md なし"
+            f"（検査 {len(discovered)} 件 / 未登録 {len(candidates)} 件はいずれもエントリ "
+            f"{_PITFALL_MIN_ENTRIES} 件未満の書きかけ）"
+        ]
     lines.append("")
     return lines
 

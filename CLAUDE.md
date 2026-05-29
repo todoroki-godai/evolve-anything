@@ -47,7 +47,7 @@
 | `evolution_operators` | BES 前向き進化探索（#256）。crossover/mutate/select_parents(fitness-proportional)/evolve_generation の決定論演算子。rl-loop の `--evolve-search` が subgoal fitness を consume（`scripts/lib/evolution_operators.py`） |
 | `memory_trace` | MemTrace 帰属診断（#254）。episodic 検索エラーを misretrieval/context_drift/corruption の3類型に分類し `event_id` 帰属。LLM/oracle 不使用、`audit/memory.py` が利用（`scripts/lib/memory_trace.py`） |
 | `slop_detector` | AI slop 辞書検出（#255）。日英 10 パターンを決定論 regex で検出、`detect_slop -> SlopResult(slop_score, hits)`。constitutional に 10% ブレンド + subgoal slop_free に接続（`scripts/lib/slop_detector.py`） |
-| pitfall 自動強制 (`pitfall_lint` / `pitfall_commit_gate`) | install + `pitfall-curate enable` で登録した pitfalls.md に対し、編集時 hook（PostToolUse・警告のみ）と commit 時ゲート（PreToolUse Bash・staged を検査し danger を exit 2 でブロック）の二段で正準フォーマットを自動 lint。判定は `normalize --check`（ok/drift/danger、書き換えなし）、台帳は `scripts/lib/pitfall_registry.py`（オプトイン・決定論、`unmanaged_candidates` で未登録を集合差検出）。自動書き換えはしない（silent wipe 防止、ADR-027）。audit は「育っている（エントリ3+件）のに未登録」の pitfalls.md を `Unmanaged Pitfalls` セクションで可視化し enable を誘導（evolve のたびに発火、liveness 判定は `parse.count_entries`） |
+| pitfall 自動強制 (`pitfall_lint` / `pitfall_commit_gate`) | install + `pitfall-curate enable` で登録した pitfalls.md に対し、編集時 hook（PostToolUse・警告のみ）と commit 時ゲート（PreToolUse Bash・staged を検査し danger を exit 2 でブロック）の二段で正準フォーマットを自動 lint。判定は `normalize --check`（ok/drift/danger、書き換えなし）、台帳は `scripts/lib/pitfall_registry.py`（オプトイン・決定論、`unmanaged_candidates` で未登録を集合差検出）。自動書き換えはしない（silent wipe 防止、ADR-027）。audit は「育っている（エントリ3+件）のに未登録」の pitfalls.md を `Unmanaged Pitfalls` セクションで可視化し enable を誘導（evolve のたびに発火、liveness 判定は `parse.count_entries`）。pitfalls.md が1件でもある PJ では該当なしでも「評価したが対象なし ✓」を1行残し（沈黙=配線漏れ誤認を防止）、1件も無い PJ のみ非表示 |
 
 ## クイックスタート
 
