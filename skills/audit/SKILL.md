@@ -129,6 +129,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/quality_monitor.py
 - 行数超過 → 分割を提案
 - 重複候補 → 統合を提案
 - Scope Advisory → スコープ最適化を提案
+- Unmanaged Pitfalls（自動強制 未登録）→ 育っている（エントリ3+件）のに pitfall lint/commit-gate 未登録の `pitfalls.md` を提示。`/rl-anything:pitfall-curate` での enable を誘導（install ≠ enforcement の可視化）
 
 ## allowed-tools
 

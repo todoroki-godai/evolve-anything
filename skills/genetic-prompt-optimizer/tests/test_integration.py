@@ -111,7 +111,7 @@ class TestFullPipeline:
         improved = "---\nname: test-skill\ndescription: Integration test skill\n---\n\n# Improved Skill\n\nBetter content with edge cases.\n"
 
         with patch("optimize._CORRECTIONS_PATH", corrections_file), \
-             patch("optimize.subprocess.run", return_value=self._mock_llm_response(improved)):
+             patch("optimize_core.subprocess.run", return_value=self._mock_llm_response(improved)):
             result = optimizer.run()
 
         assert result["strategy"] == "error_guided"
@@ -135,7 +135,7 @@ class TestFullPipeline:
         improved = "# Enhanced Skill\n\nMore examples and clarity.\n"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"), \
-             patch("optimize.subprocess.run", return_value=self._mock_llm_response(improved)):
+             patch("optimize_core.subprocess.run", return_value=self._mock_llm_response(improved)):
             result = optimizer.run()
 
         assert result["strategy"] == "llm_improve"
@@ -151,7 +151,7 @@ class TestFullPipeline:
         bad_content = "# Bad Skill\n\nTODO: implement this\n"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"), \
-             patch("optimize.subprocess.run", return_value=self._mock_llm_response(bad_content)):
+             patch("optimize_core.subprocess.run", return_value=self._mock_llm_response(bad_content)):
             result = optimizer.run()
 
         assert result.get("gate_rejected") is True
@@ -164,7 +164,7 @@ class TestFullPipeline:
         optimizer.run_dir = temp_dir / "test_run"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"), \
-             patch("optimize.subprocess.run", side_effect=FileNotFoundError):
+             patch("optimize_core.subprocess.run", side_effect=FileNotFoundError):
             result = optimizer.run()
 
         assert result.get("error") is not None

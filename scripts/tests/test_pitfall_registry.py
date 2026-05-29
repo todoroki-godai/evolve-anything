@@ -104,3 +104,30 @@ def test_discover_skips_noise_dirs(tmp_path):
 
 def test_discover_empty_when_none(tmp_path):
     assert reg.discover_pitfalls(tmp_path) == []
+
+
+def test_unmanaged_candidates_excludes_registered(tmp_path):
+    a = tmp_path / "docs"
+    a.mkdir()
+    (a / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    b = tmp_path / "skills" / "y"
+    b.mkdir(parents=True)
+    (b / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    reg.add_managed(tmp_path, a / "pitfalls.md")
+    # docs は登録済み → skills/y のみ未登録として残る
+    assert reg.unmanaged_candidates(tmp_path) == ["skills/y/pitfalls.md"]
+
+
+def test_unmanaged_candidates_all_when_none_registered(tmp_path):
+    a = tmp_path / "docs"
+    a.mkdir()
+    (a / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    assert reg.unmanaged_candidates(tmp_path) == ["docs/pitfalls.md"]
+
+
+def test_unmanaged_candidates_empty_when_all_registered(tmp_path):
+    a = tmp_path / "docs"
+    a.mkdir()
+    (a / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    reg.add_managed(tmp_path, a / "pitfalls.md")
+    assert reg.unmanaged_candidates(tmp_path) == []

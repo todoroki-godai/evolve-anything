@@ -97,3 +97,16 @@ def discover_pitfalls(project_dir: PathLike) -> List[str]:
             continue
         found.append(str(rel))
     return sorted(found)
+
+
+def unmanaged_candidates(project_dir: PathLike) -> List[str]:
+    """発見済み pitfalls.md のうち、まだ管理対象に未登録のものを返す（決定論）。
+
+    `discover_pitfalls`（全候補）から `load_managed`（登録済み）を引いた集合差。
+    audit が「自動強制の対象になり得るが未登録」のファイルを可視化するための入口。
+    キーは discover_pitfalls と同じ project 相対パスなので集合差が一致する。
+    エントリ数による liveness 判定は呼び出し側（audit）が行う — レジストリは
+    フォーマットパーサに依存せず stdlib のみで完結させる。
+    """
+    managed = set(load_managed(project_dir))
+    return [k for k in discover_pitfalls(project_dir) if k not in managed]

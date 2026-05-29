@@ -15,6 +15,7 @@ _plugin_root = _scripts.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
 import core as pc
+import parse
 
 
 SAMPLE = """# Pitfalls
@@ -687,3 +688,27 @@ def test_check_sync_detects_stale_in_distribution():
     )
     report = pc.check_sync(parsed, dist, top_n=5, mandatory_generality=4)
     assert "この特定 bucket だけの命名規則" in report["stale"]
+
+
+def test_count_entries_counts_all_lifecycle_sections():
+    content = """# Pitfalls
+
+## Active Pitfalls
+
+### A
+- **Status**: Active
+
+### B
+- **Status**: Active
+
+## Candidate Pitfalls
+
+### C
+- **Status**: Candidate
+"""
+    assert parse.count_entries(content) == 3
+
+
+def test_count_entries_ignores_template_and_placeholders():
+    # 正準 seed はコメント内テンプレ + 「まだ記録がありません」placeholder のみ → 0 件
+    assert parse.count_entries(parse.render_seed()) == 0

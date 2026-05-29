@@ -345,6 +345,82 @@ def build_lsp_suggestion_section(project_dir: Path) -> Optional[List[str]]:
     return lines
 
 
+_PITFALL_MIN_ENTRIES = 3  # この件数以上「育っている」pitfalls.md だけを advisory 対象にする
+
+
+def _load_count_entries():
+    """pitfall-curate の正準パーサから count_entries をロードする（sys.path 非汚染）。
+
+    parse.py は skills/pitfall-curate/scripts/ にあり sys.path 外。かつ core/parse 等の
+    generic 名を持つため、sys.path に足さず importlib でファイル指定ロードする。
+    取得不能時は None（呼び出し側でセクション skip）。
+    """
+    try:
+        import importlib.util
+
+        from plugin_root import PLUGIN_ROOT
+
+        parse_path = PLUGIN_ROOT / "skills" / "pitfall-curate" / "scripts" / "parse.py"
+        if not parse_path.exists():
+            return None
+        spec = importlib.util.spec_from_file_location("_pitfall_curate_parse", parse_path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.count_entries
+    except (ImportError, OSError, AttributeError):
+        return None
+
+
+def build_unmanaged_pitfalls_section(project_dir: Path) -> Optional[List[str]]:
+    """自動強制（pitfall lint / commit-gate）の対象になり得るが未登録の pitfalls.md を可視化。
+
+    install ≠ enforcement（オプトイン設計）のため、育っている pitfalls.md があっても
+    enable しなければ hook は無反応。evolve は audit を消費するので、evolve のたびに
+    「登録すべき pitfalls.md」が advisory として出る。実際の登録は pitfall-curate に誘導。
+
+    ノイズ抑制: 実エントリ >= _PITFALL_MIN_ENTRIES の「育っている」ファイルだけ対象にする
+    （空・書きかけは出さない）。1 件も無ければ None（セクション非表示）。
+    """
+    try:
+        import pitfall_registry
+    except ImportError:
+        return None
+
+    candidates = pitfall_registry.unmanaged_candidates(project_dir)
+    if not candidates:
+        return None
+
+    count_entries = _load_count_entries()
+    if count_entries is None:
+        return None
+
+    live: List[tuple] = []
+    for rel in candidates:
+        p = project_dir / rel
+        try:
+            n = count_entries(p.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            # 読めない / 非 UTF-8 の 1 ファイルで全体を落とさない
+            continue
+        if n >= _PITFALL_MIN_ENTRIES:
+            live.append((rel, n))
+    if not live:
+        return None
+
+    lines = ["## Unmanaged Pitfalls (自動強制 未登録)", ""]
+    lines.append(
+        f"以下の pitfalls.md は育っています（エントリ {_PITFALL_MIN_ENTRIES}+ 件）が、"
+        "自動強制ルールに未登録です。`/rl-anything:pitfall-curate` で enable すると、"
+        "編集/commit 時に正準フォーマットが自動で当たります:"
+    )
+    for rel, n in live:
+        lines.append(f"  - {rel} ({n} entries)")
+    lines.append("")
+    return lines
+
+
 def build_glossary_drift_section(project_dir: Path) -> Optional[List[str]]:
     """CONTEXT.md（用語集）の drift を audit レポートに出す。
 

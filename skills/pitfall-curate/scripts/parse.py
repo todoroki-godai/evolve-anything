@@ -190,6 +190,17 @@ def parse_pitfalls(content: str) -> Dict[str, List[Dict[str, Any]]]:
     return sections
 
 
+def count_entries(content: str) -> int:
+    """実エントリ数（active + candidate + graduated 合計）を返す。
+
+    parse_pitfalls がコメント内テンプレート・空セクションの placeholder を除外するため、
+    返り値は「実際に記録されている pitfall の数」を表す。audit が「育っている pitfalls.md か」
+    を判定する liveness 指標として使う（正準パーサと数え方を一致させるための単一の真実）。
+    """
+    sections = parse_pitfalls(content)
+    return sum(len(v) for v in sections.values())
+
+
 def render_seed() -> str:
     """正準フォーマットの空ひな型を返す（docs-platform 式の seed）。"""
     return _CANONICAL_SEED

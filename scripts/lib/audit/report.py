@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from .classification import classify_artifact_origin
 from .memory import build_memory_health_section
 from .quality import build_quality_trends_section
-from .sections import _build_test_guard_section, build_corrections_insights_section, build_glossary_drift_section, build_lsp_suggestion_section, build_token_consumption_section
+from .sections import _build_test_guard_section, build_corrections_insights_section, build_glossary_drift_section, build_lsp_suggestion_section, build_token_consumption_section, build_unmanaged_pitfalls_section
 
 
 def generate_report(
@@ -114,6 +114,11 @@ def generate_report(
         glossary_section = build_glossary_drift_section(project_dir)
         if glossary_section:
             lines.extend(glossary_section)
+
+    if project_dir is not None:
+        unmanaged_pitfalls_section = build_unmanaged_pitfalls_section(project_dir)
+        if unmanaged_pitfalls_section:
+            lines.extend(unmanaged_pitfalls_section)
 
     if usage:
         lines.append("## Usage (last 30 days)")
