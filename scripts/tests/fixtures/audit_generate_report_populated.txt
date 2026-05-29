@@ -12,6 +12,8 @@
 - mock entry
 ## Pipeline Health
 - mock entry
+## Memory Trace
+- mock entry
 ## Cross Project
 - mock entry
 ## Summary: 2 artifacts found

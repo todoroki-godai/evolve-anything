@@ -8,6 +8,10 @@
 - **feat(fitness): slop 辞書検出器 `slop_detector.py` + `slop_patterns.json`** — 決定論 regex/ヒューリスティックで AI slop パターン（過度な肯定・不要な謝罪・無意味な要約見出し・過剰な免責・空虚な接続句）を日英 10 パターンで検出。`detect_slop(text)` は `SlopResult(slop_score, hits)` を返し、`slop_score` は 1.0=良い / 0.0=悪い の [0.0, 1.0] スコア。`constitutional.py` の overall スコアに 10% 加重ブレンド（slop hit は violations にも追記）。LLM 非依存・コストゼロ。closes #255
 - **feat(rl-loop): BES 前向き進化探索 `evolution_operators.py` 導入** — `crossover`（Markdown `## ` セクション単位で決定論結合、frontmatter は parent_a を保持）・`mutate`（セクション安定ソート + 連続重複行除去 + corrections 強調）・`select_parents`（fitness-proportional ルーレット選択、全 fitness 0/負で一様フォールバック、`rng` 注入で再現可能）・`evolve_generation`（親ペア選択 → crossover→mutate で子生成）の決定論進化演算子を新設。`run_loop.py` に `--evolve-search` フラグを追加し、Step 3 評価直後に subgoal_scorer (#253) の total を fitness 信号として子候補を生成・採点して既存 variants に合流（best 選択は子も含めて評価）。`subgoal_scorer._score_slop_free` のプレースホルダを `slop_detector.detect_slop` (#255) に接続。LLM 非依存・決定論。closes #256
 
+### Fixed
+- **fix(audit): MemTrace 帰属診断を audit 出力に配線** — `build_memory_trace_audit_section`（#254）は実装済みだが orchestrator から呼ばれておらず audit 出力に現れなかった（実装漏れ）。`run_audit` に `memory_trace` パラメータと `--memory-trace` CLI フラグを追加し `generate_report` まで配線。「関数が呼ばれる」ことを保証する E2E 回帰テスト（`test_run_audit_memory_trace_wiring`）を追加。
+- **fix(rl-loop): `--evolve-search` を SKILL.md に記載** — run_loop.py に実装済みだが SKILL.md のオプション表に未記載で `/rl-loop` 経由から到達できなかった（doc 漏れ）。オプション表に `--evolve-search` 行を追加。
+
 ## [1.75.0] - 2026-05-28
 
 ### Added

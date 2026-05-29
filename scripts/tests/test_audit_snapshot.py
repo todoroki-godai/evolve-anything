@@ -146,7 +146,34 @@ def test_generate_report_populated_snapshot(tmp_path, monkeypatch):
         constitutional_report=["## Constitutional", "- mock entry"],
         environment_report=["## Environment", "- mock entry"],
         pipeline_health_report=["## Pipeline Health", "- mock entry"],
+        memory_trace_report=["## Memory Trace", "- mock entry"],
         cross_project_report=["## Cross Project", "- mock entry"],
         growth_report=["## Growth", "- mock entry"],
     )
     _assert_snapshot(actual, "audit_generate_report_populated.txt")
+
+
+def test_run_audit_memory_trace_wiring(tmp_path, monkeypatch):
+    """run_audit(memory_trace=True) が MemTrace セクションを出力に流すことを保証する回帰テスト。
+
+    #258 で build_memory_trace_audit_section を実装したが orchestrator から
+    呼ばれておらず audit 出力に現れなかった（配線漏れ）。本テストは
+    「定義した関数が実際にユーザーの観測する出力に到達するか」を検証する。
+    """
+    proj = _isolate_env(tmp_path, monkeypatch)
+    import audit as _audit
+
+    sentinel = ["## MemTrace 帰属診断", "- SENTINEL_memory_trace_wired"]
+    # orchestrator は遅延 import (from .memory import build_memory_trace_audit_section)
+    # するため、解決先である submodule の属性を差し替える。_isolate_env が親 audit を
+    # reload した後でも submodule を確実に取得するため import_module を使う。
+    _mem_mod = importlib.import_module("audit.memory")
+    monkeypatch.setattr(
+        _mem_mod, "build_memory_trace_audit_section", lambda *a, **k: sentinel
+    )
+
+    out_on = _audit.run_audit(str(proj), skip_rescore=True, memory_trace=True)
+    assert "SENTINEL_memory_trace_wired" in out_on, "memory_trace=True で MemTrace セクションが出力に現れない（配線漏れ）"
+
+    out_off = _audit.run_audit(str(proj), skip_rescore=True, memory_trace=False)
+    assert "SENTINEL_memory_trace_wired" not in out_off, "memory_trace=False なのに MemTrace セクションが出ている"

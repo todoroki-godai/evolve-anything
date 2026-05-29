@@ -30,6 +30,7 @@ def generate_report(
     constitutional_report: Optional[List[str]] = None,
     environment_report: Optional[List[str]] = None,
     pipeline_health_report: Optional[List[str]] = None,
+    memory_trace_report: Optional[List[str]] = None,
     cross_project_report: Optional[List[str]] = None,
     growth_report: Optional[List[str]] = None,
     contribution_scores: Optional[Dict[str, Any]] = None,
@@ -57,6 +58,9 @@ def generate_report(
 
     if pipeline_health_report:
         lines.extend(pipeline_health_report)
+
+    if memory_trace_report:
+        lines.extend(memory_trace_report)
 
     if cross_project_report:
         lines.extend(cross_project_report)

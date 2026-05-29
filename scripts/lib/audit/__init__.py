@@ -167,6 +167,7 @@ def main() -> None:
     _parser.add_argument("--telemetry-score", action="store_true", help="Telemetry Score セクションを表示")
     _parser.add_argument("--constitutional-score", action="store_true", help="Constitutional Score セクションを表示")
     _parser.add_argument("--pipeline-health", action="store_true", help="Pipeline Health セクションを表示")
+    _parser.add_argument("--memory-trace", action="store_true", help="MemTrace 帰属診断セクションを表示")
     _parser.add_argument("--growth", action="store_true", help="NFD Growth Report セクションを表示")
     _args = _parser.parse_args()
     if _args.memory_context:
@@ -174,7 +175,7 @@ def main() -> None:
         ctx = build_memory_verification_context(proj)
         print(json.dumps(ctx, ensure_ascii=False, indent=2))
     else:
-        print(run_audit(_args.project, skip_rescore=_args.skip_rescore, coherence_score=_args.coherence_score, telemetry_score=_args.telemetry_score, constitutional_score=_args.constitutional_score, pipeline_health=_args.pipeline_health, growth=_args.growth))
+        print(run_audit(_args.project, skip_rescore=_args.skip_rescore, coherence_score=_args.coherence_score, telemetry_score=_args.telemetry_score, constitutional_score=_args.constitutional_score, pipeline_health=_args.pipeline_health, memory_trace=_args.memory_trace, growth=_args.growth))
 
 
 if __name__ == "__main__":

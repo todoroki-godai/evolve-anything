@@ -34,6 +34,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Agent
 | `--dry-run` | 構造テスト（実際の変更は行わない） | false |
 | `--output-dir DIR` | 出力ディレクトリ | `.rl-loop/` |
 | `--evolve` | 自己進化パターン組み込みを有効化（Step 5.5） | false |
+| `--evolve-search` | BES 前向き進化探索（#256）を有効化。subgoal fitness で重み付けした crossover/mutate の子候補を既存 variants に合流させる | false |
 
 TARGET がスキル名（例: `my-skill`）の場合、`.claude/skills/{name}/SKILL.md` に解決する。
 ファイルパスが直接指定された場合はそのまま使用する。

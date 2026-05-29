@@ -136,6 +136,7 @@ def run_audit(
     telemetry_score: bool = False,
     constitutional_score: bool = False,
     pipeline_health: bool = False,
+    memory_trace: bool = False,
     cross_project: bool = False,
     growth: bool = False,
 ) -> str:
@@ -246,6 +247,16 @@ def run_audit(
         except Exception as e:
             print(f"Pipeline Health スキップ: {e}", file=sys.stderr)
 
+    memory_trace_report_lines = None
+    if memory_trace:
+        try:
+            from .memory import build_memory_trace_audit_section
+            memory_trace_report_lines = build_memory_trace_audit_section(
+                project_path=str(proj),
+            )
+        except Exception as e:
+            print(f"Memory Trace スキップ: {e}", file=sys.stderr)
+
     cross_project_report_lines = None
     if cross_project:
         retro = _load_global_retro()
@@ -302,6 +313,7 @@ def run_audit(
         constitutional_report=constitutional_report_lines,
         environment_report=environment_report_lines,
         pipeline_health_report=pipeline_health_report_lines,
+        memory_trace_report=memory_trace_report_lines,
         cross_project_report=cross_project_report_lines,
         growth_report=growth_report_lines,
         contribution_scores=_contribution_scores if _contribution_scores else None,
