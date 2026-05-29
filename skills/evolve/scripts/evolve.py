@@ -426,7 +426,13 @@ def run_evolve(
     # Phase 3: Audit
     try:
         from audit import run_audit
-        audit_report = run_audit(project_dir)
+        # MemTrace(#264) と constitutional(slop_detector #255 を 10% ブレンド) は opt-in だが、
+        # evolve では既定で有効化し「evolve するだけで全機能が効く」状態にする。
+        # MemTrace は決定論(LLM ゼロ)、constitutional は haiku×最大4 だがレイヤ単位キャッシュで
+        # 通常 0〜1 コール（constitutional_cache.json）。
+        audit_report = run_audit(
+            project_dir, memory_trace=True, constitutional_score=True
+        )
         result["phases"]["audit"] = {"report": audit_report}
     except Exception as e:
         result["phases"]["audit"] = {"error": str(e)}

@@ -215,6 +215,8 @@ evolve.py の出力に含まれる `skill_evolve` フェーズ結果を確認す
 
 evolve.py の出力に含まれる audit の `collect_issues()` 結果を確認し、問題リストを Compile ステージに渡す。
 （collect_issues() 内で layer_diagnose も統合されている）
+
+evolve の audit は **`memory_trace=True` / `constitutional_score=True` 既定**で実行される。これにより MemTrace 帰属診断（決定論・LLM ゼロ）と slop_detector を 10% ブレンドした constitutional スコアが「evolve するだけ」で出力に乗る。constitutional は haiku×最大4 だがレイヤ単位コンテンツハッシュキャッシュ（`constitutional_cache.json`）で通常 0〜1 コール、constitutional 単独 ON のため environment fitness（score_count≥2 で発火）は呼ばれない。
 discover の `tool_usage_rule_candidate` / `tool_usage_hook_candidate`、skill_evolve の `skill_evolve_candidate`、および `verification_rule_candidate`（検証知見カタログ）も issue リストに統合される。
 
 ### Step 4: Reorganize フェーズ（split 検出のみ）
