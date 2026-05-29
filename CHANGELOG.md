@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.79.0] - 2026-05-29
+
 ### Fixed
 - **fix(test): test_evolve_audit_flags の順序依存 flaky を根本修正（stale module 参照を解消）** — `test_run_evolve_passes_full_effect_flags_to_audit` がフルスイートでのみ FAIL（単独では PASS）していた。原因は `skills/audit/scripts/audit.py` が import 時に `sys.modules["audit"]` を本物のパッケージ（`scripts/lib/audit`）で **新しいオブジェクトに差し替える** shim であること。先行テスト（test_audit_memory_bytes / test_audit_quality_trends が `skills/audit/scripts` を sys.path 先頭に入れて import → shim 実行、test_audit_snapshot が reload）が走ると、本テストが module-level `import audit` で束縛したオブジェクトと runtime の `sys.modules["audit"]` が別オブジェクトになる。`evolve.py` の `from audit import run_audit` は後者を読むため、前者を `mock.patch.object` しても効かず `m.called == False` になっていた。テスト本体で `sys.modules["audit"]` から live オブジェクトを解決して patch するよう修正し、import 順に依存しないようにした（プロダクトコードは正しいためテスト側のみ修正）。
 - **fix(fitness): `constitutional`/`chaos` の `_load_sibling` がパッケージ化された `coherence` を silent skip していた** — `coherence` は #143 で `coherence/__init__.py` パッケージへ分割されたが、`_load_sibling()` の追従が `environment.py` だけに入り、`constitutional.py` / `chaos.py` は `{name}.py` 固定パスのまま残っていた。`_fitness_dir / "coherence.py"` が存在しないため `FileNotFoundError` → `constitutional` fitness が `Constitutional Score スキップ: ... coherence.py` で **silent skip**（`evolve`/`audit` の constitutional スコアから coherence 依存部分が欠落し続けていた、install≠enforcement の silent skip 型）。`environment.py` の package 対応 `_load_sibling`（`pkg_init.exists()` 分岐 → `importlib.import_module`）を両ファイルへ移植。回帰テスト3件追加（coherence パッケージのロード + flat module の principles も引き続きロードできることを保証）。docs-platform の実 `evolve --dry-run` で skip エラー消失を確認。closes #277
