@@ -71,6 +71,7 @@ rl-anything consists of **four independent pillars**.
 | Second Opinion | Independent cold-read second opinion | `/rl-anything:second-opinion` |
 | Spec Management | Manage SPEC.md + ADRs, automatic L1/L2 promotion | `/rl-anything:spec-keeper` |
 | Breakthrough | Diagnose "almost-but-not-quite" stuck problems → strategy proposal → spawn Agent | `/rl-anything:breakthrough` |
+| Pitfall Curation | Grow any project's pitfalls.md: dedup / universality classification / top-N distillation / sync gate | `/rl-anything:pitfall-curate` |
 | Growth Visualization (NFD) | Lv.1–10 level system + 4-phase auto-detect + 5 traits + growth narrative | `/rl-anything:audit --growth` |
 
 ## Task-oriented Guide
@@ -92,12 +93,13 @@ rl-anything consists of **four independent pillars**.
 | Hand off a session | `handover` |
 | Environment growth report | `audit --growth` |
 | Post-merge / post-deploy cleanup | `cleanup` |
+| Curate a project's pitfalls.md (dedup / classify / distill / sync) | `pitfall-curate` |
 | Cross-project fleet status | `bin/rl-fleet status` |
 | Cross-project memory recall (keyword) | `bin/rl-fleet recall "<query>"` |
 
 > All commands are invoked with the `/rl-anything:` prefix (e.g., `/rl-anything:evolve`).
 
-## Skill Catalog (19 user-invocable skills)
+## Skill Catalog (20 user-invocable skills)
 
 > **Policy**: Only user-invocable skills (callable via `/rl-anything:<skill>`) are listed here. Internal skills called automatically by evolve are noted below the table.
 
@@ -120,6 +122,7 @@ rl-anything consists of **four independent pillars**.
 | `spec-keeper` | Spec Management | SPEC.md + ADR management, Progressive Disclosure L1/L2 auto-promotion |
 | `handover` | Session Management | Write working state into a structured note for handoff to another session. `--issue` outputs to a GitHub Issue |
 | `cleanup` | Post-merge cleanup | After PR merge / deploy: handle branches / remote refs / worktrees / tmp dirs / close-candidate Issues / leftover PR Test plan items via per-item approval. Default tmp-dir prefix is `rl-anything-` only (see [ADR-021 (JA)](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)) |
+| `pitfall-curate` | Pitfall Curation | Grow any project's pitfalls.md (project-agnostic): jaccard dedup + supersede / universality classification (`Transferability` × `Generality` 1–5) / three-tier disclosure top-N distillation / record↔classify↔distribute sync gate. Classification & reframing are the agent's judgment; deterministic work is `pitfall_curate.py`. Distinct from `pitfall_manager` (self-evolved-skill-only) |
 | `release-notes-review` | Utility | CC release-notes analysis + global environment health check (`--env-only` supported) |
 | `feedback` | Utility | Send feedback via GitHub Issue |
 
