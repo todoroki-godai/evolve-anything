@@ -448,6 +448,58 @@ evolve.py の出力に含まれる `rationalization_table` フェーズ結果を
   - `outcome_error_rate` が `None` の場合は「N/A」と表示
   - `enriched_pitfalls` があれば「既存 pitfall にテレメトリデータをエンリッチ済み: {N}件」と表示
 
+### Step 7.7: 用語集ブートストラップ（CONTEXT.md が無い場合）
+
+audit の Glossary Drift section が **None**（= CONTEXT.md が存在しない）で、かつ SoT に
+未登録 jargon 候補が一定数ある PJ では、用語集（Ubiquitous Language）を最初に作る trigger が
+どこにも無いという穴がある。creation が手動依存だと detection（drift 検出）が永遠に発火しない。
+evolve はユーザーが明示的に回す per-project ループなので、ここで作成を提案する。
+
+**判定（決定論）**:
+
+```python
+import sys, os
+sys.path.insert(0, os.path.join(os.environ.get("CLAUDE_PLUGIN_ROOT", "."), "scripts", "lib"))
+import glossary_drift as gd
+context_path = os.path.join(PROJECT_DIR, "CONTEXT.md")
+candidates = []
+if not os.path.exists(context_path):
+    sources = [os.path.join(PROJECT_DIR, n) for n in ("SPEC.md", "CLAUDE.md") if os.path.exists(os.path.join(PROJECT_DIR, n))]
+    candidates = gd.find_undefined_terms([], sources)
+seed_eligible = (not os.path.exists(context_path)) and len(candidates) >= gd.SEED_MIN_CANDIDATES
+```
+
+`seed_eligible` が False（CONTEXT.md が既にある or 候補が `SEED_MIN_CANDIDATES` 未満）なら
+このステップは黙ってスキップする。jargon の薄い PJ に空の用語集を作らない。
+
+**True の場合のみ AskUserQuestion**（提案詳細プロトコルに従う）。LLM で意味を埋めるため、
+**件数とトークン見積もりを事前提示する**（プロジェクトの llm-batch-guard 準拠・MUST）:
+
+```
+CONTEXT.md が無く、未登録 jargon 候補が {N} 件あります（{候補リスト}）。
+LLM で意味を埋めた用語集ドラフトを生成しますか？
+（SPEC.md + CLAUDE.md を読み {N} 語の意味を生成。入力 ~{Xk} tokens 見積もり）
+
+A) 生成する — 各行を ⚠UNVERIFIED でマークし、後で確認
+B) Skip — 今は作らない
+```
+
+**A を選んだ場合のみ**:
+1. SPEC.md / CLAUDE.md を読み、各候補語の意味を **1 行で** 生成する。決め打ちで埋めず、
+   SoT から意味が確認できる語のみ対象にする（確信が持てない語は除外し B 扱い）。捏造しない
+2. `rows = [(term, meaning), ...]` を作り、決定論 writer で書き出す（**LLM は整形に関与しない**）:
+   ```python
+   gd.write_context_seed(context_path, rows)  # 既存があれば FileExistsError（非破壊）
+   ```
+3. 全行の初出列に `⚠UNVERIFIED` が入る。これは「人間が意味を確認し初出を `#NNN`/`ADR-NNN` に
+   書き換えてマーカーを外す」までの未検証マーク。**drift gate には載らず**、以後の evolve/audit が
+   `unverified_terms` advisory で確認を促し続ける（誤り毒・検出器自滅の回避）
+4. ユーザーに「CONTEXT.md を {N} 語の seed で生成しました。意味は LLM 推定なので確認してください」と報告
+
+> **なぜ silent でなく確認 + UNVERIFIED か**: 用語集は jargon の権威ある decode。LLM が黙って
+> 埋めると誤った意味が静かに混入し「腐った用語集は無いより悪い」状態になる。また SoT から全自動で
+> 埋めると drift 検出器の検出対象が消え自滅する。確認 1 回と未検証マーカーでこの両方を防ぐ。
+
 ### Step 8: Fitness Evolution — 評価関数の改善チェック
 
 evolve.py の出力に含まれる `fitness_evolution` フェーズを確認する。

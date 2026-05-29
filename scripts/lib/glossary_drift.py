@@ -16,9 +16,14 @@ CLI:
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass, field
+
+# evolve が CONTEXT.md を自動 seed する最小 jargon 候補数。これ未満なら seed しない
+# （jargon の薄い PJ に空の用語集を作らない）。
+SEED_MIN_CANDIDATES = 3
 
 # jargon 候補: ALLCAPS 頭字語(2-6文字) または 内部に大文字を持つ CamelCase。
 # 例: BES, RRF, BM25, MemTrace, DuckDB。先頭小文字の通常語は拾わない。
@@ -46,11 +51,17 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
 _SEP_RE = re.compile(r"^[:\-\s|]+$")
 
 
+# auto 生成エントリの未検証マーカー。初出列に置く（真の初出も人間確認待ちのため）。
+# 人が初出を `#NNN`/`ADR-NNN` に書き換えるとマーカーが消え検証完了扱いになる。
+UNVERIFIED_MARKER = "⚠UNVERIFIED"
+
+
 @dataclass
 class GlossaryEntry:
     term: str
     meaning: str
     first_seen: str
+    unverified: bool = False
 
 
 @dataclass
@@ -60,12 +71,13 @@ class GlossaryReport:
     duplicate_terms: list[str] = field(default_factory=list)
     missing_first_seen: list[str] = field(default_factory=list)
     undefined_terms: list[str] = field(default_factory=list)
+    unverified_terms: list[str] = field(default_factory=list)
 
     def has_drift(self) -> bool:
         """構造的 drift（用語集自体の整合性破れ）。CLI の gate 対象。
 
-        undefined_terms はヒューリスティックで誤検出を含むため gate しない
-        （has_undefined で別に取る）。オオカミ少年化を避ける。
+        undefined_terms / unverified_terms はヒューリスティック or 人間確認待ちで
+        gate しない（has_undefined / has_unverified で別に取る）。オオカミ少年化を避ける。
         """
         return bool(
             self.malformed_lines
@@ -76,6 +88,10 @@ class GlossaryReport:
     def has_undefined(self) -> bool:
         """SoT に出現する未登録 jargon 候補がある（advisory・非 gate）。"""
         return bool(self.undefined_terms)
+
+    def has_unverified(self) -> bool:
+        """auto 生成され人間検証待ちのエントリがある（advisory・非 gate）。"""
+        return bool(self.unverified_terms)
 
 
 def _split_row(line: str) -> list[str]:
@@ -110,7 +126,15 @@ def parse_glossary(path: str) -> tuple[list[GlossaryEntry], list[tuple[int, str]
         if len(cells) != 3 or not cells[0]:
             malformed.append((lineno, line))
             continue
-        entries.append(GlossaryEntry(term=cells[0], meaning=cells[1], first_seen=cells[2]))
+        unverified = "UNVERIFIED" in cells[2].upper()
+        entries.append(
+            GlossaryEntry(
+                term=cells[0],
+                meaning=cells[1],
+                first_seen=cells[2],
+                unverified=unverified,
+            )
+        )
     return entries, malformed
 
 
@@ -148,12 +172,15 @@ def check_glossary(
     seen: set[str] = set()
     dups: list[str] = []
     missing: list[str] = []
+    unverified: list[str] = []
     for e in entries:
         if e.term in seen and e.term not in dups:
             dups.append(e.term)
         seen.add(e.term)
         if not e.first_seen.strip():
             missing.append(e.term)
+        if e.unverified:
+            unverified.append(e.term)
 
     undefined = find_undefined_terms(entries, source_paths, stoplist=stoplist)
     return GlossaryReport(
@@ -162,7 +189,52 @@ def check_glossary(
         duplicate_terms=dups,
         missing_first_seen=missing,
         undefined_terms=undefined,
+        unverified_terms=unverified,
     )
+
+
+def write_context_seed(
+    context_path: str,
+    rows: list[tuple[str, str]],
+    *,
+    project_name: str | None = None,
+    overwrite: bool = False,
+) -> str:
+    """auto 生成された用語集 seed を CONTEXT.md に書き出す（決定論・非破壊）。
+
+    rows: (term, meaning) のリスト。意味は LLM が埋めた推定値を渡す。
+    初出列には UNVERIFIED_MARKER を置き、人間検証待ちであることを示す
+    （以後の evolve/audit が `unverified_terms` advisory で確認を促す）。
+
+    既存ファイルがある場合 overwrite=False なら FileExistsError を投げる
+    （silent wipe / 人手編集の上書き防止、ADR-027 の無破壊方針）。
+    整形のみ担当し LLM は呼ばない。
+    """
+    if not overwrite and os.path.exists(context_path):
+        raise FileExistsError(
+            f"{context_path} は既に存在します（非破壊のため上書きしません）"
+        )
+    name = project_name or os.path.basename(os.path.dirname(os.path.abspath(context_path)))
+    lines = [
+        f"# {name} — Ubiquitous Language（用語集）",
+        "",
+        "このプロジェクト固有の jargon を 1 語で decode するための共有言語（Eric Evans, DDD）。",
+        "",
+        f"> このファイルは evolve により **auto 生成された seed** です。各行の意味は LLM 推定で、",
+        f"> 初出列に `{UNVERIFIED_MARKER}` が付いています。**意味を確認し、初出を `#NNN`/`ADR-NNN` に",
+        f"> 書き換えてマーカーを外す**と検証完了です。腐った用語集は無いより悪いので、誤りは消してください。",
+        "",
+        "| 用語 | 意味 | 初出 |",
+        "|------|------|------|",
+    ]
+    for term, meaning in rows:
+        # naive パーサは `\|` をアンエスケープしないため、全角 ｜ に置換してテーブル破壊を防ぐ
+        safe_meaning = (meaning or "").replace("|", "｜").strip()
+        lines.append(f"| {term} | {safe_meaning} | {UNVERIFIED_MARKER} |")
+    lines.append("")
+    with open(context_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return context_path
 
 
 def _format_report(report: GlossaryReport) -> str:
@@ -177,6 +249,12 @@ def _format_report(report: GlossaryReport) -> str:
         lines.append(f"  ⚠ 初出欠落: {', '.join(report.missing_first_seen)}")
     if not report.has_drift():
         lines.append("  ✓ 構造 drift なし")
+    if report.unverified_terms:
+        lines.append(
+            f"  ℹ advisory: auto 生成され未検証のエントリ ({len(report.unverified_terms)}) "
+            f"— 意味を確認し初出を埋めて {UNVERIFIED_MARKER} を外す: "
+            f"{', '.join(report.unverified_terms)}"
+        )
     if report.undefined_terms:
         lines.append(
             f"  ℹ advisory: 用語集未登録の jargon 候補 ({len(report.undefined_terms)}) "

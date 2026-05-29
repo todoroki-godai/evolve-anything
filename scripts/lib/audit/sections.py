@@ -481,6 +481,13 @@ def build_glossary_drift_section(project_dir: Path) -> Optional[List[str]]:
             lines.append(f"  - 初出欠落: {', '.join(report.missing_first_seen)}")
     else:
         lines.append(f"✓ 構造 drift なし（用語集 {len(report.entries)} 件）")
+    if report.has_unverified():
+        lines.append("")
+        lines.append(
+            f"ℹ auto 生成・未検証のエントリ ({len(report.unverified_terms)}) "
+            "— 意味を確認し初出を埋めて ⚠UNVERIFIED を外す:"
+        )
+        lines.append(f"  {', '.join(report.unverified_terms)}")
     if report.has_undefined():
         lines.append("")
         lines.append(

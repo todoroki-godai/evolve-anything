@@ -142,3 +142,74 @@ def test_audit_section_flags_structural_drift(tmp_path):
     section = build_glossary_drift_section(tmp_path)
     assert section is not None
     assert any("⚠" in ln for ln in section)
+
+
+_SEEDED = """# proj — 用語集
+
+| 用語 | 意味 | 初出 |
+|------|------|------|
+| Foo | LLM 推定の意味 | ⚠UNVERIFIED |
+| Bar | 確定済みの意味 | #100 |
+"""
+
+
+def test_unverified_parsed_and_not_gated(tmp_path):
+    """UNVERIFIED 行は unverified_terms に入るが構造 drift には載らない（gate しない）。"""
+    ctx = _write(tmp_path, "CONTEXT.md", _SEEDED)
+    report = gd.check_glossary(str(ctx), [])
+    assert report.unverified_terms == ["Foo"]
+    assert report.has_unverified()
+    assert not report.has_drift()  # advisory であって gate しない
+    assert report.missing_first_seen == []  # マーカーは非空なので初出欠落にしない
+
+
+def test_unverified_counts_as_documented_for_undefined(tmp_path):
+    """UNVERIFIED でも用語集にある語は undefined（未登録）に二重計上しない。"""
+    ctx = _write(tmp_path, "CONTEXT.md", _SEEDED)
+    src = _write(tmp_path, "SPEC.md", "Foo と Bar を使う。")
+    report = gd.check_glossary(str(ctx), [str(src)])
+    assert "Foo" not in report.undefined_terms
+    assert "Bar" not in report.undefined_terms
+
+
+def test_write_context_seed_non_destructive(tmp_path):
+    """既存 CONTEXT.md は overwrite=False で上書きしない（silent wipe 防止）。"""
+    import pytest
+
+    ctx = str(tmp_path / "CONTEXT.md")
+    gd.write_context_seed(ctx, [("Foo", "意味A")], project_name="proj")
+    with pytest.raises(FileExistsError):
+        gd.write_context_seed(ctx, [("Foo", "別意味")], project_name="proj")
+
+
+def test_write_context_seed_roundtrip(tmp_path):
+    """seed は UNVERIFIED マーカー付きで書かれ、再パースで unverified として読める。"""
+    ctx = str(tmp_path / "CONTEXT.md")
+    gd.write_context_seed(
+        ctx, [("Foo", "意味A"), ("Bar", "意味B")], project_name="proj"
+    )
+    report = gd.check_glossary(ctx, [])
+    assert {e.term for e in report.entries} == {"Foo", "Bar"}
+    assert sorted(report.unverified_terms) == ["Bar", "Foo"]
+    assert not report.has_drift()
+
+
+def test_write_context_seed_escapes_pipe(tmp_path):
+    """意味に | が含まれてもテーブルが壊れない（malformed にならない）。"""
+    ctx = str(tmp_path / "CONTEXT.md")
+    gd.write_context_seed(ctx, [("Foo", "a | b の両方")], project_name="proj")
+    report = gd.check_glossary(ctx, [])
+    assert report.malformed_lines == []
+    assert report.entries[0].term == "Foo"
+
+
+def test_audit_section_surfaces_unverified(tmp_path):
+    """seed 直後の CONTEXT.md は audit section で未検証 advisory を出す。"""
+    from lib.audit.sections import build_glossary_drift_section
+
+    _write(tmp_path, "CONTEXT.md", _SEEDED)
+    section = build_glossary_drift_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "未検証" in body
+    assert "Foo" in body
