@@ -19,6 +19,7 @@ check_python_source_budgets(project_dir: pathlib.Path) -> List[Dict[str, Any]]
 classify_artifact_origin(path: pathlib.Path) -> str
 classify_usage_skill(skill_name: str) -> str | None
 collect_issues(project_dir: pathlib.Path) -> List[Dict[str, Any]]
+collect_observability(project_dir: pathlib.Path) -> Dict[str, List[str]]
 detect_duplicates_simple(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
 detect_untagged_reference_candidates(artifacts: Dict[str, List[pathlib.Path]], usage: Dict[str, int], *, project_dir: pathlib.Path | None = None) -> List[Dict[str, Any]]
 find_artifacts(project_dir: pathlib.Path) -> Dict[str, List[pathlib.Path]]

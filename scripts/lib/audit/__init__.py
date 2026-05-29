@@ -138,6 +138,9 @@ from .sections import (  # noqa: F401
 # generate_report は audit/report.py に集約済み（後方互換のため再エクスポート）
 from .report import generate_report  # noqa: F401
 
+# Observability contract — collect_observability を audit パッケージから直接 import 可能に
+from .observability import collect_observability  # noqa: F401
+
 # gstack の cross-project loader は orchestrator から間接利用 (テスト後方互換)
 from .gstack import _load_global_retro  # noqa: F401
 

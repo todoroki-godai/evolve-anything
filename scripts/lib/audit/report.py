@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from .classification import classify_artifact_origin
 from .memory import build_memory_health_section
 from .quality import build_quality_trends_section
-from .sections import _build_test_guard_section, build_corrections_insights_section, build_glossary_drift_section, build_lsp_suggestion_section, build_token_consumption_section, build_unmanaged_pitfalls_section
+from .sections import _build_test_guard_section, build_corrections_insights_section, build_lsp_suggestion_section, build_token_consumption_section
 
 
 def generate_report(
@@ -110,15 +110,17 @@ def generate_report(
         if lsp_section:
             lines.extend(lsp_section)
 
+    # Observability セクション（glossary_drift / unmanaged_pitfalls …）は
+    # observability.py の _OBSERVABILITY_BUILDERS を単一ソースとして消費する。
+    # collect_observability（evolve が surface する構造化経路）と同じ順序・同じ内容を保証し、
+    # 項目追加時に markdown 側だけ漏れる drift を防ぐ。
     if project_dir is not None:
-        glossary_section = build_glossary_drift_section(project_dir)
-        if glossary_section:
-            lines.extend(glossary_section)
+        from .observability import _OBSERVABILITY_BUILDERS
 
-    if project_dir is not None:
-        unmanaged_pitfalls_section = build_unmanaged_pitfalls_section(project_dir)
-        if unmanaged_pitfalls_section:
-            lines.extend(unmanaged_pitfalls_section)
+        for _key, _builder in _OBSERVABILITY_BUILDERS:
+            section = _builder(project_dir)
+            if section:
+                lines.extend(section)
 
     if usage:
         lines.append("## Usage (last 30 days)")

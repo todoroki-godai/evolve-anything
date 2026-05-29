@@ -437,6 +437,17 @@ def run_evolve(
     except Exception as e:
         result["phases"]["audit"] = {"error": str(e)}
 
+    # Observability contract（#272 後続）: audit の 217KB markdown に埋もれて surface されない
+    # observability 行（unmanaged_pitfalls / glossary_drift …）を構造化フィールドに昇格させ、
+    # assistant が必ずサマリに出せるようにする。silence != evaluated 原則を契約として明文化。
+    try:
+        from audit import collect_observability
+
+        _obs_proj = Path(project_dir) if project_dir else Path.cwd()
+        result["observability"] = collect_observability(_obs_proj)
+    except Exception as e:
+        result["observability"] = {"error": str(e)}
+
     # Phase 3.3: Skill Quality Trace Analysis（テレメトリ依存 — data_sufficiency 後）
     try:
         sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))

@@ -1,0 +1,117 @@
+"""Observability contract のテスト（決定論・LLM 非依存）。
+
+silence != evaluated 原則を audit↔evolve の契約として明文化する collect_observability の検証。
+audit が生成しても evolve が surface しなければ観測性は届かない（#272 で audit 単体は塞いだが
+evolve 経由では markdown blob に埋もれて出ない問題を構造化フィールドで解決）。
+
+collect_observability は「該当 PJ に存在する observability セクション」だけを key→行リストで返す。
+builder が None を返す項目（その PJ に非該当: CONTEXT.md/pitfalls.md が無い）は除外する。
+report.py の markdown 経路と同じ _OBSERVABILITY_BUILDERS を単一ソースとして消費するため、
+将来 observability 項目を追加しても両経路に自動伝播する（モグラ叩き防止）。
+"""
+import sys
+from pathlib import Path
+
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
+_LIB = _PLUGIN_ROOT / "scripts" / "lib"
+_SCRIPTS = _PLUGIN_ROOT / "scripts"
+for _p in (_LIB, _SCRIPTS):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import pitfall_registry as reg  # noqa: E402
+from audit import generate_report  # noqa: E402
+from audit.observability import _OBSERVABILITY_BUILDERS, collect_observability  # noqa: E402
+
+_GROWN = """# Pitfalls
+
+## Active Pitfalls
+
+### A
+- **Status**: Active
+
+### B
+- **Status**: Active
+
+### C
+- **Status**: Active
+"""
+
+_CONTEXT = """# Glossary
+
+| Term | Definition | First seen |
+|------|-----------|-----------|
+| Foo | A thing | 2026-01-01 |
+"""
+
+
+def _write(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+def test_empty_when_no_observability_artifacts(tmp_path):
+    """CONTEXT.md も pitfalls.md も無い PJ では空 dict（対象セクション無し）。"""
+    result = collect_observability(tmp_path)
+    assert result == {}
+
+
+def test_unmanaged_pitfalls_key_when_pitfalls_exist(tmp_path):
+    """pitfalls.md があれば unmanaged_pitfalls key が必ず立つ（clean でも ✓ 行）。"""
+    _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
+    result = collect_observability(tmp_path)
+    assert "unmanaged_pitfalls" in result
+    assert isinstance(result["unmanaged_pitfalls"], list)
+    combined = "\n".join(result["unmanaged_pitfalls"])
+    assert "Unmanaged Pitfalls" in combined
+
+
+def test_glossary_drift_key_when_context_exists(tmp_path):
+    """CONTEXT.md があれば glossary_drift key が必ず立つ。"""
+    _write(tmp_path / "CONTEXT.md", _CONTEXT)
+    result = collect_observability(tmp_path)
+    assert "glossary_drift" in result
+    combined = "\n".join(result["glossary_drift"])
+    assert "Glossary Drift" in combined
+
+
+def test_both_keys_when_both_artifacts_present(tmp_path):
+    """両アーティファクトがあれば両 key が surface される。"""
+    _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
+    _write(tmp_path / "CONTEXT.md", _CONTEXT)
+    result = collect_observability(tmp_path)
+    assert set(result.keys()) >= {"unmanaged_pitfalls", "glossary_drift"}
+
+
+def test_registered_pitfalls_still_emit_evaluated_line(tmp_path):
+    """登録済み（managed）でも沈黙せず ✓ 行を surface する（silence != evaluated）。"""
+    pf = tmp_path / "docs" / "pitfalls.md"
+    _write(pf, _GROWN)
+    reg.add_managed(tmp_path, pf)
+    result = collect_observability(tmp_path)
+    assert "unmanaged_pitfalls" in result
+    combined = "\n".join(result["unmanaged_pitfalls"])
+    assert "✓" in combined
+
+
+def test_report_markdown_uses_same_single_source(tmp_path):
+    """report.py(markdown) と collect_observability が同じ builder を消費する単一ソース契約。
+
+    collect_observability が返す全セクションは generate_report の markdown にも含まれる
+    （将来 _OBSERVABILITY_BUILDERS に項目を足したとき片方だけに出る drift を防ぐ回帰ガード）。
+    """
+    _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
+    _write(tmp_path / "CONTEXT.md", _CONTEXT)
+    obs = collect_observability(tmp_path)
+    md = generate_report({}, [], {}, [], [], None, project_dir=tmp_path)
+    for _key, lines in obs.items():
+        header = lines[0]  # "## Xxx" セクション見出し
+        assert header in md, f"{header!r} が markdown に出ていない（単一ソース drift）"
+
+
+def test_builders_list_is_nonempty_and_callable(tmp_path):
+    """_OBSERVABILITY_BUILDERS は (key, callable) のリスト。"""
+    assert len(_OBSERVABILITY_BUILDERS) >= 2
+    for key, builder in _OBSERVABILITY_BUILDERS:
+        assert isinstance(key, str)
+        assert callable(builder)

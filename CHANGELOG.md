@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(evolve): observability contract — 「必ず surface すべき observability 行」を audit↔evolve の構造化フィールドに昇格** — #272（Unmanaged Pitfalls の ✓ 行）は audit の **markdown 経路**だけを直したが、evolve は `run_audit` の 217KB markdown を `phases.audit.report` に丸ごと格納するだけで、assistant は名前付きフェーズ（fitness/skill_evolve/pitfall_hygiene…）を選択読みする運用のため、markdown 中盤に埋もれた observability 行が surface されなかった（docs-platform の evolve 実行 ev-v6 が v1.78.0 でも ✓ 行をログに出さず表面化。silence != evaluated 原則が観測性 fix 自身の配線で再発）。`scripts/lib/audit/observability.py` を新設し `_OBSERVABILITY_BUILDERS`（glossary_drift / unmanaged_pitfalls の **単一ソース**）+ `collect_observability(project_dir)` を定義。`report.py`(markdown) を個別呼び出し2つから `_OBSERVABILITY_BUILDERS` の消費に統一し、markdown 経路と構造化経路が同一ソースになるよう一本化（将来 observability 項目を足してもモグラ叩きにならない）。`run_evolve` は audit phase 直後に `result["observability"]` へ構造化格納し、SKILL.md に **Step 3.8: Observability（必ず surface する — MUST）** を新設。contract テスト7件（markdown/構造化の見出し一致を検査する単一ソース drift ガードを含む）+ API surface snapshot 更新。実 PJ docs-platform で `run_evolve(dry_run=True, skip_llm_evolve=True)` E2E 確認（`observability.unmanaged_pitfalls` に ✓ 行が surface、ev-v6 では消えていた行が構造化フィールドとして取り出せることを実証）。#272 後続。
+
 ## [1.78.0] - 2026-05-29
 
 ### Added
