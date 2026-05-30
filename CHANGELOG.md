@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(evolve,spec-keeper): SKILL.md がプラグイン同梱 `scripts/lib` を相対参照し対象PJで `No such file` になっていた問題を修正** — evolve の Step 0.5（`world_context.py` ロード）と Report ナレーション（`growth_level` / `save_world_context` の `sys.path.insert(0,'scripts/lib')`）、spec-keeper の用語集 drift チェック（`glossary_drift.py`）が、同梱スクリプトを `python3 scripts/lib/xxx.py` のように**相対パス**で参照していた。スキルは**対象 PJ の cwd** で実行されるため `対象PJ/scripts/lib/...` を指し、rl-anything 以外の全 PJ で `[Errno 2] No such file or directory` になっていた（docs-platform の ev-v7 evolve で world_context ロードが毎回失敗し、agent が `find` で実パスを探して絶対パスで再実行する迂回を強いられていた実害。spec-keeper の glossary_drift も同型で対象PJでは必ず失敗）。全箇所を `${CLAUDE_PLUGIN_ROOT}/scripts/lib/...`（audit / cleanup / agent-brushup 等と同じ正準形）に統一。docs-platform の cwd を再現した before/after 実コマンドで `No such file` → 正常ロードを確認。将来の漏れを封じる回帰テスト `scripts/tests/test_skill_md_plugin_paths.py`（全 SKILL.md が同梱 scripts/lib を相対実行/import していないことを検査。対象PJ生成物の `scripts/rl/fitness/{name}.py` は対象外）を追加。
+
 ### Added
 - **feat(fleet): `rl-fleet plugins` — インストール済み CC プラグインの最新性を決定論診断** — version フィールドを持たないプラグイン（例: skill-creator / code-simplifier）は `claude plugin update` がバージョン比較できず「最新」と誤判定して cache を同期しないため、marketplace source が更新されても古い cache が使われ続ける silent stale が発生していた（実際に skill-creator の SKILL.md / improve_description.py / run_loop.py が古いまま残っていた）。`installed_plugins.json`（インストール版 + installPath）・各 `marketplace.json`（最新版 + source）・cache↔source のコンテンツ差分の正本3点を突き合わせ、`ok` / `update`（新 semver あり）/ `drift`（同版だが cache 乖離＝要再インストール）/ `unknown`（外部 git source + version 無しで検証不能）を判定する。version 比較もコンテンツ比較もできなかった場合は `ok` と誤認せず `unknown` を返す（silence≠verified、coderabbit の外部 git source 実例で検証）。決定論・LLM 非依存（`scripts/lib/fleet/plugin_freshness.py`）。回帰テスト10件 + 実環境ドッグフード。
 
