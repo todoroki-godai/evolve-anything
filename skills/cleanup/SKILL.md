@@ -136,6 +136,7 @@ C) Abort
 ```
 
 `locked` worktree はそもそもスキャナが返さないのでここには出ない。
+CC v2.1.157 以降、Claude 管理 worktree（`.claude/worktrees/*`）はエージェント終了時に unlock されるため、終わった管理 worktree も削除候補として surface される（実行中のセッションは locked のまま保護される）。CC 自身も 30 日 sweep で `.claude/worktrees/` の孤児を掃除するが、それより早く片付けたい場合に本カテゴリが使える。
 
 #### カテゴリ 4: 一時ディレクトリ
 

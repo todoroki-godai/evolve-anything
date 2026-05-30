@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.80.1] - 2026-05-30
+
+### Changed
+- **docs(cleanup): CC v2.1.157 の Claude 管理 worktree unlock 化を反映** — リリースノートレビュー（CC v2.1.156 → v2.1.158）の結果、v2.1.157 で「Claude 管理 worktree がエージェント終了時に unlock される」「`.claude/worktrees/` 孤児が 30 日 sweep 後も残るバグ修正」が入ったため、cleanup スキルの一時 worktree セクションを更新。`scan_removable_worktrees`（`locked` 除外）が終了済み管理 worktree を削除候補として surface する挙動と、実行中セッションは locked で保護される旨を明記。`tool_decision` の `tool_parameters` テレメトリ追加は rl-anything の observe hook が OTEL 非依存のため適用なし（観測のみ）。
+
 ## [1.80.0] - 2026-05-30
 
 ### Fixed
