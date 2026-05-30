@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.80.0] - 2026-05-30
+
 ### Fixed
 - **fix(evolve,spec-keeper): SKILL.md がプラグイン同梱 `scripts/lib` を相対参照し対象PJで `No such file` になっていた問題を修正** — evolve の Step 0.5（`world_context.py` ロード）と Report ナレーション（`growth_level` / `save_world_context` の `sys.path.insert(0,'scripts/lib')`）、spec-keeper の用語集 drift チェック（`glossary_drift.py`）が、同梱スクリプトを `python3 scripts/lib/xxx.py` のように**相対パス**で参照していた。スキルは**対象 PJ の cwd** で実行されるため `対象PJ/scripts/lib/...` を指し、rl-anything 以外の全 PJ で `[Errno 2] No such file or directory` になっていた（docs-platform の ev-v7 evolve で world_context ロードが毎回失敗し、agent が `find` で実パスを探して絶対パスで再実行する迂回を強いられていた実害。spec-keeper の glossary_drift も同型で対象PJでは必ず失敗）。全箇所を `${CLAUDE_PLUGIN_ROOT}/scripts/lib/...`（audit / cleanup / agent-brushup 等と同じ正準形）に統一。docs-platform の cwd を再現した before/after 実コマンドで `No such file` → 正常ロードを確認。将来の漏れを封じる回帰テスト `scripts/tests/test_skill_md_plugin_paths.py`（全 SKILL.md が同梱 scripts/lib を相対実行/import していないことを検査。対象PJ生成物の `scripts/rl/fitness/{name}.py` は対象外）を追加。
 
