@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(fleet): `rl-fleet plugins` — インストール済み CC プラグインの最新性を決定論診断** — version フィールドを持たないプラグイン（例: skill-creator / code-simplifier）は `claude plugin update` がバージョン比較できず「最新」と誤判定して cache を同期しないため、marketplace source が更新されても古い cache が使われ続ける silent stale が発生していた（実際に skill-creator の SKILL.md / improve_description.py / run_loop.py が古いまま残っていた）。`installed_plugins.json`（インストール版 + installPath）・各 `marketplace.json`（最新版 + source）・cache↔source のコンテンツ差分の正本3点を突き合わせ、`ok` / `update`（新 semver あり）/ `drift`（同版だが cache 乖離＝要再インストール）/ `unknown`（外部 git source + version 無しで検証不能）を判定する。version 比較もコンテンツ比較もできなかった場合は `ok` と誤認せず `unknown` を返す（silence≠verified、coderabbit の外部 git source 実例で検証）。決定論・LLM 非依存（`scripts/lib/fleet/plugin_freshness.py`）。回帰テスト10件 + 実環境ドッグフード。
+
 ## [1.79.0] - 2026-05-29
 
 ### Fixed
