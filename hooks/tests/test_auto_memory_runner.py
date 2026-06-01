@@ -118,19 +118,22 @@ def test_concurrent_writes_both_entries_survive(tmp_path, tmp_data_dir, tmp_memo
 
     def worker():
         try:
-            with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-                 mock.patch("subprocess.run", return_value=mock_result), \
-                 mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
-                auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
+            auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
         except Exception as e:
             errors.append(e)
 
-    t1 = threading.Thread(target=worker)
-    t2 = threading.Thread(target=worker)
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
+    # パッチはメインスレッドで一括適用する。mock.patch.dict(os.environ) を
+    # 各ワーカースレッド内で enter/exit すると restore がレースし RL_GATING_DISABLED が
+    # リークして後続テストを汚染する（スレッド非安全）。スレッドは run() のみ実行する。
+    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
+         mock.patch("subprocess.run", return_value=mock_result), \
+         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
 
     assert errors == [], f"Unexpected errors: {errors}"
     md_files = list(tmp_memory_dir.glob("auto_*.md"))
@@ -288,6 +291,85 @@ def test_generated_file_has_required_frontmatter(tmp_path, tmp_data_dir, tmp_mem
     # Required frontmatter fields
     assert "name:" in content
     assert "description:" in content
+
+
+# ─── Test 9: belief_entropy 生成後ゲート（#285） ───────────────────────────
+
+
+def _write_message_corrections(data_dir: Path, message: str, count: int = 3) -> None:
+    """belief 比較用に `message` フィールドを持つ corrections を書き出す。"""
+    corrections_file = data_dir / "corrections.jsonl"
+    for i in range(count):
+        record = {
+            "session_id": f"sess-{i:04d}",
+            "timestamp": f"2026-05-25T10:0{i}:00Z",
+            "type": "feedback",
+            "message": message,
+        }
+        with corrections_file.open("a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def test_belief_block_skips_write_and_index(tmp_path, tmp_data_dir, tmp_memory_dir):
+    """生成後ゲート: 要約がソースを落としている場合、書込も index も行わない。"""
+    _write_message_corrections(
+        tmp_data_dir,
+        "always use absolute paths in bash commands never cd into directories",
+    )
+    memory_md = tmp_memory_dir.parent / "MEMORY.md"
+    memory_md.write_text("# MEMORY\n\n## 変更履歴\n\n")
+
+    # ソースと無関係な要約 → retention ≈ 0 → block
+    mock_result = mock.MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_mock_llm_output(
+        "completely different topic about pytest fixtures and mocking strategies today"
+    )
+
+    # memory_gating(生成前) を無効化して belief(生成後) のみを検証。
+    # RL_GATING_DISABLED は明示的に "0"（有効）に固定し、他テストの env リークに依存しない。
+    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
+         mock.patch("auto_memory_runner._HAS_MEMORY_GATING", False), \
+         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "0"}), \
+         mock.patch("subprocess.run", return_value=mock_result):
+        auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
+
+    # 副作用なし: .md ファイル・index 行ともに生成されない
+    md_files = list(tmp_memory_dir.glob("auto_*.md"))
+    assert len(md_files) == 0, "block 時は memory ファイルを書かない"
+    index_lines = [l for l in memory_md.read_text().splitlines() if l.startswith("- [auto_")]
+    assert index_lines == [], "block 時は MEMORY.md index を追記しない"
+
+    # block ログが記録される（#285 surface 用）
+    blocks_file = tmp_data_dir / "belief_blocks.jsonl"
+    assert blocks_file.exists(), "block 時は belief_blocks.jsonl に記録する"
+    assert len(blocks_file.read_text().strip().splitlines()) == 1
+
+
+def test_belief_pass_writes_normally(tmp_path, tmp_data_dir, tmp_memory_dir):
+    """生成後ゲート: 要約がソースを保持していれば従来通り書き込む。"""
+    _write_message_corrections(
+        tmp_data_dir,
+        "always use absolute paths in bash commands never cd into directories",
+    )
+
+    # ソース用語を保持した要約 → retention 高 → store
+    mock_result = mock.MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_mock_llm_output(
+        "Always use absolute paths in bash commands. Never cd into directories."
+    )
+
+    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
+         mock.patch("auto_memory_runner._HAS_MEMORY_GATING", False), \
+         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "0"}), \
+         mock.patch("subprocess.run", return_value=mock_result):
+        auto_memory_runner.run(memory_dir=tmp_memory_dir)
+
+    md_files = list(tmp_memory_dir.glob("auto_*.md"))
+    assert len(md_files) == 1, "belief pass 時は従来通り書き込む"
+    blocks_file = tmp_data_dir / "belief_blocks.jsonl"
+    assert not blocks_file.exists(), "pass 時は block ログを残さない"
 
 
 # ─── Test 8: ファイル名フォーマット ────────────────────────────────────────

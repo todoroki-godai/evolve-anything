@@ -5,6 +5,14 @@ Issue #203 / PR-D1b
 """
 from typing import Dict, List
 
+try:
+    from similarity import jaccard_coefficient
+except ImportError:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from similarity import jaccard_coefficient
+
 
 # 再利用頻度の閾値
 LOW_REUSE_THRESHOLD = 0.1
@@ -17,12 +25,12 @@ _SPECIALIZED_RATIO_THRESHOLD = 0.4
 
 
 def _jaccard_similarity(a: str, b: str) -> float:
-    """2文字列間の単語 Jaccard 類似度を計算する（大文字小文字を区別しない）。"""
-    set_a = set(a.lower().split())
-    set_b = set(b.lower().split())
-    if not set_a and not set_b:
-        return 0.0
-    return len(set_a & set_b) / len(set_a | set_b)
+    """2文字列間の単語 Jaccard 類似度を計算する（大文字小文字を区別しない）。
+
+    トークン化は空白分割（.lower().split()）を維持し、係数計算のみ
+    similarity.jaccard_coefficient に委譲する（数式の単一ソース化）。
+    """
+    return jaccard_coefficient(set(a.lower().split()), set(b.lower().split()))
 
 
 def _is_specialized(skill_content: str) -> bool:

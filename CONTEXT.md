@@ -26,3 +26,5 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | 正準フォーマット収束 | pitfalls.md を寛容パーサでなく書式収束で扱う方針（無破壊 lint） | ADR-027 |
 | observability contract | 必ず surface すべき行を単一ソース `_OBSERVABILITY_BUILDERS` 化し markdown/構造化の両経路が消費する契約 | ADR-028 |
 | silence ≠ evaluated | 沈黙だと「評価して該当なし」か「配線漏れ」か区別できない。該当なしでも ✓ を1行残す原則 | ADR-028 |
+| Belief Entropy | 生成後の memory 要約がソース corrections を保持(retention)・非接地化(drift)していないか測る決定論ゲート。memory_gating(生成前)の後段 | #285 |
+| calibration drift | fitness の score-acceptance 相関が閾値を割った状態。audit で可視化＋trigger で evolve-fitness を proactive 提案（変更は人間承認 MUST） | #286 |

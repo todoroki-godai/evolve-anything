@@ -25,6 +25,40 @@ from .state import (
 )
 
 
+def _detect_calibration_drift() -> list[str] | None:
+    """fitness calibration drift を検出する（#286 proactive 提案用）。
+
+    accept/reject が MIN_DATA_COUNT 以上 かつ score-acceptance 相関が低下した
+    fitness_func がある場合に、その func 名リストを返す。条件未達・モジュール
+    不在時は None。判定は audit builder と同じ fitness_evolution.detect_drifted_funcs
+    を共有（単一ソース）。
+    """
+    try:
+        import fitness_evolution  # type: ignore
+    except ImportError:
+        import sys
+        from pathlib import Path
+
+        fe_dir = (
+            Path(__file__).resolve().parents[3]
+            / "skills" / "evolve-fitness" / "scripts"
+        )
+        if str(fe_dir) not in sys.path:
+            sys.path.insert(0, str(fe_dir))
+        try:
+            import fitness_evolution  # type: ignore
+        except Exception:
+            return None
+    try:
+        history = fitness_evolution.load_history()
+        drift = fitness_evolution.detect_drifted_funcs(history)
+    except Exception:
+        return None
+    if drift.get("sufficient") and drift.get("drifted"):
+        return [d["func"] for d in drift["drifted"]]
+    return None
+
+
 def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: str | None = None) -> TriggerResult:
     """セッション終了時のトリガー条件を評価する。
 
@@ -116,6 +150,14 @@ def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: st
             actions.append("/rl-anything:evolve")
             details["bloat_warnings"] = bloat_result["warnings"]
 
+    # --- calibration_drift (#286): accept/reject >= 30 かつ相関低下で evolve-fitness を提案 ---
+    if not _is_in_cooldown(state, "calibration_drift", cooldown_hours):
+        drifted_funcs = _detect_calibration_drift()
+        if drifted_funcs:
+            reasons.append("calibration_drift")
+            actions.append("/rl-anything:evolve-fitness")
+            details["calibration_drift_funcs"] = drifted_funcs
+
     if not reasons:
         return TriggerResult(triggered=False)
 
@@ -131,6 +173,9 @@ def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: st
         msg_parts.append("前回 audit から規定日数を超過")
     if "bloat" in reasons and "bloat_warnings" in details:
         msg_parts.append(f"肥大化検出: {_build_bloat_message({'warnings': details['bloat_warnings']})}")
+    if "calibration_drift" in reasons:
+        funcs = ", ".join(details.get("calibration_drift_funcs", []))
+        msg_parts.append(f"fitness calibration drift 検出 ({funcs}・変更は人間承認 MUST)")
     message = "。".join(msg_parts) + f"。推奨: {', '.join(unique_actions)}"
 
     result = TriggerResult(

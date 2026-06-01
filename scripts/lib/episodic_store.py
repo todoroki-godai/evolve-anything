@@ -176,7 +176,7 @@ def query_relevant(
                 [now, project_path, limit * 5],
             ).fetchall()
 
-        from similarity import tokenize
+        from similarity import jaccard_coefficient, tokenize
 
         results: list[dict[str, Any]] = []
         for row in rows:
@@ -184,7 +184,7 @@ def query_relevant(
             event_tokens = tokenize(content)
             content_lower = content.lower()
             # Jaccard スコア（英数字トークン向け）
-            score = _jaccard(keywords, event_tokens) if event_tokens else 0.0
+            score = jaccard_coefficient(keywords, event_tokens) if event_tokens else 0.0
             # 日本語など空白分割が粗い場合: recall ベースの補完スコア
             # 英語トークン: \b word-boundary で "git"→"digit" 誤マッチを防ぐ
             # 日本語トークン: \b が機能しないため substring match（_MIN_KEYWORDS>=2 で守る）
@@ -295,13 +295,6 @@ def _to_utc(ts: Any) -> datetime:
         return dt
     except (ValueError, TypeError):
         return _utcnow()
-
-
-def _jaccard(a: set[str], b: set[str]) -> float:
-    """Jaccard 類似度係数。"""
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
 
 
 def _close(con: Any) -> None:

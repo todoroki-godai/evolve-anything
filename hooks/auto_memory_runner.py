@@ -48,6 +48,15 @@ except ImportError:
 def _is_gating_enabled() -> bool:
     return os.environ.get("RL_GATING_DISABLED", "0") != "1"
 
+# 生成後ゲート（belief_entropy）— オプショナル import
+try:
+    from belief_entropy import BLOCKS_FILENAME as _BELIEF_BLOCKS_FILENAME
+    from belief_entropy import score_belief as _score_belief
+    _HAS_BELIEF = True
+except ImportError:
+    _BELIEF_BLOCKS_FILENAME = "belief_blocks.jsonl"
+    _HAS_BELIEF = False
+
 try:
     from memory_temporal import compute_importance_score as _compute_importance_score
     from memory_temporal import write_importance_score as _write_importance_score
@@ -278,6 +287,27 @@ def _apply_importance_score(entry_path: Path) -> None:
         pass  # サイレント継続
 
 
+def _record_belief_block(data_dir: Path, belief, summary: str) -> None:
+    """belief_entropy ゲートでブロックした要約を belief_blocks.jsonl に記録する。
+
+    audit の #285 observability builder が件数を surface するためのログ。
+    append-only 1 行書き込み（corrections.jsonl と同じ low-risk パターン）。
+    失敗してもサイレント継続（Stop hook を壊さない）。
+    """
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "retention": round(float(belief.retention), 4),
+            "drift": round(float(belief.drift), 4),
+            "summary_head": summary.strip()[:80],
+        }
+        with (data_dir / _BELIEF_BLOCKS_FILENAME).open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def _archive_old_entries(memory_md_path: Path, memory_dir: Path) -> None:
     """MEMORY.md が MEMORY_LINE_LIMIT 行超の場合、古い index エントリを archive.md に移動する。
 
@@ -389,6 +419,18 @@ def run(
     llm_output = _call_llm(prompt)
     if not llm_output:
         return  # graceful exit
+
+    # 3a. 生成後ゲート（belief_entropy）: 生成された要約が元 corrections を忠実に
+    #     表しているか（retention/drift）を決定論で評価。should_store=False なら
+    #     書込も index 追記もせず終了する。例外時は fail-open（素通し）で Stop hook を壊さない。
+    if _HAS_BELIEF and _is_gating_enabled():
+        try:
+            belief = _score_belief(llm_output, corrections)
+            if not belief.should_store:
+                _record_belief_block(_data_dir, belief, llm_output)
+                return  # block: 低信頼要約は破棄（書込+index ともにスキップ）
+        except Exception:
+            pass  # belief ゲートは optional。例外時は素通し
 
     # 4. 新規 .md ファイルに書き出す
     filename = _make_filename(llm_output)

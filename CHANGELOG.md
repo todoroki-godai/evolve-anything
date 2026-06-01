@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.81.0] - 2026-06-02
+
+### Added
+- **feat(auto_memory): belief_entropy 生成後ゲート — 低信頼 memory 要約を書込前に破棄（#285）** — auto_memory_runner が Stop hook で生成する memory 要約が、元 corrections の情報を保持(retention)せず・ソース非接地の主張を過剰に含む(drift)場合に、書込前に破棄する決定論ゲートを新設。`scripts/lib/belief_entropy.py` が `retention = |src∩sum|/|src|` / `drift = |sum\src|/|sum|` を `similarity` のトークン集合演算で近似評価し、`retention < 0.25` または `drift > 0.85` で `should_store=False`（hot-hook 原則に沿い LLM ゼロ）。粗いトークン化（日本語等）で信号が乏しい場合は `low_signal` で安全側（ブロックしない）に倒す。要約は frontmatter を剥がして body のみ評価（構造トークンによる drift 過大評価を回避）。ブロックは `belief_blocks.jsonl` に記録し、`build_belief_blocks_section` が audit/evolve の observability contract（`_OBSERVABILITY_BUILDERS`）で surface（gate 未稼働の PJ は対象外で None、稼働済みで直近 block 0 件でも ✓ を1行＝silence≠evaluated）。Belief Entropy 論文（arXiv:2605.30159）の厳密な不確実性推定でなく、それに着想を得た決定論プロキシ。docs-platform 実機で「忠実要約=保存／無関係要約=ブロック／frontmatter 剥離＝drift 0.05→0.00」と「対象外(None)→gate 発火・記録→⚠ surface」のフル配線 E2E を確認。
+- **feat(audit,trigger): fitness calibration drift を observability＋proactive trigger に配線（#286）** — fitness 評価関数の score-acceptance 相関（optimize/evolve の history.jsonl）が `CORRELATION_THRESHOLD`(0.50) を割った評価関数を「再 calibration 推奨」として可視化。`fitness_evolution.detect_drifted_funcs(history)` を audit の `build_calibration_drift_section`（observability contract に登録）と trigger_engine の `_detect_calibration_drift`（session 終了時に `MIN_DATA_COUNT`(30) 以上 ∧ drift で `/rl-anything:evolve-fitness` を proactive 提案）の**共有単一ソース**として実装。accept/reject 履歴なし＝対象外(None)／データ不足＝「N/30」advisory／drift なし＝✓ を出し分け（silence≠evaluated）。全 fitness 変更は人間承認 MUST のため advisory のみ（自動適用しない）。論文「self-trained verifier」(arXiv:2605.30290) を ML-infra 非依存の rl-anything 向けに「既存 evolve-fitness の相関分析を recurring ループで再利用」へリフレーム。CONTEXT.md（用語集）に「Belief Entropy」「calibration drift」を追記。
+
+### Changed
+- **refactor(similarity): jaccard 数式を `similarity.jaccard_coefficient` に一本化** — `memory_gating` / `meta_quality` / `episodic_store` / `belief_entropy` に分散していた jaccard 係数の重複実装を canonical な公開関数（Set→Set）へ統合。各 call-site のトークン化方針は保持（memory_gating は `.lower().split()`、episodic は `similarity.tokenize`）。回帰 87 件緑で挙動不変を確認。
+
 ## [1.80.1] - 2026-05-30
 
 ### Changed

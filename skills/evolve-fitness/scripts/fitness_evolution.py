@@ -205,6 +205,42 @@ def analyze_correlations(history: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"by_fitness_func": by_fitness_func}
 
 
+def detect_drifted_funcs(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """有効 decision 数と calibration drift した fitness_func 一覧を返す。
+
+    audit observability builder（#285/#286）と trigger_engine の proactive 提案（#286）が
+    共有する単一ソース。drift = score-acceptance 相関が CORRELATION_THRESHOLD を割った
+    fitness_func（_correlation_for_records が warning を立てたもの）。
+
+    Returns:
+        {
+          "valid_count": int,    # best_fitness/human_accepted が揃う有効 decision 数
+          "sufficient": bool,    # valid_count >= MIN_DATA_COUNT
+          "drifted": [           # 相関低下した fitness_func（sufficient 時のみ非空）
+            {"func": str, "correlation": float | None}, ...
+          ],
+        }
+    """
+    valid = [
+        r for r in history
+        if r.get("best_fitness") is not None and r.get("human_accepted") is not None
+    ]
+    result: Dict[str, Any] = {
+        "valid_count": len(valid),
+        "sufficient": len(valid) >= MIN_DATA_COUNT,
+        "drifted": [],
+    }
+    if not result["sufficient"]:
+        return result
+    analysis = analyze_correlations(history)
+    result["drifted"] = [
+        {"func": func, "correlation": group.get("correlation")}
+        for func, group in analysis.get("by_fitness_func", {}).items()
+        if group.get("warning")
+    ]
+    return result
+
+
 def format_correlation_report(correlation: Dict[str, Any]) -> str:
     """analyze_correlations の by_fitness_func 形状を人間可読の文字列に整形する。
 

@@ -448,6 +448,145 @@ def build_unmanaged_pitfalls_section(project_dir: Path) -> Optional[List[str]]:
     return lines
 
 
+# belief block を「直近」とみなすウィンドウ（日数）
+_BELIEF_BLOCKS_WINDOW_DAYS = 30
+
+
+def build_belief_blocks_section(project_dir: Path) -> Optional[List[str]]:
+    """belief_entropy 生成後ゲートが block した低信頼 memory 要約を可視化（#285）。
+
+    auto_memory_runner は Stop hook 毎回 belief_entropy で要約の retention/drift を
+    評価し、低信頼要約を書込前に破棄して belief_blocks.jsonl に記録する。evolve は
+    audit を消費するので、evolve のたびに「直近どれだけ block したか」が surface される
+    — 手動確認に依存しない配線。
+
+    観測可能性: belief_blocks.jsonl が存在する（ゲートが一度でも稼働した）環境では、
+    直近ウィンドウの block が 0 件でも「評価したが直近 block なし ✓」を 1 行残す
+    （silence ≠ evaluated）。ログ自体が無い環境（gate 未稼働）は None（対象外）—
+    pitfalls.md / CONTEXT.md 不在時と同じ「アーティファクト駆動」の適用判定。
+    """
+    try:
+        import belief_entropy
+    except ImportError:
+        return None
+
+    try:
+        import rl_common
+        data_dir = Path(rl_common.DATA_DIR)
+    except Exception:
+        return None
+
+    # belief_blocks.jsonl が無い = ゲート未稼働 → 対象外（None）
+    if not (data_dir / belief_entropy.BLOCKS_FILENAME).exists():
+        return None
+
+    try:
+        count, heads = belief_entropy.summarize_blocks(
+            data_dir, days=_BELIEF_BLOCKS_WINDOW_DAYS
+        )
+    except Exception:
+        return None
+
+    header = ["## Belief Entropy Gate (低信頼 memory ブロック)", ""]
+    if count <= 0:
+        return header + [
+            f"✓ 評価したが直近 {_BELIEF_BLOCKS_WINDOW_DAYS} 日の block なし"
+            "（auto-memory の要約はソース corrections を保持）",
+            "",
+        ]
+
+    lines = header + [
+        f"⚠ 直近 {_BELIEF_BLOCKS_WINDOW_DAYS} 日で {count} 件の低信頼要約を書込前に破棄"
+        "（retention 低 or drift 過剰）。頻発する場合は corrections の質か要約プロンプトを点検:",
+    ]
+    lines += [f"  - {h}" for h in heads]
+    lines.append("")
+    return lines
+
+
+def _load_fitness_evolution():
+    """evolve-fitness の fitness_evolution モジュールを遅延 import する。"""
+    try:
+        import fitness_evolution  # type: ignore
+        return fitness_evolution
+    except ImportError:
+        import sys
+        fe_dir = (
+            Path(__file__).resolve().parents[3]
+            / "skills" / "evolve-fitness" / "scripts"
+        )
+        if str(fe_dir) not in sys.path:
+            sys.path.insert(0, str(fe_dir))
+        try:
+            import fitness_evolution  # type: ignore
+            return fitness_evolution
+        except Exception:
+            return None
+
+
+def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
+    """fitness 評価関数の score-acceptance 相関 drift を surface（#286）。
+
+    accept/reject（optimize/evolve の history.jsonl）から score と human_accepted の
+    相関を fitness_func ごとに評価し、相関が CORRELATION_THRESHOLD を割った評価関数を
+    「再 calibration 推奨」として advisory 提示する。evolve は audit を消費するので、
+    evolve のたびに calibration drift が surface される — 手動の evolve-fitness 起動に
+    依存しない配線（trigger_engine の proactive 提案と二段で効かせる）。
+
+    全 fitness 変更は人間承認が MUST のため、本 section は advisory のみ（自動適用しない）。
+
+    観測可能性:
+    - accept/reject 履歴なし → None（対象外。belief_blocks と同じデータ駆動の適用判定）
+    - 履歴ありだが < MIN_DATA_COUNT → 「評価したがデータ不足 N/30」（silence != evaluated）
+    - 十分なデータで drift なし → 「評価したが drift なし ✓」
+    - drift あり → ⚠ で対象 fitness_func と相関値、evolve-fitness 起動を提案
+    """
+    fe = _load_fitness_evolution()
+    if fe is None:
+        return None
+
+    try:
+        history = fe.load_history()
+    except Exception:
+        return None
+    if not history:
+        return None  # accept/reject 履歴なし → 対象外
+
+    try:
+        drift = fe.detect_drifted_funcs(history)  # trigger_engine と共有の単一ソース
+    except Exception:
+        return None
+
+    header = ["## Fitness Calibration Drift (score-acceptance)", ""]
+    valid_count = drift.get("valid_count", 0)
+    min_count = fe.MIN_DATA_COUNT
+
+    if not drift.get("sufficient"):
+        return header + [
+            f"ℹ 評価したが accept/reject データ不足 {valid_count}/{min_count} 件 — "
+            f"calibration drift 判定は保留（あと {min_count - valid_count} 件）。",
+            "",
+        ]
+
+    drifted = drift.get("drifted", [])
+    if not drifted:
+        return header + [
+            f"✓ 評価したが calibration drift なし（{valid_count} 件で score-acceptance 相関良好）",
+            "",
+        ]
+
+    lines = header + [
+        "⚠ score-acceptance 相関が低下した fitness_func あり。"
+        "`/rl-anything:evolve-fitness` で再 calibration を検討（変更は人間承認 MUST）:",
+    ]
+    for d in drifted:
+        corr = d.get("correlation")
+        corr_str = f"{corr:.3f}" if isinstance(corr, (int, float)) else "n/a"
+        lines.append(f"  - {d.get('func')}: 相関 {corr_str} (< {fe.CORRELATION_THRESHOLD})")
+    lines.append("")
+    return lines
+
+
 def build_glossary_drift_section(project_dir: Path) -> Optional[List[str]]:
     """CONTEXT.md（用語集）の drift を audit レポートに出す。
 

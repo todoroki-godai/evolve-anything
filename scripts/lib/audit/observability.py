@@ -15,7 +15,12 @@ markdown 経路（report.py）と構造化経路（collect_observability → evo
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .sections import build_glossary_drift_section, build_unmanaged_pitfalls_section
+from .sections import (
+    build_belief_blocks_section,
+    build_calibration_drift_section,
+    build_glossary_drift_section,
+    build_unmanaged_pitfalls_section,
+)
 
 # (key, builder) — observability の単一ソース。
 # report.py(markdown) と collect_observability(構造化) の両方がこれを消費する。
@@ -23,6 +28,8 @@ from .sections import build_glossary_drift_section, build_unmanaged_pitfalls_sec
 _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]] = [
     ("glossary_drift", build_glossary_drift_section),
     ("unmanaged_pitfalls", build_unmanaged_pitfalls_section),
+    ("belief_blocks", build_belief_blocks_section),
+    ("calibration_drift", build_calibration_drift_section),
 ]
 
 
