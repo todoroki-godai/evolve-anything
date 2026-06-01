@@ -252,6 +252,132 @@ def compute_negative_transfer(
     return results
 
 
+def compute_component_transfer(
+    usage_data: List[Dict[str, Any]],
+    delta_threshold: float = -0.05,
+    window: int = 10,
+) -> List[Dict[str, Any]]:
+    """更新コンポーネント（追加スキル）別に既存スキルの成功率 delta を分離して算出する。
+
+    arXiv 2605.30621「Harness Updating Is Not Harness Benefit」の ablation 視点:
+    compute_negative_transfer() は最初の追加スキル 1 点だけを転移点とし、after を
+    データ終端まで取るため、複数の更新が混ざって「どの更新が効いたのか」を分離できない
+    （ある時点で何かが起きた、までしか言えない）。本関数は各追加スキルを 1 つの更新
+    コンポーネントとみなし、隣接する追加イベントで before/after を区切る isolation
+    window で各コンポーネントの寄与を分離する。
+
+    各コンポーネント c（追加ts=t_c）について:
+    - before 区間 = [前コンポーネントの追加ts（無ければ baseline_ts）, t_c)
+    - after 区間  = [t_c, 次コンポーネントの追加ts（無ければ +∞))
+      → after_i と before_{i+1} は同一区間（更新 i の後 = 更新 i+1 の前）。これにより
+        更新 i+1 で起きた回帰が更新 i に誤帰属しない。
+    - 既存スキル = first_seen < t_c のスキル（先に追加された他コンポーネントも含む）
+    各既存スキルの before/after success 率を区間内で算出（各 window 件まで）、
+    net_delta = 影響を受けた既存スキルの delta 平均。
+
+    Args:
+        usage_data: usage.jsonl 由来のレコードリスト（{skill_name, ts, outcome, ...}）
+        delta_threshold: 負の転移と判定する net_delta の閾値（デフォルト -0.05）
+        window: before/after それぞれ最大 N 件のレコードを使用
+
+    Returns:
+        [{
+          "component": str, "added_ts": str,
+          "net_delta": float, "negative_transfer": bool,
+          "affected": [{"skill_name", "delta_score", "before_score",
+                        "after_score", "negative_transfer"}],
+        }]  added_ts 昇順、affected を 1 件以上持つコンポーネントのみ。
+
+    エッジケース:
+    - usage_data が空 / 全件 ts 無し → []
+    - スキルが1種類以下（追加イベントなし）→ []
+    - before/after データ不足のコンポーネント → 除外
+    """
+    if not usage_data:
+        return []
+
+    def _get_ts(rec: Dict[str, Any]) -> str:
+        return rec.get("ts") or rec.get("timestamp") or ""
+
+    sorted_data = sorted(
+        [r for r in usage_data if _get_ts(r)],
+        key=_get_ts,
+    )
+    if not sorted_data:
+        return []
+
+    skill_first_seen: Dict[str, str] = {}
+    for rec in sorted_data:
+        skill = rec.get("skill_name", "")
+        if skill and skill not in skill_first_seen:
+            skill_first_seen[skill] = _get_ts(rec)
+
+    if len(skill_first_seen) < 2:
+        return []
+
+    baseline_ts = min(skill_first_seen.values())
+    # 更新コンポーネント = baseline より後に初回登場したスキル（追加ts 昇順）
+    components = sorted(
+        [(s, t) for s, t in skill_first_seen.items() if t > baseline_ts],
+        key=lambda x: x[1],
+    )
+    if not components:
+        return []
+
+    comp_ts = [t for _, t in components]
+
+    results: List[Dict[str, Any]] = []
+    for idx, (comp_name, t_c) in enumerate(components):
+        before_lo = comp_ts[idx - 1] if idx > 0 else baseline_ts
+        after_hi = comp_ts[idx + 1] if idx + 1 < len(components) else None
+        existing = {s for s, t in skill_first_seen.items() if t < t_c}
+
+        before_rec: Dict[str, List[str]] = {}
+        after_rec: Dict[str, List[str]] = {}
+        for rec in sorted_data:
+            skill = rec.get("skill_name", "")
+            outcome = rec.get("outcome")
+            ts = _get_ts(rec)
+            if not skill or outcome not in ("success", "error") or not ts:
+                continue
+            if skill not in existing:
+                continue
+            if before_lo <= ts < t_c:
+                before_rec.setdefault(skill, []).append(outcome)
+            elif ts >= t_c and (after_hi is None or ts < after_hi):
+                after_rec.setdefault(skill, []).append(outcome)
+
+        affected: List[Dict[str, Any]] = []
+        for skill in sorted(set(before_rec) & set(after_rec)):
+            before_window = before_rec[skill][-window:]
+            after_window = after_rec[skill][:window]
+            if not before_window or not after_window:
+                continue
+            before_rate = sum(1 for o in before_window if o == "success") / len(before_window)
+            after_rate = sum(1 for o in after_window if o == "success") / len(after_window)
+            delta = after_rate - before_rate
+            affected.append({
+                "skill_name": skill,
+                "delta_score": delta,
+                "before_score": before_rate,
+                "after_score": after_rate,
+                "negative_transfer": delta < delta_threshold,
+            })
+
+        if not affected:
+            continue
+        net_delta = sum(a["delta_score"] for a in affected) / len(affected)
+        results.append({
+            "component": comp_name,
+            "added_ts": t_c,
+            "net_delta": net_delta,
+            "negative_transfer": net_delta < delta_threshold,
+            "affected": affected,
+        })
+
+    return results
+
+
 def aggregate_plugin_usage(records: List[Dict[str, Any]]) -> Dict[str, int]:
     """プラグイン別の使用回数を集計する。
 

@@ -28,3 +28,4 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | silence ≠ evaluated | 沈黙だと「評価して該当なし」か「配線漏れ」か区別できない。該当なしでも ✓ を1行残す原則 | ADR-028 |
 | Belief Entropy | 生成後の memory 要約がソース corrections を保持(retention)・非接地化(drift)していないか測る決定論ゲート。memory_gating(生成前)の後段 | #285 |
 | calibration drift | fitness の score-acceptance 相関が閾値を割った状態。audit で可視化＋trigger で evolve-fitness を proactive 提案（変更は人間承認 MUST） | #286 |
+| component transfer | 更新コンポーネント（追加スキル）別に既存スキルの成功率 delta を isolation window で分離し「どの更新が回帰させたか」を帰属する negative transfer の ablation 版 | #288 |

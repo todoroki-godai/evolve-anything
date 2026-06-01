@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.82.0] - 2026-06-02
+
+### Added
+- **feat(audit): negative transfer を更新コンポーネント別 ablation に拡張＋observability contract に配線（#288）** — 従来の `compute_negative_transfer` は「最初の追加スキル1点」を転移点とし after をデータ終端まで取るため、複数の更新が混ざって「どの更新が既存スキルの成功率を下げたか」を分離できなかった（ある時点で何かが起きた、までしか言えない）。arXiv 2605.30621「Harness Updating Is Not Harness Benefit」の ablation 視点で `compute_component_transfer` を新設し、各追加スキルを1つの更新コンポーネントとみなして隣接する追加イベントで before/after を区切る **isolation window**（after_i = before_{i+1}）で各コンポーネントの寄与を分離・帰属する。これにより「更新 i+1 で起きた回帰を更新 i に誤帰属しない」ことを保証（回帰ガードあり）。surface 経路を report 直書きから observability contract（`build_negative_transfer_section` を `_OBSERVABILITY_BUILDERS` に登録）へ載せ替え、evolve は audit を消費するので evolve のたびに markdown/構造化の両経路で surface される（手動確認に依存しない配線）。テレメトリ未蓄積＝対象外(None)／レコードありだが算出不可＝「算出対象なし」ℹ／回帰なし＝✓／回帰あり＝⚠ でコンポーネントと影響スキルを出し分け（silence≠evaluated）。決定論・LLM 非依存。回帰テスト 19 件 + 実 PJ 全 PJ 横断テレメトリ（138 件）でドッグフード（現状 outcome 蓄積がスパースで算出対象 0＝旧関数と同じ前提依存を確認）。[ADR-028]
+
 ## [1.81.0] - 2026-06-02
 
 ### Added

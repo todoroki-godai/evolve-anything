@@ -295,11 +295,10 @@ def run_audit(
         )
 
     from rl_common.config import load_user_config
-    from .usage import aggregate_contribution_scores, compute_negative_transfer
+    from .usage import aggregate_contribution_scores
     _user_cfg = load_user_config()
     _max_skill_count = int(_user_cfg.get("max_skill_count", 30))
     _contribution_scores = aggregate_contribution_scores(usage_records)
-    _negative_transfer_results = compute_negative_transfer(usage_records)
 
     return generate_report(
         artifacts, violations, usage, duplicates, advisories,
@@ -318,7 +317,6 @@ def run_audit(
         growth_report=growth_report_lines,
         contribution_scores=_contribution_scores if _contribution_scores else None,
         max_skill_count=_max_skill_count,
-        negative_transfer_results=_negative_transfer_results if _negative_transfer_results else None,
     )
 
 

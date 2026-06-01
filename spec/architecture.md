@@ -114,7 +114,7 @@ scripts/rl/fitness/     ← 適応度関数（8個組み込み: default + 7 .py 
       → reflect (corrections → rules/CLAUDE.md 反映。importance_score で低重要度をフィルタ [Mem-π])
       → corrections_insights (繰り返し失敗パターン TOP-N 集計 → audit セクションに自動表示)
       → constraint_decay (セッション後半 30% ターン集中 correction を検出 → decay_rate 算出)
-      → negative_transfer (スキル追加前後の success rate delta 計測 → delta < -0.05 でフラグ)
+      → negative_transfer (スキル追加前後の success rate delta 計測 → delta < -0.05 でフラグ。compute_component_transfer は更新コンポーネント別に isolation window で分離帰属し observability contract で surface、#288)
       → audit (環境健康診断)
       → optimize (直接パッチ → regression gate)
       → instruction compliance (corrections × critical指示 → 違反検出 → pitfall学習)

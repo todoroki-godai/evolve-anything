@@ -587,6 +587,76 @@ def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
     return lines
 
 
+_NEG_TRANSFER_WINDOW_DAYS = 30
+
+
+def build_negative_transfer_section(project_dir: Path) -> Optional[List[str]]:
+    """更新コンポーネント（追加スキル）別の negative transfer を surface（#288）。
+
+    arXiv 2605.30621「Harness Updating Is Not Harness Benefit」の ablation 視点で、
+    「どの更新が既存スキルの成功率を下げたか」を更新コンポーネント単位に分離して提示する。
+    従来の単一転移点 negative_transfer（report 直書き）を observability contract に載せ替え、
+    evolve は audit を消費するので evolve のたびに surface される — 手動確認に依存しない配線。
+
+    観測可能性（calibration_drift と同じデータ駆動の適用判定）:
+    - usage.jsonl のレコードが無い（テレメトリ未蓄積）→ None（対象外）
+    - レコードはあるが component transfer を算出できない（既存スキル前後データ不足）
+      → 「評価したが算出対象なし」ℹ 行（silence != evaluated）
+    - 算出できて回帰なし → 「評価したが negative transfer なし ✓」
+    - 回帰あり → ⚠ で対象コンポーネントと影響スキル、evolve-skill 起動を提案
+    """
+    from .usage import compute_component_transfer, load_usage_data
+
+    try:
+        usage_data = load_usage_data(
+            days=_NEG_TRANSFER_WINDOW_DAYS, project_root=Path(project_dir)
+        )
+    except Exception:
+        return None
+
+    if not usage_data:
+        return None  # テレメトリ未蓄積 → 対象外
+
+    header = ["## Negative Transfer (更新コンポーネント別)", ""]
+
+    try:
+        components = compute_component_transfer(usage_data)
+    except Exception:
+        return None
+
+    if not components:
+        return header + [
+            "ℹ 評価したが component transfer 算出対象なし"
+            "（追加スキルの前後で既存スキルの success/error データが不足）。",
+            "",
+        ]
+
+    flagged = [c for c in components if c.get("negative_transfer")]
+    if not flagged:
+        return header + [
+            f"✓ 評価したが negative transfer なし（{len(components)} 件の更新コンポーネントを評価）",
+            "",
+        ]
+
+    lines = header + [
+        "⚠ 既存スキルの成功率を下げた更新コンポーネントあり。"
+        "`/rl-anything:evolve-skill` で該当スキルの見直しを検討:",
+    ]
+    for c in flagged:
+        net = c.get("net_delta", 0.0)
+        lines.append(f"- **{c['component']}** (net Δ{net:+.0%}):")
+        for a in c.get("affected", []):
+            if not a.get("negative_transfer"):
+                continue
+            lines.append(
+                f"    - {a['skill_name']}: "
+                f"before={a['before_score']:.0%} → after={a['after_score']:.0%} "
+                f"(Δ{a['delta_score']:+.0%})"
+            )
+    lines.append("")
+    return lines
+
+
 def build_glossary_drift_section(project_dir: Path) -> Optional[List[str]]:
     """CONTEXT.md（用語集）の drift を audit レポートに出す。
 

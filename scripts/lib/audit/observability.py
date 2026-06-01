@@ -19,6 +19,7 @@ from .sections import (
     build_belief_blocks_section,
     build_calibration_drift_section,
     build_glossary_drift_section,
+    build_negative_transfer_section,
     build_unmanaged_pitfalls_section,
 )
 
@@ -30,6 +31,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("unmanaged_pitfalls", build_unmanaged_pitfalls_section),
     ("belief_blocks", build_belief_blocks_section),
     ("calibration_drift", build_calibration_drift_section),
+    ("negative_transfer", build_negative_transfer_section),
 ]
 
 
