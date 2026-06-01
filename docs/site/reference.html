@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.81.0</span>
+    <span class="header-version">v1.82.0</span>
   </div>
 </header>
 
@@ -315,7 +315,7 @@
           <tr><td>agent-brushup</td><td>エージェント定義の品質診断・改善提案・upstream 監視 (<code>scripts/lib/agent_quality.py</code>)</td></tr>
           <tr><td>meta_quality</td><td>スキル追加前の品質フィルタ — 再利用頻度と Jaccard 類似度で CREATE/REVIEW/SKIP を判定し skill-triage に組み込む</td></tr>
           <tr><td>constraint_decay</td><td>セッション後半 30% に集中する correction を検出して decay_rate を算出し run_discover() に統合する</td></tr>
-          <tr><td>negative_transfer</td><td>スキル追加前後の success rate delta を計測し delta &lt; −0.05 で負の転移フラグを付与する</td></tr>
+          <tr><td>negative_transfer</td><td>スキル追加前後の success rate delta を計測し delta &lt; −0.05 で負の転移フラグを付与する。compute_component_transfer は更新コンポーネント（追加スキル）別に isolation window で delta を分離帰属し「どの更新が回帰させたか」を特定、observability contract で evolve のたびに surface（#288, arXiv 2605.30621 ablation・決定論）</td></tr>
         </tbody>
       </table>
 
@@ -349,7 +349,7 @@
           <tr><td>fitness_history_store</td><td>fitness スコアの時系列記録 SoR（DuckDB）。<code>record_fitness_run()</code> で audit 実行時に自動記録、<code>get_axis_history()</code> でトレンド取得</td></tr>
           <tr><td>hypothesis_tracker</td><td>仮説の記録・更新・クエリを提供するストア。evolve/audit の改善仮説を追跡する</td></tr>
           <tr><td>pitfall 自動強制 (<code>pitfall_lint</code> / <code>pitfall_commit_gate</code>)</td><td><code>pitfall-curate</code> で <code>enable</code> 登録した pitfalls.md に対し、編集時 hook（警告のみ）と commit 時ゲート（index/TOC wipe を exit 2 でブロック）の二段で正準フォーマットを自動 lint する。オプトイン・自動書き換えなし (<code>pitfall_registry.py</code>)。audit は「育っている（エントリ3+件）のに未登録」の pitfalls.md を Unmanaged Pitfalls セクションで可視化し、evolve のたびに enable 漏れを surface する (<code>unmanaged_candidates</code>)</td></tr>
-          <tr><td>observability contract (<code>audit/observability.py</code>)</td><td>「必ず surface すべき observability 行」（glossary_drift / unmanaged_pitfalls）を単一ソース <code>_OBSERVABILITY_BUILDERS</code> に集約し、markdown 経路（<code>report.generate_report</code>）と構造化経路（<code>collect_observability</code> → evolve が <code>result["observability"]</code> に格納し SKILL.md Step 3.8 で必ず surface）の両方が同じリストを消費する。217KB markdown の選択読みで observability 行が埋もれる問題を出力経路の契約で塞ぐ。glossary は CONTEXT.md 不在時に「用語集未作成」seed 提案行も emit する。将来項目は builder を1行登録するだけで両経路に自動伝播する [ADR-028]</td></tr>
+          <tr><td>observability contract (<code>audit/observability.py</code>)</td><td>「必ず surface すべき observability 行」（glossary_drift / unmanaged_pitfalls / belief_blocks / calibration_drift / negative_transfer）を単一ソース <code>_OBSERVABILITY_BUILDERS</code> に集約し、markdown 経路（<code>report.generate_report</code>）と構造化経路（<code>collect_observability</code> → evolve が <code>result["observability"]</code> に格納し SKILL.md Step 3.8 で必ず surface）の両方が同じリストを消費する。217KB markdown の選択読みで observability 行が埋もれる問題を出力経路の契約で塞ぐ。glossary は CONTEXT.md 不在時に「用語集未作成」seed 提案行も emit する。将来項目は builder を1行登録するだけで両経路に自動伝播する [ADR-028]</td></tr>
         </tbody>
       </table>
 
