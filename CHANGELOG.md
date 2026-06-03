@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(discover): skill_extractor の generalizability_score に軌跡有効性の実証基準を反映（#306）** — SIRI ① 成功軌跡採掘（`skill_extractor`）は generalizability_score を `cluster_size_score * success_rate / specialization_factor` で機械的に算定し、閾値 `TRAJECTORY_SKILL_SCORE_THRESHOLD`（0.25）でフィルタするだけで、**何が有効な軌跡か**の根拠が薄かった。"What Makes Interaction Trajectories Effective for Training Terminal Agents?"（arXiv:2606.03461）の実証基準のうち TrajectoryRecord（user_prompt / outcome / session_id）から決定論で観測できる3特徴を新規 `scripts/lib/skill_extractor/effectiveness.py` で抽出し、score 算定に乗算ブレンドする: ① **多様性**（distinct user_prompt 比 — 同一プロンプトの機械的反復は汎用性が低い）② **反復性**（distinct session への分散度 `(distinct-1)/(total-1)` — 1 セッション連投でなく複数の独立セッションに再発するほど恒常的ニーズ）③ **成功/失敗コントラスト**（success と failure 両方を含む軌跡は学習信号が豊富、論文の contrastive trajectory 知見）。3特徴を重み 0.4/0.4/0.2 で加重平均した `effectiveness`（0–1）を `effectiveness_multiplier`（MIN_MULTIPLIER 0.6〜1.0）に変換し既存スコアへ乗算。**後方互換**: records が乏しい/signal 不在時は multiplier=1.0（中立）で従来挙動を温存し、`use_effectiveness=False` で従来式に完全復帰可能。候補 dict に `effectiveness` フィールドを surface して算定根拠を可視化。`run_discover → evolve` に配線済（#291）なので score 式の改善が自動で効き、単調な軌跡（同一プロンプト・同一セッション連投）の候補が割り引かれ triage 通過候補の質が上がる。決定論・LLM 非依存。TDD（diversity/recurrence/contrast 各境界 + effectiveness 範囲 + 単調 vs 多様の大小 + multiplier 範囲 + score 統合 + 後方互換フラグ + candidate フィールド、新規 21 件）。
+
 ## [1.84.1] - 2026-06-04
 
 ### Fixed

@@ -20,6 +20,10 @@ from skill_extractor.trajectory_sampler import (
     sample_trajectories,
     DEFAULT_MAX_FILES,
 )
+from skill_extractor.effectiveness import (
+    compute_effectiveness,
+    effectiveness_multiplier,
+)
 
 # ── 定数 ──────────────────────────────────────────────────
 
@@ -76,6 +80,7 @@ def extract_skill_candidates(
         score = _compute_generalizability_score(skill_records)
         success_rate = _compute_success_rate(skill_records)
         sample_prompts = _collect_sample_prompts(skill_records, max_samples=3)
+        effectiveness = round(compute_effectiveness(skill_records), 4)
 
         candidates.append(
             {
@@ -83,6 +88,7 @@ def extract_skill_candidates(
                 "session_count": len(skill_records),
                 "generalizability_score": round(score, 4),
                 "success_rate": round(success_rate, 4),
+                "effectiveness": effectiveness,
                 "source": "codeskill_extraction",
                 "sample_prompts": sample_prompts,
             }
@@ -116,18 +122,26 @@ def _group_by_skill(
 def _compute_generalizability_score(
     records: List[TrajectoryRecord],
     specialization_factor: float = 1.0,
+    use_effectiveness: bool = True,
 ) -> float:
     """generalizability_score を計算する。
 
-    スコア = clamp(cluster_size_score * success_rate / specialization_factor, 0, 1)
+    スコア = clamp(
+        cluster_size_score * success_rate * effectiveness_multiplier
+        / specialization_factor, 0, 1)
 
     - cluster_size_score: log(N+1) / log(N_max+1) で正規化（N_max=50）
     - success_rate: success / total
+    - effectiveness_multiplier: 軌跡有効性（多様性・反復性・成功/失敗コントラスト）
+      による補正係数（MIN_MULTIPLIER〜1.0、arXiv:2606.03461、issue #306）。
+      records が乏しい/signal 不在なら 1.0（中立）で既存挙動を温存する。
     - specialization_factor: 特化度ペナルティ（高いほど汎用性が低い）
 
     Args:
         records: 同一スキルの TrajectoryRecord リスト。
         specialization_factor: 特化度ペナルティ（デフォルト 1.0 = ペナルティなし）。
+        use_effectiveness: 軌跡有効性補正を適用するか（デフォルト True）。
+            False の場合は従来式（後方互換）。
 
     Returns:
         0.0 〜 1.0 のスコア。
@@ -145,9 +159,12 @@ def _compute_generalizability_score(
     # 成功率
     success_rate = _compute_success_rate(records)
 
+    # 軌跡有効性補正（実証基準: 多様性・反復性・コントラスト）
+    eff_mult = effectiveness_multiplier(records) if use_effectiveness else 1.0
+
     # 特化度ペナルティ適用
     sf = max(0.1, specialization_factor)  # ZeroDivision 防止
-    raw_score = size_score * success_rate / sf
+    raw_score = size_score * success_rate * eff_mult / sf
 
     return max(0.0, min(1.0, raw_score))
 
