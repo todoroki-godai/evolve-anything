@@ -36,6 +36,7 @@ rl-discover [--session-scan]
 
 - **行動パターン** (5+回): スキル候補として提案（usage.jsonl ベース）
 - **セッションテキストパターン** (5+回): スキル候補として提案（`--session-scan` 時のみ、セッション JSONL ベース）
+- **成功軌跡から採掘したスキル候補** (SIRI ①): `trajectory_skill_candidates` に N 件 surface（`skill_extractor` がセッション履歴の成功軌跡を採掘、`generalizability_score >= TRAJECTORY_SKILL_SCORE_THRESHOLD` でフィルタ）。triage の `missed_skill_opportunities` 形式へ変換され CREATE/UPDATE 判定に合流する
 - **エラーパターン** (3+回): ルール候補（予防策）として提案
 - **却下理由パターン** (3+回): ルール候補（品質基準）として提案
 

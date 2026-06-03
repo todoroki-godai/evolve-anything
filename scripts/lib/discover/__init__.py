@@ -26,6 +26,9 @@ BEHAVIOR_THRESHOLD = 5   # 行動パターン検出閾値
 ERROR_THRESHOLD = 3       # エラーパターン検出閾値
 REJECTION_THRESHOLD = 3   # 却下理由検出閾値
 MISSED_SKILL_THRESHOLD = 2  # missed skill 検出閾値（セッション数）
+# 成功軌跡からのスキル採掘 (SIRI ①, issue #291) の generalizability_score 下限。
+# noise が増える場合はこの値を引き上げる（再評価条件）。
+TRAJECTORY_SKILL_SCORE_THRESHOLD = 0.25
 
 # 構造的制約は共通モジュールから取得
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))

@@ -9,6 +9,56 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+def _project_transcript_dir(project_root: Path) -> Path:
+    """project_root を CC のエンコード規則で ~/.claude/projects/<encoded> に変換する。
+
+    CC は transcript ディレクトリ名を ``str(path)`` の ``/`` と ``.`` を ``-`` に置換して
+    決定する。trajectory 採掘を discover と同じ project スコープに揃えることで、
+    無関係な他 PJ の成功軌跡が混入する noise を防ぐ。
+    """
+    encoded = str(project_root).replace("/", "-").replace(".", "-")
+    return Path.home() / ".claude" / "projects" / encoded
+
+
+def _trajectory_candidates_to_missed(
+    candidates: list,
+    *,
+    threshold: float,
+    existing_skills=(),
+):
+    """skill_extractor 候補を閾値フィルタし triage の missed_skills 形式へ変換する。
+
+    Args:
+        candidates: ``extract_skill_candidates`` の戻り値（skill_name / session_count /
+            generalizability_score / sample_prompts / source を持つ dict のリスト）。
+        threshold: generalizability_score の下限（未満は除外）。
+        existing_skills: 既に missed_skill_opportunities にある skill 名の集合。
+            重複する候補は merge から除外する（surface には残す）。
+
+    Returns:
+        ``(surfaced, merged)``。surfaced は閾値を満たした生候補、merged は triage が
+        消費する ``{"skill", "session_count", "triggers_matched", ...}`` 形式のリスト。
+    """
+    existing = set(existing_skills)
+    surfaced = []
+    merged = []
+    for c in candidates:
+        if c.get("generalizability_score", 0.0) < threshold:
+            continue
+        surfaced.append(c)
+        name = c.get("skill_name", "")
+        if not name or name in existing:
+            continue
+        merged.append({
+            "skill": name,
+            "session_count": c.get("session_count", 0),
+            "triggers_matched": c.get("sample_prompts", []),
+            "source": c.get("source", "codeskill_extraction"),
+            "generalizability_score": c.get("generalizability_score", 0.0),
+        })
+    return surfaced, merged
+
+
 def run_discover(
     *,
     project_root: Optional[Path] = None,
@@ -59,6 +109,35 @@ def run_discover(
         result["missed_skill_opportunities"] = missed_result["missed"]
     if missed_result["message"]:
         result["missed_skill_message"] = missed_result["message"]
+
+    # 成功軌跡からのスキル採掘 (SIRI ①, issue #291)
+    # discover は evolve が回す recurring ループなので、ここに配線することで
+    # evolve のたびに自動発火する（手動 CLI 止まりにしない）。出力は triage の
+    # missed_skills 形式へ変換して既存の合流ポイント (missed_skill_opportunities) に接続する。
+    try:
+        _se_lib = PLUGIN_ROOT / "scripts" / "lib"
+        if str(_se_lib) not in sys.path:
+            sys.path.insert(0, str(_se_lib))
+        from skill_extractor import extract_skill_candidates
+        from . import TRAJECTORY_SKILL_SCORE_THRESHOLD  # noqa: PLC0415
+
+        # discover と同じ project スコープで採掘する（cross-PJ noise 防止）
+        traj_root = _project_transcript_dir(project_root or Path.cwd())
+        traj_candidates = extract_skill_candidates(projects_root=traj_root)
+        existing_missed = {
+            m.get("skill") for m in result.get("missed_skill_opportunities", [])
+        }
+        surfaced, merged = _trajectory_candidates_to_missed(
+            traj_candidates,
+            threshold=TRAJECTORY_SKILL_SCORE_THRESHOLD,
+            existing_skills=existing_missed,
+        )
+        if surfaced:
+            result["trajectory_skill_candidates"] = surfaced
+        if merged:
+            result.setdefault("missed_skill_opportunities", []).extend(merged)
+    except Exception as e:
+        result["trajectory_skill_candidates_error"] = str(e)
 
     # スコープ判断
     all_patterns = behavior + errors + rejections

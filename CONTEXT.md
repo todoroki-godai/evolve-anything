@@ -15,6 +15,7 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | MemTrace | episodic 検索エラーを 3 類型に分類し event_id へ帰属する診断 | #254 |
 | slop | AI 定型句。日英 10 パターンを決定論 regex で検出 | #255 |
 | subgoal fitness | 候補を 5 サブゴールに分解して返す密な中間フィードバック | #253 |
+| SIRI | 成功軌跡からスキルを採掘→検証→蒸留する3段階。①採掘=`skill_extractor`（discover で発火し triage に合流）/②検証=chaos fitness/③蒸留=evolve | #291 |
 | Observe hooks | LLM コストゼロで使用・エラー・修正を自動記録する hook 群 | ADR-002 |
 | 直接パッチ最適化 | 遺伝的アルゴリズムでなく LLM 1 パスでパッチを当てる最適化方式 | ADR-003 |
 | coherence | fitness の一種。構造的整合性 4 軸スコア | ADR-004 |
@@ -29,3 +30,4 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | Belief Entropy | 生成後の memory 要約がソース corrections を保持(retention)・非接地化(drift)していないか測る決定論ゲート。memory_gating(生成前)の後段 | #285 |
 | calibration drift | fitness の score-acceptance 相関が閾値を割った状態。audit で可視化＋trigger で evolve-fitness を proactive 提案（変更は人間承認 MUST） | #286 |
 | component transfer | 更新コンポーネント（追加スキル）別に既存スキルの成功率 delta を isolation window で分離し「どの更新が回帰させたか」を帰属する negative transfer の ablation 版 | #288 |
+| eval saturation | forward-gen trigger eval が「緑でも頑健でない」飽和兆候（positive 偏重/易しい negative/クエリ過少）を eval 実行なし決定論で測る。TASTE 着想、calibration drift と同帯で surface | #292 |

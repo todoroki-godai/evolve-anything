@@ -50,8 +50,17 @@ def _write(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
 
 
-def test_empty_when_no_observability_artifacts(tmp_path):
-    """CONTEXT.md も pitfalls.md も無い PJ では空 dict（対象セクション無し）。"""
+def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
+    """CONTEXT.md も pitfalls.md も無い PJ では空 dict（対象セクション無し）。
+
+    eval_saturation は環境グローバル（DATA_DIR 配下の eval-sets）を読む builder のため、
+    実機に eval-sets があると本テストの「PJ アーティファクト無し」前提が崩れる。
+    PJ アーティファクト契約を隔離するため eval-sets dir を空 tmp に向ける（#292）。
+    """
+    import eval_saturation
+    monkeypatch.setattr(
+        eval_saturation, "_default_eval_sets_dir", lambda: tmp_path / "no-evalsets"
+    )
     result = collect_observability(tmp_path)
     assert result == {}
 
