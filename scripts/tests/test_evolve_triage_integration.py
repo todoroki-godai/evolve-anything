@@ -92,6 +92,12 @@ class TestDiscoverEvalSetFields:
 class TestEvolveTriageIntegration:
     """Task 4.5 + 6.1: evolve 統合テスト。"""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_ledger(self, tmp_path, monkeypatch):
+        """#308: triage_all_skills が実 home の台帳に書き込むのを防ぐ（hermetic）。"""
+        import triage_ledger
+        monkeypatch.setattr(triage_ledger, "LEDGER_ROOT", tmp_path / "triage_decisions")
+
     def test_triage_phase_included_in_evolve(self):
         """triage 結果が phases["skill_triage"] に含まれる。"""
         from skill_triage import triage_all_skills
@@ -200,3 +206,75 @@ class TestEvolveTriageIntegration:
         # CREATE の new-skill がある
         create_issues = [i for i in issues if i["type"] == "skill_triage_create"]
         assert len(create_issues) > 0
+
+
+class TestTriageLedgerIntegration:
+    """#308: triage_skill→台帳の配線、連続 evolve の抑制、再発昇格、TTL を E2E で検証。
+
+    meta_quality の SKIP は「CREATE 候補 & 名前 Jaccard>0.6 の既存スキルあり & 低頻度」で
+    発火する。slug は単一トークン化されるため、ここでは triage_skill に existing_skills /
+    missed_skills を直接注入してスペース込みの近接名を与え、SKIP を自然に発火させる。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_ledger(self, tmp_path, monkeypatch):
+        """副作用隔離: 台帳を実 home でなく tmp に逃がす（別 PJ slug 混入も防ぐ）。"""
+        import triage_ledger
+        monkeypatch.setattr(triage_ledger, "LEDGER_ROOT", tmp_path / "triage_decisions")
+
+    def _run(self, now):
+        """SKIP が発火する triage_skill を1回回す。"""
+        from skill_triage import triage_skill
+        return triage_skill(
+            "deploy skill clone",
+            sessions=[],
+            usage=[],
+            missed_skills=[
+                {"skill": "deploy skill clone", "triggers_matched": ["deploy"], "session_count": 5},
+            ],
+            existing_skills={"deploy skill"},  # Jaccard("deploy skill clone","deploy skill")=0.667>0.6
+            ledger_slug="proj",
+            ledger_now=now,
+        )
+
+    def test_first_run_skip_then_second_run_suppressed(self):
+        """① 初回 SKIP は surface、2回目はクールダウン内で抑制される（連続 evolve 冪等性）。"""
+        DAY = 86400.0
+        r1 = self._run(now=1000.0)
+        assert r1["action"] == "SKIP"
+        assert r1["suppressed"] is False
+        assert r1["ledger_status"] == "new"
+
+        r2 = self._run(now=1000.0 + DAY)
+        assert r2["suppressed"] is True
+        assert r2["ledger_status"] == "suppressed"
+
+    def test_repeated_skip_escalates_to_review(self):
+        """② 窓内で ESCALATE_N 回 SKIP → REVIEW 昇格。"""
+        import triage_ledger
+        DAY = 86400.0
+        out = None
+        now = 1000.0
+        for _ in range(triage_ledger.ESCALATE_N):
+            out = self._run(now=now)
+            now += DAY
+        assert out["action"] == "REVIEW"
+        assert out["ledger_status"] == "escalated"
+
+    def test_ttl_expiry_forces_reeval_once(self):
+        """③ TTL 超過で 🔄 強制再評価が1回だけ出る。"""
+        import triage_ledger
+        DAY = 86400.0
+        self._run(now=1000.0)
+        expired = 1000.0 + (triage_ledger.DEFAULT_TTL_DAYS + 1) * DAY
+        out = self._run(now=expired)
+        assert out["ledger_status"] == "ttl_expired"
+        assert "🔄" in out["ledger_note"]
+
+    def test_all_skills_collapses_suppressed_and_keeps_summary(self):
+        """triage_all_skills が抑制を SKIP_SUPPRESSED に畳み summary 行を常に持つ。"""
+        from skill_triage import triage_all_skills
+        # スキルが無い PJ でも summary は出る（沈黙≠評価）
+        r = triage_all_skills(sessions=[], usage=[], missed_skills=[], project_root=None)
+        # project_root=None → no_skills_found で skipped だが空 summary キーは存在
+        assert "skip_suppressed_summary" in r

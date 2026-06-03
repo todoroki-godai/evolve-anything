@@ -230,6 +230,8 @@ evolve.py 出力の **トップレベル `observability` フィールド**（`un
 
 理由: これらは `phases.audit.report` の 217KB markdown 中盤にも出ているが、選択読みでは埋もれて surface されない（silence != evaluated の配線漏れが #272 後に再発した実例）。`observability` フィールドは audit↔evolve の契約として構造化済みなので、**markdown 側の該当行を探さず、この構造化フィールドを正準ソースとして出す**。`{"error": ...}` のときはエラーをそのまま表示する。
 
+**Triage SKIP 抑制サマリ（#308、必ず1行 surface する — MUST）**: `phases.skill_triage.skip_suppressed_summary`（例: `SKIP 抑制 2件 ✓`）を**そのまま1行表示する**。0件でも省略しない（silence != evaluated）。これは過去に SKIP と判断したスキル候補のうち、クールダウン内で再発したため個別表示を畳んだ件数。なお `phases.skill_triage.REVIEW`（再発エスカレーション昇格）や `ledger_status == "ttl_expired"`（🔄 強制再評価）の候補は通常どおり個別 surface される — 抑制対象は「前回判断を維持中の SKIP」のみ。
+
 ### Step 4: Reorganize フェーズ（split 検出 + 階層統合提案）
 
 evolve.py の出力に含まれる `reorganize` フェーズ結果を確認する。

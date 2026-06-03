@@ -24,6 +24,13 @@ from skill_triage import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_triage_ledger(tmp_path, monkeypatch):
+    """#308: triage_* が実 home の triage_ledger に書き込むのを防ぐ（hermetic / 副作用隔離）。"""
+    import triage_ledger
+    monkeypatch.setattr(triage_ledger, "LEDGER_ROOT", tmp_path / "triage_decisions")
+
+
 @pytest.fixture
 def skill_triggers_list():
     return [

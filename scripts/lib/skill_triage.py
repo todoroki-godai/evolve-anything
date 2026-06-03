@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from meta_quality import meta_quality_check  # noqa: E402  # (#203)
+import triage_ledger  # noqa: E402  # (#308) SKIP 判断の TTL・再発カウンタ
 from similarity import jaccard_coefficient, tokenize
 from skill_triggers import extract_skill_triggers, normalize_skill_name
 from trigger_eval_generator import (
@@ -67,6 +68,8 @@ def triage_skill(
     skill_triggers_list: Optional[List[Dict[str, Any]]] = None,
     project_root: Optional[Path] = None,
     all_eval_sets: Optional[Dict[str, Dict[str, Any]]] = None,
+    ledger_slug: Optional[str] = None,
+    ledger_now: Optional[float] = None,
 ) -> Dict[str, Any]:
     """単一スキルの triage 判定を行う。
 
@@ -79,6 +82,8 @@ def triage_skill(
         skill_triggers_list: スキルトリガー情報
         project_root: プロジェクトルート
         all_eval_sets: 事前生成済み eval set。None の場合は内部で生成。
+        ledger_slug: triage_ledger の PJ slug。None なら project_root から解決（#308）。
+        ledger_now: 台帳適用の基準時刻（テスト用、None なら現在時刻）。
 
     Returns:
         {"action": str, "skill": str, "confidence": float, "evidence": dict, ...}
@@ -124,6 +129,10 @@ def triage_skill(
             },
             all_skills=sorted(existing_skills),
         )
+        # 台帳適用 (#308): SKIP 判断に TTL・再発カウンタを反映し、
+        # 抑制/再発エスカレーション/TTL 切れの3層トリガーで recommendation を補正する。
+        slug = ledger_slug if ledger_slug is not None else triage_ledger.resolve_slug(cwd=project_root)
+        meta = triage_ledger.apply_ledger(meta, slug=slug, now=ledger_now)
         _action = meta["recommendation"] if meta["recommendation"] in ("CREATE", "SKIP", "REVIEW") else "CREATE"
         return {
             "action": _action,
@@ -135,6 +144,9 @@ def triage_skill(
             },
             "eval_set_path": eval_set_path,
             "meta_quality": meta,
+            "ledger_status": meta.get("ledger_status"),
+            "suppressed": meta.get("suppressed", False),
+            "ledger_note": meta.get("ledger_note", ""),
         }
 
     # UPDATE 判定: missed_skill 高 + 既存スキルあり + near-miss
@@ -354,6 +366,9 @@ def triage_all_skills(
 
     existing_skills = {entry["skill"] for entry in skill_triggers_list}
 
+    # 台帳 slug を一度だけ解決 (#308): triage_skill ごとに git を叩くのを避ける。
+    ledger_slug = triage_ledger.resolve_slug(cwd=project_root)
+
     # missed_skills から存在しないスキル名も追加
     all_skill_names = set(existing_skills)
     for ms in missed_skills:
@@ -380,6 +395,7 @@ def triage_all_skills(
         "SPLIT": [],
         "MERGE": [],
         "OK": [],
+        "SKIP_SUPPRESSED": [],  # ① 抑制された再発 SKIP（#308、個別表示せず畳む）
     }
 
     for skill_name in sorted(all_skill_names):
@@ -392,7 +408,12 @@ def triage_all_skills(
             skill_triggers_list=skill_triggers_list,
             project_root=project_root,
             all_eval_sets=all_eval_sets,
+            ledger_slug=ledger_slug,
         )
+        # ① 抑制 (#308): クールダウン内の再発 SKIP は個別 bucket に積まず畳む。
+        if triage.get("suppressed"):
+            result["SKIP_SUPPRESSED"].append(triage)
+            continue
         action = triage.get("action", "OK")
         result[action].append(triage)
 
@@ -413,6 +434,11 @@ def triage_all_skills(
     # MERGE 検出
     merge_candidates = detect_merge_candidates(all_eval_sets)
     result["MERGE"].extend(merge_candidates)
+
+    # 沈黙≠評価 (#308 / ADR-028): 抑制が0件でも必ず1行残す。
+    result["skip_suppressed_summary"] = triage_ledger.summarize_suppressed(
+        result["SKIP_SUPPRESSED"]
+    )
 
     result["skipped"] = False
     result["reason"] = None
@@ -466,6 +492,8 @@ def _empty_result(reason: str = "") -> Dict[str, Any]:
         "SPLIT": [],
         "MERGE": [],
         "OK": [],
+        "SKIP_SUPPRESSED": [],
+        "skip_suppressed_summary": "",
         "skipped": True,
         "reason": reason,
     }
