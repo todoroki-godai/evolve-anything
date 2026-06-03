@@ -52,6 +52,10 @@ OPTIMIZER_SCRIPT = (
 DEFAULT_OUTPUT_DIR = Path.cwd() / ".rl-loop"
 MAX_KEPT_RUNS = 10  # rl-loop 結果の保持数
 SCORE_EPSILON = 0.05  # 採点ノイズ実測値（2σ ≈ 0.05）に基づく IMPROVED/REGRESSED 判定閾値
+# SkillOpt 近似 (#305): evolve-search の多世代探索パラメータ。
+# subgoal fitness を勾配代理として最大 EVOLVE_SEARCH_GENERATIONS 世代まわす。
+EVOLVE_SEARCH_GENERATIONS = 5  # 最大世代数
+EVOLVE_SEARCH_PATIENCE = 2     # 改善なし世代の許容上限（早期停止 = 収束世代数を減らす）
 
 # 行数制限は共通モジュールから取得
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -462,41 +466,62 @@ def _evolve_variants(
     global_best_content: Optional[str],
     dry_run: bool = False,
 ) -> List[Dict[str, Any]]:
-    """BES 前向き進化探索フェーズ (#256)。
+    """BES 前向き進化探索フェーズ (#256) → 多世代化 (#305 SkillOpt 近似)。
 
-    既存 variants をサブゴール fitness で重み付けし、進化演算子
-    (crossover/mutate) で子候補を生成 → 既存スコアラーで採点して
-    variants と同形の dict のリストで返す。
-
-    fitness 信号は subgoal_scorer (#253) の total を使う。
+    既存 variants を初期集団とし、subgoal_scorer (#253) の total を
+    **勾配代理**として `evolve_search` で多世代まわす（#305）。エリート保存で
+    best subgoal fitness が世代ごとに単調非減少になり、改善が頭打ちなら早期停止
+    （収束世代数を減らす）。subgoal fitness は LLM 非依存・決定論なので
+    多世代の探索コストはゼロ円。最終的に勝ち残った進化候補のみを既存の
+    3軸スコアラー (`_score_variant_axes`) で採点し variants と同形で返す。
     """
     if not variants or _run_subgoal_scoring is None:
         return []
 
-    candidates = []
-    for v in variants:
-        content = v.get("content", "")
+    # subgoal total を勾配代理 fitness として注入（決定論・LLM 非依存）。
+    def _subgoal_fitness(content: str) -> float:
         sg = _run_subgoal_scoring(
             content, original=global_best_content, corrections=[], max_lines=500
         )
-        candidates.append({"content": content, "fitness": float(sg.get("total", 0.0))})
+        return float(sg.get("total", 0.0))
 
-    offspring = _evolution_operators.evolve_generation(
-        candidates, offspring_count=len(variants), corrections=[]
+    seeds = [{"content": v.get("content", "")} for v in variants]
+
+    search = _evolution_operators.evolve_search(
+        seeds,
+        fitness_fn=_subgoal_fitness,
+        generations=EVOLVE_SEARCH_GENERATIONS,
+        offspring_count=len(variants),
+        corrections=[],
+        patience=EVOLVE_SEARCH_PATIENCE,
     )
 
-    evolved: List[Dict[str, Any]] = []
-    for i, child in enumerate(offspring):
-        child_content = child["content"]
-        axes = _score_variant_axes(child_content, target_path, dry_run=dry_run)
-        evolved.append({
-            "id": f"evolved_{i}",
-            "score": axes.get("integrated", FALLBACK_SCORE),
-            "axes": axes,
-            "content": child_content,
-            "content_length": len(child_content),
-        })
-    return evolved
+    print(
+        f"  evolve-search: {search['generations_run']} 世代"
+        f"（収束={search['converged']}） "
+        f"best subgoal fitness 履歴={[round(x, 3) for x in search['best_fitness_history']]}"
+    )
+
+    best = search.get("best")
+    if not best:
+        return []
+
+    # 勝ち残った進化候補のみ既存 3 軸スコアラーで採点（LLM コストを 1 候補に限定）
+    child_content = best["content"]
+    axes = _score_variant_axes(child_content, target_path, dry_run=dry_run)
+    return [{
+        "id": "evolved_best",
+        "score": axes.get("integrated", FALLBACK_SCORE),
+        "axes": axes,
+        "content": child_content,
+        "content_length": len(child_content),
+        "subgoal_fitness": best["fitness"],
+        "evolve_search": {
+            "generations_run": search["generations_run"],
+            "converged": search["converged"],
+            "best_fitness_history": search["best_fitness_history"],
+        },
+    }]
 
 
 def run_loop(

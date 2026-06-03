@@ -358,8 +358,8 @@ class TestEvolveSearch:
             )
 
             assert len(results) == 1
-            # 進化フェーズで variant が増えている（元 2 + 子 2）
-            assert results[0]["variants_count"] >= 4
+            # 多世代探索 (#305) で進化 best が 1 件追加される（元 2 + evolved_best 1）
+            assert results[0]["variants_count"] >= 3
             # dry_run なので LLM 経路は呼ばれない
             mock_axis.assert_not_called()
 
@@ -405,7 +405,8 @@ class TestEvolveSearch:
 class TestEvolveVariantsHelper:
     """_evolve_variants ヘルパーの単体テスト（LLM 非依存）。"""
 
-    def test_offspring_と同形のdictを返す(self):
+    def test_進化bestを1件_variantと同形で返す(self):
+        # #305: 多世代探索で勝ち残った best を 1 件だけ返す（LLM 採点を 1 候補に限定）
         variants = [
             {"id": "v0", "score": 0.7, "axes": {}, "content": "---\nx: 1\n---\n# A\n\n## U\n\nu\n", "content_length": 10},
             {"id": "v1", "score": 0.6, "axes": {}, "content": "---\nx: 1\n---\n# B\n\n## V\n\nv\n", "content_length": 10},
@@ -413,9 +414,12 @@ class TestEvolveVariantsHelper:
         out = run_loop_mod._evolve_variants(
             variants, "/dummy", global_best_content=None, dry_run=True
         )
-        assert len(out) == len(variants)
-        for ev in out:
-            assert set(["id", "score", "axes", "content", "content_length"]).issubset(ev)
+        assert len(out) == 1
+        ev = out[0]
+        assert set(["id", "score", "axes", "content", "content_length"]).issubset(ev)
+        # 多世代探索のテレメトリが付随する
+        assert "evolve_search" in ev
+        assert "generations_run" in ev["evolve_search"]
 
     def test_空variantsなら空を返す(self):
         out = run_loop_mod._evolve_variants(

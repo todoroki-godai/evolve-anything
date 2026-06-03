@@ -12,11 +12,19 @@ crossover / mutation = 部分軌跡結合の進化演算子で局所最適を脱
     mutate(content, corrections=None) -> str
     select_parents(candidates, k, rng=None) -> list[dict]
     evolve_generation(candidates, offspring_count, corrections=None, rng=None) -> list[dict]
+    evolve_search(candidates, fitness_fn, generations, offspring_count, ...) -> dict
+
+SkillOpt 近似 (#305):
+    evolve_generation は単一世代の crossover/mutate のみで「訓練」の反復が無い。
+    evolve_search は fitness_fn を勾配代理として **多世代** 進化させ、
+    エリート保存で best fitness の単調非減少（=勾配上昇の近似）を保証する。
+    fitness_fn は呼び出し側が注入する純粋関数（LLM 非依存・決定論を維持）。
+    論文準拠の SkillOpt 実装が公開されたら fitness_fn を差し替える前提（[ADR-035]）。
 """
 
 import random
 import re
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 # Markdown セクション見出し（`## ` 始まり）
 _SECTION_RE = re.compile(r"^##\s", re.MULTILINE)
@@ -221,3 +229,126 @@ def evolve_generation(
         offspring.append({"content": child_content})
 
     return offspring
+
+
+# ── evolve_search（多世代 / SkillOpt 近似 #305）───────────────────────────
+
+
+def evolve_search(
+    candidates: List[Dict],
+    fitness_fn: Callable[[str], float],
+    generations: int,
+    offspring_count: int,
+    corrections: Optional[List[str]] = None,
+    *,
+    patience: int = 3,
+    epsilon: float = 1e-4,
+    rng: Optional[random.Random] = None,
+) -> Dict:
+    """fitness_fn を勾配代理として多世代の進化探索を回す（SkillOpt 近似）。
+
+    「スキルを訓練可能な対象として勾配的に最適化する」発想を、既存の
+    evolution_operators（crossover/mutate/select）の枠内でエリート保存付き
+    多世代探索として近似する。各世代で:
+
+      1. 現集団を fitness_fn で再評価する（注入 fitness が真の信号）。
+      2. evolve_generation で子集団を生成する。
+      3. 親 + 子の中から best を含む top を次世代に引き継ぐ（エリート保存）。
+
+    エリート保存により best fitness は世代をまたいで単調非減少になる
+    （= 勾配上昇の近似）。patience 世代連続で改善幅が epsilon 未満なら
+    収束とみなして早期停止する。
+
+    完全決定論: fitness_fn が純粋関数なら、同一 rng seed で出力は再現する。
+    LLM/subprocess は一切呼ばない（fitness_fn の中身は呼び出し側の責務）。
+
+    Args:
+        candidates:      初期集団 [{"content": str, ...}, ...]。
+        fitness_fn:      content -> float (0.0–1.0 推奨)。勾配代理の信号。
+        generations:     最大世代数。0 なら初期 best のみ返す。
+        offspring_count: 各世代で生成する子の数。
+        corrections:     mutate に渡す corrections（任意）。
+        patience:        改善なし世代数の許容上限（早期停止）。
+        epsilon:         「改善あり」とみなす最小差分。
+        rng:             random.Random。未指定時は内部生成。
+
+    Returns:
+        {
+            "best": {"content": str, "fitness": float} | None,
+            "best_fitness_history": list[float],  # 世代ごとの best fitness
+            "generations_run": int,               # 実際に回した世代数
+            "converged": bool,                    # 早期停止したか
+        }
+    """
+    empty_result = {
+        "best": None,
+        "best_fitness_history": [],
+        "generations_run": 0,
+        "converged": False,
+    }
+    if not candidates:
+        return empty_result
+    if rng is None:
+        rng = random.Random()
+
+    def _evaluate(pool: List[Dict]) -> List[Dict]:
+        """各候補に fitness_fn を適用した新 dict のリストを返す。"""
+        scored: List[Dict] = []
+        for c in pool:
+            content = c.get("content", "")
+            scored.append({"content": content, "fitness": float(fitness_fn(content))})
+        return scored
+
+    # 初期集団を真の fitness で評価
+    population = _evaluate(candidates)
+    best = max(population, key=lambda c: c["fitness"])
+    history: List[float] = []
+    converged = False
+    no_improve = 0
+    gens_run = 0
+
+    if generations <= 0:
+        return {
+            "best": {"content": best["content"], "fitness": best["fitness"]},
+            "best_fitness_history": [],
+            "generations_run": 0,
+            "converged": False,
+        }
+
+    for _ in range(generations):
+        gens_run += 1
+
+        # 子集団を生成し fitness 評価
+        offspring = evolve_generation(
+            population, offspring_count, corrections=corrections, rng=rng
+        )
+        offspring_scored = _evaluate(offspring)
+
+        # エリート保存: 親 + 子を fitness 降順に並べ、上位を次世代へ。
+        # 集団サイズは初期サイズを維持し、best は必ず残る（単調性保証）。
+        combined = population + offspring_scored
+        combined.sort(key=lambda c: c["fitness"], reverse=True)
+        pop_size = max(len(candidates), 1)
+        population = combined[:pop_size]
+
+        gen_best = population[0]
+        improvement = gen_best["fitness"] - best["fitness"]
+        # best は単調非減少（エリート保存で gen_best >= best が保証される）
+        if gen_best["fitness"] > best["fitness"]:
+            best = gen_best
+        history.append(best["fitness"])
+
+        if improvement < epsilon:
+            no_improve += 1
+        else:
+            no_improve = 0
+        if no_improve >= patience:
+            converged = True
+            break
+
+    return {
+        "best": {"content": best["content"], "fitness": best["fitness"]},
+        "best_fitness_history": history,
+        "generations_run": gens_run,
+        "converged": converged,
+    }
