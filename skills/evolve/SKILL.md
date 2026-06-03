@@ -699,10 +699,79 @@ remediation 結果から**必ず**以下を判定カードに反映する:
 - 上記すべて 0 → 「✅ 問題なし」に含める
 - `proposable_global` のみ ≥ 1 → 🟡 情報「global スキル proposable {M}件（参考値）」
 
+### Step 11: 自己解析 → issue 半自動起票（MUST — #299）
+
+evolve は他のフェーズで対象 PJ を改善するが、**evolve 自身の実行結果**（提案の質・実行時エラー・改善余地）を振り返る経路がこれまで無かった。パイプラインのバグや改善余地は、人間が気づいて手で issue を立てるまで構造に残らない（「install ≠ enforcement」と同型の配線漏れ）。このステップで evolve の `result` を自己解析し、検出した候補を**人間承認のうえ GitHub issue 化**してメタ層のループを閉じる。
+
+evolve.py 出力のトップレベル `self_analysis` フィールドを読む（`analyze_evolve_result` が決定論で生成済み。LLM 非依存なのでトークン見積もりは不要）。構造:
+
+```
+self_analysis: {
+  self_detection:          {candidates: [...], summary_line: "..."},   # 提案の質（split↔archive 矛盾 / line budget 悪化提案）
+  runtime_errors:          {candidates: [...], summary_line: "..."},   # 握り潰された phase 例外 / observability 取得失敗
+  improvement_opportunities: {candidates: [...], summary_line: "..."}, # 系統的却下 type / calibration regression
+  total_candidates: N,
+}
+```
+
+各 candidate: `{category, title, body, suggested_label, dedup_key, severity}`。
+
+**1. surface（必ず3カテゴリとも — MUST）**: 各カテゴリの `summary_line` をそのまま列挙する。0 件でも `✓ 評価したが該当なし` 行を省略しない（silence ≠ evaluated）。`self_analysis` が `{"error": ...}` の場合はエラーをそのまま表示。
+
+```
+### 自己解析（evolve メタ層）
+- 自己検出: {self_detection.summary_line}
+- 実行時エラー: {runtime_errors.summary_line}
+- 改善余地: {improvement_opportunities.summary_line}
+```
+
+**2. 候補ゼロなら終了**: `total_candidates == 0` ならここで終了（上記 ✓ 3行のみ残す）。
+
+**3. dedup（候補がある場合 — MUST）**: 既存 open issue と突合し、毎 evolve の重複起票を防ぐ（root cause 単位）。
+
+```bash
+gh issue list --repo todoroki-godai/rl-anything --state open --json number,title,body --limit 100
+```
+
+候補の flatten（3カテゴリ取りこぼし防止）と dedup は決定論ヘルパーに任せる。`self_analysis` 全体を `/tmp/rl_self_analysis.json` に、`gh issue list` 出力を `/tmp/rl_existing_issues.json` に書き出してから:
+
+```bash
+python3 -c "
+import sys, json; sys.path.insert(0, '${CLAUDE_PLUGIN_ROOT}/scripts/lib')
+from evolve_introspect import flatten_candidates, filter_duplicates
+analysis = json.load(open('/tmp/rl_self_analysis.json'))   # result['self_analysis'] そのまま
+existing = json.load(open('/tmp/rl_existing_issues.json'))  # gh issue list の出力
+cands = flatten_candidates(analysis)                        # 3カテゴリを決定論で平坦化
+print(json.dumps(filter_duplicates(cands, existing), ensure_ascii=False))
+"
+```
+
+duplicates は「既存 #N と重複 — スキップ」と1行ずつ表示する（沈黙させない）。
+
+**4. 承認（unique のみ — 提案詳細プロトコルに従う・MUST）**: unique 候補を**1件ずつ**「対象（title）・根拠（body の要点・severity）・起票先（todoroki-godai/rl-anything）・ラベル（suggested_label）」を提示してから AskUserQuestion で個別承認する。`suggested_label`（runtime_error/self_detection → `bug`、improvement → `enhancement`）は提案値であり、ユーザーがラベル変更・スキップを選べるようにする。10 件超は per-item 10 件まで展開し残りは件数で示す。
+
+**5. 起票（承認分のみ・MUST）**: body はマーカー付きで生成する（次回 evolve が同じ root cause を確実に dedup できる）。
+
+```bash
+BODY=$(python3 -c "
+import sys, json; sys.path.insert(0, '${CLAUDE_PLUGIN_ROOT}/scripts/lib')
+from evolve_introspect import render_issue_body
+print(render_issue_body(json.load(open('/tmp/rl_one_candidate.json'))))
+")
+gh issue create --repo todoroki-godai/rl-anything --title "<title>" --body "$BODY" --label "<label>"
+```
+
+> **一言メモ — 自己解析完了後:**
+> 起票件数（承認 → 起票した issue 数）に応じて1文を出力する。
+> - 1件以上: 「自分の歪みを {N} 件、記録に残した。次はそこから直る。」
+> - 0件（候補ありだが全却下/全重複）: 「気づきはあったが、今は起票しない。それも判断だ。」
+> - 候補ゼロ: 「自分を省みた。問題なし。」
+
 ### べき等性
 
 連続実行時、前回以降の新規データのみを対象に処理する（MUST）。
 重複した提案を行ってはならない（MUST NOT）。
+自己解析の起票は body 埋め込みマーカー（`rl-evolve-introspect:<dedup_key>`）で root cause 単位の重複を防ぐ（MUST NOT — 同一 root cause で毎 evolve 重複起票しない）。
 
 ## allowed-tools
 

@@ -777,6 +777,15 @@ def run_evolve(
     # Trigger history summary for report
     result["trigger_summary"] = _build_trigger_summary()
 
+    # Phase 7: Self-Analysis（#299 — evolve 自身の result を自己解析し issue 候補を生成）
+    # 全フェーズが揃った後に実行する（phases の error / 提案矛盾 / 改善余地を読む）。
+    # 決定論・LLM 非依存。起票自体は SKILL が人間承認の後に行う（半自動）。
+    try:
+        from evolve_introspect import analyze_evolve_result
+        result["self_analysis"] = analyze_evolve_result(result, project_dir)
+    except Exception as e:
+        result["self_analysis"] = {"error": str(e)}
+
     # State 更新（dry-run でない場合）
     if not dry_run:
         state = load_evolve_state()

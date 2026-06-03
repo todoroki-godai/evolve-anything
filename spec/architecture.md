@@ -116,6 +116,9 @@ scripts/rl/fitness/     ← 適応度関数（8個組み込み: default + 7 .py 
       → constraint_decay (セッション後半 30% ターン集中 correction を検出 → decay_rate 算出)
       → negative_transfer (スキル追加前後の success rate delta 計測 → delta < -0.05 でフラグ。compute_component_transfer は更新コンポーネント別に isolation window で分離帰属し observability contract で surface、#288)
       → audit (環境健康診断)
+      → self_analysis (evolve_introspect: run_evolve 末尾で result 全体を読み 3 カテゴリ
+          [提案矛盾 / phase 例外 / 系統的却下] の issue 候補を生成 → SKILL Step 11 が人間承認後
+          todoroki-godai/rl-anything へ半自動起票。root cause 単位の body マーカーで重複起票防止、#299 [ADR-033])
       → optimize (直接パッチ → regression gate)
       → instruction compliance (corrections × critical指示 → 違反検出 → pitfall学習)
       → growth_engine (Phase判定 → growth-state.json キャッシュ)
@@ -129,7 +132,7 @@ scripts/rl/fitness/     ← 適応度関数（8個組み込み: default + 7 .py 
 全 24 件の詳細は [docs/decisions/](../docs/decisions/) を参照。SPEC.md からの移動（2026-04-24）。
 
 - **配布・観測**: Plugin 配布 ([001](../docs/decisions/001-plugin-distribution-model.md)), hooks+JSONL ([002](../docs/decisions/002-observe-hooks-jsonl-architecture.md)), hook enrichment ([015](../docs/decisions/015-hook-agent-enrichment.md)), Plugin bin/ 移行 ([019](../docs/decisions/019-plugin-bin-directory-migration.md)), philosophy seed 配布 ([020](../docs/decisions/020-philosophy-seed-distribution.md))
-- **パイプライン**: GA廃止→直接パッチ ([003](../docs/decisions/003-direct-patch-over-genetic-algorithm.md)), 全レイヤー診断/Compile ([007](../docs/decisions/007-all-layer-diagnose-adapter-pattern.md), [008](../docs/decisions/008-all-layer-compile-dispatch-pattern.md)), 3ステージ簡素化 ([009](../docs/decisions/009-simplify-pipeline-3-stage.md)), スキル自己進化 ([016](../docs/decisions/016-skill-self-evolution-pattern.md), [017](../docs/decisions/017-evolve-skill-independent-command.md))
+- **パイプライン**: GA廃止→直接パッチ ([003](../docs/decisions/003-direct-patch-over-genetic-algorithm.md)), 全レイヤー診断/Compile ([007](../docs/decisions/007-all-layer-diagnose-adapter-pattern.md), [008](../docs/decisions/008-all-layer-compile-dispatch-pattern.md)), 3ステージ簡素化 ([009](../docs/decisions/009-simplify-pipeline-3-stage.md)), スキル自己進化 ([016](../docs/decisions/016-skill-self-evolution-pattern.md), [017](../docs/decisions/017-evolve-skill-independent-command.md)), evolve メタ層の自己解析→issue 半自動起票 ([033](../docs/decisions/033-evolve-introspect-self-analysis-issue-filing.md))
 - **評価・スコアリング**: Coherence 4軸 ([004](../docs/decisions/004-coherence-score-4-axes.md)), Telemetry ([005](../docs/decisions/005-telemetry-score-architecture.md)), Constitutional Judge ([006](../docs/decisions/006-constitutional-eval-llm-judge.md)), CoT除去 ([018](../docs/decisions/018-evaluate-pipeline-cot-removal.md))
 - **運用・自動化**: Auto trigger ([010](../docs/decisions/010-auto-evolve-trigger-engine.md), [011](../docs/decisions/011-auto-compression-trigger.md)), Self-Evolution EWA ([012](../docs/decisions/012-self-evolution-trajectory-ewa.md)), Compaction復元 ([013](../docs/decisions/013-compaction-state-recovery.md)), CC v2適用 ([014](../docs/decisions/014-adopt-claude-code-v2-features.md))
 - **安全設計**: Cleanup tmp_dir prefix safety-first default ([021](../docs/decisions/021-cleanup-tmp-dir-prefix-safety.md))
