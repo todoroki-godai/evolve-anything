@@ -20,7 +20,10 @@ import pytest
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 _LIB = _PLUGIN_ROOT / "scripts" / "lib"
 _SCRIPTS = _PLUGIN_ROOT / "scripts"
-for _p in (_LIB, _SCRIPTS):
+# fitness_evolution は evolve-fitness スキル配下。calibration_drift builder のグローバル
+# history を snapshot テストで隔離するため path を通す（_load_fitness_evolution と同経路）。
+_FE_SCRIPTS = _PLUGIN_ROOT / "skills" / "evolve-fitness" / "scripts"
+for _p in (_LIB, _SCRIPTS, _FE_SCRIPTS):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -71,6 +74,15 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     if "rl_common" in sys.modules:
         importlib.reload(sys.modules["rl_common"])
     importlib.reload(sys.modules["audit"])
+    # calibration_drift / eval_saturation builder は環境グローバル状態（optimize の
+    # history.jsonl / DATA_DIR の eval-sets）を読むため、実機データがあると snapshot が
+    # ブレる。空 tmp に向けて出力を決定論化する（#286 / #292）。
+    import fitness_evolution
+    monkeypatch.setattr(fitness_evolution, "HISTORY_DIR", tmp_path / "no-history")
+    import eval_saturation
+    monkeypatch.setattr(
+        eval_saturation, "_default_eval_sets_dir", lambda: tmp_path / "no-evalsets"
+    )
     return proj
 
 

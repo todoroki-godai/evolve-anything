@@ -15,7 +15,10 @@ from pathlib import Path
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 _LIB = _PLUGIN_ROOT / "scripts" / "lib"
 _SCRIPTS = _PLUGIN_ROOT / "scripts"
-for _p in (_LIB, _SCRIPTS):
+# fitness_evolution は evolve-fitness スキル配下に居るため、calibration_drift builder の
+# グローバル history を隔離するテストで import できるよう path を通す（_load_fitness_evolution と同経路）。
+_FE_SCRIPTS = _PLUGIN_ROOT / "skills" / "evolve-fitness" / "scripts"
+for _p in (_LIB, _SCRIPTS, _FE_SCRIPTS):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -56,10 +59,18 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     eval_saturation は環境グローバル（DATA_DIR 配下の eval-sets）を読む builder のため、
     実機に eval-sets があると本テストの「PJ アーティファクト無し」前提が崩れる。
     PJ アーティファクト契約を隔離するため eval-sets dir を空 tmp に向ける（#292）。
+
+    calibration_drift も環境グローバル（genetic-prompt-optimizer の history.jsonl）を読む
+    builder のため、実機に optimize 履歴があると同様に前提が崩れる。HISTORY_DIR を空 tmp に
+    向けて load_history() を空にし「PJ アーティファクト無し」契約を隔離する（#286）。
     """
     import eval_saturation
     monkeypatch.setattr(
         eval_saturation, "_default_eval_sets_dir", lambda: tmp_path / "no-evalsets"
+    )
+    import fitness_evolution
+    monkeypatch.setattr(
+        fitness_evolution, "HISTORY_DIR", tmp_path / "no-history"
     )
     result = collect_observability(tmp_path)
     assert result == {}

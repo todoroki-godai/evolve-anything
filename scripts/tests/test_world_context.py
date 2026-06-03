@@ -21,6 +21,8 @@ if str(_LIB_DIR) not in sys.path:
 from world_context import (
     DEFAULT_WORLD_CONTEXT,
     WORLD_CONTEXT_FILE,
+    _slug_filename,
+    _world_path,
     generate_world_context,
     load_world_context,
     main,
@@ -160,8 +162,8 @@ def test_save_increments_total_evolve_count(tmp_data_dir: Path, sample_world: di
     saved = save_world_context(tmp_data_dir, sample_world)
     assert saved["total_evolve_count"] == 4
 
-    # ファイルにも反映
-    on_disk = json.loads((tmp_data_dir / WORLD_CONTEXT_FILE).read_text())
+    # ファイルにも反映（sample_world は project_slug を持つので per-slug パスに書かれる）
+    on_disk = json.loads(_world_path(tmp_data_dir, "test-proj").read_text())
     assert on_disk["total_evolve_count"] == 4
 
 
@@ -217,6 +219,86 @@ def test_second_load_returns_same_world_not_regenerated(
     assert first["protagonist_title"] == second["protagonist_title"]
 
 
+# ── PJ 別スコープ（cross-project 汚染防止 / 案A） ─────────────────────────────
+
+
+def test_slug_filename_sanitizes_unsafe_chars() -> None:
+    # path 区切りや空白は安全文字に置換される（ディレクトリトラバーサル防止）
+    assert _slug_filename("atlas-breeders") == "world-context-atlas-breeders.json"
+    assert _slug_filename("a/b c") == "world-context-a_b_c.json"
+    assert _slug_filename("../etc/passwd") == "world-context-.._etc_passwd.json"
+    assert _slug_filename("") == "world-context-default.json"
+
+
+def test_world_path_legacy_when_no_slug(tmp_data_dir: Path) -> None:
+    assert _world_path(tmp_data_dir, "") == tmp_data_dir / WORLD_CONTEXT_FILE
+
+
+def test_world_path_per_slug_when_slug_given(tmp_data_dir: Path) -> None:
+    p = _world_path(tmp_data_dir, "atlas-breeders")
+    assert p == tmp_data_dir / "world-contexts" / "world-context-atlas-breeders.json"
+
+
+def test_load_with_slug_isolates_projects(tmp_data_dir: Path) -> None:
+    """先に別PJの世界観を保存しても、異なる slug の load は None を返す（汚染しない）。"""
+    ctx_docs = {
+        **DEFAULT_WORLD_CONTEXT,
+        "project_slug": "docs-platform",
+        "environment_name": "書架DOCS",
+        "total_evolve_count": 2,
+    }
+    save_world_context(tmp_data_dir, ctx_docs, slug="docs-platform")
+
+    # 別PJ atlas-breeders で load → 既存ファイルがあっても None（再生成に流れる）
+    assert load_world_context(tmp_data_dir, slug="atlas-breeders") is None
+
+    # docs-platform 自身で load → 自分の世界観が返る
+    got = load_world_context(tmp_data_dir, slug="docs-platform")
+    assert got is not None
+    assert got["environment_name"] == "書架DOCS"
+    assert got["total_evolve_count"] == 3  # save が +1 する（2 → 3）
+
+
+def test_save_derives_slug_from_ctx_project_slug(tmp_data_dir: Path) -> None:
+    """slug を明示しなくても ctx.project_slug から per-slug パスを導出する。"""
+    ctx = {**DEFAULT_WORLD_CONTEXT, "project_slug": "proj-x", "environment_name": "X"}
+    save_world_context(tmp_data_dir, ctx)
+    assert _world_path(tmp_data_dir, "proj-x").exists()
+    assert load_world_context(tmp_data_dir, slug="proj-x")["environment_name"] == "X"
+
+
+def test_save_explicit_slug_overrides_ctx(tmp_data_dir: Path) -> None:
+    ctx = {**DEFAULT_WORLD_CONTEXT, "project_slug": "in-ctx", "environment_name": "Y"}
+    save_world_context(tmp_data_dir, ctx, slug="explicit")
+    assert _world_path(tmp_data_dir, "explicit").exists()
+    assert load_world_context(tmp_data_dir, slug="explicit") is not None
+
+
+def test_two_projects_keep_independent_worlds(tmp_data_dir: Path) -> None:
+    save_world_context(
+        tmp_data_dir,
+        {**DEFAULT_WORLD_CONTEXT, "project_slug": "proj-a", "environment_name": "A"},
+        slug="proj-a",
+    )
+    save_world_context(
+        tmp_data_dir,
+        {**DEFAULT_WORLD_CONTEXT, "project_slug": "proj-b", "environment_name": "B"},
+        slug="proj-b",
+    )
+    assert load_world_context(tmp_data_dir, slug="proj-a")["environment_name"] == "A"
+    assert load_world_context(tmp_data_dir, slug="proj-b")["environment_name"] == "B"
+
+
+def test_legacy_global_file_not_returned_for_slugged_load(tmp_data_dir: Path) -> None:
+    """旧来のグローバル world-context.json が残っていても slug 付き load は拾わない。"""
+    tmp_data_dir.mkdir(parents=True, exist_ok=True)
+    legacy = {**DEFAULT_WORLD_CONTEXT, "project_slug": "old-global"}
+    (tmp_data_dir / WORLD_CONTEXT_FILE).write_text(
+        json.dumps(legacy, ensure_ascii=False), encoding="utf-8"
+    )
+    assert load_world_context(tmp_data_dir, slug="any-project") is None
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -249,7 +331,31 @@ def test_cli_generate_saves_and_prints(
         ])
 
     assert ret == 0
-    assert (data_dir / WORLD_CONTEXT_FILE).exists()
+    assert _world_path(data_dir, "test-slug").exists()
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
     assert parsed["project_slug"] == "test-slug"
+
+
+def test_cli_generate_then_load_other_slug_isolated(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """--generate --slug A の後、--load --slug B は exit 1（別PJの世界観を拾わない）。"""
+    data_dir = tmp_path / "rl-anything"
+    with patch("world_context.subprocess.run") as mock_run:
+        mock_run.return_value = _make_subprocess_mock(_VALID_LLM_RESPONSE)
+        gen = main([
+            "--generate",
+            "--claude-md", str(tmp_path / "CLAUDE.md"),
+            "--slug", "proj-a",
+            "--data-dir", str(data_dir),
+        ])
+    assert gen == 0
+    capsys.readouterr()  # drain
+
+    # 別 slug で load → 見つからない
+    assert main(["--load", "--slug", "proj-b", "--data-dir", str(data_dir)]) == 1
+    # 同じ slug で load → 見つかる
+    assert main(["--load", "--slug", "proj-a", "--data-dir", str(data_dir)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["project_slug"] == "proj-a"

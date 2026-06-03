@@ -21,6 +21,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -65,9 +66,35 @@ JSON のみ返す。説明・前置き不要。
 """
 
 
-def load_world_context(data_dir: Path = DATA_DIR) -> Optional[dict]:
-    """キャッシュ済み world-context.json を読む。なければ None。"""
-    path = data_dir / WORLD_CONTEXT_FILE
+def _slug_filename(slug: str) -> str:
+    """slug を安全なファイル名に変換する（path 区切り・空白を `_` へ）。
+
+    DATA_DIR はプラグイン全体で 1 つ（CLAUDE_PLUGIN_DATA 未設定時は全 PJ 共通）の
+    ため、world-context.json を単一ファイルで持つと先に evolve した別 PJ の世界観が
+    流用される（cross-project 汚染）。slug 別ファイルにスコープして分離する。
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", slug.strip()) or "default"
+    return f"world-context-{safe}.json"
+
+
+def _world_path(data_dir: Path, slug: str = "") -> Path:
+    """world-context の保存パスを返す。
+
+    slug 指定時は `world-contexts/<slug>.json`（PJ 別スコープ）、
+    slug 未指定時は従来の `world-context.json`（後方互換のグローバルパス）。
+    """
+    if slug and slug.strip():
+        return data_dir / "world-contexts" / _slug_filename(slug)
+    return data_dir / WORLD_CONTEXT_FILE
+
+
+def load_world_context(data_dir: Path = DATA_DIR, slug: str = "") -> Optional[dict]:
+    """キャッシュ済み world-context を読む。なければ None。
+
+    slug 指定時は per-slug パスのみを参照する（グローバルへフォールバックしない＝
+    別 PJ の世界観を拾わない）。
+    """
+    path = _world_path(data_dir, slug)
     if not path.exists():
         return None
     try:
@@ -135,14 +162,18 @@ def save_world_context(
     data_dir: Path = DATA_DIR,
     ctx: Optional[dict] = None,
     env_score: Optional[float] = None,
+    slug: str = "",
 ) -> dict:
-    """world-context.json を保存する。
+    """world-context を保存する。
 
     保存時に以下を自動更新する:
     - total_evolve_count: += 1
     - last_evolve_date: 今日の ISO 日付 (YYYY-MM-DD)
     - current_level / previous_level: env_score が渡された場合のみ更新
       (previous_level ← current_level, current_level ← compute_level(env_score).level)
+
+    保存先は slug でスコープする。slug 未指定時は ctx["project_slug"] から導出し、
+    それも無ければ従来のグローバルパスに書く（後方互換）。
 
     戻り値: 保存後の ctx dict。
     """
@@ -162,8 +193,9 @@ def save_world_context(
         except Exception:
             pass
 
-    data_dir.mkdir(parents=True, exist_ok=True)
-    path = data_dir / WORLD_CONTEXT_FILE
+    effective_slug = slug.strip() if slug else str(ctx.get("project_slug", "") or "").strip()
+    path = _world_path(data_dir, effective_slug)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(ctx, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return ctx
 
@@ -197,7 +229,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--slug",
         metavar="SLUG",
         default="",
-        help="project_slug フィールドに埋め込む値",
+        help="PJ 別スコープ用の slug。--load では参照先 PJ の特定に、"
+             "--generate では project_slug フィールドに使う（PJ 間の世界観汚染を防ぐ）",
     )
     parser.add_argument(
         "--data-dir",
@@ -237,7 +270,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     data_dir = Path(args.data_dir)
 
     if args.load:
-        ctx = load_world_context(data_dir)
+        ctx = load_world_context(data_dir, args.slug)
         if ctx is None:
             return 1
         _print_ctx(ctx)
@@ -253,7 +286,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             pass
 
     ctx = generate_world_context(claude_md_text, args.slug)
-    ctx = save_world_context(data_dir, ctx)
+    ctx = save_world_context(data_dir, ctx, slug=args.slug)
     _print_ctx(ctx)
     return 0
 

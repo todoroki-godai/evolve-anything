@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(world_context): evolve ナレーションの世界観が PJ 間で汚染される問題を修正** — `world_context.py` は `DATA_DIR/world-context.json` の単一ファイルで世界観を保持していたが、`DATA_DIR` は `CLAUDE_PLUGIN_DATA` 未設定時に全 PJ 共通（`~/.claude/rl-anything/`）のため、先に evolve した別 PJ（例: docs-platform）の世界観が後続 PJ（例: atlas-breeders）の `--load` でヒットして流用されていた（`load_world_context` が `project_slug` を照合せずファイル存在のみで返していた）。保存先を `world-contexts/world-context-<slug>.json` の **PJ 別スコープ**に分離し、`load_world_context(data_dir, slug)` / `save_world_context(..., slug)`（slug 未指定時は `ctx["project_slug"]` から導出）に slug 引数を追加。slug 指定時はグローバルへフォールバックしない（汚染源を遮断）。`--load` CLI に `--slug` を追加し、evolve SKILL.md の Step 0.5（load/generate）と Step 1（env_score save）の両方で slug を渡すよう配線。slug は `[^A-Za-z0-9._-]` を `_` 置換でサニタイズ（traversal 防止）。既存グローバルファイルは `project_slug` 基準で per-slug パスへ一度だけ移行（継続性保持）。ナレーション専用のため主機能には影響なし。TDD（PJ 分離・サニタイズ・CLI 分離の回帰 11 件追加、計 27 件緑）+ 実 CLI E2E（proj-a 取得／proj-b は exit 1 で非汚染）で確認。
+
 ## [1.83.0] - 2026-06-03
 
 ### Added
