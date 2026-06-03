@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.83.2] - 2026-06-03
+
 ### Fixed
 - **fix(skill_triggers): `- **ラベル**: `/skill`` 形式の CLAUDE.md Skills が読めず誤検知が多発する問題を修正（#295）** — `_parse_skills_section` のリスト行パーサ `^-\s+/?([a-zA-Z0-9_:-]+)\s*[:：]` は `- /skill:` / `- skill:` 形式しか拾えず、ハイフン直後が太字の非ASCIIラベルで skill 名がコロン後ろのバッククォート内にある形式（例: `- **AWSデプロイ**: \`/aws-deploy\` - \`.claude/skills/aws-deploy/SKILL.md\``）を **CLAUDE.md が存在するのに trigger 0 件**しか返さなかった。結果 `claudemd_skills` が空集合になり「CLAUDE.md 記載スキルは除外」ロジック（`detect_untagged_reference_candidates` / `detect_missed_skills` / `triage_all_skills`）が全滅し、ユーザー呼び出し型の実行スキルを `type: reference` 付与候補や missed として誤検出していた（当初 shadow 環境のパス解決問題と推定されたが、実体 project_dir 上で再現するパーサバグが真因）。`_extract_list_item_skill` を新設し、プレーン形式に加えて行内の最初のバッククォートコマンド `` `/skill-name` `` を skill 名として拾う（過剰捕捉は exclusion 集合を広げる＝誤検知を減らす安全側にしか効かない）。併せて (1) `resolve_claude_md_path` で CLAUDE.md を実体パス基準（直下→git ルート fallback）で解決、(2) `detect_missed_skills` のメッセージを「CLAUDE.md 不在」と「在るが trigger 抽出 0」で区別（ミスリード防止）、(3) audit は「CLAUDE.md は在るが trigger 抽出 0」のとき untagged_reference 検出を suppress しつつ件数を明示 surface（`claude_md_unparseable` ゲート、誤検出を confident に出さない）。実機 `sys-bots-main`/CLAUDE.md で before 0 件 → after 12 skills を確認。TDD（パーサ 3 形式 + resolver git fallback + skip/surface ゲート、新規 12 件）。[ADR-032]
 
