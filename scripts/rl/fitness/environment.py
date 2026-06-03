@@ -68,9 +68,21 @@ def _load_sibling(name: str):
     return mod
 
 
-def _normalize_weights(available_axes: list) -> Dict[str, float]:
-    """利用可能な軸のみで BASE_WEIGHTS を正規化（合計=1.0）。"""
-    raw = {k: v for k, v in BASE_WEIGHTS.items() if k in available_axes}
+def _normalize_weights(
+    available_axes: list, base_weights: Dict[str, float] | None = None
+) -> Dict[str, float]:
+    """利用可能な軸のみでベース重みを正規化（合計=1.0）。
+
+    動的正規化の数式単一ソース。environment 自身は BASE_WEIGHTS を使うが、
+    skill_rm 等の他 fitness が独自のベース重み（例: 共通軸 structure/success/validity）を
+    渡しても同じ正規化規則を再利用できる（数式の重複定義を防ぐ）。
+
+    Args:
+        available_axes: 算出できた軸のリスト。
+        base_weights: ベース重み辞書。None の場合 BASE_WEIGHTS（軸別統合）を使う。
+    """
+    weights = BASE_WEIGHTS if base_weights is None else base_weights
+    raw = {k: v for k, v in weights.items() if k in available_axes}
     total = sum(raw.values())
     if total == 0:
         return {}
@@ -157,6 +169,15 @@ def compute_environment_fitness(
     except Exception:
         pass
 
+    # Skill-RM（スキル軸の異種基準統一報酬）— 軸別統合と直交する補助診断。
+    # overall には混ぜず、calibration drift 帰属用に per-skill 報酬分布を surface する。
+    skill_rm_result: Dict[str, Any] | None = None
+    try:
+        skill_rm_mod = _load_sibling("skill_rm")
+        skill_rm_result = skill_rm_mod.compute_skill_rewards(project_dir, days)
+    except Exception:
+        pass
+
     # --- 動的正規化 ---
     sources = list(axis_scores.keys())
     weights_used = _normalize_weights(sources)
@@ -177,6 +198,9 @@ def compute_environment_fitness(
     for axis_name, axis_result in axis_results.items():
         if axis_result is not None:
             result[axis_name] = axis_result
+
+    if skill_rm_result is not None:
+        result["skill_rm"] = skill_rm_result
 
     if record and axis_scores:
         try:
@@ -221,6 +245,16 @@ def format_environment_report(result: Dict[str, Any]) -> List[str]:
         lines.append(f"  Skill Quality:  {sq['overall']:.2f} (weight {w:.2f})")
 
     lines.append("")
+
+    # Skill-RM（スキル軸の異種基準統一報酬）— 軸別統合と直交する補助診断行。
+    skill_rm = result.get("skill_rm")
+    if isinstance(skill_rm, dict):
+        try:
+            srm_mod = _load_sibling("skill_rm")
+            lines.extend(srm_mod.format_skill_rm_report(skill_rm))
+        except Exception:
+            pass
+
     return lines
 
 
