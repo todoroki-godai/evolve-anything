@@ -14,8 +14,10 @@ from plugin_root import PLUGIN_ROOT
 _lib = PLUGIN_ROOT / "scripts" / "lib"
 if str(_lib) not in sys.path:
     sys.path.insert(0, str(_lib))
+# GENERATIONS_DIR は run 成果物（個体データ）の収集元として維持。
+# accept/reject 履歴は ADR-031 で optimize_history_store（DATA_DIR/optimize_history/<slug>）に集約。
+# 旧 RL_LOOP_DIR（cwd/.rl-loop）参照は未使用の split 残骸だったため撤去。
 GENERATIONS_DIR = PLUGIN_ROOT / "skills" / "genetic-prompt-optimizer" / "scripts" / "generations"
-RL_LOOP_DIR = Path.cwd() / ".rl-loop"
 
 
 def load_generation_data() -> List[Dict[str, Any]]:
@@ -41,16 +43,9 @@ def load_generation_data() -> List[Dict[str, Any]]:
 
 
 def load_history() -> List[Dict[str, Any]]:
-    """history.jsonl からデータを読み込む。"""
-    history_file = GENERATIONS_DIR / "history.jsonl"
-    records = []
-    if history_file.exists():
-        for line in history_file.read_text(encoding="utf-8").splitlines():
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return records
+    """accept/reject 履歴を store から読み込む（ADR-031: current project slug）。"""
+    import optimize_history_store as store
+    return store.load_history(store.resolve_slug())
 
 
 def aggregate(records: List[Dict[str, Any]], history: List[Dict[str, Any]]) -> str:

@@ -60,18 +60,17 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     実機に eval-sets があると本テストの「PJ アーティファクト無し」前提が崩れる。
     PJ アーティファクト契約を隔離するため eval-sets dir を空 tmp に向ける（#292）。
 
-    calibration_drift も環境グローバル（genetic-prompt-optimizer の history.jsonl）を読む
-    builder のため、実機に optimize 履歴があると同様に前提が崩れる。HISTORY_DIR を空 tmp に
-    向けて load_history() を空にし「PJ アーティファクト無し」契約を隔離する（#286）。
+    calibration_drift も環境グローバル（accept/reject 履歴）を読む builder のため、実機に
+    optimize 履歴があると同様に前提が崩れる。store を空 tmp に向けて load_history() を空にし
+    「PJ アーティファクト無し」契約を隔離する（#286 / ADR-031 で store 隔離に移行）。
     """
     import eval_saturation
     monkeypatch.setattr(
         eval_saturation, "_default_eval_sets_dir", lambda: tmp_path / "no-evalsets"
     )
-    import fitness_evolution
-    monkeypatch.setattr(
-        fitness_evolution, "HISTORY_DIR", tmp_path / "no-history"
-    )
+    import optimize_history_store as _ohs
+    monkeypatch.setattr(_ohs, "HISTORY_ROOT", tmp_path / "no-history")
+    monkeypatch.setattr(_ohs, "resolve_slug", lambda cwd=None: "no-history")
     result = collect_observability(tmp_path)
     assert result == {}
 

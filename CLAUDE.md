@@ -36,6 +36,7 @@
 | `critical-instruction-compliance` | スキル指示の遵守保証サイクル — critical行抽出+calm/directリフレーズ+違反検出+pitfall自動学習（`scripts/lib/critical_instruction_extractor.py`） |
 | `second-opinion` エージェント | cold-read セカンドオピニオン（startup/builder/general 3モード）。codex 不要で Agent ツールのみで動作 |
 | `growth-level` | env_score (0.0-1.0) → Lv.1-10 + 日英称号マッピング。audit がキャッシュに保存、greeting で表示（`scripts/lib/growth_level.py`） |
+| `optimize_history_store` | accept/reject 履歴（fitness calibration 母集団）の正準ストア。保存先を `DATA_DIR/optimize_history/<slug>.jsonl` の **PJ スコープ**に集約し、従来の 3-way split-brain（plugin generations 更新リセット / run_loop の `.rl-loop` 孤立 / readers 不一致）を解消。slug は worktree 安全に `git --git-common-dir` 親 basename で解決（`--show-toplevel` basename は worktree 名を返すため不可）、git 外は `_unattributed`。optimize/run_loop/evolve-diff の writer と fitness_evolution/discover/audit の reader 計 6 箇所が単一経路を共有（`scripts/lib/optimize_history_store.py`、[ADR-031]） |
 | `token_usage_store` | PJ 別 LLM トークン消費の DuckDB SoR — PK uuid で冪等 ingest、`token_usage.db` にスキーマ自動作成（`scripts/lib/token_usage_store.py`） |
 | `token_usage_ingest` | `~/.claude/projects/<pj>/*.jsonl` の `message.usage` を walker で取り込み、days mtime filter + batch insert（`scripts/lib/token_usage_ingest.py`） |
 | `token_usage_query` | TOP-N / WoW スパイク / cache hit 異常 / PJ ドリルダウン (session/model/week)。fleet status・tokens サブコマンド・audit セクションが利用（`scripts/lib/token_usage_query.py`） |

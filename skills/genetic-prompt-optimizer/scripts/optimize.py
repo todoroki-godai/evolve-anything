@@ -300,9 +300,17 @@ class DirectPatchOptimizer:
 
     def save_history_entry(self, result: Dict[str, Any],
                            human_accepted: Optional[bool] = None,
-                           rejection_reason: Optional[str] = None) -> Path:
-        """history.jsonl にエントリを追記する。"""
-        history_file = self.run_dir.parent / "history.jsonl"
+                           rejection_reason: Optional[str] = None,
+                           history_file: Optional[Path] = None) -> Path:
+        """accept/reject 履歴に 1 エントリを追記する。
+
+        ADR-031: 保存先は plugin 内 generations から DATA_DIR/optimize_history/<slug> へ集約。
+        history_file 未指定時は store 経由で current project slug を解決する。
+        run 成果物（run_dir 配下）とは分離する。
+        """
+        if history_file is None:
+            import optimize_history_store as _store
+            history_file = _store.history_path(_store.resolve_slug())
         best = result.get("best_individual", {})
         entry = {
             "run_id": result.get("run_id", self.run_id),
@@ -322,10 +330,18 @@ class DirectPatchOptimizer:
 
     @staticmethod
     def record_human_decision(run_dir: str, human_accepted: bool,
-                              rejection_reason: Optional[str] = None) -> None:
-        """既存の history.jsonl エントリに human decision を記録する。"""
-        run_path = Path(run_dir)
-        history_file = run_path.parent / "history.jsonl"
+                              rejection_reason: Optional[str] = None,
+                              history_file: Optional[Path] = None) -> None:
+        """既存の最新 accept/reject エントリに human decision を記録する。
+
+        ADR-031: 履歴は DATA_DIR/optimize_history/<slug> に集約。run_dir は API 互換のため
+        残すがパス解決には使わない。history_file 未指定時は store の current slug を読む。
+        """
+        if history_file is None:
+            import optimize_history_store as _store
+            history_file = _store.history_path(_store.resolve_slug())
+        else:
+            history_file = Path(history_file)
         if not history_file.exists():
             print(f"history.jsonl が見つかりません: {history_file}")
             return

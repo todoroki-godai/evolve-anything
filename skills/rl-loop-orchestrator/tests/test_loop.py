@@ -140,8 +140,12 @@ class TestRunLoop:
 
             assert len(results) == 3
 
-    def test_history_file_created(self, tmp_path):
-        """履歴ファイルが作成される"""
+    def test_history_file_created(self, tmp_path, monkeypatch):
+        """履歴が store の per-slug ファイルに記録される（ADR-031: 旧 output_dir/history.jsonl から集約）"""
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        monkeypatch.setattr(store, "resolve_slug", lambda cwd=None: "testproj")
+
         skill_file = tmp_path / "test-skill.md"
         skill_file.write_text("# テスト\nテスト", encoding="utf-8")
 
@@ -166,7 +170,7 @@ class TestRunLoop:
                 output_dir=str(output_dir),
             )
 
-            history_file = output_dir / "history.jsonl"
+            history_file = store.history_path("testproj")
             assert history_file.exists()
             lines = history_file.read_text(encoding="utf-8").strip().split("\n")
             assert len(lines) >= 1
@@ -214,8 +218,12 @@ class TestVerdict:
         """epsilon より大きい悪化は REGRESSED"""
         assert run_loop_mod._compute_verdict(-0.10, epsilon=0.05) == "REGRESSED"
 
-    def test_verdict_in_history_jsonl(self, tmp_path):
-        """履歴ファイルに verdict が記録される"""
+    def test_verdict_in_history_jsonl(self, tmp_path, monkeypatch):
+        """store の per-slug 履歴に verdict が記録される（ADR-031）"""
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        monkeypatch.setattr(store, "resolve_slug", lambda cwd=None: "testproj")
+
         skill_file = tmp_path / "test-skill.md"
         skill_file.write_text("---\ndescription: test\n---\n# Test\n内容\n", encoding="utf-8")
         output_dir = tmp_path / "output"
@@ -233,7 +241,7 @@ class TestVerdict:
                 dry_run=True,
                 output_dir=str(output_dir),
             )
-            history_file = output_dir / "history.jsonl"
+            history_file = store.history_path("testproj")
             record = json.loads(history_file.read_text(encoding="utf-8").strip())
             assert "verdict" in record
             assert "global_best_score" in record

@@ -515,7 +515,10 @@ def run_loop(
     out_dir = _get_output_dir(output_dir)
     run_dir = out_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    history_file = out_dir / "history.jsonl"
+    # ADR-031: accept/reject 履歴は out_dir(.rl-loop) から store に集約（split-brain 解消）。
+    # out_dir/run_dir は run 成果物用に維持。
+    import optimize_history_store as _history_store
+    _history_slug = _history_store.resolve_slug()
 
     # 古いループ結果をクリーンアップ
     _cleanup_old_runs(out_dir)
@@ -717,10 +720,8 @@ def run_loop(
             loop_result["evolve_scores"] = evolve_result["evolve_scores"]
         results.append(loop_result)
 
-        # 履歴に追記
-        history_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(history_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(loop_result, ensure_ascii=False) + "\n")
+        # 履歴に追記（store の per-slug ファイルへ。readers と同一経路）
+        _history_store.append_entry(loop_result, _history_slug)
 
     # サマリー
     print(f"\n=== サマリー ===")

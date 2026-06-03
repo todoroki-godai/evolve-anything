@@ -17,12 +17,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-HISTORY_DIR = (
-    Path(__file__).parent.parent.parent  # skills/
-    / "genetic-prompt-optimizer"
-    / "scripts"
-    / "generations"
-)
+# accept/reject 履歴の正準ストア（ADR-031）。保存先は DATA_DIR/optimize_history/<slug>.jsonl。
+# 従来は plugin 内 generations/history.jsonl を直接指していたが、更新リセット + split-brain の
+# ため optimize_history_store に集約した。
+_LIB_DIR = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "lib"
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+import optimize_history_store as _history_store  # noqa: E402
+
+
+def _default_history_file() -> Path:
+    """current project slug の履歴ファイルパス（store 経由）。"""
+    return _history_store.history_path(_history_store.resolve_slug())
+
 
 MIN_DATA_COUNT = 30
 BOOTSTRAP_MIN = 5
@@ -43,7 +50,7 @@ def load_history(history_file: Optional[Path] = None) -> List[Dict[str, Any]]:
     同じ history.jsonl に正規化して書き込まれる（issue #223）。
     """
     if history_file is None:
-        history_file = HISTORY_DIR / "history.jsonl"
+        history_file = _default_history_file()
     if not history_file.exists():
         return []
 
@@ -98,7 +105,7 @@ def record_evolve_diff_decision(
     冪等性: entry_id（未指定時は内容ハッシュ）で既存行と重複したら再書き込みしない。
     """
     if history_file is None:
-        history_file = HISTORY_DIR / "history.jsonl"
+        history_file = _default_history_file()
 
     best_fitness = _score_skill_content(after_content, skill_name)
 

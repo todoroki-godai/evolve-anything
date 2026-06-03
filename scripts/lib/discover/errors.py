@@ -1,8 +1,9 @@
 """エラーパターン / 繰り返し correction / rejection 検出 + scope 判定。
 
 discover/__init__.py から re-export される（後方互換）。
-DATA_DIR / HISTORY_DIR / 閾値定数は package 経由で遅延参照する
-（テストの patch / DATA_DIR 差し替えに追従）。
+DATA_DIR / 閾値定数は package 経由で遅延参照する
+（テストの patch / DATA_DIR 差し替えに追従）。accept/reject 履歴は
+optimize_history_store（DATA_DIR/optimize_history/<slug>、ADR-031）から読む。
 """
 from collections import Counter
 from pathlib import Path
@@ -84,10 +85,17 @@ def detect_repeated_correction_patterns(
     return candidates
 
 
-def detect_rejection_patterns(threshold: int = 3) -> List[Dict[str, Any]]:
-    """繰り返し却下理由の検出（rejection_reason、3+閾値）。"""
-    from . import HISTORY_DIR
-    history_file = HISTORY_DIR / "history.jsonl"
+def detect_rejection_patterns(
+    threshold: int = 3, *, history_file: Optional[Path] = None
+) -> List[Dict[str, Any]]:
+    """繰り返し却下理由の検出（rejection_reason、3+閾値）。
+
+    accept/reject 履歴は ADR-031 で DATA_DIR/optimize_history/<slug>.jsonl に集約。
+    history_file 未指定時は store 経由で current project slug を解決して読む。
+    """
+    if history_file is None:
+        import optimize_history_store as store  # scripts/lib は __init__ で sys.path 済み
+        history_file = store.history_path(store.resolve_slug())
     records = load_jsonl(history_file)
 
     counter: Counter = Counter()

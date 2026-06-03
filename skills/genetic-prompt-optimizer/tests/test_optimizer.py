@@ -491,7 +491,8 @@ class TestHistory:
             "best_individual": {"fitness": 0.8},
         }
 
-        history_path = optimizer.save_history_entry(result)
+        # ADR-031: 履歴は store 集約。テストでは history_file を明示注入して real DATA_DIR を汚さない
+        history_path = optimizer.save_history_entry(result, history_file=temp_dir / "history.jsonl")
         assert history_path.exists()
 
         entry = json.loads(history_path.read_text(encoding="utf-8").strip())
@@ -509,17 +510,12 @@ class TestHistory:
         }
         history_file.write_text(json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
 
-        DirectPatchOptimizer.record_human_decision(str(temp_dir / "run1"), human_accepted=True)
+        # ADR-031: history_file を明示注入（run_dir は API 互換のため残るがパス解決には不使用）
+        DirectPatchOptimizer.record_human_decision(
+            str(temp_dir / "run1"), human_accepted=True, history_file=history_file
+        )
 
-        # history.jsonl は run_dir.parent なので、temp_dir 直下にあるはず
-        # ここでは temp_dir の構造を合わせる必要がある
-        # record_human_decision は run_dir の parent に history.jsonl を探す
-        run_dir = temp_dir / "run1"
-        run_dir.mkdir(exist_ok=True)
-        parent_history = temp_dir / "history.jsonl"
-
-        # history_file をリロード
-        updated = json.loads(parent_history.read_text(encoding="utf-8").strip())
+        updated = json.loads(history_file.read_text(encoding="utf-8").strip())
         assert updated["human_accepted"] is True
 
 

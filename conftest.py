@@ -85,3 +85,8 @@ def _isolate_plugin_data(tmp_path, monkeypatch):
         monkeypatch.setattr(tus, "DATA_DIR", tmp_path, raising=False)
         monkeypatch.setattr(tus, "USAGE_DB", tmp_path / "token_usage.db", raising=False)
         monkeypatch.setattr(tus, "USAGE_JSONL", tmp_path / "token_usage.jsonl", raising=False)
+    # ADR-031: accept/reject 履歴ストアも tmp に隔離（lazy import 依存の脆さを排除）
+    if "optimize_history_store" in sys.modules:
+        ohs = sys.modules["optimize_history_store"]
+        monkeypatch.setattr(ohs, "DATA_DIR", tmp_path, raising=False)
+        monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history", raising=False)

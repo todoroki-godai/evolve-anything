@@ -74,11 +74,12 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     if "rl_common" in sys.modules:
         importlib.reload(sys.modules["rl_common"])
     importlib.reload(sys.modules["audit"])
-    # calibration_drift / eval_saturation builder は環境グローバル状態（optimize の
-    # history.jsonl / DATA_DIR の eval-sets）を読むため、実機データがあると snapshot が
-    # ブレる。空 tmp に向けて出力を決定論化する（#286 / #292）。
-    import fitness_evolution
-    monkeypatch.setattr(fitness_evolution, "HISTORY_DIR", tmp_path / "no-history")
+    # calibration_drift / eval_saturation builder は環境グローバル状態（accept/reject
+    # 履歴 / DATA_DIR の eval-sets）を読むため、実機データがあると snapshot がブレる。
+    # 空 tmp に向けて出力を決定論化する（#286 / #292 / ADR-031 で store 隔離に移行）。
+    import optimize_history_store as _ohs
+    monkeypatch.setattr(_ohs, "HISTORY_ROOT", tmp_path / "no-history")
+    monkeypatch.setattr(_ohs, "resolve_slug", lambda cwd=None: "no-history")
     import eval_saturation
     monkeypatch.setattr(
         eval_saturation, "_default_eval_sets_dir", lambda: tmp_path / "no-evalsets"

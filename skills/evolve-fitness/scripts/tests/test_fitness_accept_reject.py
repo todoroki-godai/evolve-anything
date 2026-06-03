@@ -99,6 +99,26 @@ class TestRecordEvolveDiffDecisionE2E:
         assert "skill_quality" in result["by_fitness_func"]
 
 
+# ========== ADR-031: history_file 未指定時に store 経由で per-slug 解決 ==========
+
+class TestDefaultHistoryRoutesToStore:
+    def test_record_without_history_file_lands_in_slug_file(self, tmp_path, monkeypatch):
+        """history_file 未指定 → store の current slug ファイルに記録される（split-brain 解消）。"""
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        monkeypatch.setattr(store, "resolve_slug", lambda cwd=None: "proj-x")
+
+        fe.record_evolve_diff_decision(
+            skill_name="s", after_content=GOOD_SKILL, diff_summary="x",
+            human_accepted=True,
+        )
+        # store の per-slug ファイルに着地し、load_history(None) でも読める
+        assert (tmp_path / "optimize_history" / "proj-x.jsonl").exists()
+        history = fe.load_history()
+        assert len(history) == 1
+        assert history[0]["human_accepted"] is True
+
+
 # ========== (c) fitness_func グループ化 ==========
 
 class TestAnalyzeCorrelationsGrouping:

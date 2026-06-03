@@ -173,49 +173,58 @@ class TestFullPipeline:
 # --- Accept/Reject flow ---
 
 class TestAcceptRejectFlow:
-    def test_accept_flow(self, skill_path, temp_dir):
-        """accept → history.jsonl が更新される"""
+    """ADR-031: 履歴は DATA_DIR/optimize_history/<slug> に集約。store を monkeypatch して
+    tmp slug ファイルで検証する（real DATA_DIR を汚さず、default 経路を実際にテスト）。"""
+
+    @pytest.fixture
+    def store_at(self, temp_dir, monkeypatch):
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", temp_dir / "optimize_history")
+        monkeypatch.setattr(store, "resolve_slug", lambda cwd=None: "testproj")
+        return store
+
+    def test_accept_flow(self, skill_path, temp_dir, store_at):
+        """accept → 履歴の最新エントリが更新される"""
         optimizer = DirectPatchOptimizer(target_path=str(skill_path), dry_run=True)
         optimizer.run_dir = temp_dir / "runs" / "test_run"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"):
-            result = optimizer.run()
+            optimizer.run()
 
-        # accept
         DirectPatchOptimizer.record_human_decision(
             str(optimizer.run_dir), human_accepted=True
         )
 
-        history = temp_dir / "runs" / "history.jsonl"
+        history = store_at.history_path("testproj")
         entry = json.loads(history.read_text(encoding="utf-8").strip().split("\n")[-1])
         assert entry["human_accepted"] is True
 
-    def test_reject_flow(self, skill_path, temp_dir):
-        """reject → history.jsonl に理由付きで記録"""
+    def test_reject_flow(self, skill_path, temp_dir, store_at):
+        """reject → 履歴に理由付きで記録"""
         optimizer = DirectPatchOptimizer(target_path=str(skill_path), dry_run=True)
         optimizer.run_dir = temp_dir / "runs" / "test_run"
 
         with patch("optimize._CORRECTIONS_PATH", temp_dir / "missing.jsonl"):
-            result = optimizer.run()
+            optimizer.run()
 
         DirectPatchOptimizer.record_human_decision(
             str(optimizer.run_dir), human_accepted=False, rejection_reason="品質不足"
         )
 
-        history = temp_dir / "runs" / "history.jsonl"
+        history = store_at.history_path("testproj")
         entry = json.loads(history.read_text(encoding="utf-8").strip().split("\n")[-1])
         assert entry["human_accepted"] is False
         assert entry["rejection_reason"] == "品質不足"
 
-    def test_history_has_strategy_field(self, skill_path, temp_dir, corrections_file):
-        """history.jsonl に strategy/corrections_used が記録される"""
+    def test_history_has_strategy_field(self, skill_path, temp_dir, corrections_file, store_at):
+        """履歴に strategy/corrections_used が記録される"""
         optimizer = DirectPatchOptimizer(target_path=str(skill_path), dry_run=True)
         optimizer.run_dir = temp_dir / "runs" / "test_run"
 
         with patch("optimize._CORRECTIONS_PATH", corrections_file):
-            result = optimizer.run()
+            optimizer.run()
 
-        history = temp_dir / "runs" / "history.jsonl"
+        history = store_at.history_path("testproj")
         entry = json.loads(history.read_text(encoding="utf-8").strip())
         assert entry["strategy"] == "error_guided"
         assert entry["corrections_used"] == 2

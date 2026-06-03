@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
 
-HISTORY_DIR = PLUGIN_ROOT / "skills" / "genetic-prompt-optimizer" / "scripts" / "generations"
+# HISTORY_DIR（旧 plugin 内 generations）は ADR-031 で撤去。
+# accept/reject 履歴は optimize_history_store（DATA_DIR/optimize_history/<slug>）に集約。
 
 # 閾値
 BEHAVIOR_THRESHOLD = 5   # 行動パターン検出閾値
