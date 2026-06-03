@@ -12,6 +12,7 @@ TOOL_USAGE_HOOK_CANDIDATE = "tool_usage_hook_candidate"
 SKILL_EVOLVE_CANDIDATE = "skill_evolve_candidate"
 VERIFICATION_RULE_CANDIDATE = "verification_rule_candidate"
 SPLIT_CANDIDATE = "split_candidate"
+HIERARCHY_CANDIDATE = "hierarchy_candidate"
 
 # ── skill_triage 定数 ──────────────────────────────
 
@@ -204,6 +205,29 @@ def make_split_candidate_issue(
             "skill_name": skill_name,
             "line_count": split_candidate.get("line_count", 0),
             "threshold": split_candidate.get("threshold", 300),
+        },
+        "source": "reorganize",
+    }
+
+
+def make_hierarchy_candidate_issue(
+    hierarchy_candidate: Dict[str, Any],
+) -> Dict[str, Any]:
+    """reorganize の hierarchy_candidate（階層統合提案）→ issue dict 変換（#303 SkillPyramid）。
+
+    低レベルスキル群を上位スキルへ束ねる提案。member_skills を上位スキル
+    (parent_skill_suggestion) 配下にネスト統合する候補を表す。
+    """
+    parent = hierarchy_candidate.get("parent_skill_suggestion", "")
+    return {
+        "type": HIERARCHY_CANDIDATE,
+        "file": f".claude/skills/{parent}/SKILL.md" if parent else "",
+        "detail": {
+            "parent_skill_suggestion": parent,
+            "member_skills": hierarchy_candidate.get("member_skills", []),
+            "member_count": hierarchy_candidate.get("member_count", 0),
+            "centroid_keywords": hierarchy_candidate.get("centroid_keywords", []),
+            "reason": hierarchy_candidate.get("reason", "hierarchical_consolidation"),
         },
         "source": "reorganize",
     }

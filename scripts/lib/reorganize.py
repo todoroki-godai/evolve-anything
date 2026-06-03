@@ -18,11 +18,18 @@ from audit import (
     find_artifacts,
 )
 from similarity import build_tfidf_matrix
-from issue_schema import make_split_candidate_issue
+from issue_schema import make_split_candidate_issue, make_hierarchy_candidate_issue
 from artifact_scope import filter_artifacts_to_target
 
 DEFAULT_REORGANIZE_THRESHOLD = 0.7
 SPLIT_LINE_THRESHOLD = 300
+
+# ── SkillPyramid: 階層的統合（hierarchical consolidation, #303）─────────────
+# 同一クラスタ内に低レベル（小型）スキルが MIN_HIERARCHY_CLUSTER_SIZE 個以上
+# 集まっている場合、それらを上位スキルへ束ねる提案を出す。
+# split（肥大化の分割）/ merge（重複の統合）に対し、「階層（低→上位）」軸を担う。
+MIN_HIERARCHY_CLUSTER_SIZE = 3
+HIERARCHY_LINE_CEILING = 150
 
 
 def load_reorganize_threshold() -> float:
@@ -72,6 +79,64 @@ def detect_split_candidates(artifacts: Dict[str, List[Path]]) -> List[Dict[str, 
                 "line_count": line_count,
                 "threshold": SPLIT_LINE_THRESHOLD,
             })
+    return candidates
+
+
+def _suggest_parent_skill_name(centroid_keywords: List[str]) -> str:
+    """centroid キーワードから上位スキル名（kebab-case）を提案する。
+
+    例: ["deploy", "aws", "infra"] → "deploy-aws-suite"
+    キーワードが空の場合は汎用名にフォールバックする。
+    """
+    import re
+
+    cleaned = []
+    for kw in centroid_keywords[:2]:
+        slug = re.sub(r"[^a-z0-9]+", "-", str(kw).lower()).strip("-")
+        if slug:
+            cleaned.append(slug)
+    base = "-".join(cleaned) if cleaned else "consolidated"
+    return f"{base}-suite"
+
+
+def detect_hierarchy_candidates(
+    clusters: List[Dict[str, Any]],
+    line_counts: Dict[str, int],
+    min_cluster_size: int = MIN_HIERARCHY_CLUSTER_SIZE,
+    line_ceiling: int = HIERARCHY_LINE_CEILING,
+) -> List[Dict[str, Any]]:
+    """低レベルスキル群を上位スキルへ束ねる階層統合候補を検出する（#303 SkillPyramid）。
+
+    クラスタリング結果（run_reorganize の clusters）を入力に取り、
+    以下を満たすクラスタを「階層統合候補（低レベル→上位）」として返す:
+      1. メンバーが min_cluster_size 個以上（フラットな merge では捌けない規模）
+      2. メンバーの過半数が低レベル（SKILL.md が line_ceiling 行以下）
+         — 大型スキル中心のクラスタは split/merge 側の問題なので除外する
+
+    split（肥大化の分割）/ merge（重複の統合）に対し階層（低→上位）軸を担い、
+    max_skill_count への張り付きを構造的に抑える。LLM 非依存・決定論。
+
+    Returns:
+        各候補 dict: parent_skill_suggestion / member_skills / member_count /
+        centroid_keywords / reason="hierarchical_consolidation"
+    """
+    candidates: List[Dict[str, Any]] = []
+    for cluster in clusters:
+        members = cluster.get("skills", [])
+        if len(members) < min_cluster_size:
+            continue
+        # 過半数が低レベル（小型）であることを要求する
+        low_level = [m for m in members if line_counts.get(m, 0) <= line_ceiling]
+        if len(low_level) * 2 < len(members):
+            continue
+        keywords = cluster.get("centroid_keywords", [])
+        candidates.append({
+            "reason": "hierarchical_consolidation",
+            "parent_skill_suggestion": _suggest_parent_skill_name(keywords),
+            "member_skills": list(members),
+            "member_count": len(members),
+            "centroid_keywords": keywords,
+        })
     return candidates
 
 
@@ -186,16 +251,25 @@ def run_reorganize(project_dir: str = None) -> dict:
     # 分割候補
     split_candidates = detect_split_candidates(artifacts)
 
-    # split_candidates を issue_schema 形式に変換
+    # 階層統合候補（SkillPyramid, #303）: クラスタ + 各スキルの行数から検出
+    line_counts: Dict[str, int] = {
+        name: text.count("\n") + 1 for name, text in skill_texts.items()
+    }
+    hierarchy_candidates = detect_hierarchy_candidates(clusters, line_counts)
+
+    # split_candidates + hierarchy_candidates を issue_schema 形式に変換
     issues = [make_split_candidate_issue(sc) for sc in split_candidates]
+    issues += [make_hierarchy_candidate_issue(hc) for hc in hierarchy_candidates]
 
     return {
         "skipped": False,
         "clusters": clusters,
         "split_candidates": split_candidates,
+        "hierarchy_candidates": hierarchy_candidates,
         "issues": issues,
         "total_clusters": len(clusters),
         "total_split_candidates": len(split_candidates),
+        "total_hierarchy_candidates": len(hierarchy_candidates),
     }
 
 
