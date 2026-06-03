@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.84.1] - 2026-06-04
+
 ### Fixed
 - **fix(evolve): split↔archive の矛盾提案を本流で reconcile し archive を優先（#301 #302）** — reorganize の split 候補（SKILL.md 300 行超）と prune の archive 候補（`zero_invocations` / `retirement_candidates` / `decay_candidates`）の間に相互排他チェックが無く、**大きくて未使用のスキル**が同一 evolve run で「分割せよ」（reorganize）と「淘汰せよ」（prune）を同時に受けていた（#301 `onboard-project` / #302 `project-setup`）。`evolve_introspect` の `_detect_split_archive_contradiction` がこの矛盾を検出して issue 起票はしていたが、root cause（相互排他チェックの欠如）が未修正のため検出器が毎 evolve で同じ矛盾を再報告し続けていた。新規 `reconcile_split_archive(result)`（`scripts/lib/evolve_introspect.py`）が evolve.py の prune フェーズ直後（**Phase 4.1**、self-analysis の前）に決定論で走り、archive 候補に一致するスキルを `reorganize.split_candidates`（および派生 `issues`）から除外する（**archive 優先**＝同じ run で消す対象に分割という延命投資をしない、未使用シグナルを尊重）。除外は silent にせず `reorganize.split_suppressed_by_archive` と `phases.split_archive_reconcile.suppressed` に記録し、evolve SKILL.md Step 4 が非空時に「分割候補から除外（archive 優先）: <skills>」を surface する（silence≠evaluated）。検出器（`_detect_split_archive_contradiction`）は reconcile を通らない経路の **regression guard** として残置し、archive 判定 constant `_PRUNE_ARCHIVE_KEYS` とヘルパー `_collect_archive_skills` / `_skill_name` を reconcile と共有して policy を単一ソース化（片方だけ判定がずれるのを防止）。決定論・LLM 非依存。TDD（archive 優先除外 / reconcile 後の矛盾消失 / 非 archive 維持 / skipped・archive 0 件の no-op / retirement・decay キー対応、新規 6 件）。[ADR-034]
 
