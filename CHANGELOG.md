@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.84.0] - 2026-06-03
+
 ### Added
 - **feat(evolve): evolve 実行後の自己解析 → バグ/改善点を検出して GitHub issue を半自動起票（#299）** — evolve は他フェーズで対象 PJ を改善するが、**evolve 自身の実行結果**（提案の質・実行時エラー・改善余地）を振り返る経路が無く、パイプラインのバグや改善余地は人間が気づいて手で issue を立てるまで構造に残らなかった（「install≠enforcement」と同型の配線漏れ＝自動で回るループに載らないものは育たない）。新規 `scripts/lib/evolve_introspect.py` が evolve の `result` dict 全体を決定論で読み、3カテゴリの GitHub issue 候補を生成する: ① **self_detection**（同一スキルへの split↔archive 同時提案の矛盾／line-limit 超過ファイルへの content 追加 fix で budget を悪化させる提案）② **runtime_errors**（各フェーズが `{"error": ...}` で握り潰して result が緑に見える例外／observability 取得失敗。`_error_signature` がパス・行番号・16進 ID を落として root cause 単位に正規化）③ **improvement_opportunities**（self_evolution の systematic_flags＝系統的に却下される提案 type／calibration regression）。`run_evolve` 末尾（全フェーズ集約後）が `result["self_analysis"]` に格納するため **evolve のたびに自動発火**（手動 CLI 止まりにしない）。3カテゴリとも検出 0 件でも `summary_line` に「✓ 評価したが該当なし」を残す（silence≠evaluated）。起票は**半自動**: evolve SKILL.md **Step 11** が候補を per-item 提示 → 人間が AskUserQuestion で個別承認 → 承認分のみ `gh issue create --repo todoroki-godai/rl-anything`（検出対象はパイプライン自身のバグであり evolve がどの PJ 上で動いても起票先は固定）。重複起票防止は body 埋め込みマーカー `<!-- rl-evolve-introspect:<dedup_key> -->`（root cause 単位の最強シグナル）→ タイトル類似度（SequenceMatcher、閾値 0.80）の二段 dedup（`filter_duplicates`）で、同一 root cause の毎 evolve 重複起票を防ぐ。observability builder は project_dir しか受け取れず result の error/矛盾/rollback を読めないため builder ではなく独立モジュールとして実装（ADR-028 の判断軸を踏襲しつつ別配線）。決定論・LLM 非依存（起票判断のみ人間）。TDD（検出3カテゴリ + dedup マーカー/類似度 + 構造契約 + 起票 body マーカー roundtrip、新規 19 件）+ 実 PJ（rl-anything 自身）E2E で `self_analysis` 全キー出力・clean 時 0 件を確認。[ADR-033]
 
