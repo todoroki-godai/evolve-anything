@@ -24,7 +24,7 @@ from .usage import load_usage_data, aggregate_usage, aggregate_plugin_usage
 from .scope import detect_duplicates_simple, load_usage_registry, scope_advisory
 from .quality import load_quality_baselines
 from .gstack import build_gstack_analytics_section, _load_global_retro
-from .issues import detect_untagged_reference_candidates
+from .issues import detect_untagged_reference_candidates, claude_md_unparseable
 from .sections import _format_constitutional_report
 from .report import generate_report
 
@@ -170,6 +170,12 @@ def run_audit(
 
     gstack_analytics = build_gstack_analytics_section(usage_records)
     untagged = detect_untagged_reference_candidates(artifacts, usage, project_dir=proj)
+    # CLAUDE.md は在るが Skills trigger 抽出 0 → 除外ロジックが効かず誤検知になる (#295)。
+    # その状態で出た untagged 候補は誤検知の可能性が高いので suppress し、明示的に surface する。
+    untagged_skipped_count = 0
+    if untagged and claude_md_unparseable(proj):
+        untagged_skipped_count = len(untagged)
+        untagged = []
 
     hardcoded_values = []
     for category in ("skills", "rules"):
@@ -317,6 +323,7 @@ def run_audit(
         growth_report=growth_report_lines,
         contribution_scores=_contribution_scores if _contribution_scores else None,
         max_skill_count=_max_skill_count,
+        untagged_skipped_count=untagged_skipped_count,
     )
 
 

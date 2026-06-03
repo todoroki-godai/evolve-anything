@@ -278,6 +278,69 @@ def test_untagged_reference_excludes_claudemd_skills(project_dir):
     assert "my-skill" not in skill_names
 
 
+def test_untagged_reference_excludes_bold_label_backtick_skills(project_dir):
+    """`- **ラベル**: `/skill`` 形式の CLAUDE.md 記載スキルも除外される (#295)。"""
+    from audit import detect_untagged_reference_candidates
+
+    claude_md = project_dir / "CLAUDE.md"
+    claude_md.write_text(
+        "# Project\n\n## Skills\n\n"
+        "- **AWSデプロイ**: `/aws-deploy` - `.claude/skills/aws-deploy/SKILL.md`\n"
+    )
+    # 参照型に見える（heuristic では弾けない）が CLAUDE.md 記載のスキル
+    skills_dir = project_dir / ".claude" / "skills" / "aws-deploy"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(
+        "# AWS Deploy\nThis is a reference guide for deployment specifications.\n"
+    )
+
+    artifacts = _find_artifacts_local_only(project_dir)
+    with patch("audit.classify_artifact_origin", return_value="project"):
+        candidates = detect_untagged_reference_candidates(
+            artifacts, {}, project_dir=project_dir,
+        )
+
+    assert "aws-deploy" not in [c["skill_name"] for c in candidates]
+
+
+def test_claude_md_unparseable_helper(project_dir):
+    """claude_md_unparseable: CLAUDE.md の在/不在 × trigger 抽出 0 を判定する (#295)。"""
+    from audit import claude_md_unparseable
+
+    # CLAUDE.md が無い → False（正規の no-CLAUDE.md PJ。検出は走らせる）
+    assert claude_md_unparseable(project_dir) is False
+
+    # CLAUDE.md は在るが Skills セクション無し（trigger 0）→ True
+    (project_dir / "CLAUDE.md").write_text("# Project\n\nNo skills section here.\n")
+    assert claude_md_unparseable(project_dir) is True
+
+    # CLAUDE.md に parse 可能な Skills 記載 → False
+    (project_dir / "CLAUDE.md").write_text(
+        "# Project\n\n## Skills\n\n- /s: x. Trigger: t\n"
+    )
+    assert claude_md_unparseable(project_dir) is False
+
+
+def test_collect_issues_suppresses_untagged_when_claude_md_unparseable(project_dir):
+    """CLAUDE.md は在るが trigger 抽出 0 のとき untagged 構造化 issue を積まない (#295)。"""
+    # Skills セクションが無い CLAUDE.md（= trigger 抽出 0、unparseable）
+    (project_dir / "CLAUDE.md").write_text("# Project\n\nNo skills section.\n")
+    # 参照型に見えるスキル（本来なら untagged_reference になる）
+    skills_dir = project_dir / ".claude" / "skills" / "design-guide"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(
+        "# Design Guide\nThis is a reference guide for design system specifications.\n"
+    )
+
+    with patch("audit.read_auto_memory", return_value=[]), \
+         patch("audit.find_artifacts", side_effect=_find_artifacts_local_only), \
+         patch("audit.classify_artifact_origin", return_value="project"):
+        issues = collect_issues(project_dir)
+
+    untagged = [i for i in issues if i["type"] == "untagged_reference_candidates"]
+    assert untagged == []
+
+
 def test_untagged_reference_excludes_user_invocable_heuristic(project_dir):
     """トリガーワードや使用タイミング記載のスキルは除外 (#47)。"""
     from audit import detect_untagged_reference_candidates

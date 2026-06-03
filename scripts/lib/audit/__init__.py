@@ -121,6 +121,7 @@ from .gstack import (  # noqa: F401, E402
 # Issues collection は audit/issues.py に分離 (Phase 2 第四弾)
 from .issues import (  # noqa: F401, E402
     _is_user_invocable_heuristic,
+    claude_md_unparseable,
     collect_issues,
     detect_untagged_reference_candidates,
 )

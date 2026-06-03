@@ -24,6 +24,26 @@ from ._constants import LIMITS
 MEMORY_HEAVY_UPDATE_THRESHOLD = 3
 
 
+def claude_md_unparseable(project_dir: Optional[Path]) -> bool:
+    """CLAUDE.md は在るが Skills セクションから trigger を 0 件しか抽出できない状態か (#295)。
+
+    True のとき「CLAUDE.md 記載スキルは除外」ロジックが空集合で効かず、
+    ユーザー呼び出し型スキルを untagged_reference / missed_skill 等として
+    誤検出する。呼び出し側はこの状態を検出側のスキップ + 明示 surface に使う。
+
+    CLAUDE.md がそもそも存在しない場合は False（= 環境解決失敗ではなく、
+    CLAUDE.md を持たない正規プロジェクト。従来どおり検出を走らせてよい）。
+    """
+    if project_dir is None:
+        return False
+    from skill_triggers import resolve_claude_md_path, extract_skill_triggers
+
+    resolved = resolve_claude_md_path(project_root=project_dir)
+    if resolved is None:
+        return False
+    return not extract_skill_triggers(claude_md_path=resolved)
+
+
 def _is_user_invocable_heuristic(content: str) -> bool:
     """スキル内容からユーザー呼び出し型かどうかを推定する (#47)。
 
@@ -265,7 +285,12 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
     try:
         usage_records = load_usage_data(project_root=project_dir)
         usage = aggregate_usage(usage_records, exclude_plugins=True)
-        untagged = detect_untagged_reference_candidates(artifacts, usage, project_dir=project_dir)
+        # CLAUDE.md は在るが trigger 抽出 0 のときは除外ロジックが効かず誤検知になるため
+        # untagged を構造化 issue に積まない（環境解決失敗の誤検出を confident に出さない, #295）。
+        untagged = (
+            [] if claude_md_unparseable(project_dir)
+            else detect_untagged_reference_candidates(artifacts, usage, project_dir=project_dir)
+        )
         for candidate in untagged:
             issues.append({
                 "type": "untagged_reference_candidates",

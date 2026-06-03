@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent_classifier import classify_agent_type
-from skill_triggers import extract_skill_triggers, normalize_skill_name
+from skill_triggers import (
+    extract_skill_triggers,
+    normalize_skill_name,
+    resolve_claude_md_path,
+)
 
 # constraint decay: mtime フィルタ（30日）
 _THIRTY_DAYS_SEC = 30 * 24 * 3600
@@ -319,7 +323,17 @@ def detect_missed_skills(
     # CLAUDE.md からスキルトリガーを取得
     skill_triggers = extract_skill_triggers(project_root=project_root)
     if not skill_triggers:
-        return {"missed": [], "message": "No CLAUDE.md found, skipping missed skill detection"}
+        # 「CLAUDE.md が無い」と「CLAUDE.md は在るが trigger 抽出 0」を区別する (#295)。
+        # 後者は Skills セクションの記法がパーサ非対応など環境/記法側の問題で、
+        # 「No CLAUDE.md found」と出すとミスリードになる。
+        if resolve_claude_md_path(project_root=project_root) is None:
+            msg = "No CLAUDE.md found, skipping missed skill detection"
+        else:
+            msg = (
+                "CLAUDE.md present but no skill triggers extracted "
+                "(check Skills section format), skipping missed skill detection"
+            )
+        return {"missed": [], "message": msg}
 
     project_name = project_root.name if project_root else None
 

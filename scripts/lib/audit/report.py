@@ -35,6 +35,7 @@ def generate_report(
     growth_report: Optional[List[str]] = None,
     contribution_scores: Optional[Dict[str, Any]] = None,
     max_skill_count: Optional[int] = None,
+    untagged_skipped_count: int = 0,
 ) -> str:
     """1画面レポートを生成する。"""
     lines = ["# Environment Audit Report", ""]
@@ -176,6 +177,19 @@ def generate_report(
         lines.append("以下のスキルはゼロ呼び出しかつ `type` 未設定です。参照型スキルの場合は frontmatter に `type: reference` を追加してください。")
         for c in untagged_reference_candidates:
             lines.append(f"- {c['skill_name']}")
+        lines.append("")
+
+    # CLAUDE.md は在るが Skills セクションから trigger を抽出できなかった場合、
+    # CLAUDE.md 記載スキルの除外が効かず誤検知になるため untagged 検出をスキップした旨を明示する (#295)。
+    # 沈黙させず surface することで「環境解決失敗による誤検出」と「問題なし」を取り違えない。
+    if untagged_skipped_count:
+        lines.append("## Reference Type Warning (skipped — CLAUDE.md unparseable)")
+        lines.append(
+            f"CLAUDE.md は存在しますが Skills セクションから skill trigger を抽出できませんでした。"
+            f"CLAUDE.md 記載スキルの除外が効かず誤検知になるため、untagged_reference 検出 "
+            f"{untagged_skipped_count} 件をスキップしました。Skills セクションの記法を確認してください"
+            f"（`- **ラベル**: \\`/skill\\`` 形式は対応済み）。"
+        )
         lines.append("")
 
     if advisories:
