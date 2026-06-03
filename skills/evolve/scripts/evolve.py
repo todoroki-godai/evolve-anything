@@ -670,6 +670,15 @@ def run_evolve(
     except Exception as e:
         result["phases"]["prune"] = {"error": str(e)}
 
+    # Phase 4.1: split↔archive 相互排他 reconcile（#301 #302 root cause fix）
+    # reorganize と prune が揃った後、archive 候補のスキルを split 候補から除外する
+    # （消す対象を同じ run で分割提案する矛盾を本流で解消。決定論・LLM 非依存）。
+    try:
+        from evolve_introspect import reconcile_split_archive
+        result["phases"]["split_archive_reconcile"] = reconcile_split_archive(result)
+    except Exception as e:
+        result["phases"]["split_archive_reconcile"] = {"error": str(e)}
+
     # Phase 4.5: Pitfall Hygiene（自己進化済みスキルの剪定）
     try:
         sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))

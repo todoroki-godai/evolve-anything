@@ -163,6 +163,102 @@ def test_no_self_issue_when_split_and_archive_disjoint():
     assert "✓" in analysis["self_detection"]["summary_line"]
 
 
+# ── reconcile: split↔archive 相互排他（root cause fix / #301 #302） ──
+
+
+def test_reconcile_suppresses_split_for_archived_skill():
+    """archive 候補のスキルは split 候補から除外される（archive 優先）。"""
+    result = _clean_result()
+    result["phases"]["reorganize"] = {
+        "skipped": False,
+        "split_candidates": [{"skill_name": "big-skill", "line_count": 400}],
+        "issues": [{"type": "split_candidate", "detail": {"skill_name": "big-skill"}}],
+        "total_split_candidates": 1,
+    }
+    result["phases"]["prune"] = {
+        "zero_invocations": ["big-skill"],
+        "retirement_candidates": [],
+        "decay_candidates": [],
+    }
+    summary = ei.reconcile_split_archive(result)
+    assert summary["suppressed"] == ["big-skill"]
+    reorg = result["phases"]["reorganize"]
+    assert reorg["split_candidates"] == []
+    assert reorg["total_split_candidates"] == 0
+    assert reorg["issues"] == []
+    assert reorg["split_suppressed_by_archive"] == ["big-skill"]
+
+
+def test_reconcile_then_no_contradiction_detected():
+    """reconcile 後は introspect が矛盾を検出しない（root cause が消える）。"""
+    result = _clean_result()
+    result["phases"]["reorganize"] = {
+        "skipped": False,
+        "split_candidates": [{"skill_name": "big-skill"}],
+    }
+    result["phases"]["prune"] = {
+        "zero_invocations": ["big-skill"],
+        "retirement_candidates": [],
+        "decay_candidates": [],
+    }
+    ei.reconcile_split_archive(result)
+    analysis = ei.analyze_evolve_result(result)
+    assert analysis["self_detection"]["candidates"] == []
+    assert "✓" in analysis["self_detection"]["summary_line"]
+
+
+def test_reconcile_keeps_split_when_not_archived():
+    """archive 対象でない split 候補は維持される。"""
+    result = _clean_result()
+    result["phases"]["reorganize"] = {
+        "skipped": False,
+        "split_candidates": [{"skill_name": "alive"}, {"skill_name": "dead"}],
+    }
+    result["phases"]["prune"] = {
+        "zero_invocations": ["dead"],
+        "retirement_candidates": [],
+        "decay_candidates": [],
+    }
+    summary = ei.reconcile_split_archive(result)
+    assert summary["suppressed"] == ["dead"]
+    names = [ei._skill_name(sc) for sc in result["phases"]["reorganize"]["split_candidates"]]
+    assert names == ["alive"]
+
+
+def test_reconcile_noop_when_reorganize_skipped():
+    result = _clean_result()  # reorganize skipped by default
+    summary = ei.reconcile_split_archive(result)
+    assert summary["suppressed"] == []
+
+
+def test_reconcile_noop_when_no_archive_candidates():
+    result = _clean_result()
+    result["phases"]["reorganize"] = {
+        "skipped": False,
+        "split_candidates": [{"skill_name": "big"}],
+    }
+    summary = ei.reconcile_split_archive(result)
+    assert summary["suppressed"] == []
+    assert summary["remaining_split"] == 1
+
+
+def test_reconcile_handles_retirement_and_decay_keys():
+    """retirement_candidates / decay_candidates も archive 寄りとして扱う。"""
+    result = _clean_result()
+    result["phases"]["reorganize"] = {
+        "skipped": False,
+        "split_candidates": [{"skill_name": "r"}, {"skill_name": "d"}],
+    }
+    result["phases"]["prune"] = {
+        "zero_invocations": [],
+        "retirement_candidates": [{"skill_name": "r"}],
+        "decay_candidates": [{"skill_name": "d"}],
+    }
+    summary = ei.reconcile_split_archive(result)
+    assert summary["suppressed"] == ["d", "r"]
+    assert result["phases"]["reorganize"]["split_candidates"] == []
+
+
 # ── カテゴリ3: 改善余地 ─────────────────────────────
 
 

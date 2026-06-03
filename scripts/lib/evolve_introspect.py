@@ -82,6 +82,78 @@ def analyze_evolve_result(result: Dict[str, Any], project_dir: Optional[str] = N
     }
 
 
+# ── 相互排他 reconcile（split↔archive の root cause fix / #301 #302） ──
+
+
+def reconcile_split_archive(result: Dict[str, Any]) -> Dict[str, Any]:
+    """split（reorganize）と archive（prune）の相互排他を解決する。
+
+    同一スキルが分割候補かつアーカイブ候補のとき **archive を優先** し、
+    そのスキルを `reorganize.split_candidates`（および派生 `issues`）から除外する。
+    消そうとしている対象を同じ run で分割提案するのは矛盾だからだ
+    （#301 #302。`_detect_split_archive_contradiction` が検出していた root cause）。
+
+    除外した内容は透明性のため `reorganize.split_suppressed_by_archive` に記録する
+    （silent に消さない）。evolve.py が prune フェーズ直後・self-analysis の前に呼ぶ。
+
+    Returns:
+        {"suppressed": [skill, ...], "remaining_split": int}
+    """
+    phases = result.get("phases") if isinstance(result, dict) else None
+    if not isinstance(phases, dict):
+        return {"suppressed": [], "remaining_split": 0}
+    reorganize = phases.get("reorganize")
+    if not isinstance(reorganize, dict) or reorganize.get("skipped"):
+        return {"suppressed": [], "remaining_split": 0}
+    split_candidates = reorganize.get("split_candidates")
+    if not isinstance(split_candidates, list) or not split_candidates:
+        return {"suppressed": [], "remaining_split": 0}
+
+    archive_skills = _collect_archive_skills(phases)
+    if not archive_skills:
+        return {"suppressed": [], "remaining_split": len(split_candidates)}
+
+    kept: List[Any] = []
+    suppressed: List[str] = []
+    for sc in split_candidates:
+        name = _skill_name(sc)
+        if name and name in archive_skills:
+            suppressed.append(name)
+        else:
+            kept.append(sc)
+
+    if not suppressed:
+        return {"suppressed": [], "remaining_split": len(split_candidates)}
+
+    suppressed_sorted = sorted(set(suppressed))
+    suppressed_set = set(suppressed_sorted)
+    reorganize["split_candidates"] = kept
+    reorganize["total_split_candidates"] = len(kept)
+    reorganize["split_suppressed_by_archive"] = suppressed_sorted
+
+    # split_candidate 由来の issue も除外する（skill 名は detail に入る）。
+    issues = reorganize.get("issues")
+    if isinstance(issues, list):
+        reorganize["issues"] = [
+            i for i in issues if _issue_skill_name(i) not in suppressed_set
+        ]
+
+    return {"suppressed": suppressed_sorted, "remaining_split": len(kept)}
+
+
+def _issue_skill_name(issue: Any) -> str:
+    """reorganize の split issue から skill 名を取り出す（top-level / detail 両対応）。"""
+    if not isinstance(issue, dict):
+        return ""
+    top = _skill_name(issue)
+    if top:
+        return top
+    detail = issue.get("detail")
+    if isinstance(detail, dict):
+        return _skill_name(detail)
+    return ""
+
+
 # ── カテゴリ2: 実行時エラー / 誤検出 ─────────────────
 
 
@@ -172,8 +244,26 @@ def _detect_self_issues(result: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def _collect_archive_skills(phases: Dict[str, Any]) -> set:
+    """prune の archive 寄り候補（zero/retirement/decay）からスキル名集合を返す。"""
+    prune = phases.get("prune", {})
+    archive_skills: set = set()
+    if isinstance(prune, dict):
+        for key in _PRUNE_ARCHIVE_KEYS:
+            for entry in prune.get(key, []) or []:
+                name = _skill_name(entry)
+                if name:
+                    archive_skills.add(name)
+    return archive_skills
+
+
 def _detect_split_archive_contradiction(phases: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """同一スキルを「分割せよ」と「アーカイブせよ」が同時に提案する矛盾。"""
+    """同一スキルを「分割せよ」と「アーカイブせよ」が同時に提案する矛盾。
+
+    reconcile_split_archive() が evolve 本流で先に矛盾を解消するため、通常はここで
+    検出されない。ここは reconcile を通らなかった経路（reconcile 漏れ・将来の新経路）
+    の regression guard として残す。
+    """
     reorganize = phases.get("reorganize", {})
     if not isinstance(reorganize, dict) or reorganize.get("skipped"):
         return []
@@ -183,14 +273,7 @@ def _detect_split_archive_contradiction(phases: Dict[str, Any]) -> List[Dict[str
     if not split_skills:
         return []
 
-    prune = phases.get("prune", {})
-    archive_skills: set = set()
-    if isinstance(prune, dict):
-        for key in _PRUNE_ARCHIVE_KEYS:
-            for entry in prune.get(key, []) or []:
-                name = _skill_name(entry)
-                if name:
-                    archive_skills.add(name)
+    archive_skills = _collect_archive_skills(phases)
 
     out: List[Dict[str, Any]] = []
     for skill in sorted(split_skills & archive_skills):
