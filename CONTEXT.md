@@ -33,3 +33,5 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | eval saturation | forward-gen trigger eval が「緑でも頑健でない」飽和兆候（positive 偏重/易しい negative/クエリ過少）を eval 実行なし決定論で測る。TASTE 着想、calibration drift と同帯で surface | #292 |
 | self_analysis | evolve の result を読み 3 カテゴリ（提案矛盾/phase 例外/系統的却下）の issue 候補を生成する evolve メタ層の自己解析。`evolve_introspect` が決定論生成、Step 11 が人間承認後 todoroki-godai/rl-anything へ半自動起票 | #299 |
 | SkillPyramid | 同一クラスタの低レベル（小型）スキル群を上位スキルへ束ねる階層統合提案。reorganize が split/merge と別軸（低→上位）で検出し max_skill_count 張り付きを構造的に抑える。`hierarchy_candidates` で surface、適用は人間判断 | #303 |
+| hook_drift | 他ツール追従 hook（gstack flow 参照 hook 等）の陳腐化を決定論検出する `scripts/lib/hook_drift.py`。第一フェーズは stale_pin のみ | ADR-036 |
+| stale_pin | hook が参照する外部ツールの version pin（flow-chain.json の `gstack_version`）が実環境（.last-setup-version）から乖離した状態。表記ゆれが無く false positive しない drift 種 | ADR-036 |

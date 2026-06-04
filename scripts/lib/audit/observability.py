@@ -23,6 +23,7 @@ from .sections import (
     build_unmanaged_pitfalls_section,
 )
 from .sections_eval import build_eval_saturation_section
+from .sections_hook import build_hook_drift_section
 
 # (key, builder) — observability の単一ソース。
 # report.py(markdown) と collect_observability(構造化) の両方がこれを消費する。
@@ -34,6 +35,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("calibration_drift", build_calibration_drift_section),
     ("eval_saturation", build_eval_saturation_section),
     ("negative_transfer", build_negative_transfer_section),
+    ("hook_drift", build_hook_drift_section),
 ]
 
 

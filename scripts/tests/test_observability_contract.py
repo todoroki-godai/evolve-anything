@@ -71,6 +71,10 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     import optimize_history_store as _ohs
     monkeypatch.setattr(_ohs, "HISTORY_ROOT", tmp_path / "no-history")
     monkeypatch.setattr(_ohs, "resolve_slug", lambda cwd=None: "no-history")
+    # hook_drift も環境グローバル（~/.gstack の flow-chain.json）を読む builder のため、
+    # 実機に gstack があると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する。
+    import hook_drift
+    monkeypatch.setattr(hook_drift, "_default_gstack_dir", lambda: tmp_path / "no-gstack")
     result = collect_observability(tmp_path)
     assert result == {}
 
