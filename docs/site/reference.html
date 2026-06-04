@@ -319,6 +319,14 @@
           <tr><td>skill_rm</td><td>スキル軸の異種基準統一報酬（#304, arXiv:2606.03980）。スキルごとに異なる成功条件を全スキル共通な3軸（structure=CSO 構造品質 / success=invoke 直後 60s に correction 無しの暗黙成功率 / validity=invoke あたりエラー率の補数）へ射影し単一報酬で横断評価する。compute_environment_fitness の result["skill_rm"] に per-skill 報酬分布（mean/spread/worst_skill）を surface し calibration drift の帰属源を特定。決定論・LLM 非依存</td></tr>
           <tr><td>triage_ledger</td><td>SKIP 判断に状態（TTL・再発カウンタ）を持たせる正準ストア（#308）。meta_quality_check のステートレス SKIP を PJ スコープに永続化し、抑制（クールダウン内は1行に畳む）/ 再発エスカレーション（窓内 3回で SKIP→REVIEW 昇格）/ TTL 切れ（45日で1回強制再評価）の3層トリガーで evolve のたびに自動発火。決定論・LLM 非依存</td></tr>
           <tr><td>hook_drift</td><td>他ツール追従 hook（gstack flow を参照する suggest-gstack-next-action.py 等）の陳腐化を決定論検出する。第一フェーズは stale_pin のみ — flow-chain.json の gstack_version と実環境 .last-setup-version を突合し乖離を検出（version 同士で表記ゆれ false positive なし）。observability contract に登録し evolve のたびに追従漏れを surface（[ADR-036]）</td></tr>
+          <tr><td>subgoal_scorer</td><td>BES 後ろ向き分解（#253）。候補を 5 サブゴール（frontmatter/trigger/correction/line_budget/slop_free）に分解し密な中間フィードバックを返す。optimize_core.run_subgoal_scoring がラップ、決定論・LLM 非依存</td></tr>
+          <tr><td>evolution_operators</td><td>BES 前向き進化探索（#256）。crossover/mutate/select_parents(fitness-proportional)/evolve_generation の決定論演算子。rl-loop の --evolve-search が subgoal fitness を consume</td></tr>
+          <tr><td>memory_trace</td><td>MemTrace 帰属診断（#254）。episodic 検索エラーを misretrieval/context_drift/corruption の3類型に分類し event_id に帰属。LLM/oracle 不使用、audit/memory.py が利用</td></tr>
+          <tr><td>slop_detector</td><td>AI slop 辞書検出（#255）。日英 10 パターンを決定論 regex で検出し SlopResult(slop_score, hits) を返す。constitutional に 10% ブレンド + subgoal slop_free に接続</td></tr>
+          <tr><td>skill_extractor</td><td>SIRI ① の成功軌跡採掘（#238 → #291 配線）。セッション履歴の command ターンを採掘し generalizability_score 付き候補を生成、閾値（既定 0.25）でフィルタして triage の missed_skill_opportunities へ合流。discover=evolve ループに配線済・LLM 非依存</td></tr>
+          <tr><td>eval_saturation</td><td>trigger eval 飽和度診断（#292, TASTE arXiv 2605.28556）。順生成 eval の「緑でも頑健でない」飽和兆候（low_negative_coverage / easy_negatives / thin）を eval 実行なし・決定論で測り、observability contract で evolve のたびに surface</td></tr>
+          <tr><td>evolve_introspect</td><td>evolve メタ層の自己解析（#299）。完了後に result dict を決定論で読み、self_detection / runtime_errors / improvement_opportunities の3カテゴリで GitHub issue 候補を生成。起票は半自動（人間承認）、dedup マーカーで重複防止。split↔archive 矛盾は reconcile_split_archive が本流解消（#301 #302, [ADR-033][ADR-034]）</td></tr>
+          <tr><td>optimize_history_store</td><td>accept/reject 履歴（fitness calibration 母集団）の正準ストア。DATA_DIR/optimize_history/&lt;slug&gt;.jsonl の PJ スコープに集約し従来の 3-way split-brain を解消。slug は worktree 安全に git-common-dir 親 basename で解決、writer/reader 計6箇所が単一経路を共有（[ADR-031]）</td></tr>
         </tbody>
       </table>
 
