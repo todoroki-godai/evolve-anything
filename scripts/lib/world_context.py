@@ -4,16 +4,24 @@ PJ ごとに架空の世界観を生成・永続化し、evolve の各ステッ�
 初回 evolve 時に CLAUDE.md から LLM で世界設定を生成して保存、
 以降は同じ world-context.json を参照することで物語の継続性を保つ。
 
+claude -p 全廃（[ADR-037]）に伴い、世界観生成は llm_broker のファイルベース2相に分離した:
+  Phase A: --emit-request が「生成プロンプト」を JSON で吐く（LLM ゼロ）
+  Phase B: assistant が prompt を読み world JSON を生成し responses を作る（claude -p なし）
+  Phase C: --save-from-response が応答から ctx を組み立て保存する（LLM ゼロ）
+
 CLI:
-  python3 world_context.py --load
+  python3 world_context.py --load --slug <slug>
       JSON が存在すれば stdout に出力して exit 0。なければ exit 1。
-  python3 world_context.py --generate --claude-md CLAUDE.md --slug <slug>
-      CLAUDE.md を読んで LLM で世界設定を生成 → 保存 → stdout に出力。
+  python3 world_context.py --emit-request --claude-md CLAUDE.md --slug <slug>
+      CLAUDE.md を読んで世界観生成リクエスト JSON を stdout に出力（LLM は呼ばない）。
+  python3 world_context.py --save-from-response --response <responses.json> --slug <slug>
+      assistant が生成した world 応答から ctx を組み立て保存 → stdout に出力。
 
 SKILL.md での典型的な使い方:
-  python3 scripts/lib/world_context.py --load 2>/dev/null || \\
-    python3 scripts/lib/world_context.py --generate --claude-md CLAUDE.md \\
-      --slug "$(basename $(git rev-parse --show-toplevel))"
+  python3 scripts/lib/world_context.py --load --slug "$SLUG" 2>/dev/null || \\
+    python3 scripts/lib/world_context.py --emit-request --claude-md CLAUDE.md --slug "$SLUG"
+  # → assistant が world JSON を生成し responses.json を書く →
+  python3 scripts/lib/world_context.py --save-from-response --response responses.json --slug "$SLUG"
 """
 from __future__ import annotations
 
@@ -22,10 +30,11 @@ import datetime
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+
+from llm_broker import build_requests, parse_responses, passthrough
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
@@ -103,50 +112,49 @@ def load_world_context(data_dir: Path = DATA_DIR, slug: str = "") -> Optional[di
         return None
 
 
-def generate_world_context(claude_md_text: str, project_slug: str) -> dict:
-    """CLAUDE.md テキストから LLM で世界設定を生成する。
+_REQUIRED_WORLD_KEYS = {
+    "setting", "protagonist_title", "environment_name", "issue_name", "improvement_name",
+}
 
-    失敗時（LLM エラー・パース失敗）は DEFAULT_WORLD_CONTEXT を返す。
-    LLM 呼び出しは subprocess.run(["claude", ...]) で行う。
-    テストでは subprocess.run をモック対象とする。
+
+def build_world_prompt(claude_md_text: str) -> str:
+    """CLAUDE.md テキストから世界観生成プロンプトを組み立てる（Phase A・LLM ゼロ）。"""
+    description = claude_md_text[:600].strip()
+    return _LLM_PROMPT_TEMPLATE.format(description=description)
+
+
+def _extract_world_dict(raw: object) -> dict:
+    """assistant の生成応答（dict or JSON 文字列）から世界観5キーを抽出する。
+
+    トップレベルに5キーが揃えばそのまま、無ければネストされた dict を探す。
+    抽出不能なら空 dict（呼び出し側が DEFAULT_WORLD_CONTEXT へフォールバック）。
+    """
+    parsed: object = raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw.strip())
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    if isinstance(parsed, dict):
+        if _REQUIRED_WORLD_KEYS.issubset(parsed.keys()):
+            return parsed
+        for v in parsed.values():
+            if isinstance(v, dict) and _REQUIRED_WORLD_KEYS.issubset(v.keys()):
+                return v
+    return {}
+
+
+def build_world_context_from_response(raw: object, project_slug: str) -> dict:
+    """assistant が生成した world 応答から ctx を組み立てる（Phase C・LLM ゼロ）。
+
+    raw は dict（パース済み）でも JSON 文字列でも可。抽出失敗時は
+    DEFAULT_WORLD_CONTEXT にフォールバックする。
 
     戻り値には total_evolve_count=0 / last_evolve_date=None /
     current_level=None / previous_level=None / generated_at / project_slug
     が含まれる。
     """
-    description = claude_md_text[:600].strip()
-    prompt = _LLM_PROMPT_TEMPLATE.format(description=description)
-
-    world: dict = {}
-    try:
-        result = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "json"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            raw = result.stdout.strip()
-            parsed = json.loads(raw)
-            # LLM が {"result": {...}} や {"content": "..."} を返す場合に対応
-            if isinstance(parsed, dict):
-                # トップレベルに必須キーがあればそのまま使う
-                required = {"setting", "protagonist_title", "environment_name",
-                            "issue_name", "improvement_name"}
-                if required.issubset(parsed.keys()):
-                    world = parsed
-                else:
-                    # ネストされた dict を探す
-                    for v in parsed.values():
-                        if isinstance(v, dict) and required.issubset(v.keys()):
-                            world = v
-                            break
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError, KeyError):
-        pass
-
-    if not world:
-        world = dict(DEFAULT_WORLD_CONTEXT)
-
+    world = _extract_world_dict(raw) or dict(DEFAULT_WORLD_CONTEXT)
     return {
         **{k: world.get(k, DEFAULT_WORLD_CONTEXT[k]) for k in DEFAULT_WORLD_CONTEXT},
         "generated_at": datetime.date.today().isoformat(),
@@ -215,22 +223,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="world-context.json が存在すれば stdout に出力して exit 0。なければ exit 1。",
     )
     group.add_argument(
-        "--generate",
+        "--emit-request",
         action="store_true",
-        help="CLAUDE.md から LLM で世界観を生成して保存し、stdout に出力する。",
+        help="CLAUDE.md から世界観生成リクエスト JSON を stdout に出力する（LLM は呼ばない・Phase A）。",
+    )
+    group.add_argument(
+        "--save-from-response",
+        action="store_true",
+        help="assistant が生成した world 応答（--response）から ctx を組み立て保存する（Phase C）。",
     )
     parser.add_argument(
         "--claude-md",
         metavar="PATH",
         default="CLAUDE.md",
-        help="--generate 時に読む CLAUDE.md のパス（デフォルト: ./CLAUDE.md）",
+        help="--emit-request 時に読む CLAUDE.md のパス（デフォルト: ./CLAUDE.md）",
+    )
+    parser.add_argument(
+        "--response",
+        metavar="PATH",
+        default="",
+        help="--save-from-response 時に読む responses JSON（{\"world\": <world dict or JSON 文字列>}）",
     )
     parser.add_argument(
         "--slug",
         metavar="SLUG",
         default="",
         help="PJ 別スコープ用の slug。--load では参照先 PJ の特定に、"
-             "--generate では project_slug フィールドに使う（PJ 間の世界観汚染を防ぐ）",
+             "--save-from-response では project_slug フィールドに使う（PJ 間の世界観汚染を防ぐ）",
     )
     parser.add_argument(
         "--data-dir",
@@ -276,16 +295,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         _print_ctx(ctx)
         return 0
 
-    # --generate
-    claude_md_path = Path(args.claude_md)
-    claude_md_text = ""
-    if claude_md_path.exists():
-        try:
-            claude_md_text = claude_md_path.read_text(encoding="utf-8")
-        except OSError:
-            pass
+    if args.emit_request:
+        # Phase A: 生成リクエストを JSON で吐く（LLM ゼロ）
+        claude_md_path = Path(args.claude_md)
+        claude_md_text = ""
+        if claude_md_path.exists():
+            try:
+                claude_md_text = claude_md_path.read_text(encoding="utf-8")
+            except OSError:
+                pass
+        requests = build_requests(
+            [{"id": "world", "slug": args.slug}],
+            lambda _it: build_world_prompt(claude_md_text),
+        )
+        print(json.dumps({"slug": args.slug, "requests": requests}, ensure_ascii=False, indent=2))
+        return 0
 
-    ctx = generate_world_context(claude_md_text, args.slug)
+    # --save-from-response（Phase C）
+    if not args.response:
+        parser.error("--save-from-response には --response が必要です")
+    responses = json.loads(Path(args.response).read_text(encoding="utf-8"))
+    # requests を単一ソースに "world" 応答を回収（欠損なら passthrough fallback="" → DEFAULT）
+    parsed = parse_responses([{"id": "world"}], responses, parser=passthrough)
+    ctx = build_world_context_from_response(parsed["world"], args.slug)
     ctx = save_world_context(data_dir, ctx, slug=args.slug)
     _print_ctx(ctx)
     return 0

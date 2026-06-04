@@ -2,11 +2,12 @@
 """Constitutional Evaluation モジュール。
 
 原則リスト × 4レイヤー（CLAUDE.md/Rules/Skills/Memory）を LLM Judge で評価し、
-Constitutional Score（0.0〜1.0）を算出する。
+Constitutional Score（0.0〜1.0）を算出する。[ADR-037] により claude -p を全廃し、
+レイヤー評価は emit_layer_requests（Phase A）→ SKILL のインライン採点（Phase B）→
+ingest_layer_responses（Phase C）のファイルベース2相で行う。本モジュールは LLM を呼ばない。
 """
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,12 +25,6 @@ except ImportError:
 
 CSO_SIGNAL_WEIGHT = 0.1
 SLOP_PENALTY_WEIGHT = 0.1  # slop 減点の overall スコアへの影響度
-
-# Haiku pricing (per 1M tokens)
-_HAIKU_INPUT_COST_PER_M = 0.25
-_HAIKU_OUTPUT_COST_PER_M = 1.25
-# Rough chars-per-token estimate
-_CHARS_PER_TOKEN = 4
 
 
 def _ensure_paths():
@@ -133,22 +128,7 @@ def _save_cache(project_dir: Path, data: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cost estimation
-# ---------------------------------------------------------------------------
-
-def _estimate_cost(input_chars: int, output_chars: int) -> float:
-    """Haiku の推定コスト (USD) を返す。"""
-    input_tokens = input_chars / _CHARS_PER_TOKEN
-    output_tokens = output_chars / _CHARS_PER_TOKEN
-    cost = (
-        input_tokens / 1_000_000 * _HAIKU_INPUT_COST_PER_M
-        + output_tokens / 1_000_000 * _HAIKU_OUTPUT_COST_PER_M
-    )
-    return cost
-
-
-# ---------------------------------------------------------------------------
-# LLM evaluation
+# Layer evaluation (Phase B response parsing)
 # ---------------------------------------------------------------------------
 
 def _build_eval_prompt(layer_name: str, layer_content: str, principles: List[Dict[str, Any]]) -> str:
@@ -213,59 +193,37 @@ def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-def _evaluate_layer(
-    layer_name: str,
-    layer_content: str,
-    principles: List[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
-    """1レイヤーを LLM で評価する。リトライ1回。失敗時は None。
+def _parse_layer_response(raw: Optional[Any]) -> Optional[Dict[str, Any]]:
+    """1レイヤーの LLM レスポンスをパースする。None / 不正 / 空評価時は None。
+
+    [ADR-037] Phase C のパーサ。llm_broker.parse_responses から呼ばれる。Phase B の書き手は
+    assistant（非決定論プロデューサ）のため、JSON 文字列だけでなく parse 済み dict で来ても受ける
+    （world_context._extract_world_dict と同じ寛容性。str 専用だと ingest がクラッシュする）。
 
     Returns:
-        {
-            "evaluations": [{"principle_id", "score", "rationale", "violations"}, ...],
-            "input_chars": int,
-            "output_chars": int,
-        }
+        {"evaluations": [{"principle_id", "score", "rationale", "violations"}, ...]} or None
     """
-    prompt = _build_eval_prompt(layer_name, layer_content, principles)
-    timeout = THRESHOLDS["llm_timeout_sec"]
-
-    for attempt in range(2):  # 最大2回（初回 + 1リトライ）
-        try:
-            result = subprocess.run(
-                ["claude", "-p", prompt, "--model", "haiku"],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            if result.returncode != 0:
-                continue
-
-            raw_output = result.stdout
-            parsed = _parse_llm_response(raw_output)
-            if parsed is None:
-                continue
-
-            evaluations = parsed.get("evaluations", [])
-            if not evaluations:
-                continue
-
-            # スコア clamp
-            for ev in evaluations:
-                if "score" in ev:
-                    ev["score"] = _clamp(float(ev["score"]))
-
-            return {
-                "evaluations": evaluations,
-                "input_chars": len(prompt),
-                "output_chars": len(raw_output),
-            }
-        except subprocess.TimeoutExpired:
-            return None
-        except Exception:
-            continue
-
-    return None
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        parsed = raw
+    elif isinstance(raw, str):
+        parsed = _parse_llm_response(raw)
+    else:
+        return None
+    if parsed is None:
+        return None
+    evaluations = parsed.get("evaluations", [])
+    if not evaluations:
+        return None
+    # スコア clamp
+    for ev in evaluations:
+        if "score" in ev:
+            try:
+                ev["score"] = _clamp(float(ev["score"]))
+            except (TypeError, ValueError):
+                ev["score"] = 0.0
+    return {"evaluations": evaluations}
 
 
 # ---------------------------------------------------------------------------
@@ -305,99 +263,26 @@ def _load_cso_signal(data_dir: Path) -> Optional[Dict[str, Any]]:
 # Main
 # ---------------------------------------------------------------------------
 
-def compute_constitutional_score(
+def _aggregate_constitutional(
     project_dir: Path,
-    refresh: bool = False,
-) -> Optional[Dict[str, Any]]:
-    """Constitutional Score を算出する。
+    principles: List[Dict[str, Any]],
+    layer_contents: Dict[str, str],
+    layer_results: Dict[str, Dict[str, Any]],
+    layer_hashes: Dict[str, str],
+    *,
+    llm_calls: int = 0,
+    from_cache_count: int = 0,
+    estimated_cost: float = 0.0,
+) -> Dict[str, Any]:
+    """layer_results を集約して Constitutional Score を算出し、cache を保存する。
 
-    Returns:
-        成功時: {"overall", "per_principle", "per_layer", "violations", ...}
-        スキップ時: {"overall": None, "skip_reason", "coverage_value"}
-        全失敗時: None
+    [ADR-037] compute_constitutional_score（cache-only）と ingest_layer_responses（2相）が共有する。
+    LLM は呼ばない。
     """
-    _ensure_paths()
-    project_dir = Path(project_dir)
-
-    # --- Coherence Coverage gate ---
-    coherence_mod = _load_sibling("coherence")
-    try:
-        coherence_result = coherence_mod.compute_coherence_score(project_dir)
-        coverage = coherence_result["coverage"]
-    except Exception:
-        coverage = 0.0
-
-    if coverage < THRESHOLDS["min_coverage_for_eval"]:
-        return {
-            "overall": None,
-            "skip_reason": "low_coverage",
-            "coverage_value": coverage,
-        }
-
-    # --- Principles ---
-    principles_mod = _load_sibling("principles")
-    principles_result = principles_mod.extract_principles(project_dir)
-    principles = principles_result["principles"]
-    if not principles:
-        return None
-
-    # --- Layer contents ---
-    layer_contents = _collect_layer_contents(project_dir)
-    if not layer_contents:
-        return None
-
-    # --- Cache handling ---
-    cache = _load_cache(project_dir) if not refresh else None
-    cached_layers: Dict[str, Dict[str, Any]] = {}
-    cached_hashes: Dict[str, str] = {}
-    if cache:
-        cached_layers = cache.get("layer_results", {})
-        cached_hashes = cache.get("layer_hashes", {})
-
-    # --- Per-layer evaluation ---
-    layer_results: Dict[str, Dict[str, Any]] = {}
-    layer_hashes: Dict[str, str] = {}
-    total_input_chars = 0
-    total_output_chars = 0
-    llm_calls = 0
-    from_cache_count = 0
-
-    for layer_name, content in layer_contents.items():
-        content_hash = _content_hash(content)
-        layer_hashes[layer_name] = content_hash
-
-        # キャッシュ一致チェック
-        if (
-            not refresh
-            and layer_name in cached_layers
-            and cached_hashes.get(layer_name) == content_hash
-        ):
-            layer_results[layer_name] = cached_layers[layer_name]
-            from_cache_count += 1
-            continue
-
-        # LLM 評価
-        eval_result = _evaluate_layer(layer_name, content, principles)
-        if eval_result is None:
-            continue  # スキップ
-
-        layer_results[layer_name] = {
-            "evaluations": eval_result["evaluations"],
-        }
-        total_input_chars += eval_result["input_chars"]
-        total_output_chars += eval_result["output_chars"]
-        llm_calls += 1
-
-    # --- 全レイヤー失敗 ---
-    if not layer_results:
-        return None
-
-    # --- Score aggregation ---
     # principle_id → list of scores across layers
     principle_scores: Dict[str, List[float]] = {}
     # layer_name → list of scores across principles
     layer_scores_map: Dict[str, List[float]] = {}
-    # All violations
     all_violations: List[Dict[str, Any]] = []
 
     for layer_name, lr in layer_results.items():
@@ -411,7 +296,6 @@ def compute_constitutional_score(
                 principle_scores[pid] = []
             principle_scores[pid].append(score)
 
-            # Collect violations
             for v in ev.get("violations", []):
                 all_violations.append({
                     "principle_id": pid,
@@ -442,11 +326,7 @@ def compute_constitutional_score(
     for layer_name, scores in layer_scores_map.items():
         per_layer[layer_name] = round(sum(scores) / len(scores), 4) if scores else 0.0
 
-    # overall
     overall = round(sum(principle_means) / len(principle_means), 4) if principle_means else 0.0
-
-    # Cost estimation
-    estimated_cost = _estimate_cost(total_input_chars, total_output_chars)
 
     result = {
         "overall": overall,
@@ -469,13 +349,11 @@ def compute_constitutional_score(
         _slop_mod = _ilu.module_from_spec(_slop_spec)
         _slop_spec.loader.exec_module(_slop_mod)
 
-        # 全レイヤーのテキストを結合して slop スコアを算出
         all_layer_text = "\n\n".join(layer_contents.values())
         slop_result = _slop_mod.detect_slop(all_layer_text)
         slop_score = slop_result.slop_score  # 1.0=良い, 0.0=悪い
         slop_hits = slop_result.hits
 
-        # slop violations を all_violations に追加
         for hit in slop_hits:
             all_violations.append({
                 "principle_id": "anti-slop",
@@ -486,13 +364,10 @@ def compute_constitutional_score(
         result["slop_score"] = slop_score
         result["slop_hits_count"] = len(slop_hits)
 
-        # overall スコアに slop 減点を合流（加重平均: existing * (1-w) + slop * w）
-        # CSO 統合前の overall にブレンドする
         overall = round(overall * (1 - SLOP_PENALTY_WEIGHT) + slop_score * SLOP_PENALTY_WEIGHT, 4)
         result["overall"] = overall
 
     except Exception as e:
-        # slop 検出失敗は graceful degradation — overall に影響させない
         print(f"[constitutional] slop 検出スキップ: {e}", file=sys.stderr)
         result["slop_score"] = None
         result["slop_hits_count"] = 0
@@ -502,7 +377,6 @@ def compute_constitutional_score(
     cso = _load_cso_signal(gstack_dir)
     if cso is not None:
         result["cso_signal"] = cso
-        # security 軸として overall にブレンド
         cso_score = 1.0 if cso.get("outcome") == "pass" else 0.0
         result["overall"] = round(
             overall * (1 - CSO_SIGNAL_WEIGHT) + cso_score * CSO_SIGNAL_WEIGHT, 4
@@ -521,6 +395,177 @@ def compute_constitutional_score(
     return result
 
 
+def _coverage_gate(project_dir: Path) -> Optional[float]:
+    """coverage が閾値未満なら coverage 値を、十分なら None を返す。"""
+    coherence_mod = _load_sibling("coherence")
+    try:
+        coverage = coherence_mod.compute_coherence_score(project_dir)["coverage"]
+    except Exception:
+        coverage = 0.0
+    if coverage < THRESHOLDS["min_coverage_for_eval"]:
+        return coverage
+    return None
+
+
+def compute_constitutional_score(
+    project_dir: Path,
+    refresh: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Constitutional Score を算出する（LLM-free; cache 済みレイヤーのみ集約）。
+
+    [ADR-037] claude -p を全廃。cache 命中レイヤーだけを集約する。cache 未生成/全 miss なら
+    None（refresh は emit_layer_requests →（SKILL Phase B）→ ingest_layer_responses で行う）。
+
+    Returns:
+        成功時: {"overall", "per_principle", "per_layer", "violations", ...}
+        スキップ時: {"overall": None, "skip_reason", "coverage_value"}
+        cache 無/全 miss: None
+    """
+    _ensure_paths()
+    project_dir = Path(project_dir)
+
+    low_coverage = _coverage_gate(project_dir)
+    if low_coverage is not None:
+        return {"overall": None, "skip_reason": "low_coverage", "coverage_value": low_coverage}
+
+    principles = _load_sibling("principles").extract_principles(project_dir)["principles"]
+    if not principles:
+        return None
+
+    layer_contents = _collect_layer_contents(project_dir)
+    if not layer_contents:
+        return None
+
+    cache = _load_cache(project_dir) if not refresh else None
+    cached_layers = cache.get("layer_results", {}) if cache else {}
+    cached_hashes = cache.get("layer_hashes", {}) if cache else {}
+
+    # cache 命中レイヤーのみ採用（miss は LLM を呼ばずスキップ）
+    layer_results: Dict[str, Dict[str, Any]] = {}
+    layer_hashes: Dict[str, str] = {}
+    for layer_name, content in layer_contents.items():
+        content_hash = _content_hash(content)
+        layer_hashes[layer_name] = content_hash
+        if layer_name in cached_layers and cached_hashes.get(layer_name) == content_hash:
+            layer_results[layer_name] = cached_layers[layer_name]
+
+    if not layer_results:
+        return None
+
+    return _aggregate_constitutional(
+        project_dir, principles, layer_contents, layer_results, layer_hashes,
+        from_cache_count=len(layer_results),
+    )
+
+
+def emit_layer_requests(
+    project_dir: str | Path, refresh: bool = False
+) -> Dict[str, Any]:
+    """Phase A: cache-miss レイヤーの評価リクエストを生成する（決定論・LLM 非依存）。
+
+    principles が cache 由来でない場合 principles_missing=True を返す（SKILL は principles round
+    を先に回す）。プロンプトには現時点で取得できる principles（seed fallback 含む）を埋め込む。
+
+    Returns:
+        {"requests": [{"id": <layer>, "prompt": str, "meta": {"content_hash"}}],
+         "skipped": [<cache hit layer>...], "principles_missing": bool, "skip_reason"?: str}
+    """
+    _ensure_paths()
+    from llm_broker import build_requests
+
+    project_dir = Path(project_dir)
+
+    low_coverage = _coverage_gate(project_dir)
+    if low_coverage is not None:
+        return {"requests": [], "skipped": [], "principles_missing": False,
+                "skip_reason": "low_coverage"}
+
+    pres = _load_sibling("principles").extract_principles(project_dir)
+    principles = pres["principles"]
+    principles_missing = not pres.get("from_cache", False)
+    if not principles:
+        return {"requests": [], "skipped": [], "principles_missing": principles_missing}
+
+    layer_contents = _collect_layer_contents(project_dir)
+    if not layer_contents:
+        return {"requests": [], "skipped": [], "principles_missing": principles_missing}
+
+    cache = _load_cache(project_dir) if not refresh else None
+    cached_layers = cache.get("layer_results", {}) if cache else {}
+    cached_hashes = cache.get("layer_hashes", {}) if cache else {}
+
+    items: List[Dict[str, Any]] = []
+    skipped: List[str] = []
+    for layer_name, content in layer_contents.items():
+        content_hash = _content_hash(content)
+        if (
+            not refresh
+            and layer_name in cached_layers
+            and cached_hashes.get(layer_name) == content_hash
+        ):
+            skipped.append(layer_name)
+            continue
+        items.append({"id": layer_name, "_content": content, "content_hash": content_hash})
+
+    requests = build_requests(
+        items, lambda it: _build_eval_prompt(it["id"], it["_content"], principles)
+    )
+    for r in requests:  # 巨大なレイヤー本文を meta から落とす
+        r["meta"].pop("_content", None)
+    return {"requests": requests, "skipped": skipped, "principles_missing": principles_missing}
+
+
+def ingest_layer_responses(
+    project_dir: str | Path,
+    requests: List[Dict[str, Any]],
+    responses: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Phase C: レイヤー応答をパースし cache 命中分とマージして集約・保存する（決定論・LLM 非依存）。
+
+    cache 済みレイヤー + 今回 ingest したレイヤーを合わせて集約する。評価が1つも無ければ None。
+    """
+    _ensure_paths()
+    from llm_broker import parse_responses
+
+    project_dir = Path(project_dir)
+    principles = _load_sibling("principles").extract_principles(project_dir)["principles"]
+    layer_contents = _collect_layer_contents(project_dir)
+    if not layer_contents:
+        return None
+
+    cache = _load_cache(project_dir)
+    cached_layers = cache.get("layer_results", {}) if cache else {}
+    cached_hashes = cache.get("layer_hashes", {}) if cache else {}
+
+    parsed_map = parse_responses(requests, responses, parser=_parse_layer_response)
+
+    layer_results: Dict[str, Dict[str, Any]] = {}
+    layer_hashes: Dict[str, str] = {}
+    # まだ内容が一致する cache 済みレイヤーを引き継ぐ
+    for layer_name, content in layer_contents.items():
+        content_hash = _content_hash(content)
+        layer_hashes[layer_name] = content_hash
+        if layer_name in cached_layers and cached_hashes.get(layer_name) == content_hash:
+            layer_results[layer_name] = cached_layers[layer_name]
+
+    # 今回 ingest したレイヤーを上書き
+    fresh = 0
+    for req in requests:
+        lid = req["id"]
+        parsed = parsed_map.get(lid)
+        if parsed and parsed.get("evaluations"):
+            layer_results[lid] = {"evaluations": parsed["evaluations"]}
+            fresh += 1
+
+    if not layer_results:
+        return None
+
+    return _aggregate_constitutional(
+        project_dir, principles, layer_contents, layer_results, layer_hashes,
+        llm_calls=fresh, from_cache_count=len(layer_results) - fresh,
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -528,10 +573,32 @@ def compute_constitutional_score(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Constitutional Evaluation")
+    parser = argparse.ArgumentParser(description="Constitutional Evaluation（[ADR-037] 2相）")
     parser.add_argument("project_dir", help="プロジェクトディレクトリ")
-    parser.add_argument("--refresh", action="store_true", help="キャッシュを無視して再評価")
+    parser.add_argument("--refresh", action="store_true", help="cache を無視（emit 時は全レイヤー再評価）")
+    parser.add_argument(
+        "--emit-requests", action="store_true",
+        help="Phase A: cache-miss レイヤーの評価リクエスト JSON を出力",
+    )
+    parser.add_argument(
+        "--ingest", action="store_true",
+        help="Phase C: --requests と --responses をパース・集約してキャッシュ保存",
+    )
+    parser.add_argument("--requests", help="Phase C: emit-requests の出力 JSON ファイル")
+    parser.add_argument("--responses", help="Phase C: assistant 応答 JSON ファイル")
     args = parser.parse_args()
 
-    result = compute_constitutional_score(Path(args.project_dir), refresh=args.refresh)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.emit_requests:
+        out = emit_layer_requests(Path(args.project_dir), refresh=args.refresh)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+    elif args.ingest:
+        with open(args.requests, encoding="utf-8") as f:
+            req_payload = json.load(f)
+        requests = req_payload.get("requests", req_payload)
+        with open(args.responses, encoding="utf-8") as f:
+            responses = json.load(f)
+        result = ingest_layer_responses(Path(args.project_dir), requests, responses)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        result = compute_constitutional_score(Path(args.project_dir), refresh=args.refresh)
+        print(json.dumps(result, ensure_ascii=False, indent=2))

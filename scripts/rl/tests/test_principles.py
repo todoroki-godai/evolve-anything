@@ -3,10 +3,8 @@
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
@@ -37,12 +35,15 @@ def _make_project(tmp_path):
     return tmp_path
 
 
-def _mock_llm_response(extracted_principles):
-    """subprocess.run のモック戻り値を生成する。"""
-    result = mock.MagicMock()
-    result.returncode = 0
-    result.stdout = json.dumps(extracted_principles)
-    return result
+def _ingest_with(project, extracted_principles):
+    """[ADR-037] 2相経路: emit-request → 応答注入 → ingest_principles。
+
+    extracted_principles が None の場合はパース失敗（不正 JSON）を模す。
+    """
+    req = principles.build_extraction_request(project, refresh=True)
+    raw = "not json" if extracted_principles is None else json.dumps(extracted_principles)
+    responses = {"principles": raw}
+    return principles.ingest_principles(project, req["requests"], responses)
 
 
 class TestCacheRoundtrip:
@@ -107,10 +108,7 @@ class TestSeedPrinciples:
                 "testability": 0.8,
             }
         ]
-        with mock.patch.object(
-            principles, "_extract_via_llm", return_value=llm_output
-        ):
-            result = principles.extract_principles(project, refresh=True)
+        result = _ingest_with(project, llm_output)
 
         ids = {p["id"] for p in result["principles"]}
         for seed in principles.SEED_PRINCIPLES:
@@ -148,10 +146,7 @@ class TestUserDefinedPreservation:
                 "testability": 0.7,
             }
         ]
-        with mock.patch.object(
-            principles, "_extract_via_llm", return_value=llm_output
-        ):
-            result = principles.extract_principles(project, refresh=True)
+        result = _ingest_with(project, llm_output)
 
         ids = {p["id"] for p in result["principles"]}
         assert "my-custom-principle" in ids
@@ -178,10 +173,7 @@ class TestQualityFiltering:
                 "testability": 0.8,
             },
         ]
-        with mock.patch.object(
-            principles, "_extract_via_llm", return_value=llm_output
-        ):
-            result = principles.extract_principles(project, refresh=True)
+        result = _ingest_with(project, llm_output)
 
         passed_ids = {p["id"] for p in result["principles"]}
         excluded_ids = {p["id"] for p in result["excluded_low_quality"]}
@@ -209,17 +201,92 @@ class TestQualityFiltering:
 
 
 class TestLLMFailureFallback:
-    def test_llm_failure_returns_seeds_only(self, tmp_path):
+    def test_parse_failure_returns_seeds_only(self, tmp_path):
+        """[ADR-037] ingest 時にパース失敗したら seed-only にフォールバックする。"""
         project = _make_project(tmp_path)
-        with mock.patch.object(
-            principles, "_extract_via_llm", return_value=None
-        ):
-            result = principles.extract_principles(project, refresh=True)
+        result = _ingest_with(project, None)  # 不正 JSON を注入
 
         assert result["from_cache"] is False
         ids = {p["id"] for p in result["principles"]}
         seed_ids = {s["id"] for s in principles.SEED_PRINCIPLES}
         assert ids == seed_ids
+
+
+class TestTwoPhaseEmitIngest:
+    """[ADR-037] claude -p 全廃の2相経路。"""
+
+    def test_emit_request_on_fresh_project(self, tmp_path):
+        project = _make_project(tmp_path)
+        out = principles.build_extraction_request(project, refresh=True)
+        assert len(out["requests"]) == 1
+        req = out["requests"][0]
+        assert req["id"] == "principles"
+        assert "原則" in req["prompt"] or "principle" in req["prompt"].lower()
+        # 巨大な source 本文は meta に残さない
+        assert "_src" not in req["meta"]
+        assert req["meta"]["source_hash"] == out["source_hash"]
+
+    def test_emit_empty_when_cache_valid(self, tmp_path):
+        """cache が有効（source_hash 一致）なら refresh 不要で requests=[]。"""
+        project = _make_project(tmp_path)
+        # 正規の cache を作る
+        out = principles.build_extraction_request(project, refresh=True)
+        responses = {"principles": json.dumps([{
+            "id": "x", "text": "y", "source": "CLAUDE.md",
+            "category": "quality", "specificity": 0.8, "testability": 0.8,
+        }])}
+        principles.ingest_principles(project, out["requests"], responses)
+
+        again = principles.build_extraction_request(project, refresh=False)
+        assert again["requests"] == []
+
+    def test_emit_empty_on_empty_source(self, tmp_path):
+        """source が空なら requests=[]。"""
+        out = principles.build_extraction_request(tmp_path, refresh=True)
+        assert out["requests"] == []
+
+    def test_ingest_persists_cache(self, tmp_path):
+        project = _make_project(tmp_path)
+        result = _ingest_with(project, [{
+            "id": "persisted", "text": "p", "source": "CLAUDE.md",
+            "category": "quality", "specificity": 0.9, "testability": 0.9,
+        }])
+        # 次の extract_principles が cache から読めること
+        reloaded = principles.extract_principles(project, refresh=False)
+        assert reloaded["from_cache"] is True
+        ids = {p["id"] for p in reloaded["principles"]}
+        assert "persisted" in ids
+        assert result["from_cache"] is False
+
+
+class TestExtractPrinciplesLLMFree:
+    """[ADR-037] extract_principles は LLM を呼ばず cache を読むだけ。"""
+
+    def test_cache_miss_returns_seed_only_non_persisted(self, tmp_path):
+        project = _make_project(tmp_path)
+        result = principles.extract_principles(project, refresh=False)
+        assert result["from_cache"] is False
+        ids = {p["id"] for p in result["principles"]}
+        seed_ids = {s["id"] for s in principles.SEED_PRINCIPLES}
+        assert ids == seed_ids
+        # 非永続: cache ファイルが作られていない（emit/ingest で正式抽出させるため）
+        assert not (project / ".claude" / "principles.json").exists()
+
+    def test_no_subprocess_import(self):
+        """モジュールが subprocess を import していない（claude -p 全廃）。"""
+        import inspect
+        src = inspect.getsource(principles)
+        assert "import subprocess" not in src
+        assert not hasattr(principles, "_extract_via_llm")
+
+    def test_parser_accepts_already_parsed_list(self):
+        """Phase B が parse 済み list で返しても受ける（str 専用クラッシュ回避）。"""
+        out = principles._parse_principles_response([{"id": "x", "text": "y"}])
+        assert out == [{"id": "x", "text": "y"}]
+
+    def test_parser_rejects_non_str_non_list(self):
+        assert principles._parse_principles_response({"not": "a list"}) is None
+        assert principles._parse_principles_response(123) is None
 
 
 class TestComputeSourceHash:

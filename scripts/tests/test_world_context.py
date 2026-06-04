@@ -1,13 +1,12 @@
 """tests/test_world_context.py — world_context モジュールの単体テスト。
 
-LLM を直接呼ばない（subprocess.run をモック）。
+claude -p 全廃（[ADR-037]）後はファイルベース2相のため LLM を一切呼ばない（mock 不要）。
 """
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -23,7 +22,8 @@ from world_context import (
     WORLD_CONTEXT_FILE,
     _slug_filename,
     _world_path,
-    generate_world_context,
+    build_world_context_from_response,
+    build_world_prompt,
     load_world_context,
     main,
     save_world_context,
@@ -80,32 +80,32 @@ def test_load_returns_none_on_malformed_json(tmp_data_dir: Path) -> None:
     assert load_world_context(tmp_data_dir) is None
 
 
-# ── generate_world_context ────────────────────────────────────────────────────
+# ── build_world_prompt / build_world_context_from_response（ファイルベース2相）──
 
-_VALID_LLM_RESPONSE = json.dumps(
-    {
-        "setting": "魔法使いの塔。石版が光る。",
-        "protagonist_title": "魔法使い",
-        "environment_name": "魔法の塔",
-        "issue_name": "歪みの影",
-        "improvement_name": "輝く刻印",
-    }
-)
-
-
-def _make_subprocess_mock(stdout: str, returncode: int = 0) -> MagicMock:
-    mock = MagicMock()
-    mock.returncode = returncode
-    mock.stdout = stdout
-    mock.stderr = ""
-    return mock
+_VALID_WORLD = {
+    "setting": "魔法使いの塔。石版が光る。",
+    "protagonist_title": "魔法使い",
+    "environment_name": "魔法の塔",
+    "issue_name": "歪みの影",
+    "improvement_name": "輝く刻印",
+}
+_VALID_WORLD_JSON = json.dumps(_VALID_WORLD)
 
 
-def test_generate_uses_llm_response(tmp_data_dir: Path) -> None:
-    with patch("world_context.subprocess.run") as mock_run:
-        mock_run.return_value = _make_subprocess_mock(_VALID_LLM_RESPONSE)
-        result = generate_world_context("# rl-anything\nTest project.", "test-proj")
+def test_build_world_prompt_embeds_description() -> None:
+    prompt = build_world_prompt("# rl-anything\nTest project description.")
+    assert "Test project description." in prompt
+    assert "setting" in prompt  # テンプレートのキー説明が含まれる
 
+
+def test_build_world_prompt_truncates_long_input() -> None:
+    prompt = build_world_prompt("x" * 5000)
+    # description は 600 文字に切り詰められる（テンプレート分は上乗せ）
+    assert prompt.count("x") == 600
+
+
+def test_build_context_uses_world_dict(tmp_data_dir: Path) -> None:
+    result = build_world_context_from_response(_VALID_WORLD, "test-proj")
     assert result["protagonist_title"] == "魔法使い"
     assert result["environment_name"] == "魔法の塔"
     assert result["total_evolve_count"] == 0
@@ -114,37 +114,35 @@ def test_generate_uses_llm_response(tmp_data_dir: Path) -> None:
     assert result["project_slug"] == "test-proj"
 
 
-def test_generate_falls_back_to_default_on_llm_error() -> None:
-    with patch("world_context.subprocess.run") as mock_run:
-        mock_run.return_value = _make_subprocess_mock("", returncode=1)
-        result = generate_world_context("desc", "slug")
+def test_build_context_accepts_json_string() -> None:
+    result = build_world_context_from_response(_VALID_WORLD_JSON, "slug")
+    assert result["protagonist_title"] == "魔法使い"
 
+
+def test_build_context_extracts_nested_world() -> None:
+    nested = json.dumps({"result": _VALID_WORLD})
+    result = build_world_context_from_response(nested, "slug")
+    assert result["environment_name"] == "魔法の塔"
+
+
+def test_build_context_falls_back_on_empty() -> None:
+    result = build_world_context_from_response("", "slug")
     assert result["protagonist_title"] == DEFAULT_WORLD_CONTEXT["protagonist_title"]
     assert result["environment_name"] == DEFAULT_WORLD_CONTEXT["environment_name"]
 
 
-def test_generate_falls_back_to_default_on_malformed_json() -> None:
-    with patch("world_context.subprocess.run") as mock_run:
-        mock_run.return_value = _make_subprocess_mock("not json")
-        result = generate_world_context("desc", "slug")
-
+def test_build_context_falls_back_on_malformed_json() -> None:
+    result = build_world_context_from_response("not json", "slug")
     assert result["setting"] == DEFAULT_WORLD_CONTEXT["setting"]
 
 
-def test_generate_falls_back_to_default_on_timeout() -> None:
-    import subprocess as _sp
-
-    with patch("world_context.subprocess.run", side_effect=_sp.TimeoutExpired("claude", 60)):
-        result = generate_world_context("desc", "slug")
-
-    assert result["environment_name"] == DEFAULT_WORLD_CONTEXT["environment_name"]
+def test_build_context_falls_back_on_missing_keys() -> None:
+    result = build_world_context_from_response({"setting": "partial only"}, "slug")
+    assert result["setting"] == DEFAULT_WORLD_CONTEXT["setting"]  # 5キー未満は採用しない
 
 
-def test_generate_includes_all_required_fields() -> None:
-    with patch("world_context.subprocess.run") as mock_run:
-        mock_run.return_value = _make_subprocess_mock(_VALID_LLM_RESPONSE)
-        result = generate_world_context("desc", "my-project")
-
+def test_build_context_includes_all_required_fields() -> None:
+    result = build_world_context_from_response(_VALID_WORLD, "my-project")
     required = {
         "setting", "protagonist_title", "environment_name",
         "issue_name", "improvement_name",
@@ -317,40 +315,82 @@ def test_cli_load_exits_0_when_file_exists(
     assert parsed["environment_name"] == "テスト書架"
 
 
-def test_cli_generate_saves_and_prints(
+def _write_response(tmp_path: Path, world: object, name: str = "responses.json") -> Path:
+    """assistant が書いたと想定する responses.json を作る（Phase B 相当）。"""
+    p = tmp_path / name
+    p.write_text(json.dumps({"world": world}, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_cli_emit_request_outputs_prompt_no_llm(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """--emit-request は生成リクエスト JSON を吐くだけ（LLM を呼ばない・Phase A）。"""
+    claude_md = tmp_path / "CLAUDE.md"
+    claude_md.write_text("# proj\nA test project for prompts.", encoding="utf-8")
+    ret = main([
+        "--emit-request",
+        "--claude-md", str(claude_md),
+        "--slug", "test-slug",
+        "--data-dir", str(tmp_path / "rl-anything"),
+    ])
+    assert ret == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["slug"] == "test-slug"
+    assert len(doc["requests"]) == 1
+    req = doc["requests"][0]
+    assert req["id"] == "world"
+    assert "A test project for prompts." in req["prompt"]
+
+
+def test_cli_save_from_response_saves_and_prints(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     data_dir = tmp_path / "rl-anything"
-    with patch("world_context.subprocess.run") as mock_run:
-        mock_run.return_value = _make_subprocess_mock(_VALID_LLM_RESPONSE)
-        ret = main([
-            "--generate",
-            "--claude-md", str(tmp_path / "CLAUDE.md"),  # 存在しないが OK（空文字列になる）
-            "--slug", "test-slug",
-            "--data-dir", str(data_dir),
-        ])
-
+    resp = _write_response(tmp_path, _VALID_WORLD)
+    ret = main([
+        "--save-from-response",
+        "--response", str(resp),
+        "--slug", "test-slug",
+        "--data-dir", str(data_dir),
+    ])
     assert ret == 0
     assert _world_path(data_dir, "test-slug").exists()
-    captured = capsys.readouterr()
-    parsed = json.loads(captured.out)
+    parsed = json.loads(capsys.readouterr().out)
     assert parsed["project_slug"] == "test-slug"
+    assert parsed["protagonist_title"] == "魔法使い"
 
 
-def test_cli_generate_then_load_other_slug_isolated(
+def test_cli_save_from_response_missing_world_uses_default(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    """--generate --slug A の後、--load --slug B は exit 1（別PJの世界観を拾わない）。"""
+    """responses に world が欠損していても DEFAULT で保存され壊れない。"""
     data_dir = tmp_path / "rl-anything"
-    with patch("world_context.subprocess.run") as mock_run:
-        mock_run.return_value = _make_subprocess_mock(_VALID_LLM_RESPONSE)
-        gen = main([
-            "--generate",
-            "--claude-md", str(tmp_path / "CLAUDE.md"),
-            "--slug", "proj-a",
-            "--data-dir", str(data_dir),
-        ])
-    assert gen == 0
+    resp = tmp_path / "empty.json"
+    resp.write_text("{}", encoding="utf-8")
+    ret = main([
+        "--save-from-response",
+        "--response", str(resp),
+        "--slug", "slug-x",
+        "--data-dir", str(data_dir),
+    ])
+    assert ret == 0
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["protagonist_title"] == DEFAULT_WORLD_CONTEXT["protagonist_title"]
+
+
+def test_cli_save_then_load_other_slug_isolated(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """--save-from-response --slug A の後、--load --slug B は exit 1（別PJの世界観を拾わない）。"""
+    data_dir = tmp_path / "rl-anything"
+    resp = _write_response(tmp_path, _VALID_WORLD)
+    assert main([
+        "--save-from-response",
+        "--response", str(resp),
+        "--slug", "proj-a",
+        "--data-dir", str(data_dir),
+    ]) == 0
     capsys.readouterr()  # drain
 
     # 別 slug で load → 見つからない

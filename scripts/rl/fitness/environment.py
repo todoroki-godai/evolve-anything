@@ -97,8 +97,10 @@ def compute_environment_fitness(
     Args:
         project_dir: プロジェクトディレクトリ
         days: telemetry 集計期間
-        skip_llm: True の場合、LLM 呼び出しを伴う constitutional 軸をスキップする。
-            rl-fleet status の 10s timeout で LLM subprocess が完了しない問題 (#86) への対応。
+        skip_llm: True の場合、constitutional 軸をスキップする。元は #86（rl-fleet status の
+            10s timeout で LLM subprocess が完了しない）への対応。[ADR-037] で constitutional は
+            claude -p を全廃し cache 読みだけになったが、cache 未生成時に constitutional が
+            0.0 寄与して overall を歪めるのを避けるため fleet 高速パスでは引き続きスキップする。
             軽量軸（coherence / telemetry / skill_quality）のみで overall を算出する。
     """
     _ensure_paths()

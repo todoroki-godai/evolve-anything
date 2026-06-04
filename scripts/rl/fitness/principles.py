@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """プロジェクトの設計原則を抽出・キャッシュするモジュール。
 
-CLAUDE.md + Rules ファイルから LLM で原則を抽出し、
-品質スコアでフィルタリングして .claude/principles.json にキャッシュする。
+CLAUDE.md + Rules ファイルから原則を抽出し、品質スコアでフィルタリングして
+.claude/principles.json にキャッシュする。[ADR-037] により claude -p を全廃し、
+抽出は build_extraction_request（Phase A）→ SKILL のインライン生成（Phase B）→
+ingest_principles（Phase C）のファイルベース2相で行う。本モジュールは LLM を呼ばない。
 """
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -189,31 +190,21 @@ testability: 原則の遵守を機械的に検証できるか（0.0=検証不可
 {source_content}"""
 
 
-def _extract_via_llm(source_content: str) -> Optional[List[Dict[str, Any]]]:
-    """claude CLI で原則を抽出する。失敗時は None を返す。"""
-    if not source_content.strip():
-        return []
+def _parse_principles_response(raw: Optional[Any]) -> Optional[List[Dict[str, Any]]]:
+    """LLM レスポンス（JSON 配列）をパースする。None / 不正時は None を返す。
 
-    prompt = _build_extraction_prompt(source_content)
-    try:
-        result = subprocess.run(
-            ["claude", "-p", prompt, "--model", "haiku"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        print(f"[principles] LLM call failed: {e}", file=sys.stderr)
+    [ADR-037] Phase C のパーサ。llm_broker.parse_responses から呼ばれる。Phase B の書き手は
+    assistant（非決定論プロデューサ）のため、JSON 文字列だけでなく parse 済み list で来ても受ける
+    （world_context._extract_world_dict と同じ寛容性。str 専用だと ingest がクラッシュする）。
+    """
+    if not raw:
+        return None
+    if isinstance(raw, list):
+        return raw
+    if not isinstance(raw, str):
         return None
 
-    if result.returncode != 0:
-        print(
-            f"[principles] LLM call returned non-zero: {result.returncode}",
-            file=sys.stderr,
-        )
-        return None
-
-    output = result.stdout.strip()
+    output = raw.strip()
 
     # JSON 配列を抽出（コードブロックで囲まれている場合に対応）
     if "```" in output:
@@ -234,7 +225,6 @@ def _extract_via_llm(source_content: str) -> Optional[List[Dict[str, Any]]]:
     start = output.find("[")
     end = output.rfind("]")
     if start == -1 or end == -1:
-        print("[principles] LLM output does not contain JSON array", file=sys.stderr)
         return None
 
     try:
@@ -242,9 +232,98 @@ def _extract_via_llm(source_content: str) -> Optional[List[Dict[str, Any]]]:
         if not isinstance(principles, list):
             return None
         return principles
-    except json.JSONDecodeError as e:
-        print(f"[principles] Failed to parse LLM JSON: {e}", file=sys.stderr)
+    except json.JSONDecodeError:
         return None
+
+
+def build_extraction_request(
+    project_dir: str | Path, refresh: bool = False
+) -> Dict[str, Any]:
+    """Phase A: 原則抽出の LLM リクエストを生成する（決定論・LLM 非依存）。
+
+    cache が有効（source_hash 一致）/ source 空 の場合は requests=[] を返す（refresh 不要シグナル）。
+
+    Returns:
+        {"requests": [{"id": "principles", "prompt": str, "meta": {"source_hash"}}], "source_hash": str}
+    """
+    _ensure_paths()
+    from llm_broker import build_requests
+
+    project_dir = Path(project_dir)
+    current_hash = _compute_source_hash(project_dir)
+
+    if not refresh:
+        cached = _load_cache(project_dir)
+        if cached is not None and cached.get("source_hash", "") == current_hash:
+            return {"requests": [], "source_hash": current_hash}
+
+    source_content = _read_source_content(project_dir)
+    if not source_content.strip():
+        return {"requests": [], "source_hash": current_hash}
+
+    items = [{"id": "principles", "_src": source_content, "source_hash": current_hash}]
+    requests = build_requests(items, lambda it: _build_extraction_prompt(it["_src"]))
+    for r in requests:  # 巨大な source 本文を meta から落とす
+        r["meta"].pop("_src", None)
+    return {"requests": requests, "source_hash": current_hash}
+
+
+def ingest_principles(
+    project_dir: str | Path,
+    requests: List[Dict[str, Any]],
+    responses: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Phase C: LLM レスポンスをパース・統合してキャッシュ保存する（決定論・LLM 非依存）。
+
+    パース失敗時は seed-only にフォールバックする（旧 LLM 失敗パスと同じ）。
+    """
+    _ensure_paths()
+    from llm_broker import parse_responses
+
+    project_dir = Path(project_dir)
+    current_hash = _compute_source_hash(project_dir)
+
+    parsed_map = parse_responses(requests, responses, parser=_parse_principles_response)
+    llm_principles = parsed_map.get("principles")
+
+    cached_for_merge = _load_cache(project_dir)
+    cached_principles = (
+        cached_for_merge.get("principles", []) if cached_for_merge else []
+    )
+
+    if llm_principles is None:
+        result = {
+            "principles": list(SEED_PRINCIPLES),
+            "excluded_low_quality": [],
+            "source_hash": current_hash,
+            "stale_cache": False,
+            "from_cache": False,
+        }
+        _save_cache(project_dir, result)
+        return result
+
+    # seed 原則を追加（LLM 抽出結果に含まれていない場合）
+    llm_ids = {p.get("id") for p in llm_principles}
+    all_principles = list(llm_principles)
+    for seed in SEED_PRINCIPLES:
+        if seed["id"] not in llm_ids:
+            all_principles.append(dict(seed))
+
+    # user_defined をマージ
+    all_principles = _merge_user_defined(all_principles, cached_principles)
+
+    # 品質フィルタリング
+    passed, excluded = _filter_by_quality(all_principles)
+
+    result = {
+        "principles": passed,
+        "excluded_low_quality": excluded,
+        "source_hash": current_hash,
+        "stale_cache": False,
+        "from_cache": False,
+    }
+    _save_cache(project_dir, result)
+    return result
 
 
 def _quality_score(principle: Dict[str, Any]) -> float:
@@ -334,11 +413,11 @@ def extract_principles(
     project_dir: str | Path,
     refresh: bool = False,
 ) -> Dict[str, Any]:
-    """プロジェクトから設計原則を抽出する。
+    """プロジェクトの設計原則を返す（LLM-free; cache を読むだけ）。
 
-    Args:
-        project_dir: プロジェクトディレクトリパス
-        refresh: True の場合キャッシュを無視して再抽出
+    [ADR-037] claude -p を全廃。実際の抽出は build_extraction_request →（SKILL が Phase B）→
+    ingest_principles の2相で行う。本関数は cache hit→cache を返す / cache miss・refresh→
+    seed-only を返す（graceful, 非永続。SKILL の refresh で正式抽出させるため保存しない）。
 
     Returns:
         {
@@ -365,65 +444,47 @@ def extract_principles(
                 "from_cache": True,
             }
 
-    # user_defined を保存用に退避
-    cached_for_merge = _load_cache(project_dir)
-    cached_principles = (
-        cached_for_merge.get("principles", []) if cached_for_merge else []
-    )
-
-    # ソースコンテンツ読み込み + LLM 抽出
-    source_content = _read_source_content(project_dir)
-    llm_principles = _extract_via_llm(source_content)
-
-    if llm_principles is None:
-        # LLM 失敗時: seed のみ返す
-        print(
-            "[principles] LLM extraction failed, returning seed principles only",
-            file=sys.stderr,
-        )
-        result = {
-            "principles": list(SEED_PRINCIPLES),
-            "excluded_low_quality": [],
-            "source_hash": current_hash,
-            "stale_cache": False,
-            "from_cache": False,
-        }
-        _save_cache(project_dir, result)
-        return result
-
-    # seed 原則を追加（LLM 抽出結果に含まれていない場合）
-    llm_ids = {p.get("id") for p in llm_principles}
-    all_principles = list(llm_principles)
-    for seed in SEED_PRINCIPLES:
-        if seed["id"] not in llm_ids:
-            all_principles.append(dict(seed))
-
-    # user_defined をマージ
-    all_principles = _merge_user_defined(all_principles, cached_principles)
-
-    # 品質フィルタリング
-    passed, excluded = _filter_by_quality(all_principles)
-
-    result = {
-        "principles": passed,
-        "excluded_low_quality": excluded,
+    # cache 無 / refresh: LLM は呼ばず seed-only を返す（非永続）
+    return {
+        "principles": list(SEED_PRINCIPLES),
+        "excluded_low_quality": [],
         "source_hash": current_hash,
         "stale_cache": False,
         "from_cache": False,
     }
-    _save_cache(project_dir, result)
-    return result
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="プロジェクト設計原則の抽出")
+    parser = argparse.ArgumentParser(description="プロジェクト設計原則の抽出（[ADR-037] 2相）")
     parser.add_argument("project_dir", help="プロジェクトディレクトリ")
     parser.add_argument(
-        "--refresh", action="store_true", help="キャッシュを無視して再抽出"
+        "--refresh", action="store_true", help="cache を無視（emit-request 時に強制抽出）"
     )
+    parser.add_argument(
+        "--emit-request", action="store_true",
+        help="Phase A: 抽出リクエスト JSON を出力（cache 有効時は requests=[]）",
+    )
+    parser.add_argument(
+        "--ingest", action="store_true",
+        help="Phase C: --requests と --responses をパース・統合してキャッシュ保存",
+    )
+    parser.add_argument("--requests", help="Phase C: emit-request の出力 JSON ファイル")
+    parser.add_argument("--responses", help="Phase C: assistant 応答 JSON ファイル")
     args = parser.parse_args()
 
-    result = extract_principles(Path(args.project_dir), refresh=args.refresh)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.emit_request:
+        out = build_extraction_request(Path(args.project_dir), refresh=args.refresh)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+    elif args.ingest:
+        with open(args.requests, encoding="utf-8") as f:
+            req_payload = json.load(f)
+        requests = req_payload.get("requests", req_payload)
+        with open(args.responses, encoding="utf-8") as f:
+            responses = json.load(f)
+        result = ingest_principles(Path(args.project_dir), requests, responses)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        result = extract_principles(Path(args.project_dir), refresh=args.refresh)
+        print(json.dumps(result, ensure_ascii=False, indent=2))

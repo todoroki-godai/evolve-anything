@@ -48,6 +48,9 @@ rl-audit "$(pwd)" --constitutional-score
 ```
 
 Constitutional Score: 各原則 × 各レイヤーの遵守度を LLM Judge で評価。Coherence Coverage < 0.5 の場合はスキップ。
+[ADR-037] により `rl-audit --constitutional-score` 本体は claude -p を呼ばず cache
+（`principles.json` / `constitutional_cache.json`）を読むだけ。cache の再評価が要るときは Step 3.5 の
+ファイルベース2相（principles round → constitutional round）を先に回す。
 Chaos Testing: Rules/Skills の仮想除去による堅牢性テスト + SPOF 検出。
 
 複数指定時は Environment Fitness（統合スコア）も表示:
@@ -113,15 +116,62 @@ rl-audit-aggregate
 
 ### Step 3: 品質モニタリング（オプション）
 
-高頻度 global/plugin スキルの品質スコアを計測し劣化を検知する:
+高頻度 global/plugin スキルの品質スコアを計測し劣化を検知する。
+claude -p は使わず、ファイルベース2相でオーケストレーションする（[ADR-037]）:
 
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/quality_monitor.py
-```
+1. **Phase A — 再スコア対象を得る（LLM ゼロ）**:
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/quality_monitor.py --emit-requests
+   ```
+   stdout は `{"requests":[{"id":<skill名>,"prompt":"...","meta":{...}}], "skipped":[...]}`。
+   `requests` が空なら採点対象なし＝Step 3 はここで完了。
+2. **Phase B — Claude（あなた）がインラインで CoT 採点**: 各 `requests[i].prompt` を読み、
+   指示どおり CoT 形式（clarity/completeness/structure/practicality + total）の JSON で
+   **インラインで採点**する（claude -p は呼ばない＝interactive subscription 課金）。
+   採点結果を `{<skill名>: <CoT JSON 文字列>}` の形で `quality-resp.json` に Write する。
+3. **Phase C — 集約・baselines 更新（LLM ゼロ）**:
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/quality_monitor.py --ingest \
+     --requests quality-req.json --responses quality-resp.json
+   ```
+   （`quality-req.json` は Phase A の stdout を保存したもの）。baselines 追記・劣化検知を行う。
 
-- `--dry-run`: 実際の LLM 評価を行わず対象スキルのみ表示
+- `--dry-run`: 採点対象スキルのみ表示（LLM・書き込みなし）
 - audit レポートの "Skill Quality Trends" セクションで品質推移を確認
-- `--skip-rescore` を audit.py に渡すと品質計測をスキップ
+- audit パイプライン（`rl-audit` 本体）は LLM を呼ばず既存 baselines を読むだけ。再スコアは
+  この Step 3 の2相でのみ走る（`--skip-rescore` は後方互換で受理されるが本体は LLM を起動しない）
+
+### Step 3.5: Constitutional 再評価（2相・オプション）
+
+constitutional スコア（原則 × レイヤーの遵守度 + slop 10% ブレンド）を最新化する。[ADR-037] により
+claude -p を全廃し、principles 抽出 → レイヤー評価をファイルベース2相で行う。再評価が要るとき
+（cache 未生成 / CLAUDE.md・Rules 変更）だけ回す。`requests` が空ならその round は cache 最新＝スキップ。
+
+**依存順序が重要**: レイヤー評価プロンプトに principles を埋め込むため、必ず principles round を先に回す。
+
+1. **Principles round（Phase A→B→C）** — claude -p は呼ばず**インライン生成**（subscription 課金）:
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/rl/fitness/principles.py --emit-request "$(pwd)" > prin-req.json
+   ```
+   `requests` が非空なら `requests[0].prompt` を読み、指示どおり JSON 配列
+   （id/text/source/category/specificity/testability）をインライン生成して
+   `{"principles": <JSON配列文字列>}` を `prin-resp.json` に Write し:
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/rl/fitness/principles.py --ingest "$(pwd)" \
+     --requests prin-req.json --responses prin-resp.json
+   ```
+2. **Constitutional round（Phase A→B→C）** — 同じくインライン採点:
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/rl/fitness/constitutional.py --emit-requests "$(pwd)" > con-req.json
+   ```
+   `principles_missing` が true なら 1 を先に。`requests` が非空なら各 `requests[i].prompt`
+   （レイヤー × 原則の遵守度評価）を読み、`{"evaluations":[{principle_id,score,rationale,violations}]}`
+   形式の JSON でインライン採点して `{<layer名>: <JSON文字列>}` を `con-resp.json` に Write し:
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/rl/fitness/constitutional.py --ingest "$(pwd)" \
+     --requests con-req.json --responses con-resp.json
+   ```
+3. 以降の `rl-audit --constitutional-score` は更新後 cache を読んでスコアを表示する。
 
 ### Step 4: 意味的類似度の検出（オプション）
 

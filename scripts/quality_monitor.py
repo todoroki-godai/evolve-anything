@@ -3,10 +3,16 @@
 
 高頻度 global/plugin スキルの品質スコアを定期的に計測し、
 劣化を検知して /optimize 推奨を通知する。
+
+claude -p 全廃（[ADR-037]）に伴い、品質評価は llm_broker のファイルベース2相に分離した:
+  Phase A: emit_rescore_requests が「再スコアすべきスキル」と CoT プロンプトを JSON 化（LLM ゼロ）
+  Phase B: assistant が各 prompt を CoT 採点（claude -p なし＝subscription 課金）
+  Phase C: ingest_responses が応答をパースし baselines 追記・劣化検知（LLM ゼロ）
+audit パイプライン（run_audit）は LLM を呼ばず既存 baselines を読むのみ。再スコアは
+audit SKILL.md が2相でオーケストレーションする。
 """
 import json
 import re
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _plugin_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_plugin_root / "skills" / "audit" / "scripts"))
+sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
 from audit import (
     DATA_DIR,
@@ -21,6 +28,7 @@ from audit import (
     classify_artifact_origin,
     load_usage_data,
 )
+from llm_broker import build_requests, parse_responses, passthrough
 
 # ── 定数 ──────────────────────────────────────────────
 RESCORE_USAGE_THRESHOLD = 50    # 再スコアリングの使用回数閾値
@@ -183,29 +191,9 @@ def _parse_cot_response(text: str) -> Tuple[float, Optional[Dict[str, Any]]]:
     return 0.5, None
 
 
-def evaluate_skill(skill_content: str, timeout: int = 60) -> Optional[Tuple[float, Optional[Dict[str, Any]]]]:
-    """スキル内容を CoT 付きで品質評価する。
-
-    Returns:
-        (score, cot_result) タプル。タイムアウト/エラー時は None。
-    """
-    prompt = _COT_PROMPT_TEMPLATE.format(content=skill_content)
-    try:
-        result = subprocess.run(
-            ["claude", "-p", "--output-format", "text"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode == 0:
-            return _parse_cot_response(result.stdout.strip())
-        print(f"claude -p failed (rc={result.returncode}): {result.stderr.strip()}", file=sys.stderr)
-    except subprocess.TimeoutExpired:
-        print("claude -p timed out, skipping measurement", file=sys.stderr)
-    except FileNotFoundError:
-        print("claude command not found, skipping measurement", file=sys.stderr)
-    return None
+def build_cot_prompt(skill_content: str) -> str:
+    """スキル内容から CoT 品質評価プロンプトを組み立てる（Phase A・LLM ゼロ）。"""
+    return _COT_PROMPT_TEMPLATE.format(content=skill_content)
 
 
 # ── 再スコアリング判定 ──────────────────────────────────────
@@ -293,100 +281,159 @@ def detect_degradation(skill_name: str, baselines: Optional[List[Dict[str, Any]]
 
 # ── メイン実行 ──────────────────────────────────────────
 
-def run_quality_monitor(dry_run: bool = False) -> Dict[str, Any]:
-    """品質モニタリングを実行する。
+def emit_rescore_requests() -> Dict[str, Any]:
+    """再スコアすべきスキルの採点リクエストを生成する（Phase A・LLM ゼロ）。
+
+    claude -p を呼ばず、「どのスキルを採点すべきか」と CoT プロンプトだけを JSON 化可能な
+    形で返す。assistant（Phase B）が各 prompt を CoT 採点して responses（id→生テキスト）を作り、
+    ingest_responses（Phase C）が集約する。
 
     Returns:
         {
-            "measured": [{"skill_name": ..., "score": ..., ...}],
+            "requests": [{"id": skill_name, "prompt": str, "meta": {"skill_path", "usage_count"}}],
             "skipped": [{"skill_name": ..., "reason": ...}],
-            "degraded": [{"skill_name": ..., "current_score": ..., ...}],
         }
     """
     high_freq = find_high_freq_skills()
     baselines = load_baselines()
 
-    result: Dict[str, Any] = {"measured": [], "skipped": [], "degraded": []}
+    items: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
 
     for skill_name, usage_count in high_freq.items():
         if not needs_rescore(skill_name, usage_count, baselines):
-            result["skipped"].append({"skill_name": skill_name, "reason": "below threshold"})
+            skipped.append({"skill_name": skill_name, "reason": "below threshold"})
             continue
-
         path = resolve_skill_path(skill_name)
         if path is None:
-            result["skipped"].append({"skill_name": skill_name, "reason": "SKILL.md not found"})
+            skipped.append({"skill_name": skill_name, "reason": "SKILL.md not found"})
             continue
-
-        if dry_run:
-            result["measured"].append({"skill_name": skill_name, "score": None, "dry_run": True})
-            continue
-
         try:
             content = path.read_text(encoding="utf-8")
         except OSError as e:
-            result["skipped"].append({"skill_name": skill_name, "reason": str(e)})
+            skipped.append({"skill_name": skill_name, "reason": str(e)})
+            continue
+        items.append({
+            "id": skill_name,
+            "skill_path": str(path),
+            "usage_count": usage_count,
+            "_content": content,
+        })
+
+    requests = build_requests(items, lambda it: build_cot_prompt(it["_content"]))
+    # _content はプロンプトに埋め込み済みなので meta から除く（responses JSON の肥大化防止）
+    for r in requests:
+        r["meta"].pop("_content", None)
+
+    return {"requests": requests, "skipped": skipped}
+
+
+def ingest_responses(
+    requests: List[Dict[str, Any]], responses: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Phase B の CoT 採点応答を集約し baselines 追記・劣化検知する（Phase C・LLM ゼロ）。
+
+    Args:
+        requests: emit_rescore_requests の出力（id→skill_path/usage_count）
+        responses: {skill_name: CoT 生テキスト}。欠損 id は採点漏れとして skip する。
+
+    Returns:
+        {"measured": [...], "degraded": [...], "skipped": [...]}
+    """
+    parsed = parse_responses(requests, responses, parser=passthrough)
+    result: Dict[str, Any] = {"measured": [], "degraded": [], "skipped": []}
+
+    for req in requests:
+        skill_name = req["id"]
+        text = parsed.get(skill_name)
+        if not text or not str(text).strip():
+            result["skipped"].append({"skill_name": skill_name, "reason": "no response"})
             continue
 
-        eval_result = evaluate_skill(content)
-        if eval_result is None:
-            result["skipped"].append({"skill_name": skill_name, "reason": "LLM evaluation failed"})
-            continue
-
-        score, cot = eval_result
+        score, cot = _parse_cot_response(str(text))
         record = {
             "skill_name": skill_name,
             "score": round(score, 4),
             "criteria": cot if cot else {},
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "usage_count_at_measure": usage_count,
-            "skill_path": str(path),
+            "usage_count_at_measure": req.get("meta", {}).get("usage_count"),
+            "skill_path": req.get("meta", {}).get("skill_path"),
         }
         append_record(record)
         result["measured"].append(record)
 
-        # ベースラインを再読み込みして劣化検知
-        updated_baselines = load_baselines()
-        degradation = detect_degradation(skill_name, updated_baselines)
+        degradation = detect_degradation(skill_name, load_baselines())
         if degradation:
             result["degraded"].append(degradation)
 
     return result
 
 
-def main() -> None:
-    """CLI エントリポイント。"""
+def main(argv: Optional[List[str]] = None) -> int:
+    """ファイルベース2相 CLI（[ADR-037]）。claude -p は呼ばない。
+
+    Phase A: quality_monitor.py --emit-requests
+        → 再スコア対象と CoT プロンプトの JSON を stdout に出力。assistant がこれを読み、
+          各 prompt を CoT 採点して responses.json（{skill_name: 生テキスト}）を作る。
+    Phase C: quality_monitor.py --ingest --requests <requests.json> --responses <responses.json>
+        → 応答を集約し baselines 追記・劣化検知。結果サマリを表示。
+    """
     import argparse
 
-    parser = argparse.ArgumentParser(description="品質モニタリング: 高頻度スキルの品質スコアを計測")
-    parser.add_argument("--dry-run", action="store_true", help="実際の LLM 評価を行わず対象スキルのみ表示")
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="品質モニタリング: 高頻度スキルの品質スコア計測（2相）")
+    parser.add_argument("--emit-requests", action="store_true", help="Phase A: 再スコア対象と CoT プロンプトを JSON 出力")
+    parser.add_argument("--ingest", action="store_true", help="Phase C: 採点応答を集約して baselines 更新")
+    parser.add_argument("--requests", metavar="PATH", help="--ingest 用 requests JSON")
+    parser.add_argument("--responses", metavar="PATH", help="--ingest 用 responses JSON")
+    parser.add_argument("--dry-run", action="store_true", help="再スコア対象スキルのみ表示（LLM・書き込みなし）")
+    args = parser.parse_args(argv)
 
-    result = run_quality_monitor(dry_run=args.dry_run)
+    if args.emit_requests or args.dry_run:
+        emitted = emit_rescore_requests()
+        if args.dry_run:
+            if emitted["requests"]:
+                print(f"\n再スコア対象: {len(emitted['requests'])} スキル")
+                for r in emitted["requests"]:
+                    print(f"  - {r['id']}")
+            if emitted["skipped"]:
+                print(f"\nスキップ: {len(emitted['skipped'])} スキル")
+                for s in emitted["skipped"]:
+                    print(f"  - {s['skill_name']}: {s['reason']}")
+            if not emitted["requests"] and not emitted["skipped"]:
+                print("\n対象スキルなし（高頻度 global/plugin スキルが見つかりませんでした）")
+        else:
+            print(json.dumps(emitted, ensure_ascii=False, indent=2))
+        return 0
 
-    if result["measured"]:
-        print(f"\n計測完了: {len(result['measured'])} スキル")
-        for m in result["measured"]:
-            score_str = f"{m['score']:.2f}" if m.get("score") is not None else "(dry-run)"
-            print(f"  - {m['skill_name']}: {score_str}")
+    if args.ingest:
+        if not args.requests or not args.responses:
+            parser.error("--ingest には --requests と --responses が必要です")
+        req_doc = json.loads(Path(args.requests).read_text(encoding="utf-8"))
+        requests = req_doc["requests"] if isinstance(req_doc, dict) else req_doc
+        responses = json.loads(Path(args.responses).read_text(encoding="utf-8"))
+        result = ingest_responses(requests, responses)
 
-    if result["skipped"]:
-        print(f"\nスキップ: {len(result['skipped'])} スキル")
-        for s in result["skipped"]:
-            print(f"  - {s['skill_name']}: {s['reason']}")
+        if result["measured"]:
+            print(f"\n計測完了: {len(result['measured'])} スキル")
+            for m in result["measured"]:
+                print(f"  - {m['skill_name']}: {m['score']:.2f}")
+        if result["skipped"]:
+            print(f"\nスキップ: {len(result['skipped'])} スキル")
+            for s in result["skipped"]:
+                print(f"  - {s['skill_name']}: {s['reason']}")
+        if result["degraded"]:
+            print(f"\n⚠ 劣化検知: {len(result['degraded'])} スキル")
+            for d in result["degraded"]:
+                print(
+                    f"  - {d['skill_name']}: {d['current_score']:.2f} "
+                    f"(baseline {d['baseline_score']:.2f}, -{d['decline_rate']:.1f}%) "
+                    f"→ {d['recommended_command']}"
+                )
+        return 0
 
-    if result["degraded"]:
-        print(f"\n⚠ 劣化検知: {len(result['degraded'])} スキル")
-        for d in result["degraded"]:
-            print(
-                f"  - {d['skill_name']}: {d['current_score']:.2f} "
-                f"(baseline {d['baseline_score']:.2f}, -{d['decline_rate']:.1f}%) "
-                f"→ {d['recommended_command']}"
-            )
-
-    if not result["measured"] and not result["skipped"]:
-        print("\n対象スキルなし（高頻度 global/plugin スキルが見つかりませんでした）")
+    parser.error("--emit-requests / --ingest / --dry-run のいずれかを指定してください")
+    return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

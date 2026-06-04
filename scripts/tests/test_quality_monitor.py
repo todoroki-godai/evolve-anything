@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""quality_monitor.py のユニットテスト。"""
+"""quality_monitor.py のユニットテスト。
+
+claude -p 全廃（[ADR-037]）後はファイルベース2相のため LLM を一切呼ばない（mock 不要）。
+"""
 import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -19,12 +22,14 @@ from quality_monitor import (
     RESCORE_USAGE_THRESHOLD,
     _parse_cot_response,
     append_record,
+    build_cot_prompt,
     compute_baseline_score,
     compute_moving_average,
     detect_degradation,
-    evaluate_skill,
+    emit_rescore_requests,
     find_high_freq_skills,
     get_skill_records,
+    ingest_responses,
     load_baselines,
     needs_rescore,
     resolve_skill_path,
@@ -214,48 +219,112 @@ def test_parse_cot_response_fallback():
     assert cot is None
 
 
-def test_evaluate_skill_timeout():
-    """タイムアウト時は None を返す。"""
-    import subprocess
-    with patch("quality_monitor.subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 60)):
-        result = evaluate_skill("# test skill")
-        assert result is None
+# ── ファイルベース2相（Phase A: emit / Phase C: ingest）──────────────────────
 
 
-def test_evaluate_skill_command_not_found():
-    """claude コマンドが見つからない場合は None。"""
-    with patch("quality_monitor.subprocess.run", side_effect=FileNotFoundError):
-        result = evaluate_skill("# test skill")
-        assert result is None
+def test_build_cot_prompt_embeds_content():
+    """CoT プロンプトにスキル本文と評価基準が埋め込まれる（LLM ゼロ）。"""
+    prompt = build_cot_prompt("# my skill body")
+    assert "# my skill body" in prompt
+    assert "clarity" in prompt and "total" in prompt
 
 
-def test_evaluate_skill_nonzero_exit():
-    """claude -p が非ゼロ終了の場合は None。"""
-    mock_result = MagicMock()
-    mock_result.returncode = 1
-    mock_result.stderr = "error"
-    with patch("quality_monitor.subprocess.run", return_value=mock_result):
-        result = evaluate_skill("# test skill")
-        assert result is None
+_COT_RESPONSE = json.dumps({
+    "clarity": {"score": 0.85, "reason": "clear"},
+    "completeness": {"score": 0.80, "reason": "ok"},
+    "structure": {"score": 0.90, "reason": "good"},
+    "practicality": {"score": 0.75, "reason": "fine"},
+    "total": 0.825,
+})
 
 
-def test_evaluate_skill_success():
-    """正常な評価結果。"""
-    response_json = json.dumps({
-        "clarity": {"score": 0.85, "reason": "clear"},
-        "completeness": {"score": 0.80, "reason": "ok"},
-        "structure": {"score": 0.90, "reason": "good"},
-        "practicality": {"score": 0.75, "reason": "fine"},
-        "total": 0.825,
-    })
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = response_json
-    with patch("quality_monitor.subprocess.run", return_value=mock_result):
-        result = evaluate_skill("# test skill")
-        assert result is not None
-        score, cot = result
-        assert score == 0.825
+def _patch_high_freq(skill_dir: Path, skill_name: str = "commit", count: int = 60):
+    """find_high_freq_skills と resolve_skill_path を patch するコンテキストを返す。"""
+    skill_md = skill_dir / skill_name / "SKILL.md"
+    skill_md.parent.mkdir(parents=True, exist_ok=True)
+    skill_md.write_text("# commit skill body", encoding="utf-8")
+    return patch.multiple(
+        "quality_monitor",
+        find_high_freq_skills=lambda: {skill_name: count},
+        resolve_skill_path=lambda n: skill_md if n == skill_name else None,
+    ), skill_md
+
+
+def test_emit_rescore_requests_shape(tmp_path):
+    """Phase A: 再スコア対象の request を生成（id/prompt/meta、LLM ゼロ）。"""
+    ctx, skill_md = _patch_high_freq(tmp_path / "skills")
+    baselines_file = tmp_path / "quality-baselines.jsonl"
+    with ctx, patch("quality_monitor.BASELINES_FILE", baselines_file):
+        emitted = emit_rescore_requests()
+    assert len(emitted["requests"]) == 1
+    req = emitted["requests"][0]
+    assert req["id"] == "commit"
+    assert "# commit skill body" in req["prompt"]
+    assert req["meta"]["skill_path"] == str(skill_md)
+    assert req["meta"]["usage_count"] == 60
+    # _content は meta に残さない（responses JSON 肥大化防止）
+    assert "_content" not in req["meta"]
+
+
+def test_emit_rescore_requests_skips_below_threshold(tmp_path):
+    """既存 baseline が新しく閾値未満なら skip（request に含めない）。"""
+    ctx, skill_md = _patch_high_freq(tmp_path / "skills", count=60)
+    baselines_file = tmp_path / "quality-baselines.jsonl"
+    recent = {
+        "skill_name": "commit", "score": 0.85,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "usage_count_at_measure": 50,  # 差分 10 < 50
+    }
+    with ctx, patch("quality_monitor.BASELINES_FILE", baselines_file):
+        save_baselines([recent])
+        emitted = emit_rescore_requests()
+    assert emitted["requests"] == []
+    assert emitted["skipped"][0]["reason"] == "below threshold"
+
+
+def test_ingest_responses_appends_and_returns_measured(tmp_path):
+    """Phase C: 採点応答をパースし baselines 追記、measured を返す（LLM ゼロ）。"""
+    baselines_file = tmp_path / "quality-baselines.jsonl"
+    requests = [{
+        "id": "commit", "prompt": "...",
+        "meta": {"skill_path": "/x/SKILL.md", "usage_count": 60},
+    }]
+    responses = {"commit": _COT_RESPONSE}
+    with patch("quality_monitor.BASELINES_FILE", baselines_file):
+        result = ingest_responses(requests, responses)
+        loaded = load_baselines()
+    assert len(result["measured"]) == 1
+    assert result["measured"][0]["skill_name"] == "commit"
+    assert result["measured"][0]["score"] == 0.825
+    assert result["measured"][0]["usage_count_at_measure"] == 60
+    assert len(loaded) == 1  # baselines に追記された
+
+
+def test_ingest_responses_missing_response_skipped(tmp_path):
+    """採点漏れ（応答欠損）は skip され壊れない。"""
+    baselines_file = tmp_path / "quality-baselines.jsonl"
+    requests = [{"id": "commit", "prompt": "...", "meta": {}}]
+    with patch("quality_monitor.BASELINES_FILE", baselines_file):
+        result = ingest_responses(requests, {})  # 全欠損
+    assert result["measured"] == []
+    assert result["skipped"][0]["reason"] == "no response"
+
+
+def test_ingest_responses_detects_degradation(tmp_path):
+    """追記後に劣化が検知されると degraded に載る。"""
+    baselines_file = tmp_path / "quality-baselines.jsonl"
+    existing = [
+        {"skill_name": "commit", "score": 0.85, "timestamp": "2025-01-01T00:00:00+00:00"},
+        {"skill_name": "commit", "score": 0.80, "timestamp": "2025-01-02T00:00:00+00:00"},
+    ]
+    # 新たな採点が 0.60 → 移動平均 (0.85+0.80+0.60)/3=0.75、baseline 0.85 から -11.8%（>=10%）
+    low_resp = json.dumps({"total": 0.60})
+    requests = [{"id": "commit", "prompt": "...", "meta": {"usage_count": 60}}]
+    with patch("quality_monitor.BASELINES_FILE", baselines_file):
+        save_baselines(existing)
+        result = ingest_responses(requests, {"commit": low_resp})
+    assert result["degraded"]
+    assert result["degraded"][0]["skill_name"] == "commit"
 
 
 # ── 再スコアリング判定 ──────────────────────────────────────

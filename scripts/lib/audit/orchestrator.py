@@ -153,17 +153,12 @@ def run_audit(
     registry = load_usage_registry()
     advisories = scope_advisory(registry)
 
+    # 品質再スコアは claude -p を伴うため audit パイプライン（Python）からは呼ばない（[ADR-037]）。
+    # ここでは既存 baselines を読むのみ（決定論）。再スコアは audit SKILL.md が
+    # quality_monitor の2相（--emit-requests → assistant 採点 → --ingest）でオーケストレーションする。
+    # skip_rescore は後方互換のため受け取るが、本パイプラインでは LLM を起動しない。
     quality_baselines = None
-    if not skip_rescore:
-        try:
-            _scripts_dir = PLUGIN_ROOT / "scripts"
-            if str(_scripts_dir) not in sys.path:
-                sys.path.insert(0, str(_scripts_dir))
-            from quality_monitor import run_quality_monitor
-            run_quality_monitor()
-        except Exception as e:
-            print(f"品質計測スキップ: {e}", file=sys.stderr)
-
+    _ = skip_rescore  # 後方互換（CLI --skip-rescore）。LLM 起動は廃止済み
     baselines = load_quality_baselines()
     if baselines:
         quality_baselines = baselines

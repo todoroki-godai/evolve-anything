@@ -12,10 +12,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List
 
+from llm_broker import (  # noqa: F401  (parse_score は後方互換のため re-export)
+    FALLBACK_SCORE,
+    build_requests,
+    parse_responses,
+    parse_score,
+)
 from scorer_prompts import DEFAULT_AXIS_WEIGHTS as AXIS_WEIGHTS, get_axis_prompts
 from scorer_schema import ConfidenceInterval
-
-FALLBACK_SCORE = 0.5
 
 
 def compute_stats(scores: List[float]) -> Dict:
@@ -75,8 +79,89 @@ def aggregate_runs(runs: List[Dict[str, float]]) -> Dict[str, Dict]:
     return result
 
 
+def build_scoring_requests(content: str, runs: int = 5) -> List[Dict]:
+    """採点リクエスト一覧を決定論で生成する（LLM ゼロ＝Phase A: 前処理）。
+
+    claude -p を呼ばず、「何を採点すべきか」だけを JSON 化可能な形で返す。
+    Phase B（assistant が Task/インラインで採点）が各 prompt を 0.0〜1.0 で採点し、
+    id をキーにした responses を作る。Phase C（aggregate_from_responses）が集約する。
+
+    共通基盤 ``llm_broker.build_requests`` を使い、run/axis は meta 経由で持たせた上で
+    後方互換のフラット形 ``{"id", "run", "axis", "prompt"}`` に展開して返す。
+
+    Returns:
+        List[{"id": "r{run}:{axis}", "run": int, "axis": str, "prompt": str}]
+    """
+    prompts = get_axis_prompts()
+    items = [
+        {"id": f"r{run_idx}:{axis}", "run": run_idx, "axis": axis}
+        for run_idx in range(runs)
+        for axis in AXIS_WEIGHTS
+    ]
+    broker_reqs = build_requests(
+        items, lambda it: prompts[it["axis"]].format(content=content)
+    )
+    return [
+        {
+            "id": r["id"],
+            "run": r["meta"]["run"],
+            "axis": r["meta"]["axis"],
+            "prompt": r["prompt"],
+        }
+        for r in broker_reqs
+    ]
+
+
+def aggregate_from_responses(
+    requests: List[Dict], responses: Dict[str, object], runs: int
+) -> Dict:
+    """Phase B の採点結果を集約して measure_noise と同形の結果を返す（LLM ゼロ＝Phase C: ゲート）。
+
+    Args:
+        requests: build_scoring_requests の出力（id→run/axis の対応）
+        responses: {request_id: score}。値は float でも生テキストでも可（parse_score で吸収）。
+            欠損 id は FALLBACK_SCORE で穴埋めする（assistant の採点漏れで壊さない）。
+        runs: 計測回数
+
+    Returns:
+        {"runs", "raw", "stats", "recommended_epsilon"}（measure_noise と同形、target は持たない）
+    """
+    # Phase C: 応答を broker で正規化（欠損 id は parse_score(None)=FALLBACK で穴埋め）
+    parsed = parse_responses(requests, responses, parser=parse_score)
+    # id→(run,axis) の対応は requests を単一ソースとして使う（id 形式の重複定義を避ける）
+    raw: List[Dict[str, float]] = [{} for _ in range(runs)]
+    for req in requests:
+        run_idx = req["run"]
+        if not (0 <= run_idx < runs):
+            continue
+        raw[run_idx][req["axis"]] = parsed[req["id"]]
+
+    for axis_scores in raw:
+        # assistant の採点漏れ（欠損軸）は FALLBACK_SCORE で穴埋め
+        for axis in AXIS_WEIGHTS:
+            axis_scores.setdefault(axis, FALLBACK_SCORE)
+        integrated = sum(
+            axis_scores[axis] * weight for axis, weight in AXIS_WEIGHTS.items()
+        )
+        axis_scores["integrated"] = round(integrated, 4)
+
+    stats = aggregate_runs(raw)
+    epsilon = recommend_epsilon(stats["integrated"]) if stats else 0.02
+    return {
+        "runs": runs,
+        "raw": raw,
+        "stats": stats,
+        "recommended_epsilon": epsilon,
+    }
+
+
 def _run_claude_prompt(prompt_str: str, max_retries: int = 2) -> float:
-    """フォーマット済みプロンプトを claude -p に渡しスコアを返す。失敗時はリトライ。"""
+    """フォーマット済みプロンプトを claude -p に渡しスコアを返す。失敗時はリトライ。
+
+    DEPRECATED（[ADR-037]）: claude -p 全廃に向け、新規経路は
+    build_scoring_requests + aggregate_from_responses（ファイルベース2相）を使う。
+    既存 CLI（bin/rl-prompt-compare）との後方互換のため当面は残置。
+    """
     for _ in range(max_retries + 1):
         try:
             result = subprocess.run(
@@ -87,9 +172,9 @@ def _run_claude_prompt(prompt_str: str, max_retries: int = 2) -> float:
                 timeout=60,
             )
             if result.returncode == 0:
-                match = re.search(r"(0\.\d+|1\.0|0|1)", result.stdout.strip())
-                if match:
-                    return float(match.group(1))
+                # マッチがあるときだけ確定。無ければ retry に回す（従来挙動を維持）
+                if re.search(r"(0\.\d+|1\.0|0|1)", result.stdout.strip()):
+                    return parse_score(result.stdout)
         except subprocess.TimeoutExpired:
             continue
         except FileNotFoundError:
@@ -212,3 +297,60 @@ def measure_noise(target_path: str, runs: int = 5) -> Dict:
         "stats": stats,
         "recommended_epsilon": epsilon,
     }
+
+
+def main(argv=None) -> int:
+    """claude -p 全廃のファイルベース2相 CLI（[ADR-037] PoC）。
+
+    Phase A（前処理・LLM ゼロ）:
+        score_noise.py --emit-requests <target> [--runs N]
+        → 採点リクエスト JSON を stdout に出力。assistant がこれを読み、
+          各 prompt を Task/インラインで 0.0〜1.0 採点し responses.json を作る。
+
+    Phase C（ゲート・LLM ゼロ）:
+        score_noise.py --aggregate <responses.json> --requests <requests.json> [--runs N]
+        → responses を集約してノイズ統計 JSON を stdout に出力。
+
+    claude -p は一切呼ばない。LLM 作業（Phase B）は assistant 側に分離される。
+    """
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="score_noise file-based 2-phase (ADR-037)")
+    parser.add_argument("--emit-requests", metavar="TARGET", help="Phase A: 採点リクエスト生成")
+    parser.add_argument("--aggregate", metavar="RESPONSES_JSON", help="Phase C: 採点結果を集約")
+    parser.add_argument("--requests", metavar="REQUESTS_JSON", help="Phase C 用 requests JSON")
+    parser.add_argument("--runs", type=int, default=5)
+    args = parser.parse_args(argv)
+
+    if args.emit_requests:
+        content = Path(args.emit_requests).read_text(encoding="utf-8")
+        requests = build_scoring_requests(content, runs=args.runs)
+        print(
+            json.dumps(
+                {"target": args.emit_requests, "runs": args.runs, "requests": requests},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    if args.aggregate:
+        if not args.requests:
+            parser.error("--aggregate には --requests が必要です")
+        responses = json.loads(Path(args.aggregate).read_text(encoding="utf-8"))
+        req_doc = json.loads(Path(args.requests).read_text(encoding="utf-8"))
+        requests = req_doc["requests"] if isinstance(req_doc, dict) else req_doc
+        runs = req_doc.get("runs", args.runs) if isinstance(req_doc, dict) else args.runs
+        result = aggregate_from_responses(requests, responses, runs=runs)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    parser.error("--emit-requests または --aggregate を指定してください")
+    return 2
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

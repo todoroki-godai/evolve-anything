@@ -35,3 +35,5 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | SkillPyramid | 同一クラスタの低レベル（小型）スキル群を上位スキルへ束ねる階層統合提案。reorganize が split/merge と別軸（低→上位）で検出し max_skill_count 張り付きを構造的に抑える。`hierarchy_candidates` で surface、適用は人間判断 | #303 |
 | hook_drift | 他ツール追従 hook（gstack flow 参照 hook 等）の陳腐化を決定論検出する `scripts/lib/hook_drift.py`。第一フェーズは stale_pin のみ | ADR-036 |
 | stale_pin | hook が参照する外部ツールの version pin（flow-chain.json の `gstack_version`）が実環境（.last-setup-version）から乖離した状態。表記ゆれが無く false positive しない drift 種 | ADR-036 |
+| ファイルベース2相 | claude -p を Python から追い出す3相分離。Phase A（決定論=リクエスト JSON 生成）→ Phase B（assistant がインライン採点/生成、subscription 課金）→ Phase C（決定論=応答パース・ゲート）。Bash 境界を JSON ファイルで越える | ADR-037 |
+| llm_broker | ファイルベース2相の共通基盤 `scripts/lib/llm_broker.py`。build_requests/parse_responses/parse_score/passthrough を提供、IO-free・LLM-free（mock 不要） | ADR-037 |

@@ -10,7 +10,12 @@ from score_noise import (
     aggregate_runs,
     _score_single_axis,
     compare_prompt_versions,
+    parse_score,
+    build_scoring_requests,
+    aggregate_from_responses,
+    FALLBACK_SCORE,
 )
+from scorer_prompts import DEFAULT_AXIS_WEIGHTS
 
 
 def test_compute_stats_basic():
@@ -193,3 +198,70 @@ def test_compare_prompt_versions_warns_on_mean_drift():
     assert result["mean_drift_warning"] is True
     # 推奨は A（ドリフトが大きすぎて B は採用不可）
     assert result["recommended"] == "a"
+
+
+# --- PoC: claude -p 全廃のファイルベース2相パターン（LLM-free、mock 不要）---
+# Phase A: build_scoring_requests（決定論の前処理）
+# Phase B: assistant が Task/インラインで採点（テスト対象外）
+# Phase C: aggregate_from_responses（決定論のゲート）
+
+
+def test_parse_score_extracts_float():
+    """LLM 出力テキストからスコア float を抽出する（旧 _run_claude_prompt の regex を単独化）"""
+    assert parse_score("0.75") == 0.75
+    assert parse_score("スコアは 0.82 です") == 0.82
+    assert parse_score("1.0") == 1.0
+    assert parse_score("評価: 0") == 0.0
+
+
+def test_parse_score_fallback_on_no_match():
+    """数値が無い出力は FALLBACK_SCORE を返す"""
+    assert parse_score("評価できません") == FALLBACK_SCORE
+    assert parse_score("") == FALLBACK_SCORE
+
+
+def test_build_scoring_requests_shape():
+    """runs × axes の採点リクエストを決定論で生成する（LLM 呼び出しなし）"""
+    requests = build_scoring_requests("SKILL 本文", runs=3)
+    n_axes = len(DEFAULT_AXIS_WEIGHTS)
+    assert len(requests) == 3 * n_axes
+    # 各 request は id/run/axis/prompt を持つ
+    first = requests[0]
+    assert set(first.keys()) == {"id", "run", "axis", "prompt"}
+    # id は run:axis で一意
+    ids = [r["id"] for r in requests]
+    assert len(ids) == len(set(ids))
+    # prompt に content が埋め込まれている
+    assert "SKILL 本文" in first["prompt"]
+
+
+def test_build_scoring_requests_covers_all_axes_each_run():
+    """各 run で全軸がカバーされる"""
+    requests = build_scoring_requests("x", runs=2)
+    for run_idx in range(2):
+        axes_in_run = {r["axis"] for r in requests if r["run"] == run_idx}
+        assert axes_in_run == set(DEFAULT_AXIS_WEIGHTS.keys())
+
+
+def test_aggregate_from_responses_roundtrip():
+    """Phase B の採点結果(id→score)を集約して measure_noise 同形の結果を返す"""
+    requests = build_scoring_requests("x", runs=2)
+    # assistant が返したと想定する responses（id → 生テキスト or float 混在）
+    responses = {}
+    for r in requests:
+        responses[r["id"]] = "0.80" if r["axis"] == "technical" else 0.60
+    result = aggregate_from_responses(requests, responses, runs=2)
+    assert result["runs"] == 2
+    assert len(result["raw"]) == 2
+    # integrated = 0.80*0.40 + 0.60*0.40 + 0.60*0.20 = 0.32+0.24+0.12 = 0.68
+    assert result["raw"][0]["integrated"] == 0.68
+    assert "integrated" in result["stats"]
+    assert "recommended_epsilon" in result
+
+
+def test_aggregate_from_responses_missing_id_uses_fallback():
+    """responses に欠損 id があっても FALLBACK_SCORE で穴埋めして壊れない"""
+    requests = build_scoring_requests("x", runs=1)
+    result = aggregate_from_responses(requests, {}, runs=1)  # 全欠損
+    # 全軸 FALLBACK → integrated == FALLBACK_SCORE
+    assert result["raw"][0]["integrated"] == round(FALLBACK_SCORE, 4)
