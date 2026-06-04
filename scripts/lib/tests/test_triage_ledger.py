@@ -192,3 +192,83 @@ class TestSummarize:
         line = ledger.summarize_suppressed([{"suppressed": False}])
         assert line  # 空文字でない
         assert "0" in line
+
+
+class TestApplyLedgerPersistGate:
+    """persist=False（dry-run 経路）では台帳を一切書かないが、判定は計算する。
+
+    dry-run の「変更なし」契約を ledger 層で守る回帰テスト（#308 dry-run 副作用バグ）。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ledger, "LEDGER_ROOT", tmp_path / "triage_decisions")
+
+    def _skip_meta(self, key="deploy skill"):
+        return {
+            "skill_name": key,
+            "recommendation": "SKIP",
+            "reuse_rate": 0.01,
+            "duplicate_candidates": ["deploy skill clone"],
+            "reason": "low reuse + dup",
+        }
+
+    def test_persist_false_writes_nothing(self):
+        """persist=False なら台帳ファイルを作らない（変更なし契約）。"""
+        meta = self._skip_meta()
+        ledger.apply_ledger(meta, slug="proj", now=1000.0, persist=False)
+        # ファイルが存在しない（書き込みゼロ）
+        assert not ledger.ledger_path("proj").exists()
+        # load も空
+        assert ledger.load_ledger("proj") == {}
+
+    def test_persist_false_still_computes_decision(self):
+        """persist=False でも 3層判定（recommendation/ledger_status/suppressed）は返す。"""
+        meta = self._skip_meta()
+        out = ledger.apply_ledger(meta, slug="proj", now=1000.0, persist=False)
+        assert out["recommendation"] == "SKIP"
+        assert out["ledger_status"] == "new"
+        assert out["suppressed"] is False
+        assert out["candidate_key"] == ledger.candidate_key("deploy skill")
+
+    def test_persist_false_decision_matches_persisted_first_skip(self):
+        """初回 SKIP の判定は persist の True/False で一致する（観測値は同じ）。"""
+        meta = self._skip_meta()
+        dry = ledger.apply_ledger(meta, slug="dry", now=1000.0, persist=False)
+        wet = ledger.apply_ledger(meta, slug="wet", now=1000.0, persist=True)
+        for k in ("recommendation", "ledger_status", "suppressed", "candidate_key"):
+            assert dry[k] == wet[k]
+
+    def test_repeated_dry_run_does_not_escalate(self):
+        """dry-run を ESCALATE_N 回繰り返しても台帳が育たず昇格しない（副作用なし）。"""
+        meta = self._skip_meta()
+        now = 1000.0
+        for _ in range(ledger.ESCALATE_N + 2):
+            out = ledger.apply_ledger(meta, slug="proj", now=now, persist=False)
+            now += DAY
+        # 毎回「初回 SKIP」のまま（台帳に履歴が残らないため）
+        assert out["recommendation"] == "SKIP"
+        assert out["ledger_status"] == "new"
+        assert not ledger.ledger_path("proj").exists()
+
+    def test_persist_false_passthrough_recommendation(self):
+        """SKIP 以外（CREATE）の passthrough も persist=False なら書かない。"""
+        meta = dict(self._skip_meta())
+        meta["recommendation"] = "CREATE"
+        out = ledger.apply_ledger(meta, slug="proj", now=1000.0, persist=False)
+        assert out["recommendation"] == "CREATE"
+        assert out["ledger_status"] == "passthrough"
+        assert not ledger.ledger_path("proj").exists()
+
+    def test_persist_false_does_not_mutate_existing_record(self):
+        """既存レコードがあっても persist=False は台帳を更新しない（読むだけ）。"""
+        meta = self._skip_meta()
+        # 先に 1 件永続化（初回 SKIP）
+        ledger.apply_ledger(meta, slug="proj", now=1000.0, persist=True)
+        before = dict(ledger.load_ledger("proj")[ledger.candidate_key("deploy skill")])
+        # dry-run で 1 日後に再評価 → 抑制判定が返るが台帳は不変
+        out = ledger.apply_ledger(meta, slug="proj", now=1000.0 + DAY, persist=False)
+        assert out["ledger_status"] == "suppressed"
+        assert out["suppressed"] is True
+        after = ledger.load_ledger("proj")[ledger.candidate_key("deploy skill")]
+        assert after == before  # times_seen 等が増えていない

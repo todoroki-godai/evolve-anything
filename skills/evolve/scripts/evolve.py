@@ -374,6 +374,7 @@ def run_evolve(
             usage=usage_data,
             missed_skills=missed,
             project_root=proj,
+            dry_run=dry_run,  # #308: --dry-run 時は triage_ledger に書き込まない
         )
         result["phases"]["skill_triage"] = triage_result
     except Exception as e:

@@ -193,10 +193,19 @@ def apply_ledger(
     cooldown_days: int = DEFAULT_COOLDOWN_DAYS,
     escalate_n: int = ESCALATE_N,
     ttl_days: int = DEFAULT_TTL_DAYS,
+    persist: bool = True,
 ) -> Dict[str, Any]:
     """meta_quality_check 結果に台帳状態を反映した dict を返す（副作用: 台帳更新）。
 
     SKIP 以外の recommendation も記録するが、抑制・エスカレーションは SKIP のみ対象。
+
+    Args:
+        persist: False の場合、台帳への書き込み（upsert_record）を一切行わない。
+            3層判定（抑制/再発エスカレーション/TTL 切れ）は既存レコードを読んで
+            計算するため戻り値は不変。evolve --dry-run の「変更なし」契約を守るための
+            ゲート（#308 dry-run 副作用バグ）。判定は load した既存レコードのみに
+            依存し、その回で書く予定だったレコードには依存しないため、書き込みを
+            スキップしても観測される decision は persist=True と一致する。
 
     Returns: meta_result の copy に以下を追加:
         - recommendation: 必要なら REVIEW に昇格
@@ -213,6 +222,11 @@ def apply_ledger(
     out["candidate_key"] = key
     out["suppressed"] = False
     out["ledger_note"] = ""
+
+    def _persist(record: Dict[str, Any]) -> None:
+        # persist=False（dry-run 経路）では書き込みを抑止する。
+        if persist:
+            upsert_record(record, slug)
 
     ledger = load_ledger(slug)
     existing = ledger.get(key)
@@ -231,7 +245,7 @@ def apply_ledger(
             record["decided_at"] = now
             record["ttl_days"] = ttl_days
             record["suppressed_until"] = 0.0
-        upsert_record(record, slug)
+        _persist(record)
         out["ledger_status"] = "passthrough"
         return out
 
@@ -240,7 +254,7 @@ def apply_ledger(
         # 初回 SKIP: 記録するが抑制しない（最初は必ず1回 surface する）
         record = _new_record(key, "SKIP", reuse_rate, dups, now=now, ttl_days=ttl_days)
         record["suppressed_until"] = now + cooldown_days * DAY_SECONDS
-        upsert_record(record, slug)
+        _persist(record)
         out["ledger_status"] = "new"
         out["ledger_note"] = "初回 SKIP: 記録した"
         return out
@@ -261,7 +275,7 @@ def apply_ledger(
         record["times_skipped"] = 1  # 窓リセット（新しい判断サイクル）
         record["suppressed_until"] = now + cooldown_days * DAY_SECONDS
         record["recommendation"] = "SKIP"
-        upsert_record(record, slug)
+        _persist(record)
         days = int((now - decided_at) / DAY_SECONDS)
         out["ledger_status"] = "ttl_expired"
         out["ledger_note"] = f"🔄 この判断は {days} 日前。当時 SKIP だが再評価を"
@@ -273,7 +287,7 @@ def apply_ledger(
         record["recommendation"] = "REVIEW"
         record["decided_at"] = now
         record["suppressed_until"] = 0.0
-        upsert_record(record, slug)
+        _persist(record)
         out["recommendation"] = "REVIEW"
         out["ledger_status"] = "escalated"
         out["ledger_note"] = f"{times_skipped}回 SKIP: 繰り返し検出。閾値か採用を見直せ"
@@ -284,7 +298,7 @@ def apply_ledger(
     suppressed_until = float(record.get("suppressed_until", 0.0))
     if now <= suppressed_until:
         record["recommendation"] = "SKIP"
-        upsert_record(record, slug)
+        _persist(record)
         out["ledger_status"] = "suppressed"
         out["suppressed"] = True
         out["ledger_note"] = "SKIP（クールダウン内、抑制）"
@@ -293,7 +307,7 @@ def apply_ledger(
     # クールダウン外だが未エスカレーション: 通常 SKIP として surface し直す
     record["recommendation"] = "SKIP"
     record["suppressed_until"] = now + cooldown_days * DAY_SECONDS
-    upsert_record(record, slug)
+    _persist(record)
     out["ledger_status"] = "new"
     out["ledger_note"] = "SKIP（クールダウン経過、再表示）"
     return out

@@ -70,6 +70,7 @@ def triage_skill(
     all_eval_sets: Optional[Dict[str, Dict[str, Any]]] = None,
     ledger_slug: Optional[str] = None,
     ledger_now: Optional[float] = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """単一スキルの triage 判定を行う。
 
@@ -84,6 +85,8 @@ def triage_skill(
         all_eval_sets: 事前生成済み eval set。None の場合は内部で生成。
         ledger_slug: triage_ledger の PJ slug。None なら project_root から解決（#308）。
         ledger_now: 台帳適用の基準時刻（テスト用、None なら現在時刻）。
+        dry_run: True の場合、台帳（triage_ledger）への書き込みを行わない。
+            3層判定は計算するが永続化しない＝evolve --dry-run の「変更なし」契約を守る（#308）。
 
     Returns:
         {"action": str, "skill": str, "confidence": float, "evidence": dict, ...}
@@ -132,7 +135,7 @@ def triage_skill(
         # 台帳適用 (#308): SKIP 判断に TTL・再発カウンタを反映し、
         # 抑制/再発エスカレーション/TTL 切れの3層トリガーで recommendation を補正する。
         slug = ledger_slug if ledger_slug is not None else triage_ledger.resolve_slug(cwd=project_root)
-        meta = triage_ledger.apply_ledger(meta, slug=slug, now=ledger_now)
+        meta = triage_ledger.apply_ledger(meta, slug=slug, now=ledger_now, persist=not dry_run)
         _action = meta["recommendation"] if meta["recommendation"] in ("CREATE", "SKIP", "REVIEW") else "CREATE"
         return {
             "action": _action,
@@ -350,8 +353,13 @@ def triage_all_skills(
     usage: List[Dict[str, Any]],
     missed_skills: List[Dict[str, Any]],
     project_root: Optional[Path] = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """全スキルに対して triage を実行する。
+
+    Args:
+        dry_run: True の場合、triage_ledger への書き込みを行わない（判定は計算する）。
+            evolve --dry-run から伝播し「変更なし」契約を守る（#308 dry-run 副作用バグ）。
 
     Returns:
         {
@@ -409,6 +417,7 @@ def triage_all_skills(
             project_root=project_root,
             all_eval_sets=all_eval_sets,
             ledger_slug=ledger_slug,
+            dry_run=dry_run,
         )
         # ① 抑制 (#308): クールダウン内の再発 SKIP は個別 bucket に積まず畳む。
         if triage.get("suppressed"):

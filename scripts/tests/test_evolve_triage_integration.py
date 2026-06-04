@@ -222,7 +222,7 @@ class TestTriageLedgerIntegration:
         import triage_ledger
         monkeypatch.setattr(triage_ledger, "LEDGER_ROOT", tmp_path / "triage_decisions")
 
-    def _run(self, now):
+    def _run(self, now, *, dry_run=False):
         """SKIP が発火する triage_skill を1回回す。"""
         from skill_triage import triage_skill
         return triage_skill(
@@ -235,6 +235,7 @@ class TestTriageLedgerIntegration:
             existing_skills={"deploy skill"},  # Jaccard("deploy skill clone","deploy skill")=0.667>0.6
             ledger_slug="proj",
             ledger_now=now,
+            dry_run=dry_run,
         )
 
     def test_first_run_skip_then_second_run_suppressed(self):
@@ -278,3 +279,30 @@ class TestTriageLedgerIntegration:
         r = triage_all_skills(sessions=[], usage=[], missed_skills=[], project_root=None)
         # project_root=None → no_skills_found で skipped だが空 summary キーは存在
         assert "skip_suppressed_summary" in r
+
+    def test_dry_run_computes_decision_but_does_not_persist(self):
+        """#308 dry-run 副作用バグ回帰: dry_run=True は判定を返すが台帳を書かない。"""
+        import triage_ledger
+        out = self._run(now=1000.0, dry_run=True)
+        assert out["action"] == "SKIP"  # 判定は計算される
+        assert out["ledger_status"] == "new"
+        assert not triage_ledger.ledger_path("proj").exists()  # 「変更なし」契約
+
+    def test_default_run_persists_ledger(self):
+        """対照: dry_run なし（既定）は従来どおり台帳に書く。"""
+        import triage_ledger
+        self._run(now=1000.0)
+        assert triage_ledger.ledger_path("proj").exists()
+
+    def test_repeated_dry_run_never_escalates(self):
+        """dry-run を繰り返しても台帳が育たず昇格しない（連続 dry-run の冪等性）。"""
+        import triage_ledger
+        DAY = 86400.0
+        out = None
+        now = 1000.0
+        for _ in range(triage_ledger.ESCALATE_N + 2):
+            out = self._run(now=now, dry_run=True)
+            now += DAY
+        assert out["action"] == "SKIP"  # REVIEW に昇格しない
+        assert out["ledger_status"] == "new"
+        assert not triage_ledger.ledger_path("proj").exists()
