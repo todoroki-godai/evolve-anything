@@ -1,10 +1,13 @@
 """Critical Instruction Extractor — スキル指示の遵守保証サイクルのコアモジュール。
 
 Phase 1 (EXTRACT): extract_critical_lines() — MUST/禁止等のキーワードで critical 行を抽出
-Phase 1 (REPHRASE): rephrase_to_calm() — 攻撃的表現を calm/direct に LLM 変換
-Phase 3 (DETECT): detect_instruction_violation() — corrections と instructions の突合
+Phase 1 (REPHRASE): rephrase_to_calm() — 決定論フォールバック（常に reject）。
+  LLM 品質は emit_rephrase_request / ingest_rephrase の2相で回復する。
+Phase 3 (DETECT): detect_instruction_violation() — LLM-free。対立動詞検出 + keyword_overlap。
+  LLM Judge は emit_violation_judge_requests / ingest_violation_judges の2相で後追い補完する。
 
-LLM Judge 呼び出しは本モジュールにカプセル化（discover.py は関数を呼ぶだけ）。
+[ADR-037] Phase 1d-i: subprocess 経由の claude -p を全廃し、ファイルベース2相へ変換。
+LLM を呼ばないため no-llm-in-tests と完全整合（mock 不要）。
 
 Related: issue #39
 """
@@ -12,9 +15,17 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+# llm_broker を import（Phase 1a 共通基盤）
+_lib_dir = Path(__file__).resolve().parent
+if str(_lib_dir) not in sys.path:
+    sys.path.insert(0, str(_lib_dir))
+
+from llm_broker import build_requests, parse_responses, passthrough
 
 # ── 定数 ────────────────────────────────────────────────
 
@@ -52,6 +63,7 @@ REPHRASE_CONFIDENCE_MIN = 0.80
 REPHRASE_HUMAN_REVIEW_MIN = 0.60
 LLM_JUDGE_TIMEOUT_SECONDS = 30
 KEYWORD_OVERLAP_FALLBACK_MIN = 3
+_MAX_INSTRUCTIONS = 15
 
 
 # ── データクラス ────────────────────────────────────────
@@ -164,53 +176,91 @@ def extract_critical_lines(skill_content: str) -> List[CriticalInstruction]:
     return results
 
 
-# ── Phase 1: REPHRASE ──────────────────────────────────
+# ── Phase 1: REPHRASE (決定論フォールバック + 2相API) ──────────────────────
 
 
 def rephrase_to_calm(
     instruction: str, *, language: str = "en"
 ) -> Tuple[str, float, str]:
-    """攻撃的表現を calm/direct に変換する。
+    """攻撃的表現を calm/direct に変換する（決定論フォールバック）。
+
+    常に (instruction, 0.0, "reject") を返す。
+    LLM 品質は emit_rephrase_request / ingest_rephrase の2相で回復する。
 
     Returns:
         (rephrased_text, confidence, action)
         action: "auto" | "human_review" | "reject"
     """
+    return instruction, 0.0, "reject"
+
+
+def _build_rephrase_prompt(item: Dict[str, Any]) -> str:
+    """rephrase リクエスト用プロンプトを生成する（決定論）。
+
+    build_requests から渡される item は元の dict（id/instruction/language を持つ）。
+    """
+    instruction = item["instruction"]
+    language = item.get("language", "en")
     lang_hint = "日本語" if language == "ja" else "English"
-    prompt = (
+    return (
         f"以下の指示を、攻撃的な表現（MUST/NEVER/禁止等）を使わずに、"
         f"穏やかで直接的な表現にリフレーズしてください。"
         f"元の意味を正確に保持してください。{lang_hint}で回答してください。\n\n"
         f"元の指示: {instruction}\n\n"
         f'JSON形式で回答: {{"rephrased": "...", "confidence": 0.0-1.0}}'
     )
+
+
+def emit_rephrase_request(
+    instruction: str, *, language: str = "en"
+) -> Dict[str, Any]:
+    """rephrase LLM リクエストを生成する（Phase A）。
+
+    LLM・subprocess を一切呼ばない。
+
+    Returns:
+        {"requests": [{"id": "rephrase", "prompt": str, "meta": dict}]}
+    """
+    items = [{"id": "rephrase", "instruction": instruction, "language": language}]
+    requests = build_requests(items, _build_rephrase_prompt)
+    return {"requests": requests}
+
+
+def ingest_rephrase(
+    instruction: str,
+    requests: List[Dict[str, Any]],
+    responses: Dict[str, Any],
+) -> Tuple[str, float, str]:
+    """Phase B 応答から rephrase 結果を回収する（Phase C）。
+
+    LLM・subprocess を一切呼ばない。None/パース失敗 → (instruction, 0.0, "reject")。
+
+    Returns:
+        (rephrased_text, confidence, action)
+        action: "auto" | "human_review" | "reject"
+    """
+    parsed = parse_responses(requests, responses, passthrough)
+    raw = parsed.get("rephrase")
+    if not raw:
+        return instruction, 0.0, "reject"
     try:
-        result = subprocess.run(
-            ["claude", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=LLM_JUDGE_TIMEOUT_SECONDS,
-        )
-        if result.returncode == 0:
-            # JSON を抽出
-            output = result.stdout.strip()
-            json_match = re.search(r"\{[^}]+\}", output)
-            if json_match:
-                data = json.loads(json_match.group())
-                rephrased = data.get("rephrased", instruction)
-                confidence = float(data.get("confidence", 0.0))
-
-                if confidence >= REPHRASE_CONFIDENCE_MIN:
-                    return rephrased, confidence, "auto"
-                elif confidence >= REPHRASE_HUMAN_REVIEW_MIN:
-                    return rephrased, confidence, "human_review"
-                else:
-                    return instruction, confidence, "reject"
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, OSError):
-        pass
-
-    return instruction, 0.0, "reject"
+        json_match = re.search(r"\{[^}]+\}", str(raw))
+        if not json_match:
+            return instruction, 0.0, "reject"
+        data = json.loads(json_match.group())
+        rephrased = data.get("rephrased", instruction)
+        confidence = float(data.get("confidence", 0.0))
+        if confidence >= REPHRASE_CONFIDENCE_MIN:
+            return rephrased, confidence, "auto"
+        elif confidence >= REPHRASE_HUMAN_REVIEW_MIN:
+            return rephrased, confidence, "human_review"
+        else:
+            return instruction, confidence, "reject"
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return instruction, 0.0, "reject"
 
 
-# ── Phase 3: DETECT ────────────────────────────────────
+# ── Phase 3: DETECT (LLM-free + 2相API) ────────────────
 
 
 def _flatten_verb_group(group: Tuple[str, ...]) -> Set[str]:
@@ -270,33 +320,6 @@ def _are_synonyms(verb1: str, verb2: str) -> bool:
     return verb2.lower() in syns1
 
 
-def _call_llm_judge(
-    correction_message: str, instruction_text: str
-) -> Optional[Dict[str, Any]]:
-    """LLM Judge で違反判定する。失敗時は None を返す。"""
-    prompt = (
-        f"以下のユーザー修正が、スキル指示への違反を示しているか判定してください。\n\n"
-        f"スキル指示: {instruction_text}\n"
-        f"ユーザー修正: {correction_message}\n\n"
-        f"direct scoring: 違反していれば is_violation=true、していなければ false。\n"
-        f"Chain of Thought: まず理由を考え、次に判定を出してください。\n\n"
-        f'JSON形式で回答: {{"is_violation": true/false, "confidence": 0.0-1.0, "reason": "..."}}'
-    )
-    try:
-        result = subprocess.run(
-            ["claude", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=LLM_JUDGE_TIMEOUT_SECONDS,
-        )
-        if result.returncode == 0:
-            output = result.stdout.strip()
-            json_match = re.search(r"\{[^}]+\}", output)
-            if json_match:
-                return json.loads(json_match.group())
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, OSError):
-        pass
-    return None
-
-
 def _keyword_overlap(text1: str, text2: str) -> int:
     """2つのテキストの共通キーワード数を返す（小文字化、3文字以上）。"""
     words1 = {w.lower() for w in re.findall(r"\w{3,}", text1)}
@@ -308,31 +331,27 @@ def detect_instruction_violation(
     correction: Dict[str, Any],
     instructions: List[CriticalInstruction],
 ) -> Optional[Violation]:
-    """correction が instructions のいずれかに違反しているか検出する。
+    """correction が instructions のいずれかに違反しているか検出する（LLM-free）。
 
     2段階マッチング:
     1. 対立動詞検出 (deterministic) → 確定違反
-    2. LLM Judge (direct scoring + CoT) → 違反/非違反
-       失敗時: keyword overlap >= KEYWORD_OVERLAP_FALLBACK_MIN → 「要確認」
+    2. keyword overlap >= KEYWORD_OVERLAP_FALLBACK_MIN → 「要確認」
+       （LLM Judge は emit_violation_judge_requests / ingest_violation_judges の2相で補完）
     """
     message = correction.get("message", "")
     if not message or not instructions:
         return None
 
     correction_verbs = _extract_verbs_from_text(message)
+    limited = instructions[:_MAX_INSTRUCTIONS]
 
-    # llm-batch-guard: Stage 2 LLM 呼び出しが instruction 数だけ発生するため上限を設ける
-    _MAX_INSTRUCTIONS = 15
-    instructions = instructions[:_MAX_INSTRUCTIONS]
-
-    for instr in instructions:
+    for instr in limited:
         instruction_text = instr.original
         instruction_verbs = _extract_verbs_from_text(instruction_text)
 
         # Stage 1: 対立動詞検出
         opposing = _check_opposing_verbs(instruction_verbs, correction_verbs)
         if opposing:
-            # 同義動詞チェック（false positive 防止）
             v1, v2 = opposing
             if not _are_synonyms(v1, v2):
                 return Violation(
@@ -343,21 +362,138 @@ def detect_instruction_violation(
                     reason=f"対立動詞検出: instruction={v1}, correction={v2}",
                 )
 
-        # Stage 2: LLM Judge
-        judge_result = _call_llm_judge(message, instruction_text)
-        if judge_result is not None:
-            if judge_result.get("is_violation"):
+        # Stage 2: keyword overlap fallback（LLM が常に失敗した場合の既存挙動と一致）
+        overlap = _keyword_overlap(message, instruction_text)
+        if overlap >= KEYWORD_OVERLAP_FALLBACK_MIN:
+            return Violation(
+                instruction=instr,
+                correction_message=message,
+                match_type="keyword_overlap",
+                confidence=0.50,
+                reason=f"keyword overlap={overlap} (LLM Judge 失敗時 fallback)",
+                needs_review=True,
+            )
+
+    return None
+
+
+def _build_judge_prompt(item: Dict[str, Any]) -> str:
+    """violation judge リクエスト用プロンプトを生成する（決定論）。
+
+    build_requests から渡される item は元の dict（id/idx/correction_message/instruction_text を持つ）。
+    """
+    correction_message = item["correction_message"]
+    instruction_text = item["instruction_text"]
+    return (
+        f"以下のユーザー修正が、スキル指示への違反を示しているか判定してください。\n\n"
+        f"スキル指示: {instruction_text}\n"
+        f"ユーザー修正: {correction_message}\n\n"
+        f"direct scoring: 違反していれば is_violation=true、していなければ false。\n"
+        f"Chain of Thought: まず理由を考え、次に判定を出してください。\n\n"
+        f'JSON形式で回答: {{"is_violation": true/false, "confidence": 0.0-1.0, "reason": "..."}}'
+    )
+
+
+def emit_violation_judge_requests(
+    correction: Dict[str, Any],
+    instructions: List[CriticalInstruction],
+) -> Dict[str, Any]:
+    """violation judge LLM リクエストを生成する（Phase A）。
+
+    message 空 or instructions 空 → {"requests": []}。
+    先頭15件に制限。Stage1 で確定しそうな instruction も含め全件 emit する（ingest 側が短絡）。
+    LLM・subprocess を一切呼ばない。
+
+    Returns:
+        {"requests": [{"id": "judge:{idx}", "prompt": str, "meta": dict}]}
+    """
+    message = correction.get("message", "")
+    if not message or not instructions:
+        return {"requests": []}
+
+    limited = instructions[:_MAX_INSTRUCTIONS]
+    items = [
+        {
+            "id": f"judge:{idx}",
+            "idx": idx,
+            "correction_message": message,
+            "instruction_text": instr.original,
+        }
+        for idx, instr in enumerate(limited)
+    ]
+    requests = build_requests(items, _build_judge_prompt)
+    return {"requests": requests}
+
+
+def ingest_violation_judges(
+    correction: Dict[str, Any],
+    instructions: List[CriticalInstruction],
+    requests: List[Dict[str, Any]],
+    responses: Dict[str, Any],
+) -> Optional[Violation]:
+    """Phase B 応答から violation 判定を回収する（Phase C）。
+
+    元の detect_instruction_violation ループを順序通りに再生する（先頭15件）。
+    各 instruction について:
+      - Stage1 opposing 非同義 → Violation(opposing_verb, 0.95) return
+      - else: responses から judge:{idx} の raw を回収
+        - verdict 取得 & is_violation 真 → Violation(llm_judge, ...) return
+        - verdict 取得 & 偽 → continue
+        - verdict 取得失敗 → keyword_overlap fallback
+    LLM・subprocess を一切呼ばない。
+
+    Returns:
+        Violation | None
+    """
+    message = correction.get("message", "")
+    if not message or not instructions:
+        return None
+
+    correction_verbs = _extract_verbs_from_text(message)
+    limited = instructions[:_MAX_INSTRUCTIONS]
+    parsed = parse_responses(requests, responses, passthrough)
+
+    for idx, instr in enumerate(limited):
+        instruction_text = instr.original
+        instruction_verbs = _extract_verbs_from_text(instruction_text)
+
+        # Stage 1: 対立動詞検出（LLM より優先）
+        opposing = _check_opposing_verbs(instruction_verbs, correction_verbs)
+        if opposing:
+            v1, v2 = opposing
+            if not _are_synonyms(v1, v2):
+                return Violation(
+                    instruction=instr,
+                    correction_message=message,
+                    match_type="opposing_verb",
+                    confidence=0.95,
+                    reason=f"対立動詞検出: instruction={v1}, correction={v2}",
+                )
+
+        # Stage 2: LLM Judge 応答を回収
+        raw = parsed.get(f"judge:{idx}")
+        verdict = None
+        if raw:
+            try:
+                json_match = re.search(r"\{[^}]+\}", str(raw))
+                if json_match:
+                    verdict = json.loads(json_match.group())
+            except (json.JSONDecodeError, ValueError, TypeError):
+                verdict = None
+
+        if verdict is not None:
+            if verdict.get("is_violation"):
                 return Violation(
                     instruction=instr,
                     correction_message=message,
                     match_type="llm_judge",
-                    confidence=judge_result.get("confidence", 0.0),
-                    reason=judge_result.get("reason", ""),
+                    confidence=verdict.get("confidence", 0.0),
+                    reason=verdict.get("reason", ""),
                 )
             # LLM が非違反と判定 → この instruction についてはスキップ
             continue
 
-        # Stage 2 fallback: keyword overlap
+        # verdict 取得失敗 → keyword_overlap fallback
         overlap = _keyword_overlap(message, instruction_text)
         if overlap >= KEYWORD_OVERLAP_FALLBACK_MIN:
             return Violation(

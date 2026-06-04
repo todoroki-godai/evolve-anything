@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """LLM セマンティック検証モジュール。
 
-claude-reflect の semantic_detector.py から移植。
-corrections を `claude -p` でバッチ検証し、偽陽性を除去する。
+[ADR-037] Phase 1d-i: claude -p を全廃しファイルベース2相化。
+- validate_corrections / detect_contradictions は決定論フォールバック（LLM-free）。
+- LLM 品質は emit_validation_requests / ingest_validation_results の2相（SKILL 駆動）で回復する。
+- detect_contradictions は emit_contradiction_request / ingest_contradictions の2相（SKILL 駆動）で回復する。
 """
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,16 @@ from typing import Any, Dict, List, Optional
 _hooks_dir = Path(__file__).resolve().parent.parent.parent / "hooks"
 sys.path.insert(0, str(_hooks_dir))
 from common import sanitize_message
+
+# llm_broker を import（constitutional.py と同じ流儀）
+_plugin_root = Path(__file__).resolve().parent.parent.parent
+_lib_dir = str(_plugin_root / "scripts" / "lib")
+if _lib_dir not in sys.path:
+    sys.path.insert(0, _lib_dir)
+_scripts_dir = str(_plugin_root / "scripts")
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+from llm_broker import build_requests, parse_responses, passthrough
 
 BATCH_SIZE = 20
 
@@ -35,89 +46,15 @@ corrections:
 """
 
 
-def semantic_analyze(
-    corrections: List[Dict[str, Any]],
-    model: str = "sonnet",
-) -> List[Dict[str, Any]]:
-    """corrections リストを `claude -p` に送信して is_learning 判定を取得する。
+CONTRADICTION_PROMPT = """以下の corrections リストで、矛盾するペアを見つけてください。
+矛盾 = 同じ対象について相反する指示（例: 「日本語で応答して」と「英語で応答して」）
 
-    バッチサイズ上限 20件。超過時は複数バッチに分割。
+corrections:
+{corrections_json}
 
-    Args:
-        corrections: correction レコードのリスト。各レコードに message フィールドが必要。
-        model: 使用するモデル名。
-
-    Returns:
-        各 correction に is_learning, extracted_learning を付与したリスト。
-    """
-    if not corrections:
-        return []
-
-    results: List[Dict[str, Any]] = []
-
-    for batch_start in range(0, len(corrections), BATCH_SIZE):
-        batch = corrections[batch_start:batch_start + BATCH_SIZE]
-
-        # バッチ用の簡易リストを作成（サニタイズ済み）
-        batch_items = [
-            {"index": i, "message": sanitize_message(c.get("message", ""))}
-            for i, c in enumerate(batch)
-        ]
-
-        prompt = ANALYSIS_PROMPT.format(
-            corrections_json=json.dumps(batch_items, ensure_ascii=False, indent=2)
-        )
-
-        try:
-            proc = subprocess.run(
-                ["claude", "-p", "--model", model, prompt],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            response_text = proc.stdout.strip()
-            parsed = _extract_json_array(response_text)
-
-            if parsed and len(parsed) == len(batch):
-                for item in parsed:
-                    results.append({
-                        "is_learning": item.get("is_learning", True),
-                        "extracted_learning": item.get("extracted_learning"),
-                    })
-            elif parsed and 0 < len(parsed) < len(batch):
-                # partial success: index フィールドでマッチングし、残りは is_learning=True
-                print(
-                    f"Warning: validate_corrections partial success "
-                    f"(expected {len(batch)}, got {len(parsed)}), "
-                    f"unmatched items default to is_learning=True",
-                    file=sys.stderr,
-                )
-                matched = {item.get("index"): item for item in parsed if "index" in item}
-                for i in range(len(batch)):
-                    if i in matched:
-                        results.append({
-                            "is_learning": matched[i].get("is_learning", True),
-                            "extracted_learning": matched[i].get("extracted_learning"),
-                        })
-                    else:
-                        results.append({"is_learning": True, "extracted_learning": None})
-            else:
-                # 完全失敗（パース不能/空リスト/件数超過） → フォールバック（is_learning=True）
-                print(
-                    f"Warning: validate_corrections count mismatch "
-                    f"(expected {len(batch)}, got {len(parsed) if parsed else 0}), "
-                    f"defaulting to is_learning=True",
-                    file=sys.stderr,
-                )
-                for _ in batch:
-                    results.append({"is_learning": True, "extracted_learning": None})
-
-        except (subprocess.TimeoutExpired, OSError) as e:
-            print(f"Warning: semantic analysis failed: {e}", file=sys.stderr)
-            for _ in batch:
-                results.append({"is_learning": True, "extracted_learning": None})
-
-    return results
+矛盾ペアがあれば以下の JSON 配列で回答してください（なければ空配列 []）:
+[{{"pair": [index_a, index_b], "reason": "矛盾の理由"}}]
+"""
 
 
 def _extract_json_array(text: str) -> Optional[List[Dict[str, Any]]]:
@@ -158,96 +95,194 @@ def validate_corrections(
     corrections: List[Dict[str, Any]],
     model: str = "sonnet",
 ) -> List[Dict[str, Any]]:
-    """semantic_analyze のラッパー。失敗時は regex フォールバック。
+    """決定論フォールバック。全件 is_learning=True / extracted_learning=None を返す。
 
-    Args:
-        corrections: correction レコードのリスト。
-        model: 使用するモデル名。
-
-    Returns:
-        各 correction に is_learning, extracted_learning を付与したリスト。
+    model 引数は後方互換のため残すが無視する。
+    LLM 品質は emit_validation_requests / ingest_validation_results の2相（SKILL 駆動）で回復する。
     """
-    try:
-        results = semantic_analyze(corrections, model=model)
-        if len(results) == len(corrections):
-            return results
-    except Exception as e:
-        print(f"Warning: validate_corrections failed, defaulting to is_learning=True", file=sys.stderr)
-
-    # フォールバック: 全件を is_learning=True として返す（regex 結果尊重）
     return [{"is_learning": True, "extracted_learning": None} for _ in corrections]
-
-
-CONTRADICTION_PROMPT = """以下の corrections リストで、矛盾するペアを見つけてください。
-矛盾 = 同じ対象について相反する指示（例: 「日本語で応答して」と「英語で応答して」）
-
-corrections:
-{corrections_json}
-
-矛盾ペアがあれば以下の JSON 配列で回答してください（なければ空配列 []）:
-[{{"pair": [index_a, index_b], "reason": "矛盾の理由"}}]
-"""
 
 
 def detect_contradictions(
     corrections: List[Dict[str, Any]],
     model: str = "sonnet",
 ) -> List[Dict[str, Any]]:
-    """corrections リスト内の矛盾するペアを検出する。
+    """決定論フォールバック。常に空リストを返す（矛盾ペア検出なし）。
 
-    `claude -p` を使用してセマンティックに矛盾を判定する。
+    model 引数は後方互換のため残すが無視する。
+    LLM による矛盾検出は emit_contradiction_request / ingest_contradictions の2相（SKILL 駆動）で回復する。
+    """
+    return []
 
-    Args:
-        corrections: correction レコードのリスト。各レコードに message フィールドが必要。
-        model: 使用するモデル名。
+
+# ---------------------------------------------------------------------------
+# Phase A: emit（決定論で「何を聞くか」を作るだけ。LLM を呼ばない）
+# ---------------------------------------------------------------------------
+
+
+def emit_validation_requests(corrections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Phase A: corrections の is_learning 判定リクエストを生成する（決定論・LLM 非依存）。
+
+    BATCH_SIZE ごとにバッチ化し、各バッチを1リクエストにする。
+    欠損 responses は ingest_validation_results 側で全件 is_learning=True にフォールバックする。
 
     Returns:
-        矛盾ペアのリスト。各要素は {"pair": [index_a, index_b], "reason": "矛盾理由"} 形式。
+        {"requests": [{"id": "validate:<offset>", "prompt": str, "meta": {"offset", "size"}}, ...]}
     """
-    # 空入力ガード: 0件 or 1件以下は LLM 呼び出し不要
-    if len(corrections) <= 1:
-        return []
+    if not corrections:
+        return {"requests": []}
 
-    # corrections の message を抽出してサニタイズ
-    items = [
+    items: List[Dict[str, Any]] = []
+    for batch_start in range(0, len(corrections), BATCH_SIZE):
+        batch = corrections[batch_start:batch_start + BATCH_SIZE]
+        batch_items = [
+            {"index": i, "message": sanitize_message(c.get("message", ""))}
+            for i, c in enumerate(batch)
+        ]
+        items.append({
+            "id": f"validate:{batch_start}",
+            "offset": batch_start,
+            "size": len(batch),
+            "_batch_items": batch_items,
+        })
+
+    def prompt_fn(item: Dict[str, Any]) -> str:
+        return ANALYSIS_PROMPT.format(
+            corrections_json=json.dumps(item["_batch_items"], ensure_ascii=False, indent=2)
+        )
+
+    requests = build_requests(items, prompt_fn)
+    # 一時フィールドを meta から除去
+    for req in requests:
+        req["meta"].pop("_batch_items", None)
+
+    return {"requests": requests}
+
+
+def emit_contradiction_request(corrections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Phase A: corrections 内の矛盾検出リクエストを生成する（決定論・LLM 非依存）。
+
+    0件または1件の場合は空（矛盾が成立しない）。
+    2件以上の場合は単一リクエストを生成する。
+
+    Returns:
+        {"requests": [{"id": "contradictions", "prompt": str, "meta": {}}]}
+    """
+    if len(corrections) <= 1:
+        return {"requests": []}
+
+    items_data = [
         {"index": i, "message": sanitize_message(c.get("message", ""))}
         for i, c in enumerate(corrections)
     ]
+    items = [{"id": "contradictions", "_items": items_data}]
 
-    prompt = CONTRADICTION_PROMPT.format(
-        corrections_json=json.dumps(items, ensure_ascii=False, indent=2)
-    )
-
-    try:
-        proc = subprocess.run(
-            ["claude", "-p", "--model", model, prompt],
-            capture_output=True,
-            text=True,
-            timeout=60,
+    def prompt_fn(item: Dict[str, Any]) -> str:
+        return CONTRADICTION_PROMPT.format(
+            corrections_json=json.dumps(item["_items"], ensure_ascii=False, indent=2)
         )
-        response_text = proc.stdout.strip()
-        parsed = _extract_json_array(response_text)
 
-        if parsed is None:
-            return []
+    requests = build_requests(items, prompt_fn)
+    # 一時フィールドを meta から除去
+    for req in requests:
+        req["meta"].pop("_items", None)
 
-        # 各エントリのバリデーション: pair と reason が存在するもののみ返す
-        validated = []
-        for item in parsed:
-            pair = item.get("pair")
-            reason = item.get("reason", "")
-            if (
-                isinstance(pair, list)
-                and len(pair) == 2
-                and all(isinstance(idx, int) for idx in pair)
-            ):
-                validated.append({"pair": pair, "reason": reason})
+    return {"requests": requests}
 
-        return validated
 
-    except (subprocess.TimeoutExpired, OSError) as e:
-        print("Warning: contradiction detection failed", file=sys.stderr)
+# ---------------------------------------------------------------------------
+# Phase C: ingest（assistant の応答を回収してパースするだけ。LLM を呼ばない）
+# ---------------------------------------------------------------------------
+
+
+def ingest_validation_results(
+    corrections: List[Dict[str, Any]],
+    requests: List[Dict[str, Any]],
+    responses: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Phase C: is_learning 判定結果を回収してパースする（決定論・LLM 非依存）。
+
+    既定値は全件 {"is_learning": True, "extracted_learning": None}。
+    各リクエストの応答をパースし、index ベースでマッチングする。
+    欠損応答（None）・パース失敗・index 欠落は既定値のままにする。
+
+    Args:
+        corrections: emit_validation_requests に渡した corrections と同じリスト。
+        requests: emit_validation_requests の返り値の "requests" リスト。
+        responses: {request_id: 生テキスト} の応答マップ（assistant が埋める）。
+
+    Returns:
+        corrections と同数・同順のリスト。各要素は {"is_learning": bool, "extracted_learning": Optional[str]}。
+    """
+    # 既定値で全件初期化
+    result: List[Dict[str, Any]] = [
+        {"is_learning": True, "extracted_learning": None} for _ in corrections
+    ]
+
+    parsed_map = parse_responses(requests, responses, parser=passthrough)
+
+    for req in requests:
+        req_id = req["id"]
+        offset = req["meta"].get("offset", 0)
+        size = req["meta"].get("size", 0)
+        raw = parsed_map.get(req_id)
+        if raw is None:
+            continue  # 応答欠損 → 既定値のまま
+
+        parsed = _extract_json_array(raw) if isinstance(raw, str) else None
+        if not parsed:
+            continue  # パース失敗 → 既定値のまま
+
+        matched = {item.get("index", pos): item for pos, item in enumerate(parsed)}
+        for i in range(size):
+            global_idx = offset + i
+            if i in matched:
+                item = matched[i]
+                result[global_idx] = {
+                    "is_learning": item.get("is_learning", True),
+                    "extracted_learning": item.get("extracted_learning"),
+                }
+
+    return result
+
+
+def ingest_contradictions(
+    requests: List[Dict[str, Any]],
+    responses: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Phase C: 矛盾検出結果を回収してパースする（決定論・LLM 非依存）。
+
+    requests が空・応答欠損・パース失敗はいずれも [] を返す。
+    pair が [int, int] 形式のエントリのみ返す（不正エントリは除外）。
+
+    Args:
+        requests: emit_contradiction_request の返り値の "requests" リスト。
+        responses: {request_id: 生テキスト} の応答マップ（assistant が埋める）。
+
+    Returns:
+        矛盾ペアのリスト。各要素は {"pair": [int, int], "reason": str}。
+    """
+    if not requests:
         return []
-    except Exception as e:
-        print("Warning: contradiction detection failed", file=sys.stderr)
+
+    parsed_map = parse_responses(requests, responses, parser=passthrough)
+    raw = parsed_map.get("contradictions")
+    if raw is None:
         return []
+
+    parsed = _extract_json_array(raw) if isinstance(raw, str) else None
+    if not parsed:
+        return []
+
+    validated = []
+    for item in parsed:
+        pair = item.get("pair")
+        reason = item.get("reason", "")
+        if (
+            isinstance(pair, list)
+            and len(pair) == 2
+            and all(isinstance(idx, int) for idx in pair)
+        ):
+            validated.append({"pair": pair, "reason": reason})
+
+    return validated

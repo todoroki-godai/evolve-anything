@@ -77,6 +77,44 @@ corrections の `apply: true` のものを確認なしで適用する:
 
 `apply: false` の corrections（閾値未満）は Step 6 の対話レビューに進む。
 
+### Step 5.5: セマンティック検証の2相（claude -p なし、[ADR-037] Phase 1d-i）
+
+`reflect.py` の `validate_corrections` / `detect_contradictions` は [ADR-037] で claude -p を全廃し
+**決定論フォールバック**（全件 is_learning=True / 矛盾なし）で完走する。LLM 品質の意味検証は
+ここで assistant がファイルベース2相（emit→インライン→ingest）で回復する。`--skip-semantic` の場合は本ステップを丸ごと省略する。
+
+**Phase A（検証リクエスト生成 — claude -p なし）:** Step 2 で読んだ出力 JSON の `corrections` 配列を渡す。
+
+```python
+import os, sys, json
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+from semantic_detector import (
+    emit_validation_requests, ingest_validation_results,
+    emit_contradiction_request, ingest_contradictions,
+)
+corrections = OUTPUT_JSON["corrections"]  # reflect.py 出力をそのまま
+v_emit = emit_validation_requests(corrections)
+c_emit = emit_contradiction_request(corrections)
+for r in v_emit["requests"] + c_emit["requests"]:
+    print(r["id"], "\n", r["prompt"], "\n---")  # Phase B でこの prompt にインライン回答（subscription 課金）
+```
+
+**Phase B→C（インライン判定 → 回収 → 反映）:** `requests` が非空なら各 prompt を読み、
+JSON（is_learning 配列 / 矛盾ペア配列）をインラインで決定し（claude -p を呼ばない）、
+`responses = {request_id: 生テキスト}` を組んで再 emit（決定論・冪等）して ingest する:
+
+```python
+v_emit = emit_validation_requests(corrections)   # 同一結果（決定論）
+c_emit = emit_contradiction_request(corrections)
+v_results = ingest_validation_results(corrections, v_emit["requests"], responses)
+contradictions = ingest_contradictions(c_emit["requests"], responses)
+```
+
+- `v_results[i]["is_learning"] is False` の correction は「学習対象でない（質問/タスク依頼/雑談）」と表示し、自動スキップを提案する
+- `contradictions`（`{"pair":[i,j],"reason":...}`）があれば「修正 i と j が矛盾」と警告し、どちらを採るかユーザーに確認する
+- requests が空（corrections なし / 矛盾は2件未満）なら本ステップはスキップ
+
 ### Step 6: 各 correction を対話レビュー
 
 #### importance_score フィルタ（Mem-π）

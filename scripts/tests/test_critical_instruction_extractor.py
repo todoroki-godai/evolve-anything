@@ -1,13 +1,18 @@
 """critical_instruction_extractor のテスト。
 
-extract_critical_lines / rephrase_to_calm / detect_instruction_violation の
-単体テスト18本。TDD First — 実装前にテストを書く。
+[ADR-037] Phase 1d-i: subprocess / LLM mock を全廃し、2相 API と決定論経路でカバー。
+
+テスト構成:
+- extract_critical_lines: 5パス（変更なし）
+- rephrase_to_calm: LLM-free（常に reject）3パス
+- emit_rephrase_request / ingest_rephrase: 2相 API 6パス
+- detect_instruction_violation: LLM-free 6パス
+- emit_violation_judge_requests / ingest_violation_judges: 2相 API 7パス
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
@@ -26,7 +31,11 @@ from critical_instruction_extractor import (
     CriticalInstruction,
     Violation,
     detect_instruction_violation,
+    emit_rephrase_request,
+    emit_violation_judge_requests,
     extract_critical_lines,
+    ingest_rephrase,
+    ingest_violation_judges,
     rephrase_to_calm,
 )
 
@@ -104,84 +113,116 @@ Regular instructions only.
         assert "en" in langs or "ja" in langs
 
 
-# ── rephrase_to_calm ────────────────────────────────────
+# ── rephrase_to_calm (LLM-free) ────────────────────────
 
 
 class TestRephraseToCalm:
-    """rephrase_to_calm の5パス。"""
+    """rephrase_to_calm: LLM-free 化。常に (instruction, 0.0, "reject") を返す。"""
 
-    @mock.patch("critical_instruction_extractor.subprocess.run")
-    def test_auto_adopt_high_confidence(self, mock_run):
-        """confidence >= 0.80 → 自動採用。"""
-        mock_run.return_value = mock.Mock(
-            returncode=0,
-            stdout='{"rephrased": "古い項目は削除ではなく移動する", "confidence": 0.90}',
-        )
+    def test_always_returns_reject(self):
+        """rephrase_to_calm は常に reject を返す（LLM-free フォールバック）。"""
         text, confidence, action = rephrase_to_calm(
             "You MUST NOT delete old items", language="en"
         )
+        assert action == "reject"
+        assert confidence == 0.0
+        assert text == "You MUST NOT delete old items"
+
+    def test_returns_original_instruction_ja(self):
+        """日本語の指示でも元の指示をそのまま返す。"""
+        instruction = "禁止: 削除してはいけない"
+        text, confidence, action = rephrase_to_calm(instruction, language="ja")
+        assert action == "reject"
+        assert text == instruction
+        assert confidence == 0.0
+
+    def test_signature_preserved(self):
+        """シグネチャ（language キーワード引数）が維持されている。"""
+        text, confidence, action = rephrase_to_calm("NEVER skip tests")
+        assert isinstance(text, str)
+        assert isinstance(confidence, float)
+        assert isinstance(action, str)
+
+
+# ── emit_rephrase_request / ingest_rephrase ────────────
+
+
+class TestEmitIngestRephrase:
+    """emit_rephrase_request / ingest_rephrase の2相 API テスト。"""
+
+    def test_emit_returns_single_request(self):
+        """emit_rephrase_request は id="rephrase" の1件リクエストを返す。"""
+        result = emit_rephrase_request("You MUST NOT delete items", language="en")
+        assert "requests" in result
+        assert len(result["requests"]) == 1
+        req = result["requests"][0]
+        assert req["id"] == "rephrase"
+        assert "prompt" in req
+        assert "meta" in req
+        assert req["meta"]["instruction"] == "You MUST NOT delete items"
+        assert req["meta"]["language"] == "en"
+
+    def test_emit_prompt_contains_instruction(self):
+        """emit のプロンプトに元の指示が含まれる。"""
+        instruction = "NEVER skip the tests"
+        result = emit_rephrase_request(instruction)
+        prompt = result["requests"][0]["prompt"]
+        assert instruction in prompt
+
+    def test_ingest_auto_high_confidence(self):
+        """confidence >= 0.80 → auto。"""
+        out = emit_rephrase_request("You MUST check output")
+        requests = out["requests"]
+        responses = {"rephrase": '{"rephrased": "Please check output", "confidence": 0.90}'}
+        text, confidence, action = ingest_rephrase("You MUST check output", requests, responses)
+        assert action == "auto"
         assert confidence >= REPHRASE_CONFIDENCE_MIN
-        assert action == "auto"
-        assert len(text) > 0
+        assert text == "Please check output"
 
-    @mock.patch("critical_instruction_extractor.subprocess.run")
-    def test_human_gate_medium_confidence(self, mock_run):
-        """confidence 0.60-0.80 → 人間確認ゲート。"""
-        mock_run.return_value = mock.Mock(
-            returncode=0,
-            stdout='{"rephrased": "items should be moved", "confidence": 0.70}',
-        )
-        text, confidence, action = rephrase_to_calm(
-            "NEVER delete items", language="en"
-        )
-        assert REPHRASE_HUMAN_REVIEW_MIN <= confidence < REPHRASE_CONFIDENCE_MIN
+    def test_ingest_human_review_medium_confidence(self):
+        """confidence 0.60-0.80 → human_review。"""
+        out = emit_rephrase_request("NEVER delete items")
+        requests = out["requests"]
+        responses = {"rephrase": '{"rephrased": "items should not be deleted", "confidence": 0.70}'}
+        text, confidence, action = ingest_rephrase("NEVER delete items", requests, responses)
         assert action == "human_review"
+        assert REPHRASE_HUMAN_REVIEW_MIN <= confidence < REPHRASE_CONFIDENCE_MIN
 
-    @mock.patch("critical_instruction_extractor.subprocess.run")
-    def test_reject_low_confidence(self, mock_run):
-        """confidence < 0.60 → リフレーズ不採用、元の指示を使用。"""
-        mock_run.return_value = mock.Mock(
-            returncode=0,
-            stdout='{"rephrased": "something wrong", "confidence": 0.40}',
-        )
-        text, confidence, action = rephrase_to_calm(
-            "You MUST check output", language="en"
-        )
+    def test_ingest_reject_low_confidence(self):
+        """confidence < 0.60 → reject、元の指示を返す。"""
+        instruction = "You MUST check output"
+        out = emit_rephrase_request(instruction)
+        requests = out["requests"]
+        responses = {"rephrase": '{"rephrased": "something wrong", "confidence": 0.40}'}
+        text, confidence, action = ingest_rephrase(instruction, requests, responses)
         assert action == "reject"
-        assert text == "You MUST check output"  # 元の指示がそのまま
+        assert text == instruction
 
-    @mock.patch("critical_instruction_extractor.subprocess.run")
-    def test_timeout_fallback(self, mock_run):
-        """LLM タイムアウト → 元の指示を使用。"""
-        import subprocess as sp
-
-        mock_run.side_effect = sp.TimeoutExpired(cmd="claude", timeout=30)
-        text, confidence, action = rephrase_to_calm(
-            "禁止: 削除してはいけない", language="ja"
-        )
+    def test_ingest_parse_failure_returns_reject(self):
+        """パース失敗 → reject、元の指示を返す。"""
+        instruction = "禁止: 削除してはいけない"
+        out = emit_rephrase_request(instruction, language="ja")
+        requests = out["requests"]
+        responses = {"rephrase": "not valid json at all"}
+        text, confidence, action = ingest_rephrase(instruction, requests, responses)
         assert action == "reject"
-        assert text == "禁止: 削除してはいけない"
+        assert text == instruction
 
-    @mock.patch("critical_instruction_extractor.subprocess.run")
-    def test_language_preservation(self, mock_run):
-        """日本語の指示は日本語でリフレーズされる。"""
-        mock_run.return_value = mock.Mock(
-            returncode=0,
-            stdout='{"rephrased": "古い項目は CHANGELOG に移動する", "confidence": 0.85}',
-        )
-        text, confidence, action = rephrase_to_calm(
-            "古い項目は絶対に削除してはいけない", language="ja"
-        )
-        assert action == "auto"
-        # 日本語が含まれていることを確認
-        assert any(ord(c) > 0x3000 for c in text)
+    def test_ingest_missing_response_returns_reject(self):
+        """response が欠損（空 dict）→ reject。"""
+        instruction = "You MUST verify"
+        out = emit_rephrase_request(instruction)
+        requests = out["requests"]
+        text, confidence, action = ingest_rephrase(instruction, requests, {})
+        assert action == "reject"
+        assert text == instruction
 
 
-# ── detect_instruction_violation ────────────────────────
+# ── detect_instruction_violation (LLM-free) ────────────
 
 
 class TestDetectInstructionViolation:
-    """detect_instruction_violation の8パス。"""
+    """detect_instruction_violation: LLM-free の6パス。"""
 
     def test_opposing_verb_match(self):
         """対立動詞検出 (move vs delete) → 確定違反。"""
@@ -203,72 +244,30 @@ class TestDetectInstructionViolation:
         assert isinstance(result, Violation)
         assert result.match_type == "opposing_verb"
 
-    @mock.patch("critical_instruction_extractor._call_llm_judge")
-    def test_synonym_verb_no_violation(self, mock_judge):
-        """同義動詞 (move vs transfer) → LLM が非違反と判定すれば None。"""
-        mock_judge.return_value = {"is_violation": False, "confidence": 0.3, "reason": "同義語"}
+    def test_synonym_verb_no_false_positive(self):
+        """同義動詞 (create vs generate) → 対立動詞誤検出なし。keyword_overlap も低ければ None。"""
         correction = {
-            "message": "transfer ではなく move にして",
+            "message": "generate ではなく create にして",
             "correction_type": "stop",
-            "last_skill": "commit",
+            "last_skill": "scaffold",
         }
         instructions = [
             CriticalInstruction(
-                original="You must move items",
-                rephrased="Items should be moved",
+                original="You must create the file first",
+                rephrased="Create the file first",
                 language="en",
-                source_line=5,
+                source_line=3,
             )
         ]
+        # create と generate は同義なので opposing_verb では検出されない
+        # keyword overlap も低いので None
         result = detect_instruction_violation(correction, instructions)
-        assert result is None
+        # opposing_verb は出ないことを確認（None or keyword_overlap のみ）
+        if result is not None:
+            assert result.match_type != "opposing_verb"
 
-    @mock.patch("critical_instruction_extractor._call_llm_judge")
-    def test_llm_judge_violation(self, mock_judge):
-        """LLM Judge → 違反判定。"""
-        mock_judge.return_value = {"is_violation": True, "confidence": 0.85, "reason": "指示に反している"}
-        correction = {
-            "message": "CHANGELOG を上書きしないで",
-            "correction_type": "no",
-            "last_skill": "commit",
-        }
-        instructions = [
-            CriticalInstruction(
-                original="CHANGELOG への追記のみ行うこと",
-                rephrased="CHANGELOG は追記のみ",
-                language="ja",
-                source_line=15,
-            )
-        ]
-        result = detect_instruction_violation(correction, instructions)
-        assert result is not None
-        assert result.match_type == "llm_judge"
-
-    @mock.patch("critical_instruction_extractor._call_llm_judge")
-    def test_llm_judge_no_violation(self, mock_judge):
-        """LLM Judge → 非違反判定。"""
-        mock_judge.return_value = {"is_violation": False, "confidence": 0.80, "reason": "関連なし"}
-        correction = {
-            "message": "フォーマットを変えて",
-            "correction_type": "stop",
-            "last_skill": "commit",
-        }
-        instructions = [
-            CriticalInstruction(
-                original="You must move items to CHANGELOG",
-                rephrased="Items should be moved to CHANGELOG",
-                language="en",
-                source_line=5,
-            )
-        ]
-        result = detect_instruction_violation(correction, instructions)
-        assert result is None
-
-    @mock.patch("critical_instruction_extractor._call_llm_judge")
-    def test_llm_judge_failure_keyword_fallback_flagged(self, mock_judge):
-        """LLM Judge 失敗 + keyword overlap >= 3 → 「要確認」フラグ。"""
-        mock_judge.return_value = None  # 失敗
-        # 対立動詞を含まないが、keyword overlap が十分な correction
+    def test_keyword_overlap_flagged(self):
+        """keyword overlap >= 3 → 「要確認」フラグ。"""
         correction = {
             "message": "CHANGELOG file output items format wrong",
             "correction_type": "stop",
@@ -283,15 +282,12 @@ class TestDetectInstructionViolation:
             )
         ]
         result = detect_instruction_violation(correction, instructions)
-        # keyword overlap が十分なので「要確認」
         assert result is not None
         assert result.match_type == "keyword_overlap"
         assert result.needs_review is True
 
-    @mock.patch("critical_instruction_extractor._call_llm_judge")
-    def test_llm_judge_failure_low_keyword_no_violation(self, mock_judge):
-        """LLM Judge 失敗 + keyword overlap < 3 → 非違反。"""
-        mock_judge.return_value = None  # 失敗
+    def test_low_keyword_overlap_no_violation(self):
+        """keyword overlap < 3 → 非違反。"""
         correction = {
             "message": "もっと丁寧にして",
             "correction_type": "stop",
@@ -310,7 +306,6 @@ class TestDetectInstructionViolation:
 
     def test_opposing_verb_bidirectional(self):
         """対立動詞ペアは双方向で検出される。"""
-        # instruction に delete、correction に move が言及
         correction = {
             "message": "移動して、削除しないで",
             "correction_type": "stop",
@@ -324,29 +319,112 @@ class TestDetectInstructionViolation:
                 source_line=20,
             )
         ]
-        # instruction は「削除」、correction は「移動して削除しないで」→ 矛盾検出
         result = detect_instruction_violation(correction, instructions)
         assert result is not None
         assert result.match_type == "opposing_verb"
 
-    @mock.patch("critical_instruction_extractor._call_llm_judge")
-    def test_false_positive_prevention_with_synonyms(self, mock_judge):
-        """同義動詞ペアが false positive を防ぐ。"""
-        mock_judge.return_value = {"is_violation": False, "confidence": 0.80, "reason": "同義"}
-        correction = {
-            "message": "generate ではなく create にして",
-            "correction_type": "stop",
-            "last_skill": "scaffold",
-        }
+    def test_empty_inputs_return_none(self):
+        """message 空 or instructions 空 → None。"""
+        assert detect_instruction_violation({"message": ""}, [
+            CriticalInstruction(original="MUST do X", language="en", source_line=1)
+        ]) is None
+        assert detect_instruction_violation({"message": "some text"}, []) is None
+
+
+# ── emit_violation_judge_requests / ingest_violation_judges ──
+
+
+class TestEmitIngestViolationJudges:
+    """2相 API テスト: emit_violation_judge_requests / ingest_violation_judges。"""
+
+    def _make_correction(self, message: str) -> dict:
+        return {"message": message, "correction_type": "stop", "last_skill": "commit"}
+
+    def _make_instr(self, original: str) -> CriticalInstruction:
+        return CriticalInstruction(original=original, language="en", source_line=1)
+
+    def test_emit_empty_message_returns_empty(self):
+        """message 空 → {"requests": []}。"""
+        result = emit_violation_judge_requests({"message": ""}, [
+            self._make_instr("You must move items")
+        ])
+        assert result == {"requests": []}
+
+    def test_emit_empty_instructions_returns_empty(self):
+        """instructions 空 → {"requests": []}。"""
+        result = emit_violation_judge_requests(self._make_correction("delete it"), [])
+        assert result == {"requests": []}
+
+    def test_emit_creates_judge_requests_per_instruction(self):
+        """instructions 2件 → judge:0, judge:1 の2リクエスト。"""
+        correction = self._make_correction("delete the file")
         instructions = [
-            CriticalInstruction(
-                original="You must create the file first",
-                rephrased="Create the file first",
-                language="en",
-                source_line=3,
-            )
+            self._make_instr("You must move the file"),
+            self._make_instr("Always keep a backup"),
         ]
-        # create と generate は同義なので対立動詞では検出されない
-        # LLM Judge も非違反と判定
-        result = detect_instruction_violation(correction, instructions)
+        result = emit_violation_judge_requests(correction, instructions)
+        ids = [r["id"] for r in result["requests"]]
+        assert "judge:0" in ids
+        assert "judge:1" in ids
+
+    def test_ingest_llm_judge_violation(self):
+        """LLM Judge が is_violation=true → Violation(llm_judge) を返す。"""
+        correction = self._make_correction("CHANGELOG を上書きしないで")
+        instructions = [
+            self._make_instr("CHANGELOG への追記のみ行うこと"),
+        ]
+        out = emit_violation_judge_requests(correction, instructions)
+        requests = out["requests"]
+        responses = {
+            "judge:0": '{"is_violation": true, "confidence": 0.85, "reason": "指示に反している"}'
+        }
+        result = ingest_violation_judges(correction, instructions, requests, responses)
+        assert result is not None
+        assert result.match_type == "llm_judge"
+        assert result.confidence == 0.85
+        assert result.reason == "指示に反している"
+
+    def test_ingest_llm_judge_no_violation_returns_none(self):
+        """LLM Judge が is_violation=false → None。"""
+        correction = self._make_correction("フォーマットを変えて")
+        instructions = [
+            self._make_instr("You must move items to CHANGELOG"),
+        ]
+        out = emit_violation_judge_requests(correction, instructions)
+        requests = out["requests"]
+        responses = {
+            "judge:0": '{"is_violation": false, "confidence": 0.80, "reason": "関連なし"}'
+        }
+        result = ingest_violation_judges(correction, instructions, requests, responses)
         assert result is None
+
+    def test_ingest_missing_response_falls_back_to_keyword_overlap(self):
+        """judge response 欠損 → keyword_overlap fallback。"""
+        correction = self._make_correction("CHANGELOG file output items format wrong")
+        instructions = [
+            self._make_instr("output items into CHANGELOG file correctly"),
+        ]
+        out = emit_violation_judge_requests(correction, instructions)
+        requests = out["requests"]
+        # 空レスポンス → fallback
+        result = ingest_violation_judges(correction, instructions, requests, {})
+        assert result is not None
+        assert result.match_type == "keyword_overlap"
+        assert result.needs_review is True
+
+    def test_ingest_stage1_opposing_takes_priority_over_llm(self):
+        """Stage1 対立動詞が LLM Judge より優先される。"""
+        correction = self._make_correction("削除じゃなくて移動して")
+        instructions = [
+            self._make_instr("古い項目は CHANGELOG.md へ移動すること"),
+        ]
+        out = emit_violation_judge_requests(correction, instructions)
+        requests = out["requests"]
+        # LLM が「非違反」と返しても Stage1 opposing が先に返るはず
+        responses = {
+            "judge:0": '{"is_violation": false, "confidence": 0.90, "reason": "LLM says no"}'
+        }
+        result = ingest_violation_judges(correction, instructions, requests, responses)
+        # Stage1 で opposing_verb を検出 → LLM 応答より優先
+        assert result is not None
+        assert result.match_type == "opposing_verb"

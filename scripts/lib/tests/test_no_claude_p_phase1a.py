@@ -27,12 +27,19 @@ CONVERTED_MODULES = [
     # Phase 1c（evolve 系: skill_evolve の judgment 採点 / テンプレカスタマイズ）
     "scripts/lib/skill_evolve/llm_scoring.py",
     "scripts/lib/skill_evolve/proposal.py",
+    # Phase 1d-i（reflect 検出系: corrections の意味検証 / 指示違反判定）
+    "scripts/lib/semantic_detector.py",
+    "scripts/lib/critical_instruction_extractor.py",
 ]
 
-# まだ claude -p を残す既知の経路（1c 以降で順次 CONVERTED へ移す。silent 取りこぼし防止）。
-# score_noise._run_claude_prompt は bin/rl-prompt-compare 後方互換のため DEPRECATED 残置。
+# まだ claude -p を残す既知の経路（順次 CONVERTED へ移す。silent 取りこぼし防止）。
+# 不変条件: claude -p を呼ぶ全モジュールは CONVERTED_MODULES か KNOWN_REMAINING の
+# どちらかに必ず載る（台帳を網羅的に保つ）。
 KNOWN_REMAINING = [
-    "scripts/lib/score_noise.py",            # _run_claude_prompt（bin/rl-prompt-compare 用）
+    "scripts/lib/score_noise.py",                   # _run_claude_prompt（bin/rl-prompt-compare 後方互換、DEPRECATED）
+    "scripts/lib/remediation/fixers_rules.py",      # line_limit 修正の LLM 圧縮/分離（Phase 1d-ii で変換予定）
+    "scripts/lib/remediation/fixers_quality.py",    # split 候補修正の LLM 生成（Phase 1d-ii で変換予定）
+    "hooks/auto_memory_runner.py",                  # Stop hook の memory 生成（Phase 2 で evolve 吸収予定）
 ]
 
 _SUBPROCESS_CALLERS = {"run", "Popen", "call", "check_output", "check_call"}
