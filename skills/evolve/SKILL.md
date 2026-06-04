@@ -203,6 +203,26 @@ issue があれば Compile ステージの remediation で対処する。
 evolve.py の出力に含まれる `skill_evolve` フェーズ結果を確認する。
 `skill_evolve_assessment()` は全カスタムスキルの自己進化適性を5項目（各1-3点、15点満点）でスコアリングする。
 
+[ADR-037] Phase 1c により判断複雑さ（judgment_complexity）軸の claude -p を全廃した。`compute_llm_scores`
+は LLM-free（cache-read + 静的フォールバック）になり、evolve バッチはキャッシュ値で完走する。LLM 品質の
+判断複雑さで採点したい場合のみ、assessment の前にファイルベース2相で cache を最新化する（任意・cache が
+新しければ 0 コール）:
+
+```python
+import os, sys
+sys.path.insert(0, os.path.join(os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd(), "scripts", "lib"))
+from pathlib import Path
+from skill_evolve import emit_judgment_requests, ingest_judgment_scores
+proj = Path.cwd()
+skill_dirs = [...]  # 評価対象スキルの SKILL.md 親ディレクトリ群
+emit = emit_judgment_requests(proj, skill_dirs)  # static / 欠落のみ emit
+# emit["requests"] の各 prompt を Phase B でインライン採点（claude -p なし＝subscription 課金）し、
+# {skill_name: "<1-3>"} を作って:
+ingest_judgment_scores(proj, emit["requests"], responses)
+```
+
+> 件数が多い場合は batch_guard と同じく LLM_BATCH_GUARD ルールに従い、件数・推定トークンを先に提示して承認を取る。
+
 **batch_guard_trigger 検出（優先処理）**:  
 `result.phases.skill_evolve.batch_guard_trigger` が `null` でない場合、LLM 評価対象スキルが多すぎるため  
 以下のインタラクティブフローを実行してから evolve を再実行する:
@@ -216,7 +236,7 @@ evolve.py の出力に含まれる `skill_evolve` フェーズ結果を確認す
 3. 永続スキップを選んだスキルがある場合（`_plugin_root` は `~/.claude/rl-anything` または `plugin_root.py` で解決できる実際のパス）:
    ```python
    python3 -c "
-   import sys; sys.path.insert(0, str(__import__('plugin_root').PLUGIN_ROOT / 'scripts' / 'lib'))
+   import os, sys; sys.path.insert(0, os.path.join(os.environ.get('CLAUDE_PLUGIN_ROOT') or os.getcwd(), 'scripts', 'lib'))
    from skill_evolve.denylist import add_to_denylist
    add_to_denylist(['skill-a', 'skill-b'])
    print('denylist に追加しました')

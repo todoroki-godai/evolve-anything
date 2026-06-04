@@ -28,13 +28,34 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 
 ### 2. 適性判定を実行する
 
+判断複雑さ（judgment_complexity）軸は [ADR-037] により claude -p を全廃し、ファイルベース2相
+（emit → assistant inline → ingest）で採点する。`compute_llm_scores` は LLM-free なので、
+LLM 品質の採点が欲しい場合は assess の前に judgment refresh を回す（emit が空なら cache 最新＝スキップ）。
+
+**Phase A（判断複雑さ採点リクエスト生成 — claude -p なし）:**
+
 ```python
-import os, sys
+import os, sys, json
+from pathlib import Path
 _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
-from skill_evolve import assess_single_skill
+from skill_evolve import emit_judgment_requests
+proj = Path(skill_dir).parent
+emit = emit_judgment_requests(proj, [skill_dir])
+if emit["requests"]:
+    print(emit["requests"][0]["prompt"])  # Phase B でこの prompt にインライン回答（subscription 課金）
+```
 
-result = assess_single_skill(skill_name, skill_dir)
+**Phase B→C（インライン採点 → 回収 → 適性判定）:** `requests` が非空なら上の prompt を読み、
+1-3 の数字をインラインで決定し（claude -p を呼ばない）、再 emit（決定論・冪等）して ingest する:
+
+```python
+from skill_evolve import emit_judgment_requests, ingest_judgment_scores, assess_single_skill
+proj = Path(skill_dir).parent
+emit = emit_judgment_requests(proj, [skill_dir])  # 同一結果（決定論）
+if emit["requests"]:
+    ingest_judgment_scores(proj, emit["requests"], {skill_name: "<assistant が決めた 1-3>"})
+result = assess_single_skill(skill_name, skill_dir)  # 更新後 cache を読む
 ```
 
 ### 3. 判定結果を表示する
@@ -78,16 +99,38 @@ result = assess_single_skill(skill_name, skill_dir)
 
 ### 5. パターン組み込みの承認と実行
 
-```python
-from skill_evolve import evolve_skill_proposal, apply_evolve_proposal
+テンプレートカスタマイズも [ADR-037] により claude -p を全廃し、ファイルベース2相で行う。
+LLM カスタマイズ不要なら `evolve_skill_proposal`（決定論・テンプレそのまま）でも良いが、
+スキル文脈に合わせたい場合は次の2相を使う。
 
-proposal = evolve_skill_proposal(skill_name, skill_dir)
+**Phase A（カスタマイズ・リクエスト生成 — claude -p なし）:**
+
+```python
+from skill_evolve import emit_customize_request
+emit = emit_customize_request(skill_name, skill_dir)
+if emit.get("requests"):
+    print(emit["requests"][0]["prompt"])  # Phase B でこの prompt にインライン回答
+```
+
+**Phase B→C（インライン整形 → proposal 組み立て → 承認 → 適用）:** `requests` が非空なら
+上の prompt を読み、テンプレ構造（見出し・テーブル）を維持したカスタマイズ済みマークダウンを
+インライン生成し（claude -p を呼ばない）、再 emit（決定論・冪等）して ingest する:
+
+```python
+from skill_evolve import emit_customize_request, ingest_customized_proposal, apply_evolve_proposal
+emit = emit_customize_request(skill_name, skill_dir)  # 同一結果（決定論）
+proposal = ingest_customized_proposal(
+    skill_name, skill_dir, emit["requests"],
+    {skill_name: "<assistant が生成したカスタマイズ済みマークダウン>"},
+)
 # proposal の内容（追加セクション概要）をユーザーに表示
 
-# ユーザーに承認を求める（AskUserQuestion）
-# 承認された場合:
+# ユーザーに承認を求める（AskUserQuestion）。承認された場合のみ:
 result = apply_evolve_proposal(proposal)
 ```
+
+> fence 除去 + diff budget gate（#196, #199）は `ingest_customized_proposal` 内で適用される。
+> 予算超過 / 応答欠損時はテンプレそのままに安全フォールバックする。
 
 承認された場合のみ実行し、結果サマリーを表示:
 - 追加されたセクション一覧

@@ -66,8 +66,9 @@ def _collect_api_surface() -> str:
         "_file_hash", "_load_cache", "_save_cache",
         "_score_execution_frequency", "_score_failure_diversity",
         "_score_output_evaluability", "_count_external_keywords",
-        "_score_external_dependency", "_score_judgment_complexity_llm",
-        "_customize_template", "_find_project_dir",
+        "_score_external_dependency", "_score_judgment_complexity_static",
+        "_parse_judgment_response", "_customize_template",
+        "_parse_customization_response", "_find_project_dir",
         "_plugin_root", "CACHE_FILE", "DATA_DIR",
     ]
     for name in expected_private:

@@ -1,12 +1,17 @@
 """LLM 2軸スコアリング (external_dependency / judgment_complexity)。
 
 Phase 8 / Slice 2 で `skill_evolve.py` から切り出し。
+[ADR-037] Phase 1c: judgment_complexity の claude -p をファイルベース2相へ移行。
+`compute_llm_scores` は LLM-free（cache-read + 決定論フォールバック）になり、
+LLM 採点は `emit_judgment_requests`（Phase A）→ assistant inline（Phase B）→
+`ingest_judgment_scores`（Phase C）で後追い更新する。external_dependency は
+元々静的解析なので常に確定保存し、judgment は source フラグ（"static"|"llm"）で
+refresh 対象を区別する。
 """
 import re
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 
 # 外部依存キーワード（静的解析用）
@@ -38,9 +43,25 @@ def _score_external_dependency(content: str) -> int:
     return 1  # ローカル完結
 
 
-def _score_judgment_complexity_llm(skill_name: str, content: str) -> int:
-    """判断複雑さスコア (1-3)。LLMによる評価。"""
-    prompt = (
+def _score_judgment_complexity_static(content: str) -> int:
+    """判断複雑さスコア (1-3) の決定論フォールバック。条件分岐語の出現数で推定。
+
+    旧 `_score_judgment_complexity_llm` の except 節フォールバックを独立関数化したもの。
+    LLM 採点が無い経路（evolve バッチ・run_loop）はこの値で完走する。
+    """
+    branches = len(re.findall(
+        r"\b(if|else|elif|when|unless|場合|条件|判断)\b", content, re.IGNORECASE
+    ))
+    if branches >= 8:
+        return 3
+    if branches >= 3:
+        return 2
+    return 1
+
+
+def build_judgment_prompt(skill_name: str, content: str) -> str:
+    """判断複雑さ採点の Phase B プロンプトを生成する（決定論）。"""
+    return (
         f"以下のスキル定義の「判断の複雑さ」を1-3で評価してください。\n"
         f"1 = 決定論的（手順が固定、分岐なし）\n"
         f"2 = 数箇所の条件分岐あり\n"
@@ -49,34 +70,49 @@ def _score_judgment_complexity_llm(skill_name: str, content: str) -> int:
         f"内容（先頭2000文字）:\n```\n{content[:2000]}\n```\n\n"
         f"数字のみ（1, 2, 3のいずれか）で回答してください。"
     )
-    try:
-        result = subprocess.run(
-            ["claude", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=30,
+
+
+def _parse_judgment_response(raw: Optional[Any]) -> Optional[int]:
+    """Phase B 応答から判断複雑さ 1-3 を抽出する（[ADR-037] Phase C のパーサ）。
+
+    Phase B の書き手は assistant（非決定論プロデューサ）なので、JSON 文字列だけでなく
+    既に parse 済みの int / dict も寛容に受ける（信頼境界）。抽出不能なら None。
+    bool は数値扱いしない（True/False を 1/0 に化けさせないため）。
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        score = raw
+    elif isinstance(raw, float):
+        score = int(raw)
+    elif isinstance(raw, dict):
+        return _parse_judgment_response(
+            raw.get("judgment_complexity", raw.get("score"))
         )
-        if result.returncode == 0:
-            score = int(result.stdout.strip()[0])
-            if score in (1, 2, 3):
-                return score
-    except (subprocess.TimeoutExpired, ValueError, IndexError, OSError):
-        pass
-    # フォールバック: 条件分岐/if/else の出現数で推定
-    branches = len(re.findall(r"\b(if|else|elif|when|unless|場合|条件|判断)\b", content, re.IGNORECASE))
-    if branches >= 8:
-        return 3
-    if branches >= 3:
-        return 2
-    return 1
+    elif isinstance(raw, str):
+        match = re.search(r"[1-3]", raw)
+        if not match:
+            return None
+        score = int(match.group(0))
+    else:
+        return None
+    return score if score in (1, 2, 3) else None
 
 
 def compute_llm_scores(
     skill_name: str,
     skill_dir: Path,
 ) -> Dict[str, Any]:
-    """LLM 2軸のスコアを計算する（キャッシュ付き）。
+    """LLM 2軸のスコアを計算する（キャッシュ付き・LLM-free）。
+
+    cache-hit（hash 一致）はキャッシュ値を返す。cache-miss は external を静的算出し、
+    judgment は決定論フォールバック（`judgment_source="static"`）で確定保存する。
+    LLM 品質の judgment は `emit_judgment_requests`→`ingest_judgment_scores` の
+    2相が後追いで上書きする（[ADR-037] Phase 1c）。
 
     Returns:
-        {"external_dependency": int, "judgment_complexity": int, "cached": bool}
+        {"external_dependency": int, "judgment_complexity": int,
+         "cached": bool, "judgment_source": "static"|"llm"}
     """
     # キャッシュヘルパは __init__.py に残存。
     # mock.patch("skill_evolve.CACHE_FILE", ...) 互換のため関数内 lazy import。
@@ -84,7 +120,12 @@ def compute_llm_scores(
 
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.exists():
-        return {"external_dependency": 1, "judgment_complexity": 1, "cached": False}
+        return {
+            "external_dependency": 1,
+            "judgment_complexity": 1,
+            "cached": False,
+            "judgment_source": "static",
+        }
 
     content = skill_md.read_text(encoding="utf-8")
     current_hash = _file_hash(skill_md)
@@ -97,17 +138,19 @@ def compute_llm_scores(
             "external_dependency": cached["external_dependency"],
             "judgment_complexity": cached["judgment_complexity"],
             "cached": True,
+            # 旧キャッシュ（フラグ無し）は "static" 扱い → 次の refresh で LLM 値に昇格
+            "judgment_source": cached.get("judgment_source", "static"),
         }
 
-    # 新規計算
+    # cache-miss: LLM-free で決定論算出（external は静的、judgment はフォールバック）
     ext_score = _score_external_dependency(content)
-    judge_score = _score_judgment_complexity_llm(skill_name, content)
+    judge_score = _score_judgment_complexity_static(content)
 
-    # キャッシュ更新
     cache[skill_name] = {
         "hash": current_hash,
         "external_dependency": ext_score,
         "judgment_complexity": judge_score,
+        "judgment_source": "static",
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     _save_cache(cache)
@@ -116,4 +159,99 @@ def compute_llm_scores(
         "external_dependency": ext_score,
         "judgment_complexity": judge_score,
         "cached": False,
+        "judgment_source": "static",
     }
+
+
+def emit_judgment_requests(
+    project_dir: Path,
+    skill_dirs: List[Path],
+    refresh: bool = False,
+) -> Dict[str, Any]:
+    """Phase A: judgment_complexity を LLM 採点すべきスキルの request を生成する。
+
+    refresh=False: cached judgment が LLM 由来かつ hash 一致のスキルは除外（static / 欠落 /
+    hash 不一致のみ emit）。refresh=True: SKILL.md を持つ全スキルを emit。
+
+    external_dependency は静的確定値を meta に同梱し、ingest が LLM 採点漏れの
+    スキルでもキャッシュ整合を取れるようにする。
+
+    Returns:
+        {"requests": [{"id": skill_name, "prompt": str,
+                       "meta": {"hash": str, "external_dependency": int}}]}
+    """
+    from . import _file_hash, _load_cache
+    from llm_broker import build_requests
+
+    cache = _load_cache()
+    items: List[Dict[str, Any]] = []
+    for skill_dir in skill_dirs:
+        skill_dir = Path(skill_dir)
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            continue
+        skill_name = skill_dir.name
+        current_hash = _file_hash(skill_md)
+        cached = cache.get(skill_name, {})
+        is_fresh_llm = (
+            cached.get("hash") == current_hash
+            and cached.get("judgment_source") == "llm"
+        )
+        if not refresh and is_fresh_llm:
+            continue
+        content = skill_md.read_text(encoding="utf-8")
+        items.append({
+            "id": skill_name,
+            "_content": content,
+            "hash": current_hash,
+            "external_dependency": _score_external_dependency(content),
+        })
+
+    requests = build_requests(
+        items, lambda it: build_judgment_prompt(it["id"], it["_content"])
+    )
+    for r in requests:
+        r["meta"].pop("_content", None)
+    return {"requests": requests}
+
+
+def ingest_judgment_scores(
+    project_dir: Path,
+    requests: List[Dict[str, Any]],
+    responses: Dict[str, Any],
+) -> Dict[str, int]:
+    """Phase C: Phase B 応答を回収し judgment_complexity をキャッシュ更新する。
+
+    requests を単一ソースに全 id を走査（llm_broker.parse_responses）。抽出不能（None）の
+    スキルは static のまま据え置き、上書きしない。LLM 採点できたものは
+    `judgment_source="llm"` で確定保存する。
+
+    Returns:
+        {skill_name: judgment_complexity}（LLM 採点に成功したスキルのみ）
+    """
+    from . import _load_cache, _save_cache
+    from llm_broker import parse_responses
+
+    parsed = parse_responses(requests, responses, parser=_parse_judgment_response)
+    cache = _load_cache()
+    result: Dict[str, int] = {}
+    for req in requests:
+        skill_name = req["id"]
+        score = parsed.get(skill_name)
+        if score is None:
+            continue  # 抽出不能 → static のまま据え置き
+        meta = req.get("meta", {})
+        entry = cache.setdefault(skill_name, {})
+        entry["judgment_complexity"] = score
+        entry["judgment_source"] = "llm"
+        if meta.get("hash"):
+            entry["hash"] = meta["hash"]
+        # external_dependency が未保存なら emit が同梱した静的値で補完
+        if "external_dependency" not in entry:
+            entry["external_dependency"] = meta.get("external_dependency", 1)
+        entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        result[skill_name] = score
+
+    if result:
+        _save_cache(cache)
+    return result

@@ -24,14 +24,15 @@ CONVERTED_MODULES = [
     # Phase 1b（scoring 系: constitutional / principles）
     "scripts/rl/fitness/constitutional.py",
     "scripts/rl/fitness/principles.py",
+    # Phase 1c（evolve 系: skill_evolve の judgment 採点 / テンプレカスタマイズ）
+    "scripts/lib/skill_evolve/llm_scoring.py",
+    "scripts/lib/skill_evolve/proposal.py",
 ]
 
-# まだ claude -p を残す既知の経路（1b 以降で順次 CONVERTED へ移す。silent 取りこぼし防止）。
+# まだ claude -p を残す既知の経路（1c 以降で順次 CONVERTED へ移す。silent 取りこぼし防止）。
 # score_noise._run_claude_prompt は bin/rl-prompt-compare 後方互換のため DEPRECATED 残置。
 KNOWN_REMAINING = [
     "scripts/lib/score_noise.py",            # _run_claude_prompt（bin/rl-prompt-compare 用）
-    "scripts/lib/skill_evolve/llm_scoring.py",
-    "scripts/lib/skill_evolve/proposal.py",
 ]
 
 _SUBPROCESS_CALLERS = {"run", "Popen", "call", "check_output", "check_call"}

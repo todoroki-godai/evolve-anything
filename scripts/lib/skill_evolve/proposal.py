@@ -5,17 +5,23 @@ Phase 8 / Slice 4 で `skill_evolve.py` から切り出し。
 `from . import X` 関数本体内 lazy lookup で参照
 （`mock.patch("skill_evolve._plugin_root", ...)` /
  `mock.patch("skill_evolve._customize_template")` 経路の互換維持）。
+
+[ADR-037] Phase 1c: テンプレートカスタマイズの claude -p をファイルベース2相へ移行。
+`evolve_skill_proposal` は LLM-free（テンプレそのままのフォールバック）になり、
+LLM カスタマイズは `emit_customize_request`（Phase A）→ assistant inline（Phase B）→
+`ingest_customized_proposal`（Phase C）で行う。fence 除去 + diff budget gate は
+`_parse_customization_response` に集約し、Phase C 側で適用する。
 """
 import difflib
 import logging
 import re
-import subprocess
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LR_BUDGET = 30
+_REQUIRED_SECTIONS = ["Pre-flight", "Failure-triggered Learning"]
 
 
 def get_skill_lr_budget() -> int:
@@ -48,65 +54,119 @@ def get_rejected_stats(skill_name: str) -> Dict[str, Any]:
     return _get_rejected_stats(skill_name)
 
 
-def evolve_skill_proposal(
+def build_customize_prompt(
     skill_name: str,
-    skill_dir: Path,
-) -> Dict[str, Any]:
-    """適性ありスキルに自己進化パターンを組み込む変換提案を生成する。
+    skill_content: str,
+    template: str,
+) -> str:
+    """テンプレートカスタマイズの Phase B プロンプトを生成する（決定論）。"""
+    return (
+        f"以下のテンプレートを、スキル「{skill_name}」の文脈に合わせてカスタマイズしてください。\n"
+        f"テンプレートの構造（見出し、テーブル）は維持し、具体的な表現をスキルに合わせてください。\n"
+        f"出力はカスタマイズ後のマークダウンのみ（説明不要）。\n\n"
+        f"### スキル内容（先頭2000文字）:\n```\n{skill_content[:2000]}\n```\n\n"
+        f"### テンプレート:\n```\n{template}\n```"
+    )
+
+
+def _parse_customization_response(
+    raw: Optional[Any],
+    template: str,
+    budget: Optional[int] = None,
+) -> str:
+    """Phase B 応答から customized セクションを抽出する（[ADR-037] Phase C のパーサ）。
+
+    Phase B の書き手は assistant（非決定論プロデューサ）なので str を寛容に受け、
+    コードフェンスを除去する。diff budget（#196, #199）を超える / 抽出不能なら
+    template フォールバックを返す。決定論・LLM 非依存。
+    """
+    if raw is None:
+        return template
+    output = raw if isinstance(raw, str) else str(raw)
+    output = output.strip()
+    if not output:
+        return template
+
+    # コードブロック除去
+    if output.startswith("```") and output.endswith("```"):
+        lines = output.split("\n")
+        output = "\n".join(lines[1:-1])
+
+    # difflib bounded edit gate (#196, #199)
+    if budget is None:
+        budget = get_skill_lr_budget()
+    diff_lines = count_diff_lines(template, output)
+    if diff_lines > budget:
+        logger.warning(
+            "[evolve-skill] diff %d lines > budget %d, fallback to template",
+            diff_lines, budget,
+        )
+        return template
+
+    return output
+
+
+def _customize_template(
+    skill_name: str,
+    skill_content: str,
+    template: str,
+) -> str:
+    """テンプレートカスタマイズの LLM-free フォールバック（テンプレそのまま）。
+
+    [ADR-037] Phase 1c で claude -p を除去。LLM カスタマイズは
+    `emit_customize_request`→`ingest_customized_proposal` の2相に移管した。
+    決定論経路（run_loop / fixers_rules）はこのフォールバックで完走する。
+    """
+    return template
+
+
+def _load_templates(plugin_root: Path) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """自己進化セクション + pitfalls テンプレートを読む。
 
     Returns:
-        {"skill_name": str, "sections_to_add": str, "pitfalls_template": str,
-         "skill_md_path": str, "pitfalls_path": str, "error": str|None}
-        rejected pre-flight 発動時: {"status": "skipped", "reason": str}
+        (sections_content, pitfalls_content, error)
+        テンプレ不在時は (None, None, error メッセージ)
     """
-    # rejected pre-flight: 過去に rejected_rate > 30% なら skip (#200)
-    stats = get_rejected_stats(skill_name)
-    rejected_rate = stats.get("rejected_rate", 0.0)
-    if rejected_rate > 0.30:
-        return {
-            "status": "skipped",
-            "reason": f"rejected_rate={rejected_rate:.0%} > 30%",
-        }
-
-    from . import _plugin_root, _customize_template  # 関数内 lazy lookup
-    templates_dir = _plugin_root / "skills" / "evolve" / "templates"
+    templates_dir = plugin_root / "skills" / "evolve" / "templates"
     sections_template = templates_dir / "self-evolve-sections.md"
     pitfalls_template = templates_dir / "pitfalls.md"
 
-    # テンプレート不在チェック
     missing = []
     if not sections_template.exists():
         missing.append(str(sections_template))
     if not pitfalls_template.exists():
         missing.append(str(pitfalls_template))
     if missing:
-        return {
-            "skill_name": skill_name,
-            "error": f"テンプレートファイルが見つかりません: {', '.join(missing)}",
-        }
+        return None, None, f"テンプレートファイルが見つかりません: {', '.join(missing)}"
 
-    sections_content = sections_template.read_text(encoding="utf-8")
-    pitfalls_content = pitfalls_template.read_text(encoding="utf-8")
-
-    # LLM でスキル文脈にカスタマイズ
-    skill_md = skill_dir / "SKILL.md"
-    skill_content = ""
-    if skill_md.exists():
-        skill_content = skill_md.read_text(encoding="utf-8")
-
-    customized = _customize_template(skill_name, skill_content, sections_content)
-
-    # 検証: 必須セクションの存在確認
-    required_sections = ["Pre-flight", "Failure-triggered Learning"]
-    valid = all(
-        re.search(re.escape(s), customized, re.IGNORECASE)
-        for s in required_sections
+    return (
+        sections_template.read_text(encoding="utf-8"),
+        pitfalls_template.read_text(encoding="utf-8"),
+        None,
     )
 
+
+def _assemble_proposal(
+    skill_name: str,
+    skill_dir: Path,
+    customized: str,
+    sections_content: str,
+    pitfalls_content: str,
+) -> Dict[str, Any]:
+    """customized セクションから変換提案 dict を組み立てる（共通処理）。
+
+    必須セクション検証 → 欠落時はテンプレそのままにフォールバック → proposal dict 生成。
+    rubric checkpoint を出力する。`evolve_skill_proposal`（決定論）と
+    `ingest_customized_proposal`（2相）が共有する。
+    """
+    valid = all(
+        re.search(re.escape(s), customized, re.IGNORECASE)
+        for s in _REQUIRED_SECTIONS
+    )
     if not valid:
-        # フォールバック: テンプレートをそのまま使用
         customized = sections_content
 
+    skill_md = skill_dir / "SKILL.md"
     proposal = {
         "skill_name": skill_name,
         "sections_to_add": customized,
@@ -123,46 +183,121 @@ def evolve_skill_proposal(
     return proposal
 
 
-def _customize_template(
+def _rejected_preflight(skill_name: str) -> Optional[Dict[str, Any]]:
+    """rejected pre-flight: 過去に rejected_rate > 30% なら skip dict を返す (#200)。"""
+    stats = get_rejected_stats(skill_name)
+    rejected_rate = stats.get("rejected_rate", 0.0)
+    if rejected_rate > 0.30:
+        return {
+            "status": "skipped",
+            "reason": f"rejected_rate={rejected_rate:.0%} > 30%",
+        }
+    return None
+
+
+def evolve_skill_proposal(
     skill_name: str,
-    skill_content: str,
-    template: str,
-) -> str:
-    """テンプレートをスキルの文脈にカスタマイズする。"""
-    prompt = (
-        f"以下のテンプレートを、スキル「{skill_name}」の文脈に合わせてカスタマイズしてください。\n"
-        f"テンプレートの構造（見出し、テーブル）は維持し、具体的な表現をスキルに合わせてください。\n"
-        f"出力はカスタマイズ後のマークダウンのみ（説明不要）。\n\n"
-        f"### スキル内容（先頭2000文字）:\n```\n{skill_content[:2000]}\n```\n\n"
-        f"### テンプレート:\n```\n{template}\n```"
+    skill_dir: Path,
+) -> Dict[str, Any]:
+    """適性ありスキルに自己進化パターンを組み込む変換提案を生成する（LLM-free）。
+
+    [ADR-037] Phase 1c: テンプレートをそのまま（決定論フォールバック）採用する。
+    LLM カスタマイズが必要な場合は `emit_customize_request`→`ingest_customized_proposal`
+    の2相を使う。run_loop / fixers_rules はこの決定論経路で完走する。
+
+    Returns:
+        {"skill_name": str, "sections_to_add": str, "pitfalls_template": str,
+         "skill_md_path": str, "pitfalls_path": str, "error": str|None}
+        rejected pre-flight 発動時: {"status": "skipped", "reason": str}
+    """
+    skipped = _rejected_preflight(skill_name)
+    if skipped:
+        return skipped
+
+    from . import _plugin_root, _customize_template  # 関数内 lazy lookup
+    sections_content, pitfalls_content, error = _load_templates(_plugin_root)
+    if error:
+        return {"skill_name": skill_name, "error": error}
+
+    skill_md = skill_dir / "SKILL.md"
+    skill_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else ""
+
+    customized = _customize_template(skill_name, skill_content, sections_content)
+    return _assemble_proposal(
+        skill_name, skill_dir, customized, sections_content, pitfalls_content
     )
-    try:
-        result = subprocess.run(
-            ["claude", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode == 0:
-            output = result.stdout.strip()
-            # コードブロック除去
-            if output.startswith("```") and output.endswith("```"):
-                lines = output.split("\n")
-                output = "\n".join(lines[1:-1])
 
-            # difflib bounded edit gate (#196, #199)
-            budget = get_skill_lr_budget()
-            diff_lines = count_diff_lines(template, output)
-            if diff_lines > budget:
-                logger.warning(
-                    "[evolve-skill] diff %d lines > budget %d, fallback to template",
-                    diff_lines, budget,
-                )
-                return template
 
-            return output
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-    # フォールバック: テンプレートそのまま
-    return template
+def emit_customize_request(
+    skill_name: str,
+    skill_dir: Path,
+) -> Dict[str, Any]:
+    """Phase A: テンプレートカスタマイズの request を生成する。
+
+    Returns:
+        {"requests": [{"id": skill_name, "prompt": str, "meta": {}}]}
+        テンプレ不在時: {"requests": [], "error": str}
+    """
+    from . import _plugin_root
+    from llm_broker import build_requests
+
+    sections_content, _pitfalls, error = _load_templates(_plugin_root)
+    if error:
+        return {"requests": [], "error": error}
+
+    skill_md = skill_dir / "SKILL.md"
+    skill_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else ""
+
+    items = [{
+        "id": skill_name,
+        "_skill_content": skill_content,
+        "_template": sections_content,
+    }]
+    requests = build_requests(
+        items,
+        lambda it: build_customize_prompt(it["id"], it["_skill_content"], it["_template"]),
+    )
+    for r in requests:
+        r["meta"].pop("_skill_content", None)
+        r["meta"].pop("_template", None)
+    return {"requests": requests}
+
+
+def ingest_customized_proposal(
+    skill_name: str,
+    skill_dir: Path,
+    requests: List[Dict[str, Any]],
+    responses: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Phase C: Phase B 応答からカスタマイズ済み変換提案を組み立てる。
+
+    fence 除去 + diff budget gate は `_parse_customization_response` が適用。
+    応答欠損 / 予算超過 / 必須セクション欠落はテンプレそのままにフォールバックする。
+
+    Returns:
+        evolve_skill_proposal と同形の proposal dict。
+        rejected pre-flight / テンプレ不在は同様に早期 return。
+    """
+    skipped = _rejected_preflight(skill_name)
+    if skipped:
+        return skipped
+
+    from . import _plugin_root
+    from llm_broker import parse_responses
+
+    sections_content, pitfalls_content, error = _load_templates(_plugin_root)
+    if error:
+        return {"skill_name": skill_name, "error": error}
+
+    parsed = parse_responses(
+        requests,
+        responses,
+        parser=lambda raw: _parse_customization_response(raw, sections_content),
+    )
+    customized = parsed.get(skill_name, sections_content)
+    return _assemble_proposal(
+        skill_name, skill_dir, customized, sections_content, pitfalls_content
+    )
 
 
 def apply_evolve_proposal(proposal: Dict[str, Any]) -> Dict[str, Any]:

@@ -87,7 +87,12 @@ def skill_evolve_assessment(
     proj = project_dir or Path.cwd()
     artifacts = find_artifacts(proj)
 
-    # Pre-flight guard: LLM呼び出し件数の事前確認
+    # Pre-flight guard: バッチ件数の事前確認。
+    # [ADR-037] Phase 1c で compute_llm_scores は LLM-free（cache-read + 静的フォールバック）
+    # になったため、本評価ループ自体は LLM を呼ばない。LLM コストは後段の SKILL Phase B
+    # （judgment refresh の emit→assistant inline）と evolve apply（テンプレカスタマイズ）に移動した。
+    # 本ガードはその後段バッチの規模を承認させる確認ゲートとして残置する（_TOKENS_PER_SKILL は
+    # Phase B 1スキルあたりの概算）。
     # custom + allowlist に含まれる global の両方を対象件数に含める
     _TOKENS_PER_SKILL = 47_000
     _MAX_AUTO_SKILLS = 10

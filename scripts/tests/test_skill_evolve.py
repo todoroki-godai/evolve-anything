@@ -280,13 +280,8 @@ def test_proposal_with_templates(tmp_path, monkeypatch):
 
     monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
 
-    # LLM をモック（テンプレートそのまま返す）
-    with mock.patch("skill_evolve._customize_template") as mock_custom:
-        mock_custom.return_value = (
-            "## Pre-flight Check\n\nCheck pitfalls.\n\n"
-            "## Failure-triggered Learning\n\n| Trigger | Action |\n"
-        )
-        result = evolve_skill_proposal("test-skill", skill_dir)
+    # [ADR-037] Phase 1c: LLM-free。決定論フォールバック（テンプレそのまま）を返す
+    result = evolve_skill_proposal("test-skill", skill_dir)
 
     assert result["error"] is None
     assert "Pre-flight" in result["sections_to_add"]
@@ -765,58 +760,42 @@ def test_count_diff_lines_many_changes():
     assert count == 80
 
 
-# --- difflib bounded edit gate in _customize_template (#196, #199) ---
+# --- difflib bounded edit gate in _parse_customization_response (#196, #199, [ADR-037] Phase 1c) ---
 
 
-def test_customize_template_within_budget(tmp_path, monkeypatch):
-    """diff 行数がバジェット以内なら LLM 出力をそのまま返す。"""
+def test_parse_customization_within_budget(tmp_path, monkeypatch):
+    """diff 行数がバジェット以内なら Phase B 出力をそのまま返す。"""
     template = "## Pre-flight Check\n\n## Failure-triggered Learning\n"
-    # LLM が 2 行変更した出力（budget=30 以内）
+    # Phase B が 2 行変更した出力（budget=30 以内）
     customized_output = "## Pre-flight Check (custom)\n\n## Failure-triggered Learning\n"
 
-    with mock.patch("subprocess.run") as mock_run:
-        mock_run.return_value = mock.Mock(
-            returncode=0, stdout=customized_output, stderr=""
-        )
-        with mock.patch("skill_evolve.proposal.get_skill_lr_budget", return_value=30):
-            from skill_evolve.proposal import _customize_template
-            result = _customize_template("test-skill", "", template)
+    from skill_evolve.proposal import _parse_customization_response
+    result = _parse_customization_response(customized_output, template, budget=30)
 
     assert "custom" in result
 
 
-def test_customize_template_exceeds_budget_fallback(tmp_path, monkeypatch):
+def test_parse_customization_exceeds_budget_fallback(tmp_path, monkeypatch):
     """diff 行数がバジェットを超えた場合はテンプレートにフォールバックする (#196)。"""
     template = "## Pre-flight Check\n\n## Failure-triggered Learning\n"
-    # LLM が多数の行を変更した出力（budget=5 を超える）
+    # Phase B が多数の行を変更した出力（budget=5 を超える）
     many_lines = "\n".join(f"changed line {i}" for i in range(20))
-    llm_output = many_lines
 
-    with mock.patch("subprocess.run") as mock_run:
-        mock_run.return_value = mock.Mock(
-            returncode=0, stdout=llm_output, stderr=""
-        )
-        with mock.patch("skill_evolve.proposal.get_skill_lr_budget", return_value=5):
-            from skill_evolve.proposal import _customize_template
-            result = _customize_template("test-skill", "", template)
+    from skill_evolve.proposal import _parse_customization_response
+    result = _parse_customization_response(many_lines, template, budget=5)
 
     # フォールバックでテンプレートがそのまま返る
     assert result == template
 
 
-def test_customize_template_budget_override(tmp_path):
-    """skill_lr_budget=10 の userConfig override が正しく判定に使われる (#199)。"""
+def test_parse_customization_budget_override(tmp_path):
+    """budget=10 が正しく判定に使われる (#199)。"""
     template = "original line 1\noriginal line 2\noriginal line 3\n"
     # 11 行変更 (budget=10 を 1 超)
     changed_lines = "\n".join(f"changed {i}" for i in range(11))
 
-    with mock.patch("subprocess.run") as mock_run:
-        mock_run.return_value = mock.Mock(
-            returncode=0, stdout=changed_lines, stderr=""
-        )
-        with mock.patch("skill_evolve.proposal.get_skill_lr_budget", return_value=10):
-            from skill_evolve.proposal import _customize_template
-            result = _customize_template("test-skill", "", template)
+    from skill_evolve.proposal import _parse_customization_response
+    result = _parse_customization_response(changed_lines, template, budget=10)
 
     assert result == template  # fallback
 
@@ -920,11 +899,7 @@ def test_evolve_skill_proposal_proceed_when_low_rejected_rate(tmp_path, monkeypa
         "skill_evolve.proposal.get_rejected_stats",
         return_value={"rejected_rate": 0.20, "rejected_count": 2, "total_count": 10},
     ):
-        with mock.patch("skill_evolve._customize_template") as mock_custom:
-            mock_custom.return_value = (
-                "## Pre-flight Check\n\n## Failure-triggered Learning\n"
-            )
-            result = evolve_skill_proposal("test-skill", skill_dir)
+        result = evolve_skill_proposal("test-skill", skill_dir)
 
     assert result.get("error") is None
     assert result.get("status") != "skipped"
@@ -949,11 +924,7 @@ def test_evolve_skill_proposal_proceed_when_no_stats(tmp_path, monkeypatch):
         "skill_evolve.proposal.get_rejected_stats",
         return_value={"rejected_rate": 0.0, "rejected_count": 0, "total_count": 0},
     ):
-        with mock.patch("skill_evolve._customize_template") as mock_custom:
-            mock_custom.return_value = (
-                "## Pre-flight Check\n\n## Failure-triggered Learning\n"
-            )
-            result = evolve_skill_proposal("test-skill", skill_dir)
+        result = evolve_skill_proposal("test-skill", skill_dir)
 
     # skipped にならない
     assert result.get("status") != "skipped"
@@ -1295,3 +1266,224 @@ class TestBatchGuardAssessment:
         assert sentinel is None, "confirmed_batch=True では guard をスキップすべき"
         non_meta = [r for r in result if not r.get("_meta")]
         assert len(non_meta) == 11, "全 11 件が評価対象になるべき"
+
+
+# ============================================================
+# [ADR-037] Phase 1c: claude -p 全廃 — ファイルベース2相テスト
+# ============================================================
+
+
+# --- _parse_judgment_response の信頼境界（int/str/dict 寛容） ---
+
+
+def test_parse_judgment_response_int():
+    from skill_evolve import _parse_judgment_response
+    assert _parse_judgment_response(2) == 2
+
+
+def test_parse_judgment_response_str():
+    from skill_evolve import _parse_judgment_response
+    assert _parse_judgment_response("評価: 3 です") == 3
+
+
+def test_parse_judgment_response_dict():
+    from skill_evolve import _parse_judgment_response
+    assert _parse_judgment_response({"judgment_complexity": 2}) == 2
+    assert _parse_judgment_response({"score": 1}) == 1
+
+
+def test_parse_judgment_response_none_and_bool_and_out_of_range():
+    from skill_evolve import _parse_judgment_response
+    assert _parse_judgment_response(None) is None
+    assert _parse_judgment_response(True) is None  # bool は数値扱いしない
+    assert _parse_judgment_response(5) is None      # 範囲外
+    assert _parse_judgment_response("no digit") is None
+
+
+# --- compute_llm_scores が LLM-free（cache-miss は static フォールバック） ---
+
+
+def test_compute_llm_scores_cache_miss_is_static(tmp_path, monkeypatch):
+    from skill_evolve import compute_llm_scores
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Skill\n\nif foo: ...\nelse: ...\n条件 判断 場合\n")
+
+    cache_file = tmp_path / "cache.json"
+    monkeypatch.setattr("skill_evolve.CACHE_FILE", cache_file)
+    monkeypatch.setattr("skill_evolve.DATA_DIR", tmp_path)
+
+    result = compute_llm_scores("my-skill", skill_dir)
+    assert result["cached"] is False
+    assert result["judgment_source"] == "static"
+    assert result["judgment_complexity"] in (1, 2, 3)
+    # cache に static として確定保存される
+    saved = json.loads(cache_file.read_text())
+    assert saved["my-skill"]["judgment_source"] == "static"
+
+
+# --- emit_judgment_requests / ingest_judgment_scores ---
+
+
+def _make_skill(tmp_path, name, content="# S\n\nif x: ...\n"):
+    d = tmp_path / name
+    d.mkdir()
+    (d / "SKILL.md").write_text(content)
+    return d
+
+
+def test_emit_judgment_requests_shape_and_meta(tmp_path, monkeypatch):
+    from skill_evolve import emit_judgment_requests
+    sd = _make_skill(tmp_path, "alpha")
+    cache_file = tmp_path / "cache.json"
+    monkeypatch.setattr("skill_evolve.CACHE_FILE", cache_file)
+
+    out = emit_judgment_requests(tmp_path, [sd])
+    assert len(out["requests"]) == 1
+    req = out["requests"][0]
+    assert req["id"] == "alpha"
+    assert "判断の複雑さ" in req["prompt"]
+    assert "hash" in req["meta"]
+    assert "external_dependency" in req["meta"]
+    assert "_content" not in req["meta"]  # 内部フィールドは meta から除去
+
+
+def test_emit_judgment_skips_fresh_llm_but_not_static(tmp_path, monkeypatch):
+    from skill_evolve import emit_judgment_requests, _file_hash
+    sd_llm = _make_skill(tmp_path, "llmskill")
+    sd_static = _make_skill(tmp_path, "staticskill")
+    cache_file = tmp_path / "cache.json"
+    cache = {
+        "llmskill": {"hash": _file_hash(sd_llm / "SKILL.md"),
+                     "judgment_source": "llm", "judgment_complexity": 2,
+                     "external_dependency": 1},
+        "staticskill": {"hash": _file_hash(sd_static / "SKILL.md"),
+                        "judgment_source": "static", "judgment_complexity": 1,
+                        "external_dependency": 1},
+    }
+    cache_file.write_text(json.dumps(cache))
+    monkeypatch.setattr("skill_evolve.CACHE_FILE", cache_file)
+
+    out = emit_judgment_requests(tmp_path, [sd_llm, sd_static])
+    ids = {r["id"] for r in out["requests"]}
+    assert ids == {"staticskill"}  # fresh-llm は除外、static は emit
+
+    # refresh=True なら両方 emit
+    out2 = emit_judgment_requests(tmp_path, [sd_llm, sd_static], refresh=True)
+    assert {r["id"] for r in out2["requests"]} == {"llmskill", "staticskill"}
+
+
+def test_ingest_judgment_scores_updates_cache_as_llm(tmp_path, monkeypatch):
+    from skill_evolve import emit_judgment_requests, ingest_judgment_scores
+    sd = _make_skill(tmp_path, "beta")
+    cache_file = tmp_path / "cache.json"
+    monkeypatch.setattr("skill_evolve.CACHE_FILE", cache_file)
+    monkeypatch.setattr("skill_evolve.DATA_DIR", tmp_path)
+
+    out = emit_judgment_requests(tmp_path, [sd])
+    responses = {"beta": "3"}
+    result = ingest_judgment_scores(tmp_path, out["requests"], responses)
+    assert result == {"beta": 3}
+    saved = json.loads(cache_file.read_text())
+    assert saved["beta"]["judgment_complexity"] == 3
+    assert saved["beta"]["judgment_source"] == "llm"
+    assert saved["beta"]["external_dependency"] >= 1  # meta から補完
+
+
+def test_ingest_judgment_leaves_static_when_unparseable(tmp_path, monkeypatch):
+    from skill_evolve import emit_judgment_requests, ingest_judgment_scores
+    sd = _make_skill(tmp_path, "gamma")
+    cache_file = tmp_path / "cache.json"
+    monkeypatch.setattr("skill_evolve.CACHE_FILE", cache_file)
+    monkeypatch.setattr("skill_evolve.DATA_DIR", tmp_path)
+
+    out = emit_judgment_requests(tmp_path, [sd])
+    # 応答漏れ（None）→ 据え置き、cache 更新なし
+    result = ingest_judgment_scores(tmp_path, out["requests"], {})
+    assert result == {}
+    assert not cache_file.exists()  # result 空なら save しない
+
+
+# --- _parse_customization_response の信頼境界 ---
+
+
+def test_parse_customization_none_returns_template():
+    from skill_evolve.proposal import _parse_customization_response
+    template = "## Pre-flight Check\n## Failure-triggered Learning\n"
+    assert _parse_customization_response(None, template) == template
+
+
+def test_parse_customization_strips_code_fence():
+    from skill_evolve.proposal import _parse_customization_response
+    template = "## Pre-flight Check\n## Failure-triggered Learning\n"
+    raw = "```\n## Pre-flight Check (X)\n## Failure-triggered Learning\n```"
+    result = _parse_customization_response(raw, template, budget=30)
+    assert "```" not in result
+    assert "(X)" in result
+
+
+# --- emit_customize_request / ingest_customized_proposal ---
+
+
+def _setup_templates(tmp_path):
+    templates_dir = tmp_path / "skills" / "evolve" / "templates"
+    templates_dir.mkdir(parents=True)
+    (templates_dir / "self-evolve-sections.md").write_text(
+        "## Pre-flight Check\n## Failure-triggered Learning\n"
+    )
+    (templates_dir / "pitfalls.md").write_text("## Active Pitfalls\n")
+
+
+def test_emit_customize_request_shape(tmp_path, monkeypatch):
+    from skill_evolve import emit_customize_request
+    _setup_templates(tmp_path)
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
+    sd = _make_skill(tmp_path, "delta", content="# Delta Skill\n")
+
+    out = emit_customize_request("delta", sd)
+    assert len(out["requests"]) == 1
+    assert out["requests"][0]["id"] == "delta"
+    assert "カスタマイズ" in out["requests"][0]["prompt"]
+    assert "_template" not in out["requests"][0]["meta"]
+
+
+def test_emit_customize_request_template_missing(tmp_path, monkeypatch):
+    from skill_evolve import emit_customize_request
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path / "nope")
+    sd = _make_skill(tmp_path, "eps")
+    out = emit_customize_request("eps", sd)
+    assert out["requests"] == []
+    assert "error" in out
+
+
+def test_ingest_customized_proposal_builds_proposal(tmp_path, monkeypatch):
+    from skill_evolve import emit_customize_request, ingest_customized_proposal
+    _setup_templates(tmp_path)
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
+    sd = _make_skill(tmp_path, "zeta", content="# Zeta\n")
+
+    with mock.patch("skill_evolve.proposal.get_rejected_stats",
+                    return_value={"rejected_rate": 0.0}):
+        out = emit_customize_request("zeta", sd)
+        responses = {"zeta": "## Pre-flight Check (zeta)\n## Failure-triggered Learning\n"}
+        proposal = ingest_customized_proposal("zeta", sd, out["requests"], responses)
+
+    assert proposal["error"] is None
+    assert "(zeta)" in proposal["sections_to_add"]
+    assert "Active Pitfalls" in proposal["pitfalls_template"]
+
+
+def test_ingest_customized_proposal_fallback_on_missing_response(tmp_path, monkeypatch):
+    from skill_evolve import emit_customize_request, ingest_customized_proposal
+    _setup_templates(tmp_path)
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
+    sd = _make_skill(tmp_path, "eta", content="# Eta\n")
+
+    with mock.patch("skill_evolve.proposal.get_rejected_stats",
+                    return_value={"rejected_rate": 0.0}):
+        out = emit_customize_request("eta", sd)
+        proposal = ingest_customized_proposal("eta", sd, out["requests"], {})
+
+    # 応答欠損 → テンプレそのままにフォールバック
+    assert proposal["error"] is None
+    assert "Pre-flight Check" in proposal["sections_to_add"]

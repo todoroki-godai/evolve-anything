@@ -82,19 +82,27 @@ from .telemetry_scoring import (  # noqa: E402,F401
     compute_telemetry_scores,
 )
 
-# --- LLM 2軸 (llm_scoring.py / Phase 8 Slice 2) ---
+# --- LLM 2軸 (llm_scoring.py / Phase 8 Slice 2, [ADR-037] Phase 1c 2相化) ---
 from .llm_scoring import (  # noqa: E402,F401
     _EXTERNAL_DEPENDENCY_KEYWORDS,
     _count_external_keywords,
     _score_external_dependency,
-    _score_judgment_complexity_llm,
+    _score_judgment_complexity_static,
+    _parse_judgment_response,
+    build_judgment_prompt,
     compute_llm_scores,
+    emit_judgment_requests,
+    ingest_judgment_scores,
 )
 
-# --- 変換提案 (proposal.py / Phase 8 Slice 4) ---
+# --- 変換提案 (proposal.py / Phase 8 Slice 4, [ADR-037] Phase 1c 2相化) ---
 from .proposal import (  # noqa: E402,F401
     evolve_skill_proposal,
     _customize_template,
+    _parse_customization_response,
+    build_customize_prompt,
+    emit_customize_request,
+    ingest_customized_proposal,
     apply_evolve_proposal,
     count_diff_lines,
 )

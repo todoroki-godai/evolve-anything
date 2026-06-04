@@ -65,22 +65,18 @@ def test_assess_then_apply(mock_telemetry, mock_llm, tmp_path):
     assessment = assess_single_skill("test-skill", skill_dir)
     assert assessment["suitability"] in ("high", "medium")
 
-    with mock.patch("skill_evolve._customize_template") as mock_custom:
-        mock_custom.return_value = (
-            "## Pre-flight Check\n\nCheck pitfalls.\n\n"
-            "## Failure-triggered Learning\n\n| Trigger | Action |\n"
+    # [ADR-037] Phase 1c: LLM-free。テンプレに必須セクションがあれば決定論で proposal 生成
+    with mock.patch("skill_evolve._plugin_root", tmp_path):
+        # テンプレートを配置
+        templates_dir = tmp_path / "skills" / "evolve" / "templates"
+        templates_dir.mkdir(parents=True)
+        (templates_dir / "self-evolve-sections.md").write_text(
+            "## Pre-flight Check\n## Failure-triggered Learning\n"
         )
-        with mock.patch("skill_evolve._plugin_root", tmp_path):
-            # テンプレートを配置
-            templates_dir = tmp_path / "skills" / "evolve" / "templates"
-            templates_dir.mkdir(parents=True)
-            (templates_dir / "self-evolve-sections.md").write_text(
-                "## Pre-flight Check\n## Failure-triggered Learning\n"
-            )
-            (templates_dir / "pitfalls.md").write_text(
-                "## Active Pitfalls\n## Graduated Pitfalls\n"
-            )
-            proposal = evolve_skill_proposal("test-skill", skill_dir)
+        (templates_dir / "pitfalls.md").write_text(
+            "## Active Pitfalls\n## Graduated Pitfalls\n"
+        )
+        proposal = evolve_skill_proposal("test-skill", skill_dir)
 
     assert proposal["error"] is None
     result = apply_evolve_proposal(proposal)
