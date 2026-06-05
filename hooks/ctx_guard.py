@@ -123,8 +123,7 @@ def check_ctx_usage(
         f"[rl-anything:ctx_guard] ⚠ context 占有率 {pct:.1f}% "
         f"({ctx:,} / {window_tokens:,} tokens, 閾値 {warn_percent}%)\n"
         f"  compaction が走る前にできること:\n"
-        f"  - /compact で手動圧縮\n"
-        f"  - /handover で次セッションに引き継ぎ\n"
+        f"  - /compact で手動圧縮（作業文脈は checkpoint が次セッションに自動復元）\n"
         f"  - 大きな Read/Bash 出力を避け、Grep + offset/limit に切り替え",
         flush=True,
     )

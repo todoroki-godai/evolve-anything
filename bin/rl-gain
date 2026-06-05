@@ -24,7 +24,6 @@ SKILL_COST_MINUTES: Dict[str, int] = {
     "audit": 15,
     "reflect": 5,
     "implement": 10,
-    "handover": 3,
     "spec-keeper": 5,
     "second-opinion": 8,
     "rl-loop-orchestrator": 20,

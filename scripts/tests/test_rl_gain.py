@@ -187,8 +187,8 @@ def full_data_dir(tmp_path):
     records = [
         {"skill_name": "rl-anything:evolve", "ts": "2026-03-01T00:00:00Z"},
         {"skill_name": "rl-anything:audit", "ts": "2026-03-02T00:00:00Z"},
-        {"skill_name": "rl-anything:handover", "ts": "2026-03-03T00:00:00Z"},
-        {"skill_name": "rl-anything:handover", "ts": "2026-03-04T00:00:00Z"},
+        {"skill_name": "rl-anything:reflect", "ts": "2026-03-03T00:00:00Z"},
+        {"skill_name": "rl-anything:reflect", "ts": "2026-03-04T00:00:00Z"},
         {"skill_name": "ship", "ts": "2026-03-05T00:00:00Z"},
     ]
     (tmp_path / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in records))
@@ -208,14 +208,14 @@ def full_data_dir(tmp_path):
 
 def test_compute_report_invocation_count(rl_gain, full_data_dir):
     report = rl_gain.compute_report(full_data_dir)
-    # evolve:1 + audit:1 + handover:2 = 4
+    # evolve:1 + audit:1 + reflect:2 = 4
     assert report["total_invocations"] == 4
 
 
 def test_compute_report_saved_minutes(rl_gain, full_data_dir):
     report = rl_gain.compute_report(full_data_dir)
-    # evolve(10) + audit(15) + handover(3×2=6) = 31
-    assert report["saved_minutes"] == 31
+    # evolve(10) + audit(15) + reflect(5×2=10) = 35
+    assert report["saved_minutes"] == 35
 
 
 def test_compute_report_auto_triggered(rl_gain, full_data_dir):
@@ -247,7 +247,7 @@ def test_compute_report_since_date(rl_gain, full_data_dir):
 def test_compute_report_skill_breakdown(rl_gain, full_data_dir):
     report = rl_gain.compute_report(full_data_dir)
     names = [s["name"] for s in report["skill_breakdown"]]
-    assert "handover" in names
+    assert "reflect" in names
     assert "evolve" in names
     assert "ship" not in names  # rl-anything 外は除外
 

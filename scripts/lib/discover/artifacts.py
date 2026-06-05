@@ -144,7 +144,7 @@ RECOMMENDED_ARTIFACTS = [
         "id": "continuation-check",
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "continuation-check.md",
-        "description": "前回の続き判定 — handover/ロードマップ言及時に引き継ぎファイルとSPEC.mdを自動確認",
+        "description": "前回の続き判定 — 引き継ぎ/ロードマップ言及時に引き継ぎファイルとSPEC.mdを自動確認",
         "hook_path": None,
     },
     # --- 並行開発パターン ---

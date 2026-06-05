@@ -86,9 +86,7 @@ rl-anything は **4つの独立した柱** で構成される。
 | エージェント定義を診断・改善 | `agent-brushup` |
 | 独立したセカンドオピニオンを取得 | `second-opinion` |
 | SPEC.md を初期化・更新 | `spec-keeper init` / `spec-keeper update` |
-| 行き詰まり問題の突破 | `breakthrough` |
-| セッションを引き継ぎ | `handover` |
-| 環境の成長レポート | `audit --growth` |
+| 行き詰まり問題の突破 | `breakthrough` || 環境の成長レポート | `audit --growth` |
 | マージ・デプロイ後の後片付け | `cleanup` |
 | 全 PJ 横断の fleet ステータス | `bin/rl-fleet status` |
 | 全 PJ の memory を keyword 横断検索 | `bin/rl-fleet recall "<query>"` |
@@ -96,7 +94,7 @@ rl-anything は **4つの独立した柱** で構成される。
 
 > すべてのコマンドは `/rl-anything:` プレフィックス付きで呼び出す（例: `/rl-anything:evolve`）
 
-## スキル一覧（全19スキル）
+## スキル一覧（全18スキル）
 
 | スキル | 柱 | 説明 |
 |--------|-----|------|
@@ -114,9 +112,7 @@ rl-anything は **4つの独立した柱** で構成される。
 | `second-opinion` | セカンドオピニオン | Claude Agent による独立した cold-read セカンドオピニオン |
 | `breakthrough` | 行き詰まり突破 | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動 |
 | `implement` | 構造化実装 | plan artifact → タスク分解 → 実装（Standard/Parallel）→ 計画準拠チェック → テレメトリ記録 |
-| `spec-keeper` | 仕様管理 | SPEC.md + ADR 管理、Progressive Disclosure L1/L2 自動昇格 |
-| `handover` | セッション管理 | 作業状態を構造化ノートに書き出し、別セッションへ引き継ぎ。`--issue` で GitHub Issue 出力 |
-| `cleanup` | 後片付け | PR マージ・デプロイ後の branches / remote refs / worktrees / tmp dirs / close 候補 Issue / PR Test plan 残件を個別承認→実行で処理。tmp dir default prefix は `rl-anything-` のみ（詳細は [ADR-021](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)） |
+| `spec-keeper` | 仕様管理 | SPEC.md + ADR 管理、Progressive Disclosure L1/L2 自動昇格 || `cleanup` | 後片付け | PR マージ・デプロイ後の branches / remote refs / worktrees / tmp dirs / close 候補 Issue / PR Test plan 残件を個別承認→実行で処理。tmp dir default prefix は `rl-anything-` のみ（詳細は [ADR-021](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)） |
 | `release-notes-review` | ユーティリティ | CC リリースノート分析＋グローバル環境健康診断（`--env-only` 対応） |
 | `feedback` | ユーティリティ | GitHub Issue でフィードバック送信 |
 

@@ -7,29 +7,14 @@ stdout に JSON で出力する。
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 import common
 
-HANDOVER_STALE_HOURS = 48.0
-_HANDOVER_PREVIEW_LINES = 15
-_PRIORITY_SECTIONS = ("Deploy State", "Next Actions")
-
-# handover import (optional — for section extraction)
-_handover_extract_section = None
-try:
-    _plugin_root = Path(__file__).resolve().parent.parent
-    sys.path.insert(0, str(_plugin_root / "skills" / "handover" / "scripts"))
-    from handover import extract_section as _handover_extract_section
-except ImportError:
-    pass
-
 # trigger_engine import (optional)
 _trigger_engine = None
 try:
-    if _plugin_root is None:
-        _plugin_root = Path(__file__).resolve().parent.parent
+    _plugin_root = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
     from trigger_engine import read_and_delete_pending_trigger
     _trigger_engine = True
@@ -88,78 +73,10 @@ def _deliver_pending_trigger() -> None:
         print(f"[rl-anything:restore_state] trigger delivery error: {e}", file=sys.stderr)
 
 
-def _extract_section(content: str, section_name: str) -> str:
-    """Markdown の ## セクションを名前で抽出する。handover.py に委譲。"""
-    if _handover_extract_section is not None:
-        return _handover_extract_section(content, section_name)
-    # フォールバック: handover.py が import できない場合
-    import re
-    pattern = rf"^## {re.escape(section_name)}\s*\n"
-    match = re.search(pattern, content, re.MULTILINE)
-    if not match:
-        return ""
-    start = match.end()
-    next_header = re.search(r"^## ", content[start:], re.MULTILINE)
-    if next_header:
-        body = content[start : start + next_header.start()]
-    else:
-        body = content[start:]
-    return body.strip()
-
-
-def _detect_handover() -> None:
-    """最新の handover ノートを検出しプレビュー表示する。
-
-    Deploy State / Next Actions がある場合はそれらを優先表示し、
-    なければ従来通り先頭行をプレビューする。
-    """
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
-    if not project_dir:
-        return
-    handover_dir = Path(project_dir) / ".claude" / "handovers"
-    if not handover_dir.exists():
-        return
-    files = sorted(handover_dir.glob("*.md"), reverse=True)
-    if not files:
-        return
-    latest = files[0]
-    try:
-        age_hours = (time.time() - latest.stat().st_mtime) / 3600
-    except OSError:
-        return
-    if age_hours > HANDOVER_STALE_HOURS:
-        return
-    try:
-        content = latest.read_text(encoding="utf-8")
-    except OSError:
-        return
-
-    # 優先セクションを抽出
-    priority_parts: list[str] = []
-    for section_name in _PRIORITY_SECTIONS:
-        body = _extract_section(content, section_name)
-        if body:
-            priority_parts.append(f"## {section_name}\n{body}")
-
-    if priority_parts:
-        # タイトル行 + 優先セクション
-        title_line = content.splitlines()[0] if content.splitlines() else latest.name
-        preview = f"{title_line}\n\n" + "\n\n".join(priority_parts)
-    else:
-        # フォールバック: 先頭行プレビュー
-        lines = content.splitlines()[:_HANDOVER_PREVIEW_LINES]
-        preview = "\n".join(lines)
-
-    print(f"[rl-anything:handover] 引き継ぎノートあり ({latest.name}):\n{preview}\n...")
-
-
 def handle_session_start(event: dict) -> None:
     """SessionStart イベントを処理する。"""
     # Deliver pending trigger messages first
     _deliver_pending_trigger()
-
-    # Handover ノート検出
-    _detect_handover()
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
     checkpoint = common.find_latest_checkpoint(project_dir)

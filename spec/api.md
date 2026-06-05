@@ -19,9 +19,7 @@ Last updated: 2026-05-21 (implement スキルに depends_on グラフ追加)
 | `/rl-anything:evolve-skill <skill>` | 特定スキルに自己進化パターン組み込み | medium |
 | `/rl-anything:generate-fitness` | PJ固有 fitness 関数自動生成 | medium |
 | `/rl-anything:evolve-fitness` | 評価関数キャリブレーション | medium |
-| `/rl-anything:second-opinion` | Claude Agent セカンドオピニオン（startup/builder/general） | low |
-| `/rl-anything:handover` | セッション作業状態の構造化ノート書き出し | low |
-| `/rl-anything:implement` | plan artifact → 複雑性アセスメント（shallow/standard/deep）→ 深度別実装（Standard/Parallel）→ テレメトリ記録。タスク表に depends_on グラフ（task # 列記）を追加し循環依存を topological sort で検出、Ralph Loop 開始前に Ready/Blocked 一覧を表示して依存順に実行 | high |
+| `/rl-anything:second-opinion` | Claude Agent セカンドオピニオン（startup/builder/general） | low || `/rl-anything:implement` | plan artifact → 複雑性アセスメント（shallow/standard/deep）→ 深度別実装（Standard/Parallel）→ テレメトリ記録。タスク表に depends_on グラフ（task # 列記）を追加し循環依存を topological sort で検出、Ralph Loop 開始前に Ready/Blocked 一覧を表示して依存順に実行 | high |
 | `/rl-anything:version` | バージョン・ステータス表示 | low |
 | `/rl-anything:spec-keeper` | SPEC.md + ADR 管理（init/update/adr/status） | medium |
 | `/rl-anything:philosophy-review` | セッション履歴を Judge LLM で評価し哲学原則違反を corrections.jsonl 注入 | medium |
