@@ -22,6 +22,7 @@ from .sections import (
     build_negative_transfer_section,
     build_unmanaged_pitfalls_section,
 )
+from .sections_agent import build_agent_team_section
 from .sections_eval import build_eval_saturation_section
 from .sections_hook import build_hook_drift_section
 
@@ -36,6 +37,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("eval_saturation", build_eval_saturation_section),
     ("negative_transfer", build_negative_transfer_section),
     ("hook_drift", build_hook_drift_section),
+    ("agent_team", build_agent_team_section),
 ]
 
 

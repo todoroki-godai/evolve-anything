@@ -63,6 +63,10 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     calibration_drift も環境グローバル（accept/reject 履歴）を読む builder のため、実機に
     optimize 履歴があると同様に前提が崩れる。store を空 tmp に向けて load_history() を空にし
     「PJ アーティファクト無し」契約を隔離する（#286 / ADR-031 で store 隔離に移行）。
+
+    agent_team も環境グローバル（~/.claude/agents/）を読む builder のため、実機にエージェント
+    定義があると同様に前提が崩れる。scan_agents を空に向けて「PJ アーティファクト無し」契約を
+    隔離する（#326）。
     """
     import eval_saturation
     monkeypatch.setattr(
@@ -71,6 +75,8 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     import optimize_history_store as _ohs
     monkeypatch.setattr(_ohs, "HISTORY_ROOT", tmp_path / "no-history")
     monkeypatch.setattr(_ohs, "resolve_slug", lambda cwd=None: "no-history")
+    from audit import sections_agent
+    monkeypatch.setattr(sections_agent, "scan_agents", lambda **kw: [])
     # hook_drift も環境グローバル（~/.gstack の flow-chain.json）を読む builder のため、
     # 実機に gstack があると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する。
     import hook_drift

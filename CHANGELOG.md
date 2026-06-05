@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(agent-brushup): エージェント編成ギャップ（役割重複・孤立）を決定論検出し evolve で surface（#326）** — `agent_quality.py` は各エージェント *単体* の品質（frontmatter / トリガー / 行数）しか見ておらず、エージェント *間* の関係（役割が重なって呼び分けが曖昧／どの編成にも繋がらない宙ぶらりんの定義）は不可視だった。ai-daily-report 2026-06-02 の revfactory/harness（ドメイン→エージェントチーム自動設計）の着想を、フル自動生成（手動 LLM コマンド＝evolve では発火しない）でなく **決定論の「編成ギャップ検出」を recurring ループに配線**する形で取り込む。新規 `scripts/lib/agent_team.py` が 2 軸を検出: ① **役割重複**（`detect_role_overlaps` — description の役割語を Examples ブロック除去＋ストップワード除去で集合化し `similarity.jaccard_coefficient` を SoT に全ペア Jaccard、`ROLE_OVERLAP_THRESHOLD`=0.5 以上）② **孤立**（`detect_isolated` — 他エージェント定義本文への名前出現を参照とみなし、**入次数 0 かつ出次数 0** のみ孤立とする＝ルーター/オーケストレーター（出>0）と被参照の専門家（入>0）を除外し宙ぶらりんの定義だけ拾う）。observability builder `build_agent_team_section`（新規 `scripts/lib/audit/sections_agent.py`、sections.py が hard 行数バジェット 800 直前のため分離）を `_OBSERVABILITY_BUILDERS` に登録し、markdown/構造化の両経路が消費。audit を消費する evolve が **evolve のたびに自動 surface**（手動 CLI 止まりにしない＝version≠enforcement 回避）。エージェント 2 個未満は None（編成が成立しない PJ＝対象外）、2 個以上はギャップ無しでも「✓ 評価したが編成ギャップなし」を1行残す（silence≠evaluated、ADR-028）。整理は破壊的なので surface に留め適用は `/rl-anything:agent-brushup` 経由の人間判断。実機 E2E（~/.claude/agents/ 7個）で `design-review` / `doc-writer` の孤立を検出、役割重複は誤検出ゼロを確認。決定論・LLM 非依存。TDD（役割重複検出・Examples ノイズ無視・無関係ペア非検出・孤立の入出次数判定・ルーター除外・analyze の has_gap・builder の None/clean/flag、新規 10 件）。
+
 ## [1.86.0] - 2026-06-05
 
 ### Fixed
