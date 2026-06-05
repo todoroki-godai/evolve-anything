@@ -4,11 +4,25 @@ audit/__init__.py と audit/memory.py 等のサブモジュール双方から
 参照される LIMITS / _STOPWORDS をここに集約する。
 循環 import を避けるため、サブモジュールはここからのみ import する。
 """
+from pathlib import Path
+
 from line_limit import (
     MAX_PROJECT_RULE_LINES,
     MAX_RULE_LINES,
     MAX_SKILL_LINES,
 )
+
+# スキル収集・重複検出から除外するサブディレクトリ名。
+# - .archive: rl-anything 自身がアーカイブしたスキル
+# - .gstack-backup: gstack がスキル更新前に退避したバックアップ。実スキルと 1:1 で
+#   コピーされるため、除外しないと phantom duplicate を大量検出する（docs-platform
+#   evolve で 104 件、remediation の manual_required を支配し本物の issue を埋もれさせた）
+EXCLUDED_SKILL_DIRS = frozenset({".archive", ".gstack-backup"})
+
+
+def is_excluded_skill_path(path: Path) -> bool:
+    """SKILL.md のパスが収集除外対象（.archive / .gstack-backup 配下）か判定する。"""
+    return any(part in EXCLUDED_SKILL_DIRS for part in path.parts)
 
 LIMITS = {
     "CLAUDE.md": 200,  # warning のみ（violation としては扱わない）

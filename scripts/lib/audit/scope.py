@@ -10,17 +10,21 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from ._constants import is_excluded_skill_path
 from .classification import classify_artifact_origin
 
 
 def _is_plugin_managed_path(path: Path) -> bool:
-    """プラグイン管理パス（gstack 等）かどうかを判定する。
+    """プラグイン管理パス（gstack 等）／バックアップパスかどうかを判定する。
 
-    gstack は同一スキルを複数サブディレクトリ（.hermes/.kiro/.openclaw 等）に
-    意図的にコピーするため、これらは重複候補から除外する。
+    重複候補から除外すべきパス:
+    - gstack は同一スキルを複数サブディレクトリ（.hermes/.kiro/.openclaw 等）に
+      意図的にコピーするため、`gstack` を含むパスは除外する
+    - `.gstack-backup` / `.archive` 配下のコピー（is_excluded_skill_path）も除外する
+      （`.gstack-backup` は実スキルと 1:1 でコピーされ phantom duplicate の主因）
     """
     parts = path.parts
-    return any(part in ("gstack",) for part in parts)
+    return any(part in ("gstack",) for part in parts) or is_excluded_skill_path(path)
 
 
 def detect_duplicates_simple(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:

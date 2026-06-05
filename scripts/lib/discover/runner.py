@@ -20,11 +20,68 @@ def _project_transcript_dir(project_root: Path) -> Path:
     return Path.home() / ".claude" / "projects" / encoded
 
 
+def _existing_skill_names(project_root: Path) -> set:
+    """既存の project / global スキル名（bare 名）の集合を返す。
+
+    ``<project>/.claude/skills/<name>/SKILL.md`` と ``~/.claude/skills/<name>/SKILL.md``
+    の親ディレクトリ名を集める。``.archive`` / ``.gstack-backup`` などドット始まりの
+    バックアップ・アーカイブディレクトリは除外する（実スキルではないため）。
+    プラグインスキル（``:`` namespaced）は名前自体で判別できるので走査不要。
+    """
+    names: set = set()
+    for base in (project_root / ".claude" / "skills",
+                 Path.home() / ".claude" / "skills"):
+        if not base.is_dir():
+            continue
+        for child in base.iterdir():
+            if child.is_dir() and not child.name.startswith(".") \
+                    and (child / "SKILL.md").exists():
+                names.add(child.name)
+    return names
+
+
+# CC 組み込みスラッシュコマンド（`<command-name>` に現れるが SKILL.md を持たない）。
+# skill_extractor が採掘するため CREATE 候補から除外する。CC のバージョンアップで
+# 組み込みが増えたらここに追記する。
+_CC_BUILTIN_COMMANDS = frozenset({
+    "loop", "model", "compact", "clear", "help", "cost", "init", "config",
+    "doctor", "status", "resume", "memory", "permissions", "mcp", "agents",
+    "fast", "vim", "login", "logout", "add-dir", "bug", "terminal-setup",
+})
+
+
+def _is_already_existing_skill(name: str, known_skills) -> bool:
+    """候補スキル名が「既に存在するスキル/コマンド」かどうかを判定する。
+
+    skill_extractor はセッション履歴の ``<command-name>`` ターンを採掘するため、
+    候補は定義上すべて「過去に実行されたコマンド」= 既存である。CREATE 候補と
+    して扱うべきでないものを除外する:
+
+    - プラグイン namespaced（``plugin:skill`` のように ``:`` を含む）→ インストール済み
+      プラグインスキル（例: ``rl-anything:evolve``）。bare 名の project/global スキルに
+      ``:`` は付かないため、``:`` の有無で確実に判別できる
+    - ``known_skills`` に含まれる → 既存の project / global スキル（例: ``review``）
+    - CC 組み込みコマンド（例: ``loop`` / ``model``）→ SKILL.md を持たないため
+      known_skills では捕まらないので別途 denylist で除外する
+
+    除外しないと「既存の loop/model/review/rl-anything:* を新規作成せよ」という
+    無意味な CREATE 提案が remediation に流れる（docs-platform evolve で 5 件検出）。
+    """
+    if not name:
+        return True
+    if ":" in name:
+        return True
+    if name in _CC_BUILTIN_COMMANDS:
+        return True
+    return name in known_skills
+
+
 def _trajectory_candidates_to_missed(
     candidates: list,
     *,
     threshold: float,
     existing_skills=(),
+    known_skills=(),
 ):
     """skill_extractor 候補を閾値フィルタし triage の missed_skills 形式へ変換する。
 
@@ -34,20 +91,27 @@ def _trajectory_candidates_to_missed(
         threshold: generalizability_score の下限（未満は除外）。
         existing_skills: 既に missed_skill_opportunities にある skill 名の集合。
             重複する候補は merge から除外する（surface には残す）。
+        known_skills: 既存の project / global スキル名の集合。プラグイン namespaced
+            （``:`` を含む）candidate と合わせて surface / merge の双方から除外する
+            （既存スキルへの CREATE 提案は無意味なため）。
 
     Returns:
-        ``(surfaced, merged)``。surfaced は閾値を満たした生候補、merged は triage が
+        ``(surfaced, merged)``。surfaced は閾値を満たした新規候補、merged は triage が
         消費する ``{"skill", "session_count", "triggers_matched", ...}`` 形式のリスト。
     """
     existing = set(existing_skills)
+    known = set(known_skills)
     surfaced = []
     merged = []
     for c in candidates:
         if c.get("generalizability_score", 0.0) < threshold:
             continue
-        surfaced.append(c)
         name = c.get("skill_name", "")
-        if not name or name in existing:
+        # 既存スキル（プラグイン namespaced / 既存 project・global）は候補にしない
+        if _is_already_existing_skill(name, known):
+            continue
+        surfaced.append(c)
+        if name in existing:
             continue
         merged.append({
             "skill": name,
@@ -127,10 +191,13 @@ def run_discover(
         existing_missed = {
             m.get("skill") for m in result.get("missed_skill_opportunities", [])
         }
+        # 既存 project / global スキル名を集めて CREATE 候補から除外する
+        known_skills = _existing_skill_names(project_root or Path.cwd())
         surfaced, merged = _trajectory_candidates_to_missed(
             traj_candidates,
             threshold=TRAJECTORY_SKILL_SCORE_THRESHOLD,
             existing_skills=existing_missed,
+            known_skills=known_skills,
         )
         if surfaced:
             result["trajectory_skill_candidates"] = surfaced

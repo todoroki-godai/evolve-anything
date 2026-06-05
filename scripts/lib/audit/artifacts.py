@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 from frontmatter import count_content_lines
 
-from ._constants import LIMITS
+from ._constants import LIMITS, is_excluded_skill_path
 from .classification import classify_artifact_origin
 
 
@@ -29,11 +29,11 @@ def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:
     if claude_md.exists():
         result["claude_md"].append(claude_md)
 
-    # Skills (.archive/ 配下はアーカイブ済みのため除外)
+    # Skills (.archive/ アーカイブ・.gstack-backup/ バックアップ配下は除外)
     skills_dir = claude_dir / "skills"
     if skills_dir.exists():
         for skill_md in skills_dir.rglob("SKILL.md"):
-            if ".archive" not in skill_md.parts:
+            if not is_excluded_skill_path(skill_md):
                 result["skills"].append(skill_md)
 
     # Rules
@@ -53,7 +53,7 @@ def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:
     global_skills = global_claude / "skills"
     if global_skills.exists():
         for skill_md in global_skills.rglob("SKILL.md"):
-            if ".archive" not in skill_md.parts:
+            if not is_excluded_skill_path(skill_md):
                 result["skills"].append(skill_md)
 
     global_rules = global_claude / "rules"
