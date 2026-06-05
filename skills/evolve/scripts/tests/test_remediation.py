@@ -959,17 +959,14 @@ class TestRuleSeparation:
         assert _is_rule_file("/project/.claude/skills/foo/SKILL.md") is False
 
     def test_fix_line_limit_rule_separation(self, tmp_path):
-        """rule ファイルの line_limit_violation は分離モードで修正される。"""
-        import subprocess as subprocess_mod
-        from unittest.mock import patch, MagicMock
+        """rule ファイルの line_limit_violation は proposable に降格する（[ADR-037] Phase 1d-ii）。
 
+        LLM-free 化により _fix_rule_by_separation は常に fixed=False を返す。
+        LLM 品質は emit_separation_request / ingest_separation の2相（SKILL 駆動）で回復する。
+        """
         rules_dir = tmp_path / ".claude" / "rules"
         rules_dir.mkdir(parents=True)
         rule = rules_dir / "verbose-rule.md"
-        # rule の行数上限は MAX_RULE_LINES = 10。suggest_separation は detail.limit でなく
-        # この定数で超過判定するため、テスト内容も実際に 10 行を超えさせる（12 行）。
-        # detail.lines/limit は production の check_line_limits が生成する契約に合わせる
-        # （rule の line_limit_violation は常に limit=10、lines>10）。
         rule_body = "# Rule\n" + "".join(f"Line {i}\n" for i in range(1, 12))
         rule.write_text(rule_body)
 
@@ -980,25 +977,18 @@ class TestRuleSeparation:
             "category": "auto_fixable",
         }]
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.stdout = "# Rule\n詳細は references/verbose-rule.md を参照。\n"
-
-        with patch.object(subprocess_mod, "run", return_value=mock_proc):
-            results = fix_line_limit_violation(issues)
+        results = fix_line_limit_violation(issues)
 
         assert len(results) == 1
-        assert results[0]["fixed"] is True
-        assert "separation" in results[0]
-        # 分離先ファイルが生成されている
-        ref_path = Path(results[0]["separation"]["reference_path"])
-        assert ref_path.exists()
+        assert results[0]["fixed"] is False
+        assert results[0]["issue"]["category"] == "proposable"
 
     def test_fix_line_limit_skill_compression(self, tmp_path):
-        """skill ファイルは従来通り LLM 圧縮で修正される。"""
-        import subprocess as subprocess_mod
-        from unittest.mock import patch, MagicMock
+        """非 rule ファイルの line_limit_violation は proposable に降格する（[ADR-037] Phase 1d-ii）。
 
+        LLM-free 化により非 rule パスも常に fixed=False を返す。
+        LLM 品質は emit_compression_request / ingest_compression の2相（SKILL 駆動）で回復する。
+        """
         skill = tmp_path / "SKILL.md"
         long_content = "\n".join([f"line {i}" for i in range(600)])
         skill.write_text(long_content)
@@ -1010,16 +1000,11 @@ class TestRuleSeparation:
             "category": "auto_fixable",
         }]
 
-        compressed = "\n".join([f"line {i}" for i in range(400)])
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.stdout = compressed
-
-        with patch.object(subprocess_mod, "run", return_value=mock_proc):
-            results = fix_line_limit_violation(issues)
+        results = fix_line_limit_violation(issues)
 
         assert len(results) == 1
-        assert results[0]["fixed"] is True
+        assert results[0]["fixed"] is False
+        assert results[0]["issue"]["category"] == "proposable"
         assert "separation" not in results[0]
 
     def test_verify_line_limit_rule_with_ref(self, tmp_path):

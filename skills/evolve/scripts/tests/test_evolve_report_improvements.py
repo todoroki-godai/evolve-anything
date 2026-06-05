@@ -137,8 +137,11 @@ class TestLineLimitClassification:
         assert issue["category"] == "proposable"
 
     def test_fix_line_limit_timeout(self, tmp_path):
-        """LLM タイムアウト → proposable に降格。"""
-        import subprocess
+        """非 rule ファイルの line_limit_violation は常に proposable に降格する（[ADR-037] Phase 1d-ii）。
+
+        LLM-free 化により subprocess.TimeoutExpired の mock は不要。
+        error は "compression_deferred_to_2phase"（決定論フォールバック）。
+        """
         from remediation import fix_line_limit_violation
         f = tmp_path / "rule.md"
         f.write_text("# Rule\nLine 1\nLine 2\nLine 3\nLine 4\n")
@@ -148,11 +151,9 @@ class TestLineLimitClassification:
             "detail": {"lines": 5, "limit": 3},
             "category": "auto_fixable",
         }
-        with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=60)):
-            results = fix_line_limit_violation([issue])
+        results = fix_line_limit_violation([issue])
         assert len(results) == 1
         assert results[0]["fixed"] is False
-        assert results[0]["error"] == "llm_timeout"
         assert issue["category"] == "proposable"
 
 

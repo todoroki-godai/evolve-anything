@@ -28,84 +28,16 @@ def _fix_rule_by_separation(
     original_content: str,
     limit: int,
 ) -> Dict[str, Any]:
-    """rule ファイルの行数超過を references への分離で修正する。"""
-    import subprocess
-    import sys
-    from plugin_root import PLUGIN_ROOT
+    """rule ファイルの行数超過を references への分離で修正する。
 
-    sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
-    from line_limit import suggest_separation
-
-    proposal = suggest_separation(str(path), original_content)
-    if not proposal:
-        return {
-            "issue": issue, "original_content": original_content,
-            "fixed": False, "error": "separation_not_applicable",
-        }
-
-    prompt = (
-        f"以下の rule ファイルの内容を {limit} 行以内の要約+参照リンクに書き換えてください。\n"
-        f"詳細は別ファイルに分離されるので、rule には核心の1行ルールと参照リンクのみ残してください。\n"
-        f"参照リンク: `{proposal.reference_path}`\n"
-        f"出力は書き換え後の rule 内容のみ（説明不要）。\n\n"
-        f"```\n{original_content}```"
-    )
-
-    try:
-        result_proc = subprocess.run(
-            ["claude", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result_proc.returncode != 0:
-            issue["category"] = "proposable"
-            return {
-                "issue": issue, "original_content": original_content,
-                "fixed": False, "error": f"llm_error: exit code {result_proc.returncode}",
-            }
-
-        summary = result_proc.stdout.strip()
-        if summary.startswith("```") and summary.endswith("```"):
-            lines = summary.split("\n")
-            summary = "\n".join(lines[1:-1])
-
-        summary_lines = summary.count("\n") + (1 if summary and not summary.endswith("\n") else 0)
-        if summary_lines > limit:
-            issue["category"] = "proposable"
-            return {
-                "issue": issue, "original_content": original_content,
-                "fixed": False, "error": "separation_summary_too_long",
-            }
-
-        if not summary.endswith("\n"):
-            summary += "\n"
-
-        ref_path = Path(proposal.reference_path)
-        ref_path.parent.mkdir(parents=True, exist_ok=True)
-        ref_path.write_text(original_content, encoding="utf-8")
-
-        path.write_text(summary, encoding="utf-8")
-
-        return {
-            "issue": issue, "original_content": original_content,
-            "fixed": True, "error": None,
-            "separation": {
-                "reference_path": str(ref_path),
-                "summary": summary,
-            },
-        }
-
-    except subprocess.TimeoutExpired:
-        issue["category"] = "proposable"
-        return {
-            "issue": issue, "original_content": original_content,
-            "fixed": False, "error": "llm_timeout",
-        }
-    except OSError as e:
-        issue["category"] = "proposable"
-        return {
-            "issue": issue, "original_content": original_content,
-            "fixed": False, "error": str(e),
-        }
+    [ADR-037] Phase 1d-ii: claude -p を全廃。決定論フォールバック（proposable 降格）で完走する。
+    LLM 品質は emit_separation_request / ingest_separation の2相（SKILL 駆動）で回復する。
+    """
+    issue["category"] = "proposable"
+    return {
+        "issue": issue, "original_content": original_content,
+        "fixed": False, "error": "separation_deferred_to_2phase",
+    }
 
 
 def fix_line_limit_violation(
@@ -113,11 +45,11 @@ def fix_line_limit_violation(
 ) -> List[Dict[str, Any]]:
     """行数制限違反を修正する。
 
-    rule ファイル: references への分離（要約+参照リンク書き換え + 詳細ファイル生成）。
-    その他: LLM 1パス圧縮。
+    [ADR-037] Phase 1d-ii: claude -p を全廃。決定論フォールバック（proposable 降格）で完走する。
+    rule ファイル / 非 rule ファイルとも proposable 降格（fixed=False）を返す。
+    LLM 品質は emit_compression_request / ingest_compression および
+    emit_separation_request / ingest_separation の2相（SKILL 駆動）で回復する。
     """
-    import subprocess
-
     results = []
     for issue in issues:
         if issue["type"] != "line_limit_violation":
@@ -141,60 +73,12 @@ def fix_line_limit_violation(
             results.append(_fix_rule_by_separation(issue, path, original_content, limit))
             continue
 
-        prompt = (
-            f"以下のファイル内容を {limit} 行以内に圧縮してください。"
-            f"意味と構造を保ちつつ、冗長な表現を削除して簡潔にしてください。"
-            f"出力は圧縮後のファイル内容のみ（説明不要）。\n\n"
-            f"```\n{original_content}```"
-        )
-
-        try:
-            result_proc = subprocess.run(
-                ["claude", "--print", "-p", prompt],
-                capture_output=True, text=True, timeout=60,
-            )
-            if result_proc.returncode != 0:
-                issue["category"] = "proposable"
-                results.append({
-                    "issue": issue, "original_content": original_content,
-                    "fixed": False, "error": f"llm_error: exit code {result_proc.returncode}",
-                })
-                continue
-
-            compressed = result_proc.stdout.strip()
-            if compressed.startswith("```") and compressed.endswith("```"):
-                lines = compressed.split("\n")
-                compressed = "\n".join(lines[1:-1])
-
-            compressed_lines = compressed.count("\n") + (1 if compressed and not compressed.endswith("\n") else 0)
-            if compressed_lines > limit:
-                issue["category"] = "proposable"
-                results.append({
-                    "issue": issue, "original_content": original_content,
-                    "fixed": False, "error": "compression_insufficient",
-                })
-                continue
-
-            if not compressed.endswith("\n"):
-                compressed += "\n"
-            path.write_text(compressed, encoding="utf-8")
-            results.append({
-                "issue": issue, "original_content": original_content,
-                "fixed": True, "error": None,
-            })
-
-        except subprocess.TimeoutExpired:
-            issue["category"] = "proposable"
-            results.append({
-                "issue": issue, "original_content": original_content,
-                "fixed": False, "error": "llm_timeout",
-            })
-        except OSError as e:
-            issue["category"] = "proposable"
-            results.append({
-                "issue": issue, "original_content": original_content,
-                "fixed": False, "error": str(e),
-            })
+        # 非 rule ファイル: proposable 降格（LLM 圧縮は2相で回復）
+        issue["category"] = "proposable"
+        results.append({
+            "issue": issue, "original_content": original_content,
+            "fixed": False, "error": "compression_deferred_to_2phase",
+        })
 
     return results
 

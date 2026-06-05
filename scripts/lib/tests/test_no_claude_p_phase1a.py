@@ -30,6 +30,10 @@ CONVERTED_MODULES = [
     # Phase 1d-i（reflect 検出系: corrections の意味検証 / 指示違反判定）
     "scripts/lib/semantic_detector.py",
     "scripts/lib/critical_instruction_extractor.py",
+    # Phase 1d-ii（remediation 系: line_limit 圧縮/分離・split 候補提案の LLM-free 化）
+    "scripts/lib/remediation/fixers_rules.py",
+    "scripts/lib/remediation/fixers_quality.py",
+    "scripts/lib/remediation/fixers_llm.py",
 ]
 
 # まだ claude -p を残す既知の経路（順次 CONVERTED へ移す。silent 取りこぼし防止）。
@@ -37,8 +41,6 @@ CONVERTED_MODULES = [
 # どちらかに必ず載る（台帳を網羅的に保つ）。
 KNOWN_REMAINING = [
     "scripts/lib/score_noise.py",                   # _run_claude_prompt（bin/rl-prompt-compare 後方互換、DEPRECATED）
-    "scripts/lib/remediation/fixers_rules.py",      # line_limit 修正の LLM 圧縮/分離（Phase 1d-ii で変換予定）
-    "scripts/lib/remediation/fixers_quality.py",    # split 候補修正の LLM 生成（Phase 1d-ii で変換予定）
     "hooks/auto_memory_runner.py",                  # Stop hook の memory 生成（Phase 2 で evolve 吸収予定）
 ]
 

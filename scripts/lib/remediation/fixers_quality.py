@@ -44,9 +44,11 @@ from issue_schema import (
 def fix_split_candidate(
     issues: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """スキル分割案を LLM で生成して提案テキストを返す（ファイル変更なし）。"""
-    import subprocess
+    """スキル分割案を決定論フォールバックで生成して提案テキストを返す（ファイル変更なし）。
 
+    [ADR-037] Phase 1d-ii: claude -p を全廃。常に決定論 proposal_text（フォールバック文）で
+    fixed=True を返す。LLM 品質は emit_split_request / ingest_split の2相（SKILL 駆動）で回復する。
+    """
     results = []
     for issue in issues:
         if issue["type"] != "split_candidate":
@@ -75,33 +77,10 @@ def fix_split_candidate(
         line_count = detail.get("line_count", len(content.splitlines()))
         threshold = detail.get("threshold", 300)
 
-        prompt = (
-            f"以下のスキル SKILL.md ({line_count}行、閾値{threshold}行) を分析し、"
-            f"references/ に切り出すべきセクションを特定してください。\n"
-            f"出力形式:\n"
-            f"- 分割先ファイル名と各ファイルの概要\n"
-            f"- 推定削減行数\n"
-            f"- SKILL.md に残す内容の概要\n\n"
-            f"```\n{content[:3000]}```"
+        proposal_text = (
+            f"スキル「{skill_name}」({line_count}行) の分割を検討してください。"
+            f"references/ にセクションを切り出し、SKILL.md を {threshold}行以下に削減することを推奨します。"
         )
-
-        try:
-            result_proc = subprocess.run(
-                ["claude", "--print", "-p", prompt],
-                capture_output=True, text=True, timeout=60,
-            )
-            if result_proc.returncode != 0:
-                proposal_text = (
-                    f"スキル「{skill_name}」({line_count}行) の分割を検討してください。"
-                    f"references/ にセクションを切り出し、SKILL.md を {threshold}行以下に削減することを推奨します。"
-                )
-            else:
-                proposal_text = result_proc.stdout.strip()
-        except (subprocess.TimeoutExpired, OSError):
-            proposal_text = (
-                f"スキル「{skill_name}」({line_count}行) の分割を検討してください。"
-                f"references/ にセクションを切り出し、SKILL.md を {threshold}行以下に削減することを推奨します。"
-            )
 
         results.append({
             "issue": issue, "original_content": "", "fixed": True,
