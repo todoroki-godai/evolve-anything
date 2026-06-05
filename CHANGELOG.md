@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.88.0] - 2026-06-05
+
 ### Added
 - **feat(subagent-guard): SubagentStop 警告を累積カウントから時間窓ベースへ変更** — `subagent_observe.py`（SubagentStop hook）の閾値超過警告を、セッション開始からの **累積** subagent 数から **直近 `subagent_window_minutes`（既定5分）以内の同一セッション subagent 生成数** に変更。累積方式は長時間の正常セッションでも閾値に達して誤検知し続け、本来狙っている「短時間バーストの暴走ループ/カスケード」だけを捕捉できていなかった。`_count_session_subagents` を `_count_recent_session_subagents` に置き換え、各記録の `timestamp` を `now - window` で window フィルタ（パース不能・欠落 timestamp は窓外扱いで誤検知を防ぐ保守側）。新規 userConfig `subagent_window_minutes`（既定5）を `plugin.json` / `marketplace.json` に追加して時間窓を可変化（`CLAUDE_PLUGIN_OPTION_subagent_window_minutes` で上書き、長め設定で従来寄りの累積的挙動にも倒せる）。警告文面（systemMessage / additionalContext）も「直近N分で」を明示するよう更新。スコープは従来どおり同一セッション内。決定論・LLM 非依存。TDD（window 外は非警告 / window 拡大で警告 / config default+override の新規4件 + 既存テストを recent timestamp へ修正、hooks 487 緑、`claude plugin validate` 緑、API surface snapshot 再生成）。
 
