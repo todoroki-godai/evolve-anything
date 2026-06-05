@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.89.0] - 2026-06-05
+
 ### Removed
 - **chore(handover): `handover` スキルを廃止し checkpoint 機構へ統合（[ADR-040](docs/decisions/040-retire-handover-skill-into-checkpoint.md)）** — 手動でセッション引き継ぎノート（`.claude/handovers/*.md`）を書き出す `handover` スキルが運用実態として使われなくなっていたため廃止。理由は同じ `restore_state.py`（SessionStart hook）の **checkpoint 復元機構が作業文脈（git_branch / recent_commits / uncommitted_files / evolve_state）を SessionStart で自動復元する**ようになり、手動ノートの動機が吸収されたこと。残る「人が読む引き継ぎ文」用途も `/compact`（同一セッション継続）+ checkpoint（セッション跨ぎ自動復元）でほぼ代替できていた。削除対象: `skills/handover/`（SKILL.md / scripts / tests）・`bin/rl-handover`・`restore_state.py` の handover 依存（`_detect_handover` / `_extract_section` / handover.py import / 関連定数）。**checkpoint 復元・work_context サマリ・session title 生成は温存**（このコアは handover に非依存だったため無傷）。`ctx_guard.py` の context 逼迫警告から「/handover で引き継ぎ」案内を削除し「作業文脈は checkpoint が自動復元」へ置換。ドキュメント（README(.ja).md / SPEC.md / spec/api.md / spec/architecture.md / rl-anything-advisor.md）から handover 行を除去。公開コマンド `/rl-anything:handover` が消えるため MINOR bump 相当。決定論・LLM 非依存。
 
