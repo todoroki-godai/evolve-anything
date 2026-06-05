@@ -54,13 +54,39 @@ def cluster_skills(tfidf_matrix, threshold: float = 0.7) -> list:
     Returns:
         クラスタラベルのリスト（各スキルに対応）
     """
+    import numpy as np
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import pdist
 
-    distances = pdist(tfidf_matrix.toarray(), metric='cosine')
+    dense = tfidf_matrix.toarray()
+    # ゼロノルム行（退化スキル: TF-IDF 全ゼロ）が pdist(metric='cosine') に渡ると
+    # 0 除算で NaN + RuntimeWarning が発生し、linkage の結果が非決定的・不正になる（#340）。
+    # 根本原因（ゼロベクトル）を計算前に検出し、cosine 計算自体を警告なく行うため
+    # ゼロノルム行を含むペアの距離を最大距離 1.0 にフォールバックする。
+    norms = np.sqrt((dense ** 2).sum(axis=1))
+    zero_norm = norms == 0
+    if zero_norm.any():
+        # ゼロノルム行を一時的に無害なダミー方向へ置換して pdist の 0 除算を回避し、
+        # その後ゼロノルムが絡む距離をすべて最大距離 1.0 に上書きする。
+        safe = dense.copy()
+        safe[zero_norm, 0] = 1.0
+        distances = pdist(safe, metric='cosine')
+        # condensed 距離配列のインデックスを (i, j) ペアへ展開し、
+        # どちらかがゼロノルムなら 1.0（最大距離）に固定する。
+        n = dense.shape[0]
+        idx = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                if zero_norm[i] or zero_norm[j]:
+                    distances[idx] = 1.0
+                idx += 1
+    else:
+        distances = pdist(dense, metric='cosine')
+    # 念のため残存 NaN を最大距離に潰す（決定論性の保険）。
+    distances = np.nan_to_num(distances, nan=1.0)
     Z = linkage(distances, method='average')
     labels = fcluster(Z, t=threshold, criterion='distance')
-    return labels.tolist()
+    return [int(lbl) for lbl in labels.tolist()]
 
 
 def detect_split_candidates(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:

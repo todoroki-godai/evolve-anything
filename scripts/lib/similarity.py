@@ -33,6 +33,36 @@ def build_tfidf_matrix(skill_texts: dict) -> tuple:
     return matrix, vectorizer.get_feature_names_out(), skill_names
 
 
+def cosine_similarity_safe(vec_a, vec_b) -> float:
+    """ゼロノルムガード付き cosine 類似度を計算する（#340）。
+
+    scipy.spatial.distance.cosine は ``uu == 0`` または ``vv == 0``（ゼロノルム
+    ベクトル）で ``1.0 - uv / sqrt(uu*vv)`` の 0 除算により NaN + RuntimeWarning
+    を出す。退化スキル（stop word のみ等で TF-IDF が全ゼロになる文書）が混入すると
+    類似度行列が NaN に汚染され、クラスタリング結果が歪む。
+
+    どちらかがゼロノルムなら「共有する情報なし」とみなし類似度 0.0
+    （= cosine 距離 1.0、最大距離）にフォールバックする。
+    ``warnings.filterwarnings`` で握り潰さず、根本原因（ゼロベクトル）を計算前に
+    分岐して除去するため決定論的。
+
+    Args:
+        vec_a, vec_b: 1次元の numpy 配列（TF-IDF 行ベクトル）。
+
+    Returns:
+        cosine 類似度（0.0〜1.0）。ゼロノルム入力時は 0.0。
+    """
+    import numpy as np
+
+    a = np.asarray(vec_a, dtype=float)
+    b = np.asarray(vec_b, dtype=float)
+    norm_a = float(np.dot(a, a))
+    norm_b = float(np.dot(b, b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return float(np.dot(a, b) / np.sqrt(norm_a * norm_b))
+
+
 def compute_pairwise_similarity(
     paths: Dict[str, str], threshold: float = 0.80
 ) -> List[Dict[str, object]]:
@@ -68,19 +98,14 @@ def compute_pairwise_similarity(
     if matrix is None:
         return []
 
-    # ペアワイズ コサイン類似度を計算
-    try:
-        from scipy.spatial.distance import cosine as cosine_distance
-    except ImportError:
-        return []
-
+    # ペアワイズ コサイン類似度を計算（ゼロノルムガード付き、#340）
     results: List[Dict[str, object]] = []
     n = len(skill_names)
     for i in range(n):
         for j in range(i + 1, n):
             vec_a = matrix[i].toarray().flatten()
             vec_b = matrix[j].toarray().flatten()
-            similarity = 1.0 - cosine_distance(vec_a, vec_b)
+            similarity = cosine_similarity_safe(vec_a, vec_b)
             if similarity >= threshold:
                 results.append({
                     "path_a": path_map[skill_names[i]],
@@ -136,12 +161,8 @@ def filter_merge_group_pairs(
         # sklearn 未インストール: graceful degradation — 全ペアを返す、interactive は空
         return [frozenset(pair) for pair in combinations(skills, 2)], []
 
-    try:
-        from scipy.spatial.distance import cosine as cosine_distance
-    except ImportError:
-        return [frozenset(pair) for pair in combinations(skills, 2)], []
-
     # ペアワイズ類似度を計算し、閾値以上と interactive 範囲を分類
+    # （ゼロノルムガード付き、#340）
     passed: List[FrozenSet[str]] = []
     interactive: list = []
     n = len(skill_names)
@@ -149,7 +170,7 @@ def filter_merge_group_pairs(
         for j in range(i + 1, n):
             vec_a = matrix[i].toarray().flatten()
             vec_b = matrix[j].toarray().flatten()
-            similarity = 1.0 - cosine_distance(vec_a, vec_b)
+            similarity = cosine_similarity_safe(vec_a, vec_b)
             pair = frozenset([skill_names[i], skill_names[j]])
             if similarity >= threshold:
                 passed.append(pair)

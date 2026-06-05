@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """similarity.py のユニットテスト。"""
 import sys
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lib.similarity import (
     build_tfidf_matrix,
     compute_pairwise_similarity,
+    cosine_similarity_safe,
     filter_merge_group_pairs,
     jaccard_coefficient,
     tokenize,
@@ -369,6 +371,124 @@ class TestFilterMergeGroupPairs:
 
         assert len(passed) == 1
         assert interactive == []
+
+
+# --- cosine_similarity_safe (ゼロノルムガード, #340) ---
+
+
+class TestCosineSimilaritySafe:
+    """cosine_similarity_safe のゼロノルムガード（#340）。"""
+
+    def test_normal_vectors(self):
+        """非ゼロベクトルは通常の cosine 類似度を返す（回帰なし）。"""
+        import numpy as np
+
+        a = np.array([1.0, 0.0, 0.0])
+        b = np.array([1.0, 0.0, 0.0])
+        assert abs(cosine_similarity_safe(a, b) - 1.0) < 1e-9
+
+        c = np.array([1.0, 0.0])
+        d = np.array([0.0, 1.0])
+        assert abs(cosine_similarity_safe(c, d) - 0.0) < 1e-9
+
+    def test_zero_norm_vector_no_nan(self):
+        """ゼロノルムベクトルで NaN を出さず 0.0（最大距離）にフォールバック。"""
+        import numpy as np
+
+        zero = np.zeros(4)
+        nonzero = np.array([1.0, 2.0, 0.0, 0.0])
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # 警告を例外化
+            sim = cosine_similarity_safe(zero, nonzero)
+
+        assert not np.isnan(sim)
+        assert sim == 0.0
+
+    def test_both_zero_norm_no_nan(self):
+        """両方ゼロノルムでも NaN を出さず 0.0 を返す。"""
+        import numpy as np
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            sim = cosine_similarity_safe(np.zeros(3), np.zeros(3))
+
+        assert not np.isnan(sim)
+        assert sim == 0.0
+
+    def test_deterministic(self):
+        """同一入力で決定論的な結果を返す。"""
+        import numpy as np
+
+        a = np.array([0.5, 0.5, 0.0])
+        b = np.array([0.0, 1.0, 0.0])
+        assert cosine_similarity_safe(a, b) == cosine_similarity_safe(a, b)
+
+
+class TestZeroNormDocsNoNaN:
+    """退化ドキュメント（TF-IDF 全ゼロ）が混入しても NaN/警告を出さないこと（#340）。
+
+    stop_words='english' のため、stop word のみで構成された文書は TF-IDF が全ゼロ行になる。
+    """
+
+    def _make_skill(self, tmp_path, name, text):
+        (tmp_path / name).mkdir()
+        path = tmp_path / name / "SKILL.md"
+        path.write_text(text)
+        return str(path)
+
+    def test_compute_pairwise_similarity_zero_norm_no_warning(self, tmp_path):
+        """ゼロノルム文書を含む compute_pairwise_similarity が RuntimeWarning を出さない。"""
+        import numpy as np
+
+        pytest.importorskip("sklearn")
+        pytest.importorskip("scipy")
+
+        # stop word のみ → TF-IDF 全ゼロになる退化文書
+        degenerate = self._make_skill(tmp_path, "degenerate", "the the the and and or")
+        normal = self._make_skill(
+            tmp_path, "normal",
+            "AWS CloudFormation deployment infrastructure templates stack pipeline.",
+        )
+        paths = {"degenerate": degenerate, "normal": normal}
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = compute_pairwise_similarity(paths, threshold=0.30)
+
+        runtime_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+        assert runtime_warnings == [], (
+            f"想定外の RuntimeWarning: {[str(w.message) for w in runtime_warnings]}"
+        )
+        # similarity に NaN が混入していないこと
+        for r in results:
+            assert not np.isnan(r["similarity"])
+
+    def test_filter_merge_group_pairs_zero_norm_no_warning(self, tmp_path):
+        """ゼロノルム文書を含む filter_merge_group_pairs が RuntimeWarning を出さない。"""
+        pytest.importorskip("sklearn")
+        pytest.importorskip("scipy")
+
+        degenerate = self._make_skill(tmp_path, "deg", "the the and or but if")
+        normal = self._make_skill(
+            tmp_path, "norm",
+            "Python testing framework pytest unittest mock assertion coverage.",
+        )
+        skill_path_map = {"deg": degenerate, "norm": normal}
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            passed, interactive = filter_merge_group_pairs(
+                ["deg", "norm"], skill_path_map, threshold=0.60, interactive_threshold=0.10,
+            )
+
+        runtime_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+        assert runtime_warnings == [], (
+            f"想定外の RuntimeWarning: {[str(w.message) for w in runtime_warnings]}"
+        )
+        # ゼロノルム文書とは類似度 0 → passed にも interactive(>=0.10) にも入らない
+        assert frozenset(["deg", "norm"]) not in passed
+        assert all(pair != frozenset(["deg", "norm"]) for pair, _ in interactive)
 
 
 # --- tokenize ---

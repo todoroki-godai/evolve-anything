@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(reorganize): TF-IDF cosine のゼロノルムベクトル由来 NaN を根本除去（#340）** — evolve の reorganize フェーズで scipy が `RuntimeWarning: invalid value encountered in scalar divide`（`dist = 1.0 - uv / sqrt(uu*vv)`）を出し、退化スキル（stop word のみ等で TF-IDF が全ゼロになる文書）のゼロノルムベクトルが cosine 距離計算に渡って 0 除算 → NaN がクラスタリング距離行列に混入し hierarchy/split 結果を歪めていた。`warnings.filterwarnings` で握り潰さず根本原因（ゼロベクトル）を計算前に除去する方針で二重防御: ① `similarity.py` に `cosine_similarity_safe(vec_a, vec_b)` を追加し `uu==0 or vv==0` を numpy で先回りガード（類似度 0.0 = 距離 1.0 にフォールバック）、`compute_pairwise_similarity` / `filter_merge_group_pairs` の scipy `cosine` 直呼びを置換 ② `reorganize.cluster_skills` の `pdist(metric='cosine')` 経路でゼロノルム行を検出してダミー方向へ退避＋ゼロノルムが絡む距離を最大距離 1.0 に固定し、残存 NaN も `nan_to_num(nan=1.0)` で潰してから `linkage`。非ゼロベクトルの類似度計算は数式不変（回帰なし）、クラスタリングは決定論的。TDD（`cosine_similarity_safe` のゼロノルム/両ゼロ/決定論、退化文書混入時の RuntimeWarning 不在・NaN 不在を `warnings.catch_warnings`/`numpy.isnan` で assert、cluster_skills の NaN/警告不在・決定論・正常系不変の新規12件）。決定論・LLM 非依存。
+
 ## [1.88.0] - 2026-06-05
 
 ### Added
