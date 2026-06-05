@@ -61,7 +61,19 @@ FP_EXCLUSIONS: List[str] = [
     "memory_index_only",   # MEMORY.md のインデックス行
     "plugin_managed",      # plugin origin のスキル参照
     "short_field_name",    # 8文字未満のフィールド名
+    "tmp_path",            # /tmp 等の一時ファイルパス（実体は履歴的引用・存在しなくて当然）
+    "logical_path",        # SSM 等の論理パス（/service/key、拡張子なし・ファイルシステム外）
 ]
+
+# tmp_path: OS の一時ディレクトリプレフィックス（履歴的引用であり stale 判定対象外）
+_TMP_PATH_PREFIXES = ("/tmp/", "/var/tmp/", "/private/tmp/", "/var/folders/")
+
+# logical_path: SSM 風論理パスと実ファイルシステムルートを区別するための「実ルート」先頭セグメント。
+# これらで始まる絶対パスは（拡張子の有無に関わらず）実ファイル参照とみなし logical_path にしない。
+_REAL_FS_ROOT_SEGMENTS = {
+    "users", "home", "root", "var", "tmp", "opt", "etc", "usr",
+    "private", "mnt", "volumes", "bin", "sbin", "lib", "srv", "data",
+}
 
 
 # ---------- FP 除外判定 ----------
@@ -88,6 +100,26 @@ def _should_exclude_fp(issue: Dict[str, Any]) -> Optional[str]:
     # archive_path: archive/ 配下の参照
     if "/archive/" in ref_path or ref_path.startswith("archive/"):
         return "archive_path"
+
+    # tmp_path: OS 一時ディレクトリ配下の参照（#339）。
+    # /tmp/ab_test.py 等は「何を実行したか」の歴史的引用であり、ディスク上に
+    # 存在しなくて当然。auto-fix で memory から削除してはならない。
+    if ref_path.startswith(_TMP_PATH_PREFIXES):
+        return "tmp_path"
+
+    # logical_path: SSM パラメータ等の論理パス（#339）。
+    # /docs-platform/strategy のような「絶対・全セグメント拡張子なし・実ファイル
+    # システムルートでない」パスはファイル参照ではなく論理識別子。実在しない
+    # のが正常なので auto_fixable に入れてはならない。
+    # 実ファイルシステムルート（/Users, /home, /var, ~/.claude 等）配下は対象外。
+    if ref_path.startswith("/"):
+        segments = [s for s in ref_path.split("/") if s]
+        if (
+            len(segments) >= 2
+            and all("." not in s for s in segments)
+            and segments[0].lower() not in _REAL_FS_ROOT_SEGMENTS
+        ):
+            return "logical_path"
 
     # numeric_only: 数値のみパターン（429, 500 等）
     matched = detail.get("matched", "")

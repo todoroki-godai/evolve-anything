@@ -233,13 +233,130 @@ def test_fp_exclusions_memory_index_only():
     assert reason == "memory_index_only"
 
 
+def test_fp_exclusions_tmp_path():
+    """/tmp/ 配下の一時ファイルパスは FP として除外される（#339）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/tmp/ab_test.py"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason == "tmp_path"
+
+
+def test_fp_exclusions_tmp_path_macos_private():
+    """macOS の /private/tmp/ 配下も tmp_path として除外される（#339）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/private/tmp/scratch.json"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason == "tmp_path"
+
+
+def test_fp_exclusions_tmp_path_var_folders():
+    """macOS の /var/folders/ 配下も tmp_path として除外される（#339）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/var/folders/xy/abc/T/tmpfile"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason == "tmp_path"
+
+
+def test_fp_exclusions_ssm_logical_path():
+    """SSM 風の論理パス（絶対・拡張子なし）は FP として除外される（#339）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/docs-platform/strategy"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason == "logical_path"
+
+
+def test_fp_exclusions_ssm_logical_path_deep():
+    """多段の SSM 風論理パスも logical_path として除外される（#339）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/my-service/prod/api/secret-key"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason == "logical_path"
+
+
+def test_fp_exclusions_real_absolute_file_not_excluded():
+    """拡張子付きの正当な絶対ファイル参照は除外されない（#339 回帰ガード）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/Users/me/proj/scripts/lib/missing_module.py"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason is None
+
+
+def test_fp_exclusions_home_claude_md_not_excluded():
+    """~/.claude/ 配下の拡張子付き参照は logical_path 扱いしない（#339 回帰ガード）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/Users/me/.claude/rules/my-rule.md"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason is None
+
+
+def test_fp_exclusions_extensionless_real_dir_not_logical_path():
+    """拡張子なしでも実ファイルシステムルート配下のディレクトリ参照は logical_path にしない（#339 回帰ガード）。
+
+    /Users/... のような実ファイルシステムルートは SSM 論理パスではないため
+    logical_path として誤分類してはならない（他の FP 条件には掛かり得る）。
+    """
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/Users/me/proj/scripts/lib"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason != "logical_path"
+
+
+def test_fp_exclusions_extensionless_long_real_dir_not_excluded():
+    """8文字以上のセグメントを含む実ルート配下の拡張子なしパスは一切除外されない（#339 回帰ガード）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "MEMORY.md",
+        "detail": {"path": "/Users/developer/projects/repository/scripts"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason is None
+
+
+def test_fp_exclusions_tmp_path_classify_not_auto_fixable():
+    """tmp_path / logical_path は classify_issue で auto_fixable に入らない（#339 統合）。"""
+    from remediation import classify_issue
+
+    for ref in ("/tmp/ab_test.py", "/docs-platform/strategy"):
+        classified = classify_issue({
+            "type": "stale_ref",
+            "file": "MEMORY.md",
+            "detail": {"path": ref},
+        })
+        assert classified["category"] == "fp_excluded"
+        assert classified["confidence_score"] == 0.0
+
+
 def test_fp_exclusions_list_completeness():
-    """FP_EXCLUSIONS に全12パターンが含まれている。"""
-    assert len(FP_EXCLUSIONS) == 12
+    """FP_EXCLUSIONS に全14パターンが含まれている。"""
+    assert len(FP_EXCLUSIONS) == 14
     expected = {
         "test_file", "archive_path", "external_url", "numeric_only",
         "code_block_ref", "frontmatter_path", "example_snippet",
         "commented_out", "changelog_entry", "memory_index_only",
-        "plugin_managed", "short_field_name",
+        "plugin_managed", "short_field_name", "tmp_path", "logical_path",
     }
     assert set(FP_EXCLUSIONS) == expected
