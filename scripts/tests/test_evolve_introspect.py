@@ -114,6 +114,71 @@ def test_runtime_error_signature_is_path_and_digit_stable():
     assert k1 == k2
 
 
+# ── カテゴリ2 拡張: stderr 警告のキャプチャ（#341） ────
+
+
+def test_detect_captured_warning():
+    """result["warnings"] に記録された警告を runtime_errors が候補化する。
+
+    scipy の RuntimeWarning(NaN) 等は phase 例外として throw されないが
+    stderr に出る。evolve が warnings を result に記録し introspect が拾う。
+    """
+    result = _clean_result()
+    result["warnings"] = [
+        {
+            "category": "RuntimeWarning",
+            "message": "invalid value encountered in divide",
+            "filename": "scripts/lib/reorganize.py",
+            "lineno": 58,
+        }
+    ]
+    analysis = ei.analyze_evolve_result(result)
+    cands = analysis["runtime_errors"]["candidates"]
+    assert any(c["dedup_key"].startswith("runtime_warning:") for c in cands)
+    warn_cand = next(c for c in cands if c["dedup_key"].startswith("runtime_warning:"))
+    assert warn_cand["category"] == "runtime_error"
+    assert "RuntimeWarning" in warn_cand["title"] or "RuntimeWarning" in warn_cand["body"]
+    assert warn_cand["suggested_label"] == "bug"
+
+
+def test_warnings_accept_plain_strings():
+    """warnings が文字列リストでも受け付ける（後方互換 / 緩い記録経路）。"""
+    result = _clean_result()
+    result["warnings"] = ["RuntimeWarning: invalid value encountered in sqrt"]
+    analysis = ei.analyze_evolve_result(result)
+    assert any(
+        c["dedup_key"].startswith("runtime_warning:")
+        for c in analysis["runtime_errors"]["candidates"]
+    )
+
+
+def test_duplicate_warnings_collapse_to_one_candidate():
+    """同じ root cause の警告（場所違い）は単一候補に潰れる。"""
+    result = _clean_result()
+    result["warnings"] = [
+        {"category": "RuntimeWarning", "message": "invalid value encountered in divide", "filename": "a.py", "lineno": 1},
+        {"category": "RuntimeWarning", "message": "invalid value encountered in divide", "filename": "b.py", "lineno": 99},
+    ]
+    analysis = ei.analyze_evolve_result(result)
+    warn_cands = [c for c in analysis["runtime_errors"]["candidates"] if c["dedup_key"].startswith("runtime_warning:")]
+    assert len(warn_cands) == 1
+
+
+def test_no_warning_candidates_when_warnings_empty():
+    """warnings が空 / 欠落でも runtime_warning 候補は出ない（false alarm 防止）。"""
+    result = _clean_result()
+    result["warnings"] = []
+    analysis = ei.analyze_evolve_result(result)
+    assert not any(
+        c["dedup_key"].startswith("runtime_warning:")
+        for c in analysis["runtime_errors"]["candidates"]
+    )
+    # warnings キー自体が無い clean result でも 0 件 ✓
+    analysis2 = ei.analyze_evolve_result(_clean_result())
+    assert analysis2["runtime_errors"]["candidates"] == []
+    assert "✓" in analysis2["runtime_errors"]["summary_line"]
+
+
 # ── カテゴリ1: 自己検出（提案の質） ──────────────────
 
 
@@ -152,6 +217,72 @@ def test_detect_line_budget_conflict():
     analysis = ei.analyze_evolve_result(result)
     cands = analysis["self_detection"]["candidates"]
     assert any("line_budget_conflict" in c["dedup_key"] and "big.py" in c["dedup_key"] for c in cands)
+
+
+# ── カテゴリ1 拡張: auto_fixable への FP landing（#341） ─────
+
+
+def _result_with_auto_fixable(items):
+    result = _clean_result()
+    result["phases"]["remediation"] = {
+        "total_issues": len(items),
+        "classified": {"auto_fixable": items, "proposable": [], "manual_required": []},
+    }
+    return result
+
+
+def test_detect_fp_landing_in_auto_fixable_ssm_path():
+    """confidence>=0.9 の auto_fixable に SSM 風論理パスの FP が入る → 矛盾候補。"""
+    result = _result_with_auto_fixable([
+        {"type": "stale_ref", "file": "CLAUDE.md", "confidence_score": 0.95,
+         "detail": {"path": "/myapp/db/password"}},
+    ])
+    analysis = ei.analyze_evolve_result(result)
+    cands = analysis["self_detection"]["candidates"]
+    assert any(c["dedup_key"].startswith("self:fp_in_auto_fixable:") for c in cands)
+    fp_cand = next(c for c in cands if c["dedup_key"].startswith("self:fp_in_auto_fixable:"))
+    assert fp_cand["suggested_label"] == "bug"
+    assert "ssm_style_path" in fp_cand["dedup_key"]
+
+
+def test_detect_fp_landing_in_auto_fixable_tmp_path():
+    """/tmp パスの FP が auto_fixable に landing → 検出。"""
+    result = _result_with_auto_fixable([
+        {"type": "stale_ref", "file": "CLAUDE.md", "confidence_score": 0.95,
+         "detail": {"path": "/tmp/scratch/out.json"}},
+    ])
+    analysis = ei.analyze_evolve_result(result)
+    assert any(
+        c["dedup_key"].startswith("self:fp_in_auto_fixable:") and "tmp_path" in c["dedup_key"]
+        for c in analysis["self_detection"]["candidates"]
+    )
+
+
+def test_no_fp_landing_when_confidence_below_threshold():
+    """confidence < 0.9 では auto_fixable へ自動適用されないため検出対象外。"""
+    result = _result_with_auto_fixable([
+        {"type": "stale_ref", "file": "CLAUDE.md", "confidence_score": 0.5,
+         "detail": {"path": "/tmp/scratch/out.json"}},
+    ])
+    analysis = ei.analyze_evolve_result(result)
+    assert not any(
+        c["dedup_key"].startswith("self:fp_in_auto_fixable:")
+        for c in analysis["self_detection"]["candidates"]
+    )
+
+
+def test_no_fp_landing_for_legit_high_confidence_item():
+    """正当な実ファイル参照は high confidence でも FP landing として誤検出しない。"""
+    result = _result_with_auto_fixable([
+        {"type": "stale_ref", "file": "CLAUDE.md", "confidence_score": 0.95,
+         "detail": {"path": "scripts/lib/real_module.py"}},
+    ])
+    analysis = ei.analyze_evolve_result(result)
+    assert not any(
+        c["dedup_key"].startswith("self:fp_in_auto_fixable:")
+        for c in analysis["self_detection"]["candidates"]
+    )
+    assert "✓" in analysis["self_detection"]["summary_line"]
 
 
 def test_no_self_issue_when_split_and_archive_disjoint():

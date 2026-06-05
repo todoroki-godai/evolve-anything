@@ -179,12 +179,80 @@ def _detect_runtime_errors(result: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(obs, dict) and obs.get("error"):
         candidates.append(_make_runtime_candidate("observability", str(obs["error"]), source="observability"))
 
+    # stderr 警告（scipy RuntimeWarning(NaN) 等）を候補化する（#341）。
+    # evolve が実行中に出た警告を result["warnings"] に記録しておき、ここで拾う。
+    # phase が throw しない警告は phase.error に乗らないため、別経路で surface する。
+    candidates.extend(_detect_captured_warnings(result.get("warnings")))
+
     return _section(
         candidates,
-        zero_line="✓ 実行時エラー: フェーズ例外・observability 取得失敗なし",
+        zero_line="✓ 実行時エラー: フェーズ例外・observability 取得失敗・stderr 警告なし",
         hit_template="⚠ 実行時エラー {n} 件: {names}",
-        name_of=lambda c: c["dedup_key"].split(":")[1],
+        name_of=lambda c: c["dedup_key"].split(":", 1)[1] if ":" in c["dedup_key"] else c["dedup_key"],
     )
+
+
+def _detect_captured_warnings(warnings_obj: Any) -> List[Dict[str, Any]]:
+    """evolve 実行中にキャプチャされた警告を root cause 単位で候補化する。
+
+    `result["warnings"]` は以下のいずれかを受け付ける（記録経路を緩く保つ）:
+      - dict: {"category", "message", "filename", "lineno"}（warnings.catch_warnings 由来）
+      - str: "RuntimeWarning: invalid value encountered ..."（緩い記録 / 後方互換）
+
+    同一 root cause（message を正規化したシグネチャ）の警告は 1 候補に潰す。
+    """
+    if not isinstance(warnings_obj, list) or not warnings_obj:
+        return []
+
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for w in warnings_obj:
+        category, message = _parse_warning(w)
+        if not message:
+            continue
+        sig = _error_signature(message)
+        key = f"{category}:{sig}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(_make_warning_candidate(category, message, sig))
+    return out
+
+
+def _parse_warning(w: Any) -> tuple:
+    """警告レコード（dict / str）を (category, message) に正規化する。"""
+    if isinstance(w, dict):
+        category = str(w.get("category") or "Warning")
+        message = str(w.get("message") or "").strip()
+        return category, message
+    if isinstance(w, str):
+        text = w.strip()
+        # "RuntimeWarning: ..." 形式なら先頭をカテゴリとして切り出す。
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*Warning)\s*:\s*(.*)$", text)
+        if m:
+            return m.group(1), m.group(2).strip()
+        return "Warning", text
+    return "Warning", ""
+
+
+def _make_warning_candidate(category: str, message: str, sig: str) -> Dict[str, Any]:
+    title = f"[evolve introspect] stderr 警告: {category}: {message[:70]}"
+    body = (
+        f"## 自己解析: 実行時警告（stderr）\n\n"
+        f"evolve 実行中に `{category}` が stderr に出ていました（phase 例外としては"
+        f"throw されないため従来の runtime_errors では見逃されていました）。\n\n"
+        f"```\n{category}: {message}\n```\n\n"
+        f"NaN / deprecation 等の警告は計算経路の前提崩れを示すことが多いです。"
+        f"警告を握り潰さず root cause（入力データの前提・数値安定性）を修正してください。"
+    )
+    return {
+        "category": "runtime_error",
+        "title": title,
+        "body": body,
+        "suggested_label": "bug",
+        "dedup_key": f"runtime_warning:{category}:{sig}",
+        "severity": "medium",
+    }
 
 
 def _make_runtime_candidate(phase_name: str, error: str, source: str) -> Dict[str, Any]:
@@ -235,13 +303,107 @@ def _detect_self_issues(result: Dict[str, Any]) -> Dict[str, Any]:
 
     candidates.extend(_detect_split_archive_contradiction(phases))
     candidates.extend(_detect_line_budget_conflict(phases))
+    candidates.extend(_detect_fp_in_auto_fixable(phases))
 
     return _section(
         candidates,
-        zero_line="✓ 自己検出: 矛盾する提案・budget 悪化提案なし",
+        zero_line="✓ 自己検出: 矛盾する提案・budget 悪化提案・auto_fixable への FP landing なし",
         hit_template="⚠ 自己検出 {n} 件: {names}",
         name_of=lambda c: c.get("subject", c["dedup_key"]),
     )
+
+
+# confidence>=この値で auto_fixable に入ると無確認で自動適用され得るため、
+# FP が混ざっていると最も危険。AUTO_FIX_CONFIDENCE（remediation 側）と同値。
+_AUTO_FIX_FP_CONFIDENCE = 0.9
+
+
+def _detect_fp_in_auto_fixable(phases: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """auto_fixable（confidence>=0.9）に既知 FP パターンが landing した矛盾を検出する（#341）。
+
+    remediation の FP_EXCLUSIONS を通り抜けて高 confidence バケットに入った
+    「いかにも FP な論理パス/識別子」（SSM 風・/tmp・.archive・拡張子なし論理パス・
+    汎用略語）を known_fp_patterns カタログで照合する。フルオート運用で最も危険な
+    「FP の自動適用」を self_analysis がガードできていなかった盲点（#339）を塞ぐ。
+    """
+    remediation = phases.get("remediation", {})
+    if not isinstance(remediation, dict):
+        return []
+    classified = remediation.get("classified", {})
+    if not isinstance(classified, dict):
+        return []
+    auto_fixable = classified.get("auto_fixable", [])
+    if not isinstance(auto_fixable, list) or not auto_fixable:
+        return []
+
+    match_fn = _load_known_fp_matcher()
+    if match_fn is None:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for issue in auto_fixable:
+        if not isinstance(issue, dict):
+            continue
+        conf = issue.get("confidence_score")
+        if not isinstance(conf, (int, float)) or conf < _AUTO_FIX_FP_CONFIDENCE:
+            continue
+        pattern = match_fn(issue)
+        if not pattern:
+            continue
+        subject = _issue_fp_subject(issue)
+        dedup_key = f"self:fp_in_auto_fixable:{pattern}:{subject}"
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        itype = issue.get("type", "?")
+        body = (
+            f"## 自己解析: auto_fixable への FP landing\n\n"
+            f"confidence={conf} で **auto_fixable**（無確認で自動適用され得る）に入った "
+            f"issue（type=`{itype}`, file=`{issue.get('file', '?')}`）が、既知 FP パターン "
+            f"`{pattern}` に一致しています（対象: `{subject}`）。\n\n"
+            f"remediation の FP_EXCLUSIONS を通り抜けて高 confidence バケットに landing しており、"
+            f"フルオート運用では誤った自動修正につながります。`known_fp_patterns` の照合を"
+            f"remediation 側の auto_fixable 判定にも組み込むか、当該 type の confidence を見直してください。"
+        )
+        out.append({
+            "category": "self_detection",
+            "subject": subject,
+            "title": f"[evolve introspect] auto_fixable に既知 FP（{pattern}）が landing: `{subject}`",
+            "body": body,
+            "suggested_label": "bug",
+            "dedup_key": dedup_key,
+            "severity": "high",
+        })
+    return out
+
+
+def _load_known_fp_matcher():
+    """known_fp_patterns.match_known_fp_in_issue を遅延 import で取得する。
+
+    import 失敗時は None を返し、検出をスキップ（self_analysis 全体を壊さない）。
+    """
+    try:
+        from known_fp_patterns import match_known_fp_in_issue
+        return match_known_fp_in_issue
+    except Exception:
+        try:
+            from lib.known_fp_patterns import match_known_fp_in_issue  # type: ignore
+            return match_known_fp_in_issue
+        except Exception:
+            return None
+
+
+def _issue_fp_subject(issue: Dict[str, Any]) -> str:
+    """FP landing の subject（照合された論理パス/識別子）を取り出す。"""
+    detail = issue.get("detail")
+    if isinstance(detail, dict):
+        for key in ("path", "matched", "ref", "target", "name"):
+            val = detail.get(key)
+            if isinstance(val, str) and val:
+                return val
+    f = _issue_file(issue)
+    return f or "?"
 
 
 def _collect_archive_skills(phases: Dict[str, Any]) -> set:
