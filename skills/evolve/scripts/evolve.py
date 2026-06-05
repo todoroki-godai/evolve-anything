@@ -361,13 +361,10 @@ def run_evolve(
             # テレメトリ未取得 = 初回導入直後。backfill を先に実行するよう提案する
             # （自動実行はせず、副作用が大きいためユーザー判断に委ねる）。
             result["phases"]["observe"]["action"] = "backfill_recommended"
-            print(f"テレメトリ未取得: {sufficiency['message']}")
-            print("→ /rl-anything:backfill を先に実行してから evolve を回してください。")
         else:
-            result["phases"]["observe"]["action"] = "skip_recommended"
             # スキップ推奨だがユーザー選択に委ねる
-            print(f"データ不足: {sufficiency['message']}")
-            print("スキップ推奨。--force で強制実行可能。")
+            result["phases"]["observe"]["action"] = "skip_recommended"
+        _warn_insufficient_data(sufficiency)
 
     # Phase 1.5: Fitness 関数チェック
     fitness_check = check_fitness_function(project_dir)
@@ -934,6 +931,23 @@ def _emit_growth_crystallization(result: Dict[str, Any], project_dir: Optional[s
         phase=phase_str,
         source="evolve",
     )
+
+
+def _warn_insufficient_data(sufficiency: Dict[str, Any]) -> None:
+    """データ未取得/不足の人間向けガイダンスを stderr に出す（#336）。
+
+    stdout は result JSON 専用の契約。ここに「テレメトリ未取得」等の非 JSON 行を
+    混ぜると利用側の `json.loads` が先頭行で失敗するため、ガイダンスは必ず stderr へ。
+    """
+    if sufficiency.get("backfill_recommended"):
+        print(f"テレメトリ未取得: {sufficiency['message']}", file=sys.stderr)
+        print(
+            "→ /rl-anything:backfill を先に実行してから evolve を回してください。",
+            file=sys.stderr,
+        )
+    else:
+        print(f"データ不足: {sufficiency['message']}", file=sys.stderr)
+        print("スキップ推奨。--force で強制実行可能。", file=sys.stderr)
 
 
 def main() -> None:

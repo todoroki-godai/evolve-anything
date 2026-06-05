@@ -241,6 +241,9 @@ def emit_customize_request(
     from . import _plugin_root
     from llm_broker import build_requests
 
+    # #336: assess_single_skill と契約を揃え、str で渡されても TypeError にしない
+    skill_dir = Path(skill_dir)
+
     sections_content, _pitfalls, error = _load_templates(_plugin_root)
     if error:
         return {"requests": [], "error": error}
@@ -281,6 +284,9 @@ def ingest_customized_proposal(
     skipped = _rejected_preflight(skill_name)
     if skipped:
         return skipped
+
+    # #336: emit_customize_request と同じく str を許容（_assemble_proposal が / を使う）
+    skill_dir = Path(skill_dir)
 
     from . import _plugin_root
     from llm_broker import parse_responses

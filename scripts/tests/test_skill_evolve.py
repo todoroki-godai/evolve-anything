@@ -1487,3 +1487,39 @@ def test_ingest_customized_proposal_fallback_on_missing_response(tmp_path, monke
     # 応答欠損 → テンプレそのままにフォールバック
     assert proposal["error"] is None
     assert "Pre-flight Check" in proposal["sections_to_add"]
+
+
+# --- #336: skill_dir は str で渡しても TypeError にならない（Path/str 契約統一） ---
+
+
+def test_emit_customize_request_accepts_str_dir(tmp_path, monkeypatch):
+    """skill_dir を str で渡しても `skill_dir / "SKILL.md"` で落ちない（#336）。
+
+    assess_single_skill は str を受け入れるのに emit_* が Path 前提で TypeError に
+    なる契約不整合を塞ぐ。入口で Path() 正規化されていれば str でも動く。
+    """
+    from skill_evolve import emit_customize_request
+    _setup_templates(tmp_path)
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
+    sd = _make_skill(tmp_path, "theta", content="# Theta Skill\n")
+
+    out = emit_customize_request("theta", str(sd))  # str で渡す
+    assert len(out["requests"]) == 1
+    assert out["requests"][0]["id"] == "theta"
+
+
+def test_ingest_customized_proposal_accepts_str_dir(tmp_path, monkeypatch):
+    """ingest_customized_proposal も str の skill_dir を受け入れる（#336）。"""
+    from skill_evolve import emit_customize_request, ingest_customized_proposal
+    _setup_templates(tmp_path)
+    monkeypatch.setattr("skill_evolve._plugin_root", tmp_path)
+    sd = _make_skill(tmp_path, "iota", content="# Iota\n")
+
+    with mock.patch("skill_evolve.proposal.get_rejected_stats",
+                    return_value={"rejected_rate": 0.0}):
+        out = emit_customize_request("iota", str(sd))
+        responses = {"iota": "## Pre-flight Check (iota)\n## Failure-triggered Learning\n"}
+        proposal = ingest_customized_proposal("iota", str(sd), out["requests"], responses)
+
+    assert proposal["error"] is None
+    assert "(iota)" in proposal["sections_to_add"]
