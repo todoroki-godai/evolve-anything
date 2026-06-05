@@ -62,6 +62,11 @@ _DUMMY_PATTERNS = [
 
 _SAFE_URL_PARTS = ["example.com", "localhost", "127.0.0.1"]
 
+# doc 文脈の Slack channel ID（C0...）/ App ID（A0...）。これらは秘匿対象でない
+# 公開参照値で、SKILL.md の運用手順に意図的に書かれる（#337）。bot token（xoxb-,
+# api_key パターン）とは別物なので slack_id 検出から除外する。
+_SLACK_DOC_ID_RE = re.compile(r"^(?:C0|A0)[A-Z0-9]{8,}$")
+
 # バージョン番号
 _VERSION_PATTERN = re.compile(
     r"(?:^|[v=:\s])(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)\b"
@@ -114,6 +119,11 @@ def _is_arithmetic(line: str) -> bool:
     return bool(_ARITHMETIC_PATTERN.search(line))
 
 
+def _is_slack_doc_id(matched: str) -> bool:
+    """Slack channel ID（C0...）/ App ID（A0...）の doc 参照かどうか判定する（#337）。"""
+    return bool(_SLACK_DOC_ID_RE.match(matched))
+
+
 def _is_timestamp(matched: str, line: str) -> bool:
     """マッチした文字列がタイムスタンプかどうか判定する。"""
     if len(matched) == 10 and matched.isdigit() and _TIMESTAMP_PATTERN.match(matched):
@@ -144,6 +154,10 @@ def _should_exclude(
 
     # URL の安全チェック
     if pattern_name == "service_url" and _is_safe_url(matched):
+        return True
+
+    # Slack channel/app ID の doc 参照（秘匿対象でない公開参照値、#337）
+    if pattern_name == "slack_id" and _is_slack_doc_id(matched):
         return True
 
     # バージョン番号

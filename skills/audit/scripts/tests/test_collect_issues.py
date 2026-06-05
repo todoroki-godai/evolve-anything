@@ -116,7 +116,8 @@ def test_hardcoded_value_in_skill(project_dir):
     skills_dir = project_dir / ".claude" / "skills" / "my-skill"
     skills_dir.mkdir(parents=True)
     skill_md = skills_dir / "SKILL.md"
-    skill_md.write_text("# My Skill\nslack_app_id: A04K8RZLM3Q\n")
+    # U0... (user ID) は検出が残る。C0/A0（channel/app の doc 参照）は #337 で除外済み
+    skill_md.write_text("# My Skill\nslack_user_id: U04K8RZLM3Q\n")
 
     with patch("audit.read_auto_memory", return_value=[]):
         issues = collect_issues(project_dir)
@@ -124,7 +125,7 @@ def test_hardcoded_value_in_skill(project_dir):
     hv_issues = [i for i in issues if i["type"] == "hardcoded_value"]
     assert len(hv_issues) >= 1
     assert hv_issues[0]["detail"]["pattern_type"] == "slack_id"
-    assert hv_issues[0]["detail"]["matched"] == "A04K8RZLM3Q"
+    assert hv_issues[0]["detail"]["matched"] == "U04K8RZLM3Q"
     assert hv_issues[0]["source"] == "detect_hardcoded_values"
 
 

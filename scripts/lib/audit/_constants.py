@@ -14,14 +14,18 @@ from line_limit import (
 
 # スキル収集・重複検出から除外するサブディレクトリ名。
 # - .archive: rl-anything 自身がアーカイブしたスキル
+# - _archived / disabled: ユーザーが手動でアーカイブ/無効化したスキル（#337）。
+#   sys-bots は `.claude/skills/_archived/<name>/` に退避するため、除外しないと
+#   remediation の missing_effort や skill_evolve batch に混入してノイズになる
+#   （effort 付与提案が無意味・約80%の誤検知の一因）
 # - .gstack-backup: gstack がスキル更新前に退避したバックアップ。実スキルと 1:1 で
 #   コピーされるため、除外しないと phantom duplicate を大量検出する（docs-platform
 #   evolve で 104 件、remediation の manual_required を支配し本物の issue を埋もれさせた）
-EXCLUDED_SKILL_DIRS = frozenset({".archive", ".gstack-backup"})
+EXCLUDED_SKILL_DIRS = frozenset({".archive", "_archived", "disabled", ".gstack-backup"})
 
 
 def is_excluded_skill_path(path: Path) -> bool:
-    """SKILL.md のパスが収集除外対象（.archive / .gstack-backup 配下）か判定する。"""
+    """SKILL.md のパスが収集除外対象（.archive / _archived / disabled / .gstack-backup 配下）か判定する。"""
     return any(part in EXCLUDED_SKILL_DIRS for part in path.parts)
 
 LIMITS = {

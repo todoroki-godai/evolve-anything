@@ -44,6 +44,29 @@ class TestFindArtifactsExcludesBackup:
         skills = find_artifacts(tmp_path)["skills"]
         assert not any(".archive" in p.parts for p in skills)
 
+    def test_underscore_archived_配下スキルは収集されない(self, tmp_path: Path):
+        """`_archived/`（先頭ドットなし）も収集除外する（#337）。
+
+        sys-bots は `.claude/skills/_archived/<name>/` にアーカイブを置くため、
+        `.archive` だけの除外だと評価対象に混入し remediation がノイズまみれになる。
+        """
+        claude = tmp_path / ".claude"
+        active = _make_skill(claude / "skills", "live")
+        _make_skill(claude / "skills" / "_archived", "bot-tool-configuration")
+
+        skills = find_artifacts(tmp_path)["skills"]
+        assert active in skills
+        assert not any("_archived" in p.parts for p in skills)
+
+    def test_disabled_配下スキルは収集されない(self, tmp_path: Path):
+        """`disabled/` 配下も収集除外する（#337）。"""
+        claude = tmp_path / ".claude"
+        _make_skill(claude / "skills", "live")
+        _make_skill(claude / "skills" / "disabled", "old-skill")
+
+        skills = find_artifacts(tmp_path)["skills"]
+        assert not any("disabled" in p.parts for p in skills)
+
 
 class TestIsPluginManagedPath:
     def test_gstack_backup_は管理パス扱い(self):

@@ -76,6 +76,40 @@ def test_find_undefined_terms(tmp_path):
     assert "API" not in undefined       # stoplist
 
 
+def test_uppercase_stopwords_excluded(tmp_path):
+    """英大文字ストップワード（ALWAYS/FIRST/INFO/CUSTOM/DIR/MB/MD）は jargon でない（#337）。
+
+    CONTEXT.md 不在の sys-bots で「未登録 jargon 56件」のうち 45件がこの種のノイズだった。
+    """
+    ctx = _write(tmp_path, "CONTEXT.md", _VALID)
+    src = _write(
+        tmp_path, "SPEC.md",
+        "ALWAYS run FIRST. INFO level. CUSTOM DIR is 100 MB. See README.MD.",
+    )
+    undefined = gd.find_undefined_terms(gd.parse_glossary(str(ctx))[0], [str(src)])
+    for noise in ("ALWAYS", "FIRST", "INFO", "CUSTOM", "DIR", "MB", "MD"):
+        assert noise not in undefined, f"{noise} はストップワード"
+
+
+def test_slack_id_excluded_from_jargon(tmp_path):
+    """Slack ID（C05KMHFDPB9 等）は jargon 候補から除外する（#337）。"""
+    ctx = _write(tmp_path, "CONTEXT.md", _VALID)
+    src = _write(tmp_path, "SPEC.md", "Post to C05KMHFDPB9 and notify A04K8RZLM3Q.")
+    undefined = gd.find_undefined_terms(gd.parse_glossary(str(ctx))[0], [str(src)])
+    assert "C05KMHFDPB9" not in undefined
+    assert "A04K8RZLM3Q" not in undefined
+
+
+def test_real_jargon_still_detected_after_stoplist_expansion(tmp_path):
+    """ストップリスト拡張後も本物の固有語（DuckDB 等）は検出する（#337 回帰）。"""
+    ctx = _write(tmp_path, "CONTEXT.md", _VALID)
+    src = _write(tmp_path, "SPEC.md", "DuckDB と BM25 と FooBar を使う。INFO は無視。")
+    undefined = gd.find_undefined_terms(gd.parse_glossary(str(ctx))[0], [str(src)])
+    assert "DuckDB" in undefined
+    assert "FooBar" in undefined
+    assert "INFO" not in undefined
+
+
 def test_undefined_alone_does_not_gate(tmp_path):
     # 用語集は構造的に健全だが SoT に未登録 jargon がある場合:
     # has_drift（gate）は False、has_undefined（advisory）は True。

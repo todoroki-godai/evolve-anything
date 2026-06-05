@@ -148,6 +148,22 @@ class TestDetectMissingEffortFrontmatter:
         result = detect_missing_effort_frontmatter(tmp_path)
         assert result["applicable"] is False
 
+    def test_skips_archived_skills(self, skills_dir):
+        """`_archived/` / `.archive/` / `disabled/` 配下スキルは検出対象外（#337）。
+
+        アーカイブ済みスキルに effort frontmatter 付与を提案しても無意味。
+        sys-bots で missing_effort 5件が全て _archived 配下という誤検知が起きていた。
+        """
+        _make_skill(skills_dir, "live", ["name: live", "description: test"])
+        for sub, sname in (("_archived", "old1"), (".archive", "old2"), ("disabled", "old3")):
+            sub_dir = skills_dir / sub
+            sub_dir.mkdir(exist_ok=True)
+            _make_skill(sub_dir, sname, [f"name: {sname}", "description: x"])
+
+        result = detect_missing_effort_frontmatter(skills_dir.parent.parent)
+        names = {e["skill_name"] for e in result["evidence"]}
+        assert names == {"live"}  # アーカイブ配下は1件も入らない
+
 
 class TestFixMissingEffort:
     """remediation の fix_missing_effort ハンドラテスト。"""

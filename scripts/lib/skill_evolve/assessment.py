@@ -16,6 +16,27 @@ find_artifacts = None
 classify_artifact_origin = None
 load_user_config = None
 
+# batch_guard のトークン見積もり定数（#337）。
+# 実際の judgment/customize プロンプトは SKILL.md 先頭 _TRUNCATE_CHARS 字に truncate される
+# （build_judgment_prompt / build_customize_prompt と一致）。旧概算は固定 47,000/skill で
+# 全文×全スキルを仮定していたため実コストの約50倍に膨らんでいた（sys-bots で 893k と桁違い）。
+_TRUNCATE_CHARS = 2000
+_PROMPT_SCAFFOLD_CHARS = 600  # 固定の指示文 + テンプレ見出しの概算
+_CHARS_PER_TOKEN = 3.0  # 日英混在の保守的概算（1 token ≈ 3 chars）
+
+
+def _estimate_skill_tokens(skill_path) -> int:
+    """Phase B プロンプト1スキル分の概算トークン数（truncate 後プロンプト長ベース、#337）。
+
+    skill_path は SKILL.md のパス。読めない場合は scaffold 分の最小見積もりを返す。
+    """
+    try:
+        content = Path(skill_path).read_text(encoding="utf-8")
+    except OSError:
+        content = ""
+    prompt_chars = min(len(content), _TRUNCATE_CHARS) + _PROMPT_SCAFFOLD_CHARS
+    return max(1, int(prompt_chars / _CHARS_PER_TOKEN))
+
 
 def _find_project_dir(skill_dir: Path) -> Optional[Path]:
     """skill_dir からプロジェクトルートを推定する。
@@ -91,10 +112,9 @@ def skill_evolve_assessment(
     # [ADR-037] Phase 1c で compute_llm_scores は LLM-free（cache-read + 静的フォールバック）
     # になったため、本評価ループ自体は LLM を呼ばない。LLM コストは後段の SKILL Phase B
     # （judgment refresh の emit→assistant inline）と evolve apply（テンプレカスタマイズ）に移動した。
-    # 本ガードはその後段バッチの規模を承認させる確認ゲートとして残置する（_TOKENS_PER_SKILL は
-    # Phase B 1スキルあたりの概算）。
+    # 本ガードはその後段バッチの規模を承認させる確認ゲートとして残置する。トークン見積もりは
+    # `_estimate_skill_tokens`（truncate 後プロンプト長ベース、#337）でスキルごとに算出する。
     # custom + allowlist に含まれる global の両方を対象件数に含める
-    _TOKENS_PER_SKILL = 47_000
     _MAX_AUTO_SKILLS = 10
     _all_llm_targets = [
         p for p in artifacts.get("skills", [])
@@ -123,7 +143,7 @@ def skill_evolve_assessment(
                     "origin": _origin,
                     "skills": [p.parent.name for p in _group_skills],
                     "skill_dirs": [str(p.parent) for p in _group_skills],
-                    "estimated_tokens": len(_group_skills) * _TOKENS_PER_SKILL,
+                    "estimated_tokens": sum(_estimate_skill_tokens(p) for p in _group_skills),
                     "skill_count": len(_group_skills),
                 })
         return [{

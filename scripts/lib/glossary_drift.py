@@ -45,10 +45,20 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
         "CREATE", "UPDATE", "MERGE", "SPLIT", "SKIP", "REVIEW",
         "PreToolUse", "PostToolUse", "UserPromptSubmit", "AskUserQuestion",
         "MEMORY", "CHANGELOG",
+        # 汎用の英大文字ストップワード（#337）。CONTEXT.md 不在の PJ で「未登録 jargon」
+        # として大量に拾われるノイズ（sys-bots で 56件中 45件）。PJ 固有語ではない。
+        "ALWAYS", "FIRST", "INFO", "CUSTOM", "DIR", "WARN", "ERROR", "DEBUG",
+        "ENV", "TMP", "SRC", "DST", "MAX", "MIN",
+        # サイズ単位（jargon でない）
+        "MB", "KB", "GB", "TB", "MD",
     }
 )
 
 _SEP_RE = re.compile(r"^[:\-\s|]+$")
+
+# Slack ID（channel C0.../app A0.../user U0... 等）は jargon でなく ID 文字列（#337）。
+# 全大文字+数字で 0 始まり・9文字以上。DuckDB 等の CamelCase 固有語は小文字を含むため誤除外しない。
+_SLACK_ID_RE = re.compile(r"^[ABCDGTUW]0[A-Z0-9]{7,}$")
 
 
 # auto 生成エントリの未検証マーカー。初出列に置く（真の初出も人間確認待ちのため）。
@@ -156,6 +166,8 @@ def find_undefined_terms(
         for m in _CANDIDATE_RE.finditer(text):
             tok = m.group(1)
             if tok in defined or tok in stoplist:
+                continue
+            if _SLACK_ID_RE.match(tok):  # Slack ID は jargon でない（#337）
                 continue
             found.add(tok)
     return sorted(found)

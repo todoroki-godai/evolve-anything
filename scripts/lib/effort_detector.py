@@ -128,8 +128,14 @@ def detect_missing_effort_frontmatter(project_dir: Path) -> Dict[str, Any]:
     if not skills_dir.is_dir():
         return {"applicable": False, "evidence": [], "confidence": 0.0}
 
+    from audit._constants import is_excluded_skill_path
+
     missing: List[Dict[str, Any]] = []
     for skill_md in sorted(skills_dir.rglob("SKILL.md")):
+        # アーカイブ/無効化/バックアップ配下は対象外（#337）。
+        # effort 付与を提案しても無意味で、約80%の誤検知の一因だった。
+        if is_excluded_skill_path(skill_md):
+            continue
         fm = parse_frontmatter(skill_md)
         if fm.get("effort"):
             continue

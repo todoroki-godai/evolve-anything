@@ -23,14 +23,34 @@ def tmp_md(tmp_path):
 # ---------- パターン検出テスト ----------
 
 class TestDetectPatterns:
-    def test_slack_id(self, tmp_md):
+    def test_slack_channel_id_doc_reference_excluded(self, tmp_md):
+        """doc 文脈の Slack channel ID（C0...）は秘匿対象でないため検出しない（#337）。
+
+        SKILL.md の運用手順に書かれた `C0ACWGEA5BR` 等は意図的な参照値で、
+        ハードコード秘匿として 41 件も誤検知していた。
+        """
+        path = tmp_md("Post to channel C0ACWGEA5BR for alerts")
+        results = detect_hardcoded_values(path)
+        slack = [r for r in results if r["pattern_type"] == "slack_id"]
+        assert slack == []
+
+    def test_slack_app_id_doc_reference_excluded(self, tmp_md):
+        """doc 文脈の Slack App ID（A0...）も除外する（#337）。"""
         path = tmp_md("slack_app_id: A04K8RZLM3Q")
         results = detect_hardcoded_values(path)
-        assert len(results) >= 1
         slack = [r for r in results if r["pattern_type"] == "slack_id"]
-        assert len(slack) == 1
-        assert slack[0]["matched"] == "A04K8RZLM3Q"
-        assert slack[0]["line"] == 1
+        assert slack == []
+
+    def test_slack_doc_id_exclusion_does_not_hide_real_token(self, tmp_md):
+        """Slack ID 除外で本物の bot token（xoxb-）の検出を弱めない（#337）。"""
+        # secret 形リテラルを public repo の diff に残さないため実行時に連結する
+        # （pre-push secret guard / GitHub push protection の false positive 回避）
+        fake_token = "xoxb-" + "123456789012-FAKEFAKEFAKE"
+        path = tmp_md(f"token: {fake_token} and channel C0ACWGEA5BR")
+        results = detect_hardcoded_values(path)
+        kinds = {r["pattern_type"] for r in results}
+        assert "api_key" in kinds  # bot token は依然検出
+        assert "slack_id" not in kinds  # channel ID は除外
 
     def test_aws_arn(self, tmp_md):
         path = tmp_md("resource: arn:aws:lambda:ap-northeast-1:123456789012:function:my-func")
@@ -65,7 +85,7 @@ class TestDetectPatterns:
         assert len(num) >= 1
 
     def test_result_format(self, tmp_md):
-        path = tmp_md("slack_app_id: A04K8RZLM3Q")
+        path = tmp_md("slack_app_id: U04K8RZLM3Q")
         results = detect_hardcoded_values(path)
         assert len(results) >= 1
         r = results[0]
@@ -143,12 +163,12 @@ class TestExclusions:
 
 class TestSuppression:
     def test_suppressed_line(self, tmp_md):
-        path = tmp_md("slack_app_id: A04K8RZLM3Q <!-- rl-allow: hardcoded -->")
+        path = tmp_md("slack_app_id: U04K8RZLM3Q <!-- rl-allow: hardcoded -->")
         results = detect_hardcoded_values(path)
         assert len(results) == 0
 
     def test_suppression_only_affects_same_line(self, tmp_md):
-        path = tmp_md("<!-- rl-allow: hardcoded -->\nslack_app_id: A04K8RZLM3Q")
+        path = tmp_md("<!-- rl-allow: hardcoded -->\nslack_app_id: U04K8RZLM3Q")
         results = detect_hardcoded_values(path)
         slack = [r for r in results if r["pattern_type"] == "slack_id"]
         assert len(slack) == 1
@@ -201,7 +221,7 @@ class TestConfidenceScore:
         assert compute_confidence_score("unknown") == 0.5
 
     def test_detection_includes_confidence(self, tmp_md):
-        path = tmp_md("slack_app_id: A04K8RZLM3Q")
+        path = tmp_md("slack_app_id: U04K8RZLM3Q")
         results = detect_hardcoded_values(path)
         assert results[0]["confidence_score"] == 0.65
 

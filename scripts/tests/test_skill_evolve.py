@@ -1139,7 +1139,9 @@ class TestBatchGuardAssessment:
             assert "skills" in g
             assert "estimated_tokens" in g
             assert "skill_count" in g
-            assert g["estimated_tokens"] == g["skill_count"] * 47_000
+            # truncate 後プロンプト長ベース（#337）。旧 47,000/skill の桁違い過大を解消。
+            # 各スキルは truncate 上限（2000字 + scaffold）以下に収まる
+            assert 0 < g["estimated_tokens"] < g["skill_count"] * 2_000
 
     def test_assessment_filters_denied(self, monkeypatch, tmp_path):
         """denylist にあるスキルは effective_targets から除外される。"""
