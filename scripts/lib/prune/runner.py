@@ -31,7 +31,7 @@ def run_prune(
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
 
-    zero_invocations, plugin_unused = detect_zero_invocations(artifacts)
+    zero_invocations, plugin_unused = detect_zero_invocations(artifacts, project_dir=proj)
 
     # 貢献スコアを取得（Retirement 候補検出に使用）
     # project_root を指定せずクロスプロジェクト全体で集計する。

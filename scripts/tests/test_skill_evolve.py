@@ -469,3 +469,129 @@ def test_assess_already_evolved_has_none_checkpoints(tmp_path):
     )
     result = assess_single_skill("my-skill", skill_dir)
     assert result["workflow_checkpoints"] is None
+
+
+# --- #354⑧: judgment_complexity 静的指標近似 ---
+
+
+def test_judgment_complexity_static_low():
+    """条件分岐が少ない（2件未満）場合は 1（低）を返す。"""
+    from skill_evolve.llm_scoring import _score_judgment_complexity_static
+    content = "# Simple Skill\n\nDoes exactly one thing, no conditions."
+    assert _score_judgment_complexity_static(content) == 1
+
+
+def test_judgment_complexity_static_medium():
+    """条件分岐が 3-7 件の場合は 2（中）を返す。"""
+    from skill_evolve.llm_scoring import _score_judgment_complexity_static
+    # 3件の条件分岐語
+    content = "if user says yes, then proceed. elif condition, do something else. when error, retry."
+    result = _score_judgment_complexity_static(content)
+    assert result == 2
+
+
+def test_judgment_complexity_static_high():
+    """条件分岐が 8 件以上の場合は 3（高）を返す。"""
+    from skill_evolve.llm_scoring import _score_judgment_complexity_static
+    # 8件以上の条件分岐語
+    content = (
+        "if A: do X\n"
+        "elif B: do Y\n"
+        "when C occurs: handle it\n"
+        "if D: check E\n"
+        "unless F: skip\n"
+        "if G and H: complex action\n"
+        "when I: escalate\n"
+        "if J: fallback\n"
+    )
+    result = _score_judgment_complexity_static(content)
+    assert result == 3
+
+
+def test_judgment_complexity_static_deterministic():
+    """同じ入力は常に同じ値を返す（決定論）。"""
+    from skill_evolve.llm_scoring import _score_judgment_complexity_static
+    content = "if condition: do X\nelif other: do Y\nwhen error: retry"
+    result1 = _score_judgment_complexity_static(content)
+    result2 = _score_judgment_complexity_static(content)
+    assert result1 == result2
+
+
+def test_judgment_complexity_static_returns_valid_range():
+    """返り値は常に 1-3 の範囲内。"""
+    from skill_evolve.llm_scoring import _score_judgment_complexity_static
+    for content in [
+        "",
+        "# Empty skill",
+        "if" * 20,  # 20個の条件分岐
+        "複雑な判断が多数ある場合の分岐: 条件1, 条件2, 判断3, 場合4, 判断5, 条件6, 場合7, 条件8",
+    ]:
+        result = _score_judgment_complexity_static(content)
+        assert result in (1, 2, 3), f"Invalid range {result} for content: {content[:50]}"
+
+
+def test_judgment_complexity_excludes_markdown_heading_numbers():
+    """markdown 見出し番号（### N.）は steps に数えない（#354 review fix）。
+
+    見出しだらけで分岐ゼロの文書を complexity=3 に張り付かせない。
+    """
+    from skill_evolve.llm_scoring import _score_judgment_complexity_static
+    # 10 個の "### N." 見出しのみ。番号付きリスト手順でも分岐でもない。
+    heading_only = "\n".join(f"### {i}. Section title" for i in range(1, 11))
+    assert _score_judgment_complexity_static(heading_only) == 1
+    # 同じ番号でもリスト手順（行頭が数字）なら steps として数える（ただし cap で頭打ち）。
+    list_steps = "\n".join(f"{i}. do the thing" for i in range(1, 11))
+    assert _score_judgment_complexity_static(list_steps) == 2
+
+
+def test_judgment_complexity_steps_capped():
+    """steps は STEPS_SIGNAL_CAP で頭打ちになり、単独では 3 に到達しない（#354 follow-up）。
+
+    番号付きリストが長いだけの線形チェックリスト（agent-brushup/spec-keeper 等、steps 20-26）が
+    complexity=3 に張り付く問題への対処。
+    """
+    from skill_evolve.llm_scoring import (
+        _score_judgment_complexity_static,
+        STEPS_SIGNAL_CAP,
+    )
+    # 30 手順の長いチェックリスト（分岐・判断委譲ゼロ）。
+    long_checklist = "\n".join(f"{i}. step {i}" for i in range(1, 31))
+    score = _score_judgment_complexity_static(long_checklist)
+    assert score == 2, f"長い線形チェックリストは cap で 2 になるべき: {score}"
+    # cap 未満では到達できない（cap*1 < 8）ことを保証。
+    assert STEPS_SIGNAL_CAP < 8
+    # branches / ask_user が加われば 3 に到達できる（判断委譲が駆動）。
+    with_judgment = long_checklist + "\n" + "\n".join(
+        "AskUserQuestion" for _ in range(3)
+    )
+    assert _score_judgment_complexity_static(with_judgment) == 3
+
+
+def test_judgment_complexity_ask_user_is_weighted():
+    """AskUserQuestion は重み付けされ、少数でも判断委譲として効く（#354 review fix）。"""
+    from skill_evolve.llm_scoring import _score_judgment_complexity_static, ASK_USER_WEIGHT
+    assert ASK_USER_WEIGHT >= 2
+    # AskUserQuestion 2 回のみ（branches/steps ゼロ）。重み付けで 2*W >= 3 → 2 以上。
+    content = "Ask via AskUserQuestion here.\nLater ask AskUserQuestion again."
+    assert _score_judgment_complexity_static(content) >= 2
+
+
+def test_compute_llm_scores_uses_static_judgment_on_cache_miss(tmp_path, monkeypatch):
+    """キャッシュミス時に _score_judgment_complexity_static が使われる（#354 配線確認）。"""
+    from skill_evolve import compute_llm_scores
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    # 明確に高複雑さの内容（8件以上の条件分岐）
+    skill_content = (
+        "if A: x\nelif B: y\nwhen C: z\nif D: w\nunless E: v\n"
+        "if F: u\nwhen G: t\nif H: s\n"
+    )
+    (skill_dir / "SKILL.md").write_text(skill_content)
+
+    cache_file = tmp_path / "cache.json"
+    monkeypatch.setattr("skill_evolve.CACHE_FILE", cache_file)
+
+    result = compute_llm_scores("my-skill", skill_dir)
+    assert result["judgment_complexity"] == 3, "8+分岐なのに high(3) にならなかった"
+    assert result["judgment_source"] == "static"
+    assert result["cached"] is False

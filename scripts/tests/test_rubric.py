@@ -107,20 +107,20 @@ def test_rubric_checkpoint_apply():
     assert "reason_refs" in joined
     assert "✔" in joined
 
-    # correction_ids なし → failed
+    # correction_ids なし → reason_refs 項目自体を出さない（#353⑨: 常時ノイズ抑止）
     result_fail = rubric_checkpoint("apply", {})
     checks_fail = {c["name"]: c for c in result_fail["checks"]}
-    assert checks_fail["reason_refs"]["passed"] is False
+    assert "reason_refs" not in checks_fail
 
     joined_fail = "\n".join(result_fail["stdout_lines"])
-    assert "✘" in joined_fail
+    assert "reason_refs" not in joined_fail
 
 
 def test_rubric_checkpoint_apply_empty_correction_ids():
-    """空リストの correction_ids は False になる。"""
+    """空リストの correction_ids では reason_refs を出さない（#353⑨）。"""
     result = rubric_checkpoint("apply", {"correction_ids": []})
     checks = {c["name"]: c for c in result["checks"]}
-    assert checks["reason_refs"]["passed"] is False
+    assert "reason_refs" not in checks
 
 
 # ---------------------------------------------------------------------------

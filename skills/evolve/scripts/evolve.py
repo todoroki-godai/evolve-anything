@@ -668,6 +668,13 @@ def run_evolve(
             else:
                 proposable_custom.append(issue)
 
+        # classified にも split リストを追加し、トップレベルの count と整合させる。
+        # 修正前は classified に proposable_custom キーがなかったため、
+        # jq で classified.proposable_custom を参照すると null になり、
+        # phases.remediation.proposable_custom（例: 5）と食い違っていた (#353⑪)。
+        classified["proposable_custom"] = proposable_custom
+        classified["proposable_global"] = proposable_global
+
         remediation_data = {
             "total_issues": len(issues),
             "auto_fixable": len(classified["auto_fixable"]),

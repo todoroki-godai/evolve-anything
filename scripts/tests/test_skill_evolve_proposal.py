@@ -409,3 +409,129 @@ def test_ingest_customized_proposal_accepts_str_dir(tmp_path, monkeypatch):
 
     assert proposal["error"] is None
     assert "(iota)" in proposal["sections_to_add"]
+
+
+# --- #350: apply_evolve_proposal が既存 pitfalls.md を上書きしないガード ---
+
+
+def test_apply_preserves_existing_pitfalls(tmp_path):
+    """既存 pitfalls.md がある場合、apply_evolve_proposal はその内容を上書きしない（#350）。"""
+    skill_dir = tmp_path / "guarded-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Guarded Skill\n\nOriginal content.\n")
+
+    # 既存の pitfalls.md に実エントリを書き込む
+    refs_dir = skill_dir / "references"
+    refs_dir.mkdir()
+    existing_pitfalls = refs_dir / "pitfalls.md"
+    existing_content = (
+        "## Active Pitfalls\n\n"
+        "- **pitfall-001**: 実運用で蓄積したエントリ\n"
+        "- **pitfall-002**: 消えてはいけない知見\n\n"
+        "## Graduated Pitfalls\n\n"
+        "- **pitfall-old**: 卒業済み\n"
+    )
+    existing_pitfalls.write_text(existing_content)
+
+    proposal = {
+        "skill_name": "guarded-skill",
+        "sections_to_add": "## Pre-flight Check\n\n## Failure-triggered Learning\n",
+        "pitfalls_template": "## Active Pitfalls\n\n## Graduated Pitfalls\n",
+        "skill_md_path": str(skill_dir / "SKILL.md"),
+        "pitfalls_path": str(refs_dir / "pitfalls.md"),
+        "error": None,
+    }
+
+    result = apply_evolve_proposal(proposal)
+    assert result["applied"] is True
+
+    # 既存エントリが保持されている（テンプレートで上書きされていない）
+    actual = existing_pitfalls.read_text()
+    assert "pitfall-001" in actual, "既存エントリが消えた（上書きバグ）"
+    assert "pitfall-002" in actual, "既存エントリが消えた（上書きバグ）"
+    assert "pitfall-old" in actual, "既存 Graduated エントリが消えた（上書きバグ）"
+
+
+def test_apply_creates_pitfalls_when_not_exists(tmp_path):
+    """pitfalls.md が存在しない場合は新規作成する（正常系）（#350）。"""
+    skill_dir = tmp_path / "new-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# New Skill\n")
+
+    pitfalls_path = skill_dir / "references" / "pitfalls.md"
+    assert not pitfalls_path.exists()
+
+    proposal = {
+        "skill_name": "new-skill",
+        "sections_to_add": "## Pre-flight Check\n\n## Failure-triggered Learning\n",
+        "pitfalls_template": "## Active Pitfalls\n\n## Graduated Pitfalls\n",
+        "skill_md_path": str(skill_dir / "SKILL.md"),
+        "pitfalls_path": str(pitfalls_path),
+        "error": None,
+    }
+
+    result = apply_evolve_proposal(proposal)
+    assert result["applied"] is True
+    assert pitfalls_path.exists()
+    assert "Active Pitfalls" in pitfalls_path.read_text()
+
+
+# --- #353⑨: reason_refs を correction 非由来時に非表示 ---
+
+
+def test_rubric_checkpoint_no_reason_refs_without_correction_ids():
+    """correction_ids が空/None のとき reason_refs 項目が出力に含まれない（#353）。"""
+    from skill_evolve.rubric import rubric_checkpoint
+
+    proposal_no_corrections = {
+        "skill_name": "some-skill",
+        "sections_to_add": "## Pre-flight Check\n\n## Failure-triggered Learning\n",
+        "pitfalls_template": "## Active Pitfalls\n",
+        "diff_lines": 5,
+        # correction_ids キー自体なし
+    }
+
+    result = rubric_checkpoint("apply", proposal_no_corrections)
+    # reason_refs 行が stdout_lines に存在しないこと
+    lines_text = "\n".join(result["stdout_lines"])
+    assert "reason_refs" not in lines_text, (
+        f"correction なしなのに reason_refs が出力された: {result['stdout_lines']}"
+    )
+
+
+def test_rubric_checkpoint_no_reason_refs_with_empty_correction_ids():
+    """correction_ids が空リストのとき reason_refs 項目が出力に含まれない（#353）。"""
+    from skill_evolve.rubric import rubric_checkpoint
+
+    proposal_empty = {
+        "skill_name": "some-skill",
+        "sections_to_add": "## Pre-flight Check\n\n## Failure-triggered Learning\n",
+        "pitfalls_template": "## Active Pitfalls\n",
+        "diff_lines": 5,
+        "correction_ids": [],
+    }
+
+    result = rubric_checkpoint("apply", proposal_empty)
+    lines_text = "\n".join(result["stdout_lines"])
+    assert "reason_refs" not in lines_text, (
+        f"correction_ids=[] なのに reason_refs が出力された: {result['stdout_lines']}"
+    )
+
+
+def test_rubric_checkpoint_reason_refs_shown_with_correction_ids():
+    """correction_ids がある場合は reason_refs が評価される（従来通り）（#353）。"""
+    from skill_evolve.rubric import rubric_checkpoint
+
+    proposal_with_corrections = {
+        "skill_name": "some-skill",
+        "sections_to_add": "## Pre-flight Check\n\n## Failure-triggered Learning\n",
+        "pitfalls_template": "## Active Pitfalls\n",
+        "diff_lines": 5,
+        "correction_ids": ["corr-001", "corr-002"],
+    }
+
+    result = rubric_checkpoint("apply", proposal_with_corrections)
+    lines_text = "\n".join(result["stdout_lines"])
+    assert "reason_refs" in lines_text, (
+        f"correction_ids あるのに reason_refs が出力されない: {result['stdout_lines']}"
+    )

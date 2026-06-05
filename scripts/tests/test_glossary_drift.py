@@ -271,3 +271,69 @@ def test_audit_section_surfaces_unverified(tmp_path):
     body = "\n".join(section)
     assert "未検証" in body
     assert "Foo" in body
+
+
+# ---------- #353⑫: jargon denylist テスト ----------
+
+_AWS_TECH_NOISE = """# SPEC
+
+We use ARN to identify resources. The CDK stack uses SNS, SQS, S3, and IAM.
+VPC settings are defined in the CDK config. The API returns JSON over HTTP.
+AWS credentials use IAM roles. Lambda functions invoke via API Gateway.
+"""
+
+_PROJECT_JARGON = """# SPEC
+
+BES is a backward error scoring method.
+MemTrace is used for attribution diagnosis.
+SkillRM is the skill-axis reward model.
+"""
+
+
+def test_aws_tech_abbreviations_excluded_by_denylist(tmp_path):
+    """#353⑫: AWS・汎用技術略語（ARN, CDK, SNS, SQS, S3, IAM, VPC 等）が jargon 候補から除外される。
+
+    これらは 46件ものノイズを出していた。PJ 固有語ではなく汎用技術略語のため
+    denylist でフィルタする。
+    """
+    ctx = _write(tmp_path, "CONTEXT.md", _VALID)
+    src = _write(tmp_path, "SPEC.md", _AWS_TECH_NOISE)
+    undefined = gd.find_undefined_terms(gd.parse_glossary(str(ctx))[0], [str(src)])
+
+    # これらはすべて denylist で除外されるべき
+    aws_tech_terms = ["ARN", "CDK", "SNS", "SQS", "S3", "IAM", "VPC", "JSON", "HTTP", "AWS", "API"]
+    for term in aws_tech_terms:
+        assert term not in undefined, f"{term} は汎用技術略語なので jargon 候補に出てはいけない"
+
+
+def test_project_jargon_not_excluded_by_denylist(tmp_path):
+    """#353⑫: PJ 固有語（BES, MemTrace, SkillRM 等）は denylist に含まれず候補に残る。"""
+    ctx = _write(tmp_path, "CONTEXT.md", _VALID)
+    src = _write(tmp_path, "SPEC.md", _PROJECT_JARGON)
+    undefined = gd.find_undefined_terms(gd.parse_glossary(str(ctx))[0], [str(src)])
+
+    # BES, MemTrace, SkillRM は PJ 固有語で残るはず
+    assert "BES" not in undefined  # すでに _VALID 用語集に登録済み
+    assert "MemTrace" not in undefined  # すでに _VALID 用語集に登録済み
+    assert "SkillRM" in undefined  # 未登録の PJ 固有語は出る
+
+
+def test_denylist_is_explicit_constant(tmp_path):
+    """#353⑫: denylist は DEFAULT_STOPLIST として拡張可能な定数で存在する。"""
+    # DEFAULT_STOPLIST に新規 denylist 語が含まれていることを確認
+    new_denylist_terms = ["ARN", "CDK", "SNS", "SQS", "S3", "IAM", "VPC"]
+    for term in new_denylist_terms:
+        assert term in gd.DEFAULT_STOPLIST, (
+            f"{term} は DEFAULT_STOPLIST に追加されるべき汎用技術略語"
+        )
+
+
+def test_lambda_and_gateway_excluded(tmp_path):
+    """Lambda / Gateway 等もノイズになりうる場合 denylist で対応する。"""
+    ctx = _write(tmp_path, "CONTEXT.md", _VALID)
+    src = _write(tmp_path, "SPEC.md", "ARN and CDK and SNS are common in AWS.")
+    undefined = gd.find_undefined_terms(gd.parse_glossary(str(ctx))[0], [str(src)])
+    # ARN, CDK, SNS は除外済み
+    assert "ARN" not in undefined
+    assert "CDK" not in undefined
+    assert "SNS" not in undefined

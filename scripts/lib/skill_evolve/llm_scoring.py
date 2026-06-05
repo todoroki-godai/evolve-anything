@@ -14,6 +14,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+# judgment_complexity の ask_user 軸の重み（#354 review fix）。
+# AskUserQuestion はユーザーへの判断委譲の最強シグナルなので steps/branches より重く扱う。
+ASK_USER_WEIGHT = 2
+
+# steps 軸の上限（#354 follow-up）。番号付きリストが長いだけの線形チェックリスト
+# （agent-brushup/spec-keeper 等、steps 20-26）が complexity=3 に張り付く問題への対処。
+# 手順が ~5 を超えたら、それ以上の項目数は「判断の複雑さ」でなく「文書の長さ」を表すため
+# steps の寄与を頭打ちにする。これにより steps 単独では 3（>=8）に到達できなくなり、
+# 高複雑度の判定は branches / ask_user（実際の分岐・判断委譲）が駆動する。
+# 実 SKILL.md 21件の分布が {1:4,2:8,3:9} に正規化される値（cap 4-6 で安定）。
+STEPS_SIGNAL_CAP = 5
+
 # 外部依存キーワード（静的解析用）
 _EXTERNAL_DEPENDENCY_KEYWORDS = [
     r"\bAPI\b", r"\baws\b", r"\bs3\b", r"\blambda\b", r"\bcdk\b",
@@ -44,17 +56,43 @@ def _score_external_dependency(content: str) -> int:
 
 
 def _score_judgment_complexity_static(content: str) -> int:
-    """判断複雑さスコア (1-3) の決定論フォールバック。条件分岐語の出現数で推定。
+    """判断複雑さスコア (1-3) の決定論近似。3軸の静的指標で推定 (#354)。
 
-    旧 `_score_judgment_complexity_llm` の except 節フォールバックを独立関数化したもの。
-    LLM 採点が無い経路（evolve バッチ・run_loop）はこの値で完走する。
+    軸:
+    - branches: 条件分岐語（if/else/elif/when/unless/場合/条件/判断）の出現数
+    - steps:    番号付きリスト手順数（"1. " 等の行頭番号）。markdown 見出し番号
+                （"### 1." 等）は文書構造でありステップ数を過大評価するため除外する。
+                さらに STEPS_SIGNAL_CAP で頭打ちにする（長い線形チェックリスト対策）。
+    - ask_user: AskUserQuestion の出現数 × ASK_USER_WEIGHT。ユーザーへの判断委譲は
+                判断複雑さの最強シグナルなので重み付けする。
+
+    低/中/高 の閾値:
+    - signal_total < 3   → 1（決定論的）
+    - 3 <= signal_total < 8 → 2（数箇所の条件分岐）
+    - signal_total >= 8  → 3（判断・ヒューリスティクスが多数）
+
+    steps は STEPS_SIGNAL_CAP で頭打ちのため steps 単独では 3 に到達できない。
+    高複雑度の判定は branches / ask_user（実際の分岐・判断委譲）が駆動する。
+
+    決定論・LLM 非依存。LLM 品質が必要なら emit_judgment_requests を使う。
+
+    注意: branches の `場合/条件/判断` は連続日本語中では `\b` 境界が立たず
+    ほぼマッチしない（散文の英語分岐語も稀）。判断委譲の主信号は ask_user。
     """
     branches = len(re.findall(
         r"\b(if|else|elif|when|unless|場合|条件|判断)\b", content, re.IGNORECASE
     ))
-    if branches >= 8:
+    # 番号付きリスト手順のみ数える（行頭が数字）。"### 1." 等の見出し番号は
+    # 文書構造でステップ数を過大評価するため除外する（#354 review fix）。
+    # さらに STEPS_SIGNAL_CAP で頭打ちにし、長いだけのチェックリストの張り付きを防ぐ。
+    steps = min(len(re.findall(r"(?m)^\d+\.", content)), STEPS_SIGNAL_CAP)
+    # AskUserQuestion = ユーザーへの判断委譲の最強シグナルなので重み付けする（#354 review fix）。
+    ask_user = len(re.findall(r"AskUserQuestion", content, re.IGNORECASE)) * ASK_USER_WEIGHT
+
+    signal_total = branches + steps + ask_user
+    if signal_total >= 8:
         return 3
-    if branches >= 3:
+    if signal_total >= 3:
         return 2
     return 1
 

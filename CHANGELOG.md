@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.89.1] - 2026-06-05
+
+### Fixed
+- **fix(evolve-skill): `apply_evolve_proposal` が既存 `references/pitfalls.md` を無条件上書きするデータ損失バグを修正（#350）** — apply フローが空テンプレを `write_text` で無条件書込していたため、実エントリを持つスキルに標準 apply をかけると蓄積した pitfall が全消去された（docs-platform の `check-handbook-drift` で実3件を踏みかけた）。`if not pitfalls_path.exists():` の存在ガードを追加し、既存ファイルがある場合は SKILL.md 追記のみで pitfalls.md は一切触らない。`evolve-skill/SKILL.md` Step 5 にも「既存 pitfalls.md があれば上書きしない」安全分岐を明記（手順に忠実な AI ほど消す問題を文書側でも封鎖）。TDD（既存エントリ温存 E2E・新規作成正常系）。
+- **fix(prune): `zero_invocation` が本番オンデマンドスキルで構造的に常時誤発火する問題を緩和（#351）** — invocation_count に実起動を流す供給源がリポ内に存在しないため、CLAUDE.md に登録された本番スラッシュスキルが毎回「zero_invocation・要確認」に並んでいた（docs-platform で11本が誤発火）。`detect_zero_invocations` に `project_dir` 引数を追加し、対象 PJ の CLAUDE.md Skills セクション登録済みスキルを候補から除外する。パーサは #295 修正済の `skill_triggers.extract_skill_triggers`（リスト/テーブル/太字ラベルの3記法対応）を再利用。実 docs-platform で **誤発火 11→4 件**（登録7本を除外、未登録4本は正しく残存）を実証。TDD（3記法での除外・未登録は残存・project_dir なしは後方互換、新規7件）。
+- **fix(hardcoded_detector): 正規 API URL を誤検知する「検出が価値と逆」を是正（#352）** — Slack 公式 API（`slack.com/api/`）や `*.amazonaws.com/`（region 込み多段ラベル含む）の参照 URL が `service_url`（confidence 0.55）で FP 検出されていた。`_OFFICIAL_API_URL_RE` を `_is_safe_url` に追加して許可リスト化（Slack webhook `hooks.slack.com/services/` は秘匿対象のため除外しない）。実 docs-platform で S3/region付きSQS/Slack API が FP 除外され webhook のみ検出されることを実証。TDD（公式API除外・region付き除外・webhook 残存ほか）。
+- **fix(evolve): レポート運用のノイズ/UX 束を解消（#353）** — ⑥ AskUserQuestion の options 最大4制約に合わせ提案提示プロトコルを修正（5件以上は分割/誘導を明記）。⑨ `reason_refs` を correction 非由来の通常 evolve では非表示にし常時 ✘ ノイズを除去。⑩ `memory_heavy_update` を更新回数単独でなく行数との複合条件（`update_count>=3 AND line_count>=30`）に変更し、活発に正しく更新した小さなメモリの誤検知を解消。⑪ `proposable_custom` の二重持ち（`classified` 側 null と `phases.remediation` 側 count の食い違い）を解消し `classified` にリストを補完。⑫ glossary jargon 候補から AWS/インフラ汎用略語30語（ARN/CDK/SNS/SQS/S3/IAM/VPC/EC2 等）を denylist 除外。実 docs-platform CLAUDE.md で AWS/CDK/KMS/SNS が漏れなく除外されることを実証。
+- **fix(skill_evolve): `judgment_complexity` の静的近似を導入し再現性と指標妥当性を改善（#354⑧）** — ADR-037 で LLM-free 化した judgment_complexity が assistant の主観採点で再現性を欠いていた問題に対し、3軸の静的指標（条件分岐語 / 番号付きリスト手順 / `AskUserQuestion` 出現数）で 1-3 を決定論近似する。番号付きリストは markdown 見出し番号（`### 1.`）を除外し `STEPS_SIGNAL_CAP=5` で頭打ち（長い線形チェックリストの complexity=3 張り付き防止）、`AskUserQuestion` は `ASK_USER_WEIGHT=2` で重み付け（判断委譲の主信号）。これにより steps 単独では 3 に到達せず、高複雑度判定は実際の分岐・判断委譲が駆動する。実 SKILL.md 21件で分布 {1:4,2:8,3:9}・docs-platform 固有11件で {1:4,2:4,3:3} の健全分布を実証。TDD（見出し除外・cap・ask 重み・配線）。
+- **fix(evolve-fitness): 永久 `insufficient_data`（0/30 固定）の誤解を防ぐ構造的理由を併記（#354⑦）** — 「skill_evolve 提案は採点対象外」のためスキル中心 PJ では accept/reject 母集団が貯まらず 0/30 のまま固定される問題に対し、`insufficient_data` レスポンスに `structural_reason="skill_evolve_not_scored"` と理由メッセージを追加。採点対象拡大は副作用が大きいため表示改善に留める。`evolve-fitness`/`evolve` SKILL.md に表示手順を追記。TDD（理由併記・十分時は通常評価）。
+
 ## [1.89.0] - 2026-06-05
 
 ### Removed

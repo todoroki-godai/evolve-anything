@@ -18,10 +18,16 @@ from memory_temporal import parse_memory_temporal
 
 from ._constants import LIMITS
 
-# update_count >= 3 で memory_heavy_update 警告を発火。
+# memory_heavy_update 警告の複合閾値（#353）。
 # 根拠: arXiv:2605.12978 "Useful Memories Become Faulty When Continuously Updated by LLMs" は
 # 複数ラウンドの再要約で誤りが指数的に増幅することを示す (docs/research/faulty-updated-memories.md)。
+# 更新回数単独では「活発に正しく更新した健全なメモリ」を誤検知するため、
+# 行数（= 内容の肥大化）との複合条件にする（#353）。
 MEMORY_HEAVY_UPDATE_THRESHOLD = 3
+# 行数がこの値未満なら update_count が閾値を超えても警告しない。
+# memory ファイルの上限 (LIMITS["memory"] = 120 行) の 25% 相当。
+# 小さなメモリの活発更新は正常運用とみなす（コスト最適化メモリ 7 回更新の誤検知が動機）。
+MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 30
 
 
 def claude_md_unparseable(project_dir: Optional[Path]) -> bool:
@@ -206,16 +212,22 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
             })
 
         # memory_heavy_update: LLM 自己更新が閾値超え (Issue #97 / arXiv:2605.12978)
+        # 更新回数単独では正常な活発更新を誤検知するため、行数との複合条件にする（#353）。
         try:
             temporal = parse_memory_temporal(path)
             update_count = temporal.get("update_count", 0)
-            if update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD:
+            if (
+                update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD
+                and line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
+            ):
                 issues.append({
                     "type": "memory_heavy_update",
                     "file": str(path),
                     "detail": {
                         "update_count": update_count,
                         "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
+                        "line_count": line_count,
+                        "line_threshold": MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
                     },
                     "source": "build_memory_health_section",
                 })

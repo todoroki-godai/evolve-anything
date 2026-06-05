@@ -344,10 +344,19 @@ def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dic
             "status": "insufficient_data",
             "data_count": len(decisions),
             "required": MIN_DATA_COUNT,
-            "message": f"データ不足: {len(decisions)}/{MIN_DATA_COUNT}件。"
-                       f"あと {MIN_DATA_COUNT - len(decisions)} 件の accept/reject が必要。"
-                       "母集団は optimize/rl-loop の accept/reject に加え、"
-                       "evolve のスキル diff 提案の accept/reject（採点付き記録）も含む。",
+            # structural_reason: スキル中心 PJ で母集団が構造的に貯まりにくい理由を示す (#354⑦)。
+            # skill_evolve 提案（構造修正 / rule/hook candidate 等）は採点対象外のため、
+            # skill diff の accept/reject しか蓄積されない。PJ がスキル中心の場合、
+            # evolve の diff 提案回数が少なく 0/30 固定になりやすい（永久 insufficient_data）。
+            "structural_reason": "skill_evolve_not_scored",
+            "message": (
+                f"データ不足: {len(decisions)}/{MIN_DATA_COUNT}件。"
+                f"あと {MIN_DATA_COUNT - len(decisions)} 件の accept/reject が必要。"
+                "母集団は optimize/rl-loop の accept/reject に加え、"
+                "evolve のスキル diff 提案の accept/reject（採点付き記録）も含む。"
+                " ※ skill_evolve 提案（構造修正・rule/hook 候補等）は採点対象外のため、"
+                "スキル diff が少ない PJ では母集団が貯まりにくい場合があります。"
+            ),
         }
 
     if len(decisions) < MIN_DATA_COUNT:

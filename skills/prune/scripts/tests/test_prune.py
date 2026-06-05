@@ -1149,3 +1149,166 @@ class TestDetectDeadGlobs:
         (rules_dir / "test.md").write_text("# Just a rule\nContent")
         dead = prune.detect_dead_globs(tmp_path)
         assert len(dead) == 0
+
+
+class TestDetectZeroInvocationsClaudeMdExclusion:
+    """detect_zero_invocations の CLAUDE.md Skills 登録済みスキルによる誤発火防止テスト (#351)。"""
+
+    @pytest.fixture
+    def patch_data_dir(self, tmp_path):
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            yield data_dir
+
+    def _make_project_with_skills(self, tmp_path, skill_names):
+        """スキルを持つプロジェクトディレクトリを生成するヘルパー。"""
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+        skill_paths = []
+        for name in skill_names:
+            skill_dir = skills_dir / name
+            skill_dir.mkdir(parents=True)
+            skill_md = skill_dir / "SKILL.md"
+            skill_md.write_text(f"---\nname: {name}\ndescription: A skill\n---\n# Body")
+            skill_paths.append(skill_md)
+        return project_dir, skill_paths
+
+    def test_claude_md_registered_skill_excluded_list_format(self, patch_data_dir, tmp_path):
+        """CLAUDE.md の Skills セクションにリスト形式 (`- /skill`) で登録されたスキルは zero_invocation から除外される。"""
+        project_dir, skill_paths = self._make_project_with_skills(
+            tmp_path, ["generate-docs", "onboard-project", "unregistered-skill"]
+        )
+
+        # Skills セクションにリスト形式で登録
+        (project_dir / "CLAUDE.md").write_text(
+            "# Project\n\n"
+            "## Skills\n\n"
+            "- /generate-docs: Generates documentation\n"
+            "- /onboard-project: Onboards a new project\n"
+        )
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {"skills": skill_paths, "rules": []}
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30, project_dir=project_dir)
+        zero_names = [z["skill_name"] for z in zero]
+
+        # CLAUDE.md 登録済みスキルは除外される
+        assert "generate-docs" not in zero_names, "generate-docs は CLAUDE.md 登録済みのため除外されるべき"
+        assert "onboard-project" not in zero_names, "onboard-project は CLAUDE.md 登録済みのため除外されるべき"
+        # 未登録スキルは従来通り残る
+        assert "unregistered-skill" in zero_names, "unregistered-skill は未登録なので zero_invocation に残るべき"
+
+    def test_claude_md_registered_skill_excluded_table_format(self, patch_data_dir, tmp_path):
+        """CLAUDE.md の Skills セクションにテーブル形式で登録されたスキルは zero_invocation から除外される。"""
+        project_dir, skill_paths = self._make_project_with_skills(
+            tmp_path, ["deploy-service", "check-health", "unused-skill"]
+        )
+
+        # Skills セクションにテーブル形式で登録
+        (project_dir / "CLAUDE.md").write_text(
+            "# Project\n\n"
+            "## Skills\n\n"
+            "| Skill | Description |\n"
+            "|-------|-------------|\n"
+            "| `/deploy-service` | Deploys a service |\n"
+            "| `/check-health` | Checks system health |\n"
+        )
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {"skills": skill_paths, "rules": []}
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30, project_dir=project_dir)
+        zero_names = [z["skill_name"] for z in zero]
+
+        assert "deploy-service" not in zero_names, "deploy-service は CLAUDE.md テーブル登録済みのため除外されるべき"
+        assert "check-health" not in zero_names, "check-health は CLAUDE.md テーブル登録済みのため除外されるべき"
+        assert "unused-skill" in zero_names, "unused-skill は未登録なので zero_invocation に残るべき"
+
+    def test_claude_md_registered_skill_excluded_bold_label_format(self, patch_data_dir, tmp_path):
+        """CLAUDE.md の Skills セクションに太字ラベル形式 (`- **label**: `/skill``) で登録されたスキルは除外される (#295)。"""
+        project_dir, skill_paths = self._make_project_with_skills(
+            tmp_path, ["run-tests", "build-app", "orphan-skill"]
+        )
+
+        # Skills セクションに太字ラベル形式で登録 (#295 落とし穴への対応)
+        (project_dir / "CLAUDE.md").write_text(
+            "# Project\n\n"
+            "## Skills\n\n"
+            "- **テスト実行**: `/run-tests` - テストを実行する\n"
+            "- **ビルド**: `/build-app` - アプリをビルドする\n"
+        )
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {"skills": skill_paths, "rules": []}
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30, project_dir=project_dir)
+        zero_names = [z["skill_name"] for z in zero]
+
+        assert "run-tests" not in zero_names, "run-tests は CLAUDE.md 太字ラベル形式で登録済みのため除外されるべき"
+        assert "build-app" not in zero_names, "build-app は CLAUDE.md 太字ラベル形式で登録済みのため除外されるべき"
+        assert "orphan-skill" in zero_names, "orphan-skill は未登録なので zero_invocation に残るべき"
+
+    def test_no_project_dir_uses_legacy_behavior(self, patch_data_dir, tmp_path):
+        """project_dir が None（未指定）の場合、CLAUDE.md 除外を行わず従来動作を維持する。"""
+        _, skill_paths = self._make_project_with_skills(tmp_path, ["some-skill"])
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {"skills": skill_paths, "rules": []}
+        # project_dir を渡さない（後方互換）
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30)
+        zero_names = [z["skill_name"] for z in zero]
+        assert "some-skill" in zero_names, "project_dir 未指定時は CLAUDE.md 除外なしで従来通りに含まれるべき"
+
+    def test_claude_md_without_skills_section_no_exclusion(self, patch_data_dir, tmp_path):
+        """CLAUDE.md に Skills セクションがない場合、誰も除外されない。"""
+        project_dir, skill_paths = self._make_project_with_skills(tmp_path, ["some-skill"])
+
+        # Skills セクションなし
+        (project_dir / "CLAUDE.md").write_text("# Project\n\nSome description.\n")
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {"skills": skill_paths, "rules": []}
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30, project_dir=project_dir)
+        zero_names = [z["skill_name"] for z in zero]
+        assert "some-skill" in zero_names, "Skills セクションなし → 誰も除外されない"
+
+    def test_claude_md_missing_no_exclusion(self, patch_data_dir, tmp_path):
+        """CLAUDE.md が存在しない場合は誰も除外されない（安全側フォールバック）。"""
+        project_dir, skill_paths = self._make_project_with_skills(tmp_path, ["some-skill"])
+        # CLAUDE.md を作成しない
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {"skills": skill_paths, "rules": []}
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30, project_dir=project_dir)
+        zero_names = [z["skill_name"] for z in zero]
+        assert "some-skill" in zero_names, "CLAUDE.md なし → 誰も除外されない"
+
+    def test_plugin_skill_still_excluded_not_in_zero(self, patch_data_dir, tmp_path):
+        """CLAUDE.md 登録済みでもプラグイン由来スキルは zero_invocation でなく plugin_unused に分類される。"""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir(parents=True)
+
+        # Skills セクションにプラグインスキルを登録
+        (project_dir / "CLAUDE.md").write_text(
+            "# Project\n\n"
+            "## Skills\n\n"
+            "- /my-plugin-skill: Plugin skill\n"
+        )
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        # プラグインパスのスキル（classify_artifact_origin が "plugin" を返す）
+        plugin_path = Path.home() / ".claude" / "plugins" / "cache" / "test-plugin" / "v1" / ".claude" / "skills" / "my-plugin-skill" / "SKILL.md"
+        artifacts = {"skills": [plugin_path], "rules": []}
+
+        zero, plugin_unused = prune.detect_zero_invocations(artifacts, days=30, project_dir=project_dir)
+        zero_names = [z["skill_name"] for z in zero]
+        plugin_names = [p["skill_name"] for p in plugin_unused]
+
+        assert "my-plugin-skill" not in zero_names, "プラグインスキルは zero_invocation に含まれない"
+        assert "my-plugin-skill" in plugin_names, "プラグインスキルは plugin_unused に含まれる"

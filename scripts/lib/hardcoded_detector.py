@@ -62,6 +62,18 @@ _DUMMY_PATTERNS = [
 
 _SAFE_URL_PARTS = ["example.com", "localhost", "127.0.0.1"]
 
+# 公式 API パスの許可パターン（FP 除外）。
+# Slack 公式 API（slack.com/api/）や Amazon/AWS 汎用エンドポイントは
+# ドキュメントに意図的に書かれる参照値であり、秘匿対象ではない（#352）。
+# Slack webhook（hooks.slack.com/services/）は秘匿対象のため含めない。
+# サブドメインは region 込みの多段ラベル（例: sqs.us-east-1.amazonaws.com）も
+# 許容するためドットを文字クラスに含める。`.match` で先頭アンカーするため誤許可
+# リスクは低い（#352 review fix）。
+_OFFICIAL_API_URL_RE = re.compile(
+    r"https?://(?:slack\.com/api/|[a-z0-9.\-]+\.amazonaws\.com/)",
+    re.IGNORECASE,
+)
+
 # doc 文脈の Slack channel ID（C0...）/ App ID（A0...）。これらは秘匿対象でない
 # 公開参照値で、SKILL.md の運用手順に意図的に書かれる（#337）。bot token（xoxb-,
 # api_key パターン）とは別物なので slack_id 検出から除外する。
@@ -101,8 +113,16 @@ def _is_dummy(matched: str) -> bool:
 
 
 def _is_safe_url(matched: str) -> bool:
-    """URL が安全なもの（localhost, example.com 等）かどうか判定する。"""
-    return any(part in matched.lower() for part in _SAFE_URL_PARTS)
+    """URL が安全なもの（localhost, example.com, 公式 API パス等）かどうか判定する。
+
+    公式 API エンドポイント（slack.com/api/, *.amazonaws.com/）も FP 除外する（#352）。
+    Slack webhook（hooks.slack.com/services/）は秘匿対象のため除外しない。
+    """
+    if any(part in matched.lower() for part in _SAFE_URL_PARTS):
+        return True
+    if _OFFICIAL_API_URL_RE.match(matched):
+        return True
+    return False
 
 
 def _is_version_number(matched: str, line: str) -> bool:

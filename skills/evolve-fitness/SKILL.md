@@ -37,6 +37,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/evolve-fitness/scripts/fitness_evolution.py
 - 「データ不足」メッセージを表示（MUST）
 - 必要なデータ量を案内
 - 現在の件数と残り必要件数を表示
+- `structural_reason == "skill_evolve_not_scored"` の場合は追加で以下を表示（MUST）:
+  ```
+  ℹ このプロジェクトでは skill_evolve 提案（構造修正・rule/hook 候補等）が中心で、
+    これらは採点対象外のため母集団が貯まりにくい状態です。
+    スキル diff 提案の accept/reject を積み重ねると母集団が増えます。
+  ```
 
 ### Step 3: レポート表示
 

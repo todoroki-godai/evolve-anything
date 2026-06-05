@@ -28,9 +28,19 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 
 ### 2. 適性判定を実行する
 
-判断複雑さ（judgment_complexity）軸は [ADR-037] により claude -p を全廃し、ファイルベース2相
-（emit → assistant inline → ingest）で採点する。`compute_llm_scores` は LLM-free なので、
-LLM 品質の採点が欲しい場合は assess の前に judgment refresh を回す（emit が空なら cache 最新＝スキップ）。
+判断複雑さ（judgment_complexity）軸は [ADR-037] により claude -p を全廃し、以下の2段階で採点する:
+
+1. **静的指標による自動算出（決定論・LLM 非依存）** — キャッシュミス時は `_score_judgment_complexity_static()` が
+   3軸の静的シグナルから 1-3 を自動決定する (#354):
+   - 条件分岐語（if/elif/else/when/unless/場合/条件/判断）の出現数
+   - 番号付きリスト手順数（行頭 `1.`。markdown 見出し番号 `### 1.` は文書構造なので除外、
+     さらに `STEPS_SIGNAL_CAP=5` で頭打ち＝長い線形チェックリストの張り付き防止）
+   - `AskUserQuestion` の出現数 ×`ASK_USER_WEIGHT=2`（判断委譲の主信号なので重み付け）
+   - signal 合計: < 3 → 1 / 3-7 → 2 / >= 8 → 3（steps 単独では cap により 3 に到達しない）
+2. **LLM 精度が必要な場合**: `emit_judgment_requests` → assistant inline → `ingest_judgment_scores` の
+   2相で後追い更新する（`judgment_source="llm"` でキャッシュ上書き）。
+
+`compute_llm_scores` は LLM-free なので、LLM 品質の採点が欲しい場合は assess の前に judgment refresh を回す（emit が空なら cache 最新＝スキップ）。
 
 **Phase A（判断複雑さ採点リクエスト生成 — claude -p なし）:**
 
@@ -134,8 +144,12 @@ result = apply_evolve_proposal(proposal)
 
 承認された場合のみ実行し、結果サマリーを表示:
 - 追加されたセクション一覧
-- `references/pitfalls.md` の作成
+- `references/pitfalls.md` の作成（**既存ファイルがある場合は上書きしない** — SKILL.md への追記のみ行う）
 - バックアップパス（`.md.pre-evolve-backup`）
+
+> **#350 ガード**: `apply_evolve_proposal()` は `references/pitfalls.md` が既に存在する場合、
+> テンプレートで上書きしない。既存の実エントリを保護するため、存在ガードが実装済み。
+> pitfalls.md への変更が必要な場合は `/rl-anything:pitfall-curate` を使う。
 
 却下された場合はファイルに変更を加えず終了。
 

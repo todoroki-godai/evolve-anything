@@ -30,6 +30,8 @@ SEED_MIN_CANDIDATES = 3
 _CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*|[A-Z]{2,6})\b")
 
 # 用語集に載せる価値の薄い汎用テック頭字語。undefined 判定から除外する。
+# #353⑫: AWS/技術略語（ARN, CDK, SNS 等）が 46件ものノイズを出していたため denylist を拡張。
+# 各グループは拡張しやすいよう明示的に分類する。
 DEFAULT_STOPLIST: frozenset[str] = frozenset(
     {
         # 汎用テック頭字語
@@ -51,6 +53,14 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
         "ENV", "TMP", "SRC", "DST", "MAX", "MIN",
         # サイズ単位（jargon でない）
         "MB", "KB", "GB", "TB", "MD",
+        # AWS / クラウドインフラ汎用略語（#353⑫）。
+        # observability/jargon 候補に 46件ばかり出ていたノイズの主因。
+        # PJ 固有語ではなく AWS サービス名・一般的インフラ用語のため除外する。
+        "ARN", "CDK", "SNS", "SQS", "S3", "IAM", "VPC", "AWS",
+        "EC2", "ECS", "EKS", "RDS", "DMS", "EMR", "KMS", "ACM",
+        "ALB", "NLB", "ELB", "WAF", "ACL", "NAT", "IGW", "AMI",
+        "ECR", "EFS", "EBS", "SSM", "SES", "STS", "SLA", "SLO",
+        "SLI", "GW",
     }
 )
 

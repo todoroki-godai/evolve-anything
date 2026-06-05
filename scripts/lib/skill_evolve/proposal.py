@@ -342,9 +342,10 @@ def apply_evolve_proposal(proposal: Dict[str, Any]) -> Dict[str, Any]:
 
         skill_md.write_text(new_content, encoding="utf-8")
 
-        # references/pitfalls.md 作成
+        # references/pitfalls.md 作成（既存があれば上書きしない #350）
         pitfalls_path.parent.mkdir(parents=True, exist_ok=True)
-        pitfalls_path.write_text(proposal["pitfalls_template"], encoding="utf-8")
+        if not pitfalls_path.exists():
+            pitfalls_path.write_text(proposal["pitfalls_template"], encoding="utf-8")
 
         result = {
             "applied": True,

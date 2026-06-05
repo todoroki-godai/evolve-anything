@@ -121,14 +121,39 @@ def detect_dead_globs(project_dir: Path) -> List[Dict[str, Any]]:
     return dead
 
 
+def _load_claude_md_registered_skills(project_dir: Optional[Path]) -> set:
+    """CLAUDE.md の Skills セクションに登録されているスキル名のセットを返す。
+
+    project_dir が None または CLAUDE.md が存在しない場合は空セットを返す（安全側フォールバック）。
+    既知の落とし穴 (#295): `- **太字ラベル**: `/skill`` 形式にも対応するため
+    skill_triggers.extract_skill_triggers を使う（内部で _parse_skills_section が全形式を処理）。
+    """
+    if project_dir is None:
+        return set()
+    try:
+        from skill_triggers import extract_skill_triggers  # noqa: PLC0415
+        entries = extract_skill_triggers(project_root=project_dir)
+        return {entry["skill"] for entry in entries}
+    except Exception:
+        return set()
+
+
 def detect_zero_invocations(
-    artifacts: Dict[str, List[Path]], days: int = ZERO_INVOCATION_DAYS
+    artifacts: Dict[str, List[Path]],
+    days: int = ZERO_INVOCATION_DAYS,
+    project_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """usage.jsonl で指定日数間使用記録がないアーティファクトを検出。
 
     直接の Skill tool_use に加えて、usage.jsonl の parent_skill として
     参照されている回数もカウントする（MUST）。
     subagents.jsonl は参照対象外。
+
+    project_dir が指定された場合、対象 PJ の CLAUDE.md の Skills セクションに
+    登録されているスキルを zero_invocation 候補から除外する (#351)。
+    これはオンデマンド本番スキルが毎回「zero_invocation・要確認」に誤発火する
+    問題への対処であり、invocation_count の供給経路が存在しない構造的欠陥を
+    補完する安全側の除外判定。
     """
     usage_records = load_usage_data(days=days)
     used_skills = set()
@@ -138,6 +163,9 @@ def detect_zero_invocations(
         parent = rec.get("parent_skill")
         if parent:
             used_skills.add(parent)
+
+    # CLAUDE.md の Skills セクション登録済みスキルを除外セットとして取得
+    claude_md_registered = _load_claude_md_registered_skills(project_dir)
 
     zero = []
     plugin_unused = []
@@ -161,6 +189,10 @@ def detect_zero_invocations(
                     "reason": "plugin_unused",
                 })
             else:
+                # CLAUDE.md Skills セクション登録済みスキルは本番運用中とみなして zero_invocation から除外 (#351)
+                # プラグインスキルは plugin_unused に分類されるため除外対象外（上の分岐で処理済み）
+                if skill_name in claude_md_registered:
+                    continue
                 zero.append(_enrich_candidate({
                     "file": str(path),
                     "skill_name": skill_name,

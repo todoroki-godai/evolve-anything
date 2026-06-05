@@ -60,12 +60,14 @@ def rubric_checkpoint(phase: str, proposal_dict: dict[str, Any]) -> dict[str, An
         })
 
     elif phase == "apply":
-        # reason_refs: correction_ids が存在し空でないか
+        # reason_refs: correction 由来のとき（correction_ids が非空のとき）のみ評価 (#353)
+        # correction 非由来の通常 evolve では常に ✘ になりノイズになるため、非表示にする
         correction_ids = proposal_dict.get("correction_ids", [])
-        checks.append({
-            "name": "reason_refs",
-            "passed": bool(correction_ids),
-        })
+        if correction_ids:
+            checks.append({
+                "name": "reason_refs",
+                "passed": True,
+            })
 
     # stdout_lines 組み立て
     stdout_lines: list[str] = [f"├── [rubric] {phase}:"]
