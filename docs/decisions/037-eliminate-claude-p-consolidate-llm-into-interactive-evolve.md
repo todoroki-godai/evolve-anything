@@ -188,3 +188,44 @@ Phase B の書き手は assistant（非決定論プロデューサ）。`_parse_
 - 変換済み（`CONVERTED_MODULES` に追加）: `skill_evolve/llm_scoring`・`skill_evolve/proposal`
 - 残存（1d 以降、`KNOWN_REMAINING`）: `score_noise._run_claude_prompt`（後方互換）・reflect/remediation 系
   （`fixers_rules`・`fixers_quality`・`critical_instruction`・`semantic_detector`）・Stop hook（`auto_memory_runner`、Phase 2）
+
+## Phase 2 実装メモ（auto_memory Stop hook を2相化 — 完了）
+
+唯一の hook 由来 claude -p（`auto_memory_runner._call_llm`）を全廃した。Stop hook は Task ツールを
+呼べないため 1a〜1d の「SKILL がオーケストレーションする2相」を hook 内では実行できない。よって
+**hook は決定論の前処理＋キュー enqueue だけに縮退**させ、LLM 生成・生成後ゲート・memory 書き込みを
+`/evolve` のターンへ吸収した（Decision の狙い「evolve に全部集約」に一致）。
+
+### アーキテクチャ
+
+```
+[Stop hook auto_memory_runner.run(): 決定論・ゼロLLM]
+  corrections 読込 → memory_gating(生成前ゲート, LLM不要) → 生き残りを内容ハッシュ dedup
+  → DATA_DIR/auto_memory_queue/<slug>.jsonl に enqueue（.md 書込・belief ゲート・claude -p なし）
+
+[evolve SKILL Step 6.5: 2相]
+  Phase A: emit_memory_requests(records) → prompts（auto_memory_broker）
+  Phase B: assistant がインライン生成（subscription 課金）
+  Phase C: ingest_memory_results → belief_entropy(生成後ゲート) → .md 書込 + index + importance
+           + archive → stored/blocked をキューから消化（空応答はキューに残し次 drain で再試行）
+```
+
+### 設計判断
+
+- **生成前ゲート（memory_gating）は hook に残す**（LLM 不要）。**生成後ゲート（belief_entropy）と全ファイル
+  書き込みは ingest 側へ移設**（LLM 出力が必要なため）。
+- **キュー dedup = 内容ハッシュ in-queue dedup**: `compute_dedup_key` が gated corrections の
+  `(session_id, timestamp)` 列を sha256 先頭16hex 化。enqueue 前に未消化キューの key を読み同 key は
+  スキップ（毎 Stop の同一 last-5 重複を防ぐ）。新 correction で窓がずれれば新 key → enqueue されるため
+  cursor ファイル不要。append race で稀に重複しても `read_queue` の collapse と belief 照合で吸収。
+- **slug は git-common-dir 方式ではなく `project_name_from_dir(CLAUDE_PROJECT_DIR)`**。理由: memory は
+  `~/.claude/projects/<slug>/memory/` に書かれるため、drain が正しい PJ の memory に書くには同 slug で
+  スコープする必要がある（optimize_history_store/triage_ledger の worktree 安全 slug とは目的が異なる）。
+- グローバル DATA_DIR single-file pitfall を踏まないよう、キューは必ず PJ スコープ
+  `DATA_DIR/auto_memory_queue/<slug>.jsonl`。
+
+### Phase 2 で変換済み / 残存
+
+- 変換済み（`CONVERTED_MODULES` に追加）: `hooks/auto_memory_runner.py`・`scripts/lib/auto_memory_broker.py`
+- 残存（`KNOWN_REMAINING`）: `scripts/lib/score_noise.py`（`_run_claude_prompt`、bin/rl-prompt-compare
+  後方互換の DEPRECATED 経路）**のみ**。これで本流の claude -p caller はすべて2相化された。

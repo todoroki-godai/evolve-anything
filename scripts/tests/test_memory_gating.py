@@ -188,9 +188,10 @@ class TestGatingDisabledEnv:
         assert amr._is_gating_enabled() is True
 
     def test_gating_disabled_skips_gating(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """RL_GATING_DISABLED=1 でゲーティングが無効化され、LLM が呼ばれること。
+        """RL_GATING_DISABLED=1 でゲーティングが無効化され、キューに enqueue されること。
 
-        auto_memory_runner.run() 経由で _call_llm が呼ばれるかを検証する。
+        [ADR-037] Phase 2: hook は LLM を呼ばず enqueue するだけになったため、
+        旧来の「_call_llm が呼ばれる」は「キューに record が積まれる」へ置換する。
         """
         # 環境変数でゲーティング無効化
         monkeypatch.setenv("RL_GATING_DISABLED", "1")
@@ -212,30 +213,30 @@ class TestGatingDisabledEnv:
         memory_md = tmp_path / "MEMORY.md"
         memory_md.write_text("# Memory\n")
 
-        # auto_memory_runner モジュールをリロードして env 変更を反映
-        import importlib
         import auto_memory_runner as amr
+        import auto_memory_broker as amb
         # RL_GATING_DISABLED=1 → ゲーティング無効（実行時評価を monkeypatch でシミュレート）
-        with mock.patch.object(amr, "_is_gating_enabled", return_value=False), \
-             mock.patch.object(amr, "_call_llm", return_value=None) as mock_llm:
+        with mock.patch.object(amr, "_is_gating_enabled", return_value=False):
             amr.run(
                 memory_dir=memory_dir,
                 memory_md_path=memory_md,
                 data_dir=data_dir,
+                slug="testslug",
             )
-        # ゲーティング無効 → LLM 呼び出しが実行されること
-        mock_llm.assert_called_once()
+        # ゲーティング無効 → enqueue が実行されること
+        assert len(amb.read_queue("testslug", data_dir)) == 1
 
     def test_gating_disabled_via_env_var_end_to_end(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """RL_GATING_DISABLED=1 を実際に環境変数にセットすると _is_gating_enabled() が
-        False を返し、ゲーティングロジックがスキップされて LLM が呼ばれること。
+        False を返し、ゲーティングロジックがスキップされて enqueue されること。
 
         _is_gating_enabled はモックせず、env var → 関数評価 → run() の経路を通す。
         """
         import json
         import auto_memory_runner as amr
+        import auto_memory_broker as amb
 
         monkeypatch.setenv("RL_GATING_DISABLED", "1")
 
@@ -251,21 +252,20 @@ class TestGatingDisabledEnv:
         memory_md.write_text("# Memory\n")
 
         # env var から _is_gating_enabled() → False の経路を実際に通す
-        # _call_llm のみモックして LLM 実呼び出しを防ぐ
-        with mock.patch.object(amr, "_HAS_MEMORY_GATING", True), \
-             mock.patch.object(amr, "_call_llm", return_value=None) as mock_llm:
+        with mock.patch.object(amr, "_HAS_MEMORY_GATING", True):
             amr.run(
                 memory_dir=memory_dir,
                 memory_md_path=memory_md,
                 data_dir=data_dir,
+                slug="testslug",
             )
-        # RL_GATING_DISABLED=1 → ゲーティングスキップ → LLM が呼ばれること
-        mock_llm.assert_called_once()
+        # RL_GATING_DISABLED=1 → ゲーティングスキップ → enqueue されること
+        assert len(amb.read_queue("testslug", data_dir)) == 1
 
     def test_gating_enabled_low_score_skips_llm(self, tmp_path: Path) -> None:
-        """ゲーティング有効かつ低スコア correction では _call_llm が呼ばれないこと。
+        """ゲーティング有効かつ低スコア correction では enqueue されないこと。
 
-        should_store=False → LLM 呼び出しスキップ。
+        should_store=False → enqueue スキップ。
         """
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -289,16 +289,17 @@ class TestGatingDisabledEnv:
         memory_md.write_text("# Memory\n")
 
         import auto_memory_runner as amr
+        import auto_memory_broker as amb
         with mock.patch.object(amr, "_is_gating_enabled", return_value=True), \
-             mock.patch.object(amr, "_HAS_MEMORY_GATING", True), \
-             mock.patch.object(amr, "_call_llm", return_value=None) as mock_llm:
+             mock.patch.object(amr, "_HAS_MEMORY_GATING", True):
             amr.run(
                 memory_dir=memory_dir,
                 memory_md_path=memory_md,
                 data_dir=data_dir,
+                slug="testslug",
             )
-        # ゲーティングでスキップ → LLM 呼び出しなし
-        mock_llm.assert_not_called()
+        # ゲーティングでスキップ → enqueue なし
+        assert amb.read_queue("testslug", data_dir) == []
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +308,13 @@ class TestGatingDisabledEnv:
 
 class TestAutoMemoryRunnerGatingIntegration:
     def test_run_skips_llm_when_gate_false(self, tmp_path: Path) -> None:
-        """score_correction が False を返す場合 _call_llm が呼ばれないこと。"""
+        """score_correction が False を返す場合 enqueue されないこと。
+
+        [ADR-037] Phase 2: hook は LLM を呼ばず enqueue するだけ。gate False → キュー空。
+        """
         import json
         import auto_memory_runner as amr
+        import auto_memory_broker as amb
 
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -333,19 +338,23 @@ class TestAutoMemoryRunnerGatingIntegration:
         with mock.patch.object(amr, "_HAS_MEMORY_GATING", True), \
              mock.patch.object(amr, "_is_gating_enabled", return_value=True), \
              mock.patch("memory_gating.score_correction", return_value=fake_score), \
-             mock.patch.object(amr, "_score_correction", return_value=fake_score), \
-             mock.patch.object(amr, "_call_llm", return_value=None) as mock_llm:
+             mock.patch.object(amr, "_score_correction", return_value=fake_score):
             amr.run(
                 memory_dir=memory_dir,
                 memory_md_path=tmp_path / "MEMORY.md",
                 data_dir=data_dir,
+                slug="testslug",
             )
-        mock_llm.assert_not_called()
+        assert amb.read_queue("testslug", data_dir) == []
 
     def test_run_calls_llm_when_gate_true(self, tmp_path: Path) -> None:
-        """score_correction が True を返す場合 _call_llm が呼ばれること。"""
+        """score_correction が True を返す場合 enqueue されること。
+
+        [ADR-037] Phase 2: gate True → キューに record 1件。
+        """
         import json
         import auto_memory_runner as amr
+        import auto_memory_broker as amb
 
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -370,12 +379,12 @@ class TestAutoMemoryRunnerGatingIntegration:
         )
         with mock.patch.object(amr, "_HAS_MEMORY_GATING", True), \
              mock.patch.object(amr, "_is_gating_enabled", return_value=True), \
-             mock.patch.object(amr, "_score_correction", return_value=fake_score), \
-             mock.patch.object(amr, "_call_llm", return_value=None) as mock_llm:
+             mock.patch.object(amr, "_score_correction", return_value=fake_score):
             amr.run(
                 memory_dir=memory_dir,
                 memory_md_path=memory_md,
                 data_dir=data_dir,
+                slug="testslug",
             )
-        # should_store=True → _call_llm が呼ばれる（返り値が None でも呼ばれた記録は残る）
-        mock_llm.assert_called_once()
+        # should_store=True → enqueue されること
+        assert len(amb.read_queue("testslug", data_dir)) == 1

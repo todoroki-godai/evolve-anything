@@ -1,9 +1,10 @@
-"""auto_memory_runner.py のユニットテスト（TDD）。
+"""auto_memory_runner.py のユニットテスト（[ADR-037] Phase 2）。
 
-すべてのテストは LLM を呼ばない。subprocess.run / subprocess.Popen はすべて mock する。
+hook は corrections を生成前ゲートして PJ スコープキューに enqueue するだけのゼロ LLM 化。
+LLM 生成・belief ゲート・memory 書き込みは drain（auto_memory_broker）が担う。
+すべてのテストは LLM を呼ばない（subprocess.run の mock も不要）。
 """
 import json
-import os
 import sys
 import threading
 from pathlib import Path
@@ -17,6 +18,7 @@ sys.path.insert(0, str(_HOOKS))
 sys.path.insert(0, str(_LIB))
 
 import auto_memory_runner
+import auto_memory_broker
 
 
 # ─── fixtures ──────────────────────────────────────────────────────────────
@@ -52,82 +54,43 @@ def _write_corrections(data_dir: Path, count: int = 5) -> None:
             f.write(json.dumps(record) + "\n")
 
 
-def _make_mock_llm_output(summary: str = "test summary") -> str:
-    """モック LLM が返すメモリエントリ本文。"""
-    return f"---\nname: auto-test\ndescription: {summary}\nmetadata:\n  type: feedback\nimportance: medium\n---\n\n{summary}"
+# ─── Test 1: 正常系 enqueue ─────────────────────────────────────────────────
 
 
-# ─── Test 1: 正常系 ─────────────────────────────────────────────────────────
-
-
-def test_normal_creates_new_md_file(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """正常系: corrections.jsonl から候補抽出 → 新規 .md ファイルが作成される。"""
+def test_normal_enqueues_record_no_md_written(tmp_data_dir, tmp_memory_dir):
+    """正常系: corrections あり → キューに record 1件、.md は生成されない。"""
     _write_corrections(tmp_data_dir, count=5)
 
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_mock_llm_output("auto memory entry")
-
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result), \
-         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir)
+         mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        auto_memory_runner.run(data_dir=tmp_data_dir, slug="testslug", memory_dir=tmp_memory_dir)
 
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 1, f"Expected 1 auto_*.md file, got {len(md_files)}"
-    content = md_files[0].read_text()
-    assert "auto memory entry" in content
+    records = auto_memory_broker.read_queue("testslug", tmp_data_dir)
+    assert len(records) == 1
+    assert records[0]["slug"] == "testslug"
+    assert len(records[0]["corrections"]) == 5
 
-
-def test_normal_appends_index_to_memory_md(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """正常系: MEMORY.md に index 行が追記される。"""
-    _write_corrections(tmp_data_dir, count=3)
-    memory_md = tmp_memory_dir.parent / "MEMORY.md"
-    memory_md.write_text("# MEMORY\n\n## 変更履歴\n\n")
-
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_mock_llm_output("index test")
-
-    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result), \
-         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
-
-    content = memory_md.read_text()
-    assert "auto_" in content
-    # Index line should contain a summary
-    lines = [l for l in content.splitlines() if l.startswith("- [auto_")]
-    assert len(lines) >= 1
+    # hook は memory を一切書かない
+    assert list(tmp_memory_dir.glob("auto_*.md")) == []
 
 
-# ─── Test 2: atomic write / 並行起動 ───────────────────────────────────────
+# ─── Test 2: 並行 run() でキューが壊れない ───────────────────────────────────
 
 
-def test_concurrent_writes_both_entries_survive(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """並行起動シミュレーション: 2 スレッドが同時に書いても両エントリが残る。"""
+def test_concurrent_runs_queue_intact(tmp_data_dir, tmp_memory_dir):
+    """並行起動シミュレーション: 2 スレッドが同時に enqueue してもキューが壊れない。"""
     _write_corrections(tmp_data_dir, count=5)
-    memory_md = tmp_memory_dir.parent / "MEMORY.md"
-    memory_md.write_text("# MEMORY\n\n## 変更履歴\n\n")
-
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_mock_llm_output("concurrent test")
 
     errors = []
 
     def worker():
         try:
-            auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
+            auto_memory_runner.run(data_dir=tmp_data_dir, slug="testslug", memory_dir=tmp_memory_dir)
         except Exception as e:
             errors.append(e)
 
-    # パッチはメインスレッドで一括適用する。mock.patch.dict(os.environ) を
-    # 各ワーカースレッド内で enter/exit すると restore がレースし RL_GATING_DISABLED が
-    # リークして後続テストを汚染する（スレッド非安全）。スレッドは run() のみ実行する。
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result), \
-         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
+         mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
         t1 = threading.Thread(target=worker)
         t2 = threading.Thread(target=worker)
         t1.start()
@@ -136,115 +99,123 @@ def test_concurrent_writes_both_entries_survive(tmp_path, tmp_data_dir, tmp_memo
         t2.join()
 
     assert errors == [], f"Unexpected errors: {errors}"
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    # Both concurrent runs should produce their own file (new-file-per-entry pattern)
-    assert len(md_files) >= 1, "At least 1 entry file must exist after concurrent run"
-    # MEMORY.md index must have at least 1 entry after concurrent run
-    if memory_md.exists():
-        lines = [l for l in memory_md.read_text().splitlines() if l.strip().startswith("- [")]
-        assert len(lines) >= 1, "MEMORY.md index must have at least 1 entry after concurrent run"
+    # 同一 corrections 窓 → dedup → record は1件に collapse する
+    records = auto_memory_broker.read_queue("testslug", tmp_data_dir)
+    assert len(records) == 1
 
 
-# ─── Test 3: MEMORY.md 200 行超 → archive 処理 ──────────────────────────────
+# ─── Test 3: dedup ──────────────────────────────────────────────────────────
 
 
-def test_memory_md_over_200_lines_triggers_archive(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """MEMORY.md が 200 行超 → 古いエントリを archive.md に移動する。"""
-    _write_corrections(tmp_data_dir, count=3)
-    memory_md = tmp_memory_dir.parent / "MEMORY.md"
-
-    # 200 行超の MEMORY.md を作成（最初の 5 行は固定ヘッダー、残りは古いエントリ）
-    lines = ["# MEMORY", "", "## 変更履歴", ""]
-    for i in range(200):
-        lines.append(f"- [old_entry_{i:03d}](old_entry_{i:03d}.md) — old summary {i}")
-    memory_md.write_text("\n".join(lines) + "\n")
-
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_mock_llm_output("archive trigger test")
+def test_dedup_same_corrections_one_record(tmp_data_dir, tmp_memory_dir):
+    """同一 corrections で run() 2回 → キュー record は1件。"""
+    _write_corrections(tmp_data_dir, count=5)
 
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result), \
-         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
+         mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        auto_memory_runner.run(data_dir=tmp_data_dir, slug="testslug", memory_dir=tmp_memory_dir)
+        auto_memory_runner.run(data_dir=tmp_data_dir, slug="testslug", memory_dir=tmp_memory_dir)
 
-    # After archive, MEMORY.md should be shorter
-    new_content = memory_md.read_text()
-    new_line_count = new_content.count("\n") + 1
-    assert new_line_count <= 200, (
-        f"MEMORY.md should be <= 200 lines after archive, got {new_line_count}"
-    )
-
-    # Archive file should exist
-    archive_path = memory_md.parent / "archive.md"
-    assert archive_path.exists(), "archive.md should be created after overflow"
-    archive_content = archive_path.read_text()
-    assert "old_entry_" in archive_content
+    records = auto_memory_broker.read_queue("testslug", tmp_data_dir)
+    assert len(records) == 1
 
 
-# ─── Test 4: corrections.jsonl 不在 → graceful exit ────────────────────────
+# ─── Test 4: corrections 不在/空 → graceful exit ───────────────────────────
 
 
-def test_missing_corrections_exits_gracefully(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """corrections.jsonl が存在しない場合は例外を吐かずに終了する。"""
-    # corrections.jsonl を作らない
-    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run") as mock_run:
-        auto_memory_runner.run(memory_dir=tmp_memory_dir)
+def test_missing_corrections_exits_gracefully(tmp_data_dir, tmp_memory_dir):
+    """corrections.jsonl が存在しない場合は例外を吐かずに終了、キュー空。"""
+    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir):
+        auto_memory_runner.run(data_dir=tmp_data_dir, slug="testslug", memory_dir=tmp_memory_dir)
 
-    # No .md files created, no LLM called
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 0
-    mock_run.assert_not_called()
+    assert auto_memory_broker.read_queue("testslug", tmp_data_dir) == []
+    assert list(tmp_memory_dir.glob("auto_*.md")) == []
 
 
-def test_empty_corrections_exits_gracefully(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """corrections.jsonl が空の場合も例外を吐かずに終了する。"""
+def test_empty_corrections_exits_gracefully(tmp_data_dir, tmp_memory_dir):
+    """corrections.jsonl が空の場合も例外を吐かずに終了、キュー空。"""
     (tmp_data_dir / "corrections.jsonl").write_text("")
 
-    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run") as mock_run:
-        auto_memory_runner.run(memory_dir=tmp_memory_dir)
+    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir):
+        auto_memory_runner.run(data_dir=tmp_data_dir, slug="testslug", memory_dir=tmp_memory_dir)
 
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 0
-    mock_run.assert_not_called()
+    assert auto_memory_broker.read_queue("testslug", tmp_data_dir) == []
 
 
-# ─── Test 5: LLM subprocess 失敗 → graceful exit ──────────────────────────
+# ─── Test 5: memory_gating で全件落ち → キュー空 ────────────────────────────
 
 
-def test_llm_failure_exits_gracefully(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """LLM subprocess が returncode != 0 の場合は例外を吐かずに終了する。"""
+def test_gating_filters_all_queue_empty(tmp_data_dir, tmp_memory_dir):
+    """生成前ゲートで全件落ちたらキューは空のまま。"""
     _write_corrections(tmp_data_dir, count=3)
 
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 1
-    mock_result.stdout = ""
-    mock_result.stderr = "LLM error"
+    # _score_correction が should_store=False を返すよう mock
+    blocked = mock.MagicMock()
+    blocked.should_store = False
 
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir)
+         mock.patch("auto_memory_runner._HAS_MEMORY_GATING", True), \
+         mock.patch("auto_memory_runner._score_correction", return_value=blocked), \
+         mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "0"}):
+        auto_memory_runner.run(data_dir=tmp_data_dir, slug="testslug", memory_dir=tmp_memory_dir)
 
-    # No files should be created on LLM failure
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 0
+    assert auto_memory_broker.read_queue("testslug", tmp_data_dir) == []
 
 
-def test_llm_timeout_exits_gracefully(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """LLM subprocess がタイムアウトした場合も例外を吐かずに終了する。"""
+def test_gating_keeps_survivors(tmp_data_dir, tmp_memory_dir):
+    """生成前ゲートで一部生き残ったら生き残りのみ enqueue される。"""
+    _write_corrections(tmp_data_dir, count=3)
+
+    kept = mock.MagicMock()
+    kept.should_store = True
+
+    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
+         mock.patch("auto_memory_runner._HAS_MEMORY_GATING", True), \
+         mock.patch("auto_memory_runner._score_correction", return_value=kept), \
+         mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "0"}):
+        auto_memory_runner.run(data_dir=tmp_data_dir, slug="testslug", memory_dir=tmp_memory_dir)
+
+    records = auto_memory_broker.read_queue("testslug", tmp_data_dir)
+    assert len(records) == 1
+    assert len(records[0]["corrections"]) == 3
+
+
+# ─── Test 6: slug 解決 (CLAUDE_PROJECT_DIR) ─────────────────────────────────
+
+
+def test_slug_resolved_from_project_dir(tmp_data_dir, tmp_path):
+    """slug 未指定時は CLAUDE_PROJECT_DIR の basename を slug にする。"""
+    _write_corrections(tmp_data_dir, count=3)
+    project_dir = tmp_path / "myproject"
+    project_dir.mkdir()
+
+    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
+         mock.patch.dict("os.environ", {
+             "RL_GATING_DISABLED": "1",
+             "CLAUDE_PROJECT_DIR": str(project_dir),
+         }):
+        auto_memory_runner.run(data_dir=tmp_data_dir)
+
+    records = auto_memory_broker.read_queue("myproject", tmp_data_dir)
+    assert len(records) == 1
+
+
+def test_no_project_dir_graceful(tmp_data_dir):
+    """slug 未指定 & CLAUDE_PROJECT_DIR なし → graceful exit、どのキューにも書かない。"""
     _write_corrections(tmp_data_dir, count=3)
 
     with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", side_effect=Exception("timeout")):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir)
+         mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}, clear=False):
+        import os as _os
+        _os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        auto_memory_runner.run(data_dir=tmp_data_dir)
 
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 0
+    # キューディレクトリ自体が作られない（enqueue されない）
+    queue_dir = tmp_data_dir / auto_memory_broker.QUEUE_SUBDIR
+    assert not queue_dir.exists() or list(queue_dir.glob("*.jsonl")) == []
 
 
-# ─── Test 6: read_recent_corrections ───────────────────────────────────────
+# ─── Test 7: read_recent_corrections ────────────────────────────────────────
 
 
 def test_read_recent_corrections_returns_last_5(tmp_data_dir):
@@ -255,7 +226,6 @@ def test_read_recent_corrections_returns_last_5(tmp_data_dir):
         corrections = auto_memory_runner.read_recent_corrections(data_dir=tmp_data_dir)
 
     assert len(corrections) == 5
-    # Should be the last 5 (sess-0005 through sess-0009)
     assert corrections[-1]["session_id"] == "sess-0009"
     assert corrections[0]["session_id"] == "sess-0005"
 
@@ -266,132 +236,3 @@ def test_read_recent_corrections_fewer_than_5(tmp_data_dir):
 
     corrections = auto_memory_runner.read_recent_corrections(data_dir=tmp_data_dir)
     assert len(corrections) == 3
-
-
-# ─── Test 7: frontmatter 形式確認 ──────────────────────────────────────────
-
-
-def test_generated_file_has_required_frontmatter(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """生成された .md ファイルに必須 frontmatter が含まれる。"""
-    _write_corrections(tmp_data_dir, count=2)
-
-    llm_body = "---\nname: test-entry\ndescription: A test memory\nmetadata:\n  type: feedback\nimportance: medium\n---\n\nSome content here."
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = llm_body
-
-    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result), \
-         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir)
-
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 1
-    content = md_files[0].read_text()
-    # Required frontmatter fields
-    assert "name:" in content
-    assert "description:" in content
-
-
-# ─── Test 9: belief_entropy 生成後ゲート（#285） ───────────────────────────
-
-
-def _write_message_corrections(data_dir: Path, message: str, count: int = 3) -> None:
-    """belief 比較用に `message` フィールドを持つ corrections を書き出す。"""
-    corrections_file = data_dir / "corrections.jsonl"
-    for i in range(count):
-        record = {
-            "session_id": f"sess-{i:04d}",
-            "timestamp": f"2026-05-25T10:0{i}:00Z",
-            "type": "feedback",
-            "message": message,
-        }
-        with corrections_file.open("a") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
-def test_belief_block_skips_write_and_index(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """生成後ゲート: 要約がソースを落としている場合、書込も index も行わない。"""
-    _write_message_corrections(
-        tmp_data_dir,
-        "always use absolute paths in bash commands never cd into directories",
-    )
-    memory_md = tmp_memory_dir.parent / "MEMORY.md"
-    memory_md.write_text("# MEMORY\n\n## 変更履歴\n\n")
-
-    # ソースと無関係な要約 → retention ≈ 0 → block
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_mock_llm_output(
-        "completely different topic about pytest fixtures and mocking strategies today"
-    )
-
-    # memory_gating(生成前) を無効化して belief(生成後) のみを検証。
-    # RL_GATING_DISABLED は明示的に "0"（有効）に固定し、他テストの env リークに依存しない。
-    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("auto_memory_runner._HAS_MEMORY_GATING", False), \
-         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "0"}), \
-         mock.patch("subprocess.run", return_value=mock_result):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir, memory_md_path=memory_md)
-
-    # 副作用なし: .md ファイル・index 行ともに生成されない
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 0, "block 時は memory ファイルを書かない"
-    index_lines = [l for l in memory_md.read_text().splitlines() if l.startswith("- [auto_")]
-    assert index_lines == [], "block 時は MEMORY.md index を追記しない"
-
-    # block ログが記録される（#285 surface 用）
-    blocks_file = tmp_data_dir / "belief_blocks.jsonl"
-    assert blocks_file.exists(), "block 時は belief_blocks.jsonl に記録する"
-    assert len(blocks_file.read_text().strip().splitlines()) == 1
-
-
-def test_belief_pass_writes_normally(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """生成後ゲート: 要約がソースを保持していれば従来通り書き込む。"""
-    _write_message_corrections(
-        tmp_data_dir,
-        "always use absolute paths in bash commands never cd into directories",
-    )
-
-    # ソース用語を保持した要約 → retention 高 → store
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_mock_llm_output(
-        "Always use absolute paths in bash commands. Never cd into directories."
-    )
-
-    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("auto_memory_runner._HAS_MEMORY_GATING", False), \
-         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "0"}), \
-         mock.patch("subprocess.run", return_value=mock_result):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir)
-
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 1, "belief pass 時は従来通り書き込む"
-    blocks_file = tmp_data_dir / "belief_blocks.jsonl"
-    assert not blocks_file.exists(), "pass 時は block ログを残さない"
-
-
-# ─── Test 8: ファイル名フォーマット ────────────────────────────────────────
-
-
-def test_generated_filename_format(tmp_path, tmp_data_dir, tmp_memory_dir):
-    """生成ファイル名が auto_YYYYMMDD_HHMMSS_<hash>.md 形式である。"""
-    import re
-    _write_corrections(tmp_data_dir, count=2)
-
-    mock_result = mock.MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_mock_llm_output("filename format test")
-
-    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
-         mock.patch("subprocess.run", return_value=mock_result), \
-         mock.patch.dict(os.environ, {"RL_GATING_DISABLED": "1"}):
-        auto_memory_runner.run(memory_dir=tmp_memory_dir)
-
-    md_files = list(tmp_memory_dir.glob("auto_*.md"))
-    assert len(md_files) == 1
-    name = md_files[0].name
-    # Pattern: auto_YYYYMMDD_HHMMSS_<hash>.md
-    pattern = r"^auto_\d{8}_\d{6}_[0-9a-f]+\.md$"
-    assert re.match(pattern, name), f"Filename '{name}' does not match expected pattern"

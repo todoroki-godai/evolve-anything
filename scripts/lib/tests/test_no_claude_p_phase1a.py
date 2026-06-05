@@ -34,6 +34,9 @@ CONVERTED_MODULES = [
     "scripts/lib/remediation/fixers_rules.py",
     "scripts/lib/remediation/fixers_quality.py",
     "scripts/lib/remediation/fixers_llm.py",
+    # Phase 2（auto-memory Stop hook の生成を evolve drain の2相へ移設）
+    "hooks/auto_memory_runner.py",
+    "scripts/lib/auto_memory_broker.py",
 ]
 
 # まだ claude -p を残す既知の経路（順次 CONVERTED へ移す。silent 取りこぼし防止）。
@@ -41,7 +44,6 @@ CONVERTED_MODULES = [
 # どちらかに必ず載る（台帳を網羅的に保つ）。
 KNOWN_REMAINING = [
     "scripts/lib/score_noise.py",                   # _run_claude_prompt（bin/rl-prompt-compare 後方互換、DEPRECATED）
-    "hooks/auto_memory_runner.py",                  # Stop hook の memory 生成（Phase 2 で evolve 吸収予定）
 ]
 
 _SUBPROCESS_CALLERS = {"run", "Popen", "call", "check_output", "check_call"}
