@@ -25,8 +25,12 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # tool_duration hook: Bash コマンドをスロー判定する閾値 (ミリ秒)。
     # 短い値（例: 500）にすると検出数が増えるが JSONL が肥大化する。
     "slow_threshold_ms": 1000,
-    # subagent_observe hook: セッション内 subagent 数がこの値に達したら警告。
+    # subagent_observe hook: 直近 subagent_window_minutes 分以内の同一セッション
+    # subagent 数がこの値に達したら警告。累積でなく時間窓で測ることで、長時間
+    # セッションの正常使用を誤検知せず短時間バーストの暴走ループだけを捕捉する。
     "subagent_warning_threshold": 5,
+    # subagent_observe hook: 上記カウントを測る時間窓（分）。
+    "subagent_window_minutes": 5,
     # skill_evolve_assessment: LLM 評価に含めるグローバルスキル名（カンマ区切り）。
     # デフォルト空 = global は全除外。自作グローバルスキルがある場合に追加する。
     "evolve_global_allowlist": "",

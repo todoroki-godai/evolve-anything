@@ -10,28 +10,56 @@ LLM 呼び出しは行わない（MUST NOT）。
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import common
 
 MAX_MESSAGE_LENGTH = 500
 
 
-def _count_session_subagents(session_id: str) -> int:
-    """subagents.jsonl から同一セッションの記録数を返す。"""
+def _parse_ts(value) -> "datetime | None":
+    """ISO timestamp 文字列を tz-aware datetime にパースする。失敗時は None。"""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
+def _count_recent_session_subagents(
+    session_id: str, window_minutes: int, now: "datetime | None" = None
+) -> int:
+    """直近 window_minutes 分以内かつ同一セッションの subagent 記録数を返す。
+
+    累積でなく時間窓で測ることで、長時間セッションの正常使用を誤検知せず、
+    短時間に集中生成された暴走ループ/カスケードだけを捕捉する。
+    timestamp が不明・パース不能な記録は窓内かどうか判定できないため計上しない
+    （window 意味論を守り、古い記録による誤検知を防ぐ保守側に倒す）。
+    """
     subagents_file = common.DATA_DIR / "subagents.jsonl"
     if not subagents_file.exists():
         return 0
+    if now is None:
+        now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=window_minutes)
     count = 0
     for line in subagents_file.read_text().splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            if json.loads(line).get("session_id") == session_id:
-                count += 1
+            rec = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if rec.get("session_id") != session_id:
+            continue
+        ts = _parse_ts(rec.get("timestamp"))
+        if ts is not None and ts >= cutoff:
+            count += 1
     return count
 
 
@@ -68,7 +96,8 @@ def handle_subagent_stop(event: dict) -> None:
 
     cfg = common.load_user_config()
     threshold = int(cfg.get("subagent_warning_threshold", 5))
-    count = _count_session_subagents(session_id)
+    window_minutes = int(cfg.get("subagent_window_minutes", 5))
+    count = _count_recent_session_subagents(session_id, window_minutes)
     if count >= threshold:
         # systemMessage は user UI 向け（Claude には届かない）。
         # additionalContext は Claude のコンテキストに注入され、Claude 自身が読んで
@@ -77,15 +106,16 @@ def handle_subagent_stop(event: dict) -> None:
         # 後者が必須。両方を出して user 可視性と Claude への行動指示を両立する。
         warning = {
             "systemMessage": (
-                f"[rl-anything] このセッションで {count} 個の subagent が生成されました。"
-                " 意図しないループが発生していないか確認してください。"
+                f"[rl-anything] 直近 {window_minutes} 分でこのセッションの subagent が"
+                f" {count} 個生成されました。意図しないループが発生していないか確認してください。"
                 f"（閾値: {threshold}）"
             ),
             "hookSpecificOutput": {
                 "hookEventName": "SubagentStop",
                 "additionalContext": (
-                    f"[rl-anything subagent-guard] このセッションで {count} 個の subagent が"
-                    f"生成され、閾値 {threshold} に達しました。subagent-guard.md に従い、"
+                    f"[rl-anything subagent-guard] 直近 {window_minutes} 分でこのセッションの"
+                    f" subagent が {count} 個生成され、閾値 {threshold} に達しました。"
+                    "短時間に集中生成されているため subagent-guard.md に従い、"
                     "実行中の作業を一時停止し、意図しないループ/カスケード生成でないかを確認して、"
                     "ユーザーに現状を説明してください。"
                 ),

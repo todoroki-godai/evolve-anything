@@ -7,11 +7,16 @@ import json
 import os
 import time
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 import pytest
+
+
+def _recent_ts(minutes_ago: int = 0) -> str:
+    """現在時刻から minutes_ago 分前の ISO timestamp を返す（window テスト用）。"""
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
 
 import common
 import rl_common
@@ -533,17 +538,14 @@ class TestSubagentObserve:
         assert record["workflow_id"] is None
 
     def test_warning_emitted_when_threshold_exceeded(self, patch_data_dir, tmp_path, capsys):
-        """セッション内 subagent 数が閾値を超えたら systemMessage を stdout に出力する。"""
+        """直近 window 内の subagent 数が閾値に達したら systemMessage を stdout に出力する。"""
         session_id = "sess-warn-001"
-        # 既存の subagents.jsonl に同一 session の記録を threshold-1 件追加
-        subagents_file = patch_data_dir / "subagents.jsonl"
+        # 既存の subagents.jsonl に同一 session の「直近」記録を threshold-1 件追加
+        recent = _recent_ts(minutes_ago=1)
         for i in range(4):
-            subagents_file.write_text(
-                subagents_file.read_text() if subagents_file.exists() else ""
-            )
             common.append_jsonl(
                 patch_data_dir / "subagents.jsonl",
-                {"session_id": session_id, "agent_type": "Explore", "timestamp": "2026-01-01T00:00:00+00:00"},
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": recent},
             )
 
         # 5件目（閾値 = デフォルト 5）を追加 → 警告が出る
@@ -562,6 +564,59 @@ class TestSubagentObserve:
         assert "systemMessage" in output
         assert "5" in output["systemMessage"]
 
+    def test_no_warning_when_subagents_outside_window(self, patch_data_dir, tmp_path, capsys):
+        """累積では閾値超過でも、古い記録が window 外なら警告しない（長時間セッションの誤検知防止）。"""
+        session_id = "sess-window-old-001"
+        # window (5分) より前の記録を 10 件 → 累積では閾値超過だが window 外
+        old = _recent_ts(minutes_ago=30)
+        for i in range(10):
+            common.append_jsonl(
+                patch_data_dir / "subagents.jsonl",
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": old},
+            )
+
+        # 直近の 1 件目を追加 → window 内は 1 件のみなので警告なし
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            event = {
+                "agent_type": "Explore",
+                "agent_id": "agent-window-01",
+                "last_assistant_message": "done",
+                "agent_transcript_path": "/tmp/t.jsonl",
+                "session_id": session_id,
+            }
+            subagent_observe.handle_subagent_stop(event)
+
+        out = capsys.readouterr().out
+        assert out.strip() == ""
+
+    def test_window_minutes_configurable(self, patch_data_dir, tmp_path, capsys):
+        """subagent_window_minutes を広げると window 外だった記録も計上され警告する。"""
+        session_id = "sess-window-cfg-001"
+        # 10分前の記録を 4 件（デフォルト window 5 分なら圏外、60 分なら圏内）
+        old = _recent_ts(minutes_ago=10)
+        for i in range(4):
+            common.append_jsonl(
+                patch_data_dir / "subagents.jsonl",
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": old},
+            )
+
+        with mock.patch.dict(
+            os.environ,
+            {"TMPDIR": str(tmp_path), "CLAUDE_PLUGIN_OPTION_subagent_window_minutes": "60"},
+        ):
+            event = {
+                "agent_type": "Explore",
+                "agent_id": "agent-window-cfg-01",
+                "last_assistant_message": "done",
+                "agent_transcript_path": "/tmp/t.jsonl",
+                "session_id": session_id,
+            }
+            subagent_observe.handle_subagent_stop(event)
+
+        out = capsys.readouterr().out
+        output = json.loads(out)
+        assert "systemMessage" in output
+
     def test_warning_includes_additional_context_for_claude(self, patch_data_dir, tmp_path, capsys):
         """閾値超過時、Claude が読んで行動できる hookSpecificOutput.additionalContext を出力する。
 
@@ -573,7 +628,7 @@ class TestSubagentObserve:
         for _ in range(4):
             common.append_jsonl(
                 patch_data_dir / "subagents.jsonl",
-                {"session_id": session_id, "agent_type": "Explore", "timestamp": "2026-01-01T00:00:00+00:00"},
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": _recent_ts(minutes_ago=1)},
             )
 
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
@@ -601,7 +656,7 @@ class TestSubagentObserve:
         for i in range(3):
             common.append_jsonl(
                 patch_data_dir / "subagents.jsonl",
-                {"session_id": session_id, "agent_type": "Explore", "timestamp": "2026-01-01T00:00:00+00:00"},
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": _recent_ts(minutes_ago=1)},
             )
 
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
@@ -624,7 +679,7 @@ class TestSubagentObserve:
         for i in range(2):
             common.append_jsonl(
                 patch_data_dir / "subagents.jsonl",
-                {"session_id": session_id, "agent_type": "Explore", "timestamp": "2026-01-01T00:00:00+00:00"},
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": _recent_ts(minutes_ago=1)},
             )
 
         with mock.patch.dict(

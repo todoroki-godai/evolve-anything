@@ -33,7 +33,13 @@
         "subagent_warning_threshold": {
           "title": "Subagent Warning Threshold",
           "type": "number",
-          "description": "Warn via systemMessage when session subagent count reaches this value (default: 5)",
+          "description": "Warn when the number of subagents spawned within the recent time window (subagent_window_minutes) reaches this value (default: 5). Measured over a window, not cumulatively.",
+          "sensitive": false
+        },
+        "subagent_window_minutes": {
+          "title": "Subagent Window (minutes)",
+          "type": "number",
+          "description": "Time window (minutes) over which subagent spawns are counted for the warning threshold (default: 5).",
           "sensitive": false
         },
         "ctx_warn_percent": {

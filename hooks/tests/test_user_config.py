@@ -109,6 +109,19 @@ class TestLoadUserConfig:
             config = common.load_user_config()
         assert config["subagent_warning_threshold"] == 10
 
+    def test_subagent_window_minutes_default(self):
+        """subagent_window_minutes のデフォルトは 5。"""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = common.load_user_config()
+        assert config["subagent_window_minutes"] == 5
+
+    def test_subagent_window_minutes_override(self):
+        """subagent_window_minutes は環境変数で上書き可能。"""
+        env = {"CLAUDE_PLUGIN_OPTION_subagent_window_minutes": "30"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            config = common.load_user_config()
+        assert config["subagent_window_minutes"] == 30
+
     def test_empty_string_overrides_default_for_string_keys(self):
         """空文字 env var は string 型キーを空文字で上書きする（#77）。
 
