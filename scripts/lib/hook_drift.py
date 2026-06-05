@@ -5,8 +5,11 @@
 
 第一フェーズは **stale_pin** のみを実装する: `~/.gstack/flow-chain.json` が想定する
 gstack バージョン（`gstack_version`）と、実環境の gstack バージョン
-（`~/.gstack/.last-setup-version`）の乖離。flow-chain.json は gstack の setup/upgrade
-時に再生成される設計だが、再生成が漏れると hook が古いフロー構成を提案し続ける。
+（`~/.gstack/.last-setup-version`）の乖離。flow-chain.json は **手動メンテされる SoT**
+で gstack 本体は一切生成しない（実環境調査 #319 で判明 — gstack の setup/bin に
+flow-chain.json への参照はゼロ。`gstack_version` は手書きのピン）。ピンが実環境 version
+から取り残されると hook が古いフロー構成を提案し続けるため、`gstack_version` を手で
+実環境 version に更新して解消する。
 
 stale_pin を初手に選んだ理由（[ADR-035] / second-opinion レビュー）:
   - version 同士の単純突合で済み、スキル名の **表記ゆれによる false positive が無い**

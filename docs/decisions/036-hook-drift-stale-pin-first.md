@@ -41,7 +41,17 @@ Related: second-opinion レビュー, [ADR-028]（observability contract）, [AD
 
 ## Consequences
 
-- gstack upgrade 後に flow-chain.json の再生成が漏れると、evolve のたびに「flow-chain.json は gstack X 想定だが実環境は Y（MINOR N 差）」が surface され、フローチェーン見直しが促される。
+- flow-chain.json の `gstack_version` ピンが実環境（.last-setup-version）から取り残されると、evolve のたびに「flow-chain.json は gstack X 想定だが実環境は Y（MINOR N 差）」が surface され、ピンの手更新とフローチェーン見直しが促される。
 - `hook_drift` の責務は version 突合に限定されており、スキル名の表記ゆれ問題に触れないため誤検知しない。dead_ref を足す際は正規化レイヤーをテストで固めてから contract に乗せる（本 ADR の教訓）。
 - hook-fires.jsonl が蓄積を開始する。第2フェーズ（follow-through 評価）はこのログと skill-usage.jsonl の cross-ref で実装する。
 - builder は `~/.gstack/.last-setup-version` と flow-chain.json の `gstack_version` キーの出力契約に依存する。gstack 側がこれらの場所/キーを変えるとテスト（`test_hook_drift.py`）が回帰検出する。
+
+## Update（#319 — 実環境ドッグフードで前提崩れを発見）
+
+初版 Context/Consequences は「flow-chain.json は gstack の setup/upgrade で再生成される」を暗黙の前提にしていたが、**これは誤り**だった。マージ後に実環境で stale_pin を解消しようと `gstack setup` の挙動を調べたところ:
+
+- `~/.claude/skills/gstack/`（setup / bin 含む全体）を grep しても `flow-chain.json` への参照が **ゼロ** — gstack は一切このファイルを書き込まない。
+- setup が触るのは `~/.gstack/.last-setup-version` のみ。
+- `~/.gstack/flow-chain.json` は `/rl-anything:implement` 等を参照する **手動メンテのファイル**で、`gstack_version` は手書きのピン。
+
+→ stale_pin の **検出ロジックは正しい**（ピンと実環境の乖離は事実、誤検知ではない）が、**解消ガイダンスが的外れ**だった。実際の解消は `gstack_version` ピンを手で実環境 version に更新する必要があり、`gstack setup` では消えない。これを受け docstring（`hook_drift.py` / `sections_hook.py`）と stale メッセージのガイダンス文言を「手動メンテ SoT・ピンを手更新」へ訂正した。教訓: 合成 fixture は「ピンが違えば検出する」までしかテストできず、「直し方の前提が正しいか」は本番データでしか炙り出せない（`learning_synthetic_fixture_false_confidence`）。

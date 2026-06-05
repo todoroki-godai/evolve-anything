@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **fix(audit): hook_drift の解消ガイダンス文言を「flow-chain.json は手動メンテ SoT」へ訂正（#319）** — ADR-036 / `hook_drift.py` / `sections_hook.py` の docstring と stale メッセージが「flow-chain.json は gstack の setup/upgrade で再生成される設計」を前提にしていたが、PR #315 マージ後の実環境ドッグフードで**前提が誤り**と判明。`~/.claude/skills/gstack/`（setup/bin 含む全体）を grep しても `flow-chain.json` 参照は**ゼロ**で、gstack はこのファイルを一切生成しない（手動メンテの SoT、`gstack_version` は手書きピン）。stale_pin の**検出は正しい**（ピンと実環境の乖離は事実）が、`gstack setup` を回しても解消しないため**解消ガイダンスが的外れ**だった。stale メッセージを「`gstack_version` を実環境 version に手で更新」へ、docstring 2 箇所を「手動メンテ SoT・gstack は生成しない」へ訂正し、ADR-036 に `## Update（#319）` で前提崩れの経緯と教訓（`learning_synthetic_fixture_false_confidence` — 合成 fixture は検出までしかテストできず、直し方の前提は本番データでしか炙り出せない）を追記。文言修正のみでロジック・テスト不変（既存テストは ⚠/✓/version のみ assert し「再生成」文言は assert していないため回帰なし）。決定論・LLM 非依存。
+
 ## [1.87.0] - 2026-06-05
 
 ### Added
