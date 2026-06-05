@@ -70,12 +70,26 @@ def handle_subagent_stop(event: dict) -> None:
     threshold = int(cfg.get("subagent_warning_threshold", 5))
     count = _count_session_subagents(session_id)
     if count >= threshold:
+        # systemMessage は user UI 向け（Claude には届かない）。
+        # additionalContext は Claude のコンテキストに注入され、Claude 自身が読んで
+        # 行動を変えられる（CC v2.1.163 で SubagentStop 対応）。subagent-guard.md の
+        # 「閾値超過で作業を一時停止しユーザーに現状説明」を実際にエンフォースするには
+        # 後者が必須。両方を出して user 可視性と Claude への行動指示を両立する。
         warning = {
             "systemMessage": (
                 f"[rl-anything] このセッションで {count} 個の subagent が生成されました。"
                 " 意図しないループが発生していないか確認してください。"
                 f"（閾値: {threshold}）"
-            )
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "SubagentStop",
+                "additionalContext": (
+                    f"[rl-anything subagent-guard] このセッションで {count} 個の subagent が"
+                    f"生成され、閾値 {threshold} に達しました。subagent-guard.md に従い、"
+                    "実行中の作業を一時停止し、意図しないループ/カスケード生成でないかを確認して、"
+                    "ユーザーに現状を説明してください。"
+                ),
+            },
         }
         print(json.dumps(warning, ensure_ascii=False))
 

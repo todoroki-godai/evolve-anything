@@ -562,6 +562,38 @@ class TestSubagentObserve:
         assert "systemMessage" in output
         assert "5" in output["systemMessage"]
 
+    def test_warning_includes_additional_context_for_claude(self, patch_data_dir, tmp_path, capsys):
+        """閾値超過時、Claude が読んで行動できる hookSpecificOutput.additionalContext を出力する。
+
+        systemMessage は user UI 向けで Claude には届かない。subagent-guard.md の
+        「閾値超過警告が出たら作業を一時停止してユーザーに現状説明」を実際にエンフォース
+        するには Claude が読める additionalContext が必要（CC v2.1.163）。
+        """
+        session_id = "sess-warn-ac-001"
+        for _ in range(4):
+            common.append_jsonl(
+                patch_data_dir / "subagents.jsonl",
+                {"session_id": session_id, "agent_type": "Explore", "timestamp": "2026-01-01T00:00:00+00:00"},
+            )
+
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            event = {
+                "agent_type": "Explore",
+                "agent_id": "agent-ac-01",
+                "last_assistant_message": "done",
+                "agent_transcript_path": "/tmp/t.jsonl",
+                "session_id": session_id,
+            }
+            subagent_observe.handle_subagent_stop(event)
+
+        out = capsys.readouterr().out
+        output = json.loads(out)
+        hso = output["hookSpecificOutput"]
+        assert hso["hookEventName"] == "SubagentStop"
+        assert "5" in hso["additionalContext"]
+        # subagent-guard の行動指示（一時停止）が文面に含まれる
+        assert "一時停止" in hso["additionalContext"]
+
     def test_no_warning_below_threshold(self, patch_data_dir, tmp_path, capsys):
         """セッション内 subagent 数が閾値未満なら stdout は空。"""
         session_id = "sess-no-warn-001"
