@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.86.0] - 2026-06-05
+
 ### Fixed
 - **fix(audit/discover): 収集層の2大偽陽性を除去（別 PJ ドッグフードで発見）** — docs-platform で evolve を回したところ remediation の `total_issues=125` のうち **104件が phantom duplicate**、`skill_triage CREATE 5件が全て既存スキル**という偽陽性で本物の issue が埋もれていた。(A) `find_artifacts` / `detect_duplicates_simple` / `_is_plugin_managed_path` が `~/.claude/skills/.gstack-backup/<name>` を実スキルと 1:1 ペアで重複検出していた（除外判定が `"gstack"` 完全一致のみで `.gstack-backup` を素通り）。`audit/_constants.py` に `EXCLUDED_SKILL_DIRS={.archive,.gstack-backup}` + `is_excluded_skill_path` を集約し収集段階で除外。(B) `skill_extractor` が採掘する `<command-name>`（invoke 成功時のみ出る＝定義上すべて既存コマンド）から loop/model（CC builtin）・review（global）・rl-anything:*（plugin）を「新規作成せよ」と CREATE 提案していた。`discover/runner._is_already_existing_skill`（`:` namespaced / known_skills=project+global の SKILL.md 実在 / `_CC_BUILTIN_COMMANDS` denylist）で除外。実機 docs-platform で issues 125→16・duplicate 104→0・CREATE 5→0 を確認。決定論・LLM 非依存。
 
