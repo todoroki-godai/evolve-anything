@@ -103,10 +103,14 @@ Claude はこの JSON を読んで各変数（`environment_name` / `protagonist_
 
 ```bash
 rl-usage-log "evolve"
-rl-evolve --project-dir "$(pwd)" --dry-run
+rl-evolve --project-dir "$(pwd)" --dry-run --output /tmp/rl_evolve_out.json
 ```
 
-- 出力 `observe` フェーズの `action` で分岐する:
+⚠️ **`--output` は必須（MUST）**: result JSON はフェーズ全部入りで数十〜数百 KB になる。`--output` を付けると full JSON は `/tmp/rl_evolve_out.json` に書かれ、stdout には `{"output": "...", "phases": [...], "env_tier": ...}` の **1行サマリ**だけが出る（`phases` は実フェーズ名）。
+
+以降このスキルで「evolve.py の出力に含まれる `X` フェーズを確認する」と書かれている箇所は、すべて **`/tmp/rl_evolve_out.json` を Read（必要なら offset/limit で該当フェーズだけ）して参照する**。`rl-evolve` の stdout を `| head` / `| tail` で削ったり Bash の出力をそのまま読もうとしてはならない（MUST NOT）。`indent=2` の巨大 JSON が途中で切れて invalid になり「JSON が不完全 → 全量を保存し直し」のやり直しが多発する（これが本フローを設計した理由）。
+
+- 出力（`/tmp/rl_evolve_out.json` の）`observe` フェーズの `action` で分岐する:
   - `action: "backfill_recommended"`（テレメトリ未取得＝初回導入直後、`telemetry_empty: true`）の場合:
     - 「テレメトリが空。先に /rl-anything:backfill で既存セッション履歴を取り込んでください」と案内する（MUST）
     - evolve を続行せず、backfill を先に実行するよう促す（自動実行はしない）
@@ -244,9 +248,10 @@ ingest_judgment_scores(proj, emit["requests"], responses)
    ```
 4. 「今回のみスキップ」と「永続スキップ」の両方のスキル名を `--skip-skills` に渡し、**必ず `--confirmed-batch` を付けて** evolve.py を再実行する（`--confirmed-batch` がないと guard が再発火する）:
    ```
-   python3 evolve.py --confirmed-batch [--skip-skills=skill-a,skill-b] [既存の引数]
+   python3 evolve.py --confirmed-batch [--skip-skills=skill-a,skill-b] --output /tmp/rl_evolve_out.json [既存の引数]
    ```
-5. 新しい result で以降のステップを継続する
+   （Step 1 同様 `--output` 必須。新しい full result は `/tmp/rl_evolve_out.json` に上書きされ、stdout は1行サマリのみ）
+5. 新しい result（`/tmp/rl_evolve_out.json`）で以降のステップを継続する
 
 `batch_guard_trigger` が `null` の場合は従来通り以下のサマリを確認する:
 

@@ -905,6 +905,15 @@ def main() -> None:
     parser.add_argument("--skip-skills", default=None, help="評価をスキップするスキル名（カンマ区切り）")
     parser.add_argument("--skip-llm-evolve", action="store_true", help="skill_evolve の LLM 評価を全スキップ")
     parser.add_argument("--confirmed-batch", action="store_true", help="batch_guard_trigger 確認済み。件数が閾値を超えても LLM 評価を続行する")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help=(
+            "指定すると result JSON 全体をこのパスに書き、stdout には1行サマリだけ出す。"
+            "巨大 JSON の stdout 一発出力が head/Bash 出力上限で途中切断され invalid JSON 化する事故を防ぐ。"
+            "未指定時は従来通り full JSON を stdout に出す（後方互換）"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -917,7 +926,35 @@ def main() -> None:
         skip_llm_evolve=args.skip_llm_evolve,
         confirmed_batch=args.confirmed_batch,
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    if args.output:
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(_summarize_result(result, out_path), ensure_ascii=False))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def _summarize_result(result: dict, output_path: Path) -> dict:
+    """`--output` 時に stdout へ出す小さな1行サマリ。
+
+    full result を stdout に混ぜず、保存先パス・実行フェーズ一覧・env_tier だけを
+    surface する。Claude は `output` のファイルを Read で読んで各フェーズや env_score を
+    参照する（巨大 JSON を stdout に出すと head/Bash 上限で途中切断され invalid JSON 化するため）。
+
+    `phases` は実フェーズ名（`result["phases"]` 配下: observe/fitness/discover/...）を列挙する。
+    env_score は result のトップレベルに存在しない（audit セクション配下にネストする）ため
+    サマリには出さず、トップレベルに必ずある `env_tier`（small/medium/large 等）を surface する。
+    """
+    if not isinstance(result, dict):
+        return {"output": str(output_path), "phases": []}
+    phases_obj = result.get("phases")
+    phase_names = sorted(phases_obj.keys()) if isinstance(phases_obj, dict) else sorted(result.keys())
+    summary: dict = {"output": str(output_path), "phases": phase_names}
+    if "env_tier" in result:
+        summary["env_tier"] = result["env_tier"]
+    return summary
 
 
 if __name__ == "__main__":
