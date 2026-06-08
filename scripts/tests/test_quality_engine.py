@@ -257,6 +257,29 @@ class TestAnalyzeTraces:
             )
         assert result is None
 
+    def test_handles_null_ts_in_records(self, tmp_path):
+        """レコードの ts/timestamp が明示的に null でもセッションソートで落ちない（#370 回帰）。
+
+        `dict.get(key, default)` の default は **キー欠落時のみ**適用され、値が None
+        のときは None を返す。実 PJ（sys-bots）のテレメトリに `"ts": null` を含む
+        レコードがあり、`sorted(..., key=lambda r: r.get("ts", r.get("timestamp", "")))`
+        が None 同士の比較で TypeError を投げ、quality_traces フェーズを握り潰していた。
+        """
+        filepath = tmp_path / "usage.jsonl"
+        records = [
+            {"tool_name": "Skill", "skill_name": "my-skill",
+             "session_id": "s1", "ts": None, "project": "atlas"},
+            {"tool_name": "Read", "session_id": "s1", "ts": None, "project": "atlas"},
+            {"tool_name": "Edit", "session_id": "s1", "ts": None, "project": "atlas"},
+        ]
+        filepath.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+        with mock.patch.object(telemetry_query, "HAS_DUCKDB", False):
+            # pre-fix は None<None で TypeError。結果の中身は問わず「落ちない」ことを検証。
+            result = telemetry_query.query_usage_by_skill_session(
+                "my-skill", usage_file=filepath
+            )
+        assert isinstance(result, list)
+
     def test_returns_confusion_score(self, usage_file):
         """十分なセッション数があれば confusion_score を含む dict を返す。"""
         with mock.patch.object(telemetry_query, "HAS_DUCKDB", False):
@@ -476,3 +499,20 @@ class TestRecordQualityScore:
         assert len(lines) == 2
         assert json.loads(lines[0])["skill"] == "skill-a"
         assert json.loads(lines[1])["skill"] == "skill-b"
+
+    def test_default_data_dir_import_does_not_raise(self, tmp_path):
+        """data_dir 省略時の DATA_DIR 解決が ModuleNotFoundError を投げない（#370 回帰）。
+
+        旧 `from hooks.common import DATA_DIR` は standalone tool 実行で `hooks` が
+        import 不能、かつ hooks/common.py に DATA_DIR シンボルも無く、非 dry-run の
+        record で常時握り潰されていた。canonical な `from rl_common import DATA_DIR` で
+        解決し、default 経路を実際に踏んでも書き込めることを検証する。
+        """
+        import rl_common
+        with mock.patch.object(rl_common, "DATA_DIR", tmp_path):
+            quality_engine.record_quality_score(
+                "default-dir-skill", {"overall": 0.5}
+            )
+        filepath = tmp_path / "quality-scores.jsonl"
+        assert filepath.exists()
+        assert json.loads(filepath.read_text().strip())["skill"] == "default-dir-skill"

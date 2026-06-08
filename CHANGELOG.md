@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **fix(evolve): `quality_traces` フェーズで握り潰されていた2段ラッチバグを実 PJ ドッグフードで発見・修正** — v1.90.0 リリース直後に実 PJ（sys-bots）で**非 dry-run** のフル evolve を回したところ、`quality_traces` フェーズが `result["phases"]["quality_traces"] = {"error": ...}` で無言失敗し続けていた（self_analysis #299 が high severity で正しく検出）。dry-run では `record_quality_score` が `if not dry_run` ガードでスキップされ、かつテレメトリの薄い PJ では `analyze_traces` が `MIN_SESSION_SAMPLES` 未満で None を返し早期 return するため、**非 dry-run かつ実テレメトリのある PJ でしか発火しない**二重の隠れ方をしていた。① **None 同士のソート比較**（`telemetry_query/usage_errors.py:208`）: `sorted(session_records, key=lambda r: r.get("ts", r.get("timestamp", "")))` の `dict.get(key, default)` は **default がキー欠落時のみ適用され値が `None` のときは None を返す**ため、実テレメトリの `"ts": null` レコードで `'<' not supported between instances of 'NoneType' and 'NoneType'` を投げていた。`r.get("ts") or r.get("timestamp") or ""` の `or` チェーンで None を `""` に畳んで修正。② ①の奥に隠れていた死蔵 import（`quality_engine.record_quality_score`）: `from hooks.common import DATA_DIR` が (a) standalone tool 実行で `hooks` パッケージが import 不能 (b) そもそも `hooks/common.py` に `DATA_DIR` シンボルが無い、の二重で #38(v1.15.0) 以来ずっと壊れており、①のソートクラッシュに隠れて表面化していなかった（非 dry-run の record で常時 `No module named 'hooks'`）。canonical な `from rl_common import DATA_DIR`（fleet_config 等と同経路）に置換。修正後、sys-bots 実機で quality_traces エラー消失・**18スキルのスコア記録**（0→18）・self_analysis ランタイムエラー 0 を実証。TDD（null ts ソート非クラッシュ・default DATA_DIR 経路の非 ModuleNotFoundError、新規2件）。全 4098 テスト緑。決定論・LLM 非依存。
+
 ## [1.90.0] - 2026-06-08
 
 ### Added

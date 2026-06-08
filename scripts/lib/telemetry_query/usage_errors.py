@@ -205,7 +205,13 @@ def _aggregate_skill_sessions(
     window_seconds = TRACE_WINDOW_MINUTES * 60
 
     for sid, session_records in by_session.items():
-        sorted_recs = sorted(session_records, key=lambda r: r.get("ts", r.get("timestamp", "")))
+        # ts/timestamp は値が None のレコードがある（実 PJ テレメトリで `"ts": null`）。
+        # `dict.get(key, default)` の default はキー欠落時のみ効き None 値には効かないため、
+        # None 同士のソート比較で TypeError になる。`or` チェーンで None を "" に畳む。
+        sorted_recs = sorted(
+            session_records,
+            key=lambda r: r.get("ts") or r.get("timestamp") or "",
+        )
 
         skill_fires = []
         for i, rec in enumerate(sorted_recs):

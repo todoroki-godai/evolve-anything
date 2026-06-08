@@ -234,7 +234,10 @@ def record_quality_score(
         data_dir: 出力ディレクトリ（テスト用）。
     """
     if data_dir is None:
-        from hooks.common import DATA_DIR
+        # canonical な lib 経路の DATA_DIR を使う。旧 `from hooks.common import DATA_DIR`
+        # は (a) standalone tool 実行で `hooks` が import 不能 (b) hooks/common.py に
+        # DATA_DIR シンボルが無い、の二重で壊れており非 dry-run の record で常時握り潰されていた。
+        from rl_common import DATA_DIR
         data_dir = DATA_DIR
 
     data_dir.mkdir(parents=True, exist_ok=True)
