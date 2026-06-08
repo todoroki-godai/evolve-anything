@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent_classifier import classify_agent_type
+from rl_common import hook_store_path
 from skill_triggers import (
     extract_skill_triggers,
     normalize_skill_name,
@@ -155,7 +156,7 @@ def detect_behavior_patterns(
     usage = query_usage(
         project=project_name,
         include_unknown=include_unknown,
-        usage_file=DATA_DIR / "usage.jsonl",
+        usage_file=hook_store_path("usage.jsonl", base=DATA_DIR),
     )
     _is_plugin, _classify = _load_classify_usage_skill()
 
@@ -349,7 +350,7 @@ def detect_missed_skills(
     usage = query_usage(
         project=project_name,
         include_unknown=include_unknown,
-        usage_file=DATA_DIR / "usage.jsonl",
+        usage_file=hook_store_path("usage.jsonl", base=DATA_DIR),
     )
 
     # session_id ごとに使用されたスキル名を集約

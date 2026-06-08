@@ -36,12 +36,18 @@ def load_usage_data(
     # mock.patch.object で差し替えるケースに追従するため遅延参照）
     from . import DATA_DIR as _DATA_DIR
 
+    # usage.jsonl は hook（PostToolUse）が plugin-data dir に書く。tool 実行時は
+    # env 未設定で _DATA_DIR が fallback に解決され live テレメトリを取り逃すため、
+    # hook-writer 系 resolver で正準 dir を解決する（#358）。base=_DATA_DIR を渡し
+    # テストの audit.DATA_DIR patch を尊重する。
+    from rl_common import hook_store_path
+
     project_name = project_root.name if project_root else None
     include_unknown = project_root is None
     records = query_usage(
         project=project_name,
         include_unknown=include_unknown,
-        usage_file=_DATA_DIR / "usage.jsonl",
+        usage_file=hook_store_path("usage.jsonl", base=_DATA_DIR),
     )
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

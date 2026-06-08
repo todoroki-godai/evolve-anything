@@ -107,3 +107,13 @@ from .false_positive import (  # noqa: F401, E402
     load_false_positives,
     message_hash,
 )
+
+# hook-writer 系ストア dir 解決 — #358
+# PLUGIN_DATA_BASE は store_paths から再エクスポートし、テストが
+# mock.patch.object(rl_common, "PLUGIN_DATA_BASE", ...) で差し替えられるよう
+# __init__.py をモジュール属性の SoT として残す（DATA_DIR と同方針）。
+from .store_paths import (  # noqa: F401, E402
+    PLUGIN_DATA_BASE,
+    hook_store_dir,
+    hook_store_path,
+)

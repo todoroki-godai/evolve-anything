@@ -8,6 +8,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rl_common import hook_store_path
+
 from .helpers import (
     _warn_no_duckdb,
     _load_jsonl,
@@ -38,7 +40,7 @@ def query_usage(
     """
     from . import DATA_DIR, HAS_DUCKDB, _duckdb_query_file
 
-    filepath = usage_file or (DATA_DIR / "usage.jsonl")
+    filepath = usage_file or hook_store_path("usage.jsonl", base=DATA_DIR)
     if not filepath.exists():
         return []
 
@@ -89,7 +91,7 @@ def query_skill_counts(
     """
     from . import DATA_DIR, HAS_DUCKDB
 
-    filepath = usage_file or (DATA_DIR / "usage.jsonl")
+    filepath = usage_file or hook_store_path("usage.jsonl", base=DATA_DIR)
     if not filepath.exists():
         return []
 
@@ -174,7 +176,7 @@ def query_usage_by_skill_session(
     """
     from . import DATA_DIR, HAS_DUCKDB, _duckdb_query_file
 
-    filepath = usage_file or (DATA_DIR / "usage.jsonl")
+    filepath = usage_file or hook_store_path("usage.jsonl", base=DATA_DIR)
     if not filepath.exists():
         return []
 

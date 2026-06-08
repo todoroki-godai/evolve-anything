@@ -20,6 +20,8 @@ ensure_data_dir() -> None
 extract_worktree_info(event: dict) -> dict | None
 find_latest_checkpoint(project_dir: str | None = None) -> dict | None
 get_preceding_tool_calls(session_id: str, n: int = 5, *, projects_dir: pathlib.Path | None = None) -> List[dict]
+hook_store_dir(base: 'Optional[Path]' = None) -> 'Path'
+hook_store_path(filename: 'str', base: 'Optional[Path]' = None) -> 'Path'
 is_user_config_explicit(key: str) -> bool
 last_skill_path(session_id: str) -> pathlib.Path
 load_false_positives() -> set[str]

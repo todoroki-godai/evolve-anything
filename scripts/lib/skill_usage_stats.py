@@ -23,10 +23,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from rl_common import DATA_DIR
+from rl_common import hook_store_path
 
 GLOBAL_SKILLS_DIR = Path.home() / ".claude" / "skills"
 DEFAULT_DAYS = 90
+
+
+def _default_activations_file() -> Path:
+    """skill_activations.jsonl の正準パス（hook が書く plugin-data dir）。
+
+    hook（PostToolUse Skill）が plugin-data dir に書くため、tool 実行時（env 未設定）でも
+    hook-writer 系 resolver で正準 dir を解決する（#358）。
+    """
+    return hook_store_path("skill_activations.jsonl")
 
 
 def load_skill_activations(
@@ -48,7 +57,7 @@ def load_skill_activations(
         プラグイン prefix（例: "rl-anything:audit"）は除去して "audit" として集計。
         元の形式と除去後の形式の両方をキーとして登録する。
     """
-    filepath = activations_file or (DATA_DIR / "skill_activations.jsonl")
+    filepath = activations_file or _default_activations_file()
     if not filepath.exists():
         return {}
 
@@ -144,7 +153,7 @@ def find_unused_global_skills(
     Returns:
         [{"skill_name": str, "days_no_use": int}]
     """
-    filepath = activations_file or (DATA_DIR / "skill_activations.jsonl")
+    filepath = activations_file or _default_activations_file()
     if not filepath.exists():
         return []  # データなし → 蓄積待ち
 
@@ -169,7 +178,7 @@ def find_rarely_used_global_skills(
         [{"skill_name": str, "count": int, "last_used": str, "days_since": float,
           "top_level_count": int, "nested_count": int}]
     """
-    filepath = activations_file or (DATA_DIR / "skill_activations.jsonl")
+    filepath = activations_file or _default_activations_file()
     if not filepath.exists():
         return []
 
@@ -206,7 +215,7 @@ def find_nested_only_skills(
     Returns:
         [{"skill_name": str, "nested_count": int, "last_used": str}]
     """
-    filepath = activations_file or (DATA_DIR / "skill_activations.jsonl")
+    filepath = activations_file or _default_activations_file()
     if not filepath.exists():
         return []
 
@@ -306,7 +315,7 @@ def get_skill_activation_summary(
     nested_only = find_nested_only_skills(days=days, activations_file=activations_file)
     merge_candidates = find_merge_candidates(days=days, activations_file=activations_file)
 
-    filepath = activations_file or (DATA_DIR / "skill_activations.jsonl")
+    filepath = activations_file or _default_activations_file()
     return {
         "has_data": filepath.exists(),
         "days": days,
