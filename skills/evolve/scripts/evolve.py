@@ -896,6 +896,16 @@ def run_evolve(
         except Exception as e:
             print(f"[rl-anything:evolve] growth emit warning: {e}", file=sys.stderr)
 
+    # ── evolve 提案 accept/reject の決定論キャプチャ（#360-A, ADR-041）────────
+    # 候補スキルの before_sha をキューに emit。適用実績=accept / 明示却下=reject は
+    # SKILL.md Step 7.8 の drain（ingest_decisions）が optimize_history に記録する。
+    # dry_run 時は pending を計算するが書き込まない（emit_decisions が内部でガード）。
+    try:
+        from evolve_decisions import emit_decisions
+        result["evolve_decisions"] = emit_decisions(result, project_dir, dry_run=dry_run)
+    except Exception as e:
+        result["evolve_decisions"] = {"error": str(e)}
+
     return result
 
 
