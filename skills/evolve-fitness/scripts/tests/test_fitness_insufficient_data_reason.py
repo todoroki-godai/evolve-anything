@@ -1,12 +1,13 @@
-"""#354⑦: fitness_evolution の insufficient_data 時に理由説明を付記するテスト。
+"""#354⑦ / ADR-041: fitness_evolution の insufficient_data 時に理由説明を付記するテスト。
 
-skill_evolve 提案（skill diff 以外）は採点対象外であるため、
-スキル中心 PJ では accept/reject 母集団が構造的に貯まりにくい。
+採点対象外なのは remediation の fix（rules/hook・構造修正等）。母集団は discover の
+skill diff + skill_evolve high/medium 提案の accept/reject から成る（ADR-041）が、
+これらの提案が少ないスキル中心 PJ では accept/reject 母集団が構造的に貯まりにくい。
 insufficient_data の出力に、この理由を示す説明文が含まれることを検証する。
 
 テスト方針:
   - 母集団不足（0件・BOOTSTRAP_MIN未満）→ insufficient_data の message に説明文が含まれる
-  - 説明文は「skill_evolve 提案は採点対象外」「母集団が貯まりにくい」の趣旨を含む
+  - 説明文は「採点対象外（remediation の fix）」「母集団が貯まりにくい」の趣旨を含む
   - 十分な母集団（MIN_DATA_COUNT 以上）→ ready になり、説明文は不要
   - BOOTSTRAP_MIN <= data < MIN_DATA_COUNT → bootstrap になり、説明文は不要
 """
@@ -34,7 +35,7 @@ class TestInsufficientDataReasonMessage:
     """insufficient_data 時のメッセージに説明文が含まれること。"""
 
     def test_zero_data_includes_skill_evolve_explanation(self):
-        """データ 0 件 → skill_evolve 提案は採点対象外という説明が含まれる。"""
+        """データ 0 件 → 採点対象外（remediation の fix）/母集団の説明が含まれる。"""
         result = fe.run_fitness_evolution(history=[])
         assert result["status"] == "insufficient_data"
 
@@ -76,10 +77,12 @@ class TestInsufficientDataReasonMessage:
         )
 
     def test_skill_evolve_source_not_counted_explanation_present(self):
-        """skill_evolve ソースのレコードしかない場合も insufficient_data になり説明文が出る。
+        """human_accepted=None（未決定）のレコードだけの場合も insufficient_data になり説明文が出る。
 
-        skill_evolve 提案（structure fix / rule/hook candidate 等）は採点対象外のため、
-        それらだけでは decisions に数えられず insufficient_data になる。
+        accept/reject が未確定（human_accepted=None）のレコードは source によらず decisions に
+        数えられないため、それだけでは母集団が貯まらず insufficient_data になる。
+        （ADR-041 で skill_evolve high/medium も accept/reject が付けば母集団に入るが、
+        本ケースは decision 未確定なので数えられない）
         """
         # human_accepted が None のレコードは decisions に入らない
         history = [
