@@ -17,6 +17,16 @@ invariant 層であり、本 PR ではまだ配線していない。決定論・
 `kind` は実 dry-run（`evolve.py --dry-run`）で検証した型に合わせている。phase が
 `{"error": ...}` または `skipped=True` の場合、その phase 配下の optional キーは欠落しても
 違反にしない（パイプラインの正常な分岐）。
+
+**契約は意図的に部分カバー**（#379-1）。evolve.py は ~18 phase を result に書くが
+CANONICAL はその一部のみ登録する。逆方向 drift（新 phase 追加時に契約が静かに陳腐化し
+P2 self-detect が「契約なし」と誤認する）を封じるため、登録外の phase は
+`UNCOVERED_PHASES` に**明示**する。`COVERED_PHASES ∪ UNCOVERED_PHASES` が全 phase を
+覆うことを契約テストが enforce し、新 phase は CANONICAL か UNCOVERED_PHASES の更新を強制する。
+
+P2 self-detect（#377-5, `evolve_consistency`）は本モジュールの安定 API を consume する:
+`check_conformance_structured(result) -> List[ConformanceViolation]`（機械可読）と
+`CANONICAL` / `documented_path_drift`。`check_conformance`（str 版）は後方互換ラッパ。
 """
 from __future__ import annotations
 
@@ -98,9 +108,56 @@ CANONICAL: List[Key] = [
 ]
 
 
+# CANONICAL が登録する phase 集合（path から導出）。
+COVERED_PHASES: Set[str] = {k.phase for k in CANONICAL if k.phase is not None}
+
+# CANONICAL に**意図的に**含めない phase（#379-1）。evolve.py が書くが契約対象外。
+# 新 phase を足したら CANONICAL に登録するか、ここに明示して逆方向契約テストを通す。
+UNCOVERED_PHASES: Set[str] = {
+    "observe",
+    "layer_diagnose",
+    "quality_patterns",
+    "quality_traces",
+    "rationalization_table",
+    "fitness",
+    "fitness_evolution",
+    "self_evolution",
+    "prune",
+    "enrich",
+    "pitfall_hygiene",
+}
+
+
 def canonical_paths() -> Set[str]:
     """CANONICAL の全 path 集合。"""
     return {k.path for k in CANONICAL}
+
+
+@dataclass(frozen=True)
+class ConformanceViolation:
+    """機械可読な契約違反（P2 self-detect 用・#379-5）。
+
+    path:   違反した result 上の dotted path。
+    reason: 違反種別 — "missing" / "null_not_allowed" / "wrong_kind" / "item_key_missing"。
+    detail: 種別に付随する説明（wrong_kind の "expected int got bool" 等）。
+    """
+
+    path: str
+    reason: str
+    detail: str = ""
+
+    @property
+    def message(self) -> str:
+        """str 版 check_conformance と後方互換なメッセージ（既存呼び出し・テスト保護）。"""
+        if self.reason == "missing":
+            return f"missing: {self.path}"
+        if self.reason == "null_not_allowed":
+            return f"null not allowed: {self.path}"
+        if self.reason == "wrong_kind":
+            return f"wrong kind: {self.path} {self.detail}".rstrip()
+        if self.reason == "item_key_missing":
+            return f"item key missing: {self.path}{self.detail}"
+        return f"{self.reason}: {self.path} {self.detail}".rstrip()
 
 
 def _phase_inactive(result: Dict[str, Any], phase: Optional[str]) -> bool:
@@ -126,13 +183,14 @@ def _resolve(result: Dict[str, Any], path: str) -> tuple[bool, Any]:
     return True, cur
 
 
-def check_conformance(result: Dict[str, Any]) -> List[str]:
-    """実 result が CANONICAL に一致するか検査し、違反メッセージのリストを返す。
+def check_conformance_structured(result: Dict[str, Any]) -> List[ConformanceViolation]:
+    """実 result が CANONICAL に一致するか検査し、機械可読な違反リストを返す（#379-5）。
 
     空リスト = 完全準拠。phase が error / skipped の場合、その配下の
-    optional キーの欠落は違反にしない（パイプラインの正常分岐）。
+    optional キーの欠落は違反にしない（パイプラインの正常分岐）。P2 self-detect は
+    (path, reason) を構造的に consume するためこちらを使う。
     """
-    violations: List[str] = []
+    violations: List[ConformanceViolation] = []
     for key in CANONICAL:
         inactive = _phase_inactive(result, key.phase)
         found, value = _resolve(result, key.path)
@@ -140,40 +198,83 @@ def check_conformance(result: Dict[str, Any]) -> List[str]:
             # 非アクティブ phase 配下、または optional キーは欠落許容。
             if inactive or key.optional:
                 continue
-            violations.append(f"missing: {key.path}")
+            violations.append(ConformanceViolation(key.path, "missing"))
             continue
         if value is None:
             if key.nullable:
                 continue
-            violations.append(f"null not allowed: {key.path}")
+            violations.append(ConformanceViolation(key.path, "null_not_allowed"))
             continue
         # bool は int のサブクラスなので、int 期待時に bool を弾く
         if key.kind is int and isinstance(value, bool):
-            violations.append(f"wrong kind: {key.path} expected int got bool")
+            violations.append(ConformanceViolation(key.path, "wrong_kind", "expected int got bool"))
             continue
         if not isinstance(value, key.kind):
-            violations.append(
-                f"wrong kind: {key.path} expected {key.kind.__name__} got {type(value).__name__}"
-            )
+            violations.append(ConformanceViolation(
+                key.path, "wrong_kind",
+                f"expected {key.kind.__name__} got {type(value).__name__}",
+            ))
             continue
         if key.kind is list and key.item_keys and value:
             first = value[0]
             if isinstance(first, dict):
                 missing = [ik for ik in key.item_keys if ik not in first]
                 if missing:
-                    violations.append(
-                        f"item key missing: {key.path}[].{{{','.join(missing)}}}"
-                    )
+                    violations.append(ConformanceViolation(
+                        key.path, "item_key_missing", f"[].{{{','.join(missing)}}}",
+                    ))
     return violations
 
 
-def extract_documented_paths(text: str) -> Set[str]:
-    """テキスト（SKILL.md 等）が明示する result dotted path を抽出する。
+def check_conformance(result: Dict[str, Any]) -> List[str]:
+    """実 result が CANONICAL に一致するか検査し、違反メッセージのリストを返す。
 
-    `phases.X.Y...`（先頭 `result.` は許容して剥がす）形式の明示パスのみ。散文中の
-    キー名片（`.proposable` 単独など）は対象外＝precision 優先で誤検出を避ける。
+    `check_conformance_structured` の後方互換ラッパ（人間可読 str）。空リスト = 完全準拠。
+    """
+    return [v.message for v in check_conformance_structured(result)]
+
+
+def documented_path_drift(documented: Set[str]) -> Set[str]:
+    """doc が参照する path のうち canonical と prefix 整合しないものを返す（#379-3）。
+
+    exact membership（`documented - canonical_paths()`）だと dict 型 canonical キーの
+    **sub-field**（例 `phases.skill_evolve.batch_guard_trigger.reason`）を doc 参照しただけで
+    drift 扱いになり false-positive で build を壊す。longest-prefix で照合し、以下を「既知」とする:
+      - canonical と完全一致
+      - canonical キーの子孫（`p` が `canonical + "."` で始まる＝dict sub-field）
+      - canonical キーの祖先（`canonical` が `p + "."` で始まる＝中間ノード参照）
+    どの canonical とも prefix 整合しない path のみ drift として返す。
+    """
+    canonical = canonical_paths()
+    drift: Set[str] = set()
+    for p in documented:
+        if p in canonical:
+            continue
+        if any(p.startswith(c + ".") or c.startswith(p + ".") for c in canonical):
+            continue
+        drift.add(p)
+    return drift
+
+
+def extract_documented_paths(text: str) -> Set[str]:
+    """テキスト（SKILL.md / references 等）が明示する result dotted path を抽出する。
+
+    対応記法:
+      - dotted: `phases.X.Y...`（先頭 `result.` は許容して剥がす）
+      - bracket: `result["phases"]["X"]["Y"]...`（#379-3、任意対応）→ dotted へ正規化
+    散文中のキー名片（`.proposable` 単独など）は対象外＝precision 優先で誤検出を避ける。
     """
     import re
 
-    pattern = re.compile(r"(?:result\.)?(phases\.[A-Za-z_]+(?:\.[A-Za-z_]+)+)")
-    return set(pattern.findall(text))
+    out: Set[str] = set()
+    dotted = re.compile(r"(?:result\.)?(phases\.[A-Za-z_]+(?:\.[A-Za-z_]+)+)")
+    out.update(dotted.findall(text))
+
+    # bracket 記法: result["phases"]["skill_evolve"][...] → phases.skill_evolve...
+    bracket = re.compile(r'(?:result)?((?:\[\s*["\'][A-Za-z_]+["\']\s*\]){2,})')
+    seg = re.compile(r'\[\s*["\']([A-Za-z_]+)["\']\s*\]')
+    for chain in bracket.findall(text):
+        segs = seg.findall(chain)
+        if segs and segs[0] == "phases" and len(segs) >= 2:
+            out.add(".".join(segs))
+    return out

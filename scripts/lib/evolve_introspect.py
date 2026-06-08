@@ -378,6 +378,21 @@ def _detect_fp_in_auto_fixable(phases: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _collect_consistency_candidates(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """evolve_consistency.collect_consistency_candidates を遅延 import で呼ぶ（#377-5）。
+
+    import 失敗時は空リスト（検出スキップ・self_analysis 全体を壊さない）。
+    """
+    try:
+        from evolve_consistency import collect_consistency_candidates
+    except Exception:
+        try:
+            from lib.evolve_consistency import collect_consistency_candidates  # type: ignore
+        except Exception:
+            return []
+    return collect_consistency_candidates(result)
+
+
 def _load_known_fp_matcher():
     """known_fp_patterns.match_known_fp_in_issue を遅延 import で取得する。
 
@@ -507,7 +522,7 @@ def _detect_line_budget_conflict(phases: Dict[str, Any]) -> List[Dict[str, Any]]
 
 
 def _detect_improvement_opportunities(result: Dict[str, Any]) -> Dict[str, Any]:
-    """系統的却下・calibration regression から構造的改善機会を抽出する。"""
+    """系統的却下・calibration regression・整合性 drift から構造的改善機会を抽出する。"""
     candidates: List[Dict[str, Any]] = []
     phases = result.get("phases", {})
     if not isinstance(phases, dict):
@@ -518,9 +533,13 @@ def _detect_improvement_opportunities(result: Dict[str, Any]) -> Dict[str, Any]:
         candidates.extend(_detect_systematic_rejections(se))
         candidates.extend(_detect_calibration_regression(se))
 
+    # #377-5: result↔契約のキー/型乖離・usage↔suitability 矛盾を runtime で self-detect。
+    # self_evolution の状態に依存せず常に評価する（健全時 0 件＝regression guard）。
+    candidates.extend(_collect_consistency_candidates(result))
+
     return _section(
         candidates,
-        zero_line="✓ 改善余地: 系統的却下・calibration regression なし",
+        zero_line="✓ 改善余地: 系統的却下・calibration regression・整合性 drift（契約乖離/usage矛盾）なし",
         hit_template="⚠ 改善余地 {n} 件: {names}",
         name_of=lambda c: c.get("subject", c["dedup_key"]),
     )

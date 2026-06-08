@@ -294,6 +294,29 @@ def test_no_self_issue_when_split_and_archive_disjoint():
     assert "✓" in analysis["self_detection"]["summary_line"]
 
 
+# ── consistency drift が improvement_opportunities に合流（#377-5） ──
+
+
+def test_consistency_candidate_flows_into_improvement():
+    """usage0×suitability 矛盾が improvement_opportunities に surface される。"""
+    result = _clean_result()
+    result["phases"]["skill_evolve"] = {
+        "assessments": [
+            {"skill_name": "ghost", "suitability": "high",
+             "telemetry_detail": {"usage_count": 0}},
+        ],
+    }
+    analysis = ei.analyze_evolve_result(result)
+    keys = [c["dedup_key"] for c in analysis["improvement_opportunities"]["candidates"]]
+    assert any("usage_suitability" in k for k in keys)
+
+
+def test_clean_result_keeps_improvement_zero():
+    """健全な result では consistency 合流後も improvement は 0 件（regression guard）。"""
+    analysis = ei.analyze_evolve_result(_clean_result())
+    assert analysis["improvement_opportunities"]["candidates"] == []
+
+
 # ── reconcile: split↔archive 相互排他（root cause fix / #301 #302） ──
 
 

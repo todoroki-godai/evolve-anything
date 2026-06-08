@@ -135,8 +135,7 @@ def test_real_dry_run_result_conforms():
 def test_skill_md_documented_paths_are_canonical():
     text = _SKILL_MD.read_text(encoding="utf-8")
     documented = ers.extract_documented_paths(text)
-    canonical = ers.canonical_paths()
-    unknown = documented - canonical
+    unknown = ers.documented_path_drift(documented)
     assert not unknown, (
         f"SKILL.md が canonical に無い result path を参照（doc drift）: {sorted(unknown)}。"
         f"evolve_result_schema.CANONICAL を更新するか SKILL.md を修正すること"
@@ -146,3 +145,114 @@ def test_skill_md_documented_paths_are_canonical():
 def test_extract_strips_result_prefix():
     paths = ers.extract_documented_paths("`result.phases.skill_evolve.batch_guard_trigger`")
     assert "phases.skill_evolve.batch_guard_trigger" in paths
+
+
+# ── 4. 機械可読 conformance（P2 consume 用・#379-5） ──────────────
+
+
+def test_structured_conformance_returns_path_and_reason():
+    r = _minimal_valid()
+    del r["phases"]["remediation"]["proposable"]
+    viols = ers.check_conformance_structured(r)
+    assert any(v.path == "phases.remediation.proposable" and v.reason == "missing" for v in viols)
+
+
+def test_structured_conformance_wrong_kind_reason():
+    r = _minimal_valid()
+    r["phases"]["remediation"]["proposable"] = [{"type": "x"}]
+    viols = ers.check_conformance_structured(r)
+    match = [v for v in viols if v.path == "phases.remediation.proposable"]
+    assert match and match[0].reason == "wrong_kind"
+
+
+def test_structured_conformance_null_reason():
+    r = _minimal_valid()
+    # batch_guard_trigger は nullable だが、nullable でない int を None にすると null 違反
+    r["phases"]["remediation"]["proposable"] = None
+    viols = ers.check_conformance_structured(r)
+    match = [v for v in viols if v.path == "phases.remediation.proposable"]
+    assert match and match[0].reason == "null_not_allowed"
+
+
+def test_str_check_conformance_wraps_structured():
+    """str 版は structured 版の薄いラッパ（後方互換）。同じ違反集合を返す。"""
+    r = _minimal_valid()
+    del r["phases"]["remediation"]["proposable"]
+    structured = ers.check_conformance_structured(r)
+    strings = ers.check_conformance(r)
+    assert len(strings) == len(structured)
+    assert all(s.path in msg for s, msg in zip(structured, strings))
+
+
+def test_clean_result_has_no_structured_violations():
+    assert ers.check_conformance_structured(_minimal_valid()) == []
+
+
+# ── 5. longest-prefix doc-drift（dict sub-field 誤検出回避・#379-3） ──
+
+
+def test_documented_subfield_of_dict_key_is_not_drift():
+    """dict canonical キーの sub-field を doc 参照しても drift にしない（FP build 破壊を回避）。"""
+    drift = ers.documented_path_drift({"phases.skill_evolve.batch_guard_trigger.reason"})
+    assert drift == set()
+
+
+def test_documented_ancestor_of_canonical_is_not_drift():
+    drift = ers.documented_path_drift({"phases.skill_evolve"})
+    assert drift == set()
+
+
+def test_truly_unknown_documented_path_is_drift():
+    drift = ers.documented_path_drift({"phases.bogus.nonexistent"})
+    assert "phases.bogus.nonexistent" in drift
+
+
+def test_extract_bracket_notation():
+    paths = ers.extract_documented_paths('result["phases"]["skill_evolve"]["assessments"]')
+    assert "phases.skill_evolve.assessments" in paths
+
+
+# ── 6. 逆方向契約: phase 集合 ⊆ 既知 phase（#379-1） ───────────────
+
+
+def test_covered_and_uncovered_phases_are_disjoint():
+    assert ers.COVERED_PHASES.isdisjoint(ers.UNCOVERED_PHASES)
+
+
+@pytest.mark.skipif(
+    not (_REPO / "skills" / "evolve" / "scripts" / "evolve.py").exists(),
+    reason="evolve.py 不在",
+)
+def test_real_phases_are_all_registered():
+    """実 dry-run の phase 集合が COVERED ∪ UNCOVERED に収まる（未登録 phase で fail）。
+
+    CANONICAL は意図的に部分カバー。新 phase 追加時に CANONICAL か UNCOVERED_PHASES の
+    更新を強制し、契約自体の静かな陳腐化（#375 が解こうとした drift の構造的再発）を封じる。
+    """
+    sys.path.insert(0, str(_REPO / "skills" / "evolve" / "scripts"))
+    import evolve  # noqa: E402
+
+    result = evolve.run_evolve(project_dir=str(_REPO), dry_run=True)
+    actual = set(result.get("phases", {}).keys())
+    known = ers.COVERED_PHASES | ers.UNCOVERED_PHASES
+    unregistered = actual - known
+    assert not unregistered, (
+        f"未登録の phase: {sorted(unregistered)}。CANONICAL にキーを追加するか "
+        f"UNCOVERED_PHASES に明示登録すること（契約の意図的部分カバーを enforce）"
+    )
+
+
+# ── 7. references/*.md も doc-drift 走査対象（#379-2） ─────────────
+
+
+def test_references_documented_paths_are_known():
+    refs_dir = _REPO / "skills" / "evolve" / "references"
+    if not refs_dir.exists():
+        pytest.skip("references 不在")
+    for md in sorted(refs_dir.rglob("*.md")):
+        documented = ers.extract_documented_paths(md.read_text(encoding="utf-8"))
+        drift = ers.documented_path_drift(documented)
+        assert not drift, (
+            f"{md.relative_to(_REPO)} が canonical に無い result path を参照（doc drift）: "
+            f"{sorted(drift)}"
+        )

@@ -12,7 +12,7 @@ LLM 非依存なのでトークン見積もりは不要）。構造:
 self_analysis: {
   self_detection:          {candidates: [...], summary_line: "..."},   # 提案の質（split↔archive 矛盾 / line budget 悪化提案 / auto_fixable への FP landing #341）
   runtime_errors:          {candidates: [...], summary_line: "..."},   # 握り潰された phase 例外 / observability 取得失敗 / stderr 警告（scipy RuntimeWarning(NaN) 等 #341）
-  improvement_opportunities: {candidates: [...], summary_line: "..."}, # 系統的却下 type / calibration regression
+  improvement_opportunities: {candidates: [...], summary_line: "..."}, # 系統的却下 type / calibration regression / 整合性 drift（契約乖離・usage↔suitability 矛盾 #377-5）
   total_candidates: N,
 }
 ```
