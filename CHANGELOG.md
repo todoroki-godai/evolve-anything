@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.90.0] - 2026-06-08
 
 ### Added
 - **feat(evolve): 提案の accept/reject を日次ループで決定論キャプチャし fitness calibration 母集団 `optimize_history` を育てる（#360, [ADR-041]）** — calibration regression 検出（`check_calibration_regression`）の母集団が全 PJ で空だった根因は「accept/reject 記録が evolve SKILL.md の MUST（assistant が手で `record_evolve_diff_decision` を叩く）止まりで決定論コードから呼ばれず実行され損ねていた」こと（`install ≠ enforcement` の SKILL.md 版、#360 当初の「writer 不在」前提は誤りで配線自体は存在した）。新規 `scripts/lib/evolve_decisions.py` が emit→（インライン適用）→drain の2相で **accept=適用実績（ディスク before/after_sha 差分）/ reject=明示却下 / skip=記録しない**（C: ハイブリッド）を取る。`emit_decisions`（`run_evolve` 末尾）が discover の `matched_skills` と skill_evolve の high/medium 適性提案の before_sha をキュー `DATA_DIR/evolve_decisions/<slug>.jsonl` に上書きスナップショット、`ingest_decisions`（evolve SKILL.md Step 7.8 drain）が適用された diff を accept・明示却下 id を reject として既存 `record_evolve_diff_decision` 経由で optimize_history へ冪等記録（fitness_func=`skill_quality` で母集団は混合でなく増量）。accept がディスク差分由来なので記録ステップ未実行という失敗モードを構造的に塞ぐ。remediation fix は target 異種（rules/hooks/構造）で均質性を壊すため対象外。`--dry-run` は emit/ingest とも非書込（pitfall_dryrun_stateful_store_write 準拠）。evolve SKILL.md Step 3 の手動 inline python は drain へ統合。TDD（emit の matched_skills/skill_evolve 抽出・dedup・dry-run 非書込、ingest の accept(適用)/reject(明示)/skip(無変更)/dry-run・queue clear、計13件）+ 本番デフォルト経路 E2E（optimize_history へ実書込を確認）。決定論・LLM 非依存。
