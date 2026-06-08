@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(remediation): `known_fp_patterns` を `_should_exclude_fp` に配線し auto_fixable への FP landing を塞ぐ（#357）** — #341 の self_analysis（`evolve_introspect._detect_fp_in_auto_fixable`）が「confidence=0.95 の `auto_fixable` に既知 FP（`extensionless_logical_path`, 対象 `data/bots/wheeling`）が landing している」と検出し続けていた盲点を、検出側でなく**生成側**で塞いだ。`data/bots/wheeling` は相対パスのため #339 の `logical_path`（絶対パス＋実 FS ルート除外）に掛からず、末尾セグメント `wheeling` が 8 文字あるため `short_field_name` にも掛からず、`stale_ref`(0.95) として無確認自動適用され得る位置に landing していた。`remediation/principles.py` の `_should_exclude_fp` 最終段に `known_fp_patterns.match_known_fp_in_issue` を**相対 subject 限定**で配線し、`FP_EXCLUSIONS` に `known_fp_pattern` を追加（14→15）。絶対パスは既存の tmp_path/logical_path と #339 実 FS ルート除外が専管するため対象外にした（カタログの `ssm_style_path` は `/Users` 等の実ルートも拾い #339 回帰ガードと衝突するため）。self_analysis 検出はこれにより 0 件へ収束し regression guard として残る。TDD（相対論理パス除外・汎用略語除外・classify で fp_excluded・拡張子付き正当参照は誤除外しない回帰ガード、新規4件 + 既存 #339 回帰ガード温存）。決定論・LLM 非依存。
+
 ## [1.89.1] - 2026-06-05
 
 ### Fixed

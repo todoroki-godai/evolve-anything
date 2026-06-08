@@ -4,7 +4,12 @@ remediation の `FP_EXCLUSIONS`（`_should_exclude_fp`）を通り抜けて
 `auto_fixable`（confidence>=0.9）に landing してしまう「いかにも FP な」文字列を
 **決定論で**照合する自己完結カタログ。self_analysis（evolve_introspect, #341）が
 「高 confidence バケットに FP が入る」パターンを safety guard として検出するために
-使う。remediation（#337）からも将来共通参照できるよう scripts/lib に小さく独立させる。
+使う。さらに remediation 本体（#357）も `_should_exclude_fp` の最終段でこの matcher を
+**相対 subject に限定して**参照し、FP を auto_fixable 手前で除外する（自己解析が
+出していた「auto_fixable に FP landing」は 0 件へ収束し regression guard として残る）。
+絶対パスは remediation 側の tmp_path / logical_path と #339 実 FS ルート除外が専管する
+ため呼び出し側でスキップする（本カタログの ssm_style_path は /Users 等の実ルートも
+拾うため）。scripts/lib に小さく独立させ両者から共通参照する。
 
 設計原則:
   - LLM 非依存・決定論・副作用なし（純関数）。

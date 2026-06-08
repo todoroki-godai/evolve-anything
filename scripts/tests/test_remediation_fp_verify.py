@@ -350,13 +350,66 @@ def test_fp_exclusions_tmp_path_classify_not_auto_fixable():
         assert classified["confidence_score"] == 0.0
 
 
+def test_fp_exclusions_known_fp_relative_logical_path():
+    """相対の拡張子なし論理パス（data/bots/wheeling）は known_fp_pattern で除外される（#357）。
+
+    絶対パスでないため logical_path に掛からず、末尾セグメントが 8 文字あるため
+    short_field_name にも掛からず、これまで auto_fixable に landing していた既知 FP。
+    known_fp_patterns カタログ（extensionless_logical_path）で塞ぐ。
+    """
+    issue = {
+        "type": "stale_ref",
+        "file": "/Users/me/.claude/projects/proj/memory/MEMORY.md",
+        "detail": {"path": "data/bots/wheeling"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason == "known_fp_pattern"
+
+
+def test_fp_exclusions_known_fp_generic_abbreviation():
+    """汎用略語（API 等）も known_fp_pattern で除外される（#357）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "CLAUDE.md",
+        "detail": {"path": "SSM"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason == "known_fp_pattern"
+
+
+def test_fp_exclusions_known_fp_classify_not_auto_fixable():
+    """known_fp_pattern 該当は classify_issue で auto_fixable に入らない（#357 統合）。"""
+    from remediation import classify_issue
+
+    classified = classify_issue({
+        "type": "stale_ref",
+        "file": "/Users/me/.claude/projects/proj/memory/MEMORY.md",
+        "detail": {"path": "data/bots/wheeling"},
+    })
+    assert classified["category"] == "fp_excluded"
+    assert classified["confidence_score"] == 0.0
+    assert classified["fp_exclusion_reason"] == "known_fp_pattern"
+
+
+def test_fp_exclusions_known_fp_does_not_swallow_real_ref():
+    """拡張子付きの正当な相対参照は known_fp_pattern で誤除外しない（#357 回帰ガード）。"""
+    issue = {
+        "type": "stale_ref",
+        "file": "CLAUDE.md",
+        "detail": {"path": "scripts/lib/missing_module.py"},
+    }
+    reason = _should_exclude_fp(issue)
+    assert reason is None
+
+
 def test_fp_exclusions_list_completeness():
-    """FP_EXCLUSIONS に全14パターンが含まれている。"""
-    assert len(FP_EXCLUSIONS) == 14
+    """FP_EXCLUSIONS に全15パターンが含まれている。"""
+    assert len(FP_EXCLUSIONS) == 15
     expected = {
         "test_file", "archive_path", "external_url", "numeric_only",
         "code_block_ref", "frontmatter_path", "example_snippet",
         "commented_out", "changelog_entry", "memory_index_only",
         "plugin_managed", "short_field_name", "tmp_path", "logical_path",
+        "known_fp_pattern",
     }
     assert set(FP_EXCLUSIONS) == expected

@@ -63,6 +63,7 @@ FP_EXCLUSIONS: List[str] = [
     "short_field_name",    # 8文字未満のフィールド名
     "tmp_path",            # /tmp 等の一時ファイルパス（実体は履歴的引用・存在しなくて当然）
     "logical_path",        # SSM 等の論理パス（/service/key、拡張子なし・ファイルシステム外）
+    "known_fp_pattern",    # known_fp_patterns カタログ該当（相対の論理識別子・汎用略語等、#357）
 ]
 
 # tmp_path: OS の一時ディレクトリプレフィックス（履歴的引用であり stale 判定対象外）
@@ -156,7 +157,35 @@ def _should_exclude_fp(issue: Dict[str, Any]) -> Optional[str]:
         if all(len(s) < 8 for s in segments):
             return "short_field_name"
 
+    # known_fp_pattern: known_fp_patterns カタログ該当（#357）。
+    # 上の個別判定（tmp_path / logical_path / archive_path 等）を通り抜けた
+    # 「いかにも FP な」相対の拡張子なし論理識別子（data/bots/wheeling）や
+    # 汎用略語を最後に決定論で照合し、auto_fixable への landing を塞ぐ。
+    # self_analysis（evolve_introspect #341）が出していた「auto_fixable に FP landing」
+    # 検出はこれにより 0 件へ収束し、regression guard として残る。
+    #
+    # 絶対パス（先頭 /）は上の tmp_path / logical_path と #339 の実 FS ルート除外が
+    # 専管するため対象外にする。known_fp の ssm_style_path は実 FS ルート（/Users 等）も
+    # 拾ってしまい #339 回帰ガードと衝突するので、ここでは相対の subject に限定する。
+    if not ref_path.startswith("/") and _match_known_fp_in_issue(issue) is not None:
+        return "known_fp_pattern"
+
     return None
+
+
+def _match_known_fp_in_issue(issue: Dict[str, Any]) -> Optional[str]:
+    """known_fp_patterns.match_known_fp_in_issue を遅延 import で照合する（#357）。
+
+    import 失敗時は None を返し、FP 除外をスキップ（remediation 全体を壊さない）。
+    """
+    try:
+        from known_fp_patterns import match_known_fp_in_issue
+    except Exception:
+        try:
+            from lib.known_fp_patterns import match_known_fp_in_issue  # type: ignore
+        except Exception:
+            return None
+    return match_known_fp_in_issue(issue)
 
 
 # ---------- 独立検証 ----------
