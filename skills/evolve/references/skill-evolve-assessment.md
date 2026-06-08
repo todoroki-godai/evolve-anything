@@ -31,6 +31,14 @@ ingest_judgment_scores(proj, emit["requests"], responses)
 
 1. グループ表を表示する（origin / スキル数 / 推定トークン / スキル名一覧）
    `already_denied` に含まれるスキルは「今回自動スキップ済み」と明示する
+   - 推定トークンは **worst-case（`estimated_tokens`）と cache 反映後の実見込み
+     （`estimated_tokens_cache_aware`）を併記**する（#377-1）。例:
+     「最悪 ~Nk / cache 反映後 ~Mk tokens（cache fresh `cache_fresh_count` 件は ≈0、
+     refresh 必要 `refresh_needed_count` 件のみ Phase B で課金）」。
+   - ⚠ **`--confirmed-batch` 再実行そのものは LLM-free**（[ADR-037] で assessment ループは
+     cache-read）。`estimated_tokens*` は後段の Phase B（judgment refresh の emit→inline）+
+     apply で発生しうる**繰り延べコスト**であり、cache が新しければ大半が ≈0。「コスト大」と
+     即断せず cache-aware の実見込みで判断する。
 2. AskUserQuestion でグループごとに選択させる:
    - 「評価する（このまま続行）」
    - 「今回のみスキップ」

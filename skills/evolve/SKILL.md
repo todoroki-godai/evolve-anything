@@ -183,6 +183,8 @@ evolve.py の出力に含まれる `skill_evolve` フェーズ結果を確認す
   グループ提示 → AskUserQuestion（評価/今回スキップ/永続スキップ）→ `--confirmed-batch` 付き再実行の
   インタラクティブフローを実行してから evolve を再実行する（MUST）。手順・denylist/再実行コードは
   **[references/skill-evolve-assessment.md](references/skill-evolve-assessment.md)**。
+  推定トークンは worst-case（`estimated_tokens`）と cache 反映後の実見込み（`estimated_tokens_cache_aware`、
+  fresh `cache_fresh_count` 件は ≈0）を**併記**する。`--confirmed-batch` 再実行自体は LLM-free（#377-1）。
 - **`null` の場合（通常）**: 以下のサマリを確認する:
   - **already_evolved**: 既に自己進化パターンが組み込まれたスキル数
   - **high_suitability**: 適性高（12-15点）→ Compile で変換を推奨

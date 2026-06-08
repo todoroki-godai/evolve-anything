@@ -201,6 +201,31 @@ def compute_llm_scores(
     }
 
 
+def is_fresh_llm_judgment(skill_dir: Path, cache: Optional[Dict[str, Any]] = None) -> bool:
+    """judgment_complexity が LLM 由来かつ hash 一致（= Phase B refresh 不要）か。
+
+    `emit_judgment_requests(refresh=False)` の skip 条件と**同一定義の SoT**（#377-1）。
+    batch_guard の cache-aware 見積もりがこの述語を共有することで、「見積もりで貯まらない
+    と言ったスキルが実際は Phase B で skip される」ような drift を構造的に防ぐ。
+
+    cache を渡せば `_load_cache` を呼ばない（バッチで N 回ディスクを読まないため）。
+    SKILL.md 不在は False（評価対象でない）。
+    """
+    from . import _file_hash, _load_cache
+
+    skill_dir = Path(skill_dir)
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.exists():
+        return False
+    if cache is None:
+        cache = _load_cache()
+    cached = cache.get(skill_dir.name, {})
+    return (
+        cached.get("hash") == _file_hash(skill_md)
+        and cached.get("judgment_source") == "llm"
+    )
+
+
 def emit_judgment_requests(
     project_dir: Path,
     skill_dirs: List[Path],
@@ -230,12 +255,8 @@ def emit_judgment_requests(
             continue
         skill_name = skill_dir.name
         current_hash = _file_hash(skill_md)
-        cached = cache.get(skill_name, {})
-        is_fresh_llm = (
-            cached.get("hash") == current_hash
-            and cached.get("judgment_source") == "llm"
-        )
-        if not refresh and is_fresh_llm:
+        # skip 条件は is_fresh_llm_judgment に一元化（batch_guard 見積もりと同一 SoT・#377-1）
+        if not refresh and is_fresh_llm_judgment(skill_dir, cache=cache):
             continue
         content = skill_md.read_text(encoding="utf-8")
         items.append({

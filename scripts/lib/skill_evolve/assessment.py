@@ -180,15 +180,34 @@ def skill_evolve_assessment(
 
     n_effective = len(_effective_targets)
     if n_effective > _MAX_AUTO_SKILLS and not confirmed_batch:
+        # cache-aware 見積もり（#377-1）: Phase B（judgment refresh）は is_fresh_llm の
+        # スキルを skip するため、cache-fresh スキルの実コストは ≈0。worst-case
+        # （全スキル）と cache 反映後の実見込み（refresh 必要分のみ）を併記する。
+        # 判定は emit_judgment_requests と同一の SoT 述語を共有（cache は 1 回だけ読む）。
+        from .llm_scoring import is_fresh_llm_judgment
+        from . import _load_cache
+        _cache = _load_cache()
         _groups: List[Dict[str, Any]] = []
         for _origin in ("custom", "global"):
             _group_skills = [p for p in _effective_targets if classify_artifact_origin(p) == _origin]
             if _group_skills:
+                _refresh_needed = [
+                    p for p in _group_skills
+                    if not is_fresh_llm_judgment(p.parent, cache=_cache)
+                ]
+                _fresh_count = len(_group_skills) - len(_refresh_needed)
                 _groups.append({
                     "origin": _origin,
                     "skills": [p.parent.name for p in _group_skills],
                     "skill_dirs": [str(p.parent) for p in _group_skills],
+                    # worst-case（全スキル Phase B 想定・後方互換）
                     "estimated_tokens": sum(_estimate_skill_tokens(p) for p in _group_skills),
+                    # cache 反映後の実見込み（is_fresh_llm は Phase B で skip され ≈0）
+                    "estimated_tokens_cache_aware": sum(
+                        _estimate_skill_tokens(p) for p in _refresh_needed
+                    ),
+                    "cache_fresh_count": _fresh_count,
+                    "refresh_needed_count": len(_refresh_needed),
                     "skill_count": len(_group_skills),
                 })
         return [{
