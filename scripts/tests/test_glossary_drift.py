@@ -91,6 +91,25 @@ def test_uppercase_stopwords_excluded(tmp_path):
         assert noise not in undefined, f"{noise} はストップワード"
 
 
+def test_generic_meta_words_excluded(tmp_path):
+    """git/メタ/汎用状態語は jargon でない。
+
+    rl-anything 自身の evolve で CONTEXT.md 候補に HEAD/IO/FP/HOLD/DEPRECATED/
+    FALLBACK/RM/SKILL の汎用・メタ語が混入していた。PJ 固有語（DuckDB 等）は
+    残しつつ、これらの一般語のみ除外する（#353⑫ の AWS denylist と同種の拡張）。
+    """
+    ctx = _write(tmp_path, "CONTEXT.md", _VALID)
+    src = _write(
+        tmp_path, "SPEC.md",
+        "git HEAD を見る。IO 層の FP を HOLD する。DEPRECATED な FALLBACK。"
+        "RM 報酬。SKILL.md を編集。DuckDB は固有語として残す。",
+    )
+    undefined = gd.find_undefined_terms(gd.parse_glossary(str(ctx))[0], [str(src)])
+    for noise in ("HEAD", "IO", "FP", "HOLD", "DEPRECATED", "FALLBACK", "RM", "SKILL"):
+        assert noise not in undefined, f"{noise} は汎用/メタ語で除外されるべき"
+    assert "DuckDB" in undefined  # PJ 固有語は残す
+
+
 def test_slack_id_excluded_from_jargon(tmp_path):
     """Slack ID（C05KMHFDPB9 等）は jargon 候補から除外する（#337）。"""
     ctx = _write(tmp_path, "CONTEXT.md", _VALID)

@@ -127,3 +127,28 @@ def test_builder_flags_overlap_and_isolated(monkeypatch):
     assert "役割重複" in joined
     assert "孤立" in joined
     assert "lonely" in joined
+
+
+def test_builder_isolated_only_is_info_not_warning(monkeypatch):
+    """孤立のみ（役割重複なし）は ⚠ でなく ℹ で控えめに出す。
+
+    design-review / doc-writer のようなユーザー直接起動型の専門家は
+    ルーターから参照されず孤立判定されるが、それは設計上正常。
+    ⚠「改善余地」だと過剰なので ℹ に下げ、直接起動型なら正常と明示する。
+    """
+    from audit import sections_agent
+
+    agents = [
+        _mk("router", "Routes requests to specialists", content="calls worker-a and worker-b"),
+        _mk("worker-a", "Compiles reports from telemetry data", content="referenced"),
+        _mk("worker-b", "Renders dashboards for end users", content="referenced"),
+        _mk("solo-expert", "Direct-launch specialist nobody references", content="x"),
+    ]
+    monkeypatch.setattr(sections_agent, "scan_agents", lambda **kw: agents)
+    section = sections_agent.build_agent_team_section(Path("/tmp"))
+    assert section is not None
+    joined = "\n".join(section)
+    assert "ℹ" in joined
+    assert "⚠" not in joined
+    assert "直接起動" in joined
+    assert "solo-expert" in joined

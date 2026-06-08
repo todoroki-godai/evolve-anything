@@ -40,15 +40,28 @@ def build_agent_team_section(project_dir: Path) -> Optional[List[str]]:
             "",
         ]
 
-    lines = header + [
-        "⚠ エージェント編成に改善余地。"
-        "`/rl-anything:agent-brushup` で役割整理・編成見直しを検討:",
-    ]
-    for ov in result.role_overlaps:
+    lines = list(header)
+    if result.role_overlaps:
+        # 役割重複は実際の編成問題。⚠ で agent-brushup を促し、孤立も同じブロックに併記する。
         lines.append(
-            f"- 役割重複: {ov.agent_a} / {ov.agent_b} (Jaccard {ov.similarity:.2f})"
+            "⚠ エージェント編成に改善余地。"
+            "`/rl-anything:agent-brushup` で役割整理・編成見直しを検討:"
         )
-    for name in result.isolated:
-        lines.append(f"- 孤立: {name}（他エージェントから未参照）")
+        for ov in result.role_overlaps:
+            lines.append(
+                f"- 役割重複: {ov.agent_a} / {ov.agent_b} (Jaccard {ov.similarity:.2f})"
+            )
+        for name in result.isolated:
+            lines.append(f"- 孤立: {name}（他エージェントから未参照）")
+    else:
+        # 孤立のみ。design-review / doc-writer のようなユーザー直接起動型の専門家は
+        # ルーターから参照されず孤立判定されるが設計上正常。⚠「改善余地」は過剰なので
+        # ℹ に下げ、直接起動型なら正常である旨を明示して誤解を防ぐ（整理可否は人間判断）。
+        lines.append(
+            "ℹ 他エージェントから未参照のエージェントあり（ユーザー直接起動型なら正常）。"
+            "ルーター統合や整理が要るかは `/rl-anything:agent-brushup` で確認:"
+        )
+        for name in result.isolated:
+            lines.append(f"- {name}: 他エージェントから未参照")
     lines.append("")
     return lines

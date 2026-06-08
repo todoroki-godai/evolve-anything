@@ -61,6 +61,11 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
         "ALB", "NLB", "ELB", "WAF", "ACL", "NAT", "IGW", "AMI",
         "ECR", "EFS", "EBS", "SSM", "SES", "STS", "SLA", "SLO",
         "SLI", "GW",
+        # git / メタ / 汎用状態語。rl-anything 自身の evolve で CONTEXT.md 候補に
+        # 混入していた一般語・メタ語（HEAD=git, IO/FP/FALLBACK=汎用, HOLD=AskUser
+        # Question 選択肢, DEPRECATED=状態語, RM=曖昧な2文字略語, SKILL=メタファイル名）。
+        # PJ 固有語（DuckDB/MemOS/VeriTrace 等の CamelCase）は小文字を含むため誤除外しない。
+        "HEAD", "IO", "FP", "HOLD", "DEPRECATED", "FALLBACK", "RM", "SKILL",
     }
 )
 
