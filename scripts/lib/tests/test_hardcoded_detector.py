@@ -376,6 +376,73 @@ class TestDocContextSuppression:
         assert len(url) == 1, "代入文脈の webhook secret 検出が doc 文脈抑制で壊れた"
 
 
+# ---------- #377-2: Bot ID / markdown テーブルの doc 文脈抑制 ----------
+
+class TestDocContextBotIdAndTable:
+    """#377-2: 説明文中の実 Bot ID（B0...）と markdown テーブル内の ARN を抑制。
+
+    Bot ID は token（xoxb-）と違い公開参照値で、C0(channel)/A0(app) と同様に
+    doc 参照として slack_id 検出から除外する。markdown テーブル行は散文 doc 文脈
+    なので service_url / aws_arn を抑制する（手順番号・例示コマンドと同じ扱い）。
+    """
+
+    # --- Bot ID（B0...）の除外 ---
+
+    def test_bot_id_not_detected(self, tmp_md):
+        """説明文中の実 Bot ID（B0...）は公開参照値なので抑制する（#377-2）。"""
+        path = tmp_md("通知 Bot は B0AJRU27Z2Q を使う")
+        results = detect_hardcoded_values(path)
+        slack = [r for r in results if r["pattern_type"] == "slack_id"]
+        assert slack == [], f"doc 参照の Bot ID が FP 検出された: {slack}"
+
+    def test_channel_id_still_excluded(self, tmp_md):
+        """C0... channel ID の除外は維持（#337 回帰）。"""
+        path = tmp_md("チャンネル C0AJRU27Z2Q に投稿する")
+        results = detect_hardcoded_values(path)
+        assert [r for r in results if r["pattern_type"] == "slack_id"] == []
+
+    def test_app_id_still_excluded(self, tmp_md):
+        """A0... app ID の除外は維持（#337 回帰）。"""
+        path = tmp_md("App ID A04K8RZLM3Q を確認")
+        results = detect_hardcoded_values(path)
+        assert [r for r in results if r["pattern_type"] == "slack_id"] == []
+
+    def test_user_id_still_detected(self, tmp_md):
+        """U(user)/W 始まりの slack_id は doc 参照前提でないため依然検出（過剰除外防止）。"""
+        path = tmp_md("owner: U0AJRU27Z2Q")
+        results = detect_hardcoded_values(path)
+        slack = [r for r in results if r["pattern_type"] == "slack_id"]
+        assert len(slack) == 1, "U 始まりまで除外すると過剰抑制になる"
+
+    # --- markdown テーブル行の doc 文脈抑制 ---
+
+    def test_markdown_table_arn_suppressed(self, tmp_md):
+        """markdown テーブル行の ARN は散文 doc 文脈なので抑制する（#377-2）。"""
+        path = tmp_md(
+            "| 環境 | Secret ARN |\n"
+            "|------|------------|\n"
+            "| dev | arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:slack |\n"
+        )
+        results = detect_hardcoded_values(path)
+        arn = [r for r in results if r["pattern_type"] == "aws_arn"]
+        assert arn == [], f"テーブル行の ARN が FP 検出された: {arn}"
+
+    def test_markdown_table_url_suppressed(self, tmp_md):
+        """markdown テーブル行の service_url も抑制する（#377-2）。"""
+        path = tmp_md("| portal | https://my-portal.slack.com/admin |")
+        results = detect_hardcoded_values(path)
+        url = [r for r in results if r["pattern_type"] == "service_url"]
+        assert url == [], f"テーブル行の URL が FP 検出された: {url}"
+
+    # --- 回帰: 代入文脈は依然検出（テーブル抑制が壊さない） ---
+
+    def test_assignment_arn_still_detected_after_table_rule(self, tmp_md):
+        """`resource: arn:...` の代入文脈はテーブル抑制追加後も検出（#377-2 回帰）。"""
+        path = tmp_md("resource: arn:aws:lambda:ap-northeast-1:123456789012:function:f")
+        results = detect_hardcoded_values(path)
+        assert len([r for r in results if r["pattern_type"] == "aws_arn"]) == 1
+
+
 # ---------- extra_patterns / extra_allowlist テスト ----------
 
 class TestExtensibility:

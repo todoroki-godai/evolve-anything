@@ -93,14 +93,20 @@ _OFFICIAL_API_URL_RE = re.compile(
 # confidence で別途 timestamp/version 等の除外あり）には適用しない。
 _NUMBERED_STEP_RE = re.compile(r"^\s*\d+\.\s")
 _EXAMPLE_CMD_RE = re.compile(r"^\s*[$>]\s|\b(?:curl|wget)\b|\baws\s+[a-z]", re.IGNORECASE)
+# markdown テーブル行（行頭 `|` ＋ 区切り `|`）。テーブルは散文 doc 文脈であり、
+# 中の ID/ARN は設定値でなく参照・例示（#377-2）。`resource: arn:...` のような
+# 代入は `|` 始まりにならないため検出を壊さない。
+_MARKDOWN_TABLE_ROW_RE = re.compile(r"^\s*\|.+\|")
 
 # doc 文脈抑制を適用する pattern_type（高 confidence の URL/ARN 系のみ）。
 _DOC_CONTEXT_SUPPRESSED = ("service_url", "aws_arn")
 
-# doc 文脈の Slack channel ID（C0...）/ App ID（A0...）。これらは秘匿対象でない
-# 公開参照値で、SKILL.md の運用手順に意図的に書かれる（#337）。bot token（xoxb-,
-# api_key パターン）とは別物なので slack_id 検出から除外する。
-_SLACK_DOC_ID_RE = re.compile(r"^(?:C0|A0)[A-Z0-9]{8,}$")
+# doc 文脈の Slack channel ID（C0...）/ App ID（A0...）/ Bot ID（B0...）。これらは
+# 秘匿対象でない公開参照値で、SKILL.md の運用手順や説明文に意図的に書かれる
+# （#337 で C0/A0、#377-2 で B0 を追加）。bot **token**（xoxb-, api_key パターン）が
+# 秘匿対象であり、bot **ID** は別物なので slack_id 検出から除外する。U(user)/W は
+# doc 参照前提でない（PII 寄り）ため除外しない＝過剰抑制を避ける。
+_SLACK_DOC_ID_RE = re.compile(r"^(?:C0|A0|B0)[A-Z0-9]{8,}$")
 
 # バージョン番号
 _VERSION_PATTERN = re.compile(
@@ -168,14 +174,18 @@ def _is_slack_doc_id(matched: str) -> bool:
 
 
 def _is_doc_prose_context(line: str) -> bool:
-    """行が手順説明・例示コマンド（散文 doc 文脈）かどうか判定する（#359）。
+    """行が手順説明・例示コマンド・テーブル（散文 doc 文脈）かどうか判定する（#359, #377-2）。
 
-    手順番号行（``1. ...``）または例示コマンド行（行頭 ``$``/``>`` プロンプト、
-    ``curl``/``wget``、``aws <subcommand>``）に該当すれば True。これらの行の
-    URL/ARN は設定値でなく参照・例示。``resource: arn:...`` のような代入とは
-    構文的に交わらないため、代入文脈の検出は壊さない。
+    手順番号行（``1. ...``）/ 例示コマンド行（行頭 ``$``/``>`` プロンプト、
+    ``curl``/``wget``、``aws <subcommand>``）/ markdown テーブル行（``| ... |``）に
+    該当すれば True。これらの行の URL/ARN は設定値でなく参照・例示。
+    ``resource: arn:...`` のような代入とは構文的に交わらないため、代入文脈の検出は壊さない。
     """
-    return bool(_NUMBERED_STEP_RE.match(line) or _EXAMPLE_CMD_RE.search(line))
+    return bool(
+        _NUMBERED_STEP_RE.match(line)
+        or _EXAMPLE_CMD_RE.search(line)
+        or _MARKDOWN_TABLE_ROW_RE.match(line)
+    )
 
 
 def _is_timestamp(matched: str, line: str) -> bool:
