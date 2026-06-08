@@ -187,6 +187,7 @@ evolve.py の出力に含まれる `skill_evolve` フェーズ結果を確認す
   - **already_evolved**: 既に自己進化パターンが組み込まれたスキル数
   - **high_suitability**: 適性高（12-15点）→ Compile で変換を推奨
   - **medium_suitability**: 適性中（8-11点）→ ユーザー判断に委ねる
+  - **insufficient_usage**: 使用実績ゼロ（`usage_count==0`）で**保留**（#376）→ 「保留（使用実績待ち）N件」と1行表示し、**変換可能（high/medium）の件数には含めない**。自己進化（pitfalls 蓄積）は実ミスが溜まったスキルに効くので、未使用スキルに空ひな型を量産しない。検証系スキルは usage=0 でも medium 維持（例外）
   - **rejected**: アンチパターン2件以上該当で変換非推奨
 
 判断複雑さ cache を LLM 品質で最新化したい場合のみ、assessment 前にファイルベース2相を回す（任意・cache が新しければ 0 コール。コードは上記 reference）。

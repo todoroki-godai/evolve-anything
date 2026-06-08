@@ -246,6 +246,46 @@ class TestTriageAllSkills:
         all_actions = result["CREATE"] + result["UPDATE"] + result["SPLIT"] + result["MERGE"] + result["OK"]
         assert len(all_actions) > 0
 
+    def test_review_and_skip_actions_have_buckets(self, sessions, usage, tmp_path, monkeypatch):
+        """triage_skill が SKIP/REVIEW を返しても result バケツが在り KeyError しない（回帰）。
+
+        triage_ledger は初回 SKIP/TTL 切れ/クールダウン経過で recommendation="SKIP"、
+        再発エスカレーションで "REVIEW" を suppressed=False のまま返す。これらは
+        SKIP_SUPPRESSED に畳まれず result[action].append に到達するため、result 初期化に
+        SKIP/REVIEW バケツが無いと KeyError でクラッシュしていた。
+        """
+        import skill_triage
+
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text(
+            "## Skills\n"
+            "- /aws-cdk-deploy: CDK deploy. Trigger: CDK, deploy\n"
+            "- /commit: commit. Trigger: commit\n"
+        )
+
+        actions = iter(["REVIEW", "SKIP"])
+
+        def fake_triage_skill(skill_name, **kwargs):
+            try:
+                action = next(actions)
+            except StopIteration:
+                action = "OK"
+            return {"action": action, "skill": skill_name, "confidence": 0.5, "evidence": {}}
+
+        monkeypatch.setattr(skill_triage, "triage_skill", fake_triage_skill)
+
+        # 修正前はここで KeyError('REVIEW') / KeyError('SKIP')
+        result = triage_all_skills(
+            sessions=sessions,
+            usage=usage,
+            missed_skills=[],
+            project_root=tmp_path,
+        )
+
+        assert "REVIEW" in result and "SKIP" in result
+        landed = result["REVIEW"] + result["SKIP"]
+        assert len(landed) == 2  # 2 スキルが SKIP/REVIEW バケツに振り分けられた
+
 
 class TestSkillCreatorSuggestion:
     def test_suggestion_content(self):

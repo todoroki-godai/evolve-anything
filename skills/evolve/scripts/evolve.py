@@ -535,6 +535,7 @@ def run_evolve(
             "already_evolved": sum(1 for a in _assessments if a.get("already_evolved")),
             "high_suitability": sum(1 for a in _assessments if a.get("suitability") == "high"),
             "medium_suitability": sum(1 for a in _assessments if a.get("suitability") == "medium"),
+            "insufficient_usage": sum(1 for a in _assessments if a.get("suitability") == "insufficient_usage"),
             "rejected": sum(1 for a in _assessments if a.get("suitability") == "rejected"),
             "excluded_global_count": _excluded_meta.get("excluded_global_count", 0),
             "excluded_global_hint": _excluded_meta.get("hint", ""),

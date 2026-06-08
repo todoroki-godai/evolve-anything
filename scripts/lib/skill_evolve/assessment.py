@@ -54,6 +54,54 @@ def _find_project_dir(skill_dir: Path) -> Optional[Path]:
     return None
 
 
+def _finalize_suitability(scores, suitability, skill_name, skill_dir, telemetry):
+    """適性の終端処理を1箇所に集約（バッチ/単体の2経路で共有・DRY）。
+
+    ① アンチパターン rejection ② 検証系スキルの low→medium バイパス
+    ③ #376: 使用実績ゼロ(`usage_count==0`)は insufficient_usage へ降格。
+       自己進化（pitfalls.md 蓄積）は「実際のミスが溜まったスキル」に効く仕組みなので、
+       一度も使われていないスキルを medium（変換可能）と勧めるのは本末転倒。
+       検証系バイパス（テレメトリ不足でも進化推奨）と rejected は降格しない。
+
+    Returns:
+        (suitability, recommendation, anti_patterns, verification_bypass)
+    """
+    from . import is_verification_skill, ANTI_PATTERN_REJECTION_COUNT
+    from .classification import detect_anti_patterns
+
+    anti_patterns = detect_anti_patterns(scores, skill_dir)
+    rejection_count = sum(
+        1 for ap in anti_patterns
+        if ap["pattern"] in ("Noise Collector", "Context Bloat", "Band-Aid")
+    )
+
+    verification_bypass = False
+    if rejection_count >= ANTI_PATTERN_REJECTION_COUNT:
+        recommendation = "変換非推奨: 評価時アンチパターン{}件該当".format(rejection_count)
+        suitability = "rejected"
+    elif suitability == "high":
+        recommendation = "変換を推奨"
+    elif suitability == "medium":
+        recommendation = "変換可能 — ユーザー判断に委ねます"
+    elif is_verification_skill(skill_name, skill_dir):
+        suitability = "medium"
+        verification_bypass = True
+        recommendation = "変換可能 — 検証系スキルのため自己進化を推奨"
+    else:
+        recommendation = "変換非推奨"
+
+    # #376: 使用実績ゼロは降格（検証系バイパス・rejected は除外）。
+    if (
+        telemetry.get("usage_count", 0) == 0
+        and not verification_bypass
+        and suitability != "rejected"
+    ):
+        suitability = "insufficient_usage"
+        recommendation = "使用実績待ち — エラーが蓄積してから候補化"
+
+    return suitability, recommendation, anti_patterns, verification_bypass
+
+
 def skill_evolve_assessment(
     project_dir: Optional[Path] = None,
     *,
@@ -78,10 +126,7 @@ def skill_evolve_assessment(
         compute_telemetry_scores,
         compute_llm_scores,
         is_self_evolved_skill,
-        is_verification_skill,
         classify_suitability,
-        detect_anti_patterns,
-        ANTI_PATTERN_REJECTION_COUNT,
     )
     import skill_evolve.assessment as _self_mod
     if _self_mod.find_artifacts is None:
@@ -207,27 +252,9 @@ def skill_evolve_assessment(
         total_score = sum(scores.values())
         suitability = classify_suitability(total_score)
 
-        # アンチパターン検出
-        anti_patterns = detect_anti_patterns(scores, skill_dir)
-        rejection_count = sum(
-            1 for ap in anti_patterns
-            if ap["pattern"] in ("Noise Collector", "Context Bloat", "Band-Aid")
+        suitability, recommendation, anti_patterns, verification_bypass = _finalize_suitability(
+            scores, suitability, skill_name, skill_dir, telemetry
         )
-
-        verification_bypass = False
-        if rejection_count >= ANTI_PATTERN_REJECTION_COUNT:
-            recommendation = "変換非推奨: 評価時アンチパターン{}件該当".format(rejection_count)
-            suitability = "rejected"
-        elif suitability == "high":
-            recommendation = "変換を推奨"
-        elif suitability == "medium":
-            recommendation = "変換可能 — ユーザー判断に委ねます"
-        elif is_verification_skill(skill_name, skill_dir):
-            suitability = "medium"
-            verification_bypass = True
-            recommendation = "変換可能 — 検証系スキルのため自己進化を推奨"
-        else:
-            recommendation = "変換非推奨"
 
         entry = {
             "skill_name": skill_name,
@@ -281,10 +308,7 @@ def assess_single_skill(
         compute_telemetry_scores,
         compute_llm_scores,
         is_self_evolved_skill,
-        is_verification_skill,
         classify_suitability,
-        detect_anti_patterns,
-        ANTI_PATTERN_REJECTION_COUNT,
     )
     skill_dir = Path(skill_dir)
 
@@ -316,29 +340,9 @@ def assess_single_skill(
     total_score = sum(scores.values())
     suitability = classify_suitability(total_score)
 
-    # アンチパターン検出
-    anti_patterns = detect_anti_patterns(scores, skill_dir)
-    rejection_count = sum(
-        1 for ap in anti_patterns
-        if ap["pattern"] in ("Noise Collector", "Context Bloat", "Band-Aid")
+    suitability, recommendation, anti_patterns, verification_bypass = _finalize_suitability(
+        scores, suitability, skill_name, skill_dir, telemetry
     )
-
-    # 検証系スキルのバイパス判定
-    verification_bypass = False
-    if rejection_count >= ANTI_PATTERN_REJECTION_COUNT:
-        recommendation = "変換非推奨: 評価時アンチパターン{}件該当".format(rejection_count)
-        suitability = "rejected"
-    elif suitability == "high":
-        recommendation = "変換を推奨"
-    elif suitability == "medium":
-        recommendation = "変換可能 — ユーザー判断に委ねます"
-    elif is_verification_skill(skill_name, skill_dir):
-        # 検証系スキルは low でも medium に昇格
-        suitability = "medium"
-        verification_bypass = True
-        recommendation = "変換可能 — 検証系スキルのため自己進化を推奨"
-    else:
-        recommendation = "変換非推奨"
 
     # ワークフローチェックポイント検出
     workflow_checkpoints = None

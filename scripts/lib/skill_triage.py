@@ -403,6 +403,12 @@ def triage_all_skills(
         "SPLIT": [],
         "MERGE": [],
         "OK": [],
+        # triage_ledger は初回 SKIP/TTL 切れ/クールダウン経過を suppressed=False の
+        # recommendation="SKIP"、再発エスカレーションを "REVIEW" で返す（#308）。これらは
+        # SKIP_SUPPRESSED に畳まれず下の result[action].append に到達するため、バケツが必須。
+        # 欠落していると KeyError でクラッシュしていた（CANONICAL も両者を optional 登録）。
+        "SKIP": [],  # 初回 SKIP は「1回 surface する」設計（#308）。表示はするが採用しない
+        "REVIEW": [],  # 再発エスカレーション（閾値か採用を見直すシグナル、#308）
         "SKIP_SUPPRESSED": [],  # ① 抑制された再発 SKIP（#308、個別表示せず畳む）
     }
 
