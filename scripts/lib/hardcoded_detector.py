@@ -65,14 +65,37 @@ _SAFE_URL_PARTS = ["example.com", "localhost", "127.0.0.1"]
 # 公式 API パスの許可パターン（FP 除外）。
 # Slack 公式 API（slack.com/api/）や Amazon/AWS 汎用エンドポイントは
 # ドキュメントに意図的に書かれる参照値であり、秘匿対象ではない（#352）。
+# OAuth authorize（slack.com/oauth/）と開発者ポータル（api.slack.com/apps 等）も
+# 公開・非秘匿の参照値なので追加する（#359）。これ以上の個別パス列挙はモグラ叩きに
+# なるため、ドメインが秘匿でないと確定したもののみ allowlist 化し、散文・手順例中の
+# URL は doc 文脈（_is_doc_prose_context）側で抑制する分離方針とする。
 # Slack webhook（hooks.slack.com/services/）は秘匿対象のため含めない。
 # サブドメインは region 込みの多段ラベル（例: sqs.us-east-1.amazonaws.com）も
 # 許容するためドットを文字クラスに含める。`.match` で先頭アンカーするため誤許可
 # リスクは低い（#352 review fix）。
 _OFFICIAL_API_URL_RE = re.compile(
-    r"https?://(?:slack\.com/api/|[a-z0-9.\-]+\.amazonaws\.com/)",
+    r"https?://(?:"
+    r"slack\.com/(?:api|oauth)/|"      # 公式 API / OAuth エンドポイント（#352, #359）
+    r"api\.slack\.com/|"               # Slack 開発者ポータル（api.slack.com/apps 等, #359）
+    r"[a-z0-9.\-]+\.amazonaws\.com/"   # AWS 汎用エンドポイント（#352）
+    r")",
     re.IGNORECASE,
 )
+
+# doc 文脈（手順説明・例示コマンド）判定（#359）。これらの行の URL/ARN は
+# 設定値でなく参照・例示なので service_url / aws_arn を抑制する。
+# bullet（- *）や「非代入」判定は採らない: `- webhook: https://...` 形式の本物
+# secret を取りこぼす FN リスクと、URL/ARN 内の `:` を代入区切りと誤認する脆さを
+# 避けるため。手順番号行・例示コマンド行は `key: value` 代入と構文的に交わらず、
+# `resource: arn:...` のような設定値検出（test_aws_arn）を構造的に壊さない。
+# 適用は service_url / aws_arn の高 confidence 系のみ（proposable 上位の埋没を防ぐ
+# precision 優先）。api_key（本物 token は文脈無関係に秘匿）と numeric_id（低
+# confidence で別途 timestamp/version 等の除外あり）には適用しない。
+_NUMBERED_STEP_RE = re.compile(r"^\s*\d+\.\s")
+_EXAMPLE_CMD_RE = re.compile(r"^\s*[$>]\s|\b(?:curl|wget)\b|\baws\s+[a-z]", re.IGNORECASE)
+
+# doc 文脈抑制を適用する pattern_type（高 confidence の URL/ARN 系のみ）。
+_DOC_CONTEXT_SUPPRESSED = ("service_url", "aws_arn")
 
 # doc 文脈の Slack channel ID（C0...）/ App ID（A0...）。これらは秘匿対象でない
 # 公開参照値で、SKILL.md の運用手順に意図的に書かれる（#337）。bot token（xoxb-,
@@ -144,6 +167,17 @@ def _is_slack_doc_id(matched: str) -> bool:
     return bool(_SLACK_DOC_ID_RE.match(matched))
 
 
+def _is_doc_prose_context(line: str) -> bool:
+    """行が手順説明・例示コマンド（散文 doc 文脈）かどうか判定する（#359）。
+
+    手順番号行（``1. ...``）または例示コマンド行（行頭 ``$``/``>`` プロンプト、
+    ``curl``/``wget``、``aws <subcommand>``）に該当すれば True。これらの行の
+    URL/ARN は設定値でなく参照・例示。``resource: arn:...`` のような代入とは
+    構文的に交わらないため、代入文脈の検出は壊さない。
+    """
+    return bool(_NUMBERED_STEP_RE.match(line) or _EXAMPLE_CMD_RE.search(line))
+
+
 def _is_timestamp(matched: str, line: str) -> bool:
     """マッチした文字列がタイムスタンプかどうか判定する。"""
     if len(matched) == 10 and matched.isdigit() and _TIMESTAMP_PATTERN.match(matched):
@@ -174,6 +208,10 @@ def _should_exclude(
 
     # URL の安全チェック
     if pattern_name == "service_url" and _is_safe_url(matched):
+        return True
+
+    # doc 文脈（手順説明・例示コマンド）の URL/ARN は設定値でなく参照・例示（#359）
+    if pattern_name in _DOC_CONTEXT_SUPPRESSED and _is_doc_prose_context(line):
         return True
 
     # Slack channel/app ID の doc 参照（秘匿対象でない公開参照値、#337）

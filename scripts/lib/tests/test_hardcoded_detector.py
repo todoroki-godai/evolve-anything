@@ -305,6 +305,77 @@ class TestApiUrlFpAndAwsAccount:
             assert r["confidence_score"] <= 0.45
 
 
+# ---------- #359: doc 文脈の URL/ARN 過剰検出の抑制 ----------
+
+class TestDocContextSuppression:
+    """#359: SKILL.md の手順説明・例示コマンド中の URL/ARN は設定値でないため抑制。
+
+    evolve の proposable が doc URL/ARN の FP で埋まり本来の検出が埋もれる問題。
+    A: 公式・非秘匿エンドポイント（api.slack.com/, slack.com/oauth/）の allowlist 拡張。
+    B: 手順番号行・例示コマンド行の service_url / aws_arn を doc 文脈として抑制。
+    """
+
+    # --- A: allowlist 拡張（公式・非秘匿の公開エンドポイント） ---
+
+    def test_api_slack_com_apps_not_detected(self, tmp_md):
+        """Slack 開発者ポータル api.slack.com/apps は秘匿でない公開 URL（#359）。"""
+        path = tmp_md("App 設定: https://api.slack.com/apps?new_app=1")
+        results = detect_hardcoded_values(path)
+        url = [r for r in results if r["pattern_type"] == "service_url"]
+        assert url == [], f"api.slack.com の開発者ポータル URL が FP 検出された: {url}"
+
+    def test_slack_oauth_url_not_detected(self, tmp_md):
+        """Slack OAuth authorize エンドポイントは公開・非秘匿（#359）。"""
+        path = tmp_md("認可: https://slack.com/oauth/v2/authorize?client_id=foo")
+        results = detect_hardcoded_values(path)
+        url = [r for r in results if r["pattern_type"] == "service_url"]
+        assert url == [], f"Slack OAuth URL が FP 検出された: {url}"
+
+    # --- B: doc 文脈（手順番号・例示コマンド）の抑制 ---
+
+    def test_numbered_step_url_suppressed(self, tmp_md):
+        """手順番号行の URL は設定値でなく参照なので抑制する（#359）。"""
+        path = tmp_md("1. https://my-portal.slack.com/admin にアクセスする")
+        results = detect_hardcoded_values(path)
+        url = [r for r in results if r["pattern_type"] == "service_url"]
+        assert url == [], f"手順番号行の URL が FP 検出された: {url}"
+
+    def test_example_aws_command_arn_suppressed(self, tmp_md):
+        """例示 aws CLI コマンド中の ARN は設定値でなく例示なので抑制する（#359）。"""
+        path = tmp_md(
+            "aws secretsmanager get-secret-value --secret-id "
+            "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:slack-token"
+        )
+        results = detect_hardcoded_values(path)
+        arn = [r for r in results if r["pattern_type"] == "aws_arn"]
+        assert arn == [], f"例示コマンド中の ARN が FP 検出された: {arn}"
+
+    def test_example_curl_arn_suppressed(self, tmp_md):
+        """例示 curl コマンド中の ARN も抑制する（#359）。"""
+        path = tmp_md(
+            "curl -X POST --data arn:aws:sns:us-east-1:123456789012:my-topic https://x"
+        )
+        results = detect_hardcoded_values(path)
+        arn = [r for r in results if r["pattern_type"] == "aws_arn"]
+        assert arn == [], f"例示 curl 中の ARN が FP 検出された: {arn}"
+
+    # --- 回帰: 代入文脈の検出は維持する（doc 文脈と構文的に交わらない） ---
+
+    def test_assignment_arn_still_detected(self, tmp_md):
+        """`resource: arn:...` の代入文脈 ARN は依然検出する（doc 文脈でない、#359 回帰）。"""
+        path = tmp_md("resource: arn:aws:lambda:ap-northeast-1:123456789012:function:my-func")
+        results = detect_hardcoded_values(path)
+        arn = [r for r in results if r["pattern_type"] == "aws_arn"]
+        assert len(arn) == 1, "代入文脈の ARN 検出が doc 文脈抑制で壊れた"
+
+    def test_assignment_webhook_still_detected(self, tmp_md):
+        """`webhook: https://hooks.slack.com/services/...` の secret は依然検出（#359 回帰）。"""
+        path = tmp_md("webhook: https://hooks.slack.com/services/T00000000/B00000000/xxxx")
+        results = detect_hardcoded_values(path)
+        url = [r for r in results if r["pattern_type"] == "service_url"]
+        assert len(url) == 1, "代入文脈の webhook secret 検出が doc 文脈抑制で壊れた"
+
+
 # ---------- extra_patterns / extra_allowlist テスト ----------
 
 class TestExtensibility:
