@@ -59,7 +59,10 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 # スクリプト本体はプラグイン同梱なので ${CLAUDE_PLUGIN_ROOT} で絶対参照する（相対 scripts/lib は cwd=対象PJ では存在しない）。
 # --slug は --load にも必須。DATA_DIR は全 PJ 共通なので slug でスコープしないと
 # 先に evolve した別 PJ の世界観を流用してしまう（cross-project 汚染）。
-SLUG="$(basename $(git rev-parse --show-toplevel 2>/dev/null || echo unknown))"
+# slug は resolve_slug（git-common-dir 親で正規化, ADR-031）で算出する。`git rev-parse
+# --show-toplevel` の basename は worktree だと worktree 名（例 evolve）を返し本体 slug と
+# 食い違うため使わない（#408-C）。worktree からの evolve でも本体 PJ slug に正規化される。
+SLUG="$(python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug())" 2>/dev/null || echo unknown)"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/world_context.py" --load --slug "$SLUG"
 ```
 
@@ -72,18 +75,23 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/world_context.py" --load --slug "$SLU
 
 ---
 
-### Step 1: データ十分性チェック
+### Step 1: データ十分性チェック（observe 先行 pre-flight）
+
+まず **`--observe-first`** で安価な observe + fitness ゲートだけを算出する（数秒で返る）。重いフェーズ（discover/audit/skill_evolve/remediation/prune…）はここでは回さない。これにより lightweight/skip の分岐が「フル分析コスト（dry-run で数分〜20分）を払う前」に効く（#407）。
 
 ```bash
 rl-usage-log "evolve"
-rl-evolve --project-dir "$(pwd)" --dry-run --output /tmp/rl_evolve_out.json
+# 出力は PJ 別パスに書く（共有固定パスだと別 PJ の stale 出力を誤読する, #408-A）。
+SLUG="$(python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug())" 2>/dev/null || echo unknown)"
+OUT="/tmp/rl_evolve_${SLUG}.json"
+rl-evolve --project-dir "$(pwd)" --dry-run --observe-first --output "$OUT"
 ```
 
-⚠️ **`--output` は必須（MUST）**: result JSON はフェーズ全部入りで数十〜数百 KB になる。`--output` を付けると full JSON は `/tmp/rl_evolve_out.json` に書かれ、stdout には `{"output": "...", "phases": [...], "env_tier": ...}` の **1行サマリ**だけが出る（`phases` は実フェーズ名）。
+⚠️ **`--output` は必須（MUST）**: result JSON はフェーズ全部入りで数十〜数百 KB になる。`--output` を付けると full JSON は `$OUT`（`/tmp/rl_evolve_<slug>.json`）に書かれ、stdout には `{"output": "...", "slug": ..., "generated_at": ..., "phases": [...], "env_tier": ...}` の **1行サマリ**だけが出る。
 
-以降このスキルで「evolve.py の出力に含まれる `X` フェーズを確認する」と書かれている箇所は、すべて **`/tmp/rl_evolve_out.json` を Read（必要なら offset/limit で該当フェーズだけ）して参照する**。`rl-evolve` の stdout を `| head` / `| tail` で削ったり Bash の出力をそのまま読もうとしてはならない（MUST NOT）。`indent=2` の巨大 JSON が途中で切れて invalid になり「JSON が不完全 → 全量を保存し直し」のやり直しが多発する（これが本フローを設計した理由）。
+⚠️ **slug 照合は MUST（#408-B）**: `$OUT` を Read したら、まずトップレベルの `slug` / `project_dir` / `generated_at` を確認し、**対象 PJ と一致するか検証してから** Diagnose に進む。一致しなければ stale/別 PJ の出力なので使わず再実行する。以降このスキルで「evolve.py の出力に含まれる `X` フェーズを確認する」と書かれた箇所は、すべて **`$OUT` を Read（必要なら offset/limit で該当フェーズだけ）して参照する**。`rl-evolve` の stdout を `| head` / `| tail` で削ったり Bash の出力をそのまま読もうとしてはならない（MUST NOT）。`indent=2` の巨大 JSON が途中で切れて invalid になり「JSON が不完全 → 全量を保存し直し」のやり直しが多発する（これが本フローを設計した理由）。
 
-- 出力（`/tmp/rl_evolve_out.json` の）`observe` フェーズの `action` で分岐する:
+- 出力（`$OUT` の）`observe` フェーズの `action` で分岐する:
   - `action: "backfill_recommended"`（テレメトリ未取得＝初回導入直後、`telemetry_empty: true`）の場合:
     - 「テレメトリが空。先に /rl-anything:backfill で既存セッション履歴を取り込んでください」と案内する（MUST）
     - evolve を続行せず、backfill を先に実行するよう促す（自動実行はしない）
@@ -92,8 +100,18 @@ rl-evolve --project-dir "$(pwd)" --dry-run --output /tmp/rl_evolve_out.json
     - AskUserQuestion で実行/スキップを選択させる
   - `action: "lightweight_recommended"`（過去データは十分だが**前回 evolve 以降の新規観測が 0**、`no_new_observations: true`、#396）の場合:
     - フル実行は audit/discover/skill_evolve batch_guard/remediation を回しても結局すべて keep/評価のみの **no-op** になりやすい（batch_guard の AskUserQuestion を挟む割に成果が無い）。べき等性は正しいが操作コストに見合わない
-    - AskUserQuestion で「軽量モード（observability surface のみ確認して重い LLM フェーズ/batch_guard をスキップ）」か「フル実行」かを選ばせる（MUST）
-    - 軽量モードを選んだ場合: Step 3.8 の observability（`result["observability"]`）と Step 10 の推奨アクションのみ確認し、batch_guard 応答や Compile/remediation の重いフェーズはスキップしてよい
+    - AskUserQuestion で「軽量モード（重い LLM フェーズ/batch_guard をスキップ）」か「フル実行」かを選ばせる（MUST）
+    - 軽量モードを選んだ場合: 重いフェーズは回さず、observe の結果のみ報告して **ここで完了**してよい（pre-flight で既に重いフェーズはスキップ済み）
+
+- フル実行が必要な場合（`action` が無い＝データ十分かつ新規観測あり、または上記分岐でユーザーが「実行/フル実行」を選んだ場合）:
+  - **MUST: フル dry-run の所要時間目安をユーザーに伝えてから実行する**（無音で長時間ハングと誤解されるのを防ぐ, #407）。目安は `env_tier` で示す: `small` ≈ 1〜3 分 / `medium` ≈ 3〜8 分 / `large` ≈ 8〜20 分。
+  - 重いフェーズ込みの dry-run を **`--observe-first` 無し**で同じ PJ 別パスに書き直す（Bash の各呼び出しは別シェルで `$OUT`/`$SLUG` が引き継がれないため、このブロック内で再導出する）:
+    ```bash
+    SLUG="$(python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug())" 2>/dev/null || echo unknown)"
+    OUT="/tmp/rl_evolve_${SLUG}.json"
+    rl-evolve --project-dir "$(pwd)" --dry-run --output "$OUT"
+    ```
+  - 完了後、`$OUT`（=`/tmp/rl_evolve_<slug>.json`）を Read して再度 slug を照合し、Step 2 以降へ進む。
 
 ### Step 2: Fitness 関数チェック
 

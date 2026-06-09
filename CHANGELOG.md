@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(evolve): observe 先行 pre-flight（`rl-evolve --observe-first`）で軽量判定を重い処理の前に効かせる（#407）** — `observe`（前回 evolve 以降の新規観測有無）は usage.jsonl の行数カウントだけで O(ms) なのに、それを算出するために従来は全フェーズ（discover/audit/skill_evolve/remediation/prune…約20分）を完走してから SKILL Step 1 で「軽量モードにするか」を尋ねており、lightweight 分岐が事実上の事後通知だった。新フラグ `--observe-first` で安価な observe + fitness ゲートだけ算出して early-return（重いフェーズを回さない）。SKILL Step 1 はまず pre-flight で `action`（lightweight/skip/backfill/full）を判定し、フルが必要なときだけ `--observe-first` 無しの dry-run を別途走らせる。実機で 20分→**0.08秒**。dry-run 冒頭の無音対策として、フル実行前に `env_tier` ベースの所要時間目安（small≈1–3分 / medium≈3–8分 / large≈8–20分）をユーザーへ surface することを SKILL.md に MUST 化。
+
+### Changed
+- **feat(evolve): 実行結果に同一性 metadata を必須化し別PJ/stale 取り違えを防ぐ（#408 A/B/C/E）** — evolve 出力 JSON に「誰の（どのPJ）・いつの・本実行か」を機械検証する手段が `skill_name` からの推測しか無く、共有固定パス `/tmp/rl_evolve_out.json` に残った別PJの stale 出力を誤読する事故が起きた（dry-run のため無傷だったが本実行なら「別PJのデータで対象PJを変更」になりうる）。修正4点: ① result トップレベルに `slug` / `project_dir` / `generated_at` / `env_tier_reason`（count・breakdown・thresholds で tier 決定根拠を可視化, #408-E）を必須化。② `slug` は `optimize_history_store.resolve_slug`（git-common-dir 親で正規化, ADR-031）で算出し、worktree から呼んでも本体 PJ slug に正規化（SKILL Step 0.5 の `git rev-parse --show-toplevel` basename が worktree 名を返す #408-C を是正）。③ SKILL Step 1 の `--output` を PJ別パス `/tmp/rl_evolve_<slug>.json` に変更し、読込後 slug 照合を MUST 化。④ CLI 1行サマリにも slug/project_dir/generated_at を surface。TDD 新規。決定論・LLM 非依存。
+
+### Fixed
+- **fix(evolve): constitutional の None を「LLM 評価に失敗しました」と誤表示する文言を撤去（#408-D）** — constitutional は [ADR-037] で LLM を全廃し「cache 済みレイヤーのみ集約、全 miss なら `None`」という LLM-free 設計。`None` の正体は「cache が stale / 全 miss で再採点が必要」なのに、レポート本文が ADR-037 全廃前の残骸文言「LLM 評価に失敗しました」を出し、しかも `warnings[]` にも `observability` にも乗らず（silence != evaluated 違反）取り違えを招いていた。`audit/sections.py` の文言を「未算出: cache stale/全 miss（失敗ではない）→ audit Step 3.5 の2相 refresh で再生成」に修正。さらに evolve.py に `_surface_constitutional_status`（cache-only 再集約・LLM 非依存・安価）を新設し、`None`/`overall=None` のとき状態を `warnings[]` と `observability["constitutional"]` に昇格。TDD 新規。決定論・LLM 非依存。
+
 ## [1.93.0] - 2026-06-09
 
 ### Added

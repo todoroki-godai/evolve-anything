@@ -16,7 +16,17 @@ from typing import Any, Dict, List, Optional
 def _format_constitutional_report(result: Optional[Dict[str, Any]]) -> Optional[List[str]]:
     """Constitutional Score をレポート用にフォーマットする。"""
     if result is None:
-        return ["## Constitutional Score", "", "LLM 評価に失敗しました", ""]
+        # [ADR-037] constitutional は LLM を全廃し cache 済みレイヤーのみ集約する設計。
+        # None は「評価失敗」ではなく「cache 未生成 / 全レイヤー cache miss（stale）」を意味する。
+        # 旧文言「LLM 評価に失敗しました」は ADR-037（LLM 全廃）と矛盾し二重に誤解を招くため撤去（#408-D）。
+        return [
+            "## Constitutional Score",
+            "",
+            "未算出: cache 未生成または全レイヤーが stale（content hash 不一致）です。",
+            "失敗ではありません。audit Step 3.5 の 2 相 refresh"
+            "（emit_layer_requests → 採点 → ingest_layer_responses）で cache を再生成してください。",
+            "",
+        ]
 
     if result.get("overall") is None:
         skip_reason = result.get("skip_reason", "unknown")

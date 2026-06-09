@@ -28,22 +28,72 @@ collect_issues = None
 ENV_TIER_THRESHOLDS = {"medium": 20, "large": 50}
 
 
-def _compute_env_tier(project_root: Path) -> str:
-    """環境のスキル数+ルール数からtierを判定。
+def _resolve_evolve_slug(project_root: Path) -> str:
+    """worktree 安全な PJ slug を返す（#408-C）。
 
-    スキル数: .claude/skills/ 配下のディレクトリ数 + CLAUDE.md の Skills セクション記載数
-    ルール数: .claude/rules/ 配下のファイル数
-
-    Returns: "small" | "medium" | "large"
+    optimize_history_store.resolve_slug（git-common-dir 親で正規化、ADR-031）を
+    再利用する。worktree から呼んでも本体 repo 名に正規化される。解決不能なら
+    "_unattributed"。result metadata 用なので import 失敗時も例外を投げない。
     """
-    count = 0
+    try:
+        from optimize_history_store import resolve_slug
 
-    # .claude/skills/ 配下のディレクトリ数
+        return resolve_slug(project_root)
+    except Exception:
+        return "_unattributed"
+
+
+def _surface_constitutional_status(
+    project_dir: Path,
+    warning_sink: List[Dict[str, Any]],
+    observability: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """constitutional の cache 状態を warnings/observability に昇格する（#408-D）。
+
+    constitutional は [ADR-037] で LLM 全廃済み。cache 未生成/全 miss だと None を返すが、
+    これは「評価失敗」ではなく「stale → refresh 必要」。従来は warnings にも observability にも
+    乗らず、レポート本文だけが（誤って）「LLM 評価に失敗しました」と出して取り違えを招いていた。
+    ここで cache-only 再集約（LLM 非依存・安価）して状態を昇格する。
+
+    Returns: 追加した surface 行（None=正常算出で surface 不要、または import 失敗）。
+    """
+    try:
+        sys.path.insert(0, str(_plugin_root / "scripts" / "rl"))
+        from fitness.constitutional import compute_constitutional_score
+
+        con = compute_constitutional_score(project_dir)
+    except Exception:
+        # 状態 surface は best-effort。本流（audit/discover 等）には影響させない。
+        return None
+
+    if not (con is None or (isinstance(con, dict) and con.get("overall") is None)):
+        return None  # 正常算出 — surface 不要
+
+    skip_reason = con.get("skip_reason") if isinstance(con, dict) else None
+    if skip_reason == "low_coverage":
+        line = "Constitutional: coverage 不足でスキップ（評価対象が閾値未満）"
+    else:
+        line = (
+            "Constitutional: cache stale/全 miss で未算出（失敗ではない）。"
+            "audit Step 3.5 の 2 相 refresh で cache 再生成を推奨"
+        )
+    warning_sink.append({"category": "constitutional_cache", "message": line})
+    if isinstance(observability, dict):
+        observability["constitutional"] = [line]
+    return line
+
+
+def _count_env_artifacts(project_root: Path) -> Dict[str, int]:
+    """tier 判定に使うスキル数・ルール数の内訳を返す（決定論）。
+
+    env_tier の決定根拠（#408-E）を出力に含めるため、tier 計算と内訳算出を共有する。
+    """
+    skills_dir_count = 0
     skills_dir = project_root / ".claude" / "skills"
     if skills_dir.is_dir():
-        count += sum(1 for d in skills_dir.iterdir() if d.is_dir())
+        skills_dir_count = sum(1 for d in skills_dir.iterdir() if d.is_dir())
 
-    # CLAUDE.md の Skills セクション記載数
+    claude_md_skills = 0
     claude_md = project_root / "CLAUDE.md"
     if claude_md.is_file():
         try:
@@ -60,20 +110,41 @@ def _compute_env_tier(project_root: Path) -> str:
                     continue
                 # リスト項目をカウント
                 if in_skills and re.match(r"^\s*[-*]\s+", line):
-                    count += 1
+                    claude_md_skills += 1
         except (OSError, UnicodeDecodeError):
             pass
 
-    # .claude/rules/ 配下のファイル数
+    rules_count = 0
     rules_dir = project_root / ".claude" / "rules"
     if rules_dir.is_dir():
-        count += sum(1 for f in rules_dir.iterdir() if f.is_file())
+        rules_count = sum(1 for f in rules_dir.iterdir() if f.is_file())
 
+    total = skills_dir_count + claude_md_skills + rules_count
+    return {
+        "skills_dir": skills_dir_count,
+        "claude_md_skills": claude_md_skills,
+        "rules": rules_count,
+        "total": total,
+    }
+
+
+def _tier_from_count(count: int) -> str:
     if count >= ENV_TIER_THRESHOLDS["large"]:
         return "large"
     if count >= ENV_TIER_THRESHOLDS["medium"]:
         return "medium"
     return "small"
+
+
+def _compute_env_tier(project_root: Path) -> str:
+    """環境のスキル数+ルール数からtierを判定。
+
+    スキル数: .claude/skills/ 配下のディレクトリ数 + CLAUDE.md の Skills セクション記載数
+    ルール数: .claude/rules/ 配下のファイル数
+
+    Returns: "small" | "medium" | "large"
+    """
+    return _tier_from_count(_count_env_artifacts(project_root)["total"])
 
 
 def load_evolve_state() -> Dict[str, Any]:
@@ -343,18 +414,30 @@ def run_evolve(
     skip_skills: Optional[set] = None,
     skip_llm_evolve: bool = False,
     confirmed_batch: bool = False,
+    observe_first: bool = False,
 ) -> Dict[str, Any]:
     """全フェーズを実行する。
 
     Args:
         project_dir: プロジェクトディレクトリ
         dry_run: True の場合、レポートのみ出力し変更は行わない
+        observe_first: True の場合、安価な observe + fitness ゲートだけ算出して
+            重いフェーズ（discover/audit/skill_evolve/remediation/prune…）を回さず
+            early-return する（#407）。SKILL Step 1 の lightweight/skip 分岐を
+            「フル分析コストを払う前」に効かせるための pre-flight モード。
 
     Returns:
         各フェーズの結果を含む辞書
     """
+    _generated_at = datetime.now(timezone.utc).isoformat()
+    proj_root = Path(project_dir) if project_dir else Path.cwd()
     result: Dict[str, Any] = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": _generated_at,
+        # --- 結果の同一性 metadata（#408 A/B）: 読み手が「どの PJ・いつ・本実行か」を
+        #     skill_name からの推測でなくトップレベルで機械検証できるようにする。---
+        "generated_at": _generated_at,
+        "slug": _resolve_evolve_slug(proj_root),
+        "project_dir": str(proj_root.resolve()),
         "dry_run": dry_run,
         "phases": {},
     }
@@ -362,10 +445,15 @@ def run_evolve(
     # 溜める sink。self_analysis が result["warnings"] を読んで surface する（#341）。
     _warning_sink: List[Dict[str, Any]] = []
 
-    # Tier 計算（各 Phase の深度制御に使用）
-    proj_root = Path(project_dir) if project_dir else Path.cwd()
-    tier = _compute_env_tier(proj_root)
+    # Tier 計算（各 Phase の深度制御に使用）。決定根拠（#408-E）も出力に含める。
+    _tier_breakdown = _count_env_artifacts(proj_root)
+    tier = _tier_from_count(_tier_breakdown["total"])
     result["env_tier"] = tier
+    result["env_tier_reason"] = {
+        "count": _tier_breakdown["total"],
+        "breakdown": _tier_breakdown,
+        "thresholds": dict(ENV_TIER_THRESHOLDS),
+    }
 
     # Phase 1: Observe データ確認
     sufficiency = check_data_sufficiency()
@@ -389,6 +477,17 @@ def run_evolve(
     # Phase 1.5: Fitness 関数チェック
     fitness_check = check_fitness_function(project_dir)
     result["phases"]["fitness"] = fitness_check
+
+    # Phase 1.6: observe-first pre-flight early-return（#407）
+    # observe（新規観測の有無）と fitness はどちらもファイル走査だけで安価に算出できる。
+    # observe_first 時はここで打ち切り、重いフェーズ（discover/audit/skill_evolve/
+    # remediation/reorganize/prune…）を回さずに action だけ返す。SKILL Step 1 が action を
+    # 見て「軽量/スキップ/フル」を選び、フルが必要なときだけ重い dry-run を別途走らせる。
+    # これで lightweight_recommended の判定が「フル分析コストを払う前」に効く。
+    if observe_first:
+        result["observe_first"] = True
+        result["skipped_heavy_phases"] = True
+        return result
 
     # Phase 2: Discover
     try:
@@ -497,6 +596,13 @@ def run_evolve(
         result["observability"] = collect_observability(_obs_proj)
     except Exception as e:
         result["observability"] = {"error": str(e)}
+
+    # Phase 3.2: Constitutional cache 状態の surface（#408-D）
+    _surface_constitutional_status(
+        Path(project_dir) if project_dir else Path.cwd(),
+        _warning_sink,
+        result.get("observability"),
+    )
 
     # Phase 3.3: Skill Quality Trace Analysis（テレメトリ依存 — data_sufficiency 後）
     try:
@@ -1045,6 +1151,16 @@ def main() -> None:
     parser.add_argument("--skip-llm-evolve", action="store_true", help="skill_evolve の LLM 評価を全スキップ")
     parser.add_argument("--confirmed-batch", action="store_true", help="batch_guard_trigger 確認済み。件数が閾値を超えても LLM 評価を続行する")
     parser.add_argument(
+        "--observe-first",
+        action="store_true",
+        help=(
+            "安価な observe + fitness ゲートだけ算出して即返す pre-flight モード（#407）。"
+            "重いフェーズ（discover/audit/skill_evolve/remediation/prune…）は回さない。"
+            "SKILL Step 1 がまずこれで action（lightweight/skip/full）を判定し、"
+            "フルが必要なときだけ --observe-first 無しの dry-run を別途走らせる。"
+        ),
+    )
+    parser.add_argument(
         "--drain",
         action="store_true",
         help=(
@@ -1088,6 +1204,7 @@ def main() -> None:
         skip_skills=_skip_skills,
         skip_llm_evolve=args.skip_llm_evolve,
         confirmed_batch=args.confirmed_batch,
+        observe_first=args.observe_first,
     )
 
     if args.output:
@@ -1115,8 +1232,16 @@ def _summarize_result(result: dict, output_path: Path) -> dict:
     phases_obj = result.get("phases")
     phase_names = sorted(phases_obj.keys()) if isinstance(phases_obj, dict) else sorted(result.keys())
     summary: dict = {"output": str(output_path), "phases": phase_names}
-    if "env_tier" in result:
-        summary["env_tier"] = result["env_tier"]
+    # 同一性 metadata を 1 行サマリにも出す（#408）。読み手は stdout だけで
+    # 「どの PJ・いつの・本実行か」を即検証でき、stale/別 PJ ファイルの誤読を防げる。
+    for k in ("slug", "project_dir", "generated_at", "dry_run", "env_tier"):
+        if k in result:
+            summary[k] = result[k]
+    if result.get("observe_first"):
+        summary["observe_first"] = True
+        observe = result.get("phases", {}).get("observe", {})
+        if isinstance(observe, dict) and observe.get("action"):
+            summary["observe_action"] = observe["action"]
     return summary
 
 
