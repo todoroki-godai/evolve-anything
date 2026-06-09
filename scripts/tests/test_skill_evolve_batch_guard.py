@@ -81,10 +81,14 @@ class TestBatchGuardAssessment:
 
         cfg_mock = mock.MagicMock()
         cfg_mock.get.return_value = ""
+        # #400 改善: guard は usage>0 のスキルのみ母集団に入れる。使用実績ありをモック。
+        _tel = {"frequency": 1, "diversity": 1, "evaluability": 1,
+                "error_count": 0, "usage_count": 1, "error_categories": {}}
 
         with mock.patch("skill_evolve.assessment.find_artifacts", return_value={"skills": skill_paths}), \
              mock.patch("skill_evolve.assessment.classify_artifact_origin", side_effect=lambda p: origins[skill_paths.index(p)]), \
              mock.patch("skill_evolve.assessment.load_user_config", return_value=cfg_mock), \
+             mock.patch("skill_evolve.compute_telemetry_scores", return_value=_tel), \
              mock.patch("skill_evolve.denylist.DATA_DIR", tmp_path):
             from skill_evolve.assessment import skill_evolve_assessment
             result = skill_evolve_assessment(tmp_path)
@@ -106,6 +110,8 @@ class TestBatchGuardAssessment:
 
         cfg_mock = mock.MagicMock()
         cfg_mock.get.return_value = ",".join(f"global-{i}" for i in range(4))
+        _tel = {"frequency": 1, "diversity": 1, "evaluability": 1,
+                "error_count": 0, "usage_count": 1, "error_categories": {}}
 
         def origin_fn(p):
             name = p.parent.name
@@ -116,6 +122,7 @@ class TestBatchGuardAssessment:
         with mock.patch("skill_evolve.assessment.find_artifacts", return_value={"skills": all_paths}), \
              mock.patch("skill_evolve.assessment.classify_artifact_origin", side_effect=origin_fn), \
              mock.patch("skill_evolve.assessment.load_user_config", return_value=cfg_mock), \
+             mock.patch("skill_evolve.compute_telemetry_scores", return_value=_tel), \
              mock.patch("skill_evolve.denylist.DATA_DIR", tmp_path):
             from skill_evolve.assessment import skill_evolve_assessment
             result = skill_evolve_assessment(tmp_path)

@@ -141,6 +141,12 @@ def reconcile_split_archive(result: Dict[str, Any]) -> Dict[str, Any]:
     return {"suppressed": suppressed_sorted, "remaining_split": len(kept)}
 
 
+# skill_evolve↔archive の reconcile（#400 バグ#2）と remediation batch_skip の observability 昇格
+# （#400 バグ#6）は file-size budget のため evolve_reconcile.py へ分離した。reconcile_split_archive
+# と対をなすので、利用側は evolve_reconcile.reconcile_skill_evolve_archive /
+# build_remediation_batch_skip_observability を参照する。
+
+
 def _issue_skill_name(issue: Any) -> str:
     """reorganize の split issue から skill 名を取り出す（top-level / detail 両対応）。"""
     if not isinstance(issue, dict):

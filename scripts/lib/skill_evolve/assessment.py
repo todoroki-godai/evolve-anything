@@ -178,6 +178,27 @@ def skill_evolve_assessment(
     _effective_targets = [p for p in _all_llm_targets if p.parent.name not in _denied]
     _already_denied = [p.parent.name for p in _all_llm_targets if p.parent.name in _denied]
 
+    # #400 改善: usage_count==0 のスキルは batch_guard の母集団から事前除外する。
+    # 使用実績ゼロのスキルは自己進化（実ミス蓄積）の効果が無く insufficient_usage へ降格される
+    # （per-skill ループ側）。これらを guard 母集団に入れると、実際は数件のために guard が
+    # 不必要に発火する（issue 実例: 14件中10件が insufficient_usage 保留で実質4件のため発火）。
+    # 検証系（usage 不問で medium）は除外しない。判定は per-skill ループと同じ
+    # compute_telemetry_scores を使う。コストがかかるので閾値超過の見込みがある時だけ評価する。
+    if len(_effective_targets) > _MAX_AUTO_SKILLS:
+        from . import is_verification_skill as _is_verif
+
+        def _has_self_evolution_value(p) -> bool:
+            name = p.parent.name
+            try:
+                if _is_verif(name, p.parent):
+                    return True  # 検証系は usage 不問で評価対象
+                tel = compute_telemetry_scores(name, project=project)
+                return tel.get("usage_count", 0) > 0
+            except Exception:
+                return True  # テレメトリ取得失敗時は安全側（除外しない）
+
+        _effective_targets = [p for p in _effective_targets if _has_self_evolution_value(p)]
+
     n_effective = len(_effective_targets)
     if n_effective > _MAX_AUTO_SKILLS and not confirmed_batch:
         # cache-aware 見積もり（#377-1）: Phase B（judgment refresh）は is_fresh_llm の
@@ -210,23 +231,29 @@ def skill_evolve_assessment(
                     "refresh_needed_count": len(_refresh_needed),
                     "skill_count": len(_group_skills),
                 })
-        return [{
-            "_meta": "batch_guard_trigger",
-            "groups": _groups,
-            "total_effective": n_effective,
-            "already_denied": _already_denied,
-            # #394: `--confirmed-batch` 再実行そのものは LLM-free（ADR-037 で
-            # compute_llm_scores は cache-read + 静的フォールバック）。groups の
-            # estimated_tokens / estimated_tokens_cache_aware は「Phase B judgment
-            # refresh を LLM で回した場合の繰り延べコスト見積もり」であって、再実行の
-            # 課金ではない。cache_fresh=0 だと cache_aware==worst-case になり「≈0」の
-            # 根拠に使えないため、再実行が課金ゼロであることはこのフラグで明示する。
-            "rerun_llm_free": True,
-            "estimate_meaning": (
-                "estimated_tokens* は Phase B judgment refresh を LLM で回した場合の"
-                "繰り延べコスト見積もり。`--confirmed-batch` 再実行自体は LLM-free（課金ゼロ）。"
-            ),
-        }]
+        # #400 バグ#3: 全件 cache-fresh（refresh_needed 合計0）なら Phase B の繰り延べコストも
+        # ≈0＝課金ゼロが確定している。AskUserQuestion で停止＋全フェーズ再実行は無駄なので、
+        # guard sentinel を返さず通常の評価ループへ自動で進む（確定ゼロは自動評価でよい）。
+        # 1件でも refresh が要る場合は従来どおり sentinel を返し承認を求める（過剰自動化しない）。
+        _total_refresh = sum(g["refresh_needed_count"] for g in _groups)
+        if _total_refresh > 0:
+            return [{
+                "_meta": "batch_guard_trigger",
+                "groups": _groups,
+                "total_effective": n_effective,
+                "already_denied": _already_denied,
+                # #394: `--confirmed-batch` 再実行そのものは LLM-free（ADR-037 で
+                # compute_llm_scores は cache-read + 静的フォールバック）。groups の
+                # estimated_tokens / estimated_tokens_cache_aware は「Phase B judgment
+                # refresh を LLM で回した場合の繰り延べコスト見積もり」であって、再実行の
+                # 課金ではない。cache_fresh=0 だと cache_aware==worst-case になり「≈0」の
+                # 根拠に使えないため、再実行が課金ゼロであることはこのフラグで明示する。
+                "rerun_llm_free": True,
+                "estimate_meaning": (
+                    "estimated_tokens* は Phase B judgment refresh を LLM で回した場合の"
+                    "繰り延べコスト見積もり。`--confirmed-batch` 再実行自体は LLM-free（課金ゼロ）。"
+                ),
+            }]
 
     results: List[Dict[str, Any]] = []
     _excluded_global_count = 0

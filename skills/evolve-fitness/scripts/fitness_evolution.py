@@ -331,6 +331,21 @@ def get_adversarial_templates() -> List[Dict[str, str]]:
     ]
 
 
+def fitness_next_action(proposals_available: bool) -> str:
+    """insufficient_data 時にユーザーが取るべき行動を **1 行**で返す（#400 バグ#5）。
+
+    長文の message とは別に、結論だけを 1 行で締めるためのフィールド。SKILL.md Step 8 は
+    これを最終行にそのまま出す。proposals_available は「現 run で skill 提案
+    （skill_evolve high/medium または discover matched_skills）が出ているか」。
+
+      - True : evolve 継続で母集団が自動で貯まる → 「放置でOK」
+      - False: 提案が構造的に出ない PJ → 「fitness は使わない設計。対応不要」（無理に貯めない）
+    """
+    if proposals_available:
+        return "放置でOK — evolve を継続すれば skill 提案の accept/reject が自動で母集団に貯まる（ADR-041）"
+    return "このPJでは fitness は使わない設計。対応不要（提案が構造的に出ないため母集団は貯まらない）"
+
+
 def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """評価関数の改善レポートを生成する。"""
     if history is None:
@@ -352,6 +367,9 @@ def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dic
             # key 名 "skill_evolve_not_scored" は後方互換のため据え置き（ADR-041 以降は skill_evolve
             # high/medium も採点されるため名称はやや misnomer だが、消費側コントラクト維持を優先）。
             "structural_reason": "skill_evolve_not_scored",
+            # 1 行の結論（#400 バグ#5）。run 単体では提案有無を知れないため楽観側を既定にし、
+            # evolve.py Phase 5 が現 run の提案 0 件を検出したら structural-stuck 版へ上書きする。
+            "next_action": fitness_next_action(proposals_available=True),
             "message": (
                 f"データ不足: {len(decisions)}/{MIN_DATA_COUNT}件。"
                 f"あと {MIN_DATA_COUNT - len(decisions)} 件の accept/reject が必要。"

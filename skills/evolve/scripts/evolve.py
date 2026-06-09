@@ -751,6 +751,31 @@ def run_evolve(
     except Exception as e:
         result["phases"]["split_archive_reconcile"] = {"error": str(e)}
 
+    # Phase 4.2: skill_evolve↔archive 相互排他 reconcile（#400 バグ#2）
+    # archive 候補のスキルを skill_evolve（自己進化提案）から除外する。消そうとする対象に
+    # 自己進化を組み込めと提案する矛盾を本流で解消（決定論・LLM 非依存）。emit_decisions より
+    # 前に降格させることで矛盾候補を fitness 母集団からも外す。
+    try:
+        from evolve_reconcile import reconcile_skill_evolve_archive
+        result["phases"]["skill_evolve_archive_reconcile"] = reconcile_skill_evolve_archive(result)
+    except Exception as e:
+        result["phases"]["skill_evolve_archive_reconcile"] = {"error": str(e)}
+
+    # Phase 4.3: remediation batch_skip を observability に強制昇格（#400 バグ#6）。
+    # reconcile 後の最終 batch_skip 件数を result["observability"] に注入し、Step 3.8 が必ず
+    # surface する構造化経路に乗せる（SKILL.md の surface MUST 依存をやめ silence != evaluated を担保）。
+    try:
+        from evolve_reconcile import build_remediation_batch_skip_observability
+        _bs_line = build_remediation_batch_skip_observability(result)
+        if _bs_line is not None:
+            obs = result.get("observability")
+            if not isinstance(obs, dict) or "error" in obs:
+                obs = {} if not isinstance(obs, dict) else obs
+                result["observability"] = obs
+            obs["remediation_batch_skip"] = _bs_line
+    except Exception:
+        pass
+
     # Phase 4.5: Pitfall Hygiene（自己進化済みスキルの剪定）
     try:
         sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
@@ -779,8 +804,20 @@ def run_evolve(
 
     # Phase 5: Fitness Evolution（評価関数の改善チェック）
     try:
-        from fitness_evolution import run_fitness_evolution
+        from fitness_evolution import run_fitness_evolution, fitness_next_action
         fitness_evo_result = run_fitness_evolution()
+        # #400 バグ#5: insufficient_data の結論 1 行（next_action）を現 run の提案有無で確定する。
+        # skill_evolve high/medium も discover matched_skills も 0 = 提案が構造的に出ない PJ →
+        # 「fitness は使わない設計。対応不要」。1 つでも提案があれば「放置でOK（継続で貯まる）」。
+        if fitness_evo_result.get("status") == "insufficient_data":
+            _se = result["phases"].get("skill_evolve", {})
+            _disc = result["phases"].get("discover", {})
+            _proposals_available = (
+                _se.get("high_suitability", 0) > 0
+                or _se.get("medium_suitability", 0) > 0
+                or len(_disc.get("matched_skills", []) or []) > 0
+            )
+            fitness_evo_result["next_action"] = fitness_next_action(_proposals_available)
         result["phases"]["fitness_evolution"] = fitness_evo_result
     except Exception as e:
         result["phases"]["fitness_evolution"] = {"error": str(e)}

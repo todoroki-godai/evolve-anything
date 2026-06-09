@@ -183,15 +183,19 @@ evolve.py の出力に含まれる `skill_evolve` フェーズ結果を確認す
 [ADR-037] により判断複雑さ（judgment_complexity）軸も含め `compute_llm_scores` は LLM-free
 （cache-read + 静的フォールバック）になり、evolve バッチはキャッシュ値で完走する。
 
-- **`result.phases.skill_evolve.batch_guard_trigger` が `null` でない場合**: LLM 評価対象スキルが多すぎる。
-  グループ提示 → AskUserQuestion（評価/今回スキップ/永続スキップ）→ `--confirmed-batch` 付き再実行の
-  インタラクティブフローを実行してから evolve を再実行する（MUST）。手順・denylist/再実行コードは
+- **`result.phases.skill_evolve.batch_guard_trigger` が `null` でない場合**: refresh が必要なスキルが
+  多い（Phase B judgment refresh の繰り延べ LLM コストが発生しうる）。グループ提示 → AskUserQuestion
+  （評価/今回スキップ/永続スキップ）→ `--confirmed-batch` 付き再実行のインタラクティブフローを実行してから
+  evolve を再実行する（MUST）。手順・denylist/再実行コードは
   **[references/skill-evolve-assessment.md](references/skill-evolve-assessment.md)**。
-  推定トークンは worst-case（`estimated_tokens`）と cache 反映後の実見込み（`estimated_tokens_cache_aware`、
-  fresh `cache_fresh_count` 件は ≈0）を**併記**する。`--confirmed-batch` 再実行自体は LLM-free（#377-1）で、
-  これは sentinel の **`rerun_llm_free: true`** フラグで機械可読に示される（#394）。`cache_fresh_count == 0` だと
-  `estimated_tokens_cache_aware` が worst-case 同値になるが、それは再実行の課金ではない（再実行ゼロの根拠は
-  `estimated_tokens*` でなく `rerun_llm_free`）。再実行は `rl-evolve --confirmed-batch ...`（PATH ラッパー、#395）で行う。
+  - **表示は実見込みを先頭に**（#400 バグ#4）: cache 反映後の実見込み `estimated_tokens_cache_aware`
+    （fresh `cache_fresh_count` 件は ≈0）を**主**に出す。worst-case の `estimated_tokens` は括弧内の
+    参考値に留める（worst-case を前面に出してユーザーを不必要に身構えさせない）。
+  - `--confirmed-batch` 再実行自体は LLM-free（#377-1）で、sentinel の **`rerun_llm_free: true`** フラグで
+    機械可読に示される（#394）。再実行は `rl-evolve --confirmed-batch ...`（PATH ラッパー、#395）で行う。
+  - **`null` で来る = 課金ゼロ確定の自動進行**（#400 バグ#3）: 全スキルが cache-fresh（refresh_needed 合計0）の
+    ときは guard sentinel を返さず自動で評価へ進む。確定ゼロのケースで AskUserQuestion を出して全フェーズを
+    やり直す無駄を構造的に排した。よって sentinel が出る = 実コストが発生しうる場合に限られる。
 - **`null` の場合（通常）**: 以下のサマリ（**いずれも件数=int**。スキル名は `assessments[]` の `.skill_name` を見る。
   `high_suitability[].skill` のような配列展開はできない＝#395）を確認する:
   - **already_evolved**: 既に自己進化パターンが組み込まれたスキル数
@@ -457,61 +461,55 @@ skill_evolve の high/medium 適性提案）の `before_sha` をキュー `DATA_
 Step 3 でスキルファイルを実際に変更したもの（適用済み）が accept、ユーザーが「不要」と却下した
 提案 id が reject、未変更かつ未却下（保留）は母集団に入れない。
 
-- **`--dry-run` の場合**: 書き込まない（ingest が内部でガード）。`result.evolve_decisions.count` を
-  「accept/reject 記録対象: N 件（dry-run のため未記録）✓」と1行 surface する（silence != evaluated）。
-- **通常実行の場合**: Step 3 の承認フロー完了後に以下を実行する。`rejected` は Step 3 で
-  ユーザーが明示的に却下した提案の `{id: 理由}`（却下が無ければ空 dict）:
+> **#400 バグ#1 根治**: 旧版は「`--dry-run` の場合は未記録でスキップ」していたが、evolve の
+> 標準フローは `rl-evolve --dry-run` で分析 → assistant が Step 3 で対話適用、である。この運用だと
+> emit がキューを書かない（dry-run 契約）ため、accept が**永久に記録されず optimize_history が
+> 空のまま**だった（fitness_evolution が `0/30` から動かない真因）。修正後は `--dry-run` 分析だった
+> 場合でも、**Step 3 の適用が済んだら必ず** ingest を実行する。ingest には result 同梱の
+> `result.evolve_decisions.pending`（before_sha 付き）を直接渡し、apply 後のディスク差分から
+> accept を決定論で取る（キュー不要）。`--dry-run` はあくまで「分析パスが書き込まない」意味であり、
+> その後の対話適用は実変更なので ingest は `dry_run=False` で記録する。
+
+**実行タイミング**: Step 3 の承認・適用フロー完了後に、分析が `--dry-run` だったか否かに関わらず
+必ず以下を実行する。`rejected` は Step 3 でユーザーが明示的に却下した提案の `{id: 理由}`
+（却下が無ければ空 dict）。`pending` は result からそのまま渡す（emit がキューを書いていなくても動く）:
 
 ```python
-import os, sys
+import os, sys, json
 _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 import evolve_decisions as ed
 
 slug = ed.resolve_slug()
-# rejected: Step 3 で明示却下した提案の {proposal_id: rejection_reason}。
-# proposal_id は result.evolve_decisions.pending[].id（無ければ空 dict）。
-summary = ed.ingest_decisions(slug, rejected={})
+# result は Step 0 の --output JSON。pending は result["evolve_decisions"]["pending"]。
+result = json.load(open("/tmp/rl_evolve_out.json", encoding="utf-8"))
+pending = (result.get("evolve_decisions") or {}).get("pending") or []
+# rejected: Step 3 で明示却下した提案の {proposal_id: rejection_reason}（無ければ空 dict）。
+# proposal_id は pending[].id。
+summary = ed.ingest_decisions(slug, rejected={}, pending=pending)
 print(f"evolve-decisions: accepted={len(summary['accepted'])} "
       f"rejected={len(summary['rejected'])} skipped={len(summary['skipped'])}")
 ```
 
+- 何も適用せず（純粋プレビュー）何も却下しなければ、全件が skip に落ち記録されない（self-correcting）
 - accept/reject は `record_evolve_diff_decision` 経由で optimize_history（ADR-031）へ冪等記録され、
   fitness_evolution の相関母集団 / `check_calibration_regression` の入力になる
-- skip（未変更・未却下）は記録されない。消化済みはキューから消える（次 run の emit で上書き）
-- 結果（accepted/rejected/skipped 件数）を Report に報告する
+- 結果（accepted/rejected/skipped 件数）を Report に報告する。`accepted >= 1` なら
+  「fitness 母集団に +N 件記録 ✓」と1行 surface する（silence != evaluated）
 
 ### Step 8: Fitness Evolution — 評価関数の改善チェック
 
 evolve.py の出力に含まれる `fitness_evolution` フェーズを確認する。
 
-- `status: "insufficient_data"` の場合:
-  - 以下を表示（**ユーザーが文脈を理解できるよう必ず理由を添えること**）:
-    ```
-    Fitness Evolution: データ不足（N/30件）
-    理由: accept/reject の蓄積がまだ30件に達していません。
-    このプロジェクトで fitness を有効化するには、accept/reject の実績を積む必要があります:
-      - /rl-anything:evolve を回す（discover の matched_skills / skill_evolve high·medium 提案の
-        accept/reject が ADR-041 の evolve_decisions により optimize_history へ自動記録される。
-        ＝特別な操作は不要で、evolve を継続的に回すこと自体が母集団を貯める）
-      - bin/rl-optimize で提案を accept/reject する
-      - /rl-anything:rl-loop-orchestrator を実行してバリエーション評価を蓄積する
-    ```
-  - 0件の場合は `status: "insufficient_data" — データ 0/30件` だけでなく、「このプロジェクトではまだ一度も評価が蓄積されていません」と明示する（MUST）
-  - `structural_reason == "skill_evolve_not_scored"` の場合は追加で以下を表示（MUST）:
-    ```
-    ℹ このプロジェクトでは remediation の fix 提案（rules/hook・構造修正等）が中心で、
-      これらは採点対象外のため母集団が構造的に貯まりにくい状態です。
-      /rl-anything:evolve を回せば、discover の skill diff 提案と skill_evolve の
-      high·medium 提案の accept/reject は自動で母集団に積み上がります（ADR-041）。
-      ⚠ ただし母集団は『提案が出て初めて』貯まる。skill_evolve が already_evolved 飽和
-      （high/medium=0）かつ discover の matched_skills=0 の PJ では提案自体が構造的に
-      出ないため、evolve を何回回しても 0/N のまま（『evolve を回せば貯まる』は空手形）。
-      → その PJ では remediation 中心の運用が正常で、無理に母集団を貯める必要はない
-        （fitness calibration は提案が出る PJ で機能する設計）。skill_evolve サマリの
-        high_suitability / medium_suitability / matched_skills が 0 か否かで両者を見分ける。
-    ```
-    (`message` フィールドにも同趣旨の説明が含まれているので、それを表示しても構わない)
+- `status: "insufficient_data"` の場合（**結論を1行で締める** — #400 バグ#5）:
+  - **`result.phases.fitness_evolution.next_action` を最終行にそのまま出す**（MUST）。これが結論。
+    evolve.py が現 run の提案有無で確定済みの1行で、長文説明より優先する:
+    - 提案あり → 「放置でOK — evolve を継続すれば skill 提案の accept/reject が自動で母集団に貯まる（ADR-041）」
+    - 提案なし → 「このPJでは fitness は使わない設計。対応不要（提案が構造的に出ないため母集団は貯まらない）」
+  - 件数は `Fitness Evolution: データ不足（N/30件）` の1行だけ添える。**3段の長文説明は出さない**
+    （`message` フィールドの詳細を出すのはユーザーが理由を尋ねた時のみ）。冗長な説明で次アクションを
+    埋もれさせない＝issue #400 バグ#5 の指摘。
+  - 0件の場合は「このプロジェクトではまだ一度も評価が蓄積されていません」を件数行に添えてよい
 - `status: "bootstrap"` の場合:
   - 「簡易分析モード (N/30件)」と表示
   - 基本統計（承認率、平均スコア、スコア分布）を表示

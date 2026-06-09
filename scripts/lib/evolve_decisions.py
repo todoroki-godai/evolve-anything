@@ -203,18 +203,28 @@ def ingest_decisions(
     rejected: Optional[Dict[str, str]] = None,
     dry_run: bool = False,
     history_file: Optional[Path] = None,
+    pending: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Step 7.8 drain。キューの各 pending を分類して optimize_history に記録する。
+    """Step 7.8 drain。各 pending を分類して optimize_history に記録する。
 
       after_sha != before_sha（適用された）→ accept（human_accepted=True）
       id in rejected（明示却下）          → reject（human_accepted=False, reason）
       未変更かつ未却下（skip）            → 記録しない
 
     accept/reject は record_evolve_diff_decision 経由で optimize_history へ冪等記録。
-    消化済み（accept/reject/skip すべて）をキューから消す。dry_run 時は書込・消化なし。
+
+    pending のソース（#400 バグ#1 根治）:
+      - `pending=None`（既定）: キュー `DATA_DIR/evolve_decisions/<slug>.jsonl` から読む。
+        消化済みをキューから消す（非 dry_run 時）。
+      - `pending=[...]` を明示渡し: `result.evolve_decisions.pending` を直接消費する。
+        **dry-run 運用フロー専用の経路** — `rl-evolve --dry-run` では emit がキューを
+        書かないため、result 同梱の pending（before_sha 付き）を渡すことで apply 後の
+        ディスク差分から accept を記録できる。この場合キューは SoT でないため触らない。
     """
     rejected = rejected or {}
-    pending = read_queue(slug)
+    from_queue = pending is None
+    if from_queue:
+        pending = read_queue(slug)
     if history_file is None:
         history_file = _store.history_path(slug)
     else:
@@ -256,7 +266,9 @@ def ingest_decisions(
             )
         (accepted if kind == "accept" else rejected_out).append(pid)
 
-    if not dry_run:
+    if not dry_run and from_queue:
+        # キューが SoT のときだけ消化済みを除去する。pending を直接渡された場合
+        # （dry-run 運用経路）はキューを生成も変更もしない。
         consumed = set(accepted) | set(rejected_out) | set(skipped)
         remaining = [e for e in pending if e["id"] not in consumed]
         _write_queue(slug, remaining)

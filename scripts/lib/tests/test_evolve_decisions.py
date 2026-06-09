@@ -170,6 +170,86 @@ def test_ingest_clears_consumed_queue(result_with_match, skill_file, monkeypatch
     assert ed.read_queue("testslug") == []  # 消化済みは消える
 
 
+def test_ingest_accepts_pending_directly_without_queue(result_with_match, skill_file, monkeypatch, tmp_path, hist):
+    """#400 バグ#1: dry-run 運用では emit がキューを書かない。result.evolve_decisions.pending を
+    直接 ingest に渡せば、apply 後のディスク差分から accept を記録できる（キュー不要）。"""
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    # dry-run の emit はキューを書かないが pending（before_sha 付き）は返す
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    assert out["persisted"] is False
+    assert ed.read_queue("testslug") == []  # キューは空のまま
+    # assistant が apply した体で内容変更
+    skill_file.write_text("# my-skill\n\n改善: foo bar baz\n", encoding="utf-8")
+    summary = ed.ingest_decisions(
+        "testslug", dry_run=False, history_file=hist, pending=out["pending"]
+    )
+    assert len(summary["accepted"]) == 1  # キューが空でも result.pending から accept
+    recs = _read_jsonl(hist)
+    assert len(recs) == 1
+    assert recs[0]["human_accepted"] is True
+
+
+def test_ingest_pending_direct_does_not_mutate_queue(result_with_match, skill_file, monkeypatch, tmp_path, hist):
+    """pending を直接渡したときはキューを SoT としないので、キューに触れない。"""
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    skill_file.write_text("# changed\n", encoding="utf-8")
+    ed.ingest_decisions("testslug", dry_run=False, history_file=hist, pending=out["pending"])
+    assert ed.read_queue("testslug") == []  # キューは生成も変更もされない
+
+
+def test_e2e_dry_run_cycle_increments_fitness_store(result_with_match, skill_file, monkeypatch, tmp_path):
+    """#400 バグ#1 の決定的実証（real verification）。
+
+    dry-run 検証では『apply 境界』を越えないため、母集団が増えないバグを構造的に観測できなかった。
+    本テストは dry-run 分析 → apply → Step 7.8 ingest の1サイクルを実走させ、**fitness が読む
+    正準ストア optimize_history が実際に +1 される**ことを、ingest の default パス（明示 history_file
+    なし）と fitness の load_history が同一経路を共有することまで含めて検証する。これが緑なら
+    「実 evolve を回しても 0/30 から動かない」症状が構造的に解消されたことの証拠になる。
+    """
+    import optimize_history_store as ohs
+    # 正準ストアを tmp に向ける（ingest の default 書込先と fitness の読込先が同一経路であることを使う）
+    monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    # fitness_evolution を import 可能にする
+    _fe_dir = _LIB.parent.parent / "skills" / "evolve-fitness" / "scripts"
+    sys.path.insert(0, str(_fe_dir))
+    import fitness_evolution as fe
+
+    slug = "e2e-slug"
+    # 1) dry-run の emit（キューは書かない）→ pending（before_sha 付き）を得る
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug=slug)
+    assert ed.read_queue(slug) == []  # dry-run はストアに何も書かない（契約）
+
+    # 2) assistant が apply（スキル内容を変更）
+    skill_file.write_text("# my-skill\n\n改善されたトリガー: foo bar baz\n", encoding="utf-8")
+
+    # 3) Step 7.8: result.pending を直接渡して ingest（明示 history_file なし＝正準ストアへ書く）
+    summary = ed.ingest_decisions(slug, dry_run=False, pending=out["pending"])
+    assert len(summary["accepted"]) == 1
+
+    # 4) fitness 側が同じ正準ストアを読んで +1 を観測する（0/30 から動いた）
+    hist_path = ohs.history_path(slug)
+    history = fe.load_history(history_file=hist_path)
+    assert len(history) == 1
+    assert history[0]["human_accepted"] is True
+    fe_result = fe.run_fitness_evolution(history=history)
+    assert fe_result["data_count"] == 1  # ← これが旧コードでは永遠に 0 だった
+
+
+def test_ingest_pending_direct_reject(result_with_match, skill_file, monkeypatch, tmp_path, hist):
+    """pending 直接渡しでも明示却下は reject 記録される。"""
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    pid = out["pending"][0]["id"]
+    summary = ed.ingest_decisions(
+        "testslug", rejected={pid: "不一致"}, dry_run=False, history_file=hist, pending=out["pending"]
+    )
+    assert summary["rejected"] == [pid]
+    recs = _read_jsonl(hist)
+    assert recs[0]["human_accepted"] is False
+
+
 def test_emit_no_matches_is_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
     out = ed.emit_decisions({"phases": {"discover": {"matched_skills": []}}}, dry_run=False, slug="testslug")

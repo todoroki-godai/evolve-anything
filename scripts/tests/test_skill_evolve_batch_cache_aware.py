@@ -94,9 +94,13 @@ class TestBatchGuardCacheAware:
 
         cfg_mock = mock.MagicMock()
         cfg_mock.get.return_value = ""
+        # #400 改善: guard は usage>0 のスキルのみ母集団に入れる。使用実績ありをモック。
+        _tel = {"frequency": 1, "diversity": 1, "evaluability": 1,
+                "error_count": 0, "usage_count": 1, "error_categories": {}}
         with mock.patch("skill_evolve.assessment.find_artifacts", return_value={"skills": skill_paths}), \
              mock.patch("skill_evolve.assessment.classify_artifact_origin", return_value="custom"), \
              mock.patch("skill_evolve.assessment.load_user_config", return_value=cfg_mock), \
+             mock.patch("skill_evolve.compute_telemetry_scores", return_value=_tel), \
              mock.patch("skill_evolve.denylist.DATA_DIR", tmp_path):
             from skill_evolve.assessment import skill_evolve_assessment
             result = skill_evolve_assessment(tmp_path)
@@ -141,6 +145,7 @@ class TestBatchGuardCacheAware:
         with mock.patch("skill_evolve.assessment.find_artifacts", return_value={"skills": skill_paths}), \
              mock.patch("skill_evolve.assessment.classify_artifact_origin", return_value="custom"), \
              mock.patch("skill_evolve.assessment.load_user_config", return_value=cfg_mock), \
+             mock.patch("skill_evolve.compute_telemetry_scores", return_value={"frequency": 1, "diversity": 1, "evaluability": 1, "error_count": 0, "usage_count": 1, "error_categories": {}}), \
              mock.patch("skill_evolve.denylist.DATA_DIR", tmp_path):
             from skill_evolve.assessment import skill_evolve_assessment
             result = skill_evolve_assessment(tmp_path)
@@ -166,3 +171,73 @@ class TestBatchGuardCacheAware:
         # LLM-free であることは sentinel の rerun_llm_free フラグで明示される
         assert sentinel["rerun_llm_free"] is True
         assert "LLM-free" in sentinel["estimate_meaning"]
+
+
+class TestBatchGuardAutoProceedWhenZeroBilling:
+    """#400 バグ#3: 全件 cache-fresh（refresh_needed 合計0＝課金ゼロ確定）なら
+    batch_guard sentinel を返さず、AskUserQuestion 停止なしで評価ループへ自動で進む。"""
+
+    def test_no_guard_when_all_fresh(self, tmp_path, monkeypatch):
+        import importlib
+        from skill_evolve import _file_hash
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        import skill_evolve.denylist as dl_mod
+        importlib.reload(dl_mod)
+        # 11 件すべてを fresh-llm にする → refresh_needed 合計 0
+        for i in range(11):
+            d = tmp_path / ".claude/skills" / f"s-{i}"
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text("# S\n\nif x: ...\n")
+        skill_paths = [tmp_path / ".claude/skills" / f"s-{i}" / "SKILL.md" for i in range(11)]
+        cache = {}
+        for i in range(11):
+            cache[f"s-{i}"] = {"hash": _file_hash(skill_paths[i]), "judgment_source": "llm",
+                               "judgment_complexity": 2, "external_dependency": 1}
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(json.dumps(cache))
+        monkeypatch.setattr("skill_evolve.CACHE_FILE", cache_file)
+        cfg_mock = mock.MagicMock()
+        cfg_mock.get.return_value = ""
+        with mock.patch("skill_evolve.assessment.find_artifacts", return_value={"skills": skill_paths}), \
+             mock.patch("skill_evolve.assessment.classify_artifact_origin", return_value="custom"), \
+             mock.patch("skill_evolve.assessment.load_user_config", return_value=cfg_mock), \
+             mock.patch("skill_evolve.compute_telemetry_scores", return_value={"frequency": 1, "diversity": 1, "evaluability": 1, "error_count": 0, "usage_count": 1, "error_categories": {}}), \
+             mock.patch("skill_evolve.denylist.DATA_DIR", tmp_path):
+            from skill_evolve.assessment import skill_evolve_assessment
+            result = skill_evolve_assessment(tmp_path)
+        # guard sentinel が無く、各スキルの assessment が出ている（自動進行）
+        sentinel = next((r for r in result if r.get("_meta") == "batch_guard_trigger"), None)
+        assert sentinel is None
+        assessed = [r for r in result if not r.get("_meta")]
+        assert len(assessed) == 11
+
+    def test_guard_still_fires_when_some_refresh_needed(self, tmp_path, monkeypatch):
+        """1件でも refresh 必要なら従来どおり guard が出る（過剰自動化しない）。"""
+        import importlib
+        from skill_evolve import _file_hash
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        import skill_evolve.denylist as dl_mod
+        importlib.reload(dl_mod)
+        for i in range(11):
+            d = tmp_path / ".claude/skills" / f"s-{i}"
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text("# S\n\nif x: ...\n")
+        skill_paths = [tmp_path / ".claude/skills" / f"s-{i}" / "SKILL.md" for i in range(11)]
+        cache = {}
+        for i in range(10):  # 10 件のみ fresh、1 件は cache 不在
+            cache[f"s-{i}"] = {"hash": _file_hash(skill_paths[i]), "judgment_source": "llm",
+                               "judgment_complexity": 2, "external_dependency": 1}
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(json.dumps(cache))
+        monkeypatch.setattr("skill_evolve.CACHE_FILE", cache_file)
+        cfg_mock = mock.MagicMock()
+        cfg_mock.get.return_value = ""
+        with mock.patch("skill_evolve.assessment.find_artifacts", return_value={"skills": skill_paths}), \
+             mock.patch("skill_evolve.assessment.classify_artifact_origin", return_value="custom"), \
+             mock.patch("skill_evolve.assessment.load_user_config", return_value=cfg_mock), \
+             mock.patch("skill_evolve.compute_telemetry_scores", return_value={"frequency": 1, "diversity": 1, "evaluability": 1, "error_count": 0, "usage_count": 1, "error_categories": {}}), \
+             mock.patch("skill_evolve.denylist.DATA_DIR", tmp_path):
+            from skill_evolve.assessment import skill_evolve_assessment
+            result = skill_evolve_assessment(tmp_path)
+        sentinel = next((r for r in result if r.get("_meta") == "batch_guard_trigger"), None)
+        assert sentinel is not None  # refresh_needed=1 のため停止する

@@ -14,6 +14,7 @@ sys.path.insert(0, str(_root))
 sys.path.insert(0, str(_root / "lib"))
 
 from lib import evolve_introspect as ei
+from lib import evolve_reconcile as er  # #400: reconcile_skill_evolve_archive / batch_skip obs
 
 
 # ── 共通フィクスチャ ────────────────────────────────
@@ -411,6 +412,148 @@ def test_reconcile_handles_retirement_and_decay_keys():
     summary = ei.reconcile_split_archive(result)
     assert summary["suppressed"] == ["d", "r"]
     assert result["phases"]["reorganize"]["split_candidates"] == []
+
+
+# ── reconcile: skill_evolve↔archive 相互排他（#400 バグ#2） ──
+
+
+def _result_with_skill_evolve_and_archive():
+    """ghost を high 適性で自己進化提案しつつ prune で archive 候補にもする矛盾 result。"""
+    result = _clean_result()
+    result["phases"]["skill_evolve"] = {
+        "assessments": [
+            {"skill_name": "ghost", "skill_dir": "/s/ghost", "suitability": "high"},
+            {"skill_name": "alive", "skill_dir": "/s/alive", "suitability": "medium"},
+        ],
+        "high_suitability": 1,
+        "medium_suitability": 1,
+    }
+    result["phases"]["prune"] = {
+        "zero_invocations": ["ghost"],
+        "retirement_candidates": [],
+        "decay_candidates": [],
+    }
+    result["phases"]["remediation"] = {
+        "classified": {
+            "proposable_custom": [
+                {"type": "skill_evolve_candidate", "detail": {"skill_name": "ghost"}},
+                {"type": "skill_evolve_candidate", "detail": {"skill_name": "alive"}},
+            ],
+            "proposable_custom_individual": [
+                {"type": "skill_evolve_candidate", "detail": {"skill_name": "ghost"}},
+            ],
+            "proposable_custom_batch_skip": [
+                {"type": "skill_evolve_candidate", "detail": {"skill_name": "alive"}},
+            ],
+            "proposable": [
+                {"type": "skill_evolve_candidate", "detail": {"skill_name": "ghost"}},
+            ],
+        },
+        "proposable_custom": 2,
+        "proposable_custom_individual": 1,
+        "proposable_custom_batch_skip": 1,
+        "proposable": 1,
+    }
+    return result
+
+
+def test_reconcile_skill_evolve_suppresses_archived_skill():
+    """archive 候補のスキルは skill_evolve 提案から除外される（archive 優先）。"""
+    result = _result_with_skill_evolve_and_archive()
+    summary = er.reconcile_skill_evolve_archive(result)
+    assert summary["suppressed"] == ["ghost"]
+    se = result["phases"]["skill_evolve"]
+    # ghost は降格、alive は維持
+    suit = {a["skill_name"]: a["suitability"] for a in se["assessments"]}
+    assert suit["ghost"] == "suppressed_by_archive"
+    assert suit["alive"] == "medium"
+    assert se["high_suitability"] == 0  # ghost が抜けた
+    assert se["medium_suitability"] == 1
+    assert se["evolve_suppressed_by_archive"] == ["ghost"]
+
+
+def test_reconcile_skill_evolve_removes_remediation_issues():
+    """remediation の skill_evolve issue も archive 対象スキル分を除外し count を整合させる。"""
+    result = _result_with_skill_evolve_and_archive()
+    er.reconcile_skill_evolve_archive(result)
+    cls = result["phases"]["remediation"]["classified"]
+    names_in = lambda key: [i["detail"]["skill_name"] for i in cls[key]]
+    assert names_in("proposable_custom") == ["alive"]
+    assert names_in("proposable_custom_individual") == []
+    assert names_in("proposable_custom_batch_skip") == ["alive"]
+    assert names_in("proposable") == []
+    rem = result["phases"]["remediation"]
+    assert rem["proposable_custom"] == 1
+    assert rem["proposable_custom_individual"] == 0
+    assert rem["proposable_custom_batch_skip"] == 1
+    assert rem["proposable"] == 0
+
+
+def test_reconcile_skill_evolve_excluded_from_emit_after_reconcile():
+    """reconcile 後の assessments を emit_decisions が拾わない（母集団に矛盾候補を入れない）。"""
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "lib"))
+    import evolve_decisions as ed
+    result = _result_with_skill_evolve_and_archive()
+    er.reconcile_skill_evolve_archive(result)
+    cands = ed._extract_candidates(result)
+    names = {c["skill_name"] for c in cands}
+    assert "ghost" not in names  # archive 候補は emit 対象外
+    assert "alive" in names
+
+
+def test_reconcile_skill_evolve_noop_without_archive():
+    result = _clean_result()
+    result["phases"]["skill_evolve"] = {
+        "assessments": [{"skill_name": "x", "suitability": "high"}],
+        "high_suitability": 1, "medium_suitability": 0,
+    }
+    summary = er.reconcile_skill_evolve_archive(result)
+    assert summary["suppressed"] == []
+    assert result["phases"]["skill_evolve"]["assessments"][0]["suitability"] == "high"
+
+
+def test_reconcile_skill_evolve_noop_when_phase_missing():
+    summary = er.reconcile_skill_evolve_archive(_clean_result())
+    assert summary["suppressed"] == []
+
+
+# ── observability: remediation batch_skip 強制 surface（#400 バグ#6） ──
+
+
+def test_batch_skip_observability_surfaces_count_when_nonzero():
+    result = _clean_result()
+    result["phases"]["remediation"] = {"proposable_custom_batch_skip": 7}
+    lines = er.build_remediation_batch_skip_observability(result)
+    assert lines is not None
+    assert len(lines) == 1
+    assert "7 件" in lines[0]
+    assert "batch_skip" in lines[0]
+
+
+def test_batch_skip_observability_zero_still_surfaces():
+    """0 件でも ✓ を残す（silence != evaluated）。"""
+    result = _clean_result()
+    result["phases"]["remediation"] = {"proposable_custom_batch_skip": 0}
+    lines = er.build_remediation_batch_skip_observability(result)
+    assert lines == ["✓ remediation batch_skip: 0 件（まとめスキップ対象なし）"]
+
+
+def test_batch_skip_observability_none_when_no_remediation():
+    """remediation phase が無い / error は非該当（None）。"""
+    result = _clean_result()
+    result["phases"].pop("remediation", None)
+    assert er.build_remediation_batch_skip_observability(result) is None
+    result["phases"]["remediation"] = {"error": "boom"}
+    assert er.build_remediation_batch_skip_observability(result) is None
+
+
+def test_batch_skip_observability_handles_non_int():
+    result = _clean_result()
+    result["phases"]["remediation"] = {"proposable_custom_batch_skip": None}
+    lines = er.build_remediation_batch_skip_observability(result)
+    assert lines == ["✓ remediation batch_skip: 0 件（まとめスキップ対象なし）"]
 
 
 # ── カテゴリ3: 改善余地 ─────────────────────────────

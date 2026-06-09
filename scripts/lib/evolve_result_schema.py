@@ -109,6 +109,10 @@ CANONICAL: List[Key] = [
     Key("phases.audit.report", str, optional=True),
     Key("phases.discover.reflect_data_count", int, optional=True),
     Key("phases.split_archive_reconcile.suppressed", list, optional=True),
+    Key("phases.skill_evolve_archive_reconcile.suppressed", list, optional=True,
+        note="skill_evolve↔archive reconcile で archive 優先除外したスキル名（#400 バグ#2）"),
+    Key("phases.fitness_evolution.next_action", str, optional=True,
+        note="insufficient_data 時の結論 1 行（#400 バグ#5）。evolve.py が提案有無で確定"),
 ]
 
 
@@ -124,7 +128,6 @@ UNCOVERED_PHASES: Set[str] = {
     "quality_traces",
     "rationalization_table",
     "fitness",
-    "fitness_evolution",
     "self_evolution",
     "prune",
     "enrich",

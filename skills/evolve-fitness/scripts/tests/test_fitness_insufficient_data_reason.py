@@ -164,6 +164,37 @@ class TestInsufficientDataReasonMessage:
         assert result["required"] == fe.MIN_DATA_COUNT
 
 
+class TestNextActionOneLiner:
+    """#400 バグ#5: 結論を 1 行で締める next_action フィールド。"""
+
+    def test_insufficient_data_has_next_action(self):
+        result = fe.run_fitness_evolution(history=[])
+        assert result["status"] == "insufficient_data"
+        assert "next_action" in result
+        # 1 行（改行を含まない）であること
+        assert "\n" not in result["next_action"]
+
+    def test_next_action_proposals_available_is_leave_alone(self):
+        s = fe.fitness_next_action(proposals_available=True)
+        assert "放置でOK" in s
+        assert "\n" not in s
+
+    def test_next_action_no_proposals_is_no_op_design(self):
+        s = fe.fitness_next_action(proposals_available=False)
+        assert "対応不要" in s
+        assert "使わない設計" in s
+        assert "\n" not in s
+
+    def test_bootstrap_no_next_action(self):
+        history = [
+            {"best_fitness": 0.5, "human_accepted": i % 2 == 0, "fitness_func": "skill_quality"}
+            for i in range(10)
+        ]
+        result = fe.run_fitness_evolution(history=history)
+        assert result["status"] == "bootstrap"
+        assert "next_action" not in result
+
+
 class TestInsufficientDataMessageForEvolveSkill:
     """SKILL.md Step 8 の表示テンプレートに対応した出力フォーマットテスト。"""
 
