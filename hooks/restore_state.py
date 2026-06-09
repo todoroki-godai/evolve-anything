@@ -21,6 +21,13 @@ try:
 except ImportError:
     pass
 
+# spec_trigger import (optional) — main 着地の仕様未追従変更を検出（ADR-044）
+_spec_trigger = None
+try:
+    import spec_trigger as _spec_trigger
+except ImportError:
+    pass
+
 
 def _make_session_title(checkpoint: dict) -> str:
     """checkpoint から claude agents 表示用のセッションタイトルを生成する。"""
@@ -73,10 +80,30 @@ def _deliver_pending_trigger() -> None:
         print(f"[rl-anything:restore_state] trigger delivery error: {e}", file=sys.stderr)
 
 
+def _deliver_spec_drift() -> None:
+    """main に着地した仕様未追従の変更があれば spec-keeper 提案を stdout に出す（ADR-044）。
+
+    fail-safe: spec_trigger 内部で git/IO 例外は握られるが、念のため全体を保護する。
+    """
+    if _spec_trigger is None:
+        return
+    try:
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        cwd = Path(project_dir) if project_dir else None
+        result = _spec_trigger.detect(cwd=cwd)
+        message = result.get("message")
+        if message:
+            print(message)
+    except Exception as e:
+        print(f"[rl-anything:restore_state] spec-trigger error: {e}", file=sys.stderr)
+
+
 def handle_session_start(event: dict) -> None:
     """SessionStart イベントを処理する。"""
     # Deliver pending trigger messages first
     _deliver_pending_trigger()
+    # 仕様未追従マージの提案
+    _deliver_spec_drift()
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
     checkpoint = common.find_latest_checkpoint(project_dir)

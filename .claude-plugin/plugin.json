@@ -123,6 +123,12 @@
       "type": "number",
       "description": "evolve-skill の1回の変更で許容する最大差分行数（デフォルト: 30）。LLM 出力がこの行数を超えた場合はテンプレートにフォールバックする。",
       "sensitive": false
+    },
+    "spec_trigger_enabled": {
+      "title": "Spec Trigger on Merge",
+      "type": "boolean",
+      "description": "SessionStart で main に着地した『挙動コードを変えたのに SPEC.md/CLAUDE.md 等の仕様を未更新』のマージを検出し spec-keeper update / ADR 化を1回提案する (default: true)。false で無効化。",
+      "sensitive": false
     }
   }
 }

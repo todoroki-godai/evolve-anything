@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(spec_trigger): main 着地の仕様未追従マージを SessionStart で検出し spec-keeper/ADR を提案（ADR-044）** — 仕様変更の後に SPEC.md/ADR を追従させたいが、現状トリガー（`spec-keeper-trigger.md` ルール + gstack `ship→spec-keeper`）は /ship 経由でしか発火せず、`gh pr merge` 直叩き・GitHub web squash マージ（この PJ の実マージ手段、直近 #384/#382/#386 等）では無音だった。ルール記載は assistant が忘れる＝`SKILL.md MUST ≠ enforcement` の穴。web squash は「自分のセッション外で main が進んだ」状態でローカルイベント(Stop/PostToolUse)では原理的に拾えないため検知点は **SessionStart 一択**。新規 `scripts/lib/spec_trigger.py`（決定論・LLM 非依存）の `detect()` を `hooks/restore_state.py` の `_deliver_spec_drift()` が fail-safe 呼び出し（新規 hook 不要、既存配信機構に相乗り）。**ゲートは実コーパス 40 commit への dry 適用で較正**（learning_synthetic_fixture_false_confidence: FP/FN は実コーパスでしか分からない）: 素朴 `feat:`+plugin.json 監視=8件全部 version bump の FP / structural-only=0件で死蔵 / 広域=12件中10件が `fix:` の FP → **feat/refactor/feat! × `scripts**.py`・`hooks**.py` 変更 × 仕様アーティファクト未更新で 2件の真 TP**。データが教えた設計修正2点: ① 仕様アーティファクト集合に **CLAUDE.md** を含める（この PJ の生きた仕様は SPEC.md でなく CLAUDE.md の component table、SPEC.md 単点は FP/FN 源）② **`fix:` を信号源から除外**（バグ修正は挙動を触るが仕様は変えない）。ADR 化は breaking(`!`) のみ併記。重複抑制は cooldown(3日)+リマインド1回で打ち止め（at-most-once は `silence≠evaluated` 再発のため不可）＋**解消プロキシ**（スキャン範囲に仕様アーティファクトを触った commit があれば pending 全クリア＝dev が仕様維持＝沈黙）。trunk(main/master) を解決できなければ沈黙（HEAD=現在ブランチには落とさない＝master 既定リポでの自分の作業中ブランチ誤提案を防止、/review 指摘）。`detect(persist=False)` でマーカー書き込みゼロ（pitfall_dryrun_stateful_store_write）。slug は `optimize_history_store.resolve_slug`（worktree 安全, ADR-031）。`userConfig.spec_trigger_enabled`(default true) で無効化可。グローバルルール `spec-keeper-trigger.md` は他 PJ も使うため痩せさせず現状維持・hook は加算的 enforcement（second-opinion の一元化案からの意図的逸脱）。TDD（ゲート純関数11 + 実 temp-git E2E 10 + commit_type 3 = 新規24件、実コーパスで本物モジュールが FIRE=2 を再現）。決定論・LLM 非依存。
+
 ## [1.91.0] - 2026-06-09
 
 ### Fixed

@@ -39,6 +39,10 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     "max_skill_count": 30,
     # Pre-flight ガードレール: 同一スキルで N 回以上 correction が発火した場合に能動警告。
     "correction_preflight_threshold": 3,
+    # spec_trigger (ADR-044): SessionStart で main に着地した「挙動コードを変えたのに
+    # 仕様アーティファクト(SPEC.md/CLAUDE.md 等)を未更新」のマージを検出し
+    # spec-keeper update / ADR 化を1回提案する。False で完全無効化。
+    "spec_trigger_enabled": True,
 }
 
 
