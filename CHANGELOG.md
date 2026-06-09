@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.92.1] - 2026-06-09
+
 ### Fixed
 - **fix(evolve): observability の誤検知2件を是正（cross_skill の `[category]` 未展開 / unmanaged_pitfalls が worktree を拾う）（#393）** — docs-platform の evolve dry-run で observability に2件の検出ノイズが出た。① pitfalls.md の Root-cause がテンプレ未展開（`[category]`）のまま記録されると `cross_skill_analysis` のキーが `[category]` になり「何のカテゴリで横断しているか」が読めず共通ルール化判断ができなかった → `pitfall_manager/runner.py` の横断集計で角括弧プレースホルダ（`_is_placeholder_category`）を除外。② `pitfall_registry._DISCOVERY_IGNORE` に `worktrees` を追加し、`.claude/worktrees/<name>/...` の一時作業コピー（本体スキルの pitfalls.md と同一内容）を `unmanaged_candidates` が「未登録」と誤検知しないようにした。TDD 新規4件。決定論・LLM 非依存。
 - **fix(hook_drift): 検出元パス（evidence）を併記し独自検証の誤判断を防ぐ（#394-1）** — `hook_drift` が「実環境は 1.57.0.0」とだけ出し根拠（どのファイル由来か）が無いため、検証で `gstack --version` の PATH フォールバックが flow-chain.json を読み戻して逆の結論を出しかけた。`HookDriftReport` に `pinned_source`/`actual_source` を追加し、`sections_hook` の警告に「pinned の出元: ~/.gstack/flow-chain.json」「実環境の出元: ~/.gstack/.last-setup-version」を併記。TDD 新規3件。決定論・LLM 非依存。
