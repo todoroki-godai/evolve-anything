@@ -39,6 +39,34 @@ def _list_archived_skill_names() -> list[str]:
     return sorted(names)
 
 
+def _was_repo_skill(skill_name: str) -> bool:
+    """skill_name が rl-anything リポジトリのスキルだった履歴があるか（git で判定）。
+
+    `_ARCHIVE_DIR`（= `~/.claude/rl-anything/archive` または `$CLAUDE_PLUGIN_DATA/archive`）は
+    開発機の **グローバル runtime archive** で、全 PJ・全プラグインの prune 結果が混在する。
+    そのため他プラグイン由来のスキル名（例: openspec-* プラグインの `openspec-apply-change`）が
+    archive に入り、それが rl-anything のテストにフィクスチャ文字列として現れると、オーファン検査が
+    「rl-anything が archive した自分のスキル」と取り違えて誤検知する（非ハーメチックな FP）。
+    オーファン検査は **rl-anything 自身がリポジトリで持っていたスキル** だけを対象にすべきなので、
+    git 履歴に `skills/<name>/` が一度も存在しない名前は除外する。
+
+    git が使えない環境では従来どおり全件検査する（安全側 = 取りこぼさない）。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "log", "--all", "--oneline", "-1", "--", f"skills/{skill_name}/"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if out.returncode != 0:
+            return True  # git エラー時は安全側で検査対象に残す
+        return bool(out.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return True
+
+
 def _grep_repo(needle: str) -> list[str]:
     """repo 内で needle を含む行を返す。git grep を優先、フォールバックは rglob。"""
     try:
@@ -70,9 +98,11 @@ def _grep_repo(needle: str) -> list[str]:
 
 def test_no_orphan_archived_skill_refs() -> None:
     """archive 済み skill への import / path ref が repo 内に残っていないこと。"""
-    archived = _list_archived_skill_names()
+    # グローバル runtime archive には他プラグイン由来のスキルも混ざる。rl-anything 自身が
+    # リポジトリで持っていた（git 履歴に skills/<name>/ がある）名前だけをオーファン検査対象にする。
+    archived = [n for n in _list_archived_skill_names() if _was_repo_skill(n)]
     if not archived:
-        pytest.skip("no archived skills found in {}".format(_ARCHIVE_DIR))
+        pytest.skip("no rl-anything-origin archived skills found in {}".format(_ARCHIVE_DIR))
 
     def _filter_noise(refs: list[str]) -> list[str]:
         return [
@@ -95,3 +125,18 @@ def test_no_orphan_archived_skill_refs() -> None:
         f"orphan refs to archived skills found: {orphan_refs}. "
         "Run check_import_dependencies before archiving."
     )
+
+
+def test_provenance_gate_excludes_cross_plugin_archive_names() -> None:
+    """プロベナンス・ゲートが他プラグイン由来の archive 名を検査対象から外すこと（非ハーメチック FP の回帰）。
+
+    `openspec-apply-change` 等の openspec プラグインスキルが開発機のグローバル archive に
+    入っていても、rl-anything のリポジトリスキルではないので検査対象外になる。一方で
+    rl-anything 自身のスキル（prune/evolve/audit）は検査対象に残る。
+    """
+    # rl-anything のリポジトリスキルは対象に残る
+    assert _was_repo_skill("prune")
+    assert _was_repo_skill("evolve")
+    # 他プラグイン由来 / 存在しない名前は対象外
+    assert not _was_repo_skill("openspec-apply-change")
+    assert not _was_repo_skill("this-skill-never-existed-xyz")
