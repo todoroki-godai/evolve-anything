@@ -90,6 +90,14 @@ def main(argv: list[str] | None = None) -> int:
                            help="plugins ルート (default: ~/.claude/plugins)")
     plugins_p.add_argument("--json", action="store_true", help="JSON 出力")
 
+    migrate_p = sub.add_parser(
+        "migrate-data",
+        help="DATA_DIR hook/tool 分裂を一元化（plugin-data 側ストアを ~/.claude/rl-anything にマージ + marker 設置、#364）",
+    )
+    migrate_p.add_argument("--dry-run", action="store_true", help="マージ内容の確認のみ（書き込みゼロ）")
+    migrate_p.add_argument("--canonical", type=Path, default=None, help="正準 dir（default: ~/.claude/rl-anything）")
+    migrate_p.add_argument("--source", type=Path, default=None, help="旧 plugin-data dir（default: install レイアウトを自動探索）")
+
     recall_p = sub.add_parser(
         "recall",
         help="全 PJ の memory を横断 keyword 検索（決定論・LLM 非依存）",
@@ -114,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_plugins(args)
     if args.command == "recall":
         return _run_recall(args)
+    if args.command == "migrate-data":
+        return _run_migrate_data(args)
 
     # default: status
     return _run_status(args)
@@ -126,6 +136,20 @@ def _run_plugins(args: argparse.Namespace) -> int:
     rows = check_plugin_freshness(plugins_root=args.root)
     print(format_plugin_freshness_table(rows, as_json=args.json), end="")
     return 0
+
+
+def _run_migrate_data(args: argparse.Namespace) -> int:
+    """migrate-data サブコマンド: DATA_DIR 分裂の一元化 migration を実行する（#364）。"""
+    import data_dir_migration
+
+    kwargs = {"dry_run": args.dry_run}
+    if args.canonical is not None:
+        kwargs["canonical"] = args.canonical
+    if args.source is not None:
+        kwargs["source"] = args.source
+    summary = data_dir_migration.migrate(**kwargs)
+    print(data_dir_migration.format_summary(summary))
+    return 1 if summary["failures"] else 0
 
 
 def _run_recall(args: argparse.Namespace) -> int:

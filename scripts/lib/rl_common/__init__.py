@@ -26,7 +26,44 @@ import sys
 from pathlib import Path
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+
+# DATA_DIR 一元化 marker（#364 Phase 2）。data_dir_migration.migrate() が
+# 正準 dir に設置し、以後 hook 文脈（CC が CLAUDE_PLUGIN_DATA=plugin-data を設定）
+# でも正準 dir に解決される。
+DATA_DIR_UNIFIED_MARKER = ".data-dir-unified"
+_DEFAULT_DATA_DIR = Path.home() / ".claude" / "rl-anything"
+_CC_PLUGIN_DATA_BASE = Path.home() / ".claude" / "plugins" / "data"
+
+
+def resolve_data_dir(
+    env_value: str = "",
+    default_dir: "Path | None" = None,
+    cc_plugin_data_base: "Path | None" = None,
+) -> Path:
+    """DATA_DIR を解決する（#364 Phase 2: marker ゲートの一元化 redirect）。
+
+    - env 無し → 既定 fallback（従来通り）
+    - env が CC install レイアウト（~/.claude/plugins/data/ 配下）を指し、かつ
+      正準 dir に一元化 marker が存在 → 正準 dir へ redirect（hook/tool 統一）
+    - それ以外の env（テスト isolation の tmp dir・custom 環境）→ 無条件で尊重
+    """
+    default_dir = default_dir if default_dir is not None else _DEFAULT_DATA_DIR
+    cc_base = cc_plugin_data_base if cc_plugin_data_base is not None else _CC_PLUGIN_DATA_BASE
+    if not env_value:
+        return default_dir
+    env_path = Path(env_value)
+    try:
+        if (
+            env_path.resolve().is_relative_to(Path(cc_base).resolve())
+            and (default_dir / DATA_DIR_UNIFIED_MARKER).exists()
+        ):
+            return default_dir
+    except OSError:
+        pass
+    return env_path
+
+
+DATA_DIR = resolve_data_dir(_PLUGIN_DATA_ENV)
 CHECKPOINTS_DIR = DATA_DIR / "checkpoints"
 CHECKPOINT_TTL_HOURS = 48.0
 

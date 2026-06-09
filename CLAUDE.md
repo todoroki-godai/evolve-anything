@@ -62,6 +62,7 @@
 | `evolve_result_schema` | result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379） | `evolve_result_schema.py` |
 | `evolve_consistency` | P1 invariant の runtime self-detect（型 drift のみ）（#377-5） | `evolve_consistency.py` |
 | `hook_drift` | 他ツール追従 hook の陳腐化検出（stale_pin）[ADR-036] | `hook_drift.py` |
+| `data_dir_migration` | DATA_DIR hook/tool 分裂の一元化 migration（marker ゲート redirect + DuckDB rebuild マージ、`rl-fleet migrate-data`）[#364, ADR-042] | `data_dir_migration.py` |
 | `spec_trigger` | 仕様未更新マージの SessionStart 検出→spec-keeper 提案 [ADR-044] | `spec_trigger.py` |
 
 ## クイックスタート

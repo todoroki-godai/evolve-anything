@@ -38,3 +38,4 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | ファイルベース2相 | claude -p を Python から追い出す3相分離。Phase A（決定論=リクエスト JSON 生成）→ Phase B（assistant がインライン採点/生成、subscription 課金）→ Phase C（決定論=応答パース・ゲート）。Bash 境界を JSON ファイルで越える | ADR-037 |
 | llm_broker | ファイルベース2相の共通基盤 `scripts/lib/llm_broker.py`。build_requests/parse_responses/parse_score/passthrough を提供、IO-free・LLM-free（mock 不要） | ADR-037 |
 | 編成ギャップ | エージェント *間* の関係（役割重複＝description の役割語 Jaccard / 孤立＝入次数 0 かつ出次数 0）を決定論検出。agent_quality（単体品質）と別軸。observability builder `agent_team` 経由で evolve のたびに surface、整理は人間判断 | #326 |
+| data-dir-unified marker | DATA_DIR 一元化済みを示す `~/.claude/rl-anything/.data-dir-unified`。存在時 hook 文脈の CLAUDE_PLUGIN_DATA（install レイアウト配下）も正準 dir に redirect され hook/tool 分裂が終息。`rl-fleet migrate-data` が全 entry マージ成功時に設置 | #364 |

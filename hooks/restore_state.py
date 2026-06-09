@@ -35,6 +35,13 @@ try:
 except ImportError:
     pass
 
+# data_dir_migration import (optional) — DATA_DIR 分裂の未解消を検出（#364）
+_data_dir_migration = None
+try:
+    import data_dir_migration as _data_dir_migration
+except ImportError:
+    pass
+
 
 def _make_session_title(checkpoint: dict) -> str:
     """checkpoint から claude agents 表示用のセッションタイトルを生成する。"""
@@ -131,6 +138,36 @@ def _deliver_evolve_drain_reminder() -> None:
         print(f"[rl-anything:restore_state] evolve-drain reminder error: {e}", file=sys.stderr)
 
 
+def _deliver_data_dir_migration_reminder() -> None:
+    """DATA_DIR 分裂が未解消なら `rl-fleet migrate-data` を1行案内する（#364）。
+
+    marker（一元化済）があれば沈黙。marker 無し & 旧 plugin-data dir に
+    ストアが残っていれば案内する。migration 実行で marker が立ち自然終息
+    （install ≠ enforcement 対策の検出層、#402 の drain リマインドと同型）。
+    """
+    if _data_dir_migration is None:
+        return
+    try:
+        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        if not env:
+            return  # hook 文脈でなければ判定しない（probe で実環境を読まない）
+        source = Path(env)
+        if not _data_dir_migration.is_cc_install_layout(source):
+            return  # テスト isolation / custom 環境
+        canonical = _data_dir_migration.default_canonical()
+        marker = canonical / _data_dir_migration._marker_name()
+        if marker.exists():
+            return
+        if _data_dir_migration.needs_migration(source=source):
+            print(
+                "[rl-anything] DATA_DIR が hook/tool 文脈で分裂しています（#364）。"
+                "`rl-fleet migrate-data --dry-run` で内容確認後、"
+                "`rl-fleet migrate-data` で一元化してください。"
+            )
+    except Exception as e:
+        print(f"[rl-anything:restore_state] data-dir migration reminder error: {e}", file=sys.stderr)
+
+
 def handle_session_start(event: dict) -> None:
     """SessionStart イベントを処理する。"""
     # Deliver pending trigger messages first
@@ -139,6 +176,8 @@ def handle_session_start(event: dict) -> None:
     _deliver_spec_drift()
     # 未 drain の適用済み evolve 提案の記録リマインド（#402）
     _deliver_evolve_drain_reminder()
+    # DATA_DIR 分裂の未解消検出（#364）
+    _deliver_data_dir_migration_reminder()
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
     checkpoint = common.find_latest_checkpoint(project_dir)

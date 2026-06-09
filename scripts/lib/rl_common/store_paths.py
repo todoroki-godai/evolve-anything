@@ -73,6 +73,16 @@ def hook_store_dir(base: Optional[Path] = None) -> Path:
     if base.resolve() != _REAL_DEFAULT_FALLBACK_RESOLVED:
         return base
 
+    # 1.5 一元化 marker（#364 Phase 2）: migration 済み環境では hook も正準 dir に
+    #     書くため、env/probe で旧 plugin-data dir を返すと「migration 済みの空ストア」
+    #     を読んでしまう。marker があれば base（=正準）をそのまま返す。
+    marker_name = getattr(rl_common, "DATA_DIR_UNIFIED_MARKER", ".data-dir-unified")
+    try:
+        if (base / marker_name).exists():
+            return base
+    except OSError:
+        pass
+
     # 2. env（hook が設定する plugin-data）。base が既定 fallback のときのみ。
     env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
     if env:
