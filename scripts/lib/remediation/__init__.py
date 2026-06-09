@@ -80,6 +80,10 @@ from issue_schema import (  # noqa: E402
 # 分類閾値
 AUTO_FIX_CONFIDENCE = 0.9
 PROPOSABLE_CONFIDENCE = 0.5
+# proposable 帯（0.5〜0.9未満）内で「1件ずつ個別承認」と「まとめてスキップ（デフォルト）」を
+# 分ける閾値（#377-3）。confidence >= この値 → 個別承認、未満 → batch_skip（FP は 0.5〜0.65 に
+# 集中するため低帯を畳んで質問攻めを防ぐ）。
+PROPOSABLE_INDIVIDUAL_CONFIDENCE = 0.7
 MAJOR_EXCESS_RATIO = 1.6  # 行数が制限値の160%以上 → manual_required
 DUPLICATE_PROPOSABLE_SIMILARITY = 0.75  # duplicate の proposable 昇格閾値
 DUPLICATE_PROPOSABLE_CONFIDENCE = 0.60  # similarity >= 閾値時の confidence
@@ -110,6 +114,7 @@ from .confidence import (  # noqa: E402, F401
     compute_confidence_score,
     classify_issue,
     classify_issues,
+    partition_proposable_by_confidence,
 )
 
 

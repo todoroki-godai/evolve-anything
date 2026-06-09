@@ -67,6 +67,8 @@ CANONICAL: List[Key] = [
     Key("phases.remediation.proposable", int, note="件数。実体は classified.proposable[]（配列ではない）"),
     Key("phases.remediation.proposable_custom", int),
     Key("phases.remediation.proposable_global", int),
+    Key("phases.remediation.proposable_custom_individual", int, note="件数（#377-3）。conf>=0.7 で個別承認対象。実体は classified.proposable_custom_individual[]"),
+    Key("phases.remediation.proposable_custom_batch_skip", int, note="件数（#377-3）。conf<0.7 でまとめてスキップ対象。実体は classified.proposable_custom_batch_skip[]"),
     Key("phases.remediation.manual_required", int, note="件数。実体は classified.manual_required[]"),
     Key("phases.remediation.classified", dict),
     Key("phases.remediation.classified.proposable", list, item_keys=["type", "file"]),
@@ -74,6 +76,8 @@ CANONICAL: List[Key] = [
     Key("phases.remediation.classified.manual_required", list),
     Key("phases.remediation.classified.proposable_custom", list),
     Key("phases.remediation.classified.proposable_global", list),
+    Key("phases.remediation.classified.proposable_custom_individual", list),
+    Key("phases.remediation.classified.proposable_custom_batch_skip", list),
     # --- reorganize: split は skill_name/line_count（.skill/.content_lines ではない）。
     #     skipped 時はこれらのキー自体が出ないため optional ---
     Key("phases.reorganize.split_candidates", list, item_keys=["skill_name", "line_count"],

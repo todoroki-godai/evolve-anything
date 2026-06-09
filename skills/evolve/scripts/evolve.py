@@ -676,12 +676,22 @@ def run_evolve(
         classified["proposable_custom"] = proposable_custom
         classified["proposable_global"] = proposable_global
 
+        # proposable_custom を confidence しきい値で「個別承認」「まとめてスキップ」に分割
+        # （#377-3）。低 confidence FP 群（conf 0.5 中心）で per-item 承認 MUST が質問攻めに
+        # なるのを防ぐ。判定は決定論コードに置き、SKILL.md は count を消費するだけにする。
+        from remediation import partition_proposable_by_confidence
+        _partition = partition_proposable_by_confidence(proposable_custom)
+        classified["proposable_custom_individual"] = _partition["individual"]
+        classified["proposable_custom_batch_skip"] = _partition["batch_skip"]
+
         remediation_data = {
             "total_issues": len(issues),
             "auto_fixable": len(classified["auto_fixable"]),
             "proposable": len(classified["proposable"]),
             "proposable_custom": len(proposable_custom),
             "proposable_global": len(proposable_global),
+            "proposable_custom_individual": len(_partition["individual"]),
+            "proposable_custom_batch_skip": len(_partition["batch_skip"]),
             "manual_required": len(classified["manual_required"]),
             "classified": classified,
         }

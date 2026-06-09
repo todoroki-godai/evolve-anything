@@ -22,6 +22,7 @@ MEC_SKILL_NAME = 'skill_name'
 MEC_SKILL_PATH = 'skill_path'
 MISSING_EFFORT_CANDIDATE = 'missing_effort'
 PROPOSABLE_CONFIDENCE = 0.5
+PROPOSABLE_INDIVIDUAL_CONFIDENCE = 0.7
 RULE_ALTERNATIVE_TOOLS = 'alternative_tools'
 RULE_CONTENT = 'content'
 RULE_FILENAME = 'filename'
@@ -85,6 +86,7 @@ fix_workflow_checkpoint(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 generate_auto_fix_summaries(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 generate_proposals(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 generate_rationale(issue: Dict[str, Any], category: str) -> str
+partition_proposable_by_confidence(proposable: List[Dict[str, Any]], threshold: float = None) -> Dict[str, List[Dict[str, Any]]]
 record_outcome(issue: Dict[str, Any], category: str, action: str, result: str, user_decision: str, rationale: str, *, dry_run: bool = False, fix_detail: Dict[str, Any] | None = None, verify_result: Dict[str, Any] | None = None, duration_ms: int | None = None) -> Dict[str, Any] | None
 rollback_fix(fixed_file: str, original_content: str) -> bool
 verify_fix(fixed_file: str, original_issue: Dict[str, Any]) -> Dict[str, Any]

@@ -31,13 +31,28 @@ regression 検出時: `rollback_fix()` で復元し manual_required に格上げ
 
 ### proposable (confidence ≥ 0.5, scope != global, confidence < 0.9 for non-file/project)
 
-- `proposable_custom > 0` の場合のみ個別承認フローを実行（MUST）
+**confidence で2分割して質問攻めを防ぐ（#377-3）。** evolve.py が `proposable_custom` を決定論で
+`partition_proposable_by_confidence`（しきい値 0.7）にかけ、`classified.proposable_custom_individual[]`
+（conf ≥ 0.7）と `classified.proposable_custom_batch_skip[]`（conf < 0.7）に分けて result に surface する。
+SKILL は count を消費するだけで、しきい値判定はコード側に置く（MUST が効かない class の再発防止）。
+
+**個別承認対象 = `proposable_custom_individual`（conf ≥ 0.7）:**
+
+- `proposable_custom_individual > 0` の場合のみ個別承認フローを実行（MUST）
 - **提案詳細プロトコルに従う**: `generate_proposals(issues)` で各 issue の `{proposal, rationale}` を取得し、**1件ずつ**「対象・根拠（detail の実値）・変更内容」を提示してから AskUserQuestion で個別承認（MUST）
 - **⚠ pitfall — 補足説明は Q&A の前に出す（MUST）**: 「なぜ必要か」「どんな効果があるか」を AskUserQuestion と同じターン内の Q&A より前のテキストとして先に出力すること。ユーザーが Yes/No を判断できる状態を作ってから質問する。
-- **⚠ pitfall — AskUserQuestion の options は最大 4 択（MUST）**: proposable_custom が 5 件以上の場合に 5 択以上の options を1問で出してはならない。proposal-protocol.md の方式 A（1件ずつ）または方式 B（グループ分割）を使う。
+- **⚠ pitfall — AskUserQuestion の options は最大 4 択（MUST）**: individual が 5 件以上の場合に 5 択以上の options を1問で出してはならない。proposal-protocol.md の方式 A（1件ずつ）または方式 B（グループ分割）を使う。
 - 同じ type の issue が複数あっても件数に丸めない（例: `missing_effort` が 10 スキル分あるなら各スキル名 + 推定 effort + reason を per-item で展開する。10 件超は他 M 件と誘導）
 - 対応 type: line_limit_violation, near_limit, orphan_rule, stale_memory, memory_duplicate, missing_effort
 - 承認された修正のみ実行 → 検証 → 記録
+
+**まとめてスキップ対象 = `proposable_custom_batch_skip`（conf < 0.7）:**
+
+- FP 集中帯（hardcoded_value / duplicate 低類似 / skill_evolve medium 等、conf 0.5〜0.65）。**デフォルトはスキップ**。
+- 「低 confidence の proposable {batch_skip}件をまとめてスキップしました（個別に見る場合は展開可）」と**1行表示**する。**1件ずつ AskUserQuestion を出してはならない（MUST NOT）**。
+- ユーザーが希望した場合のみ、提案詳細プロトコルで個別展開し承認フローに乗せる。
+
+- `proposable_custom_individual == 0`（個別対象なし）の場合は AskUserQuestion を出さず、batch_skip の1行表示のみで Step を終える。batch_skip も0件なら「proposable: 個別対象なし ✓」を残す（沈黙≠評価）。
 - `proposable_custom == 0` かつ `proposable_global > 0` の場合: 「proposable: global スキルのみ {M}件（参考値） — 対応不要」と1行表示してスキップ
 
 ### manual_required (confidence < 0.5, or impact_scope = global)

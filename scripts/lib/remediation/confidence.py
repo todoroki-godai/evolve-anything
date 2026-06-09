@@ -277,6 +277,44 @@ def classify_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def partition_proposable_by_confidence(
+    proposable: List[Dict[str, Any]],
+    threshold: float = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """proposable issue リストを confidence しきい値で2分割する（#377-3）。
+
+    - ``confidence_score >= threshold`` → ``individual``（1件ずつ個別承認）
+    - ``confidence_score <  threshold`` → ``batch_skip``（まとめてスキップがデフォルト、
+      個別展開は任意）
+
+    Step 5.5 の per-item 承認 MUST が低 confidence FP 群（conf 0.5 中心）で「質問攻め」に
+    なる問題を、SKILL.md の文言でなくコード側のしきい値判定で塞ぐ決定論分割。
+
+    confidence_score 欠落は質問攻め回避側（batch_skip）に倒す。両リストとも confidence 降順で
+    安定ソートし、提示順を決定論化する。入力リストは破壊しない。
+
+    threshold 未指定時は :data:`PROPOSABLE_INDIVIDUAL_CONFIDENCE` を使う。
+    """
+    from . import PROPOSABLE_INDIVIDUAL_CONFIDENCE  # noqa: PLC0415
+
+    if threshold is None:
+        threshold = PROPOSABLE_INDIVIDUAL_CONFIDENCE
+
+    individual: List[Dict[str, Any]] = []
+    batch_skip: List[Dict[str, Any]] = []
+    for issue in proposable:
+        conf = issue.get("confidence_score", 0.0)
+        if conf >= threshold:
+            individual.append(issue)
+        else:
+            batch_skip.append(issue)
+
+    _by_conf = lambda it: it.get("confidence_score", 0.0)  # noqa: E731
+    individual.sort(key=_by_conf, reverse=True)
+    batch_skip.sort(key=_by_conf, reverse=True)
+    return {"individual": individual, "batch_skip": batch_skip}
+
+
 def classify_issues(issues: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     """issue リストを3カテゴリ + fp_excluded に分類する。
 
