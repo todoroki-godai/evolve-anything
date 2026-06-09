@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.93.0] - 2026-06-09
+
 ### Added
 - **feat(evolve): drain（Step 7.8）の enforcement gap を是正 — `rl-evolve --drain` + SessionStart リマインド（#402）** — accept/reject を母集団 `optimize_history` に記録する `ingest_decisions`（drain）が、決定論コードでなく `skills/evolve/SKILL.md` の指示文だけから呼ばれており、assistant が飛ばすと母集団が永久に空＝fitness が `0/30` から動かない（#360 / `learning_skill_md_must_not_enforcement` と同系統）。修正は3点: ① `evolve_decisions.drain_pending`（`rl-evolve --drain` の実体）で SKILL.md を inline python から**単一コマンド**へ集約し記録漏れの失敗面を縮小。② emit が `--dry-run` でも env 非依存の固定パス `~/.claude/rl-anything/evolve_pending/<slug>.json` に「未 drain 提案」マーカー（`before_sha` 付き）を記録（評価 store/queue とは別の運用状態、drain でクリア）。③ **SessionStart hook**（`restore_state._deliver_evolve_drain_reminder`）が `undrained_applied`（marker の before_sha と現ディスク sha を突合、`optimize_history` を読まない）で「適用済みなのに未 drain」を検出して `rl-evolve --drain` を促す。drain は **tool 文脈（CLI）**で走り reader と同一 DATA_DIR に書くため hook/tool の DATA_DIR split（#358 / `pitfall_datadir_hook_tool_split`）を踏まない。Stop hook auto-drain は apply タイミング非依存にできず env scrub も脆弱なため**不採用**（second-opinion 反映）。timing 問題は「次 SessionStart で見る」ことで構造回避。冪等性（`ingest` の `{pid}_{kind}` entry_id dedup）で「未 apply 空振り→後で apply→再 drain」でも accept は一度だけ記録される。TDD 新規19件（drain 11 / SessionStart リマインド 4 / 既存 +4）。全テストの実 home 汚染を conftest autouse + harness で構造的に封じた。決定論・LLM 非依存。
 
