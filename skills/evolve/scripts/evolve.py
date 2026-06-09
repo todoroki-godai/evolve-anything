@@ -1045,6 +1045,20 @@ def main() -> None:
     parser.add_argument("--skip-llm-evolve", action="store_true", help="skill_evolve の LLM 評価を全スキップ")
     parser.add_argument("--confirmed-batch", action="store_true", help="batch_guard_trigger 確認済み。件数が閾値を超えても LLM 評価を続行する")
     parser.add_argument(
+        "--drain",
+        action="store_true",
+        help=(
+            "evolve 本体を回さず、保留中の提案 accept/reject を optimize_history に drain する（#402）。"
+            "apply 後の SKILL.md Step 7.8 で `rl-evolve --drain` を1コマンド実行する。"
+            "pending は marker（emit が dry-run でも記録）か --result-json から取る。"
+        ),
+    )
+    parser.add_argument(
+        "--result-json",
+        default=None,
+        help="--drain 時の pending ソース result JSON（未指定なら marker を使う）",
+    )
+    parser.add_argument(
         "--output",
         default=None,
         help=(
@@ -1055,6 +1069,16 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # #402: drain モード — evolve 本体を回さず保留中の決定を optimize_history へ記録する。
+    # CLI(=tool 文脈)で走るため reader と同一 DATA_DIR に書く＝#358(DATA_DIR split)を踏まない。
+    if args.drain:
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from evolve_decisions import drain_pending
+
+        summary = drain_pending(project_dir=args.project_dir, result_json=args.result_json)
+        print(json.dumps(summary, ensure_ascii=False))
+        return
 
     _skip_skills = {s.strip() for s in args.skip_skills.split(",") if s.strip()} if args.skip_skills else None
 

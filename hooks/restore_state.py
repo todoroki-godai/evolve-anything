@@ -28,6 +28,13 @@ try:
 except ImportError:
     pass
 
+# evolve_decisions import (optional) — 未 drain の適用済み提案を検出（#402）
+_evolve_decisions = None
+try:
+    import evolve_decisions as _evolve_decisions
+except ImportError:
+    pass
+
 
 def _make_session_title(checkpoint: dict) -> str:
     """checkpoint から claude agents 表示用のセッションタイトルを生成する。"""
@@ -98,12 +105,40 @@ def _deliver_spec_drift() -> None:
         print(f"[rl-anything:restore_state] spec-trigger error: {e}", file=sys.stderr)
 
 
+def _deliver_evolve_drain_reminder() -> None:
+    """前回 evolve で emit した提案が apply 済みなのに未 drain なら surface する（#402）。
+
+    ingest（Step 7.8 drain）が SKILL.md prose 依存だった enforcement gap の検出層。
+    `undrained_applied` は optimize_history を読まず marker の before_sha と現ディスク sha を
+    突合するだけなので、hook 文脈でも DATA_DIR split（#358）を踏まない。timing 問題は
+    「次 SessionStart で見る」ことで構造的に回避（apply は前セッションで完了済み）。
+    apply 済みが無ければ沈黙、drain 実行で marker が消えて自然終息。
+    """
+    if _evolve_decisions is None:
+        return
+    try:
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        cwd = Path(project_dir) if project_dir else None
+        slug = _evolve_decisions.resolve_slug(cwd)
+        applied = _evolve_decisions.undrained_applied(slug)
+        if applied:
+            names = ", ".join(sorted({p.get("skill_name", "?") for p in applied}))
+            print(
+                f"[rl-anything] 未 drain の適用済み evolve 提案が {len(applied)} 件あります（{names}）。"
+                "`rl-evolve --drain` で fitness 母集団（optimize_history）に記録してください（#402）。"
+            )
+    except Exception as e:
+        print(f"[rl-anything:restore_state] evolve-drain reminder error: {e}", file=sys.stderr)
+
+
 def handle_session_start(event: dict) -> None:
     """SessionStart イベントを処理する。"""
     # Deliver pending trigger messages first
     _deliver_pending_trigger()
     # 仕様未追従マージの提案
     _deliver_spec_drift()
+    # 未 drain の適用済み evolve 提案の記録リマインド（#402）
+    _deliver_evolve_drain_reminder()
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
     checkpoint = common.find_latest_checkpoint(project_dir)

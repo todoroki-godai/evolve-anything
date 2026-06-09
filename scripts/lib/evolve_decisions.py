@@ -33,6 +33,13 @@ import optimize_history_store as _store  # noqa: E402
 DATA_DIR = _store.DATA_DIR
 QUEUE_ROOT = DATA_DIR / "evolve_decisions"
 
+# 「未 drain 提案」マーカーの root（#402）。QUEUE_ROOT は DATA_DIR(=CLAUDE_PLUGIN_DATA 派生)配下で
+# hook(env 有)/tool(env 無)で割れる（pitfall_datadir_hook_tool_split, #358）。SessionStart hook
+# (env 有) と emit/drain(tool 文脈, env 無) が**同一パスに合意する必要がある**ため、ここは env を
+# 見ず home 基準で固定する。マーカーは評価状態(optimize_history/queue)ではなく「apply→drain 待ちの
+# 提案ポインタ」という運用状態で、fitness 母集団には入らず drain で消える。
+MARKER_ROOT = Path.home() / ".claude" / "rl-anything" / "evolve_pending"
+
 # MVP 対象は discover の matched_skills（#223/Step 3 と同じスキル diff クラス）。
 # skill_evolve / remediation への拡張は均質性を崩さないため follow-up（ADR-041）。
 FITNESS_FUNC = "skill_quality"
@@ -74,6 +81,72 @@ def _write_queue(slug: str, records: List[Dict[str, Any]]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+# ─── pending marker（未 drain 提案ポインタ, #402）─────────────────────────────
+
+
+def marker_path(slug: str) -> Path:
+    return MARKER_ROOT / f"{_store._sanitize_slug(slug)}.json"
+
+
+def write_pending_marker(
+    slug: str, pending: List[Dict[str, Any]], *, result_path: Optional[str] = None
+) -> None:
+    """slug の「未 drain 提案」マーカーを上書きする（emit が dry-run でも書く）。
+
+    マーカーは store/queue とは別の運用状態。SessionStart の drain リマインドと
+    `rl-evolve --drain` の pending ソースとして使う。
+    """
+    path = marker_path(slug)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"slug": slug, "pending": pending, "result_path": result_path}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def read_pending_marker(slug: str) -> Optional[Dict[str, Any]]:
+    path = marker_path(slug)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def clear_pending_marker(slug: str) -> bool:
+    path = marker_path(slug)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
+def undrained_applied(slug: str) -> List[Dict[str, Any]]:
+    """marker の pending のうち、現在のディスク sha が before_sha と異なる（=apply 済）entry を返す。
+
+    SessionStart リマインドの signal。**optimize_history を読まない**ので hook 文脈でも
+    DATA_DIR split（#358）を踏まない。マーカー無し / 未 apply なら []（沈黙＝silence!=evaluated を
+    満たしつつ、適用済みのものだけ surface する）。
+    """
+    marker = read_pending_marker(slug)
+    if not marker:
+        return []
+    out: List[Dict[str, Any]] = []
+    for p in marker.get("pending", []) or []:
+        sp = p.get("skill_path")
+        before = p.get("before_sha")
+        if not sp or not before:
+            continue
+        try:
+            current = _sha256(Path(sp).read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if current != before:
+            out.append(p)
+    return out
 
 
 # ─── helpers ───────────────────────────────────────────────────────────────
@@ -191,6 +264,16 @@ def emit_decisions(
         _write_queue(slug, pending)  # 現在 run の pending で上書き
         persisted = True
 
+    # #402: drain 検出用の運用マーカー（dry-run でも書く。store/queue とは別状態）。
+    # 候補ゼロなら古いマーカーを消す（drain 待ちが無いので沈黙させる）。
+    try:
+        if pending:
+            write_pending_marker(slug, pending)
+        else:
+            clear_pending_marker(slug)
+    except OSError:
+        pass
+
     return {"pending": pending, "count": len(pending), "persisted": persisted, "slug": slug}
 
 
@@ -274,3 +357,47 @@ def ingest_decisions(
         _write_queue(slug, remaining)
 
     return {"accepted": accepted, "rejected": rejected_out, "skipped": skipped}
+
+
+# ─── drain（`rl-evolve --drain` の実体, #402）────────────────────────────────
+
+
+def drain_pending(
+    *,
+    slug: Optional[str] = None,
+    project_dir: Optional[str] = None,
+    result_json: Optional[str] = None,
+    rejected: Optional[Dict[str, str]] = None,
+    history_file: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`rl-evolve --drain` の実体（#402）。pending を marker か result-json から取り、
+    apply 後のディスク差分から accept を ingest し、marker をクリアする。
+
+    enforcement gap（ingest が SKILL.md prose 依存）を、SKILL.md が inline python でなく
+    **単一コマンド `rl-evolve --drain` を呼ぶだけ**にして縮める。drain は CLI＝**tool 文脈**で
+    走るため optimize_history を reader と同一 DATA_DIR に書く＝#358（DATA_DIR split）を踏まない。
+
+    冪等: ingest が `{pid}_{kind}` entry_id で dedup するので、未 apply で空振り→後で apply→再 drain
+    でも accept は一度だけ記録される（apply タイミング非依存）。
+
+    Args:
+        slug: 未指定なら project_dir/cwd から worktree 安全に解決。
+        result_json: 指定時はこの result JSON の `evolve_decisions.pending` を使う（marker より優先）。
+        rejected: {pending_id: reason} の明示却下。
+        history_file: テスト用の store 上書き。
+    """
+    if slug is None:
+        slug = resolve_slug(Path(project_dir) if project_dir else None)
+
+    if result_json:
+        data = json.loads(Path(result_json).read_text(encoding="utf-8"))
+        pending = (data.get("evolve_decisions") or {}).get("pending") or []
+    else:
+        marker = read_pending_marker(slug)
+        pending = (marker.get("pending") if marker else None) or []
+
+    summary = ingest_decisions(
+        slug, pending=pending, dry_run=False, rejected=rejected, history_file=history_file
+    )
+    clear_pending_marker(slug)
+    return summary

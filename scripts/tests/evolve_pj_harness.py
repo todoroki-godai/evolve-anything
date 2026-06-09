@@ -109,6 +109,8 @@ def build_evolve_test_pj(
 
     monkeypatch.setattr(ohs, "HISTORY_ROOT", data_dir / "optimize_history")
     monkeypatch.setattr(ed, "QUEUE_ROOT", data_dir / "evolve_decisions")
+    # #402: emit が書く pending marker（env 非依存の実 home 固定）も隔離する。
+    monkeypatch.setattr(ed, "MARKER_ROOT", data_dir / "evolve_pending")
 
     return EvolveTestPJ(root=root, data_dir=data_dir, slug=slug, skills=skill_paths)
 
