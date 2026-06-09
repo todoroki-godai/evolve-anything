@@ -61,21 +61,27 @@ def handle_user_prompt_submit(event: dict) -> None:
         return
 
     # ユーザーの発話テキストを取得
+    # CC の UserPromptSubmit 実イベントは発話を top-level "prompt"（str）で渡す。
+    # "message" 形（str / dict）は旧形式・テスト互換のためフォールバックとして残す。
     message = ""
-    raw_content = event.get("message", {})
-    if isinstance(raw_content, str):
-        message = raw_content
-    elif isinstance(raw_content, dict):
-        content = raw_content.get("content", "")
-        if isinstance(content, str):
-            message = content
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text = block.get("text", "")
-                    if text.strip():
-                        message = text
-                        break
+    raw_prompt = event.get("prompt", "")
+    if isinstance(raw_prompt, str) and raw_prompt.strip():
+        message = raw_prompt
+    else:
+        raw_content = event.get("message", {})
+        if isinstance(raw_content, str):
+            message = raw_content
+        elif isinstance(raw_content, dict):
+            content = raw_content.get("content", "")
+            if isinstance(content, str):
+                message = content
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if text.strip():
+                            message = text
+                            break
 
     if not message.strip():
         return

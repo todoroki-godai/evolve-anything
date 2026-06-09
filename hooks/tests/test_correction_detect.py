@@ -320,6 +320,41 @@ class TestCorrectionDetectHook:
         assert record["session_id"] == "sess-cd-001"
         assert record["last_skill"] is None
 
+    def test_real_cc_payload_prompt_field(self, patch_data_dir):
+        """CC の実 UserPromptSubmit イベントは発話を top-level `prompt` で渡す。
+
+        既存テストが全て合成の `message` 形だったため、実ペイロードでは
+        検出ゼロ（corrections.jsonl 新規記録が 3 週間停止）になっていた回帰を封じる。
+        """
+        event = {
+            "session_id": "sess-cd-prompt",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/tmp",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "いや、そうじゃなくて skill-evolve を使って",
+        }
+        correction_detect.handle_user_prompt_submit(event)
+
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        assert corrections_file.exists()
+        record = json.loads(corrections_file.read_text().strip())
+        assert record["correction_type"] == "iya"
+        assert record["session_id"] == "sess-cd-prompt"
+
+    def test_prompt_field_takes_precedence_over_empty_message(self, patch_data_dir):
+        """prompt と message が両方ある場合も prompt 優先で検出する。"""
+        event = {
+            "session_id": "sess-cd-prompt2",
+            "prompt": "違う、Bでやってって言ったよね",
+            "message": {},
+        }
+        correction_detect.handle_user_prompt_submit(event)
+
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        assert corrections_file.exists()
+        record = json.loads(corrections_file.read_text().strip())
+        assert record["correction_type"] == "chigau"
+
     def test_english_correction_detected(self, patch_data_dir):
         event = {
             "session_id": "sess-cd-002",

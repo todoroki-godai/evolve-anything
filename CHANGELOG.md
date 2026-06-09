@@ -10,6 +10,7 @@
 
 ### Fixed
 - **fix(evolve): constitutional の None を「LLM 評価に失敗しました」と誤表示する文言を撤去（#408-D）** — constitutional は [ADR-037] で LLM を全廃し「cache 済みレイヤーのみ集約、全 miss なら `None`」という LLM-free 設計。`None` の正体は「cache が stale / 全 miss で再採点が必要」なのに、レポート本文が ADR-037 全廃前の残骸文言「LLM 評価に失敗しました」を出し、しかも `warnings[]` にも `observability` にも乗らず（silence != evaluated 違反）取り違えを招いていた。`audit/sections.py` の文言を「未算出: cache stale/全 miss（失敗ではない）→ audit Step 3.5 の2相 refresh で再生成」に修正。さらに evolve.py に `_surface_constitutional_status`（cache-only 再集約・LLM 非依存・安価）を新設し、`None`/`overall=None` のとき状態を `warnings[]` と `observability["constitutional"]` に昇格。TDD 新規。決定論・LLM 非依存。
+- **fix(hooks): correction_detect が CC 実ペイロードの `prompt` フィールドを読まず、UserPromptSubmit 起点の修正検出が初期実装から一度も発火していなかった（#409）** — CC の UserPromptSubmit イベントは発話を top-level `prompt`（str）で渡すが、`hooks/correction_detect.py` は `event["message"]`（str/dict 形）しか読まなかった。初期実装（328eddb6）から一貫してこの形だったため、**実環境ではユーザー発話の修正パターン（「いや、そうじゃなくて」等）が誕生以来一度も corrections.jsonl に記録されておらず**、既存レコードは save_state（Stop hook feedback）由来のみだった。既存テスト 76 件が全て合成の `message` 形だったため緑のまま機能不全（`learning_synthetic_fixture_false_confidence` の実例）。corrections を上流とする reflect / auto-memory / optimize / constraint_decay / trigger_engine がユーザー発話シグナルを受け取れていなかった。修正は `event.get("prompt")` の優先読み + 旧 `message` 形のフォールバック温存。実ペイロード形（`{"session_id", "transcript_path", "cwd", "hook_event_name", "prompt"}`）の回帰テスト 2 件追加。実ペイロード E2E で `chigau 0.85` の検出復活を実測確認。決定論・LLM 非依存。
 
 ## [1.93.0] - 2026-06-09
 
