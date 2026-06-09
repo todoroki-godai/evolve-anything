@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.94.0] - 2026-06-10
+
 ### Added
 - **feat(data-dir): DATA_DIR hook/tool 分裂の一元化 migration（#364 Phase 2）** — #358/ADR-042 は reader 側の正準化に留まり、書き込み側の分裂（sessions.jsonl が tool 側 5/25 停止・hook 側現役と**鮮度逆転**、errors.jsonl 同様、usage.jsonl は**二重書き**）が実害として残っていた。正準 = `~/.claude/rl-anything` 固定（#402 の env 非依存固定パス前例に整合。plugin-data dir は `<marketplace>-<plugin>` 命名依存で脆い）。① **marker ゲート redirect**: `rl_common.resolve_data_dir`（新設・純関数）が CC install レイアウト（`~/.claude/plugins/data/*`）を指す CLAUDE_PLUGIN_DATA を、正準 dir の marker `.data-dir-unified` 存在時のみ正準へ向け直す。テスト isolation（tmp dir env）は無条件尊重で conftest 隔離を壊さない。`hook_store_path` も marker 存在時は正準を返す（migration 後に ADR-042 の probe が「migration 済みの空 dir」を読む逆転を防止）。② **`rl-fleet migrate-data`**（`scripts/lib/data_dir_migration.py`）: `.jsonl`=行 dedup append / `.db`=DuckDB テーブル単位 union dedup（**書込可 ATTACH で WAL replay**、per-fire connection 開閉で肥大した sessions.db の compaction を兼ねる: 実測 9.6GB・84k 行・実データ約 14MB）/ `.wal`=コピーせず削除（正準側の別 db と不整合ペアになるため）/ その他 = mtime newer-wins、`tmp`/`__pycache__` 除外。dry-run は書き込みゼロ（pitfall_dryrun_stateful_store_write）。marker は全 entry 成功時のみ書き、部分失敗は再実行で回収（冪等）。③ **実行順序の構造化**: 旧版 hook 稼働中に migrate すると分裂が即再発するため、本 fix を含む版のインストール**後**に 1 回実行する。SessionStart（`restore_state._deliver_data_dir_migration_reminder`）が CLAUDE_PLUGIN_DATA env（install レイアウト配下のときのみ＝実環境 probe をテストに漏らさない）から未解消を検出して案内し、migration で marker が立ち自然終息（install ≠ enforcement 対策、#402 drain リマインドと同型）。TDD 新規 26 件（マージ規則・E2E・dry-run 無副作用・冪等・redirect・hook_store_dir・リマインド）。実環境 dry-run で errors 31,800 行 / sessions 60,499 行 / usage 1,892 行等のマージ計画を確認済み。決定論・LLM 非依存。
 ### Added
