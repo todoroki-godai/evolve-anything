@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(skill_extractor): 軌跡スキル候補に Workflow-to-Skill の4軸構造分解を付与（#381）** — tech-eval で抽出した唯一の本質ギャップ。`skill_extractor` は成功軌跡をスキル名でグルーピングして `generalizability_score` を付けるだけで、Workflow-to-Skill (arXiv 2606.06893) が提案する `routing`/`workflow`/`semantics`/`attachments` の構造分解を持たず、候補採用時に「どこで発火・何が要るか」を人が後から調べる必要があった。新規 `scripts/lib/skill_extractor/decomposition.py` の `decompose_candidate` が TrajectoryRecord 群から4軸を**決定論的**に導く（LLM 非依存）: ① **routing**（いつ発火するか）= user_prompt の頻出 trigger_keywords + 代表プロンプト ② **workflow**（どう実行されるか、手順は軌跡に残らないため実行プロファイルで近似）= 呼び出し回数 + outcome 分布 ③ **semantics**（何をするか）= namespace/base_name ④ **attachments**（どの文脈に anchor されているか ≒ 必要リソースの広がり）= distinct session 数、単一セッション由来なら `session_bound=True`（一過性バーストで reuse 証拠が弱い）。`projects` は cross-project 直接 API 用に残置（実 discover の採掘は単一 PJ scope のため projects は弁別せず、`session_count` が wired path でも定着度を弁別する — レビューで死に信号だった旧 `project_bound` を作り直した）。`extract_skill_candidates` の各候補に `decomposition` を付与し、discover runner の `_trajectory_candidates_to_missed` が採用判断に効く2軸（routing/attachments）を merged にも持ち上げて triage/report で surface。配線先は `run_discover`→`skill_extractor`（evolve が回す recurring ループ）で手動 CLI 止まりにしない。`discover/SKILL.md` Step 2 に「候補テーブルに routing/attachments 列を必ず出す」を明記。tokenize/stopword は `agent_team` と同規則を流用。TDD（4軸の存在・空入力骨格維持・routing キーワード抽出/上限・workflow outcome 分布・semantics namespace 分離・attachments session_bound/session_count/cross-project projects・extract 統合、新規14件）。全 4180 テスト緑。決定論・LLM 非依存。
+
 ## [1.90.1] - 2026-06-08
 
 ### Fixed

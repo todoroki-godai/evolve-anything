@@ -24,6 +24,7 @@ from skill_extractor.effectiveness import (
     compute_effectiveness,
     effectiveness_multiplier,
 )
+from skill_extractor.decomposition import decompose_candidate
 
 # ── 定数 ──────────────────────────────────────────────────
 
@@ -81,6 +82,10 @@ def extract_skill_candidates(
         success_rate = _compute_success_rate(skill_records)
         sample_prompts = _collect_sample_prompts(skill_records, max_samples=3)
         effectiveness = round(compute_effectiveness(skill_records), 4)
+        # Workflow-to-Skill (arXiv 2606.06893) の4軸構造分解。候補に
+        # routing(発火文脈) / workflow(実行プロファイル) / semantics(何をするか) /
+        # attachments(依存PJ資源) を付け、採用判断（どこで発火・何が要るか）を速める。
+        decomposition = decompose_candidate(skill_records)
 
         candidates.append(
             {
@@ -91,6 +96,7 @@ def extract_skill_candidates(
                 "effectiveness": effectiveness,
                 "source": "codeskill_extraction",
                 "sample_prompts": sample_prompts,
+                "decomposition": decomposition,
             }
         )
 

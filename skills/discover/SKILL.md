@@ -36,7 +36,7 @@ rl-discover [--session-scan]
 
 - **行動パターン** (5+回): スキル候補として提案（usage.jsonl ベース）
 - **セッションテキストパターン** (5+回): スキル候補として提案（`--session-scan` 時のみ、セッション JSONL ベース）
-- **成功軌跡から採掘したスキル候補** (SIRI ①): `trajectory_skill_candidates` に N 件 surface（`skill_extractor` がセッション履歴の成功軌跡を採掘、`generalizability_score >= TRAJECTORY_SKILL_SCORE_THRESHOLD` でフィルタ）。triage の `missed_skill_opportunities` 形式へ変換され CREATE/UPDATE 判定に合流する
+- **成功軌跡から採掘したスキル候補** (SIRI ①): `trajectory_skill_candidates` に N 件 surface（`skill_extractor` がセッション履歴の成功軌跡を採掘、`generalizability_score >= TRAJECTORY_SKILL_SCORE_THRESHOLD` でフィルタ）。triage の `missed_skill_opportunities` 形式へ変換され CREATE/UPDATE 判定に合流する。各候補は Workflow-to-Skill (arXiv 2606.06893) の4軸分解 `decomposition`（routing=発火文脈 / workflow=実行プロファイル / semantics=何をするか / attachments=anchor の広がり）を持つ（#381）。**候補テーブルには `score` に加え `routing`（trigger_keywords）と `attachments`（session_count / session_bound）の列を必ず出す** — 「どこで発火・どれだけ定着しているか」を採用判断の前に見せる。`session_bound=true`（単一セッション由来の一過性バースト）は reuse 証拠が弱く CREATE 根拠が薄いシグナルとして注記する（discover の採掘は単一 PJ scope なので projects 自体は弁別せず、session_count が定着度の指標）
 - **エラーパターン** (3+回): ルール候補（予防策）として提案
 - **却下理由パターン** (3+回): ルール候補（品質基準）として提案
 

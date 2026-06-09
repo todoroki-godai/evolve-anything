@@ -87,7 +87,8 @@ def _trajectory_candidates_to_missed(
 
     Args:
         candidates: ``extract_skill_candidates`` の戻り値（skill_name / session_count /
-            generalizability_score / sample_prompts / source を持つ dict のリスト）。
+            generalizability_score / sample_prompts / source / decomposition を持つ
+            dict のリスト）。decomposition は Workflow-to-Skill の4軸分解（#381）。
         threshold: generalizability_score の下限（未満は除外）。
         existing_skills: 既に missed_skill_opportunities にある skill 名の集合。
             重複する候補は merge から除外する（surface には残す）。
@@ -96,8 +97,9 @@ def _trajectory_candidates_to_missed(
             （既存スキルへの CREATE 提案は無意味なため）。
 
     Returns:
-        ``(surfaced, merged)``。surfaced は閾値を満たした新規候補、merged は triage が
-        消費する ``{"skill", "session_count", "triggers_matched", ...}`` 形式のリスト。
+        ``(surfaced, merged)``。surfaced は閾値を満たした新規候補（decomposition 全4軸を
+        保持）、merged は triage が消費する ``{"skill", "session_count",
+        "triggers_matched", "routing", "attachments", ...}`` 形式のリスト。
     """
     existing = set(existing_skills)
     known = set(known_skills)
@@ -113,12 +115,19 @@ def _trajectory_candidates_to_missed(
         surfaced.append(c)
         if name in existing:
             continue
+        # Workflow-to-Skill の4軸分解から、採用判断に効く 2 軸（routing=発火文脈 /
+        # attachments=anchor の広がり）を merged にも持ち上げ、triage/report で surface
+        # する（#381）。候補テーブルに「どこで発火・どれだけ定着しているか」が出る
+        # ようにする（attachments.session_count が単一 PJ scope でも定着度を弁別する）。
+        decomposition = c.get("decomposition") or {}
         merged.append({
             "skill": name,
             "session_count": c.get("session_count", 0),
             "triggers_matched": c.get("sample_prompts", []),
             "source": c.get("source", "codeskill_extraction"),
             "generalizability_score": c.get("generalizability_score", 0.0),
+            "routing": decomposition.get("routing", {}),
+            "attachments": decomposition.get("attachments", {}),
         })
     return surfaced, merged
 
