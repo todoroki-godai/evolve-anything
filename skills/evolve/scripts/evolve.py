@@ -245,7 +245,21 @@ def check_data_sufficiency() -> Dict[str, Any]:
     telemetry_empty = total_observations == 0 and sessions == 0
     backfill_recommended = telemetry_empty
 
-    if sufficient:
+    # 前回 evolve 以降の新規観測がゼロ（過去データはある）= フルパイプラインを
+    # 回しても結局すべて keep/評価のみの no-op になりやすい状態（#396）。
+    # backfill 推奨（テレメトリ空）とは別物。SKILL.md はこのフラグを見て
+    # 「軽量モード（observability surface のみで重い LLM フェーズ/batch_guard を
+    # スキップ提案）」をユーザーに提示する。べき等性は保ちつつ操作コストを下げる。
+    no_new_observations = (
+        sessions == 0 and observations == 0 and total_observations > 0
+    )
+
+    if sufficient and no_new_observations:
+        msg = (
+            f"前回 evolve 以降の新規観測なし（0 セッション / 0 新規観測, 全{total_observations}）。"
+            "過去データは十分ですが、フル実行は no-op になりやすいため軽量モードを検討してください。"
+        )
+    elif sufficient:
         msg = f"{sessions} セッション, {observations} 新規観測 (全{total_observations}) — データ十分"
     elif telemetry_empty:
         msg = (
@@ -262,6 +276,7 @@ def check_data_sufficiency() -> Dict[str, Any]:
         "sufficient": sufficient,
         "telemetry_empty": telemetry_empty,
         "backfill_recommended": backfill_recommended,
+        "no_new_observations": no_new_observations,
         "message": msg,
     }
 
@@ -365,6 +380,11 @@ def run_evolve(
             # スキップ推奨だがユーザー選択に委ねる
             result["phases"]["observe"]["action"] = "skip_recommended"
         _warn_insufficient_data(sufficiency)
+    elif sufficiency.get("no_new_observations"):
+        # データは十分だが前回 evolve 以降の新規観測がゼロ（#396）。フル実行は
+        # no-op になりやすいので軽量モードを提案する（SKILL.md が surface）。
+        # 自動スキップはしない — べき等性は保ちつつユーザーに選択させる。
+        result["phases"]["observe"]["action"] = "lightweight_recommended"
 
     # Phase 1.5: Fitness 関数チェック
     fitness_check = check_fitness_function(project_dir)

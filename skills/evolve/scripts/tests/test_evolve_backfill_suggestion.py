@@ -60,3 +60,36 @@ class TestBackfillSuggestion:
         assert result["sufficient"] is True
         assert result["telemetry_empty"] is False
         assert result["backfill_recommended"] is False
+
+    def test_no_new_observations_flags_lightweight(self, tmp_path):
+        """過去データ十分だが新規観測 0 → no_new_observations=True で軽量モード誘導（#396）。"""
+        import evolve
+        usage_file = tmp_path / "usage.jsonl"
+        lines = [
+            f'{{"timestamp": "2026-01-01T00:00:0{i}Z", "session_id": "s{i}"}}'
+            for i in range(25)
+        ]
+        usage_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with mock.patch.object(evolve, "DATA_DIR", tmp_path), \
+             mock.patch.object(evolve, "count_new_sessions", return_value=0), \
+             mock.patch.object(evolve, "count_new_observations", return_value=0):
+            result = evolve.check_data_sufficiency()
+        assert result["sufficient"] is True  # total>=20 でべき等性は保つ
+        assert result["no_new_observations"] is True
+        assert result["telemetry_empty"] is False  # 空ではない（過去データあり）
+        assert "軽量モード" in result["message"]
+
+    def test_new_observations_not_lightweight(self, tmp_path):
+        """新規観測があれば no_new_observations=False（回帰ガード）。"""
+        import evolve
+        usage_file = tmp_path / "usage.jsonl"
+        lines = [
+            f'{{"timestamp": "2026-01-01T00:00:0{i}Z", "session_id": "s{i}"}}'
+            for i in range(25)
+        ]
+        usage_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with mock.patch.object(evolve, "DATA_DIR", tmp_path), \
+             mock.patch.object(evolve, "count_new_sessions", return_value=2), \
+             mock.patch.object(evolve, "count_new_observations", return_value=8):
+            result = evolve.check_data_sufficiency()
+        assert result["no_new_observations"] is False

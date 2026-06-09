@@ -102,6 +102,21 @@ def test_discover_skips_noise_dirs(tmp_path):
     assert found == ["docs/pitfalls.md"]
 
 
+def test_discover_skips_worktree_copies(tmp_path):
+    # .claude/worktrees/<name>/... は git worktree の一時コピー。本体スキルの
+    # pitfalls.md と同一内容のコピーを未登録候補として拾わない（#393）。
+    wt = tmp_path / ".claude" / "worktrees" / "issue-x" / ".claude" / "skills" / "foo" / "references"
+    wt.mkdir(parents=True)
+    (wt / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    real = tmp_path / ".claude" / "skills" / "foo" / "references"
+    real.mkdir(parents=True)
+    (real / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
+    found = reg.discover_pitfalls(tmp_path)
+    assert found == [".claude/skills/foo/references/pitfalls.md"]
+    # unmanaged_candidates も worktree コピーを未登録扱いしない
+    assert reg.unmanaged_candidates(tmp_path) == [".claude/skills/foo/references/pitfalls.md"]
+
+
 def test_discover_empty_when_none(tmp_path):
     assert reg.discover_pitfalls(tmp_path) == []
 

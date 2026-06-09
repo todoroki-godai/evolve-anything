@@ -215,6 +215,17 @@ def skill_evolve_assessment(
             "groups": _groups,
             "total_effective": n_effective,
             "already_denied": _already_denied,
+            # #394: `--confirmed-batch` 再実行そのものは LLM-free（ADR-037 で
+            # compute_llm_scores は cache-read + 静的フォールバック）。groups の
+            # estimated_tokens / estimated_tokens_cache_aware は「Phase B judgment
+            # refresh を LLM で回した場合の繰り延べコスト見積もり」であって、再実行の
+            # 課金ではない。cache_fresh=0 だと cache_aware==worst-case になり「≈0」の
+            # 根拠に使えないため、再実行が課金ゼロであることはこのフラグで明示する。
+            "rerun_llm_free": True,
+            "estimate_meaning": (
+                "estimated_tokens* は Phase B judgment refresh を LLM で回した場合の"
+                "繰り延べコスト見積もり。`--confirmed-batch` 再実行自体は LLM-free（課金ゼロ）。"
+            ),
         }]
 
     results: List[Dict[str, Any]] = []

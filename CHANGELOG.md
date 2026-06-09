@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(evolve): observability の誤検知2件を是正（cross_skill の `[category]` 未展開 / unmanaged_pitfalls が worktree を拾う）（#393）** — docs-platform の evolve dry-run で observability に2件の検出ノイズが出た。① pitfalls.md の Root-cause がテンプレ未展開（`[category]`）のまま記録されると `cross_skill_analysis` のキーが `[category]` になり「何のカテゴリで横断しているか」が読めず共通ルール化判断ができなかった → `pitfall_manager/runner.py` の横断集計で角括弧プレースホルダ（`_is_placeholder_category`）を除外。② `pitfall_registry._DISCOVERY_IGNORE` に `worktrees` を追加し、`.claude/worktrees/<name>/...` の一時作業コピー（本体スキルの pitfalls.md と同一内容）を `unmanaged_candidates` が「未登録」と誤検知しないようにした。TDD 新規4件。決定論・LLM 非依存。
+- **fix(hook_drift): 検出元パス（evidence）を併記し独自検証の誤判断を防ぐ（#394-1）** — `hook_drift` が「実環境は 1.57.0.0」とだけ出し根拠（どのファイル由来か）が無いため、検証で `gstack --version` の PATH フォールバックが flow-chain.json を読み戻して逆の結論を出しかけた。`HookDriftReport` に `pinned_source`/`actual_source` を追加し、`sections_hook` の警告に「pinned の出元: ~/.gstack/flow-chain.json」「実環境の出元: ~/.gstack/.last-setup-version」を併記。TDD 新規3件。決定論・LLM 非依存。
+
+### Changed
+- **feat(skill_evolve): batch_guard の再実行が LLM-free であることを機械可読フラグで明示（#394-2）** — `estimated_tokens_cache_aware` は `cache_fresh_count==0` のとき worst-case と同値になり「≈0」の根拠に使えない。実際に再実行が課金ゼロなのは `--confirmed-batch` 再実行自体が LLM-free（ADR-037）だからで、`estimated_tokens*` は Phase B judgment refresh の繰り延べコスト見積もりに過ぎない。batch_guard_trigger sentinel に `rerun_llm_free: true` と `estimate_meaning` を追加し、フィールドの意味と再実行ゼロの根拠を分離。SKILL.md / skill-evolve-assessment.md も追従。TDD 新規1件。
+- **docs(evolve): SKILL/reference の乖離2件を是正（evolve.py 直叩き→rl-evolve ラッパー / skill_evolve 出力の正準明示）（#395）** — ① batch_guard 再実行手順の `python3 evolve.py ...` を、インストール時に PATH に入る `rl-evolve --confirmed-batch ...` ラッパーに統一（実パスの glob 探索が空振りしていた）。② `high_suitability` 等は**件数(int)**で `assessments[]` が正準の詳細配列（フィールド名は `skill` でなく `skill_name`）であることを SKILL.md / reference に明示（`high_suitability[].skill` の配列展開で空振りする事故を防止、#379 の機械可読化と整合）。
+- **feat(evolve): 新規観測0でのフル評価 no-op に軽量モードを提案 + fitness 鶏卵問題を正直に説明（#396）** — ① `check_data_sufficiency` に `no_new_observations`（過去データ十分だが前回 evolve 以降の新規観測0）を追加し、observe phase の action を `lightweight_recommended` に。SKILL.md Step 1 が「observability surface のみ確認して重い LLM フェーズ/batch_guard をスキップ」する軽量モードを AskUserQuestion で提案（べき等性は保ちつつ操作コスト削減）。② `fitness_evolution` の insufficient_data メッセージを正直化 — `already_evolved` 飽和（high/medium=0）かつ `matched_skills=0` の PJ では提案自体が構造的に出ず evolve を回しても 0/N のまま（「evolve を回せば貯まる」が空手形）であることと、その PJ では remediation 中心が正常で無理に母集団を貯める必要がないことを明示。TDD 新規3件。決定論・LLM 非依存。
+
 ## [1.92.0] - 2026-06-09
 
 ### Added

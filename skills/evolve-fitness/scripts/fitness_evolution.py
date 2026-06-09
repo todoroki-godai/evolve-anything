@@ -360,6 +360,12 @@ def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dic
                 "accept/reject（採点付き記録）も含む（ADR-041）。"
                 " ※ 採点対象外なのは remediation の fix（rules/hook・構造修正等）で、"
                 "これらが中心のスキル中心 PJ では母集団が貯まりにくい場合があります。"
+                " 重要: 母集団は『提案が出て初めて』accept/reject が発生して積み上がる。"
+                "skill_evolve が already_evolved 飽和（high/medium=0）かつ discover の "
+                "matched_skills=0 の PJ では提案自体が構造的に出ないため、evolve を何回回しても "
+                "0/N のまま貯まらない（『evolve を回せば貯まる』はこの構造では空手形）。"
+                "その場合は remediation 中心の運用が正常であり、無理に母集団を貯める必要はない"
+                "（fitness calibration は提案が出る PJ で機能する設計）。"
             ),
         }
 

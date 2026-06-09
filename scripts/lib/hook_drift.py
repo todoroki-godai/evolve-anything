@@ -47,10 +47,14 @@ def _default_gstack_dir() -> Path:
 class HookDriftReport:
     """stale_pin 検出結果。
 
-    applicable: gstack 追従 hook の検査対象がこの環境に存在するか
-                （.gstack と flow-chain.json の双方がある）。
-    stale_pin:  pinned と actual が読めて、かつ不一致。
-    minor_gap:  semantic version の MINOR 桁の差（解析できた場合のみ、絶対値）。
+    applicable:    gstack 追従 hook の検査対象がこの環境に存在するか
+                   （.gstack と flow-chain.json の双方がある）。
+    stale_pin:     pinned と actual が読めて、かつ不一致。
+    minor_gap:     semantic version の MINOR 桁の差（解析できた場合のみ、絶対値）。
+    pinned_source: pinned_version をどのファイルから読んだか（evidence, #394）。
+    actual_source: actual_version をどのファイルから読んだか（evidence, #394）。
+                   assistant/ユーザーが独自検証する際、誤った fallback（flow-chain.json を
+                   読み戻す等）を避けるため検出元パスを明示する。
     """
 
     applicable: bool = False
@@ -58,6 +62,8 @@ class HookDriftReport:
     actual_version: Optional[str] = None
     stale_pin: bool = False
     minor_gap: int = 0
+    pinned_source: Optional[str] = None
+    actual_source: Optional[str] = None
 
 
 def _parse_version(text: str) -> Optional[Tuple[int, ...]]:
@@ -109,7 +115,13 @@ def check_hook_drift(gstack_dir: Optional[Path] = None) -> HookDriftReport:
 
     actual = read_actual_gstack_version(gdir)
     report = HookDriftReport(
-        applicable=True, pinned_version=pinned, actual_version=actual
+        applicable=True,
+        pinned_version=pinned,
+        actual_version=actual,
+        # evidence（#394）: どのファイルから読んだかを明示する。actual は
+        # `.last-setup-version` 由来であって `gstack --version` の PATH 解決ではない。
+        pinned_source=str(gdir / _FLOW_CHAIN),
+        actual_source=str(gdir / _SETUP_VERSION) if actual is not None else None,
     )
     if actual is None:
         return report  # 実 version 不明 → 判定不能（stale 断定しない）

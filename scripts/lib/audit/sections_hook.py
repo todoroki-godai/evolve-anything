@@ -34,12 +34,14 @@ def build_hook_drift_section(project_dir: Path) -> Optional[List[str]]:
         return None  # gstack 未導入環境 → 沈黙
 
     header = ["## Hook Drift (gstack flow 追従)", ""]
+    pinned_src = report.pinned_source or "~/.gstack/flow-chain.json"
+    actual_src = report.actual_source or "~/.gstack/.last-setup-version"
     if not report.stale_pin:
         if report.actual_version is None:
             # flow-chain はあるが実 version が読めない（判定不能）。評価した痕跡は残す。
             return header + [
                 f"ℹ flow-chain.json は gstack {report.pinned_version} 想定。"
-                " 実環境 version（.last-setup-version）が読めず追従判定は保留。",
+                f" 実環境 version（{actual_src}）が読めず追従判定は保留。",
                 "",
             ]
         return header + [
@@ -57,5 +59,9 @@ def build_hook_drift_section(project_dir: Path) -> Optional[List[str]]:
         f"{gap}。flow-chain.json は手動メンテされる SoT（gstack は生成しない、#319）。"
         f"`gstack_version` を実環境 {report.actual_version} に手で更新し、"
         "フローチェーンが最新スキル構成を反映しているか併せて見直しを推奨。",
+        # evidence（#394）: 検出元パスを併記。独自検証で `gstack --version` の PATH
+        # フォールバックが flow-chain.json を読み戻す誤判定を避けられる。
+        f"  ・pinned ({report.pinned_version}) の出元: {pinned_src}",
+        f"  ・実環境 ({report.actual_version}) の出元: {actual_src}",
         "",
     ]

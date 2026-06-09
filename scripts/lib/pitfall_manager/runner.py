@@ -25,6 +25,18 @@ from .rationalization import generate_rationalization_table
 PREFLIGHT_MATURITY_RATIO = 0.50
 SCRIPTIFIABLE_CATEGORIES = frozenset({"action", "tool_use", "output"})
 
+
+def _is_placeholder_category(category: str) -> bool:
+    """Root-cause が `[category]` 等のテンプレ未展開 placeholder か判定する（#393）。
+
+    pitfalls.md のテンプレートをコピーしたまま category を埋めずに残すと、
+    `[category]` のような角括弧プレースホルダが実カテゴリとして集計され、
+    cross_skill_analysis のキーが読めなくなる。角括弧で囲まれた値は
+    実カテゴリではないので集計対象から外す。決定論・LLM 非依存。
+    """
+    c = category.strip()
+    return c.startswith("[") and c.endswith("]")
+
 # `<repo>/scripts/lib/pitfall_manager/runner.py` → `<repo>/scripts`
 _plugin_root = Path(__file__).resolve().parent.parent.parent
 
@@ -211,6 +223,12 @@ def pitfall_hygiene(
             cause = item["fields"].get("Root-cause", "")
             category = cause.split("—")[0].strip() if "—" in cause else cause.split("-")[0].strip()
             category = category.lower().strip()
+            # テンプレ未展開の placeholder（`[category]` 等の角括弧プレースホルダ）は
+            # 実カテゴリではないので集計から除外する（#393）。空文字は元から除外。
+            # これを残すと cross_skill_analysis のキーが `[category]` のまま出て、
+            # 「何のカテゴリで横断しているか」が読めず共通ルール化の判断ができない。
+            if _is_placeholder_category(category):
+                continue
             if category:
                 if category not in all_root_causes:
                     all_root_causes[category] = []

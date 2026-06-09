@@ -16,9 +16,13 @@ from typing import List, Union
 _REGISTRY_REL = ".claude/rl-anything/pitfall-managed.json"
 
 # 探索時に降りない重いディレクトリ。pitfalls.md がここに紛れても監視対象ではない。
+# worktrees: `.claude/worktrees/<name>/...` は一時的な作業コピー（git worktree）であり、
+# 本体スキルの pitfalls.md と同一内容のコピーを「未登録」と誤検知する源（#393）。
+# 恒久管理対象は本体のみなので探索から除外する。
 _DISCOVERY_IGNORE = {
     ".git", "node_modules", "dist", "build", "target",
     ".venv", "venv", "__pycache__", ".next", ".cache",
+    "worktrees",
 }
 
 PathLike = Union[str, Path]

@@ -261,6 +261,47 @@ def test_hygiene_cap_exceeded(tmp_path):
     assert result["cap_exceeded"][0]["active_count"] == 11
 
 
+def _make_skill_with_root_cause(base, name, root_cause):
+    skill_dir = base / ".claude" / "skills" / name
+    refs = skill_dir / "references"
+    refs.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "# T\n\n## Failure-triggered Learning\n\ncontent\n", encoding="utf-8"
+    )
+    (refs / "pitfalls.md").write_text(
+        "# Pitfalls\n\n## Active Pitfalls\n\n"
+        "### Issue\n"
+        "- **Status**: Active\n"
+        "- **Last-seen**: 2026-03-10\n"
+        f"- **Root-cause**: {root_cause}\n"
+        "- **Pre-flight対応**: No\n"
+        "- **Avoidance-count**: 0\n\n"
+        "## Candidate Pitfalls\n\n## Graduated Pitfalls\n",
+        encoding="utf-8",
+    )
+
+
+def test_cross_skill_excludes_placeholder_category(tmp_path):
+    # テンプレ未展開の `[category]` を持つ 3 スキルがあっても、placeholder は
+    # 実カテゴリではないので cross_skill_analysis のキーに出さない（#393）。
+    for n in ("a", "b", "c"):
+        _make_skill_with_root_cause(tmp_path, n, "[category]")
+    result = pitfall_hygiene(tmp_path)
+    cross = result["cross_skill_analysis"]
+    assert "[category]" not in cross
+    assert cross == {"status": "問題なし"}
+
+
+def test_cross_skill_keeps_real_category(tmp_path):
+    # 実カテゴリ "action" が 3 スキルで横断していれば検出する（回帰ガード）。
+    for n in ("a", "b", "c"):
+        _make_skill_with_root_cause(tmp_path, n, "action — 個別の事象")
+    result = pitfall_hygiene(tmp_path)
+    cross = result["cross_skill_analysis"]
+    assert "action" in cross
+    assert sorted(cross["action"]) == ["a", "b", "c"]
+
+
 # --- Root-cause キーワード抽出 ---
 
 

@@ -85,6 +85,22 @@ def test_unparseable_version_falls_back_to_string_compare(tmp_path: Path) -> Non
     assert report.minor_gap == 0
 
 
+def test_report_carries_evidence_source_paths(tmp_path: Path) -> None:
+    """検出元パス（evidence）を report に持つ（#394）。独自検証で迷わないため。"""
+    gdir = _make_gstack(tmp_path, pinned="1.47.0.0", actual="1.55.0.0")
+    report = hook_drift.check_hook_drift(gstack_dir=gdir)
+    assert report.pinned_source == str(gdir / "flow-chain.json")
+    assert report.actual_source == str(gdir / ".last-setup-version")
+
+
+def test_actual_source_none_when_actual_unreadable(tmp_path: Path) -> None:
+    """実 version が読めなければ actual_source は None（存在しないパスを出さない）。"""
+    gdir = _make_gstack(tmp_path, pinned="1.47.0.0", actual=None)
+    report = hook_drift.check_hook_drift(gstack_dir=gdir)
+    assert report.actual_source is None
+    assert report.pinned_source == str(gdir / "flow-chain.json")
+
+
 # --- build_hook_drift_section (observability builder) -----------------------
 
 def test_builder_returns_none_when_not_applicable(tmp_path: Path, monkeypatch) -> None:
@@ -116,6 +132,10 @@ def test_builder_emits_warning_on_stale_pin(tmp_path: Path, monkeypatch) -> None
     assert "⚠" in body
     assert "1.47.0.0" in body
     assert "1.55.0.0" in body
+    # evidence（#394）: 検出元パスを併記する
+    assert "flow-chain.json" in body
+    assert ".last-setup-version" in body
+    assert "出元" in body
 
 
 def test_builder_registered_in_observability_contract() -> None:

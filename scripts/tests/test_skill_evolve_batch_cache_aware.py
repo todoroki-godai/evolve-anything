@@ -162,3 +162,7 @@ class TestBatchGuardCacheAware:
         assert g["cache_fresh_count"] == 0
         assert g["refresh_needed_count"] == 11
         assert g["estimated_tokens_cache_aware"] == g["estimated_tokens"]
+        # #394: cache_fresh=0 で cache_aware が worst-case 同値でも、再実行が
+        # LLM-free であることは sentinel の rerun_llm_free フラグで明示される
+        assert sentinel["rerun_llm_free"] is True
+        assert "LLM-free" in sentinel["estimate_meaning"]

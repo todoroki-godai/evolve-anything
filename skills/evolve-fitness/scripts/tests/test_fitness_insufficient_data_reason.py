@@ -60,6 +60,20 @@ class TestInsufficientDataReasonMessage:
             f"insufficient_data のメッセージに母集団蓄積の難しさ説明がない: {msg!r}"
         )
 
+    def test_zero_data_explains_chicken_egg_honestly(self):
+        """データ 0 件 → 『提案が出ない PJ では evolve を回しても貯まらない』を正直に説明（#396）。
+
+        『evolve を回せば貯まる』が already_evolved 飽和 + matched_skills=0 の PJ では
+        空手形になることを明示し、無理に貯める必要がない旨を伝える。
+        """
+        result = fe.run_fitness_evolution(history=[])
+        assert result["status"] == "insufficient_data"
+        msg = result["message"]
+        assert "空手形" in msg, f"鶏卵問題の正直な説明がない: {msg!r}"
+        assert "already_evolved" in msg or "提案自体が" in msg, (
+            f"提案が構造的に出ない条件の説明がない: {msg!r}"
+        )
+
     def test_below_bootstrap_min_includes_explanation(self):
         """BOOTSTRAP_MIN - 1 件（= 4件）でも説明が含まれる。"""
         history = [
