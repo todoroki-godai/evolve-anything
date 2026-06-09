@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 from skill_extractor.trajectory_sampler import TrajectoryRecord
 from skill_extractor.decomposition import (
     decompose_candidate,
+    corpus_frequent_tokens,
     ROUTING_KEYWORD_LIMIT,
 )
 from skill_extractor.skill_extractor import extract_skill_candidates
@@ -84,6 +85,76 @@ class TestRouting:
         d = decompose_candidate(records)
         assert d["routing"]["sample_triggers"]
         assert all(isinstance(s, str) for s in d["routing"]["sample_triggers"])
+
+
+# ── routing: stopword 拡充（#387 — 実 PJ で if/not/md ノイズ露見）──────
+# 合成 fixture では見えず実コーパスで露見した（learning_synthetic_fixture_false_confidence）。
+# 普遍語（英語機能語・拡張子）は static stopword で、環境固有の遍在語は DF で落とす。
+
+
+class TestStopwordExpansion:
+    def test_english_function_words_excluded(self):
+        """英語機能語（if/not/is/the/then/it）は trigger に残さない。"""
+        records = [
+            _rec(user_prompt="if this is not the review then run it"),
+            _rec(user_prompt="review the diff if not broken so we can ship it"),
+        ]
+        d = decompose_candidate(records)
+        kws = d["routing"]["trigger_keywords"]
+        for noise in ("if", "not", "is", "the", "then", "it", "so", "we"):
+            assert noise not in kws, f"機能語 {noise!r} が trigger に残った: {kws}"
+        # 発火文脈を表す content word は残る
+        assert "review" in kws
+
+    def test_file_extensions_excluded(self):
+        """ファイル名由来の拡張子 token（md/py/json）は trigger に残さない。"""
+        records = [
+            _rec(user_prompt="update the spec.md and notes.md files"),
+            _rec(user_prompt="edit config.json and main.py for the spec"),
+        ]
+        d = decompose_candidate(records)
+        kws = d["routing"]["trigger_keywords"]
+        for ext in ("md", "py", "json"):
+            assert ext not in kws, f"拡張子 {ext!r} が trigger に残った: {kws}"
+        assert "spec" in kws
+
+
+# ── corpus document-frequency（環境固有の遍在語を弁別語から除外）──────
+# claude/gstack のようなツール名はどのスキルのプロンプトにも出るため弁別しない。
+# ハードコード（allowlist）はモグラ叩きなので、corpus 全体の DF で決定論に落とす。
+
+
+class TestCorpusFrequentTokens:
+    def _corpus(self):
+        # "claude" は全5スキルに出る遍在語。topic 語は各1スキルのみ。
+        return {
+            "review": ["claude review the diff", "claude check the code"],
+            "spec": ["claude update spec", "claude write the spec"],
+            "implement": ["claude implement feature", "claude build it"],
+            "audit": ["claude run audit", "claude audit env"],
+            "cleanup": ["claude cleanup branches", "claude prune worktrees"],
+        }
+
+    def test_ubiquitous_token_flagged(self):
+        freq = corpus_frequent_tokens(self._corpus(), min_skills=5, df_ratio=0.8)
+        assert "claude" in freq
+
+    def test_minority_token_not_flagged(self):
+        freq = corpus_frequent_tokens(self._corpus(), min_skills=5, df_ratio=0.8)
+        # 各スキル固有の content 語は弁別するので残す
+        for kept in ("review", "spec", "audit", "cleanup"):
+            assert kept not in freq
+
+    def test_small_corpus_returns_empty(self):
+        """min_skills 未満では DF 減衰しない（少数コーパスでの過剰除外を防ぐ）。"""
+        small = {"a": ["claude x"], "b": ["claude y"]}
+        assert corpus_frequent_tokens(small, min_skills=5, df_ratio=0.8) == set()
+
+    def test_static_stopwords_not_counted(self):
+        """static stopword（the/is 等）は DF 計算前に落ちるので freq に出ない。"""
+        freq = corpus_frequent_tokens(self._corpus(), min_skills=5, df_ratio=0.8)
+        assert "the" not in freq
+        assert "is" not in freq
 
 
 # ── workflow: 実行プロファイル（手順は軌跡に残らないので近似）──────
@@ -196,3 +267,33 @@ class TestCandidateIntegration:
             assert set(c["decomposition"].keys()) == {
                 "routing", "workflow", "semantics", "attachments",
             }
+
+    def test_corpus_frequent_token_removed_across_candidates(
+        self, tmp_path, monkeypatch
+    ):
+        """全候補に共通して出る遍在語は本流経路でも trigger から外れ、
+        各スキル固有語は残る（#387 受け入れ条件の合成版）。"""
+        skills = ["s-a", "s-b", "s-c", "s-d", "s-e"]
+        topics = {
+            "s-a": "alpha", "s-b": "beta", "s-c": "gamma",
+            "s-d": "delta", "s-e": "epsilon",
+        }
+        records = []
+        for sk in skills:
+            t = topics[sk]
+            records.append(
+                _rec(skill_name=sk, user_prompt=f"claude {t} task", session_id=sk + "1")
+            )
+            records.append(
+                _rec(skill_name=sk, user_prompt=f"claude {t} again", session_id=sk + "2")
+            )
+        monkeypatch.setattr(
+            "skill_extractor.skill_extractor.sample_trajectories",
+            lambda **kw: records,
+        )
+        candidates = extract_skill_candidates(projects_root=tmp_path)
+        by_name = {c["skill_name"]: c for c in candidates}
+        for sk in skills:
+            kws = by_name[sk]["decomposition"]["routing"]["trigger_keywords"]
+            assert "claude" not in kws, f"{sk}: 遍在語 claude が残った: {kws}"
+            assert topics[sk] in kws, f"{sk}: 固有語 {topics[sk]} が消えた: {kws}"

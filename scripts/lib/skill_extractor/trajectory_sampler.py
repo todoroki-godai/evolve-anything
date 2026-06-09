@@ -23,6 +23,30 @@ DEFAULT_MAX_FILES = 50
 # <command-name> タグから skill 名を取り出す正規表現
 _COMMAND_NAME_RE = re.compile(r"<command-name>([^<]+)</command-name>")
 
+# 機構ターン判定（#387）。type=user だがユーザー発話でない harness 注入ターン。
+# これらを直前プロンプト探索で飛ばさないと、compaction サマリ・SKILL.md 本体・
+# task-notification のパスや tool-use-id が routing.trigger_keywords を汚す
+# （実 PJ E2E で claude/gstack/users/todoroki 等のノイズの最大の出所と判明）。
+_MACHINERY_PREFIXES = (
+    "<system-reminder>",
+    "<task-notification>",
+    "<local-command",
+    "<command-output>",
+    "<command-message>",
+)
+"""lstrip 後この接頭辞で始まる user ターンは機構ターン。"""
+
+_MACHINERY_MARKERS = (
+    "this session is being continued from a previous conversation",
+    "base directory for this skill:",
+    "stop hook feedback:",
+    "caveat: the messages below were generated",
+)
+"""lstrip+lower 後、先頭付近にこの語を含む user ターンは機構ターン。"""
+
+_MACHINERY_MARKER_WINDOW = 300
+"""機構マーカーを探す先頭文字数（依頼文中の偶然一致を避けるため先頭付近に限定）。"""
+
 # ビルトインコマンド（スキルではない）
 _BUILTIN_COMMANDS = frozenset([
     "compact",
@@ -216,11 +240,32 @@ def _extract_skill_from_turn(turn: dict) -> Optional[str]:
     return skill_name
 
 
-def _find_preceding_user_prompt(turns: list, command_index: int) -> str:
-    """command_index より前の直近 user ターンのプロンプトテキストを返す。
+def _is_machinery_prompt(content: str) -> bool:
+    """user ターンの content が harness 注入の機構ターンか判定する（#387）。
 
-    <command-name> を含まない純粋な user メッセージを探す。
-    見つからない場合は空文字列を返す。
+    compaction サマリ・SKILL.md 注入・task-notification・system-reminder・
+    Stop hook feedback 等は type=user だがユーザー発話ではない。これらを
+    routing のキーワード採掘から除くために判定する。
+
+    Args:
+        content: user ターンの content 文字列。
+
+    Returns:
+        機構ターンなら True。
+    """
+    low = content.lstrip().lower()
+    if low.startswith(_MACHINERY_PREFIXES):
+        return True
+    head = low[:_MACHINERY_MARKER_WINDOW]
+    return any(marker in head for marker in _MACHINERY_MARKERS)
+
+
+def _find_preceding_user_prompt(turns: list, command_index: int) -> str:
+    """command_index より前の直近の「本物の」user プロンプトを返す。
+
+    <command-name> を含む呼び出しターンと、harness 注入の機構ターン
+    （compaction/SKILL.md/notification/system-reminder/Stop hook）を飛ばし、
+    本物のユーザー発話を探す。見つからない場合は空文字列を返す。
     """
     for j in range(command_index - 1, -1, -1):
         t = turns[j]
@@ -232,8 +277,8 @@ def _find_preceding_user_prompt(turns: list, command_index: int) -> str:
         # command-name タグを含まない通常メッセージのみ
         if "<command-name>" in content:
             continue
-        # local-command-caveat 等のシステム挿入メッセージを除外
-        if "<local-command" in content or "<command-message>" in content:
+        # harness 注入の機構ターン（パス・機構語で trigger を汚すため除外）
+        if _is_machinery_prompt(content):
             continue
         return content.strip()
     return ""

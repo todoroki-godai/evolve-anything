@@ -24,7 +24,10 @@ from skill_extractor.effectiveness import (
     compute_effectiveness,
     effectiveness_multiplier,
 )
-from skill_extractor.decomposition import decompose_candidate
+from skill_extractor.decomposition import (
+    decompose_candidate,
+    corpus_frequent_tokens,
+)
 
 # ── 定数 ──────────────────────────────────────────────────
 
@@ -73,6 +76,15 @@ def extract_skill_candidates(
 
     grouped = _group_by_skill(records)
 
+    # corpus 全体の document-frequency から「ほぼ全スキルに出る遍在語」を1回だけ算出する
+    # （環境固有のツール名 claude/gstack 等）。各スキルの trigger_keywords から外し、
+    # 発火文脈を弁別する content 語だけを残す（#387）。グルーピング全体（候補閾値で
+    # 落ちる小クラスタも含む）を母集団にして DF 推定の signal を増やす。
+    prompts_by_skill = {
+        name: [r.user_prompt for r in recs] for name, recs in grouped.items()
+    }
+    corpus_stopwords = corpus_frequent_tokens(prompts_by_skill)
+
     candidates: List[Dict[str, Any]] = []
     for skill_name, skill_records in grouped.items():
         if len(skill_records) < min_cluster_size:
@@ -85,7 +97,7 @@ def extract_skill_candidates(
         # Workflow-to-Skill (arXiv 2606.06893) の4軸構造分解。候補に
         # routing(発火文脈) / workflow(実行プロファイル) / semantics(何をするか) /
         # attachments(依存PJ資源) を付け、採用判断（どこで発火・何が要るか）を速める。
-        decomposition = decompose_candidate(skill_records)
+        decomposition = decompose_candidate(skill_records, corpus_stopwords)
 
         candidates.append(
             {
