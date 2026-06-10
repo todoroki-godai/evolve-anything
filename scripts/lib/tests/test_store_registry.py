@@ -107,3 +107,30 @@ def test_current_orphan_disposition_is_declared() -> None:
         decl = store_registry.declaration_for(name)
         assert decl is not None, f"orphan {name} が未宣言"
         assert decl.disposition is not None, f"orphan {name} に disposition がない"
+
+
+# --- .db ストア対応（#430）---------------------------------------------------
+
+def test_utterances_db_declared_as_permanent_db() -> None:
+    """utterances.db が kind='db' / retention='permanent' で宣言されている（#430）。"""
+    decl = store_registry.declaration_for("utterances.db")
+    assert decl is not None
+    assert decl.kind == "db"
+    assert decl.retention == "permanent"
+
+
+def test_db_stores_excluded_from_hook_writer_backfill() -> None:
+    """db ストアは hook-writer 突合の母集団でない（writer が batch ingest）。
+
+    declarations_by_kind('jsonl') に db ストアが混ざらないことを保証する。
+    """
+    jsonl_names = {d.name for d in store_registry.declarations_by_kind("jsonl")}
+    db_names = {d.name for d in store_registry.declarations_by_kind("db")}
+    assert "utterances.db" in db_names
+    assert "utterances.db" not in jsonl_names
+
+
+def test_db_declaration_does_not_appear_as_stale_drift() -> None:
+    """db ストア宣言が contract-drift の stale に誤検知されない（#430）。"""
+    drift = orphan_store.detect_store_contract_drift()
+    assert "utterances.db" not in drift.stale

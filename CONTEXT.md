@@ -39,3 +39,4 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | llm_broker | ファイルベース2相の共通基盤 `scripts/lib/llm_broker.py`。build_requests/parse_responses/parse_score/passthrough を提供、IO-free・LLM-free（mock 不要） | ADR-037 |
 | 編成ギャップ | エージェント *間* の関係（役割重複＝description の役割語 Jaccard / 孤立＝入次数 0 かつ出次数 0）を決定論検出。agent_quality（単体品質）と別軸。observability builder `agent_team` 経由で evolve のたびに surface、整理は人間判断 | #326 |
 | data-dir-unified marker | DATA_DIR 一元化済みを示す `~/.claude/rl-anything/.data-dir-unified`。存在時 hook 文脈の CLAUDE_PLUGIN_DATA（install レイアウト配下）も正準 dir に redirect され hook/tool 分裂が終息。`rl-fleet migrate-data` が全 entry マージ成功時に設置 | #364 |
+| utterance archive | 全PJ human 発話の恒久 DuckDB ストア `utterances.db`。writer は batch ingest のみ（hot path ゼロ）。物理 PK `(source_path,line_no)` + 論理 UNIQUE `(session_id,timestamp,text_hash)` で resume 複製を弾く。pj_slug は transcript の `cwd` 由来（encoded dir 名のデコードは非可逆なので諦める）。query は pj_slug 必須・source_kind デフォルト `dialogue` のみ | #430 |

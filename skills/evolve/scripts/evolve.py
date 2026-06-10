@@ -1089,6 +1089,20 @@ def run_evolve(
         except Exception as e:
             print(f"[rl-anything:evolve] growth emit warning: {e}", file=sys.stderr)
 
+    # ── utterance アーカイブの増分 ingest（#430）────────────────────
+    # 全PJ human 発話を恒久アーカイブに batch 取り込み（hot path ゼロ・ゼロ LLM）。
+    # dry-run 時は ingest しない（実 DATA_DIR / utterances.db を書かない）。
+    if not dry_run:
+        try:
+            from utterance_archive import ingest as _utt_ingest
+            _utt_res = _utt_ingest.ingest_all_projects(progress=False)
+            result["utterance_ingest"] = {
+                "inserted": _utt_res.get("inserted", 0),
+                "files_processed": _utt_res.get("files_processed", 0),
+            }
+        except Exception as e:
+            result["utterance_ingest"] = {"error": str(e)}
+
     # ── evolve 提案 accept/reject の決定論キャプチャ（#360-A, ADR-041）────────
     # 候補スキルの before_sha をキューに emit。適用実績=accept / 明示却下=reject は
     # SKILL.md Step 7.8 の drain（ingest_decisions）が optimize_history に記録する。

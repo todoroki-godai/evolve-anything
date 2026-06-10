@@ -42,6 +42,13 @@ try:
 except ImportError:
     pass
 
+# utterance_archive.store import (optional) — staleness marker のみ読む（#430）
+_utterance_store = None
+try:
+    from utterance_archive import store as _utterance_store
+except ImportError:
+    pass
+
 
 def _make_session_title(checkpoint: dict) -> str:
     """checkpoint から claude agents 表示用のセッションタイトルを生成する。"""
@@ -216,6 +223,54 @@ def _deliver_data_dir_migration_reminder() -> None:
         print(f"[rl-anything:restore_state] data-dir migration reminder error: {e}", file=sys.stderr)
 
 
+def utterance_staleness_advisory(data_dir) -> str | None:
+    """data_dir の utterance アーカイブが stale なら advisory メッセージを返す（純関数・#430）。
+
+    observe-first pre-flight: staleness marker（last_ingest_at ファイル）を読むだけで
+    DuckDB 接続も transcript 走査もしない（0.1 秒以下、pitfall_hot_hook_eager_import）。
+    marker 不在 = 「未 ingest」と解釈して advisory を返す（∞ 扱い・0日でない）。
+    閾値は最終 ingest > 14 日。fresh なら None。
+    """
+    if _utterance_store is None:
+        return None
+    if not _utterance_store.is_stale(data_dir, threshold_days=14):
+        return None
+    last = _utterance_store.read_last_ingest_at(data_dir)
+    detail = "未 ingest（marker なし）" if last is None else f"最終 ingest {last}"
+    return (
+        "[rl-anything] utterance アーカイブが 14 日以上 ingest されていません"
+        f"（{detail}, #430）。`rl-fleet ingest` で取り込むか、`evolve`/`audit` を回すと"
+        "自動取り込みされます。"
+    )
+
+
+def _deliver_utterance_staleness() -> None:
+    """utterance アーカイブの staleness advisory を SessionStart に出す（#430・安全弁）。
+
+    実環境ガード: `CLAUDE_PLUGIN_DATA` が CC install レイアウト配下のときだけ判定する
+    （migration リマインドと同型）。テスト isolation の tmp env / 非 hook 文脈では実環境を
+    一切 probe せず沈黙し、JSON stdout を汚さない。advisory は強制でなく安全弁
+    （本線は evolve/audit 同居、install ≠ enforcement）。
+    """
+    if _utterance_store is None or _data_dir_migration is None:
+        return
+    try:
+        import os as _os
+        import rl_common  # 遅延 import（patch 追従）
+
+        env = _os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        if not env:
+            return  # hook 文脈でなければ判定しない（実環境を probe しない）
+        if not _data_dir_migration.is_cc_install_layout(Path(env)):
+            return  # テスト isolation / custom 環境
+        data_dir = rl_common.resolve_data_dir(env)
+        message = utterance_staleness_advisory(data_dir)
+        if message:
+            print(message)
+    except Exception as e:
+        print(f"[rl-anything:restore_state] utterance staleness check error: {e}", file=sys.stderr)
+
+
 def handle_session_start(event: dict) -> None:
     """SessionStart イベントを処理する。"""
     # Deliver pending trigger messages first
@@ -226,6 +281,8 @@ def handle_session_start(event: dict) -> None:
     _deliver_evolve_drain()
     # DATA_DIR 分裂の未解消検出（#364）
     _deliver_data_dir_migration_reminder()
+    # utterance アーカイブの staleness advisory（#430・marker 読みのみ）
+    _deliver_utterance_staleness()
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
     checkpoint = common.find_latest_checkpoint(project_dir)

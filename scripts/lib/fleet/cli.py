@@ -99,6 +99,18 @@ def main(argv: list[str] | None = None) -> int:
     migrate_p.add_argument("--canonical", type=Path, default=None, help="正準 dir（default: ~/.claude/rl-anything）")
     migrate_p.add_argument("--source", type=Path, default=None, help="旧 plugin-data dir（default: install レイアウトを自動探索）")
 
+    uttr_p = sub.add_parser(
+        "ingest",
+        help="全PJ human 発話を utterances.db に増分 ingest（#430・ゼロ LLM）",
+    )
+    uttr_p.add_argument("--root", type=Path, default=None,
+                        help="projects ルート (default: ~/.claude/projects)")
+    uttr_p.add_argument("--days", type=int, default=None,
+                        help="mtime フィルタ（日）。default: 無制限（初回 backfill）")
+    uttr_p.add_argument("--max-files", type=int, default=None,
+                        help="PJ ごとの取り込みファイル上限（backfill bench 用サンプリング）")
+    uttr_p.add_argument("--quiet", action="store_true", help="進捗 stderr を抑制")
+
     recall_p = sub.add_parser(
         "recall",
         help="全 PJ の memory を横断 keyword 検索（決定論・LLM 非依存）",
@@ -123,11 +135,35 @@ def main(argv: list[str] | None = None) -> int:
         return _run_plugins(args)
     if args.command == "recall":
         return _run_recall(args)
+    if args.command == "ingest":
+        return _run_ingest(args)
     if args.command == "migrate-data":
         return _run_migrate_data(args)
 
     # default: status
     return _run_status(args)
+
+
+def _run_ingest(args: argparse.Namespace) -> int:
+    """ingest サブコマンド: 全PJ human 発話を utterances.db に増分 ingest する（#430）。"""
+    from utterance_archive import ingest as utterance_ingest
+
+    res = utterance_ingest.ingest_all_projects(
+        projects_root=args.root,
+        days=args.days,
+        max_files=args.max_files,
+        progress=not args.quiet,
+    )
+    if res.get("duckdb") is False:
+        print("[fleet:ingest] DuckDB 未インストールのため utterances.db を作成できません。")
+        return 1
+    print(
+        f"[fleet:ingest] inserted={res.get('inserted', 0)} "
+        f"files={res.get('files_processed', 0)} "
+        f"projects={res.get('projects', 0)} "
+        f"elapsed={res.get('elapsed_s', 0.0):.1f}s"
+    )
+    return 0
 
 
 def _run_plugins(args: argparse.Namespace) -> int:

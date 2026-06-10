@@ -28,6 +28,11 @@ from typing import Dict, List, Literal, Optional
 # retention の種別。
 RetentionKind = Literal["permanent", "ttl", "compaction"]
 
+# ストアの物理形式。jsonl（hook append 系）と db（batch ingest 系 DuckDB SoR）を区別する。
+# orphan_store / contract-drift の hook-writer 突合は jsonl のみ対象（writer が hook の append
+# だから）。db ストアは writer が batch ingest なので、その突合の母集団には含めない（#430）。
+StoreKind = Literal["jsonl", "db"]
+
 # orphan（reader 0）ストアの処遇分類。
 # - keep_future : 将来の基盤として意図的に reader 不在（消さない）
 # - drain       : enqueue→drain 2相など、reader が別経路（DB 取り込み等）で jsonl 直読しない
@@ -39,10 +44,11 @@ DispositionKind = Literal["keep_future", "drain", "remove"]
 class StoreDeclaration:
     """1 ストアの契約宣言。
 
-    name:        jsonl ストアの basename（例: "corrections.jsonl"）
+    name:        ストアの basename（例: "corrections.jsonl" / "utterances.db"）
     writer:      書き込み側の説明（どの hook/script が書くか — 人間可読 evidence）
     reader:      読み取り側の説明（誰が消費するか。reader 不在の場合は disposition で説明）
     retention:   保持ポリシー種別（permanent / ttl / compaction）
+    kind:        物理形式（"jsonl" 既定 / "db"）。db は hook-writer 突合の対象外（#430）
     ttl_days:    retention="ttl" のときの失効日数（それ以外は None）
     compaction:  retention="compaction" のときの圧縮条件（散文。それ以外は None）
     disposition: reader 不在（orphan）ストアの処遇。reader がある通常ストアは None
@@ -53,6 +59,7 @@ class StoreDeclaration:
     writer: str
     reader: str
     retention: RetentionKind
+    kind: StoreKind = "jsonl"
     ttl_days: Optional[int] = None
     compaction: Optional[str] = None
     disposition: Optional[DispositionKind] = None
@@ -134,7 +141,23 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="reader 0 だが意図的。#427 で orphan 検出された当該ストア。"
         "ローテーション済みなので肥大リスクは抑制済み。",
     ),
+    StoreDeclaration(
+        name="utterances.db",
+        kind="db",
+        writer="scripts/lib/utterance_archive/ingest.py（evolve/audit batch + rl-fleet ingest）。"
+        "hot path（hooks）からは書かない。",
+        reader="utterance_archive.query（query_utterances / query_utterances_all_projects）。"
+        "下流: #431 個人辞書・#432 暗黙シグナル・遡及分析。",
+        retention="permanent",
+        note="全PJ human 発話の恒久アーカイブ（#430）。物理 PK (source_path,line_no) + "
+        "論理 UNIQUE (session_id,timestamp,text_hash)。writer は batch ingest のみ。",
+    ),
 ]
+
+
+def declarations_by_kind(kind: StoreKind) -> List[StoreDeclaration]:
+    """指定 kind の宣言だけを返す（jsonl の hook-writer 突合などで使う）。"""
+    return [d for d in _DECLARATIONS if d.kind == kind]
 
 
 def declarations() -> List[StoreDeclaration]:
