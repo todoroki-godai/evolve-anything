@@ -175,18 +175,21 @@ def detect_store_contract_drift(
 
     declared = set(store_registry.declared_store_names())
 
-    # db ストア（utterances.db 等）は writer が batch ingest で find_store_writers に
-    # 出ないため、stale 突合の母集団から外す（全宣言で突合すると db が必ず stale 誤検知に
-    # なる、#430）。declared_store_names() がテストで monkeypatch される経路でも、db 名の
-    # 除外は declarations_by_kind('db') から導いて減算するので patch を壊さない。
+    # hook-writer 突合（find_store_writers）に現れない writer を持つストアは、宣言が
+    # あっても「実 writer 見当たらず」で stale 誤検知になる。対象は db（batch ingest, #430）
+    # と writer_locus="batch" の jsonl（weak_signals.jsonl, #432）。両者を stale_exempt_names
+    # に集約して減算する（declared_store_names が monkeypatch される経路でも patch を壊さない）。
     try:
-        db_declared = {d.name for d in store_registry.declarations_by_kind("db")}
-    except AttributeError:  # 古い store_registry 互換
-        db_declared = set()
+        exempt = set(store_registry.stale_exempt_names())
+    except AttributeError:  # 古い store_registry 互換（db のみ除外にフォールバック）
+        try:
+            exempt = {d.name for d in store_registry.declarations_by_kind("db")}
+        except AttributeError:
+            exempt = set()
 
     undeclared = sorted(name for name in writers if name not in declared)
     stale = sorted(
-        name for name in declared if name not in writers and name not in db_declared
+        name for name in declared if name not in writers and name not in exempt
     )
     return StoreContractDriftReport(
         undeclared=undeclared,

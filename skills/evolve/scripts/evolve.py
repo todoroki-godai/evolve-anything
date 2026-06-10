@@ -1103,6 +1103,18 @@ def run_evolve(
         except Exception as e:
             result["utterance_ingest"] = {"error": str(e)}
 
+    # ── 暗黙修正シグナルの決定論検出 → weak_signals レーン（#432）──────────
+    # 4 チャネル（直後手編集 / permission deny / 言い直し / Esc 中断）をゼロ LLM で検出し、
+    # weak_signals.jsonl に provenance 付きで記録（corrections 本流には入れない）。
+    # 言い直し検出は上の utterance ingest で更新した utterances.db を入力に使うため後段に置く。
+    # dry_run でも検出は走るが run_batch(dry_run=True) が store 書き込みを最下層で弾く。
+    try:
+        from weak_signals import batch as _ws_batch
+        _ws_slug = Path(project_dir).name if project_dir else Path.cwd().name
+        result["weak_signals"] = _ws_batch.run_batch(_ws_slug, dry_run=dry_run)
+    except Exception as e:
+        result["weak_signals"] = {"error": str(e)}
+
     # ── evolve 提案 accept/reject の決定論キャプチャ（#360-A, ADR-041）────────
     # 候補スキルの before_sha をキューに emit。適用実績=accept / 明示却下=reject は
     # SKILL.md Step 7.8 の drain（ingest_decisions）が optimize_history に記録する。

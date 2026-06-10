@@ -39,20 +39,28 @@ StoreKind = Literal["jsonl", "db"]
 # - remove      : 不要。writer/hook ごと削除予定（暫定で残すが orphan として surface してよい）
 DispositionKind = Literal["keep_future", "drain", "remove"]
 
+# writer の所在。stale 突合（宣言あり / 実 hook writer なし）の母集団から除外するかを決める。
+# - hook  : hooks.json 登録 hook の append が書く（find_store_writers で拾える。stale 突合対象）
+# - batch : evolve/audit 等の batch script が書く（hook には現れない。stale 突合の対象外）
+#           db ストアと同じ理由で、jsonl でも batch writer は hook-writer 突合に出ないため除外する。
+WriterLocus = Literal["hook", "batch"]
+
 
 @dataclass(frozen=True)
 class StoreDeclaration:
     """1 ストアの契約宣言。
 
-    name:        ストアの basename（例: "corrections.jsonl" / "utterances.db"）
-    writer:      書き込み側の説明（どの hook/script が書くか — 人間可読 evidence）
-    reader:      読み取り側の説明（誰が消費するか。reader 不在の場合は disposition で説明）
-    retention:   保持ポリシー種別（permanent / ttl / compaction）
-    kind:        物理形式（"jsonl" 既定 / "db"）。db は hook-writer 突合の対象外（#430）
-    ttl_days:    retention="ttl" のときの失効日数（それ以外は None）
-    compaction:  retention="compaction" のときの圧縮条件（散文。それ以外は None）
-    disposition: reader 不在（orphan）ストアの処遇。reader がある通常ストアは None
-    note:        補足（任意）
+    name:         ストアの basename（例: "corrections.jsonl" / "utterances.db"）
+    writer:       書き込み側の説明（どの hook/script が書くか — 人間可読 evidence）
+    reader:       読み取り側の説明（誰が消費するか。reader 不在の場合は disposition で説明）
+    retention:    保持ポリシー種別（permanent / ttl / compaction）
+    kind:         物理形式（"jsonl" 既定 / "db"）。db は hook-writer 突合の対象外（#430）
+    writer_locus: 書き込み主体（"hook" 既定 / "batch"）。batch は hook-writer 突合に出ない
+                  ため stale 突合の対象外（#432: weak_signals.jsonl は batch 書き込み jsonl）
+    ttl_days:     retention="ttl" のときの失効日数（それ以外は None）
+    compaction:   retention="compaction" のときの圧縮条件（散文。それ以外は None）
+    disposition:  reader 不在（orphan）ストアの処遇。reader がある通常ストアは None
+    note:         補足（任意）
     """
 
     name: str
@@ -60,6 +68,7 @@ class StoreDeclaration:
     reader: str
     retention: RetentionKind
     kind: StoreKind = "jsonl"
+    writer_locus: WriterLocus = "hook"
     ttl_days: Optional[int] = None
     compaction: Optional[str] = None
     disposition: Optional[DispositionKind] = None
@@ -152,12 +161,39 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="全PJ human 発話の恒久アーカイブ（#430）。物理 PK (source_path,line_no) + "
         "論理 UNIQUE (session_id,timestamp,text_hash)。writer は batch ingest のみ。",
     ),
+    StoreDeclaration(
+        name="weak_signals.jsonl",
+        writer="scripts/lib/weak_signals/batch.py（evolve/audit batch から run_batch）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="reflect が確認後に corrections 本流へ昇格（promoted フラグ）。"
+        "audit が channel 別件数を advisory surface（sections_weak_signals）。"
+        "下流: #431 のバッチ LLM 判定もこのレーンを共有。",
+        retention="permanent",
+        note="暗黙修正シグナルの決定論検出レーン（#432）。4 チャネル（直後手編集 / "
+        "permission deny / 言い直し / Esc 中断）。corrections に直接入れず昇格は reflect 確認後。",
+    ),
 ]
 
 
 def declarations_by_kind(kind: StoreKind) -> List[StoreDeclaration]:
     """指定 kind の宣言だけを返す（jsonl の hook-writer 突合などで使う）。"""
     return [d for d in _DECLARATIONS if d.kind == kind]
+
+
+def stale_exempt_names() -> List[str]:
+    """stale 突合（宣言あり / 実 hook writer なし）から除外すべきストア名（ソート済み）。
+
+    hook-writer 突合（find_store_writers）に現れない writer を持つストアは、
+    宣言があっても「実 writer 見当たらず」で stale 誤検知になる。除外対象:
+    - kind="db"          : writer が batch ingest（utterances.db）
+    - writer_locus="batch": writer が batch script（weak_signals.jsonl 等）
+
+    両者は同じ理由（hook に現れない writer）なので 1 関数で集約する（#432）。
+    """
+    return sorted(
+        {d.name for d in _DECLARATIONS if d.kind == "db" or d.writer_locus == "batch"}
+    )
 
 
 def declarations() -> List[StoreDeclaration]:
