@@ -17,6 +17,37 @@ from line_limit import NEAR_LIMIT_RATIO
 from memory_temporal import parse_memory_temporal
 
 from ._constants import LIMITS
+from .classification import classify_artifact_origin
+
+
+def collect_hardcoded_value_issues(
+    artifacts: Dict[str, List[Path]],
+) -> List[Dict[str, Any]]:
+    """skills / rules から hardcoded value issue を収集する共通関数（#419）。
+
+    issues.py の collect_issues と orchestrator.py の run_audit はかつて同型の
+    検出ループを二重実装しており、issues.py だけが global/plugin origin 除外を
+    持っていた（orchestrator 側は除外なし＝外部管理スキルの散文まで走査して
+    大量 FP の温床になっていた）。検出ループを本関数 1 箇所に集約し、両 call site
+    がこれを呼ぶことで origin 除外の divergence を構造的に根治する。
+
+    global / plugin origin（ユーザーが管理しない外部品）は除外する。
+    """
+    issues: List[Dict[str, Any]] = []
+    for category in ("skills", "rules"):
+        for path in artifacts.get(category, []):
+            # global/plugin スキルは外部管理のため除外
+            if classify_artifact_origin(path) in ("global", "plugin"):
+                continue
+            detections = detect_hardcoded_values(str(path))
+            for det in detections:
+                issues.append({
+                    "type": "hardcoded_value",
+                    "file": str(path),
+                    "detail": det,
+                    "source": "detect_hardcoded_values",
+                })
+    return issues
 
 # memory_heavy_update 警告の複合閾値（#353）。
 # 根拠: arXiv:2605.12978 "Useful Memories Become Faulty When Continuously Updated by LLMs" は
@@ -244,21 +275,8 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
             "source": "detect_duplicates_simple",
         })
 
-    # hardcoded values（ハードコード値検出）
-    from . import classify_artifact_origin as _classify_origin  # noqa: E402
-    for category in ("skills", "rules"):
-        for path in artifacts.get(category, []):
-            # global/plugin スキルは外部管理のため除外
-            if _classify_origin(path) in ("global", "plugin"):
-                continue
-            detections = detect_hardcoded_values(str(path))
-            for det in detections:
-                issues.append({
-                    "type": "hardcoded_value",
-                    "file": str(path),
-                    "detail": det,
-                    "source": "detect_hardcoded_values",
-                })
+    # hardcoded values（ハードコード値検出）— orchestrator と共通の検出関数を使う（#419）
+    issues.extend(collect_hardcoded_value_issues(artifacts))
 
     # レイヤー別診断（Rules / Memory / Hooks / CLAUDE.md）
     try:

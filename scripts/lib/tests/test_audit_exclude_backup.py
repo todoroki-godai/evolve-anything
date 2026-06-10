@@ -68,6 +68,48 @@ class TestFindArtifactsExcludesBackup:
         assert not any("disabled" in p.parts for p in skills)
 
 
+class TestFindArtifactsExcludesContaminatedDirs:
+    """#419: node_modules / 任意の dot-dir 配下の SKILL.md を収集対象外にする。
+
+    `rglob("SKILL.md")` は node_modules や `.hermes`/`.git` 等の dot-dir まで
+    再帰し、外部パッケージ同梱の SKILL.md や gstack 同梱コピーが走査対象に入って
+    hardcoded_value 検出のノイズ源になる（fleet ISSUES 599 件汚染の一因）。
+    """
+
+    def test_node_modules_配下スキルは収集されない(self, tmp_path: Path):
+        claude = tmp_path / ".claude"
+        active = _make_skill(claude / "skills", "my-skill")
+        _make_skill(claude / "skills" / "node_modules" / "some-pkg", "vendored")
+
+        skills = find_artifacts(tmp_path)["skills"]
+        assert active in skills
+        assert not any("node_modules" in p.parts for p in skills)
+
+    def test_任意のdot_dir配下スキルは収集されない(self, tmp_path: Path):
+        """`.hermes` 等、明示列挙していない dot-dir 配下も除外する（#419）。"""
+        claude = tmp_path / ".claude"
+        active = _make_skill(claude / "skills", "my-skill")
+        _make_skill(claude / "skills" / "my-skill" / ".hermes" / "gstack", "shadow")
+        _make_skill(claude / "skills" / ".git", "junk")
+
+        skills = find_artifacts(tmp_path)["skills"]
+        assert active in skills
+        assert not any(".hermes" in p.parts for p in skills)
+        assert not any(".git" in p.parts for p in skills)
+
+    def test_dot_claude自体は除外されない(self, tmp_path: Path):
+        """走査の起点 `.claude` ディレクトリ自体は dot-dir でも除外しない（#419 回帰）。
+
+        `.claude/skills/<name>/SKILL.md` は正当な収集対象。dot-dir 除外は
+        skills/ より深いコンポーネントにのみ効く必要がある。
+        """
+        claude = tmp_path / ".claude"
+        active = _make_skill(claude / "skills", "my-skill")
+
+        skills = find_artifacts(tmp_path)["skills"]
+        assert active in skills
+
+
 class TestIsPluginManagedPath:
     def test_gstack_backup_は管理パス扱い(self):
         p = Path.home() / ".claude" / "skills" / ".gstack-backup" / "review" / "SKILL.md"

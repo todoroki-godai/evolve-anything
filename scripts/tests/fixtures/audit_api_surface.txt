@@ -19,6 +19,7 @@ check_python_source_budgets(project_dir: pathlib.Path) -> List[Dict[str, Any]]
 classify_artifact_origin(path: pathlib.Path) -> str
 classify_usage_skill(skill_name: str) -> str | None
 claude_md_unparseable(project_dir: pathlib.Path | None) -> bool
+collect_hardcoded_value_issues(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
 collect_issues(project_dir: pathlib.Path) -> List[Dict[str, Any]]
 collect_observability(project_dir: pathlib.Path) -> Dict[str, List[str]]
 detect_duplicates_simple(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]

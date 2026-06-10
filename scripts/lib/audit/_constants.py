@@ -23,10 +23,44 @@ from line_limit import (
 #   evolve で 104 件、remediation の manual_required を支配し本物の issue を埋もれさせた）
 EXCLUDED_SKILL_DIRS = frozenset({".archive", "_archived", "disabled", ".gstack-backup"})
 
+# 走査汚染源として除外するディレクトリ名（#419）。
+# - node_modules: 外部 npm パッケージ同梱の SKILL.md が rglob で拾われ、
+#   hardcoded_value 検出のノイズ源になる
+EXCLUDED_VENDOR_DIRS = frozenset({"node_modules"})
+
+# rglob("SKILL.md") は `.hermes`（gstack 同梱コピー）/ `.git` 等の任意 dot-dir まで
+# 再帰してしまう。走査起点（`.claude/skills/`）より深いコンポーネントの dot-dir
+# 配下はすべて除外する（#419）。dot-dir 判定は `skills/` セグメント以降にのみ効かせ、
+# 走査対象 PJ の親パスに dot-dir（例: ~/.config/... 配下の PJ）があっても誤除外しない。
+_SCAN_ANCHOR_DIR = "skills"
+
 
 def is_excluded_skill_path(path: Path) -> bool:
-    """SKILL.md のパスが収集除外対象（.archive / _archived / disabled / .gstack-backup 配下）か判定する。"""
-    return any(part in EXCLUDED_SKILL_DIRS for part in path.parts)
+    """SKILL.md のパスが収集除外対象か判定する。
+
+    除外対象（#337, #419）:
+    - .archive / _archived / disabled / .gstack-backup 配下（アーカイブ・バックアップ）
+    - node_modules 配下（外部 vendor パッケージ）
+    - 走査起点 `skills/` より深い任意の dot-dir 配下（.hermes / .git 等の走査汚染）
+    """
+    parts = path.parts
+    if any(part in EXCLUDED_SKILL_DIRS for part in parts):
+        return True
+    if any(part in EXCLUDED_VENDOR_DIRS for part in parts):
+        return True
+    # 最初の `skills/` セグメント以降の component に dot-dir があれば除外。
+    # 親パス（PJ ルートより上）の dot-dir は走査対象外なので評価しない。
+    # 最初の出現を anchor にするのは、`.hermes/skills/...` のように dot-dir 配下に
+    # 入れ子の `skills/` を持つ vendor コピーを取りこぼさないため（最後の出現だと
+    # 入れ子 skills 以降に dot-dir が無く誤って許容してしまう）。
+    try:
+        anchor_idx = parts.index(_SCAN_ANCHOR_DIR)
+    except ValueError:
+        anchor_idx = -1
+    for part in parts[anchor_idx + 1:]:
+        if part.startswith("."):
+            return True
+    return False
 
 LIMITS = {
     "CLAUDE.md": 200,  # warning のみ（violation としては扱わない）

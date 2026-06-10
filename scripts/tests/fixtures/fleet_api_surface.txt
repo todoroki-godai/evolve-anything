@@ -16,6 +16,7 @@ RecallHit(pj_display: 'str', file_path: 'Path', score: 'float', snippet: 'str', 
 aggregate_subagents_by_project(subagents_path: 'Path | None' = None, *, window_days: 'int' = 30, now: 'datetime | None' = None) -> 'dict[str, int]'
 classify_project(pj_path: 'Path', settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, stale_days: 'int' = 30, now: 'datetime | None' = None) -> 'str'
 collect_fleet_status(root: 'Path | None' = None, settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, data_dir: 'Path | None' = None, timeout: 'float' = 10.0, max_workers: 'int' = 2, projects: 'list[Path] | None' = None) -> 'list[FleetRow]'
+detect_equal_issue_counts(rows: 'list[FleetRow]') -> 'list[dict]'
 enumerate_memory_dirs(projects_root: 'Path | None' = None) -> 'list[MemoryDir]'
 enumerate_projects(root: 'Path') -> 'list[Path]'
 format_hits(hits: 'list[RecallHit]', *, as_json: 'bool') -> 'str'

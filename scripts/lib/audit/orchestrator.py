@@ -17,14 +17,16 @@ from typing import Any, Dict, List, Optional
 
 from plugin_root import PLUGIN_ROOT
 from rl_common import DATA_DIR
-from hardcoded_detector import detect_hardcoded_values
-
 from .artifacts import find_artifacts, check_line_limits, check_python_source_budgets
 from .usage import load_usage_data, aggregate_usage, aggregate_plugin_usage
 from .scope import detect_duplicates_simple, load_usage_registry, scope_advisory
 from .quality import load_quality_baselines
 from .gstack import build_gstack_analytics_section, _load_global_retro
-from .issues import detect_untagged_reference_candidates, claude_md_unparseable
+from .issues import (
+    detect_untagged_reference_candidates,
+    claude_md_unparseable,
+    collect_hardcoded_value_issues,
+)
 from .sections import _format_constitutional_report
 from .report import generate_report
 
@@ -172,17 +174,8 @@ def run_audit(
         untagged_skipped_count = len(untagged)
         untagged = []
 
-    hardcoded_values = []
-    for category in ("skills", "rules"):
-        for path in artifacts.get(category, []):
-            detections = detect_hardcoded_values(str(path))
-            for det in detections:
-                hardcoded_values.append({
-                    "type": "hardcoded_value",
-                    "file": str(path),
-                    "detail": det,
-                    "source": "detect_hardcoded_values",
-                })
+    # issues.py の collect_issues と同一の検出関数を共有し origin 除外を通す（#419）
+    hardcoded_values = collect_hardcoded_value_issues(artifacts)
 
     coherence_report_lines = None
     if coherence_score:

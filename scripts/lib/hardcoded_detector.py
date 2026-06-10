@@ -14,7 +14,11 @@ from typing import Any, Dict, List, Optional
 PATTERNS: List[Dict[str, Any]] = [
     {
         "name": "api_key",
-        "regex": re.compile(r"(xoxb-|xapp-|sk-|AKIA)[A-Za-z0-9\-_]{8,}"),
+        # 先頭に単語境界 (?<![A-Za-z0-9]) を要求して、`ask-only-for-one-way` のような
+        # 英単語内部の `sk-` 部分一致 FP を防ぐ（#419: fleet ISSUES の 92% を占めた誤検知）。
+        # 境界 = 行頭 / 非英数字。本物の `sk-<token>` は通常 `key: sk-...` のように
+        # 区切り後に現れるため検出を弱めない。
+        "regex": re.compile(r"(?<![A-Za-z0-9])(xoxb-|xapp-|sk-|AKIA)[A-Za-z0-9\-_]{8,}"),
         "confidence": 0.85,
     },
     {

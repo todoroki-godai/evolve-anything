@@ -203,6 +203,33 @@ def collect_fleet_status(
         return list(pool.map(_work, projects))
 
 
+def detect_equal_issue_counts(rows: list[FleetRow]) -> list[dict]:
+    """複数 PJ の issues_summary total が完全一致したら measurement bug 警報を返す（#419）。
+
+    fleet ISSUES が全 PJ で 599 にぴたり揃ったのは hardcoded_value 検出パイプラインの
+    bug が原因で、独立に走査したはずの PJ が偶然同値になるのは測定バグの強シグナル。
+    同一の **非ゼロ** total を 2 PJ 以上が共有したら、その total と PJ 群を 1 件の
+    警報として返す（0 件一致は「issue なし」で健全なので対象外）。
+
+    Returns:
+        [{"total": int, "projects": [pj_name, ...]}]。一致グループごとに 1 件。
+        警報なしなら空リスト。
+    """
+    by_total: dict[int, list[str]] = {}
+    for row in rows:
+        if row.issues_summary is None:
+            continue  # 旧 cache は total 取得不能 → 一致判定に含めない
+        total = row.issues_summary.total()
+        if total <= 0:
+            continue  # 0 件一致は健全
+        by_total.setdefault(total, []).append(row.pj_name)
+    alarms: list[dict] = []
+    for total, projects in by_total.items():
+        if len(projects) >= 2:
+            alarms.append({"total": total, "projects": projects})
+    return alarms
+
+
 def _serialize_row(row: FleetRow) -> dict:
     d = asdict(row)
     if row.latest_audit is not None:

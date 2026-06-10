@@ -443,6 +443,66 @@ class TestDocContextBotIdAndTable:
         assert len([r for r in results if r["pattern_type"] == "aws_arn"]) == 1
 
 
+# ---------- #419: api_key regex の単語境界（sk- 部分一致 FP） ----------
+
+class TestApiKeyWordBoundary:
+    """#419: `sk-` パターンが英単語内部に部分一致して大量 FP を出していた。
+
+    gstack スキル散文中の `ask-only-for-one-way` 等が `(...|sk-|...)` に単語途中で
+    マッチし、fleet ISSUES の 92%（552/599）を占める偽陽性だった。
+    `sk-` の前に単語境界（英数字でない）を要求して防ぐ。
+    """
+
+    def test_sk_prose_no_word_boundary_not_detected(self, tmp_md):
+        """散文 `ask-only-for-one-way` は `sk-` の部分一致 FP として検出しない（#419）。"""
+        path = tmp_md("This rule is ask-only-for-one-way and never two-way.")
+        results = detect_hardcoded_values(path)
+        api = [r for r in results if r["pattern_type"] == "api_key"]
+        assert api == [], f"散文中の sk- 部分一致が FP 検出された: {api}"
+
+    def test_various_sk_suffixed_words_not_detected(self, tmp_md):
+        """`task-`/`risk-`/`disk-` 等 sk で終わる単語＋ハイフンも FP にしない（#419）。"""
+        path = tmp_md(
+            "task-runner risk-averse disk-usage flask-app brisk-walking "
+            "mask-required desk-setup"
+        )
+        results = detect_hardcoded_values(path)
+        api = [r for r in results if r["pattern_type"] == "api_key"]
+        assert api == [], f"sk 終わり単語の sk- 部分一致が FP 検出された: {api}"
+
+    def test_real_sk_token_still_detected(self, tmp_md):
+        """単語境界を持つ本物の `sk-` API キーは引き続き検出する（#419 回帰）。
+
+        secret 形リテラルを public repo の diff に残さないため実行時に連結する
+        （pre-push secret guard / GitHub push protection の FP 回避）。
+        """
+        fake_key = "sk" + "-" + "a" * 20
+        path = tmp_md(f"openai_api_key: {fake_key}")
+        results = detect_hardcoded_values(path)
+        api = [r for r in results if r["pattern_type"] == "api_key"]
+        assert len(api) == 1, f"本物の sk- API キーが検出されなかった: {results}"
+        assert api[0]["matched"].startswith("sk-")
+
+    def test_sk_token_at_line_start_detected(self, tmp_md):
+        """行頭の `sk-` トークン（前に文字なし）も検出する（境界 = 行頭, #419 回帰）。"""
+        fake_key = "sk" + "-" + "b" * 20
+        path = tmp_md(fake_key)
+        results = detect_hardcoded_values(path)
+        api = [r for r in results if r["pattern_type"] == "api_key"]
+        assert len(api) == 1
+
+    def test_other_api_key_prefixes_still_detected(self, tmp_md):
+        """xoxb-/xapp-/AKIA の検出は単語境界追加後も維持する（#419 回帰）。"""
+        fake_xoxb = "xoxb-" + "123456789012-FAKEFAKEFAKE"
+        path = tmp_md(
+            f"slack: {fake_xoxb}\naws: AKIAIOSFODNN7EXAMPLE"
+        )
+        results = detect_hardcoded_values(path)
+        api = {r["matched"][:4] for r in results if r["pattern_type"] == "api_key"}
+        assert "xoxb" in api
+        assert "AKIA" in api
+
+
 # ---------- extra_patterns / extra_allowlist テスト ----------
 
 class TestExtensibility:

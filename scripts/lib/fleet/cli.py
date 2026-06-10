@@ -16,7 +16,7 @@ from . import (
     _DEFAULT_TIMEOUT_SEC,
 )
 from .cli_tokens import _inject_token_metrics, _run_tokens
-from .collectors import collect_fleet_status, write_fleet_run
+from .collectors import collect_fleet_status, detect_equal_issue_counts, write_fleet_run
 from .formatters import format_status_table
 from .project_loader import enumerate_projects
 from .recall import format_hits, recall
@@ -222,6 +222,14 @@ def _run_status(args) -> int:
     else:
         stale_count = 0
     print(format_status_table(rows), end="")
+    # 複数 PJ の ISSUES total が完全一致 = 検出パイプラインの測定バグの強シグナル（#419）
+    for alarm in detect_equal_issue_counts(rows):
+        pjs = ", ".join(alarm["projects"])
+        print(
+            f"[fleet] ⚠ ISSUES total が {len(alarm['projects'])} PJ で同値 "
+            f"({alarm['total']}): {pjs} — 独立走査で同値は測定バグの疑い。"
+            f"audit 検出パイプラインを確認してください（#419）"
+        )
     if not show_all and stale_count:
         print(f"[fleet] STALE {stale_count} PJ を非表示にしています（--all で全表示）")
     if new_candidates:

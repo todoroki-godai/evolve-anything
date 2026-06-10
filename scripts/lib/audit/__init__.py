@@ -122,6 +122,7 @@ from .gstack import (  # noqa: F401, E402
 from .issues import (  # noqa: F401, E402
     _is_user_invocable_heuristic,
     claude_md_unparseable,
+    collect_hardcoded_value_issues,
     collect_issues,
     detect_untagged_reference_candidates,
 )

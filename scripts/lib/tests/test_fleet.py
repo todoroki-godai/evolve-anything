@@ -741,3 +741,68 @@ class TestFleetRowCacheParse:
         assert s.line_violations == 5
         assert s.hardcoded_values == 0
         assert s.total() == 5
+
+
+class TestEqualIssueCountAlarm:
+    """#419 再発予防: 複数 PJ の issues_summary が完全一致したら measurement bug 警報。
+
+    fleet ISSUES が全 PJ で 599 にぴたり揃ったのは検出パイプラインの bug が原因で、
+    env_score の物差しとして死んでいた。複数 PJ が同一の非ゼロ total を共有したら
+    「独立に走査したはずの PJ が偶然同値」= 測定バグの強シグナルなので警報を出す。
+    """
+
+    def _row(self, name: str, total: int):
+        # total を line_violations 1 本に寄せた IssuesSummary を組む
+        return FleetRow(
+            pj_name=name,
+            status=STATUS_ENABLED,
+            env_score=0.5,
+            issues_summary=IssuesSummary(line_violations=total),
+        )
+
+    def test_同一の非ゼロtotalが2PJ以上で警報(self):
+        from fleet import detect_equal_issue_counts
+        rows = [self._row("a", 599), self._row("b", 599), self._row("c", 12)]
+        alarms = detect_equal_issue_counts(rows)
+        assert len(alarms) == 1
+        alarm = alarms[0]
+        assert alarm["total"] == 599
+        assert set(alarm["projects"]) == {"a", "b"}
+
+    def test_total_0_の一致は警報しない(self):
+        """0 件一致は健全（issue なし）なので警報対象外（#419）。"""
+        from fleet import detect_equal_issue_counts
+        rows = [self._row("a", 0), self._row("b", 0), self._row("c", 0)]
+        assert detect_equal_issue_counts(rows) == []
+
+    def test_全PJ異なるtotalなら警報なし(self):
+        from fleet import detect_equal_issue_counts
+        rows = [self._row("a", 10), self._row("b", 11), self._row("c", 12)]
+        assert detect_equal_issue_counts(rows) == []
+
+    def test_issues_summary_None_は集計対象外(self):
+        """旧 cache（issues_summary None）は total 取得不能なので一致判定に含めない（#419）。"""
+        from fleet import detect_equal_issue_counts
+        rows = [
+            FleetRow(pj_name="a", status=STATUS_ENABLED, issues_summary=None),
+            FleetRow(pj_name="b", status=STATUS_ENABLED, issues_summary=None),
+        ]
+        assert detect_equal_issue_counts(rows) == []
+
+    def test_3PJ以上の一致も1警報にまとめる(self):
+        from fleet import detect_equal_issue_counts
+        rows = [self._row("a", 599), self._row("b", 599), self._row("c", 599)]
+        alarms = detect_equal_issue_counts(rows)
+        assert len(alarms) == 1
+        assert set(alarms[0]["projects"]) == {"a", "b", "c"}
+
+    def test_複数のグループを別々に警報(self):
+        from fleet import detect_equal_issue_counts
+        rows = [
+            self._row("a", 599), self._row("b", 599),
+            self._row("c", 42), self._row("d", 42),
+            self._row("e", 7),
+        ]
+        alarms = detect_equal_issue_counts(rows)
+        totals = {a["total"] for a in alarms}
+        assert totals == {599, 42}

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(audit): fleet ISSUES 599 件は測定バグ — hardcoded_values 検出パイプライン3点修正（#419）** — `rl-fleet status` の ISSUES 列が全 PJ で 600 前後（bots/receipt/figma-to-code はぴったり 599 で一致）に揃い env_score の物差しとして死んでいた。再現で 599 件を完全再現し根因3点を確定: ① `hardcoded_detector` の `sk-` regex に単語境界がなく、gstack スキル散文の `ask-only-for-one-way` 等が単語内部にマッチ（api_key 552 件＝全体の 92% を占める FP）→ `(?<![A-Za-z0-9])` 境界を追加。② 検出ループの二重実装の divergence — `audit/issues.py` には global/plugin origin 除外があるが `audit/orchestrator.py` の同型ループには無く、除外なし経路で外部管理スキルの散文まで走査していた → 共通関数 `collect_hardcoded_value_issues` に集約し両 call site が共有。③ 走査対象の汚染 — `find_artifacts` の `rglob("SKILL.md")` が `node_modules` / `.hermes`（`.hermes/skills/` 入れ子含む）/ `.git` 等の任意 dot-dir まで再帰 → `is_excluded_skill_path` を node_modules + 最初の `skills/` 以降の dot-dir 配下を除外するよう拡張。再発予防として fleet status に「複数 PJ の ISSUES total が同値（非ゼロ）なら測定バグ警報」の不変条件チェック（`detect_equal_issue_counts`）を追加し `_run_status` で surface。TDD 新規（regex 境界の FP/回帰 + 本物 secret 検出維持 + 共通関数共有 + 収集除外 + 同値カウント警報）。決定論・LLM 非依存。
+
 ## [1.94.1] - 2026-06-10
 
 ### Fixed

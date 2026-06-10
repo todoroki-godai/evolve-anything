@@ -101,6 +101,7 @@ from .collectors import (  # noqa: E402, F401
     _serialize_row,
     aggregate_subagents_by_project,
     collect_fleet_status,
+    detect_equal_issue_counts,
     write_fleet_run,
 )
 
