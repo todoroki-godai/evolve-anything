@@ -67,7 +67,7 @@
     "slow_threshold_ms": {
       "title": "Slow Threshold (ms)",
       "type": "number",
-      "description": "Bash commands slower than this (ms) are logged to tool_durations.jsonl by tool_duration hook (default: 1000)",
+      "description": "Currently unused (tool_duration hook removed in #426; key kept for manifest compatibility, reusable later) (default: 1000)",
       "sensitive": false
     },
     "subagent_warning_threshold": {
