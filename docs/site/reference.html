@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.94.1</span>
+    <span class="header-version">v1.96.0</span>
   </div>
 </header>
 
@@ -298,6 +298,10 @@
           <tr><td>Observe hooks (21個)</td><td>LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録する</td></tr>
           <tr><td>Auto Trigger</td><td>セッション終了・corrections 蓄積・ファイル変更時に evolve/audit 実行を自動提案する (<code>trigger_engine.py</code>)</td></tr>
           <tr><td>spec_trigger</td><td>main に着地した「挙動コード（<code>scripts/**.py</code>・<code>hooks/**.py</code>）を変えたのに仕様アーティファクト（SPEC.md・CLAUDE.md・spec/・docs/decisions/ 等）を未更新」のマージを SessionStart で検出し spec-keeper update / ADR 化を1回提案する（[ADR-044]）。/ship を経ない <code>gh pr merge</code> 直叩き・GitHub web squash マージの無音穴を塞ぐ。ゲートは実コーパス 40 commit の dry 適用で較正（feat/refactor/feat! を信号源とし fix は除外）。cooldown(3日)+リマインド1回+解消プロキシで重複抑制、<code>spec_trigger_enabled</code> で無効化可。決定論・LLM 非依存</td></tr>
+          <tr><td>capture_rate</td><td>correction capture 率（20+ ターン session のうち correction 検出割合）を決定論算出し audit に advisory surface（#421）</td></tr>
+          <tr><td>orphan_store</td><td>writer あり reader なしの jsonl ストアを決定論検出（hooks=writer / scripts+skills=reader 静的突合）（#422）</td></tr>
+          <tr><td>utterance_archive</td><td>全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query）。物理PK+論理UNIQUEで resume 複製を弾く・cwd 由来 pj_slug・evolve/audit batch + rl-fleet ingest + SessionStart staleness advisory（#430）</td></tr>
+          <tr><td>weak_signals</td><td>暗黙修正シグナルの決定論検出（直後手編集 / permission deny / 言い直し / Esc 中断）→ weak_signals.jsonl レーン。corrections 直入れせず reflect 確認後に昇格。言い直し閾値は実コーパス dry-run で決定（jaccard 0.8）[#432]</td></tr>
           <tr><td>userConfig (18項目)</td><td>CC v2.1.83 manifest.userConfig でトリガー閾値・cleanup prefix・slow command 閾値・subagent 警告閾値・スキル数上限 (<code>max_skill_count</code>=30)・correction pre-flight 閾値 (<code>correction_preflight_threshold</code>=3)・error pre-flight 閾値 (<code>error_preflight_threshold</code>=3)・spec_trigger 有効化 (<code>spec_trigger_enabled</code>) 等を設定する</td></tr>
         </tbody>
       </table>
@@ -329,6 +333,13 @@
           <tr><td>eval_saturation</td><td>trigger eval 飽和度診断（#292, TASTE arXiv 2605.28556）。順生成 eval の「緑でも頑健でない」飽和兆候（low_negative_coverage / easy_negatives / thin）を eval 実行なし・決定論で測り、observability contract で evolve のたびに surface</td></tr>
           <tr><td>evolve_introspect</td><td>evolve メタ層の自己解析（#299）。完了後に result dict を決定論で読み、self_detection / runtime_errors / improvement_opportunities の3カテゴリで GitHub issue 候補を生成。起票は半自動（人間承認）、dedup マーカーで重複防止。split↔archive 矛盾は reconcile_split_archive が本流解消（#301 #302, [ADR-033][ADR-034]）</td></tr>
           <tr><td>optimize_history_store</td><td>accept/reject 履歴（fitness calibration 母集団）の正準ストア。DATA_DIR/optimize_history/&lt;slug&gt;.jsonl の PJ スコープに集約し従来の 3-way split-brain を解消。slug は worktree 安全に git-common-dir 親 basename で解決、writer/reader 計6箇所が単一経路を共有（[ADR-031]）</td></tr>
+          <tr><td>evolve_decisions</td><td>evolve 提案の accept/reject を emit→drain 2相で決定論キャプチャ（<code>rl-evolve --drain</code>）[ADR-041, #400, #402]</td></tr>
+          <tr><td>evolve_reconcile</td><td>skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400）</td></tr>
+          <tr><td>evolve_result_schema</td><td>result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379）</td></tr>
+          <tr><td>evolve_consistency</td><td>P1 invariant の runtime self-detect（型 drift のみ）（#377-5）</td></tr>
+          <tr><td>outcome_metrics</td><td>行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。utilization の plugin レイアウト探索修理も同梱 [#423, ADR-046]</td></tr>
+          <tr><td>outcome_attribution</td><td>outcome 2軸（一発成功率 / rework 率）を per-skill 帰属し evolve ターゲットランキングへ自動入力（advisory→閉ループの先行配線）。dry-run に before/after 順位差分を surface [#433]</td></tr>
+          <tr><td>correction_semantic</td><td>correction capture の二層化（#431）。utterances.db の dialogue 発話を Haiku がバッチ意味判定（auto_memory 2 相と同型）→ weak_signals(channel=llm_judge) 隔離 + 個人辞書（correction_idioms.jsonl）。フェーズ昇格は human-source のみ駆動（provenance_weight）/ reflect 昇格フロー（--show-weak-signals / --promote-weak）[#431]</td></tr>
         </tbody>
       </table>
 
