@@ -524,6 +524,13 @@ def run_evolve(
             project_root=proj,
             dry_run=dry_run,  # #308: --dry-run 時は triage_ledger に書き込まない
         )
+        # #433 先行スコープ: corrections 非依存の2軸（一発成功率 / rework 率）を
+        # スキル単位に分解し、triage 候補の順位に自動入力（advisory→閉ループ配線）。
+        # in-memory の sessions/usage_data を渡すので DATA_DIR 再読込なし（dry-run 安全）。
+        from audit.outcome_attribution import apply_outcome_ranking
+        triage_result = apply_outcome_ranking(
+            triage_result, usage=usage_data, sessions=sessions
+        )
         result["phases"]["skill_triage"] = triage_result
     except Exception as e:
         result["phases"]["skill_triage"] = {"error": str(e), "skipped": True}
