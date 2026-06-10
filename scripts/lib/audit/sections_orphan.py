@@ -50,3 +50,57 @@ def build_orphan_store_section(project_dir: Path) -> Optional[List[str]]:
         lines.append(f"  ・{name} ← writer: {writers}（reader 0）")
     lines.append("")
     return lines
+
+
+def build_store_contract_section(project_dir: Path) -> Optional[List[str]]:
+    """ストア契約ゲート: 宣言（store_registry）と実体の drift を audit に surface する（#434）。
+
+    orphan_store（事後・reader 0 検出）とは別軸の事前ゲート。新ストアを追加するとき
+    store_registry に宣言を足さずに hook が書くと `undeclared` として検出する（モグラ叩き解消）。
+
+    観測可能性:
+    - orphan_store / store_registry 未解決 → None（沈黙）
+    - 登録 hook の writer が 1 件も無い環境 → None（沈黙）
+    - drift なし → 「評価したが該当なし ✓」（silence != evaluated）
+    - undeclared / stale / 宣言不整合あり → ⚠ で evidence 併記
+    """
+    try:
+        import orphan_store
+    except ImportError:
+        return None
+
+    # writer が 1 件も無い環境（hooks.json 不在等）は評価対象が無い → 沈黙。
+    if not orphan_store.find_store_writers():
+        return None
+
+    drift = orphan_store.detect_store_contract_drift()
+
+    header = ["## Store Contract Gate (宣言と実体の drift)", ""]
+    clean = not (drift.undeclared or drift.stale or drift.declaration_problems)
+    if clean:
+        return header + [
+            "✓ 評価したが該当なし（登録 hook が書く全 jsonl ストアが store_registry "
+            "に writer/reader/retention 宣言済み）",
+            "",
+        ]
+
+    lines = list(header)
+    if drift.undeclared:
+        lines.append(
+            f"⚠ store_registry に宣言が無い新規 writer が {len(drift.undeclared)} 件。"
+            "新ストアは scripts/lib/store_registry.py に writer/reader/retention を宣言すること（#434）。",
+        )
+        for name in drift.undeclared:
+            writers = ", ".join(drift.declared_writer_files.get(name, [])) or "(不明)"
+            lines.append(f"  ・{name} ← writer: {writers}（宣言なし）")
+    if drift.stale:
+        lines.append(
+            f"⚠ 宣言はあるが実 writer が見当たらないストアが {len(drift.stale)} 件"
+            "（writer 削除済み？ 宣言を見直すこと）: " + ", ".join(drift.stale),
+        )
+    if drift.declaration_problems:
+        lines.append("⚠ store_registry 宣言自身の不整合:")
+        for p in drift.declaration_problems:
+            lines.append(f"  ・{p}")
+    lines.append("")
+    return lines

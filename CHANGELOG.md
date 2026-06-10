@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **chore(observe): ストア新設の事前契約ゲート — writer/reader/retention 宣言を必須化（#434）** — orphan_store（#422/#426/#427）は「writer あり reader 0」の**事後**検出でモグラ叩き（`message_display.jsonl` #427 が代表例）だった。新 jsonl ストア追加時に **writer / reader / retention の3点宣言を必須化**する事前ゲートを追加。① 宣言 SoT を機械可読な Python dict で新設（`scripts/lib/store_registry.py` の `StoreDeclaration` リスト。`_OBSERVABILITY_BUILDERS` 等の既存宣言慣習に統一、消費側 orphan_store から import 一発で参照し JSON parse 経路を増やさない）。retention は `permanent`/`ttl`(N日・`ttl_days` 必須)/`compaction`(条件散文必須) の3種別を `validate_declarations` で整合性検証、orphan の処遇は `disposition`(`keep_future`/`drain`/`remove`)で明示。② orphan_store に `detect_store_contract_drift` を追加 — **宣言なしの新規 writer = undeclared**（reader 有無に関わらず検出）/ **宣言あり実 writer 不在 = stale** / 宣言不整合 を突合し、observability builder `build_store_contract_section`（`audit/sections_orphan.py`）を `_OBSERVABILITY_BUILDERS` に登録して audit/evolve に surface。③ 既存 hook writer 9 ストア（corrections/usage/usage-registry/sessions/errors/workflows/skill_activations/subagents/message_display）を宣言バックフィル、`message_display.jsonl`（#427 の orphan）は disposition=keep_future + retention=compaction（1MB ローテーション）で記録。`test_all_live_hook_writers_are_declared` が宣言漏れを回帰検出、`test_contract_section_detects_undeclared_writer` が「宣言なしで新ストアに書く hook を追加すると audit が検出する」を回帰保証。TDD 新規。決定論・LLM 非依存。
+
 ## [1.95.0] - 2026-06-10
 
 ### Added

@@ -20,7 +20,10 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import orphan_store  # noqa: E402
-from audit.sections_orphan import build_orphan_store_section  # noqa: E402
+from audit.sections_orphan import (  # noqa: E402
+    build_orphan_store_section,
+    build_store_contract_section,
+)
 
 
 def _make_plugin(
@@ -248,3 +251,131 @@ def test_builder_registered_in_observability_contract() -> None:
 
     keys = [k for k, _ in _OBSERVABILITY_BUILDERS]
     assert "orphan_store" in keys
+
+
+# --- detect_store_contract_drift (事前契約ゲート, #434) -----------------------
+
+def test_drift_flags_undeclared_writer(tmp_path: Path, monkeypatch) -> None:
+    """store_registry に宣言が無い writer hook を undeclared として検出する。
+
+    issue #434 の主検出: 宣言なしの新規 writer。reader の有無に関わらず検出する。
+    """
+    import store_registry
+
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"newhook.py": 'append_jsonl(DATA_DIR / "brandnew.jsonl", r)'},
+        registered=["newhook.py"],
+        # reader も書いておく → orphan_store の事後検出には出ないが、宣言なしなら drift には出る
+        scripts_files={"lib/c.py": 'open(DATA_DIR / "brandnew.jsonl")'},
+    )
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: root)
+    # 宣言は空にして「未宣言の新 writer」を再現
+    monkeypatch.setattr(store_registry, "declared_store_names", lambda: [])
+    monkeypatch.setattr(store_registry, "validate_declarations", lambda decls=None: [])
+
+    drift = orphan_store.detect_store_contract_drift()
+    assert "brandnew.jsonl" in drift.undeclared
+    assert "newhook.py" in drift.declared_writer_files["brandnew.jsonl"]
+
+
+def test_drift_clean_when_all_declared(tmp_path: Path, monkeypatch) -> None:
+    """全 writer が宣言済みなら undeclared は空。"""
+    import store_registry
+
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"w.py": 'append_jsonl(DATA_DIR / "declared.jsonl", r)'},
+        registered=["w.py"],
+    )
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: root)
+    monkeypatch.setattr(
+        store_registry, "declared_store_names", lambda: ["declared.jsonl"]
+    )
+    monkeypatch.setattr(store_registry, "validate_declarations", lambda decls=None: [])
+
+    drift = orphan_store.detect_store_contract_drift()
+    assert drift.undeclared == []
+
+
+def test_drift_flags_stale_declaration(tmp_path: Path, monkeypatch) -> None:
+    """宣言はあるが実 writer が無いストアを stale として検出する。"""
+    import store_registry
+
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"w.py": 'append_jsonl(DATA_DIR / "alive.jsonl", r)'},
+        registered=["w.py"],
+    )
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: root)
+    monkeypatch.setattr(
+        store_registry,
+        "declared_store_names",
+        lambda: ["alive.jsonl", "ghost.jsonl"],
+    )
+    monkeypatch.setattr(store_registry, "validate_declarations", lambda decls=None: [])
+
+    drift = orphan_store.detect_store_contract_drift()
+    assert "ghost.jsonl" in drift.stale
+    assert drift.undeclared == []
+
+
+# --- build_store_contract_section (regression: 宣言なし新 writer を audit が検出) -
+
+def test_contract_section_detects_undeclared_writer(tmp_path: Path, monkeypatch) -> None:
+    """宣言なしで新ストアに書く hook を追加すると audit セクションが検出する（#434 SC）。
+
+    これが issue の主 Success Criteria の回帰テスト:
+    「宣言なしで新ストアに書き込む hook を追加すると audit が検出する」。
+    """
+    import store_registry
+
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"sneaky.py": 'append_jsonl(DATA_DIR / "undeclared_store.jsonl", r)'},
+        registered=["sneaky.py"],
+    )
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: root)
+    monkeypatch.setattr(store_registry, "declared_store_names", lambda: [])
+    monkeypatch.setattr(store_registry, "validate_declarations", lambda decls=None: [])
+
+    section = build_store_contract_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "⚠" in body
+    assert "undeclared_store.jsonl" in body
+    assert "sneaky.py" in body
+
+
+def test_contract_section_ok_when_all_declared(tmp_path: Path, monkeypatch) -> None:
+    """全 writer 宣言済みなら『評価したが該当なし ✓』を残す（silence != evaluated）。"""
+    import store_registry
+
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"w.py": 'append_jsonl(DATA_DIR / "ok_store.jsonl", r)'},
+        registered=["w.py"],
+    )
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: root)
+    monkeypatch.setattr(store_registry, "declared_store_names", lambda: ["ok_store.jsonl"])
+    monkeypatch.setattr(store_registry, "validate_declarations", lambda decls=None: [])
+
+    section = build_store_contract_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "✓" in body
+
+
+def test_contract_section_silent_when_no_writers(tmp_path: Path, monkeypatch) -> None:
+    """writer が 1 件も無い環境（評価対象なし）は None（沈黙）。"""
+    root = _make_plugin(tmp_path, hook_files={}, registered=[])
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: root)
+    assert build_store_contract_section(tmp_path) is None
+
+
+def test_contract_section_registered_in_observability_contract() -> None:
+    """observability contract に store_contract builder が登録されていること。"""
+    from audit.observability import _OBSERVABILITY_BUILDERS
+
+    keys = [k for k, _ in _OBSERVABILITY_BUILDERS]
+    assert "store_contract" in keys

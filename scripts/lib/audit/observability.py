@@ -26,7 +26,7 @@ from .sections_agent import build_agent_team_section
 from .sections_capture import build_capture_rate_section
 from .sections_eval import build_eval_saturation_section
 from .sections_hook import build_hook_drift_section
-from .sections_orphan import build_orphan_store_section
+from .sections_orphan import build_orphan_store_section, build_store_contract_section
 from .sections_outcome import build_outcome_metrics_section
 
 # (key, builder) — observability の単一ソース。
@@ -43,6 +43,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("agent_team", build_agent_team_section),
     ("correction_capture", build_capture_rate_section),
     ("orphan_store", build_orphan_store_section),
+    ("store_contract", build_store_contract_section),
     ("outcome_metrics", build_outcome_metrics_section),
 ]
 

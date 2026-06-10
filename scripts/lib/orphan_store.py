@@ -57,6 +57,23 @@ class OrphanStoreReport:
     reader_count: Dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class StoreContractDriftReport:
+    """宣言（store_registry）と実体（hook writer）の drift 検出結果（#434）。
+
+    undeclared:   実際に登録 hook が書くが store_registry に宣言が無いストア名（ソート済み）。
+                  → 「宣言なしの新規 writer」。これが事前ゲートの主検出対象。
+    declared_writer_files: undeclared ストア名 → それを書く hook ファイル名（evidence）。
+    stale:        宣言はあるが実 writer が見当たらないストア名（writer が消えた等）。advisory。
+    declaration_problems: store_registry 宣言自身の整合性問題（retention 不整合など）。
+    """
+
+    undeclared: List[str] = field(default_factory=list)
+    declared_writer_files: Dict[str, List[str]] = field(default_factory=dict)
+    stale: List[str] = field(default_factory=list)
+    declaration_problems: List[str] = field(default_factory=list)
+
+
 def _registered_hook_files(plugin_root: Path) -> List[str]:
     """hooks.json の command で参照される hook ファイル名（xxx.py）一覧を返す。"""
     hooks_json = plugin_root / "hooks" / "hooks.json"
@@ -134,4 +151,35 @@ def detect_orphan_stores(plugin_root: Optional[Path] = None) -> OrphanStoreRepor
         orphans=orphans,
         writer_files={name: sorted(writers[name]) for name in orphans},
         reader_count={name: readers.get(name, 0) for name in writers},
+    )
+
+
+def detect_store_contract_drift(
+    plugin_root: Optional[Path] = None,
+) -> StoreContractDriftReport:
+    """宣言（store_registry）と実体（登録 hook の writer）の drift を検出する（#434）。
+
+    事前契約ゲート: 新ストアを追加するとき store_registry に宣言を足さずに hook が書くと
+    `undeclared` に載る。orphan_store の事後検出（reader 0）と違い、reader の有無に関わらず
+    「宣言なしの新規 writer」を検出するのが目的（モグラ叩きの解消）。
+
+    store_registry が解決できない環境（別 PJ 等）では空レポートを返す（沈黙）。
+    """
+    root = plugin_root if plugin_root is not None else _default_plugin_root()
+    writers = find_store_writers(root)
+
+    try:
+        import store_registry
+    except ImportError:
+        return StoreContractDriftReport()
+
+    declared = set(store_registry.declared_store_names())
+
+    undeclared = sorted(name for name in writers if name not in declared)
+    stale = sorted(name for name in declared if name not in writers)
+    return StoreContractDriftReport(
+        undeclared=undeclared,
+        declared_writer_files={name: sorted(writers[name]) for name in undeclared},
+        stale=stale,
+        declaration_problems=store_registry.validate_declarations(),
     )
