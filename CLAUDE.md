@@ -26,7 +26,7 @@
 
 | コンポーネント | 一言サマリ | 実体 |
 |----------------|-----------|------|
-| Observe hooks (21個) | LLM コストゼロで使用・エラー・修正・ワークフロー・ファイル変更を自動記録 | `hooks/` |
+| Observe hooks (20個) | LLM コストゼロで使用・エラー・修正・ワークフロー・ファイル変更を自動記録 | `hooks/` |
 | Auto Trigger | corrections 蓄積・セッション終了等で evolve/audit を自動提案 | `trigger_engine.py` |
 | `userConfig` | trigger 閾値・各種上限など 18 項目をプラグイン有効化時に設定可能 | manifest |
 | `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチ | agent |
@@ -64,6 +64,7 @@
 | `hook_drift` | 他ツール追従 hook の陳腐化検出（stale_pin）[ADR-036] | `hook_drift.py` |
 | `data_dir_migration` | DATA_DIR hook/tool 分裂の一元化 migration（marker ゲート redirect + DuckDB rebuild マージ、`rl-fleet migrate-data`）[#364, ADR-042] | `data_dir_migration.py` |
 | `spec_trigger` | 仕様未更新マージの SessionStart 検出→spec-keeper 提案 [ADR-044] | `spec_trigger.py` |
+| `orphan_store` | writer あり reader なしの jsonl ストアを決定論検出（hooks=writer / scripts+skills=reader 静的突合）（#422） | `orphan_store.py` |
 
 ## クイックスタート
 

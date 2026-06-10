@@ -73,6 +73,16 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # DATA_DIR は import 時に env var を読むので reload が必要
     if "rl_common" in sys.modules:
         importlib.reload(sys.modules["rl_common"])
+    # importlib.reload は spec を sys.path 順で **再解決** するため、先行テストが
+    # skills/audit/scripts（CLI shim の flat audit.py がある）を sys.path 先頭に
+    # 入れていると shim が再実行され、sys.modules["audit"] が別オブジェクトに
+    # 置換される。その新 module の __init__ 実行では audit.* submodule が全て
+    # sys.modules キャッシュ命中になり親への属性 bind が走らないため、以後
+    # getattr(audit, "issues") 系（monkeypatch の文字列パス解決等）が落ちる
+    # order-dependent 汚染になる（#419 の test_hardcoded_collection_shared で顕在化）。
+    # 実パッケージ（scripts/lib/audit/）を必ず先に解決させ in-place reload に保つ
+    # （monkeypatch なので teardown で sys.path は自動復元）。
+    monkeypatch.syspath_prepend(str(_LIB))
     importlib.reload(sys.modules["audit"])
     # calibration_drift / eval_saturation builder は環境グローバル状態（accept/reject
     # 履歴 / DATA_DIR の eval-sets）を読むため、実機データがあると snapshot がブレる。
@@ -84,6 +94,10 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         eval_saturation, "_default_eval_sets_dir", lambda: tmp_path / "no-evalsets"
     )
+    # orphan_store builder は rl-anything 自身の hooks/scripts/skills を走査するため、実プラグインに
+    # orphan ストアがあると snapshot がブレる。空 tmp に向けて出力を決定論化する（#422）。
+    import orphan_store
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: tmp_path / "no-plugin")
     return proj
 
 

@@ -126,7 +126,7 @@ rl-anything consists of **four independent pillars**.
 
 ## Hooks (Data Collection)
 
-14 hooks cover the full session lifecycle at zero LLM cost.
+13 hooks cover the full session lifecycle at zero LLM cost.
 
 | Hook | Event | Output |
 |------|-------|--------|
@@ -136,7 +136,6 @@ rl-anything consists of **four independent pillars**.
 | `instructions_loaded` | InstructionsLoaded | `sessions.jsonl` + Growth greeting |
 | `workflow_context` | PreToolUse | `$TMPDIR/rl-anything-workflow-*.json` |
 | `skill_activation_log` | PostToolUse | `skill_activations.jsonl` (skill firing record) |
-| `tool_duration` | PostToolUse | `tool_durations.jsonl` (slow command record) |
 | `file_changed` | FileChanged | stdout (audit suggestion) |
 | `permission_denied` | PermissionDenied | `errors.jsonl` (permission-denial record) |
 | `stop_failure` | StopFailure | `errors.jsonl` (API errors) |

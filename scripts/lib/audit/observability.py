@@ -25,6 +25,7 @@ from .sections import (
 from .sections_agent import build_agent_team_section
 from .sections_eval import build_eval_saturation_section
 from .sections_hook import build_hook_drift_section
+from .sections_orphan import build_orphan_store_section
 
 # (key, builder) — observability の単一ソース。
 # report.py(markdown) と collect_observability(構造化) の両方がこれを消費する。
@@ -38,6 +39,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("negative_transfer", build_negative_transfer_section),
     ("hook_drift", build_hook_drift_section),
     ("agent_team", build_agent_team_section),
+    ("orphan_store", build_orphan_store_section),
 ]
 
 

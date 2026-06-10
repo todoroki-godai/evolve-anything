@@ -66,16 +66,6 @@
         ]
       },
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/tool_duration.py\"",
-            "timeout": 3000
-          }
-        ]
-      },
-      {
         "matcher": "Edit",
         "hooks": [
           {

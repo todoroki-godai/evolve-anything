@@ -120,7 +120,7 @@ rl-anything は **4つの独立した柱** で構成される。
 
 ## Hooks（データ収集）
 
-14個の hooks が LLM コストゼロでセッションライフサイクル全体をカバーする。
+13個の hooks が LLM コストゼロでセッションライフサイクル全体をカバーする。
 
 | Hook | イベント | 出力先 |
 |------|---------|--------|
@@ -130,7 +130,6 @@ rl-anything は **4つの独立した柱** で構成される。
 | `instructions_loaded` | InstructionsLoaded | `sessions.jsonl` + Growth greeting |
 | `workflow_context` | PreToolUse | `$TMPDIR/rl-anything-workflow-*.json` |
 | `skill_activation_log` | PostToolUse | `skill_activations.jsonl`（スキル発火記録） |
-| `tool_duration` | PostToolUse | `tool_durations.jsonl`（slow command 記録） |
 | `file_changed` | FileChanged | stdout（audit 提案） |
 | `permission_denied` | PermissionDenied | `errors.jsonl`（パーミッション拒否記録） |
 | `stop_failure` | StopFailure | `errors.jsonl`（API エラー） |

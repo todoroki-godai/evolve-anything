@@ -11,6 +11,7 @@ from pathlib import Path
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
+from audit import issues as issues_mod  # noqa: E402
 from audit.issues import collect_hardcoded_value_issues  # noqa: E402
 
 
@@ -38,8 +39,12 @@ class TestSharedCollectionFunction:
         def fake_classify(path):
             return "global" if path == global_md else "custom"
 
+        # 文字列ターゲットは使わない: 先行テストが sys.modules["audit"] を別オブジェクトに
+        # 置換すると（skills/audit/scripts の flat shim 経由 reload、submodule 属性なし）、
+        # 文字列パス解決の getattr(audit, "issues") が AttributeError で落ちる order-dependent
+        # 失敗になる。module オブジェクト直接参照なら親 audit の同一性に依存しない（#419）。
         monkeypatch.setattr(
-            "audit.issues.classify_artifact_origin", fake_classify, raising=False
+            issues_mod, "classify_artifact_origin", fake_classify, raising=False
         )
 
         artifacts = {"skills": [custom_md, global_md], "rules": []}
@@ -54,7 +59,7 @@ class TestSharedCollectionFunction:
         fake_key = "sk" + "-" + "b" * 20
         md.write_text(f"key: {fake_key}", encoding="utf-8")
         monkeypatch.setattr(
-            "audit.issues.classify_artifact_origin", lambda p: "custom", raising=False
+            issues_mod, "classify_artifact_origin", lambda p: "custom", raising=False
         )
         issues = collect_hardcoded_value_issues({"skills": [md], "rules": []})
         assert len(issues) == 1
