@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.94.1] - 2026-06-10
+
+### Fixed
+- **fix(data-dir): `merge_db` のスキーマ乖離・並行書き込みをロバスト化（#414 follow-up, #417）** — `rl-fleet migrate-data` の DuckDB マージで、src/old に同名テーブルがあり列構成が食い違うと `CREATE TABLE AS ... UNION` が Binder Error を投げ、per-entry failure に落ち→ marker が永久に書かれず→ SessionStart リマインドが永久発火する**永久失敗ループ**になっていた（#417 優先）。新規 `_merge_table_both` で3段フォールバック: ① 列完全一致 → 従来 UNION（高速路）② 列集合の差分（バージョン跨ぎの列追加/削除）→ 列名で揃えた superset union（欠損列は `NULL` 補完、行・列とも損失なし）③ 和解不能な型差 → old を残し src を `{table}__src_unmerged` 別テーブルへ退避（**データ損失ゼロ**、`format_summary` が要手動統合として surface）。型乖離でも完走するため marker が立ちループを断つ。並行書き込み窓（#417-2）対策として append-only ログ（`.jsonl`/単発）は merge 前後の `(mtime_ns, size)` 差分でマージ中の外部追記を検知し削除を見送る（次回再実行で dedup 回収、`.db` は writable ATTACH の WAL replay で source 自身が変わるため idle 実行ガイダンスで対処）。UNION の行折り畳み（#417-3）は jsonl 行 dedup と同設計の意図的挙動として docstring 明文化（PK 持ちストアは無害）。副次で、`migrate-data` 実行後に resolver の marker チェックが実 home を読んで probe 系テストが落ちる test 衛生バグ（`pitfall_resolver_marker_reads_real_home`）を `fallback` fixture の実 home 隔離で根治。TDD 新規10件（スキーマ乖離3パターン + 並行窓 + marker 完走）+ 既存8件を隔離修正。決定論・LLM 非依存。
+
 ## [1.94.0] - 2026-06-10
 
 ### Added
