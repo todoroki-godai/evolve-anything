@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.95.0] - 2026-06-10
+
 ### Added
 - **feat(fitness): アウトカム指標 v1 — utilization 恒久0 の修理 + 行動アウトカム3軸の advisory 導入（#423）** — env_score が全 PJ で 0.6 前後・Lv.6-7 頭打ちだった構造要因2つに対処。**(1) utilization 修理**: `telemetry._find_all_skills` を audit 収集系 `audit.artifacts.find_project_skill_dirs`（`.claude/skills/` と plugin レイアウトのリポジトリ直下 `skills/` の両走査 + #419 収集除外を共有）に統一。plugin レイアウトの本リポジトリで skills 0→21 / utilization 0.0→≈0.54 を実測（telemetry 重み25%が死に枠だった根因の修理、他軸の計算式は不変）。**(2) 行動アウトカム3軸（advisory・スコア重みには未反映）**: correction 再発率 / 一発成功率 / rework 率(近似) を既存ストア（corrections.jsonl / sessions.jsonl）から決定論算出し、observability builder `build_outcome_metrics_section`（`audit/sections_outcome.py`）を `_OBSERVABILITY_BUILDERS` に登録して audit/evolve のたびに surface。各軸に evidence（件数・session_id 例）を併記、データ不足の軸は「データ不足」を明示、3軸とも該当ストア皆無なら None で沈黙。rework は既存ストアに編集対象ファイル ID が無いため tool_sequence の編集バーストを近似 proxy とし限界を ADR-046 に明記。重み昇格は 2〜4 週 advisory 並走→分布実測→判断（[ADR-046]）。TDD 新規（plugin レイアウト探索・3軸算出・builder・observability/snapshot 隔離）。決定論・LLM 非依存。
 
