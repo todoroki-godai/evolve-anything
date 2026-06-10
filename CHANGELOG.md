@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.96.0] - 2026-06-10
 
 ### Fixed
 - fix(hooks): `tool_duration.py` を no-op 互換 shim として復活（#426 follow-up） — hook 登録はセッション開始時に固定されるため、v1.95.0 で本体を削除した後も旧セッションが発火し続け、毎回 Errno 2 の blocking error がユーザーに表示されていた。stdin 読み捨て + exit 0 の shim でエラー表示だけを止める（何も書き込まない）。旧セッションが掃けた次々リリースで削除可。`plugin.json` の `slow_threshold_ms` description も未使用の実態に追従（key は manifest 互換のため維持、config.py のコメントと整合）
