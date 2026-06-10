@@ -81,6 +81,15 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     # 実機に gstack があると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する。
     import hook_drift
     monkeypatch.setattr(hook_drift, "_default_gstack_dir", lambda: tmp_path / "no-gstack")
+    # correction_capture も環境グローバル（DATA_DIR 配下の usage.jsonl/corrections.jsonl）を
+    # 読む builder のため、実機に live テレメトリがあると「PJ アーティファクト無し」前提が崩れる。
+    # store を不在 tmp に向けて active session 0 → None にし、契約を隔離する（#421）。
+    from audit import sections_capture
+    monkeypatch.setattr(
+        sections_capture,
+        "_resolve_store_files",
+        lambda: (tmp_path / "no-usage.jsonl", tmp_path / "no-corr.jsonl"),
+    )
     # orphan_store も環境グローバル（rl-anything 自身の hooks/scripts/skills）を走査する builder
     # のため、実プラグインに orphan ストアがあると同様に前提が崩れる。空 tmp に向けて隔離する（#422）。
     import orphan_store

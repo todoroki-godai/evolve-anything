@@ -112,30 +112,78 @@ def _deliver_spec_drift() -> None:
         print(f"[rl-anything:restore_state] spec-trigger error: {e}", file=sys.stderr)
 
 
-def _deliver_evolve_drain_reminder() -> None:
-    """前回 evolve で emit した提案が apply 済みなのに未 drain なら surface する（#402）。
+def _resolve_canonical_history_file(slug: str):
+    """drain の書き込み先 optimize_history を **tool 文脈の正準 DATA_DIR** に解決する（#421）。
 
-    ingest（Step 7.8 drain）が SKILL.md prose 依存だった enforcement gap の検出層。
-    `undrained_applied` は optimize_history を読まず marker の before_sha と現ディスク sha を
-    突合するだけなので、hook 文脈でも DATA_DIR split（#358）を踏まない。timing 問題は
-    「次 SessionStart で見る」ことで構造的に回避（apply は前セッションで完了済み）。
-    apply 済みが無ければ沈黙、drain 実行で marker が消えて自然終息。
+    `optimize_history_store.DATA_DIR`/`HISTORY_ROOT` は import 時に raw `CLAUDE_PLUGIN_DATA`
+    から確定するため、hook 文脈（CC が env=plugin-data を設定）でそのまま drain すると
+    plugin-data dir へ書き、tool 文脈の `rl-evolve --drain`（env 無 → fallback/正準）と
+    書き込み先が割れる（pitfall_datadir_hook_tool_split, #358/#364）。
+
+    そこで marker ゲート付きの `rl_common.resolve_data_dir` で tool reader と同じ正準 dir を
+    解決し、`<canonical>/optimize_history/<sanitized_slug>.jsonl` を返して drain_pending に
+    history_file として渡す。これで hook 文脈でも drain は tool reader と同一ファイルに書く。
+    """
+    import rl_common
+    import optimize_history_store as _ohs
+
+    env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+    canonical = rl_common.resolve_data_dir(env)
+    return canonical / "optimize_history" / f"{_ohs._sanitize_slug(slug)}.jsonl"
+
+
+def _deliver_evolve_drain() -> None:
+    """前回 evolve で emit→apply 済みの提案を SessionStart で自動 drain する（#421）。
+
+    #402 はリマインド表示のみで、実 drain は assistant が手で `rl-evolve --drain` を叩く
+    SKILL.md prose 依存（install ≠ enforcement）だった。本関数はそれを人手ゼロの自動回収へ
+    昇格させ、apply 済み提案を optimize_history（fitness 母集団）へ決定論記録する。
+
+    レイテンシ予算（pitfall_hot_hook_eager_import）:
+      - pending marker が無いケースは MARKER_ROOT のディレクトリ存在チェック → slug 解決 →
+        marker ファイル存在チェックの軽い判定で early-return し、重い経路（optimize_history
+        書き込みを伴う drain_pending）に入らない。duckdb 等の eager import もしない。
+    DATA_DIR split（#364）:
+      - drain の書き込み先は `_resolve_canonical_history_file` で tool reader と同一の正準
+        DATA_DIR に固定する。
+    fail-safe:
+      - drain 中の例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
+    冪等: drain_pending（ingest）が `{pid}_{kind}` entry_id で dedup するため再発火しても二重記録なし。
     """
     if _evolve_decisions is None:
         return
     try:
+        # 軽量 early-return: marker root が無ければ未 drain 提案は存在しない。
+        if not _evolve_decisions.MARKER_ROOT.exists():
+            return
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
         cwd = Path(project_dir) if project_dir else None
         slug = _evolve_decisions.resolve_slug(cwd)
+        if not _evolve_decisions.marker_path(slug).exists():
+            return  # この slug に未 drain marker なし → 沈黙（重い drain に入らない）
+        # apply 済み（ディスク sha が before と異なる）entry が無ければ drain しない。
+        # undrained_applied は optimize_history を読まず marker の sha 突合だけ（#358 を踏まない）。
+        # 「未 apply のまま marker をクリア」して将来の apply を取り逃すのを防ぐため、ここを
+        # ゲートにする（apply されるまで marker は残し、次 SessionStart で再評価する）。
         applied = _evolve_decisions.undrained_applied(slug)
-        if applied:
-            names = ", ".join(sorted({p.get("skill_name", "?") for p in applied}))
-            print(
-                f"[rl-anything] 未 drain の適用済み evolve 提案が {len(applied)} 件あります（{names}）。"
-                "`rl-evolve --drain` で fitness 母集団（optimize_history）に記録してください（#402）。"
-            )
+        if not applied:
+            return
     except Exception as e:
-        print(f"[rl-anything:restore_state] evolve-drain reminder error: {e}", file=sys.stderr)
+        print(f"[rl-anything:restore_state] evolve-drain pre-check error: {e}", file=sys.stderr)
+        return
+
+    try:
+        history_file = _resolve_canonical_history_file(slug)
+        summary = _evolve_decisions.drain_pending(slug=slug, history_file=history_file)
+        accepted = summary.get("accepted") or []
+        rejected = summary.get("rejected") or []
+        print(
+            f"[rl-anything] evolve 提案を自動 drain しました: "
+            f"accept {len(accepted)} 件 / reject {len(rejected)} 件を "
+            f"fitness 母集団（optimize_history）に記録（#421）。"
+        )
+    except Exception as e:
+        print(f"[rl-anything:restore_state] evolve-drain error: {e}", file=sys.stderr)
 
 
 def _deliver_data_dir_migration_reminder() -> None:
@@ -174,8 +222,8 @@ def handle_session_start(event: dict) -> None:
     _deliver_pending_trigger()
     # 仕様未追従マージの提案
     _deliver_spec_drift()
-    # 未 drain の適用済み evolve 提案の記録リマインド（#402）
-    _deliver_evolve_drain_reminder()
+    # apply 済み evolve 提案の SessionStart 自動 drain（#421, #402 リマインドからの昇格）
+    _deliver_evolve_drain()
     # DATA_DIR 分裂の未解消検出（#364）
     _deliver_data_dir_migration_reminder()
 
