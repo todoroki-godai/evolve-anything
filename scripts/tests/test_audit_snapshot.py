@@ -98,6 +98,10 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # orphan ストアがあると snapshot がブレる。空 tmp に向けて出力を決定論化する（#422）。
     import orphan_store
     monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: tmp_path / "no-plugin")
+    # outcome_metrics builder は環境グローバルな DATA_DIR 配下のストア（corrections/sessions）を
+    # 読むため、実機データがあると snapshot がブレる。空 tmp に向けて出力を決定論化する（#423）。
+    from audit import outcome_metrics
+    monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path / "no-outcome-data")
     return proj
 
 

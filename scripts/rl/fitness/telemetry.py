@@ -63,11 +63,24 @@ def _iso_days_ago(days: int) -> str:
 
 
 def _find_all_skills(project_dir: Path) -> List[str]:
-    """project_dir/.claude/skills/ 配下の SKILL.md を持つディレクトリ名を返す。"""
-    skills_dir = project_dir / ".claude" / "skills"
-    if not skills_dir.exists():
-        return []
-    return [p.parent.name for p in skills_dir.rglob("SKILL.md")]
+    """SKILL.md を持つスキルディレクトリ名を返す。
+
+    通常レイアウト（`.claude/skills/`）と plugin レイアウト（リポジトリ直下 `skills/`）の
+    両方を走査する。audit の収集系（`audit.artifacts.find_project_skill_dirs`）に統一し、
+    #419 の収集除外も共有する。plugin レイアウト PJ で utilization が恒久 0 になる
+    根因の修理（#423）。collect 系が解決できない環境では旧来の `.claude/skills/` のみ
+    走査にフォールバックする。
+    """
+    _ensure_paths()
+    try:
+        from audit.artifacts import find_project_skill_dirs
+
+        return find_project_skill_dirs(Path(project_dir))
+    except ImportError:
+        skills_dir = Path(project_dir) / ".claude" / "skills"
+        if not skills_dir.exists():
+            return []
+        return [p.parent.name for p in skills_dir.rglob("SKILL.md")]
 
 
 def score_utilization(project_dir: Path, days: int = 30) -> float:

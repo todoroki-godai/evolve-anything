@@ -1,0 +1,250 @@
+"""アウトカム指標 v1 — 行動アウトカム3軸の決定論算出（#423, advisory）。
+
+env_score の大半は coherence / constitutional（入力 proxy = 構造の綺麗さ）であり、
+「環境が良くなればユーザーの手戻りが減る」という目的変数を直接測る軸が無かった。
+本モジュールは既存ストアのみから LLM 非依存・決定論で 3 軸を算出する:
+
+1. correction 再発率: 同型 correction（correction_type）が窓内で複数セッションに跨って
+   再発した率。corrections.jsonl から算出。
+2. 一発成功率: エラーが 1 件も発生しなかったセッションの割合（error→retry 連鎖なし）。
+   sessions.jsonl の error_count から算出。
+3. rework 率: 検証ツールを介さず連続する Edit/Write が閾値以上現れたセッションの割合。
+   sessions.jsonl の tool_sequence から算出。
+   注意: ストアに編集対象ファイル ID が無いため「同一ファイル N ターン内再編集」は厳密には
+   算出不能。tool_sequence 上の編集バーストを近似 proxy として用いる（ADR-046 に明記）。
+
+各関数は `(value: float|None, evidence: dict)` を返す。データ不足時は value=None +
+evidence["reason"]="no_data" で「沈黙でなくデータ不足を明示」する（#393-#396 準拠）。
+重みには入れない（advisory のみ）。2〜4 週並走 → 分布実測 → 重み昇格判断（ADR-046）。
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+# テストは ``monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)`` で
+# 直接この module 属性を差し替える（文字列ターゲット patch を避ける既知 pitfall 準拠）。
+try:
+    from rl_common import DATA_DIR
+except ImportError:  # pragma: no cover - パス未解決時のフォールバック
+    DATA_DIR = Path.home() / ".claude" / "rl-anything"
+
+# 検証/観測とみなすツール（編集バーストの「介在」判定に使う）。
+_VERIFICATION_TOOLS = frozenset({"Bash", "Read", "Grep", "Glob", "Skill", "Agent", "Task"})
+_EDIT_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
+
+_MAX_EXAMPLES = 5
+
+
+def _dedup(seq: List[str], limit: int = _MAX_EXAMPLES) -> List[str]:
+    """順序を保ったまま重複・空を除いて先頭 limit 件を返す（sessions.jsonl の重複行対策）。"""
+    seen: set = set()
+    out: List[str] = []
+    for s in seq:
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _iso_days_ago(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    """jsonl を 1 行ずつ安全に読む（壊れた行はスキップ）。"""
+    if not path.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
+def _ts_of(rec: Dict[str, Any], *fields: str) -> str:
+    """複数候補フィールドから最初に値のあるタイムスタンプ文字列を返す。"""
+    for f in fields:
+        v = rec.get(f)
+        if v:
+            return str(v)
+    return ""
+
+
+def _in_window(ts: str, since: str) -> bool:
+    """ts（ISO）が since 以降か。空 ts は窓外として扱う（決定論）。"""
+    if not ts:
+        return False
+    return ts.replace("Z", "+00:00") >= since
+
+
+def correction_recurrence_rate(
+    days: int = 30, *, data_dir: Optional[Path] = None
+) -> Tuple[Optional[float], Dict[str, Any]]:
+    """同型 correction（correction_type）が複数セッションに跨って再発した率。
+
+    分母 = 窓内に出現した distinct correction_type 数
+    分子 = そのうち 2 つ以上の distinct session_id で発生した correction_type 数
+
+    値が高いほど「同じ手戻りを繰り返している」= 悪い。
+    """
+    base = data_dir if data_dir is not None else DATA_DIR
+    since = _iso_days_ago(days)
+    records = [
+        r for r in _read_jsonl(base / "corrections.jsonl")
+        if _in_window(_ts_of(r, "timestamp"), since)
+    ]
+    if not records:
+        return None, {"reason": "no_data", "store": "corrections.jsonl", "window_days": days}
+
+    sessions_by_type: Dict[str, set] = {}
+    for r in records:
+        ctype = r.get("correction_type")
+        sid = r.get("session_id") or ""
+        if not ctype:
+            continue
+        sessions_by_type.setdefault(ctype, set()).add(sid)
+
+    if not sessions_by_type:
+        return None, {"reason": "no_data", "store": "corrections.jsonl", "window_days": days}
+
+    distinct_types = len(sessions_by_type)
+    recurring = {t: len(s) for t, s in sessions_by_type.items() if len(s) >= 2}
+    rate = round(len(recurring) / distinct_types, 4)
+    examples = dict(sorted(recurring.items(), key=lambda kv: kv[1], reverse=True)[:_MAX_EXAMPLES])
+    return rate, {
+        "records": len(records),
+        "distinct_types": distinct_types,
+        "recurring_types": len(recurring),
+        "examples": examples,  # {correction_type: distinct_session_count}
+        "window_days": days,
+    }
+
+
+def first_try_success_rate(
+    days: int = 30, *, data_dir: Optional[Path] = None
+) -> Tuple[Optional[float], Dict[str, Any]]:
+    """エラーが 1 件も発生しなかったセッションの割合（error→retry 連鎖なし）。
+
+    分母 = 窓内のセッション数
+    分子 = error_count == 0 のセッション数
+
+    値が高いほど「一発で通った」= 良い。
+    """
+    base = data_dir if data_dir is not None else DATA_DIR
+    since = _iso_days_ago(days)
+    records = [
+        r for r in _read_jsonl(base / "sessions.jsonl")
+        if _in_window(_ts_of(r, "timestamp", "first_timestamp"), since)
+    ]
+    if not records:
+        return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
+
+    clean: List[str] = []
+    for r in records:
+        ec = r.get("error_count")
+        if ec is None:
+            continue
+        if ec == 0:
+            clean.append(r.get("session_id") or "")
+    total = len(records)
+    rate = round(len(clean) / total, 4) if total else None
+    if rate is None:
+        return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
+    return rate, {
+        "total_sessions": total,
+        "clean_sessions": len(clean),
+        "examples": _dedup(clean),
+        "window_days": days,
+    }
+
+
+def _has_edit_burst(tool_sequence: List[str], min_consecutive: int) -> bool:
+    """tool_sequence に検証ツールを介さない連続 Edit/Write が min_consecutive 以上あるか。"""
+    run = 0
+    for tool in tool_sequence:
+        if tool in _EDIT_TOOLS:
+            run += 1
+            if run >= min_consecutive:
+                return True
+        elif tool in _VERIFICATION_TOOLS:
+            run = 0
+        # その他のツール（AskUserQuestion 等）は run を維持も増加もしない（中立）
+    return False
+
+
+def rework_rate(
+    days: int = 30, *, min_consecutive: int = 3, data_dir: Optional[Path] = None
+) -> Tuple[Optional[float], Dict[str, Any]]:
+    """編集ありセッションのうち、編集バースト（検証なし連続編集）を含む割合。
+
+    分母 = 窓内で 1 度でも Edit/Write を行ったセッション数
+    分子 = そのうち検証ツールを介さない連続編集が min_consecutive 以上あったセッション数
+
+    値が高いほど「検証せず編集を繰り返した」= rework が多い = 悪い。
+
+    近似の限界（ADR-046）: ストアに編集対象ファイル ID が無いため厳密な「同一ファイル
+    N ターン内再編集」は算出不能。tool_sequence 上の編集バーストを proxy とする。
+    """
+    base = data_dir if data_dir is not None else DATA_DIR
+    since = _iso_days_ago(days)
+    records = [
+        r for r in _read_jsonl(base / "sessions.jsonl")
+        if _in_window(_ts_of(r, "timestamp", "first_timestamp"), since)
+    ]
+    if not records:
+        return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
+
+    edit_sessions: List[str] = []
+    rework_sessions: List[str] = []
+    for r in records:
+        seq = r.get("tool_sequence")
+        if not isinstance(seq, list) or not seq:
+            continue
+        if not any(t in _EDIT_TOOLS for t in seq):
+            continue
+        sid = r.get("session_id") or ""
+        edit_sessions.append(sid)
+        if _has_edit_burst(seq, min_consecutive):
+            rework_sessions.append(sid)
+
+    if not edit_sessions:
+        return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
+
+    rate = round(len(rework_sessions) / len(edit_sessions), 4)
+    return rate, {
+        "total_sessions": len(edit_sessions),  # 編集ありセッションのみが母集団
+        "rework_sessions": len(rework_sessions),
+        "min_consecutive": min_consecutive,
+        "examples": _dedup(rework_sessions),
+        "window_days": days,
+    }
+
+
+def compute_outcome_metrics(
+    days: int = 30, *, data_dir: Optional[Path] = None
+) -> Dict[str, Dict[str, Any]]:
+    """3 軸をまとめて算出する。各軸 {"value": float|None, "evidence": dict}。"""
+    cr_v, cr_e = correction_recurrence_rate(days, data_dir=data_dir)
+    fs_v, fs_e = first_try_success_rate(days, data_dir=data_dir)
+    rw_v, rw_e = rework_rate(days, data_dir=data_dir)
+    return {
+        "correction_recurrence": {"value": cr_v, "evidence": cr_e},
+        "first_try_success": {"value": fs_v, "evidence": fs_e},
+        "rework": {"value": rw_v, "evidence": rw_e},
+    }

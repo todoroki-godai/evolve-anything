@@ -13,6 +13,34 @@ from ._constants import LIMITS, is_excluded_skill_path
 from .classification import classify_artifact_origin
 
 
+def find_project_skill_dirs(project_dir: Path) -> List[str]:
+    """プロジェクト内の SKILL.md を持つスキルディレクトリ名を返す。
+
+    通常レイアウト（`.claude/skills/`）と plugin レイアウト（リポジトリ直下 `skills/`）の
+    両方を走査する。後者は本リポジトリ自身（rl-anything）のような plugin リポジトリで、
+    telemetry.utilization が恒久 0 になる根因だった（#423）。
+
+    収集除外（#419: node_modules / dot-dir / アーカイブ・バックアップ）は
+    `is_excluded_skill_path` を共有して自動的に効く。
+
+    Returns:
+        重複排除済みのスキルディレクトリ名リスト（ソート済み）。
+    """
+    skill_roots = [
+        project_dir / ".claude" / "skills",  # 通常レイアウト
+        project_dir / "skills",              # plugin レイアウト（リポジトリ直下）
+    ]
+    names: set[str] = set()
+    for root in skill_roots:
+        if not root.exists():
+            continue
+        for skill_md in root.rglob("SKILL.md"):
+            if is_excluded_skill_path(skill_md):
+                continue
+            names.add(skill_md.parent.name)
+    return sorted(names)
+
+
 def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:
     """プロジェクト内のアーティファクトを一覧する。"""
     result: Dict[str, List[Path]] = {

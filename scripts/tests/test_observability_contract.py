@@ -94,6 +94,10 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     # のため、実プラグインに orphan ストアがあると同様に前提が崩れる。空 tmp に向けて隔離する（#422）。
     import orphan_store
     monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: tmp_path / "no-plugin")
+    # outcome_metrics も環境グローバル（DATA_DIR 配下の corrections/sessions）を読む builder の
+    # ため、実機データがあると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する（#423）。
+    from audit import outcome_metrics
+    monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path / "no-outcome-data")
     result = collect_observability(tmp_path)
     assert result == {}
 

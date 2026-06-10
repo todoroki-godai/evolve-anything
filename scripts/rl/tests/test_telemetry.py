@@ -105,6 +105,26 @@ class TestScoreUtilization:
             score = telemetry.score_utilization(tmp_path, days=30)
         assert score == 0.0
 
+    def test_plugin_layout_skills_nonzero(self, tmp_path):
+        """plugin レイアウト（リポジトリ直下 skills/）でも utilization が非ゼロになる（#423）。"""
+        # 通常レイアウトでなく plugin レイアウトでスキルを配置
+        for name in ["skill-a", "skill-b"]:
+            sd = tmp_path / "skills" / name
+            sd.mkdir(parents=True, exist_ok=True)
+            (sd / "SKILL.md").write_text(f"# {name}\n")
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        now = _now_iso()
+        _write_jsonl(data_dir / "usage.jsonl", [
+            {"skill_name": "skill-a", "project": tmp_path.name, "ts": now, "session_id": "s1"},
+            {"skill_name": "skill-b", "project": tmp_path.name, "ts": now, "session_id": "s1"},
+        ])
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            score = telemetry.score_utilization(tmp_path, days=30)
+        # 旧実装（.claude/skills のみ）なら 0.0、修理後は非ゼロ
+        assert score > 0.0
+
 
 class TestScoreEffectiveness:
     def test_errors_decreasing(self, tmp_path):
