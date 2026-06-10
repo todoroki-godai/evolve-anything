@@ -346,7 +346,12 @@ def _build_growth_report(
         corrections = query_corrections(project=project_name)
         crystallized = count_crystallized_rules(project=project_name)
         sessions_count = len(sessions) if sessions else 0
-        corrections_count = len(corrections) if corrections else 0
+        # フェーズ昇格カウントは human-source のみで駆動する（#431 提案3）。
+        # 機械ノイズ（Stop hook の source=hook/backfill + correction_type=stop）で
+        # 状態が動かないよう、provenance_weight で人間確認済みのみを数える。
+        from correction_semantic.provenance_weight import count_human_corrections
+        corrections_total = len(corrections) if corrections else 0
+        corrections_count = count_human_corrections(corrections or [])
 
         _fitness_dir = PLUGIN_ROOT / "scripts" / "rl" / "fitness"
         if str(_fitness_dir) not in sys.path:
@@ -387,7 +392,7 @@ def _build_growth_report(
         lines.append(f"**Environment Score:** {env_score:.2f}")
         lines.append(f"**Phase:** {names['en']} ({names['ja']})")
         lines.append(f"**Progress:** [{bar}] {progress_pct}%")
-        lines.append(f"**Sessions:** {sessions_count} | **Corrections:** {corrections_count} | **Crystallizations:** {crystallized}")
+        lines.append(f"**Sessions:** {sessions_count} | **Corrections:** {corrections_count} (human) / {corrections_total} (total) | **Crystallizations:** {crystallized}")
         lines.append("")
 
         events = query_crystallizations(project=project_name)

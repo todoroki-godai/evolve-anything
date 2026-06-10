@@ -899,3 +899,65 @@ class TestPromoteEpisodicSubcommand:
                 mock_promote.assert_called_once()
                 called_corr = mock_promote.call_args[0][0]
                 assert called_corr["session_id"] == sid
+
+
+# --- Test: weak_signals 昇格フロー（#431/#432 二層化） ---
+
+class TestWeakSignalPromotion:
+    def _seed_ws(self, tmp_path):
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+        ws = tmp_path / "weak_signals.jsonl"
+        sigs = [
+            WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 1,
+                                     "text": "緑にして赤じゃなくて", "reason": "後置型"},
+                       "2026-06-10T00:00:00+00:00", "s1", "rl-anything"),
+            WeakSignal("rephrase", {"x": 1}, "2026-06-10T00:01:00+00:00", "s2", "rl-anything"),
+        ]
+        append_signals(sigs, path=ws)
+        return ws, sigs
+
+    def test_show_weak_signals_cli(self, tmp_path, capsys):
+        ws, _ = self._seed_ws(tmp_path)
+        with mock.patch("sys.argv", ["reflect", "--show-weak-signals",
+                                     "--weak-signals-file", str(ws)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "weak_signals"
+        assert out["count"] == 2
+
+    def test_show_weak_signals_channel_filter(self, tmp_path, capsys):
+        ws, _ = self._seed_ws(tmp_path)
+        with mock.patch("sys.argv", ["reflect", "--show-weak-signals",
+                                     "--weak-channel", "llm_judge",
+                                     "--weak-signals-file", str(ws)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["count"] == 1
+
+    def test_promote_weak_writes_human_correction(self, tmp_path, capsys):
+        ws, sigs = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sigs[0].signal_key,
+                                     "--weak-signals-file", str(ws),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "promoted_weak"
+        assert out["promoted"] == 1
+        recs = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(recs) == 1
+        assert recs[0]["source"] == "reflect_confirmed"
+
+    def test_promote_weak_dry_run(self, tmp_path, capsys):
+        ws, sigs = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sigs[0].signal_key,
+                                     "--dry-run",
+                                     "--weak-signals-file", str(ws),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["dry_run"] is True
+        assert out["promoted"] == 1
+        assert not corr.exists()

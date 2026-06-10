@@ -43,6 +43,26 @@ def _resolve_evolve_slug(project_root: Path) -> str:
         return "_unattributed"
 
 
+def _resolve_pj_slug(project_dir: Optional[str]) -> str:
+    """utterances.db の pj_slug と**同じ導出**で PJ slug を返す（#431/#440 修正）。
+
+    weak_signals / correction_semantic は utterances.db の pj_slug と突合するため、
+    optimize_history_store の git-common-dir 方式ではなく utterance_archive と同型の
+    「``/.claude/worktrees/`` で切って本体 repo basename」を使う（worktree 内実行で
+    worktree 名になり utterances.db の pj_slug と食い違う PR #440 の既知課題を解消）。
+    """
+    base = project_dir or str(Path.cwd())
+    try:
+        from utterance_archive.extractor import pj_slug_from_cwd
+
+        slug = pj_slug_from_cwd(base)
+        if slug:
+            return slug
+    except Exception:
+        pass
+    return Path(base).name
+
+
 def _surface_constitutional_status(
     project_dir: Path,
     warning_sink: List[Dict[str, Any]],
@@ -1110,10 +1130,26 @@ def run_evolve(
     # dry_run でも検出は走るが run_batch(dry_run=True) が store 書き込みを最下層で弾く。
     try:
         from weak_signals import batch as _ws_batch
-        _ws_slug = Path(project_dir).name if project_dir else Path.cwd().name
+        _ws_slug = _resolve_pj_slug(project_dir)
         result["weak_signals"] = _ws_batch.run_batch(_ws_slug, dry_run=dry_run)
     except Exception as e:
         result["weak_signals"] = {"error": str(e)}
+
+    # ── correction capture の二層化: バッチ LLM 意味判定の Phase A emit（#431）─────
+    # utterances.db の dialogue 発話を Haiku 判定リクエストに変換（決定論・ここでは LLM 非呼び出し）。
+    # 実際の判定（Phase B）と weak_signals 隔離記録（Phase C）は SKILL.md 側が担う。
+    # dry_run でも emit（読み取りのみ）は走るが書き込みはしない。ここでは件数とトークン見積もりのみ。
+    try:
+        from correction_semantic import batch as _cs_batch
+        _cs_slug = _resolve_pj_slug(project_dir)
+        _cs_emitted = _cs_batch.emit_judgement_requests(_cs_slug)
+        result["correction_semantic"] = {
+            "slug": _cs_slug,
+            "unjudged": _cs_emitted.get("unjudged", 0),
+            "batches": _cs_emitted.get("batches", 0),
+        }
+    except Exception as e:
+        result["correction_semantic"] = {"error": str(e)}
 
     # ── evolve 提案 accept/reject の決定論キャプチャ（#360-A, ADR-041）────────
     # 候補スキルの before_sha をキューに emit。適用実績=accept / 明示却下=reject は

@@ -173,6 +173,28 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="暗黙修正シグナルの決定論検出レーン（#432）。4 チャネル（直後手編集 / "
         "permission deny / 言い直し / Esc 中断）。corrections に直接入れず昇格は reflect 確認後。",
     ),
+    StoreDeclaration(
+        name="correction_idioms.jsonl",
+        writer="scripts/lib/correction_semantic/batch.py（evolve batch の Phase C ingest）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="reflect が --show-weak-signals で参照（個人辞書）。"
+        "実コーパスで precision 検証後に hot hook の補助パターンへ昇格可能（#431 提案2）。",
+        retention="permanent",
+        note="バッチ LLM 意味判定が抽出した修正言い回しの個人辞書（#431）。provenance"
+        "（元発話の物理キー・判定理由）付き。idiom+物理キーの安定ハッシュで dedup。",
+    ),
+    StoreDeclaration(
+        name="correction_judged.jsonl",
+        writer="scripts/lib/correction_semantic/batch.py（Phase C ingest 完了発話の物理キー記録）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="correction_semantic.batch.emit_judgement_requests が再判定除外に参照（自己消費）。",
+        retention="permanent",
+        disposition="drain",
+        note="バッチ LLM 意味判定の進捗カーソル（#431）。判定済み発話（source_path:line_no）を"
+        "記録し、無駄な LLM 再判定を防ぐ。reader は同 package の emit のみ（自己消費）。",
+    ),
 ]
 
 

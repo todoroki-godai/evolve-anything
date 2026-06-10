@@ -42,3 +42,7 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | utterance archive | 全PJ human 発話の恒久 DuckDB ストア `utterances.db`。writer は batch ingest のみ（hot path ゼロ）。物理 PK `(source_path,line_no)` + 論理 UNIQUE `(session_id,timestamp,text_hash)` で resume 複製を弾く。pj_slug は transcript の `cwd` 由来（encoded dir 名のデコードは非可逆なので諦める）。query は pj_slug 必須・source_kind デフォルト `dialogue` のみ | #430 |
 | weak signals（弱シグナル） | 暗黙修正シグナルの決定論検出レーン `weak_signals.jsonl`。4 チャネル（直後手編集 / permission deny / 言い直し / Esc 中断）をゼロ LLM・バッチ側で検出。corrections 本流に直接入れず（ノイジー）昇格は reflect 確認後（`promoted` フラグ）。言い直し閾値は jaccard 0.8（実コーパス dry-run で決定）。FP は「機構生成テンプレ」という除外理由で直交分離 | #432 |
 | writer_locus | store_registry のストア宣言フィールド。書き込み主体が `hook`（hooks.json 登録 hook の append）か `batch`（evolve/audit 等の script）か。`batch` は hook-writer 突合に出ないため stale 突合の対象外（db kind と同じ扱い） | #432 |
+| correction capture 二層化 | hot hook（語彙・ゼロ LLM・低レイテンシ）の上にバッチ LLM 意味判定（Haiku・auto_memory 2 相と同型）を足す設計。語彙で拾えない文中・後置・観察型の修正を意味論で拾い weak_signals(channel=llm_judge) へ隔離記録 | #431 |
+| 個人辞書 | `correction_idioms.jsonl`。バッチ LLM 判定が抽出した修正言い回し（idiom）を provenance 付きで蓄積。実コーパスで precision 検証後に hot hook の補助パターンへ昇格可能 | #431 |
+| human-source（provenance 重み付け） | corrections のうちフェーズ昇格カウントを駆動する出所。`source=reflect_confirmed` のみが human。`source=hook/backfill` や `correction_type=stop`（Stop hook）は機械として除外。機械ノイズで growth フェーズが動かないようにする gate（`provenance_weight`） | #431 |
+| llm_judge（channel） | weak_signals レーンのチャネル名。#431 のバッチ LLM 意味判定が検出した修正をこの channel で隔離記録（#432 の決定論 4 チャネルと同じレーンを共有） | #431 |

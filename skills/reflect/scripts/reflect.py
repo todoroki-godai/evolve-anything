@@ -709,11 +709,48 @@ def main():
     parser.add_argument("--promote-episodic", action="store_true", help="指定 correction を episodic 層に昇格")
     parser.add_argument("--session-id", type=str, default=None, help="--promote-episodic: 昇格する correction の session_id")
     parser.add_argument("--timestamp", type=str, default=None, help="--promote-episodic: 昇格する correction の timestamp")
+    parser.add_argument("--show-weak-signals", action="store_true",
+                        help="weak_signals レーンの未昇格レコードを表示（#431/#432 の二層化）")
+    parser.add_argument("--weak-channel", type=str, default=None,
+                        help="--show-weak-signals/--promote-weak: チャネルで絞る（例: llm_judge）")
+    parser.add_argument("--promote-weak", type=str, default=None,
+                        help="指定 signal_key（カンマ区切り）の weak_signal を corrections へ昇格")
+    parser.add_argument("--weak-signals-file", type=str, default=None,
+                        help="weak_signals.jsonl のパス（テスト用）")
     args = parser.parse_args()
 
     corrections_file = Path(args.corrections_file) if args.corrections_file else CORRECTIONS_FILE
     current_project = os.environ.get("CLAUDE_PROJECT_DIR")
     project_root = Path(current_project) if current_project else Path.cwd()
+    weak_signals_file = Path(args.weak_signals_file) if args.weak_signals_file else None
+
+    # --show-weak-signals: weak_signals レーンの未昇格レコードを表示（#431/#432 二層化）
+    if args.show_weak_signals:
+        from correction_semantic import promote as _cs_promote
+        unp = _cs_promote.read_unpromoted(
+            weak_signals_path=weak_signals_file, channel=args.weak_channel
+        )
+        print(json.dumps({
+            "status": "weak_signals",
+            "unpromoted": unp,
+            "count": len(unp),
+            "channel": args.weak_channel,
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # --promote-weak: 指定 signal_key の weak_signal を corrections へ昇格（人間確認後）
+    if args.promote_weak:
+        from correction_semantic import promote as _cs_promote
+        keys = [k.strip() for k in args.promote_weak.split(",") if k.strip()]
+        res = _cs_promote.promote_signals(
+            keys,
+            weak_signals_path=weak_signals_file,
+            corrections_path=corrections_file if args.corrections_file else None,
+            project_path=current_project or str(project_root),
+            dry_run=args.dry_run,
+        )
+        print(json.dumps({"status": "promoted_weak", **res}, ensure_ascii=False, indent=2))
+        return
 
     # --promote-episodic: 指定 session_id + timestamp の correction を episodic に昇格
     if args.promote_episodic:
