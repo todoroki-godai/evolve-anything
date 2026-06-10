@@ -97,6 +97,145 @@ class TestMergeDb:
         assert not (canonical / "s.db").exists()
 
 
+class TestMergeDbSchemaDivergence:
+    """#417-1: src/old で同名テーブルの列が異なっても永久失敗させない。"""
+
+    duckdb = pytest.importorskip("duckdb")
+
+    def _make(self, path, ddl, inserts):
+        con = self.duckdb.connect(str(path))
+        con.execute(ddl)
+        for s in inserts:
+            con.execute(s)
+        con.close()
+
+    def _cols(self, path, table="t"):
+        con = self.duckdb.connect(str(path), read_only=True)
+        cols = {r[0] for r in con.execute(
+            "SELECT column_name FROM duckdb_columns() WHERE table_name = ?", [table]
+        ).fetchall()}
+        con.close()
+        return cols
+
+    def _tables(self, path):
+        con = self.duckdb.connect(str(path), read_only=True)
+        names = {r[0] for r in con.execute(
+            "SELECT table_name FROM duckdb_tables()"
+        ).fetchall()}
+        con.close()
+        return names
+
+    def test_added_column_superset_union_no_row_loss(self, dirs):
+        """バージョン跨ぎで列が増えた db: 列を NULL 補完した superset でマージ、行は全保持。"""
+        canonical, source = dirs
+        self._make(canonical / "d.db",
+                   "CREATE TABLE t (id INTEGER, name VARCHAR)",
+                   ["INSERT INTO t VALUES (1, 'old')"])
+        self._make(source / "d.db",
+                   "CREATE TABLE t (id INTEGER, name VARCHAR, extra VARCHAR)",
+                   ["INSERT INTO t VALUES (2, 'new', 'x')"])
+        info = ddm.merge_db(source / "d.db", canonical / "d.db")
+        assert info["action"] == "merged_db"
+        assert self._cols(canonical / "d.db") == {"id", "name", "extra"}
+        con = self.duckdb.connect(str(canonical / "d.db"), read_only=True)
+        rows = set(con.execute("SELECT id, name, extra FROM t").fetchall())
+        con.close()
+        assert (1, "old", None) in rows  # 旧行は欠損列が NULL
+        assert (2, "new", "x") in rows
+        assert any(n["mode"] == "aligned_union" for n in info["schema_notes"])
+
+    def test_removed_column_superset_union(self, dirs):
+        """source 側で列が減ったケースも superset でマージ（対称）。"""
+        canonical, source = dirs
+        self._make(canonical / "d.db",
+                   "CREATE TABLE t (id INTEGER, name VARCHAR, legacy VARCHAR)",
+                   ["INSERT INTO t VALUES (1, 'a', 'L')"])
+        self._make(source / "d.db",
+                   "CREATE TABLE t (id INTEGER, name VARCHAR)",
+                   ["INSERT INTO t VALUES (2, 'b')"])
+        info = ddm.merge_db(source / "d.db", canonical / "d.db")
+        assert self._cols(canonical / "d.db") == {"id", "name", "legacy"}
+        con = self.duckdb.connect(str(canonical / "d.db"), read_only=True)
+        rows = set(con.execute("SELECT id, name, legacy FROM t").fetchall())
+        con.close()
+        assert (1, "a", "L") in rows
+        assert (2, "b", None) in rows
+
+    def test_irreconcilable_type_keeps_both_no_loss(self, dirs):
+        """同名列で和解不能な型（INTEGER vs STRUCT）: 両保持でデータ損失ゼロ + surface。"""
+        canonical, source = dirs
+        self._make(canonical / "d.db",
+                   "CREATE TABLE t (id INTEGER, val INTEGER)",
+                   ["INSERT INTO t VALUES (1, 10)"])
+        self._make(source / "d.db",
+                   "CREATE TABLE t (id INTEGER, val STRUCT(x INTEGER))",
+                   ["INSERT INTO t VALUES (2, {'x': 5})"])
+        info = ddm.merge_db(source / "d.db", canonical / "d.db")
+        assert info["action"] == "merged_db"  # migration は失敗扱いにしない
+        tables = self._tables(canonical / "d.db")
+        assert "t" in tables
+        side = [t for t in tables if t.startswith("t__")]
+        assert side, f"side table が無い: {tables}"
+        con = self.duckdb.connect(str(canonical / "d.db"), read_only=True)
+        old_ids = {r[0] for r in con.execute("SELECT id FROM t").fetchall()}
+        src_ids = {r[0] for r in con.execute(f'SELECT id FROM "{side[0]}"').fetchall()}
+        con.close()
+        assert 1 in old_ids  # 既存データ保持
+        assert 2 in src_ids  # source データも別テーブルで保持
+        assert any(n["mode"] == "kept_both" for n in info["schema_notes"])
+
+    def test_schema_conflict_migration_completes_with_marker(self, dirs):
+        """型乖離 db があっても migration は完走し marker が立つ（永久失敗ループを防ぐ）。"""
+        canonical, source = dirs
+        self._make(canonical / "d.db",
+                   "CREATE TABLE t (id INTEGER, val INTEGER)",
+                   ["INSERT INTO t VALUES (1, 10)"])
+        self._make(source / "d.db",
+                   "CREATE TABLE t (id INTEGER, val STRUCT(x INTEGER))",
+                   ["INSERT INTO t VALUES (2, {'x': 5})"])
+        summary = ddm.migrate(canonical=canonical, source=source)
+        assert summary["failures"] == 0
+        assert summary["marker_written"] is True
+        assert not (source / "d.db").exists()
+
+
+class TestConcurrentWriteWindow:
+    """#417-2: マージ中に別セッションが source へ追記しても行を失わない。"""
+
+    def test_jsonl_concurrent_append_kept_for_next_run(self, dirs, monkeypatch):
+        canonical, source = dirs
+        (source / "usage.jsonl").write_text('{"u": 1}\n')
+        real = ddm.merge_jsonl
+
+        def racy(src, dst, dry_run=False):
+            # 実マージ（スナップショット読み）後に別セッションの hook が追記したと擬制
+            result = real(src, dst, dry_run=dry_run)
+            (source / "usage.jsonl").write_text('{"u": 1}\n{"u": 2}\n')
+            return result
+
+        monkeypatch.setattr(ddm, "merge_jsonl", racy)
+        summary = ddm.migrate(canonical=canonical, source=source)
+        # マージ中に増えた行を持つ source は削除されず次回へ残る
+        assert (source / "usage.jsonl").exists()
+        assert '{"u": 2}' in (source / "usage.jsonl").read_text()
+        kept = [e for e in summary["entries"] if e.get("source_kept")]
+        assert kept and kept[0]["name"] == "usage.jsonl"
+        # 再実行で完全消化（dedup）
+        monkeypatch.setattr(ddm, "merge_jsonl", real)
+        ddm.migrate(canonical=canonical, source=source)
+        text = (canonical / "usage.jsonl").read_text()
+        assert '{"u": 1}' in text and '{"u": 2}' in text
+        assert not (source / "usage.jsonl").exists()
+
+    def test_stable_source_removed_normally(self, dirs):
+        """並行追記が無ければ従来どおり source を削除する（ガードの副作用なし）。"""
+        canonical, source = dirs
+        (source / "usage.jsonl").write_text('{"u": 1}\n')
+        summary = ddm.migrate(canonical=canonical, source=source)
+        assert not (source / "usage.jsonl").exists()
+        assert all(not e.get("source_kept") for e in summary["entries"])
+
+
 class TestMergeDirAndPlainFile:
     def test_newer_source_wins(self, dirs):
         canonical, source = dirs

@@ -41,6 +41,20 @@ from typing import Any, Dict, Optional
 _SKIP_NAMES = {"tmp", "__pycache__"}
 
 
+def _qident(name: str) -> str:
+    """DuckDB の識別子を二重引用符でクオートする（埋め込み " はエスケープ）。"""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _stat_tuple(p: Path):
+    """並行書き込み検知用の (mtime_ns, size)。存在しなければ None。"""
+    try:
+        st = p.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def _marker_name() -> str:
     import rl_common
     return getattr(rl_common, "DATA_DIR_UNIFIED_MARKER", ".data-dir-unified")
@@ -115,6 +129,68 @@ def merge_jsonl(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
     return {"action": "merged_jsonl", "new_lines": len(new_lines)}
 
 
+def _attached_columns(con, db: str, table: str) -> list:
+    """ATTACH 済み db のテーブル列名を定義順で返す。"""
+    rows = con.execute(
+        "SELECT column_name FROM duckdb_columns() "
+        "WHERE database_name = ? AND table_name = ? ORDER BY column_index",
+        [db, table],
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _projection(all_cols: list, present: set) -> str:
+    """superset 列リストに対し、当該側に無い列は ``NULL AS col`` で補完する SELECT 句。"""
+    parts = []
+    for c in all_cols:
+        qc = _qident(c)
+        parts.append(qc if c in present else f"NULL AS {qc}")
+    return ", ".join(parts)
+
+
+def _merge_table_both(con, table: str) -> Optional[Dict[str, Any]]:
+    """src/old 両方にある同名テーブルを、スキーマ乖離に耐えてマージする（#417-1）。
+
+    1. 列が完全一致 → そのまま ``UNION``（型解決は DuckDB に委ねる、従来の高速路）
+    2. 列集合が異なる（バージョン跨ぎの列追加/削除）→ 列名で揃えた superset union
+       （欠損列は NULL 補完）。行・列とも損失なし
+    3. それでも失敗（同名列の和解不能な型差など）→ old をそのまま残し、src を
+       ``{table}__src_unmerged`` 別テーブルへ退避。**データ損失ゼロ**で手動統合を促す
+
+    返り値: schema_note（完全一致時は None。aligned_union / kept_both 時は dict）。
+    例外は投げない（migrate の per-entry failure に落とさず、必ず完走させる）。
+    """
+    qt = _qident(table)
+    src_cols = _attached_columns(con, "src", table)
+    old_cols = _attached_columns(con, "old", table)
+    try:
+        if src_cols == old_cols:
+            con.execute(f"CREATE TABLE {qt} AS SELECT * FROM src.{qt} UNION SELECT * FROM old.{qt}")
+            return None
+        all_cols = list(src_cols) + [c for c in old_cols if c not in src_cols]
+        src_proj = _projection(all_cols, set(src_cols))
+        old_proj = _projection(all_cols, set(old_cols))
+        con.execute(
+            f"CREATE TABLE {qt} AS "
+            f"SELECT {src_proj} FROM src.{qt} UNION "
+            f"SELECT {old_proj} FROM old.{qt}"
+        )
+        return {
+            "table": table,
+            "mode": "aligned_union",
+            "src_only": sorted(set(src_cols) - set(old_cols)),
+            "old_only": sorted(set(old_cols) - set(src_cols)),
+        }
+    except Exception as e:  # 和解不能 → 両保持（損失ゼロ、要手動統合として surface）
+        con.execute(f"DROP TABLE IF EXISTS {qt}")
+        con.execute(f"CREATE TABLE {qt} AS SELECT * FROM old.{qt}")
+        side = f"{table}__src_unmerged"
+        qside = _qident(side)
+        con.execute(f"DROP TABLE IF EXISTS {qside}")
+        con.execute(f"CREATE TABLE {qside} AS SELECT * FROM src.{qt}")
+        return {"table": table, "mode": "kept_both", "side_table": side, "error": str(e)}
+
+
 def merge_db(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
     """DuckDB のテーブル単位 union dedup マージ + compaction。
 
@@ -124,8 +200,14 @@ def merge_db(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
     が縮まないため、rebuild 方式でマージと compaction を同時に行う
     （実測: sessions.db 9.6GB / 84k 行 / 実データ約 14MB）。
 
+    スキーマ乖離耐性（#417-1）: src/old で同名テーブルの列が食い違っても永久失敗
+    させない。列追加/削除は superset union（NULL 補完）、和解不能な型差は両保持で
+    退避する（``_merge_table_both``）。``UNION``（``UNION ALL`` でない）はキー無し
+    テーブルの正当な重複行も折り畳むが、これは jsonl 行 dedup と同じ意図的設計で、
+    PK を持つストア（token_usage の uuid 等）は無害（#417-3）。
+
     注意: CREATE TABLE AS のため PK/index は引き継がない（対象の telemetry 系
-    ストアは制約なしの append ログ。制約付き db が両側に現れたら手動マージ）。
+    ストアは制約なしの append ログ）。
     """
     if dry_run:
         return {"action": "would_merge_db"}
@@ -161,10 +243,13 @@ def merge_db(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
                     "SELECT table_name FROM duckdb_tables() WHERE database_name = 'old'"
                 ).fetchall()
             }
+        schema_notes = []
         for t in sorted(src_tables | old_tables):
-            qt = '"' + t.replace('"', '""') + '"'
+            qt = _qident(t)
             if t in src_tables and t in old_tables:
-                con.execute(f"CREATE TABLE {qt} AS SELECT * FROM src.{qt} UNION SELECT * FROM old.{qt}")
+                note = _merge_table_both(con, t)
+                if note:
+                    schema_notes.append(note)
             elif t in src_tables:
                 con.execute(f"CREATE TABLE {qt} AS SELECT * FROM src.{qt}")
             else:
@@ -178,7 +263,11 @@ def merge_db(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
     finally:
         con.close()
     tmp.replace(dst)  # 旧 bloat ファイルを置換 = compaction
-    return {"action": "merged_db", "tables": sorted(src_tables | old_tables)}
+    return {
+        "action": "merged_db",
+        "tables": sorted(src_tables | old_tables),
+        "schema_notes": schema_notes,
+    }
 
 
 def merge_file_newer_wins(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
@@ -276,6 +365,14 @@ def migrate(
             summary["entries"].append({"name": entry.name, "action": "skipped_wal"})
             continue
         dst = canonical / entry.name
+        # 並行書き込み窓（#417-2）対策: append-only ログ（.jsonl / 単発ファイル）は
+        # merge が source を書き換えないため、merge 前後で stat が変わったら
+        # 「マージ中に別セッションの hook が追記した」とみなし削除を見送る（次回再実行で
+        # dedup 回収）。.db は writable ATTACH の WAL replay で source 自身が変わるため
+        # 対象外（idle 実行ガイダンスで対処）。
+        guard_stat = None
+        if not dry_run and not entry.is_dir() and entry.suffix != ".db":
+            guard_stat = _stat_tuple(entry)
         try:
             if entry.is_dir():
                 info = merge_dir(entry, dst, dry_run=dry_run)
@@ -286,7 +383,10 @@ def migrate(
             else:
                 info = merge_file_newer_wins(entry, dst, dry_run=dry_run)
             if not dry_run:
-                _remove_entry(entry)
+                if guard_stat is not None and _stat_tuple(entry) != guard_stat:
+                    info["source_kept"] = "concurrent_change"  # 削除見送り
+                else:
+                    _remove_entry(entry)
             info["name"] = entry.name
             summary["entries"].append(info)
         except Exception as e:  # 個別失敗は記録して続行（次回再実行で回収）
@@ -308,8 +408,31 @@ def format_summary(summary: Dict[str, Any]) -> str:
     lines.append(f"  正準: {summary['canonical']}")
     lines.append(f"  source: {summary['source'] or '(なし — marker のみ設置)'}")
     for e in summary["entries"]:
-        detail = {k: v for k, v in e.items() if k not in ("name", "action")}
+        detail = {k: v for k, v in e.items() if k not in ("name", "action", "schema_notes")}
         lines.append(f"  - {e['name']}: {e['action']}" + (f" {detail}" if detail else ""))
+    # スキーマ乖離（#417-1）の surface — 列差分マージ / 型乖離の両保持を明示
+    conflicts = []
+    for e in summary["entries"]:
+        for n in e.get("schema_notes") or []:
+            if n.get("mode") == "kept_both":
+                conflicts.append(
+                    f"{e['name']}::{n['table']} → 型乖離のため両保持（src を {n['side_table']} へ退避・要手動統合）"
+                )
+            elif n.get("mode") == "aligned_union":
+                conflicts.append(
+                    f"{e['name']}::{n['table']} → 列差分を NULL 補完でマージ "
+                    f"(src_only={n.get('src_only')}, old_only={n.get('old_only')})"
+                )
+    if conflicts:
+        lines.append("  スキーマ乖離:")
+        for c in conflicts:
+            lines.append(f"    • {c}")
+    # 並行書き込み（#417-2）で削除を見送ったストア
+    if any(e.get("source_kept") for e in summary["entries"]):
+        lines.append(
+            "  ℹ マージ中に別セッションが source へ追記したストアがあります（削除見送り）。"
+            "他の CC セッションを閉じてから再実行すると完全に消化されます。"
+        )
     if summary["failures"]:
         lines.append(f"  ⚠ 失敗 {summary['failures']} 件 — 再実行で回収してください")
     lines.append(f"  marker: {'書込済 ✓' if summary['marker_written'] else '未書込'}")

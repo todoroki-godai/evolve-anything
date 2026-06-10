@@ -94,7 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         "migrate-data",
         help="DATA_DIR hook/tool 分裂を一元化（plugin-data 側ストアを ~/.claude/rl-anything にマージ + marker 設置、#364）",
     )
-    migrate_p.add_argument("--dry-run", action="store_true", help="マージ内容の確認のみ（書き込みゼロ）")
+    migrate_p.add_argument("--dry-run", action="store_true",
+                           help="マージ内容の確認のみ（書き込みゼロ）。他の CC セッションを閉じた idle 時の実行を推奨（並行書き込み窓を回避）")
     migrate_p.add_argument("--canonical", type=Path, default=None, help="正準 dir（default: ~/.claude/rl-anything）")
     migrate_p.add_argument("--source", type=Path, default=None, help="旧 plugin-data dir（default: install レイアウトを自動探索）")
 

@@ -21,7 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 import rl_common  # noqa: E402
-from rl_common.store_paths import _REAL_DEFAULT_FALLBACK  # noqa: E402
+from rl_common import store_paths  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +29,25 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
 
 
-def test_env_set_wins(monkeypatch, tmp_path):
+@pytest.fixture
+def fallback(monkeypatch, tmp_path):
+    """実 ~/.claude/rl-anything を読まない隔離 fallback（marker 無し）。
+
+    hook_store_dir は ``base == 既定 fallback`` のときだけ probe / env / marker を
+    評価する設計のため、それらの経路を試すテストは base に「既定 fallback と判定
+    される」dir を渡す必要がある。実 home の ``.data-dir-unified`` marker（#364
+    migration 実行後に出現）を読むとグローバル状態依存になり probe テストが壊れる
+    （pitfall_test_hygiene_global_state_and_pkg_shadow）。resolved 定数を marker
+    の無い tmp dir に差し替えて実 home から構造的に隔離する。
+    """
+    iso = tmp_path / "iso_fallback"
+    iso.mkdir()
+    monkeypatch.setattr(store_paths, "_REAL_DEFAULT_FALLBACK", iso)
+    monkeypatch.setattr(store_paths, "_REAL_DEFAULT_FALLBACK_RESOLVED", iso.resolve())
+    return iso
+
+
+def test_env_set_wins(monkeypatch, tmp_path, fallback):
     """base が既定 fallback のとき CLAUDE_PLUGIN_DATA を返す（hook 実行時）。
 
     base を明示しないと rl_common.DATA_DIR（import 時凍結）の値に依存し full-suite
@@ -38,27 +56,27 @@ def test_env_set_wins(monkeypatch, tmp_path):
     plugin_dir = tmp_path / "explicit_plugin_data"
     plugin_dir.mkdir()
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(plugin_dir))
-    assert rl_common.hook_store_dir(base=_REAL_DEFAULT_FALLBACK) == plugin_dir
+    assert rl_common.hook_store_dir(base=fallback) == plugin_dir
 
 
-def test_probe_finds_install_layout(monkeypatch, tmp_path):
+def test_probe_finds_install_layout(monkeypatch, tmp_path, fallback):
     """base が既定 fallback のとき install レイアウトから plugin-data dir を特定する。"""
     base = tmp_path / "plugins_data"
     canonical = base / "rl-anything-rl-anything"
     canonical.mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
     # base=既定 fallback を明示的に渡し probe を有効化
-    assert rl_common.hook_store_dir(base=_REAL_DEFAULT_FALLBACK) == canonical
+    assert rl_common.hook_store_dir(base=fallback) == canonical
 
 
-def test_probe_picks_rl_anything_dir_only(monkeypatch, tmp_path):
+def test_probe_picks_rl_anything_dir_only(monkeypatch, tmp_path, fallback):
     """plugin-data base に複数プラグイン dir があっても rl-anything のものを選ぶ。"""
     base = tmp_path / "plugins_data"
     (base / "other-marketplace-other-plugin").mkdir(parents=True)
     canonical = base / "mymarket-rl-anything"
     canonical.mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
-    assert rl_common.hook_store_dir(base=_REAL_DEFAULT_FALLBACK) == canonical
+    assert rl_common.hook_store_dir(base=fallback) == canonical
 
 
 def test_explicit_base_skips_probe(monkeypatch, tmp_path):
@@ -72,12 +90,12 @@ def test_explicit_base_skips_probe(monkeypatch, tmp_path):
     assert rl_common.hook_store_dir(base=explicit) == explicit
 
 
-def test_fallback_when_no_plugin_data(monkeypatch, tmp_path):
+def test_fallback_when_no_plugin_data(monkeypatch, tmp_path, fallback):
     """install レイアウトが無ければ base（既定 fallback）を返す（後方互換）。"""
     base = tmp_path / "empty_plugins_data"  # 存在しない
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
     assert not base.exists()
-    assert rl_common.hook_store_dir(base=_REAL_DEFAULT_FALLBACK) == _REAL_DEFAULT_FALLBACK
+    assert rl_common.hook_store_dir(base=fallback) == fallback
 
 
 def test_default_base_is_rl_common_data_dir(monkeypatch, tmp_path):
@@ -89,27 +107,27 @@ def test_default_base_is_rl_common_data_dir(monkeypatch, tmp_path):
     assert rl_common.hook_store_dir() == patched
 
 
-def test_hook_store_path_joins_filename(monkeypatch, tmp_path):
+def test_hook_store_path_joins_filename(monkeypatch, tmp_path, fallback):
     """hook_store_path は解決した dir に filename を結合する。"""
     base = tmp_path / "plugins_data"
     canonical = base / "rl-anything-rl-anything"
     canonical.mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
-    got = rl_common.hook_store_path("usage.jsonl", base=_REAL_DEFAULT_FALLBACK)
+    got = rl_common.hook_store_path("usage.jsonl", base=fallback)
     assert got == canonical / "usage.jsonl"
 
 
-def test_env_empty_string_treated_as_unset(monkeypatch, tmp_path):
+def test_env_empty_string_treated_as_unset(monkeypatch, tmp_path, fallback):
     """空文字の CLAUDE_PLUGIN_DATA は未設定扱い（Path('') 誤解決を防ぐ）。"""
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", "")
     base = tmp_path / "plugins_data"
     canonical = base / "rl-anything-rl-anything"
     canonical.mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
-    assert rl_common.hook_store_dir(base=_REAL_DEFAULT_FALLBACK) == canonical
+    assert rl_common.hook_store_dir(base=fallback) == canonical
 
 
-def test_multiple_rl_anything_dirs_prefers_recent(monkeypatch, tmp_path):
+def test_multiple_rl_anything_dirs_prefers_recent(monkeypatch, tmp_path, fallback):
     """rl-anything dir が複数あれば mtime が新しい方を決定論で選ぶ。"""
     import os
     base = tmp_path / "plugins_data"
@@ -119,12 +137,12 @@ def test_multiple_rl_anything_dirs_prefers_recent(monkeypatch, tmp_path):
     new.mkdir(parents=True)
     os.utime(old, (1_000_000, 1_000_000))  # old を過去 mtime に
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
-    assert rl_common.hook_store_dir(base=_REAL_DEFAULT_FALLBACK) == new
+    assert rl_common.hook_store_dir(base=fallback) == new
 
 
 # --- #358 リグレッション（統合）: tool 実行が hook の書いた plugin-data を読む ---
 
-def test_358_load_usage_data_reads_plugin_data_via_probe(monkeypatch, tmp_path):
+def test_358_load_usage_data_reads_plugin_data_via_probe(monkeypatch, tmp_path, fallback):
     """env 未設定の tool 実行でも hook が plugin-data に書いた usage を読む（#358）。
 
     bug: env 未設定 → DATA_DIR=fallback → reader が空の fallback を読み prune が
@@ -144,14 +162,14 @@ def test_358_load_usage_data_reads_plugin_data_via_probe(monkeypatch, tmp_path):
         json.dumps({"skill_name": "live-skill", "project": None, "timestamp": now}) + "\n"
     )
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
-    # audit.DATA_DIR を既定 fallback に固定 → 明示 base でないので probe が効く
-    monkeypatch.setattr(audit, "DATA_DIR", _REAL_DEFAULT_FALLBACK)
+    # audit.DATA_DIR を（隔離）既定 fallback に固定 → 明示 base でないので probe が効く
+    monkeypatch.setattr(audit, "DATA_DIR", fallback)
 
     records = audit.load_usage_data()
     assert any(r.get("skill_name") == "live-skill" for r in records), records
 
 
-def test_358_skill_activations_reads_plugin_data_via_probe(monkeypatch, tmp_path):
+def test_358_skill_activations_reads_plugin_data_via_probe(monkeypatch, tmp_path, fallback):
     """env 未設定の tool 実行でも hook が書いた skill_activations を読む（#358）。"""
     import json
     from datetime import datetime, timezone
@@ -167,7 +185,7 @@ def test_358_skill_activations_reads_plugin_data_via_probe(monkeypatch, tmp_path
         json.dumps({"skill": "live-skill", "ts": now, "invocation_trigger": "top-level"}) + "\n"
     )
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
-    monkeypatch.setattr(rl_common, "DATA_DIR", _REAL_DEFAULT_FALLBACK)
+    monkeypatch.setattr(rl_common, "DATA_DIR", fallback)
 
     stats = sus.load_skill_activations(days=30)
     assert "live-skill" in stats, stats
