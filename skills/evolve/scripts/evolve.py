@@ -1070,6 +1070,18 @@ def run_evolve(
         except ImportError:
             pass
 
+    # ── sessions.jsonl → sessions.db の batch ingest（#415 Phase A）────────
+    # hot path（hooks）は jsonl 追記のみで、db への取り込みはこの batch 文脈に同居させる。
+    # dry-run 時は DATA_DIR 非書込の規約に従い ingest しない。
+    if not dry_run:
+        try:
+            import session_store
+            ingested = session_store.ingest()
+            result["sessions_ingested"] = ingested
+        except Exception as e:
+            print(f"[rl-anything:evolve] session ingest warning: {e}", file=sys.stderr)
+            result["sessions_ingested"] = {"error": str(e)}
+
     # ── NFD: 結晶化イベント emit + growth キャッシュ更新 ────────
     if not dry_run:
         try:

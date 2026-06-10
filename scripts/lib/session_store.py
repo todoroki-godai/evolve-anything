@@ -1,15 +1,26 @@
 """SessionStore — sessions の永続化を集約する Repository。
 
-DuckDB 有: sessions.db (sessions テーブル) を SoR とする
-DuckDB 無: sessions.jsonl にフォールバック（後方互換）
+書き込みパターン（#415 Phase A: jsonl-first 化）:
+- hot path（hooks）: `append()` は **sessions.jsonl に追記するのみ**。DuckDB には書かない。
+  per-fire connect→INSERT→close が sessions.db の再肥大（9.6GB / 実データ14MB）の病巣だった
+  ため根治した。
+- cold path（batch）: `ingest()` だけが jsonl → sessions.db を **最上位 1 connection** で
+  取り込む（DuckDB checkpoint pitfall 準拠）。取り込み成功後に jsonl を `.ingested-<ts>` へ
+  rotate し、rotate 済みは glob で恒久除外（mtime 非依存）。1世代保持。
 
-呼び出し側は ストレージ詳細を意識せず append/count_unique_since/query を使う。
+読み取りパターン（union read）:
+- `count_unique_since` / `query` は **db の結果 + 未 ingest jsonl の結果** を
+  (session_id, timestamp) で dedup して合算する。理由: trigger_engine 等は ingest と
+  **非同期**（セッションイベント時）に count を読むため、「ingest 直後にしか読まない」
+  仮定は成立しない。db 不在 / DuckDB 無の場合は jsonl のみを読む（後方互換）。
+
 LLM 呼び出しは行わない（MUST NOT）。
 """
 from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +28,14 @@ _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
 SESSIONS_DB = DATA_DIR / "sessions.db"
 SESSIONS_JSONL = DATA_DIR / "sessions.jsonl"
+# rotate 済み jsonl の glob パターン（ingest 対象から恒久除外する）。
+_ROTATED_GLOB = "sessions.jsonl.ingested-*"
+# 保険 compaction: file_size が rows×平均行長 のこの倍率を超えたら rebuild。
+_COMPACTION_BLOAT_RATIO = 10.0
+# DuckDB はブロック単位割り当てで最小ファイルサイズの床（数百KB）がある。
+# この床近辺では乖離比が常に大きく出て false compaction を招くため、
+# 絶対サイズがこの閾値未満なら compaction しない（縮める余地が無い）。
+_COMPACTION_MIN_BYTES = 4 * 1024 * 1024  # 4MB
 
 try:
     import duckdb as _duckdb
@@ -51,41 +70,9 @@ def _connect():
 def append(record: dict) -> None:
     """セッションレコードを追記する。
 
-    Phase 2: DuckDB を SoR として書く。HAS_DUCKDB=False のみ JSONL にフォールバック。
-    DuckDB ロック競合時は最大 2 回リトライし、それでも失敗なら JSONL フォールバック。
+    #415 Phase A: **jsonl 追記のみ**。DuckDB へは書かない（hot path から接続を消す）。
+    db への取り込みは batch `ingest()` が行う。
     """
-    if HAS_DUCKDB:
-        import time as _time
-        _max_retries = 2
-        for attempt in range(_max_retries + 1):
-            con = None
-            try:
-                con = _connect()
-                con.execute(
-                    "INSERT INTO sessions (session_id, timestamp, project, type, skill_count, error_count, raw_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [
-                        record.get("session_id", ""),
-                        record.get("timestamp", ""),
-                        record.get("project"),
-                        record.get("type"),
-                        record.get("skill_count"),
-                        record.get("error_count"),
-                        json.dumps(record, ensure_ascii=False),
-                    ],
-                )
-                return
-            except Exception:
-                if attempt < _max_retries:
-                    _time.sleep(0.05 * (2 ** attempt))
-            finally:
-                if con is not None:
-                    try:
-                        con.close()
-                    except Exception:
-                        pass
-        # 全リトライ失敗 → JSONL フォールバック
-
     _append_jsonl(record)
 
 
@@ -105,18 +92,217 @@ def _append_jsonl(record: dict) -> None:
         pass
 
 
+def _record_to_row(rec: dict) -> list:
+    """jsonl レコードを sessions テーブルの行タプルに変換。"""
+    return [
+        rec.get("session_id", ""),
+        rec.get("timestamp", ""),
+        rec.get("project"),
+        rec.get("type"),
+        rec.get("skill_count"),
+        rec.get("error_count"),
+        json.dumps(rec, ensure_ascii=False),
+    ]
+
+
+def _iter_jsonl_records(path: Path):
+    """jsonl の各行を dict として yield（壊れた行はスキップ）。"""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+
+def ingest() -> int:
+    """sessions.jsonl を sessions.db に batch 取り込みする。
+
+    - 最上位 **1 connection** で取り込む（DuckDB checkpoint pitfall: per-row connect 禁止）。
+    - 重複除去キーは `(session_id, timestamp)`（既存 `migrate_from_jsonl` と同一）。
+    - 取り込み成功確認後に live jsonl を `.ingested-<ts>` へ rotate（rotate 済みは glob で
+      恒久除外。1世代保持）。
+    - 完走時に保険 compaction（サイズ乖離 >10倍 で rebuild）。
+
+    Returns:
+        新規に挿入された件数（live jsonl が無ければ 0）。
+    """
+    if not HAS_DUCKDB:
+        return 0
+    if not SESSIONS_JSONL.exists():
+        # live が無くても compaction の機会としては使えるが、ここでは noop に倒す。
+        return 0
+
+    con = None
+    try:
+        con = _connect()
+        existing_keys = {
+            (row[0], row[1])
+            for row in con.execute("SELECT session_id, timestamp FROM sessions").fetchall()
+        }
+
+        inserted = 0
+        for rec in _iter_jsonl_records(SESSIONS_JSONL):
+            sid = rec.get("session_id", "")
+            ts = rec.get("timestamp", "")
+            if not sid or not ts:
+                continue
+            if (sid, ts) in existing_keys:
+                continue
+            con.execute(
+                "INSERT INTO sessions (session_id, timestamp, project, type, skill_count, error_count, raw_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                _record_to_row(rec),
+            )
+            existing_keys.add((sid, ts))
+            inserted += 1
+
+        # compaction 要否を同一 connection 内で判定（rebuild は close 後にファイル swap）。
+        needs_compaction = _needs_compaction(con)
+    except Exception:
+        # 取り込み失敗時は rotate しない（jsonl を温存して次回再試行）。
+        return 0
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+    # ここに来た時点で db への取り込みは成功。jsonl を rotate する。
+    _rotate_jsonl()
+
+    # 保険 compaction: connection を閉じた後にファイル swap で rebuild する。
+    if needs_compaction:
+        _compact_db()
+    return inserted
+
+
+def _rotate_jsonl() -> None:
+    """live jsonl を `.ingested-<ts>` へ rename し、古い rotate 済みを 1 世代に削る。"""
+    try:
+        if not SESSIONS_JSONL.exists():
+            return
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        rotated = DATA_DIR / f"sessions.jsonl.ingested-{ts}"
+        SESSIONS_JSONL.rename(rotated)
+        # 1世代保持: 最新の rotate 済み 1 件を残して残りを削除。
+        all_rotated = sorted(DATA_DIR.glob(_ROTATED_GLOB))
+        for old in all_rotated[:-1]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _needs_compaction(con) -> bool:
+    """db ファイルサイズが (rows × 平均 raw_json 行長) の閾値倍を超えているか判定。
+
+    free page（大量 INSERT→DELETE 後の残骸）でファイルが論理サイズから乖離した状態を検出。
+    DuckDB はブロック単位割り当てで最小ファイルサイズの床があるため、床（既定 db サイズ）を
+    超える分だけを乖離として評価する。
+    """
+    try:
+        stats = con.execute(
+            "SELECT COUNT(*), COALESCE(AVG(LENGTH(raw_json)), 0) FROM sessions"
+        ).fetchone()
+        rows = int(stats[0]) if stats else 0
+        avg_len = float(stats[1]) if stats and stats[1] is not None else 0.0
+        if rows == 0:
+            return False
+        try:
+            file_size = SESSIONS_DB.stat().st_size
+        except OSError:
+            return False
+        # 最小ファイルサイズの床近辺は縮める余地が無いので compaction しない。
+        if file_size < _COMPACTION_MIN_BYTES:
+            return False
+        logical = rows * max(avg_len, 1.0)
+        if logical <= 0:
+            return False
+        return file_size > logical * _COMPACTION_BLOAT_RATIO
+    except Exception:
+        return False
+
+
+def _compact_db() -> None:
+    """sessions.db を新規ファイルへ rebuild して swap し、free page を解放する。
+
+    DuckDB は in-place の DROP/CREATE では割り当て済みブロックを返さないため、
+    ATTACH した新規 db へ `CREATE TABLE AS` でコピー → 元ファイルを差し替える。
+    connection は呼び出し前に閉じておくこと（ファイル swap のため）。
+    """
+    if not HAS_DUCKDB or not SESSIONS_DB.exists():
+        return
+    fresh = SESSIONS_DB.with_suffix(".db.compact")
+    con = None
+    try:
+        # 既存の中途半端な compact ファイルを除去。
+        for p in (fresh, Path(str(fresh) + ".wal")):
+            if p.exists():
+                p.unlink()
+        con = _duckdb.connect(str(SESSIONS_DB))
+        con.execute(f"ATTACH '{fresh}' AS fresh")
+        con.execute("CREATE TABLE fresh.sessions AS SELECT * FROM sessions")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_timestamp ON fresh.sessions(timestamp)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON fresh.sessions(session_id)"
+        )
+        con.close()
+        con = None
+        # 元ファイルを新規ファイルで差し替え（WAL も掃除）。
+        wal = Path(str(SESSIONS_DB) + ".wal")
+        if wal.exists():
+            wal.unlink()
+        os.replace(str(fresh), str(SESSIONS_DB))
+    except Exception:
+        # compaction はベストエフォート。失敗時は元ファイルを温存する。
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        try:
+            if fresh.exists():
+                fresh.unlink()
+        except OSError:
+            pass
+
+
+def _uningested_jsonl_records():
+    """未 ingest（rotate されていない live）jsonl のレコードを yield。
+
+    rotate 済み（`.ingested-*`）は ingest 後の重複なので除外する。
+    """
+    yield from _iter_jsonl_records(SESSIONS_JSONL)
+
+
 def count_unique_since(timestamp: str) -> int:
-    """timestamp より後のユニーク session_id 数を返す。"""
+    """timestamp より後のユニーク session_id 数を返す（union read）。
+
+    db の結果 + 未 ingest jsonl の結果を (session_id, timestamp) で dedup して合算する。
+    """
+    pairs: set[tuple[str, str]] = set()
+
     if HAS_DUCKDB and SESSIONS_DB.exists():
         con = None
         try:
             con = _connect()
-            result = con.execute(
-                "SELECT COUNT(DISTINCT session_id) FROM sessions "
+            rows = con.execute(
+                "SELECT DISTINCT session_id, timestamp FROM sessions "
                 "WHERE timestamp > ? AND session_id IS NOT NULL AND session_id != ''",
                 [timestamp],
-            ).fetchone()
-            return int(result[0]) if result else 0
+            ).fetchall()
+            for sid, ts in rows:
+                if sid:
+                    pairs.add((sid, ts))
         except Exception:
             pass
         finally:
@@ -126,33 +312,30 @@ def count_unique_since(timestamp: str) -> int:
                 except Exception:
                     pass
 
-    return _count_unique_since_jsonl(timestamp)
+    # 未 ingest jsonl を合算（dedup は (session_id, timestamp) で行う）。
+    for rec in _uningested_jsonl_records():
+        ts = rec.get("timestamp", "")
+        sid = rec.get("session_id", "")
+        if sid and ts > timestamp:
+            pairs.add((sid, ts))
 
-
-def _count_unique_since_jsonl(timestamp: str) -> int:
-    if not SESSIONS_JSONL.exists():
-        return 0
-    session_ids: set[str] = set()
-    for line in SESSIONS_JSONL.read_text(encoding="utf-8").splitlines():
-        try:
-            rec = json.loads(line)
-            ts = rec.get("timestamp", "")
-            if ts > timestamp:
-                sid = rec.get("session_id", "")
-                if sid:
-                    session_ids.add(sid)
-        except json.JSONDecodeError:
-            continue
-    return len(session_ids)
+    # ユニーク session_id 数（同一 session_id が複数 timestamp を持つ場合は 1 とカウント）。
+    return len({sid for sid, _ in pairs})
 
 
 def query(since: str | None = None, limit: int | None = None) -> list[dict]:
-    """セッションレコードを返す。raw_json をデコードして返す。
+    """セッションレコードを返す（union read）。
+
+    db の結果 + 未 ingest jsonl の結果を (session_id, timestamp) で dedup して合算し、
+    timestamp 昇順に並べて返す。limit は union 後に適用する。
 
     Args:
         since: ISO 8601 timestamp。指定時はこれより新しいレコードのみ。
-        limit: 返す件数の上限。
+        limit: 返す件数の上限（union 後に適用）。
     """
+    # dedup キー → レコード。db を先に入れ、jsonl は未取り込み分のみ補完する。
+    by_key: dict[tuple[str, str], dict] = {}
+
     if HAS_DUCKDB and SESSIONS_DB.exists():
         con = None
         try:
@@ -162,17 +345,14 @@ def query(since: str | None = None, limit: int | None = None) -> list[dict]:
             if since:
                 sql += " WHERE timestamp > ?"
                 params.append(since)
-            sql += " ORDER BY timestamp"
-            if limit:
-                sql += f" LIMIT {int(limit)}"
             rows = con.execute(sql, params).fetchall()
-            results = []
             for (raw,) in rows:
                 try:
-                    results.append(json.loads(raw))
+                    rec = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-            return results
+                key = (rec.get("session_id", ""), rec.get("timestamp", ""))
+                by_key[key] = rec
         except Exception:
             pass
         finally:
@@ -182,30 +362,26 @@ def query(since: str | None = None, limit: int | None = None) -> list[dict]:
                 except Exception:
                     pass
 
-    return _query_jsonl(since=since, limit=limit)
-
-
-def _query_jsonl(since: str | None = None, limit: int | None = None) -> list[dict]:
-    if not SESSIONS_JSONL.exists():
-        return []
-    results = []
-    for line in SESSIONS_JSONL.read_text(encoding="utf-8").splitlines():
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for rec in _uningested_jsonl_records():
         if since and rec.get("timestamp", "") <= since:
             continue
-        results.append(rec)
-        if limit and len(results) >= limit:
-            break
+        key = (rec.get("session_id", ""), rec.get("timestamp", ""))
+        # db に既にある (session_id, timestamp) は db を優先（dedup）。
+        if key not in by_key:
+            by_key[key] = rec
+
+    results = sorted(by_key.values(), key=lambda r: r.get("timestamp", ""))
+    if limit:
+        results = results[: int(limit)]
     return results
 
 
 def migrate_from_jsonl(skip_if_db_has_data: bool = False) -> int:
-    """sessions.jsonl のレコードを sessions.db に取り込む。
+    """sessions.jsonl のレコードを sessions.db に取り込む（後方互換 CLI 用）。
 
     べき等: 同じ (session_id, timestamp) ペアは重複挿入しない。
+    `ingest()` と異なり jsonl の rotate は行わない（migrate_sessions_to_duckdb.py の
+    薄い CLI ラッパーが想定する従来挙動を温存する）。
 
     Args:
         skip_if_db_has_data: True なら DB に既存データがある場合スキップ。
@@ -226,18 +402,13 @@ def migrate_from_jsonl(skip_if_db_has_data: bool = False) -> int:
             if existing and existing[0] > 0:
                 return 0
 
-        # 既存の (session_id, timestamp) ペアを取得して重複防止
         existing_keys = {
             (row[0], row[1])
             for row in con.execute("SELECT session_id, timestamp FROM sessions").fetchall()
         }
 
         inserted = 0
-        for line in SESSIONS_JSONL.read_text(encoding="utf-8").splitlines():
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        for rec in _iter_jsonl_records(SESSIONS_JSONL):
             sid = rec.get("session_id", "")
             ts = rec.get("timestamp", "")
             if not sid or not ts:
@@ -247,15 +418,7 @@ def migrate_from_jsonl(skip_if_db_has_data: bool = False) -> int:
             con.execute(
                 "INSERT INTO sessions (session_id, timestamp, project, type, skill_count, error_count, raw_json) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    sid,
-                    ts,
-                    rec.get("project"),
-                    rec.get("type"),
-                    rec.get("skill_count"),
-                    rec.get("error_count"),
-                    json.dumps(rec, ensure_ascii=False),
-                ],
+                _record_to_row(rec),
             )
             existing_keys.add((sid, ts))
             inserted += 1
@@ -273,16 +436,19 @@ def migrate_from_jsonl(skip_if_db_has_data: bool = False) -> int:
 def delete_by_session_ids(session_ids: list[str], source: str | None = None) -> int:
     """指定 session_id のレコードを削除する。
 
+    db と未 ingest jsonl の両方から削除する（union 書き込み側の整合）。
+
     Args:
         session_ids: 削除対象の session_id リスト。
         source: 指定時はこの source を持つレコードのみ削除（backfill 等）。
 
     Returns:
-        削除件数。
+        削除件数（db + jsonl の合算）。
     """
     if not session_ids:
         return 0
 
+    deleted = 0
     if HAS_DUCKDB and SESSIONS_DB.exists():
         con = None
         try:
@@ -295,7 +461,7 @@ def delete_by_session_ids(session_ids: list[str], source: str | None = None) -> 
                 params.append(source)
             sql += " RETURNING session_id"
             rows = con.execute(sql, params).fetchall()
-            return len(rows)
+            deleted += len(rows)
         except Exception:
             pass
         finally:
@@ -305,7 +471,8 @@ def delete_by_session_ids(session_ids: list[str], source: str | None = None) -> 
                 except Exception:
                     pass
 
-    return _delete_by_session_ids_jsonl(session_ids, source=source)
+    deleted += _delete_by_session_ids_jsonl(session_ids, source=source)
+    return deleted
 
 
 def _delete_by_session_ids_jsonl(session_ids: list[str], source: str | None = None) -> int:
@@ -328,5 +495,3 @@ def _delete_by_session_ids_jsonl(session_ids: list[str], source: str | None = No
         kept.append(line)
     SESSIONS_JSONL.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
     return deleted
-
-

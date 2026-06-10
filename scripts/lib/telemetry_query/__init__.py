@@ -38,7 +38,7 @@ from .helpers import (  # noqa: E402, F401
 # telemetry_query/sessions_corrections_workflows.py に集約（後方互換のため再エクスポート）
 from .sessions_corrections_workflows import (  # noqa: E402, F401
     query_sessions,
-    _query_sessions_table,
+    _query_sessions_via_store,
     _duckdb_query_file,
     query_corrections,
     _filter_corrections_by_project,

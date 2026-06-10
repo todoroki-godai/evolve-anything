@@ -10,5 +10,5 @@ _filter_by_time(records: List[Dict[str, Any]], since: str | None, until: str | N
 _filter_corrections_by_project(records: List[Dict[str, Any]], project: str | None, include_unknown: bool = False) -> List[Dict[str, Any]]
 _load_jsonl(filepath: pathlib.Path) -> List[Dict[str, Any]]
 _parse_ts(ts_str: str) -> datetime.datetime | None
-_query_sessions_table(*, project: str | None = None, include_unknown: bool = False, since: str | None = None, until: str | None = None) -> List[Dict[str, Any]]
+_query_sessions_via_store(*, project: str | None = None, include_unknown: bool = False, since: str | None = None, until: str | None = None) -> List[Dict[str, Any]]
 _warn_no_duckdb() -> None

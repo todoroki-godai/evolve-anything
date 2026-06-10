@@ -85,10 +85,16 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="sessions.jsonl",
-        writer="hooks/observe.py 等（セッション境界の記録）",
-        reader="audit / trigger / capture_rate がセッション単位集計に使用",
-        retention="permanent",
-        note="セッションテレメトリの SoR。",
+        writer="hooks/observe.py 等（セッション境界の記録）。hot path は jsonl 追記のみ（#415 Phase A）",
+        reader="session_store.ingest() が batch で sessions.db へ取り込み（drain 経路）。"
+        "audit / trigger / capture_rate は session_store API（union read）経由で集計",
+        retention="compaction",
+        compaction="batch ingest（evolve 同居）で sessions.db に取り込み後、live jsonl を "
+        ".ingested-<ts> へ rotate（glob 恒久除外・1世代保持）。SoR は sessions.db。"
+        "db 側は file_size vs rows×平均行長 の乖離 >10倍 で rebuild compaction",
+        disposition="drain",
+        note="jsonl は hot path 緩衝。per-fire connect→INSERT→close による sessions.db "
+        "再肥大（9.6GB）を根治するため jsonl-first + batch ingest に変更（#415）。",
     ),
     StoreDeclaration(
         name="errors.jsonl",

@@ -28,7 +28,13 @@ def query_sessions(
 ) -> List[Dict[str, Any]]:
     """sessions をクエリして結果を返す。
 
-    sessions_file 未指定: session_store の sessions テーブル (DuckDB) を参照。
+    sessions_file 未指定:
+        - `HAS_DUCKDB=True`: **SessionStore の union read** (`session_store.query`) を参照する。
+          db の取り込み済み分 + 未 ingest（live）jsonl の両方が見える（#415 Phase A: append は
+          jsonl 追記のみで ingest は非同期のため、db 直読では未 ingest セッションを取りこぼす。
+          union read でこれを防ぐ）。
+        - `HAS_DUCKDB=False`: 後方互換で `DATA_DIR / sessions.jsonl` を直接読む（DuckDB 非依存の
+          フォールバック。union read は session_store の DuckDB 経路に依存するため不可）。
     sessions_file 指定:   後方互換のため指定された JSONL を読む（テスト用）。
 
     Args:
@@ -50,63 +56,40 @@ def query_sessions(
         records = _filter_by_project(records, project, include_unknown)
         return _filter_by_time(records, since, until)
 
-    if HAS_DUCKDB:
-        return _query_sessions_table(project=project, include_unknown=include_unknown, since=since, until=until)
+    if not HAS_DUCKDB:
+        # DuckDB 非依存フォールバック: DATA_DIR / sessions.jsonl を直読（union read は不可）。
+        fallback = DATA_DIR / "sessions.jsonl"
+        if not fallback.exists():
+            return []
+        _warn_no_duckdb()
+        records = _load_jsonl(fallback)
+        records = _filter_by_project(records, project, include_unknown)
+        return _filter_by_time(records, since, until)
 
-    # HAS_DUCKDB=False のフォールバック: 従来通り JSONL を読む
-    fallback = DATA_DIR / "sessions.jsonl"
-    if not fallback.exists():
-        return []
-    _warn_no_duckdb()
-    records = _load_jsonl(fallback)
-    records = _filter_by_project(records, project, include_unknown)
-    return _filter_by_time(records, since, until)
+    # HAS_DUCKDB=True: SessionStore の union read（db + 未 ingest jsonl の dedup 合算）に揃える。
+    return _query_sessions_via_store(project=project, include_unknown=include_unknown, since=since, until=until)
 
 
-def _query_sessions_table(
+def _query_sessions_via_store(
     *,
     project: Optional[str] = None,
     include_unknown: bool = False,
     since: Optional[str] = None,
     until: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """session_store の sessions テーブルを参照してレコードを返す。
+    """SessionStore の union read を経由して sessions を取得し project/時間でフィルタする。
 
-    raw_json をデコードして元の dict を返す（read_json_auto と同じ形式）。
+    session_store.query は (session_id, timestamp) で db と未 ingest jsonl を dedup 合算する。
+    union read が dict を返すため SQL WHERE を Python フィルタに置換し両経路で挙動を揃える。
+    本番では telemetry_query と session_store は同一 DATA_DIR (`~/.claude/rl-anything`) に解決し、
+    pytest では conftest が両モジュールの DATA_DIR を同一 tmp に rebase するため、session_store の
+    モジュール変数をそのまま信頼して読む（HAS_DUCKDB=True 経路でのみ到達）。
     """
-    import duckdb
     import session_store
-    if not session_store.SESSIONS_DB.exists():
-        return []
-    conn = duckdb.connect(str(session_store.SESSIONS_DB), read_only=True)
-    try:
-        sql = "SELECT raw_json FROM sessions"
-        params: Dict[str, Any] = {}
-        where_parts: List[str] = []
-        if project is not None:
-            params["project"] = project
-            if include_unknown:
-                where_parts.append("(project = $project OR project IS NULL)")
-            else:
-                where_parts.append("project = $project")
-        if since:
-            params["since"] = since
-            where_parts.append("timestamp >= $since")
-        if until:
-            params["until"] = until
-            where_parts.append("timestamp < $until")
-        if where_parts:
-            sql += " WHERE " + " AND ".join(where_parts)
-        rows = conn.execute(sql, params).fetchall()
-        results: List[Dict[str, Any]] = []
-        for (raw,) in rows:
-            try:
-                results.append(json.loads(raw))
-            except (json.JSONDecodeError, TypeError):
-                continue
-        return results
-    finally:
-        conn.close()
+
+    records = session_store.query()
+    records = _filter_by_project(records, project, include_unknown)
+    return _filter_by_time(records, since, until)
 
 
 def _duckdb_query_file(
