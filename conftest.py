@@ -12,13 +12,43 @@ guard を session 起動時にインストールする。issue #41: テスト時
 1 セッション 1.5M token 消費の主要因。mock 漏れを構造的に検出するため、
 subprocess.run(["claude", ...]) を呼んだ瞬間に RuntimeError を投げる。
 正当な用途 (integration テスト等) は環境変数 RL_ALLOW_LLM_IN_TESTS=1 で解除可。
+
+【DATA_DIR の構造的隔離 — #420】
+store モジュール（session_store / token_usage_store / growth_journal 等）は
+``DATA_DIR`` を **import 時に確定** する。autouse fixture の per-test
+``monkeypatch.setenv`` は import より後に走るため、import 時キャプチャ組には
+効かず、手動 patch 許可リストに漏れた growth_journal が実 ~/.claude/rl-anything/
+を汚染した（977 件中 852 件 = 87%）。許可リスト方式は「4 匹目のモグラ」を
+構造的に生む。よって **入口で塞ぐ**: 全テストモジュールの import より先に走る
+conftest トップレベルで ``CLAUDE_PLUGIN_DATA`` を session 一時 dir に固定する。
+import 時キャプチャ組も含め一律に隔離され、モジュール個別 patch は不要になる
+（tmp_path は fixture でしか使えないので tempfile.mkdtemp で session dir を作る）。
 """
+import atexit
 import os
+import shutil
 import subprocess
 import sys
-from pathlib import Path
+import tempfile
 
 import pytest
+
+
+def _isolate_data_dir_at_import() -> None:
+    """全テストモジュールの import より先に CLAUDE_PLUGIN_DATA を tmp に固定する。
+
+    import 時に DATA_DIR をキャプチャする store モジュールを構造的に隔離する
+    最初の砦（#420）。既に環境（CI で意図的に設定）に値があれば尊重する。
+    """
+    if os.environ.get("CLAUDE_PLUGIN_DATA"):
+        return
+    session_dir = tempfile.mkdtemp(prefix="rl-anything-test-data-")
+    os.environ["CLAUDE_PLUGIN_DATA"] = session_dir
+    # session 終了時に掃除（残骸を作らない）。
+    atexit.register(lambda: shutil.rmtree(session_dir, ignore_errors=True))
+
+
+_isolate_data_dir_at_import()
 
 
 def _install_llm_guard():
@@ -72,21 +102,74 @@ def _install_llm_guard():
 _install_llm_guard()
 
 
+def _rebase_module_data_dirs(monkeypatch, sys_modules, tmp_path) -> None:
+    """import 済み store モジュールの import 時キャプチャ DATA_DIR を per-test に貼り替える。
+
+    手動 patch 許可リスト（session_store / token_usage_store /
+    optimize_history_store の 3 件をベタ書き）の **構造的代替**（#420）。
+    許可リストは新 store 追加時に「次のモグラ」（漏れたモジュールの本番汚染）を
+    生む欠陥があった。ここでは ``sys.modules`` を走査して module-level の
+    ``DATA_DIR`` / ``_DATA_DIR_VAL`` を持つモジュールを機械的に発見し、その値と、
+    旧 DATA_DIR 配下に派生した他の ``Path`` 属性（``SESSIONS_DB`` /
+    ``PENDING_TRIGGER_FILE`` / ``HISTORY_ROOT`` 等）を per-test の ``tmp_path`` に
+    rebase する。monkeypatch.setattr 経由なのでテスト終了時に自動復元される。
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    real_home = (_Path.home() / ".claude").resolve()
+
+    for mod in list(sys_modules.values()):
+        if mod is None:
+            continue
+        for dd_attr in ("DATA_DIR", "_DATA_DIR_VAL"):
+            old = getattr(mod, dd_attr, None)
+            if not isinstance(old, _Path):
+                continue
+            try:
+                old_resolved = old.resolve()
+            except OSError:
+                continue
+            # 既に tmp 隔離済み（real home 配下でない）でも、テスト間で共有される
+            # session dir を指しているとリークするため一律 per-test に貼り替える。
+            # 派生 Path 属性（DATA_DIR 配下のもの）も合わせて rebase。
+            for attr_name in dir(mod):
+                if attr_name.startswith("__"):
+                    continue
+                val = getattr(mod, attr_name, None)
+                if not isinstance(val, _Path):
+                    continue
+                try:
+                    val_resolved = val.resolve()
+                except OSError:
+                    continue
+                if val_resolved == old_resolved:
+                    monkeypatch.setattr(mod, attr_name, tmp_path, raising=False)
+                    continue
+                # old DATA_DIR 配下の派生パス → tmp_path 配下へ rebase
+                try:
+                    rel = val_resolved.relative_to(old_resolved)
+                except ValueError:
+                    continue
+                monkeypatch.setattr(mod, attr_name, tmp_path / rel, raising=False)
+            break  # DATA_DIR を見つけたら _DATA_DIR_VAL は再走査しない
+
+
 @pytest.fixture(autouse=True)
 def _isolate_plugin_data(tmp_path, monkeypatch):
+    """per-test の追加隔離。
+
+    トップレベル ``_isolate_data_dir_at_import`` が session 一時 dir を固定する
+    ことで import 時キャプチャ組も実 home から構造的に隔離される（#420）。本
+    fixture は per-test の env を tmp_path に上書きし、call-time に env を読む
+    ストアをテスト単位で分離する（書き込みのテスト間漏れ防止）。
+
+    さらに ``_rebase_module_data_dirs`` で import 済みの全 store モジュールの
+    import 時キャプチャ DATA_DIR を per-test tmp_path に機械的に貼り替える。
+    かつての手動 patch 許可リスト（session_store / token_usage_store /
+    optimize_history_store の 3 件ベタ書き）はこの機械 sweep で撤去した。許可
+    リストは新 store 追加時に「次のモグラ」を生む構造的欠陥で、機械 sweep が
+    その根を断つ（漏れが原理的に起きない）。
+    """
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-    if "session_store" in sys.modules:
-        ss = sys.modules["session_store"]
-        monkeypatch.setattr(ss, "DATA_DIR", tmp_path, raising=False)
-        monkeypatch.setattr(ss, "SESSIONS_DB", tmp_path / "sessions.db", raising=False)
-        monkeypatch.setattr(ss, "SESSIONS_JSONL", tmp_path / "sessions.jsonl", raising=False)
-    if "token_usage_store" in sys.modules:
-        tus = sys.modules["token_usage_store"]
-        monkeypatch.setattr(tus, "DATA_DIR", tmp_path, raising=False)
-        monkeypatch.setattr(tus, "USAGE_DB", tmp_path / "token_usage.db", raising=False)
-        monkeypatch.setattr(tus, "USAGE_JSONL", tmp_path / "token_usage.jsonl", raising=False)
-    # ADR-031: accept/reject 履歴ストアも tmp に隔離（lazy import 依存の脆さを排除）
-    if "optimize_history_store" in sys.modules:
-        ohs = sys.modules["optimize_history_store"]
-        monkeypatch.setattr(ohs, "DATA_DIR", tmp_path, raising=False)
-        monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history", raising=False)
+    _rebase_module_data_dirs(monkeypatch, sys.modules, tmp_path)
