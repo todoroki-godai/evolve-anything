@@ -26,7 +26,7 @@
 
 | コンポーネント | 一言サマリ | 実体 |
 |----------------|-----------|------|
-| Observe hooks (20個) | LLM コストゼロで使用・エラー・修正・ワークフロー・ファイル変更を自動記録 | `hooks/` |
+| Observe hooks (23個 registered) | LLM コストゼロで使用・エラー・修正・ワークフロー・ファイル変更を自動記録 | `hooks/` |
 | Auto Trigger | corrections 蓄積・セッション終了等で evolve/audit を自動提案 | `trigger_engine.py` |
 | `userConfig` | trigger 閾値・各種上限など 18 項目をプラグイン有効化時に設定可能 | manifest |
 | `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチ | agent |
@@ -66,6 +66,7 @@
 | `spec_trigger` | 仕様未更新マージの SessionStart 検出→spec-keeper 提案 [ADR-044] | `spec_trigger.py` |
 | `capture_rate` | correction capture 率（20+ ターン session のうち correction 検出割合）を決定論算出し audit に advisory surface（#421） | `capture_rate.py` |
 | `orphan_store` | writer あり reader なしの jsonl ストアを決定論検出（hooks=writer / scripts+skills=reader 静的突合）（#422） | `orphan_store.py` |
+| `store_registry` | ストア新設の事前契約ゲート — writer/reader/retention 宣言の機械可読 SoT（jsonl/db 両対応、writer_locus で batch 書込を stale 突合から除外）（#430-#434） | `store_registry.py` |
 | `outcome_metrics` | 行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。utilization の plugin レイアウト探索修理も同梱 [#423, ADR-046] | `audit/outcome_metrics.py` |
 | `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query）。物理PK+論理UNIQUEで resume 複製を弾く・cwd 由来 pj_slug・evolve/audit batch + rl-fleet ingest + SessionStart staleness advisory（#430） | `utterance_archive/` |
 | `outcome_attribution` | outcome 2軸（一発成功率 / rework 率）を per-skill 帰属し evolve ターゲットランキングへ自動入力（advisory→閉ループの先行配線）。dry-run に before/after 順位差分を surface [#433] | `audit/outcome_attribution.py` |

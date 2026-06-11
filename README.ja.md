@@ -91,6 +91,8 @@ rl-anything は **4つの独立した柱** で構成される。
 | 全 PJ 横断の fleet ステータス | `bin/rl-fleet status` |
 | 全 PJ の memory を keyword 横断検索 | `bin/rl-fleet recall "<query>"` |
 | インストール済み CC プラグインの最新性診断 | `bin/rl-fleet plugins` |
+| 全 PJ human 発話の恒久アーカイブを更新 | `bin/rl-fleet ingest` |
+| 暗黙修正シグナルの確認と corrections への昇格 | `reflect --show-weak-signals` / `reflect --promote-weak` |
 
 > すべてのコマンドは `/rl-anything:` プレフィックス付きで呼び出す（例: `/rl-anything:evolve`）
 

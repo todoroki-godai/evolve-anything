@@ -94,6 +94,8 @@ rl-anything consists of **four independent pillars**.
 | Curate a project's pitfalls.md (dedup / classify / distill / sync) | `pitfall-curate` |
 | Cross-project fleet status | `bin/rl-fleet status` |
 | Cross-project memory recall (keyword) | `bin/rl-fleet recall "<query>"` |
+| Update the permanent cross-project utterance archive | `bin/rl-fleet ingest` |
+| Review implicit-correction signals and promote to corrections | `reflect --show-weak-signals` / `reflect --promote-weak` |
 
 > All commands are invoked with the `/rl-anything:` prefix (e.g., `/rl-anything:evolve`).
 
