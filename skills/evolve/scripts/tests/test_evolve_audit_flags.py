@@ -41,3 +41,35 @@ def test_run_evolve_passes_full_effect_flags_to_audit(tmp_path):
     _, kwargs = m.call_args
     assert kwargs.get("memory_trace") is True, "memory_trace=True が audit に渡っていない（MemTrace が evolve で効かない）"
     assert kwargs.get("constitutional_score") is True, "constitutional_score=True が渡っていない（slop_detector が evolve で効かない）"
+
+
+def test_run_evolve_dry_run_passes_dry_run_to_audit(tmp_path):
+    """#491: run_evolve(dry_run=True) は audit にも dry_run=True を貫通させる。"""
+    live_audit = sys.modules.get("audit", audit)
+    with mock.patch.object(live_audit, "run_audit", return_value="## audit report") as m:
+        run_evolve(project_dir=str(tmp_path), dry_run=True)
+    assert m.called
+    _, kwargs = m.call_args
+    assert kwargs.get("dry_run") is True, "dry_run=True が audit に渡っていない（dry-run で audit-history を汚す）"
+
+
+def test_run_audit_dry_run_does_not_record_completion(tmp_path, monkeypatch):
+    """#491: run_audit(dry_run=True) は audit-history / evolve-state を更新しない。
+
+    run_audit は `_record_audit_completion` を orchestrator モジュール内の名前で呼ぶため、
+    再エクスポート先の `audit` でなく orchestrator の名前を patch する。
+    """
+    import audit.orchestrator as orch
+    called = {"n": 0}
+    monkeypatch.setattr(orch, "_record_audit_completion", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    orch.run_audit(project_dir=str(tmp_path), dry_run=True)
+    assert called["n"] == 0, "dry_run=True なのに _record_audit_completion が呼ばれた"
+
+
+def test_run_audit_default_records_completion(tmp_path, monkeypatch):
+    """回帰防止: audit 単体 CLI 既定（dry_run=False）では従来どおり記録する。"""
+    import audit.orchestrator as orch
+    called = {"n": 0}
+    monkeypatch.setattr(orch, "_record_audit_completion", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    orch.run_audit(project_dir=str(tmp_path))
+    assert called["n"] == 1, "dry_run=False で _record_audit_completion が呼ばれていない"

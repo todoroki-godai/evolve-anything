@@ -147,6 +147,11 @@ def query_relevant(
     if not HAS_DUCKDB or not keywords:
         return []
 
+    # #491: read 経路で空 DB を物理生成しない（dry-run の「1バイトも書かない」契約）。
+    # DB がまだ無ければ取得結果も空なので、connect/mkdir/CREATE TABLE を一切走らせない。
+    if not get_db_path().exists():
+        return []
+
     con = None
     try:
         con = _connect()

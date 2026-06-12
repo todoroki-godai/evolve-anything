@@ -99,6 +99,16 @@ class TestQueryRelevant:
         result = store.query_relevant(set(), None)
         assert result == []
 
+    def test_read_does_not_materialize_db(self, store, tmp_path):
+        """#491: read 経路（query_relevant）は空 DB を物理生成してはならない。"""
+        if not store.HAS_DUCKDB:
+            pytest.skip("DuckDB not installed")
+        db_path = store.get_db_path()
+        assert not db_path.exists()  # 前提: まだ DB は無い
+        result = store.query_relevant({"git", "diff"}, None)
+        assert result == []
+        assert not db_path.exists(), "read で episodic.db が materialize された（dry-run 契約違反）"
+
     def test_finds_matching_event(self, store):
         if not store.HAS_DUCKDB:
             pytest.skip("DuckDB not installed")

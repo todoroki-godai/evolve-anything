@@ -141,8 +141,14 @@ def run_audit(
     memory_trace: bool = False,
     cross_project: bool = False,
     growth: bool = False,
+    dry_run: bool = False,
 ) -> str:
-    """Audit を実行してレポートを返す。"""
+    """Audit を実行してレポートを返す。
+
+    dry_run=True 時は audit-history.jsonl / evolve-state.json への完了記録を行わない
+    （#491: run_evolve(dry_run=True) の「1バイトも書かない」契約を貫通させる。
+    audit 単体 CLI `bin/rl-audit` の既存挙動は変えないため既定 False）。
+    """
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
     violations = check_line_limits(artifacts)
@@ -265,11 +271,13 @@ def run_audit(
                 cross_project_report_lines.append(f"- Streak: {totals['streak']}")
             cross_project_report_lines.append("")
 
-    _record_audit_completion(
-        coherence_report=coherence_report_lines,
-        telemetry_report=telemetry_report_lines,
-        environment_report=environment_report_lines,
-    )
+    # #491: dry-run では完了記録（audit-history.jsonl / evolve-state.json）を書かない
+    if not dry_run:
+        _record_audit_completion(
+            coherence_report=coherence_report_lines,
+            telemetry_report=telemetry_report_lines,
+            environment_report=environment_report_lines,
+        )
 
     growth_report_lines = None
     if growth:

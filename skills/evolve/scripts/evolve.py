@@ -636,7 +636,7 @@ def run_evolve(
         # MemTrace は決定論(LLM ゼロ)、constitutional は haiku×最大4 だがレイヤ単位キャッシュで
         # 通常 0〜1 コール（constitutional_cache.json）。
         audit_report = run_audit(
-            project_dir, memory_trace=True, constitutional_score=True
+            project_dir, memory_trace=True, constitutional_score=True, dry_run=dry_run
         )
         result["phases"]["audit"] = {"report": audit_report}
     except Exception as e:
