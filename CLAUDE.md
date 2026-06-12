@@ -70,8 +70,13 @@
 | `outcome_metrics` | 行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。utilization の plugin レイアウト探索修理も同梱 [#423, ADR-046] | `audit/outcome_metrics.py` |
 | `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query）。物理PK+論理UNIQUEで resume 複製を弾く・cwd 由来 pj_slug・evolve/audit batch + rl-fleet ingest + SessionStart staleness advisory（#430） | `utterance_archive/` |
 | `outcome_attribution` | outcome 2軸（一発成功率 / rework 率）を per-skill 帰属し evolve ターゲットランキングへ自動入力（advisory→閉ループの先行配線）。dry-run に before/after 順位差分を surface [#433] | `audit/outcome_attribution.py` |
-| `weak_signals` | 暗黙修正シグナルの決定論検出（直後手編集 / permission deny / 言い直し / Esc 中断）→ weak_signals.jsonl レーン。corrections 直入れせず reflect 確認後に昇格。言い直し閾値は実コーパス dry-run で決定（jaccard 0.8）[#432] | `weak_signals/` |
+| `weak_signals` | 暗黙修正シグナルの決定論検出（直後手編集 / permission deny / 言い直し / Esc 中断）→ weak_signals.jsonl レーン。corrections 直入れせず reflect 確認後に昇格。言い直し閾値は実コーパス dry-run で決定（jaccard 0.8）。45日 TTL で期限切れを expired マークし昇格候補から除外（#442）+ observability に evolve 昇格誘導文言（#444）[#432] | `weak_signals/` |
 | `correction_semantic` | correction capture の二層化（#431）。utterances.db の dialogue 発話を Haiku がバッチ意味判定（auto_memory 2 相と同型）→ weak_signals(channel=llm_judge) 隔離 + 個人辞書（correction_idioms.jsonl）。フェーズ昇格は human-source のみ駆動（provenance_weight）/ reflect 昇格フロー（--show-weak-signals / --promote-weak）[#431] | `correction_semantic/` |
+| `bootstrap_backlog` | 初回 evolve で既存 weak_signals バックログの消化方式を AskUserQuestion 3 択で選ぶ bootstrap phase（marker で1回きり・slug スコープ厳守・常時 emit）（#443） | `correction_semantic/bootstrap_backlog.py` |
+| `daily_review` | evolve の「今日の修正確認」phase — 新規 weak_signal を idiom 単位 group 化し最大5件を y/n 確認、promote 成功後のみ既読追記（既読ストア correction_review_seen.jsonl）（#446） | `correction_semantic/daily_review.py` |
+| `idiom_autopromote` | confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / `rl-reflect --revoke-idiom` 巻き戻し（#447, ADR-047） | `correction_semantic/idiom_autopromote.py` |
+| `measurement_bug` | 複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185） | `audit/measurement_bug.py` |
+| `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ / 今日の昇格成果。閾値は growth_engine の定数が単一ソース（#448） | `growth_report.py` |
 
 ## クイックスタート
 
