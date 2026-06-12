@@ -111,6 +111,66 @@ class TestSuppression:
         assert out["suppressed"] == [dropped]
 
 
+# ── emit→reconcile 決定論 fallback（#494 発見1: record_rejection の安全網） ──
+class TestReconcileSurfaced:
+    """SKILL.md の inline record_rejection を取りこぼしても、毎回再出する提案を
+    決定論で自動却下する安全網（#494）。surfaced マーカーで連続提示回数を追跡し、
+    解決されないまま閾値回数 surface された提案を ledger へ自動記録する。"""
+
+    def _setup(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sl, "LEDGER_ROOT", tmp_path / "remediation_suppression")
+        monkeypatch.setattr(sl, "SURFACED_ROOT", tmp_path / "remediation_surfaced")
+
+    def test_first_surface_not_suppressed(self, tmp_path, monkeypatch):
+        """初回提示だけでは却下しない（ユーザーが対応する猶予を与える）。"""
+        self._setup(tmp_path, monkeypatch)
+        issue = _issue(file_="x.md", lines=11, limit=10)
+        res = sl.reconcile_surfaced([issue], slug="proj", auto_reject_after_runs=2)
+        assert res["auto_rejected"] == 0
+        assert not sl.is_suppressed(issue, slug="proj")
+
+    def test_repeated_surface_auto_rejects(self, tmp_path, monkeypatch):
+        """閾値回数（2回）連続提示され続けたら自動却下し、次回 surface から抑制される。"""
+        self._setup(tmp_path, monkeypatch)
+        issue = _issue(file_="x.md", lines=11, limit=10)
+        # 1回目: まだ却下しない
+        r1 = sl.reconcile_surfaced([issue], slug="proj", auto_reject_after_runs=2)
+        assert r1["auto_rejected"] == 0
+        # 2回目: 連続で再出 → 自動却下
+        r2 = sl.reconcile_surfaced([issue], slug="proj", auto_reject_after_runs=2)
+        assert r2["auto_rejected"] == 1
+        assert sl.is_suppressed(issue, slug="proj")
+
+    def test_resolved_issue_not_rejected(self, tmp_path, monkeypatch):
+        """前回 surface された提案が今回検出されなければ（解決された）却下しない。"""
+        self._setup(tmp_path, monkeypatch)
+        issue = _issue(file_="x.md", lines=11, limit=10)
+        sl.reconcile_surfaced([issue], slug="proj", auto_reject_after_runs=2)
+        # 今回は検出されない（ユーザーが修正した）→ marker から落ち、却下されない
+        res = sl.reconcile_surfaced([], slug="proj", auto_reject_after_runs=2)
+        assert res["auto_rejected"] == 0
+        assert not sl.is_suppressed(issue, slug="proj")
+
+    def test_dry_run_no_write(self, tmp_path, monkeypatch):
+        """persist=False（dry-run）は surfaced マーカーにも ledger にも一切書かない。"""
+        self._setup(tmp_path, monkeypatch)
+        issue = _issue(file_="x.md", lines=11, limit=10)
+        sl.reconcile_surfaced([issue], slug="proj", auto_reject_after_runs=2)
+        sl.reconcile_surfaced([issue], slug="proj", auto_reject_after_runs=2, persist=False)
+        # persist=False の 2 回目では自動却下を計上するが ledger には書かない
+        assert not sl.is_suppressed(issue, slug="proj")
+
+    def test_explicit_record_rejection_still_works(self, tmp_path, monkeypatch):
+        """SKILL.md が record_rejection を呼べば即抑制（既存経路は不変）。"""
+        self._setup(tmp_path, monkeypatch)
+        issue = _issue(file_="x.md", lines=11, limit=10)
+        sl.record_rejection(issue, slug="proj")
+        assert sl.is_suppressed(issue, slug="proj")
+        # その後 reconcile が surface しても二重却下にならない（既に suppressed）
+        res = sl.reconcile_surfaced([issue], slug="proj", auto_reject_after_runs=2)
+        assert res["auto_rejected"] == 0
+
+
 # ── dry-run 非書込（#308 pitfall 再発防止） ──────────────────
 class TestDryRunNoWrite:
     def test_persist_false_does_not_write(self, tmp_path, monkeypatch):

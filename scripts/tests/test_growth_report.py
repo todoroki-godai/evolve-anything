@@ -263,6 +263,120 @@ class TestBuildGrowthReport:
         assert "human" in lines_text or "人間" in lines_text
 
 
+# ── promoted_today を corrections ストアから決定論導出（#494 発見2）──────
+class TestPromotedTodayFromCorrectionsStore:
+    """promoted_today / autopromoted_today が corrections ストア（実 promote の永続記録）
+    から決定論導出され、構造的常時0が解消されることを確認する（#494 発見2）。
+
+    根因: build_review の返り値に promoted キーが存在せず、growth_report が
+    review_result.daily.promoted を読んでも構造的に必ず 0 になっていた。実 promote は
+    Step 6.2 の rl-reflect --promote-weak が corrections.jsonl に書く（source=reflect_confirmed
+    / promoted_by=idiom_dict）ため、growth_report は corrections の「今日の昇格」を数える。
+    """
+
+    def _today_iso(self) -> str:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).isoformat()
+
+    def _yesterday_iso(self) -> str:
+        from datetime import datetime, timedelta, timezone
+        return (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+    def test_promoted_today_counts_today_human_weak_promotions(self):
+        """source=reflect_confirmed + weak_signal_key + 今日の timestamp を promoted_today に数える。
+
+        review_result.daily に promoted キーが無い（= 実 build_review の返り値）状況でも、
+        corrections ストアの今日の人間確認昇格を反映する。
+        """
+        from growth_report import build_growth_report
+        corrections = [
+            # 今日の人間確認昇格（promoted_today に数える）
+            {"source": "reflect_confirmed", "correction_type": "semantic_idiom",
+             "weak_signal_key": "k1", "timestamp": self._today_iso()},
+            {"source": "reflect_confirmed", "correction_type": "semantic_idiom",
+             "weak_signal_key": "k2", "timestamp": self._today_iso()},
+            # 昨日の昇格（今日には数えない）
+            {"source": "reflect_confirmed", "correction_type": "semantic_idiom",
+             "weak_signal_key": "k0", "timestamp": self._yesterday_iso()},
+        ]
+        result = build_growth_report(
+            "test-pj",
+            corrections=corrections,
+            review_result={"daily": {"groups": []}},  # promoted キー無し（実 build_review 相当）
+            autopromote_result={},
+        )
+        assert result["promoted_today"] == 2
+
+    def test_autopromoted_today_counts_today_idiom_dict_promotions(self):
+        """promoted_by=idiom_dict + 今日の timestamp を autopromoted_today に数える。"""
+        from growth_report import build_growth_report
+        corrections = [
+            {"source": "idiom_dict", "promoted_by": "idiom_dict",
+             "correction_type": "semantic_idiom", "weak_signal_key": "a1",
+             "timestamp": self._today_iso()},
+            {"source": "idiom_dict", "promoted_by": "idiom_dict",
+             "correction_type": "semantic_idiom", "weak_signal_key": "a2",
+             "timestamp": self._yesterday_iso()},  # 昨日 → 数えない
+        ]
+        result = build_growth_report(
+            "test-pj",
+            corrections=corrections,
+            review_result={"daily": {"groups": []}},
+            autopromote_result={},  # promoted キー無し（実 autopromote が当 run で 0 件のとき）
+        )
+        assert result["autopromoted_today"] == 1
+
+    def test_idiom_dict_not_double_counted_as_promoted_today(self):
+        """idiom_dict 昇格は autopromoted にのみ数え、promoted_today に重複計上しない。"""
+        from growth_report import build_growth_report
+        corrections = [
+            {"source": "idiom_dict", "promoted_by": "idiom_dict",
+             "correction_type": "semantic_idiom", "weak_signal_key": "a1",
+             "timestamp": self._today_iso()},
+        ]
+        result = build_growth_report(
+            "test-pj",
+            corrections=corrections,
+            review_result={"daily": {"groups": []}},
+            autopromote_result={},
+        )
+        assert result["promoted_today"] == 0
+        assert result["autopromoted_today"] == 1
+
+    def test_explicit_review_promoted_takes_precedence_when_higher(self):
+        """同 run の live カウント（review_result.daily.promoted）が store より多ければ尊重する。
+
+        後方互換: 明示渡しの promoted は max で勝たせる（structural-0 補正は下限保証）。
+        """
+        from growth_report import build_growth_report
+        corrections = [
+            {"source": "reflect_confirmed", "correction_type": "semantic_idiom",
+             "weak_signal_key": "k1", "timestamp": self._today_iso()},
+        ]
+        result = build_growth_report(
+            "test-pj",
+            corrections=corrections,
+            review_result={"daily": {"promoted": 5, "groups": []}},
+            autopromote_result={},
+        )
+        assert result["promoted_today"] == 5
+
+    def test_non_weak_human_correction_not_counted(self):
+        """weak_signal 由来でない reflect_confirmed（手書き correction）は promoted_today に数えない。"""
+        from growth_report import build_growth_report
+        corrections = [
+            {"source": "reflect_confirmed", "correction_type": "improvement",
+             "timestamp": self._today_iso()},  # weak_signal_key 無し
+        ]
+        result = build_growth_report(
+            "test-pj",
+            corrections=corrections,
+            review_result={"daily": {"groups": []}},
+            autopromote_result={},
+        )
+        assert result["promoted_today"] == 0
+
+
 # ── 閾値リテラル禁止テスト ────────────────────────────────────────
 
 

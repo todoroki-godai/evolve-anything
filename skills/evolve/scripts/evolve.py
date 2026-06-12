@@ -885,6 +885,22 @@ def run_evolve(
         classified["proposable_custom_individual"] = _partition["individual"]
         classified["proposable_custom_batch_skip"] = _partition["batch_skip"]
 
+        # #494 発見1: record_rejection の決定論 fallback。SKILL.md Step 5.5 の inline
+        # record_rejection を取りこぼしても、解決されないまま連続して個別承認に出続けた
+        # 提案を自動却下し「毎回再出」を断つ。surfaced マーカーで連続提示回数を追跡する。
+        # 読み取り→閾値判定は dry-run でも実行できるが、書込（marker / ledger）は persist で
+        # ゲートする（dry-run 非書込・pitfall_dryrun_stateful_store_write）。import 失敗時は
+        # フェーズを壊さず 0 件にフォールバックする。
+        auto_rejected_count = 0
+        try:
+            from remediation.suppression_ledger import reconcile_surfaced as _reconcile
+            _recon = _reconcile(
+                _partition["individual"], slug=_suppress_slug, persist=not dry_run
+            )
+            auto_rejected_count = int(_recon.get("auto_rejected", 0))
+        except Exception:
+            auto_rejected_count = 0
+
         remediation_data = {
             "total_issues": len(issues),
             "auto_fixable": len(classified["auto_fixable"]),
@@ -895,6 +911,8 @@ def run_evolve(
             "proposable_custom_batch_skip": len(_partition["batch_skip"]),
             # #477-2: suppression ledger により次回再提示を抑制した件数（silence != evaluated）。
             "suppressed_by_ledger": suppressed_count,
+            # #494: 連続再出で自動却下した件数（SKILL.md record_rejection の決定論 fallback）。
+            "auto_rejected_by_reconcile": auto_rejected_count,
             "manual_required": len(classified["manual_required"]),
             "classified": classified,
         }

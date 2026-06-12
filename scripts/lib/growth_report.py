@@ -12,6 +12,7 @@ evolve レポート末尾に:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from growth_engine import (
@@ -20,6 +21,62 @@ from growth_engine import (
     PHASE_DISPLAY_NAMES,
 )
 from correction_semantic.provenance_weight import count_human_corrections
+
+
+def _is_today(ts: Any) -> bool:
+    """correction の timestamp が「今日（UTC）」かを判定する（決定論・LLM 非依存）。
+
+    ISO8601 文字列を tolerant にパースする。パース不能 / 欠落は今日でない扱い（保守的）。
+    """
+    if not isinstance(ts, str) or not ts:
+        return False
+    raw = ts.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        # 日付のみ（YYYY-MM-DD）等の簡易フォーマットを救済（先頭の日付部分のみ抽出）
+        date_part = raw.split("T", 1)[0].split(" ", 1)[0]
+        try:
+            dt = datetime.strptime(date_part, "%Y-%m-%d")
+        except ValueError:
+            return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).date() == datetime.now(timezone.utc).date()
+
+
+def count_promoted_today(corrections: Optional[List[Dict[str, Any]]]) -> Dict[str, int]:
+    """corrections ストアから「今日昇格した weak_signal 由来 correction」を決定論で数える（#494）。
+
+    実 promote は Step 6.2 の `rl-reflect --promote-weak`（人間確認）/ idiom_autopromote（自動）が
+    corrections.jsonl に書く永続記録なので、build_review の返り値（promoted キー無し）に依存せず
+    ここを単一の真実とする。これにより growth_report.promoted_today の「構造的常時0」を根治する。
+
+    判定（weak_signal 由来の昇格のみ・手書き correction や Stop hook 機械生成は除外）:
+      - weak_signal_key を持つ（= weak_signals レーンからの昇格）
+      - invalidated でない（安全弁③ revoke 済みは除外）
+      - timestamp が今日（UTC）
+      - promoted_by=="idiom_dict" → autopromoted_today
+      - source=="reflect_confirmed"（idiom_dict でない）→ promoted_today
+
+    Returns: {"promoted_today": int, "autopromoted_today": int}
+    """
+    promoted = 0
+    autopromoted = 0
+    for rec in corrections or []:
+        if rec.get("invalidated"):
+            continue
+        if not rec.get("weak_signal_key"):
+            continue
+        if not _is_today(rec.get("timestamp")):
+            continue
+        if rec.get("promoted_by") == "idiom_dict":
+            autopromoted += 1
+        elif rec.get("source") == "reflect_confirmed":
+            promoted += 1
+    return {"promoted_today": promoted, "autopromoted_today": autopromoted}
 
 
 def build_growth_report(
@@ -55,13 +112,23 @@ def build_growth_report(
     target = STRUCTURED_CORRECTIONS_TARGET
     remaining = max(0, target - human_count)
 
-    # ── 今日の昇格件数（dict.get None pitfall: (d.get(k) or {}) 形式）──
+    # ── 今日の昇格件数（#494 発見2: 構造的常時0 の根治）──────────────
+    # build_review の返り値（daily）には promoted キーが存在せず、実 promote は Step 6.2 の
+    # rl-reflect --promote-weak が corrections.jsonl に書く。そこで corrections ストアの
+    # 「今日の weak_signal 由来昇格」を単一の真実として数える（count_promoted_today）。
+    # 後方互換: 明示渡しの live カウント（review_result.daily.promoted / autopromote_result.
+    # promoted）が store より多ければ max で勝たせる（同 run の即時表示用）。store 由来導出は
+    # 下限保証として常時0を解消する。dict.get None pitfall: (d.get(k) or {}) 形式。
+    _today = count_promoted_today(_corrections)
+
     _review = review_result or {}
     _daily = (_review.get("daily") or {})
-    promoted_today: int = int((_daily.get("promoted") or 0))
+    _explicit_promoted: int = int((_daily.get("promoted") or 0))
+    promoted_today: int = max(_explicit_promoted, _today["promoted_today"])
 
     _autopromote = autopromote_result or {}
-    autopromoted_today: int = int((_autopromote.get("promoted") or 0))
+    _explicit_autopromoted: int = int((_autopromote.get("promoted") or 0))
+    autopromoted_today: int = max(_explicit_autopromoted, _today["autopromoted_today"])
 
     # ── フェーズ表示名（corrections カウントベースで暫定判定）────────
     # ここでは full detect_phase は呼ばず、corrections カウントのみで

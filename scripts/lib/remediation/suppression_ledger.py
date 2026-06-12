@@ -34,6 +34,11 @@ from typing import Any, Dict, List, Optional
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
 LEDGER_ROOT = DATA_DIR / "remediation_suppression"
+# 連続提示回数を追跡する surfaced マーカーの root（#494 発見1: record_rejection の安全網）。
+SURFACED_ROOT = DATA_DIR / "remediation_surfaced"
+
+# 解決されないまま連続でこの回数 surface された提案を自動却下する（決定論 fallback）。
+DEFAULT_AUTO_REJECT_AFTER_RUNS = 2
 
 # git repo 外（slug 解決不能）の保全先。
 UNATTRIBUTED_SLUG = "_unattributed"
@@ -236,3 +241,108 @@ def filter_suppressed(
     for it in issues:
         (suppressed if _suppressed(it) else surface).append(it)
     return {"surface": surface, "suppressed": suppressed}
+
+
+# ─────────────────────────────────────────────────────────────────
+# emit→reconcile 決定論 fallback（#494 発見1: record_rejection の安全網）
+# ─────────────────────────────────────────────────────────────────
+# 背景: 却下の記録は SKILL.md Step 5.5 の散文 MUST（assistant が inline python で record_rejection
+# を叩く）だけが入口で、取りこぼすと却下が永久消失し #477 が解いた「同じ提案が毎回再出」が再発する
+# （learning_skill_md_must_not_enforcement）。Step 7.8 の drain（restore_state の undrained 検出）
+# のような安全網が remediation だけ無かった。
+#
+# 対処: surfaced マーカー（per-slug）で各提案 dedup_key の「連続提示回数」を決定論で追跡し、
+# 解決されないまま閾値回数 surface され続けた提案を自動却下（record_rejection）する。
+#   - 提案が今回検出されなくなった = 解決された（修正された / 既に suppressed）→ marker から落とす。
+#   - 連続提示回数が auto_reject_after_runs に達した = ユーザーが対応も明示却下もしなかった
+#     → 自動却下して再提示を止める（毎回再出の症状を断つ）。
+# dry-run（persist=False）は marker / ledger に一切書かない（pitfall_dryrun_stateful_store_write）。
+def surfaced_path(slug: str) -> Path:
+    return SURFACED_ROOT / f"{_sanitize_slug(slug)}.json"
+
+
+def _load_surfaced(slug: str) -> Dict[str, Dict[str, Any]]:
+    """surfaced マーカーを dedup_key→{count, first_seen, last_seen} の dict で読む。"""
+    path = surfaced_path(slug)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    entries = data.get("entries") if isinstance(data, dict) else None
+    return entries if isinstance(entries, dict) else {}
+
+
+def _write_surfaced(slug: str, entries: Dict[str, Dict[str, Any]]) -> None:
+    path = surfaced_path(slug)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"slug": slug, "entries": entries}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def reconcile_surfaced(
+    current_issues: List[Dict[str, Any]],
+    *,
+    slug: str,
+    now: Optional[float] = None,
+    auto_reject_after_runs: int = DEFAULT_AUTO_REJECT_AFTER_RUNS,
+    ttl_days: int = DEFAULT_TTL_DAYS,
+    persist: bool = True,
+) -> Dict[str, Any]:
+    """個別承認に出す提案の連続提示を追跡し、未解決のまま閾値回数 surface されたものを自動却下する。
+
+    各 evolve run の remediation phase（個別承認候補確定後）で1回呼ぶ。SKILL.md の inline
+    record_rejection が走らなくても、毎回再出する提案をこの安全網が決定論で抑制する。
+
+    Args:
+        current_issues: 今回 surface する個別承認候補（proposable_custom_individual）。
+        auto_reject_after_runs: 連続提示がこの回数に達したら自動却下する（既定2）。
+        persist: False（dry-run）なら marker / ledger に一切書かない。返り値の件数は計算する。
+
+    Returns:
+        {"auto_rejected": int, "tracked": int, "resolved": int, "auto_rejected_keys": [str, ...]}
+    """
+    now = _now() if now is None else now
+    prior = _load_surfaced(slug)
+
+    # 今回 surface する提案を dedup_key で索引化（既に suppressed のものは追跡しない）。
+    current_by_key: Dict[str, Dict[str, Any]] = {}
+    for it in current_issues:
+        if is_suppressed(it, slug=slug, now=now):
+            continue
+        current_by_key[dedup_key(it)] = it
+
+    new_entries: Dict[str, Dict[str, Any]] = {}
+    auto_rejected_keys: List[str] = []
+    resolved = 0
+
+    # 1) 今回も出ている提案: 連続提示回数を増やす（新規は 1）。閾値到達で自動却下。
+    for key, issue in current_by_key.items():
+        prev = prior.get(key) or {}
+        count = int(prev.get("count", 0)) + 1
+        first_seen = prev.get("first_seen", now)
+        if count >= auto_reject_after_runs:
+            # 自動却下: ledger に記録し marker からは落とす（以降 is_suppressed が True）。
+            if persist:
+                record_rejection(issue, slug=slug, now=now, ttl_days=ttl_days, persist=True)
+            auto_rejected_keys.append(key)
+        else:
+            new_entries[key] = {"count": count, "first_seen": first_seen, "last_seen": now}
+
+    # 2) 前回 marker にあったが今回出ていない提案 = 解決された → marker から落とす（却下しない）。
+    for key in prior:
+        if key not in current_by_key:
+            resolved += 1
+
+    if persist:
+        _write_surfaced(slug, new_entries)
+
+    return {
+        "auto_rejected": len(auto_rejected_keys),
+        "auto_rejected_keys": auto_rejected_keys,
+        "tracked": len(new_entries),
+        "resolved": resolved,
+    }

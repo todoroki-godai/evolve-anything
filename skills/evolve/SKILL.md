@@ -310,6 +310,8 @@ confidence/scope で3カテゴリに動的分類される。各カテゴリの M
     print(f"suppression ledger: {len(rejected_issues)} 件を却下記録（次回 evolve で再提示しない）")
     ```
 
+    - **決定論 fallback（#494）**: 上の inline 記録を取りこぼしても、run_evolve が remediation phase で `reconcile_surfaced` を毎 run 呼び、解決されないまま連続で個別承認に出続けた提案を閾値回数（既定2）で**自動却下**する安全網がある（`remediation.auto_rejected_by_reconcile` に件数 surface・dry-run 非書込）。これは Step 5.5 の散文 MUST が唯一の却下入口だった構造（却下が永久消失するレーン）を塞ぐためのもの。**それでもユーザーが明示却下した提案は上の record_rejection で即記録するのが正**（fallback は次回以降に効くため、即時抑制は inline 記録が担う）。
+
 #### Step 5.5.1: proposable の line_limit_violation / split_candidate に対する2相品質回復（[ADR-037] Phase 1d-ii）
 
 `fix_line_limit_violation` / `fix_split_candidate` は [ADR-037] で claude -p を全廃し決定論フォールバックで完走する。

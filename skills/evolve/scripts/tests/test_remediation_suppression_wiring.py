@@ -80,3 +80,26 @@ class TestApplyRemediationSuppression:
         )
         assert surviving == items
         assert suppressed_count == 0
+
+
+class TestReconcileSurfacedWiring:
+    """#494: record_rejection の決定論 fallback（reconcile_surfaced）の配線。"""
+
+    def _setup(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sl, "LEDGER_ROOT", tmp_path / "remediation_suppression")
+        monkeypatch.setattr(sl, "SURFACED_ROOT", tmp_path / "remediation_surfaced")
+
+    def test_persist_writes_surfaced_marker(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch)
+        sl.reconcile_surfaced([_issue("x.md")], slug="proj", persist=True)
+        assert sl.surfaced_path("proj").exists()
+
+    def test_dry_run_writes_nothing(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch)
+        root = tmp_path / "remediation_surfaced"
+        ledger_root = tmp_path / "remediation_suppression"
+        # 2 回呼んでも persist=False なら marker も ledger も作られない
+        sl.reconcile_surfaced([_issue("x.md")], slug="proj", persist=False)
+        sl.reconcile_surfaced([_issue("x.md")], slug="proj", persist=False)
+        assert not root.exists() or list(root.glob("*.json")) == []
+        assert not ledger_root.exists() or list(ledger_root.glob("*.jsonl")) == []

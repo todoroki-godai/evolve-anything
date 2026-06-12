@@ -52,7 +52,7 @@ def _minimal_valid() -> dict:
                 "total_issues": 0, "auto_fixable": 0, "proposable": 0,
                 "proposable_custom": 0, "proposable_global": 0, "manual_required": 0,
                 "proposable_custom_individual": 0, "proposable_custom_batch_skip": 0,
-                "suppressed_by_ledger": 0,
+                "suppressed_by_ledger": 0, "auto_rejected_by_reconcile": 0,
                 "classified": {
                     "proposable": [], "auto_fixable": [], "manual_required": [],
                     "proposable_custom": [], "proposable_global": [],

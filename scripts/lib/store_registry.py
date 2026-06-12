@@ -249,6 +249,23 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "（全PJ共通 DATA_DIR 単一ファイル pitfall 回避）・worktree 安全 slug・dry-run 非書込。"
         "TTL45日経過で 1 回だけ再 surface（環境変化での再評価機会）。",
     ),
+    StoreDeclaration(
+        name="remediation_surfaced/<slug>.json",
+        writer="scripts/lib/remediation/suppression_ledger.reconcile_surfaced"
+        "（evolve の remediation phase が個別承認候補確定後に毎 run 1 回呼ぶ）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="reconcile_surfaced 自身が次回 evolve で前回の連続提示回数を参照（自己消費）。"
+        "閾値到達で remediation_suppression へ自動却下を昇格させる。",
+        retention="permanent",
+        disposition="drain",
+        note="record_rejection の決定論 fallback の surfaced マーカー（#494）。SKILL.md Step 5.5 の"
+        "inline record_rejection を取りこぼしても、解決されないまま連続 surface された提案を"
+        "閾値回数（既定2）で自動却下する安全網。per-slug 単一 JSON（dedup_key→{count, first_seen,"
+        " last_seen}）で上書き。提案が検出されなくなれば marker から落ちる（解決＝却下しない）。"
+        "PJ slug スコープ（全PJ共通 DATA_DIR 単一ファイル pitfall 回避）・dry-run 非書込。"
+        "肥大化しない（毎 run 上書き・未解決提案のみ保持）。",
+    ),
 ]
 
 
