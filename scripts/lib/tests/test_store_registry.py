@@ -163,3 +163,23 @@ def test_correction_review_seen_declared_as_batch_permanent() -> None:
 def test_correction_review_seen_not_stale_drift() -> None:
     """batch-writer 宣言なので hook-writer 突合の stale に誤検知されない（#446）。"""
     assert "correction_review_seen.jsonl" in store_registry.stale_exempt_names()
+
+
+# --- remediation_suppression/<slug>.jsonl の宣言（#477）----------------------
+
+def test_remediation_suppression_declared_as_batch_ttl_45() -> None:
+    """remediation_suppression/<slug>.jsonl が batch-writer / ttl=45 で宣言されている（#477）。
+
+    remediation 個別承認で却下された提案の suppression ledger。evolve batch が書く
+    新ストアで、宣言なしで書くと orphan_store が undeclared として surface する（#434）。
+    """
+    decl = store_registry.declaration_for("remediation_suppression/<slug>.jsonl")
+    assert decl is not None
+    assert decl.retention == "ttl"
+    assert decl.ttl_days == 45
+    assert decl.writer_locus == "batch"
+
+
+def test_remediation_suppression_not_stale_drift() -> None:
+    """batch-writer 宣言なので hook-writer 突合の stale に誤検知されない（#477）。"""
+    assert "remediation_suppression/<slug>.jsonl" in store_registry.stale_exempt_names()

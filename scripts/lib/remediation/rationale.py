@@ -24,9 +24,9 @@ from issue_schema import (
 
 _RATIONALE_TEMPLATES = {
     "stale_ref": "ディスク上に存在しないパス参照「{path}」を削除します。",
-    "line_limit_violation_auto": "行数が制限を {excess} 行超過しています。空行除去等で制限内に収めます。",
-    "line_limit_violation_propose": "行数が制限値の {pct}% ({lines}/{limit}) です。reference ファイルへの切り出しを提案します。",
-    "line_limit_violation_manual": "行数が制限値の {pct}% ({lines}/{limit}) と大幅に超過しています。手動でのリファクタリングが必要です。",
+    "line_limit_violation_auto": "{basis}が制限を {excess} 行超過しています（基準: {basis}）。空行除去等で制限内に収めます。",
+    "line_limit_violation_propose": "{basis}が制限値の {pct}% ({lines}/{limit}) です（基準: {basis}）。reference ファイルへの切り出しを提案します。",
+    "line_limit_violation_manual": "{basis}が制限値の {pct}% ({lines}/{limit}) と大幅に超過しています（基準: {basis}）。手動でのリファクタリングが必要です。",
     "near_limit": "行数が制限の {pct}% ({lines}/{limit}) に達しています。トピック別ファイルへの分割を提案します。",
     "duplicate": "名前が類似するアーティファクト「{name}」が {count} 箇所にあります。統合を検討してください。",
     "hardcoded_value": "ハードコード値 `{matched}` ({pattern_type}) が検出されました。プレースホルダへの置換を検討してください。",
@@ -66,15 +66,26 @@ def generate_rationale(issue: Dict[str, Any], category: str) -> str:
         pct = int(lines / limit * 100) if limit > 0 else 0
         excess = lines - limit
 
+        # #477-3: 何を数えているかを明示する。rule ファイルは frontmatter を除外した
+        # 「コンテンツ行」をカウントするため（count_content_lines）、実ファイルが 40 行でも
+        # lines=11 と報告されうる。基準をレポートに出して混乱を防ぐ。
+        file_path = issue.get("file", "")
+        if ".claude/rules/" in file_path:
+            basis = "コンテンツ行（frontmatter 除外）"
+        else:
+            basis = "総行数"
+
         if category == "auto_fixable":
-            return _RATIONALE_TEMPLATES["line_limit_violation_auto"].format(excess=excess)
+            return _RATIONALE_TEMPLATES["line_limit_violation_auto"].format(
+                excess=excess, basis=basis,
+            )
         elif category == "proposable":
             return _RATIONALE_TEMPLATES["line_limit_violation_propose"].format(
-                pct=pct, lines=lines, limit=limit,
+                pct=pct, lines=lines, limit=limit, basis=basis,
             )
         else:
             return _RATIONALE_TEMPLATES["line_limit_violation_manual"].format(
-                pct=pct, lines=lines, limit=limit,
+                pct=pct, lines=lines, limit=limit, basis=basis,
             )
 
     if issue_type == "near_limit":

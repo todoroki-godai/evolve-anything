@@ -72,6 +72,7 @@ def compute_confidence_score(issue: Dict[str, Any]) -> float:
         DUPLICATE_PROPOSABLE_CONFIDENCE,
         DUPLICATE_PROPOSABLE_SIMILARITY,
         MAJOR_EXCESS_RATIO,
+        PROPOSABLE_CONFIDENCE,
     )
 
     issue_type = issue["type"]
@@ -87,24 +88,28 @@ def compute_confidence_score(issue: Dict[str, Any]) -> float:
         return 0.95
 
     if issue_type == "line_limit_violation":
+        # #477-3: 超過率（excess / limit）で confidence をスケールする。
+        # 旧実装は「1行超過 → 0.95」と固定で超過幅を考慮せず過剰だった
+        # （1行超過でも auto_fixable 手前まで確信を持ってしまう）。超過がわずかなら
+        # 確信度を抑え、超過率が大きいほど（manual 帯の手前まで）単調に上げる。
+        # auto_fixable（0.9）には昇格させず proposable 帯に留める設計は維持する。
         lines = detail.get("lines", 0)
         limit = detail.get("limit", 1)
         excess = lines - limit if limit > 0 else lines
         ratio = lines / limit if limit > 0 else 999
         if ratio >= MAJOR_EXCESS_RATIO:
-            # 大幅超過 → 自動修正困難
+            # 大幅超過（160%+）→ 自動修正困難（manual_required へ）
             return 0.3
-        elif excess == 1:
-            # 1行超過 → LLM 圧縮で対応可能
-            return 0.95
-        elif excess <= 2 and ratio <= 1.02:
-            # 2行以内かつ2%以内 → 高めの信頼度だが auto_fixable にはしない
-            return 0.7
-        elif ratio <= 1.10:
-            # 10% 以内の超過 → 高めの信頼度
-            return 0.7
-        else:
-            return 0.5
+        if excess <= 0:
+            # 超過なし（境界・データ不整合）→ proposable 下限
+            return PROPOSABLE_CONFIDENCE
+        # 超過率 0（=超過なし）で floor 0.55、MAJOR_EXCESS_RATIO 直前で cap 0.88 に
+        # 線形補間。proposable 帯（< AUTO_FIX_CONFIDENCE=0.9）に必ず収まる。
+        excess_ratio = excess / limit if limit > 0 else 0.0
+        floor, cap = 0.55, 0.88
+        span = MAJOR_EXCESS_RATIO - 1.0  # 超過率の有効レンジ（0 〜 0.6）
+        frac = min(1.0, excess_ratio / span) if span > 0 else 1.0
+        return round(floor + (cap - floor) * frac, 4)
 
     if issue_type == "near_limit":
         pct = detail.get("pct", 0)
@@ -313,6 +318,49 @@ def partition_proposable_by_confidence(
     individual.sort(key=_by_conf, reverse=True)
     batch_skip.sort(key=_by_conf, reverse=True)
     return {"individual": individual, "batch_skip": batch_skip}
+
+
+def partition_proposable_by_scope(
+    proposable: List[Dict[str, Any]],
+    origin_resolver=None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """proposable issue を custom / global スコープに分割する（#477-1）。
+
+    `impact_scope`（impact 由来）と origin（パス由来）の判定が食い違っても、
+    impact_scope を最終権威にして global へ寄せる。SKILL.md 上 global scope は
+    「参考値・対応不要」であり、個別承認 AskUserQuestion に出してはならない。
+
+    バグ: ~/.claude/rules/ 配下のグローバル rule は `compute_impact_scope` が "global"
+    を返す一方、`classify_artifact_origin` は "custom" を返すため、origin だけで
+    分割すると proposable_custom_individual に流れ込み、proposable_global は 0 に
+    なっていた。ここで impact_scope == "global" OR origin == "global" を global と
+    判定して整合を取る（決定論・LLM 非依存）。
+
+    Args:
+        proposable: 分類対象の proposable issue リスト。
+        origin_resolver: file path → origin 文字列（"custom"/"global"/...）の関数。
+            None の場合は impact_scope のみで判定する。
+
+    Returns:
+        {"custom": [...], "global": [...]}。入力リストは破壊しない。
+    """
+    custom: List[Dict[str, Any]] = []
+    glob: List[Dict[str, Any]] = []
+    for issue in proposable:
+        is_global = issue.get("impact_scope") == "global"
+        if not is_global and origin_resolver is not None:
+            file_path = issue.get("file", "")
+            if file_path:
+                try:
+                    if origin_resolver(file_path) == "global":
+                        is_global = True
+                except Exception:
+                    pass
+        if is_global:
+            glob.append(issue)
+        else:
+            custom.append(issue)
+    return {"custom": custom, "global": glob}
 
 
 def classify_issues(issues: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:

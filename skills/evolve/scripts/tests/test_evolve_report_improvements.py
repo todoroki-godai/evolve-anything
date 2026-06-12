@@ -89,18 +89,24 @@ class TestComputeTrend:
 # ========== 2.4: Remediation auto_fixable 拡張テスト ==========
 
 class TestLineLimitClassification:
-    def test_1_line_excess_auto_fixable(self):
-        """1行超過 → confidence 0.95 → auto_fixable。"""
+    def test_1_line_excess_not_overconfident(self):
+        """1行超過 → 超過率スケールで confidence を抑え proposable に留める（#477-3）。
+
+        旧実装は 1行超過に固定 0.95 を与え auto_fixable まで昇格させていたが、超過幅を
+        考慮しない過剰な確信だった。超過率（excess/limit）でスケールし、わずかな超過は
+        auto_fixable（>=0.9）に昇格させず proposable 帯に留める。
+        """
         from remediation import classify_issue
         issue = {
             "type": "line_limit_violation",
             "file": "/project/.claude/rules/test.md",
-            "detail": {"lines": 4, "limit": 3},
+            "detail": {"lines": 4, "limit": 3},  # excess=1, ratio≈1.33
             "source": "check_line_limits",
         }
         result = classify_issue(issue)
-        assert result["confidence_score"] == 0.95
-        assert result["category"] == "auto_fixable"
+        assert result["confidence_score"] < 0.9
+        assert result["confidence_score"] >= 0.5
+        assert result["category"] == "proposable"
 
     def test_2_line_excess_proposable(self):
         """2行超過 → proposable 維持（ratio < 1.6 の場合）。"""

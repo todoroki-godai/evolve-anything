@@ -294,6 +294,21 @@ confidence/scope で3カテゴリに動的分類される。各カテゴリの M
   - **まとめてスキップ対象 = `proposable_custom_batch_skip`（conf < 0.7、実体 `classified.proposable_custom_batch_skip[]`）**: FP 集中帯（hardcoded/duplicate/skill_evolve medium 等）。**デフォルトはスキップ**で「低 confidence の proposable {batch_skip}件をまとめてスキップしました（個別に見る場合は展開可）」と1行表示する。1件ずつ AskUserQuestion を出さない（MUST NOT）。ユーザーが希望した場合のみ提案詳細プロトコルで個別展開する。
   - `proposable_custom_individual == 0`（＝個別対象なし）の場合は AskUserQuestion を出さず、batch_skip の1行表示のみで Step を終える（沈黙≠評価のため、batch_skip が0件でも個別対象0件なら「proposable: 個別対象なし ✓」を残す）。
   - `proposable_custom == 0 かつ proposable_global > 0` は「global のみ {M}件（参考値）— 対応不要」と1行でスキップ。
+  - **却下/スキップの記録（べき等性 — 重複提案 MUST NOT、#477）**: 個別承認 AskUserQuestion でユーザーが**却下／スキップ**を選んだ提案は、`record_rejection` で suppression ledger に記録する（dedup_key 単位・TTL45日）。これにより次回 evolve で同じ提案が再出しない（run_evolve が `_apply_remediation_suppression` で却下済みを既に除外し、`remediation.suppressed_by_ledger` 件数を surface する）。**dry-run（`--dry-run`）のときは記録しない（MUST NOT）**。記録対象は「採用しなかった issue dict」（`classified.proposable_custom_individual[]` の要素そのもの）。下記コードで一括記録する（**#479: 直 import は ModuleNotFoundError になるため sys.path 設定込みの完全コードで実行する**）:
+
+    ```python
+    import os, sys
+    _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+    sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+    from remediation.suppression_ledger import record_rejection, resolve_slug
+
+    # rejected_issues = ユーザーが却下/スキップした issue dict のリスト（個別承認で不採用にしたもの）
+    # dry_run = True のときは下のループを実行しない（MUST NOT — suppression ledger に書かない）
+    slug = resolve_slug()  # worktree 安全 slug（git-common-dir の親 basename）
+    for issue in rejected_issues:
+        record_rejection(issue, slug=slug)  # dedup_key 単位・TTL45日で記録（last-write-wins）
+    print(f"suppression ledger: {len(rejected_issues)} 件を却下記録（次回 evolve で再提示しない）")
+    ```
 
 #### Step 5.5.1: proposable の line_limit_violation / split_candidate に対する2相品質回復（[ADR-037] Phase 1d-ii）
 
@@ -305,7 +320,7 @@ confidence/scope で3カテゴリに動的分類される。各カテゴリの M
 **manual_required** (confidence < 0.5, or impact_scope = global):
 - 問題の概要、推奨アクション、分類理由を表示のみ
 
-**サマリ**: 「Remediation 完了: N件修正 / M件スキップ / K件ロールバック（要手動対応）」
+**サマリ**: 「Remediation 完了: N件修正 / M件スキップ / K件ロールバック（要手動対応）」。`remediation.suppressed_by_ledger > 0` のときは「suppression ledger により {S}件を再提示抑制（前回却下・TTL45日内）」を1行追記する（silence != evaluated、#477）。
 
 > **一言メモ — Remediation 完了後**: 修正件数に応じた1文を出力する（文言は [references/report-narration.md](references/report-narration.md)）。
 

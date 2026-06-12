@@ -115,6 +115,7 @@ from .confidence import (  # noqa: E402, F401
     classify_issue,
     classify_issues,
     partition_proposable_by_confidence,
+    partition_proposable_by_scope,
 )
 
 

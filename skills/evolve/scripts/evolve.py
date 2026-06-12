@@ -63,6 +63,31 @@ def _resolve_pj_slug(project_dir: Optional[str]) -> str:
     return Path(base).name
 
 
+def _apply_remediation_suppression(proposable, slug, now=None):
+    """却下済み提案を suppression ledger で除外する（#477-2 配線）。
+
+    remediation の proposable 候補から、過去にユーザーが却下/スキップして
+    suppression_ledger に記録された提案（dedup_key 一致・TTL 内）を除外する。
+    べき等性原則（重複提案 MUST NOT）の実装。filter_suppressed は **読み取りのみ**で
+    副作用がないため dry-run でも安全に適用できる（書き込みは SKILL.md 側の
+    record_rejection が担い、dry-run では呼ばない）。
+
+    suppression_ledger が import できない場合は全件 surface（フェーズを壊さない）。
+
+    Returns:
+        (surviving, suppressed_count) のタプル。
+    """
+    try:
+        from remediation.suppression_ledger import filter_suppressed
+    except Exception:
+        return list(proposable), 0
+    try:
+        out = filter_suppressed(proposable, slug=slug, now=now)
+    except Exception:
+        return list(proposable), 0
+    return out["surface"], len(out["suppressed"])
+
+
 def _surface_constitutional_status(
     project_dir: Path,
     warning_sink: List[Dict[str, Any]],
@@ -805,22 +830,41 @@ def run_evolve(
 
         classified = classify_remediation_issues(issues)
 
-        # proposable を custom/global スコープ別に集計（#183 false positive 可視化）
+        # proposable を custom/global スコープ別に集計（#183 false positive 可視化）。
+        # #477-1: impact_scope（impact 由来）を最終権威にして global へ寄せる。
+        # ~/.claude/rules/ 配下の global rule は compute_impact_scope が "global" を返す
+        # 一方 classify_artifact_origin は "custom" を返すため、origin 単独判定では
+        # proposable_custom_individual に流れ込み proposable_global が 0 になっていた。
+        # partition_proposable_by_scope が impact_scope OR origin=="global" で整合を取る。
         from audit import classify_artifact_origin  # artifact_scope は re-export しないため audit から直接 import
-        proposable_custom = []
-        proposable_global = []
-        for issue in classified["proposable"]:
-            file_path = issue.get("file", "")
-            origin = "custom"
-            if file_path:
-                try:
-                    origin = classify_artifact_origin(Path(file_path))
-                except Exception:
-                    pass
-            if origin == "global":
-                proposable_global.append(issue)
-            else:
-                proposable_custom.append(issue)
+        from remediation import partition_proposable_by_scope
+
+        def _origin_resolver(file_path):
+            try:
+                return classify_artifact_origin(Path(file_path))
+            except Exception:
+                return "custom"
+
+        _scope_partition = partition_proposable_by_scope(
+            classified["proposable"], origin_resolver=_origin_resolver
+        )
+        proposable_custom = _scope_partition["custom"]
+        proposable_global = _scope_partition["global"]
+
+        # #477-2 配線: 却下済み提案を suppression ledger で除外する（べき等性原則 =
+        # 重複提案 MUST NOT）。個別承認に出す proposable_custom から、過去に却下/スキップ
+        # して記録された提案（dedup_key 一致・TTL45日内）を取り除く。filter は読み取りのみ
+        # （副作用なし）なので dry-run でも適用してよい。書込（record_rejection）は SKILL.md
+        # 側が個別承認の確定時に行い、dry-run では呼ばない。
+        # 抑制件数は observability として result に残す（silence != evaluated）。
+        try:
+            from remediation.suppression_ledger import resolve_slug as _rem_resolve_slug
+            _suppress_slug = _rem_resolve_slug(cwd=proj)
+        except Exception:
+            _suppress_slug = proj.name
+        proposable_custom, suppressed_count = _apply_remediation_suppression(
+            proposable_custom, slug=_suppress_slug
+        )
 
         # classified にも split リストを追加し、トップレベルの count と整合させる。
         # 修正前は classified に proposable_custom キーがなかったため、
@@ -845,6 +889,8 @@ def run_evolve(
             "proposable_global": len(proposable_global),
             "proposable_custom_individual": len(_partition["individual"]),
             "proposable_custom_batch_skip": len(_partition["batch_skip"]),
+            # #477-2: suppression ledger により次回再提示を抑制した件数（silence != evaluated）。
+            "suppressed_by_ledger": suppressed_count,
             "manual_required": len(classified["manual_required"]),
             "classified": classified,
         }

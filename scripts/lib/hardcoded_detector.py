@@ -105,6 +105,16 @@ _MARKDOWN_TABLE_ROW_RE = re.compile(r"^\s*\|.+\|")
 # doc 文脈抑制を適用する pattern_type（高 confidence の URL/ARN 系のみ）。
 _DOC_CONTEXT_SUPPRESSED = ("service_url", "aws_arn")
 
+# markdown フェンス付きコードブロック境界（``` または ~~~、言語指定あり可）。
+# #477-4: ドキュメント用スキルのコードブロック内の ARN/ID は設定値でなく例示・参照
+# （既知の FP 系統）。コードブロック内では doc 文脈系（ARN/URL/数値 ID/Slack ID）を
+# 抑制する。本物の token（api_key）はコードブロック内でも秘匿対象なので抑制しない。
+_CODE_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+
+# コードブロック内で抑制する pattern_type。例示・参照として書かれる識別子系のみ。
+# api_key は文脈無関係に秘匿対象なので含めない（コードブロック内でも検出する）。
+_CODE_BLOCK_SUPPRESSED = ("service_url", "aws_arn", "numeric_id", "slack_id")
+
 # doc 文脈の Slack channel ID（C0...）/ App ID（A0...）/ Bot ID（B0...）。これらは
 # 秘匿対象でない公開参照値で、SKILL.md の運用手順や説明文に意図的に書かれる
 # （#337 で C0/A0、#377-2 で B0 を追加）。bot **token**（xoxb-, api_key パターン）が
@@ -310,12 +320,25 @@ def detect_hardcoded_values(
     results: List[Dict[str, Any]] = []
     seen: set = set()  # (line_num, matched) で重複排除
 
+    # #477-4: フェンス付きコードブロック内かどうかを行単位で追跡する。
+    # ``` / ~~~ の出現でトグルし、ブロック内の doc 文脈系識別子（ARN/ID 等）は抑制する。
+    in_code_block = False
+
     for line_num, line in enumerate(content.splitlines(), start=1):
+        # フェンス行はトグルのみ行いマッチ対象から除く（フェンス行自体に値はない）。
+        if _CODE_FENCE_RE.match(line):
+            in_code_block = not in_code_block
+            continue
+
         # インライン抑制コメントチェック（行全体をスキップ）
         if _SUPPRESSION_COMMENT.search(line):
             continue
 
         for pat in all_patterns:
+            # コードブロック内の doc 文脈系識別子は例示・参照とみなし抑制（api_key は除く）。
+            if in_code_block and pat["name"] in _CODE_BLOCK_SUPPRESSED:
+                continue
+
             for m in pat["regex"].finditer(line):
                 matched = m.group(0)
                 key = (line_num, matched)

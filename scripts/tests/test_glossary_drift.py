@@ -110,6 +110,24 @@ def test_generic_meta_words_excluded(tmp_path):
     assert "DuckDB" in undefined  # PJ 固有語は残す
 
 
+def test_generic_doc_abbreviations_excluded(tmp_path):
+    """ドキュメント汎用略語（PDF/QA/FAQ 等）は jargon でない（#477-4）。
+
+    glossary の jargon 候補に PDF/QA 等の汎用略語が並ぶノイズを denylist で塞ぐ。
+    PJ 固有語（DuckDB 等の CamelCase）は小文字を含むため誤除外しない。
+    """
+    ctx = _write(tmp_path, "CONTEXT.md", _VALID)
+    src = _write(
+        tmp_path, "SPEC.md",
+        "PDF を出力。QA を実施。FAQ を更新。CSV/XML をパース。MVP を出す。"
+        "KPI を測る。DuckDB は固有語として残す。",
+    )
+    undefined = gd.find_undefined_terms(gd.parse_glossary(str(ctx))[0], [str(src)])
+    for noise in ("PDF", "QA", "FAQ", "CSV", "XML", "MVP", "KPI"):
+        assert noise not in undefined, f"{noise} は汎用ドキュメント略語で除外されるべき"
+    assert "DuckDB" in undefined  # PJ 固有語は残す
+
+
 def test_slack_id_excluded_from_jargon(tmp_path):
     """Slack ID（C05KMHFDPB9 等）は jargon 候補から除外する（#337）。"""
     ctx = _write(tmp_path, "CONTEXT.md", _VALID)

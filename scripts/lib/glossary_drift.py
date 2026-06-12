@@ -66,6 +66,11 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
         # Question 選択肢, DEPRECATED=状態語, RM=曖昧な2文字略語, SKILL=メタファイル名）。
         # PJ 固有語（DuckDB/MemOS/VeriTrace 等の CamelCase）は小文字を含むため誤除外しない。
         "HEAD", "IO", "FP", "HOLD", "DEPRECATED", "FALLBACK", "RM", "SKILL",
+        # 汎用ドキュメント／業務略語（#477-4）。glossary の jargon 候補に PDF/QA 等の
+        # 汎用略語が並ぶノイズを denylist で塞ぐ。PJ 固有語ではなく一般的な
+        # ファイル形式・業務用語のため除外する（DuckDB 等の CamelCase は誤除外しない）。
+        "PDF", "QA", "FAQ", "CSV", "XML", "TSV", "MVP", "KPI", "OKR",
+        "PII", "GDPR", "FYI", "ETA", "WIP", "EOD",
     }
 )
 

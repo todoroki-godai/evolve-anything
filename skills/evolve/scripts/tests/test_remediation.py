@@ -110,8 +110,13 @@ class TestClassification:
         assert result["category"] == "proposable"
         assert result["impact_scope"] == "global"
 
-    def test_minor_line_excess_auto_fixable(self):
-        """1行超過 → auto_fixable に格下げ。"""
+    def test_minor_line_excess_proposable_not_overconfident(self):
+        """1行超過（超過率 1%）→ 超過率スケールで proposable に留める（#477-3）。
+
+        旧実装は 1行超過に固定 0.95 を与え auto_fixable まで昇格させていた。超過幅を
+        考慮しない過剰な確信のため、超過率（excess/limit）でスケールし、わずかな超過は
+        auto_fixable（>=0.9）に昇格させない。121/120 は超過率 0.8% で確信度は低い。
+        """
         issue = {
             "type": "line_limit_violation",
             "file": "/project/.claude/memory/topic.md",
@@ -119,8 +124,8 @@ class TestClassification:
             "source": "check_line_limits",
         }
         result = classify_issue(issue)
-        assert result["category"] == "auto_fixable"
-        assert result["confidence_score"] >= 0.9
+        assert result["category"] == "proposable"
+        assert result["confidence_score"] < 0.9
 
     def test_major_line_excess_manual_required(self):
         """大幅超過 (160%+) → manual_required に格上げ。"""

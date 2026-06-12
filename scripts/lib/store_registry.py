@@ -231,6 +231,24 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "（全PJ共通 DATA_DIR 単一ファイル pitfall 回避）。母集団は weak_signals（TTL 45 日で"
         "自然減衰・数百件規模）なので肥大化は無視できる。重複追記は read 側 set 化で無害。",
     ),
+    StoreDeclaration(
+        name="remediation_suppression/<slug>.jsonl",
+        writer="scripts/lib/remediation/suppression_ledger.record_rejection"
+        "（evolve の SKILL.md が remediation 個別承認で「却下/スキップ」確定時に呼ぶ）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="suppression_ledger.is_suppressed / filter_suppressed が次回 evolve の "
+        "remediation proposable 候補から却下済みを除外（evolve._apply_remediation_suppression"
+        "経由・自己消費）。",
+        retention="ttl",
+        ttl_days=45,
+        disposition="drain",
+        note="remediation 個別承認で却下された提案の suppression ledger（#477）。べき等性原則"
+        "（重複提案 MUST NOT）の実装。dedup_key（type+file+主要detail の sha256 先頭16hex）単位の"
+        "append-only・load 時 last-write-wins collapse。triage_ledger（#308）を範に PJ slug スコープ"
+        "（全PJ共通 DATA_DIR 単一ファイル pitfall 回避）・worktree 安全 slug・dry-run 非書込。"
+        "TTL45日経過で 1 回だけ再 surface（環境変化での再評価機会）。",
+    ),
 ]
 
 

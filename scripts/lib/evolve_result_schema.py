@@ -69,6 +69,7 @@ CANONICAL: List[Key] = [
     Key("phases.remediation.proposable_global", int),
     Key("phases.remediation.proposable_custom_individual", int, note="件数（#377-3）。conf>=0.7 で個別承認対象。実体は classified.proposable_custom_individual[]"),
     Key("phases.remediation.proposable_custom_batch_skip", int, note="件数（#377-3）。conf<0.7 でまとめてスキップ対象。実体は classified.proposable_custom_batch_skip[]"),
+    Key("phases.remediation.suppressed_by_ledger", int, note="件数（#477-2）。suppression ledger で次回再提示を抑制した却下済み提案数（silence != evaluated）"),
     Key("phases.remediation.manual_required", int, note="件数。実体は classified.manual_required[]"),
     Key("phases.remediation.classified", dict),
     Key("phases.remediation.classified.proposable", list, item_keys=["type", "file"]),
