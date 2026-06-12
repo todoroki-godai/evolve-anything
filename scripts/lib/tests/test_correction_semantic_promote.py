@@ -214,3 +214,74 @@ def test_invalidate_noop_when_no_match(tmp_path: Path) -> None:
     ])
     res = cs_promote.invalidate_idiom_corrections({"nonexistent"}, corrections_path=corr)
     assert res["invalidated"] == 0
+
+
+# ── resolve_idiom_keys_for_signals（signal→idiom provenance 突合・#463 配線） ──
+
+
+def _seed_signal_and_idiom(ws_path: Path, idioms_path: Path, *, line_no, text, slug="rl-anything"):
+    """同じ provenance（pj_slug, source_path, line_no）を共有する weak_signal + idiom を seed。
+
+    batch.py は同じ prov で WeakSignal と CorrectionIdiom を作るため、(pj_slug, source_path,
+    line_no) で signal→idiom が突合できる。
+    """
+    import correction_semantic.store as cs_store
+    prov = {"source_path": "/a.jsonl", "line_no": line_no,
+            "session_id": "s1", "text": text, "reason": "後置型", "judge": "llm_haiku"}
+    sig = WeakSignal("llm_judge", prov, "2026-06-10T00:00:00+00:00", "s1", slug)
+    append_signals([sig], path=ws_path)
+    it = cs_store.CorrectionIdiom(
+        idiom=text, provenance=prov, detected_at="2026-06-10T00:00:00+00:00", pj_slug=slug,
+    )
+    cs_store.append_idioms([it], path=idioms_path)
+    return sig, it
+
+
+def test_resolve_idiom_keys_maps_signal_to_idiom_key(tmp_path: Path) -> None:
+    """signal_key → 対応する idiom_key を provenance 突合で解決する。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    idioms = tmp_path / "correction_idioms.jsonl"
+    sig, it = _seed_signal_and_idiom(ws, idioms, line_no=1, text="四国めたんじゃなくて")
+    mapping = cs_promote.resolve_idiom_keys_for_signals(
+        [sig.signal_key], weak_signals_path=ws, idioms_path=idioms,
+    )
+    assert mapping == {sig.signal_key: it.idiom_key}
+
+
+def test_resolve_idiom_keys_works_after_promotion(tmp_path: Path) -> None:
+    """promote 済み（promoted=True）の signal でも idiom_key を解決できる（配線順序の保証）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    idioms = tmp_path / "correction_idioms.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sig, it = _seed_signal_and_idiom(ws, idioms, line_no=1, text="四国めたんじゃなくて")
+    cs_promote.promote_signals([sig.signal_key], weak_signals_path=ws,
+                               corrections_path=corr, project_path="/p")
+    # promote 後（promoted=True）でも解決できないと confirm が後段で空振りする
+    mapping = cs_promote.resolve_idiom_keys_for_signals(
+        [sig.signal_key], weak_signals_path=ws, idioms_path=idioms,
+    )
+    assert mapping == {sig.signal_key: it.idiom_key}
+
+
+def test_resolve_idiom_keys_skips_signals_without_idiom(tmp_path: Path) -> None:
+    """対応 idiom が無いシグナル（rephrase 等）は mapping に含めない。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    idioms = tmp_path / "correction_idioms.jsonl"
+    # idiom を持たない rephrase シグナルのみ
+    sig = WeakSignal("rephrase", {"source_path": "/b.jsonl", "line_no": 9},
+                     "t", "s2", "rl-anything")
+    append_signals([sig], path=ws)
+    mapping = cs_promote.resolve_idiom_keys_for_signals(
+        [sig.signal_key], weak_signals_path=ws, idioms_path=idioms,
+    )
+    assert mapping == {}
+
+
+def test_resolve_idiom_keys_unknown_signal_returns_empty(tmp_path: Path) -> None:
+    ws = tmp_path / "weak_signals.jsonl"
+    idioms = tmp_path / "correction_idioms.jsonl"
+    _seed_signal_and_idiom(ws, idioms, line_no=1, text="四国めたんじゃなくて")
+    mapping = cs_promote.resolve_idiom_keys_for_signals(
+        ["nonexistent"], weak_signals_path=ws, idioms_path=idioms,
+    )
+    assert mapping == {}

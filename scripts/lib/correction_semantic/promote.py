@@ -44,6 +44,62 @@ def read_unpromoted(
     return out
 
 
+def _match_key(pj_slug: Any, provenance: Optional[Dict[str, Any]]) -> tuple:
+    """(pj_slug, source_path, line_no) — signal↔idiom を突合する物理キー。
+
+    batch.py は同一発話から WeakSignal と CorrectionIdiom を同じ provenance で作るので、
+    この3要素一致で signal→idiom を対応付けられる（#463）。
+    """
+    prov = provenance or {}
+    return (pj_slug, prov.get("source_path", ""), prov.get("line_no", ""))
+
+
+def resolve_idiom_keys_for_signals(
+    signal_keys: List[str],
+    *,
+    weak_signals_path: Optional[Path] = None,
+    idioms_path: Optional[Path] = None,
+) -> Dict[str, str]:
+    """指定 signal_key → 対応する idiom_key の対応表を provenance 突合で解決する（#463）。
+
+    `--promote-weak` 承認時に、昇格したシグナルに対応する idiom を confirmed 化するための
+    配線。signal と idiom は (pj_slug, source_path, line_no) を共有する（batch.py が同一
+    provenance で両方を作る）ため、その物理キーで突合する。promote 済み（promoted=True）の
+    シグナルでも解決できる（read_signals は全件読む）。
+
+    対応 idiom が無いシグナル（rephrase 等）・未知 signal_key は結果に含めない。
+
+    Returns: {signal_key: idiom_key, ...}
+    """
+    from correction_semantic.store import read_idioms
+
+    target = set(k for k in (signal_keys or []) if k)
+    if not target:
+        return {}
+
+    # signal_key → (pj_slug, source_path, line_no)
+    sig_match: Dict[str, tuple] = {}
+    for r in read_signals(weak_signals_path):
+        key = r.get("signal_key")
+        if key in target:
+            sig_match[key] = _match_key(r.get("pj_slug"), r.get("provenance"))
+
+    # (pj_slug, source_path, line_no) → idiom_key
+    idiom_by_match: Dict[tuple, str] = {}
+    for r in read_idioms(idioms_path):
+        mk = _match_key(r.get("pj_slug"), r.get("provenance"))
+        idiom_key = r.get("idiom_key")
+        if idiom_key:
+            idiom_by_match.setdefault(mk, idiom_key)
+
+    out: Dict[str, str] = {}
+    for key, mk in sig_match.items():
+        idiom_key = idiom_by_match.get(mk)
+        if idiom_key:
+            out[key] = idiom_key
+    return out
+
+
 def _correction_message(rec: Dict[str, Any]) -> str:
     """weak_signal の provenance から corrections の message 本文を組み立てる。"""
     prov = rec.get("provenance") or {}

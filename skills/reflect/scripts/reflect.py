@@ -744,8 +744,13 @@ def main():
         return
 
     # --promote-weak: 指定 signal_key の weak_signal を corrections へ昇格（人間確認後）
+    # 昇格成功後、当該シグナルに対応する idiom を confirmed=True にマークする（#463 配線漏れ修正）。
+    # この confirmed 化が idiom_autopromote の発火ゲート（ADR-047 雪崩防止不変条件）を満たす。
+    # CLI に閉じる（ADR-045）: SKILL.md の散文に手順を足すのでなく、--promote-weak が confirmed まで
+    # 一気通貫で行う。dry_run はどのストアにも書かない（最下層 write ゲート）。
     if args.promote_weak:
         from correction_semantic import promote as _cs_promote
+        from correction_semantic import store as _cs_store
         keys = [k.strip() for k in args.promote_weak.split(",") if k.strip()]
         res = _cs_promote.promote_signals(
             keys,
@@ -754,7 +759,21 @@ def main():
             project_path=current_project or str(project_root),
             dry_run=args.dry_run,
         )
-        print(json.dumps({"status": "promoted_weak", **res}, ensure_ascii=False, indent=2))
+        # 承認したシグナルに対応する idiom を confirmed 化（signal→idiom は provenance 突合）。
+        idiom_key_map = _cs_promote.resolve_idiom_keys_for_signals(
+            keys, weak_signals_path=weak_signals_file, idioms_path=idioms_file,
+        )
+        confirm_res = _cs_store.confirm_idioms(
+            list(set(idiom_key_map.values())),
+            path=idioms_file,
+            confirmed_by="reflect_promote_weak",
+            dry_run=args.dry_run,
+        )
+        print(json.dumps({
+            "status": "promoted_weak",
+            **res,
+            "confirmed_idioms": confirm_res.get("confirmed", 0),
+        }, ensure_ascii=False, indent=2))
         return
 
     # --revoke-idiom: 自動昇格の取り消し（ADR-047 安全弁③）

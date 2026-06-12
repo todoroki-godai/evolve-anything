@@ -963,6 +963,111 @@ class TestWeakSignalPromotion:
         assert not corr.exists()
 
 
+# --- Test: --promote-weak が idiom を confirmed 化する閉ループ（#463 配線漏れ修正） ---
+
+class TestPromoteWeakConfirmsIdiom:
+    SLUG = "rl-anything"
+
+    def _prov(self, line_no, text):
+        return {"source_path": "/a.jsonl", "line_no": line_no, "session_id": "s1",
+                "text": text, "reason": "後置型", "judge": "llm_haiku"}
+
+    def _seed(self, tmp_path, line_no, text):
+        """同じ provenance を共有する weak_signal + idiom を seed（batch.py と同型）。"""
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+        import correction_semantic.store as cs_store
+        ws = tmp_path / "weak_signals.jsonl"
+        idioms = tmp_path / "correction_idioms.jsonl"
+        prov = self._prov(line_no, text)
+        sig = WeakSignal("llm_judge", prov, "2026-06-10T00:00:00+00:00", "s1", self.SLUG)
+        append_signals([sig], path=ws)
+        it = cs_store.CorrectionIdiom(
+            idiom=text, provenance=prov, detected_at="2026-06-10T00:00:00+00:00", pj_slug=self.SLUG,
+        )
+        cs_store.append_idioms([it], path=idioms)
+        return ws, idioms, sig, it
+
+    def test_promote_weak_confirms_corresponding_idiom(self, tmp_path, capsys):
+        """正規フロー（CLI 経由 --promote-weak）の承認だけで idiom confirmed=True が立つ。"""
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        import correction_semantic.store as cs_store
+        text = "四国めたんじゃなくて"
+        ws, idioms, sig, it = self._seed(tmp_path, line_no=1, text=text)
+        corr = tmp_path / "corrections.jsonl"
+
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sig.signal_key,
+                                     "--weak-signals-file", str(ws),
+                                     "--idioms-file", str(idioms),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "promoted_weak"
+        assert out["promoted"] == 1
+        assert out.get("confirmed_idioms", 0) >= 1
+        # corrections に human-source 1 件
+        recs = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(recs) == 1
+        # 当該 idiom が confirmed=True
+        assert cs_store.read_confirmed_idiom_texts(self.SLUG, idioms) == {text}
+
+    def test_closed_loop_autopromote_fires_after_confirm(self, tmp_path, capsys):
+        """閉ループ E2E: --promote-weak で confirmed 化 → 同テキストの新規 signal を autopromote が昇格。"""
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+        import correction_semantic.store as cs_store
+        from correction_semantic import idiom_autopromote as iap
+        text = "四国めたんじゃなくて"
+        ws, idioms, sig, it = self._seed(tmp_path, line_no=1, text=text)
+        corr = tmp_path / "corrections.jsonl"
+
+        # (b) --promote-weak 相当のフロー（reflect.py 経由）
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sig.signal_key,
+                                     "--weak-signals-file", str(ws),
+                                     "--idioms-file", str(idioms),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        capsys.readouterr()
+        # (c) corrections +1 / idiom confirmed=True
+        recs = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(recs) == 1
+        assert cs_store.read_confirmed_idiom_texts(self.SLUG, idioms) == {text}
+
+        # (d) 同テキストの新規 weak_signal（別 phys）+ 新 idiom record を投入
+        prov99 = self._prov(99, text)
+        append_signals([WeakSignal("llm_judge", prov99, "2026-06-20T00:00:00+00:00",
+                                   "s1", self.SLUG)], path=ws)
+        it99 = cs_store.CorrectionIdiom(
+            idiom=text, provenance=prov99, detected_at="2026-06-20T00:00:00+00:00", pj_slug=self.SLUG,
+        )
+        cs_store.append_idioms([it99], path=idioms)
+
+        ap = iap.autopromote(self.SLUG, weak_signals_path=ws, idioms_path=idioms,
+                             corrections_path=corr)
+        assert ap["promoted"] >= 1  # confirmed 後の再発で実発火
+        recs2 = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert any(r.get("source") == "idiom_dict" for r in recs2)
+
+    def test_promote_weak_confirm_dry_run_writes_nothing(self, tmp_path, capsys):
+        """dry-run: corrections / weak_signals / idioms すべてバイト不変（最下層 write ゲート）。"""
+        text = "四国めたんじゃなくて"
+        ws, idioms, sig, it = self._seed(tmp_path, line_no=1, text=text)
+        corr = tmp_path / "corrections.jsonl"
+        before_ws = ws.read_text(encoding="utf-8")
+        before_idioms = idioms.read_text(encoding="utf-8")
+
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sig.signal_key, "--dry-run",
+                                     "--weak-signals-file", str(ws),
+                                     "--idioms-file", str(idioms),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["dry_run"] is True
+        assert not corr.exists()  # corrections 非書込
+        assert ws.read_text(encoding="utf-8") == before_ws  # weak_signals 不変
+        assert idioms.read_text(encoding="utf-8") == before_idioms  # idioms 不変（confirmed 立たず）
+
+
 # --- Test: --revoke-idiom（安全弁③・ADR-047 #447） ---
 
 class TestRevokeIdiom:

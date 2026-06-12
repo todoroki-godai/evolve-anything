@@ -346,7 +346,7 @@ reflect は独立フェーズではなく discover に統合済み。**`phases.d
 - `bootstrap.is_bootstrap == True` → **AskUserQuestion で 3 択を人間に選ばせる（MUST — テキスト表示だけで済ませない）**。question に `bootstrap.pj_total` 件・`bootstrap.groups_total` グループを判断材料として提示する:
   - question: 「この PJ の未昇格バックログ {pj_total} 件（{groups_total} グループ）を初回 bootstrap で消化しますか？」
   - options:
-    1. **まとめて確認** → `bootstrap.groups` を順に AskUserQuestion バッチで提示（各 group の `representative` を確認 → 承認なら同 group の `signal_keys` を `correction_semantic.promote.promote_signals(signal_keys, ...)` で一括昇格）。全 group 確認後に `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる。
+    1. **まとめて確認** → `bootstrap.groups` を順に AskUserQuestion バッチで提示（各 group の `representative` を確認 → 承認なら同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で一括昇格）。CLI が promote と同時に対応 idiom を confirmed=True 化する（#463 — `promote_signals` ライブラリ直接呼びは confirmed 化をバイパスするため使わない）。全 group 確認後に `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる。
     2. **日次5件ずつ** → marker を立てず、Step 6 の通常 reflect ページネーションに合流（以後の evolve で `is_bootstrap=True` が再提示される）。
     3. **TTL 失効に任せる** → `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる（以後 bootstrap を再提示しない。weak_signals TTL #5 が残りを間引く）。
 
@@ -358,7 +358,7 @@ reflect は独立フェーズではなく discover に統合済み。**`phases.d
 
 - `daily.eligible != True`（新規 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。`daily.eligible == False` のときのみ「今日の修正確認: 新規なし ✓」を1行表示）
 - `daily.eligible == True` → `daily.groups`（最大5件・頻度降順）を **AskUserQuestion で y/n 確認（MUST — 最大5問を1バッチで）**。各 question に group の `idiom`（無ければ `representative`）と `evidence.count`（再発回数）を提示する:
-  - **はい（昇格）** → 同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で昇格 → **promote 成功を確認後に** `daily_review.record_reviewed(signal_keys, slug, decision="promoted", dry_run=dry_run)` で既読追記。promote が部分失敗した group は既読追記しない（取りこぼし防止 — 次回再提示される）
+  - **はい（昇格）** → 同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で昇格（CLI が promote と同時に対応 idiom を confirmed=True 化し、以後の同テキスト再発は idiom_autopromote が機械昇格する — #463。出力の `confirmed_idioms` 件数で確認可）→ **promote 成功を確認後に** `daily_review.record_reviewed(signal_keys, slug, decision="promoted", dry_run=dry_run)` で既読追記。promote が部分失敗した group は既読追記しない（取りこぼし防止 — 次回再提示される）
   - **いいえ（却下）** → `daily_review.record_reviewed(signal_keys, slug, decision="rejected", dry_run=dry_run)` で既読追記（次回から再提示しない）
   - **Skip / Other / 中断** → 既読追記しない（次回再提示）。evolve 全体は完走する
 - `daily.remaining > 0` なら「ほか {remaining} グループは次回以降に提示」を1行表示する

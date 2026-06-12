@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(reward): `--promote-weak` 承認時に対応 idiom を confirmed 化する配線を追加（closes #463）** — ADR-047 の `confirm_idioms` が本流から一度も呼ばれず、idiom_autopromote の雪崩防止不変条件（confirmed 0 件 → promoted 0）により自動昇格が永久 0 件だった配線漏れを修正。`rl-reflect --promote-weak` が promote 成功後に、承認シグナルへ対応する idiom を `confirm_idioms(confirmed_by="reflect_promote_weak")` で confirmed=True にマークする。signal→idiom の突合は新規ライブラリ関数 `correction_semantic.promote.resolve_idiom_keys_for_signals(signal_keys, ...)`（(pj_slug, source_path, line_no) の provenance 物理キー一致・promoted=True 後でも解決可能）。CLI に閉じる（ADR-045）— SKILL.md の散文に手順を足さず `--promote-weak` が confirmed まで一気通貫。dry-run はどのストア（corrections / weak_signals / correction_idioms）にも書かない（最下層 write ゲート貫通）。TDD: 閉ループ E2E（--promote-weak → confirmed → 同テキスト再発 signal が autopromote で実発火）+ provenance 突合 4 件 + dry-run ゼロ書込。決定論・LLM 非依存。
 - fix(tests): test_audit_snapshot の order-dependent 隔離漏れを修正（closes #464） — `corrections_insights.CORRECTIONS_FILE` が import 時に `Path.home()` を固定するため `setenv("HOME")` 隔離が貫通せず、実 corrections.jsonl が 10 件（MIN_DISPLAY_RECORDS）を超えた 2026-06-12 に「繰り返し失敗パターン」セクション出現で snapshot mismatch が顕在化。`_isolate_env` の既存パターン（setattr 固定）で CORRECTIONS_FILE を tmp に差し替え。
 
 ## [1.97.0] - 2026-06-12
