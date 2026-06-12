@@ -19,6 +19,22 @@ import rl_common  # noqa: E402
 import session_store  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolate_tmpdir(tmp_path_factory, monkeypatch):
+    """TMPDIR を隔離する（#495）。
+
+    rl_common.workflow.last_skill_path は ``os.environ.get("TMPDIR", "/tmp")`` を
+    直接読むため、write_last_skill/read_last_skill を踏むテスト（observe 経由含む）が
+    実 /tmp に ``rl-anything-last-skill-<session>.json`` を漏らしていた。autouse で
+    TMPDIR を専用一時ディレクトリに向け、テスト由来の ephemeral marker を実環境から
+    隔離する。``tmp_path`` 直下を汚すと「副作用ゼロ」を assert するテスト
+    （iterdir() == []）を壊すため、独立した tmp_path_factory ディレクトリを使う。
+    workflow.py 本体（意図的な cross-process marker）は変更しない。
+    """
+    isolated = tmp_path_factory.mktemp("tmpdir_isolated")
+    monkeypatch.setenv("TMPDIR", str(isolated))
+
+
 @pytest.fixture
 def tmp_data_dir(tmp_path):
     """テスト用の一時データディレクトリ。"""

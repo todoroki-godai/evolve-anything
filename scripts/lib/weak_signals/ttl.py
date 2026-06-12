@@ -74,11 +74,16 @@ def mark_expired(
     weak_signals_path: Optional[Path] = None,
     now: Optional[datetime] = None,
     dry_run: bool = False,
+    pj_slug: Optional[str] = None,
 ) -> Dict[str, Any]:
     """detected_at から TTL_DAYS 超かつ未昇格・未expired を expired=True にマークする。
 
     削除はしない。dry_run はマークせず「マークするはずだった件数」だけ返し store に
     一切触れない（mtime 不変）。常時 emit 用に store 無しでも安全に 0 件を返す。
+
+    pj_slug を指定した場合は当 PJ のレコードのみを expired マークの対象にする
+    （cross-PJ write 防止 #495）。全件書き直しは従来どおり行うが、他 PJ レコードは
+    expired フラグを変更しない。pj_slug=None は後方互換（全件対象）。
 
     Returns:
         {"expired": int, "scanned": int, "dry_run": bool}
@@ -91,7 +96,13 @@ def mark_expired(
         return {"expired": 0, "scanned": 0, "dry_run": dry_run}
 
     recs = read_signals(ws_path)
-    expirable = [r for r in recs if _is_expirable(r, cutoff)]
+
+    def _should_expire(r: Dict[str, Any]) -> bool:
+        if pj_slug is not None and r.get("pj_slug") != pj_slug:
+            return False
+        return _is_expirable(r, cutoff)
+
+    expirable = [r for r in recs if _should_expire(r)]
 
     if dry_run:
         # 最下層: dry-run は store に一切書かない（mtime も変えない）。件数だけ返す。

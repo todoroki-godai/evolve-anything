@@ -61,7 +61,7 @@ rl-discover [--session-scan]
 
 ### Step 5.5: 検証知見の検出
 
-discover.py は `verification_catalog.py` の `detect_verification_needs()` を呼び出し、プロジェクトに未導入の検証知見ルールを検出する。
+discover.py は `verification_catalog` パッケージの `detect_verification_needs()` を呼び出し、プロジェクトに未導入の検証知見ルールを検出する。
 
 - `verification_needs` が存在する場合:
   - 各エントリの `description` と `evidence`（検出箇所）を表示

@@ -73,6 +73,9 @@ rl-audit "$(pwd)"
 その内容をレポートに表示し、`/rl-anything:prune` による整理を提案する。
 
 ```python
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from skill_usage_stats import get_skill_activation_summary
 summary = get_skill_activation_summary(days=90)
 # summary["has_data"] が False の場合はスキップ（蓄積待ち）

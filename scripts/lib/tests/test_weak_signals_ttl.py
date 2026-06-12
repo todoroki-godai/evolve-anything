@@ -103,3 +103,41 @@ def test_mark_expired_missing_file(tmp_path: Path) -> None:
     res = ws_ttl.mark_expired(weak_signals_path=ws, now=_NOW)
     assert res == {"expired": 0, "scanned": 0, "dry_run": False}
     assert not ws.exists()
+
+
+def _seed_multi_pj(ws_path: Path):
+    """2 PJ のレコードを混在させる（cross-PJ write 防止テスト用）。"""
+    sigs_a = [
+        WeakSignal("rephrase", {"line_no": 10}, _iso(50), "s1", "rl-anything"),  # PJA 期限切れ対象
+    ]
+    sigs_b = [
+        WeakSignal("rephrase", {"line_no": 20}, _iso(50), "s2", "other-pj"),   # PJB 期限切れ対象
+    ]
+    append_signals(sigs_a, path=ws_path)
+    append_signals(sigs_b, path=ws_path)
+
+
+def test_mark_expired_only_current_pj(tmp_path: Path) -> None:
+    """pj_slug 指定時は当PJのレコードのみ expired=True にし、他PJレコードは変更しない (#495)。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    _seed_multi_pj(ws)
+
+    res = ws_ttl.mark_expired(weak_signals_path=ws, now=_NOW, pj_slug="rl-anything")
+    assert res["expired"] == 1  # rl-anything の期限切れ1件のみ
+    assert res["scanned"] == 2  # 全件スキャン
+
+    recs = [json.loads(line) for line in ws.read_text(encoding="utf-8").splitlines() if line.strip()]
+    by_line = {r["provenance"]["line_no"]: r for r in recs}
+    # rl-anything は期限切れマーク済み
+    assert by_line[10]["expired"] is True
+    # other-pj は変更されていない
+    assert by_line[20].get("expired", False) is False
+
+
+def test_mark_expired_no_pj_slug_marks_all(tmp_path: Path) -> None:
+    """pj_slug 未指定（後方互換）は全件を対象にする。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    _seed_multi_pj(ws)
+
+    res = ws_ttl.mark_expired(weak_signals_path=ws, now=_NOW)
+    assert res["expired"] == 2  # 両PJとも期限切れ対象

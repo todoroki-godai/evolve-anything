@@ -22,6 +22,7 @@ corrections.jsonl に蓄積されたユーザー修正を分析し、
 /rl-anything:reflect --apply-all            # 高信頼度を自動適用
 /rl-anything:reflect --min-confidence 0.70  # 閾値変更
 /rl-anything:reflect --skip-semantic        # セマンティック検証スキップ
+/rl-anything:reflect --revoke-idiom <key>   # idiom 自動昇格の取り消し（ADR-047 安全弁③）
 ```
 
 ## 実行手順

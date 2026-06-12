@@ -1207,9 +1207,12 @@ def run_evolve(
     # run_batch 直後・昇格候補を読む下流（#1 daily_review 等）の前に常時 emit。
     # detected_at から 45 日超かつ未昇格・未expired を expired=True にマーク（削除しない）し、
     # read_unpromoted(exclude_expired=True) から外す。dry_run は store に一切触れない（最下層 write ゲート）。
+    # pj_slug を渡し当 PJ レコードのみ expired マーク（cross-PJ write 防止 #495）。
     try:
         from weak_signals import ttl as _ws_ttl
-        result["weak_signals_ttl"] = _ws_ttl.mark_expired(dry_run=dry_run)
+        result["weak_signals_ttl"] = _ws_ttl.mark_expired(
+            dry_run=dry_run, pj_slug=_resolve_pj_slug(project_dir)
+        )
     except Exception as e:
         result["weak_signals_ttl"] = {"error": str(e)}
 

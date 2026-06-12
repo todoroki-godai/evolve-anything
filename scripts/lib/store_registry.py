@@ -141,16 +141,6 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="サブエージェントテレメトリ。",
     ),
     StoreDeclaration(
-        name="message_display.jsonl",
-        writer="hooks/message_display.py（アシスタント応答テレメトリ）",
-        reader="（現状 jsonl 直読の reader なし — 将来の応答フィルタリング基盤）",
-        retention="compaction",
-        compaction="1MB 超でローテーション（hooks/message_display.py の _MAX_LOG_BYTES）",
-        disposition="keep_future",
-        note="reader 0 だが意図的。#427 で orphan 検出された当該ストア。"
-        "ローテーション済みなので肥大リスクは抑制済み。",
-    ),
-    StoreDeclaration(
         name="utterances.db",
         kind="db",
         writer="scripts/lib/utterance_archive/ingest.py（evolve/audit batch + rl-fleet ingest）。"

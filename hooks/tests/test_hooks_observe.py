@@ -101,7 +101,10 @@ class TestObserve:
 
     def test_skill_usage_project_null_when_unset(self, patch_data_dir):
         """CLAUDE_PROJECT_DIR 未設定時は project が null。"""
-        with mock.patch.dict(os.environ, {}, clear=True):
+        # clear=True で環境を空にすると autouse の TMPDIR 隔離も消え last_skill が
+        # 実 /tmp に漏れるため、隔離 TMPDIR は保持する（#495）。
+        preserved = {"TMPDIR": os.environ["TMPDIR"]} if os.environ.get("TMPDIR") else {}
+        with mock.patch.dict(os.environ, preserved, clear=True):
             # CLAUDE_PROJECT_DIR を確実に削除
             os.environ.pop("CLAUDE_PROJECT_DIR", None)
             event = {

@@ -212,18 +212,6 @@
         ]
       }
     ],
-    "MessageDisplay": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/message_display.py\"",
-            "timeout": 2000
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "matcher": "",
