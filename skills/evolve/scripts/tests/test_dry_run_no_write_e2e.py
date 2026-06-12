@@ -25,6 +25,22 @@ for _p in (
 
 from evolve import run_evolve  # noqa: E402
 
+# 文書化された意図的 dry-run 書込（SHA256 不変契約の原則ベース除外。#496/#513）。
+# bypass フラグではなく「設計として dry-run でも書く」と文書化されたパスのみを列挙する:
+# - evolve_pending/: evolve_decisions の pending marker。emit→drain 捕捉（#402/ADR-041）の
+#   運用ポインタで、標準フロー（dry-run 分析のみ）で書かれないと drain が全死する（#513）
+# - skill-evolve-cache.json / constitutional_cache.json: LLM 再呼び出し回避キャッシュ
+#   （evolve-ops の cache warm 設計）
+_DOCUMENTED_DRY_RUN_WRITES = (
+    "evolve_pending/",
+    "skill-evolve-cache.json",
+    "constitutional_cache.json",
+)
+
+
+def _is_documented_write(rel_path: str) -> bool:
+    return any(token in rel_path for token in _DOCUMENTED_DRY_RUN_WRITES)
+
 
 def _snapshot(root: Path) -> dict[str, str]:
     """root 配下の全ファイルの相対パス→SHA256 マップを返す（存在しなければ空）。"""
@@ -58,9 +74,13 @@ def test_dry_run_writes_nothing_under_isolated_dirs(tmp_path, monkeypatch):
 
     after = _snapshot(tmp_path)
 
-    added = sorted(set(after) - set(before))
-    removed = sorted(set(before) - set(after))
-    modified = sorted(k for k in before.keys() & after.keys() if before[k] != after[k])
+    added = sorted(k for k in set(after) - set(before) if not _is_documented_write(k))
+    removed = sorted(k for k in set(before) - set(after) if not _is_documented_write(k))
+    modified = sorted(
+        k
+        for k in before.keys() & after.keys()
+        if before[k] != after[k] and not _is_documented_write(k)
+    )
 
     assert not added, f"dry-run が新規ファイルを作成した: {added}"
     assert not removed, f"dry-run が既存ファイルを削除した: {removed}"

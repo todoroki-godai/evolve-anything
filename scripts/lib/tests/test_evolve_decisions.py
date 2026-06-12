@@ -75,33 +75,38 @@ def test_emit_writes_pending_with_before_sha(result_with_match, skill_file, monk
     assert queued[0]["fitness_func"] == "skill_quality"
 
 
-def test_emit_dry_run_does_not_write(result_with_match, monkeypatch, tmp_path):
+def test_emit_dry_run_does_not_write_queue_but_writes_marker(
+    result_with_match, monkeypatch, tmp_path
+):
+    """#513: dry-run は queue（データストア）には書かないが、marker（運用ポインタ）は書く。
+
+    marker は #402/ADR-041 の「文書化された意図的 dry-run 書込」。標準フローは
+    dry-run 分析のみなので、ここで書かないと emit→drain 捕捉が全死する
+    （#505 が誤ってゲートした回帰の再発防止）。
+    """
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
-    # MARKER_ROOT も明示 patch する（#491: dry-run で marker を作らないことを検証）。
     monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
     out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
     assert out["count"] == 1
     assert out["persisted"] is False
-    assert ed.read_queue("testslug") == []  # 書き込みゼロ
-    # #491: dry-run では marker も作らない（apply→drain 待ちポインタなので）
-    assert not ed.marker_path("testslug").exists()
-    assert out["marker_written"] is False
+    assert ed.read_queue("testslug") == []  # queue は書き込みゼロ（dry-run 純度）
+    # marker は dry-run でも書く（drain の pending ソース）
+    assert ed.marker_path("testslug").exists()
+    assert out["marker_written"] is True
 
 
-def test_emit_dry_run_does_not_clear_existing_marker(result_with_match, monkeypatch, tmp_path):
-    """#491: dry-run は既存 marker を削除してもいけない（二方向違反）。"""
+def test_emit_dry_run_empty_pending_clears_stale_marker(monkeypatch, tmp_path):
+    """#402/#513: 候補ゼロの dry-run は stale marker を消す（drain 待ちが無いので沈黙させる）。"""
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
     monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
-    # 候補ゼロの result を作り、事前に marker を seed する
     empty_result = {"phases": {}}
     ed.write_pending_marker("testslug", [{"id": "x"}])
     assert ed.marker_path("testslug").exists()
 
     out = ed.emit_decisions(empty_result, dry_run=True, slug="testslug")
     assert out["count"] == 0
-    # dry-run は既存 marker を消さない
-    assert ed.marker_path("testslug").exists()
-    assert out["marker_cleared"] is False
+    assert not ed.marker_path("testslug").exists()
+    assert out["marker_cleared"] is True
 
 
 def test_emit_apply_writes_marker(result_with_match, skill_file, monkeypatch, tmp_path):

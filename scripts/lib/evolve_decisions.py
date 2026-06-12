@@ -266,18 +266,19 @@ def emit_decisions(
         _write_queue(slug, pending)  # 現在 run の pending で上書き
         persisted = True
 
-        # #402: drain 検出用の運用マーカー（store/queue とは別状態）。
-        # 候補ゼロなら古いマーカーを消す（drain 待ちが無いので沈黙させる）。
-        # #491: marker は apply→drain 待ちポインタなので dry-run では一切触らない
-        # （作成も削除も「1バイトも書かない」契約違反）。
-        try:
-            if pending:
-                write_pending_marker(slug, pending)
-                marker_written = True
-            else:
-                marker_cleared = clear_pending_marker(slug)
-        except OSError:
-            pass
+    # #402: drain 検出用の運用マーカー（dry-run でも書く。store/queue とは別状態）。
+    # 候補ゼロなら古いマーカーを消す（drain 待ちが無いので沈黙させる）。
+    # #513: 標準フローは dry-run 分析のみなので、ここをゲートすると emit→drain 捕捉
+    # （ADR-041）が全死する（#505 の誤ゲートを revert）。marker は「文書化された
+    # 意図的 dry-run 書込」であり、SHA256 不変契約側が evolve_pending/ を原則除外する。
+    try:
+        if pending:
+            write_pending_marker(slug, pending)
+            marker_written = True
+        else:
+            marker_cleared = clear_pending_marker(slug)
+    except OSError:
+        pass
 
     return {
         "pending": pending,
