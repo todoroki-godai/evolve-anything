@@ -18,6 +18,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
@@ -406,3 +408,127 @@ class TestObservabilityWiring:
 
         keys = [k for k, _ in _OBSERVABILITY_BUILDERS]
         assert "promotion_readiness" in keys
+
+
+# ============================================================================
+# #469: session 系分母を sessions.db（union read）から得られること
+# ============================================================================
+
+import session_store  # noqa: E402
+
+requires_duckdb = pytest.mark.skipif(
+    not session_store.HAS_DUCKDB, reason="duckdb が無い環境"
+)
+
+
+def _ingest_sessions_db(data_dir: Path, records: list[dict]) -> None:
+    """records を sessions.jsonl に書いて session_store.ingest() で db へ取り込み rotate。
+
+    ingest 後 live jsonl は rotate されるため、その後の読みは db 経由になる
+    （実環境: #415 で sessions.jsonl がほぼ常に空になっている状態を再現する）。
+    """
+    old_dir = session_store.DATA_DIR
+    old_db = session_store.SESSIONS_DB
+    old_jsonl = session_store.SESSIONS_JSONL
+    try:
+        session_store.DATA_DIR = data_dir
+        session_store.SESSIONS_DB = data_dir / "sessions.db"
+        session_store.SESSIONS_JSONL = data_dir / "sessions.jsonl"
+        path = data_dir / "sessions.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+        session_store.ingest()
+    finally:
+        session_store.DATA_DIR = old_dir
+        session_store.SESSIONS_DB = old_db
+        session_store.SESSIONS_JSONL = old_jsonl
+
+
+class TestSessionDenominatorFromDb:
+    """#469: live jsonl が rotate で空でも sessions.db から session 系分母を得る。"""
+
+    @requires_duckdb
+    def test_per_pj_first_try_reads_from_db_when_jsonl_rotated(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        _ingest_sessions_db(tmp_path, [
+            _session("/p/a", "s1", now, error_count=0),
+            _session("/p/a", "s2", now, error_count=2),
+            _session("/p/b", "s3", now, error_count=0),
+        ])
+        # live jsonl は rotate されて存在しないはず（実環境再現）。
+        assert not (tmp_path / "sessions.jsonl").exists()
+
+        out = opr.per_pj_first_try_success(days=30)
+        # jsonl 直読なら空 = 永遠に ✗ だったが、db union read で分母が取れる。
+        assert out["/p/a"]["denominator"] == 2
+        assert out["/p/a"]["value"] == 0.5
+        assert out["/p/b"]["denominator"] == 1
+
+    @requires_duckdb
+    def test_condition2_denominator_met_from_db(self, tmp_path, monkeypatch):
+        """条件2: db 側 session レコードで sessions floor を満たせる。"""
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        sess = []
+        for i in range(35):
+            sess.append(_session("/p/a", f"pa{i}", now, error_count=i % 2))
+        for i in range(35):
+            sess.append(_session("/p/b", f"pb{i}", now, error_count=0))
+        _ingest_sessions_db(tmp_path, sess)
+        assert not (tmp_path / "sessions.jsonl").exists()
+
+        fs = opr.per_pj_first_try_success(days=30)
+        denom = opr.check_denominators(
+            {pj: v["denominator"] for pj, v in fs.items()}, floor=opr.SESSION_FLOOR
+        )
+        assert denom["pass"] is True
+        assert sorted(denom["meeting"]) == ["/p/a", "/p/b"]
+
+    @requires_duckdb
+    def test_condition3_paired_windows_from_db(self, tmp_path, monkeypatch):
+        """条件3: apply anchor 前後の paired session を db から取れて方向判定できる。"""
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        anchor = now - timedelta(days=15)
+        opr_hist = tmp_path / "optimize_history"
+        opr_hist.mkdir(parents=True, exist_ok=True)
+        (opr_hist / "p_a.jsonl").write_text(
+            json.dumps({"id": "x1", "human_accepted": True,
+                        "timestamp": _iso(anchor), "skill_name": "s"}) + "\n"
+        )
+        sessions = []
+        for i in range(4):  # before: 1/4 clean = 0.25
+            sessions.append(_session("p_a", f"b{i}", anchor - timedelta(days=3),
+                                     error_count=0 if i == 0 else 1))
+        for i in range(4):  # after: 4/4 clean = 1.0
+            sessions.append(_session("p_a", f"a{i}", anchor + timedelta(days=3),
+                                     error_count=0))
+        _ingest_sessions_db(tmp_path, sessions)
+        assert not (tmp_path / "sessions.jsonl").exists()
+
+        result = opr.check_direction(days=60, window_days=14)
+        # jsonl 直読なら no_paired_windows（paired session 0）だったが、db で paired が取れる。
+        assert result.get("reason") != "no_paired_windows"
+        assert result["compared"] >= 1
+        assert result["pass"] is True
+
+    @requires_duckdb
+    def test_db_read_does_not_write(self, tmp_path, monkeypatch):
+        """db 経路の読み取りでも DATA_DIR の byte を変えない（dry-run 契約 #461 維持）。"""
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        _write_jsonl(tmp_path / "corrections.jsonl", [_correction("/p/a", "iya", "s1", now)])
+        _ingest_sessions_db(tmp_path, [_session("/p/a", "s1", now, error_count=0)])
+
+        def _snapshot() -> dict[str, bytes]:
+            return {
+                str(p.relative_to(tmp_path)): p.read_bytes()
+                for p in sorted(tmp_path.rglob("*"))
+                if p.is_file()
+            }
+
+        before = _snapshot()
+        opr.compute_promotion_readiness(days=30, window_days=14)
+        after = _snapshot()
+        assert before == after  # db / jsonl いずれも byte 不変

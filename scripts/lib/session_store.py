@@ -376,6 +376,82 @@ def query(since: str | None = None, limit: int | None = None) -> list[dict]:
     return results
 
 
+def read_session_records(
+    data_dir: Path | None = None, *, since: str | None = None
+) -> list[dict]:
+    """任意の data_dir の session レコードを union read する（読み取り専用・書込なし）。
+
+    #469: outcome_metrics / outcome_promotion_readiness の session 系分母を実効化するため、
+    sessions.jsonl 直読でなく **DuckDB sessions.db + 未 ingest live jsonl** の合算を返す。
+    sessions.jsonl は #415 で db へ ingest 後 rotate されるため live jsonl はほぼ空であり、
+    jsonl だけ読むと session 系の分母が構造的に常に空（永遠に ✗）になっていた。
+
+    重複除去キーは ``ingest()`` と同一の ``(session_id, timestamp)``（db 優先）。
+    duckdb が import できない / db が存在しない場合は jsonl のみへ graceful fallback する
+    （既存 ``query`` / ``count_unique_since`` と同じ流儀）。
+
+    **読み取り専用**: db は read_only 接続で開き、スキーマ作成（CREATE TABLE）も mkdir も
+    行わない。dry-run の「1バイトも書かない」契約（#461）を壊さないため。
+
+    Args:
+        data_dir: 読む対象 dir。None ならモジュール定数 ``DATA_DIR``（= 既定の解決パス）。
+                  outcome 系は tmp DATA_DIR を monkeypatch するため、その値をここへ渡す。
+        since: ISO 8601 timestamp。指定時は ``timestamp > since`` のレコードのみ返す。
+               None なら窓フィルタなし（呼び出し側が ``_in_window`` 等で別途窓判定する想定）。
+
+    Returns:
+        session レコード dict の list（timestamp 昇順）。
+    """
+    base = data_dir if data_dir is not None else DATA_DIR
+    db_path = base / "sessions.db"
+    jsonl_path = base / "sessions.jsonl"
+
+    by_key: dict[tuple[str, str], dict] = {}
+
+    if HAS_DUCKDB and db_path.exists():
+        con = None
+        try:
+            # read_only=True: スキーマ作成・mkdir をせず、ファイルを書き換えない。
+            con = _duckdb.connect(str(db_path), read_only=True)
+            sql = "SELECT raw_json FROM sessions"
+            params: list[Any] = []
+            if since:
+                sql += " WHERE timestamp > ?"
+                params.append(since)
+            rows = con.execute(sql, params).fetchall()
+            for (raw,) in rows:
+                try:
+                    rec = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                key = (rec.get("session_id", ""), rec.get("timestamp", ""))
+                by_key[key] = rec
+        except Exception:
+            # db が壊れている / table 不在 / read_only 不可 等は jsonl のみへ fallback。
+            pass
+        finally:
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+
+    for rec in _iter_jsonl_records(jsonl_path):
+        if not isinstance(rec, dict):
+            continue
+        ts = rec.get("timestamp", "")
+        if since and ts <= since:
+            continue
+        key = (rec.get("session_id", ""), ts)
+        # db に既にある (session_id, timestamp) は db を優先（dedup）。
+        if key not in by_key:
+            by_key[key] = rec
+
+    return sorted(by_key.values(), key=lambda r: r.get("timestamp", ""))
+
+
 def migrate_from_jsonl(skip_if_db_has_data: bool = False) -> int:
     """sessions.jsonl のレコードを sessions.db に取り込む（後方互換 CLI 用）。
 

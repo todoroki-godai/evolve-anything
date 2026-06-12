@@ -82,6 +82,21 @@ def _records_in_window(store: str, days: int, base: Path) -> List[Dict[str, Any]
     ]
 
 
+def _sessions_in_window(days: int, base: Path) -> List[Dict[str, Any]]:
+    """#469: session レコードは union read（db + 未 ingest jsonl）で取得する。
+
+    sessions.jsonl 直読（``_records_in_window("sessions.jsonl", ...)``）だと #415 の
+    rotate で live jsonl がほぼ空になり、条件2（sessions≥30 分母）と条件3（前後窓 paired
+    session）が構造的に常に空 = 永遠に ✗ になっていた。読み取り経路は session_store に
+    1 つだけ実装し outcome_metrics 経由で共有する（二重実装回避）。
+    """
+    since = _om._iso_days_ago(days)
+    return [
+        r for r in _om.read_sessions(base)
+        if _om._in_window(_om._ts_of(r, "timestamp", "first_timestamp"), since)
+    ]
+
+
 def _base(data_dir: Optional[Path]) -> Path:
     return data_dir if data_dir is not None else DATA_DIR
 
@@ -130,7 +145,7 @@ def per_pj_first_try_success(
     """
     base = _base(data_dir)
     grouped: Dict[str, List[Dict[str, Any]]] = {}
-    for r in _records_in_window("sessions.jsonl", days, base):
+    for r in _sessions_in_window(days, base):
         pj = _pj_of(r, _SESSION_PJ_FIELDS)
         if not pj:
             continue
@@ -155,7 +170,7 @@ def per_pj_rework(
     """
     base = _base(data_dir)
     grouped: Dict[str, List[Dict[str, Any]]] = {}
-    for r in _records_in_window("sessions.jsonl", days, base):
+    for r in _sessions_in_window(days, base):
         pj = _pj_of(r, _SESSION_PJ_FIELDS)
         if not pj:
             continue
@@ -293,7 +308,7 @@ def check_direction(
     if not anchors:
         return {"pass": False, "reason": "no_apply_events", "anchors": 0, "evidence": []}
 
-    sessions = _records_in_window("sessions.jsonl", days, base)
+    sessions = _sessions_in_window(days, base)
     # slug（optimize_history のキー）と sessions の PJ 識別子は別表記になりうるため、
     # session 側の PJ 値とゆるく突合する（slug が PJ 値に含まれる / 一致）。
     evidence: List[Dict[str, Any]] = []

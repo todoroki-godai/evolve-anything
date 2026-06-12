@@ -31,6 +31,32 @@ try:
 except ImportError:  # pragma: no cover - パス未解決時のフォールバック
     DATA_DIR = Path.home() / ".claude" / "rl-anything"
 
+# #469: session 系軸は sessions.jsonl 直読でなく session_store の union read
+# （DuckDB sessions.db + 未 ingest live jsonl）を使う。sessions.jsonl は #415 で db へ
+# ingest 後 rotate されるため live jsonl はほぼ空であり、jsonl 直読だと session 系の分母が
+# 構造的に常に空になっていた。読み取り経路は session_store に 1 つだけ実装し、
+# outcome_metrics と outcome_promotion_readiness の両方がそれを共有する（二重実装回避）。
+try:
+    import session_store as _session_store
+except ImportError:  # pragma: no cover - パス未解決時は jsonl 直読へ fallback
+    _session_store = None
+
+
+def read_sessions(base: Path, *, since: Optional[str] = None) -> List[Dict[str, Any]]:
+    """session レコードを union read で取得する（db + 未 ingest jsonl, dedup 済み）。
+
+    base 配下の sessions.db / sessions.jsonl を session_store 経由で読む。
+    duckdb 無 / db 不在時は jsonl のみへ graceful fallback（session_store 側で処理）。
+    session_store を import できない環境では sessions.jsonl 直読へ最終 fallback する。
+    """
+    if _session_store is not None:
+        return _session_store.read_session_records(base, since=since)
+    # session_store 不在時の最終フォールバック（旧挙動: live jsonl のみ）。
+    recs = _read_jsonl(base / "sessions.jsonl")
+    if since:
+        return [r for r in recs if _ts_of(r, "timestamp", "first_timestamp") > since]
+    return recs
+
 # 検証/観測とみなすツール（編集バーストの「介在」判定に使う）。
 _VERIFICATION_TOOLS = frozenset({"Bash", "Read", "Grep", "Glob", "Skill", "Agent", "Task"})
 _EDIT_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
@@ -149,7 +175,7 @@ def first_try_success_rate(
     base = data_dir if data_dir is not None else DATA_DIR
     since = _iso_days_ago(days)
     records = [
-        r for r in _read_jsonl(base / "sessions.jsonl")
+        r for r in read_sessions(base)
         if _in_window(_ts_of(r, "timestamp", "first_timestamp"), since)
     ]
     if not records:
@@ -204,7 +230,7 @@ def rework_rate(
     base = data_dir if data_dir is not None else DATA_DIR
     since = _iso_days_ago(days)
     records = [
-        r for r in _read_jsonl(base / "sessions.jsonl")
+        r for r in read_sessions(base)
         if _in_window(_ts_of(r, "timestamp", "first_timestamp"), since)
     ]
     if not records:
