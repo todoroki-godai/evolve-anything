@@ -198,6 +198,20 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="バッチ LLM 意味判定の進捗カーソル（#431）。判定済み発話（source_path:line_no）を"
         "記録し、無駄な LLM 再判定を防ぐ。reader は同 package の emit のみ（自己消費）。",
     ),
+    StoreDeclaration(
+        name="bootstrap_done-<slug>.marker",
+        writer="scripts/lib/correction_semantic/bootstrap_backlog.mark_done"
+        "（evolve の SKILL.md が「まとめて確認」完了時・「TTL 失効に任せる」選択時に呼ぶ）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="bootstrap_backlog.build / is_done が初回判定に参照（自己消費）。"
+        "marker 立ち後は is_bootstrap=False で即返す。",
+        retention="permanent",
+        disposition="drain",
+        note="初回バックログ bootstrap の完了 marker（#443）。空ファイル。PJ slug スコープ"
+        "（bootstrap_done-<slug>.marker・全PJ共通 DATA_DIR 単一ファイル pitfall 回避）。"
+        "立ったら以後 bootstrap を再提示しない（TTL #5 が残りを間引く）。",
+    ),
 ]
 
 

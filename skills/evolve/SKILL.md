@@ -338,6 +338,20 @@ reflect は独立フェーズではなく discover に統合済み。**`phases.d
 - `0 < reflect_data_count < 5` → Report に「未処理修正 {N} 件あり」と表示のみ（Step 10.1 のサマリ掲載と整合）
 - `reflect_data_count == 0` → スキップ
 
+### Step 6.1: 初回バックログ bootstrap（#443）
+
+既存の weak_signals バックログ（channel=llm_judge・未昇格）を初回 evolve でまとめて確認する入口。**判定は phase 出力 `result.correction_review.bootstrap` を読むだけで行う（散文ステップで判定しない）。** 機械は「アクティブ PJ」を判定しない — 件数は人間の判断材料として表示するだけ。
+
+- `bootstrap.is_bootstrap != True`（marker 立ち済み or backlog 0 / error）→ **スキップ**（沈黙≠評価のため `bootstrap.is_bootstrap=False` のときのみ「bootstrap: 消化済み ✓」を1行表示）
+- `bootstrap.is_bootstrap == True` → **AskUserQuestion で 3 択を人間に選ばせる（MUST — テキスト表示だけで済ませない）**。question に `bootstrap.pj_total` 件・`bootstrap.groups_total` グループを判断材料として提示する:
+  - question: 「この PJ の未昇格バックログ {pj_total} 件（{groups_total} グループ）を初回 bootstrap で消化しますか？」
+  - options:
+    1. **まとめて確認** → `bootstrap.groups` を順に AskUserQuestion バッチで提示（各 group の `representative` を確認 → 承認なら同 group の `signal_keys` を `correction_semantic.promote.promote_signals(signal_keys, ...)` で一括昇格）。全 group 確認後に `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる。
+    2. **日次5件ずつ** → marker を立てず、Step 6 の通常 reflect ページネーションに合流（以後の evolve で `is_bootstrap=True` が再提示される）。
+    3. **TTL 失効に任せる** → `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる（以後 bootstrap を再提示しない。weak_signals TTL #5 が残りを間引く）。
+
+`mark_done` は `dry_run=True`（ドライラン実行時）なら marker を書かない（最下層まで dry-run ゲートを貫通）。3 択いずれを選んでも、Skip しても evolve 全体は完走する。
+
 ### Step 6.5: auto-memory キュー drain（2相, [ADR-037] Phase 2）
 
 Stop hook（auto_memory_runner）は corrections を生成前ゲートして PJ スコープキュー

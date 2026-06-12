@@ -1161,6 +1161,22 @@ def run_evolve(
     except Exception as e:
         result["correction_semantic"] = {"error": str(e)}
 
+    # ── 初回バックログ bootstrap モード（#443）─────────────────────────────
+    # 既存の weak_signals バックログ（channel=llm_judge・未昇格）を初回 evolve で
+    # まとめて確認する入口。決定論で「未消化 backlog の有無・PJ 別件数・group 化」を
+    # **常時 emit** し、SKILL.md が is_bootstrap=True のとき AskUserQuestion で 3 択
+    # （まとめて確認 / 日次 5 件 / TTL 失効に任せる）を人間に出す。機械は判定しない。
+    # #C（correction_review）とキー共有: correction_review["bootstrap"] に相乗りさせる。
+    # dry_run でも build（読み取りのみ）は走り marker を書かない。bootstrap は cwd の PJ
+    # slug の backlog のみが対象（DATA_DIR 全PJ共通 pitfall）。
+    try:
+        from correction_semantic import bootstrap_backlog as _bb
+        _bb_slug = _resolve_pj_slug(project_dir)
+        _bb_res = _bb.build(_bb_slug, dry_run=dry_run)
+        result.setdefault("correction_review", {})["bootstrap"] = _bb_res
+    except Exception as e:
+        result.setdefault("correction_review", {})["bootstrap"] = {"error": str(e)}
+
     # ── evolve 提案 accept/reject の決定論キャプチャ（#360-A, ADR-041）────────
     # 候補スキルの before_sha をキューに emit。適用実績=accept / 明示却下=reject は
     # SKILL.md Step 7.8 の drain（ingest_decisions）が optimize_history に記録する。
