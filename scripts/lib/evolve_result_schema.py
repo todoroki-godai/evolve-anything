@@ -58,6 +58,18 @@ class Key:
         parts = self.path.split(".")
         return parts[1] if len(parts) >= 2 and parts[0] == "phases" else None
 
+    @property
+    def top_level(self) -> Optional[str]:
+        """`phases.*` でない top-level path の最上位セグメント（#493）。
+
+        `growth_report` → "growth_report"、`correction_review.daily` → "correction_review"。
+        `phases.*` は phase 体系で別管理するため None を返す。
+        """
+        parts = self.path.split(".")
+        if parts[0] == "phases":
+            return None
+        return parts[0]
+
 
 # 実 dry-run（evolve.py --dry-run --project-dir <repo>）で検証した正準キー一覧。
 CANONICAL: List[Key] = [
@@ -114,6 +126,49 @@ CANONICAL: List[Key] = [
         note="skill_evolve↔archive reconcile で archive 優先除外したスキル名（#400 バグ#2）"),
     Key("phases.fitness_evolution.next_action", str, optional=True,
         note="insufficient_data 時の結論 1 行（#400 バグ#5）。evolve.py が提案有無で確定"),
+    # ── top-level キー（phases.* の外。#442-#448 で追加・#493 で契約化）─────────
+    #   SKILL.md が dotted path で読む実害キーは required（optional にしない）。
+    #   rename / kind drift を test-time conformance で検出する。
+    # --- correction_review: bootstrap / daily 入口（#443, #446）。SKILL.md 360/392 行で読む ---
+    Key("correction_review", dict),
+    Key("correction_review.bootstrap", dict,
+        note="初回 evolve の weak_signals バックログ消化入口（#443）。SKILL.md 360 行"),
+    Key("correction_review.daily", dict,
+        note="日次の新規 weak_signal 確認入口（#446）。SKILL.md 392 行。daily.eligible/groups/remaining を読む"),
+    # --- growth_report: 成長状態レポート（#448）。SKILL.md 670/677 行で lines を列挙 ---
+    Key("growth_report", dict,
+        note="成長状態レポート（#448）。SKILL.md 670 行で lines を MUST 列挙。error キー時は表示スキップ"),
+    # --- idiom_autopromote: confirmed idiom の機械昇格結果（#447） ---
+    Key("idiom_autopromote", dict,
+        note="confirmed idiom と同テキストの再発 weak_signal を機械昇格した結果（#447）"),
+    # --- observability: 必ず surface すべき行の構造化フィールド（ADR-028）。SKILL.md 238/533 行 ---
+    Key("observability", dict,
+        note="audit↔evolve の契約として構造化済み（ADR-028）。SKILL.md 238 行で各 key の行を MUST 列挙"),
+    # --- evolve_decisions: pending[].id を SKILL.md 173/567/586 行で読む（#400, ADR-041）---
+    Key("evolve_decisions", dict,
+        note="evolve 提案の accept/reject snapshot（ADR-041）。SKILL.md 551 行"),
+    Key("evolve_decisions.pending", list,
+        note="before_sha 付き pending 提案（#400）。SKILL.md 567/586 行で pending[].id を読む"),
+    # --- weak_signals: 暗黙修正シグナル検出結果（#442） ---
+    Key("weak_signals", dict, note="暗黙修正シグナルの検出結果（#442）"),
+    Key("weak_signals_ttl", dict,
+        note="weak_signals の TTL 失効スキャン結果（#442）。SKILL.md reader が読む実害キー（issue #493 コメント）"),
+    # --- correction_semantic: correction capture の二層化バッチ判定（#431） ---
+    Key("correction_semantic", dict, note="utterances の dialogue 意味判定バッチ（#431）"),
+    # --- self_analysis: evolve result の自己解析（ADR-033）---
+    Key("self_analysis", dict, note="evolve result の自己解析→issue 候補（ADR-033）"),
+    # --- trigger_summary: auto trigger の発火サマリ ---
+    Key("trigger_summary", dict, note="auto trigger の発火統計"),
+    # --- warnings: ユーザー向け警告リスト ---
+    Key("warnings", list, note="ユーザー向け警告（category/message）"),
+    # --- env_tier: 環境規模ティア（small/medium/large）---
+    Key("env_tier", str, note="環境規模ティア（observe phase が確定）"),
+    Key("env_tier_reason", dict, note="env_tier の根拠（breakdown/count/thresholds）"),
+    # --- 識別・メタ情報（全 run 共通の正準フィールド）---
+    Key("slug", str, note="PJ slug（git-common-dir 親で解決・ADR-031）"),
+    Key("project_dir", str, note="評価対象 PJ の絶対パス"),
+    Key("generated_at", str, note="result 生成時刻（ISO8601）"),
+    Key("dry_run", bool, note="dry-run 実行フラグ"),
 ]
 
 
@@ -133,6 +188,17 @@ UNCOVERED_PHASES: Set[str] = {
     "prune",
     "enrich",
     "pitfall_hygiene",
+}
+
+# CANONICAL が登録する top-level キー集合（#493）。`phases.*` 以外の最上位セグメント。
+COVERED_TOPLEVEL: Set[str] = {k.top_level for k in CANONICAL if k.top_level is not None}
+
+# CANONICAL に**意図的に**含めない top-level キー（#493）。evolve.py が書くが契約対象外。
+# 新 top-level キーを足したら CANONICAL に登録するか、ここに明示して逆方向契約テストを通す。
+UNCOVERED_TOPLEVEL: Set[str] = {
+    "phases",      # phase 体系で別管理（COVERED_PHASES / UNCOVERED_PHASES）
+    "timestamp",   # generated_at の別名（同値）。reader 非依存のため非契約化
+    "output",      # --output 指定時のみ付く実行メタ（CLI 経路の副産物）
 }
 
 
@@ -268,8 +334,12 @@ def extract_documented_paths(text: str) -> Set[str]:
     """テキスト（SKILL.md / references 等）が明示する result dotted path を抽出する。
 
     対応記法:
-      - dotted: `phases.X.Y...`（先頭 `result.` は許容して剥がす）
-      - bracket: `result["phases"]["X"]["Y"]...`（#379-3、任意対応）→ dotted へ正規化
+      - dotted(phases): `phases.X.Y...`（先頭 `result.` は許容して剥がす）
+      - dotted(top-level): `result.<top>.<...>`（#493。top が登録済み top-level キーのときのみ。
+        precision のため top-level は **必ず `result.` 接頭辞**を要求する。散文中の
+        `growth_report.lines` のような裸の dotted は拾わない）
+      - bracket: `result["phases"]["X"]...` / `result["growth_report"]["lines"]` /
+        `result["growth_report"]`（#379-3, #493、任意対応）→ dotted へ正規化
     散文中のキー名片（`.proposable` 単独など）は対象外＝precision 優先で誤検出を避ける。
     """
     import re
@@ -278,11 +348,25 @@ def extract_documented_paths(text: str) -> Set[str]:
     dotted = re.compile(r"(?:result\.)?(phases\.[A-Za-z_]+(?:\.[A-Za-z_]+)+)")
     out.update(dotted.findall(text))
 
+    # top-level dotted: `result.correction_review.bootstrap` 等（#493）。
+    # precision 重視で `result.` を必須とし、leading セグメントが登録済み top-level の場合のみ採る。
+    known_top = {k.top_level for k in CANONICAL if k.top_level is not None}
+    top_dotted = re.compile(r"result\.([A-Za-z_]+(?:\.[A-Za-z_]+)*)")
+    for m in top_dotted.findall(text):
+        head = m.split(".")[0]
+        if head in known_top:
+            out.add(m)
+
     # bracket 記法: result["phases"]["skill_evolve"][...] → phases.skill_evolve...
-    bracket = re.compile(r'(?:result)?((?:\[\s*["\'][A-Za-z_]+["\']\s*\]){2,})')
+    #   1 セグメント（result["growth_report"]）も top-level 登録済みなら採る（#493）。
+    bracket = re.compile(r'(?:result)((?:\[\s*["\'][A-Za-z_]+["\']\s*\])+)')
     seg = re.compile(r'\[\s*["\']([A-Za-z_]+)["\']\s*\]')
     for chain in bracket.findall(text):
         segs = seg.findall(chain)
-        if segs and segs[0] == "phases" and len(segs) >= 2:
+        if not segs:
+            continue
+        if segs[0] == "phases" and len(segs) >= 2:
+            out.add(".".join(segs))
+        elif segs[0] in known_top:
             out.add(".".join(segs))
     return out

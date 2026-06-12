@@ -68,7 +68,25 @@ def _minimal_valid() -> dict:
                 "CREATE": [], "UPDATE": [], "SPLIT": [], "MERGE": [], "OK": [],
                 "SKIP_SUPPRESSED": [], "skip_suppressed_summary": "",
             },
-        }
+        },
+        # top-level required キー（#493）。phases と並ぶ正準フィールド。
+        "correction_review": {"bootstrap": {}, "daily": {}},
+        "correction_semantic": {},
+        "evolve_decisions": {"pending": []},
+        "growth_report": {},
+        "idiom_autopromote": {},
+        "observability": {},
+        "self_analysis": {},
+        "trigger_summary": {},
+        "warnings": [],
+        "weak_signals": {},
+        "weak_signals_ttl": {},
+        "env_tier": "small",
+        "env_tier_reason": {},
+        "slug": "x",
+        "project_dir": "/x",
+        "generated_at": "2026-01-01T00:00:00+00:00",
+        "dry_run": True,
     }
 
 
@@ -260,6 +278,87 @@ def test_real_phases_are_all_registered():
         f"未登録の phase: {sorted(unregistered)}。CANONICAL にキーを追加するか "
         f"UNCOVERED_PHASES に明示登録すること（契約の意図的部分カバーを enforce）"
     )
+
+
+# ── 6b. 逆方向契約: top-level キー集合 ⊆ 既知 top-level（#493） ──────
+#
+# phases.* と同型の完全性ゲートを top-level キーにも掛ける。#442-#448 で大量追加された
+# correction_review / growth_report / idiom_autopromote 等が schema 契約の対象外で、
+# rename / kind drift が素通りし SKILL.md reader が静かに空表示になる構造的再発を封じる。
+
+
+def test_covered_and_uncovered_toplevel_are_disjoint():
+    assert ers.COVERED_TOPLEVEL.isdisjoint(ers.UNCOVERED_TOPLEVEL)
+
+
+@pytest.mark.skipif(
+    not (_REPO / "skills" / "evolve" / "scripts" / "evolve.py").exists(),
+    reason="evolve.py 不在",
+)
+def test_real_toplevel_keys_are_all_registered():
+    """実 dry-run の top-level キー集合が COVERED ∪ UNCOVERED に収まる（未登録キーで fail）。
+
+    phases.* の completeness（test_real_phases_are_all_registered）と同型。新しい top-level
+    キーを足したら CANONICAL に登録するか UNCOVERED_TOPLEVEL に明示登録することを強制し、
+    schema 契約自体の静かな陳腐化を封じる（#493）。
+    """
+    sys.path.insert(0, str(_REPO / "skills" / "evolve" / "scripts"))
+    import evolve  # noqa: E402
+
+    result = evolve.run_evolve(project_dir=str(_REPO), dry_run=True)
+    actual = {k for k in result.keys() if k != "phases"}
+    known = ers.COVERED_TOPLEVEL | ers.UNCOVERED_TOPLEVEL
+    unregistered = actual - known
+    assert not unregistered, (
+        f"未登録の top-level キー: {sorted(unregistered)}。CANONICAL にキーを追加するか "
+        f"UNCOVERED_TOPLEVEL に明示登録すること（契約の意図的部分カバーを enforce・#493）"
+    )
+
+
+def test_toplevel_required_keys_are_registered_in_canonical():
+    """SKILL.md reader が読む実害キーが CANONICAL に登録されている（#493 範囲補足）。
+
+    issue 本文＋コメントで列挙された reader 必須キー。これらは optional でなく required で
+    登録され、rename / 欠落が test-time conformance で検出されること。
+    """
+    canon = ers.canonical_paths()
+    required = {
+        "correction_review.bootstrap",
+        "correction_review.daily",
+        "growth_report",
+        "idiom_autopromote",
+        "observability",
+        "weak_signals",
+        "weak_signals_ttl",
+        "evolve_decisions",
+        "evolve_decisions.pending",
+    }
+    missing = required - canon
+    assert not missing, f"reader 必須 top-level キーが CANONICAL 未登録: {sorted(missing)}"
+
+
+def test_toplevel_growth_report_kind_drift_detected():
+    """growth_report が dict→他型に drift したら conformance が wrong_kind を出す（#493）。"""
+    r = _minimal_valid()
+    r["growth_report"] = "broken"  # dict であるべき
+    viol = ers.check_conformance(r)
+    assert any("wrong kind: growth_report" in v for v in viol), viol
+
+
+def test_toplevel_correction_review_daily_kind_drift_detected():
+    """correction_review.daily が dict→他型に drift したら wrong_kind（#493）。"""
+    r = _minimal_valid()
+    r["correction_review"]["daily"] = []  # daily は dict であるべき
+    viol = ers.check_conformance(r)
+    assert any("wrong kind: correction_review.daily" in v for v in viol), viol
+
+
+def test_toplevel_missing_required_key_is_violation():
+    """required top-level キーの欠落は test-time conformance で missing になる（#493）。"""
+    r = _minimal_valid()
+    del r["growth_report"]
+    viol = ers.check_conformance(r)
+    assert any("missing: growth_report" in v for v in viol), viol
 
 
 # ── 7. references/*.md も doc-drift 走査対象（#379-2） ─────────────
