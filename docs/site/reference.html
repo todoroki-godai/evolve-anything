@@ -316,7 +316,7 @@
           <tr><td>skill-triage</td><td>テレメトリ + trigger eval で CREATE/UPDATE/SPLIT/MERGE/OK の5択判定する</td></tr>
           <tr><td>trigger-eval-generator</td><td>sessions.jsonl + usage.jsonl → skill-creator 互換 evals.json を自動生成する</td></tr>
           <tr><td>evolve-skill</td><td>特定スキルに自己進化パターン（Pre-flight / pitfalls.md）をピンポイント組み込みする (<code>assess_single_skill</code> + <code>apply_evolve_proposal</code>)</td></tr>
-          <tr><td>agent-brushup</td><td>エージェント定義の品質診断・改善提案・upstream 監視 (<code>scripts/lib/agent_quality.py</code>)</td></tr>
+          <tr><td>agent-brushup</td><td>エージェント定義の品質診断・改善提案・upstream 監視・model exact-ID pin 検出（#449） (<code>scripts/lib/agent_quality.py</code>)</td></tr>
           <tr><td>meta_quality</td><td>スキル追加前の品質フィルタ — 再利用頻度と Jaccard 類似度で CREATE/REVIEW/SKIP を判定し skill-triage に組み込む</td></tr>
           <tr><td>constraint_decay</td><td>セッション後半 30% に集中する correction を検出して decay_rate を算出し run_discover() に統合する</td></tr>
           <tr><td>negative_transfer</td><td>スキル追加前後の success rate delta を計測し delta &lt; −0.05 で負の転移フラグを付与する。compute_component_transfer は更新コンポーネント（追加スキル）別に isolation window で delta を分離帰属し「どの更新が回帰させたか」を特定、observability contract で evolve のたびに surface（#288, arXiv 2605.30621 ablation・決定論）</td></tr>
