@@ -106,6 +106,13 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # 実機データがあると snapshot がブレる。空 tmp に向けて出力を決定論化する（#445）。
     from audit import measurement_bug
     monkeypatch.setattr(measurement_bug, "DATA_DIR", tmp_path / "no-growth-state")
+    # outcome_promotion_readiness builder は環境グローバルな DATA_DIR 配下のストア
+    # （corrections/sessions/optimize_history）を読むため、実機データがあると snapshot がブレる。
+    # 空 tmp に向けて出力を決定論化する（#461）。
+    from audit import outcome_promotion_readiness
+    monkeypatch.setattr(
+        outcome_promotion_readiness, "DATA_DIR", tmp_path / "no-promotion-data"
+    )
     # corrections_insights は import 時に Path.home() を CORRECTIONS_FILE へ固定するため
     # setenv("HOME") では隔離できない（先行テストが実 HOME で import 済みだと実
     # corrections.jsonl を読む order-dependent 汚染）。実機 corrections が
