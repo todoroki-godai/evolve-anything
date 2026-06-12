@@ -18,14 +18,31 @@ from pathlib import Path
 
 import common
 
-GLOBAL_SKILLS_PREFIX = str(Path.home() / ".claude" / "skills")
 MAX_PROMPT_LENGTH = 200
 
 
 def is_global_skill(skill_name: str, tool_input: dict) -> bool:
-    """global スキル（~/.claude/skills/ 配下）かどうかを判定する。"""
+    """global スキル（~/.claude/skills/ 配下）かどうかを判定する。
+
+    CC が渡す skill 値は bare 名（例: "commit"）が実データ形式。
+    bare 名の場合は ~/.claude/skills/<name>/SKILL.md の存在チェックで判定する。
+    パス形式が渡された場合（後方互換）は prefix マッチにフォールバックする。
+    (#485 — パス前置判定が bare 名で永久 False になっていたバグを修正)
+    """
     skill_path = tool_input.get("skill", "")
-    return skill_path.startswith(GLOBAL_SKILLS_PREFIX) or skill_path.startswith("~/.claude/skills/")
+    if not skill_path:
+        return False
+
+    global_skills_dir = Path.home() / ".claude" / "skills"
+    global_prefix = str(global_skills_dir)
+
+    # パス形式: 後方互換 (将来 CC がパス形式で渡す場合も対応)
+    if skill_path.startswith(global_prefix) or skill_path.startswith("~/.claude/skills/"):
+        return True
+
+    # bare 名: ~/.claude/skills/<name>/SKILL.md の存在チェック
+    skill_md = global_skills_dir / skill_path / "SKILL.md"
+    return skill_md.exists()
 
 
 def _get_project() -> str | None:

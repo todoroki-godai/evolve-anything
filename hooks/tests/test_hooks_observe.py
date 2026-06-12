@@ -131,13 +131,74 @@ class TestObserve:
         record = json.loads(usage_file.read_text().strip())
         assert record["project"] is None
 
-    def test_global_skill_registers(self, patch_data_dir):
-        global_prefix = str(Path.home() / ".claude" / "skills")
+    def test_global_skill_registers_bare_name(self, patch_data_dir, monkeypatch, tmp_path):
+        """CC が渡す bare 名（"commit" 等）の global スキルが usage-registry.jsonl に記録される。
+
+        実 CC は skill=<bare名> を渡す（パス形式ではない）。
+        bare 名の場合 is_global_skill は ~/.claude/skills/<name>/SKILL.md の存在チェックで判定する。
+        (#485 — パス前置判定が永久 False だったバグの回帰テスト)
+        """
+        # HOME を tmp_path に差し替えて、実 ~/.claude を触らない
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+
+        # fake global skill SKILL.md を設置
+        skill_dir = fake_home / ".claude" / "skills" / "commit"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# commit skill")
+
+        event = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "commit"},
+            "tool_result": {},
+            "session_id": "sess-bare-001",
+        }
+        observe.handle_post_tool_use(event)
+
+        registry_file = patch_data_dir / "usage-registry.jsonl"
+        assert registry_file.exists(), "bare 名の global スキルが usage-registry.jsonl に記録されていない"
+        record = json.loads(registry_file.read_text().strip())
+        assert record["skill_name"] == "commit"
+        assert "project_path" in record
+
+    def test_global_skill_registers_bare_name_non_global(self, patch_data_dir, monkeypatch, tmp_path):
+        """bare 名でも ~/.claude/skills/ に存在しない PJ スキルは usage-registry に記録されない。"""
+        # HOME を tmp_path に差し替えて、実 ~/.claude を触らない
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+        # global skills ディレクトリは作るが "local-skill" は置かない
+        (fake_home / ".claude" / "skills").mkdir(parents=True)
+
+        event = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "local-skill"},
+            "tool_result": {},
+            "session_id": "sess-bare-002",
+        }
+        observe.handle_post_tool_use(event)
+
+        registry_file = patch_data_dir / "usage-registry.jsonl"
+        assert not registry_file.exists(), "PJ スキルが usage-registry に誤記録された"
+
+    def test_global_skill_registers_path_form_backward_compat(self, patch_data_dir, monkeypatch, tmp_path):
+        """パス形式（後方互換）でも usage-registry.jsonl に記録される。
+
+        将来 CC がパス形式で渡す可能性に備えて、既存の動作を維持する。
+        """
+        # HOME を tmp_path に差し替えて、実 ~/.claude を触らない
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+
+        # パス形式で global prefix が一致する場合
+        global_prefix = str(fake_home / ".claude" / "skills")
         event = {
             "tool_name": "Skill",
             "tool_input": {"skill": f"{global_prefix}/my-global"},
             "tool_result": {},
-            "session_id": "sess-002",
+            "session_id": "sess-path-001",
         }
         observe.handle_post_tool_use(event)
 
