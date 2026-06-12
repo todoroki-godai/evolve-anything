@@ -396,7 +396,8 @@ claude plugin uninstall claude-reflect
 ## テスト
 
 ```bash
-python3 -m pytest hooks/ skills/ scripts/tests/ scripts/rl/tests/ -v
+# bare コマンドで全件収集（収集パスは pytest.ini の testpaths が単一ソース）
+python3 -m pytest -v
 
 # プラグイン定義の整合性チェック
 claude plugin validate

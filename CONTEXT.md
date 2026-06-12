@@ -55,3 +55,4 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | confirm 配線 | `rl-reflect --promote-weak` が promote 成功後に対応 idiom を confirmed 化する正準経路。signal→idiom は provenance 物理キー（pj_slug, source_path, line_no）で突合 | #463 |
 | 重み昇格レディネス（promotion readiness） | outcome 3軸を fitness 重みへ繰り入れてよいかの3条件決定論判定（分散 / 件数下限 / 方向妥当性）。全 ✓ で「重み昇格を提案」を advisory surface | #461, ADR-046 |
 | cross_pj_confirmed | 他 PJ で confirm 済みの同テキスト idiom を持つ確認 group に付くラベル（slug 一覧）。先頭提示の判断材料であり自動承認はしない | #462 |
+| union read | DuckDB ストア（read_only）+ 未 ingest live jsonl を dedup 合算して読む読み取り経路。ingest 後の rotate で jsonl が空でも分母が取れる（sessions: `session_store.read_session_records`、dedup キーは ingest の UNIQUE と同一） | #415 |

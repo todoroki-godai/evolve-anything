@@ -402,7 +402,8 @@ claude plugin uninstall claude-reflect
 ## Tests
 
 ```bash
-python3 -m pytest hooks/ skills/ scripts/tests/ scripts/rl/tests/ -v
+# bare command collects everything (pytest.ini testpaths is the single source of collection paths)
+python3 -m pytest -v
 
 # Plugin definition consistency check
 claude plugin validate

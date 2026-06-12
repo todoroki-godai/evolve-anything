@@ -77,8 +77,9 @@
 | `idiom_autopromote` | confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / `rl-reflect --revoke-idiom` 巻き戻し（#447, ADR-047）。confirmed 化の正準経路は `rl-reflect --promote-weak` の confirm 配線（#463） | `correction_semantic/idiom_autopromote.py` |
 | `measurement_bug` | 複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185） | `audit/measurement_bug.py` |
 | `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ / 今日の昇格成果。閾値は growth_engine の定数が単一ソース（#448） | `growth_report.py` |
-| `outcome_promotion_readiness` | ADR-046 重み昇格レディネスの3条件決定論判定（分散 / 件数下限 / 方向妥当性）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母の実効化は #469（#461） | `audit/outcome_promotion_readiness.py` |
+| `outcome_promotion_readiness` | ADR-046 重み昇格レディネスの3条件決定論判定（分散 / 件数下限 / 方向妥当性）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母は session_store union read（db read_only + 未 ingest jsonl）で実効化済み（#461, #469） | `audit/outcome_promotion_readiness.py` |
 | `cross_pj_priority` | confirmed idiom の PJ 横断優先提示 — 他 PJ 承認済みと同テキストの確認 group に `cross_pj_confirmed` ラベル + 先頭表示（提示のみ・自動承認しない、normalize は autopromote と1関数共有）（#462） | `correction_semantic/cross_pj_priority.py` |
+| `testpaths_coverage` | pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468） | `testpaths_coverage.py` |
 
 ## クイックスタート
 
