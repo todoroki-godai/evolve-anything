@@ -109,44 +109,9 @@ def test_resume_duplicate_no_violation(tmp_path: Path) -> None:
 
 
 # --- 実機 1 PJ E2E（transcript-store-bench ルール）-----------------------------
-
-def _real_rl_anything_pj() -> Path | None:
-    root = Path.home() / ".claude" / "projects"
-    if not root.exists():
-        return None
-    cands = sorted(
-        p for p in root.iterdir()
-        if p.is_dir() and p.name.endswith("rl-anything") and not p.name.endswith("worktrees")
-    )
-    return cands[0] if cands else None
-
-
-@pytest.mark.real_home  # 実 ~/.claude/projects の transcript を読む実機 E2E（autouse HOME 隔離をオプトアウト, #471）
-def test_real_pj_e2e(tmp_path: Path) -> None:
-    """rl-anything PJ の実 transcript で ingest を完走させ wall time / rows を assertion。
-
-    書き込み先は tmp_path（実 DATA_DIR に触れない）。実 transcript パスは読むだけ。
-    """
-    pj = _real_rl_anything_pj()
-    if pj is None:
-        pytest.skip("実 rl-anything transcript が見つからない")
-
-    # tmp に projects root を作り、実 PJ ディレクトリを 1 つだけ symlink で見せる
-    fake_root = tmp_path / "projects"
-    fake_root.mkdir()
-    (fake_root / pj.name).symlink_to(pj)
-
-    db = tmp_path / "utterances.db"
-    t0 = time.perf_counter()
-    res = uingest.ingest_all_projects(projects_root=fake_root, db_path=db, progress=False)
-    elapsed = time.perf_counter() - t0
-
-    assert elapsed < 60.0, f"ingest が遅すぎ: {elapsed:.1f}s"
-    assert res["inserted"] > 0, "実 PJ から発話が 1 件も取れない（抽出バグ）"
-    assert db.exists() and db.stat().st_size > 0
-
-    # 14日より古い発話も取得できる（古い発話の検索可能性）
-    rows = uquery.query_utterances("rl-anything", db_path=db)
-    assert len(rows) > 0
-    # source_kind デフォルトは dialogue のみ
-    assert all(r["source_kind"] == "dialogue" for r in rows)
+#
+# 実 transcript を読む実機 E2E（旧 test_real_pj_e2e, 直列 35 秒）は #496 で
+# 通し評価ゲート（bin/rl-dogfood-gate）の Layer 1 へ移設した。検証内容
+# （wall time / DB size / row 数）は scripts/lib/dogfood/ingest_check.py の
+# check_ingest_e2e / check_real_pj_ingest に書き直して維持している。pytest
+# スイートからは外し、ゲートの実機 1 周（rl-dogfood-gate --layer 1）で確認する。

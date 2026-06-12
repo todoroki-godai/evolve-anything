@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""bin/rl-dogfood-gate — 通し評価ゲート（#496）。
+
+「テスト緑・evolve 無エラー・でも成果物がバグだらけ」を構造的に防ぐ 3 層ゲート:
+  Layer 1: dogfood E2E（dry-run 不変 SHA256 + 実 PJ ingest E2E）
+  Layer 2: report invariants（result JSON の機械検査）
+  Layer 3: SKILL.md コードブロック抽出実行（安全分類つき）
+
+Usage:
+    rl-dogfood-gate [--layer 1|2|3|all] [--json] [--output <path>]
+
+exit 0=全緑 / 1=赤あり / 2=実行エラー。
+"""
+import sys
+from pathlib import Path
+
+# bin/ → plugin_root/scripts/lib/
+_lib = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_lib))
+
+from dogfood.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
