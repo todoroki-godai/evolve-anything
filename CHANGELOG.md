@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.99.0] - 2026-06-12
+
 ### Added
 - **feat(dogfood): 通し評価ゲート `bin/rl-dogfood-gate` を新設（#496）** — 「テスト緑・evolve 無エラー・でも成果物がバグだらけ」を構造的に防ぐリリース前 dogfood ゲート。pytest 非依存の独立 CLI（Layer3 が「ユーザーと同じ素の起動経路」を再現する必要があり、conftest の sys.path 補完 / HOME 隔離の下駄を意図的に避けるため）。ロジックは `scripts/lib/dogfood/` パッケージ。**Layer 1（dogfood E2E）**: (1a) dry-run 不変 — DATA_DIR 全ファイルの SHA256 スナップショットを取り `evolve.py --dry-run` を素の python 起動（PYTHONPATH のみ）→ 再スナップショットで差分ゼロを assert（#491 の 4 ファイル書換を赤検出、bypass なし）。(1b) store 差分（書かれるべき方向）は非 dry-run が実環境を汚すため Wave 0 では NotImplemented 枠だけ予約し #484 修正後に実装。さらに実 PJ utterance ingest E2E（旧 `test_real_pj_e2e`・直列35秒）を pytest スイートから本ゲートへ移設（`scripts/lib/dogfood/ingest_check.py`、wall time / DB size / row 数の assertion を維持）。**Layer 2（report invariants）**: dry-run result JSON の機械検査 — 必須 top-level キー存在 / 件数非負 / 当PJ ≤ 全PJ / observability contract（ADR-028 の `_OBSERVABILITY_BUILDERS` を単一ソースに import）突合。**Layer 3（SKILL.md コードブロック抽出実行）**: 全 `skills/*/SKILL.md` の python/bash fenced block を抽出し安全分類 — python は import 文を `import X` に正規化して素の subprocess で import 検証（ゲートは scripts/lib を勝手に注入せず、ブロックが自前で行う sys.path 設定のみ前置＝sys.path 不足 #487/#495 を捕捉）、bash は `--help`/`--dry-run` 付きのみ実行・それ以外（書込/破壊系・プレースホルダ・コマンド置換）は存在検証のみ。CLI: `--layer 1|2|3|all` / `--json` / `--output`、exit 0=全緑 / 1=赤あり / 2=実行エラー。実機1周で #486（削除済み backfill CLI 3本）/ #487（agent-brushup sys.path 不足）/ #495（audit sys.path 不足）/ #488（prune `from scripts.prune import`）を赤検出することを確認。TDD 新規 43 ユニットテスト（合成 fixture・HOME 隔離）。決定論・LLM 非依存。
 - feat(tests): フルスイートを pytest-xdist で並列化（`pytest.ini` `addopts` に `-n auto` 追加）— 直列 135 秒 → 42 秒に短縮
