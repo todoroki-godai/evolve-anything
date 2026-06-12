@@ -64,6 +64,17 @@ def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:
             if not is_excluded_skill_path(skill_md):
                 result["skills"].append(skill_md)
 
+    # plugin_self skills (#185): リポジトリ自体がプラグイン本体
+    # （`.claude-plugin/plugin.json` が存在）の場合のみ repo 直下 skills/ を追加スキャン。
+    # これにより rl-anything 本体スキルが skill_evolve / pitfall 剪定の対象になる。
+    # 通常 PJ（manifest 無し）では一切スキャンしないため挙動不変（回帰ゼロ）。
+    if (project_dir / ".claude-plugin" / "plugin.json").exists():
+        plugin_self_dir = project_dir / "skills"
+        if plugin_self_dir.exists():
+            for skill_md in plugin_self_dir.rglob("SKILL.md"):
+                if not is_excluded_skill_path(skill_md):
+                    result["skills"].append(skill_md)
+
     # Rules
     rules_dir = claude_dir / "rules"
     if rules_dir.exists():

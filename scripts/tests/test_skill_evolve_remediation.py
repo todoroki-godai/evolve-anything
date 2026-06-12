@@ -73,6 +73,43 @@ def test_skill_evolve_issues_injected_into_remediation(tmp_path):
     assert classified["proposable"][0]["confidence_score"] == 0.60
 
 
+def test_plugin_self_skill_evolve_issue_is_proposable_not_auto_fixable(tmp_path):
+    """#185 安全確認: plugin_self スキルへの skill_evolve 修正は auto_fixable にならない。
+
+    plugin_self は is_protected_skill→True のため、high suitability（confidence 0.85）でも
+    auto-apply ゲートが proposable（人間確認必須）に降格させ、無人で SKILL.md を書き換える
+    経路を塞ぐ。protection_warning も付く。
+    """
+    evolve_scripts = Path(__file__).resolve().parent.parent.parent / "skills" / "evolve" / "scripts"
+    sys.path.insert(0, str(evolve_scripts))
+    from remediation import classify_issue as real_classify_issue
+
+    # プラグイン本体リポジトリ構成: <repo>/.claude-plugin/plugin.json + <repo>/skills/evolve/
+    manifest = tmp_path / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text('{"name": "rl-anything"}', encoding="utf-8")
+    skill_dir = tmp_path / "skills" / "evolve"
+    skill_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text("# Evolve\n", encoding="utf-8")
+
+    assessment = {
+        "skill_name": "evolve",
+        "skill_dir": str(skill_dir),
+        "already_evolved": False,
+        "suitability": "high",  # 通常なら confidence 0.85 → auto_fixable 候補
+        "total_score": 18,
+    }
+    issue = make_skill_evolve_issue(assessment, str(skill_md))
+    assert issue["type"] == SKILL_EVOLVE_CANDIDATE
+
+    classified = real_classify_issue(issue)
+    assert classified["category"] == "proposable", (
+        "plugin_self は protected のため auto_fixable に昇格してはならない"
+    )
+    assert classified["category"] != "auto_fixable"
+
+
 def test_tool_usage_issues_injected_into_remediation():
     """discover の tool_usage 結果が remediation の issues に注入されることを確認。
 

@@ -72,11 +72,14 @@ def classify_artifact_origin(path: Path) -> str:
 
     Returns:
         "plugin" — プラグイン由来
+        "plugin_self" — プラグイン本体リポジトリ自身の repo 直下 skills/（#185）
         "global" — ~/.claude/skills/ 配下
         "custom" — その他（プロジェクトローカル等）
     """
     if _plugin_skill_map_cache is not None:
         # テスト後方互換: ローカルキャッシュが設定されている場合はインライン判定
+        from skill_origin import _is_plugin_self_skill
+
         resolved = path.expanduser().resolve()
         resolved_str = str(resolved)
 
@@ -92,6 +95,9 @@ def classify_artifact_origin(path: Path) -> str:
         global_skills_path = str(Path.home() / ".claude" / "skills")
         if resolved_str.startswith(global_skills_path):
             return "global"
+
+        if _is_plugin_self_skill(resolved):
+            return "plugin_self"
 
         if "/.claude/skills/" in resolved_str:
             parts = resolved.parts

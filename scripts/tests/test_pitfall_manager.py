@@ -229,6 +229,43 @@ def test_hygiene_graduation_candidate(tmp_path):
     assert len(result["stale_warnings"]) == 1  # 2025-01-01 は6ヶ月超
 
 
+def test_hygiene_includes_plugin_self_skills(tmp_path):
+    """#185: プラグイン本体リポジトリの repo 直下 skills/ も pitfall 剪定対象になる。
+
+    pitfall_hygiene は origin フィルタを持たず find_artifacts の結果を全件走査する
+    （is_self_evolved_skill のみで絞る）。find_artifacts が plugin_self を含むよう
+    なったため、本体スキルが自動的に剪定対象に入ることを確認する。
+    """
+    # プラグイン本体マニフェスト
+    manifest = tmp_path / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text('{"name": "rl-anything"}', encoding="utf-8")
+
+    # repo 直下 skills/ に自己進化済みスキル
+    skill_dir = tmp_path / "skills" / "evolve"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "# Evolve\n\n## Failure-triggered Learning\n\ncontent\n"
+    )
+    refs = skill_dir / "references"
+    refs.mkdir()
+    pitfalls = (
+        "# Pitfalls\n\n## Active Pitfalls\n\n"
+        "### Plugin self issue\n"
+        "- **Status**: Active\n"
+        "- **Last-seen**: 2025-01-01\n"
+        "- **Root-cause**: action — old\n"
+        "- **Pre-flight対応**: Yes\n"
+        "- **Avoidance-count**: 15\n\n"
+        "## Candidate Pitfalls\n\n## Graduated Pitfalls\n"
+    )
+    (refs / "pitfalls.md").write_text(pitfalls, encoding="utf-8")
+
+    result = pitfall_hygiene(tmp_path, frequency_scores={"evolve": 1})
+    assert result["skills_checked"] == 1
+    assert len(result["graduation_candidates"]) == 1
+
+
 def test_hygiene_cap_exceeded(tmp_path):
     skill_dir = tmp_path / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)

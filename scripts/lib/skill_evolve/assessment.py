@@ -159,12 +159,15 @@ def skill_evolve_assessment(
     # （judgment refresh の emit→assistant inline）と evolve apply（テンプレカスタマイズ）に移動した。
     # 本ガードはその後段バッチの規模を承認させる確認ゲートとして残置する。トークン見積もりは
     # `_estimate_skill_tokens`（truncate 後プロンプト長ベース、#337）でスキルごとに算出する。
-    # custom + allowlist に含まれる global の両方を対象件数に含める
+    # custom + plugin_self + allowlist に含まれる global を対象件数に含める。
+    # plugin_self（#185）= プラグイン本体リポジトリ自身の repo 直下 skills/。custom と同等に
+    # 評価対象へ。インストール済み他プラグイン（origin=plugin）は引き続き除外する。
     _MAX_AUTO_SKILLS = 10
     _all_llm_targets = [
         p for p in artifacts.get("skills", [])
         if (
-            (classify_artifact_origin(p) == "custom" and not Path(p).parent.is_symlink())
+            (classify_artifact_origin(p) in ("custom", "plugin_self")
+             and not Path(p).parent.is_symlink())
             or (classify_artifact_origin(p) == "global" and p.parent.name in _global_allowlist)
         )
     ]
@@ -257,16 +260,19 @@ def skill_evolve_assessment(
 
     results: List[Dict[str, Any]] = []
     _excluded_global_count = 0
+    _excluded_plugin_count = 0
 
     for skill_path in artifacts.get("skills", []):
         skill_dir = skill_path.parent
         skill_name = skill_dir.name
 
-        # 対象フィルタ: ユーザー自作のプロジェクトローカルスキルのみ
-        # plugin = rl-anything 本体、global = gstack 等インストール済み → 除外
-        # ただし evolve_global_allowlist に含まれる global スキルは評価対象に含める
+        # 対象フィルタ: ユーザー自作のプロジェクトローカルスキル（custom）と
+        # プラグイン本体リポジトリ自身のスキル（plugin_self, #185）を評価対象にする。
+        # plugin = インストール済み他プラグイン → 除外（件数は Option B でサマリ surface）
+        # global = gstack 等インストール済み → 除外（allowlist のみ評価対象）
         origin = classify_artifact_origin(skill_path)
         if origin == "plugin":
+            _excluded_plugin_count += 1
             continue
         if origin == "global":
             if skill_name not in _global_allowlist:
@@ -342,6 +348,19 @@ def skill_evolve_assessment(
                 f"global スキル {_excluded_global_count} 件は評価対象外 "
                 f"(ダウンロード済みスキルは除外)。"
                 f" 自作グローバルスキルがあれば evolve_global_allowlist に追加してください。"
+            ),
+        })
+
+    # excluded_plugins サマリ（Option B / #185）: silence ≠ evaluated（ADR-028）。
+    # インストール済み他プラグイン由来スキルは編集対象でないため除外するが、
+    # 「なぜ 0 件なのか」をユーザーに伝えるため件数を明示する。
+    if _excluded_plugin_count > 0:
+        results.append({
+            "_meta": "excluded_plugins",
+            "excluded_plugin_count": _excluded_plugin_count,
+            "hint": (
+                f"インストール済み他プラグイン由来スキル {_excluded_plugin_count} 件は"
+                f"評価対象外 (本体リポジトリ自身のスキル=plugin_self は対象)。"
             ),
         })
 

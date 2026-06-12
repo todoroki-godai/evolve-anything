@@ -56,6 +56,55 @@ class TestClassifySkillOrigin:
             result = classify_skill_origin(global_skill)
             assert result == "global"
 
+    def test_plugin_self_repo_root_skills(self, tmp_path):
+        """プラグイン本体リポジトリの repo 直下 skills/ は plugin_self を返す（#185）。
+
+        `.claude-plugin/plugin.json` が存在するディレクトリ直下の skills/<name>/ は
+        プラグイン自身のスキル。evolve が自己診断対象にするため plugin_self で分類する。
+        """
+        (tmp_path / ".claude-plugin").mkdir(parents=True)
+        (tmp_path / ".claude-plugin" / "plugin.json").write_text(
+            '{"name": "rl-anything"}', encoding="utf-8"
+        )
+        skill_dir = tmp_path / "skills" / "evolve"
+        skill_dir.mkdir(parents=True)
+        result = classify_skill_origin(skill_dir)
+        assert result == "plugin_self"
+
+    def test_plugin_self_skill_md_path(self, tmp_path):
+        """SKILL.md のパスを渡しても plugin_self を返す（#185）。"""
+        (tmp_path / ".claude-plugin").mkdir(parents=True)
+        (tmp_path / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+        skill_md = tmp_path / "skills" / "reflect" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("# reflect", encoding="utf-8")
+        result = classify_skill_origin(skill_md)
+        assert result == "plugin_self"
+
+    def test_no_plugin_json_repo_root_skills_custom(self, tmp_path):
+        """.claude-plugin/plugin.json が無い通常 PJ の repo 直下 skills/ は custom のまま（回帰ゼロ）。"""
+        skill_dir = tmp_path / "skills" / "evolve"
+        skill_dir.mkdir(parents=True)
+        result = classify_skill_origin(skill_dir)
+        assert result == "custom"
+
+    def test_plugin_self_does_not_match_dotclaude_skills(self, tmp_path):
+        """plugin.json があっても .claude/skills/ 配下（ユーザー自作）は plugin_self にしない。"""
+        (tmp_path / ".claude-plugin").mkdir(parents=True)
+        (tmp_path / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+        skill_dir = tmp_path / ".claude" / "skills" / "my-custom"
+        skill_dir.mkdir(parents=True)
+        result = classify_skill_origin(skill_dir)
+        assert result == "custom"
+
+    def test_plugin_self_protected(self, tmp_path):
+        """plugin_self は編集保護対象（auto-apply ゲートで proposable に降格させるため）（#185）。"""
+        (tmp_path / ".claude-plugin").mkdir(parents=True)
+        (tmp_path / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+        skill_dir = tmp_path / "skills" / "evolve"
+        skill_dir.mkdir(parents=True)
+        assert is_protected_skill(skill_dir) is True
+
     def test_plugin_skill_via_installed_plugins(self, tmp_path):
         """installed_plugins.json 経由でプラグインスキルを判定。"""
         # セットアップ: installed_plugins.json

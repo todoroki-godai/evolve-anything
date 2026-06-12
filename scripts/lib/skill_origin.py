@@ -115,6 +115,29 @@ def get_plugin_skill_names() -> frozenset:
 
 # --- Origin Classification ---------------------------------------------------
 
+def _is_plugin_self_skill(resolved: Path) -> bool:
+    """resolved パスがプラグイン本体リポジトリの repo 直下 skills/<name>/ かを判定する（#185）。
+
+    条件: パスに `/skills/` を含み、その `skills/` の親ディレクトリに
+    `.claude-plugin/plugin.json` が存在する（= リポジトリ自体がプラグイン本体）。
+    `.claude/skills/`（ユーザー自作）は親が `.claude` になるため一致しない。
+    """
+    parts = resolved.parts
+    try:
+        # 末尾側の `skills` を採用（ネストされた skills より repo 直下を優先しないが、
+        # 通常 plugin レイアウトは <repo>/skills/<name> の1段のみ）。
+        skills_idx = len(parts) - 1 - list(reversed(parts)).index("skills")
+    except ValueError:
+        return False
+    if skills_idx == 0:
+        return False
+    parent = Path(*parts[:skills_idx])
+    # `.claude/skills/` は plugin_self ではない（ユーザー自作スキル）
+    if parent.name == ".claude":
+        return False
+    return (parent / ".claude-plugin" / "plugin.json").exists()
+
+
 def classify_skill_origin(path: Path) -> str:
     """スキルの出自を分類する。
 
@@ -122,7 +145,11 @@ def classify_skill_origin(path: Path) -> str:
         path: スキルのファイルパス
 
     Returns:
-        "plugin" — プラグイン由来
+        "plugin" — プラグイン由来（インストール済み他プラグイン。編集保護）
+        "plugin_self" — プラグイン本体リポジトリ自身の repo 直下 skills/（#185）。
+            `.claude-plugin/plugin.json` を持つリポジトリの直下 skills/<name>/ が該当。
+            evolve は custom と同等に評価対象へ含めるが、auto-apply ゲートでは
+            plugin 同様に保護（人間確認なしの直接書き換えを防ぐ）。
         "global" — ~/.claude/skills/ 配下
         "custom" — プロジェクトローカル等
     """
@@ -143,6 +170,12 @@ def classify_skill_origin(path: Path) -> str:
     if resolved_str.startswith(global_skills_path):
         return "global"
 
+    # plugin_self: プラグイン本体リポジトリの repo 直下 skills/<name>/（#185）。
+    # `<repo>/skills/<name>/...` で <repo> に `.claude-plugin/plugin.json` があれば本体スキル。
+    # `.claude/skills/` 配下（ユーザー自作）は除外する。
+    if _is_plugin_self_skill(resolved):
+        return "plugin_self"
+
     # プロジェクトの .claude/skills/ 配下でプラグインインストール済みスキル名に一致
     if "/.claude/skills/" in resolved_str:
         parts = resolved.parts
@@ -161,8 +194,13 @@ def classify_skill_origin(path: Path) -> str:
 # --- Protection ---------------------------------------------------------------
 
 def is_protected_skill(path: Path) -> bool:
-    """スキルが編集保護対象かを判定する。plugin origin → True。"""
-    return classify_skill_origin(path) == "plugin"
+    """スキルが編集保護対象かを判定する。
+
+    plugin（インストール済み他プラグイン）と plugin_self（本体リポジトリ自身、#185）の
+    両方を保護する。plugin_self は evolve の評価対象だが、auto-apply ゲートでは人間確認
+    なしの直接書き換えを防ぐため protected に倒す（proposable に降格 → ユーザー承認必須）。
+    """
+    return classify_skill_origin(path) in ("plugin", "plugin_self")
 
 
 def suggest_local_alternative(
