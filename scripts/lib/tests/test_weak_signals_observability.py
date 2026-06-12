@@ -79,6 +79,98 @@ def test_builder_includes_evolve_hint(tmp_path: Path, monkeypatch) -> None:
     assert "今日の修正確認" in body
 
 
+# ── #490: 当PJフィルタ（unpromoted / by_channel / 昇格導線文） ───────────
+
+def _seed_multi_pj(tmp_path: Path, monkeypatch, records: list) -> Path:
+    """複数PJのレコードを含む weak_signals ストアを tmp に設置する。"""
+    store = tmp_path / "weak_signals.jsonl"
+    import json
+    with open(store, "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
+    return store
+
+
+def test_unpromoted_count_is_scoped_to_current_pj(tmp_path: Path, monkeypatch) -> None:
+    """未昇格件数は当PJ（project_dir の slug）のみを数える（#490）。
+
+    全PJ合計 5 件のうち当PJ未昇格が 2 件の場合、昇格導線文は「当PJ未昇格 2 件」と出る。
+    全PJ集計の 5 件（total）は total 表示に残す。
+    """
+    current_slug = tmp_path.name  # pj_slug_fast(tmp_path) と一致
+
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        # 当PJ: 未昇格 2 件
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug},
+        {"channel": "esc_interrupt", "promoted": False, "pj_slug": current_slug},
+        # 他PJ: 未昇格 3 件（count に含めない）
+        {"channel": "rephrase", "promoted": False, "pj_slug": "other-pj-a"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": "other-pj-b"},
+        {"channel": "permission_deny", "promoted": False, "pj_slug": "other-pj-b"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+
+    # total は全PJ集計（5件）のまま残す
+    assert "5 件" in body
+    assert "全PJ" in body
+
+    # 昇格導線文は当PJのみ（2件）
+    assert "当PJ未昇格 2" in body or ("当PJ" in body and "2 件" in body)
+    # 全PJ合計の未昇格数（5件）が昇格導線文に出ていないこと
+    # （total と区別できる数字）
+    assert "未昇格 5" not in body
+
+
+def test_by_channel_counts_scoped_to_current_pj(tmp_path: Path, monkeypatch) -> None:
+    """チャネル別内訳は当PJのみで集計する（#490）。
+
+    全PJ: rephrase 3件（当PJ1、他PJ2）。チャネル別では「言い直し 1」と表示する。
+    """
+    current_slug = tmp_path.name
+
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug},
+        {"channel": "rephrase", "promoted": False, "pj_slug": "other-pj"},
+        {"channel": "rephrase", "promoted": True, "pj_slug": "other-pj"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+
+    # total は全PJ集計（3件）
+    assert "3 件" in body
+
+    # チャネル別内訳は当PJのみ（言い直し 1）
+    assert "言い直し 1" in body
+    # 他PJの2件がチャネル内訳に混入していないこと
+    assert "言い直し 3" not in body
+    assert "言い直し 2" not in body
+
+
+def test_evolve_hint_absent_when_no_current_pj_unpromoted(tmp_path: Path, monkeypatch) -> None:
+    """当PJに未昇格がゼロなら昇格導線文が出ない（他PJに未昇格があっても）（#490）。"""
+    current_slug = tmp_path.name
+
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        # 当PJ: 全件昇格済み
+        {"channel": "rephrase", "promoted": True, "pj_slug": current_slug},
+        # 他PJ: 未昇格あり
+        {"channel": "rephrase", "promoted": False, "pj_slug": "other-pj"},
+        {"channel": "esc_interrupt", "promoted": False, "pj_slug": "other-pj"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+
+    # total は全PJ集計（3件）で表示される
+    assert "3 件" in body
+    # 当PJ未昇格ゼロ → 昇格導線文なし
+    assert "今日の修正確認" not in body
+
+
 def test_builder_registered_in_observability_contract() -> None:
     from audit.observability import _OBSERVABILITY_BUILDERS
 

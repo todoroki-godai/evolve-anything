@@ -85,7 +85,11 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     観測可能性:
     - weak_signals モジュール / store 未解決 → None（沈黙）
     - store が空（レコード 0）→ None（まだ何も検出していない＝対象外で沈黙）
-    - レコードあり → チャネル別件数 + 未昇格数を併記（advisory・スコア非関与）
+    - レコードあり → 全PJ集計 total + 当PJチャネル別件数 + 当PJ未昇格数を併記（advisory・スコア非関与）
+
+    #490: by_channel 内訳・unpromoted 件数・昇格導線文は当PJ（pj_slug フィルタ）に限定する。
+    total は「（全PJ集計）」のまま残し「うち当PJ未昇格 M 件が昇格可能」と併記する。
+    daily_review が pj_slug フィルタで当PJのみ昇格する実装（daily_review.py:153）と一致させる。
     """
     try:
         from weak_signals.store import read_signals
@@ -100,15 +104,28 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     if not records:
         return None  # まだ何も溜まっていない → 沈黙
 
+    # #490: 当PJスコープの slug を pj_slug_fast で導出する（daily_review の書込側と同一関数）。
+    try:
+        from pj_slug import pj_slug_fast
+        current_slug: Optional[str] = pj_slug_fast(project_dir)
+    except Exception:
+        current_slug = None
+
+    total = len(records)
+
+    # by_channel / unpromoted は当PJのみで集計（#490）。
+    # slug が取れない場合・レコードに pj_slug が無い場合は当PJとして扱うフォールバック（後方互換）。
     by_channel: dict = {}
     unpromoted = 0
     for r in records:
+        rec_slug = r.get("pj_slug")
+        if current_slug is not None and rec_slug is not None and rec_slug != current_slug:
+            continue  # 他PJのレコードはチャネル集計から除外（pj_slug 未設定は当PJ扱い）
         ch = r.get("channel", "unknown")
         by_channel[ch] = by_channel.get(ch, 0) + 1
         if not r.get("promoted"):
             unpromoted += 1
 
-    total = len(records)
     parts = []
     for ch in ("manual_edit_after_ai", "permission_deny", "rephrase", "esc_interrupt"):
         if ch in by_channel:
@@ -119,8 +136,10 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         if ch not in _CHANNEL_LABELS:
             parts.append(f"{ch} {n}")
 
+    # #490: 昇格導線文は当PJのみの件数で表示する。
+    # total（全PJ集計）との区別を明確にするため「うち当PJ未昇格 M 件」と明示する。
     hint = (
-        f"うち未昇格 {unpromoted} 件は `/rl-anything:evolve` の今日の修正確認 phase で昇格可能。"
+        f"うち当PJ未昇格 {unpromoted} 件は `/rl-anything:evolve` の今日の修正確認 phase で昇格可能。"
         if unpromoted > 0
         else ""
     )
@@ -128,8 +147,10 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     # #476-2: read_signals() は DATA_DIR 全PJ共通ストアを集計するため (全PJ) 集計である。
     # bootstrap の pj_total は (当PJ) 集計なので、ラベルなしで並ぶと桁の食い違いに見える。
     # スコープを明示して混乱を防ぐ。
+    # by_channel 内訳は当PJのみ（#490）。
+    parts_str = f"（{' / '.join(parts)}）" if parts else ""
     body_line = (
-        f"暗黙修正シグナルが {total} 件（全PJ集計）（{' / '.join(parts)}）。"
+        f"暗黙修正シグナルが {total} 件（全PJ集計）{parts_str}。"
         + (f" {hint}" if hint else "")
         + " corrections capture が枯渇しているときの語彙非依存な代替報酬源（advisory・スコア非関与, #432）。"
     )
