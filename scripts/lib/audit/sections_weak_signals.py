@@ -125,8 +125,11 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         else ""
     )
     header = ["## Weak Signals (暗黙修正シグナル / 昇格前)", ""]
+    # #476-2: read_signals() は DATA_DIR 全PJ共通ストアを集計するため (全PJ) 集計である。
+    # bootstrap の pj_total は (当PJ) 集計なので、ラベルなしで並ぶと桁の食い違いに見える。
+    # スコープを明示して混乱を防ぐ。
     body_line = (
-        f"暗黙修正シグナルが {total} 件（{' / '.join(parts)}）。"
+        f"暗黙修正シグナルが {total} 件（全PJ集計）（{' / '.join(parts)}）。"
         + (f" {hint}" if hint else "")
         + " corrections capture が枯渇しているときの語彙非依存な代替報酬源（advisory・スコア非関与, #432）。"
     )

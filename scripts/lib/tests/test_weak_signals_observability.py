@@ -50,6 +50,21 @@ def test_builder_surfaces_channel_counts(tmp_path: Path, monkeypatch) -> None:
     assert "未昇格 3" in body
 
 
+def test_builder_labels_counts_as_all_projects(tmp_path: Path, monkeypatch) -> None:
+    """weak_signals 件数はグローバル集計なので (全PJ) ラベルを付ける（#476-2）。
+
+    bootstrap の pj_total は (当PJ) 集計でラベルなしのため、桁が違って見える混乱を防ぐ。
+    """
+    _seed(tmp_path, monkeypatch, [
+        {"channel": "rephrase", "promoted": False, "pj_slug": "a"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": "b"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "全PJ" in body
+
+
 def test_builder_includes_evolve_hint(tmp_path: Path, monkeypatch) -> None:
     """未昇格ありなら 'evolve' と '今日の修正確認' の誘導行が出る（#444）。"""
     _seed(tmp_path, monkeypatch, [

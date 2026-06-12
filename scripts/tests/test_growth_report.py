@@ -245,6 +245,23 @@ class TestBuildGrowthReport:
         )
         assert result["corrections_human"] == 0
 
+    def test_corrections_line_clarifies_human_source_meaning(self):
+        """corrections 行が「何を数えた数か」（human-confirmed のみ）を明示する（#476-4）。
+
+        corrections_human 0/10 と prune の corrections kept 39 の関係が読み取れず、何を数えて 0
+        なのか不明だった。行に human-confirmed である旨を添える。
+        """
+        from growth_report import build_growth_report
+        machine_only = [{"source": "hook", "correction_type": "improvement"} for _ in range(39)]
+        result = build_growth_report(
+            "test-pj",
+            corrections=machine_only,
+            review_result={},
+            autopromote_result={},
+        )
+        lines_text = " ".join(result["lines"])
+        assert "human" in lines_text or "人間" in lines_text
+
 
 # ── 閾値リテラル禁止テスト ────────────────────────────────────────
 

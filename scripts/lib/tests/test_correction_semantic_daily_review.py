@@ -246,3 +246,40 @@ def test_build_review_dry_run_no_write(tmp_path: Path):
     assert res["dry_run"] is True
     # build は読み取りのみ。既読集合に一切書かない（追記は apply 時のみ）。
     assert not seen.exists()
+
+
+# ─────────────────────────────────────────────────────────────────
+# build_review: bootstrap-pending シグナルを除外（#476-3 二重提示の解消）
+# ─────────────────────────────────────────────────────────────────
+def test_build_review_excludes_bootstrap_pending_keys(tmp_path: Path):
+    """bootstrap が全包含するシグナルは daily から除外する（二重提示の解消・#476-3）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    seen = _seen(tmp_path)
+    append_signals([_sig("金額がきれてる", 1)], path=ws)
+    recs = dr._read_new("rl-anything", weak_signals_path=ws, seen_keys=set())
+    key = recs[0]["signal_key"]
+
+    # bootstrap が当該 signal_key を保持している → daily からは除外される
+    res = dr.build_review(
+        "rl-anything",
+        weak_signals_path=ws,
+        seen_path=seen,
+        exclude_signal_keys={key},
+    )
+    assert res["eligible"] is False
+    assert res["groups"] == []
+
+
+def test_build_review_no_exclusion_when_set_empty(tmp_path: Path):
+    """exclude_signal_keys が空（非 bootstrap run）なら従来通り全件提示する（#476-3）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    seen = _seen(tmp_path)
+    append_signals([_sig("金額がきれてる", 1)], path=ws)
+    res = dr.build_review(
+        "rl-anything",
+        weak_signals_path=ws,
+        seen_path=seen,
+        exclude_signal_keys=set(),
+    )
+    assert res["eligible"] is True
+    assert len(res["groups"]) == 1

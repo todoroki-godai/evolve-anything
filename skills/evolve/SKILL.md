@@ -391,9 +391,11 @@ res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)
 
 前回 evolve 以降の**新規** weak_signal（channel=llm_judge・未昇格・非expired・既読集合に無いもの）を idiom 単位で確認する日次入口。reflect SKILL Step 7.7 の散文ステップからの移植（learning_skill_md_must_not_enforcement — 毎日叩かれる evolve の決定論 phase 出力を消費する）。**判定は phase 出力 `result.correction_review.daily` を読むだけで行う。**
 
+**二重提示の解消（#476-3）**: Step 6.1 で `bootstrap.is_bootstrap == True` の run では、daily phase は bootstrap groups が保持する signal_key を自動的に除外して emit する（evolve.py が `exclude_signal_keys` で配線済み）。そのため Step 6.1（まとめて確認）→ Step 6.2 を順に実行しても同じシグナルを 2 回質問しない。`daily.remaining` も bootstrap-pending を除いた「前回以降の新規」だけを数える。
+
 - `daily.eligible != True`（新規 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。`daily.eligible == False` のときのみ「今日の修正確認: 新規なし ✓」を1行表示）
 - `daily.eligible == True` → `daily.groups`（最大5件・cross-PJ 承認済み一致が先頭、続いて頻度降順 — #462）を **AskUserQuestion で y/n 確認（MUST — 最大5問を1バッチで）**。各 question に group の `idiom`（無ければ `representative`）と `evidence.count`（再発回数）を提示し、`cross_pj_confirmed` が非空なら「他 PJ（{slug一覧}）で承認済み」も添える（判断材料の提示のみで自動承認はしない）:
-  - **はい（昇格）** → 同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で昇格（CLI が promote と同時に対応 idiom を confirmed=True 化し、以後の同テキスト再発は idiom_autopromote が機械昇格する — #463。出力の `confirmed_idioms` 件数で確認可）→ **promote 成功を確認後に** `daily_review.record_reviewed(signal_keys, slug, decision="promoted", dry_run=dry_run)` で既読追記。promote が部分失敗した group は既読追記しない（取りこぼし防止 — 次回再提示される）
+  - **はい（昇格）** → 同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で昇格（CLI が promote と同時に対応 idiom を confirmed=True 化し、以後の同テキスト再発は idiom_autopromote が機械昇格する — #463。出力の `confirmed_idioms` 件数で確認可。出力の `corrections_human` は**昇格後**の human-confirmed correction 件数で、Step 9 の成長状態レポート表示はこの最新値を使う — #476-4 対話前スナップショット問題の解消）→ **promote 成功を確認後に** `daily_review.record_reviewed(signal_keys, slug, decision="promoted", dry_run=dry_run)` で既読追記。promote が部分失敗した group は既読追記しない（取りこぼし防止 — 次回再提示される）
   - **いいえ（却下）** → `daily_review.record_reviewed(signal_keys, slug, decision="rejected", dry_run=dry_run)` で既読追記（次回から再提示しない）
   - **Skip / Other / 中断** → 既読追記しない（次回再提示）。evolve 全体は完走する
 - `daily.remaining > 0` なら「ほか {remaining} グループは次回以降に提示」を1行表示する
@@ -669,8 +671,10 @@ evolve の結果を**人間が読みやすい形式**で出力する。raw な a
 > `growth_report` キーが存在しない / `error` キーが含まれる場合は表示をスキップ。
 > `lines` が空リストの場合は「成長状態: データ不足」を 1 行表示する。
 > 表示例:
-> - `corrections 7/10 — あと3件で構造化育成へ`
+> - `corrections（human-confirmed のみ）7/10 — あと3件で構造化育成へ`
 > - `今日の確認で reflect 確認 2件 / idiom 1件 が自動化対象に昇格`
+>
+> **対話前スナップショット問題の補正（#476-4・MUST）:** `growth_report` は analysis 時点で生成されるため `promoted_today` / `corrections_human` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合は、最後に実行した `rl-reflect --promote-weak` 出力の `corrections_human`（昇格後の最新値）と、その run で「はい」と答えた件数を使って、`corrections（human-confirmed のみ）{最新値}/10` と `今日の確認で {実昇格件数}件が自動化対象に昇格` を**最新値で上書き表示**する。昇格が 0 件だった場合は growth_report の値をそのまま表示する。`corrections（human-confirmed のみ）` は reflect 承認 / idiom_dict 自動昇格のみを数えた数で、prune の `corrections kept`（全 correction を数える）とは別物（行内の `（human-confirmed のみ）` ラベルで区別する）。
 
 ### Step 10: 推奨アクション（MUST — スキップ厳禁）
 

@@ -769,10 +769,22 @@ def main():
             confirmed_by="reflect_promote_weak",
             dry_run=args.dry_run,
         )
+        # #476-4: 昇格後の corrections_human を返す（growth_report の promoted_today は対話前
+        # スナップショットで固定されるため、CLI が更新後カウントを返し assistant が最新値を
+        # 表示できるようにする）。dry_run は corrections に書かないため pre-promotion 値のまま。
+        # 同じ corrections ファイル（CLI 指定 or DATA_DIR fallback）を読んで human-source を数える。
+        from correction_semantic.provenance_weight import count_human_corrections
+        if args.corrections_file:
+            _corr_path = corrections_file
+        else:
+            import rl_common as _rc
+            _corr_path = Path(_rc.DATA_DIR) / "corrections.jsonl"
+        _human = count_human_corrections(load_corrections(_corr_path))
         print(json.dumps({
             "status": "promoted_weak",
             **res,
             "confirmed_idioms": confirm_res.get("confirmed", 0),
+            "corrections_human": _human,
         }, ensure_ascii=False, indent=2))
         return
 

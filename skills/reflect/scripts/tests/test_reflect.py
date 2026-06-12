@@ -962,6 +962,36 @@ class TestWeakSignalPromotion:
         assert out["promoted"] == 1
         assert not corr.exists()
 
+    def test_promote_weak_returns_updated_human_count(self, tmp_path, capsys):
+        """--promote-weak が昇格後の corrections_human カウントを返す（#476-4 stale 表示の解消）。
+
+        growth_report の promoted_today は対話前スナップショットで固定されるため、promote CLI
+        が更新後カウントを返し assistant が最新値を表示できるようにする。
+        """
+        ws, sigs = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sigs[0].signal_key,
+                                     "--weak-signals-file", str(ws),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "promoted_weak"
+        # 昇格直後の corrections_human（source=reflect_confirmed の human-source）が反映される
+        assert out["corrections_human"] == 1
+
+    def test_promote_weak_dry_run_human_count_unchanged(self, tmp_path, capsys):
+        """dry_run では corrections に書かないので corrections_human は変動しない（#476-4）。"""
+        ws, sigs = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sigs[0].signal_key,
+                                     "--dry-run",
+                                     "--weak-signals-file", str(ws),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["dry_run"] is True
+        assert out["corrections_human"] == 0
+
 
 # --- Test: --promote-weak が idiom を confirmed 化する閉ループ（#463 配線漏れ修正） ---
 

@@ -55,3 +55,51 @@ def test_daily_review_dry_run_writes_no_seen(data_dir):
 
     seen = data_dir / "correction_review_seen.jsonl"
     assert not seen.exists(), "dry_run で既読集合が書かれた"
+
+
+def test_daily_excludes_bootstrap_pending_signals(data_dir, monkeypatch):
+    """bootstrap が is_bootstrap=True で発火する run では daily から bootstrap-pending を除外（#476-3）。
+
+    bootstrap groups の signal_keys が daily に二重提示されないことを実 run_evolve 経由で検証する。
+    """
+    import json
+
+    import weak_signals.store as ws_store
+
+    # 当該 cwd の PJ slug で未昇格 llm_judge シグナルを 1 件置く（marker 未設定 → is_bootstrap=True）
+    import sys as _sys
+    _scripts = str(_plugin_root / "skills" / "evolve" / "scripts")
+    if _scripts not in _sys.path:
+        _sys.path.insert(0, _scripts)
+    from evolve import _resolve_pj_slug
+
+    slug = _resolve_pj_slug(None)
+    store = data_dir / "weak_signals.jsonl"
+    with open(store, "w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "channel": "llm_judge",
+            "provenance": {"source_path": "/a.jsonl", "line_no": 1,
+                           "text": "金額がきれてる", "reason": "r"},
+            "detected_at": "2026-06-10T00:00:00+00:00",
+            "session_id": "s1",
+            "pj_slug": slug,
+            "promoted": False,
+            "signal_key": "dup-key-1",
+            "expired": False,
+        }) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
+
+    result = run_evolve(dry_run=True)
+    cr = result.get("correction_review", {})
+    bootstrap = cr.get("bootstrap", {})
+    daily = cr.get("daily", {})
+
+    # bootstrap が当該シグナルを保持していれば daily からは除外される
+    if bootstrap.get("is_bootstrap"):
+        bootstrap_keys = set()
+        for g in bootstrap.get("groups", []):
+            bootstrap_keys.update(g.get("signal_keys") or [])
+        daily_keys = set()
+        for g in daily.get("groups", []):
+            daily_keys.update(g.get("signal_keys") or [])
+        assert not (bootstrap_keys & daily_keys), "bootstrap と daily が同一 signal_key を二重提示している"

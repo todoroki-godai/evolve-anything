@@ -268,6 +268,7 @@ def build_review(
     idioms_path: Optional[Path] = None,
     seen_path: Optional[Path] = None,
     max_groups: int = 5,
+    exclude_signal_keys: Optional[Set[str]] = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """前回 evolve 以降の新規 unpromoted weak_signal を idiom 単位 group 化して返す。
@@ -291,11 +292,22 @@ def build_review(
 
     build_review は読み取りのみ（既読集合に書かない）。追記は SKILL.md が apply 時に
     record_reviewed を呼ぶ（promote 確定後）。
+
+    exclude_signal_keys（#476-3 二重提示の解消）: bootstrap が is_bootstrap=True で発火する
+    run では、bootstrap の groups が daily の対象シグナルを signal_key 単位で全包含している。
+    SKILL.md 手順通り Step 6.1（bootstrap まとめて確認）→ Step 6.2（daily）を実行すると同じ
+    シグナルを 2 回質問することになるため、bootstrap-pending の signal_key をここで除外する。
+    None / 空 set（非 bootstrap run）なら従来通り全件提示する。
     """
     seen_keys = read_reviewed_keys(seen_path)
     new_records = _read_new(
         pj_slug, weak_signals_path=weak_signals_path, seen_keys=seen_keys
     )
+    # #476-3: bootstrap-pending の signal_key を daily から除外し二重提示を防ぐ。
+    if exclude_signal_keys:
+        new_records = [
+            r for r in new_records if r.get("signal_key") not in exclude_signal_keys
+        ]
     idioms = read_idioms(idioms_path)
     phys_to_idiom = _idiom_by_phys(idioms, pj_slug)
 

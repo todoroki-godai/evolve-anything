@@ -1231,11 +1231,19 @@ def run_evolve(
     # #443 bootstrap と同じ correction_review dict に相乗りさせる（setdefault で同居）。
     # build_review は読み取りのみ。既読追記は SKILL.md の apply（record_reviewed）に委ねる。
     # dry_run でも build（読み取りのみ）は走るが既読集合を一切書かない（最下層 write ゲート）。
+    # #476-3: bootstrap が is_bootstrap=True で発火する run では、bootstrap groups が daily の
+    # 対象シグナルを signal_key 単位で全包含している。Step 6.1→6.2 を順に実行すると同じシグナルを
+    # 2 回質問するため、bootstrap-pending の signal_key を daily から除外する（二重提示の解消）。
     try:
         from correction_semantic import daily_review as _dr
         _dr_slug = _resolve_pj_slug(project_dir)
+        _bootstrap = (result.get("correction_review") or {}).get("bootstrap") or {}
+        _bootstrap_keys: set = set()
+        if _bootstrap.get("is_bootstrap"):
+            for _g in (_bootstrap.get("groups") or []):
+                _bootstrap_keys.update(_g.get("signal_keys") or [])
         result.setdefault("correction_review", {})["daily"] = _dr.build_review(
-            _dr_slug, dry_run=dry_run
+            _dr_slug, exclude_signal_keys=_bootstrap_keys, dry_run=dry_run
         )
     except Exception as e:
         result.setdefault("correction_review", {})["daily"] = {"error": str(e)}

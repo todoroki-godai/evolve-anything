@@ -77,14 +77,17 @@ def build_growth_report(
     lines: List[str] = []
 
     # corrections 進捗行
+    # #476-4: corrections_human が「何を数えた数か」を明示する。これは prune の
+    # 「corrections kept」（全 correction を数える）とは別物で、human-confirmed（reflect 承認 /
+    # idiom_dict 自動昇格・機械生成 hook/backfill は除外）のみを数えたフェーズ昇格カウントである。
     if remaining > 0:
         lines.append(
-            f"corrections {human_count}/{target} — "
+            f"corrections（human-confirmed のみ）{human_count}/{target} — "
             f"あと{remaining}件で{PHASE_DISPLAY_NAMES[Phase.STRUCTURED_NURTURING]['ja']}へ"
         )
     else:
         lines.append(
-            f"corrections {human_count}/{target} — "
+            f"corrections（human-confirmed のみ）{human_count}/{target} — "
             f"達成・次フェーズ条件は sessions/coherence"
         )
 
