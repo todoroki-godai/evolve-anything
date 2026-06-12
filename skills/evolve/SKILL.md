@@ -377,9 +377,11 @@ _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from correction_semantic import bootstrap_backlog
 
-# slug は resolve_slug（git-common-dir 親で正規化, ADR-031）。worktree でも本体 PJ slug に揃う。
-from optimize_history_store import resolve_slug
-slug = resolve_slug()
+# #492: slug は phase 出力（build が実際に read に使った slug）をそのまま渡す。
+# ここで resolve_slug() を再導出すると、評価が project_dir != cwd や repo subdir / worktree
+# から起動された場合に build と別 slug を解決し、marker が別ファイルになって bootstrap が
+# 永久再提示される（read/write split-brain）。read=write の slug を構造的に保証する。
+slug = result["correction_review"]["bootstrap"]["slug"]
 
 # 「まとめて確認」完了時・「TTL 失効に任せる」選択時のどちらでも呼ぶ。
 # dry_run=True（ドライラン実行時）なら marker を書かない。
@@ -409,8 +411,9 @@ import os, sys
 _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from correction_semantic import daily_review
-from optimize_history_store import resolve_slug
-slug = resolve_slug()
+# #492: slug は phase 出力（build_review が実際に read に使った slug）をそのまま渡す。
+# resolve_slug() の再導出は read/write split-brain（既読除外不発）の原因になる。
+slug = result["correction_review"]["daily"]["slug"]
 
 # promote 成功を確認後に既読追記（はい＝昇格）。decision はキーワード専用。
 res = daily_review.record_reviewed(signal_keys, slug, decision="promoted", dry_run=dry_run)

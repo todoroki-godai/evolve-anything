@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
 _STARVATION_THRESHOLD = 0.10
 
 
-def _llm_judge_count() -> int:
+def _llm_judge_count(project_dir: Optional[Path] = None) -> int:
     """**当 PJ slug の** weak_signals llm_judge channel 件数を返す（#476-1 / #476 fixup）。
 
     capture_rate は hook が書く corrections.jsonl のみを分子にするが、correction の
@@ -25,9 +25,14 @@ def _llm_judge_count() -> int:
 
     **slug スコープ必須（全PJ共通 DATA_DIR pitfall）**: weak_signals.jsonl は全 PJ 共通
     ストアなので、PJ フィルタなしで数えると hook N（当PJ window 集計）と桁が混在し、さらに
-    他 PJ の llm_judge シグナルが当 PJ の枯渇警告を誤って抑制する。bootstrap_backlog と同じ
-    `r.get("pj_slug")` 突合で当 PJ slug に限定する。slug 導出は optimize_history_store.resolve_slug
-    （worktree 安全・git-common-dir 親で本体 slug に正規化）に合わせる。
+    他 PJ の llm_judge シグナルが当 PJ の枯渇警告を誤って抑制する。
+
+    **#492: 書込側と同じ slug 関数に揃える。** weak_signals の llm_judge channel は
+    evolve.py が ``_resolve_pj_slug``（= ``pj_slug_fast`` / ``utterance_archive.pj_slug_from_cwd``
+    の文字列方式）で書く。読み側がここで git-common-dir 方式（旧 ``resolve_slug``）かつ
+    引数なし=cwd で導出すると、評価が ``project_dir != cwd`` や worktree から起動された
+    場合に書込 slug と食い違い、当 PJ の llm_judge を 0 と誤読する（read/write split-brain）。
+    ``project_dir`` を引数で受け、``pj_slug_fast`` で書込側と同一の slug に揃える。
 
     store / slug 未解決 / 読込失敗は 0（防御的・沈黙でなく従来挙動へフォールバック）。
     """
@@ -36,9 +41,11 @@ def _llm_judge_count() -> int:
     except ImportError:
         return 0
     try:
-        from optimize_history_store import resolve_slug
-        slug = resolve_slug()
+        from pj_slug import pj_slug_fast
+        slug = pj_slug_fast(project_dir if project_dir is not None else Path.cwd())
     except Exception:
+        slug = None
+    if not slug:
         return 0
     try:
         return sum(
@@ -113,7 +120,8 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
     # #476-1: capture を channel 別に表示する。hook 系（corrections.jsonl）は capture_rate の
     # 分子、意味判定系（weak_signals の llm_judge channel）は別レーン。両方を併記して
     # 「hook 0% だが llm_judge が大量捕捉」の実態を可視化する。
-    llm_judge = _llm_judge_count()
+    # #492: project_dir を渡し、weak_signals 書込側（pj_slug_fast）と同じ slug で照合する。
+    llm_judge = _llm_judge_count(project_dir)
 
     header = ["## Correction Capture (報酬入力の捕捉率)", ""]
     detail = (

@@ -196,6 +196,55 @@ class TestSubagentWorktree:
         assert "worktree" not in record
 
 
+class TestProjectFieldWorktreeNormalization:
+    """#492: hook 書込側の project フィールドが worktree cwd でも本体 repo 名になる。
+
+    旧実装は素の basename だったため worktree cwd（.../.claude/worktrees/<name>）で
+    worktree 名（feedback / bots 等）が project に固定され、読み側で本体 repo 名に
+    復元できず当 PJ フィルタから恒久的に漏れていた（#489 レビュー）。
+    """
+
+    def test_project_name_from_dir_normalizes_worktree(self):
+        """worktree cwd → project は本体 repo 名（切り詰め basename）。"""
+        cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-many"
+        assert rl_common.project_name_from_dir(cwd) == "rl-anything"
+
+    def test_project_name_from_dir_main_repo_unchanged(self):
+        """本体 repo の cwd は従来どおり basename。"""
+        assert rl_common.project_name_from_dir("/Users/x/work/ai-daily-report") == "ai-daily-report"
+
+    def test_observe_writes_normalized_project(self, patch_data_dir, monkeypatch):
+        """observe hook の usage.jsonl project が worktree cwd でも本体名で書かれる。"""
+        wt_cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", wt_cwd)
+        event = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "evolve", "args": ""},
+            "tool_result": {"is_error": False},
+            "session_id": "sess-wt-proj",
+        }
+        observe.handle_post_tool_use(event)
+
+        usage_file = patch_data_dir / "usage.jsonl"
+        record = json.loads(usage_file.read_text().strip().splitlines()[0])
+        assert record["project"] == "rl-anything"
+
+    def test_session_summary_writes_normalized_project(self, patch_data_dir, monkeypatch):
+        """session_summary の sessions レコード project が worktree cwd でも本体名で書かれる。"""
+        wt_cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", wt_cwd)
+        event = {"session_id": "sess-wt-summary"}
+        session_summary.handle_stop(event)
+
+        records = session_store.query()
+        assert len(records) == 1
+        assert records[0]["project"] == "rl-anything"
+
+    def test_migration_date_constant_exists(self):
+        """移行日定数が公開され #478 と同型で記録されている。"""
+        assert rl_common.PJ_SLUG_NORMALIZATION_DATE == "2026-06-12"
+
+
 # --- v2.1.78: instructions_loaded.py テスト ---
 
 import instructions_loaded

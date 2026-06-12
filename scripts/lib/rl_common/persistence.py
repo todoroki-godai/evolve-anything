@@ -14,9 +14,35 @@ try:
 except ImportError:
     _HAVE_FCNTL = False
 
+# #492: PJ slug 正規化（書込側 basename 固定の根治）の移行日。これより前に書かれた
+# sessions.jsonl / usage.jsonl の project は worktree 名（feedback / bots 等）で固定されて
+# おり、フルパスが無いため本体 repo 名に遡及復元できない（#489 レビュー）。以後の書込は
+# worktree cwd でも本体 repo 名で記録される。#478 の USAGE_RECORDING_FIX_DATE と同型。
+PJ_SLUG_NORMALIZATION_DATE = "2026-06-12"
+
 
 def project_name_from_dir(project_dir: str) -> str:
-    """プロジェクトディレクトリパスから末尾のディレクトリ名を返す。"""
+    """プロジェクトディレクトリパスから worktree 安全な PJ slug を返す（#492）。
+
+    旧実装は素の basename（``Path(project_dir).name``）だったため、worktree cwd
+    （``.../.claude/worktrees/<name>``）では worktree 名（feedback / bots 等）が書かれ、
+    本体 repo セッションと別 PJ 扱いになっていた（sessions/usage の project 欠落・#489）。
+
+    pj_slug.pj_slug_fast に委譲し、``/.claude/worktrees/`` を切り詰めて本体 repo 名へ
+    正規化する。hot path（毎発火 hook）から呼ばれるため subprocess を使わない軽量版を使う。
+    解決不能（空 path 等）の場合は素の basename にフォールバックする。
+    """
+    try:
+        _lib = str(Path(__file__).resolve().parent.parent)
+        if _lib not in sys.path:
+            sys.path.insert(0, _lib)
+        from pj_slug import pj_slug_fast
+
+        slug = pj_slug_fast(project_dir)
+        if slug:
+            return slug
+    except Exception:
+        pass
     return Path(project_dir).name
 
 

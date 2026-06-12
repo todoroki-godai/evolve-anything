@@ -122,7 +122,6 @@ def test_advisory_only_no_score_field(tmp_path, monkeypatch):
 
 # ── #476-1: channel 別表示で llm_judge 大量捕捉時の誤「枯渇」警告を解消 ──────
 
-_THIS_SLUG = "rl-anything"
 _OTHER_SLUG = "other-pj"
 
 
@@ -130,22 +129,23 @@ def _seed_weak_signals(tmp_path, monkeypatch, *, this_pj=0, other_pj=0):
     """weak_signals.jsonl に当PJ / 他PJ の llm_judge レコードを置く（slug スコープ検証用）。
 
     #476 fixup: weak_signals.jsonl は全PJ共通ストアなので当PJ slug でフィルタする。
-    resolve_slug を当PJ slug に固定し、当PJ / 他PJ のレコードを混在させて検証できるようにする。
+    #492: _llm_judge_count は書込側と同じ pj_slug_fast(project_dir) で当PJ slug を導出する。
+    builder には project_dir=tmp_path を渡すので、当PJ slug は pj_slug_fast(tmp_path)
+    （= tmp_path.name）。これに合わせて当PJ レコードの pj_slug を tmp_path.name にする。
     """
     import weak_signals.store as ws_store
+    from pj_slug import pj_slug_fast
 
+    this_slug = pj_slug_fast(tmp_path)
     store = tmp_path / "weak_signals.jsonl"
     with open(store, "w", encoding="utf-8") as f:
         for i in range(this_pj):
             f.write(json.dumps({"channel": "llm_judge", "promoted": False,
-                                "signal_key": f"a{i}", "pj_slug": _THIS_SLUG}) + "\n")
+                                "signal_key": f"a{i}", "pj_slug": this_slug}) + "\n")
         for i in range(other_pj):
             f.write(json.dumps({"channel": "llm_judge", "promoted": False,
                                 "signal_key": f"b{i}", "pj_slug": _OTHER_SLUG}) + "\n")
     monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
-    # _llm_judge_count は optimize_history_store.resolve_slug を呼ぶ。当PJ slug に固定する。
-    import optimize_history_store
-    monkeypatch.setattr(optimize_history_store, "resolve_slug", lambda cwd=None: _THIS_SLUG)
 
 
 def test_no_starvation_warning_when_llm_judge_captures(tmp_path, monkeypatch):

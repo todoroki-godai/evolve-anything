@@ -130,6 +130,7 @@ from .detection import (  # noqa: F401, E402
 
 # project 識別子 / JSONL 追記 — Slice 4
 from .persistence import (  # noqa: F401, E402
+    PJ_SLUG_NORMALIZATION_DATE,
     append_jsonl,
     extract_worktree_info,
     get_preceding_tool_calls,

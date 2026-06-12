@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -48,29 +47,13 @@ def resolve_slug(cwd: Optional[Path] = None) -> str:
     worktree 安全: `git rev-parse --git-common-dir` で本体 repo の .git を取り、
     その親ディレクトリ名を slug とする。worktree から呼んでも本体 slug に正規化される。
     git repo 外なら UNATTRIBUTED_SLUG。
+
+    #492: 導出ロジックは ``pj_slug.resolve_pj_slug`` に単一ソース化した。本関数は
+    後方互換のための thin wrapper（既存呼び出し元の一斉書き換えを避ける段階移行）。
     """
-    cwd_path = Path(cwd) if cwd is not None else Path.cwd()
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
-            cwd=str(cwd_path),
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-        return UNATTRIBUTED_SLUG
+    from pj_slug import resolve_pj_slug
 
-    if not out:
-        return UNATTRIBUTED_SLUG
-
-    common_dir = Path(out)
-    if not common_dir.is_absolute():
-        common_dir = (cwd_path / common_dir).resolve()
-    # common_dir は本体 repo の .git（または bare repo path）。親が repo root。
-    repo_root = common_dir.parent
-    slug = repo_root.name
-    return slug or UNATTRIBUTED_SLUG
+    return resolve_pj_slug(cwd)
 
 
 def history_path(slug: str) -> Path:

@@ -61,6 +61,7 @@ class Utterance:
 
 
 # worktree セッションを本体 repo に帰属させるためのマーカー（cwd 中で切る位置）。
+# #492: 切り詰めロジックは pj_slug.pj_slug_fast に移動。本定数は後方互換 re-export 用に残す。
 _WORKTREE_MARKER = "/.claude/worktrees/"
 
 
@@ -76,15 +77,19 @@ def pj_slug_from_cwd(cwd: Optional[str]) -> Optional[str]:
     2. pj_slug = 正規化後パスの basename
 
     cwd が None / 空なら None（呼び出し側が encoded dir 名へ fallback する）。
+
+    #492: 導出ロジックは ``pj_slug.pj_slug_fast`` に単一ソース化した。本関数は
+    後方互換のための thin wrapper（既存呼び出し元の一斉書き換えを避ける段階移行）。
+    hot path 互換のため subprocess を呼ばない軽量版へ委譲する。
     """
-    if not cwd:
-        return None
-    path = cwd
-    marker_idx = path.find(_WORKTREE_MARKER)
-    if marker_idx != -1:
-        path = path[:marker_idx]  # 本体 repo root まで切り詰め
-    base = Path(path).name
-    return base or None
+    import sys as _sys
+
+    _lib = str(Path(__file__).resolve().parent.parent)
+    if _lib not in _sys.path:
+        _sys.path.insert(0, _lib)
+    from pj_slug import pj_slug_fast
+
+    return pj_slug_fast(cwd)
 
 
 def pj_slug_from_dir_name(dir_name: str) -> str:
