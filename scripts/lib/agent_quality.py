@@ -19,11 +19,13 @@ from lib.agent_quality_catalog import (
     ANTI_PATTERNS,
     BEST_PRACTICES,
     BLOAT_LINE_THRESHOLD,
+    EXACT_MODEL_ID_PATTERN,
     KITCHEN_SINK_HEADING_THRESHOLD,
     KNOWLEDGE_HARDCODING_LOW_THRESHOLD,
     KNOWLEDGE_HARDCODING_MEDIUM_THRESHOLD,
     KNOWLEDGE_HARDCODING_PATTERNS,
     MIN_DESCRIPTION_LENGTH,
+    MODEL_ALIASES,
     OUTPUT_SPEC_MIN_MATCHES,
     OUTPUT_SPEC_PATTERNS,
     VAGUE_KEYWORD_THRESHOLD,
@@ -193,6 +195,18 @@ def check_quality(agent: AgentInfo) -> Dict[str, Any]:
         })
         score -= 0.05
 
+    pin_result = check_model_pin(agent)
+    if pin_result["pinned"]:
+        issues.append({
+            "type": "exact_model_id_pin",
+            "detail": (
+                f"model: {pin_result['current_value']!r} は exact ID pin — "
+                f"推奨エイリアス: {pin_result['recommended_alias']!r}"
+            ),
+            "severity": "medium",
+        })
+        score -= 0.1
+
     for bp_name, bp_info in BEST_PRACTICES.items():
         if not _has_section(agent.content, bp_info["detect_patterns"]):
             suggestions.append({
@@ -211,6 +225,62 @@ def check_quality(agent: AgentInfo) -> Dict[str, Any]:
         "suggestions": suggestions,
         "line_count": agent.line_count,
     }
+
+
+def check_model_pin(agent: AgentInfo) -> Dict[str, Any]:
+    """frontmatter の model: フィールドが exact model ID pin かを検査する。
+
+    Returns:
+        {
+            "pinned": bool,
+            "current_value": str | None,  # pin されている場合の現在値
+            "file": str,                   # エージェントファイルパス
+            "recommended_alias": str | None,  # 推奨エイリアス（pinned=True 時のみ）
+        }
+    """
+    if not agent.frontmatter:
+        if agent.path.exists():
+            agent.frontmatter = parse_frontmatter(agent.path)
+        else:
+            return {"pinned": False, "current_value": None, "file": str(agent.path), "recommended_alias": None}
+
+    model_value = agent.frontmatter.get("model")
+    if model_value is None:
+        return {"pinned": False, "current_value": None, "file": str(agent.path), "recommended_alias": None}
+
+    model_str = str(model_value).strip()
+
+    # エイリアス（完全一致）はスキップ
+    if model_str.lower() in MODEL_ALIASES:
+        return {"pinned": False, "current_value": model_str, "file": str(agent.path), "recommended_alias": None}
+
+    # exact model ID パターン: claude- 始まりかつバージョン数字を含む
+    if EXACT_MODEL_ID_PATTERN.match(model_str):
+        recommended = _suggest_alias(model_str)
+        return {
+            "pinned": True,
+            "current_value": model_str,
+            "file": str(agent.path),
+            "recommended_alias": recommended,
+        }
+
+    return {"pinned": False, "current_value": model_str, "file": str(agent.path), "recommended_alias": None}
+
+
+def _suggest_alias(model_id: str) -> str:
+    """exact model ID から推奨エイリアスを返す。
+
+    例:
+        claude-opus-4-8   -> "opus"
+        claude-sonnet-4-6 -> "sonnet"
+        claude-haiku-4-0  -> "haiku"
+        claude-fable-1-0  -> "fable"
+    """
+    lower = model_id.lower()
+    for alias in ("opus", "sonnet", "haiku", "fable"):
+        if alias in lower:
+            return alias
+    return "sonnet"  # フォールバック
 
 
 def _count_vague_keywords(content: str) -> int:

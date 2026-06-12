@@ -25,6 +25,7 @@ from lib.agent_quality import (
     check_upstream,
     scan_agents,
 )
+from lib.agent_quality import check_model_pin  # noqa: F401 — new in #449
 
 
 # --- Fixtures ---
@@ -537,6 +538,226 @@ class TestCheckUpstream:
 
         assert result["status"] == "error"
         assert not state_file.exists()
+
+
+# --- check_model_pin tests ---
+
+
+class TestCheckModelPin:
+    """check_model_pin() のテスト: exact model ID pin 検出。"""
+
+    def test_exact_id_pin_detected(self, global_agents_dir, tmp_path):
+        """exact model ID（claude-opus-4-8 等）は stale リスク警告として検出される。"""
+        content = """\
+---
+name: pinned-bot
+description: An agent that uses an exact model ID pin.
+tools: Read
+model: claude-opus-4-8
+---
+
+# Pinned Bot
+
+1. Do this
+2. Do that
+3. Review output
+
+Provide feedback organized by priority.
+Include specific examples of how to fix issues.
+"""
+        path = _write_agent(global_agents_dir, "pinned", content)
+        agent = AgentInfo(name="pinned", path=path, scope="global")
+
+        result = check_model_pin(agent)
+
+        assert result["pinned"] is True
+        assert "claude-opus-4-8" in result["current_value"]
+        assert result["file"] == str(path)
+        assert result["recommended_alias"] is not None
+
+    def test_exact_id_pin_with_version_number(self, global_agents_dir, tmp_path):
+        """claude- 始まりかつバージョン数字付きのパターンを検出する。"""
+        content = """\
+---
+name: versioned-bot
+description: Uses a versioned model ID like claude-sonnet-4-6.
+tools: Read
+model: claude-sonnet-4-6
+---
+
+# Versioned Bot
+
+1. Step one
+2. Step two
+3. Step three
+
+Provide specific, actionable feedback.
+"""
+        path = _write_agent(global_agents_dir, "versioned", content)
+        agent = AgentInfo(name="versioned", path=path, scope="global")
+
+        result = check_model_pin(agent)
+
+        assert result["pinned"] is True
+        assert "claude-sonnet-4-6" in result["current_value"]
+
+    def test_alias_not_flagged_sonnet(self, global_agents_dir, tmp_path):
+        """エイリアス 'sonnet' は警告しない。"""
+        path = _write_agent(global_agents_dir, "alias-sonnet", _good_agent())
+        agent = AgentInfo(name="alias-sonnet", path=path, scope="global")
+
+        result = check_model_pin(agent)
+
+        assert result["pinned"] is False
+
+    def test_alias_not_flagged_opus(self, global_agents_dir, tmp_path):
+        """エイリアス 'opus' は警告しない。"""
+        content = """\
+---
+name: opus-bot
+description: An agent using the opus alias without version number.
+tools: Read
+model: opus
+---
+
+# Opus Bot
+
+1. Step one
+2. Step two
+3. Step three
+
+Provide specific, actionable feedback.
+"""
+        path = _write_agent(global_agents_dir, "opus-alias", content)
+        agent = AgentInfo(name="opus-alias", path=path, scope="global")
+
+        result = check_model_pin(agent)
+
+        assert result["pinned"] is False
+
+    def test_alias_not_flagged_haiku(self, global_agents_dir, tmp_path):
+        """エイリアス 'haiku' は警告しない。"""
+        content = """\
+---
+name: haiku-bot
+description: An agent using haiku alias for quick tasks.
+tools: Read
+model: haiku
+---
+
+# Haiku Bot
+
+1. Step one
+2. Step two
+3. Step three
+
+Provide feedback on results.
+"""
+        path = _write_agent(global_agents_dir, "haiku-alias", content)
+        agent = AgentInfo(name="haiku-alias", path=path, scope="global")
+
+        result = check_model_pin(agent)
+
+        assert result["pinned"] is False
+
+    def test_alias_not_flagged_inherit(self, global_agents_dir, tmp_path):
+        """エイリアス 'inherit' は警告しない。"""
+        content = """\
+---
+name: inherit-bot
+description: An agent that inherits the model from the parent context.
+tools: Read
+model: inherit
+---
+
+# Inherit Bot
+
+1. Step one
+2. Step two
+3. Step three
+
+Provide feedback on results.
+"""
+        path = _write_agent(global_agents_dir, "inherit-alias", content)
+        agent = AgentInfo(name="inherit-alias", path=path, scope="global")
+
+        result = check_model_pin(agent)
+
+        assert result["pinned"] is False
+
+    def test_no_model_field_not_flagged(self, global_agents_dir, tmp_path):
+        """model: 未指定（フィールドなし）は警告しない。"""
+        path = _write_agent(global_agents_dir, "no-model", _minimal_agent())
+        agent = AgentInfo(name="no-model", path=path, scope="global")
+
+        result = check_model_pin(agent)
+
+        assert result["pinned"] is False
+
+    def test_fable_alias_not_flagged(self, global_agents_dir, tmp_path):
+        """エイリアス 'fable' は警告しない。"""
+        content = """\
+---
+name: fable-bot
+description: An agent using the fable alias for creative tasks.
+tools: Read
+model: fable
+---
+
+# Fable Bot
+
+1. Step one
+2. Step two
+3. Step three
+
+Provide feedback on results.
+"""
+        path = _write_agent(global_agents_dir, "fable-alias", content)
+        agent = AgentInfo(name="fable-alias", path=path, scope="global")
+
+        result = check_model_pin(agent)
+
+        assert result["pinned"] is False
+
+    def test_check_quality_includes_model_pin_warning(self, global_agents_dir, tmp_path):
+        """check_quality() の issues に exact_model_id_pin が含まれる。"""
+        content = """\
+---
+name: pinned-quality
+description: An agent that uses exact model ID in quality check context.
+tools: Read
+model: claude-haiku-4-0
+---
+
+# Pinned Quality Bot
+
+1. Do this first
+2. Do that second
+3. Review results
+
+Provide feedback organized by priority.
+Include specific examples of how to fix issues.
+"""
+        path = _write_agent(global_agents_dir, "pinned-quality", content)
+        agent = AgentInfo(name="pinned-quality", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "exact_model_id_pin" in issue_types
+        issue = next(i for i in result["issues"] if i["type"] == "exact_model_id_pin")
+        assert issue["severity"] == "medium"
+        assert "claude-haiku-4-0" in issue["detail"]
+
+    def test_check_quality_no_model_pin_warning_for_alias(self, global_agents_dir, tmp_path):
+        """check_quality() でエイリアス使用時は exact_model_id_pin が出ない。"""
+        path = _write_agent(global_agents_dir, "clean-model", _good_agent())
+        agent = AgentInfo(name="clean-model", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "exact_model_id_pin" not in issue_types
 
 
 # --- Constants tests ---

@@ -51,6 +51,17 @@ KNOWLEDGE_HARDCODING_PATTERNS = [
 KNOWLEDGE_HARDCODING_LOW_THRESHOLD = 3
 KNOWLEDGE_HARDCODING_MEDIUM_THRESHOLD = 10
 
+# exact model ID pin 検出
+# claude- 始まりかつバージョン数字（例: claude-opus-4-8, claude-sonnet-4-6）を含む
+# エイリアス（opus/sonnet/haiku/fable/inherit 等）はマッチしない
+EXACT_MODEL_ID_PATTERN = re.compile(
+    r"^claude-[a-z]+-\d+",
+    re.IGNORECASE,
+)
+
+# エイリアス（エイリアスと判定されるモデル名。完全一致チェックに使用）
+MODEL_ALIASES = frozenset({"opus", "sonnet", "haiku", "fable", "inherit"})
+
 # JIT識別子戦略の検出パターン
 JIT_PATTERNS = [
     r"(?i)(read|grep|bash|確認|参照).*(before|前に|必ず|always)",
@@ -101,6 +112,10 @@ ANTI_PATTERNS = {
     "knowledge_hardcoding": {
         "description": "バージョン番号・具体パス・プロジェクト固有名詞をハードコード（陳腐化リスク）",
         "severity": "low",
+    },
+    "exact_model_id_pin": {
+        "description": "model フィールドに exact ID（claude-*-N 形式）を pin — 新モデルリリース後も古い ID に固定される silent stale リスク",
+        "severity": "medium",
     },
 }
 

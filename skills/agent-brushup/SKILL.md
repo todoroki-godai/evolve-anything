@@ -67,6 +67,7 @@ agents = scan_agents(project_root=Path("$(pwd)"))
 ### 検出された問題
 - **[agent-name]** missing_frontmatter: YAML frontmatter が欠落
 - **[agent-name]** knowledge_hardcoding: バージョン番号・具体パス・固有名詞のハードコード（陳腐化リスク）
+- **[agent-name]** exact_model_id_pin: model フィールドに exact ID（claude-*-N 形式）を pin — 新モデルリリース後に silent stale になるリスク。推奨エイリアスに置き換えること
 
 ### ベストプラクティス提案
 - **[agent-name]** に success_metrics セクション追加を推奨
