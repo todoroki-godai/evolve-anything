@@ -119,8 +119,46 @@ def _in_window(ts: str, since: str) -> bool:
     return ts.replace("Z", "+00:00") >= since
 
 
+def _normalize_pj(value: Optional[str]) -> Optional[str]:
+    """PJ 識別子（フルパス or basename）を worktree 安全な slug に正規化する（#489）。
+
+    既存の共有関数 ``utterance_archive.extractor.pj_slug_from_cwd`` に寄せる
+    （新しい比較方式を発明しない。slug 1関数化 #492 にそのまま乗る）。これにより
+    ``/x/rl-anything/.claude/worktrees/feedback`` のような worktree セッションの
+    フルパスが本体 repo 名 ``rl-anything`` に正規化され、本体⇔worktree 間の取りこぼし
+    （undercount）を防ぐ。フルパスを持たない basename だけのレコード（worktree slug の
+    痕跡が ``project=feedback`` 等で固定済み）はフルパスが無いため pj_slug_from_cwd の
+    素通し（basename）と同じく原値のまま残る — 復元不能な情報欠落であり本関数の責務外。
+    import 不能環境では basename フォールバック。
+    """
+    if not value:
+        return None
+    try:
+        from utterance_archive.extractor import pj_slug_from_cwd
+        return pj_slug_from_cwd(value)
+    except ImportError:  # pragma: no cover - パス未解決時のフォールバック
+        return Path(str(value)).name or None
+
+
+def _project_match(rec: Dict[str, Any], project: Optional[str]) -> bool:
+    """レコードが当PJ slug に属するか（#489, worktree 安全）。
+
+    project は呼び出し側で ``_normalize_pj`` 済みの当PJ slug（None なら全PJ対象 =
+    後方互換 cross-PJ 集計）。PJ 識別フィールドはストアごとに異なる:
+    corrections.jsonl は ``project_path``（フルパス）、sessions.jsonl は ``project``
+    （basename）。いずれも ``_normalize_pj`` で worktree 安全 slug に正規化してから
+    突合する。どの識別フィールドも持たない（未帰属）レコードは寛容に include する
+    （他PJの誤混入でなく属性欠落なので当PJ集計から除外しない）。
+    """
+    if project is None:
+        return True
+    raw = rec.get("project_path") or rec.get("project") or rec.get("project_name")
+    slug = _normalize_pj(raw)
+    return slug == project or slug is None
+
+
 def correction_recurrence_rate(
-    days: int = 30, *, data_dir: Optional[Path] = None
+    days: int = 30, *, data_dir: Optional[Path] = None, project: Optional[str] = None
 ) -> Tuple[Optional[float], Dict[str, Any]]:
     """同型 correction（correction_type）が複数セッションに跨って再発した率。
 
@@ -128,12 +166,15 @@ def correction_recurrence_rate(
     分子 = そのうち 2 つ以上の distinct session_id で発生した correction_type 数
 
     値が高いほど「同じ手戻りを繰り返している」= 悪い。
+
+    project（PJ basename）指定時は当PJ分のみを対象にする（#489）。None なら全PJ集計
+    （cross-PJ 用途の後方互換）。
     """
     base = data_dir if data_dir is not None else DATA_DIR
     since = _iso_days_ago(days)
     records = [
         r for r in _read_jsonl(base / "corrections.jsonl")
-        if _in_window(_ts_of(r, "timestamp"), since)
+        if _in_window(_ts_of(r, "timestamp"), since) and _project_match(r, project)
     ]
     if not records:
         return None, {"reason": "no_data", "store": "corrections.jsonl", "window_days": days}
@@ -163,7 +204,7 @@ def correction_recurrence_rate(
 
 
 def first_try_success_rate(
-    days: int = 30, *, data_dir: Optional[Path] = None
+    days: int = 30, *, data_dir: Optional[Path] = None, project: Optional[str] = None
 ) -> Tuple[Optional[float], Dict[str, Any]]:
     """エラーが 1 件も発生しなかったセッションの割合（error→retry 連鎖なし）。
 
@@ -171,12 +212,15 @@ def first_try_success_rate(
     分子 = error_count == 0 のセッション数
 
     値が高いほど「一発で通った」= 良い。
+
+    project（PJ basename）指定時は当PJ分のみを対象にする（#489）。None なら全PJ集計。
     """
     base = data_dir if data_dir is not None else DATA_DIR
     since = _iso_days_ago(days)
     records = [
         r for r in read_sessions(base)
         if _in_window(_ts_of(r, "timestamp", "first_timestamp"), since)
+        and _project_match(r, project)
     ]
     if not records:
         return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
@@ -215,7 +259,8 @@ def _has_edit_burst(tool_sequence: List[str], min_consecutive: int) -> bool:
 
 
 def rework_rate(
-    days: int = 30, *, min_consecutive: int = 3, data_dir: Optional[Path] = None
+    days: int = 30, *, min_consecutive: int = 3, data_dir: Optional[Path] = None,
+    project: Optional[str] = None,
 ) -> Tuple[Optional[float], Dict[str, Any]]:
     """編集ありセッションのうち、編集バースト（検証なし連続編集）を含む割合。
 
@@ -226,12 +271,15 @@ def rework_rate(
 
     近似の限界（ADR-046）: ストアに編集対象ファイル ID が無いため厳密な「同一ファイル
     N ターン内再編集」は算出不能。tool_sequence 上の編集バーストを proxy とする。
+
+    project（PJ basename）指定時は当PJ分のみを対象にする（#489）。None なら全PJ集計。
     """
     base = data_dir if data_dir is not None else DATA_DIR
     since = _iso_days_ago(days)
     records = [
         r for r in read_sessions(base)
         if _in_window(_ts_of(r, "timestamp", "first_timestamp"), since)
+        and _project_match(r, project)
     ]
     if not records:
         return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
@@ -263,12 +311,17 @@ def rework_rate(
 
 
 def compute_outcome_metrics(
-    days: int = 30, *, data_dir: Optional[Path] = None
+    days: int = 30, *, data_dir: Optional[Path] = None, project: Optional[str] = None
 ) -> Dict[str, Dict[str, Any]]:
-    """3 軸をまとめて算出する。各軸 {"value": float|None, "evidence": dict}。"""
-    cr_v, cr_e = correction_recurrence_rate(days, data_dir=data_dir)
-    fs_v, fs_e = first_try_success_rate(days, data_dir=data_dir)
-    rw_v, rw_e = rework_rate(days, data_dir=data_dir)
+    """3 軸をまとめて算出する。各軸 {"value": float|None, "evidence": dict}。
+
+    project（PJ basename）指定時は当PJ分のみを対象にする（#489）。None なら全PJ集計
+    （後方互換）。当PJレポートの表示には project を渡して当PJスコープに直す。
+    昇格判断（promotion_readiness）は per-PJ 分解を別途持つため本関数は経由しない。
+    """
+    cr_v, cr_e = correction_recurrence_rate(days, data_dir=data_dir, project=project)
+    fs_v, fs_e = first_try_success_rate(days, data_dir=data_dir, project=project)
+    rw_v, rw_e = rework_rate(days, data_dir=data_dir, project=project)
     return {
         "correction_recurrence": {"value": cr_v, "evidence": cr_e},
         "first_try_success": {"value": fs_v, "evidence": fs_e},

@@ -70,8 +70,9 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
     """correction capture 率を audit に surface する（#421）。
 
     capture 率 = 「min_turns 以上のターンを持つセッション（usage 行数 proxy）」のうち
-    「correction を 1 件以上検出したセッション」の割合。report の他 builder と異なり
-    project_dir には依存せず環境グローバルなテレメトリ（usage/corrections）を読む。
+    「correction を 1 件以上検出したセッション」の割合。usage/corrections は全PJ共通
+    ストアだが、#489 で当PJスコープに直した（project_dir の basename を当PJ識別子として
+    渡す）。これで同セクションの llm_judge 行（元から当PJ限定）とスコープが揃う。
 
     観測可能性:
     - active session が 0（テレメトリ未蓄積 / 長セッション無し）→ None（対象外で沈黙）
@@ -87,8 +88,15 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
 
     try:
         usage_file, corrections_file = _resolve_store_files()
+        # #489: 当PJスコープに直す。usage/corrections は全PJ共通ストアなので、
+        # project_dir を worktree 安全 slug に正規化して当PJ識別子として渡し、他PJの
+        # active/captured を当PJレポートに無ラベル混入させない（llm_judge 行は元から
+        # 当PJ限定なので併置のスコープ不一致も解消される）。正規化は capture_rate._normalize_pj
+        # （= utterance_archive.pj_slug_from_cwd）に寄せ、本体⇔worktree の取りこぼしを防ぐ。
         result = capture_rate.compute_capture_rate(
-            usage_file=usage_file, corrections_file=corrections_file
+            usage_file=usage_file,
+            corrections_file=corrections_file,
+            project=capture_rate._normalize_pj(str(project_dir)),
         )
     except Exception:
         return None
@@ -109,7 +117,7 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
 
     header = ["## Correction Capture (報酬入力の捕捉率)", ""]
     detail = (
-        f"（直近 {days} 日 / {min_turns}+ ターンのセッション {active} 件中 "
+        f"（当PJ・直近 {days} 日 / {min_turns}+ ターンのセッション {active} 件中 "
         f"{captured} 件で correction を検出）"
     )
     channel_line = (

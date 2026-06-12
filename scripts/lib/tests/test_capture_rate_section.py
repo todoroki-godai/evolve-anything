@@ -39,14 +39,42 @@ def _setup_stores(tmp_path, monkeypatch, *, usage_rows, corr_rows):
     monkeypatch.setattr(sections_capture, "_resolve_store_files", lambda: (usage, corr))
 
 
-def _usage(sid, n):
-    return [{"session_id": sid, "skill_name": "Bash", "ts": _now_iso()} for _ in range(n)]
+def _usage(sid, n, project=None):
+    row = {"session_id": sid, "skill_name": "Bash", "ts": _now_iso()}
+    if project is not None:
+        row["project"] = project
+    return [dict(row) for _ in range(n)]
 
 
 def test_none_when_no_usage(tmp_path, monkeypatch):
     """usage が無い（active session 0）→ None（テレメトリ未蓄積で対象外）。"""
     _setup_stores(tmp_path, monkeypatch, usage_rows=[], corr_rows=[])
     assert build_capture_rate_section(tmp_path) is None
+
+
+# ── #489: capture 率を当PJスコープに直す（全PJ集計の無ラベル表示を解消） ──────
+
+def test_capture_rate_scoped_to_current_pj(tmp_path, monkeypatch):
+    """active session を当PJ（project_dir basename）分のみ数える（#489）。
+
+    当PJ "mine" の active session 1 件 + 他PJ "other" 2 件があるとき、全PJ集計だと
+    active 3 件になる。当PJスコープなら 1 件。基本この PJ 名で project を解決する。
+    """
+    # _resolve_store_files は当PJ slug を解決するために resolve_slug を呼ぶ想定にしない。
+    # builder は project_dir.name を当PJ識別子として compute_capture_rate に渡す。
+    usage = _usage("mine1", 30, project="mine") + _usage("o1", 30, project="other") \
+        + _usage("o2", 30, project="other")
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=usage,
+        corr_rows=[{"session_id": "mine1", "timestamp": _now_iso(), "project_path": "/work/mine"}],
+    )
+    section = build_capture_rate_section(tmp_path / "mine")
+    assert section is not None
+    combined = "\n".join(section)
+    # 当PJ active=1 / captured=1 → 100%、他PJ の 2 件は混ざらない
+    assert "1 件中" in combined
+    assert "100%" in combined
 
 
 def test_evaluated_line_when_full_capture(tmp_path, monkeypatch):

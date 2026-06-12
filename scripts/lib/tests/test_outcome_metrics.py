@@ -153,6 +153,139 @@ class TestReworkRate:
         assert evidence["reason"] == "no_data"
 
 
+# ---------- project スコープ（#489） ----------
+
+class TestProjectScope:
+    """当PJレポートの数値は当PJスコープに直す（#489）。
+
+    corrections.jsonl は ``project_path``（フルパス）、sessions.jsonl は ``project``
+    （basename）で PJ を識別する。project 指定時は当PJ分のみを数える（全PJ集計の漏出を防ぐ）。
+    """
+
+    def test_correction_recurrence_filters_by_project(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        # 当PJ(mine): "iya" が 2 セッションで再発 / 他PJ(other): "iya" は 1 セッションのみ
+        records = [
+            {"correction_type": "iya", "session_id": "s1", "timestamp": ts,
+             "project_path": "/work/mine"},
+            {"correction_type": "iya", "session_id": "s2", "timestamp": ts,
+             "project_path": "/work/mine"},
+            {"correction_type": "iya", "session_id": "s9", "timestamp": ts,
+             "project_path": "/work/other"},
+        ]
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        # 全PJ集計だと distinct=1 / recurring=1 → 1.0 になる（"iya" が s1,s2,s9 計3セッション）
+        # 当PJ "mine" に絞ると distinct=1 / recurring=1 → 1.0 だが records は 2 件
+        value, evidence = outcome_metrics.correction_recurrence_rate(days=30, project="mine")
+        assert evidence["records"] == 2  # 他PJ の 1 件を含まない
+
+    def test_first_try_success_filters_by_project(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        # 当PJ(mine): 2 clean / 2 total = 1.0
+        # 他PJ(other): 0 clean / 2 total（全PJ集計だと 2/4 = 0.5 に汚染される）
+        records = [
+            {"session_id": "s1", "error_count": 0, "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s2", "error_count": 0, "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s3", "error_count": 5, "timestamp": ts, "first_timestamp": ts, "project": "other"},
+            {"session_id": "s4", "error_count": 3, "timestamp": ts, "first_timestamp": ts, "project": "other"},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.first_try_success_rate(days=30, project="mine")
+        assert value == pytest.approx(1.0)  # 当PJ のみ → 全 clean
+        assert evidence["total_sessions"] == 2
+
+    def test_rework_filters_by_project(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"session_id": "s1", "tool_sequence": ["Read", "Edit", "Edit", "Edit"],
+             "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s9", "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts, "project": "other"},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.rework_rate(days=30, project="mine")
+        # 当PJ のみ → 編集ありセッション 1 件、すべて rework
+        assert value == pytest.approx(1.0)
+        assert evidence["total_sessions"] == 1
+
+    def test_no_project_arg_keeps_cross_pj_behavior(self, tmp_path, monkeypatch):
+        """project 未指定なら従来通り全PJ集計（後方互換・promotion_readiness 等の cross-PJ 用途）。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"session_id": "s1", "error_count": 0, "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s2", "error_count": 5, "timestamp": ts, "first_timestamp": ts, "project": "other"},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.first_try_success_rate(days=30)
+        assert evidence["total_sessions"] == 2  # 全PJ
+
+    def test_worktree_record_matches_main_repo_filter(self, tmp_path, monkeypatch):
+        """worktree セッションの record（project_path に /.claude/worktrees/）が
+        本体 repo の project_dir フィルタにマッチする（worktree slug pitfall, #489）。
+
+        worktree から書いた correction は project_path=/x/rl-anything/.claude/worktrees/feedback。
+        pj_slug_from_cwd で本体 repo 名 rl-anything に正規化され、当PJ=rl-anything に含まれる。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"correction_type": "iya", "session_id": "s1", "timestamp": ts,
+             "project_path": "/x/rl-anything"},
+            # worktree セッション（basename だけ見ると "feedback" になり取りこぼす）
+            {"correction_type": "iya", "session_id": "s2", "timestamp": ts,
+             "project_path": "/x/rl-anything/.claude/worktrees/feedback"},
+            {"correction_type": "iya", "session_id": "s9", "timestamp": ts,
+             "project_path": "/x/other"},
+        ]
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        project = outcome_metrics._normalize_pj("/somewhere/rl-anything")
+        assert project == "rl-anything"
+        value, evidence = outcome_metrics.correction_recurrence_rate(days=30, project=project)
+        # 本体 s1 + worktree s2 = 2 件（other は除外）
+        assert evidence["records"] == 2
+
+    def test_project_dir_can_be_worktree_path(self, tmp_path, monkeypatch):
+        """project_dir 自体が worktree パスでも本体 slug に正規化されてマッチする（#489）。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"session_id": "s1", "error_count": 0, "timestamp": ts, "first_timestamp": ts,
+             "project_path": "/x/rl-anything"},
+            {"session_id": "s9", "error_count": 5, "timestamp": ts, "first_timestamp": ts,
+             "project_path": "/x/other"},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        # worktree パスから audit しても本体 slug に正規化される
+        project = outcome_metrics._normalize_pj("/x/rl-anything/.claude/worktrees/feedback")
+        assert project == "rl-anything"
+        value, evidence = outcome_metrics.first_try_success_rate(days=30, project=project)
+        assert evidence["total_sessions"] == 1  # 本体 s1 のみ、other 除外
+
+    def test_records_without_project_are_included(self, tmp_path, monkeypatch):
+        """project フィールドの無い（未帰属）レコードは寛容に include する（capture_rate と同様）。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"session_id": "s1", "error_count": 0, "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s2", "error_count": 0, "timestamp": ts, "first_timestamp": ts},  # project 無し
+            {"session_id": "s3", "error_count": 0, "timestamp": ts, "first_timestamp": ts, "project": "other"},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.first_try_success_rate(days=30, project="mine")
+        assert evidence["total_sessions"] == 2  # mine + 未帰属、other は除外
+
+
 # ---------- builder（observability） ----------
 
 class TestSectionBuilder:
@@ -187,6 +320,33 @@ class TestSectionBuilder:
         # orphan_store / hook_drift と同じ「評価対象が無ければ沈黙」の境界。
         lines = build_outcome_metrics_section(tmp_path)
         assert lines is None
+
+    def test_section_scoped_to_current_pj(self, tmp_path, monkeypatch):
+        """builder は project_dir の basename を当PJとし、その分のみを表示する（#489）。
+
+        全PJ集計だと一発成功率は 1/2=0.50 だが、当PJ "mine" に絞れば 1/1=1.00。
+        ラベルに「当PJ」を明記する。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        _write_jsonl(tmp_path / "sessions.jsonl", [
+            {"session_id": "s1", "error_count": 0, "tool_sequence": ["Read", "Edit"],
+             "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s2", "error_count": 5, "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts, "project": "other"},
+        ])
+        from audit.sections_outcome import build_outcome_metrics_section
+
+        # project_dir の basename = "mine" を当PJとして使う
+        lines = build_outcome_metrics_section(tmp_path / "mine")
+        assert lines is not None
+        joined = "\n".join(lines)
+        # 当PJ のみ（s1）なので一発成功率 1.00 / total 1 sessions
+        assert "1.00" in joined
+        assert "total 1 sessions" in joined
+        # スコープが明記される
+        assert "当PJ" in joined
 
     def test_partial_data_shows_data_insufficient_for_empty_axis(self, tmp_path, monkeypatch):
         monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)

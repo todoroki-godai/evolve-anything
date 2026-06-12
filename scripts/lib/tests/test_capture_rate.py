@@ -133,6 +133,80 @@ def test_days_window_excludes_old_records(tmp_path):
     assert result["active_sessions"] == 1  # old は窓外
 
 
+# ── #489: project フィルタ（usage は project / corrections は project_path basename） ──
+
+def test_project_filter_scopes_usage_and_corrections(tmp_path):
+    """project 指定で当PJの usage / corrections のみ数える（#489）。
+
+    usage.jsonl は ``project``（basename）、corrections.jsonl は ``project_path``
+    （フルパス）で PJ を識別する。当PJ "mine" を渡すと他PJ "other" は除外される。
+    """
+    usage = tmp_path / "usage.jsonl"
+    _write_usage(
+        usage,
+        [{"session_id": "m1", "skill_name": "Bash", "ts": _now_iso(), "project": "mine"} for _ in range(25)]
+        + [{"session_id": "o1", "skill_name": "Bash", "ts": _now_iso(), "project": "other"} for _ in range(30)],
+    )
+    corr = tmp_path / "corrections.jsonl"
+    corr.write_text(
+        json.dumps({"session_id": "m1", "timestamp": _now_iso(), "project_path": "/work/mine"}) + "\n"
+        + json.dumps({"session_id": "o1", "timestamp": _now_iso(), "project_path": "/work/other"}) + "\n",
+        encoding="utf-8",
+    )
+    result = capture_rate.compute_capture_rate(
+        usage_file=usage, corrections_file=corr, min_turns=20, project="mine"
+    )
+    assert result["active_sessions"] == 1  # other は除外
+    assert result["captured_sessions"] == 1  # mine の correction のみ
+    assert result["capture_rate"] == 1.0
+
+
+def test_project_filter_normalizes_worktree_paths(tmp_path):
+    """worktree セッションの record が本体 repo の当PJ slug にマッチする（#489 差し戻し）。
+
+    corrections の project_path はフルパスなので /.claude/worktrees/ を切って本体名に正規化
+    される。project=当PJ slug（capture_rate._normalize_pj 済み）で突合する。project_dir 自体が
+    worktree パスでも本体 slug に正規化される。
+    """
+    usage = tmp_path / "usage.jsonl"
+    _write_usage(
+        usage,
+        [{"session_id": "m1", "skill_name": "Bash", "ts": _now_iso(), "project": "rl-anything"} for _ in range(25)]
+        + [{"session_id": "o1", "skill_name": "Bash", "ts": _now_iso(), "project": "other"} for _ in range(30)],
+    )
+    corr = tmp_path / "corrections.jsonl"
+    corr.write_text(
+        # worktree セッションの correction（project_path に /.claude/worktrees/）
+        json.dumps({"session_id": "m1", "timestamp": _now_iso(),
+                    "project_path": "/x/rl-anything/.claude/worktrees/feedback"}) + "\n",
+        encoding="utf-8",
+    )
+    # project_dir 自体が worktree パスでも本体 slug に正規化される
+    project = capture_rate._normalize_pj("/x/rl-anything/.claude/worktrees/agent-foo")
+    assert project == "rl-anything"
+    result = capture_rate.compute_capture_rate(
+        usage_file=usage, corrections_file=corr, min_turns=20, project=project,
+    )
+    assert result["active_sessions"] == 1  # other 除外
+    # worktree correction が本体 slug に正規化され当PJ captured に乗る
+    assert result["captured_sessions"] == 1
+    assert result["capture_rate"] == 1.0
+
+
+def test_project_filter_includes_unattributed_records(tmp_path):
+    """project / project_path の無いレコードは寛容に include する（unattributed 救済）。"""
+    usage = tmp_path / "usage.jsonl"
+    _write_usage(
+        usage,
+        [{"session_id": "m1", "skill_name": "Bash", "ts": _now_iso(), "project": "mine"} for _ in range(25)]
+        + [{"session_id": "u1", "skill_name": "Bash", "ts": _now_iso()} for _ in range(25)],  # project 無し
+    )
+    result = capture_rate.compute_capture_rate(
+        usage_file=usage, corrections_file=tmp_path / "c.jsonl", min_turns=20, project="mine"
+    )
+    assert result["active_sessions"] == 2  # mine + unattributed
+
+
 def test_malformed_lines_skipped(tmp_path):
     usage = tmp_path / "usage.jsonl"
     usage.parent.mkdir(parents=True, exist_ok=True)

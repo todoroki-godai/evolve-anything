@@ -67,8 +67,9 @@ def compute_capture_rate(
         corrections_file: corrections.jsonl パス。None なら同上。
         days: 集計窓（日）。usage の ``ts`` がこの窓内のものだけを数える。
         min_turns: active とみなすセッションの最小ターン数（usage 行数 proxy）。
-        project: 指定時はこの project のレコードのみ対象（usage は project / project_name、
-            未指定/None のレコードも include する寛容判定）。
+        project: 指定時はこの当PJ slug のレコードのみ対象（#489）。レコードの project /
+            project_name / project_path は worktree 安全 slug に正規化して突合する
+            （呼び出し側も同じ正規化で project を渡すこと）。未帰属レコードは寛容に include。
 
     Returns:
         {
@@ -131,7 +132,33 @@ def compute_capture_rate(
     }
 
 
+def _normalize_pj(value: Optional[str]) -> Optional[str]:
+    """PJ 識別子（フルパス or basename）を worktree 安全な slug に正規化する（#489）。
+
+    既存の共有関数 ``utterance_archive.extractor.pj_slug_from_cwd`` に寄せる
+    （新しい比較方式を発明しない。slug 1関数化 #492 にそのまま乗る）。
+    ``/x/rl-anything/.claude/worktrees/feedback`` を本体 repo 名 ``rl-anything`` へ
+    正規化し、本体⇔worktree 間の取りこぼし（undercount）を防ぐ。
+    import 不能環境では basename フォールバック。
+    """
+    if not value:
+        return None
+    try:
+        from utterance_archive.extractor import pj_slug_from_cwd
+        return pj_slug_from_cwd(value)
+    except ImportError:  # pragma: no cover - パス未解決時のフォールバック
+        return Path(str(value)).name or None
+
+
 def _project_match(rec: Dict[str, Any], project: str) -> bool:
-    """レコードが project に一致するか（project / project_name、未設定は許容）。"""
-    p = rec.get("project") or rec.get("project_name")
-    return p == project or p is None
+    """レコードが当PJ slug（``project``）に一致するか（#489, worktree 安全）。
+
+    PJ 識別フィールドはストアごとに異なる: usage.jsonl は ``project``（basename）、
+    corrections.jsonl は ``project_path``（フルパス）。いずれも ``_normalize_pj`` で
+    worktree 安全 slug に正規化してから突合する。``project`` 引数は呼び出し側で正規化済み
+    の当PJ slug。どの識別フィールドも持たない（未帰属）レコードは寛容に include する
+    （unattributed 救済 = 他PJの誤混入でなく属性欠落なので、当PJ集計から除外しない）。
+    """
+    raw = rec.get("project_path") or rec.get("project") or rec.get("project_name")
+    slug = _normalize_pj(raw)
+    return slug == project or slug is None

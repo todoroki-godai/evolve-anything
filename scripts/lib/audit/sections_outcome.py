@@ -5,8 +5,13 @@
 
 各軸に evidence（件数・session_id 例など根拠レコードへの参照）を併記する
 （learning_observability_quality_evidence_and_meaning 準拠）。データ不足の軸は沈黙でなく
-「データ不足」を明示する（#393-#396）。検査対象は環境グローバルなストア（DATA_DIR）であり
-project_dir には依存しないため、observability contract 互換で引数は受け取るだけ。
+「データ不足」を明示する（#393-#396）。
+
+スコープ（#489）: ストア（corrections/sessions）は全PJ共通だが、当PJレポートの数値は
+project_dir の basename を当PJ識別子として当PJスコープに直す（全PJ集計の無ラベル表示で
+読み手が当PJ値と誤認するのを防ぐ。一発成功率 全PJ0.73 vs 当PJ0.88 の 15pt 乖離を実測）。
+全PJ横断の重み昇格判断は outcome_promotion_readiness が per-PJ 分解で別途担う（本 builder の
+当PJ化はその入力に影響しない）。
 """
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -74,17 +79,21 @@ def build_outcome_metrics_section(project_dir: Path) -> Optional[List[str]]:
     except ImportError:
         return None
 
-    metrics = outcome_metrics.compute_outcome_metrics(days=30)
+    # #489: 当PJスコープに直す。project_dir を worktree 安全 slug に正規化して渡す
+    # （本体 / worktree どちらから audit しても同じ slug になり取りこぼしを防ぐ）。
+    metrics = outcome_metrics.compute_outcome_metrics(
+        days=30, project=outcome_metrics._normalize_pj(str(project_dir))
+    )
 
     # 評価対象（該当ストア）が 1 つも無い環境は沈黙する。
     if all(metrics[k].get("value") is None for k in ("correction_recurrence", "first_try_success", "rework")):
         return None
 
     header = [
-        "## Outcome Metrics v1 (advisory — スコア重みには未反映)",
+        "## Outcome Metrics v1 (当PJ・advisory — スコア重みには未反映)",
         "",
-        "行動アウトカムの目的変数（手戻り）を直接測る 3 軸。2〜4 週並走 → 分布実測 → "
-        "重み昇格判断（ADR-046）。決定論・LLM 非依存。",
+        "行動アウトカムの目的変数（手戻り）を直接測る 3 軸（当PJスコープ, #489）。"
+        "2〜4 週並走 → 分布実測 → 重み昇格判断（ADR-046）。決定論・LLM 非依存。",
         "",
     ]
     body: List[str] = []
