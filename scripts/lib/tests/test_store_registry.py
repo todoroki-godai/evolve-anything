@@ -144,3 +144,22 @@ def test_weak_signals_declared_with_ttl_45() -> None:
     assert decl is not None
     assert decl.retention == "ttl"
     assert decl.ttl_days == 45
+
+
+# --- correction_review_seen.jsonl の宣言（#446）------------------------------
+
+def test_correction_review_seen_declared_as_batch_permanent() -> None:
+    """correction_review_seen.jsonl が batch-writer / permanent で宣言されている（#446）。
+
+    既読集合は evolve batch（daily_review）が書く新ストア。宣言なしで書くと
+    orphan_store が undeclared として surface する（#434）。
+    """
+    decl = store_registry.declaration_for("correction_review_seen.jsonl")
+    assert decl is not None
+    assert decl.retention == "permanent"
+    assert decl.writer_locus == "batch"
+
+
+def test_correction_review_seen_not_stale_drift() -> None:
+    """batch-writer 宣言なので hook-writer 突合の stale に誤検知されない（#446）。"""
+    assert "correction_review_seen.jsonl" in store_registry.stale_exempt_names()

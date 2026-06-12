@@ -1177,6 +1177,23 @@ def run_evolve(
     except Exception as e:
         result.setdefault("correction_review", {})["bootstrap"] = {"error": str(e)}
 
+    # ── 今日の修正確認（daily_review・#446）─────────────────────────────────
+    # 前回 evolve 以降の新規 weak_signal（channel=llm_judge・未昇格・非expired）のうち
+    # 既読集合（correction_review_seen.jsonl）に無いものを idiom 単位で group 化し、頻度降順・
+    # 上位 5 件を **常時 emit**（eligible でなくても groups=[] でキーを置く）。SKILL.md が
+    # eligible のとき AskUserQuestion で y/n 確認し、「はい」を rl-reflect --promote-weak で昇格。
+    # #443 bootstrap と同じ correction_review dict に相乗りさせる（setdefault で同居）。
+    # build_review は読み取りのみ。既読追記は SKILL.md の apply（record_reviewed）に委ねる。
+    # dry_run でも build（読み取りのみ）は走るが既読集合を一切書かない（最下層 write ゲート）。
+    try:
+        from correction_semantic import daily_review as _dr
+        _dr_slug = _resolve_pj_slug(project_dir)
+        result.setdefault("correction_review", {})["daily"] = _dr.build_review(
+            _dr_slug, dry_run=dry_run
+        )
+    except Exception as e:
+        result.setdefault("correction_review", {})["daily"] = {"error": str(e)}
+
     # ── evolve 提案 accept/reject の決定論キャプチャ（#360-A, ADR-041）────────
     # 候補スキルの before_sha をキューに emit。適用実績=accept / 明示却下=reject は
     # SKILL.md Step 7.8 の drain（ingest_decisions）が optimize_history に記録する。

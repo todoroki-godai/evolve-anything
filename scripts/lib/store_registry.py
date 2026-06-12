@@ -212,6 +212,21 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "（bootstrap_done-<slug>.marker・全PJ共通 DATA_DIR 単一ファイル pitfall 回避）。"
         "立ったら以後 bootstrap を再提示しない（TTL #5 が残りを間引く）。",
     ),
+    StoreDeclaration(
+        name="correction_review_seen.jsonl",
+        writer="scripts/lib/correction_semantic/daily_review.record_reviewed"
+        "（evolve の SKILL.md が「今日の修正確認」で「はい/いいえ」確定時に呼ぶ）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="daily_review.build_review / read_reviewed_keys が「新規」判定に参照（自己消費）。"
+        "既読 signal_key は次回 evolve で再提示しない。",
+        retention="permanent",
+        disposition="drain",
+        note="今日の修正確認の既読集合（#446）。correction_judged.jsonl と同方式の物理キー集合"
+        "（append-only・1 行 {key, pj_slug, decision, reviewed_at}）。PJ slug スコープ"
+        "（全PJ共通 DATA_DIR 単一ファイル pitfall 回避）。母集団は weak_signals（TTL 45 日で"
+        "自然減衰・数百件規模）なので肥大化は無視できる。重複追記は read 側 set 化で無害。",
+    ),
 ]
 
 

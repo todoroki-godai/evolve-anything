@@ -352,6 +352,19 @@ reflect は独立フェーズではなく discover に統合済み。**`phases.d
 
 `mark_done` は `dry_run=True`（ドライラン実行時）なら marker を書かない（最下層まで dry-run ゲートを貫通）。3 択いずれを選んでも、Skip しても evolve 全体は完走する。
 
+### Step 6.2: 今日の修正確認（daily_review・#446）
+
+前回 evolve 以降の**新規** weak_signal（channel=llm_judge・未昇格・非expired・既読集合に無いもの）を idiom 単位で確認する日次入口。reflect SKILL Step 7.7 の散文ステップからの移植（learning_skill_md_must_not_enforcement — 毎日叩かれる evolve の決定論 phase 出力を消費する）。**判定は phase 出力 `result.correction_review.daily` を読むだけで行う。**
+
+- `daily.eligible != True`（新規 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。`daily.eligible == False` のときのみ「今日の修正確認: 新規なし ✓」を1行表示）
+- `daily.eligible == True` → `daily.groups`（最大5件・頻度降順）を **AskUserQuestion で y/n 確認（MUST — 最大5問を1バッチで）**。各 question に group の `idiom`（無ければ `representative`）と `evidence.count`（再発回数）を提示する:
+  - **はい（昇格）** → 同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で昇格 → **promote 成功を確認後に** `daily_review.record_reviewed(signal_keys, slug, decision="promoted", dry_run=dry_run)` で既読追記。promote が部分失敗した group は既読追記しない（取りこぼし防止 — 次回再提示される）
+  - **いいえ（却下）** → `daily_review.record_reviewed(signal_keys, slug, decision="rejected", dry_run=dry_run)` で既読追記（次回から再提示しない）
+  - **Skip / Other / 中断** → 既読追記しない（次回再提示）。evolve 全体は完走する
+- `daily.remaining > 0` なら「ほか {remaining} グループは次回以降に提示」を1行表示する
+
+`record_reviewed` は `dry_run=True`（ドライラン実行時）なら既読集合に書かない（最下層まで dry-run ゲートを貫通）。dry-run では確認の表示のみ行い、promote / 既読追記は行わない。
+
 ### Step 6.5: auto-memory キュー drain（2相, [ADR-037] Phase 2）
 
 Stop hook（auto_memory_runner）は corrections を生成前ゲートして PJ スコープキュー
