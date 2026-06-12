@@ -598,6 +598,14 @@ rl-evolve --drain
 - 何も適用せず（純粋プレビュー）何も却下しなければ、全件が skip に落ち記録されない（self-correcting）
 - accept/reject は `record_evolve_diff_decision` 経由で optimize_history（ADR-031）へ冪等記録され、
   fitness_evolution の相関母集団 / `check_calibration_regression` の入力になる
+- **決定論 weak_signals の永続化も同居（#484）**: `rl-evolve --drain` は同じ apply 境界で
+  決定論3チャネル（manual_edit_after_ai / esc_interrupt / rephrase）+ permission_deny を
+  `persist_weak_signals_drain` で weak_signals.jsonl へ永続化する。理由は #400 と同型の盲点:
+  標準フローは `rl-evolve --dry-run` 分析なので run_evolve 内の `run_batch(dry_run=True)` は
+  #491 契約で常にゼロ書き込みになり、決定論チャネルが**実 PJ で一度も永続化されない**
+  （llm_judge だけが Phase B/C の apply 側で書かれて存在していた）。検出は冪等（signal_key
+  dedup）なので tool 文脈・非 dry-run の drain で書くのが正。結果は drain サマリの
+  `weak_signals_persisted`（detected/written/skipped_dup）で surface される。
 - 結果（accepted/rejected/skipped 件数）を Report に報告する。`accepted >= 1` なら
   「fitness 母集団に +N 件記録 ✓」と1行 surface する（silence != evaluated）
 

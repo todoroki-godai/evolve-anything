@@ -1439,6 +1439,20 @@ def main() -> None:
         from evolve_decisions import drain_pending
 
         summary = drain_pending(project_dir=args.project_dir, result_json=args.result_json)
+
+        # #484: 決定論 weak_signals を apply 境界で永続化する。
+        # 標準フローは `rl-evolve --dry-run` 分析 → 対話適用なので、run_evolve 内の
+        # run_batch(dry_run=True) は #491 契約で常にゼロ書き込みになる。決定論検出は冪等
+        # （signal_key dedup）なので、tool 文脈・非 dry-run・正準 DATA_DIR で走る drain で
+        # 永続化する（evolve_decisions の drain と同型・#400 の盲点修正と同じ構造）。
+        try:
+            from weak_signals import batch as _ws_batch
+
+            _ws_slug = _resolve_pj_slug(args.project_dir)
+            summary["weak_signals_persisted"] = _ws_batch.persist_weak_signals_drain(_ws_slug)
+        except Exception as e:
+            summary["weak_signals_persisted"] = {"error": str(e)}
+
         print(json.dumps(summary, ensure_ascii=False))
         return
 

@@ -156,3 +156,41 @@ def run_batch(
         "skipped_dup": write_res["skipped_dup"],
         "dry_run": write_res["dry_run"],
     }
+
+
+def persist_weak_signals_drain(
+    pj_slug: str,
+    *,
+    store_path: Optional[Path] = None,
+    projects_root: Optional[Path] = None,
+    errors_path: Optional[Path] = None,
+    utterances: Optional[List[Dict[str, Any]]] = None,
+    max_transcripts: int = DEFAULT_MAX_TRANSCRIPTS,
+) -> Dict[str, Any]:
+    """apply 境界（`rl-evolve --drain`）で決定論 weak_signals を永続化する（#484）。
+
+    根因（#484）: 標準 evolve フローは ``rl-evolve --dry-run`` 分析 → assistant が対話適用、
+    である。``run_batch`` は ``run_evolve`` の中で ``dry_run=dry_run`` で呼ばれるため、dry-run
+    分析パスでは ``append_signals`` の最下層 dry-run ゲート（#491 invariant）で常に書き込み
+    ゼロになる。非 dry-run の evolve は標準フローでまず走らないので、決定論3チャネル
+    （manual_edit_after_ai / esc_interrupt / rephrase）が実 PJ で**一度も永続化されない**。
+
+    決定論検出は冪等（signal_key dedup）なので、#400 の evolve_decisions と同型に
+    **apply 境界の drain**（tool 文脈・非 dry-run・正準 DATA_DIR）で永続化する。
+    これは「dry-run 分析は何も書かない（#491）」契約を破らずに永続化を成立させる。
+
+    ``run_batch(pj_slug, dry_run=False)`` の薄いラッパだが、apply 境界専用の入口として
+    名前を分けることで「ここは必ず書き込む経路」という意図を CLI / SKILL.md から明示する。
+
+    Returns:
+        run_batch と同じ dict（``dry_run`` は常に False）。
+    """
+    return run_batch(
+        pj_slug,
+        dry_run=False,
+        store_path=store_path,
+        projects_root=projects_root,
+        errors_path=errors_path,
+        utterances=utterances,
+        max_transcripts=max_transcripts,
+    )
