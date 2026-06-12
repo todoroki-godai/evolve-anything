@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- fix(tests): test_audit_snapshot の order-dependent 隔離漏れを修正（closes #464） — `corrections_insights.CORRECTIONS_FILE` が import 時に `Path.home()` を固定するため `setenv("HOME")` 隔離が貫通せず、実 corrections.jsonl が 10 件（MIN_DISPLAY_RECORDS）を超えた 2026-06-12 に「繰り返し失敗パターン」セクション出現で snapshot mismatch が顕在化。`_isolate_env` の既存パターン（setattr 固定）で CORRECTIONS_FILE を tmp に差し替え。
+
 ## [1.97.0] - 2026-06-12
 
 ### Added

@@ -106,6 +106,15 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # 実機データがあると snapshot がブレる。空 tmp に向けて出力を決定論化する（#445）。
     from audit import measurement_bug
     monkeypatch.setattr(measurement_bug, "DATA_DIR", tmp_path / "no-growth-state")
+    # corrections_insights は import 時に Path.home() を CORRECTIONS_FILE へ固定するため
+    # setenv("HOME") では隔離できない（先行テストが実 HOME で import 済みだと実
+    # corrections.jsonl を読む order-dependent 汚染）。実機 corrections が
+    # MIN_DISPLAY_RECORDS(10) 件を超えると「繰り返し失敗パターン」セクションが出現し
+    # snapshot がブレる（#464 — 実機 39 件で顕在化）。
+    import corrections_insights
+    monkeypatch.setattr(
+        corrections_insights, "CORRECTIONS_FILE", tmp_path / "no-corrections.jsonl"
+    )
     return proj
 
 
