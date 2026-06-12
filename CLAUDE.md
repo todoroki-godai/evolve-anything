@@ -163,6 +163,18 @@ python3 -m pytest hooks/ skills/ scripts/tests/ scripts/rl/tests/ -v
 claude plugin validate
 ```
 
+フルスイートはデフォルトで全件実行する（slow マーカーによる deselect は無し）。
+2026-06-12 時点で約 1 分（#457 で run_evolve 系の実環境ストア読みを隔離し 32 分→1 分に短縮）。
+
+**run_evolve を呼ぶ新規テストを書くときは HOME を隔離すること（#457）。** `run_evolve` は
+`project_dir=tmp_path` でも後段フェーズ（utterance ingest / prune global check /
+weak_signals / correction_semantic）が `Path.home()/.claude/projects`（実環境 ≈9925 jsonl /
+1.9GB）を default 走査するため、未隔離だと 1 件数十秒に膨張する。`skills/evolve/scripts/tests/`
+配下は conftest の autouse fixture が自動隔離する。別ディレクトリでは
+`from test_home_isolation import isolate_home`（`scripts/lib/`）を import し、autouse fixture で
+`isolate_home(monkeypatch, tmp_path)` を呼ぶ。ルート conftest の `CLAUDE_PLUGIN_DATA`(=DATA_DIR)
+隔離は `Path.home()` 由来パスには効かない点に注意。
+
 ## Specification
 - 現在の仕様全体像: [SPEC.md](SPEC.md)
 - コンポーネント詳細（設計経緯・issue/ADR 参照の SoT）: [spec/components.md](spec/components.md)

@@ -471,19 +471,33 @@ class TestCompaction:
         # db を人為的に肥大させる（bloat を模す: 大量 INSERT→DELETE で free page を残す）。
         # DuckDB はブロック単位割り当てで最小ファイルサイズの床（数百KB）があり、かつ列圧縮が
         # 効くため、床（compaction 閾値 4MB）を超える incompressible データで bloat させる。
-        import secrets
-
+        #
+        # #457: 旧実装は 60000 行を Python ループで 1 行ずつ INSERT しており（per-row
+        # con.execute + secrets.token_hex）1 件 43s かかっていた。bloat の意図（>4MB の
+        # incompressible データで free page を残す）は保ったまま、DuckDB 側生成の
+        # md5(random()) を bulk INSERT に置換して 0.3s 級に短縮する。
+        # 肝: INSERT 後にいったん close してブロック割り当てをディスクへ flush してから
+        # 別 connection で DELETE する（同一 connection 内の INSERT→DELETE は DuckDB が
+        # 割り当てを最適化で畳んでしまい file が膨らまない）。free page は rebuild まで残る。
         import duckdb
+
+        # raw_json は md5(random()) を 16 連結（≈512 hex 文字の incompressible データ）。
+        _md5_concat = " || ".join(["md5(random()::VARCHAR)"] * 16)
         con = duckdb.connect(str(db_path))
-        for i in range(60000):
-            con.execute(
-                "INSERT INTO sessions (session_id, timestamp, raw_json) VALUES (?, ?, ?)",
-                [f"bloat{i}", "2026-04-30T00:00:00+00:00", secrets.token_hex(250)],
-            )
+        con.execute(
+            f"""
+            INSERT INTO sessions (session_id, timestamp, raw_json)
+            SELECT 'bloat' || i::VARCHAR, '2026-04-30T00:00:00+00:00', {_md5_concat}
+            FROM range(60000) t(i)
+            """
+        )
+        con.close()  # ブロック割り当てをディスクへ flush（この後の DELETE で free page 化）
+        con = duckdb.connect(str(db_path))
         con.execute("DELETE FROM sessions WHERE session_id LIKE 'bloat%'")
         con.close()
         size_bloated = db_path.stat().st_size
         assert size_bloated > size_before, "前提: bloat で db が膨らんでいる"
+        assert size_bloated > 4 * 1024 * 1024, "前提: bloat が compaction 閾値(4MB)を超える"
 
         # 次の ingest で compaction が発火し db が縮む
         fresh_store.append({"session_id": "b", "timestamp": "2026-04-30T13:00:00+00:00"})
