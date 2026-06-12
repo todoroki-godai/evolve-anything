@@ -26,13 +26,19 @@ from weak_signals.store import default_store_path, read_signals
 def read_unpromoted(
     weak_signals_path: Optional[Path] = None,
     channel: Optional[str] = None,
+    exclude_expired: bool = True,
 ) -> List[Dict[str, Any]]:
     """未昇格（promoted=False）の weak_signal レコードを返す。
 
     channel を渡すとそのチャネルだけに絞る（例: "llm_judge" で #431 のバッチ判定のみ）。
+    exclude_expired（既定 True）は TTL 失効（expired=True）レコードを昇格候補から外す
+    （#442。古い修正候補は腐る — TTL が品質フィルタとして機能する）。後方互換が必要な
+    呼び出しは exclude_expired=False で全件取得できる。
     """
     recs = read_signals(weak_signals_path)
     out = [r for r in recs if not r.get("promoted")]
+    if exclude_expired:
+        out = [r for r in out if not r.get("expired")]
     if channel is not None:
         out = [r for r in out if r.get("channel") == channel]
     return out

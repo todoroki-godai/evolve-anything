@@ -106,3 +106,30 @@ def test_promote_skips_unknown_keys(tmp_path: Path) -> None:
                                      corrections_path=corr, project_path="/p")
     assert res["promoted"] == 0
     assert not corr.exists()
+
+
+def _seed_with_expired(ws_path: Path):
+    """1 件目を expired=True にして seed する（#442 TTL）。"""
+    sigs = _seed_signals(ws_path)
+    recs = [json.loads(line) for line in ws_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    recs[0]["expired"] = True
+    recs[0]["expired_at"] = "2026-06-12T00:00:00+00:00"
+    ws_path.write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs), encoding="utf-8"
+    )
+    return sigs
+
+
+def test_read_unpromoted_excludes_expired_by_default(tmp_path: Path) -> None:
+    """exclude_expired=True（既定）で expired レコードは昇格候補から外れる（#442）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    _seed_with_expired(ws)
+    # 既定で expired を除外 → 1 件
+    assert len(cs_promote.read_unpromoted(weak_signals_path=ws)) == 1
+
+
+def test_read_unpromoted_can_include_expired(tmp_path: Path) -> None:
+    """exclude_expired=False なら expired も含めて返す（後方互換）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    _seed_with_expired(ws)
+    assert len(cs_promote.read_unpromoted(weak_signals_path=ws, exclude_expired=False)) == 2

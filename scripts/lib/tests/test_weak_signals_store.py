@@ -57,6 +57,14 @@ def test_append_then_read_roundtrip(tmp_path: Path) -> None:
     assert all(r["promoted"] is False for r in recs)
 
 
+def test_weak_signal_defaults_expired_fields() -> None:
+    """新規レコードは expired=False / expired_at=None で初期化される（#442 TTL）。"""
+    sig = _sig(line_no=7)
+    rec = sig.to_record()
+    assert rec["expired"] is False
+    assert rec["expired_at"] is None
+
+
 def test_dedup_skips_existing_signal_key(tmp_path: Path) -> None:
     """同一 signal_key は再追記でスキップ（バッチ再実行の二重記録防止）。"""
     store = tmp_path / "weak_signals.jsonl"

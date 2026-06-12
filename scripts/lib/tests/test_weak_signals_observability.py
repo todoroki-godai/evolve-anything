@@ -60,14 +60,17 @@ def test_builder_registered_in_observability_contract() -> None:
 # ── store_registry の宣言契約 ─────────────────────────────────────
 
 def test_weak_signals_declared_in_store_registry() -> None:
-    """weak_signals.jsonl が writer/reader/retention 宣言済みであること（#434 事前ゲート）。"""
+    """weak_signals.jsonl が writer/reader/retention 宣言済みであること（#434 事前ゲート）。
+    #442 で retention が permanent→ttl(45日) に変更された。
+    """
     import store_registry
 
     decl = store_registry.declaration_for("weak_signals.jsonl")
     assert decl is not None
     assert decl.writer
     assert decl.reader
-    assert decl.retention == "permanent"
+    assert decl.retention == "ttl"  # #442: TTL 45 日（corrections decay と整合）
+    assert decl.ttl_days == 45
     assert decl.writer_locus == "batch"
 
 

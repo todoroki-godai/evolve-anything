@@ -134,3 +134,13 @@ def test_db_declaration_does_not_appear_as_stale_drift() -> None:
     """db ストア宣言が contract-drift の stale に誤検知されない（#430）。"""
     drift = orphan_store.detect_store_contract_drift()
     assert "utterances.db" not in drift.stale
+
+
+# --- weak_signals.jsonl の TTL 宣言（#442）-----------------------------------
+
+def test_weak_signals_declared_with_ttl_45() -> None:
+    """weak_signals.jsonl が retention='ttl' / ttl_days=45 で宣言されている（#442）。"""
+    decl = store_registry.declaration_for("weak_signals.jsonl")
+    assert decl is not None
+    assert decl.retention == "ttl"
+    assert decl.ttl_days == 45

@@ -8,6 +8,8 @@
 - ``pj_slug``      — ADR-031 準拠 slug（read 側照合の強制。全PJ共通 DATA_DIR 単一ファイル pitfall）
 - ``promoted``     — 昇格状態（初期 False。reflect 確認後に True へ）
 - ``signal_key``   — 同一シグナルの dedup キー（channel + provenance の安定ハッシュ）
+- ``expired``      — TTL 失効状態（初期 False。detected_at から TTL_DAYS 超で True / #442）
+- ``expired_at``   — 失効マーク時刻（ISO8601 UTC / null。weak_signals.ttl.mark_expired が設定）
 
 dry-run 書き込みゼロ（pitfall_dryrun_stateful_store_write）: append_signals は ``dry_run``
 を受け、True なら **一切ファイルに触れない**（最下層 write までゲートを貫通させる）。
@@ -38,6 +40,8 @@ class WeakSignal:
     pj_slug: str
     promoted: bool = False
     signal_key: str = ""
+    expired: bool = False
+    expired_at: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.signal_key:

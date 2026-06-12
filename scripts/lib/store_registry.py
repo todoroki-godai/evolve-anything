@@ -169,9 +169,12 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="reflect が確認後に corrections 本流へ昇格（promoted フラグ）。"
         "audit が channel 別件数を advisory surface（sections_weak_signals）。"
         "下流: #431 のバッチ LLM 判定もこのレーンを共有。",
-        retention="permanent",
+        retention="ttl",
+        ttl_days=45,
         note="暗黙修正シグナルの決定論検出レーン（#432）。4 チャネル（直後手編集 / "
-        "permission deny / 言い直し / Esc 中断）。corrections に直接入れず昇格は reflect 確認後。",
+        "permission deny / 言い直し / Esc 中断）。corrections に直接入れず昇格は reflect 確認後。"
+        "TTL 45 日（#442・corrections decay と整合）: detected_at 超過は削除せず expired=True "
+        "マークし read_unpromoted から除外（weak_signals.ttl.mark_expired を evolve phase で常時 emit）。",
     ),
     StoreDeclaration(
         name="correction_idioms.jsonl",

@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(reward): weak_signals に 45日 TTL を追加 — expired マークと昇格候補からの除外（closes #442）** — weak_signals.jsonl のレコードに TTL（45日・corrections の decay と整合）を導入。期限切れは削除せず `expired` マークし、`read_unpromoted` 等の昇格候補 reader から除外（古い修正候補を昇格させる label noise を防ぐ）。TTL 判定・マーキングは evolve の決定論 phase として常時 emit（dry-run はマーキング書込をしない＝persist ゲートを最下層まで貫通）。store_registry の weak_signals 宣言を retention=ttl(45日) に更新。設計 SoT: docs/evolve/daily-evolve-reward-loop-design.md 機能#5。
+
 ## [1.96.0] - 2026-06-10
 
 ### Fixed

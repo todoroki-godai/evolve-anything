@@ -1135,6 +1135,16 @@ def run_evolve(
     except Exception as e:
         result["weak_signals"] = {"error": str(e)}
 
+    # ── weak_signals の TTL 失効マーク（#442・corrections decay 45 日と整合）─────
+    # run_batch 直後・昇格候補を読む下流（#1 daily_review 等）の前に常時 emit。
+    # detected_at から 45 日超かつ未昇格・未expired を expired=True にマーク（削除しない）し、
+    # read_unpromoted(exclude_expired=True) から外す。dry_run は store に一切触れない（最下層 write ゲート）。
+    try:
+        from weak_signals import ttl as _ws_ttl
+        result["weak_signals_ttl"] = _ws_ttl.mark_expired(dry_run=dry_run)
+    except Exception as e:
+        result["weak_signals_ttl"] = {"error": str(e)}
+
     # ── correction capture の二層化: バッチ LLM 意味判定の Phase A emit（#431）─────
     # utterances.db の dialogue 発話を Haiku 判定リクエストに変換（決定論・ここでは LLM 非呼び出し）。
     # 実際の判定（Phase B）と weak_signals 隔離記録（Phase C）は SKILL.md 側が担う。
