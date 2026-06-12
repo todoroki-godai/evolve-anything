@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.97.0</span>
+    <span class="header-version">v1.98.0</span>
   </div>
 </header>
 
@@ -339,10 +339,12 @@
           <tr><td>evolve_consistency</td><td>P1 invariant の runtime self-detect（型 drift のみ）（#377-5）</td></tr>
           <tr><td>outcome_metrics</td><td>行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。utilization の plugin レイアウト探索修理も同梱 [#423, ADR-046]</td></tr>
           <tr><td>outcome_attribution</td><td>outcome 2軸（一発成功率 / rework 率）を per-skill 帰属し evolve ターゲットランキングへ自動入力（advisory→閉ループの先行配線）。dry-run に before/after 順位差分を surface [#433]</td></tr>
+          <tr><td>outcome_promotion_readiness</td><td>ADR-046 重み昇格レディネスの3条件決定論判定（分散 / 件数下限 / 方向妥当性）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母は session_store union read（db read_only + 未 ingest jsonl）で実効化済み（#461, #469）</td></tr>
           <tr><td>correction_semantic</td><td>correction capture の二層化（#431）。utterances.db の dialogue 発話を Haiku がバッチ意味判定（auto_memory 2 相と同型）→ weak_signals(channel=llm_judge) 隔離 + 個人辞書（correction_idioms.jsonl）。フェーズ昇格は human-source のみ駆動（provenance_weight）/ reflect 昇格フロー（--show-weak-signals / --promote-weak）[#431]</td></tr>
           <tr><td>bootstrap_backlog</td><td>初回 evolve で既存 weak_signals バックログの消化方式を AskUserQuestion 3 択で選ぶ bootstrap phase（marker で1回きり・slug スコープ厳守・常時 emit）（#443）</td></tr>
           <tr><td>daily_review</td><td>evolve の「今日の修正確認」phase — 新規 weak_signal を idiom 単位 group 化し最大5件を y/n 確認、promote 成功後のみ既読追記（既読ストア correction_review_seen.jsonl）（#446）</td></tr>
-          <tr><td>idiom_autopromote</td><td>confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / <code>rl-reflect --revoke-idiom</code> 巻き戻し（#447, ADR-047）</td></tr>
+          <tr><td>idiom_autopromote</td><td>confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / <code>rl-reflect --revoke-idiom</code> 巻き戻し（#447, ADR-047）。confirmed 化の正準経路は <code>rl-reflect --promote-weak</code> の confirm 配線（#463）</td></tr>
+          <tr><td>cross_pj_priority</td><td>confirmed idiom の PJ 横断優先提示 — 他 PJ 承認済みと同テキストの確認 group に <code>cross_pj_confirmed</code> ラベル + 先頭表示（提示のみ・自動承認しない、normalize は autopromote と1関数共有）（#462）</td></tr>
         </tbody>
       </table>
 
@@ -368,6 +370,8 @@
           <tr><td>growth-level</td><td>env_score (0.0–1.0) → Lv.1–10 + 日英称号マッピング</td></tr>
           <tr><td>growth_report</td><td>evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ / 今日の昇格成果。閾値は growth_engine の定数が単一ソース（#448）</td></tr>
           <tr><td>measurement_bug</td><td>複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185）</td></tr>
+          <tr><td>testpaths_coverage</td><td>pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468）</td></tr>
+          <tr><td>plugin_self origin</td><td>プラグイン本体リポジトリ自身の repo 直下 skills/ を evolve 診断対象化 — <code>.claude-plugin/plugin.json</code> 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185）</td></tr>
           <tr><td>critical-instruction-compliance</td><td>スキル指示の遵守保証サイクル — critical 行抽出 + 違反検出 + pitfall 自動学習</td></tr>
           <tr><td>second-opinion エージェント</td><td>cold-read セカンドオピニオン（startup/builder/general 3モード）。codex 不要で Agent ツールのみで動作する</td></tr>
           <tr><td>token_usage_store</td><td>プロジェクト別 LLM トークン消費の DuckDB SoR — PK uuid で冪等 ingest</td></tr>
