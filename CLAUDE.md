@@ -172,7 +172,7 @@ claude plugin validate
 フルスイートはデフォルトで全件実行する（slow マーカーによる deselect は無し）。
 収集パスは `pytest.ini` の `testpaths` が単一ソース。新しい tests/ を足したら testpaths に追記する
 （漏れは audit の Testpaths Coverage チェック = `scripts/lib/testpaths_coverage.py` が検出する。#468）。
-2026-06-12 時点で約 1 分（#457 で run_evolve 系の実環境ストア読みを隔離し 32 分→1 分に短縮）。
+pytest-xdist `-n auto` で並列実行（`pytest.ini` の `addopts` に設定済み）、2026-06-12 時点で約 42 秒（直列だと約 135 秒）。#457 で run_evolve 系の実環境ストア読みを隔離し直列 32 分→1 分→xdist で 42 秒に短縮。
 
 **run_evolve を呼ぶ新規テストを書くときは HOME を隔離すること（#457）。** `run_evolve` は
 `project_dir=tmp_path` でも後段フェーズ（utterance ingest / prune global check /
