@@ -66,6 +66,7 @@ def _store_count(slug="testslug"):
 
 
 @pytest.mark.real_marker_root
+@pytest.mark.real_home  # MARKER_ROOT は import 時に実 home で凍結。autouse の HOME 隔離をオプトアウト（#471）
 def test_marker_root_is_home_based_not_env_derived():
     # QUEUE_ROOT は DATA_DIR(env 派生) 配下だが、MARKER_ROOT は home 固定。
     # これにより emit(tool 文脈)と SessionStart(hook 文脈)が同一パスに合意する。

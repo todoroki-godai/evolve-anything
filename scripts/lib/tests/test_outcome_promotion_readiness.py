@@ -300,16 +300,34 @@ class TestComputePromotionReadiness:
         assert result["promote"] is True
 
     def test_dry_run_no_store_write(self, tmp_path, monkeypatch):
-        # 読み取りのみ — compute は DATA_DIR に何も書かない
+        # 読み取りのみ — compute は DATA_DIR に何も書かない。
+        # ファイル名集合の同一性だけでなく各ファイルの read_bytes() を before/after で
+        # 照合し、既存ファイルへの追記・書換も検出する（#471: byte 照合強化）。
         monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
         now = _now()
         _write_jsonl(tmp_path / "corrections.jsonl", [
             _correction("/p/a", "iya", "s1", now),
         ])
-        before = sorted(p.name for p in tmp_path.iterdir())
+        # 既存ストア（sessions / optimize_history）も置き、追記・書換も検出対象にする。
+        _write_jsonl(tmp_path / "sessions.jsonl", [])
+        opr_hist = tmp_path / "optimize_history"
+        opr_hist.mkdir(parents=True, exist_ok=True)
+        (opr_hist / "a.jsonl").write_text(
+            json.dumps({"id": "x", "human_accepted": True,
+                        "timestamp": _iso(now), "skill_name": "s"}) + "\n"
+        )
+
+        def _snapshot() -> dict[str, bytes]:
+            return {
+                str(p.relative_to(tmp_path)): p.read_bytes()
+                for p in sorted(tmp_path.rglob("*"))
+                if p.is_file()
+            }
+
+        before = _snapshot()
         opr.compute_promotion_readiness(days=30, window_days=14)
-        after = sorted(p.name for p in tmp_path.iterdir())
-        assert before == after  # 新規ファイル生成なし
+        after = _snapshot()
+        assert before == after  # 新規生成・追記・書換いずれもなし（byte 不変）
 
 
 # ============================================================================

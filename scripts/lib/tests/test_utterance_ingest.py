@@ -121,6 +121,7 @@ def _real_rl_anything_pj() -> Path | None:
     return cands[0] if cands else None
 
 
+@pytest.mark.real_home  # 実 ~/.claude/projects の transcript を読む実機 E2E（autouse HOME 隔離をオプトアウト, #471）
 def test_real_pj_e2e(tmp_path: Path) -> None:
     """rl-anything PJ の実 transcript で ingest を完走させ wall time / rows を assertion。
 

@@ -73,6 +73,12 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # DATA_DIR は import 時に env var を読むので reload が必要
     if "rl_common" in sys.modules:
         importlib.reload(sys.modules["rl_common"])
+    # token_usage_store も DATA_DIR/USAGE_DB/USAGE_JSONL を import 時に
+    # CLAUDE_PLUGIN_DATA(=env)/Path.home() 基準で固定する（build_token_consumption_section が
+    # 関数内 lazy import）。setenv 後に reload して tmp 基準へ再解決し、実 ~/.claude の
+    # token_usage.db（実機 60MB+）を読まないようにする（#471 — observability 隔離ガード対象）。
+    if "token_usage_store" in sys.modules:
+        importlib.reload(sys.modules["token_usage_store"])
     # importlib.reload は spec を sys.path 順で **再解決** するため、先行テストが
     # skills/audit/scripts（CLI shim の flat audit.py がある）を sys.path 先頭に
     # 入れていると shim が再実行され、sys.modules["audit"] が別オブジェクトに
