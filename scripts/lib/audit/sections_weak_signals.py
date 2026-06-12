@@ -61,10 +61,15 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         if ch not in _CHANNEL_LABELS:
             parts.append(f"{ch} {n}")
 
+    hint = (
+        f"うち未昇格 {unpromoted} 件は `/rl-anything:evolve` の今日の修正確認 phase で昇格可能。"
+        if unpromoted > 0
+        else ""
+    )
     header = ["## Weak Signals (暗黙修正シグナル / 昇格前)", ""]
-    return header + [
+    body_line = (
         f"暗黙修正シグナルが {total} 件（{' / '.join(parts)}）。"
-        f"うち未昇格 {unpromoted} 件は reflect 確認後に corrections 本流へ昇格候補。"
-        "corrections capture が枯渇しているときの語彙非依存な代替報酬源（advisory・スコア非関与, #432）。",
-        "",
-    ]
+        + (f" {hint}" if hint else "")
+        + " corrections capture が枯渇しているときの語彙非依存な代替報酬源（advisory・スコア非関与, #432）。"
+    )
+    return header + [body_line, ""]

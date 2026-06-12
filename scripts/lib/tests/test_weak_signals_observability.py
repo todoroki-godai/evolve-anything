@@ -50,6 +50,20 @@ def test_builder_surfaces_channel_counts(tmp_path: Path, monkeypatch) -> None:
     assert "未昇格 3" in body
 
 
+def test_builder_includes_evolve_hint(tmp_path: Path, monkeypatch) -> None:
+    """未昇格ありなら 'evolve' と '今日の修正確認' の誘導行が出る（#444）。"""
+    _seed(tmp_path, monkeypatch, [
+        {"channel": "rephrase", "promoted": False},
+        {"channel": "esc_interrupt", "promoted": False},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # ADR-028 / issue #444: markdown と構造化経路の両方に同じ行が出る単一ソース契約
+    assert "evolve" in body
+    assert "今日の修正確認" in body
+
+
 def test_builder_registered_in_observability_contract() -> None:
     from audit.observability import _OBSERVABILITY_BUILDERS
 
