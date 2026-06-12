@@ -123,7 +123,10 @@ AskUserQuestion の options は常に **4つ以下** とする（MUST）。
 承認された候補のみ `~/.claude/rl-anything/archive/` に移動:
 
 ```python
-from scripts.prune import archive_file, check_import_dependencies, SkillDependencyError
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+from prune import archive_file, check_import_dependencies, SkillDependencyError
 archive_file("/path/to/file", "zero_invocation")
 ```
 
@@ -156,7 +159,10 @@ archive する前に依存を断ち切る PR を先行させてください。
 ### Step 5: 復元（--restore 時）
 
 ```python
-from scripts.prune import restore_file, list_archive
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+from prune import restore_file, list_archive
 items = list_archive()  # 一覧表示
 restore_file("/path/to/archive/file")  # 復元
 ```
