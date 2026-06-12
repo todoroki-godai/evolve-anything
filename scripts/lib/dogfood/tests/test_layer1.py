@@ -48,9 +48,11 @@ def test_dry_run_invariance_red_when_files_change(monkeypatch, tmp_path):
     (data_dir / "a.json").write_text("x", encoding="utf-8")
 
     def fake_run_evolve_dry(repo_root, output_path, env=None):
-        # dry-run が DATA_DIR を書き換えるケース（#491 型）
-        (data_dir / "a.json").write_text("MUTATED", encoding="utf-8")
-        (data_dir / "new-marker").write_text("", encoding="utf-8")
+        # dry-run が隔離コピー先（CLAUDE_PLUGIN_DATA）を書き換えるケース（#491 型）。
+        # 新しい隔離コピー方式では env["CLAUDE_PLUGIN_DATA"] がコピー先パスを指す。
+        isolated = Path(env["CLAUDE_PLUGIN_DATA"]) if env and "CLAUDE_PLUGIN_DATA" in env else data_dir
+        (isolated / "a.json").write_text("MUTATED", encoding="utf-8")
+        (isolated / "new-marker").write_text("", encoding="utf-8")
         output_path.write_text('{"phases":{}}', encoding="utf-8")
         return {"returncode": 0, "stderr": ""}
 
