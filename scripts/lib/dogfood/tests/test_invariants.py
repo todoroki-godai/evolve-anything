@@ -117,6 +117,29 @@ def test_observability_contract_unknown_key_detected():
     assert any("not_a_real_builder_key" in f["detail"] for f in failures)
 
 
+def test_observability_contract_constitutional_not_unknown():
+    """constitutional は evolve-only observability キー — contract violation にならない（#504）。"""
+    r = _ok_result()
+    r["observability"]["constitutional"] = ["Constitutional: cache stale"]
+    failures = invariants.check_observability_contract(r)
+    assert all("constitutional" not in f["detail"] for f in failures)
+
+
+def test_observability_contract_remediation_batch_skip_not_unknown():
+    """remediation_batch_skip は evolve-only observability キー — contract violation にならない（#504）。"""
+    r = _ok_result()
+    r["observability"]["remediation_batch_skip"] = ["✓ remediation batch_skip: 0 件"]
+    failures = invariants.check_observability_contract(r)
+    assert all("remediation_batch_skip" not in f["detail"] for f in failures)
+
+
+def test_observability_contract_evolve_only_keys_in_known_set():
+    """_observability_builder_keys() が evolve-only キーを含む（#504）。"""
+    known = invariants._observability_builder_keys()
+    assert "constitutional" in known, "constitutional が既知キーに含まれていない"
+    assert "remediation_batch_skip" in known, "remediation_batch_skip が既知キーに含まれていない"
+
+
 # --- run_all 集約 --------------------------------------------------------------
 
 def test_run_all_green_on_ok_result():

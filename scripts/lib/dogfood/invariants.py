@@ -32,12 +32,27 @@ _COUNT_KEY_NAMES = {
 _GLOBAL_SUFFIX = "_all_pj"
 
 
+# evolve.py が audit/PJ アーティファクト起点でなく実行時状態として直接書き込む observability キー。
+# これらは _OBSERVABILITY_BUILDERS（project_dir: Path → section）の builder パターンに馴染まないため
+# contract 外に書き込まれるが、既知・意図的なキーなので unknown 判定しない（#504）。
+# - constitutional: _surface_constitutional_status()（cache stale/未生成アラート）
+# - remediation_batch_skip: build_remediation_batch_skip_observability()（evolve result が引数）
+_EVOLVE_ONLY_OBSERVABILITY_KEYS: frozenset = frozenset(
+    {"constitutional", "remediation_batch_skip"}
+)
+
+
 def _observability_builder_keys() -> set:
-    """observability contract の単一ソースから既知 builder key 集合を得る。"""
+    """observability contract の単一ソースから既知 builder key 集合を得る。
+
+    _OBSERVABILITY_BUILDERS（audit/PJ アーティファクト起点の builder）に加え、
+    evolve.py が実行時状態として直接書き込む _EVOLVE_ONLY_OBSERVABILITY_KEYS も
+    既知として含める（#504）。
+    """
     try:
         from audit.observability import _OBSERVABILITY_BUILDERS
 
-        return {k for k, _ in _OBSERVABILITY_BUILDERS}
+        return {k for k, _ in _OBSERVABILITY_BUILDERS} | _EVOLVE_ONLY_OBSERVABILITY_KEYS
     except Exception:
         # contract が import できない環境では unknown-key 検査を無効化（FP 回避）。
         return set()
