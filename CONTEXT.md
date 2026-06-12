@@ -52,3 +52,6 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | revoke（自動昇格の巻き戻し） | `rl-reflect --revoke-idiom <idiom_key>`。idiom を confirmed=False に戻し（同テキスト全 record）、由来 corrections を `invalidated=True` に原子的 rewrite。invalidated は count_human_corrections から除外＝フェーズ進捗が巻き戻る | #447 |
 | measurement_bug（同値一致検査） | 複数 PJ（≥3）で非自明な集計値（0/None 除外）が bit-exact 一致したら測定バグ候補として advisory surface。「全 PJ 同値カウント＝測定バグ強シグナル」の自動化 | #445 |
 | growth_report（成長レポート） | evolve レポート末尾の決定論表示「あと N 件で次フェーズ」「今日の昇格成果」。閾値は growth_engine の 6 定数が単一ソース | #448 |
+| confirm 配線 | `rl-reflect --promote-weak` が promote 成功後に対応 idiom を confirmed 化する正準経路。signal→idiom は provenance 物理キー（pj_slug, source_path, line_no）で突合 | #463 |
+| 重み昇格レディネス（promotion readiness） | outcome 3軸を fitness 重みへ繰り入れてよいかの3条件決定論判定（分散 / 件数下限 / 方向妥当性）。全 ✓ で「重み昇格を提案」を advisory surface | #461, ADR-046 |
+| cross_pj_confirmed | 他 PJ で confirm 済みの同テキスト idiom を持つ確認 group に付くラベル（slug 一覧）。先頭提示の判断材料であり自動承認はしない | #462 |
