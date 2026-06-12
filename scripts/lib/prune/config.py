@@ -11,6 +11,11 @@ DEFAULT_DECAY_THRESHOLD = 0.2
 CORRECTION_PENALTY = 0.15
 ZERO_INVOCATION_DAYS = 30
 
+# Skill 発火の usage 記録経路が修正された日付 (#478)。
+# この日以前のデータは欠損しているため、zero_invocation を「使われていない」と
+# 断定せず advisory を付与して人間判断に委ねる。
+USAGE_RECORDING_FIX_DATE = "2026-06-12"
+
 # Retirement 機構 (Library Drift arXiv:2605.19576 に基づく)
 RETIREMENT_CONTRIBUTION_THRESHOLD = 0.3  # これ以下の貢献スコアをアーカイブ候補とみなす
 RETIREMENT_MIN_INVOCATIONS = 5  # スコア算出に必要な最低呼び出し回数

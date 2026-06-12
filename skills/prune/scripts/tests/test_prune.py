@@ -891,6 +891,30 @@ class TestDetectZeroInvocationsReferenceExclusion:
         zero_names = [z["skill_name"] for z in zero]
         assert "regular-skill" in zero_names
 
+    def test_zero_invocation_carries_usage_fix_advisory(self, patch_data_dir, tmp_path):
+        """zero_invocation 候補に usage 記録修正日の advisory が付く (#478)。
+
+        Skill 発火の usage 記録経路は #478 で修正された。修正日以前のデータは
+        欠損しているため、zero_invocation を「使われていない」と断定できない。
+        この緩和として advisory 文言を付与する。
+        """
+        skills_dir = tmp_path / "project" / ".claude" / "skills"
+        action_dir = skills_dir / "regular-skill"
+        action_dir.mkdir(parents=True)
+        (action_dir / "SKILL.md").write_text("---\nname: regular-skill\ndescription: regular\n---\n")
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+
+        artifacts = {
+            "skills": [action_dir / "SKILL.md"],
+            "rules": [],
+        }
+        zero, _ = prune.detect_zero_invocations(artifacts, days=30)
+        assert len(zero) == 1
+        cand = zero[0]
+        assert "advisory" in cand
+        assert prune.USAGE_RECORDING_FIX_DATE in cand["advisory"]
+
 
 class TestDetectReferenceDrift:
     """detect_reference_drift のユニットテスト。"""

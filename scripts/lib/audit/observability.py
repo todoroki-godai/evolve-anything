@@ -31,6 +31,7 @@ from .sections_orphan import build_orphan_store_section, build_store_contract_se
 from .sections_outcome import build_outcome_metrics_section
 from .sections_promotion_readiness import build_promotion_readiness_section
 from .sections_testpaths import build_testpaths_coverage_section
+from .sections_triage import build_skill_triage_section
 from .sections_weak_signals import build_weak_signals_section
 
 # (key, builder) — observability の単一ソース。
@@ -53,6 +54,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("promotion_readiness", build_promotion_readiness_section),
     ("weak_signals", build_weak_signals_section),
     ("testpaths_coverage", build_testpaths_coverage_section),
+    ("skill_triage", build_skill_triage_section),
 ]
 
 

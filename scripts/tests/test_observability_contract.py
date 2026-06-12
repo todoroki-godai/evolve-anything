@@ -178,3 +178,21 @@ def test_builders_list_is_nonempty_and_callable(tmp_path):
     for key, builder in _OBSERVABILITY_BUILDERS:
         assert isinstance(key, str)
         assert callable(builder)
+
+
+def test_skill_triage_key_when_custom_skills_exist(tmp_path):
+    """custom スキルがあれば skill_triage key が必ず立つ（#478）。"""
+    skill_dir = tmp_path / ".claude" / "skills" / "my-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: my-skill\n---\n", encoding="utf-8")
+    result = collect_observability(tmp_path)
+    assert "skill_triage" in result
+    combined = "\n".join(result["skill_triage"])
+    assert "Skill Triage" in combined
+    assert "CREATE" in combined
+
+
+def test_skill_triage_absent_when_no_custom_skills(tmp_path):
+    """custom スキルが無い PJ では skill_triage は surface されない（triage 対象外）。"""
+    from audit.sections_triage import build_skill_triage_section
+    assert build_skill_triage_section(tmp_path) is None

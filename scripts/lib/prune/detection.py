@@ -23,6 +23,7 @@ from audit import (
 from .config import (
     DEFAULT_DECAY_DAYS,
     ZERO_INVOCATION_DAYS,
+    USAGE_RECORDING_FIX_DATE,
     RETIREMENT_CONTRIBUTION_THRESHOLD,
     RETIREMENT_MIN_INVOCATIONS,
     load_decay_threshold,
@@ -198,6 +199,13 @@ def detect_zero_invocations(
                     "skill_name": skill_name,
                     "reason": "zero_invocation",
                     "days": days,
+                    # Skill 発火の usage 記録経路は #478 で修正された。修正日以前の
+                    # データは欠損しているため、zero_invocation を「未使用」と断定せず
+                    # 人間判断に委ねる緩和 advisory を付与する。
+                    "advisory": (
+                        f"usage 記録経路は {USAGE_RECORDING_FIX_DATE} に修正済み (#478)。"
+                        "この日以前のデータは欠損のため zero と断定不可。"
+                    ),
                 }))
 
     # rules は毎ターン system prompt に注入されるため使用回数を測定できない。

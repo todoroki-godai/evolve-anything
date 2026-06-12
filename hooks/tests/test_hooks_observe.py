@@ -146,6 +146,32 @@ class TestObserve:
         record = json.loads(registry_file.read_text().strip())
         assert "project_path" in record
 
+    def test_observe_registered_for_skill_matcher(self):
+        """observe.py が PostToolUse の Skill matcher に登録されている (#478)。
+
+        Skill 発火が usage.jsonl に記録される唯一の経路は observe.py の
+        handle_post_tool_use の Skill 分岐。これが Agent matcher にしか
+        登録されていないと Skill 発火が usage registry に乗らず、
+        telemetry の usage_count が構造的に 0 になり prune zero_invocation /
+        skill_evolve insufficient_usage が FP 化する。
+        """
+        hooks_json = Path(__file__).resolve().parent.parent / "hooks.json"
+        config = json.loads(hooks_json.read_text(encoding="utf-8"))
+        post = config["hooks"]["PostToolUse"]
+
+        def _commands_for(matcher: str) -> list[str]:
+            cmds: list[str] = []
+            for group in post:
+                if group.get("matcher") == matcher:
+                    cmds.extend(h.get("command", "") for h in group.get("hooks", []))
+            return cmds
+
+        skill_cmds = _commands_for("Skill")
+        assert any("observe.py" in c for c in skill_cmds), (
+            "observe.py must be registered for the PostToolUse Skill matcher so that "
+            "Skill firings are recorded to usage.jsonl"
+        )
+
     def test_error_recorded(self, patch_data_dir):
         event = {
             "tool_name": "Bash",

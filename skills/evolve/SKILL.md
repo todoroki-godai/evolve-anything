@@ -241,6 +241,8 @@ evolve.py 出力の **トップレベル `observability` フィールド**（`un
 
 **Triage SKIP 抑制サマリ（#308、必ず1行 surface する — MUST）**: `phases.skill_triage.skip_suppressed_summary`（例: `SKIP 抑制 2件 ✓`）を**そのまま1行表示する**。0件でも省略しない（silence != evaluated）。これは過去に SKIP と判断したスキル候補のうち、クールダウン内で再発したため個別表示を畳んだ件数。なお `phases.skill_triage.REVIEW`（再発エスカレーション昇格）や `ledger_status == "ttl_expired"`（🔄 強制再評価）の候補は通常どおり個別 surface される — 抑制対象は「前回判断を維持中の SKIP」のみ。
 
+**Triage アクションサマリ（#478、必ず surface する — MUST）**: `phases.skill_triage` の `CREATE` / `UPDATE` / `SPLIT` / `MERGE` 各リストの**件数と上位候補（skill 名 + confidence）をサマリ表示する**。特に **CREATE（trajectory 由来の新スキル候補）は埋没厳禁** — 過去は remediation の低 confidence batch_skip の1行に畳まれてユーザーに提示されなかった（#478）。各アクション0件でも「CREATE: 0件 ✓」のように省略せず1行残す（silence != evaluated）。`observability.skill_triage`（Step 3.8 で surface 済みの契約行）が「この表示を必ず行え」というリマインダになっている。
+
 ### Step 4: Reorganize フェーズ（split 検出 + 階層統合提案）
 
 evolve.py の出力に含まれる `reorganize` フェーズ結果を確認する。

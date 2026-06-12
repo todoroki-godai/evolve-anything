@@ -97,7 +97,11 @@ def _finalize_suitability(scores, suitability, skill_name, skill_dir, telemetry)
         and suitability != "rejected"
     ):
         suitability = "insufficient_usage"
-        recommendation = "使用実績待ち — エラーが蓄積してから候補化"
+        recommendation = (
+            "使用実績待ち — エラーが蓄積してから候補化"
+            "（usage 記録経路は 2026-06-12 に修正済み #478。"
+            "修正日以前のデータは欠損のため zero と断定不可）"
+        )
 
     return suitability, recommendation, anti_patterns, verification_bypass
 

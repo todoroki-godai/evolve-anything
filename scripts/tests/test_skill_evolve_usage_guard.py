@@ -43,6 +43,8 @@ def test_finalize_demotes_zero_usage_to_insufficient(tmp_path):
     assert suit == "insufficient_usage"
     assert bypass is False
     assert "使用実績待ち" in rec
+    # #478: usage 記録経路修正日の advisory を含める（pre-fix データ欠損の緩和）
+    assert "#478" in rec
 
 
 def test_finalize_verification_skill_keeps_medium_even_at_zero_usage(tmp_path):
