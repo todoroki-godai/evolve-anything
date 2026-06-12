@@ -28,10 +28,11 @@ rl-audit
 # 環境の健康診断
 /rl-anything:audit
 
-# 過去セッションからデータを一括収集
-/rl-anything:backfill
+# 過去セッションの human 発話を一括収集（任意・ゼロ LLM）
+# ※ Skill/Agent 観測は observe hooks が進行形で自動記録する。専用 backfill CLI は廃止（#215/#486）
+bin/rl-fleet ingest
 
-# 日次運用（まず dry-run でプレビュー → 確認後に本実行）
+# 日次運用（まず dry-run でプレビュー → 確認後に本実行。取り込みも内包）
 /rl-anything:evolve --dry-run
 /rl-anything:evolve
 ```
@@ -243,11 +244,14 @@ rl-anything は **4つの独立した柱** で構成される。
 
 レポート内容: Skill Quality Trends / MEMORY Health / Plugin Usage / OpenSpec Workflow Analytics / ハードコード値検出
 
-### backfill
+### backfill（廃止 — #215/#486）
+
+専用 CLI（`rl-backfill` 等）は #215 で削除済み。観測は observe hooks が進行形で自動記録し、
+取り込み・分析は `evolve` / `audit` に統合済み。human 発話だけ先に取り込みたい場合のみ:
 
 ```
-/rl-anything:backfill              # バックフィル＋分析
-/rl-anything:backfill --force      # 既存データを削除して再実行
+bin/rl-fleet ingest                # 全 PJ の human 発話を utterances.db に取り込み（ゼロ LLM）
+/rl-anything:evolve --dry-run      # 取り込み + 改善提案（dry-run プレビュー）
 ```
 
 </details>

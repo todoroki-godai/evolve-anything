@@ -26,7 +26,10 @@ class TestBackfillSuggestion:
         assert result["sufficient"] is False
         assert result["telemetry_empty"] is True
         assert result["backfill_recommended"] is True
-        assert "backfill" in result["message"].lower()
+        # #486: 旧 /rl-anything:backfill スキルは #215 で CLI 削除済みの幻なので
+        # 案内文に含めてはならない。初回は hooks の観測蓄積 + /rl-anything:evolve が正。
+        assert "/rl-anything:backfill" not in result["message"]
+        assert "/rl-anything:evolve" in result["message"]
 
     def test_partial_data_not_backfill(self, tmp_path):
         """少量だが観測あり → backfill_recommended: False（単なるデータ不足）。"""

@@ -17,7 +17,7 @@
 | pitfall 運用 | pitfall-curate | 任意PJの pitfalls.md を育てる PJ非依存ツール。類似 dedup / 普遍性分類（universal/project/instance + 汎用度1-5）/ 三段階開示の配布版(Top-N)生成 / 記録↔分類↔配布の同期ゲート。判断は agent、決定論処理は `scripts/pitfall_curate.py`。`pitfall_manager`（自己進化専用）とは別物 |
 | 仕様管理 | spec-keeper | SPEC.md + ADR の管理、Progressive Disclosure L1/L2 自動昇格 |
 | 後片付け | cleanup | PR マージ・デプロイ後の痕跡（branches / worktrees / tmp dirs / Issues / Test plan 残件）を候補提示→個別承認→実行。tmp dir default prefix は `rl-anything-` のみに安全側限定 |
-| ユーティリティ | feedback, update, version, backfill | フィードバック・更新・バージョン確認・初期セットアップ |
+| ユーティリティ | feedback, update, version | フィードバック・更新・バージョン確認（backfill は #215 で CLI 削除→evolve 自動 ingest に統合、スキルは廃止リダイレクトのみ） |
 
 ## コンポーネント
 
@@ -86,9 +86,11 @@
 
 ```
 # 初回セットアップ（新規PJ導入時）
-/rl-anything:backfill           # 既存セッション履歴をバックフィル → 分析レポート
+# observe hooks が自動でセッションを記録する。数セッション利用後に下記を回せばよい。
+# （旧 /rl-anything:backfill は #215 で CLI 削除済みの幻なので廃止）
+bin/rl-fleet ingest             # 全 PJ の human 発話を utterances.db に取り込み（任意・ゼロ LLM）
 
-# 日次運用（全フェーズ一括）
+# 日次運用（全フェーズ一括 = 取り込み + 改善提案）
 /rl-anything:evolve
 
 # 修正フィードバックの反映

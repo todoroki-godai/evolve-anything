@@ -30,10 +30,12 @@ rl-audit
 # Health check of your environment
 /rl-anything:audit
 
-# Bulk-collect data from past sessions
-/rl-anything:backfill
+# Bulk-collect human utterances from past sessions (optional, zero LLM)
+# Note: Skill/Agent observations are recorded going forward by observe hooks.
+# The dedicated backfill CLIs were removed in #215; the skill is deprecated (#486).
+bin/rl-fleet ingest
 
-# Daily operation (preview with dry-run first, then execute)
+# Daily operation (preview with dry-run first, then execute; ingest is included)
 /rl-anything:evolve --dry-run
 /rl-anything:evolve
 ```
@@ -249,11 +251,15 @@ Each candidate gets a recommendation label (archive / keep / needs review) and a
 
 Report contents: Skill Quality Trends / MEMORY Health / Plugin Usage / OpenSpec Workflow Analytics / Hardcoded-value detection.
 
-### backfill
+### backfill (deprecated — #215/#486)
+
+The dedicated CLIs (`rl-backfill`, etc.) were removed in #215. Observation is now recorded
+going forward by observe hooks, and ingest/analysis is folded into `evolve` / `audit`.
+To bulk-collect only human utterances first:
 
 ```
-/rl-anything:backfill              # Backfill + analysis
-/rl-anything:backfill --force      # Delete existing data and re-run
+bin/rl-fleet ingest                # Ingest human utterances across all PJs into utterances.db (zero LLM)
+/rl-anything:evolve --dry-run      # Ingest + improvement proposals (dry-run preview)
 ```
 
 </details>

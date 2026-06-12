@@ -95,7 +95,9 @@ def test_insufficient_data_warning_goes_to_stderr_not_stdout(capsys):
     captured = capsys.readouterr()
     assert captured.out == ""  # stdout には1文字も出さない
     assert "テレメトリ未取得" in captured.err
-    assert "backfill" in captured.err
+    # #486: 削除済みの /rl-anything:backfill を案内しない。observe + evolve が現行経路。
+    assert "/rl-anything:backfill" not in captured.err
+    assert "evolve" in captured.err
 
     evolve._warn_insufficient_data(
         {"backfill_recommended": False, "message": "観測 1 件のみ"}
