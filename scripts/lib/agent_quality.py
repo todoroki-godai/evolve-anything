@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from frontmatter import count_content_lines, parse_frontmatter
-from lib.agent_quality_catalog import (
+from agent_quality_catalog import (
     ANTI_PATTERNS,
     BEST_PRACTICES,
     BLOAT_LINE_THRESHOLD,
@@ -31,7 +31,7 @@ from lib.agent_quality_catalog import (
     VAGUE_KEYWORD_THRESHOLD,
     VAGUE_KEYWORDS,
 )
-from lib.agent_quality_upstream import check_upstream  # noqa: F401 — re-export
+from agent_quality_upstream import check_upstream  # noqa: F401 — re-export
 
 logger = logging.getLogger(__name__)
 

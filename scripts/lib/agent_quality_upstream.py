@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from lib.agent_quality_catalog import UPSTREAM_REPO
+from agent_quality_catalog import UPSTREAM_REPO
 
 logger = logging.getLogger(__name__)
 

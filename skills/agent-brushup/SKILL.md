@@ -29,14 +29,18 @@ description: |
 
 ```bash
 rl-usage-log "agent-brushup"
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lib/agent_quality.py scan "$(pwd)" 2>&1
 ```
 
-上記が CLI として使えない場合は、Python で直接:
-
 ```python
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from agent_quality import scan_agents, check_quality, check_upstream
-agents = scan_agents(project_root=Path("$(pwd)"))
+from pathlib import Path
+agents = scan_agents(project_root=Path(os.getcwd()))
+for a in agents:
+    result = check_quality(a)
+    print(result)
 ```
 
 ### Step 2: サブコマンド分岐
