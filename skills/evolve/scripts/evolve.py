@@ -1204,6 +1204,23 @@ def run_evolve(
     except Exception as e:
         result["evolve_decisions"] = {"error": str(e)}
 
+    # ── 成長レポート（決定論・read-only）（#448）─────────────────────────────
+    # audit phase 後に corrections を取得して「あと N 件で次フェーズ」「今日の昇格成果」を
+    # 常時 emit（error でもキーを置く）。ファイル書き込みなし（growth_report は read-only）。
+    try:
+        from growth_report import build_growth_report
+        from telemetry_query import query_corrections as _query_corrections_gr
+        _gr_project_name = Path(project_dir).name if project_dir else Path.cwd().name
+        _gr_corrections = _query_corrections_gr(project=_gr_project_name)
+        result["growth_report"] = build_growth_report(
+            _gr_project_name,
+            corrections=_gr_corrections,
+            review_result=result.get("correction_review"),
+            autopromote_result=result.get("idiom_autopromote"),
+        )
+    except Exception as e:
+        result["growth_report"] = {"error": str(e)}
+
     return result
 
 

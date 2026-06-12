@@ -30,6 +30,23 @@ except ImportError:
 STALENESS_WARN_DAYS = 7
 STALENESS_HIDE_DAYS = 30
 
+# ── フェーズ閾値定数（単一ソース）──────────────────────────────────
+# growth_report.py 等がこれを import して使う。ここだけ変更すれば
+# detect_phase / compute_phase_progress / レポート表示が同時追従する。
+
+# Bootstrap → Initial Nurturing 昇格閾値
+BOOTSTRAP_SESSIONS_TARGET: int = 10
+
+# Initial Nurturing → Structured Nurturing 昇格閾値
+STRUCTURED_SESSIONS_TARGET: int = 50
+STRUCTURED_CORRECTIONS_TARGET: int = 10
+STRUCTURED_RULES_TARGET: int = 3
+
+# Structured Nurturing → Mature Operation 昇格閾値
+MATURE_SESSIONS_TARGET: int = 200
+MATURE_RULES_TARGET: int = 10
+MATURE_COHERENCE_TARGET: float = 0.7
+
 
 # ── Phase Enum ──────────────────────────────────────────────────
 
@@ -86,22 +103,22 @@ def detect_phase(
     """
     # Mature Operation
     if (
-        sessions_count > 200
-        and crystallized_rules >= 10
-        and coherence_score >= 0.7
+        sessions_count > MATURE_SESSIONS_TARGET
+        and crystallized_rules >= MATURE_RULES_TARGET
+        and coherence_score >= MATURE_COHERENCE_TARGET
     ):
         return Phase.MATURE_OPERATION
 
     # Structured Nurturing
     if (
-        sessions_count >= 50
-        and corrections_count >= 10
-        and crystallized_rules >= 3
+        sessions_count >= STRUCTURED_SESSIONS_TARGET
+        and corrections_count >= STRUCTURED_CORRECTIONS_TARGET
+        and crystallized_rules >= STRUCTURED_RULES_TARGET
     ):
         return Phase.STRUCTURED_NURTURING
 
     # Initial Nurturing
-    if sessions_count >= 10:
+    if sessions_count >= BOOTSTRAP_SESSIONS_TARGET:
         return Phase.INITIAL_NURTURING
 
     # Bootstrap (fallback)
@@ -123,23 +140,27 @@ def compute_phase_progress(
         return 1.0
 
     if phase == Phase.BOOTSTRAP:
-        # 次フェーズ (Initial) の条件: sessions >= 10
-        return min(1.0, sessions_count / 10.0)
+        # 次フェーズ (Initial) の条件: sessions >= BOOTSTRAP_SESSIONS_TARGET
+        return min(1.0, sessions_count / BOOTSTRAP_SESSIONS_TARGET)
 
     if phase == Phase.INITIAL_NURTURING:
         # 次フェーズ (Structured) の条件:
-        #   sessions >= 50, corrections >= 10, crystallized_rules >= 3
-        s = min(1.0, sessions_count / 50.0)
-        c = min(1.0, corrections_count / 10.0)
-        r = min(1.0, crystallized_rules / 3.0)
+        #   sessions >= STRUCTURED_SESSIONS_TARGET,
+        #   corrections >= STRUCTURED_CORRECTIONS_TARGET,
+        #   crystallized_rules >= STRUCTURED_RULES_TARGET
+        s = min(1.0, sessions_count / STRUCTURED_SESSIONS_TARGET)
+        c = min(1.0, corrections_count / STRUCTURED_CORRECTIONS_TARGET)
+        r = min(1.0, crystallized_rules / STRUCTURED_RULES_TARGET)
         return (s + c + r) / 3.0
 
     if phase == Phase.STRUCTURED_NURTURING:
         # 次フェーズ (Mature) の条件:
-        #   sessions > 200, crystallized_rules >= 10, coherence >= 0.7
-        s = min(1.0, sessions_count / 200.0)
-        r = min(1.0, crystallized_rules / 10.0)
-        co = min(1.0, coherence_score / 0.7)
+        #   sessions > MATURE_SESSIONS_TARGET,
+        #   crystallized_rules >= MATURE_RULES_TARGET,
+        #   coherence >= MATURE_COHERENCE_TARGET
+        s = min(1.0, sessions_count / MATURE_SESSIONS_TARGET)
+        r = min(1.0, crystallized_rules / MATURE_RULES_TARGET)
+        co = min(1.0, coherence_score / MATURE_COHERENCE_TARGET)
         return (s + r + co) / 3.0
 
     return 0.0
