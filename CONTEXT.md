@@ -56,3 +56,4 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | 重み昇格レディネス（promotion readiness） | outcome 3軸を fitness 重みへ繰り入れてよいかの3条件決定論判定（分散 / 件数下限 / 方向妥当性）。全 ✓ で「重み昇格を提案」を advisory surface | #461, ADR-046 |
 | cross_pj_confirmed | 他 PJ で confirm 済みの同テキスト idiom を持つ確認 group に付くラベル（slug 一覧）。先頭提示の判断材料であり自動承認はしない | #462 |
 | union read | DuckDB ストア（read_only）+ 未 ingest live jsonl を dedup 合算して読む読み取り経路。ingest 後の rotate で jsonl が空でも分母が取れる（sessions: `session_store.read_session_records`、dedup キーは ingest の UNIQUE と同一） | #415 |
+| plugin_self | スキル origin の一種 — `.claude-plugin/plugin.json` を持つリポジトリ自身の repo 直下 `skills/` のスキル。evolve は custom 同等に診断するが auto-apply は protected（人間承認必須）。インストール済み他プラグイン（plugin）とは別物 | #185 |

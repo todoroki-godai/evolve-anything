@@ -80,6 +80,7 @@
 | `outcome_promotion_readiness` | ADR-046 重み昇格レディネスの3条件決定論判定（分散 / 件数下限 / 方向妥当性）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母は session_store union read（db read_only + 未 ingest jsonl）で実効化済み（#461, #469） | `audit/outcome_promotion_readiness.py` |
 | `cross_pj_priority` | confirmed idiom の PJ 横断優先提示 — 他 PJ 承認済みと同テキストの確認 group に `cross_pj_confirmed` ラベル + 先頭表示（提示のみ・自動承認しない、normalize は autopromote と1関数共有）（#462） | `correction_semantic/cross_pj_priority.py` |
 | `testpaths_coverage` | pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468） | `testpaths_coverage.py` |
+| `plugin_self` origin | プラグイン本体リポジトリ自身の repo 直下 `skills/` を evolve 診断対象化 — `.claude-plugin/plugin.json` 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185） | `skill_origin.py` |
 
 ## クイックスタート
 
