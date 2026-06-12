@@ -57,3 +57,6 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | cross_pj_confirmed | 他 PJ で confirm 済みの同テキスト idiom を持つ確認 group に付くラベル（slug 一覧）。先頭提示の判断材料であり自動承認はしない | #462 |
 | union read | DuckDB ストア（read_only）+ 未 ingest live jsonl を dedup 合算して読む読み取り経路。ingest 後の rotate で jsonl が空でも分母が取れる（sessions: `session_store.read_session_records`、dedup キーは ingest の UNIQUE と同一） | #415 |
 | plugin_self | スキル origin の一種 — `.claude-plugin/plugin.json` を持つリポジトリ自身の repo 直下 `skills/` のスキル。evolve は custom 同等に診断するが auto-apply は protected（人間承認必須）。インストール済み他プラグイン（plugin）とは別物 | #185 |
+| dogfood gate（通し評価ゲート） | リリース前に実環境の繋ぎ目を3層で検査する `bin/rl-dogfood-gate`（Layer1: dry-run 不変・隔離コピー / Layer2: report invariants / Layer3: SKILL.md コードブロック実行）。pytest が掬えない「テスト緑・実環境赤」を防ぐ | #496 |
+| 隔離コピー方式 | gate Layer1 が実 DATA_DIR を tmp にコピーし `CLAUDE_PLUGIN_DATA` で隔離実行してコピー側のみ比較する方式。ライブ hook の ambient write 偽赤を構造的に排除 | #496, PR #515 |
+| 文書化された除外リスト | dry-run 純度契約（1バイトも書かない）の原則ベース例外 — 意図された dry-run 書込（cache warm / 運用ポインタ evolve_pending/）を理由コメント付き定数で除外。bypass フラグは作らない | #513, #496 |
