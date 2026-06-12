@@ -35,7 +35,7 @@
 | `skill-triage` | CREATE/UPDATE/SPLIT/MERGE/OK の5択判定 | `skill_triage.py` |
 | `trigger-eval-generator` | sessions+usage → skill-creator 互換 evals.json 自動生成 | `trigger_eval_generator.py` |
 | `evolve-skill` | 自己進化パターン（Pre-flight / pitfalls.md）のピンポイント組み込み | skill |
-| `agent-brushup` | エージェント定義の品質診断・改善提案・upstream 監視 | `agent_quality.py` |
+| `agent-brushup` | エージェント定義の品質診断・改善提案・upstream 監視・model exact-ID pin 検出（#449） | `agent_quality.py` |
 | `critical-instruction-compliance` | critical 行抽出+リフレーズ+違反検出+pitfall 自動学習 | `critical_instruction_extractor.py` |
 | `second-opinion` | cold-read セカンドオピニオン（3モード、codex 不要） | agent |
 | `growth-level` | env_score → Lv.1-10 + 日英称号マッピング | `growth_level.py` |
