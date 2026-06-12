@@ -572,6 +572,30 @@ def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
     min_count = fe.MIN_DATA_COUNT
 
     if not drift.get("sufficient"):
+        # #479 item 3: fitness_evolution が insufficient_data + structural_reason を返す
+        # （skill_evolve_not_scored = 提案が構造的に出ない PJ）場合、「あと N 件で判定可能」を
+        # 蓄積前提の断定として単独で出すと fitness_evolution の next_action
+        # （「fitness は使わない設計。対応不要」）と同一 run で矛盾する。母集団は『提案が出て
+        # 初めて』accept/reject が発生して積み上がるため、構造的に対象外になり得る旨を明示し
+        # 3 箇所（Step 2 / fitness_evolution / calibration_drift）の文言を統一する。
+        structural = False
+        try:
+            fe_result = fe.run_fitness_evolution()
+            structural = bool(
+                fe_result.get("status") == "insufficient_data"
+                and fe_result.get("structural_reason")
+            )
+        except Exception:
+            structural = False
+
+        if structural:
+            return header + [
+                f"ℹ 評価したが accept/reject データ不足 {valid_count}/{min_count} 件 — "
+                "calibration drift 判定は保留。"
+                "母集団は『提案が出て初めて』accept/reject が発生して積み上がるため、"
+                "skill 提案が構造的に出ない PJ では構造的に対象外（無理に貯める必要はない）。",
+                "",
+            ]
         return header + [
             f"ℹ 評価したが accept/reject データ不足 {valid_count}/{min_count} 件 — "
             f"calibration drift 判定は保留（あと {min_count - valid_count} 件）。",

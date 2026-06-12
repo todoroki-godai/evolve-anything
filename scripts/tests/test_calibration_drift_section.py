@@ -45,6 +45,23 @@ def test_data_insufficient_line(monkeypatch, tmp_path):
     assert "データ不足 10/30" in combined
 
 
+def test_data_insufficient_structural_caveat(monkeypatch, tmp_path):
+    """insufficient_data に structural_reason がある場合、文言は『あと N 件で貯まる』を
+    断定せず『提案が出て初めて積み上がる＝構造的に対象外の場合がある』へ統一する（#479 item 3）。
+
+    fitness_evolution の next_action（「fitness は使わない設計。対応不要」）と
+    calibration_drift の「あと N 件」が同一 run で矛盾していた問題を解消する。
+    """
+    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(2))
+    section = build_calibration_drift_section(tmp_path)
+    combined = "\n".join(section)
+    assert "データ不足 2/30" in combined
+    # 構造的に対象外の可能性を明示する（提案が出ないと貯まらない）
+    assert "構造的に対象外" in combined
+    # 「あと N 件」を蓄積前提の断定として単独で出さない（#479 item 3）
+    assert "あと 28 件で判定可能になります" not in combined
+
+
 def test_clean_when_no_drift(monkeypatch, tmp_path):
     """十分なデータで drift（warning）が無ければ ✓ 行を残す。"""
     monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(30))

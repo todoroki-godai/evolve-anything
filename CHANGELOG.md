@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(evolve): evolve SKILL.md 記載と実体の3箇所の乖離を解消（closes #479）** — (1) **import パス誤り（ModuleNotFoundError）**: Step 6.1/6.2 が `bootstrap_backlog.mark_done(...)` / `daily_review.record_reviewed(...)` を直 import 前提で記載していたが実体は `correction_semantic` パッケージ配下。Step 6.5（auto_memory_broker）と同型の sys.path 設定込み完全コード例（`from correction_semantic import bootstrap_backlog` / `daily_review`・`resolve_slug` で slug 導出・`decision` はキーワード専用）を両 Step に追加し、`python3 -c` で実行検証（dry-run で `mark_done` / `record_reviewed` が期待 dict を返すことを確認）。(2) **所要時間目安が stale**: Step 1 の `large ≈ 8〜20 分`（および line 80 の「数分〜20分」）が [ADR-037] の audit/skill_evolve LLM-free 化以降の実測（large 環境で約34秒）と一桁以上乖離していたため、`small ≈ 〜15 秒 / medium ≈ 15〜30 秒 / large ≈ 30〜60 秒（実測約34秒）`へ再校正し「LLM-free 化以降の実測ベース」と注記。(3) **fitness 文言の3箇所矛盾**: 同一 run で fitness_evolution の next_action（「fitness は使わない設計。対応不要」）と calibration_drift の「あと N 件」（蓄積前提）が矛盾していた。`scripts/lib/audit/sections.py` の `build_calibration_drift_section` が、fitness_evolution の insufficient_data + structural_reason（`skill_evolve_not_scored`）を検出した場合、「あと N 件で判定可能」の蓄積前提断定を「母集団は『提案が出て初めて』積み上がる＝構造的に対象外になり得る」へ切替え、3箇所（Step 2 has_fitness / fitness_evolution next_action / calibration_drift）の文言を統一。SKILL.md Step 8 に整合注記を追記。TDD 新規 1 テスト（test_data_insufficient_structural_caveat）。決定論・LLM 非依存。
+
 ## [1.98.0] - 2026-06-12
 
 ### Added
