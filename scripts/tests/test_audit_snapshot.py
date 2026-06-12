@@ -102,6 +102,10 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # 読むため、実機データがあると snapshot がブレる。空 tmp に向けて出力を決定論化する（#423）。
     from audit import outcome_metrics
     monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path / "no-outcome-data")
+    # measurement_bug builder は環境グローバルな DATA_DIR 配下の growth-state-*.json を walk するため、
+    # 実機データがあると snapshot がブレる。空 tmp に向けて出力を決定論化する（#445）。
+    from audit import measurement_bug
+    monkeypatch.setattr(measurement_bug, "DATA_DIR", tmp_path / "no-growth-state")
     return proj
 
 

@@ -98,6 +98,10 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     # ため、実機データがあると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する（#423）。
     from audit import outcome_metrics
     monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path / "no-outcome-data")
+    # measurement_bug も環境グローバル（DATA_DIR 配下の growth-state-*.json）を walk する builder の
+    # ため、実機データがあると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する（#445）。
+    from audit import measurement_bug
+    monkeypatch.setattr(measurement_bug, "DATA_DIR", tmp_path / "no-growth-state")
     result = collect_observability(tmp_path)
     assert result == {}
 
