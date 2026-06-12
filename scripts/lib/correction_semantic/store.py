@@ -42,11 +42,16 @@ def utterance_key(utterance: Dict[str, Any]) -> str:
 class CorrectionIdiom:
     """1 件の修正言い回しレコード（correction_idioms.jsonl 1 行に対応）。
 
-    idiom:       抽出された修正の言い回し（例: "四国めたんじゃなくて"）
-    provenance:  検出根拠（source_path / line_no / session_id / reason 等の evidence dict）
-    detected_at: 検出時刻（ISO8601 UTC）
-    pj_slug:     ADR-031 準拠 slug（read 側照合の強制・全PJ共通 DATA_DIR 単一ファイル pitfall）
-    idiom_key:   dedup キー（idiom + provenance の物理キーの安定ハッシュ）
+    idiom:        抽出された修正の言い回し（例: "四国めたんじゃなくて"）
+    provenance:   検出根拠（source_path / line_no / session_id / reason 等の evidence dict）
+    detected_at:  検出時刻（ISO8601 UTC）
+    pj_slug:      ADR-031 準拠 slug（read 側照合の強制・全PJ共通 DATA_DIR 単一ファイル pitfall）
+    idiom_key:    dedup キー（idiom + provenance の物理キーの安定ハッシュ）
+    confirmed:    人間が #446 の review で「はい」を選んだか（初期 False・ADR-047）。
+                  confirmed=True が立つまで idiom_autopromote は一切発動しない（雪崩防止）。
+    confirmed_at: 確認時刻（ISO8601 / None）
+    confirmed_by: 確認 source（"daily_review" / None）
+    revoked_at:   安全弁③で取り消した時刻（ISO8601 / None。取り消し時に confirmed=False へ戻す）
     """
 
     idiom: str
@@ -54,6 +59,10 @@ class CorrectionIdiom:
     detected_at: str
     pj_slug: str
     idiom_key: str = ""
+    confirmed: bool = False
+    confirmed_at: Optional[str] = None
+    confirmed_by: Optional[str] = None
+    revoked_at: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.idiom_key:
@@ -105,6 +114,187 @@ def read_idioms(path: Optional[Path] = None) -> List[Dict[str, Any]]:
 
 def existing_idiom_keys(path: Optional[Path] = None) -> Set[str]:
     return {r.get("idiom_key") for r in read_idioms(path) if r.get("idiom_key")}
+
+
+# ─────────────────────────────────────────────────────────────────
+# human-confirmed idiom（ADR-047・自動昇格の発火ゲート + 安全弁③）
+# ─────────────────────────────────────────────────────────────────
+# confirmed の単位は「pj_slug × idiom テキスト」。idiom_key（idiom + 物理キーの安定ハッシュ）は
+# 出現ごとに別値（dedup 用）なので、これを confirmed のキーにすると **同じ言い回しの新規発話**が
+# 別 idiom_key の新 record（unconfirmed）になり永遠にマッチしない（同 phys のシグナルは #446 の
+# 「はい」時点で promoted 済み）→ 構造的 no-op になる。承認済みパターンの新規再発を機械再適用する
+# のが本機能の目的なので、テキスト一致まで一般化する。FP は安全弁3点（daily_cap / surface / revoke）
+# で吸収する（ADR-047 採用案 C）。idiom_key は corrections への provenance 追跡用に維持。
+def read_confirmed_idiom_texts(
+    pj_slug: str, path: Optional[Path] = None
+) -> Set[str]:
+    """当該 PJ slug の confirmed=True かつ未 revoke な idiom の **テキスト集合**を返す。
+
+    idiom_autopromote はこのテキスト集合に一致する新規 weak_signal を自動昇格する。
+    **confirmed=True が 1 件も無ければ空集合** → 自動昇格は一切発動しない（雪崩防止）。
+    revoked_at が立った idiom テキストは除外する（安全弁③で巻き戻る）。
+    """
+    out: Set[str] = set()
+    for r in read_idioms(path):
+        if r.get("pj_slug") != pj_slug:
+            continue
+        if not r.get("confirmed"):
+            continue
+        if r.get("revoked_at"):
+            continue
+        idiom = r.get("idiom")
+        if idiom:
+            out.add(idiom)
+    return out
+
+
+def _resolve_idiom_texts_for_keys(
+    recs: List[Dict[str, Any]], idiom_keys: Set[str]
+) -> Set[tuple]:
+    """idiom_key 集合 → 対応する (pj_slug, idiom テキスト) 集合を解決する。
+
+    confirm / revoke はテキスト単位で全 record に効かせるため、まず引数の idiom_key から
+    (slug, text) を解決し、その (slug, text) を持つ全 record をマッチさせる。
+    """
+    out: Set[tuple] = set()
+    for r in recs:
+        if r.get("idiom_key") in idiom_keys:
+            out.add((r.get("pj_slug"), r.get("idiom")))
+    return out
+
+
+def idiom_keys_for_same_text(
+    idiom_key: str, path: Optional[Path] = None
+) -> Set[str]:
+    """指定 idiom_key と同じ (pj_slug, idiom テキスト) を持つ全 idiom record の idiom_key 集合。
+
+    revoke（安全弁③）の corrections 巻き戻しで使う: confirmed はテキスト単位なので、
+    同テキストの別 phys から昇格した corrections（別 idiom_key）も invalidate 対象にする。
+    引数 idiom_key 自身も含む。該当無し（未知 key）なら空集合。
+    """
+    recs = read_idioms(path)
+    target_texts = _resolve_idiom_texts_for_keys(recs, {idiom_key})
+    if not target_texts:
+        return set()
+    return {
+        r.get("idiom_key")
+        for r in recs
+        if (r.get("pj_slug"), r.get("idiom")) in target_texts and r.get("idiom_key")
+    }
+
+
+def _rewrite_idioms(path: Path, recs: List[Dict[str, Any]]) -> None:
+    """correction_idioms.jsonl を原子的に書き直す（promote._rewrite_promoted と同型）。"""
+    import os
+    import tempfile
+
+    new_content = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def confirm_idioms(
+    idiom_keys: List[str],
+    *,
+    path: Optional[Path] = None,
+    confirmed_by: str = "daily_review",
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """指定 idiom_key の idiom を **テキスト単位**で confirmed=True にマークする。
+
+    #446 の review で「はい」確定時に呼ばれる。引数 idiom_key から (pj_slug, idiom テキスト) を
+    解決し、その (slug, text) を持つ **当該 slug の全 record** に confirmed=True を立てる
+    （将来発話の新 record はテキスト照合で自動的に効くので、ここで追記する必要はない）。
+    confirmed_at / confirmed_by を立て、revoked_at は None にリセット（再確認で復活）。
+
+    返り値の "confirmed" は **書き換えた record 件数**（テキスト一致で複数になりうる）。
+
+    dry-run ゼロ書込: dry_run=True なら一切ファイルに触れず「確認するはずだった record 件数」を返す。
+
+    Returns: {"confirmed": int, "dry_run": bool}
+    """
+    from datetime import datetime, timezone
+
+    store = path if path is not None else default_idioms_path()
+    target_keys = set(k for k in (idiom_keys or []) if k)
+    if not target_keys:
+        return {"confirmed": 0, "dry_run": dry_run}
+
+    recs = _read_jsonl(store)
+    target_texts = _resolve_idiom_texts_for_keys(recs, target_keys)
+    if not target_texts:
+        return {"confirmed": 0, "dry_run": dry_run}
+
+    matched = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for r in recs:
+        if (r.get("pj_slug"), r.get("idiom")) in target_texts:
+            matched += 1
+            if not dry_run:
+                r["confirmed"] = True
+                r["confirmed_at"] = now
+                r["confirmed_by"] = confirmed_by
+                r["revoked_at"] = None
+
+    if dry_run:
+        return {"confirmed": matched, "dry_run": True}
+
+    if matched:
+        _rewrite_idioms(store, recs)
+    return {"confirmed": matched, "dry_run": False}
+
+
+def revoke_idiom(
+    idiom_key: str,
+    *,
+    path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """指定 idiom_key の idiom を **テキスト単位**で confirmed=False + revoked_at に戻す（安全弁③）。
+
+    引数 idiom_key から (pj_slug, idiom テキスト) を解決し、その (slug, text) を持つ
+    当該 slug の全 record に revoked_at を立てる（テキスト単位の取り消し）。取り消し後
+    read_confirmed_idiom_texts から外れ、autopromote の対象から除外される。
+    corrections レコードの invalidated 化は呼び出し側（reflect --revoke-idiom）が行う。
+
+    返り値の "revoked" は **書き換えた record 件数**。
+
+    dry-run ゼロ書込: dry_run=True なら一切ファイルに触れず「取り消すはずだった record 件数」を返す。
+
+    Returns: {"revoked": int, "dry_run": bool}
+    """
+    from datetime import datetime, timezone
+
+    store = path if path is not None else default_idioms_path()
+    recs = _read_jsonl(store)
+    target_texts = _resolve_idiom_texts_for_keys(recs, {idiom_key})
+    if not target_texts:
+        return {"revoked": 0, "dry_run": dry_run}
+
+    matched = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for r in recs:
+        if (r.get("pj_slug"), r.get("idiom")) in target_texts:
+            matched += 1
+            if not dry_run:
+                r["confirmed"] = False
+                r["revoked_at"] = now
+
+    if dry_run:
+        return {"revoked": matched, "dry_run": True}
+
+    if matched:
+        _rewrite_idioms(store, recs)
+    return {"revoked": matched, "dry_run": False}
 
 
 def append_idioms(

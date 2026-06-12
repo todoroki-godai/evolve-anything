@@ -54,11 +54,22 @@ def _correction_message(rec: Dict[str, Any]) -> str:
     return text or reason or rec.get("channel", "weak_signal")
 
 
-def _build_correction_record(rec: Dict[str, Any], project_path: str) -> Dict[str, Any]:
-    """weak_signal → corrections.jsonl の human-source レコードへ変換する。"""
+def _build_correction_record(
+    rec: Dict[str, Any],
+    project_path: str,
+    *,
+    source: str = "reflect_confirmed",
+    idiom_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """weak_signal → corrections.jsonl の human-source レコードへ変換する。
+
+    source: "reflect_confirmed"（人間確認・#431）/ "idiom_dict"（自動昇格・ADR-047）。
+            いずれも provenance_weight.HUMAN_SOURCES のメンバーで重み 1.0。
+    idiom_key: source="idiom_dict" のとき確認済み idiom_key を残す（安全弁③で巻き戻せる）。
+    """
     prov = rec.get("provenance") or {}
     now = datetime.now(timezone.utc).isoformat()
-    return {
+    out = {
         "correction_type": "semantic_idiom",
         "matched_patterns": [],
         "message": _correction_message(rec),
@@ -72,13 +83,20 @@ def _build_correction_record(rec: Dict[str, Any], project_path: str) -> Dict[str
         "extracted_learning": None,
         "project_path": project_path,
         # human-source: フェーズ昇格カウント対象（provenance_weight.HUMAN_SOURCES）
-        "source": "reflect_confirmed",
+        "source": source,
         "timestamp": now,
         "session_id": rec.get("session_id", ""),
         "weak_signal_key": rec.get("signal_key"),
         "weak_signal_channel": rec.get("channel"),
         "weak_signal_provenance": prov,
+        # 安全弁③: revoke で巻き戻せるよう全レコードに invalidated を初期 False で持たせる。
+        "invalidated": False,
     }
+    if source == "idiom_dict":
+        # provenance を潰さない: proxy 再適用だったことを後から監査・一括 invalidate できる。
+        out["promoted_by"] = "idiom_dict"
+        out["idiom_key"] = idiom_key
+    return out
 
 
 def _rewrite_promoted(
@@ -112,13 +130,19 @@ def promote_signals(
     weak_signals_path: Optional[Path] = None,
     corrections_path: Optional[Path] = None,
     project_path: str = "",
+    source: str = "reflect_confirmed",
+    idiom_keys: Optional[Dict[str, str]] = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """指定 signal_key の未昇格 weak_signal を corrections へ昇格する。
 
-    - corrections.jsonl に source=reflect_confirmed の human-source レコードを追記
+    - corrections.jsonl に human-source レコードを追記
+      （source="reflect_confirmed"=人間確認 / "idiom_dict"=自動昇格・ADR-047）
     - 昇格した weak_signal を promoted=True にマーク（二重昇格防止）
     - dry-run はどちらにも一切書かない（昇格するはずだった件数だけ返す）
+
+    idiom_keys: source="idiom_dict" のとき signal_key → 確認済み idiom_key の対応表。
+                昇格レコードに idiom_key を残し、安全弁③（revoke）で巻き戻せるようにする。
 
     Returns:
         {"promoted": int, "dry_run": bool}
@@ -146,10 +170,16 @@ def promote_signals(
     corrections_path = Path(corrections_path)
     corrections_path.parent.mkdir(parents=True, exist_ok=True)
 
+    idiom_keys = idiom_keys or {}
     promoted_keys: Set[str] = set()
     for rec in candidates:
-        append_jsonl(corrections_path, _build_correction_record(rec, project_path))
         key = rec.get("signal_key")
+        append_jsonl(
+            corrections_path,
+            _build_correction_record(
+                rec, project_path, source=source, idiom_key=idiom_keys.get(key),
+            ),
+        )
         if key:
             promoted_keys.add(key)
 
@@ -157,3 +187,71 @@ def promote_signals(
     _rewrite_promoted(ws_path, promoted_keys)
 
     return {"promoted": len(promoted_keys), "dry_run": False}
+
+
+def invalidate_idiom_corrections(
+    idiom_keys: Set[str],
+    *,
+    corrections_path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """指定 idiom_key 由来の idiom_dict 昇格 corrections を invalidated=True に原子的 rewrite（安全弁③）。
+
+    revoke（ADR-047）で confirmed を取り消したとき、その idiom_key で自動昇格された corrections を
+    invalidated=True にして count_human_corrections から除外する（フェーズ進捗が正しく巻き戻る）。
+    promoted_by="idiom_dict" かつ idiom_key が一致するレコードのみが対象（reflect_confirmed や
+    他 idiom_key のレコードは不変）。weak_signals 側の promoted=True は維持（再提示しない）。
+
+    dry-run ゼロ書込: dry_run=True なら一切ファイルに触れず「invalidate するはずだった件数」を返す。
+
+    Returns: {"invalidated": int, "dry_run": bool}
+    """
+    target = set(k for k in (idiom_keys or set()) if k)
+    if corrections_path is None:
+        import rl_common as _rc
+
+        corrections_path = Path(_rc.DATA_DIR) / "corrections.jsonl"
+    corrections_path = Path(corrections_path)
+    if not target or not corrections_path.exists():
+        return {"invalidated": 0, "dry_run": dry_run}
+
+    recs: List[Dict[str, Any]] = []
+    matched = 0
+    with open(corrections_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if (
+                r.get("promoted_by") == "idiom_dict"
+                and r.get("idiom_key") in target
+                and not r.get("invalidated")
+            ):
+                matched += 1
+                if not dry_run:
+                    r["invalidated"] = True
+            recs.append(r)
+
+    if dry_run:
+        return {"invalidated": matched, "dry_run": True}
+
+    if matched:
+        new_content = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(corrections_path.parent), suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            os.replace(tmp_path, corrections_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    return {"invalidated": matched, "dry_run": False}

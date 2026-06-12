@@ -9,6 +9,7 @@ RL ループの報酬入力（corrections）が枯渇しているとき（captur
 observability contract の `build_*_section` 契約（`(project_dir) -> Optional[List[str]]`）は
 他 builder と同一。決定論・LLM 非依存。store を読むだけで検出（batch 走査）はしない。
 """
+import json
 from pathlib import Path
 from typing import List, Optional
 
@@ -19,6 +20,63 @@ _CHANNEL_LABELS = {
     "rephrase": "言い直し",
     "esc_interrupt": "Esc 中断",
 }
+
+# 自動昇格 surface で列挙する idiom の最大数（行が伸びすぎないよう抑える）。
+_MAX_IDIOM_LIST = 5
+
+
+def _corrections_path() -> Path:
+    """corrections.jsonl の正準パスを ADR-042 resolver 経由で解決する（テストで差し替え可）。"""
+    import os
+
+    import rl_common  # 遅延 import（hook/tool 文脈の patch 追従）
+
+    env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+    return Path(rl_common.resolve_data_dir(env)) / "corrections.jsonl"
+
+
+def _autopromote_lines() -> List[str]:
+    """corrections.jsonl の idiom_dict 自動昇格（非 invalidated）を surface する行を返す（安全弁②・ADR-047）。
+
+    idiom_autopromote は confirmed idiom に一致した新規 weak_signal を人間再確認なしで昇格する。
+    黙って進まないよう、累計の自動昇格件数 + idiom 一覧を必ず可視化する（ADR-028 observability）。
+    0 件ならノイズを足さないため空リストを返す。
+    """
+    path = _corrections_path()
+    if not path.exists():
+        return []
+    promoted_msgs: List[str] = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if r.get("promoted_by") != "idiom_dict":
+                    continue
+                if r.get("invalidated"):
+                    continue
+                promoted_msgs.append(r.get("message") or "")
+    except OSError:
+        return []
+
+    n = len(promoted_msgs)
+    if n == 0:
+        return []
+    shown = [m for m in promoted_msgs if m][:_MAX_IDIOM_LIST]
+    listing = " / ".join(shown) if shown else ""
+    more = f" ほか {n - len(shown)} 件" if n > len(shown) else ""
+    line = (
+        f"うち idiom_dict 自動昇格は累計 {n} 件"
+        + (f"（{listing}{more}）" if listing else "")
+        + "。human-confirmed idiom に一致した新規シグナルを再確認なしで昇格"
+        + "（重み 1.0・ADR-047 安全弁②）。誤昇格は `rl-reflect --revoke-idiom <idiom_key>` で巻き戻せる。"
+    )
+    return [line]
 
 
 def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
@@ -72,4 +130,5 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         + (f" {hint}" if hint else "")
         + " corrections capture が枯渇しているときの語彙非依存な代替報酬源（advisory・スコア非関与, #432）。"
     )
-    return header + [body_line, ""]
+    # 安全弁②（ADR-047）: idiom_dict 自動昇格を毎回 surface（黙って進まない）。
+    return header + [body_line] + _autopromote_lines() + [""]

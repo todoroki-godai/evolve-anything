@@ -58,3 +58,30 @@ def test_known_machine_sources_enumerated() -> None:
     assert "hook" in pw.MACHINE_SOURCES
     assert "backfill" in pw.MACHINE_SOURCES
     assert "reflect_confirmed" in pw.HUMAN_SOURCES
+
+
+def test_idiom_dict_source_is_human() -> None:
+    # human が承認した idiom の機械的再適用は human-source（重み 1.0・ADR-047）
+    assert pw.is_human_correction({"source": "idiom_dict"}) is True
+    assert "idiom_dict" in pw.HUMAN_SOURCES
+
+
+def test_invalidated_record_is_excluded(tmp_path=None) -> None:
+    # 安全弁③: revoke で invalidated=True になったレコードはカウントから外れる
+    assert pw.is_human_correction(
+        {"source": "idiom_dict", "invalidated": True}
+    ) is False
+    # reflect_confirmed でも invalidated は除外（汎用）
+    assert pw.is_human_correction(
+        {"source": "reflect_confirmed", "invalidated": True}
+    ) is False
+
+
+def test_count_excludes_invalidated() -> None:
+    records = [
+        {"source": "idiom_dict", "correction_type": "semantic_idiom"},
+        {"source": "idiom_dict", "correction_type": "semantic_idiom", "invalidated": True},
+        {"source": "reflect_confirmed", "correction_type": "semantic_idiom"},
+    ]
+    # invalidated 1 件を除外し 2 件
+    assert pw.count_human_corrections(records) == 2

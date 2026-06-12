@@ -43,6 +43,10 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # 仕様アーティファクト(SPEC.md/CLAUDE.md 等)を未更新」のマージを検出し
     # spec-keeper update / ADR 化を1回提案する。False で完全無効化。
     "spec_trigger_enabled": True,
+    # idiom_autopromote 安全弁①（ADR-047・#447）: human-confirmed idiom に一致する新規
+    # weak_signal を 1 回の evolve で自動昇格する件数上限。超過分は次回 run に持ち越す
+    # （capped で surface）。1 回の confirmed 化が引き金で大量昇格する暴走を量で抑える。
+    "idiom_autopromote_daily_cap": 10,
 }
 
 

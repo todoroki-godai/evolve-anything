@@ -129,6 +129,12 @@
       "type": "boolean",
       "description": "SessionStart で main に着地した『挙動コードを変えたのに SPEC.md/CLAUDE.md 等の仕様を未更新』のマージを検出し spec-keeper update / ADR 化を1回提案する (default: true)。false で無効化。",
       "sensitive": false
+    },
+    "idiom_autopromote_daily_cap": {
+      "title": "Idiom Autopromote Daily Cap",
+      "type": "number",
+      "description": "human-confirmed idiom に一致する新規 weak_signal を1回の evolve で自動昇格する件数上限 (default: 10・ADR-047 安全弁①)。超過分は次回 run に持ち越す (capped で surface)。1回の承認が引き金で大量昇格する暴走を量で抑える。",
+      "sensitive": false
     }
   }
 }

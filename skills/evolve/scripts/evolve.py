@@ -1194,6 +1194,29 @@ def run_evolve(
     except Exception as e:
         result.setdefault("correction_review", {})["daily"] = {"error": str(e)}
 
+    # ── human-confirmed idiom の自動昇格（idiom_autopromote・ADR-047・#447）─────
+    # confirmed=True（かつ未 revoke）の idiom テキストに一致する新規未昇格 weak_signal を、
+    # 人間再確認なしで corrections へ自動昇格（source="idiom_dict"・重み 1.0）。
+    # **最重要の不変条件**: confirmed が 1 件も無ければ promoted=0（雪崩防止）。現環境の
+    # 313 idiom は全件未確認なので起動時点で一切発動しない。confirmed は #446 の人間 y/n でしか立たない。
+    # 安全弁①: daily_cap（userConfig idiom_autopromote_daily_cap・既定 10）件で打ち切り、
+    # 超過は capped で次回 run に持ち越す。error でもキーを置く（常時 emit）。promoted は int で
+    # emit（#448 growth_report が (d.get("promoted") or 0) で読む契約）。
+    # dry_run は promote_signals が corrections / weak_signals に一切触れない（最下層 write ゲート）。
+    try:
+        from correction_semantic import idiom_autopromote as _iap
+        from rl_common.config import load_user_config as _luc
+        _iap_slug = _resolve_pj_slug(project_dir)
+        _iap_cap = int(_luc().get("idiom_autopromote_daily_cap", 10))
+        result["idiom_autopromote"] = _iap.autopromote(
+            _iap_slug,
+            project_path=str(project_dir) if project_dir else "",
+            daily_cap=_iap_cap,
+            dry_run=dry_run,
+        )
+    except Exception as e:
+        result["idiom_autopromote"] = {"error": str(e)}
+
     # ── evolve 提案 accept/reject の決定論キャプチャ（#360-A, ADR-041）────────
     # 候補スキルの before_sha をキューに emit。適用実績=accept / 明示却下=reject は
     # SKILL.md Step 7.8 の drain（ingest_decisions）が optimize_history に記録する。

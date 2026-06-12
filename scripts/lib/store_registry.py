@@ -182,10 +182,14 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "hot path（hooks）からは書かない。",
         writer_locus="batch",
         reader="reflect が --show-weak-signals で参照（個人辞書）。"
+        "idiom_autopromote が confirmed=True の idiom を read_confirmed_idiom_keys で読み自動昇格（ADR-047）。"
         "実コーパスで precision 検証後に hot hook の補助パターンへ昇格可能（#431 提案2）。",
         retention="permanent",
         note="バッチ LLM 意味判定が抽出した修正言い回しの個人辞書（#431）。provenance"
-        "（元発話の物理キー・判定理由）付き。idiom+物理キーの安定ハッシュで dedup。",
+        "（元発話の物理キー・判定理由）付き。idiom+物理キーの安定ハッシュで dedup。"
+        "confirmed/confirmed_at/confirmed_by/revoked_at を持ち（ADR-047・#447）、人間が #446 review で"
+        "「はい」確定時に confirmed=True 化。confirmed=True が立つまで idiom_autopromote は一切発動しない"
+        "（雪崩防止）。revoke（安全弁③）で confirmed=False + revoked_at に戻す。",
     ),
     StoreDeclaration(
         name="correction_judged.jsonl",

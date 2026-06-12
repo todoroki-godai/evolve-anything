@@ -23,8 +23,11 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 # 人間確認済みとみなす source 値（明示 allowlist）。
-# reflect が weak_signals レーンのレコードを人間確認後 corrections へ昇格するときに付与する。
-HUMAN_SOURCES = frozenset({"reflect_confirmed"})
+# - "reflect_confirmed": reflect が weak_signals レーンを人間確認後 corrections へ昇格（#431）。
+# - "idiom_dict": human-confirmed idiom に一致した新規 weak_signal の自動昇格（ADR-047）。
+#   人間が一度承認した idiom_key の機械的再適用なので human-source とみなす（重み 1.0）。
+#   雪崩防止: confirmed=True が立つまで idiom_dict 昇格は一切発生しない（idiom_autopromote が保証）。
+HUMAN_SOURCES = frozenset({"reflect_confirmed", "idiom_dict"})
 
 # 機械生成として除外する source 値（観測された全機械 source）。
 MACHINE_SOURCES = frozenset({"hook", "backfill", "migrate_learnings_queue"})
@@ -37,10 +40,13 @@ def is_human_correction(record: Dict[str, Any]) -> bool:
     """correction 1 件が human-confirmed か（フェーズ昇格カウント対象か）を返す。
 
     判定（保守的・false positive を避ける）:
-    1. correction_type が Stop hook 系なら機械（source 不問）
-    2. source が HUMAN_SOURCES の明示メンバーなら人間
-    3. それ以外（MACHINE_SOURCES / 欠落 / 未知）は機械
+    1. invalidated=True なら除外（安全弁③: revoke で巻き戻されたレコード・ADR-047）
+    2. correction_type が Stop hook 系なら機械（source 不問）
+    3. source が HUMAN_SOURCES の明示メンバーなら人間
+    4. それ以外（MACHINE_SOURCES / 欠落 / 未知）は機械
     """
+    if record.get("invalidated"):
+        return False
     if record.get("correction_type") in _MACHINE_CORRECTION_TYPES:
         return False
     return record.get("source") in HUMAN_SOURCES

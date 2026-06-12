@@ -717,12 +717,17 @@ def main():
                         help="指定 signal_key（カンマ区切り）の weak_signal を corrections へ昇格")
     parser.add_argument("--weak-signals-file", type=str, default=None,
                         help="weak_signals.jsonl のパス（テスト用）")
+    parser.add_argument("--revoke-idiom", type=str, default=None,
+                        help="指定 idiom_key の自動昇格を取り消す（ADR-047 安全弁③・confirmed=False + corrections invalidate）")
+    parser.add_argument("--idioms-file", type=str, default=None,
+                        help="correction_idioms.jsonl のパス（テスト用）")
     args = parser.parse_args()
 
     corrections_file = Path(args.corrections_file) if args.corrections_file else CORRECTIONS_FILE
     current_project = os.environ.get("CLAUDE_PROJECT_DIR")
     project_root = Path(current_project) if current_project else Path.cwd()
     weak_signals_file = Path(args.weak_signals_file) if args.weak_signals_file else None
+    idioms_file = Path(args.idioms_file) if args.idioms_file else None
 
     # --show-weak-signals: weak_signals レーンの未昇格レコードを表示（#431/#432 二層化）
     if args.show_weak_signals:
@@ -750,6 +755,35 @@ def main():
             dry_run=args.dry_run,
         )
         print(json.dumps({"status": "promoted_weak", **res}, ensure_ascii=False, indent=2))
+        return
+
+    # --revoke-idiom: 自動昇格の取り消し（ADR-047 安全弁③）
+    # idiom を confirmed=False + revoked_at に戻し（テキスト単位で全 record）、その idiom テキスト
+    # 由来の promoted_by="idiom_dict" corrections を invalidated=True に巻き戻す（同テキストの別
+    # idiom_key 由来も含む）。count_human_corrections は invalidated を除外するためフェーズ進捗が
+    # 正しく戻る。weak_signals の promoted=True は維持（再提示しない）。dry_run はファイル不変。
+    if args.revoke_idiom:
+        from correction_semantic import promote as _cs_promote
+        from correction_semantic import store as _cs_store
+        # 同テキストの全 idiom_key を先に解決（revoke で confirmed が消える前に取る）
+        same_text_keys = _cs_store.idiom_keys_for_same_text(
+            args.revoke_idiom, path=idioms_file
+        )
+        revoke_res = _cs_store.revoke_idiom(
+            args.revoke_idiom, path=idioms_file, dry_run=args.dry_run
+        )
+        inval_res = _cs_promote.invalidate_idiom_corrections(
+            same_text_keys or {args.revoke_idiom},
+            corrections_path=corrections_file if args.corrections_file else None,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps({
+            "status": "revoked_idiom",
+            "idiom_key": args.revoke_idiom,
+            "revoked": revoke_res.get("revoked", 0),
+            "invalidated": inval_res.get("invalidated", 0),
+            "dry_run": bool(args.dry_run),
+        }, ensure_ascii=False, indent=2))
         return
 
     # --promote-episodic: 指定 session_id + timestamp の correction を episodic に昇格

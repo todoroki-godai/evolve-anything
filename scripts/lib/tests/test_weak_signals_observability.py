@@ -71,6 +71,83 @@ def test_builder_registered_in_observability_contract() -> None:
     assert "weak_signals" in keys
 
 
+# ── idiom_dict 自動昇格の surface（安全弁②・ADR-047） ────────────────
+
+
+def _seed_autopromote(tmp_path: Path, monkeypatch, *, corrections, idioms=None) -> None:
+    """weak_signals は空のまま、corrections / correction_idioms を tmp に向ける。"""
+    import json
+
+    import correction_semantic.store as cs_store
+
+    ws_store_path = tmp_path / "weak_signals.jsonl"
+    # weak_signals を 1 件置いて builder が None で沈黙しないようにする
+    with open(ws_store_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"channel": "rephrase", "promoted": False}) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: ws_store_path)
+
+    corr_path = tmp_path / "corrections.jsonl"
+    with open(corr_path, "w", encoding="utf-8") as f:
+        for r in corrections:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    # sections_weak_signals が読む corrections パス解決を tmp に向ける
+    import audit.sections_weak_signals as sws
+    monkeypatch.setattr(sws, "_corrections_path", lambda: corr_path)
+
+    idioms_path = tmp_path / "correction_idioms.jsonl"
+    if idioms:
+        with open(idioms_path, "w", encoding="utf-8") as f:
+            for r in idioms:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    monkeypatch.setattr(cs_store, "default_idioms_path", lambda base=None: idioms_path)
+
+
+def test_builder_surfaces_idiom_autopromote_count(tmp_path: Path, monkeypatch) -> None:
+    """corrections に idiom_dict 昇格があれば N 件 + idiom 一覧を surface する（安全弁②）。"""
+    _seed_autopromote(
+        tmp_path, monkeypatch,
+        corrections=[
+            {"source": "idiom_dict", "promoted_by": "idiom_dict",
+             "message": "四国めたんじゃなくて（後置型）", "invalidated": False},
+            {"source": "idiom_dict", "promoted_by": "idiom_dict",
+             "message": "緑じゃなくて赤", "invalidated": False},
+            {"source": "reflect_confirmed", "message": "別経路"},  # 数えない
+        ],
+    )
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "idiom_dict" in body and "自動昇格" in body
+    assert "2 件" in body
+
+
+def test_builder_excludes_invalidated_from_autopromote_count(tmp_path: Path, monkeypatch) -> None:
+    """invalidated=True（revoke 済み）は自動昇格件数から除外する。"""
+    _seed_autopromote(
+        tmp_path, monkeypatch,
+        corrections=[
+            {"source": "idiom_dict", "promoted_by": "idiom_dict",
+             "message": "生きてる", "invalidated": False},
+            {"source": "idiom_dict", "promoted_by": "idiom_dict",
+             "message": "取り消し済み", "invalidated": True},
+        ],
+    )
+    section = build_weak_signals_section(tmp_path)
+    body = "\n".join(section or [])
+    assert "1 件" in body
+
+
+def test_builder_no_autopromote_line_when_none(tmp_path: Path, monkeypatch) -> None:
+    """idiom_dict 昇格が 0 件なら自動昇格行は出さない（ノイズを足さない）。"""
+    _seed_autopromote(
+        tmp_path, monkeypatch,
+        corrections=[{"source": "reflect_confirmed", "message": "x"}],
+    )
+    section = build_weak_signals_section(tmp_path)
+    body = "\n".join(section or [])
+    assert "自動昇格" not in body
+
+
 # ── store_registry の宣言契約 ─────────────────────────────────────
 
 def test_weak_signals_declared_in_store_registry() -> None:

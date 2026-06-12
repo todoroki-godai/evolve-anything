@@ -133,3 +133,84 @@ def test_read_unpromoted_can_include_expired(tmp_path: Path) -> None:
     ws = tmp_path / "weak_signals.jsonl"
     _seed_with_expired(ws)
     assert len(cs_promote.read_unpromoted(weak_signals_path=ws, exclude_expired=False)) == 2
+
+
+# ── idiom_dict 昇格（ADR-047・source/promoted_by/idiom_key を残す） ────
+
+
+def test_promote_with_idiom_dict_source(tmp_path: Path) -> None:
+    """source="idiom_dict" を渡すと corrections レコードがその source で書かれる。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sigs = _seed_signals(ws)
+    res = cs_promote.promote_signals(
+        [sigs[0].signal_key], weak_signals_path=ws, corrections_path=corr,
+        project_path="/p", source="idiom_dict", idiom_keys={sigs[0].signal_key: "abc123"},
+    )
+    assert res["promoted"] == 1
+    rec = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()][0]
+    assert rec["source"] == "idiom_dict"
+    assert rec["promoted_by"] == "idiom_dict"
+    assert rec["idiom_key"] == "abc123"
+    assert rec["invalidated"] is False
+
+
+def test_promote_default_source_has_no_promoted_by(tmp_path: Path) -> None:
+    """既定（reflect_confirmed）昇格は後方互換: promoted_by を強制しない。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sigs = _seed_signals(ws)
+    cs_promote.promote_signals(
+        [sigs[0].signal_key], weak_signals_path=ws, corrections_path=corr, project_path="/p",
+    )
+    rec = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()][0]
+    assert rec["source"] == "reflect_confirmed"
+    # 既定は invalidated=False（巻き戻し対象でない通常レコードも統一して持つ）
+    assert rec.get("invalidated") is False
+
+
+# ── invalidate_idiom_corrections（安全弁③・revoke の corrections 巻き戻し） ──
+
+
+def _write_corrections(path: Path, recs):
+    with open(path, "w", encoding="utf-8") as f:
+        for r in recs:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def test_invalidate_marks_matching_idiom_dict_records(tmp_path: Path) -> None:
+    corr = tmp_path / "corrections.jsonl"
+    _write_corrections(corr, [
+        {"source": "idiom_dict", "promoted_by": "idiom_dict", "idiom_key": "k1", "invalidated": False},
+        {"source": "idiom_dict", "promoted_by": "idiom_dict", "idiom_key": "k2", "invalidated": False},
+        {"source": "reflect_confirmed", "message": "x"},  # 対象外
+    ])
+    res = cs_promote.invalidate_idiom_corrections({"k1"}, corrections_path=corr)
+    assert res["invalidated"] == 1
+    recs = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+    by_key = {r.get("idiom_key"): r for r in recs if r.get("idiom_key")}
+    assert by_key["k1"]["invalidated"] is True
+    assert by_key["k2"]["invalidated"] is False  # 別 idiom_key は不変
+    # reflect_confirmed レコードは触らない
+    assert recs[2].get("invalidated") in (None, False)
+
+
+def test_invalidate_dry_run_writes_nothing(tmp_path: Path) -> None:
+    corr = tmp_path / "corrections.jsonl"
+    _write_corrections(corr, [
+        {"source": "idiom_dict", "promoted_by": "idiom_dict", "idiom_key": "k1", "invalidated": False},
+    ])
+    before = corr.read_text(encoding="utf-8")
+    res = cs_promote.invalidate_idiom_corrections({"k1"}, corrections_path=corr, dry_run=True)
+    assert res["dry_run"] is True
+    assert res["invalidated"] == 1
+    assert corr.read_text(encoding="utf-8") == before
+
+
+def test_invalidate_noop_when_no_match(tmp_path: Path) -> None:
+    corr = tmp_path / "corrections.jsonl"
+    _write_corrections(corr, [
+        {"source": "idiom_dict", "promoted_by": "idiom_dict", "idiom_key": "k1", "invalidated": False},
+    ])
+    res = cs_promote.invalidate_idiom_corrections({"nonexistent"}, corrections_path=corr)
+    assert res["invalidated"] == 0

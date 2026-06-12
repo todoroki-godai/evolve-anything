@@ -961,3 +961,69 @@ class TestWeakSignalPromotion:
         assert out["dry_run"] is True
         assert out["promoted"] == 1
         assert not corr.exists()
+
+
+# --- Test: --revoke-idiom（安全弁③・ADR-047 #447） ---
+
+class TestRevokeIdiom:
+    def _seed(self, tmp_path):
+        """confirmed idiom + その idiom_key 由来の idiom_dict 昇格 corrections を作る。"""
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        import correction_semantic.store as cs_store
+
+        idioms = tmp_path / "correction_idioms.jsonl"
+        it = cs_store.CorrectionIdiom(
+            idiom="四国めたんじゃなくて",
+            provenance={"source_path": "/a.jsonl", "line_no": 1, "reason": "後置型"},
+            detected_at="2026-06-10T00:00:00+00:00", pj_slug="rl-anything",
+        )
+        cs_store.append_idioms([it], path=idioms)
+        cs_store.confirm_idioms([it.idiom_key], path=idioms, confirmed_by="daily_review")
+
+        corr = tmp_path / "corrections.jsonl"
+        with open(corr, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "source": "idiom_dict", "promoted_by": "idiom_dict",
+                "idiom_key": it.idiom_key, "invalidated": False,
+                "correction_type": "semantic_idiom", "message": "四国めたんじゃなくて",
+            }, ensure_ascii=False) + "\n")
+        return idioms, corr, it.idiom_key
+
+    def test_revoke_idiom_rolls_back(self, tmp_path, capsys):
+        idioms, corr, key = self._seed(tmp_path)
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        import correction_semantic.store as cs_store
+        from correction_semantic import provenance_weight as pw
+
+        # 巻き戻し前: human-source 1 件
+        before = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert pw.count_human_corrections(before) == 1
+
+        with mock.patch("sys.argv", ["reflect", "--revoke-idiom", key,
+                                     "--idioms-file", str(idioms),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "revoked_idiom"
+        assert out["revoked"] >= 1
+        assert out["invalidated"] == 1
+
+        # idiom は confirmed=False + revoked_at（autopromote 対象外）
+        assert cs_store.read_confirmed_idiom_texts("rl-anything", idioms) == set()
+        # corrections は invalidated=True → human カウントから除外（進捗巻き戻り）
+        after = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert after[0]["invalidated"] is True
+        assert pw.count_human_corrections(after) == 0
+
+    def test_revoke_idiom_dry_run_writes_nothing(self, tmp_path, capsys):
+        idioms, corr, key = self._seed(tmp_path)
+        before_corr = corr.read_text(encoding="utf-8")
+        before_idioms = idioms.read_text(encoding="utf-8")
+        with mock.patch("sys.argv", ["reflect", "--revoke-idiom", key, "--dry-run",
+                                     "--idioms-file", str(idioms),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["dry_run"] is True
+        assert corr.read_text(encoding="utf-8") == before_corr
+        assert idioms.read_text(encoding="utf-8") == before_idioms
