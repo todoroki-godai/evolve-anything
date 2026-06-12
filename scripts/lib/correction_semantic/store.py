@@ -125,6 +125,21 @@ def existing_idiom_keys(path: Optional[Path] = None) -> Set[str]:
 # 「はい」時点で promoted 済み）→ 構造的 no-op になる。承認済みパターンの新規再発を機械再適用する
 # のが本機能の目的なので、テキスト一致まで一般化する。FP は安全弁3点（daily_cap / surface / revoke）
 # で吸収する（ADR-047 採用案 C）。idiom_key は corrections への provenance 追跡用に維持。
+def normalize_idiom_text(text: Optional[str]) -> str:
+    """idiom テキスト一致判定の正準正規化（決定論・LLM 非依存）。
+
+    idiom_autopromote（ADR-047・#447）と cross_pj_priority（#462）の**両方**がこの 1 関数を
+    通してテキストを照合する（正規化ロジックを二重実装しない・Success Criteria #462）。
+    正規化は周囲空白の strip のみ — 既存 autopromote は厳密 exact-match だったので、
+    strip は exact-match の superset であり既存 confirmed 照合を壊さない（接地維持）。
+    日本語 idiom は median 10 文字の生発話断片（bootstrap_backlog の実データ知見）であり、
+    casefold/全半角統一は過剰一般化（別意味の取り違え）を招くため意図的に入れない。
+    """
+    if not text:
+        return ""
+    return text.strip()
+
+
 def read_confirmed_idiom_texts(
     pj_slug: str, path: Optional[Path] = None
 ) -> Set[str]:
@@ -133,6 +148,7 @@ def read_confirmed_idiom_texts(
     idiom_autopromote はこのテキスト集合に一致する新規 weak_signal を自動昇格する。
     **confirmed=True が 1 件も無ければ空集合** → 自動昇格は一切発動しない（雪崩防止）。
     revoked_at が立った idiom テキストは除外する（安全弁③で巻き戻る）。
+    テキストは normalize_idiom_text で正準化して返す（autopromote 照合と正規化を共有）。
     """
     out: Set[str] = set()
     for r in read_idioms(path):
@@ -142,9 +158,42 @@ def read_confirmed_idiom_texts(
             continue
         if r.get("revoked_at"):
             continue
-        idiom = r.get("idiom")
+        idiom = normalize_idiom_text(r.get("idiom"))
         if idiom:
             out.add(idiom)
+    return out
+
+
+def read_cross_pj_confirmed_idiom_texts(
+    pj_slug: str, path: Optional[Path] = None
+) -> Dict[str, List[str]]:
+    """**他 PJ slug** の confirmed=True かつ未 revoke な idiom の {正規化テキスト: [他slug, ...]}。
+
+    #462: ある PJ で人間が承認した idiom と正規化テキスト一致する他 PJ の未確認 idiom を
+    daily_review / bootstrap_backlog の提示で先頭に優先表示するための照合素材。
+    correction_idioms.jsonl は全 PJ 共通の単一ストア（レコードに pj_slug あり）なので、
+    cross-PJ 照合は「自 slug を除く confirmed テキスト集合」を読むだけで決定論になる。
+
+    自 slug の confirmed は cross シグナルにしない（自 PJ 内は通常 confirmed/autopromote 経路）。
+    revoked_at が立った idiom は除外（安全弁③で巻き戻る）。テキストは normalize_idiom_text で
+    正準化したキーで集約し、値は重複排除した他 slug 一覧（出現順保存）。**確認状態を変えたり
+    昇格したりはしない**（読み取り専用・ADR-047 不変条件）。
+    """
+    out: Dict[str, List[str]] = {}
+    for r in read_idioms(path):
+        slug = r.get("pj_slug")
+        if not slug or slug == pj_slug:
+            continue
+        if not r.get("confirmed"):
+            continue
+        if r.get("revoked_at"):
+            continue
+        idiom = normalize_idiom_text(r.get("idiom"))
+        if not idiom:
+            continue
+        slugs = out.setdefault(idiom, [])
+        if slug not in slugs:
+            slugs.append(slug)
     return out
 
 

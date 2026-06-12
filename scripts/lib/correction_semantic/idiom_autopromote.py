@@ -31,7 +31,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from correction_semantic.promote import read_unpromoted
-from correction_semantic.store import read_confirmed_idiom_texts, read_idioms
+from correction_semantic.store import (
+    normalize_idiom_text,
+    read_confirmed_idiom_texts,
+    read_idioms,
+)
 
 
 def _phys(prov: Dict[str, Any]) -> str:
@@ -99,7 +103,9 @@ def autopromote(
         if info is None:
             continue
         idiom_text = info["idiom"]
-        if idiom_text not in confirmed_texts:
+        # confirmed_texts は read_confirmed_idiom_texts が正規化済みで返す。候補側も
+        # 同じ normalize_idiom_text を通して照合し、正規化ロジックを共有する（#462）。
+        if normalize_idiom_text(idiom_text) not in confirmed_texts:
             continue
         matched.append({
             "signal_key": r.get("signal_key"),

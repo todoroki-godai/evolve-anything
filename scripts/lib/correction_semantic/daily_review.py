@@ -303,6 +303,13 @@ def build_review(
     # 頻度（再発回数）降順。安定ソートで同頻度は入力順を保つ。
     groups.sort(key=lambda g: g["evidence"]["count"], reverse=True)
 
+    # 他 PJ で confirmed 済みの idiom と正規化テキスト一致する group を先頭へ優先表示し、
+    # cross_pj_confirmed ラベルを常時付与する（#462）。ストアへの書込は無い（read 専用）。
+    # 頻度ソート後に適用するので「cross-PJ 一致（頻度順）→ 非一致（頻度順）」になる。
+    from correction_semantic.cross_pj_priority import prioritize as _prioritize
+
+    groups = _prioritize(groups, pj_slug, idioms_path=idioms_path)
+
     top = groups[:max_groups]
     remaining = max(0, len(groups) - len(top))
 

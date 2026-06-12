@@ -174,6 +174,7 @@ def build(
     *,
     weak_signals_path: Optional[Path] = None,
     marker_path: Optional[Path] = None,
+    idioms_path: Optional[Path] = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """初回（marker 未設定）のみ、当該 PJ の未昇格 backlog を group 化して返す。
@@ -182,12 +183,16 @@ def build(
       {"is_bootstrap": bool,   # marker 未設定なら True
        "pj_total": int,        # 当該 PJ の未昇格 backlog 件数
        "groups_total": int,    # 内容キーワード jaccard≥0.5 圧縮後の group 数
-       "groups": [...],        # bootstrap 選択時に使う全 group（代表 idiom + signal_keys）
+       "groups": [...],        # bootstrap 選択時に使う全 group（代表 idiom + signal_keys +
+                               #   cross_pj_confirmed: [<他slug>, ...]・#462）
        "slug": str,
        "dry_run": bool}
 
     marker（bootstrap_done-<slug>.marker）が立っていたら is_bootstrap=False で即返す
     （重い group 化をしない早期 return）。build 自体は marker を書かない（読み取りのみ）。
+
+    他 PJ で confirmed 済みの idiom と正規化テキスト一致する group は先頭へ優先表示し、
+    cross_pj_confirmed ラベルを付与する（#462）。idioms_path は read 専用（書込なし）。
     """
     marker = marker_path if marker_path is not None else default_marker_path(pj_slug)
 
@@ -204,6 +209,10 @@ def build(
 
     backlog = _read_backlog(pj_slug, weak_signals_path)
     groups = group_signals(backlog)
+    # 他 PJ confirmed 一致 group を先頭へ + cross_pj_confirmed 付与（#462・read 専用）。
+    from correction_semantic.cross_pj_priority import prioritize as _prioritize
+
+    groups = _prioritize(groups, pj_slug, idioms_path=idioms_path)
     return {
         "is_bootstrap": True,
         "pj_total": len(backlog),
