@@ -109,7 +109,12 @@ def _collect_ablation_targets(project_dir: Path) -> List[Dict[str, Any]]:
 def _prepare_shadow_project(project_dir: Path, tmp_root: Path) -> Path:
     """一時ディレクトリにプロジェクトのシャドウコピーを作成する。
 
-    コピー対象: CLAUDE.md, .claude/ ディレクトリ
+    コピー対象: CLAUDE.md, .claude/ ディレクトリ。
+
+    ただし `.claude/worktrees/` は除外する（#523-1）。worktrees はアブレーション対象
+    （rules/skills）ではない上、stale な agent worktree が壊れた symlink / ファイル不在を
+    含むと shutil.copytree が生 Python タプルの長大 stderr を吐いてフル dry-run を汚す。
+    壊れた symlink も無視して copytree が途中で例外停止しないようにする。
     """
     shadow_dir = tmp_root / "shadow"
     shadow_dir.mkdir(parents=True, exist_ok=True)
@@ -119,10 +124,16 @@ def _prepare_shadow_project(project_dir: Path, tmp_root: Path) -> Path:
     if claude_md.exists():
         shutil.copy2(claude_md, shadow_dir / "CLAUDE.md")
 
-    # .claude ディレクトリ
+    # .claude ディレクトリ（worktrees は除外）
     claude_dir = project_dir / ".claude"
     if claude_dir.exists():
-        shutil.copytree(claude_dir, shadow_dir / ".claude", dirs_exist_ok=True)
+        shutil.copytree(
+            claude_dir,
+            shadow_dir / ".claude",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("worktrees"),
+            ignore_dangling_symlinks=True,
+        )
 
     return shadow_dir
 

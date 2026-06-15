@@ -36,6 +36,35 @@ _MAX_AUDIT_HISTORY = 100
 _DEGRADATION_THRESHOLD = 0.10  # 10% drop
 
 
+def _summarize_skip_reason(exc: Exception, *, max_len: int = 160) -> str:
+    """スキップ通知用に例外を1行要約する（#523-1）。
+
+    Chaos Testing が `.claude/worktrees/` の stale な agent worktree を shadow コピー
+    しようとして失敗すると、shutil.Error が生 Python タプル（ファイルパスの長大リスト）
+    を `str()` に展開し、stderr を汚していた。複数行・巨大タプルを 1 行へ畳む。
+
+    worktree 残骸由来と判定できる場合は件数付きの定型サマリにする。
+    """
+    import shutil as _shutil
+
+    if isinstance(exc, _shutil.Error):
+        args0 = exc.args[0] if exc.args else None
+        if isinstance(args0, (list, tuple)):
+            wt = sum(
+                1
+                for entry in args0
+                if isinstance(entry, (list, tuple)) and entry
+                and "worktrees" in str(entry[0])
+            )
+            if wt:
+                return f"スキップ {wt} 件（worktree 残骸）"
+            return f"コピー失敗 {len(args0)} 件"
+    text = str(exc).replace("\n", " ").strip()
+    if len(text) > max_len:
+        text = text[: max_len - 1] + "…"
+    return text or exc.__class__.__name__
+
+
 def _record_audit_completion(
     coherence_report: Optional[List[str]] = None,
     telemetry_report: Optional[List[str]] = None,
@@ -225,9 +254,9 @@ def run_audit(
                 else:
                     constitutional_report_lines = chaos_lines
             except Exception as e:
-                print(f"Chaos Testing スキップ: {e}", file=sys.stderr)
+                print(f"Chaos Testing スキップ: {_summarize_skip_reason(e)}", file=sys.stderr)
         except Exception as e:
-            print(f"Constitutional Score スキップ: {e}", file=sys.stderr)
+            print(f"Constitutional Score スキップ: {_summarize_skip_reason(e)}", file=sys.stderr)
 
     environment_report_lines = None
     score_count = sum([coherence_score, telemetry_score, constitutional_score])

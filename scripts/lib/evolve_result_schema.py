@@ -121,7 +121,16 @@ CANONICAL: List[Key] = [
         note="再発エスカレーション候補がある時のみ出現（#308）。result 初期化に追加済（KeyError 修正）"),
     # --- その他 SKILL.md が dotted path で言及する正準キー ---
     Key("phases.audit.report", str, optional=True),
-    Key("phases.discover.reflect_data_count", int, optional=True),
+    Key("phases.discover.reflect_data_count", int, optional=True,
+        note="健常時は件数(int>=0)。discover 失敗時は degraded sentinel `-1`(int) に"
+             "フォールバックする（#526-3）。kind=int を保つことで runtime self-detect "
+             "（evolve_consistency）の wrong_kind 誤検出を回避（/review #530）。"
+             "SKILL.md は数値比較前に `< 0`(degraded) を先判定する"),
+    Key("phases.discover.error", str, optional=True,
+        note="discover 失敗時のみ。例外メッセージ（#521）。SKILL.md Step 6 が degraded 表示で併記"),
+    Key("phases.discover.traceback", str, optional=True,
+        note="discover 失敗時のみ。root cause を握り潰さず残す traceback（#521）。"
+             "pitfalls.md / SKILL.md Step 6 が degraded 表示の根拠として併記する"),
     Key("phases.split_archive_reconcile.suppressed", list, optional=True),
     Key("phases.skill_evolve_archive_reconcile.suppressed", list, optional=True,
         note="skill_evolve↔archive reconcile で archive 優先除外したスキル名（#400 バグ#2）"),
@@ -162,6 +171,13 @@ CANONICAL: List[Key] = [
     Key("trigger_summary", dict, note="auto trigger の発火統計"),
     # --- warnings: ユーザー向け警告リスト ---
     Key("warnings", list, note="ユーザー向け警告（category/message）"),
+    # --- env_score: 構造化環境スコア + 成長レベル（#523/#526-2）。audit phase 直後に surface ---
+    #   observe_first 早期 return 経路（audit phase 不実行）では欠落するため optional。
+    Key("env_score", dict, optional=True,
+        note="構造化 env_score + 成長レベル（#523/#526-2）。dict: score/level/title_ja/title_en/"
+             "sources/degraded。算出失敗時は degraded=True（previous_level は world-context.json）。"
+             "observe_first 早期 return では欠落。"
+             "SKILL.md / references/report-narration.md が Report クライマックスで読む実害キー"),
     # --- env_tier: 環境規模ティア（small/medium/large）---
     Key("env_tier", str, note="環境規模ティア（observe phase が確定）"),
     Key("env_tier_reason", dict, note="env_tier の根拠（breakdown/count/thresholds）"),

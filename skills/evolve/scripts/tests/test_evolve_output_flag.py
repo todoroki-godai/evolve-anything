@@ -18,8 +18,8 @@ sys.path.insert(0, str(_SCRIPTS.parent.parent.parent / "scripts" / "lib"))
 
 import evolve  # noqa: E402
 
-# 実 dry-run の result 構造に合わせる（実フェーズは result["phases"] 配下にネスト、
-# env_score は result に存在せず top-level は env_tier のみ — 実機 dry-run で検証済み）。
+# 実 dry-run の result 構造に合わせる（実フェーズは result["phases"] 配下にネスト）。
+# env_score は #523-2/#526-2 で top-level に構造化 dict として surface されるようになった。
 _FAKE_RESULT = {
     "phases": {
         "observe": {"action": "ok"},
@@ -62,11 +62,27 @@ def test_output_flag_stdout_is_small_summary_not_full_json(patched_run, monkeypa
     # phases は実フェーズ名（result["phases"] 配下）を列挙する。トップレベルキーではない
     assert summary["phases"] == ["fitness", "observe"]
     assert "observability" not in summary["phases"]  # top-level キーは混ぜない
-    # env_score でなく top-level に実在する env_tier を surface する
+    # top-level に実在する env_tier を surface する
     assert summary["env_tier"] == "small"
+    # この fixture には env_score を入れていないのでサマリにも出ない（None/欠落時は出さない）
     assert "env_score" not in summary
     # 1行であること（途中切断検出の安定性）
     assert stdout.strip().count("\n") == 0
+
+
+def test_summary_surfaces_env_score_when_present():
+    """#523-2/#526-2: result に env_score(dict) があれば 1 行サマリにも level/score を出す。"""
+    from pathlib import Path
+
+    result_ok = dict(_FAKE_RESULT)
+    result_ok["env_score"] = {"score": 0.72, "level": 7, "degraded": False}
+    summary = evolve._summarize_result(result_ok, Path("/tmp/out.json"))
+    assert summary["env_score"] == {"score": 0.72, "level": 7}
+
+    result_degraded = dict(_FAKE_RESULT)
+    result_degraded["env_score"] = {"score": None, "degraded": True, "previous_level": 6}
+    summary_d = evolve._summarize_result(result_degraded, Path("/tmp/out.json"))
+    assert summary_d["env_score"] == {"degraded": True, "previous_level": 6}
 
 
 def test_no_output_flag_keeps_full_json_on_stdout(patched_run, monkeypatch, tmp_path, capsys):

@@ -26,16 +26,24 @@ SKILL.md 各 Step の「一言メモ → references/report-narration.md」ポイ
 
 ## Report クライマックス（成長レベル）
 
-evolve.py の出力 JSON に `env_score` フィールドが含まれる場合、その値を使ってレベルを取得する
-（`<ENV_SCORE>` を実際の数値で置換）:
+evolve.py の出力 JSON のトップレベル `result["env_score"]` は**構造化 dict**（#523-2/#526-2）。
+スクリプトが既に `compute_level` を解決済みなので、再計算は不要でこの dict をそのまま読む:
 
-```bash
-python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from growth_level import compute_level; import json; info = compute_level(<ENV_SCORE>); print(json.dumps({'level':info.level,'title_ja':info.title_ja,'title_en':info.title_en}))"
+```json
+// 成功時
+{"score": 0.72, "level": 7, "title_ja": "熟達", "title_en": "Experienced",
+ "sources": ["coherence", "telemetry"], "degraded": false}
+// 算出失敗時（silence != evaluated: 黙らず degraded を出す）
+{"score": null, "degraded": true, "reason": "...",
+ "previous_level": 6, "previous_title_ja": "..."}
 ```
 
-stdout: `{"level": 7, "title_ja": "熟達", "title_en": "Experienced"}` 形式。
+- `degraded` が false: `score` / `level` / `title_ja` / `title_en` をそのまま使う（`<ENV_SCORE>` = `score`）。
+- `degraded` が true: 「env_score: 取得失敗（前回 Lv.{previous_level}・world-context.json から）」と
+  1 行で surface する。黙って表示なしにはしない（取得失敗を観測可能にするのが原則）。
 
-次に `save_world_context` で world-context.json に保存する（`SLUG` は Step 0.5 と同じ PJ 別スコープ値。
+次に成功時のみ `save_world_context` で world-context.json に保存する（`<ENV_SCORE>` =
+`result["env_score"]["score"]`。`SLUG` は Step 0.5 と同じ PJ 別スコープ値。
 slug は env 経由で渡す＝python -c へ直接埋め込むと repo 名に `'` を含む場合に壊れる）:
 
 ```bash
@@ -59,4 +67,4 @@ save_world_context(data_dir, ctx, env_score=<ENV_SCORE>, slug=slug)
   「**[Lv.{current_level}] {称号}**」
 - 前回レベル不明（`previous_level` == null / 初回）:
   「**[Lv.{current_level}] {称号}**」
-- env_score が取得できない場合: 表示なし。
+- `env_score.degraded` が true（取得失敗）: 上記 degraded の 1 行を出す（**表示なしにはしない**）。

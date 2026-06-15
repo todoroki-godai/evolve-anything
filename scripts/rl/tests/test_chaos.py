@@ -4,6 +4,7 @@
 import importlib.util
 import json
 import sys
+import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -208,6 +209,46 @@ class TestScope:
         assert "rule-c" in names
         assert "skill-a" in names
         assert "skill-b" in names
+
+
+class TestShadowExcludesWorktrees:
+    """#523-1: shadow コピー対象から .claude/worktrees/ を除外する回帰テスト。
+
+    chaos の _prepare_shadow_project は `.claude/` を丸ごと copytree していたため、
+    `.claude/worktrees/` 配下の stale な agent worktree（壊れた symlink / ファイル不在）が
+    あると copytree が生 Python タプルの長大 stderr を吐いてフル dry-run を汚していた。
+    worktrees はアブレーション対象（rules/skills）でないので shadow に含める必要がない。
+    """
+
+    def test_shadow_excludes_worktrees_dir(self, tmp_path):
+        project = _make_project(tmp_path)
+        # stale worktree を模す（本来コピー不要なディレクトリ）
+        wt = project / ".claude" / "worktrees" / "agent-stale" / ".claude" / "rules"
+        wt.mkdir(parents=True, exist_ok=True)
+        (wt / "leak.md").write_text("# Should not be copied\n")
+
+        with tempfile.TemporaryDirectory() as tmp_root:
+            shadow = chaos._prepare_shadow_project(project, Path(tmp_root))
+            # worktrees ディレクトリは shadow に含まれない
+            assert not (shadow / ".claude" / "worktrees").exists(), (
+                ".claude/worktrees/ が shadow コピーに含まれている（stale worktree 汚染の原因）"
+            )
+            # 通常の rules/skills は引き続きコピーされる
+            assert (shadow / ".claude" / "rules" / "rule-a.md").exists()
+            assert (shadow / ".claude" / "skills" / "skill-a" / "SKILL.md").exists()
+
+    def test_shadow_survives_broken_symlink_in_worktrees(self, tmp_path):
+        """worktrees 配下に壊れた symlink があっても _prepare_shadow_project は例外を出さない。"""
+        project = _make_project(tmp_path)
+        wt = project / ".claude" / "worktrees" / "agent-stale"
+        wt.mkdir(parents=True, exist_ok=True)
+        broken = wt / "dangling"
+        broken.symlink_to(project / "nonexistent-target")
+
+        with tempfile.TemporaryDirectory() as tmp_root:
+            # 例外を出さずに完走できること（worktrees を ignore するため）
+            shadow = chaos._prepare_shadow_project(project, Path(tmp_root))
+            assert shadow.exists()
 
 
 class TestLoadSiblingPackage:

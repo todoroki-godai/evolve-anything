@@ -162,26 +162,47 @@ def run_discover(
         project_root=project_root, include_unknown=include_unknown,
     )
     rejections = detect_rejection_patterns()
-    reflect_data = load_claude_reflect_data()
-
-    # missed skill 検出
-    missed_result = detect_missed_skills(
-        project_root=project_root,
-        include_unknown=include_unknown,
-    )
 
     result: Dict[str, Any] = {
         "behavior_patterns": behavior,
         "error_patterns": errors,
         "rejection_patterns": rejections,
-        "reflect_data_count": len(reflect_data),
     }
 
-    # missed skill opportunities をレポートに含める
-    if missed_result["missed"]:
-        result["missed_skill_opportunities"] = missed_result["missed"]
-    if missed_result["message"]:
-        result["missed_skill_message"] = missed_result["message"]
+    # reflect データ件数（下流 SKILL.md Step 6 / Step 10.1 が `>= 5` 比較で参照する。
+    # 失敗時に欠落させると None 比較で TypeError になるため、必ずキーを残し
+    # degraded sentinel -1 にフォールバックする。#526-3）
+    # sentinel を int に保つのは CANONICAL 契約が同キーを kind=int と宣言しているため。
+    # str sentinel だと runtime self-detect（evolve_consistency）が wrong_kind drift を
+    # 誤検出し幻の「契約乖離 issue」を自作する（/review #530 で発見）。
+    try:
+        reflect_data = load_claude_reflect_data()
+        result["reflect_data_count"] = len(reflect_data)
+    except Exception as e:
+        # 下流の `reflect_data_count >= 5` が None で未定義にならないよう明示値にする。
+        # SKILL は数値比較の前に `< 0`（degraded）を先判定する。
+        result["reflect_data_count"] = -1
+        result["reflect_data_count_error"] = str(e)
+
+    # missed skill 検出。detect_missed_skills が None / 想定キー欠落を返しても
+    # try/except 外の subscript で run_discover 全体を落とさない（#521）。
+    try:
+        missed_result = detect_missed_skills(
+            project_root=project_root,
+            include_unknown=include_unknown,
+        )
+        if missed_result is None:
+            # 契約違反（detect_missed_skills は常に dict を返す約束）。握り潰さず
+            # 観測可能にする。下流の subscript 起因の `'NoneType' object is not
+            # subscriptable` 全死を防ぐ（#521）。
+            raise TypeError("detect_missed_skills returned None (expected dict)")
+        # missed skill opportunities をレポートに含める（想定キー欠落にも耐える）
+        if missed_result.get("missed"):
+            result["missed_skill_opportunities"] = missed_result["missed"]
+        if missed_result.get("message"):
+            result["missed_skill_message"] = missed_result["message"]
+    except Exception as e:
+        result["missed_skill_opportunities_error"] = str(e)
 
     # 成功軌跡からのスキル採掘 (SIRI ①, issue #291)
     # discover は evolve が回す recurring ループなので、ここに配線することで
@@ -215,19 +236,28 @@ def run_discover(
     except Exception as e:
         result["trajectory_skill_candidates_error"] = str(e)
 
-    # スコープ判断
+    # スコープ判断。determine_scope が例外でも握り潰さず error を残す（#521）。
     all_patterns = behavior + errors + rejections
-    for p in all_patterns:
-        p["scope"] = determine_scope(p)
+    try:
+        for p in all_patterns:
+            p["scope"] = determine_scope(p)
+    except Exception as e:
+        result["scope_error"] = str(e)
 
     result["total_candidates"] = len(all_patterns)
 
-    # enrich 統合: Jaccard 照合
+    # enrich 統合: Jaccard 照合。_enrich_patterns が None / 想定キー欠落を返しても
+    # try/except 外の subscript で run_discover を落とさない（#521）。
     active_patterns = errors + rejections if (errors or rejections) else behavior
     if active_patterns:
-        enrich_result = _enrich_patterns(active_patterns, project_dir=project_root)
-        result["matched_skills"] = enrich_result["matched_skills"]
-        result["unmatched_patterns"] = enrich_result["unmatched_patterns"]
+        try:
+            enrich_result = _enrich_patterns(active_patterns, project_dir=project_root)
+            if enrich_result is None:
+                raise TypeError("_enrich_patterns returned None (expected dict)")
+            result["matched_skills"] = enrich_result.get("matched_skills", [])
+            result["unmatched_patterns"] = enrich_result.get("unmatched_patterns", [])
+        except Exception as e:
+            result["matched_skills_error"] = str(e)
 
     # 検証知見カタログの検出
     try:
@@ -243,7 +273,9 @@ def run_discover(
     if tool_usage:
         from tool_usage_analyzer import analyze_tool_usage
         tool_result = analyze_tool_usage(project_root=project_root)
-        if tool_result["total_tool_calls"] > 0:
+        # analyze_tool_usage は常に dict を返す契約だが、None / キー欠落でも
+        # subscript で落とさず .get() でガードする（#521 の一貫した防御）。
+        if (tool_result or {}).get("total_tool_calls", 0) > 0:
             result["tool_usage_patterns"] = tool_result
 
     # 推奨アーティファクト未導入チェック（tool_usage データを証拠として付加）
