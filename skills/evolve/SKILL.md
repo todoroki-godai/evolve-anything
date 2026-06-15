@@ -158,6 +158,8 @@ evolve.py の出力に含まれる `fitness` フェーズを確認する。
 - **繰り返しパターン**: 上位パターンとサブカテゴリをスキル候補として提案
 - **Bash 割合**: 全ツール呼び出し数と Bash の割合（例: `Bash: 31.8% (127/400)`）
 
+**`phases.discover.rule_violation_observed`（list、#522-3）が存在する場合は別レーンとして surface する（MUST）**: 既存 rules で禁止済みのコマンド（例: `cd` 禁止なのに 626 回観測）は「スキル候補」ではなく**ルール導入済みだが実行が止まっていない違反観測**（rule installed != enforced）として、`violated_command` / `count` / `recommendation`（hook enforce 検討）を1行ずつ表示する。これらは repeating_patterns から除外済みのためスキル候補としては提案しない。違反ゼロ時はキーが欠落するので省略してよい。
+
 discover の出力に含まれる enrich 結果（Jaccard 照合）を確認する。
 discover.py は Discover のパターン（error/rejection/behavior）を既存スキルと Jaccard 係数で照合し、`matched_skills` と `unmatched_patterns` を出力する（型A パターン: LLM 呼び出しなし）。
 

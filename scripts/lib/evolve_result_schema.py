@@ -131,6 +131,8 @@ CANONICAL: List[Key] = [
     Key("phases.discover.traceback", str, optional=True,
         note="discover 失敗時のみ。root cause を握り潰さず残す traceback（#521）。"
              "pitfalls.md / SKILL.md Step 6 が degraded 表示の根拠として併記する"),
+    Key("phases.discover.rule_violation_observed", list, optional=True,
+        note="既存 rules で禁止済みコマンドの違反観測（#522-3）。tool_usage 無効時・違反ゼロ時は欠落"),
     Key("phases.split_archive_reconcile.suppressed", list, optional=True),
     Key("phases.skill_evolve_archive_reconcile.suppressed", list, optional=True,
         note="skill_evolve↔archive reconcile で archive 優先除外したスキル名（#400 バグ#2）"),

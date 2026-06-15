@@ -89,10 +89,12 @@ from .detection import (  # noqa: E402, F401
     _expand_glob_pattern,
     detect_dead_globs,
     detect_zero_invocations,
+    make_zero_invocation_suppression_summary,
     safe_global_check,
     detect_duplicates,
     detect_decay_candidates,
     detect_retirement_candidates,
+    zero_invocation_window_suppressed,
 )
 
 

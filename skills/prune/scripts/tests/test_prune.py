@@ -897,6 +897,8 @@ class TestDetectZeroInvocationsReferenceExclusion:
         Skill 発火の usage 記録経路は #478 で修正された。修正日以前のデータは
         欠損しているため、zero_invocation を「使われていない」と断定できない。
         この緩和として advisory 文言を付与する。
+
+        この advisory パス自体は不変（窓 suppress は run_prune 層で行う #522-2）。
         """
         skills_dir = tmp_path / "project" / ".claude" / "skills"
         action_dir = skills_dir / "regular-skill"
@@ -914,6 +916,80 @@ class TestDetectZeroInvocationsReferenceExclusion:
         cand = zero[0]
         assert "advisory" in cand
         assert prune.USAGE_RECORDING_FIX_DATE in cand["advisory"]
+
+
+class TestZeroInvocationMeasurementWindowSuppression:
+    """#522-2/#529-1: 計測修正日が観測窓内にある間 zero_invocation を suppress。
+
+    suppress 判定は run_prune 層（時間窓の概念）で行い、detect_zero_invocations の
+    純粋な検出ロジック（参照/プラグイン/CLAUDE.md 除外）には触れない。
+    決定論ヘルパ zero_invocation_window_suppressed + suppression summary を検証する。
+    """
+
+    def test_window_straddling_fix_date_is_suppressed(self):
+        from datetime import datetime, timezone
+        # now - 30d = 2026-06-01 < 2026-06-12 (fix date) → 窓が修正日をまたぐ → suppress
+        now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        assert prune.zero_invocation_window_suppressed(days=30, now=now) is True
+
+    def test_window_entirely_after_fix_date_not_suppressed(self):
+        from datetime import datetime, timezone
+        # now - 30d = 2026-07-02 >= 2026-06-12 → 窓全体が修正後 → 通常判定
+        now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        assert prune.zero_invocation_window_suppressed(days=30, now=now) is False
+
+    def test_window_boundary_exactly_at_fix_date_not_suppressed(self):
+        from datetime import datetime, timezone
+        # now - 30d == 2026-06-12 ちょうど → 窓全体が修正日以降 → 通常判定
+        now = datetime(2026, 7, 12, tzinfo=timezone.utc)
+        assert prune.zero_invocation_window_suppressed(days=30, now=now) is False
+
+    def test_make_suppression_summary_reports_count(self):
+        summary = prune.make_zero_invocation_suppression_summary(suppressed_count=3)
+        assert summary["suppressed_count"] == 3
+        assert prune.USAGE_RECORDING_FIX_DATE in summary["message"]
+        assert "3" in summary["message"]
+
+    def test_run_prune_suppresses_zero_invocations_in_window(self, tmp_path):
+        from datetime import datetime, timezone
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+        action_dir = skills_dir / "regular-skill"
+        action_dir.mkdir(parents=True)
+        (action_dir / "SKILL.md").write_text("---\nname: regular-skill\ndescription: regular\n---\n")
+        (project_dir / ".claude" / "rules").mkdir(parents=True)
+        (data_dir / "usage.jsonl").write_text("")
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            # 窓が修正日をまたぐ → suppress
+            now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+            result = prune.run_prune(str(project_dir), now=now)
+            assert result["zero_invocations"] == []
+            assert result["zero_invocations_suppressed"] is not None
+            assert result["zero_invocations_suppressed"]["suppressed_count"] >= 1
+
+    def test_run_prune_keeps_zero_invocations_after_window(self, tmp_path):
+        from datetime import datetime, timezone
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        project_dir = tmp_path / "project"
+        skills_dir = project_dir / ".claude" / "skills"
+        action_dir = skills_dir / "regular-skill"
+        action_dir.mkdir(parents=True)
+        (action_dir / "SKILL.md").write_text("---\nname: regular-skill\ndescription: regular\n---\n")
+        (project_dir / ".claude" / "rules").mkdir(parents=True)
+        (data_dir / "usage.jsonl").write_text("")
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir):
+            now = datetime(2026, 8, 1, tzinfo=timezone.utc)  # 窓全体が修正後
+            result = prune.run_prune(str(project_dir), now=now)
+            zero_names = [z["skill_name"] for z in result["zero_invocations"]]
+            assert "regular-skill" in zero_names
+            assert result["zero_invocations_suppressed"] is None
 
 
 class TestDetectReferenceDrift:

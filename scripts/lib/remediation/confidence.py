@@ -11,12 +11,25 @@ from typing import Any, Dict, List
 from issue_schema import (
     SE_SUITABILITY,
     SKILL_EVOLVE_CANDIDATE,
+    SKILL_TRIAGE_CREATE,
+    SKILL_TRIAGE_MERGE,
+    SKILL_TRIAGE_SPLIT,
+    SKILL_TRIAGE_UPDATE,
+    ST_CONFIDENCE,
     TOOL_USAGE_HOOK_CANDIDATE,
     TOOL_USAGE_RULE_CANDIDATE,
     VERIFICATION_RULE_CANDIDATE,
     VRC_DETECTION_CONFIDENCE,
     WCC_CONFIDENCE,
     WORKFLOW_CHECKPOINT_CANDIDATE,
+)
+
+# skill_triage の判定結果が detail に運ぶ confidence を top-level に引き継ぐ対象 (#522-1)
+_SKILL_TRIAGE_TYPES = (
+    SKILL_TRIAGE_CREATE,
+    SKILL_TRIAGE_UPDATE,
+    SKILL_TRIAGE_SPLIT,
+    SKILL_TRIAGE_MERGE,
 )
 
 
@@ -186,6 +199,12 @@ def compute_confidence_score(issue: Dict[str, Any]) -> float:
     if issue_type == WORKFLOW_CHECKPOINT_CANDIDATE:
         # ギャップ検出の confidence をそのまま使用（上限 0.85 = proposable）
         return min(0.85, detail.get(WCC_CONFIDENCE, 0.5))
+
+    if issue_type in _SKILL_TRIAGE_TYPES:
+        # skill_triage は detail["confidence"]（CREATE=0.70 等）を権威とする。
+        # default 0.5 に降格すると CREATE が partition で batch_skip 落ちし、
+        # 個別承認レーン（proposable_custom_individual）に永久に乗らない (#522-1)。
+        return detail.get(ST_CONFIDENCE, 0.5)
 
     return 0.5
 

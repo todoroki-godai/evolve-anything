@@ -265,15 +265,20 @@ def make_skill_triage_issue(
     skill = triage_result.get(ST_SKILL, "") or ""
     skills = triage_result.get(ST_SKILLS, [])
     file_path = f".claude/skills/{skill}/SKILL.md" if skill else ""
+    confidence = triage_result.get(ST_CONFIDENCE, 0.0)
 
     return {
         "type": issue_type,
         "file": file_path,
+        # top-level confidence_score を triage の confidence で初期化する。
+        # compute_confidence_score が classify 時に再算出するが、raw issue を直接読む
+        # 経路でも default 0.5 降格が起きないようにする (#522-1)。
+        "confidence_score": confidence,
         "detail": {
             ST_ACTION: action,
             ST_SKILL: skill,
             ST_SKILLS: skills,
-            ST_CONFIDENCE: triage_result.get(ST_CONFIDENCE, 0.0),
+            ST_CONFIDENCE: confidence,
             ST_EVIDENCE: triage_result.get(ST_EVIDENCE, {}),
             ST_SUGGESTION: triage_result.get(ST_SUGGESTION, ""),
             ST_EVAL_SET_PATH: triage_result.get(ST_EVAL_SET_PATH, ""),

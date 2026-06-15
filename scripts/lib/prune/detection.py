@@ -2,7 +2,7 @@
 
 prune/__init__.py から re-export される（後方互換）。
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -120,6 +120,42 @@ def detect_dead_globs(project_dir: Path) -> List[Dict[str, Any]]:
                     "reason": "dead_glob",
                 })
     return dead
+
+
+def zero_invocation_window_suppressed(
+    days: int = ZERO_INVOCATION_DAYS,
+    now: Optional[datetime] = None,
+) -> bool:
+    """zero_invocation 観測窓 [now - days, now] が計測修正日をまたぐかを判定する。
+
+    Skill 発火の usage 記録経路は USAGE_RECORDING_FIX_DATE (#478) に修正された。
+    観測窓の開始（now - days）が修正日より前にある間は、欠損データに基づく
+    zero_invocation を「未使用」と断定できないため suppress する (#522-2/#529-1)。
+
+    窓全体が修正日以降（window_start >= fix_date）になれば False を返し通常判定に復帰する。
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    try:
+        fix_date = datetime.fromisoformat(USAGE_RECORDING_FIX_DATE).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    window_start = now - timedelta(days=days)
+    return window_start < fix_date
+
+
+def make_zero_invocation_suppression_summary(suppressed_count: int) -> Dict[str, Any]:
+    """suppress 時に candidates の代わりに surface する 1 行サマリを生成する。"""
+    return {
+        "suppressed_count": suppressed_count,
+        "reason": "measurement_window_straddles_fix_date",
+        "fix_date": USAGE_RECORDING_FIX_DATE,
+        "message": (
+            f"計測待ち {suppressed_count} 件（usage 記録経路は {USAGE_RECORDING_FIX_DATE} に"
+            f"修正済み #478。観測窓がこの日をまたぐ間は zero_invocation を suppress。"
+            f"窓全体が修正日以降に蓄積されたら再評価）"
+        ),
+    }
 
 
 def _load_claude_md_registered_skills(project_dir: Optional[Path]) -> set:

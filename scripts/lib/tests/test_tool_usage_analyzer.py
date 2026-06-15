@@ -147,6 +147,27 @@ class TestClassifyBashCommands:
         assert len(result["builtin_replaceable"]) == 1
         assert result["builtin_replaceable"][0]["alternative"] == "Grep"
 
+    def test_var_assignment_prefix_skipped(self):
+        # VAR=value プレフィックスは env/sudo 同様にスキップし、実コマンド head を計上する (#522-3)
+        commands = ["WT=/tmp/x git status"]
+        result = classify_bash_commands(commands)
+        assert len(result["cli_legitimate"]) == 1
+        assert result["cli_legitimate"][0]["head"] == "git"
+
+    def test_var_assignment_prefix_builtin(self):
+        # 代入プレフィックス越しでも builtin_replaceable を正しく判定する (#522-3)
+        commands = ["FOO=bar cat /etc/hosts"]
+        result = classify_bash_commands(commands)
+        assert len(result["builtin_replaceable"]) == 1
+        assert result["builtin_replaceable"][0]["head"] == "cat"
+
+    def test_var_assignment_only_no_command(self):
+        # 代入のみで実コマンドが無い場合は head 無し（スキップ）
+        commands = ["FOO=bar"]
+        result = classify_bash_commands(commands)
+        assert len(result["builtin_replaceable"]) == 0
+        assert len(result["cli_legitimate"]) == 0
+
 
 # ---------- _is_cat_replaceable ----------
 
@@ -202,6 +223,13 @@ class TestDetectRepeatingCommands:
         commands = ["git status"] * 10
         patterns = detect_repeating_commands(commands, threshold=5)
         assert len(patterns[0]["examples"]) <= 3
+
+    def test_var_assignment_prefix_grouped_by_real_command(self):
+        # VAR= プレフィックス越しでも実コマンド key でグルーピングする (#522-3)
+        commands = ["WT=/tmp/x git status"] * 6
+        patterns = detect_repeating_commands(commands, threshold=5)
+        assert len(patterns) == 1
+        assert patterns[0]["pattern"] == "git status"
 
 
 # ---------- analyze_tool_usage ----------

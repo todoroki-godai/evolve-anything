@@ -31,8 +31,10 @@ load_drift_threshold() -> float
 load_interactive_merge_threshold() -> float
 load_merge_similarity_threshold() -> float
 main() -> None
+make_zero_invocation_suppression_summary(suppressed_count: int) -> Dict[str, Any]
 merge_duplicates(duplicate_candidates: List[Dict[str, Any]], reorganize_merge_groups: List[Dict[str, Any]] | None = None, project_dir: str | None = None) -> Dict[str, Any]
 restore_file(archive_path: str) -> str | None
-run_prune(project_dir: str | None = None, reorganize_merge_groups: list | None = None) -> Dict[str, Any]
+run_prune(project_dir: str | None = None, reorganize_merge_groups: list | None = None, now: datetime.datetime | None = None) -> Dict[str, Any]
 safe_global_check(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
 suggest_recommendation(skill_info: Dict[str, Any]) -> str
+zero_invocation_window_suppressed(days: int = 30, now: datetime.datetime | None = None) -> bool

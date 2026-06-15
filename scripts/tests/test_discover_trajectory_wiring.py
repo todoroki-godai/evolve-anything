@@ -179,5 +179,67 @@ def test_run_discover_handles_extractor_error(tmp_path):
     assert "boom" in result["trajectory_skill_candidates_error"]
 
 
+# ── rule_violation_observed レーン統合（#522-3）──────────────
+
+
+def _make_project_with_cd_rule(tmp_path):
+    proj = tmp_path / "proj"
+    rules_dir = proj / ".claude" / "rules"
+    rules_dir.mkdir(parents=True)
+    (rules_dir / "code-quality.md").write_text(
+        "# コード品質\n- Bashで `cd` 禁止。絶対パス・`git -C` を使う。\n",
+        encoding="utf-8",
+    )
+    return proj
+
+
+def test_run_discover_splits_rule_violation_lane(tmp_path, monkeypatch):
+    """既存 rules で禁止済みの cd が repeating_patterns にあると
+    rule_violation_observed レーンに分離され、スキル候補から除外される (#522-3)。"""
+    proj = _make_project_with_cd_rule(tmp_path)
+    fake_tool_result = {
+        "total_tool_calls": 700,
+        "repeating_patterns": [
+            {"pattern": "cd somewhere", "count": 626, "subcategory": "cli", "examples": []},
+            {"pattern": "git status", "count": 30, "subcategory": "vcs", "examples": []},
+        ],
+    }
+    # global rules を tmp に隔離（実 ~/.claude/rules を読まない）
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+
+    with mock.patch(
+        "tool_usage_analyzer.analyze_tool_usage", return_value=fake_tool_result,
+    ):
+        result = discover.run_discover(project_root=proj, tool_usage=True)
+
+    assert "rule_violation_observed" in result
+    viols = result["rule_violation_observed"]
+    assert len(viols) == 1
+    assert viols[0]["violated_command"] == "cd"
+    assert viols[0]["count"] == 626
+    # repeating_patterns からは cd が除外され git のみ残る
+    remaining = [p["pattern"] for p in result["tool_usage_patterns"]["repeating_patterns"]]
+    assert remaining == ["git status"]
+
+
+def test_run_discover_no_rule_violation_when_no_match(tmp_path, monkeypatch):
+    """禁止コマンドが repeating に無ければ rule_violation_observed キーは出ない。"""
+    proj = _make_project_with_cd_rule(tmp_path)
+    fake_tool_result = {
+        "total_tool_calls": 30,
+        "repeating_patterns": [
+            {"pattern": "git status", "count": 30, "subcategory": "vcs", "examples": []},
+        ],
+    }
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+
+    with mock.patch(
+        "tool_usage_analyzer.analyze_tool_usage", return_value=fake_tool_result,
+    ):
+        result = discover.run_discover(project_root=proj, tool_usage=True)
+
+    assert "rule_violation_observed" not in result
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

@@ -278,6 +278,26 @@ def run_discover(
         if (tool_result or {}).get("total_tool_calls", 0) > 0:
             result["tool_usage_patterns"] = tool_result
 
+        # rule_violation_observed レーン分離 (#522-3): 既存 rules で禁止済みのコマンドが
+        # repeating_patterns で「スキル候補」提案されるのを防ぐ。rule installed != enforced
+        # の違反観測は専用レーンに分離し、スキル候補から除外する。決定論・LLM 非依存。
+        try:
+            from rule_violation_lane import (
+                default_rule_dirs,
+                extract_prohibited_command_heads,
+                partition_rule_violations,
+            )
+            _proj = project_root or Path.cwd()
+            prohibited = extract_prohibited_command_heads(default_rule_dirs(_proj))
+            partitioned = partition_rule_violations(
+                tool_result.get("repeating_patterns", []), prohibited,
+            )
+            tool_result["repeating_patterns"] = partitioned["skill_candidates"]
+            if partitioned["rule_violation_observed"]:
+                result["rule_violation_observed"] = partitioned["rule_violation_observed"]
+        except Exception as e:
+            result["rule_violation_observed_error"] = str(e)
+
     # 推奨アーティファクト未導入チェック（tool_usage データを証拠として付加）
     recommended_missing = detect_recommended_artifacts(
         tool_usage_patterns=tool_result,
