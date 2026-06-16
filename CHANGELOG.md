@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.101.0] - 2026-06-16
+
 ### Added
 - **feat(hook_drift): dead_ref 検出（flow-chain 参照スキルの実在突合）（closes #316）** — ADR-036 第二フェーズ。`~/.gstack/flow-chain.json` が参照する skill 名（chain のソースキー + 各 `next` 遷移先）が live registry（`~/.claude/skills/` ∪ rl-anything 本体 repo の `skills/` ∪ `skill_origin.get_plugin_skill_names()`）に実在しないものを `detect_dead_refs` が検出。表記ゆれによる false positive リスクで第一フェーズ（stale_pin）から除外していた核心を、`normalize_skill_ref`（前後空白 / 先頭 `/` / `plugin:skill` 名前空間 / 引数の除去）に閉じ込め、変換を契約テストで先に固定。**FP 厳禁（precision 優先）**: 正規化不能の参照は flag せず、live registry が空（skill 列挙失敗）なら全参照を dead に見せないため沈黙。`build_hook_drift_section` が stale_pin の後ろに `⚠ 実在しないスキル N 件` を追記（dead が無ければ非表示）。実 `~/.gstack/flow-chain.json`（128 live skills）でドッグフードし FP 0 を回帰テスト化。決定論・LLM 非依存。
 
