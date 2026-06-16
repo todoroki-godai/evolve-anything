@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(hook_drift): dead_ref 検出（flow-chain 参照スキルの実在突合）（closes #316）** — ADR-036 第二フェーズ。`~/.gstack/flow-chain.json` が参照する skill 名（chain のソースキー + 各 `next` 遷移先）が live registry（`~/.claude/skills/` ∪ rl-anything 本体 repo の `skills/` ∪ `skill_origin.get_plugin_skill_names()`）に実在しないものを `detect_dead_refs` が検出。表記ゆれによる false positive リスクで第一フェーズ（stale_pin）から除外していた核心を、`normalize_skill_ref`（前後空白 / 先頭 `/` / `plugin:skill` 名前空間 / 引数の除去）に閉じ込め、変換を契約テストで先に固定。**FP 厳禁（precision 優先）**: 正規化不能の参照は flag せず、live registry が空（skill 列挙失敗）なら全参照を dead に見せないため沈黙。`build_hook_drift_section` が stale_pin の後ろに `⚠ 実在しないスキル N 件` を追記（dead が無ければ非表示）。実 `~/.gstack/flow-chain.json`（128 live skills）でドッグフードし FP 0 を回帰テスト化。決定論・LLM 非依存。
+
+### Fixed
+- **fix(discover): `workflow_checkpoint_gaps` を常時出力（closes #369）** — `run_discover` の workflow checkpoint 走査は workflow skill 該当なし（skills_dir 不在等）でキー自体を欠落させ、evolve SKILL.md Step 10.4 が「評価したが該当なし」と「そもそも評価していない（silence）」を区別できなかった。`stall_recovery_patterns` と同じく成功・except 両経路で `workflow_checkpoint_gaps` を必ず設定し、該当なしは空リスト `[]` で明示。決定論・LLM 非依存。
+
+### Removed
+- **chore: message_display dead code 削除（closes #427）** — orphan_store（#422）が検出した真正 orphan `message_display.jsonl`（writer あり reader 0）は #495 で MessageDisplay hook の不発登録（CC v2.1.175 の標準 hook イベント名ではなく実環境で一度も発火していなかった）と store_registry 宣言を撤去済みだったが、`hooks/message_display.py` 本体と `hooks/tests/test_message_display.py` が dead code として温存されていた。reader 設計が scripts/skills のどこにも存在しないこと（import 0）を確認し本体・テストを削除。spec/components.md の store_registry 説明（"9 ストア … message_display を宣言バックフィル済み"）を実態（8 ストア・撤去済み）に整合。決定論・LLM 非依存。
+
 ## [1.100.1] - 2026-06-16
 
 ### Fixed

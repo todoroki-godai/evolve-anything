@@ -436,12 +436,16 @@ def run_discover(
         result["stall_recovery_patterns"] = []
         result["stall_recovery_error"] = str(e)
 
-    # ワークフローチェックポイントギャップ走査
+    # ワークフローチェックポイントギャップ走査。
+    # workflow skill 該当なし（skills_dir 不在等）でもキーを必ず残し `[]` にする。
+    # 「評価したが該当なし ✓」と「そもそも評価していない（silence）」を
+    # 下流 SKILL.md Step 10.4 が区別できるようにするため
+    # — stall_recovery_patterns が常に出力されるのと同じ契約に揃える（#369）。
+    workflow_gaps: list = []
     try:
         from workflow_checkpoint import is_workflow_skill, detect_checkpoint_gaps
         proj = project_root or Path.cwd()
         skills_dir = proj / ".claude" / "skills"
-        workflow_gaps = []
         if skills_dir.is_dir():
             for skill_dir in sorted(skills_dir.iterdir()):
                 if not skill_dir.is_dir():
@@ -454,9 +458,9 @@ def run_discover(
                         "skill_name": skill_dir.name,
                         "gaps": gaps,
                     })
-        if workflow_gaps:
-            result["workflow_checkpoint_gaps"] = workflow_gaps
+        result["workflow_checkpoint_gaps"] = workflow_gaps
     except Exception as e:
+        result["workflow_checkpoint_gaps"] = workflow_gaps
         result["workflow_checkpoint_gaps_error"] = str(e)
 
     return result

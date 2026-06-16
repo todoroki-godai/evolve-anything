@@ -284,6 +284,22 @@ class TestDiscoverIntegration:
         assert "stall_recovery_patterns" in result
         assert isinstance(result["stall_recovery_patterns"], list)
 
+    def test_workflow_checkpoint_gaps_always_present(self):
+        """run_discover 結果に workflow_checkpoint_gaps が常に存在する（#369）。
+
+        workflow skill 該当なし（skills_dir 不在等）でも、
+        「評価したが該当なし」を `[]` で明示できるようキーを必ず残す。
+        silence（キー欠落）と「評価して 0 件」を区別できるようにする
+        — stall_recovery_patterns が常時出力されるのと同じ契約。
+        """
+        from discover import run_discover
+
+        result = run_discover(project_root=Path("/nonexistent-project"))
+        # skills_dir が存在しないケースでもキーは必ず存在し、空リストになる
+        assert "workflow_checkpoint_gaps" in result
+        assert isinstance(result["workflow_checkpoint_gaps"], list)
+        assert result["workflow_checkpoint_gaps"] == []
+
 
 # ── Section 4: evolve report integration ─────────────
 

@@ -774,7 +774,7 @@ TL;DR: 変更 {N} 件 / 要対応 {M} 件 / 残りすべて評価済みクリー
 - **10.1 Reflect**: `reflect_data_count < 0`（degraded sentinel `-1`・#526-3）→ 🟡「Reflect: discover 失敗のため reflect 件数 不明」（数値比較の前に `< 0` を判定する）/ `>= 1` → 🔴 `/rl-anything:reflect`（未処理 {N}件）/ 0 → 「Reflect: 未処理なし」
 - **10.2 ツール使用**: `installed_artifacts` + `tool_usage_patterns` を対策済み/未対策で切替（Built-in代替/sleep/Bash割合の閾値判定 + 前回比トレンド）
 - **10.3 自己進化**: 自己進化済みスキル数・pitfall 統計・卒業/剪定フラグ・根本原因横断分析を表示（0 件なら「対象スキルなし」）
-- **10.4 Workflow Checkpoint Gaps**: `workflow_checkpoint_gaps` をテーブル表示 / なければ「ギャップなし」
+- **10.4 Workflow Checkpoint Gaps**: `workflow_checkpoint_gaps` をテーブル表示 / 空リスト `[]`（評価済み・該当なし）なら「ギャップなし ✓」。キー自体は workflow skill 不在でも常に存在する（silence≠evaluated を排除・#369）。`workflow_checkpoint_gaps_error` があれば 🟡 で評価失敗を併記
 - **10.5 Process Stall Patterns**: `stall_recovery_patterns` をテーブル表示 / なければ「検出なし」
 - **10.6 Remediation サマリ**: auto_fixable / manual_required / `proposable_custom_individual` ≥1 を 🔴 要対応に、`proposable_custom_batch_skip`（低 confidence・まとめスキップ済み）と proposable_global のみは 🟡 情報に反映（#377-3）
 
