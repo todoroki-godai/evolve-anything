@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.99.0</span>
+    <span class="header-version">v1.100.0</span>
   </div>
 </header>
 
@@ -337,7 +337,7 @@
           <tr><td>evolve_reconcile</td><td>skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400）</td></tr>
           <tr><td>evolve_result_schema</td><td>result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379）</td></tr>
           <tr><td>evolve_consistency</td><td>P1 invariant の runtime self-detect（型 drift のみ）（#377-5）</td></tr>
-          <tr><td>outcome_metrics</td><td>行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。utilization の plugin レイアウト探索修理も同梱 [#423, ADR-046]</td></tr>
+          <tr><td>outcome_metrics</td><td>行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。utilization の plugin レイアウト探索修理も同梱。correction 再発率は <code>MIN_DISTINCT_TYPES_FLOOR=5</code> 未満で率を非表示にし低サンプル誤シグナルを抑止（#529-2）[#423, ADR-046]</td></tr>
           <tr><td>outcome_attribution</td><td>outcome 2軸（一発成功率 / rework 率）を per-skill 帰属し evolve ターゲットランキングへ自動入力（advisory→閉ループの先行配線）。dry-run に before/after 順位差分を surface [#433]</td></tr>
           <tr><td>outcome_promotion_readiness</td><td>ADR-046 重み昇格レディネスの3条件決定論判定（分散 / 件数下限 / 方向妥当性）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母は session_store union read（db read_only + 未 ingest jsonl）で実効化済み（#461, #469）</td></tr>
           <tr><td>correction_semantic</td><td>correction capture の二層化（#431）。utterances.db の dialogue 発話を Haiku がバッチ意味判定（auto_memory 2 相と同型）→ weak_signals(channel=llm_judge) 隔離 + 個人辞書（correction_idioms.jsonl）。フェーズ昇格は human-source のみ駆動（provenance_weight）/ reflect 昇格フロー（--show-weak-signals / --promote-weak）[#431]</td></tr>
@@ -345,6 +345,9 @@
           <tr><td>daily_review</td><td>evolve の「今日の修正確認」phase — 新規 weak_signal を idiom 単位 group 化し最大5件を y/n 確認、promote 成功後のみ既読追記（既読ストア correction_review_seen.jsonl）（#446）</td></tr>
           <tr><td>idiom_autopromote</td><td>confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / <code>rl-reflect --revoke-idiom</code> 巻き戻し（#447, ADR-047）。confirmed 化の正準経路は <code>rl-reflect --promote-weak</code> の confirm 配線（#463）</td></tr>
           <tr><td>cross_pj_priority</td><td>confirmed idiom の PJ 横断優先提示 — 他 PJ 承認済みと同テキストの確認 group に <code>cross_pj_confirmed</code> ラベル + 先頭表示（提示のみ・自動承認しない、normalize は autopromote と1関数共有）（#462）</td></tr>
+          <tr><td>idiom_filter</td><td>過汎用 idiom の FP guard — 3 ゲート（最小長 floor 8 / 日常語 stopword / 文脈固有トークン）を <code>idiom_eligible</code> に集約し confirmed→idiom_autopromote の FP 製造を遮断。<code>confirmable_idiom</code> を bootstrap/daily group に emit し AskUserQuestion で idiom 単位拒否を可能化（#527, #527-4）</td></tr>
+          <tr><td>representative</td><td>correction group の representative 品質改善 — <code>user_only_text</code> が assistant 引用ブロックを strip し user 発話のみ抽出、<code>prev_action_summary</code> が直前 AI 行動 1 行要約を evidence に添える（#528-3）</td></tr>
+          <tr><td>remediation 参照リンク相対化</td><td>separation emit prompt のマシン固有絶対パスを PJ ルート相対化（<code>reference_link_for_prompt</code>）+ references/remediation.md に emit/ingest 6 関数の実 signature 表（#524）</td></tr>
         </tbody>
       </table>
 
@@ -372,7 +375,7 @@
           <tr><td>measurement_bug</td><td>複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185）</td></tr>
           <tr><td>testpaths_coverage</td><td>pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468）</td></tr>
           <tr><td>plugin_self origin</td><td>プラグイン本体リポジトリ自身の repo 直下 skills/ を evolve 診断対象化 — <code>.claude-plugin/plugin.json</code> 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185）</td></tr>
-          <tr><td>dogfood gate</td><td>通し評価ゲート <code>bin/rl-dogfood-gate</code> — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。リリース前の実環境 dogfood E2E（#496, #513）</td></tr>
+          <tr><td>dogfood gate</td><td>通し評価ゲート <code>bin/rl-dogfood-gate</code> — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 非 dry-run store 差分（Layer1b・<code>rl-evolve --drain --result-json</code> の隔離実行で weak_signals 永続化方向を assert）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。evolve.py の DATA_DIR を env 優先解決に統一（#517）。リリース前の実環境 dogfood E2E（#496, #513, #517, #518）</td></tr>
           <tr><td>pj_slug</td><td>PJ slug 導出の単一ソース — resolve_pj_slug（git-common-dir 親・authoritative）/ pj_slug_fast（文字列処理・hooks hot path）。read/write 同一関数で worktree slug 食い違いを構造的に防ぐ（#492）</td></tr>
           <tr><td>weak_signals drain 永続化</td><td>決定論3チャネルの永続化を <code>rl-evolve --drain</code> の apply 境界に配線 — 標準フロー（dry-run 分析のみ）で書込経路が構造的に死んでいた #484 の根治</td></tr>
           <tr><td>critical-instruction-compliance</td><td>スキル指示の遵守保証サイクル — critical 行抽出 + 違反検出 + pitfall 自動学習</td></tr>
