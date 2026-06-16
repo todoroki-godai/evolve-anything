@@ -30,6 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.promote import read_unpromoted
 from correction_semantic.store import (
     normalize_idiom_text,
@@ -103,6 +104,10 @@ def autopromote(
         if info is None:
             continue
         idiom_text = info["idiom"]
+        # #527 防御ゲート: ガード導入前に confirmed 化された過汎用 idiom（極短/相槌/断片）が
+        # 既存ストアに残っていても自動昇格しない。ingest 側の guard と二重で FP を止める。
+        if not idiom_eligible(idiom_text):
+            continue
         # confirmed_texts は read_confirmed_idiom_texts が正規化済みで返す。候補側も
         # 同じ normalize_idiom_text を通して照合し、正規化ロジックを共有する（#462）。
         if normalize_idiom_text(idiom_text) not in confirmed_texts:

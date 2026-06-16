@@ -106,7 +106,9 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(tmp_path: Path
     responses = _responses_for(emitted, {
         (rid, 0): {"is_correction": True, "idiom": "四国めたんじゃなくて", "reason": "後置型"},
         (rid, 1): {"is_correction": False, "idiom": None, "reason": ""},
-        (rid, 2): {"is_correction": True, "idiom": "違うんだけど", "reason": "ソフト指摘"},
+        # #527: idiom_filter の floor を通る eligible idiom を使う
+        # （極短「違うんだけど」は guard で個人辞書から弾かれる別テストで検証）
+        (rid, 2): {"is_correction": True, "idiom": "色が違うから赤にして", "reason": "ソフト指摘"},
     })
 
     res = cs_batch.ingest_judgement_results(
@@ -123,9 +125,38 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(tmp_path: Path
     # 個人辞書に 2 件
     idiom_lines = [json.loads(l) for l in idioms_store.read_text(encoding="utf-8").splitlines() if l.strip()]
     assert len(idiom_lines) == 2
-    assert {r["idiom"] for r in idiom_lines} == {"四国めたんじゃなくて", "違うんだけど"}
+    assert {r["idiom"] for r in idiom_lines} == {"四国めたんじゃなくて", "色が違うから赤にして"}
     # 判定進捗に 3 件（修正/非修正どちらも判定済みに記録）
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+
+
+def test_ingest_filters_overbroad_idioms_from_dictionary(tmp_path: Path) -> None:
+    """#527: 過汎用 idiom（極短/相槌/日付断片）は weak_signal は残すが個人辞書に入れない。"""
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+
+    emitted = cs_batch.emit_judgement_requests(
+        "rl-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = _responses_for(emitted, {
+        (rid, 0): {"is_correction": True, "idiom": "つむぎにしてほしいんだけど", "reason": "後置"},  # eligible
+        (rid, 1): {"is_correction": True, "idiom": "気がする", "reason": "推量"},  # too_short
+        (rid, 2): {"is_correction": True, "idiom": "いや、2/24の", "reason": "断片"},  # context_token
+    })
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    # corrections は 3 件すべて検出され weak_signals に隔離記録される
+    assert res["corrections"] == 3
+    ws_lines = [json.loads(l) for l in ws_store.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(ws_lines) == 3
+    # 個人辞書には eligible な 1 件のみ。過汎用 2 件は idioms_filtered。
+    assert res["idioms_filtered"] == 2
+    idiom_lines = [json.loads(l) for l in idioms_store.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert {r["idiom"] for r in idiom_lines} == {"つむぎにしてほしいんだけど"}
 
 
 def test_ingest_dry_run_writes_nothing(tmp_path: Path) -> None:

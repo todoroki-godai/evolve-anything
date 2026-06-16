@@ -46,20 +46,53 @@ class TestCorrectionRecurrence:
     def test_recurrence_detected(self, tmp_path, monkeypatch):
         monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
         now = _now()
-        # 同 correction_type "iya" が 2 つの異なるセッションで発生 → 再発
-        # "stop" は 1 セッションのみ → 非再発
+        # #529-2: 最小分母 floor (distinct >= 5) を満たすよう 5 distinct type を用意する。
+        # "iya" だけが 2 セッションに跨って再発 → recurring=1 / distinct=5 → 0.2。
         records = [
             {"correction_type": "iya", "session_id": "s1", "timestamp": _iso(now - timedelta(days=2))},
             {"correction_type": "iya", "session_id": "s2", "timestamp": _iso(now - timedelta(days=1))},
             {"correction_type": "stop", "session_id": "s3", "timestamp": _iso(now)},
+            {"correction_type": "no", "session_id": "s4", "timestamp": _iso(now)},
+            {"correction_type": "wrong", "session_id": "s5", "timestamp": _iso(now)},
+            {"correction_type": "redo", "session_id": "s6", "timestamp": _iso(now)},
         ]
         _write_jsonl(tmp_path / "corrections.jsonl", records)
         value, evidence = outcome_metrics.correction_recurrence_rate(days=30)
-        # 2 distinct types, 1 recurring → 0.5
-        assert value == pytest.approx(0.5)
-        assert evidence["distinct_types"] == 2
+        # 5 distinct types, 1 recurring → 0.2
+        assert value == pytest.approx(0.2)
+        assert evidence["distinct_types"] == 5
         assert evidence["recurring_types"] == 1
         assert "iya" in evidence["examples"]
+
+    def test_below_distinct_floor_returns_none(self, tmp_path, monkeypatch):
+        """#529-2: distinct type < floor (5) では率を出さず insufficient_sample。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        # distinct 2 type / 9 correction / 再発 1 type = #529-2 で問題視された 0.50 ケース
+        records = [
+            {"correction_type": "iya", "session_id": f"s{i}", "timestamp": _iso(now)}
+            for i in range(8)
+        ] + [{"correction_type": "stop", "session_id": "sx", "timestamp": _iso(now)}]
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        value, evidence = outcome_metrics.correction_recurrence_rate(days=30)
+        assert value is None
+        assert evidence["reason"] == "insufficient_sample"
+        assert evidence["distinct_types"] == 2
+        assert evidence["floor"] == outcome_metrics.MIN_DISTINCT_TYPES_FLOOR
+        assert evidence["records"] == 9
+
+    def test_at_distinct_floor_returns_rate(self, tmp_path, monkeypatch):
+        """floor 丁度 (distinct == 5) なら率を出す（境界 inclusive）。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        records = [
+            {"correction_type": f"t{i}", "session_id": f"s{i}", "timestamp": _iso(now)}
+            for i in range(5)
+        ]
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        value, evidence = outcome_metrics.correction_recurrence_rate(days=30)
+        assert value is not None
+        assert evidence["distinct_types"] == 5
 
     def test_window_filters_old(self, tmp_path, monkeypatch):
         monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
@@ -364,3 +397,29 @@ class TestSectionBuilder:
         joined = "\n".join(lines)
         assert "データ不足" in joined  # correction 軸
         assert "advisory" in joined.lower()
+
+    def test_insufficient_sample_shows_sample_shortage(self, tmp_path, monkeypatch):
+        """#529-2: correction distinct < floor では率を出さず「サンプル不足」を明示する。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        # session 軸を成立させて section を出力させる（all no_data 沈黙を避ける）。
+        _write_jsonl(tmp_path / "sessions.jsonl", [
+            {"session_id": "s1", "error_count": 0, "tool_sequence": ["Read", "Edit"],
+             "timestamp": ts, "first_timestamp": ts},
+        ])
+        # correction は distinct 2 type のみ（floor 5 未満）= #529-2 の 0.50 誤シグナル元
+        _write_jsonl(tmp_path / "corrections.jsonl", [
+            {"correction_type": "iya", "session_id": "s1", "timestamp": ts},
+            {"correction_type": "iya", "session_id": "s2", "timestamp": ts},
+            {"correction_type": "stop", "session_id": "s3", "timestamp": ts},
+        ])
+        from audit.sections_outcome import build_outcome_metrics_section
+
+        lines = build_outcome_metrics_section(tmp_path)
+        assert lines is not None
+        joined = "\n".join(lines)
+        assert "サンプル不足" in joined
+        assert "distinct 2 type" in joined
+        # 誤シグナルの率（0.50）が表示されていないこと
+        assert "0.50" not in joined

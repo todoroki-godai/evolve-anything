@@ -79,6 +79,27 @@ def test_group_merges_similar_idioms():
     assert big["representative"]  # 代表 idiom がある
 
 
+def test_group_representative_strips_assistant_quote(_=None):
+    # #528-3: assistant の過去レポート引用（> ℹ️ …）を strip し user 発話のみを representative に
+    sig = _sig("やっぱり、金額表示を直して\n> ℹ️ データ蓄積待ち（ADR-046）", 1)
+    groups = bb.group_signals([sig.to_record()])
+    assert groups[0]["representative"] == "やっぱり、金額表示を直して"
+
+
+def test_group_confirmable_idiom_eligible():
+    # #527-4: eligible な representative は confirmable_idiom に出る
+    sig = _sig("金額表示を赤にしてほしい", 1)  # 12 文字・eligible
+    groups = bb.group_signals([sig.to_record()])
+    assert groups[0]["confirmable_idiom"] == "金額表示を赤にしてほしい"
+
+
+def test_group_confirmable_idiom_none_for_overbroad():
+    # #527-4: 過汎用 representative（極短）は confirmed 化対象にしない（None）
+    sig = _sig("気がする", 1)
+    groups = bb.group_signals([sig.to_record()])
+    assert groups[0]["confirmable_idiom"] is None
+
+
 def test_group_keyless_idioms_stay_separate():
     # keyword が抽出できない短い断片は dedup されず別 group のまま（圧縮されない）
     sigs = [_sig("やめて", 1), _sig("ちがう", 2)]

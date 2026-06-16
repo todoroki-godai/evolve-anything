@@ -121,14 +121,19 @@ def build_growth_report(
     # 下限保証として常時0を解消する。dict.get None pitfall: (d.get(k) or {}) 形式。
     _today = count_promoted_today(_corrections)
 
+    # #525-1: 「このrun」（明示渡しの live カウント）と「本日累計」（store 由来）を区別する。
+    # promoted_today（本日累計）は store の今日の昇格を数えるため、同日に走った別セッション分も
+    # 含む。これを「今日の確認で N件昇格」と単独表示すると、当 run で何も承認していなくても
+    # 過去の昇格があたかも当 run の成果に見える（#525-1 の混同）。出所を line で明示するため、
+    # *_this_run（明示渡し）を別途保持する。
     _review = review_result or {}
     _daily = (_review.get("daily") or {})
-    _explicit_promoted: int = int((_daily.get("promoted") or 0))
-    promoted_today: int = max(_explicit_promoted, _today["promoted_today"])
+    promoted_this_run: int = int((_daily.get("promoted") or 0))
+    promoted_today: int = max(promoted_this_run, _today["promoted_today"])
 
     _autopromote = autopromote_result or {}
-    _explicit_autopromoted: int = int((_autopromote.get("promoted") or 0))
-    autopromoted_today: int = max(_explicit_autopromoted, _today["autopromoted_today"])
+    autopromoted_this_run: int = int((_autopromote.get("promoted") or 0))
+    autopromoted_today: int = max(autopromoted_this_run, _today["autopromoted_today"])
 
     # ── フェーズ表示名（corrections カウントベースで暫定判定）────────
     # ここでは full detect_phase は呼ばず、corrections カウントのみで
@@ -158,8 +163,12 @@ def build_growth_report(
             f"達成・次フェーズ条件は sessions/coherence"
         )
 
-    # 今日の昇格行（どちらかが 1 件以上の場合のみ）
+    # 今日の昇格行（本日累計が 1 件以上の場合のみ）。
+    # #525-1: 「本日累計 N 件昇格（このrunでは M 件）」と出所を明示する。本日累計は store の
+    # 今日の weak_signal 由来昇格（同日の別セッション分を含む）、このrun は当 evolve run で明示
+    # 渡しされた live カウント。両者を区別しないと過去の昇格が当 run の成果に誤読される。
     total_today = promoted_today + autopromoted_today
+    this_run_total = promoted_this_run + autopromoted_this_run
     if total_today > 0:
         parts = []
         if promoted_today > 0:
@@ -167,7 +176,8 @@ def build_growth_report(
         if autopromoted_today > 0:
             parts.append(f"idiom {autopromoted_today}件")
         lines.append(
-            f"今日の確認で {' / '.join(parts)} が自動化対象に昇格"
+            f"本日累計 {' / '.join(parts)} が自動化対象に昇格"
+            f"（このrunでは {this_run_total} 件）"
         )
 
     return {
@@ -178,5 +188,7 @@ def build_growth_report(
         "remaining_to_next": remaining,
         "promoted_today": promoted_today,
         "autopromoted_today": autopromoted_today,
+        "promoted_this_run": promoted_this_run,
+        "autopromoted_this_run": autopromoted_this_run,
         "lines": lines,
     }

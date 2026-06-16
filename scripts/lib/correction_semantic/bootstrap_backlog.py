@@ -30,6 +30,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from correction_semantic.idiom_filter import idiom_eligible
+from correction_semantic.representative import user_only_text
 from weak_signals.store import default_store_path, read_signals
 
 MARKER_PREFIX = "bootstrap_done-"
@@ -65,17 +67,26 @@ def _jaccard(a: Set[str], b: Set[str]) -> float:
 
 
 def _idiom_text(rec: Dict[str, Any]) -> str:
-    """weak_signal レコードから idiom 本文（発話断片）を取り出す。"""
+    """weak_signal レコードから idiom 本文（発話断片）を取り出す。
+
+    #528-3: assistant の過去レポート引用混入（「ℹ️ データ蓄積待ち…」等）を strip し
+    user 発話のみを representative にする。
+    """
     prov = rec.get("provenance") or {}
-    return prov.get("text") or ""
+    return user_only_text(prov.get("text") or "")
 
 
 def group_signals(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """未昇格 backlog レコードを内容キーワード jaccard≥0.5 で group 化する。
 
-    各 group は ``{"representative": str, "signal_keys": [...], "size": int}``。
-    keyword が抽出できない断片は単独 group のまま（圧縮されない＝実データの現実的下限）。
-    取りこぼし防止: 全レコードがいずれかの group の signal_keys に必ず 1 回入る。
+    各 group は ``{"representative": str, "signal_keys": [...], "size": int,
+    "confirmable_idiom": str | None}``。keyword が抽出できない断片は単独 group のまま
+    （圧縮されない＝実データの現実的下限）。取りこぼし防止: 全レコードがいずれかの group の
+    signal_keys に必ず 1 回入る。
+
+    #527-4: confirmable_idiom = この group を「はい」確定すると confirmed になる idiom テキスト。
+    representative が idiom_filter の floor/stopword/context token を通る場合のみその text、
+    過汎用なら None（AskUserQuestion で「confirmed になる idiom 無し」と提示できる）。
 
     決定論: 入力順を保った逐次 single-pass グルーピング（同じ入力で同じ出力）。
     """
@@ -94,7 +105,12 @@ def group_signals(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     placed = True
                     break
         if not placed:
-            groups.append({"representative": text, "signal_keys": [key]})
+            groups.append({
+                "representative": text,
+                "signal_keys": [key],
+                # #527-4: 過汎用 representative は confirmed 化対象にしない（None で提示）。
+                "confirmable_idiom": text if idiom_eligible(text) else None,
+            })
             group_kws.append(kws)
     for g in groups:
         g["size"] = len(g["signal_keys"])

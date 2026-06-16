@@ -234,6 +234,72 @@ def test_build_review_uses_idiom_dict_representative(tmp_path: Path):
 
 
 # ─────────────────────────────────────────────────────────────────
+# #528-3 / #527-4: representative 品質 + confirmable_idiom 提示
+# ─────────────────────────────────────────────────────────────────
+def test_build_review_strips_assistant_quote_from_representative(tmp_path: Path):
+    # #528-3: assistant の過去レポート引用混入を strip し user 発話のみ representative にする
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [_sig("やっぱり、高だけにして\n> ℹ️ データ蓄積待ち（PJ≥2）", 1)], path=ws
+    )
+    res = dr.build_review("rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
+    g = res["groups"][0]
+    assert g["representative"] == "やっぱり、高だけにして"
+    assert g["evidence"]["text"] == "やっぱり、高だけにして"
+
+
+def test_build_review_evidence_has_prev_action(tmp_path: Path):
+    # #528-3: 直前 AI 行動の 1 行要約を evidence に添える（一行 representative の判読補助）
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [_sig("やっぱり、高だけにして", 1, prev_action="Edit model-routing.md (effort 設定)")],
+        path=ws,
+    )
+    res = dr.build_review("rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
+    assert res["groups"][0]["evidence"]["prev_action"] == "Edit model-routing.md (effort 設定)"
+
+
+def test_build_review_confirmable_idiom_eligible(tmp_path: Path):
+    # #527-4: eligible な matched idiom は confirmable_idiom に出る
+    ws = tmp_path / "weak_signals.jsonl"
+    idioms = tmp_path / "correction_idioms.jsonl"
+    append_signals([_sig("金額がきれてる", 1)], path=ws)
+    append_idioms(
+        [CorrectionIdiom(
+            idiom="金額表示の見切れを直して",  # eligible
+            provenance={"source_path": "/a.jsonl", "line_no": 1},
+            detected_at="2026-06-10T00:00:00+00:00",
+            pj_slug="rl-anything",
+        )],
+        path=idioms,
+    )
+    res = dr.build_review(
+        "rl-anything", weak_signals_path=ws, idioms_path=idioms, seen_path=_seen(tmp_path)
+    )
+    assert res["groups"][0]["confirmable_idiom"] == "金額表示の見切れを直して"
+
+
+def test_build_review_confirmable_idiom_none_for_overbroad(tmp_path: Path):
+    # #527-4: 過汎用 matched idiom（極短）は confirmed 化対象にしない（None）
+    ws = tmp_path / "weak_signals.jsonl"
+    idioms = tmp_path / "correction_idioms.jsonl"
+    append_signals([_sig("金額がきれてる", 1)], path=ws)
+    append_idioms(
+        [CorrectionIdiom(
+            idiom="気がする",  # too_short → confirmable にしない
+            provenance={"source_path": "/a.jsonl", "line_no": 1},
+            detected_at="2026-06-10T00:00:00+00:00",
+            pj_slug="rl-anything",
+        )],
+        path=idioms,
+    )
+    res = dr.build_review(
+        "rl-anything", weak_signals_path=ws, idioms_path=idioms, seen_path=_seen(tmp_path)
+    )
+    assert res["groups"][0]["confirmable_idiom"] is None
+
+
+# ─────────────────────────────────────────────────────────────────
 # build_review: dry-run ファイル不変
 # ─────────────────────────────────────────────────────────────────
 def test_build_review_dry_run_no_write(tmp_path: Path):

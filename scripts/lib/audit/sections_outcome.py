@@ -31,6 +31,14 @@ def _format_axis(key: str, axis: Dict[str, Any]) -> List[str]:
     if value is None:
         reason = ev.get("reason", "no_data")
         store = ev.get("store", "")
+        # #529-2: 最小分母 floor 未満は「データ不足」でなく「サンプル不足」と
+        # 区別して表示する（ストアはあるが率を出すには分母が小さい状態）。
+        if reason == "insufficient_sample":
+            return [
+                f"  ・{label}: サンプル不足"
+                f"（distinct {ev.get('distinct_types', 0)} type"
+                f" < floor {ev.get('floor', '?')}）— 率は非表示"
+            ]
         return [f"  ・{label}: データ不足（{reason} / {store}）"]
 
     lines = [f"  ・{label}: {value:.2f} — {direction}"]

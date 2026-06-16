@@ -39,11 +39,17 @@ def _has_custom_skills(project_dir: Path) -> bool:
 
 
 def build_skill_triage_section(project_dir: Path) -> Optional[List[str]]:
-    """skill_triage の結果サマリを必ず surface する契約行を返す（#478）。
+    """skill_triage の findings レーンの位置づけ行を返す（#478, #528-4）。
 
     PJ に custom スキルが無ければ None（triage 対象外で沈黙）。
-    あれば「evolve の skill_triage phase の CREATE/UPDATE/SPLIT/MERGE を必ず提示せよ」
-    という契約行を返す。triage は再実行しない（重い・副作用回避）。
+    あれば「skill_triage の実データ（CREATE/UPDATE/SPLIT/MERGE 件数）は
+    `phases.skill_triage` を参照する」という **findings レーンの軽量リマインダ** を返す。
+    triage は再実行しない（重い・副作用回避）ため、件数自体はここでは持たない。
+
+    #528-4: 旧版はこの builder が「必ずサマリ表示すること」という assistant への
+    指示文（MUST 表現）を出していたが、observability は findings レーン（実データの観測）
+    であって指示の置き場ではない。指示（MUST）は SKILL.md Step 3.8 に移管し、ここは
+    「実データがどこにあるか」を案内する findings 行に留める。
     """
     if not _has_custom_skills(project_dir):
         return None
@@ -51,9 +57,8 @@ def build_skill_triage_section(project_dir: Path) -> Optional[List[str]]:
     return [
         "## Skill Triage (CREATE/UPDATE/SPLIT/MERGE)",
         "",
-        "evolve の `result[\"phases\"][\"skill_triage\"]` にある CREATE / UPDATE / "
-        "SPLIT / MERGE 候補を必ずサマリ表示すること（#478）。"
-        "trajectory 由来の新スキル候補（CREATE）が remediation の低 confidence "
-        "batch_skip に畳まれて埋没しないよう、各アクションの件数と上位候補を surface する。",
+        "実データは `result[\"phases\"][\"skill_triage\"]` の CREATE / UPDATE / "
+        "SPLIT / MERGE（各リストの件数と上位候補）にある。trajectory 由来の新スキル候補"
+        "（CREATE）は埋没しやすいレーン（#478）。表示手順は evolve SKILL.md Step 3.8。",
         "",
     ]

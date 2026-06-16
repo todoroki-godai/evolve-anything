@@ -20,7 +20,32 @@ from remediation.fixers_llm import (
     ingest_compression,
     ingest_separation,
     ingest_split,
+    reference_link_for_prompt,
 )
+
+
+# ────────────────────────────────────────────────────────────
+# reference_link_for_prompt (#524-2)
+# ────────────────────────────────────────────────────────────
+
+class TestReferenceLinkForPrompt:
+    def test_project_absolute_path_becomes_relative(self):
+        abs_path = "/Users/someone/proj/.claude/references/foo.md"
+        assert reference_link_for_prompt(abs_path) == ".claude/references/foo.md"
+
+    def test_global_home_path_becomes_relative(self):
+        abs_path = "/Users/someone/.claude/references/bar.md"
+        assert reference_link_for_prompt(abs_path) == ".claude/references/bar.md"
+
+    def test_path_without_claude_segment_returns_unchanged(self):
+        # .claude/ を含まないパスは壊さず素通し（安全側）
+        p = "/tmp/no-claude-here/references/baz.md"
+        assert reference_link_for_prompt(p) == p
+
+    def test_deterministic_no_io(self, tmp_path):
+        # 存在しないパスでも例外なく純粋に文字列変換する（IO なし）
+        p = str(tmp_path / "nonexistent" / ".claude" / "references" / "x.md")
+        assert reference_link_for_prompt(p) == ".claude/references/x.md"
 
 
 # ────────────────────────────────────────────────────────────
@@ -171,6 +196,36 @@ class TestEmitSeparationRequest:
         assert "requests" in result
         assert isinstance(result["requests"], list)
 
+    def test_prompt_uses_pj_root_relative_reference_link(self, tmp_path):
+        """#524-2: prompt の参照リンクはマシン固有絶対パスでなく PJ ルート相対パス。
+
+        コミットされるファイルに /Users/<user>/... が埋まると他環境で壊れるため、
+        .claude/ セグメント以降の相対パス（.claude/references/<name>.md）を指示する。
+        """
+        issue, path = self._make_rule_issue(tmp_path)
+        content = path.read_text()
+        result = emit_separation_request(issue, path, content, limit=10)
+        assert result["requests"], "separation 対象なら requests は非空"
+        prompt = result["requests"][0]["prompt"]
+        # 相対リンクが含まれる
+        assert ".claude/references/test-rule.md" in prompt
+        # マシン固有絶対パス（tmp_path のホーム配下プレフィックス）が prompt に出ない
+        assert str(tmp_path) not in prompt
+
+    def test_meta_keeps_absolute_reference_path_for_write(self, tmp_path):
+        """#524-2: 実際の書込先（meta.reference_path）は絶対のまま保持する。
+
+        prompt の表示は相対だが、ingest がファイルを書く先は絶対パスでなければならない。
+        """
+        issue, path = self._make_rule_issue(tmp_path)
+        content = path.read_text()
+        result = emit_separation_request(issue, path, content, limit=10)
+        meta = result["requests"][0]["meta"]
+        assert meta["reference_path"].startswith(str(tmp_path))
+        assert meta["reference_path"].endswith(".claude/references/test-rule.md")
+        # 相対表示用リンクも meta に保持される（ingest 検証で許容するため）
+        assert meta["reference_link"] == ".claude/references/test-rule.md"
+
 
 # ────────────────────────────────────────────────────────────
 # 4. ingest_separation
@@ -197,6 +252,30 @@ class TestIngestSeparation:
         assert result["fixed"] is True
         assert rule_path.read_text() == "summary line\n"
         assert ref_path.read_text() == "original content\n"
+
+    def test_writes_to_absolute_path_even_with_relative_link_in_meta(self, tmp_path):
+        """#524-2: meta に相対 reference_link があっても、書込先は絶対 reference_path。
+
+        emit が相対リンクを prompt 用に持たせても、ingest は絶対パスでファイルを書く。
+        """
+        rule_path = tmp_path / ".claude" / "rules" / "test-rule.md"
+        rule_path.parent.mkdir(parents=True, exist_ok=True)
+        rule_path.write_text("original content\n", encoding="utf-8")
+        ref_path = tmp_path / ".claude" / "references" / "test-rule.md"
+
+        issue = _make_issue()
+        requests = [{"id": "separate", "prompt": "...", "meta": {
+            "reference_path": str(ref_path),
+            "reference_link": ".claude/references/test-rule.md",
+        }}]
+        responses = {"separate": "summary line\n"}
+
+        result = ingest_separation(issue, rule_path, "original content\n", 10,
+                                   requests, responses)
+        assert result["fixed"] is True
+        # 相対パス（cwd 相対）でなく meta の絶対パスに書かれていること
+        assert ref_path.read_text() == "original content\n"
+        assert result["separation"]["reference_path"] == str(ref_path)
 
     def test_success_result_contains_separation(self, tmp_path):
         rule_path = tmp_path / "test-rule.md"

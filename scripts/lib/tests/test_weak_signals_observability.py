@@ -45,9 +45,10 @@ def test_builder_surfaces_channel_counts(tmp_path: Path, monkeypatch) -> None:
     assert section is not None
     body = "\n".join(section)
     assert "4 件" in body
-    assert "言い直し 2" in body
-    assert "Esc 中断 1" in body
-    assert "未昇格 3" in body
+    # #528-2: matrix 1 行ずつ（全PJ N / 当PJ未昇格 M）
+    assert "言い直し（rephrase）: 全PJ 2" in body
+    assert "Esc 中断（esc_interrupt）: 全PJ 1" in body
+    assert "当PJ未昇格 3" in body
 
 
 def test_builder_labels_counts_as_all_projects(tmp_path: Path, monkeypatch) -> None:
@@ -143,11 +144,8 @@ def test_by_channel_counts_scoped_to_current_pj(tmp_path: Path, monkeypatch) -> 
     # total は全PJ集計（3件）
     assert "3 件" in body
 
-    # チャネル別内訳は当PJのみ（言い直し 1）
-    assert "言い直し 1" in body
-    # 他PJの2件がチャネル内訳に混入していないこと
-    assert "言い直し 3" not in body
-    assert "言い直し 2" not in body
+    # #528-2 matrix: 当PJ未昇格は 1（rephrase 当PJ1未昇格）、全PJ は 3
+    assert "言い直し（rephrase）: 全PJ 3 / 当PJ未昇格 1" in body
 
 
 def test_evolve_hint_absent_when_no_current_pj_unpromoted(tmp_path: Path, monkeypatch) -> None:
@@ -176,6 +174,81 @@ def test_builder_registered_in_observability_contract() -> None:
 
     keys = [k for k, _ in _OBSERVABILITY_BUILDERS]
     assert "weak_signals" in keys
+
+
+# ── #528-2: チャネル別×スコープ matrix ───────────────────────────────
+
+
+def test_channel_scope_matrix_one_line_each(tmp_path: Path, monkeypatch) -> None:
+    """チャネル別×スコープ（全PJ / 当PJ未昇格）を 1 行ずつ matrix 表示する（#528-2）。
+
+    「347 件（全PJ集計）（llm_judge 6）。うち当PJ未昇格 6 件」が初見で読めない問題を、
+    `<channel>: 全PJ N / 当PJ未昇格 M` の matrix 1 行ずつに分解する。
+    """
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        # 当PJ: llm_judge 未昇格 2 / 昇格済み 1
+        {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "a"},
+        {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "b"},
+        {"channel": "llm_judge", "promoted": True, "pj_slug": current_slug, "signal_key": "c"},
+        # 他PJ: llm_judge 4 件（全PJ集計の母数に入る）
+        {"channel": "llm_judge", "promoted": False, "pj_slug": "other", "signal_key": "d"},
+        {"channel": "llm_judge", "promoted": False, "pj_slug": "other", "signal_key": "e"},
+        {"channel": "llm_judge", "promoted": False, "pj_slug": "other", "signal_key": "f"},
+        {"channel": "llm_judge", "promoted": True, "pj_slug": "other", "signal_key": "g"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # matrix 行: 全PJ 7 / 当PJ未昇格 2
+    assert "llm_judge" in body
+    assert "全PJ 7" in body
+    assert "当PJ未昇格 2" in body
+
+
+# ── #525-1: 未昇格と未読の分離 ───────────────────────────────────────
+
+
+def test_unpromoted_splits_unread_via_seen_store(tmp_path: Path, monkeypatch) -> None:
+    """昇格導線文が「未昇格 N 件（うち未読 M 件）」と既読を分離する（#525-1）。
+
+    daily phase「新規なし（既読済）」と weak_signals「未昇格 N 件は昇格可能」の
+    噛み合わなさを、既読ストアと突合した未読数を併記して解消する。
+    """
+    import correction_semantic.daily_review as dr
+    current_slug = tmp_path.name
+    seen_path = tmp_path / "correction_review_seen.jsonl"
+    import json
+    # 当PJ未昇格 3 件のうち 2 件は既読
+    with open(seen_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"key": "k1"}) + "\n")
+        f.write(json.dumps({"key": "k2"}) + "\n")
+    monkeypatch.setattr(dr, "default_seen_path", lambda base=None: seen_path)
+
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "k1"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "k2"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "k3"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "当PJ未昇格 3" in body
+    assert "未読 1" in body
+
+
+def test_unread_count_robust_when_seen_store_missing(tmp_path: Path, monkeypatch) -> None:
+    """既読ストアが無い / 読めない場合、未読 = 未昇格 にフォールバックする（#525-1）。"""
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "x1"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "x2"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "当PJ未昇格 2" in body
+    assert "未読 2" in body
 
 
 # ── idiom_dict 自動昇格の surface（安全弁②・ADR-047） ────────────────

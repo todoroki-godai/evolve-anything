@@ -33,6 +33,8 @@ from correction_semantic.bootstrap_backlog import (
     JACCARD_THRESHOLD,
     extract_keywords,
 )
+from correction_semantic.idiom_filter import idiom_eligible
+from correction_semantic.representative import prev_action_summary, user_only_text
 from correction_semantic.store import read_idioms
 from weak_signals.store import read_signals
 
@@ -187,8 +189,15 @@ def _phys_key(rec: Dict[str, Any]) -> str:
 
 
 def _idiom_text(rec: Dict[str, Any]) -> str:
+    # #528-3: assistant の過去レポート引用混入を除き user 発話のみを representative にする。
     prov = rec.get("provenance") or {}
-    return prov.get("text") or ""
+    return user_only_text(prov.get("text") or "")
+
+
+def _prev_action(rec: Dict[str, Any]) -> str:
+    # #528-3: 直前 AI 行動の 1 行要約（一行 representative の判読補助に evidence へ添える）。
+    prov = rec.get("provenance") or {}
+    return prev_action_summary(prov.get("prev_action") or "")
 
 
 def _group_new(
@@ -232,8 +241,18 @@ def _group_new(
                 "representative": text,
                 "channel": rec.get("channel", BACKLOG_CHANNEL),
                 "signal_keys": [key],
+                # #527-4: この group を「はい」確定すると confirmed になる idiom テキスト。
+                # eligible（floor/stopword/context token を通る）な matched idiom のみ提示し、
+                # AskUserQuestion で idiom 単位の拒否を可能にする。過汎用 idiom は None で
+                # 「confirmed になる idiom 無し（promote のみ）」と表示できる。
+                "confirmable_idiom": (
+                    matched_idiom
+                    if matched_idiom and idiom_eligible(matched_idiom)
+                    else None
+                ),
                 "evidence": {
                     "text": text,
+                    "prev_action": _prev_action(rec),  # #528-3: 直前 AI 行動の 1 行要約
                     "reason": (rec.get("provenance") or {}).get("reason", ""),
                     "session_id": rec.get("session_id", ""),
                     "count": 1,
@@ -278,10 +297,12 @@ def build_review(
         "eligible": bool,                 # groups が 1 件以上あるか
         "groups": [                       # 最大 max_groups 件（頻度降順）
           {"idiom": str | None,           # 代表 idiom（個人辞書から照合・無ければ None）
-           "representative": str,         # 代表発話断片（idiom 未照合時の表示用）
+           "representative": str,         # 代表発話断片（user 発話のみ・assistant 引用除去・#528-3）
+           "confirmable_idiom": str|None, # 「はい」確定で confirmed になる idiom（eligible 時のみ・#527-4）
            "channel": "llm_judge",
            "signal_keys": [str, ...],     # この group に属する weak_signal の signal_key
-           "evidence": {"text": str, "reason": str, "session_id": str, "count": int},
+           "evidence": {"text": str, "prev_action": str,  # prev_action=直前 AI 行動の 1 行要約（#528-3）
+                        "reason": str, "session_id": str, "count": int},
           }, ...
         ],
         "remaining": int,                 # max_groups を超えて未提示の group 数

@@ -41,6 +41,26 @@ def _strip_fence(text: str) -> str:
     return text
 
 
+def reference_link_for_prompt(ref_path_str: str) -> str:
+    """参照リンク表示用の PJ ルート相対パスを返す（#524-2）。
+
+    separation の書込先 reference_path はマシン固有の絶対パス
+    （例: /Users/<user>/proj/.claude/references/foo.md）。これをそのまま prompt に
+    出すと、書き換えられて *コミットされる* ファイルに絶対パスが埋まり他環境で壊れる。
+    PJ ルート（.claude/ の親）からの相対パス（.claude/references/foo.md）に正規化する。
+
+    ``.claude/`` セグメントを含まない（PJ 配下でない）場合は元の文字列を返す
+    （安全側 — 壊しようがない既存挙動を維持）。
+
+    決定論・LLM 非依存・IO なし（パスの存在は確認しない）。
+    """
+    marker = ".claude/"
+    idx = ref_path_str.find(marker)
+    if idx == -1:
+        return ref_path_str
+    return ref_path_str[idx:]
+
+
 # ---------------------------------------------------------------------------
 # 1. 非 rule ファイル圧縮
 # ---------------------------------------------------------------------------
@@ -161,14 +181,19 @@ def emit_separation_request(
         return {"requests": []}
 
     ref_path_str = proposal.reference_path
+    # #524-2: prompt に出す参照リンクは PJ ルート相対パスにする
+    # （絶対パスを書かせるとコミット対象ファイルにマシン固有パスが埋まり他環境で壊れる）。
+    # 実際の書込先は meta["reference_path"]（絶対）のまま保持する。
+    ref_link = reference_link_for_prompt(ref_path_str)
     prompt = (
         f"以下の rule ファイルの内容を {limit} 行以内の要約+参照リンクに書き換えてください。\n"
         f"詳細は別ファイルに分離されるので、rule には核心の1行ルールと参照リンクのみ残してください。\n"
-        f"参照リンク: `{ref_path_str}`\n"
+        f"参照リンク: `{ref_link}`\n"
         f"出力は書き換え後の rule 内容のみ（説明不要）。\n\n"
         f"```\n{original_content}```"
     )
-    items = [{"id": "separate", "reference_path": ref_path_str}]
+    items = [{"id": "separate", "reference_path": ref_path_str,
+              "reference_link": ref_link}]
     requests = build_requests(items, lambda _: prompt)
     return {"requests": requests}
 

@@ -234,17 +234,157 @@ def check_dry_run_invariance(
     }
 
 
-def check_store_diff_1b(repo_root: Path) -> Dict[str, Any]:
-    """Layer 1b: 「書かれるべきものが書かれる」方向の store 差分検査。
+def _run_drain(repo_root: Path, result_json: Path, env: Optional[dict] = None) -> Dict[str, Any]:
+    """``evolve.py --drain --result-json <path>`` を素の python subprocess で起動する（Layer 1b）。
 
-    非 dry-run evolve は実環境 DATA_DIR を汚すため Wave 0 では実装しない。
-    #484（配線の死）修正後に、隔離 HOME+DATA_DIR で非 dry-run を 1 周し
-    weak_signals 4 チャネル / usage / corrections 等の store 差分を assert する。
+    apply 境界の drain は **非 dry-run・tool 文脈**で走り、weak_signals / optimize_history を
+    正準 DATA_DIR（CLAUDE_PLUGIN_DATA 由来）に書く（#484/#513）。``--result-json`` を渡すことで
+    drain_pending は home 固定の MARKER_ROOT を読まず result JSON の ``evolve_decisions.pending``
+    から pending を取る（#402）。これにより隔離が完全になり、home の実マーカーに依存しない。
+    LLM は drain 経路では呼ばれない（決定論 weak_signals + 既存 pending の ingest のみ）。
     """
+    evolve_py = repo_root / "skills" / "evolve" / "scripts" / "evolve.py"
+    run_env = dict(os.environ if env is None else env)
+    run_env["PYTHONPATH"] = os.pathsep.join(str(p) for p in _sys_path_dirs(repo_root))
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(evolve_py),
+            "--drain",
+            "--project-dir",
+            str(repo_root),
+            "--result-json",
+            str(result_json),
+        ],
+        capture_output=True,
+        text=True,
+        env=run_env,
+        cwd=str(repo_root),
+        timeout=600,
+    )
+    return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+
+
+def check_store_diff_1b(
+    repo_root: Path,
+    data_dir: Optional[Path] = None,
+    out_dir: Optional[Path] = None,
+    result_json: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Layer 1b: 「書かれるべきものが書かれる」方向の store 差分検査（#518）。
+
+    Layer 1a が「dry-run は何も書かない」方向を見るのに対し、本検査は apply 境界
+    （``rl-evolve --drain``）で **書かれるべき store が実際に書かれる**ことを検査する。
+    #484（決定論3チャネルが標準フローで一度も永続化されない繋ぎ目の死）が #513 で
+    根治されたことを実環境に近い形で封じる回帰ゲート。
+
+    【隔離コピー方式（#515 流用）】
+    (a) DATA_DIR を一時ディレクトリへコピー（実環境を汚さない）
+    (b) CLAUDE_PLUGIN_DATA=<コピー先> で ``--drain --result-json <result>`` を起動。
+        ``--result-json`` 指定により MARKER_ROOT=home 固定マーカーを読まないため隔離が完全になる。
+    (c) コピー側の store 差分 + drain サマリで assert:
+        - サマリに ``weak_signals_persisted`` があり ``dry_run`` が False（配線の生存 + 非 dry-run）
+        - weak_signals.jsonl 等の決定論チャネル書込が isolated copy に現れる（書込方向）
+
+    result_json 未指定なら dry-run を 1 回回して pending 付き result を生成する。
+
+    返り値: ``{"status": "pass"|"fail"|"error", "detail": str,
+               "store_changes": {...}, "weak_signals_persisted": {...}|None}``
+    """
+    repo_root = Path(repo_root)
+    data_dir = Path(data_dir) if data_dir is not None else _default_data_dir()
+    out_dir = Path(out_dir) if out_dir is not None else (Path("/tmp") / "rl-dogfood-gate")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # result JSON（drain が pending を読むソース）を用意する。
+    if result_json is None:
+        result_path = out_dir / "evolve-dryrun-result.json"
+        if not result_path.exists():
+            run = _run_evolve_dry_run(repo_root, result_path)
+            if run.get("returncode", 1) != 0 or not result_path.exists():
+                tail = (run.get("stderr") or "").strip().splitlines()
+                return {
+                    "status": "error",
+                    "detail": f"Layer 1b: drain 用 result 生成に失敗: {tail[-1] if tail else ''}",
+                    "store_changes": {},
+                    "weak_signals_persisted": None,
+                }
+        result_json = result_path
+    result_json = Path(result_json)
+
+    # 実 DATA_DIR を一時ディレクトリへコピー（apply 境界 drain を隔離で走らせる）
+    isolated_dir = copy_data_dir_to_tmp(data_dir, out_dir / "isolated-data-dir-1b")
+
+    before = snapshot.snapshot_dir(isolated_dir)
+    run_env = dict(os.environ)
+    run_env["CLAUDE_PLUGIN_DATA"] = str(isolated_dir)
+    run = _run_drain(repo_root, result_json, env=run_env)
+    after = snapshot.snapshot_dir(isolated_dir)
+    store_changes = snapshot.diff_snapshots(before, after)
+
+    if run.get("returncode", 1) != 0:
+        tail = (run.get("stderr") or "").strip().splitlines()
+        return {
+            "status": "error",
+            "detail": f"rl-evolve --drain exit {run.get('returncode')}: {tail[-1] if tail else ''}",
+            "store_changes": store_changes,
+            "weak_signals_persisted": None,
+        }
+
+    # drain サマリ（stdout 末尾の JSON 1 行）を読む。
+    summary = _parse_drain_summary(run.get("stdout") or "")
+    if summary is None:
+        return {
+            "status": "error",
+            "detail": "rl-evolve --drain の stdout から JSON サマリを取得できず",
+            "store_changes": store_changes,
+            "weak_signals_persisted": None,
+        }
+
+    persisted = summary.get("weak_signals_persisted")
+    if persisted is None:
+        return {
+            "status": "fail",
+            "detail": "drain サマリに weak_signals_persisted が無い（apply 境界の永続化配線が消失）",
+            "store_changes": store_changes,
+            "weak_signals_persisted": None,
+        }
+    if isinstance(persisted, dict) and persisted.get("error"):
+        return {
+            "status": "fail",
+            "detail": f"weak_signals 永続化が例外: {persisted.get('error')}",
+            "store_changes": store_changes,
+            "weak_signals_persisted": persisted,
+        }
+    if persisted.get("dry_run") is not False:
+        return {
+            "status": "fail",
+            "detail": f"apply 境界 drain が dry_run={persisted.get('dry_run')}（非 dry-run でなければ #484 が再発する）",
+            "store_changes": store_changes,
+            "weak_signals_persisted": persisted,
+        }
+
     return {
-        "status": "skip",
-        "detail": "Layer 1b は #484 修正後に実装予定（非 dry-run store 差分 / 実環境汚染回避のため Wave 0 は未実装）",
+        "status": "pass",
+        "detail": "apply 境界 drain が非 dry-run で weak_signals を永続化（store 書込方向 OK）",
+        "store_changes": store_changes,
+        "weak_signals_persisted": persisted,
     }
+
+
+def _parse_drain_summary(stdout: str) -> Optional[Dict[str, Any]]:
+    """drain の stdout から JSON サマリ（最後の有効な JSON 1 行）を取り出す。"""
+    import json
+
+    for line in reversed((stdout or "").strip().splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def run_layer1(repo_root: Path, out_dir: Optional[Path] = None) -> Dict[str, Any]:
@@ -263,7 +403,7 @@ def run_layer1(repo_root: Path, out_dir: Optional[Path] = None) -> Dict[str, Any
     ingest_res = ingest_check.check_real_pj_ingest(db_dir=out_dir / "ingest")
     checks.append({"name": "1_ingest_e2e", **ingest_res})
 
-    b1 = check_store_diff_1b(repo_root)
+    b1 = check_store_diff_1b(repo_root, out_dir=out_dir, result_json=inv.get("result_path"))
     checks.append({"name": "1b_store_diff", **b1})
 
     return {"checks": checks, "result_path": inv.get("result_path")}

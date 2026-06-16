@@ -79,7 +79,35 @@ def test_dry_run_invariance_errors_on_nonzero_exit(monkeypatch, tmp_path):
     assert res["status"] == "error"
 
 
-def test_check_store_diff_1b_not_implemented(tmp_path):
-    res = layer1.check_store_diff_1b(repo_root=tmp_path)
-    assert res["status"] == "skip"
-    assert "484" in res["detail"]
+def test_check_store_diff_1b_implemented_pass(monkeypatch, tmp_path):
+    """Layer 1b は #518 で実装済み（NotImplemented の skip 枠を解消）。
+
+    drain サブプロセスを mock し、weak_signals_persisted(dry_run=False) と
+    isolated copy への書込で pass になることを確認する。詳細は
+    test_layer1b_store_diff.py。ここでは「skip でなく実 check になった」ことを封じる。
+    """
+    import json
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "state.json").write_text("{}", encoding="utf-8")
+    result_path = tmp_path / "result.json"
+    result_path.write_text(
+        json.dumps({"phases": {}, "evolve_decisions": {"pending": []}}), encoding="utf-8"
+    )
+
+    def fake_drain(repo_root, result_json, env=None):
+        data = Path(env["CLAUDE_PLUGIN_DATA"])
+        (data / "weak_signals.jsonl").write_text('{"channel": "rephrase"}\n', encoding="utf-8")
+        summary = {"weak_signals_persisted": {"written": 1, "dry_run": False}}
+        return {"returncode": 0, "stdout": json.dumps(summary), "stderr": ""}
+
+    monkeypatch.setattr(layer1, "_run_drain", fake_drain)
+    res = layer1.check_store_diff_1b(
+        repo_root=tmp_path / "repo",
+        data_dir=data_dir,
+        out_dir=tmp_path / "out",
+        result_json=result_path,
+    )
+    assert res["status"] == "pass", res
+    assert res["weak_signals_persisted"]["dry_run"] is False

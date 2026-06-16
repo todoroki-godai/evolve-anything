@@ -377,6 +377,68 @@ class TestPromotedTodayFromCorrectionsStore:
         assert result["promoted_today"] == 0
 
 
+# ── #525-1: 今日の昇格行の出所明示（本日累計 vs このrun）─────────────
+class TestPromotedTodayProvenance:
+    """「今日の確認で N件が自動化対象に昇格」が同日の別セッション分を指す問題を、
+    本日累計（store 由来）と このrun（明示渡しの live カウント）を区別して表示する（#525-1）。
+    """
+
+    def _today_iso(self) -> str:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).isoformat()
+
+    def test_returns_this_run_keys(self):
+        """this_run の昇格件数キーが返り値に含まれる（出所区別用）。"""
+        from growth_report import build_growth_report
+        result = build_growth_report(
+            "test-pj",
+            corrections=[],
+            review_result={"daily": {"promoted": 2, "groups": []}},
+            autopromote_result={"promoted": 1},
+        )
+        assert "promoted_this_run" in result
+        assert "autopromoted_this_run" in result
+        assert result["promoted_this_run"] == 2
+        assert result["autopromoted_this_run"] == 1
+
+    def test_line_distinguishes_today_total_from_this_run(self):
+        """store に本日累計の昇格があり、このrunの明示渡しが 0 のとき、
+        「本日累計 N 件昇格（このrunでは 0 件）」と出所を明示する。
+        """
+        from growth_report import build_growth_report
+        corrections = [
+            # 本日累計（別セッションで昇格済み）2 件
+            {"source": "reflect_confirmed", "correction_type": "semantic_idiom",
+             "weak_signal_key": "k1", "timestamp": self._today_iso()},
+            {"source": "reflect_confirmed", "correction_type": "semantic_idiom",
+             "weak_signal_key": "k2", "timestamp": self._today_iso()},
+        ]
+        result = build_growth_report(
+            "test-pj",
+            corrections=corrections,
+            review_result={"daily": {"groups": []}},  # promoted 無し = このrunで 0 件
+            autopromote_result={},
+        )
+        # 本日累計 = 2、このrun = 0
+        assert result["promoted_today"] == 2
+        assert result["promoted_this_run"] == 0
+        lines_text = " ".join(result["lines"])
+        assert "本日累計" in lines_text
+        assert "このrun" in lines_text
+
+    def test_no_promotion_line_when_today_total_zero(self):
+        """本日累計が 0 件なら昇格行を出さない（従来挙動の維持）。"""
+        from growth_report import build_growth_report
+        result = build_growth_report(
+            "test-pj",
+            corrections=[],
+            review_result={"daily": {"groups": []}},
+            autopromote_result={},
+        )
+        lines_text = " ".join(result["lines"])
+        assert "本日累計" not in lines_text
+
+
 # ── 閾値リテラル禁止テスト ────────────────────────────────────────
 
 

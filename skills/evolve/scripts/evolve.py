@@ -19,7 +19,29 @@ _plugin_root = PLUGIN_ROOT
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "evolve-fitness" / "scripts"))
 
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+def _resolve_data_dir() -> Path:
+    """DATA_DIR を解決（CLAUDE_PLUGIN_DATA 優先、未設定は ~/.claude/rl-anything）。
+
+    rl_common.resolve_data_dir（#364 Phase 2 の marker ゲート redirect 含む）に揃え、
+    reader（hooks / scripts.lib）と同一 DATA_DIR に解決する。従来は env を無視して
+    home 固定だったため、CLAUDE_PLUGIN_DATA で隔離した dogfood gate / テストが
+    evolve.py の書込・読込だけ実環境 DATA_DIR に漏れていた（#517）。import 失敗時は
+    従来 fallback。MARKER_ROOT（evolve_decisions.py）の home 固定は別契約なので不変。
+    """
+    import os
+
+    env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+    try:
+        from rl_common import resolve_data_dir
+
+        return Path(resolve_data_dir(env))
+    except Exception:
+        if env:
+            return Path(env)
+        return Path.home() / ".claude" / "rl-anything"
+
+
+DATA_DIR = _resolve_data_dir()
 EVOLVE_STATE_FILE = DATA_DIR / "evolve-state.json"
 
 # Module-level references for testability (populated on first call)
@@ -1579,8 +1601,25 @@ def main() -> None:
             "未指定時は従来通り full JSON を stdout に出す（後方互換）"
         ),
     )
+    parser.add_argument(
+        "--print-out-path",
+        action="store_true",
+        help=(
+            "evolve 本体を回さず、slug 解決済みの OUT パス `/tmp/rl_evolve_<slug>.json` の1行だけを"
+            "print して即返す（#525-3）。SKILL.md Step 1 の SLUG/OUT 再導出ボイラープレートを短縮する"
+            "（rl-evolve は既に slug を解決できるため）。"
+        ),
+    )
 
     args = parser.parse_args()
+
+    # #525-3: OUT パスだけ印字する軽量モード（評価本体は回さない）。
+    # slug 解決 + /tmp パス組み立てのみで DATA_DIR resolver には触れない（#517 と非競合）。
+    if args.print_out_path:
+        _root = Path(args.project_dir) if args.project_dir else Path.cwd()
+        _slug = _resolve_evolve_slug(_root)
+        print(f"/tmp/rl_evolve_{_slug}.json")
+        return
 
     # #402: drain モード — evolve 本体を回さず保留中の決定を optimize_history へ記録する。
     # CLI(=tool 文脈)で走るため reader と同一 DATA_DIR に書く＝#358(DATA_DIR split)を踏まない。

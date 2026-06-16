@@ -49,7 +49,7 @@ def _print_layer1(l1: Dict[str, Any]) -> None:
     for c in l1.get("checks", []):
         mark = {"pass": "✓", "fail": "✗", "skip": "—", "error": "‼"}.get(c["status"], "?")
         print(f"  {mark} {c['name']}: {c['status']} — {c.get('detail', '')}")
-        diff = c.get("diff")
+        diff = c.get("diff") or c.get("store_changes")
         if diff and not (c["status"] == "pass"):
             for kind in ("added", "removed", "modified"):
                 for p in diff.get(kind, []):

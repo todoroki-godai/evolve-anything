@@ -138,9 +138,10 @@ def test_daily_cap_limits_and_caps_overflow(tmp_path: Path) -> None:
     idioms = tmp_path / "correction_idioms.jsonl"
     corr = tmp_path / "corrections.jsonl"
     # confirmed idiom + 一致シグナルを 5 件用意し cap=2 で打ち切る
+    # #527: idiom_filter の floor を通る eligible idiom を使う（極短だと guard で弾かれる）
     for i in range(1, 6):
-        _seed_idiom(idioms, line_no=i, text=f"修正{i}", confirmed=True)
-        _seed_signal(ws, line_no=i, text=f"修正{i}")
+        _seed_idiom(idioms, line_no=i, text=f"これに直してほしい案{i}", confirmed=True)
+        _seed_signal(ws, line_no=i, text=f"これに直してほしい案{i}")
 
     res = iap.autopromote(
         SLUG, weak_signals_path=ws, idioms_path=idioms, corrections_path=corr, daily_cap=2,
@@ -157,8 +158,8 @@ def test_capped_overflow_promoted_next_run(tmp_path: Path) -> None:
     idioms = tmp_path / "correction_idioms.jsonl"
     corr = tmp_path / "corrections.jsonl"
     for i in range(1, 4):
-        _seed_idiom(idioms, line_no=i, text=f"修正{i}", confirmed=True)
-        _seed_signal(ws, line_no=i, text=f"修正{i}")
+        _seed_idiom(idioms, line_no=i, text=f"これに直してほしい案{i}", confirmed=True)
+        _seed_signal(ws, line_no=i, text=f"これに直してほしい案{i}")
 
     r1 = iap.autopromote(SLUG, weak_signals_path=ws, idioms_path=idioms,
                          corrections_path=corr, daily_cap=2)

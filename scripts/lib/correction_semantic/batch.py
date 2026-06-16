@@ -37,7 +37,9 @@ if str(_lib_dir) not in sys.path:
 from llm_broker import build_requests, parse_responses, passthrough  # noqa: E402
 
 from . import DEFAULT_BATCH_SIZE, LLM_JUDGE_CHANNEL
+from . import idiom_filter as _idiom_filter
 from . import prompt as _prompt
+from . import representative as _representative
 from . import store as _store
 
 # 1 発話あたりの概算トークン（プロンプト雛形 + 発話本文）。est 用の粗い係数。
@@ -119,9 +121,13 @@ def ingest_judgement_results(
       4. is_correction=True → WeakSignal(channel=llm_judge) + CorrectionIdiom を蓄積
       5. バッチ内の全発話の物理キーを judged に記録（修正/非修正どちらも）
 
+    過汎用 idiom guard（#527）: floor（8 文字未満）/ stopword（相槌・推量・否定のみ）/
+    文脈固有トークン（日付・割合・序数）に該当する idiom は **個人辞書に入れない**
+    （weak_signal は隔離記録するので reflect で人間が拾える）。弾いた件数は idioms_filtered。
+
     Returns:
         {"corrections", "non_corrections", "skipped_batches",
-         "weak_written", "idioms_written", "judged_written", "dry_run"}
+         "weak_written", "idioms_written", "idioms_filtered", "judged_written", "dry_run"}
     """
     from weak_signals.store import WeakSignal, append_signals, now_iso
 
@@ -134,6 +140,7 @@ def ingest_judgement_results(
     corrections = 0
     non_corrections = 0
     skipped_batches = 0
+    idioms_filtered = 0  # #527: 過汎用 idiom（floor/stopword/context token）で弾いた件数
 
     for req in requests:
         key = req.get("id")
@@ -161,7 +168,10 @@ def ingest_judgement_results(
                 "source_path": utt.get("source_path", ""),
                 "line_no": utt.get("line_no", ""),
                 "session_id": utt.get("session_id", ""),
-                "text": (utt.get("text") or "")[:200],
+                # #528-3: representative の判読性のため user 発話のみ保存（assistant の
+                # 過去レポート引用ブロックを除去）+ 直前 AI 行動を evidence に添える。
+                "text": _representative.user_only_text(utt.get("text") or "")[:200],
+                "prev_action": (utt.get("prev_action") or "")[:120],
                 "reason": v.get("reason", ""),
                 "judge": "llm_haiku",
             }
@@ -174,13 +184,17 @@ def ingest_judgement_results(
                 pj_slug=str(utt.get("pj_slug") or ""),
             ))
             idiom_text = v.get("idiom")
-            if idiom_text:
+            # #527: 過汎用 idiom（極短/相槌・推量/日付・数値断片）は個人辞書に入れない。
+            # idiom 化を弾いても weak_signal は隔離記録済み（reflect で人間が拾える）。
+            if idiom_text and _idiom_filter.idiom_eligible(idiom_text):
                 idioms.append(_store.CorrectionIdiom(
                     idiom=idiom_text,
                     provenance=prov,
                     detected_at=detected_at,
                     pj_slug=str(utt.get("pj_slug") or ""),
                 ))
+            elif idiom_text:
+                idioms_filtered += 1
 
     ws_res = append_signals(signals, path=weak_signals_path, dry_run=dry_run)
     idiom_res = _store.append_idioms(idioms, path=idioms_path, dry_run=dry_run)
@@ -192,6 +206,7 @@ def ingest_judgement_results(
         "skipped_batches": skipped_batches,
         "weak_written": ws_res["written"],
         "idioms_written": idiom_res["written"],
+        "idioms_filtered": idioms_filtered,  # #527: 過汎用で弾いた idiom 件数（observability）
         "judged_written": judged_res["written"],
         "dry_run": bool(dry_run),
     }

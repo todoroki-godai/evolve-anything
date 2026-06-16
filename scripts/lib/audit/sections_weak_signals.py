@@ -79,16 +79,46 @@ def _autopromote_lines() -> List[str]:
     return [line]
 
 
+def _read_reviewed_keys() -> set:
+    """daily_review の既読 signal_key 集合を読む（#525-1）。
+
+    correction_semantic（別所有モジュール）からは **read-only** で参照する。
+    モジュール/ストア未解決時は空集合にフォールバックし、未読 = 未昇格 として振る舞う
+    （既読情報が無いだけで surface 自体は壊さない）。
+    """
+    try:
+        from correction_semantic.daily_review import read_reviewed_keys
+    except ImportError:
+        return set()
+    try:
+        return read_reviewed_keys()
+    except Exception:
+        return set()
+
+
+# matrix surface で列挙するチャネルの順序（既知チャネル → llm_judge → その他）。
+_CHANNEL_ORDER = (
+    "manual_edit_after_ai",
+    "permission_deny",
+    "rephrase",
+    "esc_interrupt",
+    "llm_judge",
+)
+
+
 def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     """weak_signals レーンの蓄積状況を audit に surface する（#432）。
 
     観測可能性:
     - weak_signals モジュール / store 未解決 → None（沈黙）
     - store が空（レコード 0）→ None（まだ何も検出していない＝対象外で沈黙）
-    - レコードあり → 全PJ集計 total + 当PJチャネル別件数 + 当PJ未昇格数を併記（advisory・スコア非関与）
+    - レコードあり → チャネル別×スコープ matrix（全PJ N / 当PJ未昇格 M）を 1 行ずつ
+      + 当PJ未昇格と未読の分離を併記（advisory・スコア非関与）
 
-    #490: by_channel 内訳・unpromoted 件数・昇格導線文は当PJ（pj_slug フィルタ）に限定する。
-    total は「（全PJ集計）」のまま残し「うち当PJ未昇格 M 件が昇格可能」と併記する。
+    #490: 当PJ集計は pj_slug フィルタに限定し、total は「（全PJ集計）」で残す。
+    #528-2: チャネル別×スコープを matrix 1 行ずつに分解（散文の桁混在を解消）。
+    #525-1: 当PJ未昇格を「未昇格 N 件（うち未読 M 件）」に分離し、daily phase
+      「新規なし（既読済）」との噛み合わせを取る（既読ストアと突合）。
     daily_review が pj_slug フィルタで当PJのみ昇格する実装（daily_review.py:153）と一致させる。
     """
     try:
@@ -111,48 +141,68 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     except Exception:
         current_slug = None
 
+    reviewed_keys = _read_reviewed_keys()
+
     total = len(records)
 
-    # by_channel / unpromoted は当PJのみで集計（#490）。
-    # slug が取れない場合・レコードに pj_slug が無い場合は当PJとして扱うフォールバック（後方互換）。
-    by_channel: dict = {}
-    unpromoted = 0
+    # チャネル別の (全PJ件数 / 当PJ未昇格 / 当PJ未昇格かつ未読) を集計する。
+    # slug が取れない / レコードに pj_slug が無い場合は当PJ扱い（後方互換・#490）。
+    all_by_channel: dict = {}            # 全PJ件数（matrix の左）
+    cur_unpromoted_by_channel: dict = {}  # 当PJ未昇格（matrix の右）
+    unpromoted = 0      # 当PJ未昇格 合計
+    unread = 0          # 当PJ未昇格かつ未読 合計（#525-1）
     for r in records:
-        rec_slug = r.get("pj_slug")
-        if current_slug is not None and rec_slug is not None and rec_slug != current_slug:
-            continue  # 他PJのレコードはチャネル集計から除外（pj_slug 未設定は当PJ扱い）
         ch = r.get("channel", "unknown")
-        by_channel[ch] = by_channel.get(ch, 0) + 1
-        if not r.get("promoted"):
+        all_by_channel[ch] = all_by_channel.get(ch, 0) + 1
+
+        rec_slug = r.get("pj_slug")
+        is_current = not (
+            current_slug is not None and rec_slug is not None and rec_slug != current_slug
+        )
+        if is_current and not r.get("promoted"):
+            cur_unpromoted_by_channel[ch] = cur_unpromoted_by_channel.get(ch, 0) + 1
             unpromoted += 1
+            if r.get("signal_key") not in reviewed_keys:
+                unread += 1
 
-    parts = []
-    for ch in ("manual_edit_after_ai", "permission_deny", "rephrase", "esc_interrupt"):
-        if ch in by_channel:
-            label = _CHANNEL_LABELS.get(ch, ch)
-            parts.append(f"{label} {by_channel[ch]}")
-    # 既知チャネル外（将来の llm_judge 等）も拾う
-    for ch, n in by_channel.items():
-        if ch not in _CHANNEL_LABELS:
-            parts.append(f"{ch} {n}")
+    # #528-2: チャネル別×スコープ matrix（1 行ずつ）。順序は既知チャネル → その他。
+    ordered_channels = [c for c in _CHANNEL_ORDER if c in all_by_channel]
+    ordered_channels += [c for c in all_by_channel if c not in _CHANNEL_ORDER]
+    matrix_lines: List[str] = []
+    for ch in ordered_channels:
+        label = _CHANNEL_LABELS.get(ch, ch)
+        cur_n = cur_unpromoted_by_channel.get(ch, 0)
+        matrix_lines.append(
+            f"  - {label}（{ch}）: 全PJ {all_by_channel[ch]} / 当PJ未昇格 {cur_n}"
+        )
 
-    # #490: 昇格導線文は当PJのみの件数で表示する。
-    # total（全PJ集計）との区別を明確にするため「うち当PJ未昇格 M 件」と明示する。
-    hint = (
-        f"うち当PJ未昇格 {unpromoted} 件は `/rl-anything:evolve` の今日の修正確認 phase で昇格可能。"
-        if unpromoted > 0
-        else ""
-    )
     header = ["## Weak Signals (暗黙修正シグナル / 昇格前)", ""]
     # #476-2: read_signals() は DATA_DIR 全PJ共通ストアを集計するため (全PJ) 集計である。
     # bootstrap の pj_total は (当PJ) 集計なので、ラベルなしで並ぶと桁の食い違いに見える。
     # スコープを明示して混乱を防ぐ。
-    # by_channel 内訳は当PJのみ（#490）。
-    parts_str = f"（{' / '.join(parts)}）" if parts else ""
-    body_line = (
-        f"暗黙修正シグナルが {total} 件（全PJ集計）{parts_str}。"
-        + (f" {hint}" if hint else "")
-        + " corrections capture が枯渇しているときの語彙非依存な代替報酬源（advisory・スコア非関与, #432）。"
+    summary_line = (
+        f"暗黙修正シグナルが {total} 件（全PJ集計）。"
+        " corrections capture が枯渇しているときの語彙非依存な代替報酬源"
+        "（advisory・スコア非関与, #432）。チャネル別×スコープは次の matrix で内訳を示す:"
     )
+    # #525-1: 昇格導線文は当PJ未昇格と未読を分離する。daily phase「新規なし（既読済）」と
+    # 「未昇格 N 件は昇格可能」が噛み合うよう、未読（= 今日の修正確認の対象）を併記する。
+    if unpromoted > 0:
+        hint_line = (
+            f"当PJ未昇格 {unpromoted} 件（うち未読 {unread} 件）。"
+            " 未読分は `/rl-anything:evolve` の今日の修正確認 phase で昇格可能"
+            "（既読済は再提示されない）。"
+        )
+        trailer = [hint_line]
+    else:
+        trailer = []
+
     # 安全弁②（ADR-047）: idiom_dict 自動昇格を毎回 surface（黙って進まない）。
-    return header + [body_line] + _autopromote_lines() + [""]
+    return (
+        header
+        + [summary_line]
+        + matrix_lines
+        + trailer
+        + _autopromote_lines()
+        + [""]
+    )

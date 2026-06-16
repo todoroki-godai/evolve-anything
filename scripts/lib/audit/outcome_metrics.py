@@ -63,6 +63,17 @@ _EDIT_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
 
 _MAX_EXAMPLES = 5
 
+# #529-2: correction 再発率の表示側 最小分母 floor。
+# 再発率 = recurring_types / distinct_types。分母 = distinct_types（窓内に出現した
+# distinct correction_type 数）。分母が小さいと 1 type の再発有無で率が大きく振れ
+# （例: distinct 2 で 1 再発 → 0.50）、誤シグナルになる。promotion_readiness は重み
+# 昇格の前提として correction *件数* に CORRECTION_FLOOR=10 を課す（per-PJ・複数 PJ）。
+# 表示側はそれより手前の advisory なので緩めるが、率が安定する最小分母として
+# distinct type ≥ 5 を要求する（distinct 5 なら 1 type の振れは 0.20 に抑えられ、
+# CORRECTION_FLOOR=10 件で平均 2 件/type のとき distinct ≈ 5 と整合する暫定値）。
+# floor 未満では率を None にし「サンプル不足」を明示する（沈黙 != 評価不能, #393-#396）。
+MIN_DISTINCT_TYPES_FLOOR = 5
+
 
 def _dedup(seq: List[str], limit: int = _MAX_EXAMPLES) -> List[str]:
     """順序を保ったまま重複・空を除いて先頭 limit 件を返す（sessions.jsonl の重複行対策）。"""
@@ -191,6 +202,17 @@ def correction_recurrence_rate(
         return None, {"reason": "no_data", "store": "corrections.jsonl", "window_days": days}
 
     distinct_types = len(sessions_by_type)
+    # #529-2: 最小分母 floor 未満では率を出さず「サンプル不足」を明示する。
+    # 低 distinct（n<5）で率を出すと 1 type の振れで誤シグナルになる。
+    if distinct_types < MIN_DISTINCT_TYPES_FLOOR:
+        return None, {
+            "reason": "insufficient_sample",
+            "store": "corrections.jsonl",
+            "records": len(records),
+            "distinct_types": distinct_types,
+            "floor": MIN_DISTINCT_TYPES_FLOOR,
+            "window_days": days,
+        }
     recurring = {t: len(s) for t, s in sessions_by_type.items() if len(s) >= 2}
     rate = round(len(recurring) / distinct_types, 4)
     examples = dict(sorted(recurring.items(), key=lambda kv: kv[1], reverse=True)[:_MAX_EXAMPLES])

@@ -190,6 +190,10 @@ def test_skill_triage_key_when_custom_skills_exist(tmp_path):
     combined = "\n".join(result["skill_triage"])
     assert "Skill Triage" in combined
     assert "CREATE" in combined
+    # #528-4: findings レーンの行であって assistant への指示文（必ず〜せよ等の MUST 表現）
+    # ではないこと。指示は SKILL.md 側に移管した。
+    assert "必ず" not in combined
+    assert "せよ" not in combined
 
 
 def test_skill_triage_absent_when_no_custom_skills(tmp_path):
