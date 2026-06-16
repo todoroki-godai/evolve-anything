@@ -2,8 +2,10 @@
 
 ## [Unreleased]
 
+## [1.100.1] - 2026-06-16
+
 ### Fixed
-- `observability.skill_triage` の findings 補完（#528-4）: 案内行だけで CREATE/UPDATE/SPLIT/MERGE の実件数を持たなかった findings レーンに、evolve が `phases.skill_triage` の実件数行を注入。`build_skill_triage_counts_lines` を追加し、全 0 件でも surface（silence != evaluated）。
+- `observability.skill_triage` の findings 補完（#528-4）: 案内行だけで CREATE/UPDATE/SPLIT/MERGE の実件数を持たなかった findings レーンに、evolve が `phases.skill_triage` の実件数行を注入。`build_skill_triage_counts_lines` を追加し、全 0 件でも surface（silence != evaluated）。実 PJ（docs-platform）の evolve dry-run で正の注入経路を実機確認済み。
 
 ## [1.100.0] - 2026-06-16
 
