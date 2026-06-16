@@ -85,6 +85,42 @@ def test_run_evolve_env_score_dry_run_does_not_record_fitness(tmp_path, monkeypa
     assert captured.get("record") is False, "dry_run=True なのに record=True で fitness 履歴を汚す"
 
 
+def test_run_evolve_injects_triage_counts_into_observability(tmp_path):
+    """#528-4: observability.skill_triage に triage の実件数行が注入される。
+
+    custom スキルがあると collect_observability は skill_triage（案内行）を立てる。
+    evolve は result["phases"]["skill_triage"] の CREATE/UPDATE/SPLIT/MERGE 件数を
+    その findings レーンに追記する（案内だけでなく実データが入る）。
+    """
+    # custom スキルを置いて collect_observability に skill_triage を立てさせる。
+    skill_dir = tmp_path / ".claude" / "skills" / "my-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: my-skill\n---\n", encoding="utf-8")
+
+    live_audit = sys.modules.get("audit", audit)
+    fake_triage = {
+        "CREATE": [{"action": "CREATE"}, {"action": "CREATE"}],
+        "UPDATE": [{"action": "UPDATE"}],
+        "SPLIT": [],
+        "MERGE": [],
+        "OK": [],
+        "SKIP": [],
+        "REVIEW": [],
+        "SKIP_SUPPRESSED": [],
+    }
+    import skill_triage as _st
+    with mock.patch.object(live_audit, "run_audit", return_value="## audit report"), \
+         mock.patch("environment.compute_environment_fitness", return_value={"overall": 0.5, "sources": []}), \
+         mock.patch.object(_st, "triage_all_skills", return_value=fake_triage):
+        result = run_evolve(project_dir=str(tmp_path))
+
+    obs = result.get("observability", {})
+    assert "skill_triage" in obs, "custom スキルがあるのに observability.skill_triage が無い"
+    combined = "\n".join(obs["skill_triage"])
+    assert "CREATE 2" in combined, f"triage 実件数が findings に注入されていない: {combined}"
+    assert "UPDATE 1" in combined
+
+
 def test_run_evolve_captures_audit_stderr_into_warnings(tmp_path):
     """#523-1: audit 実行中の stderr（Chaos スキップ等）が self_analysis に配線される。"""
     live_audit = sys.modules.get("audit", audit)

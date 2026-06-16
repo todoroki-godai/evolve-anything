@@ -825,6 +825,24 @@ def run_evolve(
     except Exception as e:
         result["observability"] = {"error": str(e)}
 
+    # #528-4: observability.skill_triage（案内行のみ）に triage の実件数 findings を注入する。
+    # collect_observability は triage を再実行しない設計で件数を持てないが、evolve は
+    # Phase 2.6 で算出済みの triage_result を `result["phases"]["skill_triage"]` に持つ。
+    # findings レーンに実データ（CREATE/UPDATE/SPLIT/MERGE 件数）が無いのは contract 違反
+    # だったため、ここで件数行を追記する（silence != evaluated）。
+    try:
+        from audit.sections_triage import build_skill_triage_counts_lines
+
+        _obs = result.get("observability")
+        if isinstance(_obs, dict) and isinstance(_obs.get("skill_triage"), list):
+            _count_lines = build_skill_triage_counts_lines(
+                result["phases"].get("skill_triage")
+            )
+            if _count_lines:
+                _obs["skill_triage"] = _obs["skill_triage"] + _count_lines
+    except Exception:
+        pass
+
     # Phase 3.2: Constitutional cache 状態の surface（#408-D）
     _surface_constitutional_status(
         Path(project_dir) if project_dir else Path.cwd(),

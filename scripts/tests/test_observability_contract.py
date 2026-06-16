@@ -200,3 +200,48 @@ def test_skill_triage_absent_when_no_custom_skills(tmp_path):
     """custom スキルが無い PJ では skill_triage は surface されない（triage 対象外）。"""
     from audit.sections_triage import build_skill_triage_section
     assert build_skill_triage_section(tmp_path) is None
+
+
+def _triage_result(**counts):
+    """CREATE/UPDATE/SPLIT/MERGE/OK のリストを件数分だけ詰めた triage_result を作る。"""
+    base = {k: [] for k in ("CREATE", "UPDATE", "SPLIT", "MERGE", "OK")}
+    for action, n in counts.items():
+        base[action] = [{"action": action} for _ in range(n)]
+    return base
+
+
+def test_triage_counts_lines_emit_actual_numbers():
+    """#528-4: triage_result から CREATE/UPDATE/SPLIT/MERGE の実件数が行に入る。"""
+    from audit.sections_triage import build_skill_triage_counts_lines
+
+    res = _triage_result(CREATE=2, UPDATE=1, SPLIT=0, MERGE=3)
+    combined = "\n".join(build_skill_triage_counts_lines(res))
+    assert "CREATE 2" in combined
+    assert "UPDATE 1" in combined
+    assert "SPLIT 0" in combined
+    assert "MERGE 3" in combined
+
+
+def test_triage_counts_lines_none_when_phase_missing_or_error():
+    """skill_triage phase が無い／error の場合は None（沈黙）。"""
+    from audit.sections_triage import build_skill_triage_counts_lines
+
+    assert build_skill_triage_counts_lines(None) is None
+    assert build_skill_triage_counts_lines({"error": "boom", "skipped": True}) is None
+
+
+def test_triage_counts_lines_zero_all_still_emits():
+    """全 0 件でも findings として件数行を出す（silence != evaluated）。"""
+    from audit.sections_triage import build_skill_triage_counts_lines
+
+    combined = "\n".join(build_skill_triage_counts_lines(_triage_result()))
+    assert "CREATE 0" in combined
+
+
+def test_triage_counts_lines_instruction_free():
+    """findings レーンなので MUST 指示文（必ず/せよ）を含まない（#528-4）。"""
+    from audit.sections_triage import build_skill_triage_counts_lines
+
+    combined = "\n".join(build_skill_triage_counts_lines(_triage_result(CREATE=1)))
+    assert "必ず" not in combined
+    assert "せよ" not in combined
