@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.100.0] - 2026-06-16
+
 ### Added
 - `rule_violation_observed` レーン（#522-3）: 既存 rules で禁止済みのコマンド（例: `cd` 禁止なのに 626 回観測）が repeating_patterns で「スキル候補」提案されるのを防ぐ。rule installed != enforced の違反観測を専用レーンに分離し、`phases.discover.rule_violation_observed` として surface（hook enforce 検討を推奨）。決定論・LLM 非依存 (#522)
 - **feat(correction_semantic): 過汎用 idiom の FP guard + representative 品質改善（closes #527, refs #528）** — 過汎用な短文字 idiom が confirmed 化され idiom_autopromote（#463）の FP 製造機になる問題を決定論ゲートで根治。実測（`correction_idioms.jsonl` の confirmed 中の極短 idiom「いやいや」「じゃなくて」「気がする」「比率だけ」「いや、2/24の」）に合わせ `correction_semantic/idiom_filter.py` を新設し 3 ゲートを 1 関数（`idiom_eligible`）に集約: (1) 最小長 floor（正規化後 8 文字未満を弾く）/ (2) 日常語 stopword（相槌・推量・否定のみで具体修正内容を持たない言い回しを弾く。具体名が残れば残す）/ (3) 文脈固有トークン（日付 `2/24` / 割合 `80%` / 序数 `3番目` など再発しても別文脈になる断片を弾く）。`batch.ingest` で idiom 化時に弾き（個人辞書に入れず weak_signal は隔離記録のまま・弾いた件数を `idioms_filtered` で surface）、`idiom_autopromote` にも防御ゲートを置きガード導入前に confirmed 化済みの過汎用 idiom も自動昇格しない。**#527-4**: bootstrap/daily の group に `confirmable_idiom`（「はい」確定で confirmed になる idiom テキスト・eligible 時のみ。過汎用は None）を decision 材料として常時 emit し、AskUserQuestion で idiom 単位の拒否を可能化（提示配線は SKILL.md 側）。**#528-3 (部分)**: `correction_semantic/representative.py` を新設し representative から assistant の過去レポート引用ブロック（`>` markdown quote / code fence / ℹ️・✓・✗ 等のステータス絵文字プレフィックス行）を strip し user 発話のみ抽出（全行が引用なら情報喪失回避で元 text fallback）。一行 representative の判読のため直前 AI 行動の 1 行要約（`prev_action`）を evidence に添える。TDD 新規（idiom_filter 14 / representative 11 + batch/bootstrap/daily に guard・confirmable・representative・prev_action 検証を追加）。決定論・LLM 非依存。

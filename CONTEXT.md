@@ -53,6 +53,8 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | measurement_bug（同値一致検査） | 複数 PJ（≥3）で非自明な集計値（0/None 除外）が bit-exact 一致したら測定バグ候補として advisory surface。「全 PJ 同値カウント＝測定バグ強シグナル」の自動化 | #445 |
 | growth_report（成長レポート） | evolve レポート末尾の決定論表示「あと N 件で次フェーズ」「今日の昇格成果」。閾値は growth_engine の 6 定数が単一ソース | #448 |
 | confirm 配線 | `rl-reflect --promote-weak` が promote 成功後に対応 idiom を confirmed 化する正準経路。signal→idiom は provenance 物理キー（pj_slug, source_path, line_no）で突合 | #463 |
+| 過汎用 idiom FP guard（idiom_eligible） | confirmed→idiom_autopromote の FP 製造を遮断する 3 ゲート（最小長 floor 8 / 日常語 stopword / 文脈固有トークン）を 1 関数に集約。「いやいや」「気がする」等の極短・相槌・日付断片を弾く | #527 |
+| confirmable_idiom | bootstrap/daily の確認 group に emit される「はい確定で confirmed=standing auto-promote rule になる idiom テキスト」。eligible 時のみ非 None（過汎用は None＝今回限りの昇格）。AskUserQuestion の判断材料 | #527-4 |
 | 重み昇格レディネス（promotion readiness） | outcome 3軸を fitness 重みへ繰り入れてよいかの3条件決定論判定（分散 / 件数下限 / 方向妥当性）。全 ✓ で「重み昇格を提案」を advisory surface | #461, ADR-046 |
 | cross_pj_confirmed | 他 PJ で confirm 済みの同テキスト idiom を持つ確認 group に付くラベル（slug 一覧）。先頭提示の判断材料であり自動承認はしない | #462 |
 | union read | DuckDB ストア（read_only）+ 未 ingest live jsonl を dedup 合算して読む読み取り経路。ingest 後の rotate で jsonl が空でも分母が取れる（sessions: `session_store.read_session_records`、dedup キーは ingest の UNIQUE と同一） | #415 |
