@@ -1,6 +1,8 @@
 """bin/rl-dogfood-gate のロジック本体（#496）。
 
-通し評価ゲート CLI。``--layer 1|2|3|all``、``--json``、``--output <path>``。
+通し評価ゲート CLI。``--layer 1|2|3|all|light``、``--json``、``--output <path>``。
+``light`` = pre-push 向け高速層（Layer1a 不変 + Layer2 + Layer3、約十数秒。Layer1b drain
+と ingest E2E を除外）。pre-push hook（scripts/git-hooks/pre-push.local）が非ブロッキングで呼ぶ。
 exit 0=全緑 / 1=赤あり / 2=実行エラー。
 
 Layer 2 は Layer 1 の dry-run result JSON を入力にするため、``--layer 2`` 単独でも
@@ -98,7 +100,15 @@ def main(argv: List[str] | None = None) -> int:
         prog="rl-dogfood-gate",
         description="通し評価ゲート（#496）— dry-run 不変 / report invariants / SKILL.md コードブロック検証",
     )
-    parser.add_argument("--layer", choices=["1", "2", "3", "all"], default="all")
+    parser.add_argument(
+        "--layer",
+        choices=["1", "2", "3", "all", "light"],
+        default="all",
+        help=(
+            "light = pre-push 向けの高速層構成（Layer1a 不変 + Layer2 + Layer3、約十数秒）。"
+            "重い Layer1b drain（約3分）と ingest E2E を除外する。"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="JSON 出力")
     parser.add_argument("--output", type=Path, default=None, help="結果 JSON の保存先")
     parser.add_argument("--result", type=Path, default=None, help="Layer 2 が読む既存 result JSON（省略時は dry-run で生成）")
@@ -114,22 +124,31 @@ def main(argv: List[str] | None = None) -> int:
     exit_red = False
     result_path = args.result
 
-    if args.layer in ("1", "all"):
-        l1 = _run_layer1(repo_root, out_dir)
+    light = args.layer == "light"
+
+    if args.layer in ("1", "all") or light:
+        if light:
+            # light: Layer1a の dry-run 不変だけを回す。ingest E2E と Layer1b drain
+            # （約3分）は重いので除外する（pre-push の非ブロッキング高速ゲート用）。
+            inv = layer1.check_dry_run_invariance(repo_root, out_dir=out_dir)
+            l1 = {"checks": [{"name": "1a_dry_run_invariance", **inv}],
+                  "result_path": inv.get("result_path")}
+        else:
+            l1 = _run_layer1(repo_root, out_dir)
         report["layer1"] = l1
         has_fail, has_error = _layer1_has_red(l1)
         exit_red = exit_red or has_fail
         exit_error = exit_error or has_error
         result_path = l1.get("result_path") or result_path
 
-    if args.layer in ("2", "all"):
+    if args.layer in ("2", "all") or light:
         l2 = _run_layer2(repo_root, out_dir, result_path)
         report["layer2"] = l2
         if l2.get("error"):
             exit_error = True
         exit_red = exit_red or _layer2_has_red(l2)
 
-    if args.layer in ("3", "all"):
+    if args.layer in ("3", "all") or light:
         l3 = layer3.run_layer3(repo_root)
         report["layer3"] = l3
         exit_red = exit_red or _layer3_has_red(l3)

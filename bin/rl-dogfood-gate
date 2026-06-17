@@ -7,7 +7,10 @@
   Layer 3: SKILL.md コードブロック抽出実行（安全分類つき）
 
 Usage:
-    rl-dogfood-gate [--layer 1|2|3|all] [--json] [--output <path>]
+    rl-dogfood-gate [--layer 1|2|3|all|light] [--json] [--output <path>]
+
+``--layer light`` = pre-push 向けの高速層（Layer1a 不変 + Layer2 + Layer3、約十数秒）。
+重い Layer1b drain（約3分）と ingest E2E を除外する。pre-push hook が非ブロッキングで呼ぶ。
 
 exit 0=全緑 / 1=赤あり / 2=実行エラー。
 """

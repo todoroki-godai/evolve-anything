@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.102.0] - 2026-06-17
+
+### Added
+- **feat(dogfood): `--layer light` + 非ブロッキング pre-push hook** — `bin/rl-dogfood-gate --layer light` を新設（Layer1a dry-run 不変 + Layer2 report invariants + Layer3 SKILL.md コードブロック、実機約11秒）。フル `--layer all`（Layer1b の `--drain` subprocess が支配的で約3.5分）から重い Layer1b drain と ingest E2E を除外した高速層で、日常 push 向け。`scripts/git-hooks/pre-push.local`（+ `install.sh`）を新設し、gstack-redact の managed pre-push が chain する `pre-push.local` 拡張点へ導入。**非ブロッキング**（赤でも `exit 0`・警告のみ。1人開発で `--no-verify` 迂回を招かないため）。共有 hooks なので install は worktree 横断で1回。**繋ぎ目対策**: hook は gate の終了コードを区別する（0=緑 / 1=実際に赤→警告 / 2 等=gate を実行できず→soft スキップ）。非0を一律「赤」に潰すと、light 未対応の古い gate（共有 hooks を未マージ branch/別 worktree から踏むと argparse が exit 2）を誤警告し狼少年になるため。TDD（`test_cli_light.py` 4件 + `test_prepush_hook.py` 5件 — 後者は実 bash hook を subprocess 実走し exit 0/1/2 の分岐と非ブロッキングを封じる）。実 push E2E で managed→pre-push.local→実 gate 緑→gstack-redact の全段を確認。決定論・LLM 非依存。
+
 ## [1.101.0] - 2026-06-16
 
 ### Added

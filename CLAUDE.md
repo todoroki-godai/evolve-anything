@@ -81,7 +81,7 @@
 | `cross_pj_priority` | confirmed idiom の PJ 横断優先提示 — 他 PJ 承認済みと同テキストの確認 group に `cross_pj_confirmed` ラベル + 先頭表示（提示のみ・自動承認しない、normalize は autopromote と1関数共有）（#462） | `correction_semantic/cross_pj_priority.py` |
 | `testpaths_coverage` | pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468） | `testpaths_coverage.py` |
 | `plugin_self` origin | プラグイン本体リポジトリ自身の repo 直下 `skills/` を evolve 診断対象化 — `.claude-plugin/plugin.json` 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185） | `skill_origin.py` |
-| `dogfood gate` | 通し評価ゲート `bin/rl-dogfood-gate` — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 非 dry-run store 差分（Layer1b・`rl-evolve --drain --result-json` の隔離コピー実行で weak_signals 永続化方向を assert）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。evolve.py module-level DATA_DIR を env 優先解決に統一（#517）。リリース前の実環境 dogfood E2E（#496, #513, #517, #518） | `scripts/lib/dogfood/` |
+| `dogfood gate` | 通し評価ゲート `bin/rl-dogfood-gate` — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 非 dry-run store 差分（Layer1b・`rl-evolve --drain --result-json` の隔離コピー実行で weak_signals 永続化方向を assert）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。evolve.py module-level DATA_DIR を env 優先解決に統一（#517）。`--layer light`（Layer1a 不変 + Layer2 + Layer3、約十数秒・Layer1b drain と ingest 除外）を pre-push hook（`scripts/git-hooks/pre-push.local`・非ブロッキング警告）が自動実行。リリース前の実環境 dogfood E2E（#496, #513, #517, #518） | `scripts/lib/dogfood/`, `scripts/git-hooks/` |
 | `pj_slug` | PJ slug 導出の単一ソース — `resolve_pj_slug`（git-common-dir 親・authoritative）/ `pj_slug_fast`（文字列処理・hooks hot path）。read/write 同一関数で worktree slug 食い違いを構造的に防ぐ（#492） | `pj_slug.py` |
 | weak_signals drain 永続化 | 決定論3チャネルの永続化を `rl-evolve --drain` の apply 境界に配線（`persist_weak_signals_drain`）— 標準フロー＝dry-run 分析のみで書込経路が構造的に死んでいた #484 の根治。pending marker の dry-run 書込は #402/ADR-041 の意図された設計（#513 で復元） | `weak_signals/batch.py` |
 | `idiom_filter` | 過汎用 idiom の FP guard — 3 ゲート（最小長 floor 8 / 日常語 stopword / 文脈固有トークン）を `idiom_eligible` に集約し confirmed→idiom_autopromote の FP 製造を遮断。`confirmable_idiom` を bootstrap/daily group に emit し SKILL.md の AskUserQuestion で idiom 単位拒否を可能化（#527, #527-4） | `correction_semantic/idiom_filter.py` |
@@ -183,7 +183,12 @@ claude plugin validate
 pytest-xdist `-n auto` で並列実行（`pytest.ini` の `addopts` に設定済み）、2026-06-12 時点で約 32 秒・4972件（直列だと約 135 秒）。#457 で run_evolve 系の実環境ストア読みを隔離し直列 32 分→1 分→xdist で約 32 秒に短縮。**並行 worker に回させるときは `-n 0` で直列**（targeted テストまで多プロセス化し CPU 飢餓するため）。
 
 リリース前は `bin/rl-dogfood-gate --layer all` も全緑を確認する（pytest が掬えない実環境の繋ぎ目
-— dry-run 不変 / report invariants / SKILL.md コードブロック — を検査する。#496）。
+— dry-run 不変 / report invariants / SKILL.md コードブロック — を検査する。#496）。フル `all` は
+Layer1b の drain が重く約3.5分かかる。日常 push は **`--layer light`**（Layer1a 不変 + Layer2 +
+Layer3、約十数秒。重い Layer1b drain と ingest E2E を除外）が `pre-push` hook 経由で**非ブロッキング
+警告**として自動実行される。hook ソースは `scripts/git-hooks/pre-push.local`、導入は
+`bash scripts/git-hooks/install.sh`（gstack-redact の managed pre-push が chain する `pre-push.local`
+へコピー。共有 hooks なので worktree 横断で1回でよい）。
 
 **run_evolve を呼ぶ新規テストを書くときは HOME を隔離すること（#457）。** `run_evolve` は
 `project_dir=tmp_path` でも後段フェーズ（utterance ingest / prune global check /
