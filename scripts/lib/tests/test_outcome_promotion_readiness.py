@@ -182,6 +182,50 @@ class TestPerPjSession:
         assert opr.per_pj_first_try_success(days=30) == {}
 
 
+class TestPerPjReworkFloor:
+    """#569: per_pj_rework も最小分母 floor を欠く（#563-2 の同類残）。
+
+    edit_sessions が MIN_EDIT_SESSIONS_FLOOR 未満の PJ は rework 率が分母 1〜数件で
+    0.0/1.0 に振れ統計的に無意味。value=None + sample_insufficient で「サンプル不足」を
+    明示し、将来 rework を gate 条件に組み込んでも #563 と同じ分母1の 1.0 張り付き FP を
+    再発させない。floor は outcome_metrics と同一定数（二重管理回避）。
+    """
+
+    def _burst(self) -> list:
+        # 連続 Edit ≥ min_consecutive(3) で rework burst を作る。
+        return ["Read", "Edit", "Edit", "Edit"]
+
+    def test_below_floor_value_none_and_flagged(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        # PJ a: edit_sessions=2（< floor 5）→ サンプル不足
+        sessions = [
+            _session("/p/a", "a1", now, tool_sequence=self._burst()),
+            _session("/p/a", "a2", now, tool_sequence=self._burst()),
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", sessions)
+        out = opr.per_pj_rework(days=30)
+        assert out["/p/a"]["value"] is None
+        assert out["/p/a"]["sample_insufficient"] is True
+        # 分母は観測値として保持（floor 未満であることを示す）
+        assert out["/p/a"]["denominator"] == 2
+
+    def test_at_or_above_floor_keeps_value(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        # PJ b: edit_sessions=5（= floor）→ value を保持、flag は False
+        sessions = []
+        for i in range(5):
+            sessions.append(
+                _session("/p/b", f"b{i}", now, tool_sequence=self._burst())
+            )
+        _write_jsonl(tmp_path / "sessions.jsonl", sessions)
+        out = opr.per_pj_rework(days=30)
+        assert out["/p/b"]["value"] == 1.0  # 全 session rework burst
+        assert out["/p/b"]["sample_insufficient"] is False
+        assert out["/p/b"]["denominator"] == 5
+
+
 # ============================================================================
 # 条件3: 方向の妥当性（apply イベント前後で軸が期待方向へ動くか）
 # ============================================================================

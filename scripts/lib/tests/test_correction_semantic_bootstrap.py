@@ -256,10 +256,83 @@ def _many_groups(n: int):
     return groups
 
 
+def _many_short_jp_groups(n: int):
+    """短い日本語発話断片を多数（#568 の実データを模した）作る。
+
+    実コーパス（figma-to-code 108 groups）では各発話が固有名詞中心で共通語彙が
+    薄く、word-level TF-IDF だとほぼ全 group が別バケットに割れた（108→48）。
+    ここでは固有トークンを散りばめた短文を生成し、char n-gram + 上限ガードで
+    AskUserQuestion に畳める規模（≤ MAX_THEME_BUCKETS）まで圧縮できることを検証する。
+    """
+    # 各発話に固有の語を混ぜて jaccard merge を回避し group 数 = n にする。
+    nouns = [
+        "フッター", "余白", "見出し", "配色", "枠線", "ボタン", "リンク", "画像",
+        "金額", "請求", "明細", "目次", "経費", "口座", "残高", "税率",
+        "派遣", "探検", "詳細", "情報量", "違和感", "メンバー", "通知", "履歴",
+    ]
+    verbs = ["を直して", "がおかしい", "を変えて", "が気になる", "を調整して", "が切れてる"]
+    groups = []
+    for i in range(n):
+        noun = nouns[i % len(nouns)]
+        verb = verbs[i % len(verbs)]
+        rep = f"{noun}{verb}{i}番"
+        groups.append({
+            "representative": rep,
+            "signal_keys": [f"k{i}"],
+            "size": 1,
+            "confirmable_idiom": None,
+        })
+    return groups
+
+
 def test_cluster_threshold_constant_defined():
     # 閾値定数が定義されている（根拠コメント付き）。
     assert isinstance(bb.THEME_CLUSTER_THRESHOLD, int)
     assert bb.THEME_CLUSTER_THRESHOLD > 0
+
+
+def test_max_theme_buckets_constant_defined():
+    # #568: バケット数の上限ガード定数が定義されている。
+    assert isinstance(bb.MAX_THEME_BUCKETS, int)
+    assert bb.MAX_THEME_BUCKETS > 0
+
+
+def test_cluster_groups_caps_short_jp_fragments():
+    # #568 root cause: 短い日本語断片が多数（40+）あると word-level TF-IDF では
+    # ほぼ畳めなかった（実コーパス 108→48）。char n-gram + 上限ガードで
+    # AskUserQuestion に畳める規模（≤ MAX_THEME_BUCKETS）まで圧縮できること。
+    groups = _many_short_jp_groups(48)
+    buckets = bb.cluster_groups(groups)
+    assert len(buckets) <= bb.MAX_THEME_BUCKETS, (
+        f"短い日本語断片 48 group が {len(buckets)} バケットに割れた"
+        f"（上限 {bb.MAX_THEME_BUCKETS} 以下に畳むべき）"
+    )
+    # 取りこぼし無し: 全 group がいずれかのバケットに 1 回入る。
+    covered = sorted(i for b in buckets for i in b["group_indices"])
+    assert covered == list(range(len(groups)))
+
+
+def test_cluster_groups_short_jp_deterministic():
+    # #568: 短文の上限ガード経路でも決定論（同入力 → 同バケット割当）。
+    groups = _many_short_jp_groups(48)
+    a = bb.cluster_groups(groups)
+    b = bb.cluster_groups(groups)
+    assert a == b
+
+
+def test_cluster_groups_single_bucket_without_sklearn(monkeypatch):
+    # #568: sklearn 不在を模した経路では graceful degradation で単一バケット。
+    # cluster_groups 内の char TF-IDF 構築を ImportError 相当に潰す。
+    import correction_semantic.bootstrap_backlog as _bb
+
+    def _boom(*a, **k):
+        raise ImportError("no sklearn")
+
+    monkeypatch.setattr(_bb, "_build_char_tfidf", _boom)
+    groups = _many_short_jp_groups(48)
+    buckets = _bb.cluster_groups(groups)
+    assert len(buckets) == 1
+    assert sorted(buckets[0]["group_indices"]) == list(range(len(groups)))
 
 
 def test_cluster_groups_returns_buckets():

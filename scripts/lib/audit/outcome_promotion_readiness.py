@@ -191,9 +191,15 @@ def per_pj_rework(
                 rework_sessions += 1
         if not edit_sessions:
             continue
+        # #569: edit_sessions が floor 未満なら rework 率は分母数件で 0.0/1.0 に振れ
+        # 統計的に無意味。value=None + sample_insufficient で明示し、将来 rework を gate
+        # 条件に組み込んでも #563 と同じ分母1の 1.0 張り付き FP を再発させない。floor は
+        # correction_recurrence(#563-2) / outcome_metrics(#529-2) と同一定数を使う。
+        insufficient = edit_sessions < _om.MIN_EDIT_SESSIONS_FLOOR
         out[pj] = {
-            "value": round(rework_sessions / edit_sessions, 4),
+            "value": None if insufficient else round(rework_sessions / edit_sessions, 4),
             "denominator": edit_sessions,
+            "sample_insufficient": insufficient,
         }
     return out
 

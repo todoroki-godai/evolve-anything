@@ -19,6 +19,7 @@ from glossary_drift import (  # noqa: E402
     DEFAULT_STOPLIST,
     GlossaryEntry,
     find_undefined_terms,
+    load_common_english_words,
 )
 
 
@@ -44,7 +45,9 @@ def _make_source(tmp_path: Path, content: str, name: str = "SOURCE.md") -> str:
 class TestUniversalTechTermsExcluded:
     """issue #554 — 汎用テック語が DEFAULT_STOPLIST で除外されること。"""
 
-    # 各 FP 語が DEFAULT_STOPLIST に含まれることを構造的に確認
+    # 各 FP 語が「stoplist または辞書フィルタ」で除外されることを構造的に確認。
+    # #567 以降、辞書に小文字形を持つ語（GET/JS/JavaScript 等）は stoplist から
+    # 辞書フィルタへ移譲したため、源泉は stoplist 直接含有に限らない。
     @pytest.mark.parametrize("tok", [
         "GET", "POST", "PUT", "DELETE", "PATCH",  # HTTP メソッド
         "JS", "TS",                                 # 言語略語
@@ -52,10 +55,10 @@ class TestUniversalTechTermsExcluded:
         "IaC", "CDN", "SaaS", "PaaS", "IaaS",     # クラウド概念
         "TypeScript", "JavaScript",                 # 言語名 CamelCase
     ])
-    def test_in_default_stoplist(self, tok: str):
-        """FP 語が DEFAULT_STOPLIST に直接含まれる（find_undefined_terms の除外源泉）。"""
-        assert tok in DEFAULT_STOPLIST, (
-            f"'{tok}' は汎用テック語として DEFAULT_STOPLIST に含まれるべき (#554)"
+    def test_excluded_by_stoplist_or_dictionary(self, tok: str):
+        """FP 語が stoplist 直接 or 辞書フィルタのいずれかで除外される（#554/#567）。"""
+        assert tok in DEFAULT_STOPLIST or tok.lower() in load_common_english_words(), (
+            f"'{tok}' は汎用テック語として stoplist or 辞書で除外されるべき (#554/#567)"
         )
 
     @pytest.mark.parametrize("tok", [
@@ -78,10 +81,13 @@ class TestAWSServiceNamesExcluded:
         "Lambda", "Cognito", "CloudWatch",          # 代表的 CamelCase サービス
         "Kinesis", "Athena", "Glue",               # 代表的 CamelCase サービス
     ])
-    def test_aws_camelcase_in_default_stoplist(self, tok: str):
-        """CamelCase AWS サービス名が DEFAULT_STOPLIST に含まれる。"""
-        assert tok in DEFAULT_STOPLIST, (
-            f"'{tok}' は AWS サービス名として DEFAULT_STOPLIST に含まれるべき (#554)"
+    def test_aws_camelcase_excluded(self, tok: str):
+        """CamelCase AWS サービス名が stoplist or 辞書フィルタで除外される。
+
+        #567 以降、辞書に載るサービス名（Lambda 等）は辞書フィルタが落とす。
+        """
+        assert tok in DEFAULT_STOPLIST or tok.lower() in load_common_english_words(), (
+            f"'{tok}' は AWS サービス名として stoplist or 辞書で除外されるべき (#554/#567)"
         )
 
     @pytest.mark.parametrize("tok", [
@@ -149,3 +155,152 @@ class TestExistingStoplistIntact:
         assert tok not in result, (
             f"既存 stoplist の '{tok}' が除外されなくなった（回帰）"
         )
+
+
+# ---------------------------------------------------------------------------
+# #567 辞書ベース一般英単語フィルタ
+# ---------------------------------------------------------------------------
+
+class TestCommonEnglishWordsLoader:
+    """同梱の常用英単語リストが load できること。"""
+
+    def test_loads_nonempty_frozenset(self):
+        words = load_common_english_words()
+        assert isinstance(words, frozenset)
+        # google-10000-english は ~9900 語ある
+        assert len(words) > 5000
+
+    def test_all_lowercase(self):
+        words = load_common_english_words()
+        # 代表的な語が小文字で含まれる
+        assert "begin" in words
+        assert "select" in words
+        assert "info" in words
+
+    def test_cached_same_object(self):
+        """lazy load は同一 frozenset を返す（毎回ファイル読みしない）。"""
+        assert load_common_english_words() is load_common_english_words()
+
+
+class TestDictionaryFilterExcludesGenericWords:
+    """issue #567 — 一般英単語が stoplist に無くても辞書フィルタで除外される。"""
+
+    # stoplist に載っていなくても辞書フィルタで除外される語を選ぶ
+    @pytest.mark.parametrize("tok", [
+        "BEGIN", "FAILED", "SELECT", "INFO", "GROUP",
+    ])
+    def test_generic_word_excluded_by_dictionary(self, tmp_path: Path, tok: str):
+        """stoplist を空にしても辞書フィルタが一般語を除外する。"""
+        source = _make_source(tmp_path, f"The query said {tok} now.", f"src_{tok}.md")
+        # stoplist を空にして「辞書フィルタ単独」で効くことを示す
+        result = find_undefined_terms(_entries(), [source], stoplist=frozenset())
+        assert tok not in result, (
+            f"'{tok}' は一般英単語なので辞書フィルタで除外されるべき (#567)"
+        )
+
+    @pytest.mark.parametrize("tok", [
+        "BEGIN", "FAILED", "SELECT", "INFO", "GROUP",
+    ])
+    def test_lower_in_common_words(self, tok: str):
+        """対象語の .lower() が同梱辞書に含まれる（除外の源泉）。"""
+        assert tok.lower() in load_common_english_words()
+
+
+class TestDictionaryFilterKeepsProjectJargon:
+    """issue #567 — PJ・framework 固有語は辞書に無いので保持される。"""
+
+    @pytest.mark.parametrize("tok", [
+        "FastAPI", "NestJS", "UPDATER", "AMAMO", "DuckDB",
+    ])
+    def test_project_jargon_not_in_common_words(self, tok: str):
+        """PJ 固有語の .lower() は辞書に無い。"""
+        assert tok.lower() not in load_common_english_words()
+
+    @pytest.mark.parametrize("tok", [
+        "FastAPI", "NestJS", "UPDATER", "AMAMO", "DuckDB",
+    ])
+    def test_project_jargon_reported_as_undefined(self, tmp_path: Path, tok: str):
+        """PJ 固有語は辞書フィルタを通り抜けて undefined_terms に上がる。"""
+        source = _make_source(tmp_path, f"The {tok} layer handles it.", f"src_{tok}.md")
+        result = find_undefined_terms(_entries(), [source], stoplist=frozenset())
+        assert tok in result, (
+            f"'{tok}' は PJ/framework 固有語として undefined_terms に現れるべき (#567)"
+        )
+
+
+class TestNoFalseNegativeAfterStoplistShrink:
+    """issue #567 回帰 — stoplist 縮小後も、変更前に除外されていた全 token が
+    「辞書 or 残存 stoplist」のいずれかで必ず除外される（FN を作らない）。
+
+    変更前の DEFAULT_STOPLIST 全体を真実集合とし、各 token が現行ロジックで
+    undefined に上がらないことを source 経由で確認する。
+    """
+
+    # #567 変更前に DEFAULT_STOPLIST が除外していた全 token のスナップショット。
+    # この集合のどれ一つも、変更後に undefined として再浮上してはならない。
+    _PRE_567_STOPLIST = frozenset({
+        # 汎用テック頭字語
+        "API", "CLI", "LLM", "JSON", "JSONL", "YAML", "HTML", "CSS", "HTTP",
+        "HTTPS", "URL", "URI", "SQL", "DB", "ID", "UUID", "PK", "OK", "TODO",
+        "README", "SPEC", "CLAUDE", "CONTEXT", "ADR", "PR", "CI", "CD", "PJ", "SoT",
+        "MUST", "NOT", "AND", "OR", "TTL", "CPU", "OSS", "UX", "UI", "E2E",
+        "TDD", "SDD", "MCP", "SDK", "CC", "WoW", "TOP", "N", "AI", "ASCII",
+        "ROI", "CJK", "NFD", "NaN", "LR", "GitHub",
+        "INSERT", "INTO", "ON", "DO", "NOTHING", "IGNORE", "CONFLICT", "BLOCK",
+        "CREATE", "UPDATE", "MERGE", "SPLIT", "SKIP", "REVIEW",
+        "PreToolUse", "PostToolUse", "UserPromptSubmit", "AskUserQuestion",
+        "MEMORY", "CHANGELOG",
+        "ALWAYS", "FIRST", "INFO", "CUSTOM", "DIR", "WARN", "ERROR", "DEBUG",
+        "ENV", "TMP", "SRC", "DST", "MAX", "MIN",
+        "MB", "KB", "GB", "TB", "MD",
+        "ARN", "CDK", "SNS", "SQS", "S3", "IAM", "VPC", "AWS",
+        "EC2", "ECS", "EKS", "RDS", "DMS", "EMR", "KMS", "ACM",
+        "ALB", "NLB", "ELB", "WAF", "ACL", "NAT", "IGW", "AMI",
+        "ECR", "EFS", "EBS", "SSM", "SES", "STS", "SLA", "SLO",
+        "SLI", "GW",
+        "HEAD", "IO", "FP", "HOLD", "DEPRECATED", "FALLBACK", "RM", "SKILL",
+        "PDF", "QA", "FAQ", "CSV", "XML", "TSV", "MVP", "KPI", "OKR",
+        "PII", "GDPR", "FYI", "ETA", "WIP", "EOD",
+        "GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS",
+        "JS", "TS",
+        "JWT", "CRUD", "SHA", "RPC", "gRPC", "REST", "SOAP",
+        "OAuth", "SAML", "CORS", "CSRF", "XSS",
+        "CDN", "IaC", "SaaS", "PaaS", "IaaS",
+        "TypeScript", "JavaScript", "GraphQL", "OpenAPI", "WebSocket",
+        "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch",
+        "CloudFront", "DynamoDB", "EventBridge", "Lambda",
+        "Cognito", "CloudWatch", "CloudFormation", "CloudTrail",
+        "Kinesis", "Athena", "Glue", "Redshift",
+        "CodeBuild", "CodePipeline", "CodeDeploy",
+        "StepFunctions",
+        "BEGIN", "END", "COMMIT", "ROLLBACK", "SELECT",
+        "DELETE", "WHERE", "JOIN", "GROUP", "ORDER",
+        "FAILED", "FAIL", "PASS", "PASSED", "ERROR", "WARN", "WARNING",
+        "TRACE", "FATAL", "GENERATED",
+        "SKIPPED", "PENDING", "RUNNING", "DONE", "FIXME",
+        "OFF", "LOW", "HIGH", "MID", "TRUE", "FALSE", "YES", "NO",
+        "NULL", "NONE", "ENABLED", "DISABLED", "START", "STOP",
+        "WEB", "APP", "DEV", "PROD", "STG", "TEST", "XXX",
+        "SPA", "BFF", "RAG", "ORM", "OWASP", "MVC", "DAO", "DTO",
+        "VM", "OS",
+    })
+
+    def test_no_pre_567_token_resurfaces(self, tmp_path: Path):
+        """変更前に除外されていた全 token が現行ロジックでも undefined に出ない。"""
+        # 全 token を 1 ファイルにまとめ、defined 無しで undefined を取る
+        content = " ".join(sorted(self._PRE_567_STOPLIST))
+        source = _make_source(tmp_path, content, "all_pre567.md")
+        result = set(find_undefined_terms(_entries(), [source]))
+        resurfaced = sorted(self._PRE_567_STOPLIST & result)
+        assert not resurfaced, (
+            f"#567 で FN 発生: 以下が undefined に再浮上した = {resurfaced}"
+        )
+
+    def test_each_pre_567_token_excluded_individually(self, tmp_path: Path):
+        """各 token が個別 source でも除外される（regex 単体マッチ含む）。"""
+        failures = []
+        for tok in sorted(self._PRE_567_STOPLIST):
+            source = _make_source(tmp_path, f"x {tok} y", f"s_{tok}.md")
+            if tok in find_undefined_terms(_entries(), [source]):
+                failures.append(tok)
+        assert not failures, f"#567 FN: 個別 source で除外されない = {failures}"

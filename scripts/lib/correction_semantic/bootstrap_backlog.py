@@ -57,8 +57,31 @@ THEME_CLUSTER_THRESHOLD = 12
 
 # テーマクラスタの TF-IDF コサイン距離しきい値（reorganize.cluster_skills と同流儀・
 # これ以下の距離が同一クラスタ）。bootstrap の発話断片はスキル本文より短くテーマ間の
-# 距離が開きやすいため、reorganize の 0.7 より緩めの 0.85 で粗いテーマ束にする。
-_CLUSTER_DISTANCE_THRESHOLD = 0.85
+# 距離が開きやすいため、char n-gram（後述）で語彙を成立させたうえで初期距離をやや緩め
+# の 0.90 で粗いテーマ束にする。バケット数が上限を超える場合は _MAX_THEME_BUCKETS の
+# ガードが距離を段階的に上げて再クラスタする。
+_CLUSTER_DISTANCE_THRESHOLD = 0.90
+
+# テーマバケット数の上限ガード（#568）。
+# 根拠: #558 の狙いは「45+ group の per-group AskUserQuestion 質問マラソンを 1 問の
+# multiSelect に畳む」こと。だが word-level TF-IDF（build_tfidf_matrix）は日本語の
+# 短い発話断片を共通語彙で束ねられず、実コーパス（figma-to-code 108 group）で
+# 108→48 バケットにしか畳めなかった（root cause: 各発話が固有名詞中心で TF-IDF の
+# 語彙が共有されない）。char n-gram で語彙を成立させ、さらにバケット数がこの上限を
+# 超えるなら距離閾値を段階的に上げて再クラスタし、AskUserQuestion の 1 問で扱える
+# 規模（実測 figma 108→10 / receipt 20→9 / atlas 23→6）に必ず収める。
+MAX_THEME_BUCKETS = 10
+
+# 上限ガードで距離を緩めるステップ幅と上限（決定論・有限回で必ず停止）。
+_CLUSTER_DISTANCE_STEP = 0.02
+_CLUSTER_DISTANCE_MAX = 0.999
+
+# char n-gram の語数範囲（#568）。短い日本語断片は単語境界が曖昧なため、文字 bi/tri-gram
+# で部分文字列の共有を捉える（"フッターを直して" と "余白を直して" が「を直して」で近づく）。
+_CHAR_NGRAM_RANGE = (2, 3)
+
+# char n-gram の語彙上限（語彙爆発を抑える・決定論には影響しない）。
+_CHAR_MAX_FEATURES = 400
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -139,19 +162,42 @@ def _theme_label(tokens: List[str]) -> str:
     return " / ".join(picked) if picked else "その他"
 
 
-def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """bootstrap group 群をテーマ別バケットに決定論クラスタリングする（#558）。
+def _build_char_tfidf(docs: List[str]):
+    """発話断片群を char n-gram TF-IDF 行列に変換する（#568）。
 
-    既存資産（``similarity.build_tfidf_matrix`` の TF-IDF +
-    ``reorganize.cluster_skills`` の階層クラスタリング）を再利用する（新しい類似度は
-    発明しない）。各 group の内容キーワード（``extract_keywords`` 抽出・漢字/カタカナ
-    2 字以上）を空白連結したものを TF-IDF の 1 文書として扱う。default の英語向け
-    tokenizer は日本語を割れないため、キーワードを ASCII 化せず空白区切りトークンで
-    与えて vocabulary を成立させる。
+    word-level の ``similarity.build_tfidf_matrix`` は日本語の短い発話断片を共通語彙で
+    束ねられない（各発話が固有名詞中心で TF-IDF の語彙が共有されず、108 group が
+    48 バケットにしか畳めなかった）。char n-gram（``analyzer='char_wb'`` +
+    ``ngram_range``）なら部分文字列の共有（"を直して" 等の述部・共通語幹）を捉えられる。
+
+    Returns: ``(matrix, feature_names)``。sklearn 未インストール時は ImportError を
+    送出する（呼び出し側が graceful degradation する）。
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    vectorizer = TfidfVectorizer(
+        analyzer="char_wb",
+        ngram_range=_CHAR_NGRAM_RANGE,
+        max_features=_CHAR_MAX_FEATURES,
+    )
+    matrix = vectorizer.fit_transform(docs)
+    return matrix, vectorizer.get_feature_names_out()
+
+
+def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """bootstrap group 群をテーマ別バケットに決定論クラスタリングする（#558, #568）。
+
+    各 group の representative（発話断片）を 1 文書とし、char n-gram TF-IDF
+    （``_build_char_tfidf``）でベクトル化、``reorganize.cluster_skills`` の階層
+    クラスタリングで束ねる。word-level TF-IDF は日本語の短文を共通語彙で束ねられず
+    実コーパスで 108→48 にしか畳めなかったため、char n-gram に差し替えた（#568）。
+
+    さらにバケット数が ``MAX_THEME_BUCKETS`` を超える場合は距離閾値を段階的に上げて
+    再クラスタし、AskUserQuestion 1 問で扱える規模（実測 figma 108→10）に必ず収める。
 
     Returns: 各バケット = ``{"theme_label": str, "group_indices": [int...],
-    "groups": [<group dict>...]}``。theme_label はクラスタ centroid の上位トークンから
-    決定論生成。取りこぼし無し（全 group がいずれかのバケットに 1 回入る）。
+    "groups": [<group dict>...]}``。theme_label はクラスタ centroid の上位文字 n-gram
+    から決定論生成。取りこぼし無し（全 group がいずれかのバケットに 1 回入る）。
 
     sklearn/scipy 未インストール or 文書が少ない場合は単一バケットに全 group を入れて
     graceful degradation する（決定論・例外を投げない）。
@@ -159,22 +205,18 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not groups:
         return []
 
-    # 各 group の文書テキスト = 内容キーワードの空白連結（日本語 tokenizer 回避）。
-    # キーワードが取れない断片は representative 全体をフォールバック語彙にする。
-    docs: List[str] = []
-    for g in groups:
-        rep = g.get("representative") or ""
-        kws = sorted(extract_keywords(rep))
-        docs.append(" ".join(kws) if kws else rep)
+    # 各 group の文書 = representative 全文（char n-gram は単語境界に依存しないため、
+    # word-level の keyword 連結より生文の方が部分文字列の共有を多く拾える）。
+    docs: List[str] = [(g.get("representative") or "") for g in groups]
 
     # 単一テーマに畳む graceful degradation（クラスタリング不能/不要時）。
     def _single_bucket() -> List[Dict[str, Any]]:
-        all_tokens: List[str] = []
-        for d in docs:
-            all_tokens.extend(d.split())
-        # 最頻トークン上位を label に（決定論: 出現数降順 → トークン昇順）。
+        # 最頻の内容キーワード上位を label に（決定論: 出現数降順 → トークン昇順）。
         from collections import Counter
 
+        all_tokens: List[str] = []
+        for d in docs:
+            all_tokens.extend(sorted(extract_keywords(d)))
         counter = Counter(t for t in all_tokens if t)
         top = [t for t, _ in sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))]
         return [{
@@ -187,16 +229,7 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return _single_bucket()
 
     try:
-        from similarity import build_tfidf_matrix
-    except Exception:
-        return _single_bucket()
-
-    # TF-IDF 向けに語彙トークンを保持する vectorizer を similarity 経由で構築する。
-    # build_tfidf_matrix は stop_words='english' & default token_pattern（2 字以上の
-    # 単語）なので、空白区切りの日本語キーワードはそのまま 1 トークンとして拾われる。
-    skill_texts = {f"g{i}": docs[i] for i in range(len(docs))}
-    try:
-        matrix, feature_names, names = build_tfidf_matrix(skill_texts)
+        matrix, feature_names = _build_char_tfidf(docs)
     except Exception:
         return _single_bucket()
     if matrix is None or feature_names is None:
@@ -207,19 +240,29 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     except Exception:
         return _single_bucket()
 
-    try:
-        labels = cluster_skills(matrix, threshold=_CLUSTER_DISTANCE_THRESHOLD)
-    except Exception:
+    # 上限ガード（#568）: 距離閾値を上げながらバケット数が MAX_THEME_BUCKETS 以下に
+    # 収まるまで再クラスタする。決定論（同入力で同じ閾値列・同じ labels）。距離が
+    # _CLUSTER_DISTANCE_MAX に達したら、それ以上は束ねられないので打ち切る（有限回停止）。
+    threshold = _CLUSTER_DISTANCE_THRESHOLD
+    labels: List[int] = []
+    while True:
+        try:
+            labels = cluster_skills(matrix, threshold=threshold)
+        except Exception:
+            return _single_bucket()
+        n_buckets = len(set(labels))
+        if n_buckets <= MAX_THEME_BUCKETS or threshold >= _CLUSTER_DISTANCE_MAX:
+            break
+        threshold = round(min(threshold + _CLUSTER_DISTANCE_STEP, _CLUSTER_DISTANCE_MAX), 4)
+    if not labels:
         return _single_bucket()
 
-    # names は dict 挿入順（= groups 順）。label → group index 群へ集約する。
-    idx_by_name = {name: int(name[1:]) for name in names}  # "gN" → N
+    # label → group index 群へ集約する（labels の位置 = docs/groups の index）。
     cluster_map: Dict[int, List[int]] = {}
-    for pos, label in enumerate(labels):
-        gi = idx_by_name[names[pos]]
+    for gi, label in enumerate(labels):
         cluster_map.setdefault(int(label), []).append(gi)
 
-    # centroid 上位トークンで theme_label を決定論生成する。
+    # centroid 上位 n-gram で theme_label を決定論生成する。
     import numpy as np
 
     dense = matrix.toarray()
@@ -228,11 +271,14 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ordered = sorted(cluster_map.values(), key=lambda inds: min(inds))
     for indices in ordered:
         indices = sorted(indices)
-        # cluster の TF-IDF centroid から上位トークンを取る（決定論）。
-        rows = [pos for pos, name in enumerate(names) if idx_by_name[name] in indices]
-        centroid = np.mean(dense[rows], axis=0)
+        centroid = np.mean(dense[indices], axis=0)
         top_feat_idx = list(np.argsort(centroid)[::-1])
-        top_tokens = [feature_names[i] for i in top_feat_idx if centroid[i] > 0][:3]
+        # char n-gram の label は空白・記号を含むためトリムして見やすくする。
+        top_tokens = [
+            feature_names[i].strip()
+            for i in top_feat_idx
+            if centroid[i] > 0 and feature_names[i].strip()
+        ][:3]
         buckets.append({
             "theme_label": _theme_label(list(top_tokens)),
             "group_indices": indices,

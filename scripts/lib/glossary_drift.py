@@ -20,6 +20,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # evolve が CONTEXT.md を自動 seed する最小 jargon 候補数。これ未満なら seed しない
 # （jargon の薄い PJ に空の用語集を作らない）。
@@ -29,109 +30,116 @@ SEED_MIN_CANDIDATES = 3
 # 例: BES, RRF, BM25, MemTrace, DuckDB。先頭小文字の通常語は拾わない。
 _CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*|[A-Z]{2,6})\b")
 
+# 同梱の常用英単語リスト（google-10000-english, public domain）。詳細は
+# scripts/lib/data/NOTICE.md。jargon 候補の `.lower()` がこのリストに含まれるなら
+# 一般英単語であり PJ 固有 jargon ではないと判定する（#567）。
+_COMMON_WORDS_PATH = Path(__file__).resolve().parent / "data" / "common_english_words.txt"
+_COMMON_WORDS_CACHE: frozenset[str] | None = None
+
+
+def load_common_english_words() -> frozenset[str]:
+    """同梱の常用英単語リストを lazy load する（1 回だけ・以降キャッシュ）。
+
+    すべて小文字・1 行 1 語。`find_undefined_terms` が jargon 候補の `.lower()` を
+    このリストと突合し、一般英単語（BEGIN/SELECT/INFO 等の ALLCAPS 化を含む）を
+    除外する。stoplist の手動 denylist 個別列挙（モグラ叩き）の根治（#567）。
+    """
+    global _COMMON_WORDS_CACHE
+    if _COMMON_WORDS_CACHE is None:
+        try:
+            with open(_COMMON_WORDS_PATH, encoding="utf-8") as f:
+                _COMMON_WORDS_CACHE = frozenset(
+                    line.strip().lower() for line in f if line.strip()
+                )
+        except FileNotFoundError:
+            # データファイル不在でも検出は壊さない（stoplist のみで継続）。
+            _COMMON_WORDS_CACHE = frozenset()
+    return _COMMON_WORDS_CACHE
+
+
 # 用語集に載せる価値の薄い汎用テック頭字語。undefined 判定から除外する。
 # #353⑫: AWS/技術略語（ARN, CDK, SNS 等）が 46件ものノイズを出していたため denylist を拡張。
+#
+# #567: 一般英単語の FP は辞書フィルタ（load_common_english_words）が根治するため、
+# `.lower()` が常用英単語リストに載る語（BEGIN/END/SELECT/FAILED/INFO/GROUP 等）は
+# stoplist から除去した。ここに残すのは「辞書に載らない頭字語・固有名」のみ:
+#   - 頭字語（API, JSON, AWS, CDK ...）= 辞書に小文字形が無い
+#   - framework/サービス固有 CamelCase（TypeScript, CloudFront, DynamoDB ...）
+#   - メタファイル名・PJ メタ語（CLAUDE, SPEC, README, ADR, SoT, PJ ...）
 # 各グループは拡張しやすいよう明示的に分類する。
 DEFAULT_STOPLIST: frozenset[str] = frozenset(
     {
-        # 汎用テック頭字語
-        "API", "CLI", "LLM", "JSON", "JSONL", "YAML", "HTML", "CSS", "HTTP",
-        "HTTPS", "URL", "URI", "SQL", "DB", "ID", "UUID", "PK", "OK", "TODO",
-        "README", "SPEC", "CLAUDE", "CONTEXT", "ADR", "PR", "CI", "CD", "PJ", "SoT",
-        "MUST", "NOT", "AND", "OR", "TTL", "CPU", "OSS", "UX", "UI", "E2E",
-        "TDD", "SDD", "MCP", "SDK", "CC", "WoW", "TOP", "N", "AI", "ASCII",
+        # 汎用テック頭字語（辞書に小文字形を持たない略語）
+        "API", "CLI", "LLM", "JSON", "JSONL", "YAML", "HTML", "HTTP",
+        "HTTPS", "URL", "URI", "SQL", "DB", "ID", "UUID", "PK", "TODO",
+        "README", "SPEC", "CLAUDE", "ADR", "PR", "CI", "CD", "PJ", "SoT",
+        "MCP", "SDK", "CC", "WoW", "ASCII",
         "ROI", "CJK", "NFD", "NaN", "LR", "GitHub",
-        # SQL / 制御キーワード（jargon でない）
-        "INSERT", "INTO", "ON", "DO", "NOTHING", "IGNORE", "CONFLICT", "BLOCK",
-        # skill-triage の状態・hook イベント名・ツール名（英語の制御語で decode 不要）
-        "CREATE", "UPDATE", "MERGE", "SPLIT", "SKIP", "REVIEW",
+        "E2E", "TDD", "SDD", "TTL", "CPU", "OSS", "UX",
+        # SQL / 制御キーワード（辞書に無い略語のみ。INSERT/SELECT 等は辞書フィルタ）
+        "INTO", "IGNORE",
+        # skill-triage の状態・hook イベント名・ツール名（辞書に無いもの）
         "PreToolUse", "PostToolUse", "UserPromptSubmit", "AskUserQuestion",
         "MEMORY", "CHANGELOG",
-        # 汎用の英大文字ストップワード（#337）。CONTEXT.md 不在の PJ で「未登録 jargon」
-        # として大量に拾われるノイズ（sys-bots で 56件中 45件）。PJ 固有語ではない。
-        "ALWAYS", "FIRST", "INFO", "CUSTOM", "DIR", "WARN", "ERROR", "DEBUG",
-        "ENV", "TMP", "SRC", "DST", "MAX", "MIN",
-        # サイズ単位（jargon でない）
-        "MB", "KB", "GB", "TB", "MD",
-        # AWS / クラウドインフラ汎用略語（#353⑫）。
-        # observability/jargon 候補に 46件ばかり出ていたノイズの主因。
+        # 汎用の英大文字ストップワード（#337）で辞書に無いもの。
+        "ENV", "TMP", "SRC", "DST",
+        # サイズ単位（jargon でない・辞書に無い略語）
+        "MB", "KB", "TB", "MD",
+        # AWS / クラウドインフラ汎用略語（#353⑫）。辞書に小文字形を持たない略語。
         # PJ 固有語ではなく AWS サービス名・一般的インフラ用語のため除外する。
         "ARN", "CDK", "SNS", "SQS", "S3", "IAM", "VPC", "AWS",
         "EC2", "ECS", "EKS", "RDS", "DMS", "EMR", "KMS", "ACM",
-        "ALB", "NLB", "ELB", "WAF", "ACL", "NAT", "IGW", "AMI",
+        "ALB", "NLB", "ELB", "WAF", "ACL", "IGW", "AMI",
         "ECR", "EFS", "EBS", "SSM", "SES", "STS", "SLA", "SLO",
         "SLI", "GW",
-        # git / メタ / 汎用状態語。rl-anything 自身の evolve で CONTEXT.md 候補に
-        # 混入していた一般語・メタ語（HEAD=git, IO/FP/FALLBACK=汎用, HOLD=AskUser
-        # Question 選択肢, DEPRECATED=状態語, RM=曖昧な2文字略語, SKILL=メタファイル名）。
-        # PJ 固有語（DuckDB/MemOS/VeriTrace 等の CamelCase）は小文字を含むため誤除外しない。
-        "HEAD", "IO", "FP", "HOLD", "DEPRECATED", "FALLBACK", "RM", "SKILL",
-        # 汎用ドキュメント／業務略語（#477-4）。glossary の jargon 候補に PDF/QA 等の
-        # 汎用略語が並ぶノイズを denylist で塞ぐ。PJ 固有語ではなく一般的な
-        # ファイル形式・業務用語のため除外する（DuckDB 等の CamelCase は誤除外しない）。
+        # git / メタ / 汎用語で辞書に無いもの。
+        # IO/FP/FALLBACK/RM/SKILL は辞書に無い略語・メタ語。HEAD/HOLD/DEPRECATED は
+        # 辞書フィルタで落ちるため除去した。
+        "IO", "FP", "FALLBACK", "RM", "SKILL", "DEPRECATED",
+        # 汎用ドキュメント／業務略語（#477-4）で辞書に無いもの。
         "PDF", "QA", "FAQ", "CSV", "XML", "TSV", "MVP", "KPI", "OKR",
         "PII", "GDPR", "FYI", "ETA", "WIP", "EOD",
     }
-    # --- #554 追加: 汎用テック語 ---
-    # amamo PJ 等で 33 件中約 13 件が不要な一般語として FP 報告された。
-    # HTTP メソッド・言語名・汎用プロトコル等、読者が既知のテック語を除外する。
-    # PJ 固有語（AMAMO, JCM, MRV, EOA, PKCE 等）は小文字を含まない全大文字か
-    # PJ 固有 CamelCase なので誤除外しない。
+    # --- #554 追加: 汎用テック語（辞書に無いもののみ残す） ---
+    # GET/POST/PUT/PATCH 等の HTTP メソッドは辞書フィルタで落ちるため除去。
     | frozenset(
         {
-            # HTTP メソッド（jargon でなく RFC 標準語）
-            "GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD",
-            # 言語・ランタイム略語
-            "JS", "TS",
-            # 汎用テックプロトコル・設計概念
-            "JWT", "CRUD", "SHA", "RPC", "gRPC", "REST", "SOAP",
+            # 汎用テックプロトコル・設計概念（辞書に無い略語）
+            "JWT", "CRUD", "SHA", "RPC", "gRPC", "SOAP",
             "OAuth", "SAML", "CORS", "CSRF", "XSS",
-            # クラウド配信・運用概念
+            # クラウド配信・運用概念（辞書に無い略語）
             "CDN", "IaC", "SaaS", "PaaS", "IaaS",
             # 言語名 CamelCase（regex が CamelCase を候補にするため明示除外）
-            "TypeScript", "JavaScript", "GraphQL", "OpenAPI", "WebSocket",
-            "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch",
+            "TypeScript", "GraphQL", "OpenAPI", "WebSocket",
+            "PostgreSQL", "MongoDB", "Redis", "Elasticsearch",
         }
     )
     # --- #554 追加: AWS サービス名 CamelCase ---
     # CloudFront / DynamoDB / EventBridge 等は CamelCase として regex に拾われる。
-    # PJ 固有語ではなく AWS 公式サービス名のため除外する。
-    # 真の PJ jargon（AnchorRegistry, MindMap 等）との区別:
-    #   - AWS サービス名は AWS 公式ドキュメントで定義された固有名詞。
-    #   - PJ jargon は当該リポジトリ固有のコンセプト名。
-    # 代表的なサービス名を列挙する（全量は不要; 主要サービスをカバーする）。
+    # 辞書に小文字形が無い AWS 公式サービス名のため除外する。
+    # Lambda は辞書に載るため除去（辞書フィルタが落とす）。
     | frozenset(
         {
-            "CloudFront", "DynamoDB", "EventBridge", "Lambda",
+            "CloudFront", "DynamoDB", "EventBridge",
             "Cognito", "CloudWatch", "CloudFormation", "CloudTrail",
             "Kinesis", "Athena", "Glue", "Redshift",
             "CodeBuild", "CodePipeline", "CodeDeploy",
             "StepFunctions",
         }
     )
-    # --- #554-2 追加: 汎用英大文字語 / SQL・ログ・ステータストークン ---
-    # 実 PJ E2E（docs-platform / sys-bots）で、stoplist 通過後も SQL キーワード・ログ
-    # レベル・汎用ステータス語が jargon 候補として残留した（BEGIN/END/FAILED/GENERATED/
-    # OFF/WEB/XXX/LOW/PASS 等）。これらは PJ 固有概念ではなく読者既知の一般語なので除外する。
-    # 注: 辞書ベースの「一般英単語フィルタ」が根治だが本 PR では observed FP の語彙を
-    # 明示除外に留める（残れば別 issue で辞書フィルタ化）。
+    # --- #554-2 由来で辞書に無い語のみ残す ---
+    # #554-2 の SQL/ログ/ステータス語の大半（BEGIN/END/SELECT/FAILED/INFO/GROUP/
+    # ON/OFF/WEB/APP/...）は辞書フィルタ（#567）が根治するため除去した。
+    # 辞書に載らない略語・固有頭字語のみここに残す。
     | frozenset(
         {
-            # SQL / トランザクション・制御語
-            "BEGIN", "END", "COMMIT", "ROLLBACK", "SELECT", "INSERT",
-            "UPDATE", "DELETE", "WHERE", "JOIN", "GROUP", "ORDER",
-            # ログレベル・ステータス語
-            "FAILED", "FAIL", "PASS", "PASSED", "ERROR", "WARN", "WARNING",
-            "INFO", "DEBUG", "TRACE", "FATAL", "OK", "GENERATED", "SKIP",
-            "SKIPPED", "PENDING", "RUNNING", "DONE", "TODO", "FIXME",
-            # 汎用 ON/OFF・レベル・真偽
-            "ON", "OFF", "LOW", "HIGH", "MID", "TRUE", "FALSE", "YES", "NO",
-            "NULL", "NONE", "ENABLED", "DISABLED", "START", "STOP",
-            # 汎用ドメイン語（読者既知）
-            "WEB", "APP", "DEV", "PROD", "STG", "TEST", "XXX",
-            # 汎用テック略語（universal-tech、GET/JS と同クラス）
+            # 辞書に無い SQL/制御語
+            "ROLLBACK",
+            # 辞書に無いステータス略語
+            "SKIPPED", "FIXME", "XXX", "WARN", "STG", "PROD",
+            # 辞書に無い汎用テック略語
             "SPA", "BFF", "RAG", "ORM", "OWASP", "MVC", "DAO", "DTO",
-            "SDK", "CLI", "DB", "VM", "OS",
+            "VM", "OS",
         }
     )
 )
@@ -238,6 +246,7 @@ def find_undefined_terms(
 ) -> list[str]:
     """SoT に出現する jargon 候補で用語集に未登録のものを返す（ソート済み・一意）。"""
     defined = {e.term for e in entries}
+    common_words = load_common_english_words()  # #567: 一般英単語の辞書フィルタ
     found: set[str] = set()
     for sp in source_paths:
         try:
@@ -248,6 +257,9 @@ def find_undefined_terms(
         for m in _CANDIDATE_RE.finditer(text):
             tok = m.group(1)
             if tok in defined or tok in stoplist:
+                continue
+            # #567: `.lower()` が常用英単語（BEGIN/SELECT/INFO 等）なら jargon でない。
+            if tok.lower() in common_words:
                 continue
             if _SLACK_ID_RE.match(tok):  # Slack ID は jargon でない（#337）
                 continue
