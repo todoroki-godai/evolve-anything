@@ -1,6 +1,6 @@
 # SPEC.md — rl-anything
 
-Last updated: 2026-06-18 by /spec-keeper update — #554-#563 batch（unreleased / evolve-introspect 起票の FP・bug・UX・設計 10件 + 実PJ E2E 追補 #563-2/#554-2）の挙動変更を spec/components.md に反映（bootstrap_backlog テーマクラスタ #558）。released baseline は v1.100.0（繋ぎ目バグ束 Wave1-7 #521-#529 + evolve.py env 優先 DATA_DIR #517）
+Last updated: 2026-06-18 by /spec-keeper update — tech-eval 由来の2コンポーネント追加を spec/components.md に反映: multiview_eval（SEAGym 流 evolve 多視点評価, #564）/ relevance_gate（FinAcumen 流 関連度ゲート, #565）。直前: #554-#563 batch（unreleased）の挙動変更（bootstrap_backlog テーマクラスタ #558 ほか）。released baseline は v1.100.0（繋ぎ目バグ束 Wave1-7 #521-#529 + evolve.py env 優先 DATA_DIR #517）
 
 ## Overview
 

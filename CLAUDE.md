@@ -88,6 +88,8 @@
 | `idiom_filter` | 過汎用 idiom の FP guard — 3 ゲート（最小長 floor 8 / 日常語 stopword / 文脈固有トークン）を `idiom_eligible` に集約し confirmed→idiom_autopromote の FP 製造を遮断。`confirmable_idiom` を bootstrap/daily group に emit し SKILL.md の AskUserQuestion で idiom 単位拒否を可能化（#527, #527-4） | `correction_semantic/idiom_filter.py` |
 | `representative` | correction group の representative 品質改善 — `user_only_text` が assistant 引用ブロックを strip し user 発話のみ抽出、`prev_action_summary` が直前 AI 行動 1 行要約を evidence に添える（#528-3 部分） | `correction_semantic/representative.py` |
 | remediation 参照リンク相対化 | separation emit prompt のマシン固有絶対パスを PJ ルート相対化（`reference_link_for_prompt`）+ `references/remediation.md` に emit/ingest 6 関数の実 signature 表（#524） | `remediation/fixers_llm.py` |
+| `multiview_eval` | evolve 提案を4視点（再利用可能 / 過学習疑い / 退行リスク / コスト増）で決定論分類し audit/evolve に advisory surface。chaos/outcome_attribution/negative_transfer を join、replay は将来フックのみ（#564, tech-eval SEAGym） | `audit/multiview_eval.py`, `audit/sections_multiview.py` |
+| `relevance_gate` | 過去経験（weak_signal/idiom）提案を現在文脈との関連度（jaccard 流儀）でゲートし、無関係を理由付きで `suppressed` 分離。`rl-reflect --show-weak-signals --context` に配線（#565, tech-eval FinAcumen） | `correction_semantic/relevance_gate.py` |
 
 ## クイックスタート
 
