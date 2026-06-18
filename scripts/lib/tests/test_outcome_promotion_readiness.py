@@ -63,6 +63,63 @@ def _session(pj: str, sid: str, dt: datetime, *, error_count: int = 0,
 
 
 # ============================================================================
+# #593: PJ キー抽出は worktree 安全 slug に正規化する
+# ============================================================================
+
+class TestPjOfNormalization:
+    """#593: ``_pj_of`` は worktree フルパス / フルパス / basename を親PJ slug に畳む。
+
+    背景: 同じ audit パッケージの outcome_metrics は読み取り時に _normalize_pj で
+    worktree パスを親 repo slug に正規化済みだが、本モジュールの _pj_of は生の
+    project_path（worktree フルパス）/ project（basename）をそのまま PJ キーにしていた。
+    このため worktree（例: amamo/.claude/worktrees/evolve）が幻の別PJ slug として
+    cross-PJ 統計に混入していた。期待値は実装（pj_slug_fast）の挙動に合わせる:
+      - worktree フルパス → marker で切って親 repo basename（amamo）
+      - 通常フルパス      → basename（rl-anything）
+      - basename だけ     → 原値そのまま（feedback）
+    """
+
+    def test_worktree_fullpath_collapses_to_parent_repo(self):
+        rec = {"project_path": "/x/amamo/.claude/worktrees/evolve"}
+        assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "amamo"
+
+    def test_normal_fullpath_yields_basename(self):
+        rec = {"project_path": "/x/rl-anything"}
+        assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "rl-anything"
+
+    def test_bare_basename_passes_through(self):
+        rec = {"project": "feedback"}
+        assert opr._pj_of(rec, opr._SESSION_PJ_FIELDS) == "feedback"
+
+    def test_field_priority_preserved_correction(self):
+        # correction は project_path を優先（_CORRECTION_PJ_FIELDS の先頭）
+        rec = {"project_path": "/x/amamo/.claude/worktrees/evolve", "project": "other"}
+        assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "amamo"
+
+    def test_field_priority_preserved_session(self):
+        # session は project を優先（_SESSION_PJ_FIELDS の先頭）
+        rec = {"project": "feedback", "project_path": "/x/amamo"}
+        assert opr._pj_of(rec, opr._SESSION_PJ_FIELDS) == "feedback"
+
+    def test_empty_values_skipped(self):
+        # 空値はスキップして次の候補へ（現挙動維持）
+        rec = {"project_path": "", "project": "/x/rl-anything"}
+        assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "rl-anything"
+
+    def test_no_pj_fields_returns_empty(self):
+        assert opr._pj_of({}, opr._CORRECTION_PJ_FIELDS) == ""
+
+    def test_phantom_worktree_does_not_split_pj(self):
+        # 同一 repo の本体セッションと worktree セッションが同じ PJ キーに畳まれる
+        # （幻PJが混入しない = #593 の本丸）。
+        main_rec = {"project_path": "/x/amamo"}
+        wt_rec = {"project_path": "/x/amamo/.claude/worktrees/evolve"}
+        assert opr._pj_of(main_rec, opr._CORRECTION_PJ_FIELDS) == opr._pj_of(
+            wt_rec, opr._CORRECTION_PJ_FIELDS
+        )
+
+
+# ============================================================================
 # 条件1: 分散が十分（軸値が全 PJ で同値でないか）
 # ============================================================================
 
@@ -144,10 +201,11 @@ class TestPerPjCorrection:
         ]
         _write_jsonl(tmp_path / "corrections.jsonl", records)
         out = opr.per_pj_correction_recurrence(days=30)
-        assert out["/p/a"]["value"] == 0.5
-        assert out["/p/a"]["denominator"] == 3  # correction 件数
-        assert out["/p/b"]["value"] == 0.0
-        assert out["/p/b"]["denominator"] == 1
+        # #593: PJ キーは _normalize_pj 経由で正規化される（/p/a → basename a）。
+        assert out["a"]["value"] == 0.5
+        assert out["a"]["denominator"] == 3  # correction 件数
+        assert out["b"]["value"] == 0.0
+        assert out["b"]["denominator"] == 1
 
     def test_window_excludes_old(self, tmp_path, monkeypatch):
         monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
@@ -172,10 +230,11 @@ class TestPerPjSession:
         ]
         _write_jsonl(tmp_path / "sessions.jsonl", records)
         out = opr.per_pj_first_try_success(days=30)
-        assert out["/p/a"]["value"] == 0.5  # 1/2 clean
-        assert out["/p/a"]["denominator"] == 2
-        assert out["/p/b"]["value"] == 1.0
-        assert out["/p/b"]["denominator"] == 1
+        # #593: PJ キーは _normalize_pj 経由で正規化される（/p/a → basename a）。
+        assert out["a"]["value"] == 0.5  # 1/2 clean
+        assert out["a"]["denominator"] == 2
+        assert out["b"]["value"] == 1.0
+        assert out["b"]["denominator"] == 1
 
     def test_no_file_returns_empty(self, tmp_path, monkeypatch):
         monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
@@ -205,10 +264,11 @@ class TestPerPjReworkFloor:
         ]
         _write_jsonl(tmp_path / "sessions.jsonl", sessions)
         out = opr.per_pj_rework(days=30)
-        assert out["/p/a"]["value"] is None
-        assert out["/p/a"]["sample_insufficient"] is True
+        # #593: PJ キーは _normalize_pj 経由で正規化される（/p/a → basename a）。
+        assert out["a"]["value"] is None
+        assert out["a"]["sample_insufficient"] is True
         # 分母は観測値として保持（floor 未満であることを示す）
-        assert out["/p/a"]["denominator"] == 2
+        assert out["a"]["denominator"] == 2
 
     def test_at_or_above_floor_keeps_value(self, tmp_path, monkeypatch):
         monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
@@ -221,9 +281,10 @@ class TestPerPjReworkFloor:
             )
         _write_jsonl(tmp_path / "sessions.jsonl", sessions)
         out = opr.per_pj_rework(days=30)
-        assert out["/p/b"]["value"] == 1.0  # 全 session rework burst
-        assert out["/p/b"]["sample_insufficient"] is False
-        assert out["/p/b"]["denominator"] == 5
+        # #593: PJ キーは _normalize_pj 経由で正規化される（/p/b → basename b）。
+        assert out["b"]["value"] == 1.0  # 全 session rework burst
+        assert out["b"]["sample_insufficient"] is False
+        assert out["b"]["denominator"] == 5
 
 
 # ============================================================================
@@ -541,9 +602,10 @@ class TestSessionDenominatorFromDb:
 
         out = opr.per_pj_first_try_success(days=30)
         # jsonl 直読なら空 = 永遠に ✗ だったが、db union read で分母が取れる。
-        assert out["/p/a"]["denominator"] == 2
-        assert out["/p/a"]["value"] == 0.5
-        assert out["/p/b"]["denominator"] == 1
+        # #593: PJ キーは _normalize_pj 経由で正規化される（/p/a → basename a）。
+        assert out["a"]["denominator"] == 2
+        assert out["a"]["value"] == 0.5
+        assert out["b"]["denominator"] == 1
 
     @requires_duckdb
     def test_condition2_denominator_met_from_db(self, tmp_path, monkeypatch):
@@ -563,7 +625,8 @@ class TestSessionDenominatorFromDb:
             {pj: v["denominator"] for pj, v in fs.items()}, floor=opr.SESSION_FLOOR
         )
         assert denom["pass"] is True
-        assert sorted(denom["meeting"]) == ["/p/a", "/p/b"]
+        # #593: PJ キーは _normalize_pj 経由で正規化される（/p/a → a, /p/b → b）。
+        assert sorted(denom["meeting"]) == ["a", "b"]
 
     @requires_duckdb
     def test_condition3_paired_windows_from_db(self, tmp_path, monkeypatch):

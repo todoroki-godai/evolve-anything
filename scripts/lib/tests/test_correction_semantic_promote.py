@@ -65,9 +65,46 @@ def test_promote_writes_human_source_correction(tmp_path: Path) -> None:
     # human-source で書かれる（フェーズ昇格カウント対象）
     assert all(r["source"] == "reflect_confirmed" for r in corr_recs)
     assert all(r["reflect_status"] == "applied" for r in corr_recs)
-    assert all(r.get("project_path") == "/Users/x/rl-anything" for r in corr_recs)
+    # #593: project_path は書込時に worktree 安全 slug へ正規化される
+    # （/Users/x/rl-anything → basename rl-anything）。
+    assert all(r.get("project_path") == "rl-anything" for r in corr_recs)
     # provenance の言い回し本文が message に入る
     assert any("緑にして" in r.get("message", "") for r in corr_recs)
+
+
+def test_promote_normalizes_worktree_project_path(tmp_path: Path) -> None:
+    """#593: worktree フルパスが渡されても project_path は本体 repo slug で書かれる。
+
+    reflect_confirmed / idiom_dict 昇格は呼び出し側が worktree フルパスを渡しうる。
+    cross-PJ 統計に幻PJ slug を混入させないため、書込境界（_build_correction_record）で
+    project（#492）と同じ pj_slug_fast 経由の正規化を通す。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sigs = _seed_signals(ws)
+
+    wt_path = "/Users/x/tools/amamo/.claude/worktrees/evolve"
+    cs_promote.promote_signals(
+        [sigs[0].signal_key], weak_signals_path=ws, corrections_path=corr,
+        project_path=wt_path,
+    )
+    corr_recs = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(corr_recs) == 1
+    # worktree フルパスが幻PJ slug ではなく本体 repo slug amamo に畳まれる。
+    assert corr_recs[0]["project_path"] == "amamo"
+
+
+def test_promote_empty_project_path_preserved(tmp_path: Path) -> None:
+    """#593: 空 project_path は空のまま（正規化が None→"" を増幅しない）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sigs = _seed_signals(ws)
+    cs_promote.promote_signals(
+        [sigs[0].signal_key], weak_signals_path=ws, corrections_path=corr,
+        project_path="",
+    )
+    corr_recs = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert corr_recs[0]["project_path"] == ""
 
 
 def test_promote_marks_weak_signal_promoted(tmp_path: Path) -> None:

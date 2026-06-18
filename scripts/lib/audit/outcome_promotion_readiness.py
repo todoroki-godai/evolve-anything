@@ -67,10 +67,20 @@ _AXIS_BETTER_WHEN_LOWER = {
 
 
 def _pj_of(rec: Dict[str, Any], fields) -> str:
+    """レコードの PJ 識別フィールドを worktree 安全な slug に正規化して返す（#593）。
+
+    フィールド優先順（correction は project_path 優先 / session は project 優先）を
+    維持したまま、最初に値のあるフィールドを ``outcome_metrics._normalize_pj``
+    （= ``pj_slug_from_cwd``）経由で正規化する。これにより worktree フルパス
+    （例 ``/x/amamo/.claude/worktrees/evolve``）が本体 repo slug（``amamo``）に畳まれ、
+    幻の別PJ slug が cross-PJ 統計に混入しなくなる。読み取り時正規化なので既存データ
+    込みで即解消する。同パッケージ ``outcome_metrics`` の ``_project_match`` と同方式
+    （新しい正規化を発明しない）。空値はスキップし、どの候補も無ければ "" を返す。
+    """
     for f in fields:
         v = rec.get(f)
         if v:
-            return str(v)
+            return _om._normalize_pj(str(v)) or ""
     return ""
 
 

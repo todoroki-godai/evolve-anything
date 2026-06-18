@@ -138,7 +138,13 @@ def handle_user_prompt_submit(event: dict) -> None:
         "guardrail": pattern_info.get("type") == "guardrail",
         "reflect_status": "pending",
         "extracted_learning": None,
-        "project_path": os.environ.get("CLAUDE_PROJECT_DIR"),
+        # #593: project_path は consumer が PJ 識別子として扱うため、worktree cwd でも
+        # 本体 repo slug に正規化する（project と同じ project_name_from_dir 経由・
+        # subprocess なし）。未設定時は None のまま（従来挙動）。
+        "project_path": (
+            common.project_name_from_dir(_proj_dir)
+            if (_proj_dir := os.environ.get("CLAUDE_PROJECT_DIR")) else None
+        ),
         "source": "hook",
         "timestamp": now,
         "session_id": session_id,

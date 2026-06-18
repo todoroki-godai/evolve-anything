@@ -86,7 +86,12 @@ def handle_post_tool_use(event: dict) -> None:
 
         # global スキルの場合、Usage Registry にも記録
         if is_global_skill(skill_name, tool_input):
-            project_path = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
+            # #593: project_path は consumer が PJ 識別子として扱う（パスとして
+            # open/stat しない）ため、worktree cwd でも本体 repo slug に正規化する
+            # （project と同じ project_name_from_dir / pj_slug_fast 経由。subprocess なし）。
+            project_path = common.project_name_from_dir(
+                os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
+            )
             registry_record = {
                 "skill_name": skill_name,
                 "project_path": project_path,

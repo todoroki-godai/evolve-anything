@@ -23,6 +23,28 @@ from typing import Any, Dict, List, Optional, Set
 from weak_signals.store import default_store_path, read_signals
 
 
+def _normalize_project_path(value: str) -> str:
+    """project_path を worktree 安全な slug に正規化する（#593）。
+
+    昇格レコードの project_path は呼び出し側が worktree フルパスを渡しうるが、
+    consumer は PJ 識別子として扱う（パスとして open/stat しない）。書込境界で
+    ``pj_slug.pj_slug_fast``（subprocess なしの軽量版）を通し、worktree フルパス
+    （``.../.claude/worktrees/<name>``）を本体 repo slug に畳む。hook 書込側の
+    project（#492 ``project_name_from_dir``）と同方式に揃える（新方式を発明しない）。
+    空値はそのまま空で返す（None→"" を増幅しない）。
+    """
+    if not value:
+        return value
+    try:
+        from pj_slug import pj_slug_fast
+        slug = pj_slug_fast(value)
+        if slug:
+            return slug
+    except Exception:
+        pass
+    return Path(value).name or value
+
+
 def read_unpromoted(
     weak_signals_path: Optional[Path] = None,
     channel: Optional[str] = None,
@@ -137,7 +159,8 @@ def _build_correction_record(
         "guardrail": False,
         "reflect_status": "applied",
         "extracted_learning": None,
-        "project_path": project_path,
+        # #593: 書込境界で worktree 安全 slug に正規化（幻PJ slug 混入防止）。
+        "project_path": _normalize_project_path(project_path),
         # human-source: フェーズ昇格カウント対象（provenance_weight.HUMAN_SOURCES）
         "source": source,
         "timestamp": now,

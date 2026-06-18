@@ -99,6 +99,15 @@ def main(argv: list[str] | None = None) -> int:
     migrate_p.add_argument("--canonical", type=Path, default=None, help="正準 dir（default: ~/.claude/rl-anything）")
     migrate_p.add_argument("--source", type=Path, default=None, help="旧 plugin-data dir（default: install レイアウトを自動探索）")
 
+    pjslug_p = sub.add_parser(
+        "migrate-pj-slug",
+        help="既存レコードの幻PJ slug（worktree フルパス等）を worktree 安全 slug へ遡及正規化（corrections/subagents/sessions.db、#593）",
+    )
+    pjslug_p.add_argument("--apply", action="store_true",
+                          help="実書込（既定は dry-run = 1バイトも書かず正規化予定件数だけ表示）")
+    pjslug_p.add_argument("--data-dir", type=Path, default=None,
+                          help="対象 DATA_DIR（default: ~/.claude/rl-anything）。他の CC セッションを閉じた idle 時の --apply を推奨")
+
     uttr_p = sub.add_parser(
         "ingest",
         help="全PJ human 発話を utterances.db に増分 ingest（#430・ゼロ LLM）",
@@ -139,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_ingest(args)
     if args.command == "migrate-data":
         return _run_migrate_data(args)
+    if args.command == "migrate-pj-slug":
+        return _run_migrate_pj_slug(args)
 
     # default: status
     return _run_status(args)
@@ -187,6 +198,21 @@ def _run_migrate_data(args: argparse.Namespace) -> int:
     summary = data_dir_migration.migrate(**kwargs)
     print(data_dir_migration.format_summary(summary))
     return 1 if summary["failures"] else 0
+
+
+def _run_migrate_pj_slug(args: argparse.Namespace) -> int:
+    """migrate-pj-slug: 既存レコードの幻PJ slug を worktree 安全 slug へ遡及正規化（#593）。"""
+    import pj_slug_backfill
+
+    if args.data_dir is not None:
+        data_dir = args.data_dir
+    else:
+        import data_dir_migration
+        data_dir = data_dir_migration.default_canonical()
+
+    summary = pj_slug_backfill.backfill(data_dir, apply=args.apply)
+    print(pj_slug_backfill.format_summary(summary))
+    return 0
 
 
 def _run_recall(args: argparse.Namespace) -> int:

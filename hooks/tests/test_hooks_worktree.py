@@ -245,6 +245,66 @@ class TestProjectFieldWorktreeNormalization:
         assert rl_common.PJ_SLUG_NORMALIZATION_DATE == "2026-06-12"
 
 
+class TestProjectPathWorktreeNormalization:
+    """#593: hook 書込側の project_path も worktree 安全 slug に正規化する。
+
+    project フィールドは #492 で正規化済みだが、project_path は raw CLAUDE_PROJECT_DIR
+    （worktree フルパス）をそのまま stamp していたため、worktree（例
+    .../.claude/worktrees/<name>）が幻の別PJ slug として cross-PJ 統計に混入していた。
+    project_path の全 consumer は PJ 識別子として扱う（パスとして open/stat しない）ため、
+    書込時に project と同じ project_name_from_dir（pj_slug_fast 経由）で slug 化する。
+    """
+
+    def test_observe_usage_registry_project_path_normalized(self, patch_data_dir, monkeypatch):
+        """observe hook の usage-registry.jsonl project_path が worktree cwd でも本体名。"""
+        wt_cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", wt_cwd)
+        # global スキル判定を真にして usage-registry 経路へ入れる。
+        monkeypatch.setattr(observe, "is_global_skill", lambda *a, **k: True)
+        event = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "evolve", "args": ""},
+            "tool_result": {"is_error": False},
+            "session_id": "sess-wt-regpath",
+        }
+        observe.handle_post_tool_use(event)
+
+        reg_file = patch_data_dir / "usage-registry.jsonl"
+        record = json.loads(reg_file.read_text().strip().splitlines()[0])
+        assert record["project_path"] == "rl-anything"
+
+    def test_correction_detect_project_path_normalized(self, patch_data_dir, monkeypatch):
+        """correction_detect hook の corrections.jsonl project_path が worktree cwd でも本体名。"""
+        import correction_detect
+
+        wt_cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", wt_cwd)
+        event = {
+            "session_id": "sess-wt-corrpath",
+            "prompt": "いや、そうじゃなくて",  # 修正パターン（iya）を踏ませる
+        }
+        correction_detect.handle_user_prompt_submit(event)
+
+        corr_file = patch_data_dir / "corrections.jsonl"
+        record = json.loads(corr_file.read_text().strip().splitlines()[0])
+        assert record["project_path"] == "rl-anything"
+
+    def test_correction_detect_main_repo_unchanged(self, patch_data_dir, monkeypatch):
+        """本体 repo の cwd は project_path も従来どおり basename。"""
+        import correction_detect
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/x/work/ai-daily-report")
+        event = {
+            "session_id": "sess-main-corrpath",
+            "prompt": "いや、そうじゃなくて",
+        }
+        correction_detect.handle_user_prompt_submit(event)
+
+        corr_file = patch_data_dir / "corrections.jsonl"
+        record = json.loads(corr_file.read_text().strip().splitlines()[0])
+        assert record["project_path"] == "ai-daily-report"
+
+
 # --- v2.1.78: instructions_loaded.py テスト ---
 
 import instructions_loaded
