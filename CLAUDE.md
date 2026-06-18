@@ -7,7 +7,7 @@
 | 柱 | スキル | 説明 |
 |----|--------|------|
 | 自律進化 | evolve, discover, reorganize, prune, audit | Observe → Diagnose → Compile → Housekeeping → Report の3ステージパイプライン |
-| フィードバック | reflect | 修正パターン検出 → corrections.jsonl → CLAUDE.md/rules に反映 |
+| フィードバック | reflect, report-feedback | reflect=修正パターン検出 → corrections.jsonl → CLAUDE.md/rules に反映。report-feedback=evolve/audit レポートを LLM メタレビュー → rl-anything 自身への改善 issue を todoroki-godai/rl-anything に半自動起票（決定論 evolve_introspect が拾えない「読んで気づく」改善が対象。旧 feedback スキルの後継） |
 | 直接パッチ最適化 | optimize, rl-loop, generate-fitness, evolve-fitness | corrections/context → LLM 1パスパッチ → regression gate（`scripts/lib/regression_gate.py` に共通化） |
 | **fleet 観測・介入** | fleet (`bin/rl-fleet`) | 全 PJ 横断で env_score / 導入状況を一覧表示。`status` / `tokens` / `test-guard status`（no-llm-in-tests / pytest-no-llm 導入状況）/ `discover` / `recall`（全 PJ memory を keyword 横断検索、決定論・LLM 非依存）/ `plugins`（インストール済み CC プラグインの最新性診断 — update/drift/unknown を決定論検出。version 無しプラグインの silent stale を cache↔marketplace source の差分で検出） |
 | エージェント管理 | agent-brushup | エージェント定義の品質診断・改善提案・新規作成・削除候補 |
@@ -17,7 +17,7 @@
 | pitfall 運用 | pitfall-curate | 任意PJの pitfalls.md を育てる PJ非依存ツール。類似 dedup / 普遍性分類（universal/project/instance + 汎用度1-5）/ 三段階開示の配布版(Top-N)生成 / 記録↔分類↔配布の同期ゲート。判断は agent、決定論処理は `scripts/pitfall_curate.py`。`pitfall_manager`（自己進化専用）とは別物 |
 | 仕様管理 | spec-keeper | SPEC.md + ADR の管理、Progressive Disclosure L1/L2 自動昇格 |
 | 後片付け | cleanup | PR マージ・デプロイ後の痕跡（branches / worktrees / tmp dirs / Issues / Test plan 残件）を候補提示→個別承認→実行。tmp dir default prefix は `rl-anything-` のみに安全側限定 |
-| ユーティリティ | feedback, update, version | フィードバック・更新・バージョン確認（backfill は #215 で CLI 削除→evolve 自動 ingest に統合、スキルは廃止リダイレクトのみ） |
+| ユーティリティ | update, version | 更新・バージョン確認（backfill は #215 で CLI 削除→evolve 自動 ingest に統合、スキルは廃止リダイレクトのみ。旧 feedback スキルは report-feedback に統合し削除） |
 
 ## コンポーネント
 
@@ -90,6 +90,7 @@
 | remediation 参照リンク相対化 | separation emit prompt のマシン固有絶対パスを PJ ルート相対化（`reference_link_for_prompt`）+ `references/remediation.md` に emit/ingest 6 関数の実 signature 表（#524） | `remediation/fixers_llm.py` |
 | `multiview_eval` | evolve 提案を4視点（再利用可能 / 過学習疑い / 退行リスク / コスト増）で決定論分類し audit/evolve に advisory surface。chaos/outcome_attribution/negative_transfer を join、replay は将来フックのみ（#564, tech-eval SEAGym） | `audit/multiview_eval.py`, `audit/sections_multiview.py` |
 | `relevance_gate` | 過去経験（weak_signal/idiom）提案を現在文脈との関連度（jaccard 流儀）でゲートし、無関係を理由付きで `suppressed` 分離。`rl-reflect --show-weak-signals --context` に配線（#565, tech-eval FinAcumen） | `correction_semantic/relevance_gate.py` |
+| `report-feedback` | evolve/audit レポートを LLM メタレビューし rl-anything 自身への改善 issue を todoroki-godai/rl-anything に半自動起票するスキル。決定論 `evolve_introspect` が拾えない「読んで気づく」改善（表示・提案の質・バグ・UX）が対象で、その dedup/render 配線を再利用。旧 `feedback` スキルの後継として統合・削除 | `skills/report-feedback/`, 契約 `scripts/lib/tests/test_report_feedback_contract.py` |
 
 ## クイックスタート
 

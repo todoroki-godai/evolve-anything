@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.104.0] - 2026-06-18
+
+### Added
+- **feat(report-feedback): evolve/audit レポートのメタレビュー起票スキルを新設し旧 feedback を統合・削除** — 他PJで `/rl-anything:evolve`・`/rl-anything:audit` を回した後に「レポートを見て rl-anything 自体の改善点・バグを探して issue 化する」手作業をスキル化。決定論 `evolve_introspect`（Step 11）が拾えるのは result dict の機械的矛盾だけで、「レポートを読んで初めて気づく」改善（数字の母数欠落・提案の質・誤検知・表示バグ・UX 摩擦）を起票する経路が無かった。新規 `skills/report-feedback/SKILL.md` は LLM がレポートの**中身（対象環境の改善）でなく出来栄え・挙動**をメタレビューし、rl-anything 自身への改善候補を `evolve_introspect` の candidate スキーマで生成 → 同モジュールの `flatten_candidates`/`filter_duplicates`/`render_issue_body` を再利用して dedup・重複防止マーカーを共有 → 人間個別承認のうえ `todoroki-godai/rl-anything` に起票する。2経路（audit 経路=`rl-audit` の stdout レポート本文・`self_analysis` 無し / evolve 経路=result JSON の `self_analysis` を決定論 seed として併用）＋会話経路。他PJから呼ぶため SKILL のスクリプト参照は `${CLAUDE_PLUGIN_ROOT}` 経由（相対パス No such file pitfall 回避）。public repo 起票のため Step5 に「対象PJ固有語を一般化・数値は現象として記述」のプライバシーチェックを MUST 配置。**旧 `feedback` スキル（会話から GitHub Issue 化・全履歴7回のみ使用）を統合・削除**。実 audit レポート（202行）で1回ドッグフードし、Belief Entropy Gate の生フロントマター途中切れ表示・Telemetry ゼロ重み節の見出し誤読リスク等を実際に検出できることを確認。LLM 部分は決定論検証不能だが「候補スキーマ↔dedup/render 配線」は契約テスト `scripts/lib/tests/test_report_feedback_contract.py`（5件・LLM 非依存）が固定。
+
 ## [1.103.1] - 2026-06-18
 
 ### Fixed
