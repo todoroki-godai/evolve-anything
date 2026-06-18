@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# bin/rl-release-sync — リリース（bump + tag push）後に、ローカル開発環境の
+# rl-anything プラグインを最新バージョンへ同期する。
+#
+# 背景（なぜ必要か）:
+#   marketplace は Directory source（ローカルの作業ディレクトリ）を直接見る。
+#   リリースは worktree → PR → origin/main に入るが、**ローカル main を pull
+#   しない限り marketplace は古いまま**。そのため `claude plugin update` を
+#   叩いても低い（古い）バージョンしか返らない、という慢性的な穴があった。
+#   このスクリプトを `claude plugin tag --push` の直後に実行すると、その穴を塞ぐ。
+#
+# 手順: ローカル main を origin/main へ fast-forward → marketplace update →
+#       plugin update。
+#
+# Usage:
+#   rl-release-sync [--dry-run]
+#     --dry-run   実コマンドを実行せず、実行予定のコマンドを表示するだけ。
+#
+# exit 0=成功 / 1=同期失敗（ff 不可など要手動確認）/ 2=前提不成立（repo 外・main 以外）。
+set -uo pipefail
+
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+run() {
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "+ $*"
+  else
+    "$@"
+  fi
+}
+
+# --- main 本体 repo を解決（worktree から呼んでも本体を指すように） ---
+GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)" || {
+  echo "[release-sync] ⚠ git repo 外です。rl-anything のディレクトリ内で実行してください。" >&2
+  exit 2
+}
+# git-common-dir は <main>/.git（相対で返ることがあるので絶対化）。
+GIT_COMMON="$(cd "$GIT_COMMON" && pwd)"
+MAIN_REPO="$(dirname "$GIT_COMMON")"
+echo "[release-sync] main repo: $MAIN_REPO" >&2
+
+# --- 本体が main をチェックアウトしているか（誤同期防止） ---
+cur="$(git -C "$MAIN_REPO" branch --show-current 2>/dev/null)"
+if [ "$cur" != "main" ]; then
+  echo "[release-sync] ⚠ 本体が main 以外（'${cur}'）をチェックアウト中です。" >&2
+  echo "[release-sync]   本体を main に切り替えてから再実行してください。" >&2
+  exit 2
+fi
+
+PLUGIN_JSON="$MAIN_REPO/.claude-plugin/plugin.json"
+before="$(grep '"version"' "$PLUGIN_JSON" 2>/dev/null | head -1 | tr -d ' ')"
+
+# --- ローカル main を origin/main へ fast-forward ---
+run git -C "$MAIN_REPO" fetch origin
+if ! run git -C "$MAIN_REPO" merge --ff-only origin/main; then
+  echo "[release-sync] ⚠ fast-forward に失敗しました（ローカル main が origin と分岐）。" >&2
+  echo "[release-sync]   手動で 'git -C $MAIN_REPO status' を確認してください。" >&2
+  exit 1
+fi
+
+# --- marketplace（Directory source）→ plugin を更新 ---
+run claude plugin marketplace update rl-anything
+run claude plugin update rl-anything@rl-anything
+
+after="$(grep '"version"' "$PLUGIN_JSON" 2>/dev/null | head -1 | tr -d ' ')"
+echo "[release-sync] plugin.json version: ${before} → ${after}" >&2
+echo "[release-sync] 完了。反映には Claude Code の再起動が必要です。" >&2

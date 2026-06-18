@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(release): `bin/rl-release-sync` — リリース後のローカルプラグイン自動同期** — marketplace は Directory source（ローカルの作業ディレクトリ）を直接見るため、リリース（bump）が worktree→PR→origin/main に入っても**ローカル main を pull しない限り marketplace が古いまま**で、`claude plugin update` が低い（古い）バージョンを返す慢性的な穴があった。`claude plugin tag --push` の直後に `bin/rl-release-sync` を実行すると「ローカル main を origin/main へ fast-forward → `claude plugin marketplace update rl-anything` → `claude plugin update rl-anything@rl-anything`」を一括実行してその穴を塞ぐ。worktree から呼んでも `git --git-common-dir` 経由で本体 repo を解決し、本体が main 以外をチェックアウト中なら exit 2 で誤同期を防止。`--dry-run` で実行予定コマンドのみ表示。`.claude/rules/commit-version.md` のリリース手順に組み込み済み。TDD（`bin/tests/test_release_sync.py` 3件・dry-run でコマンド順序 / main 以外 abort / repo 外 abort を封じる）。決定論・LLM 非依存。
+
 ## [1.102.0] - 2026-06-17
 
 ### Added
