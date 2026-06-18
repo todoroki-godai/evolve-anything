@@ -14,11 +14,16 @@ def run_prune(
     project_dir: Optional[str] = None,
     reorganize_merge_groups: Optional[list] = None,
     now: Optional[datetime] = None,
+    pj_scoped: bool = True,
 ) -> Dict[str, Any]:
     """Prune を実行して候補を返す。
 
     ``now`` は zero_invocation 観測窓 suppress 判定（#522-2/#529-1）のために注入可能。
     未指定時は現在時刻を使う。
+
+    ``pj_scoped`` が真（既定）のとき、global 淘汰候補は PJ 単独では判断不能なため
+    フル配列を result に積まず件数サマリ（``{"count", "pointer"}``）に畳む（#586）。
+    cross-PJ で全件評価したい場合（CLI 全 PJ 走査）は ``pj_scoped=False`` でフル配列を返す。
     """
     # mock.patch("prune.detect_X", ...) / mock.patch("prune.find_artifacts", ...) 追従のため package 経由で参照
     from . import (  # noqa: PLC0415
@@ -30,6 +35,7 @@ def run_prune(
         detect_retirement_candidates,
         detect_zero_invocations,
         find_artifacts,
+        make_global_candidates_summary,
         make_zero_invocation_suppression_summary,
         merge_duplicates,
         safe_global_check,
@@ -60,19 +66,34 @@ def run_prune(
     _usage_records = load_usage_data()
     _contribution_scores = aggregate_contribution_scores(_usage_records)
 
+    # global 淘汰候補: PJスコープ evolve では判断材料が不足する（cross-PJ 使用状況が必要）ため、
+    # フル配列を result に積まず件数サマリに畳む（#586）。全件評価したい CLI 走査では
+    # pj_scoped=False でフル配列を維持する。
+    global_full = safe_global_check(artifacts)
+    if pj_scoped:
+        global_value: Any = make_global_candidates_summary(len(global_full))
+        global_count = len(global_full)
+    else:
+        global_value = global_full
+        global_count = len(global_full)
+
     candidates = {
         "dead_globs": detect_dead_globs(proj),
         "zero_invocations": zero_invocations,
         "zero_invocations_suppressed": zero_invocations_suppressed,
         "plugin_unused": plugin_unused,
-        "global_candidates": safe_global_check(artifacts),
+        "global_candidates": global_value,
         "duplicate_candidates": detect_duplicates(artifacts),
         "decay_candidates": detect_decay_candidates(artifacts),
         "reference_drift_candidates": detect_reference_drift(artifacts, proj),
         "retirement_candidates": detect_retirement_candidates(artifacts, _contribution_scores),
     }
 
+    # list の要素数を合算する。PJスコープでは global_candidates が dict サマリになり
+    # 上の合算から漏れるため、件数を別途加算して total を維持する（#586）。
     total = sum(len(v) for v in candidates.values() if isinstance(v, list))
+    if pj_scoped:
+        total += global_count
     candidates["total_candidates"] = total
 
     rules = artifacts.get("rules", [])

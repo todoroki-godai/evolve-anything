@@ -144,6 +144,19 @@ def zero_invocation_window_suppressed(
     return window_start < fix_date
 
 
+def make_global_candidates_summary(count: int) -> Dict[str, Any]:
+    """PJスコープ evolve 用の global 淘汰候補サマリ（件数のみ）を生成する（#586）。
+
+    global 候補は PJ 単独 evolve では判断材料が不足する（cross-PJ 使用状況が必要）ため、
+    producer 側で全件配列を result に積まず件数＋誘導ポインタに畳む。個別判断は
+    PJ 横断で見られる ``bin/rl-fleet status`` / グローバル audit に委ねる（#525-3 の consumer 仕様）。
+    """
+    return {
+        "count": count,
+        "pointer": "全件と判断材料は `bin/rl-fleet status` で確認",
+    }
+
+
 def make_zero_invocation_suppression_summary(suppressed_count: int) -> Dict[str, Any]:
     """suppress 時に candidates の代わりに surface する 1 行サマリを生成する。"""
     return {

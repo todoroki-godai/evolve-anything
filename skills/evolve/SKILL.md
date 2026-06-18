@@ -538,7 +538,7 @@ Usage Registry の cross-PJ 使用状況を確認し、既存の `safe_global_ch
 - **グローバル文脈の audit へ誘導**: 個別判断は PJ 横断で見られる `bin/rl-fleet status` / グローバル audit に委ねる旨を1行添える（「全件と判断材料は `bin/rl-fleet status` で確認」）。
 - 0 件なら「Global Skills: 淘汰候補なし ✓」を1行残す（silence != evaluated）。
 
-> 補足: prune phase が result に global 候補の全件配列を載せている場合、PJ レポートではその件数だけを使う（配列を1件ずつ展開しない）。配列自体を result から落とす producer 側の最適化は別 issue（prune producer は本 SKILL の所有外）。
+> 補足: PJスコープ evolve では prune producer 側で global 候補を件数サマリ `{"count": N, "pointer": "全件と判断材料は \`bin/rl-fleet status\` で確認"}` に畳んでおり（#586）、`global_candidates` はフル配列でなくこの dict が入る。レポートは `global_candidates.count` をそのまま {N} に使う（個別 skill 名は持たない）。全件配列が必要な cross-PJ 走査では `run_prune(pj_scoped=False)` を使う。
 
 #### Merge サブステップ
 

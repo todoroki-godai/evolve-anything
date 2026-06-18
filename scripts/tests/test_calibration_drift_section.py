@@ -62,6 +62,45 @@ def test_data_insufficient_structural_caveat(monkeypatch, tmp_path):
     assert "あと 28 件で判定可能になります" not in combined
 
 
+def test_bootstrap_structural_caveat(monkeypatch, tmp_path):
+    """#584: BOOTSTRAP_MIN(5)〜MIN_DATA_COUNT(30) 未満の bootstrap 母集団でも、
+    skill 提案が構造的に出ない PJ では母集団が 30 に到達しないため「あと N 件」を
+    断定で出さず、構造的に対象外の可能性を明示する（#479 の structural guard を
+    insufficient_data だけでなく bootstrap にも適用）。
+
+    skill_evolve 未採点 PJ では optimize/rl-loop 由来の少数 accept/reject が
+    history に残ると bootstrap 経路に入り、従来は「あと N 件」が出ていた。
+    """
+    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(10))
+    section = build_calibration_drift_section(tmp_path)
+    combined = "\n".join(section)
+    assert "データ不足 10/30" in combined
+    # 構造的に対象外の可能性を明示する（提案が出ないと貯まらない）
+    assert "構造的に対象外" in combined
+    # 「あと N 件」を蓄積前提の断定として単独で出さない（#584）
+    assert "あと 20 件" not in combined
+
+
+def test_count_when_not_structural(monkeypatch, tmp_path):
+    """#584 退行防止: 構造的に貯まらない兆候が無い（structural_reason なし & bootstrap
+    でもない）insufficient_data では従来どおり件数（あと N 件）を出す。
+
+    run_fitness_evolution の status が insufficient_data でも bootstrap でもない（例外的に
+    structural_reason を持たない他ステータス）場合は構造シグナル無しと見なし件数を残す。
+    """
+    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(10))
+    monkeypatch.setattr(
+        fitness_evolution,
+        "run_fitness_evolution",
+        lambda *a, **k: {"status": "ready", "data_count": 10, "required": 30},
+    )
+    section = build_calibration_drift_section(tmp_path)
+    combined = "\n".join(section)
+    assert "データ不足 10/30" in combined
+    assert "あと 20 件" in combined
+    assert "構造的に対象外" not in combined
+
+
 def test_clean_when_no_drift(monkeypatch, tmp_path):
     """十分なデータで drift（warning）が無ければ ✓ 行を残す。"""
     monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(30))

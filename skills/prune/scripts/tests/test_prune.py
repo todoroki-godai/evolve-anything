@@ -1412,3 +1412,110 @@ class TestDetectZeroInvocationsClaudeMdExclusion:
 
         assert "my-plugin-skill" not in zero_names, "プラグインスキルは zero_invocation に含まれない"
         assert "my-plugin-skill" in plugin_names, "プラグインスキルは plugin_unused に含まれる"
+
+
+class TestRunPruneGlobalCandidatesScope:
+    """PJスコープ evolve では prune が global 候補をフル配列で result に積まない（#586）。
+
+    global 候補は PJ 単独 evolve では判断材料が不足する（cross-PJ 使用状況が必要）ため、
+    consumer（SKILL.md）は件数1行に畳むだけ。producer 側でフル配列の生成・格納を止める。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_home(self, monkeypatch, tmp_path):
+        # safe_global_check は実 ~/.claude/skills を列挙するため HOME を隔離する（#457）。
+        from test_home_isolation import isolate_home
+        isolate_home(monkeypatch, tmp_path)
+
+    def _make_project(self, tmp_path):
+        data_dir = tmp_path / "rl-anything"
+        data_dir.mkdir()
+        project_dir = tmp_path / "project"
+        (project_dir / ".claude" / "skills").mkdir(parents=True)
+        (project_dir / ".claude" / "rules").mkdir(parents=True)
+        (data_dir / "usage.jsonl").write_text("")
+        return data_dir, project_dir
+
+    def _fake_global_candidates(self, n=76):
+        return [
+            {
+                "file": f"~/.claude/skills/skill-{i}/SKILL.md",
+                "skill_name": f"skill-{i}",
+                "reason": "no_activation_90d",
+                "days_no_use": 90,
+            }
+            for i in range(n)
+        ]
+
+    def test_pj_scoped_collapses_global_candidates_to_count(self, tmp_path):
+        """PJスコープ（既定）では global_candidates がフル配列でなく件数サマリになる。"""
+        data_dir, project_dir = self._make_project(tmp_path)
+        fake = self._fake_global_candidates(76)
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir), \
+             mock.patch("prune.safe_global_check", return_value=fake):
+            result = prune.run_prune(str(project_dir))
+
+        gc = result["global_candidates"]
+        # フル配列でなく件数サマリ（dict）であること
+        assert isinstance(gc, dict), "PJスコープでは global_candidates は dict サマリ"
+        assert gc["count"] == 76
+        assert "bin/rl-fleet status" in gc["pointer"]
+        # フル配列の要素（skill_name の山）が result に残っていないこと
+        assert "candidates" not in gc
+
+    def test_pj_scoped_result_size_is_small(self, tmp_path):
+        """76 件の global 候補があっても result の global 部分は小さい（数十KB を積まない）。"""
+        data_dir, project_dir = self._make_project(tmp_path)
+        fake = self._fake_global_candidates(76)
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir), \
+             mock.patch("prune.safe_global_check", return_value=fake):
+            result = prune.run_prune(str(project_dir))
+
+        serialized = json.dumps(result["global_candidates"], ensure_ascii=False)
+        full = json.dumps(fake, ensure_ascii=False)
+        assert len(serialized) < 500, f"サマリは小さいはず: {len(serialized)}"
+        assert len(serialized) < len(full) / 10, "フル配列の 1/10 未満"
+
+    def test_pj_scoped_total_candidates_includes_global_count(self, tmp_path):
+        """件数サマリ化後も total_candidates が global 件数を取りこぼさない。"""
+        data_dir, project_dir = self._make_project(tmp_path)
+        fake = self._fake_global_candidates(76)
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir), \
+             mock.patch("prune.safe_global_check", return_value=fake):
+            result = prune.run_prune(str(project_dir))
+
+        assert result["total_candidates"] >= 76, "total に global 件数が反映される"
+
+    def test_global_scoped_keeps_full_array(self, tmp_path):
+        """global スコープ評価（pj_scoped=False）では従来どおりフル配列を返す（退行防止）。"""
+        data_dir, project_dir = self._make_project(tmp_path)
+        fake = self._fake_global_candidates(76)
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir), \
+             mock.patch("prune.safe_global_check", return_value=fake):
+            result = prune.run_prune(str(project_dir), pj_scoped=False)
+
+        gc = result["global_candidates"]
+        assert isinstance(gc, list), "global スコープではフル配列を維持"
+        assert len(gc) == 76
+        assert gc[0]["skill_name"] == "skill-0"
+
+    def test_pj_scoped_zero_global_candidates(self, tmp_path):
+        """global 候補 0 件でも件数サマリ（count=0）を残す（silence != evaluated）。"""
+        data_dir, project_dir = self._make_project(tmp_path)
+
+        with mock.patch.object(audit, "DATA_DIR", data_dir), \
+             mock.patch("prune.DATA_DIR", data_dir), \
+             mock.patch("prune.safe_global_check", return_value=[]):
+            result = prune.run_prune(str(project_dir))
+
+        gc = result["global_candidates"]
+        assert isinstance(gc, dict)
+        assert gc["count"] == 0

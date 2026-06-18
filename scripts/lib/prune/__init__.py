@@ -90,6 +90,7 @@ from .detection import (  # noqa: E402, F401
     detect_dead_globs,
     detect_zero_invocations,
     make_zero_invocation_suppression_summary,
+    make_global_candidates_summary,
     safe_global_check,
     detect_duplicates,
     detect_decay_candidates,
