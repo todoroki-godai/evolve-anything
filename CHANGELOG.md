@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.103.0] - 2026-06-18
+
 ### Added
 - **feat(correction_semantic): FinAcumen 流の関連度ゲート付き経験提案＋無関係抑制（closes #565）** — 過去経験（weak_signal / idiom）の提案を「現在の文脈キーワード集合」との意味的関連度で選別し、無関係な経験を明示的に抑制する増分実装。新規 `scripts/lib/correction_semantic/relevance_gate.py`（純関数 `candidate_text` / `score_relevance` / `gate_candidates` / `summarize_gate`）が、校正済み閾値（既存 `JACCARD_THRESHOLD`=0.5 流儀・引数で上書き可能）を超えた候補だけを `kept`（提案根拠）に**関連度降順**で残し、閾値未満は**黙って消さず** `suppressed` に分離して `suppressed_reason`（なぜ落としたか）を残す。各候補に `relevance_score`（0.0-1.0）を付与。文脈キーワードが抽出できない場合は `gate_applied=False` で全件素通し（経験を勝手に隠さない安全側フォールバック）。`rl-reflect --show-weak-signals --context "<現在の文脈>"`（`--relevance-threshold` で閾値上書き）に配線し、出力末尾の `relevance_gate` サマリで抑制の効きを確認できる（`--context` 無しは従来通り全件提示の後方互換）。類似度は既存 jaccard 流儀を再利用し独自の閾値学習機構は作らない。決定論・LLM 非依存。TDD（`test_correction_semantic_relevance_gate.py` 16件 + reflect 配線 3件）。
 - **feat(audit): SEAGym 流の多視点評価レイヤ — evolve 提案を4視点で決定論分類（closes #564）** — evolve 提案の評価を「単一の accept/reject」から多視点へ拡張する薄い集約レイヤ。既存3部品（chaos 仮想アブレーション / outcome_attribution 一発成功率・rework率 / negative_transfer）を skill 名で join し、各 evolve 対象スキルを4視点（再利用可能な改善 / 過学習疑い / 退行リスク / コスト増）に決定論分類して audit/evolve レポートに advisory surface する。新規 `scripts/lib/audit/multiview_eval.py`（純関数・dry-run 安全・DATA_DIR 再読込なし）+ `sections_multiview.py`（observability builder・chaos は重いため再実行せず outcome/negative-transfer を軽量集約・silence≠evaluated 境界を明示）。chaos しきい値は `config.py` の `CHAOS_THRESHOLDS` から複製し契約テストで drift 検出。replay スナップショット比較は将来拡張フックのみ（スコープ外）。出典: tech-eval（SEAGym, arXiv 2606.17546）。TDD（multiview 分類23件 + observability 隔離 guard 追従）。決定論・LLM 非依存。
