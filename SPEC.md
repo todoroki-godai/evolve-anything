@@ -1,6 +1,6 @@
 # SPEC.md — rl-anything
 
-Last updated: 2026-06-16 by /spec-keeper update — v1.100.0（繋ぎ目バグ束 Wave1-7 #521-#529 根治: self-observation 配線/検出レーン品質/過汎用 idiom FP guard/レポート UX/参照 drift/outcome floor/dogfood Layer1b + evolve.py env 優先 DATA_DIR #517）を反映
+Last updated: 2026-06-18 by /spec-keeper update — #554-#563 batch（unreleased / evolve-introspect 起票の FP・bug・UX・設計 10件 + 実PJ E2E 追補 #563-2/#554-2）の挙動変更を spec/components.md に反映（bootstrap_backlog テーマクラスタ #558）。released baseline は v1.100.0（繋ぎ目バグ束 Wave1-7 #521-#529 + evolve.py env 優先 DATA_DIR #517）
 
 ## Overview
 
