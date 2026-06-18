@@ -415,7 +415,18 @@ def compute_promotion_readiness(
     rw = per_pj_rework(days, data_dir=data_dir)
 
     # 条件1（分散）: 代表軸として correction_recurrence の per-PJ 値を使う。
-    variance = check_variance({pj: v["value"] for pj, v in cr.items()})
+    # #563-2: 最小分母 floor 未満の PJ は値が統計的に無意味（distinct_types が小さいと
+    # 1 type の再発有無で 0.0/1.0 に振れる）。floor 未満を variance 入力から除外しないと、
+    # サブ floor の PJ が一斉に 1.0 へ張り付き「全 PJ 同値 = 測定バグ」を恒久 false positive
+    # にする。outcome_metrics.correction_recurrence_rate は #529-2 で floor 済みだが、
+    # readiness の per_pj_correction_recurrence は重複実装で floor が漏れていた（実 PJ E2E で
+    # 発見・#563 が解消すると宣言した promotion_readiness 条件1 の FP の真因）。floor は
+    # outcome_metrics と同一定数を使う（二重管理を避ける）。
+    variance = check_variance({
+        pj: v["value"]
+        for pj, v in cr.items()
+        if v.get("distinct_types", 0) >= _om.MIN_DISTINCT_TYPES_FLOOR
+    })
     # 条件2（分母）: correction 件数の floor を満たす PJ が複数あるか。
     denominator = check_denominators(
         {pj: v["denominator"] for pj, v in cr.items()}, floor=CORRECTION_FLOOR

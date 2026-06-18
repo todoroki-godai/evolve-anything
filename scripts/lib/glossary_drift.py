@@ -72,6 +72,68 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
         "PDF", "QA", "FAQ", "CSV", "XML", "TSV", "MVP", "KPI", "OKR",
         "PII", "GDPR", "FYI", "ETA", "WIP", "EOD",
     }
+    # --- #554 追加: 汎用テック語 ---
+    # amamo PJ 等で 33 件中約 13 件が不要な一般語として FP 報告された。
+    # HTTP メソッド・言語名・汎用プロトコル等、読者が既知のテック語を除外する。
+    # PJ 固有語（AMAMO, JCM, MRV, EOA, PKCE 等）は小文字を含まない全大文字か
+    # PJ 固有 CamelCase なので誤除外しない。
+    | frozenset(
+        {
+            # HTTP メソッド（jargon でなく RFC 標準語）
+            "GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD",
+            # 言語・ランタイム略語
+            "JS", "TS",
+            # 汎用テックプロトコル・設計概念
+            "JWT", "CRUD", "SHA", "RPC", "gRPC", "REST", "SOAP",
+            "OAuth", "SAML", "CORS", "CSRF", "XSS",
+            # クラウド配信・運用概念
+            "CDN", "IaC", "SaaS", "PaaS", "IaaS",
+            # 言語名 CamelCase（regex が CamelCase を候補にするため明示除外）
+            "TypeScript", "JavaScript", "GraphQL", "OpenAPI", "WebSocket",
+            "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch",
+        }
+    )
+    # --- #554 追加: AWS サービス名 CamelCase ---
+    # CloudFront / DynamoDB / EventBridge 等は CamelCase として regex に拾われる。
+    # PJ 固有語ではなく AWS 公式サービス名のため除外する。
+    # 真の PJ jargon（AnchorRegistry, MindMap 等）との区別:
+    #   - AWS サービス名は AWS 公式ドキュメントで定義された固有名詞。
+    #   - PJ jargon は当該リポジトリ固有のコンセプト名。
+    # 代表的なサービス名を列挙する（全量は不要; 主要サービスをカバーする）。
+    | frozenset(
+        {
+            "CloudFront", "DynamoDB", "EventBridge", "Lambda",
+            "Cognito", "CloudWatch", "CloudFormation", "CloudTrail",
+            "Kinesis", "Athena", "Glue", "Redshift",
+            "CodeBuild", "CodePipeline", "CodeDeploy",
+            "StepFunctions",
+        }
+    )
+    # --- #554-2 追加: 汎用英大文字語 / SQL・ログ・ステータストークン ---
+    # 実 PJ E2E（docs-platform / sys-bots）で、stoplist 通過後も SQL キーワード・ログ
+    # レベル・汎用ステータス語が jargon 候補として残留した（BEGIN/END/FAILED/GENERATED/
+    # OFF/WEB/XXX/LOW/PASS 等）。これらは PJ 固有概念ではなく読者既知の一般語なので除外する。
+    # 注: 辞書ベースの「一般英単語フィルタ」が根治だが本 PR では observed FP の語彙を
+    # 明示除外に留める（残れば別 issue で辞書フィルタ化）。
+    | frozenset(
+        {
+            # SQL / トランザクション・制御語
+            "BEGIN", "END", "COMMIT", "ROLLBACK", "SELECT", "INSERT",
+            "UPDATE", "DELETE", "WHERE", "JOIN", "GROUP", "ORDER",
+            # ログレベル・ステータス語
+            "FAILED", "FAIL", "PASS", "PASSED", "ERROR", "WARN", "WARNING",
+            "INFO", "DEBUG", "TRACE", "FATAL", "OK", "GENERATED", "SKIP",
+            "SKIPPED", "PENDING", "RUNNING", "DONE", "TODO", "FIXME",
+            # 汎用 ON/OFF・レベル・真偽
+            "ON", "OFF", "LOW", "HIGH", "MID", "TRUE", "FALSE", "YES", "NO",
+            "NULL", "NONE", "ENABLED", "DISABLED", "START", "STOP",
+            # 汎用ドメイン語（読者既知）
+            "WEB", "APP", "DEV", "PROD", "STG", "TEST", "XXX",
+            # 汎用テック略語（universal-tech、GET/JS と同クラス）
+            "SPA", "BFF", "RAG", "ORM", "OWASP", "MVC", "DAO", "DTO",
+            "SDK", "CLI", "DB", "VM", "OS",
+        }
+    )
 )
 
 _SEP_RE = re.compile(r"^[:\-\s|]+$")

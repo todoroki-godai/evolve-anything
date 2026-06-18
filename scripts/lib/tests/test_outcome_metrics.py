@@ -157,18 +157,25 @@ class TestReworkRate:
         now = _now()
         ts = _iso(now)
         # s1: 3 連続 Edit（検証ツール介在なし）→ rework
-        # s2: Edit → Bash → Edit（介在あり）→ rework でない
+        # s2〜s5: Edit → Bash（介在あり）→ rework でない
+        # MIN_EDIT_SESSIONS_FLOOR=5 を満たす 5 件の編集ありセッション
         records = [
             {"session_id": "s1", "tool_sequence": ["Read", "Edit", "Edit", "Edit", "Bash"],
              "timestamp": ts, "first_timestamp": ts},
             {"session_id": "s2", "tool_sequence": ["Edit", "Bash", "Edit", "Bash"],
              "timestamp": ts, "first_timestamp": ts},
+            {"session_id": "s3", "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts},
+            {"session_id": "s4", "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts},
+            {"session_id": "s5", "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts},
         ]
         _write_jsonl(tmp_path / "sessions.jsonl", records)
         value, evidence = outcome_metrics.rework_rate(days=30, min_consecutive=3)
-        # 1 of 2 sessions with an edit-burst >= 3
-        assert value == pytest.approx(0.5)
-        assert evidence["total_sessions"] == 2
+        # 1 of 5 sessions with an edit-burst >= 3
+        assert value == pytest.approx(0.2)
+        assert evidence["total_sessions"] == 5
         assert evidence["rework_sessions"] == 1
         assert "s1" in evidence["examples"]
 
@@ -184,6 +191,66 @@ class TestReworkRate:
         value, evidence = outcome_metrics.rework_rate(days=30)
         assert value is None
         assert evidence["reason"] == "no_data"
+
+    def test_below_edit_sessions_floor_returns_none(self, tmp_path, monkeypatch):
+        """#563: edit_sessions < MIN_EDIT_SESSIONS_FLOOR のとき rate=None / insufficient_sample。
+
+        分母 1 件で rework=1 のとき rate=1.0 に張り付き誤シグナルになる。
+        floor 未満では率を出さず「サンプル不足」を明示する（correction_recurrence の
+        MIN_DISTINCT_TYPES_FLOOR=5 と同方針, #529-2）。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        # 編集ありセッション 1 件、かつ rework → floor 未満
+        records = [
+            {"session_id": "s1", "tool_sequence": ["Edit", "Edit", "Edit"],
+             "timestamp": ts, "first_timestamp": ts},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.rework_rate(days=30, min_consecutive=3)
+        assert value is None
+        assert evidence["reason"] == "insufficient_sample"
+        assert evidence["floor"] == outcome_metrics.MIN_EDIT_SESSIONS_FLOOR
+        assert "edit_sessions" in evidence
+
+    def test_at_edit_sessions_floor_returns_rate(self, tmp_path, monkeypatch):
+        """floor 丁度（edit_sessions == MIN_EDIT_SESSIONS_FLOOR）なら率を出す（境界 inclusive）。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        floor = outcome_metrics.MIN_EDIT_SESSIONS_FLOOR
+        # floor 件の編集ありセッションを用意（すべて rework でない = 0.0）
+        records = [
+            {"session_id": f"s{i}", "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts}
+            for i in range(floor)
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.rework_rate(days=30, min_consecutive=3)
+        assert value is not None
+        assert evidence["total_sessions"] == floor
+
+    def test_above_floor_computes_rate_correctly(self, tmp_path, monkeypatch):
+        """floor を超えたら従来通り率を出す（回帰テスト）。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        floor = outcome_metrics.MIN_EDIT_SESSIONS_FLOOR
+        # floor+2 件：うち 1 件が rework
+        records = [
+            {"session_id": "rw", "tool_sequence": ["Edit", "Edit", "Edit"],
+             "timestamp": ts, "first_timestamp": ts},
+        ] + [
+            {"session_id": f"s{i}", "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts}
+            for i in range(floor + 1)
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.rework_rate(days=30, min_consecutive=3)
+        assert value is not None
+        assert evidence["rework_sessions"] == 1
+        assert evidence["total_sessions"] == floor + 2
 
 
 # ---------- project スコープ（#489） ----------
@@ -235,17 +302,27 @@ class TestProjectScope:
         monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
         now = _now()
         ts = _iso(now)
+        # MIN_EDIT_SESSIONS_FLOOR=5 を満たすため当PJ "mine" に 5 件の編集ありセッションを用意する。
+        # うち 2 件が rework（連続編集3以上）
         records = [
             {"session_id": "s1", "tool_sequence": ["Read", "Edit", "Edit", "Edit"],
+             "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s2", "tool_sequence": ["Edit", "Edit", "Edit"],
+             "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s3", "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s4", "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts, "project": "mine"},
+            {"session_id": "s5", "tool_sequence": ["Edit", "Bash"],
              "timestamp": ts, "first_timestamp": ts, "project": "mine"},
             {"session_id": "s9", "tool_sequence": ["Edit", "Bash"],
              "timestamp": ts, "first_timestamp": ts, "project": "other"},
         ]
         _write_jsonl(tmp_path / "sessions.jsonl", records)
-        value, evidence = outcome_metrics.rework_rate(days=30, project="mine")
-        # 当PJ のみ → 編集ありセッション 1 件、すべて rework
-        assert value == pytest.approx(1.0)
-        assert evidence["total_sessions"] == 1
+        value, evidence = outcome_metrics.rework_rate(days=30, project="mine", min_consecutive=3)
+        # 当PJ のみ → 編集ありセッション 5 件、rework 2 件
+        assert value == pytest.approx(0.4)
+        assert evidence["total_sessions"] == 5
 
     def test_no_project_arg_keeps_cross_pj_behavior(self, tmp_path, monkeypatch):
         """project 未指定なら従来通り全PJ集計（後方互換・promotion_readiness 等の cross-PJ 用途）。"""
@@ -423,3 +500,37 @@ class TestSectionBuilder:
         assert "distinct 2 type" in joined
         # 誤シグナルの率（0.50）が表示されていないこと
         assert "0.50" not in joined
+
+    def test_rework_insufficient_sample_shows_sample_shortage(self, tmp_path, monkeypatch):
+        """#563: edit_sessions < MIN_EDIT_SESSIONS_FLOOR では rework 率を出さず「サンプル不足」を表示する。
+
+        分母 1 件で 1.0 に張り付くのを防ぐ（correction_recurrence の #529-2 と同方針）。
+        first_try_success が成立している状態で section を出力させる。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        # first_try_success 用に十分なセッションを用意（error_count あり）。
+        # ただし edit_sessions（tool_sequence に Edit を含む）は MIN_EDIT_SESSIONS_FLOOR 未満。
+        floor = outcome_metrics.MIN_EDIT_SESSIONS_FLOOR
+        records = [
+            {"session_id": f"clean_{i}", "error_count": 0, "tool_sequence": ["Read", "Bash"],
+             "timestamp": ts, "first_timestamp": ts}
+            for i in range(5)
+        ] + [
+            # 編集ありセッション 1 件のみ → floor 未満
+            {"session_id": "edit1", "error_count": 0, "tool_sequence": ["Edit", "Edit", "Edit"],
+             "timestamp": ts, "first_timestamp": ts},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        from audit.sections_outcome import build_outcome_metrics_section
+
+        lines = build_outcome_metrics_section(tmp_path)
+        assert lines is not None
+        joined = "\n".join(lines)
+        # rework 率はサンプル不足で表示されない
+        assert "サンプル不足" in joined
+        # 誤シグナルの率（1.00）が rework として表示されていないこと
+        # （first_try_success の 1.00 は出る可能性があるが rework 軸の行では出ない）
+        rework_lines = [l for l in lines if "rework" in l.lower()]
+        assert any("サンプル不足" in l for l in rework_lines)

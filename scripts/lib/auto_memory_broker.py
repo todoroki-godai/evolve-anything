@@ -67,10 +67,88 @@ MEMORY_LINE_LIMIT = 200
 # キューのサブディレクトリ名
 QUEUE_SUBDIR = "auto_memory_queue"
 
+# ─────────────────────────────────────────────────────────────────
+# rule citation フィルタ
+# ─────────────────────────────────────────────────────────────────
+# 既知のグローバル・PJ 固有 rule スラッグ集合。
+# Stop hook 由来の「既存ルール再掲リマインダ」が auto-memory に enqueue されるのを防ぐ。
+#
+# 検出方針:
+#   - ハイフン区切りのスラッグ（例: "no-defer-use-subagent"）は一般文章への混入が稀なため
+#     部分文字列マッチで安全に検出できる。
+#   - 汎用英単語（"auth"、"commit"、"safety" 等）は FP リスクが高いため除外する。
+#     代わりにハイフン付き形式（"commit-version" 等）で検出する。
+# 新しい rule ファイル（.claude/rules/ 配下）を追加した際はここにも追記する。
+_KNOWN_RULE_SLUGS: frozenset[str] = frozenset({
+    # グローバル rules (~/.claude/rules/) — ハイフン入りのみ（FP 防止）
+    "avoid-bash-builtin",
+    "background-execution",
+    "code-quality",
+    "copy-paste-output",
+    "delegate-implementation",
+    "estimate-data-feasibility",
+    "evolve-ops",
+    "explain-clearly",
+    "factual-claims",
+    "loop-safety",
+    "lsp-first",
+    "memory-context",
+    "model-routing",
+    "review-routing",
+    "skill-ops",
+    "spec-keeper-trigger",
+    "subagent-guard",
+    "think-before-coding",
+    "worktree-parallel",
+    # PJ 固有 rules (.claude/rules/) — ハイフン入りのみ
+    "commit-version",
+    "file-size-budget",
+    "git-push",
+    "infra-ship-gate",
+    "issue-link",
+    "llm-batch-guard",
+    "no-llm-in-tests",
+    "parallel-session-guard",
+    "root-cause-first",
+    "tdd-first",
+    "transcript-store-bench",
+    "verify-before-claim",
+    "verify-data-contract",
+    "verify-side-effects",
+    # よく現れる略語・別名（ハイフン入りのみ）
+    "no-defer-use-subagent",
+    "no-defer",
+})
+
 
 # 環境変数でゲーティングを無効化できる（ingest 内で毎回評価してテスト中の monkeypatch を有効にする）
 def _is_gating_enabled() -> bool:
     return os.environ.get("RL_GATING_DISABLED", "0") != "1"
+
+
+def is_rule_citation(correction: dict) -> bool:
+    """correction が既存 rule の再掲リマインダかどうかを判定する（保守的検出）。
+
+    `message` / `corrected` / `original` フィールドに既知の rule slug が含まれる場合に
+    True を返す。検出は大小文字区別なし・部分文字列マッチ。
+    FP を最小化するため、slug が明確に識別できるものだけを対象にする。
+
+    Args:
+        correction: 1件の correction dict。
+
+    Returns:
+        True なら rule citation（enqueue 対象外）、False なら通常 correction。
+    """
+    if not isinstance(correction, dict):
+        return False
+    # 対象フィールド: message > corrected > original の順で検査
+    target_text = " ".join(
+        str(correction.get(field, "") or "")
+        for field in ("message", "corrected", "original")
+    ).lower()
+    if not target_text.strip():
+        return False
+    return any(slug in target_text for slug in _KNOWN_RULE_SLUGS)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -131,6 +209,10 @@ def read_queue(slug: str, data_dir: Path) -> List[dict]:
 def enqueue(corrections: List[dict], slug: str, data_dir: Path) -> bool:
     """gated corrections をキューに append する（内容ハッシュ in-queue dedup）。
 
+    rule citation フィルタ: 各 correction を `is_rule_citation` で検査し、
+    既存 rule slug を再掲するだけのリマインダを除外する。除外後に空になった場合は
+    enqueue せず False を返す。
+
     キューの未消化 dedup_key を best-effort で読み、同 key が既存なら enqueue を
     スキップして False を返す。新規なら record を append("a") して True を返す。
 
@@ -138,6 +220,13 @@ def enqueue(corrections: List[dict], slug: str, data_dir: Path) -> bool:
     """
     if not corrections:
         return False
+
+    # rule citation フィルタ: 既存ルール再掲リマインダを除外
+    filtered_corrections = [c for c in corrections if not is_rule_citation(c)]
+    if not filtered_corrections:
+        return False  # 全件が rule citation → enqueue しない
+    corrections = filtered_corrections
+
     key = compute_dedup_key(corrections)
     existing_keys = {r.get("dedup_key") for r in read_queue(slug, data_dir)}
     if key in existing_keys:

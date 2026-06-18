@@ -67,10 +67,13 @@ def test_builder_labels_counts_as_all_projects(tmp_path: Path, monkeypatch) -> N
 
 
 def test_builder_includes_evolve_hint(tmp_path: Path, monkeypatch) -> None:
-    """未昇格ありなら 'evolve' と '今日の修正確認' の誘導行が出る（#444）。"""
+    """llm_judge 未昇格ありなら 'evolve' と '今日の修正確認' の誘導行が出る（#444, #562）。
+
+    #562: daily_review phase は llm_judge チャネルのみ対象。evolve 誘導は
+    llm_judge 未読があるときだけ出る。決定論チャネルのみでは出ない。
+    """
     _seed(tmp_path, monkeypatch, [
-        {"channel": "rephrase", "promoted": False},
-        {"channel": "esc_interrupt", "promoted": False},
+        {"channel": "llm_judge", "promoted": False},
     ])
     section = build_weak_signals_section(tmp_path)
     assert section is not None
@@ -368,3 +371,111 @@ def test_contract_drift_does_not_flag_weak_signals_stale() -> None:
 
     drift = orphan_store.detect_store_contract_drift()
     assert "weak_signals.jsonl" not in drift.stale
+
+
+# ── #562: hint チャネルスコープ修正 ─────────────────────────────────────────
+
+
+def test_hint_evolve_absent_when_only_deterministic_channels_unread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """決定論チャネル（manual_edit_after_ai等）のみ未読の場合、
+    「今日の修正確認 phase」行が出ないこと（#562）。
+
+    llm_judge 未読 0 件なら daily_review phase は 0 件しか出さず、
+    「今日の修正確認 phase で昇格可能」という hint が誤誘導になる。
+    """
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        # 決定論チャネルのみ: 当PJ未昇格・未読
+        {"channel": "manual_edit_after_ai", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
+        {"channel": "esc_interrupt", "promoted": False, "pj_slug": current_slug, "signal_key": "d2"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "d3"},
+        # llm_judge は 0 件
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # 決定論チャネルのみ → evolve の「今日の修正確認 phase」行は出ない
+    assert "今日の修正確認" not in body
+    # 代わりに reflect 誘導行が出る
+    assert "reflect" in body or "--promote-weak" in body
+
+
+def test_hint_reflect_shown_for_deterministic_unread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """決定論チャネル未読 M 件は reflect --promote-weak 誘導行が出ること（#562）。"""
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {"channel": "manual_edit_after_ai", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "d2"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # 決定論チャネル 2 件 → reflect --promote-weak 誘導
+    assert "--promote-weak" in body
+    assert "2" in body  # 件数が含まれる
+
+
+def test_hint_evolve_shown_for_llm_judge_unread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """llm_judge 未読ありなら「今日の修正確認 phase」行が出ること（#562・従来動作の保持）。"""
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "j1"},
+        {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "j2"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "今日の修正確認" in body
+    assert "evolve" in body
+
+
+def test_hint_evolve_absent_when_llm_judge_unread_is_zero(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """llm_judge 未読 0 件（全員昇格済みまたは既読）なら今日の修正確認行が出ないこと（#562）。"""
+    import correction_semantic.daily_review as dr
+    current_slug = tmp_path.name
+    seen_path = tmp_path / "correction_review_seen.jsonl"
+    import json
+    # j1 は既読
+    with open(seen_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"key": "j1"}) + "\n")
+    monkeypatch.setattr(dr, "default_seen_path", lambda base=None: seen_path)
+
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        # llm_judge: 未昇格だが既読（= daily phase 対象外）
+        {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "j1"},
+        # 決定論チャネル: 未昇格・未読
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # llm_judge 未読 0 → 今日の修正確認行なし
+    assert "今日の修正確認" not in body
+    # 決定論チャネル未読あり → reflect 誘導あり
+    assert "--promote-weak" in body
+
+
+def test_hint_both_channels_when_mixed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """llm_judge と決定論チャネルの両方が未読なら両方の誘導行が出ること（#562）。"""
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "j1"},
+        {"channel": "manual_edit_after_ai", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # llm_judge あり → evolve 誘導
+    assert "今日の修正確認" in body
+    # 決定論チャネルあり → reflect 誘導
+    assert "--promote-weak" in body

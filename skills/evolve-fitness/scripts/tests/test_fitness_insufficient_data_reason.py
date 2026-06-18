@@ -39,7 +39,7 @@ class TestInsufficientDataReasonMessage:
         result = fe.run_fitness_evolution(history=[])
         assert result["status"] == "insufficient_data"
 
-        msg = result["message"]
+        msg = result["details"]["message"]
         # 「skill_evolve」または「採点対象外」のキーワードが含まれる
         has_skill_evolve = "skill_evolve" in msg
         has_not_scored = "採点対象外" in msg
@@ -53,7 +53,7 @@ class TestInsufficientDataReasonMessage:
         result = fe.run_fitness_evolution(history=[])
         assert result["status"] == "insufficient_data"
 
-        msg = result["message"]
+        msg = result["details"]["message"]
         # 「貯まりにくい」「蓄積」「母集団」のいずれかが含まれる
         has_difficulty = any(kw in msg for kw in ("貯まりにくい", "蓄積", "母集団"))
         assert has_difficulty, (
@@ -68,7 +68,7 @@ class TestInsufficientDataReasonMessage:
         """
         result = fe.run_fitness_evolution(history=[])
         assert result["status"] == "insufficient_data"
-        msg = result["message"]
+        msg = result["details"]["message"]
         assert "空手形" in msg, f"鶏卵問題の正直な説明がない: {msg!r}"
         assert "already_evolved" in msg or "提案自体が" in msg, (
             f"提案が構造的に出ない条件の説明がない: {msg!r}"
@@ -83,7 +83,7 @@ class TestInsufficientDataReasonMessage:
         result = fe.run_fitness_evolution(history=history)
         assert result["status"] == "insufficient_data"
 
-        msg = result["message"]
+        msg = result["details"]["message"]
         has_skill_evolve = "skill_evolve" in msg
         has_not_scored = "採点対象外" in msg
         assert has_skill_evolve or has_not_scored, (
@@ -107,7 +107,7 @@ class TestInsufficientDataReasonMessage:
         result = fe.run_fitness_evolution(history=history)
         assert result["status"] == "insufficient_data"
 
-        msg = result["message"]
+        msg = result["details"]["message"]
         has_skill_evolve = "skill_evolve" in msg
         has_not_scored = "採点対象外" in msg
         assert has_skill_evolve or has_not_scored, (
@@ -201,7 +201,7 @@ class TestInsufficientDataMessageForEvolveSkill:
     def test_message_has_count_fraction(self):
         """N/30件のフォーマットが含まれる。"""
         result = fe.run_fitness_evolution(history=[])
-        msg = result["message"]
+        msg = result["details"]["message"]
         # "0/30" のようなカウント表示
         assert "/30" in msg or str(fe.MIN_DATA_COUNT) in msg, (
             f"insufficient_data メッセージにデータ件数表示がない: {msg!r}"
@@ -210,7 +210,7 @@ class TestInsufficientDataMessageForEvolveSkill:
     def test_message_describes_how_to_accumulate(self):
         """蓄積方法（bin/rl-optimize / rl-loop）または採点対象の案内が含まれる。"""
         result = fe.run_fitness_evolution(history=[])
-        msg = result["message"]
+        msg = result["details"]["message"]
         has_optimize = "optimize" in msg.lower()
         has_rl_loop = "rl-loop" in msg or "rl_loop" in msg
         has_evolve_diff = "evolve" in msg.lower()

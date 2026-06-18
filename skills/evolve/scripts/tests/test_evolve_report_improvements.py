@@ -377,6 +377,67 @@ class TestFitnessBootstrap:
         assert "correlation" not in result
 
 
+# ========== #559: insufficient_data 出力契約の圧縮（verdict / one_liner / details）==========
+
+class TestInsufficientDataOutputContract:
+    """insufficient_data + structural_reason のケースで verdict/one_liner を top-level に出し、
+    長文 message を details サブ dict に隔離する（#559）。"""
+
+    def _make_history(self, n):
+        return [{"best_fitness": 0.5, "human_accepted": True} for _ in range(n)]
+
+    def test_verdict_and_one_liner_at_top_level(self):
+        """top-level に verdict と one_liner（1行サマリ）が出る。"""
+        from fitness_evolution import run_fitness_evolution
+        result = run_fitness_evolution(history=self._make_history(2))
+        assert result["status"] == "insufficient_data"
+        assert result["verdict"] == "insufficient_data"
+        assert isinstance(result["one_liner"], str)
+        assert result["one_liner"]
+        # one_liner は 1 行（改行を含まない）
+        assert "\n" not in result["one_liner"]
+
+    def test_long_message_isolated_in_details(self):
+        """長文 message は top-level から消え、details 配下に入る。"""
+        from fitness_evolution import run_fitness_evolution
+        result = run_fitness_evolution(history=self._make_history(2))
+        assert "details" in result
+        details = result["details"]
+        # 3 段落相当の長文は details.message に隔離される
+        assert "message" in details
+        assert len(details["message"]) > len(result["one_liner"])
+        # top-level の冗長 message は消えている（one_liner に置き換わった）
+        assert "message" not in result
+
+    def test_details_carries_legacy_verbose_fields(self):
+        """details に has_fitness / structural_reason / next_action / message を集約する。"""
+        from fitness_evolution import run_fitness_evolution
+        result = run_fitness_evolution(history=self._make_history(2))
+        details = result["details"]
+        assert details["structural_reason"] == "skill_evolve_not_scored"
+        assert "next_action" in details
+        assert "message" in details
+
+    def test_backward_compat_top_level_keys_preserved(self):
+        """下流互換: sections.py が読む structural_reason、evolve.py が上書きする next_action は
+        top-level にも残す（#559 後方互換）。"""
+        from fitness_evolution import run_fitness_evolution
+        result = run_fitness_evolution(history=self._make_history(2))
+        # audit/sections.py は fe_result.get("status") と fe_result.get("structural_reason") を読む
+        assert result["status"] == "insufficient_data"
+        assert result["structural_reason"] == "skill_evolve_not_scored"
+        # evolve.py Phase 5 が fitness_evo_result["next_action"] を top-level に上書きする
+        assert "next_action" in result
+        assert result["data_count"] == 2
+
+    def test_evolve_phase5_overwrite_propagates_to_details(self):
+        """evolve.py が next_action を上書きしたとき details にも追従できるよう、
+        top-level と details の next_action は同じ初期値を持つ。"""
+        from fitness_evolution import run_fitness_evolution
+        result = run_fitness_evolution(history=self._make_history(2))
+        assert result["next_action"] == result["details"]["next_action"]
+
+
 # ========== 5.3: Bash Ratio Threshold 表示テスト ==========
 
 class TestThresholdDisplay:

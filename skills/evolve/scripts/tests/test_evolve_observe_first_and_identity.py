@@ -137,7 +137,10 @@ def _patch_constitutional(monkeypatch, value):
 
 
 def test_constitutional_none_surfaced_to_warnings_and_observability(monkeypatch, tmp_path):
-    """cache stale/全 miss（None）は warnings と observability に「失敗でない」案内で乗る。"""
+    """cache stale/全 miss（None）は observability に「失敗でない」案内で乗る。
+
+    #561: 良性 advisory は warning_sink に積まない（scipy RuntimeWarning 等の真の警告用）。
+    """
     _patch_constitutional(monkeypatch, None)
     sink, obs = [], {}
     line = evolve._surface_constitutional_status(tmp_path, sink, obs)
@@ -145,16 +148,37 @@ def test_constitutional_none_surfaced_to_warnings_and_observability(monkeypatch,
     assert line is not None
     assert "失敗ではない" in line
     assert "refresh" in line or "再生成" in line
-    assert sink and sink[0]["category"] == "constitutional_cache"
+    # #561: warning_sink には積まない（良性 advisory を bug 候補として拾わせない）
+    assert sink == []
     assert obs["constitutional"] == [line]
 
 
-def test_constitutional_low_coverage_surfaced(monkeypatch, tmp_path):
+def test_constitutional_cache_advisory_not_in_warning_sink(monkeypatch, tmp_path):
+    """#561 regression: constitutional_cache カテゴリが warning_sink に入らない。
+
+    warning_sink → result["warnings"] → evolve_introspect._detect_captured_warnings で
+    bug 候補として拾われるため、良性 advisory をこのパスに流してはいけない。
+    observability にのみ surface する。
+    """
+    _patch_constitutional(monkeypatch, None)
+    sink, obs = [], {}
+    evolve._surface_constitutional_status(tmp_path, sink, obs)
+    # warning_sink は空のまま
+    assert sink == []
+    # observability には乗る
+    assert "constitutional" in obs
+    assert obs["constitutional"]
+
+
+def test_constitutional_low_coverage_not_in_warning_sink(monkeypatch, tmp_path):
+    """#561 regression: low_coverage 良性 advisory も warning_sink に入らない。"""
     _patch_constitutional(monkeypatch, {"overall": None, "skip_reason": "low_coverage"})
     sink, obs = [], {}
     line = evolve._surface_constitutional_status(tmp_path, sink, obs)
     assert "coverage" in line
-    assert sink
+    # #561: warning_sink には積まない
+    assert sink == []
+    assert obs["constitutional"] == [line]
 
 
 def test_constitutional_scored_not_surfaced(monkeypatch, tmp_path):

@@ -8,6 +8,9 @@ import re
 from collections import Counter, defaultdict
 from typing import Any, Dict, List
 
+# examples フィールドの truncate (#555)
+from rule_violation_lane import truncate_example  # noqa: E402
+
 # `VAR=value` 形式の代入プレフィックス（env/sudo 同様、実コマンドの前置として読み飛ばす）
 _VAR_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -139,11 +142,13 @@ def detect_repeating_commands(
             head = key.split()[0]
             # サブカテゴリ分類
             subcategory = _classify_subcategory(head, key)
+            # examples を 1行・120字に truncate (#555)
+            truncated = [truncate_example(ex) for ex in key_examples[key]]
             patterns.append({
                 "pattern": key,
                 "count": count,
                 "subcategory": subcategory,
-                "examples": key_examples[key],
+                "examples": truncated,
             })
 
     return patterns

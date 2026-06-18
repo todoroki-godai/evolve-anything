@@ -31,12 +31,19 @@ def _format_axis(key: str, axis: Dict[str, Any]) -> List[str]:
     if value is None:
         reason = ev.get("reason", "no_data")
         store = ev.get("store", "")
-        # #529-2: 最小分母 floor 未満は「データ不足」でなく「サンプル不足」と
+        # #529-2 / #563: 最小分母 floor 未満は「データ不足」でなく「サンプル不足」と
         # 区別して表示する（ストアはあるが率を出すには分母が小さい状態）。
+        # correction_recurrence は distinct_types、rework は edit_sessions を分母とする。
         if reason == "insufficient_sample":
+            if "distinct_types" in ev:
+                sample_detail = f"distinct {ev['distinct_types']} type"
+            elif "edit_sessions" in ev:
+                sample_detail = f"edit sessions {ev['edit_sessions']}"
+            else:
+                sample_detail = "n/a"
             return [
                 f"  ・{label}: サンプル不足"
-                f"（distinct {ev.get('distinct_types', 0)} type"
+                f"（{sample_detail}"
                 f" < floor {ev.get('floor', '?')}）— 率は非表示"
             ]
         return [f"  ・{label}: データ不足（{reason} / {store}）"]

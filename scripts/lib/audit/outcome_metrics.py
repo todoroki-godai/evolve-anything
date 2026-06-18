@@ -74,6 +74,18 @@ _MAX_EXAMPLES = 5
 # floor 未満では率を None にし「サンプル不足」を明示する（沈黙 != 評価不能, #393-#396）。
 MIN_DISTINCT_TYPES_FLOOR = 5
 
+# #563: rework 率の表示側 最小分母 floor。
+# rework 率 = rework_sessions / edit_sessions。分母 = 窓内で 1 度でも Edit/Write を
+# 行ったセッション数。分母が小さいと 1 セッションの結果で率が大きく振れ
+# （例: edit_sessions=1 で rework=1 → 1.0 に張り付き）誤シグナルになる。これは
+# downstream の measurement_bug（全PJ bit-exact 一致を測定バグと判定）や
+# promotion_readiness 条件1（分散が十分）を誤発火させる（#563）。
+# correction_recurrence の MIN_DISTINCT_TYPES_FLOOR=5 と同方針で edit_sessions ≥ 5 を要求する
+# （edit_sessions 5 なら 1 セッションの振れは 0.20 に抑えられ、5 という値は
+# correction floor と整合する暫定値）。floor 未満では率を None にし「サンプル不足」を
+# 明示する（沈黙 != 評価不能, #393-#396）。
+MIN_EDIT_SESSIONS_FLOOR = 5
+
 
 def _dedup(seq: List[str], limit: int = _MAX_EXAMPLES) -> List[str]:
     """順序を保ったまま重複・空を除いて先頭 limit 件を返す（sessions.jsonl の重複行対策）。"""
@@ -321,6 +333,18 @@ def rework_rate(
 
     if not edit_sessions:
         return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
+
+    # #563: 最小分母 floor 未満では率を出さず「サンプル不足」を明示する。
+    # edit_sessions が少ないと 1 セッションの振れで率が 1.0 に張り付き誤シグナルになる
+    # （correction_recurrence の MIN_DISTINCT_TYPES_FLOOR=5 と同方針, #529-2）。
+    if len(edit_sessions) < MIN_EDIT_SESSIONS_FLOOR:
+        return None, {
+            "reason": "insufficient_sample",
+            "store": "sessions.jsonl",
+            "edit_sessions": len(edit_sessions),
+            "floor": MIN_EDIT_SESSIONS_FLOOR,
+            "window_days": days,
+        }
 
     rate = round(len(rework_sessions) / len(edit_sessions), 4)
     return rate, {

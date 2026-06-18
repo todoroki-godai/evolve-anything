@@ -963,10 +963,12 @@ class TestWeakSignalPromotion:
         assert not corr.exists()
 
     def test_promote_weak_returns_updated_human_count(self, tmp_path, capsys):
-        """--promote-weak が昇格後の corrections_human カウントを返す（#476-4 stale 表示の解消）。
+        """--promote-weak が昇格後の corrections_human_allpj カウントを返す（#476-4 stale 表示の解消）。
 
         growth_report の promoted_today は対話前スナップショットで固定されるため、promote CLI
         が更新後カウントを返し assistant が最新値を表示できるようにする。
+        キーは corrections_human_allpj（全PJ集計）— per-PJ の growth_report.corrections_human と
+        区別するため #557 でリネーム。
         """
         ws, sigs = self._seed_ws(tmp_path)
         corr = tmp_path / "corrections.jsonl"
@@ -976,11 +978,13 @@ class TestWeakSignalPromotion:
             reflect.main()
         out = json.loads(capsys.readouterr().out)
         assert out["status"] == "promoted_weak"
-        # 昇格直後の corrections_human（source=reflect_confirmed の human-source）が反映される
-        assert out["corrections_human"] == 1
+        # 昇格直後の corrections_human_allpj（全PJ集計・source=reflect_confirmed の human-source）が反映される
+        assert out["corrections_human_allpj"] == 1
+        # 旧キー（全PJ集計値）は削除済み — per-PJ の growth_report.corrections_human と混同防止 (#557)
+        assert "corrections_human" not in out
 
     def test_promote_weak_dry_run_human_count_unchanged(self, tmp_path, capsys):
-        """dry_run では corrections に書かないので corrections_human は変動しない（#476-4）。"""
+        """dry_run では corrections に書かないので corrections_human_allpj は変動しない（#476-4）。"""
         ws, sigs = self._seed_ws(tmp_path)
         corr = tmp_path / "corrections.jsonl"
         with mock.patch("sys.argv", ["reflect", "--promote-weak", sigs[0].signal_key,
@@ -990,7 +994,9 @@ class TestWeakSignalPromotion:
             reflect.main()
         out = json.loads(capsys.readouterr().out)
         assert out["dry_run"] is True
-        assert out["corrections_human"] == 0
+        assert out["corrections_human_allpj"] == 0
+        # 旧キー（全PJ集計値）は削除済み — per-PJ の growth_report.corrections_human と混同防止 (#557)
+        assert "corrections_human" not in out
 
 
 # --- Test: --promote-weak が idiom を confirmed 化する閉ループ（#463 配線漏れ修正） ---

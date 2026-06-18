@@ -134,3 +134,96 @@ def test_dedup_stable_for_same_skill():
     ]
     keys = [c["dedup_key"] for c in ec.detect_consistency_drift(r)["candidates"]]
     assert len(keys) == len(set(keys))
+
+
+# ── ③ verification_bypass=True の例外（#376 + #560 guard） ──────────────────
+
+
+def test_verification_bypass_true_usage0_medium_is_not_contradiction():
+    """#376 の検証系バイパス: verification_bypass=True の usage0/medium は矛盾ではない（#560）。"""
+    r = _clean()
+    r["phases"]["skill_evolve"]["assessments"] = [
+        {
+            "skill_name": "verify-skill",
+            "suitability": "medium",
+            "telemetry_detail": {"usage_count": 0},
+            "verification_bypass": True,
+        },
+    ]
+    section = ec.detect_consistency_drift(r)
+    assert not any(
+        "usage_suitability" in c["dedup_key"] for c in section["candidates"]
+    ), "verification_bypass=True の assessment を矛盾として誤検出している (#560)"
+
+
+def test_verification_bypass_false_usage0_medium_is_contradiction():
+    """verification_bypass=False の usage0/medium は従来どおり矛盾として検出する。"""
+    r = _clean()
+    r["phases"]["skill_evolve"]["assessments"] = [
+        {
+            "skill_name": "non-verify-skill",
+            "suitability": "medium",
+            "telemetry_detail": {"usage_count": 0},
+            "verification_bypass": False,
+        },
+    ]
+    section = ec.detect_consistency_drift(r)
+    assert any(
+        "usage_suitability" in c["dedup_key"] for c in section["candidates"]
+    ), "verification_bypass=False の usage0/medium が矛盾として検出されていない"
+
+
+def test_verification_bypass_absent_usage0_medium_is_contradiction():
+    """verification_bypass フィールドが無い場合も従来どおり矛盾として検出する。"""
+    r = _clean()
+    r["phases"]["skill_evolve"]["assessments"] = [
+        {
+            "skill_name": "no-bypass-field-skill",
+            "suitability": "medium",
+            "telemetry_detail": {"usage_count": 0},
+        },
+    ]
+    section = ec.detect_consistency_drift(r)
+    assert any(
+        "usage_suitability" in c["dedup_key"] for c in section["candidates"]
+    ), "verification_bypass フィールド無しの usage0/medium が矛盾として検出されていない"
+
+
+def test_verification_bypass_true_usage0_high_is_not_contradiction():
+    """verification_bypass=True の usage0/high も矛盾ではない（high+bypass は medium+bypass と同様）。"""
+    r = _clean()
+    r["phases"]["skill_evolve"]["assessments"] = [
+        {
+            "skill_name": "verify-high-skill",
+            "suitability": "high",
+            "telemetry_detail": {"usage_count": 0},
+            "verification_bypass": True,
+        },
+    ]
+    section = ec.detect_consistency_drift(r)
+    assert not any(
+        "usage_suitability" in c["dedup_key"] for c in section["candidates"]
+    ), "verification_bypass=True/high の assessment を矛盾として誤検出している (#560)"
+
+
+def test_mixed_bypass_and_non_bypass_only_non_bypass_detected():
+    """bypass=True と bypass=False が混在する場合、bypass=False のみ検出される。"""
+    r = _clean()
+    r["phases"]["skill_evolve"]["assessments"] = [
+        {
+            "skill_name": "verify-ok",
+            "suitability": "medium",
+            "telemetry_detail": {"usage_count": 0},
+            "verification_bypass": True,
+        },
+        {
+            "skill_name": "non-verify-bad",
+            "suitability": "medium",
+            "telemetry_detail": {"usage_count": 0},
+            "verification_bypass": False,
+        },
+    ]
+    section = ec.detect_consistency_drift(r)
+    subjects = [c.get("subject") for c in section["candidates"] if "usage_suitability" in c["dedup_key"]]
+    assert "non-verify-bad" in subjects, "bypass=False の assessment が検出されていない"
+    assert "verify-ok" not in subjects, "bypass=True の assessment が誤検出されている"

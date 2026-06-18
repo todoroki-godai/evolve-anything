@@ -369,7 +369,10 @@ reflect は独立フェーズではなく discover に統合済み。**`phases.d
 - `bootstrap.is_bootstrap == True` → **AskUserQuestion で 3 択を人間に選ばせる（MUST — テキスト表示だけで済ませない）**。question に `bootstrap.pj_total` 件・`bootstrap.groups_total` グループを判断材料として提示する:
   - question: 「この PJ の未昇格バックログ {pj_total} 件（{groups_total} グループ）を初回 bootstrap で消化しますか？」
   - options:
-    1. **まとめて確認** → `bootstrap.groups` を順に AskUserQuestion バッチで提示（各 group の `representative` を確認 → 承認なら同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で一括昇格）。group の `confirmable_idiom` が非 None なら「確定すると idiom『{confirmable_idiom}』も confirmed 化（以後この表現の再発を自動昇格）」を question に添える（None＝過汎用 FP guard #527 で除外済み・standing auto-promote rule にしない・#527-4）。group の `cross_pj_confirmed` が非空なら「他 PJ（{slug一覧}）で承認済み」を question に添える（先頭に並んでいるのはこのため — #462。判断材料の提示のみで自動承認はしない）。CLI が promote と同時に対応 idiom を confirmed=True 化する（#463 — `promote_signals` ライブラリ直接呼びは confirmed 化をバイパスするため使わない）。全 group 確認後に `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる。
+    1. **まとめて確認** → 提示方式は `bootstrap.theme_buckets` の有無で分岐する（#558。`theme_buckets` は group 数が `THEME_CLUSTER_THRESHOLD`（=12）超のときだけ phase が emit する決定論 TF-IDF テーマクラスタ。閾値以下は `None`）:
+       - **`bootstrap.theme_buckets` が非 None（= group 数が閾値超）→ バケット単位の multiSelect 1 問に畳む（MUST。質問マラソンを避け explain-clearly と整合させる）。** 各バケット `{theme_label, group_indices, groups}` を AskUserQuestion の multiSelect オプション 1 個として提示し（label に `theme_label` と件数）、ユーザーが選んだバケットに含まれる全 group の `signal_keys` をまとめて `rl-reflect --promote-weak <signal_keys カンマ区切り>` で一括昇格する（選ばれなかったバケットは昇格しない）。バケット内 group の `confirmable_idiom` / `cross_pj_confirmed` は下記 per-group と同じ扱い（非 None idiom は confirmed 化される旨を multiSelect の説明に添える）。
+       - **`bootstrap.theme_buckets` が None（= group 数が閾値以下）→ 従来の per-group フロー（挙動不変）。** `bootstrap.groups` を順に AskUserQuestion バッチで提示（各 group の `representative` を確認 → 承認なら同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で一括昇格）。group の `confirmable_idiom` が非 None なら「確定すると idiom『{confirmable_idiom}』も confirmed 化（以後この表現の再発を自動昇格）」を question に添える（None＝過汎用 FP guard #527 で除外済み・standing auto-promote rule にしない・#527-4）。group の `cross_pj_confirmed` が非空なら「他 PJ（{slug一覧}）で承認済み」を question に添える（先頭に並んでいるのはこのため — #462。判断材料の提示のみで自動承認はしない）。
+       いずれの方式でも CLI が promote と同時に対応 idiom を confirmed=True 化する（#463 — `promote_signals` ライブラリ直接呼びは confirmed 化をバイパスするため使わない）。確認完了後に `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる。
     2. **日次5件ずつ** → marker を立てず、Step 6 の通常 reflect ページネーションに合流（以後の evolve で `is_bootstrap=True` が再提示される）。
     3. **TTL 失効に任せる** → `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる（以後 bootstrap を再提示しない。weak_signals TTL #5 が残りを間引く）。
 
@@ -403,7 +406,7 @@ res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)
 
 - `daily.eligible != True`（新規 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。`daily.eligible == False` のときのみ「今日の修正確認: 新規なし ✓」を1行表示）
 - `daily.eligible == True` → `daily.groups`（最大5件・cross-PJ 承認済み一致が先頭、続いて頻度降順 — #462）を **AskUserQuestion で y/n 確認（MUST — 最大5問を1バッチで）**。各 question に group の `idiom`（無ければ `representative`）と `evidence.count`（再発回数）を提示し、`confirmable_idiom` が非 None なら「『はい』で確定すると以後この表現の再発を自動昇格する idiom『{confirmable_idiom}』も confirmed 化される」を添える（None＝過汎用 FP guard #527 で除外済み・この group の昇格は今回限りで standing auto-promote rule にならない・#527-4）。`cross_pj_confirmed` が非空なら「他 PJ（{slug一覧}）で承認済み」も添える（判断材料の提示のみで自動承認はしない）:
-  - **はい（昇格）** → 同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で昇格（CLI が promote と同時に対応 idiom を confirmed=True 化し、以後の同テキスト再発は idiom_autopromote が機械昇格する — #463。出力の `confirmed_idioms` 件数で確認可。出力の `corrections_human` は**昇格後**の human-confirmed correction 件数で、Step 9 の成長状態レポート表示はこの最新値を使う — #476-4 対話前スナップショット問題の解消）→ **promote 成功を確認後に** `daily_review.record_reviewed(signal_keys, slug, decision="promoted", dry_run=dry_run)` で既読追記。promote が部分失敗した group は既読追記しない（取りこぼし防止 — 次回再提示される）
+  - **はい（昇格）** → 同 group の `signal_keys` を `rl-reflect --promote-weak <signal_keys カンマ区切り>` で昇格（CLI が promote と同時に対応 idiom を confirmed=True 化し、以後の同テキスト再発は idiom_autopromote が機械昇格する — #463。出力の `confirmed_idioms` 件数で確認可。出力の `corrections_human_allpj` は昇格後の全PJ集計 human-confirmed 件数（**per-PJ の growth_report.corrections_human とは別物 — #557**。Step 9 の成長状態表示には使わない — 下記の対話前スナップショット問題補正を参照）→ **promote 成功を確認後に** `daily_review.record_reviewed(signal_keys, slug, decision="promoted", dry_run=dry_run)` で既読追記。promote が部分失敗した group は既読追記しない（取りこぼし防止 — 次回再提示される）
   - **いいえ（却下）** → `daily_review.record_reviewed(signal_keys, slug, decision="rejected", dry_run=dry_run)` で既読追記（次回から再提示しない）
   - **Skip / Other / 中断** → 既読追記しない（次回再提示）。evolve 全体は完走する
 - `daily.remaining > 0` なら「ほか {remaining} グループは次回以降に提示」を1行表示する
@@ -624,35 +627,21 @@ rl-evolve --drain
 
 evolve.py の出力に含まれる `fitness_evolution` フェーズを確認する。
 
-- `status: "insufficient_data"` の場合（**結論を1行で締める** — #400 バグ#5）:
-  - **役割1行を先に添える（#528-1・誤読防止 MUST）**: `has_fitness: true` かつ
-    `structural_reason` がある（提案が構造的に出ない PJ）のときは、next_action の前に
-    **「fitness 関数自体は rl-optimize / rl-loop-orchestrator 実行時に評価に使用中。evolve 日次
-    ループでは skill 提案が出ない限り calibration 母集団は貯まらない」** を1行出す。これを省くと
-    次の next_action「fitness は使わない設計」が**fitness 関数全体の否定**に読めてしまう（#525-1）。
-    対象外なのは **calibration（accept/reject 蓄積による再調整）だけ**であって、fitness 関数の
-    評価利用ではない、という区別を明示する。
-  - **`result.phases.fitness_evolution.next_action` を最終行にそのまま出す**（MUST）。これが結論。
-    evolve.py が現 run の提案有無で確定済みの1行で、長文説明より優先する:
-    - 提案あり → 「放置でOK — evolve を継続すれば skill 提案の accept/reject が自動で母集団に貯まる（ADR-041）」
-    - 提案なし → 「このPJでは fitness は使わない設計。対応不要（提案が構造的に出ないため母集団は貯まらない）」
-      （↑上の役割1行とセットで読ませること。単独で出すと全体否定に誤読される — #525-1）
-  - **件数行（#526-4・MUST）**: `structural_reason == "skill_evolve_not_scored"` がある
-    insufficient_data では **件数行（`データ不足（N/30件）`）を省く**。理由: structural ケースでは
-    `data_count` が構造的に 0 固定になりやすく（提案が出て初めて母集団が積み上がる）、`0/30` を
-    出すと「あと 30 件貯めれば判定できる」という蓄積前提の誤読を生む（分子が意味を持たない）。
-    `structural_reason` が無い通常の insufficient_data のときだけ `Fitness Evolution: データ不足
-    （{data_count}/30件）` の1行を添える（`data_count` は producer が常に int で返す。`null` 穴あき
-    表示は出さない）。
-  - **3段の長文説明は出さない**（`message` フィールドの詳細を出すのはユーザーが理由を尋ねた時のみ）。
-    冗長な説明で次アクションを埋もれさせない＝issue #400 バグ#5 の指摘。
-  - 0件の場合（`data_count == 0`・structural でない）は「このプロジェクトではまだ一度も評価が
-    蓄積されていません」を件数行に添えてよい
-  - **整合（#479）**: `structural_reason`（`skill_evolve_not_scored`）がある insufficient_data では、
-    `next_action`・上の役割1行・observability の `calibration_drift` 行（「構造的に対象外」に切替）・
-    Step 2 の `has_fitness` 表示の4箇所が「提案が出て初めて母集団が貯まる＝calibration は構造的に
-    対象外になり得る（fitness 関数の評価利用は継続）」で揃う。calibration_drift を
-    「あと N 件で判定可能」と蓄積前提で言い直さない（矛盾するため）。
+- `status: "insufficient_data"` の場合（出力契約は **#559 で {verdict, one_liner, details} に圧縮済み**。
+  従来の誤読防止注記 #400 バグ#5 / #525-1 / #526-4 / #528-1 / #479 はこの 1 本に統合した）:
+  - **`result.phases.fitness_evolution.one_liner` を1行そのまま出す。これが結論**（MUST）。
+    `verdict`（機械判定）と `one_liner`（1行サマリ）が top-level の結論で、`data_count`/件数・
+    3段落の長文説明・`structural_reason`/`next_action` はすべて `details` 配下に隔離されている。
+  - **`details.message`（長文）と件数（`N/30`）は既定で出さない**。structural ケース
+    （`details.structural_reason == "skill_evolve_not_scored"`）では `data_count` が構造的に 0 固定に
+    なりやすく、`0/30` 単独表示は「あと 30 件貯めれば判定できる」という蓄積前提の誤読を生む。
+    ユーザーが理由を尋ねたときだけ `details.message` / `details.next_action` を開示する。
+  - **誤読の本質**（開示時に添える1行）: 対象外なのは **calibration（accept/reject 蓄積による再調整）
+    だけ**で、fitness 関数自体は rl-optimize / rl-loop-orchestrator 実行時の評価に使用中。
+    「fitness は使わない設計」を fitness 関数全体の否定と読ませない（#525-1）。
+  - **整合（#479）**: structural ケースでは observability の `calibration_drift` 行と Step 2 の
+    `has_fitness` 表示も「提案が出て初めて母集団が貯まる＝calibration は構造的に対象外になり得る
+    （評価利用は継続）」で揃え、`calibration_drift` を「あと N 件で判定可能」と蓄積前提で言い直さない。
 - `status: "bootstrap"` の場合:
   - 「簡易分析モード (N/30件)」と表示
   - 基本統計（承認率、平均スコア、スコア分布）を表示
@@ -735,10 +724,10 @@ TL;DR: 変更 {N} 件 / 要対応 {M} 件 / 残りすべて評価済みクリー
 > - `corrections（human-confirmed のみ）7/10 — あと3件で構造化育成へ`
 > - `本日累計 reflect 確認 2件 / idiom 1件 が自動化対象に昇格（このrunでは 1 件）`
 >
-> **対話前スナップショット問題の補正（#476-4・MUST。全PJ値の混入を断つ — #526-1）:** `growth_report` は analysis 時点で生成されるため `corrections_human` / `promoted_today` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合の上書きは、必ず **per-PJ の値に今回昇格数を加算する** 方式で行う（**`rl-reflect --promote-weak` 出力の `corrections_human` をそのまま使ってはならない — MUST NOT**）:
+> **対話前スナップショット問題の補正（#476-4・MUST。全PJ値の混入を断つ — #526-1）:** `growth_report` は analysis 時点で生成されるため `corrections_human` / `promoted_today` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合の上書きは、必ず **per-PJ の値に今回昇格数を加算する** 方式で行う（**`rl-reflect --promote-weak` 出力の `corrections_human_allpj` をそのまま使ってはならない — MUST NOT**）:
 >
 > - **`corrections（human-confirmed のみ）` 行**: `result["growth_report"]["corrections_human"]`（= 当PJ analysis 時点の値）に、Step 6.2 で「はい」と答えて昇格に成功した件数を**足した値**を分子にする（分母は `corrections_target`）。
->   - ⚠ **`rl-reflect --promote-weak` の出力 `corrections_human` は全PJ合計（例 41）を返す**ため、これで当PJ値（例 0/10）を上書きすると `41/10` という不整合表示になる（#526-1 の事故）。CLI 出力の `corrections_human` は当PJ分母 `/10` と意味が合わないので分子に使わない。
+>   - ⚠ **`rl-reflect --promote-weak` の出力 `corrections_human_allpj` は全PJ合計（例 41）を返す（#557 でリネーム済み）**ため、これで当PJ値（例 0/10）を上書きすると `41/10` という不整合表示になる（#526-1 の事故）。CLI 出力の `corrections_human_allpj` は当PJ分母 `/10` と意味が合わないので分子に使わない。
 > - **`本日累計 ...（このrunでは M 件）` 行**: growth_report の `promoted_today` / `autopromoted_today`（本日累計・store 由来）と、`promoted_this_run` / `autopromoted_this_run`（このrun・明示渡し）をそのまま使う。Step 6.2 で承認した直後で store がまだ反映前なら、このrun件数を本日累計に足して表示してよい。
 > - 昇格が 0 件だった場合は growth_report の値をそのまま表示する。
 >

@@ -138,6 +138,13 @@ CANONICAL: List[Key] = [
         note="skill_evolve↔archive reconcile で archive 優先除外したスキル名（#400 バグ#2）"),
     Key("phases.fitness_evolution.next_action", str, optional=True,
         note="insufficient_data 時の結論 1 行（#400 バグ#5）。evolve.py が提案有無で確定"),
+    Key("phases.fitness_evolution.verdict", str, optional=True,
+        note="insufficient_data 時の機械判定（#559）。例 'insufficient_data'"),
+    Key("phases.fitness_evolution.one_liner", str, optional=True,
+        note="insufficient_data 時の 1 行サマリ＝結論（#559）。SKILL.md Step 8 はこれを出す"),
+    Key("phases.fitness_evolution.details", dict, optional=True,
+        note="insufficient_data 時の冗長フィールド隔離先（#559）。"
+             "has_fitness / structural_reason / next_action / message を集約"),
     # ── top-level キー（phases.* の外。#442-#448 で追加・#493 で契約化）─────────
     #   SKILL.md が dotted path で読む実害キーは required（optional にしない）。
     #   rename / kind drift を test-time conformance で検出する。

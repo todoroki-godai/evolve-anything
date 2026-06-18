@@ -301,6 +301,42 @@ class TestComputePromotionReadiness:
         assert result["direction"]["pass"] is True
         assert result["promote"] is True
 
+    def test_subfloor_pjs_not_flagged_as_measurement_bug(self, tmp_path, monkeypatch):
+        # #563-2: distinct_types が floor 未満の PJ は値が統計的に無意味で 0.0/1.0 に振れる。
+        # 複数 PJ がサブ floor で一斉に 1.0 になっても「全 PJ 同値 = 測定バグ」(all_identical)
+        # の false positive を出してはならない。floor 未満は variance 入力から除外され、
+        # 残りが _MIN_PJ 未満なら insufficient_pj（測定バグではなくサンプル不足）になる。
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        corr = []
+        # 3 PJ それぞれ distinct_types=3（< floor 5）・全 type 再発 → 各 PJ value=1.0
+        for pj in ("/p/a", "/p/b", "/p/c"):
+            for t in range(3):
+                for s in range(2):  # 同 type を 2 セッションに跨らせ再発させる
+                    corr.append(_correction(pj, f"t{t}", f"{pj}_s{t}_{s}", now))
+        _write_jsonl(tmp_path / "corrections.jsonl", corr)
+        result = opr.compute_promotion_readiness(days=30, window_days=14)
+        assert result["variance"]["pass"] is False
+        # 修正前は all_identical（value 1.0）の measurement-bug FP。修正後は除外され
+        # 残り 0 PJ → insufficient_pj。
+        assert result["variance"]["reason"] == "insufficient_pj"
+
+    def test_at_floor_identical_still_flagged(self, tmp_path, monkeypatch):
+        # floor を満たす PJ が真に同値なら従来どおり all_identical を検出する
+        # （floor 導入が正当な測定バグシグナルまで握り潰さないことの確認）。
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        corr = []
+        # 2 PJ それぞれ distinct_types=5（= floor）・全 type 再発 → 各 PJ value=1.0
+        for pj in ("/p/a", "/p/b"):
+            for t in range(5):
+                for s in range(2):
+                    corr.append(_correction(pj, f"t{t}", f"{pj}_s{t}_{s}", now))
+        _write_jsonl(tmp_path / "corrections.jsonl", corr)
+        result = opr.compute_promotion_readiness(days=30, window_days=14)
+        assert result["variance"]["reason"] == "all_identical"
+        assert result["variance"]["value"] == 1.0
+
     def test_dry_run_no_store_write(self, tmp_path, monkeypatch):
         # 読み取りのみ — compute は DATA_DIR に何も書かない。
         # ファイル名集合の同一性だけでなく各ファイルの read_bytes() を before/after で

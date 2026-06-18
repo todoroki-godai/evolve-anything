@@ -130,6 +130,8 @@ def _detect_usage_suitability_contradiction(result: Dict[str, Any]) -> List[Dict
     for a in assessments:
         if not isinstance(a, dict):
             continue
+        if a.get("verification_bypass"):   # #376 の検証系例外は矛盾ではない (#560)
+            continue
         suitability = a.get("suitability")
         if suitability not in _PROPOSED_SUITABILITY:
             continue

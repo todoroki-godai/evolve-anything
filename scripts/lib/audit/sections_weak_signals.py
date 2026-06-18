@@ -147,10 +147,16 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
 
     # チャネル別の (全PJ件数 / 当PJ未昇格 / 当PJ未昇格かつ未読) を集計する。
     # slug が取れない / レコードに pj_slug が無い場合は当PJ扱い（後方互換・#490）。
+    # #562: 未読を llm_judge チャネルと決定論チャネルに分けて集計する。
+    # daily_review phase（evolve）は llm_judge のみ対象。決定論チャネルは reflect 経路。
+    _LLM_JUDGE_CHANNEL = "llm_judge"
+
     all_by_channel: dict = {}            # 全PJ件数（matrix の左）
     cur_unpromoted_by_channel: dict = {}  # 当PJ未昇格（matrix の右）
     unpromoted = 0      # 当PJ未昇格 合計
     unread = 0          # 当PJ未昇格かつ未読 合計（#525-1）
+    unread_llm_judge = 0       # #562: llm_judge チャネルの未読（daily phase 対象）
+    unread_deterministic = 0   # #562: 決定論チャネルの未読（reflect 経路）
     for r in records:
         ch = r.get("channel", "unknown")
         all_by_channel[ch] = all_by_channel.get(ch, 0) + 1
@@ -164,6 +170,10 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
             unpromoted += 1
             if r.get("signal_key") not in reviewed_keys:
                 unread += 1
+                if ch == _LLM_JUDGE_CHANNEL:
+                    unread_llm_judge += 1
+                else:
+                    unread_deterministic += 1
 
     # #528-2: チャネル別×スコープ matrix（1 行ずつ）。順序は既知チャネル → その他。
     ordered_channels = [c for c in _CHANNEL_ORDER if c in all_by_channel]
@@ -185,17 +195,27 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         " corrections capture が枯渇しているときの語彙非依存な代替報酬源"
         "（advisory・スコア非関与, #432）。チャネル別×スコープは次の matrix で内訳を示す:"
     )
-    # #525-1: 昇格導線文は当PJ未昇格と未読を分離する。daily phase「新規なし（既読済）」と
-    # 「未昇格 N 件は昇格可能」が噛み合うよう、未読（= 今日の修正確認の対象）を併記する。
+    # #525-1 / #562: 昇格導線文は当PJ未昇格と未読を分離する。
+    # #562: hint をチャネル別に分ける。
+    #   - llm_judge 未読 → 今日の修正確認 phase（evolve）で昇格
+    #   - 決定論チャネル未読 → reflect --promote-weak で昇格
+    # llm_judge 未読 0 のときは「今日の修正確認 phase」行を出さない（誤誘導防止）。
+    trailer: List[str] = []
     if unpromoted > 0:
-        hint_line = (
+        trailer.append(
             f"当PJ未昇格 {unpromoted} 件（うち未読 {unread} 件）。"
-            " 未読分は `/rl-anything:evolve` の今日の修正確認 phase で昇格可能"
-            "（既読済は再提示されない）。"
         )
-        trailer = [hint_line]
-    else:
-        trailer = []
+        if unread_llm_judge > 0:
+            trailer.append(
+                f"  うち llm_judge {unread_llm_judge} 件は"
+                " `/rl-anything:evolve` の今日の修正確認 phase で昇格可能"
+                "（既読済は再提示されない）。"
+            )
+        if unread_deterministic > 0:
+            trailer.append(
+                f"  うち決定論チャネル {unread_deterministic} 件は"
+                " `/rl-anything:reflect --promote-weak` で昇格可能。"
+            )
 
     # 安全弁②（ADR-047）: idiom_dict 自動昇格を毎回 surface（黙って進まない）。
     return (

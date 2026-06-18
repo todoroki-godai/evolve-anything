@@ -226,7 +226,10 @@ def _surface_constitutional_status(
             "Constitutional: cache stale/全 miss で未算出（失敗ではない）。"
             "audit Step 3.5 の 2 相 refresh で cache 再生成を推奨"
         )
-    warning_sink.append({"category": "constitutional_cache", "message": line})
+    # #561: 良性 advisory は warning_sink に積まない。
+    # warning_sink → result["warnings"] → evolve_introspect._detect_captured_warnings で
+    # bug 候補として拾われるため（scipy RuntimeWarning 等の真の警告用のパス）。
+    # observability のみに surface する。
     if isinstance(observability, dict):
         observability["constitutional"] = [line]
     return line
@@ -1208,7 +1211,12 @@ def run_evolve(
                 or _se.get("medium_suitability", 0) > 0
                 or len(_disc.get("matched_skills", []) or []) > 0
             )
-            fitness_evo_result["next_action"] = fitness_next_action(_proposals_available)
+            _na = fitness_next_action(_proposals_available)
+            fitness_evo_result["next_action"] = _na
+            # #559: 冗長フィールドは details に隔離済み。top-level の上書きを details にも追従させ
+            # 矛盾を防ぐ（details.next_action が結論の正準位置）。
+            if isinstance(fitness_evo_result.get("details"), dict):
+                fitness_evo_result["details"]["next_action"] = _na
         result["phases"]["fitness_evolution"] = fitness_evo_result
     except Exception as e:
         result["phases"]["fitness_evolution"] = {"error": str(e)}

@@ -97,6 +97,9 @@ from .artifacts import (  # noqa: E402, F401
 # run_discover オーケストレータ + CLI main は discover/runner.py に集約済み（後方互換のため再エクスポート）
 from .runner import main, run_discover  # noqa: E402, F401
 
+# examples truncate ヘルパ（#555, rule_violation_lane から re-export）
+from rule_violation_lane import truncate_example  # noqa: E402, F401
+
 
 if __name__ == "__main__":
     main()

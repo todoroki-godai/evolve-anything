@@ -290,7 +290,9 @@ def run_discover(
             _proj = project_root or Path.cwd()
             prohibited = extract_prohibited_command_heads(default_rule_dirs(_proj))
             partitioned = partition_rule_violations(
-                tool_result.get("repeating_patterns", []), prohibited,
+                tool_result.get("repeating_patterns", []),
+                prohibited,
+                project_root=_proj,
             )
             tool_result["repeating_patterns"] = partitioned["skill_candidates"]
             if partitioned["rule_violation_observed"]:

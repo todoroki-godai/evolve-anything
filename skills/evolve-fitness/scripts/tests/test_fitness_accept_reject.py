@@ -211,5 +211,5 @@ class TestInsufficientDataMessage:
     def test_message_names_population_sources(self):
         result = fe.run_fitness_evolution(history=[])
         assert result["status"] == "insufficient_data"
-        assert "optimize" in result["message"]
-        assert "evolve" in result["message"]
+        assert "optimize" in result["details"]["message"]
+        assert "evolve" in result["details"]["message"]

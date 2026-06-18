@@ -47,6 +47,19 @@ JACCARD_THRESHOLD = 0.5
 # 助詞・1 字漢字・ひらがな語尾はノイズになるため拾わない（圧縮の効きを担保）。
 _KEYWORD_RE = re.compile(r"[一-龥々]{2,}|[ァ-ヴー]{2,}")
 
+# テーマクラスタ提示への切り替え閾値（#558）。
+# 根拠: 初回 bootstrap で当 PJ 未昇格シグナルが多数（amamo PJ で 48 件 / 45 グループ）
+# 出ると Step 6.1「各 group を AskUserQuestion で順に確認」が質問マラソンになり、
+# explain-clearly（質問を畳む）ルールと衝突する。group 数が本閾値を超えたときだけ
+# テーマ別バケットの multiSelect 1 問に畳む。閾値以下は従来 per-group フロー（挙動不変）。
+# 12 は「per-group で出しても許容できる現実的上限（数問程度）」の経験則。
+THEME_CLUSTER_THRESHOLD = 12
+
+# テーマクラスタの TF-IDF コサイン距離しきい値（reorganize.cluster_skills と同流儀・
+# これ以下の距離が同一クラスタ）。bootstrap の発話断片はスキル本文より短くテーマ間の
+# 距離が開きやすいため、reorganize の 0.7 より緩めの 0.85 で粗いテーマ束にする。
+_CLUSTER_DISTANCE_THRESHOLD = 0.85
+
 
 # ─────────────────────────────────────────────────────────────────
 # keyword 抽出 / jaccard grouping（決定論・LLM 非依存）
@@ -115,6 +128,117 @@ def group_signals(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for g in groups:
         g["size"] = len(g["signal_keys"])
     return groups
+
+
+# ─────────────────────────────────────────────────────────────────
+# テーマクラスタリング（#558・決定論 TF-IDF・LLM 非依存）
+# ─────────────────────────────────────────────────────────────────
+def _theme_label(tokens: List[str]) -> str:
+    """クラスタの代表トークン列からテーマラベルを決定論で生成する。"""
+    picked = [t for t in tokens if t][:3]
+    return " / ".join(picked) if picked else "その他"
+
+
+def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """bootstrap group 群をテーマ別バケットに決定論クラスタリングする（#558）。
+
+    既存資産（``similarity.build_tfidf_matrix`` の TF-IDF +
+    ``reorganize.cluster_skills`` の階層クラスタリング）を再利用する（新しい類似度は
+    発明しない）。各 group の内容キーワード（``extract_keywords`` 抽出・漢字/カタカナ
+    2 字以上）を空白連結したものを TF-IDF の 1 文書として扱う。default の英語向け
+    tokenizer は日本語を割れないため、キーワードを ASCII 化せず空白区切りトークンで
+    与えて vocabulary を成立させる。
+
+    Returns: 各バケット = ``{"theme_label": str, "group_indices": [int...],
+    "groups": [<group dict>...]}``。theme_label はクラスタ centroid の上位トークンから
+    決定論生成。取りこぼし無し（全 group がいずれかのバケットに 1 回入る）。
+
+    sklearn/scipy 未インストール or 文書が少ない場合は単一バケットに全 group を入れて
+    graceful degradation する（決定論・例外を投げない）。
+    """
+    if not groups:
+        return []
+
+    # 各 group の文書テキスト = 内容キーワードの空白連結（日本語 tokenizer 回避）。
+    # キーワードが取れない断片は representative 全体をフォールバック語彙にする。
+    docs: List[str] = []
+    for g in groups:
+        rep = g.get("representative") or ""
+        kws = sorted(extract_keywords(rep))
+        docs.append(" ".join(kws) if kws else rep)
+
+    # 単一テーマに畳む graceful degradation（クラスタリング不能/不要時）。
+    def _single_bucket() -> List[Dict[str, Any]]:
+        all_tokens: List[str] = []
+        for d in docs:
+            all_tokens.extend(d.split())
+        # 最頻トークン上位を label に（決定論: 出現数降順 → トークン昇順）。
+        from collections import Counter
+
+        counter = Counter(t for t in all_tokens if t)
+        top = [t for t, _ in sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))]
+        return [{
+            "theme_label": _theme_label(top),
+            "group_indices": list(range(len(groups))),
+            "groups": list(groups),
+        }]
+
+    if len(groups) < 3:
+        return _single_bucket()
+
+    try:
+        from similarity import build_tfidf_matrix
+    except Exception:
+        return _single_bucket()
+
+    # TF-IDF 向けに語彙トークンを保持する vectorizer を similarity 経由で構築する。
+    # build_tfidf_matrix は stop_words='english' & default token_pattern（2 字以上の
+    # 単語）なので、空白区切りの日本語キーワードはそのまま 1 トークンとして拾われる。
+    skill_texts = {f"g{i}": docs[i] for i in range(len(docs))}
+    try:
+        matrix, feature_names, names = build_tfidf_matrix(skill_texts)
+    except Exception:
+        return _single_bucket()
+    if matrix is None or feature_names is None:
+        return _single_bucket()
+
+    try:
+        from reorganize import cluster_skills
+    except Exception:
+        return _single_bucket()
+
+    try:
+        labels = cluster_skills(matrix, threshold=_CLUSTER_DISTANCE_THRESHOLD)
+    except Exception:
+        return _single_bucket()
+
+    # names は dict 挿入順（= groups 順）。label → group index 群へ集約する。
+    idx_by_name = {name: int(name[1:]) for name in names}  # "gN" → N
+    cluster_map: Dict[int, List[int]] = {}
+    for pos, label in enumerate(labels):
+        gi = idx_by_name[names[pos]]
+        cluster_map.setdefault(int(label), []).append(gi)
+
+    # centroid 上位トークンで theme_label を決定論生成する。
+    import numpy as np
+
+    dense = matrix.toarray()
+    buckets: List[Dict[str, Any]] = []
+    # クラスタ順は「最小 group_index 昇順」で決定論的に並べる。
+    ordered = sorted(cluster_map.values(), key=lambda inds: min(inds))
+    for indices in ordered:
+        indices = sorted(indices)
+        # cluster の TF-IDF centroid から上位トークンを取る（決定論）。
+        rows = [pos for pos, name in enumerate(names) if idx_by_name[name] in indices]
+        centroid = np.mean(dense[rows], axis=0)
+        top_feat_idx = list(np.argsort(centroid)[::-1])
+        top_tokens = [feature_names[i] for i in top_feat_idx if centroid[i] > 0][:3]
+        buckets.append({
+            "theme_label": _theme_label(list(top_tokens)),
+            "group_indices": indices,
+            "groups": [groups[i] for i in indices],
+        })
+    return buckets
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -201,6 +325,10 @@ def build(
        "groups_total": int,    # 内容キーワード jaccard≥0.5 圧縮後の group 数
        "groups": [...],        # bootstrap 選択時に使う全 group（代表 idiom + signal_keys +
                                #   cross_pj_confirmed: [<他slug>, ...]・#462）
+       "theme_buckets": [...] | None,  # #558: group 数が THEME_CLUSTER_THRESHOLD 超の
+                               #   ときだけ TF-IDF テーマ別バケット
+                               #   [{theme_label, group_indices, groups}]。閾値以下は None
+                               #   （従来 per-group フロー・挙動不変）
        "slug": str,
        "dry_run": bool}
 
@@ -219,6 +347,7 @@ def build(
             "pj_total": 0,
             "groups_total": 0,
             "groups": [],
+            "theme_buckets": None,
             "slug": pj_slug,
             "dry_run": dry_run,
         }
@@ -229,11 +358,17 @@ def build(
     from correction_semantic.cross_pj_priority import prioritize as _prioritize
 
     groups = _prioritize(groups, pj_slug, idioms_path=idioms_path)
+    # #558: group 数が閾値超のときだけテーマ別バケットを emit（質問マラソン回避）。
+    # 閾値以下は theme_buckets=None で従来 per-group フローのまま（挙動不変）。
+    theme_buckets = (
+        cluster_groups(groups) if len(groups) >= THEME_CLUSTER_THRESHOLD else None
+    )
     return {
         "is_bootstrap": True,
         "pj_total": len(backlog),
         "groups_total": len(groups),
         "groups": groups,
+        "theme_buckets": theme_buckets,
         "slug": pj_slug,
         "dry_run": dry_run,
     }

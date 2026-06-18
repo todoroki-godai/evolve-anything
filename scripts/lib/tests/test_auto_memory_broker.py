@@ -438,3 +438,81 @@ def test_ingest_multiple_records_partial(tmp_data_dir, tmp_memory_dir):
     remaining = amb.read_queue("slug", tmp_data_dir)
     assert len(remaining) == 1
     assert remaining[0]["dedup_key"] == k_skipped
+
+
+# ─── is_rule_citation / enqueue rule-citation skip ────────────────────────────
+
+
+def test_is_rule_citation_detects_known_rule_slug():
+    """known rule slug を message に含む correction は rule citation と判定される。"""
+    assert amb.is_rule_citation({"message": "no-defer-use-subagent ルールに従ってください"}) is True
+
+
+def test_is_rule_citation_detects_rule_slug_in_corrected():
+    """corrected フィールドに rule slug を含む場合も判定対象。"""
+    assert amb.is_rule_citation({"corrected": "worktree-parallel を参照すること"}) is True
+
+
+def test_is_rule_citation_passes_regular_correction():
+    """通常の correction（rule slug を含まない）は False。"""
+    assert amb.is_rule_citation({"message": "always use absolute paths in bash commands"}) is False
+
+
+def test_is_rule_citation_empty_dict():
+    """空の correction は False（エラーにならない）。"""
+    assert amb.is_rule_citation({}) is False
+
+
+def test_is_rule_citation_project_rule_slug():
+    """PJ 固有 rule slug（no-llm-in-tests, tdd-first 等）も検出する。"""
+    assert amb.is_rule_citation({"message": "no-llm-in-tests を守れと言いましたよね"}) is True
+    assert amb.is_rule_citation({"message": "tdd-first に従いましょう"}) is True
+
+
+def test_enqueue_skips_rule_citation_correction(tmp_data_dir):
+    """rule citation のみからなる corrections は enqueue されない（False 返却）。"""
+    rule_corrections = [
+        {
+            "session_id": "sess-0001",
+            "timestamp": "2026-06-18T10:00:00Z",
+            "message": "no-defer-use-subagent ルールに従ってください",
+        }
+    ]
+    result = amb.enqueue(rule_corrections, "slug", tmp_data_dir)
+    assert result is False
+    assert amb.read_queue("slug", tmp_data_dir) == []
+
+
+def test_enqueue_skips_when_all_corrections_are_rule_citations(tmp_data_dir):
+    """全 correction が rule citation なら enqueue されない。"""
+    rule_corrections = [
+        {"session_id": "s1", "timestamp": "t1", "message": "tdd-first に従え"},
+        {"session_id": "s2", "timestamp": "t2", "message": "worktree-parallel を使え"},
+    ]
+    assert amb.enqueue(rule_corrections, "slug", tmp_data_dir) is False
+    assert amb.read_queue("slug", tmp_data_dir) == []
+
+
+def test_enqueue_keeps_mixed_corrections_without_rule_citations(tmp_data_dir):
+    """通常の correction は rule citation が混在していても enqueue する（rule citation 行を除いたうえで）。"""
+    mixed_corrections = [
+        {"session_id": "s1", "timestamp": "t1", "message": "no-defer-use-subagent ルールに従え"},
+        {"session_id": "s2", "timestamp": "t2", "message": "always use absolute paths"},
+    ]
+    result = amb.enqueue(mixed_corrections, "slug", tmp_data_dir)
+    assert result is True
+    records = amb.read_queue("slug", tmp_data_dir)
+    assert len(records) == 1
+    # rule citation が除外されて通常 correction だけが残っている
+    msgs = [c.get("message", "") for c in records[0]["corrections"]]
+    assert any("absolute paths" in m for m in msgs)
+    assert not any("no-defer-use-subagent" in m for m in msgs)
+
+
+def test_enqueue_normal_corrections_unaffected(tmp_data_dir):
+    """通常の correction（rule citation なし）は従来どおり enqueue される。"""
+    normal_corrections = _corrections(3)
+    assert amb.enqueue(normal_corrections, "slug", tmp_data_dir) is True
+    records = amb.read_queue("slug", tmp_data_dir)
+    assert len(records) == 1
+    assert len(records[0]["corrections"]) == 3

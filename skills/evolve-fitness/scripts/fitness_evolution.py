@@ -355,36 +355,59 @@ def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dic
     decisions = [r for r in history if r.get("human_accepted") is not None]
 
     if len(decisions) < BOOTSTRAP_MIN:
+        # #559: insufficient_data の出力契約を圧縮する。誤読防止のため SKILL.md に注記が
+        # 積み上がり続けた（#400 バグ#5 / #525-1 / #526-4 / #528-1 / #479）真因は、has_fitness /
+        # structural_reason / next_action / 3 段落 message が top-level に併存し情報過多だったこと。
+        #   - top-level: verdict（機械判定）+ one_liner（1 行サマリ。これが結論）
+        #   - details : 長文 message と冗長フィールドを隔離
+        # 後方互換: audit/sections.py が status + structural_reason を、evolve.py Phase 5 が
+        #   next_action を top-level で読む/上書きするため、両キーは top-level にも残す。
+
+        # structural_reason: スキル中心 PJ で母集団が構造的に貯まりにくい理由を示す (#354⑦, ADR-041)。
+        # 採点対象外なのは remediation の fix（rules/hook・構造修正等）。母集団は discover の
+        # skill diff + skill_evolve high/medium 提案の accept/reject から成る（ADR-041 で
+        # evolve_decisions が両者を自動記録）が、これらの提案回数が少ない PJ では 0/30 固定に
+        # なりやすい（永久 insufficient_data）。
+        # key 名 "skill_evolve_not_scored" は後方互換のため据え置き（ADR-041 以降は skill_evolve
+        # high/medium も採点されるため名称はやや misnomer だが、消費側コントラクト維持を優先）。
+        structural_reason = "skill_evolve_not_scored"
+        # 1 行の結論（#400 バグ#5）。run 単体では提案有無を知れないため楽観側を既定にし、
+        # evolve.py Phase 5 が現 run の提案 0 件を検出したら structural-stuck 版へ上書きする。
+        next_action = fitness_next_action(proposals_available=True)
+        long_message = (
+            f"データ不足: {len(decisions)}/{MIN_DATA_COUNT}件。"
+            f"あと {MIN_DATA_COUNT - len(decisions)} 件の accept/reject が必要。"
+            "母集団は optimize/rl-loop の accept/reject に加え、"
+            "evolve の skill diff 提案と skill_evolve high/medium 提案の "
+            "accept/reject（採点付き記録）も含む（ADR-041）。"
+            " ※ 採点対象外なのは remediation の fix（rules/hook・構造修正等）で、"
+            "これらが中心のスキル中心 PJ では母集団が貯まりにくい場合があります。"
+            " 重要: 母集団は『提案が出て初めて』accept/reject が発生して積み上がる。"
+            "skill_evolve が already_evolved 飽和（high/medium=0）かつ discover の "
+            "matched_skills=0 の PJ では提案自体が構造的に出ないため、evolve を何回回しても "
+            "0/N のまま貯まらない（『evolve を回せば貯まる』はこの構造では空手形）。"
+            "その場合は remediation 中心の運用が正常であり、無理に母集団を貯める必要はない"
+            "（fitness calibration は提案が出る PJ で機能する設計）。"
+        )
         return {
             "status": "insufficient_data",
+            "verdict": "insufficient_data",
+            "one_liner": (
+                "skill_evolve 未採点のため fitness 進化は評価不能（正常・要対応なし）。"
+                f"母集団 {len(decisions)}/{MIN_DATA_COUNT} 件 — 結論は details.next_action。"
+            ),
             "data_count": len(decisions),
             "required": MIN_DATA_COUNT,
-            # structural_reason: スキル中心 PJ で母集団が構造的に貯まりにくい理由を示す (#354⑦, ADR-041)。
-            # 採点対象外なのは remediation の fix（rules/hook・構造修正等）。母集団は discover の
-            # skill diff + skill_evolve high/medium 提案の accept/reject から成る（ADR-041 で
-            # evolve_decisions が両者を自動記録）が、これらの提案回数が少ない PJ では 0/30 固定に
-            # なりやすい（永久 insufficient_data）。
-            # key 名 "skill_evolve_not_scored" は後方互換のため据え置き（ADR-041 以降は skill_evolve
-            # high/medium も採点されるため名称はやや misnomer だが、消費側コントラクト維持を優先）。
-            "structural_reason": "skill_evolve_not_scored",
-            # 1 行の結論（#400 バグ#5）。run 単体では提案有無を知れないため楽観側を既定にし、
-            # evolve.py Phase 5 が現 run の提案 0 件を検出したら structural-stuck 版へ上書きする。
-            "next_action": fitness_next_action(proposals_available=True),
-            "message": (
-                f"データ不足: {len(decisions)}/{MIN_DATA_COUNT}件。"
-                f"あと {MIN_DATA_COUNT - len(decisions)} 件の accept/reject が必要。"
-                "母集団は optimize/rl-loop の accept/reject に加え、"
-                "evolve の skill diff 提案と skill_evolve high/medium 提案の "
-                "accept/reject（採点付き記録）も含む（ADR-041）。"
-                " ※ 採点対象外なのは remediation の fix（rules/hook・構造修正等）で、"
-                "これらが中心のスキル中心 PJ では母集団が貯まりにくい場合があります。"
-                " 重要: 母集団は『提案が出て初めて』accept/reject が発生して積み上がる。"
-                "skill_evolve が already_evolved 飽和（high/medium=0）かつ discover の "
-                "matched_skills=0 の PJ では提案自体が構造的に出ないため、evolve を何回回しても "
-                "0/N のまま貯まらない（『evolve を回せば貯まる』はこの構造では空手形）。"
-                "その場合は remediation 中心の運用が正常であり、無理に母集団を貯める必要はない"
-                "（fitness calibration は提案が出る PJ で機能する設計）。"
-            ),
+            # 後方互換: top-level に残す（sections.py / evolve.py が読む・上書きする）。
+            "structural_reason": structural_reason,
+            "next_action": next_action,
+            # 冗長フィールドの隔離先（#559）。
+            "details": {
+                "has_fitness": False,
+                "structural_reason": structural_reason,
+                "next_action": next_action,
+                "message": long_message,
+            },
         }
 
     if len(decisions) < MIN_DATA_COUNT:

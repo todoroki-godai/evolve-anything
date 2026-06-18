@@ -769,10 +769,13 @@ def main():
             confirmed_by="reflect_promote_weak",
             dry_run=args.dry_run,
         )
-        # #476-4: 昇格後の corrections_human を返す（growth_report の promoted_today は対話前
+        # #476-4: 昇格後の corrections_human_allpj を返す（growth_report の promoted_today は対話前
         # スナップショットで固定されるため、CLI が更新後カウントを返し assistant が最新値を
         # 表示できるようにする）。dry_run は corrections に書かないため pre-promotion 値のまま。
         # 同じ corrections ファイル（CLI 指定 or DATA_DIR fallback）を読んで human-source を数える。
+        # #557: キー名を corrections_human_allpj に変更 — これは全PJ集計値（DATA_DIR 内の
+        # corrections.jsonl 全件対象）であり、per-PJ の growth_report["corrections_human"] とは
+        # 別物。混同すると 41/10 のような不整合表示になる（#526-1 の事故再発防止）。
         from correction_semantic.provenance_weight import count_human_corrections
         if args.corrections_file:
             _corr_path = corrections_file
@@ -784,7 +787,7 @@ def main():
             "status": "promoted_weak",
             **res,
             "confirmed_idioms": confirm_res.get("confirmed", 0),
-            "corrections_human": _human,
+            "corrections_human_allpj": _human,  # 全PJ集計値（per-PJの growth_report.corrections_human とは別物 — #557）
         }, ensure_ascii=False, indent=2))
         return
 

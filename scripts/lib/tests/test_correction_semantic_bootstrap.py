@@ -230,3 +230,107 @@ def test_default_marker_path_includes_slug(tmp_path: Path):
     p = bb.default_marker_path("my-pj", base=tmp_path)
     assert p.name == "bootstrap_done-my-pj.marker"
     assert p.parent == tmp_path
+
+
+# ─────────────────────────────────────────────────────────────────
+# テーマクラスタリング（#558・決定論 TF-IDF・LLM 非依存）
+# ─────────────────────────────────────────────────────────────────
+def _many_groups(n: int):
+    """n 個の group dict を作る（representative はテーマ別に keyword を持つ）。
+
+    前半は「金額/表示」系、後半は「コスト/見積もり」系で、TF-IDF クラスタが
+    2 テーマ以上に割れるよう内容キーワードを散らす。
+    """
+    groups = []
+    for i in range(n):
+        if i % 2 == 0:
+            rep = f"金額表示がきれてる{i}"
+        else:
+            rep = f"コスト見積もりを直して{i}"
+        groups.append({
+            "representative": rep,
+            "signal_keys": [f"k{i}"],
+            "size": 1,
+            "confirmable_idiom": None,
+        })
+    return groups
+
+
+def test_cluster_threshold_constant_defined():
+    # 閾値定数が定義されている（根拠コメント付き）。
+    assert isinstance(bb.THEME_CLUSTER_THRESHOLD, int)
+    assert bb.THEME_CLUSTER_THRESHOLD > 0
+
+
+def test_cluster_groups_returns_buckets():
+    # クラスタ結果は各バケット = {theme_label, group_indices, groups}。
+    groups = _many_groups(14)
+    buckets = bb.cluster_groups(groups)
+    assert isinstance(buckets, list)
+    assert len(buckets) >= 1
+    for b in buckets:
+        assert "theme_label" in b
+        assert isinstance(b["theme_label"], str) and b["theme_label"]
+        assert "group_indices" in b
+        assert "groups" in b
+        assert len(b["group_indices"]) == len(b["groups"])
+    # 取りこぼし無し: 全 group がいずれかのバケットに 1 回入る。
+    covered = sorted(i for b in buckets for i in b["group_indices"])
+    assert covered == list(range(len(groups)))
+
+
+def test_cluster_groups_deterministic():
+    # 同入力 → 同出力（決定論）。
+    groups = _many_groups(16)
+    a = bb.cluster_groups(groups)
+    b = bb.cluster_groups(groups)
+    assert a == b
+
+
+def test_cluster_groups_separates_themes():
+    # 明確に異なる 2 テーマは別バケットに分かれる。
+    groups = _many_groups(14)
+    buckets = bb.cluster_groups(groups)
+    assert len(buckets) >= 2
+
+
+# ─────────────────────────────────────────────────────────────────
+# build: 閾値超のときだけバケット構造、以下は従来構造（挙動不変）
+# ─────────────────────────────────────────────────────────────────
+def test_build_no_buckets_below_threshold(tmp_path: Path):
+    # group 数 < 閾値 → 従来構造（buckets 無し or None）、挙動は変わらない。
+    ws = tmp_path / "weak_signals.jsonl"
+    sigs = [_sig(f"金額表示{i}がきれてる", i) for i in range(3)]
+    append_signals(sigs, path=ws)
+    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    assert res["is_bootstrap"] is True
+    # 閾値以下なので buckets は付かない（None）か空。groups は従来どおり残る。
+    assert not res.get("theme_buckets")
+    assert isinstance(res["groups"], list)
+
+
+def test_build_buckets_above_threshold(tmp_path: Path):
+    # group 数 >= 閾値 → theme_buckets が emit される。
+    ws = tmp_path / "weak_signals.jsonl"
+    # 各 idiom に固有の漢字 2 字キーワードを与え jaccard で merge されないようにする
+    # （group 数 = 件数になり閾値を確実に超える）。テーマは 2 系統に散らす。
+    theme_a = ["価格", "費用", "料金", "原価", "予算", "経費", "金額", "代金"]
+    theme_b = ["画面", "表示", "配置", "余白", "色彩", "枠線", "書体", "図形"]
+    sigs = []
+    n = bb.THEME_CLUSTER_THRESHOLD + 4
+    for i in range(n):
+        if i % 2 == 0:
+            kw = theme_a[(i // 2) % len(theme_a)]
+            sigs.append(_sig(f"{kw}項目{i}番を直して", i))
+        else:
+            kw = theme_b[(i // 2) % len(theme_b)]
+            sigs.append(_sig(f"{kw}欄{i}番を直して", i))
+    append_signals(sigs, path=ws)
+    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    assert res["is_bootstrap"] is True
+    assert res["groups_total"] >= bb.THEME_CLUSTER_THRESHOLD
+    buckets = res.get("theme_buckets")
+    assert buckets, "閾値超なら theme_buckets が emit されるべき"
+    # 取りこぼし無し
+    covered = sorted(i for b in buckets for i in b["group_indices"])
+    assert covered == list(range(res["groups_total"]))
