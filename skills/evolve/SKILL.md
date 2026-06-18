@@ -33,6 +33,36 @@ Observe データ確認 → Diagnose → Compile → Housekeeping → Report の
 
 セクション 1-6 のコンポーネント（Observe hooks, テレメトリ, Feedback, Audit, Prune, Discover）が全て利用可能であること。
 
+## dry-run 記録可否の一元表（MUST — 手順本体に入る前に必ず確認する）
+
+evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-run（`--dry-run`）で記録するか否かが分岐する**。
+長い手順の終盤で取り違えやすい（過去に実行ミスが起きた）ので、各書き込み操作の dry-run 記録可否をここに集約する。
+各 Step の本文に書かれた実際の挙動（`mark_done(dry_run=...)` / `record_reviewed(dry_run=...)` /
+`rl-evolve --drain` の設計）を転記したもの。個々の Step の記述が正準で、この表は早見表として使う。
+
+| Step | 操作 | 関数 / コマンド | dry-run 時 | 非 dry-run 時 |
+|------|------|----------------|-----------|--------------|
+| 5.5 | remediation 却下を suppression ledger に記録 | `record_rejection`（SKILL では dry_run 時ループを実行しない・ライブラリは `persist=False`） | **書かない**（MUST NOT） | 書く |
+| 6.1 | 初回 bootstrap 完了 marker | `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` | **書かない** | 書く |
+| 6.2 | 今日の修正確認 既読追記 | `daily_review.record_reviewed(..., dry_run=dry_run)` | **書かない** | 書く |
+| 6.5 | auto-memory drain（memory 書込 / belief_blocks） | `auto_memory_broker.ingest_memory_results(...)` | **書かない**（分析パスはゼロ書込） | 書く |
+| run 末尾 | evolve_decisions queue 書込（before_sha スナップショット） | `emit_decisions(...)` の `_write_queue` | **書かない** | 書く |
+| run 末尾 | drain 検出用 **pending marker** | `emit_decisions(...)` の `write_pending_marker` | **書く**（#402/ADR-041・文書化された意図的 dry-run 書込・#513） | 書く |
+| 7.8 | optimize_history へ accept/reject 記録 | `rl-evolve --drain`（`drain_pending`） | **書く**（drain は dry-run 分析後でも必ず実行） | 書く |
+| 7.8 | 決定論 weak_signals の永続化（manual_edit / esc / rephrase / permission_deny） | `rl-evolve --drain`（`persist_weak_signals_drain`） | **書く**（drain の apply 境界・#484/#513） | 書く |
+
+**2 つの設計の違いを取り違えない（MUST）**:
+
+- **`mark_done` / `record_reviewed` / `record_rejection` / auto-memory ingest / queue 書込**は、dry-run で
+  **一切書かない**（`pitfall_dryrun_stateful_store_write` を踏まない最下層ゲート）。`--dry-run` は「分析だけで
+  ファイルを変えない」契約なので、これらは非 dry-run のときだけ書く。
+- **`rl-evolve --drain`（Step 7.8）と pending marker（run 末尾）は、dry-run でも書く**。理由は #402/ADR-041/#513:
+  evolve の標準フローは `rl-evolve --dry-run` で分析 → assistant が Step 3 で対話適用、という運用なので、
+  drain を dry-run でゲートすると accept/reject の記録と決定論 weak_signals の永続化が **実 PJ で永久に死ぬ**
+  （#505 の誤ゲートを revert した経緯）。drain は tool 文脈（CLI）で apply 境界に走り、検出は冪等（dedup）
+  なので dry-run 分析後に走らせて書くのが正。pending marker も drain 検出に必要なので dry-run でも書く
+  （store/queue とは別状態の運用マーカー）。
+
 ## 提案詳細プロトコル（全 AskUserQuestion 共通）
 
 evolve が「やりますか？」と尋ねる前に、ユーザーが Yes/No を判断できる材料を提示する共通ルール。

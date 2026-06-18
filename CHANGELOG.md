@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(evolve): 高頻度 `rule_violation_observed` を hook_candidate へ昇格する導線を追加（closes #585）** — `builtin_replaceable` は `tool_usage_hook_candidate` に昇格して remediation proposable に乗るのに、`rule_violation_lane.py` が分離する `rule_violation_observed`（例: `rule_installed_but_not_enforced`・同一コマンドの高頻度違反）は **surface のみ**で hook 候補にも remediation proposable にも乗らず、「最も enforce すべき高頻度違反」が放置されていた（large 環境で `cd` 400回超の rule 違反が毎回観察のみ）。`rule_violation_lane.py` に閾値 gate 付きの hook_candidate 昇格を追加し `evolve.py` に配線。レーン分離（既存）→ 高頻度違反のみ hook 昇格、という builtin_replaceable と同型のフロー。決定論・LLM 非依存。TDD（`test_rule_violation_hook_promotion.py`）。
+
+### Changed
+- **docs(evolve): dry-run 記録可否の一元表を SKILL.md 冒頭に追加（closes #588）** — evolve 手順が Step 0.5〜11 + 多数の MUST と長大で、「dry-run では記録しない」vs「drain は dry-run でも実行」のように**記録可否が Step ごとに分岐**し実行者が取り違えやすかった（実際に長い手順の終盤で実行ミスが発生）。SKILL.md 冒頭に「Step / 操作 / dry-run時 / 非dry-run時」の一元表（8行）を追加し、`mark_done`・`record_reviewed`（dry-run では書かない）と `rl-evolve --drain` の `persist_weak_signals_drain` / pending marker（dry-run でも書く＝#402/#513 の意図的設計）の**違いを明示**。ドキュメントのみ・コード変更なし。
+
+### Fixed
+- **fix(evolve): weak_signals 過去未読分の昇格導線を surface し `correction_capture` 案内文の矛盾を解消（closes #583）** — observability の「未昇格 llm_judge は今日の修正確認 phase で昇格可能」案内が daily/bootstrap の実導線と食い違っていた: `bootstrap_backlog` が marker 済み（`is_done`）だと過去 backlog を一切提示せず、`daily_review` は `max_groups=5` で上位 group しか出さない（既読化されないので 6 番目以降が毎回こぼれる）ため、「marker 済み × daily 上位を超える過去未読分」が両 phase から構造的に外れ、案内どおり進めても入口がなかった。過去 backlog 全件の真の入口は `reflect --show-weak-signals`/`--promote-weak`（`read_unpromoted` ベースで marker/既読を見ず全件拾う）だが surface されていなかった。`sections_weak_signals.py` に `_backlog_lane_lines` を追加し、bootstrap が `is_done` かつ `daily.build_review(dry_run=True).remaining > 0` のときだけ過去 backlog N 件を昇格できる別レーン行を surface（marker 未設定 or daily 全件カバー時は出さず重複・誤誘導を回避）。判定は read-only・取得失敗時は従来挙動へフォールバック。決定論・LLM 非依存。TDD（`test_weak_signals_observability.py`）。
+
 ## [1.104.0] - 2026-06-18
 
 ### Added

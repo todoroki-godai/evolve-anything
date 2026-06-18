@@ -96,6 +96,45 @@ def _read_reviewed_keys() -> set:
         return set()
 
 
+def _backlog_lane_lines(current_slug: Optional[str]) -> List[str]:
+    """過去 backlog（daily phase 圏外）の昇格導線を別レーンで返す（#583）。
+
+    「今日の修正確認 phase で昇格可能」の案内は daily_review が拾える分にしか当てはまらない。
+    daily_review は ``max_groups``（既定 5）で上位 group しか提示せず、bootstrap も marker 済み
+    （``is_done``）なら過去 backlog を拾わない。両者の隙間に落ちる過去未読分（marker 済み かつ
+    ``build_review`` の ``remaining > 0``）が実在するときだけ、``reflect --show-weak-signals``
+    → ``--promote-weak`` という全件入口を案内する。
+
+    判定は read-only（marker は読むだけ・build_review は読み取りのみで既読集合を書かない）。
+    slug 未解決 / モジュール未解決 / 読込失敗は空リスト（従来挙動＝誘導なしへフォールバック）。
+    """
+    if not current_slug:
+        return []
+    try:
+        from correction_semantic import bootstrap_backlog as _bb
+        from correction_semantic import daily_review as _dr
+    except ImportError:
+        return []
+    try:
+        # bootstrap が未消化（marker 未設定）なら過去 backlog は bootstrap がまとめて拾う。
+        # その場合は別レーンを出さない（誤誘導・重複案内の回避）。
+        if not _bb.is_done(current_slug):
+            return []
+        # marker 済み: daily が上位 group しか拾えないので remaining 分が構造的に外れる。
+        review = _dr.build_review(current_slug, dry_run=True)
+        remaining = int(review.get("remaining", 0) or 0)
+    except Exception:
+        return []
+    if remaining <= 0:
+        return []
+    return [
+        f"  ⚠ うち過去 backlog {remaining} 件は今日の修正確認 phase の上位提示から外れている"
+        "（bootstrap 消化済み・daily は上位のみ提示）。"
+        " 全件は `/rl-anything:reflect --show-weak-signals --weak-channel llm_judge` で確認し"
+        " `--promote-weak <signal_key,...>` で昇格する。",
+    ]
+
+
 # matrix surface で列挙するチャネルの順序（既知チャネル → llm_judge → その他）。
 _CHANNEL_ORDER = (
     "manual_edit_after_ai",
@@ -211,6 +250,17 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
                 " `/rl-anything:evolve` の今日の修正確認 phase で昇格可能"
                 "（既読済は再提示されない）。"
             )
+            # #583: 「今日の修正確認 phase で昇格可能」の案内と実導線の食い違いを解消する。
+            # daily_review は max_groups（既定 5）で上位 group しか提示せず、bootstrap も
+            # marker 済み（is_done）なら過去 backlog を一切拾わない。両者の隙間に落ちる
+            # 「marker 済み × daily 上位を超える過去未読分」は両 phase から構造的に外れる
+            # （案内文どおりに進めても入口がない）。その隙間が実在する（marker 済み かつ
+            # daily.build_review の remaining > 0）ときだけ、過去 backlog 全件の真の入口
+            # （reflect --show-weak-signals → --promote-weak は read_unpromoted ベースで
+            # marker/既読を見ず全件拾える）を別レーンで surface する。判定は read-only で、
+            # 取得失敗時は従来挙動（誘導なし）にフォールバックする。
+            for backlog_line in _backlog_lane_lines(current_slug):
+                trailer.append(backlog_line)
         if unread_deterministic > 0:
             trailer.append(
                 f"  うち決定論チャネル {unread_deterministic} 件は"

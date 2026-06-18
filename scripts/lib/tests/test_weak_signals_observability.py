@@ -479,3 +479,123 @@ def test_hint_both_channels_when_mixed(
     assert "今日の修正確認" in body
     # 決定論チャネルあり → reflect 誘導
     assert "--promote-weak" in body
+
+
+# ── #583: 過去未読 backlog（daily phase 圏外）の昇格導線を別レーンで surface ──
+
+
+def _point_daily_seen(tmp_path: Path, monkeypatch, seen_keys: list) -> None:
+    """daily_review.default_seen_path を tmp に向け、seen_keys を既読として書く。"""
+    import json
+
+    import correction_semantic.daily_review as dr
+
+    seen_path = tmp_path / "correction_review_seen.jsonl"
+    with open(seen_path, "w", encoding="utf-8") as f:
+        for k in seen_keys:
+            f.write(json.dumps({"key": k}) + "\n")
+    monkeypatch.setattr(dr, "default_seen_path", lambda base=None: seen_path)
+
+
+def _set_bootstrap_marker(tmp_path: Path, monkeypatch, *, done: bool) -> None:
+    """bootstrap_backlog.default_marker_path を tmp に向け、marker の有無を制御する。"""
+    import correction_semantic.bootstrap_backlog as bb
+
+    marker = tmp_path / "bootstrap_done.marker"
+    if done:
+        marker.write_text("", encoding="utf-8")
+    monkeypatch.setattr(bb, "default_marker_path", lambda slug, base=None: marker)
+
+
+def _llm_judge_recs(slug: str, n: int, *, start: int = 0) -> list:
+    """互いに非類似な user 発話を持つ未読 llm_judge レコードを n 件作る。
+
+    daily_review の group 化（内容キーワード jaccard≥0.5）で圧縮されないよう、各レコードに
+    固有名詞中心の異なる発話を与える（1 件 = 1 group になる）。provenance を持たせて
+    build_review が representative を組めるようにする。
+    """
+    distinct = [
+        "アルファ機能を直して", "ベータ画面の余白", "ガンマ集計のバグ",
+        "デルタ認証エラー", "イプシロン描画崩れ", "ゼータ通知設定",
+        "イータ検索結果", "シータ並び順修正",
+    ]
+    out = []
+    for i in range(n):
+        text = distinct[(start + i) % len(distinct)] + f"ケース{start + i}"
+        out.append({
+            "channel": "llm_judge",
+            "promoted": False,
+            "pj_slug": slug,
+            "signal_key": f"j{start + i}",
+            "provenance": {
+                "source_path": f"/x/{start + i}.jsonl",
+                "line_no": start + i,
+                "text": text,
+                "reason": "修正指示",
+            },
+        })
+    return out
+
+
+def test_backlog_lane_surfaced_when_bootstrap_done_and_daily_overflows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """bootstrap marker 済み + 未読 llm_judge が daily 上位(max_groups)を超えるとき、
+    過去 backlog 全件を reflect --promote-weak で昇格できる別レーン導線を surface する（#583）。
+
+    daily_review.build_review は max_groups=5 でトップ group しか提示せず、bootstrap も
+    marker 済みなら何も拾わない。結果、超過分は両 phase から構造的に外れるため、案内文の
+    「今日の修正確認 phase で昇格可能」だけだと過去未読分に入口がない。
+    """
+    current_slug = tmp_path.name
+    # 7 件の互いに非類似な未読 llm_judge（daily は上位 5 group のみ → remaining 2）
+    _seed_multi_pj(tmp_path, monkeypatch, _llm_judge_recs(current_slug, 7))
+    _point_daily_seen(tmp_path, monkeypatch, [])
+    _set_bootstrap_marker(tmp_path, monkeypatch, done=True)
+
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # 従来の evolve 誘導は残る（daily が拾う分はある）
+    assert "今日の修正確認" in body
+    # 過去 backlog 全件の入口（reflect --show-weak-signals / --promote-weak）が別レーンで出る
+    assert "--show-weak-signals" in body
+    assert "--promote-weak" in body
+    # llm_judge チャネルに絞る案内であること（決定論チャネル用の従来 reflect 行と区別）
+    assert "llm_judge" in body
+
+
+def test_backlog_lane_absent_when_bootstrap_pending(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """bootstrap marker 未設定（pending）なら、過去 backlog は bootstrap がまとめて拾うので
+    別レーン導線は出さない（誤誘導・重複案内を避ける）（#583）。"""
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, _llm_judge_recs(current_slug, 7))
+    _point_daily_seen(tmp_path, monkeypatch, [])
+    _set_bootstrap_marker(tmp_path, monkeypatch, done=False)
+
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "今日の修正確認" in body
+    # bootstrap pending → backlog 別レーンは出さない
+    assert "--show-weak-signals" not in body
+
+
+def test_backlog_lane_absent_when_daily_covers_all(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """bootstrap marker 済みでも未読 llm_judge が daily 上位に収まる（remaining=0）なら、
+    過去 backlog の取りこぼしは無いので別レーン導線を出さない（#583）。"""
+    current_slug = tmp_path.name
+    # 3 件 → daily の max_groups=5 に収まる（remaining=0）
+    _seed_multi_pj(tmp_path, monkeypatch, _llm_judge_recs(current_slug, 3))
+    _point_daily_seen(tmp_path, monkeypatch, [])
+    _set_bootstrap_marker(tmp_path, monkeypatch, done=True)
+
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "今日の修正確認" in body
+    assert "--show-weak-signals" not in body

@@ -20,6 +20,13 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 _TRUNCATE_MAX_CHARS = 120
 _ELLIPSIS = "…"
 
+# rule_violation_observed を hook_candidate へ昇格する頻度しきい値（#585）。
+# builtin_replaceable の検出しきい値（REPEATING_THRESHOLD=5）と同水準だと
+# 低頻度の偶発違反まで remediation proposable に乗って質問攻めになるため、
+# 「enforce すべき高頻度違反」に絞る独自しきい値を定義する。違反は既に rules で
+# 明文禁止済みであり「hook で機械強制する」価値があるのは反復が定着した違反に限る。
+RULE_VIOLATION_HOOK_THRESHOLD = 20
+
 
 def truncate_example(text: str) -> str:
     """コマンド example を 1 行・最大 120 字に truncate する。
@@ -199,6 +206,137 @@ def partition_rule_violations(
         "skill_candidates": skill_candidates,
         "rule_violation_observed": violations,
     }
+
+
+# 違反コマンドを block する enforcement PreToolUse hook テンプレート（#585）。
+# builtin_replaceable の hook（代替ツールへ誘導）と違い、これは「既存 rules で禁止済み
+# のコマンドを機械的に block する」enforcement 型。代替は rules 本文に記載済みのため
+# ここでは block + ルール参照誘導に徹する。
+_ENFORCEMENT_HOOK_TEMPLATE = '''\
+#!/usr/bin/env python3
+"""PreToolUse hook: 既存 rules で禁止済みのコマンドを block する（rl-anything #585 生成）。
+
+rule_installed_but_not_enforced（ルール導入済みだが実行が止まっていない）違反を
+高頻度観測したため、機械的に enforce する。代替手段は該当 rule 本文を参照すること。
+"""
+import json
+import sys
+
+# 禁止コマンド head の集合。
+PROHIBITED = {prohibited_set}
+
+
+def _get_command_head(command):
+    parts = command.strip().lstrip("$").strip().split()
+    idx = 0
+    while idx < len(parts) and parts[idx] in ("env", "sudo"):
+        idx += 1
+    return parts[idx] if idx < len(parts) else ""
+
+
+def check_command(command):
+    head = _get_command_head(command)
+    if head in PROHIBITED:
+        return (
+            f"`{{head}}` は既存 rules で禁止されています。該当ルールの代替手段を使用してください。"
+        )
+    return None
+
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+    except (json.JSONDecodeError, EOFError):
+        sys.exit(0)
+    if data.get("tool_name") != "Bash":
+        sys.exit(0)
+    command = data.get("tool_input", {{}}).get("command", "")
+    if not command:
+        sys.exit(0)
+    reason = check_command(command)
+    if reason:
+        print(reason, file=sys.stderr)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _enforcement_hook_script_path() -> Path:
+    """enforcement hook の出力先（global ~/.claude/hooks）。"""
+    return Path.home() / ".claude" / "hooks" / "enforce-prohibited-commands.py"
+
+
+def make_hook_candidate_issues_from_rule_violations(
+    rule_violations: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """高頻度 rule_violation_observed を tool_usage_hook_candidate issue に昇格する（#585）。
+
+    builtin_replaceable が make_hook_candidate_issue で remediation proposable に
+    乗るのと同じ経路に、rule_installed_but_not_enforced 違反のうち
+    RULE_VIOLATION_HOOK_THRESHOLD 以上の高頻度なものを乗せる。
+
+    違反コマンド head を block する enforcement PreToolUse hook を 1 つの scaffold に
+    まとめて生成し、既存の make_hook_candidate_issue（type=tool_usage_hook_candidate）で
+    issue 化する。これにより remediation の fix_hook_scaffold / rationale / confidence
+    がそのまま再利用される。source のみ "rule_violation_observed" に上書きし、由来を
+    トレース可能にする。
+
+    入力は破壊しない。決定論・LLM 非依存。
+
+    Returns:
+        tool_usage_hook_candidate issue のリスト（昇格対象が無ければ空リスト）。
+    """
+    # 遅延 import で循環依存を避ける（issue_schema は rule_violation_lane を import しない）。
+    from issue_schema import make_hook_candidate_issue
+
+    eligible: List[Dict[str, Any]] = []
+    for viol in rule_violations or []:
+        head = str(viol.get("violated_command", "")).strip()
+        if not head:
+            continue
+        count = viol.get("count", 0) or 0
+        if count < RULE_VIOLATION_HOOK_THRESHOLD:
+            continue
+        eligible.append({"head": head, "count": count})
+
+    if not eligible:
+        return []
+
+    # 違反 head をまとめて 1 つの enforcement hook scaffold にする。
+    commands = sorted({e["head"] for e in eligible})
+    total_count = sum(e["count"] for e in eligible)
+
+    script_path = _enforcement_hook_script_path()
+    script_content = _ENFORCEMENT_HOOK_TEMPLATE.format(
+        prohibited_set=repr(set(commands)),
+    )
+    import json
+
+    settings_diff = json.dumps({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    "command": f"python3 {script_path}",
+                }],
+            }],
+        },
+    }, ensure_ascii=False, indent=2)
+
+    hook_candidate = {
+        "script_path": str(script_path),
+        "script_content": script_content,
+        "settings_diff": settings_diff,
+        "target_commands": commands,
+    }
+    issue = make_hook_candidate_issue(hook_candidate, total_count)
+    # 由来を rule_violation レーンに上書き（builtin_replaceable と区別する）。
+    issue["source"] = "rule_violation_observed"
+    return [issue]
 
 
 def default_rule_dirs(project_root: Path) -> List[Path]:

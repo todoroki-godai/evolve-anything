@@ -961,6 +961,19 @@ def run_evolve(
                     hook_candidate, total_count,
                 ))
 
+        # --- 高頻度 rule_violation_observed を hook_candidate に昇格 (#585) ---
+        # rule_installed_but_not_enforced（ルール導入済みだが実行が止まっていない）の
+        # 高頻度違反は surface のみだったが、builtin_replaceable と同様に enforcement hook
+        # 候補として remediation proposable に乗せる。レーン分離（discover）の出力を再利用。
+        rule_violations = discover_data.get("rule_violation_observed", [])
+        if rule_violations:
+            from rule_violation_lane import (
+                make_hook_candidate_issues_from_rule_violations,
+            )
+            issues.extend(
+                make_hook_candidate_issues_from_rule_violations(rule_violations)
+            )
+
         # --- skill_evolve の適性判定結果を issue に変換 ---
         se_phase = result["phases"].get("skill_evolve", {})
         for assessment in se_phase.get("assessments", []):
