@@ -713,6 +713,11 @@ def main():
                         help="weak_signals レーンの未昇格レコードを表示（#431/#432 の二層化）")
     parser.add_argument("--weak-channel", type=str, default=None,
                         help="--show-weak-signals/--promote-weak: チャネルで絞る（例: llm_judge）")
+    parser.add_argument("--context", type=str, default=None,
+                        help="--show-weak-signals: 現在の文脈（自由文）。関連度ゲートで無関係な"
+                             "過去経験を suppressed に分離し、関連度スコア付きで提示する（#565）")
+    parser.add_argument("--relevance-threshold", type=float, default=None,
+                        help="--context: 関連度ゲートの閾値（既定は校正済み 0.5・#565）")
     parser.add_argument("--promote-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）の weak_signal を corrections へ昇格")
     parser.add_argument("--weak-signals-file", type=str, default=None,
@@ -730,11 +735,33 @@ def main():
     idioms_file = Path(args.idioms_file) if args.idioms_file else None
 
     # --show-weak-signals: weak_signals レーンの未昇格レコードを表示（#431/#432 二層化）
+    # --context が渡されたら relevance_gate（#565）で「現在の文脈」と無関係な過去経験を
+    # suppressed に分離し、関連度スコア付きで提示する。FinAcumen 流の「校正済み閾値を
+    # 超えた経験だけ提案根拠に出し、無関係メモリは明示抑制（黙って消さない）」を実現する。
     if args.show_weak_signals:
         from correction_semantic import promote as _cs_promote
         unp = _cs_promote.read_unpromoted(
             weak_signals_path=weak_signals_file, channel=args.weak_channel
         )
+        if args.context is not None:
+            from correction_semantic import relevance_gate as _rg
+            thr = (
+                args.relevance_threshold
+                if args.relevance_threshold is not None
+                else _rg.RELEVANCE_THRESHOLD
+            )
+            gated = _rg.gate_candidates(args.context, unp, threshold=thr)
+            print(json.dumps({
+                "status": "weak_signals",
+                # 関連度ゲート適用後: 閾値を超えた経験だけが提案根拠（kept）に出る。
+                "unpromoted": gated["kept"],
+                "count": len(gated["kept"]),
+                # 無関係な経験は黙って消さず suppressed に分離して理由を残す。
+                "suppressed": gated["suppressed"],
+                "channel": args.weak_channel,
+                "relevance_gate": _rg.summarize_gate(gated),
+            }, ensure_ascii=False, indent=2))
+            return
         print(json.dumps({
             "status": "weak_signals",
             "unpromoted": unp,

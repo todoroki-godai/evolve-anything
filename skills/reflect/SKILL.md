@@ -228,6 +228,16 @@ rl-reflect --show-weak-signals --weak-channel llm_judge
 
 出力 JSON の `unpromoted` 配列を読み、各レコードの `channel`（`llm_judge` = LLM 意味判定 / `rephrase` = 言い直し / `manual_edit_after_ai` / `permission_deny` / `esc_interrupt`）・`provenance.text`（元発話）・`provenance.reason`（判定理由）・`signal_key` を一覧表示する。
 
+**関連度ゲート（#565・FinAcumen 流）**: 現在の作業文脈に無関係な過去経験が提案根拠に混じるのを防ぎたい場合、`--context` に現在の文脈（自由文・直近の作業内容や扱っているテーマ）を渡す:
+
+```
+rl-reflect --show-weak-signals --weak-channel llm_judge --context "認証ルーティングの設定を直している"
+# 閾値を上書きする場合（既定は校正済み 0.5）:
+rl-reflect --show-weak-signals --context "..." --relevance-threshold 0.6
+```
+
+`--context` を渡すと各候補に **関連度スコア**（`relevance_score`・0.0-1.0）が付き、校正済み閾値を超えた経験だけが `unpromoted`（提案根拠）に**関連度降順**で残る。閾値未満の無関係な経験は**黙って消さず** `suppressed` 配列に分離され、`suppressed_reason`（なぜ落としたか）が残る。出力末尾の `relevance_gate`（`{kept, suppressed, total, threshold, gate_applied}`）で抑制の効きを確認できる。文脈キーワードが抽出できない（空 context 等）場合は `gate_applied=False` で全件素通し（安全側フォールバック・経験を勝手に隠さない）。決定論・LLM 非依存。
+
 2. **本物の修正だけを昇格**: ユーザーに各レコードが**本物の修正か**を確認する（weak_signals は本質的にノイジーなので、機械的に全部昇格しない）。本物と確認できた `signal_key` だけを昇格する:
 
 ```

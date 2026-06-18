@@ -1168,3 +1168,74 @@ class TestRevokeIdiom:
         assert out["dry_run"] is True
         assert corr.read_text(encoding="utf-8") == before_corr
         assert idioms.read_text(encoding="utf-8") == before_idioms
+
+
+# --- Test: --show-weak-signals に --context 関連度ゲートを配線（#565） ---
+
+class TestWeakSignalRelevanceGate:
+    """FinAcumen 流の関連度ゲート（#565）が reflect --show-weak-signals に効いている。
+
+    --context（現在の文脈）を渡すと、語彙が重なる過去経験だけが unpromoted（提案根拠）に
+    残り、無関係な経験は suppressed に分離され関連度スコア付きで提示される。
+    --context 無し（後方互換）なら従来通り全件提示で suppressed フィールドは付かない。
+    """
+
+    def _seed_two(self, tmp_path):
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+        ws = tmp_path / "weak_signals.jsonl"
+        sigs = [
+            WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 1,
+                                     "text": "認証ルーティングの設定を確認", "reason": "r"},
+                       "2026-06-10T00:00:00+00:00", "s1", "rl-anything"),
+            WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 2,
+                                     "text": "チョコレートケーキのレシピ", "reason": "r"},
+                       "2026-06-10T00:01:00+00:00", "s2", "rl-anything"),
+        ]
+        append_signals(sigs, path=ws)
+        return ws
+
+    def test_context_gates_unrelated_into_suppressed(self, tmp_path, capsys):
+        ws = self._seed_two(tmp_path)
+        with mock.patch("sys.argv", ["reflect", "--show-weak-signals",
+                                     "--context", "認証ルーティングの設定を直したい",
+                                     "--weak-signals-file", str(ws)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "weak_signals"
+        # 関連する経験だけが提案根拠（unpromoted=kept）に残る
+        kept_texts = [c["provenance"]["text"] for c in out["unpromoted"]]
+        assert "認証ルーティングの設定を確認" in kept_texts
+        assert "チョコレートケーキのレシピ" not in kept_texts
+        # 無関係な経験は黙って消さず suppressed に分離して理由を残す
+        sup_texts = [c["provenance"]["text"] for c in out["suppressed"]]
+        assert "チョコレートケーキのレシピ" in sup_texts
+        assert "suppressed_reason" in out["suppressed"][0]
+        # 各候補に関連度スコアが付く（observability）
+        assert "relevance_score" in out["unpromoted"][0]
+        assert out["relevance_gate"]["gate_applied"] is True
+        assert out["relevance_gate"]["kept"] == 1
+        assert out["relevance_gate"]["suppressed"] == 1
+
+    def test_context_threshold_overridable(self, tmp_path, capsys):
+        ws = self._seed_two(tmp_path)
+        # 極端に高い閾値なら関連経験も suppressed に落ちる
+        with mock.patch("sys.argv", ["reflect", "--show-weak-signals",
+                                     "--context", "認証ルーティングの設定を直したい",
+                                     "--relevance-threshold", "0.99",
+                                     "--weak-signals-file", str(ws)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["count"] == 0
+        assert out["relevance_gate"]["threshold"] == 0.99
+
+    def test_no_context_keeps_backward_compat(self, tmp_path, capsys):
+        ws = self._seed_two(tmp_path)
+        with mock.patch("sys.argv", ["reflect", "--show-weak-signals",
+                                     "--weak-signals-file", str(ws)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        # --context 無しは従来通り全件・suppressed/relevance_gate フィールド無し
+        assert out["count"] == 2
+        assert "suppressed" not in out
+        assert "relevance_gate" not in out
