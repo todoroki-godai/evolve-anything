@@ -950,6 +950,25 @@ class TestZeroInvocationMeasurementWindowSuppression:
         assert prune.USAGE_RECORDING_FIX_DATE in summary["message"]
         assert "3" in summary["message"]
 
+    def test_make_suppression_summary_surfaces_reeval_date(self):
+        """#587: suppress 解除予定日を構造化 + message に surface する。
+
+        解除日 = 計測修正日 + 観測窓日数（窓全体が修正日以降に揃う最早日）。
+        2026-06-12 + 30d = 2026-07-12。再評価が自動で走ることを明示する。
+        """
+        summary = prune.make_zero_invocation_suppression_summary(suppressed_count=2)
+        # 構造化フィールドで解除予定日と自動再評価の保証を機械可読に持つ
+        assert summary["reeval_date"] == "2026-07-12"
+        assert summary["auto_reeval"] is True
+        # message にも解除予定日を表示する（人間向け advisory）
+        assert "2026-07-12" in summary["message"]
+
+    def test_zero_invocation_reeval_date_is_fix_date_plus_window(self):
+        """解除予定日ヘルパは fix_date + days を ISO 日付文字列で返す。"""
+        assert prune.zero_invocation_reeval_date() == "2026-07-12"
+        # 観測窓を変えれば解除日も追従する
+        assert prune.zero_invocation_reeval_date(days=10) == "2026-06-22"
+
     def test_run_prune_suppresses_zero_invocations_in_window(self, tmp_path):
         from datetime import datetime, timezone
         data_dir = tmp_path / "rl-anything"

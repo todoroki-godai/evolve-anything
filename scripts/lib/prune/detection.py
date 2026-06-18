@@ -157,16 +157,43 @@ def make_global_candidates_summary(count: int) -> Dict[str, Any]:
     }
 
 
+def zero_invocation_reeval_date(days: int = ZERO_INVOCATION_DAYS) -> str:
+    """suppress が自動解除される最早日（ISO 日付）を返す（#587）。
+
+    suppress は観測窓 [now - days, now] が計測修正日をまたぐ間だけ有効
+    （`zero_invocation_window_suppressed`）。窓全体が修正日以降に揃う最早日は
+    ``window_start == fix_date`` すなわち ``now == fix_date + days``。
+    この日以降に prune/evolve を回せば suppress は自動で解除され通常判定に復帰する。
+
+    fix_date が解釈不能な場合は空文字を返す（advisory を出さない安全側）。
+    """
+    try:
+        fix_date = datetime.fromisoformat(USAGE_RECORDING_FIX_DATE)
+    except ValueError:
+        return ""
+    return (fix_date + timedelta(days=days)).date().isoformat()
+
+
 def make_zero_invocation_suppression_summary(suppressed_count: int) -> Dict[str, Any]:
-    """suppress 時に candidates の代わりに surface する 1 行サマリを生成する。"""
+    """suppress 時に candidates の代わりに surface する 1 行サマリを生成する。
+
+    #587: 「いつ再評価されるか不明」という永久保留リスク懸念に応え、解除予定日
+    （``reeval_date``）と自動再評価の保証（``auto_reeval``）を構造化 + message に surface する。
+    再評価は別途トリガーを要さず、解除予定日以降の prune/evolve 実行で
+    ``zero_invocation_window_suppressed`` が False に転じることで自動的に走る。
+    """
+    reeval_date = zero_invocation_reeval_date()
     return {
         "suppressed_count": suppressed_count,
         "reason": "measurement_window_straddles_fix_date",
         "fix_date": USAGE_RECORDING_FIX_DATE,
+        "reeval_date": reeval_date,
+        "auto_reeval": True,
         "message": (
             f"計測待ち {suppressed_count} 件（usage 記録経路は {USAGE_RECORDING_FIX_DATE} に"
             f"修正済み #478。観測窓がこの日をまたぐ間は zero_invocation を suppress。"
-            f"窓全体が修正日以降に蓄積されたら再評価）"
+            f"観測窓が揃う {reeval_date} 以降の prune/evolve 実行で自動的に再評価される"
+            f"＝永久保留にはならない）"
         ),
     }
 

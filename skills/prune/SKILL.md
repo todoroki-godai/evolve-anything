@@ -41,7 +41,7 @@ rl-prune "$(pwd)"
   - `type: reference` の参照型スキル（drift 検出で別途処理）
   - `.pin` ファイルで保護されているスキル
   - 対象 PJ の **CLAUDE.md の Skills セクションに登録されているスキル**（本番運用中とみなす、#351）
-  - **観測窓が usage 記録修正日 (#478) をまたぐ間は zero_invocation 全体を suppress（#522-2/#529-1）**。この期間は欠損データで「未使用」を断定できないため、候補を出さず `zero_invocations_suppressed.message`（「計測待ち N 件」）を**1行 surface するだけに留める（MUST）**。per-item 調査・個別承認は行わない（advisory↔MUST 矛盾の解消）。窓全体が修正日以降に蓄積されたら通常判定に自動復帰する。
+  - **観測窓が usage 記録修正日 (#478) をまたぐ間は zero_invocation 全体を suppress（#522-2/#529-1）**。この期間は欠損データで「未使用」を断定できないため、候補を出さず `zero_invocations_suppressed.message`（「計測待ち N 件」）を**1行 surface するだけに留める（MUST）**。per-item 調査・個別承認は行わない（advisory↔MUST 矛盾の解消）。**suppress は永久保留にはならない（#587）**: 解除予定日 `zero_invocations_suppressed.reeval_date`（= 計測修正日 + 観測窓日数）と自動再評価フラグ `auto_reeval` を構造化 + message に surface する。この日以降の prune/evolve 実行で `zero_invocation_window_suppressed` が False に転じ通常判定へ**自動復帰**する（別途トリガー不要）。
 - **Plugin Unused**: プラグイン由来で未使用のスキル（レポートのみ、アーカイブ対象外）
 - **Global 候補**: `skill_activations.jsonl` で90日間未使用・低頻度のグローバルスキルを検出（データなし時は usage-registry.jsonl フォールバック）
 - **重複候補**: audit-report の意味的類似度検出結果

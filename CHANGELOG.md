@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **feat(prune): zero_invocation suppress に解除予定日と自動再評価保証を surface（closes #587）** — usage 計測経路の修正（#478）により `zero_invocations_suppressed` が「計測待ち」になるが、**いつ再評価されるか／自動再評価の保証があるか**が surface されておらず「永久保留になり得る」と誤読させていた。調査の結果、再評価は既に構造的に保証されている（`zero_invocation_window_suppressed` は毎回 live 再計算され、観測窓が修正日をまたがなくなる `fix_date + 観測窓日数` 以降の prune/evolve 実行で suppress が自動で False に転じる／`insufficient_usage` も毎回 live `usage_count` から再計算）。欠けていたのは**解除予定日の可視化のみ**だったため、`zero_invocation_reeval_date()` ヘルパを追加し suppression summary に `reeval_date`・`auto_reeval` を構造化 + message に解除予定日を明示（「観測窓が揃う YYYY-MM-DD 以降の prune/evolve 実行で自動的に再評価される＝永久保留にはならない」）。report 描画は `zero_invocations_suppressed.message` を直接 surface する既存仕様のため描画コード変更なしで反映。決定論・LLM 非依存。TDD（`test_prune.py` に reeval_date surface / ヘルパ計算の2ケース + API surface snapshot 追従）。
 - **feat(evolve): 高頻度 `rule_violation_observed` を hook_candidate へ昇格する導線を追加（closes #585）** — `builtin_replaceable` は `tool_usage_hook_candidate` に昇格して remediation proposable に乗るのに、`rule_violation_lane.py` が分離する `rule_violation_observed`（例: `rule_installed_but_not_enforced`・同一コマンドの高頻度違反）は **surface のみ**で hook 候補にも remediation proposable にも乗らず、「最も enforce すべき高頻度違反」が放置されていた（large 環境で `cd` 400回超の rule 違反が毎回観察のみ）。`rule_violation_lane.py` に閾値 gate 付きの hook_candidate 昇格を追加し `evolve.py` に配線。レーン分離（既存）→ 高頻度違反のみ hook 昇格、という builtin_replaceable と同型のフロー。決定論・LLM 非依存。TDD（`test_rule_violation_hook_promotion.py`）。
 
 ### Changed

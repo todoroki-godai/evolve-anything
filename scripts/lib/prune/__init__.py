@@ -96,6 +96,7 @@ from .detection import (  # noqa: E402, F401
     detect_decay_candidates,
     detect_retirement_candidates,
     zero_invocation_window_suppressed,
+    zero_invocation_reeval_date,
 )
 
 
