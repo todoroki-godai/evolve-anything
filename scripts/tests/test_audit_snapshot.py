@@ -128,6 +128,12 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         corrections_insights, "CORRECTIONS_FILE", tmp_path / "no-corrections.jsonl"
     )
+    # sections_multiview builder（#564）が query_sessions を関数内 import するため、
+    # telemetry_query.DATA_DIR が observability の供給モジュールに入る。DATA_DIR は import 時に
+    # Path.home() を bound copy する（env 非依存）ので setenv では効かず、setattr で tmp に向ける
+    # （submodule は from . import DATA_DIR の関数内 lazy 参照なので親属性の差し替えで届く）。
+    import telemetry_query
+    monkeypatch.setattr(telemetry_query, "DATA_DIR", tmp_path / "no-telemetry-data")
     return proj
 
 

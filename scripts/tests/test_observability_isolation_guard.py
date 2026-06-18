@@ -49,7 +49,8 @@ _CLAUDE_HOME = (Path.home() / ".claude").resolve()
 # ``_isolate_env`` が中和する (module, attr) の既知リスト（テスト側で明示管理）。
 # - setattr 直接差し替え:
 #     corrections_insights.CORRECTIONS_FILE / audit.outcome_metrics.DATA_DIR /
-#     audit.outcome_promotion_readiness.DATA_DIR / audit.measurement_bug.DATA_DIR
+#     audit.outcome_promotion_readiness.DATA_DIR / audit.measurement_bug.DATA_DIR /
+#     telemetry_query.DATA_DIR（sections_multiview builder #564 が query_sessions を使う）
 # - HOME setenv + reload で env/HOME 基準に再解決:
 #     rl_common.* / token_usage_store.*
 _KNOWN_ISOLATED: Set[Tuple[str, str]] = {
@@ -57,6 +58,7 @@ _KNOWN_ISOLATED: Set[Tuple[str, str]] = {
     ("audit.outcome_metrics", "DATA_DIR"),
     ("audit.outcome_promotion_readiness", "DATA_DIR"),
     ("audit.measurement_bug", "DATA_DIR"),
+    ("telemetry_query", "DATA_DIR"),
     ("rl_common", "DATA_DIR"),
     ("rl_common", "CHECKPOINTS_DIR"),
     ("rl_common", "FALSE_POSITIVES_FILE"),
