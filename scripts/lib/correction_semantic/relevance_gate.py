@@ -23,16 +23,19 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Set
 
-from correction_semantic.bootstrap_backlog import (
-    JACCARD_THRESHOLD,
-    extract_keywords,
-)
+from correction_semantic.bootstrap_backlog import extract_keywords
 from correction_semantic.representative import user_only_text
 
-# 校正済みの関連度しきい値（既存 jaccard 流儀の固定値・引数で上書き可能）。
-# daily_review / bootstrap_backlog の grouping と同じ 0.5 を既定にする。閾値学習機構は
-# Issue #565 のスコープ外（決定論・固定/設定可能な定数で十分）。
-RELEVANCE_THRESHOLD = JACCARD_THRESHOLD
+# 校正済みの関連度しきい値（jaccard 流儀の固定値・引数で上書き可能）。
+#
+# relevance（過去経験が現文脈に関係するか）は near-duplicate dedup より緩い関係。
+# bootstrap_backlog / daily_review の grouping 用 JACCARD_THRESHOLD(=0.5) を流用すると、
+# 実コーパスでは到達不能だった（典型的な自由文文脈の jaccard が max ~0.25 / 中央値 0.0 に
+# 収まり、287 件中 kept=0 = 全件 suppressed の no-op に倒れる — #578 実PJ dogfood で確認）。
+# そこで relevance 専用の校正値に decouple し、実コーパス分布に合わせて下げる。metric は
+# jaccard 据え置き（汎用語1語一致を 1/N に自然減衰し、overlap 係数の tiny-set 偽陽性を避ける）。
+# 閾値学習機構は Issue #565 のスコープ外（決定論・固定/設定可能な定数で十分）。
+RELEVANCE_THRESHOLD = 0.2
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -230,6 +230,74 @@ class TestClassifyMultiview:
         )
         assert "overfit_suspect" in res["alpha"]["labels"]
 
+    def test_joins_namespaced_attribution_keys_to_bare_target(self):
+        """実データの outcome キーは `<plugin>:<skill>` 修飾形（attribute_outcomes は起動時の
+        スキル名）。target は SKILL.md の dir 名（bare）。名前空間を正規化して同一スキルを
+        join する（#577: 実PJ dogfood で交差が空集合になる seam を検出）。"""
+        attribution = {
+            # 起動時のスキル名はプラグイン修飾形（rl-anything:cleanup）。
+            "rl-anything:cleanup": {"first_try_success": 0.2, "rework": 0.0,
+                                    "n_sessions": 2, "degraded": False},
+        }
+        res = mv.classify_multiview(
+            target_skills=["cleanup"],  # SKILL.md dir 名（bare）
+            chaos_result=None,
+            outcome_attribution=attribution,
+            negative_transfer=[],
+        )
+        # 修飾形 rl-anything:cleanup が bare cleanup に join され outcome 信号を拾う。
+        assert res["cleanup"]["degraded"] is False
+        assert "overfit_suspect" in res["cleanup"]["labels"]
+
+    def test_agent_keys_do_not_join_as_skills(self):
+        """`Agent:rl-anything:second-opinion` は subagent 帰属でありスキルではない。
+        同名スキル `second-opinion` に誤 join してはならない（bare 化で取りこぼさない）。"""
+        attribution = {
+            "Agent:rl-anything:second-opinion": {
+                "first_try_success": 0.1, "rework": 0.9,
+                "n_sessions": 2, "degraded": False},
+        }
+        res = mv.classify_multiview(
+            target_skills=["second-opinion"],
+            chaos_result=None,
+            outcome_attribution=attribution,
+            negative_transfer=[],
+        )
+        # Agent: は除外されるので skill には信号が来ず unknown。
+        assert res["second-opinion"]["labels"] == ["unknown"]
+        assert res["second-opinion"]["degraded"] is True
+
+    def test_namespaced_negative_transfer_key_joins(self):
+        """negative_transfer の skill_name も起動時のスキル名（修飾形）でありうる。
+        bare 化して target に join する。"""
+        res = mv.classify_multiview(
+            target_skills=["cleanup"],
+            chaos_result=None,
+            outcome_attribution={},
+            negative_transfer=[{"skill_name": "rl-anything:cleanup",
+                                "delta_score": -0.2, "negative_transfer": True,
+                                "before_score": 0.8, "after_score": 0.6}],
+        )
+        assert "regression_risk" in res["cleanup"]["labels"]
+
+    def test_exact_bare_key_wins_over_namespaced_alias(self):
+        """bare と修飾形が両方あるとき、bare（exact 一致）を優先する（決定論・順序非依存）。"""
+        attribution = {
+            "rl-anything:cleanup": {"first_try_success": 0.9, "rework": 0.0,
+                                    "n_sessions": 8, "degraded": False},
+            "cleanup": {"first_try_success": 0.2, "rework": 0.0,
+                        "n_sessions": 2, "degraded": False},
+        }
+        res = mv.classify_multiview(
+            target_skills=["cleanup"],
+            chaos_result=None,
+            outcome_attribution=attribution,
+            negative_transfer=[],
+        )
+        # exact bare（low success/few sessions）が採用され overfit が立つ。
+        assert "overfit_suspect" in res["cleanup"]["labels"]
+        assert res["cleanup"]["evidence"]["n_sessions"] == 2
+
 
 # ---------- ラベルの定数契約 ----------
 

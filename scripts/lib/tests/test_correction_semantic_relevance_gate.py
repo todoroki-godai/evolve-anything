@@ -112,7 +112,7 @@ def test_suppressed_candidates_carry_reason_and_score():
     assert "relevance_score" in sup
     assert sup["relevance_score"] == 0.0
     # reason に閾値が記録され判読できる
-    assert str(JACCARD_THRESHOLD) in sup["suppressed_reason"] or "below" in sup["suppressed_reason"]
+    assert str(rg.RELEVANCE_THRESHOLD) in sup["suppressed_reason"] or "below" in sup["suppressed_reason"]
 
 
 def test_threshold_is_overridable():
@@ -187,5 +187,27 @@ def test_summarize_gate_counts():
     assert summary["kept"] == len(res["kept"])
     assert summary["suppressed"] == len(res["suppressed"])
     assert summary["total"] == 3
-    assert summary["threshold"] == JACCARD_THRESHOLD
+    assert summary["threshold"] == rg.RELEVANCE_THRESHOLD
     assert summary["gate_applied"] is True
+
+
+# ─────────────────────────────────────────────────────────────────
+# relevance 閾値の校正（#578: dedup 用 0.5 流用で実コーパス全件 suppressed の修正）
+# ─────────────────────────────────────────────────────────────────
+def test_relevance_threshold_decoupled_from_dedup_threshold():
+    """relevance 閾値は near-duplicate dedup 用 JACCARD_THRESHOLD(0.5) と decouple され、
+    より緩い値になっている。relevance（過去経験が現文脈に関係するか）は dedup より緩い
+    関係で、dedup 用 0.5 を流用すると実コーパスで全件 suppressed の no-op に倒れるため
+    （#578 実PJ dogfood: 287 件中 kept=0 / jaccard max ~0.25 を確認）。"""
+    assert rg.RELEVANCE_THRESHOLD < JACCARD_THRESHOLD
+
+
+def test_partially_related_candidate_kept_under_default_but_not_under_dedup():
+    """実文脈レベルの部分一致（jaccard ~0.25）が既定では kept、旧 dedup 閾値 0.5 では
+    suppressed になる。これが #578 で全件 suppress に倒れていた挙動の修正点。"""
+    context = "変更を確認してコミット"        # kws: {変更, 確認, コミット}
+    cand = _ws("削除を確認", "rel")            # kws: {削除, 確認} → jaccard 1/4 = 0.25
+    res_new = rg.gate_candidates(context, [cand])                  # 既定 RELEVANCE_THRESHOLD
+    res_old = rg.gate_candidates(context, [cand], threshold=JACCARD_THRESHOLD)  # 旧 0.5
+    assert any(c["signal_key"] == "rel" for c in res_new["kept"])
+    assert any(c["signal_key"] == "rel" for c in res_old["suppressed"])

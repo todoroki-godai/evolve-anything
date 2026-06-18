@@ -194,21 +194,64 @@ def classify_multiview(
 
     DATA_DIR を再読込しない（入力済みの結果だけを join する）= dry-run 安全。
     """
-    chaos_by_skill = _index_chaos(chaos_result)
-    neg_by_skill = {
-        rec.get("skill_name", ""): rec
-        for rec in (negative_transfer or [])
-        if rec.get("skill_name")
-    }
+    # join キーの名前空間を揃える（#577）: outcome/negative_transfer のキーは attribute_outcomes が
+    # 記録する「起動時のスキル名」= プラグイン修飾形（rl-anything:cleanup）だが、target_skills は
+    # SKILL.md の dir 名（bare cleanup）。bare 化しないと交差が空集合になり常に「該当視点なし」になる。
+    chaos_by_skill = _index_chaos(chaos_result)  # chaos の name は dir 名（bare）なので正規化不要。
+    neg_by_skill: Dict[str, Dict[str, Any]] = {}
+    for rec in (negative_transfer or []):
+        bare = _bare_skill_name(rec.get("skill_name", ""))
+        if bare and bare not in neg_by_skill:
+            neg_by_skill[bare] = rec
+    attr_by_skill = _index_outcomes(outcome_attribution)
 
     out: Dict[str, Dict[str, Any]] = {}
     for skill in target_skills:
         out[skill] = classify_skill_multiview(
             skill=skill,
             chaos_entry=chaos_by_skill.get(skill),
-            outcome_attr=(outcome_attribution or {}).get(skill),
+            outcome_attr=attr_by_skill.get(skill),
             neg_transfer=neg_by_skill.get(skill),
         )
+    return out
+
+
+def _bare_skill_name(key: Optional[str]) -> Optional[str]:
+    """起動時のスキル名 `<plugin>:<skill>` を bare な skill 名（SKILL.md dir 名）へ正規化する。
+
+    outcome_attribution / negative_transfer のキーは attribute_outcomes が記録する「起動時の
+    スキル名」= プラグイン修飾形（例 `rl-anything:cleanup`）。一方 evolve 対象（target_skills）は
+    SKILL.md のディレクトリ名（bare `cleanup`）。両者を skill 名で join するには名前空間を揃える
+    必要がある（#577: 不一致で交差が空集合になり、実データで常に「該当視点なし」に倒れていた）。
+
+    `Agent:*` は subagent 帰属でありスキルではないので None（join 対象外）。dir 名に `:` は
+    含まれないため、修飾形は最後の `:` 以降が skill 名（`rl-anything:cleanup` → `cleanup`、
+    `Agent:rl-anything:second-opinion` → None、`update-config` → `update-config`）。
+    """
+    if not key:
+        return None
+    if key.startswith("Agent:"):
+        return None
+    return key.rsplit(":", 1)[-1]
+
+
+def _index_outcomes(
+    outcome_attribution: Optional[Dict[str, Dict[str, Any]]],
+) -> Dict[str, Dict[str, Any]]:
+    """outcome_attribution のキーを bare skill 名へ正規化して index する（#577）。
+
+    `Agent:*`（subagent 帰属）は除外。bare と修飾形（`<plugin>:<skill>`）が同一 skill に
+    衝突したら exact bare を優先する（順序非依存・決定論）。
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for key, value in (outcome_attribution or {}).items():
+        bare = _bare_skill_name(key)
+        if bare is None:
+            continue
+        if key == bare:
+            out[bare] = value            # exact bare は常に勝つ。
+        else:
+            out.setdefault(bare, value)  # 修飾形は bare が無いときだけ採用。
     return out
 
 
