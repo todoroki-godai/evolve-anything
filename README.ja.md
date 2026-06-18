@@ -117,7 +117,7 @@ rl-anything は **4つの独立した柱** で構成される。
 | `implement` | 構造化実装 | plan artifact → タスク分解 → 実装（Standard/Parallel）→ 計画準拠チェック → テレメトリ記録 |
 | `spec-keeper` | 仕様管理 | SPEC.md + ADR 管理、Progressive Disclosure L1/L2 自動昇格 || `cleanup` | 後片付け | PR マージ・デプロイ後の branches / remote refs / worktrees / tmp dirs / close 候補 Issue / PR Test plan 残件を個別承認→実行で処理。tmp dir default prefix は `rl-anything-` のみ（詳細は [ADR-021](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)） |
 | `release-notes-review` | ユーティリティ | CC リリースノート分析＋グローバル環境健康診断（`--env-only` 対応） |
-| `feedback` | ユーティリティ | GitHub Issue でフィードバック送信 |
+| `report-feedback` | フィードバック | evolve/audit レポートを LLM メタレビューし rl-anything 自身への改善 issue を半自動起票（旧 `feedback` の後継） |
 
 内部スキル（evolve から自動呼出し）: `reorganize`（split 検出のみ）、`enrich`（discover に統合済み、deprecated）
 
