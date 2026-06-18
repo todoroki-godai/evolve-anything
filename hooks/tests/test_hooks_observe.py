@@ -790,3 +790,74 @@ class TestSubagentObserve:
         assert "systemMessage" in output
 
 
+class TestCountDistinctAgents:
+    """_count_recent_session_subagents は SubagentStop 記録数でなく distinct agent を数える（#574）。
+
+    長命 background worker は idle のたびに SubagentStop を再発火し、同一 agent_id が
+    複数行 append される。記録行数を数えると 1 個のワーカーが窓内で何度 idle になったかまで
+    加算され、distinct な subagent 数を水増しして偽の暴走警告を出す。
+    """
+
+    def _append(self, data_dir, session_id, agent_id=None, agent_type="Explore", minutes_ago=1):
+        rec = {
+            "session_id": session_id,
+            "agent_type": agent_type,
+            "timestamp": _recent_ts(minutes_ago=minutes_ago),
+        }
+        if agent_id is not None:
+            rec["agent_id"] = agent_id
+        common.append_jsonl(data_dir / "subagents.jsonl", rec)
+
+    def test_same_agent_id_repeated_counts_one(self, patch_data_dir):
+        """同一 agent_id の SubagentStop が N 行あっても distinct は 1。"""
+        sid = "sess-distinct-001"
+        for _ in range(18):
+            self._append(patch_data_dir, sid, agent_id="agent-aaa")
+        assert subagent_observe._count_recent_session_subagents(sid, 5) == 1
+
+    def test_distinct_agent_ids_counted_each(self, patch_data_dir):
+        """異なる agent_id は各 1 として数える。"""
+        sid = "sess-distinct-002"
+        for i in range(4):
+            # 各 agent_id を複数回 append しても distinct 数は agent 数に一致
+            for _ in range(3):
+                self._append(patch_data_dir, sid, agent_id=f"agent-{i}")
+        assert subagent_observe._count_recent_session_subagents(sid, 5) == 4
+
+    def test_records_without_agent_id_counted_individually(self, patch_data_dir):
+        """agent_id 欠落レコードは個別カウント（識別子なしを 1 に潰すと暴走を見逃すため保守側）。"""
+        sid = "sess-distinct-003"
+        for _ in range(5):
+            self._append(patch_data_dir, sid, agent_id=None)
+        assert subagent_observe._count_recent_session_subagents(sid, 5) == 5
+
+    def test_outside_window_excluded(self, patch_data_dir):
+        """窓外の記録は distinct カウントからも除外する。"""
+        sid = "sess-distinct-004"
+        for _ in range(10):
+            self._append(patch_data_dir, sid, agent_id="agent-old", minutes_ago=30)
+        self._append(patch_data_dir, sid, agent_id="agent-new", minutes_ago=1)
+        assert subagent_observe._count_recent_session_subagents(sid, 5) == 1
+
+    def test_idle_reemit_does_not_trigger_false_warning(self, patch_data_dir, tmp_path, capsys):
+        """2 個のワーカーが窓内で何度 idle 再発火しても閾値 5 に達しない（#574 の偽警告再現）。"""
+        sid = "sess-distinct-005"
+        # worker A/B がそれぞれ idle 再発火で 10 回ずつ記録（記録数 20 だが distinct は 2）
+        for _ in range(10):
+            self._append(patch_data_dir, sid, agent_id="worker-A")
+            self._append(patch_data_dir, sid, agent_id="worker-B")
+
+        with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
+            event = {
+                "agent_type": "Explore",
+                "agent_id": "worker-A",  # 既存ワーカーの再発火
+                "last_assistant_message": "done",
+                "agent_transcript_path": "/tmp/t.jsonl",
+                "session_id": sid,
+            }
+            subagent_observe.handle_subagent_stop(event)
+
+        # distinct は worker-A / worker-B の 2 個 → 閾値 5 未満 → 警告なし
+        assert capsys.readouterr().out.strip() == ""
+
+

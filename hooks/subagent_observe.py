@@ -33,12 +33,18 @@ def _parse_ts(value) -> "datetime | None":
 def _count_recent_session_subagents(
     session_id: str, window_minutes: int, now: "datetime | None" = None
 ) -> int:
-    """直近 window_minutes 分以内かつ同一セッションの subagent 記録数を返す。
+    """直近 window_minutes 分以内かつ同一セッションの distinct な subagent 数を返す。
 
     累積でなく時間窓で測ることで、長時間セッションの正常使用を誤検知せず、
     短時間に集中生成された暴走ループ/カスケードだけを捕捉する。
     timestamp が不明・パース不能な記録は窓内かどうか判定できないため計上しない
     （window 意味論を守り、古い記録による誤検知を防ぐ保守側に倒す）。
+
+    #574: 記録「行数」でなく distinct な agent_id 数を数える。長命 background worker は
+    idle のたびに SubagentStop を再発火し同一 agent_id が複数行 append されるため、
+    行数を数えると 1 個のワーカーの再発火回数まで加算され distinct な subagent 数を
+    水増しして偽の暴走警告を出す。agent_id 欠落レコードは識別子で dedup できないため
+    個別カウントする（1 に潰すと暴走を見逃すので、過小評価しない保守側に倒す）。
     """
     subagents_file = common.DATA_DIR / "subagents.jsonl"
     if not subagents_file.exists():
@@ -46,7 +52,8 @@ def _count_recent_session_subagents(
     if now is None:
         now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=window_minutes)
-    count = 0
+    seen_ids = set()
+    unidentified = 0
     for line in subagents_file.read_text().splitlines():
         line = line.strip()
         if not line:
@@ -58,9 +65,14 @@ def _count_recent_session_subagents(
         if rec.get("session_id") != session_id:
             continue
         ts = _parse_ts(rec.get("timestamp"))
-        if ts is not None and ts >= cutoff:
-            count += 1
-    return count
+        if ts is None or ts < cutoff:
+            continue
+        agent_id = rec.get("agent_id") or rec.get("agent_name")
+        if agent_id:
+            seen_ids.add(agent_id)
+        else:
+            unidentified += 1
+    return len(seen_ids) + unidentified
 
 
 def handle_subagent_stop(event: dict) -> None:
