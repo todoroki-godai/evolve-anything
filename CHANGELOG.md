@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+- **移植 issue の確実なバグ群を一括修正（closes #21, #22, #23, #24, #25, #26, #30, #31, #32, #33）** — todoroki-godai/evolve-anything へ移植した open issue のうち、原因が明確な実バグを並行ワーカーで修正:
+  - **#30/#32 (discover)**: `discover/errors.py` が `error` フィールドの値が明示的に `None` のとき `None[:200]` で TypeError になる #521 regression を None 合体で修正。`phases_diagnose.py` の discover crash 時 `reflect_data_count` を degraded sentinel `-1` に正準化。
+  - **#33 (introspect)**: `evolve_introspect` が closed issue の再発を regression として、前歴 issue への backlink 付きで起票するよう拡張（open/closed marker を分離・`render_regression_body` 追加）。
+  - **#31 (dogfood)**: Layer3 `existence_only` チェックが bash コマンド内 single-quote inline python（`python3 -c '...'`）を誤検知しないよう、quote 追跡を `in_dquote`/`in_squote` に分離。
+  - **#21/#22 (correction_semantic)**: bootstrap backlog の theme_label に代表抜粋を併記。idiom_filter に最大長 ceiling（80字）と `too_long` 理由を追加。
+  - **#23 (glossary)**: 汎用技術略語・フォーマットプレースホルダ・stdlib シンボルの誤検知を除外（doubled-component で DMS 等の正規プレースホルダは保護）。
+  - **#26 (discover)**: 未導入が継続している推奨アーティファクトを TTL 45 日で suppress する artifact suppression ledger を追加。
+  - **#24/#25 (outcome)**: worktree 名 slug 混入の健全性チェック + 読取正規化を追加し、promotion readiness セクションに surface 配線 + 母数の意味を明示。
+- **fix(hooks): `permission_denied` で `file_path` が `None` のとき TypeError になる #30 同型バグを修正** — `tool_input.get("file_path", "")[:200]` のデフォルトは「キー欠落」しか守らず、値が明示的に `None` のとき `None[:200]` で落ちる。None 合体（`(... or "")[:200]`）で修正。
+- **fix(tests): keyset snapshot の xdist 非hermetic 失敗を修正（#457）** — `tool_usage_analyzer.CLAUDE_PROJECTS_DIR` が module-level で `Path.home()` を import 時に凍結し、HOME 隔離（#457）を擦り抜けて xdist worker が実 `~/.claude/projects` を読む非hermetic 露出（keyset snapshot drift）の根因だった。`session_io._resolve_session_dir` の `projects_dir=None` 既定を call-time HOME 解決へ変更（明示 override は import 時凍結値との差分で判定して尊重）。
+
 ## [1.105.0] - 2026-06-19
 
 ### Added
