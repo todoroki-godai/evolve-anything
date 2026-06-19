@@ -37,10 +37,11 @@ self_analysis: {
 
 ## 3. dedup（候補がある場合 — MUST）
 
-既存 open issue と突合し、毎 evolve の重複起票を防ぐ（root cause 単位）。
+既存 issue（open + closed 両方）と突合し、毎 evolve の重複起票を防ぐ（root cause 単位）。
+closed も取るのは、過去に直した issue の再発（regression）を検出し前歴へ backlink するため（#33）。
 
 ```bash
-gh issue list --repo todoroki-godai/evolve-anything --state open --json number,title,body --limit 100
+gh issue list --repo todoroki-godai/evolve-anything --state all --json number,title,body,state --limit 200
 ```
 
 候補の flatten（3カテゴリ取りこぼし防止）と dedup は決定論ヘルパーに任せる。`self_analysis` 全体を
@@ -58,6 +59,8 @@ print(json.dumps(filter_duplicates(cands, existing), ensure_ascii=False))
 ```
 
 duplicates は「既存 #N と重複 — スキップ」と1行ずつ表示する（沈黙させない）。
+`regressions`（前回 closed と同一マーカーの再発・`unique` にも残る）は「⚠️ 再発→ #N（前回 closed）」と
+表示し、起票時は `render_regression_body(cand, N)` で body 冒頭に backlink を入れる（#33）。
 
 ## 4. 承認（unique のみ — 提案詳細プロトコルに従う・MUST）
 

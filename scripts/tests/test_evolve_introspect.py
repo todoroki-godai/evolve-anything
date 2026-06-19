@@ -644,6 +644,95 @@ def test_dedup_empty_existing():
     assert len(out["unique"]) == 1
 
 
+# ── closed issue regression（#33） ───────────────────
+
+
+def test_closed_marker_match_is_regression_not_duplicate():
+    """close 済み issue にマーカーが一致したら、dup でなく unique（regression）として扱う。"""
+    c = _candidate()
+    existing = [{
+        "number": 42,
+        "state": "CLOSED",
+        "title": "別タイトル",
+        "body": ei.render_issue_body(c),
+    }]
+    out = ei.filter_duplicates([c], existing)
+    # 再発なので新規起票（unique）に残る
+    assert len(out["unique"]) == 1
+    assert out["duplicates"] == []
+    # regression として呼び出し側に surface される
+    assert len(out["regressions"]) == 1
+    assert out["regressions"][0]["existing_number"] == 42
+    assert out["regressions"][0]["dedup_key"] == c["dedup_key"]
+
+
+def test_open_marker_match_still_duplicate_when_also_closed_exists():
+    """open と closed の両方に同一マーカーがあれば open 優先で dup（既存挙動を守る）。"""
+    c = _candidate()
+    existing = [
+        {"number": 7, "state": "CLOSED", "title": "旧", "body": ei.render_issue_body(c)},
+        {"number": 9, "state": "OPEN", "title": "現役", "body": ei.render_issue_body(c)},
+    ]
+    out = ei.filter_duplicates([c], existing)
+    assert out["unique"] == []
+    assert len(out["duplicates"]) == 1
+    assert out["duplicates"][0]["existing_number"] == 9
+    assert out["regressions"] == []
+
+
+def test_missing_state_defaults_to_open_for_backward_compat():
+    """state 欠落（旧 gh 出力）は open 扱いで従来通り dup（後方互換）。"""
+    c = _candidate()
+    existing = [{"number": 10, "title": "別タイトル", "body": ei.render_issue_body(c)}]
+    out = ei.filter_duplicates([c], existing)
+    assert out["unique"] == []
+    assert len(out["duplicates"]) == 1
+    assert out["regressions"] == []
+
+
+def test_lowercase_state_closed_is_recognized():
+    """gh の state 表記揺れ（小文字 'closed'）も regression として認識する。"""
+    c = _candidate()
+    existing = [{
+        "number": 13,
+        "state": "closed",
+        "title": "別タイトル",
+        "body": ei.render_issue_body(c),
+    }]
+    out = ei.filter_duplicates([c], existing)
+    assert len(out["regressions"]) == 1
+    assert out["regressions"][0]["existing_number"] == 13
+
+
+def test_regression_body_prepends_backlink():
+    """regression render は body 冒頭に前回 closed issue へのバックリンクを差し込む。"""
+    c = _candidate()
+    rendered = ei.render_regression_body(c, 42)
+    # 冒頭に regression 文脈
+    assert rendered.splitlines()[0].startswith("> ")
+    assert "#42" in rendered.splitlines()[0]
+    # 元本文も残る
+    assert c["body"] in rendered
+    # dedup マーカーも従来通り末尾に入る（再発も dedup 対象に保つ）
+    assert ei.extract_marker(rendered) == c["dedup_key"]
+
+
+def test_closed_title_similarity_is_not_regression():
+    """マーカー無し closed の title 類似は regression 扱いしない（誤バックリンク防止）。"""
+    c = _candidate(title="[evolve introspect] `discover` フェーズで例外: KeyError")
+    existing = [{
+        "number": 5,
+        "state": "CLOSED",
+        "title": "[evolve introspect] `discover` フェーズで例外: KeyError missed",
+        "body": "marker なしで手動 close された既存 issue",
+    }]
+    out = ei.filter_duplicates([c], existing)
+    # marker が無いので前歴に確実に紐づけられない → 通常の unique（誤リンクしない）
+    assert len(out["unique"]) == 1
+    assert out["regressions"] == []
+    assert out["duplicates"] == []
+
+
 # ── summary_lines（surface 用） ──────────────────────
 
 
