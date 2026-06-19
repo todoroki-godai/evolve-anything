@@ -59,8 +59,8 @@ ingest_judgment_scores(proj, emit["requests"], responses)
    ```
    rl-evolve --confirmed-batch [--skip-skills=skill-a,skill-b] --output "$OUT" [既存の引数]
    ```
-   （`rl-evolve` は `skills/evolve/scripts/evolve.py` を呼ぶ薄いラッパー。PATH に無い特殊環境でのみ
-   `python3 <plugin_root>/skills/evolve/scripts/evolve.py ...` を直接叩く。Step 1 同様 `--output` 必須で、
+   （`rl-evolve` は `skills/evolve/scripts/evolve/`（パッケージ）の `main` を呼ぶ薄いラッパー。PATH に無い特殊環境でのみ
+   `PYTHONPATH=<plugin_root>/scripts/lib:<plugin_root>/skills/evolve/scripts python3 -m evolve ...` を直接叩く（#531 でパッケージ化したため旧 `evolve.py` 直叩きは不可）。Step 1 同様 `--output` 必須で、
    `$OUT` は Step 1 と同じ PJ 別パス `/tmp/rl_evolve_<slug>.json`（共有固定パスは別 PJ の stale 誤読源, #408-A）。
    新しい full result は `$OUT` に上書きされ stdout は1行サマリのみ）
 5. 新しい result（`$OUT`）を Read し、トップレベル `slug` を対象 PJ と照合してから以降のステップを継続する

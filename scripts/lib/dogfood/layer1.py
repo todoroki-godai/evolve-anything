@@ -147,12 +147,13 @@ def _run_evolve_dry_run(repo_root: Path, output_path: Path, env: Optional[dict] 
     LLM は dry-run 経路では呼ばれない（評価系は --dry-run で skip / cache 参照）。
     env には CLAUDE_PLUGIN_DATA=<isolated_dir> が含まれる（check_dry_run_invariance が設定）。
     """
-    evolve_py = repo_root / "skills" / "evolve" / "scripts" / "evolve.py"
     run_env = dict(os.environ if env is None else env)
     run_env["PYTHONPATH"] = os.pathsep.join(str(p) for p in _sys_path_dirs(repo_root))
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # #531: evolve はパッケージ化（evolve/）したため `-m evolve` で起動する。
+    # PYTHONPATH に skills/evolve/scripts を含むので __main__.py が解決される。
     proc = subprocess.run(
-        [sys.executable, str(evolve_py), "--dry-run", "--project-dir", str(repo_root), "--output", str(output_path)],
+        [sys.executable, "-m", "evolve", "--dry-run", "--project-dir", str(repo_root), "--output", str(output_path)],
         capture_output=True,
         text=True,
         env=run_env,
@@ -243,13 +244,14 @@ def _run_drain(repo_root: Path, result_json: Path, env: Optional[dict] = None) -
     から pending を取る（#402）。これにより隔離が完全になり、home の実マーカーに依存しない。
     LLM は drain 経路では呼ばれない（決定論 weak_signals + 既存 pending の ingest のみ）。
     """
-    evolve_py = repo_root / "skills" / "evolve" / "scripts" / "evolve.py"
     run_env = dict(os.environ if env is None else env)
     run_env["PYTHONPATH"] = os.pathsep.join(str(p) for p in _sys_path_dirs(repo_root))
+    # #531: パッケージ化に伴い `-m evolve` で起動（PYTHONPATH に skills/evolve/scripts を含む）。
     proc = subprocess.run(
         [
             sys.executable,
-            str(evolve_py),
+            "-m",
+            "evolve",
             "--drain",
             "--project-dir",
             str(repo_root),

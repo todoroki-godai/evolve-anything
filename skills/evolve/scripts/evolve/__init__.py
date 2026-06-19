@@ -637,6 +637,12 @@ def run_evolve(
     Returns:
         各フェーズの結果を含む辞書
     """
+    # #531 束縛フェンス: monkeypatch (setattr(evolve, ...)) と本体 self-mutation が効く束縛先を
+    # パッケージ evolve（__init__）に集約する。フェーズ分割後に run_evolve が別 module へ移っても
+    # 差し替え対象 helper を evolve.<name> 経由で呼べば、名前解決すり抜け（test 緑のまま実関数が
+    # 走る silent fail / ADR-048 未明示の罠）を構造的に防げる。
+    import evolve as _ev
+
     _generated_at = datetime.now(timezone.utc).isoformat()
     proj_root = Path(project_dir) if project_dir else Path.cwd()
     result: Dict[str, Any] = {
@@ -664,7 +670,7 @@ def run_evolve(
     }
 
     # Phase 1: Observe データ確認
-    sufficiency = check_data_sufficiency()
+    sufficiency = _ev.check_data_sufficiency()
     result["phases"]["observe"] = sufficiency
 
     if not sufficiency["sufficient"]:
@@ -683,7 +689,7 @@ def run_evolve(
         result["phases"]["observe"]["action"] = "lightweight_recommended"
 
     # Phase 1.5: Fitness 関数チェック
-    fitness_check = check_fitness_function(project_dir)
+    fitness_check = _ev.check_fitness_function(project_dir)
     result["phases"]["fitness"] = fitness_check
 
     # Phase 1.6: observe-first pre-flight early-return（#407）
@@ -1601,6 +1607,10 @@ def _warn_insufficient_data(sufficiency: Dict[str, Any]) -> None:
 def main() -> None:
     import argparse
 
+    # #531 束縛フェンス: main から差し替え対象（run_evolve / _resolve_evolve_slug）を呼ぶときは
+    # evolve.<name> 経由にする。main を cli.py へ抽出後も setattr(evolve, ...) が効き続ける。
+    import evolve as _ev
+
     parser = argparse.ArgumentParser(description="Evolve オーケストレーター")
     parser.add_argument("--project-dir", default=None, help="プロジェクトディレクトリ")
     parser.add_argument("--dry-run", action="store_true", help="レポートのみ、変更なし")
@@ -1656,7 +1666,7 @@ def main() -> None:
     # slug 解決 + /tmp パス組み立てのみで DATA_DIR resolver には触れない（#517 と非競合）。
     if args.print_out_path:
         _root = Path(args.project_dir) if args.project_dir else Path.cwd()
-        _slug = _resolve_evolve_slug(_root)
+        _slug = _ev._resolve_evolve_slug(_root)
         print(f"/tmp/rl_evolve_{_slug}.json")
         return
 
@@ -1686,7 +1696,7 @@ def main() -> None:
 
     _skip_skills = {s.strip() for s in args.skip_skills.split(",") if s.strip()} if args.skip_skills else None
 
-    result = run_evolve(
+    result = _ev.run_evolve(
         project_dir=args.project_dir,
         dry_run=args.dry_run,
         skip_skills=_skip_skills,

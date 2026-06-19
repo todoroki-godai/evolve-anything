@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """_compute_env_tier() のユニットテスト (TDD First)。"""
-import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -9,11 +8,11 @@ import pytest
 
 _plugin_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "skills" / "evolve" / "scripts"))
+sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
-_evolve_path = _plugin_root / "skills" / "evolve" / "scripts" / "evolve.py"
-_spec = importlib.util.spec_from_file_location("evolve", _evolve_path)
-evolve = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(evolve)
+# #531: evolve はパッケージ化（evolve/）したため spec_from_file_location(evolve.py) でなく
+# 通常 import で読む（パッケージの相対 import を正しく解決させる）。
+import evolve  # noqa: E402
 
 
 def _setup_project(tmp_path, n_skill_dirs=0, n_rules=0, skills_in_claudemd=0):
