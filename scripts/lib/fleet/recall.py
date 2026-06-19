@@ -258,6 +258,36 @@ def _hit_to_dict(h: RecallHit) -> dict:
     }
 
 
+def reinforce_recall_hits(hits: list[RecallHit]) -> None:
+    """recall ヒットした memory ファイルを access proxy として reinforce する（#18）。
+
+    recall ヒット = その memory が「思い出すに値した」アクセス。これを唯一の access
+    proxy として `reinforce_memory` を発火し、`last_reinforced_at` リセット +
+    `importance_score` 上昇 + `update_count` インクリメントを行う（よく使う記憶ほど残る）。
+    直接 hit と 1-hop linked 先の両方を対象にする。frontmatter なしファイルは no-op。
+
+    `recall()` 本体の純粋性（副作用は stderr 警告のみ）を壊さないため、書き込み副作用
+    を持つ本関数は CLI など発火境界からオプトインで呼ぶ。例外はサイレント（観測性より
+    安定性優先・hook の慣例に揃える）。
+    """
+    try:
+        from memory_temporal import reinforce_memory
+    except ImportError:
+        return
+
+    seen: set[Path] = set()
+    for hit in hits:
+        targets = [hit, *hit.linked]
+        for t in targets:
+            if t.file_path in seen:
+                continue
+            seen.add(t.file_path)
+            try:
+                reinforce_memory(t.file_path, reason="recall hit")
+            except Exception:
+                pass  # 個別ファイルの失敗は無視（recall 体験を壊さない）
+
+
 def format_hits(hits: list[RecallHit], *, as_json: bool) -> str:
     if as_json:
         payload = []

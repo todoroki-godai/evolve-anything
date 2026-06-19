@@ -20,7 +20,7 @@ try:
     _scripts_lib = str(Path(__file__).resolve().parent.parent / "scripts" / "lib")
     if _scripts_lib not in sys.path:
         sys.path.insert(0, _scripts_lib)
-    from memory_temporal import parse_memory_temporal, is_stale, is_superseded
+    from memory_temporal import parse_memory_temporal, is_stale, is_superseded, reinforce_memory
     _memory_temporal = True
 except ImportError:
     pass
@@ -84,6 +84,8 @@ def handle_instructions_loaded(event: dict) -> None:
             memory_dir = Path.home() / ".claude" / "projects" / candidate / "memory"
             if memory_dir.is_dir():
                 _emit_stale_memory_warnings(memory_dir)
+                # SessionStart で注入された（= アクセスされた）有効 memory を reinforce（#18）
+                _reinforce_loaded_memory(memory_dir)
                 break
 
     # ── NFD: Growth greeting 出力 ──────────────────────────────
@@ -113,6 +115,33 @@ def _emit_stale_memory_warnings(memory_dir: Path) -> None:
                 temporal = parse_memory_temporal(md_file)
                 if is_superseded(temporal) or is_stale(temporal):
                     print(f"STALE MEMORY: {md_file.name}")
+            except Exception:
+                pass  # ファイル単位のエラーはスキップ
+    except Exception:
+        pass  # memory_dir スキャン失敗はサイレント
+
+
+def _reinforce_loaded_memory(memory_dir: Path) -> None:
+    """SessionStart で注入された有効 memory を access proxy として reinforce する（#18）。
+
+    memory は「よく参照されるほど残る」べき（忘却曲線リセット）。SessionStart の memory
+    注入を access proxy とし、注入対象＝有効（非 stale / 非 superseded）な memory に
+    `reinforce_memory` を発火する。stale / superseded（無視指示が出る = 実質注入されない）
+    memory は強化しない。frontmatter なしファイルは reinforce_memory 側で no-op。
+    LLM 呼び出しなし。例外はサイレント（hook の安定性優先）。
+    """
+    if not _memory_temporal:
+        return
+    if not memory_dir.is_dir():
+        return
+
+    try:
+        for md_file in sorted(memory_dir.glob("*.md")):
+            try:
+                temporal = parse_memory_temporal(md_file)
+                if is_superseded(temporal) or is_stale(temporal):
+                    continue  # 注入されない memory は強化しない
+                reinforce_memory(md_file, reason="session-start memory injection")
             except Exception:
                 pass  # ファイル単位のエラーはスキップ
     except Exception:

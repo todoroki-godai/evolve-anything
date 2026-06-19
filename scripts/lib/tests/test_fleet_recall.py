@@ -23,7 +23,9 @@ from fleet.recall import (  # noqa: E402
     format_hits,
     parse_fact_file,
     recall,
+    reinforce_recall_hits,
 )
+from memory_temporal import parse_memory_temporal  # noqa: E402
 
 
 def _write(p: Path, text: str) -> Path:
@@ -358,6 +360,64 @@ class TestFormatHits:
     def test_空ヒットのメッセージ(self):
         out = format_hits([], as_json=False)
         assert out.strip() != ""
+
+
+class TestReinforceRecallHits:
+    """recall ヒット時に対象 memory ファイルを reinforce する本番配線（#18）。"""
+
+    def test_直接hitファイルがreinforceされる(self, tmp_path):
+        f = _write(
+            tmp_path / "memory" / "hot.md",
+            "---\nname: hot\ndescription: about widgets\nupdate_count: 0\n---\nwidget body\n",
+        )
+        hit = RecallHit(
+            pj_display="pj-a", file_path=f, score=2.0,
+            snippet="widget", is_index=False,
+        )
+        before = parse_memory_temporal(f)
+        assert before["last_reinforced_at"] is None
+        reinforce_recall_hits([hit])
+        after = parse_memory_temporal(f)
+        assert after["update_count"] == 1
+
+    def test_last_reinforced_atが書かれる(self, tmp_path):
+        f = _write(
+            tmp_path / "memory" / "hot.md",
+            "---\nname: hot\ndescription: d\nupdate_count: 0\n---\nbody\n",
+        )
+        reinforce_recall_hits([
+            RecallHit(pj_display="p", file_path=f, score=1.0, snippet="", is_index=False)
+        ])
+        text = f.read_text(encoding="utf-8")
+        assert "last_reinforced_at:" in text
+
+    def test_linked先もreinforceされる(self, tmp_path):
+        main_f = _write(
+            tmp_path / "memory" / "main.md",
+            "---\nname: main\ndescription: d\nupdate_count: 0\n---\nbody\n",
+        )
+        linked_f = _write(
+            tmp_path / "memory" / "linked.md",
+            "---\nname: linked\ndescription: d\nupdate_count: 0\n---\nbody\n",
+        )
+        hit = RecallHit(
+            pj_display="p", file_path=main_f, score=1.0, snippet="", is_index=False,
+            linked=[RecallHit(pj_display="p", file_path=linked_f, score=0.0,
+                              snippet="", is_index=False, is_linked=True)],
+        )
+        reinforce_recall_hits([hit])
+        assert parse_memory_temporal(linked_f)["update_count"] == 1
+
+    def test_frontmatterなしファイルはno_op(self, tmp_path):
+        f = _write(tmp_path / "memory" / "legacy.md", "# no frontmatter\nbody\n")
+        reinforce_recall_hits([
+            RecallHit(pj_display="p", file_path=f, score=1.0, snippet="", is_index=False)
+        ])
+        # no-op: ファイルは変化しない、例外も出ない
+        assert f.read_text(encoding="utf-8") == "# no frontmatter\nbody\n"
+
+    def test_空ヒットは例外なし(self):
+        reinforce_recall_hits([])  # 何もしない
 
 
 class TestRecallCLI:
