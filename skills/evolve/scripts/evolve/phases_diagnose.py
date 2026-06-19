@@ -33,6 +33,31 @@ from ._capture import _capture_audit_stderr
 from ._env import _surface_constitutional_status
 
 
+def _load_corrections(project_dir: Path) -> list:
+    """当 PJ スコープの corrections レコードを in-memory で読む（#10 correction 軸の素）。
+
+    corrections.jsonl は現状ほぼ空なので空リストになるのが通常（attribute_outcomes が
+    graceful に correction_recurrence=None を返す）。読み取りのみで一切書かない（dry-run
+    安全）。outcome_metrics の純ヘルパ（jsonl 読み / PJ slug 正規化）を再利用して
+    worktree 安全に当 PJ 分のみへ絞る（重複実装回避）。解決不能環境では空リスト。
+    """
+    sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+    try:
+        from audit import outcome_metrics as _om
+    except ImportError:
+        return []
+    try:
+        base = _om.DATA_DIR
+        proj_slug = _om._normalize_pj(str(project_dir))
+        return [
+            r
+            for r in _om._read_jsonl(base / "corrections.jsonl")
+            if _om._project_match(r, proj_slug)
+        ]
+    except Exception:
+        return []
+
+
 def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False) -> None:
     """診断フェーズ（Phase 1〜3.4）を result に in-place で書き込む。
 
@@ -128,12 +153,25 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
             project_root=proj,
             dry_run=ctx.dry_run,  # #308: --dry-run 時は triage_ledger に書き込まない
         )
-        # #433 先行スコープ: corrections 非依存の2軸（一発成功率 / rework 率）を
-        # スキル単位に分解し、triage 候補の順位に自動入力（advisory→閉ループ配線）。
-        # in-memory の sessions/usage_data を渡すので DATA_DIR 再読込なし（dry-run 安全）。
+        # #433 先行スコープ: outcome 軸をスキル単位に分解し triage 候補の順位に自動入力
+        # （advisory→閉ループ配線）。in-memory の sessions/usage_data を渡すので triage 順位
+        # 計算では DATA_DIR を書かない（dry-run 安全）。
+        #   #10: correction 再発率を3軸目に追加（corrections.jsonl 由来・現状ほぼ空なので
+        #        graceful None）＋ negative_transfer 検出スキルの昇格抑制 gate。
+        #   #28: reward 分散（RODS 学習余地）列を advisory に付与。
         from audit.outcome_attribution import apply_outcome_ranking
+        from audit.usage import compute_negative_transfer
+        try:
+            neg_transfer = compute_negative_transfer(usage_data)
+        except Exception:
+            neg_transfer = []
+        corrections_data = _load_corrections(proj)
         triage_result = apply_outcome_ranking(
-            triage_result, usage=usage_data, sessions=sessions
+            triage_result,
+            usage=usage_data,
+            sessions=sessions,
+            corrections=corrections_data,
+            negative_transfer=neg_transfer,
         )
         result["phases"]["skill_triage"] = triage_result
     except Exception as e:
