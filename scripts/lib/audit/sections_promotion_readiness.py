@@ -84,6 +84,29 @@ def _direction_line(dr: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _slug_hygiene_lines(opr) -> List[str]:
+    """#24: optimize_history に worktree ディレクトリ名 slug が混入していないか健全性チェック
+    の結果を1行 surface する。silence≠evaluated（この PJ の慣例）に従い、混入 0 件でも
+    『✓ worktree名slug混入なし』を残し、検出時は該当 slug を警告行で出す。
+
+    ``detect_worktree_name_slugs`` 未提供（旧 module 解決）でも例外を投げず沈黙しない —
+    呼び出し側が import 済みの opr を渡すため、getattr で防御的に確認する。
+    """
+    detect = getattr(opr, "detect_worktree_name_slugs", None)
+    if detect is None:
+        return []
+    suspects = detect()
+    if not suspects:
+        return [f"  {_mark(True)} slug 健全性: worktree 名 slug の混入なし（#24）"]
+    sample = ", ".join(suspects[:5])
+    extra = f" 他{len(suspects) - 5}件" if len(suspects) > 5 else ""
+    return [
+        f"  {_mark(False)} slug 健全性: optimize_history に worktree 名 slug が "
+        f"{len(suspects)} 件混入（#24・本体 repo 名へ未正規化の汚染）",
+        f"      該当: {sample}{extra}（pj_slug_backfill で回収 or 該当ファイルをマージ）",
+    ]
+
+
 def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
     """ADR-046 重み昇格レディネスを 3 条件 ✓/✗ で surface する（決定論・LLM 非依存）。
 
@@ -114,6 +137,7 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
     body: List[str] = [_variance_line(result["variance"])]
     body.extend(_denominator_line(result["denominator"]))
     body.extend(_direction_line(result["direction"]))
+    body.extend(_slug_hygiene_lines(opr))
 
     if result.get("promote"):
         body.append("")

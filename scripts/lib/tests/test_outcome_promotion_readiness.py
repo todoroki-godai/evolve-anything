@@ -542,6 +542,44 @@ class TestBuildSection:
         assert "✓" in combined
 
 
+class TestSlugHygieneSurface:
+    """#24: detect_worktree_name_slugs を promotion readiness section に surface 配線。
+    silence≠evaluated: 混入 0 件でも ✓ 行を残し、検出時は警告行 + 該当 slug を出す。"""
+
+    def test_clean_store_surfaces_checkmark_line(self, tmp_path, monkeypatch):
+        from audit.sections_promotion_readiness import build_promotion_readiness_section
+
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        # section が None にならないよう per-PJ データを最低 1 件置く。
+        _write_jsonl(tmp_path / "corrections.jsonl", [_correction("/p/a", "iya", "s1", now)])
+        # optimize_history は clean な slug のみ。
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        (hist / "evolve-anything.jsonl").write_text("{}\n")
+
+        lines = build_promotion_readiness_section(tmp_path)
+        combined = "\n".join(lines)
+        assert "slug 健全性" in combined
+        assert "混入なし" in combined  # ✓ 行（評価済みの可視化）
+
+    def test_contaminated_store_surfaces_warning_with_slug(self, tmp_path, monkeypatch):
+        from audit.sections_promotion_readiness import build_promotion_readiness_section
+
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        _write_jsonl(tmp_path / "corrections.jsonl", [_correction("/p/a", "iya", "s1", now)])
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        (hist / "agent-deadbeef.jsonl").write_text("{}\n")
+
+        lines = build_promotion_readiness_section(tmp_path)
+        combined = "\n".join(lines)
+        assert "slug 健全性" in combined
+        assert "✗" in combined
+        assert "agent-deadbeef" in combined  # 該当 slug を警告行に出す
+
+
 class TestObservabilityWiring:
     def test_registered_in_observability_builders(self):
         # ADR-028: _OBSERVABILITY_BUILDERS への登録で markdown / 構造化 両経路に伝播
