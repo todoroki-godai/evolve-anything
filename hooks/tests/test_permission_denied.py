@@ -91,6 +91,25 @@ class TestPermissionDenied:
         assert "worktree" in record
         assert record["worktree"]["name"] == "feature-x"
 
+    def test_file_path_none_does_not_crash(self, patch_data_dir):
+        """tool_input.file_path が明示的に None でも TypeError にならない（#30 同型）。
+
+        `.get("file_path", "")` のデフォルトは「キー欠落」しか守らず、値が None の
+        とき `None[:200]` で TypeError になる。None 合体で守る。
+        """
+        import permission_denied
+
+        event = {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": None},
+            "session_id": "sess-pd-none",
+        }
+        permission_denied.handle_permission_denied(event)  # should not raise
+
+        errors_path = patch_data_dir / "errors.jsonl"
+        record = json.loads(errors_path.read_text().strip())
+        assert record["type"] == "permission_denied"
+
     def test_main_reads_stdin(self, patch_data_dir):
         """main() が stdin から JSON を読んで処理する。"""
         import permission_denied
