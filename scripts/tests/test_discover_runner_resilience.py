@@ -85,6 +85,53 @@ def test_determine_scope_failure_does_not_crash(tmp_path):
     assert "scope boom" in result["scope_error"]
 
 
+# ── #30: errors.py の None 値 subscript（#521 regression）─────
+
+
+def test_detect_error_patterns_tolerates_none_error_value():
+    """errors.jsonl の レコードが {"error": None} でも detect_error_patterns は落ちない（#30）。
+
+    `rec.get("error", "")[:200]` は "error" キーが存在し値が明示的に None のとき
+    `None[:200]` で `'NoneType' object is not subscriptable` になる。`.get(..., "")`
+    のデフォルトは「キー欠落」しか守らず「値が None」を守れない。None 合体で守る。
+    """
+    import discover.errors as errors_mod
+    import telemetry_query
+
+    recs = [
+        {"error": None},          # 値が明示的に None（#30 の再現データ）
+        {"error": "boom"},
+        {"error": "boom"},
+        {"error": "boom"},        # 閾値 3 を満たす実エラー
+        {},                       # キー欠落（従来 .get default で守れていたケース）
+    ]
+    # query_errors は detect_error_patterns 内で telemetry_query から local import
+    # されるため、ソースモジュール側を mock する（call graph の実呼び先）。
+    with mock.patch.object(telemetry_query, "query_errors", return_value=recs):
+        patterns = errors_mod.detect_error_patterns(project_root=None)
+    # 落ちずに集計でき、None/欠落は空文字扱いで除外、実エラーのみ拾う
+    assert isinstance(patterns, list)
+    assert any(p["pattern"] == "boom" and p["count"] == 3 for p in patterns)
+
+
+def test_run_discover_does_not_crash_when_errors_contain_none(tmp_path):
+    """errors レコードに None 値があっても run_discover 全体は落ちない（#30）。
+
+    detect_error_patterns は run_discover の try/except 外で呼ばれているため、
+    そこが落ちると run_discover 全体が落ち、Phase 2 except に吸われて
+    reflect_data_count が欠落する（→ #32 の二次クラッシュ連鎖）。
+    """
+    import telemetry_query
+
+    with mock.patch.object(
+        telemetry_query, "query_errors", return_value=[{"error": None}],
+    ):
+        result = discover.run_discover(project_root=tmp_path)
+    assert isinstance(result, dict)
+    # 落ちずに完走するので degraded sentinel ではなく実 contract キーが揃う
+    assert "reflect_data_count" in result
+
+
 # ── #526-3: reflect_data_count の degraded フォールバック ──────
 
 

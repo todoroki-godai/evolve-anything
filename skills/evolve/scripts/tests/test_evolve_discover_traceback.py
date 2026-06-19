@@ -47,6 +47,37 @@ def test_discover_phase_captures_traceback_on_failure(tmp_path, monkeypatch):
     assert "discover boom" in discover_phase["traceback"]
 
 
+def test_discover_full_crash_sets_degraded_reflect_count(tmp_path, monkeypatch):
+    """run_discover が全クラッシュしても discover フェーズに degraded sentinel
+    reflect_data_count == -1 を残す（#32）。
+
+    discover が例外で全クラッシュすると phase 出力が `{"error":..., "traceback":...}`
+    だけになり `reflect_data_count` キー自体が欠落 → 下流が `.get("reflect_data_count")`
+    で None。evolve スキル手順は degraded を sentinel `-1` として扱い `< 0` で判定する
+    規定だが、実際は None/欠落になり `None < 0` で二次クラッシュしていた。
+    全クラッシュ経路でも degraded sentinel を必ずセットして契約を一本化する。
+    """
+    fake = type(sys)("discover")
+
+    def _boom(**kwargs):
+        raise RuntimeError("discover boom")
+
+    fake.run_discover = _boom
+    monkeypatch.setitem(sys.modules, "discover", fake)
+
+    live_audit = sys.modules.get("audit", audit)
+    with mock.patch.object(live_audit, "run_audit", return_value="## audit report"):
+        result = run_evolve(project_dir=str(tmp_path), dry_run=True)
+
+    discover_phase = result["phases"]["discover"]
+    # 全クラッシュでも degraded sentinel -1（int）で契約を一本化する
+    assert discover_phase.get("reflect_data_count") == -1
+    assert isinstance(discover_phase["reflect_data_count"], int)
+    # クラッシュ自体の観測可能性は #521 の契約どおり維持する
+    assert discover_phase["error"] == "discover boom"
+    assert "traceback" in discover_phase
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
