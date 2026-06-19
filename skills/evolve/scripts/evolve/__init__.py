@@ -54,6 +54,11 @@ from ._report import _emit_growth_crystallization, _warn_insufficient_data
 # _resolve_evolve_slug を `import evolve as _ev` 経由で呼ぶ（_context.py の docstring 参照）。
 from ._context import EvolveContext
 
+# 診断フェーズ群（Phase 1〜3.4）は phases_diagnose.py に分離（PR 6/8, refs #531）。
+# phases_diagnose は __init__ を module-level import しない（循環回避・evolve 参照は関数内）ため
+# ここで import しても循環しない。
+from .phases_diagnose import run_diagnose_phases
+
 # #517: DATA_DIR / EVOLVE_STATE_FILE はパッケージ（__init__）load 時に env 優先で再解決する。
 # `del sys.modules["evolve"]` + reimport で CLAUDE_PLUGIN_DATA を再評価させる契約
 # （test_evolve_data_dir_env）を保つため、_env から frozen 値を re-export するのではなく
@@ -116,261 +121,13 @@ def run_evolve(
     )
     result: Dict[str, Any] = ctx.new_result()
 
-    # Phase 1: Observe データ確認
-    sufficiency = _ev.check_data_sufficiency()
-    result["phases"]["observe"] = sufficiency
-
-    if not sufficiency["sufficient"]:
-        if sufficiency.get("backfill_recommended"):
-            # テレメトリ未取得 = 初回導入直後。backfill を先に実行するよう提案する
-            # （自動実行はせず、副作用が大きいためユーザー判断に委ねる）。
-            result["phases"]["observe"]["action"] = "backfill_recommended"
-        else:
-            # スキップ推奨だがユーザー選択に委ねる
-            result["phases"]["observe"]["action"] = "skip_recommended"
-        _warn_insufficient_data(sufficiency)
-    elif sufficiency.get("no_new_observations"):
-        # データは十分だが前回 evolve 以降の新規観測がゼロ（#396）。フル実行は
-        # no-op になりやすいので軽量モードを提案する（SKILL.md が surface）。
-        # 自動スキップはしない — べき等性は保ちつつユーザーに選択させる。
-        result["phases"]["observe"]["action"] = "lightweight_recommended"
-
-    # Phase 1.5: Fitness 関数チェック
-    fitness_check = _ev.check_fitness_function(project_dir)
-    result["phases"]["fitness"] = fitness_check
-
-    # Phase 1.6: observe-first pre-flight early-return（#407）
-    # observe（新規観測の有無）と fitness はどちらもファイル走査だけで安価に算出できる。
-    # observe_first 時はここで打ち切り、重いフェーズ（discover/audit/skill_evolve/
-    # remediation/reorganize/prune…）を回さずに action だけ返す。SKILL Step 1 が action を
-    # 見て「軽量/スキップ/フル」を選び、フルが必要なときだけ重い dry-run を別途走らせる。
-    # これで lightweight_recommended の判定が「フル分析コストを払う前」に効く。
-    if observe_first:
-        result["observe_first"] = True
-        result["skipped_heavy_phases"] = True
+    # #531 PR6: 診断フェーズ群（Phase 1〜3.4）は phases_diagnose.run_diagnose_phases に抽出済み。
+    # result を in-place mutate する。observe_first は ctx でなく明示引数で渡す（ctx は #4 dataclass
+    # の契約・observe_first は pre-flight 制御フラグで状態でないため）。early-return は
+    # result["skipped_heavy_phases"] フラグで表現し、ここで本体を打ち切る。
+    run_diagnose_phases(result, ctx, observe_first=observe_first)
+    if result.get("skipped_heavy_phases"):
         return result
-
-    # Phase 2: Discover
-    try:
-        from discover import run_discover
-        project_root = Path(project_dir) if project_dir else None
-        discover_result = run_discover(project_root=project_root, tool_usage=True)
-        result["phases"]["discover"] = discover_result
-    except Exception as e:
-        # traceback を捨てると root cause が永久に観測不能になり result が緑に見える（#521）。
-        # self_analysis が後で参照できるよう traceback を残す。
-        result["phases"]["discover"] = {
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-        }
-
-    # Phase 2.5: Enrich（discover に統合済み — discover 出力から取得）
-    discover_data = result["phases"].get("discover", {})
-    result["phases"]["enrich"] = {
-        "enrichments": discover_data.get("matched_skills", []),
-        "unmatched_patterns": discover_data.get("unmatched_patterns", []),
-        "total_enrichments": len(discover_data.get("matched_skills", [])),
-        "total_unmatched": len(discover_data.get("unmatched_patterns", [])),
-        "skipped_reason": "no_patterns_available" if not discover_data.get("matched_skills") and not discover_data.get("unmatched_patterns") else None,
-    }
-
-    # Phase 2.6: Skill Triage（trigger eval + CREATE/UPDATE/SPLIT/MERGE/OK 判定）
-    try:
-        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-        from skill_triage import triage_all_skills
-        from telemetry_query import query_sessions, query_usage
-        proj = Path(project_dir) if project_dir else Path.cwd()
-        sessions = query_sessions(project=proj.name)
-        usage_data = query_usage(project=proj.name)
-        missed = discover_data.get("missed_skill_opportunities", [])
-        triage_result = triage_all_skills(
-            sessions=sessions,
-            usage=usage_data,
-            missed_skills=missed,
-            project_root=proj,
-            dry_run=dry_run,  # #308: --dry-run 時は triage_ledger に書き込まない
-        )
-        # #433 先行スコープ: corrections 非依存の2軸（一発成功率 / rework 率）を
-        # スキル単位に分解し、triage 候補の順位に自動入力（advisory→閉ループ配線）。
-        # in-memory の sessions/usage_data を渡すので DATA_DIR 再読込なし（dry-run 安全）。
-        from audit.outcome_attribution import apply_outcome_ranking
-        triage_result = apply_outcome_ranking(
-            triage_result, usage=usage_data, sessions=sessions
-        )
-        result["phases"]["skill_triage"] = triage_result
-    except Exception as e:
-        result["phases"]["skill_triage"] = {"error": str(e), "skipped": True}
-
-    # Phase 2.65: Skill Quality Pattern Detection（テレメトリ不要）
-    try:
-        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-        from instruction_patterns import detect_patterns, check_defaults_first, analyze_context_efficiency
-        from quality_engine import recommend_patterns
-
-        proj = Path(project_dir) if project_dir else Path.cwd()
-        claude_md_path = proj / "CLAUDE.md"
-        claude_md_content = claude_md_path.read_text(encoding="utf-8") if claude_md_path.is_file() else None
-
-        quality_results = {}
-        skills_dir = proj / ".claude" / "skills"
-        if skills_dir.is_dir():
-            for skill_dir in skills_dir.iterdir():
-                if not skill_dir.is_dir():
-                    continue
-                skill_md = skill_dir / "SKILL.md"
-                if not skill_md.is_file():
-                    continue
-                content = skill_md.read_text(encoding="utf-8")
-                patterns = detect_patterns(content)
-                defaults = check_defaults_first(content)
-                ctx_eff = analyze_context_efficiency(content, claude_md_content)
-                recommendation = recommend_patterns(patterns, content)
-                quality_results[skill_dir.name] = {
-                    "patterns": patterns,
-                    "defaults_first_score": defaults,
-                    "context_efficiency": ctx_eff,
-                    "recommendation": recommendation,
-                }
-        result["phases"]["quality_patterns"] = quality_results
-    except Exception as e:
-        result["phases"]["quality_patterns"] = {"error": str(e)}
-
-    # Phase 2.7: Layer Diagnose（全レイヤー診断）
-    try:
-        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-        from layer_diagnose import diagnose_all_layers
-        proj = Path(project_dir) if project_dir else Path.cwd()
-        layer_result = diagnose_all_layers(proj)
-        result["phases"]["layer_diagnose"] = layer_result
-    except Exception as e:
-        result["phases"]["layer_diagnose"] = {"error": str(e)}
-
-    # Phase 3: Audit
-    try:
-        from audit import run_audit
-        # MemTrace(#264) と constitutional(slop_detector #255 を 10% ブレンド) は opt-in だが、
-        # evolve では既定で有効化し「evolve するだけで全機能が効く」状態にする。
-        # MemTrace は決定論(LLM ゼロ)、constitutional は haiku×最大4 だがレイヤ単位キャッシュで
-        # 通常 0〜1 コール（constitutional_cache.json）。
-        # audit 実行中の stderr（Chaos/Constitutional スキップ等）を self_analysis に
-        # 渡せるよう捕捉する（#523-1）。Python warnings ではないため _capture_warnings
-        # では拾えない経路。
-        with _capture_audit_stderr(ctx.warning_sink):
-            audit_report = run_audit(
-                project_dir, memory_trace=True, constitutional_score=True, dry_run=dry_run
-            )
-        result["phases"]["audit"] = {"report": audit_report}
-    except Exception as e:
-        result["phases"]["audit"] = {"error": str(e)}
-
-    # 構造化 env_score の surface（#523-2/#526-2）: run_audit は markdown レポート文字列
-    # だけを返し構造化 env_score を捨てるため、SKILL.md / references/report-narration.md が
-    # 読むトップレベル `result["env_score"]` が常に欠落し成長レベル演出が一度も発火しなかった。
-    # 同じ権威ソース（compute_environment_fitness）から取り直して compute_level まで解決する。
-    # 算出失敗時も黙らず degraded=True を置く（silence != evaluated の自己適用）。
-    result["env_score"] = _compute_env_score_struct(project_dir, dry_run=dry_run)
-
-    # Observability contract（#272 後続）: audit の 217KB markdown に埋もれて surface されない
-    # observability 行（unmanaged_pitfalls / glossary_drift …）を構造化フィールドに昇格させ、
-    # assistant が必ずサマリに出せるようにする。silence != evaluated 原則を契約として明文化。
-    try:
-        from audit import collect_observability
-
-        _obs_proj = Path(project_dir) if project_dir else Path.cwd()
-        result["observability"] = collect_observability(_obs_proj)
-    except Exception as e:
-        result["observability"] = {"error": str(e)}
-
-    # #528-4: observability.skill_triage（案内行のみ）に triage の実件数 findings を注入する。
-    # collect_observability は triage を再実行しない設計で件数を持てないが、evolve は
-    # Phase 2.6 で算出済みの triage_result を `result["phases"]["skill_triage"]` に持つ。
-    # findings レーンに実データ（CREATE/UPDATE/SPLIT/MERGE 件数）が無いのは contract 違反
-    # だったため、ここで件数行を追記する（silence != evaluated）。
-    try:
-        from audit.sections_triage import build_skill_triage_counts_lines
-
-        _obs = result.get("observability")
-        if isinstance(_obs, dict) and isinstance(_obs.get("skill_triage"), list):
-            _count_lines = build_skill_triage_counts_lines(
-                result["phases"].get("skill_triage")
-            )
-            if _count_lines:
-                _obs["skill_triage"] = _obs["skill_triage"] + _count_lines
-    except Exception:
-        pass
-
-    # Phase 3.2: Constitutional cache 状態の surface（#408-D）
-    _surface_constitutional_status(
-        Path(project_dir) if project_dir else Path.cwd(),
-        ctx.warning_sink,
-        result.get("observability"),
-    )
-
-    # Phase 3.3: Skill Quality Trace Analysis（テレメトリ依存 — data_sufficiency 後）
-    try:
-        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-        from quality_engine import analyze_traces, compute_overall_score, record_quality_score
-
-        proj = Path(project_dir) if project_dir else Path.cwd()
-        quality_patterns = result["phases"].get("quality_patterns", {})
-        trace_results = {}
-        for skill_name, qr in quality_patterns.items():
-            if isinstance(qr, dict) and "patterns" in qr:
-                trace = analyze_traces(skill_name, project=proj.name)
-                pattern_score = qr["patterns"].get("score", 0.0)
-                confusion = trace.get("confusion_score") if trace else None
-                ctx_eff = qr.get("context_efficiency", {}).get("efficiency_score", 0.5)
-                defaults = qr.get("defaults_first_score", 1.0)
-                overall = compute_overall_score(pattern_score, confusion, ctx_eff, defaults)
-                trace_results[skill_name] = {
-                    "confusion_score": confusion,
-                    "overall_score": overall,
-                }
-                if not dry_run:
-                    record_quality_score(skill_name, {
-                        "pattern_score": pattern_score,
-                        "confusion_score": confusion,
-                        "context_efficiency": ctx_eff,
-                        "defaults_first_score": defaults,
-                        "overall": overall,
-                    })
-        result["phases"]["quality_traces"] = trace_results
-    except Exception as e:
-        result["phases"]["quality_traces"] = {"error": str(e)}
-
-    # Phase 3.4: Skill Self-Evolution Assessment（適性判定 — remediation の前に実行）
-    try:
-        import evolve as _evolve_mod
-        if _evolve_mod.skill_evolve_assessment is None:
-            sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-            from skill_evolve import skill_evolve_assessment as _sea
-            _evolve_mod.skill_evolve_assessment = _sea
-        skill_evolve_assessment = _evolve_mod.skill_evolve_assessment
-        proj = Path(project_dir) if project_dir else Path.cwd()
-        se_assessment = skill_evolve_assessment(
-            proj, project=proj.name,
-            skip_skills=skip_skills,
-            skip_llm_evolve=skip_llm_evolve,
-            confirmed_batch=confirmed_batch,
-        )
-        # _meta エントリを分離
-        _excluded_meta = next((a for a in se_assessment if a.get("_meta") == "excluded_globals"), {})
-        _batch_guard = next((a for a in se_assessment if a.get("_meta") == "batch_guard_trigger"), None)
-        _assessments = [a for a in se_assessment if not a.get("_meta")]
-        result["phases"]["skill_evolve"] = {
-            "assessments": _assessments,
-            "total_skills": len(_assessments),
-            "already_evolved": sum(1 for a in _assessments if a.get("already_evolved")),
-            "high_suitability": sum(1 for a in _assessments if a.get("suitability") == "high"),
-            "medium_suitability": sum(1 for a in _assessments if a.get("suitability") == "medium"),
-            "insufficient_usage": sum(1 for a in _assessments if a.get("suitability") == "insufficient_usage"),
-            "rejected": sum(1 for a in _assessments if a.get("suitability") == "rejected"),
-            "excluded_global_count": _excluded_meta.get("excluded_global_count", 0),
-            "excluded_global_hint": _excluded_meta.get("hint", ""),
-            "batch_guard_trigger": _batch_guard,
-        }
-    except Exception as e:
-        result["phases"]["skill_evolve"] = {"error": str(e)}
 
     # Phase 3.5: Remediation（audit + discover + skill_evolve の結果を統合）
     try:
@@ -775,6 +532,10 @@ def run_evolve(
 
     # State 更新（dry-run でない場合）
     if not dry_run:
+        # Phase 1 の sufficiency は phases_diagnose で result["phases"]["observe"] に格納済み
+        # （同一 dict・sessions/observations キーは不変）。診断フェーズ抽出（#531 PR6）後は
+        # ここから取り直す（ローカル sufficiency が run_diagnose_phases 側へ移ったため）。
+        sufficiency = result["phases"]["observe"]
         state = load_evolve_state()
         state.update({
             "last_run_timestamp": datetime.now(timezone.utc).isoformat(),
