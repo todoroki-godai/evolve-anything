@@ -8,11 +8,11 @@ STATUS_STALE = 'STALE'
 
 # fleet public function / class signatures
 AuditResult(status: 'str', env_score: 'float | None' = None, phase: 'str | None' = None, growth_level: 'int | None' = None, latest_audit: 'datetime | None' = None, message: 'str' = '', issues_summary: 'IssuesSummary | None' = None) -> None
-Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False) -> None
+Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False, links: 'list[str]' = <factory>) -> None
 FleetRow(pj_name: 'str', status: 'str', env_score: 'float | None' = None, growth_level: 'int | None' = None, phase: 'str | None' = None, latest_audit: 'datetime | None' = None, audit_status: 'str' = 'OK', message: 'str' = '', issues_summary: 'IssuesSummary | None' = None, subagents_30d: 'int' = 0, tokens_30d: 'int | None' = None, cache_hit_pct: 'float | None' = None, cache_reuse_factor: 'float | None' = None) -> None
 IssuesSummary(line_violations: 'int' = 0, hardcoded_values: 'int' = 0, potential_duplicates: 'int' = 0, corrections_unprocessed: 'int' = 0, skill_quality_degraded_count: 'int' = 0) -> None
 MemoryDir(memory_dir: Path, pj_display: str)
-RecallHit(pj_display: 'str', file_path: 'Path', score: 'float', snippet: 'str', is_index: 'bool') -> None
+RecallHit(pj_display: 'str', file_path: 'Path', score: 'float', snippet: 'str', is_index: 'bool', is_linked: 'bool' = False, linked: "list['RecallHit']" = <factory>) -> None
 aggregate_subagents_by_project(subagents_path: 'Path | None' = None, *, window_days: 'int' = 30, now: 'datetime | None' = None) -> 'dict[str, int]'
 classify_project(pj_path: 'Path', settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, stale_days: 'int' = 30, now: 'datetime | None' = None) -> 'str'
 collect_fleet_status(root: 'Path | None' = None, settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, data_dir: 'Path | None' = None, timeout: 'float' = 10.0, max_workers: 'int' = 2, projects: 'list[Path] | None' = None) -> 'list[FleetRow]'
