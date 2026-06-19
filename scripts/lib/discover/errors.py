@@ -33,7 +33,9 @@ def detect_error_patterns(
     )
     counter: Counter = Counter()
     for rec in errors:
-        error = rec.get("error", "")[:200]
+        # `.get("error", "")` のデフォルトは「キー欠落」しか守らず、値が明示的に None の
+        # とき `None[:200]` で TypeError になる。None 合体で守る（#30 / #521 regression）。
+        error = (rec.get("error") or "")[:200]
         if error:
             counter[error] += 1
 

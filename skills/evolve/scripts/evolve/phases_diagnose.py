@@ -92,9 +92,14 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
     except Exception as e:
         # traceback を捨てると root cause が永久に観測不能になり result が緑に見える（#521）。
         # self_analysis が後で参照できるよう traceback を残す。
+        # discover が全クラッシュすると reflect_data_count キー自体が欠落し、下流が
+        # None で比較して `None < 0` 二次クラッシュする（#32）。degraded 表現を1つに
+        # 正準化するため、全クラッシュ経路でも degraded sentinel -1（int）を必ずセット
+        # する（runner.py の部分失敗フォールバックと同じ契約に揃える・#526-3）。
         result["phases"]["discover"] = {
             "error": str(e),
             "traceback": traceback.format_exc(),
+            "reflect_data_count": -1,
         }
 
     # Phase 2.5: Enrich（discover に統合済み — discover 出力から取得）

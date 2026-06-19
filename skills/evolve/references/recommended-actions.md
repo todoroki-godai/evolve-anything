@@ -5,7 +5,9 @@ Step 10 本体の MUST（必ず出力・判定カード3段階・カスタムス
 
 ## 10.1: Reflect 推奨
 
-discover 結果の `reflect_data_count` の値を確認し、**必ず**以下のいずれかを表示する:
+discover 結果の `reflect_data_count` の値を確認し、**必ず**以下のいずれかを表示する。
+**数値比較の前に「欠落（None）または `< 0`」を先に判定する**（discover 全クラッシュ時はキー自体が欠落しうるため `None < 0` 二次クラッシュを避ける・#32）:
+- `reflect_data_count is None or reflect_data_count < 0` → 「Reflect: discover 失敗のため reflect 件数 不明」（degraded sentinel `-1` or 欠落・#526-3 / #32）
 - `reflect_data_count >= 1` → 「⚠ 未処理の修正フィードバックが {N} 件あります。`/evolve-anything:reflect` で反映すると evolve-skill の精度が向上します」
 - `reflect_data_count == 0` → 「Reflect: 未処理なし」
 
