@@ -816,9 +816,9 @@ evolve.py 出力トップレベル `self_analysis`（`analyze_evolve_result` が
 **必ず以下を順に行う（MUST）**:
 1. **surface（3カテゴリとも）**: 各 `summary_line` をそのまま列挙。0 件でも `✓ 評価したが該当なし` を省略しない（silence ≠ evaluated）。`{"error": ...}` はそのまま表示
 2. **候補ゼロなら終了**: `total_candidates == 0` ならここで終了
-3. **dedup**: `gh issue list --repo todoroki-godai/evolve-anything --state open` と突合し `flatten_candidates`+`filter_duplicates` で root cause 単位の重複を除く。duplicates は「既存 #N と重複 — スキップ」と1行ずつ表示
+3. **dedup**: `gh issue list --repo todoroki-godai/evolve-anything --state all --json number,title,body,state` と突合し `flatten_candidates`+`filter_duplicates` で root cause 単位の重複を除く。duplicates は「既存 #N と重複 — スキップ」、`regressions`（前回 closed と同一 root cause の再発・`unique` にも残る）は「⚠️ 再発→ #N（前回 closed）の regression」と1行ずつ表示（#33）
 4. **承認（unique のみ・提案詳細プロトコル）**: 1件ずつ title・根拠（severity）・起票先・ラベル（`suggested_label` は提案値で変更/スキップ可）を提示 → AskUserQuestion で個別承認。10 件超は per-item 10 件まで
-5. **起票（承認分のみ）**: `render_issue_body` でマーカー付き body 生成 → `gh issue create --repo todoroki-godai/evolve-anything`
+5. **起票（承認分のみ）**: `render_issue_body` でマーカー付き body 生成 → `gh issue create --repo todoroki-godai/evolve-anything`。`regressions` にある候補は `render_regression_body(cand, N)`（N=前回 closed 番号）で body 冒頭に backlink を入れて起票
 
 → self_analysis の構造詳細・各カテゴリの検出内容・dedup/render の実コードは **[references/self-analysis.md](references/self-analysis.md)**。
 

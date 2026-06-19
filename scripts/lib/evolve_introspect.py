@@ -615,6 +615,21 @@ def render_issue_body(candidate: Dict[str, Any]) -> str:
     return f"{candidate.get('body', '').rstrip()}\n\n{marker}\n"
 
 
+def render_regression_body(candidate: Dict[str, Any], prev_number: int) -> str:
+    """regression（前回 closed と同一 root cause の再発）候補の body を生成する。
+
+    body 冒頭に「#N の regression（前回 closed）」のバックリンクを差し込み、
+    一度直したはずが再発した＝不完全な修正だった文脈をレビュアーに伝える（#33）。
+    末尾には通常通り dedup マーカーを残し、再発分も次回以降の dedup 対象に保つ。
+    """
+    note = (
+        f"> ⚠️ #{prev_number} の regression（前回 closed）。"
+        f"同一 root cause が再発しており、前回の修正が不完全だった可能性があります。"
+    )
+    base = render_issue_body(candidate)
+    return f"{note}\n\n{base}"
+
+
 def extract_marker(text: str) -> Optional[str]:
     """body から dedup_key を取り出す。無ければ None。"""
     m = _MARKER_RE.search(text or "")
@@ -626,33 +641,64 @@ def filter_duplicates(
     existing_issues: List[Dict[str, Any]],
     title_threshold: float = _TITLE_SIMILARITY_THRESHOLD,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """既存 open issue と重複する候補を除外する。
+    """既存 issue と重複する候補を仕分ける（open/closed を区別）。
 
-    1) body の隠しマーカー（dedup_key）が一致する既存 issue があれば dup（最強シグナル）。
-    2) マーカーが無い手動起票でも、タイトル類似度が閾値以上なら dup と見なす。
+    1) body の隠しマーカー（dedup_key）が **open** issue に一致 → dup（最強シグナル）。
+    2) マーカーが無い手動起票でも、**open** issue とタイトル類似度が閾値以上なら dup。
+    3) マーカーが **closed** issue にのみ一致 → regression（再発）。dup にはせず unique に
+       残しつつ、前歴 #N を呼び出し側へ surface する（#33）。一度直したはずが再発した
+       ＝不完全な修正だった文脈をレビュアーに伝えるため、新規起票時に backlink を添える。
+
+    closed issue へのタイトル類似一致は「確実に前歴へ紐づけられない」ため regression
+    扱いしない（誤バックリンク防止）。マーカー一致のみを regression シグナルとする。
 
     Args:
         candidates: analyze_evolve_result が出した候補リスト。
-        existing_issues: [{"number": int, "title": str, "body": str}, ...]（gh issue list 由来）。
+        existing_issues: [{"number": int, "title": str, "body": str, "state": str}, ...]
+            （gh issue list 由来）。state 欠落は後方互換で open 扱い。
 
     Returns:
-        {"unique": [...], "duplicates": [{**candidate, "existing_number": int, "reason": str}]}
+        {
+          "unique": [...],
+          "duplicates": [{**candidate, "existing_number": int, "reason": str}],
+          "regressions": [{**candidate, "existing_number": int, "reason": "closed_marker"}],
+        }
     """
-    marker_index: Dict[str, int] = {}
+    open_marker_index: Dict[str, int] = {}
+    closed_marker_index: Dict[str, int] = {}
+    open_issues: List[Dict[str, Any]] = []
     for issue in existing_issues or []:
-        key = extract_marker(issue.get("body", ""))
-        if key:
-            marker_index[key] = issue.get("number")
+        if _is_closed(issue):
+            key = extract_marker(issue.get("body", ""))
+            # open が後で勝てるよう、closed は open に無いときだけ採用（open 優先）
+            if key and key not in closed_marker_index:
+                closed_marker_index[key] = issue.get("number")
+        else:
+            open_issues.append(issue)
+            key = extract_marker(issue.get("body", ""))
+            if key:
+                open_marker_index[key] = issue.get("number")
 
     unique: List[Dict[str, Any]] = []
     duplicates: List[Dict[str, Any]] = []
+    regressions: List[Dict[str, Any]] = []
     for cand in candidates:
-        dup_number, reason = _match_existing(cand, existing_issues or [], marker_index, title_threshold)
+        dup_number, reason = _match_existing(cand, open_issues, open_marker_index, title_threshold)
         if dup_number is not None:
             duplicates.append({**cand, "existing_number": dup_number, "reason": reason})
-        else:
-            unique.append(cand)
-    return {"unique": unique, "duplicates": duplicates}
+            continue
+        # open に dup が無い場合のみ closed マーカー（regression）を判定
+        prev_closed = closed_marker_index.get(cand["dedup_key"])
+        if prev_closed is not None:
+            regressions.append({**cand, "existing_number": prev_closed, "reason": "closed_marker"})
+        unique.append(cand)
+    return {"unique": unique, "duplicates": duplicates, "regressions": regressions}
+
+
+def _is_closed(issue: Dict[str, Any]) -> bool:
+    """issue が closed かを判定する。state 欠落（旧 gh 出力）は open 扱い（後方互換）。"""
+    state = issue.get("state")
+    return isinstance(state, str) and state.strip().lower() == "closed"
 
 
 def _match_existing(
