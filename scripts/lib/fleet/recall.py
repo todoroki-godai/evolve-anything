@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -29,6 +29,8 @@ _DESC_BOOST = 2.0
 _NAME_BOOST = 3.0
 _INDEX_PENALTY = 0.5  # MEMORY.md index 行は fact 本体より下位に（dedup 意図）
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+_LINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")  # [[name]] 相互リンク（#11）
+_LINK_EXPAND_TOPN = 5  # 1-hop 展開する直接 hit の上限（爆発防止・深さ 1 固定）
 
 
 @dataclass
@@ -41,6 +43,7 @@ class Fact:
     body: str
     parse_ok: bool          # frontmatter から name/description を取れたか
     malformed_frontmatter: bool = False  # delimiter はあるが YAML 不正/未閉じ
+    links: list[str] = field(default_factory=list)  # 本文中の [[name]] リンク（順序保持・一意化, #11）
 
 
 @dataclass
@@ -50,10 +53,22 @@ class RecallHit:
     score: float
     snippet: str
     is_index: bool
+    is_linked: bool = False              # 1-hop 展開由来（直接 hit でない, #11）
+    linked: list["RecallHit"] = field(default_factory=list)  # この hit の [[link]] 1-hop 先（#11）
 
 
 def _tokenize(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text)]
+
+
+def _extract_links(body: str) -> list[str]:
+    """本文中の `[[name]]` リンクを順序保持・一意化して抽出する（#11）。"""
+    seen: dict[str, None] = {}
+    for m in _LINK_RE.findall(body):
+        name = m.strip()
+        if name and name not in seen:
+            seen[name] = None
+    return list(seen)
 
 
 def parse_fact_file(path: Path) -> Fact:
@@ -61,6 +76,7 @@ def parse_fact_file(path: Path) -> Fact:
 
     frontmatter（先頭 `---` ブロック）から name/description を抽出。frontmatter が
     無い / 不正な場合は本文フォールバック（name = ファイル名 stem、body = 全文）。
+    本文中の `[[name]]` リンクは links に抽出する（#11）。
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -70,12 +86,16 @@ def parse_fact_file(path: Path) -> Fact:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         # frontmatter 無し（MEMORY.md index 等）→ 本文フォールバック（壊れてはいない）
-        return Fact(path, path.stem, "", text.strip(), parse_ok=False)
+        body = text.strip()
+        return Fact(path, path.stem, "", body, parse_ok=False, links=_extract_links(body))
 
     close_idx = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
     if close_idx is None:
         # 開きはあるが閉じが無い → malformed。全文を body にして grep で拾えるように
-        return Fact(path, path.stem, "", text, parse_ok=False, malformed_frontmatter=True)
+        return Fact(
+            path, path.stem, "", text, parse_ok=False,
+            malformed_frontmatter=True, links=_extract_links(text),
+        )
 
     fm_block = "\n".join(lines[1:close_idx])
     body = "\n".join(lines[close_idx + 1:]).strip()
@@ -83,14 +103,20 @@ def parse_fact_file(path: Path) -> Fact:
         data = yaml.safe_load(fm_block)
     except yaml.YAMLError:
         # YAML 不正 → 全文を body にフォールバック（frontmatter 領域も grep 対象に）
-        return Fact(path, path.stem, "", text, parse_ok=False, malformed_frontmatter=True)
+        return Fact(
+            path, path.stem, "", text, parse_ok=False,
+            malformed_frontmatter=True, links=_extract_links(text),
+        )
 
     if not isinstance(data, dict):
-        return Fact(path, path.stem, "", body, parse_ok=False, malformed_frontmatter=True)
+        return Fact(
+            path, path.stem, "", body, parse_ok=False,
+            malformed_frontmatter=True, links=_extract_links(body),
+        )
 
     name = str(data.get("name") or path.stem)
     description = str(data.get("description") or "")
-    return Fact(path, name, description, body, parse_ok=True)
+    return Fact(path, name, description, body, parse_ok=True, links=_extract_links(body))
 
 
 def _make_snippet(body: str, query_terms: list[str]) -> str:
@@ -143,44 +169,103 @@ def recall(
         return []
 
     hits: list[RecallHit] = []
+    # PJ ごとの全 fact（[[link]] 解決のためのインデックス: name/stem → Fact）
+    pj_index: dict[str, dict[str, Fact]] = {}
+    # 直接 hit と紐づく Fact（links 取得用）
+    hit_facts: dict[int, Fact] = {}
+
     for mem in enumerate_memory_dirs(projects_root=projects_root):
+        index: dict[str, Fact] = {}
         for md in sorted(mem.memory_dir.glob("*.md"), key=lambda p: p.name):
             fact = parse_fact_file(md)
+            # link 解決インデックス（name / ファイル名 stem の両方で引けるように）
+            index.setdefault(fact.name, fact)
+            index.setdefault(md.stem, fact)
             if fact.malformed_frontmatter:
                 print(f"warning: malformed frontmatter, body-grep fallback: {md}", file=sys.stderr)
             score = _score(fact, query_terms)
             if score <= 0:
                 continue
-            hits.append(
-                RecallHit(
-                    pj_display=mem.pj_display,
-                    file_path=md,
-                    score=score,
-                    snippet=_make_snippet(fact.body, query_terms),
-                    is_index=(md.name == _INDEX_FILENAME),
-                )
+            hit = RecallHit(
+                pj_display=mem.pj_display,
+                file_path=md,
+                score=score,
+                snippet=_make_snippet(fact.body, query_terms),
+                is_index=(md.name == _INDEX_FILENAME),
             )
+            hits.append(hit)
+            hit_facts[id(hit)] = fact
+        pj_index[mem.pj_display] = index
 
     hits.sort(key=lambda h: (-h.score, h.pj_display, h.file_path.name))
-    return hits[:limit]
+    top = hits[:limit]
+
+    # 1-hop [[link]] 展開（トップ N hit のみ・深さ 1 固定）。決定論・スコア対象外（#11）。
+    direct_paths = {h.file_path for h in top}
+    for hit in top[:_LINK_EXPAND_TOPN]:
+        fact = hit_facts.get(id(hit))
+        if fact is None or not fact.links:
+            continue
+        hit.linked = _expand_links(fact, pj_index.get(hit.pj_display, {}),
+                                   hit.pj_display, direct_paths, query_terms)
+
+    return top
+
+
+def _expand_links(
+    fact: Fact,
+    index: dict[str, Fact],
+    pj_display: str,
+    direct_paths: set[Path],
+    query_terms: list[str],
+) -> list[RecallHit]:
+    """fact の `[[link]]` を同一 PJ 内で 1-hop 解決し linked hit を返す（#11）。
+
+    - dangling link（解決できない name）は無視（memory 規約上 error ではない）
+    - 直接 hit に既に含まれるファイルは重複させない
+    - スコアは付けない（score=0.0, is_linked=True）。順序は本文中の出現順を保持
+    """
+    linked: list[RecallHit] = []
+    emitted: set[Path] = set()
+    for name in fact.links:
+        target = index.get(name)
+        if target is None:
+            continue  # dangling
+        path = target.file_path
+        if path in direct_paths or path in emitted:
+            continue  # 直接 hit / 既出は重複させない
+        emitted.add(path)
+        linked.append(
+            RecallHit(
+                pj_display=pj_display,
+                file_path=path,
+                score=0.0,
+                snippet=_make_snippet(target.body, query_terms),
+                is_index=(path.name == _INDEX_FILENAME),
+                is_linked=True,
+            )
+        )
+    return linked
+
+
+def _hit_to_dict(h: RecallHit) -> dict:
+    return {
+        "pj_display": h.pj_display,
+        "file_path": str(h.file_path),
+        "score": round(h.score, 3),
+        "snippet": h.snippet,
+        "is_index": h.is_index,
+    }
 
 
 def format_hits(hits: list[RecallHit], *, as_json: bool) -> str:
     if as_json:
-        return json.dumps(
-            [
-                {
-                    "pj_display": h.pj_display,
-                    "file_path": str(h.file_path),
-                    "score": round(h.score, 3),
-                    "snippet": h.snippet,
-                    "is_index": h.is_index,
-                }
-                for h in hits
-            ],
-            ensure_ascii=False,
-            indent=2,
-        )
+        payload = []
+        for h in hits:
+            d = _hit_to_dict(h)
+            d["linked"] = [_hit_to_dict(lk) for lk in h.linked]
+            payload.append(d)
+        return json.dumps(payload, ensure_ascii=False, indent=2)
     if not hits:
         return "該当する memory はありませんでした。"
     out: list[str] = []
@@ -189,4 +274,8 @@ def format_hits(hits: list[RecallHit], *, as_json: bool) -> str:
         out.append(f"[{h.score:6.2f}] {h.pj_display}{tag}  {h.file_path.name}")
         if h.snippet:
             out.append(f"         {h.snippet}")
+        for lk in h.linked:
+            out.append(f"         ↳ linked: {lk.file_path.name}")
+            if lk.snippet:
+                out.append(f"             {lk.snippet}")
     return "\n".join(out)
