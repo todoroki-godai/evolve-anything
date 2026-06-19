@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+# import 時の凍結値。session_io が「明示的に差し替えられたか」を判定するために保持する。
+# （module-level 定数の Path.home() 凍結が #457 の HOME 隔離を擦り抜け、xdist で実
+#  ~/.claude/projects を読む非hermetic 露出 = keyset snapshot drift の根因だった。）
+_IMPORT_TIME_PROJECTS_DIR = CLAUDE_PROJECTS_DIR
 GLOBAL_RULES_DIR = Path.home() / ".claude" / "rules"
 GLOBAL_HOOKS_DIR = Path.home() / ".claude" / "hooks"
 RL_HOOKS_DIR = Path.home() / ".claude" / "evolve-anything" / "hooks"
