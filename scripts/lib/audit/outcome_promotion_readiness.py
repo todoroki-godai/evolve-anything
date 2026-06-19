@@ -256,20 +256,61 @@ def check_denominators(denom_by_pj: Dict[str, int], *, floor: int) -> Dict[str, 
 def _load_apply_anchors(base: Path) -> Dict[str, List[str]]:
     """optimize_history/<slug>.jsonl から human_accepted=True の timestamp を PJ 別に集める。
 
-    apply イベント（reflect/evolve 適用）の anchor。slug がそのまま PJ キー。
+    apply イベント（reflect/evolve 適用）の anchor。ファイル名 stem が PJ slug。
+
+    #24: 書込側（optimize_history_store.resolve_slug = git-common-dir authoritative）が
+    worktree 安全 slug を出すのが原則だが、write-side fix 以前に書かれた legacy ファイルや
+    フルパス痕跡 stem が混じると幻PJ として cross-PJ anchor 統計を汚す。読み取り時にも
+    ``_normalize_pj``（= corrections/sessions の PJ キー正規化と同一関数）で stem を畳んで
+    二重防御する。clean な slug は normalize しても同値なので無害。
     """
     hist_dir = base / "optimize_history"
     if not hist_dir.is_dir():
         return {}
     anchors: Dict[str, List[str]] = {}
     for path in sorted(hist_dir.glob("*.jsonl")):
-        slug = path.stem
+        slug = _om._normalize_pj(path.stem) or path.stem
         for rec in _om._read_jsonl(path):
             if rec.get("human_accepted") is True:
                 ts = _om._ts_of(rec, "timestamp")
                 if ts:
                     anchors.setdefault(slug, []).append(ts)
     return anchors
+
+
+# worktree ディレクトリ名の典型 prefix（CC の worktree 隔離が生成する命名）。
+# optimize_history の slug stem がこれに該当したら、本体 repo 名に正規化されず worktree
+# ディレクトリ名がそのまま slug 化された汚染（#24）の強いシグナル。
+_WORKTREE_NAME_PREFIXES = ("agent-", "worktree-agent-", "worktree-")
+
+# 意図的な保全 slug（worktree 名ではない）。検出から除外する。
+_UNATTRIBUTED_SLUG = "_unattributed"
+
+
+def detect_worktree_name_slugs(data_dir: Optional[Path] = None) -> List[str]:
+    """optimize_history に worktree ディレクトリ名 stem の slug ファイルが混じっていないか
+    健全性チェックする（#24・書込側正規化漏れ / legacy 汚染の可視化）。
+
+    検出シグナル: slug stem が worktree ディレクトリ名の典型 prefix
+    （``agent-`` / ``worktree-agent-`` / ``worktree-``）で始まる。これらは
+    ``git rev-parse --show-toplevel`` の basename を slug 化してしまう既知の罠
+    （pitfall_worktree_slug_show_toplevel）で本体 repo 名へ正規化されなかった痕跡。
+
+    Returns: 疑わしい slug（stem）のソート済みリスト。clean なら []。
+    読み取りのみ・決定論・LLM 非依存。``_unattributed`` 等の意図的 slug は除外。
+    """
+    base = _base(data_dir)
+    hist_dir = base / "optimize_history"
+    if not hist_dir.is_dir():
+        return []
+    suspects: List[str] = []
+    for path in sorted(hist_dir.glob("*.jsonl")):
+        stem = path.stem
+        if stem == _UNATTRIBUTED_SLUG:
+            continue
+        if any(stem.startswith(p) for p in _WORKTREE_NAME_PREFIXES):
+            suspects.append(stem)
+    return sorted(suspects)
 
 
 def _axis_value_in_range(

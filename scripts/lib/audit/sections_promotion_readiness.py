@@ -17,17 +17,23 @@ def _mark(passed: bool) -> str:
 
 
 def _variance_line(v: Dict[str, Any]) -> str:
+    # #25: 条件1 と条件2 がどちらも「PJ が N 件」という同一表現を使い、N の母数の意味
+    # （分散を判定できる PJ 数 vs 分母 floor を満たす PJ 数）が違うのに見分けられず、
+    # 「条件1 0 件 / 条件2 2 件」が一見矛盾して読めた。各ラベルに母数の意味を明示する。
     if v.get("pass"):
         return (
             f"  {_mark(True)} 条件1 分散が十分: "
-            f"{v.get('pj_count', 0)} PJ / 相異なる値 {v.get('distinct_values', 0)} 種"
+            f"分散を判定できる PJ 数 {v.get('pj_count', 0)} / 相異なる値 {v.get('distinct_values', 0)} 種"
         )
     reason = v.get("reason", "")
     if reason == "insufficient_pj":
-        return f"  {_mark(False)} 条件1 分散が十分: PJ が {v.get('pj_count', 0)} 件のみ（≥2 必要）"
+        return (
+            f"  {_mark(False)} 条件1 分散が十分: "
+            f"分散を判定できる PJ 数 {v.get('pj_count', 0)}（≥2 必要・件数下限を満たす軸値のみ計上）"
+        )
     if reason == "all_identical":
         return (
-            f"  {_mark(False)} 条件1 分散が十分: 全 {v.get('pj_count', 0)} PJ が同値 "
+            f"  {_mark(False)} 条件1 分散が十分: 分散を判定できる全 {v.get('pj_count', 0)} PJ が同値 "
             f"{v.get('value')} = 測定バグ強シグナル（#445）"
         )
     return f"  {_mark(False)} 条件1 分散が十分: 判定不能（{reason}）"
@@ -36,9 +42,11 @@ def _variance_line(v: Dict[str, Any]) -> str:
 def _denominator_line(d: Dict[str, Any]) -> List[str]:
     floor = d.get("floor", "?")
     meeting = d.get("meeting", [])
+    # #25: 条件1 の「分散を判定できる PJ 数」と区別できるよう、こちらは「分母 ≥floor を
+    # 満たす PJ 数」と母数の意味を明示する（同一表現による矛盾の見え方を解消）。
     head = (
         f"  {_mark(d.get('pass', False))} 条件2 データ件数下限: "
-        f"分母 ≥{floor} を満たす PJ {len(meeting)} 件（≥2 必要）"
+        f"分母 ≥{floor} を満たす PJ 数 {len(meeting)}（≥2 必要）"
     )
     lines = [head]
     denoms = d.get("denominators", {})
@@ -76,6 +84,29 @@ def _direction_line(dr: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _slug_hygiene_lines(opr) -> List[str]:
+    """#24: optimize_history に worktree ディレクトリ名 slug が混入していないか健全性チェック
+    の結果を1行 surface する。silence≠evaluated（この PJ の慣例）に従い、混入 0 件でも
+    『✓ worktree名slug混入なし』を残し、検出時は該当 slug を警告行で出す。
+
+    ``detect_worktree_name_slugs`` 未提供（旧 module 解決）でも例外を投げず沈黙しない —
+    呼び出し側が import 済みの opr を渡すため、getattr で防御的に確認する。
+    """
+    detect = getattr(opr, "detect_worktree_name_slugs", None)
+    if detect is None:
+        return []
+    suspects = detect()
+    if not suspects:
+        return [f"  {_mark(True)} slug 健全性: worktree 名 slug の混入なし（#24）"]
+    sample = ", ".join(suspects[:5])
+    extra = f" 他{len(suspects) - 5}件" if len(suspects) > 5 else ""
+    return [
+        f"  {_mark(False)} slug 健全性: optimize_history に worktree 名 slug が "
+        f"{len(suspects)} 件混入（#24・本体 repo 名へ未正規化の汚染）",
+        f"      該当: {sample}{extra}（pj_slug_backfill で回収 or 該当ファイルをマージ）",
+    ]
+
+
 def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
     """ADR-046 重み昇格レディネスを 3 条件 ✓/✗ で surface する（決定論・LLM 非依存）。
 
@@ -106,6 +137,7 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
     body: List[str] = [_variance_line(result["variance"])]
     body.extend(_denominator_line(result["denominator"]))
     body.extend(_direction_line(result["direction"]))
+    body.extend(_slug_hygiene_lines(opr))
 
     if result.get("promote"):
         body.append("")
