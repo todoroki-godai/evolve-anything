@@ -129,6 +129,101 @@ def test_roundtrip_worktree_write_main_read(tmp_path):
     assert write_slug == read_slug == "proj-rt"
 
 
+# ── SessionStart cache（sibling-dir worktree の write 時解決・#29/#593）────────
+def test_fast_sibling_worktree_resolves_via_cache(tmp_path):
+    """sibling-dir worktree（/.claude/worktrees/ マーカー外）は cache 経由で本体 slug へ。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    sibling = "/Users/x/tools/rl-anything-wt/issue-593"
+    # SessionStart が authoritative slug を cache に書いたと想定
+    pj_slug.write_pj_slug_cache(sibling, "rl-anything", data_dir=data_dir)
+    # hot-path: マーカーで畳めないが cache で本体 slug に解決される
+    assert pj_slug.pj_slug_fast(sibling, data_dir=data_dir) == "rl-anything"
+
+
+def test_fast_worktree_marker_unchanged_even_with_cache(tmp_path):
+    """/.claude/worktrees/ マーカー worktree はマーカー fast-path 優先（cache 不要・従来どおり）。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-many"
+    # cache が無くてもマーカーだけで本体 slug に畳める
+    assert pj_slug.pj_slug_fast(cwd, data_dir=data_dir) == "evolve-anything"
+
+
+def test_fast_normal_repo_unchanged_with_cache(tmp_path):
+    """通常 repo（worktree でない）は cache の有無で挙動が変わらない（basename）。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    assert pj_slug.pj_slug_fast("/Users/x/tools/evolve-anything", data_dir=data_dir) == "evolve-anything"
+
+
+def test_fast_cache_miss_falls_back_to_basename(tmp_path):
+    """cache 未生成 / cwd miss は従来の basename フォールバック（後方互換）。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # cache ファイルが存在しないケース
+    sibling = "/Users/x/tools/rl-anything-wt/issue-593"
+    assert pj_slug.pj_slug_fast(sibling, data_dir=data_dir) == "issue-593"
+    # cache はあるが別 cwd のエントリしかないケース（miss）
+    pj_slug.write_pj_slug_cache("/Users/x/tools/other-wt/foo", "other", data_dir=data_dir)
+    assert pj_slug.pj_slug_fast(sibling, data_dir=data_dir) == "issue-593"
+
+
+def test_fast_cache_lookup_does_not_invoke_subprocess(tmp_path, monkeypatch):
+    """cache 参照経路も hot-path 安全（subprocess を呼ばない）。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    sibling = "/Users/x/tools/rl-anything-wt/issue-593"
+    pj_slug.write_pj_slug_cache(sibling, "rl-anything", data_dir=data_dir)
+
+    def _boom(*a, **k):
+        raise AssertionError("cache lookup must not invoke subprocess")
+
+    monkeypatch.setattr(pj_slug.subprocess, "run", _boom)
+    assert pj_slug.pj_slug_fast(sibling, data_dir=data_dir) == "rl-anything"
+
+
+def test_fast_no_data_dir_arg_keeps_legacy_behavior():
+    """data_dir 未指定（既存呼び出し元）はキャッシュを引かず従来 basename 挙動。"""
+    sibling = "/Users/x/tools/rl-anything-wt/issue-593"
+    assert pj_slug.pj_slug_fast(sibling) == "issue-593"
+
+
+def test_fast_corrupt_cache_falls_back(tmp_path):
+    """cache が壊れた JSON でも例外を投げず basename にフォールバックする。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / pj_slug.PJ_SLUG_CACHE_FILENAME).write_text("{ not json")
+    sibling = "/Users/x/tools/rl-anything-wt/issue-593"
+    assert pj_slug.pj_slug_fast(sibling, data_dir=data_dir) == "issue-593"
+
+
+def test_write_cache_normalizes_path_keys(tmp_path):
+    """cache lookup は末尾スラッシュ差を吸収して一致させる（write/read 同形正規化）。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    pj_slug.write_pj_slug_cache("/Users/x/tools/rl-anything-wt/issue-593/", "rl-anything", data_dir=data_dir)
+    # 末尾スラッシュ無しで引いても一致
+    assert pj_slug.pj_slug_fast("/Users/x/tools/rl-anything-wt/issue-593", data_dir=data_dir) == "rl-anything"
+
+
+def test_write_cache_merges_existing_entries(tmp_path):
+    """write は既存エントリを保持してマージする（複数 PJ の cwd を共存）。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    pj_slug.write_pj_slug_cache("/Users/x/tools/aaa-wt/x", "aaa", data_dir=data_dir)
+    pj_slug.write_pj_slug_cache("/Users/x/tools/bbb-wt/y", "bbb", data_dir=data_dir)
+    assert pj_slug.pj_slug_fast("/Users/x/tools/aaa-wt/x", data_dir=data_dir) == "aaa"
+    assert pj_slug.pj_slug_fast("/Users/x/tools/bbb-wt/y", data_dir=data_dir) == "bbb"
+
+
+def test_write_cache_creates_data_dir_if_missing(tmp_path):
+    """data_dir が未作成でも write_pj_slug_cache が作成する。"""
+    data_dir = tmp_path / "nonexistent" / "data"
+    pj_slug.write_pj_slug_cache("/Users/x/tools/zzz-wt/q", "zzz", data_dir=data_dir)
+    assert pj_slug.pj_slug_fast("/Users/x/tools/zzz-wt/q", data_dir=data_dir) == "zzz"
+
+
 # ── 後方互換 wrapper ──────────────────────────────────────────────────────
 def test_resolve_slug_wrapper_delegates(tmp_path):
     import optimize_history_store as store
