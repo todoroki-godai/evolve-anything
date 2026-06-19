@@ -49,6 +49,11 @@ from ._capture import _capture_warnings, _TeeStderr, _capture_audit_stderr
 # re-export で __init__ 名前空間に名前が入るため解決される。
 from ._report import _emit_growth_crystallization, _warn_insufficient_data
 
+# run_evolve のフェーズ間共有ローカルを束ねる dataclass は _context.py に分離（PR 5/8, refs #531）。
+# `from evolve import EvolveContext` の後方互換を保つ。new_result() は束縛フェンスのため
+# _resolve_evolve_slug を `import evolve as _ev` 経由で呼ぶ（_context.py の docstring 参照）。
+from ._context import EvolveContext
+
 # #517: DATA_DIR / EVOLVE_STATE_FILE はパッケージ（__init__）load 時に env 優先で再解決する。
 # `del sys.modules["evolve"]` + reimport で CLAUDE_PLUGIN_DATA を再評価させる契約
 # （test_evolve_data_dir_env）を保つため、_env から frozen 値を re-export するのではなく
@@ -101,31 +106,15 @@ def run_evolve(
     # 走る silent fail / ADR-048 未明示の罠）を構造的に防げる。
     import evolve as _ev
 
-    _generated_at = datetime.now(timezone.utc).isoformat()
-    proj_root = Path(project_dir) if project_dir else Path.cwd()
-    result: Dict[str, Any] = {
-        "timestamp": _generated_at,
-        # --- 結果の同一性 metadata（#408 A/B）: 読み手が「どの PJ・いつ・本実行か」を
-        #     skill_name からの推測でなくトップレベルで機械検証できるようにする。---
-        "generated_at": _generated_at,
-        "slug": _resolve_evolve_slug(proj_root),
-        "project_dir": str(proj_root.resolve()),
-        "dry_run": dry_run,
-        "phases": {},
-    }
-    # フェーズ実行中の警告（stderr に流れて消える scipy RuntimeWarning(NaN) 等）を
-    # 溜める sink。self_analysis が result["warnings"] を読んで surface する（#341）。
-    _warning_sink: List[Dict[str, Any]] = []
-
-    # Tier 計算（各 Phase の深度制御に使用）。決定根拠（#408-E）も出力に含める。
-    _tier_breakdown = _count_env_artifacts(proj_root)
-    tier = _tier_from_count(_tier_breakdown["total"])
-    result["env_tier"] = tier
-    result["env_tier_reason"] = {
-        "count": _tier_breakdown["total"],
-        "breakdown": _tier_breakdown,
-        "thresholds": dict(ENV_TIER_THRESHOLDS),
-    }
+    # #531 PR5: フェーズ間共有ローカル（引数 + 初期化フェーズで作る proj_root / generated_at /
+    # warning_sink / tier / tier_breakdown）を EvolveContext に束ねる。振る舞いはゼロ変更で、
+    # 以降 run_evolve 本体はローカル変数の代わりに ctx.<field> を参照する（phase 抽出 PR で
+    # (result, ctx) シグネチャに乗せる前段）。result 初期 dict は ctx.new_result() が
+    # キー・値とも完全一致で構築する（_resolve_evolve_slug は束縛フェンス経由で呼ぶ）。
+    ctx = EvolveContext.create(
+        project_dir, dry_run, skip_skills, skip_llm_evolve, confirmed_batch
+    )
+    result: Dict[str, Any] = ctx.new_result()
 
     # Phase 1: Observe データ確認
     sufficiency = _ev.check_data_sufficiency()
@@ -266,7 +255,7 @@ def run_evolve(
         # audit 実行中の stderr（Chaos/Constitutional スキップ等）を self_analysis に
         # 渡せるよう捕捉する（#523-1）。Python warnings ではないため _capture_warnings
         # では拾えない経路。
-        with _capture_audit_stderr(_warning_sink):
+        with _capture_audit_stderr(ctx.warning_sink):
             audit_report = run_audit(
                 project_dir, memory_trace=True, constitutional_score=True, dry_run=dry_run
             )
@@ -313,7 +302,7 @@ def run_evolve(
     # Phase 3.2: Constitutional cache 状態の surface（#408-D）
     _surface_constitutional_status(
         Path(project_dir) if project_dir else Path.cwd(),
-        _warning_sink,
+        ctx.warning_sink,
         result.get("observability"),
     )
 
@@ -596,7 +585,7 @@ def run_evolve(
     # result["warnings"] に記録し self_analysis が surface できるようにする（#341）。
     try:
         from reorganize import run_reorganize
-        with _capture_warnings(_warning_sink):
+        with _capture_warnings(ctx.warning_sink):
             reorganize_result = run_reorganize(project_dir)
         result["phases"]["reorganize"] = reorganize_result
     except Exception as e:
@@ -773,7 +762,7 @@ def run_evolve(
 
     # キャプチャした警告を self_analysis が読めるよう result に確定する（#341）。
     # 必ず self_analysis の前に格納する（runtime_errors が警告を surface するため）。
-    result["warnings"] = _warning_sink
+    result["warnings"] = ctx.warning_sink
 
     # Phase 7: Self-Analysis（#299 — evolve 自身の result を自己解析し issue 候補を生成）
     # 全フェーズが揃った後に実行する（phases の error / 提案矛盾 / 改善余地 / 警告を読む）。
