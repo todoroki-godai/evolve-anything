@@ -2,7 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(recall): recall に `[[link]]` 1-hop 展開を追加（closes #11）** — `bin/evolve-fleet recall` で memory fact 本文中の `[[name]]` リンクを抽出（`Fact.links`）し、キーワードヒットした fact の 1-hop 先 fact も結果に追加する（同一 PJ 内・dangling 無視・直接ヒット重複排除・スコア対象外で末尾 `↳ linked:` 表示）。決定論・ADR-025 整合（vector/LLM 非使用）。
+- **feat(memory): reinforce_memory を本番配線（closes #18）** — dead-code だった `memory_temporal.reinforce_memory()` を、(a) recall ヒット時（`fleet/recall.reinforce_recall_hits` を CLI `_run_recall` から opt-in 発火＝recall.py の純粋性契約を壊さない）と (b) SessionStart の MEMORY.md 注入時（`hooks/instructions_loaded.py`、有効 memory のみ・stale/superseded はスキップ）に配線。「よく参照される有効 memory ほど残る」忘却曲線強化を実効化。
+- **feat(outcome): outcome 3軸ランキング + negative_transfer gate（closes #10）** — `apply_outcome_ranking` に correction 再発率を3軸目として追加（corrections.jsonl 由来・現状ほぼ空なので既存2軸と同様 None で graceful）。さらに `compute_negative_transfer` でフラグの立ったスキル（追加が他スキルの成功率を下げた）を `outcome.suppressed=True` でランキング末尾へ落とす rollback gate を追加。`phases_diagnose` から corrections（PJ スコープ read-only）+ negative_transfer を渡して enforcement 配線。advisory→閉ループの先行配線。
+- **feat(outcome): RODS 分散ベースのターゲット列（closes #28）** — 既存 `check_variance`（per-PJ 測定バグ検出）を per-skill に転用し、reward（session 別 一発成功）分散が大きい＝能力境界＝学習余地大のスキルを `outcome.reward_variance` として各候補に advisory 添付（自動昇格はしない）。
+- **feat(audit): paired trajectory auditing（観測版）を audit observability に配線（closes #15）** — 既存テレメトリから「同一タスク種別で、あるスキルが使われた軌跡 vs 使われなかった軌跡」の挙動を対照観測してシグナル化する `sections_paired.py` を追加し `_OBSERVABILITY_BUILDERS` に登録（能動再実行はしない＝観測版）。outcome_attribution / multiview_eval / negative_transfer と相補する advisory。
+
 ### Fixed
+- **fix(pj_slug): sibling-dir worktree の write 時 slug を SessionStart cache 経由で authoritative 解決（closes #29）** — `pj_slug_fast` が `/.claude/worktrees/` マーカー外の sibling-dir worktree を親 repo へ畳めず幻 PJ slug を残していた #593 の write 時残課題を根治。SessionStart（`hooks/restore_state.py`）で `resolve_pj_slug`（authoritative・git-common-dir 親）を1回解決し `DATA_DIR/pj_slug_cache.json` に書き、`pj_slug_fast` は data_dir 渡し時のみこの cache を参照（subprocess なし＝hot-path 安全維持・cache miss は従来 basename フォールバックで後方互換）。バックフィル7ストア化（#602）は既 done のため不変。
 - **移植 issue の確実なバグ群を一括修正（closes #21, #22, #23, #24, #25, #26, #30, #31, #32, #33）** — todoroki-godai/evolve-anything へ移植した open issue のうち、原因が明確な実バグを並行ワーカーで修正:
   - **#30/#32 (discover)**: `discover/errors.py` が `error` フィールドの値が明示的に `None` のとき `None[:200]` で TypeError になる #521 regression を None 合体で修正。`phases_diagnose.py` の discover crash 時 `reflect_data_count` を degraded sentinel `-1` に正準化。
   - **#33 (introspect)**: `evolve_introspect` が closed issue の再発を regression として、前歴 issue への backlink 付きで起票するよう拡張（open/closed marker を分離・`render_regression_body` 追加）。
