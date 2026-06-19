@@ -213,6 +213,109 @@ class TestSessionsDbBackfill:
 
 
 # ============================================================================
+# 追加4ストア（project フィールド）: usage / workflows / skill_activations / errors
+# ============================================================================
+
+# (summary キー, ファイル名) — いずれも project フィールドの jsonl
+_PROJECT_JSONL_STORES = [
+    ("usage", "usage.jsonl"),
+    ("workflows", "workflows.jsonl"),
+    ("skill_activations", "skill_activations.jsonl"),
+    ("errors", "errors.jsonl"),
+]
+
+
+@pytest.mark.parametrize("store_key,filename", _PROJECT_JSONL_STORES)
+class TestProjectJsonlStores:
+    def test_apply_normalizes_project(self, tmp_path, store_key, filename):
+        path = tmp_path / filename
+        _write_jsonl(path, [
+            {"project": _WT, "session_id": "s1"},  # worktree → 親 repo
+            {"project": _FULL, "session_id": "s2"},  # フルパス → basename
+            {"project": "feedback", "session_id": "s3"},  # basename 素通し
+            {"session_id": "s4"},  # project 無し
+        ])
+        summary = bf.backfill(tmp_path, apply=True)
+        recs = _read_jsonl(path)
+        assert recs[0]["project"] == "amamo"
+        assert recs[1]["project"] == "rl-anything"
+        assert recs[2]["project"] == "feedback"  # basename 不変（情報欠落で復元不能）
+        assert "project" not in recs[3] or recs[3].get("project") is None
+        assert summary[store_key]["normalized"] == 2
+        # 他フィールド保全
+        assert recs[0]["session_id"] == "s1"
+
+    def test_dry_run_writes_nothing(self, tmp_path, store_key, filename):
+        path = tmp_path / filename
+        _write_jsonl(path, [
+            {"project": _WT, "session_id": "s1"},
+            {"project": _FULL, "session_id": "s2"},
+        ])
+        before = path.read_bytes()
+        summary = bf.backfill(tmp_path, apply=False)
+        assert path.read_bytes() == before  # 書込ゼロ
+        assert summary[store_key]["normalized"] == 2  # 予定件数は数える
+        assert summary["applied"] is False
+
+    def test_idempotent(self, tmp_path, store_key, filename):
+        path = tmp_path / filename
+        _write_jsonl(path, [{"project": _WT, "session_id": "s1"}])
+        bf.backfill(tmp_path, apply=True)
+        after = path.read_bytes()
+        summary2 = bf.backfill(tmp_path, apply=True)
+        assert path.read_bytes() == after  # 2回目は無変化
+        assert summary2[store_key]["normalized"] == 0
+
+    def test_no_file_is_noop(self, tmp_path, store_key, filename):
+        summary = bf.backfill(tmp_path, apply=True)
+        assert summary[store_key]["normalized"] == 0
+
+
+# ============================================================================
+# usage-registry.jsonl（project_path フィールド）
+# ============================================================================
+
+class TestUsageRegistryBackfill:
+    def test_apply_normalizes_project_path(self, tmp_path):
+        path = tmp_path / "usage-registry.jsonl"
+        _write_jsonl(path, [
+            {"project_path": _WT, "skill_name": "evolve"},
+            {"project_path": _FULL, "skill_name": "audit"},
+            {"project_path": "feedback", "skill_name": "reflect"},  # basename 素通し
+            {"skill_name": "x"},  # project_path 無し
+        ])
+        summary = bf.backfill(tmp_path, apply=True)
+        recs = _read_jsonl(path)
+        assert recs[0]["project_path"] == "amamo"
+        assert recs[1]["project_path"] == "rl-anything"
+        assert recs[2]["project_path"] == "feedback"
+        assert "project_path" not in recs[3] or recs[3].get("project_path") is None
+        assert summary["usage_registry"]["normalized"] == 2
+        assert recs[0]["skill_name"] == "evolve"
+
+    def test_dry_run_writes_nothing(self, tmp_path):
+        path = tmp_path / "usage-registry.jsonl"
+        _write_jsonl(path, [{"project_path": _WT, "skill_name": "evolve"}])
+        before = path.read_bytes()
+        summary = bf.backfill(tmp_path, apply=False)
+        assert path.read_bytes() == before
+        assert summary["usage_registry"]["normalized"] == 1
+
+    def test_idempotent(self, tmp_path):
+        path = tmp_path / "usage-registry.jsonl"
+        _write_jsonl(path, [{"project_path": _WT, "skill_name": "evolve"}])
+        bf.backfill(tmp_path, apply=True)
+        after = path.read_bytes()
+        summary2 = bf.backfill(tmp_path, apply=True)
+        assert path.read_bytes() == after
+        assert summary2["usage_registry"]["normalized"] == 0
+
+    def test_no_file_is_noop(self, tmp_path):
+        summary = bf.backfill(tmp_path, apply=True)
+        assert summary["usage_registry"]["normalized"] == 0
+
+
+# ============================================================================
 # 安全性: 実 DATA_DIR を触らない / format_summary
 # ============================================================================
 
@@ -225,3 +328,23 @@ class TestSummaryFormat:
         assert "corrections" in text
         # dry-run は「予定」表現を含む
         assert "予定" in text or "dry-run" in text.lower()
+
+    def test_format_summary_lists_all_seven_stores(self, tmp_path):
+        # 全7ストアにフルパス1件ずつ仕込み、summary がすべて表示することを確認。
+        _write_jsonl(tmp_path / "corrections.jsonl", [{"project_path": _WT}])
+        _write_jsonl(tmp_path / "subagents.jsonl", [{"project": _WT}])
+        _write_jsonl(tmp_path / "usage.jsonl", [{"project": _WT}])
+        _write_jsonl(tmp_path / "workflows.jsonl", [{"project": _WT}])
+        _write_jsonl(tmp_path / "skill_activations.jsonl", [{"project": _WT}])
+        _write_jsonl(tmp_path / "errors.jsonl", [{"project": _WT}])
+        _write_jsonl(tmp_path / "usage-registry.jsonl", [{"project_path": _WT}])
+        summary = bf.backfill(tmp_path, apply=False)
+        text = bf.format_summary(summary)
+        for filename in (
+            "corrections.jsonl", "subagents.jsonl", "usage.jsonl",
+            "workflows.jsonl", "skill_activations.jsonl", "errors.jsonl",
+            "usage-registry.jsonl",
+        ):
+            assert filename in text
+        # dry-run 合計は7件（各ストア worktree フルパス1件）
+        assert "7" in text

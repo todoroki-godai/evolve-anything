@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
 
     pjslug_p = sub.add_parser(
         "migrate-pj-slug",
-        help="既存レコードの幻PJ slug（worktree フルパス等）を worktree 安全 slug へ遡及正規化（corrections/subagents/sessions.db、#593）",
+        help="既存レコードの幻PJ slug（worktree フルパス等）を worktree 安全 slug へ遡及正規化（全7ストア: corrections/subagents/usage/workflows/skill_activations/errors/usage-registry/sessions.db、#593/#602）",
     )
     pjslug_p.add_argument("--apply", action="store_true",
                           help="実書込（既定は dry-run = 1バイトも書かず正規化予定件数だけ表示）")
