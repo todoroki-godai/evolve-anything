@@ -216,12 +216,21 @@ def _extract_bash_commands(code: str) -> List[str]:
     実在検証して意味のある裸のコマンド名だけを返す（FP を構造的に抑制）。
     """
     cmds: List[str] = []
-    in_quote = False  # 複数行クォート文字列（python3 -c "..." の本文）内かどうか
+    # 複数行クォート文字列（``python3 -c "..."`` / ``python3 -c '...'`` の本文）内かどうかを
+    # ダブル・シングルそれぞれ独立に追跡する。bash の埋め込み python は single-quote 区切りも
+    # 多用される（report-feedback/SKILL.md #31）。どちらの区切りで開いていても本文行
+    # （from/import/代入行）を裸コマンドとして拾わない。
+    in_dquote = False
+    in_squote = False
     for line in _split_logical_lines(code):
-        started_in_quote = in_quote
-        # この論理行で " のパリティを更新する（行内の文字列開閉を追跡）。
-        if line.count('"') % 2 == 1:
-            in_quote = not in_quote
+        started_in_quote = in_dquote or in_squote
+        # この論理行でクォートのパリティを更新する（行内の文字列開閉を追跡）。
+        # 既に一方のクォート区間内なら、もう片方の引用符は文字列リテラルの一部なので
+        # パリティ更新の対象にしない（例: single-quote 中の " は python の文字列リテラル）。
+        if not in_squote and line.count('"') % 2 == 1:
+            in_dquote = not in_dquote
+        if not in_dquote and line.count("'") % 2 == 1:
+            in_squote = not in_squote
         # クォート文字列の途中で始まる行（埋め込み python/heredoc 本文）は検証対象外。
         if started_in_quote:
             continue

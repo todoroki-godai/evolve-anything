@@ -105,6 +105,44 @@ def test_classify_bash_placeholder_existence_only():
     assert cls.get("has_placeholder") is True
 
 
+def test_bash_with_single_quoted_inline_python_excludes_python_body():
+    """bash ブロック内 ``python3 -c '...'`` の本文（python 行）を bash コマンドとして拾わない（#31）。
+
+    single-quote で囲んだ埋め込み python の ``from``/``import``/代入行が裸コマンドとして
+    existence チェックされる false positive を防ぐ。
+    """
+    code = (
+        "PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}/scripts/lib\" python3 -c '\n"
+        "import json, sys\n"
+        "from evolve_introspect import flatten_candidates, summary_lines\n"
+        "result = json.load(open(sys.argv[1]))\n"
+        "analysis = result.get(\"self_analysis\", {})\n"
+        "json.dump(flatten_candidates(analysis), open(\"/tmp/x.json\",\"w\"))\n"
+        "' \"<result.json path>\"\n"
+    )
+    cls = sb.classify_block("bash", code)
+    cmds = cls.get("commands", [])
+    # 埋め込み python のトークンを bash コマンドとして拾っていないこと
+    for tok in ("from", "result", "analysis", "import", "json"):
+        assert tok not in cmds, f"埋め込み python トークン {tok!r} を誤検出した: {cmds}"
+
+
+def test_bash_single_quoted_inline_python_no_existence_failure(tmp_path: Path):
+    """``python3 -c '...'`` を含む bash ブロックが existence_only で fail しない（#31 受け入れ）。"""
+    code = (
+        "PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}/scripts/lib\" python3 -c '\n"
+        "import json\n"
+        "from evolve_introspect import render_issue_body\n"
+        "cand = json.load(open(\"/tmp/rf_one.json\"))\n"
+        "print(render_issue_body(cand))\n"
+        "' > /tmp/rf_body.md\n"
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    # 埋め込み python の from/cand/import 等で missing fail を出さない
+    assert res["status"] != "fail", res.get("detail")
+
+
 # --- import 検証実行 -----------------------------------------------------------
 
 def test_run_import_check_passes_for_stdlib(tmp_path: Path):
