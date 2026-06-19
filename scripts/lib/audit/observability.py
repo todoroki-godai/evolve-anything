@@ -30,6 +30,7 @@ from .sections_measurement import build_measurement_bug_section
 from .sections_multiview import build_multiview_eval_section
 from .sections_orphan import build_orphan_store_section, build_store_contract_section
 from .sections_outcome import build_outcome_metrics_section
+from .sections_paired import build_paired_trajectory_section
 from .sections_promotion_readiness import build_promotion_readiness_section
 from .sections_testpaths import build_testpaths_coverage_section
 from .sections_triage import build_skill_triage_section
@@ -52,6 +53,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("store_contract", build_store_contract_section),
     ("outcome_metrics", build_outcome_metrics_section),
     ("multiview_eval", build_multiview_eval_section),
+    ("paired_trajectory", build_paired_trajectory_section),
     ("measurement_bug", build_measurement_bug_section),
     ("promotion_readiness", build_promotion_readiness_section),
     ("weak_signals", build_weak_signals_section),

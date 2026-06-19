@@ -384,6 +384,130 @@ def compute_component_transfer(
     return results
 
 
+def compute_paired_trajectory(
+    *,
+    usage: List[Dict[str, Any]],
+    sessions: List[Dict[str, Any]],
+    min_per_arm: int = 1,
+    delta_threshold: float = -0.05,
+) -> List[Dict[str, Any]]:
+    """paired trajectory auditing（観測版）— 同一タスク種別で skill 有/無の挙動を対照する。
+
+    SkillAudit (arXiv 2606.14239) は同一タスクをスキル有/無で**能動再実行**して挙動軌跡の
+    差分を診断信号にする。rl-anything は受動観測（再実行しない）設計なので、本関数は既存
+    テレメトリ（usage + sessions）から「同一 task-type のセッションで対象スキルが使われた群
+    vs 使われなかった群」を準実験的に拾い、挙動メトリクスのデルタを算出する観測版である（#15）。
+
+    compute_component_transfer / compute_negative_transfer との違い（流用でなく新規）:
+      - それらは「スキル追加の**時系列前後**」での既存スキル success デルタ（準実験だが時間軸）。
+      - 本関数は「同一 task-type 内での skill **有/無**の対照」（横断・同時点の対照）。
+        SkillAudit の paired 対照に対応するのはこちら。
+
+    task-type の定義（決定論・LLM 非依存）:
+      1 セッションの task-type key = そのセッションで呼ばれたスキル集合から**対象スキルを
+      除いた残り**（= タスク文脈）。同じ context-skill-set を持つセッションを「同一タスク種別」
+      とみなす。空 context（対象スキル単独セッション）は文脈不明として除外する。
+
+    挙動メトリクス: 一発成功率 = error_count==0 のセッション割合（outcome_attribution と同義）。
+    error_count 欠損セッションは分母から除外する（None 比較落ち pitfall 回避）。
+
+    paired 成立条件: ある task-type バケットで with 腕・without 腕の双方に min_per_arm 以上の
+    有効セッション（error_count を持つ）があること。両腕が揃ったバケットのみ delta を計上する。
+
+    Args:
+        usage: usage.jsonl 相当（skill/skill_name → session_id）。
+        sessions: sessions 相当（session_id → error_count）。
+        min_per_arm: paired 成立に必要な各腕の最小有効セッション数。
+        delta_threshold: behavior_delta がこの値未満なら regression=True（挙動悪化兆候）。
+
+    Returns:
+        対象スキルごとに集約した
+        [{"skill", "behavior_delta", "with_success", "without_success",
+          "n_with", "n_without", "paired_task_types", "regression"}]
+        behavior_delta = with_success - without_success（高いほどスキルが挙動を改善）。
+        paired バケットが 1 つも無いスキルは除外。behavior_delta 昇順（悪い順）→ skill 名。
+
+    エッジケース:
+    - usage / sessions が空 → []
+    - 対象スキルが全 task-type で常に存在（without 腕なし）→ そのスキルは除外
+    """
+    if not usage or not sessions:
+        return []
+
+    # session_id → そのセッションで呼ばれたスキル集合。
+    skills_by_session: Dict[str, set] = {}
+    for rec in usage:
+        skill = rec.get("skill_name") or rec.get("skill") or ""
+        sid = rec.get("session_id") or ""
+        if not skill or sid_excluded(skill) or not sid:
+            continue
+        skills_by_session.setdefault(sid, set()).add(skill)
+
+    # session_id → error_count（欠損は None）。
+    err_by_session: Dict[str, Optional[int]] = {}
+    for s in sessions:
+        sid = s.get("session_id") or ""
+        if sid:
+            err_by_session[sid] = s.get("error_count")
+
+    # 観測対象スキル = usage に現れた全スキル。
+    all_skills = {sk for sks in skills_by_session.values() for sk in sks}
+
+    results: List[Dict[str, Any]] = []
+    for target in sorted(all_skills):
+        # target ごとに task-type（= target を除いた context-skill-set）でバケット化し、
+        # 各バケットを with/without 腕に分けて有効セッション（error_count あり）を集める。
+        buckets: Dict[frozenset, Dict[str, List[int]]] = {}
+        for sid, sks in skills_by_session.items():
+            context = frozenset(sks - {target})
+            if not context:
+                continue  # 文脈不明（対象スキル単独）は除外。
+            err = err_by_session.get(sid)
+            if err is None:
+                continue  # 挙動メトリクス算出不能 → 分母から除外。
+            arm = "with" if target in sks else "without"
+            bucket = buckets.setdefault(context, {"with": [], "without": []})
+            bucket[arm].append(err)
+
+        with_clean = with_total = 0
+        without_clean = without_total = 0
+        paired = 0
+        for ctx, arms in buckets.items():
+            w, wo = arms["with"], arms["without"]
+            if len(w) < min_per_arm or len(wo) < min_per_arm:
+                continue  # 片腕しかない / 件数不足 → paired 不成立。
+            paired += 1
+            with_clean += sum(1 for e in w if e == 0)
+            with_total += len(w)
+            without_clean += sum(1 for e in wo if e == 0)
+            without_total += len(wo)
+
+        if paired == 0:
+            continue
+
+        with_success = with_clean / with_total if with_total else 0.0
+        without_success = without_clean / without_total if without_total else 0.0
+        delta = with_success - without_success
+        results.append({
+            "skill": target,
+            "behavior_delta": delta,
+            "with_success": with_success,
+            "without_success": without_success,
+            "n_with": with_total,
+            "n_without": without_total,
+            "paired_task_types": paired,
+            "regression": delta < delta_threshold,
+        })
+
+    results.sort(key=lambda r: (r["behavior_delta"], r["skill"]))
+    return results
+
+
+def sid_excluded(skill: str) -> bool:
+    """task-type 文脈の組み立てから除外すべきノイズスキルか（基本ツール）。"""
+    return skill in _BUILTIN_TOOLS
+
+
 def aggregate_plugin_usage(records: List[Dict[str, Any]]) -> Dict[str, int]:
     """プラグイン別の使用回数を集計する。
 
