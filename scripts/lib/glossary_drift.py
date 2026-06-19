@@ -142,7 +142,63 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
             "VM", "OS",
         }
     )
+    # --- #23 追加: 広く知られた汎用技術略語（辞書に無いもの） ---
+    # メディア/エンコーディング・モデル・ハッシュ・色空間など、特定 PJ に固有でなく
+    # どの分野でも通用する一般技術用語。用語集に載せても decode 価値が薄いため除外する。
+    | frozenset(
+        {
+            # メディア/コンテナ/コーデック
+            "MP4", "MP3", "AAC", "WAV", "FLAC", "WebM", "AVI", "MOV",
+            "JPEG", "PNG", "GIF", "WebP", "SVG", "TIFF",
+            # エンコーディング/文字集合
+            "UTF", "ASCII", "Base64", "ISO8601",
+            # ハッシュ/暗号
+            "MD5", "SHA1", "SHA256", "SHA512", "HMAC", "AES", "RSA",
+            # 認証バージョン付き（OAuth は既存・OAuth2 は別 token）
+            "OAuth2",
+            # ML/AI 汎用略語・プラットフォーム
+            "TTS", "ASR", "NLP", "OCR", "GPU", "TPU", "CUDA", "ONNX",
+            "HF",   # Hugging Face
+            "HN",   # Hacker News
+            # 色空間/グラフィクス
+            "RGB", "RGBA", "CMYK", "HSL", "DPI",
+            # 時刻/タイムゾーン略語
+            "UTC", "GMT", "PST", "JST", "EST",
+        }
+    )
 )
+
+# #23: 標準ライブラリ/フレームワークの既知シンボル名。CamelCase のため
+# _CANDIDATE_RE に拾われるが PJ 固有 jargon ではない。辞書に小文字形を持たない
+# ため辞書フィルタでは落ちず、明示的に除外する。「stdlib シンボル」グループとして
+# 拡張しやすいよう分類する（除外理由ベース・#23）。
+STDLIB_SYMBOLS: frozenset[str] = frozenset(
+    {
+        # concurrent.futures
+        "ThreadPoolExecutor", "ProcessPoolExecutor",
+        # collections
+        "OrderedDict", "Counter", "ChainMap",
+        # io
+        "BytesIO", "StringIO",
+        # abc / typing
+        "ABCMeta", "ABC", "TypeVar", "NamedTuple", "TypedDict",
+        # decimal / fractions
+        "Decimal", "Fraction",
+        # datetime
+        "DateTime",
+        # 広く使われる data/科学計算フレームワークの型名
+        "DataFrame", "Series", "ndarray",
+    }
+)
+
+# #23: 日付/時刻フォーマットのプレースホルダ。`YYYY`/`MM`/`DD`/`HH`/`SS` 等。
+# 判定条件は2つとも満たすこと:
+#   (1) 全文字が Y/M/D/H/S のみ（日付/時刻成分の指定子文字）
+#   (2) いずれかの文字が連続して繰り返す（YYYY, MM, HHMMSS の MM 等）
+# 整形指定子は必ず成分文字を繰り返す（YYYY=年4桁, MM=月2桁）ため (2) を要件にすると、
+# DMS（D/M/S 各1回・全文字相異）のような実在頭字語を誤除外しない。`YYYY/MM/DD` の
+# ような連結列は区切りで分割され各成分（YYYY/MM/DD）が個別にこの形に該当する。
+_PLACEHOLDER_RE = re.compile(r"^[YMDHS]*([YMDHS])\1[YMDHS]*$")
 
 _SEP_RE = re.compile(r"^[:\-\s|]+$")
 
@@ -257,6 +313,10 @@ def find_undefined_terms(
         for m in _CANDIDATE_RE.finditer(text):
             tok = m.group(1)
             if tok in defined or tok in stoplist:
+                continue
+            if tok in STDLIB_SYMBOLS:  # #23: stdlib/framework シンボル名は jargon でない
+                continue
+            if _PLACEHOLDER_RE.match(tok):  # #23: 日付/時刻プレースホルダ（YYYY/MM/DD 等）
                 continue
             # #567: `.lower()` が常用英単語（BEGIN/SELECT/INFO 等）なら jargon でない。
             if tok.lower() in common_words:
