@@ -304,3 +304,103 @@ class TestNoFalseNegativeAfterStoplistShrink:
             if tok in find_undefined_terms(_entries(), [source]):
                 failures.append(tok)
         assert not failures, f"#567 FN: 個別 source で除外されない = {failures}"
+
+
+# ---------------------------------------------------------------------------
+# #23: 汎用技術略語 / フォーマットプレースホルダ / stdlib シンボルの除外
+# ---------------------------------------------------------------------------
+
+class TestFormatPlaceholdersExcluded:
+    """issue #23 — 全大文字の日付/時刻プレースホルダ（YYYY/MM/DD 等）が
+    undefined_terms に出ないこと。これらは jargon でなく整形トークン。"""
+
+    @pytest.mark.parametrize("tok", [
+        "YYYY", "MM", "DD", "HH", "SS", "YY", "MMM", "DDD",
+        "YYYYMMDD", "HHMMSS",
+    ])
+    def test_placeholder_not_reported_as_undefined(self, tmp_path: Path, tok: str):
+        source = _make_source(
+            tmp_path, f"Date format is {tok} here.", f"src_{tok}.md"
+        )
+        result = find_undefined_terms(_entries(), [source], stoplist=frozenset())
+        assert tok not in result, (
+            f"'{tok}' はフォーマットプレースホルダなので undefined に出てはいけない (#23)"
+        )
+
+    def test_full_date_pattern_not_reported(self, tmp_path: Path):
+        """`YYYY/MM/DD` のような連結プレースホルダの各成分が出ない。"""
+        source = _make_source(tmp_path, "Use YYYY/MM/DD or YYYY-MM-DD.", "d.md")
+        result = find_undefined_terms(_entries(), [source], stoplist=frozenset())
+        for tok in ("YYYY", "MM", "DD"):
+            assert tok not in result, f"'{tok}' が undefined に出た (#23)"
+
+    @pytest.mark.parametrize("tok", [
+        # placeholder 除外が PJ 固有の頭字語（日付成分文字でも 1 種でない）を
+        # 巻き込まないこと。MRV/JCM 等は除外しない。
+        "MRV", "JCM", "DMS",
+    ])
+    def test_placeholder_filter_keeps_other_acronyms(self, tmp_path: Path, tok: str):
+        """日付成分文字を含むが placeholder でない頭字語は誤除外しない。"""
+        source = _make_source(tmp_path, f"The {tok} term.", f"src_{tok}.md")
+        # DMS は stoplist 由来なので stoplist 込みで判定、MRV/JCM は固有語
+        result_no_stop = find_undefined_terms(
+            _entries(), [source], stoplist=frozenset()
+        )
+        if tok in ("MRV", "JCM"):
+            assert tok in result_no_stop, (
+                f"'{tok}' は固有頭字語なので placeholder フィルタで誤除外してはいけない (#23)"
+            )
+
+
+class TestStdlibSymbolsExcluded:
+    """issue #23 — Python 標準ライブラリ/フレームワークの既知シンボル名が
+    undefined_terms に出ないこと（ThreadPoolExecutor 等）。"""
+
+    @pytest.mark.parametrize("tok", [
+        "ThreadPoolExecutor", "ProcessPoolExecutor", "OrderedDict",
+        "BytesIO", "StringIO", "ABCMeta", "Decimal", "Counter",
+        "DataFrame",
+    ])
+    def test_stdlib_symbol_not_reported_as_undefined(self, tmp_path: Path, tok: str):
+        source = _make_source(
+            tmp_path, f"We use {tok} in the pool.", f"src_{tok}.md"
+        )
+        result = find_undefined_terms(_entries(), [source], stoplist=frozenset())
+        assert tok not in result, (
+            f"'{tok}' は stdlib シンボルなので undefined に出てはいけない (#23)"
+        )
+
+
+class TestGenericTechAbbreviationsExcluded:
+    """issue #23 — 広く知られた技術略語（MP4/OAuth2/TTS/HF/HN 等）が
+    undefined_terms に出ないこと。"""
+
+    @pytest.mark.parametrize("tok", [
+        "MP4", "OAuth2", "TTS", "ASR", "HF", "HN",
+        "UTC", "RGBA", "RGB", "GPU", "TPU", "MD5", "SHA256", "SHA1",
+        "UTF", "ISO8601",
+    ])
+    def test_generic_abbrev_not_reported_as_undefined(self, tmp_path: Path, tok: str):
+        source = _make_source(
+            tmp_path, f"Output is {tok} encoded.", f"src_{tok}.md"
+        )
+        result = find_undefined_terms(_entries(), [source])
+        assert tok not in result, (
+            f"'{tok}' は汎用技術略語なので undefined に出てはいけない (#23)"
+        )
+
+
+class TestIssue23DoesNotSuppressProjectJargon:
+    """#23 の3フィルタが PJ 固有語を巻き込まないことを確認。"""
+
+    @pytest.mark.parametrize("tok", [
+        "AMAMO", "AnchorRegistry", "JCM", "MRV", "MemTrace", "DuckDB",
+    ])
+    def test_project_jargon_still_reported(self, tmp_path: Path, tok: str):
+        source = _make_source(
+            tmp_path, f"The {tok} component runs.", f"src_{tok}.md"
+        )
+        result = find_undefined_terms(_entries(), [source], stoplist=frozenset())
+        assert tok in result, (
+            f"'{tok}' は PJ 固有語として undefined に残るべき (#23)"
+        )

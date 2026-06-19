@@ -177,15 +177,22 @@ RECOMMENDED_ARTIFACTS = [
 
 def detect_recommended_artifacts(
     tool_usage_patterns: Optional[Dict[str, Any]] = None,
+    *,
+    now: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """推奨ルール/hook の導入状態をチェックする。
 
     Returns:
         未導入 artifact のリスト。各エントリに evidence (検出データ) を含む。
+
+    #26: ユーザーが導入を見送った artifact は suppression 窓（TTL）内は畳む。
+    記録は discover-suppression.jsonl の type:"artifact" エントリ。窓を過ぎたら
+    1 回だけ再提示して再評価を促す（is_artifact_suppressed が TTL を判定）。
     """
     missing = []
     # package 経由で参照することで `mock.patch("discover.RECOMMENDED_ARTIFACTS", ...)` 既存テストに追従
     from . import RECOMMENDED_ARTIFACTS as _ARTIFACTS  # noqa: PLC0415
+    from .suppression import is_artifact_suppressed  # noqa: PLC0415
     for artifact in _ARTIFACTS:
         rule_path = artifact.get("path")
         rule_exists = rule_path.exists() if rule_path else True
@@ -193,6 +200,10 @@ def detect_recommended_artifacts(
         hook_exists = hook_path.exists() if hook_path else True
 
         if rule_exists and hook_exists:
+            continue
+
+        # #26: 見送り済み & クールダウン窓内なら再提示しない
+        if is_artifact_suppressed(artifact["id"], now=now):
             continue
 
         entry: Dict[str, Any] = {
