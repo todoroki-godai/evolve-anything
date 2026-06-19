@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 
 def find_real_rl_anything_pj() -> Optional[Path]:
-    """実 ``~/.claude/projects`` から rl-anything 本体 PJ ディレクトリを 1 つ返す。
+    """実 ``~/.claude/projects`` から evolve-anything 本体 PJ ディレクトリを 1 つ返す。
 
     worktrees サフィックスの PJ は除外（本体の transcript を読むため）。
     """
@@ -23,7 +23,7 @@ def find_real_rl_anything_pj() -> Optional[Path]:
         return None
     cands = sorted(
         p for p in root.iterdir()
-        if p.is_dir() and p.name.endswith("rl-anything") and not p.name.endswith("worktrees")
+        if p.is_dir() and p.name.endswith("evolve-anything") and not p.name.endswith("worktrees")
     )
     return cands[0] if cands else None
 
@@ -75,8 +75,8 @@ def check_ingest_e2e(
     if not (db.exists() and db.stat().st_size > 0):
         return {**out, "status": "fail", "detail": "DB が空 / 未生成", "rows": 0}
 
-    # PJ slug は cwd 由来。本体 PJ なら "rl-anything" で引ける。
-    rows = uquery.query_utterances("rl-anything", db_path=db)
+    # PJ slug は cwd 由来。本体 PJ なら "evolve-anything" で引ける。
+    rows = uquery.query_utterances("evolve-anything", db_path=db)
     out["rows"] = len(rows)
     if len(rows) == 0:
         return {**out, "status": "fail", "detail": "実 PJ から発話が 1 件も取れない（抽出バグ）"}
@@ -86,8 +86,8 @@ def check_ingest_e2e(
 
 
 def check_real_pj_ingest(db_dir: Path) -> Dict[str, Any]:
-    """実 rl-anything PJ を見つけて ingest E2E を回す（実機ゲート用ラッパ）。"""
+    """実 evolve-anything PJ を見つけて ingest E2E を回す（実機ゲート用ラッパ）。"""
     pj = find_real_rl_anything_pj()
     if pj is None:
-        return {"status": "skip", "detail": "実 rl-anything transcript が見つからない"}
+        return {"status": "skip", "detail": "実 evolve-anything transcript が見つからない"}
     return check_ingest_e2e(pj_dir=pj, db_dir=db_dir)

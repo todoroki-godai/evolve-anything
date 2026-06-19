@@ -67,7 +67,7 @@ class TestHistoryPath:
 
     def test_clean_slug_unchanged(self, tmp_path, monkeypatch):
         monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
-        assert store.history_path("rl-anything").name == "rl-anything.jsonl"
+        assert store.history_path("evolve-anything").name == "evolve-anything.jsonl"
 
     def test_unsafe_chars_sanitized(self, tmp_path, monkeypatch):
         monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")

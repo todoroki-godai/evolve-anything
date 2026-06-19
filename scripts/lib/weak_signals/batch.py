@@ -167,9 +167,9 @@ def persist_weak_signals_drain(
     utterances: Optional[List[Dict[str, Any]]] = None,
     max_transcripts: int = DEFAULT_MAX_TRANSCRIPTS,
 ) -> Dict[str, Any]:
-    """apply 境界（`rl-evolve --drain`）で決定論 weak_signals を永続化する（#484）。
+    """apply 境界（`evolve --drain`）で決定論 weak_signals を永続化する（#484）。
 
-    根因（#484）: 標準 evolve フローは ``rl-evolve --dry-run`` 分析 → assistant が対話適用、
+    根因（#484）: 標準 evolve フローは ``evolve --dry-run`` 分析 → assistant が対話適用、
     である。``run_batch`` は ``run_evolve`` の中で ``dry_run=dry_run`` で呼ばれるため、dry-run
     分析パスでは ``append_signals`` の最下層 dry-run ゲート（#491 invariant）で常に書き込み
     ゼロになる。非 dry-run の evolve は標準フローでまず走らないので、決定論3チャネル

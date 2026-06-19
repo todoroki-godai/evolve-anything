@@ -61,7 +61,7 @@ dry-run ゼロ書込 E2E・実 PJ ドッグフード（learning_synthetic_fixtur
 > ## 背景
 > 既存 313 件（全件 llm_judge・未昇格）を初回 evolve でまとめて確認する入口がない。
 > **実測: 文字列類似では 313→267 (15%) しか圧縮できない**（idiom は生の発話断片）。
-> **決定（設計 §機能#3）: ハイブリッド方式** — アクティブ PJ（rl-anything 47件・figma-to-code
+> **決定（設計 §機能#3）: ハイブリッド方式** — アクティブ PJ（evolve-anything 47件・figma-to-code
 > 116件など上位）のみ初回 bootstrap でまとめて確認（per-PJ 15-30分）。残り PJ は日次5件 +
 > TTL 45日の自然失効に任せる。これは**「古い修正候補は腐る」を意図した間引き**であり、
 > 45日間確認されなかった低活動 PJ のシグナルは現在の作業文脈との関連が失われている
@@ -84,7 +84,7 @@ dry-run ゼロ書込 E2E・実 PJ ドッグフード（learning_synthetic_fixtur
 > - [ ] marker 立ち後は `is_bootstrap=False` で即返す（「TTL 失効に任せる」選択でも marker が立つ）
 > - [ ] 3 択いずれを選んでも evolve 全体は完走する
 > - [ ] dry_run でファイル不変（実 PJ E2E）
-> - [ ] rl-anything 実 PJ で `pj_total=47`（実測値）が出ることを確認
+> - [ ] evolve-anything 実 PJ で `pj_total=47`（実測値）が出ることを確認
 
 **依存**: なし（#C と統合するが先行実装可）。**PR サイズ**: 2 PR
 （PR1: bootstrap_backlog + marker + evolve emit、PR2: SKILL.md の 3 択分岐）。
@@ -112,7 +112,7 @@ dry-run ゼロ書込 E2E・実 PJ ドッグフード（learning_synthetic_fixtur
 >   既読追記は **apply 時のみ**（dry_run は読むだけ）。
 > - `evolve.py`: weak_signals run_batch / ttl の後に `result["correction_review"]` を常時 emit。
 > - `skills/evolve/SKILL.md`: 新 Step（reflect Step 7.7 を移植）。
->   `$OUT` の groups を AskUserQuestion で y/n（最大5問1バッチ）→「はい」を `rl-reflect --promote-weak`。
+>   `$OUT` の groups を AskUserQuestion で y/n（最大5問1バッチ）→「はい」を `evolve-reflect --promote-weak`。
 >   **エッジケース分岐を明記**: Skip/Other/中断でも evolve は完走（design §2.1）。dry_run は表示のみ。
 >
 > ## Acceptance Criteria
@@ -157,7 +157,7 @@ dry-run ゼロ書込 E2E・実 PJ ドッグフード（learning_synthetic_fixtur
 >   `.claude-plugin/plugin.json` に追加（既存項目と同じフラット number + description 粒度）。
 > - **安全弁②**: `sections_weak_signals.py` builder（ADR-028）に
 >   「本 run の idiom_dict 自動昇格 N 件（idiom 一覧）」行を追加。毎 evolve/audit で必ず surface。
-> - **安全弁③**: `rl-reflect --revoke-idiom <idiom_key>` 新規 CLI。
+> - **安全弁③**: `evolve-reflect --revoke-idiom <idiom_key>` 新規 CLI。
 >   confirmed=False + revoked_at に戻し、該当 idiom_key 由来の `promoted_by="idiom_dict"`
 >   corrections を `invalidated=True` に原子的 rewrite。`count_human_corrections` は
 >   invalidated を除外（フェーズ進捗が正しく巻き戻る）。weak_signals の promoted=True は
@@ -189,7 +189,7 @@ dry-run ゼロ書込 E2E・実 PJ ドッグフード（learning_synthetic_fixtur
 >
 > ## 変更
 > - `scripts/lib/audit/sections_weak_signals.py`: 戻り行に
->   「未昇格 N 件 → /rl-anything:evolve の今日の修正確認で昇格可能」を追記。
+>   「未昇格 N 件 → /evolve-anything:evolve の今日の修正確認で昇格可能」を追記。
 >   `correction_review.remaining` が取れる文脈なら「backlog 消化中（残 X group）」併記。
 >
 > ## Acceptance Criteria
@@ -245,7 +245,7 @@ dry-run ゼロ書込 E2E・実 PJ ドッグフード（learning_synthetic_fixtur
 >   ≥3 PJ で bit-exact 一致したら候補。0 同値は未測定・データ不足で正当に起きる（#423 既出）ため
 >   除外し FP を構造的に避ける。precision 優先は ADR-043 の方針と整合。
 > - `scripts/lib/audit/sections_measurement.py` 新規 builder を `_OBSERVABILITY_BUILDERS` 登録（ADR-028）。
->   データ源は growth-state-*.json walk（rl-fleet status と同経路）。
+>   データ源は growth-state-*.json walk（evolve-fleet status と同経路）。
 >
 > ## Acceptance Criteria
 > - [ ] 3 PJ 以上で同一の **非ゼロ** env_score が出たら surface・1-2 PJ 一致は無視

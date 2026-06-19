@@ -208,11 +208,11 @@ class TestInsufficientDataMessageForEvolveSkill:
         )
 
     def test_message_describes_how_to_accumulate(self):
-        """蓄積方法（bin/rl-optimize / rl-loop）または採点対象の案内が含まれる。"""
+        """蓄積方法（bin/evolve-optimize / evolve-loop）または採点対象の案内が含まれる。"""
         result = fe.run_fitness_evolution(history=[])
         msg = result["details"]["message"]
         has_optimize = "optimize" in msg.lower()
-        has_rl_loop = "rl-loop" in msg or "rl_loop" in msg
+        has_rl_loop = "evolve-loop" in msg or "rl_loop" in msg
         has_evolve_diff = "evolve" in msg.lower()
         assert has_optimize or has_rl_loop or has_evolve_diff, (
             f"insufficient_data のメッセージに蓄積方法の案内がない: {msg!r}"

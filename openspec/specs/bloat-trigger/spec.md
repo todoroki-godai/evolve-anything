@@ -9,19 +9,19 @@
 
 #### Scenario: MEMORY.md exceeds threshold
 - **WHEN** プロジェクトの MEMORY.md が `memory_md_lines`（デフォルト: 150）行を超過
-- **THEN** `TriggerResult(triggered=True, reason="bloat", action="/rl-anything:evolve")` を返し、details に bloat 種別 `memory` と行数を含めなければならない (MUST)
+- **THEN** `TriggerResult(triggered=True, reason="bloat", action="/evolve-anything:evolve")` を返し、details に bloat 種別 `memory` と行数を含めなければならない (MUST)
 
 #### Scenario: Rules count exceeds threshold
 - **WHEN** rules の総数が `rules_count`（デフォルト: 100）を超過
-- **THEN** `TriggerResult(triggered=True, reason="bloat", action="/rl-anything:evolve")` を返し、details に bloat 種別 `rules_count` と件数を含めなければならない (MUST)
+- **THEN** `TriggerResult(triggered=True, reason="bloat", action="/evolve-anything:evolve")` を返し、details に bloat 種別 `rules_count` と件数を含めなければならない (MUST)
 
 #### Scenario: Skills count exceeds threshold
 - **WHEN** skills の総数が `skills_count`（デフォルト: 30）を超過
-- **THEN** `TriggerResult(triggered=True, reason="bloat", action="/rl-anything:evolve")` を返し、details に bloat 種別 `skills_count` と件数を含めなければならない (MUST)
+- **THEN** `TriggerResult(triggered=True, reason="bloat", action="/evolve-anything:evolve")` を返し、details に bloat 種別 `skills_count` と件数を含めなければならない (MUST)
 
 #### Scenario: CLAUDE.md exceeds threshold
 - **WHEN** CLAUDE.md が `claude_md_lines`（デフォルト: 150）行を超過
-- **THEN** `TriggerResult(triggered=True, reason="bloat", action="/rl-anything:evolve")` を返し、details に bloat 種別 `claude_md` と行数を含めなければならない (MUST)
+- **THEN** `TriggerResult(triggered=True, reason="bloat", action="/evolve-anything:evolve")` を返し、details に bloat 種別 `claude_md` と行数を含めなければならない (MUST)
 
 #### Scenario: No bloat detected
 - **WHEN** すべてのアーティファクトが閾値以内

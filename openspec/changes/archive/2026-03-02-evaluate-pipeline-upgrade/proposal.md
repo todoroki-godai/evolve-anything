@@ -28,5 +28,5 @@
 ## Impact
 
 - `skills/genetic-prompt-optimizer/scripts/optimize.py`: `_llm_evaluate`, `next_generation`, `evaluate` メソッドの変更
-- `skills/rl-loop-orchestrator/scripts/run-loop.py`: `--model` 指定の削除
+- `skills/evolve-loop-orchestrator/scripts/run-loop.py`: `--model` 指定の削除
 - **BREAKING**: `--model` オプションをCLI引数から削除。代わりに Claude Code のデフォルト設定を使用

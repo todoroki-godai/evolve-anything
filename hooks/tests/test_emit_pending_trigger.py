@@ -45,7 +45,7 @@ def test_no_output_when_import_fails(data_dir, capsys):
 # ─── pending trigger あり ────────────────────────────────────────
 
 def test_outputs_trigger_message(data_dir, capsys):
-    payload = {"message": "evolve 推奨", "action": "/rl-anything:evolve"}
+    payload = {"message": "evolve 推奨", "action": "/evolve-anything:evolve"}
     _call_with_payload(payload, data_dir)
     out = capsys.readouterr().out
     assert "AUTO_EVOLVE_TRIGGER" in out
@@ -53,16 +53,16 @@ def test_outputs_trigger_message(data_dir, capsys):
 
 
 def test_outputs_recommended_command(data_dir, capsys):
-    payload = {"message": "msg", "action": "/rl-anything:audit"}
+    payload = {"message": "msg", "action": "/evolve-anything:audit"}
     _call_with_payload(payload, data_dir)
     out = capsys.readouterr().out
-    assert "/rl-anything:audit" in out
+    assert "/evolve-anything:audit" in out
 
 
 # ─── triage cache あり ───────────────────────────────────────────
 
 def test_appends_candidate_from_cache(data_dir, capsys):
-    payload = {"message": "推奨evolve候補はセッション開始時に表示されます。", "action": "/rl-anything:evolve"}
+    payload = {"message": "推奨evolve候補はセッション開始時に表示されます。", "action": "/evolve-anything:evolve"}
     cache = {
         "candidates": [
             {"skill": "audit", "action": "UPDATE", "confidence": 0.85, "reason": "使用頻度が高い"},
@@ -77,7 +77,7 @@ def test_appends_candidate_from_cache(data_dir, capsys):
 
 
 def test_cache_file_deleted_after_read(data_dir, capsys):
-    payload = {"message": "msg", "action": "/rl-anything:evolve"}
+    payload = {"message": "msg", "action": "/evolve-anything:evolve"}
     cache = {"candidates": [{"skill": "evolve", "action": "UPDATE", "confidence": 0.9, "reason": ""}], "generated_at": ""}
     triage_file = data_dir / "skill-triage-cache.json"
     triage_file.write_text(json.dumps(cache))
@@ -86,7 +86,7 @@ def test_cache_file_deleted_after_read(data_dir, capsys):
 
 
 def test_tolerates_corrupt_cache_file(data_dir, capsys):
-    payload = {"message": "msg", "action": "/rl-anything:evolve"}
+    payload = {"message": "msg", "action": "/evolve-anything:evolve"}
     (data_dir / "skill-triage-cache.json").write_text("not-json")
     _call_with_payload(payload, data_dir)
     out = capsys.readouterr().out
@@ -94,14 +94,14 @@ def test_tolerates_corrupt_cache_file(data_dir, capsys):
 
 
 def test_tolerates_missing_cache_file(data_dir, capsys):
-    payload = {"message": "msg", "action": "/rl-anything:evolve"}
+    payload = {"message": "msg", "action": "/evolve-anything:evolve"}
     _call_with_payload(payload, data_dir)
     out = capsys.readouterr().out
     assert "AUTO_EVOLVE_TRIGGER" in out
 
 
 def test_multiple_candidates_shown(data_dir, capsys):
-    payload = {"message": "推奨evolve候補はセッション開始時に表示されます。", "action": "/rl-anything:evolve"}
+    payload = {"message": "推奨evolve候補はセッション開始時に表示されます。", "action": "/evolve-anything:evolve"}
     cache = {
         "candidates": [
             {"skill": "evolve", "action": "UPDATE", "confidence": 0.9, "reason": ""},

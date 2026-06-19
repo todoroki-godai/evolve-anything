@@ -21,5 +21,5 @@
 ## Impact
 
 - **scripts/migrate_project_field.py**: 新規作成。依存: `json`, `shutil`（標準ライブラリのみ）
-- **~/.claude/rl-anything/usage.jsonl**: 既存レコードに `project` フィールドが追記される（破壊的変更。バックアップで復旧可能）
-- **~/.claude/rl-anything/sessions.jsonl**: 読み取りのみ（変更なし）
+- **~/.claude/evolve-anything/usage.jsonl**: 既存レコードに `project` フィールドが追記される（破壊的変更。バックアップで復旧可能）
+- **~/.claude/evolve-anything/sessions.jsonl**: 読み取りのみ（変更なし）

@@ -12,7 +12,7 @@ audit スキルは bloat check レポート（CLAUDE.md/MEMORY.md 行数、rules
 - **`evaluate_session_end()` 内に bloat トリガーを統合**: bloat を別関数にすると呼び出し側で結果をマージする必要があるため、既存の reasons/actions リストに追加するのが最もシンプル
 - **`CLAUDE_PROJECT_DIR` 環境変数から project_dir を取得**: `evaluate_session_end()` に keyword-only パラメータ `project_dir` を追加。未設定時は bloat 評価をスキップ
 - **閾値は `bloat_control.BLOAT_THRESHOLDS` を single source of truth とし、trigger_config には `enabled` のみ格納**: 閾値の DRY 違反を防止
-- **全 bloat 種別で `/rl-anything:evolve` を提案**: evolve の Compile ステージが全レイヤーの問題に対応し、ユーザーが1コマンドで対処可能
+- **全 bloat 種別で `/evolve-anything:evolve` を提案**: evolve の Compile ステージが全レイヤーの問題に対応し、ユーザーが1コマンドで対処可能
 - **専用 reason `"bloat"` で既存のクールダウン機構を利用**: 全 bloat サブタイプで共有し、bloat 警告の頻度を抑えてユーザー体験を優先
 - **lazy import パターン**: trigger_engine.py から bloat_control.py への transitive import チェーンを回避するため、`evaluate_bloat()` 内で lazy import し ImportError 時はサイレントスキップ
 

@@ -13,7 +13,7 @@ from line_limit import (
 )
 
 # スキル収集・重複検出から除外するサブディレクトリ名。
-# - .archive: rl-anything 自身がアーカイブしたスキル
+# - .archive: evolve-anything 自身がアーカイブしたスキル
 # - _archived / disabled: ユーザーが手動でアーカイブ/無効化したスキル（#337）。
 #   sys-bots は `.claude/skills/_archived/<name>/` に退避するため、除外しないと
 #   remediation の missing_effort や skill_evolve batch に混入してノイズになる

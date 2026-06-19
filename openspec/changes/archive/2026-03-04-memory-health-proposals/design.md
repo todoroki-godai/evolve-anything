@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything plugin は MEMORY ファイルの行数超過チェック（audit）と corrections の昇格候補検出（reflect）を持つが、MEMORY 内容の品質分析や更新提案は行わない。MEMORY は使い続けるうちに陳腐化（削除済みパス参照）や肥大化が蓄積する。
+evolve-anything plugin は MEMORY ファイルの行数超過チェック（audit）と corrections の昇格候補検出（reflect）を持つが、MEMORY 内容の品質分析や更新提案は行わない。MEMORY は使い続けるうちに陳腐化（削除済みパス参照）や肥大化が蓄積する。
 
 既存の基盤:
 - `audit.py`: `find_artifacts()` で project-local memory 一覧取得、`check_line_limits()` で行数チェック済み

@@ -28,13 +28,13 @@ def _utts():
     return [
         {"source_path": "/a.jsonl", "line_no": 1, "session_id": "s1",
          "text": "ボタンは緑にして、赤じゃなくて", "prev_action": "Edit",
-         "pj_slug": "rl-anything", "timestamp": "2026-06-01T00:00:00+00:00"},
+         "pj_slug": "evolve-anything", "timestamp": "2026-06-01T00:00:00+00:00"},
         {"source_path": "/a.jsonl", "line_no": 2, "session_id": "s1",
          "text": "ありがとう完璧", "prev_action": None,
-         "pj_slug": "rl-anything", "timestamp": "2026-06-01T00:01:00+00:00"},
+         "pj_slug": "evolve-anything", "timestamp": "2026-06-01T00:01:00+00:00"},
         {"source_path": "/a.jsonl", "line_no": 3, "session_id": "s1",
          "text": "P6のデザインが違うんだけど", "prev_action": "Write",
-         "pj_slug": "rl-anything", "timestamp": "2026-06-01T00:02:00+00:00"},
+         "pj_slug": "evolve-anything", "timestamp": "2026-06-01T00:02:00+00:00"},
     ]
 
 
@@ -43,7 +43,7 @@ def _utts():
 
 def test_emit_batches_unjudged(tmp_path: Path) -> None:
     emitted = cs_batch.emit_judgement_requests(
-        "rl-anything", utterances=_utts(), batch_size=2,
+        "evolve-anything", utterances=_utts(), batch_size=2,
         judged_path=tmp_path / "judged.jsonl",
     )
     # 3 発話 / batch_size 2 → 2 リクエスト
@@ -58,7 +58,7 @@ def test_emit_skips_already_judged(tmp_path: Path) -> None:
     judged = tmp_path / "judged.jsonl"
     cs_store.record_judged(["/a.jsonl:1", "/a.jsonl:2"], path=judged)
     emitted = cs_batch.emit_judgement_requests(
-        "rl-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
     # 残り 1 件（line_no 3）だけ → 1 リクエスト
     assert len(emitted["requests"]) == 1
@@ -71,7 +71,7 @@ def test_emit_empty_when_all_judged(tmp_path: Path) -> None:
     judged = tmp_path / "judged.jsonl"
     cs_store.record_judged(["/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"], path=judged)
     emitted = cs_batch.emit_judgement_requests(
-        "rl-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
     assert emitted["requests"] == []
 
@@ -99,7 +99,7 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(tmp_path: Path
     judged = tmp_path / "judged.jsonl"
 
     emitted = cs_batch.emit_judgement_requests(
-        "rl-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
     rid = emitted["requests"][0]["id"]
     # index 0 (四国めたん) と 2 (P6) を修正と判定、1 は非修正
@@ -137,7 +137,7 @@ def test_ingest_filters_overbroad_idioms_from_dictionary(tmp_path: Path) -> None
     judged = tmp_path / "judged.jsonl"
 
     emitted = cs_batch.emit_judgement_requests(
-        "rl-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
     rid = emitted["requests"][0]["id"]
     responses = _responses_for(emitted, {
@@ -165,7 +165,7 @@ def test_ingest_dry_run_writes_nothing(tmp_path: Path) -> None:
     judged = tmp_path / "judged.jsonl"
 
     emitted = cs_batch.emit_judgement_requests(
-        "rl-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
     rid = emitted["requests"][0]["id"]
     responses = _responses_for(emitted, {
@@ -188,7 +188,7 @@ def test_ingest_missing_response_does_not_mark_judged(tmp_path: Path) -> None:
     idioms_store = tmp_path / "idioms.jsonl"
     judged = tmp_path / "judged.jsonl"
     emitted = cs_batch.emit_judgement_requests(
-        "rl-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
     # responses 空（assistant が応答しなかった）
     res = cs_batch.ingest_judgement_results(

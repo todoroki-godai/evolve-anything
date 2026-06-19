@@ -56,7 +56,7 @@ def main() -> None:
         action="store_true",
         help=(
             "evolve 本体を回さず、保留中の提案 accept/reject を optimize_history に drain する（#402）。"
-            "apply 後の SKILL.md Step 7.8 で `rl-evolve --drain` を1コマンド実行する。"
+            "apply 後の SKILL.md Step 7.8 で `evolve --drain` を1コマンド実行する。"
             "pending は marker（emit が dry-run でも記録）か --result-json から取る。"
         ),
     )
@@ -80,7 +80,7 @@ def main() -> None:
         help=(
             "evolve 本体を回さず、slug 解決済みの OUT パス `/tmp/rl_evolve_<slug>.json` の1行だけを"
             "print して即返す（#525-3）。SKILL.md Step 1 の SLUG/OUT 再導出ボイラープレートを短縮する"
-            "（rl-evolve は既に slug を解決できるため）。"
+            "（evolve は既に slug を解決できるため）。"
         ),
     )
 
@@ -103,7 +103,7 @@ def main() -> None:
         summary = drain_pending(project_dir=args.project_dir, result_json=args.result_json)
 
         # #484: 決定論 weak_signals を apply 境界で永続化する。
-        # 標準フローは `rl-evolve --dry-run` 分析 → 対話適用なので、run_evolve 内の
+        # 標準フローは `evolve --dry-run` 分析 → 対話適用なので、run_evolve 内の
         # run_batch(dry_run=True) は #491 契約で常にゼロ書き込みになる。決定論検出は冪等
         # （signal_key dedup）なので、tool 文脈・非 dry-run・正準 DATA_DIR で走る drain で
         # 永続化する（evolve_decisions の drain と同型・#400 の盲点修正と同じ構造）。

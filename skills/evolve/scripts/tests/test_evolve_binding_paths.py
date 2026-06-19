@@ -86,7 +86,7 @@ def test_setattr_run_evolve_reaches_main(monkeypatch, capsys):
         return {"phases": {}, "slug": "x", "stub": True}
 
     monkeypatch.setattr(evolve, "run_evolve", _sentinel)
-    monkeypatch.setattr(sys, "argv", ["rl-evolve", "--dry-run"])
+    monkeypatch.setattr(sys, "argv", ["evolve", "--dry-run"])
     evolve.main()
     assert calls["n"] == 1, "run_evolve の差し替えが main にすり抜けた（main 抽出後の silent fail 予兆）"
 
@@ -100,7 +100,7 @@ def test_setattr_resolve_evolve_slug_reaches_main(monkeypatch, capsys):
         return "sentinelslug"
 
     monkeypatch.setattr(evolve, "_resolve_evolve_slug", _sentinel)
-    monkeypatch.setattr(sys, "argv", ["rl-evolve", "--print-out-path"])
+    monkeypatch.setattr(sys, "argv", ["evolve", "--print-out-path"])
     evolve.main()
     out = capsys.readouterr().out
     assert calls["n"] == 1, "_resolve_evolve_slug の差し替えが main にすり抜けた"

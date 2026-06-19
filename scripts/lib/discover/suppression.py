@@ -63,7 +63,7 @@ def add_merge_suppression(skill_a: str, skill_b: str) -> None:
         with open(_suppression_file(), "a", encoding="utf-8") as f:
             f.write(json.dumps({"pattern": key, "type": "merge"}, ensure_ascii=False) + "\n")
     except OSError as e:
-        print(f"[rl-anything] merge suppression write failed: {e}", file=sys.stderr)
+        print(f"[evolve-anything] merge suppression write failed: {e}", file=sys.stderr)
 
 
 def add_to_suppression_list(pattern: str) -> None:

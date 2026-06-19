@@ -50,7 +50,7 @@ def handle_file_changed(event: dict) -> dict | None:
         output["watchPaths"] = watch_paths
 
     if result.triggered:
-        output["systemMessage"] = f"[rl-anything:auto-trigger] {result.message}"
+        output["systemMessage"] = f"[evolve-anything:auto-trigger] {result.message}"
 
     return output if output else None
 

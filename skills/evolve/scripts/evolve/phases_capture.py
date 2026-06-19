@@ -134,7 +134,7 @@ def run_capture_phases(result: Dict[str, Any], ctx) -> None:
             ingested = session_store.ingest()
             result["sessions_ingested"] = ingested
         except Exception as e:
-            print(f"[rl-anything:evolve] session ingest warning: {e}", file=sys.stderr)
+            print(f"[evolve-anything:evolve] session ingest warning: {e}", file=sys.stderr)
             result["sessions_ingested"] = {"error": str(e)}
 
     # ── NFD: 結晶化イベント emit + growth キャッシュ更新 ────────
@@ -142,7 +142,7 @@ def run_capture_phases(result: Dict[str, Any], ctx) -> None:
         try:
             _emit_growth_crystallization(result, project_dir)
         except Exception as e:
-            print(f"[rl-anything:evolve] growth emit warning: {e}", file=sys.stderr)
+            print(f"[evolve-anything:evolve] growth emit warning: {e}", file=sys.stderr)
 
     # ── utterance アーカイブの増分 ingest（#430）────────────────────
     # 全PJ human 発話を恒久アーカイブに batch 取り込み（hot path ゼロ・ゼロ LLM）。
@@ -219,7 +219,7 @@ def run_capture_phases(result: Dict[str, Any], ctx) -> None:
     # 前回 evolve 以降の新規 weak_signal（channel=llm_judge・未昇格・非expired）のうち
     # 既読集合（correction_review_seen.jsonl）に無いものを idiom 単位で group 化し、頻度降順・
     # 上位 5 件を **常時 emit**（eligible でなくても groups=[] でキーを置く）。SKILL.md が
-    # eligible のとき AskUserQuestion で y/n 確認し、「はい」を rl-reflect --promote-weak で昇格。
+    # eligible のとき AskUserQuestion で y/n 確認し、「はい」を evolve-reflect --promote-weak で昇格。
     # #443 bootstrap と同じ correction_review dict に相乗りさせる（setdefault で同居）。
     # build_review は読み取りのみ。既読追記は SKILL.md の apply（record_reviewed）に委ねる。
     # dry_run でも build（読み取りのみ）は走るが既読集合を一切書かない（最下層 write ゲート）。

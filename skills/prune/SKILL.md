@@ -8,7 +8,7 @@ description: |
 disable-model-invocation: true
 ---
 
-# /rl-anything:prune — 未使用アーティファクトの淘汰
+# /evolve-anything:prune — 未使用アーティファクトの淘汰
 
 dead glob・zero invocation・重複の3基準でアーティファクトを検出し、アーカイブを提案する。
 直接削除は行わない（MUST NOT）。全淘汰は人間承認が必須（MUST）。
@@ -19,9 +19,9 @@ Global 候補の検出は `skill_activations.jsonl`（PostToolUse hook 蓄積）
 ## Usage
 
 ```
-/rl-anything:prune [project-dir]
-/rl-anything:prune --restore          # アーカイブから復元
-/rl-anything:prune --list-archive     # アーカイブ一覧表示
+/evolve-anything:prune [project-dir]
+/evolve-anything:prune --restore          # アーカイブから復元
+/evolve-anything:prune --list-archive     # アーカイブ一覧表示
 ```
 
 ## 実行手順
@@ -29,8 +29,8 @@ Global 候補の検出は `skill_activations.jsonl`（PostToolUse hook 蓄積）
 ### Step 1: 候補検出
 
 ```bash
-rl-usage-log "prune"
-rl-prune "$(pwd)"
+evolve-usage-log "prune"
+evolve-prune "$(pwd)"
 ```
 
 ### Step 2: 候補リストの表示 + 推薦ラベル判定
@@ -121,7 +121,7 @@ AskUserQuestion の options は常に **4つ以下** とする（MUST）。
 
 ### Step 4: アーカイブ実行
 
-承認された候補のみ `~/.claude/rl-anything/archive/` に移動:
+承認された候補のみ `~/.claude/evolve-anything/archive/` に移動:
 
 ```python
 import os, sys

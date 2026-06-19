@@ -79,8 +79,8 @@ class TestRestoreStateTrigger:
         payload = {
             "triggered": True,
             "reason": "session_count",
-            "action": "/rl-anything:evolve",
-            "message": "前回 evolve から 12 セッション経過。推奨: /rl-anything:evolve",
+            "action": "/evolve-anything:evolve",
+            "message": "前回 evolve から 12 セッション経過。推奨: /evolve-anything:evolve",
         }
         (data_dir / "pending-trigger.json").write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"

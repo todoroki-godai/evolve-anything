@@ -59,9 +59,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_permission_denied(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:permission_denied] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:permission_denied] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:permission_denied] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:permission_denied] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

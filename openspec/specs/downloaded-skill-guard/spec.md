@@ -4,7 +4,7 @@
 `skill_origin.py` はスキルファイルパスからその origin（plugin / global / custom）を判定する（MUST）。`installed_plugins.json` を優先ソースとし、存在しない場合はパスベースでフォールバックする。
 
 #### Scenario: Plugin skill detected via installed_plugins.json
-- **WHEN** `installed_plugins.json` に "rl-anything" プラグインが登録されており、スキルパスがそのプラグインのスキル名に一致する
+- **WHEN** `installed_plugins.json` に "evolve-anything" プラグインが登録されており、スキルパスがそのプラグインのスキル名に一致する
 - **THEN** `classify_skill_origin()` が `"plugin"` を返す
 
 #### Scenario: Plugin skill detected via path fallback

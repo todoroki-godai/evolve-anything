@@ -37,7 +37,7 @@ from typing import Optional
 from llm_broker import build_requests, parse_responses, passthrough
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 
 try:
     from growth_level import compute_level as _compute_level  # type: ignore[import]

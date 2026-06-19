@@ -19,7 +19,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 WORKFLOWS_PATH = DATA_DIR / "workflows.jsonl"
 OUTPUT_PATH = DATA_DIR / "workflow_stats.json"
 
@@ -232,13 +232,13 @@ def main():
         "--workflows-path",
         type=str,
         default=None,
-        help="workflows.jsonl のパス（デフォルト: ~/.claude/rl-anything/workflows.jsonl）",
+        help="workflows.jsonl のパス（デフォルト: ~/.claude/evolve-anything/workflows.jsonl）",
     )
     parser.add_argument(
         "--output",
         type=str,
         default=None,
-        help="出力先パス（デフォルト: ~/.claude/rl-anything/workflow_stats.json）",
+        help="出力先パス（デフォルト: ~/.claude/evolve-anything/workflow_stats.json）",
     )
 
     args = parser.parse_args()

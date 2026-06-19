@@ -5,7 +5,7 @@ description: |
   docs/site/ 以下の HTML 説明サイトをリポジトリの現状に合わせて最新化する。
   バージョン番号・スキル一覧・4つの柱・アーキテクチャ表を自動更新し、手動管理の sources.html には触れない。
   Trigger: docs更新, docs refresh, サイト更新, HTMLを最新化, ドキュメントサイト更新, リリース後にdocs, docs/site を更新
-  /rl-anything:version や版上げ作業の最後に呼ぶこと。
+  /evolve-anything:version や版上げ作業の最後に呼ぶこと。
 allowed-tools: Read, Edit, Write, Bash, Glob
 ---
 

@@ -21,7 +21,7 @@
 
 #### Scenario: Only bloat trigger fires
 - **WHEN** bloat トリガーのみが条件を満たし、他のトリガー条件は未達
-- **THEN** `TriggerResult(triggered=True, reason="bloat")` を返し、`/rl-anything:evolve` を推奨しなければならない (MUST)
+- **THEN** `TriggerResult(triggered=True, reason="bloat")` を返し、`/evolve-anything:evolve` を推奨しなければならない (MUST)
 
 #### Scenario: Bloat evaluation with project_dir
 - **WHEN** session_summary.py が `CLAUDE_PROJECT_DIR` を受け取っている

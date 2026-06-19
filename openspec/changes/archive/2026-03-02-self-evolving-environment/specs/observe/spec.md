@@ -43,14 +43,14 @@ hooks/restore_state.py は SessionStart compact hook として、保存済みチ
 - **WHEN** 新しいセッションが開始され、checkpoint.json が存在する
 - **THEN** 前回の進化状態が復元される
 
-### Requirement: 観測データは ~/.claude/rl-anything/ に保存しなければならない（MUST）
-全ての観測データ（usage.jsonl, errors.jsonl, sessions.jsonl, usage-registry.jsonl）は ~/.claude/rl-anything/ ディレクトリに保存しなければならない（MUST）。
+### Requirement: 観測データは ~/.claude/evolve-anything/ に保存しなければならない（MUST）
+全ての観測データ（usage.jsonl, errors.jsonl, sessions.jsonl, usage-registry.jsonl）は ~/.claude/evolve-anything/ ディレクトリに保存しなければならない（MUST）。
 ディレクトリが存在しない場合、自動作成しなければならない（MUST）。
 
 #### Scenario: データ保存先
 - **WHEN** observe hook がデータを記録する
-- **THEN** ~/.claude/rl-anything/ 配下の対応する JSONL ファイルに追記される
+- **THEN** ~/.claude/evolve-anything/ 配下の対応する JSONL ファイルに追記される
 
 #### Scenario: ディレクトリ不在時の自動作成
-- **WHEN** ~/.claude/rl-anything/ ディレクトリが存在しない状態で hook が実行される
+- **WHEN** ~/.claude/evolve-anything/ ディレクトリが存在しない状態で hook が実行される
 - **THEN** ディレクトリを自動作成し（MUST）、データ記録を継続する

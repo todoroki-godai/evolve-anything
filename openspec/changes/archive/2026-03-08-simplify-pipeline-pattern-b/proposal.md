@@ -17,7 +17,7 @@
 
 - `diagnose-stage`: Diagnose ステージ — discover(core) + enrich(統合) + audit 問題検出を1ステージに統合。パターン検出 + 既存スキル照合 + 構造チェックを実行し、レイヤー別の問題リストを出力する
 - `compile-stage`: Compile ステージ — optimize + reflect + remediation を1ステージに統合。corrections/context/診断結果からパッチ生成 → regression gate → fitness 検証 → メモリルーティングを実行する
-- `shared-regression-gate`: 共通 regression gate ライブラリ — optimize / rl-loop / 将来の全層 Compile で共有する regression gate ルールエンジン
+- `shared-regression-gate`: 共通 regression gate ライブラリ — optimize / evolve-loop / 将来の全層 Compile で共有する regression gate ルールエンジン
 
 ### Modified Capabilities
 
@@ -33,6 +33,6 @@
 - **discover スキル**: enrich の Jaccard 処理を統合、session-scan 削除
 - **prune スキル**: reorganize のマージ検出ロジックを取り込み
 - **optimize スキル**: regression gate を外部ライブラリ参照に変更
-- **rl-loop スキル**: regression gate を外部ライブラリ参照に変更
+- **evolve-loop スキル**: regression gate を外部ライブラリ参照に変更
 - **テスト**: 既存テストの参照先変更 + 新しい共通 gate のテスト追加
 - **関連 issue**: #21（ロードマップ簡素化）の Phase 1 に該当

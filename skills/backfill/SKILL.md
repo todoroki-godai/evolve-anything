@@ -9,7 +9,7 @@ description: |
 disable-model-invocation: true
 ---
 
-# /rl-anything:backfill — 【廃止】セッション履歴のバックフィル
+# /evolve-anything:backfill — 【廃止】セッション履歴のバックフィル
 
 このスキルは **廃止済み** です。専用 CLI（`rl-backfill` / `rl-backfill-reclassify` /
 `rl-backfill-analyze`）は #215（v1.65.1）でソースごと削除されており、実行すると
@@ -26,13 +26,13 @@ command-not-found になります。**このスキルは何もバックフィル
    テレメトリが溜まります。
 
 2. **取り込み（evolve が batch でまとめて実行）**
-   `/rl-anything:evolve` が `sessions.jsonl` → DuckDB の batch ingest と、
+   `/evolve-anything:evolve` が `sessions.jsonl` → DuckDB の batch ingest と、
    全 PJ human 発話の `utterances.db` 増分 ingest（#430）を内包します。
    全 PJ の human 発話だけを先に取り込みたい場合は次を使えます（読み取りのみ・ゼロ LLM）:
 
    ```bash
    # 全 PJ の human 発話を utterances.db に増分 ingest（初回は --days 無指定で全期間）
-   bin/rl-fleet ingest
+   bin/evolve-fleet ingest
    ```
 
 3. **分析レポート**
@@ -41,7 +41,7 @@ command-not-found になります。**このスキルは何もバックフィル
 
    ```bash
    # 環境スコアと観測サマリ（dry-run・変更なし）
-   /rl-anything:audit
+   /evolve-anything:audit
    ```
 
 ## 初回セットアップの手順
@@ -49,7 +49,7 @@ command-not-found になります。**このスキルは何もバックフィル
 ```
 # 1. 数セッション通常運用して observe hooks にテレメトリを溜める
 # 2. 取り込み + 改善提案を一括実行（dry-run で安全に下見）
-/rl-anything:evolve --dry-run
+/evolve-anything:evolve --dry-run
 ```
 
 ## allowed-tools

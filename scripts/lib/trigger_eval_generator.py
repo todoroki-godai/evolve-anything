@@ -20,16 +20,16 @@ UNRELATED_CONFIDENCE_WEIGHT = 0.6
 
 
 def _data_dir() -> Path:
-    """DATA_DIR を解決（CLAUDE_PLUGIN_DATA 優先、未設定は ~/.claude/rl-anything）。"""
+    """DATA_DIR を解決（CLAUDE_PLUGIN_DATA 優先、未設定は ~/.claude/evolve-anything）。"""
     try:
         from rl_common import DATA_DIR
         return Path(DATA_DIR)
     except Exception:
-        return Path.home() / ".claude" / "rl-anything"
+        return Path.home() / ".claude" / "evolve-anything"
 
 
 # eval-sets の書き込み先。DATA_DIR 由来にして reader(eval_saturation) と揃える
-# （prod では ~/.claude/rl-anything/eval-sets で従来と不変、CLAUDE_PLUGIN_DATA 設定時も一致）。
+# （prod では ~/.claude/evolve-anything/eval-sets で従来と不変、CLAUDE_PLUGIN_DATA 設定時も一致）。
 EVAL_SETS_DIR = _data_dir() / "eval-sets"
 
 

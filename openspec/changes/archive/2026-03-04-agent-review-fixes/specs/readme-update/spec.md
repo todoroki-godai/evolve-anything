@@ -10,7 +10,7 @@ README.md を Before/After のストーリー構成で全面更新する（SHALL
 
 #### Scenario: What（概要）セクションが存在する
 - **WHEN** README.md を確認する
-- **THEN** rl-anything が何をするか（遺伝的アルゴリズムによるスキル/ルールの自動最適化）が簡潔に記述されている
+- **THEN** evolve-anything が何をするか（遺伝的アルゴリズムによるスキル/ルールの自動最適化）が簡潔に記述されている
 
 #### Scenario: After（効果）セクションが存在する
 - **WHEN** README.md を確認する
@@ -22,7 +22,7 @@ README.md を Before/After のストーリー構成で全面更新する（SHALL
 
 #### Scenario: Before/After チュートリアルが存在する
 - **WHEN** README.md のチュートリアルセクションを確認する
-- **THEN** 1つのスキルを `/rl-anything:evolve` で改善する手順と、改善前後のスコア比較が記載されている
+- **THEN** 1つのスキルを `/evolve-anything:evolve` で改善する手順と、改善前後のスコア比較が記載されている
 
 ### Requirement: README.md のクイックスタートがスラッシュコマンド形式
 
@@ -32,9 +32,9 @@ README.md のクイックスタートは `python3 <PLUGIN_DIR>/...` ではなく
 - **WHEN** README.md のクイックスタートセクションを確認する
 - **THEN** `/optimize --target .claude/skills/my-skill/SKILL.md` 形式の使用例が記載されている
 
-#### Scenario: /rl-loop のクイックスタートが記載されている
+#### Scenario: /evolve-loop のクイックスタートが記載されている
 - **WHEN** README.md のクイックスタートセクションを確認する
-- **THEN** `/rl-loop --target .claude/skills/my-skill/SKILL.md` 形式の使用例が記載されている
+- **THEN** `/evolve-loop --target .claude/skills/my-skill/SKILL.md` 形式の使用例が記載されている
 
 #### Scenario: python3 コマンドの直接実行は詳細リファレンスに移動
 - **WHEN** README.md のクイックスタートセクションを確認する

@@ -31,7 +31,7 @@ remediation の `classify_issue()` において、`scope == "global"` かつ `co
 
 #### Scenario: hook scaffold の実行
 - **WHEN** ユーザーが `tool_usage_hook_candidate` の修正を承認した
-- **THEN** hook スクリプトが `~/.claude/rl-anything/hooks/` に書き込まれ、settings.json 登録案が表示される
+- **THEN** hook スクリプトが `~/.claude/evolve-anything/hooks/` に書き込まれ、settings.json 登録案が表示される
 
 ### Requirement: VERIFY_DISPATCH に global rule 検証を追加
 `VERIFY_DISPATCH["tool_usage_rule_candidate"]` として rule ファイルの存在確認と内容検証を行う（MUST）。

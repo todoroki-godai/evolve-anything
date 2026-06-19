@@ -12,9 +12,9 @@
 2. **誤りは指数的に増幅する**ことが複数ラウンドで観測される
 3. **対策**: オリジナルデータの保持 / 再要約の回数制限 / human-in-the-loop
 
-## rl-anything 側の現行実装と照合
+## evolve-anything 側の現行実装と照合
 
-| 論文の警告 | rl-anything 側の対応状態 | 評価 |
+| 論文の警告 | evolve-anything 側の対応状態 | 評価 |
 |-----------|--------------------------|------|
 | LLM による MEMORY.md 自動更新 | `reflect` skill が corrections.jsonl から CLAUDE.md/rules に反映 | ⚠ リスク該当 |
 | 元データの保持 | corrections.jsonl は append-only（要約せず保持） | ✅ 安全側 |

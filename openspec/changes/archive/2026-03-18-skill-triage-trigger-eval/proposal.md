@@ -1,6 +1,6 @@
 ## Why
 
-evolve/discover はテレメトリベースでスキル候補の検出や既存スキルの適性評価を行うが、**description の trigger 精度**（正しいクエリで発火するか、誤ったクエリで発火しないか）を定量計測する手段がない。結果として「新スキルを作るべきか」「既存の description を更新すべきか」「スキルを分割/マージすべきか」の判断が曖昧になっている。skill-creator v2 が eval/benchmark/description optimizer を提供しているため、rl-anything はテレメトリから eval set を自動生成し、skill-creator と補完関係を築くことで、スキルライフサイクル全体の品質を自動管理できる。
+evolve/discover はテレメトリベースでスキル候補の検出や既存スキルの適性評価を行うが、**description の trigger 精度**（正しいクエリで発火するか、誤ったクエリで発火しないか）を定量計測する手段がない。結果として「新スキルを作るべきか」「既存の description を更新すべきか」「スキルを分割/マージすべきか」の判断が曖昧になっている。skill-creator v2 が eval/benchmark/description optimizer を提供しているため、evolve-anything はテレメトリから eval set を自動生成し、skill-creator と補完関係を築くことで、スキルライフサイクル全体の品質を自動管理できる。
 
 ## What Changes
 

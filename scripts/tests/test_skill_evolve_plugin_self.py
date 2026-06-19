@@ -21,7 +21,7 @@ from skill_evolve.assessment import skill_evolve_assessment  # noqa: E402
 def _make_plugin_self_repo(tmp_path: Path, *skill_names: str) -> Path:
     manifest = tmp_path / ".claude-plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text('{"name": "rl-anything"}', encoding="utf-8")
+    manifest.write_text('{"name": "evolve-anything"}', encoding="utf-8")
     for name in skill_names:
         skill_md = tmp_path / "skills" / name / "SKILL.md"
         skill_md.parent.mkdir(parents=True, exist_ok=True)

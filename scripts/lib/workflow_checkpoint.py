@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 import os as _os
 
 _PLUGIN_DATA_ENV = _os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 
 # ── 閾値定数 ──────────────────────────────────────────
 MIN_CHECKPOINT_EVIDENCE = 2

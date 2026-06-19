@@ -1,4 +1,4 @@
-# ADR-024: MemOS L1→L4 結晶化アーキテクチャと rl-anything 4層メモリ設計の対応関係
+# ADR-024: MemOS L1→L4 結晶化アーキテクチャと evolve-anything 4層メモリ設計の対応関係
 
 - **Status**: Accepted
 - **Date**: 2026-05-19
@@ -6,19 +6,19 @@
 
 ## Context
 
-rl-anything は corrections.jsonl（観測）→ MEMORY.md（短期記憶）→ rules/CLAUDE.md（行動ポリシー）→ skills/（実行可能知識）という 4 層の情報蓄積パイプラインを持つ。この設計は経験的に形成されたものであり、外部の理論的根拠が明示されていなかった。
+evolve-anything は corrections.jsonl（観測）→ MEMORY.md（短期記憶）→ rules/CLAUDE.md（行動ポリシー）→ skills/（実行可能知識）という 4 層の情報蓄積パイプラインを持つ。この設計は経験的に形成されたものであり、外部の理論的根拠が明示されていなかった。
 
 2026 年初頭に発表された MemOS / HiMem 論文（arXiv:2601.06377）は、LLM メモリを
 L1（トレース）→ L2（ポリシー）→ L3（ワールドモデル）→ L4（結晶化スキル）の 4 層に
 分類し、下位層から上位層への「結晶化（crystallization）」を自律エージェントの知識獲得
 メカニズムとして定式化した。
 
-rl-anything の設計がこの 4 層アーキテクチャと構造的に同型であることを確認し、
+evolve-anything の設計がこの 4 層アーキテクチャと構造的に同型であることを確認し、
 各層のライフサイクル・更新トリガー・廃棄条件を ADR として明文化する必要がある。
 
-## MemOS 4層モデルと rl-anything の対応
+## MemOS 4層モデルと evolve-anything の対応
 
-| MemOS 層 | 役割 | rl-anything 対応 | 形式 |
+| MemOS 層 | 役割 | evolve-anything 対応 | 形式 |
 |---------|------|-----------------|------|
 | **L1 トレース** | 生の観測・経験ログ | `corrections.jsonl` / `sessions.jsonl` / `usage.jsonl` 等 | JSONL（追記のみ） |
 | **L2 ポリシー** | セッション横断の短期記憶・行動指針の素案 | `MEMORY.md` (auto-memory) | Markdown（`/reflect` で更新） |
@@ -77,7 +77,7 @@ L1 (corrections.jsonl)
 
 ## Decision
 
-rl-anything の 4 層メモリ設計を MemOS L1→L4 結晶化アーキテクチャと対応付け、
+evolve-anything の 4 層メモリ設計を MemOS L1→L4 結晶化アーキテクチャと対応付け、
 各層のライフサイクル・更新トリガー・廃棄条件を本 ADR で明文化する。
 
 設計の同型性を確認したが、以下の **未実装ギャップ** が存在する（将来検討）:

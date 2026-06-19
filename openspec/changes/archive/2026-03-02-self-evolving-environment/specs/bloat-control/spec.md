@@ -23,7 +23,7 @@ evolve / optimize / discover の全パイプラインで、出力アーティフ
 - **THEN** 対応する警告と改善提案がレポートに含まれなければならない（MUST）
 
 ### Requirement: Usage Registry でプロジェクト横断の使用状況を追跡しなければならない（MUST）
-~/.claude/rl-anything/usage-registry.jsonl に global スキルの使用をプロジェクト別に記録しなければならない（MUST）。
+~/.claude/evolve-anything/usage-registry.jsonl に global スキルの使用をプロジェクト別に記録しなければならない（MUST）。
 
 #### Scenario: 使用状況の記録
 - **WHEN** global スキルが使用される

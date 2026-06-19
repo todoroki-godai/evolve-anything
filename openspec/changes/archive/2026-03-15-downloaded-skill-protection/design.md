@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything プラグインのスキルは `installed_plugins.json` 経由でダウンロードされ、`.claude/skills/` に配置される。現在これらのスキルとユーザー作成スキルの区別はパスベース判定（`audit.py:classify_artifact_origin()`）で行われているが、編集保護の仕組みは存在しない。
+evolve-anything プラグインのスキルは `installed_plugins.json` 経由でダウンロードされ、`.claude/skills/` に配置される。現在これらのスキルとユーザー作成スキルの区別はパスベース判定（`audit.py:classify_artifact_origin()`）で行われているが、編集保護の仕組みは存在しない。
 
 reflect の知見ルーティング（`suggest_claude_file()`）は8層メモリ階層で動作するが、corrections の `last_skill` フィールドは現在ルーティング判定に使用されておらず、キーワードマッチのみで宛先を決定している。
 
@@ -58,7 +58,7 @@ reflect の知見ルーティング（`suggest_claude_file()`）は8層メモリ
 
 - **[Risk] `installed_plugins.json` の形式変更** → Claude Code のバージョンアップで形式が変わる可能性。フォールバック（パスベース判定）で緩和。
 - **[Risk] 知見の分散** → プラグインスキルの知見がプロジェクト側 references/ に分散する。audit でプロジェクト固有 references の存在を表示して可視化で緩和。
-- **[Trade-off] 警告のみで物理ブロックなし** → エージェントが警告を無視する可能性があるが、rl-anything の責務として rules/CLAUDE.md への記載で対応可能（reflect が自動的にルールを生成）。
+- **[Trade-off] 警告のみで物理ブロックなし** → エージェントが警告を無視する可能性があるが、evolve-anything の責務として rules/CLAUDE.md への記載で対応可能（reflect が自動的にルールを生成）。
 
 ## Constants
 

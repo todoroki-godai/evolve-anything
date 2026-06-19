@@ -31,32 +31,32 @@
 
 ### 強い点
 
-- **r^comp の存在が決定的**: skill 数を experience 数で正規化して罰する明示項。skill バブル（増やすほど報酬になる罠）を構造的に防いでいる。rl-anything には対応項が無い（`prune` は LLM judge で都度判断）。
-- **r^fc**: 「skill 指示通りに valid な function call が出たか」を直接 reward 化。スキル品質の操作的定義としてシンプルで強い。rl-anything は observe hooks (15個) で tool 呼び出しを全量取れているのに、この signal を skill 品質に back-prop していない。
-- **frozen executor + trainable curator の分離**: rl-anything と相性が良い（Claude Code 自体は frozen、rl-anything plugin だけが進化対象）。設計の正当化に使える。
+- **r^comp の存在が決定的**: skill 数を experience 数で正規化して罰する明示項。skill バブル（増やすほど報酬になる罠）を構造的に防いでいる。evolve-anything には対応項が無い（`prune` は LLM judge で都度判断）。
+- **r^fc**: 「skill 指示通りに valid な function call が出たか」を直接 reward 化。スキル品質の操作的定義としてシンプルで強い。evolve-anything は observe hooks (15個) で tool 呼び出しを全量取れているのに、この signal を skill 品質に back-prop していない。
+- **frozen executor + trainable curator の分離**: evolve-anything と相性が良い（Claude Code 自体は frozen、evolve-anything plugin だけが進化対象）。設計の正当化に使える。
 - **Cross-backbone 汎化**: curator policy が executor を取り替えても効く → メタ層で学べる証拠。
 
 ### 弱い点 / 違和感
 
-- **Action 空間が 3 操作のみ**（SPLIT/MERGE 無し）。rl-anything の `skill_triage` (5択) のほうが豊富。論文ではこれを simplicity と呼んでいるが、reorganize 系の判断は LLM curator の prompt 任せになっており、ablation でも切り分けられていない。
+- **Action 空間が 3 操作のみ**（SPLIT/MERGE 無し）。evolve-anything の `skill_triage` (5択) のほうが豊富。論文ではこれを simplicity と呼んでいるが、reorganize 系の判断は LLM curator の prompt 任せになっており、ablation でも切り分けられていない。
 - **r^cnt が Qwen3-32B judge**: judge model を curator と同系統に取ると報酬ハッキング懸念。独立 judge にすべきだが論文内に検証なし。
-- **BM25 retrieval 限界**を著者が認めている: skill 数増加でノイズ拾い、コンテキスト汚染。rl-anything も skill 全部 load なので同種の問題。
-- **Compression 項のスケール感**: 経験数 χ が分母なので新規 PJ 立ち上げ時は ε に弱い。rl-anything のように長期 telemetry がある環境では効くが、cold start で振動する懸念。
+- **BM25 retrieval 限界**を著者が認めている: skill 数増加でノイズ拾い、コンテキスト汚染。evolve-anything も skill 全部 load なので同種の問題。
+- **Compression 項のスケール感**: 経験数 χ が分母なので新規 PJ 立ち上げ時は ε に弱い。evolve-anything のように長期 telemetry がある環境では効くが、cold start で振動する懸念。
 - **Ablation が薄い**: λ_f / λ_u / λ_c を個別に 0 にした表が無く、各項の寄与が不明。Appendix C 言及のみ。
-- **Failure mode の議論が浅い**: skill が誤って削除された後の recovery、curator が wrong update を打った時の rollback について記述なし。rl-anything の regression gate（`scripts/lib/regression_gate.py`）に相当する safety 層が無い。
+- **Failure mode の議論が浅い**: skill が誤って削除された後の recovery、curator が wrong update を打った時の rollback について記述なし。evolve-anything の regression gate（`scripts/lib/regression_gate.py`）に相当する safety 層が無い。
 - **コード未公開**。再現困難。
 
-## rl-anything との対応関係（構造同型と差分）
+## evolve-anything との対応関係（構造同型と差分）
 
-| 観点 | SkillOS | rl-anything | 評価 |
+| 観点 | SkillOS | evolve-anything | 評価 |
 |------|---------|-------------|------|
 | Skill 表現 | MD + YAML | MD + YAML | 完全同型 |
-| Curator action | 3操作 | 5択 (CREATE/UPDATE/SPLIT/MERGE/OK) | rl-anything 優位 |
+| Curator action | 3操作 | 5択 (CREATE/UPDATE/SPLIT/MERGE/OK) | evolve-anything 優位 |
 | Retrieval | BM25 | file listing + LLM context | 同レベル（両者の弱点） |
 | Curator 学習 | GRPO | LLM 1-pass + regression gate | SkillOS 優位（学習 vs ヒューリスティック） |
 | 圧縮度報酬 | r^comp 明示 | `prune` の LLM judge のみ | SkillOS 優位（最大の差分） |
-| Function call signal | r^fc 報酬 | observe hooks で記録のみ | rl-anything は signal あるが活用してない |
-| Safety / rollback | 記述なし | regression gate あり | rl-anything 優位 |
+| Function call signal | r^fc 報酬 | observe hooks で記録のみ | evolve-anything は signal あるが活用してない |
+| Safety / rollback | 記述なし | regression gate あり | evolve-anything 優位 |
 | Cross-backbone | Qwen→Gemini で汎化検証済 | Claude Code 単一環境 | scope 外 |
 
 ## 取り入れる優先順位
@@ -74,7 +74,7 @@
 
 論文を読み込むと、**r^comp と r^fc の 2 つの reward 項のほうが ROI が圧倒的に高い**。両方とも
 
-- rl-anything のデータ基盤（`token_usage_store`, observe hooks, skill 数カウント）で既に取れる
+- evolve-anything のデータ基盤（`token_usage_store`, observe hooks, skill 数カウント）で既に取れる
 - fitness 関数への加算項として実装 30〜50 行
 - ハイパラ 1 個追加で済む
 

@@ -19,11 +19,11 @@ _HOOK = _REPO_ROOT / "scripts" / "git-hooks" / "pre-push.local"
 
 
 def _make_stub_repo(tmp_path: Path) -> Path:
-    """bin/rl-dogfood-gate が環境変数 STUB_RC の終了コードを返す stub git repo を作る。"""
+    """bin/evolve-dogfood-gate が環境変数 STUB_RC の終了コードを返す stub git repo を作る。"""
     repo = tmp_path / "stubrepo"
     (repo / "bin").mkdir(parents=True)
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    gate = repo / "bin" / "rl-dogfood-gate"
+    gate = repo / "bin" / "evolve-dogfood-gate"
     gate.write_text(
         "#!/usr/bin/env python3\n"
         "import os, sys\n"

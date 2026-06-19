@@ -15,7 +15,7 @@ evolve パイプラインは8ステージ（Observe / Discover / Enrich / Optimi
   - Housekeeping: prune（ゼロ使用アーカイブ + マージ提案）+ evolve-fitness（30+ サンプル時のみ）
 - **enrich を discover の後処理フィルタに統合**: `_enrich_patterns()` 関数として discover.py に組み込み、独立スキルとしての enrich は廃止
 - **マージ候補検出を prune に一元化**: reorganize からマージ候補検出を削除し split 検出のみに縮小。prune の semantic similarity ベースの検出に一本化
-- **regression gate を `scripts/lib/regression_gate.py` に共通ライブラリとして抽出**: optimize.py と rl-loop で共有。`GateResult` dataclass + `check_gates()` インターフェース。スコアフィールドは含めず合否判定のみ
+- **regression gate を `scripts/lib/regression_gate.py` に共通ライブラリとして抽出**: optimize.py と evolve-loop で共有。`GateResult` dataclass + `check_gates()` インターフェース。スコアフィールドは含めず合否判定のみ
 - **discover から session-scan（テキストレベルパターンマイニング、約50 LOC）を削除**: ノイズが多く usage.jsonl ベースの検出で十分カバー
 - **backfill をパイプライン外のセットアップコマンドに再分類**: 実行頻度が1-2回で日常パイプラインの一部ではない
 
@@ -31,7 +31,7 @@ evolve パイプラインは8ステージ（Observe / Discover / Enrich / Optimi
 **良い影響:**
 - スキル数 15 から 14 へ削減、LOC 約8,350 から約7,900 へ約450 LOC 削減
 - パイプラインの構造が明確になり、後続の全層 Diagnose / 全層 Compile / 自己進化の土台が整う
-- regression gate の共通化により、optimize / rl-loop / 将来の全層 Compile で統一的な品質ゲートを適用可能
+- regression gate の共通化により、optimize / evolve-loop / 将来の全層 Compile で統一的な品質ゲートを適用可能
 - マージ候補検出の二重実装が解消される
 
 **悪い影響:**

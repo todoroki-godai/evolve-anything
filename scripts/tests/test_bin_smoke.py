@@ -18,8 +18,8 @@ _BIN_DIR = Path(__file__).resolve().parent.parent.parent / "bin"
 
 # 実行コストが大きいスクリプトは除外（全 PJ スキャン等）
 _SKIP_SCRIPTS: set[str] = {
-    "rl-fleet",  # DuckDB walk + 全 PJ スキャン
-    "rl-gain",   # ~/.claude/projects/ 全体スキャン
+    "evolve-fleet",  # DuckDB walk + 全 PJ スキャン
+    "evolve-gain",   # ~/.claude/projects/ 全体スキャン
 }
 
 _IMPORT_ERROR_PATTERNS = (

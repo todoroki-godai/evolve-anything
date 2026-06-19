@@ -78,12 +78,12 @@ def test_classify_python_no_imports_existence_only():
 # --- 安全分類: bash ------------------------------------------------------------
 
 def test_classify_bash_help_runnable():
-    cls = sb.classify_block("bash", "rl-audit --help")
+    cls = sb.classify_block("bash", "evolve-audit --help")
     assert cls["mode"] == "run"
 
 
 def test_classify_bash_dry_run_runnable():
-    cls = sb.classify_block("bash", "rl-evolve --dry-run --output /tmp/x.json")
+    cls = sb.classify_block("bash", "evolve --dry-run --output /tmp/x.json")
     assert cls["mode"] == "run"
 
 

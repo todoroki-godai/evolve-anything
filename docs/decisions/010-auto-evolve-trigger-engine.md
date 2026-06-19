@@ -5,7 +5,7 @@ Status: Accepted
 
 ## Context
 
-rl-anything は7つの observe hooks でテレメトリを収集し、`/evolve` で Diagnose / Compile / Housekeeping の3ステージパイプラインを実行するが、`/evolve` は手動実行が前提でユーザーが忘れると進化ループが止まる。測定 + 進化パイプラインが整備されたにもかかわらず、「ユーザーが忘れると動かない」状態にあった。
+evolve-anything は7つの observe hooks でテレメトリを収集し、`/evolve` で Diagnose / Compile / Housekeeping の3ステージパイプラインを実行するが、`/evolve` は手動実行が前提でユーザーが忘れると進化ループが止まる。測定 + 進化パイプラインが整備されたにもかかわらず、「ユーザーが忘れると動かない」状態にあった。
 
 ## Decision
 

@@ -8,11 +8,11 @@ Related: second-opinion レビュー, [ADR-028]（observability contract）, [AD
 
 `~/.claude/hooks/suggest-gstack-next-action.py` は gstack の Stop hook で、`~/.gstack/flow-chain.json`（フローチェーン定義）を参照して「次のアクション」を提案する。gstack 本体が進化（スキルの追加・rename・フロー変更）すると、この種の **他ツール追従 hook** は静的参照が腐り、古い／存在しないスキルを提案し続ける。
 
-ユーザーの要望は「hook が役に立っているか・陳腐化していないかを rl-anything の evolve で評価したい」。最初の設計案は汎用 `hook_drift` モジュールで 3 種の drift（`dead_ref`＝参照先スキルの実在突合 / `internal_drift`＝hook 内ハードコード vs 外部宣言 / `stale_pin`＝参照ツールの version 乖離）を一括検出し、Tier 2 として hook ソースに `# rl-refs:` 宣言行を置く拡張も含んでいた。
+ユーザーの要望は「hook が役に立っているか・陳腐化していないかを evolve-anything の evolve で評価したい」。最初の設計案は汎用 `hook_drift` モジュールで 3 種の drift（`dead_ref`＝参照先スキルの実在突合 / `internal_drift`＝hook 内ハードコード vs 外部宣言 / `stale_pin`＝参照ツールの version 乖離）を一括検出し、Tier 2 として hook ソースに `# rl-refs:` 宣言行を置く拡張も含んでいた。
 
 `second-opinion` エージェントの独立レビューで、この初期設計は過剰（YAGNI・false positive リスク）と判定された:
 
-- **`dead_ref` は表記ゆれで false positive を量産する**。flow-chain.json は `/rl-anything:implement` / `/review`、hook の FALLBACK は `/document-release` / `/spec-keeper update` と表記が混在する。正規化を固めずに実在突合すると「存在するスキルを死んでいると報告」するノイズが observability 経由で毎 evolve 出続け、audit 全体の信頼性を毀損する。これは `glossary_drift` が `undefined_terms` を gate しない（候補提示に留める）設計と整合しない — あちらは曖昧でも候補提示で済むが、dead_ref の誤検知は致命的。
+- **`dead_ref` は表記ゆれで false positive を量産する**。flow-chain.json は `/evolve-anything:implement` / `/review`、hook の FALLBACK は `/document-release` / `/spec-keeper update` と表記が混在する。正規化を固めずに実在突合すると「存在するスキルを死んでいると報告」するノイズが observability 経由で毎 evolve 出続け、audit 全体の信頼性を毀損する。これは `glossary_drift` が `undefined_terms` を gate しない（候補提示に留める）設計と整合しない — あちらは曖昧でも候補提示で済むが、dead_ref の誤検知は致命的。
 - **`internal_drift` は実害ほぼゼロ**。flow-chain.json が読めれば hook は FALLBACK を使わない。1 ケースのために汎用突合機構を作るのは YAGNI。Tier 2 の `# rl-refs:` に至っては対象ファイルが現時点でゼロ。
 - **有用性（follow-through）評価の前提が誤っていた**。「hook は発火痕跡を残さない」と判断して第2フェーズに送ったが、hook は STATE_FILE を書き、`skill-usage.jsonl` は実行スキルを記録している。発火を 1 行ログするだけで follow-through を後段で測れる。
 
@@ -24,7 +24,7 @@ Related: second-opinion レビュー, [ADR-028]（observability contract）, [AD
 
 3. **silence ≠ evaluated を守る**。gstack 未導入環境（.gstack / flow-chain.json 不在）は None で沈黙。version 一致時は「評価したが drift なし ✓」、実 version 不明時は「判定保留 ℹ」を残す。
 
-4. **hook 側は機構に頼らず即修正し、有用性の種をまく**。FALLBACK_CHAIN を SoT（flow-chain.json）と整合させ（`ship → /land-and-deploy → /rl-anything:spec-keeper update`）、提案 block を出す瞬間に `~/.gstack/analytics/hook-fires.jsonl` へ `{ts, skill, suggested_next}` を append する。これは follow-through 計測（第2フェーズ）のデータの種であり、`skill-usage.jsonl` と cross-ref して「提案 → 実行」率を後段で算出する。
+4. **hook 側は機構に頼らず即修正し、有用性の種をまく**。FALLBACK_CHAIN を SoT（flow-chain.json）と整合させ（`ship → /land-and-deploy → /evolve-anything:spec-keeper update`）、提案 block を出す瞬間に `~/.gstack/analytics/hook-fires.jsonl` へ `{ts, skill, suggested_next}` を append する。これは follow-through 計測（第2フェーズ）のデータの種であり、`skill-usage.jsonl` と cross-ref して「提案 → 実行」率を後段で算出する。
 
 5. **`dead_ref` / `internal_drift` / follow-through 評価は別 issue に切り出す**。dead_ref は live registry のスキル名正規化を固めてから、follow-through は fire-log が貯まってから着手する。
 
@@ -34,10 +34,10 @@ Related: second-opinion レビュー, [ADR-028]（observability contract）, [AD
 スコープが広く、dead_ref の false positive が observability 全体の信頼性を毀損する。第一例（suggest-gstack-next-action）の実害は stale_pin に集中しており（実測で flow-chain 1.47.0.0 vs 実環境 1.55.0.0）、一括実装は YAGNI。却下。
 
 ### 代替案B: hook の有用性（follow-through）評価を先に作る
-評価軸としては本命だが、データ（fire-log）が無いと測れない。まず種をまき（Decision 4）、データが貯まってから診断を作るのが rl-anything の observe → diagnose 構造に整合する。先に診断機構だけ作っても空回りするため、順序として後。
+評価軸としては本命だが、データ（fire-log）が無いと測れない。まず種をまき（Decision 4）、データが貯まってから診断を作るのが evolve-anything の observe → diagnose 構造に整合する。先に診断機構だけ作っても空回りするため、順序として後。
 
 ### 代替案C: gstack 側に hook 健全性チェックを持たせる
-責務論としてはあり得るが、gstack は skill-usage を記録するだけで hook の健全性に関知しない。「誰が事実情報（hook ファイル・flow-chain.json）にアクセスできるか」で判断すると、両方を読める rl-anything 側が監視を担うのが現実的。却下。
+責務論としてはあり得るが、gstack は skill-usage を記録するだけで hook の健全性に関知しない。「誰が事実情報（hook ファイル・flow-chain.json）にアクセスできるか」で判断すると、両方を読める evolve-anything 側が監視を担うのが現実的。却下。
 
 ## Consequences
 
@@ -52,6 +52,6 @@ Related: second-opinion レビュー, [ADR-028]（observability contract）, [AD
 
 - `~/.claude/skills/gstack/`（setup / bin 含む全体）を grep しても `flow-chain.json` への参照が **ゼロ** — gstack は一切このファイルを書き込まない。
 - setup が触るのは `~/.gstack/.last-setup-version` のみ。
-- `~/.gstack/flow-chain.json` は `/rl-anything:implement` 等を参照する **手動メンテのファイル**で、`gstack_version` は手書きのピン。
+- `~/.gstack/flow-chain.json` は `/evolve-anything:implement` 等を参照する **手動メンテのファイル**で、`gstack_version` は手書きのピン。
 
 → stale_pin の **検出ロジックは正しい**（ピンと実環境の乖離は事実、誤検知ではない）が、**解消ガイダンスが的外れ**だった。実際の解消は `gstack_version` ピンを手で実環境 version に更新する必要があり、`gstack setup` では消えない。これを受け docstring（`hook_drift.py` / `sections_hook.py`）と stale メッセージのガイダンス文言を「手動メンテ SoT・ピンを手更新」へ訂正した。教訓: 合成 fixture は「ピンが違えば検出する」までしかテストできず、「直し方の前提が正しいか」は本番データでしか炙り出せない（`learning_synthetic_fixture_false_confidence`）。

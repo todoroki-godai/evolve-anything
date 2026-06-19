@@ -95,7 +95,7 @@ def build_token_consumption_section(days: int = 30) -> List[str]:
         return [
             "## Token Consumption",
             "",
-            "(Token tracking not initialized — run `rl-fleet tokens --backfill` to enable)",
+            "(Token tracking not initialized — run `evolve-fleet tokens --backfill` to enable)",
             "",
         ]
 
@@ -274,7 +274,7 @@ def _load_lsp_json(project_dir: Path) -> Optional[Dict[str, Any]]:
         return json.loads(lsp_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         import sys as _sys
-        print(f"[rl-anything:audit] .lsp.json が不正な JSON です: {lsp_path}", file=_sys.stderr)
+        print(f"[evolve-anything:audit] .lsp.json が不正な JSON です: {lsp_path}", file=_sys.stderr)
         return None
     except OSError:
         return None
@@ -440,7 +440,7 @@ def build_unmanaged_pitfalls_section(project_dir: Path) -> Optional[List[str]]:
     if live:
         lines = header + [
             f"以下の pitfalls.md は育っています（エントリ {_PITFALL_MIN_ENTRIES}+ 件）が、"
-            "自動強制ルールに未登録です。`/rl-anything:pitfall-curate` で enable すると、"
+            "自動強制ルールに未登録です。`/evolve-anything:pitfall-curate` で enable すると、"
             "編集/commit 時に正準フォーマットが自動で当たります:"
         ]
         lines += [f"  - {rel} ({n} entries)" for rel, n in live]
@@ -584,7 +584,7 @@ def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
             # #479: insufficient_data（< BOOTSTRAP_MIN）で structural_reason が立つ PJ。
             # #584: bootstrap（BOOTSTRAP_MIN〜MIN_DATA_COUNT 未満）でも同じ誤読が起きる。
             # 母集団は『提案が出て初めて』積み上がるため、skill 提案が構造的に出ない PJ では
-            # optimize/rl-loop 由来の少数 accept/reject が history に残るだけで bootstrap に入り、
+            # optimize/evolve-loop 由来の少数 accept/reject が history に残るだけで bootstrap に入り、
             # MIN_DATA_COUNT へ永久に届かない。bootstrap 戻り値は structural_reason を持たない
             # （fitness_evolution の契約）ため、status==bootstrap も構造シグナルとして畳む。
             status = fe_result.get("status")
@@ -618,7 +618,7 @@ def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
 
     lines = header + [
         "⚠ score-acceptance 相関が低下した fitness_func あり。"
-        "`/rl-anything:evolve-fitness` で再 calibration を検討（変更は人間承認 MUST）:",
+        "`/evolve-anything:evolve-fitness` で再 calibration を検討（変更は人間承認 MUST）:",
     ]
     for d in drifted:
         corr = d.get("correlation")
@@ -681,7 +681,7 @@ def build_negative_transfer_section(project_dir: Path) -> Optional[List[str]]:
 
     lines = header + [
         "⚠ 既存スキルの成功率を下げた更新コンポーネントあり。"
-        "`/rl-anything:evolve-skill` で該当スキルの見直しを検討:",
+        "`/evolve-anything:evolve-skill` で該当スキルの見直しを検討:",
     ]
     for c in flagged:
         net = c.get("net_delta", 0.0)

@@ -31,7 +31,7 @@ def skill_and_marker(tmp_path, monkeypatch):
     """skill file + before_sha marker を testslug に用意し、store を tmp に隔離する。"""
     monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
     monkeypatch.setattr(ed, "resolve_slug", lambda cwd=None: "testslug")
-    # optimize_history を tmp に隔離（実環境 ~/.claude/rl-anything へ書かない）。
+    # optimize_history を tmp に隔離（実環境 ~/.claude/evolve-anything へ書かない）。
     monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
     # restore_state が canonical history_file を解決する経路も tmp に固定する。
     monkeypatch.setattr(

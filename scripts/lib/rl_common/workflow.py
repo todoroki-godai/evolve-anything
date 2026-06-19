@@ -1,4 +1,4 @@
-"""rl-anything ワークフロー文脈 + スキルスタック + 直前スキル管理。
+"""evolve-anything ワークフロー文脈 + スキルスタック + 直前スキル管理。
 
 `workflow_context_path` / `skill_stack_path` / `read_skill_stack` /
 `write_skill_stack` / `read_workflow_context` / `last_skill_path` /
@@ -19,7 +19,7 @@ _WORKFLOW_CONTEXT_EXPIRE_SECONDS = 24 * 60 * 60  # 24時間
 def workflow_context_path(session_id: str) -> Path:
     """ワークフロー文脈ファイルのパスを返す。"""
     tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return Path(tmpdir) / f"rl-anything-workflow-{session_id}.json"
+    return Path(tmpdir) / f"evolve-anything-workflow-{session_id}.json"
 
 
 def skill_stack_path(session_id: str) -> Path:
@@ -30,7 +30,7 @@ def skill_stack_path(session_id: str) -> Path:
     観察対象: Skill ツールのみ（Bash/Read 等は含まない）。
     """
     tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return Path(tmpdir) / f"rl-anything-skill-stack-{session_id}.json"
+    return Path(tmpdir) / f"evolve-anything-skill-stack-{session_id}.json"
 
 
 def read_skill_stack(session_id: str) -> list:
@@ -82,14 +82,14 @@ def read_workflow_context(session_id: str) -> dict:
             "workflow_id": ctx.get("workflow_id"),
         }
     except Exception as e:
-        print(f"[rl-anything] read_workflow_context error: {e}", file=sys.stderr)
+        print(f"[evolve-anything] read_workflow_context error: {e}", file=sys.stderr)
         return null_result
 
 
 def last_skill_path(session_id: str) -> Path:
     """直前スキル記録ファイルのパスを返す。"""
     tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return Path(tmpdir) / f"rl-anything-last-skill-{session_id}.json"
+    return Path(tmpdir) / f"evolve-anything-last-skill-{session_id}.json"
 
 
 def write_last_skill(session_id: str, skill_name: str) -> None:
@@ -99,7 +99,7 @@ def write_last_skill(session_id: str, skill_name: str) -> None:
         data = {"skill_name": skill_name, "timestamp": datetime.now(timezone.utc).isoformat()}
         path.write_text(json.dumps(data), encoding="utf-8")
     except Exception as e:
-        print(f"[rl-anything] write_last_skill error: {e}", file=sys.stderr)
+        print(f"[evolve-anything] write_last_skill error: {e}", file=sys.stderr)
 
 
 def read_last_skill(session_id: str) -> str | None:
@@ -115,5 +115,5 @@ def read_last_skill(session_id: str) -> str | None:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data.get("skill_name")
     except Exception as e:
-        print(f"[rl-anything] read_last_skill error: {e}", file=sys.stderr)
+        print(f"[evolve-anything] read_last_skill error: {e}", file=sys.stderr)
         return None

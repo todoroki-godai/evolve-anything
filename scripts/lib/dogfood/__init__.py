@@ -4,7 +4,7 @@
 実装ロジックを置く。pytest 非依存（Layer3 は「ユーザーと同じ素の起動経路」を再現する
 ため conftest の sys.path 補完 / HOME 隔離の下駄を意図的に避ける）。
 
-エントリポイントは ``bin/rl-dogfood-gate`` → ``dogfood.cli.main``。
+エントリポイントは ``bin/evolve-dogfood-gate`` → ``dogfood.cli.main``。
 
 層構成:
   - Layer 1: dogfood E2E（dry-run 不変 SHA256 + 実 PJ ingest E2E）

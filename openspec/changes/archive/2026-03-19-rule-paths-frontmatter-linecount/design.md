@@ -2,7 +2,7 @@ Closes: #31
 
 ## Context
 
-Claude Code の `.claude/rules/` ファイルは YAML frontmatter に `paths` を指定することで、特定ファイル編集時のみルールをロードできる。rl-anything はルール生成（reflect）・最適化（optimize）・自動修正（remediation）を行うが、`paths` frontmatter の提案は行っていない。
+Claude Code の `.claude/rules/` ファイルは YAML frontmatter に `paths` を指定することで、特定ファイル編集時のみルールをロードできる。evolve-anything はルール生成（reflect）・最適化（optimize）・自動修正（remediation）を行うが、`paths` frontmatter の提案は行っていない。
 
 また、現在の行数チェック（`line_limit.py` の `check_line_limit()` / `suggest_separation()`、`audit.py` の `check_line_limits()`）は `content.count("\n") + 1` で全体行数を数えており、frontmatter 行も含まれる。`paths` 等の frontmatter を追加すると本文3行でも全体7-8行になり、制限超過と判定される矛盾がある。
 

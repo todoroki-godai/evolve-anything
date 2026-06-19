@@ -25,7 +25,7 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _rec(uuid, days_ago, pj_id="-pj-foo-rl-anything", input_tokens=0, cache_creation=0, cache_read=0):
+def _rec(uuid, days_ago, pj_id="-pj-foo-evolve-anything", input_tokens=0, cache_creation=0, cache_read=0):
     return {
         "uuid": uuid,
         "ts": (_now() - timedelta(days=days_ago)).isoformat(),

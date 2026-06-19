@@ -8,7 +8,7 @@ Semantic Verification サブセクションは audit SKILL.md のステップで
 
 #### Scenario: Memory Health セクションにセマンティック検証結果が含まれる
 
-- **WHEN** `/rl-anything:audit` を実行し、MEMORY に3セクションあり LLM 検証で1件が MISLEADING、1件が STALE と判定される
+- **WHEN** `/evolve-anything:audit` を実行し、MEMORY に3セクションあり LLM 検証で1件が MISLEADING、1件が STALE と判定される
 - **THEN** レポートの Memory Health セクション内に "### Semantic Verification" サブセクションが含まれ、MISLEADING 1件と STALE 1件の判定結果と修正提案が表示される
 
 #### Scenario: 全セクションが CONSISTENT の場合

@@ -5,8 +5,8 @@
 同じ参照スキルで N 回ずつ採点し、σ・mean drift を比較する。
 
 使用例:
-  rl-prompt-compare --axis technical --candidate new_prompt.txt skills/audit/SKILL.md
-  rl-prompt-compare --axis domain --candidate new.txt --runs 7 SKILL.md --json
+  evolve-prompt-compare --axis technical --candidate new_prompt.txt skills/audit/SKILL.md
+  evolve-prompt-compare --axis domain --candidate new.txt --runs 7 SKILL.md --json
 """
 
 import argparse
@@ -138,7 +138,7 @@ def main() -> None:
         _print_report(args.axis, result)
         if result["recommended"] == "b":
             import os as _os
-            data_dir = _os.environ.get("CLAUDE_PLUGIN_DATA", "~/.claude/rl-anything")
+            data_dir = _os.environ.get("CLAUDE_PLUGIN_DATA", "~/.claude/evolve-anything")
             print(f"  B を採用するには:")
             print(f"    cp {candidate} {data_dir}/scorer_prompts/{args.axis}.txt")
             print()

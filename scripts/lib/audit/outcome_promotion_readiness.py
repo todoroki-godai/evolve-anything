@@ -34,7 +34,7 @@ from . import outcome_metrics as _om
 try:
     from rl_common import DATA_DIR
 except ImportError:  # pragma: no cover - パス未解決時のフォールバック
-    DATA_DIR = Path.home() / ".claude" / "rl-anything"
+    DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 # ADR-046 の暫定下限。correction 系軸は分母 = correction 件数、session 系軸は分母 = session 数。
 CORRECTION_FLOOR = 10

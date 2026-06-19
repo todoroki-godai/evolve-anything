@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rl-anything 共通ユーティリティ。
+"""evolve-anything 共通ユーティリティ。
 
 hooks/common.py から移動。スキルスクリプト・フックスクリプトの両方から
 参照される共有コード。hooks/ への直接 sys.path 操作を不要にする。
@@ -31,7 +31,7 @@ _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 # 正準 dir に設置し、以後 hook 文脈（CC が CLAUDE_PLUGIN_DATA=plugin-data を設定）
 # でも正準 dir に解決される。
 DATA_DIR_UNIFIED_MARKER = ".data-dir-unified"
-_DEFAULT_DATA_DIR = Path.home() / ".claude" / "rl-anything"
+_DEFAULT_DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 _CC_PLUGIN_DATA_BASE = Path.home() / ".claude" / "plugins" / "data"
 
 
@@ -81,7 +81,7 @@ def ensure_data_dir() -> None:
     try:
         DATA_DIR.chmod(0o700)
     except OSError as e:
-        print(f"[rl-anything] chmod data dir warning: {e}", file=sys.stderr)
+        print(f"[evolve-anything] chmod data dir warning: {e}", file=sys.stderr)
 
 
 # --- サブモジュール re-export (Phase 13) ---

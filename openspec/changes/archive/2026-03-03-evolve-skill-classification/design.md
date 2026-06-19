@@ -1,12 +1,12 @@
 ## Context
 
-rl-anything の evolve/prune パイプラインは、プロジェクト内の全スキル・ルールを `find_artifacts()` で収集し、
+evolve-anything の evolve/prune パイプラインは、プロジェクト内の全スキル・ルールを `find_artifacts()` で収集し、
 `usage.jsonl` の呼び出し記録と照合して淘汰候補を検出する。
 
 現状の問題:
 1. **出自の区別なし**: カスタムスキル（ユーザー手書き）とプラグインスキル（`plugin install` 由来）を同列に扱う
 2. **プラグインスキル淘汰の無意味さ**: アーカイブしても `plugin update` で復活する
-3. **frontmatter 欠如**: rl-anything 自身の12スキル中9つに frontmatter がなく、Claude の自動起動判定対象外
+3. **frontmatter 欠如**: evolve-anything 自身の12スキル中9つに frontmatter がなく、Claude の自動起動判定対象外
 4. **observe.py の出自記録なし**: Skill 呼び出し時に plugin 由来かどうかを記録していない
 
 ## Goals / Non-Goals
@@ -14,7 +14,7 @@ rl-anything の evolve/prune パイプラインは、プロジェクト内の全
 **Goals:**
 - `find_artifacts()` がスキルの出自（custom / plugin / global）を識別できるようにする
 - `detect_zero_invocations()` がプラグイン由来スキルを淘汰対象から除外し、レポートのみ出力する
-- rl-anything の全 SKILL.md に適切な YAML frontmatter を追加する
+- evolve-anything の全 SKILL.md に適切な YAML frontmatter を追加する
 - evolve レポートでスキルの出自別にセクション分けする
 
 **Non-Goals:**
@@ -80,4 +80,4 @@ import 元として使われている箇所がないことを確認済み。
 - **[Risk] find_artifacts がプラグインスキルを重複収集** → プラグインキャッシュ配下はデフォルトで find_artifacts の走査対象外のため問題なし。ただしプラグインが project `.claude/skills/` にもスキルを配置する場合は注意
 - **[Trade-off] frontmatter 追加で SKILL.md の行数増加** → 5-8行の増加で影響は軽微
 - **[Trade-off] ユーティリティ関数方式は呼び出し側に分類責任** → prune.py と evolve.py の2箇所のみなので許容範囲
-- **[Risk] commands 削除で /opsx:apply 等が使えなくなる** → openspec-* SKILL.md 経由で同等機能を提供。プラグイン名前空間で `rl-anything:openspec-apply-change` として呼び出し可能
+- **[Risk] commands 削除で /opsx:apply 等が使えなくなる** → openspec-* SKILL.md 経由で同等機能を提供。プラグイン名前空間で `evolve-anything:openspec-apply-change` として呼び出し可能

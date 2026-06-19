@@ -161,7 +161,7 @@ from .orchestrator import (  # noqa: F401
 )
 
 def main() -> None:
-    """bin/rl-audit エントリポイント。"""
+    """bin/evolve-audit エントリポイント。"""
     import argparse as _argparse
 
     _parser = _argparse.ArgumentParser(description="環境の健康診断")

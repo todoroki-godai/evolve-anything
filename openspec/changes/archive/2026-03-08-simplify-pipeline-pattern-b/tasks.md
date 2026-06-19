@@ -3,7 +3,7 @@
 - [x] 1.1 `scripts/lib/regression_gate.py` を新設: `GateResult` dataclass と `check_gates()` 関数を実装（shared-regression-gate spec 準拠）。pitfall パターンロード機能を含む
 - [x] 1.2 `check_gates()` のユニットテスト作成: 空コンテンツ、行数超過、禁止パターン、frontmatter 消失、pitfall パターン検出、全通過の6シナリオ
 - [x] 1.3 `optimize.py` のゲートロジックを `check_gates()` 呼び出しに置換（regression-gate spec 準拠）
-- [x] 1.4 rl-loop は現行の `check_line_limit()` チェックを維持。optimize 経由で gate 済みパッチを受け取る構造を確認
+- [x] 1.4 evolve-loop は現行の `check_line_limit()` チェックを維持。optimize 経由で gate 済みパッチを受け取る構造を確認
 - [x] 1.5 既存テスト（`scripts/tests/`, `skills/genetic-prompt-optimizer/tests/`）が全て通ることを確認
 
 ## 2. enrich → discover 統合

@@ -69,11 +69,11 @@ upstream issue `anthropics/claude-code#14160`（auto-compact 時 custom_instruct
 
 **決定**: 復元時に人間可読なサマリーを stdout に出力し、Claude が作業状態を把握できるようにする。committed（完了）と uncommitted（作業中）を分離表示する。
 
-**理由**: JSON のみだと Claude が解釈しにくい。`[rl-anything:restore_state]` プレフィックス付きの自然言語サマリーを追加出力する。
+**理由**: JSON のみだと Claude が解釈しにくい。`[evolve-anything:restore_state]` プレフィックス付きの自然言語サマリーを追加出力する。
 
 出力例:
 ```
-[rl-anything:restore_state] 作業コンテキスト復元:
+[evolve-anything:restore_state] 作業コンテキスト復元:
   ブランチ: feature/x
   完了: abc1234 fix: something, def5678 feat: another
   作業中: path/to/file1, path/to/file2

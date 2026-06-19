@@ -9,7 +9,7 @@
 - [x] 2.2 should_trigger クエリ抽出ロジック実装（スキル使用セッションの user_prompts から抽出、マルチプロンプト対応: トリガーワード一致度優先選択、フォールバック先頭優先）
 - [x] 2.3 should_not_trigger クエリ生成ロジック実装（near-miss `confidence_weight: 1.0` + unrelated `confidence_weight: 0.6` の2ソース、near-miss 優先採用）
 - [x] 2.4 eval set バランス調整ロジック実装（MIN_EVAL_QUERIES=3, TARGET_EVAL_QUERIES=10, サンプリング）
-- [x] 2.5 ファイル出力実装（`~/.claude/rl-anything/eval-sets/<skill-name>.json`）
+- [x] 2.5 ファイル出力実装（`~/.claude/evolve-anything/eval-sets/<skill-name>.json`）
 - [x] 2.6 trigger_eval_generator のテスト追加（正常系 + データ不足 + バランス調整 + フォーマット互換性）
 
 ## 3. Skill Triage Engine

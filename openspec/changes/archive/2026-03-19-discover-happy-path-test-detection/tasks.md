@@ -25,4 +25,4 @@ Related: #33
 ## 4. 検証
 
 - [x] 4.1 全テスト実行（`python3 -m pytest scripts/tests/ skills/discover/scripts/tests/ -v`）で既存テストが壊れていないことを確認
-- [x] 4.2 `detect_happy_path_test_gap()` が rl-anything 自身のコードに対して正常に動作することを手動確認
+- [x] 4.2 `detect_happy_path_test_gap()` が evolve-anything 自身のコードに対して正常に動作することを手動確認

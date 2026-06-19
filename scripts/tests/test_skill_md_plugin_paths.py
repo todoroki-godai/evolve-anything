@@ -3,7 +3,7 @@
 背景: evolve / spec-keeper の SKILL.md が `python3 scripts/lib/xxx.py` や
 `sys.path.insert(0,'scripts/lib')` のように **相対パス**で同梱スクリプトを参照していた。
 スキルは対象 PJ の cwd で実行されるため、相対 `scripts/lib/...` は「対象PJ/scripts/lib/...」を
-指してしまい、rl-anything 以外の全 PJ で `No such file or directory` になる
+指してしまい、evolve-anything 以外の全 PJ で `No such file or directory` になる
 （docs-platform の ev-v7 evolve で world_context ロードが毎回失敗し find 迂回していた実害）。
 
 同梱スクリプトは `${CLAUDE_PLUGIN_ROOT}/scripts/lib/...` で絶対参照するのが正準

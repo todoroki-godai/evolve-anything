@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything v1.7.0 の observe hooks は PostToolUse / SubagentStop / PreCompact / SessionStart / Stop / UserPromptSubmit の 7 イベントを処理している。Claude Code v2.1.69〜v2.1.78 で以下の機能が追加されたが、未活用:
+evolve-anything v1.7.0 の observe hooks は PostToolUse / SubagentStop / PreCompact / SessionStart / Stop / UserPromptSubmit の 7 イベントを処理している。Claude Code v2.1.69〜v2.1.78 で以下の機能が追加されたが、未活用:
 
 - hook event payload に `agent_id`, `agent_type`, `worktree` フィールド追加（v2.1.69〜v2.1.77）
 - `InstructionsLoaded` イベント新設（v2.1.77）
@@ -13,8 +13,8 @@ rl-anything v1.7.0 の observe hooks は PostToolUse / SubagentStop / PreCompact
 - `subagent_observe.py` は既に `agent_id`/`agent_type` を event から取得済み（対応不要）
 - `worktree` フィールドは全 hook で未取得
 - `InstructionsLoaded` / `StopFailure` イベントは hooks.json に未定義
-- `agents/rl-scorer.md` は `model: haiku` のみ。maxTurns/disallowedTools 未設定
-- `DATA_DIR` は `~/.claude/rl-anything/` にハードコード。CLAUDE_PLUGIN_DATA 未参照
+- `agents/evolve-scorer.md` は `model: haiku` のみ。maxTurns/disallowedTools 未設定
+- `DATA_DIR` は `~/.claude/evolve-anything/` にハードコード。CLAUDE_PLUGIN_DATA 未参照
 - Agent `resume` パラメータはスキル/エージェント定義で使用箇所なし（対応不要）
 
 ## Goals / Non-Goals
@@ -64,9 +64,9 @@ trigger_engine の将来的な coherence check トリガーに使える形にす
 
 ### D4: plugin validate の統合箇所
 README.md のテストセクションに `claude plugin validate` コマンドを追加する。
-CI/pre-commit への統合は将来対応（rl-anything は CI 未構築）。
+CI/pre-commit への統合は将来対応（evolve-anything は CI 未構築）。
 
-**代替案 A**: pre-commit hook として自動実行。→ 不採用: rl-anything は pre-commit フレームワーク未導入。導入コストに見合わない。
+**代替案 A**: pre-commit hook として自動実行。→ 不採用: evolve-anything は pre-commit フレームワーク未導入。導入コストに見合わない。
 **代替案 B**: GitHub Actions CI に組み込み。→ 不採用: CI 未構築。将来的に CI 構築時に検討。
 
 ### D5: StopFailure hook の処理内容
@@ -77,18 +77,18 @@ worktree 情報がある場合は同様に付与する。
 
 **代替案**: 既存の `session_summary.py` に統合。→ 不採用: Stop と StopFailure は異なるイベントで、session_summary は正常終了のサマリー生成に特化しており、責務が異なる。
 
-### D6: rl-scorer の maxTurns / disallowedTools
+### D6: evolve-scorer の maxTurns / disallowedTools
 `maxTurns: 15` を設定し、採点が暴走した場合のコスト上限を設ける。
 `disallowedTools` に `Edit`, `Write`, `Bash` を設定し、採点エージェントがコードを変更しないことを保証する。
 `effort` は未設定（デフォルトのまま）。haiku モデルでは効果が限定的なため。
 
-**代替案 A**: maxTurns を設定しない。→ 不採用: rl-scorer は 3 サブエージェントを起動するため、異常時のコスト増大リスクがある。
-**代替案 B**: disallowedTools に Agent も含める。→ 不採用: rl-scorer 自身が 3 サブエージェントを Agent tool で起動するため不可。
+**代替案 A**: maxTurns を設定しない。→ 不採用: evolve-scorer は 3 サブエージェントを起動するため、異常時のコスト増大リスクがある。
+**代替案 B**: disallowedTools に Agent も含める。→ 不採用: evolve-scorer 自身が 3 サブエージェントを Agent tool で起動するため不可。
 
 ### D7: DATA_DIR の CLAUDE_PLUGIN_DATA フォールバック
 `common.py` の `DATA_DIR` を以下の優先順で解決する:
 1. `${CLAUDE_PLUGIN_DATA}` 環境変数（設定されていれば）
-2. `~/.claude/rl-anything/`（従来のフォールバック）
+2. `~/.claude/evolve-anything/`（従来のフォールバック）
 
 既存データの移行は行わない。新規データは CLAUDE_PLUGIN_DATA に書き込まれ、
 読み取り時は両ディレクトリを確認する必要がある箇所は telemetry_query.py 等だが、
@@ -103,4 +103,4 @@ Non-Goals のため本 change では対応しない。
 - [flag file のクラッシュ時残存] → 起動時に mtime ベースの stale 検出（STALE_FLAG_TTL_HOURS=24）で自動削除
 - [後方互換] → 新フィールドはすべて optional。既存の telemetry_query / discover / audit は未知フィールドを無視するため影響なし
 - [CLAUDE_PLUGIN_DATA 未設定の環境] → フォールバックで従来パスを使用。CC v2.1.78 未満でも動作する
-- [rl-scorer disallowedTools] → Agent tool を禁止するとサブエージェント起動が不可能になるため除外が必須
+- [evolve-scorer disallowedTools] → Agent tool を禁止するとサブエージェント起動が不可能になるため除外が必須

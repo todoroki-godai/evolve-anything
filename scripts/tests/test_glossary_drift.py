@@ -94,7 +94,7 @@ def test_uppercase_stopwords_excluded(tmp_path):
 def test_generic_meta_words_excluded(tmp_path):
     """git/メタ/汎用状態語は jargon でない。
 
-    rl-anything 自身の evolve で CONTEXT.md 候補に HEAD/IO/FP/HOLD/DEPRECATED/
+    evolve-anything 自身の evolve で CONTEXT.md 候補に HEAD/IO/FP/HOLD/DEPRECATED/
     FALLBACK/RM/SKILL の汎用・メタ語が混入していた。PJ 固有語（DuckDB 等）は
     残しつつ、これらの一般語のみ除外する（#353⑫ の AWS denylist と同種の拡張）。
     """

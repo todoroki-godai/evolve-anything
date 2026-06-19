@@ -75,7 +75,7 @@ class TestPjOfNormalization:
     このため worktree（例: amamo/.claude/worktrees/evolve）が幻の別PJ slug として
     cross-PJ 統計に混入していた。期待値は実装（pj_slug_fast）の挙動に合わせる:
       - worktree フルパス → marker で切って親 repo basename（amamo）
-      - 通常フルパス      → basename（rl-anything）
+      - 通常フルパス      → basename（evolve-anything）
       - basename だけ     → 原値そのまま（feedback）
     """
 
@@ -84,8 +84,8 @@ class TestPjOfNormalization:
         assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "amamo"
 
     def test_normal_fullpath_yields_basename(self):
-        rec = {"project_path": "/x/rl-anything"}
-        assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "rl-anything"
+        rec = {"project_path": "/x/evolve-anything"}
+        assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "evolve-anything"
 
     def test_bare_basename_passes_through(self):
         rec = {"project": "feedback"}
@@ -103,8 +103,8 @@ class TestPjOfNormalization:
 
     def test_empty_values_skipped(self):
         # 空値はスキップして次の候補へ（現挙動維持）
-        rec = {"project_path": "", "project": "/x/rl-anything"}
-        assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "rl-anything"
+        rec = {"project_path": "", "project": "/x/evolve-anything"}
+        assert opr._pj_of(rec, opr._CORRECTION_PJ_FIELDS) == "evolve-anything"
 
     def test_no_pj_fields_returns_empty(self):
         assert opr._pj_of({}, opr._CORRECTION_PJ_FIELDS) == ""

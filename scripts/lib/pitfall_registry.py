@@ -4,7 +4,7 @@ install で lint hook はプラグインに同梱・配布されるが、各 PJ 
 対象ファイルを登録するまで hook は何もしない（オプトイン設計）。これにより「最新版を入れて、
 コマンドを 1 回打つと、以後 pitfalls の追加/修正/削除に自動でルールが当たる」を実現する。
 
-レジストリは PJ 直下の `.claude/rl-anything/pitfall-managed.json` に、project_dir からの
+レジストリは PJ 直下の `.claude/evolve-anything/pitfall-managed.json` に、project_dir からの
 相対パス（プロジェクト外は絶対パス）で保存する。LLM は呼ばない・決定論。
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import List, Union
 
-_REGISTRY_REL = ".claude/rl-anything/pitfall-managed.json"
+_REGISTRY_REL = ".claude/evolve-anything/pitfall-managed.json"
 
 # 探索時に降りない重いディレクトリ。pitfalls.md がここに紛れても監視対象ではない。
 # worktrees: `.claude/worktrees/<name>/...` は一時的な作業コピー（git worktree）であり、

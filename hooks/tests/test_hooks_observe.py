@@ -325,7 +325,7 @@ class TestObserve:
 
     def test_directory_auto_created(self, tmp_path):
         """ディレクトリが存在しない場合 MUST 自動作成する。"""
-        new_dir = tmp_path / "new-rl-anything"
+        new_dir = tmp_path / "new-evolve-anything"
         with mock.patch.object(common, "DATA_DIR", new_dir), \
              mock.patch.object(rl_common, "DATA_DIR", new_dir), \
              mock.patch.object(rl_common, "CHECKPOINTS_DIR", new_dir / "checkpoints"):
@@ -453,7 +453,7 @@ class TestObserve:
             "started_at": "2026-03-03T10:00:00+00:00",
         }
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
-            ctx_path = tmp_path / "rl-anything-workflow-sess-110.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-110.json"
             ctx_path.write_text(json.dumps(ctx))
 
             event = {
@@ -593,7 +593,7 @@ class TestSubagentObserve:
             "workflow_id": "wf-sub12345",
         }
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
-            ctx_path = tmp_path / "rl-anything-workflow-sess-210.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-210.json"
             ctx_path.write_text(json.dumps(ctx))
 
             event = {

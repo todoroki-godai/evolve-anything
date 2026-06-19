@@ -2,13 +2,13 @@
 
 背景（#358 / pitfall_datadir_hook_tool_split）: DATA_DIR が hook 文脈
 （CC が CLAUDE_PLUGIN_DATA を設定 → ``~/.claude/plugins/data/<mp>-<plugin>``）と
-tool 文脈（env 無し → fallback ``~/.claude/rl-anything``）で別 dir に解決され、
+tool 文脈（env 無し → fallback ``~/.claude/evolve-anything``）で別 dir に解決され、
 ストアごとに正準 dir が割れる。ADR-042 は reader 側の正準化（``hook_store_path``）
 で最小修正したが、sessions.jsonl / errors.jsonl 等の鮮度逆転・usage.jsonl の
 二重書きという実害が残った。本モジュールはその Phase 2 = **書き込み側の一元化**。
 
 設計:
-- 正準 = ``~/.claude/rl-anything`` 固定（#402 の「env 非依存固定パス」前例に整合。
+- 正準 = ``~/.claude/evolve-anything`` 固定（#402 の「env 非依存固定パス」前例に整合。
   plugin-data dir は ``<marketplace>-<plugin>`` 命名に依存し脆い）
 - redirect は **marker ゲート**: ``rl_common.resolve_data_dir`` が CC install
   レイアウトを指す env を、正準 dir に marker（``.data-dir-unified``）が存在する
@@ -16,7 +16,7 @@ tool 文脈（env 無し → fallback ``~/.claude/rl-anything``）で別 dir に
   ため、conftest の ``CLAUDE_PLUGIN_DATA=tmp_path`` 隔離を壊さない
 - migration 実行順序が重要: **旧版プラグインの hook が動いている間に実行すると
   分裂が即再発**する（旧版は redirect を知らず plugin-data に書き続ける）。
-  よって本 fix を含む版をインストールした後に ``rl-fleet migrate-data`` を1回
+  よって本 fix を含む版をインストールした後に ``evolve-fleet migrate-data`` を1回
   実行する。SessionStart（restore_state）が ``needs_migration`` を検出して案内
   し、実行で marker が立って自然終息する（install ≠ enforcement 対策）
 - マージ規則: ``.jsonl`` は行単位 dedup append（append-only ログ前提）、
@@ -62,7 +62,7 @@ def _marker_name() -> str:
 
 def default_canonical() -> Path:
     """正準 DATA_DIR（env 非依存固定パス、#402 前例に整合）。"""
-    return Path.home() / ".claude" / "rl-anything"
+    return Path.home() / ".claude" / "evolve-anything"
 
 
 def find_source(plugin_data_base: Optional[Path] = None) -> Optional[Path]:
@@ -392,7 +392,7 @@ def migrate(
         except Exception as e:  # 個別失敗は記録して続行（次回再実行で回収）
             summary["failures"] += 1
             summary["entries"].append({"name": entry.name, "action": "error", "error": str(e)})
-            print(f"[rl-anything:migrate] {entry.name}: {e}", file=sys.stderr)
+            print(f"[evolve-anything:migrate] {entry.name}: {e}", file=sys.stderr)
 
     if not dry_run and summary["failures"] == 0:
         _write_marker(canonical, source, summary)

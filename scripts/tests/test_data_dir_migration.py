@@ -28,7 +28,7 @@ from rl_common import store_paths  # noqa: E402
 @pytest.fixture
 def dirs(tmp_path):
     canonical = tmp_path / "canonical"
-    source = tmp_path / "plugin-data" / "rl-anything-rl-anything"
+    source = tmp_path / "plugin-data" / "evolve-anything-evolve-anything"
     canonical.mkdir(parents=True)
     source.mkdir(parents=True)
     return canonical, source
@@ -368,7 +368,7 @@ class TestResolveDataDir:
         canon = tmp_path / "canon"
         canon.mkdir()
         (canon / rl_common.DATA_DIR_UNIFIED_MARKER).write_text("{}")
-        pd = tmp_path / "pd" / "rl-anything-rl-anything"
+        pd = tmp_path / "pd" / "evolve-anything-evolve-anything"
         pd.mkdir(parents=True)
         assert rl_common.resolve_data_dir(
             str(pd), default_dir=canon, cc_plugin_data_base=tmp_path / "pd"
@@ -378,7 +378,7 @@ class TestResolveDataDir:
         """marker が無い限り従来挙動（split のまま機能する後方互換）。"""
         canon = tmp_path / "canon"
         canon.mkdir()
-        pd = tmp_path / "pd" / "rl-anything-rl-anything"
+        pd = tmp_path / "pd" / "evolve-anything-evolve-anything"
         pd.mkdir(parents=True)
         assert rl_common.resolve_data_dir(
             str(pd), default_dir=canon, cc_plugin_data_base=tmp_path / "pd"

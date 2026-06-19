@@ -1,4 +1,4 @@
-"""rl-anything checkpoint 管理。
+"""evolve-anything checkpoint 管理。
 
 `find_latest_checkpoint` / `_load_legacy_checkpoint` / `cleanup_old_checkpoints`
 を提供する。`DATA_DIR` / `CHECKPOINTS_DIR` / `CHECKPOINT_TTL_HOURS` は

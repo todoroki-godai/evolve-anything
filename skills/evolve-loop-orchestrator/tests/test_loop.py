@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rl-loop-orchestrator のテスト"""
+"""evolve-loop-orchestrator のテスト"""
 import json
 import os
 import sys
@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-# run_loop.py を importlib で読み込む（bin/rl-loop との一貫性）
+# run_loop.py を importlib で読み込む（bin/evolve-loop との一貫性）
 import importlib.util
 spec = importlib.util.spec_from_file_location(
     "run_loop",

@@ -1,4 +1,4 @@
-"""rl-anything fleet — 全 PJ 横断のメンテナンス拠点（Phase 1: status のみ）。
+"""evolve-anything fleet — 全 PJ 横断のメンテナンス拠点（Phase 1: status のみ）。
 
 設計: `todoroki-main-design-20260422-140954.md` Phase 1 節。
 """
@@ -20,8 +20,8 @@ from rl_common import DATA_DIR as _DEFAULT_DATA_DIR  # honors CLAUDE_PLUGIN_DATA
 _DEFAULT_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 _DEFAULT_AUTO_MEMORY_ROOT = Path.home() / ".claude" / "projects"
 _DEFAULT_PROJECTS_ROOT = Path.home() / "tools"
-_DEFAULT_RL_AUDIT_BIN = Path(__file__).resolve().parent.parent.parent.parent / "bin" / "rl-audit"
-_PLUGIN_KEY_PREFIX = "rl-anything@"
+_DEFAULT_RL_AUDIT_BIN = Path(__file__).resolve().parent.parent.parent.parent / "bin" / "evolve-audit"
+_PLUGIN_KEY_PREFIX = "evolve-anything@"
 _SETTINGS_RETRY_SLEEP_SEC = 0.1
 _DEFAULT_TIMEOUT_SEC = 10.0
 _DEFAULT_MAX_WORKERS = 2
@@ -36,7 +36,7 @@ def _current_data_dir() -> Path:
     こちらを使う。
     """
     env_val = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-    return Path(env_val) if env_val else Path.home() / ".claude" / "rl-anything"
+    return Path(env_val) if env_val else Path.home() / ".claude" / "evolve-anything"
 
 
 # project_loader (PJ 列挙 / 導入状況判定) は fleet/project_loader.py に集約済み（後方互換のため再エクスポート）
@@ -117,7 +117,7 @@ from .cli_tokens import (  # noqa: E402, F401
 
 
 # CLI エントリポイント (main / _run_status / _run_test_guard / _run_discover) は
-# fleet/cli.py に集約済み（後方互換のため再エクスポート、bin/rl-fleet は fleet.main を呼ぶ）
+# fleet/cli.py に集約済み（後方互換のため再エクスポート、bin/evolve-fleet は fleet.main を呼ぶ）
 from .cli import (  # noqa: E402, F401
     _run_discover,
     _run_recall,

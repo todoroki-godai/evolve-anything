@@ -21,7 +21,7 @@ import auto_memory_broker as amb
 
 @pytest.fixture
 def tmp_data_dir(tmp_path):
-    d = tmp_path / "rl-anything"
+    d = tmp_path / "evolve-anything"
     d.mkdir()
     return d
 

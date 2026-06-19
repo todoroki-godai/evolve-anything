@@ -26,7 +26,7 @@ def _make_corpus(tmp_path: Path) -> dict:
                             "session_id": "s1"}) + "\n")
 
     projects_root = tmp_path / "projects"
-    pj_dir = projects_root / "-Users-x-rl-anything"
+    pj_dir = projects_root / "-Users-x-evolve-anything"
     pj_dir.mkdir(parents=True)
     tp = pj_dir / "session.jsonl"
     with open(tp, "w", encoding="utf-8") as f:
@@ -39,9 +39,9 @@ def _make_corpus(tmp_path: Path) -> dict:
 
     utterances = [
         {"session_id": "s1", "line_no": 1, "text": "prod まで動作確認してほしい",
-         "source_path": str(tp), "pj_slug": "rl-anything"},
+         "source_path": str(tp), "pj_slug": "evolve-anything"},
         {"session_id": "s1", "line_no": 2, "text": "prod まで動作確認してほしい",
-         "source_path": str(tp), "pj_slug": "rl-anything"},
+         "source_path": str(tp), "pj_slug": "evolve-anything"},
     ]
     return {"errors_path": errors, "projects_root": projects_root, "utterances": utterances}
 
@@ -50,7 +50,7 @@ def test_run_batch_detects_all_four_channels(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path)
     store = tmp_path / "weak_signals.jsonl"
     res = ws_batch.run_batch(
-        "rl-anything",
+        "evolve-anything",
         store_path=store,
         errors_path=corpus["errors_path"],
         projects_root=corpus["projects_root"],
@@ -73,7 +73,7 @@ def test_run_batch_dry_run_writes_nothing(tmp_path: Path) -> None:
     corpus = _make_corpus(tmp_path)
     store = tmp_path / "weak_signals.jsonl"
     res = ws_batch.run_batch(
-        "rl-anything",
+        "evolve-anything",
         dry_run=True,
         store_path=store,
         errors_path=corpus["errors_path"],
@@ -91,11 +91,11 @@ def test_run_batch_dedup_on_rerun(tmp_path: Path) -> None:
     """2 回目の実行で同一シグナルは dedup される（store は増えない）。"""
     corpus = _make_corpus(tmp_path)
     store = tmp_path / "weak_signals.jsonl"
-    ws_batch.run_batch("rl-anything", store_path=store,
+    ws_batch.run_batch("evolve-anything", store_path=store,
                        errors_path=corpus["errors_path"],
                        projects_root=corpus["projects_root"],
                        utterances=corpus["utterances"])
-    res2 = ws_batch.run_batch("rl-anything", store_path=store,
+    res2 = ws_batch.run_batch("evolve-anything", store_path=store,
                              errors_path=corpus["errors_path"],
                              projects_root=corpus["projects_root"],
                              utterances=corpus["utterances"])

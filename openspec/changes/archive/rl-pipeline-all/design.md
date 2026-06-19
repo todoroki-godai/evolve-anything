@@ -5,7 +5,7 @@
 ```
 Layer 2: 遺伝的最適化 (genetic-prompt-optimizer)
     ↓ バリエーション生成→評価→選択
-Layer 3: 自律ループ (rl-loop-orchestrator + rl-scorer)
+Layer 3: 自律ループ (evolve-loop-orchestrator + evolve-scorer)
     ↓ 3役分担で1サイクル自動化
 ```
 
@@ -53,7 +53,7 @@ Layer 3: 自律ループ (rl-loop-orchestrator + rl-scorer)
 |--------|--------|
 | API コスト | 初期パラメータ最小限（集団3×世代3） |
 | モデル崩壊（全バリエーションが劣化） | 元スキルを baseline として保持。全劣化時は不採用 |
-| rl-scorer の評価精度 | 人間確認ステップを必須にし、完全自動化を避ける |
+| evolve-scorer の評価精度 | 人間確認ステップを必須にし、完全自動化を避ける |
 
 ## 後続 Changes
 

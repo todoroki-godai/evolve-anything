@@ -1,6 +1,6 @@
 """test-guard: 各 PJ で no-llm-in-tests / pytest-no-llm の導入状況を可視化する。
 
-責務: 検出と一覧表示のみ。配布・install は scope 外 (senior 指摘: rl-anything は
+責務: 検出と一覧表示のみ。配布・install は scope 外 (senior 指摘: evolve-anything は
 CC plugin なので Python 依存配布の主体にはしない)。
 """
 from __future__ import annotations

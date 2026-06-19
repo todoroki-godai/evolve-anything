@@ -1,4 +1,4 @@
-"""bin/rl-usage-log のテスト。"""
+"""bin/evolve-usage-log のテスト。"""
 import json
 import os
 import subprocess
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 BIN_DIR = Path(__file__).resolve().parent.parent
-SCRIPT = BIN_DIR / "rl-usage-log"
+SCRIPT = BIN_DIR / "evolve-usage-log"
 
 
 def test_writes_usage_record(tmp_path):

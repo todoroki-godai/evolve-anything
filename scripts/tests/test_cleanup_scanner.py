@@ -72,7 +72,7 @@ def test_scan_prunable_remote_refs_parses_dry_run_output():
     def fake_git(args):
         assert args == ["fetch", "--prune", "--dry-run"]
         return (
-            "From github.com:todoroki-godai/rl-anything\n"
+            "From github.com:todoroki-godai/evolve-anything\n"
             " - [would prune] origin/feat/merged-a\n"
             " - [would prune] origin/feat/merged-b\n"
         )
@@ -154,16 +154,16 @@ def test_scan_tmp_dirs_matches_prefixes(tmp_path):
     """指定 prefix にマッチするディレクトリだけを返す。"""
     (tmp_path / "claude-sandbox-1").mkdir()
     (tmp_path / "gstack-qa-2").mkdir()
-    (tmp_path / "rl-anything-bench-3").mkdir()
+    (tmp_path / "evolve-anything-bench-3").mkdir()
     (tmp_path / "other-keep").mkdir()
     (tmp_path / "claude-not-a-dir.txt").write_text("x")
 
     result = scan_tmp_dirs(
-        prefixes=["claude-", "gstack-", "rl-anything-"],
+        prefixes=["claude-", "gstack-", "evolve-anything-"],
         tmp_root=str(tmp_path),
     )
     names = sorted(Path(p).name for p in result)
-    assert names == ["claude-sandbox-1", "gstack-qa-2", "rl-anything-bench-3"]
+    assert names == ["claude-sandbox-1", "evolve-anything-bench-3", "gstack-qa-2"]
 
 
 def test_scan_tmp_dirs_returns_empty_when_no_match(tmp_path):
@@ -227,31 +227,31 @@ def test_scan_tmp_dirs_custom_exclude_patterns(tmp_path):
 # ---------- parse_prefix_config ----------
 
 def test_parse_prefix_config_single():
-    assert parse_prefix_config("rl-anything-") == ["rl-anything-"]
+    assert parse_prefix_config("evolve-anything-") == ["evolve-anything-"]
 
 
 def test_parse_prefix_config_multiple():
     """カンマ区切りで複数 prefix を受け付ける。"""
-    result = parse_prefix_config("rl-anything-,claude-sandbox-,gstack-scratch-")
-    assert result == ["rl-anything-", "claude-sandbox-", "gstack-scratch-"]
+    result = parse_prefix_config("evolve-anything-,claude-sandbox-,gstack-scratch-")
+    assert result == ["evolve-anything-", "claude-sandbox-", "gstack-scratch-"]
 
 
 def test_parse_prefix_config_trims_whitespace():
     """各要素前後の空白を除去する（人間が手書きで編集する想定）。"""
-    result = parse_prefix_config(" rl-anything- , claude-sandbox- ")
-    assert result == ["rl-anything-", "claude-sandbox-"]
+    result = parse_prefix_config(" evolve-anything- , claude-sandbox- ")
+    assert result == ["evolve-anything-", "claude-sandbox-"]
 
 
 def test_parse_prefix_config_drops_empty_items():
     """空要素（連続カンマ・前後カンマ）は無視する。"""
-    result = parse_prefix_config(",rl-anything-,,claude-sandbox-,")
-    assert result == ["rl-anything-", "claude-sandbox-"]
+    result = parse_prefix_config(",evolve-anything-,,claude-sandbox-,")
+    assert result == ["evolve-anything-", "claude-sandbox-"]
 
 
 def test_parse_prefix_config_dedupes_preserving_order():
     """重複 prefix は最初の出現順を保持して排除する。"""
-    result = parse_prefix_config("rl-anything-,claude-sandbox-,rl-anything-")
-    assert result == ["rl-anything-", "claude-sandbox-"]
+    result = parse_prefix_config("evolve-anything-,claude-sandbox-,evolve-anything-")
+    assert result == ["evolve-anything-", "claude-sandbox-"]
 
 
 def test_parse_prefix_config_empty_or_whitespace_returns_empty():

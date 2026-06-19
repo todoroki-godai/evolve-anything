@@ -295,4 +295,4 @@ else:
 | _extract_markdown() | 拡張 | セクション単位の抽出に対応（既存の code block 抽出と共存） |
 | Individual.section_id | 拡張 | Optional[str] フィールド追加。budget_mpo パスでセクション追跡 |
 | select_strategy() | 新規（専用） | strategy_router.py。optimize.py 以外から呼ぶ想定なし |
-| ModelCascade | 新規（共通候補） | 将来 rl-loop-orchestrator からも利用可能だが、まず専用で実装 |
+| ModelCascade | 新規（共通候補） | 将来 evolve-loop-orchestrator からも利用可能だが、まず専用で実装 |

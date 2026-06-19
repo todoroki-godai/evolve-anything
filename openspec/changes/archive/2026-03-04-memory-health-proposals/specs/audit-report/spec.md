@@ -6,12 +6,12 @@ audit.py の generate_report() は、既存のセクション（Summary, Line Li
 
 #### Scenario: 品質推移セクションの表示
 
-- **WHEN** `/rl-anything:audit` を実行し、quality-baselines.jsonl に commit スキルの計測レコードが 5 件存在する
+- **WHEN** `/evolve-anything:audit` を実行し、quality-baselines.jsonl に commit スキルの計測レコードが 5 件存在する
 - **THEN** レポートに "## Skill Quality Trends" セクションが含まれ、commit スキルのスコア推移がスパークライン風に表示される
 
 #### Scenario: quality-baselines.jsonl が存在しない場合
 
-- **WHEN** `/rl-anything:audit` を実行し、quality-baselines.jsonl が存在しない
+- **WHEN** `/evolve-anything:audit` を実行し、quality-baselines.jsonl が存在しない
 - **THEN** 品質推移セクションは表示されない（既存のレポートセクションのみ出力）
 
 #### Scenario: 計測レコードが1件のみの場合

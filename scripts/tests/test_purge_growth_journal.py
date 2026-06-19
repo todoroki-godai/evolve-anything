@@ -38,7 +38,7 @@ class TestClassifyProject:
             ("", BUCKET_UNKNOWN),
             ("unknown", BUCKET_UNKNOWN),
             (None, BUCKET_UNKNOWN),
-            ("rl-anything", BUCKET_KEEP),
+            ("evolve-anything", BUCKET_KEEP),
             ("docs-platform", BUCKET_KEEP),
             ("my-real-project", BUCKET_KEEP),
         ],
@@ -61,7 +61,7 @@ class TestPartitionRecords:
             {"project": "tmpY", "targets": ["b"]},
             {"project": "unknown", "targets": ["c"]},
             {"project": "", "targets": ["d"]},
-            {"project": "rl-anything", "targets": ["e"]},
+            {"project": "evolve-anything", "targets": ["e"]},
         ]
         kept, buckets = partition_records(records)
         assert len(buckets[BUCKET_PURGE]) == 2
@@ -94,7 +94,7 @@ class TestPurgeJournal:
             {"type": "crystallization", "project": "test_a", "targets": ["x"]},
             {"type": "crystallization", "project": "tmp_b", "targets": ["y"]},
             {"type": "crystallization", "project": "unknown", "targets": ["z"]},
-            {"type": "crystallization", "project": "rl-anything", "targets": ["w"]},
+            {"type": "crystallization", "project": "evolve-anything", "targets": ["w"]},
         ]
 
     def test_missing_file(self, tmp_path):
@@ -143,14 +143,14 @@ class TestPurgeJournal:
         ]
         assert len(remaining) == 2
         projects = {r["project"] for r in remaining}
-        assert projects == {"unknown", "rl-anything"}
+        assert projects == {"unknown", "evolve-anything"}
 
     def test_apply_no_test_entries_no_backup(self, tmp_path):
         journal = tmp_path / "growth-journal.jsonl"
         _write_journal(
             journal,
             [
-                {"project": "rl-anything", "targets": ["x"]},
+                {"project": "evolve-anything", "targets": ["x"]},
                 {"project": "unknown", "targets": ["y"]},
             ],
         )

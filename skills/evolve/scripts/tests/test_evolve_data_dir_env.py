@@ -1,11 +1,11 @@
 """evolve.py の module-level DATA_DIR が CLAUDE_PLUGIN_DATA を尊重することの保証（#517）。
 
-evolve.py は従来 `Path.home()/".claude"/"rl-anything"` をハードコードで
+evolve.py は従来 `Path.home()/".claude"/"evolve-anything"` をハードコードで
 DATA_DIR に置き、`CLAUDE_PLUGIN_DATA` 環境変数を読まなかった。rl_common は
 env 優先解決（resolve_data_dir）を提供しており、evolve.py もこれに揃える。
 
 env 設定時に DATA_DIR / EVOLVE_STATE_FILE が env 側へ向くことと、env 無しでは
-従来 fallback（~/.claude/rl-anything）に向くことを reload 経由で assert する。
+従来 fallback（~/.claude/evolve-anything）に向くことを reload 経由で assert する。
 決定論・LLM 非依存。
 """
 import importlib
@@ -39,7 +39,7 @@ def test_data_dir_honors_claude_plugin_data(tmp_path, monkeypatch):
 
 def test_data_dir_falls_back_without_env(monkeypatch):
     """CLAUDE_PLUGIN_DATA 未設定時は rl_common.resolve_data_dir("") と同じ
-    既定 fallback（実運用では ~/.claude/rl-anything）を指す。"""
+    既定 fallback（実運用では ~/.claude/evolve-anything）を指す。"""
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
     from rl_common import resolve_data_dir
 

@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything の observe hooks は現在 PostToolUse（Skill matcher）のみ。subagent の活動は Claude Code の SubagentStop イベントで取得可能（agent_type, agent_transcript_path, last_assistant_message を含む）。hooks.json のパスは `$PLUGIN_DIR` を使用しているが、公式仕様では `${CLAUDE_PLUGIN_ROOT}` が正しい。
+evolve-anything の observe hooks は現在 PostToolUse（Skill matcher）のみ。subagent の活動は Claude Code の SubagentStop イベントで取得可能（agent_type, agent_transcript_path, last_assistant_message を含む）。hooks.json のパスは `$PLUGIN_DIR` を使用しているが、公式仕様では `${CLAUDE_PLUGIN_ROOT}` が正しい。
 
 ## Goals / Non-Goals
 

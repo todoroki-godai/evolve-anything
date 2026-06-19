@@ -1,7 +1,7 @@
 """Orphan store（writer あり reader なし jsonl）の observability セクション生成（#422）。
 
 sections_hook.py / sections_eval.py と同じ「環境グローバル系 builder」。検査対象は
-rl-anything 自身のプラグインソース（hooks/ + scripts/ + skills/）であり、project_dir には
+evolve-anything 自身のプラグインソース（hooks/ + scripts/ + skills/）であり、project_dir には
 依存しない。引数は observability contract 互換（`(project_dir) -> Optional[List[str]]`）の
 ため受け取るだけ。
 

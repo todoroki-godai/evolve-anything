@@ -1,6 +1,6 @@
 ## Why
 
-`/rl-anything:optimize` 実行後に accept/reject の確認フローが SKILL.md に記載されておらず、`history.jsonl` の全エントリが `human_accepted: null` のまま残り続ける。これにより `/rl-anything:evolve` の Step 6 (Fitness Evolution) が常に「データ不足: 0/30件」と表示され、評価関数の改善が一切機能しない。CLI 側の `--accept` / `--reject` フラグと `record_human_decision()` は実装済みだが、スキルのワークフローに組み込まれていない。
+`/evolve-anything:optimize` 実行後に accept/reject の確認フローが SKILL.md に記載されておらず、`history.jsonl` の全エントリが `human_accepted: null` のまま残り続ける。これにより `/evolve-anything:evolve` の Step 6 (Fitness Evolution) が常に「データ不足: 0/30件」と表示され、評価関数の改善が一切機能しない。CLI 側の `--accept` / `--reject` フラグと `record_human_decision()` は実装済みだが、スキルのワークフローに組み込まれていない。
 
 ## What Changes
 

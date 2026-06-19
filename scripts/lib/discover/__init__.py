@@ -11,7 +11,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 # パッケージ化後 (Phase 2): __file__ は scripts/lib/discover/__init__.py のため
 # scripts/lib/ を sys.path に追加して plugin_root / line_limit / similarity 等を解決

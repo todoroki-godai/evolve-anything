@@ -2,7 +2,7 @@
 
 ### Requirement: 高頻度 global/plugin スキルの品質スコアを計測し quality-baselines.jsonl に記録しなければならない（MUST）
 
-quality_monitor.py は高頻度スキル（直近 HIGH_FREQ_DAYS（デフォルト: 30）日で HIGH_FREQ_THRESHOLD（デフォルト: 10）回以上使用）のうち、classify_artifact_origin() が "global" または "plugin" を返すスキルを対象に、CoT 付き品質評価（clarity / completeness / structure / practicality の4軸）を実行し、結果を ~/.claude/rl-anything/quality-baselines.jsonl に追記しなければならない（MUST）。各レコードにはスキル名・総合スコア・各軸スコア・タイムスタンプ・計測時点の使用回数を含めなければならない（MUST）。
+quality_monitor.py は高頻度スキル（直近 HIGH_FREQ_DAYS（デフォルト: 30）日で HIGH_FREQ_THRESHOLD（デフォルト: 10）回以上使用）のうち、classify_artifact_origin() が "global" または "plugin" を返すスキルを対象に、CoT 付き品質評価（clarity / completeness / structure / practicality の4軸）を実行し、結果を ~/.claude/evolve-anything/quality-baselines.jsonl に追記しなければならない（MUST）。各レコードにはスキル名・総合スコア・各軸スコア・タイムスタンプ・計測時点の使用回数を含めなければならない（MUST）。
 
 定数定義（quality_monitor.py 先頭）:
 - `HIGH_FREQ_THRESHOLD = 10` — 高頻度判定の使用回数閾値

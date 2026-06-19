@@ -2,10 +2,10 @@
 
 ### Requirement: プロジェクト分析にワークフロー統計と fitness-criteria.md を統合しなければならない（MUST）
 
-analyze_project.py は、ワークフロー統計 JSON（`~/.claude/rl-anything/workflow_stats.json`）と `.claude/fitness-criteria.md` が存在する場合、それらを入力ソースとして読み込み、出力 JSON に統合しなければならない（MUST）。
+analyze_project.py は、ワークフロー統計 JSON（`~/.claude/evolve-anything/workflow_stats.json`）と `.claude/fitness-criteria.md` が存在する場合、それらを入力ソースとして読み込み、出力 JSON に統合しなければならない（MUST）。
 
 #### Scenario: ワークフロー統計のマージ
-- **WHEN** `~/.claude/rl-anything/workflow_stats.json` が存在する
+- **WHEN** `~/.claude/evolve-anything/workflow_stats.json` が存在する
 - **THEN** analyze_project.py の出力 JSON に `workflow_stats` フィールドが追加される
 - **AND** 各スキルの `consistency`, `avg_steps`, `dominant_pattern` が含まれる
 
@@ -19,7 +19,7 @@ analyze_project.py は、ワークフロー統計 JSON（`~/.claude/rl-anything/
 - **THEN** analyze_project.py は従来通り CLAUDE.md と rules のみから criteria を生成する
 
 #### Scenario: ワークフロー統計が存在しない場合
-- **WHEN** `~/.claude/rl-anything/workflow_stats.json` が存在しない
+- **WHEN** `~/.claude/evolve-anything/workflow_stats.json` が存在しない
 - **THEN** analyze_project.py の出力 JSON に `workflow_stats` フィールドは含まれない
 
 ## ADDED Requirements

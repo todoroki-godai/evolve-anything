@@ -10,7 +10,7 @@
 ### 概要
 
 AIRA（Automated Instruction Refinement and Architecture）は、スキル定義の構造そのものを
-自律的に探索・最適化するエンジンの構想。現在の rl-anything がスキルの「内容」を最適化するのに対し、
+自律的に探索・最適化するエンジンの構想。現在の evolve-anything がスキルの「内容」を最適化するのに対し、
 AIRA はスキルの「形式・構造・発火条件」まで含めた探索を行う。
 
 ### 設計構想
@@ -23,7 +23,7 @@ AIRA はスキルの「形式・構造・発火条件」まで含めた探索を
 
 - arXiv:2605.15871 — AIRA の原論文（論文コード未公開、2026-05 時点）
 
-### rl-anything との関係
+### evolve-anything との関係
 
 現在の実装ロードマップ（FORGE / LBYL / ALSO）は AIRA の前段として機能する。
 FORGE の `evolution_memory` が蓄積した成功パターンは AIRA の訓練データとなりうる。

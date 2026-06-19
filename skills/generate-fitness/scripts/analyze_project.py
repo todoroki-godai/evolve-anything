@@ -19,7 +19,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-WORKFLOW_STATS_PATH = Path.home() / ".claude" / "rl-anything" / "workflow_stats.json"
+WORKFLOW_STATS_PATH = Path.home() / ".claude" / "evolve-anything" / "workflow_stats.json"
 
 
 # --- ドメイン定義 ---

@@ -19,7 +19,7 @@
 `ensure_data_dir()` はディレクトリを `700` で作成する（MUST）。`append_jsonl()` は新規ファイル作成時にパーミッションを `600` に設定する（MUST）。
 
 #### Scenario: 新規ディレクトリ作成時のパーミッション
-- **WHEN** `ensure_data_dir()` が `~/.claude/rl-anything/` を初回作成する
+- **WHEN** `ensure_data_dir()` が `~/.claude/evolve-anything/` を初回作成する
 - **THEN** ディレクトリのパーミッションが `700` (rwx------) である
 
 #### Scenario: 新規 JSONL ファイル作成時のパーミッション

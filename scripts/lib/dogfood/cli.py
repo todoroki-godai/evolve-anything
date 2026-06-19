@@ -1,4 +1,4 @@
-"""bin/rl-dogfood-gate のロジック本体（#496）。
+"""bin/evolve-dogfood-gate のロジック本体（#496）。
 
 通し評価ゲート CLI。``--layer 1|2|3|all|light``、``--json``、``--output <path>``。
 ``light`` = pre-push 向け高速層（Layer1a 不変 + Layer2 + Layer3、約十数秒。Layer1b drain
@@ -97,7 +97,7 @@ def _layer3_has_red(l3: Dict[str, Any]) -> bool:
 
 def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="rl-dogfood-gate",
+        prog="evolve-dogfood-gate",
         description="通し評価ゲート（#496）— dry-run 不変 / report invariants / SKILL.md コードブロック検証",
     )
     parser.add_argument(
@@ -112,7 +112,7 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="JSON 出力")
     parser.add_argument("--output", type=Path, default=None, help="結果 JSON の保存先")
     parser.add_argument("--result", type=Path, default=None, help="Layer 2 が読む既存 result JSON（省略時は dry-run で生成）")
-    parser.add_argument("--out-dir", type=Path, default=Path("/tmp") / "rl-dogfood-gate", help="一時出力ディレクトリ")
+    parser.add_argument("--out-dir", type=Path, default=Path("/tmp") / "evolve-dogfood-gate", help="一時出力ディレクトリ")
     args = parser.parse_args(argv)
 
     repo_root = _repo_root()

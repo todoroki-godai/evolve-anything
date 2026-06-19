@@ -81,7 +81,7 @@ def _query_sessions_via_store(
 
     session_store.query は (session_id, timestamp) で db と未 ingest jsonl を dedup 合算する。
     union read が dict を返すため SQL WHERE を Python フィルタに置換し両経路で挙動を揃える。
-    本番では telemetry_query と session_store は同一 DATA_DIR (`~/.claude/rl-anything`) に解決し、
+    本番では telemetry_query と session_store は同一 DATA_DIR (`~/.claude/evolve-anything`) に解決し、
     pytest では conftest が両モジュールの DATA_DIR を同一 tmp に rebase するため、session_store の
     モジュール変数をそのまま信頼して読む（HAS_DUCKDB=True 経路でのみ到達）。
     """

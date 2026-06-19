@@ -50,7 +50,7 @@ def _is_today(ts: Any) -> bool:
 def count_promoted_today(corrections: Optional[List[Dict[str, Any]]]) -> Dict[str, int]:
     """corrections ストアから「今日昇格した weak_signal 由来 correction」を決定論で数える（#494）。
 
-    実 promote は Step 6.2 の `rl-reflect --promote-weak`（人間確認）/ idiom_autopromote（自動）が
+    実 promote は Step 6.2 の `evolve-reflect --promote-weak`（人間確認）/ idiom_autopromote（自動）が
     corrections.jsonl に書く永続記録なので、build_review の返り値（promoted キー無し）に依存せず
     ここを単一の真実とする。これにより growth_report.promoted_today の「構造的常時0」を根治する。
 
@@ -114,7 +114,7 @@ def build_growth_report(
 
     # ── 今日の昇格件数（#494 発見2: 構造的常時0 の根治）──────────────
     # build_review の返り値（daily）には promoted キーが存在せず、実 promote は Step 6.2 の
-    # rl-reflect --promote-weak が corrections.jsonl に書く。そこで corrections ストアの
+    # evolve-reflect --promote-weak が corrections.jsonl に書く。そこで corrections ストアの
     # 「今日の weak_signal 由来昇格」を単一の真実として数える（count_promoted_today）。
     # 後方互換: 明示渡しの live カウント（review_result.daily.promoted / autopromote_result.
     # promoted）が store より多ければ max で勝たせる（同 run の即時表示用）。store 由来導出は

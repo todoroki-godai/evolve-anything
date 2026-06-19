@@ -14,7 +14,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 
 ## 実行手順
 
-ユーザーが `/rl-anything:evolve-skill` を呼び出したら、以下の手順で実行する。
+ユーザーが `/evolve-anything:evolve-skill` を呼び出したら、以下の手順で実行する。
 
 ### 1. 対象スキルを解決する
 
@@ -159,7 +159,7 @@ result = apply_evolve_proposal(proposal)
 
 > **#350 ガード**: `apply_evolve_proposal()` は `references/pitfalls.md` が既に存在する場合、
 > テンプレートで上書きしない。既存の実エントリを保護するため、存在ガードが実装済み。
-> pitfalls.md への変更が必要な場合は `/rl-anything:pitfall-curate` を使う。
+> pitfalls.md への変更が必要な場合は `/evolve-anything:pitfall-curate` を使う。
 
 却下された場合はファイルに変更を加えず終了。
 
@@ -187,7 +187,7 @@ idempotency_check: pass / fail
 ## 使用例
 
 ```
-/rl-anything:evolve-skill my-skill                # スキル名指定
-/rl-anything:evolve-skill .claude/skills/my-skill/SKILL.md  # パス指定
-/rl-anything:evolve-skill my-skill --dry-run       # 判定結果のみ
+/evolve-anything:evolve-skill my-skill                # スキル名指定
+/evolve-anything:evolve-skill .claude/skills/my-skill/SKILL.md  # パス指定
+/evolve-anything:evolve-skill my-skill --dry-run       # 判定結果のみ
 ```

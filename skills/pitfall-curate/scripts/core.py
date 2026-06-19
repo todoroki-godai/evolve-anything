@@ -6,10 +6,10 @@ parse / 類似度 / 配布版選定・描画 / drift 検出 / フィールド書
 設計方針:
 - LLM はここでは一切呼ばない。普遍性分類の「判断」はスキル本体（agent）が行い、
   本モジュールは決定論的処理だけを担う。これにより単体テストが LLM 非依存になる。
-- TF-IDF/Jaccard エンジンは scripts/lib/similarity.py を再利用する（rl-anything の
+- TF-IDF/Jaccard エンジンは scripts/lib/similarity.py を再利用する（evolve-anything の
   既存 pitfall dedup と一貫）。
 
-pitfalls.md フォーマットは rl-anything 標準:
+pitfalls.md フォーマットは evolve-anything 標準:
     ## Active Pitfalls
     ### <title>
     - **Status**: Active

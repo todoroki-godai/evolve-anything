@@ -1,12 +1,12 @@
-"""#525-3 CLI 配線テスト: `rl-evolve --print-out-path` が slug 解決済みの OUT パスを print する。
+"""#525-3 CLI 配線テスト: `evolve --print-out-path` が slug 解決済みの OUT パスを print する。
 
 背景（#525-3 冗長性）: SKILL.md Step 1 は各 Bash 呼び出しごとに
 
     SLUG="$(python3 -c "...resolve_slug...")"
     OUT="/tmp/rl_evolve_${SLUG}.json"
 
-という slug 再導出ボイラープレートを繰り返していた。rl-evolve は既に slug を解決できるので、
-`rl-evolve --print-out-path` で `/tmp/rl_evolve_<slug>.json` の1行を返せば再導出を短縮できる。
+という slug 再導出ボイラープレートを繰り返していた。evolve は既に slug を解決できるので、
+`evolve --print-out-path` で `/tmp/rl_evolve_<slug>.json` の1行を返せば再導出を短縮できる。
 
 このコマンドは evolve 本体を回さず（早期 return）、DATA_DIR/パス解決ロジックには触れない
 （slug 解決 + /tmp パス組み立てのみ・#517 evolve.py DATA_DIR と非競合）。

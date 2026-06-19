@@ -1,6 +1,6 @@
 """fleet PJ audit subprocess 実行ロジック。
 
-`run_audit_subprocess` で `bin/rl-audit` を起動し growth-state JSON から結果を読む。
+`run_audit_subprocess` で `bin/evolve-audit` を起動し growth-state JSON から結果を読む。
 fleet/__init__.py から re-export される（後方互換）。
 """
 from __future__ import annotations
@@ -125,15 +125,15 @@ def run_audit_subprocess(
 ) -> AuditResult:
     """PJ の audit を subprocess で実行し growth-state から結果を読み取る。
 
-    - `bin/rl-audit --growth --skip-rescore -- <pj_path>` を実行（副作用: growth-state 更新）
+    - `bin/evolve-audit --growth --skip-rescore -- <pj_path>` を実行（副作用: growth-state 更新）
     - `--` 区切りで PJ パスに leading `-` があっても argparse を誤動作させない
     - `data_dir` 指定時は `CLAUDE_PLUGIN_DATA=<data_dir>` を env に設定
     - subprocess は `start_new_session=True` で別プロセスグループに隔離し、timeout 時は
-      `os.killpg` で子孫まで確実に終了させる（孤児化した rl-audit 子孫が growth-state を
+      `os.killpg` で子孫まで確実に終了させる（孤児化した evolve-audit 子孫が growth-state を
       半書き状態で残すことを防ぐ）
     - subprocess timeout / returncode 非ゼロ / growth-state 破損は `AuditResult.status` で区別
 
-    Phase 1 では rl-audit stdout は parse せず growth-state JSON を唯一の真実とする。
+    Phase 1 では evolve-audit stdout は parse せず growth-state JSON を唯一の真実とする。
     """
     rl_audit_bin = rl_audit_bin or _DEFAULT_RL_AUDIT_BIN
     effective_data_dir = data_dir or _DEFAULT_DATA_DIR

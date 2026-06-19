@@ -1,4 +1,4 @@
-"""rl-anything プロジェクト識別子 + JSONL 追記。
+"""evolve-anything プロジェクト識別子 + JSONL 追記。
 
 `project_name_from_dir` / `extract_worktree_info` / `append_jsonl` /
 `get_preceding_tool_calls` を提供する。
@@ -168,6 +168,6 @@ def append_jsonl(filepath: Path, record: dict) -> None:
             try:
                 filepath.chmod(0o600)
             except OSError as e:
-                print(f"[rl-anything] chmod file warning: {e}", file=sys.stderr)
+                print(f"[evolve-anything] chmod file warning: {e}", file=sys.stderr)
     except OSError as e:
-        print(f"[rl-anything] write failed: {e}", file=sys.stderr)
+        print(f"[evolve-anything] write failed: {e}", file=sys.stderr)

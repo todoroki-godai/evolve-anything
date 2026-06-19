@@ -41,7 +41,7 @@ def _default_eval_sets_dir() -> Path:
         import rl_common
         return Path(rl_common.DATA_DIR) / "eval-sets"
     except Exception:
-        return Path.home() / ".claude" / "rl-anything" / "eval-sets"
+        return Path.home() / ".claude" / "evolve-anything" / "eval-sets"
 
 
 def load_eval_sets(eval_sets_dir: Path) -> Dict[str, List[Dict[str, Any]]]:

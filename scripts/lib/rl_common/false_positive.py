@@ -1,4 +1,4 @@
-"""rl-anything 偽陽性フィードバック管理。
+"""evolve-anything 偽陽性フィードバック管理。
 
 `message_hash` / `load_false_positives` / `add_false_positive` /
 `cleanup_false_positives` を提供する。
@@ -41,7 +41,7 @@ def load_false_positives() -> set[str]:
                 continue
         return hashes
     except OSError as e:
-        print(f"[rl-anything] load_false_positives warning: {e}", file=sys.stderr)
+        print(f"[evolve-anything] load_false_positives warning: {e}", file=sys.stderr)
         return set()
 
 
@@ -89,5 +89,5 @@ def cleanup_false_positives() -> int:
             fp_file.write_text("\n".join(kept) + "\n" if kept else "", encoding="utf-8")
         return removed
     except OSError as e:
-        print(f"[rl-anything] cleanup_false_positives warning: {e}", file=sys.stderr)
+        print(f"[evolve-anything] cleanup_false_positives warning: {e}", file=sys.stderr)
         return 0

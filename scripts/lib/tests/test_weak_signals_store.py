@@ -27,7 +27,7 @@ def _sig(channel="rephrase", **prov) -> WeakSignal:
         provenance={"detector": channel, **prov},
         detected_at="2026-06-10T00:00:00+00:00",
         session_id="sess-1",
-        pj_slug="rl-anything",
+        pj_slug="evolve-anything",
     )
 
 

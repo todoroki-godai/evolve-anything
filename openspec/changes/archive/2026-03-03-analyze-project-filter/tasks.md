@@ -7,7 +7,7 @@
 
 - [x] 2.1 analyze.py に argparse で --project CLI 引数を追加する
   （デフォルト値: common.project_name_from_dir(os.getcwd())
-   = カレントディレクトリの末尾名。例: /Users/foo/rl-anything → "rl-anything"）
+   = カレントディレクトリの末尾名。例: /Users/foo/evolve-anything → "evolve-anything"）
 - [x] 2.2 `get_project_session_ids(project_name)` 関数を追加 — sessions.jsonl から該当 project_name の session_id セットを返す
 - [x] 2.3 `load_jsonl()` に `session_ids: Optional[Set[str]]` フィルタパラメータを追加する
 - [x] 2.4 `run_analysis()` を `project` 引数を受け取るように更新し、フィルタ済みデータで分析を実行する

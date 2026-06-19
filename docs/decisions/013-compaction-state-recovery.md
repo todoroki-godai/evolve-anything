@@ -13,7 +13,7 @@ upstream issue `anthropics/claude-code#14160`（auto-compact 時 custom_instruct
 
 - **既存 hook の拡張**: 新規ファイルではなく既存の `save_state.py` / `restore_state.py` を拡張し、checkpoint.json に `work_context` フィールドを追加（後方互換）
 - **git コマンドで作業コンテキストを取得**: `git log --oneline -5`（直近5コミット）と `git status --short`（未コミット変更）の2コマンドで committed/uncommitted を分離して保存
-- **restore_state で人間可読サマリーを出力**: JSON だけでなく `[rl-anything:restore_state]` プレフィックス付きの自然言語サマリーを stdout に出力し、Claude が作業状態を把握できるようにする
+- **restore_state で人間可読サマリーを出力**: JSON だけでなく `[evolve-anything:restore_state]` プレフィックス付きの自然言語サマリーを stdout に出力し、Claude が作業状態を把握できるようにする
 - **CLAUDE.md に Compaction Instructions セクションを追加**: 圧縮時にサマリーに含めるべき情報を指示（Layer 1）
 - **合計 timeout ガード**: `_collect_work_context()` 内で elapsed tracking を行い、合計 3.5s 超過時に残りの git コマンドを skip（hook の 5000ms timeout 内に確実に収める）
 - **定数化**: `_MAX_UNCOMMITTED_FILES=30`, `_MAX_RECENT_COMMITS=5`, `_GIT_TIMEOUT_SECONDS=2`

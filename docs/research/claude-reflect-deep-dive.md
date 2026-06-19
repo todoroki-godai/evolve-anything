@@ -1,14 +1,14 @@
 # claude-reflect 詳細調査
 
 > 調査日: 2026-03-01
-> **ステータス: 参考資料** — rl-anything が correction detection・reflect を独自実装したため、claude-reflect は採用していません。設計の参考として保持。
+> **ステータス: 参考資料** — evolve-anything が correction detection・reflect を独自実装したため、claude-reflect は採用していません。設計の参考として保持。
 
 ## 結論（先に）
 
 **BayramAnnakov/claude-reflect が圧倒的に成熟**。v3.0.1、758 stars、160テスト。
 プラグインマーケットプレイス経由でインストール可能。
 
-rl-anything では以下のアーキテクチャを参考に独自実装した:
+evolve-anything では以下のアーキテクチャを参考に独自実装した:
 1. **correction_detect.py** — UserPromptSubmit フックで CJK/英語 26パターンの修正検出
 2. **reflect スキル** — corrections.jsonl → CLAUDE.md/rules への反映
 3. **偽陽性フィルタ** — CJK 対応を含むフィルタリング

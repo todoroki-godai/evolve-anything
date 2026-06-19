@@ -59,7 +59,7 @@ def extract_skill_candidates(
 
             [
                 {
-                    "skill_name": "rl-anything:implement",
+                    "skill_name": "evolve-anything:implement",
                     "session_count": 5,
                     "generalizability_score": 0.72,
                     "success_rate": 0.8,

@@ -1,22 +1,22 @@
 ---
-name: rl-anything:import
+name: evolve-anything:import
 description: |
   コミュニティスキルを GitHub からワンコマンドで import する。
-  Trigger: import skill, スキルをインポート, コミュニティスキル, rl-fleet import
+  Trigger: import skill, スキルをインポート, コミュニティスキル, evolve-fleet import
 effort: low
 allowed-tools: Bash
 ---
 
-# rl-anything:import — コミュニティスキル import
+# evolve-anything:import — コミュニティスキル import
 
-`bin/rl-fleet import <source>` を呼び出して、GitHub またはローカルパスからスキルを安全にインポートする。
+`bin/evolve-fleet import <source>` を呼び出して、GitHub またはローカルパスからスキルを安全にインポートする。
 
 ## 使い方
 
 ユーザーに source の入力を促し、以下のコマンドを Bash で実行する:
 
 ```bash
-bin/rl-fleet import <source> [--force] [--yes]
+bin/evolve-fleet import <source> [--force] [--yes]
 ```
 
 ## source の形式
@@ -39,7 +39,7 @@ bin/rl-fleet import <source> [--force] [--yes]
 2. 以下のコマンドを実行する:
 
 ```bash
-bin/rl-fleet import {source}
+bin/evolve-fleet import {source}
 ```
 
 3. プレビューが表示されたら内容を確認してユーザーに伝える

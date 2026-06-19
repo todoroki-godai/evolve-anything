@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything は Claude Code のスキル/ルールを遺伝的アルゴリズムで最適化する plugin。現在、評価関数は組み込み2種（`default`: LLM汎用評価、`skill_quality`: ルールベース構造チェック）とプロジェクト固有関数（手動作成）の3パターン。atlas-breeaders では手動で `narrative_fitness.py` を作成済みだが、docs-platform・ooishi-kun 等への展開時に毎回手動作成が必要で導入障壁が高い。
+evolve-anything は Claude Code のスキル/ルールを遺伝的アルゴリズムで最適化する plugin。現在、評価関数は組み込み2種（`default`: LLM汎用評価、`skill_quality`: ルールベース構造チェック）とプロジェクト固有関数（手動作成）の3パターン。atlas-breeaders では手動で `narrative_fitness.py` を作成済みだが、docs-platform・ooishi-kun 等への展開時に毎回手動作成が必要で導入障壁が高い。
 
 ## Goals / Non-Goals
 
@@ -32,7 +32,7 @@ rl-anything は Claude Code のスキル/ルールを遺伝的アルゴリズム
 
 **代替案**: LLM に CLAUDE.md を渡してドメイン判定 → 遅い・コスト高・オフラインで動かない
 
-**理由**: rl-scorer エージェントが既にドメイン自動判定ロジックを持っており、同様のアプローチで十分。rules/ や skills/ のファイル名・内容からの keyword extraction で高精度に推定可能。
+**理由**: evolve-scorer エージェントが既にドメイン自動判定ロジックを持っており、同様のアプローチで十分。rules/ や skills/ のファイル名・内容からの keyword extraction で高精度に推定可能。
 
 ### 3. 生成は Claude CLI (`claude -p`) + テンプレート
 
@@ -58,9 +58,9 @@ rl-anything は Claude Code のスキル/ルールを遺伝的アルゴリズム
 
 ### 6. ドメイン推定の共有化方針
 
-**選択**: generate-fitness-skill の project-analyzer と rl-scorer エージェント（agents/rl-scorer.md）はいずれもドメイン推定（game/documentation/bot/general）を行う。現時点では独立実装とし、将来的に共通モジュールへの統合を検討する
+**選択**: generate-fitness-skill の project-analyzer と evolve-scorer エージェント（agents/evolve-scorer.md）はいずれもドメイン推定（game/documentation/bot/general）を行う。現時点では独立実装とし、将来的に共通モジュールへの統合を検討する
 
-**理由**: rl-scorer は LLM ベース（CLAUDE.md を読んで推定）、project-analyzer はルールベース（キーワード頻度）でアプローチが異なる。統合には両者のインターフェース統一が必要で、現段階では各機能の安定化を優先する
+**理由**: evolve-scorer は LLM ベース（CLAUDE.md を読んで推定）、project-analyzer はルールベース（キーワード頻度）でアプローチが異なる。統合には両者のインターフェース統一が必要で、現段階では各機能の安定化を優先する
 
 **将来計画**: 両者のドメイン分類が安定した後、`lib/domain-detector.py` として共通化を検討
 

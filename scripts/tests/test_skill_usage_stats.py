@@ -55,11 +55,11 @@ class TestLoadSkillActivations:
 
     def test_plugin_prefix_normalized(self, tmp_path):
         f = _write_activations(tmp_path, [
-            {"ts": _ts(1), "skill": "rl-anything:audit", "session_id": "s1", "project": "p"},
+            {"ts": _ts(1), "skill": "evolve-anything:audit", "session_id": "s1", "project": "p"},
         ])
         stats = sus.load_skill_activations(days=30, activations_file=f)
         # both prefixed and base name are registered
-        assert "rl-anything:audit" in stats
+        assert "evolve-anything:audit" in stats
         assert "audit" in stats
         assert stats["audit"]["count"] == 1
 

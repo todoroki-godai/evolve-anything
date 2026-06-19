@@ -1,6 +1,6 @@
 """testpaths カバレッジの observability セクション生成（#468）。
 
-sections_orphan.py と同じ「環境グローバル系 builder」。検査対象は rl-anything 自身の
+sections_orphan.py と同じ「環境グローバル系 builder」。検査対象は evolve-anything 自身の
 リポジトリ（pytest.ini + tests/ ツリー）であり、引数 project_dir は self-audit 時に
 プラグインルートと一致するため、それをリポジトリルートとして突合する（observability contract
 互換 `(project_dir) -> Optional[List[str]]`）。

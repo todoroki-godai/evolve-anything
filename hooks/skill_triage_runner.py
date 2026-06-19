@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 TRIAGE_CACHE_FILE = DATA_DIR / "skill-triage-cache.json"
 
 _HOOKS_DIR = Path(__file__).resolve().parent

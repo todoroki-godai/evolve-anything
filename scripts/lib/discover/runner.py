@@ -58,13 +58,13 @@ def _is_already_existing_skill(name: str, known_skills) -> bool:
     して扱うべきでないものを除外する:
 
     - プラグイン namespaced（``plugin:skill`` のように ``:`` を含む）→ インストール済み
-      プラグインスキル（例: ``rl-anything:evolve``）。bare 名の project/global スキルに
+      プラグインスキル（例: ``evolve-anything:evolve``）。bare 名の project/global スキルに
       ``:`` は付かないため、``:`` の有無で確実に判別できる
     - ``known_skills`` に含まれる → 既存の project / global スキル（例: ``review``）
     - CC 組み込みコマンド（例: ``loop`` / ``model``）→ SKILL.md を持たないため
       known_skills では捕まらないので別途 denylist で除外する
 
-    除外しないと「既存の loop/model/review/rl-anything:* を新規作成せよ」という
+    除外しないと「既存の loop/model/review/evolve-anything:* を新規作成せよ」という
     無意味な CREATE 提案が remediation に流れる（docs-platform evolve で 5 件検出）。
     """
     if not name:

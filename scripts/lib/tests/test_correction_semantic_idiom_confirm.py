@@ -17,7 +17,7 @@ if str(_lib_dir) not in sys.path:
 
 from correction_semantic import store as cs_store  # noqa: E402
 
-SLUG = "rl-anything"
+SLUG = "evolve-anything"
 
 
 def _idiom(text="四国めたんじゃなくて", source_path="/a.jsonl", line_no=1, pj_slug=SLUG):

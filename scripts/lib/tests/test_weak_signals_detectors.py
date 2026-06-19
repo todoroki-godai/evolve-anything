@@ -31,14 +31,14 @@ def test_permission_deny_detected_from_error_records() -> None:
          "timestamp": "2026-06-10T00:00:00Z", "session_id": "s1"},
         {"type": "tool_error", "tool_name": "Read"},  # 別種 → 無視
     ]
-    sigs = detect_permission_deny(recs, "rl-anything")
+    sigs = detect_permission_deny(recs, "evolve-anything")
     assert len(sigs) == 1
     s = sigs[0]
     assert s.channel == "permission_deny"
     assert s.provenance["tool_name"] == "Bash"
     assert s.provenance["denial_reason"] == "hard_deny"
     assert s.session_id == "s1"
-    assert s.pj_slug == "rl-anything"
+    assert s.pj_slug == "evolve-anything"
 
 
 def test_permission_deny_empty_when_no_denials() -> None:
@@ -66,7 +66,7 @@ def test_manual_edit_after_ai_from_tool_result_error(tmp_path: Path) -> None:
             ]}
         ]}},
     ])
-    sigs = detect_transcript_signals(tp, "rl-anything")
+    sigs = detect_transcript_signals(tp, "evolve-anything")
     edits = [s for s in sigs if s.channel == "manual_edit_after_ai"]
     assert len(edits) == 1
     assert edits[0].provenance["attribution"] == "user_or_linter"
@@ -81,7 +81,7 @@ def test_esc_interrupt_detected(tmp_path: Path) -> None:
             {"type": "text", "text": "[Request interrupted by user]"}
         ]}},
     ])
-    sigs = detect_transcript_signals(tp, "rl-anything")
+    sigs = detect_transcript_signals(tp, "evolve-anything")
     interrupts = [s for s in sigs if s.channel == "esc_interrupt"]
     assert len(interrupts) == 1
     assert interrupts[0].session_id == "s2"
@@ -103,7 +103,7 @@ def test_transcript_missing_file_returns_empty(tmp_path: Path) -> None:
 
 def _utt(session_id, line_no, text, **extra):
     return {"session_id": session_id, "line_no": line_no, "text": text,
-            "source_path": "/x.jsonl", "pj_slug": "rl-anything", **extra}
+            "source_path": "/x.jsonl", "pj_slug": "evolve-anything", **extra}
 
 
 def test_rephrase_detected_for_high_similarity_consecutive() -> None:
@@ -112,7 +112,7 @@ def test_rephrase_detected_for_high_similarity_consecutive() -> None:
         _utt("s1", 1, "開発サーバー動かして。目視してみる。"),
         _utt("s1", 2, "開発サーバー動かして。目視してみる"),  # 句点だけ違い → 高類似
     ]
-    sigs = detect_rephrase(utts, "rl-anything")
+    sigs = detect_rephrase(utts, "evolve-anything")
     assert len(sigs) == 1
     assert sigs[0].channel == "rephrase"
     assert sigs[0].provenance["similarity"] >= REPHRASE_JACCARD_THRESHOLD
@@ -124,7 +124,7 @@ def test_rephrase_not_detected_for_unrelated() -> None:
         _utt("s1", 1, "テストを全部回して結果を見せて"),
         _utt("s1", 2, "じゃあ次はデプロイの設定を確認しよう"),
     ]
-    assert detect_rephrase(utts, "rl-anything") == []
+    assert detect_rephrase(utts, "evolve-anything") == []
 
 
 def test_rephrase_excludes_dispatch_templates() -> None:
@@ -138,7 +138,7 @@ def test_rephrase_excludes_dispatch_templates() -> None:
         _utt("s1", 1, base + "SP帯。subagent として動く。"),
         _utt("s1", 2, base + "PC帯。subagent として動く。"),  # near-identical だが派遣テンプレ
     ]
-    assert detect_rephrase(utts, "rl-anything") == []
+    assert detect_rephrase(utts, "evolve-anything") == []
 
 
 def test_rephrase_skips_cross_session_pairs() -> None:
@@ -147,7 +147,7 @@ def test_rephrase_skips_cross_session_pairs() -> None:
         _utt("s1", 1, "prod まで動作確認して"),
         _utt("s2", 1, "prod まで動作確認して"),
     ]
-    assert detect_rephrase(utts, "rl-anything") == []
+    assert detect_rephrase(utts, "evolve-anything") == []
 
 
 def test_rephrase_skips_short_utterances() -> None:
@@ -156,4 +156,4 @@ def test_rephrase_skips_short_utterances() -> None:
         _utt("s1", 1, "はい"),
         _utt("s1", 2, "はい"),
     ]
-    assert detect_rephrase(utts, "rl-anything") == []
+    assert detect_rephrase(utts, "evolve-anything") == []

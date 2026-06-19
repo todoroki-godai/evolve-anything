@@ -55,7 +55,7 @@ DEFAULT_TRIGGER_CONFIG["triggers"]["bloat"] = {
 
 ### D4: bloat トリガーのアクション
 
-**選択: 全種別で `/rl-anything:evolve` を提案**
+**選択: 全種別で `/evolve-anything:evolve` を提案**
 
 理由: evolve の Compile ステージが全レイヤーの問題（bloat 含む）に対応し、remediation で修正アクションを生成する。prune も evolve 内で呼ばれる。ユーザーが1コマンドで対処できる。
 

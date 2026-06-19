@@ -6,23 +6,23 @@ status: accepted
 
 ## Context
 
-AI 研究トレンド 2 件を tech-eval で評価し、採用推奨「中」以上の 2 概念を rl-anything に取り込むことにした（[#285](../../CHANGELOG.md) / [#286](../../CHANGELOG.md)）。
+AI 研究トレンド 2 件を tech-eval で評価し、採用推奨「中」以上の 2 概念を evolve-anything に取り込むことにした（[#285](../../CHANGELOG.md) / [#286](../../CHANGELOG.md)）。
 
 - **#285 Belief Entropy（arXiv:2605.30159）**: LLM 生成の記憶要約が元情報に対してどれだけ不確実（hallucination / 欠落）かを測り、低品質な記憶を弾く。論文は内部状態のエントロピー推定（複数サンプリング / log-prob 解析）を前提とする。
 - **#286 Self-Trained Verification（arXiv:2605.30290）**: 受理/棄却の判定器（verifier model）を自己生成データで継続学習し、生成物の採否を自律改善する。論文は専用モデルの追加学習を前提とする。
 
-どちらも「論文の額面どおり」に実装すると rl-anything のアーキテクチャと衝突する:
+どちらも「論文の額面どおり」に実装すると evolve-anything のアーキテクチャと衝突する:
 
 1. **#285 を LLM ベースで実装する衝突** — belief 評価が走る場所は `auto_memory_runner`（Stop hook、毎ターン発火する hot hook）。ここに追加の LLM 呼び出しやサンプリングを差すと、`[hot hook eager import pitfall]`（毎発火 hook の重い処理がレイテンシを蝕む、duckdb eager import で 114ms→73ms を経験）と同型のコストを記憶生成のたびに払う。記憶生成は既に LLM 1 call を消費しており、その品質ゲートにもう 1 call を重ねるのは hot path で過大。
-2. **#286 を verifier model 学習で実装する衝突** — rl-anything は「LLM 1 パス直接パッチ + 決定論ゲート」を設計の柱とし（[ADR-003](003-direct-patch-over-genetic-algorithm.md)）、モデル学習基盤（訓練ループ / 重み管理 / GPU）を持たない。専用 verifier の追加学習は PJ の前提（プラグイン・ローカル・決定論）と相容れない。
+2. **#286 を verifier model 学習で実装する衝突** — evolve-anything は「LLM 1 パス直接パッチ + 決定論ゲート」を設計の柱とし（[ADR-003](003-direct-patch-over-genetic-algorithm.md)）、モデル学習基盤（訓練ループ / 重み管理 / GPU）を持たない。専用 verifier の追加学習は PJ の前提（プラグイン・ローカル・決定論）と相容れない。
 
 ## Decision
 
-論文のコア意図（記憶品質ゲート / 受理判定の自己改善）は採るが、実装は rl-anything の制約（hot-hook 原則・LLM ゼロの決定論・既存 recurring ループ）に合わせて翻案する。
+論文のコア意図（記憶品質ゲート / 受理判定の自己改善）は採るが、実装は evolve-anything の制約（hot-hook 原則・LLM ゼロの決定論・既存 recurring ループ）に合わせて翻案する。
 
 1. **#285 → 決定論 retention/drift プロキシ**: `scripts/lib/belief_entropy.py` を新設。生成要約 vs 元 corrections のトークン集合演算で `retention = |src∩sum|/|src|`（情報保持率 = recall 近似）と `drift = |sum\src|/|sum|`（非接地率 = 1 - precision 近似）を計算し、`retention < 0.25 ∨ drift > 0.85` で `should_store=False`（書込前に破棄）。**LLM 呼び出しゼロ**。`similarity.jaccard_coefficient` のトークン化を再利用する。粗いトークン化（日本語等）で信号が乏しい場合は `low_signal` でブロックしない（安全側）。要約は frontmatter を剥がして body のみ評価する（構造トークンによる drift 過大評価を回避）。これは論文の厳密な不確実性推定ではなく、それに着想を得た**保守的な決定論プロキシ**（過剰ブロックを避け「明確な欠落・幻覚」のみ弾く）。
 
-2. **#286 → 既存 evolve-fitness の相関分析を recurring ループで再利用**: 新規 verifier を学習せず、`fitness_evolution.detect_drifted_funcs(history)` が optimize/evolve の accept/reject 履歴から fitness 評価関数ごとの score-acceptance 相関を計算し、`CORRELATION_THRESHOLD`(0.50) を割った関数を「再 calibration 推奨」として検出する。これを audit の `build_calibration_drift_section`（observability）と trigger_engine の `_detect_calibration_drift`（session 終了時に `MIN_DATA_COUNT`(30) 以上 ∧ drift で `/rl-anything:evolve-fitness` を proactive 提案）の**共有単一ソース**にする。全 fitness 変更は**人間承認 MUST**で、本機構は advisory のみ（自動適用しない）。
+2. **#286 → 既存 evolve-fitness の相関分析を recurring ループで再利用**: 新規 verifier を学習せず、`fitness_evolution.detect_drifted_funcs(history)` が optimize/evolve の accept/reject 履歴から fitness 評価関数ごとの score-acceptance 相関を計算し、`CORRELATION_THRESHOLD`(0.50) を割った関数を「再 calibration 推奨」として検出する。これを audit の `build_calibration_drift_section`（observability）と trigger_engine の `_detect_calibration_drift`（session 終了時に `MIN_DATA_COUNT`(30) 以上 ∧ drift で `/evolve-anything:evolve-fitness` を proactive 提案）の**共有単一ソース**にする。全 fitness 変更は**人間承認 MUST**で、本機構は advisory のみ（自動適用しない）。
 
 3. **両者を observability contract に乗せる**: `belief_blocks` / `calibration_drift` を [ADR-028](028-observability-contract-audit-evolve.md) の `_OBSERVABILITY_BUILDERS` に登録し、markdown / 構造化の両経路へ自動伝播させる。データ駆動の適用判定（ログ/履歴が無い PJ は `None`＝対象外、稼働済みで該当なしでも `✓` を1行＝`silence ≠ evaluated`）。
 

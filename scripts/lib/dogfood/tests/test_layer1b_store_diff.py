@@ -1,11 +1,11 @@
 """Layer 1b: 非 dry-run store 差分検査のユニットテスト（#518）。
 
 Layer 1a が「dry-run は何も書かない」方向を検査するのに対し、Layer 1b は
-「apply 境界（`rl-evolve --drain`）で書かれるべきものが書かれる」方向を検査する。
+「apply 境界（`evolve --drain`）で書かれるべきものが書かれる」方向を検査する。
 
 隔離コピー方式（#515）を流用:
   (a) DATA_DIR を tmp にコピー
-  (b) CLAUDE_PLUGIN_DATA=<コピー先> で `rl-evolve --drain --result-json <result>` を実行
+  (b) CLAUDE_PLUGIN_DATA=<コピー先> で `evolve --drain --result-json <result>` を実行
       （--result-json 指定により MARKER_ROOT=home 固定マーカーを読まず result から pending を取る
         ＝隔離が完全になる。#402/drain_pending の result_json 優先経路）
   (c) コピー側の store 差分で assert:
@@ -70,7 +70,7 @@ def test_store_diff_passes_claude_plugin_data_to_drain(monkeypatch, tmp_path):
         # drain が weak_signals.jsonl を isolated copy に書く（決定論チャネル）
         data = Path(env["CLAUDE_PLUGIN_DATA"])
         (data / "weak_signals.jsonl").write_text(
-            '{"channel": "manual_edit_after_ai", "pj_slug": "rl-anything"}\n',
+            '{"channel": "manual_edit_after_ai", "pj_slug": "evolve-anything"}\n',
             encoding="utf-8",
         )
         summary = {

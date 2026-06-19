@@ -38,7 +38,7 @@ class TestWorkflowContext:
             }
             workflow_context.handle_pre_tool_use(event)
 
-            ctx_path = tmp_path / "rl-anything-workflow-sess-wf-001.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-wf-001.json"
             assert ctx_path.exists()
             ctx = json.loads(ctx_path.read_text())
             assert ctx["skill_name"] == "opsx:refine"
@@ -57,7 +57,7 @@ class TestWorkflowContext:
             }
             workflow_context.handle_pre_tool_use(event1)
 
-            ctx_path = tmp_path / "rl-anything-workflow-sess-wf-002.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-wf-002.json"
             ctx1 = json.loads(ctx_path.read_text())
             wf_id_1 = ctx1["workflow_id"]
 
@@ -81,7 +81,7 @@ class TestWorkflowContext:
                 "session_id": "",
             }
             workflow_context.handle_pre_tool_use(event)
-            assert not list(tmp_path.glob("rl-anything-workflow-*"))
+            assert not list(tmp_path.glob("evolve-anything-workflow-*"))
 
     def test_no_skill_name_noop(self, tmp_path):
         """skill_name がない場合は何もしない。"""
@@ -92,18 +92,18 @@ class TestWorkflowContext:
                 "session_id": "sess-wf-003",
             }
             workflow_context.handle_pre_tool_use(event)
-            assert not list(tmp_path.glob("rl-anything-workflow-*"))
+            assert not list(tmp_path.glob("evolve-anything-workflow-*"))
 
     def test_invocation_trigger_top_level(self, tmp_path):
         """最初の Skill 呼び出しは invocation_trigger = 'top-level'。"""
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
             event = {
                 "tool_name": "Skill",
-                "tool_input": {"skill": "rl-anything:audit"},
+                "tool_input": {"skill": "evolve-anything:audit"},
                 "session_id": "sess-wf-trigger-01",
             }
             workflow_context.handle_pre_tool_use(event)
-            ctx_path = tmp_path / "rl-anything-workflow-sess-wf-trigger-01.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-wf-trigger-01.json"
             ctx = json.loads(ctx_path.read_text())
             assert ctx["invocation_trigger"] == "top-level"
 
@@ -113,18 +113,18 @@ class TestWorkflowContext:
             # 1回目: top-level
             event1 = {
                 "tool_name": "Skill",
-                "tool_input": {"skill": "rl-anything:evolve"},
+                "tool_input": {"skill": "evolve-anything:evolve"},
                 "session_id": "sess-wf-trigger-02",
             }
             workflow_context.handle_pre_tool_use(event1)
             # 2回目: nested (コンテキストファイル存在)
             event2 = {
                 "tool_name": "Skill",
-                "tool_input": {"skill": "rl-anything:audit"},
+                "tool_input": {"skill": "evolve-anything:audit"},
                 "session_id": "sess-wf-trigger-02",
             }
             workflow_context.handle_pre_tool_use(event2)
-            ctx_path = tmp_path / "rl-anything-workflow-sess-wf-trigger-02.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-wf-trigger-02.json"
             ctx = json.loads(ctx_path.read_text())
             assert ctx["invocation_trigger"] == "nested-skill"
 
@@ -141,7 +141,7 @@ class TestReadWorkflowContext:
             "started_at": "2026-03-03T10:00:00+00:00",
         }
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
-            ctx_path = tmp_path / "rl-anything-workflow-sess-rwc-001.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-rwc-001.json"
             ctx_path.write_text(json.dumps(ctx))
 
             result = common.read_workflow_context("sess-rwc-001")
@@ -158,7 +158,7 @@ class TestReadWorkflowContext:
     def test_context_corrupted(self, tmp_path):
         """文脈ファイルが破損している場合、null を返す。"""
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
-            ctx_path = tmp_path / "rl-anything-workflow-sess-rwc-003.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-rwc-003.json"
             ctx_path.write_text("NOT VALID JSON{{{")
 
             result = common.read_workflow_context("sess-rwc-003")
@@ -172,7 +172,7 @@ class TestReadWorkflowContext:
             "workflow_id": "wf-expired1",
         }
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
-            ctx_path = tmp_path / "rl-anything-workflow-sess-rwc-004.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-rwc-004.json"
             ctx_path.write_text(json.dumps(ctx))
 
             # mtime を25時間前に設定

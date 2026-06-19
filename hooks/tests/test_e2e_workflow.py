@@ -33,7 +33,7 @@ def run_e2e():
     results = {}
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        data_dir = Path(tmpdir) / "rl-anything"
+        data_dir = Path(tmpdir) / "evolve-anything"
         data_dir.mkdir()
 
         with mock.patch.object(common, "DATA_DIR", data_dir):
@@ -55,7 +55,7 @@ def run_e2e():
                 }
                 workflow_context.handle_pre_tool_use(pre_event)
 
-                ctx_path = Path(tmpdir) / f"rl-anything-workflow-{session_id}.json"
+                ctx_path = Path(tmpdir) / f"evolve-anything-workflow-{session_id}.json"
                 assert ctx_path.exists(), "文脈ファイルが作成されていない"
                 ctx = json.loads(ctx_path.read_text())
                 print(f"  文脈ファイル: {json.dumps(ctx, indent=2, ensure_ascii=False)}")

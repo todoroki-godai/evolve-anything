@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: PostToolUse で Agent ツール呼び出しを観測しなければならない（MUST）
-既存の observe.py の PostToolUse ハンドラを拡張し、Agent ツール呼び出し時に subagent_type, prompt（200文字上限）, timestamp を `~/.claude/rl-anything/usage.jsonl` に追記しなければならない（MUST）。
+既存の observe.py の PostToolUse ハンドラを拡張し、Agent ツール呼び出し時に subagent_type, prompt（200文字上限）, timestamp を `~/.claude/evolve-anything/usage.jsonl` に追記しなければならない（MUST）。
 
 #### Scenario: Agent ツール呼び出しの記録
 - **WHEN** PostToolUse イベントで tool_name が "Agent" である

@@ -47,7 +47,7 @@ CONSIDERATION_SKILLS: frozenset[str] = frozenset({
     "prune",
     "reorganize",
     "genetic-prompt-optimizer",
-    "rl-loop-orchestrator",
+    "evolve-loop-orchestrator",
 })
 
 # haiku 1 call で生成する出力の最大文字数

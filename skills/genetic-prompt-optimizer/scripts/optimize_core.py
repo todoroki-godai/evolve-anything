@@ -63,7 +63,7 @@ def collect_context(
     context: Dict[str, Any] = {}
 
     try:
-        stats_path = Path.home() / ".claude" / "rl-anything" / "workflow_stats.json"
+        stats_path = Path.home() / ".claude" / "evolve-anything" / "workflow_stats.json"
         if stats_path.exists():
             data = json.loads(stats_path.read_text(encoding="utf-8"))
             hint = extract_workflow_hint(data, target_skill_name)

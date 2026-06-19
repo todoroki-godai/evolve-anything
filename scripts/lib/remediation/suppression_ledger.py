@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 LEDGER_ROOT = DATA_DIR / "remediation_suppression"
 # 連続提示回数を追跡する surfaced マーカーの root（#494 発見1: record_rejection の安全網）。
 SURFACED_ROOT = DATA_DIR / "remediation_surfaced"

@@ -42,7 +42,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 
 3. 回答を `.claude/fitness-criteria.md` に保存:
 ```bash
-rl-usage-log "generate-fitness"
+evolve-usage-log "generate-fitness"
 cat > .claude/fitness-criteria.md << 'EOF'
 ## 品質基準
 {ユーザーの回答}

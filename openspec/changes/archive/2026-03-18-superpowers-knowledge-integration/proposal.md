@@ -1,8 +1,8 @@
 ## Why
 
-Superpowers (https://github.com/obra/superpowers) の開発方法論には、rl-anything のテレメトリ基盤と組み合わせて価値のあるアイデアが3つある: 合理化防止テーブル、CSO (Claude Search Optimization)、証拠提示義務。ただし Superpowers プラグイン自体の導入は不要。ワークフローが OpenSpec と重複し、TDD 強制が全スキルに波及するため、知見の cherry-pick に留める。
+Superpowers (https://github.com/obra/superpowers) の開発方法論には、evolve-anything のテレメトリ基盤と組み合わせて価値のあるアイデアが3つある: 合理化防止テーブル、CSO (Claude Search Optimization)、証拠提示義務。ただし Superpowers プラグイン自体の導入は不要。ワークフローが OpenSpec と重複し、TDD 強制が全スキルに波及するため、知見の cherry-pick に留める。
 
-現状の rl-anything は「スキル/ルールの構造品質」は計測できるが、「合理化によるスキップ」「description の発見性」「検証証拠の提示」は改善対象外。
+現状の evolve-anything は「スキル/ルールの構造品質」は計測できるが、「合理化によるスキップ」「description の発見性」「検証証拠の提示」は改善対象外。
 
 ## What Changes
 
@@ -10,7 +10,7 @@ Superpowers (https://github.com/obra/superpowers) の開発方法論には、rl-
 - **CSO チェック軸の fitness 追加**: skill_quality fitness に「description が本文の要約になっていないか」「トリガーワードを含むか」等の CSO 検証を追加（Anthropic 公式ツールガイド由来）
 - **証拠提示義務パターンの verification_catalog 追加**: 「Evidence before claims」ルールをテンプレート化し、discover/remediation 経由で未導入プロジェクトに提案
 
-**方針**: Superpowers プラグインは導入しない。知見を3つ抽出し、rl-anything のパイプライン（pitfall_manager, skill_quality, verification_catalog）に組み込む。
+**方針**: Superpowers プラグインは導入しない。知見を3つ抽出し、evolve-anything のパイプライン（pitfall_manager, skill_quality, verification_catalog）に組み込む。
 
 ## Capabilities
 

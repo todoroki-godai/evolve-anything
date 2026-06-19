@@ -2,7 +2,7 @@
 
 データファイル: DATA_DIR / evolution_memory.jsonl
   - DATA_DIR は CLAUDE_PLUGIN_DATA 環境変数で上書き可能
-    (未設定時: ~/.claude/rl-anything/)
+    (未設定時: ~/.claude/evolve-anything/)
 
 公開関数:
   save_winner  -- 成功パターンを追記（max 1000件ローテーション）
@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 # ── DATA_DIR（テスト時は monkeypatch.setattr で差し替え）────────────────────
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR: Path = (
-    Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+    Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 )
 
 _MEMORY_FILENAME = "evolution_memory.jsonl"

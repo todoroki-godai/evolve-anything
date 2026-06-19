@@ -23,7 +23,7 @@ try:
 
     _DATA_DIR = _common.DATA_DIR
 except ImportError:
-    _DATA_DIR = Path.home() / ".claude" / "rl-anything"
+    _DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 # ── 定数 ────────────────────────────────────────────────────────
 

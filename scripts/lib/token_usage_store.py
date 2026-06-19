@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 USAGE_DB = DATA_DIR / "token_usage.db"
 USAGE_JSONL = DATA_DIR / "token_usage.jsonl"
 

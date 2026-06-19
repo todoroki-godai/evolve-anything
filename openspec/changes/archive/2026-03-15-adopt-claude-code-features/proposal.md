@@ -1,13 +1,13 @@
 ## Why
 
-Claude Code v2.1.x で追加された plugin/skill 向け新機能（`context: fork`、`${CLAUDE_SKILL_DIR}`、agent model 指定、skill hooks、`once: true` hook、auto-memory、worktree isolation 等）が rl-anything の各スキル・フックに未適用のまま残っている。これらを採用することで、コンテキスト効率・コスト最適化・安全性・auto-memory との共存が改善される。
+Claude Code v2.1.x で追加された plugin/skill 向け新機能（`context: fork`、`${CLAUDE_SKILL_DIR}`、agent model 指定、skill hooks、`once: true` hook、auto-memory、worktree isolation 等）が evolve-anything の各スキル・フックに未適用のまま残っている。これらを採用することで、コンテキスト効率・コスト最適化・安全性・auto-memory との共存が改善される。
 
 ## What Changes
 
 ### 即適用（スキル frontmatter 更新）
 - evolve / audit / discover スキルに `context: fork` を追加し、大量出力がメインコンテキストを汚染するのを防止
 - 全スキルの templates/ 等パス参照を `${CLAUDE_SKILL_DIR}` 変数に置換し、ハードコードパスを排除
-- rl-scorer エージェント定義は `model: sonnet`（現状維持）、evolve LLM 評価はモデル指定なし（inherit）、discover パターン検出は `model: haiku` でコスト最適化
+- evolve-scorer エージェント定義は `model: sonnet`（現状維持）、evolve LLM 評価はモデル指定なし（inherit）、discover パターン検出は `model: haiku` でコスト最適化
 - evolve スキルに skill-level hooks（PostToolUse）を追加し、remediation 後のリグレッション検出を自動化
 
 ### フック改善
@@ -46,6 +46,6 @@ Claude Code v2.1.x で追加された plugin/skill 向け新機能（`context: f
 - **スキルファイル**: 全13スキルの SKILL.md frontmatter 更新
 - **フック**: save_state.py、restore_state.py の更新
 - **スクリプト**: reflect_utils.py、layer_diagnose.py、remediation.py の更新
-- **エージェント定義**: .claude/agents/ 配下の rl-scorer 定義追加/更新
+- **エージェント定義**: .claude/agents/ 配下の evolve-scorer 定義追加/更新
 - **設定**: plugin.json、CLAUDE.md の更新
 - **依存**: Claude Code v2.1.0+ 必須（context:fork、${CLAUDE_SKILL_DIR} サポート）

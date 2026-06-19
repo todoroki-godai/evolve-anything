@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>rl-anything — はじめに / 4つの柱</title>
+<title>evolve-anything — はじめに / 4つの柱</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -15,7 +15,7 @@
   <button class="sidebar-toggle" id="sidebarToggle" aria-label="メニュー">☰</button>
   <a href="index.html" class="site-logo">
     <svg class="claude-mark" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#CF6B47" fill-opacity=".12"/><path d="M20 9C13.925 9 9 13.925 9 20s4.925 11 11 11 11-4.925 11-11S26.075 9 20 9zm0 2c4.97 0 9 4.03 9 9s-4.03 9-9 9-9-4.03-9-9 4.03-9 9-9z" fill="#CF6B47" fill-opacity=".5"/><path d="M16.5 17c0-.828.672-1.5 1.5-1.5h4c.828 0 1.5.672 1.5 1.5S22.828 18.5 22 18.5h-1.25V23c0 .828-.672 1.5-1.5 1.5S17.75 23.828 17.75 23v-4.5H18c-.828 0-1.5-.672-1.5-1.5z" fill="#CF6B47"/></svg>
-    <span>rl-anything</span>
+    <span>evolve-anything</span>
     <span class="badge">plugin</span>
   </a>
   <div class="header-right">
@@ -54,7 +54,7 @@
   <main class="main">
 
     <section class="doc-section" id="intro">
-      <h1>rl-anything</h1>
+      <h1>evolve-anything</h1>
       <p class="lead">スキル・ルールの <strong>自律進化パイプライン</strong>、修正フィードバックループ、直接パッチ最適化、fleet 観測・介入を提供する Claude Code プラグイン。</p>
       <div class="badge-row">
         <span class="badge badge-blue">Claude Code Plugin</span>
@@ -64,14 +64,14 @@
       </div>
       <div class="callout callout-info">
         <span class="callout-icon">💡</span>
-        <span>rl-anything は LLM コストゼロの hooks 群で動作を観測し、corrections.jsonl に蓄積されたフィードバックをもとに CLAUDE.md・rules・skills を自動改善します。</span>
+        <span>evolve-anything は LLM コストゼロの hooks 群で動作を観測し、corrections.jsonl に蓄積されたフィードバックをもとに CLAUDE.md・rules・skills を自動改善します。</span>
       </div>
 
       <h2>インストール</h2>
-      <pre><span class="sh">$</span> claude plugin install rl-anything</pre>
+      <pre><span class="sh">$</span> claude plugin install evolve-anything</pre>
       <p>インストール後、既存セッション履歴を取り込む初回セットアップを実行します。</p>
       <pre><span class="cm"># 初回セットアップ</span>
-<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">backfill</span></pre>
+<span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">backfill</span></pre>
 
       <h2>動作環境</h2>
       <table class="arch-table">
@@ -87,7 +87,7 @@
 
     <section class="doc-section" id="pillars">
       <h1>4つの柱</h1>
-      <p class="lead">rl-anything のすべての機能は4つの設計原則に基づいています。</p>
+      <p class="lead">evolve-anything のすべての機能は4つの設計原則に基づいています。</p>
       <div class="pillars-grid">
         <div class="pillar-card">
           <span class="pillar-icon">🔄</span>
@@ -104,13 +104,13 @@
         <div class="pillar-card">
           <span class="pillar-icon">⚡</span>
           <h3>直接パッチ最適化</h3>
-          <span class="pillar-skills">optimize · rl-loop · generate-fitness · evolve-fitness</span>
+          <span class="pillar-skills">optimize · evolve-loop · generate-fitness · evolve-fitness</span>
           <p>corrections/context をもとに LLM 1パスでパッチを生成し、regression gate で品質を保証する。</p>
         </div>
         <div class="pillar-card">
           <span class="pillar-icon">🌐</span>
           <h3>Fleet 観測・介入</h3>
-          <span class="pillar-skills">fleet (bin/rl-fleet)</span>
+          <span class="pillar-skills">fleet (bin/evolve-fleet)</span>
           <p>全プロジェクト横断で env_score・導入状況を一覧表示。低スコアのプロジェクトに直接介入でき、全 PJ の memory を keyword 横断検索（recall）や、インストール済み CC プラグインの最新性診断（plugins）もできる。</p>
         </div>
       </div>
@@ -118,7 +118,7 @@
       <h2>設計思想</h2>
       <div class="callout callout-tip">
         <span class="callout-icon">🔬</span>
-        <span><strong>Frozen Executor + Trainable Curator</strong> — Claude Code 本体（executor）は frozen と扱い、rl-anything はスキル群と curation ロジック（curator）のみを進化対象とします。SkillOS 論文（arXiv:2605.06614）が同設計で cross-backbone 汎化を実証しており、ADR-023 として明文化されています。</span>
+        <span><strong>Frozen Executor + Trainable Curator</strong> — Claude Code 本体（executor）は frozen と扱い、evolve-anything はスキル群と curation ロジック（curator）のみを進化対象とします。SkillOS 論文（arXiv:2605.06614）が同設計で cross-backbone 汎化を実証しており、ADR-023 として明文化されています。</span>
       </div>
     </section>
 

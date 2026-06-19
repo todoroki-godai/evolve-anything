@@ -60,7 +60,7 @@ class TestE2ETriggerFlow:
         data = trigger_engine.read_and_delete_pending_trigger()
         assert data is not None
         assert data["triggered"] is True
-        assert "/rl-anything:evolve" in data["message"]
+        assert "/evolve-anything:evolve" in data["message"]
 
         # Step 5: File should be deleted after delivery
         assert not (data_dir / "pending-trigger.json").exists()
@@ -86,7 +86,7 @@ class TestE2ETriggerFlow:
         assert data is None
 
     def test_audit_overdue_triggers(self, data_dir):
-        """audit overdue → /rl-anything:audit を提案。"""
+        """audit overdue → /evolve-anything:audit を提案。"""
         state = {
             "last_run_timestamp": datetime.now(timezone.utc).isoformat(),
             # No last_audit_timestamp → overdue
@@ -98,7 +98,7 @@ class TestE2ETriggerFlow:
         result = trigger_engine.evaluate_session_end()
         assert result.triggered is True
         assert "audit_overdue" in result.details.get("all_reasons", [])
-        assert "/rl-anything:audit" in result.message
+        assert "/evolve-anything:audit" in result.message
 
     def test_corrections_flow(self, data_dir):
         """corrections 閾値到達 → メッセージ出力。"""
@@ -125,7 +125,7 @@ class TestE2ETriggerFlow:
         pending = {
             "triggered": True,
             "reason": "days_elapsed",
-            "action": "/rl-anything:evolve",
+            "action": "/evolve-anything:evolve",
             "message": "前回 evolve から 15.6 日経過",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -147,7 +147,7 @@ class TestE2ETriggerFlow:
         pending = {
             "triggered": True,
             "reason": "days_elapsed",
-            "action": "/rl-anything:evolve",
+            "action": "/evolve-anything:evolve",
             "message": "前回 evolve から 15.6 日経過",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }

@@ -8,7 +8,7 @@ description: |
   Trigger: discover, パターン発見, pattern detection, skill generation, スキル生成
 ---
 
-# /rl-anything:discover — パターン発見
+# /evolve-anything:discover — パターン発見
 
 観測データ（usage.jsonl, errors.jsonl, history.jsonl）から繰り返しパターンを検出し、
 スキル/ルール候補を生成する。生成されるアーティファクトは構造的制約を満たさなければならない（MUST）。
@@ -16,7 +16,7 @@ description: |
 ## Usage
 
 ```
-/rl-anything:discover [--scope global|project] [--session-scan]
+/evolve-anything:discover [--scope global|project] [--session-scan]
 ```
 
 ### オプション
@@ -28,8 +28,8 @@ description: |
 ### Step 1: パターン検出
 
 ```bash
-rl-usage-log "discover"
-rl-discover [--session-scan]
+evolve-usage-log "discover"
+evolve-discover [--session-scan]
 ```
 
 ### Step 2: 検出結果の表示
@@ -69,7 +69,7 @@ discover.py は `verification_catalog` パッケージの `detect_verification_n
 
 ### Step 6: corrections.jsonl 連携（オプション）
 
-corrections.jsonl（`~/.claude/rl-anything/corrections.jsonl`）が存在する場合、修正フィードバックデータも入力ソースとして利用する。
+corrections.jsonl（`~/.claude/evolve-anything/corrections.jsonl`）が存在する場合、修正フィードバックデータも入力ソースとして利用する。
 未生成時は他の入力ソースのみで正常に動作する（MUST）。
 旧 claude-reflect の learnings-queue.json からのデータは `scripts/migrate_reflect_queue.py` で corrections.jsonl に移行できる。
 

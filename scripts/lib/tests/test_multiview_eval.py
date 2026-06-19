@@ -235,8 +235,8 @@ class TestClassifyMultiview:
         スキル名）。target は SKILL.md の dir 名（bare）。名前空間を正規化して同一スキルを
         join する（#577: 実PJ dogfood で交差が空集合になる seam を検出）。"""
         attribution = {
-            # 起動時のスキル名はプラグイン修飾形（rl-anything:cleanup）。
-            "rl-anything:cleanup": {"first_try_success": 0.2, "rework": 0.0,
+            # 起動時のスキル名はプラグイン修飾形（evolve-anything:cleanup）。
+            "evolve-anything:cleanup": {"first_try_success": 0.2, "rework": 0.0,
                                     "n_sessions": 2, "degraded": False},
         }
         res = mv.classify_multiview(
@@ -245,15 +245,15 @@ class TestClassifyMultiview:
             outcome_attribution=attribution,
             negative_transfer=[],
         )
-        # 修飾形 rl-anything:cleanup が bare cleanup に join され outcome 信号を拾う。
+        # 修飾形 evolve-anything:cleanup が bare cleanup に join され outcome 信号を拾う。
         assert res["cleanup"]["degraded"] is False
         assert "overfit_suspect" in res["cleanup"]["labels"]
 
     def test_agent_keys_do_not_join_as_skills(self):
-        """`Agent:rl-anything:second-opinion` は subagent 帰属でありスキルではない。
+        """`Agent:evolve-anything:second-opinion` は subagent 帰属でありスキルではない。
         同名スキル `second-opinion` に誤 join してはならない（bare 化で取りこぼさない）。"""
         attribution = {
-            "Agent:rl-anything:second-opinion": {
+            "Agent:evolve-anything:second-opinion": {
                 "first_try_success": 0.1, "rework": 0.9,
                 "n_sessions": 2, "degraded": False},
         }
@@ -274,7 +274,7 @@ class TestClassifyMultiview:
             target_skills=["cleanup"],
             chaos_result=None,
             outcome_attribution={},
-            negative_transfer=[{"skill_name": "rl-anything:cleanup",
+            negative_transfer=[{"skill_name": "evolve-anything:cleanup",
                                 "delta_score": -0.2, "negative_transfer": True,
                                 "before_score": 0.8, "after_score": 0.6}],
         )
@@ -283,7 +283,7 @@ class TestClassifyMultiview:
     def test_exact_bare_key_wins_over_namespaced_alias(self):
         """bare と修飾形が両方あるとき、bare（exact 一致）を優先する（決定論・順序非依存）。"""
         attribution = {
-            "rl-anything:cleanup": {"first_try_success": 0.9, "rework": 0.0,
+            "evolve-anything:cleanup": {"first_try_success": 0.9, "rework": 0.0,
                                     "n_sessions": 8, "degraded": False},
             "cleanup": {"first_try_success": 0.2, "rework": 0.0,
                         "n_sessions": 2, "degraded": False},

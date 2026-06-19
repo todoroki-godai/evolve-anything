@@ -1,6 +1,6 @@
 """共通 regression gate ライブラリ。
 
-optimize.py / rl-loop で共有するゲートチェックを一元管理する。
+optimize.py / evolve-loop で共有するゲートチェックを一元管理する。
 """
 
 import re

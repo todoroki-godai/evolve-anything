@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: PreToolUse hook で Skill 呼び出し時にワークフロー文脈ファイルを書き出さなければならない（MUST）
-Skill ツールの PreToolUse 時に、セッション内のワークフロー文脈を `$TMPDIR/rl-anything-workflow-{session_id}.json` に書き出さなければならない（MUST）。文脈ファイルには `skill_name`, `session_id`, `workflow_id`, `started_at` を含む。同一セッション内で別の Skill が呼ばれた場合は上書きする。
+Skill ツールの PreToolUse 時に、セッション内のワークフロー文脈を `$TMPDIR/evolve-anything-workflow-{session_id}.json` に書き出さなければならない（MUST）。文脈ファイルには `skill_name`, `session_id`, `workflow_id`, `started_at` を含む。同一セッション内で別の Skill が呼ばれた場合は上書きする。
 
 #### Scenario: Skill 呼び出し時に文脈ファイルが作成される
 - **WHEN** Skill ツール `opsx:refine` の PreToolUse イベントが発生する
-- **THEN** `$TMPDIR/rl-anything-workflow-{session_id}.json` に `skill_name: "opsx:refine"`, `workflow_id`, `started_at` が書き出される
+- **THEN** `$TMPDIR/evolve-anything-workflow-{session_id}.json` に `skill_name: "opsx:refine"`, `workflow_id`, `started_at` が書き出される
 
 #### Scenario: 同一セッション内で別の Skill が呼ばれると文脈が上書きされる
 - **WHEN** 同一セッション内で `opsx:refine` の後に `opsx:apply` が呼ばれる
@@ -72,7 +72,7 @@ Stop hook でセッション中のワークフロー文脈と usage レコード
 - **THEN** workflows.jsonl には何も書き出されない
 
 ### Requirement: ワークフロー文脈ファイルをセッション終了時に削除しなければならない（MUST）
-Stop hook でワークフロー文脈ファイル（`$TMPDIR/rl-anything-workflow-{session_id}.json`）を削除しなければならない（MUST）。文脈ファイルが存在しない場合はサイレントにスキップする。24時間以上経過した文脈ファイルは無効とみなす。
+Stop hook でワークフロー文脈ファイル（`$TMPDIR/evolve-anything-workflow-{session_id}.json`）を削除しなければならない（MUST）。文脈ファイルが存在しない場合はサイレントにスキップする。24時間以上経過した文脈ファイルは無効とみなす。
 
 #### Scenario: セッション終了時のクリーンアップ
 - **WHEN** セッションが終了し文脈ファイルが存在する

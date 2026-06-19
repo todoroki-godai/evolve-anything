@@ -90,7 +90,7 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
         "_resolve_store_files",
         lambda: (tmp_path / "no-usage.jsonl", tmp_path / "no-corr.jsonl"),
     )
-    # orphan_store も環境グローバル（rl-anything 自身の hooks/scripts/skills）を走査する builder
+    # orphan_store も環境グローバル（evolve-anything 自身の hooks/scripts/skills）を走査する builder
     # のため、実プラグインに orphan ストアがあると同様に前提が崩れる。空 tmp に向けて隔離する（#422）。
     import orphan_store
     monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: tmp_path / "no-plugin")

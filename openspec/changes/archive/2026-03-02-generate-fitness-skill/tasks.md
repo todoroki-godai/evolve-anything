@@ -22,6 +22,6 @@
 
 ## 4. 統合テスト
 
-- [x] 4.1 dry-run テスト: analyze-project.py を rl-anything 自身に実行して JSON 出力を確認
+- [x] 4.1 dry-run テスト: analyze-project.py を evolve-anything 自身に実行して JSON 出力を確認
 - [ ] 4.2 生成テスト: atlas-breeaders 相当のサンプル CLAUDE.md で fitness 関数を生成し、インターフェース準拠を確認（スキップ: Claude CLI の実行環境制約）
 - [ ] 4.3 既存 `--fitness` オプションとの互換確認: 生成された関数を optimize.py から呼び出せることを確認（スキップ: Claude CLI の実行環境制約）

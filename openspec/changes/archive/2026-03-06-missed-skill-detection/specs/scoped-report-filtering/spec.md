@@ -4,7 +4,7 @@
 discover の `detect_behavior_patterns()` はプラグインスキルをメインランキングから除外し、plugin_summary エントリとして末尾に付加する。さらに missed skill opportunities の検出結果をレポートに含める（MUST）。
 
 #### Scenario: Plugin summary in discover
-- **WHEN** openspec-propose が 50 回、rl-anything:audit が 10 回使用されている
+- **WHEN** openspec-propose が 50 回、evolve-anything:audit が 10 回使用されている
 - **THEN** メインパターンには含まれず、`plugin_summary` エントリにプラグイン別内訳が含まれる
 
 #### Scenario: Missed skill opportunities in discover report

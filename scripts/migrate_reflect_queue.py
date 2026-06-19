@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """learnings-queue.json → corrections.jsonl 変換マイグレーションスクリプト。
 
-claude-reflect の learnings-queue.json を rl-anything の corrections.jsonl に変換する。
+claude-reflect の learnings-queue.json を evolve-anything の corrections.jsonl に変換する。
 冪等: 重複判定キー = (timestamp, SHA256(message[:100])) で二重追記を防止。
 """
 import hashlib
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 LEARNINGS_QUEUE = Path.home() / ".claude" / "learnings-queue.json"
-CORRECTIONS_FILE = Path.home() / ".claude" / "rl-anything" / "corrections.jsonl"
+CORRECTIONS_FILE = Path.home() / ".claude" / "evolve-anything" / "corrections.jsonl"
 
 
 def _dedup_key(timestamp: str, message: str) -> str:

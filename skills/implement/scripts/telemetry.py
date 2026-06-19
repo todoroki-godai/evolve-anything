@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _data_dir() -> Path:
-    raw = os.environ.get("CLAUDE_PLUGIN_DATA", os.path.expanduser("~/.claude/rl-anything"))
+    raw = os.environ.get("CLAUDE_PLUGIN_DATA", os.path.expanduser("~/.claude/evolve-anything"))
     p = Path(raw)
     p.mkdir(parents=True, exist_ok=True)
     return p

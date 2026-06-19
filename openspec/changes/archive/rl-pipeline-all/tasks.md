@@ -14,13 +14,13 @@
 
 ## 3. Layer 3: 自律進化ループ
 
-- [x] 3.1 rl-loop-orchestrator SKILL.md 作成
+- [x] 3.1 evolve-loop-orchestrator SKILL.md 作成
 - [x] 3.2 run-loop.py 実装（ベースライン取得→バリエーション生成→評価→選択→人間確認）
 - [x] 3.3 test_loop.py 実装（9テスト）
-- [x] 3.4 rl-scorer エージェント定義（agents/rl-scorer.md）
+- [x] 3.4 evolve-scorer エージェント定義（agents/evolve-scorer.md）
 - [x] 3.5 --dry-run でフルループ動作確認
 
 ## 4. 統合と仕上げ
 
 - [x] 4.1 CLAUDE.md に RLAnything セクション追加
-- [x] 4.2 rl-anything plugin として独立リポジトリに分離
+- [x] 4.2 evolve-anything plugin として独立リポジトリに分離

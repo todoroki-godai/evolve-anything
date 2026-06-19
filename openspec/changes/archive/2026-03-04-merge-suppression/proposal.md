@@ -21,4 +21,4 @@ evolve の Prune フェーズ（Merge サブステップ）で却下した統合
 - `skills/prune/scripts/prune.py` — `merge_duplicates()` に suppression チェック追加
 - `skills/discover/scripts/discover.py` — suppression ファイル I/O の共通化（必要に応じて）
 - `skills/evolve/SKILL.md` — merge 却下時の suppression 登録フロー明確化
-- `~/.claude/rl-anything/discover-suppression.jsonl` or 新規ファイル — suppression データ格納先
+- `~/.claude/evolve-anything/discover-suppression.jsonl` or 新規ファイル — suppression データ格納先

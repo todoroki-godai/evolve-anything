@@ -1,4 +1,4 @@
-"""rl-anything correction / prompt detection。
+"""evolve-anything correction / prompt detection。
 
 `PROMPT_CATEGORIES` / `CORRECTION_PATTERNS` / `FALSE_POSITIVE_FILTERS` 等の
 分類・修正パターン辞書と、`classify_prompt` / `sanitize_message` /

@@ -45,7 +45,7 @@ def extract_paths_outside_codeblocks(text: str) -> List[Tuple[int, str]]:
             # 短すぎるパスやURL風のものを除外
             if len(path_str) < 3 or path_str.startswith("http"):
                 continue
-            # スラッシュコマンド記法 (/plugin, /rl-anything:xxx) を除外
+            # スラッシュコマンド記法 (/plugin, /evolve-anything:xxx) を除外
             if path_str.startswith("/") and "/" not in path_str[1:]:
                 continue
             # Python シンボル参照 (CONST/func) を除外 — 全大文字セグメントを含む場合

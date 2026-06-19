@@ -5,11 +5,11 @@
 
 #### Scenario: Session count threshold reached
 - **WHEN** 前回 evolve 実行以降のセッション数が `min_sessions`（デフォルト: 10）以上
-- **THEN** `TriggerResult(triggered=True, reason="session_count", action="/rl-anything:evolve")` を返さなければならない (MUST)
+- **THEN** `TriggerResult(triggered=True, reason="session_count", action="/evolve-anything:evolve")` を返さなければならない (MUST)
 
 #### Scenario: Days since last evolve exceeded
 - **WHEN** 前回 evolve 実行から `max_days`（デフォルト: 7）日以上経過
-- **THEN** `TriggerResult(triggered=True, reason="days_elapsed", action="/rl-anything:evolve")` を返さなければならない (MUST)
+- **THEN** `TriggerResult(triggered=True, reason="days_elapsed", action="/evolve-anything:evolve")` を返さなければならない (MUST)
 
 #### Scenario: No trigger conditions met
 - **WHEN** すべてのトリガー条件が閾値未満

@@ -4,9 +4,9 @@
 同一スキルを N 回採点し、軸別スコアの標準偏差と推奨 epsilon を出力する。
 
 使用例:
-  rl-score-noise path/to/SKILL.md
-  rl-score-noise path/to/SKILL.md --runs 7
-  rl-score-noise path/to/SKILL.md --json
+  evolve-score-noise path/to/SKILL.md
+  evolve-score-noise path/to/SKILL.md --runs 7
+  evolve-score-noise path/to/SKILL.md --json
 """
 
 import argparse
@@ -59,7 +59,7 @@ def _print_report(result: dict) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="rl-scorer の採点ノイズを計測する")
+    parser = argparse.ArgumentParser(description="evolve-scorer の採点ノイズを計測する")
     parser.add_argument("target", help="計測対象のスキルファイルパス")
     parser.add_argument("--runs", type=int, default=5, help="採点回数（デフォルト: 5）")
     parser.add_argument("--json", action="store_true", help="結果を JSON で出力")

@@ -2,7 +2,7 @@
 """PostToolUse async hook — Agent 使用・エラーを記録する。
 
 stdin から Claude Code の PostToolUse イベント JSON を受け取り、
-~/.claude/rl-anything/ 配下の JSONL ファイルに追記する。
+~/.claude/evolve-anything/ 配下の JSONL ファイルに追記する。
 
 Skill PostToolUse は v2.1.121 以降対応。invocation_trigger の記録は
 skill_activation_log.py が担当。本 hook は Agent ツール呼び出しとエラー記録のみを担当する。
@@ -149,10 +149,10 @@ def main() -> None:
         event = json.loads(raw)
         handle_post_tool_use(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:observe] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:observe] parse error: {e}", file=sys.stderr)
     except Exception as e:
         # サイレント失敗: セッションをブロックしない
-        print(f"[rl-anything:observe] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:observe] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ ingest_judgment_scores(proj, emit["requests"], responses)
    - 「評価する（このまま続行）」
    - 「今回のみスキップ」
    - 「永続スキップ（denylist に追加）」
-3. 永続スキップを選んだスキルがある場合（`_plugin_root` は `~/.claude/rl-anything` または `plugin_root.py` で解決できる実際のパス）:
+3. 永続スキップを選んだスキルがある場合（`_plugin_root` は `~/.claude/evolve-anything` または `plugin_root.py` で解決できる実際のパス）:
    ```python
    python3 -c "
    import os, sys; sys.path.insert(0, os.path.join(os.environ.get('CLAUDE_PLUGIN_ROOT') or os.getcwd(), 'scripts', 'lib'))
@@ -55,11 +55,11 @@ ingest_judgment_scores(proj, emit["requests"], responses)
    print('denylist に追加しました')
    "
    ```
-4. 「今回のみスキップ」と「永続スキップ」の両方のスキル名を `--skip-skills` に渡し、**必ず `--confirmed-batch` を付けて** 再実行する（`--confirmed-batch` がないと guard が再発火する）。**インストール時に PATH に入る `rl-evolve` ラッパーを使う**（`evolve.py` の実パスを glob 探索しない — #395）:
+4. 「今回のみスキップ」と「永続スキップ」の両方のスキル名を `--skip-skills` に渡し、**必ず `--confirmed-batch` を付けて** 再実行する（`--confirmed-batch` がないと guard が再発火する）。**インストール時に PATH に入る `evolve` ラッパーを使う**（`evolve.py` の実パスを glob 探索しない — #395）:
    ```
-   rl-evolve --confirmed-batch [--skip-skills=skill-a,skill-b] --output "$OUT" [既存の引数]
+   evolve --confirmed-batch [--skip-skills=skill-a,skill-b] --output "$OUT" [既存の引数]
    ```
-   （`rl-evolve` は `skills/evolve/scripts/evolve/`（パッケージ）の `main` を呼ぶ薄いラッパー。PATH に無い特殊環境でのみ
+   （`evolve` は `skills/evolve/scripts/evolve/`（パッケージ）の `main` を呼ぶ薄いラッパー。PATH に無い特殊環境でのみ
    `PYTHONPATH=<plugin_root>/scripts/lib:<plugin_root>/skills/evolve/scripts python3 -m evolve ...` を直接叩く（#531 でパッケージ化したため旧 `evolve.py` 直叩きは不可）。Step 1 同様 `--output` 必須で、
    `$OUT` は Step 1 と同じ PJ 別パス `/tmp/rl_evolve_<slug>.json`（共有固定パスは別 PJ の stale 誤読源, #408-A）。
    新しい full result は `$OUT` に上書きされ stdout は1行サマリのみ）

@@ -100,7 +100,7 @@ def _record_audit_completion(
         _append_audit_history(history_record)
         _check_degradation(history_record)
     except Exception as e:
-        print(f"[rl-anything:audit] history recording error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:audit] history recording error: {e}", file=sys.stderr)
 
 
 def _extract_score_from_report(lines: List[str]) -> Optional[float]:
@@ -176,7 +176,7 @@ def run_audit(
 
     dry_run=True 時は audit-history.jsonl / evolve-state.json への完了記録を行わない
     （#491: run_evolve(dry_run=True) の「1バイトも書かない」契約を貫通させる。
-    audit 単体 CLI `bin/rl-audit` の既存挙動は変えないため既定 False）。
+    audit 単体 CLI `bin/evolve-audit` の既存挙動は変えないため既定 False）。
     """
     proj = Path(project_dir) if project_dir else Path.cwd()
     artifacts = find_artifacts(proj)
@@ -361,7 +361,7 @@ def _build_growth_report(
         proj: プロジェクトディレクトリ
         skip_llm: True の場合、compute_environment_fitness に skip_llm=True を伝播し、
             LLM（constitutional）軸をスキップして軽量軸のみで env_score を算出する。
-            rl-fleet status の 10s timeout 対応 (#86)。
+            evolve-fleet status の 10s timeout 対応 (#86)。
         issues_summary: IssuesSummary instance — growth-state cache の `issues_summary`
             キーに dict として書き込む。fleet status (#22) が読み取る。None なら
             未書き込み（旧 cache 互換）。

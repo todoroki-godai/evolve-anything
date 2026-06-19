@@ -29,7 +29,7 @@ requires_duckdb = pytest.mark.skipif(
 
 # worktree フルパス → 親 repo slug amamo / 通常フルパス → basename / basename 素通し。
 _WT = "/Users/x/tools/amamo/.claude/worktrees/evolve"
-_FULL = "/Users/x/rl-anything"
+_FULL = "/Users/x/evolve-anything"
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
@@ -70,7 +70,7 @@ class TestCorrectionsBackfill:
         summary = bf.backfill(tmp_path, apply=True)
         recs = _read_jsonl(corr)
         assert recs[0]["project_path"] == "amamo"  # worktree → 親 repo
-        assert recs[1]["project_path"] == "rl-anything"  # フルパス → basename
+        assert recs[1]["project_path"] == "evolve-anything"  # フルパス → basename
         assert recs[2]["project_path"] == "amamo"  # 既に slug は不変
         assert "project_path" not in recs[3] or recs[3].get("project_path") is None
         # 既に slug の1件と project_path 無しの1件は normalized にカウントしない
@@ -238,7 +238,7 @@ class TestProjectJsonlStores:
         summary = bf.backfill(tmp_path, apply=True)
         recs = _read_jsonl(path)
         assert recs[0]["project"] == "amamo"
-        assert recs[1]["project"] == "rl-anything"
+        assert recs[1]["project"] == "evolve-anything"
         assert recs[2]["project"] == "feedback"  # basename 不変（情報欠落で復元不能）
         assert "project" not in recs[3] or recs[3].get("project") is None
         assert summary[store_key]["normalized"] == 2
@@ -287,7 +287,7 @@ class TestUsageRegistryBackfill:
         summary = bf.backfill(tmp_path, apply=True)
         recs = _read_jsonl(path)
         assert recs[0]["project_path"] == "amamo"
-        assert recs[1]["project_path"] == "rl-anything"
+        assert recs[1]["project_path"] == "evolve-anything"
         assert recs[2]["project_path"] == "feedback"
         assert "project_path" not in recs[3] or recs[3].get("project_path") is None
         assert summary["usage_registry"]["normalized"] == 2

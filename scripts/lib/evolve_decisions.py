@@ -38,7 +38,7 @@ QUEUE_ROOT = DATA_DIR / "evolve_decisions"
 # (env 有) と emit/drain(tool 文脈, env 無) が**同一パスに合意する必要がある**ため、ここは env を
 # 見ず home 基準で固定する。マーカーは評価状態(optimize_history/queue)ではなく「apply→drain 待ちの
 # 提案ポインタ」という運用状態で、fitness 母集団には入らず drain で消える。
-MARKER_ROOT = Path.home() / ".claude" / "rl-anything" / "evolve_pending"
+MARKER_ROOT = Path.home() / ".claude" / "evolve-anything" / "evolve_pending"
 
 # MVP 対象は discover の matched_skills（#223/Step 3 と同じスキル diff クラス）。
 # skill_evolve / remediation への拡張は均質性を崩さないため follow-up（ADR-041）。
@@ -96,7 +96,7 @@ def write_pending_marker(
     """slug の「未 drain 提案」マーカーを上書きする（emit が dry-run でも書く）。
 
     マーカーは store/queue とは別の運用状態。SessionStart の drain リマインドと
-    `rl-evolve --drain` の pending ソースとして使う。
+    `evolve --drain` の pending ソースとして使う。
     """
     path = marker_path(slug)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -313,7 +313,7 @@ def ingest_decisions(
       - `pending=None`（既定）: キュー `DATA_DIR/evolve_decisions/<slug>.jsonl` から読む。
         消化済みをキューから消す（非 dry_run 時）。
       - `pending=[...]` を明示渡し: `result.evolve_decisions.pending` を直接消費する。
-        **dry-run 運用フロー専用の経路** — `rl-evolve --dry-run` では emit がキューを
+        **dry-run 運用フロー専用の経路** — `evolve --dry-run` では emit がキューを
         書かないため、result 同梱の pending（before_sha 付き）を渡すことで apply 後の
         ディスク差分から accept を記録できる。この場合キューは SoT でないため触らない。
     """
@@ -372,7 +372,7 @@ def ingest_decisions(
     return {"accepted": accepted, "rejected": rejected_out, "skipped": skipped}
 
 
-# ─── drain（`rl-evolve --drain` の実体, #402）────────────────────────────────
+# ─── drain（`evolve --drain` の実体, #402）────────────────────────────────
 
 
 def drain_pending(
@@ -383,11 +383,11 @@ def drain_pending(
     rejected: Optional[Dict[str, str]] = None,
     history_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """`rl-evolve --drain` の実体（#402）。pending を marker か result-json から取り、
+    """`evolve --drain` の実体（#402）。pending を marker か result-json から取り、
     apply 後のディスク差分から accept を ingest し、marker をクリアする。
 
     enforcement gap（ingest が SKILL.md prose 依存）を、SKILL.md が inline python でなく
-    **単一コマンド `rl-evolve --drain` を呼ぶだけ**にして縮める。drain は CLI＝**tool 文脈**で
+    **単一コマンド `evolve --drain` を呼ぶだけ**にして縮める。drain は CLI＝**tool 文脈**で
     走るため optimize_history を reader と同一 DATA_DIR に書く＝#358（DATA_DIR split）を踏まない。
 
     冪等: ingest が `{pid}_{kind}` entry_id で dedup するので、未 apply で空振り→後で apply→再 drain

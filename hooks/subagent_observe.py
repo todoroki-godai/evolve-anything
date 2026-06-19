@@ -2,7 +2,7 @@
 """SubagentStop async hook — subagent の完了データを記録する。
 
 stdin から Claude Code の SubagentStop イベント JSON を受け取り、
-~/.claude/rl-anything/subagents.jsonl に追記する。
+~/.claude/evolve-anything/subagents.jsonl に追記する。
 
 LLM 呼び出しは行わない（MUST NOT）。
 書き込み失敗時はセッションをブロックしない（MUST NOT）。
@@ -118,14 +118,14 @@ def handle_subagent_stop(event: dict) -> None:
         # 後者が必須。両方を出して user 可視性と Claude への行動指示を両立する。
         warning = {
             "systemMessage": (
-                f"[rl-anything] 直近 {window_minutes} 分でこのセッションの subagent が"
+                f"[evolve-anything] 直近 {window_minutes} 分でこのセッションの subagent が"
                 f" {count} 個生成されました。意図しないループが発生していないか確認してください。"
                 f"（閾値: {threshold}）"
             ),
             "hookSpecificOutput": {
                 "hookEventName": "SubagentStop",
                 "additionalContext": (
-                    f"[rl-anything subagent-guard] 直近 {window_minutes} 分でこのセッションの"
+                    f"[evolve-anything subagent-guard] 直近 {window_minutes} 分でこのセッションの"
                     f" subagent が {count} 個生成され、閾値 {threshold} に達しました。"
                     "短時間に集中生成されているため subagent-guard.md に従い、"
                     "実行中の作業を一時停止し、意図しないループ/カスケード生成でないかを確認して、"
@@ -144,9 +144,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_subagent_stop(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:subagent_observe] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:subagent_observe] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:subagent_observe] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:subagent_observe] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -74,7 +74,7 @@ def _autopromote_lines() -> List[str]:
         f"うち idiom_dict 自動昇格は累計 {n} 件"
         + (f"（{listing}{more}）" if listing else "")
         + "。human-confirmed idiom に一致した新規シグナルを再確認なしで昇格"
-        + "（重み 1.0・ADR-047 安全弁②）。誤昇格は `rl-reflect --revoke-idiom <idiom_key>` で巻き戻せる。"
+        + "（重み 1.0・ADR-047 安全弁②）。誤昇格は `evolve-reflect --revoke-idiom <idiom_key>` で巻き戻せる。"
     )
     return [line]
 
@@ -130,7 +130,7 @@ def _backlog_lane_lines(current_slug: Optional[str]) -> List[str]:
     return [
         f"  ⚠ うち過去 backlog {remaining} 件は今日の修正確認 phase の上位提示から外れている"
         "（bootstrap 消化済み・daily は上位のみ提示）。"
-        " 全件は `/rl-anything:reflect --show-weak-signals --weak-channel llm_judge` で確認し"
+        " 全件は `/evolve-anything:reflect --show-weak-signals --weak-channel llm_judge` で確認し"
         " `--promote-weak <signal_key,...>` で昇格する。",
     ]
 
@@ -247,7 +247,7 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         if unread_llm_judge > 0:
             trailer.append(
                 f"  うち llm_judge {unread_llm_judge} 件は"
-                " `/rl-anything:evolve` の今日の修正確認 phase で昇格可能"
+                " `/evolve-anything:evolve` の今日の修正確認 phase で昇格可能"
                 "（既読済は再提示されない）。"
             )
             # #583: 「今日の修正確認 phase で昇格可能」の案内と実導線の食い違いを解消する。
@@ -264,7 +264,7 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         if unread_deterministic > 0:
             trailer.append(
                 f"  うち決定論チャネル {unread_deterministic} 件は"
-                " `/rl-anything:reflect --promote-weak` で昇格可能。"
+                " `/evolve-anything:reflect --promote-weak` で昇格可能。"
             )
 
     # 安全弁②（ADR-047）: idiom_dict 自動昇格を毎回 surface（黙って進まない）。

@@ -17,7 +17,7 @@ def find_project_skill_dirs(project_dir: Path) -> List[str]:
     """プロジェクト内の SKILL.md を持つスキルディレクトリ名を返す。
 
     通常レイアウト（`.claude/skills/`）と plugin レイアウト（リポジトリ直下 `skills/`）の
-    両方を走査する。後者は本リポジトリ自身（rl-anything）のような plugin リポジトリで、
+    両方を走査する。後者は本リポジトリ自身（evolve-anything）のような plugin リポジトリで、
     telemetry.utilization が恒久 0 になる根因だった（#423）。
 
     収集除外（#419: node_modules / dot-dir / アーカイブ・バックアップ）は
@@ -66,7 +66,7 @@ def find_artifacts(project_dir: Path) -> Dict[str, List[Path]]:
 
     # plugin_self skills (#185): リポジトリ自体がプラグイン本体
     # （`.claude-plugin/plugin.json` が存在）の場合のみ repo 直下 skills/ を追加スキャン。
-    # これにより rl-anything 本体スキルが skill_evolve / pitfall 剪定の対象になる。
+    # これにより evolve-anything 本体スキルが skill_evolve / pitfall 剪定の対象になる。
     # 通常 PJ（manifest 無し）では一切スキャンしないため挙動不変（回帰ゼロ）。
     if (project_dir / ".claude-plugin" / "plugin.json").exists():
         plugin_self_dir = project_dir / "skills"

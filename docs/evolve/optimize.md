@@ -5,7 +5,7 @@
 ## 既存機能（維持）
 
 - `/optimize <target>` — corrections/context ベースの直接パッチ最適化
-- `/rl-loop <target>` — ベースライン取得 → 直接パッチ → 評価 → 人間確認のループ
+- `/evolve-loop <target>` — ベースライン取得 → 直接パッチ → 評価 → 人間確認のループ
 - `/generate-fitness` — プロジェクト固有の評価関数を自動生成
 
 ## 2つのモード
@@ -50,7 +50,7 @@ corrections.jsonl に記録されたフィードバックを LLM パッチプロ
 
 ## クロスラン集計（aggregate-runs）
 
-複数の optimize / rl-loop ラン間で傾向を集計するスクリプト。
+複数の optimize / evolve-loop ラン間で傾向を集計するスクリプト。
 
 ```bash
 python3 skills/audit/scripts/aggregate_runs.py --dir <results_dir>

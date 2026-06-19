@@ -24,7 +24,7 @@
 - [x] 3.3 reflect_utils.py のユニットテスト: find_claude_files の8層パス探索（CLAUDE.local.md 含む）、suggest_claude_file のルーティング判定、frontmatter パース、suggest_auto_memory_topic のトピック分類、read_auto_memory の読み込み
 - [x] 3.4 semantic_detector.py のユニットテスト: JSON 抽出、レスポンス正規化、タイムアウトフォールバック、JSON パース失敗フォールバック、バッチサイズ分割（20件超）（claude -p のモック）
 
-## 4. /rl-anything:reflect スキル
+## 4. /evolve-anything:reflect スキル
 
 - [x] 4.1 `skills/reflect/scripts/reflect.py` を作成: pending corrections 抽出、プロジェクトフィルタリング、重複検出、ルーティング提案、JSON 出力
 - [x] 4.2 `skills/reflect/SKILL.md` を作成: reflect.py 実行 → 対話レビュー（AskUserQuestion で approve/edit/skip/skip-remaining）→ Edit ツールで書込 → reflect_status 更新。3件目以降は「残り全部 skip」選択肢を追加。昇格候補は corrections レビュー完了後に別セクション表示

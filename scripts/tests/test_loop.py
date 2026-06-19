@@ -8,7 +8,7 @@ _LIB_DIR = _SCRIPTS_DIR / "lib"
 _LOOP_SCRIPTS_DIR = (
     Path(__file__).resolve().parent.parent.parent
     / "skills"
-    / "rl-loop-orchestrator"
+    / "evolve-loop-orchestrator"
     / "scripts"
 )
 for _p in [str(_SCRIPTS_DIR), str(_LIB_DIR), str(_LOOP_SCRIPTS_DIR)]:

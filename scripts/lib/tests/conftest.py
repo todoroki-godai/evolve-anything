@@ -53,7 +53,7 @@ def _isolate_home_default(request, tmp_path_factory, monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolate_evolve_marker(request, tmp_path, monkeypatch):
     """emit_decisions(#402) は dry-run でも MARKER_ROOT にマーカーを書く。MARKER_ROOT は
-    env 非依存の実 home 固定（~/.claude/rl-anything/evolve_pending）なので、隔離しないと
+    env 非依存の実 home 固定（~/.claude/evolve-anything/evolve_pending）なので、隔離しないと
     全テストが実 home を汚す（verify-side-effects）。temp へ向けて構造的に封じる。
     個別テストが MARKER_ROOT を明示 setattr する場合はそちらが後勝ちで上書きする。
     `@pytest.mark.real_marker_root` を付けたテストは隔離せず実定義を検証する。"""

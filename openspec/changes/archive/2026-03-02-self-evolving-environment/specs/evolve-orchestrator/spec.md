@@ -1,10 +1,10 @@
 ## ADDED Requirements
 
-### Requirement: /rl-anything:evolve スキルで全フェーズをワンコマンド実行しなければならない（MUST）
+### Requirement: /evolve-anything:evolve スキルで全フェーズをワンコマンド実行しなければならない（MUST）
 Observe データ確認 → Discover → Optimize → Prune → Report の全フェーズを1つのコマンドで実行しなければならない（MUST）。
 
 #### Scenario: 通常実行
-- **WHEN** ユーザーが `/rl-anything:evolve` を実行する
+- **WHEN** ユーザーが `/evolve-anything:evolve` を実行する
 - **THEN** 各フェーズが順次実行され、最終レポートが表示される
 
 #### Scenario: 観測データ不足時の自動スキップ
@@ -15,7 +15,7 @@ Observe データ確認 → Discover → Optimize → Prune → Report の全フ
 レポートのみ出力し、変更は一切行わないモードを提供しなければならない（MUST）。
 
 #### Scenario: dry-run 実行
-- **WHEN** ユーザーが `/rl-anything:evolve --dry-run` を実行する
+- **WHEN** ユーザーが `/evolve-anything:evolve --dry-run` を実行する
 - **THEN** 各フェーズの結果がレポートとして表示されるが、ファイルへの変更は行われない
 
 ### Requirement: 日次実行を想定した設計にしなければならない（MUST）

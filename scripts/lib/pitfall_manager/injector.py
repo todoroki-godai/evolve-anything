@@ -22,12 +22,12 @@ try:
     _sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
     from rl_common import DATA_DIR
 except ImportError:
-    DATA_DIR = Path.home() / ".claude" / "rl-anything"  # type: ignore[assignment]
+    DATA_DIR = Path.home() / ".claude" / "evolve-anything"  # type: ignore[assignment]
 
 
 def _injected_path(session_id: str) -> Path:
     tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return Path(tmpdir) / f"rl-anything-injected-{session_id}.json"
+    return Path(tmpdir) / f"evolve-anything-injected-{session_id}.json"
 
 
 def count_recent_errors(session_id: str, tail_lines: int = 200) -> int:

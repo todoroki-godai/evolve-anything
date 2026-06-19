@@ -2,9 +2,9 @@
 """自律進化ループランナー
 
 1ループの流れ:
-1. ベースラインスコア取得（rl-scorer）
+1. ベースラインスコア取得（evolve-scorer）
 2. バリエーション生成（genetic-prompt-optimizer）
-3. 各バリエーション評価（rl-scorer）
+3. 各バリエーション評価（evolve-scorer）
 4. 最良バリエーション選択
 5. 人間確認（--auto でスキップ可）
 6. 承認されたら対象スキルに反映
@@ -49,8 +49,8 @@ OPTIMIZER_SCRIPT = (
     / "scripts"
     / "optimize.py"
 )
-DEFAULT_OUTPUT_DIR = Path.cwd() / ".rl-loop"
-MAX_KEPT_RUNS = 10  # rl-loop 結果の保持数
+DEFAULT_OUTPUT_DIR = Path.cwd() / ".evolve-loop"
+MAX_KEPT_RUNS = 10  # evolve-loop 結果の保持数
 SCORE_EPSILON = 0.05  # 採点ノイズ実測値（2σ ≈ 0.05）に基づく IMPROVED/REGRESSED 判定閾値
 # SkillOpt 近似 (#305): evolve-search の多世代探索パラメータ。
 # subgoal fitness を勾配代理として最大 EVOLVE_SEARCH_GENERATIONS 世代まわす。
@@ -540,7 +540,7 @@ def run_loop(
     out_dir = _get_output_dir(output_dir)
     run_dir = out_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    # ADR-031: accept/reject 履歴は out_dir(.rl-loop) から store に集約（split-brain 解消）。
+    # ADR-031: accept/reject 履歴は out_dir(.evolve-loop) から store に集約（split-brain 解消）。
     # out_dir/run_dir は run 成果物用に維持。
     import optimize_history_store as _history_store
     _history_slug = _history_store.resolve_slug()
@@ -777,7 +777,7 @@ def main():
     parser.add_argument("--population", type=int, default=3, help="バリエーション数")
     parser.add_argument("--auto", action="store_true", help="自動承認モード")
     parser.add_argument("--dry-run", action="store_true", help="構造テスト")
-    parser.add_argument("--output-dir", help="出力ディレクトリ（デフォルト: .rl-loop/）")
+    parser.add_argument("--output-dir", help="出力ディレクトリ（デフォルト: .evolve-loop/）")
     parser.add_argument("--evolve", action="store_true", help="自己進化パターン組み込みを有効化")
     parser.add_argument("--evolve-search", action="store_true", help="BES 前向き進化探索を有効化 (#256)")
 

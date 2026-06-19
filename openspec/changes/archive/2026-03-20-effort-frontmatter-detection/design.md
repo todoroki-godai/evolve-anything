@@ -1,6 +1,6 @@
 ## Context
 
-CC v2.1.80 で SKILL.md frontmatter に `effort: low|medium|high` を記述するとスキル呼び出し時の effort level を自動設定できる。rl-anything プラグインは自身の15スキルに effort を設定済みだが、ユーザー環境のプロジェクトスキルには未設定のものが多い。既存の audit → evolve → remediation パイプラインに検出・推定・提案を統合する。
+CC v2.1.80 で SKILL.md frontmatter に `effort: low|medium|high` を記述するとスキル呼び出し時の effort level を自動設定できる。evolve-anything プラグインは自身の15スキルに effort を設定済みだが、ユーザー環境のプロジェクトスキルには未設定のものが多い。既存の audit → evolve → remediation パイプラインに検出・推定・提案を統合する。
 
 ## Goals / Non-Goals
 

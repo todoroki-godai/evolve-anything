@@ -1,4 +1,4 @@
-"""rl-anything userConfig (CC v2.1.83 manifest.userConfig) ユーティリティ。
+"""evolve-anything userConfig (CC v2.1.83 manifest.userConfig) ユーティリティ。
 
 USER_CONFIG_DEFAULTS / load_user_config / is_user_config_explicit / _parse_bool
 を提供する。DATA_DIR 等のディレクトリ系は ``rl_common.__init__`` に残置
@@ -20,8 +20,8 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # cleanup スキル: 一時ディレクトリ削除候補の prefix (カンマ区切り)。
     # manifest.userConfig は boolean/number/string のみサポートのため string で
     # 受け取り、scripts/lib/cleanup_scanner.parse_prefix_config で list 化する。
-    # 安全側デフォルト: rl-anything 名前空間のみ (ADR-021)。
-    "cleanup_tmp_prefixes": "rl-anything-",
+    # 安全側デフォルト: evolve-anything 名前空間のみ (ADR-021)。
+    "cleanup_tmp_prefixes": "evolve-anything-",
     # (#422 で tool_duration hook を削除したため現在は未使用) Bash コマンドのスロー判定
     # 閾値 (ミリ秒)。userConfig 項目数（manifest 18 項目）を保つため key は維持。再利用時に流用可。
     "slow_threshold_ms": 1000,

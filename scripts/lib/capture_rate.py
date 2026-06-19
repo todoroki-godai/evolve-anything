@@ -137,7 +137,7 @@ def _normalize_pj(value: Optional[str]) -> Optional[str]:
 
     既存の共有関数 ``utterance_archive.extractor.pj_slug_from_cwd`` に寄せる
     （新しい比較方式を発明しない。slug 1関数化 #492 にそのまま乗る）。
-    ``/x/rl-anything/.claude/worktrees/feedback`` を本体 repo 名 ``rl-anything`` へ
+    ``/x/evolve-anything/.claude/worktrees/feedback`` を本体 repo 名 ``evolve-anything`` へ
     正規化し、本体⇔worktree 間の取りこぼし（undercount）を防ぐ。
     import 不能環境では basename フォールバック。
     """

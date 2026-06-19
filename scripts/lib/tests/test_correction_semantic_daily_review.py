@@ -28,7 +28,7 @@ from correction_semantic.store import CorrectionIdiom, append_idioms  # noqa: E4
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
 
 
-def _sig(text: str, line_no: int, pj_slug: str = "rl-anything", **prov_extra) -> WeakSignal:
+def _sig(text: str, line_no: int, pj_slug: str = "evolve-anything", **prov_extra) -> WeakSignal:
     prov = {"source_path": "/a.jsonl", "line_no": line_no, "text": text, "reason": "r"}
     prov.update(prov_extra)
     return WeakSignal(
@@ -54,7 +54,7 @@ def test_seen_keys_empty_when_no_file(tmp_path: Path):
 def test_record_reviewed_appends_and_reads_back(tmp_path: Path):
     seen = _seen(tmp_path)
     res = dr.record_reviewed(
-        ["k1", "k2"], "rl-anything", decision="promoted", path=seen
+        ["k1", "k2"], "evolve-anything", decision="promoted", path=seen
     )
     assert res["written"] == 2
     assert res["dry_run"] is False
@@ -65,7 +65,7 @@ def test_record_reviewed_dry_run_no_write(tmp_path: Path):
     # 最下層まで dry-run ゲートを貫通（pitfall_dryrun_stateful_store_write）
     seen = _seen(tmp_path)
     res = dr.record_reviewed(
-        ["k1"], "rl-anything", decision="rejected", path=seen, dry_run=True
+        ["k1"], "evolve-anything", decision="rejected", path=seen, dry_run=True
     )
     assert res["dry_run"] is True
     assert not seen.exists()
@@ -74,8 +74,8 @@ def test_record_reviewed_dry_run_no_write(tmp_path: Path):
 def test_record_reviewed_dedup_is_idempotent(tmp_path: Path):
     # 既読集合の重複追記が read 側 set 化で無害（冪等性）
     seen = _seen(tmp_path)
-    dr.record_reviewed(["k1"], "rl-anything", decision="rejected", path=seen)
-    dr.record_reviewed(["k1"], "rl-anything", decision="rejected", path=seen)
+    dr.record_reviewed(["k1"], "evolve-anything", decision="rejected", path=seen)
+    dr.record_reviewed(["k1"], "evolve-anything", decision="rejected", path=seen)
     assert dr.read_reviewed_keys(path=seen) == {"k1"}
 
 
@@ -85,7 +85,7 @@ def test_record_reviewed_dedup_is_idempotent(tmp_path: Path):
 def test_build_review_eligible_false_when_no_signals(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
     )
     assert res["eligible"] is False
     assert res["groups"] == []
@@ -97,7 +97,7 @@ def test_build_review_eligible_true_with_new_signals(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
     )
     assert res["eligible"] is True
     assert len(res["groups"]) == 1
@@ -116,12 +116,12 @@ def test_build_review_excludes_seen_keys(tmp_path: Path):
     append_signals([_sig("金額がきれてる", 1)], path=ws)
     # その 1 件を既読化（rejected）→ 再提示されない
     recs = dr._read_new(  # 内部ヘルパで signal_key を取得
-        "rl-anything", weak_signals_path=ws, seen_keys=set()
+        "evolve-anything", weak_signals_path=ws, seen_keys=set()
     )
     key = recs[0]["signal_key"]
-    dr.record_reviewed([key], "rl-anything", decision="rejected", path=seen)
+    dr.record_reviewed([key], "evolve-anything", decision="rejected", path=seen)
 
-    res = dr.build_review("rl-anything", weak_signals_path=ws, seen_path=seen)
+    res = dr.build_review("evolve-anything", weak_signals_path=ws, seen_path=seen)
     assert res["eligible"] is False
     assert res["groups"] == []
 
@@ -129,8 +129,8 @@ def test_build_review_excludes_seen_keys(tmp_path: Path):
 def test_build_review_reviewed_keys_count(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     seen = _seen(tmp_path)
-    dr.record_reviewed(["x1", "x2"], "rl-anything", decision="promoted", path=seen)
-    res = dr.build_review("rl-anything", weak_signals_path=ws, seen_path=seen)
+    dr.record_reviewed(["x1", "x2"], "evolve-anything", decision="promoted", path=seen)
+    res = dr.build_review("evolve-anything", weak_signals_path=ws, seen_path=seen)
     assert res["reviewed_keys_count"] == 2
 
 
@@ -141,15 +141,15 @@ def test_build_review_scopes_to_pj_slug(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     append_signals(
         [
-            _sig("金額がきれてる", 1, pj_slug="rl-anything"),
+            _sig("金額がきれてる", 1, pj_slug="evolve-anything"),
             _sig("別件です", 2, pj_slug="figma-to-code"),
         ],
         path=ws,
     )
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
     )
-    # rl-anything の 1 idiom のみ
+    # evolve-anything の 1 idiom のみ
     total = sum(len(g["signal_keys"]) for g in res["groups"])
     assert total == 1
 
@@ -163,7 +163,7 @@ def test_build_review_excludes_promoted_and_expired(tmp_path: Path):
     expired.expired = True
     append_signals([fresh, promoted, expired], path=ws)
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
     )
     total = sum(len(g["signal_keys"]) for g in res["groups"])
     assert total == 1
@@ -172,10 +172,10 @@ def test_build_review_excludes_promoted_and_expired(tmp_path: Path):
 def test_build_review_only_llm_judge_channel(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)
-    other = WeakSignal("rephrase", {"text": "別チャネル"}, "t", "s", "rl-anything")
+    other = WeakSignal("rephrase", {"text": "別チャネル"}, "t", "s", "evolve-anything")
     append_signals([other], path=ws)
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
     )
     total = sum(len(g["signal_keys"]) for g in res["groups"])
     assert total == 1
@@ -197,7 +197,7 @@ def test_build_review_orders_by_frequency_and_caps(tmp_path: Path):
         path=ws,
     )
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path), max_groups=1
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path), max_groups=1
     )
     assert len(res["groups"]) == 1
     # max_groups=1 で切ったので残り 1 group は remaining
@@ -219,13 +219,13 @@ def test_build_review_uses_idiom_dict_representative(tmp_path: Path):
                 idiom="金額表示の見切れ",
                 provenance={"source_path": "/a.jsonl", "line_no": 1},
                 detected_at="2026-06-10T00:00:00+00:00",
-                pj_slug="rl-anything",
+                pj_slug="evolve-anything",
             )
         ],
         path=idioms,
     )
     res = dr.build_review(
-        "rl-anything",
+        "evolve-anything",
         weak_signals_path=ws,
         idioms_path=idioms,
         seen_path=_seen(tmp_path),
@@ -242,7 +242,7 @@ def test_build_review_strips_assistant_quote_from_representative(tmp_path: Path)
     append_signals(
         [_sig("やっぱり、高だけにして\n> ℹ️ データ蓄積待ち（PJ≥2）", 1)], path=ws
     )
-    res = dr.build_review("rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
+    res = dr.build_review("evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
     g = res["groups"][0]
     assert g["representative"] == "やっぱり、高だけにして"
     assert g["evidence"]["text"] == "やっぱり、高だけにして"
@@ -255,7 +255,7 @@ def test_build_review_evidence_has_prev_action(tmp_path: Path):
         [_sig("やっぱり、高だけにして", 1, prev_action="Edit model-routing.md (effort 設定)")],
         path=ws,
     )
-    res = dr.build_review("rl-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
+    res = dr.build_review("evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
     assert res["groups"][0]["evidence"]["prev_action"] == "Edit model-routing.md (effort 設定)"
 
 
@@ -269,12 +269,12 @@ def test_build_review_confirmable_idiom_eligible(tmp_path: Path):
             idiom="金額表示の見切れを直して",  # eligible
             provenance={"source_path": "/a.jsonl", "line_no": 1},
             detected_at="2026-06-10T00:00:00+00:00",
-            pj_slug="rl-anything",
+            pj_slug="evolve-anything",
         )],
         path=idioms,
     )
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, idioms_path=idioms, seen_path=_seen(tmp_path)
+        "evolve-anything", weak_signals_path=ws, idioms_path=idioms, seen_path=_seen(tmp_path)
     )
     assert res["groups"][0]["confirmable_idiom"] == "金額表示の見切れを直して"
 
@@ -289,12 +289,12 @@ def test_build_review_confirmable_idiom_none_for_overbroad(tmp_path: Path):
             idiom="気がする",  # too_short → confirmable にしない
             provenance={"source_path": "/a.jsonl", "line_no": 1},
             detected_at="2026-06-10T00:00:00+00:00",
-            pj_slug="rl-anything",
+            pj_slug="evolve-anything",
         )],
         path=idioms,
     )
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, idioms_path=idioms, seen_path=_seen(tmp_path)
+        "evolve-anything", weak_signals_path=ws, idioms_path=idioms, seen_path=_seen(tmp_path)
     )
     assert res["groups"][0]["confirmable_idiom"] is None
 
@@ -307,7 +307,7 @@ def test_build_review_dry_run_no_write(tmp_path: Path):
     seen = _seen(tmp_path)
     append_signals([_sig("金額がきれてる", 1)], path=ws)
     res = dr.build_review(
-        "rl-anything", weak_signals_path=ws, seen_path=seen, dry_run=True
+        "evolve-anything", weak_signals_path=ws, seen_path=seen, dry_run=True
     )
     assert res["dry_run"] is True
     # build は読み取りのみ。既読集合に一切書かない（追記は apply 時のみ）。
@@ -322,12 +322,12 @@ def test_build_review_excludes_bootstrap_pending_keys(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     seen = _seen(tmp_path)
     append_signals([_sig("金額がきれてる", 1)], path=ws)
-    recs = dr._read_new("rl-anything", weak_signals_path=ws, seen_keys=set())
+    recs = dr._read_new("evolve-anything", weak_signals_path=ws, seen_keys=set())
     key = recs[0]["signal_key"]
 
     # bootstrap が当該 signal_key を保持している → daily からは除外される
     res = dr.build_review(
-        "rl-anything",
+        "evolve-anything",
         weak_signals_path=ws,
         seen_path=seen,
         exclude_signal_keys={key},
@@ -342,7 +342,7 @@ def test_build_review_no_exclusion_when_set_empty(tmp_path: Path):
     seen = _seen(tmp_path)
     append_signals([_sig("金額がきれてる", 1)], path=ws)
     res = dr.build_review(
-        "rl-anything",
+        "evolve-anything",
         weak_signals_path=ws,
         seen_path=seen,
         exclude_signal_keys=set(),

@@ -11,7 +11,7 @@ env_score が全 PJ で 0.6 前後・Lv.6-7 に頭打ち。実測で構造要因
 
 1. **utilization=0.0 が構造的**: `scripts/rl/fitness/telemetry.py` の `_find_all_skills` は
    `project_dir/.claude/skills/` のみ走査していた。plugin レイアウト（リポジトリ直下
-   `skills/`）の rl-anything 本体では 0 件 → telemetry の重み 25% が死に枠。本リポジトリ実測で
+   `skills/`）の evolve-anything 本体では 0 件 → telemetry の重み 25% が死に枠。本リポジトリ実測で
    skills 検出 0 → utilization 0.0 を確認。
 2. **スコアの大半が「構造の綺麗さ」**: coherence / constitutional は入力 proxy であり、
    「環境が良くなればユーザーの手戻りが減る」という目的変数を直接測る軸が無い。

@@ -80,7 +80,7 @@ def _collect_single(
 def _find_duplicate_basenames(projects: list[Path]) -> set[str]:
     """同一 basename を持つ PJ を検出し、重複 basename 集合を返す。
 
-    rl-audit の growth-state cache (`growth-state-<basename>.json`) は basename 単位で
+    evolve-audit の growth-state cache (`growth-state-<basename>.json`) は basename 単位で
     命名されるため、同じ basename の PJ が複数あると cache が衝突し fleet は誤った
     score を表示する。Phase 1 では該当 PJ を AUDIT_ERROR として surface する。
     Phase 3 の per-PJ CLAUDE_PLUGIN_DATA 分離で根本解決予定。

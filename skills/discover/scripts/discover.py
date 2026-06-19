@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CLI エントリポイント shim — 実装は scripts/lib/discover/ パッケージに移設。
-bin/rl-discover が整備されたら SKILL.md から直接呼ばれなくなる。
+bin/evolve-discover が整備されたら SKILL.md から直接呼ばれなくなる。
 
 shim 自身がファイル名 `discover.py` のため、ナイーブに `import discover` すると
 sys.path 先頭に shim 自身のディレクトリが載った場合に自分自身を再帰 import して

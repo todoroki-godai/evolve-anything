@@ -23,9 +23,9 @@ Phase 0 ──▶ Phase 1 ──▶ Phase 2 ──▶ Phase 3
 | `scripts/rl/fitness/skill_quality.py` | Skill 構造スコア（7軸） | 0 |
 | `scripts/rl/fitness/plugin.py` | PJ固有キーワードスコア（4軸） | 0 |
 | `scripts/lib/telemetry_query.py` | usage/sessions/errors の SQL クエリ | 1 |
-| `~/.claude/rl-anything/usage.jsonl` | スキル呼び出し履歴（skill_name, project, timestamp） | 1 |
-| `~/.claude/rl-anything/sessions.jsonl` | セッション概要（skill_count, error_count） | 1 |
-| `~/.claude/rl-anything/workflows.jsonl` | ワークフロー（steps, intent_category） | 1 |
+| `~/.claude/evolve-anything/usage.jsonl` | スキル呼び出し履歴（skill_name, project, timestamp） | 1 |
+| `~/.claude/evolve-anything/sessions.jsonl` | セッション概要（skill_count, error_count） | 1 |
+| `~/.claude/evolve-anything/workflows.jsonl` | ワークフロー（steps, intent_category） | 1 |
 | `scripts/reflect_utils.py` | 8層メモリルーティング、find_claude_files() | 0, 1 |
 | `scripts/lib/hardcoded_detector.py` | ハードコード値検出 | 0 |
 | `scripts/lib/skill_triggers.py` | スキル名+トリガーワード抽出 | 0, 1 |

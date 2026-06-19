@@ -1,15 +1,15 @@
 ## Context
 
-rl-anything は Claude Code plugin として遺伝的アルゴリズムベースのスキル最適化を提供している。
-現状は `/optimize` と `/rl-loop` による既存スキルの改善のみ。
+evolve-anything は Claude Code plugin として遺伝的アルゴリズムベースのスキル最適化を提供している。
+現状は `/optimize` と `/evolve-loop` による既存スキルの改善のみ。
 
 環境全体（skills / rules / memory / CLAUDE.md）のライフサイクル管理がなく、
 スキルの発見・淘汰・肥大化制御・フィードバック収集は手動に頼っている。
 
 既存コンポーネント:
 - `genetic-prompt-optimizer` — LLM でバリエーションを生成し、適応度関数で評価して進化
-- `rl-loop-orchestrator` — ベースライン取得→バリエーション生成→評価→人間確認のループ統合
-- `rl-scorer` エージェント — 技術品質 + ドメイン品質 + 構造品質の3軸で採点
+- `evolve-loop-orchestrator` — ベースライン取得→バリエーション生成→評価→人間確認のループ統合
+- `evolve-scorer` エージェント — 技術品質 + ドメイン品質 + 構造品質の3軸で採点
 - `generate-fitness` — プロジェクト分析から評価関数を自動生成
 
 ## Goals / Non-Goals
@@ -51,7 +51,7 @@ regex + 集計のみ実行。LLM 呼び出しなし。
 
 ### 3. 淘汰はアーカイブ方式（削除しない）
 
-**選択**: `.claude/rl-anything/archive/` に退避。復元コマンドあり。30日ルール。
+**選択**: `.claude/evolve-anything/archive/` に退避。復元コマンドあり。30日ルール。
 
 **代替案**: 直接削除 → 誤判断時の回復コストが高い
 **根拠**: 全成熟ツール（claude-reflect、32世代実験）のコンセンサス。

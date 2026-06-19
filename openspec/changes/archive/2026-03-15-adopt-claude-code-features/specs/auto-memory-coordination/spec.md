@@ -22,4 +22,4 @@ CLAUDE.md に auto-memory との棲み分けガイドを記載しなければな
 
 #### Scenario: guide content
 - **WHEN** ユーザーが CLAUDE.md を参照する
-- **THEN** auto-memory と rl-anything memory の役割分担が明記されている（auto-memory: 一般的なユーザー学習、rl-anything reflect: correction ベースの構造化ルーティング）
+- **THEN** auto-memory と evolve-anything memory の役割分担が明記されている（auto-memory: 一般的なユーザー学習、evolve-anything reflect: correction ベースの構造化ルーティング）

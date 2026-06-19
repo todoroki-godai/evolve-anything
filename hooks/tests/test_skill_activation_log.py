@@ -18,7 +18,7 @@ import skill_activation_log
 
 @pytest.fixture
 def tmp_data_dir(tmp_path):
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     return data_dir
 
@@ -36,7 +36,7 @@ class TestSkillActivationLog:
         tmp_path, tmp_data_dir = patch_env
         event = {
             "tool_name": "Skill",
-            "tool_input": {"skill": "rl-anything:audit"},
+            "tool_input": {"skill": "evolve-anything:audit"},
             "session_id": "sess-sal-001",
         }
         skill_activation_log.handle_post_tool_use(event)
@@ -44,7 +44,7 @@ class TestSkillActivationLog:
         out_file = tmp_data_dir / "skill_activations.jsonl"
         assert out_file.exists()
         rec = json.loads(out_file.read_text().strip())
-        assert rec["skill"] == "rl-anything:audit"
+        assert rec["skill"] == "evolve-anything:audit"
         assert rec["session_id"] == "sess-sal-001"
         assert "ts" in rec
         assert rec["project"] == "test"
@@ -53,18 +53,18 @@ class TestSkillActivationLog:
         tmp_path, tmp_data_dir = patch_env
         # Write context file with invocation_trigger
         ctx = {
-            "skill_name": "rl-anything:audit",
+            "skill_name": "evolve-anything:audit",
             "session_id": "sess-sal-002",
             "workflow_id": "wf-abc12345",
             "started_at": "2026-05-06T00:00:00+00:00",
             "invocation_trigger": "nested-skill",
         }
-        ctx_path = tmp_path / "rl-anything-workflow-sess-sal-002.json"
+        ctx_path = tmp_path / "evolve-anything-workflow-sess-sal-002.json"
         ctx_path.write_text(json.dumps(ctx))
 
         event = {
             "tool_name": "Skill",
-            "tool_input": {"skill": "rl-anything:audit"},
+            "tool_input": {"skill": "evolve-anything:audit"},
             "session_id": "sess-sal-002",
         }
         skill_activation_log.handle_post_tool_use(event)
@@ -78,7 +78,7 @@ class TestSkillActivationLog:
         tmp_path, tmp_data_dir = patch_env
         event = {
             "tool_name": "Skill",
-            "tool_input": {"skill": "rl-anything:reflect"},
+            "tool_input": {"skill": "evolve-anything:reflect"},
             "session_id": "sess-sal-003",
         }
         skill_activation_log.handle_post_tool_use(event)
@@ -101,7 +101,7 @@ class TestSkillActivationLog:
         tmp_path, tmp_data_dir = patch_env
         event = {
             "tool_name": "Skill",
-            "tool_input": {"skill": "rl-anything:audit"},
+            "tool_input": {"skill": "evolve-anything:audit"},
             "session_id": "",
         }
         skill_activation_log.handle_post_tool_use(event)

@@ -132,7 +132,7 @@ def _evaluate_self_evolution(state: dict[str, Any] | None = None) -> TriggerResu
     result = TriggerResult(
         triggered=True,
         reason="self_evolution",
-        action="/rl-anything:evolve",
+        action="/evolve-anything:evolve",
         message=f"False positive 蓄積検出: {', '.join(triggered_types)}。self-evolution を推奨。",
         details={"triggered_types": triggered_types},
     )
@@ -199,7 +199,7 @@ def _evaluate_approval_rate_decline(state: dict[str, Any] | None = None) -> Trig
     result = TriggerResult(
         triggered=True,
         reason="approval_rate_decline",
-        action="/rl-anything:evolve",
+        action="/evolve-anything:evolve",
         message=(
             f"承認率低下検出: {previous_rate:.0%} → {recent_rate:.0%} "
             f"(Δ{decline:.0%})。self-evolution を推奨。"

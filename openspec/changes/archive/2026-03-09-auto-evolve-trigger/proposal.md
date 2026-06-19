@@ -8,7 +8,7 @@
 - **Corrections 蓄積閾値トリガー**: `correction_detect.py` (PostToolUse hook) で corrections 件数を監視し、閾値到達時に関連スキルの再最適化を提案
 - **Session-end 評価での audit 統合**: セッション終了時に前回 audit からの経過日数を評価し、30日超の場合は audit 実行を提案（定期 cron の代替）
 - **evolve 実行条件エンジン**: 複数のトリガー条件（セッション数、corrections 数、前回実行からの経過日数、audit 経過日数）を統合評価する共通モジュール
-- **ユーザー設定**: トリガーの有効/無効、閾値のカスタマイズを `~/.claude/rl-anything/evolve-state.json` の `trigger_config` キーで管理
+- **ユーザー設定**: トリガーの有効/無効、閾値のカスタマイズを `~/.claude/evolve-anything/evolve-state.json` の `trigger_config` キーで管理
 
 **NOTE**: 全トリガーは「提案」のみで自動実行はしない（Graduated Autonomy は Phase 5 で対応）。
 
@@ -29,5 +29,5 @@
 - **hooks/restore_state.py**: SessionStart hook に `pending-trigger.json` 読取 + stdout 出力 + 削除ロジックを追加
 - **hooks/correction_detect.py**: PostToolUse hook に蓄積閾値チェックを追加
 - **scripts/lib/trigger_engine.py**: 新規共通モジュール（条件評価 + クールダウン + 設定管理）
-- **~/.claude/rl-anything/evolve-state.json**: 既存ファイルに `trigger_config` キー + `trigger_history` + `last_audit_timestamp` フィールドを追加
-- **~/.claude/rl-anything/pending-trigger.json**: Stop → SessionStart 間の遅延配信ファイル（ランタイム生成・配信後削除）
+- **~/.claude/evolve-anything/evolve-state.json**: 既存ファイルに `trigger_config` キー + `trigger_history` + `last_audit_timestamp` フィールドを追加
+- **~/.claude/evolve-anything/pending-trigger.json**: Stop → SessionStart 間の遅延配信ファイル（ランタイム生成・配信後削除）

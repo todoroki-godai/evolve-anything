@@ -176,7 +176,7 @@ def backfill(data_dir: Path, *, apply: bool = False) -> Dict[str, Any]:
     """全7ストアの project / project_path を worktree 安全 slug に遡及正規化する（#602）。
 
     Args:
-        data_dir: 対象ストアが置かれた DATA_DIR（テストは fixture dir、実運用は ~/.claude/rl-anything）。
+        data_dir: 対象ストアが置かれた DATA_DIR（テストは fixture dir、実運用は ~/.claude/evolve-anything）。
         apply:    True で実書込。False（既定）は dry-run（1バイトも書かない・予定件数のみ）。
 
     Returns:

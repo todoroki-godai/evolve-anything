@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 EVOLVE_STATE_FILE = DATA_DIR / "evolve-state.json"
 PENDING_TRIGGER_FILE = DATA_DIR / "pending-trigger.json"
 SNOOZE_FILE = DATA_DIR / "trigger-snooze.json"

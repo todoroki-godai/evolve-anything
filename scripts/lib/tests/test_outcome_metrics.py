@@ -341,24 +341,24 @@ class TestProjectScope:
         """worktree セッションの record（project_path に /.claude/worktrees/）が
         本体 repo の project_dir フィルタにマッチする（worktree slug pitfall, #489）。
 
-        worktree から書いた correction は project_path=/x/rl-anything/.claude/worktrees/feedback。
-        pj_slug_from_cwd で本体 repo 名 rl-anything に正規化され、当PJ=rl-anything に含まれる。
+        worktree から書いた correction は project_path=/x/evolve-anything/.claude/worktrees/feedback。
+        pj_slug_from_cwd で本体 repo 名 evolve-anything に正規化され、当PJ=evolve-anything に含まれる。
         """
         monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
         now = _now()
         ts = _iso(now)
         records = [
             {"correction_type": "iya", "session_id": "s1", "timestamp": ts,
-             "project_path": "/x/rl-anything"},
+             "project_path": "/x/evolve-anything"},
             # worktree セッション（basename だけ見ると "feedback" になり取りこぼす）
             {"correction_type": "iya", "session_id": "s2", "timestamp": ts,
-             "project_path": "/x/rl-anything/.claude/worktrees/feedback"},
+             "project_path": "/x/evolve-anything/.claude/worktrees/feedback"},
             {"correction_type": "iya", "session_id": "s9", "timestamp": ts,
              "project_path": "/x/other"},
         ]
         _write_jsonl(tmp_path / "corrections.jsonl", records)
-        project = outcome_metrics._normalize_pj("/somewhere/rl-anything")
-        assert project == "rl-anything"
+        project = outcome_metrics._normalize_pj("/somewhere/evolve-anything")
+        assert project == "evolve-anything"
         value, evidence = outcome_metrics.correction_recurrence_rate(days=30, project=project)
         # 本体 s1 + worktree s2 = 2 件（other は除外）
         assert evidence["records"] == 2
@@ -370,14 +370,14 @@ class TestProjectScope:
         ts = _iso(now)
         records = [
             {"session_id": "s1", "error_count": 0, "timestamp": ts, "first_timestamp": ts,
-             "project_path": "/x/rl-anything"},
+             "project_path": "/x/evolve-anything"},
             {"session_id": "s9", "error_count": 5, "timestamp": ts, "first_timestamp": ts,
              "project_path": "/x/other"},
         ]
         _write_jsonl(tmp_path / "sessions.jsonl", records)
         # worktree パスから audit しても本体 slug に正規化される
-        project = outcome_metrics._normalize_pj("/x/rl-anything/.claude/worktrees/feedback")
-        assert project == "rl-anything"
+        project = outcome_metrics._normalize_pj("/x/evolve-anything/.claude/worktrees/feedback")
+        assert project == "evolve-anything"
         value, evidence = outcome_metrics.first_try_success_rate(days=30, project=project)
         assert evidence["total_sessions"] == 1  # 本体 s1 のみ、other 除外
 

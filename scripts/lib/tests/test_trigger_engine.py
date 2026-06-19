@@ -134,7 +134,7 @@ class TestHistoryRecording:
     def test_record_trigger(self):
         state = {"trigger_history": []}
         result = TriggerResult(
-            triggered=True, reason="session_count", action="/rl-anything:evolve"
+            triggered=True, reason="session_count", action="/evolve-anything:evolve"
         )
         state = _record_trigger(state, result)
         assert len(state["trigger_history"]) == 1
@@ -297,7 +297,7 @@ class TestEvaluateCorrections:
 
         result = evaluate_corrections()
         assert result.triggered is True
-        assert result.action == "/rl-anything:evolve"
+        assert result.action == "/evolve-anything:evolve"
 
     def test_cooldown_blocks(self, data_dir):
         now = datetime.now(timezone.utc)
@@ -585,7 +585,7 @@ class TestPendingTrigger:
         result = TriggerResult(
             triggered=True,
             reason="session_count",
-            action="/rl-anything:evolve",
+            action="/evolve-anything:evolve",
             message="test message",
         )
         write_pending_trigger(result)
@@ -793,7 +793,7 @@ class TestEvaluateFileChanged:
         _write_state(data_dir, {})
         result = evaluate_file_changed("/project/CLAUDE.md")
         assert result.triggered is True
-        assert result.action == "/rl-anything:audit"
+        assert result.action == "/evolve-anything:audit"
         assert "claude_md" in result.reason
 
     def test_non_watched_file(self, data_dir):
@@ -809,7 +809,7 @@ class TestEvaluateFileChanged:
             "trigger_history": [
                 {
                     "reason": "file_changed:claude_md",
-                    "action": "/rl-anything:audit",
+                    "action": "/evolve-anything:audit",
                     "timestamp": now.isoformat(),
                 }
             ]

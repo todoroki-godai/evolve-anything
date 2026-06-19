@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rl-anything プロジェクト固有の fitness 関数
+"""evolve-anything プロジェクト固有の fitness 関数
 
 品質基準:
 - LLM呼び出しを最小化し、ルールベース処理を優先 (weight: 0.3)

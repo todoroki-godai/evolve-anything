@@ -117,7 +117,7 @@ def handle_pre_compact(event: dict) -> None:
             json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     except OSError as e:
-        print(f"[rl-anything:save_state] write failed: {e}", file=sys.stderr)
+        print(f"[evolve-anything:save_state] write failed: {e}", file=sys.stderr)
 
     # TTL cleanup
     common.cleanup_old_checkpoints()
@@ -131,9 +131,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_pre_compact(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:save_state] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:save_state] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:save_state] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:save_state] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

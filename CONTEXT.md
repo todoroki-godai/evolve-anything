@@ -1,4 +1,4 @@
-# rl-anything — Ubiquitous Language（用語集）
+# evolve-anything — Ubiquitous Language（用語集）
 
 このプロジェクト固有の jargon を 1 語で decode するための共有言語。
 AI も人も、ここの用語を使って会話・命名・記述する（Eric Evans, DDD）。
@@ -31,14 +31,14 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | calibration drift | fitness の score-acceptance 相関が閾値を割った状態。audit で可視化＋trigger で evolve-fitness を proactive 提案（変更は人間承認 MUST） | #286 |
 | component transfer | 更新コンポーネント（追加スキル）別に既存スキルの成功率 delta を isolation window で分離し「どの更新が回帰させたか」を帰属する negative transfer の ablation 版 | #288 |
 | eval saturation | forward-gen trigger eval が「緑でも頑健でない」飽和兆候（positive 偏重/易しい negative/クエリ過少）を eval 実行なし決定論で測る。TASTE 着想、calibration drift と同帯で surface | #292 |
-| self_analysis | evolve の result を読み 3 カテゴリ（提案矛盾/phase 例外/系統的却下）の issue 候補を生成する evolve メタ層の自己解析。`evolve_introspect` が決定論生成、Step 11 が人間承認後 todoroki-godai/rl-anything へ半自動起票 | #299 |
+| self_analysis | evolve の result を読み 3 カテゴリ（提案矛盾/phase 例外/系統的却下）の issue 候補を生成する evolve メタ層の自己解析。`evolve_introspect` が決定論生成、Step 11 が人間承認後 todoroki-godai/evolve-anything へ半自動起票 | #299 |
 | SkillPyramid | 同一クラスタの低レベル（小型）スキル群を上位スキルへ束ねる階層統合提案。reorganize が split/merge と別軸（低→上位）で検出し max_skill_count 張り付きを構造的に抑える。`hierarchy_candidates` で surface、適用は人間判断 | #303 |
 | hook_drift | 他ツール追従 hook（gstack flow 参照 hook 等）の陳腐化を決定論検出する `scripts/lib/hook_drift.py`。第一フェーズは stale_pin のみ | ADR-036 |
 | stale_pin | hook が参照する外部ツールの version pin（flow-chain.json の `gstack_version`）が実環境（.last-setup-version）から乖離した状態。表記ゆれが無く false positive しない drift 種 | ADR-036 |
 | ファイルベース2相 | claude -p を Python から追い出す3相分離。Phase A（決定論=リクエスト JSON 生成）→ Phase B（assistant がインライン採点/生成、subscription 課金）→ Phase C（決定論=応答パース・ゲート）。Bash 境界を JSON ファイルで越える | ADR-037 |
 | llm_broker | ファイルベース2相の共通基盤 `scripts/lib/llm_broker.py`。build_requests/parse_responses/parse_score/passthrough を提供、IO-free・LLM-free（mock 不要） | ADR-037 |
 | 編成ギャップ | エージェント *間* の関係（役割重複＝description の役割語 Jaccard / 孤立＝入次数 0 かつ出次数 0）を決定論検出。agent_quality（単体品質）と別軸。observability builder `agent_team` 経由で evolve のたびに surface、整理は人間判断 | #326 |
-| data-dir-unified marker | DATA_DIR 一元化済みを示す `~/.claude/rl-anything/.data-dir-unified`。存在時 hook 文脈の CLAUDE_PLUGIN_DATA（install レイアウト配下）も正準 dir に redirect され hook/tool 分裂が終息。`rl-fleet migrate-data` が全 entry マージ成功時に設置 | #364 |
+| data-dir-unified marker | DATA_DIR 一元化済みを示す `~/.claude/evolve-anything/.data-dir-unified`。存在時 hook 文脈の CLAUDE_PLUGIN_DATA（install レイアウト配下）も正準 dir に redirect され hook/tool 分裂が終息。`evolve-fleet migrate-data` が全 entry マージ成功時に設置 | #364 |
 | utterance archive | 全PJ human 発話の恒久 DuckDB ストア `utterances.db`。writer は batch ingest のみ（hot path ゼロ）。物理 PK `(source_path,line_no)` + 論理 UNIQUE `(session_id,timestamp,text_hash)` で resume 複製を弾く。pj_slug は transcript の `cwd` 由来（encoded dir 名のデコードは非可逆なので諦める）。query は pj_slug 必須・source_kind デフォルト `dialogue` のみ | #430 |
 | weak signals（弱シグナル） | 暗黙修正シグナルの決定論検出レーン `weak_signals.jsonl`。4 チャネル（直後手編集 / permission deny / 言い直し / Esc 中断）をゼロ LLM・バッチ側で検出。corrections 本流に直接入れず（ノイジー）昇格は reflect 確認後（`promoted` フラグ）。言い直し閾値は jaccard 0.8（実コーパス dry-run で決定）。FP は「機構生成テンプレ」という除外理由で直交分離 | #432 |
 | writer_locus | store_registry のストア宣言フィールド。書き込み主体が `hook`（hooks.json 登録 hook の append）か `batch`（evolve/audit 等の script）か。`batch` は hook-writer 突合に出ないため stale 突合の対象外（db kind と同じ扱い） | #432 |
@@ -49,16 +49,16 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | bootstrap backlog | 初回 evolve で既存 weak_signals バックログの消化方式を人間が3択（まとめて確認/日次5件/TTL 失効に任せる）で選ぶ phase。marker `bootstrap_done-<slug>.marker` で1回きり | #443 |
 | 今日の修正確認（daily review） | evolve の決定論 phase。新規 weak_signal を idiom 単位 group 化し最大5件を y/n 確認 → promote 成功後のみ既読追記（`correction_review_seen.jsonl`）。reflect Step 7.7 の移植 | #446 |
 | idiom_autopromote（自動昇格） | confirmed idiom と同テキスト（pj_slug × idiom テキスト単位で照合）の再発 weak_signal を人間確認なしで corrections へ機械昇格。`source=idiom_dict` は HUMAN_SOURCES（根拠は人間の confirm）。安全弁: daily_cap / observability 常時 surface / revoke | #447, ADR-047 |
-| revoke（自動昇格の巻き戻し） | `rl-reflect --revoke-idiom <idiom_key>`。idiom を confirmed=False に戻し（同テキスト全 record）、由来 corrections を `invalidated=True` に原子的 rewrite。invalidated は count_human_corrections から除外＝フェーズ進捗が巻き戻る | #447 |
+| revoke（自動昇格の巻き戻し） | `evolve-reflect --revoke-idiom <idiom_key>`。idiom を confirmed=False に戻し（同テキスト全 record）、由来 corrections を `invalidated=True` に原子的 rewrite。invalidated は count_human_corrections から除外＝フェーズ進捗が巻き戻る | #447 |
 | measurement_bug（同値一致検査） | 複数 PJ（≥3）で非自明な集計値（0/None 除外）が bit-exact 一致したら測定バグ候補として advisory surface。「全 PJ 同値カウント＝測定バグ強シグナル」の自動化 | #445 |
 | growth_report（成長レポート） | evolve レポート末尾の決定論表示「あと N 件で次フェーズ」「今日の昇格成果」。閾値は growth_engine の 6 定数が単一ソース | #448 |
-| confirm 配線 | `rl-reflect --promote-weak` が promote 成功後に対応 idiom を confirmed 化する正準経路。signal→idiom は provenance 物理キー（pj_slug, source_path, line_no）で突合 | #463 |
+| confirm 配線 | `evolve-reflect --promote-weak` が promote 成功後に対応 idiom を confirmed 化する正準経路。signal→idiom は provenance 物理キー（pj_slug, source_path, line_no）で突合 | #463 |
 | 過汎用 idiom FP guard（idiom_eligible） | confirmed→idiom_autopromote の FP 製造を遮断する 3 ゲート（最小長 floor 8 / 日常語 stopword / 文脈固有トークン）を 1 関数に集約。「いやいや」「気がする」等の極短・相槌・日付断片を弾く | #527 |
 | confirmable_idiom | bootstrap/daily の確認 group に emit される「はい確定で confirmed=standing auto-promote rule になる idiom テキスト」。eligible 時のみ非 None（過汎用は None＝今回限りの昇格）。AskUserQuestion の判断材料 | #527-4 |
 | 重み昇格レディネス（promotion readiness） | outcome 3軸を fitness 重みへ繰り入れてよいかの3条件決定論判定（分散 / 件数下限 / 方向妥当性）。全 ✓ で「重み昇格を提案」を advisory surface | #461, ADR-046 |
 | cross_pj_confirmed | 他 PJ で confirm 済みの同テキスト idiom を持つ確認 group に付くラベル（slug 一覧）。先頭提示の判断材料であり自動承認はしない | #462 |
 | union read | DuckDB ストア（read_only）+ 未 ingest live jsonl を dedup 合算して読む読み取り経路。ingest 後の rotate で jsonl が空でも分母が取れる（sessions: `session_store.read_session_records`、dedup キーは ingest の UNIQUE と同一） | #415 |
 | plugin_self | スキル origin の一種 — `.claude-plugin/plugin.json` を持つリポジトリ自身の repo 直下 `skills/` のスキル。evolve は custom 同等に診断するが auto-apply は protected（人間承認必須）。インストール済み他プラグイン（plugin）とは別物 | #185 |
-| dogfood gate（通し評価ゲート） | リリース前に実環境の繋ぎ目を3層で検査する `bin/rl-dogfood-gate`（Layer1: dry-run 不変・隔離コピー / Layer2: report invariants / Layer3: SKILL.md コードブロック実行）。pytest が掬えない「テスト緑・実環境赤」を防ぐ | #496 |
+| dogfood gate（通し評価ゲート） | リリース前に実環境の繋ぎ目を3層で検査する `bin/evolve-dogfood-gate`（Layer1: dry-run 不変・隔離コピー / Layer2: report invariants / Layer3: SKILL.md コードブロック実行）。pytest が掬えない「テスト緑・実環境赤」を防ぐ | #496 |
 | 隔離コピー方式 | gate Layer1 が実 DATA_DIR を tmp にコピーし `CLAUDE_PLUGIN_DATA` で隔離実行してコピー側のみ比較する方式。ライブ hook の ambient write 偽赤を構造的に排除 | #496, PR #515 |
 | 文書化された除外リスト | dry-run 純度契約（1バイトも書かない）の原則ベース例外 — 意図された dry-run 書込（cache warm / 運用ポインタ evolve_pending/）を理由コメント付き定数で除外。bypass フラグは作らない | #513, #496 |

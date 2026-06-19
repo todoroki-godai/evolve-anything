@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 OUTCOMES_FILE = DATA_DIR / "remediation-outcomes.jsonl"
 CALIBRATION_FILE = DATA_DIR / "confidence-calibration.json"
 PROPOSALS_FILE = DATA_DIR / "pipeline-proposals.jsonl"

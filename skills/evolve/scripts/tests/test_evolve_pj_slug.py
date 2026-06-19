@@ -16,13 +16,13 @@ import evolve  # noqa: E402
 
 
 def test_plain_project_dir():
-    assert evolve._resolve_pj_slug("/Users/x/tools/rl-anything") == "rl-anything"
+    assert evolve._resolve_pj_slug("/Users/x/tools/evolve-anything") == "evolve-anything"
 
 
 def test_worktree_dir_normalizes_to_main_repo():
     # worktree 内パスでも本体 repo basename になる（worktree 名にならない）
-    wt = "/Users/x/tools/rl-anything/.claude/worktrees/agent-abc123"
-    assert evolve._resolve_pj_slug(wt) == "rl-anything"
+    wt = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-abc123"
+    assert evolve._resolve_pj_slug(wt) == "evolve-anything"
 
 
 def test_matches_utterance_archive_derivation():

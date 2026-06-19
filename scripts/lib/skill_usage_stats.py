@@ -54,7 +54,7 @@ def load_skill_activations(
         }}
 
     Note:
-        プラグイン prefix（例: "rl-anything:audit"）は除去して "audit" として集計。
+        プラグイン prefix（例: "evolve-anything:audit"）は除去して "audit" として集計。
         元の形式と除去後の形式の両方をキーとして登録する。
     """
     filepath = activations_file or _default_activations_file()
@@ -97,7 +97,7 @@ def load_skill_activations(
 
             parent = rec.get("parent_skill")
 
-            # 正規化: "rl-anything:audit" → "audit" も別キーで登録
+            # 正規化: "evolve-anything:audit" → "audit" も別キーで登録
             base = skill.split(":")[-1] if ":" in skill else skill
             for key in ({skill, base} if base != skill else {skill}):
                 if key not in stats:

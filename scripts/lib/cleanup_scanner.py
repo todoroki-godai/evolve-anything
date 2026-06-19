@@ -1,6 +1,6 @@
 """cleanup スキル用の後片付け候補スキャナ群。
 
-`/rl-anything:cleanup` から呼ばれる純粋なスキャナ関数を提供する。
+`/evolve-anything:cleanup` から呼ばれる純粋なスキャナ関数を提供する。
 副作用（削除）は含まず、候補リストの返却に責務を限定する。
 
 Design notes:

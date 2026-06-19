@@ -4,7 +4,7 @@ assessment / reorganize / prune など複数モジュールで「どのスキル
 の判断を統一するための共通関数。
 
 ルール:
-  - origin == "plugin"  → 常に除外（rl-anything 本体スキル）
+  - origin == "plugin"  → 常に除外（evolve-anything 本体スキル）
   - origin == "global"  → デフォルト除外。evolve_global_allowlist に含まれる場合のみ対象
   - origin == "custom"  → 対象（symlink は除外）
 """

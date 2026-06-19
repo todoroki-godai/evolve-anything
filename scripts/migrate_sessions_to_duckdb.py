@@ -23,7 +23,7 @@ def main() -> None:
     parser.add_argument(
         "--data-dir",
         default=os.environ.get("CLAUDE_PLUGIN_DATA"),
-        help="データディレクトリ（デフォルト: $CLAUDE_PLUGIN_DATA or ~/.claude/rl-anything）",
+        help="データディレクトリ（デフォルト: $CLAUDE_PLUGIN_DATA or ~/.claude/evolve-anything）",
     )
     parser.add_argument(
         "--skip-if-db-has-data",

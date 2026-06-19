@@ -20,7 +20,7 @@ from correction_semantic import provenance_weight as pw  # noqa: E402
 from correction_semantic import store as cs_store  # noqa: E402
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
 
-SLUG = "rl-anything"
+SLUG = "evolve-anything"
 
 
 def _prov(line_no, text="四国めたんじゃなくて"):

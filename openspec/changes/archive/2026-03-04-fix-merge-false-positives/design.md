@@ -1,6 +1,6 @@
 ## Context
 
-コードベースに「計算スタブ」「黙って 0.5 を返すフォールバック」が散在し、複数機能が実質的に動作していない。Issue #3 の merge 誤検知が最も深刻だが、同じパターンが semantic_detector, optimizer, rl-loop にも存在する。
+コードベースに「計算スタブ」「黙って 0.5 を返すフォールバック」が散在し、複数機能が実質的に動作していない。Issue #3 の merge 誤検知が最も深刻だが、同じパターンが semantic_detector, optimizer, evolve-loop にも存在する。
 
 ## Goals / Non-Goals
 

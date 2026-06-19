@@ -161,7 +161,7 @@ def build_pipeline_health_section(
     if degraded_types:
         lines.append(
             f"DEGRADED: {', '.join(degraded_types)}。"
-            "`/rl-anything:evolve` での self-evolution を推奨します。"
+            "`/evolve-anything:evolve` での self-evolution を推奨します。"
         )
         lines.append("")
 

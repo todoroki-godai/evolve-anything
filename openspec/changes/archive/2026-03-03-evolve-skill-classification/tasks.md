@@ -41,4 +41,4 @@
 
 - [x] 6.1 `python3 -m pytest skills/ -v` で既存テスト全パス確認（161 passed）
 - [ ] 6.2 `--dry-run` で evolve を実行し、出自別セクションが正しく表示されることを確認
-- [ ] 6.3 `/rl-anything:openspec-apply-change` 等で SKILL.md 経由の呼び出しが動作することを確認
+- [ ] 6.3 `/evolve-anything:openspec-apply-change` 等で SKILL.md 経由の呼び出しが動作することを確認

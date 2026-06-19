@@ -1,8 +1,8 @@
 ## Context
 
-rl-anything の evolve パイプラインは Diagnose → Compile → Housekeeping の3ステージで構成される。Diagnose では discover（パターン検出）、audit（問題検出）、reorganize（split検出）を実行するが、スキルの **description trigger 精度** を計測する手段がない。
+evolve-anything の evolve パイプラインは Diagnose → Compile → Housekeeping の3ステージで構成される。Diagnose では discover（パターン検出）、audit（問題検出）、reorganize（split検出）を実行するが、スキルの **description trigger 精度** を計測する手段がない。
 
-skill-creator v2 は `run_eval.py`（trigger 精度計測）と `improve_description.py`（description 最適化）を提供している。rl-anything はテレメトリデータ（sessions.jsonl / usage.jsonl）を保持しており、これを eval set に変換する独自価値を持つ。
+skill-creator v2 は `run_eval.py`（trigger 精度計測）と `improve_description.py`（description 最適化）を提供している。evolve-anything はテレメトリデータ（sessions.jsonl / usage.jsonl）を保持しており、これを eval set に変換する独自価値を持つ。
 
 現状の判断能力:
 - discover `detect_missed_skills()`: テキストマッチベースの missed skill 検出（false positive 多い）
@@ -17,9 +17,9 @@ skill-creator v2 は `run_eval.py`（trigger 精度計測）と `improve_descrip
 - evolve Diagnose ステージに triage を統合し、description 品質問題を remediation パイプラインに流す
 
 **Non-Goals:**
-- skill-creator の `run_eval.py` / `improve_description.py` を rl-anything 内に再実装しない（フォーマット互換のみ）
+- skill-creator の `run_eval.py` / `improve_description.py` を evolve-anything 内に再実装しない（フォーマット互換のみ）
 - description の自動書き換えは行わない（skill-creator に委譲し、パスを提案するのみ）
-- trigger eval の実機テスト（`claude -p` 実行）は rl-anything 側では行わない（コスト大。eval set 生成までが責務）
+- trigger eval の実機テスト（`claude -p` 実行）は evolve-anything 側では行わない（コスト大。eval set 生成までが責務）
 
 ## Decisions
 
@@ -47,7 +47,7 @@ skill-creator v2 は `run_eval.py`（trigger 精度計測）と `improve_descrip
 
 skill-creator の `run_eval.py --eval-set` でそのまま使えるようにする。
 
-**代替案**: rl-anything 独自フォーマット → 却下。互換性を最優先
+**代替案**: evolve-anything 独自フォーマット → 却下。互換性を最優先
 
 ### D3: triage 判定ロジック
 

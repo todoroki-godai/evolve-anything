@@ -107,7 +107,7 @@ def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: st
 
         if audit_triggered and not _is_in_cooldown(state, "audit_overdue", cooldown_hours):
             reasons.append("audit_overdue")
-            actions.append("/rl-anything:audit")
+            actions.append("/evolve-anything:audit")
 
     # --- session_end conditions ---
     se_cfg = triggers_cfg.get("session_end", {})
@@ -137,17 +137,17 @@ def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: st
 
         if session_triggered and not _is_in_cooldown(state, "session_count", cooldown_hours):
             reasons.append("session_count")
-            actions.append("/rl-anything:evolve")
+            actions.append("/evolve-anything:evolve")
         if days_triggered and not _is_in_cooldown(state, "days_elapsed", cooldown_hours):
             reasons.append("days_elapsed")
-            actions.append("/rl-anything:evolve")
+            actions.append("/evolve-anything:evolve")
 
     # --- bloat ---
     if project_dir and not _is_in_cooldown(state, "bloat", cooldown_hours):
         bloat_result = _evaluate_bloat(project_dir, config)
         if bloat_result:
             reasons.append("bloat")
-            actions.append("/rl-anything:evolve")
+            actions.append("/evolve-anything:evolve")
             details["bloat_warnings"] = bloat_result["warnings"]
 
     # --- calibration_drift (#286): accept/reject >= 30 かつ相関低下で evolve-fitness を提案 ---
@@ -155,7 +155,7 @@ def evaluate_session_end(state: dict[str, Any] | None = None, *, project_dir: st
         drifted_funcs = _detect_calibration_drift()
         if drifted_funcs:
             reasons.append("calibration_drift")
-            actions.append("/rl-anything:evolve-fitness")
+            actions.append("/evolve-anything:evolve-fitness")
             details["calibration_drift_funcs"] = drifted_funcs
 
     if not reasons:
@@ -252,16 +252,16 @@ def evaluate_corrections(state: dict[str, Any] | None = None) -> TriggerResult:
     ]
 
     if skill_names:
-        action = f"/rl-anything:evolve-skill {skill_names[0]}"
+        action = f"/evolve-anything:evolve-skill {skill_names[0]}"
         skill_list = ", ".join(skill_names)
         message = f"Corrections が {count} 件蓄積。関連スキル: {skill_list}。推奨: {action}"
     else:
-        action = "/rl-anything:evolve"
+        action = "/evolve-anything:evolve"
         message = f"Corrections が {count} 件蓄積。推奨: {action}"
 
     if preflight_skills:
         preflight_list = ", ".join(preflight_skills)
-        message += f"\n⚠️ Pre-flight 警告: {preflight_list} で {per_skill_threshold} 回以上の correction — `/rl-anything:evolve-skill <skill>` で自己進化パターンを組み込むことを推奨します"
+        message += f"\n⚠️ Pre-flight 警告: {preflight_list} で {per_skill_threshold} 回以上の correction — `/evolve-anything:evolve-skill <skill>` で自己進化パターンを組み込むことを推奨します"
 
     result = TriggerResult(
         triggered=True,

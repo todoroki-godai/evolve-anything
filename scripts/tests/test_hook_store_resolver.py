@@ -3,14 +3,14 @@
 
 hook（PostToolUse 等）は CC が設定する CLAUDE_PLUGIN_DATA 配下（plugin-data dir）に
 書き込むが、standalone tool/skill 実行時は env 未設定で DATA_DIR が既定 fallback
-(~/.claude/rl-anything) に解決され、reader が live テレメトリを取り逃す。
+(~/.claude/evolve-anything) に解決され、reader が live テレメトリを取り逃す。
 prune の zero_invocation 誤判定（#358）の根因。
 
 resolver は:
   1. CLAUDE_PLUGIN_DATA env があればそこ（hook 実行コンテキスト）
   2. base が既定 fallback 以外に明示設定されていればそれを尊重（custom / テスト patch）
   3. base が既定 fallback のとき install レイアウト
-     ~/.claude/plugins/data/<*rl-anything*> を探索（tool/skill 実行コンテキスト）
+     ~/.claude/plugins/data/<*evolve-anything*> を探索（tool/skill 実行コンテキスト）
   4. 探索失敗時は base（後方互換・graceful）
 """
 import sys
@@ -31,7 +31,7 @@ def _clean_env(monkeypatch):
 
 @pytest.fixture
 def fallback(monkeypatch, tmp_path):
-    """実 ~/.claude/rl-anything を読まない隔離 fallback（marker 無し）。
+    """実 ~/.claude/evolve-anything を読まない隔離 fallback（marker 無し）。
 
     hook_store_dir は ``base == 既定 fallback`` のときだけ probe / env / marker を
     評価する設計のため、それらの経路を試すテストは base に「既定 fallback と判定
@@ -62,7 +62,7 @@ def test_env_set_wins(monkeypatch, tmp_path, fallback):
 def test_probe_finds_install_layout(monkeypatch, tmp_path, fallback):
     """base が既定 fallback のとき install レイアウトから plugin-data dir を特定する。"""
     base = tmp_path / "plugins_data"
-    canonical = base / "rl-anything-rl-anything"
+    canonical = base / "evolve-anything-evolve-anything"
     canonical.mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
     # base=既定 fallback を明示的に渡し probe を有効化
@@ -70,10 +70,10 @@ def test_probe_finds_install_layout(monkeypatch, tmp_path, fallback):
 
 
 def test_probe_picks_rl_anything_dir_only(monkeypatch, tmp_path, fallback):
-    """plugin-data base に複数プラグイン dir があっても rl-anything のものを選ぶ。"""
+    """plugin-data base に複数プラグイン dir があっても evolve-anything のものを選ぶ。"""
     base = tmp_path / "plugins_data"
     (base / "other-marketplace-other-plugin").mkdir(parents=True)
-    canonical = base / "mymarket-rl-anything"
+    canonical = base / "mymarket-evolve-anything"
     canonical.mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
     assert rl_common.hook_store_dir(base=fallback) == canonical
@@ -82,7 +82,7 @@ def test_probe_picks_rl_anything_dir_only(monkeypatch, tmp_path, fallback):
 def test_explicit_base_skips_probe(monkeypatch, tmp_path):
     """base が既定 fallback 以外なら probe せず base を尊重する（テスト patch 保護）。"""
     base = tmp_path / "plugins_data"
-    (base / "rl-anything-rl-anything").mkdir(parents=True)
+    (base / "evolve-anything-evolve-anything").mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
     explicit = tmp_path / "patched_data_dir"
     explicit.mkdir()
@@ -110,7 +110,7 @@ def test_default_base_is_rl_common_data_dir(monkeypatch, tmp_path):
 def test_hook_store_path_joins_filename(monkeypatch, tmp_path, fallback):
     """hook_store_path は解決した dir に filename を結合する。"""
     base = tmp_path / "plugins_data"
-    canonical = base / "rl-anything-rl-anything"
+    canonical = base / "evolve-anything-evolve-anything"
     canonical.mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
     got = rl_common.hook_store_path("usage.jsonl", base=fallback)
@@ -121,18 +121,18 @@ def test_env_empty_string_treated_as_unset(monkeypatch, tmp_path, fallback):
     """空文字の CLAUDE_PLUGIN_DATA は未設定扱い（Path('') 誤解決を防ぐ）。"""
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", "")
     base = tmp_path / "plugins_data"
-    canonical = base / "rl-anything-rl-anything"
+    canonical = base / "evolve-anything-evolve-anything"
     canonical.mkdir(parents=True)
     monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
     assert rl_common.hook_store_dir(base=fallback) == canonical
 
 
 def test_multiple_rl_anything_dirs_prefers_recent(monkeypatch, tmp_path, fallback):
-    """rl-anything dir が複数あれば mtime が新しい方を決定論で選ぶ。"""
+    """evolve-anything dir が複数あれば mtime が新しい方を決定論で選ぶ。"""
     import os
     base = tmp_path / "plugins_data"
-    old = base / "a-rl-anything"
-    new = base / "b-rl-anything"
+    old = base / "a-evolve-anything"
+    new = base / "b-evolve-anything"
     old.mkdir(parents=True)
     new.mkdir(parents=True)
     os.utime(old, (1_000_000, 1_000_000))  # old を過去 mtime に
@@ -155,7 +155,7 @@ def test_358_load_usage_data_reads_plugin_data_via_probe(monkeypatch, tmp_path, 
 
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
     base = tmp_path / "plugins_data"
-    canonical = base / "rl-anything-rl-anything"
+    canonical = base / "evolve-anything-evolve-anything"
     canonical.mkdir(parents=True)
     now = datetime.now(timezone.utc).isoformat()
     (canonical / "usage.jsonl").write_text(
@@ -178,7 +178,7 @@ def test_358_skill_activations_reads_plugin_data_via_probe(monkeypatch, tmp_path
 
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
     base = tmp_path / "plugins_data"
-    canonical = base / "rl-anything-rl-anything"
+    canonical = base / "evolve-anything-evolve-anything"
     canonical.mkdir(parents=True)
     now = datetime.now(timezone.utc).isoformat()
     (canonical / "skill_activations.jsonl").write_text(

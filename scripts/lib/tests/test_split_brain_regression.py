@@ -1,6 +1,6 @@
 """ADR-031 split-brain 回帰 E2E。
 
-旧構造: run_loop は cwd/.rl-loop/history.jsonl に書き、readers（fitness_evolution /
+旧構造: run_loop は cwd/.evolve-loop/history.jsonl に書き、readers（fitness_evolution /
 discover）は plugin generations/history.jsonl を読む → run_loop の accept/reject が
 readers に永久に届かない（孤立）。
 

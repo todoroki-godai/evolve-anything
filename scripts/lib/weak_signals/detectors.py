@@ -22,7 +22,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from .store import WeakSignal, now_iso
 
 # ── チャネル ③（言い直し）のしきい値 ──────────────────────────────
-# 実コーパス dry-run（rl-anything 全 PJ utterances.db 3204 発話 / 1289 連続ペア）で
+# 実コーパス dry-run（evolve-anything 全 PJ utterances.db 3204 発話 / 1289 連続ペア）で
 # 分布を確認して決定（ADR-044 準拠・固定値を設計前に決めない）:
 #   - 0.6: 162 ペア（うち大半が並列 agent 派遣テンプレの誤検知）
 #   - 0.8 + dispatch 除外: 16 ペア（目視 100% が真の言い直し/再送）

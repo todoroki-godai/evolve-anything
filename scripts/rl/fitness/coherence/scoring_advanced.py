@@ -204,7 +204,7 @@ def score_efficiency(project_dir: Path, *, data_dir: Optional[Path] = None) -> T
 
     # 3. 未使用 Skill（usage.jsonl ベース）
     if data_dir is None:
-        data_dir = Path.home() / ".claude" / "rl-anything"
+        data_dir = Path.home() / ".claude" / "evolve-anything"
     usage_file = data_dir / "usage.jsonl"
     if usage_file.exists():
         skill_names = set()

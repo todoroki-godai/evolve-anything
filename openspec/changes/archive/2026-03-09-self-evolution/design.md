@@ -66,7 +66,7 @@ pipeline-trajectory-analysis（分析・集計）
 ### D3: Pipeline Health メトリクスは audit の既存フレームワーク内
 
 **選択肢**:
-- A) 独立した `/rl-anything:pipeline-health` コマンドを新設
+- A) 独立した `/evolve-anything:pipeline-health` コマンドを新設
 - B) audit レポートの新セクションとして追加
 
 **決定**: B を採用。

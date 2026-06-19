@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything の discover は usage.jsonl からスキル/ルールの使用パターンを検出するが、「使うべきだったのに使われなかったスキル」は検出できない。また reflect の `suggest_claude_file()` はキーワードベース（`always/never/prefer` → global）でスコープ判定しており、correction の内容の意味的な判定はしていない。
+evolve-anything の discover は usage.jsonl からスキル/ルールの使用パターンを検出するが、「使うべきだったのに使われなかったスキル」は検出できない。また reflect の `suggest_claude_file()` はキーワードベース（`always/never/prefer` → global）でスコープ判定しており、correction の内容の意味的な判定はしていない。
 
 実際のインシデント: ユーザーが「チャンネル設定」タスクに切り替えた際、`/channel-routing` スキルが存在するにもかかわらず手動で作業した。ユーザー自身が気づいて correction が発生。さらにその correction から生成されたルールのスコープ判定（global vs project）も、たまたまキーワードで正しくなっただけで本質的な判定ではなかった。
 
@@ -61,7 +61,7 @@ Step 3: 候補 - 実績 = missed skill opportunities
 Step 4: 頻度閾値（MISSED_SKILL_THRESHOLD）でフィルタリング
 ```
 
-スキル名正規化: 突合時に先頭 `/` 除去、`plugin-name:` prefix 除去で表記揺れを吸収する（例: `/channel-routing`, `rl-anything:channel-routing`, `channel-routing` を同一視）。
+スキル名正規化: 突合時に先頭 `/` 除去、`plugin-name:` prefix 除去で表記揺れを吸収する（例: `/channel-routing`, `evolve-anything:channel-routing`, `channel-routing` を同一視）。
 
 project フィルタリング: 既存の `query_usage()` と同じ project フィルタを `query_sessions()` にも適用する（`--project-dir` / `--include-unknown` フラグ踏襲）。
 

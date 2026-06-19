@@ -24,7 +24,7 @@
 
 ## 5. remediation.py — テレメトリ記録
 
-- [x] 5.1 `record_outcome(issue, category, action, result, user_decision, rationale)` 関数を実装。`~/.claude/rl-anything/remediation-outcomes.jsonl` に結果を追記する。dry-run 時は記録しない
+- [x] 5.1 `record_outcome(issue, category, action, result, user_decision, rationale)` 関数を実装。`~/.claude/evolve-anything/remediation-outcomes.jsonl` に結果を追記する。dry-run 時は記録しない
 - [x] 5.2 テレメトリ記録のユニットテストを追加（正常記録、dry-run スキップ）
 
 ## 6. evolve パイプラインへの統合

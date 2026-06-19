@@ -28,7 +28,7 @@ from correction_semantic import bootstrap_backlog as bb  # noqa: E402
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
 
 
-def _sig(text: str, line_no: int, pj_slug: str = "rl-anything", **prov_extra) -> WeakSignal:
+def _sig(text: str, line_no: int, pj_slug: str = "evolve-anything", **prov_extra) -> WeakSignal:
     prov = {"source_path": "/a.jsonl", "line_no": line_no, "text": text, "reason": "r"}
     prov.update(prov_extra)
     return WeakSignal(
@@ -41,7 +41,7 @@ def _sig(text: str, line_no: int, pj_slug: str = "rl-anything", **prov_extra) ->
 
 
 def _marker(tmp_path: Path) -> Path:
-    return tmp_path / "bootstrap_done-rl-anything.marker"
+    return tmp_path / "bootstrap_done-evolve-anything.marker"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ def test_build_returns_bootstrap_when_no_marker(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1), _sig("書き直しして", 2)], path=ws)
 
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
     assert res["is_bootstrap"] is True
     assert res["pj_total"] == 2
     assert res["groups_total"] >= 1
@@ -136,14 +136,14 @@ def test_build_scopes_to_pj_slug_only(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     append_signals(
         [
-            _sig("金額がきれてる", 1, pj_slug="rl-anything"),
+            _sig("金額がきれてる", 1, pj_slug="evolve-anything"),
             _sig("別件です", 2, pj_slug="figma-to-code"),
             _sig("別件2の話", 3, pj_slug="figma-to-code"),
         ],
         path=ws,
     )
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
-    assert res["pj_total"] == 1  # rl-anything の 1 件のみ
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    assert res["pj_total"] == 1  # evolve-anything の 1 件のみ
 
 
 def test_build_only_counts_unpromoted(tmp_path: Path):
@@ -152,7 +152,7 @@ def test_build_only_counts_unpromoted(tmp_path: Path):
     promoted = _sig("もう昇格済み", 2)
     promoted.promoted = True
     append_signals([promoted], path=ws)
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
     assert res["pj_total"] == 1
 
 
@@ -160,9 +160,9 @@ def test_build_only_counts_llm_judge_channel(tmp_path: Path):
     # backlog は llm_judge チャネル（#431 のバッチ判定）のみが対象
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)
-    other = WeakSignal("rephrase", {"text": "別チャネル"}, "t", "s", "rl-anything")
+    other = WeakSignal("rephrase", {"text": "別チャネル"}, "t", "s", "evolve-anything")
     append_signals([other], path=ws)
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
     assert res["pj_total"] == 1
 
 
@@ -175,7 +175,7 @@ def test_build_excludes_expired_defensively(tmp_path: Path):
     ws.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs), encoding="utf-8"
     )
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
     assert res["pj_total"] == 1
 
 
@@ -188,7 +188,7 @@ def test_build_returns_false_when_marker_present(tmp_path: Path):
     marker = _marker(tmp_path)
     marker.write_text("", encoding="utf-8")
 
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=marker)
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=marker)
     assert res["is_bootstrap"] is False
     # 早期 return: 重い group 化はしない（groups は空でよい）
     assert res["groups"] == []
@@ -200,14 +200,14 @@ def test_build_returns_false_when_marker_present(tmp_path: Path):
 # ─────────────────────────────────────────────────────────────────
 def test_mark_done_writes_marker(tmp_path: Path):
     marker = _marker(tmp_path)
-    res = bb.mark_done("rl-anything", marker_path=marker, dry_run=False)
+    res = bb.mark_done("evolve-anything", marker_path=marker, dry_run=False)
     assert res["written"] is True
     assert marker.exists()
 
 
 def test_mark_done_dry_run_no_write(tmp_path: Path):
     marker = _marker(tmp_path)
-    res = bb.mark_done("rl-anything", marker_path=marker, dry_run=True)
+    res = bb.mark_done("evolve-anything", marker_path=marker, dry_run=True)
     assert res["written"] is False
     assert res["dry_run"] is True
     assert not marker.exists()  # 最下層まで dry-run ゲート貫通
@@ -218,7 +218,7 @@ def test_build_dry_run_does_not_write_marker(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)
     marker = _marker(tmp_path)
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=marker, dry_run=True)
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=marker, dry_run=True)
     assert res["dry_run"] is True
     assert not marker.exists()
 
@@ -375,7 +375,7 @@ def test_build_no_buckets_below_threshold(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     sigs = [_sig(f"金額表示{i}がきれてる", i) for i in range(3)]
     append_signals(sigs, path=ws)
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
     assert res["is_bootstrap"] is True
     # 閾値以下なので buckets は付かない（None）か空。groups は従来どおり残る。
     assert not res.get("theme_buckets")
@@ -399,7 +399,7 @@ def test_build_buckets_above_threshold(tmp_path: Path):
             kw = theme_b[(i // 2) % len(theme_b)]
             sigs.append(_sig(f"{kw}欄{i}番を直して", i))
     append_signals(sigs, path=ws)
-    res = bb.build("rl-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
     assert res["is_bootstrap"] is True
     assert res["groups_total"] >= bb.THEME_CLUSTER_THRESHOLD
     buckets = res.get("theme_buckets")

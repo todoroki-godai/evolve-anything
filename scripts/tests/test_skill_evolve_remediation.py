@@ -87,7 +87,7 @@ def test_plugin_self_skill_evolve_issue_is_proposable_not_auto_fixable(tmp_path)
     # プラグイン本体リポジトリ構成: <repo>/.claude-plugin/plugin.json + <repo>/skills/evolve/
     manifest = tmp_path / ".claude-plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text('{"name": "rl-anything"}', encoding="utf-8")
+    manifest.write_text('{"name": "evolve-anything"}', encoding="utf-8")
     skill_dir = tmp_path / "skills" / "evolve"
     skill_dir.mkdir(parents=True)
     skill_md = skill_dir / "SKILL.md"

@@ -96,7 +96,7 @@ def test_store_data_dir_not_real_home(mod_name):
     assert _REAL_HOME_CLAUDE not in resolved.parents and resolved != _REAL_HOME_CLAUDE, (
         f"{mod_name}.DATA_DIR resolved to real home: {resolved}. "
         "conftest top-level CLAUDE_PLUGIN_DATA isolation is not effective for this module "
-        "(it would pollute ~/.claude/rl-anything during tests)."
+        "(it would pollute ~/.claude/evolve-anything during tests)."
     )
 
 

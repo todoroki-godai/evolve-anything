@@ -26,6 +26,6 @@
 - `skills/genetic-prompt-optimizer/tests/` — テストを新パイプラインに合わせて書き直し
 - `skills/genetic-prompt-optimizer/SKILL.md` — `--generations`, `--population`, `--budget`, `--cascade`, `--parallel` オプション廃止
 - `scripts/rl/fitness/` — fitness 関数は直接パッチでは不要だが、品質スコア参考表示用に維持
-- `skills/rl-loop-orchestrator/SKILL.md` — 説明文更新（バリエーション生成 → 直接パッチ）
+- `skills/evolve-loop-orchestrator/SKILL.md` — 説明文更新（バリエーション生成 → 直接パッチ）
 - `README.md`, `CLAUDE.md`, `docs/` — 遺伝的アルゴリズム関連記述の更新
 - closes #19

@@ -26,7 +26,7 @@ _REAL_PJ = (
     Path.home()
     / ".claude"
     / "projects"
-    / "-Users-todoroki-tools-rl-anything"
+    / "-Users-todoroki-tools-evolve-anything"
 )
 
 
@@ -42,7 +42,7 @@ def _setup_store(tmp_path, monkeypatch):
 
 @pytest.mark.bench_ingest
 def test_real_pj_single_under_60s(tmp_path, monkeypatch):
-    """rl-anything PJ 1 個 / --days 7 / 60 秒以内 + 2 回目 30 秒以内 (design doc 主要 success criteria)。"""
+    """evolve-anything PJ 1 個 / --days 7 / 60 秒以内 + 2 回目 30 秒以内 (design doc 主要 success criteria)。"""
     try:
         import duckdb  # noqa
     except ImportError:
@@ -89,7 +89,7 @@ def test_real_pj_single_under_60s(tmp_path, monkeypatch):
           f"{'parse-bound (consider byte-offset)' if ratio >= 2.0 else 'commit-bound (Approach B sufficient)'}",
           flush=True)
     print(
-        f"\nBench: rl-anything --days 7 = {t1:.1f}s (incr {t2:.1f}s) / "
+        f"\nBench: evolve-anything --days 7 = {t1:.1f}s (incr {t2:.1f}s) / "
         f"DB {db_size/(1024*1024):.1f} MB / {rows:,} rows",
         flush=True,
     )

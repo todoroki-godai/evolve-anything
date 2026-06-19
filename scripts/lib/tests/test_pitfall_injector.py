@@ -100,7 +100,7 @@ class TestGetPitfallForSkill:
             "## Active Pitfalls\n\n### P1\ntext\n"
         )
         with mock.patch.object(injector, "_plugin_root", tmp_path):
-            result = injector.get_pitfall_for_skill("/home/user/.claude/skills/rl-anything/evolve")
+            result = injector.get_pitfall_for_skill("/home/user/.claude/skills/evolve-anything/evolve")
         assert result is not None
         assert "P1" in result
 
@@ -111,19 +111,19 @@ class TestIsAlreadyInjected:
             assert injector.is_already_injected("sess-1", "evolve") is False
 
     def test_not_injected_when_different_skill(self, tmp_path):
-        path = tmp_path / "rl-anything-injected-sess-1.json"
+        path = tmp_path / "evolve-anything-injected-sess-1.json"
         path.write_text(json.dumps({"injected_skills": ["commit"]}))
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
             assert injector.is_already_injected("sess-1", "evolve") is False
 
     def test_injected_when_skill_present(self, tmp_path):
-        path = tmp_path / "rl-anything-injected-sess-1.json"
+        path = tmp_path / "evolve-anything-injected-sess-1.json"
         path.write_text(json.dumps({"injected_skills": ["evolve", "commit"]}))
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
             assert injector.is_already_injected("sess-1", "evolve") is True
 
     def test_path_form_normalized(self, tmp_path):
-        path = tmp_path / "rl-anything-injected-sess-1.json"
+        path = tmp_path / "evolve-anything-injected-sess-1.json"
         path.write_text(json.dumps({"injected_skills": ["evolve"]}))
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
             assert injector.is_already_injected("sess-1", "/home/user/skills/evolve") is True
@@ -133,13 +133,13 @@ class TestMarkInjected:
     def test_creates_file_on_first_mark(self, tmp_path):
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
             injector.mark_injected("sess-1", "evolve")
-        path = tmp_path / "rl-anything-injected-sess-1.json"
+        path = tmp_path / "evolve-anything-injected-sess-1.json"
         assert path.exists()
         data = json.loads(path.read_text())
         assert "evolve" in data["injected_skills"]
 
     def test_appends_to_existing(self, tmp_path):
-        path = tmp_path / "rl-anything-injected-sess-1.json"
+        path = tmp_path / "evolve-anything-injected-sess-1.json"
         path.write_text(json.dumps({"injected_skills": ["commit"]}))
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
             injector.mark_injected("sess-1", "evolve")
@@ -151,7 +151,7 @@ class TestMarkInjected:
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
             injector.mark_injected("sess-1", "evolve")
             injector.mark_injected("sess-1", "evolve")
-        path = tmp_path / "rl-anything-injected-sess-1.json"
+        path = tmp_path / "evolve-anything-injected-sess-1.json"
         data = json.loads(path.read_text())
         assert data["injected_skills"].count("evolve") == 1
 

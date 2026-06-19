@@ -911,8 +911,8 @@ class TestWeakSignalPromotion:
         sigs = [
             WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 1,
                                      "text": "緑にして赤じゃなくて", "reason": "後置型"},
-                       "2026-06-10T00:00:00+00:00", "s1", "rl-anything"),
-            WeakSignal("rephrase", {"x": 1}, "2026-06-10T00:01:00+00:00", "s2", "rl-anything"),
+                       "2026-06-10T00:00:00+00:00", "s1", "evolve-anything"),
+            WeakSignal("rephrase", {"x": 1}, "2026-06-10T00:01:00+00:00", "s2", "evolve-anything"),
         ]
         append_signals(sigs, path=ws)
         return ws, sigs
@@ -1002,7 +1002,7 @@ class TestWeakSignalPromotion:
 # --- Test: --promote-weak が idiom を confirmed 化する閉ループ（#463 配線漏れ修正） ---
 
 class TestPromoteWeakConfirmsIdiom:
-    SLUG = "rl-anything"
+    SLUG = "evolve-anything"
 
     def _prov(self, line_no, text):
         return {"source_path": "/a.jsonl", "line_no": line_no, "session_id": "s1",
@@ -1116,7 +1116,7 @@ class TestRevokeIdiom:
         it = cs_store.CorrectionIdiom(
             idiom="四国めたんじゃなくて",
             provenance={"source_path": "/a.jsonl", "line_no": 1, "reason": "後置型"},
-            detected_at="2026-06-10T00:00:00+00:00", pj_slug="rl-anything",
+            detected_at="2026-06-10T00:00:00+00:00", pj_slug="evolve-anything",
         )
         cs_store.append_idioms([it], path=idioms)
         cs_store.confirm_idioms([it.idiom_key], path=idioms, confirmed_by="daily_review")
@@ -1150,7 +1150,7 @@ class TestRevokeIdiom:
         assert out["invalidated"] == 1
 
         # idiom は confirmed=False + revoked_at（autopromote 対象外）
-        assert cs_store.read_confirmed_idiom_texts("rl-anything", idioms) == set()
+        assert cs_store.read_confirmed_idiom_texts("evolve-anything", idioms) == set()
         # corrections は invalidated=True → human カウントから除外（進捗巻き戻り）
         after = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
         assert after[0]["invalidated"] is True
@@ -1187,10 +1187,10 @@ class TestWeakSignalRelevanceGate:
         sigs = [
             WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 1,
                                      "text": "認証ルーティングの設定を確認", "reason": "r"},
-                       "2026-06-10T00:00:00+00:00", "s1", "rl-anything"),
+                       "2026-06-10T00:00:00+00:00", "s1", "evolve-anything"),
             WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 2,
                                      "text": "チョコレートケーキのレシピ", "reason": "r"},
-                       "2026-06-10T00:01:00+00:00", "s2", "rl-anything"),
+                       "2026-06-10T00:01:00+00:00", "s2", "evolve-anything"),
         ]
         append_signals(sigs, path=ws)
         return ws

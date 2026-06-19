@@ -24,7 +24,7 @@ def _make_skill(base: Path, *parts: str) -> Path:
 def _make_plugin_manifest(repo: Path) -> None:
     manifest = repo / ".claude-plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text('{"name": "rl-anything"}', encoding="utf-8")
+    manifest.write_text('{"name": "evolve-anything"}', encoding="utf-8")
 
 
 def test_plugin_self_repo_root_skills_included(tmp_path):

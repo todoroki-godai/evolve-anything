@@ -17,7 +17,7 @@
 
 紹介文の「トークンコスト削減」は誤読。inference 時はむしろコスト高。
 
-## rl-anything 側の retrieval 実態
+## evolve-anything 側の retrieval 実態
 
 | レイヤー | 現状実装 | 規模 | PageIndex 適合性 |
 |---|---|---|---|
@@ -32,7 +32,7 @@
 1. **構造ミスマッチ**: PageIndex は「目次のある長文ドキュメント」前提。当 PJ で唯一スケールが合う transcript 群には構造がない。索引前に summarize/segmentation が別途必要で、それは別問題に化ける
 2. **規模ミスマッチ**: ADR 24 本・SPEC 2 本で計 1191 行。Read で全部入る。索引のオーバーヘッドが本体より重い古典的アンチパターン
 3. **コストプロファイル衝突**: `.claude/rules/llm-batch-guard.md` で「LLM バッチ処理は事前に件数とトークン見積もり提示」を自分で課している。1 クエリ 50-100K の reasoning chain は逆方向
-4. **重複機能**: 「similarity ≠ relevance」の問題意識は constitutional eval（LLM judge）と rl-scorer のドメイン軸で既に実装済み。哲学が重複
+4. **重複機能**: 「similarity ≠ relevance」の問題意識は constitutional eval（LLM judge）と evolve-scorer のドメイン軸で既に実装済み。哲学が重複
 5. **依存追加**: trigger engine にツリー再ビルドの発火条件を足す必要があり、メンテ面積が増える
 
 ## 借りる価値のあるアイデア

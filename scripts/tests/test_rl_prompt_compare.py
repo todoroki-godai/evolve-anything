@@ -1,4 +1,4 @@
-"""bin/rl-prompt-compare のユニット + E2E テスト。"""
+"""bin/evolve-prompt-compare のユニット + E2E テスト。"""
 import importlib.machinery
 import importlib.util
 import json
@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-_BIN = Path(__file__).resolve().parent.parent.parent / "bin" / "rl-prompt-compare"
+_BIN = Path(__file__).resolve().parent.parent.parent / "bin" / "evolve-prompt-compare"
 
 
 def _load_module():

@@ -33,7 +33,7 @@
 - mock entry
 ## Token Consumption
 
-(Token tracking not initialized — run `rl-fleet tokens --backfill` to enable)
+(Token tracking not initialized — run `evolve-fleet tokens --backfill` to enable)
 
 ## Potential Duplicates (1)
 - dup: /x/a, /y/a

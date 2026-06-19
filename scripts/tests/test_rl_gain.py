@@ -1,4 +1,4 @@
-"""bin/rl-gain のユニット + E2E テスト。"""
+"""bin/evolve-gain のユニット + E2E テスト。"""
 import importlib.machinery
 import importlib.util
 import json
@@ -10,8 +10,8 @@ from unittest import mock
 
 import pytest
 
-# bin/rl-gain を importlib でロード（.py 拡張子なし）
-_BIN = Path(__file__).resolve().parent.parent.parent / "bin" / "rl-gain"
+# bin/evolve-gain を importlib でロード（.py 拡張子なし）
+_BIN = Path(__file__).resolve().parent.parent.parent / "bin" / "evolve-gain"
 
 
 def _load_rl_gain():
@@ -31,9 +31,9 @@ def rl_gain():
 
 
 def test_is_rl_anything_skill_true(rl_gain):
-    assert rl_gain.is_rl_anything_skill("rl-anything:evolve") is True
-    assert rl_gain.is_rl_anything_skill("rl-anything:audit") is True
-    assert rl_gain.is_rl_anything_skill("rl-anything:implement") is True
+    assert rl_gain.is_rl_anything_skill("evolve-anything:evolve") is True
+    assert rl_gain.is_rl_anything_skill("evolve-anything:audit") is True
+    assert rl_gain.is_rl_anything_skill("evolve-anything:implement") is True
 
 
 def test_is_rl_anything_skill_false(rl_gain):
@@ -43,8 +43,8 @@ def test_is_rl_anything_skill_false(rl_gain):
 
 
 def test_get_skill_short_name(rl_gain):
-    assert rl_gain.get_skill_short_name("rl-anything:evolve") == "evolve"
-    assert rl_gain.get_skill_short_name("rl-anything:spec-keeper") == "spec-keeper"
+    assert rl_gain.get_skill_short_name("evolve-anything:evolve") == "evolve"
+    assert rl_gain.get_skill_short_name("evolve-anything:spec-keeper") == "spec-keeper"
     assert rl_gain.get_skill_short_name("ship") == "ship"
 
 
@@ -54,11 +54,11 @@ def test_get_skill_short_name(rl_gain):
 @pytest.fixture
 def usage_file(tmp_path):
     records = [
-        {"skill_name": "rl-anything:evolve", "ts": "2026-03-01T00:00:00Z", "project": "rl-anything"},
-        {"skill_name": "rl-anything:audit", "ts": "2026-03-02T00:00:00Z", "project": "rl-anything"},
-        {"skill_name": "rl-anything:evolve", "ts": "2026-03-03T00:00:00Z", "project": "rl-anything"},
-        {"skill_name": "ship", "ts": "2026-03-04T00:00:00Z", "project": "rl-anything"},
-        {"skill_name": "rl-anything:implement", "ts": "2026-03-05T00:00:00Z", "project": "rl-anything"},
+        {"skill_name": "evolve-anything:evolve", "ts": "2026-03-01T00:00:00Z", "project": "evolve-anything"},
+        {"skill_name": "evolve-anything:audit", "ts": "2026-03-02T00:00:00Z", "project": "evolve-anything"},
+        {"skill_name": "evolve-anything:evolve", "ts": "2026-03-03T00:00:00Z", "project": "evolve-anything"},
+        {"skill_name": "ship", "ts": "2026-03-04T00:00:00Z", "project": "evolve-anything"},
+        {"skill_name": "evolve-anything:implement", "ts": "2026-03-05T00:00:00Z", "project": "evolve-anything"},
     ]
     f = tmp_path / "usage.jsonl"
     f.write_text("\n".join(json.dumps(r) for r in records))
@@ -82,12 +82,12 @@ def test_get_rl_skill_counts(rl_gain, usage_file):
     assert counts["evolve"] == 2
     assert counts["audit"] == 1
     assert counts["implement"] == 1
-    assert "ship" not in counts  # rl-anything 外はカウントしない
+    assert "ship" not in counts  # evolve-anything 外はカウントしない
 
 
 def test_get_since_date_rl_records(rl_gain, usage_file):
     records = rl_gain.load_usage_records(usage_file)
-    rl_records = [r for r in records if r.get("skill_name", "").startswith("rl-anything:")]
+    rl_records = [r for r in records if r.get("skill_name", "").startswith("evolve-anything:")]
     since = rl_gain.get_since_date(rl_records)
     assert since == "2026-03-01"
 
@@ -185,10 +185,10 @@ def test_get_session_count_with_db(rl_gain, tmp_path):
 def full_data_dir(tmp_path):
     # usage.jsonl
     records = [
-        {"skill_name": "rl-anything:evolve", "ts": "2026-03-01T00:00:00Z"},
-        {"skill_name": "rl-anything:audit", "ts": "2026-03-02T00:00:00Z"},
-        {"skill_name": "rl-anything:reflect", "ts": "2026-03-03T00:00:00Z"},
-        {"skill_name": "rl-anything:reflect", "ts": "2026-03-04T00:00:00Z"},
+        {"skill_name": "evolve-anything:evolve", "ts": "2026-03-01T00:00:00Z"},
+        {"skill_name": "evolve-anything:audit", "ts": "2026-03-02T00:00:00Z"},
+        {"skill_name": "evolve-anything:reflect", "ts": "2026-03-03T00:00:00Z"},
+        {"skill_name": "evolve-anything:reflect", "ts": "2026-03-04T00:00:00Z"},
         {"skill_name": "ship", "ts": "2026-03-05T00:00:00Z"},
     ]
     (tmp_path / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in records))
@@ -233,7 +233,7 @@ def test_compute_report_growth_level(rl_gain, full_data_dir):
 def test_compute_report_no_audit(rl_gain, tmp_path):
     # audit-history.jsonl なし → growth_info は None
     (tmp_path / "usage.jsonl").write_text(
-        '{"skill_name": "rl-anything:evolve", "ts": "2026-03-01T00:00:00Z"}\n'
+        '{"skill_name": "evolve-anything:evolve", "ts": "2026-03-01T00:00:00Z"}\n'
     )
     report = rl_gain.compute_report(tmp_path)
     assert report["growth_info"] is None
@@ -249,7 +249,7 @@ def test_compute_report_skill_breakdown(rl_gain, full_data_dir):
     names = [s["name"] for s in report["skill_breakdown"]]
     assert "reflect" in names
     assert "evolve" in names
-    assert "ship" not in names  # rl-anything 外は除外
+    assert "ship" not in names  # evolve-anything 外は除外
 
 
 # ─── print_report smoke test ─────────────────────────────────────
@@ -259,7 +259,7 @@ def test_print_report_no_crash(rl_gain, full_data_dir, capsys):
     report = rl_gain.compute_report(full_data_dir)
     rl_gain.print_report(report)
     out = capsys.readouterr().out
-    assert "RL-Anything ROI Report" in out
+    assert "Evolve-Anything ROI Report" in out
     assert "Est. manual work saved" in out
     assert "Growth Level" in out
 
@@ -276,7 +276,7 @@ def test_print_report_na_growth(rl_gain, tmp_path, capsys):
 
 
 def test_main_runs(tmp_path):
-    """bin/rl-gain を実行して 3 秒以内にレポートが出ることを確認。"""
+    """bin/evolve-gain を実行して 3 秒以内にレポートが出ることを確認。"""
     env = {"CLAUDE_PLUGIN_DATA": str(tmp_path), "PATH": "/usr/bin:/bin"}
     result = subprocess.run(
         [sys.executable, str(_BIN)],
@@ -286,4 +286,4 @@ def test_main_runs(tmp_path):
         env=env,
     )
     assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert "RL-Anything ROI Report" in result.stdout
+    assert "Evolve-Anything ROI Report" in result.stdout

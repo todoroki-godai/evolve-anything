@@ -7,7 +7,7 @@
 
 ## Frozen Executor + Trainable Curator（SkillOS 設計との同型性）
 
-rl-anything は **Claude Code を frozen executor**、**plugin 層を trainable curator** として
+evolve-anything は **Claude Code を frozen executor**、**plugin 層を trainable curator** として
 分離する設計を採用する（[ADR-023](../docs/decisions/023-skillos-frozen-executor-trainable-curator.md)）。この設計は SkillOS 論文（Ouyang et al., 2026, arXiv:2605.06614）
 が独立に実証した同型アーキテクチャと一致する。
 
@@ -15,7 +15,7 @@ SkillOS の報酬設計から取り込んだ要素:
 - **r^comp**: skill 数 / invocation 数 による圧縮ペナルティ（skill バブル防止）
 - **r^fc**: skill 別エラー率から推定する valid tool call 率
 
-rl-anything の優位点（SkillOS 対比）:
+evolve-anything の優位点（SkillOS 対比）:
 - skill_triage の 5 択（SPLIT/MERGE を含む）vs SkillOS の 3 操作
 - regression gate（`scripts/lib/regression_gate.py`）による safety 層
 
@@ -23,10 +23,10 @@ rl-anything の優位点（SkillOS 対比）:
 
 ## 4層メモリ結晶化（MemOS 対応設計）
 
-rl-anything の corrections→evolve パイプラインは MemOS / HiMem（arXiv:2601.06377）の
+evolve-anything の corrections→evolve パイプラインは MemOS / HiMem（arXiv:2601.06377）の
 L1→L4 結晶化アーキテクチャと同型の設計を採用する（[ADR-024](../docs/decisions/024-memory-crystallization-memos-correspondence.md)）。
 
-| MemOS 層 | rl-anything 対応 |
+| MemOS 層 | evolve-anything 対応 |
 |---------|-----------------|
 | L1 トレース | `corrections.jsonl` / `sessions.jsonl` 等（Observe hooks が記録） |
 | **Episodic 層** | `episodic.db`（DuckDB TTL 30d、`/reflect` approve で昇格。`episodic_store.py` / `episodic_retriever.py`）— L1 と L2 の橋渡し。クロスセッション短期記憶 |

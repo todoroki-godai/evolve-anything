@@ -58,9 +58,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_stop_failure(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:stop_failure] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:stop_failure] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:stop_failure] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:stop_failure] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

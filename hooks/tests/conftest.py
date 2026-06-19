@@ -25,7 +25,7 @@ def _isolate_tmpdir(tmp_path_factory, monkeypatch):
 
     rl_common.workflow.last_skill_path は ``os.environ.get("TMPDIR", "/tmp")`` を
     直接読むため、write_last_skill/read_last_skill を踏むテスト（observe 経由含む）が
-    実 /tmp に ``rl-anything-last-skill-<session>.json`` を漏らしていた。autouse で
+    実 /tmp に ``evolve-anything-last-skill-<session>.json`` を漏らしていた。autouse で
     TMPDIR を専用一時ディレクトリに向け、テスト由来の ephemeral marker を実環境から
     隔離する。``tmp_path`` 直下を汚すと「副作用ゼロ」を assert するテスト
     （iterdir() == []）を壊すため、独立した tmp_path_factory ディレクトリを使う。
@@ -38,7 +38,7 @@ def _isolate_tmpdir(tmp_path_factory, monkeypatch):
 @pytest.fixture
 def tmp_data_dir(tmp_path):
     """テスト用の一時データディレクトリ。"""
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     return data_dir
 

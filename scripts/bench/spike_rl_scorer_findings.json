@@ -1,12 +1,12 @@
 {
-  "spike": "rl-scorer output eval feasibility",
+  "spike": "evolve-scorer output eval feasibility",
   "date": "2026-04-16",
   "good_score": 0.767,
   "poor_score": 0.0,
   "delta": 0.767,
   "feasible": true,
-  "conclusion": "✓ 転用可能。rl-scorer の3軸は LLM 出力評価に機能する。",
-  "recommendation": "Week 2: Approach A 完了 → rl-scorer を golden_cases.jsonl の評価に接続",
+  "conclusion": "✓ 転用可能。evolve-scorer の3軸は LLM 出力評価に機能する。",
+  "recommendation": "Week 2: Approach A 完了 → evolve-scorer を golden_cases.jsonl の評価に接続",
   "good_result": {
     "label": "良質な evolve 出力（golden 相当）",
     "scores": {
@@ -57,7 +57,7 @@
       "structure": {
         "total": 0.0,
         "error": true,
-        "raw": "申し訳ありませんが、評価対象となる `evolve` スキルの実行出力が提示されていません。\n\n評価するには、以下のいずれかが必要です：\n\n1. **実行出力テキスト** — evolve スキルが生成したMarkdown形式の出力内容\n2. **ファイルパス** — 出力が保存されているファイルの場所（例：`scripts/output/evolve_result.md`）\n\n例えば、`/rl-anything:evolve` を実行後に生成されたレポートやサマリーを共有していただければ、構造品質（フォーマット・長さ・具体例・完結性）を評価できます。\n\nどちらをお持ちでしょうか？"
+        "raw": "申し訳ありませんが、評価対象となる `evolve` スキルの実行出力が提示されていません。\n\n評価するには、以下のいずれかが必要です：\n\n1. **実行出力テキスト** — evolve スキルが生成したMarkdown形式の出力内容\n2. **ファイルパス** — 出力が保存されているファイルの場所（例：`scripts/output/evolve_result.md`）\n\n例えば、`/evolve-anything:evolve` を実行後に生成されたレポートやサマリーを共有していただければ、構造品質（フォーマット・長さ・具体例・完結性）を評価できます。\n\nどちらをお持ちでしょうか？"
       }
     },
     "integrated_score": 0.0

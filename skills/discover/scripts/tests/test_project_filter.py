@@ -19,7 +19,7 @@ import discover
 @pytest.fixture
 def usage_with_projects(tmp_path):
     """プロジェクトフィールド付き usage.jsonl。"""
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     usage_file = data_dir / "usage.jsonl"
     records = []
@@ -115,7 +115,7 @@ class TestLoadClaudeReflectData:
 
     def test_pending_only(self, tmp_path):
         """pending のみ返す。applied/skipped は除外。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         corrections_file = data_dir / "corrections.jsonl"
         records = [
@@ -134,7 +134,7 @@ class TestLoadClaudeReflectData:
 
     def test_all_applied(self, tmp_path):
         """全件 applied なら空リスト。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         corrections_file = data_dir / "corrections.jsonl"
         records = [
@@ -150,7 +150,7 @@ class TestLoadClaudeReflectData:
 
     def test_empty_file(self, tmp_path):
         """ファイルが空なら空リスト。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         (data_dir / "corrections.jsonl").write_text("")
         with mock.patch.object(discover, "DATA_DIR", data_dir):
@@ -159,7 +159,7 @@ class TestLoadClaudeReflectData:
 
     def test_nonexistent_file(self, tmp_path):
         """ファイルが存在しない場合は空リスト。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         with mock.patch.object(discover, "DATA_DIR", data_dir):
             result = discover.load_claude_reflect_data()

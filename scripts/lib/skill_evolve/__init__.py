@@ -59,7 +59,7 @@ RATIONALIZATION_OUTCOME_WINDOW_DAYS = 30
 # LLMキャッシュ
 # plugin_root.py が <repo>/scripts/lib/ 基点で正確に解決するためそちらを使う
 from plugin_root import PLUGIN_ROOT as _plugin_root
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 CACHE_FILE = DATA_DIR / "skill-evolve-cache.json"
 
 # --- 分類 / アンチパターン / キャッシュヘルパ (classification.py / Phase 8 Slice 3) ---

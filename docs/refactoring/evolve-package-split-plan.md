@@ -48,7 +48,7 @@ C→D で remediation/self_evolution を参照）。→ phase 関数は `(result
 
 ### 配置: `skills/evolve/scripts/evolve/`（パッケージ化）
 
-- 既存の import 元慣習を Grep 済み: `bin/rl-evolve` は `sys.path.insert(0, skills/evolve/scripts)` → `from evolve import main`。
+- 既存の import 元慣習を Grep 済み: `bin/evolve` は `sys.path.insert(0, skills/evolve/scripts)` → `from evolve import main`。
   test 21 本は `from evolve import run_evolve / compute_trend / _resolve_pj_slug / check_data_sufficiency`。
 - `scripts/lib/audit.py → scripts/lib/audit/`（`__init__.py` re-export）の前例と**完全同型**。
   `evolve.py` を `evolve/__init__.py` にすれば `from evolve import X` は透過解決（sys.path は変えない）。
@@ -226,7 +226,7 @@ phase 関数シグネチャ統一: `def run_X(result: Dict[str, Any], ctx: Evolv
 | 2 | **キー集合 snapshot**（新規） | 抽出前後で result の `sorted(walk_keys(result))` が bit-identical。値は timestamp/generated_at で割れるので**キーのみ**を golden 化 | **新規・Slice 0** | `skills/evolve/scripts/tests/test_evolve_keyset_snapshot.py` |
 | 3 | **束縛経路テスト**（新規・§3） | `setattr(evolve, "run_evolve"/"check_data_sufficiency"/"_resolve_evolve_slug", sentinel)` が `main`/`run_evolve` に効く（束縛すり抜けの検出） | **新規・Slice 0** | `skills/evolve/scripts/tests/test_evolve_binding_paths.py` |
 | 4 | 既存 test 21 本（`from evolve import ...`） | re-export 正当性。import パス無変更で通る | **既存** | `skills/evolve/scripts/tests/` ほか |
-| 5 | `bin/rl-dogfood-gate --layer all` | dry-run SHA256 不変 / report invariants / SKILL.md コードブロック実行（実環境の繋ぎ目） | **既存** | gate |
+| 5 | `bin/evolve-dogfood-gate --layer all` | dry-run SHA256 不変 / report invariants / SKILL.md コードブロック実行（実環境の繋ぎ目） | **既存** | gate |
 
 ### HOME 隔離（#457）— 新規テストで MUST
 
@@ -284,7 +284,7 @@ python3 -m pytest skills/evolve/scripts/tests/test_evolve_binding_paths.py -q   
 claude plugin validate                                                # パッケージ整合性
 
 # 最初(#1)と最後(#8)は必須・中間は任意
-bin/rl-dogfood-gate --layer all
+bin/evolve-dogfood-gate --layer all
 ```
 
 ---
@@ -296,7 +296,7 @@ bin/rl-dogfood-gate --layer all
 | **monkeypatch 束縛すり抜け**（§3-2）— 抽出後 `setattr(evolve, ...)` が phase/cli 名前空間に効かず test が緑のまま実関数が走る | 🔴**高**（silent fail・ADR 未明示） | (1) 差し替え対象は phase/cli で `evolve.<name>` 経由呼び出しに統一（#1 で先行）。(2) 束縛経路テスト(#3)を #1 で緑固定し各 PR で回帰フェンス化 |
 | self-mutation スロット（`skill_evolve_assessment`/`collect_issues`）の束縛喪失（§3-1） | 🟡中 | スロット 2 変数は **`__init__.py` 先頭に残す**（phase へ移さない）。phase 内 `import evolve as _evolve_mod` 維持 |
 | phase 抽出で result の形が変わる | 🟡中 | キー集合 snapshot(#2) + CANONICAL 契約(#1) が構造 drift を検出 |
-| dry-run 書込ゲートの段違い破壊（post-batch 群 weak_signals/idiom 等は `dry_run` を最下層 write まで貫通） | 🟡中 | `ctx.dry_run` の伝播を `bin/rl-dogfood-gate` の dry-run SHA256 不変（Layer1）で確認。#8 で `--layer all` 必須 |
+| dry-run 書込ゲートの段違い破壊（post-batch 群 weak_signals/idiom 等は `dry_run` を最下層 write まで貫通） | 🟡中 | `ctx.dry_run` の伝播を `bin/evolve-dogfood-gate` の dry-run SHA256 不変（Layer1）で確認。#8 で `--layer all` 必須 |
 | module 先頭 `sys.path.insert`×2 / `DATA_DIR` の env 優先解決(#517) が抽出で消える | 🟡中 | `sys.path.insert` と `_resolve_data_dir`/`DATA_DIR` は **`__init__.py` 先頭**に残す（import 時点で効かせる）。`_env.py` の `DATA_DIR` は `__init__` から re-export |
 | `${CLAUDE_PLUGIN_ROOT}` / `plugin_root` 参照（`from plugin_root import PLUGIN_ROOT`）が抽出先で解決不能 | 🟡中 | `PLUGIN_ROOT` import も `__init__.py` 先頭に残し、`_env`/phase は `from plugin_root import PLUGIN_ROOT` を各自で行う（sys.path は `__init__` が通済み） |
 | 循環 import（`__init__` → phase → `import evolve`） | 🟡中 | phase の `import evolve as _evolve_mod` は **関数内 import**（現状もそう）なので循環しない。module-level で `from . import phases_*` する `__init__` も、phase が module-level で `evolve` を import しなければ安全 |

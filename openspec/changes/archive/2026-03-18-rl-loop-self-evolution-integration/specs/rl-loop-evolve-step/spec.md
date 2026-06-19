@@ -5,11 +5,11 @@
 `run-loop.py` は `--evolve` CLI フラグを受け付けなければならない（MUST）。デフォルトは無効（false）。有効時、各ループの最終ステップ（Step 5.5）として自己進化パターン組み込みを実行する。
 
 #### Scenario: --evolve フラグなしで実行
-- **WHEN** `--evolve` フラグなしで rl-loop を実行する
+- **WHEN** `--evolve` フラグなしで evolve-loop を実行する
 - **THEN** 従来通りテキスト最適化ループのみ実行し、自己進化パターン組み込みは行わない
 
 #### Scenario: --evolve フラグありで実行
-- **WHEN** `--evolve` フラグありで rl-loop を実行する
+- **WHEN** `--evolve` フラグありで evolve-loop を実行する
 - **THEN** 各ループの Step 5 後に自己進化適性判定 → パターン組み込み提案を実行する
 
 ### Requirement: 単一スキル向け自己進化の共通関数
@@ -19,7 +19,7 @@
 1. **`assess_single_skill(skill_name, skill_dir)`** — 1スキルの適性判定結果を返す
 2. **`apply_evolve_proposal(proposal)`** — `evolve_skill_proposal()` の返り値を受け取り、SKILL.md セクション追記 + `references/pitfalls.md` 作成 + バックアップ作成を実行する
 
-独立コマンド（evolve-skill）、rl-loop、remediation の3箇所から呼び出される。
+独立コマンド（evolve-skill）、evolve-loop、remediation の3箇所から呼び出される。
 
 #### Scenario: 適性 medium 以上
 - **WHEN** 対象スキルの適性が medium または high と判定される

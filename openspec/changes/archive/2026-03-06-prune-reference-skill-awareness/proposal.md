@@ -1,6 +1,6 @@
 ## Why
 
-Prune フェーズの `detect_zero_invocations()` は呼び出し回数ゼロのスキルをアーカイブ候補として検出するが、「参照型スキル」（デザインシステムガイド、評価仕様、設定ガイド等）は `/skill-name` で直接呼び出されることが稀であり、誤検出される。参照型スキルはコードベースとの整合性（ドリフト）で陳腐化を評価すべき。(ref: todoroki-godai/rl-anything#1)
+Prune フェーズの `detect_zero_invocations()` は呼び出し回数ゼロのスキルをアーカイブ候補として検出するが、「参照型スキル」（デザインシステムガイド、評価仕様、設定ガイド等）は `/skill-name` で直接呼び出されることが稀であり、誤検出される。参照型スキルはコードベースとの整合性（ドリフト）で陳腐化を評価すべき。(ref: todoroki-godai/evolve-anything#1)
 
 ## What Changes
 

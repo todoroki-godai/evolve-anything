@@ -4,7 +4,7 @@
 本テストは drain の3要素を決定論で固定する:
 
   1. **pending marker**（emit が dry-run でも書く運用ポインタ。評価 store/queue とは別物）
-  2. **drain_pending**（`rl-evolve --drain` の実体。marker or result-json から pending を取り
+  2. **drain_pending**（`evolve --drain` の実体。marker or result-json から pending を取り
      ingest→冪等記録→marker クリア）
   3. **undrained_applied**（SessionStart リマインドの signal。store を読まず #358 を踏まない）
 
@@ -70,7 +70,7 @@ def _store_count(slug="testslug"):
 def test_marker_root_is_home_based_not_env_derived():
     # QUEUE_ROOT は DATA_DIR(env 派生) 配下だが、MARKER_ROOT は home 固定。
     # これにより emit(tool 文脈)と SessionStart(hook 文脈)が同一パスに合意する。
-    assert ed.MARKER_ROOT == Path.home() / ".claude" / "rl-anything" / "evolve_pending"
+    assert ed.MARKER_ROOT == Path.home() / ".claude" / "evolve-anything" / "evolve_pending"
     assert "evolve_pending" in str(ed.marker_path("anything"))
 
 

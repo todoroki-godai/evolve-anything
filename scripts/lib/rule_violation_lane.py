@@ -214,7 +214,7 @@ def partition_rule_violations(
 # ここでは block + ルール参照誘導に徹する。
 _ENFORCEMENT_HOOK_TEMPLATE = '''\
 #!/usr/bin/env python3
-"""PreToolUse hook: 既存 rules で禁止済みのコマンドを block する（rl-anything #585 生成）。
+"""PreToolUse hook: 既存 rules で禁止済みのコマンドを block する（evolve-anything #585 生成）。
 
 rule_installed_but_not_enforced（ルール導入済みだが実行が止まっていない）違反を
 高頻度観測したため、機械的に enforce する。代替手段は該当 rule 本文を参照すること。

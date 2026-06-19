@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 @pytest.fixture
 def e2e_env(tmp_path):
     """E2E テスト用の一時環境を構築する。"""
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     tmpdir = str(tmp_path)
     with mock.patch.object(common, "DATA_DIR", data_dir), \

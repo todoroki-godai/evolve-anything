@@ -1,6 +1,6 @@
 ## Context
 
-`/rl-anything:optimize` は `optimize.py` で最適化を実行後、`save_history_entry()` で `history.jsonl` にエントリを追記する。この時点で `human_accepted=None` として記録される。CLI には `--accept`/`--reject` フラグと `record_human_decision()` メソッドが実装済みだが、SKILL.md の Step 3 には「結果をユーザーに報告する」としか書かれておらず、accept/reject を確認するワークフローが欠落している。
+`/evolve-anything:optimize` は `optimize.py` で最適化を実行後、`save_history_entry()` で `history.jsonl` にエントリを追記する。この時点で `human_accepted=None` として記録される。CLI には `--accept`/`--reject` フラグと `record_human_decision()` メソッドが実装済みだが、SKILL.md の Step 3 には「結果をユーザーに報告する」としか書かれておらず、accept/reject を確認するワークフローが欠落している。
 
 ## Goals / Non-Goals
 
@@ -23,7 +23,7 @@
 ### Decision 2: AskUserQuestion で確認後に CLI で記録
 
 **選択**: Step 3 で AskUserQuestion ツールを使い accept/reject を確認し、その結果を `optimize.py --accept` or `--reject --reason "..."` で記録する
-**理由**: rl-anything の他のスキル（evolve, prune 等）と同じ対話パターンに合わせる。`allowed-tools` に `AskUserQuestion` の追加が必要。
+**理由**: evolve-anything の他のスキル（evolve, prune 等）と同じ対話パターンに合わせる。`allowed-tools` に `AskUserQuestion` の追加が必要。
 **検討した代替案**: 結果を自動 accept し、ユーザーが不満な場合のみ `--reject` を別途実行する方式。しかしこの方式では reject のハードルが高くなり、`human_accepted: null` のまま残るエントリが減らない（根本原因が解消されない）ため不採用。
 
 ## Risks / Trade-offs

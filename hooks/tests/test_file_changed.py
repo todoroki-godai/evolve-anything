@@ -27,7 +27,7 @@ class TestHandleFileChanged:
         with mock.patch("file_changed.evaluate_file_changed") as mock_eval:
             mock_eval.return_value = mock.MagicMock(
                 triggered=True,
-                message="claude_md ファイルが変更されました。推奨: /rl-anything:audit",
+                message="claude_md ファイルが変更されました。推奨: /evolve-anything:audit",
             )
             result = handle_file_changed(event)
         mock_eval.assert_called_once()

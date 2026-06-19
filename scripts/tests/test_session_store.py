@@ -53,7 +53,7 @@ class TestPaths:
     def test_default_data_dir(self, monkeypatch):
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
         result = _import_session_store()
-        assert result["data_dir"] == str(Path.home() / ".claude" / "rl-anything")
+        assert result["data_dir"] == str(Path.home() / ".claude" / "evolve-anything")
 
     def test_env_override(self, tmp_path):
         result = _import_session_store({"CLAUDE_PLUGIN_DATA": str(tmp_path)})

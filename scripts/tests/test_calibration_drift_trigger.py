@@ -1,7 +1,7 @@
 """calibration drift の trigger_engine proactive 提案テスト（#286・決定論）。
 
 evaluate_session_end が accept/reject >= 30 かつ drift 検出時に
-/rl-anything:evolve-fitness を action に含めること、データ不足・drift なしでは
+/evolve-anything:evolve-fitness を action に含めること、データ不足・drift なしでは
 発火しないことを検証する。
 """
 import sys
@@ -76,7 +76,7 @@ def _quiet_state():
 
 
 def test_session_end_includes_evolve_fitness_action(monkeypatch):
-    """drift 検出時、action に /rl-anything:evolve-fitness が入る。"""
+    """drift 検出時、action に /evolve-anything:evolve-fitness が入る。"""
     monkeypatch.setattr(
         session_corrections, "_detect_calibration_drift", lambda: ["skill_quality"]
     )
@@ -87,7 +87,7 @@ def test_session_end_includes_evolve_fitness_action(monkeypatch):
 
     assert result.triggered is True
     assert "calibration_drift" in result.details.get("all_reasons", [])
-    assert "/rl-anything:evolve-fitness" in result.details.get("all_actions", [])
+    assert "/evolve-anything:evolve-fitness" in result.details.get("all_actions", [])
     assert "人間承認 MUST" in result.message
 
 

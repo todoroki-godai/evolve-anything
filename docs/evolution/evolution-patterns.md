@@ -107,7 +107,7 @@
 
 **K8s との対比**:
 
-| K8s | rl-anything |
+| K8s | evolve-anything |
 |-----|-------------|
 | Deployment YAML | CLAUDE.md + Rules（desired state） |
 | Running Pods | Skills + Memory + Hooks（actual state） |

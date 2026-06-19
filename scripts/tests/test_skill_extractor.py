@@ -57,7 +57,7 @@ def simple_session_turns():
             "type": "user",
             "message": {
                 "role": "user",
-                "content": "<command-name>/rl-anything:implement</command-name>\n<command-message>implement</command-message>\n<command-args></command-args>",
+                "content": "<command-name>/evolve-anything:implement</command-name>\n<command-message>implement</command-message>\n<command-args></command-args>",
             },
             "sessionId": "sess-001",
             "uuid": "uuid-002",
@@ -91,7 +91,7 @@ def multi_skill_session_turns():
             "type": "user",
             "message": {
                 "role": "user",
-                "content": "<command-name>/rl-anything:audit</command-name>\n<command-message>audit</command-message>",
+                "content": "<command-name>/evolve-anything:audit</command-name>\n<command-message>audit</command-message>",
             },
             "sessionId": "sess-002",
             "uuid": "uuid-011",
@@ -115,7 +115,7 @@ def multi_skill_session_turns():
             "type": "user",
             "message": {
                 "role": "user",
-                "content": "<command-name>/rl-anything:evolve</command-name>\n<command-message>evolve</command-message>",
+                "content": "<command-name>/evolve-anything:evolve</command-name>\n<command-message>evolve</command-message>",
             },
             "sessionId": "sess-002",
             "uuid": "uuid-014",
@@ -140,11 +140,11 @@ class TestExtractSkillFromTurn:
             "type": "user",
             "message": {
                 "role": "user",
-                "content": "<command-name>/rl-anything:implement</command-name>",
+                "content": "<command-name>/evolve-anything:implement</command-name>",
             },
         }
         result = _extract_skill_from_turn(turn)
-        assert result == "rl-anything:implement"
+        assert result == "evolve-anything:implement"
 
     def test_strips_leading_slash(self):
         turn = {
@@ -169,7 +169,7 @@ class TestExtractSkillFromTurn:
             "type": "assistant",
             "message": {
                 "role": "assistant",
-                "content": "<command-name>/rl-anything:implement</command-name>",
+                "content": "<command-name>/evolve-anything:implement</command-name>",
             },
         }
         # assistant ターンのコマンド名は無視
@@ -189,10 +189,10 @@ class TestExtractSkillFromTurn:
         turn = {
             "type": "system",
             "subtype": "local_command",
-            "content": "<command-name>/rl-anything:audit</command-name>",
+            "content": "<command-name>/evolve-anything:audit</command-name>",
         }
         result = _extract_skill_from_turn(turn)
-        assert result == "rl-anything:audit"
+        assert result == "evolve-anything:audit"
 
 
 # ── _parse_jsonl_file ─────────────────────────────────────
@@ -208,7 +208,7 @@ class TestParseJsonlFile:
         assert len(records) == 1
         rec = records[0]
         assert isinstance(rec, TrajectoryRecord)
-        assert rec.skill_name == "rl-anything:implement"
+        assert rec.skill_name == "evolve-anything:implement"
         assert rec.user_prompt == "実装をお願いします"
         assert rec.session_id == "sess-001"
 
@@ -220,7 +220,7 @@ class TestParseJsonlFile:
 
         assert len(records) == 2
         skill_names = {r.skill_name for r in records}
-        assert skill_names == {"rl-anything:audit", "rl-anything:evolve"}
+        assert skill_names == {"evolve-anything:audit", "evolve-anything:evolve"}
 
     def test_no_command_name_returns_empty(self, tmp_path):
         turns = [
@@ -267,7 +267,7 @@ class TestParseJsonlFile:
                 "type": "user",
                 "message": {
                     "role": "user",
-                    "content": "<command-name>/rl-anything:evolve</command-name>",
+                    "content": "<command-name>/evolve-anything:evolve</command-name>",
                 },
                 "sessionId": "sess-z",
                 "uuid": "uuid-z2",
@@ -312,7 +312,7 @@ class TestMachineryFilter:
         for r in real:
             assert _is_machinery_prompt(r) is False, f"実依頼を誤検出: {r!r}"
 
-    def _command_turn(self, skill="rl-anything:audit", ts="2026-01-01T00:09:00.000Z"):
+    def _command_turn(self, skill="evolve-anything:audit", ts="2026-01-01T00:09:00.000Z"):
         return {
             "type": "user",
             "message": {"role": "user", "content": f"<command-name>/{skill}</command-name>"},
@@ -415,7 +415,7 @@ class TestTrajectorySampler:
                     "type": "user",
                     "message": {
                         "role": "user",
-                        "content": f"<command-name>/rl-anything:audit</command-name>",
+                        "content": f"<command-name>/evolve-anything:audit</command-name>",
                     },
                     "sessionId": f"sess-{i:03d}",
                     "uuid": f"uuid-{i}-2",

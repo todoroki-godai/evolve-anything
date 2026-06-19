@@ -256,7 +256,7 @@ class TestThreeLayerBlend:
 class TestSkipLLM:
     """skip_llm=True で constitutional 軸（LLM呼び出し）をスキップする動作のテスト。
 
-    rl-fleet status の 10s timeout で rl-anything 自身が TIMEOUT する問題 (#86) 対応。
+    evolve-fleet status の 10s timeout で evolve-anything 自身が TIMEOUT する問題 (#86) 対応。
     """
 
     def test_skip_llm_does_not_load_constitutional(self, tmp_path):

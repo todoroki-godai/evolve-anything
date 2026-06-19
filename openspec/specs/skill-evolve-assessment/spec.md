@@ -44,7 +44,7 @@ skill_evolve_assessment() はスコアに基づき3段階で分類する（SHALL
 - **THEN** 「適性: 中」に分類される（7点なら低、8点なら中）
 
 ### Requirement: LLM scoring cache
-外部依存度・判断複雑さの LLM 判定結果は `~/.claude/rl-anything/skill-evolve-cache.json` にキャッシュする（SHALL）。スキルファイルの SHA256 ハッシュと紐づけ、ファイル変更時のみ再計算する。
+外部依存度・判断複雑さの LLM 判定結果は `~/.claude/evolve-anything/skill-evolve-cache.json` にキャッシュする（SHALL）。スキルファイルの SHA256 ハッシュと紐づけ、ファイル変更時のみ再計算する。
 
 #### Scenario: Cache hit
 - **WHEN** スキルファイルのハッシュがキャッシュと一致する

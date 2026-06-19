@@ -53,7 +53,7 @@ def _stub_growth_deps(monkeypatch, tmp_path):
 def test_phase_not_promoted_on_machine_noise(_stub_growth_deps, tmp_path) -> None:
     import audit.orchestrator as orch
 
-    proj = tmp_path / "rl-anything"
+    proj = tmp_path / "evolve-anything"
     proj.mkdir()
     lines = orch._build_growth_report(proj, skip_llm=True)
     text = "\n".join(lines)
@@ -88,7 +88,7 @@ def test_phase_promotes_when_human_corrections_sufficient(monkeypatch, tmp_path)
                                                       "axes": {"coherence": {"score": 0.5}}})
     monkeypatch.setattr(growth_engine, "_DATA_DIR", tmp_path, raising=False)
 
-    proj = tmp_path / "rl-anything"
+    proj = tmp_path / "evolve-anything"
     proj.mkdir()
     lines = orch._build_growth_report(proj, skip_llm=True)
     text = "\n".join(lines)

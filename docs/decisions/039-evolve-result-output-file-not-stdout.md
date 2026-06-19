@@ -12,7 +12,7 @@ Related: PR #334, [[pitfall_large_json_stdout_truncation]], [ADR-028]（observab
 
 結果、ユーザー環境で evolve のたびに「head -200 で切れて JSON が不完全でした。全量をファイルに保存し直します」というやり直しが多発していた。原因は Claude のミスではなく **出力契約と SKILL.md のミスマッチ**:
 
-- Claude が Bash で `rl-evolve` を実行すると、Bash ツールの出力上限で末尾が切られる、または
+- Claude が Bash で `evolve` を実行すると、Bash ツールの出力上限で末尾が切られる、または
 - 巨大化を見越して Claude が `| head -200` を自分で挟む
 
 → どちらも `indent=2` の JSON を**構造の途中で**切り、invalid JSON 化 → パース失敗 → ファイル保存にフォールバックするやり直しが発生する。
@@ -33,7 +33,7 @@ evolve SKILL.md を更新する:
 
 ## Alternatives Considered
 
-### 代替案A: SKILL.md だけ修正（`rl-evolve … > /tmp/out.json` に書き換え）
+### 代替案A: SKILL.md だけ修正（`evolve … > /tmp/out.json` に書き換え）
 最小コストだが、出力契約は依然「巨大 JSON を stdout に出す」ままで、別の呼び出し経路（手動実行・他スキル）が同じ罠を踏む。SKILL の散文に依存した運用回避であり、コード側の保証にならないため不採用（install ≠ enforcement の構図）。
 
 ### 代替案B: `--output`（採用）

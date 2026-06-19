@@ -255,7 +255,7 @@ class TestDataDirFallback:
             os.environ.pop("CLAUDE_PLUGIN_DATA", None)
             importlib.reload(rl_common)
             importlib.reload(common)
-            assert common.DATA_DIR == Path.home() / ".claude" / "rl-anything"
+            assert common.DATA_DIR == Path.home() / ".claude" / "evolve-anything"
 
 
 class TestPostCompact:

@@ -68,7 +68,7 @@ extracted」をメッセージで区別し、ミスリードを防ぐ。
 CLAUDE.md の Skills 記法は PJ ごとに自由度が高い。あらゆる bespoke 形式を飲み込むパーサは
 [ADR-027](027-pitfall-format-convergence-vs-tolerant-parser.md) が pitfalls.md で否定した
 「際限ない寛容パーサ」と同型のアンチパターンになる。本 ADR はこれに該当しないと判断した:
-**CLAUDE.md は rl-anything が書式を強制できない外部入力**であり（pitfalls.md のように `seed` +
+**CLAUDE.md は evolve-anything が書式を強制できない外部入力**であり（pitfalls.md のように `seed` +
 `normalize` で正準形へ収束させられない）、かつ追加するのは「太字ラベル + バッククォートコマンド」
 という**実 PJ で実証された1形式に限定した足切り**である。`normalize` 路線が取れない以上、
 頻出記法までのカバレッジ拡張が現実解。さらに過剰捕捉が安全側（exclusion 拡大）なので、寛容化の
@@ -94,5 +94,5 @@ robustness として残すが、本誤検知の主因対策ではない。
 - **悪い影響 / 制約**: パーサは「太字ラベル + バッククォートコマンド」までで、それ以外の bespoke
   記法（例: テーブル外の任意散文に埋まった skill 参照）は引き続き拾えない。新たな実 PJ 記法が
   出たら都度カバレッジを足切りで拡張する（[ADR-027] の収束原則を CLAUDE.md には適用できない
-  ことの裏返し）。`claude_md_unparseable` ゲートは Skills セクションを持たない CLAUDE.md（rl-anything
+  ことの裏返し）。`claude_md_unparseable` ゲートは Skills セクションを持たない CLAUDE.md（evolve-anything
   自身など）でも True になるが、その場合 untagged 候補が元々 0 件なら surface しない設計のため実害なし。

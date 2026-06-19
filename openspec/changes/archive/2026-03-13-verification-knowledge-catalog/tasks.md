@@ -48,4 +48,4 @@
 
 - [x] 6.1 統合テスト: `evolve.py --dry-run` で検証知見検出→提案の全フローが動作することを確認
 - [x] 6.2 既存テストの非破壊確認: `python3 -m pytest hooks/ skills/ scripts/tests/ scripts/rl/tests/ -v` が全パス
-- [x] 6.3 実際の rl-anything プロジェクトで evolve を実行し、`data-contract-verification` が提案されることを確認
+- [x] 6.3 実際の evolve-anything プロジェクトで evolve を実行し、`data-contract-verification` が提案されることを確認

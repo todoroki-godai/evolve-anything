@@ -185,7 +185,7 @@ class TestConfigurableThreshold:
 
     def test_configurable_threshold(self, tmp_path):
         """evolve-state.json に reorganize_threshold が設定されている場合その値を使う。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
 
         state = {"reorganize_threshold": 0.5}
@@ -200,7 +200,7 @@ class TestConfigurableThreshold:
 
     def test_default_threshold_when_no_file(self, tmp_path):
         """evolve-state.json が存在しない場合デフォルト 0.7 を返す。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
 
         with mock.patch.object(reorganize, "DATA_DIR", data_dir):
@@ -210,7 +210,7 @@ class TestConfigurableThreshold:
 
     def test_default_threshold_when_key_missing(self, tmp_path):
         """evolve-state.json に reorganize_threshold キーが無い場合デフォルト 0.7 を返す。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
 
         state = {"decay_threshold": 0.2}
@@ -225,7 +225,7 @@ class TestConfigurableThreshold:
 
     def test_default_threshold_when_malformed_json(self, tmp_path):
         """evolve-state.json が不正な JSON の場合デフォルト 0.7 を返す。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
 
         (data_dir / "evolve-state.json").write_text("not valid json")

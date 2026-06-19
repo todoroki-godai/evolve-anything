@@ -46,8 +46,8 @@ except ImportError:
         return False
 
 # corrections.jsonl / errors.jsonl のデフォルトパス
-CORRECTIONS_FILE = Path.home() / ".claude" / "rl-anything" / "corrections.jsonl"
-ERRORS_FILE = Path.home() / ".claude" / "rl-anything" / "errors.jsonl"
+CORRECTIONS_FILE = Path.home() / ".claude" / "evolve-anything" / "corrections.jsonl"
+ERRORS_FILE = Path.home() / ".claude" / "evolve-anything" / "errors.jsonl"
 
 # promotion 閾値
 PROMOTION_MIN_OCCURRENCES = 2

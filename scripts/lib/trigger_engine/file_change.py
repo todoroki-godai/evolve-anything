@@ -22,7 +22,7 @@ from .state import (
 
 
 def is_watched_file(file_path: str) -> str | None:
-    """ファイルパスを rl-anything 関連カテゴリに分類する。
+    """ファイルパスを evolve-anything 関連カテゴリに分類する。
 
     Returns:
         "claude_md" / "skills" / "rules" / None
@@ -74,8 +74,8 @@ def evaluate_file_changed(
     result = TriggerResult(
         triggered=True,
         reason=reason,
-        action="/rl-anything:audit",
-        message=f"{category} ファイルが変更されました。推奨: /rl-anything:audit",
+        action="/evolve-anything:audit",
+        message=f"{category} ファイルが変更されました。推奨: /evolve-anything:audit",
         details={"file_path": file_path, "category": category},
     )
     state = _record_trigger(state, result)

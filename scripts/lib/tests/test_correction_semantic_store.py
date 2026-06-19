@@ -21,7 +21,7 @@ def _idiom(text="四国めたんじゃなくて", source_path="/a.jsonl", line_n
         provenance={"source_path": source_path, "line_no": line_no,
                     "session_id": "s1", "reason": "正しい値の後置型"},
         detected_at="2026-06-10T00:00:00+00:00",
-        pj_slug="rl-anything",
+        pj_slug="evolve-anything",
     )
 
 

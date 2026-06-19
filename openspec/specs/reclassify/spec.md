@@ -51,7 +51,7 @@ TBD - created by archiving change backfill-noise-filter. Update Purpose after ar
 分類は SKILL.md Step 2 で Claude Code セッション内の LLM が実行する。subprocess（`claude -p --model haiku`）を使用してはならない（MUST NOT）。
 
 #### Scenario: SKILL.md Step 2 による分類フロー
-- **WHEN** `/rl-anything:backfill` の Step 2 が実行される
+- **WHEN** `/evolve-anything:backfill` の Step 2 が実行される
 - **THEN** `reclassify.py extract --include-reclassified` で "other" プロンプトを抽出する
 - **AND** Claude Code が SKILL.md に記載されたカテゴリ定義に基づき各プロンプトを分類する
 - **AND** 分類結果を JSON ファイルに書き出す

@@ -26,8 +26,8 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "hooks"))
 import common
 
 # ~/.claude/projects/<slug>/ のパス
-_PROJECTS_DIR = Path.home() / ".claude" / "projects" / "-Users-todoroki-tools-rl-anything"
-_DATA_DIR = Path(os.environ.get("CLAUDE_PLUGIN_DATA", Path.home() / ".claude" / "rl-anything"))
+_PROJECTS_DIR = Path.home() / ".claude" / "projects" / "-Users-todoroki-tools-evolve-anything"
+_DATA_DIR = Path(os.environ.get("CLAUDE_PLUGIN_DATA", Path.home() / ".claude" / "evolve-anything"))
 
 PRECEDING_N = 5  # 直近 N 件のツール呼び出しを取得
 

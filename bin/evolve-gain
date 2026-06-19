@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""rl-gain — rl-anything ROI 可視化コマンド。
+"""evolve-gain — evolve-anything ROI 可視化コマンド。
 
-rtk gain 風の ASCII レポートで rl-anything の効果を可視化する。
+rtk gain 風の ASCII レポートで evolve-anything の効果を可視化する。
 """
 import json
 import os
@@ -16,7 +16,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from scripts.lib.growth_level import compute_level, compute_xp_progress
 
-DATA_DIR = Path(os.environ.get("CLAUDE_PLUGIN_DATA", Path.home() / ".claude/rl-anything"))
+DATA_DIR = Path(os.environ.get("CLAUDE_PLUGIN_DATA", Path.home() / ".claude/evolve-anything"))
 
 # スキル別推定節約時間 (分)
 SKILL_COST_MINUTES: Dict[str, int] = {
@@ -26,8 +26,8 @@ SKILL_COST_MINUTES: Dict[str, int] = {
     "implement": 10,
     "spec-keeper": 5,
     "second-opinion": 8,
-    "rl-loop-orchestrator": 20,
-    "rl-loop": 20,
+    "evolve-loop-orchestrator": 20,
+    "evolve-loop": 20,
     "discover": 5,
     "prune": 5,
     "agent-brushup": 8,
@@ -50,12 +50,12 @@ DEFAULT_COST_MINUTES = 2
 
 
 def is_rl_anything_skill(skill_name: str) -> bool:
-    return skill_name.startswith("rl-anything:")
+    return skill_name.startswith("evolve-anything:")
 
 
 def get_skill_short_name(skill_name: str) -> str:
-    if skill_name.startswith("rl-anything:"):
-        return skill_name[len("rl-anything:"):]
+    if skill_name.startswith("evolve-anything:"):
+        return skill_name[len("evolve-anything:"):]
     return skill_name
 
 
@@ -199,7 +199,7 @@ def print_report(report: Dict) -> None:
     SEP2 = "─" * W
 
     print()
-    print("RL-Anything ROI Report")
+    print("Evolve-Anything ROI Report")
     print(SEP)
 
     since_str = f"  (since {report['since_date']})" if report["since_date"] else ""
@@ -230,7 +230,7 @@ def print_report(report: Dict) -> None:
 
     if report["skill_breakdown"]:
         print()
-        print("By Skill (rl-anything 系)")
+        print("By Skill (evolve-anything 系)")
         print(SEP2)
         print(f"  {'#':>2}  {'Skill':<25}  {'Count':>5}  {'Est. Saved':>10}  Impact")
         print(SEP2)
@@ -245,7 +245,7 @@ def print_report(report: Dict) -> None:
     else:
         print()
         print("No skill usage recorded yet.")
-        print("Run /rl-anything:evolve, /rl-anything:audit, or other skills to start tracking.")
+        print("Run /evolve-anything:evolve, /evolve-anything:audit, or other skills to start tracking.")
 
     print()
 

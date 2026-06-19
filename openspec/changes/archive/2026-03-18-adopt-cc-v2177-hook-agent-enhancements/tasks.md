@@ -34,14 +34,14 @@
 - [x] 6.2 `hooks/hooks.json` に `StopFailure` エントリを追加
 - [x] 6.3 テスト追加: rate_limit / auth_failure イベントで正しく記録されることを確認
 
-## 7. rl-scorer Agent frontmatter 拡張（v2.1.78）
+## 7. evolve-scorer Agent frontmatter 拡張（v2.1.78）
 
-- [x] 7.1 `agents/rl-scorer.md` の frontmatter に `maxTurns: 15` を追加
-- [x] 7.2 `agents/rl-scorer.md` の frontmatter に `disallowedTools: [Edit, Write, Bash]` を追加
+- [x] 7.1 `agents/evolve-scorer.md` の frontmatter に `maxTurns: 15` を追加
+- [x] 7.2 `agents/evolve-scorer.md` の frontmatter に `disallowedTools: [Edit, Write, Bash]` を追加
 
 ## 8. DATA_DIR の CLAUDE_PLUGIN_DATA フォールバック（v2.1.78）
 
-- [x] 8.1 `hooks/common.py` の `DATA_DIR` を `os.environ.get("CLAUDE_PLUGIN_DATA") or Path.home() / ".claude" / "rl-anything"` に変更
+- [x] 8.1 `hooks/common.py` の `DATA_DIR` を `os.environ.get("CLAUDE_PLUGIN_DATA") or Path.home() / ".claude" / "evolve-anything"` に変更
 - [x] 8.2 テスト追加: CLAUDE_PLUGIN_DATA 設定時にそちらが優先されることを確認
 - [x] 8.3 テスト追加: CLAUDE_PLUGIN_DATA 未設定時に従来パスにフォールバックすることを確認
 

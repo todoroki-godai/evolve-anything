@@ -1,6 +1,6 @@
 ## Why
 
-evolve/discover が `~/.claude/rl-anything/usage.jsonl` を全レコード無差別に読み込むため、別プロジェクトのテレメトリが混入し、無関係なスキル候補（例: AWS 未使用 PJ に `aws-deploy` を推薦）が提案される。データ量は増加し続けており（現在 1915 行）、JSONL の全行パースによる分析コードの複雑さも課題。
+evolve/discover が `~/.claude/evolve-anything/usage.jsonl` を全レコード無差別に読み込むため、別プロジェクトのテレメトリが混入し、無関係なスキル候補（例: AWS 未使用 PJ に `aws-deploy` を推薦）が提案される。データ量は増加し続けており（現在 1915 行）、JSONL の全行パースによる分析コードの複雑さも課題。
 
 ## What Changes
 

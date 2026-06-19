@@ -52,7 +52,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from optimize_history_store import resolve_slug, UNATTRIBUTED_SLUG  # noqa: F401
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 # テストは spec_trigger.MARKER_ROOT を monkeypatch して隔離する
 MARKER_ROOT = DATA_DIR / "spec_trigger"
 
@@ -212,7 +212,7 @@ def _view(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 def format_message(surfaced: List[Dict[str, Any]]) -> str:
     n = len(surfaced)
-    lines = [f"[rl-anything:spec-trigger] 🔔 main に仕様未追従の変更 {n} 件:"]
+    lines = [f"[evolve-anything:spec-trigger] 🔔 main に仕様未追従の変更 {n} 件:"]
     has_breaking = False
     for s in surfaced:
         tag = " 🔁再通知" if s.get("reminder") else ""
@@ -222,7 +222,7 @@ def format_message(surfaced: List[Dict[str, Any]]) -> str:
         lines.append(f"  - {s['sha'][:8]} {s['subject'][:64]}{bang}{tag}")
     lines.append(
         "→ コード変更が SPEC.md / CLAUDE.md(component table) に未反映の可能性。"
-        " /rl-anything:spec-keeper update で追従を検討。"
+        " /evolve-anything:spec-keeper update で追従を検討。"
     )
     if has_breaking:
         lines.append("  破壊的変更あり → ADR 化も検討。")

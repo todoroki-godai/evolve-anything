@@ -1,6 +1,6 @@
 """永続スキップリスト (denylist) の読み書き。
 
-グローバルスコープ（全 PJ 共通）で ~/.claude/rl-anything/skill-evolve-denylist.json に保存。
+グローバルスコープ（全 PJ 共通）で ~/.claude/evolve-anything/skill-evolve-denylist.json に保存。
 """
 import json
 import os
@@ -13,7 +13,7 @@ _DENYLIST_FILENAME = "skill-evolve-denylist.json"
 DATA_DIR: Path = (
     Path(os.environ["CLAUDE_PLUGIN_DATA"])
     if os.environ.get("CLAUDE_PLUGIN_DATA")
-    else Path.home() / ".claude" / "rl-anything"
+    else Path.home() / ".claude" / "evolve-anything"
 )
 
 

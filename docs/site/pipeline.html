@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>rl-anything — パイプライン / 主要スキル</title>
+<title>evolve-anything — パイプライン / 主要スキル</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -15,7 +15,7 @@
   <button class="sidebar-toggle" id="sidebarToggle" aria-label="メニュー">☰</button>
   <a href="index.html" class="site-logo">
     <svg class="claude-mark" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#CF6B47" fill-opacity=".12"/><path d="M20 9C13.925 9 9 13.925 9 20s4.925 11 11 11 11-4.925 11-11S26.075 9 20 9zm0 2c4.97 0 9 4.03 9 9s-4.03 9-9 9-9-4.03-9-9 4.03-9 9-9z" fill="#CF6B47" fill-opacity=".5"/><path d="M16.5 17c0-.828.672-1.5 1.5-1.5h4c.828 0 1.5.672 1.5 1.5S22.828 18.5 22 18.5h-1.25V23c0 .828-.672 1.5-1.5 1.5S17.75 23.828 17.75 23v-4.5H18c-.828 0-1.5-.672-1.5-1.5z" fill="#CF6B47"/></svg>
-    <span>rl-anything</span>
+    <span>evolve-anything</span>
     <span class="badge">plugin</span>
   </a>
   <div class="header-right">
@@ -55,7 +55,7 @@
 
     <section class="doc-section" id="pipeline">
       <h1>パイプライン</h1>
-      <p class="lead"><code>/rl-anything:evolve</code> を実行すると、以下の5ステージが順番に走ります。各ステージは独立して呼び出すことも可能です。</p>
+      <p class="lead"><code>/evolve-anything:evolve</code> を実行すると、以下の5ステージが順番に走ります。各ステージは独立して呼び出すことも可能です。</p>
 
       <div class="pipeline">
         <div class="pipeline-step active">
@@ -103,12 +103,12 @@
 
     <section class="doc-section" id="skills">
       <h1>主要スキル</h1>
-      <p class="lead">rl-anything が提供するスキルの一覧です。すべて <code>/rl-anything:&lt;skill&gt;</code> で呼び出せます。</p>
+      <p class="lead">evolve-anything が提供するスキルの一覧です。すべて <code>/evolve-anything:&lt;skill&gt;</code> で呼び出せます。</p>
 
       <h2>採点・進化系</h2>
       <div class="skills-list">
         <div class="skill-row">
-          <span class="skill-name">rl-scorer</span>
+          <span class="skill-name">evolve-scorer</span>
           <span class="skill-desc">オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点。CLAUDE.md からドメイン（ゲーム / API / Bot / ドキュメント）を自動判定して評価軸を切り替える。</span>
         </div>
         <div class="skill-row">
@@ -161,7 +161,7 @@
         </div>
         <div class="skill-row">
           <span class="skill-name">report-feedback</span>
-          <span class="skill-desc">evolve / audit レポートを LLM メタレビューし、rl-anything 自身への改善 issue を <code>todoroki-godai/rl-anything</code> に半自動起票する。決定論 introspect が拾えない「読んで気づく」改善が対象（旧 feedback の後継）。</span>
+          <span class="skill-desc">evolve / audit レポートを LLM メタレビューし、evolve-anything 自身への改善 issue を <code>todoroki-godai/evolve-anything</code> に半自動起票する。決定論 introspect が拾えない「読んで気づく」改善が対象（旧 feedback の後継）。</span>
         </div>
         <div class="skill-row">
           <span class="skill-name">import</span>

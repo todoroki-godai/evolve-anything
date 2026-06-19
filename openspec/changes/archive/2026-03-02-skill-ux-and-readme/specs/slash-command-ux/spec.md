@@ -2,15 +2,15 @@
 
 ### Requirement: SKILL.md のスキル名変更
 
-genetic-prompt-optimizer の SKILL.md frontmatter `name` フィールドを `optimize` に変更する。rl-loop-orchestrator の SKILL.md は `rl-loop` をトリガーワードとして維持する。
+genetic-prompt-optimizer の SKILL.md frontmatter `name` フィールドを `optimize` に変更する。evolve-loop-orchestrator の SKILL.md は `evolve-loop` をトリガーワードとして維持する。
 
 #### Scenario: /optimize でスキルが呼び出される
 - **WHEN** ユーザーが `/optimize` と入力する
 - **THEN** genetic-prompt-optimizer の SKILL.md が Claude に読み込まれ、instructions に従った処理が開始される
 
-#### Scenario: /rl-loop でスキルが呼び出される
-- **WHEN** ユーザーが `/rl-loop` と入力する
-- **THEN** rl-loop-orchestrator の SKILL.md が Claude に読み込まれ、instructions に従った処理が開始される
+#### Scenario: /evolve-loop でスキルが呼び出される
+- **WHEN** ユーザーが `/evolve-loop` と入力する
+- **THEN** evolve-loop-orchestrator の SKILL.md が Claude に読み込まれ、instructions に従った処理が開始される
 
 ### Requirement: SKILL.md instructions の書き換え
 
@@ -24,9 +24,9 @@ SKILL.md の instructions を「ユーザー向けドキュメント」から「
 - **WHEN** `/optimize` が引数なしで呼び出される
 - **THEN** Claude は instructions に従い、ユーザーに `--target` の指定を求める
 
-#### Scenario: /rl-loop 実行時に Claude がスクリプトを自動実行する
-- **WHEN** `/rl-loop --target .claude/skills/my-skill/SKILL.md` が呼び出される
-- **THEN** Claude は instructions に従い、`python3 <PLUGIN_DIR>/skills/rl-loop-orchestrator/scripts/run-loop.py --target .claude/skills/my-skill/SKILL.md` を自動実行する
+#### Scenario: /evolve-loop 実行時に Claude がスクリプトを自動実行する
+- **WHEN** `/evolve-loop --target .claude/skills/my-skill/SKILL.md` が呼び出される
+- **THEN** Claude は instructions に従い、`python3 <PLUGIN_DIR>/skills/evolve-loop-orchestrator/scripts/run-loop.py --target .claude/skills/my-skill/SKILL.md` を自動実行する
 
 ### Requirement: instructions に含めるべき要素
 

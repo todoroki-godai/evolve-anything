@@ -176,7 +176,7 @@ def check_observability_contract(result: Dict[str, Any]) -> List[Dict[str, str]]
     return failures
 
 
-# (name, function) の単一ソース。bin/rl-dogfood-gate がこれを回す。
+# (name, function) の単一ソース。bin/evolve-dogfood-gate がこれを回す。
 _CHECKS = (
     ("required_keys", check_required_keys),
     ("non_negative_counts", check_non_negative_counts),

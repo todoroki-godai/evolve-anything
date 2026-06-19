@@ -114,7 +114,7 @@ class TestSessionSummary:
     def test_context_file_cleanup(self, patch_data_dir, tmp_path):
         """セッション終了時に文脈ファイルが削除される。"""
         with mock.patch.dict(os.environ, {"TMPDIR": str(tmp_path)}):
-            ctx_path = tmp_path / "rl-anything-workflow-sess-wfs-003.json"
+            ctx_path = tmp_path / "evolve-anything-workflow-sess-wfs-003.json"
             ctx_path.write_text('{"skill_name":"test"}')
             assert ctx_path.exists()
 
@@ -395,7 +395,7 @@ class TestRestoreState:
         result = json.loads(lines[0])
         assert result["restored"] is True
         summary = "\n".join(lines[1:])
-        assert "[rl-anything:restore_state] 作業コンテキスト復元:" in summary
+        assert "[evolve-anything:restore_state] 作業コンテキスト復元:" in summary
         assert "ブランチ: feature/x" in summary
         assert "abc1234 fix: something" in summary
         assert "path/to/file1" in summary

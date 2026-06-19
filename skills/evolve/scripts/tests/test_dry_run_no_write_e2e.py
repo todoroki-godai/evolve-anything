@@ -59,7 +59,7 @@ def test_dry_run_writes_nothing_under_isolated_dirs(tmp_path, monkeypatch):
 
     # MARKER_ROOT は import 時に実 home で凍結される（env 非依存）ので、
     # この E2E では明示的に隔離ツリー配下へ向ける（実 home 汚染防止 + snapshot 対象化）。
-    marker_root = tmp_path / "isolated-home" / ".claude" / "rl-anything" / "evolve_pending"
+    marker_root = tmp_path / "isolated-home" / ".claude" / "evolve-anything" / "evolve_pending"
     monkeypatch.setattr(ed, "MARKER_ROOT", marker_root)
 
     project_dir = tmp_path / "project"

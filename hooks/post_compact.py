@@ -14,7 +14,7 @@ import common
 
 def _build_context_message(checkpoint: dict) -> str:
     """checkpoint から人間可読なコンテキストサマリーを構築する。"""
-    parts = ["[rl-anything:post_compact] Compact 後の作業コンテキスト:"]
+    parts = ["[evolve-anything:post_compact] Compact 後の作業コンテキスト:"]
 
     work_context = checkpoint.get("work_context", {})
 
@@ -59,9 +59,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_post_compact(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:post_compact] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:post_compact] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:post_compact] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:post_compact] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

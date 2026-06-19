@@ -30,7 +30,7 @@
                Completeness スキル使用率    ─
                Efficiency   セッション効率  ─
 ────────────────────────────────────────────────────────
-rl-anything    ─            ─             LLMコール最小化
+evolve-anything    ─            ─             LLMコール最小化
                                           べき等性、互換性
 atlas-breeaders ─           ─             ゲームバランス
                                           UX品質、物語整合
@@ -99,7 +99,7 @@ Phase 3 (長期): Pattern 1 + 2 — Task Exec + Eureka
 - [ ] Phase 1: 既存 hooks データから測定可能な Telemetry 指標の洗い出し
 - [ ] Phase 1: Configuration Utilization の測定プロトタイプ
 - [ ] Phase 2: CLAUDE.md からの原則自動抽出の PoC
-- [ ] Phase 3: rl-anything 用の test-tasks.yaml 雛形作成
+- [ ] Phase 3: evolve-anything 用の test-tasks.yaml 雛形作成
 - [ ] Phase 3: Eureka 式 fitness 進化ループの設計
 - [ ] #14 のスコープを Phase 3 に位置づけるか、本 issue に統合するか判断
 

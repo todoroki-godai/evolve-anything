@@ -93,7 +93,7 @@ def test_extract_from_project_root(tmp_path):
 
 def test_normalize_skill_name():
     assert normalize_skill_name("/channel-routing") == "channel-routing"
-    assert normalize_skill_name("rl-anything:channel-routing") == "channel-routing"
+    assert normalize_skill_name("evolve-anything:channel-routing") == "channel-routing"
     assert normalize_skill_name("channel-routing") == "channel-routing"
     assert normalize_skill_name("/plugin:skill") == "skill"
 

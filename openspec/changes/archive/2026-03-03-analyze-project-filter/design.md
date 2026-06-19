@@ -1,6 +1,6 @@
 ## Context
 
-`analyze.py` は `common.DATA_DIR` (`~/.claude/rl-anything/`) 配下の JSONL ファイルを全件読み込み分析する。一方 `backfill.py` は各レコードに `project_name` フィールドを付与してプロジェクト単位でデータを書き込む。この非対称性により、複数プロジェクトで backfill を実行すると分析結果にデータが混在する。
+`analyze.py` は `common.DATA_DIR` (`~/.claude/evolve-anything/`) 配下の JSONL ファイルを全件読み込み分析する。一方 `backfill.py` は各レコードに `project_name` フィールドを付与してプロジェクト単位でデータを書き込む。この非対称性により、複数プロジェクトで backfill を実行すると分析結果にデータが混在する。
 
 現在のデータフロー:
 - `backfill.py` → sessions.jsonl に `project_name` を設定 ✅

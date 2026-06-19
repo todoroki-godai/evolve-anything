@@ -22,12 +22,12 @@ def store(tmp_path, monkeypatch):
     return tus
 
 
-def _rec(uuid: str, ts: str = "2026-05-01T12:00:00Z", pj_id: str = "-pj-rl-anything", **kw) -> dict:
+def _rec(uuid: str, ts: str = "2026-05-01T12:00:00Z", pj_id: str = "-pj-evolve-anything", **kw) -> dict:
     base = {
         "uuid": uuid,
         "ts": ts,
         "pj_id": pj_id,
-        "pj_slug": "rl-anything",
+        "pj_slug": "evolve-anything",
         "session_id": "sess-1",
         "parent_uuid": None,
         "is_sidechain": False,
@@ -75,13 +75,13 @@ def test_get_last_ingested_ts(store):
         import duckdb  # noqa
     except ImportError:
         pytest.skip("duckdb not installed")
-    assert store.get_last_ingested_ts("-pj-rl-anything") is None
+    assert store.get_last_ingested_ts("-pj-evolve-anything") is None
     store.append_batch([
         _rec("u1", ts="2026-05-01T12:00:00Z"),
         _rec("u2", ts="2026-05-03T08:00:00Z"),
         _rec("u3", ts="2026-05-02T12:00:00Z"),
     ])
-    last = store.get_last_ingested_ts("-pj-rl-anything")
+    last = store.get_last_ingested_ts("-pj-evolve-anything")
     assert last is not None
     assert "2026-05-03" in last
     # 別 PJ は None

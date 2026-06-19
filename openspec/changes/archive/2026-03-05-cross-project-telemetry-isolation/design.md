@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything の observe hook は全プロジェクトのテレメトリを `~/.claude/rl-anything/usage.jsonl` に一括記録する。discover/audit はこのファイルを全行パースし Python で集計するが、プロジェクト識別子がないため全 PJ のデータが混在し、無関係なスキル候補が提案される。
+evolve-anything の observe hook は全プロジェクトのテレメトリを `~/.claude/evolve-anything/usage.jsonl` に一括記録する。discover/audit はこのファイルを全行パースし Python で集計するが、プロジェクト識別子がないため全 PJ のデータが混在し、無関係なスキル候補が提案される。
 
 現状のアーキテクチャ:
 - Write: observe hook → JSONL append（依存なし、高速）
@@ -79,6 +79,6 @@ rl-anything の observe hook は全プロジェクトのテレメトリを `~/.c
 
 ## Risks / Trade-offs
 
-- **duckdb 依存の追加 (~80MB)**: rl-anything は既に scipy に依存しており、サイズ増加は許容範囲。read 側のみなので hook には影響なし → hook の requirements.txt には追加しない
+- **duckdb 依存の追加 (~80MB)**: evolve-anything は既に scipy に依存しており、サイズ増加は許容範囲。read 側のみなので hook には影響なし → hook の requirements.txt には追加しない
 - **DuckDB の JSONL パース性能**: 1万行程度なら `read_json_auto()` で十分高速。将来的に 10万行超になった場合は Parquet アーカイブを検討
-- **project 名の衝突**: 異なるパス配下の同名ディレクトリは同一 project として扱われる。rl-anything の利用形態では実質的に問題にならない
+- **project 名の衝突**: 異なるパス配下の同名ディレクトリは同一 project として扱われる。evolve-anything の利用形態では実質的に問題にならない

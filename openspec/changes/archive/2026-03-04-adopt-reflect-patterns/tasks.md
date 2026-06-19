@@ -2,7 +2,7 @@
 
 - [x] 1.1 `hooks/correction_detect.py` を新規作成: UserPromptSubmit イベントから CJK/英語修正パターンを検出し corrections.jsonl に記録
 - [x] 1.2 修正パターン定義を `hooks/common.py` に追加（CORRECTION_PATTERNS, CJK_CORRECTION_PATTERNS, false_positive_filters）
-- [x] 1.3 直前スキル紐付けロジック: observe.py が最後に記録した skill_name を `$TMPDIR/rl-anything-last-skill-{session_id}.json` に書き出し、correction_detect.py が last_skill として取得。TTL は 24 時間とし、古いファイルは無視する（MUST）
+- [x] 1.3 直前スキル紐付けロジック: observe.py が最後に記録した skill_name を `$TMPDIR/evolve-anything-last-skill-{session_id}.json` に書き出し、correction_detect.py が last_skill として取得。TTL は 24 時間とし、古いファイルは無視する（MUST）
 - [x] 1.4 `hooks/hooks.json` に UserPromptSubmit エントリを追加
 - [x] 1.5 correction_detect.py のユニットテスト: パターン検出、疑問文除外、サイレント失敗
 

@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     from rl_common import DATA_DIR
 except ImportError:  # pragma: no cover - パス未解決時のフォールバック
-    DATA_DIR = Path.home() / ".claude" / "rl-anything"
+    DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 # #469: session 系軸は sessions.jsonl 直読でなく session_store の union read
 # （DuckDB sessions.db + 未 ingest live jsonl）を使う。sessions.jsonl は #415 で db へ
@@ -147,8 +147,8 @@ def _normalize_pj(value: Optional[str]) -> Optional[str]:
 
     既存の共有関数 ``utterance_archive.extractor.pj_slug_from_cwd`` に寄せる
     （新しい比較方式を発明しない。slug 1関数化 #492 にそのまま乗る）。これにより
-    ``/x/rl-anything/.claude/worktrees/feedback`` のような worktree セッションの
-    フルパスが本体 repo 名 ``rl-anything`` に正規化され、本体⇔worktree 間の取りこぼし
+    ``/x/evolve-anything/.claude/worktrees/feedback`` のような worktree セッションの
+    フルパスが本体 repo 名 ``evolve-anything`` に正規化され、本体⇔worktree 間の取りこぼし
     （undercount）を防ぐ。フルパスを持たない basename だけのレコード（worktree slug の
     痕跡が ``project=feedback`` 等で固定済み）はフルパスが無いため pj_slug_from_cwd の
     素通し（basename）と同じく原値のまま残る — 復元不能な情報欠落であり本関数の責務外。

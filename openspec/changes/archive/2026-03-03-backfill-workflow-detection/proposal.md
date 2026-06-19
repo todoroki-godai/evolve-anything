@@ -23,5 +23,5 @@ backfill のワークフロー検出は現在 `Skill→Agent` パターンのみ
 
 - `skills/backfill/scripts/backfill.py` — ワークフロー検出ロジック拡張
 - `skills/backfill/scripts/tests/test_backfill.py` — 新パターンのテスト追加
-- `~/.claude/rl-anything/workflows.jsonl` — 既存レコードとの互換性（`workflow_type` 未設定は `skill-driven` として扱う）
+- `~/.claude/evolve-anything/workflows.jsonl` — 既存レコードとの互換性（`workflow_type` 未設定は `skill-driven` として扱う）
 - Phase C（workflow-tracing 11.1〜11.4）のデータ入力が大幅に増加する見込み

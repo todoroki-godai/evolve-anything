@@ -14,7 +14,7 @@ Phase 11 で `telemetry_query.py` (652 行) を package 化（Slice 1-3 で 4 �
 """
 from pathlib import Path
 
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 try:
     import duckdb  # noqa: F401  # HAS_DUCKDB 判定のための probe

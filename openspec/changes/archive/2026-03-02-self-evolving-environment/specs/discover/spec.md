@@ -1,6 +1,6 @@
 ## ADDED Requirements
 
-### Requirement: /rl-anything:discover スキルで観測データからスキル/ルール候補を発見しなければならない（MUST）
+### Requirement: /evolve-anything:discover スキルで観測データからスキル/ルール候補を発見しなければならない（MUST）
 usage.jsonl、errors.jsonl、sessions.jsonl、history.jsonl の観測データから繰り返しパターンを検出し、スキル/ルール候補を生成しなければならない（MUST）。
 
 #### Scenario: 繰り返し行動パターンの検出

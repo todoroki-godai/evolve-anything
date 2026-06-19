@@ -12,7 +12,7 @@ LSP_TOOLS = {"LSP", "goToDefinition", "findReferences", "hover", "documentSymbol
              "incomingCalls", "outgoingCalls"}
 
 PROJECTS = {
-    "rl-anything":   "-Users-todoroki-tools-rl-anything",
+    "evolve-anything":   "-Users-todoroki-tools-evolve-anything",
     "docs-platform": "-Users-todoroki-work-docs-platform",
     "sys-bots":      "-Users-todoroki-work-sys-bots",
     "figma-to-code": "-Users-todoroki-work-figma-to-code",

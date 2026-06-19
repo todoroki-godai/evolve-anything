@@ -2,7 +2,7 @@ Closes: #35
 
 ## Context
 
-rl-anything の discover はセッションtranscript（`~/.claude/projects/<encoded>/*.jsonl`）からツール使用パターンを分析し、ルール/hook/スキル候補を提案する。`extract_tool_calls()`（`tool_usage_analyzer.py:70-121`）が各セッションファイルの assistant メッセージから tool_use ブロックを抽出し、Bash コマンド文字列を収集している。現在は以下の検出が可能:
+evolve-anything の discover はセッションtranscript（`~/.claude/projects/<encoded>/*.jsonl`）からツール使用パターンを分析し、ルール/hook/スキル候補を提案する。`extract_tool_calls()`（`tool_usage_analyzer.py:70-121`）が各セッションファイルの assistant メッセージから tool_use ブロックを抽出し、Bash コマンド文字列を収集している。現在は以下の検出が可能:
 - `classify_bash_commands()`: builtin_replaceable / sleep_polling 分類
 - `detect_repeating_commands()`: 同一コマンドの繰り返し（閾値 5 回以上）
 - `detect_recommended_artifacts()`: 推奨 rule/hook の未導入チェック

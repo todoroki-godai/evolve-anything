@@ -270,7 +270,7 @@ class TestPromotedTodayFromCorrectionsStore:
 
     根因: build_review の返り値に promoted キーが存在せず、growth_report が
     review_result.daily.promoted を読んでも構造的に必ず 0 になっていた。実 promote は
-    Step 6.2 の rl-reflect --promote-weak が corrections.jsonl に書く（source=reflect_confirmed
+    Step 6.2 の evolve-reflect --promote-weak が corrections.jsonl に書く（source=reflect_confirmed
     / promoted_by=idiom_dict）ため、growth_report は corrections の「今日の昇格」を数える。
     """
 

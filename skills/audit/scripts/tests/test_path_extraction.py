@@ -67,7 +67,7 @@ def test_codeblock_paths_excluded():
 
 def test_mixed_content():
     text = """- discover/audit: telemetry_query で分析
-- skills/update/ — `/rl-anything:update` スキル
+- skills/update/ — `/evolve-anything:update` スキル
 - scripts/lib/reflect_utils.py — 8層メモリルーティング
 - usage/errors レコードに project フィールド追加"""
     paths = _paths(text)

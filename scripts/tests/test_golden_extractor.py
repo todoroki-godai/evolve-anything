@@ -32,12 +32,12 @@ def usage_file(tmp_path):
     path = tmp_path / "usage.jsonl"
     _write_jsonl(path, [
         # session-A: evolve を使用 (correction あり)
-        {"skill_name": "evolve", "ts": "2026-04-01T10:00:00Z", "session_id": "sess-A", "file_path": "", "project": "rl-anything"},
+        {"skill_name": "evolve", "ts": "2026-04-01T10:00:00Z", "session_id": "sess-A", "file_path": "", "project": "evolve-anything"},
         # session-B: reflect を使用 (correction なし → golden)
-        {"skill_name": "reflect", "ts": "2026-04-02T10:00:00Z", "session_id": "sess-B", "file_path": "", "project": "rl-anything"},
+        {"skill_name": "reflect", "ts": "2026-04-02T10:00:00Z", "session_id": "sess-B", "file_path": "", "project": "evolve-anything"},
         # session-C: evolve + audit を使用 (correction なし → golden)
-        {"skill_name": "evolve", "ts": "2026-04-03T10:00:00Z", "session_id": "sess-C", "file_path": "some-skill", "project": "rl-anything"},
-        {"skill_name": "audit", "ts": "2026-04-03T10:05:00Z", "session_id": "sess-C", "file_path": "", "project": "rl-anything"},
+        {"skill_name": "evolve", "ts": "2026-04-03T10:00:00Z", "session_id": "sess-C", "file_path": "some-skill", "project": "evolve-anything"},
+        {"skill_name": "audit", "ts": "2026-04-03T10:05:00Z", "session_id": "sess-C", "file_path": "", "project": "evolve-anything"},
     ])
     return path
 

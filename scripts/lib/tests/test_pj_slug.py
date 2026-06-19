@@ -20,12 +20,12 @@ import pj_slug  # noqa: E402
 
 # ── pj_slug_fast（文字列のみ）─────────────────────────────────────────────
 def test_fast_main_repo():
-    assert pj_slug.pj_slug_fast("/Users/x/tools/rl-anything") == "rl-anything"
+    assert pj_slug.pj_slug_fast("/Users/x/tools/evolve-anything") == "evolve-anything"
 
 
 def test_fast_worktree_normalizes_to_main():
-    cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-many"
-    assert pj_slug.pj_slug_fast(cwd) == "rl-anything"
+    cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-many"
+    assert pj_slug.pj_slug_fast(cwd) == "evolve-anything"
 
 
 def test_fast_hyphenated_name():
@@ -33,7 +33,7 @@ def test_fast_hyphenated_name():
 
 
 def test_fast_trailing_slash():
-    assert pj_slug.pj_slug_fast("/Users/x/tools/rl-anything/") == "rl-anything"
+    assert pj_slug.pj_slug_fast("/Users/x/tools/evolve-anything/") == "evolve-anything"
 
 
 def test_fast_none_and_empty_return_none():
@@ -91,8 +91,8 @@ def test_resolve_outside_git_falls_back_to_fast(tmp_path, monkeypatch):
         raise FileNotFoundError("no git")
 
     monkeypatch.setattr(pj_slug.subprocess, "run", _fail)
-    cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
-    assert pj_slug.resolve_pj_slug(cwd) == "rl-anything"
+    cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-z"
+    assert pj_slug.resolve_pj_slug(cwd) == "evolve-anything"
 
 
 def test_resolve_unattributed_when_nothing_resolves(monkeypatch):
@@ -139,7 +139,7 @@ def test_resolve_slug_wrapper_delegates(tmp_path):
 
 def test_pj_slug_from_cwd_wrapper_delegates():
     from utterance_archive.extractor import pj_slug_from_cwd
-    cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-many"
-    assert pj_slug_from_cwd(cwd) == "rl-anything"
+    cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-many"
+    assert pj_slug_from_cwd(cwd) == "evolve-anything"
     assert pj_slug_from_cwd(None) is None
     assert pj_slug_from_cwd("") is None

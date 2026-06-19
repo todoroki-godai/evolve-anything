@@ -395,7 +395,7 @@ def detect_missed_skills(
                 "session_count": session_count,
             }
             # eval set ステータスを付与
-            eval_set_path = Path.home() / ".claude" / "rl-anything" / "eval-sets" / f"{skill}.json"
+            eval_set_path = Path.home() / ".claude" / "evolve-anything" / "eval-sets" / f"{skill}.json"
             if eval_set_path.exists():
                 entry["eval_set_path"] = str(eval_set_path)
                 entry["eval_set_status"] = "available"

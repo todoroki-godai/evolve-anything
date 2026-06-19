@@ -160,7 +160,7 @@ def _run_claude_prompt(prompt_str: str, max_retries: int = 2) -> float:
 
     DEPRECATED（[ADR-037]）: claude -p 全廃に向け、新規経路は
     build_scoring_requests + aggregate_from_responses（ファイルベース2相）を使う。
-    既存 CLI（bin/rl-prompt-compare）との後方互換のため当面は残置。
+    既存 CLI（bin/evolve-prompt-compare）との後方互換のため当面は残置。
     """
     for _ in range(max_retries + 1):
         try:

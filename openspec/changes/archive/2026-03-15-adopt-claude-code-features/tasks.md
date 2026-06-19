@@ -36,7 +36,7 @@
 
 - [ ] 5.1 genetic-prompt-optimizer/SKILL.md の patch-apply-test サイクルを Agent tool（`isolation: "worktree"`）経由に変更。サブエージェント内で `optimize.py --apply-patch` → `pytest` → 結果ファイル出力の指示を追記
 - [ ] 5.2 optimize.py に `--apply-patch` モードを追加（worktree 内でのパッチ適用専用）
-- [ ] 5.3 rl-loop-orchestrator/SKILL.md にも同様の worktree isolation 経由の指示を追記
+- [ ] 5.3 evolve-loop-orchestrator/SKILL.md にも同様の worktree isolation 経由の指示を追記
 
 ## 6. Effort Level Routing
 

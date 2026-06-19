@@ -21,7 +21,7 @@ try:
 
     _DATA_DIR_VAL = _common.DATA_DIR
 except ImportError:
-    _DATA_DIR_VAL = Path.home() / ".claude" / "rl-anything"
+    _DATA_DIR_VAL = Path.home() / ".claude" / "evolve-anything"
 
 JOURNAL_FILENAME = "growth-journal.jsonl"
 

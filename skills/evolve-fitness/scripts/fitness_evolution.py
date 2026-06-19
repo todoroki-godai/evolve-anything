@@ -46,7 +46,7 @@ EVOLVE_DIFF_SOURCE = "evolve_remediation"
 def load_history(history_file: Optional[Path] = None) -> List[Dict[str, Any]]:
     """history.jsonl（SSoT）を読み込む。
 
-    optimize/rl-loop の SSoT に加え、evolve diff 提案の採点記録も
+    optimize/evolve-loop の SSoT に加え、evolve diff 提案の採点記録も
     同じ history.jsonl に正規化して書き込まれる（issue #223）。
     """
     if history_file is None:
@@ -99,7 +99,7 @@ def record_evolve_diff_decision(
     """evolve の Compile/remediation でスキル diff を accept/reject した時点で、
     after content を skill_quality で採点し history.jsonl に正規記録する（issue #223）。
 
-    optimize/rl-loop と同一スキーマ（best_fitness/human_accepted/fitness_func）で
+    optimize/evolve-loop と同一スキーマ（best_fitness/human_accepted/fitness_func）で
     記録するため母集団が「混合ではなく増量」になり相関が壊れない。
 
     冪等性: entry_id（未指定時は内容ハッシュ）で既存行と重複したら再書き込みしない。
@@ -377,7 +377,7 @@ def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dic
         long_message = (
             f"データ不足: {len(decisions)}/{MIN_DATA_COUNT}件。"
             f"あと {MIN_DATA_COUNT - len(decisions)} 件の accept/reject が必要。"
-            "母集団は optimize/rl-loop の accept/reject に加え、"
+            "母集団は optimize/evolve-loop の accept/reject に加え、"
             "evolve の skill diff 提案と skill_evolve high/medium 提案の "
             "accept/reject（採点付き記録）も含む（ADR-041）。"
             " ※ 採点対象外なのは remediation の fix（rules/hook・構造修正等）で、"

@@ -193,7 +193,7 @@ def _emit_pending_trigger() -> None:
         return  # ファイルなし or スヌーズ中
 
     message = payload.get("message", "")
-    action = payload.get("action", "/rl-anything:evolve")
+    action = payload.get("action", "/evolve-anything:evolve")
 
     # skill-triage-cache があれば候補リストをメッセージに追記
     if triage_cache_file.exists():
@@ -213,7 +213,7 @@ def _emit_pending_trigger() -> None:
                     message += f"\n理由: {reason}"
                 if len(candidates) > 1:
                     message += "\n上位候補:\n" + "\n".join(candidate_lines)
-                action = f"/rl-anything:evolve-skill {skill}" if skill else action
+                action = f"/evolve-anything:evolve-skill {skill}" if skill else action
         except (json.JSONDecodeError, OSError):
             pass
         try:
@@ -235,9 +235,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_instructions_loaded(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:instructions_loaded] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:instructions_loaded] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:instructions_loaded] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:instructions_loaded] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

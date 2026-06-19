@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 def _warn_no_duckdb() -> None:
     print(
-        "[rl-anything] duckdb not installed. Falling back to Python JSONL parser. "
+        "[evolve-anything] duckdb not installed. Falling back to Python JSONL parser. "
         "Install with: pip install duckdb",
         file=sys.stderr,
     )

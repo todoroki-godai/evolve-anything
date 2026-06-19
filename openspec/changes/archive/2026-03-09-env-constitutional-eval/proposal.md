@@ -1,6 +1,6 @@
 ## Why
 
-Phase 0（Coherence Score）と Phase 1（Telemetry Score）は LLM コストゼロで環境の構造品質と行動実績を測定するが、「PJ の価値観・原則に沿っているか」という質的評価ができない。例えば rl-anything で「LLM コール最小化」「べき等性保証」といった PJ 固有の原則を全レイヤーが遵守しているかは、静的分析やテレメトリでは判定できない。Phase 2 として Constitutional AI + Chaos Engineering の手法を導入し、LLM Judge による原則ベース評価と障害注入による堅牢性テストを実現する。
+Phase 0（Coherence Score）と Phase 1（Telemetry Score）は LLM コストゼロで環境の構造品質と行動実績を測定するが、「PJ の価値観・原則に沿っているか」という質的評価ができない。例えば evolve-anything で「LLM コール最小化」「べき等性保証」といった PJ 固有の原則を全レイヤーが遵守しているかは、静的分析やテレメトリでは判定できない。Phase 2 として Constitutional AI + Chaos Engineering の手法を導入し、LLM Judge による原則ベース評価と障害注入による堅牢性テストを実現する。
 
 ## What Changes
 

@@ -1,13 +1,13 @@
 ## Why
 
-rl-anything と claude-reflect の2つのプラグインが同じ UserPromptSubmit hook で修正パターンを検出しており、データが分断されている。CJK 修正（rl-anything）は /reflect に届かず、英語/Guardrail 修正（claude-reflect）は discover に届かない。毎プロンプトで Python が2本走るパフォーマンス問題もある。claude-reflect の機能を rl-anything に吸収し、修正検出から CLAUDE.md 反映までを1つのパイプラインに統合する。
+evolve-anything と claude-reflect の2つのプラグインが同じ UserPromptSubmit hook で修正パターンを検出しており、データが分断されている。CJK 修正（evolve-anything）は /reflect に届かず、英語/Guardrail 修正（claude-reflect）は discover に届かない。毎プロンプトで Python が2本走るパフォーマンス問題もある。claude-reflect の機能を evolve-anything に吸収し、修正検出から CLAUDE.md 反映までを1つのパイプラインに統合する。
 
 ## What Changes
 
 - **パターン統合**: claude-reflect の英語17パターン + Guardrail 8パターンを `hooks/common.py` の CORRECTION_PATTERNS にマージ。CJK + 英語 + Guardrail の統一パターンセット化
 - **corrections.jsonl 拡張**: confidence/decay_days/routing_hint/guardrail フィールドを追加し、learnings-queue.json の役割を吸収
-- **`/rl-anything:reflect` スキル新設**: corrections.jsonl を入力に、6層メモリ階層ルーティング + セマンティック検証 + 対話レビュー → CLAUDE.md/rules/skills 書込
-- **`/rl-anything:reflect-skills` スキル新設**: セッション履歴からスキル候補を発見（discover と統合）
+- **`/evolve-anything:reflect` スキル新設**: corrections.jsonl を入力に、6層メモリ階層ルーティング + セマンティック検証 + 対話レビュー → CLAUDE.md/rules/skills 書込
+- **`/evolve-anything:reflect-skills` スキル新設**: セッション履歴からスキル候補を発見（discover と統合）
 - **evolve パイプラインに Reflect Step 追加**: 未処理 corrections が N件以上あれば reflect 実行を提案
 - **backfill 拡張**: 過去セッションからの correction 遡及抽出時に英語/Guardrail パターンも使用
 - **hooks 統合**: correction_detect.py で全パターンを処理。claude-reflect の UserPromptSubmit hook が不要に

@@ -14,7 +14,7 @@ version フィールドを持たないプラグイン（例: skill-creator）は
 - drift   : 同一/比較不能バージョンだが cache コンテンツが source と乖離（要再インストール）
 - unknown : marketplace に該当が無く比較不能（Directory marketplace の自前 PJ 等）
 
-LLM 非依存・ファイルシステムのみ。`bin/rl-fleet plugins` から利用される。
+LLM 非依存・ファイルシステムのみ。`bin/evolve-fleet plugins` から利用される。
 """
 from __future__ import annotations
 

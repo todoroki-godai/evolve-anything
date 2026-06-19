@@ -12,7 +12,7 @@
 
 #### Scenario: Multiple plugins
 
-- **WHEN** `openspec@openspec` と `rl-anything@rl-anything` の両方がインストールされている
+- **WHEN** `openspec@openspec` と `evolve-anything@evolve-anything` の両方がインストールされている
 - **THEN** 各プラグインのスキルがそれぞれのプラグイン名にマッピングされる
 
 #### Scenario: Backward compatibility

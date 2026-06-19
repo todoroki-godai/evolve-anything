@@ -76,12 +76,12 @@ def evaluate(event: dict, project_dir: str) -> Optional[str]:
         return None
     if res["state"] == "danger":
         return (
-            f"[rl-anything:pitfall_lint] ⚠ {path.name}: {res['reason']}\n"
+            f"[evolve-anything:pitfall_lint] ⚠ {path.name}: {res['reason']}\n"
             "  このまま commit すると内容を失う恐れがあります。"
             "`### タイトル` 形式のエントリへ再構成してください。"
         )
     return (
-        f"[rl-anything:pitfall_lint] ⚠ {path.name} が正準フォーマットと差分があります"
+        f"[evolve-anything:pitfall_lint] ⚠ {path.name} が正準フォーマットと差分があります"
         "（自動修正はしません）。正準化の提案:\n"
         f"{_diff_preview(res['diff'])}\n"
         f"  揃えるには: pitfall_curate.py normalize --pitfalls {file_path} --out {file_path}"

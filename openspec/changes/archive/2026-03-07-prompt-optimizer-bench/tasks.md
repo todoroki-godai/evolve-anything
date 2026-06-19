@@ -7,7 +7,7 @@
 
 ## 2. Phase 1 Strategy 実装
 
-- [x] 2.1 `BaselineGAStrategy` を実装（rl-anything の現行 optimize.py の mutation/crossover/evaluate をポート）
+- [x] 2.1 `BaselineGAStrategy` を実装（evolve-anything の現行 optimize.py の mutation/crossover/evaluate をポート）
 - [x] 2.2 `SelfRefineStrategy` を実装（批評→部分修正ループ、最大3回反復）
 - [x] 2.3 `GEPALiteStrategy` を実装（診断→指示付き変異、MutationContext 活用）
 
@@ -44,7 +44,7 @@
 
 - [x] 7.1 Phase 1 の3手法でベンチマークを実行（5 trials）
 - [x] 7.2 結果を分析し、比較レポートを作成
-- [x] 7.3 rl-anything issue #12 に結果をフィードバック
+- [x] 7.3 evolve-anything issue #12 に結果をフィードバック
 
 ## 8. Phase 2 Strategy 追加（Phase 1 結果後）
 

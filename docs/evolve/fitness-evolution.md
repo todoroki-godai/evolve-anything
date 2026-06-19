@@ -15,7 +15,7 @@
 
 ### 1. Accept/Reject フィードバックからの学習
 
-optimize/rl-loop で人間が accept/reject するたびに、評価関数の精度を検証できる。
+optimize/evolve-loop で人間が accept/reject するたびに、評価関数の精度を検証できる。
 
 ```
 history.jsonl に蓄積:
@@ -93,7 +93,7 @@ adversarial probe の具体例:
 accept/reject が30件以上蓄積されたら実行可能に。
 
 ```
-/rl-anything:evolve-fitness
+/evolve-anything:evolve-fitness
 
 出力例:
   Fitness calibration report:

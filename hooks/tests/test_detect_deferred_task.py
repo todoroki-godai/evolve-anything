@@ -26,7 +26,7 @@ def _load_module():
 def mod(tmp_path):
     """モジュールをロードし、DATA_DIR を一時ディレクトリに差し替える。"""
     m = _load_module()
-    with mock.patch.object(m, "DATA_DIR", tmp_path / "rl-anything"):
+    with mock.patch.object(m, "DATA_DIR", tmp_path / "evolve-anything"):
         yield m
 
 

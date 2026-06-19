@@ -1,5 +1,5 @@
 name: Feedback
-description: rl-anything プラグインへのフィードバック
+description: evolve-anything プラグインへのフィードバック
 title: "[Feedback] "
 labels: ["feedback"]
 body:
@@ -21,7 +21,7 @@ body:
       label: 対象コンポーネント
       options:
         - optimize
-        - rl-loop
+        - evolve-loop
         - discover
         - prune
         - audit

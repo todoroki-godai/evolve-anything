@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""~/.claude/rl-anything/ ディレクトリの初期化スクリプト。
+"""~/.claude/evolve-anything/ ディレクトリの初期化スクリプト。
 
 観測データ・アーカイブ・フィードバックドラフト用のディレクトリを作成し、
 .gitignore を配置する。
@@ -7,7 +7,7 @@
 import os
 from pathlib import Path
 
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 SUBDIRS = [
     "archive",
@@ -15,7 +15,7 @@ SUBDIRS = [
 ]
 
 GITIGNORE_CONTENT = """\
-# rl-anything data directory — machine-generated, not version-controlled
+# evolve-anything data directory — machine-generated, not version-controlled
 *
 !.gitignore
 """

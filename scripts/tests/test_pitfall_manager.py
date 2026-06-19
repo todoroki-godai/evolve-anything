@@ -239,7 +239,7 @@ def test_hygiene_includes_plugin_self_skills(tmp_path):
     # プラグイン本体マニフェスト
     manifest = tmp_path / ".claude-plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text('{"name": "rl-anything"}', encoding="utf-8")
+    manifest.write_text('{"name": "evolve-anything"}', encoding="utf-8")
 
     # repo 直下 skills/ に自己進化済みスキル
     skill_dir = tmp_path / "skills" / "evolve"

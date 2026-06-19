@@ -39,7 +39,7 @@ gepa_lite        +0.12±0.04  0.55     0.90      18
 
 ### Requirement: JSON 形式で結果を出力する
 
-全ての分析結果を JSON 形式でも出力できなければならない（SHALL）。プログラムからの利用や rl-anything への還元を可能にする。
+全ての分析結果を JSON 形式でも出力できなければならない（SHALL）。プログラムからの利用や evolve-anything への還元を可能にする。
 
 #### Scenario: JSON 出力
 

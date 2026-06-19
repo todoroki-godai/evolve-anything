@@ -6,7 +6,7 @@ fleet 構想 (issue #68) で各 PJ のデータ置き場を CLAUDE_PLUGIN_DATA e
 
 このテストは以下を保証する:
 1. audit.DATA_DIR と rl_common.DATA_DIR が同一オブジェクト (identity)
-2. CLAUDE_PLUGIN_DATA 未設定時は従来通り ~/.claude/rl-anything/ を指す (regression)
+2. CLAUDE_PLUGIN_DATA 未設定時は従来通り ~/.claude/evolve-anything/ を指す (regression)
 3. CLAUDE_PLUGIN_DATA 指定時は env var のパスに切り替わる (fleet blocker 解消)
 4. bloat_control.py の `from audit import DATA_DIR` が壊れない (既存コード互換)
 """
@@ -63,9 +63,9 @@ def test_audit_data_dir_is_rl_common_data_dir():
 
 
 def test_audit_data_dir_default_without_env():
-    """CLAUDE_PLUGIN_DATA 未設定時は ~/.claude/rl-anything/ を指す (regression)。"""
+    """CLAUDE_PLUGIN_DATA 未設定時は ~/.claude/evolve-anything/ を指す (regression)。"""
     r = _import_audit(env=None)
-    expected = str(Path.home() / ".claude" / "rl-anything")
+    expected = str(Path.home() / ".claude" / "evolve-anything")
     assert r["audit_dir"] == expected, (
         f"期待 {expected} / 実際 {r['audit_dir']}. "
         "既存 audit コマンドの fallback が壊れている可能性"
@@ -85,7 +85,7 @@ def test_audit_data_dir_env_override(tmp_path: Path):
 def test_audit_data_dir_env_empty_string_falls_back():
     """CLAUDE_PLUGIN_DATA="" (空文字) 時は fallback に戻る (rl_common L19-20 の挙動)。"""
     r = _import_audit(env={"CLAUDE_PLUGIN_DATA": ""})
-    expected = str(Path.home() / ".claude" / "rl-anything")
+    expected = str(Path.home() / ".claude" / "evolve-anything")
     assert r["audit_dir"] == expected
 
 

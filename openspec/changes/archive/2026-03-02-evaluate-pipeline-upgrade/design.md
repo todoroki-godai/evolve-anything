@@ -80,7 +80,7 @@ evaluate() → _run_custom_fitness() → 見つからなければ → _llm_evalu
 |---|---|---|
 | Regression Gate 不合格 | 不合格理由（空/行数超過/禁止パターン） | ゲート不合格時 |
 | CoT 評価の低スコア | 基準名 + reason | いずれかの基準が 0.4 未満 |
-| rl-loop の人間却下 | 却下バリエーションの最低基準 + reason | ユーザーが却下時 |
+| evolve-loop の人間却下 | 却下バリエーションの最低基準 + reason | ユーザーが却下時 |
 
 **蓄積先**: 対象スキルの `references/pitfalls.md`（Markdown テーブル形式）
 
@@ -91,7 +91,7 @@ evaluate() → _run_custom_fitness() → 見つからなければ → _llm_evalu
 
 **フィードバック経路**:
 ```
-optimize/rl-loop 実行 → 失敗パターン観測 → pitfalls.md に蓄積
+optimize/evolve-loop 実行 → 失敗パターン観測 → pitfalls.md に蓄積
   ↓
 次回 Regression Gate → pitfalls.md のパターンも動的チェック
   ↓

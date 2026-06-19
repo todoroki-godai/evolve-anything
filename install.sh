@@ -1,13 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# rl-anything plugin installer / updater
+# evolve-anything plugin installer / updater
 # Usage:
 #   curl -sL https://raw.githubusercontent.com/todoroki-godai/evolve-anything/main/install.sh | bash
 #   ./install.sh
 
-MARKETPLACE_NAME="rl-anything"
-PLUGIN_NAME="rl-anything"
+MARKETPLACE_NAME="evolve-anything"
+PLUGIN_NAME="evolve-anything"
 PLUGIN_KEY="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
 REPO_URL="https://github.com/todoroki-godai/evolve-anything.git"
 
@@ -17,7 +17,7 @@ MARKETPLACES_DIR="$PLUGINS_DIR/marketplaces"
 CACHE_DIR="$PLUGINS_DIR/cache"
 INSTALLED_JSON="$PLUGINS_DIR/installed_plugins.json"
 
-echo "=== rl-anything installer ==="
+echo "=== evolve-anything installer ==="
 
 # 1. marketplace clone/update
 MARKETPLACE_PATH="$MARKETPLACES_DIR/$MARKETPLACE_NAME"
@@ -73,5 +73,5 @@ installed_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 PYEOF
 
 echo ""
-echo "Done! rl-anything $VERSION installed (scope: user)"
+echo "Done! evolve-anything $VERSION installed (scope: user)"
 echo "Restart Claude Code to activate."

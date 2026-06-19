@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Remediation outcome recording
-修正結果を `~/.claude/rl-anything/remediation-outcomes.jsonl` に記録する（SHALL）。dry-run 時は記録しない。outcome レコードには修正の詳細メタデータ（fix 結果、検証結果、所要時間）を含めなければならない（MUST）。
+修正結果を `~/.claude/evolve-anything/remediation-outcomes.jsonl` に記録する（SHALL）。dry-run 時は記録しない。outcome レコードには修正の詳細メタデータ（fix 結果、検証結果、所要時間）を含めなければならない（MUST）。
 
 #### Scenario: Successful fix recorded with extended metadata
 - **WHEN** auto_fixable な修正が成功した

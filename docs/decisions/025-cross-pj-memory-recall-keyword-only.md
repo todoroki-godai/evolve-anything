@@ -15,11 +15,11 @@ hybrid retrieval、knowledge graph、80+ MCP tools）を試験導入したが、
   1 プロンプト（< 200K tokens）に収まる規模で、vector の本来の価値（コーパスがコンテキストに
   載らないから近似検索する）が発生していない。
 - vector が本当に効く PJ（docs-platform handbook / sys-bots RAG）は実在するが、それらは
-  製品が自前 RAG を持つべきで、rl-anything が汎用 vector store を抱えるのは関心事の混同。
+  製品が自前 RAG を持つべきで、evolve-anything が汎用 vector store を抱えるのは関心事の混同。
 
 ## Decision
 
-rl-anything に **keyword ベースの決定論的な PJ 横断 recall** を `bin/rl-fleet recall` として実装する。
+evolve-anything に **keyword ベースの決定論的な PJ 横断 recall** を `bin/evolve-fleet recall` として実装する。
 
 1. **1段・決定論 engine（LLM rerank なし）**: keyword/token prefilter（stdlib `re`/`pathlib`）→
    TF + frontmatter description/filename ブーストで rank → 構造化出力（`--json`）。
@@ -27,7 +27,7 @@ rl-anything に **keyword ベースの決定論的な PJ 横断 recall** を `bi
    呼ぶ rerank の二重化は避ける。非決定性（順位揺れで再現困難バグ）・レイテンシ・課金・
    テストの LLM mock 負債を回避し、engine を決定論に保つ。
 2. **列挙は memory dir 存在ベースの別経路**（`enumerate_memory_dirs()`）: 既存
-   `enumerate_projects()` は `_is_plugin_enabled` で rl-anything 有効 PJ に絞るため、recall に
+   `enumerate_projects()` は `_is_plugin_enabled` で evolve-anything 有効 PJ に絞るため、recall に
    流用すると未導入 PJ の memory が静かに消え横断性を殺す。`memory/` の存在だけを条件にする。
 3. **embedding / vector は非採用**。
 4. **frontmatter パース堅牢性**: 不正/欠落でも本文 grep フォールバック。delimiter があるのに
@@ -45,6 +45,6 @@ rl-anything に **keyword ベースの決定論的な PJ 横断 recall** を `bi
 
 ## References
 
-- 設計: `~/.gstack/projects/todoroki-godai-rl-anything/todoroki-main-design-20260528-133406.md`
+- 設計: `~/.gstack/projects/todoroki-godai-evolve-anything/todoroki-main-design-20260528-133406.md`
 - 関連 ADR: [022 fleet 観測・介入](022-fleet-observation-plus-intervention.md)
 - 実装: `scripts/lib/fleet/recall.py`, `scripts/lib/fleet/project_loader.py::enumerate_memory_dirs`

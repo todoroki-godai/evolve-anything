@@ -52,7 +52,7 @@ SLUG="$SLUG" python3 -c "
 import sys, os; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib')
 from world_context import load_world_context, save_world_context
 from pathlib import Path
-data_dir = Path(os.environ.get('CLAUDE_PLUGIN_DATA', Path.home() / '.claude' / 'rl-anything'))
+data_dir = Path(os.environ.get('CLAUDE_PLUGIN_DATA', Path.home() / '.claude' / 'evolve-anything'))
 slug = os.environ['SLUG']
 ctx = load_world_context(data_dir, slug) or {}
 save_world_context(data_dir, ctx, env_score=<ENV_SCORE>, slug=slug)

@@ -92,7 +92,7 @@ DUPLICATE_PROPOSABLE_CONFIDENCE = 0.60  # similarity >= 閾値時の confidence
 _GLOBAL_SCOPE_PATTERNS = {"CLAUDE.md"}
 _PROJECT_SCOPE_PATTERNS = {".claude/"}
 
-DATA_DIR = Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 # 原則ベース判断 + FP 除外 + 独立検証は remediation/principles.py に集約済み（後方互換のため再エクスポート）
 from .principles import (  # noqa: E402, F401

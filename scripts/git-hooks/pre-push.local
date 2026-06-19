@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rl-anything pre-push.local — gstack-redact の managed pre-push hook から chain される
+# evolve-anything pre-push.local — gstack-redact の managed pre-push hook から chain される
 # ローカル拡張フック。push 前に dogfood-gate の light 層（Layer1a 不変 + Layer2 + Layer3、
 # 約十数秒）を走らせる。
 #
@@ -7,7 +7,7 @@
 #   - **非ブロッキング**: 赤でも push は止めない（警告のみ）。1人開発でブロッキングにすると
 #     hotfix 時に `--no-verify` で迂回され、逆に常時オフと同じになるため。
 #   - light は重い Layer1b drain（約3分）と ingest E2E を除外する高速層。フル
-#     （`bin/rl-dogfood-gate --layer all`・約3.5分）は手動/リリース前に走らせる。
+#     （`bin/evolve-dogfood-gate --layer all`・約3.5分）は手動/リリース前に走らせる。
 #
 # インストール: scripts/git-hooks/install.sh（.git/hooks/pre-push.local へコピー）。
 set -uo pipefail
@@ -16,7 +16,7 @@ set -uo pipefail
 cat >/dev/null 2>&1 || true
 
 _root="$(git rev-parse --show-toplevel 2>/dev/null)"
-_gate="${_root}/bin/rl-dogfood-gate"
+_gate="${_root}/bin/evolve-dogfood-gate"
 if [ -z "${_root}" ] || [ ! -x "${_gate}" ]; then
   # ゲートが見つからない環境では黙って通す（非ブロッキング方針）。
   exit 0
@@ -36,7 +36,7 @@ case "${_rc}" in
     ;;
   1)
     echo "[pre-push] ⚠ dogfood-gate light が赤を検出（push は継続＝非ブロッキング）。" >&2
-    echo "[pre-push]   詳細: /tmp/rl-prepush-gate.log / フル検査: bin/rl-dogfood-gate --layer all" >&2
+    echo "[pre-push]   詳細: /tmp/rl-prepush-gate.log / フル検査: bin/evolve-dogfood-gate --layer all" >&2
     ;;
   *)
     # exit 2 等 = gate を正しく実行できず（light 非対応の古い worktree / 環境エラー）。

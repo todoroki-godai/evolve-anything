@@ -39,15 +39,15 @@ def _setup_fake_plugins(tmp_path):
     for skill in ["openspec-propose", "openspec-refine", "openspec-apply", "openspec-verify", "openspec-archive"]:
         (openspec_dir / ".claude" / "skills" / skill).mkdir(parents=True)
 
-    # rl-anything プラグイン: skills/ レイアウト
-    rl_dir = tmp_path / "rl-anything"
+    # evolve-anything プラグイン: skills/ レイアウト
+    rl_dir = tmp_path / "evolve-anything"
     for skill in ["audit", "discover", "evolve"]:
         (rl_dir / "skills" / skill).mkdir(parents=True)
 
     plugins_data = {
         "plugins": {
             "openspec@openspec": [{"installPath": str(openspec_dir)}],
-            "rl-anything@rl-anything": [{"installPath": str(rl_dir)}],
+            "evolve-anything@evolve-anything": [{"installPath": str(rl_dir)}],
         }
     }
 
@@ -67,15 +67,15 @@ class TestLoadPluginSkillMap:
         assert isinstance(result, dict)
         assert result.get("openspec-propose") == "openspec"
         assert result.get("openspec-refine") == "openspec"
-        assert result.get("audit") == "rl-anything"
-        assert result.get("discover") == "rl-anything"
+        assert result.get("audit") == "evolve-anything"
+        assert result.get("discover") == "evolve-anything"
 
     def test_scans_both_layouts(self, tmp_path):
         with _setup_fake_plugins(tmp_path):
             result = audit._load_plugin_skill_map()
         # openspec は .claude/skills/ レイアウト
         assert "openspec-propose" in result
-        # rl-anything は skills/ レイアウト
+        # evolve-anything は skills/ レイアウト
         assert "evolve" in result
 
     def test_backward_compat_wrapper(self, tmp_path):
@@ -106,8 +106,8 @@ class TestClassifyUsageSkill:
         with _setup_fake_plugins(tmp_path):
             # openspec-propose は openspec@openspec プラグイン → "openspec"
             assert audit.classify_usage_skill("openspec-propose") == "openspec"
-            # audit は rl-anything@rl-anything プラグイン → "rl-anything"
-            assert audit.classify_usage_skill("audit") == "rl-anything"
+            # audit は evolve-anything@evolve-anything プラグイン → "evolve-anything"
+            assert audit.classify_usage_skill("audit") == "evolve-anything"
 
     def test_prefix_match(self, tmp_path):
         """旧スキル名が prefix マッチで検出される。"""
@@ -173,7 +173,7 @@ class TestAggregateUsage:
         with _setup_fake_plugins(tmp_path):
             result = audit.aggregate_plugin_usage(self._make_records())
         assert result.get("openspec") == 3
-        assert "rl-anything" not in result
+        assert "evolve-anything" not in result
 
 
 # ---------- build_gstack_analytics_section tests ----------

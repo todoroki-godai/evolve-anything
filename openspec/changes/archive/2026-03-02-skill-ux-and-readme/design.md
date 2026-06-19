@@ -1,11 +1,11 @@
 ## Context
 
-rl-anything は Claude Code Plugin としてインストールされるが、現在のUXは `python3 <PLUGIN_DIR>/skills/.../optimize.py --target ...` という長いコマンドをユーザーが手動入力する形式。Plugin ディレクトリのパスを知っている必要があり、Claude Code Plugin の利点（スラッシュコマンドで呼び出し）が活かされていない。また README.md は技術仕様の羅列で、「なぜこの Plugin を導入すべきか」のストーリーがない。
+evolve-anything は Claude Code Plugin としてインストールされるが、現在のUXは `python3 <PLUGIN_DIR>/skills/.../optimize.py --target ...` という長いコマンドをユーザーが手動入力する形式。Plugin ディレクトリのパスを知っている必要があり、Claude Code Plugin の利点（スラッシュコマンドで呼び出し）が活かされていない。また README.md は技術仕様の羅列で、「なぜこの Plugin を導入すべきか」のストーリーがない。
 
 ## Goals / Non-Goals
 
 **Goals:**
-- SKILL.md の instructions を「Claude がスクリプトを自動実行する」形式に書き換え、`/optimize`, `/rl-loop` で即利用可能にする
+- SKILL.md の instructions を「Claude がスクリプトを自動実行する」形式に書き換え、`/optimize`, `/evolve-loop` で即利用可能にする
 - README.md を導入ストーリー（Before/After）中心に全面更新
 - CLAUDE.md のクイックスタートをスラッシュコマンド形式に同期
 

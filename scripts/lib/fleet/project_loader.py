@@ -78,7 +78,7 @@ class MemoryDir(NamedTuple):
 def enumerate_memory_dirs(projects_root: Path | None = None) -> list[MemoryDir]:
     """`*/memory/` に `*.md` を持つ全 PJ を列挙する（plugin 有効性で絞らない）。
 
-    `enumerate_projects()` は `_is_plugin_enabled` で rl-anything 有効 PJ に絞るため
+    `enumerate_projects()` は `_is_plugin_enabled` で evolve-anything 有効 PJ に絞るため
     横断 recall には使えない（未導入 PJ の memory が静かに消える）。recall は
     auto-memory の `memory/` 存在だけを条件に列挙する別経路。
 
@@ -116,7 +116,7 @@ def _load_settings_with_retry(settings_path: Path) -> dict | None:
 
 
 def _is_plugin_enabled(settings: dict) -> bool:
-    """settings.enabledPlugins に rl-anything@* が truthy で含まれるか。"""
+    """settings.enabledPlugins に evolve-anything@* が truthy で含まれるか。"""
     enabled = settings.get("enabledPlugins") or {}
     if not isinstance(enabled, dict):
         return False
@@ -158,12 +158,12 @@ def classify_project(
     stale_days: int = 30,
     now: datetime | None = None,
 ) -> str:
-    """PJ の rl-anything 導入状況を 3 値で判定する。
+    """PJ の evolve-anything 導入状況を 3 値で判定する。
 
     判定表 (設計 Phase 1 ハイブリッド):
-    - `rl-anything@*` 有効 + auto-memory の直近 `.jsonl` が `stale_days` 以内 → ENABLED
-    - `rl-anything@*` 有効 + auto-memory 古い or 欠損 → STALE
-    - `rl-anything@*` 無効 or settings 欠損 / 破損（retry も失敗） → NOT_ENABLED
+    - `evolve-anything@*` 有効 + auto-memory の直近 `.jsonl` が `stale_days` 以内 → ENABLED
+    - `evolve-anything@*` 有効 + auto-memory 古い or 欠損 → STALE
+    - `evolve-anything@*` 無効 or settings 欠損 / 破損（retry も失敗） → NOT_ENABLED
 
     `settings_path` が破損していた場合は 100ms sleep 後に 1 回だけ retry する。
     """

@@ -27,11 +27,11 @@ from mutation_injector import (
 
 _CTX = """\
 # CLAUDE.md
-# rl-anything Plugin
+# evolve-anything Plugin
 スキル/ルールの自律進化パイプラインを提供する Claude Code Plugin。
 
 ## クイックスタート
-/rl-anything:evolve で日次運用。
+/evolve-anything:evolve で日次運用。
 
 # rules/skill-ops.md
 # スキル運用

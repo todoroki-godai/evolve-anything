@@ -5,7 +5,7 @@
 ## レポート例
 
 ```
-rl-anything: Environment Health Report (2026-03-02)
+evolve-anything: Environment Health Report (2026-03-02)
 ─────────────────────────────────────────────────────
 Artifacts:
   Skills: 23 active, 2 unused (>30日), 1 low-score (0.58)
@@ -74,11 +74,11 @@ python3 skills/audit/scripts/aggregate_runs.py --dir <results_dir>
 
 ## レポート履歴
 
-各 evolve 実行のレポートは `.claude/rl-anything/history/` に日付付きで保存。
+各 evolve 実行のレポートは `.claude/evolve-anything/history/` に日付付きで保存。
 推移を確認したい場合に過去のレポートを参照できる。
 
 ```
-.claude/rl-anything/history/
+.claude/evolve-anything/history/
 ├── 2026-03-01.json
 ├── 2026-03-02.json
 └── 2026-03-03.json

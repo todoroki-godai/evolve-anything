@@ -4,17 +4,17 @@
 evolve, audit, discover スキルの SKILL.md frontmatter に `context: fork` を追加し、大量出力がメインコンテキストを汚染しないようにする（MUST）。fork コンテキストでは会話履歴にアクセスできないため、ファイルシステムベースで動作するスキルのみが対象。fork されたエージェントの最終メッセージは親コンテキストに返される。詳細結果は `<DATA_DIR>/<skill>-report.json` にファイル出力する（MUST）。fork コンテキスト内では AskUserQuestion を使用してはならない（MUST NOT）。ユーザー承認が必要な操作は fork 復帰後にメインコンテキストで実施する（MUST）。
 
 #### Scenario: evolve with context:fork
-- **WHEN** ユーザーが `/rl-anything:evolve` を実行する
+- **WHEN** ユーザーが `/evolve-anything:evolve` を実行する
 - **THEN** evolve は fork されたサブエージェントコンテキストで実行される
 - **AND** 詳細結果は `<DATA_DIR>/evolve-report.json` にファイル出力される
 - **AND** 最終メッセージとして要約がメインコンテキストに返される
 
 #### Scenario: audit with context:fork
-- **WHEN** ユーザーが `/rl-anything:audit` を実行する
+- **WHEN** ユーザーが `/evolve-anything:audit` を実行する
 - **THEN** audit は fork されたコンテキストで実行され、レポートは `<DATA_DIR>/audit-report.json` にファイル出力される
 
 #### Scenario: discover with context:fork
-- **WHEN** ユーザーが `/rl-anything:discover` を実行する
+- **WHEN** ユーザーが `/evolve-anything:discover` を実行する
 - **THEN** discover は fork されたコンテキストで実行され、候補リストは `<DATA_DIR>/discover-report.json` にファイル出力される
 
 #### Scenario: fork context does not use AskUserQuestion

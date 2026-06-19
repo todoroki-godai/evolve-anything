@@ -206,8 +206,8 @@ class TestProjectFieldWorktreeNormalization:
 
     def test_project_name_from_dir_normalizes_worktree(self):
         """worktree cwd → project は本体 repo 名（切り詰め basename）。"""
-        cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-many"
-        assert rl_common.project_name_from_dir(cwd) == "rl-anything"
+        cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-many"
+        assert rl_common.project_name_from_dir(cwd) == "evolve-anything"
 
     def test_project_name_from_dir_main_repo_unchanged(self):
         """本体 repo の cwd は従来どおり basename。"""
@@ -215,7 +215,7 @@ class TestProjectFieldWorktreeNormalization:
 
     def test_observe_writes_normalized_project(self, patch_data_dir, monkeypatch):
         """observe hook の usage.jsonl project が worktree cwd でも本体名で書かれる。"""
-        wt_cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
+        wt_cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-z"
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", wt_cwd)
         event = {
             "tool_name": "Skill",
@@ -227,18 +227,18 @@ class TestProjectFieldWorktreeNormalization:
 
         usage_file = patch_data_dir / "usage.jsonl"
         record = json.loads(usage_file.read_text().strip().splitlines()[0])
-        assert record["project"] == "rl-anything"
+        assert record["project"] == "evolve-anything"
 
     def test_session_summary_writes_normalized_project(self, patch_data_dir, monkeypatch):
         """session_summary の sessions レコード project が worktree cwd でも本体名で書かれる。"""
-        wt_cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
+        wt_cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-z"
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", wt_cwd)
         event = {"session_id": "sess-wt-summary"}
         session_summary.handle_stop(event)
 
         records = session_store.query()
         assert len(records) == 1
-        assert records[0]["project"] == "rl-anything"
+        assert records[0]["project"] == "evolve-anything"
 
     def test_migration_date_constant_exists(self):
         """移行日定数が公開され #478 と同型で記録されている。"""
@@ -257,7 +257,7 @@ class TestProjectPathWorktreeNormalization:
 
     def test_observe_usage_registry_project_path_normalized(self, patch_data_dir, monkeypatch):
         """observe hook の usage-registry.jsonl project_path が worktree cwd でも本体名。"""
-        wt_cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
+        wt_cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-z"
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", wt_cwd)
         # global スキル判定を真にして usage-registry 経路へ入れる。
         monkeypatch.setattr(observe, "is_global_skill", lambda *a, **k: True)
@@ -271,13 +271,13 @@ class TestProjectPathWorktreeNormalization:
 
         reg_file = patch_data_dir / "usage-registry.jsonl"
         record = json.loads(reg_file.read_text().strip().splitlines()[0])
-        assert record["project_path"] == "rl-anything"
+        assert record["project_path"] == "evolve-anything"
 
     def test_correction_detect_project_path_normalized(self, patch_data_dir, monkeypatch):
         """correction_detect hook の corrections.jsonl project_path が worktree cwd でも本体名。"""
         import correction_detect
 
-        wt_cwd = "/Users/x/tools/rl-anything/.claude/worktrees/agent-z"
+        wt_cwd = "/Users/x/tools/evolve-anything/.claude/worktrees/agent-z"
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", wt_cwd)
         event = {
             "session_id": "sess-wt-corrpath",
@@ -287,7 +287,7 @@ class TestProjectPathWorktreeNormalization:
 
         corr_file = patch_data_dir / "corrections.jsonl"
         record = json.loads(corr_file.read_text().strip().splitlines()[0])
-        assert record["project_path"] == "rl-anything"
+        assert record["project_path"] == "evolve-anything"
 
     def test_correction_detect_main_repo_unchanged(self, patch_data_dir, monkeypatch):
         """本体 repo の cwd は project_path も従来どおり basename。"""

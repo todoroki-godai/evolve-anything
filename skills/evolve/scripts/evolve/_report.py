@@ -65,7 +65,7 @@ def _warn_insufficient_data(sufficiency: Dict[str, Any]) -> None:
     """
     if sufficiency.get("backfill_recommended"):
         print(f"テレメトリ未取得: {sufficiency['message']}", file=sys.stderr)
-        # #486: 旧 /rl-anything:backfill は #215 で CLI 削除済みの幻。observe hooks が
+        # #486: 旧 /evolve-anything:backfill は #215 で CLI 削除済みの幻。observe hooks が
         # 進行形でセッションを記録するので、数セッション利用後に evolve を回せばよい。
         print(
             "→ observe hooks が今後のセッションを自動記録します。"

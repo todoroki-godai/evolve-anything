@@ -51,7 +51,7 @@ from optimize_core import (
 from evolution_memory import save_winner  # type: ignore[import]
 
 # corrections パス
-_CORRECTIONS_PATH = Path.home() / ".claude" / "rl-anything" / "corrections.jsonl"
+_CORRECTIONS_PATH = Path.home() / ".claude" / "evolve-anything" / "corrections.jsonl"
 
 # 廃止オプション
 _DEPRECATED_OPTIONS = {

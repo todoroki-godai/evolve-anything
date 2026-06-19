@@ -12,7 +12,7 @@ Claude Code v2.1.163 で `Stop` / `SubagentStop` hook が `hookSpecificOutput.ad
 { "hookSpecificOutput": { "hookEventName": "SubagentStop", "additionalContext": "..." } }
 ```
 
-rl-anything は 2 つの該当 hook を持つ:
+evolve-anything は 2 つの該当 hook を持つ:
 
 - **Stop = `hooks/session_summary.py`**: セッション終了時に Auto Trigger エンジン（`trigger_engine.py`）が evolve/audit の実行を提案する。提案は `pending-trigger.json` に書き出され、**次セッション開始時**に `instructions_loaded.py` 経由で surface される。介入的でなく「ユーザーが確認してから実行する」非介入方針。
 - **SubagentStop = `hooks/subagent_observe.py`**: セッション内 subagent 数が閾値（既定 5）を超えると警告を出す。グローバルルール `subagent-guard.md` は「閾値超過警告が出たら**作業を一時停止してユーザーに現状説明**」を要求している。

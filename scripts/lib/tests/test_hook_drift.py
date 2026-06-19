@@ -156,10 +156,10 @@ def test_builder_registered_in_observability_contract() -> None:
         ("/review", "review"),
         ("/ship", "ship"),
         # プラグイン名前空間 `plugin:skill`
-        ("/rl-anything:implement", "implement"),
-        ("rl-anything:implement", "implement"),
+        ("/evolve-anything:implement", "implement"),
+        ("evolve-anything:implement", "implement"),
         # 引数を伴う参照 → スキル名のみ
-        ("/rl-anything:spec-keeper update", "spec-keeper"),
+        ("/evolve-anything:spec-keeper update", "spec-keeper"),
         ("/spec-keeper init", "spec-keeper"),
         # 前後空白
         ("  /retro  ", "retro"),
@@ -212,7 +212,7 @@ def _make_gstack_with_chain(tmp_path: Path, chain: dict) -> Path:
 def test_dead_refs_empty_when_all_refs_live(tmp_path: Path, monkeypatch) -> None:
     """全参照が live registry に存在すれば dead_ref はゼロ（FP なし）。"""
     chain = {
-        "spec": {"next": ["/review", "/rl-anything:implement"]},
+        "spec": {"next": ["/review", "/evolve-anything:implement"]},
         "office-hours": {"next": ["/plan-eng-review"]},
     }
     gdir = _make_gstack_with_chain(tmp_path, chain)

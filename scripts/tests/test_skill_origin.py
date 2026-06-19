@@ -64,7 +64,7 @@ class TestClassifySkillOrigin:
         """
         (tmp_path / ".claude-plugin").mkdir(parents=True)
         (tmp_path / ".claude-plugin" / "plugin.json").write_text(
-            '{"name": "rl-anything"}', encoding="utf-8"
+            '{"name": "evolve-anything"}', encoding="utf-8"
         )
         skill_dir = tmp_path / "skills" / "evolve"
         skill_dir.mkdir(parents=True)
@@ -111,13 +111,13 @@ class TestClassifySkillOrigin:
         plugins_dir = tmp_path / ".claude" / "plugins"
         plugins_dir.mkdir(parents=True)
 
-        install_path = tmp_path / "plugins" / "rl-anything"
+        install_path = tmp_path / "plugins" / "evolve-anything"
         skill_dir = install_path / ".claude" / "skills" / "openspec-verify"
         skill_dir.mkdir(parents=True)
 
         data = {
             "plugins": {
-                "rl-anything@marketplace": [{
+                "evolve-anything@marketplace": [{
                     "installPath": str(install_path),
                 }]
             }

@@ -195,7 +195,7 @@ def classify_multiview(
     DATA_DIR を再読込しない（入力済みの結果だけを join する）= dry-run 安全。
     """
     # join キーの名前空間を揃える（#577）: outcome/negative_transfer のキーは attribute_outcomes が
-    # 記録する「起動時のスキル名」= プラグイン修飾形（rl-anything:cleanup）だが、target_skills は
+    # 記録する「起動時のスキル名」= プラグイン修飾形（evolve-anything:cleanup）だが、target_skills は
     # SKILL.md の dir 名（bare cleanup）。bare 化しないと交差が空集合になり常に「該当視点なし」になる。
     chaos_by_skill = _index_chaos(chaos_result)  # chaos の name は dir 名（bare）なので正規化不要。
     neg_by_skill: Dict[str, Dict[str, Any]] = {}
@@ -220,13 +220,13 @@ def _bare_skill_name(key: Optional[str]) -> Optional[str]:
     """起動時のスキル名 `<plugin>:<skill>` を bare な skill 名（SKILL.md dir 名）へ正規化する。
 
     outcome_attribution / negative_transfer のキーは attribute_outcomes が記録する「起動時の
-    スキル名」= プラグイン修飾形（例 `rl-anything:cleanup`）。一方 evolve 対象（target_skills）は
+    スキル名」= プラグイン修飾形（例 `evolve-anything:cleanup`）。一方 evolve 対象（target_skills）は
     SKILL.md のディレクトリ名（bare `cleanup`）。両者を skill 名で join するには名前空間を揃える
     必要がある（#577: 不一致で交差が空集合になり、実データで常に「該当視点なし」に倒れていた）。
 
     `Agent:*` は subagent 帰属でありスキルではないので None（join 対象外）。dir 名に `:` は
-    含まれないため、修飾形は最後の `:` 以降が skill 名（`rl-anything:cleanup` → `cleanup`、
-    `Agent:rl-anything:second-opinion` → None、`update-config` → `update-config`）。
+    含まれないため、修飾形は最後の `:` 以降が skill 名（`evolve-anything:cleanup` → `cleanup`、
+    `Agent:evolve-anything:second-opinion` → None、`update-config` → `update-config`）。
     """
     if not key:
         return None

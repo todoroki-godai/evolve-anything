@@ -80,7 +80,7 @@ false confidence だった）、目的（重複排除・配布版生成）を果
   確定状態の commit 時にだけブロックするため。どちらも自動書き換えはしない（preamble/index
   の silent wipe バグの反省）。`enable`/`disable` で管理対象を登録するオプトイン方式とし、
   登録した pitfalls.md にのみ反応する（install しただけでは無反応）。台帳は PJ 直下
-  `.claude/rl-anything/pitfall-managed.json`（`scripts/lib/pitfall_registry.py`、決定論）。
+  `.claude/evolve-anything/pitfall-managed.json`（`scripts/lib/pitfall_registry.py`、決定論）。
   `enable` は index/TOC を「エントリファイルでない」として登録拒否する。
 - figma の既存 TS / 3段階開示構造の置換は依然スコープ外（[ADR-026](026-pitfall-curate-vs-pitfall-manager.md) 踏襲）。
 

@@ -60,7 +60,7 @@ def handle_user_prompt_submit(event: dict) -> None:
         return
 
     safe_name = skill_name.replace("\n", "").replace("\r", "")
-    header = f"[rl-anything pitfall-inject: {safe_name}]\n"
+    header = f"[evolve-anything pitfall-inject: {safe_name}]\n"
     print(header + pitfall_text, flush=True)
     mark_injected(session_id, skill_name)
 
@@ -73,9 +73,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_user_prompt_submit(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:pitfall_injector] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:pitfall_injector] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:pitfall_injector] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:pitfall_injector] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DATA_DIR = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".claude" / "rl-anything")))
+DATA_DIR = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".claude" / "evolve-anything")))
 DEFERRED_LOG = DATA_DIR / "deferred_tasks.jsonl"
 
 # 先送り検出パターン（AI 出力向け）

@@ -171,19 +171,19 @@ def test_project_filter_normalizes_worktree_paths(tmp_path):
     usage = tmp_path / "usage.jsonl"
     _write_usage(
         usage,
-        [{"session_id": "m1", "skill_name": "Bash", "ts": _now_iso(), "project": "rl-anything"} for _ in range(25)]
+        [{"session_id": "m1", "skill_name": "Bash", "ts": _now_iso(), "project": "evolve-anything"} for _ in range(25)]
         + [{"session_id": "o1", "skill_name": "Bash", "ts": _now_iso(), "project": "other"} for _ in range(30)],
     )
     corr = tmp_path / "corrections.jsonl"
     corr.write_text(
         # worktree セッションの correction（project_path に /.claude/worktrees/）
         json.dumps({"session_id": "m1", "timestamp": _now_iso(),
-                    "project_path": "/x/rl-anything/.claude/worktrees/feedback"}) + "\n",
+                    "project_path": "/x/evolve-anything/.claude/worktrees/feedback"}) + "\n",
         encoding="utf-8",
     )
     # project_dir 自体が worktree パスでも本体 slug に正規化される
-    project = capture_rate._normalize_pj("/x/rl-anything/.claude/worktrees/agent-foo")
-    assert project == "rl-anything"
+    project = capture_rate._normalize_pj("/x/evolve-anything/.claude/worktrees/agent-foo")
+    assert project == "evolve-anything"
     result = capture_rate.compute_capture_rate(
         usage_file=usage, corrections_file=corr, min_turns=20, project=project,
     )

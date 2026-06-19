@@ -1,10 +1,10 @@
 ## ADDED Requirements
 
 ### Requirement: Bootstrap スキルがカタログから推奨設定を表示する
-`/rl-anything:bootstrap` を実行すると、`recommended-globals.json` から推奨設定一覧をカテゴリ別（essential/recommended/optional）に表示し、各エントリの名前・説明・種別（rule/hook）を提示する。essential カテゴリはデフォルト選択済みとして表示する。
+`/evolve-anything:bootstrap` を実行すると、`recommended-globals.json` から推奨設定一覧をカテゴリ別（essential/recommended/optional）に表示し、各エントリの名前・説明・種別（rule/hook）を提示する。essential カテゴリはデフォルト選択済みとして表示する。
 
 #### Scenario: 初回実行で全カテゴリが表示される
-- **WHEN** ユーザーが `/rl-anything:bootstrap` を実行する
+- **WHEN** ユーザーが `/evolve-anything:bootstrap` を実行する
 - **THEN** essential/recommended/optional の 3 カテゴリに分かれた推奨設定一覧が表示される
 - **AND** 各エントリに名前・説明・種別（rule/hook）が含まれる
 

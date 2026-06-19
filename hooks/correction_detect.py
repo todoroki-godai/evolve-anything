@@ -192,10 +192,10 @@ def _check_corrections_trigger() -> bool:
     try:
         result = evaluate_corrections()
         if result.triggered and result.message:
-            print(f"[rl-anything:auto-trigger] {result.message}")
+            print(f"[evolve-anything:auto-trigger] {result.message}")
             return True
     except Exception as e:
-        print(f"[rl-anything:correction] trigger eval error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:correction] trigger eval error: {e}", file=sys.stderr)
     return False
 
 
@@ -207,9 +207,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_user_prompt_submit(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:correction] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:correction] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:correction] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:correction] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

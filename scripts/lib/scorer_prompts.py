@@ -1,4 +1,4 @@
-"""rl-scorer の軸別評価プロンプト。
+"""evolve-scorer の軸別評価プロンプト。
 
 run-loop.py と score_noise.py 両方から参照される単一の Source of Truth。
 プロンプト改善時はこのファイルを変更し、両方の機能に同時反映する。

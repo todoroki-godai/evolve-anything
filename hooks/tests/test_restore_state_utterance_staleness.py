@@ -26,7 +26,7 @@ def test_advisory_when_marker_absent(tmp_path):
     """marker 不在 = 未 ingest → advisory を返す。"""
     msg = restore_state.utterance_staleness_advisory(tmp_path)
     assert msg is not None
-    assert "rl-fleet ingest" in msg
+    assert "evolve-fleet ingest" in msg
     assert "未 ingest" in msg
 
 
@@ -36,7 +36,7 @@ def test_advisory_when_stale(tmp_path):
     (tmp_path / ustore.MARKER_NAME).write_text(old, encoding="utf-8")
     msg = restore_state.utterance_staleness_advisory(tmp_path)
     assert msg is not None
-    assert "rl-fleet ingest" in msg
+    assert "evolve-fleet ingest" in msg
 
 
 def test_advisory_none_when_fresh(tmp_path):
@@ -55,12 +55,12 @@ def test_advisory_does_not_write(tmp_path):
 
 def test_deliver_fires_in_install_layout(tmp_path, monkeypatch, capsys):
     """install レイアウト env では advisory を stdout に出す。"""
-    source = tmp_path / "plugins" / "data" / "rl-anything-rl-anything"
+    source = tmp_path / "plugins" / "data" / "evolve-anything-evolve-anything"
     source.mkdir(parents=True)
     monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: Path(p) == source)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(source))
     restore_state._deliver_utterance_staleness()
-    assert "rl-fleet ingest" in capsys.readouterr().out
+    assert "evolve-fleet ingest" in capsys.readouterr().out
 
 
 def test_deliver_silent_outside_install_layout(tmp_path, monkeypatch, capsys):

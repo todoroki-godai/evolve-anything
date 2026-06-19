@@ -10,7 +10,7 @@ precision 優先は ADR-043 の方針と整合。fleet status 側の `detect_equ
 （#419）と同じ検出方針を共有する（閾値は ≥3 PJ で精度を上げる — audit は全 PJ 横断の
 集計値を見るため、issues 単独より広い metric 群を扱う）。
 
-データ源は growth-state-*.json walk（rl-fleet status と同経路）。決定論・LLM 非依存。
+データ源は growth-state-*.json walk（evolve-fleet status と同経路）。決定論・LLM 非依存。
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from typing import Any, Dict, List
 try:
     from rl_common import DATA_DIR
 except ImportError:  # pragma: no cover - パス未解決時のフォールバック
-    DATA_DIR = Path.home() / ".claude" / "rl-anything"
+    DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 # ≥3 PJ で bit-exact 一致したら候補（1-2 PJ 一致は偶然で起きうるため無視）。
 _MIN_MATCHING_PJ = 3
@@ -101,7 +101,7 @@ def _issues_total(summary: Any) -> Any:
 def collect_cross_pj_metrics(data_dir: Path | None = None) -> Dict[str, Dict[str, Any]]:
     """DATA_DIR 配下の growth-state-*.json を walk し、PJ 横断の metric を集める。
 
-    rl-fleet status と同経路（growth-state cache を唯一の真実とする）。
+    evolve-fleet status と同経路（growth-state cache を唯一の真実とする）。
 
     Returns:
         {metric_name: {pj_name: value}}。読めない / 破損ファイルは skip する。

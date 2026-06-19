@@ -42,9 +42,9 @@
 - **AND** `user_prompts` に `/commit` が追加される
 
 #### Scenario: プラグインコマンドの抽出
-- **WHEN** human メッセージの content に `<command-name>/rl-anything:backfill</command-name>` が含まれる
+- **WHEN** human メッセージの content に `<command-name>/evolve-anything:backfill</command-name>` が含まれる
 - **THEN** `user_intents` に `skill-invocation` が追加される
-- **AND** `user_prompts` に `/rl-anything:backfill` が追加される
+- **AND** `user_prompts` に `/evolve-anything:backfill` が追加される
 
 #### Scenario: command-name タグのパース失敗
 - **WHEN** `<command-name>` タグは存在するがコマンド名を抽出できない

@@ -75,7 +75,7 @@ class TestAddMergeSuppression:
     @pytest.fixture
     def patch_suppression(self, tmp_path):
         """SUPPRESSION_FILE と DATA_DIR を tmp_path にパッチする。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         suppression_file = data_dir / "discover-suppression.jsonl"
         with mock.patch.object(discover, "DATA_DIR", data_dir), \

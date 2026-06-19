@@ -125,7 +125,7 @@ Claude Code の Glob→Grep→Read 階層戦略と同じ思想で、
 Bash grep のみで「設計判断を含む design.md」を高速抽出する。
 
 ```bash
-rl-usage-log "spec-keeper"
+evolve-usage-log "spec-keeper"
 # 設計判断セクションを含む design.md を抽出（数秒で完了）
 find openspec/changes/archive -name "design.md" \
   -exec grep -l "^## Decision\|^# Decision\|^## Risks\|Trade-off\|Approach" {} \;
@@ -402,8 +402,8 @@ gstack の `/document-release` が完了した後に、以下を提案する:
 - SPEC.md の更新が必要そうなら `/spec-keeper update` を提案
 - design doc に Approaches Considered がある場合、ADR の作成を提案
 
-## rl-anything との連携（将来）
+## evolve-anything との連携（将来）
 
-rl-anything の discover が SPEC.md の鮮度を検出し、更新を提案できるようにする。
+evolve-anything の discover が SPEC.md の鮮度を検出し、更新を提案できるようにする。
 evolve パイプラインで SPEC.md の品質チェック（カバレッジ、具体性）を組み込む。
 これは Phase 3 として、実運用フィードバック後に検討する。

@@ -1,10 +1,10 @@
 ## ADDED Requirements
 
 ### Requirement: 偽陽性レポート機構
-corrections の偽陽性をユーザーが報告できる機構を提供する。報告された偽陽性は `~/.claude/rl-anything/false_positives.jsonl` に JSONL 形式で保存される（MUST）。各レコードの `message_hash` は SHA-256 ハッシュ、`timestamp` は ISO 8601 形式とする（MUST）。
+corrections の偽陽性をユーザーが報告できる機構を提供する。報告された偽陽性は `~/.claude/evolve-anything/false_positives.jsonl` に JSONL 形式で保存される（MUST）。各レコードの `message_hash` は SHA-256 ハッシュ、`timestamp` は ISO 8601 形式とする（MUST）。
 
 #### Scenario: reflect 実行中に偽陽性を報告
-- **WHEN** `/rl-anything:reflect` の実行中にユーザーが correction を「偽陽性」としてマーク
+- **WHEN** `/evolve-anything:reflect` の実行中にユーザーが correction を「偽陽性」としてマーク
 - **THEN** `false_positives.jsonl` に `{"message_hash": "<メッセージの SHA-256 ハッシュ>", "original_type": "<correction_type>", "timestamp": "<ISO 8601 形式のタイムスタンプ>"}` が追記される
 
 #### Scenario: 報告済み偽陽性のフィルタリング

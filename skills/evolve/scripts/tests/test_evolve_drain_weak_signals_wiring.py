@@ -1,6 +1,6 @@
-"""#484 CLI 配線テスト: `rl-evolve --drain` が決定論 weak_signals を永続化する。
+"""#484 CLI 配線テスト: `evolve --drain` が決定論 weak_signals を永続化する。
 
-根因（#484）: 標準フローは `rl-evolve --dry-run` 分析 → 対話適用。run_evolve 内の
+根因（#484）: 標準フローは `evolve --dry-run` 分析 → 対話適用。run_evolve 内の
 run_batch(dry_run=True) は #491 契約で常にゼロ書き込みなので、決定論3チャネルが実 PJ で
 一度も永続化されない。修正は apply 境界（drain・tool 文脈・非 dry-run）で
 persist_weak_signals_drain を呼ぶこと。本テストは main() の --drain 分岐がそれを呼び、

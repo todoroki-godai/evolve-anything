@@ -103,11 +103,11 @@ CACHE_EXCLUDE_JSON_KEYS: Dict[str, frozenset] = {
 
 
 def _default_data_dir() -> Path:
-    """正準 DATA_DIR（env 非依存固定: ~/.claude/rl-anything）。"""
+    """正準 DATA_DIR（env 非依存固定: ~/.claude/evolve-anything）。"""
     env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
     if env:
         return Path(env)
-    return Path.home() / ".claude" / "rl-anything"
+    return Path.home() / ".claude" / "evolve-anything"
 
 
 def _sys_path_dirs(repo_root: Path) -> List[Path]:
@@ -183,7 +183,7 @@ def check_dry_run_invariance(
     """
     repo_root = Path(repo_root)
     data_dir = Path(data_dir) if data_dir is not None else _default_data_dir()
-    out_dir = Path(out_dir) if out_dir is not None else (Path("/tmp") / "rl-dogfood-gate")
+    out_dir = Path(out_dir) if out_dir is not None else (Path("/tmp") / "evolve-dogfood-gate")
     out_dir.mkdir(parents=True, exist_ok=True)
     result_path = out_dir / "evolve-dryrun-result.json"
 
@@ -276,7 +276,7 @@ def check_store_diff_1b(
     """Layer 1b: 「書かれるべきものが書かれる」方向の store 差分検査（#518）。
 
     Layer 1a が「dry-run は何も書かない」方向を見るのに対し、本検査は apply 境界
-    （``rl-evolve --drain``）で **書かれるべき store が実際に書かれる**ことを検査する。
+    （``evolve --drain``）で **書かれるべき store が実際に書かれる**ことを検査する。
     #484（決定論3チャネルが標準フローで一度も永続化されない繋ぎ目の死）が #513 で
     根治されたことを実環境に近い形で封じる回帰ゲート。
 
@@ -295,7 +295,7 @@ def check_store_diff_1b(
     """
     repo_root = Path(repo_root)
     data_dir = Path(data_dir) if data_dir is not None else _default_data_dir()
-    out_dir = Path(out_dir) if out_dir is not None else (Path("/tmp") / "rl-dogfood-gate")
+    out_dir = Path(out_dir) if out_dir is not None else (Path("/tmp") / "evolve-dogfood-gate")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # result JSON（drain が pending を読むソース）を用意する。
@@ -328,7 +328,7 @@ def check_store_diff_1b(
         tail = (run.get("stderr") or "").strip().splitlines()
         return {
             "status": "error",
-            "detail": f"rl-evolve --drain exit {run.get('returncode')}: {tail[-1] if tail else ''}",
+            "detail": f"evolve --drain exit {run.get('returncode')}: {tail[-1] if tail else ''}",
             "store_changes": store_changes,
             "weak_signals_persisted": None,
         }
@@ -338,7 +338,7 @@ def check_store_diff_1b(
     if summary is None:
         return {
             "status": "error",
-            "detail": "rl-evolve --drain の stdout から JSON サマリを取得できず",
+            "detail": "evolve --drain の stdout から JSON サマリを取得できず",
             "store_changes": store_changes,
             "weak_signals_persisted": None,
         }
@@ -396,7 +396,7 @@ def run_layer1(repo_root: Path, out_dir: Optional[Path] = None) -> Dict[str, Any
     読む dry-run result JSON のパス（成功時のみ）。
     """
     repo_root = Path(repo_root)
-    out_dir = Path(out_dir) if out_dir is not None else (Path("/tmp") / "rl-dogfood-gate")
+    out_dir = Path(out_dir) if out_dir is not None else (Path("/tmp") / "evolve-dogfood-gate")
     checks: List[Dict[str, Any]] = []
 
     inv = check_dry_run_invariance(repo_root, out_dir=out_dir)

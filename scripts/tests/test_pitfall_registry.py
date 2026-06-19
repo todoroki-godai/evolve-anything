@@ -60,7 +60,7 @@ def test_remove_managed(tmp_path):
 
 
 def test_corrupt_registry_returns_empty(tmp_path):
-    p = tmp_path / ".claude" / "rl-anything" / "pitfall-managed.json"
+    p = tmp_path / ".claude" / "evolve-anything" / "pitfall-managed.json"
     p.parent.mkdir(parents=True)
     p.write_text("{ not json", encoding="utf-8")
     assert reg.load_managed(tmp_path) == []  # raise しない

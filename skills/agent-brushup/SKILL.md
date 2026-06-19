@@ -7,14 +7,14 @@ description: |
   Trigger: agent-brushup, エージェント改善, agent品質, agent診断, エージェント整理
 ---
 
-# /rl-anything:agent-brushup — エージェント品質管理
+# /evolve-anything:agent-brushup — エージェント品質管理
 
 エージェント定義を診断・改善・整理する。
 
 ## Usage
 
 ```
-/rl-anything:agent-brushup [subcommand] [args]
+/evolve-anything:agent-brushup [subcommand] [args]
 ```
 
 サブコマンド:
@@ -28,7 +28,7 @@ description: |
 ### Step 1: エージェント走査
 
 ```bash
-rl-usage-log "agent-brushup"
+evolve-usage-log "agent-brushup"
 ```
 
 ```python

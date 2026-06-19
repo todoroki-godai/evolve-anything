@@ -5,7 +5,7 @@
 検出は Claude Code native の `~/.claude/projects/-<slug>/*.jsonl` に埋め込まれた
 `cwd` フィールドを信頼する（slug デコードの曖昧性を回避）。
 
-Config ファイル: `~/.claude/rl-anything/fleet-config.json`
+Config ファイル: `~/.claude/evolve-anything/fleet-config.json`
 {
   "tracked_projects": ["<abs path>", ...],
   "ignored_projects": ["<abs path>", ...],
@@ -22,7 +22,7 @@ from typing import Any
 try:
     from rl_common import DATA_DIR as _DATA_DIR
 except ImportError:
-    _DATA_DIR = Path.home() / ".claude" / "rl-anything"
+    _DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 CONFIG_PATH = _DATA_DIR / "fleet-config.json"
 CC_PROJECTS_ROOT = Path.home() / ".claude" / "projects"

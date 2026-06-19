@@ -5,13 +5,13 @@ Status: Accepted
 
 ## Context
 
-rl-anything は `/optimize` と `/rl-loop` による既存スキルの改善のみを提供していた。環境全体（skills / rules / memory / CLAUDE.md）のライフサイクル管理がなく、スキルの発見・淘汰・肥大化制御・フィードバック収集は手動に頼っていた。「発見 -> 生成 -> 最適化 -> 淘汰」の全ライフサイクルを管理し、使えば使うほど環境が賢くなる自律進化エンジンへの拡張が必要だった。
+evolve-anything は `/optimize` と `/evolve-loop` による既存スキルの改善のみを提供していた。環境全体（skills / rules / memory / CLAUDE.md）のライフサイクル管理がなく、スキルの発見・淘汰・肥大化制御・フィードバック収集は手動に頼っていた。「発見 -> 生成 -> 最適化 -> 淘汰」の全ライフサイクルを管理し、使えば使うほど環境が賢くなる自律進化エンジンへの拡張が必要だった。
 
 ## Decision
 
 - **観測は async hooks + JSONL 追記のみ**: PostToolUse / Stop / PreCompact / SessionStart の async hooks で regex + 集計のみ実行。LLM 呼び出しなし、コストゼロ。Homunculus v1->v2 の知見から Hook 観測は 100% 信頼、スキル観測は 50-80%
 - **構造的制約はコードで強制**: 生成/更新パイプラインで行数バリデーション（SKILL.md 500行、rules 3行、memory 120行）。プロンプトでの制約は32世代実験で2回失敗したため不採用
-- **淘汰はアーカイブ方式（削除しない）**: `.claude/rl-anything/archive/` に退避し、復元コマンドを用意。30日ルール。直接削除は誤判断時の回復コストが高い
+- **淘汰はアーカイブ方式（削除しない）**: `.claude/evolve-anything/archive/` に退避し、復元コマンドを用意。30日ルール。直接削除は誤判断時の回復コストが高い
 - **Global スコープは Usage Registry で安全管理**: global スキル使用時にプロジェクトパスも記録し、Prune は全プロジェクトの使用データを参照して判断
 - **Discover の閾値は 5+ クラスタでスキル候補、3+ でルール候補**: 複数回検出を必須とし過学習を防止。3行ルールが抽象化を強制
 - **段階的実装（8ステップ）**: Observe -> Audit/Report -> Prune -> Discover -> Evolve統合 -> Optimize拡張 -> Fitness進化 -> Bloat制御。各ステップが前のステップのデータに依存

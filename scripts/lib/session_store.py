@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 SESSIONS_DB = DATA_DIR / "sessions.db"
 SESSIONS_JSONL = DATA_DIR / "sessions.jsonl"
 # rotate 済み jsonl の glob パターン（ingest 対象から恒久除外する）。

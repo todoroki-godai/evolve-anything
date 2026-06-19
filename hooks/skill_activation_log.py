@@ -76,9 +76,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_post_tool_use(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:skill_activation_log] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:skill_activation_log] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:skill_activation_log] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:skill_activation_log] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

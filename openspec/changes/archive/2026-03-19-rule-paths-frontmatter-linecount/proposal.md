@@ -1,6 +1,6 @@
 ## Why
 
-rl-anything がルールを生成・最適化する際、適用対象が特定ファイルパターンに限定できるケースでも `paths` frontmatter を提案していない。また、現在の行数制限チェックは frontmatter を含めた全体行数でカウントしており、`paths` や `description` 等の frontmatter を追加すると本文が3行でも制限超過になる。これにより `paths` frontmatter 活用へのインセンティブが阻害されている。Closes: #31
+evolve-anything がルールを生成・最適化する際、適用対象が特定ファイルパターンに限定できるケースでも `paths` frontmatter を提案していない。また、現在の行数制限チェックは frontmatter を含めた全体行数でカウントしており、`paths` や `description` 等の frontmatter を追加すると本文が3行でも制限超過になる。これにより `paths` frontmatter 活用へのインセンティブが阻害されている。Closes: #31
 
 ## What Changes
 

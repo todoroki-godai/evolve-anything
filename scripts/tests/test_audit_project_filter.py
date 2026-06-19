@@ -24,7 +24,7 @@ def reset_cache():
 @pytest.fixture
 def usage_data_dir(tmp_path):
     """プロジェクトフィールド付き usage.jsonl を含むデータディレクトリ。"""
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     now = datetime.now(timezone.utc).isoformat()
     records = [

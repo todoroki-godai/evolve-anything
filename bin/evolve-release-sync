@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# bin/rl-release-sync — リリース（bump + tag push）後に、ローカル開発環境の
-# rl-anything プラグインを最新バージョンへ同期する。
+# bin/evolve-release-sync — リリース（bump + tag push）後に、ローカル開発環境の
+# evolve-anything プラグインを最新バージョンへ同期する。
 #
 # 背景（なぜ必要か）:
 #   marketplace は Directory source（ローカルの作業ディレクトリ）を直接見る。
@@ -13,7 +13,7 @@
 #       plugin update。
 #
 # Usage:
-#   rl-release-sync [--dry-run]
+#   evolve-release-sync [--dry-run]
 #     --dry-run   実コマンドを実行せず、実行予定のコマンドを表示するだけ。
 #
 # exit 0=成功 / 1=同期失敗（ff 不可など要手動確認）/ 2=前提不成立（repo 外・main 以外）。
@@ -32,7 +32,7 @@ run() {
 
 # --- main 本体 repo を解決（worktree から呼んでも本体を指すように） ---
 GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)" || {
-  echo "[release-sync] ⚠ git repo 外です。rl-anything のディレクトリ内で実行してください。" >&2
+  echo "[release-sync] ⚠ git repo 外です。evolve-anything のディレクトリ内で実行してください。" >&2
   exit 2
 }
 # git-common-dir は <main>/.git（相対で返ることがあるので絶対化）。
@@ -60,8 +60,8 @@ if ! run git -C "$MAIN_REPO" merge --ff-only origin/main; then
 fi
 
 # --- marketplace（Directory source）→ plugin を更新 ---
-run claude plugin marketplace update rl-anything
-run claude plugin update rl-anything@rl-anything
+run claude plugin marketplace update evolve-anything
+run claude plugin update evolve-anything@evolve-anything
 
 after="$(grep '"version"' "$PLUGIN_JSON" 2>/dev/null | head -1 | tr -d ' ')"
 echo "[release-sync] plugin.json version: ${before} → ${after}" >&2

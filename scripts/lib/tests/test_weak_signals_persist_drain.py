@@ -1,6 +1,6 @@
 """#484 再発予防 E2E: 決定論 weak_signals が apply 境界（drain）で永続化される。
 
-根因（#484）: 標準 evolve フローは ``rl-evolve --dry-run`` 分析 → assistant が対話適用、で
+根因（#484）: 標準 evolve フローは ``evolve --dry-run`` 分析 → assistant が対話適用、で
 ある。決定論3チャネル（manual_edit_after_ai / esc_interrupt / rephrase）の検出は
 ``run_evolve`` 内の ``run_batch(dry_run=dry_run)`` だけで永続化されるため、dry-run 分析では
 ``append_signals`` の最下層 dry-run ゲート（#491 invariant）で常にゼロ書き込みになる。
@@ -8,7 +8,7 @@
 永続化されない**（llm_judge だけが SKILL.md の apply 側 Phase B/C で書かれて存在する）。
 
 #400 の evolve_decisions と同型の修正: 決定論検出は冪等（signal_key dedup）なので、
-apply 境界の `rl-evolve --drain`（tool 文脈・非 dry-run・正準 DATA_DIR）で
+apply 境界の `evolve --drain`（tool 文脈・非 dry-run・正準 DATA_DIR）で
 ``persist_weak_signals_drain`` を回し永続化する。
 
 完了基準は **store 差分**（#400「dry-run 検証の盲点」と同型）:
@@ -113,7 +113,7 @@ def test_drain_is_idempotent(store_path, stub_collect):
 
 
 def test_drain_cli_persists_via_evolve(tmp_path, monkeypatch):
-    """CLI 配線: `rl-evolve --drain` の実体（main の drain 分岐）が weak_signals を永続化する。
+    """CLI 配線: `evolve --drain` の実体（main の drain 分岐）が weak_signals を永続化する。
 
     apply 境界をまたぐ store 差分を assert する E2E（#400 と同型・完了基準は store 差分）。
     """

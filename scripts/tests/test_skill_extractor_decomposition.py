@@ -22,12 +22,12 @@ from skill_extractor.skill_extractor import extract_skill_candidates
 
 
 def _rec(
-    skill_name="rl-anything:implement",
+    skill_name="evolve-anything:implement",
     user_prompt="実装して",
     outcome="success",
     session_id="s1",
     timestamp="t1",
-    source_file="/home/u/.claude/projects/rl-anything/abc.jsonl",
+    source_file="/home/u/.claude/projects/evolve-anything/abc.jsonl",
 ) -> TrajectoryRecord:
     return TrajectoryRecord(
         skill_name=skill_name,
@@ -185,10 +185,10 @@ class TestWorkflow:
 
 class TestSemantics:
     def test_base_name_strips_namespace(self):
-        records = [_rec(skill_name="rl-anything:implement")]
+        records = [_rec(skill_name="evolve-anything:implement")]
         d = decompose_candidate(records)
         assert d["semantics"]["base_name"] == "implement"
-        assert d["semantics"]["namespace"] == "rl-anything"
+        assert d["semantics"]["namespace"] == "evolve-anything"
 
     def test_namespace_none_when_absent(self):
         records = [_rec(skill_name="audit")]
@@ -228,11 +228,11 @@ class TestAttachments:
     def test_projects_still_tracked_for_cross_project(self):
         """projects は cross-project 直接API用に残置（多PJ入力で弁別）。"""
         records = [
-            _rec(source_file="/h/.claude/projects/rl-anything/a.jsonl", session_id="s1"),
+            _rec(source_file="/h/.claude/projects/evolve-anything/a.jsonl", session_id="s1"),
             _rec(source_file="/h/.claude/projects/docs-platform/b.jsonl", session_id="s2"),
         ]
         d = decompose_candidate(records)
-        assert set(d["attachments"]["projects"]) == {"rl-anything", "docs-platform"}
+        assert set(d["attachments"]["projects"]) == {"evolve-anything", "docs-platform"}
 
     def test_empty_session_ids_tolerated(self):
         """session_id 欠落（空文字）は distinct から除外し、0 件なら bound 扱い。"""

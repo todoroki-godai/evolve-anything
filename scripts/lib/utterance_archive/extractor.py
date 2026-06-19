@@ -69,7 +69,7 @@ def pj_slug_from_cwd(cwd: Optional[str]) -> Optional[str]:
     """transcript レコードの ``cwd`` から worktree 安全な pj_slug を導出する（#430）。
 
     encoded dir 名（``~/.claude/projects/`` 配下）は ``/`` と ``.`` が同じ ``-`` に
-    潰れる非可逆エンコードのため ``rl-anything`` のようなハイフン入り名を復元できない。
+    潰れる非可逆エンコードのため ``evolve-anything`` のようなハイフン入り名を復元できない。
     そこで transcript 内の cwd（ファイルシステム非依存・削除済み PJ でも残る）を正に使う:
 
     1. cwd に ``/.claude/worktrees/`` が含まれればそこで切って本体側パスへ正規化

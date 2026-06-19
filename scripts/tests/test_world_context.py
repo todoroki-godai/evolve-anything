@@ -35,7 +35,7 @@ from world_context import (
 
 @pytest.fixture
 def tmp_data_dir(tmp_path: Path) -> Path:
-    return tmp_path / "rl-anything"
+    return tmp_path / "evolve-anything"
 
 
 @pytest.fixture
@@ -93,7 +93,7 @@ _VALID_WORLD_JSON = json.dumps(_VALID_WORLD)
 
 
 def test_build_world_prompt_embeds_description() -> None:
-    prompt = build_world_prompt("# rl-anything\nTest project description.")
+    prompt = build_world_prompt("# evolve-anything\nTest project description.")
     assert "Test project description." in prompt
     assert "setting" in prompt  # テンプレートのキー説明が含まれる
 
@@ -332,7 +332,7 @@ def test_cli_emit_request_outputs_prompt_no_llm(
         "--emit-request",
         "--claude-md", str(claude_md),
         "--slug", "test-slug",
-        "--data-dir", str(tmp_path / "rl-anything"),
+        "--data-dir", str(tmp_path / "evolve-anything"),
     ])
     assert ret == 0
     doc = json.loads(capsys.readouterr().out)
@@ -346,7 +346,7 @@ def test_cli_emit_request_outputs_prompt_no_llm(
 def test_cli_save_from_response_saves_and_prints(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     resp = _write_response(tmp_path, _VALID_WORLD)
     ret = main([
         "--save-from-response",
@@ -365,7 +365,7 @@ def test_cli_save_from_response_missing_world_uses_default(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     """responses に world が欠損していても DEFAULT で保存され壊れない。"""
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     resp = tmp_path / "empty.json"
     resp.write_text("{}", encoding="utf-8")
     ret = main([
@@ -383,7 +383,7 @@ def test_cli_save_then_load_other_slug_isolated(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     """--save-from-response --slug A の後、--load --slug B は exit 1（別PJの世界観を拾わない）。"""
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     resp = _write_response(tmp_path, _VALID_WORLD)
     assert main([
         "--save-from-response",

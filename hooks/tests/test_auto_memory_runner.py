@@ -35,7 +35,7 @@ def tmp_memory_dir(tmp_path):
 @pytest.fixture
 def tmp_data_dir(tmp_path):
     """一時データディレクトリ。"""
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     return data_dir
 

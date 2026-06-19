@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything の evolve パイプラインは、プロジェクトの使用パターンを分析してルール/フック/スキルの改善を提案する。現在の検出対象は:
+evolve-anything の evolve パイプラインは、プロジェクトの使用パターンを分析してルール/フック/スキルの改善を提案する。現在の検出対象は:
 - `builtin_replaceable`: Bash で Built-in ツール代替可能なコマンド使用
 - `sleep-polling-guard`: sleep ポーリングパターン
 

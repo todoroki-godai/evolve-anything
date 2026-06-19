@@ -17,7 +17,7 @@ Prune 候補に対して以下のラベルを付与:
 
 | ラベル | 条件 | アクション |
 |--------|------|-----------|
-| `archive` | 30日以上未使用、参照なし | `.claude/rl-anything/archive/` に移動 |
+| `archive` | 30日以上未使用、参照なし | `.claude/evolve-anything/archive/` に移動 |
 | `merge` | 由来ペア（Reorganize で検出）の統合候補 | 統合案を生成して提案 |
 | `keep` | 他スキル/ルールから参照あり、または cross-PJ で使用中 | 淘汰しない |
 | `downgrade` | global スキルだが1PJのみで使用 | project スコープへの降格を提案 |
@@ -47,7 +47,7 @@ Prune 候補に対して以下のラベルを付与:
 ## 淘汰 ≠ 削除
 
 - 「削除」ではなく **「アーカイブ提案」**
-- `.claude/rl-anything/archive/` に移動
+- `.claude/evolve-anything/archive/` に移動
 - 人間が承認して初めて実行
 - いつでも復元可能
 

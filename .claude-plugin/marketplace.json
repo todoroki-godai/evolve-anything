@@ -1,11 +1,11 @@
 {
-  "name": "rl-anything",
+  "name": "evolve-anything",
   "owner": {
     "name": "todoroki-godai"
   },
   "plugins": [
     {
-      "name": "rl-anything",
+      "name": "evolve-anything",
       "source": "./",
       "description": "Automatic skill/rule optimization using direct LLM patches with fitness evaluation and human approval workflow",
       "version": "1.105.0",
@@ -19,7 +19,7 @@
         "optimization",
         "direct-patch",
         "skill-evolution",
-        "rl-loop",
+        "evolve-loop",
         "claude-code"
       ],
       "category": "development",

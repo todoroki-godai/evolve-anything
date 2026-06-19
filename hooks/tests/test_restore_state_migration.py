@@ -1,7 +1,7 @@
 """restore_state の DATA_DIR 一元化リマインド（#364）。
 
 SessionStart で「marker 無し & 旧 plugin-data dir にストア残存」を検出して
-`rl-fleet migrate-data` を案内するか、marker 済み / 残存なし / 非 hook 文脈では
+`evolve-fleet migrate-data` を案内するか、marker 済み / 残存なし / 非 hook 文脈では
 沈黙するかを決定論で固定する（#402 drain リマインドと同型の
 install ≠ enforcement 検出層）。
 
@@ -26,7 +26,7 @@ import restore_state  # noqa: E402
 def env(tmp_path, monkeypatch):
     canonical = tmp_path / "canonical"
     canonical.mkdir()
-    source = tmp_path / "plugins" / "data" / "rl-anything-rl-anything"
+    source = tmp_path / "plugins" / "data" / "evolve-anything-evolve-anything"
     source.mkdir(parents=True)
     monkeypatch.setattr(ddm, "default_canonical", lambda: canonical)
     monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: Path(p) == source)
@@ -39,7 +39,7 @@ def test_reminder_fires_when_split_unresolved(env, capsys):
     (source / "usage.jsonl").write_text("{}\n")
     restore_state._deliver_data_dir_migration_reminder()
     out = capsys.readouterr().out
-    assert "rl-fleet migrate-data" in out
+    assert "evolve-fleet migrate-data" in out
 
 
 def test_reminder_silent_when_marker_exists(env, capsys):

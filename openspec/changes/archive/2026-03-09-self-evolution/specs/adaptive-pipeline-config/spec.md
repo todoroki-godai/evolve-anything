@@ -20,7 +20,7 @@ confidence-calibration の算出結果に基づき、パイプラインパラメ
 - **THEN** 提案の算出と表示は通常通り行うが、pipeline-proposals.jsonl への書き込みは行わない
 
 ### Requirement: Proposal persistence
-生成された調整提案を `~/.claude/rl-anything/pipeline-proposals.jsonl` に記録しなければならない（SHALL）。
+生成された調整提案を `~/.claude/evolve-anything/pipeline-proposals.jsonl` に記録しなければならない（SHALL）。
 
 #### Scenario: Proposal recorded
 - **WHEN** 調整提案が生成された

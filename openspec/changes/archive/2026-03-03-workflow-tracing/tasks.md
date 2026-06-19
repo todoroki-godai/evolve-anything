@@ -1,6 +1,6 @@
 ## 1. PreToolUse hook（ワークフロー文脈記録）
 
-- [x] 1.1 `hooks/workflow_context.py` を作成（stdin から PreToolUse イベントを読み取り、Skill 呼び出し時に `$TMPDIR/rl-anything-workflow-{session_id}.json` を書き出す）
+- [x] 1.1 `hooks/workflow_context.py` を作成（stdin から PreToolUse イベントを読み取り、Skill 呼び出し時に `$TMPDIR/evolve-anything-workflow-{session_id}.json` を書き出す）
 - [x] 1.2 `workflow_id` 生成ロジック（`wf-{uuid4先頭8文字}` 形式）
 - [x] 1.3 `hooks.json` に PreToolUse エントリを追加（matcher: `tool_name: "Skill"`, command: `workflow_context.py`, timeout: 5000）
 
@@ -60,7 +60,7 @@
 - [x] 10.2 手動で Agent:Explore を呼び、`parent_skill: null`, `workflow_id: null` が記録されることを確認
 - [x] 10.3 セッション終了後に workflows.jsonl にシーケンスレコードが書き出されることを確認（`steps`, `step_count`, `intent_category` の内容が妥当か目視）
 - [x] 10.4 subagents.jsonl にも `parent_skill`, `workflow_id` が付与されていることを確認
-- [x] 10.5 文脈ファイル（`$TMPDIR/rl-anything-workflow-*.json`）がセッション終了後に削除されていることを確認
+- [x] 10.5 文脈ファイル（`$TMPDIR/evolve-anything-workflow-*.json`）がセッション終了後に削除されていることを確認
 
 ### 10b. Discover / Prune 精度の確認
 
@@ -98,7 +98,7 @@
   - Discover/Prune 精度改善の before/after（11.5-11.6 の結果）
 
 Phase C proposal に含めるべき設計入力（アイデア記録）:
-  - **初期設定スキル** (`/rl-anything:setup`): 対話形式で per-project / global の rules, skills, memory を自動生成
+  - **初期設定スキル** (`/evolve-anything:setup`): 対話形式で per-project / global の rules, skills, memory を自動生成
   - **Observe → Reflect → Adapt → Repeat** ループの実装（2026年の self-improving agent ベストプラクティス）
   - example-based bootstrap パターン（Turborepo の `--example` 方式）
 

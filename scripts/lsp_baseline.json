@@ -2,7 +2,7 @@
   "recorded_at": "2026-05-19",
   "note": "LSP正式有効化後ベースライン（pyright+pylsp+typescript-lsp）",
   "projects": {
-    "rl-anything": {
+    "evolve-anything": {
       "sessions_sampled": 10,
       "tool_calls": {
         "ToolSearch": 7,

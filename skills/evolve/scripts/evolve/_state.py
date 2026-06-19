@@ -217,13 +217,13 @@ def check_data_sufficiency() -> Dict[str, Any]:
     elif sufficient:
         msg = f"{sessions} セッション, {observations} 新規観測 (全{total_observations}) — データ十分"
     elif telemetry_empty:
-        # #486: 旧 /rl-anything:backfill スキルは #215（v1.65.1）で CLI 削除済みの幻。
+        # #486: 旧 /evolve-anything:backfill スキルは #215（v1.65.1）で CLI 削除済みの幻。
         # 現行は observe hooks がセッションを進行形で観測し、evolve が batch ingest する。
-        # 初回はしばらく通常運用してから /rl-anything:evolve を回せばよい。
+        # 初回はしばらく通常運用してから /evolve-anything:evolve を回せばよい。
         msg = (
             "テレメトリが空です（観測データ未取得）。"
             "observe hooks が今後のセッションを自動記録します。"
-            "数セッション利用してから /rl-anything:evolve を実行してください。"
+            "数セッション利用してから /evolve-anything:evolve を実行してください。"
         )
     else:
         msg = f"前回 evolve 以降: {sessions} セッション, {observations} 観測 (全{total_observations})"

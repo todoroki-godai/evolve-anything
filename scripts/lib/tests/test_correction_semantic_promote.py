@@ -23,10 +23,10 @@ def _seed_signals(ws_path: Path):
     sigs = [
         WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 1,
                                  "text": "緑にして赤じゃなくて", "reason": "後置型"},
-                   "2026-06-10T00:00:00+00:00", "s1", "rl-anything"),
+                   "2026-06-10T00:00:00+00:00", "s1", "evolve-anything"),
         WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 2,
                                  "text": "P6が違う", "reason": "ソフト指摘"},
-                   "2026-06-10T00:01:00+00:00", "s1", "rl-anything"),
+                   "2026-06-10T00:01:00+00:00", "s1", "evolve-anything"),
     ]
     append_signals(sigs, path=ws_path)
     return sigs
@@ -42,7 +42,7 @@ def test_read_unpromoted_returns_all_when_none_promoted(tmp_path: Path) -> None:
 def test_read_unpromoted_filters_by_channel(tmp_path: Path) -> None:
     ws = tmp_path / "weak_signals.jsonl"
     _seed_signals(ws)
-    append_signals([WeakSignal("rephrase", {"x": 1}, "t", "s2", "rl-anything")], path=ws)
+    append_signals([WeakSignal("rephrase", {"x": 1}, "t", "s2", "evolve-anything")], path=ws)
     # channel フィルタ無しなら 3、llm_judge のみなら 2
     assert len(cs_promote.read_unpromoted(weak_signals_path=ws)) == 3
     assert len(cs_promote.read_unpromoted(weak_signals_path=ws, channel="llm_judge")) == 2
@@ -56,7 +56,7 @@ def test_promote_writes_human_source_correction(tmp_path: Path) -> None:
 
     res = cs_promote.promote_signals(
         keys, weak_signals_path=ws, corrections_path=corr,
-        project_path="/Users/x/rl-anything",
+        project_path="/Users/x/evolve-anything",
     )
     assert res["promoted"] == 2
 
@@ -66,8 +66,8 @@ def test_promote_writes_human_source_correction(tmp_path: Path) -> None:
     assert all(r["source"] == "reflect_confirmed" for r in corr_recs)
     assert all(r["reflect_status"] == "applied" for r in corr_recs)
     # #593: project_path は書込時に worktree 安全 slug へ正規化される
-    # （/Users/x/rl-anything → basename rl-anything）。
-    assert all(r.get("project_path") == "rl-anything" for r in corr_recs)
+    # （/Users/x/evolve-anything → basename evolve-anything）。
+    assert all(r.get("project_path") == "evolve-anything" for r in corr_recs)
     # provenance の言い回し本文が message に入る
     assert any("緑にして" in r.get("message", "") for r in corr_recs)
 
@@ -256,7 +256,7 @@ def test_invalidate_noop_when_no_match(tmp_path: Path) -> None:
 # ── resolve_idiom_keys_for_signals（signal→idiom provenance 突合・#463 配線） ──
 
 
-def _seed_signal_and_idiom(ws_path: Path, idioms_path: Path, *, line_no, text, slug="rl-anything"):
+def _seed_signal_and_idiom(ws_path: Path, idioms_path: Path, *, line_no, text, slug="evolve-anything"):
     """同じ provenance（pj_slug, source_path, line_no）を共有する weak_signal + idiom を seed。
 
     batch.py は同じ prov で WeakSignal と CorrectionIdiom を作るため、(pj_slug, source_path,
@@ -306,7 +306,7 @@ def test_resolve_idiom_keys_skips_signals_without_idiom(tmp_path: Path) -> None:
     idioms = tmp_path / "correction_idioms.jsonl"
     # idiom を持たない rephrase シグナルのみ
     sig = WeakSignal("rephrase", {"source_path": "/b.jsonl", "line_no": 9},
-                     "t", "s2", "rl-anything")
+                     "t", "s2", "evolve-anything")
     append_signals([sig], path=ws)
     mapping = cs_promote.resolve_idiom_keys_for_signals(
         [sig.signal_key], weak_signals_path=ws, idioms_path=idioms,

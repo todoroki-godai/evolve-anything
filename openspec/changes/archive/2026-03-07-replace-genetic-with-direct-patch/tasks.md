@@ -31,7 +31,7 @@
 - [x] 5.2 対応するテストファイル（test_strategy_router.py 等 6ファイル）を削除
 - [x] 5.3 optimize.py から旧モジュールの import と `GeneticOptimizer` / `Individual` の旧ロジックを除去
 - [x] 5.4 SKILL.md を更新: 廃止オプション削除、新 `--mode` オプション追加、説明文を直接パッチモードに変更
-- [x] 5.5 rl-loop-orchestrator/SKILL.md の説明更新（3バリエーション生成 → 直接パッチ、API コスト目安更新）
+- [x] 5.5 evolve-loop-orchestrator/SKILL.md の説明更新（3バリエーション生成 → 直接パッチ、API コスト目安更新）
 - [x] 5.6 evolve/SKILL.md の GA オプション参照確認・削除
 
 ## 6. 統合テスト・検証

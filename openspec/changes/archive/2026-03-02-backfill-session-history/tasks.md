@@ -11,7 +11,7 @@
 
 ## 2. スキル定義
 
-- [x] 2.1 `skills/backfill/SKILL.md` を作成（`/rl-anything:backfill` スキル定義）
+- [x] 2.1 `skills/backfill/SKILL.md` を作成（`/evolve-anything:backfill` スキル定義）
 
 ## 3. テスト
 

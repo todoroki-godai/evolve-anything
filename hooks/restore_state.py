@@ -67,7 +67,7 @@ def _make_session_title(checkpoint: dict) -> str:
 
 def _format_work_context_summary(work_context: dict) -> str:
     """work_context から人間可読なサマリーを生成する。"""
-    parts = ["[rl-anything:restore_state] 作業コンテキスト復元:"]
+    parts = ["[evolve-anything:restore_state] 作業コンテキスト復元:"]
 
     branch = work_context.get("git_branch", "")
     if branch:
@@ -96,9 +96,9 @@ def _deliver_pending_trigger() -> None:
             return
         message = data.get("message", "")
         if message:
-            print(f"[rl-anything:auto-trigger] {message}")
+            print(f"[evolve-anything:auto-trigger] {message}")
     except Exception as e:
-        print(f"[rl-anything:restore_state] trigger delivery error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] trigger delivery error: {e}", file=sys.stderr)
 
 
 def _deliver_spec_drift() -> None:
@@ -116,7 +116,7 @@ def _deliver_spec_drift() -> None:
         if message:
             print(message)
     except Exception as e:
-        print(f"[rl-anything:restore_state] spec-trigger error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] spec-trigger error: {e}", file=sys.stderr)
 
 
 def _resolve_canonical_history_file(slug: str):
@@ -124,7 +124,7 @@ def _resolve_canonical_history_file(slug: str):
 
     `optimize_history_store.DATA_DIR`/`HISTORY_ROOT` は import 時に raw `CLAUDE_PLUGIN_DATA`
     から確定するため、hook 文脈（CC が env=plugin-data を設定）でそのまま drain すると
-    plugin-data dir へ書き、tool 文脈の `rl-evolve --drain`（env 無 → fallback/正準）と
+    plugin-data dir へ書き、tool 文脈の `evolve --drain`（env 無 → fallback/正準）と
     書き込み先が割れる（pitfall_datadir_hook_tool_split, #358/#364）。
 
     そこで marker ゲート付きの `rl_common.resolve_data_dir` で tool reader と同じ正準 dir を
@@ -142,7 +142,7 @@ def _resolve_canonical_history_file(slug: str):
 def _deliver_evolve_drain() -> None:
     """前回 evolve で emit→apply 済みの提案を SessionStart で自動 drain する（#421）。
 
-    #402 はリマインド表示のみで、実 drain は assistant が手で `rl-evolve --drain` を叩く
+    #402 はリマインド表示のみで、実 drain は assistant が手で `evolve --drain` を叩く
     SKILL.md prose 依存（install ≠ enforcement）だった。本関数はそれを人手ゼロの自動回収へ
     昇格させ、apply 済み提案を optimize_history（fitness 母集団）へ決定論記録する。
 
@@ -176,7 +176,7 @@ def _deliver_evolve_drain() -> None:
         if not applied:
             return
     except Exception as e:
-        print(f"[rl-anything:restore_state] evolve-drain pre-check error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] evolve-drain pre-check error: {e}", file=sys.stderr)
         return
 
     try:
@@ -185,16 +185,16 @@ def _deliver_evolve_drain() -> None:
         accepted = summary.get("accepted") or []
         rejected = summary.get("rejected") or []
         print(
-            f"[rl-anything] evolve 提案を自動 drain しました: "
+            f"[evolve-anything] evolve 提案を自動 drain しました: "
             f"accept {len(accepted)} 件 / reject {len(rejected)} 件を "
             f"fitness 母集団（optimize_history）に記録（#421）。"
         )
     except Exception as e:
-        print(f"[rl-anything:restore_state] evolve-drain error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] evolve-drain error: {e}", file=sys.stderr)
 
 
 def _deliver_data_dir_migration_reminder() -> None:
-    """DATA_DIR 分裂が未解消なら `rl-fleet migrate-data` を1行案内する（#364）。
+    """DATA_DIR 分裂が未解消なら `evolve-fleet migrate-data` を1行案内する（#364）。
 
     marker（一元化済）があれば沈黙。marker 無し & 旧 plugin-data dir に
     ストアが残っていれば案内する。migration 実行で marker が立ち自然終息
@@ -215,12 +215,12 @@ def _deliver_data_dir_migration_reminder() -> None:
             return
         if _data_dir_migration.needs_migration(source=source):
             print(
-                "[rl-anything] DATA_DIR が hook/tool 文脈で分裂しています（#364）。"
-                "`rl-fleet migrate-data --dry-run` で内容確認後、"
-                "`rl-fleet migrate-data` で一元化してください。"
+                "[evolve-anything] DATA_DIR が hook/tool 文脈で分裂しています（#364）。"
+                "`evolve-fleet migrate-data --dry-run` で内容確認後、"
+                "`evolve-fleet migrate-data` で一元化してください。"
             )
     except Exception as e:
-        print(f"[rl-anything:restore_state] data-dir migration reminder error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] data-dir migration reminder error: {e}", file=sys.stderr)
 
 
 def utterance_staleness_advisory(data_dir) -> str | None:
@@ -238,8 +238,8 @@ def utterance_staleness_advisory(data_dir) -> str | None:
     last = _utterance_store.read_last_ingest_at(data_dir)
     detail = "未 ingest（marker なし）" if last is None else f"最終 ingest {last}"
     return (
-        "[rl-anything] utterance アーカイブが 14 日以上 ingest されていません"
-        f"（{detail}, #430）。`rl-fleet ingest` で取り込むか、`evolve`/`audit` を回すと"
+        "[evolve-anything] utterance アーカイブが 14 日以上 ingest されていません"
+        f"（{detail}, #430）。`evolve-fleet ingest` で取り込むか、`evolve`/`audit` を回すと"
         "自動取り込みされます。"
     )
 
@@ -268,7 +268,7 @@ def _deliver_utterance_staleness() -> None:
         if message:
             print(message)
     except Exception as e:
-        print(f"[rl-anything:restore_state] utterance staleness check error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] utterance staleness check error: {e}", file=sys.stderr)
 
 
 def handle_session_start(event: dict) -> None:
@@ -305,7 +305,7 @@ def handle_session_start(event: dict) -> None:
             if summary:
                 print(summary)
     except (json.JSONDecodeError, OSError) as e:
-        print(f"[rl-anything:restore_state] restore failed: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] restore failed: {e}", file=sys.stderr)
 
 
 def main() -> None:
@@ -318,9 +318,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_session_start(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:restore_state] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:restore_state] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:restore_state] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

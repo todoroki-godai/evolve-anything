@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>rl-anything — 適応度関数 / クイックスタート / アーキテクチャ</title>
+<title>evolve-anything — 適応度関数 / クイックスタート / アーキテクチャ</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -15,7 +15,7 @@
   <button class="sidebar-toggle" id="sidebarToggle" aria-label="メニュー">☰</button>
   <a href="index.html" class="site-logo">
     <svg class="claude-mark" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#CF6B47" fill-opacity=".12"/><path d="M20 9C13.925 9 9 13.925 9 20s4.925 11 11 11 11-4.925 11-11S26.075 9 20 9zm0 2c4.97 0 9 4.03 9 9s-4.03 9-9 9-9-4.03-9-9 4.03-9 9-9z" fill="#CF6B47" fill-opacity=".5"/><path d="M16.5 17c0-.828.672-1.5 1.5-1.5h4c.828 0 1.5.672 1.5 1.5S22.828 18.5 22 18.5h-1.25V23c0 .828-.672 1.5-1.5 1.5S17.75 23.828 17.75 23v-4.5H18c-.828 0-1.5-.672-1.5-1.5z" fill="#CF6B47"/></svg>
-    <span>rl-anything</span>
+    <span>evolve-anything</span>
     <span class="badge">plugin</span>
   </a>
   <div class="header-right">
@@ -55,7 +55,7 @@
 
     <section class="doc-section" id="fitness">
       <h1>適応度関数</h1>
-      <p class="lead">rl-anything には8種類の組み込み fitness が含まれています。<code>--fitness &lt;name&gt;</code> フラグで使い分けます。プロジェクト固有の fitness は <code>scripts/rl/fitness/&lt;name&gt;.py</code> に配置することで追加できます。</p>
+      <p class="lead">evolve-anything には8種類の組み込み fitness が含まれています。<code>--fitness &lt;name&gt;</code> フラグで使い分けます。プロジェクト固有の fitness は <code>scripts/rl/fitness/&lt;name&gt;.py</code> に配置することで追加できます。</p>
 
       <div class="fitness-grid">
         <div class="fitness-card">
@@ -88,7 +88,7 @@
         </div>
         <div class="fitness-card">
           <div class="fname">🔌 plugin</div>
-          <p>rl-anything プラグイン自身の統合 fitness。プラグインの自己評価に使用し、メタレベルの品質を計測する。</p>
+          <p>evolve-anything プラグイン自身の統合 fitness。プラグインの自己評価に使用し、メタレベルの品質を計測する。</p>
         </div>
       </div>
 
@@ -105,7 +105,7 @@
     <span class="kw">return</span> <span class="nm">0.8</span>
 
 <span class="cm"># 使用する</span>
-<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">optimize</span> <span class="nm">my-skill</span> --fitness my_domain</pre>
+<span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">optimize</span> <span class="nm">my-skill</span> --fitness my_domain</pre>
     </section>
 
     <section class="doc-section" id="quickstart">
@@ -114,14 +114,14 @@
 
       <!-- ===== Day 1 ===== -->
       <h2>🌱 Day 1 — まず土台を作る</h2>
-      <p>インストール直後は、過去のセッション履歴が蓄積されていません。<code>backfill</code> を実行して既存の作業ログを取り込み、rl-anything に「あなたのプロジェクトの素性」を教えましょう。</p>
+      <p>インストール直後は、過去のセッション履歴が蓄積されていません。<code>backfill</code> を実行して既存の作業ログを取り込み、evolve-anything に「あなたのプロジェクトの素性」を教えましょう。</p>
 
       <div class="story-flow">
         <div class="story-step">
           <div class="story-step-num">1</div>
           <div class="story-step-body">
             <div class="story-step-title">過去ログを取り込む</div>
-            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">backfill</span></pre>
+            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">backfill</span></pre>
             <p class="story-step-note">既存セッション履歴を解析し、よく使うパターン・修正傾向を学習します。初回のみ。</p>
           </div>
         </div>
@@ -130,7 +130,7 @@
           <div class="story-step-num">2</div>
           <div class="story-step-body">
             <div class="story-step-title">仕様書を初期化する</div>
-            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">spec-keeper</span> init</pre>
+            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">spec-keeper</span> init</pre>
             <p class="story-step-note">コードベースを読んで <code>SPEC.md</code> を生成します。次セッションへの引き継ぎ書の土台になります。</p>
           </div>
         </div>
@@ -139,7 +139,7 @@
           <div class="story-step-num">3</div>
           <div class="story-step-body">
             <div class="story-step-title">健康診断で現状を把握する</div>
-            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">audit</span></pre>
+            <pre style="margin-top:.5rem"><span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">audit</span></pre>
             <p class="story-step-note">coherence / telemetry / constitutional の3軸でスコアを算出し、改善候補を一覧表示します。</p>
           </div>
         </div>
@@ -184,7 +184,7 @@
       </div>
 
       <pre><span class="cm"># 毎日これ1つで OK（Observe → Diagnose → Compile の全フェーズを自動実行）</span>
-<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">evolve</span></pre>
+<span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">evolve</span></pre>
 
       <div class="callout callout-info">
         <span class="callout-icon">💡</span>
@@ -201,7 +201,7 @@
             <span class="scenario-title">「いつもClaude が同じミスをする」</span>
           </div>
           <p>修正パターンを <code>corrections.jsonl</code> に記録し、スキルとルールに反映します。</p>
-          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">reflect</span></pre>
+          <pre><span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">reflect</span></pre>
           <p class="scenario-note">何度もあなたが直した操作がパターン認識され、スキルの pitfall として自動追加されます。</p>
         </div>
 
@@ -211,9 +211,9 @@
             <span class="scenario-title">「このスキルだけ精度を上げたい」</span>
           </div>
           <p>全体 evolve を待たずにピンポイントで特定スキルを改善します。</p>
-          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">optimize</span> <span class="nm">my-skill</span>
+          <pre><span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">optimize</span> <span class="nm">my-skill</span>
 <span class="cm"># または自己進化パターンを組み込む</span>
-<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">evolve-skill</span> <span class="nm">my-skill</span></pre>
+<span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">evolve-skill</span> <span class="nm">my-skill</span></pre>
         </div>
 
         <div class="scenario-card">
@@ -222,8 +222,8 @@
             <span class="scenario-title">「なかなか解決しない問題がある」</span>
           </div>
           <p>行き詰まりを診断し、戦略提案 → Agent 起動まで一気に行います。</p>
-          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">breakthrough</span> <span class="nm">&lt;問題の説明&gt;</span></pre>
-          <p class="scenario-note">または独立した視点でのレビューが欲しいときは <code>/rl-anything:second-opinion</code></p>
+          <pre><span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">breakthrough</span> <span class="nm">&lt;問題の説明&gt;</span></pre>
+          <p class="scenario-note">または独立した視点でのレビューが欲しいときは <code>/evolve-anything:second-opinion</code></p>
         </div>
 
         <div class="scenario-card">
@@ -232,9 +232,9 @@
             <span class="scenario-title">「複数プロジェクトの状態を把握したい」</span>
           </div>
           <p>fleet コマンドで全プロジェクトを横断的に監視します。</p>
-          <pre><span class="sh">$</span> bin/rl-fleet status
-<span class="sh">$</span> bin/rl-fleet tokens
-<span class="sh">$</span> bin/rl-fleet test-guard status</pre>
+          <pre><span class="sh">$</span> bin/evolve-fleet status
+<span class="sh">$</span> bin/evolve-fleet tokens
+<span class="sh">$</span> bin/evolve-fleet test-guard status</pre>
           <p class="scenario-note">env_score が低いプロジェクトには、表示されたコマンドをそのまま実行して改善できます。</p>
         </div>
 
@@ -245,7 +245,7 @@
           </div>
           <p>作業文脈は checkpoint 機構が自動保存し、次セッション開始時に自動復元します。手動操作は不要です。仕様書を最新化したい場合のみ実行します。</p>
           <pre><span class="cm"># 作業文脈は自動復元（操作不要）。仕様書を最新化する場合のみ:</span>
-<span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">spec-keeper</span> update</pre>
+<span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">spec-keeper</span> update</pre>
         </div>
 
         <div class="scenario-card">
@@ -254,14 +254,14 @@
             <span class="scenario-title">「PRマージ後に後片付けしたい」</span>
           </div>
           <p>ブランチ・worktree・tmp ディレクトリ・未クローズ Issue などの痕跡を候補提示しながら削除します。</p>
-          <pre><span class="sh">/</span><span class="nm">rl-anything</span>:<span class="fn">cleanup</span></pre>
+          <pre><span class="sh">/</span><span class="nm">evolve-anything</span>:<span class="fn">cleanup</span></pre>
           <p class="scenario-note">個別承認方式なので、消したくないものは対話で除外できます。</p>
         </div>
       </div>
 
       <!-- ===== 成長カーブ ===== -->
       <h2>📊 使い続けるとどう変わるか</h2>
-      <p>rl-anything は env_score（0.0〜1.0）をレベルに変換して表示します。<code>audit</code> 後のグリーティングで現在のレベルと称号が確認できます。</p>
+      <p>evolve-anything は env_score（0.0〜1.0）をレベルに変換して表示します。<code>audit</code> 後のグリーティングで現在のレベルと称号が確認できます。</p>
 
       <div class="growth-track">
         <div class="growth-item">
@@ -289,7 +289,7 @@
 
     <section class="doc-section" id="arch">
       <h1>アーキテクチャ</h1>
-      <p class="lead">rl-anything の内部構造です。すべてのコンポーネントは独立して動作し、単一の <code>plugin.json</code> マニフェストで統合されています。</p>
+      <p class="lead">evolve-anything の内部構造です。すべてのコンポーネントは独立して動作し、単一の <code>plugin.json</code> マニフェストで統合されています。</p>
 
       <h2>観測レイヤー</h2>
       <table class="arch-table">
@@ -300,7 +300,7 @@
           <tr><td>spec_trigger</td><td>main に着地した「挙動コード（<code>scripts/**.py</code>・<code>hooks/**.py</code>）を変えたのに仕様アーティファクト（SPEC.md・CLAUDE.md・spec/・docs/decisions/ 等）を未更新」のマージを SessionStart で検出し spec-keeper update / ADR 化を1回提案する（[ADR-044]）。/ship を経ない <code>gh pr merge</code> 直叩き・GitHub web squash マージの無音穴を塞ぐ。ゲートは実コーパス 40 commit の dry 適用で較正（feat/refactor/feat! を信号源とし fix は除外）。cooldown(3日)+リマインド1回+解消プロキシで重複抑制、<code>spec_trigger_enabled</code> で無効化可。決定論・LLM 非依存</td></tr>
           <tr><td>capture_rate</td><td>correction capture 率（20+ ターン session のうち correction 検出割合）を決定論算出し audit に advisory surface（#421）</td></tr>
           <tr><td>orphan_store</td><td>writer あり reader なしの jsonl ストアを決定論検出（hooks=writer / scripts+skills=reader 静的突合）（#422）</td></tr>
-          <tr><td>utterance_archive</td><td>全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query）。物理PK+論理UNIQUEで resume 複製を弾く・cwd 由来 pj_slug・evolve/audit batch + rl-fleet ingest + SessionStart staleness advisory（#430）</td></tr>
+          <tr><td>utterance_archive</td><td>全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query）。物理PK+論理UNIQUEで resume 複製を弾く・cwd 由来 pj_slug・evolve/audit batch + evolve-fleet ingest + SessionStart staleness advisory（#430）</td></tr>
           <tr><td>weak_signals</td><td>暗黙修正シグナルの決定論検出（直後手編集 / permission deny / 言い直し / Esc 中断）→ weak_signals.jsonl レーン。corrections 直入れせず reflect 確認後に昇格。言い直し閾値は実コーパス dry-run で決定（jaccard 0.8）。45日 TTL で期限切れを expired マークし昇格候補から除外（#442）+ observability に evolve 昇格誘導文言（#444）[#432]</td></tr>
           <tr><td>userConfig (18項目)</td><td>CC v2.1.83 manifest.userConfig でトリガー閾値・cleanup prefix・slow command 閾値・subagent 警告閾値・スキル数上限 (<code>max_skill_count</code>=30)・correction pre-flight 閾値 (<code>correction_preflight_threshold</code>=3)・error pre-flight 閾値 (<code>error_preflight_threshold</code>=3)・spec_trigger 有効化 (<code>spec_trigger_enabled</code>) 等を設定する</td></tr>
         </tbody>
@@ -311,8 +311,8 @@
         <thead><tr><th>コンポーネント</th><th>説明</th></tr></thead>
         <tbody>
           <tr><td>genetic-prompt-optimizer</td><td>corrections/context ベースの LLM 1パス直接パッチで最適化する</td></tr>
-          <tr><td>rl-loop-orchestrator</td><td>ベースライン取得 → バリエーション生成 → 評価 → 人間確認のループを統合する</td></tr>
-          <tr><td>rl-scorer エージェント</td><td>オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点する</td></tr>
+          <tr><td>evolve-loop-orchestrator</td><td>ベースライン取得 → バリエーション生成 → 評価 → 人間確認のループを統合する</td></tr>
+          <tr><td>evolve-scorer エージェント</td><td>オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点する</td></tr>
           <tr><td>skill-triage</td><td>テレメトリ + trigger eval で CREATE/UPDATE/SPLIT/MERGE/OK の5択判定する</td></tr>
           <tr><td>trigger-eval-generator</td><td>sessions.jsonl + usage.jsonl → skill-creator 互換 evals.json を自動生成する</td></tr>
           <tr><td>evolve-skill</td><td>特定スキルに自己進化パターン（Pre-flight / pitfalls.md）をピンポイント組み込みする (<code>assess_single_skill</code> + <code>apply_evolve_proposal</code>)</td></tr>
@@ -323,17 +323,17 @@
           <tr><td>skill_rm</td><td>スキル軸の異種基準統一報酬（#304, arXiv:2606.03980）。スキルごとに異なる成功条件を全スキル共通な3軸（structure=CSO 構造品質 / success=invoke 直後 60s に correction 無しの暗黙成功率 / validity=invoke あたりエラー率の補数）へ射影し単一報酬で横断評価する。compute_environment_fitness の result["skill_rm"] に per-skill 報酬分布（mean/spread/worst_skill）を surface し calibration drift の帰属源を特定。決定論・LLM 非依存</td></tr>
           <tr><td>triage_ledger</td><td>SKIP 判断に状態（TTL・再発カウンタ）を持たせる正準ストア（#308）。meta_quality_check のステートレス SKIP を PJ スコープに永続化し、抑制（クールダウン内は1行に畳む）/ 再発エスカレーション（窓内 3回で SKIP→REVIEW 昇格）/ TTL 切れ（45日で1回強制再評価）の3層トリガーで evolve のたびに自動発火。決定論・LLM 非依存</td></tr>
           <tr><td>hook_drift</td><td>他ツール追従 hook（gstack flow を参照する suggest-gstack-next-action.py 等）の陳腐化を決定論検出する。stale_pin（flow-chain.json の gstack_version と実環境 .last-setup-version を突合し乖離を検出・version 同士で表記ゆれ false positive なし）に加え、第二フェーズ dead_ref（flow-chain が参照する skill 名の live registry 実在突合・正規化を契約テストで先固め・正規化不能/registry 空は沈黙で FP 厳禁・#316）を検出。observability contract に登録し evolve のたびに追従漏れを surface（[ADR-036]）</td></tr>
-          <tr><td>data_dir_migration</td><td>DATA_DIR が hook 文脈（env 有 → plugin-data dir）と tool 文脈（env 無 → fallback dir）で別ディレクトリに分裂する問題を一元化する migration（#364, [ADR-042]）。<code>.data-dir-unified</code> marker ゲートで redirect を制御し、JSONL は行 dedup append、DuckDB は fresh tmp DB へ src+old を per-table UNION して atomic replace（マージ＋compaction）。書いてから消す（pre-delete のデータ損失なし）+ 冪等（全件成功時のみ marker）+ dry-run 非書込。<code>rl-fleet migrate-data</code> で実行。決定論・LLM 非依存</td></tr>
-          <tr><td>agent_team</td><td>エージェント編成ギャップの決定論検出（#326）。agent_quality（単体品質）と直交し、エージェント間の関係を2軸で見る — 役割重複（description の役割語を Examples 除去＋ストップワード除去で集合化し全ペア Jaccard ≥ 0.5）と孤立（他エージェント本文への名前出現を参照とみなし入次数 0 かつ出次数 0 のみ＝ルーター/被参照の専門家を除外）。observability builder build_agent_team_section を登録し evolve のたびに surface、整理は人間判断（/rl-anything:agent-brushup）。決定論・LLM 非依存</td></tr>
+          <tr><td>data_dir_migration</td><td>DATA_DIR が hook 文脈（env 有 → plugin-data dir）と tool 文脈（env 無 → fallback dir）で別ディレクトリに分裂する問題を一元化する migration（#364, [ADR-042]）。<code>.data-dir-unified</code> marker ゲートで redirect を制御し、JSONL は行 dedup append、DuckDB は fresh tmp DB へ src+old を per-table UNION して atomic replace（マージ＋compaction）。書いてから消す（pre-delete のデータ損失なし）+ 冪等（全件成功時のみ marker）+ dry-run 非書込。<code>evolve-fleet migrate-data</code> で実行。決定論・LLM 非依存</td></tr>
+          <tr><td>agent_team</td><td>エージェント編成ギャップの決定論検出（#326）。agent_quality（単体品質）と直交し、エージェント間の関係を2軸で見る — 役割重複（description の役割語を Examples 除去＋ストップワード除去で集合化し全ペア Jaccard ≥ 0.5）と孤立（他エージェント本文への名前出現を参照とみなし入次数 0 かつ出次数 0 のみ＝ルーター/被参照の専門家を除外）。observability builder build_agent_team_section を登録し evolve のたびに surface、整理は人間判断（/evolve-anything:agent-brushup）。決定論・LLM 非依存</td></tr>
           <tr><td>subgoal_scorer</td><td>BES 後ろ向き分解（#253）。候補を 5 サブゴール（frontmatter/trigger/correction/line_budget/slop_free）に分解し密な中間フィードバックを返す。optimize_core.run_subgoal_scoring がラップ、決定論・LLM 非依存</td></tr>
-          <tr><td>evolution_operators</td><td>BES 前向き進化探索（#256）。crossover/mutate/select_parents(fitness-proportional)/evolve_generation の決定論演算子。rl-loop の --evolve-search が subgoal fitness を consume</td></tr>
+          <tr><td>evolution_operators</td><td>BES 前向き進化探索（#256）。crossover/mutate/select_parents(fitness-proportional)/evolve_generation の決定論演算子。evolve-loop の --evolve-search が subgoal fitness を consume</td></tr>
           <tr><td>memory_trace</td><td>MemTrace 帰属診断（#254）。episodic 検索エラーを misretrieval/context_drift/corruption の3類型に分類し event_id に帰属。LLM/oracle 不使用、audit/memory.py が利用</td></tr>
           <tr><td>slop_detector</td><td>AI slop 辞書検出（#255）。日英 10 パターンを決定論 regex で検出し SlopResult(slop_score, hits) を返す。constitutional に 10% ブレンド + subgoal slop_free に接続</td></tr>
           <tr><td>skill_extractor</td><td>SIRI ① の成功軌跡採掘（#238 → #291 配線）。セッション履歴の command ターンを採掘し generalizability_score 付き候補を生成、閾値（既定 0.25）でフィルタして triage の missed_skill_opportunities へ合流。discover=evolve ループに配線済・LLM 非依存</td></tr>
           <tr><td>eval_saturation</td><td>trigger eval 飽和度診断（#292, TASTE arXiv 2605.28556）。順生成 eval の「緑でも頑健でない」飽和兆候（low_negative_coverage / easy_negatives / thin）を eval 実行なし・決定論で測り、observability contract で evolve のたびに surface</td></tr>
           <tr><td>evolve_introspect</td><td>evolve メタ層の自己解析（#299）。完了後に result dict を決定論で読み、self_detection / runtime_errors / improvement_opportunities の3カテゴリで GitHub issue 候補を生成。起票は半自動（人間承認）、dedup マーカーで重複防止。split↔archive 矛盾は reconcile_split_archive が本流解消（#301 #302, [ADR-033][ADR-034]）</td></tr>
           <tr><td>optimize_history_store</td><td>accept/reject 履歴（fitness calibration 母集団）の正準ストア。DATA_DIR/optimize_history/&lt;slug&gt;.jsonl の PJ スコープに集約し従来の 3-way split-brain を解消。slug は worktree 安全に git-common-dir 親 basename で解決、writer/reader 計6箇所が単一経路を共有（[ADR-031]）</td></tr>
-          <tr><td>evolve_decisions</td><td>evolve 提案の accept/reject を emit→drain 2相で決定論キャプチャ（<code>rl-evolve --drain</code>）[ADR-041, #400, #402]</td></tr>
+          <tr><td>evolve_decisions</td><td>evolve 提案の accept/reject を emit→drain 2相で決定論キャプチャ（<code>evolve --drain</code>）[ADR-041, #400, #402]</td></tr>
           <tr><td>evolve_reconcile</td><td>skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400）</td></tr>
           <tr><td>evolve_result_schema</td><td>result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379）</td></tr>
           <tr><td>evolve_consistency</td><td>P1 invariant の runtime self-detect（型 drift のみ）（#377-5）</td></tr>
@@ -343,14 +343,14 @@
           <tr><td>correction_semantic</td><td>correction capture の二層化（#431）。utterances.db の dialogue 発話を Haiku がバッチ意味判定（auto_memory 2 相と同型）→ weak_signals(channel=llm_judge) 隔離 + 個人辞書（correction_idioms.jsonl）。フェーズ昇格は human-source のみ駆動（provenance_weight）/ reflect 昇格フロー（--show-weak-signals / --promote-weak）[#431]</td></tr>
           <tr><td>bootstrap_backlog</td><td>初回 evolve で既存 weak_signals バックログの消化方式を AskUserQuestion 3 択で選ぶ bootstrap phase（marker で1回きり・slug スコープ厳守・常時 emit）（#443）</td></tr>
           <tr><td>daily_review</td><td>evolve の「今日の修正確認」phase — 新規 weak_signal を idiom 単位 group 化し最大5件を y/n 確認、promote 成功後のみ既読追記（既読ストア correction_review_seen.jsonl）（#446）</td></tr>
-          <tr><td>idiom_autopromote</td><td>confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / <code>rl-reflect --revoke-idiom</code> 巻き戻し（#447, ADR-047）。confirmed 化の正準経路は <code>rl-reflect --promote-weak</code> の confirm 配線（#463）</td></tr>
+          <tr><td>idiom_autopromote</td><td>confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / <code>evolve-reflect --revoke-idiom</code> 巻き戻し（#447, ADR-047）。confirmed 化の正準経路は <code>evolve-reflect --promote-weak</code> の confirm 配線（#463）</td></tr>
           <tr><td>cross_pj_priority</td><td>confirmed idiom の PJ 横断優先提示 — 他 PJ 承認済みと同テキストの確認 group に <code>cross_pj_confirmed</code> ラベル + 先頭表示（提示のみ・自動承認しない、normalize は autopromote と1関数共有）（#462）</td></tr>
           <tr><td>idiom_filter</td><td>過汎用 idiom の FP guard — 3 ゲート（最小長 floor 8 / 日常語 stopword / 文脈固有トークン）を <code>idiom_eligible</code> に集約し confirmed→idiom_autopromote の FP 製造を遮断。<code>confirmable_idiom</code> を bootstrap/daily group に emit し AskUserQuestion で idiom 単位拒否を可能化（#527, #527-4）</td></tr>
           <tr><td>representative</td><td>correction group の representative 品質改善 — <code>user_only_text</code> が assistant 引用ブロックを strip し user 発話のみ抽出、<code>prev_action_summary</code> が直前 AI 行動 1 行要約を evidence に添える（#528-3）</td></tr>
           <tr><td>remediation 参照リンク相対化</td><td>separation emit prompt のマシン固有絶対パスを PJ ルート相対化（<code>reference_link_for_prompt</code>）+ references/remediation.md に emit/ingest 6 関数の実 signature 表（#524）</td></tr>
           <tr><td>multiview_eval</td><td>evolve 提案を4視点（再利用可能 / 過学習疑い / 退行リスク / コスト増）で決定論分類し audit/evolve に advisory surface。chaos/outcome_attribution/negative_transfer を join、replay は将来フックのみ（#564, tech-eval SEAGym）</td></tr>
-          <tr><td>relevance_gate</td><td>過去経験（weak_signal/idiom）提案を現在文脈との関連度（jaccard 流儀）でゲートし、無関係を理由付きで <code>suppressed</code> 分離。<code>rl-reflect --show-weak-signals --context</code> に配線（#565, tech-eval FinAcumen）</td></tr>
-          <tr><td>report-feedback</td><td>evolve/audit レポートを LLM メタレビューし rl-anything 自身への改善 issue を <code>todoroki-godai/rl-anything</code> に半自動起票するスキル。決定論 <code>evolve_introspect</code> が拾えない「読んで気づく」改善（表示・提案の質・バグ・UX）が対象で、その dedup/render 配線を再利用。旧 <code>feedback</code> スキルの後継として統合・削除</td></tr>
+          <tr><td>relevance_gate</td><td>過去経験（weak_signal/idiom）提案を現在文脈との関連度（jaccard 流儀）でゲートし、無関係を理由付きで <code>suppressed</code> 分離。<code>evolve-reflect --show-weak-signals --context</code> に配線（#565, tech-eval FinAcumen）</td></tr>
+          <tr><td>report-feedback</td><td>evolve/audit レポートを LLM メタレビューし evolve-anything 自身への改善 issue を <code>todoroki-godai/evolve-anything</code> に半自動起票するスキル。決定論 <code>evolve_introspect</code> が拾えない「読んで気づく」改善（表示・提案の質・バグ・UX）が対象で、その dedup/render 配線を再利用。旧 <code>feedback</code> スキルの後継として統合・削除</td></tr>
         </tbody>
       </table>
 
@@ -360,7 +360,7 @@
         <span>MemOS の L1→L4 結晶化アーキテクチャに対応した4層構造（<a href="sources.html">ADR-024、issue #149</a>）。</span>
       </div>
       <table class="arch-table">
-        <thead><tr><th>層</th><th>rl-anything</th><th>説明</th></tr></thead>
+        <thead><tr><th>層</th><th>evolve-anything</th><th>説明</th></tr></thead>
         <tbody>
           <tr><td>L1 トレース</td><td><code>corrections.jsonl</code></td><td>append-only の raw イベント蓄積（update_count guard で劣化防止）</td></tr>
           <tr><td>L2 ポリシー</td><td><code>MEMORY.md</code></td><td>セッション横断の学習・判断メモ（auto-memory）</td></tr>
@@ -378,9 +378,9 @@
           <tr><td>measurement_bug</td><td>複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185）</td></tr>
           <tr><td>testpaths_coverage</td><td>pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468）</td></tr>
           <tr><td>plugin_self origin</td><td>プラグイン本体リポジトリ自身の repo 直下 skills/ を evolve 診断対象化 — <code>.claude-plugin/plugin.json</code> 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185）</td></tr>
-          <tr><td>dogfood gate</td><td>通し評価ゲート <code>bin/rl-dogfood-gate</code> — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 非 dry-run store 差分（Layer1b・<code>rl-evolve --drain --result-json</code> の隔離実行で weak_signals 永続化方向を assert）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。evolve.py の DATA_DIR を env 優先解決に統一（#517）。<code>--layer light</code>（Layer1a 不変 + Layer2 + Layer3、約十数秒・Layer1b drain と ingest 除外）を pre-push hook（<code>scripts/git-hooks/pre-push.local</code>・非ブロッキング警告。gate 終了コードを区別し古い gate を誤警告しない）が自動実行。リリース前の実環境 dogfood E2E（#496, #513, #517, #518）</td></tr>
+          <tr><td>dogfood gate</td><td>通し評価ゲート <code>bin/evolve-dogfood-gate</code> — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 非 dry-run store 差分（Layer1b・<code>evolve --drain --result-json</code> の隔離実行で weak_signals 永続化方向を assert）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。evolve.py の DATA_DIR を env 優先解決に統一（#517）。<code>--layer light</code>（Layer1a 不変 + Layer2 + Layer3、約十数秒・Layer1b drain と ingest 除外）を pre-push hook（<code>scripts/git-hooks/pre-push.local</code>・非ブロッキング警告。gate 終了コードを区別し古い gate を誤警告しない）が自動実行。リリース前の実環境 dogfood E2E（#496, #513, #517, #518）</td></tr>
           <tr><td>pj_slug</td><td>PJ slug 導出の単一ソース — resolve_pj_slug（git-common-dir 親・authoritative）/ pj_slug_fast（文字列処理・hooks hot path）。read/write 同一関数で worktree slug 食い違いを構造的に防ぐ（#492）</td></tr>
-          <tr><td>weak_signals drain 永続化</td><td>決定論3チャネルの永続化を <code>rl-evolve --drain</code> の apply 境界に配線 — 標準フロー（dry-run 分析のみ）で書込経路が構造的に死んでいた #484 の根治</td></tr>
+          <tr><td>weak_signals drain 永続化</td><td>決定論3チャネルの永続化を <code>evolve --drain</code> の apply 境界に配線 — 標準フロー（dry-run 分析のみ）で書込経路が構造的に死んでいた #484 の根治</td></tr>
           <tr><td>critical-instruction-compliance</td><td>スキル指示の遵守保証サイクル — critical 行抽出 + 違反検出 + pitfall 自動学習</td></tr>
           <tr><td>second-opinion エージェント</td><td>cold-read セカンドオピニオン（startup/builder/general 3モード）。codex 不要で Agent ツールのみで動作する</td></tr>
           <tr><td>token_usage_store</td><td>プロジェクト別 LLM トークン消費の DuckDB SoR — PK uuid で冪等 ingest</td></tr>
@@ -402,7 +402,7 @@
 
       <div class="callout callout-info">
         <span class="callout-icon">📁</span>
-        <span><strong>データ保存先</strong>: <code>CLAUDE_PLUGIN_DATA</code> 環境変数優先、未設定時は <code>~/.claude/rl-anything/</code> にフォールバックします。</span>
+        <span><strong>データ保存先</strong>: <code>CLAUDE_PLUGIN_DATA</code> 環境変数優先、未設定時は <code>~/.claude/evolve-anything/</code> にフォールバックします。</span>
       </div>
     </section>
 

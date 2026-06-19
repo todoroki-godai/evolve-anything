@@ -64,7 +64,7 @@ class TestDiscoverEvalSetFields:
         )
 
         # eval set ファイルを作成
-        eval_dir = Path.home() / ".claude" / "rl-anything" / "eval-sets"
+        eval_dir = Path.home() / ".claude" / "evolve-anything" / "eval-sets"
         eval_dir.mkdir(parents=True, exist_ok=True)
         eval_file = eval_dir / "test-skill.json"
         eval_file.write_text("[]")

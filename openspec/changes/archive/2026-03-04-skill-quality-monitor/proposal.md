@@ -13,7 +13,7 @@
 
 ### New Capabilities
 
-- `quality-baseline`: 高頻度 global スキルの品質スコアを計測・記録し、ベースライン履歴として ~/.claude/rl-anything/quality-baselines.jsonl に保存する機能
+- `quality-baseline`: 高頻度 global スキルの品質スコアを計測・記録し、ベースライン履歴として ~/.claude/evolve-anything/quality-baselines.jsonl に保存する機能
 - `degradation-detector`: 使用回数閾値（50回）または期間閾値（7日）で再スコアリングをトリガーし、ベースラインからのスコア低下（10%以上）を検知する機能
 
 ### Modified Capabilities
@@ -24,6 +24,6 @@
 
 - **新規ファイル**: scripts/quality_monitor.py（品質計測・ベースライン記録・劣化検知ロジック）
 - **既存変更**: skills/audit/scripts/audit.py（品質推移セクションの追加）、skills/audit/SKILL.md（品質モニタリング手順の追加）
-- **データストレージ**: ~/.claude/rl-anything/quality-baselines.jsonl（品質スコア履歴）
+- **データストレージ**: ~/.claude/evolve-anything/quality-baselines.jsonl（品質スコア履歴）
 - **依存**: 既存の optimize.py の _llm_evaluate() を再利用（品質スコア計測）、usage.jsonl（使用回数の集計）
 - **外部依存**: なし（既存の claude CLI のみ使用）

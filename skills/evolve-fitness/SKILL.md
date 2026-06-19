@@ -7,7 +7,7 @@ description: |
   Trigger: evolve-fitness, 評価関数改善, fitness improvement, calibration, キャリブレーション
 ---
 
-# /rl-anything:evolve-fitness — 評価関数の改善提案
+# /evolve-anything:evolve-fitness — 評価関数の改善提案
 
 accept/reject データから score-acceptance 相関を分析し、
 評価関数の改善を提案する。全変更は人間承認が必須（MUST）。
@@ -15,7 +15,7 @@ accept/reject データから score-acceptance 相関を分析し、
 ## Usage
 
 ```
-/rl-anything:evolve-fitness
+/evolve-anything:evolve-fitness
 ```
 
 ## 前提
@@ -27,7 +27,7 @@ accept/reject が30件以上蓄積されていること（SHALL）。
 ### Step 1: データ分析
 
 ```bash
-rl-usage-log "evolve-fitness"
+evolve-usage-log "evolve-fitness"
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/evolve-fitness/scripts/fitness_evolution.py
 ```
 
@@ -41,7 +41,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/evolve-fitness/scripts/fitness_evolution.py
   ```
   ℹ このプロジェクトでは remediation の fix 提案（rules/hook・構造修正等）が中心で、
     これらは採点対象外のため母集団が貯まりにくい状態です。
-    ただし /rl-anything:evolve を継続的に回せば、discover の skill diff 提案と
+    ただし /evolve-anything:evolve を継続的に回せば、discover の skill diff 提案と
     skill_evolve の high·medium 提案の accept/reject は自動で母集団に積み上がります（ADR-041）。
     → 手動で貯める導線を探す必要はなく、evolve を回し続けることが解決策です。
   ```

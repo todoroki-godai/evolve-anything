@@ -1,16 +1,16 @@
 ## ADDED Requirements
 
-### Requirement: /rl-anything:feedback スキルでフィードバックを収集しなければならない（MUST）
+### Requirement: /evolve-anything:feedback スキルでフィードバックを収集しなければならない（MUST）
 対話フロー（カテゴリ → ドメイン → スコア → 自由記述）でフィードバックを収集し、GitHub Issue として送信しなければならない（MUST）。
 
 #### Scenario: フィードバックの収集と送信
-- **WHEN** ユーザーが `/rl-anything:feedback` を実行する
+- **WHEN** ユーザーが `/evolve-anything:feedback` を実行する
 - **THEN** カテゴリ選択 → ドメイン選択 → スコア入力 → 自由記述の対話フローが開始され、
   プレビュー確認後に GitHub Issue が作成される
 
 #### Scenario: gh 未認証時のフォールバック
 - **WHEN** gh CLI が認証されていない
-- **THEN** フィードバックは ~/.claude/rl-anything/feedback-drafts/ にローカル保存しなければならない（MUST）
+- **THEN** フィードバックは ~/.claude/evolve-anything/feedback-drafts/ にローカル保存しなければならない（MUST）
 
 ### Requirement: プライバシーを保護しなければならない（MUST）
 フィードバックにはスキルの内容やファイルパスを含めてはならない（MUST NOT）。

@@ -2,13 +2,13 @@
 
 - **評価日**: 2026-05-15
 - **対象**: Zhang et al., "Harnessing Agentic Evolution" (10著者, 2026-05-14)
-- **結論**: 🟡 **理論的整合性のみ確認、新規実装は不要**（rl-anything の evolve パイプラインがほぼ同等の機構を既に保持）
-- **再評価トリガー**: 論文のコード公開後に「経験→新スキル自動生成」の具体実装が rl-anything の手法と本質的に異なる場合
+- **結論**: 🟡 **理論的整合性のみ確認、新規実装は不要**（evolve-anything の evolve パイプラインがほぼ同等の機構を既に保持）
+- **再評価トリガー**: 論文のコード公開後に「経験→新スキル自動生成」の具体実装が evolve-anything の手法と本質的に異なる場合
 - **実体**: AIエージェントが環境相互作用を通じて自律的にスキルを生成・洗練するフレームワーク。遺伝的プログラミング + LLM 推論の融合
 
-## rl-anything 側の現行実装と照合
+## evolve-anything 側の現行実装と照合
 
-| 論文の概念 | rl-anything 側の対応 | 状態 |
+| 論文の概念 | evolve-anything 側の対応 | 状態 |
 |-----------|---------------------|------|
 | 経験ログからのスキル自動生成 | `discover/` (sessions.jsonl → 行動パターン → skill triage) | ✅ |
 | 遺伝的バリエーション生成 | `bench/mutation_injector.py` (rule_delete / trigger_invert / prompt_truncate) | ✅ |
@@ -19,7 +19,7 @@
 
 ## 採否理由
 
-論文が主張する「経験→新スキル自動生成 + 遺伝的選択」のコアループは、rl-anything が既に 3 ステージパイプライン (`evolve`) として実装済み。`mutation_injector.py` の 3 種類のミューテーションと `bench/run_benchmark.py` の sentinel 評価が遺伝的選択に相当する。
+論文が主張する「経験→新スキル自動生成 + 遺伝的選択」のコアループは、evolve-anything が既に 3 ステージパイプライン (`evolve`) として実装済み。`mutation_injector.py` の 3 種類のミューテーションと `bench/run_benchmark.py` の sentinel 評価が遺伝的選択に相当する。
 
 論文側で **新しい知見はあるが、実装層では取り入れる対象が見当たらない**:
 - 我々の fitness は 4 軸統合 (coherence/telemetry/constitutional/skill_quality)、論文の「複雑意思決定問題で人間レベル」も同種の多軸評価が想定される

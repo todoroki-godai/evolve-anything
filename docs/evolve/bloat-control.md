@@ -69,7 +69,7 @@ Cold（オンデマンドロード）:
   memory/*.md        ← 参照された時だけ
 
 Archive（ロードされない）:
-  .claude/rl-anything/archive/  ← Prune で退避済み
+  .claude/evolve-anything/archive/  ← Prune で退避済み
 ```
 
 ### 4. 自動圧縮トリガー（将来計画 — 部分実装）
@@ -156,7 +156,7 @@ Layer 3: Plugin Bundling（実行）
 observe hooks がスキル使用を記録するたびに、プロジェクトパスも保存:
 
 ```jsonl
-// ~/.claude/rl-anything/usage-registry.jsonl
+// ~/.claude/evolve-anything/usage-registry.jsonl
 {"skill":"~/.claude/skills/figma-to-code","project":"/path/to/web-app","last_used":"2026-03-01","count":30}
 {"skill":"~/.claude/skills/figma-to-code","project":"/path/to/design-system","last_used":"2026-02-28","count":10}
 // 他の98PJからのエントリなし → 2/100PJ で使用

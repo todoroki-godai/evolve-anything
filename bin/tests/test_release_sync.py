@@ -1,4 +1,4 @@
-"""bin/rl-release-sync の dry-run 契約テスト。
+"""bin/evolve-release-sync の dry-run 契約テスト。
 
 実際の git fetch / claude plugin 操作は副作用が大きく claude CLI に依存するため、
 ``--dry-run`` でコマンドシーケンスが正しい順序で出力されることを検証する
@@ -8,7 +8,7 @@
 import subprocess
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "rl-release-sync"
+SCRIPT = Path(__file__).resolve().parents[1] / "evolve-release-sync"
 
 
 def _init_main_repo(tmp_path):
@@ -36,11 +36,11 @@ def test_dry_run_emits_sync_sequence(tmp_path):
     out = res.stdout + res.stderr
     assert res.returncode == 0, out
     assert "merge --ff-only origin/main" in out
-    assert "claude plugin marketplace update rl-anything" in out
-    assert "claude plugin update rl-anything@rl-anything" in out
+    assert "claude plugin marketplace update evolve-anything" in out
+    assert "claude plugin update evolve-anything@evolve-anything" in out
     i_ff = out.index("merge --ff-only origin/main")
-    i_mp = out.index("marketplace update rl-anything")
-    i_pl = out.index("plugin update rl-anything@rl-anything")
+    i_mp = out.index("marketplace update evolve-anything")
+    i_pl = out.index("plugin update evolve-anything@evolve-anything")
     assert i_ff < i_mp < i_pl, f"順序違反: {out}"
 
 

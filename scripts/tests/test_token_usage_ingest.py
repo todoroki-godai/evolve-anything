@@ -149,11 +149,11 @@ def test_parse_sidechain_flag(ingest):
 
 def test_pj_slug_extraction(ingest):
     assert ingest._pj_slug_from_id(
-        "-Users-todoroki-tools-rl-anything"
+        "-Users-todoroki-tools-evolve-anything"
     ) == "anything"
     # designではDIR末尾セグメントだが、`-`splitの最後は実際は"anything"
     # フォールバック: 空文字列なら入力を返す
-    assert ingest._pj_slug_from_id("rl-anything") == "anything"
+    assert ingest._pj_slug_from_id("evolve-anything") == "anything"
     assert ingest._pj_slug_from_id("") == ""
 
 

@@ -16,7 +16,7 @@ import correction_detect
 
 @pytest.fixture
 def tmp_data_dir(tmp_path):
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     return data_dir
 
@@ -436,7 +436,7 @@ class TestCorrectionDetectHook:
             mock_stdin.read.return_value = "NOT VALID JSON{{{"
             correction_detect.main()
         captured = capsys.readouterr()
-        assert "[rl-anything:correction] parse error" in captured.err
+        assert "[evolve-anything:correction] parse error" in captured.err
 
     def test_empty_session_id_noop(self, patch_data_dir):
         event = {

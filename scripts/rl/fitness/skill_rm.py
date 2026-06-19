@@ -3,7 +3,7 @@
 
 arXiv:2606.03980 の Skill Reward Model 着想。タスク（スキル）ごとに異なる
 成功条件（異種基準）を、すべてのスキルに共通な軸へ射影し、単一の報酬値で
-横断評価する。これにより rl-scorer / environment fitness の「軸別」重み統合
+横断評価する。これにより evolve-scorer / environment fitness の「軸別」重み統合
 （coherence/telemetry/constitutional/skill_quality）とは直交する「スキル別」の
 統一スコアが得られる。
 

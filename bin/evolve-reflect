@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bin/rl-reflect — corrections → CLAUDE.md/rules 反映 CLI。"""
+"""bin/evolve-reflect — corrections → CLAUDE.md/rules 反映 CLI。"""
 import sys
 from pathlib import Path
 

@@ -4,7 +4,7 @@ Slice 0: 後続リファクタ (Phase 1 = fleet/ パッケージ分割) で
 fleet の公開 API surface が変わらないことを byte レベルで保証する。
 
 - API surface: 公開関数シグネチャ + module-level constants の dump を fixture 化
-- 外部 importer (bin/rl-fleet, scripts/lib/tests/test_fleet_tokens.py, prune.py 等)
+- 外部 importer (bin/evolve-fleet, scripts/lib/tests/test_fleet_tokens.py, prune.py 等)
   が依存する `from fleet import X` 形式の import 互換性を担保する SoT
 
 fixture 更新は `UPDATE_SNAPSHOTS=1 pytest scripts/tests/test_fleet_snapshot.py` で。
@@ -79,7 +79,7 @@ def test_fleet_api_surface_snapshot():
     """公開関数/クラスシグネチャ + 定数値の dump。
 
     Phase 1 (fleet/ パッケージ分割) で公開 API が変わったら検知する。
-    外部 importer (bin/rl-fleet, prune.py, evolve.py, test_fleet_tokens.py 等) の
+    外部 importer (bin/evolve-fleet, prune.py, evolve.py, test_fleet_tokens.py 等) の
     `from fleet import X` 互換性を保証する SoT。
     """
     actual = _collect_api_surface()
@@ -90,9 +90,9 @@ def test_default_rl_audit_bin_exists():
     """fleet/__init__.py の _DEFAULT_RL_AUDIT_BIN が実在のパスを指していること。
 
     fleet/ パッケージの階層が変わると Path(__file__).parent の数がずれて
-    bin/rl-audit が見つからなくなり、全 PJ が AUDIT_ERROR になる（PR #65 での既発症）。
+    bin/evolve-audit が見つからなくなり、全 PJ が AUDIT_ERROR になる（PR #65 での既発症）。
     """
     assert fleet._DEFAULT_RL_AUDIT_BIN.exists(), (
-        f"bin/rl-audit が見つかりません: {fleet._DEFAULT_RL_AUDIT_BIN}\n"
+        f"bin/evolve-audit が見つかりません: {fleet._DEFAULT_RL_AUDIT_BIN}\n"
         "fleet/__init__.py の .parent 数と __file__ の階層が合っているか確認してください"
     )

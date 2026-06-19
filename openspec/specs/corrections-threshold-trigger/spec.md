@@ -9,7 +9,7 @@ corrections 蓄積時の再最適化トリガー。correction_detect hook (PostT
 
 #### Scenario: Threshold reached
 - **WHEN** 前回 evolve/reflect 以降の corrections 件数が `threshold`（デフォルト: 10）に到達
-- **THEN** stdout にメッセージを出力し、関連スキルの `/rl-anything:optimize <skill>` または `/rl-anything:reflect` を推奨しなければならない (MUST)
+- **THEN** stdout にメッセージを出力し、関連スキルの `/evolve-anything:optimize <skill>` または `/evolve-anything:reflect` を推奨しなければならない (MUST)
 
 #### Scenario: Below threshold
 - **WHEN** corrections 件数が閾値未満
@@ -24,11 +24,11 @@ correction レコードから再最適化対象のスキルを特定しなけれ
 
 #### Scenario: Correction has last_skill
 - **WHEN** correction レコードに `last_skill` フィールドが存在する
-- **THEN** 当該スキルに対する `/rl-anything:optimize <skill>` を推奨しなければならない (MUST)
+- **THEN** 当該スキルに対する `/evolve-anything:optimize <skill>` を推奨しなければならない (MUST)
 
 #### Scenario: Correction without last_skill
 - **WHEN** correction レコードに `last_skill` が空または未設定
-- **THEN** 汎用の `/rl-anything:evolve` を推奨しなければならない (SHALL)
+- **THEN** 汎用の `/evolve-anything:evolve` を推奨しなければならない (SHALL)
 
 #### Scenario: Multiple skills with corrections
 - **WHEN** 複数のスキルに対する corrections が蓄積されている

@@ -109,7 +109,7 @@ def build_quality_trends_section(
             parts.append(f" {sparkline}")
         parts.append(f" {latest_score:.2f}")
         if degraded:
-            parts.append(f" DEGRADED → /rl-anything:evolve-skill {skill_name}")
+            parts.append(f" DEGRADED → /evolve-anything:evolve-skill {skill_name}")
         elif rescore_needed:
             parts.append(" RESCORE NEEDED")
         lines.append("".join(parts))

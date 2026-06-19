@@ -20,7 +20,7 @@ GitHub issue 候補を生成する（「install != enforcement」と同型の配
     SKILL 側が人間承認の後に行う。dedup_key は root cause 単位で安定させ、
     body に隠しマーカーを埋め込むことで毎 evolve の重複起票を防ぐ。
 
-起票先は常に todoroki-godai/rl-anything（検出対象はパイプライン自身のバグであり、
+起票先は常に todoroki-godai/evolve-anything（検出対象はパイプライン自身のバグであり、
 evolve がどの PJ 上で動いても起票先は固定）。SKILL 側で --repo を固定する。
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 
 # body に埋め込む隠しマーカー。これがあれば既存 issue と root cause 単位で
 # 確実に dedup できる（タイトル類似度より強いシグナル）。
-MARKER_PREFIX = "rl-evolve-introspect"
+MARKER_PREFIX = "evolve-introspect"
 _MARKER_RE = re.compile(r"<!--\s*" + re.escape(MARKER_PREFIX) + r":([^\s>]+)\s*-->")
 
 # タイトル類似度で dup と見なす閾値（marker なしで手動起票された既存 issue 向け）。

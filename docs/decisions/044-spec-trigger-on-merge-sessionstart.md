@@ -87,9 +87,9 @@ at-most-once（無視したら HEAD 前進で二度と出さない）は `silenc
 ## グローバルルールは置換しない（second-opinion からの逸脱点）
 
 second-opinion は「`spec-keeper-trigger.md` を hook へ一元化して1行参照に痩せさせよ」と
-助言したが、同ルールは**グローバル（全 PJ 共通）**であり、rl-anything 固有の hook で
+助言したが、同ルールは**グローバル（全 PJ 共通）**であり、evolve-anything 固有の hook で
 他 PJ 向けの一般ガイダンスを削ると他 PJ が壊れる。よってルールは現状維持、hook は
-rl-anything への**加算的 enforcement** とする。
+evolve-anything への**加算的 enforcement** とする。
 
 ## 配置
 

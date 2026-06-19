@@ -143,7 +143,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     StoreDeclaration(
         name="utterances.db",
         kind="db",
-        writer="scripts/lib/utterance_archive/ingest.py（evolve/audit batch + rl-fleet ingest）。"
+        writer="scripts/lib/utterance_archive/ingest.py（evolve/audit batch + evolve-fleet ingest）。"
         "hot path（hooks）からは書かない。",
         reader="utterance_archive.query（query_utterances / query_utterances_all_projects）。"
         "下流: #431 個人辞書・#432 暗黙シグナル・遡及分析。",

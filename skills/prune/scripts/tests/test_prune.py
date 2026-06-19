@@ -23,12 +23,12 @@ class TestClassifyArtifactOrigin:
 
     def test_plugin_origin(self):
         """プラグインキャッシュ配下のスキルは plugin と判定される。"""
-        path = Path.home() / ".claude" / "plugins" / "cache" / "rl-anything" / "rl-anything" / "0.4.0" / ".claude" / "skills" / "optimize" / "SKILL.md"
+        path = Path.home() / ".claude" / "plugins" / "cache" / "evolve-anything" / "evolve-anything" / "0.4.0" / ".claude" / "skills" / "optimize" / "SKILL.md"
         assert audit.classify_artifact_origin(path) == "plugin"
 
     def test_plugin_origin_with_tilde(self):
         """チルダ付きパスも正しく展開されて plugin と判定される。"""
-        path = Path("~/.claude/plugins/cache/rl-anything/rl-anything/0.4.0/.claude/skills/optimize/SKILL.md")
+        path = Path("~/.claude/plugins/cache/evolve-anything/evolve-anything/0.4.0/.claude/skills/optimize/SKILL.md")
         assert audit.classify_artifact_origin(path) == "plugin"
 
     def test_global_origin(self):
@@ -49,7 +49,7 @@ class TestClassifyArtifactOrigin:
     def test_env_override(self):
         """CLAUDE_PLUGINS_DIR 環境変数でプラグインパスをオーバーライドできる。"""
         with mock.patch.dict(os.environ, {"CLAUDE_PLUGINS_DIR": "/custom/plugins"}):
-            path = Path("/custom/plugins/rl-anything/SKILL.md")
+            path = Path("/custom/plugins/evolve-anything/SKILL.md")
             assert audit.classify_artifact_origin(path) == "plugin"
 
     def test_env_override_does_not_match_default(self):
@@ -140,7 +140,7 @@ class TestClassifyArtifactOrigin:
     def test_project_skill_with_plugin_name_classified_as_plugin_in_prune(self, tmp_path):
         """プロジェクト .claude/skills/ 配下のプラグインインストール済みスキルが prune で plugin_unused に分類される。"""
         audit.classification._plugin_skill_map_cache = {"openspec-apply-change": "openspec"}
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         try:
             with mock.patch.object(audit, "DATA_DIR", data_dir):
@@ -252,7 +252,7 @@ class TestMergeDuplicates:
     @pytest.fixture
     def patch_data_dir(self, tmp_path):
         """テスト用の DATA_DIR を作成。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         with mock.patch.object(audit, "DATA_DIR", data_dir):
             yield data_dir
@@ -654,7 +654,7 @@ class TestCleanupCorrections:
     @pytest.fixture
     def patch_data_dir(self, tmp_path):
         """テスト用の DATA_DIR を作成（audit と prune 両方をパッチ）。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         with mock.patch.object(audit, "DATA_DIR", data_dir), \
              mock.patch("prune.DATA_DIR", data_dir):
@@ -769,7 +769,7 @@ class TestIsReferenceSkill:
         """frontmatter に type なし → LLM 推定（キーワードベースフォールバック）。"""
         skill_dir = tmp_path / "guide-skill"
         skill_dir.mkdir()
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         (skill_dir / "SKILL.md").write_text(
             "---\nname: guide-skill\ndescription: Design system guide\n---\n# Guide\nThis is a reference guide for design system specifications."
@@ -783,7 +783,7 @@ class TestIsReferenceSkill:
         """LLM 推定失敗時は False を返す。"""
         skill_dir = tmp_path / "failing-skill"
         skill_dir.mkdir()
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("---\nname: failing-skill\ndescription: test\n---\n# Body")
         with mock.patch.object(audit, "DATA_DIR", data_dir), \
@@ -796,7 +796,7 @@ class TestIsReferenceSkill:
         import time
         skill_dir = tmp_path / "cached-skill"
         skill_dir.mkdir()
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         skill_md = skill_dir / "SKILL.md"
         skill_md.write_text("---\nname: cached-skill\ndescription: test\n---\n# Body with trigger: foo")
@@ -821,7 +821,7 @@ class TestIsReferenceSkill:
         """frontmatter に type があればキャッシュを無視する。"""
         skill_dir = tmp_path / "override-skill"
         skill_dir.mkdir()
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
 
         # キャッシュに reference と保存
@@ -845,7 +845,7 @@ class TestDetectZeroInvocationsReferenceExclusion:
 
     @pytest.fixture
     def patch_data_dir(self, tmp_path):
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         with mock.patch.object(audit, "DATA_DIR", data_dir), \
              mock.patch("prune.DATA_DIR", data_dir):
@@ -971,7 +971,7 @@ class TestZeroInvocationMeasurementWindowSuppression:
 
     def test_run_prune_suppresses_zero_invocations_in_window(self, tmp_path):
         from datetime import datetime, timezone
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         project_dir = tmp_path / "project"
         skills_dir = project_dir / ".claude" / "skills"
@@ -992,7 +992,7 @@ class TestZeroInvocationMeasurementWindowSuppression:
 
     def test_run_prune_keeps_zero_invocations_after_window(self, tmp_path):
         from datetime import datetime, timezone
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         project_dir = tmp_path / "project"
         skills_dir = project_dir / ".claude" / "skills"
@@ -1016,7 +1016,7 @@ class TestDetectReferenceDrift:
 
     @pytest.fixture
     def patch_data_dir(self, tmp_path):
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         with mock.patch.object(audit, "DATA_DIR", data_dir), \
              mock.patch("prune.DATA_DIR", data_dir):
@@ -1127,14 +1127,14 @@ class TestLoadDriftThreshold:
 
     def test_default_value(self, tmp_path):
         """evolve-state.json がない場合デフォルト 0.5。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         with mock.patch("prune.DATA_DIR", data_dir):
             assert prune.load_drift_threshold() == 0.5
 
     def test_custom_value(self, tmp_path):
         """evolve-state.json に設定がある場合それを使用。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         (data_dir / "evolve-state.json").write_text(json.dumps({"reference_drift_threshold": 0.7}))
         with mock.patch("prune.DATA_DIR", data_dir):
@@ -1142,7 +1142,7 @@ class TestLoadDriftThreshold:
 
     def test_invalid_value_fallback(self, tmp_path):
         """不正な値の場合デフォルトにフォールバック。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         (data_dir / "evolve-state.json").write_text(json.dumps({"reference_drift_threshold": "invalid"}))
         with mock.patch("prune.DATA_DIR", data_dir):
@@ -1150,7 +1150,7 @@ class TestLoadDriftThreshold:
 
     def test_out_of_range_value_fallback(self, tmp_path):
         """範囲外の値の場合デフォルトにフォールバック。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         (data_dir / "evolve-state.json").write_text(json.dumps({"reference_drift_threshold": 1.5}))
         with mock.patch("prune.DATA_DIR", data_dir):
@@ -1163,7 +1163,7 @@ class TestPrunePluginExclusion:
     @pytest.fixture
     def patch_data_dir(self, tmp_path):
         """テスト用の DATA_DIR を作成。"""
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         with mock.patch.object(audit, "DATA_DIR", data_dir):
             yield data_dir
@@ -1275,7 +1275,7 @@ class TestDetectZeroInvocationsClaudeMdExclusion:
 
     @pytest.fixture
     def patch_data_dir(self, tmp_path):
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         with mock.patch.object(audit, "DATA_DIR", data_dir), \
              mock.patch("prune.DATA_DIR", data_dir):
@@ -1447,7 +1447,7 @@ class TestRunPruneGlobalCandidatesScope:
         isolate_home(monkeypatch, tmp_path)
 
     def _make_project(self, tmp_path):
-        data_dir = tmp_path / "rl-anything"
+        data_dir = tmp_path / "evolve-anything"
         data_dir.mkdir()
         project_dir = tmp_path / "project"
         (project_dir / ".claude" / "skills").mkdir(parents=True)
@@ -1480,7 +1480,7 @@ class TestRunPruneGlobalCandidatesScope:
         # フル配列でなく件数サマリ（dict）であること
         assert isinstance(gc, dict), "PJスコープでは global_candidates は dict サマリ"
         assert gc["count"] == 76
-        assert "bin/rl-fleet status" in gc["pointer"]
+        assert "bin/evolve-fleet status" in gc["pointer"]
         # フル配列の要素（skill_name の山）が result に残っていないこと
         assert "candidates" not in gc
 

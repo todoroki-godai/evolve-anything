@@ -55,9 +55,9 @@ class TestResolveAutoMemoryDir:
 
     def test_実測_rl_anything_PJ(self):
         """~/.claude/projects/ 内に実在するはずの slug と一致する。"""
-        pj = Path("/Users/todoroki/tools/rl-anything")
+        pj = Path("/Users/todoroki/tools/evolve-anything")
         result = resolve_auto_memory_dir(pj)
-        expected = Path.home() / ".claude" / "projects" / "-Users-todoroki-tools-rl-anything"
+        expected = Path.home() / ".claude" / "projects" / "-Users-todoroki-tools-evolve-anything"
         assert result == expected
 
     def test_trailing_slash_正規化(self):
@@ -148,7 +148,7 @@ class TestClassifyProject:
         if enabled is None:
             data: dict = {"enabledPlugins": {}}
         else:
-            data = {"enabledPlugins": {"rl-anything@rl-anything": enabled}}
+            data = {"enabledPlugins": {"evolve-anything@evolve-anything": enabled}}
         path.write_text(json.dumps(data))
 
     def test_ENABLED_最近の活動あり(self, tmp_path):
@@ -205,7 +205,7 @@ class TestClassifyProject:
                 call_count["n"] += 1
                 if call_count["n"] == 1:
                     return "{ broken"
-                return json.dumps({"enabledPlugins": {"rl-anything@rl-anything": True}})
+                return json.dumps({"enabledPlugins": {"evolve-anything@evolve-anything": True}})
             return original_read_text(self, *args, **kwargs)
 
         with mock.patch.object(Path, "read_text", flaky_read_text):
@@ -238,7 +238,7 @@ class _FakePopen:
 
     def communicate(self, timeout=None):
         if self._raise_timeout:
-            raise subprocess.TimeoutExpired(cmd="rl-audit", timeout=timeout)
+            raise subprocess.TimeoutExpired(cmd="evolve-audit", timeout=timeout)
         return self._stdout, self._stderr
 
     def wait(self, timeout=None):
@@ -364,7 +364,7 @@ class TestFormatStatusTable:
     def test_ENABLEDと_STALEと_NOT_ENABLEDが正しく区別される(self):
         rows = [
             FleetRow(
-                pj_name="rl-anything",
+                pj_name="evolve-anything",
                 status=STATUS_ENABLED,
                 env_score=0.65,
                 growth_level=7,
@@ -714,7 +714,7 @@ class TestFleetRowCacheParse:
     """run_audit_subprocess が growth-state 新フィールドを正しく拾えるか。"""
 
     def test_growth_state_に_issues_summary_があれば_AuditResult_に入る(self, tmp_path, monkeypatch):
-        # rl-audit を fake にして growth-state だけ書き、_parse_issues_summary を
+        # evolve-audit を fake にして growth-state だけ書き、_parse_issues_summary を
         # 経由する経路をテスト。subprocess は fake で OK にする。
         from fleet import _parse_issues_summary
         raw = {

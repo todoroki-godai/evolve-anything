@@ -2,7 +2,7 @@
 
 > **Note**: Japanese (`README.ja.md`) is the source of truth. Deep references (SPEC.md, ADRs, `spec/`) are maintained in Japanese only — links from this English README point to the Japanese sources.
 
-# rl-anything
+# evolve-anything
 
 A Claude Code Plugin that **autonomously observes, discovers, prunes, and evolves** Claude Code skills/rules, and **optimizes them via direct LLM patches**.
 
@@ -10,41 +10,41 @@ A Claude Code Plugin that **autonomously observes, discovers, prunes, and evolve
 
 ```bash
 # Register the marketplace (first time only)
-claude plugin marketplace add todoroki-godai/rl-anything
+claude plugin marketplace add todoroki-godai/evolve-anything
 
 # Install
-claude plugin install rl-anything@rl-anything --scope user
+claude plugin install evolve-anything@evolve-anything --scope user
 
 # Restart Claude Code
 ```
 
 After restart, Observe hooks start running automatically and record skill usage, errors, and correction feedback.
 
-Bare commands (`rl-audit`, `rl-evolve`, etc.) are also provided under `bin/`. Add it to your PATH to invoke them directly from the CLI:
+Bare commands (`evolve-audit`, `evolve`, etc.) are also provided under `bin/`. Add it to your PATH to invoke them directly from the CLI:
 ```bash
-export PATH="$(claude plugin path rl-anything)/bin:$PATH"
-rl-audit
+export PATH="$(claude plugin path evolve-anything)/bin:$PATH"
+evolve-audit
 ```
 
 ```bash
 # Health check of your environment
-/rl-anything:audit
+/evolve-anything:audit
 
 # Bulk-collect human utterances from past sessions (optional, zero LLM)
 # Note: Skill/Agent observations are recorded going forward by observe hooks.
 # The dedicated backfill CLIs were removed in #215; the skill is deprecated (#486).
-bin/rl-fleet ingest
+bin/evolve-fleet ingest
 
 # Daily operation (preview with dry-run first, then execute; ingest is included)
-/rl-anything:evolve --dry-run
-/rl-anything:evolve
+/evolve-anything:evolve --dry-run
+/evolve-anything:evolve
 ```
 
 In normal use, **just run `evolve` once a day**. If there isn't enough data, it will automatically suggest skipping.
 
 ## Overview — The Four Pillars
 
-rl-anything consists of **four independent pillars**.
+evolve-anything consists of **four independent pillars**.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -59,29 +59,29 @@ rl-anything consists of **four independent pillars**.
 │  Generate-Fitness → Optimize → RL-Loop → Evolve-Fitness │
 ├─────────────────────────────────────────────────────────┤
 │  Pillar 4: Fleet Observation & Intervention             │
-│  rl-fleet status → cross-project env_score / adoption   │
+│  evolve-fleet status → cross-project env_score / adoption   │
 └─────────────────────────────────────────────────────────┘
 ```
 
 | Pillar | What it does | Main command |
 |--------|--------------|--------------|
-| Autonomous Evolution | Detect patterns from usage data → generate skills → prune → evolve | `/rl-anything:evolve` |
-| Feedback | Detect user corrections ("no, that's wrong" etc.) → reflect into rules | `/rl-anything:reflect` |
-| Direct-Patch Optimization | corrections/context → 1-pass LLM patch → regression gate | `/rl-anything:rl-loop` |
-| **Fleet Observation** | Cross-project env_score / adoption status (Phase 1: status), cross-project memory keyword recall | `bin/rl-fleet status` / `bin/rl-fleet recall` |
-| Agent Management | Quality diagnosis & improvement proposals for agent definitions | `/rl-anything:agent-brushup` |
-| Second Opinion | Independent cold-read second opinion | `/rl-anything:second-opinion` |
-| Spec Management | Manage SPEC.md + ADRs, automatic L1/L2 promotion | `/rl-anything:spec-keeper` |
-| Breakthrough | Diagnose "almost-but-not-quite" stuck problems → strategy proposal → spawn Agent | `/rl-anything:breakthrough` |
-| Pitfall Curation | Grow any project's pitfalls.md: dedup / universality classification / top-N distillation / sync gate | `/rl-anything:pitfall-curate` |
-| Growth Visualization (NFD) | Lv.1–10 level system + 4-phase auto-detect + 5 traits + growth narrative | `/rl-anything:audit --growth` |
+| Autonomous Evolution | Detect patterns from usage data → generate skills → prune → evolve | `/evolve-anything:evolve` |
+| Feedback | Detect user corrections ("no, that's wrong" etc.) → reflect into rules | `/evolve-anything:reflect` |
+| Direct-Patch Optimization | corrections/context → 1-pass LLM patch → regression gate | `/evolve-anything:evolve-loop` |
+| **Fleet Observation** | Cross-project env_score / adoption status (Phase 1: status), cross-project memory keyword recall | `bin/evolve-fleet status` / `bin/evolve-fleet recall` |
+| Agent Management | Quality diagnosis & improvement proposals for agent definitions | `/evolve-anything:agent-brushup` |
+| Second Opinion | Independent cold-read second opinion | `/evolve-anything:second-opinion` |
+| Spec Management | Manage SPEC.md + ADRs, automatic L1/L2 promotion | `/evolve-anything:spec-keeper` |
+| Breakthrough | Diagnose "almost-but-not-quite" stuck problems → strategy proposal → spawn Agent | `/evolve-anything:breakthrough` |
+| Pitfall Curation | Grow any project's pitfalls.md: dedup / universality classification / top-N distillation / sync gate | `/evolve-anything:pitfall-curate` |
+| Growth Visualization (NFD) | Lv.1–10 level system + 4-phase auto-detect + 5 traits + growth narrative | `/evolve-anything:audit --growth` |
 
 ## Task-oriented Guide
 
 | What you want to do | Command |
 |---------------------|---------|
 | Daily maintenance (preview → execute) | `evolve --dry-run` → `evolve` |
-| Pinpoint-improve a specific skill | `rl-loop my-skill` |
+| Pinpoint-improve a specific skill | `evolve-loop my-skill` |
 | Reflect correction feedback into rules | `reflect` |
 | View accumulated feedback | `reflect --view` |
 | Inventory all skills/rules | `audit` |
@@ -94,16 +94,16 @@ rl-anything consists of **four independent pillars**.
 | Break through stuck problems | `breakthrough` || Environment growth report | `audit --growth` |
 | Post-merge / post-deploy cleanup | `cleanup` |
 | Curate a project's pitfalls.md (dedup / classify / distill / sync) | `pitfall-curate` |
-| Cross-project fleet status | `bin/rl-fleet status` |
-| Cross-project memory recall (keyword) | `bin/rl-fleet recall "<query>"` |
-| Update the permanent cross-project utterance archive | `bin/rl-fleet ingest` |
+| Cross-project fleet status | `bin/evolve-fleet status` |
+| Cross-project memory recall (keyword) | `bin/evolve-fleet recall "<query>"` |
+| Update the permanent cross-project utterance archive | `bin/evolve-fleet ingest` |
 | Review implicit-correction signals and promote to corrections | `reflect --show-weak-signals` / `reflect --promote-weak` |
 
-> All commands are invoked with the `/rl-anything:` prefix (e.g., `/rl-anything:evolve`).
+> All commands are invoked with the `/evolve-anything:` prefix (e.g., `/evolve-anything:evolve`).
 
 ## Skill Catalog (19 user-invocable skills)
 
-> **Policy**: Only user-invocable skills (callable via `/rl-anything:<skill>`) are listed here. Internal skills called automatically by evolve are noted below the table.
+> **Policy**: Only user-invocable skills (callable via `/evolve-anything:<skill>`) are listed here. Internal skills called automatically by evolve are noted below the table.
 
 | Skill | Pillar | Description |
 |-------|--------|-------------|
@@ -113,7 +113,7 @@ rl-anything consists of **four independent pillars**.
 | `audit` | Autonomous Evolution | Inventory & health check of skills/rules/memory + Growth Report |
 | `backfill` | Autonomous Evolution | Collect & analyze data from past session history |
 | `reflect` | Feedback | Reflect corrections into CLAUDE.md / rules |
-| `rl-loop` | Direct-Patch Optimization | Baseline → direct patch → evaluation → human-confirmation loop (backed by `rl-loop-orchestrator`) |
+| `evolve-loop` | Direct-Patch Optimization | Baseline → direct patch → evaluation → human-confirmation loop (backed by `evolve-loop-orchestrator`) |
 | `generate-fitness` | Direct-Patch Optimization | Auto-generate project-specific fitness functions |
 | `evolve-fitness` | Direct-Patch Optimization | Improve fitness functions from accept/reject data |
 | `evolve-skill` | Direct-Patch Optimization | Inject self-evolution patterns into a specific skill |
@@ -121,12 +121,12 @@ rl-anything consists of **four independent pillars**.
 | `second-opinion` | Second Opinion | Independent cold-read second opinion via Claude Agent |
 | `breakthrough` | Breakthrough | Diagnose "almost-but-not-quite" stuck problems → strategy → spawn Agent |
 | `implement` | Structured Implementation | plan artifact → task decomposition → implementation (Standard/Parallel) → plan-conformance check → telemetry |
-| `spec-keeper` | Spec Management | SPEC.md + ADR management, Progressive Disclosure L1/L2 auto-promotion || `cleanup` | Post-merge cleanup | After PR merge / deploy: handle branches / remote refs / worktrees / tmp dirs / close-candidate Issues / leftover PR Test plan items via per-item approval. Default tmp-dir prefix is `rl-anything-` only (see [ADR-021 (JA)](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)) |
+| `spec-keeper` | Spec Management | SPEC.md + ADR management, Progressive Disclosure L1/L2 auto-promotion || `cleanup` | Post-merge cleanup | After PR merge / deploy: handle branches / remote refs / worktrees / tmp dirs / close-candidate Issues / leftover PR Test plan items via per-item approval. Default tmp-dir prefix is `evolve-anything-` only (see [ADR-021 (JA)](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)) |
 | `pitfall-curate` | Pitfall Curation | Grow any project's pitfalls.md (project-agnostic): jaccard dedup + supersede / universality classification (`Transferability` × `Generality` 1–5) / three-tier disclosure top-N distillation / record↔classify↔distribute sync gate. Classification & reframing are the agent's judgment; deterministic work is `pitfall_curate.py`. Opt-in auto-enforcement: run `enable` once per project to register a pitfalls.md, then edit-time (`pitfall_lint`, warn-only) and commit-time (`pitfall_commit_gate`, blocks index/TOC wipe) hooks keep its canonical format automatically. Distinct from `pitfall_manager` (self-evolved-skill-only) |
 | `release-notes-review` | Utility | CC release-notes analysis + global environment health check (`--env-only` supported) |
-| `report-feedback` | Feedback | LLM meta-reviews evolve/audit reports and semi-automatically files improvement issues against rl-anything itself (successor to the old `feedback`) |
+| `report-feedback` | Feedback | LLM meta-reviews evolve/audit reports and semi-automatically files improvement issues against evolve-anything itself (successor to the old `feedback`) |
 
-**Internal skills** (called automatically, not user-invocable): `rl-loop-orchestrator` (rl-loop backend: baseline→patch→eval→confirm loop), `genetic-prompt-optimizer` (LLM direct-patch optimizer used by rl-loop), `reorganize` (split detection, called by evolve), `enrich` (merged into discover, deprecated)
+**Internal skills** (called automatically, not user-invocable): `evolve-loop-orchestrator` (evolve-loop backend: baseline→patch→eval→confirm loop), `genetic-prompt-optimizer` (LLM direct-patch optimizer used by evolve-loop), `reorganize` (split detection, called by evolve), `enrich` (merged into discover, deprecated)
 
 ## Hooks (Data Collection)
 
@@ -138,7 +138,7 @@ rl-anything consists of **four independent pillars**.
 | `correction_detect` | UserPromptSubmit | `corrections.jsonl` |
 | `subagent_observe` | SubagentStop | `subagents.jsonl` |
 | `instructions_loaded` | InstructionsLoaded | `sessions.jsonl` + Growth greeting |
-| `workflow_context` | PreToolUse | `$TMPDIR/rl-anything-workflow-*.json` |
+| `workflow_context` | PreToolUse | `$TMPDIR/evolve-anything-workflow-*.json` |
 | `skill_activation_log` | PostToolUse | `skill_activations.jsonl` (skill firing record) |
 | `file_changed` | FileChanged | stdout (audit suggestion) |
 | `permission_denied` | PermissionDenied | `errors.jsonl` (permission-denial record) |
@@ -159,7 +159,7 @@ On session end / when corrections accumulate, evolve/audit execution is automati
 | Accumulated corrections | ≥ 10 | On correction detection |
 | Days since last audit | ≥ 30 | Session end |
 
-Settings can be overridden via `trigger_config` in `~/.claude/rl-anything/evolve-state.json`:
+Settings can be overridden via `trigger_config` in `~/.claude/evolve-anything/evolve-state.json`:
 
 ```json
 {
@@ -187,8 +187,8 @@ The sections below are detail references — read on demand.
 ### evolve
 
 ```
-/rl-anything:evolve --dry-run    # Preview (recommended)
-/rl-anything:evolve              # Execute
+/evolve-anything:evolve --dry-run    # Preview (recommended)
+/evolve-anything:evolve              # Execute
 ```
 
 Phases: Diagnose (Discover + Audit + Reorganize) → Compile (Optimize + Remediation + Reflect) → Housekeeping (Prune + Fitness Evolution) → Report
@@ -198,8 +198,8 @@ If fewer than 3 sessions have elapsed, or fewer than 10 observations have been c
 ### discover
 
 ```
-/rl-anything:discover                    # Pattern detection + candidate generation (enrich integrated)
-/rl-anything:discover --scope global     # Detect at global scope
+/evolve-anything:discover                    # Pattern detection + candidate generation (enrich integrated)
+/evolve-anything:discover --scope global     # Detect at global scope
 ```
 
 Detection criteria: behavioral patterns (5+ occurrences) → skill candidates; error patterns (3+) → rule candidates; rejection reasons (3+) → rule candidates. Built-in Agents are split out into `agent_usage_summary`. Missing recommended rules/hooks are also detected. Existing-skill matching uses Jaccard similarity (enrich integration).
@@ -207,9 +207,9 @@ Detection criteria: behavioral patterns (5+ occurrences) → skill candidates; e
 ### prune
 
 ```
-/rl-anything:prune                 # Detect prune candidates
-/rl-anything:prune --restore       # Restore from archive
-/rl-anything:prune --list-archive  # List archive
+/evolve-anything:prune                 # Detect prune candidates
+/evolve-anything:prune --restore       # Restore from archive
+/evolve-anything:prune --list-archive  # List archive
 ```
 
 Each candidate gets a recommendation label (archive / keep / needs review) and a description. TF-IDF similarity filtering reduces false positives. Reference-type skills are excluded from pruning.
@@ -217,36 +217,36 @@ Each candidate gets a recommendation label (archive / keep / needs review) and a
 ### reflect
 
 ```
-/rl-anything:reflect                          # Interactive review
-/rl-anything:reflect --view                   # List pending
-/rl-anything:reflect --dry-run                # Preview only
-/rl-anything:reflect --apply-all              # Apply high-confidence in bulk (>= 0.85)
-/rl-anything:reflect --apply-all --min-confidence 0.70  # Override threshold
-/rl-anything:reflect --skip-semantic          # Disable semantic verification
+/evolve-anything:reflect                          # Interactive review
+/evolve-anything:reflect --view                   # List pending
+/evolve-anything:reflect --dry-run                # Preview only
+/evolve-anything:reflect --apply-all              # Apply high-confidence in bulk (>= 0.85)
+/evolve-anything:reflect --apply-all --min-confidence 0.70  # Override threshold
+/evolve-anything:reflect --skip-semantic          # Disable semantic verification
 ```
 
-### rl-loop
+### evolve-loop
 
 ```
-/rl-anything:rl-loop my-skill              # 1 loop
-/rl-anything:rl-loop my-skill --loops 3    # 3 loops
-/rl-anything:rl-loop my-skill --auto       # Skip human confirmation
+/evolve-anything:evolve-loop my-skill              # 1 loop
+/evolve-anything:evolve-loop my-skill --loops 3    # 3 loops
+/evolve-anything:evolve-loop my-skill --auto       # Skip human confirmation
 ```
 
 ### generate-fitness
 
 ```
-/rl-anything:generate-fitness                # Default
-/rl-anything:generate-fitness --ask          # Ask quality criteria first
-/rl-anything:generate-fitness --name bot     # Specify function name
+/evolve-anything:generate-fitness                # Default
+/evolve-anything:generate-fitness --ask          # Ask quality criteria first
+/evolve-anything:generate-fitness --name bot     # Specify function name
 ```
 
 ### audit
 
 ```
-/rl-anything:audit [project-dir]
-/rl-anything:audit --skip-rescore    # Skip quality measurement
-/rl-anything:audit --memory-context  # Output JSON for MEMORY semantic verification
+/evolve-anything:audit [project-dir]
+/evolve-anything:audit --skip-rescore    # Skip quality measurement
+/evolve-anything:audit --memory-context  # Output JSON for MEMORY semantic verification
 ```
 
 Report contents: Skill Quality Trends / MEMORY Health / Plugin Usage / OpenSpec Workflow Analytics / Hardcoded-value detection.
@@ -258,8 +258,8 @@ going forward by observe hooks, and ingest/analysis is folded into `evolve` / `a
 To bulk-collect only human utterances first:
 
 ```
-bin/rl-fleet ingest                # Ingest human utterances across all PJs into utterances.db (zero LLM)
-/rl-anything:evolve --dry-run      # Ingest + improvement proposals (dry-run preview)
+bin/evolve-fleet ingest                # Ingest human utterances across all PJs into utterances.db (zero LLM)
+/evolve-anything:evolve --dry-run      # Ingest + improvement proposals (dry-run preview)
 ```
 
 </details>
@@ -267,10 +267,10 @@ bin/rl-fleet ingest                # Ingest human utterances across all PJs into
 <details>
 <summary><strong>Data flow</strong></summary>
 
-All data is stored under `~/.claude/rl-anything/`.
+All data is stored under `~/.claude/evolve-anything/`.
 
 ```
-~/.claude/rl-anything/
+~/.claude/evolve-anything/
 ├── usage.jsonl           # Skill / agent usage records
 ├── errors.jsonl          # Error records
 ├── sessions.jsonl        # Session summaries
@@ -293,7 +293,7 @@ All data is stored under `~/.claude/rl-anything/`.
 | `workflows.jsonl` | session_summary hook, backfill | audit, discover |
 | `corrections.jsonl` | correction_detect hook, backfill | reflect, discover, evolve, prune |
 | `false_positives.jsonl` | reflect | correction_detect |
-| `workflow_stats.json` | workflow_analysis.py | optimize, rl-scorer, generate-fitness |
+| `workflow_stats.json` | workflow_analysis.py | optimize, evolve-scorer, generate-fitness |
 | `checkpoint.json` | save_state hook | restore_state hook |
 
 </details>
@@ -342,14 +342,14 @@ if __name__ == "__main__":
 
 ### Cultivating fitness functions
 
-Once 30+ accept/reject records accumulate, `/rl-anything:evolve-fitness` proposes improvements:
+Once 30+ accept/reject records accumulate, `/evolve-anything:evolve-fitness` proposes improvements:
 - score-acceptance correlation < 0.50 → recalibration recommended
 - same `rejection_reason` 3+ times → propose adding a new axis
 
 </details>
 
 <details>
-<summary><strong>rl-scorer domain auto-detection</strong></summary>
+<summary><strong>evolve-scorer domain auto-detection</strong></summary>
 
 The domain is inferred from CLAUDE.md, switching evaluation axes automatically.
 
@@ -373,11 +373,11 @@ After installation, hooks automatically record skill usage, errors, and correcti
 
 ### Act 2: Discover → Optimize — From patterns to improvements
 
-`/rl-anything:discover` detected the pattern "personality is manually added after `/bot-create`" and auto-generated a rule candidate. Direct-patch optimization further improved the skill itself, raising its score from 0.62 → 0.84.
+`/evolve-anything:discover` detected the pattern "personality is manually added after `/bot-create`" and auto-generated a rule candidate. Direct-patch optimization further improved the skill itself, raising its score from 0.62 → 0.84.
 
 ### Act 3: Reflect — Feedback comes alive
 
-The correction "no, set personality first" was auto-reflected into CLAUDE.md via `/rl-anything:reflect`, eliminating the recurring mistake.
+The correction "no, set personality first" was auto-reflected into CLAUDE.md via `/evolve-anything:reflect`, eliminating the recurring mistake.
 
 ### Act 4: Daily operation
 
@@ -397,7 +397,7 @@ The correction "no, set personality first" was auto-reflected into CLAUDE.md via
 python3 <PLUGIN_DIR>/scripts/migrate_reflect_queue.py
 
 # Verify
-/rl-anything:reflect --view
+/evolve-anything:reflect --view
 
 # Uninstall
 claude plugin uninstall claude-reflect

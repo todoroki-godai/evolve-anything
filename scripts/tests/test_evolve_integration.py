@@ -14,7 +14,7 @@ sys.path.insert(0, str(_lib_dir))
 
 _rl_loop_script = (
     Path(__file__).resolve().parent.parent.parent
-    / "skills" / "rl-loop-orchestrator" / "scripts" / "run_loop.py"
+    / "skills" / "evolve-loop-orchestrator" / "scripts" / "run_loop.py"
 )
 
 

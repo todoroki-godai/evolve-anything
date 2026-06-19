@@ -42,5 +42,5 @@ SKILL.md の Step 2（分析レポート出力）のコマンドに `--project` 
 
 #### Scenario: SKILL.md のコマンドがプロジェクトフィルタ付きで記載されている
 
-- **WHEN** `/rl-anything:backfill` スキルが Step 2 を実行する
+- **WHEN** `/evolve-anything:backfill` スキルが Step 2 を実行する
 - **THEN** `analyze.py --project "$(basename $(pwd))"` のようにプロジェクト名を渡して実行する

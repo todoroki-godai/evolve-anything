@@ -32,7 +32,7 @@ _PLUGIN_ROOT = _SCRIPTS_DIR.parent
 import os
 
 _DATA_DIR_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR_DEFAULT = Path(_DATA_DIR_ENV) if _DATA_DIR_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR_DEFAULT = Path(_DATA_DIR_ENV) if _DATA_DIR_ENV else Path.home() / ".claude" / "evolve-anything"
 
 # usage.jsonl の必須フィールド（設計仕様: golden_extractor init 時に assert）
 REQUIRED_USAGE_FIELDS = {"skill_name", "session_id", "ts"}
@@ -218,19 +218,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--usage-file",
         type=Path,
         default=DATA_DIR_DEFAULT / "usage.jsonl",
-        help="usage.jsonl のパス（デフォルト: ~/.claude/rl-anything/usage.jsonl）",
+        help="usage.jsonl のパス（デフォルト: ~/.claude/evolve-anything/usage.jsonl）",
     )
     p.add_argument(
         "--corrections-file",
         type=Path,
         default=DATA_DIR_DEFAULT / "corrections.jsonl",
-        help="corrections.jsonl のパス（デフォルト: ~/.claude/rl-anything/corrections.jsonl）",
+        help="corrections.jsonl のパス（デフォルト: ~/.claude/evolve-anything/corrections.jsonl）",
     )
     p.add_argument(
         "--output",
         type=Path,
         default=DATA_DIR_DEFAULT / "golden_cases.jsonl",
-        help="出力先 JSONL ファイル（デフォルト: ~/.claude/rl-anything/golden_cases.jsonl）",
+        help="出力先 JSONL ファイル（デフォルト: ~/.claude/evolve-anything/golden_cases.jsonl）",
     )
     p.add_argument(
         "--skills",

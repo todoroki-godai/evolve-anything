@@ -14,7 +14,7 @@ import common
 
 @pytest.fixture
 def tmp_data_dir(tmp_path):
-    data_dir = tmp_path / "rl-anything"
+    data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     return data_dir
 

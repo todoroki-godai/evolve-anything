@@ -53,14 +53,14 @@ def _assistant_tooluse_line(names, ts="2026-06-01T00:00:00Z", sid="s1", uuid="a1
 
 def test_pj_slug_from_cwd_main_repo() -> None:
     """本体 repo の cwd → basename がそのまま slug（ハイフン入り名も保持）。"""
-    cwd = "/Users/todoroki/tools/rl-anything"
-    assert pj_slug_from_cwd(cwd) == "rl-anything"
+    cwd = "/Users/todoroki/tools/evolve-anything"
+    assert pj_slug_from_cwd(cwd) == "evolve-anything"
 
 
 def test_pj_slug_from_cwd_worktree_normalizes_to_main() -> None:
     """worktree の cwd → .claude/worktrees/ で切って本体 slug に帰属。"""
-    cwd = "/Users/todoroki/tools/rl-anything/.claude/worktrees/agent-many"
-    assert pj_slug_from_cwd(cwd) == "rl-anything"
+    cwd = "/Users/todoroki/tools/evolve-anything/.claude/worktrees/agent-many"
+    assert pj_slug_from_cwd(cwd) == "evolve-anything"
 
 
 def test_pj_slug_from_cwd_hyphenated_name() -> None:
@@ -77,7 +77,7 @@ def test_pj_slug_from_cwd_missing_returns_none() -> None:
 
 def test_pj_slug_from_dir_name_fallback() -> None:
     """cwd が無いファイル用の fallback: encoded dir 名をそのまま使う。"""
-    name = "-Users-todoroki-tools-rl-anything"
+    name = "-Users-todoroki-tools-evolve-anything"
     assert pj_slug_from_dir_name(name) == name
 
 
@@ -121,7 +121,7 @@ def test_excluded_pj_via_cwd_slug(tmp_path: Path) -> None:
 def test_extracts_plain_human_string(tmp_path: Path) -> None:
     f = tmp_path / "s1.jsonl"
     f.write_text(_user_line("これは普通の人間の発話です") + "\n", encoding="utf-8")
-    utts = list(extract_utterances(f, pj_slug="rl-anything"))
+    utts = list(extract_utterances(f, pj_slug="evolve-anything"))
     assert len(utts) == 1
     u = utts[0]
     assert u.text == "これは普通の人間の発話です"
@@ -129,7 +129,7 @@ def test_extracts_plain_human_string(tmp_path: Path) -> None:
     assert u.session_id == "s1"
     assert u.line_no == 1
     assert u.text_hash  # non-empty hash
-    assert u.pj_slug == "rl-anything"
+    assert u.pj_slug == "evolve-anything"
 
 
 def test_extracts_human_from_content_list(tmp_path: Path) -> None:

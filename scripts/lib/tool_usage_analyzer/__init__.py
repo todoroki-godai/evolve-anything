@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 GLOBAL_RULES_DIR = Path.home() / ".claude" / "rules"
 GLOBAL_HOOKS_DIR = Path.home() / ".claude" / "hooks"
-RL_HOOKS_DIR = Path.home() / ".claude" / "rl-anything" / "hooks"
+RL_HOOKS_DIR = Path.home() / ".claude" / "evolve-anything" / "hooks"
 
 REPEATING_THRESHOLD = 5
 

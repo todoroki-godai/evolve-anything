@@ -76,7 +76,7 @@ def test_dedups_against_existing_missed():
 
 def test_plugin_namespaced_candidates_excluded():
     """`:` を含むプラグインスキル名は surface / merge の双方から除外される。"""
-    cands = [_cand("rl-anything:evolve", 0.95), _cand("brandnew", 0.8)]
+    cands = [_cand("evolve-anything:evolve", 0.95), _cand("brandnew", 0.8)]
     surfaced, merged = _trajectory_candidates_to_missed(cands, threshold=0.3)
     assert [c["skill_name"] for c in surfaced] == ["brandnew"]
     assert [m["skill"] for m in merged] == ["brandnew"]
@@ -101,7 +101,7 @@ def test_cc_builtin_commands_excluded():
 
 
 def test_is_already_existing_skill_predicate():
-    assert _is_already_existing_skill("rl-anything:evolve", set()) is True
+    assert _is_already_existing_skill("evolve-anything:evolve", set()) is True
     assert _is_already_existing_skill("review", {"review"}) is True
     assert _is_already_existing_skill("loop", set()) is True  # CC builtin
     assert _is_already_existing_skill("model", set()) is True  # CC builtin

@@ -43,7 +43,7 @@ CONVERTED_MODULES = [
 # 不変条件: claude -p を呼ぶ全モジュールは CONVERTED_MODULES か KNOWN_REMAINING の
 # どちらかに必ず載る（台帳を網羅的に保つ）。
 KNOWN_REMAINING = [
-    "scripts/lib/score_noise.py",                   # _run_claude_prompt（bin/rl-prompt-compare 後方互換、DEPRECATED）
+    "scripts/lib/score_noise.py",                   # _run_claude_prompt（bin/evolve-prompt-compare 後方互換、DEPRECATED）
 ]
 
 _SUBPROCESS_CALLERS = {"run", "Popen", "call", "check_output", "check_call"}

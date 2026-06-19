@@ -3,14 +3,14 @@
 Superpowers (v5.0.5) は開発方法論の強制フレームワーク。14スキル全体をプラグインとして導入すると、OpenSpec とワークフローが重複し（brainstorming↔explore, writing-plans↔propose, executing-plans↔apply）、SessionStart で全スキル発火を強制される（"YOU MUST USE IT"）。
 
 Superpowers から cherry-pick すべき知見は3つ:
-- **合理化防止テーブル**: スキップの言い訳を列挙して潰す手法 → rl-anything はテレメトリで定量化できる
+- **合理化防止テーブル**: スキップの言い訳を列挙して潰す手法 → evolve-anything はテレメトリで定量化できる
 - **CSO (Claude Search Optimization)**: description 設計の知見 → Anthropic 公式ツールガイドが裏付け
 - **証拠提示義務**: "Evidence before claims" → TDD とは独立した検証パターン
 
 ## Goals / Non-Goals
 
 **Goals:**
-- 上記3つの知見を rl-anything の既存パイプラインに組み込む
+- 上記3つの知見を evolve-anything の既存パイプラインに組み込む
 - テレメトリ駆動で合理化防止テーブルを自動生成する（Superpowers は静的・手動）
 - 既存の evolve/discover/remediation パイプラインに自然に統合
 
@@ -71,8 +71,8 @@ pitfall_manager.py に `generate_rationalization_table()` を追加。correction
 
 **代替案（検討済み）**:
 - A) ハイブリッド（install + CLAUDE.md 抑制）→ 指示の綱引き問題
-- B) Fork して rl-anything に組み込み → メンテコスト大
-- C) 知見のみ抽出（**採用**）→ 必要な 3 アイデアを rl-anything のパイプラインに組み込む
+- B) Fork して evolve-anything に組み込み → メンテコスト大
+- C) 知見のみ抽出（**採用**）→ 必要な 3 アイデアを evolve-anything のパイプラインに組み込む
 
 ### D5: 合理化パターン検出の閾値設計
 

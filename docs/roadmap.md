@@ -1,6 +1,6 @@
 # Roadmap
 
-rl-anything の将来計画。現在の実装状況は [README.ja.md](../README.ja.md) を参照。
+evolve-anything の将来計画。現在の実装状況は [README.ja.md](../README.ja.md) を参照。
 
 ---
 
@@ -126,7 +126,7 @@ Phase 0        Phase 1        Phase 2        Phase 3
 
 ### Gap 5: 自動圧縮トリガー — **完了**
 
-`auto-compression-trigger` change で実装済み。`trigger_engine.py` に `_evaluate_bloat()` を追加し、`bloat_check()` の結果に基づいてセッション終了時に肥大化を自動検出して `/rl-anything:evolve` を提案する。
+`auto-compression-trigger` change で実装済み。`trigger_engine.py` に `_evaluate_bloat()` を追加し、`bloat_check()` の結果に基づいてセッション終了時に肥大化を自動検出して `/evolve-anything:evolve` を提案する。
 
 | トリガー | 閾値 (bloat_control.BLOAT_THRESHOLDS) | 状態 |
 |---------|---------------------------------------|------|

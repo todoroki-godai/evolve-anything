@@ -6,7 +6,7 @@
 1. `semantic_similarity_check()` が全ペアを無条件返却 → 465件の誤検知 merge 提案（Issue #3）
 2. `detect_contradictions()` が将来用スタブで常に空リスト → 矛盾検出が機能しない
 3. `validate_corrections()` の LLM 失敗時フォールバックが全件 `is_learning=True` → reflect のフィルタが無効化
-4. optimizer/rl-loop のスコアリングが複数箇所で黙って 0.5 を返す → 品質判定が無意味に
+4. optimizer/evolve-loop のスコアリングが複数箇所で黙って 0.5 を返す → 品質判定が無意味に
 5. dry-run モードで固定ダミースコア → ユーザーが結果を誤解するリスク
 
 ## What Changes

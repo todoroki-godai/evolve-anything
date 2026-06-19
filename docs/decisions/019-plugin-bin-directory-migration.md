@@ -8,7 +8,7 @@ Related: CC v2.1.91 Plugin bin/ サポート追加
 
 CC v2.1.91 でプラグインが `bin/` 配下に実行ファイルを置き、Bash tool から bare command として呼べるようになった。
 
-rl-anything の `skills/*/scripts/*.py` は以下の二役を兼ねていた:
+evolve-anything の `skills/*/scripts/*.py` は以下の二役を兼ねていた:
 
 1. **CLI entry point** — SKILL.md の `python3 <PLUGIN_DIR>/skills/*/scripts/*.py` で起動
 2. **importable module** — `evolve.py` が `from audit import run_audit` のように他スクリプトを直接 import
@@ -27,7 +27,7 @@ rl-anything の `skills/*/scripts/*.py` は以下の二役を兼ねていた:
 
 4. **`hooks/common.py` を thin re-exporter に変更** — DATA_DIR, append_jsonl 等の共有ユーティリティを `scripts/lib/rl_common.py` に移動し、`hooks/common.py` は `from rl_common import *` だけの再エクスポーターになる。`handover.py` と `reflect.py` の `sys.path.insert(hooks/)` を削除する
 
-5. **SKILL.md の呼び出しを bare command に更新** — `python3 <PLUGIN_DIR>/skills/audit/scripts/audit.py` → `rl-audit`
+5. **SKILL.md の呼び出しを bare command に更新** — `python3 <PLUGIN_DIR>/skills/audit/scripts/audit.py` → `evolve-audit`
 
 6. **pytest P0 collision を同時解消** — 各テストディレクトリに `__init__.py` を追加する
 
@@ -37,7 +37,7 @@ rl-anything の `skills/*/scripts/*.py` は以下の二役を兼ねていた:
 
 ### Approach A: Shell thin wrapper のみ（ファイル移動なし）
 
-`bin/rl-audit` を `exec python3 "${CLAUDE_PLUGIN_ROOT}/skills/audit/scripts/audit.py" "$@"` とする 1 行 bash wrapper。Python ファイルはそのまま。
+`bin/evolve-audit` を `exec python3 "${CLAUDE_PLUGIN_ROOT}/skills/audit/scripts/audit.py" "$@"` とする 1 行 bash wrapper。Python ファイルはそのまま。
 
 不採用理由: import グラフの問題が残る。`evolve.py` の sys.path 8 行は消えない。`hooks/common.py` の二役も解消しない。「短い bare command」の恩恵だけを得て、構造的な問題は先送りになる。
 
@@ -51,9 +51,9 @@ rl-anything の `skills/*/scripts/*.py` は以下の二役を兼ねていた:
 
 **良い影響**:
 - `evolve.py` の sys.path 操作が 8 行 → 2 行に削減される（scripts/lib/ が直接参照可能になるため）
-- SKILL.md の bash ブロックが `rl-audit "$(pwd)"` と簡潔になり、`<PLUGIN_DIR>` の解決が不要になる
+- SKILL.md の bash ブロックが `evolve-audit "$(pwd)"` と簡潔になり、`<PLUGIN_DIR>` の解決が不要になる
 - `bin/` で全 CLI が発見可能になる（`ls bin/rl-*` で一覧できる）
-- CI からスクリプトを直接呼べる（`bin/rl-audit --dry-run`）
+- CI からスクリプトを直接呼べる（`bin/evolve-audit --dry-run`）
 - `hooks/` cross-import が完全に解消される
 - pytest P0 collision が同時に解消される
 - `skills/` = Claude 向け仕様、`bin/` = 実行ファイル、`scripts/lib/` = ライブラリ という役割分担が明確になる

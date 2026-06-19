@@ -2,8 +2,8 @@
 """PreToolUse async hook — Skill 呼び出し時にワークフロー文脈ファイルを書き出す。
 
 stdin から Claude Code の PreToolUse イベント JSON を受け取り:
-1. $TMPDIR/rl-anything-workflow-{session_id}.json に文脈を書き出す（observe.py 後方互換）
-2. $TMPDIR/rl-anything-skill-stack-{session_id}.json にスタックを push する
+1. $TMPDIR/evolve-anything-workflow-{session_id}.json に文脈を書き出す（observe.py 後方互換）
+2. $TMPDIR/evolve-anything-skill-stack-{session_id}.json にスタックを push する
    （PostToolUse で pop → parent_skill の正確な追跡を実現）
 
 スタック方式により Skill→Skill のネスト呼び出しで親スキルを確実に特定できる。
@@ -73,9 +73,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_pre_tool_use(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:workflow_context] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:workflow_context] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:workflow_context] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:workflow_context] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

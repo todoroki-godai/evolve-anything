@@ -62,7 +62,7 @@ Related: #26
 
 ### D7: カタログのカテゴリ分類
 
-**決定**: `essential`（rl-anything の動作に直接影響）/ `recommended`（品質向上）/ `optional`（便利だがなくてもよい）の 3 段階。essential はデフォルト選択済み。
+**決定**: `essential`（evolve-anything の動作に直接影響）/ `recommended`（品質向上）/ `optional`（便利だがなくてもよい）の 3 段階。essential はデフォルト選択済み。
 
 ### D8: Candidate Tracking の仕組み
 

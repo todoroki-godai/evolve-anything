@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: SubagentStop イベントで subagent の完了データを記録しなければならない（MUST）
-SubagentStop フック `hooks/subagent_observe.py` で、agent_type, agent_id, last_assistant_message（500文字上限）, agent_transcript_path, timestamp を `~/.claude/rl-anything/subagents.jsonl` に追記しなければならない（MUST）。LLM 呼び出しは行ってはならない（MUST NOT）。
+SubagentStop フック `hooks/subagent_observe.py` で、agent_type, agent_id, last_assistant_message（500文字上限）, agent_transcript_path, timestamp を `~/.claude/evolve-anything/subagents.jsonl` に追記しなければならない（MUST）。LLM 呼び出しは行ってはならない（MUST NOT）。
 
 #### Scenario: subagent 正常完了時の記録
 - **WHEN** subagent が正常に完了し SubagentStop イベントが発火する

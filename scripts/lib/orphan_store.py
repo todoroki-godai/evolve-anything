@@ -32,7 +32,7 @@ _HOOK_PY_RE = re.compile(r"hooks/([A-Za-z0-9_\-]+\.py)")
 
 
 def _default_plugin_root() -> Path:
-    """rl-anything 自身のプラグインルート。
+    """evolve-anything 自身のプラグインルート。
 
     module 定数でなく関数にして呼び出し時に解決する（hook_drift の `_default_gstack_dir`
     と同じ慣習）。テストは `monkeypatch.setattr(orphan_store, "_default_plugin_root", ...)`

@@ -116,7 +116,7 @@ def evaluate(event: dict, project_dir: str, run_git: GitRunner) -> Dict[str, str
         return {
             "decision": "deny",
             "message": (
-                "[rl-anything:pitfall_commit_gate] ✗ commit をブロックしました。\n"
+                "[evolve-anything:pitfall_commit_gate] ✗ commit をブロックしました。\n"
                 f"  次の pitfalls はエントリ0件で実質コンテンツがあり、wipe の恐れがあります: "
                 f"{', '.join(danger)}\n"
                 "  `### タイトル` 形式へ再構成するか、index/TOC なら管理対象から外して"
@@ -127,7 +127,7 @@ def evaluate(event: dict, project_dir: str, run_git: GitRunner) -> Dict[str, str
         return {
             "decision": "warn",
             "message": (
-                "[rl-anything:pitfall_commit_gate] ⚠ 正準フォーマットと差分のある "
+                "[evolve-anything:pitfall_commit_gate] ⚠ 正準フォーマットと差分のある "
                 f"pitfalls を commit します（ブロックはしません）: {', '.join(drift)}\n"
                 "  揃えるには `pitfall_curate.py normalize --pitfalls <path> --out <path>`。"
             ),

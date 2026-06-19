@@ -1,6 +1,6 @@
 ## Why
 
-rl-anything の observe hooks はツール呼び出しを記録するが、ユーザーの修正意図（「いや、」「違う、」）やスキルの価値減衰を捉えられない。claude-reflect が実証した CJK パターン検出・信頼度スコア・2段階検証のアーキテクチャを取り入れることで、discover/prune の精度を大幅に改善できる。
+evolve-anything の observe hooks はツール呼び出しを記録するが、ユーザーの修正意図（「いや、」「違う、」）やスキルの価値減衰を捉えられない。claude-reflect が実証した CJK パターン検出・信頼度スコア・2段階検証のアーキテクチャを取り入れることで、discover/prune の精度を大幅に改善できる。
 
 ## What Changes
 

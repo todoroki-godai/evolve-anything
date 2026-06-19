@@ -6,9 +6,9 @@
 - **再評価トリガー**: MEMORY.md のエントリ数が 80 を超える / session 横断のメモリ復元レイテンシが運用課題になる
 - **実体**: エージェントの長期記憶を「常時更新 + 折り畳み圧縮 + 必要時即時復元」する手法。脳神経科学からインスパイア
 
-## rl-anything 側の現行実装と照合
+## evolve-anything 側の現行実装と照合
 
-| 論文の概念 | rl-anything 側の対応 | 状態 |
+| 論文の概念 | evolve-anything 側の対応 | 状態 |
 |-----------|---------------------|------|
 | 長期メモリの永続化 | `MEMORY.md` (auto-memory) + `token_usage_store.py` (DuckDB SoR) | ✅ |
 | 古いメモリの陳腐化検出 | `memory_temporal.py` (`is_stale`, `is_superseded`) | ✅ |
@@ -47,4 +47,4 @@
 ## 関連
 
 - 現行コード: `scripts/lib/memory_temporal.py`, `scripts/lib/layer_diagnose.py:139-205`, `scripts/lib/token_usage_store.py`
-- 関連メモリ: `~/.claude/projects/-Users-todoroki-tools-rl-anything/memory/archive_change_history.md` (既存の手動 archive)
+- 関連メモリ: `~/.claude/projects/-Users-todoroki-tools-evolve-anything/memory/archive_change_history.md` (既存の手動 archive)

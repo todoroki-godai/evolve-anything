@@ -10,8 +10,8 @@
 ## Goals / Non-Goals
 
 **Goals:**
-- 独立コマンド `/rl-anything:evolve-skill <name>` で特定スキルを自己進化対応にする
-- rl-loop の `--evolve` フラグで最適化と自己進化対応を一体実行する
+- 独立コマンド `/evolve-anything:evolve-skill <name>` で特定スキルを自己進化対応にする
+- evolve-loop の `--evolve` フラグで最適化と自己進化対応を一体実行する
 - 既存の `skill_evolve.py` API を再利用し、新コード量を最小化する
 - 既に自己進化済みのスキルは自動スキップ
 
@@ -22,23 +22,23 @@
 
 ## Decisions
 
-### D1: 独立コマンドを主、rl-loop 統合を副
+### D1: 独立コマンドを主、evolve-loop 統合を副
 
-自己進化パターン組み込みは1回限りの操作。rl-loop のような繰り返しループの中に置くのは操作粒度が合わない。独立コマンドが発見しやすく、ユースケースに直結する。
+自己進化パターン組み込みは1回限りの操作。evolve-loop のような繰り返しループの中に置くのは操作粒度が合わない。独立コマンドが発見しやすく、ユースケースに直結する。
 
-rl-loop の `--evolve` は「最適化のついでに未対応なら提案する」便利フラグとして維持。
+evolve-loop の `--evolve` は「最適化のついでに未対応なら提案する」便利フラグとして維持。
 
-代替案: rl-loop のみに統合 → 1回限りの操作にループを回す必要がありオーバーヘッド大。却下。
+代替案: evolve-loop のみに統合 → 1回限りの操作にループを回す必要がありオーバーヘッド大。却下。
 
 ### D2: evolve-skill コマンドは SKILL.md ベースのスキル定義
 
-`skills/evolve-skill/SKILL.md` に配置。`skill_evolve.py` の単一スキル向け軽量ラッパー `_assess_single_skill()` を共通ヘルパーとして `skill_evolve.py` に追加し、独立コマンドと rl-loop の両方から呼び出す。
+`skills/evolve-skill/SKILL.md` に配置。`skill_evolve.py` の単一スキル向け軽量ラッパー `_assess_single_skill()` を共通ヘルパーとして `skill_evolve.py` に追加し、独立コマンドと evolve-loop の両方から呼び出す。
 
 代替案: Python スクリプトとして実装 → SKILL.md の方がプラグインのスキル一覧に自然に載り、発見しやすい。却下。
 
 ### D3: 判定 + 適用の2共通関数を skill_evolve.py に追加
 
-`skill_evolve_assessment()` は全カスタムスキルスキャン。以下の2関数を `skill_evolve.py` に新設し、独立コマンド・rl-loop・remediation の3箇所から呼び出す:
+`skill_evolve_assessment()` は全カスタムスキルスキャン。以下の2関数を `skill_evolve.py` に新設し、独立コマンド・evolve-loop・remediation の3箇所から呼び出す:
 
 1. **`assess_single_skill(skill_name, skill_dir)`** — 1スキルの適性判定結果を返す
 2. **`apply_evolve_proposal(proposal)`** — `evolve_skill_proposal()` の返り値を受け取り、SKILL.md セクション追記 + `references/pitfalls.md` 作成を実行する
@@ -47,7 +47,7 @@ rl-loop の `--evolve` は「最適化のついでに未対応なら提案する
 
 代替案: 適用ロジックを各呼び出し元に個別実装 → 3箇所で同一ロジックが重複し DRY 違反。却下。
 
-### D4: 自己進化ステップは rl-loop の Step 5.5（最適化後）
+### D4: 自己進化ステップは evolve-loop の Step 5.5（最適化後）
 
 テキスト最適化（Step 1-5）完了後に自己進化パターンを組み込む。最適化パッチがテンプレート部分を壊すリスクを回避。
 
@@ -77,7 +77,7 @@ rl-loop の `--evolve` は「最適化のついでに未対応なら提案する
 呼び出し元3箇所:
 1. `remediation.py:fix_skill_evolve()` — evolve パイプライン経由
 2. `skills/evolve-skill/SKILL.md` — 独立コマンド経由
-3. `run-loop.py:_try_evolve_skill()` — rl-loop `--evolve` 経由
+3. `run-loop.py:_try_evolve_skill()` — evolve-loop `--evolve` 経由
 
 ## Risks / Trade-offs
 

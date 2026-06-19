@@ -62,4 +62,4 @@ correction_detect.py は例外発生時に stderr に警告を出力し、exit 0
 
 #### Scenario: JSON パースエラー
 - **WHEN** stdin から不正な JSON が入力される
-- **THEN** stderr に `[rl-anything:correction] parse error: ...` を出力し、exit 0 で終了する
+- **THEN** stderr に `[evolve-anything:correction] parse error: ...` を出力し、exit 0 で終了する

@@ -23,4 +23,4 @@
 
 - [x] 4.1 `docs/evolve/prune.md` に参照型スキルの判断基準を追記
 - [x] 4.2 audit レポートに「ゼロ呼び出しだが reference 未設定」の警告を追加
-- [ ] 4.3 GitHub Issue todoroki-godai/rl-anything#1 を close する（コミット後に実行）
+- [ ] 4.3 GitHub Issue todoroki-godai/evolve-anything#1 を close する（コミット後に実行）

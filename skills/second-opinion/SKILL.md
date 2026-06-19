@@ -138,14 +138,14 @@ B) 元の前提を維持する
 
 ```
 # office-hours 後にセカンドオピニオン
-/rl-anything:second-opinion startup
+/evolve-anything:second-opinion startup
 
 # 設計レビュー
-/rl-anything:second-opinion general
+/evolve-anything:second-opinion general
 
 # モード自動判定（会話文脈から）
-/rl-anything:second-opinion
+/evolve-anything:second-opinion
 
 # コンテキスト直接指定
-/rl-anything:second-opinion general "マイクロサービス vs モノリスの設計判断"
+/evolve-anything:second-opinion general "マイクロサービス vs モノリスの設計判断"
 ```

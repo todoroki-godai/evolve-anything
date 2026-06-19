@@ -1,6 +1,6 @@
 ## 1. 環境観測 hooks（Observe）
 
-- [x] 1.0 ~/.claude/rl-anything/ ディレクトリの初期化スクリプト（ディレクトリ作成 + .gitignore）
+- [x] 1.0 ~/.claude/evolve-anything/ ディレクトリの初期化スクリプト（ディレクトリ作成 + .gitignore）
 - [x] 1.1 hooks/observe.py — PostToolUse async hook（使用スキル・ファイルパス・エラー記録）
 - [x] 1.2 hooks/observe.py — global スキル使用時にプロジェクトパスも usage-registry.jsonl に記録
 - [x] 1.3 hooks/session_summary.py — Stop async hook（セッション要約を sessions.jsonl に追記）
@@ -23,7 +23,7 @@
 
 ## 3. フィードバックコマンド
 
-- [x] 3.1 skills/feedback/SKILL.md — /rl-anything:feedback スキル作成
+- [x] 3.1 skills/feedback/SKILL.md — /evolve-anything:feedback スキル作成
 - [x] 3.2 gh 認証チェックフロー実装
 - [x] 3.3 対話フロー（カテゴリ → ドメイン → スコア → 自由記述）
 - [x] 3.4 プライバシー保護ルール（スキル内容・パスを含めない）
@@ -41,7 +41,7 @@
 - [x] 4.5 Scope Advisory レポート（Usage Registry ベース）
 - [x] 4.6 scripts/aggregate-runs.py（クロスラン集計：戦略別有効性・スコア推移）
 - [x] 4.7 1画面レポート出力
-- [x] 4.8 skills/audit/SKILL.md — /rl-anything:audit スキル作成
+- [x] 4.8 skills/audit/SKILL.md — /evolve-anything:audit スキル作成
 
 ## 5. 淘汰（Prune）
 
@@ -49,10 +49,10 @@
 - [x] 5.2 zero invocation 検出（usage.jsonl ベース、30日ルール）
 - [x] 5.3 global スキルの安全判断（Usage Registry で cross-PJ 使用状況確認）
 - [x] 5.4 重複検出（4.4 で実装した意味的類似度の共通ユーティリティ関数を再利用）
-- [x] 5.5 アーカイブ処理（.claude/rl-anything/archive/ へ移動）
+- [x] 5.5 アーカイブ処理（.claude/evolve-anything/archive/ へ移動）
 - [x] 5.6 アーカイブ提案 + 人間承認フロー
 - [x] 5.7 復元コマンド
-- [x] 5.8 skills/prune/SKILL.md — /rl-anything:prune スキル作成
+- [x] 5.8 skills/prune/SKILL.md — /evolve-anything:prune スキル作成
 - [x] 5.9 復元失敗時のエラーハンドリング（archive にファイルが存在しない場合）
 
 ## 6. 発見（Discover）
@@ -64,7 +64,7 @@
 - [x] 6.5 スキル候補の生成（SKILL.md 500行バリデーション付き）
 - [x] 6.6 ルール候補の生成（3行バリデーション付き）
 - [x] 6.7 claude-reflect データの取り込み（オプション、未インストール時はスキップ）
-- [x] 6.8 skills/discover/SKILL.md — /rl-anything:discover スキル作成
+- [x] 6.8 skills/discover/SKILL.md — /evolve-anything:discover スキル作成
 
 ## 7. 統合（Evolve オーケストレーター）
 
@@ -74,7 +74,7 @@
 - [x] 7.2 観測データ量による自動スキップ判定（前回 evolve 実行以降のセッション数が3未満 / 10観測未満）
 - [x] 7.3 --dry-run モード（レポートのみ、変更なし）
 - [x] 7.4 連続実行時のべき等性（前回以降の新規データのみ処理）
-- [x] 7.5 skills/evolve/SKILL.md — /rl-anything:evolve スキル作成
+- [x] 7.5 skills/evolve/SKILL.md — /evolve-anything:evolve スキル作成
 
 ## 8. 評価関数の自己成長
 
@@ -83,7 +83,7 @@
 - [x] 8.3 rejection_reason の頻度分析 → 欠落評価軸の提案
 - [x] 8.4 CoT reason のパターン分析 → 評価軸の重み調整提案
 - [x] 8.5 adversarial probe: ゲーミング候補を生成して fitness の脆弱性検出
-- [x] 8.6 skills/evolve-fitness/SKILL.md — /rl-anything:evolve-fitness スキル作成
+- [x] 8.6 skills/evolve-fitness/SKILL.md — /evolve-anything:evolve-fitness スキル作成
 - [x] 8.7 全変更の人間承認フロー
 
 ## 9. 肥大化制御の自動化

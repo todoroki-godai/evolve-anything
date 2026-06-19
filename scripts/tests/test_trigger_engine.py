@@ -2,7 +2,7 @@
 """trigger_engine.py の DATA_DIR + min_sessions + rolling pruning テスト。
 
 検証:
-1. CLAUDE_PLUGIN_DATA 未設定時は ~/.claude/rl-anything/ を指す
+1. CLAUDE_PLUGIN_DATA 未設定時は ~/.claude/evolve-anything/ を指す
 2. CLAUDE_PLUGIN_DATA 設定時はそのパスに切り替わる（DATA_DIR バグ修正）
 3. DEFAULT_TRIGGER_CONFIG の min_sessions がデフォルト 3 である
 4. _prune_sessions_jsonl がファイルを max_lines 以下に切り詰める
@@ -47,10 +47,10 @@ def _import_trigger(env: dict[str, str] | None = None) -> dict:
 
 class TestDataDir:
     def test_default_path(self, tmp_path, monkeypatch):
-        """CLAUDE_PLUGIN_DATA 未設定時は ~/.claude/rl-anything/ を指す。"""
+        """CLAUDE_PLUGIN_DATA 未設定時は ~/.claude/evolve-anything/ を指す。"""
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
         result = _import_trigger()
-        expected = str(Path.home() / ".claude" / "rl-anything")
+        expected = str(Path.home() / ".claude" / "evolve-anything")
         assert result["data_dir"] == expected
 
     def test_env_override(self, tmp_path):
@@ -61,7 +61,7 @@ class TestDataDir:
 
     def test_env_override_plugin_data_dir(self, tmp_path):
         """プラグイン実行時の実際のパス形式でも機能する。"""
-        plugin_dir = str(tmp_path / "plugins" / "data" / "rl-anything-rl-anything")
+        plugin_dir = str(tmp_path / "plugins" / "data" / "evolve-anything-evolve-anything")
         result = _import_trigger({"CLAUDE_PLUGIN_DATA": plugin_dir})
         assert result["data_dir"] == plugin_dir
 

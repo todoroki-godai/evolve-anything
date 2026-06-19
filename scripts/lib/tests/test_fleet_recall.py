@@ -212,7 +212,7 @@ class TestFormatHits:
 
 
 class TestRecallCLI:
-    """rl-fleet recall サブコマンドの dispatch。"""
+    """evolve-fleet recall サブコマンドの dispatch。"""
 
     def _corpus(self, tmp_path):
         root = tmp_path / "projects"

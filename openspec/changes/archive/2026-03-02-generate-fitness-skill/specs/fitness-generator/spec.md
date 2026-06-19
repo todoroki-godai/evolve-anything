@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: fitness 関数の自動生成
-analyze-project.py の出力JSONを入力として、プロジェクト固有の fitness 関数（Python スクリプト）を生成しなければならない（MUST）。生成されたスクリプトは既存の rl-anything インターフェース（stdin でスキル内容 → stdout で 0.0-1.0 スコア）に準拠しなければならない（MUST）。
+analyze-project.py の出力JSONを入力として、プロジェクト固有の fitness 関数（Python スクリプト）を生成しなければならない（MUST）。生成されたスクリプトは既存の evolve-anything インターフェース（stdin でスキル内容 → stdout で 0.0-1.0 スコア）に準拠しなければならない（MUST）。
 
 #### Scenario: 正常な生成フロー
 - **WHEN** analyze-project.py の出力JSONが与えられる
@@ -24,7 +24,7 @@ analyze-project.py の出力JSONを入力として、プロジェクト固有の
 - **THEN** エラーメッセージを stderr に出力し、手動生成用のテンプレートパス（`templates/fitness-template.py`）を提示して exit 1 で終了しなければならない（MUST）
 
 ### Requirement: 生成される fitness 関数のインターフェース準拠
-生成されるPythonスクリプトは rl-anything の fitness 関数インターフェースに厳密に準拠しなければならない（MUST）。
+生成されるPythonスクリプトは evolve-anything の fitness 関数インターフェースに厳密に準拠しなければならない（MUST）。
 
 #### Scenario: stdin/stdout インターフェース
 - **WHEN** 生成された fitness 関数に stdin でスキル内容を渡す

@@ -119,7 +119,7 @@ def cleanup_context_file(session_id: str) -> None:
         if ctx_path.exists():
             ctx_path.unlink()
     except OSError as e:
-        print(f"[rl-anything:session_summary] cleanup error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:session_summary] cleanup error: {e}", file=sys.stderr)
 
 
 def _cleanup_instructions_loaded_flag(session_id: str) -> None:
@@ -129,7 +129,7 @@ def _cleanup_instructions_loaded_flag(session_id: str) -> None:
         if flag.exists():
             flag.unlink()
     except OSError as e:
-        print(f"[rl-anything:session_summary] instructions_loaded flag cleanup error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:session_summary] instructions_loaded flag cleanup error: {e}", file=sys.stderr)
 
 
 def _get_project() -> str | None:
@@ -199,7 +199,7 @@ def _evaluate_trigger() -> None:
         changed_skills = detect_skill_changes()
         if changed_skills:
             skill_list = ", ".join(changed_skills)
-            result.message += f"\n変更されたスキル: {skill_list}。推奨: /rl-anything:optimize {changed_skills[0]}"
+            result.message += f"\n変更されたスキル: {skill_list}。推奨: /evolve-anything:optimize {changed_skills[0]}"
             result.details["changed_skills"] = changed_skills
         # graceful degradation: skill-triage は非同期で別プロセス起動
         # 結果は次回セッション開始時に instructions_loaded.py が skill-triage-cache.json を読む
@@ -208,7 +208,7 @@ def _evaluate_trigger() -> None:
         _launch_triage_async()
     except Exception as e:
         # Silent failure — session end processing must continue
-        print(f"[rl-anything:session_summary] trigger eval error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:session_summary] trigger eval error: {e}", file=sys.stderr)
 
 
 def _launch_triage_async() -> None:
@@ -258,9 +258,9 @@ def main() -> None:
         event = json.loads(raw)
         handle_stop(event)
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[rl-anything:session_summary] parse error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:session_summary] parse error: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"[rl-anything:session_summary] unexpected error: {e}", file=sys.stderr)
+        print(f"[evolve-anything:session_summary] unexpected error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

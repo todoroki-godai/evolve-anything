@@ -20,7 +20,7 @@ remediation-outcomes.jsonl の実績データから、issue_type 別の最適 co
 - **THEN** キャリブレーション結果の算出と表示は通常通り行うが、confidence-calibration.json への書き込みは行わない
 
 ### Requirement: Calibration result storage
-キャリブレーション結果を `~/.claude/rl-anything/confidence-calibration.json` に保存しなければならない（SHALL）。
+キャリブレーション結果を `~/.claude/evolve-anything/confidence-calibration.json` に保存しなければならない（SHALL）。
 
 #### Scenario: Calibration file format
 - **WHEN** キャリブレーションが完了した

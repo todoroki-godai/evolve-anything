@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything v0.12.0 に対する ambiguous-intent-resolver / senior-engineer の2エージェントレビューで5つの優先改善項目が特定された。
+evolve-anything v0.12.0 に対する ambiguous-intent-resolver / senior-engineer の2エージェントレビューで5つの優先改善項目が特定された。
 
 現状の課題:
 - `scripts/` 直下と `skills/*/scripts/` に同名ファイルが5組存在（discover, evolve, audit, aggregate_runs, fitness_evolution）。テストで `importlib` workaround が必要
@@ -20,7 +20,7 @@ rl-anything v0.12.0 に対する ambiguous-intent-resolver / senior-engineer の
 
 **Non-Goals:**
 - GeneticOptimizer の責務分割（別 change で対応）
-- rl-loop の claude CLI 出力依存問題（別 change で対応）
+- evolve-loop の claude CLI 出力依存問題（別 change で対応）
 - Individual.id の UUID 化（別 change で対応）
 - マルチユーザー・マルチプロジェクトのデータ分離改善
 
@@ -36,7 +36,7 @@ rl-anything v0.12.0 に対する ambiguous-intent-resolver / senior-engineer の
 
 ### D2: 偽陽性フィードバックの保存形式
 
-**決定**: `~/.claude/rl-anything/false_positives.jsonl` に JSONL 形式で保存。`detect_correction()` で読み込んでフィルタリングする。
+**決定**: `~/.claude/evolve-anything/false_positives.jsonl` に JSONL 形式で保存。`detect_correction()` で読み込んでフィルタリングする。
 
 **理由**: 既存の JSONL パターン（corrections.jsonl, usage.jsonl）と一貫性がある。起動時に全件ロードは避け、reflect 実行時に参照する設計。
 

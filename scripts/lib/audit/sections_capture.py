@@ -146,7 +146,7 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
         return header + [
             f"hook 経由の capture 率は低い（{rate:.0%}）が、意味判定レーン（llm_judge）で "
             f"{llm_judge} 件捕捉済み。{channel_line}",
-            "未昇格の llm_judge シグナルは `/rl-anything:evolve` の今日の修正確認 phase で昇格可能"
+            "未昇格の llm_judge シグナルは `/evolve-anything:evolve` の今日の修正確認 phase で昇格可能"
             "（報酬入力は枯渇していない・advisory・スコア非関与, #421/#476）。",
             "",
         ]

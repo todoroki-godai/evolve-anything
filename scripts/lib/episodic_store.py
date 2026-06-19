@@ -1,8 +1,8 @@
 """episodic_store — 直近セッションの「適用済み修正」を DuckDB で TTL 管理するストア。
 
 3層メモリ設計 (issue #189) の episodic 層:
-  working   ~/.claude/rl-anything/corrections.jsonl  (変更なし)
-  episodic  ~/.claude/rl-anything/episodic.db         (このモジュール)
+  working   ~/.claude/evolve-anything/corrections.jsonl  (変更なし)
+  episodic  ~/.claude/evolve-anything/episodic.db         (このモジュール)
   semantic  ~/.claude/projects/<pj>/memory/*.md       (変更なし)
 
 DuckDB 有: episodic.db の episodic_events テーブルを SoR とする。
@@ -24,7 +24,7 @@ from typing import Any
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR: Path = (
-    Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+    Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 )
 
 EPISODIC_DB_NAME = "episodic.db"

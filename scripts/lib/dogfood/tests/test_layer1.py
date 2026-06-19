@@ -1,7 +1,7 @@
 """dogfood.layer1 のユニットテスト（#496 Layer 1 オーケストレーション）。
 
 evolve subprocess 起動は重いので mock し、snapshot 差分判定のロジックだけ検証する。
-実機 dry-run は bin/rl-dogfood-gate --layer 1 で別途確認する。
+実機 dry-run は bin/evolve-dogfood-gate --layer 1 で別途確認する。
 """
 from __future__ import annotations
 

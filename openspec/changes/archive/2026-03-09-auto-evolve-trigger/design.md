@@ -1,6 +1,6 @@
 ## Context
 
-rl-anything は 7 つの observe hooks でテレメトリを収集し、`/evolve` で Diagnose → Compile → Housekeeping の3ステージパイプラインを実行する。しかし `/evolve` は手動実行が前提で、ユーザーが忘れると進化ループが止まる。
+evolve-anything は 7 つの observe hooks でテレメトリを収集し、`/evolve` で Diagnose → Compile → Housekeeping の3ステージパイプラインを実行する。しかし `/evolve` は手動実行が前提で、ユーザーが忘れると進化ループが止まる。
 
 現在の hooks アーキテクチャ:
 - `observe.py` (PostToolUse async): usage/errors 記録
@@ -96,7 +96,7 @@ rl-anything は 7 つの observe hooks でテレメトリを収集し、`/evolve
 
 ### D6: correction トリガーでの関連スキル特定
 
-**決定**: correction レコードの `last_skill` フィールドと `context`（ファイルパス）から関連スキルを特定し、`/rl-anything:optimize <skill>` を提案する。
+**決定**: correction レコードの `last_skill` フィールドと `context`（ファイルパス）から関連スキルを特定し、`/evolve-anything:optimize <skill>` を提案する。
 
 **理由**: corrections.jsonl には `last_skill`（修正が発生したスキル）が記録されているため、再最適化対象を特定できる。`last_skill` が空の場合は汎用の `/evolve` を提案。
 

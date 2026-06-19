@@ -32,7 +32,7 @@ plan → implement → ship の「implement」フェーズを構造化する。
 **gstack plan artifact がある場合:**
 
 ```bash
-rl-usage-log "implement"
+evolve-usage-log "implement"
 setopt +o nomatch 2>/dev/null || true  # zsh compat
 GSTACK_SLUG=""
 if command -v ~/.claude/skills/gstack/bin/gstack-slug &>/dev/null; then
@@ -307,19 +307,19 @@ evolve のたびに効かせるなら audit に section を足す配線が必要
 
 ```
 設計判断が含まれています。ADR を起票しますか？
-→ /rl-anything:spec-keeper
+→ /evolve-anything:spec-keeper
 ```
 
 ---
 
 ### Step 4: テレメトリ記録
 
-実装完了時に rl-anything のテレメトリに記録する。
+実装完了時に evolve-anything のテレメトリに記録する。
 
 ```python
 import json, os, datetime
 
-data_dir = os.environ.get("CLAUDE_PLUGIN_DATA", os.path.expanduser("~/.claude/rl-anything"))
+data_dir = os.environ.get("CLAUDE_PLUGIN_DATA", os.path.expanduser("~/.claude/evolve-anything"))
 os.makedirs(data_dir, exist_ok=True)
 
 record = {

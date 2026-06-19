@@ -5,7 +5,7 @@ __pycache__/
 *.backup
 *.swp
 generations/
-.rl-loop/
+.evolve-loop/
 .claude/session-context.md
 .claude/settings.json
 .claude/worktrees/

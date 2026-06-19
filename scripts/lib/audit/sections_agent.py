@@ -45,7 +45,7 @@ def build_agent_team_section(project_dir: Path) -> Optional[List[str]]:
         # 役割重複は実際の編成問題。⚠ で agent-brushup を促し、孤立も同じブロックに併記する。
         lines.append(
             "⚠ エージェント編成に改善余地。"
-            "`/rl-anything:agent-brushup` で役割整理・編成見直しを検討:"
+            "`/evolve-anything:agent-brushup` で役割整理・編成見直しを検討:"
         )
         for ov in result.role_overlaps:
             lines.append(
@@ -59,7 +59,7 @@ def build_agent_team_section(project_dir: Path) -> Optional[List[str]]:
         # ℹ に下げ、直接起動型なら正常である旨を明示して誤解を防ぐ（整理可否は人間判断）。
         lines.append(
             "ℹ 他エージェントから未参照のエージェントあり（ユーザー直接起動型なら正常）。"
-            "ルーター統合や整理が要るかは `/rl-anything:agent-brushup` で確認:"
+            "ルーター統合や整理が要るかは `/evolve-anything:agent-brushup` で確認:"
         )
         for name in result.isolated:
             lines.append(f"- {name}: 他エージェントから未参照")

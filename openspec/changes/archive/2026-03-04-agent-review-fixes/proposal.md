@@ -1,6 +1,6 @@
 ## Why
 
-ambiguous-intent-resolver と senior-engineer による多角的レビューで、rl-anything v0.12.0 の品質・運用性・セキュリティに関する5つの優先改善項目が特定された。プラグインの信頼性とオンボーディング体験を向上させるために対応する。
+ambiguous-intent-resolver と senior-engineer による多角的レビューで、evolve-anything v0.12.0 の品質・運用性・セキュリティに関する5つの優先改善項目が特定された。プラグインの信頼性とオンボーディング体験を向上させるために対応する。
 
 ## What Changes
 

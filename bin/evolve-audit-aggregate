@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bin/rl-audit-aggregate — クロスラン集計 CLI。"""
+"""bin/evolve-audit-aggregate — クロスラン集計 CLI。"""
 import sys
 from pathlib import Path
 

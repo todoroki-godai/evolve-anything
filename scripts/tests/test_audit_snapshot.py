@@ -100,7 +100,7 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         eval_saturation, "_default_eval_sets_dir", lambda: tmp_path / "no-evalsets"
     )
-    # orphan_store builder は rl-anything 自身の hooks/scripts/skills を走査するため、実プラグインに
+    # orphan_store builder は evolve-anything 自身の hooks/scripts/skills を走査するため、実プラグインに
     # orphan ストアがあると snapshot がブレる。空 tmp に向けて出力を決定論化する（#422）。
     import orphan_store
     monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: tmp_path / "no-plugin")

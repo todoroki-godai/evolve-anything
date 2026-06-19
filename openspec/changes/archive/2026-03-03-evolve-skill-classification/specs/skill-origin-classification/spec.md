@@ -15,11 +15,11 @@
 環境変数 `CLAUDE_PLUGINS_DIR` が設定されている場合はそちらを優先しなければならない (MUST)。
 
 #### Scenario: プラグインキャッシュ配下のスキル
-- **WHEN** `classify_artifact_origin(Path.home() / ".claude" / "plugins" / "cache" / "rl-anything" / "rl-anything" / "0.4.0" / ".claude" / "skills" / "optimize" / "SKILL.md")` を呼び出す
+- **WHEN** `classify_artifact_origin(Path.home() / ".claude" / "plugins" / "cache" / "evolve-anything" / "evolve-anything" / "0.4.0" / ".claude" / "skills" / "optimize" / "SKILL.md")` を呼び出す
 - **THEN** `"plugin"` を返す
 
 #### Scenario: チルダ付きパスの展開
-- **WHEN** `classify_artifact_origin(Path("~/.claude/plugins/cache/rl-anything/rl-anything/0.4.0/.claude/skills/optimize/SKILL.md"))` を呼び出す
+- **WHEN** `classify_artifact_origin(Path("~/.claude/plugins/cache/evolve-anything/evolve-anything/0.4.0/.claude/skills/optimize/SKILL.md"))` を呼び出す
 - **THEN** 関数内でチルダが展開され、`"plugin"` を返す
 
 #### Scenario: グローバルスキル

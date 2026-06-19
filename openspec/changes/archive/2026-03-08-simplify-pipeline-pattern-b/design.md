@@ -70,9 +70,9 @@ observe hooks → JSONL files
 
 ### D3: regression gate を共通ライブラリに抽出
 
-**決定**: `scripts/lib/regression_gate.py` を新設し、optimize.py と rl-loop から参照する。
+**決定**: `scripts/lib/regression_gate.py` を新設し、optimize.py と evolve-loop から参照する。
 
-**理由**: 現在 optimize.py 内にハードコードされた gate ルールが、rl-loop でも別途実装されている。Phase 3 で全層 Compile を実装する際にもこの gate が必要になるため、先行して共通化する。
+**理由**: 現在 optimize.py 内にハードコードされた gate ルールが、evolve-loop でも別途実装されている。Phase 3 で全層 Compile を実装する際にもこの gate が必要になるため、先行して共通化する。
 
 **インターフェース**:
 ```python

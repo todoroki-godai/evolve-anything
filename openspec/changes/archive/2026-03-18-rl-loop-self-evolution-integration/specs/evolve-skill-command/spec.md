@@ -1,19 +1,19 @@
 ## ADDED Requirements
 
-### Requirement: /rl-anything:evolve-skill コマンド
+### Requirement: /evolve-anything:evolve-skill コマンド
 
-`/rl-anything:evolve-skill <name>` コマンドを提供しなければならない（MUST）。指定スキルに対して自己進化適性判定→テンプレート組み込み→人間確認を1コマンドで実行する。
+`/evolve-anything:evolve-skill <name>` コマンドを提供しなければならない（MUST）。指定スキルに対して自己進化適性判定→テンプレート組み込み→人間確認を1コマンドで実行する。
 
 #### Scenario: スキル名指定で実行
-- **WHEN** `/rl-anything:evolve-skill my-skill` を実行する
+- **WHEN** `/evolve-anything:evolve-skill my-skill` を実行する
 - **THEN** `.claude/skills/my-skill/` を対象として適性判定を実行し、結果を表示する
 
 #### Scenario: ファイルパス指定で実行
-- **WHEN** `/rl-anything:evolve-skill .claude/skills/my-skill/SKILL.md` を実行する
+- **WHEN** `/evolve-anything:evolve-skill .claude/skills/my-skill/SKILL.md` を実行する
 - **THEN** 指定パスからスキルディレクトリを解決し、適性判定を実行する
 
 #### Scenario: 引数なしで実行
-- **WHEN** `/rl-anything:evolve-skill` を引数なしで実行する
+- **WHEN** `/evolve-anything:evolve-skill` を引数なしで実行する
 - **THEN** 対象スキルの指定を求めるメッセージを表示する
 
 ### Requirement: 適性判定結果の表示
@@ -59,7 +59,7 @@
 
 ### Requirement: --dry-run オプション
 
-`/rl-anything:evolve-skill my-skill --dry-run` で適性判定結果のみ表示し、ファイル変更を行わないモードを提供しなければならない（MUST）。
+`/evolve-anything:evolve-skill my-skill --dry-run` で適性判定結果のみ表示し、ファイル変更を行わないモードを提供しなければならない（MUST）。
 
 #### Scenario: dry-run 実行
 - **WHEN** `--dry-run` オプション付きで実行する

@@ -42,7 +42,7 @@ _EXCLUDE_DIRS = {
 
 
 def _default_repo_root() -> Path:
-    """rl-anything 自身のリポジトリ（= プラグイン）ルート。
+    """evolve-anything 自身のリポジトリ（= プラグイン）ルート。
 
     module 定数でなく関数にして呼び出し時に解決する（orphan_store の `_default_plugin_root`
     と同じ慣習）。テストは `repo_root` 引数で疑似ツリーに差し替えられる。

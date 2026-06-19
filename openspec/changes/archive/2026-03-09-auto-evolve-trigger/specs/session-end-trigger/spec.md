@@ -42,7 +42,7 @@
 
 #### Scenario: Skill files modified in session
 - **WHEN** セッション中に `git diff` で `.claude/skills/*/SKILL.md` に変更が検出される
-- **THEN** 提案メッセージに「変更されたスキル: {skill_names}」を追加し、`/rl-anything:optimize {skill}` を推奨しなければならない (MUST)
+- **THEN** 提案メッセージに「変更されたスキル: {skill_names}」を追加し、`/evolve-anything:optimize {skill}` を推奨しなければならない (MUST)
 
 #### Scenario: No skill files modified
 - **WHEN** セッション中に SKILL.md の変更が検出されない
@@ -53,7 +53,7 @@
 
 #### Scenario: Audit overdue
 - **WHEN** `evolve-state.json` の `last_audit_timestamp` から `interval_days`（デフォルト: 30）日以上経過
-- **THEN** `pending-trigger.json` に audit 提案（`/rl-anything:audit`）を含めなければならない (MUST)
+- **THEN** `pending-trigger.json` に audit 提案（`/evolve-anything:audit`）を含めなければならない (MUST)
 
 #### Scenario: Audit not overdue
 - **WHEN** 前回 audit からの経過が `interval_days` 未満

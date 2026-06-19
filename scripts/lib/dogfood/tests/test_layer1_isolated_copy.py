@@ -117,7 +117,7 @@ def test_invariance_evolve_pending_dir_excluded(monkeypatch, tmp_path):
             data_path = Path(env["CLAUDE_PLUGIN_DATA"])
             pending = data_path / "evolve_pending"
             pending.mkdir(exist_ok=True)
-            (pending / "rl-anything.json").write_text('{"pending": true}', encoding="utf-8")
+            (pending / "evolve-anything.json").write_text('{"pending": true}', encoding="utf-8")
         output_path.write_text('{"phases":{}}', encoding="utf-8")
         return {"returncode": 0, "stderr": ""}
 

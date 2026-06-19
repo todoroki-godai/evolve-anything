@@ -1,7 +1,7 @@
-"""rl-fleet tokens サブコマンド + token_usage SoR からのメトリクス注入。
+"""evolve-fleet tokens サブコマンド + token_usage SoR からのメトリクス注入。
 
 `_inject_token_metrics` は status コマンドが FleetRow に tokens_30d / cache_hit_pct を
-埋めるために使う。`_run_tokens` は `rl-fleet tokens` サブコマンド本体。
+埋めるために使う。`_run_tokens` は `evolve-fleet tokens` サブコマンド本体。
 fleet/__init__.py から re-export される（後方互換）。
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _inject_token_metrics(rows: list[FleetRow], days: int = 30) -> None:
         if slug and slug not in by_slug:
             by_slug[slug] = c
     for row in rows:
-        # row.pj_name 末尾セグメントは "-" で区切られた最後 (例: "rl-anything" → "anything")
+        # row.pj_name 末尾セグメントは "-" で区切られた最後 (例: "evolve-anything" → "anything")
         # token_usage_ingest._pj_slug_from_id と同ロジック
         last = row.pj_name.rstrip("-").split("-")[-1].lower() if row.pj_name else ""
         c = by_slug.get(last)
@@ -99,7 +99,7 @@ def _resolve_pj_id(query: str) -> str | list[str] | None:
 
 
 def _run_tokens(args) -> int:
-    """`rl-fleet tokens` サブコマンド。"""
+    """`evolve-fleet tokens` サブコマンド。"""
     try:
         import token_usage_query as tuq  # type: ignore
         import token_usage_store as tus  # type: ignore
@@ -138,7 +138,7 @@ def _run_tokens(args) -> int:
             db_empty = True
 
     if db_empty:
-        msg = "[fleet tokens] No data. Run `rl-fleet tokens --backfill` to ingest transcripts."
+        msg = "[fleet tokens] No data. Run `evolve-fleet tokens --backfill` to ingest transcripts."
         print(msg, file=sys.stderr)
         if getattr(args, "json", False):
             print(json.dumps({"empty": True}, ensure_ascii=False))

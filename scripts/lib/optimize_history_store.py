@@ -1,11 +1,11 @@
 """optimize_history_store — accept/reject 履歴の正準ストア（ADR-031）。
 
-optimize / rl-loop / evolve-diff の accept/reject 決定ログ（fitness calibration の母集団）を
+optimize / evolve-loop / evolve-diff の accept/reject 決定ログ（fitness calibration の母集団）を
 DATA_DIR 配下の project スコープ JSONL に集約する単一ソース。
 
 背景: 従来は読み書きが 3 経路に分裂（split-brain）していた:
   - optimize / evolve-diff → <PLUGIN_ROOT>/skills/.../generations/history.jsonl（更新でリセット）
-  - run_loop            → <cwd>/.rl-loop/history.jsonl（readers が読まない孤立）
+  - run_loop            → <cwd>/.evolve-loop/history.jsonl（readers が読まない孤立）
   - readers             → plugin generations を読む
 このモジュールに集約し、保存先を永続 DATA_DIR の `optimize_history/<slug>.jsonl` に一本化する。
 
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "rl-anything"
+DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 HISTORY_ROOT = DATA_DIR / "optimize_history"
 
 # git repo 外（slug 解決不能）の保全先。calibration 母集団からは除外される。

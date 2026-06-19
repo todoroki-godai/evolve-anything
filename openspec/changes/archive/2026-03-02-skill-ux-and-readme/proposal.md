@@ -1,6 +1,6 @@
 ## Why
 
-現在の rl-anything は使い方が `python3 <PLUGIN_DIR>/skills/.../optimize.py --target ...` という長いコマンドで、ユーザーが Plugin ディレクトリのパスを知っている必要がある。Claude Code Plugin としてインストールした意味が薄い。また README.md にはプロジェクトが抱える課題と導入効果のストーリーがなく、「なぜこの Plugin を入れるべきか」が伝わらない。
+現在の evolve-anything は使い方が `python3 <PLUGIN_DIR>/skills/.../optimize.py --target ...` という長いコマンドで、ユーザーが Plugin ディレクトリのパスを知っている必要がある。Claude Code Plugin としてインストールした意味が薄い。また README.md にはプロジェクトが抱える課題と導入効果のストーリーがなく、「なぜこの Plugin を入れるべきか」が伝わらない。
 
 ## What Changes
 
@@ -12,7 +12,7 @@
 
 ### New Capabilities
 
-- `slash-command-ux`: スラッシュコマンド（`/optimize`, `/rl-loop`）でスクリプト実行を Claude に委ねる UX
+- `slash-command-ux`: スラッシュコマンド（`/optimize`, `/evolve-loop`）でスクリプト実行を Claude に委ねる UX
 - `readme-story`: 導入前の課題 → 導入 → 効果を描く物語風ストーリーを README に追加
 
 ### Modified Capabilities
@@ -22,6 +22,6 @@
 ## Impact
 
 - `skills/genetic-prompt-optimizer/SKILL.md`: スキル名・instructions 変更（予定）
-- `skills/rl-loop-orchestrator/SKILL.md`: instructions 変更（予定）
+- `skills/evolve-loop-orchestrator/SKILL.md`: instructions 変更（予定）
 - `README.md`: 全面更新
 - `CLAUDE.md`: クイックスタート部分の更新

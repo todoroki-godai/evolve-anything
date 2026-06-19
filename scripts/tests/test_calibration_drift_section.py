@@ -68,7 +68,7 @@ def test_bootstrap_structural_caveat(monkeypatch, tmp_path):
     断定で出さず、構造的に対象外の可能性を明示する（#479 の structural guard を
     insufficient_data だけでなく bootstrap にも適用）。
 
-    skill_evolve 未採点 PJ では optimize/rl-loop 由来の少数 accept/reject が
+    skill_evolve 未採点 PJ では optimize/evolve-loop 由来の少数 accept/reject が
     history に残ると bootstrap 経路に入り、従来は「あと N 件」が出ていた。
     """
     monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(10))

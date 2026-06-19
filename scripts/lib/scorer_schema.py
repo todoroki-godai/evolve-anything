@@ -1,6 +1,6 @@
-"""rl-scorer エージェント出力のスキーマ定義とバリデーション。
+"""evolve-scorer エージェント出力のスキーマ定義とバリデーション。
 
-rl-scorer が返すべき JSON 構造を型付きで表現し、
+evolve-scorer が返すべき JSON 構造を型付きで表現し、
 キー欠損・型不正を早期に検出する。
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ class ConfidenceInterval:
 
 
 class ScorerValidationError(ValueError):
-    """rl-scorer の出力が期待スキーマを満たさない。"""
+    """evolve-scorer の出力が期待スキーマを満たさない。"""
     def __init__(self, msg: str, raw: dict):
         super().__init__(msg)
         self.raw = raw
@@ -51,7 +51,7 @@ class AxisResult:
 
 @dataclass(frozen=True)
 class ScorerOutput:
-    """rl-scorer エージェントの統合出力スキーマ。"""
+    """evolve-scorer エージェントの統合出力スキーマ。"""
     technical: AxisResult
     domain_quality: AxisResult
     structure: AxisResult
@@ -72,7 +72,7 @@ def validate_scorer_output(raw: dict) -> ScorerOutput:
     """raw dict を ScorerOutput に変換。欠損・型エラーは ScorerValidationError を raise。
 
     Args:
-        raw: rl-scorer が返した JSON をパースした dict
+        raw: evolve-scorer が返した JSON をパースした dict
 
     Returns:
         バリデーション済みの ScorerOutput

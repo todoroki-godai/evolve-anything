@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: 共通 regression gate ライブラリ
-`scripts/lib/regression_gate.py` を新設し、ゲートチェックロジックを一元管理しなければならない（MUST）。optimize.py および rl-loop から参照される。
+`scripts/lib/regression_gate.py` を新設し、ゲートチェックロジックを一元管理しなければならない（MUST）。optimize.py および evolve-loop から参照される。
 
 #### Scenario: check_gates が全チェックを実行
 - **WHEN** `check_gates(candidate="...", original="---\nname: test\n---\ncontent", max_lines=500, pitfall_patterns_path="references/pitfalls.md")` を呼び出す
@@ -61,13 +61,13 @@ optimize.py は `scripts/lib/regression_gate.py` から `check_gates` を import
 - **WHEN** optimize.py がパッチ候補を評価する
 - **THEN** `check_gates()` を呼び出してゲート判定を行い、不合格時は `score=0.0` を設定する
 
-### Requirement: rl-loop のゲート利用方針
-rl-loop-orchestrator は optimize 経由で gate 済みのパッチを受け取るため、full gate の再実行は不要である。rl-loop 独自の `check_line_limit()` による行数チェックは維持する（MUST）。rl-loop が直接パッチを生成する場合は `check_gates()` を使用すべきである（SHOULD）。
+### Requirement: evolve-loop のゲート利用方針
+evolve-loop-orchestrator は optimize 経由で gate 済みのパッチを受け取るため、full gate の再実行は不要である。evolve-loop 独自の `check_line_limit()` による行数チェックは維持する（MUST）。evolve-loop が直接パッチを生成する場合は `check_gates()` を使用すべきである（SHOULD）。
 
-#### Scenario: rl-loop が optimize 経由でパッチを受け取る
-- **WHEN** rl-loop が optimize の出力パッチを使用する
+#### Scenario: evolve-loop が optimize 経由でパッチを受け取る
+- **WHEN** evolve-loop が optimize の出力パッチを使用する
 - **THEN** full gate は再実行せず、`check_line_limit()` による行数チェックのみ実行する
 
-#### Scenario: rl-loop が直接パッチを生成する
-- **WHEN** rl-loop が optimize を経由せず独自にパッチを生成する
+#### Scenario: evolve-loop が直接パッチを生成する
+- **WHEN** evolve-loop が optimize を経由せず独自にパッチを生成する
 - **THEN** `check_gates()` を使用してゲート判定を行う

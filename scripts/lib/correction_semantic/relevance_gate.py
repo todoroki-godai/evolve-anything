@@ -2,7 +2,7 @@
 
 FinAcumen（Financial Multimodal Reasoning via Self-Evolving Experience Memory Harness,
 arXiv 2606.17642）の「意味的関連度が校正済み閾値を超えたときだけ経験を条件付け、無関係
-メモリはフォールバックで明示的に抑制する」を rl-anything の reflect / correction_semantic に
+メモリはフォールバックで明示的に抑制する」を evolve-anything の reflect / correction_semantic に
 増分移植する。論文コードは未公開のため概念のみ移植し、類似度は既存 jaccard 流儀を再利用する
 （独自の閾値学習機構はフルでは作らない — Issue #565 スコープ厳守）。
 

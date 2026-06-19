@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""bin/rl-backfill-turn-indices — sessions.jsonl と corrections.jsonl に turn 系フィールドを追記。
+"""bin/evolve-backfill-turn-indices — sessions.jsonl と corrections.jsonl に turn 系フィールドを追記。
 
 constraint_decay が必要とする max_turn_index / turn_index を一度きり backfill する。
 
 Usage:
-    bin/rl-backfill-turn-indices [--apply] [--data-dir PATH] [--projects-dir PATH]
+    bin/evolve-backfill-turn-indices [--apply] [--data-dir PATH] [--projects-dir PATH]
 
 Options:
     --apply          実際に書き込む（デフォルトは dry-run）
-    --data-dir       rl-anything データディレクトリ（デフォルト: ~/.claude/rl-anything）
+    --data-dir       evolve-anything データディレクトリ（デフォルト: ~/.claude/evolve-anything）
     --projects-dir   Claude プロジェクトディレクトリ（デフォルト: ~/.claude/projects）
     --verify         backfill 後の整合性確認のみ（--apply と併用）
 """
@@ -63,7 +63,7 @@ def _verify(data_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--apply", action="store_true", help="実際に書き込む（デフォルトは dry-run）")
-    parser.add_argument("--data-dir", type=Path, default=Path.home() / ".claude" / "rl-anything")
+    parser.add_argument("--data-dir", type=Path, default=Path.home() / ".claude" / "evolve-anything")
     parser.add_argument("--projects-dir", type=Path, default=Path.home() / ".claude" / "projects")
     parser.add_argument("--verify", action="store_true", help="整合性確認を実行")
     args = parser.parse_args()

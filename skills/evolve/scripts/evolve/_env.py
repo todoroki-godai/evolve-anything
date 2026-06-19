@@ -22,7 +22,7 @@ _plugin_root = PLUGIN_ROOT
 
 
 def _resolve_data_dir() -> Path:
-    """DATA_DIR を解決（CLAUDE_PLUGIN_DATA 優先、未設定は ~/.claude/rl-anything）。
+    """DATA_DIR を解決（CLAUDE_PLUGIN_DATA 優先、未設定は ~/.claude/evolve-anything）。
 
     rl_common.resolve_data_dir（#364 Phase 2 の marker ゲート redirect 含む）に揃え、
     reader（hooks / scripts.lib）と同一 DATA_DIR に解決する。従来は env を無視して
@@ -40,7 +40,7 @@ def _resolve_data_dir() -> Path:
     except Exception:
         if env:
             return Path(env)
-        return Path.home() / ".claude" / "rl-anything"
+        return Path.home() / ".claude" / "evolve-anything"
 
 
 DATA_DIR = _resolve_data_dir()

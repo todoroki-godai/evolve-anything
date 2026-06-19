@@ -120,7 +120,7 @@ def check_ctx_usage(
         return False
 
     print(
-        f"[rl-anything:ctx_guard] ⚠ context 占有率 {pct:.1f}% "
+        f"[evolve-anything:ctx_guard] ⚠ context 占有率 {pct:.1f}% "
         f"({ctx:,} / {window_tokens:,} tokens, 閾値 {warn_percent}%)\n"
         f"  compaction が走る前にできること:\n"
         f"  - /compact で手動圧縮（作業文脈は checkpoint が次セッションに自動復元）\n"

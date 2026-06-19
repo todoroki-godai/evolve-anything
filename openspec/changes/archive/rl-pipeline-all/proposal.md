@@ -13,7 +13,7 @@
 ### New Capabilities
 - `rl-genetic-skill-optimizer`: スキル/ルールの遺伝的最適化フレームワーク。バリエーション生成（突然変異 + 交叉）、適応度関数による評価、世代管理、バックアップ/復元
 - `rl-autonomous-loop`: 3役分担型の自律進化ループ。ベースライン取得→バリエーション生成→評価→選択→人間確認の1サイクルを自動化
-- `rl-scorer-agent`: 技術品質 + ドメイン品質 + 構造評価の統合スコアを算出する採点エージェント
+- `evolve-scorer-agent`: 技術品質 + ドメイン品質 + 構造評価の統合スコアを算出する採点エージェント
 - `rl-fitness-functions`: プロジェクト固有の適応度関数（汎用・ルールベース・カスタム）
 
 ### Modified Capabilities
@@ -21,11 +21,11 @@
 
 ## Impact
 
-- **新規ディレクトリ**: `skills/genetic-prompt-optimizer/`, `skills/rl-loop-orchestrator/`
-- **新規エージェント**: `agents/rl-scorer.md`
+- **新規ディレクトリ**: `skills/genetic-prompt-optimizer/`, `skills/evolve-loop-orchestrator/`
+- **新規エージェント**: `agents/evolve-scorer.md`
 - **依存**: `claude` CLI（headless mode）
 
 ## Origin
 
-atlas-breeaders プロジェクトで設計・実装され、rl-anything plugin として独立した。
+atlas-breeaders プロジェクトで設計・実装され、evolve-anything plugin として独立した。
 Layer 1（rl-session-log-analyzer: claude-reflect 拡張）は atlas-breeaders 固有のため除外。

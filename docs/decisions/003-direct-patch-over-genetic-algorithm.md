@@ -28,7 +28,7 @@ genetic-prompt-optimizer は世代ループ（mutate -> evaluate -> select）で
 - LLM コールが 6~15+ から 1~2 回に大幅削減され、コスト効率が劇的に改善
 - corrections の豊富なテキスト情報を直接活用することで、改善精度が向上
 - 6モジュール削除によりコードベースが大幅に簡素化され、保守性が向上
-- rl-loop-orchestrator との CLI 互換性を維持し、ユーザーへの影響を最小化
+- evolve-loop-orchestrator との CLI 互換性を維持し、ユーザーへの影響を最小化
 
 **悪い影響:**
 - BREAKING CHANGE: GA ベースの最適化は完全に廃止され、過去の GA パラメータは利用不可

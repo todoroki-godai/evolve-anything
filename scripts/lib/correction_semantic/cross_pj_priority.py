@@ -12,7 +12,7 @@
   直接削る。confirmed 済みの他 PJ idiom と一致する group を**先頭に出して判断材料を足す**。
 - **自動 confirmed 化・自動昇格はしない**（ADR-047 不変条件「人間が承認していないパターンは
   絶対に自動昇格しない」を維持）。本モジュールは提示順とラベルだけ変える純関数で、ストアに
-  一切書かない（read 専用）。承認経路は #463 の通常フロー（rl-reflect --promote-weak）が担う。
+  一切書かない（read 専用）。承認経路は #463 の通常フロー（evolve-reflect --promote-weak）が担う。
 
 正規化の流用（Success Criteria #462）: テキスト一致は store.normalize_idiom_text を通す。
 idiom_autopromote と**同じ 1 関数**を共有し、正規化ロジックを二重実装しない。

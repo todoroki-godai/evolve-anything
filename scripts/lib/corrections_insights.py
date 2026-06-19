@@ -24,7 +24,7 @@ try:
 except ImportError:
     _POSITIVE_TYPES = frozenset({"perfect", "great-approach", "keep-doing"})
 
-CORRECTIONS_FILE = Path.home() / ".claude" / "rl-anything" / "corrections.jsonl"
+CORRECTIONS_FILE = Path.home() / ".claude" / "evolve-anything" / "corrections.jsonl"
 MIN_DISPLAY_RECORDS = 10  # この件数以上ないと意味のある集計にならない（D9）
 
 

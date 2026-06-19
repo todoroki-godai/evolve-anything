@@ -6,7 +6,7 @@ corrections.jsonl に対象スキルに関連する未適用レコード（`refl
 
 #### Scenario: corrections が存在する場合に error_guided モードで動作する
 
-- **WHEN** `~/.claude/rl-anything/corrections.jsonl` に `last_skill` が対象スキル名と一致し、`reflect_status` が `"applied"` でないレコードが 1 件以上存在する
+- **WHEN** `~/.claude/evolve-anything/corrections.jsonl` に `last_skill` が対象スキル名と一致し、`reflect_status` が `"applied"` でないレコードが 1 件以上存在する
 - **THEN** `error_guided` モードで動作し、corrections の `message` / `correction_type` / `extracted_learning` を LLM プロンプトに含めてスキルの改善版を 1 回の `claude -p` コールで生成する
 
 #### Scenario: corrections が大量にある場合は直近 N 件に制限する

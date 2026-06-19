@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """クロスラン集計スクリプト。
 
-複数の optimize/rl-loop 実行結果を集計し、
+複数の optimize/evolve-loop 実行結果を集計し、
 戦略別（elite/mutation/crossover）の有効性・スコア推移・accept/reject 比率を出力する。
 """
 import json
@@ -16,7 +16,7 @@ if str(_lib) not in sys.path:
     sys.path.insert(0, str(_lib))
 # GENERATIONS_DIR は run 成果物（個体データ）の収集元として維持。
 # accept/reject 履歴は ADR-031 で optimize_history_store（DATA_DIR/optimize_history/<slug>）に集約。
-# 旧 RL_LOOP_DIR（cwd/.rl-loop）参照は未使用の split 残骸だったため撤去。
+# 旧 RL_LOOP_DIR（cwd/.evolve-loop）参照は未使用の split 残骸だったため撤去。
 GENERATIONS_DIR = PLUGIN_ROOT / "skills" / "genetic-prompt-optimizer" / "scripts" / "generations"
 
 

@@ -149,11 +149,11 @@ def make_global_candidates_summary(count: int) -> Dict[str, Any]:
 
     global 候補は PJ 単独 evolve では判断材料が不足する（cross-PJ 使用状況が必要）ため、
     producer 側で全件配列を result に積まず件数＋誘導ポインタに畳む。個別判断は
-    PJ 横断で見られる ``bin/rl-fleet status`` / グローバル audit に委ねる（#525-3 の consumer 仕様）。
+    PJ 横断で見られる ``bin/evolve-fleet status`` / グローバル audit に委ねる（#525-3 の consumer 仕様）。
     """
     return {
         "count": count,
-        "pointer": "全件と判断材料は `bin/rl-fleet status` で確認",
+        "pointer": "全件と判断材料は `bin/evolve-fleet status` で確認",
     }
 
 

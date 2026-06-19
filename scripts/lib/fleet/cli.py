@@ -1,7 +1,7 @@
-"""rl-fleet CLI エントリポイント (argparse + status / discover / test-guard サブコマンド)。
+"""evolve-fleet CLI エントリポイント (argparse + status / discover / test-guard サブコマンド)。
 
 `tokens` サブコマンドは `cli_tokens.py` に分離済み。fleet/__init__.py から
-re-export される（後方互換、`bin/rl-fleet` は `fleet.main` を呼ぶ）。
+re-export される（後方互換、`bin/evolve-fleet` は `fleet.main` を呼ぶ）。
 """
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ from .recall import format_hits, recall
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`bin/rl-fleet` エントリポイント。"""
+    """`bin/evolve-fleet` エントリポイント。"""
     parser = argparse.ArgumentParser(
-        prog="rl-fleet",
-        description="全 PJ 横断で rl-anything の健康状態を一覧表示する",
+        prog="evolve-fleet",
+        description="全 PJ 横断で evolve-anything の健康状態を一覧表示する",
     )
     sub = parser.add_subparsers(dest="command")
     status_p = sub.add_parser("status", help="各 PJ のステータスを表形式で表示（default）")
@@ -92,11 +92,11 @@ def main(argv: list[str] | None = None) -> int:
 
     migrate_p = sub.add_parser(
         "migrate-data",
-        help="DATA_DIR hook/tool 分裂を一元化（plugin-data 側ストアを ~/.claude/rl-anything にマージ + marker 設置、#364）",
+        help="DATA_DIR hook/tool 分裂を一元化（plugin-data 側ストアを ~/.claude/evolve-anything にマージ + marker 設置、#364）",
     )
     migrate_p.add_argument("--dry-run", action="store_true",
                            help="マージ内容の確認のみ（書き込みゼロ）。他の CC セッションを閉じた idle 時の実行を推奨（並行書き込み窓を回避）")
-    migrate_p.add_argument("--canonical", type=Path, default=None, help="正準 dir（default: ~/.claude/rl-anything）")
+    migrate_p.add_argument("--canonical", type=Path, default=None, help="正準 dir（default: ~/.claude/evolve-anything）")
     migrate_p.add_argument("--source", type=Path, default=None, help="旧 plugin-data dir（default: install レイアウトを自動探索）")
 
     pjslug_p = sub.add_parser(
@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     pjslug_p.add_argument("--apply", action="store_true",
                           help="実書込（既定は dry-run = 1バイトも書かず正規化予定件数だけ表示）")
     pjslug_p.add_argument("--data-dir", type=Path, default=None,
-                          help="対象 DATA_DIR（default: ~/.claude/rl-anything）。他の CC セッションを閉じた idle 時の --apply を推奨")
+                          help="対象 DATA_DIR（default: ~/.claude/evolve-anything）。他の CC セッションを閉じた idle 時の --apply を推奨")
 
     uttr_p = sub.add_parser(
         "ingest",
@@ -297,7 +297,7 @@ def _run_status(args) -> int:
     if new_candidates:
         print(
             f"\n[fleet] 新しい PJ 候補を {len(new_candidates)} 件検出しました。"
-            f" `rl-fleet discover` で track/ignore を設定してください。",
+            f" `evolve-fleet discover` で track/ignore を設定してください。",
         )
     agent_line = _show_active_agents()
     if agent_line:

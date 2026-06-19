@@ -174,7 +174,7 @@ def _default_journal_path() -> Path:
 
         return growth_journal._data_dir() / growth_journal.JOURNAL_FILENAME
     except Exception:
-        return Path.home() / ".claude" / "rl-anything" / "growth-journal.jsonl"
+        return Path.home() / ".claude" / "evolve-anything" / "growth-journal.jsonl"
 
 
 def main(argv=None) -> int:
