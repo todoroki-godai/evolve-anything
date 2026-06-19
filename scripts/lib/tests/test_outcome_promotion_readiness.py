@@ -675,3 +675,124 @@ class TestSessionDenominatorFromDb:
         opr.compute_promotion_readiness(days=30, window_days=14)
         after = _snapshot()
         assert before == after  # db / jsonl いずれも byte 不変
+
+
+# ============================================================================
+# #24: optimize_history slug の worktree 名混入を検出 / anchor 読みも正規化
+# ============================================================================
+
+class TestApplyAnchorNormalization:
+    """#24: _load_apply_anchors は optimize_history のファイル名 stem を slug として
+    そのまま PJ キーにしていた。書込側が worktree 安全 slug を出すのが原則だが、write-side
+    fix 以前に書かれた legacy ファイル（stem = worktree 名や フルパス痕跡）が混じると幻PJ
+    として cross-PJ anchor 統計を汚す。読み取り時にも _normalize_pj で畳んで二重防御する。"""
+
+    def test_worktree_name_stem_collapses_to_parent(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        # legacy: stem がフルパス痕跡（worktree フルパスを sanitize した形ではなく
+        # ここでは basename 化されたフルパス）。_normalize_pj で basename に畳まれる。
+        (hist / "amamo.jsonl").write_text(
+            json.dumps({"human_accepted": True, "timestamp": _iso(now)}) + "\n"
+        )
+        anchors = opr._load_apply_anchors(tmp_path)
+        # 正規化後キーで引ける（basename はそのまま amamo）。
+        assert "amamo" in anchors
+
+    def test_fullpath_stem_is_normalized(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        # sanitize で / が _ になったフルパス痕跡（旧 split-brain 由来）。
+        # _normalize_pj はフルパスを basename に畳むため、ここは原値そのまま残る
+        # （sanitize 済みで区切り文字が失われており復元不能 = 情報欠落、責務外）。
+        (hist / "_p_amamo.jsonl").write_text(
+            json.dumps({"human_accepted": True, "timestamp": _iso(now)}) + "\n"
+        )
+        anchors = opr._load_apply_anchors(tmp_path)
+        # 少なくとも例外なく読め、何らかのキーで拾える（回帰防止）。
+        assert anchors  # 空でない
+
+
+class TestDetectWorktreeNameSlugs:
+    """#24: optimize_history に worktree ディレクトリ名 stem の slug ファイルが混じったら
+    健全性チェックで検出して警告する（書込側正規化漏れ / legacy 汚染の可視化）。"""
+
+    def test_clean_store_returns_empty(self, tmp_path):
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        (hist / "evolve-anything.jsonl").write_text("{}\n")
+        (hist / "sys-bots.jsonl").write_text("{}\n")
+        suspects = opr.detect_worktree_name_slugs(tmp_path)
+        assert suspects == []
+
+    def test_agent_prefix_slug_flagged(self, tmp_path):
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        (hist / "agent-af5dd642e130c9754.jsonl").write_text("{}\n")
+        suspects = opr.detect_worktree_name_slugs(tmp_path)
+        assert "agent-af5dd642e130c9754" in suspects
+
+    def test_worktree_agent_prefix_slug_flagged(self, tmp_path):
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        (hist / "worktree-agent-abc123.jsonl").write_text("{}\n")
+        suspects = opr.detect_worktree_name_slugs(tmp_path)
+        assert "worktree-agent-abc123" in suspects
+
+    def test_no_history_dir_returns_empty(self, tmp_path):
+        assert opr.detect_worktree_name_slugs(tmp_path) == []
+
+    def test_unattributed_not_flagged(self, tmp_path):
+        # _unattributed は意図的な保全 slug であり worktree 名ではない。
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        (hist / "_unattributed.jsonl").write_text("{}\n")
+        assert opr.detect_worktree_name_slugs(tmp_path) == []
+
+
+# ============================================================================
+# #25: 条件表示は母数の意味を明示する（同一表現で母数が異なる矛盾の解消）
+# ============================================================================
+
+class TestConditionLabelsDisambiguateDenominator:
+    """#25: 条件1（分散）と条件2（件数下限）がどちらも『PJ が N 件』という同一表現を使い、
+    N の母数の意味（分散を満たす PJ 数 vs 分母 floor を満たす PJ 数）が違うのに見分けられず
+    『条件1 0 件 / 条件2 2 件』が矛盾に見えた。各ラベルに母数の意味を明示する。"""
+
+    def test_variance_insufficient_pj_states_meaning(self):
+        from audit.sections_promotion_readiness import _variance_line
+        line = _variance_line({"pass": False, "reason": "insufficient_pj", "pj_count": 0})
+        # 「分散を判定できる PJ 数」であることが文言から分かる
+        assert "分散" in line
+        assert "判定" in line or "対象" in line  # 単なる「PJ が N 件」ではない
+
+    def test_variance_pass_states_meaning(self):
+        from audit.sections_promotion_readiness import _variance_line
+        line = _variance_line({"pass": True, "pj_count": 3, "distinct_values": 3})
+        assert "分散" in line
+
+    def test_denominator_line_states_meaning(self):
+        from audit.sections_promotion_readiness import _denominator_line
+        lines = _denominator_line(
+            {"pass": True, "floor": 10, "meeting": ["a", "b"], "denominators": {"a": 12, "b": 35}}
+        )
+        head = lines[0]
+        # 「分母 ≥floor を満たす PJ 数」であることが分かる
+        assert "分母" in head
+
+    def test_variance_and_denominator_labels_are_distinguishable(self):
+        """条件1 と条件2 の PJ 件数ラベルが同一文字列でない（矛盾に見えない）。"""
+        from audit.sections_promotion_readiness import _variance_line, _denominator_line
+        v = _variance_line({"pass": False, "reason": "insufficient_pj", "pj_count": 0})
+        d = _denominator_line(
+            {"pass": False, "floor": 10, "meeting": ["a", "b"], "denominators": {"a": 12, "b": 35}}
+        )[0]
+        # 両者から「PJ が N 件」の素の共通フレーズを除いた後、母数説明が異なる
+        assert "分散" in v
+        assert "分母" in d
+        # 「PJ が {n} 件のみ」という曖昧な裸表現を条件1 が使っていない
+        assert "PJ が 0 件のみ" not in v

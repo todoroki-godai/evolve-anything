@@ -17,17 +17,23 @@ def _mark(passed: bool) -> str:
 
 
 def _variance_line(v: Dict[str, Any]) -> str:
+    # #25: 条件1 と条件2 がどちらも「PJ が N 件」という同一表現を使い、N の母数の意味
+    # （分散を判定できる PJ 数 vs 分母 floor を満たす PJ 数）が違うのに見分けられず、
+    # 「条件1 0 件 / 条件2 2 件」が一見矛盾して読めた。各ラベルに母数の意味を明示する。
     if v.get("pass"):
         return (
             f"  {_mark(True)} 条件1 分散が十分: "
-            f"{v.get('pj_count', 0)} PJ / 相異なる値 {v.get('distinct_values', 0)} 種"
+            f"分散を判定できる PJ 数 {v.get('pj_count', 0)} / 相異なる値 {v.get('distinct_values', 0)} 種"
         )
     reason = v.get("reason", "")
     if reason == "insufficient_pj":
-        return f"  {_mark(False)} 条件1 分散が十分: PJ が {v.get('pj_count', 0)} 件のみ（≥2 必要）"
+        return (
+            f"  {_mark(False)} 条件1 分散が十分: "
+            f"分散を判定できる PJ 数 {v.get('pj_count', 0)}（≥2 必要・件数下限を満たす軸値のみ計上）"
+        )
     if reason == "all_identical":
         return (
-            f"  {_mark(False)} 条件1 分散が十分: 全 {v.get('pj_count', 0)} PJ が同値 "
+            f"  {_mark(False)} 条件1 分散が十分: 分散を判定できる全 {v.get('pj_count', 0)} PJ が同値 "
             f"{v.get('value')} = 測定バグ強シグナル（#445）"
         )
     return f"  {_mark(False)} 条件1 分散が十分: 判定不能（{reason}）"
@@ -36,9 +42,11 @@ def _variance_line(v: Dict[str, Any]) -> str:
 def _denominator_line(d: Dict[str, Any]) -> List[str]:
     floor = d.get("floor", "?")
     meeting = d.get("meeting", [])
+    # #25: 条件1 の「分散を判定できる PJ 数」と区別できるよう、こちらは「分母 ≥floor を
+    # 満たす PJ 数」と母数の意味を明示する（同一表現による矛盾の見え方を解消）。
     head = (
         f"  {_mark(d.get('pass', False))} 条件2 データ件数下限: "
-        f"分母 ≥{floor} を満たす PJ {len(meeting)} 件（≥2 必要）"
+        f"分母 ≥{floor} を満たす PJ 数 {len(meeting)}（≥2 必要）"
     )
     lines = [head]
     denoms = d.get("denominators", {})
