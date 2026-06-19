@@ -36,6 +36,11 @@ def _session(sid: str, *, error_count: int = 0, tool_sequence=None) -> dict:
     }
 
 
+def _correction(ctype: str, session_id: str, *, skill: str = "foo") -> dict:
+    # corrections.jsonl の実スキーマに準拠（correction_detect.py:128-）。
+    return {"correction_type": ctype, "session_id": session_id, "last_skill": skill}
+
+
 # ---------- per-skill 帰属 ----------
 
 class TestAttributeOutcomes:
@@ -106,6 +111,52 @@ class TestAttributeOutcomes:
         assert attr["foo"]["first_try_success"] == pytest.approx(0.0)
 
 
+# ---------- correction 再発率軸（#10 3軸目, corrections 由来） ----------
+
+class TestCorrectionRecurrenceAxis:
+    def test_no_corrections_axis_is_none_graceful(self):
+        # corrections.jsonl が空（現状の通常状態）→ 軸は None・クラッシュしない
+        usage = [_usage("foo", "s1")]
+        sessions = [_session("s1", error_count=0)]
+        attr = oa.attribute_outcomes(usage=usage, sessions=sessions)
+        assert attr["foo"]["correction_recurrence"] is None
+
+    def test_correction_recurrence_attributed_per_skill(self):
+        # foo の correction_type "X" が 2 つの distinct session に跨って再発 → 再発
+        # distinct types = 2 (X, Y), recurring = 1 (X) → 0.5
+        usage = [_usage("foo", "s1"), _usage("foo", "s2")]
+        sessions = [_session("s1"), _session("s2")]
+        corrections = [
+            _correction("X", "s1", skill="foo"),
+            _correction("X", "s2", skill="foo"),  # X が別 session で再発
+            _correction("Y", "s1", skill="foo"),  # Y は 1 session のみ
+        ]
+        attr = oa.attribute_outcomes(
+            usage=usage, sessions=sessions, corrections=corrections
+        )
+        assert attr["foo"]["correction_recurrence"] == pytest.approx(0.5)
+
+    def test_correction_scoped_to_skill(self):
+        # 他スキル（bar）の correction は foo の軸に混ざらない
+        usage = [_usage("foo", "s1")]
+        sessions = [_session("s1")]
+        corrections = [_correction("X", "s1", skill="bar")]
+        attr = oa.attribute_outcomes(
+            usage=usage, sessions=sessions, corrections=corrections
+        )
+        # foo には correction が無い → None graceful
+        assert attr["foo"]["correction_recurrence"] is None
+
+    def test_corrections_default_empty_keeps_two_axis_behaviour(self):
+        # corrections 引数を渡さなくても従来 2 軸はそのまま（後方互換）
+        usage = [_usage("foo", "s1")]
+        sessions = [_session("s1", error_count=0)]
+        attr = oa.attribute_outcomes(usage=usage, sessions=sessions)
+        assert attr["foo"]["first_try_success"] == pytest.approx(1.0)
+        assert "correction_recurrence" in attr["foo"]
+        assert attr["foo"]["correction_recurrence"] is None
+
+
 # ---------- outcome priority スコア ----------
 
 class TestOutcomePriority:
@@ -128,6 +179,39 @@ class TestOutcomePriority:
         rec = {"first_try_success": 0.0, "rework": None, "degraded": False, "n_sessions": 3}
         # (1 - 0.0) のみ → 1.0
         assert oa.outcome_priority(rec) == pytest.approx(1.0)
+
+    def test_correction_recurrence_contributes_when_present(self):
+        # 3 軸とも悪い（first_try 0 / rework 1 / correction_recurrence 1）→ 1.0
+        rec = {
+            "first_try_success": 0.0,
+            "rework": 1.0,
+            "correction_recurrence": 1.0,
+            "degraded": False,
+            "n_sessions": 5,
+        }
+        assert oa.outcome_priority(rec) == pytest.approx(1.0)
+
+    def test_correction_recurrence_none_does_not_break_priority(self):
+        # correction_recurrence=None は components から除外（None 比較落ちなし）
+        rec = {
+            "first_try_success": 1.0,
+            "rework": 0.0,
+            "correction_recurrence": None,
+            "degraded": False,
+            "n_sessions": 5,
+        }
+        assert oa.outcome_priority(rec) == pytest.approx(0.0)
+
+    def test_correction_recurrence_averaged_in(self):
+        # first_try 1.0 (→0.0), rework None, correction_recurrence 1.0 → (0.0+1.0)/2 = 0.5
+        rec = {
+            "first_try_success": 1.0,
+            "rework": None,
+            "correction_recurrence": 1.0,
+            "degraded": False,
+            "n_sessions": 5,
+        }
+        assert oa.outcome_priority(rec) == pytest.approx(0.5)
 
 
 # ---------- ランキング配線 ----------
@@ -214,3 +298,131 @@ class TestApplyOutcomeRanking:
         # 入力 triage の UPDATE 並びは変わらない（純粋関数）
         assert [id(c) for c in triage["UPDATE"]] == before_ids
         assert "outcome" not in triage["UPDATE"][0]
+
+    def test_passes_corrections_through_to_attribution(self):
+        # corrections を渡すと候補 evidence に correction_recurrence が乗る
+        triage = self._triage()
+        usage, sessions = self._usage_sessions()
+        corrections = [
+            _correction("X", "b1", skill="bad"),
+        ]
+        result = oa.apply_outcome_ranking(
+            triage, usage=usage, sessions=sessions, corrections=corrections
+        )
+        bad = next(c for c in result["UPDATE"] if c["skill"] == "bad")
+        assert "correction_recurrence" in bad["outcome"]
+
+
+# ---------- negative_transfer rollback gate（#10 安全弁） ----------
+
+class TestNegativeTransferGate:
+    def _triage(self):
+        return {
+            "CREATE": [],
+            "UPDATE": [
+                # bad はアウトカム最悪で本来トップだが negative_transfer なので抑制
+                {"action": "UPDATE", "skill": "bad", "confidence": 0.7},
+                {"action": "UPDATE", "skill": "good", "confidence": 0.7},
+            ],
+            "SPLIT": [], "MERGE": [], "OK": [], "skipped": False,
+        }
+
+    def _usage_sessions(self):
+        usage = [_usage("good", "g1"), _usage("bad", "b1")]
+        sessions = [
+            _session("g1", error_count=0, tool_sequence=["Edit", "Bash"]),
+            _session("b1", error_count=4, tool_sequence=["Edit", "Edit", "Edit"]),
+        ]
+        return usage, sessions
+
+    def test_negative_transfer_skill_suppressed_from_top(self):
+        triage = self._triage()
+        usage, sessions = self._usage_sessions()
+        neg = [{"skill_name": "bad", "negative_transfer": True, "delta_score": -0.3}]
+        result = oa.apply_outcome_ranking(
+            triage, usage=usage, sessions=sessions, negative_transfer=neg
+        )
+        order = [c["skill"] for c in result["UPDATE"]]
+        # bad はアウトカム最悪だが negative_transfer suppress で末尾に落ちる
+        assert order == ["good", "bad"]
+
+    def test_suppression_records_evidence(self):
+        triage = self._triage()
+        usage, sessions = self._usage_sessions()
+        neg = [{"skill_name": "bad", "negative_transfer": True, "delta_score": -0.3}]
+        result = oa.apply_outcome_ranking(
+            triage, usage=usage, sessions=sessions, negative_transfer=neg
+        )
+        bad = next(c for c in result["UPDATE"] if c["skill"] == "bad")
+        assert bad["outcome"]["suppressed"] is True
+        assert "negative_transfer" in (bad["outcome"].get("suppress_reason") or "")
+
+    def test_non_flagged_negative_transfer_not_suppressed(self):
+        # negative_transfer=False のレコードは抑制しない
+        triage = self._triage()
+        usage, sessions = self._usage_sessions()
+        neg = [{"skill_name": "bad", "negative_transfer": False, "delta_score": 0.1}]
+        result = oa.apply_outcome_ranking(
+            triage, usage=usage, sessions=sessions, negative_transfer=neg
+        )
+        order = [c["skill"] for c in result["UPDATE"]]
+        assert order == ["bad", "good"]
+
+    def test_no_negative_transfer_arg_no_suppression(self):
+        # 引数省略時は従来挙動（suppress なし）
+        triage = self._triage()
+        usage, sessions = self._usage_sessions()
+        result = oa.apply_outcome_ranking(triage, usage=usage, sessions=sessions)
+        order = [c["skill"] for c in result["UPDATE"]]
+        assert order == ["bad", "good"]
+
+
+# ---------- RODS reward 分散ベースのターゲット列（#28） ----------
+
+class TestRewardVarianceColumn:
+    def test_high_variance_skill_flagged_as_learning_headroom(self):
+        # foo: 1 clean + 1 dirty session → first-try reward {1.0, 0.0} = 分散あり
+        usage = [_usage("foo", "s1"), _usage("foo", "s2")]
+        sessions = [
+            _session("s1", error_count=0),
+            _session("s2", error_count=5),
+        ]
+        attr = oa.attribute_outcomes(usage=usage, sessions=sessions)
+        rv = attr["foo"]["reward_variance"]
+        assert rv["pass"] is True  # 分散十分 = 能力境界 = 学習余地大
+
+    def test_uniform_reward_no_variance(self):
+        # 全 session clean → reward 全 1.0 → 分散なし
+        usage = [_usage("foo", "s1"), _usage("foo", "s2")]
+        sessions = [
+            _session("s1", error_count=0),
+            _session("s2", error_count=0),
+        ]
+        attr = oa.attribute_outcomes(usage=usage, sessions=sessions)
+        assert attr["foo"]["reward_variance"]["pass"] is False
+
+    def test_single_session_insufficient_for_variance(self):
+        usage = [_usage("foo", "s1")]
+        sessions = [_session("s1", error_count=0)]
+        attr = oa.attribute_outcomes(usage=usage, sessions=sessions)
+        rv = attr["foo"]["reward_variance"]
+        assert rv["pass"] is False
+        assert rv["reason"] == "insufficient_pj"
+
+    def test_variance_column_in_ranking_evidence(self):
+        triage = {
+            "CREATE": [],
+            "UPDATE": [
+                {"action": "UPDATE", "skill": "foo", "confidence": 0.7},
+            ],
+            "SPLIT": [], "MERGE": [], "OK": [], "skipped": False,
+        }
+        usage = [_usage("foo", "s1"), _usage("foo", "s2")]
+        sessions = [
+            _session("s1", error_count=0),
+            _session("s2", error_count=5),
+        ]
+        result = oa.apply_outcome_ranking(triage, usage=usage, sessions=sessions)
+        foo = result["UPDATE"][0]
+        assert "reward_variance" in foo["outcome"]
+        assert foo["outcome"]["reward_variance"]["pass"] is True
