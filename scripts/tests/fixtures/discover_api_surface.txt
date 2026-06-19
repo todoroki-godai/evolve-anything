@@ -10,6 +10,7 @@ REJECTION_THRESHOLD = 3
 TRAJECTORY_SKILL_SCORE_THRESHOLD = 0.25
 
 # discover public function / class signatures
+add_artifact_suppression(artifact_id: str, *, now: float | None = None) -> None
 add_merge_suppression(skill_a: str, skill_b: str) -> None
 add_to_suppression_list(pattern: str) -> None
 detect_behavior_patterns(threshold: int = 5, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> List[Dict[str, Any]]
@@ -17,10 +18,12 @@ detect_constraint_decay(sessions_path: pathlib.Path, corrections_path: pathlib.P
 detect_error_patterns(threshold: int = 3, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> List[Dict[str, Any]]
 detect_installed_artifacts(tool_usage_patterns: Dict[str, Any] | None = None) -> List[Dict[str, Any]]
 detect_missed_skills(threshold: int = 2, *, project_root: pathlib.Path | None = None, include_unknown: bool = False) -> Dict[str, Any]
-detect_recommended_artifacts(tool_usage_patterns: Dict[str, Any] | None = None) -> List[Dict[str, Any]]
+detect_recommended_artifacts(tool_usage_patterns: Dict[str, Any] | None = None, *, now: float | None = None) -> List[Dict[str, Any]]
 detect_rejection_patterns(threshold: int = 3, *, history_file: pathlib.Path | None = None) -> List[Dict[str, Any]]
 detect_repeated_correction_patterns(corrections: List[Dict[str, Any]], threshold: int = 3) -> List[Dict[str, Any]]
 determine_scope(pattern: Dict[str, Any]) -> str
+is_artifact_suppressed(artifact_id: str, *, now: float | None = None, ttl_days: int = 45) -> bool
+load_artifact_suppression() -> set
 load_claude_reflect_data() -> List[Dict[str, Any]]
 load_jsonl(filepath: pathlib.Path) -> List[Dict[str, Any]]
 load_merge_suppression() -> set
