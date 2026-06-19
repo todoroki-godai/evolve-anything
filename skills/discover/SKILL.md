@@ -59,6 +59,13 @@ evolve-discover [--session-scan]
 生成された候補をユーザーに提示し、承認/却下を確認する。
 同一パターンが2回 reject された場合、抑制リストに追加し3回目以降は提案しない。
 
+`recommended_artifacts`（未導入の推奨 rule/hook）の提示でユーザーが「導入しない」と
+判断した場合、その artifact id を suppression に記録する（MUST。#26）。記録には
+`scripts/lib/discover/suppression.py` の `add_artifact_suppression(<artifact_id>)` を
+`${CLAUDE_PLUGIN_ROOT}` 経由で呼ぶ。`detect_recommended_artifacts` が TTL（既定45日）
+窓内は再提示を畳み、窓を過ぎたら1回だけ再評価のため再提示する。記録しないと毎回
+再提示され、本当に必要な提案の signal が薄まる。
+
 ### Step 5.5: 検証知見の検出
 
 discover.py は `verification_catalog` パッケージの `detect_verification_needs()` を呼び出し、プロジェクトに未導入の検証知見ルールを検出する。
