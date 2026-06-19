@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.105.0] - 2026-06-19
+
 ### Added
 - **feat(fleet): `migrate-pj-slug` バックフィルを全7ストアに拡張（refs #602）** — #593 で新設した `bin/rl-fleet migrate-pj-slug`（幻PJ slug の遡及正規化）は実装当初 corrections / subagents / sessions.db の3ストアのみ対象だったが、worktree フルパス由来の汚染は実環境横断スイープで7ストア（追加: usage.jsonl / workflows.jsonl / skill_activations.jsonl / errors.jsonl / usage-registry.jsonl）に及ぶことが判明していた。`pj_slug_backfill.py` の対象を `_JSONL_STORES` 単一ソース宣言に集約し全7ストアへ拡張（既存 `_backfill_jsonl` / `_backfill_sessions_db` を再利用・新方式は発明しない）。各ストアの正規化フィールド名は writer hook の record 構築箇所を Read で確定（usage-registry のみ `project_path`、他4追加ストアは `project`）。dry-run 既定（1バイトも書かない）／`--apply` 実書込／冪等は3ストア版から不変。CLI 本体（`backfill`/`format_summary` を汎用に呼ぶ）はロジック変更なし・help 文言のみ追従。残課題（sibling-dir worktree の write 時解決 = SessionStart cache 案）は #602 に継続。決定論・LLM 非依存。TDD（追加5ストアの dry-run 書込ゼロ / apply 正規化 / 冪等 / worktree・通常・basename パターン + 全7ストア summary・計33件緑）。
 - **feat(prune): zero_invocation suppress に解除予定日と自動再評価保証を surface（closes #587）** — usage 計測経路の修正（#478）により `zero_invocations_suppressed` が「計測待ち」になるが、**いつ再評価されるか／自動再評価の保証があるか**が surface されておらず「永久保留になり得る」と誤読させていた。調査の結果、再評価は既に構造的に保証されている（`zero_invocation_window_suppressed` は毎回 live 再計算され、観測窓が修正日をまたがなくなる `fix_date + 観測窓日数` 以降の prune/evolve 実行で suppress が自動で False に転じる／`insufficient_usage` も毎回 live `usage_count` から再計算）。欠けていたのは**解除予定日の可視化のみ**だったため、`zero_invocation_reeval_date()` ヘルパを追加し suppression summary に `reeval_date`・`auto_reeval` を構造化 + message に解除予定日を明示（「観測窓が揃う YYYY-MM-DD 以降の prune/evolve 実行で自動的に再評価される＝永久保留にはならない」）。report 描画は `zero_invocations_suppressed.message` を直接 surface する既存仕様のため描画コード変更なしで反映。決定論・LLM 非依存。TDD（`test_prune.py` に reeval_date surface / ヘルパ計算の2ケース + API surface snapshot 追従）。
