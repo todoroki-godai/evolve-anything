@@ -150,8 +150,8 @@ def test_nullable_batch_guard_allows_none():
 
 
 @pytest.mark.skipif(
-    not (_REPO / "skills" / "evolve" / "scripts" / "evolve.py").exists(),
-    reason="evolve.py 不在",
+    not (_REPO / "skills" / "evolve" / "scripts" / "evolve" / "__init__.py").exists(),
+    reason="evolve パッケージ不在",
 )
 def test_real_dry_run_result_conforms():
     """実 run_evolve(dry_run=True) の出力が CANONICAL に準拠する（合成 fixture を使わない）。
@@ -258,8 +258,8 @@ def test_covered_and_uncovered_phases_are_disjoint():
 
 
 @pytest.mark.skipif(
-    not (_REPO / "skills" / "evolve" / "scripts" / "evolve.py").exists(),
-    reason="evolve.py 不在",
+    not (_REPO / "skills" / "evolve" / "scripts" / "evolve" / "__init__.py").exists(),
+    reason="evolve パッケージ不在",
 )
 def test_real_phases_are_all_registered():
     """実 dry-run の phase 集合が COVERED ∪ UNCOVERED に収まる（未登録 phase で fail）。
@@ -292,8 +292,8 @@ def test_covered_and_uncovered_toplevel_are_disjoint():
 
 
 @pytest.mark.skipif(
-    not (_REPO / "skills" / "evolve" / "scripts" / "evolve.py").exists(),
-    reason="evolve.py 不在",
+    not (_REPO / "skills" / "evolve" / "scripts" / "evolve" / "__init__.py").exists(),
+    reason="evolve パッケージ不在",
 )
 def test_real_toplevel_keys_are_all_registered():
     """実 dry-run の top-level キー集合が COVERED ∪ UNCOVERED に収まる（未登録キーで fail）。
