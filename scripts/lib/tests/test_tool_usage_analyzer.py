@@ -539,6 +539,79 @@ class TestCheckArtifactInstalled:
         assert result["content_matched"] is True
 
 
+# ---------- projects_dir 既定の call-time HOME 解決 (#457) ----------
+
+class TestDefaultProjectsDirHomeResolution:
+    """projects_dir=None の既定解決が import 時凍結でなく call-time HOME を読むことの回帰テスト。
+
+    module-level の CLAUDE_PROJECTS_DIR は import 時に Path.home() を凍結するため、
+    xdist で先に import した worker が HOME 隔離（#457）を擦り抜け実 ~/.claude/projects を
+    読む非hermetic 露出（keyset snapshot drift）の根因になっていた。
+    """
+
+    def _write_session(self, projects_root, slug_suffix, command):
+        proj_dir = projects_root / f"xyz-{slug_suffix}"
+        proj_dir.mkdir(parents=True)
+        rec = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": command}},
+        ]}}
+        (proj_dir / "session1.jsonl").write_text(
+            json.dumps(rec, ensure_ascii=False), encoding="utf-8",
+        )
+
+    def test_default_resolves_call_time_home(self, tmp_path, monkeypatch):
+        """projects_dir=None のとき call-time HOME 配下の projects を読む。
+
+        修正前: import 時凍結値（実 or 別 home）を読み uniquemarker を拾えず fail。
+        修正後: live HOME を読み uniquemarker を拾って pass。
+        """
+        import lib.tool_usage_analyzer as tua
+
+        # 「override されていない」状態を保証する（import 時凍結値 == 現 module 値）。
+        monkeypatch.setattr(tua, "_IMPORT_TIME_PROJECTS_DIR", tua.CLAUDE_PROJECTS_DIR)
+
+        # HOME を別 tmp に向ける（fixture 後の差し替え）。
+        home = tmp_path / "home"
+        projects_root = home / ".claude" / "projects"
+        # slug は project_root.name で endswith マッチするので dir 名末尾を合わせる。
+        self._write_session(projects_root, "test-project", "uniquemarker_cmd --flag")
+        monkeypatch.setenv("HOME", str(home))
+
+        result = analyze_tool_usage(
+            project_root=Path("/fake/test-project"),
+            projects_dir=None,
+        )
+
+        assert result["total_tool_calls"] > 0
+        assert "uniquemarker_cmd" in result["cli_summary"]
+
+    def test_explicit_override_is_respected(self, tmp_path, monkeypatch):
+        """CLAUDE_PROJECTS_DIR を差し替えたら（mock 互換）既定がその override 先を読む。
+
+        HOME とは別 dir を指して区別する。
+        """
+        import lib.tool_usage_analyzer as tua
+
+        # HOME 配下にも別コマンドのセッションを置き、override 先と取り違えていないか弁別する。
+        home = tmp_path / "home"
+        home_projects = home / ".claude" / "projects"
+        self._write_session(home_projects, "test-project", "home_marker_cmd")
+        monkeypatch.setenv("HOME", str(home))
+
+        # override 先（HOME とは別 dir）。
+        override_root = tmp_path / "override_projects"
+        self._write_session(override_root, "test-project", "override_marker_cmd")
+        monkeypatch.setattr(tua, "CLAUDE_PROJECTS_DIR", override_root)
+
+        result = analyze_tool_usage(
+            project_root=Path("/fake/test-project"),
+            projects_dir=None,
+        )
+
+        assert "override_marker_cmd" in result["cli_summary"]
+        assert "home_marker_cmd" not in result["cli_summary"]
+
+
 # ---------- threshold constants ----------
 
 class TestThresholdConstants:

@@ -16,9 +16,16 @@ def _resolve_session_dir(
 ) -> Optional[Path]:
     """project_root からセッション JSONL のディレクトリを解決する。"""
     if projects_dir is None:
-        # 遅延 import で循環回避 + mock.patch("tool_usage_analyzer.CLAUDE_PROJECTS_DIR") 互換
-        from . import CLAUDE_PROJECTS_DIR
-        projects_dir = CLAUDE_PROJECTS_DIR
+        # 既定は call-time の HOME から再解決する。module-level の CLAUDE_PROJECTS_DIR は
+        # import 時に Path.home() を凍結するため、テストの HOME 隔離（#457）を擦り抜け、
+        # xdist で先に import した worker が実 ~/.claude/projects を読む非hermetic 露出
+        # （keyset snapshot drift）の根因になっていた。CLAUDE_PROJECTS_DIR が import 時の
+        # 凍結値から差し替えられている場合（mock.patch 等）はそれを尊重する。
+        from . import CLAUDE_PROJECTS_DIR, _IMPORT_TIME_PROJECTS_DIR
+        if CLAUDE_PROJECTS_DIR != _IMPORT_TIME_PROJECTS_DIR:
+            projects_dir = CLAUDE_PROJECTS_DIR
+        else:
+            projects_dir = Path.home() / ".claude" / "projects"
 
     if not projects_dir.is_dir():
         return None
