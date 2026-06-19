@@ -75,6 +75,42 @@ def test_substantive_idiom_with_no_context_token_passes():
     assert f.idiom_eligible("つむぎにしてほしいんだけど")
 
 
+# ── 最大長 ceiling（過特化＝メッセージ全文を弾く・#22）──────────────────
+def test_overlong_idiom_rejected():
+    # #22: 冗長な（複数行・自然文）暗黙修正シグナルは confirmable_idiom に全文が入る。
+    # 全文一致は実運用で二度と再発しないため standing auto-promote rule にしない。
+    long_text = "あ" * (f.MAX_IDIOM_CHARS + 1)
+    assert not f.idiom_eligible(long_text)
+
+
+def test_at_ceiling_idiom_passes():
+    # ちょうど上限の長さは通る（境界・他条件次第）。
+    at_ceiling = "つ" * f.MAX_IDIOM_CHARS
+    assert f.idiom_eligible(at_ceiling)
+
+
+def test_multiline_fulltext_rejected():
+    # 複数行の自然文（メッセージ全文）は ceiling 超で弾く。
+    full = (
+        "さっきのフッターのデザインなんだけど、やっぱり余白が広すぎる気がするので"
+        "もう少し詰めて、あと色も少し濃くしてほしい。あと見出しのサイズも調整して、"
+        "ボタンの角丸ももう少し小さくして、リンクの色は青系に統一してほしい。"
+    )
+    assert len(full) > f.MAX_IDIOM_CHARS
+    assert not f.idiom_eligible(full)
+
+
+def test_ceiling_constant_defined():
+    # #22: 上限定数が定義され floor より大きい。
+    assert isinstance(f.MAX_IDIOM_CHARS, int)
+    assert f.MAX_IDIOM_CHARS > f.MIN_IDIOM_CHARS
+
+
+def test_eligible_reason_too_long():
+    long_text = "あ" * (f.MAX_IDIOM_CHARS + 1)
+    assert f.eligible_reason(long_text) == "too_long"
+
+
 # ── eligible_reason（surface 用の拒否理由）─────────────────────────
 def test_eligible_reason_too_short():
     assert f.eligible_reason("気がする") == "too_short"

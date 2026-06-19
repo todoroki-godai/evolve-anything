@@ -360,6 +360,58 @@ def test_cluster_groups_deterministic():
     assert a == b
 
 
+def _representative_excerpt_present(bucket) -> bool:
+    """theme_label に当該バケット代表シグナルの冒頭抜粋が含まれるか。"""
+    label = bucket["theme_label"]
+    for g in bucket["groups"]:
+        rep = (g.get("representative") or "").strip()
+        if not rep:
+            continue
+        # 代表の冒頭 N 文字（小さめ）が label に現れていれば抜粋併記済み。
+        head = rep[: min(8, len(rep))]
+        if head and head in label:
+            return True
+    return False
+
+
+def test_cluster_groups_theme_label_includes_representative_excerpt():
+    # #21: 日本語シグナルでは char n-gram の centroid 上位が「、、/って/んだ」のような
+    # 意味をなさない断片列になり、theme_label 単独ではバケット選択の手がかりにならない。
+    # representative の冒頭抜粋を併記し、人間が選べるラベルにする（option b）。
+    groups = _many_short_jp_groups(48)
+    buckets = bb.cluster_groups(groups)
+    for b in buckets:
+        assert _representative_excerpt_present(b), (
+            f"theme_label に代表シグナル抜粋が含まれない: {b['theme_label']!r}"
+        )
+
+
+def test_cluster_groups_theme_label_excerpt_in_single_bucket():
+    # graceful degradation（単一バケット）でも代表抜粋が併記される。
+    import correction_semantic.bootstrap_backlog as _bb
+
+    def _boom(*a, **k):
+        raise ImportError("no sklearn")
+
+    _orig = _bb._build_char_tfidf
+    try:
+        _bb._build_char_tfidf = _boom
+        groups = _many_short_jp_groups(48)
+        buckets = _bb.cluster_groups(groups)
+    finally:
+        _bb._build_char_tfidf = _orig
+    assert len(buckets) == 1
+    assert _representative_excerpt_present(buckets[0])
+
+
+def test_cluster_groups_theme_label_excerpt_deterministic():
+    # #21: 抜粋併記後も決定論（同入力 → 同 label）。
+    groups = _many_short_jp_groups(48)
+    a = bb.cluster_groups(groups)
+    b = bb.cluster_groups(groups)
+    assert [x["theme_label"] for x in a] == [x["theme_label"] for x in b]
+
+
 def test_cluster_groups_separates_themes():
     # 明確に異なる 2 テーマは別バケットに分かれる。
     groups = _many_groups(14)
