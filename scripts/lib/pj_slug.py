@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Optional, Union
@@ -33,13 +34,80 @@ UNATTRIBUTED_SLUG = "_unattributed"
 # utterance_archive.extractor._WORKTREE_MARKER と同値（後方互換のため重複定義）。
 _WORKTREE_MARKER = "/.claude/worktrees/"
 
+# SessionStart cache（#29/#593）: sibling-dir worktree（``/.claude/worktrees/`` マーカー外）の
+# write 時 slug 解決のためのキャッシュファイル名。DATA_DIR 直下に置く。
+#   - SessionStart（hot path でない）が `resolve_pj_slug(cwd)`（authoritative・subprocess 可）を
+#     1回だけ呼び、{cwd: slug} を本ファイルに書く（``write_pj_slug_cache``）。
+#   - hooks hot path の ``pj_slug_fast`` は worktree マーカーで畳めなかったときだけ本ファイルを
+#     参照し、cwd 一致なら authoritative slug を返す（subprocess なし＝hot-path 安全を維持）。
+# キャッシュ miss / 未生成 / 破損は従来 basename 挙動へフォールバック（後方互換）。
+PJ_SLUG_CACHE_FILENAME = "pj_slug_cache.json"
 
-def pj_slug_fast(path: Optional[Union[str, Path]]) -> Optional[str]:
+
+def _normalize_cache_key(path: Union[str, Path]) -> str:
+    """cache のキー正規化（write/read 同形）。末尾スラッシュ差等を吸収する。"""
+    return str(Path(str(path)))
+
+
+def write_pj_slug_cache(
+    cwd: Union[str, Path],
+    slug: str,
+    *,
+    data_dir: Path,
+) -> None:
+    """{cwd: slug} を DATA_DIR/pj_slug_cache.json に書く（SessionStart 用・#29/#593）。
+
+    SessionStart（hot path でない）から1回だけ呼ぶ前提。``slug`` は呼び出し側で
+    ``resolve_pj_slug(cwd)``（authoritative）を解決して渡す。既存エントリは保持して
+    マージする（複数 PJ の cwd を共存させる）。破損キャッシュは無視して上書き再構築する。
+
+    決定論・subprocess なし（slug 解決は呼び出し側の責務）。
+    """
+    data_dir = Path(data_dir)
+    cache_path = data_dir / PJ_SLUG_CACHE_FILENAME
+    existing: dict = {}
+    if cache_path.exists():
+        try:
+            loaded = json.loads(cache_path.read_text())
+            if isinstance(loaded, dict):
+                existing = loaded
+        except (json.JSONDecodeError, OSError):
+            existing = {}  # 破損キャッシュは捨てて再構築
+    existing[_normalize_cache_key(cwd)] = slug
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(existing, ensure_ascii=False))
+
+
+def _lookup_pj_slug_cache(path: Union[str, Path], data_dir: Path) -> Optional[str]:
+    """cache から cwd 一致の authoritative slug を引く（hot path・subprocess なし）。
+
+    未生成 / miss / 破損は None（呼び出し側が従来挙動へフォールバック）。
+    """
+    cache_path = Path(data_dir) / PJ_SLUG_CACHE_FILENAME
+    if not cache_path.exists():
+        return None
+    try:
+        loaded = json.loads(cache_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    return loaded.get(_normalize_cache_key(path))
+
+
+def pj_slug_fast(
+    path: Optional[Union[str, Path]],
+    *,
+    data_dir: Optional[Path] = None,
+) -> Optional[str]:
     """文字列処理のみで worktree 安全な pj_slug を導出する（hot path 用・subprocess なし）。
 
     1. path に ``/.claude/worktrees/`` が含まれればそこで切って本体側パスへ正規化
        （worktree セッションを main repo に帰属させる）
-    2. pj_slug = 正規化後パスの basename
+    2. (1) で畳めない sibling-dir worktree（マーカー外）は、``data_dir`` が渡されていれば
+       SessionStart cache（``write_pj_slug_cache``）を参照し、cwd 一致なら authoritative
+       slug を返す（subprocess なし＝hot-path 安全を維持・#29/#593）
+    3. cache miss / 未生成 / 破損 / ``data_dir`` 未指定なら正規化後パスの basename
 
     path が None / 空なら None（呼び出し側が fallback する）。
     ``git rev-parse`` を呼ばないため、毎発火 hook から安全に使える。
@@ -49,7 +117,14 @@ def pj_slug_fast(path: Optional[Union[str, Path]]) -> Optional[str]:
     s = str(path)
     marker_idx = s.find(_WORKTREE_MARKER)
     if marker_idx != -1:
-        s = s[:marker_idx]  # 本体 repo root まで切り詰め
+        # worktree マーカーで本体 repo root まで畳めるケース（従来どおり・cache 不要）。
+        base = Path(s[:marker_idx]).name
+        return base or None
+    # sibling-dir worktree（マーカー外）: SessionStart cache を参照（subprocess なし）。
+    if data_dir is not None:
+        cached = _lookup_pj_slug_cache(s, data_dir)
+        if cached:
+            return cached
     base = Path(s).name
     return base or None
 

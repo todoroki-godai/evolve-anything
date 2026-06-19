@@ -49,6 +49,13 @@ try:
 except ImportError:
     pass
 
+# pj_slug import (optional) — SessionStart で sibling-dir worktree の slug を cache（#29/#593）
+_pj_slug = None
+try:
+    import pj_slug as _pj_slug
+except ImportError:
+    pass
+
 
 def _make_session_title(checkpoint: dict) -> str:
     """checkpoint から claude agents 表示用のセッションタイトルを生成する。"""
@@ -271,8 +278,44 @@ def _deliver_utterance_staleness() -> None:
         print(f"[evolve-anything:restore_state] utterance staleness check error: {e}", file=sys.stderr)
 
 
+def _persist_pj_slug_cache() -> None:
+    """sibling-dir worktree の write 時 slug 解決のため authoritative slug を cache する（#29/#593）。
+
+    背景: ``pj_slug_fast``（hooks hot path・subprocess 禁止）は ``/.claude/worktrees/`` マーカー
+    配下の worktree しか親 repo へ畳めない。sibling-dir worktree（例 ``rl-anything-wt/issue-593``）は
+    マーカーが無く、write 時に basename が「幻 PJ slug」として記録され続ける（#593 残課題）。
+
+    そこで hot path でない SessionStart で1回だけ ``resolve_pj_slug(cwd)``（authoritative・
+    git-common-dir 親・subprocess 可）を解決し、``{cwd: slug}`` を DATA_DIR の cache に書く。
+    以後 ``pj_slug_fast`` はマーカーで畳めなかったとき本 cache を参照して本体 slug を返す
+    （subprocess なし＝hot-path 安全を維持）。read/write 同一 slug の原則（#492）を sibling
+    worktree にも拡張する。
+
+    DATA_DIR は他 deliver 関数と同じく ``rl_common.resolve_data_dir``（env 優先・#364）で解決する。
+    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
+    """
+    if _pj_slug is None:
+        return
+    try:
+        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        if not project_dir:
+            return  # cwd 不明なら cache に書かない
+        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        data_dir = rl_common.resolve_data_dir(env)
+        slug = _pj_slug.resolve_pj_slug(project_dir)  # authoritative（subprocess 可）
+        if not slug or slug == _pj_slug.UNATTRIBUTED_SLUG:
+            return  # 帰属不能（git 外の素 dir 等）は cache に書かない
+        _pj_slug.write_pj_slug_cache(project_dir, slug, data_dir=data_dir)
+    except Exception as e:
+        print(f"[evolve-anything:restore_state] pj_slug cache error: {e}", file=sys.stderr)
+
+
 def handle_session_start(event: dict) -> None:
     """SessionStart イベントを処理する。"""
+    # sibling-dir worktree の write 時 slug 解決用 cache を更新（#29/#593）
+    _persist_pj_slug_cache()
     # Deliver pending trigger messages first
     _deliver_pending_trigger()
     # 仕様未追従マージの提案
