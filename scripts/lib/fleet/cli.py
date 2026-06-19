@@ -19,7 +19,7 @@ from .cli_tokens import _inject_token_metrics, _run_tokens
 from .collectors import collect_fleet_status, detect_equal_issue_counts, write_fleet_run
 from .formatters import format_status_table
 from .project_loader import enumerate_projects
-from .recall import format_hits, recall
+from .recall import format_hits, recall, reinforce_recall_hits
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -219,6 +219,8 @@ def _run_recall(args: argparse.Namespace) -> int:
     """recall サブコマンド: 全 PJ memory を横断検索して結果を出力する。"""
     hits = recall(args.query, limit=args.limit, projects_root=args.root)
     print(format_hits(hits, as_json=args.json))
+    # recall ヒットを access proxy として reinforce（#18）。書き込み失敗は recall 体験を壊さない。
+    reinforce_recall_hits(hits)
     return 0
 
 

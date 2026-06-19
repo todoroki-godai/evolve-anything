@@ -23,7 +23,9 @@ from fleet.recall import (  # noqa: E402
     format_hits,
     parse_fact_file,
     recall,
+    reinforce_recall_hits,
 )
+from memory_temporal import parse_memory_temporal  # noqa: E402
 
 
 def _write(p: Path, text: str) -> Path:
@@ -184,14 +186,151 @@ class TestRecall:
         assert len(hits) == 1
 
 
+class TestParseFactLinks:
+    """parse_fact_file が本文中の [[name]] リンクを抽出する（#11）。"""
+
+    def test_本文のlinkを抽出(self, tmp_path):
+        f = _write(
+            tmp_path / "f.md",
+            "---\nname: my-fact\ndescription: d\n---\n"
+            "see [[other-fact]] and [[third-fact]] for detail.\n",
+        )
+        fact = parse_fact_file(f)
+        assert fact.links == ["other-fact", "third-fact"]
+
+    def test_linkなしは空リスト(self, tmp_path):
+        f = _write(tmp_path / "f.md", "---\nname: n\ndescription: d\n---\nno links here\n")
+        fact = parse_fact_file(f)
+        assert fact.links == []
+
+    def test_link重複は一意化し順序保持(self, tmp_path):
+        f = _write(
+            tmp_path / "f.md",
+            "---\nname: n\ndescription: d\n---\n[[a]] then [[b]] then [[a]] again\n",
+        )
+        fact = parse_fact_file(f)
+        assert fact.links == ["a", "b"]
+
+    def test_frontmatter内のlinkは無視_本文のみ(self, tmp_path):
+        # links は body から抽出されるので、frontmatter 内に [[x]] があっても拾わない
+        f = _write(
+            tmp_path / "f.md",
+            "---\nname: n\ndescription: refs [[infm]]\n---\n[[inbody]]\n",
+        )
+        fact = parse_fact_file(f)
+        assert fact.links == ["inbody"]
+
+
+class TestRecallLinkExpansion:
+    """recall が hit fact の [[link]] 先を 1-hop 展開して併記する（#11）。"""
+
+    def _corpus(self, tmp_path):
+        root = tmp_path / "projects"
+        _write(
+            root / "-pj-a" / "memory" / "main.md",
+            "---\nname: main-fix\ndescription: about widgets\n---\n"
+            "widget core. see [[helper]] for more.\n",
+        )
+        _write(
+            root / "-pj-a" / "memory" / "helper.md",
+            "---\nname: helper\ndescription: helper detail\n---\n"
+            "helper body explaining the supporting bits.\n",
+        )
+        return root
+
+    def test_hit_factのlink先が併記される(self, tmp_path):
+        root = self._corpus(tmp_path)
+        hits = recall("widget", projects_root=root)
+        assert len(hits) == 1
+        assert hits[0].file_path.name == "main.md"
+        linked_names = [lk.file_path.name for lk in hits[0].linked]
+        assert linked_names == ["helper.md"]
+
+    def test_link先はスコア対象でない_直接hitに混ざらない(self, tmp_path):
+        root = self._corpus(tmp_path)
+        # "widget" は helper.md 本体にはマッチしない。直接 hit は main.md のみ
+        hits = recall("widget", projects_root=root)
+        direct_names = [h.file_path.name for h in hits]
+        assert direct_names == ["main.md"]
+        # helper.md は linked として添付（直接 hit ではない）
+        assert hits[0].linked[0].is_linked is True
+
+    def test_直接hitでもあるlink先はlinkedに重複させない(self, tmp_path):
+        root = tmp_path / "projects"
+        # 両方が query にマッチし、main が helper を指す
+        _write(
+            root / "-pj-a" / "memory" / "main.md",
+            "---\nname: main\ndescription: common\n---\ncommon term see [[helper]]\n",
+        )
+        _write(
+            root / "-pj-a" / "memory" / "helper.md",
+            "---\nname: helper\ndescription: common\n---\ncommon term helper\n",
+        )
+        hits = recall("common", projects_root=root)
+        direct = {h.file_path.name for h in hits}
+        assert direct == {"main.md", "helper.md"}
+        # helper は既に直接 hit なので、main の linked には現れない
+        main_hit = next(h for h in hits if h.file_path.name == "main.md")
+        assert "helper.md" not in [lk.file_path.name for lk in main_hit.linked]
+
+    def test_dangling_linkは無視しエラーにならない(self, tmp_path):
+        root = tmp_path / "projects"
+        _write(
+            root / "-pj-a" / "memory" / "main.md",
+            "---\nname: main\ndescription: about widgets\n---\nwidget see [[ghost]]\n",
+        )
+        hits = recall("widget", projects_root=root)
+        assert len(hits) == 1
+        assert hits[0].linked == []
+
+    def test_link解決は同一PJ内のみ(self, tmp_path):
+        root = tmp_path / "projects"
+        _write(
+            root / "-pj-a" / "memory" / "main.md",
+            "---\nname: main\ndescription: about widgets\n---\nwidget see [[shared]]\n",
+        )
+        # 別 PJ に同名 name の fact があっても解決しない
+        _write(
+            root / "-pj-b" / "memory" / "shared.md",
+            "---\nname: shared\ndescription: other pj\n---\nshared in pj-b\n",
+        )
+        hits = recall("widget", projects_root=root)
+        assert hits[0].linked == []
+
+    def test_link先のnameでもファイル名stemでも解決(self, tmp_path):
+        root = tmp_path / "projects"
+        _write(
+            root / "-pj-a" / "memory" / "main.md",
+            "---\nname: main\ndescription: about widgets\n---\nwidget see [[helper-fix]]\n",
+        )
+        # frontmatter name が helper-fix、ファイル名は別
+        _write(
+            root / "-pj-a" / "memory" / "helper_file.md",
+            "---\nname: helper-fix\ndescription: d\n---\nhelper body\n",
+        )
+        hits = recall("widget", projects_root=root)
+        assert [lk.file_path.name for lk in hits[0].linked] == ["helper_file.md"]
+
+
 class TestFormatHits:
-    def _hit(self):
+    def _hit(self, linked=None):
         return RecallHit(
             pj_display="pj-a",
             file_path=Path("/x/memory/caching.md"),
             score=2.5,
             snippet="duckdb checkpoint",
             is_index=False,
+            linked=linked or [],
+        )
+
+    def _linked_hit(self):
+        return RecallHit(
+            pj_display="pj-a",
+            file_path=Path("/x/memory/related.md"),
+            score=0.0,
+            snippet="related context",
+            is_index=False,
+            is_linked=True,
         )
 
     def test_json出力は構造化(self):
@@ -200,15 +339,85 @@ class TestFormatHits:
         assert data[0]["pj_display"] == "pj-a"
         assert data[0]["score"] == 2.5
         assert data[0]["is_index"] is False
+        assert data[0]["linked"] == []
+
+    def test_json出力にlinkedフィールド(self):
+        out = format_hits([self._hit(linked=[self._linked_hit()])], as_json=True)
+        data = json.loads(out)
+        assert len(data[0]["linked"]) == 1
+        assert data[0]["linked"][0]["file_path"].endswith("related.md")
 
     def test_人間可読出力にPJ名とsnippet(self):
         out = format_hits([self._hit()], as_json=False)
         assert "pj-a" in out
         assert "duckdb checkpoint" in out
 
+    def test_人間可読出力にlinked行(self):
+        out = format_hits([self._hit(linked=[self._linked_hit()])], as_json=False)
+        assert "↳ linked" in out
+        assert "related.md" in out
+
     def test_空ヒットのメッセージ(self):
         out = format_hits([], as_json=False)
         assert out.strip() != ""
+
+
+class TestReinforceRecallHits:
+    """recall ヒット時に対象 memory ファイルを reinforce する本番配線（#18）。"""
+
+    def test_直接hitファイルがreinforceされる(self, tmp_path):
+        f = _write(
+            tmp_path / "memory" / "hot.md",
+            "---\nname: hot\ndescription: about widgets\nupdate_count: 0\n---\nwidget body\n",
+        )
+        hit = RecallHit(
+            pj_display="pj-a", file_path=f, score=2.0,
+            snippet="widget", is_index=False,
+        )
+        before = parse_memory_temporal(f)
+        assert before["last_reinforced_at"] is None
+        reinforce_recall_hits([hit])
+        after = parse_memory_temporal(f)
+        assert after["update_count"] == 1
+
+    def test_last_reinforced_atが書かれる(self, tmp_path):
+        f = _write(
+            tmp_path / "memory" / "hot.md",
+            "---\nname: hot\ndescription: d\nupdate_count: 0\n---\nbody\n",
+        )
+        reinforce_recall_hits([
+            RecallHit(pj_display="p", file_path=f, score=1.0, snippet="", is_index=False)
+        ])
+        text = f.read_text(encoding="utf-8")
+        assert "last_reinforced_at:" in text
+
+    def test_linked先もreinforceされる(self, tmp_path):
+        main_f = _write(
+            tmp_path / "memory" / "main.md",
+            "---\nname: main\ndescription: d\nupdate_count: 0\n---\nbody\n",
+        )
+        linked_f = _write(
+            tmp_path / "memory" / "linked.md",
+            "---\nname: linked\ndescription: d\nupdate_count: 0\n---\nbody\n",
+        )
+        hit = RecallHit(
+            pj_display="p", file_path=main_f, score=1.0, snippet="", is_index=False,
+            linked=[RecallHit(pj_display="p", file_path=linked_f, score=0.0,
+                              snippet="", is_index=False, is_linked=True)],
+        )
+        reinforce_recall_hits([hit])
+        assert parse_memory_temporal(linked_f)["update_count"] == 1
+
+    def test_frontmatterなしファイルはno_op(self, tmp_path):
+        f = _write(tmp_path / "memory" / "legacy.md", "# no frontmatter\nbody\n")
+        reinforce_recall_hits([
+            RecallHit(pj_display="p", file_path=f, score=1.0, snippet="", is_index=False)
+        ])
+        # no-op: ファイルは変化しない、例外も出ない
+        assert f.read_text(encoding="utf-8") == "# no frontmatter\nbody\n"
+
+    def test_空ヒットは例外なし(self):
+        reinforce_recall_hits([])  # 何もしない
 
 
 class TestRecallCLI:
