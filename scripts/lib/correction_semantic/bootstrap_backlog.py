@@ -156,10 +156,47 @@ def group_signals(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ─────────────────────────────────────────────────────────────────
 # テーマクラスタリング（#558・決定論 TF-IDF・LLM 非依存）
 # ─────────────────────────────────────────────────────────────────
+# theme_label に併記する代表シグナル抜粋の文字数（#21）。
+_THEME_EXCERPT_CHARS = 24
+
+
 def _theme_label(tokens: List[str]) -> str:
     """クラスタの代表トークン列からテーマラベルを決定論で生成する。"""
     picked = [t for t in tokens if t][:3]
     return " / ".join(picked) if picked else "その他"
+
+
+def _representative_excerpt(reps: List[str]) -> str:
+    """バケット代表シグナルの冒頭抜粋を決定論で返す（#21・AskUserQuestion 用）。
+
+    日本語シグナルでは char n-gram の centroid 上位が「、、/って/んだ」のような意味を
+    なさない断片列になり theme_label 単独では選択の手がかりにならない。代表シグナル
+    （呼び出し側が group_index 順に渡した先頭非空テキスト）の冒頭
+    ``_THEME_EXCERPT_CHARS`` 文字を併記して人間が選べるラベルにする
+    （issue #21 option b・外部形態素解析に依存しない）。
+
+    決定論: 渡された reps の順序どおりに最初の非空テキストを採用する。
+    """
+    for rep in reps:
+        text = (rep or "").strip()
+        if text:
+            head = text[:_THEME_EXCERPT_CHARS]
+            return head + ("…" if len(text) > _THEME_EXCERPT_CHARS else "")
+    return ""
+
+
+def _theme_label_with_excerpt(tokens: List[str], reps: List[str]) -> str:
+    """n-gram テーマラベルに代表シグナル抜粋を併記する（#21）。
+
+    抜粋が取れなければ n-gram ラベル単独（後方互換）。抜粋があれば
+    ``「<代表抜粋>」 (<n-gram label>)`` 形式で人間可読にする。代表抜粋は label の
+    冒頭に置く（AskUserQuestion の選択肢でまず意味が読めるようにするため）。
+    """
+    excerpt = _representative_excerpt(reps)
+    label = _theme_label(tokens)
+    if not excerpt:
+        return label
+    return f"「{excerpt}」 ({label})"
 
 
 def _build_char_tfidf(docs: List[str]):
@@ -196,8 +233,10 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     再クラスタし、AskUserQuestion 1 問で扱える規模（実測 figma 108→10）に必ず収める。
 
     Returns: 各バケット = ``{"theme_label": str, "group_indices": [int...],
-    "groups": [<group dict>...]}``。theme_label はクラスタ centroid の上位文字 n-gram
-    から決定論生成。取りこぼし無し（全 group がいずれかのバケットに 1 回入る）。
+    "groups": [<group dict>...]}``。theme_label はクラスタ代表シグナルの冒頭抜粋 +
+    centroid 上位文字 n-gram から決定論生成（#21: 日本語では n-gram 単独が無意味な
+    断片列になるため代表抜粋を併記）。取りこぼし無し（全 group がいずれかのバケットに
+    1 回入る）。
 
     sklearn/scipy 未インストール or 文書が少ない場合は単一バケットに全 group を入れて
     graceful degradation する（決定論・例外を投げない）。
@@ -220,7 +259,8 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         counter = Counter(t for t in all_tokens if t)
         top = [t for t, _ in sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))]
         return [{
-            "theme_label": _theme_label(top),
+            # #21: n-gram ラベル単独でなく代表シグナル抜粋を併記して人間可読にする。
+            "theme_label": _theme_label_with_excerpt(top, docs),
             "group_indices": list(range(len(groups))),
             "groups": list(groups),
         }]
@@ -279,8 +319,10 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             for i in top_feat_idx
             if centroid[i] > 0 and feature_names[i].strip()
         ][:3]
+        # #21: バケット代表シグナル（最小 group_index = 入力順先頭）の抜粋を併記する。
+        bucket_reps = [docs[i] for i in indices]
         buckets.append({
-            "theme_label": _theme_label(list(top_tokens)),
+            "theme_label": _theme_label_with_excerpt(list(top_tokens), bucket_reps),
             "group_indices": indices,
             "groups": [groups[i] for i in indices],
         })
