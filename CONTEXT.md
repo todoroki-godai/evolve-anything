@@ -62,3 +62,5 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | dogfood gate（通し評価ゲート） | リリース前に実環境の繋ぎ目を3層で検査する `bin/evolve-dogfood-gate`（Layer1: dry-run 不変・隔離コピー / Layer2: report invariants / Layer3: SKILL.md コードブロック実行）。pytest が掬えない「テスト緑・実環境赤」を防ぐ | #496 |
 | 隔離コピー方式 | gate Layer1 が実 DATA_DIR を tmp にコピーし `CLAUDE_PLUGIN_DATA` で隔離実行してコピー側のみ比較する方式。ライブ hook の ambient write 偽赤を構造的に排除 | #496, PR #515 |
 | 文書化された除外リスト | dry-run 純度契約（1バイトも書かない）の原則ベース例外 — 意図された dry-run 書込（cache warm / 運用ポインタ evolve_pending/）を理由コメント付き定数で除外。bypass フラグは作らない | #513, #496 |
+| RODS | reward 分散ベースの進化ターゲット選定（Reward-variance Outcome-Driven Selection）。session 別 reward proxy（一発成功 0/1）の分散が大きい＝能力境界＝学習余地大、とみなし `check_variance` を per-skill 転用して outcome ランキングに advisory 列を添える（自動昇格はしない） | #28 |
+| paired trajectory（観測版） | 同一タスク種別を「あるスキル使用群 vs 非使用群」に分け、既存テレメトリからアウトカム差を決定論で対照観測するシグナル。能動再実行はしない（観測版）。outcome_attribution/multiview_eval/negative_transfer と相補 | #15 |
