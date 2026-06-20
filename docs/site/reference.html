@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.106.0</span>
+    <span class="header-version">v1.107.0</span>
   </div>
 </header>
 
@@ -383,6 +383,7 @@
           <tr><td>plugin_self origin</td><td>プラグイン本体リポジトリ自身の repo 直下 skills/ を evolve 診断対象化 — <code>.claude-plugin/plugin.json</code> 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185）</td></tr>
           <tr><td>dogfood gate</td><td>通し評価ゲート <code>bin/evolve-dogfood-gate</code> — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 非 dry-run store 差分（Layer1b・<code>evolve --drain --result-json</code> の隔離実行で weak_signals 永続化方向を assert）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。evolve.py の DATA_DIR を env 優先解決に統一（#517）。<code>--layer light</code>（Layer1a 不変 + Layer2 + Layer3、約十数秒・Layer1b drain と ingest 除外）を pre-push hook（<code>scripts/git-hooks/pre-push.local</code>・非ブロッキング警告。gate 終了コードを区別し古い gate を誤警告しない）が自動実行。リリース前の実環境 dogfood E2E（#496, #513, #517, #518）</td></tr>
           <tr><td>pj_slug</td><td>PJ slug 導出の単一ソース — resolve_pj_slug（git-common-dir 親・authoritative）/ pj_slug_fast（文字列処理・hooks hot path）。read/write 同一関数で worktree slug 食い違いを構造的に防ぐ（#492）</td></tr>
+          <tr><td><code>store_write</code> write barrier</td><td>全ストア書込の単一ゲート — <code>store_write(store_name, record)</code> が canonical <code>DATA_DIR/&lt;name&gt;</code> を内部解決し store_registry の active 登録を runtime guard で照合。既定 reject（全 production caller=hooks 10 + scripts/lib 6 を移行完了 → warn-only から昇格・登録外書込は <code>StoreWriteError</code>／緊急避難は env <code>EVOLVE_WRITE_GUARD=warn</code>／store_registry 不在は fail-open）。例外口は別名関数 <code>store_write_raw</code>。read（union 寛容）と write（厳格）を分離し共有は store_registry のみ（ADR-049, #55）</td></tr>
           <tr><td>weak_signals drain 永続化</td><td>決定論3チャネルの永続化を <code>evolve --drain</code> の apply 境界に配線 — 標準フロー（dry-run 分析のみ）で書込経路が構造的に死んでいた #484 の根治</td></tr>
           <tr><td>critical-instruction-compliance</td><td>スキル指示の遵守保証サイクル — critical 行抽出 + 違反検出 + pitfall 自動学習</td></tr>
           <tr><td>second-opinion エージェント</td><td>cold-read セカンドオピニオン（startup/builder/general 3モード）。codex 不要で Agent ツールのみで動作する</td></tr>
