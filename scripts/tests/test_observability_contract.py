@@ -102,6 +102,10 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     # ため、実機データがあると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する（#445）。
     from audit import measurement_bug
     monkeypatch.setattr(measurement_bug, "DATA_DIR", tmp_path / "no-growth-state")
+    # fanout_cost も環境グローバル（DATA_DIR 配下の subagents.jsonl）を読む builder のため、
+    # 実機データがあると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する（#14）。
+    import fanout_cost
+    monkeypatch.setattr(fanout_cost, "DATA_DIR", tmp_path / "no-fanout")
     # memory_capability も環境グローバル（~/.claude/projects/<slug>/memory/）を読む builder のため、
     # 実機の対象 slug に memory があると「PJ アーティファクト無し」前提が崩れる。memory dir を空 tmp に
     # 向けて隔離する（#19）。
