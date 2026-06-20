@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 
 import yaml
 
+from frontmatter import find_frontmatter_close
+
 # スキル名バリデーション: 英数字・ハイフン・アンダースコアのみ、先頭は英数字
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
 
@@ -273,7 +275,7 @@ def _parse_frontmatter_text(text: str) -> dict:
     if not text.startswith("---"):
         return {}
 
-    end = text.find("---", 3)
+    end = find_frontmatter_close(text)
     if end == -1:
         return {}
 

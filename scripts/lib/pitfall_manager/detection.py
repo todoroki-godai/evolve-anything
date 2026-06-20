@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from frontmatter import find_frontmatter_close
 from similarity import jaccard_coefficient, tokenize
 from skill_evolve import (
     CANDIDATE_PROMOTION_COUNT,
@@ -52,7 +53,7 @@ def _split_sections_from_content(content: str) -> List[str]:
     # frontmatter 除外
     stripped = content
     if stripped.startswith("---"):
-        end = stripped.find("---", 3)
+        end = find_frontmatter_close(stripped)
         if end != -1:
             stripped = stripped[end + 3:]
 

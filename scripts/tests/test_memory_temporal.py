@@ -268,10 +268,8 @@ class TestReinforceMemory:
 
         reinforce_memory(f, reason="test reinforcement")
 
-        import yaml
-        text = f.read_text(encoding="utf-8")
-        end = text.find("---", 3)
-        fm = yaml.safe_load(text[3:end].strip())
+        from lib.frontmatter import parse_frontmatter
+        fm = parse_frontmatter(f)
 
         assert fm["update_count"] == 4
         assert isinstance(fm["importance_score"], float)

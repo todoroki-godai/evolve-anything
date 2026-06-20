@@ -9,6 +9,37 @@ from typing import Any, Dict, Tuple
 import yaml
 
 
+def find_frontmatter_close(text: str) -> int:
+    """開き `---` に対応する閉じ `---` の開始インデックスを返す（#40）。
+
+    閉じ区切りは「行頭の `---`」（直前が改行）のみとみなし、YAML 値の中に
+    現れる `---`（例: `description: a --- b`）を区切りと誤認しない。
+    `text.find("---", 3)` は値内の `---` にマッチして frontmatter を破壊する
+    弱い慣習で、reader と writer が別々に同じ式を持つと read/write が desync
+    する。本関数を frontmatter 区切り探索の単一ソースとする。
+
+    返り値は閉じ `---` の開始インデックスなので、呼び出し側は従来どおり
+    `text[3:end]`（YAML ブロック）/ `text[end + 3:]`（本文）で slice できる。
+    正常な frontmatter（閉じ `---` が行頭）では `text.find("---", 3)` と同じ
+    インデックスを返すため後方互換。
+
+    前提: 開き `---` の直後は改行であること（正常な frontmatter は必ず `---\\n`）。
+    単一行の `---...---`（開き行に内容も閉じも乗る不正形）は「閉じなし」(-1) として
+    扱う。旧 `find("---", 3)` は値内の `---` を拾って誤パースしていたため、これは
+    退行ではなくより安全側の挙動。
+
+    Args:
+        text: `---` で始まる前提のファイル内容。
+
+    Returns:
+        閉じ `---` の開始インデックス。見つからなければ -1。
+    """
+    nl = text.find("\n---", 3)
+    if nl == -1:
+        return -1
+    return nl + 1
+
+
 def count_content_lines(content: str) -> int:
     """frontmatter を除外したコンテンツ部分の行数を返す。
 
@@ -65,7 +96,7 @@ def parse_frontmatter(filepath: Path) -> Dict[str, Any]:
     if not text.startswith("---"):
         return {}
 
-    end = text.find("---", 3)
+    end = find_frontmatter_close(text)
     if end == -1:
         return {}
 
@@ -99,7 +130,7 @@ def update_frontmatter(filepath: Path, updates: Dict[str, Any]) -> Tuple[bool, s
         return False, "empty_file"
 
     if text.startswith("---"):
-        end = text.find("---", 3)
+        end = find_frontmatter_close(text)
         if end == -1:
             return False, "yaml_parse_error"
 

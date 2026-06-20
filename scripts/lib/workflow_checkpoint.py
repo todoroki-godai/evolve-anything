@@ -10,6 +10,11 @@ import signal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:  # scripts/lib が sys.path のとき（runtime / 一部テスト）
+    from frontmatter import find_frontmatter_close
+except ImportError:  # scripts/ が sys.path のとき（lib.* 経由の import 文脈）
+    from lib.frontmatter import find_frontmatter_close
+
 logger = logging.getLogger(__name__)
 
 # ── DATA_DIR（テスト時 mock 対象）──────────────────────
@@ -46,7 +51,7 @@ def _parse_frontmatter_type(skill_md_path: Path) -> Optional[str]:
     if not content.startswith("---"):
         return None
 
-    end = content.find("---", 3)
+    end = find_frontmatter_close(content)
     if end == -1:
         return None
 

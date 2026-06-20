@@ -107,3 +107,38 @@ def test_malformed_yaml_frontmatter_is_noop(tmp_path):
     p.write_text(original, encoding="utf-8")
     assert mt.write_temporal_metadata(p, valid_from="2026-06-20T00:00:00+00:00") is False
     assert p.read_text(encoding="utf-8") == original  # 不変
+
+
+def test_write_preserves_value_with_inline_dashes(tmp_path):
+    """frontmatter の値に --- が含まれても writer が本文/値を破壊しない（#40）。"""
+    p = tmp_path / "auto.md"
+    p.write_text(
+        "---\nname: x\ndescription: a --- b\nmetadata:\n  type: feedback\n"
+        "importance: medium\n---\n\nimportant body text",
+        encoding="utf-8",
+    )
+    changed = mt.write_temporal_metadata(p, valid_from="2026-06-20T00:00:00+00:00")
+    assert changed is True
+    parsed = mt.parse_frontmatter(p)
+    assert parsed["description"] == "a --- b"  # 値が壊れない
+    assert parsed["valid_from"] == "2026-06-20T00:00:00+00:00"
+    text = p.read_text(encoding="utf-8")
+    assert text.rstrip().endswith("important body text")  # body 保持
+    assert text.count("important body text") == 1  # 重複なし
+
+
+def test_reinforce_preserves_value_with_inline_dashes(tmp_path):
+    """reinforce_memory も値内 --- で本文を破壊しない（#40・writer 共通）。"""
+    p = tmp_path / "reinf.md"
+    p.write_text(
+        "---\nname: x\ndescription: sep --- here\nupdate_count: 1\n"
+        "metadata:\n  type: feedback\n---\n\nbody keep",
+        encoding="utf-8",
+    )
+    mt.reinforce_memory(p, reason="t")
+    parsed = mt.parse_frontmatter(p)
+    assert parsed["description"] == "sep --- here"
+    assert parsed["update_count"] == 2  # インクリメントされる
+    text = p.read_text(encoding="utf-8")
+    assert text.rstrip().endswith("body keep")
+    assert text.count("body keep") == 1
