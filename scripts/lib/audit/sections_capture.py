@@ -151,11 +151,15 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
             "",
         ]
 
+    # #52-6: 具体手順を番号付きで添える（何をどの順で確認すればよいかを明示）。
     return header + [
         f"⚠ correction capture 率が低い: {rate:.0%} {detail}。"
         "RL ループの報酬入力（corrections）が枯渇している可能性。"
         "検出器の仕様通りの少なさか capture 漏れかを `corrections.jsonl` の中身で確認し、"
         "漏れなら `correction_detect` hook の発火条件を見直す（advisory・スコア非関与, #421）。",
         channel_line,
+        "次の一手: 1) `wc -l <DATA_DIR>/corrections.jsonl` で件数を確認 → "
+        "2) `/evolve-anything:reflect` で未処理修正を反映 → "
+        "3) 件数が少ないだけなら数週間運用を継続して蓄積を待つ。",
         "",
     ]

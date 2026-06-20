@@ -28,6 +28,7 @@ from .issues import (
     collect_hardcoded_value_issues,
 )
 from .sections import _format_constitutional_report
+from .sections_milestone import _next_milestone_lines, build_next_milestone_section
 from .report import generate_report
 
 
@@ -325,6 +326,12 @@ def run_audit(
             proj, skip_llm=skip_rescore, issues_summary=_issues,
         )
 
+    # #52-2: フル growth report が無い標準実行でも「次フェーズ到達条件」を出す。
+    # growth=True のときはフル report 側に Next Milestone が含まれるため二重出力しない。
+    next_milestone_lines = None
+    if not growth:
+        next_milestone_lines = build_next_milestone_section(proj)
+
     from rl_common.config import load_user_config
     from .usage import aggregate_contribution_scores
     _user_cfg = load_user_config()
@@ -346,6 +353,7 @@ def run_audit(
         memory_trace_report=memory_trace_report_lines,
         cross_project_report=cross_project_report_lines,
         growth_report=growth_report_lines,
+        next_milestone=next_milestone_lines,
         contribution_scores=_contribution_scores if _contribution_scores else None,
         max_skill_count=_max_skill_count,
         untagged_skipped_count=untagged_skipped_count,
@@ -457,18 +465,8 @@ def _build_growth_report(
             lines.append(story)
             lines.append("")
 
-        lines.append("### Next Milestone")
-        if phase == Phase.MATURE_OPERATION:
-            lines.append("最終フェーズに到達しています。")
-        else:
-            next_phases = {
-                Phase.BOOTSTRAP: ("Initial Nurturing", "sessions >= 10"),
-                Phase.INITIAL_NURTURING: ("Structured Nurturing", "sessions >= 50, corrections >= 10, crystallized_rules >= 3"),
-                Phase.STRUCTURED_NURTURING: ("Mature Operation", "sessions > 200, crystallized_rules >= 10, coherence >= 0.7"),
-            }
-            next_name, next_req = next_phases.get(phase, ("?", "?"))
-            lines.append(f"Next phase: **{next_name}** — requires: {next_req}")
-        lines.append("")
+        # Next Milestone は軽量サブセット（標準 audit #52-2）と同一文言を共有する。
+        lines.extend(_next_milestone_lines(phase))
 
     except Exception as e:
         lines.append(f"Growth Report の生成に失敗しました: {e}")

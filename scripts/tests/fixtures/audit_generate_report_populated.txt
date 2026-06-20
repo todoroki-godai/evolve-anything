@@ -1,5 +1,8 @@
 # Environment Audit Report
 
+## TL;DR
+要対応 0 件 / 観察中 0 件 / 評価済みクリーン 0 件
+
 ## Growth
 - mock entry
 ## Environment
@@ -24,6 +27,7 @@
 
 ## Line Limit Violations (1)
 - /x/skill.md: 600/500 lines
+→ `/evolve-anything:evolve` Step4 または手動分割で対処。800行超（分割必須）を優先する。
 
 ## Usage (last 30 days)
 - foo: 3 invocations
@@ -34,6 +38,13 @@
 ## Token Consumption
 
 (Token tracking not initialized — run `evolve-fleet tokens --backfill` to enable)
+（実行後: PJ別 LLM コスト TOP3 + WoW / cache hit 異常検出が見える）
 
 ## Potential Duplicates (1)
 - dup: /x/a, /y/a
+
+## 推奨アクション
+
+🔴 要対応（実行コマンドあり）:
+  - Line Limit Violations 1件 — 対象ファイルを `/evolve-anything:evolve` Step4 または手動分割（800行超を優先）
+  - Token Consumption 未初期化 — `bin/evolve-fleet tokens --backfill`（実行後: PJ別 LLM コスト TOP3 + 異常検出が見える）

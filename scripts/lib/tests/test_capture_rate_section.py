@@ -182,6 +182,10 @@ def test_starvation_warning_when_both_channels_empty(tmp_path, monkeypatch):
     combined = "\n".join(section)
     assert "⚠" in combined
     assert "枯渇している可能性" in combined
+    # #52-6: 具体手順（番号付き）が添えられている
+    assert "次の一手" in combined
+    assert "wc -l" in combined
+    assert "/evolve-anything:reflect" in combined
 
 
 def test_other_pj_llm_judge_not_counted(tmp_path, monkeypatch):

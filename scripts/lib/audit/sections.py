@@ -92,10 +92,12 @@ def build_token_consumption_section(days: int = 30) -> List[str]:
             db_empty = True
 
     if db_empty:
+        # #52-4: 実行後に何が見えるかを添えて行動の意味を伝える。
         return [
             "## Token Consumption",
             "",
             "(Token tracking not initialized — run `evolve-fleet tokens --backfill` to enable)",
+            "（実行後: PJ別 LLM コスト TOP3 + WoW / cache hit 異常検出が見える）",
             "",
         ]
 
@@ -324,33 +326,37 @@ def build_lsp_suggestion_section(project_dir: Path) -> Optional[List[str]]:
     if not detected:
         return None
 
+    # #49-2: 1行サマリ + <details> で詳細（install コマンド / .lsp.json 設定例）を折り畳む。
+    # 未設定 PJ で毎回フル展開すると冗長なため、サマリ1行で気づけるようにし、必要な人だけ
+    # 詳細を開く（surface は維持・冗長性だけ圧縮）。
     lines = ["## LSP Setup Recommendation", ""]
     lines.append(
-        f"このPJには {', '.join(detected)} のファイルが検出されましたが、"
-        "`.lsp.json` が設定されていません。"
+        f"ℹ LSP 未設定（{', '.join(detected)}）— 導入すると `goToDefinition` / "
+        "`findReferences` 等で Read 呼び出しを削減できます。設定例は下記を展開:"
     )
-    lines.append(
-        "LSP（Language Server Protocol）を導入すると、"
-        "Claude Code が `goToDefinition` / `findReferences` 等のツールを活用でき、"
-        "Read ツールの呼び出し回数を削減できます。"
-    )
-    lines.append("")
 
     seen_installs: set = set()
     config_example: Dict[str, Any] = {}
+    install_lines: List[str] = []
     for lang in detected:
         info = _LSP_CATALOG[lang]
         install_cmd = info["install"]
         if install_cmd not in seen_installs:
-            lines.append(f"**{lang}**: `{install_cmd}`")
+            install_lines.append(f"**{lang}**: `{install_cmd}`")
             seen_installs.add(install_cmd)
         config_example[info["lsp_key"]] = info["config"]
 
     lines.append("")
-    lines.append("`.lsp.json` 設定例（プロジェクトルートに配置）:")
+    lines.append("<details>")
+    lines.append("<summary>.lsp.json 設定例（プロジェクトルートに配置）</summary>")
+    lines.append("")
+    lines.extend(install_lines)
+    lines.append("")
     lines.append("```json")
     lines.append(json.dumps(config_example, indent=2, ensure_ascii=False))
     lines.append("```")
+    lines.append("")
+    lines.append("</details>")
     lines.append("")
     return lines
 

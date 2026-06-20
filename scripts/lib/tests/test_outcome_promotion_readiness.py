@@ -485,6 +485,12 @@ class TestBuildSection:
         assert build_promotion_readiness_section(tmp_path) is None
 
     def test_surfaces_conditions_when_data_present(self, tmp_path, monkeypatch):
+        """#49-3: 3条件すべて ✗ かつ slug clean なら 1行に圧縮される（PJ ≥2 ヒント）。
+
+        旧契約（全条件を ✓/✗ で全展開）は ✓ が1つでもある場合に維持される
+        （test_promotion_line_when_all_pass / 部分 pass のテストで担保）。データ1件だけの
+        全✗ ケースは冗長なので圧縮版（ℹ 条件不足）に倒す。
+        """
         from audit.sections_promotion_readiness import build_promotion_readiness_section
 
         monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
@@ -495,9 +501,10 @@ class TestBuildSection:
         lines = build_promotion_readiness_section(tmp_path)
         assert lines is not None
         combined = "\n".join(lines)
-        # 3条件が ✓/✗ で出る
-        assert "分散" in combined or "variance" in combined.lower()
-        assert "✗" in combined  # データ不足なので少なくとも 1 つ ✗
+        # 圧縮版: 条件不足の1行サマリ + PJ ≥2 ヒント（全展開はされない）
+        assert "条件不足" in combined
+        assert "PJ" in combined and "2" in combined
+        assert "条件1" not in combined  # 全展開されていない
 
     def test_promotion_line_when_all_pass(self, tmp_path, monkeypatch):
         from audit.sections_promotion_readiness import build_promotion_readiness_section

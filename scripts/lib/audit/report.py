@@ -11,6 +11,13 @@ from .classification import classify_artifact_origin
 from .memory import build_memory_health_section
 from .quality import build_quality_trends_section
 from .sections import _build_test_guard_section, build_corrections_insights_section, build_lsp_suggestion_section, build_token_consumption_section
+from .sections_summary import (
+    build_clean_fold_line,
+    build_recommended_actions_section,
+    build_tldr_block,
+    classify_section,
+    fold_clean_observability,
+)
 
 
 def generate_report(
@@ -33,6 +40,7 @@ def generate_report(
     memory_trace_report: Optional[List[str]] = None,
     cross_project_report: Optional[List[str]] = None,
     growth_report: Optional[List[str]] = None,
+    next_milestone: Optional[List[str]] = None,
     contribution_scores: Optional[Dict[str, Any]] = None,
     max_skill_count: Optional[int] = None,
     untagged_skipped_count: int = 0,
@@ -93,6 +101,11 @@ def generate_report(
         lines.append(f"## Line Limit Violations ({len(violations)})")
         for v in violations:
             lines.append(f"- {v['file']}: {v['lines']}/{v['limit']} lines")
+        # #52-3: 次アクション導線（800行超=分割必須を優先）。
+        lines.append(
+            "→ `/evolve-anything:evolve` Step4 または手動分割で対処。"
+            "800行超（分割必須）を優先する。"
+        )
         lines.append("")
 
     if project_dir is not None:
@@ -111,16 +124,25 @@ def generate_report(
             lines.extend(lsp_section)
 
     # Observability セクション（glossary_drift / unmanaged_pitfalls …）は
-    # observability.py の _OBSERVABILITY_BUILDERS を単一ソースとして消費する。
-    # collect_observability（evolve が surface する構造化経路）と同じ順序・同じ内容を保証し、
-    # 項目追加時に markdown 側だけ漏れる drift を防ぐ。
+    # observability.py の collect_observability を単一ソースとして消費する（ADR-028）。
+    # evolve が surface する構造化経路と同じ順序・同じ内容を保証し、項目追加時に markdown 側
+    # だけ漏れる drift を防ぐ。
+    #
+    # #49-1/#49-5: 全 ✓（クリーン）/ ℹ・データ不足（観察中）のセクションは展開せず
+    # 1行に畳む。要対応（⚠/🔴）のセクションだけ full-text 展開する。畳んだセクション名は
+    # `## ✓ 評価済みクリーン: ...` に列挙して残すため silence != evaluated は保たれる。
+    obs_critical_count = 0
+    obs_clean_names: List[str] = []
+    obs_watch_names: List[str] = []
+    observability: Dict[str, List[str]] = {}
     if project_dir is not None:
-        from .observability import _OBSERVABILITY_BUILDERS
+        from .observability import collect_observability
 
-        for _key, _builder in _OBSERVABILITY_BUILDERS:
-            section = _builder(project_dir)
-            if section:
-                lines.extend(section)
+        observability = collect_observability(project_dir)
+        expanded, obs_clean_names, obs_watch_names = fold_clean_observability(observability)
+        obs_critical_count = len(observability) - len(obs_clean_names) - len(obs_watch_names)
+        lines.extend(expanded)
+        lines.extend(build_clean_fold_line(obs_clean_names, obs_watch_names))
 
     if usage:
         lines.append("## Usage (last 30 days)")
@@ -200,5 +222,39 @@ def generate_report(
                 f"last used {a['last_used'][:10] if a['last_used'] else 'never'} → {a['recommendation']}"
             )
         lines.append("")
+
+    # #52-2: 標準実行でも「次フェーズ到達条件」を出す（フル growth report は重いので
+    # Next Milestone 1ブロックだけ）。growth=True 時は growth_report に含まれるので None。
+    if next_milestone:
+        lines.append("## 🌱 成長の次の一手")
+        lines.extend(next_milestone)
+
+    # #52-1: 推奨アクション判定カードを末尾に必ず出す（MUST — スキップ厳禁）。
+    # Token 未初期化は build_token_consumption_section の出力本文から、capture 枯渇は
+    # observability の correction_capture セクションが要対応（⚠）かで決定論判定する。
+    token_uninitialized = bool(token_section) and any(
+        "not initialized" in ln for ln in token_section
+    )
+    _capture_section = observability.get("correction_capture")
+    capture_starved = (
+        _capture_section is not None and classify_section(_capture_section) == "critical"
+    )
+    lines.extend(
+        build_recommended_actions_section(
+            violations=violations,
+            token_uninitialized=token_uninitialized,
+            capture_starved=capture_starved,
+            scope_candidates=advisories or [],
+        )
+    )
+
+    # #49-5: TL;DR を冒頭（タイトル直後）に挿入する。observability の要対応 / 観察中 /
+    # クリーン件数を1行で先出しし、詳細を全部読まずとも全体像が掴めるようにする。
+    tldr = build_tldr_block(
+        critical=obs_critical_count,
+        watch=len(obs_watch_names),
+        clean=len(obs_clean_names),
+    )
+    lines[2:2] = tldr
 
     return "\n".join(lines)

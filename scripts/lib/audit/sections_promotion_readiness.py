@@ -127,6 +127,28 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
     if not any(axes.get(k) for k in ("correction_recurrence", "first_try_success", "rework")):
         return None  # 評価対象（per-PJ データ）が無い環境は沈黙
 
+    # slug 健全性（#24）は 3条件評価とは独立した健全性チェックなので、圧縮可否の判定より
+    # 先に評価する。混入があれば（✗）重要警告なので圧縮せず全展開に倒す。
+    slug_lines = _slug_hygiene_lines(opr)
+    slug_has_issue = any("✗" in ln for ln in slug_lines)
+
+    # #49-3: 3条件すべて ✗ かつ slug 健全性に問題なしの場合だけ、冗長な全展開をせず
+    # 1行に圧縮する（継続観察中でまだ判断材料が無い状態の繰り返し表示を避ける）。
+    # ✓ が1つでもある / slug 混入あり なら従来の全展開（重要情報を埋もれさせない）。
+    v_pass = bool(result["variance"].get("pass"))
+    d_pass = bool(result["denominator"].get("pass"))
+    dir_pass = bool(result["direction"].get("pass"))
+    if not (v_pass or d_pass or dir_pass) and not slug_has_issue:
+        return [
+            "## Outcome Weight Promotion Readiness (advisory — ADR-046)",
+            "",
+            "ℹ Outcome Weight Promotion: 条件不足（PJ ≥2 のデータ蓄積が必要）— 継続観察。"
+            "outcome 3軸を environment fitness の重みへ繰り入れる判断はまだ時期尚早"
+            "（重みには未反映・advisory 並走を継続）。",
+            *slug_lines,
+            "",
+        ]
+
     header = [
         "## Outcome Weight Promotion Readiness (advisory — ADR-046)",
         "",
@@ -137,7 +159,7 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
     body: List[str] = [_variance_line(result["variance"])]
     body.extend(_denominator_line(result["denominator"]))
     body.extend(_direction_line(result["direction"]))
-    body.extend(_slug_hygiene_lines(opr))
+    body.extend(slug_lines)
 
     if result.get("promote"):
         body.append("")
@@ -149,5 +171,10 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
         body.append("")
         body.append(
             "  → 未充足の条件があるため重み昇格は時期尚早（advisory 並走を継続、ADR-046）"
+        )
+        # #52-5: 何が貯まれば昇格判断できるかの蓄積条件を1行添える。
+        body.append(
+            "      蓄積条件: 3条件すべて ✓（PJ ≥2 で分散十分・分母 ≥floor・apply 前後で期待方向）"
+            "が揃うと「重み昇格を提案」に切り替わる。"
         )
     return header + body + [""]

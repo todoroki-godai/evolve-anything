@@ -47,11 +47,15 @@ def _format_advantage(adv: Dict[str, Any]) -> List[str]:
     ev = adv.get("evidence", {})
     if value is None:
         # 評価対象（subagents）はあるが各群の分母が floor 未満 → 沈黙でなくデータ不足明示。
+        # #52-5: 何が貯まれば advantage が出るかの蓄積条件を1行添える。
+        floor = ev.get("floor", "?")
         return [
             "  ・fan-out advantage（一発成功率 delta）: データ不足（サンプル不足）"
             f"— fan-out群 {ev.get('fanout_group_sessions', 0)} / "
             f"single群 {ev.get('single_group_sessions', 0)} "
-            f"< floor {ev.get('floor', '?')}（同一タスク種別の対照比較は #15 同様スパース）",
+            f"< floor {floor}（同一タスク種別の対照比較は #15 同様スパース）",
+            f"      蓄積条件: fan-out 群・single 群とも同一タスク種別の session が各 ≥{floor} "
+            "貯まると advantage（一発成功率 delta）が算出される。",
         ]
     direction = "正なら fan-out が一発成功率で有利"
     return [
@@ -79,6 +83,22 @@ def build_fanout_cost_section(project_dir: Path) -> Optional[List[str]]:
     metrics = fanout_cost.compute_fanout_metrics(project_dir, days=30)
     if not metrics.get("applicable"):
         return None
+
+    # #49-6: fan-out advantage が構造的データ不足（spawning sessions <5）なら、
+    # cost の詳細を全展開せず1行に圧縮する（advantage 評価に必要な対照群が組めない間の
+    # 繰り返し表示を避ける）。advantage が算出できていれば spawning に関わらず全展開する。
+    cost_ev = metrics["cost"].get("evidence", {})
+    spawning = cost_ev.get("spawning_sessions", 0)
+    advantage_value = metrics["advantage"].get("value")
+    if advantage_value is None and spawning < 5:
+        return [
+            "## Fan-out Cost/Advantage (当PJ・advisory — スコア重みには未反映)",
+            "",
+            f"ℹ Fan-out: cost 観察中（advantage 評価には spawning sessions ≥5 必要、"
+            f"現在 {spawning}件）。複数 agent fan-out の費用対効果は対照群が揃うまで保留"
+            "（#14, arXiv 2606.13003・決定論・LLM 非依存）。",
+            "",
+        ]
 
     header = [
         "## Fan-out Cost/Advantage (当PJ・advisory — スコア重みには未反映)",

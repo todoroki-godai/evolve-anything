@@ -1,5 +1,8 @@
 # Environment Audit Report
 
+## TL;DR
+要対応 0 件 / 観察中 0 件 / 評価済みクリーン 0 件
+
 ## Summary: 0 artifacts found
 - skills: 0
 - rules: 0
@@ -9,3 +12,9 @@
 ## Token Consumption
 
 (Token tracking not initialized — run `evolve-fleet tokens --backfill` to enable)
+（実行後: PJ別 LLM コスト TOP3 + WoW / cache hit 異常検出が見える）
+
+## 推奨アクション
+
+🔴 要対応（実行コマンドあり）:
+  - Token Consumption 未初期化 — `bin/evolve-fleet tokens --backfill`（実行後: PJ別 LLM コスト TOP3 + 異常検出が見える）

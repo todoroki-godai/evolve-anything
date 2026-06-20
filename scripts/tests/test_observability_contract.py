@@ -171,16 +171,30 @@ def test_registered_pitfalls_still_emit_evaluated_line(tmp_path):
 def test_report_markdown_uses_same_single_source(tmp_path):
     """report.py(markdown) と collect_observability が同じ builder を消費する単一ソース契約。
 
-    collect_observability が返す全セクションは generate_report の markdown にも含まれる
+    collect_observability が返す全セクションは generate_report の markdown に **到達する**
     （将来 _OBSERVABILITY_BUILDERS に項目を足したとき片方だけに出る drift を防ぐ回帰ガード）。
+
+    #49-1/#49-5 で markdown 経路に折り畳みを入れたため「到達」の形は 2 通りある:
+    - 要対応（⚠/🔴）セクション → header が full-text で出る
+    - クリーン（✓）/ 観察（ℹ・データ不足）セクション → key 名が折り畳み行に残る
+    どちらでも「評価したことが見える」ので silence != evaluated は保たれる。
     """
+    import sys as _sys
+    _sys.path.insert(0, str(_LIB))
+    from audit.sections_summary import classify_section  # noqa: PLC0415
+
     _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
     _write(tmp_path / "CONTEXT.md", _CONTEXT)
     obs = collect_observability(tmp_path)
     md = generate_report({}, [], {}, [], [], None, project_dir=tmp_path)
-    for _key, lines in obs.items():
+    for key, lines in obs.items():
         header = lines[0]  # "## Xxx" セクション見出し
-        assert header in md, f"{header!r} が markdown に出ていない（単一ソース drift）"
+        if classify_section(lines) == "critical":
+            # 要対応セクションは header が full-text 展開される
+            assert header in md, f"{header!r} が markdown に出ていない（単一ソース drift）"
+        else:
+            # クリーン / 観察セクションは折り畳み行に key 名が残る
+            assert key in md, f"{key!r} が折り畳み行にも出ていない（silence != evaluated 違反）"
 
 
 def test_builders_list_is_nonempty_and_callable(tmp_path):
