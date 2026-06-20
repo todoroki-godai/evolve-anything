@@ -97,3 +97,13 @@ def test_empty_source_ids_is_noop(tmp_path):
     assert mt.write_temporal_metadata(p, source_correction_ids=[]) is False
     parsed = mt.parse_memory_temporal(p)
     assert parsed["source_correction_ids"] == []
+
+
+def test_malformed_yaml_frontmatter_is_noop(tmp_path):
+    """壊れた YAML frontmatter は no-op（False）で原本を破壊しない。"""
+    p = tmp_path / "broken.md"
+    # `: : :` は yaml.safe_load が YAMLError を投げる不正構文
+    original = "---\nname: x\nbad: : : :\n---\n\nbody"
+    p.write_text(original, encoding="utf-8")
+    assert mt.write_temporal_metadata(p, valid_from="2026-06-20T00:00:00+00:00") is False
+    assert p.read_text(encoding="utf-8") == original  # 不変

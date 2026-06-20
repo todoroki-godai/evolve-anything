@@ -31,6 +31,23 @@ def test_本物のTask_agentは記録する(patch_data_dir):
     assert recs[0]["agent_type"] == "general-purpose"
 
 
+def test_本物のsubagentバーストは閾値警告を出す(patch_data_dir, capsys):
+    """#36 の agent_type 空 early-return が burst-guard を盲目化していないことの担保。
+
+    本物（agent_type 付き）の subagent を閾値（既定5）分・同一セッション・distinct agent_id で
+    生成したら subagent-guard 警告が stdout に出る。ノイズ除外で burst 検出が死んでいない。
+    """
+    base = {"agent_type": "general-purpose", "session_id": "burst-1"}
+    with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": ""}):
+        for i in range(5):  # 既定 subagent_warning_threshold=5
+            event = dict(base, agent_id=f"real-{i}", last_assistant_message="x")
+            subagent_observe.handle_subagent_stop(event)
+    out = capsys.readouterr().out
+    assert "subagent-guard" in out or "subagent" in out  # 警告 JSON が出る
+    # 5件すべて本物なので記録もされる
+    assert len(_read_subagents(patch_data_dir)) == 5
+
+
 def test_agent_type空のノイズは記録しない(patch_data_dir):
     # compaction 要約相当（agent_type 空・<analysis> 本文）
     noise_events = [
