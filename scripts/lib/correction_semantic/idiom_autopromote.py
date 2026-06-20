@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional
 from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.promote import read_unpromoted
 from correction_semantic.store import (
+    _pj_slug_match,
     normalize_idiom_text,
     read_confirmed_idiom_texts,
     read_idioms,
@@ -53,7 +54,7 @@ def _phys_to_idiom(pj_slug: str, idioms_path: Optional[Path]) -> Dict[str, Dict[
     """
     out: Dict[str, Dict[str, Any]] = {}
     for r in read_idioms(idioms_path):
-        if r.get("pj_slug") != pj_slug:
+        if not _pj_slug_match(r.get("pj_slug"), pj_slug):
             continue
         phys = _phys(r.get("provenance") or {})
         idiom = r.get("idiom")

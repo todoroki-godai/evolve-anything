@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(#46): legacy 個人辞書 / 判定進捗を read 層 union+alias で可視化（refs #46・Phase 1: idioms + judged）** — PJ rename（rl-anything→evolve-anything）で legacy `~/.claude/rl-anything` に取り残された `correction_idioms.jsonl`（313件・うち当PJ 47件）/ `correction_judged.jsonl`（3204件）が canonical-only reader から見えず、idiom_autopromote / cross_pj 照合 / 再判定 dedup が空回りしていた問題を、**物理 merge せず read 層だけで**解消。union read + slug alias を共有モジュール `store_read_union`（`iter_read_store_paths`=canonical+legacy union・canonical 先頭 dedup / `pj_slug_match`=`canonical_pj_slug` 別名・read 専用）に切り出し（weak_signals.store と単一ソース化）、`correction_semantic/store.py`（read_idioms / read_judged_keys / read_confirmed_idiom_texts / read_cross_pj_confirmed_idiom_texts）と `idiom_autopromote._phys_to_idiom` に適用。明示 path 指定時は union しない（テスト isolation / write round-trip の hermetic 性を維持）。**実測検証**: read_idioms 0→313 / read_judged_keys 0→3204（再判定 LLM コスト削減）/ _phys_to_idiom 0→47。autopromote は weak_signals が未 union（Phase 1 対象外）のため promoted=0 を維持＝副作用なし。調査で #46 の元診断（物理 merge が no_data の真因）が誤りと判明（corrections は #45/#47 read 層で既に可視・capture 0% は分母アーティファクト）。TDD 新規 9 件。決定論・LLM 非依存。残り weak_signals は daily_review 既読（`correction_review_seen`）取り残しと結合するため Phase 2 に分離（要追加検証）。
+
 ## [1.107.0] - 2026-06-20
 
 ### Added
