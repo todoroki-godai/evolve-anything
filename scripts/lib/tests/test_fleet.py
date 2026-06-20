@@ -609,14 +609,17 @@ class TestAggregateSubagentsByProject:
     def _write(self, path: Path, lines: list[str]) -> None:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    # #36: 本物の Task subagent は必ず agent_type を持つ。集計は agent_type 付きのみ。
+    _AT = "general-purpose"
+
     def test_30d_window_でフィルタ(self, tmp_path):
         now = self._now()
         f = tmp_path / "subagents.jsonl"
         self._write(f, [
-            json.dumps({"project": "a", "timestamp": (now - timedelta(days=5)).isoformat()}),
-            json.dumps({"project": "a", "timestamp": (now - timedelta(days=29)).isoformat()}),
-            json.dumps({"project": "a", "timestamp": (now - timedelta(days=31)).isoformat()}),
-            json.dumps({"project": "b", "timestamp": (now - timedelta(days=10)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "project": "a", "timestamp": (now - timedelta(days=5)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "project": "a", "timestamp": (now - timedelta(days=29)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "project": "a", "timestamp": (now - timedelta(days=31)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "project": "b", "timestamp": (now - timedelta(days=10)).isoformat()}),
         ])
         counts = aggregate_subagents_by_project(f, now=now)
         assert counts == {"a": 2, "b": 1}
@@ -625,18 +628,32 @@ class TestAggregateSubagentsByProject:
         now = self._now()
         f = tmp_path / "subagents.jsonl"
         self._write(f, [
-            json.dumps({"timestamp": (now - timedelta(days=1)).isoformat()}),
-            json.dumps({"project": "", "timestamp": (now - timedelta(days=1)).isoformat()}),
-            json.dumps({"project": None, "timestamp": (now - timedelta(days=1)).isoformat()}),
-            json.dumps({"project": "real", "timestamp": (now - timedelta(days=1)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "timestamp": (now - timedelta(days=1)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "project": "", "timestamp": (now - timedelta(days=1)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "project": None, "timestamp": (now - timedelta(days=1)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "project": "real", "timestamp": (now - timedelta(days=1)).isoformat()}),
         ])
         counts = aggregate_subagents_by_project(f, now=now)
         assert counts == {"(unknown)": 3, "real": 1}
 
+    def test_agent_type空はノイズとして除外(self, tmp_path):
+        """#36: agent_type 空（compaction 要約・メイン Stop 等）は集計対象外。"""
+        now = self._now()
+        f = tmp_path / "subagents.jsonl"
+        ts = (now - timedelta(days=1)).isoformat()
+        self._write(f, [
+            json.dumps({"agent_type": self._AT, "project": "a", "timestamp": ts}),
+            json.dumps({"agent_type": "", "project": "a", "timestamp": ts}),       # ノイズ
+            json.dumps({"project": "a", "timestamp": ts}),                          # agent_type 欠損=ノイズ
+            json.dumps({"agent_type": "   ", "project": "a", "timestamp": ts}),     # 空白のみ=ノイズ
+        ])
+        counts = aggregate_subagents_by_project(f, now=now)
+        assert counts == {"a": 1}
+
     def test_破損行は1行単位でskip(self, tmp_path):
         now = self._now()
         f = tmp_path / "subagents.jsonl"
-        good = json.dumps({"project": "a", "timestamp": (now - timedelta(days=1)).isoformat()})
+        good = json.dumps({"agent_type": self._AT, "project": "a", "timestamp": (now - timedelta(days=1)).isoformat()})
         f.write_text(good + "\n{not valid json\n" + good + "\n", encoding="utf-8")
         counts = aggregate_subagents_by_project(f, now=now)
         assert counts == {"a": 2}
@@ -650,7 +667,7 @@ class TestAggregateSubagentsByProject:
         f = tmp_path / "subagents.jsonl"
         # naive iso (tz なし)
         naive = (now - timedelta(days=2)).replace(tzinfo=None).isoformat()
-        f.write_text(json.dumps({"project": "x", "timestamp": naive}) + "\n", encoding="utf-8")
+        f.write_text(json.dumps({"agent_type": self._AT, "project": "x", "timestamp": naive}) + "\n", encoding="utf-8")
         counts = aggregate_subagents_by_project(f, now=now)
         assert counts == {"x": 1}
 
@@ -658,9 +675,9 @@ class TestAggregateSubagentsByProject:
         now = self._now()
         f = tmp_path / "subagents.jsonl"
         self._write(f, [
-            json.dumps({"project": "a"}),  # ts 欠損
-            json.dumps({"project": "a", "timestamp": "not-a-date"}),
-            json.dumps({"project": "a", "timestamp": (now - timedelta(days=1)).isoformat()}),
+            json.dumps({"agent_type": self._AT, "project": "a"}),  # ts 欠損
+            json.dumps({"agent_type": self._AT, "project": "a", "timestamp": "not-a-date"}),
+            json.dumps({"agent_type": self._AT, "project": "a", "timestamp": (now - timedelta(days=1)).isoformat()}),
         ])
         counts = aggregate_subagents_by_project(f, now=now)
         assert counts == {"a": 1}

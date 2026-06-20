@@ -77,6 +77,13 @@ def _count_recent_session_subagents(
 
 def handle_subagent_stop(event: dict) -> None:
     """SubagentStop イベントを処理する。"""
+    # #36: SubagentStop は本物の Task agent 以外（compaction 要約・メインセッション Stop・
+    # rate-limit メッセージ等）でも発火し、それらは agent_type が空になる。本物の Task
+    # subagent は必ず agent_type を持つので、空レコードはノイズとして記録しない
+    # （subagents.jsonl の 58% を占めていた汚染を writer 側で遮断）。
+    if not str(event.get("agent_type", "")).strip():
+        return
+
     common.ensure_data_dir()
 
     last_message = event.get("last_assistant_message") or ""
