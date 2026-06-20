@@ -7,9 +7,9 @@
   - 例外口は別名関数 store_write_raw（フラグでない・ADR-049 決定5）
 を検証する。
 
-Phase 2a は **挙動不変の土台**: store_write/store_write_raw を新設するが既存 14 caller
-（append_jsonl 直呼び）は未移行。本テストは新 API 単体の契約を固める。caller 移行（2b）は
-write-path-set keyset snapshot の不変で守る。
+Phase 2b 完了後の既定は **reject**: 全 caller（hooks 10 + scripts/lib 6）が store_write 経由
+へ移行済み。本テストは新 API の契約（reject 既定・不正値の warn de-escalate・raw 例外口）と
+write-path-set keyset snapshot の不変を固める。
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def data_dir(tmp_path, monkeypatch):
     d = tmp_path / "evolve-anything"
     d.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(rl_common, "DATA_DIR", d)
-    # env 由来の既定 guard モードがテスト環境に漏れないよう除去（既定 warn を確定）。
+    # env 由来の guard モード上書きがテスト環境に漏れないよう除去（コード既定 reject を確定）。
     monkeypatch.delenv("EVOLVE_WRITE_GUARD", raising=False)
     return d
 
@@ -75,31 +75,31 @@ def test_store_write_caller_cannot_choose_location(data_dir):
     assert not (data_dir.parent / "corrections.jsonl").exists()
 
 
-# --- runtime guard: warn-only（Phase 2a 既定）--------------------------------
+# --- runtime guard: warn モード（明示 de-escalate / 移行期・緊急避難口）-------
 
-def test_warn_only_undeclared_store_still_writes(data_dir, capsys):
-    """未登録ストアは warn-only 既定では警告を出すが書込は継続する（挙動不変）。"""
-    store_write("totally_new_store.jsonl", {"v": 1})
+def test_warn_mode_undeclared_store_still_writes(data_dir, capsys):
+    """未登録ストアは guard_mode="warn" 明示なら警告を出すが書込は継続する（緊急避難）。"""
+    store_write("totally_new_store.jsonl", {"v": 1}, guard_mode="warn")
     err = capsys.readouterr().err
     assert "write-barrier" in err
     assert "未登録" in err
     assert _read_lines(data_dir / "totally_new_store.jsonl") == [{"v": 1}]
 
 
-def test_warn_only_non_active_store_still_writes(data_dir, capsys, monkeypatch):
-    """legacy/dead ストアも warn-only では警告のみで書込継続（reject 昇格は移行後）。"""
+def test_warn_mode_non_active_store_still_writes(data_dir, capsys, monkeypatch):
+    """legacy/dead ストアも guard_mode="warn" 明示なら警告のみで書込継続（緊急避難）。"""
     legacy = StoreDeclaration_legacy()
     monkeypatch.setattr(
         store_registry, "_DECLARATIONS", [legacy], raising=True
     )
-    store_write("legacy_store.jsonl", {"v": 1})
+    store_write("legacy_store.jsonl", {"v": 1}, guard_mode="warn")
     err = capsys.readouterr().err
     assert "非 active" in err
     assert _read_lines(data_dir / "legacy_store.jsonl") == [{"v": 1}]
 
 
-def test_warn_only_active_store_is_silent(data_dir, capsys):
-    """active ストアは警告を出さない（ノイズを出さない）。"""
+def test_active_store_write_is_silent(data_dir, capsys):
+    """active ストアは（既定 reject でも）警告を出さない（ノイズを出さない）。"""
     store_write("corrections.jsonl", {"v": 1})
     assert "write-barrier" not in capsys.readouterr().err
 
@@ -129,6 +129,17 @@ def test_reject_mode_active_store_writes_normally(data_dir):
     assert _read_lines(data_dir / "usage.jsonl") == [{"v": 1}]
 
 
+def test_default_guard_mode_is_reject(data_dir):
+    """guard_mode 未指定・env 未設定なら既定は reject（ADR-049 ②・#55 capstone）。
+
+    全 writer 移行（2b）完了に伴い既定を warn-only → reject へ昇格した。明示モードも env も
+    無い素の呼び出しで、未登録ストアは StoreWriteError を送出し書込しないことを固定する。
+    """
+    with pytest.raises(StoreWriteError, match="未登録"):
+        store_write("phantom_default.jsonl", {"v": 1})
+    assert not (data_dir / "phantom_default.jsonl").exists()
+
+
 def test_guard_mode_from_env(data_dir, monkeypatch):
     """EVOLVE_WRITE_GUARD=reject が既定モードを上書きする。"""
     monkeypatch.setenv("EVOLVE_WRITE_GUARD", "reject")
@@ -136,8 +147,15 @@ def test_guard_mode_from_env(data_dir, monkeypatch):
         store_write("phantom.jsonl", {"v": 1})
 
 
+def test_env_warn_de_escalates_default_reject(data_dir, monkeypatch):
+    """EVOLVE_WRITE_GUARD=warn は既定 reject を warn へ下げ書込継続（コード変更なしの緊急避難口）。"""
+    monkeypatch.setenv("EVOLVE_WRITE_GUARD", "warn")
+    store_write("phantom_env_warn.jsonl", {"v": 1})
+    assert _read_lines(data_dir / "phantom_env_warn.jsonl") == [{"v": 1}]
+
+
 def test_invalid_guard_mode_falls_back_to_warn(data_dir, capsys):
-    """不正な guard_mode 値は warn にフォールバック（reject に化けて誤爆させない）。"""
+    """不正な guard_mode 値は warn へ de-escalate（typo を理由に既定 reject へ昇格させない）。"""
     store_write("phantom.jsonl", {"v": 1}, guard_mode="bogus")
     assert _read_lines(data_dir / "phantom.jsonl") == [{"v": 1}]
 

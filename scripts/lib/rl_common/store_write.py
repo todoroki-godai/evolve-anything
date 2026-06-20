@@ -4,9 +4,11 @@
 一切知らない・触れない（場所決定は `store_name` → `DATA_DIR/<name>` の内部解決のみ）。
 `store_registry` 未登録 / 非 active ストアへの書込を **runtime guard** で弾く。
 
-Phase 2a は **warn-only**（挙動不変の土台）: 未登録 / 非 active でも警告のみで書込は継続する。
-全 writer（append_jsonl 直呼び 14 caller）を store_write へ移行（2b）し終えたら、既定モードを
-"reject" へ昇格して登録外書込を実行時に例外で弾く（ADR-049 実装順序②・🔴 read 統一(#45) の後）。
+既定モードは **reject**（ADR-049 ②・全 writer 移行 2b 完了後に warn-only から昇格済み）: 未登録 /
+非 active ストアへの書込を実行時に StoreWriteError で弾く。全 production caller（hooks 10 +
+scripts/lib 6）は登録済み active ストア名のみを使うため、reject は登録外書込（＝バグ）にのみ発火する。
+guard は store_registry 不在環境で fail-open する（barrier 不在でも従来挙動を壊さない安全側）。
+緊急避難は env `EVOLVE_WRITE_GUARD=warn` で warn へ戻せる（コード変更不要）。
 
 設計（ADR-049）:
 - 主防御は runtime guard。静的 AST open 禁止は FP/FN が増えるため不採用（advisory のみ）。
@@ -28,18 +30,22 @@ class StoreWriteError(Exception):
     """未登録 / 非 active ストアへの書込を reject モードで弾いたときに送出する。"""
 
 
-# Phase 2a の既定は warn-only。全 writer 移行後に "reject" へ昇格する（ADR-049 ②）。
+# 既定は reject（ADR-049 ②・全 writer 移行 2b 完了で warn-only から昇格）。
 # 環境変数 EVOLVE_WRITE_GUARD で上書きできる（"warn" | "reject"）。
 _VALID_GUARD_MODES = ("warn", "reject")
-_DEFAULT_GUARD_MODE = "warn"
+_DEFAULT_GUARD_MODE = "reject"
 
 
 def _resolve_guard_mode(explicit: Optional[str]) -> str:
-    """明示指定 > env > 既定。不正値は warn にフォールバック（reject に化けて誤爆させない）。"""
+    """明示指定 > env > 既定（reject）。
+
+    不正値は warn へ **de-escalate** する（typo を理由に reject へ昇格させない＝誤爆防止）。
+    既定が reject になった後も、無効な guard 値は破壊側でなく安全側（warn・書込継続）に倒す。
+    """
     mode = explicit if explicit is not None else os.environ.get(
         "EVOLVE_WRITE_GUARD", _DEFAULT_GUARD_MODE
     )
-    return mode if mode in _VALID_GUARD_MODES else _DEFAULT_GUARD_MODE
+    return mode if mode in _VALID_GUARD_MODES else "warn"
 
 
 def _guard_problem(store_name: str) -> Optional[str]:
@@ -71,8 +77,8 @@ def store_write(
     一切指定できない（勝手な場所への保存を作らせない＝ユーザー要件）。
 
     guard_mode:
-      - "warn"（既定・Phase 2a）: 未登録 / 非 active は stderr 警告のみで書込は継続。
-      - "reject": StoreWriteError を送出し書込しない（全 writer 移行後に既定昇格）。
+      - "reject"（既定）: 未登録 / 非 active は StoreWriteError を送出し書込しない。
+      - "warn": 未登録 / 非 active でも stderr 警告のみで書込は継続（移行期・緊急避難用）。
     """
     mode = _resolve_guard_mode(guard_mode)
     problem = _guard_problem(store_name)

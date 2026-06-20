@@ -1,6 +1,6 @@
 # ADR-049: write barrier — 全ストア書込を `store_write` 単一ゲートに集約し runtime で強制
 
-- Status: Proposed
+- Status: Accepted（① read 統一 + ② write barrier 実装完了 / ③ merge #46・④ 削除 #54 は要承認で未着手）
 - Date: 2026-06-20
 - Issue: #55（本 ADR と同時起票・実装トラッキング）, #45（DATA_DIR SoT 単一ソース化）, #46（legacy merge）, #54（死にストア削除）
 - Related: ADR-042（hook-store-dir-resolver — reader 正準化）, ADR-031（PJ スコープ slug）,
@@ -73,12 +73,17 @@
 ### 実装順序（順序は崩せない — MUST）
 
 ```
-① read 統一（#45 read 側）…… legacy を union して全部見えるようにする
-② write barrier 導入 ………… store_write 唯一API + 未登録reject + atomic + registry status
-③ legacy→canonical merge（#46・要承認）
-④ 死にストア削除（#54）
+① read 統一（#45 read 側）…… legacy を union して全部見えるようにする        ✅ 完了
+② write barrier 導入 ………… store_write 唯一API + 未登録reject + atomic + registry status  ✅ 完了
+③ legacy→canonical merge（#46・要承認）                                      ⬜ 未着手（要承認）
+④ 死にストア削除（#54）                                                       ⬜ 未着手（要承認）
 （静的 advisory は並行：store_write 非経由の DATA_DIR 参照をレビューに上げる）
 ```
+
+② の完了内訳: Phase 2a（store_write 土台・warn-only / PR #57）→ Phase 2b wave 1-3（全 production
+caller を store_write へ移行・hooks 10 + scripts/lib 6 / PR #58-#60）→ reject 昇格（既定を
+warn-only → reject へ・#55 capstone）。production 挙動は不変（全 caller が登録済み active 名のみ
+使用）、登録外書込のみ `StoreWriteError` で弾く。緊急避難は env `EVOLVE_WRITE_GUARD=warn`。
 
 **🔴 read 統一(①) を write barrier(②) より先に**やる。逆順は事故る: write barrier を先に入れると
 legacy への書込が止まり、reader がまだ legacy を読めていない状態で **既存データが即・行方不明**になる。
