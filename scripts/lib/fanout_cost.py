@@ -37,9 +37,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
-    from rl_common import DATA_DIR
+    from rl_common import DATA_DIR, is_noise_agent_type
 except ImportError:  # pragma: no cover - パス未解決時のフォールバック
     DATA_DIR = Path.home() / ".claude" / "evolve-anything"
+
+    def is_noise_agent_type(agent_type) -> bool:
+        """rl_common 未解決時のフォールバック（空判定のみ）。"""
+        return not str(agent_type or "").strip()
 
 # fan-out / single 各群の最小 session 数 floor。outcome_metrics の各群 ≥5 方針に倣う
 # （edit_sessions≥5 / distinct_types≥5）。floor 未満では advantage delta を出さず
@@ -71,9 +75,10 @@ def _normalize_pj(value: Optional[str]) -> Optional[str]:
 
 
 def _read_subagents(base: Path, since: str, project: Optional[str]) -> List[Dict[str, Any]]:
-    """当 PJ・窓内・agent_type 非空の subagent レコードを返す（#36, #489）。
+    """当 PJ・窓内・agent_type 非ノイズの subagent レコードを返す（#36, #489）。
 
-    collectors.aggregate_subagents_by_project と同じ除外を適用する（agent_type 空除外）。
+    collectors.aggregate_subagents_by_project と同じ除外を適用する
+    （`is_noise_agent_type` = 空 / ID 形 agent_type 除外・writer/reader 単一ソース）。
     """
     path = base / "subagents.jsonl"
     if not path.is_file():
@@ -93,8 +98,9 @@ def _read_subagents(base: Path, since: str, project: Optional[str]) -> List[Dict
             continue
         if not isinstance(rec, dict):
             continue
-        # #36: agent_type 空は本物の Task subagent でない。reader 契約として除外する。
-        if not str(rec.get("agent_type", "")).strip():
+        # #36: agent_type 空 / ID 形は本物の Task subagent でない。reader 契約として除外する
+        # （writer/reader 単一ソース判定・collectors と同じ）。
+        if is_noise_agent_type(rec.get("agent_type", "")):
             continue
         if not _in_window(str(rec.get("timestamp", "")), since):
             continue

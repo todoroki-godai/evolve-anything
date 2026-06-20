@@ -133,6 +133,26 @@ def test_empty_agent_type_excluded(tmp_path):
     assert cost["evidence"]["total_subagents"] == 2
 
 
+def test_id_shaped_agent_type_excluded(tmp_path):
+    """ID 形（pure hex / UUID）の agent_type は cost breakdown から除外する。
+
+    実観測（kazevolve）で agent_type=pure hex が内訳を汚していた回帰防止。
+    """
+    _write_subagents(tmp_path, [
+        _sub("A"), _sub("A"),
+        _sub("A", agent_type="aab2173eb119c5b91"),                     # 除外（pure hex）
+        _sub("A", agent_type="77037416-f452-4241-a414-4eb497336e71"),  # 除外（UUID）
+        _sub("A", agent_type="build-a1"),                              # 保持（カスタム名）
+    ])
+    out = fanout_cost.compute_fanout_metrics(_PJ_DIR, days=30)
+    cost = out["cost"]
+    # 有効 = general-purpose×2 + build-a1×1 = 3、ID 形 2 件は除外
+    assert cost["evidence"]["total_subagents"] == 3
+    bd = cost["evidence"]["agent_type_breakdown"]
+    assert bd == {"general-purpose": 2, "build-a1": 1}
+    assert "aab2173eb119c5b91" not in bd
+
+
 # --- ④ advantage 分母 < floor → データ不足明示 ------------------------------
 
 def test_advantage_insufficient_sample(tmp_path):

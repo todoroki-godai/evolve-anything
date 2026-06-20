@@ -24,6 +24,7 @@ from . import (
 )
 from .audit_runner import IssuesSummary, run_audit_subprocess
 from .project_loader import classify_project, enumerate_projects
+from rl_common import is_noise_agent_type  # writer/reader 単一ソースの agent_type ノイズ判定
 
 
 _UNKNOWN_PROJECT_LABEL = "(unknown)"
@@ -129,10 +130,11 @@ def aggregate_subagents_by_project(
             continue  # 破損 1 行を skip
         if not isinstance(rec, dict):
             continue
-        # #36: agent_type が空のレコードは本物の Task subagent でない（compaction 要約・
-        # メインセッション Stop 等のノイズ）。reader 契約として除外する（writer 側 skip との
-        # 二重防御で、writer fix 前に書かれた履歴データの汚染も弾く）。
-        if not str(rec.get("agent_type", "")).strip():
+        # #36: agent_type が空 / ID 形のレコードは本物の Task subagent でない（compaction
+        # 要約・メインセッション Stop 等のノイズ、または harness が ID 形を渡したもの）。
+        # reader 契約として除外する（writer 側 skip との二重防御で、writer fix 前に書かれた
+        # 履歴データの汚染も弾く）。判定は writer/reader 単一ソース。
+        if is_noise_agent_type(rec.get("agent_type", "")):
             continue
         ts_raw = rec.get("timestamp")
         if not isinstance(ts_raw, str):

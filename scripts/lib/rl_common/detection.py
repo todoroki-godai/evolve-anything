@@ -188,3 +188,37 @@ def detect_all_patterns(text: str) -> list[str]:
         if re.search(pattern, text_stripped) or re.search(pattern, text_stripped.lower()):
             matched.append(key)
     return matched
+
+
+# subagents.jsonl の agent_type ノイズ判定（writer/reader 単一ソース）。
+# hex 桁とハイフンのみで構成される opaque identifier を検出する正規表現。
+_OPAQUE_ID_RE = re.compile(r"^[0-9a-fA-F-]+$")
+# 本物の agent 種別名と ID 形を分ける hex 桁数の floor。ID（pure hex 17 桁・UUID 32 桁・
+# agent_id 形）は十分長く、人間可読な agent 名がこの桁数に達することはない。
+_OPAQUE_ID_MIN_HEX_DIGITS = 12
+
+
+def is_noise_agent_type(agent_type) -> bool:
+    """subagents.jsonl の agent_type がノイズ（本物の Task subagent でない）か判定する。
+
+    writer（subagent_observe）と reader（fleet.collectors / fanout_cost）が同じ判定を
+    共有するための単一ソース。片側だけ直すと read/write が desync するため
+    （copied-parse-convention pitfall・#40 の教訓）、全 call site はこの関数を呼ぶ。
+
+    除外するノイズ:
+    - #36: 空 / 空白のみの agent_type。SubagentStop は本物の Task agent 以外
+      （compaction 要約・メインセッション Stop・rate-limit メッセージ等）でも発火し、
+      それらは agent_type が空になる。
+    - ID 形: harness が agent_type に ID 形の値（pure hex `aab2173eb119c5b91` /
+      UUID / `agent_id` 形）を渡すケース。本物の agent 種別名は人間可読で必ず非 hex 文字を
+      含むため、hex 桁とハイフンのみ・hex 桁が floor 以上の値は opaque identifier として除外する。
+      カスタム agent 名（build-a1 / gamer-mvp29 / fapo-impl 等）は非 hex 文字を含むので保持される。
+    """
+    s = str(agent_type or "").strip()
+    if not s:
+        return True
+    if _OPAQUE_ID_RE.match(s):
+        hex_digits = sum(1 for c in s if c in "0123456789abcdefABCDEF")
+        if hex_digits >= _OPAQUE_ID_MIN_HEX_DIGITS:
+            return True
+    return False

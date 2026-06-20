@@ -60,3 +60,29 @@ def test_agent_type空のノイズは記録しない(patch_data_dir):
             subagent_observe.handle_subagent_stop(e)
     recs = _read_subagents(patch_data_dir)
     assert recs == []  # 1件も記録されない
+
+
+def test_ID形のagent_typeノイズは記録しない(patch_data_dir):
+    """harness が agent_type に ID 形（pure hex / agent_id 形）を渡したノイズを遮断する。
+
+    実観測（kazevolve）で agent_type=pure hex が cost breakdown を汚していた。
+    """
+    noise_events = [
+        {"agent_type": "aab2173eb119c5b91", "agent_id": "aaab2173eb119c5b91-x", "session_id": "s1"},
+        {"agent_type": "77037416-f452-4241-a414-4eb497336e71", "agent_id": "n5", "session_id": "s1"},
+    ]
+    with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": ""}):
+        for e in noise_events:
+            subagent_observe.handle_subagent_stop(e)
+    assert _read_subagents(patch_data_dir) == []
+
+
+def test_カスタムagent名は記録する(patch_data_dir):
+    """非 hex 文字を含むカスタム agent 名（build-a1 等）は ID 形と誤判定せず記録する。"""
+    with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": ""}):
+        for at in ("build-a1", "gamer-mvp29", "fapo-impl"):
+            subagent_observe.handle_subagent_stop(
+                {"agent_type": at, "agent_id": f"id-{at}", "session_id": "s1"}
+            )
+    recs = _read_subagents(patch_data_dir)
+    assert sorted(r["agent_type"] for r in recs) == ["build-a1", "fapo-impl", "gamer-mvp29"]
