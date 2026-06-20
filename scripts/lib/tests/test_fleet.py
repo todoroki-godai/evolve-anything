@@ -20,6 +20,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
@@ -437,6 +439,18 @@ class TestFormatStatusTable:
 class TestCollectFleetStatus:
     """collect_fleet_status() の統合テスト（下位関数は mock）。"""
 
+    @pytest.fixture(autouse=True)
+    def _hermetic_data_dir(self, tmp_path_factory, monkeypatch):
+        """subagents 集計の cross-dir union（#45 ⒞）が実 ~/.claude を読まないよう隔離。
+
+        collect_fleet_status は aggregate_subagents_by_project() を path 無しで呼ぶため
+        `_current_data_dir()`→`CLAUDE_PLUGIN_DATA` に解決する。tmp に向けると
+        `iter_read_data_dirs(tmp)` は兄弟 dir が無く `[tmp]` のみ＝hermetic
+        （実 legacy subagents.jsonl 6.7MB を読まない・#420/#457 の xdist 非hermetic 回避）。
+        """
+        d = tmp_path_factory.mktemp("fleet_data")
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(d))
+
     def test_ENABLEDとNOT_ENABLEDのPJ混在(self, tmp_path):
         root = tmp_path / "repos"
         pj_a = root / "a"
@@ -681,6 +695,89 @@ class TestAggregateSubagentsByProject:
         ])
         counts = aggregate_subagents_by_project(f, now=now)
         assert counts == {"a": 1}
+
+
+class TestAggregateSubagentsCrossDirUnion:
+    """aggregate_subagents_by_project の cross-dir union + read 層 slug 別名（#45/#47 ⒞）。
+
+    path 未指定時は `_current_data_dir()` を起点に `iter_read_data_dirs` で canonical +
+    legacy/plugins-data を union read する。canonical を tmp に向け（CLAUDE_PLUGIN_DATA）、
+    兄弟 dir を作るだけで hermetic に検証できる（実 home を読まない）。
+    """
+
+    _AT = "general-purpose"
+
+    def _now(self) -> datetime:
+        return datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+
+    def _rec(self, project, days_ago: int, now: datetime) -> dict:
+        return {
+            "agent_type": self._AT,
+            "project": project,
+            "timestamp": (now - timedelta(days=days_ago)).isoformat(),
+        }
+
+    def _write_sub(self, d: Path, recs: list[dict]) -> None:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "subagents.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8"
+        )
+
+    @pytest.fixture
+    def canonical(self, tmp_path, monkeypatch) -> Path:
+        c = tmp_path / "evolve-anything"
+        c.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(c))
+        return c
+
+    def test_unions_canonical_and_legacy(self, canonical, tmp_path):
+        now = self._now()
+        self._write_sub(canonical, [self._rec("evolve-anything", 1, now)])
+        self._write_sub(tmp_path / "rl-anything", [self._rec("bots", 2, now)])
+        counts = aggregate_subagents_by_project(now=now)
+        assert counts == {"evolve-anything": 1, "bots": 1}
+
+    def test_legacy_rl_anything_folded_to_current(self, canonical, tmp_path):
+        """legacy 行が旧 slug ``project='rl-anything'`` でも現 slug に畳む（read 層別名）。"""
+        now = self._now()
+        self._write_sub(canonical, [self._rec("evolve-anything", 1, now)])
+        self._write_sub(tmp_path / "rl-anything", [self._rec("rl-anything", 2, now)])
+        counts = aggregate_subagents_by_project(now=now)
+        assert counts == {"evolve-anything": 2}
+
+    def test_other_pj_not_folded(self, canonical, tmp_path):
+        """他 PJ（bots）の legacy 行は畳まれず別キーのまま。"""
+        now = self._now()
+        self._write_sub(canonical, [self._rec("evolve-anything", 1, now)])
+        self._write_sub(tmp_path / "rl-anything", [self._rec("bots", 2, now)])
+        counts = aggregate_subagents_by_project(now=now)
+        assert counts.get("bots") == 1
+        assert "rl-anything" not in counts
+
+    def test_unions_plugins_data(self, canonical, tmp_path):
+        """plugins-data dir（token glob 一致）も union 対象。"""
+        now = self._now()
+        self._write_sub(canonical, [self._rec("evolve-anything", 1, now)])
+        plugin_data = tmp_path / "plugins" / "data" / "evolve-anything-evolve-anything"
+        self._write_sub(plugin_data, [self._rec("evolve-anything", 2, now)])
+        counts = aggregate_subagents_by_project(now=now)
+        assert counts == {"evolve-anything": 2}
+
+    def test_hermetic_tmp_only_reads_canonical(self, canonical):
+        """兄弟 dir を作らなければ canonical のみ（実 home の legacy を読まない）。"""
+        now = self._now()
+        self._write_sub(canonical, [self._rec("evolve-anything", 1, now)])
+        counts = aggregate_subagents_by_project(now=now)
+        assert counts == {"evolve-anything": 1}
+
+    def test_explicit_path_is_single_file_no_union(self, canonical, tmp_path):
+        """explicit path 指定時は後方互換でその 1 ファイルのみ（union しない）。"""
+        now = self._now()
+        self._write_sub(canonical, [self._rec("evolve-anything", 1, now)])
+        self._write_sub(tmp_path / "rl-anything", [self._rec("bots", 2, now)])
+        # canonical のファイルを明示指定 → legacy 兄弟は読まない。
+        counts = aggregate_subagents_by_project(canonical / "subagents.jsonl", now=now)
+        assert counts == {"evolve-anything": 1}
 
 
 class TestIssuesSummaryRendering:

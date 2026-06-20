@@ -105,53 +105,80 @@ def aggregate_subagents_by_project(
     - 行単位 try/except で破損 1 行が全件落ちないようにする
     - timestamp 不正 / 欠損行も skip（カウント対象外）
 
+    読み取り対象（#45/#47 ⒞ read 統一）:
+    - explicit `subagents_path` 指定時はその 1 ファイルのみ（後方互換・テスト注入経路）。
+    - 未指定時は `_current_data_dir()` を起点に `rl_common.iter_read_data_dirs` で
+      canonical + legacy(rename) + plugins-data の **cross-dir union read**。fleet は
+      cross-PJ 集計だが各 dir を単一 dir でしか読めていなかったため legacy/plugins-data の
+      subagents が母集団から欠落していた（#45）。subagents.jsonl は append-only event log
+      なので dir 跨ぎの concat は dedup 不要（同一レコードが複数 dir に重複しない）。
+    - PJ rename（rl-anything→evolve-anything）の旧 slug project は `canonical_pj_slug` で
+      現 slug に畳む（read 層別名・#47）。rename 後は legacy slug の PJ dir が存在せず
+      `_work` から lookup されないため、畳まないと legacy 集計が silent drop する。
+      他 PJ（bots 等）は passthrough で副作用なし。
+
     Returns:
         {project_name: count}。キーに `(unknown)` も含まれ得る。
     """
-    if subagents_path is None:
-        subagents_path = _current_data_dir() / "subagents.jsonl"
-    if not subagents_path.is_file():
-        return {}
-
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=window_days)
-    counts: dict[str, int] = {}
+
+    if subagents_path is not None:
+        files = [subagents_path]
+    else:
+        try:
+            from rl_common import iter_read_data_dirs
+            files = [d / "subagents.jsonl" for d in iter_read_data_dirs(_current_data_dir())]
+        except ImportError:
+            files = [_current_data_dir() / "subagents.jsonl"]
+
     try:
-        text = subagents_path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
+        from pj_slug import canonical_pj_slug
+    except ImportError:
+        canonical_pj_slug = None  # type: ignore
+
+    counts: dict[str, int] = {}
+    for fp in files:
+        if not fp.is_file():
             continue
         try:
-            rec = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            continue  # 破損 1 行を skip
-        if not isinstance(rec, dict):
+            text = fp.read_text(encoding="utf-8")
+        except OSError:
             continue
-        # #36: agent_type が空 / ID 形のレコードは本物の Task subagent でない（compaction
-        # 要約・メインセッション Stop 等のノイズ、または harness が ID 形を渡したもの）。
-        # reader 契約として除外する（writer 側 skip との二重防御で、writer fix 前に書かれた
-        # 履歴データの汚染も弾く）。判定は writer/reader 単一ソース。
-        if is_noise_agent_type(rec.get("agent_type", "")):
-            continue
-        ts_raw = rec.get("timestamp")
-        if not isinstance(ts_raw, str):
-            continue
-        try:
-            ts = datetime.fromisoformat(ts_raw)
-        except ValueError:
-            continue
-        # naive な timestamp は UTC とみなす（subagent_observe.py は aware で書き込む）
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        if ts < cutoff:
-            continue
-        project = rec.get("project")
-        if not isinstance(project, str) or not project:
-            project = _UNKNOWN_PROJECT_LABEL
-        counts[project] = counts.get(project, 0) + 1
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                rec = json.loads(s)
+            except (json.JSONDecodeError, ValueError):
+                continue  # 破損 1 行を skip
+            if not isinstance(rec, dict):
+                continue
+            # #36/#44: agent_type が空 / ID 形のレコードは本物の Task subagent でない
+            # （compaction 要約・メインセッション Stop 等のノイズ、または harness が ID 形を
+            # 渡したもの）。reader 契約として除外する（writer 側 skip との二重防御で、writer
+            # fix 前に書かれた履歴データの汚染も弾く）。判定は writer/reader 単一ソース。
+            if is_noise_agent_type(rec.get("agent_type", "")):
+                continue
+            ts_raw = rec.get("timestamp")
+            if not isinstance(ts_raw, str):
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_raw)
+            except ValueError:
+                continue
+            # naive な timestamp は UTC とみなす（subagent_observe.py は aware で書き込む）
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                continue
+            project = rec.get("project")
+            if not isinstance(project, str) or not project:
+                project = _UNKNOWN_PROJECT_LABEL
+            elif canonical_pj_slug is not None:
+                project = canonical_pj_slug(project)
+            counts[project] = counts.get(project, 0) + 1
     return counts
 
 
