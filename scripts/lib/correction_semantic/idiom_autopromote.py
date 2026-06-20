@@ -99,7 +99,8 @@ def autopromote(
 
     matched: List[Dict[str, Any]] = []
     for r in unpromoted:
-        if r.get("pj_slug") != pj_slug:
+        # #46 read 層拡張: legacy weak_signal（旧 slug タグ）も alias で当 PJ として拾う。
+        if not _pj_slug_match(r.get("pj_slug"), pj_slug):
             continue
         info = phys_to_idiom.get(_phys(r.get("provenance") or {}))
         if info is None:
