@@ -198,6 +198,13 @@ from .persistence import (  # noqa: F401, E402
     project_name_from_dir,
 )
 
+# write barrier 単一書込ゲート — ADR-049 / #55
+from .store_write import (  # noqa: F401, E402
+    StoreWriteError,
+    store_write,
+    store_write_raw,
+)
+
 # 偽陽性フィードバック管理 — Slice 4
 from .false_positive import (  # noqa: F401, E402
     _FALSE_POSITIVE_EXPIRY_DAYS,

@@ -66,7 +66,8 @@
 | `spec_trigger` | 仕様未更新マージの SessionStart 検出→spec-keeper 提案 [ADR-044] | `spec_trigger.py` |
 | `capture_rate` | correction capture 率（20+ ターン session のうち correction 検出割合）を決定論算出し audit に advisory surface（#421） | `capture_rate.py` |
 | `orphan_store` | writer あり reader なしの jsonl ストアを決定論検出（hooks=writer / scripts+skills=reader 静的突合）（#422） | `orphan_store.py` |
-| `store_registry` | ストア新設の事前契約ゲート — writer/reader/retention 宣言の機械可読 SoT（jsonl/db 両対応、writer_locus で batch 書込を stale 突合から除外）（#430-#434） | `store_registry.py` |
+| `store_registry` | ストア新設の事前契約ゲート — writer/reader/retention 宣言の機械可読 SoT（jsonl/db 両対応、writer_locus で batch 書込を stale 突合から除外。`status` active/legacy/dead で write 許可を制御 #55）（#430-#434, #55） | `store_registry.py` |
+| `store_write` write barrier | 全ストア書込の単一ゲート — `store_write(store_name, record)` が canonical `DATA_DIR/<name>` を内部解決し store_registry の active 登録を runtime guard で照合（Phase 2a warn-only→全 writer 移行後 reject 昇格）。例外口は別名関数 `store_write_raw`。read（union 寛容）と write（厳格）を分離し共有は store_registry のみ [ADR-049, #55] | `rl_common/store_write.py` |
 | `outcome_metrics` | 行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。utilization の plugin レイアウト探索修理も同梱 [#423, ADR-046] | `audit/outcome_metrics.py` |
 | `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query）。物理PK+論理UNIQUEで resume 複製を弾く・cwd 由来 pj_slug・evolve/audit batch + evolve-fleet ingest + SessionStart staleness advisory（#430） | `utterance_archive/` |
 | `outcome_attribution` | outcome 3軸（一発成功率 / rework 率 / correction 再発率）を per-skill 帰属し evolve ターゲットランキングへ自動入力 + negative_transfer gate で退行スキルを末尾 rollback（#10）+ RODS reward 分散列（#28）。dry-run に before/after 順位差分を surface [#433, #10, #28] | `audit/outcome_attribution.py` |
