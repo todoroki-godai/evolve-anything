@@ -6,7 +6,51 @@ from pathlib import Path
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
 
-from lib.frontmatter import count_content_lines, extract_description, parse_frontmatter
+from lib.frontmatter import (
+    count_content_lines,
+    extract_description,
+    find_frontmatter_close,
+    parse_frontmatter,
+)
+
+
+# --- find_frontmatter_close (#40: 行頭 \n--- アンカー) ---
+
+
+def test_find_frontmatter_close_basic():
+    text = "---\nk: v\n---\nbody"
+    end = find_frontmatter_close(text)
+    assert text[end:end + 3] == "---"
+    # 閉じ --- の直前は改行（行頭区切り）
+    assert text[end - 1] == "\n"
+
+
+def test_find_frontmatter_close_ignores_inline_dashes():
+    """値の中の --- を閉じ区切りと誤認しない（#40 の核心）。"""
+    text = "---\nk: a---b\n---\nbody"
+    end = find_frontmatter_close(text)
+    # 値 a---b は yaml ブロック内に丸ごと残る（旧 find('---',3) はここで切れて壊す）
+    assert "a---b" in text[3:end]
+
+
+def test_find_frontmatter_close_no_close():
+    assert find_frontmatter_close("---\nk: v\nno close") == -1
+
+
+def test_find_frontmatter_close_empty_yaml():
+    text = "---\n---\nbody"
+    end = find_frontmatter_close(text)
+    assert text[3:end].strip() == ""
+
+
+def test_find_frontmatter_close_matches_old_for_wellformed():
+    """正常ファイルでは旧 find('---', 3) と同じ index を返す（後方互換）。"""
+    for text in (
+        "---\nname: foo\ndescription: bar\n---\n# Body",
+        "---\npaths:\n  - a\n  - b\n---\n",
+        "---\n---\nbody",
+    ):
+        assert find_frontmatter_close(text) == text.find("---", 3)
 
 
 # --- parse_frontmatter ---
@@ -52,6 +96,14 @@ def test_parse_frontmatter_with_paths(tmp_path):
     f.write_text("---\npaths:\n  - src/**/*.ts\n  - lib/*.py\n---\n")
     result = parse_frontmatter(f)
     assert result["paths"] == ["src/**/*.ts", "lib/*.py"]
+
+
+def test_parse_frontmatter_value_contains_inline_dashes(tmp_path):
+    """frontmatter の値に --- が含まれても全フィールドを正しく読む（#40）。"""
+    f = tmp_path / "test.md"
+    f.write_text("---\nname: foo\ndescription: uses --- as separator\n---\n# Body")
+    result = parse_frontmatter(f)
+    assert result == {"name": "foo", "description": "uses --- as separator"}
 
 
 # --- extract_description ---

@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from frontmatter import parse_frontmatter
+from frontmatter import find_frontmatter_close, parse_frontmatter
 
 TEMPORAL_DEFAULTS: dict[str, Any] = {
     "valid_from": None,
@@ -151,7 +151,7 @@ def reinforce_memory(filepath: Path, reason: str) -> None:
     if not text.startswith("---"):
         return  # frontmatter なし → no-op
 
-    end = text.find("---", 3)
+    end = find_frontmatter_close(text)
     if end == -1:
         return
 
@@ -210,7 +210,7 @@ def write_importance_score(filepath: Path, score: float) -> None:
     if not text.startswith("---"):
         return
 
-    end = text.find("---", 3)
+    end = find_frontmatter_close(text)
     if end == -1:
         return
 
@@ -278,7 +278,7 @@ def write_temporal_metadata(
     if not text.startswith("---"):
         return False
 
-    end = text.find("---", 3)
+    end = find_frontmatter_close(text)
     if end == -1:
         return False
 
