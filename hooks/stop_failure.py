@@ -85,7 +85,7 @@ def handle_stop_failure(event: dict) -> None:
     wt = common.extract_worktree_info(event)
     if wt:
         record["worktree"] = wt
-    common.append_jsonl(common.DATA_DIR / "errors.jsonl", record)
+    common.store_write("errors.jsonl", record)  # ADR-049 / #55 単一書込ゲート
 
 
 def main() -> None:

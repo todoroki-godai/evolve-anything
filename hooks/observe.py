@@ -79,7 +79,7 @@ def handle_post_tool_use(event: dict) -> None:
         wt_skill = common.extract_worktree_info(event)
         if wt_skill:
             usage_record["worktree"] = wt_skill
-        common.append_jsonl(common.DATA_DIR / "usage.jsonl", usage_record)
+        common.store_write("usage.jsonl", usage_record)  # ADR-049 / #55 単一書込ゲート
 
         # 直前スキル名を一時ファイルに記録（correction_detect.py が参照）
         common.write_last_skill(session_id, skill_name)
@@ -97,7 +97,7 @@ def handle_post_tool_use(event: dict) -> None:
                 "project_path": project_path,
                 "timestamp": now,
             }
-            common.append_jsonl(common.DATA_DIR / "usage-registry.jsonl", registry_record)
+            common.store_write("usage-registry.jsonl", registry_record)  # ADR-049 / #55
 
     # Agent ツール呼び出し時の usage 記録
     elif tool_name == "Agent":
@@ -122,7 +122,7 @@ def handle_post_tool_use(event: dict) -> None:
         wt = common.extract_worktree_info(event)
         if wt:
             usage_record["worktree"] = wt
-        common.append_jsonl(common.DATA_DIR / "usage.jsonl", usage_record)
+        common.store_write("usage.jsonl", usage_record)  # ADR-049 / #55 単一書込ゲート
 
     # エラーの記録
     if is_error:
@@ -138,7 +138,7 @@ def handle_post_tool_use(event: dict) -> None:
         wt_err = common.extract_worktree_info(event)
         if wt_err:
             error_record["worktree"] = wt_err
-        common.append_jsonl(common.DATA_DIR / "errors.jsonl", error_record)
+        common.store_write("errors.jsonl", error_record)  # ADR-049 / #55 単一書込ゲート
 
 
 def main() -> None:

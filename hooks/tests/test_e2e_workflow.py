@@ -13,8 +13,10 @@ from unittest import mock
 
 # hooks/ をインポートパスに追加
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts" / "lib"))
 
 import common
+import rl_common
 import workflow_context
 import observe
 import subagent_observe
@@ -36,7 +38,8 @@ def run_e2e():
         data_dir = Path(tmpdir) / "evolve-anything"
         data_dir.mkdir()
 
-        with mock.patch.object(common, "DATA_DIR", data_dir):
+        with mock.patch.object(common, "DATA_DIR", data_dir), \
+             mock.patch.object(rl_common, "DATA_DIR", data_dir):
             with mock.patch.dict(os.environ, {"TMPDIR": tmpdir}):
 
                 session_id = "e2e-sess-001"
