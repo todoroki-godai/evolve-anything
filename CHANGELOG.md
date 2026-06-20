@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.108.0] - 2026-06-20
 
 ### Changed
 - **feat(audit): audit レポートの UX 改善 — TL;DR / 推奨アクション / クリーン折り畳み（refs #49, closes #52）** — audit 標準出力（`bin/evolve-audit`）が冗長で「今すぐ見るべき要対応」と「次の一手」が埋もれる問題を解消。(1) 冒頭に **TL;DR**（要対応N / 観察中M / 評価済みクリーンK の3数字・#49-5）、(2) observability の全✓（クリーン）/ ℹ・データ不足（観察中）セクションは展開せず `## ✓ 評価済みクリーン: ...` の1行に名前だけ畳む（#49-1・要対応 ⚠/🔴 のみ full-text 展開。畳んでも名前が残るので silence != evaluated は維持・ADR-028 contract 不変）、(3) 末尾に **推奨アクション判定カード**（🔴 要対応=violations / token 未初期化 / capture 枯渇、🟡 情報=scope-advisory、✅ 問題なし・#52-1）、(4) 標準実行でも **Next Milestone**（次フェーズ到達条件）を軽量サブセットで常時出力（フル growth report は重いので Next Milestone 1ブロックのみ・phase は growth-state cache 優先で fitness/LLM 非依存・#52-2）、(5) 冗長 advisory を圧縮（LSP 未設定は1行サマリ + `<details>` 折り畳み #49-2 / Promotion Readiness 全✗ かつ slug clean は1行 #49-3 / Fan-out spawning<5 は1行 #49-6）、(6) 各セクションに次アクション1行（violations→evolve/分割導線 #52-3 / token 未初期化に「実行後に何が見えるか」 #52-4 / fanout・promotion に蓄積条件 #52-5 / capture 枯渇に番号付き手順 #52-6）。新規 `audit/sections_summary.py`（TL;DR/折り畳み/推奨アクション）+ `audit/sections_milestone.py`（Next Milestone・orchestrator の 500 行超過回避で切り出し）。TDD 新規（report-ux 17 / section-compression 11 / next-milestone 3）。決定論・LLM 非依存。**#49 finding 4（evolve SKILL.md の step/MUST 再構成）は設計判断のため対象外**。
