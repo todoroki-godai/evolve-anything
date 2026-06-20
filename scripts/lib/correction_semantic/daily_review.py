@@ -38,6 +38,12 @@ from correction_semantic.representative import prev_action_summary, user_only_te
 from correction_semantic.store import read_idioms
 from weak_signals.store import read_signals
 
+# #46 read 層拡張: 既読 union + slug alias は共有モジュール（idioms/weak_signals と単一ソース）。
+from store_read_union import (  # noqa: E402
+    iter_read_store_paths as _iter_read_store_paths,
+    pj_slug_match as _pj_slug_match,
+)
+
 SEEN_STORE_NAME = "correction_review_seen.jsonl"
 
 
@@ -60,14 +66,13 @@ def default_seen_path(base: Optional[Path] = None) -> Path:
     return Path(data_dir) / SEEN_STORE_NAME
 
 
-def read_reviewed_keys(path: Optional[Path] = None) -> Set[str]:
-    """既読集合の signal_key を返す（ファイル無し → 空 set。重複は set 化で無害）。"""
-    store = path if path is not None else default_seen_path()
+def _read_seen_one(store: Path) -> Set[str]:
+    """単一 correction_review_seen.jsonl の key 集合（ファイル無し → 空 set）。"""
+    import json
+
     out: Set[str] = set()
     if not store.exists():
         return out
-    import json
-
     try:
         with open(store, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -83,6 +88,22 @@ def read_reviewed_keys(path: Optional[Path] = None) -> Set[str]:
                     out.add(k)
     except OSError:
         return out
+    return out
+
+
+def read_reviewed_keys(path: Optional[Path] = None) -> Set[str]:
+    """既読集合の signal_key を返す（ファイル無し → 空 set。重複は set 化で無害）。
+
+    path 未指定（production 既定）は #46 read 層拡張で canonical + legacy を union read する
+    （key は集合なので自然 dedup）。**flooding 防止の要**: weak_signals を union しても legacy で
+    確認済みのシグナルを既読に含めないと daily_review に再噴出するため、既読も対で union する。
+    明示 path 指定時はそのファイルのみ（hermetic）。
+    """
+    if path is not None:
+        return _read_seen_one(Path(path))
+    out: Set[str] = set()
+    for p in _iter_read_store_paths(SEEN_STORE_NAME):
+        out |= _read_seen_one(p)
     return out
 
 
@@ -155,7 +176,8 @@ def _read_new(
     recs = read_signals(weak_signals_path)
     out: List[Dict[str, Any]] = []
     for r in recs:
-        if r.get("pj_slug") != pj_slug:
+        # #46 read 層拡張: legacy weak_signal（旧 slug タグ）も alias で当 PJ として拾う。
+        if not _pj_slug_match(r.get("pj_slug"), pj_slug):
             continue
         if r.get("channel") != BACKLOG_CHANNEL:
             continue
@@ -176,7 +198,8 @@ def _idiom_by_phys(idioms: List[Dict[str, Any]], pj_slug: str) -> Dict[str, str]
     """物理キー（source_path:line_no）→ idiom 本文の対応表（当該 PJ slug のみ）。"""
     out: Dict[str, str] = {}
     for it in idioms:
-        if it.get("pj_slug") != pj_slug:
+        # #46 read 層拡張: legacy idiom（旧 slug タグ）も alias で当 PJ として拾う。
+        if not _pj_slug_match(it.get("pj_slug"), pj_slug):
             continue
         prov = it.get("provenance") or {}
         phys = f"{prov.get('source_path', '')}:{prov.get('line_no', '')}"

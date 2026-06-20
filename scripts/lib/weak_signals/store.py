@@ -26,6 +26,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# #46 read 層拡張: union read は共有モジュール（correction_semantic.store と単一ソース）。
+from store_read_union import iter_read_store_paths as _iter_read_store_paths  # noqa: E402
+
 STORE_NAME = "weak_signals.jsonl"
 
 
@@ -85,9 +88,8 @@ def default_store_path(base: Optional[Path] = None) -> Path:
     return Path(data_dir) / STORE_NAME
 
 
-def read_signals(path: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """既存の weak_signals レコードを読む（ファイル無し → 空リスト）。"""
-    store = path if path is not None else default_store_path()
+def _read_one(store: Path) -> List[Dict[str, Any]]:
+    """単一 weak_signals.jsonl を読む（ファイル無し → 空リスト）。"""
     if not store.exists():
         return []
     out: List[Dict[str, Any]] = []
@@ -103,6 +105,28 @@ def read_signals(path: Optional[Path] = None) -> List[Dict[str, Any]]:
                     continue
     except OSError:
         return []
+    return out
+
+
+def read_signals(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """既存の weak_signals レコードを読む（ファイル無し → 空リスト）。
+
+    path 未指定（production 既定）は #46 read 層拡張で canonical + legacy を union read し、
+    ``signal_key`` で dedup する（canonical 先頭勝ち）。signal_key 欠落レコードは dedup できない
+    ので全件残す（取りこぼし防止）。明示 path 指定時はそのファイルのみ（hermetic）。
+    """
+    if path is not None:
+        return _read_one(Path(path))
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for p in _iter_read_store_paths(STORE_NAME):
+        for r in _read_one(p):
+            k = r.get("signal_key")
+            if k and k in seen:
+                continue
+            if k:
+                seen.add(k)
+            out.append(r)
     return out
 
 

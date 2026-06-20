@@ -20,7 +20,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from weak_signals.store import default_store_path, read_signals
+from weak_signals.store import STORE_NAME as _WS_STORE_NAME, read_signals
+
+# #46 read 層拡張: union read（昇格候補）+ union mark（再昇格防止）の候補 dir 解決を共有する。
+from store_read_union import iter_read_store_paths as _iter_read_store_paths  # noqa: E402
 
 
 def _normalize_project_path(value: str) -> str:
@@ -182,13 +185,21 @@ def _rewrite_promoted(
     weak_signals_path: Path,
     promoted_keys: Set[str],
 ) -> None:
-    """weak_signals.jsonl の該当 signal_key 行を promoted=True にして原子的に書き直す。"""
+    """weak_signals.jsonl の該当 signal_key 行を promoted=True にして原子的に書き直す。
+
+    該当行が無ければ書き換えない（union mark で legacy/canonical を順に走査するとき、key を
+    持たない dir のファイルを無駄に rewrite しない・#46）。明示の単一 path を読む（hermetic）。
+    """
     if not weak_signals_path.exists() or not promoted_keys:
         return
     recs = read_signals(weak_signals_path)
+    changed = False
     for r in recs:
-        if r.get("signal_key") in promoted_keys:
+        if r.get("signal_key") in promoted_keys and not r.get("promoted"):
             r["promoted"] = True
+            changed = True
+    if not changed:
+        return
     new_content = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
     weak_signals_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=str(weak_signals_path.parent), suffix=".tmp")
@@ -201,6 +212,26 @@ def _rewrite_promoted(
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def _mark_promoted(
+    weak_signals_path: Optional[Path],
+    promoted_keys: Set[str],
+) -> None:
+    """昇格した signal を promoted=True にマークする（再昇格防止）。
+
+    #46 read 層拡張: ``weak_signals_path=None``（production）は legacy も含む union dir すべてで
+    該当 signal_key を promoted=True に書き換える。read は union（legacy 可視）なのに mark を
+    canonical だけに書くと legacy record の promoted=False が残り **毎 run 再昇格**してしまう
+    （重複 corrections の avalanche）。これは新規 record の relocate / 物理 merge ではなく既存
+    record の状態遷移（promotion セマンティクスが必須とする維持書込）なので read-layer-only
+    方針と矛盾しない。明示 path 指定時はそのファイルのみ（hermetic）。
+    """
+    if weak_signals_path is not None:
+        _rewrite_promoted(Path(weak_signals_path), promoted_keys)
+        return
+    for p in _iter_read_store_paths(_WS_STORE_NAME):
+        _rewrite_promoted(p, promoted_keys)
 
 
 def promote_signals(
@@ -226,10 +257,11 @@ def promote_signals(
     Returns:
         {"promoted": int, "dry_run": bool}
     """
-    ws_path = weak_signals_path if weak_signals_path is not None else default_store_path()
     target = set(signal_keys or [])
+    # #46 read 層拡張: weak_signals_path=None（production）は read_unpromoted 経由で
+    # canonical + legacy を union read し legacy 昇格候補を拾う。明示 path は単一（hermetic）。
     candidates = [
-        r for r in read_unpromoted(ws_path)
+        r for r in read_unpromoted(weak_signals_path)
         if r.get("signal_key") in target
     ]
 
@@ -266,8 +298,8 @@ def promote_signals(
         if key:
             promoted_keys.add(key)
 
-    # weak_signal を promoted=True にマーク
-    _rewrite_promoted(ws_path, promoted_keys)
+    # weak_signal を promoted=True にマーク（再昇格防止・union dir 全て / hermetic）
+    _mark_promoted(weak_signals_path, promoted_keys)
 
     return {"promoted": len(promoted_keys), "dry_run": False}
 
