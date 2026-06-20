@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import common
 import correction_detect
+import rl_common
 
 
 @pytest.fixture
@@ -23,7 +24,11 @@ def tmp_data_dir(tmp_path):
 
 @pytest.fixture
 def patch_data_dir(tmp_data_dir):
-    with mock.patch.object(common, "DATA_DIR", tmp_data_dir):
+    # store_write は SoT の rl_common.DATA_DIR を call-time 参照する（ADR-049 / #55）。
+    # 移行後 corrections の書込はゲート経由になるため、re-export コピーの
+    # common.DATA_DIR に加えて SoT も同じ tmp に向ける（additive・挙動不変）。
+    with mock.patch.object(common, "DATA_DIR", tmp_data_dir), \
+         mock.patch.object(rl_common, "DATA_DIR", tmp_data_dir):
         yield tmp_data_dir
 
 
@@ -304,6 +309,25 @@ class TestLastSkill:
 
 class TestCorrectionDetectHook:
     """correction_detect.py のフックテスト。"""
+
+    def test_corrections_routed_through_store_write(self, patch_data_dir):
+        """corrections 書込は store_write 単一ゲート経由（ADR-049 / #55 wave 1）。
+
+        append_jsonl 直呼びでなく store_write("corrections.jsonl", record) を通る。
+        保存先解決と registry guard を単一ゲートに集約したことを構造的に固定し、
+        将来 append_jsonl 直呼びに silent revert したらこのテストが落ちる。
+        """
+        event = {
+            "session_id": "sess-cd-sw",
+            "message": {"content": "いや、そうじゃなくて optimize を使って"},
+        }
+        with mock.patch.object(common, "store_write") as m_sw:
+            correction_detect.handle_user_prompt_submit(event)
+        assert m_sw.call_count == 1
+        args = m_sw.call_args.args
+        assert args[0] == "corrections.jsonl"
+        assert args[1]["correction_type"] == "iya"
+        assert args[1]["session_id"] == "sess-cd-sw"
 
     def test_japanese_correction_detected(self, patch_data_dir):
         event = {
