@@ -77,18 +77,31 @@ def _query_sessions_via_store(
     since: Optional[str] = None,
     until: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """SessionStore の union read を経由して sessions を取得し project/時間でフィルタする。
+    """SessionStore の **cross-dir union read** を経由して sessions を取得しフィルタする。
 
-    session_store.query は (session_id, timestamp) で db と未 ingest jsonl を dedup 合算する。
-    union read が dict を返すため SQL WHERE を Python フィルタに置換し両経路で挙動を揃える。
+    `read_session_records_union` は canonical + legacy/plugins-data の全候補 dir を
+    (session_id, timestamp) で dedup 合算する（#45 ① read 統一・PR1 が outcome 系で導入した
+    のと同一の cross-dir reader）。query_sessions はこれを使う**第2の session reader** だが、
+    以前は `session_store.query()`（単一 DATA_DIR 内の db+jsonl union のみ）を呼んでおり
+    cross-dir 未対応＝PR1 の partial fix 残りだった（pitfall_copied_parse_convention_partial_fix）。
+
+    project フィルタは ``alias_aware=True``: PJ rename（rl-anything→evolve-anything）の legacy 行は
+    旧 slug でタグ付けされたまま残るため、cross-dir union 単独では現 slug filter に弾かれ回収ゼロ
+    になる（PR2 で usage/errors/subagents に入れた read 層 slug 別名と同じ罠）。canonical_pj_slug で
+    両辺を畳んで legacy を当 PJ に回収する。union は全 PJ レコードを一度に返し Python で1回だけ
+    フィルタするため二重カウントは起きない（usage/errors の accept_slug ループ方式とは別経路）。
+
+    since は包含（>=）境界を維持するため reader へ push せず `_filter_by_time` で適用する
+    （reader の since は排他 `>` で境界意味が異なる）。当 PJ の legacy は全件直近 90 日内のため
+    since 窓では母集団が減らず（実測）、cold-path の union 全読みは ~0.5s で許容範囲。
+
     本番では telemetry_query と session_store は同一 DATA_DIR (`~/.claude/evolve-anything`) に解決し、
-    pytest では conftest が両モジュールの DATA_DIR を同一 tmp に rebase するため、session_store の
-    モジュール変数をそのまま信頼して読む（HAS_DUCKDB=True 経路でのみ到達）。
+    pytest では conftest が両モジュールの DATA_DIR を同一 tmp に rebase する（HAS_DUCKDB=True 経路）。
     """
     import session_store
 
-    records = session_store.query()
-    records = _filter_by_project(records, project, include_unknown)
+    records = session_store.read_session_records_union()
+    records = _filter_by_project(records, project, include_unknown, alias_aware=True)
     return _filter_by_time(records, since, until)
 
 

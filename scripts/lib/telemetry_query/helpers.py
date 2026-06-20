@@ -36,14 +36,34 @@ def _filter_by_project(
     records: List[Dict[str, Any]],
     project: Optional[str],
     include_unknown: bool = False,
+    *,
+    alias_aware: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Python でプロジェクトフィルタリングを適用する（フォールバック用）。"""
+    """Python でプロジェクトフィルタリングを適用する（フォールバック用）。
+
+    alias_aware=False（既定）: ``rec["project"] == project`` の exact-match。
+    usage/errors は read 層別名を「accept_slug ごとの exact 呼び出しループ」で扱う
+    （PR2 / b4dff29）。ここで既定から別名を効かせると、その no-duckdb fallback 経路で
+    同一レコードが accept_slug の数だけ二重カウントされるため、既定は exact のまま据える。
+
+    alias_aware=True: PJ rename の旧 slug を ``pj_slug.canonical_pj_slug`` で現 slug に畳んで
+    両辺を比較する（rl-anything≡evolve-anything）。sessions の cross-dir union 経路
+    （`_query_sessions_via_store`）だけが opt-in する。これは union が全 PJ の cross-dir
+    レコードを一度に返し、Python 側で1回だけフィルタするため二重カウントが起きない。
+    """
     if project is None:
         return records
+    norm = None
+    if alias_aware:
+        try:
+            from pj_slug import canonical_pj_slug as norm  # type: ignore
+        except ImportError:
+            norm = None
+    target = norm(project) if norm else project
     result = []
     for rec in records:
         rec_project = rec.get("project")
-        if rec_project == project:
+        if rec_project is not None and (norm(rec_project) if norm else rec_project) == target:
             result.append(rec)
         elif include_unknown and rec_project is None:
             result.append(rec)
