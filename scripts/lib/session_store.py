@@ -77,17 +77,18 @@ def append(record: dict) -> None:
 
 
 def _append_jsonl(record: dict) -> None:
-    """sessions.jsonl に JSON 1行追記。"""
+    """sessions.jsonl に JSON 1行追記（store_write_raw 経由・ADR-049 / #55）。
+
+    sessions.jsonl は sessions.db と co-located で自前リゾルバ（SESSIONS_JSONL）を持つため、
+    canonical 解決の store_write ではなく明示パスの store_write_raw（別名例外口）を使う。
+    append_jsonl 委譲で flock + 新規時 600 perms を獲得（旧 inline open の自前 chmod と同等・
+    write/read が同一 DATA_DIR を見続けるので #364 の hook/tool 乖離を持ち込まない）。
+    """
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        is_new = not SESSIONS_JSONL.exists()
-        with open(SESSIONS_JSONL, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        if is_new:
-            try:
-                SESSIONS_JSONL.chmod(0o600)
-            except OSError:
-                pass
+        from rl_common import store_write_raw
+
+        store_write_raw(SESSIONS_JSONL, record)
     except OSError:
         pass
 

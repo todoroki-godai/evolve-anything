@@ -148,10 +148,15 @@ def append_signals(
         return {"written": len(to_write), "skipped_dup": skipped, "dry_run": True}
 
     if to_write:
-        from rl_common import append_jsonl
+        # ADR-049 / #55: production（path 無し）は単一書込ゲート store_write 経由。
+        # 明示 path（テスト/isolation）は store_write_raw（別名例外口）でそのパスを尊重する。
+        from rl_common import store_write, store_write_raw
 
         store.parent.mkdir(parents=True, exist_ok=True)
         for sig in to_write:
-            append_jsonl(store, sig.to_record())
+            if path is None:
+                store_write(STORE_NAME, sig.to_record())
+            else:
+                store_write_raw(store, sig.to_record())
 
     return {"written": len(to_write), "skipped_dup": skipped, "dry_run": False}

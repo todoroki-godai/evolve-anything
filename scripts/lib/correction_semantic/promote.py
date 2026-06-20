@@ -240,8 +240,11 @@ def promote_signals(
         return {"promoted": 0, "dry_run": False}
 
     # corrections に human-source レコードを追記
-    from rl_common import append_jsonl
+    # ADR-049 / #55: production（corrections_path 無し）は単一書込ゲート store_write、
+    # 明示 path（テスト/isolation）は store_write_raw でそのパスを尊重する。
+    from rl_common import store_write, store_write_raw
 
+    use_gate = corrections_path is None
     if corrections_path is None:
         import rl_common as _rc
 
@@ -253,12 +256,13 @@ def promote_signals(
     promoted_keys: Set[str] = set()
     for rec in candidates:
         key = rec.get("signal_key")
-        append_jsonl(
-            corrections_path,
-            _build_correction_record(
-                rec, project_path, source=source, idiom_key=idiom_keys.get(key),
-            ),
+        record = _build_correction_record(
+            rec, project_path, source=source, idiom_key=idiom_keys.get(key),
         )
+        if use_gate:
+            store_write("corrections.jsonl", record)
+        else:
+            store_write_raw(corrections_path, record)
         if key:
             promoted_keys.add(key)
 
