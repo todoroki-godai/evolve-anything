@@ -57,6 +57,8 @@ except ImportError:
 try:
     from memory_temporal import compute_importance_score as _compute_importance_score
     from memory_temporal import write_importance_score as _write_importance_score
+    from memory_temporal import write_temporal_metadata as _write_temporal_metadata
+    from memory_temporal import make_source_correction_id as _make_source_correction_id
     _HAS_MEMORY_TEMPORAL = True
 except ImportError:
     _HAS_MEMORY_TEMPORAL = False
@@ -386,6 +388,50 @@ def _apply_importance_score(entry_path: Path) -> None:
         pass  # サイレント継続
 
 
+def _derive_source_correction_ids(corrections: List[dict]) -> List[str]:
+    """corrections から source_correction_ids（"{session_id}#{timestamp}"）を導出する。
+
+    memory→correction の単方向因果リンク（#2）。session_id / timestamp の両方が空の
+    correction はスキップし、順序を保ったまま重複を排除する。
+    """
+    if not _HAS_MEMORY_TEMPORAL:
+        return []
+    ids: List[str] = []
+    seen: Set[str] = set()
+    for c in (corrections or []):
+        if not isinstance(c, dict):
+            continue
+        sid = str(c.get("session_id", "") or "")
+        ts = str(c.get("timestamp", "") or "")
+        if not sid and not ts:
+            continue
+        cid = _make_source_correction_id(sid, ts)
+        if cid not in seen:
+            seen.add(cid)
+            ids.append(cid)
+    return ids
+
+
+def _apply_temporal_metadata(entry_path: Path, corrections: List[dict]) -> None:
+    """エントリの frontmatter に valid_from + source_correction_ids を書き込む（#2 配線）。
+
+    valid_from は生成時刻（now）。source_correction_ids は corrections から導出した
+    memory→correction 因果リンク。decay_days / superseded_at は書かないため stale/superseded
+    は発火しない（純加算）。compute_importance_score の correction_bonus を効かせるため
+    _apply_importance_score の **前** に呼ぶ。失敗してもサイレント継続。
+    """
+    if not _HAS_MEMORY_TEMPORAL:
+        return
+    try:
+        valid_from = datetime.now(timezone.utc).isoformat()
+        ids = _derive_source_correction_ids(corrections)
+        _write_temporal_metadata(
+            entry_path, valid_from=valid_from, source_correction_ids=ids,
+        )
+    except Exception:
+        pass  # サイレント継続
+
+
 def _record_belief_block(data_dir: Path, belief, summary: str) -> None:
     """belief_entropy ゲートでブロックした要約を belief_blocks.jsonl に記録する。
 
@@ -571,6 +617,9 @@ def ingest_memory_results(
         # 書き込み
         filename = _make_filename(llm_output)
         entry_path = _write_entry_file(memory_dir, filename, llm_output)
+        # #2: valid_from + source_correction_ids を先に書く（correction_bonus を
+        # importance_score に効かせるため _apply_importance_score の前）
+        _apply_temporal_metadata(entry_path, corrections_by_key.get(key, []))
         _apply_importance_score(entry_path)
         summary = _extract_one_line_summary(llm_output)
         _append_index_line(memory_md_path, filename, summary)

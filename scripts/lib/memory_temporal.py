@@ -244,6 +244,98 @@ def write_importance_score(filepath: Path, score: float) -> None:
         return
 
 
+def write_temporal_metadata(
+    filepath: Path,
+    *,
+    valid_from: str | None = None,
+    source_correction_ids: list | None = None,
+) -> bool:
+    """frontmatter に valid_from / source_correction_ids を書き込む（provenance 配線・#2）。
+
+    auto_memory_broker が memory エントリ生成時に呼び、APEX-MEM の時間的妥当性
+    （valid_from）と因果リンク（source_correction_ids: memory→corrections の単方向参照）を
+    決定論で埋める。reader 側（parse_memory_temporal / build_temporal_memory_warnings /
+    instructions_loaded の stale フィルタ）は既に実装済みで、本関数が write 側の休眠配線を
+    活性化する。
+
+    冪等性:
+    - valid_from は既存値があれば上書きしない（初回設定のみ）
+    - source_correction_ids は既存と union（順序保持・重複排除）
+
+    decay_days / superseded_at は書かない（None のまま）ため、本関数だけでは
+    is_stale / is_superseded は発火しない（純加算・振る舞い非変更）。
+
+    frontmatter がない場合は no-op。atomic write（tmp → os.replace）。
+
+    Returns:
+        変更を書き込んだら True、no-op（frontmatter なし / 変更なし / 失敗）なら False。
+    """
+    try:
+        text = filepath.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+
+    if not text.startswith("---"):
+        return False
+
+    end = text.find("---", 3)
+    if end == -1:
+        return False
+
+    yaml_str = text[3:end].strip()
+    try:
+        fm: dict[str, Any] = yaml.safe_load(yaml_str) or {}
+        if not isinstance(fm, dict):
+            return False
+    except yaml.YAMLError:
+        return False
+
+    changed = False
+
+    if valid_from and not fm.get("valid_from"):
+        fm["valid_from"] = valid_from
+        changed = True
+
+    if source_correction_ids:
+        existing = fm.get("source_correction_ids", [])
+        if not isinstance(existing, list):
+            existing = []
+        merged = list(existing)
+        seen = {str(x) for x in existing}
+        for cid in source_correction_ids:
+            if str(cid) not in seen:
+                seen.add(str(cid))
+                merged.append(cid)
+        if merged != existing:
+            fm["source_correction_ids"] = merged
+            changed = True
+
+    if not changed:
+        return False
+
+    new_yaml = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False).rstrip()
+    body = text[end + 3:]
+    new_text = f"---\n{new_yaml}\n---{body}"
+
+    try:
+        dir_path = filepath.parent
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(new_text)
+            os.replace(tmp_path, filepath)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            return False
+    except (OSError, PermissionError):
+        return False
+
+    return True
+
+
 def make_source_correction_id(session_id: str, timestamp: str) -> str:
     """source_correction_ids の複合キーを生成する。
 
