@@ -10,6 +10,7 @@ STALE_FLAG_TTL_HOURS = 24
 USER_CONFIG_DEFAULTS = {'audit_interval_days': 30, 'auto_trigger': True, 'cleanup_tmp_prefixes': 'evolve-anything-', 'cooldown_hours': 24, 'correction_preflight_threshold': 3, 'evolve_global_allowlist': '', 'evolve_interval_days': 7, 'growth_display': True, 'idiom_autopromote_daily_cap': 10, 'language': 'ja', 'max_skill_count': 30, 'min_sessions': 10, 'slow_threshold_ms': 1000, 'spec_trigger_enabled': True, 'subagent_warning_threshold': 5, 'subagent_window_minutes': 5}
 
 # rl_common public function / class signatures
+StoreWriteError (no signature)
 add_false_positive(msg: str, correction_type: str) -> None
 append_jsonl(filepath: pathlib.Path, record: dict) -> None
 calculate_confidence(base_confidence: float, text: str, matched_count: int = 1, has_strong: bool = False, has_i_told_you: bool = False) -> tuple[float, int]
@@ -39,6 +40,8 @@ resolve_data_dir(env_value: str = '', default_dir: 'Path | None' = None, cc_plug
 sanitize_message(text: str, max_length: int = 500) -> str
 should_include_message(text: str) -> bool
 skill_stack_path(session_id: str) -> pathlib.Path
+store_write(store_name: 'str', record: 'dict', *, guard_mode: 'Optional[str]' = None) -> 'None'
+store_write_raw(filepath: 'Path', record: 'dict') -> 'None'
 workflow_context_path(session_id: str) -> pathlib.Path
 write_last_skill(session_id: str, skill_name: str) -> None
 write_skill_stack(session_id: str, stack: list) -> None

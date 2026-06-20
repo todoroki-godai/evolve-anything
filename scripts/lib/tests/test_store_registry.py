@@ -183,3 +183,58 @@ def test_remediation_suppression_declared_as_batch_ttl_45() -> None:
 def test_remediation_suppression_not_stale_drift() -> None:
     """batch-writer 宣言なので hook-writer 突合の stale に誤検知されない（#477）。"""
     assert "remediation_suppression/<slug>.jsonl" in store_registry.stale_exempt_names()
+
+
+# --- status フィールド（write barrier・ADR-049 / #55）------------------------
+
+def test_status_defaults_to_active() -> None:
+    """status 未指定の宣言は active 既定（write barrier の write 許可対象）。"""
+    decl = store_registry.declaration_for("corrections.jsonl")
+    assert decl.status == "active"
+
+
+def test_all_real_declarations_are_active() -> None:
+    """同梱 SoT の全ストアは現状 active（legacy/dead は #46/#54 で段階導入）。"""
+    assert all(d.status == "active" for d in store_registry.declarations())
+
+
+def test_status_can_be_legacy_or_dead() -> None:
+    """status は legacy / dead を取れる（migration で read-only 化・削除予定を表す）。"""
+    legacy = StoreDeclaration(
+        name="x.jsonl", writer="w", reader="r", retention="permanent", status="legacy"
+    )
+    dead = StoreDeclaration(
+        name="y.jsonl", writer="w", reader="r", retention="permanent", status="dead"
+    )
+    assert legacy.status == "legacy"
+    assert dead.status == "dead"
+
+
+def test_active_store_names_returns_only_active_sorted() -> None:
+    """active_store_names() は status=active のストア名のみソートして返す。"""
+    decls = [
+        StoreDeclaration(name="a.jsonl", writer="w", reader="r", retention="permanent"),
+        StoreDeclaration(
+            name="b.jsonl", writer="w", reader="r", retention="permanent", status="legacy"
+        ),
+        StoreDeclaration(
+            name="c.jsonl", writer="w", reader="r", retention="permanent", status="dead"
+        ),
+    ]
+    assert store_registry.active_store_names(decls) == ["a.jsonl"]
+
+
+def test_is_active_store() -> None:
+    """is_active_store は active 宣言のみ True（未登録 / 非 active は False）。"""
+    assert store_registry.is_active_store("corrections.jsonl") is True
+    assert store_registry.is_active_store("no_such_store.jsonl") is False
+
+
+def test_validate_declarations_accepts_status() -> None:
+    """status 付き宣言も validate_declarations を通過する（既存ルール非破壊）。"""
+    decls = [
+        StoreDeclaration(
+            name="a.jsonl", writer="w", reader="r", retention="permanent", status="legacy"
+        ),
+    ]
+    assert store_registry.validate_declarations(decls) == []

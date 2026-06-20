@@ -45,6 +45,13 @@ DispositionKind = Literal["keep_future", "drain", "remove"]
 #           db ストアと同じ理由で、jsonl でも batch writer は hook-writer 突合に出ないため除外する。
 WriterLocus = Literal["hook", "batch"]
 
+# ストアの生死ステータス（write barrier・ADR-049 / #55）。
+# - active : 通常稼働。store_write の書込許可対象。
+# - legacy : 旧 dir に孤立し read-only。merge（#46）の読み元。write barrier は write を弾く。
+# - dead   : 廃止予定。reader も無く削除待ち（#54）。write も read もしない。
+# 全ストアは現状 active。legacy/dead は migration（#46/#54）で段階導入する。
+StoreStatus = Literal["active", "legacy", "dead"]
+
 
 @dataclass(frozen=True)
 class StoreDeclaration:
@@ -60,6 +67,7 @@ class StoreDeclaration:
     ttl_days:     retention="ttl" のときの失効日数（それ以外は None）
     compaction:   retention="compaction" のときの圧縮条件（散文。それ以外は None）
     disposition:  reader 不在（orphan）ストアの処遇。reader がある通常ストアは None
+    status:       生死（active 既定 / legacy / dead）。write barrier の write 許可は active のみ
     note:         補足（任意）
     """
 
@@ -72,6 +80,7 @@ class StoreDeclaration:
     ttl_days: Optional[int] = None
     compaction: Optional[str] = None
     disposition: Optional[DispositionKind] = None
+    status: StoreStatus = "active"
     note: Optional[str] = None
 
 
@@ -287,6 +296,24 @@ def declarations() -> List[StoreDeclaration]:
 def declared_store_names() -> List[str]:
     """宣言済みストアの basename 一覧（ソート済み）。"""
     return sorted(d.name for d in _DECLARATIONS)
+
+
+def active_store_names(decls: Optional[List[StoreDeclaration]] = None) -> List[str]:
+    """status=active のストア名のみソートして返す（write barrier の write 許可集合・#55）。
+
+    legacy/dead は除外。write-path-set keyset snapshot の対象（ADR-049 安全網）。
+    """
+    items = decls if decls is not None else _DECLARATIONS
+    return sorted(d.name for d in items if d.status == "active")
+
+
+def is_active_store(name: str) -> bool:
+    """name が active 登録ストアなら True（未登録 / legacy / dead は False）。
+
+    store_write の runtime guard が write 可否判定に使う単一ソース（#55）。
+    """
+    decl = declaration_for(name)
+    return decl is not None and decl.status == "active"
 
 
 def declaration_for(name: str) -> Optional[StoreDeclaration]:
