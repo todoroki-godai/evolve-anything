@@ -27,6 +27,7 @@ from .sections_capture import build_capture_rate_section
 from .sections_eval import build_eval_saturation_section
 from .sections_hook import build_hook_drift_section
 from .sections_measurement import build_measurement_bug_section
+from .sections_memory import build_memory_capability_section
 from .sections_multiview import build_multiview_eval_section
 from .sections_orphan import build_orphan_store_section, build_store_contract_section
 from .sections_outcome import build_outcome_metrics_section
@@ -52,6 +53,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("orphan_store", build_orphan_store_section),
     ("store_contract", build_store_contract_section),
     ("outcome_metrics", build_outcome_metrics_section),
+    ("memory_capability", build_memory_capability_section),
     ("multiview_eval", build_multiview_eval_section),
     ("paired_trajectory", build_paired_trajectory_section),
     ("measurement_bug", build_measurement_bug_section),

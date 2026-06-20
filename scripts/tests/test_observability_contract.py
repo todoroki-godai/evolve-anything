@@ -102,6 +102,13 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     # ため、実機データがあると「PJ アーティファクト無し」前提が崩れる。空 tmp に向けて隔離する（#445）。
     from audit import measurement_bug
     monkeypatch.setattr(measurement_bug, "DATA_DIR", tmp_path / "no-growth-state")
+    # memory_capability も環境グローバル（~/.claude/projects/<slug>/memory/）を読む builder のため、
+    # 実機の対象 slug に memory があると「PJ アーティファクト無し」前提が崩れる。memory dir を空 tmp に
+    # 向けて隔離する（#19）。
+    import memory_capability
+    monkeypatch.setattr(
+        memory_capability, "_resolve_memory_dir", lambda project_dir: tmp_path / "no-memory"
+    )
     result = collect_observability(tmp_path)
     assert result == {}
 
