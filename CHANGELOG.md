@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.106.0] - 2026-06-20
+
+### Changed
+- **chore: プラグインを `rl-anything` から `evolve-anything` へリブランド** — 内部参照（skills / spec / scripts のドキュメント・テスト・識別子）628 ファイルを `rl-anything`→`evolve-anything` に一括置換し、プラグイン名・marketplace 名・リポジトリ（todoroki-godai/evolve-anything）と整合。データ層に残る旧 slug `rl-anything` のテレメトリは read 層 slug 別名（#45/#47・`PJ_SLUG_ALIASES`）で後方互換を維持（物理データは非改変・物理 merge #46 は要承認で別途）。
+
 ### Added
 - **feat(memory): APEX-MEM provenance の write 側休眠配線を活性化（closes #2）** — memory frontmatter の `valid_from` / `source_correction_ids` は reader 側（`memory_temporal.parse_memory_temporal` / `instructions_loaded` の stale フィルタ / `audit.build_temporal_memory_warnings`）が実装済みだったが、**write 側で誰も埋めておらず**（broker は importance_score のみ後付け）因果チェーン（memory→corrections）が常に空という休眠配線だった。`memory_temporal.write_temporal_metadata()`（`write_importance_score` と同型・atomic write・冪等: valid_from は既存保持／source_correction_ids は順序保持 union）を新設し、`auto_memory_broker.ingest_memory_results` が memory エントリ生成時に `_apply_temporal_metadata`（valid_from=生成時刻・source_correction_ids=corrections から `make_source_correction_id` で導出）を `_apply_importance_score` の **前** に発火（correction_bonus を importance_score に効かせる順序）。`decay_days`/`superseded_at` は書かないため `is_stale`/`is_superseded` は非発火＝純加算・振る舞い非変更（opt-in gate 不要）。あわせて #2 項目5として `session_summary.count_session_usage` を corrections.jsonl 集計に拡張し session END record（sessions.jsonl）へ `correction_count` を追加（skill_count/error_count と完全同型・session START では構造的に常時0件のため session END が正準集計点・raw_json 経由で sessions.db ingest を通過し全 union-read reader から可視）。TDD 新規（write_temporal_metadata 8 / broker provenance 4 / session correction_count 3）。決定論・LLM 非依存。
 - **feat(recall): recall に `[[link]]` 1-hop 展開を追加（closes #11）** — `bin/evolve-fleet recall` で memory fact 本文中の `[[name]]` リンクを抽出（`Fact.links`）し、キーワードヒットした fact の 1-hop 先 fact も結果に追加する（同一 PJ 内・dangling 無視・直接ヒット重複排除・スコア対象外で末尾 `↳ linked:` 表示）。決定論・ADR-025 整合（vector/LLM 非使用）。
