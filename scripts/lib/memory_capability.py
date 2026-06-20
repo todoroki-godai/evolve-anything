@@ -30,16 +30,20 @@ from typing import Any, Dict, List
 
 from frontmatter import parse_frontmatter
 from memory_temporal import is_stale, is_superseded, parse_memory_temporal
-from pj_slug import resolve_pj_slug
+from pj_slug import resolve_cc_memory_dir
 
 # 索引ファイル（memory 実体ではないので集計対象外）。
 _INDEX_FILENAME = "MEMORY.md"
 
 
 def _resolve_memory_dir(project_dir: Path) -> Path:
-    """当 PJ の memory ディレクトリを返す（worktree 安全 slug 由来・1 ディレクトリのみ）。"""
-    slug = resolve_pj_slug(project_dir)
-    return Path.home() / ".claude" / "projects" / slug / "memory"
+    """当 PJ の memory ディレクトリを返す（CC パスエンコード単一ソース・1 ディレクトリのみ）。
+
+    CC の memory dir は ``~/.claude/projects/<path-encoded>/memory``。``resolve_pj_slug`` の
+    repo-basename slug とは名前空間が別物なので ``resolve_cc_memory_dir`` を使う（#19 で
+    ``resolve_pj_slug`` 由来の別 dir を指し section が常に沈黙したバグの根治・#18 と単一ソース）。
+    """
+    return resolve_cc_memory_dir(project_dir)
 
 
 def _memory_files(memory_dir: Path) -> List[Path]:

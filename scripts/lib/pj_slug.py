@@ -172,3 +172,28 @@ def resolve_pj_slug(path_or_cwd: Optional[Union[str, Path]] = None) -> str:
         if fast:
             return fast
     return UNATTRIBUTED_SLUG
+
+
+def resolve_cc_memory_dir(path_or_cwd: Optional[Union[str, Path]] = None) -> Path:
+    """CC の ``~/.claude/projects/<path-encoded>/memory`` を返す（単一ソース・#18/#19）。
+
+    Claude Code は projects ディレクトリを **cwd 絶対パスの ``/`` を ``-`` に置換した名前**
+    で持つ（例: ``/Users/x/proj`` → ``-Users-x-proj``）。これは ``resolve_pj_slug`` が返す
+    repo-basename slug（例 ``proj``）とは **名前空間が別物**。memory dir 解決に
+    ``resolve_pj_slug`` を使うと別の場所を指して section が常に沈黙する（#19 で実際に踏んだ
+    バグ）。memory dir を引く箇所は必ず本関数を使うこと。
+
+    存在する candidate（先頭 ``-`` 有無の2通り）を優先して返す。どちらも無ければ primary
+    candidate（非存在 Path）を返すので、呼び出し側は ``is_dir()`` で不在を扱える。
+
+    既知の限界: worktree から渡された path はその worktree の encoded dir を見る（#18 と同挙動。
+    memory は CC が cwd 単位で projects dir を持つため本体 repo へは自動正規化しない）。
+    """
+    base = Path.home() / ".claude" / "projects"
+    target = Path(path_or_cwd) if path_or_cwd is not None else Path.cwd()
+    encoded = str(target).replace("/", "-")
+    for candidate in (encoded, encoded.lstrip("-")):
+        memory_dir = base / candidate / "memory"
+        if memory_dir.is_dir():
+            return memory_dir
+    return base / encoded / "memory"

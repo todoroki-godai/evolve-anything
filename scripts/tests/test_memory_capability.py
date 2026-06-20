@@ -25,7 +25,7 @@ from test_home_isolation import isolate_home  # noqa: E402
 
 import memory_capability  # noqa: E402
 from audit.sections_memory import build_memory_capability_section  # noqa: E402
-from pj_slug import resolve_pj_slug  # noqa: E402
+from pj_slug import resolve_cc_memory_dir, resolve_pj_slug  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -35,9 +35,12 @@ def _isolated_home(monkeypatch, tmp_path):
 
 
 def _memory_dir_for(project_dir: Path) -> Path:
-    """project_dir の slug に対応する隔離 home 配下の memory dir を作って返す。"""
-    slug = resolve_pj_slug(project_dir)
-    mem = Path.home() / ".claude" / "projects" / slug / "memory"
+    """project_dir の CC memory dir を実 resolver 経由で作って返す。
+
+    実装と同じ ``_resolve_memory_dir`` を使うことで、fixture が誤った slug 名前空間で
+    dir を作って実装と握り合う synthetic false confidence（#19 で実際に踏んだ）を防ぐ。
+    """
+    mem = memory_capability._resolve_memory_dir(project_dir)
     mem.mkdir(parents=True, exist_ok=True)
     return mem
 
@@ -133,6 +136,28 @@ def test_mixed_files_axes_rates_correct(tmp_path):
     assert result["use_read"]["evidence"]["reinforced"] == 2
     # update_count median: [4, 2, 0, 0] → median = 1.0
     assert result["use_read"]["evidence"]["update_count_median"] == pytest.approx(1.0)
+
+
+def test_memory_dir_uses_cc_path_encoding_not_repo_slug(tmp_path):
+    """memory dir は CC パスエンコード（``-`` 連結）で解決し repo-basename slug は使わない。
+
+    #19 回帰: 実装が ``resolve_pj_slug``（repo-basename）を使うと CC の実 memory dir
+    （``~/.claude/projects/<path-encoded>/memory``）と名前空間が食い違い section が常に沈黙する。
+    repo-basename slug の場所に memory を置いても拾われないことを assert して固定する。
+    """
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+
+    # 実 resolver は CC パスエンコード（resolve_cc_memory_dir）と一致する
+    assert memory_capability._resolve_memory_dir(project_dir) == resolve_cc_memory_dir(project_dir)
+    assert memory_capability._resolve_memory_dir(project_dir).name == "memory"
+
+    # repo-basename slug（旧バグの場所）に memory 実体を置いても applicable=False のまま
+    wrong = Path.home() / ".claude" / "projects" / resolve_pj_slug(project_dir) / "memory"
+    if wrong != memory_capability._resolve_memory_dir(project_dir):
+        wrong.mkdir(parents=True, exist_ok=True)
+        _write_memory(wrong, "ghost.md", ["name: ghost", "update_count: 9"])
+        assert memory_capability.compute_memory_capability(project_dir)["applicable"] is False
 
 
 def test_slug_resolved_from_project_dir_not_cwd(tmp_path, monkeypatch):

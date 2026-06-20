@@ -21,6 +21,7 @@ try:
     if _scripts_lib not in sys.path:
         sys.path.insert(0, _scripts_lib)
     from memory_temporal import parse_memory_temporal, is_stale, is_superseded, reinforce_memory
+    from pj_slug import resolve_cc_memory_dir
     _memory_temporal = True
 except ImportError:
     pass
@@ -78,15 +79,13 @@ def handle_instructions_loaded(event: dict) -> None:
     _append_session(record)
 
     # ── stale memory 警告（ソフト指示方式） ──────────────────────
-    if project_dir:
-        proj_encoded = project_dir.replace("/", "-")
-        for candidate in [proj_encoded, proj_encoded.lstrip("-")]:
-            memory_dir = Path.home() / ".claude" / "projects" / candidate / "memory"
-            if memory_dir.is_dir():
-                _emit_stale_memory_warnings(memory_dir)
-                # SessionStart で注入された（= アクセスされた）有効 memory を reinforce（#18）
-                _reinforce_loaded_memory(memory_dir)
-                break
+    # memory dir は CC パスエンコード（resolve_cc_memory_dir 単一ソース・#18/#19）。
+    if project_dir and _memory_temporal:
+        memory_dir = resolve_cc_memory_dir(project_dir)
+        if memory_dir.is_dir():
+            _emit_stale_memory_warnings(memory_dir)
+            # SessionStart で注入された（= アクセスされた）有効 memory を reinforce（#18）
+            _reinforce_loaded_memory(memory_dir)
 
     # ── NFD: Growth greeting 出力 ──────────────────────────────
     _emit_growth_greeting(project)
