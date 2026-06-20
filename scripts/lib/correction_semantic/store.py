@@ -20,6 +20,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+# #46 read 層拡張: union read + slug alias は共有モジュール（weak_signals.store と単一ソース）。
+from store_read_union import (  # noqa: E402
+    iter_read_store_paths as _iter_read_store_paths,
+    pj_slug_match as _pj_slug_match,
+)
+
 IDIOMS_STORE_NAME = "correction_idioms.jsonl"
 JUDGED_STORE_NAME = "correction_judged.jsonl"
 
@@ -107,9 +113,24 @@ def default_judged_path(base: Optional[Path] = None) -> Path:
 
 
 def read_idioms(path: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """既存の個人辞書レコードを読む（ファイル無し → 空リスト）。"""
-    store = path if path is not None else default_idioms_path()
-    return _read_jsonl(store)
+    """既存の個人辞書レコードを読む（ファイル無し → 空リスト）。
+
+    path 未指定（production 既定）は #46 read 層拡張で canonical + legacy を union read し、
+    ``idiom_key`` で dedup する（canonical 先頭勝ち）。明示 path 指定時はそのファイルのみ（hermetic）。
+    """
+    if path is not None:
+        return _read_jsonl(Path(path))
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for p in _iter_read_store_paths(IDIOMS_STORE_NAME):
+        for r in _read_jsonl(p):
+            k = r.get("idiom_key")
+            if k and k in seen:
+                continue
+            if k:
+                seen.add(k)
+            out.append(r)
+    return out
 
 
 def existing_idiom_keys(path: Optional[Path] = None) -> Set[str]:
@@ -152,7 +173,7 @@ def read_confirmed_idiom_texts(
     """
     out: Set[str] = set()
     for r in read_idioms(path):
-        if r.get("pj_slug") != pj_slug:
+        if not _pj_slug_match(r.get("pj_slug"), pj_slug):
             continue
         if not r.get("confirmed"):
             continue
@@ -182,7 +203,7 @@ def read_cross_pj_confirmed_idiom_texts(
     out: Dict[str, List[str]] = {}
     for r in read_idioms(path):
         slug = r.get("pj_slug")
-        if not slug or slug == pj_slug:
+        if not slug or _pj_slug_match(slug, pj_slug):
             continue
         if not r.get("confirmed"):
             continue
@@ -393,13 +414,18 @@ def append_idioms(
 def read_judged_keys(path: Optional[Path] = None) -> Set[str]:
     """判定済み発話の物理キー集合を返す（ファイル無し → 空 set）。
 
-    各行は {"key": "<source_path>:<line_no>", ...}。"""
-    store = path if path is not None else default_judged_path()
+    各行は {"key": "<source_path>:<line_no>", ...}。path 未指定（production 既定）は #46
+    read 層拡張で canonical + legacy を union read する（key は集合なので自然 dedup）。
+    明示 path 指定時はそのファイルのみ（hermetic）。判定済みキーが増えるほど再判定の LLM call
+    を省けるので union は安全（純加算）。
+    """
+    paths = [Path(path)] if path is not None else _iter_read_store_paths(JUDGED_STORE_NAME)
     out: Set[str] = set()
-    for rec in _read_jsonl(store):
-        k = rec.get("key")
-        if k:
-            out.add(k)
+    for p in paths:
+        for rec in _read_jsonl(p):
+            k = rec.get("key")
+            if k:
+                out.add(k)
     return out
 
 
