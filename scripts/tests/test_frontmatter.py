@@ -49,6 +49,8 @@ def test_find_frontmatter_close_matches_old_for_wellformed():
         "---\nname: foo\ndescription: bar\n---\n# Body",
         "---\npaths:\n  - a\n  - b\n---\n",
         "---\n---\nbody",
+        "---\r\nk: v\r\n---\r\nbody",  # CRLF（閉じは \r\n--- でも \n--- が当たる）
+        "---\nk: v\n----\nbody",      # 閉じ行が ---- （4ダッシュ）
     ):
         assert find_frontmatter_close(text) == text.find("---", 3)
 
