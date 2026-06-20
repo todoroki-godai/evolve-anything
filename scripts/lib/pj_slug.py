@@ -34,6 +34,49 @@ UNATTRIBUTED_SLUG = "_unattributed"
 # utterance_archive.extractor._WORKTREE_MARKER と同値（後方互換のため重複定義）。
 _WORKTREE_MARKER = "/.claude/worktrees/"
 
+# ── PJ rename の read 層 slug 別名（#45/#47・ADR-049 ①）────────────────────
+# PJ が rename されると、rename 前に書かれた legacy テレメトリは旧 slug でタグ付け
+# されたまま残る（例: evolve-anything は旧名 rl-anything 名義で session 8万件・error 3万件・
+# subagents 2千件を蓄積）。self-audit/dogfood がリネーム前の自分の履歴を回収できるよう、
+# **読み取り層でのみ** 旧 slug を現 slug に畳む別名表。
+#   - read 側の slug 比較（``_normalize_pj``）と query 系 reader（``pj_slug_aliases_for``）が
+#     共有する単一ソース。
+#   - write 側 deriver（``pj_slug_fast`` / ``resolve_pj_slug`` / ``pj_slug_from_cwd``）には
+#     適用しない（可逆性のため・データは書き換えない・物理 merge #46 とは独立）。
+# 新しい rename はここに ``{旧 slug: 現 slug}`` を1行追記する。
+PJ_SLUG_ALIASES = {
+    "rl-anything": "evolve-anything",
+}
+
+
+def canonical_pj_slug(slug: Optional[str]) -> Optional[str]:
+    """旧 slug を現 slug に畳む（read 層の別名解決・SoT）。
+
+    ``PJ_SLUG_ALIASES`` に旧名があれば現名を返す。未知 / None / 空はそのまま返す
+    （非破壊・冪等）。write 側には適用しないこと（別名は読み取り専用契約）。
+    """
+    if not slug:
+        return slug
+    return PJ_SLUG_ALIASES.get(str(slug), str(slug))
+
+
+def pj_slug_aliases_for(target: Optional[str]) -> set:
+    """``target``（現 slug）にマッチすべき全 slug（自身 + 畳まれる旧名）の集合を返す。
+
+    exact-match で project フィルタする query 系 reader（query_usage / query_errors）が
+    別名込みに絞り込みを広げるのに使う。rename されていない PJ では ``{target}`` のみを
+    返す（他 PJ は現状維持・cross-PJ 副作用なし）。``target`` が空なら空集合。
+    """
+    if not target:
+        return set()
+    target = str(target)
+    out = {target}
+    for old, new in PJ_SLUG_ALIASES.items():
+        if new == target:
+            out.add(old)
+    return out
+
+
 # SessionStart cache（#29/#593）: sibling-dir worktree（``/.claude/worktrees/`` マーカー外）の
 # write 時 slug 解決のためのキャッシュファイル名。DATA_DIR 直下に置く。
 #   - SessionStart（hot path でない）が `resolve_pj_slug(cwd)`（authoritative・subprocess 可）を

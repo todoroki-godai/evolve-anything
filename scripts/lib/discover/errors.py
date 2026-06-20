@@ -21,16 +21,36 @@ def detect_error_patterns(
     project_root: Optional[Path] = None,
     include_unknown: bool = False,
 ) -> List[Dict[str, Any]]:
-    """繰り返しエラーパターンの検出（errors、3+閾値）。"""
+    """繰り返しエラーパターンの検出（errors、3+閾値）。
+
+    #45/#47 ① read 統一（ADR-049）: DATA_DIR 断片化の移行期は errors.jsonl が
+    canonical / legacy / plugins-data に分裂し、PJ rename（rl-anything→evolve-anything）で
+    legacy が旧 slug タグのまま残るため、self-audit が母集団を取り逃す。iter_read_data_dirs で
+    cross-dir union read し、pj_slug_aliases_for で旧 slug も当 PJ として含める（read 専用別名・
+    データ非改変）。append-only event log で同一レコードが複数 dir に重複しないため concat で正しい。
+    """
     from . import DATA_DIR
     from telemetry_query import query_errors
+    from rl_common import iter_read_data_dirs
+    from pj_slug import pj_slug_aliases_for
 
     project_name = project_root.name if project_root else None
-    errors = query_errors(
-        project=project_name,
-        include_unknown=include_unknown,
-        errors_file=DATA_DIR / "errors.jsonl",
-    )
+    # 当 PJ が rename されている場合、旧 slug でタグ付けされた legacy も同一 PJ として含める。
+    # rename されていない PJ は {project_name} のみ（他 PJ 現状維持）。None は全 PJ（[None]）。
+    accept_slugs = sorted(pj_slug_aliases_for(project_name)) if project_name else [None]
+    errors: List[Dict[str, Any]] = []
+    for d in iter_read_data_dirs(DATA_DIR):
+        errors_file = d / "errors.jsonl"
+        for idx, slug in enumerate(accept_slugs):
+            # include_unknown（未帰属レコードの救済）は最初の slug の1回だけ（重複 pull 防止）。
+            iu = include_unknown if idx == 0 else False
+            errors.extend(
+                query_errors(
+                    project=slug,
+                    include_unknown=iu,
+                    errors_file=errors_file,
+                )
+            )
     counter: Counter = Counter()
     for rec in errors:
         # `.get("error", "")` のデフォルトは「キー欠落」しか守らず、値が明示的に None の

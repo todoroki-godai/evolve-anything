@@ -63,6 +63,66 @@ def resolve_data_dir(
     return env_path
 
 
+# read 統一（#45）: DATA_DIR 断片化の移行期に reader が union read する候補 dir 名。
+# canonical.parent（= ~/.claude）からの相対で導出する（実 home を直接参照しない）。
+_LEGACY_DATA_DIR_NAME = "rl-anything"
+_PLUGINS_DATA_REL = ("plugins", "data")
+# plugin-data dir 名は ``<marketplace>-<plugin>``。marketplace prefix は環境で変わりうる
+# （#358 probe は ``*evolve-anything*`` を一般マッチしていた）。固定名でなく plugin token を
+# 含む dir を glob して superset カバーする（旧名 rl-anything era の dir も含む）。
+_PLUGINS_DATA_NAME_TOKENS = ("evolve-anything", "rl-anything")
+
+
+def iter_read_data_dirs(canonical: "Path | None" = None) -> "list[Path]":
+    """read 用の候補 DATA_DIR を canonical 優先・存在するものだけ列挙する（#45 read 統一）。
+
+    DATA_DIR 断片化（canonical / legacy rename / plugins-data hook split）の間、同一ストアが
+    複数 dir に分裂しているため、reader が全 dir を union して読めるように候補を返す。
+    候補は **canonical.parent からの相対**で導出するため、tmp canonical を渡すテストでは
+    兄弟 dir が存在せず ``[canonical]`` のみを返す（実 home ~/.claude を読まない＝hermetic。
+    store モジュールが実 home を読んで xdist 非hermetic になる #420/#457 を構造的に防ぐ）。
+
+    write 統一（#55 write barrier）+ merge（#46）が済めば候補は canonical 1 つに収束する。
+    それまでの移行期に既存データを orphan させないための read 側の安全網。
+
+    Returns:
+        存在する候補 dir の list（canonical 先頭・resolve 重複排除・順序安定）。
+    """
+    canonical = canonical if canonical is not None else DATA_DIR
+    claude_root = canonical.parent
+    candidates = [canonical, claude_root / _LEGACY_DATA_DIR_NAME]
+    # plugins-data 候補は固定名でなく token glob（#358 の任意 marketplace prefix 一般性を
+    # 引き継ぐ・superset）。claude_root 相対の glob なので hermetic（tmp canonical では
+    # 兄弟が存在せず空）。順序は名前昇順で決定論化。
+    plugins_data = claude_root.joinpath(*_PLUGINS_DATA_REL)
+    try:
+        if plugins_data.is_dir():
+            matched = [
+                child
+                for child in plugins_data.iterdir()
+                if child.is_dir()
+                and any(tok in child.name for tok in _PLUGINS_DATA_NAME_TOKENS)
+            ]
+            candidates.extend(sorted(matched, key=lambda p: p.name))
+    except OSError:
+        pass
+
+    out: "list[Path]" = []
+    seen: set = set()
+    for d in candidates:
+        try:
+            if not d.exists():
+                continue
+            key = d.resolve()
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+    return out
+
+
 DATA_DIR = resolve_data_dir(_PLUGIN_DATA_ENV)
 CHECKPOINTS_DIR = DATA_DIR / "checkpoints"
 CHECKPOINT_TTL_HOURS = 48.0

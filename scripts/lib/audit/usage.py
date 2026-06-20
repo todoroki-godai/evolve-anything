@@ -38,17 +38,38 @@ def load_usage_data(
 
     # usage.jsonl は hook（PostToolUse）が plugin-data dir に書く。tool 実行時は
     # env 未設定で _DATA_DIR が fallback に解決され live テレメトリを取り逃すため、
-    # hook-writer 系 resolver で正準 dir を解決する（#358）。base=_DATA_DIR を渡し
-    # テストの audit.DATA_DIR patch を尊重する。
-    from rl_common import hook_store_path
+    # 従来は hook-writer 系 resolver で単一 dir を正準解決していた（#358）。
+    #
+    # #45 ① read 統一（ADR-049）: DATA_DIR 断片化（canonical / legacy rename /
+    # plugins-data hook split）の移行期は usage.jsonl が複数 dir に分裂しており、
+    # 単一 dir では母集団を取り逃す（実測: canonical 54KB に対し legacy 1.4MB）。
+    # iter_read_data_dirs で全候補 dir を cross-dir union read する（hook_store_path の
+    # 単一 dir probe を包含・strictly more）。append-only の event log で同一レコードが
+    # 複数 dir に重複しないため dedup なしの concat で正しい。cold-path（audit/prune の
+    # 集計）専用。write 統一（#55）+ merge（#46）後は canonical 1 つに収束する。
+    from rl_common import iter_read_data_dirs
+    from pj_slug import pj_slug_aliases_for
 
     project_name = project_root.name if project_root else None
     include_unknown = project_root is None
-    records = query_usage(
-        project=project_name,
-        include_unknown=include_unknown,
-        usage_file=hook_store_path("usage.jsonl", base=_DATA_DIR),
-    )
+    # #45/#47 ① read 統一: 当 PJ が rename されている場合、旧 slug でタグ付けされた legacy
+    # も同一 PJ として含める（read 専用別名）。rename されていない PJ は {project_name} のみ
+    # なので他 PJ は現状維持。project_name=None（全 PJ）は project フィルタなし（[None]）。
+    accept_slugs = sorted(pj_slug_aliases_for(project_name)) if project_name else [None]
+    records: List[Dict[str, Any]] = []
+    for d in iter_read_data_dirs(_DATA_DIR):
+        usage_file = d / "usage.jsonl"
+        for idx, slug in enumerate(accept_slugs):
+            # include_unknown（project 未帰属レコードの救済）は最初の slug の1回だけ。
+            # 残り別名は False で引き、unknown の重複 pull を防ぐ。
+            iu = include_unknown if idx == 0 else False
+            records.extend(
+                query_usage(
+                    project=slug,
+                    include_unknown=iu,
+                    usage_file=usage_file,
+                )
+            )
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     return [r for r in records if (r.get("ts") or r.get("timestamp") or "") >= cutoff]

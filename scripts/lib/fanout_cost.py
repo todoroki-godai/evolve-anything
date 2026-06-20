@@ -77,39 +77,51 @@ def _normalize_pj(value: Optional[str]) -> Optional[str]:
 def _read_subagents(base: Path, since: str, project: Optional[str]) -> List[Dict[str, Any]]:
     """当 PJ・窓内・agent_type 非ノイズの subagent レコードを返す（#36, #489）。
 
+    DATA_DIR 断片化（canonical / legacy rename / plugins-data hook split）の移行期に
+    subagents.jsonl が複数 dir に分裂しているため、iter_read_data_dirs で全候補を
+    cross-dir union read する（#45 ① read 統一・ADR-049）。append-only の spawn イベント
+    log で同一レコードが複数 dir に重複しないため、dedup なしの concat で正しい
+    （session_store の db↔jsonl 重複と異なり cross-dir 分裂は write-time 排他）。
+    cold-path（audit section）専用。hot-path では union しない。
     collectors.aggregate_subagents_by_project と同じ除外を適用する
     （`is_noise_agent_type` = 空 / ID 形 agent_type 除外・writer/reader 単一ソース）。
     """
-    path = base / "subagents.jsonl"
-    if not path.is_file():
-        return []
-    out: List[Dict[str, Any]] = []
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
+        from rl_common import iter_read_data_dirs
+        dirs = iter_read_data_dirs(base)
+    except ImportError:  # pragma: no cover - パス未解決時のフォールバック
+        dirs = [base]
+    out: List[Dict[str, Any]] = []
+    for d in dirs:
+        path = d / "subagents.jsonl"
+        if not path.is_file():
             continue
         try:
-            rec = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
+            text = path.read_text(encoding="utf-8")
+        except OSError:
             continue
-        if not isinstance(rec, dict):
-            continue
-        # #36: agent_type 空 / ID 形は本物の Task subagent でない。reader 契約として除外する
-        # （writer/reader 単一ソース判定・collectors と同じ）。
-        if is_noise_agent_type(rec.get("agent_type", "")):
-            continue
-        if not _in_window(str(rec.get("timestamp", "")), since):
-            continue
-        # #489: 当 PJ スコープに絞る。識別フィールドが無いレコードは寛容に include。
-        if project is not None:
-            slug = _normalize_pj(rec.get("project") or rec.get("project_path"))
-            if slug is not None and slug != project:
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
                 continue
-        out.append(rec)
+            try:
+                rec = json.loads(s)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            # #36: agent_type 空 / ID 形は本物の Task subagent でない。reader 契約として除外する
+            # （writer/reader 単一ソース判定・collectors と同じ）。
+            if is_noise_agent_type(rec.get("agent_type", "")):
+                continue
+            if not _in_window(str(rec.get("timestamp", "")), since):
+                continue
+            # #489: 当 PJ スコープに絞る。識別フィールドが無いレコードは寛容に include。
+            if project is not None:
+                slug = _normalize_pj(rec.get("project") or rec.get("project_path"))
+                if slug is not None and slug != project:
+                    continue
+            out.append(rec)
     return out
 
 

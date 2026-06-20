@@ -452,6 +452,44 @@ def read_session_records(
     return sorted(by_key.values(), key=lambda r: r.get("timestamp", ""))
 
 
+def read_session_records_union(
+    canonical: Path | None = None, *, since: str | None = None
+) -> list[dict]:
+    """canonical + legacy/plugins-data の全候補 dir を cross-dir union read する（#45 read 統一）。
+
+    DATA_DIR 断片化の移行期は、canonical だけを読むと plugins-data / legacy へ hook 書込された
+    session が母集団から欠落する（outcome の一発成功率・fan-out cost の母集団欠損 #45）。
+    ``rl_common.iter_read_data_dirs`` が返す全候補 dir を ``read_session_records`` で読み、
+    ``(session_id, timestamp)`` で dedup（**canonical 優先**＝候補列の先頭優先）して合算する。
+
+    cold-path（outcome / audit）専用。hot-path（trigger の count）は呼ばない
+    — legacy 71MB db を毎発火で開くのを避けるため（since 窓付きでも open 自体のコストがある。
+    cold-path の since 窓付き union は実測 ~16ms で legacy に直近データが無く許容範囲）。
+
+    **読み取り専用**: ``read_session_records`` が read_only 接続・mkdir 非実行のため、
+    dry-run の「1バイトも書かない」契約（#461）を維持する。
+
+    Args:
+        canonical: 起点となる canonical dir。None ならモジュール定数 ``DATA_DIR``。
+                   候補 dir はこの ``canonical.parent`` から導出される（tmp 渡しで hermetic）。
+        since: ISO 8601 timestamp。指定時は各候補 dir で ``timestamp > since`` のみ。
+
+    Returns:
+        session レコード dict の list（timestamp 昇順・dedup 済み）。
+    """
+    from rl_common import iter_read_data_dirs
+
+    base = canonical if canonical is not None else DATA_DIR
+    by_key: dict[tuple[str, str], dict] = {}
+    for d in iter_read_data_dirs(base):
+        for rec in read_session_records(d, since=since):
+            key = (rec.get("session_id", ""), rec.get("timestamp", ""))
+            # 候補列は canonical 先頭なので、先に入った dir（= canonical）を優先する。
+            if key not in by_key:
+                by_key[key] = rec
+    return sorted(by_key.values(), key=lambda r: r.get("timestamp", ""))
+
+
 def migrate_from_jsonl(skip_if_db_has_data: bool = False) -> int:
     """sessions.jsonl のレコードを sessions.db に取り込む（後方互換 CLI 用）。
 

@@ -235,3 +235,94 @@ def test_token_join_noted_as_proxy(tmp_path):
     _write_subagents(tmp_path, [_sub("A"), _sub("A")])
     out = fanout_cost.compute_fanout_metrics(Path("/x/evolve-anything"), days=30)
     assert out["cost"]["evidence"].get("token_join") == "unsupported_proxy_count"
+
+
+# --- ⑦ cross-dir read union（#45 ① read 統一）-------------------------------
+# DATA_DIR 断片化の移行期に subagents.jsonl が canonical / legacy / plugins-data に
+# 分裂しているため、cold-path 集計 reader は全候補を union read する（ADR-049 ①）。
+
+
+def _canonical_layout(root: Path) -> Path:
+    """canonical = root/evolve-anything を作る。
+
+    iter_read_data_dirs は候補を canonical.parent（= root）から導出するため、
+    canonical を tmp の素直な子ではなく ``root/evolve-anything`` にすると
+    兄弟 legacy(rl-anything) / plugins-data も root 配下に作れる（hermetic）。
+    """
+    canonical = root / "evolve-anything"
+    canonical.mkdir(parents=True, exist_ok=True)
+    return canonical
+
+
+def test_subagents_unioned_across_canonical_and_legacy(tmp_path, monkeypatch):
+    """canonical と legacy(rl-anything) に分裂した subagents を cross-dir union する（#45）。"""
+    canonical = _canonical_layout(tmp_path)
+    legacy = tmp_path / "rl-anything"
+    legacy.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(fanout_cost, "DATA_DIR", canonical)
+    # canonical に fan-out session A（2体）、legacy に fan-out session B（2体）
+    _write_subagents(canonical, [_sub("A"), _sub("A")])
+    _write_subagents(legacy, [_sub("B"), _sub("B")])
+    out = fanout_cost.compute_fanout_metrics(_PJ_DIR, days=30)
+    cost = out["cost"]
+    # 両 dir 合算: spawning 2 session、subagent 4 体（legacy を取り逃さない）
+    assert cost["evidence"]["spawning_sessions"] == 2
+    assert cost["evidence"]["total_subagents"] == 4
+
+
+def test_subagents_unioned_includes_plugins_data(tmp_path, monkeypatch):
+    """plugins-data hook split 先の subagents も union に含める（現行 hook 書込先・#45）。"""
+    canonical = _canonical_layout(tmp_path)
+    plugins_data = tmp_path / "plugins" / "data" / "evolve-anything-evolve-anything"
+    plugins_data.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(fanout_cost, "DATA_DIR", canonical)
+    _write_subagents(canonical, [_sub("A"), _sub("A")])
+    _write_subagents(plugins_data, [_sub("P"), _sub("P"), _sub("P")])
+    out = fanout_cost.compute_fanout_metrics(_PJ_DIR, days=30)
+    cost = out["cost"]
+    assert cost["evidence"]["spawning_sessions"] == 2
+    assert cost["evidence"]["total_subagents"] == 5
+
+
+def test_subagents_hermetic_tmp_only_reads_canonical(tmp_path, monkeypatch):
+    """canonical が tmp の素直な子のとき、兄弟 dir は存在せず canonical のみ読む（実 home 非参照）。"""
+    monkeypatch.setattr(fanout_cost, "DATA_DIR", tmp_path)
+    _write_subagents(tmp_path, [_sub("A"), _sub("A")])
+    out = fanout_cost.compute_fanout_metrics(_PJ_DIR, days=30)
+    # 実 ~/.claude/rl-anything 等を読まない＝canonical の 2 体のみ
+    assert out["cost"]["evidence"]["total_subagents"] == 2
+
+
+def test_legacy_rl_anything_attributed_to_evolve_anything(tmp_path, monkeypatch):
+    """旧 slug project='rl-anything' の legacy subagent を当 PJ(evolve-anything) に帰属する（#45/#47）。
+
+    PJ rename（rl-anything→evolve-anything）後、legacy は旧 slug でタグ付けされている。
+    read 層 slug 別名 + cross-dir union の両方が効いて初めて self-audit が回収できる。
+    """
+    canonical = _canonical_layout(tmp_path)
+    legacy = tmp_path / "rl-anything"
+    legacy.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(fanout_cost, "DATA_DIR", canonical)
+    # canonical に現 slug の fan-out session、legacy に旧 slug の fan-out session
+    _write_subagents(canonical, [_sub("A", project="evolve-anything"), _sub("A", project="evolve-anything")])
+    _write_subagents(legacy, [_sub("B", project="rl-anything"), _sub("B", project="rl-anything")])
+    out = fanout_cost.compute_fanout_metrics(_PJ_DIR, days=30)
+    cost = out["cost"]
+    # 旧 slug B も当 PJ に畳まれて合算: spawning 2 / subagent 4
+    assert cost["evidence"]["spawning_sessions"] == 2
+    assert cost["evidence"]["total_subagents"] == 4
+
+
+def test_other_pj_legacy_not_attributed(tmp_path, monkeypatch):
+    """rename されていない他 PJ(bots) の legacy は当 PJ に混ぜない（別名は当 PJ 限定）。"""
+    canonical = _canonical_layout(tmp_path)
+    legacy = tmp_path / "rl-anything"
+    legacy.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(fanout_cost, "DATA_DIR", canonical)
+    _write_subagents(canonical, [_sub("A", project="evolve-anything"), _sub("A", project="evolve-anything")])
+    _write_subagents(legacy, [_sub("X", project="bots"), _sub("X", project="bots"), _sub("X", project="bots")])
+    out = fanout_cost.compute_fanout_metrics(_PJ_DIR, days=30)
+    cost = out["cost"]
+    # bots は別名対象外 → 当 PJ 集計は canonical の 2 体のみ
+    assert cost["evidence"]["spawning_sessions"] == 1
+    assert cost["evidence"]["total_subagents"] == 2

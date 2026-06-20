@@ -43,14 +43,19 @@ except ImportError:  # pragma: no cover - パス未解決時は jsonl 直読へ 
 
 
 def read_sessions(base: Path, *, since: Optional[str] = None) -> List[Dict[str, Any]]:
-    """session レコードを union read で取得する（db + 未 ingest jsonl, dedup 済み）。
+    """session レコードを cross-dir union read で取得する（db + 未 ingest jsonl, dedup 済み）。
 
-    base 配下の sessions.db / sessions.jsonl を session_store 経由で読む。
+    #45 read 統一: ``base`` 単体でなく ``iter_read_data_dirs(base)`` が返す全候補 dir
+    （canonical + legacy + plugins-data）を union する。DATA_DIR 断片化の移行期に
+    plugins-data / legacy へ hook 書込された session が母集団から欠落するのを防ぐ
+    （canonical だけ読むと outcome の一発成功率・fan-out cost が母集団欠損で過少になる）。
+    候補は ``base.parent`` から導出されるため、tmp ``base`` を渡すテストでは canonical
+    のみを読み hermetic（実 home を読まない）。
     duckdb 無 / db 不在時は jsonl のみへ graceful fallback（session_store 側で処理）。
     session_store を import できない環境では sessions.jsonl 直読へ最終 fallback する。
     """
     if _session_store is not None:
-        return _session_store.read_session_records(base, since=since)
+        return _session_store.read_session_records_union(base, since=since)
     # session_store 不在時の最終フォールバック（旧挙動: live jsonl のみ）。
     recs = _read_jsonl(base / "sessions.jsonl")
     if since:
@@ -153,14 +158,24 @@ def _normalize_pj(value: Optional[str]) -> Optional[str]:
     痕跡が ``project=feedback`` 等で固定済み）はフルパスが無いため pj_slug_from_cwd の
     素通し（basename）と同じく原値のまま残る — 復元不能な情報欠落であり本関数の責務外。
     import 不能環境では basename フォールバック。
+
+    #45/#47 ① read 統一: 正規化後の slug を ``canonical_pj_slug`` で read 層別名解決する
+    （PJ rename rl-anything→evolve-anything の旧 slug を現 slug に畳む）。これにより
+    rename 前の legacy テレメトリ（旧 slug タグ）が self-audit/dogfood の当 PJ 集計に
+    回収される。別名は read 専用・データ非改変（pj_slug.PJ_SLUG_ALIASES が単一ソース）。
     """
     if not value:
         return None
     try:
         from utterance_archive.extractor import pj_slug_from_cwd
-        return pj_slug_from_cwd(value)
+        slug = pj_slug_from_cwd(value)
     except ImportError:  # pragma: no cover - パス未解決時のフォールバック
-        return Path(str(value)).name or None
+        slug = Path(str(value)).name or None
+    try:
+        from pj_slug import canonical_pj_slug
+        return canonical_pj_slug(slug)
+    except ImportError:  # pragma: no cover - パス未解決時のフォールバック
+        return slug
 
 
 def _project_match(rec: Dict[str, Any], project: Optional[str]) -> bool:

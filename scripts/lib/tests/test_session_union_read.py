@@ -164,3 +164,81 @@ class TestReadSessionRecords:
         session_store.read_session_records(tmp_path)
         after = db_path.read_bytes()
         assert before == after
+
+
+class TestReadSessionRecordsUnion:
+    """read_session_records_union: canonical + legacy/plugins-data の cross-dir union（#45）。
+
+    iter_read_data_dirs が canonical.parent から候補を導出するため、canonical を
+    ``tmp/evolve-anything`` にすると兄弟 dir（``tmp/rl-anything`` 等）を作るだけで
+    cross-dir union を hermetic に検証できる（実 home を読まない）。
+    """
+
+    @staticmethod
+    def _canonical(root: Path) -> Path:
+        c = root / "evolve-anything"
+        c.mkdir(parents=True, exist_ok=True)
+        return c
+
+    def test_unions_across_canonical_and_legacy(self, tmp_path):
+        """canonical の s1 と legacy 兄弟 dir の s2 を 1 つに union する。"""
+        canonical = self._canonical(tmp_path)
+        legacy = tmp_path / "rl-anything"
+        legacy.mkdir()
+        _write_jsonl(canonical / "sessions.jsonl", [_session("s1", "2026-06-01T00:00:00+00:00")])
+        _write_jsonl(legacy / "sessions.jsonl", [_session("s2", "2026-06-02T00:00:00+00:00")])
+
+        recs = session_store.read_session_records_union(canonical)
+        assert sorted(r["session_id"] for r in recs) == ["s1", "s2"]
+
+    def test_canonical_wins_on_duplicate_key(self, tmp_path):
+        """同一 (session_id, timestamp) が複数 dir にあるとき canonical を優先する。"""
+        canonical = self._canonical(tmp_path)
+        legacy = tmp_path / "rl-anything"
+        legacy.mkdir()
+        _write_jsonl(
+            canonical / "sessions.jsonl",
+            [_session("s1", "2026-06-01T00:00:00+00:00", error_count=0)],
+        )
+        _write_jsonl(
+            legacy / "sessions.jsonl",
+            [_session("s1", "2026-06-01T00:00:00+00:00", error_count=9)],
+        )
+        recs = session_store.read_session_records_union(canonical)
+        assert len(recs) == 1
+        assert recs[0]["error_count"] == 0  # canonical 優先
+
+    def test_hermetic_tmp_only_reads_canonical(self, tmp_path):
+        """兄弟 dir を作らなければ canonical のみ（実 home の legacy を読まない）。"""
+        canonical = self._canonical(tmp_path)
+        _write_jsonl(canonical / "sessions.jsonl", [_session("s1", "2026-06-01T00:00:00+00:00")])
+        recs = session_store.read_session_records_union(canonical)
+        assert [r["session_id"] for r in recs] == ["s1"]
+
+    def test_since_propagates_to_each_dir(self, tmp_path):
+        """since は各候補 dir の read に伝播する。"""
+        canonical = self._canonical(tmp_path)
+        legacy = tmp_path / "rl-anything"
+        legacy.mkdir()
+        _write_jsonl(
+            canonical / "sessions.jsonl",
+            [
+                _session("old", "2026-05-01T00:00:00+00:00"),
+                _session("new-c", "2026-06-10T00:00:00+00:00"),
+            ],
+        )
+        _write_jsonl(
+            legacy / "sessions.jsonl",
+            [
+                _session("old-l", "2026-05-02T00:00:00+00:00"),
+                _session("new-l", "2026-06-11T00:00:00+00:00"),
+            ],
+        )
+        recs = session_store.read_session_records_union(
+            canonical, since="2026-06-01T00:00:00+00:00"
+        )
+        assert sorted(r["session_id"] for r in recs) == ["new-c", "new-l"]
+
+    def test_empty_when_no_data(self, tmp_path):
+        canonical = self._canonical(tmp_path)
+        assert session_store.read_session_records_union(canonical) == []

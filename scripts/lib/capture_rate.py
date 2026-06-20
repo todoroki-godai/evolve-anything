@@ -140,14 +140,23 @@ def _normalize_pj(value: Optional[str]) -> Optional[str]:
     ``/x/evolve-anything/.claude/worktrees/feedback`` を本体 repo 名 ``evolve-anything`` へ
     正規化し、本体⇔worktree 間の取りこぼし（undercount）を防ぐ。
     import 不能環境では basename フォールバック。
+
+    #45/#47 ① read 統一: 正規化後の slug を ``canonical_pj_slug`` で read 層別名解決する
+    （PJ rename rl-anything→evolve-anything の旧 slug を現 slug に畳む・read 専用・
+    pj_slug.PJ_SLUG_ALIASES が単一ソース・outcome_metrics._normalize_pj と同方針）。
     """
     if not value:
         return None
     try:
         from utterance_archive.extractor import pj_slug_from_cwd
-        return pj_slug_from_cwd(value)
+        slug = pj_slug_from_cwd(value)
     except ImportError:  # pragma: no cover - パス未解決時のフォールバック
-        return Path(str(value)).name or None
+        slug = Path(str(value)).name or None
+    try:
+        from pj_slug import canonical_pj_slug
+        return canonical_pj_slug(slug)
+    except ImportError:  # pragma: no cover - パス未解決時のフォールバック
+        return slug
 
 
 def _project_match(rec: Dict[str, Any], project: str) -> bool:
