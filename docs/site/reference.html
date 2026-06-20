@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.105.0</span>
+    <span class="header-version">v1.106.0</span>
   </div>
 </header>
 
@@ -338,7 +338,7 @@
           <tr><td>evolve_result_schema</td><td>result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379）</td></tr>
           <tr><td>evolve_consistency</td><td>P1 invariant の runtime self-detect（型 drift のみ）（#377-5）</td></tr>
           <tr><td>outcome_metrics</td><td>行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。utilization の plugin レイアウト探索修理も同梱。correction 再発率は <code>MIN_DISTINCT_TYPES_FLOOR=5</code> 未満で率を非表示にし低サンプル誤シグナルを抑止（#529-2）[#423, ADR-046]</td></tr>
-          <tr><td>outcome_attribution</td><td>outcome 2軸（一発成功率 / rework 率）を per-skill 帰属し evolve ターゲットランキングへ自動入力（advisory→閉ループの先行配線）。dry-run に before/after 順位差分を surface [#433]</td></tr>
+          <tr><td>outcome_attribution</td><td>outcome 3軸（一発成功率 / rework 率 / correction 再発率）を per-skill 帰属し evolve ターゲットランキングへ自動入力 + negative_transfer gate で退行スキルを末尾 rollback（#10）+ RODS reward 分散列（#28）。dry-run に before/after 順位差分を surface [#433, #10, #28]</td></tr>
           <tr><td>outcome_promotion_readiness</td><td>ADR-046 重み昇格レディネスの3条件決定論判定（分散 / 件数下限 / 方向妥当性）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母は session_store union read（db read_only + 未 ingest jsonl）で実効化済み（#461, #469）</td></tr>
           <tr><td>correction_semantic</td><td>correction capture の二層化（#431）。utterances.db の dialogue 発話を Haiku がバッチ意味判定（auto_memory 2 相と同型）→ weak_signals(channel=llm_judge) 隔離 + 個人辞書（correction_idioms.jsonl）。フェーズ昇格は human-source のみ駆動（provenance_weight）/ reflect 昇格フロー（--show-weak-signals / --promote-weak）[#431]</td></tr>
           <tr><td>bootstrap_backlog</td><td>初回 evolve で既存 weak_signals バックログの消化方式を AskUserQuestion 3 択で選ぶ bootstrap phase（marker で1回きり・slug スコープ厳守・常時 emit）（#443）</td></tr>
@@ -351,6 +351,9 @@
           <tr><td>multiview_eval</td><td>evolve 提案を4視点（再利用可能 / 過学習疑い / 退行リスク / コスト増）で決定論分類し audit/evolve に advisory surface。chaos/outcome_attribution/negative_transfer を join、replay は将来フックのみ（#564, tech-eval SEAGym）</td></tr>
           <tr><td>relevance_gate</td><td>過去経験（weak_signal/idiom）提案を現在文脈との関連度（jaccard 流儀）でゲートし、無関係を理由付きで <code>suppressed</code> 分離。<code>evolve-reflect --show-weak-signals --context</code> に配線（#565, tech-eval FinAcumen）</td></tr>
           <tr><td>report-feedback</td><td>evolve/audit レポートを LLM メタレビューし evolve-anything 自身への改善 issue を <code>todoroki-godai/evolve-anything</code> に半自動起票するスキル。決定論 <code>evolve_introspect</code> が拾えない「読んで気づく」改善（表示・提案の質・バグ・UX）が対象で、その dedup/render 配線を再利用。旧 <code>feedback</code> スキルの後継として統合・削除</td></tr>
+          <tr><td>memory_capability</td><td>記憶操作を read/use/write/maintain 観点で advisory 評価する observability section（OPD-Evolver #19）。reason 非永続化のため read/use 統合の3軸（write=記憶量 / maintain=健全度 / use_read=活性）。memory dir 解決は <code>resolve_cc_memory_dir</code> 単一ソース（CC パスエンコード）</td></tr>
+          <tr><td>fanout_cost</td><td>fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は各群 ≥5 の floor ゲート付き</td></tr>
+          <tr><td>paired_trajectory</td><td>paired trajectory auditing（観測版）— 同一タスク種別を「スキル使用群 vs 非使用群」に分け既存テレメトリからアウトカム差を決定論対照集計し advisory surface（能動再実行なし）。outcome_attribution/multiview_eval/negative_transfer と相補（#15）</td></tr>
         </tbody>
       </table>
 
