@@ -142,11 +142,17 @@ def test_multiple_rl_anything_dirs_prefers_recent(monkeypatch, tmp_path, fallbac
 
 # --- #358 リグレッション（統合）: tool 実行が hook の書いた plugin-data を読む ---
 
-def test_358_load_usage_data_reads_plugin_data_via_probe(monkeypatch, tmp_path, fallback):
-    """env 未設定の tool 実行でも hook が plugin-data に書いた usage を読む（#358）。
+def test_358_load_usage_data_reads_plugin_data_via_union(monkeypatch, tmp_path, fallback):
+    """env 未設定の tool 実行でも hook が plugin-data に書いた usage を読む（#358 / #45）。
 
     bug: env 未設定 → DATA_DIR=fallback → reader が空の fallback を読み prune が
-    全スキル zero_invocation 誤判定。fix: probe で plugin-data dir を回収。
+    全スキル zero_invocation 誤判定。
+
+    #45 ① read 統一で load_usage_data の読み取り機構が「単一 dir probe（hook_store_path）」
+    から「cross-dir union（iter_read_data_dirs）」に変わった。union は canonical.parent 配下の
+    ``plugins/data/*<plugin token>*`` を glob して回収する（production の plugin-data 実体
+    ``~/.claude/plugins/data/evolve-anything-evolve-anything`` を包含・任意 marketplace prefix も
+    token glob でカバー）。本テストはその union 経路で plugin-data の live usage を読むことを封じる。
     """
     import json
     from datetime import datetime, timezone
@@ -154,16 +160,35 @@ def test_358_load_usage_data_reads_plugin_data_via_probe(monkeypatch, tmp_path, 
     import audit
 
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-    base = tmp_path / "plugins_data"
-    canonical = base / "evolve-anything-evolve-anything"
-    canonical.mkdir(parents=True)
+    # audit.DATA_DIR = canonical（隔離 fallback）。union は canonical.parent/plugins/data を見る。
+    monkeypatch.setattr(audit, "DATA_DIR", fallback)
+    plugin_data = fallback.parent / "plugins" / "data" / "evolve-anything-evolve-anything"
+    plugin_data.mkdir(parents=True)
     now = datetime.now(timezone.utc).isoformat()
-    (canonical / "usage.jsonl").write_text(
+    (plugin_data / "usage.jsonl").write_text(
         json.dumps({"skill_name": "live-skill", "project": None, "timestamp": now}) + "\n"
     )
-    monkeypatch.setattr(rl_common, "PLUGIN_DATA_BASE", base)
-    # audit.DATA_DIR を（隔離）既定 fallback に固定 → 明示 base でないので probe が効く
+
+    records = audit.load_usage_data()
+    assert any(r.get("skill_name") == "live-skill" for r in records), records
+
+
+def test_358_load_usage_data_reads_arbitrary_marketplace_prefix(monkeypatch, tmp_path, fallback):
+    """任意 marketplace prefix の plugin-data dir も token glob で union 回収する（#358 一般性保持）。"""
+    import json
+    from datetime import datetime, timezone
+
+    import audit
+
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
     monkeypatch.setattr(audit, "DATA_DIR", fallback)
+    # 固定名でなく別 marketplace prefix（"othermkt-evolve-anything"）でも plugin token を含めば拾う。
+    plugin_data = fallback.parent / "plugins" / "data" / "othermkt-evolve-anything"
+    plugin_data.mkdir(parents=True)
+    now = datetime.now(timezone.utc).isoformat()
+    (plugin_data / "usage.jsonl").write_text(
+        json.dumps({"skill_name": "live-skill", "project": None, "timestamp": now}) + "\n"
+    )
 
     records = audit.load_usage_data()
     assert any(r.get("skill_name") == "live-skill" for r in records), records

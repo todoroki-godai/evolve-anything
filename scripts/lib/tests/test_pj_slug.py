@@ -183,6 +183,44 @@ def test_fast_cache_lookup_does_not_invoke_subprocess(tmp_path, monkeypatch):
     assert pj_slug.pj_slug_fast(sibling, data_dir=data_dir) == "rl-anything"
 
 
+# ── PJ rename の read 層 slug 別名（#45/#47・ADR-049 ①）────────────────────
+def test_canonical_pj_slug_folds_legacy_to_current():
+    """旧 slug rl-anything は現 slug evolve-anything に畳まれる（read 層別名）。"""
+    assert pj_slug.canonical_pj_slug("rl-anything") == "evolve-anything"
+
+
+def test_canonical_pj_slug_passthrough_unknown():
+    """別名に無い slug はそのまま返す（非破壊・他 PJ 不変）。"""
+    assert pj_slug.canonical_pj_slug("bots") == "bots"
+    assert pj_slug.canonical_pj_slug("evolve-anything") == "evolve-anything"
+
+
+def test_canonical_pj_slug_none_and_empty():
+    """None / 空はそのまま返す（呼び出し側の fallback を壊さない）。"""
+    assert pj_slug.canonical_pj_slug(None) is None
+    assert pj_slug.canonical_pj_slug("") == ""
+
+
+def test_aliases_for_current_includes_legacy():
+    """現 slug にマッチすべき集合 = 自身 + 畳まれる旧名。"""
+    assert pj_slug.pj_slug_aliases_for("evolve-anything") == {"evolve-anything", "rl-anything"}
+
+
+def test_aliases_for_non_renamed_is_singleton():
+    """rename されていない PJ は自身のみ（他 PJ 現状維持・cross-PJ 副作用なし）。"""
+    assert pj_slug.pj_slug_aliases_for("bots") == {"bots"}
+
+
+def test_aliases_for_empty_is_empty_set():
+    assert pj_slug.pj_slug_aliases_for(None) == set()
+    assert pj_slug.pj_slug_aliases_for("") == set()
+
+
+def test_write_side_slug_derivation_unaffected_by_alias():
+    """別名は read 層のみ。write 側 deriver（pj_slug_fast）は rl-anything を畳まない。"""
+    assert pj_slug.pj_slug_fast("/Users/x/tools/rl-anything") == "rl-anything"
+
+
 def test_fast_no_data_dir_arg_keeps_legacy_behavior():
     """data_dir 未指定（既存呼び出し元）はキャッシュを引かず従来 basename 挙動。"""
     sibling = "/Users/x/tools/rl-anything-wt/issue-593"

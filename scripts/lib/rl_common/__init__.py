@@ -67,7 +67,10 @@ def resolve_data_dir(
 # canonical.parent（= ~/.claude）からの相対で導出する（実 home を直接参照しない）。
 _LEGACY_DATA_DIR_NAME = "rl-anything"
 _PLUGINS_DATA_REL = ("plugins", "data")
-_PLUGINS_DATA_DIR_NAMES = ("evolve-anything-evolve-anything", "rl-anything-rl-anything")
+# plugin-data dir 名は ``<marketplace>-<plugin>``。marketplace prefix は環境で変わりうる
+# （#358 probe は ``*evolve-anything*`` を一般マッチしていた）。固定名でなく plugin token を
+# 含む dir を glob して superset カバーする（旧名 rl-anything era の dir も含む）。
+_PLUGINS_DATA_NAME_TOKENS = ("evolve-anything", "rl-anything")
 
 
 def iter_read_data_dirs(canonical: "Path | None" = None) -> "list[Path]":
@@ -88,8 +91,21 @@ def iter_read_data_dirs(canonical: "Path | None" = None) -> "list[Path]":
     canonical = canonical if canonical is not None else DATA_DIR
     claude_root = canonical.parent
     candidates = [canonical, claude_root / _LEGACY_DATA_DIR_NAME]
+    # plugins-data 候補は固定名でなく token glob（#358 の任意 marketplace prefix 一般性を
+    # 引き継ぐ・superset）。claude_root 相対の glob なので hermetic（tmp canonical では
+    # 兄弟が存在せず空）。順序は名前昇順で決定論化。
     plugins_data = claude_root.joinpath(*_PLUGINS_DATA_REL)
-    candidates.extend(plugins_data / name for name in _PLUGINS_DATA_DIR_NAMES)
+    try:
+        if plugins_data.is_dir():
+            matched = [
+                child
+                for child in plugins_data.iterdir()
+                if child.is_dir()
+                and any(tok in child.name for tok in _PLUGINS_DATA_NAME_TOKENS)
+            ]
+            candidates.extend(sorted(matched, key=lambda p: p.name))
+    except OSError:
+        pass
 
     out: "list[Path]" = []
     seen: set = set()
