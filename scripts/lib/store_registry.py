@@ -129,6 +129,19 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="エラーテレメトリ。",
     ),
     StoreDeclaration(
+        name="false_positives.jsonl",
+        writer="scripts/lib/rl_common/false_positive.py の add_false_positive"
+        "（correction 偽陽性フィードバックの記録・on-demand）。hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="correction 検出時に load_false_positives が偽陽性フィルタとして参照"
+        "（detection.detect_correction 経路）。",
+        retention="ttl",
+        ttl_days=180,
+        note="偽陽性フィードバックストア（#55 で registry 登録）。180 日超を cleanup_false_positives "
+        "が削除。writer は hook でなく library 関数（reflect/report-feedback から呼ぶ）なので "
+        "writer_locus=batch で hook-writer stale 突合から除外。",
+    ),
+    StoreDeclaration(
         name="workflows.jsonl",
         writer="hooks（ワークフロー系イベント記録）",
         reader="audit / discover が消費",

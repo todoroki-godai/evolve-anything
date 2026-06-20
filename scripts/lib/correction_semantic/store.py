@@ -373,11 +373,16 @@ def append_idioms(
         return {"written": len(to_write), "skipped_dup": skipped, "dry_run": True}
 
     if to_write:
-        from rl_common import append_jsonl
+        # ADR-049 / #55: production（path 無し）は単一書込ゲート store_write、
+        # 明示 path は store_write_raw でそのパスを尊重する。
+        from rl_common import store_write, store_write_raw
 
         store.parent.mkdir(parents=True, exist_ok=True)
         for it in to_write:
-            append_jsonl(store, it.to_record())
+            if path is None:
+                store_write(IDIOMS_STORE_NAME, it.to_record())
+            else:
+                store_write_raw(store, it.to_record())
 
     return {"written": len(to_write), "skipped_dup": skipped, "dry_run": False}
 
@@ -423,11 +428,14 @@ def record_judged(
         return {"written": len(to_write), "dry_run": True}
 
     if to_write:
-        from rl_common import append_jsonl
+        from rl_common import store_write, store_write_raw
 
         store.parent.mkdir(parents=True, exist_ok=True)
         for k in to_write:
-            append_jsonl(store, {"key": k})
+            if path is None:
+                store_write(JUDGED_STORE_NAME, {"key": k})
+            else:
+                store_write_raw(store, {"key": k})
 
     return {"written": len(to_write), "dry_run": False}
 

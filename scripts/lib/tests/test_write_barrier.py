@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -171,6 +172,7 @@ _EXPECTED_ACTIVE_STORES = [
     "correction_review_seen.jsonl",
     "corrections.jsonl",
     "errors.jsonl",
+    "false_positives.jsonl",
     "remediation_suppression/<slug>.jsonl",
     "remediation_surfaced/<slug>.json",
     "sessions.jsonl",
@@ -201,6 +203,69 @@ def test_store_write_resolves_every_active_store_under_canonical(data_dir):
         assert (data_dir / name).exists()
         # 解決先は常に canonical 直下（別 dir に漏れない）。
         assert json.loads((data_dir / name).read_text().splitlines()[0]) == {"probe": name}
+
+
+# --- Phase 2b wave 3: scripts/lib caller の store_write 経由ルーティング -------
+#
+# 既存の behavioral テストは isolation 用に明示 path= を渡すため store_write_raw 分岐を
+# 踏む。本群は **production の path 無し（gate）分岐** が store_write へ正しく流れることを
+# 構造的に固定する（store 名の取り違え regression を検出）。store_write を mock するため
+# 実書込は起きない。
+
+def test_false_positive_routes_through_store_write(data_dir):
+    """add_false_positive は store_write("false_positives.jsonl") 経由（#55 wave 3）。"""
+    import rl_common
+    with mock.patch.object(rl_common, "store_write") as m_sw:
+        rl_common.add_false_positive("いや、そうじゃなくて optimize を使って", "iya")
+    assert m_sw.call_count == 1
+    assert m_sw.call_args.args[0] == "false_positives.jsonl"
+
+
+def test_session_store_routes_through_store_write_raw(data_dir):
+    """session_store._append_jsonl は自己解決パスを尊重し store_write_raw 経由（#55 wave 3）。"""
+    import rl_common
+    import session_store
+    with mock.patch.object(rl_common, "store_write_raw") as m_raw:
+        session_store._append_jsonl({"session_id": "s", "timestamp": "t"})
+    assert m_raw.call_count == 1
+    assert m_raw.call_args.args[0] == session_store.SESSIONS_JSONL
+
+
+def test_weak_signals_gate_routes_through_store_write(data_dir):
+    """append_signals(path 無し) は store_write("weak_signals.jsonl") 経由（#55 wave 3）。"""
+    import rl_common
+    from weak_signals.store import WeakSignal, append_signals
+    sig = WeakSignal(
+        channel="llm_judge",
+        provenance={"source_path": "/a.jsonl", "line_no": 1, "text": "x", "reason": "r"},
+        detected_at="2026-06-10T00:00:00+00:00",
+        session_id="s1",
+        pj_slug="evolve-anything",
+    )
+    with mock.patch.object(rl_common, "store_write") as m_sw:
+        append_signals([sig])  # path=None → gate
+    assert m_sw.call_count == 1
+    assert m_sw.call_args.args[0] == "weak_signals.jsonl"
+
+
+def test_record_judged_gate_routes_through_store_write(data_dir):
+    """record_judged(path 無し) は store_write("correction_judged.jsonl") 経由（#55 wave 3）。"""
+    import rl_common
+    from correction_semantic.store import record_judged
+    with mock.patch.object(rl_common, "store_write") as m_sw:
+        record_judged(["k1"])  # path=None → gate
+    assert m_sw.call_count == 1
+    assert m_sw.call_args.args[0] == "correction_judged.jsonl"
+
+
+def test_record_reviewed_gate_routes_through_store_write(data_dir):
+    """record_reviewed(path 無し) は store_write("correction_review_seen.jsonl") 経由（#55 wave 3）。"""
+    import rl_common
+    from correction_semantic.daily_review import record_reviewed
+    with mock.patch.object(rl_common, "store_write") as m_sw:
+        record_reviewed(["k1"], "evolve-anything", decision="rejected")  # path=None → gate
+    assert m_sw.call_count == 1
+    assert m_sw.call_args.args[0] == "correction_review_seen.jsonl"
 
 
 def StoreDeclaration_legacy() -> "store_registry.StoreDeclaration":

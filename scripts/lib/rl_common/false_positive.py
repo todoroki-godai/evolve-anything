@@ -54,7 +54,9 @@ def add_false_positive(msg: str, correction_type: str) -> None:
         "original_type": correction_type,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    _root.append_jsonl(_root.FALSE_POSITIVES_FILE, record)
+    # ADR-049 / #55: 単一書込ゲート経由。保存先（canonical DATA_DIR/false_positives.jsonl）は
+    # store_write が内部解決し registry の active 登録を照合する（FALSE_POSITIVES_FILE と同一パス）。
+    _root.store_write("false_positives.jsonl", record)
 
 
 def cleanup_false_positives() -> int:

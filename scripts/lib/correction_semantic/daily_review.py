@@ -118,20 +118,23 @@ def record_reviewed(
         return {"written": len(to_write), "dry_run": True}
 
     if to_write:
-        from rl_common import append_jsonl
+        # ADR-049 / #55: production（path 無し）は単一書込ゲート store_write、
+        # 明示 path は store_write_raw でそのパスを尊重する。
+        from rl_common import store_write, store_write_raw
 
         reviewed_at = datetime.now(timezone.utc).isoformat()
         store.parent.mkdir(parents=True, exist_ok=True)
         for k in to_write:
-            append_jsonl(
-                store,
-                {
-                    "key": k,
-                    "pj_slug": pj_slug,
-                    "decision": decision,
-                    "reviewed_at": reviewed_at,
-                },
-            )
+            rec = {
+                "key": k,
+                "pj_slug": pj_slug,
+                "decision": decision,
+                "reviewed_at": reviewed_at,
+            }
+            if path is None:
+                store_write(SEEN_STORE_NAME, rec)
+            else:
+                store_write_raw(store, rec)
 
     return {"written": len(to_write), "dry_run": False}
 
