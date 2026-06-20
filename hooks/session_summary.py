@@ -34,9 +34,15 @@ except ImportError:
 
 
 def count_session_usage(session_id: str) -> dict:
-    """当該セッションの使用スキル数・エラー数を集計する。"""
+    """当該セッションの使用スキル数・エラー数・修正数を集計する。
+
+    correction_count は corrections.jsonl の当該 session_id 一致件数（#2 項目5）。
+    session END 時点で当該セッションの correction が確定するため、ここが正準な
+    集計点（session START の instructions_loaded では構造的に常時 0 件になる）。
+    """
     skill_count = 0
     error_count = 0
+    correction_count = 0
 
     usage_file = common.DATA_DIR / "usage.jsonl"
     if usage_file.exists():
@@ -58,7 +64,21 @@ def count_session_usage(session_id: str) -> dict:
             except json.JSONDecodeError:
                 continue
 
-    return {"skill_count": skill_count, "error_count": error_count}
+    corrections_file = common.DATA_DIR / "corrections.jsonl"
+    if corrections_file.exists():
+        for line in corrections_file.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+                if rec.get("session_id") == session_id:
+                    correction_count += 1
+            except json.JSONDecodeError:
+                continue
+
+    return {
+        "skill_count": skill_count,
+        "error_count": error_count,
+        "correction_count": correction_count,
+    }
 
 
 def build_workflow_sequences(session_id: str) -> list:
@@ -152,6 +172,7 @@ def handle_stop(event: dict) -> None:
         "session_id": session_id,
         "skill_count": stats["skill_count"],
         "error_count": stats["error_count"],
+        "correction_count": stats["correction_count"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "project": project,
     }

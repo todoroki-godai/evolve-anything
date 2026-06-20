@@ -45,6 +45,26 @@ class TestSessionSummary:
         assert record["session_id"] == "sess-010"
         assert record["skill_count"] == 2
         assert record["error_count"] == 0
+        assert record["correction_count"] == 0
+
+    def test_correction_count_recorded(self, patch_data_dir):
+        """session END record に当該セッションの correction_count が入る（#2 項目5）。"""
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        corrections_file.write_text(
+            json.dumps({"session_id": "sess-cc", "original": "a", "corrected": "b"}) + "\n"
+            + json.dumps({"session_id": "sess-cc", "original": "c", "corrected": "d"}) + "\n"
+            + json.dumps({"session_id": "other", "original": "e", "corrected": "f"}) + "\n"
+        )
+
+        session_summary.handle_stop({"session_id": "sess-cc"})
+
+        record = [r for r in session_store.query() if r["session_id"] == "sess-cc"][0]
+        assert record["correction_count"] == 2  # other セッションは数えない
+
+    def test_correction_count_zero_when_no_corrections(self, patch_data_dir):
+        session_summary.handle_stop({"session_id": "sess-none"})
+        record = [r for r in session_store.query() if r["session_id"] == "sess-none"][0]
+        assert record["correction_count"] == 0
 
 
     def test_workflow_sequence_recorded(self, patch_data_dir, tmp_path):

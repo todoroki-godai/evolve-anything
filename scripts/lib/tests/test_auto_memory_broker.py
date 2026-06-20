@@ -14,6 +14,8 @@ _LIB = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_LIB))
 
 import auto_memory_broker as amb
+import memory_temporal as mt
+from frontmatter import parse_frontmatter
 
 
 # ─── fixtures ──────────────────────────────────────────────────────────────
@@ -438,6 +440,92 @@ def test_ingest_multiple_records_partial(tmp_data_dir, tmp_memory_dir):
     remaining = amb.read_queue("slug", tmp_data_dir)
     assert len(remaining) == 1
     assert remaining[0]["dedup_key"] == k_skipped
+
+
+# ─── ingest temporal provenance (#2 配線) ─────────────────────────────────────
+
+
+def test_ingest_writes_temporal_provenance(tmp_data_dir, tmp_memory_dir):
+    """ingest が valid_from + source_correction_ids を frontmatter に書く（休眠配線の活性化）。"""
+    corrections = _corrections(3)  # session_id + timestamp 付き（distinct 3件）
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output("provenance entry")}
+
+    with mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    md_file = list(tmp_memory_dir.glob("auto_*.md"))[0]
+    parsed = mt.parse_memory_temporal(md_file)
+    assert parsed["valid_from"]  # 生成時刻が入る（非 None・非空）
+    expected_ids = [
+        mt.make_source_correction_id(c["session_id"], c["timestamp"]) for c in corrections
+    ]
+    assert parsed["source_correction_ids"] == expected_ids
+
+
+def test_ingest_provenance_does_not_trigger_stale(tmp_data_dir, tmp_memory_dir):
+    """valid_from だけでは decay_days/superseded_at が None なので stale/superseded 非発火（純加算）。"""
+    corrections = _corrections(2)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output("safe entry")}
+
+    with mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    md_file = list(tmp_memory_dir.glob("auto_*.md"))[0]
+    parsed = mt.parse_memory_temporal(md_file)
+    assert parsed["decay_days"] is None
+    assert parsed["superseded_at"] is None
+    assert mt.is_stale(parsed) is False
+    assert mt.is_superseded(parsed) is False
+
+
+def test_ingest_importance_includes_correction_bonus(tmp_data_dir, tmp_memory_dir):
+    """source_correction_ids が書かれた後に importance_score が採点され correction_bonus が乗る。
+
+    base medium=0.5 + correction_bonus(3*0.03=0.09) = 0.59。配線順
+    （_apply_temporal_metadata → _apply_importance_score）の担保。
+    """
+    corrections = _corrections(3)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output("bonus entry")}
+
+    with mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    md_file = list(tmp_memory_dir.glob("auto_*.md"))[0]
+    fm = parse_frontmatter(md_file)
+    assert fm["importance_score"] == pytest.approx(0.59, abs=0.001)
+
+
+def test_derive_source_correction_ids_dedups_and_skips_empty():
+    """session_id/timestamp 両空はスキップ、重複は順序保持で排除。"""
+    corrections = [
+        {"session_id": "s1", "timestamp": "t1"},
+        {"session_id": "s1", "timestamp": "t1"},  # 重複
+        {"session_id": "", "timestamp": ""},       # 両空 → スキップ
+        {"session_id": "s2", "timestamp": "t2"},
+    ]
+    ids = amb._derive_source_correction_ids(corrections)
+    assert ids == ["s1#t1", "s2#t2"]
 
 
 # ─── is_rule_citation / enqueue rule-citation skip ────────────────────────────
