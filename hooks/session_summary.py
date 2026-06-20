@@ -179,13 +179,13 @@ def handle_stop(event: dict) -> None:
     if _session_store is not None:
         _session_store.append(session_record)
     else:
-        common.append_jsonl(common.DATA_DIR / "sessions.jsonl", session_record)
+        common.store_write("sessions.jsonl", session_record)  # ADR-049 / #55 単一書込ゲート
 
     # ワークフローシーケンスを workflows.jsonl に書き出す
     sequences = build_workflow_sequences(session_id)
     for seq in sequences:
         seq["project"] = project
-        common.append_jsonl(common.DATA_DIR / "workflows.jsonl", seq)
+        common.store_write("workflows.jsonl", seq)  # ADR-049 / #55 単一書込ゲート
 
     # 文脈ファイルのクリーンアップ
     cleanup_context_file(session_id)

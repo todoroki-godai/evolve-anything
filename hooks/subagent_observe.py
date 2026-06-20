@@ -111,7 +111,7 @@ def handle_subagent_stop(event: dict) -> None:
     wt = common.extract_worktree_info(event)
     if wt:
         record["worktree"] = wt
-    common.append_jsonl(common.DATA_DIR / "subagents.jsonl", record)
+    common.store_write("subagents.jsonl", record)  # ADR-049 / #55 単一書込ゲート
 
     cfg = common.load_user_config()
     threshold = int(cfg.get("subagent_warning_threshold", 5))

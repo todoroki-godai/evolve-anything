@@ -198,7 +198,7 @@ def _append_session(record: dict) -> None:
         import session_store
         session_store.append(record)
     except ImportError:
-        common.append_jsonl(common.DATA_DIR / "sessions.jsonl", record)
+        common.store_write("sessions.jsonl", record)  # ADR-049 / #55 単一書込ゲート
 
 
 def _emit_pending_trigger() -> None:

@@ -311,7 +311,10 @@ class TestObserve:
     def test_write_failure_silent(self, tmp_data_dir):
         """JSONL 書き込み失敗時、例外を投げない。"""
         bad_dir = tmp_data_dir / "nonexistent_sub" / "deep"
-        with mock.patch.object(common, "DATA_DIR", bad_dir):
+        # store_write は SoT rl_common.DATA_DIR を見るため、書込先を壊す意図を保つには
+        # SoT も bad_dir に向ける（#55 wave 2）。append_jsonl は親 dir 不在で OSError→silent。
+        with mock.patch.object(common, "DATA_DIR", bad_dir), \
+             mock.patch.object(rl_common, "DATA_DIR", bad_dir):
             with mock.patch.object(common, "ensure_data_dir"):
                 # ensure_data_dir を無効化して書き込み先を壊す
                 event = {
@@ -338,6 +341,19 @@ class TestObserve:
             observe.handle_post_tool_use(event)
 
         assert new_dir.exists()
+
+    def test_usage_routed_through_store_write(self, patch_data_dir):
+        """observe の usage 書込は store_write 単一ゲート経由（#55 wave 2）。"""
+        event = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "test"},
+            "tool_result": {},
+            "session_id": "sess-obs-sw",
+        }
+        with mock.patch.object(common, "store_write") as m_sw:
+            observe.handle_post_tool_use(event)
+        names = [c.args[0] for c in m_sw.call_args_list]
+        assert "usage.jsonl" in names
 
     def test_agent_tool_usage_recorded(self, patch_data_dir):
         """Agent ツール呼び出しが usage.jsonl に記録される。"""
@@ -571,10 +587,25 @@ class TestSubagentObserve:
         record = json.loads(subagents_file.read_text().strip())
         assert record["agent_transcript_path"] == "/nonexistent/path/transcript.jsonl"
 
+    def test_subagents_routed_through_store_write(self, patch_data_dir):
+        """subagent_observe の subagents 書込は store_write 単一ゲート経由（#55 wave 2）。"""
+        event = {
+            "agent_type": "Explore",
+            "agent_id": "agent-sw",
+            "last_assistant_message": "test",
+            "agent_transcript_path": "/tmp/t.jsonl",
+            "session_id": "sess-sub-sw",
+        }
+        with mock.patch.object(common, "store_write") as m_sw:
+            subagent_observe.handle_subagent_stop(event)
+        assert any(c.args[0] == "subagents.jsonl" for c in m_sw.call_args_list)
+
     def test_write_failure_silent(self, tmp_data_dir):
         """書き込み失敗時、例外を投げない（MUST NOT block session）。"""
         bad_dir = tmp_data_dir / "nonexistent_sub" / "deep"
-        with mock.patch.object(common, "DATA_DIR", bad_dir):
+        # store_write の SoT も bad_dir に向け書込先を壊す意図を保つ（#55 wave 2）。
+        with mock.patch.object(common, "DATA_DIR", bad_dir), \
+             mock.patch.object(rl_common, "DATA_DIR", bad_dir):
             with mock.patch.object(common, "ensure_data_dir"):
                 event = {
                     "agent_type": "Explore",

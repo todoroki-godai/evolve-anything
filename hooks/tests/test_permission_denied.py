@@ -8,8 +8,10 @@ from unittest import mock
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts" / "lib"))
 
 import common
+import rl_common
 
 
 @pytest.fixture
@@ -21,13 +23,33 @@ def tmp_data_dir(tmp_path):
 
 @pytest.fixture
 def patch_data_dir(tmp_data_dir):
+    # store_write は SoT の rl_common.DATA_DIR を call-time 参照する（ADR-049 / #55 wave 2）。
+    # errors 書込がゲート経由になるため SoT も同じ tmp に向ける（additive・挙動不変）。
     with mock.patch.object(common, "DATA_DIR", tmp_data_dir), \
-         mock.patch.object(common, "CHECKPOINTS_DIR", tmp_data_dir / "checkpoints"):
+         mock.patch.object(common, "CHECKPOINTS_DIR", tmp_data_dir / "checkpoints"), \
+         mock.patch.object(rl_common, "DATA_DIR", tmp_data_dir):
         yield tmp_data_dir
 
 
 class TestPermissionDenied:
     """permission_denied.py のテスト。"""
+
+    def test_errors_routed_through_store_write(self, patch_data_dir):
+        """permission_denied の errors 書込は store_write 単一ゲート経由（#55 wave 2）。"""
+        import permission_denied
+
+        event = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "rm -rf /"},
+            "session_id": "sess-pd-sw",
+            "denial_reason": "auto_mode_classifier",
+        }
+        with mock.patch.object(common, "store_write") as m_sw, \
+             mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/tmp/test-project"}):
+            permission_denied.handle_permission_denied(event)
+        assert m_sw.call_count == 1
+        assert m_sw.call_args.args[0] == "errors.jsonl"
+        assert m_sw.call_args.args[1]["session_id"] == "sess-pd-sw"
 
     def test_records_permission_denied_event(self, patch_data_dir):
         """PermissionDenied イベントが errors.jsonl に type:permission_denied で記録される。"""
