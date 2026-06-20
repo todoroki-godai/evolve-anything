@@ -26,6 +26,7 @@ hook_store_dir(base: 'Optional[Path]' = None) -> 'Path'
 hook_store_path(filename: 'str', base: 'Optional[Path]' = None) -> 'Path'
 is_noise_agent_type(agent_type) -> bool
 is_user_config_explicit(key: str) -> bool
+iter_read_data_dirs(canonical: 'Path | None' = None) -> 'list[Path]'
 last_skill_path(session_id: str) -> pathlib.Path
 load_false_positives() -> set[str]
 load_user_config() -> dict
