@@ -97,6 +97,7 @@
 | temporal provenance 書込配線 | APEX-MEM の `valid_from`+`source_correction_ids`（memory→correction 因果リンク）write 側休眠配線を活性化 — `write_temporal_metadata` を broker `ingest_memory_results` が importance 採点の前に発火（純加算・stale/superseded 非発火）。項目5: session END record に `correction_count`（#2） | `memory_temporal.py` + `auto_memory_broker.py` + `hooks/session_summary.py` |
 | subagents/errors 測定バグ修正 | subagents.jsonl の `agent_type` 空ノイズ（約58%）を writer/reader 二重防御で遮断（#36）+ errors.jsonl の `error_type` 常時 unknown を `error_message` 本文から決定論分類（#37）。senpai 独立検証で「集計を分解せず結論した誤診」由来の実バグとして発見 | `hooks/subagent_observe.py` + `fleet/collectors.py` + `hooks/stop_failure.py` |
 | `memory_capability` | 記憶操作を read/use/write/maintain 観点で advisory 評価する observability section（OPD-Evolver #19）。reason 非永続化のため read/use 統合の3軸（write=記憶量 / maintain=健全度 / use_read=活性）。memory dir 解決は `resolve_cc_memory_dir` 単一ソース（CC パスエンコード・#18 と共有。`resolve_pj_slug` repo-basename slug を使うと名前空間食い違いで常時沈黙する dogfood 発見バグの根治） | `scripts/lib/memory_capability.py` + `audit/sections_memory.py` + `pj_slug.resolve_cc_memory_dir` |
+| `fanout_cost` | fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は #15 同様スパースゆえ各群 ≥5 の floor ゲート付き。subagents.jsonl(agent_type 空除外 #36) + sessions(union read #469) を `_normalize_pj` で当 PJ スコープ | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
 
 ## クイックスタート
 
