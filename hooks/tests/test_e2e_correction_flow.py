@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import common
 import correction_detect
+import rl_common
 
 # prune / audit のパス
 _plugin_root = Path(__file__).resolve().parent.parent.parent
@@ -35,7 +36,9 @@ def e2e_env(tmp_path):
     data_dir = tmp_path / "evolve-anything"
     data_dir.mkdir()
     tmpdir = str(tmp_path)
+    # store_write の SoT（rl_common.DATA_DIR）も同じ tmp に向ける（#55 wave 1・additive）。
     with mock.patch.object(common, "DATA_DIR", data_dir), \
+         mock.patch.object(rl_common, "DATA_DIR", data_dir), \
          mock.patch.object(prune, "DATA_DIR", data_dir), \
          mock.patch.dict(os.environ, {"TMPDIR": tmpdir}):
         yield data_dir

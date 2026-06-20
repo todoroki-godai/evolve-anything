@@ -151,7 +151,10 @@ def handle_user_prompt_submit(event: dict) -> None:
     }
     if error_category is not None:
         record["error_category"] = error_category
-    common.append_jsonl(common.DATA_DIR / "corrections.jsonl", record)
+    # ADR-049 / #55: 全ストア書込は store_write 単一ゲート経由。保存先（canonical
+    # DATA_DIR/corrections.jsonl）は store_write が内部解決し、registry guard で
+    # active 登録を照合する（warn-only フェーズ・挙動不変）。
+    common.store_write("corrections.jsonl", record)
 
     # Corrections threshold trigger evaluation (plain-text output)
     trigger_fired = _check_corrections_trigger()
