@@ -84,6 +84,35 @@ def _direction_line(dr: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _compressed_gap_line(result: Dict[str, Any]) -> str:
+    """#49 + #51 調停: 全✗ ケースを 1 行に圧縮しつつ per-条件の具体ギャップ数値 +
+    必要アクションを載せる（「時期尚早」で終わらせない）。
+
+    閾値（必要 PJ 数 / correction・sessions の floor）は ``outcome_promotion_readiness`` の
+    定数を単一ソースとして引く（ここでハードコード重複を作らない）。
+    """
+    from . import outcome_promotion_readiness as opr
+
+    min_pj = opr._MIN_PJ
+    variance = result["variance"]
+    denominator = result["denominator"]
+    direction = result["direction"]
+
+    # 条件1: 分散を判定できる PJ 数 / 条件2: 分母 floor を満たす PJ 数 / 条件3: apply 件数。
+    var_now = variance.get("pj_count", 0)
+    denom_now = len(denominator.get("meeting", []))
+    apply_now = direction.get("anchors", 0)
+
+    return (
+        f"ℹ Outcome Weight Promotion: 条件不足"
+        f"（分散判定PJ {var_now}/{min_pj}・分母≥{opr.CORRECTION_FLOOR} のPJ {denom_now}/{min_pj}"
+        f"・apply {apply_now}件）— 次回 audit で再測定。"
+        f"蓄積: corrections≥{opr.CORRECTION_FLOOR}/PJ・sessions≥{opr.SESSION_FLOOR}/PJ を"
+        f"{min_pj}+ PJ で揃え、`evolve --drain` で apply（accept）を記録すると条件が埋まる"
+        f"（重みには未反映・advisory 並走を継続、ADR-046）。"
+    )
+
+
 def _slug_hygiene_lines(opr) -> List[str]:
     """#24: optimize_history に worktree ディレクトリ名 slug が混入していないか健全性チェック
     の結果を1行 surface する。silence≠evaluated（この PJ の慣例）に従い、混入 0 件でも
@@ -132,9 +161,11 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
     slug_lines = _slug_hygiene_lines(opr)
     slug_has_issue = any("✗" in ln for ln in slug_lines)
 
-    # #49-3: 3条件すべて ✗ かつ slug 健全性に問題なしの場合だけ、冗長な全展開をせず
-    # 1行に圧縮する（継続観察中でまだ判断材料が無い状態の繰り返し表示を避ける）。
-    # ✓ が1つでもある / slug 混入あり なら従来の全展開（重要情報を埋もれさせない）。
+    # #49 / #51 の調停: 3条件すべて ✗ かつ slug 健全性に問題なしの場合だけ、冗長な全展開を
+    # せず 1行に圧縮する（#49 = 継続観察中で判断材料が無い状態の繰り返し全展開を避ける）。
+    # ただし「時期尚早」で終わらせず、per-条件の具体ギャップ数値 + 必要アクションを同じ1行に
+    # 載せる（#51 = 何があと幾つ足りないか・どうすれば貯まるかを示す）。✓ が1つでもある /
+    # slug 混入あり なら従来の全展開（重要情報を埋もれさせない）。
     v_pass = bool(result["variance"].get("pass"))
     d_pass = bool(result["denominator"].get("pass"))
     dir_pass = bool(result["direction"].get("pass"))
@@ -142,9 +173,7 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
         return [
             "## Outcome Weight Promotion Readiness (advisory — ADR-046)",
             "",
-            "ℹ Outcome Weight Promotion: 条件不足（PJ ≥2 のデータ蓄積が必要）— 継続観察。"
-            "outcome 3軸を environment fitness の重みへ繰り入れる判断はまだ時期尚早"
-            "（重みには未反映・advisory 並走を継続）。",
+            _compressed_gap_line(result),
             *slug_lines,
             "",
         ]

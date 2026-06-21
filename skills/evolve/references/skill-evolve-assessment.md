@@ -88,6 +88,7 @@ ingest_judgment_scores(proj, emit["requests"], responses)
 - **high_suitability**: 適性高（12-15点）のスキル数 → Compile で変換を推奨
 - **medium_suitability**: 適性中（8-11点）のスキル数 → ユーザー判断に委ねる
 - **insufficient_usage**: 使用実績ゼロ（`usage_count==0`）で保留した件数（#376）
+  - **解除条件（#51・ユーザーに添える）**: ① そのスキルを1回でも使えば usage が記録され、次回 evolve で `_finalize_suitability` が自動的に再評価する（保留は `telemetry.usage_count==0` のみが条件・永久保留ではない）。② 検証系スキル（`is_verification_skill`＝スキル名または SKILL.md 内容に `verify/validate/check/lint/test/qa/audit/assert/inspect/scan` を含む）は usage=0 でも保留にならず medium 維持。③ usage 記録を伴わずに保留を外す入口は実装に無い＝**「使って待つ」以外の強制評価手段は無い**（捏造した手順を案内しない）
 - **rejected**: アンチパターン2件以上該当で変換非推奨（集計は assessments の suitability から算出）
 
 適性高/中のスキルがあれば `skill_evolve_candidate` issue として Remediation パイプラインに注入され、Step 5.5 で変換提案が生成される。

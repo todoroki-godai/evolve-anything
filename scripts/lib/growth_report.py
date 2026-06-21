@@ -162,6 +162,14 @@ def build_growth_report(
             f"corrections（human-confirmed のみ）{human_count}/{target} — "
             f"達成・次フェーズ条件は sessions/coherence"
         )
+    # #51: 「あと N 件」の分子が何を数えた数かを行内で明示する。is_human_correction
+    # （provenance_weight）が human-source とみなすのは reflect 承認（source=reflect_confirmed）と
+    # idiom_dict 自動昇格のみで、hot hook の語彙検出（source=hook）・backfill・Stop hook 由来
+    # （correction_type=stop）は除外される。ユーザーが「自分のどの操作がここに効くか」を読めるようにする。
+    lines.append(
+        "  └ カウントされるアクション: /reflect で approve または --promote-weak で昇格した修正"
+        "（自動検出・Stop hook 由来は除外）"
+    )
 
     # 今日の昇格行（本日累計が 1 件以上の場合のみ）。
     # #525-1: 「本日累計 N 件昇格（このrunでは M 件）」と出所を明示する。本日累計は store の
