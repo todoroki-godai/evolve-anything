@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **feat(audit): Outcome Weight Promotion Readiness の全✗ 圧縮にギャップ数値+アクションを併載（refs #49, refs #51）** — v1.108.0 の #49-3 圧縮（全✗ かつ slug clean 時に1行化）に、#51 HIGH「『時期尚早』で終わらせず per-条件の具体ギャップを示す」を統合。`_compressed_gap_line` が「条件不足（分散判定PJ N/2・分母≥10 のPJ N/2・apply N件）— 次回 audit で再測定。蓄積: corrections≥10/PJ・sessions≥30/PJ を2+ PJ で揃え `evolve --drain` で apply 記録」を1行で出力（閾値は `outcome_promotion_readiness` 定数の単一ソース・ハードコード重複なし）。✓ が1つ以上 / slug 混入ありは従来どおり per-条件詳細を full 展開。TDD 10件。決定論・LLM 非依存。
+- **docs(skills): evolve SKILL.md を3層ナビ化（closes #49 finding 4）+ reflect/insufficient_usage/bootstrap/growth_report に判断材料を追加（closes #51）** — #49-4（v1.108.0 で設計判断として対象外だった step/MUST 再構成）を実装: evolve SKILL.md 冒頭に手順ナビ（**A 必須骨格5**=0.5/1/3.8/9/10 ／ **B 条件付き10** ／ **C 参照専用4** + 各 Step への anchor リンク）を追加。分類は読みやすさのためのナビで各 Step 本文が正準。#51（判断を迫るのに材料不足）を全 finding 解消: (1) reflect Step 7/7.5 に昇格・更新の実行手段を明示（promotion_candidates は専用 CLI を持たない＝memory dir への Write + MEMORY.md Edit / AskUserQuestion 2択 / スキップ時は次回再提示で取りこぼし無し）、(2) insufficient_usage 保留の解除条件（スキルを1回使えば次回 evolve で自動再評価 / `is_verification_skill` 例外キーワード / 強制評価手段は無いと明示）、(3) bootstrap 3択の各 option に marker 副作用（TTL45日・「marker を立てる＝再表示されない」非対称）、(4) growth_report の corrections 進捗行にカウント対象サブテキスト（/reflect approve・--promote-weak のみ / 自動検出・Stop hook 由来は除外）+ TDD。**#49 / #51 はこれで全 finding 完了**（#49 レポート層 5 finding は v1.108.0=46b2514 で既済）。決定論・LLM 非依存。
+
 ## [1.108.0] - 2026-06-20
 
 ### Changed
