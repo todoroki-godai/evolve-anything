@@ -106,6 +106,13 @@ hooks 定義を確認:
 - **新フックイベント活用**: CC が新たに追加したフックイベント（PostCompact, WorktreeCreate 等）の活用余地
 - **evolve-anything hooks との整合**: プラグインの hooks.json と settings.json で重複・競合がないか
 
+**重複判定は `if` 条件まで見る（誤検出防止）**: CC の hook の実効的な同一性は `command` 単独でなく
+`(event, matcher, command, if)` の組で決まる。同じ `command` でも `matcher` や `if` 条件
+（例: `if: Skill(gstack-ship)` と `if: Skill(commit)`）が異なれば、それは**別トリガーであり重複ではない**。
+hook を列挙・比較するときは command だけを抜き出さず、必ず `matcher` と `if` を併記して突合する。
+`if` を落として command だけで数えると、発火条件の違う hook を重複と誤検出する。
+Bash/Python で settings.json をパースして確認する場合も、`if` フィールドを必ず出力に含めること。
+
 #### 2.5.5 Memory (`~/.claude/projects/*/memory/MEMORY.md`)
 
 現在プロジェクトの MEMORY.md を Read で確認:
