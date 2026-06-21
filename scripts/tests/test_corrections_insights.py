@@ -1,6 +1,7 @@
 """corrections_insights モジュールのテスト。"""
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,11 @@ def make_corrections(tmp_path: Path, records: list[dict]) -> Path:
     return f
 
 
-RECENT_TS = "2026-05-22T00:00:00+00:00"
+# RECENT_TS は now-1日の動的値にする。ハードコード日付は時間経過で lookback_days=30 の
+# 境界を跨いで陳腐化する time-bomb（2026-05-22 固定値が 2026-06-21 に 30 日境界へ落ちて
+# test_load_filters_by_lookback / test_lookback_filters_old_records が赤化した）。now 相対で
+# 算出し再陳腐化を根絶する。OLD_TS は常に十分古いので固定のままでよい。
+RECENT_TS = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
 OLD_TS = "2020-01-01T00:00:00+00:00"
 
 

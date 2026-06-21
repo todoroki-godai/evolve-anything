@@ -12,6 +12,7 @@ build_gstack_analytics_section(records: List[Dict[str, Any]]) -> List[str]
 build_memory_health_section(artifacts: Dict[str, List[pathlib.Path]], project_dir: pathlib.Path) -> List[str]
 build_memory_verification_context(project_dir: pathlib.Path) -> Dict[str, Any]
 build_quality_trends_section(baselines: List[Dict[str, Any]], usage: Dict[str, int]) -> List[str]
+build_scope_advisory_section(advisories: List[Dict[str, Any]] | None) -> List[str] | None
 build_temporal_memory_warnings(memory_dir: pathlib.Path, corrections_path: pathlib.Path | None = None) -> List[Dict[str, Any]]
 build_token_consumption_section(days: int = 30) -> List[str]
 check_line_limits(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]

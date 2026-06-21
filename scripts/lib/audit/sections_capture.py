@@ -152,12 +152,24 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
         ]
 
     # #52-6: 具体手順を番号付きで添える（何をどの順で確認すればよいかを明示）。
+    # #48-F3: 「次の一手」の前に、低 capture を生む決定論的な原因の当たりを付けられる
+    # よう「考えられる原因」を併記する。0% は「件数が少ないだけ（仕様通り）」のほかに
+    # (1) correction_detect hook の未登録/未発火（corrections.jsonl が育たない）、
+    # (2) worktree slug 食い違い（corrections が幻 slug に書かれ当PJで 0 に見える
+    #     read/write split-brain, #492/#593）が起きやすい。原因の切り分けを先にすると
+    # 「件数が少ないだけ」と「capture 漏れ」の取り違えを減らせる（hook 有用性評価 #318）。
     return header + [
         f"⚠ correction capture 率が低い: {rate:.0%} {detail}。"
         "RL ループの報酬入力（corrections）が枯渇している可能性。"
         "検出器の仕様通りの少なさか capture 漏れかを `corrections.jsonl` の中身で確認し、"
         "漏れなら `correction_detect` hook の発火条件を見直す（advisory・スコア非関与, #421）。",
         channel_line,
+        "考えられる原因: a) `correction_detect` hook が未登録/未発火 — "
+        "`claude hooks list` で登録を確認（未登録なら corrections.jsonl が育たない） / "
+        "b) worktree slug 食い違い — 当PJを worktree から起動していると corrections が幻 slug に "
+        "書かれ当PJ集計で 0 に見える（read/write split-brain, #492/#593）。"
+        "別 slug の corrections.jsonl が無いか確認 / "
+        "c) 単純に件数が少ないだけ（仕様通り）— 運用継続で蓄積を待つ。",
         "次の一手: 1) `wc -l <DATA_DIR>/corrections.jsonl` で件数を確認 → "
         "2) `/evolve-anything:reflect` で未処理修正を反映 → "
         "3) 件数が少ないだけなら数週間運用を継続して蓄積を待つ。",
