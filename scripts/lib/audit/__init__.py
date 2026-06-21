@@ -92,6 +92,7 @@ from .scope import (  # noqa: F401
     semantic_similarity_check,
     load_usage_registry,
     scope_advisory,
+    build_scope_advisory_section,
 )
 
 

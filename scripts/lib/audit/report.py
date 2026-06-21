@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from .classification import classify_artifact_origin
 from .memory import build_memory_health_section
 from .quality import build_quality_trends_section
+from .scope import build_scope_advisory_section
 from .sections import _build_test_guard_section, build_corrections_insights_section, build_lsp_suggestion_section, build_token_consumption_section
 from .sections_summary import (
     build_clean_fold_line,
@@ -214,14 +215,11 @@ def generate_report(
         )
         lines.append("")
 
-    if advisories:
-        lines.append("## Scope Advisory")
-        for a in advisories:
-            lines.append(
-                f"- {a['skill']}: {a['project_count']} projects, "
-                f"last used {a['last_used'][:10] if a['last_used'] else 'never'} → {a['recommendation']}"
-            )
-        lines.append("")
+    # #48-F4: Scope Advisory のレンダリングを testable helper に切り出し、project-scope
+    # 候補がある場合に「どう移動するか」の操作導線を 1 行添える（advisory → 行動導線）。
+    scope_section = build_scope_advisory_section(advisories)
+    if scope_section:
+        lines.extend(scope_section)
 
     # #52-2: 標準実行でも「次フェーズ到達条件」を出す（フル growth report は重いので
     # Next Milestone 1ブロックだけ）。growth=True 時は growth_report に含まれるので None。

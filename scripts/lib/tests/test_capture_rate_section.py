@@ -188,6 +188,32 @@ def test_starvation_warning_when_both_channels_empty(tmp_path, monkeypatch):
     assert "/evolve-anything:reflect" in combined
 
 
+def test_starvation_includes_cause_hints(tmp_path, monkeypatch):
+    """#48-F3: 低 capture の ⚠ 警告に「考えられる原因」の診断ヒントを添える。
+
+    capture 0% は「件数が少ないだけ（仕様通り）」のほかに、決定論で起きやすい2つの
+    原因がある: (1) correction_detect hook が未登録/未発火（corrections.jsonl が育たない）、
+    (2) worktree slug 食い違い（corrections が幻 slug に書かれ当PJで 0 に見える read/write
+    split-brain, #492/#593）。これらを診断ヒントとして surface し、ユーザーが「次の一手」の
+    前に原因の当たりを付けられるようにする。
+    """
+    _setup_stores(
+        tmp_path,
+        monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    _seed_weak_signals(tmp_path, monkeypatch, this_pj=0)
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    # 「考えられる原因」の見出しと2つの決定論的原因が含まれる
+    assert "考えられる原因" in combined
+    assert "hook" in combined  # correction_detect hook 未登録/未発火
+    assert "登録" in combined  # claude hooks list 等で登録確認を促す
+    assert ("worktree" in combined) or ("slug" in combined)  # slug 食い違い
+
+
 def test_other_pj_llm_judge_not_counted(tmp_path, monkeypatch):
     """他PJ の llm_judge シグナルは当PJ の枯渇判定を抑制しない（#476 fixup スコープ混在）。"""
     _setup_stores(

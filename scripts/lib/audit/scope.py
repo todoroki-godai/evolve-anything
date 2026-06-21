@@ -8,7 +8,7 @@ audit パッケージから切り出された Scope モジュール。
 """
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ._constants import is_excluded_skill_path
 from .classification import classify_artifact_origin
@@ -120,3 +120,47 @@ def scope_advisory(registry: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, 
         }
         advisories.append(advisory)
     return advisories
+
+
+def build_scope_advisory_section(
+    advisories: Optional[List[Dict[str, Any]]],
+) -> Optional[List[str]]:
+    """Scope Advisory のレンダリング（#48-F4）。
+
+    旧実装は report.py 内インラインで item 行を出すだけで、「project-scope へどう
+    移動するか」の操作導線が無く advisory 止まり（alert fatigue）だった。本 helper は
+    レンダリングをテスト可能に切り出し、`consider project-scope` 候補が 1 つでもあれば
+    具体的な移動手順を 1 行添える。
+
+    決定論・LLM 非依存・read-only（入力 advisories を破壊しない）。
+
+    Args:
+        advisories: ``scope_advisory`` の返り値。空 / None なら None（沈黙）。
+
+    Returns:
+        markdown 行のリスト。advisory が無ければ None。
+    """
+    if not advisories:
+        return None
+
+    lines = ["## Scope Advisory"]
+    has_project_scope_candidate = False
+    for a in advisories:
+        last_used = a.get("last_used") or ""
+        last_used_disp = last_used[:10] if last_used else "never"
+        lines.append(
+            f"- {a.get('skill', '?')}: {a.get('project_count', 0)} projects, "
+            f"last used {last_used_disp} → {a.get('recommendation', '')}"
+        )
+        if a.get("recommendation") == "consider project-scope":
+            has_project_scope_candidate = True
+
+    # project-scope 候補がある場合のみ移動手順を添える（keep global だけならノイズを足さない）。
+    if has_project_scope_candidate:
+        lines.append(
+            "  → 移動するには: そのスキルがプロジェクト固有なら "
+            "`~/.claude/skills/<skill>` を対象PJの `.claude/skills/<skill>` へ移動"
+            "（global → project-local）。複数PJで使うなら global のまま据え置く。"
+        )
+    lines.append("")
+    return lines
