@@ -78,6 +78,51 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 → 背景・方式 A/B の手順・`detail` 活用の詳細は **[references/proposal-protocol.md](references/proposal-protocol.md)**。
 このプロトコルは Step 2 / 5.5 / 7 / 7.5 など全提案ポイントに適用する（各 Step で再掲しない）。
 
+## 手順ナビ — 3 層に分けて読む（MUST — 本体に入る前に必ず読む・#49）
+
+手順は Step 0.5〜11 と長く **27 ステップ・MUST 多数**で、毎回全部に同じ注意を払うと取りこぼす。
+そこで全ステップを「**毎回通る骨格 (A)**／**該当した時だけ (B)**／**特定状況の参照 (C)**」の3層に分類する。
+**まず (A) だけを「今すぐ実行する骨格」として通し、(B)(C) は各 Step の入口に書かれた条件に当てはまった時だけ実行する。**
+分類は読みやすさのためのナビで、各 Step 本文が正準（本文の MUST はそのまま有効）。
+
+### (A) 必須骨格 — 毎回このメインパスを通す（5 ステップ）
+
+これだけは dry-run でも本実行でも**常に**通る。迷ったら (A) を順に実行すれば evolve は成立する。
+
+1. **[Step 0.5](#step-05-世界観ロード)** 世界観ロード（LLM 不要）
+2. **[Step 1](#step-1-データ十分性チェックobserve-先行-pre-flight)** データ十分性チェック（observe 先行 pre-flight）→ ここで lightweight/skip が分岐
+3. **[Step 3.8](#step-38-observability必ず-surface-する--must)** Observability を必ず surface（silence ≠ evaluated の単一ソース）
+4. **[Step 9](#step-9-report-フェーズ)** Report（TL;DR + 成長レベル + 成長状態）
+5. **[Step 10](#step-10-推奨アクションmust--スキップ厳禁)** 推奨アクション（スキップ厳禁・該当ゼロでも「なし」を出す）
+
+### (B) 条件付き — フェーズ出力にデータ／発見があった時だけ（10 ステップ）
+
+各 Step の入口に「`result.phases.X` が〜の場合」「候補があれば」等の発火条件がある。条件に当てはまらなければ
+1 行 surface（✓ クリーン）して**次へ進む**。当てはまった時だけ本文の AskUserQuestion / 適用フローを実行する。
+
+- **[Step 2](#step-2-fitness-関数チェック)** Fitness 関数チェック（`has_fitness: false` のとき生成提案）
+- **[Step 2.5](#step-25-意図確認チェックintention-check)** 意図確認（パッチ候補があるとき）
+- **[Step 3.6](#step-36-スキル自己進化適性判定)** スキル自己進化適性判定（`batch_guard_trigger` 非 null のときインタラクティブ）
+- **[Step 5.5](#step-55-remediation-フェーズ)** Remediation（`total_issues > 0` のとき分類・承認）
+- **[Step 6.1](#step-61-初回バックログ-bootstrap443)** 初回バックログ bootstrap（`bootstrap.is_bootstrap == True` のとき 3 択）
+- **[Step 6.2](#step-62-今日の修正確認daily_review446)** 今日の修正確認（`daily.eligible == True` のとき y/n 確認）
+- **[Step 7](#step-7-prune-フェーズmerge)** Prune（+Merge・淘汰候補があるとき個別承認）
+- **[Step 7.5](#step-75-pitfall-剪定)** Pitfall 剪定（卒業/剪定候補があるとき）
+- **[Step 7.8](#step-78-evolve-提案-acceptreject-drain決定論キャプチャ-360-a-adr-041)** accept/reject drain（Step 3 で適用 or 却下したとき。`evolve --drain` 1 コマンド）
+- **[Step 11](#step-11-自己解析--issue-半自動起票must--299)** 自己解析 → issue 半自動起票（`total_candidates > 0` のとき承認起票）
+
+### (C) 参照専用 — 特定状況でのみ開く（4 ステップ）
+
+通常は 1 行 surface して通り過ぎてよい。本文を熟読するのは下記の特定状況だけ。
+
+- **[Step 5.5.1](#step-551-proposable-の-line_limit_violation--split_candidate-に対する2相品質回復adr-037-phase-1d-ii)** proposable の line_limit/split に対する2相品質回復（Step 5.5 で該当 issue を承認した時のみ）
+- **[Step 7.6](#step-76-合理化防止テーブル)** 合理化防止テーブル（`rationalization_table` フェーズが存在する時のみ）
+- **[Step 7.7](#step-77-用語集ブートストラップcontextmd-が無い場合)** 用語集ブートストラップ（CONTEXT.md 不在 + seed 適格の時のみ）
+- **[Step 8](#step-8-fitness-evolution--評価関数の改善チェック)** Fitness Evolution（`status: ready` で提案がある時のみ承認）
+
+> 上記に挙げていない Step（3 / 3.5 / 3.7 / 4 / 5 / 5.6 / 6 / 6.5）は Diagnose/Compile の中間フェーズで、
+> (A) のメインパスを通る過程で出力を読むもの。各 Step 本文の指示に従う。
+
 ## 実行手順
 
 ### Step 0.5: 世界観ロード
@@ -250,7 +295,7 @@ evolve.py の出力に含まれる `skill_evolve` フェーズ結果を確認す
   - **already_evolved**: 既に自己進化パターンが組み込まれたスキル数
   - **high_suitability**: 適性高（12-15点）→ Compile で変換を推奨
   - **medium_suitability**: 適性中（8-11点）→ ユーザー判断に委ねる
-  - **insufficient_usage**: 使用実績ゼロ（`usage_count==0`）で**保留**（#376）→ 「保留（使用実績待ち）N件」と1行表示し、**変換可能（high/medium）の件数には含めない**。自己進化（pitfalls 蓄積）は実ミスが溜まったスキルに効くので、未使用スキルに空ひな型を量産しない。検証系スキルは usage=0 でも medium 維持（例外）
+  - **insufficient_usage**: 使用実績ゼロ（`usage_count==0`）で**保留**（#376）→ 「保留（使用実績待ち）N件」と1行表示し、**変換可能（high/medium）の件数には含めない**。自己進化（pitfalls 蓄積）は実ミスが溜まったスキルに効くので、未使用スキルに空ひな型を量産しない。**解除条件（ユーザーに必ず添える — #51）**: ① **そのスキルを1回でも使えば usage が記録され、次回 evolve で自動的に再評価される**（保留は `telemetry.usage_count==0` のみが条件で、`assessment._finalize_suitability` が毎 run 再判定する。「永久保留」ではない）。② **検証系スキルは usage=0 でも保留にならず medium 維持**（`is_verification_skill` が True のとき = スキル名または SKILL.md 内容に `verify / validate / check / lint / test / qa / audit / assert / inspect / scan` のいずれかを含むスキル。失敗時インパクトが大きいためテレメトリ非依存で進化推奨）。③ **強制評価の代替手段は無い** — usage 記録を伴わずに保留を外す入口は実装に無いので、「使って待つ」以外の方法は無いと明示する（嘘の手順を案内しない）
   - **rejected**: アンチパターン2件以上該当で変換非推奨
 
 判断複雑さ cache を LLM 品質で最新化したい場合のみ、assessment 前にファイルベース2相を回す（任意・cache が新しければ 0 コール。コードは上記 reference）。
@@ -396,15 +441,15 @@ reflect は独立フェーズではなく discover に統合済み。**`phases.d
 既存の weak_signals バックログ（channel=llm_judge・未昇格）を初回 evolve でまとめて確認する入口。**判定は phase 出力 `result.correction_review.bootstrap` を読むだけで行う（散文ステップで判定しない）。** 機械は「アクティブ PJ」を判定しない — 件数は人間の判断材料として表示するだけ。
 
 - `bootstrap.is_bootstrap != True`（marker 立ち済み or backlog 0 / error）→ **スキップ**（沈黙≠評価のため `bootstrap.is_bootstrap=False` のときのみ「bootstrap: 消化済み ✓」を1行表示）
-- `bootstrap.is_bootstrap == True` → **AskUserQuestion で 3 択を人間に選ばせる（MUST — テキスト表示だけで済ませない）**。question に `bootstrap.pj_total` 件・`bootstrap.groups_total` グループを判断材料として提示する:
+- `bootstrap.is_bootstrap == True` → **AskUserQuestion で 3 択を人間に選ばせる（MUST — テキスト表示だけで済ませない）**。question に `bootstrap.pj_total` 件・`bootstrap.groups_total` グループを判断材料として提示する。**各 option の `detail` に下記の副作用1行を必ず添える（MUST）** — 3択は「marker を立てるか立てないか」で以後の再表示挙動が非対称になり、取り違えると bootstrap が永久に消える / 永久に再提示される（#51 MEDIUM）:
   - question: 「この PJ の未昇格バックログ {pj_total} 件（{groups_total} グループ）を初回 bootstrap で消化しますか？」
-  - options:
-    1. **まとめて確認** → 提示方式は `bootstrap.theme_buckets` の有無で分岐する（#558。`theme_buckets` は group 数が `THEME_CLUSTER_THRESHOLD`（=12）超のときだけ phase が emit する決定論 TF-IDF テーマクラスタ。閾値以下は `None`）:
+  - options（`detail` に副作用を明示する）:
+    1. **まとめて確認** → 〔副作用〕確認完了後に `mark_done` で完了 marker（`bootstrap_done-<slug>.marker`）が立ち、**以後この PJ で bootstrap は再表示されない**。確認しなかった残りは weak_signals の TTL（45日・`weak_signals/ttl.py` の `TTL_DAYS`）で自然失効する。提示方式は `bootstrap.theme_buckets` の有無で分岐する（#558。`theme_buckets` は group 数が `THEME_CLUSTER_THRESHOLD`（=12）超のときだけ phase が emit する決定論 TF-IDF テーマクラスタ。閾値以下は `None`）:
        - **`bootstrap.theme_buckets` が非 None（= group 数が閾値超）→ バケット単位の multiSelect 1 問に畳む（MUST。質問マラソンを避け explain-clearly と整合させる）。** 各バケット `{theme_label, group_indices, groups}` を AskUserQuestion の multiSelect オプション 1 個として提示し（label に `theme_label` と件数）、ユーザーが選んだバケットに含まれる全 group の `signal_keys` をまとめて `evolve-reflect --promote-weak <signal_keys カンマ区切り>` で一括昇格する（選ばれなかったバケットは昇格しない）。バケット内 group の `confirmable_idiom` / `cross_pj_confirmed` は下記 per-group と同じ扱い（非 None idiom は confirmed 化される旨を multiSelect の説明に添える）。
        - **`bootstrap.theme_buckets` が None（= group 数が閾値以下）→ 従来の per-group フロー（挙動不変）。** `bootstrap.groups` を順に AskUserQuestion バッチで提示（各 group の `representative` を確認 → 承認なら同 group の `signal_keys` を `evolve-reflect --promote-weak <signal_keys カンマ区切り>` で一括昇格）。group の `confirmable_idiom` が非 None なら「確定すると idiom『{confirmable_idiom}』も confirmed 化（以後この表現の再発を自動昇格）」を question に添える（None＝過汎用 FP guard #527 で除外済み・standing auto-promote rule にしない・#527-4）。group の `cross_pj_confirmed` が非空なら「他 PJ（{slug一覧}）で承認済み」を question に添える（先頭に並んでいるのはこのため — #462。判断材料の提示のみで自動承認はしない）。
        いずれの方式でも CLI が promote と同時に対応 idiom を confirmed=True 化する（#463 — `promote_signals` ライブラリ直接呼びは confirmed 化をバイパスするため使わない）。確認完了後に `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる。
-    2. **日次5件ずつ** → marker を立てず、Step 6 の通常 reflect ページネーションに合流（以後の evolve で `is_bootstrap=True` が再提示される）。
-    3. **TTL 失効に任せる** → `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で marker を立てる（以後 bootstrap を再提示しない。weak_signals TTL #5 が残りを間引く）。
+    2. **日次5件ずつ** → 〔副作用〕**marker を立てない**ため、以後の evolve でも `is_bootstrap=True` が**再提示され続ける**（Step 6 の通常 reflect ページネーションに合流。少しずつ消化したいとき向き）。
+    3. **TTL 失効に任せる** → 〔副作用〕`bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で完了 marker が立ち、**以後 bootstrap を再提示しない**（＝今回は1件も確認しないまま打ち切る）。残りは weak_signals の TTL（45日・`weak_signals/ttl.py` の `TTL_DAYS`）が間引く。option 1 と「marker を立てる＝再表示されない」点は同じで、違いは**確認するか/しないか**。
 
 `mark_done` は `dry_run=True`（ドライラン実行時）なら marker を書かない（最下層まで dry-run ゲートを貫通）。3 択いずれを選んでも、Skip しても evolve 全体は完走する。
 
@@ -752,6 +797,7 @@ TL;DR: 変更 {N} 件 / 要対応 {M} 件 / 残りすべて評価済みクリー
 > `lines` が空リストの場合は「成長状態: データ不足」を 1 行表示する。
 > 表示例:
 > - `corrections（human-confirmed のみ）7/10 — あと3件で構造化育成へ`
+> - `  └ カウントされるアクション: /reflect で approve または --promote-weak で昇格した修正（自動検出・Stop hook 由来は除外）`（#51 LOW）
 > - `本日累計 reflect 確認 2件 / idiom 1件 が自動化対象に昇格（このrunでは 1 件）`
 >
 > **対話前スナップショット問題の補正（#476-4・MUST。全PJ値の混入を断つ — #526-1）:** `growth_report` は analysis 時点で生成されるため `corrections_human` / `promoted_today` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合の上書きは、必ず **per-PJ の値に今回昇格数を加算する** 方式で行う（**`evolve-reflect --promote-weak` 出力の `corrections_human_allpj` をそのまま使ってはならない — MUST NOT**）:

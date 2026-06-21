@@ -171,17 +171,35 @@ evolve-reflect --promote-episodic \
 - routing_hint が "skip" の場合: 対話レビューで表示するが、自動適用はしない
 - line_limit_warning がある場合: 警告メッセージを表示し、分離を提案する
 
-### Step 7: promotion_candidates の表示
+### Step 7: promotion_candidates の表示と昇格
 
 corrections レビュー完了後、promotion_candidates がある場合は別セクションとして表示する。
-「auto-memory への昇格候補」として、各候補のメッセージ・出現回数・推奨トピックを一覧表示する。
-昇格の実行はユーザー判断に委ねる（自動実行しない）。
+「auto-memory への昇格候補」として、各候補のメッセージ・出現回数・推奨トピック（`suggested_topic`）を一覧表示する。
 
-### Step 7.5: memory_update_candidates の表示
+**昇格手順（#51 — 「ユーザー判断に委ねる」だけで止めず、実行手段を明示する）**: promotion_candidates は **専用の CLI フラグを持たない**（weak_signals の `evolve-reflect --promote-weak` とは別経路。これらは auto-memory への新規記録なので CLI 一発でなく中身の判断が要る）。昇格＝**auto-memory ディレクトリ（`~/.claude/projects/<エンコード済み PJ パス>/memory/`）へ memory frontmatter v2 のエントリ .md を Write し、同 dir の MEMORY.md インデックスに1行 Edit で追記する**ことで実現する（evolve の Step 6.5 auto-memory drain と同じ書き込み先・同じ形式）。
+
+各候補について **AskUserQuestion で 2 択を出す（MUST — 表示だけで終わらせない）**:
+- question: 「『{message}』（{occurrences}回・topic: {suggested_topic}）を auto-memory に昇格しますか？」
+- options:
+  - **昇格する（実行手順を表示）** → 上記の memory dir に Write + MEMORY.md に Edit で1行追記する。書き込み後に追記先パスを報告する。
+  - **今回スキップ（次回再提示）** → 何も書かない。
+
+**昇格しない場合の挙動**: promotion_candidates は reflect 実行のたびに corrections から決定論で再検出される（出現回数2回以上 or 14日以上経過の閾値・TTL で消えるストアではない）。よって**スキップしても次回 reflect で再提示される**（取りこぼしは起きない）。`--dry-run` のときは表示のみで Write/Edit しない（Step 4 と整合）。
+
+### Step 7.5: memory_update_candidates の表示と更新
 
 promotion_candidates 表示の後、memory_update_candidates がある場合は「MEMORY 更新候補」セクションとして表示する。
-各候補の correction_message、memory_file、memory_line を一覧表示する。
-更新の実行はユーザー判断に委ねる（自動実行しない）。
+各候補の `correction_message`、`memory_file`、`memory_line`（+ `memory_line_num` / `common_keywords`）を一覧表示する。
+
+**更新手順（#51 — 実行手段を明示する）**: 各候補は更新先（`memory_file` の `memory_line_num` 行目）が特定済みなので、**Edit ツールで該当行を correction の内容で更新する**（新規 CLI は無い）。更新前に **Step 7.6 の update_count guard を必ず確認する**（`update_count >= 3` の memory は再要約による情報減損リスクの warning を出してから判断）。
+
+各候補について **AskUserQuestion で 2 択を出す（MUST）**:
+- question: 「{memory_file}:{memory_line_num}『{memory_line}』を correction『{correction_message}』で更新しますか？」
+- options:
+  - **更新する** → Edit で該当行を更新する（update_count は `post_tool_use_memory.py` hook が自動 +1 するため手動加算しない — Step 7.6）。
+  - **今回スキップ（次回再提示）** → 何も書かない。
+
+**更新しない場合の挙動**: memory_update_candidates も reflect のたびに corrections × 既存 MEMORY の共通キーワード照合で決定論再検出される（TTL で消えるストアではない）。**スキップしても次回 reflect で再提示される**。`--dry-run` のときは表示のみで Edit しない（Step 4 と整合）。
 
 ### Step 7.6: memory 更新時の update_count guard
 
