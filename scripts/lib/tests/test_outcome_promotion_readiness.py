@@ -485,11 +485,13 @@ class TestBuildSection:
         assert build_promotion_readiness_section(tmp_path) is None
 
     def test_surfaces_conditions_when_data_present(self, tmp_path, monkeypatch):
-        """#49-3: 3条件すべて ✗ かつ slug clean なら 1行に圧縮される（PJ ≥2 ヒント）。
+        """#49 圧縮 + #51 ギャップ数値の調停: 3条件すべて ✗ かつ slug clean なら、
+        全展開せず圧縮しつつ per-条件のギャップ数値 + 必要アクションを 1〜2 行に載せる。
 
         旧契約（全条件を ✓/✗ で全展開）は ✓ が1つでもある場合に維持される
         （test_promotion_line_when_all_pass / 部分 pass のテストで担保）。データ1件だけの
-        全✗ ケースは冗長なので圧縮版（ℹ 条件不足）に倒す。
+        全✗ ケースは冗長なので圧縮版（ℹ 条件不足）に倒すが、「時期尚早」で終わらせず
+        「現在N / あと M」のギャップと、何をすれば貯まるか（蓄積対象・apply 記録方法）を出す。
         """
         from audit.sections_promotion_readiness import build_promotion_readiness_section
 
@@ -501,10 +503,25 @@ class TestBuildSection:
         lines = build_promotion_readiness_section(tmp_path)
         assert lines is not None
         combined = "\n".join(lines)
-        # 圧縮版: 条件不足の1行サマリ + PJ ≥2 ヒント（全展開はされない）
+        # 圧縮版: 全展開していない（条件 ✓/✗ の per-条件詳細行は出さない）
         assert "条件不足" in combined
-        assert "PJ" in combined and "2" in combined
-        assert "条件1" not in combined  # 全展開されていない
+        assert "条件1 分散が十分" not in combined  # 全展開されていない
+        # 本文（ヘッダー/空行/末尾空行 / slug 健全性行を除く実体行）は 1 行に圧縮されている。
+        # slug 健全性行は silence≠evaluated の慣例で圧縮版でも残す（本文カウントから除外）。
+        body = [
+            ln for ln in lines
+            if ln.strip() and not ln.startswith("## ") and "slug 健全性" not in ln
+        ]
+        assert len(body) == 1
+        # #51: per-条件の具体ギャップ数値（現在N / 必要 _MIN_PJ）が載っている
+        assert f"0/{opr._MIN_PJ}" in combined  # 分散 PJ 0/2・分母 PJ 0/2
+        assert "apply 0" in combined  # apply イベント現在 0 件
+        # #51: 必要アクション（apply 記録方法・蓄積対象ストアと floor）が載っている
+        assert "evolve --drain" in combined
+        assert f"{opr.CORRECTION_FLOOR}" in combined  # corrections の floor
+        assert f"{opr.SESSION_FLOOR}" in combined  # sessions の floor
+        # #51: 次回評価の目安が載っている
+        assert "次回" in combined
 
     def test_promotion_line_when_all_pass(self, tmp_path, monkeypatch):
         from audit.sections_promotion_readiness import build_promotion_readiness_section
@@ -547,6 +564,43 @@ class TestBuildSection:
         combined = "\n".join(lines)
         assert "重み昇格" in combined  # 提案行
         assert "✓" in combined
+
+    def test_full_expansion_when_one_condition_passes(self, tmp_path, monkeypatch):
+        """#49 調停の片側: ✓ が1つ以上あれば圧縮せず per-条件詳細を full 展開する。
+
+        条件2（分母）のみ pass させる: 2 PJ それぞれ correction 件数 ≥ CORRECTION_FLOOR で
+        denominator は pass、distinct_types < MIN_DISTINCT_TYPES_FLOOR なので variance 入力から
+        除外され insufficient_pj（条件1 ✗）、apply イベント無しで direction は no_apply_events
+        （条件3 ✗）。✓ が1つあるので圧縮版（条件不足の1行）ではなく全展開になる。
+        """
+        from audit.sections_promotion_readiness import build_promotion_readiness_section
+
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        corr = []
+        # 2 PJ それぞれ distinct_types=4（< floor 5）・件数 12（≥ CORRECTION_FLOOR 10）
+        for pj in ("/p/a", "/p/b"):
+            for i in range(12):
+                ctype = f"t{i % 4}"
+                corr.append(_correction(pj, ctype, f"{pj}_s{i}", now))
+        _write_jsonl(tmp_path / "corrections.jsonl", corr)
+
+        result = opr.compute_promotion_readiness(days=30, window_days=14)
+        # 前提確認: 条件2 のみ pass の状況になっている（fixture の妥当性ガード）
+        assert result["denominator"]["pass"] is True
+        assert result["variance"]["pass"] is False
+        assert result["direction"]["pass"] is False
+        assert result["promote"] is False
+
+        lines = build_promotion_readiness_section(tmp_path)
+        assert lines is not None
+        combined = "\n".join(lines)
+        # 圧縮版ではなく per-条件詳細が全展開されている
+        assert "条件1 分散が十分" in combined
+        assert "条件2 データ件数下限" in combined
+        assert "条件3 方向の妥当性" in combined
+        assert "条件不足" not in combined  # 圧縮版ではない
+        assert "✓" in combined  # 条件2 の ✓
 
 
 class TestSlugHygieneSurface:
