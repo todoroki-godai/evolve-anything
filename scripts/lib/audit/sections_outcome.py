@@ -107,8 +107,9 @@ def build_outcome_metrics_section(project_dir: Path) -> Optional[List[str]]:
     header = [
         "## Outcome Metrics v1 (当PJ・advisory — スコア重みには未反映)",
         "",
-        "行動アウトカムの目的変数（手戻り）を直接測る 3 軸（当PJスコープ, #489）。"
-        "2〜4 週並走 → 分布実測 → 重み昇格判断（ADR-046）。決定論・LLM 非依存。",
+        "作業の手戻り・やり直しを直接測る 3 つの指標です（このプロジェクトのみ集計, #489）。"
+        "2〜4 週間データを貯めてから、スコアの重みに取り込むか判断します（内部設計 ADR-046）。"
+        "LLM を使わず決定論で算出。",
         "",
     ]
     body: List[str] = []

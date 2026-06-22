@@ -22,37 +22,37 @@ def _variance_line(v: Dict[str, Any]) -> str:
     # 「条件1 0 件 / 条件2 2 件」が一見矛盾して読めた。各ラベルに母数の意味を明示する。
     if v.get("pass"):
         return (
-            f"  {_mark(True)} 条件1 分散が十分: "
-            f"分散を判定できる PJ 数 {v.get('pj_count', 0)} / 相異なる値 {v.get('distinct_values', 0)} 種"
+            f"  {_mark(True)} 条件1 分散が十分（PJ間で値がばらつくか）: "
+            f"判定できた PJ {v.get('pj_count', 0)} / 相異なる値 {v.get('distinct_values', 0)} 種"
         )
     reason = v.get("reason", "")
     if reason == "insufficient_pj":
         return (
-            f"  {_mark(False)} 条件1 分散が十分: "
-            f"分散を判定できる PJ 数 {v.get('pj_count', 0)}（≥2 必要・件数下限を満たす軸値のみ計上）"
+            f"  {_mark(False)} 条件1 分散が十分（PJ間で値がばらつくか）: "
+            f"判定できる PJ {v.get('pj_count', 0)}（2 以上必要・必要件数を満たす軸値のみ計上）"
         )
     if reason == "all_identical":
         return (
-            f"  {_mark(False)} 条件1 分散が十分: 分散を判定できる全 {v.get('pj_count', 0)} PJ が同値 "
-            f"{v.get('value')} = 測定バグ強シグナル（#445）"
+            f"  {_mark(False)} 条件1 分散が十分（PJ間で値がばらつくか）: "
+            f"判定できた全 {v.get('pj_count', 0)} PJ が同値 {v.get('value')} = 測定バグの強い兆候（#445）"
         )
-    return f"  {_mark(False)} 条件1 分散が十分: 判定不能（{reason}）"
+    return f"  {_mark(False)} 条件1 分散が十分（PJ間で値がばらつくか）: 判定不能（{reason}）"
 
 
 def _denominator_line(d: Dict[str, Any]) -> List[str]:
     floor = d.get("floor", "?")
     meeting = d.get("meeting", [])
-    # #25: 条件1 の「分散を判定できる PJ 数」と区別できるよう、こちらは「分母 ≥floor を
-    # 満たす PJ 数」と母数の意味を明示する（同一表現による矛盾の見え方を解消）。
+    # #25/#50: 条件1 の「判定できた PJ 数（分散）」と区別できるよう、こちらは「必要件数
+    # ≥floor に達した PJ 数」と母数の意味を平易に明示する（同一表現による矛盾の見え方を解消）。
     head = (
-        f"  {_mark(d.get('pass', False))} 条件2 データ件数下限: "
-        f"分母 ≥{floor} を満たす PJ 数 {len(meeting)}（≥2 必要）"
+        f"  {_mark(d.get('pass', False))} 条件2 データ件数下限（各PJに必要なデータ件数があるか）: "
+        f"必要件数 {floor} 件以上の PJ {len(meeting)}（2 以上必要）"
     )
     lines = [head]
     denoms = d.get("denominators", {})
     if denoms:
         sample = ", ".join(f"{Path(pj).name or pj}={n}" for pj, n in list(denoms.items())[:5])
-        lines.append(f"      分母実測: {sample}")
+        lines.append(f"      各PJの件数: {sample}")
     return lines
 
 
@@ -104,12 +104,12 @@ def _compressed_gap_line(result: Dict[str, Any]) -> str:
     apply_now = direction.get("anchors", 0)
 
     return (
-        f"ℹ Outcome Weight Promotion: 条件不足"
-        f"（分散判定PJ {var_now}/{min_pj}・分母≥{opr.CORRECTION_FLOOR} のPJ {denom_now}/{min_pj}"
-        f"・apply {apply_now}件）— 次回 audit で再測定。"
-        f"蓄積: corrections≥{opr.CORRECTION_FLOOR}/PJ・sessions≥{opr.SESSION_FLOOR}/PJ を"
-        f"{min_pj}+ PJ で揃え、`evolve --drain` で apply（accept）を記録すると条件が埋まる"
-        f"（重みには未反映・advisory 並走を継続、ADR-046）。"
+        f"ℹ Outcome Weight Promotion: まだ条件不足"
+        f"（値がばらつくPJ {var_now}/{min_pj}・データが{opr.CORRECTION_FLOOR}件以上あるPJ "
+        f"{denom_now}/{min_pj}・適用記録 apply {apply_now}件）— 次回 audit で再測定。"
+        f"貯めかた: corrections を{opr.CORRECTION_FLOOR}件/PJ・sessions を{opr.SESSION_FLOOR}件/PJ 以上"
+        f"{min_pj} PJ で揃え、`evolve --drain` で適用（accept）を記録すると条件が埋まります"
+        f"（スコアの重みには未反映・参考値として並走、ADR-046）。"
     )
 
 
@@ -203,7 +203,7 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
         )
         # #52-5: 何が貯まれば昇格判断できるかの蓄積条件を1行添える。
         body.append(
-            "      蓄積条件: 3条件すべて ✓（PJ ≥2 で分散十分・分母 ≥floor・apply 前後で期待方向）"
-            "が揃うと「重み昇格を提案」に切り替わる。"
+            "      蓄積条件: 3条件すべて ✓（PJ 2 以上で値がばらつく・各PJに必要件数あり・"
+            "適用前後で期待方向に改善）が揃うと「重み昇格を提案」に切り替わります。"
         )
     return header + body + [""]

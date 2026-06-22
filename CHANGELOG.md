@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **feat(audit): audit レポート文面の理解困難箇所7件を平易化（closes #50）** — 実PJ dogfood audit で確認された「何を言ってるのかわからない」文面（ジャーゴン裸出し / arXiv番号の羅列 / 単位不明 / 主語が消える構文）を、observability 契約と保持必須トークンを壊さずに平易化。対象6セクション: (1) **sections_memory** `OPD-Evolver（arXiv…）の read/use/write/maintain 観点で評価する advisory` → 「記憶の書き込み・維持・活用を3つの観点で評価」+ arXiv は末尾の参考表記に降格、(2) **sections_fanout** advantage の `< floor N（…#15 同様スパース）` → 「対照に必要な最小セッション数 N を下回るため算出不可」/ cost の `subagent N 体（token 直接 join は未対応＝体数を proxy）` → 「コスト目安: 起動した subagent の総数 N（トークン消費量の代わりの指標…）」/ 「delta」を平易な glos に、(3) **sections_outcome** `行動アウトカムの目的変数（手戻り）…2〜4週並走→分布実測→重み昇格判断（ADR-046）` → 「作業の手戻り・やり直しを直接測る3つの指標…2〜4週間データを貯めてからスコアの重みに取り込むか判断（内部設計 ADR-046）」、(4) **sections_capture** `RL ループの報酬入力（corrections）が枯渇` → 「修正フィードバック（corrections）がほとんど貯まっておらず枯渇している可能性」+ `correction_detect` hook に「修正を検出して記録する仕組み」の glos、(5) **sections_promotion_readiness** 条件2 の `分母 ≥N を満たす PJ 数` → 「必要件数 N 件以上の PJ」/ 条件1 に「（PJ間で値がばらつくか）」glos / 圧縮ギャップ行も同様に平易化、(6) **sections_paired** `観測版 SkillAudit（arXiv…）…準実験的に観測` → 「スキルを使った/使わなかったセッションで一発成功率に差が出ているかを既存ログから比べます」。保持必須の契約トークン（`Memory Capability` / `fan-out session 率` / `枯渇している可能性` / `条件2 データ件数下限` / `Paired Trajectory` / `advisory` / `当PJ` / 圧縮行の `0/2`・`apply 0`・`evolve --drain`・floor 値）は不変。#25 disambiguation テスト2件を新文言（「分母」→「件数」）に追従。決定論・LLM 非依存。
+
 ## [1.109.0] - 2026-06-21
 
 ### Changed

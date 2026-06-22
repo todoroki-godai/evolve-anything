@@ -53,9 +53,10 @@ def build_memory_capability_section(project_dir: Path) -> Optional[List[str]]:
     header = [
         "## Memory Capability (read/use/write/maintain — advisory, スコア重みには未反映)",
         "",
-        f"記憶操作能力を OPD-Evolver（arXiv 2606.17628, #19）の read/use/write/maintain "
-        f"観点で評価する advisory（当 PJ memory {total} 件）。決定論・LLM 非依存。"
-        f"記憶の死蔵・未活用を可視化する（fitness 重みには入れない）。",
+        f"記憶（メモリ）の書き込み・維持・活用を 3 つの観点で評価します"
+        f"（当 PJ memory {total} 件）。記憶が死蔵・未活用になっていないかの可視化が目的で、"
+        f"スコアの重みには反映しません（参考: OPD-Evolver 論文 arXiv 2606.17628, #19）。"
+        f"LLM を使わず決定論で算出。",
         "",
     ]
 
