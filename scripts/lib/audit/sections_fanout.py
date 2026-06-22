@@ -29,15 +29,15 @@ def _format_cost(cost: Dict[str, Any]) -> List[str]:
         f"      evidence: fan-out {ev.get('fanout_sessions', 0)} / "
         f"spawning {ev.get('spawning_sessions', 0)} sessions "
         f"(subagent ≥2 を fan-out とみなす)",
-        f"  ・fan-out session あたり平均 subagent: {avg:.2f} 体",
+        f"  ・fan-out 1 セッションあたりの平均 subagent 数: {avg:.2f}",
     ]
     breakdown = ev.get("agent_type_breakdown") or {}
     if breakdown:
         sample = ", ".join(f"{t}×{c}" for t, c in list(breakdown.items())[:5])
         lines.append(f"      agent_type 内訳: {sample}")
     lines.append(
-        f"  ・cost proxy: subagent {ev.get('total_subagents', 0)} 体"
-        f"（token 直接 join は未対応 = 体数を proxy）"
+        f"  ・コスト目安: 起動した subagent の総数 {ev.get('total_subagents', 0)}"
+        f"（トークン消費量の代わりの指標。実トークン数の集計は未実装のため subagent 数で代用）"
     )
     return lines
 
@@ -50,16 +50,16 @@ def _format_advantage(adv: Dict[str, Any]) -> List[str]:
         # #52-5: 何が貯まれば advantage が出るかの蓄積条件を1行添える。
         floor = ev.get("floor", "?")
         return [
-            "  ・fan-out advantage（一発成功率 delta）: データ不足（サンプル不足）"
+            "  ・fan-out advantage（fan-out すると一発成功率が上がるか）: データ不足 "
             f"— fan-out群 {ev.get('fanout_group_sessions', 0)} / "
-            f"single群 {ev.get('single_group_sessions', 0)} "
-            f"< floor {floor}（同一タスク種別の対照比較は #15 同様スパース）",
-            f"      蓄積条件: fan-out 群・single 群とも同一タスク種別の session が各 ≥{floor} "
-            "貯まると advantage（一発成功率 delta）が算出される。",
+            f"single群 {ev.get('single_group_sessions', 0)}"
+            f"（対照に必要な最小セッション数 {floor} を下回るため算出不可）",
+            f"      蓄積条件: 同一タスク種別の session が fan-out 群・single 群ともに各 {floor} "
+            "件以上貯まると算出されます。",
         ]
     direction = "正なら fan-out が一発成功率で有利"
     return [
-        f"  ・fan-out advantage（一発成功率 delta）: {value:+.2f} — {direction}",
+        f"  ・fan-out advantage（fan-out で一発成功率がどれだけ上がるか）: {value:+.2f} — {direction}",
         f"      evidence: fan-out群 {ev.get('fanout_success_rate', 0):.2f}"
         f"（{ev.get('fanout_group_sessions', 0)} sess） vs "
         f"single群 {ev.get('single_success_rate', 0):.2f}"
@@ -103,9 +103,9 @@ def build_fanout_cost_section(project_dir: Path) -> Optional[List[str]]:
     header = [
         "## Fan-out Cost/Advantage (当PJ・advisory — スコア重みには未反映)",
         "",
-        "複数 agent を fan-out する費用対効果を既存テレメトリから測る（#14, arXiv 2606.13003）。"
-        "cost は非スパースで常時算出。advantage は #15 同様スパースなので floor ゲート付き。"
-        "決定論・LLM 非依存。",
+        "複数の agent に分担（fan-out）させる費用対効果を既存ログから測ります（#14）。"
+        "cost（コスト）は常に算出できます。advantage（効果）は対照群が揃いにくいため、"
+        "最小サンプル数の条件を満たしたときだけ算出します。LLM を使わず決定論で算出。",
         "",
     ]
     body: List[str] = []

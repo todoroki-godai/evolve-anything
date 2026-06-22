@@ -880,8 +880,8 @@ class TestConditionLabelsDisambiguateDenominator:
             {"pass": True, "floor": 10, "meeting": ["a", "b"], "denominators": {"a": 12, "b": 35}}
         )
         head = lines[0]
-        # 「分母 ≥floor を満たす PJ 数」であることが分かる
-        assert "分母" in head
+        # 「必要件数 ≥floor に達した PJ 数」であることが分かる（#50: 「分母」ジャーゴンを平易化）
+        assert "件数" in head
 
     def test_variance_and_denominator_labels_are_distinguishable(self):
         """条件1 と条件2 の PJ 件数ラベルが同一文字列でない（矛盾に見えない）。"""
@@ -891,7 +891,9 @@ class TestConditionLabelsDisambiguateDenominator:
             {"pass": False, "floor": 10, "meeting": ["a", "b"], "denominators": {"a": 12, "b": 35}}
         )[0]
         # 両者から「PJ が N 件」の素の共通フレーズを除いた後、母数説明が異なる
+        # （#50: 条件1=「分散」/ 条件2=「件数」で見分けられる）
         assert "分散" in v
-        assert "分母" in d
+        assert "件数" in d
+        assert v != d
         # 「PJ が {n} 件のみ」という曖昧な裸表現を条件1 が使っていない
         assert "PJ が 0 件のみ" not in v
