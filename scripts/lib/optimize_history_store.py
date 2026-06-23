@@ -65,9 +65,8 @@ def history_path(slug: str) -> Path:
     return HISTORY_ROOT / f"{_sanitize_slug(slug)}.jsonl"
 
 
-def load_history(slug: str) -> List[Dict[str, Any]]:
-    """slug の履歴を読み込む。ファイル未存在なら []。空行・壊れた JSON 行はスキップ。"""
-    path = history_path(slug)
+def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    """1 ファイルを読み込む。未存在なら []。空行・壊れた JSON 行はスキップ。"""
     if not path.exists():
         return []
     records: List[Dict[str, Any]] = []
@@ -80,6 +79,36 @@ def load_history(slug: str) -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return records
+
+
+def load_history(slug: str) -> List[Dict[str, Any]]:
+    """slug の履歴を canonical + legacy/plugins-data から cross-dir union read する（#45）。
+
+    DATA_DIR 断片化（rename rl-anything→evolve-anything / plugins-data hook split）の移行期、
+    canonical だけ読むと legacy にのみ残った accept/reject 履歴（fitness calibration の母集団）
+    を取り逃す。``rl_common.iter_read_data_dirs`` が ``HISTORY_ROOT.parent``（= DATA_DIR）の親
+    から候補 dir を導出し、各候補の ``optimize_history/<slug>.jsonl`` を読んで合算する。
+    候補は **canonical 先頭**なので、同一 ``id`` は canonical を優先して dedup する
+    （``id`` を持たないレコードは安全に dedup できないため全件保持）。
+
+    **読み取り専用**: ``append_entry``（write）は canonical 固定のまま（ADR-049: write 側
+    self-resolver は意図的に維持）。本関数は read 側だけを union 化する。tmp canonical を
+    渡すテストでは兄弟 dir が存在せず canonical のみを読む（hermetic）。
+    """
+    from rl_common import iter_read_data_dirs
+
+    safe = _sanitize_slug(slug)
+    by_id: Dict[Any, Dict[str, Any]] = {}
+    out: List[Dict[str, Any]] = []
+    for d in iter_read_data_dirs(HISTORY_ROOT.parent):
+        for rec in _read_jsonl(d / "optimize_history" / f"{safe}.jsonl"):
+            rid = rec.get("id")
+            if rid is not None:
+                if rid in by_id:
+                    continue  # 候補列は canonical 先頭 → 先勝ち（canonical 優先）
+                by_id[rid] = rec
+            out.append(rec)
+    return out
 
 
 def append_entry(entry: Dict[str, Any], slug: str) -> None:
