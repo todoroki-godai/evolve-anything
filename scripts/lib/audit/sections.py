@@ -108,9 +108,11 @@ def build_token_consumption_section(days: int = 30) -> List[str]:
     except Exception:
         return []
 
-    lines: List[str] = [f"## Token Consumption (last {days} days)", ""]
+    # #67: このセクションは PJ 別 audit でも全 PJ 横断の TOP-N を出す（当該 PJ 固有ではない）。
+    # 見出しで明示し「この PJ の消費」と誤読されないようにする。
+    lines: List[str] = [f"## Token Consumption（全PJ横断・last {days} days）", ""]
     if top:
-        lines.append("TOP 3 consumers:")
+        lines.append("TOP 3 consumers (across all projects):")
         for i, c in enumerate(top, 1):
             hit = (
                 f"  (cache hit {c['cache_hit_pct']:.0f}%)"
@@ -302,7 +304,8 @@ def build_corrections_insights_section(
     if not patterns:
         return []
 
-    lines: List[str] = [f"## 繰り返し失敗パターン TOP-{top_n}", ""]
+    # #67: corrections.jsonl は全 PJ 共通ストア。PJ 別 audit でも全 PJ 横断の集計である旨を明示。
+    lines: List[str] = [f"## 繰り返し失敗パターン TOP-{top_n}（全PJ横断）", ""]
     for i, p in enumerate(patterns, 1):
         lines.append(f"{i}. `{p['correction_type']}` — {p['count']} 回")
         if p.get("example_messages"):
@@ -503,7 +506,8 @@ def build_belief_blocks_section(project_dir: Path) -> Optional[List[str]]:
     except Exception:
         return None
 
-    header = ["## Belief Entropy Gate (低信頼 memory ブロック)", ""]
+    # #67: belief_blocks.jsonl は DATA_DIR 直下の全 PJ 共通ストア。PJ 別 audit でも横断集計。
+    header = ["## Belief Entropy Gate（全PJ横断・低信頼 memory ブロック）", ""]
     if count <= 0:
         return header + [
             f"✓ 評価したが直近 {_BELIEF_BLOCKS_WINDOW_DAYS} 日の block なし"

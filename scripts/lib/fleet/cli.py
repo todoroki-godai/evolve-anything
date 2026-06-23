@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     status_p = sub.add_parser("status", help="各 PJ のステータスを表形式で表示（default）")
     for p in (parser, status_p):
         p.add_argument("--root", type=Path, default=None, help="PJ 列挙のルート（config 未設定時の fallback、default: ~/tools）")
-        p.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SEC, help="PJ 毎の audit タイムアウト秒 (default: 10)")
+        p.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SEC, help="PJ 毎の audit タイムアウト秒 (default: 30、超過時は前回 cache を CACHED 表示)")
         p.add_argument("--max-workers", type=int, default=_DEFAULT_MAX_WORKERS, help="並列数 (default: 2)")
         p.add_argument("--no-write", action="store_true", help="fleet-runs/*.jsonl への追記をスキップ")
         p.add_argument("--all", dest="show_all", action="store_true", help="STALE/NOT_ENABLED PJ も含めて全表示（デフォルトは STALE 除外）")
@@ -251,9 +251,31 @@ def _show_active_agents() -> str | None:
     if not sessions:
         return None
 
-    names = [s.get("name") or s.get("id", "?") for s in sessions[:5]]
+    names = [_session_label(s) for s in sessions[:5]]
     suffix = f" (…他 {len(sessions) - 5} 件)" if len(sessions) > 5 else ""
     return f"[fleet] アクティブセッション: {len(sessions)} 件 — {', '.join(names)}{suffix}"
+
+
+def _session_label(session: dict) -> str:
+    """active session の表示ラベル（#71）。
+
+    `claude agents --json` の session は通常 ``name``/``id`` を持たず
+    ``cwd``/``sessionId`` のみ（実測 2026-06-23）。旧実装は ``name or id`` だけ見て
+    全件 ``?`` に化けていた。``name`` → ``cwd`` basename → ``sessionId`` 先頭8桁の順で
+    意味のあるラベルに落とす。
+    """
+    name = session.get("name")
+    if name:
+        return str(name)
+    cwd = session.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        base = Path(cwd).name
+        if base:
+            return base
+    sid = session.get("sessionId") or session.get("id")
+    if isinstance(sid, str) and sid:
+        return sid[:8]
+    return "?"
 
 
 def _run_status(args) -> int:

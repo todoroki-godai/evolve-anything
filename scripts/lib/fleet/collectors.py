@@ -237,13 +237,23 @@ def collect_fleet_status(
         return list(pool.map(_work, projects))
 
 
+# measurement bug 警報の最小一致 PJ 数。audit 側 measurement_bug._MIN_MATCHING_PJ=3 と統一（#70）。
+# 旧値 2 は ISSUES=3/5 のような小カウントの偶然一致を「測定バグ」と誤検知していた
+# （2026-06-23 実 PJ dogfood で FP 確認）。bit-exact 一致が測定バグの強シグナルになるのは
+# 「独立走査の ≥3 PJ」のときであり、2 PJ の小カウント一致は通常の偶然。
+_MIN_EQUAL_ISSUE_PJ = 3
+
+
 def detect_equal_issue_counts(rows: list[FleetRow]) -> list[dict]:
-    """複数 PJ の issues_summary total が完全一致したら measurement bug 警報を返す（#419）。
+    """複数 PJ の issues_summary total が完全一致したら measurement bug 警報を返す（#419, #70）。
 
     fleet ISSUES が全 PJ で 599 にぴたり揃ったのは hardcoded_value 検出パイプラインの
     bug が原因で、独立に走査したはずの PJ が偶然同値になるのは測定バグの強シグナル。
-    同一の **非ゼロ** total を 2 PJ 以上が共有したら、その total と PJ 群を 1 件の
-    警報として返す（0 件一致は「issue なし」で健全なので対象外）。
+    同一の **非ゼロ** total を ``_MIN_EQUAL_ISSUE_PJ``（=3）以上が共有したら、その total と
+    PJ 群を 1 件の警報として返す（0 件一致は「issue なし」で健全なので対象外）。
+
+    閾値は audit 側 ``measurement_bug._MIN_MATCHING_PJ`` と統一（#70）。2 PJ 一致は
+    小カウント（3/5 等）で偶然起きやすく FP の温床だったため ≥3 に引き上げた。
 
     Returns:
         [{"total": int, "projects": [pj_name, ...]}]。一致グループごとに 1 件。
@@ -259,7 +269,7 @@ def detect_equal_issue_counts(rows: list[FleetRow]) -> list[dict]:
         by_total.setdefault(total, []).append(row.pj_name)
     alarms: list[dict] = []
     for total, projects in by_total.items():
-        if len(projects) >= 2:
+        if len(projects) >= _MIN_EQUAL_ISSUE_PJ:
             alarms.append({"total": total, "projects": projects})
     return alarms
 

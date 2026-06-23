@@ -318,6 +318,8 @@ def find_undefined_terms(
                 continue
             if _PLACEHOLDER_RE.match(tok):  # #23: 日付/時刻プレースホルダ（YYYY/MM/DD 等）
                 continue
+            if len(set(tok)) == 1:  # #72: 同一文字の繰り返し（XXXXXXXXXXXX 等のマスク/伏せ字）は jargon でない
+                continue
             # #567: `.lower()` が常用英単語（BEGIN/SELECT/INFO 等）なら jargon でない。
             if tok.lower() in common_words:
                 continue

@@ -333,6 +333,22 @@ class TestRunAuditSubprocess:
         # プロセスグループの終了処理が走ったことを確認 (SIGTERM 1 回は呼ばれる)
         assert m_killpg.called
 
+    def test_TIMEOUT_with_cache_shows_cached_score(self, tmp_path):
+        """timeout でも前回 growth-state cache があれば CACHED + 前回スコアを返す（#66）。"""
+        from fleet import AUDIT_CACHED
+        pj = self._make_pj(tmp_path)
+        data_dir = tmp_path / "data"
+        self._write_growth_state(data_dir, pj, env_score=0.62, phase="initial_nurturing")
+        fake = _FakePopen(raise_timeout=True)
+        with mock.patch("fleet.audit_runner.subprocess.Popen", return_value=fake), \
+             mock.patch("fleet.audit_runner.os.killpg"):
+            result = run_audit_subprocess(pj, timeout=10, data_dir=data_dir)
+        assert result.status == AUDIT_CACHED
+        assert result.env_score == 0.62
+        assert result.phase == "initial_nurturing"
+        assert result.growth_level == 6
+        assert "cached" in result.message.lower()
+
     def test_ERROR_returncode非ゼロ(self, tmp_path):
         pj = self._make_pj(tmp_path)
         data_dir = tmp_path / "data"
@@ -874,14 +890,20 @@ class TestEqualIssueCountAlarm:
             issues_summary=IssuesSummary(line_violations=total),
         )
 
-    def test_同一の非ゼロtotalが2PJ以上で警報(self):
+    def test_同一の非ゼロtotalが3PJ以上で警報(self):
         from fleet import detect_equal_issue_counts
-        rows = [self._row("a", 599), self._row("b", 599), self._row("c", 12)]
+        rows = [self._row("a", 599), self._row("b", 599), self._row("c", 599), self._row("d", 12)]
         alarms = detect_equal_issue_counts(rows)
         assert len(alarms) == 1
         alarm = alarms[0]
         assert alarm["total"] == 599
-        assert set(alarm["projects"]) == {"a", "b"}
+        assert set(alarm["projects"]) == {"a", "b", "c"}
+
+    def test_2PJのみの一致は警報しない(self):
+        """#70: 2 PJ の小カウント一致（ISSUES=3/5 等）は偶然で FP の温床なので ≥3 に統一。"""
+        from fleet import detect_equal_issue_counts
+        rows = [self._row("a", 5), self._row("b", 5), self._row("c", 3), self._row("d", 3)]
+        assert detect_equal_issue_counts(rows) == []
 
     def test_total_0_の一致は警報しない(self):
         """0 件一致は健全（issue なし）なので警報対象外（#419）。"""
@@ -913,10 +935,32 @@ class TestEqualIssueCountAlarm:
     def test_複数のグループを別々に警報(self):
         from fleet import detect_equal_issue_counts
         rows = [
-            self._row("a", 599), self._row("b", 599),
-            self._row("c", 42), self._row("d", 42),
-            self._row("e", 7),
+            self._row("a", 599), self._row("b", 599), self._row("c", 599),
+            self._row("d", 42), self._row("e", 42), self._row("f", 42),
+            self._row("g", 7),
         ]
         alarms = detect_equal_issue_counts(rows)
         totals = {a["total"] for a in alarms}
         assert totals == {599, 42}
+
+
+class TestSessionLabel:
+    """#71: active session の表示ラベル（name/id 欠落時に cwd basename へ落とす）。"""
+
+    def test_name_優先(self):
+        from fleet.cli import _session_label
+        assert _session_label({"name": "my-session", "cwd": "/x/proj"}) == "my-session"
+
+    def test_name_欠落時は_cwd_basename(self):
+        from fleet.cli import _session_label
+        # 実際の `claude agents --json` は name/id を持たず cwd/sessionId のみ
+        s = {"cwd": "/Users/x/updater/figma-to-code", "sessionId": "abcd1234efgh"}
+        assert _session_label(s) == "figma-to-code"
+
+    def test_cwd欠落時は_sessionId先頭(self):
+        from fleet.cli import _session_label
+        assert _session_label({"sessionId": "abcd1234efgh"}) == "abcd1234"
+
+    def test_全欠落で_question(self):
+        from fleet.cli import _session_label
+        assert _session_label({}) == "?"

@@ -28,6 +28,28 @@ def _safe_query(sql: str, params: list[Any] | None = None) -> list[tuple]:
         return []
 
 
+def _display_slug(pj_id: str) -> str:
+    """pj_id から表示用 basename を都度復元する（pj_slug 単一ソース・#68）。
+
+    DB に保存された pj_slug は旧 ingest の ``-`` 末尾 split で化けている可能性があるため、
+    表示時は pj_id から ``pj_slug.pj_id_to_slug`` で復元し直す。import 不能・空 pj_id は
+    空文字を返し、呼び出し側で stored slug に fallback させる。
+    """
+    if not pj_id:
+        return ""
+    try:
+        from pj_slug import pj_id_to_slug  # type: ignore
+    except ImportError:  # pragma: no cover - script-style import fallback
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+        try:
+            from pj_slug import pj_id_to_slug  # type: ignore
+        except ImportError:
+            return ""
+    return pj_id_to_slug(pj_id) or ""
+
+
 def top_n_consumers(days: int = 30, n: int = 3) -> list[dict]:
     """直近 N 日間の TOP-N 消費 PJ。
 
@@ -56,9 +78,13 @@ def top_n_consumers(days: int = 30, n: int = 3) -> list[dict]:
         denom = cc + cr
         hit_pct = (cr * 100.0 / denom) if denom > 0 else None
         reuse_factor = (cr / cc) if cc > 0 else None
+        # 表示 slug は pj_id から都度復元する（#68）。旧 ingest が DB に書いた
+        # 末尾 split の化け slug（code/bots/platform 等）に依存せず、新旧どちらの
+        # 行でも正しい basename を表示する。fs 復元不能時は stored slug に fallback。
+        display_slug = _display_slug(pj_id) or pj_slug
         out.append({
             "pj_id": pj_id,
-            "pj_slug": pj_slug,
+            "pj_slug": display_slug,
             "tokens": int(tokens or 0),
             "cache_hit_pct": hit_pct,
             "cache_reuse_factor": reuse_factor,

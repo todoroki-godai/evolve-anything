@@ -48,10 +48,15 @@ from llm_broker import build_requests, parse_responses, passthrough  # noqa: E40
 # 生成後ゲート（belief_entropy）— オプショナル import
 try:
     from belief_entropy import BLOCKS_FILENAME as _BELIEF_BLOCKS_FILENAME
+    from belief_entropy import clean_summary_head as _clean_summary_head
     from belief_entropy import score_belief as _score_belief
     _HAS_BELIEF = True
 except ImportError:
     _BELIEF_BLOCKS_FILENAME = "belief_blocks.jsonl"
+
+    def _clean_summary_head(text: str, limit: int = 80) -> str:  # type: ignore
+        return " ".join((text or "").split())[:limit]
+
     _HAS_BELIEF = False
 
 try:
@@ -444,7 +449,8 @@ def _record_belief_block(data_dir: Path, belief, summary: str) -> None:
             "ts": datetime.now(timezone.utc).isoformat(),
             "retention": round(float(belief.retention), 4),
             "drift": round(float(belief.drift), 4),
-            "summary_head": summary.strip()[:80],
+            # #69: frontmatter 除去 + 1 行化して記録（表示崩れ防止）。full summary を渡すので本文が入る。
+            "summary_head": _clean_summary_head(summary),
         }
         with (data_dir / _BELIEF_BLOCKS_FILENAME).open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

@@ -14,6 +14,7 @@ STATUS_NOT_ENABLED = "NOT_ENABLED"
 AUDIT_OK = "OK"
 AUDIT_TIMEOUT = "TIMEOUT"
 AUDIT_ERROR = "ERROR"
+AUDIT_CACHED = "CACHED"  # timeout したが前回 growth-state cache の score を表示（#66）
 
 from rl_common import DATA_DIR as _DEFAULT_DATA_DIR  # honors CLAUDE_PLUGIN_DATA
 
@@ -23,7 +24,11 @@ _DEFAULT_PROJECTS_ROOT = Path.home() / "tools"
 _DEFAULT_RL_AUDIT_BIN = Path(__file__).resolve().parent.parent.parent.parent / "bin" / "evolve-audit"
 _PLUGIN_KEY_PREFIX = "evolve-anything@"
 _SETTINGS_RETRY_SLEEP_SEC = 0.1
-_DEFAULT_TIMEOUT_SEC = 10.0
+# 実 PJ の audit は単体でも 10-13s かかる（2026-06-23 実測: docs 10.1s / sys-bots 13.0s）。
+# 旧既定 10s では全 active PJ が TIMEOUT し SCORE/LV/PHASE 列が恒久的に空になっていた（#66）。
+# 初回 warm-up が medium PJ を完走できる 30s に引き上げ、超過時は cache fallback（AUDIT_CACHED）で
+# 前回スコアを表示する。
+_DEFAULT_TIMEOUT_SEC = 30.0
 _DEFAULT_MAX_WORKERS = 2
 _KILL_GRACE_SEC = 2.0
 
