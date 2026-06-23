@@ -141,3 +141,27 @@ def format_status_table(rows: list[FleetRow], now: datetime | None = None) -> st
         parts = [row_cells[i].ljust(widths[i]) for i in range(len(widths))]
         lines.append("  ".join(parts).rstrip())
     return "\n".join(lines) + "\n"
+
+
+def format_status_json(rows: list[FleetRow]) -> str:
+    """fleet status 行を JSON で整形する（``--json`` 出力・#53）。
+
+    `tokens` / `plugins` / `test-guard status` が既に持つ ``--json`` と一貫させ、
+    複数 PJ の env_score / 導入状況を構造化データで提供する（HTML 化より優先＝
+    主要消費者は Claude Code セッション内のアシスタント）。
+
+    各行を ``asdict`` で dict 化し（``issues_summary`` などネストした dataclass も
+    再帰展開）、JSON 非対応の ``latest_audit``（datetime）は ISO 8601 文字列へ、
+    None はそのまま null にする。``default=str`` は将来 datetime 以外の非対応
+    フィールドが増えても落ちないための保険。
+    """
+    import json as _json
+    from dataclasses import asdict
+
+    projects: list[dict] = []
+    for row in rows:
+        d = asdict(row)
+        la = d.get("latest_audit")
+        d["latest_audit"] = la.isoformat() if la is not None else None
+        projects.append(d)
+    return _json.dumps({"projects": projects}, ensure_ascii=False, indent=2, default=str) + "\n"
