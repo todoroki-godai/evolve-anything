@@ -166,6 +166,52 @@ class TestQuery:
         assert len(results) == 3
 
 
+class TestReadDoesNotRequireWriteAccess:
+    """#65: read 経路（query / count_unique_since）は write 権限を要求してはならない。
+
+    旧挙動は read が ``_connect()``（read-write + CREATE TABLE DDL）で開き、実 DB の初回
+    read-write open が write transaction commit でファイル byte を書き換えた（dry-run byte
+    契約 #461 違反・dogfood Layer 1a 赤）。``read_session_records``（既存）の read_only 接続
+    パターンを横展開して根治する。
+
+    判別方法: db を chmod 444 にすると read-write open は EACCES で失敗（→ except で db を
+    読まず空 jsonl のみ＝0 件返し）、read_only open は成功して db を読める。SHA 比較は
+    クリーンな小 DB が既に canonical 形のため退行を捕捉できない（実 DB の初回 fold 状態でしか
+    SHA が動かない）ので、write 権限要求の有無で判別する。
+    """
+
+    def _populate_db(self, store):
+        try:
+            import duckdb  # noqa
+        except ImportError:
+            pytest.skip("duckdb not installed")
+        for i in range(5):
+            store.append({
+                "session_id": f"s{i}",
+                "timestamp": f"2026-04-30T{12+i:02d}:00:00+00:00",
+            })
+        store.ingest()  # jsonl → db（jsonl は rotate されるので read は db のみが頼り）
+        assert store.SESSIONS_DB.exists()
+
+    def test_query_does_not_require_write_access(self, fresh_store):
+        self._populate_db(fresh_store)
+        fresh_store.SESSIONS_DB.chmod(0o444)
+        try:
+            results = fresh_store.query()
+            assert len(results) == 5, "read_only でない（444 db を読めず空返し＝write 権限要求）"
+        finally:
+            fresh_store.SESSIONS_DB.chmod(0o644)
+
+    def test_count_unique_since_does_not_require_write_access(self, fresh_store):
+        self._populate_db(fresh_store)
+        fresh_store.SESSIONS_DB.chmod(0o444)
+        try:
+            count = fresh_store.count_unique_since("2026-04-30T00:00:00+00:00")
+            assert count == 5, "read_only でない（444 db を読めず 0 件＝write 権限要求）"
+        finally:
+            fresh_store.SESSIONS_DB.chmod(0o644)
+
+
 class TestMigration:
     def test_migrate_jsonl_to_db_imports_all_records(self, fresh_store, tmp_path):
         try:

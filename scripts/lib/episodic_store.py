@@ -73,6 +73,17 @@ def _connect():
     return con
 
 
+def _connect_ro():
+    """**読み取り専用**接続（read_only=True）を返す（#65）。
+
+    schema 作成（CREATE TABLE）・mkdir・chmod を一切行わず、ファイルを書き換えない。
+    実 DB の初回 read-write open は write transaction commit でファイル byte を書き換える
+    ため（dry-run byte 契約 #461 違反）、read 経路はこの read_only 接続を使う。
+    呼び出し側が ``get_db_path().exists()`` で事前ガードする前提（不在 db を materialize しない）。
+    """
+    return _duckdb.connect(str(get_db_path()), read_only=True)
+
+
 def insert_event(
     session_id: str,
     project_path: str | None,
@@ -154,7 +165,7 @@ def query_relevant(
 
     con = None
     try:
-        con = _connect()
+        con = _connect_ro()  # #65: read は read_only 接続（byte を書き換えない）
         now = _utcnow()
 
         if project_path is None:

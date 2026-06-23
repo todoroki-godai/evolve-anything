@@ -117,6 +117,30 @@ class TestQueryRelevant:
         assert len(results) >= 1
         assert results[0]["score"] > 0
 
+    def test_read_does_not_require_write_access(self, store):
+        """#65: read（query_relevant）は write 権限を要求してはならない（read_only 接続）。
+
+        旧挙動は read 経路が ``_connect()``（read-write + CREATE TABLE DDL）で開き、実 DB の
+        初回 read-write open が write transaction commit でファイル byte を書き換えていた
+        （dry-run byte 契約 #461 違反・dogfood Layer 1a 赤）。``read_session_records`` の
+        read_only 接続パターンに揃えて根治する。
+
+        判別方法: db を chmod 444 にすると read-write open は EACCES で失敗（→ except で
+        空返し）、read_only open は成功する。SHA 比較はクリーンな小 DB が既に canonical 形の
+        ため退行を捕捉できない（実 DB の初回 fold 状態でしか SHA が動かない）ので、write 権限
+        要求の有無で判別する。
+        """
+        if not store.HAS_DUCKDB:
+            pytest.skip("DuckDB not installed")
+        store.insert_event("s1", "/pj/foo", "git diff で変更確認")
+        db_path = store.get_db_path()
+        db_path.chmod(0o444)
+        try:
+            results = store.query_relevant({"git", "diff"}, "/pj/foo")
+            assert len(results) >= 1, "read_only でない（444 db を読めず空返し＝write 権限要求）"
+        finally:
+            db_path.chmod(0o644)
+
     def test_filters_expired(self, store, monkeypatch):
         """TTL 期限切れのレコードは返さない。"""
         if not store.HAS_DUCKDB:

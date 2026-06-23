@@ -84,6 +84,17 @@ def _connect():
     return con
 
 
+def _connect_ro():
+    """**読み取り専用**接続（read_only=True）を返す（#65）。
+
+    schema 作成（CREATE TABLE）・mkdir を行わず、ファイルを書き換えない。実 DB の初回
+    read-write open は write transaction commit でファイル byte を書き換えるため
+    （dry-run byte 契約 #461 違反・dogfood Layer 1a 赤）、read 経路はこの read_only 接続を使う。
+    呼び出し側が ``USAGE_DB.exists()`` で事前ガードする前提（``token_usage_query._safe_query``）。
+    """
+    return _duckdb.connect(str(USAGE_DB), read_only=True)
+
+
 @contextmanager
 def connection() -> Iterator[Any]:
     """1 つの connection を with-block 全体で再利用するための context manager。
@@ -238,7 +249,7 @@ def query(sql: str, params: list[Any] | None = None, con=None) -> list[tuple]:
         return con.execute(sql, params or []).fetchall()
     c = None
     try:
-        c = _connect()
+        c = _connect_ro()  # #65: read は read_only 接続（byte を書き換えない）
         return c.execute(sql, params or []).fetchall()
     finally:
         if c is not None:
