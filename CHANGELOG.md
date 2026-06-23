@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.110.1] - 2026-06-23
 
 ### Fixed
 - **fix(token_usage): pj_slug 派生の末尾 split 化けを fs 復元に単一ソース化 + fleet TOKENS join desync を是正（closes #68）** — 実PJ dogfood（2026-06-23・docs-platform / sys-bots / receipt）。`_pj_slug_from_id` が CC エンコードパス（`-Users-…-figma-to-code`）を `-` で単純 split し**末尾セグメントだけ**採用していたため、`figma-to-code` → `code` / `rl-anything` → `anything` / `docs-platform` → `platform` / **`sys-bots` → `bots`（matsukaze-utils の別 PJ `bots` と名前空間衝突）** に化け、audit の Token Consumption 表示が全 PJ 誤りだった。`/` と `-` の両義性は文字列だけでは解けないため、`pj_slug.pj_id_to_slug`（**実ファイルシステムを root から貪欲探索**して dir 名を最長一致で復元・親まで解決できれば改名/削除された leaf も残りトークン結合で復元・架空パスは legacy 末尾 split に fallback）を新設し pj_slug 単一ソースに集約。ingest は transcript の `cwd` フィールド（曖昧さなし）を `pj_slug_fast` 経由で最優先。表示（`top_n_consumers`）は DB の化け slug に依存せず pj_id から都度復元。**併せて回帰を是正**: `fleet/_inject_token_metrics` が FleetRow.pj_name と consumer.pj_slug を**両側とも `-` 末尾 split** で照合しており（バグ同士が偶然一致＝両側 `code` で当たっていた）、top_n の slug を正した時点で row 側だけ旧 split のまま desync し figma-to-code 等が "--"、sys-bots が bots のトークンを誤取得していた（[[pitfall_copied_parse_convention_partial_fix]] の再現）。両側を basename 一致へ統一し、旧来からの bots↔sys-bots 誤帰属まで是正。実データで 5 PJ の slug 復元と TOKENS join を実証。TDD 9件（pj_id_to_slug の hyphen 復元 / 衝突回避 / 改名 leaf / legacy fallback + ingest cwd 優先 + top_n 都度復元 + join 衝突回避）。決定論・LLM 非依存。
