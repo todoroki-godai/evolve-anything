@@ -19,8 +19,14 @@ from .formatters import _format_short_int
 def _inject_token_metrics(rows: list[FleetRow], days: int = 30) -> None:
     """token_usage SoR から TOP-N 全体を引いて FleetRow に注入する。
 
-    Match key: FleetRow.pj_name (basename) と pj_slug (encoded path 末尾セグメント) を
-    末尾一致で照合する。データ無し PJ は None のまま。
+    Match key: FleetRow.pj_name (basename) と consumer の pj_slug (pj_id から復元した
+    basename・#68) を **basename 同士で完全一致**させる。データ無し PJ は None のまま。
+
+    旧実装は両側を ``"-" 末尾 split`` で照合していた（``figma-to-code`` → ``code``）。
+    これは pj_slug 化けバグ（#68）と同じ誤りを両側に持たせて偶然一致させていたため、
+    top_n の slug を basename に修正した時点で row 側だけ旧 split のまま desync し、
+    figma-to-code 等が "--" に、sys-bots が bots のトークンを誤って拾う回帰を生んだ。
+    両側を basename に揃えて根治する。
     """
     try:
         import token_usage_query as tuq  # type: ignore
@@ -33,17 +39,15 @@ def _inject_token_metrics(rows: list[FleetRow], days: int = 30) -> None:
         return
     if not consumers:
         return
-    # pj_slug → metric。同名衝突時は最初を採用
+    # pj_slug(basename) → metric。同名衝突時は最初を採用
     by_slug: dict[str, dict] = {}
     for c in consumers:
         slug = (c.get("pj_slug") or "").lower()
         if slug and slug not in by_slug:
             by_slug[slug] = c
     for row in rows:
-        # row.pj_name 末尾セグメントは "-" で区切られた最後 (例: "evolve-anything" → "anything")
-        # token_usage_ingest._pj_slug_from_id と同ロジック
-        last = row.pj_name.rstrip("-").split("-")[-1].lower() if row.pj_name else ""
-        c = by_slug.get(last)
+        key = (row.pj_name or "").lower()  # FleetRow.pj_name は basename
+        c = by_slug.get(key)
         if c is None:
             continue
         row.tokens_30d = c.get("tokens")

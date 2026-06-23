@@ -30,14 +30,38 @@ _CHUNK_SIZE = 100
 
 
 def _pj_slug_from_id(pj_id: str) -> str:
-    """encoded path → 表示用 short name。"""
+    """encoded path → 表示用 short name（pj_slug 単一ソースに委譲・#68）。
+
+    旧実装は ``-`` 単純 split の末尾採用で ``figma-to-code`` → ``code`` /
+    ``sys-bots`` → ``bots`` と化け、別 PJ と名前空間衝突していた。実 dir 名を
+    ファイルシステム貪欲探索で復元する ``pj_slug.pj_id_to_slug`` に一本化する。
+    """
     if not pj_id:
         return pj_id
-    parts = pj_id.rstrip("-").split("-")
-    if not parts:
-        return pj_id
-    last = parts[-1]
-    return last or pj_id
+    try:
+        from pj_slug import pj_id_to_slug  # type: ignore
+    except ImportError:  # pragma: no cover - script-style import fallback
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from pj_slug import pj_id_to_slug  # type: ignore
+    return pj_id_to_slug(pj_id)
+
+
+def _slug_from_cwd(cwd: object) -> str:
+    """transcript の ``cwd`` フィールドから authoritative な pj_slug を導く（#68）。
+
+    ``cwd`` は曖昧さのない絶対パスなので、pj_id の ``-``/``/`` 両義性を回避できる最も
+    確実なソース。worktree 正規化込みで ``pj_slug.pj_slug_fast`` に委譲する。
+    """
+    if not isinstance(cwd, str) or not cwd:
+        return ""
+    try:
+        from pj_slug import pj_slug_fast  # type: ignore
+    except ImportError:  # pragma: no cover
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from pj_slug import pj_slug_fast  # type: ignore
+    return pj_slug_fast(cwd) or ""
 
 
 def _parse_cache_creation_tokens(usage: dict) -> int:
@@ -91,10 +115,13 @@ def parse_transcript_line(line: str, pj_id: str = "", pj_slug: str = "") -> dict
     role = message.get("role") or ""
     model = message.get("model") if role == "assistant" else None
 
+    # slug 解決順（#68）: 明示引数 > transcript の cwd（曖昧さなし）> pj_id の fs 復元。
+    slug = pj_slug or _slug_from_cwd(obj.get("cwd")) or _pj_slug_from_id(pj_id)
+
     return {
         "uuid": uuid,
         "pj_id": pj_id,
-        "pj_slug": pj_slug or _pj_slug_from_id(pj_id),
+        "pj_slug": slug,
         "session_id": obj.get("sessionId") or "",
         "parent_uuid": obj.get("parentUuid"),
         "is_sidechain": is_sidechain,
@@ -178,7 +205,9 @@ def ingest_pj_dir(
     """
     pj_dir = Path(pj_dir)
     pj_id = pj_dir.name
-    pj_slug = _pj_slug_from_id(pj_id)
+    # 空を渡して parse_transcript_line に slug を解決させる（cwd 優先・#68）。
+    # 行に cwd が無い場合のみ _pj_slug_from_id(pj_id) に fallback する。
+    pj_slug = ""
 
     cutoff = None
     if days is not None and days >= 0:

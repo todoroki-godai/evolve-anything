@@ -148,12 +148,13 @@ def test_parse_sidechain_flag(ingest):
 
 
 def test_pj_slug_extraction(ingest):
-    assert ingest._pj_slug_from_id(
-        "-Users-todoroki-tools-evolve-anything"
-    ) == "anything"
-    # designではDIR末尾セグメントだが、`-`splitの最後は実際は"anything"
-    # フォールバック: 空文字列なら入力を返す
+    # #68: pj_slug.pj_id_to_slug に委譲。fs 上に実在する encoded path は正しい basename
+    # （`-` を含む dir 名でも貪欲復元）。この repo 自身の cwd は必ず実在する。
+    here = "-" + str(_REPO_ROOT).lstrip("/").replace("/", "-")
+    assert ingest._pj_slug_from_id(here) == "evolve-anything"
+    # fs 解決不能な相対/架空名は legacy 末尾 split に fallback（決定論）
     assert ingest._pj_slug_from_id("evolve-anything") == "anything"
+    # フォールバック: 空文字列なら入力を返す
     assert ingest._pj_slug_from_id("") == ""
 
 

@@ -404,3 +404,19 @@ class TestIssue23DoesNotSuppressProjectJargon:
         assert tok in result, (
             f"'{tok}' は PJ 固有語として undefined に残るべき (#23)"
         )
+
+
+class TestMaskedPlaceholderExcluded:
+    """#72 — 同一文字反復のマスク/伏せ字（XXXXXXXXXXXX 等）が jargon 候補に出ない。"""
+
+    @pytest.mark.parametrize("tok", ["XXXXXXXXXXXX", "XXXX", "AAAAAA"])
+    def test_masked_token_not_reported(self, tmp_path: Path, tok: str):
+        source = _make_source(tmp_path, f"アカウント番号は {tok} です。", f"src_{tok}.md")
+        result = find_undefined_terms(_entries(), [source])
+        assert tok not in result, f"'{tok}' はマスク値なので jargon 候補に現れてはいけない (#72)"
+
+    def test_real_acronym_still_reported(self, tmp_path: Path):
+        """マスク除外が本物の頭字語（複数文字種）まで巻き込まないこと。"""
+        source = _make_source(tmp_path, "BES と RRF を使う。", "src_real.md")
+        result = find_undefined_terms(_entries(), [source])
+        assert "BES" in result and "RRF" in result

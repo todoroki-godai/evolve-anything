@@ -127,3 +127,53 @@ def test_score_belief_returns_beliefscore_type():
     assert isinstance(score, BeliefScore)
     assert 0.0 <= score.retention <= 1.0
     assert 0.0 <= score.drift <= 1.0
+
+
+# ── clean_summary_head（#69 表示崩れ根治）──────────────────────────────────
+def test_clean_summary_head_strips_frontmatter_full_summary():
+    """full summary（閉じ --- あり）は frontmatter を除去して本文を返す。"""
+    summary = (
+        "---\n"
+        "name: no-defer-spawn-subagent\n"
+        "description: 先送り表現を検出したら即座に\n"
+        "---\n"
+        "先送りせず background subagent を起動して並行処理する。\n"
+    )
+    head = belief_entropy.clean_summary_head(summary)
+    assert head.startswith("先送りせず background subagent")
+    assert "---" not in head
+    assert "name:" not in head
+    assert "\n" not in head
+
+
+def test_clean_summary_head_truncated_frontmatter_one_line():
+    """既存データ（閉じ --- 無しで truncate 済み）は 1 行化し先頭 --- を落とす。"""
+    truncated = "---\nname: no-defer-spawn-subagent-immediately\ndescription: 先送り表現を検出したら即座に backgr"
+    head = belief_entropy.clean_summary_head(truncated)
+    assert "\n" not in head
+    assert not head.startswith("---")
+    assert head.startswith("name: no-defer-spawn-subagent-immediately")
+
+
+def test_clean_summary_head_truncates_long_with_ellipsis():
+    head = belief_entropy.clean_summary_head("あ" * 200, limit=80)
+    assert head.endswith("…")
+    assert len(head) <= 81
+
+
+def test_summarize_blocks_returns_clean_single_line_heads(tmp_path):
+    """summarize_blocks の heads は崩れず 1 行に整形されている（#69）。"""
+    import json
+    from datetime import datetime, timezone
+    blocks = tmp_path / belief_entropy.BLOCKS_FILENAME
+    rec = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "retention": 0.1,
+        "drift": 0.9,
+        "summary_head": "---\nname: foo\ndescription: 多段タスクを",
+    }
+    blocks.write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+    count, heads = belief_entropy.summarize_blocks(tmp_path, days=30)
+    assert count == 1
+    assert heads and all("\n" not in h for h in heads)
+    assert not heads[0].startswith("---")

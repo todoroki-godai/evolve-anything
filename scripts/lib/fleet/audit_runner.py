@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import (
+    AUDIT_CACHED,
     AUDIT_ERROR,
     AUDIT_OK,
     AUDIT_TIMEOUT,
@@ -95,6 +96,31 @@ def _parse_issues_summary(raw: object) -> IssuesSummary | None:
     )
 
 
+def _audit_result_from_state(state_path: Path, status: str) -> AuditResult | None:
+    """growth-state cache JSON を読んで AuditResult を組み立てる（success/timeout 共通）。
+
+    Returns:
+        cache 不在 / parse 失敗 → None（呼び出し側で OK-no-cache / ERROR / TIMEOUT を判断）。
+        正常 → 指定 ``status`` の AuditResult（env_score 等を埋める）。
+    """
+    if not state_path.is_file():
+        return None
+    try:
+        state = json.loads(state_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    env_score = state.get("env_score")
+    phase = state.get("phase")
+    return AuditResult(
+        status=status,
+        env_score=env_score if isinstance(env_score, (int, float)) else None,
+        phase=phase if isinstance(phase, str) else None,
+        growth_level=_safe_compute_level(env_score),
+        latest_audit=_parse_iso(state.get("updated_at")),
+        issues_summary=_parse_issues_summary(state.get("issues_summary")),
+    )
+
+
 def _terminate_process_group(proc: subprocess.Popen) -> None:
     """subprocess のプロセスグループを SIGTERM→SIGKILL で順次停止させる。
 
@@ -158,10 +184,18 @@ def run_audit_subprocess(
     except OSError as e:
         return AuditResult(AUDIT_ERROR, message=f"spawn failed: {e}")
 
+    state_path = effective_data_dir / f"growth-state-{_pj_safe_name(pj_path)}.json"
+
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _terminate_process_group(proc)
+        # timeout でも前回の growth-state cache があれば前回スコアを表示する（#66）。
+        # cache が無い（初回 warm-up 未完了）場合のみ純粋な TIMEOUT。
+        cached = _audit_result_from_state(state_path, AUDIT_CACHED)
+        if cached is not None and cached.env_score is not None:
+            cached.message = f"timeout after {timeout}s; showing cached score"
+            return cached
         return AuditResult(AUDIT_TIMEOUT, message=f"timeout after {timeout}s")
 
     if proc.returncode != 0:
@@ -169,24 +203,9 @@ def run_audit_subprocess(
         tail = stderr_tail[-1] if stderr_tail else f"returncode {proc.returncode}"
         return AuditResult(AUDIT_ERROR, message=tail[:200])
 
-    state_path = effective_data_dir / f"growth-state-{_pj_safe_name(pj_path)}.json"
     if not state_path.is_file():
         return AuditResult(AUDIT_OK, message="no growth-state cache")
-    try:
-        state = json.loads(state_path.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        return AuditResult(AUDIT_ERROR, message=f"state parse: {e}")
-
-    env_score = state.get("env_score")
-    phase = state.get("phase")
-    growth_level = _safe_compute_level(env_score)
-    latest_audit = _parse_iso(state.get("updated_at"))
-    issues = _parse_issues_summary(state.get("issues_summary"))
-    return AuditResult(
-        status=AUDIT_OK,
-        env_score=env_score if isinstance(env_score, (int, float)) else None,
-        phase=phase if isinstance(phase, str) else None,
-        growth_level=growth_level,
-        latest_audit=latest_audit,
-        issues_summary=issues,
-    )
+    result = _audit_result_from_state(state_path, AUDIT_OK)
+    if result is None:
+        return AuditResult(AUDIT_ERROR, message="state parse failed")
+    return result

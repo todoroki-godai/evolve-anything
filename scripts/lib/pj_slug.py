@@ -244,3 +244,54 @@ def resolve_cc_memory_dir(path_or_cwd: Optional[Union[str, Path]] = None) -> Pat
         if memory_dir.is_dir():
             return memory_dir
     return base / encoded / "memory"
+
+
+def pj_id_to_slug(pj_id: Optional[str], root: Optional[Union[str, Path]] = None) -> str:
+    """CC エンコード pj_id（``-Users-x-updater-figma-to-code``）→ 実 dir basename（``figma-to-code``）。
+
+    CC は projects dir 名を **cwd 絶対パスの ``/`` → ``-`` 置換**で作るため、dir 名に
+    ``-`` を含む PJ（``figma-to-code`` / ``sys-bots`` / ``docs-platform``）は ``-`` 単純 split
+    の末尾採用だと ``code`` / ``bots`` / ``platform`` に化け、別 PJ と名前空間衝突する
+    （token_usage の旧 ``_pj_slug_from_id`` バグ・2026-06-23 実 PJ dogfood で発見）。
+
+    ``/`` と ``-`` の両義性は文字列だけでは解けないので、**実ファイルシステムを root から
+    貪欲探索**して解決する（各位置で「存在する最長 dir 名」を採る）。完全に解決できた場合のみ
+    その basename を返す。dir 不在（PJ 削除済み / テストの架空パス）では legacy 末尾 split に
+    fallback し、後方互換と決定性を保つ。
+
+    Args:
+        pj_id: CC エンコード済みパス名（先頭 ``-`` 有無どちらでも可）。
+        root:  探索起点（省略時 ``/``）。テストは tmp 構造を渡して hermetic に検証する。
+    """
+    if not pj_id:
+        return pj_id or ""
+    raw = pj_id.lstrip("-")
+    if not raw:
+        return pj_id
+    tokens = raw.split("-")
+    legacy = tokens[-1] or pj_id  # 末尾 split fallback（旧挙動）
+    base = Path("/") if root is None else Path(root)
+    cur = base
+    i = 0
+    n = len(tokens)
+    matched_any = False
+    while i < n:
+        best_j = None
+        # 「存在する最長 dir 名」を採る（実 dir 名を最大マッチで復元）。
+        for j in range(n, i, -1):
+            cand = "-".join(tokens[i:j])
+            if (cur / cand).is_dir():
+                best_j = j
+                cur = cur / cand
+                break
+        if best_j is None:
+            break  # これ以上 fs 上で辿れない
+        matched_any = True
+        i = best_j
+    if matched_any:
+        if i == n and cur.name:
+            return cur.name           # 完全解決 → basename
+        # 親 dir まで解決できた = 残りトークンが leaf（削除/改名で実在しなくても
+        # 内部の ``-`` は保持される）。``rl-anything`` 等を正しく復元する。
+        return "-".join(tokens[i:])
+    return legacy                      # 何も解決できない架空パス → 末尾 split

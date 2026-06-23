@@ -141,6 +141,33 @@ def score_belief(
 # belief ゲートの block ログ
 BLOCKS_FILENAME = "belief_blocks.jsonl"
 
+# 表示用 summary_head の最大長
+SUMMARY_HEAD_LIMIT = 80
+
+
+def clean_summary_head(text: str, limit: int = SUMMARY_HEAD_LIMIT) -> str:
+    """block 表示用に要約を 1 行へ整形する（#69）。
+
+    旧実装は ``summary.strip()[:80]`` で生テキストを切っていたため、frontmatter
+    （``---``/``name:``/``description:``）がそのまま入り、改行で箇条書きが崩れ語の途中で
+    切れて読めなかった。本関数で:
+
+      1. frontmatter を除去して本文（記憶の中身）を取り出す
+      2. 改行・連続空白を単一スペースに畳んで 1 行化する
+      3. 既存データ（閉じ ``---`` 無しで truncate 済み）は先頭の ``---`` を落とす
+      4. ``limit`` 超過は ``…`` 付きで末尾省略する
+
+    writer は full summary を渡せば本文が得られる。reader は truncate 済み head を渡しても
+    最低限 1 行化される（本文は復元できないが箇条書き崩れは解消する）。
+    """
+    body = _strip_frontmatter(text or "")
+    one_line = " ".join(body.split())
+    while one_line.startswith("---"):
+        one_line = one_line[3:].lstrip()
+    if len(one_line) > limit:
+        return one_line[:limit].rstrip() + "…"
+    return one_line
+
 
 def summarize_blocks(
     data_dir: Path, days: int = 30
@@ -175,7 +202,9 @@ def summarize_blocks(
             if ts is not None and ts < cutoff:
                 continue
             count += 1
-            head = str(rec.get("summary_head", "")).strip()
+            # 既存データの summary_head は生 frontmatter が truncate されている場合がある
+            # ため、表示前に 1 行へ整形する（#69）。
+            head = clean_summary_head(str(rec.get("summary_head", "")))
             if head and len(heads) < 3:
                 heads.append(head)
     except OSError:

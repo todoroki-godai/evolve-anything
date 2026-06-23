@@ -291,3 +291,39 @@ def test_pj_slug_from_cwd_wrapper_delegates():
     assert pj_slug_from_cwd(cwd) == "evolve-anything"
     assert pj_slug_from_cwd(None) is None
     assert pj_slug_from_cwd("") is None
+
+
+# ── pj_id_to_slug（encoded pj_id → 実 basename・#68 token_usage slug 化け根治）────
+def test_pj_id_to_slug_decodes_hyphenated_dir(tmp_path):
+    """`-` を含む dir 名を fs 貪欲探索で正しく復元（末尾 split の化けを根治）。"""
+    # root=tmp_path 配下に updater/figma-to-code を実在させ hermetic に検証
+    (tmp_path / "updater" / "figma-to-code").mkdir(parents=True)
+    assert pj_slug.pj_id_to_slug("-updater-figma-to-code", root=tmp_path) == "figma-to-code"
+
+
+def test_pj_id_to_slug_resolves_collision_prone_names(tmp_path):
+    """sys-bots が bots に化けて別 PJ と衝突する旧バグの回帰防止。"""
+    (tmp_path / "sys-bots").mkdir(parents=True)
+    assert pj_slug.pj_id_to_slug("-sys-bots", root=tmp_path) == "sys-bots"
+    # 化けると `bots`（別 PJ）に衝突する — それを起こさないこと
+    assert pj_slug.pj_id_to_slug("-sys-bots", root=tmp_path) != "bots"
+
+
+def test_pj_id_to_slug_falls_back_to_legacy_when_dir_absent(tmp_path):
+    """親すら解決できない架空 pj_id は legacy 末尾 split に fallback。"""
+    assert pj_slug.pj_id_to_slug("-nope-missing-anything", root=tmp_path) == "anything"
+
+
+def test_pj_id_to_slug_recovers_renamed_leaf_via_parent(tmp_path):
+    """親 dir まで実在すれば、leaf が改名/削除されても残りトークン結合で復元する。
+
+    例: matsukaze-utils/ は実在するが rl-anything/ は rl-anything-OLD に改名済み
+    → 末尾 split だと "anything" に化けるが、親まで解決できるので "rl-anything" を返す。
+    """
+    (tmp_path / "matsukaze-utils").mkdir(parents=True)  # 親だけ作る（leaf は作らない）
+    assert pj_slug.pj_id_to_slug("-matsukaze-utils-rl-anything", root=tmp_path) == "rl-anything"
+
+
+def test_pj_id_to_slug_empty_and_none():
+    assert pj_slug.pj_id_to_slug("") == ""
+    assert pj_slug.pj_id_to_slug(None) == ""
