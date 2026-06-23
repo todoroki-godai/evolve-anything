@@ -151,6 +151,7 @@ def compute_environment_fitness(
         skills_dir = project_dir / ".claude" / "skills"
         if skills_dir.is_dir():
             sq_scores = []
+            missing_red_flags = 0  # #62: red flags（危険サイン）節なしスキル数
             for skill_dir in skills_dir.iterdir():
                 skill_md = skill_dir / "SKILL.md"
                 if skill_md.is_file():
@@ -159,6 +160,8 @@ def compute_environment_fitness(
                         score_result = sq_mod.evaluate_skill_quality(content, str(skill_dir))
                         if score_result and "overall" in score_result:
                             sq_scores.append(score_result["overall"])
+                            if score_result.get("red_flags", {}).get("present") is False:
+                                missing_red_flags += 1
                     except Exception:
                         continue
             if sq_scores:
@@ -167,6 +170,8 @@ def compute_environment_fitness(
                 axis_results["skill_quality"] = {
                     "overall": avg_sq,
                     "skills_evaluated": len(sq_scores),
+                    # #62: red flags 節なしの数（surface 用・evolve が加点機会を拾える）
+                    "skills_missing_red_flags": missing_red_flags,
                 }
     except Exception:
         pass

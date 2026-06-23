@@ -33,6 +33,39 @@ CSO_ACTION_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# ── red flags（危険サイン）節 ────────────────────────────
+# addyosmani/agent-skills の authoring パターン（#62）。各 SKILL.md が「このスキルを
+# サボってはいけない危険サイン」の自己点検節を持つことを品質要件にする。本文中の
+# 見出し（markdown heading）として red flags / 危険サイン 等が存在するかを測る
+# （散文中の言及は対象外＝自己点検「節」の有無を測るため heading に限定）。
+RED_FLAGS_BONUS = 0.1  # red flags 節がある場合の skill_quality 加点
+RED_FLAGS_HEADING = re.compile(
+    r"^#{1,6}\s*.*(red\s*flags?|レッドフラグ|危険サイン|危険な兆候|赤信号)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def check_red_flags_section(content: str) -> Dict[str, Any]:
+    """SKILL.md 本文に red flags（危険サイン）節があるかを検査する（#62）。
+
+    Args:
+        content: SKILL.md のテキスト内容
+
+    Returns:
+        {"present": bool, "bonus": float, "note": str | None}
+        present=True なら bonus=RED_FLAGS_BONUS / note=None、
+        present=False なら bonus=0.0 / note=指摘文（surface 用）。
+    """
+    present = bool(RED_FLAGS_HEADING.search(content or ""))
+    return {
+        "present": present,
+        "bonus": RED_FLAGS_BONUS if present else 0.0,
+        "note": None if present else (
+            "red flags（危険サイン）節なし — スキルをサボってはいけない危険サインの"
+            "自己点検節（## Red Flags / ## 危険サイン）を追加すると加点されます"
+        ),
+    }
+
 # ── YAML frontmatter パーサー ──────────────────────────
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -172,9 +205,14 @@ def evaluate_skill_quality(content: str, skill_dir: str) -> Optional[Dict[str, A
         return None
     try:
         cso_result = check_cso_compliance(skill_path)
+        # #62: red flags（危険サイン）節があれば加点（節を足すと overall が上がる）。
+        # absent は減点でなく advisory note（非punitive・既存スキルのスコアは下げない）。
+        rf_result = check_red_flags_section(content)
+        overall = max(0.0, min(1.0, cso_result["score"] + rf_result["bonus"]))
         return {
-            "overall": cso_result["score"],
+            "overall": round(overall, 3),
             "cso": cso_result,
+            "red_flags": rf_result,
         }
     except Exception:
         return None

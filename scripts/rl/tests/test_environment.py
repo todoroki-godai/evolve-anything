@@ -330,3 +330,33 @@ class TestSkipLLM:
         # デフォルトでは constitutional が読み込まれる
         assert "constitutional" in loaded
         assert "constitutional" in result["sources"]
+
+
+class TestSkillQualityRedFlagsAggregation:
+    """#62: environment fitness が red flags（危険サイン）節なしスキル数を集計する。"""
+
+    def test_skills_missing_red_flags_counted(self, tmp_path):
+        project = _make_project(tmp_path)  # sample-skill は red flags 節なし
+        skills_dir = project / ".claude" / "skills"
+        # red flags 節ありスキルを追加（こちらは欠落カウントに含まれない）
+        rf = skills_dir / "rf-skill"
+        rf.mkdir(parents=True, exist_ok=True)
+        (rf / "SKILL.md").write_text(
+            "---\nname: rf-skill\ndescription: \"Use when auditing safely.\"\n---\n\n"
+            "## Steps\n\nDo it.\n\n## Red Flags\n\n- Skipping the gate\n"
+        )
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        for f in ("sessions.jsonl", "usage.jsonl", "errors.jsonl", "corrections.jsonl", "workflows.jsonl"):
+            _write_jsonl(data_dir / f, [])
+
+        with mock.patch("telemetry_query.DATA_DIR", data_dir), \
+             mock.patch("telemetry_query.HAS_DUCKDB", False):
+            result = environment.compute_environment_fitness(
+                project, days=30, skip_llm=True, record=False
+            )
+
+        sq = result.get("skill_quality")
+        assert sq is not None
+        assert sq["skills_evaluated"] == 2
+        assert sq["skills_missing_red_flags"] == 1  # sample-skill のみ red flags なし
