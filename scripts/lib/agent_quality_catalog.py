@@ -177,3 +177,39 @@ BEST_PRACTICES = {
         "detect_patterns": JIT_PATTERNS,
     },
 }
+
+# addyosmani/agent-skills 流の skill anatomy（外部良例エントリ, Issue #63）。
+# triggering→workflow→anti-rationalization→red flags→verification の5節構成。
+# 既存 BEST_PRACTICES と重複する frontmatter/overview/deliverables は再収録しない。
+SKILL_ANATOMY = {
+    "source": "addyosmani/agent-skills",
+    "description": "addyosmani 流 anatomy（triggering→workflow→anti-rationalization→red flags→verification）に揃える",
+    "sections": [
+        {"key": "triggering_conditions", "label": "triggering conditions",
+         "detect_patterns": [r"(?i)##\s*triggering", r"(?i)##\s*when\s+to\s+use", r"(?i)##\s*トリガー", r"発動条件", r"使用タイミング"]},
+        {"key": "step_by_step_workflow", "label": "step-by-step workflow",
+         "detect_patterns": [r"(?i)##\s*(step.by.step\s+)?workflow", r"(?i)##\s*steps?", r"(?i)##\s*手順", r"(?m)^\s*\d+\.\s"]},
+        {"key": "anti_rationalization", "label": "anti-rationalization table",
+         "detect_patterns": [r"(?i)anti.rationaliz", r"(?i)rationaliz", r"言い訳", r"合理化"]},
+        {"key": "red_flags", "label": "red flags",
+         "detect_patterns": [r"(?i)##\s*red\s*flags?", r"危険信号", r"🚩"]},
+        {"key": "verification_requirements", "label": "verification requirements",
+         "detect_patterns": [r"(?i)##\s*verification", r"検証要件", r"(?i)verify", r"確認方法"]},
+    ],
+}
+
+
+def missing_anatomy_sections(content: str) -> list[dict]:
+    """SKILL_ANATOMY の各節について content に存在しないものを順序通り返す。
+
+    各 section の detect_patterns のいずれかが re.search でヒットすれば充足、
+    1つもヒットしなければ欠落。欠落 section の {"key", "label"} を sections の
+    定義順のまま list で返す。
+
+    純粋関数。agent_quality からの import は禁止（循環 import 回避）。
+    """
+    missing: list[dict] = []
+    for section in SKILL_ANATOMY["sections"]:
+        if not any(re.search(p, content) for p in section["detect_patterns"]):
+            missing.append({"key": section["key"], "label": section["label"]})
+    return missing

@@ -28,8 +28,10 @@ from agent_quality_catalog import (
     MODEL_ALIASES,
     OUTPUT_SPEC_MIN_MATCHES,
     OUTPUT_SPEC_PATTERNS,
+    SKILL_ANATOMY,
     VAGUE_KEYWORD_THRESHOLD,
     VAGUE_KEYWORDS,
+    missing_anatomy_sections,
 )
 from agent_quality_upstream import check_upstream  # noqa: F401 — re-export
 
@@ -213,6 +215,15 @@ def check_quality(agent: AgentInfo) -> Dict[str, Any]:
                 "pattern": bp_name,
                 "description": bp_info["description"],
             })
+
+    missing_anatomy = missing_anatomy_sections(agent.content)
+    if missing_anatomy:
+        labels = ", ".join(m["label"] for m in missing_anatomy)
+        suggestions.append({
+            "pattern": "skill_anatomy",
+            "description": f'{SKILL_ANATOMY["description"]}（欠落: {labels}）',
+            "source": SKILL_ANATOMY["source"],
+        })
 
     score = max(0.0, min(1.0, score))
 
