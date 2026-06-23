@@ -28,7 +28,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -64,29 +63,15 @@ def resolve_slug(cwd: Optional[Path] = None) -> str:
     """current（または指定 cwd の）project slug を返す。
 
     worktree 安全: `git rev-parse --git-common-dir` で本体 repo の .git を取り、
-    その親ディレクトリ名を slug とする。git repo 外なら UNATTRIBUTED_SLUG。
+    その親ディレクトリ名を slug とする。git repo 外なら basename（#47）。
+
+    #47: slug 導出は ``pj_slug.resolve_pj_slug`` に単一ソース化した（従来は本モジュールに
+    git subprocess 解決を複製していた）。これで非git PJ の fallback が writer hot-path の
+    ``pj_slug_fast``（basename）と一致し、別実装による non-git slug 食い違いを構造的に防ぐ。
     """
-    cwd_path = Path(cwd) if cwd is not None else Path.cwd()
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
-            cwd=str(cwd_path),
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-        return UNATTRIBUTED_SLUG
+    from pj_slug import resolve_pj_slug
 
-    if not out:
-        return UNATTRIBUTED_SLUG
-
-    common_dir = Path(out)
-    if not common_dir.is_absolute():
-        common_dir = (cwd_path / common_dir).resolve()
-    repo_root = common_dir.parent
-    slug = repo_root.name
-    return slug or UNATTRIBUTED_SLUG
+    return resolve_pj_slug(cwd)
 
 
 # ─────────────────────────────────────────────────────────────────

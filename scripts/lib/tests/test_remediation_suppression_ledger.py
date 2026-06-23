@@ -65,10 +65,11 @@ class TestResolveSlug:
         _git(repo, "worktree", "add", "-q", "-b", "feat-x", str(wt))
         assert sl.resolve_slug(cwd=wt) == "main-repo"
 
-    def test_outside_git_returns_unattributed(self, tmp_path):
+    def test_outside_git_returns_basename(self, tmp_path):
+        # #47: 非git dir は basename（writer pj_slug_fast と一致・resolve_pj_slug に単一ソース化）。
         plain = tmp_path / "not-a-repo"
         plain.mkdir()
-        assert sl.resolve_slug(cwd=plain) == sl.UNATTRIBUTED_SLUG
+        assert sl.resolve_slug(cwd=plain) == "not-a-repo"
 
 
 # ── record / suppress ────────────────────────────────────────
