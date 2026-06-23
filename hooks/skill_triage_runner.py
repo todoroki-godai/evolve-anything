@@ -11,14 +11,23 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-_PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
-TRIAGE_CACHE_FILE = DATA_DIR / "skill-triage-cache.json"
-
 _HOOKS_DIR = Path(__file__).resolve().parent
 _LIB_DIR = _HOOKS_DIR.parent / "scripts" / "lib"
 sys.path.insert(0, str(_LIB_DIR))
 sys.path.insert(0, str(_HOOKS_DIR))
+
+_PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+# #45(b)/#364: marker-aware 解決。hook 文脈（CLAUDE_PLUGIN_DATA=plugins/data 配下）でも
+# canonical に一元化 marker があれば canonical に redirect する。これで usage.jsonl を
+# canonical の live データから読み、skill-triage-cache.json を reader（instructions_loaded=
+# common.DATA_DIR = canonical）と同じ dir に書く（writer/reader split の解消）。
+try:
+    from rl_common import resolve_data_dir
+    DATA_DIR = resolve_data_dir(_PLUGIN_DATA_ENV)
+except Exception:
+    # fail-silent subprocess: rl_common 解決に失敗しても従来の naive 解決で継続する
+    DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
+TRIAGE_CACHE_FILE = DATA_DIR / "skill-triage-cache.json"
 
 
 def _load_jsonl(path: Path) -> list:
