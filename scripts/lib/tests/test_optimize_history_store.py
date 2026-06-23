@@ -117,3 +117,79 @@ class TestAppendAndLoad:
         path.write_text('{"id": "ok"}\n\nnot-json\n{"id": "ok2"}\n')
         loaded = store.load_history("proj")
         assert [r["id"] for r in loaded] == ["ok", "ok2"]
+
+
+class TestLoadHistoryUnion:
+    """load_history は canonical + legacy/plugins-data を cross-dir union read する（#45）。
+
+    optimize_history/<slug>.jsonl が rename（rl-anything→evolve-anything）で legacy にのみ
+    残ると、canonical だけ読む reader は fitness calibration の母集団を取り逃す。
+    iter_read_data_dirs が HISTORY_ROOT.parent（=DATA_DIR）の親から候補を導出するため、
+    canonical を tmp/evolve-anything にして兄弟 tmp/rl-anything を作れば hermetic に検証できる。
+    write 側（append_entry）は canonical 固定のまま（ADR-049）。
+    """
+
+    @staticmethod
+    def _canonical(root: Path) -> Path:
+        c = root / "evolve-anything"
+        (c / "optimize_history").mkdir(parents=True, exist_ok=True)
+        return c
+
+    @staticmethod
+    def _write(dir_: Path, slug: str, records: list) -> None:
+        oh = dir_ / "optimize_history"
+        oh.mkdir(parents=True, exist_ok=True)
+        (oh / f"{slug}.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+        )
+
+    def test_unions_canonical_and_legacy(self, tmp_path, monkeypatch):
+        canonical = self._canonical(tmp_path)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        legacy = tmp_path / "rl-anything"
+        self._write(canonical, "proj", [{"id": "c1", "best_fitness": 0.5}])
+        self._write(legacy, "proj", [{"id": "l1", "best_fitness": 0.3}])
+        loaded = store.load_history("proj")
+        assert sorted(r["id"] for r in loaded) == ["c1", "l1"]
+
+    def test_canonical_wins_on_duplicate_id(self, tmp_path, monkeypatch):
+        canonical = self._canonical(tmp_path)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        legacy = tmp_path / "rl-anything"
+        self._write(canonical, "proj", [{"id": "x", "best_fitness": 0.9}])
+        self._write(legacy, "proj", [{"id": "x", "best_fitness": 0.1}])
+        loaded = store.load_history("proj")
+        assert len(loaded) == 1
+        assert loaded[0]["best_fitness"] == 0.9  # canonical 優先
+
+    def test_records_without_id_all_kept(self, tmp_path, monkeypatch):
+        canonical = self._canonical(tmp_path)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        legacy = tmp_path / "rl-anything"
+        self._write(canonical, "proj", [{"best_fitness": 0.5}])
+        self._write(legacy, "proj", [{"best_fitness": 0.3}])
+        loaded = store.load_history("proj")
+        assert len(loaded) == 2  # id 無しは dedup せず全件
+
+    def test_hermetic_tmp_only_reads_canonical(self, tmp_path, monkeypatch):
+        """兄弟 dir を作らなければ canonical のみ（実 home legacy を読まない）。"""
+        canonical = self._canonical(tmp_path)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "proj", [{"id": "c1"}])
+        loaded = store.load_history("proj")
+        assert [r["id"] for r in loaded] == ["c1"]
+
+    def test_empty_when_no_data(self, tmp_path, monkeypatch):
+        canonical = self._canonical(tmp_path)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        assert store.load_history("nope") == []
+
+    def test_write_stays_canonical_only(self, tmp_path, monkeypatch):
+        """append_entry は canonical のみへ書く（union read 化で write が漏れない・ADR-049）。"""
+        canonical = self._canonical(tmp_path)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        legacy = tmp_path / "rl-anything"
+        legacy.mkdir()
+        store.append_entry({"id": "new"}, "proj")
+        assert (canonical / "optimize_history" / "proj.jsonl").exists()
+        assert not (legacy / "optimize_history" / "proj.jsonl").exists()
