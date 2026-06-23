@@ -178,14 +178,20 @@ def resolve_pj_slug(path_or_cwd: Optional[Union[str, Path]] = None) -> str:
     解決順:
       1. ``git rev-parse --git-common-dir`` で本体 repo の .git を取り、その親 basename。
          worktree から呼んでも本体 slug に正規化される（最も正確）。
-      2. git 不可（repo 外 / git 未インストール / OS エラー）のフォールバックは **path に
-         worktree マーカー（``/.claude/worktrees/``）がある場合のみ** ``pj_slug_fast`` で
-         本体 slug に正規化する。worktree 由来の path が git なしでも本体 repo に帰属できる
-         ようにするための限定フォールバックである。
-      3. git 不可 かつ worktree マーカー無しの素の dir は ``UNATTRIBUTED_SLUG`` を返す
-         （旧 ``resolve_slug`` のセマンティクスを温存 — calibration 母集団からの除外を壊さない）。
+      2. git 不可（repo 外 / git 未インストール / OS エラー）のフォールバックは
+         ``pj_slug_fast`` に委譲する（worktree マーカーがあれば本体 slug に正規化、無ければ
+         basename）。これにより **writer の hot-path（``pj_slug_fast``）と reader（本関数）が
+         非git PJ でも同一規約（basename）になり**、hook が basename で書いたレコードを reader が
+         ``_unattributed`` 名前空間で探して交差ゼロになる silent bug を根治する（#47）。
+      3. basename も取れない真の空 path（``Path('').name`` 等）のみ ``UNATTRIBUTED_SLUG``
+         （calibration 母集団からの除外センチネルとして残す）。
 
     ``path_or_cwd`` が None のときは現在の cwd（``Path.cwd()``）を使う。
+
+    注意（#47 セマンティクス変更）: 旧版は worktree マーカー無しの非git dir を ``_unattributed``
+    固定にしていた（calibration 除外）。非git PJ は稀だが、その間 writer/reader slug が割れて
+    全 section 沈黙＋他の非git PJ 同士が ``_unattributed`` に混ざり誤帰属していた。basename は
+    pj_slug_fast が既に write 側で使っている識別子であり、reader を揃えることで読めるようにする。
     """
     cwd_path = Path(path_or_cwd) if path_or_cwd is not None else Path.cwd()
     try:
@@ -208,13 +214,11 @@ def resolve_pj_slug(path_or_cwd: Optional[Union[str, Path]] = None) -> str:
         if slug:
             return slug
 
-    # git 不可: worktree マーカーがある path のみ文字列フォールバックで本体 slug に正規化。
-    # マーカー無しの素の dir は _unattributed（旧 resolve_slug のセマンティクス温存）。
-    if _WORKTREE_MARKER in str(cwd_path):
-        fast = pj_slug_fast(cwd_path)
-        if fast:
-            return fast
-    return UNATTRIBUTED_SLUG
+    # git 不可: 文字列フォールバック（pj_slug_fast）に委譲し writer と同一規約に揃える（#47）。
+    # pj_slug_fast: worktree マーカーがあれば本体 slug へ畳む / 無ければ basename。
+    # basename も取れない真の空 path のみ _unattributed（calibration 除外センチネル）。
+    fast = pj_slug_fast(cwd_path)
+    return fast or UNATTRIBUTED_SLUG
 
 
 def resolve_cc_memory_dir(path_or_cwd: Optional[Union[str, Path]] = None) -> Path:

@@ -63,8 +63,14 @@ def test_persist_silent_without_project_dir(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_persist_skips_unattributed_non_git_dir(tmp_path, monkeypatch):
-    """git 外の素 dir（_unattributed）は cache に書かない。"""
+def test_persist_writes_cache_for_non_git_dir(tmp_path, monkeypatch):
+    """#47: git 外の素 dir も basename slug を cache に書く（bridge を非git でも有効化）。
+
+    旧挙動は resolve_pj_slug が非git で _unattributed を返し bridge が cache 書込を
+    スキップ → hot-path の pj_slug_fast が cache を引けず basename にフォールバックする一方、
+    reader は _unattributed を見て交差ゼロになっていた。resolve_pj_slug が basename を返す
+    ようになったことで、bridge も非git PJ の cwd→basename を cache し writer/reader が揃う。
+    """
     plain = tmp_path / "plain-dir"
     plain.mkdir()
     data_dir = tmp_path / "data"
@@ -72,7 +78,9 @@ def test_persist_skips_unattributed_non_git_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(plain))
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
     restore_state._persist_pj_slug_cache()
-    assert not (data_dir / pj_slug.PJ_SLUG_CACHE_FILENAME).exists()
+    cache_path = data_dir / pj_slug.PJ_SLUG_CACHE_FILENAME
+    assert cache_path.exists()
+    assert pj_slug._lookup_pj_slug_cache(str(plain), data_dir) == "plain-dir"
 
 
 def test_persist_called_from_handle_session_start(tmp_path, monkeypatch):

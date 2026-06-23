@@ -103,17 +103,32 @@ def test_resolve_unattributed_when_nothing_resolves(monkeypatch):
     assert pj_slug.resolve_pj_slug("") == pj_slug.UNATTRIBUTED_SLUG
 
 
-def test_resolve_plain_nongit_dir_returns_unattributed(monkeypatch):
-    """git 不可 かつ worktree マーカー無しの素の dir は _unattributed（旧挙動温存）。
+def test_resolve_plain_nongit_dir_returns_basename(monkeypatch):
+    """git 不可 かつ worktree マーカー無しの素の dir は basename を返す（#47）。
 
-    worktree マーカーが無ければ basename フォールバックしない — calibration 除外の
-    セマンティクスを壊さないための限定フォールバック契約。
+    旧挙動は _unattributed 固定で、hot-path writer（pj_slug_fast=basename）と非対称だった。
+    その結果、非git PJ の hook 書込レコード（pj_slug=basename）を reader（resolve_pj_slug）が
+    _unattributed 名前空間で探して交差ゼロになる silent bug を生んでいた。writer/reader を
+    同一規約（basename）に揃えてこれを根治する。basename も取れない真の空 path のみ
+    _unattributed（calibration 除外センチネルとして残す）。
     """
     def _fail(*a, **k):
         raise FileNotFoundError("no git")
 
     monkeypatch.setattr(pj_slug.subprocess, "run", _fail)
-    assert pj_slug.resolve_pj_slug("/Users/x/some/plain-dir") == pj_slug.UNATTRIBUTED_SLUG
+    assert pj_slug.resolve_pj_slug("/Users/x/some/plain-dir") == "plain-dir"
+
+
+def test_nongit_writer_reader_slug_symmetry(monkeypatch):
+    """#47 核心: 同一非git path で writer(pj_slug_fast) と reader(resolve_pj_slug) が一致する。"""
+    def _fail(*a, **k):
+        raise FileNotFoundError("no git")
+
+    monkeypatch.setattr(pj_slug.subprocess, "run", _fail)
+    path = "/Users/x/some/non-git-project"
+    writer = pj_slug.pj_slug_fast(path)
+    reader = pj_slug.resolve_pj_slug(path)
+    assert writer == reader == "non-git-project"
 
 
 # ── read/write 整合の往復（往復テスト）─────────────────────────────────────

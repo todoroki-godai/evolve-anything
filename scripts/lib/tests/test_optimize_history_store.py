@@ -54,10 +54,11 @@ class TestResolveSlug:
         # 素直な show-toplevel basename は "feature-x" になるが、store は本体名を返すべき
         assert store.resolve_slug(cwd=wt) == "main-repo"
 
-    def test_outside_git_returns_unattributed(self, tmp_path):
+    def test_outside_git_returns_basename(self, tmp_path):
+        # #47: 非git dir は basename（writer pj_slug_fast と一致・resolve_pj_slug 単一ソース）。
         plain = tmp_path / "not-a-repo"
         plain.mkdir()
-        assert store.resolve_slug(cwd=plain) == store.UNATTRIBUTED_SLUG
+        assert store.resolve_slug(cwd=plain) == "not-a-repo"
 
 
 class TestHistoryPath:
