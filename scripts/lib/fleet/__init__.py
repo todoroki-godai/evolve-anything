@@ -90,6 +90,7 @@ from .formatters import (  # noqa: E402, F401
     _format_cell_issues,
     _format_cell_subagents,
     format_status_table,
+    format_status_json,
 )
 
 

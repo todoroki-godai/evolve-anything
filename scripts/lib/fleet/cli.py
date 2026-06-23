@@ -17,7 +17,7 @@ from . import (
 )
 from .cli_tokens import _inject_token_metrics, _run_tokens
 from .collectors import collect_fleet_status, detect_equal_issue_counts, write_fleet_run
-from .formatters import format_status_table
+from .formatters import format_status_json, format_status_table
 from .project_loader import enumerate_projects
 from .recall import format_hits, recall, reinforce_recall_hits
 
@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--max-workers", type=int, default=_DEFAULT_MAX_WORKERS, help="並列数 (default: 2)")
         p.add_argument("--no-write", action="store_true", help="fleet-runs/*.jsonl への追記をスキップ")
         p.add_argument("--all", dest="show_all", action="store_true", help="STALE/NOT_ENABLED PJ も含めて全表示（デフォルトは STALE 除外）")
+        p.add_argument("--json", action="store_true", help="JSON 出力（複数 PJ の env_score / 導入状況を構造化・#53）")
 
     discover_p = sub.add_parser(
         "discover",
@@ -285,6 +286,12 @@ def _run_status(args) -> int:
         rows = [r for r in rows if r.status != STATUS_STALE]
     else:
         stale_count = 0
+    if getattr(args, "json", False):
+        # JSON モード: stdout を JSON のみに保つため alarm/hint/agent 行は出さない（#53）。
+        print(format_status_json(rows), end="")
+        if not args.no_write:
+            write_fleet_run(rows)
+        return 0
     print(format_status_table(rows), end="")
     # 複数 PJ の ISSUES total が完全一致 = 検出パイプラインの測定バグの強シグナル（#419）
     for alarm in detect_equal_issue_counts(rows):
