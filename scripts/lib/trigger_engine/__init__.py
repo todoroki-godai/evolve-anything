@@ -12,8 +12,14 @@ import importlib.util
 import os
 from pathlib import Path
 
+from rl_common import resolve_data_dir
+
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
+# #45(b)/#364: marker-aware 解決。hook 文脈（CLAUDE_PLUGIN_DATA=plugins/data 配下）でも
+# canonical に一元化 marker があれば canonical に redirect し、co-reader（instructions_loaded
+# / restore_state / batch reader はいずれも canonical）と writer の dir を一致させる。
+# 単一 dir redirect（cross-dir union ではない）＝ADR-049 の hot-path 原則に従う。
+DATA_DIR = resolve_data_dir(_PLUGIN_DATA_ENV)
 EVOLVE_STATE_FILE = DATA_DIR / "evolve-state.json"
 PENDING_TRIGGER_FILE = DATA_DIR / "pending-trigger.json"
 SNOOZE_FILE = DATA_DIR / "trigger-snooze.json"
