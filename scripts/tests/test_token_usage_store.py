@@ -55,6 +55,31 @@ def test_append_batch_basic(store):
     assert [r[0] for r in rows] == ["u1", "u2"]
 
 
+def test_query_does_not_require_write_access(store):
+    """#65: read 経路（query・con 未指定）は write 権限を要求してはならない（read_only 接続）。
+
+    旧挙動は ``query`` が ``_connect()``（read-write + CREATE TABLE DDL）で自己接続し、実 DB の
+    初回 read-write open が write transaction commit でファイル byte を書き換えた（dry-run byte
+    契約 #461 違反・dogfood Layer 1a 赤）。read_only 自己接続に揃えて根治する。
+
+    判別方法: db を chmod 444 にすると read-write 自己接続は EACCES で失敗、read_only 自己接続は
+    成功して読める。SHA 比較はクリーンな小 DB が既に canonical 形のため退行を捕捉できない（実 DB の
+    初回 fold 状態でしか SHA が動かない）ので、write 権限要求の有無で判別する。
+    """
+    try:
+        import duckdb  # noqa
+    except ImportError:
+        pytest.skip("duckdb not installed")
+    store.append_batch([_rec("u1"), _rec("u2", ts="2026-05-02T12:00:00Z")])
+    assert store.USAGE_DB.exists()
+    store.USAGE_DB.chmod(0o444)
+    try:
+        rows = store.query("SELECT COUNT(*) FROM token_usage")
+        assert rows[0][0] == 2, "read_only でない（444 db を読めず＝write 権限要求）"
+    finally:
+        store.USAGE_DB.chmod(0o644)
+
+
 def test_append_batch_idempotent(store):
     """同じ uuid を 2 回 append しても行数不変 (CRITICAL)。"""
     try:

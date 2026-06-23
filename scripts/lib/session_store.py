@@ -67,6 +67,18 @@ def _connect():
     return con
 
 
+def _connect_ro():
+    """**読み取り専用**接続（read_only=True）を返す（#65）。
+
+    schema 作成（CREATE TABLE）・mkdir を行わず、ファイルを書き換えない。実 DB の初回
+    read-write open は write transaction commit でファイル byte を書き換えるため
+    （dry-run byte 契約 #461 違反・dogfood Layer 1a 赤）、read 経路はこの read_only 接続を使う。
+    呼び出し側が ``SESSIONS_DB.exists()`` で事前ガードする前提。``read_session_records`` の
+    read_only パターン（416）と同一の流儀。
+    """
+    return _duckdb.connect(str(SESSIONS_DB), read_only=True)
+
+
 def append(record: dict) -> None:
     """セッションレコードを追記する。
 
@@ -295,7 +307,7 @@ def count_unique_since(timestamp: str) -> int:
     if HAS_DUCKDB and SESSIONS_DB.exists():
         con = None
         try:
-            con = _connect()
+            con = _connect_ro()  # #65: read は read_only 接続（byte を書き換えない）
             rows = con.execute(
                 "SELECT DISTINCT session_id, timestamp FROM sessions "
                 "WHERE timestamp > ? AND session_id IS NOT NULL AND session_id != ''",
@@ -340,7 +352,7 @@ def query(since: str | None = None, limit: int | None = None) -> list[dict]:
     if HAS_DUCKDB and SESSIONS_DB.exists():
         con = None
         try:
-            con = _connect()
+            con = _connect_ro()  # #65: read は read_only 接続（byte を書き換えない）
             sql = "SELECT raw_json FROM sessions"
             params: list[Any] = []
             if since:
