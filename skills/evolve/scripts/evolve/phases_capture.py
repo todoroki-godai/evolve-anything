@@ -158,6 +158,24 @@ def run_capture_phases(result: Dict[str, Any], ctx) -> None:
         except Exception as e:
             result["utterance_ingest"] = {"error": str(e)}
 
+    # ── subagent 内部軌跡の増分 ingest（#38）────────────────────────
+    # subagents.jsonl の agent_transcript_path が指す transcript をパースし、subagent が
+    # 内部で何回 error してからやり直したかを subagent_traces.jsonl に記録（hot path ゼロ・
+    # ゼロ LLM・named transcript のみ読む＝projects 全 walk しない）。
+    # dry-run 時は ingest しない（実 DATA_DIR / subagent_traces.jsonl を書かない）。
+    if not dry_run:
+        try:
+            from subagent_traces import ingest as _st_ingest
+            _st_res = _st_ingest.ingest_all_projects(progress=False)
+            result["subagent_traces_ingest"] = {
+                "ingested": _st_res.get("ingested", 0),
+                "skipped": _st_res.get("skipped", 0),
+                "capped": _st_res.get("capped", False),
+                "remaining": _st_res.get("remaining", 0),
+            }
+        except Exception as e:
+            result["subagent_traces_ingest"] = {"error": str(e)}
+
     # ── 暗黙修正シグナルの決定論検出 → weak_signals レーン（#432）──────────
     # 4 チャネル（直後手編集 / permission deny / 言い直し / Esc 中断）をゼロ LLM で検出し、
     # weak_signals.jsonl に provenance 付きで記録（corrections 本流には入れない）。

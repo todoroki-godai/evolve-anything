@@ -172,6 +172,32 @@ def test_reward_ema_not_stale_drift() -> None:
     assert "reward_ema.jsonl" in store_registry.stale_exempt_names()
 
 
+# --- subagent_traces.jsonl の宣言（#38・subagent 内部軌跡）-------------------
+
+def test_subagent_traces_declared_as_active_batch_permanent() -> None:
+    """subagent_traces.jsonl が active / batch-writer / permanent で宣言されている（#38）。
+
+    evolve batch の apply 境界が ingest_all_projects で書く新ストア。宣言なしで書くと
+    store_write が StoreWriteError で reject し、orphan_store も undeclared として surface
+    する（#434 / ADR-049）。
+    """
+    decl = store_registry.declaration_for("subagent_traces.jsonl")
+    assert decl is not None
+    assert decl.status == "active"
+    assert decl.retention == "permanent"
+    assert decl.writer_locus == "batch"
+
+
+def test_subagent_traces_write_not_rejected_by_barrier() -> None:
+    """active 宣言なので store_write の runtime guard が write を弾かない（#38）。"""
+    assert store_registry.is_active_store("subagent_traces.jsonl") is True
+
+
+def test_subagent_traces_not_stale_drift() -> None:
+    """batch-writer 宣言なので hook-writer 突合の stale に誤検知されない（#38）。"""
+    assert "subagent_traces.jsonl" in store_registry.stale_exempt_names()
+
+
 # --- correction_review_seen.jsonl の宣言（#446）------------------------------
 
 def test_correction_review_seen_declared_as_batch_permanent() -> None:

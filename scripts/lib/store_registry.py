@@ -275,6 +275,21 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "reader は latest-per-skill のみ参照・低書込レート（per-evolve 数件）なので permanent。",
     ),
     StoreDeclaration(
+        name="subagent_traces.jsonl",
+        writer="scripts/lib/subagent_traces/ingest.py（evolve batch の apply 境界 "
+        "ingest_all_projects）。hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="audit の per-agent 品質 section（sections_subagent_traces）が "
+        "read_traces で読み、agent_type 別の内部一発成功率を advisory surface。",
+        retention="permanent",
+        note="#38 per-agent 品質帰属。subagents.jsonl の agent_transcript_path が指す "
+        "transcript の tool_use/tool_result/is_error をパースし、subagent が内部で何回 error "
+        "してからやり直したかを記録する。親セッションの error_count しか見ない既存 outcome "
+        "帰属の盲点（内部 error 連発でも最終成功なら一発成功と誤記録）を塞ぐ。agent_id 単位 "
+        "last-append-wins・pj_slug スコープ。writer は batch ingest のみ（hook-writer stale "
+        "突合から writer_locus=batch で除外）。",
+    ),
+    StoreDeclaration(
         name="remediation_surfaced/<slug>.json",
         writer="scripts/lib/remediation/suppression_ledger.reconcile_surfaced"
         "（evolve の remediation phase が個別承認候補確定後に毎 run 1 回呼ぶ）。"
