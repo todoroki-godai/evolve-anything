@@ -71,6 +71,34 @@ def test_横断性_複数PJがヒットしうる(tmp_path):
     assert len(pjs) == _N_PJ
 
 
+def test_validity_aware_ranking_fresh上位_staleも残る(tmp_path):
+    """query が fresh / stale 両方に一致 → fresh が上位・stale も結果に残る（#74）。
+
+    RaMem(iii): validity で降格はするがハード除外しない（フォールバック保持）。
+    """
+    root = tmp_path / "projects"
+    mem = root / "-Users-x-pj-validity" / "memory"
+    mem.mkdir(parents=True)
+    # 同一 TF（widget が同回数）で fresh は decay 無し、stale は decay 超過
+    (mem / "fresh.md").write_text(
+        "---\nname: fresh-widget\ndescription: d\n---\nwidget widget widget config.\n",
+        encoding="utf-8",
+    )
+    (mem / "stale.md").write_text(
+        "---\nname: stale-widget\ndescription: d\n"
+        "valid_from: '2020-01-01T00:00:00+00:00'\ndecay_days: 1\n---\n"
+        "widget widget widget config.\n",
+        encoding="utf-8",
+    )
+    hits = recall("widget", projects_root=root)
+    names = [h.file_path.name for h in hits]
+    # stale もハード除外されず結果に残る（フォールバック保持）
+    assert "fresh.md" in names
+    assert "stale.md" in names
+    # fresh が stale より上位
+    assert names.index("fresh.md") < names.index("stale.md")
+
+
 @pytest.mark.skipif(
     not list(Path.home().glob(".claude/projects/*/memory/*.md")),
     reason="実 ~/.claude/projects の memory コーパスが無い環境",

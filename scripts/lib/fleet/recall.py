@@ -28,6 +28,8 @@ _SNIPPET_WIDTH = 160
 _DESC_BOOST = 2.0
 _NAME_BOOST = 3.0
 _INDEX_PENALTY = 0.5  # MEMORY.md index 行は fact 本体より下位に（dedup 意図）
+_STALE_PENALTY = 0.4        # decay 超過 memory は降格（ただし結果には残す, #74）
+_SUPERSEDED_PENALTY = 0.25  # 明示的に置換された memory はより強く降格（#74）
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 _LINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")  # [[name]] 相互リンク（#11）
 _LINK_EXPAND_TOPN = 5  # 1-hop 展開する直接 hit の上限（爆発防止・深さ 1 固定）
@@ -44,6 +46,8 @@ class Fact:
     parse_ok: bool          # frontmatter から name/description を取れたか
     malformed_frontmatter: bool = False  # delimiter はあるが YAML 不正/未閉じ
     links: list[str] = field(default_factory=list)  # 本文中の [[name]] リンク（順序保持・一意化, #11）
+    is_stale: bool = False        # decay_days 超過（grounding validity, #74）
+    is_superseded: bool = False   # superseded_at が過去（明示的に置換済み, #74）
 
 
 @dataclass
@@ -116,7 +120,26 @@ def parse_fact_file(path: Path) -> Fact:
 
     name = str(data.get("name") or path.stem)
     description = str(data.get("description") or "")
-    return Fact(path, name, description, body, parse_ok=True, links=_extract_links(body))
+    is_stale, is_superseded = _temporal_validity(path)
+    return Fact(
+        path, name, description, body, parse_ok=True,
+        links=_extract_links(body), is_stale=is_stale, is_superseded=is_superseded,
+    )
+
+
+def _temporal_validity(path: Path) -> tuple[bool, bool]:
+    """grounding metadata から (is_stale, is_superseded) を計算する（#74）。
+
+    memory_temporal の既存 API を再利用（再実装禁止）。frontmatter の temporal フィールド
+    が無ければ TEMPORAL_DEFAULTS で両方 False。memory_temporal が import できない環境では
+    安全側に倒して両方 False（recall を壊さない）。CLI スケールなので file 再読込は許容。
+    """
+    try:
+        from memory_temporal import is_stale, is_superseded, parse_memory_temporal
+    except ImportError:
+        return False, False
+    temporal = parse_memory_temporal(path)
+    return is_stale(temporal), is_superseded(temporal)
 
 
 def _make_snippet(body: str, query_terms: list[str]) -> str:
@@ -149,6 +172,13 @@ def _score(fact: Fact, query_terms: list[str]) -> float:
     score = tf + _DESC_BOOST * desc_hit + _NAME_BOOST * name_hit
     if fact.file_path.name == _INDEX_FILENAME:
         score *= _INDEX_PENALTY
+    # grounding validity 降格（#74）。ハード除外せず順位だけ下げる＝RaMem(iii) の
+    # フォールバック保持。superseded を stale に優先し penalty を stack しない。
+    if score > 0:
+        if fact.is_superseded:
+            score *= _SUPERSEDED_PENALTY
+        elif fact.is_stale:
+            score *= _STALE_PENALTY
     return score
 
 

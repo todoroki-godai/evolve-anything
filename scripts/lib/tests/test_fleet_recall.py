@@ -19,7 +19,11 @@ sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 from fleet import main  # noqa: E402
 from fleet.project_loader import enumerate_memory_dirs  # noqa: E402
 from fleet.recall import (  # noqa: E402
+    _STALE_PENALTY,
+    _SUPERSEDED_PENALTY,
+    Fact,
     RecallHit,
+    _score,
     format_hits,
     parse_fact_file,
     recall,
@@ -310,6 +314,129 @@ class TestRecallLinkExpansion:
         )
         hits = recall("widget", projects_root=root)
         assert [lk.file_path.name for lk in hits[0].linked] == ["helper_file.md"]
+
+
+class TestParseFactTemporalValidity:
+    """parse_fact_file が temporal frontmatter から is_stale / is_superseded を埋める（#74）。
+
+    grounding metadata（valid_from / superseded_at / decay_days）は memory_temporal に
+    既存だが recall._score が消費していなかった配線漏れを塞ぐ。parse_ok のときのみ計算し、
+    frontmatter 無し（MEMORY.md index 等）は後方互換で両方 False のまま。
+    """
+
+    def test_superseded_at_過去はis_superseded_True(self, tmp_path):
+        # 実 writer（write_temporal_metadata）は isoformat 文字列を quoted で書く。
+        # YAML は unquoted ISO を datetime に自動変換し is_superseded が解釈不能になるため、
+        # 実データ同様に quote する。
+        f = _write(
+            tmp_path / "s.md",
+            "---\nname: old-fact\ndescription: d\nsuperseded_at: '2020-01-01T00:00:00+00:00'\n---\n"
+            "replaced body\n",
+        )
+        fact = parse_fact_file(f)
+        assert fact.is_superseded is True
+
+    def test_decay超過はis_stale_True(self, tmp_path):
+        # valid_from=2020 + decay_days=1 → now() 基準で確実に超過
+        f = _write(
+            tmp_path / "st.md",
+            "---\nname: aged-fact\ndescription: d\nvalid_from: '2020-01-01T00:00:00+00:00'\ndecay_days: 1\n---\n"
+            "aged body\n",
+        )
+        fact = parse_fact_file(f)
+        assert fact.is_stale is True
+        assert fact.is_superseded is False
+
+    def test_新鮮なfactは両方False(self, tmp_path):
+        # decay_days 無し → 期限なし → is_stale False
+        f = _write(
+            tmp_path / "fresh.md",
+            "---\nname: fresh-fact\ndescription: d\nvalid_from: '2020-01-01T00:00:00+00:00'\n---\n"
+            "fresh body\n",
+        )
+        fact = parse_fact_file(f)
+        assert fact.is_stale is False
+        assert fact.is_superseded is False
+
+    def test_temporal_frontmatter無しは両方False_後方互換(self, tmp_path):
+        f = _write(
+            tmp_path / "plain.md",
+            "---\nname: plain\ndescription: d\n---\nplain body\n",
+        )
+        fact = parse_fact_file(f)
+        assert fact.is_stale is False
+        assert fact.is_superseded is False
+
+    def test_frontmatter無しファイルは両方False(self, tmp_path):
+        # parse_ok=False（frontmatter 無し）は temporal 計算せず False のまま
+        f = _write(tmp_path / "index.md", "# Index\n- entry\n")
+        fact = parse_fact_file(f)
+        assert fact.parse_ok is False
+        assert fact.is_stale is False
+        assert fact.is_superseded is False
+
+
+class TestScoreTemporalPenalty:
+    """_score が validity を消費し stale/superseded を降格する（ハード除外しない・#74）。
+
+    RaMem(iii): validity で降格はするが結果には残す（フォールバック保持）。
+    """
+
+    def _fact(self, *, is_stale=False, is_superseded=False):
+        return Fact(
+            file_path=Path("/x/memory/f.md"),
+            name="f",
+            description="",
+            body="duckdb duckdb duckdb",
+            parse_ok=True,
+            is_stale=is_stale,
+            is_superseded=is_superseded,
+        )
+
+    def test_fresh_factはペナルティ無し(self):
+        terms = ["duckdb"]
+        baseline = _score(self._fact(), terms)
+        assert baseline == 3.0  # tf=3, boost なし
+
+    def test_stale_factは降格するが正のまま(self):
+        terms = ["duckdb"]
+        baseline = _score(self._fact(), terms)
+        stale = _score(self._fact(is_stale=True), terms)
+        assert stale == baseline * _STALE_PENALTY
+        assert stale > 0
+
+    def test_superseded_factは強く降格するが正のまま(self):
+        terms = ["duckdb"]
+        baseline = _score(self._fact(), terms)
+        sup = _score(self._fact(is_superseded=True), terms)
+        assert sup == baseline * _SUPERSEDED_PENALTY
+        assert sup > 0
+
+    def test_順位ロック_fresh_gt_stale_gt_0(self):
+        terms = ["duckdb"]
+        fresh = _score(self._fact(), terms)
+        stale = _score(self._fact(is_stale=True), terms)
+        assert fresh > stale > 0
+
+    def test_superseded優先_stackしない(self):
+        # 両方 True → superseded penalty のみ適用（stack しない）
+        terms = ["duckdb"]
+        baseline = _score(self._fact(), terms)
+        both = _score(self._fact(is_stale=True, is_superseded=True), terms)
+        assert both == baseline * _SUPERSEDED_PENALTY
+
+    def test_スコア0は降格適用しない(self):
+        # query 不一致で score==0 のときは penalty を掛けない（0 のまま）
+        terms = ["nomatch"]
+        fact = Fact(
+            file_path=Path("/x/memory/f.md"),
+            name="f",
+            description="",
+            body="duckdb",
+            parse_ok=True,
+            is_stale=True,
+        )
+        assert _score(fact, terms) == 0.0
 
 
 class TestFormatHits:
