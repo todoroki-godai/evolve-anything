@@ -9,7 +9,7 @@ STATUS_STALE = 'STALE'
 
 # fleet public function / class signatures
 AuditResult(status: 'str', env_score: 'float | None' = None, phase: 'str | None' = None, growth_level: 'int | None' = None, latest_audit: 'datetime | None' = None, message: 'str' = '', issues_summary: 'IssuesSummary | None' = None) -> None
-Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False, links: 'list[str]' = <factory>) -> None
+Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False, links: 'list[str]' = <factory>, is_stale: 'bool' = False, is_superseded: 'bool' = False) -> None
 FleetRow(pj_name: 'str', status: 'str', env_score: 'float | None' = None, growth_level: 'int | None' = None, phase: 'str | None' = None, latest_audit: 'datetime | None' = None, audit_status: 'str' = 'OK', message: 'str' = '', issues_summary: 'IssuesSummary | None' = None, subagents_30d: 'int' = 0, tokens_30d: 'int | None' = None, cache_hit_pct: 'float | None' = None, cache_reuse_factor: 'float | None' = None) -> None
 IssuesSummary(line_violations: 'int' = 0, hardcoded_values: 'int' = 0, potential_duplicates: 'int' = 0, corrections_unprocessed: 'int' = 0, skill_quality_degraded_count: 'int' = 0) -> None
 MemoryDir(memory_dir: Path, pj_display: str)
