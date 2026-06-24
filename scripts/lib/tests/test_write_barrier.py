@@ -201,6 +201,8 @@ _EXPECTED_ACTIVE_STORES = [
     "usage-registry.jsonl",
     "usage.jsonl",
     "utterances.db",
+    "verbosity_candidates.jsonl",
+    "verbosity_verdicts.jsonl",
     "weak_signals.jsonl",
     "workflows.jsonl",
 ]

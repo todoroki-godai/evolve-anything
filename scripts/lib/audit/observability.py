@@ -39,6 +39,7 @@ from .sections_skill_vuln import build_skill_vuln_section
 from .sections_subagent_traces import build_subagent_traces_section
 from .sections_testpaths import build_testpaths_coverage_section
 from .sections_triage import build_skill_triage_section
+from .sections_verbosity import build_verbosity_section
 from .sections_weak_signals import build_weak_signals_section
 
 # (key, builder) — observability の単一ソース。
@@ -59,6 +60,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("outcome_metrics", build_outcome_metrics_section),
     ("fanout_cost", build_fanout_cost_section),
     ("subagent_traces", build_subagent_traces_section),
+    ("verbosity", build_verbosity_section),
     ("memory_capability", build_memory_capability_section),
     ("multiview_eval", build_multiview_eval_section),
     ("paired_trajectory", build_paired_trajectory_section),

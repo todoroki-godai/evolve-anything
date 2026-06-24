@@ -136,6 +136,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_summary.py\"",
             "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py\"",
+            "timeout": 5000
           }
         ]
       }
