@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import outcome_metrics as _om
+from .predictive_validity import check_predictive_validity
 
 # テストは ``monkeypatch.setattr(outcome_promotion_readiness, "DATA_DIR", tmp_path)`` で
 # 直接この module 属性を差し替える（文字列ターゲット patch を避ける既知 pitfall 準拠）。
@@ -455,14 +456,18 @@ def compute_promotion_readiness(
     days: int = 30, *, window_days: int = DEFAULT_WINDOW_DAYS,
     data_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """ADR-046 の3条件を測定し「重み昇格を提案」可否を返す（読み取りのみ・書込なし）。
+    """ADR-046 の4条件を測定し「重み昇格を提案」可否を返す（読み取りのみ・書込なし）。
+
+    条件4（予測妥当性・#42）は predictive_validity モジュールへ委譲する
+    （file-size-budget: 本ファイルは肥大化済みゆえロジック本体は分割）。
 
     Returns:
         {
-          "promote": bool,                     # 3条件すべて pass か
+          "promote": bool,                     # 4条件すべて pass か
           "variance": {...},                   # 条件1（代表軸 = correction_recurrence）
           "denominator": {...},                # 条件2（correction floor）
           "direction": {...},                  # 条件3
+          "predictive_validity": {...},        # 条件4（in/out-of-sample 順位相関 #42）
           "axes": {axis: {pj: {value, denominator}}},  # per-PJ 生データ（evidence）
           "window_days": int,
         }
@@ -492,13 +497,22 @@ def compute_promotion_readiness(
     direction = check_direction(
         days=max(days, window_days * 4), window_days=window_days, data_dir=data_dir
     )
+    # 条件4（予測妥当性 #42）: in/out-of-sample で skill 順位が一致するか（順位相関）。
+    # 集計平均ベースの順位が分布外（新しいセッション）へ転移しなければ昇格しない保守設計。
+    # insufficient_data は pass=False ゆえ promote をブロックする（予測妥当性を検証できない
+    # 環境では昇格させない = 正しい挙動）。
+    predictive_validity = check_predictive_validity(days, data_dir=data_dir)
 
-    promote = bool(variance["pass"] and denominator["pass"] and direction["pass"])
+    promote = bool(
+        variance["pass"] and denominator["pass"]
+        and direction["pass"] and predictive_validity["pass"]
+    )
     return {
         "promote": promote,
         "variance": variance,
         "denominator": denominator,
         "direction": direction,
+        "predictive_validity": predictive_validity,
         "axes": {
             "correction_recurrence": cr,
             "first_try_success": fs,

@@ -84,6 +84,34 @@ def _direction_line(dr: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _predictive_validity_line(pv: Dict[str, Any]) -> List[str]:
+    """条件4 予測妥当性（in/out-of-sample 順位相関 #42）を ✓/✗ + 内容で1〜2行に出す。
+
+    閾値・件数下限は ``predictive_validity`` モジュールの定数を単一ソースとして引く
+    （ここでハードコード重複を作らない）。データ不足は「データ不足」と明示し、相関値を
+    捏造しない（沈黙 != 評価不能 の慣例）。
+    """
+    from . import predictive_validity as pvm
+
+    if pv.get("pass"):
+        return [
+            f"  {_mark(True)} 条件4 予測妥当性（順位相関）: "
+            f"in/out-of-sample で skill 順位が一致"
+            f"（rho={pv.get('rho')}, 対象 {pv.get('n_skills', 0)} skill）"
+        ]
+    if pv.get("reason") == "insufficient_data":
+        return [
+            f"  {_mark(False)} 条件4 予測妥当性（順位相関）: "
+            f"データ不足（両 sample に {pvm.MIN_RANKED_SKILLS} skill 以上必要・"
+            f"現在 {pv.get('n_skills', 0)}）"
+        ]
+    return [
+        f"  {_mark(False)} 条件4 予測妥当性（順位相関）: "
+        f"順位が分布外で崩れる"
+        f"（rho={pv.get('rho')} < {pvm.PREDICTIVE_VALIDITY_RHO_FLOOR}・誤昇格リスク）"
+    ]
+
+
 def _compressed_gap_line(result: Dict[str, Any]) -> str:
     """#49 + #51 調停: 全✗ ケースを 1 行に圧縮しつつ per-条件の具体ギャップ数値 +
     必要アクションを載せる（「時期尚早」で終わらせない）。
@@ -93,20 +121,30 @@ def _compressed_gap_line(result: Dict[str, Any]) -> str:
     """
     from . import outcome_promotion_readiness as opr
 
+    from . import predictive_validity as pvm
+
     min_pj = opr._MIN_PJ
     variance = result["variance"]
     denominator = result["denominator"]
     direction = result["direction"]
+    predictive = result.get("predictive_validity", {})
 
     # 条件1: 分散を判定できる PJ 数 / 条件2: 分母 floor を満たす PJ 数 / 条件3: apply 件数。
     var_now = variance.get("pj_count", 0)
     denom_now = len(denominator.get("meeting", []))
     apply_now = direction.get("anchors", 0)
+    # 条件4: 予測妥当性。データ不足なら ranked skill 数、低rho なら rho を1語で添える。
+    if predictive.get("reason") == "insufficient_data":
+        pv_word = f"予測妥当性 skill {predictive.get('n_skills', 0)}/{pvm.MIN_RANKED_SKILLS}"
+    elif predictive.get("pass"):
+        pv_word = f"予測妥当性 rho={predictive.get('rho')}✓"
+    else:
+        pv_word = f"予測妥当性 rho={predictive.get('rho')}<{pvm.PREDICTIVE_VALIDITY_RHO_FLOOR}"
 
     return (
         f"ℹ Outcome Weight Promotion: まだ条件不足"
         f"（値がばらつくPJ {var_now}/{min_pj}・データが{opr.CORRECTION_FLOOR}件以上あるPJ "
-        f"{denom_now}/{min_pj}・適用記録 apply {apply_now}件）— 次回 audit で再測定。"
+        f"{denom_now}/{min_pj}・適用記録 apply {apply_now}件・{pv_word}）— 次回 audit で再測定。"
         f"貯めかた: corrections を{opr.CORRECTION_FLOOR}件/PJ・sessions を{opr.SESSION_FLOOR}件/PJ 以上"
         f"{min_pj} PJ で揃え、`evolve --drain` で適用（accept）を記録すると条件が埋まります"
         f"（スコアの重みには未反映・参考値として並走、ADR-046）。"
@@ -169,7 +207,8 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
     v_pass = bool(result["variance"].get("pass"))
     d_pass = bool(result["denominator"].get("pass"))
     dir_pass = bool(result["direction"].get("pass"))
-    if not (v_pass or d_pass or dir_pass) and not slug_has_issue:
+    pv_pass = bool(result.get("predictive_validity", {}).get("pass"))
+    if not (v_pass or d_pass or dir_pass or pv_pass) and not slug_has_issue:
         return [
             "## Outcome Weight Promotion Readiness (advisory — ADR-046)",
             "",
@@ -182,18 +221,19 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
         "## Outcome Weight Promotion Readiness (advisory — ADR-046)",
         "",
         "outcome 3軸を environment fitness の重みへ繰り入れてよいかの決定論判定。"
-        "3条件すべて ✓ で初めて「重み昇格を提案」する（重みには未反映）。決定論・LLM 非依存。",
+        "4条件すべて ✓ で初めて「重み昇格を提案」する（重みには未反映）。決定論・LLM 非依存。",
         "",
     ]
     body: List[str] = [_variance_line(result["variance"])]
     body.extend(_denominator_line(result["denominator"]))
     body.extend(_direction_line(result["direction"]))
+    body.extend(_predictive_validity_line(result.get("predictive_validity", {})))
     body.extend(slug_lines)
 
     if result.get("promote"):
         body.append("")
         body.append(
-            "  → 3条件すべて充足。outcome 3軸を environment fitness の重みへ繰り入れる"
+            "  → 4条件すべて充足。outcome 3軸を environment fitness の重みへ繰り入れる"
             "**重み昇格を提案**（coherence/constitutional をゲート降格する将来案を検討、ADR-046）"
         )
     else:
@@ -203,7 +243,8 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
         )
         # #52-5: 何が貯まれば昇格判断できるかの蓄積条件を1行添える。
         body.append(
-            "      蓄積条件: 3条件すべて ✓（PJ 2 以上で値がばらつく・各PJに必要件数あり・"
-            "適用前後で期待方向に改善）が揃うと「重み昇格を提案」に切り替わります。"
+            "      蓄積条件: 4条件すべて ✓（PJ 2 以上で値がばらつく・各PJに必要件数あり・"
+            "適用前後で期待方向に改善・in/out-of-sample で skill 順位が一致）が揃うと"
+            "「重み昇格を提案」に切り替わります。"
         )
     return header + body + [""]
