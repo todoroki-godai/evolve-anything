@@ -14,6 +14,14 @@ fitness の重み軸にはしない（outcome_metrics / fanout_cost と同じ ad
 from pathlib import Path
 from typing import List, Optional
 
+# #76 Finding A: floor を満たす agent_type のうち、内部品質が悪い種別に ⚠ を付けて
+# report.py の畳み込み（⚠/🔴 だけ full-text 展開）に乗せ、『✓ 評価済みクリーン』への
+# 埋没を防ぐ。閾値は実 PJ dogfood（v1.111.0）で較正:
+#   出すべき = 0.17(figma general-purpose) / 0.33(sys-bots general-purpose, tool error 8.33)
+#   出さない = senpai 1.0 / senior-engineer 0.90 / Plan 1.0 / Explore 0.50（境界・strict <）
+LOW_FIRST_TRY_SUCCESS = 0.5  # これ未満（strict）の内部一発成功率は ⚠。
+HIGH_AVG_TOOL_ERROR = 5.0    # これ以上の平均 tool error は ⚠（rate 良好でも独立に発火）。
+
 
 def _slug_for(project_dir: Path) -> Optional[str]:
     """project_dir を worktree 安全 slug に正規化する（本体/worktree どちらでも同一 slug）。"""
@@ -73,9 +81,32 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
         )
         return header + body + [""]
 
+    flagged = False
     for s in summaries:
+        rate = s["first_try_success_rate"]
+        ate = s["avg_tool_error"]
+        low_rate = rate < LOW_FIRST_TRY_SUCCESS
+        high_err = ate >= HIGH_AVG_TOOL_ERROR
+        if low_rate or high_err:
+            flagged = True
+            reasons: List[str] = []
+            if low_rate:
+                reasons.append(f"内部リトライ多（一発成功率 < {LOW_FIRST_TRY_SUCCESS:.2f}）")
+            if high_err:
+                reasons.append(f"tool error 過多（平均 ≥ {HIGH_AVG_TOOL_ERROR:.1f}）")
+            body.append(
+                f"  ・⚠ {s['agent_type']}: 内部一発成功率 {rate:.2f}"
+                f"（{s['n']} 件）・平均 tool error {ate:.2f} — {' / '.join(reasons)}"
+            )
+        else:
+            body.append(
+                f"  ・{s['agent_type']}: 内部一発成功率 {rate:.2f}"
+                f"（{s['n']} 件）— 高いほど内部リトライ少。平均 tool error {ate:.2f}"
+            )
+    if flagged:
+        body.append("")
         body.append(
-            f"  ・{s['agent_type']}: 内部一発成功率 {s['first_try_success_rate']:.2f}"
-            f"（{s['n']} 件）— 高いほど内部リトライ少。平均 tool error {s['avg_tool_error']:.2f}"
+            "  → ⚠ の agent 種別は親セッションでは『一発成功』に見えても内部で失敗を"
+            "繰り返しています（#38）。当該 agent 定義のツール手順・前提・権限を見直してください。"
         )
     return header + body + [""]

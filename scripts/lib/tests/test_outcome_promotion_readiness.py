@@ -705,6 +705,32 @@ class TestBuildSection:
         assert "条件不足" not in combined  # 圧縮版ではない
         assert "✓" in combined  # 条件2 の ✓
 
+    def test_partial_readiness_classifies_as_watch_not_clean(self, tmp_path, monkeypatch):
+        """部分達成（✗ あり・promote=False）の全展開は『観察中』に分類され、
+        『✓ 評価済みクリーン』に誤って畳まれない（#76 Finding C）。
+
+        report.py の分類は ⚠/🔴=critical / ℹ・データ不足=watch / それ以外=clean。
+        promote=False の全展開に ℹ マーカーが無いと、✗（未達条件）を含むのに
+        『該当なし / drift なし』のクリーン群へ畳まれ『問題なし』と誤読される。
+        """
+        from audit.sections_promotion_readiness import build_promotion_readiness_section
+        from audit.sections_summary import classify_section
+
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        corr = []
+        for pj in ("/p/a", "/p/b"):
+            for i in range(12):
+                corr.append(_correction(pj, f"t{i % 4}", f"{pj}_s{i}", now))
+        _write_jsonl(tmp_path / "corrections.jsonl", corr)
+
+        lines = build_promotion_readiness_section(tmp_path)
+        assert lines is not None
+        combined = "\n".join(lines)
+        assert "✗" in combined  # 未達条件がある
+        assert "ℹ" in combined  # 観察中マーカー
+        assert classify_section(lines) == "watch"  # clean に畳まれない
+
 
 class TestSlugHygieneSurface:
     """#24: detect_worktree_name_slugs を promotion readiness section に surface 配線。

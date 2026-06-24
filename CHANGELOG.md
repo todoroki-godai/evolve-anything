@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(audit): subagent_traces の低品質シグナルが audit サマリで不可視になる分類盲点を是正（closes #76）** — 実PJ dogfood（2026-06-24・figma-to-code / sys-bots）で発見。#38 の最も actionable なシグナル（agent 種別ごとの低 internal first-try-success / 高 avg tool error）が、`build_subagent_traces_section` が rate の良し悪しに関わらず `⚠`/`🔴` を一切出さないため、`report.py` の畳み込み（⚠/🔴 を含むセクションだけ full-text 展開・他は1行に畳む）で **必ず「✓ 評価済みクリーン」に畳まれ本文がユーザーに届かなかった**（figma `general-purpose` 0.17 / sys-bots `general-purpose` 0.33・tool error 8.33 がサマリに出ず、#38 が暴くべき「親は最終成功しか見ず内部スラッシュを見逃す」盲点が分類段で殺されていた）。**Finding A**: floor（`DEFAULT_MIN_TRACES`=3）以上の agent 種別で `first_try_success_rate < LOW_FIRST_TRY_SUCCESS`(=0.5・strict <) または `avg_tool_error >= HIGH_AVG_TOOL_ERROR`(=5.0) のとき `⚠` 行 + 見直し誘導行を出し、`report.py` の展開条件を満たす。閾値は実 PJ dogfood で較正（出すべき=0.17/0.33、出さない=senpai 1.0/senior-engineer 0.90/Plan 1.0、境界 Explore 0.50 は strict < で非発火）。avg_tool_error は rate 良好でも独立発火（成功多数の中に内部大量リトライ agent が混じるケースを拾う）。**Finding C（付随）**: `outcome_promotion_readiness` の全展開（promote=False・未達条件 ✗ あり）に分類マーカーが無く「✓ 評価済みクリーン（該当なし / drift なし）」へ紛れ「問題なし」と誤読される問題を、当該 promote=False 行に `ℹ` を付与して『観察中』へ分類されるよう是正。TDD 5件（低rate ⚠ / 高tool error 独立 ⚠ / healthy clean / 境界0.50 非発火 / partial readiness watch 分類）。決定論・LLM 非依存。
+
 ## [1.111.0] - 2026-06-24
 
 ### Added
