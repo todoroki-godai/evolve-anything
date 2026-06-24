@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(audit): 予測妥当性（in/out-of-sample 順位相関）を重み昇格レディネスの第4条件に追加（closes #42）** — `outcome_promotion_readiness` の3条件（分散 / 件数下限 / 方向妥当性）に**第4条件「予測妥当性（順位相関）」**を追加。新規 `predictive_validity.py` が `skill_activations.jsonl` × sessions（union read）の per-skill 一発成功率を `ts` 中央値で in/out-of-sample（古い半分=過去 / 新しい半分=未知）に分割し、両半分に共通出現する skill（≥`MIN_RANKED_SKILLS`=5）を first_try_success で順位付け → **純 Python Spearman 順位相関 rho**（タイは平均順位・ゼロ分散は捏造せず 0.0）を算出。`rho ≥ PREDICTIVE_VALIDITY_RHO_FLOOR`（0.5）で pass。skill 名は namespace prefix を bare 化して join（#577 流儀）。promote ゲートに AND 合流し、`insufficient_data` は「データ不足」を明示して捏造せず**保守的に昇格をブロック**（予測妥当性を検証できない環境では昇格させない）。section に条件4 行を full-expand / compressed 両経路へ surface。実 DATA_DIR dry-run で **rho=-0.0513 < 0.5**（in/out で skill 順位が分布外へ転移）を正しく検出し昇格をブロック＝誤昇格抑制が機能。TDD・LLM 非依存・全スイート 5900 passed。出典 arXiv 2606.19704（Beyond Static Leaderboards）。
+
 ## [1.110.1] - 2026-06-23
 
 ### Fixed

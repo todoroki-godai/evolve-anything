@@ -55,7 +55,8 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | confirm 配線 | `evolve-reflect --promote-weak` が promote 成功後に対応 idiom を confirmed 化する正準経路。signal→idiom は provenance 物理キー（pj_slug, source_path, line_no）で突合 | #463 |
 | 過汎用 idiom FP guard（idiom_eligible） | confirmed→idiom_autopromote の FP 製造を遮断する 3 ゲート（最小長 floor 8 / 日常語 stopword / 文脈固有トークン）を 1 関数に集約。「いやいや」「気がする」等の極短・相槌・日付断片を弾く | #527 |
 | confirmable_idiom | bootstrap/daily の確認 group に emit される「はい確定で confirmed=standing auto-promote rule になる idiom テキスト」。eligible 時のみ非 None（過汎用は None＝今回限りの昇格）。AskUserQuestion の判断材料 | #527-4 |
-| 重み昇格レディネス（promotion readiness） | outcome 3軸を fitness 重みへ繰り入れてよいかの3条件決定論判定（分散 / 件数下限 / 方向妥当性）。全 ✓ で「重み昇格を提案」を advisory surface | #461, ADR-046 |
+| 重み昇格レディネス（promotion readiness） | outcome 3軸を fitness 重みへ繰り入れてよいかの4条件決定論判定（分散 / 件数下限 / 方向妥当性 / 予測妥当性）。全 ✓ で「重み昇格を提案」を advisory surface | #461, ADR-046, #42 |
+| 予測妥当性（predictive validity・順位相関） | 集計平均ベースの skill 順位が分布外（未知セッション=配備時）でも当たるかを in/out-of-sample 分割の Spearman 順位相関で測る、重み昇格レディネスの第4条件。低相関＝過去への過学習＝誤昇格リスクとみなし保守的にブロック。データ不足は「データ不足」と明示し捏造しない | #42, arXiv 2606.19704 |
 | cross_pj_confirmed | 他 PJ で confirm 済みの同テキスト idiom を持つ確認 group に付くラベル（slug 一覧）。先頭提示の判断材料であり自動承認はしない | #462 |
 | union read | DuckDB ストア（read_only）+ 未 ingest live jsonl を dedup 合算して読む読み取り経路。ingest 後の rotate で jsonl が空でも分母が取れる（sessions: `session_store.read_session_records`、dedup キーは ingest の UNIQUE と同一） | #415 |
 | plugin_self | スキル origin の一種 — `.claude-plugin/plugin.json` を持つリポジトリ自身の repo 直下 `skills/` のスキル。evolve は custom 同等に診断するが auto-apply は protected（人間承認必須）。インストール済み他プラグイン（plugin）とは別物 | #185 |
