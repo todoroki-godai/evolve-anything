@@ -262,6 +262,19 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "TTL45日経過で 1 回だけ再 surface（環境変化での再評価機会）。",
     ),
     StoreDeclaration(
+        name="reward_ema.jsonl",
+        writer="scripts/lib/audit/reward_ema.py（evolve --drain の apply 境界 "
+        "persist_reward_ema_batch）。hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="apply_outcome_ranking が read_reward_ema で prior EMA を読み advisory 列を "
+        "付与（順位は変えない）。",
+        retention="permanent",
+        note="MAA #64（arXiv:2606.20475）: 各スキルの符号付き advantage を evolve サイクル"
+        "（バッチ）跨ぎで EMA 累積し『通時で安定して効くか』を判定する。RODS（#28・単一"
+        "スナップショット reward 分散）と相補。plant-the-seed 型で 3-4 サイクルから意味を持つ。"
+        "reader は latest-per-skill のみ参照・低書込レート（per-evolve 数件）なので permanent。",
+    ),
+    StoreDeclaration(
         name="remediation_surfaced/<slug>.json",
         writer="scripts/lib/remediation/suppression_ledger.reconcile_surfaced"
         "（evolve の remediation phase が個別承認候補確定後に毎 run 1 回呼ぶ）。"

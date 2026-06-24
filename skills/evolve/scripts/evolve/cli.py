@@ -115,6 +115,18 @@ def main() -> None:
         except Exception as e:
             summary["weak_signals_persisted"] = {"error": str(e)}
 
+        # #64 MAA: バッチ跨ぎ符号付き advantage の EMA を apply 境界で永続化する
+        # （weak_signals #484 と同型・非 dry-run・正準 DATA_DIR）。plant-the-seed 型。
+        try:
+            from audit.reward_ema import persist_reward_ema_batch
+
+            _ema_slug = _resolve_pj_slug(args.project_dir)
+            summary["reward_ema_persisted"] = persist_reward_ema_batch(
+                args.project_dir, slug=_ema_slug
+            )
+        except Exception as e:
+            summary["reward_ema_persisted"] = {"error": str(e)}
+
         print(json.dumps(summary, ensure_ascii=False))
         return
 

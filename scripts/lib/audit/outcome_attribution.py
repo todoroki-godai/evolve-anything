@@ -234,6 +234,16 @@ def outcome_priority(attr: Dict[str, Any]) -> float:
     return round(sum(components) / len(components), 4)
 
 
+def _ema_stability_label(rec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """reward_ema.ema_stability_label の遅延ラッパ（#64・循環 import 回避）。
+
+    reward_ema は本モジュール（attribute_outcomes）を import するため、module-top で
+    逆方向 import すると循環する。呼び出し時に遅延 import する。
+    """
+    from .reward_ema import ema_stability_label
+    return ema_stability_label(rec)
+
+
 def _negative_transfer_skills(
     negative_transfer: Optional[List[Dict[str, Any]]],
 ) -> Dict[str, Dict[str, Any]]:
@@ -258,6 +268,7 @@ def apply_outcome_ranking(
     sessions: List[Dict[str, Any]],
     corrections: Optional[List[Dict[str, Any]]] = None,
     negative_transfer: Optional[List[Dict[str, Any]]] = None,
+    reward_ema: Optional[Dict[str, dict]] = None,
 ) -> Dict[str, Any]:
     """triage 候補の各 action リストを outcome priority 降順で再配置する（純粋関数）。
 
@@ -272,6 +283,12 @@ def apply_outcome_ranking(
 
     #28 RODS: 各候補に reward 分散判定（``outcome.reward_variance``）を添える。高分散 =
     能力境界 = 学習余地大。advisory 列のみで自動昇格はしない（順位は従来 priority 主導）。
+
+    #64 MAA: ``reward_ema`` を渡すと各候補に ``outcome.reward_ema``（バッチ跨ぎ符号付き
+    EMA レコード or None）を添え、``outcome_ranking[action]["reward_ema"]`` に skill 別
+    の通時安定ラベルを記録する。この関数は in-memory 純粋契約を保つため DATA_DIR を読まず、
+    prior EMA は呼び出し側が読んで渡す（read のみ＝dry-run 安全）。**順位は変えない**
+    （advisory のみ）。``reward_ema=None`` のときは完全に従来挙動。
 
     dry-run observability（#393-#396 準拠: 数字に意味を添える）のため、action ごとの
     before/after スキル順と changed フラグ、suppress されたスキルを ``outcome_ranking`` に
@@ -333,6 +350,9 @@ def apply_outcome_ranking(
                 )
             else:
                 outcome["suppressed"] = False
+            # #64 MAA: バッチ跨ぎ符号付き EMA レコード（advisory 列・順位非影響）。
+            # 渡されなければ None（従来挙動を壊さない）。
+            outcome["reward_ema"] = (reward_ema or {}).get(skill)
             new_cand["outcome"] = outcome
             enriched.append(new_cand)
 
@@ -369,6 +389,11 @@ def apply_outcome_ranking(
                 for c in ordered
                 if (c["outcome"].get("reward_variance") or {}).get("pass")
             ],
+            # #64 MAA: skill 別の通時安定ラベル（バッチ跨ぎ EMA・advisory）。
+            "reward_ema": {
+                c.get("skill", ""): _ema_stability_label((reward_ema or {}).get(c.get("skill", "")))
+                for c in ordered
+            },
         }
 
     if ranking_evidence:
