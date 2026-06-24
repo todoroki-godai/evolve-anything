@@ -101,6 +101,7 @@
 | `memory_capability` | 記憶操作を read/use/write/maintain 観点で advisory 評価する observability section（OPD-Evolver #19）。reason 非永続化のため read/use 統合の3軸（write=記憶量 / maintain=健全度 / use_read=活性）。memory dir 解決は `resolve_cc_memory_dir` 単一ソース（CC パスエンコード・#18 と共有。`resolve_pj_slug` repo-basename slug を使うと名前空間食い違いで常時沈黙する dogfood 発見バグの根治） | `scripts/lib/memory_capability.py` + `audit/sections_memory.py` + `pj_slug.resolve_cc_memory_dir` |
 | `skill_vuln_scan` | 取り込みスキルの静的脆弱性スキャン（SkillSpector 型）— `.md`/`.sh`/`.bash` を決定論・LLM 非依存で行スキャンし remote_exec/secret_exfil/destructive/prompt_injection/overbroad_tools を検出し audit observability に surface。combo 必須で FP 較正（`gh api ... | base64 -d` 等は非検出・#13） | `skill_vuln_scan.py` + `audit/sections_skill_vuln.py` |
 | `fanout_cost` | fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は #15 同様スパースゆえ各群 ≥5 の floor ゲート付き。subagents.jsonl(agent_type 空除外 #36) + sessions(union read #469) を `_normalize_pj` で当 PJ スコープ | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
+| `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出（human/machine 評価源の蓄積偏り・保守閾値, #73） | `audit/memory_contagion.py` |
 
 ## クイックスタート
 
