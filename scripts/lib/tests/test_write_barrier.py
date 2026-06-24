@@ -196,6 +196,7 @@ _EXPECTED_ACTIVE_STORES = [
     "reward_ema.jsonl",
     "sessions.jsonl",
     "skill_activations.jsonl",
+    "subagent_traces.jsonl",
     "subagents.jsonl",
     "usage-registry.jsonl",
     "usage.jsonl",
