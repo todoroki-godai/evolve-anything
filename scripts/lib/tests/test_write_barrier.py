@@ -193,6 +193,7 @@ _EXPECTED_ACTIVE_STORES = [
     "false_positives.jsonl",
     "remediation_suppression/<slug>.jsonl",
     "remediation_surfaced/<slug>.json",
+    "reward_ema.jsonl",
     "sessions.jsonl",
     "skill_activations.jsonl",
     "subagents.jsonl",
