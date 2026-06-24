@@ -146,6 +146,32 @@ def test_weak_signals_declared_with_ttl_45() -> None:
     assert decl.ttl_days == 45
 
 
+# --- reward_ema.jsonl の宣言（#64・MAA バッチ跨ぎ EMA）-----------------------
+
+def test_reward_ema_declared_as_active_batch_permanent() -> None:
+    """reward_ema.jsonl が active / batch-writer / permanent で宣言されている（#64）。
+
+    evolve --drain の apply 境界が persist_reward_ema_batch で書く新ストア。宣言なしで
+    書くと store_write が StoreWriteError で reject し、orphan_store も undeclared として
+    surface する（#434 / ADR-049）。
+    """
+    decl = store_registry.declaration_for("reward_ema.jsonl")
+    assert decl is not None
+    assert decl.status == "active"
+    assert decl.retention == "permanent"
+    assert decl.writer_locus == "batch"
+
+
+def test_reward_ema_write_not_rejected_by_barrier() -> None:
+    """active 宣言なので store_write の runtime guard が write を弾かない（#64）。"""
+    assert store_registry.is_active_store("reward_ema.jsonl") is True
+
+
+def test_reward_ema_not_stale_drift() -> None:
+    """batch-writer 宣言なので hook-writer 突合の stale に誤検知されない（#64）。"""
+    assert "reward_ema.jsonl" in store_registry.stale_exempt_names()
+
+
 # --- correction_review_seen.jsonl の宣言（#446）------------------------------
 
 def test_correction_review_seen_declared_as_batch_permanent() -> None:

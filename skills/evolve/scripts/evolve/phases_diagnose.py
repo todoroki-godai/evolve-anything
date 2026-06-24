@@ -166,12 +166,21 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
         except Exception:
             neg_transfer = []
         corrections_data = _load_corrections(proj)
+        #   #64 MAA: バッチ跨ぎ符号付き EMA を読み advisory 列を付与（read のみ＝dry-run 安全・
+        #            順位は変えない）。書込は evolve --drain の apply 境界で行う。
+        try:
+            from pj_slug import resolve_pj_slug
+            from audit.reward_ema import read_reward_ema
+            _ema_map = read_reward_ema(resolve_pj_slug(proj))
+        except Exception:
+            _ema_map = {}
         triage_result = apply_outcome_ranking(
             triage_result,
             usage=usage_data,
             sessions=sessions,
             corrections=corrections_data,
             negative_transfer=neg_transfer,
+            reward_ema=_ema_map,
         )
         result["phases"]["skill_triage"] = triage_result
     except Exception as e:
