@@ -23,6 +23,8 @@ from skill_extractor.trajectory_sampler import (
     _extract_skill_from_turn,
     _find_preceding_user_prompt,
     _is_machinery_prompt,
+    _determine_outcome,
+    _has_error_tool_result,
 )
 from skill_extractor.skill_extractor import (
     extract_skill_candidates,
@@ -372,6 +374,119 @@ class TestMachineryFilter:
         records = _parse_jsonl_file(jsonl_path)
         assert len(records) == 1
         assert records[0].user_prompt == "認証まわりを整理して"
+
+
+# ── failure 判定（#27 — 未回復エラーで終わる軌跡のみ failure）──────
+# トラジェクトリ末尾が未回復エラーのときだけ failure。エラー後に assistant
+# で回復していれば success のまま（一過性エラーを failure 扱いしない FP ガード）。
+
+
+def _user_tool_result_turn(*, is_error: bool, content_override=None):
+    """user 型ターンで content list 内に tool_result block を持つターンを構築する。"""
+    if content_override is not None:
+        content = content_override
+    else:
+        content = [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01",
+                "content": "boom" if is_error else "ok",
+                "is_error": is_error,
+            }
+        ]
+    return {
+        "type": "user",
+        "message": {"role": "user", "content": content},
+        "sessionId": "sess-f",
+        "uuid": "u-tr",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+    }
+
+
+def _assistant_text_turn(text="対応します"):
+    return {
+        "type": "assistant",
+        "message": {"role": "assistant", "content": text},
+        "sessionId": "sess-f",
+        "uuid": "u-a",
+        "timestamp": "2026-01-01T00:00:01.000Z",
+    }
+
+
+def _command_turn_f():
+    return {
+        "type": "user",
+        "message": {"role": "user", "content": "<command-name>/evolve-anything:audit</command-name>"},
+        "sessionId": "sess-f",
+        "uuid": "u-cmd",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+    }
+
+
+class TestHasErrorToolResult:
+    def test_user_turn_with_error_block_true(self):
+        turn = _user_tool_result_turn(is_error=True)
+        assert _has_error_tool_result(turn) is True
+
+    def test_user_turn_with_non_error_block_false(self):
+        turn = _user_tool_result_turn(is_error=False)
+        assert _has_error_tool_result(turn) is False
+
+    def test_content_str_safe_false(self):
+        turn = _user_tool_result_turn(is_error=True, content_override="just a string")
+        assert _has_error_tool_result(turn) is False
+
+    def test_content_none_safe_false(self):
+        turn = {
+            "type": "user",
+            "message": {"role": "user", "content": None},
+            "sessionId": "s", "uuid": "u", "timestamp": "t",
+        }
+        assert _has_error_tool_result(turn) is False
+
+    def test_content_non_list_dict_safe_false(self):
+        turn = {
+            "type": "user",
+            "message": {"role": "user", "content": {"weird": "shape"}},
+            "sessionId": "s", "uuid": "u", "timestamp": "t",
+        }
+        assert _has_error_tool_result(turn) is False
+
+    def test_no_message_key_safe_false(self):
+        assert _has_error_tool_result({"type": "user"}) is False
+
+    def test_assistant_turn_false(self):
+        # tool_result block は user ターンにしか現れない。assistant text は False。
+        assert _has_error_tool_result(_assistant_text_turn()) is False
+
+
+class TestDetermineOutcomeFailure:
+    def test_unrecovered_error_at_tail_is_failure(self):
+        # command の直後にエラー tool_result で終わり、回復 assistant 無し → failure
+        turns = [_command_turn_f(), _user_tool_result_turn(is_error=True)]
+        assert _determine_outcome(turns, 0) == "failure"
+
+    def test_error_then_assistant_recovery_is_success(self):
+        # エラーの後に assistant ターンで回復 → success（FP ガードの回帰ロック）
+        turns = [
+            _command_turn_f(),
+            _user_tool_result_turn(is_error=True),
+            _assistant_text_turn("リカバリしました"),
+        ]
+        assert _determine_outcome(turns, 0) == "success"
+
+    def test_no_error_with_assistant_is_success(self):
+        turns = [_command_turn_f(), _assistant_text_turn()]
+        assert _determine_outcome(turns, 0) == "success"
+
+    def test_empty_window_is_unknown(self):
+        turns = [_command_turn_f()]
+        assert _determine_outcome(turns, 0) == "unknown"
+
+    def test_non_error_tool_result_then_no_assistant_is_unknown(self):
+        # window 内に assistant も error も無い → unknown
+        turns = [_command_turn_f(), _user_tool_result_turn(is_error=False)]
+        assert _determine_outcome(turns, 0) == "unknown"
 
 
 # ── sample_trajectories ───────────────────────────────────

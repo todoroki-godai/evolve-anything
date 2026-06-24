@@ -284,17 +284,63 @@ def _find_preceding_user_prompt(turns: list, command_index: int) -> str:
     return ""
 
 
-def _determine_outcome(turns: list, command_index: int) -> str:
-    """command_index の直後に assistant ターンがあれば success、なければ unknown を返す。
+def _has_error_tool_result(turn: dict) -> bool:
+    """turn がエラー tool_result block を含む user ターンか判定する（#27）。
 
-    将来的には tool_result / error 等で failure を判定することも可能。
+    トランスクリプト jsonl では tool_result は user 型ターンの message.content
+    list 内の block として現れる（observe.py / pitfall_lint.py が tool_result.get
+    ("is_error") でエラー判定しているのと同じ構造）。
+
+    Args:
+        turn: セッションの1ターン。
+
+    Returns:
+        content list 内に ``type=="tool_result"`` かつ ``is_error`` が truthy な
+        block があれば True。content が str / None / 非 list 等は安全に False。
     """
+    msg = turn.get("message")
+    if not isinstance(msg, dict):
+        return False
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return False
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_result" and block.get("is_error"):
+            return True
+    return False
+
+
+def _determine_outcome(turns: list, command_index: int) -> str:
+    """command_index 直後の window から outcome（success/failure/unknown）を判定する（#27）。
+
+    window（``command_index+1 .. min(command_index+6, len)``）を走査し、
+
+    - window 末尾が **未回復エラー**（エラー tool_result の後に回復 assistant が無い）の
+      ときのみ "failure"。トラジェクトリがエラーで終わり回復していないケース。
+    - エラーの後に assistant ターンで回復していれば "success" のまま（単発の一過性
+      エラーを failure 扱いしない FP ガード — issue #27 は FP 多発で再設計とゲート）。
+    - エラー無し（または回復済み）で assistant ターンがあれば "success"。
+    - assistant もエラーも無ければ "unknown"。
+    """
+    last_error_idx = None
+    last_assistant_idx = None
     for j in range(command_index + 1, min(command_index + 6, len(turns))):
         t = turns[j]
-        if t.get("type") == "assistant":
-            content = _get_content(t)
-            if content:
-                return "success"
+        if _has_error_tool_result(t):
+            last_error_idx = j
+        if t.get("type") == "assistant" and _get_content(t):
+            last_assistant_idx = j
+
+    # 未回復エラー: エラーがあり、その後に回復 assistant が無い → failure
+    if last_error_idx is not None and (
+        last_assistant_idx is None or last_assistant_idx < last_error_idx
+    ):
+        return "failure"
+
+    if last_assistant_idx is not None:
+        return "success"
     return "unknown"
 
 

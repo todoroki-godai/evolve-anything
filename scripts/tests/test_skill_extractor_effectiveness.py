@@ -5,6 +5,7 @@ generalizability_score の算定に反映されていることを検証する。
 
 TDD-first・決定論・LLM 非依存。
 """
+import json
 import sys
 from pathlib import Path
 
@@ -106,6 +107,95 @@ class TestContrast:
     def test_only_unknown_neutral(self):
         recs = [_rec(outcome="unknown") for _ in range(3)]
         assert compute_contrast(recs) == 0.5
+
+    # #27: failure producer を配線した結果、休眠していた CONTRAST_BOTH /
+    # CONTRAST_ALL_FAILURE 分岐に producer 由来の record で到達することを
+    # end-to-end でロックする（producer 不在で到達不能だった休眠配線の活性化）。
+    def test_producer_failure_record_reaches_contrast_both(self, tmp_path):
+        from skill_extractor.trajectory_sampler import _parse_jsonl_file
+
+        def cmd(uuid, ts="2026-01-01T00:00:00.000Z"):
+            return {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<command-name>/evolve-anything:audit</command-name>",
+                },
+                "sessionId": "s", "uuid": uuid, "timestamp": ts,
+            }
+
+        def err_tool_result(uuid):
+            return {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t", "is_error": True}
+                    ],
+                },
+                "sessionId": "s", "uuid": uuid, "timestamp": "2026-01-01T00:00:01.000Z",
+            }
+
+        def assistant(uuid):
+            return {
+                "type": "assistant",
+                "message": {"role": "assistant", "content": "done"},
+                "sessionId": "s", "uuid": uuid, "timestamp": "2026-01-01T00:00:02.000Z",
+            }
+
+        # 2件目（success）を先に置き、その後に未回復エラーで終わる軌跡（failure）を
+        # 5ターン超の padding で離して、failure 軌跡の window に後続 assistant が
+        # 入らないようにする（window = command_index+1 .. +5）。
+        def pad(uuid):
+            return {
+                "type": "user",
+                "message": {"role": "user", "content": "padding human prompt"},
+                "sessionId": "s", "uuid": uuid, "timestamp": "2026-01-01T00:00:03.000Z",
+            }
+
+        turns = [
+            cmd("c1"),
+            assistant("a1"),       # 1件目: 通常 assistant → success
+            pad("p1"), pad("p2"), pad("p3"), pad("p4"), pad("p5"),
+            cmd("c2"),
+            err_tool_result("e1"),  # 2件目: 未回復エラーで終わる → failure
+        ]
+        path = tmp_path / "s.jsonl"
+        path.write_text("\n".join(json.dumps(t, ensure_ascii=False) for t in turns))
+        records = _parse_jsonl_file(path)
+        outcomes = sorted(r.outcome for r in records)
+        assert outcomes == ["failure", "success"]
+        # producer 由来の record で success+failure の両方 → CONTRAST_BOTH に到達
+        assert compute_contrast(records) == CONTRAST_BOTH
+
+    def test_producer_all_failure_reaches_contrast_all_failure(self, tmp_path):
+        from skill_extractor.trajectory_sampler import _parse_jsonl_file
+
+        turns = [
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<command-name>/evolve-anything:audit</command-name>",
+                },
+                "sessionId": "s", "uuid": "c1", "timestamp": "2026-01-01T00:00:00.000Z",
+            },
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t", "is_error": True}
+                    ],
+                },
+                "sessionId": "s", "uuid": "e1", "timestamp": "2026-01-01T00:00:01.000Z",
+            },
+        ]
+        path = tmp_path / "s.jsonl"
+        path.write_text("\n".join(json.dumps(t, ensure_ascii=False) for t in turns))
+        records = _parse_jsonl_file(path)
+        assert [r.outcome for r in records] == ["failure"]
+        assert compute_contrast(records) == CONTRAST_ALL_FAILURE
 
 
 # ── compute_effectiveness / multiplier ───────────────────

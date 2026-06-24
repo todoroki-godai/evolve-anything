@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import List
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from skill_extractor.trajectory_sampler import TrajectoryRecord
@@ -17,6 +19,7 @@ from skill_extractor.decomposition import (
     decompose_candidate,
     corpus_frequent_tokens,
     ROUTING_KEYWORD_LIMIT,
+    SAMPLE_TRIGGER_LIMIT,
 )
 from skill_extractor.skill_extractor import extract_skill_candidates
 
@@ -43,18 +46,25 @@ def _rec(
 
 
 class TestFourAxesPresent:
-    def test_returns_all_four_axes(self):
+    def test_returns_all_five_axes(self):
         records = [_rec(), _rec(user_prompt="コードを書いて")]
         d = decompose_candidate(records)
-        assert set(d.keys()) == {"routing", "workflow", "semantics", "attachments"}
+        assert set(d.keys()) == {
+            "routing", "workflow", "semantics", "attachments", "failure_analysis",
+        }
 
-    def test_empty_records_still_returns_four_axes(self):
-        """空入力でも4軸の骨格は壊さない（silence≠evaluated）。"""
+    def test_empty_records_still_returns_five_axes(self):
+        """空入力でも5軸の骨格は壊さない（silence≠evaluated）。"""
         d = decompose_candidate([])
-        assert set(d.keys()) == {"routing", "workflow", "semantics", "attachments"}
+        assert set(d.keys()) == {
+            "routing", "workflow", "semantics", "attachments", "failure_analysis",
+        }
         assert d["workflow"]["invocations"] == 0
         assert d["attachments"]["projects"] == []
         assert d["routing"]["trigger_keywords"] == []
+        assert d["failure_analysis"]["failure_count"] == 0
+        assert d["failure_analysis"]["failure_rate"] == 0.0
+        assert d["failure_analysis"]["is_failure_derived"] is False
 
 
 # ── routing: いつ/どんな文脈で発火するか ─────────────────────
@@ -246,6 +256,47 @@ class TestAttachments:
         assert d["attachments"]["projects"] == []
 
 
+# ── failure_analysis: 失敗の罠（どの文脈で失敗したか）#27 ──────────
+
+
+class TestFailureAnalysis:
+    def test_failures_counted_and_rated(self):
+        records = [
+            _rec(outcome="failure", user_prompt="認証を直して"),
+            _rec(outcome="failure", user_prompt="ビルドが壊れた"),
+            _rec(outcome="success", user_prompt="実装して"),
+            _rec(outcome="unknown", user_prompt="調べて"),
+        ]
+        fa = decompose_candidate(records)["failure_analysis"]
+        assert fa["failure_count"] == 2
+        assert fa["failure_rate"] == pytest.approx(0.5)
+        assert fa["is_failure_derived"] is True
+        assert set(fa["sample_failure_triggers"]) == {"認証を直して", "ビルドが壊れた"}
+
+    def test_sample_triggers_capped_and_distinct(self):
+        records = [
+            _rec(outcome="failure", user_prompt=f"fail prompt {i}") for i in range(5)
+        ]
+        # 同一プロンプトの重複は distinct で1つに畳む
+        records.append(_rec(outcome="failure", user_prompt="fail prompt 0"))
+        # 空プロンプトは除外
+        records.append(_rec(outcome="failure", user_prompt=""))
+        fa = decompose_candidate(records)["failure_analysis"]
+        assert len(fa["sample_failure_triggers"]) == SAMPLE_TRIGGER_LIMIT
+        assert "" not in fa["sample_failure_triggers"]
+        assert len(set(fa["sample_failure_triggers"])) == len(
+            fa["sample_failure_triggers"]
+        )
+
+    def test_all_success_no_failure(self):
+        records = [_rec(outcome="success") for _ in range(3)]
+        fa = decompose_candidate(records)["failure_analysis"]
+        assert fa["failure_count"] == 0
+        assert fa["failure_rate"] == 0.0
+        assert fa["sample_failure_triggers"] == []
+        assert fa["is_failure_derived"] is False
+
+
 # ── extract_skill_candidates への統合 ─────────────────────────
 
 
@@ -265,7 +316,7 @@ class TestCandidateIntegration:
         for c in candidates:
             assert "decomposition" in c
             assert set(c["decomposition"].keys()) == {
-                "routing", "workflow", "semantics", "attachments",
+                "routing", "workflow", "semantics", "attachments", "failure_analysis",
             }
 
     def test_corpus_frequent_token_removed_across_candidates(

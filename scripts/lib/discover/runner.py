@@ -128,6 +128,7 @@ def _trajectory_candidates_to_missed(
             "generalizability_score": c.get("generalizability_score", 0.0),
             "routing": decomposition.get("routing", {}),
             "attachments": decomposition.get("attachments", {}),
+            "failure_analysis": decomposition.get("failure_analysis", {}),
         })
     return surfaced, merged
 
