@@ -62,6 +62,46 @@ def _session(pj: str, sid: str, dt: datetime, *, error_count: int = 0,
     }
 
 
+# skill_activations.jsonl: skill / session_id / project / ts（条件4 予測妥当性 #42 の入力）。
+def _activation(skill: str, sid: str, dt: datetime, *, project: str = "p") -> dict:
+    return {
+        "skill": skill,
+        "session_id": sid,
+        "project": project,
+        "ts": _iso(dt),
+        "invocation_trigger": "top-level",
+        "parent_skill": None,
+    }
+
+
+def _predictive_corpus(now: datetime, *, reverse_out: bool = False):
+    """条件4（予測妥当性 #42）が pass / fail する skill_activations + sessions を生成する。
+
+    5 skill を in-sample（古い半分）/ out-of-sample（新しい半分）の両方に各 4 session で
+    出現させ、in-sample で first_try_success の明確な順位を作る。reverse_out=False なら
+    out-of-sample も同順位（高相関 → 条件4 pass）、True なら逆順位（低相関 → 条件4 fail）。
+
+    Returns: (activations, sessions)。両者を既存ストアへ追記して使う（条件1〜3 と独立）。
+    """
+    old = now - timedelta(days=20)
+    new = now - timedelta(days=2)
+    acts: list[dict] = []
+    sess: list[dict] = []
+    counter = 0
+    for i in range(5):
+        sk = f"pv_s{i}"
+        for half_dt, rev in ((old, False), (new, reverse_out)):
+            frac = (4 - i) / 4.0 if rev else i / 4.0
+            n_clean = round(frac * 4)
+            for j in range(4):
+                sid = f"pv_{counter}"
+                counter += 1
+                acts.append(_activation(sk, sid, half_dt))
+                sess.append(_session("/p/pv", sid, half_dt,
+                                     error_count=0 if j < n_clean else 1))
+    return acts, sess
+
+
 # ============================================================================
 # #593: PJ キー抽出は worktree 安全 slug に正規化する
 # ============================================================================
@@ -398,13 +438,70 @@ class TestComputePromotionReadiness:
         for i in range(35):
             sess.append(_session("/p/c", f"pc{i}", now - timedelta(days=1),
                                  error_count=0))
+
+        # 条件4（予測妥当性 #42）も pass させる: in/out で skill 順位が一致する corpus。
+        acts4, sess4 = _predictive_corpus(now, reverse_out=False)
+        sess.extend(sess4)
+        _write_jsonl(tmp_path / "skill_activations.jsonl", acts4)
         _write_jsonl(tmp_path / "sessions.jsonl", sess)
 
         result = opr.compute_promotion_readiness(days=60, window_days=14)
         assert result["variance"]["pass"] is True
         assert result["denominator"]["pass"] is True
         assert result["direction"]["pass"] is True
+        assert result["predictive_validity"]["pass"] is True
         assert result["promote"] is True
+
+    def test_condition4_blocks_promotion_when_low_correlation(self, tmp_path, monkeypatch):
+        """#42: 条件1〜3 がすべて pass でも、条件4（予測妥当性）が fail なら promote=False。
+
+        in-sample で良かった skill 順位が out-of-sample で逆転する corpus を与え、
+        条件4 が誤昇格をブロックすることを検証する（条件4 を AND 合流した狙いの核心）。
+        """
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        anchor = now - timedelta(days=20)
+
+        corr = []
+        for i in range(12):
+            ctype = "iya" if i < 8 else f"t{i}"
+            corr.append(_correction("/p/a", ctype, f"a_s{i % 3}", now - timedelta(days=1)))
+        for i in range(12):
+            ctype = "iya" if i < 4 else f"u{i}"
+            corr.append(_correction("/p/b", ctype, f"b_s{i % 3}", now - timedelta(days=1)))
+        for i in range(12):
+            corr.append(_correction("/p/c", f"v{i}", f"c_s{i}", now - timedelta(days=1)))
+        _write_jsonl(tmp_path / "corrections.jsonl", corr)
+
+        sess = []
+        opr_hist = tmp_path / "optimize_history"
+        opr_hist.mkdir(parents=True, exist_ok=True)
+        (opr_hist / "a.jsonl").write_text(
+            json.dumps({"id": "x", "human_accepted": True,
+                        "timestamp": _iso(anchor), "skill_name": "s"}) + "\n"
+        )
+        for i in range(35):
+            in_before = i < 18
+            dt = anchor - timedelta(days=3) if in_before else anchor + timedelta(days=3)
+            sess.append(_session("/p/a", f"pa{i}", dt, error_count=1 if in_before else 0))
+        for i in range(35):
+            sess.append(_session("/p/b", f"pb{i}", now - timedelta(days=1), error_count=i % 2))
+        for i in range(35):
+            sess.append(_session("/p/c", f"pc{i}", now - timedelta(days=1), error_count=0))
+
+        # 条件4 を fail させる: in/out で skill 順位が逆転する corpus（低相関）。
+        acts4, sess4 = _predictive_corpus(now, reverse_out=True)
+        sess.extend(sess4)
+        _write_jsonl(tmp_path / "skill_activations.jsonl", acts4)
+        _write_jsonl(tmp_path / "sessions.jsonl", sess)
+
+        result = opr.compute_promotion_readiness(days=60, window_days=14)
+        # 条件1〜3 は満たすが条件4 が fail → promote はブロックされる。
+        assert result["variance"]["pass"] is True
+        assert result["denominator"]["pass"] is True
+        assert result["direction"]["pass"] is True
+        assert result["predictive_validity"]["pass"] is False
+        assert result["promote"] is False
 
     def test_subfloor_pjs_not_flagged_as_measurement_bug(self, tmp_path, monkeypatch):
         # #563-2: distinct_types が floor 未満の PJ は値が統計的に無意味で 0.0/1.0 に振れる。
@@ -557,12 +654,18 @@ class TestBuildSection:
             sess.append(_session("/p/b", f"pb{i}", now - timedelta(days=1), error_count=i % 2))
         for i in range(35):
             sess.append(_session("/p/c", f"pc{i}", now - timedelta(days=1), error_count=0))
+
+        # 条件4（予測妥当性 #42）も pass させる。
+        acts4, sess4 = _predictive_corpus(now, reverse_out=False)
+        sess.extend(sess4)
+        _write_jsonl(tmp_path / "skill_activations.jsonl", acts4)
         _write_jsonl(tmp_path / "sessions.jsonl", sess)
 
         lines = build_promotion_readiness_section(tmp_path)
         assert lines is not None
         combined = "\n".join(lines)
         assert "重み昇格" in combined  # 提案行
+        assert "条件4 予測妥当性" in combined  # 第4条件が全展開に出る
         assert "✓" in combined
 
     def test_full_expansion_when_one_condition_passes(self, tmp_path, monkeypatch):
