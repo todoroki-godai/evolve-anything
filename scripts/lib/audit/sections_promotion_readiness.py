@@ -238,8 +238,11 @@ def build_promotion_readiness_section(project_dir: Path) -> Optional[List[str]]:
         )
     else:
         body.append("")
+        # #76 Finding C: 未達条件（✗）を含む全展開は『観察中』へ分類されるよう ℹ を付ける。
+        # ℹ が無いと report.py の畳み込みで『✓ 評価済みクリーン（該当なし / drift なし）』へ
+        # 紛れ、未達があるのに『問題なし』と誤読される。
         body.append(
-            "  → 未充足の条件があるため重み昇格は時期尚早（advisory 並走を継続、ADR-046）"
+            "  ℹ 未充足の条件があるため重み昇格は時期尚早（advisory 並走を継続、ADR-046）"
         )
         # #52-5: 何が貯まれば昇格判断できるかの蓄積条件を1行添える。
         body.append(

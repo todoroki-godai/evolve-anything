@@ -358,3 +358,74 @@ def test_section_emits_agent_type_rows(data_dir, monkeypatch):
     joined = "\n".join(out)
     assert "impl-worker" in joined
     assert "内部一発成功率" in joined
+
+
+def test_section_warns_on_low_first_try_success(data_dir, monkeypatch):
+    """一発成功率が閾値未満の agent_type は ⚠ を出し、critical に分類される（#76 Finding A）。
+
+    親は最終成功しか見ない盲点（#38）を audit サマリで surface するには、⚠/🔴 が無いと
+    report.py の畳み込みで『✓ 評価済みクリーン』に必ず埋没する。低 rate で ⚠ を発火させる。
+    """
+    from audit import sections_subagent_traces as sec
+    from audit.sections_summary import classify_section
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    # general-purpose: 6 件中 1 成功（rate 0.17）= 実 PJ dogfood の figma 相当。
+    for i in range(6):
+        _tstore.write_trace({"agent_id": f"g{i}", "pj_slug": "p", "agent_type": "general-purpose",
+                             "first_try_success": i == 0, "tool_error_count": 0 if i == 0 else 2})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    assert out is not None
+    joined = "\n".join(out)
+    assert "⚠" in joined
+    assert "general-purpose" in joined
+    # report.py の分類で full-text 展開される（畳み込みで消えない）。
+    assert classify_section(out) == "critical"
+
+
+def test_section_warns_on_high_avg_tool_error_even_if_rate_ok(data_dir, monkeypatch):
+    """rate が閾値以上でも平均 tool error が過多なら ⚠（#76 Finding A・独立ゲート）。
+
+    成功多数の中に『内部で大量リトライしてから成功』する agent が混じるケースを拾う。
+    """
+    from audit import sections_subagent_traces as sec
+    from audit.sections_summary import classify_section
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    # 4 件中 3 成功（rate 0.75 ≥ 0.5）だが 1 件が tool_error 24 → 平均 6.0 ≥ 5。
+    for i in range(3):
+        _tstore.write_trace({"agent_id": f"ok{i}", "pj_slug": "p", "agent_type": "retry-heavy",
+                             "first_try_success": True, "tool_error_count": 0})
+    _tstore.write_trace({"agent_id": "bad", "pj_slug": "p", "agent_type": "retry-heavy",
+                         "first_try_success": False, "tool_error_count": 24})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "⚠" in joined
+    assert classify_section(out) == "critical"
+
+
+def test_section_no_warning_for_healthy_rates(data_dir, monkeypatch):
+    """rate ≥ 閾値 かつ tool error 少なら ⚠ を出さず clean のまま（FP 抑制）。"""
+    from audit import sections_subagent_traces as sec
+    from audit.sections_summary import classify_section
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(4):
+        _tstore.write_trace({"agent_id": f"s{i}", "pj_slug": "p", "agent_type": "senpai",
+                             "first_try_success": True, "tool_error_count": 0})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "⚠" not in joined
+    assert classify_section(out) == "clean"
+
+
+def test_section_borderline_half_rate_not_flagged(data_dir, monkeypatch):
+    """一発成功率ちょうど 0.50（境界・実 PJ の Explore 相当）は ⚠ を出さない（strict <）。"""
+    from audit import sections_subagent_traces as sec
+    from audit.sections_summary import classify_section
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    # 4 件中 2 成功（rate 0.50）、失敗側 tool_error は 1 で過多でない。
+    for i in range(4):
+        _tstore.write_trace({"agent_id": f"e{i}", "pj_slug": "p", "agent_type": "Explore",
+                             "first_try_success": i < 2, "tool_error_count": 0 if i < 2 else 1})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "⚠" not in joined
+    assert classify_section(out) == "clean"
