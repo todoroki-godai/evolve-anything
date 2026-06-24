@@ -64,6 +64,7 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | 隔離コピー方式 | gate Layer1 が実 DATA_DIR を tmp にコピーし `CLAUDE_PLUGIN_DATA` で隔離実行してコピー側のみ比較する方式。ライブ hook の ambient write 偽赤を構造的に排除 | #496, PR #515 |
 | 文書化された除外リスト | dry-run 純度契約（1バイトも書かない）の原則ベース例外 — 意図された dry-run 書込（cache warm / 運用ポインタ evolve_pending/）を理由コメント付き定数で除外。bypass フラグは作らない | #513, #496 |
 | RODS | reward 分散ベースの進化ターゲット選定（Reward-variance Outcome-Driven Selection）。session 別 reward proxy（一発成功 0/1）の分散が大きい＝能力境界＝学習余地大、とみなし `check_variance` を per-skill 転用して outcome ランキングに advisory 列を添える（自動昇格はしない） | #28 |
+| reward EMA（MAA） | バッチ跨ぎ符号付き advantage の指数移動平均（Marginal Advantage Accumulation）。各スキルの baseline 比 一発成功率差を evolve サイクル跨ぎで符号付き EMA 累積し「通時で安定して効くか」を判定。RODS（単一スナップショット分散＝今どこが学習余地か）と相補で、reward EMA＝その余地は本物か（通時で安定して効くか）。書込は `evolve --drain` の apply 境界のみ・閾値は捏造せず符号＋サイクル数のみ（plant-the-seed・3-4 サイクルから有意） | #64, arXiv 2606.20475 |
 | paired trajectory（観測版） | 同一タスク種別を「あるスキル使用群 vs 非使用群」に分け、既存テレメトリからアウトカム差を決定論で対照観測するシグナル。能動再実行はしない（観測版）。outcome_attribution/multiview_eval/negative_transfer と相補 | #15 |
 | write barrier | 全ストア書込の単一ゲート `rl_common.store_write(store_name, record)`。canonical `DATA_DIR/<name>` を内部解決し（呼び出し側は保存先指定不可）、store_registry の active 登録を runtime guard（既定 reject・未登録/非active は `StoreWriteError`）で照合。read（union 寛容）と write（canonical 厳格）を分離し共有は store_registry のみ。緊急避難は env `EVOLVE_WRITE_GUARD=warn` | ADR-049, #55 |
 | store_write_raw | write barrier の明示パス例外口（別名関数・フラグでない）。store_registry 照合を通さず指定パスへ直接 append する。raw を使う diff が静的 advisory に必ず上がるよう、`allow_unregistered=True` 的フラグでなく別名にしてある（ADR-049 決定5） | ADR-049, #55 |
