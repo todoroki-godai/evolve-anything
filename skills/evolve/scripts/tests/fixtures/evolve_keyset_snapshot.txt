@@ -68,6 +68,7 @@ observability.glossary_drift
 observability.orphan_store
 observability.remediation_batch_skip
 observability.skill_triage
+observability.skill_vuln
 observability.store_contract
 observability.testpaths_coverage
 observability.unmanaged_pitfalls
