@@ -290,6 +290,30 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "突合から writer_locus=batch で除外）。",
     ),
     StoreDeclaration(
+        name="verbosity_candidates.jsonl",
+        writer="hooks/record_verbosity.py（Stop hook がゼロ LLM で足切り超の長応答を記録）。",
+        reader="scripts/lib/verbosity/judge.py（Haiku バッチ判定）+ "
+        "audit/sections_verbosity（冗長率 / パターン Top-N を advisory surface）。",
+        retention="ttl",
+        ttl_days=45,
+        note="#75 回答冗長性の学習ループ。足切り 800 字超の最終 assistant 応答を pj_slug 付きで "
+        "記録し、後段 Haiku バッチ（judge）が『無駄に冗長か』を判定する。standalone "
+        "~/.claude/verbosity/candidates.jsonl の移植先。hook が書く（writer_locus=hook 既定）。"
+        "TTL 45 日: 判定済みは verdicts に残るので古い未判定候補は失効させてよい。",
+    ),
+    StoreDeclaration(
+        name="verbosity_verdicts.jsonl",
+        writer="scripts/lib/verbosity/judge.py（--run の Haiku 判定後 write_verdict）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="scripts/lib/verbosity/judge.py（再判定除外の dedup）+ "
+        "audit/sections_verbosity（冗長率集計）。verbose=True は weak_signals "
+        "（channel=verbosity）にも emit され reflect 昇格フローに乗る。",
+        retention="permanent",
+        note="#75 回答冗長性の判定結果（hash 単位 last-append-wins・pj_slug スコープ）。"
+        "judge が batch で書く（writer_locus=batch で hook-writer stale 突合から除外）。",
+    ),
+    StoreDeclaration(
         name="remediation_surfaced/<slug>.json",
         writer="scripts/lib/remediation/suppression_ledger.reconcile_surfaced"
         "（evolve の remediation phase が個別承認候補確定後に毎 run 1 回呼ぶ）。"
