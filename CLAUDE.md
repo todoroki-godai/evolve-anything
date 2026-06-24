@@ -53,7 +53,7 @@
 | `evolution_operators` | BES 前向き進化探索の決定論演算子（#256） | `evolution_operators.py` |
 | `memory_trace` | episodic 検索エラーの3類型帰属（#254） | `memory_trace.py` |
 | `slop_detector` | AI slop 日英 10 パターンの決定論検出（#255） | `slop_detector.py` |
-| `skill_extractor` | 成功軌跡採掘→スキル候補生成 + 4軸分解 + 3層ノイズ除去（#291, #381, #387） | `skill_extractor/` |
+| `skill_extractor` | 成功軌跡採掘→スキル候補生成 + 4軸分解 + 3層ノイズ除去（#291, #381, #387）+ failure-rollout マイニング + 失敗の罠軸 (#27) | `skill_extractor/` |
 | `skill_rm` | スキル軸の異種基準統一報酬 — 3軸射影で横断評価（#304） | `fitness/skill_rm.py` |
 | pitfall 自動強制 | pitfalls.md の編集時 lint + commit ゲート（オプトイン）[ADR-027] | `pitfall_registry.py` |
 | `agent_team` | エージェント間の役割重複・孤立の決定論検出（#326） | `agent_team.py` |
