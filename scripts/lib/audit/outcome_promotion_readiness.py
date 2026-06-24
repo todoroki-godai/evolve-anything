@@ -349,6 +349,32 @@ def _axis_value_in_range(
     return None
 
 
+def _dedup_direction_evidence(
+    evidence: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """#77: 方向妥当性の証拠を (pj, axis, before, after) で重複排除する。
+
+    条件3 は anchor（apply イベント）単位で compared/expected_dirs を加算するが、
+    before/after は PJ×窓の集計値。同一 apply が optimize_history に近接 timestamp で
+    二重記録（実環境 v1.111.0 sys-bots で 0.8ms 差を観測）されると同じ PJ×窓集計が
+    複数回現れ、非独立な証拠を多重計上して過半判定を水増しする（条件4 fail のうちは
+    誤昇格しないが条件3 単独では潜在ラッチ）。
+
+    pj をキーに含めるため、別 PJ が偶然同一の before/after デルタを示しても独立証拠として
+    保持される（畳まれるのは同一 PJ×同一窓集計のみ）。improved は (before, after, axis) の
+    決定論関数ゆえキーに含めなくても一意。出現順は保つ（先勝ち）。
+    """
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for e in evidence:
+        key = (e["pj"], e["axis"], e["before"], e["after"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    return out
+
+
 def check_direction(
     days: int = 60, *, window_days: int = DEFAULT_WINDOW_DAYS,
     data_dir: Optional[Path] = None,
@@ -369,9 +395,7 @@ def check_direction(
     sessions = _sessions_in_window(days, base)
     # slug（optimize_history のキー）と sessions の PJ 識別子は別表記になりうるため、
     # session 側の PJ 値とゆるく突合する（slug が PJ 値に含まれる / 一致）。
-    evidence: List[Dict[str, Any]] = []
-    expected_dirs = 0
-    compared = 0
+    raw_evidence: List[Dict[str, Any]] = []
 
     from datetime import datetime, timedelta
 
@@ -398,12 +422,9 @@ def check_direction(
             )
             if before is None or after is None:
                 continue
-            compared += 1
             better_when_lower = _AXIS_BETTER_WHEN_LOWER["first_try_success"]
             improved = (after < before) if better_when_lower else (after > before)
-            if improved:
-                expected_dirs += 1
-            evidence.append({
+            raw_evidence.append({
                 "pj": pj_key,
                 "axis": "first_try_success",
                 "before": round(before, 4),
@@ -411,15 +432,22 @@ def check_direction(
                 "improved": improved,
             })
 
-    if compared == 0:
+    # #77: 同一 apply の二重 anchor が同一 PJ×窓集計を生み非独立証拠を多重計上するのを防ぐ。
+    # compared/expected_dirs/過半判定はすべて重複排除後の distinct な証拠だけで行う。
+    evidence = _dedup_direction_evidence(raw_evidence)
+    total_anchors = sum(len(v) for v in anchors.values())
+
+    if not evidence:
         return {
             "pass": False, "reason": "no_paired_windows",
-            "anchors": sum(len(v) for v in anchors.values()), "evidence": [],
+            "anchors": total_anchors, "evidence": [],
         }
+    compared = len(evidence)
+    expected_dirs = sum(1 for e in evidence if e["improved"])
     passed = expected_dirs > compared / 2
     return {
         "pass": passed,
-        "anchors": sum(len(v) for v in anchors.values()),
+        "anchors": total_anchors,
         "compared": compared,
         "expected_direction": expected_dirs,
         "window_days": window_days,
