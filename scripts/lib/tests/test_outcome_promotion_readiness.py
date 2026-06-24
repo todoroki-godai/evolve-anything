@@ -369,6 +369,120 @@ class TestDirectionCondition:
         # evidence に before/after の軸値が入る
         assert any("first_try" in str(e) for e in result["evidence"])
 
+    def test_near_duplicate_anchors_counted_once(self, tmp_path, monkeypatch):
+        """#77: 同一 apply の二重 anchor（近接 timestamp）は同一 PJ×窓集計を生むため
+        (pj, before, after) で 1 件に畳まれる（修正前は compared=2 の二重計上）。
+
+        実環境（v1.111.0 sys-bots）で optimize_history に 0.8ms 差の二重記録を観測し、
+        同じ 0.6747→1.0 を 2 回数えて compared=2/expected_dirs=2 → 2/2 が成立していた。
+        """
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        anchor = now - timedelta(days=15)
+        anchor2 = anchor + timedelta(microseconds=800)  # 0.8ms 差 = 同一 apply の二重記録
+        opr_hist = tmp_path / "optimize_history"
+        opr_hist.mkdir(parents=True, exist_ok=True)
+        (opr_hist / "p_a.jsonl").write_text(
+            json.dumps({"id": "x1", "human_accepted": True,
+                        "timestamp": _iso(anchor), "skill_name": "s"}) + "\n"
+            + json.dumps({"id": "x2", "human_accepted": True,
+                          "timestamp": _iso(anchor2), "skill_name": "s"}) + "\n"
+        )
+        sessions = []
+        for i in range(4):  # before: 1/4 clean = 0.25
+            sessions.append(_session("p_a", f"b{i}", anchor - timedelta(days=3),
+                                     error_count=0 if i == 0 else 1))
+        for i in range(4):  # after: 4/4 clean = 1.0
+            sessions.append(_session("p_a", f"a{i}", anchor + timedelta(days=3),
+                                     error_count=0))
+        _write_jsonl(tmp_path / "sessions.jsonl", sessions)
+        result = opr.check_direction(days=60, window_days=14)
+        # 二重 anchor でも同一 PJ×窓集計は 1 件に畳まれる（#77）。修正前は compared=2。
+        assert result["compared"] == 1
+        assert len(result["evidence"]) == 1
+        # 生の apply 記録数（透明性のため）は 2 のまま保持する。
+        assert result["anchors"] == 2
+
+    def test_independent_pjs_not_deduped(self, tmp_path, monkeypatch):
+        """#77: 別 PJ は偶然同一のデルタでも独立証拠として畳まれない（pj をキーに含む）。
+
+        dedup キーから pj を落とすと独立した複数 PJ の同一デルタまで握り潰してしまうため、
+        (pj, before, after) で畳むことの正当性を固定する（issue の『独立2 PJ では2のまま』）。
+        """
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        anchor = now - timedelta(days=15)
+        opr_hist = tmp_path / "optimize_history"
+        opr_hist.mkdir(parents=True, exist_ok=True)
+        (opr_hist / "p_a.jsonl").write_text(
+            json.dumps({"id": "x1", "human_accepted": True,
+                        "timestamp": _iso(anchor)}) + "\n"
+        )
+        (opr_hist / "p_b.jsonl").write_text(
+            json.dumps({"id": "x2", "human_accepted": True,
+                        "timestamp": _iso(anchor)}) + "\n"
+        )
+        sessions = []
+        # PJ a と PJ b で同一デルタ 0.25 → 1.0 を作る（別 PJ なので畳まれない）。
+        for pj in ("p_a", "p_b"):
+            for i in range(4):
+                sessions.append(_session(pj, f"{pj}_b{i}", anchor - timedelta(days=3),
+                                         error_count=0 if i == 0 else 1))
+            for i in range(4):
+                sessions.append(_session(pj, f"{pj}_a{i}", anchor + timedelta(days=3),
+                                         error_count=0))
+        _write_jsonl(tmp_path / "sessions.jsonl", sessions)
+        result = opr.check_direction(days=60, window_days=14)
+        assert result["compared"] == 2
+        assert len(result["evidence"]) == 2
+
+    def test_dedup_prevents_majority_inflation(self, tmp_path, monkeypatch):
+        """#77: 二重 anchor が過半判定を水増しして pass に化ける潜在ラッチを解消する。
+
+        PJ a の二重 anchor（improving）が 2 回計上されると a:2 improving + b:1 regression =
+        2/3 で過半成立 → pass=True に化ける。dedup 後は a:1 + b:1 = 1/2 で過半未満 →
+        pass=False。条件3 単独で非独立証拠により成立しうる構造そのものを塞ぐ。
+        """
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        anchor = now - timedelta(days=15)
+        anchor2 = anchor + timedelta(microseconds=800)
+        opr_hist = tmp_path / "optimize_history"
+        opr_hist.mkdir(parents=True, exist_ok=True)
+        # PJ a: 二重 anchor（improving 0.25 → 1.0）
+        (opr_hist / "p_a.jsonl").write_text(
+            json.dumps({"id": "x1", "human_accepted": True,
+                        "timestamp": _iso(anchor)}) + "\n"
+            + json.dumps({"id": "x2", "human_accepted": True,
+                          "timestamp": _iso(anchor2)}) + "\n"
+        )
+        # PJ b: 単一 anchor（regression 1.0 → 0.25・期待方向に動かない）
+        (opr_hist / "p_b.jsonl").write_text(
+            json.dumps({"id": "y1", "human_accepted": True,
+                        "timestamp": _iso(anchor)}) + "\n"
+        )
+        sessions = []
+        # PJ a: before 0.25 → after 1.0（improving）
+        for i in range(4):
+            sessions.append(_session("p_a", f"a_b{i}", anchor - timedelta(days=3),
+                                     error_count=0 if i == 0 else 1))
+        for i in range(4):
+            sessions.append(_session("p_a", f"a_a{i}", anchor + timedelta(days=3),
+                                     error_count=0))
+        # PJ b: before 1.0 → after 0.25（regression）
+        for i in range(4):
+            sessions.append(_session("p_b", f"b_b{i}", anchor - timedelta(days=3),
+                                     error_count=0))
+        for i in range(4):
+            sessions.append(_session("p_b", f"b_a{i}", anchor + timedelta(days=3),
+                                     error_count=0 if i == 0 else 1))
+        _write_jsonl(tmp_path / "sessions.jsonl", sessions)
+        result = opr.check_direction(days=60, window_days=14)
+        # dedup 後: a(improving) 1 + b(regression) 1 = 1/2 → 過半未満 → pass=False。
+        assert result["compared"] == 2
+        assert result["expected_direction"] == 1
+        assert result["pass"] is False
+
 
 # ============================================================================
 # 統合: compute_promotion_readiness（3条件 + 提案判定）
