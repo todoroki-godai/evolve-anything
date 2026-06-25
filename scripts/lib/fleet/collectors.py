@@ -182,6 +182,67 @@ def aggregate_subagents_by_project(
     return counts
 
 
+def aggregate_sessions_by_project(
+    *,
+    window_days: int = _SUBAGENTS_DEFAULT_WINDOW_DAYS,
+    now: datetime | None = None,
+    canonical: Path | None = None,
+) -> dict[str, int]:
+    """sessions を session_store union read で読み、project 別に **distinct session 数** を返す（#85）。
+
+    `aggregate_subagents_by_project` と対称の queue 補助シグナル。fleet queue の
+    ``activity_since.sessions`` がリテラル 0 にハードコードされていた内部不整合（subagents は
+    実値・sessions だけ 0）を実値配線するための集計関数。
+
+    - read は ``session_store.read_session_records_union(canonical, since=<cutoff_iso>)``
+      を使う（cross-dir union・read_only・mkdir/CREATE しない＝**読み取り専用厳守**・#469 流儀）。
+      ``canonical=None`` のとき union read は既定 DATA_DIR を読む。``canonical`` はテスト注入用に
+      素通しする（``canonical.parent`` から候補 dir が導出されるため hermetic 化できる）。
+    - sessions.jsonl は 1 session につき複数行（instructions_loaded + session_summary 等）に
+      なるため、**行数でなく distinct ``session_id``** を数える（``dict[str, set[str]]`` で集めて
+      最後に len）。``session_id`` 欠損 / 空の record は distinct 母数に入れない。
+    - ``project`` は session record ではフルパス（``/x/evolve-anything/...``）なので
+      ``outcome_metrics._normalize_pj``（path→worktree 安全 slug→canonical fold の単一ソース・
+      fanout_cost と共有）で slug 化する。空 / 非 str / 解決不能は ``(unknown)`` に分類する。
+      import 失敗時は basename 素通し。
+
+    Returns:
+        {project_slug: distinct_session_count}。キーに ``(unknown)`` も含まれ得る。
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=window_days)
+
+    import session_store
+
+    records = session_store.read_session_records_union(
+        canonical, since=cutoff.isoformat()
+    )
+
+    try:
+        from audit.outcome_metrics import _normalize_pj
+    except ImportError:  # pragma: no cover - パス未解決時のフォールバック
+        _normalize_pj = None  # type: ignore
+
+    by_project: dict[str, set[str]] = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        sid = rec.get("session_id")
+        if not isinstance(sid, str) or not sid:
+            continue  # distinct の母数に session_id 欠損は入れない
+        project_raw = rec.get("project")
+        slug: str | None = None
+        if isinstance(project_raw, str) and project_raw:
+            if _normalize_pj is not None:
+                slug = _normalize_pj(project_raw)
+            else:
+                slug = Path(project_raw).name or None
+        project = slug or _UNKNOWN_PROJECT_LABEL
+        by_project.setdefault(project, set()).add(sid)
+
+    return {project: len(sids) for project, sids in by_project.items()}
+
+
 def collect_fleet_status(
     root: Path | None = None,
     settings_path: Path | None = None,

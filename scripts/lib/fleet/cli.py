@@ -276,9 +276,12 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     from rl_common import project_name_from_dir
 
     from . import _current_data_dir
-    from .collectors import aggregate_subagents_by_project
+    from .collectors import (
+        aggregate_sessions_by_project,
+        aggregate_subagents_by_project,
+    )
     from .project_loader import enumerate_projects
-    from .queue import build_queue_result
+    from .queue import _correction_slug, build_queue_result
     from .queue_state import read_last_evolve
 
     config = fleet_config.load_config()
@@ -304,10 +307,30 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
 
     last_evolve_map = read_last_evolve(data_dir=data_dir)
     subagent_counts = aggregate_subagents_by_project()
+    session_counts = aggregate_sessions_by_project()
     activity_map = {
-        slug: {"subagents": subagent_counts.get(slug, 0), "sessions": 0}
+        slug: {
+            "subagents": subagent_counts.get(slug, 0),
+            "sessions": session_counts.get(slug, 0),
+        }
         for slug in pj_slugs
     }
+
+    # material 母集団（weak_signals + corrections に出現する全 slug）と、それを実 dir に
+    # 解決できる untracked PJ の gate map（#86 O2）。queue の母集団は tracked_projects 限定
+    # だが material 母集団の方が広く、material を持つ untracked PJ（例: amamo）が完全沈黙し
+    # 真の evolve 候補を取りこぼす。weak は read_unpromoted（reader と同一ソース）、corr は
+    # _correction_slug で per-PJ reader と同じ正規化に揃える（名前空間ズレ防止）。
+    material_slugs = _collect_material_slugs(
+        weak_signals_path=weak_path if weak_path.exists() else None,
+        corrections_path=corr_path,
+        correction_slug=_correction_slug,
+    )
+    # 実 dir gate: CC が認識する実在 PJ dir（CLAUDE.md/.claude 有）に解決できる slug のみ
+    # untracked surface する（phantom/temp slug 除外）。status の新候補検出と同じ discovery。
+    untracked_dir_map: dict = {}
+    for vp in fleet_config.filter_valid_projects(fleet_config.discover_cc_projects()):
+        untracked_dir_map.setdefault(project_name_from_dir(str(vp)), str(vp))
 
     return build_queue_result(
         pj_slugs=pj_slugs,
@@ -318,7 +341,55 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         activity_map=activity_map,
         generated_at=datetime.now(timezone.utc).isoformat(),
         pj_paths=pj_paths,
+        material_slugs=material_slugs,
+        untracked_dir_map=untracked_dir_map,
     )
+
+
+def _collect_material_slugs(
+    *,
+    weak_signals_path: Path | None,
+    corrections_path: Path,
+    correction_slug,
+) -> list[str]:
+    """weak_signals + corrections に出現する全 pj_slug を集める（重複可・#86 O2）。
+
+    weak は ``correction_semantic.promote.read_unpromoted`` の ``pj_slug``、corr は
+    ``queue._correction_slug``（per-PJ reader と同一正規化）で bare slug 化する。空文字は
+    除外。dedup は呼び側（``collect_untracked_materials`` が canonical fold 後に行う）。
+    読み取り専用・例外は握りつぶして空寄りに倒す（advisory のため落とさない）。
+    """
+    slugs: list[str] = []
+    try:
+        from correction_semantic.promote import read_unpromoted
+
+        for r in read_unpromoted(
+            weak_signals_path=weak_signals_path, exclude_expired=True
+        ):
+            s = r.get("pj_slug")
+            if s:
+                slugs.append(s)
+    except Exception:
+        pass
+    if corrections_path.exists():
+        try:
+            text = corrections_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = _json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            s = correction_slug(rec.get("project_path"))
+            if s:
+                slugs.append(s)
+    return slugs
 
 
 def _run_queue(args: argparse.Namespace) -> int:

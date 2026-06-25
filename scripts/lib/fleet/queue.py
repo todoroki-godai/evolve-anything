@@ -163,6 +163,88 @@ def new_corrections_by_pj(
     return count
 
 
+# --- untracked だが学習素材を持つ PJ の advisory 列挙（#86）-------------------
+
+_UNKNOWN_PROJECT_LABEL = "(unknown)"  # collectors._UNKNOWN_PROJECT_LABEL と一致させる
+
+
+def _canonical_slug(slug: str) -> str:
+    """slug を canonical（rename 旧→現）に畳む。import 失敗時は素通し。"""
+    try:
+        from pj_slug import canonical_pj_slug
+        return canonical_pj_slug(slug) or slug
+    except Exception:
+        return slug
+
+
+def collect_untracked_materials(
+    *,
+    material_slugs: List[str],
+    tracked_slugs: set,
+    threshold: int,
+    weak_signals_path: Optional[Path],
+    corrections_path: Path,
+    dir_map: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """material（weak/corr）を持つが queue 母集団（tracked）に居ない PJ を advisory 列挙する（#86）。
+
+    queue の母集団は fleet-config.json の ``tracked_projects`` 限定だが、material 母集団
+    （weak_signals / corrections に出現する全 pj_slug）の方が広い。この不一致で、material を
+    持つ untracked PJ（例: amamo weak 64 件だが tracked 外）が待ちにも skipped_dead にも
+    出ず完全沈黙し真の evolve 候補を取りこぼす（O2）。本関数はその差集合を surface する。
+
+    対象 slug は以下を**全て満たす**もの: ① ``tracked_slugs`` に無い ② ``dir_map`` に
+    実 dir を持つ（``Path(dir_map[slug]).is_dir()`` が真＝phantom/temp slug 除外ゲート）
+    ③ ``(unknown)`` でない。各 ``material_slugs`` は ``canonical_pj_slug`` で fold
+    （rename 旧 slug を現 slug に畳む。import 失敗時は素通し）してから dedup する。
+
+    対象 slug について ``weak_unprocessed_by_pj`` + ``new_corrections_by_pj``
+    （untracked は last_evolve state 無し＝全件）を集計し、``material_count >= threshold``
+    のものを material_count 降順（同数は pj_slug 昇順）で返す。
+
+    Returns:
+        ``[{pj_slug, project_path, material_count, weak_unprocessed, new_corrections}]``。
+        純関数（store I/O は既存 reader 経由・dir_map/material_slugs は呼び側が用意）。
+    """
+    tracked_canon = {_canonical_slug(s) for s in tracked_slugs}
+    seen: set = set()
+    candidates: List[str] = []
+    for raw in material_slugs:
+        slug = _canonical_slug(raw)
+        if not slug or slug == _UNKNOWN_PROJECT_LABEL:
+            continue
+        if slug in tracked_canon:
+            continue
+        path = dir_map.get(slug)
+        if not path or not Path(path).is_dir():
+            continue
+        if slug in seen:
+            continue
+        seen.add(slug)
+        candidates.append(slug)
+
+    out: List[Dict[str, Any]] = []
+    for slug in candidates:
+        weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
+        corr = new_corrections_by_pj(
+            slug, last_evolve_at=None, corrections_path=corrections_path
+        )
+        count = weak + corr
+        if count < threshold:
+            continue
+        out.append(
+            {
+                "pj_slug": slug,
+                "project_path": dir_map[slug],
+                "material_count": count,
+                "weak_unprocessed": weak,
+                "new_corrections": corr,
+            }
+        )
+    out.sort(key=lambda x: (-x["material_count"], x["pj_slug"]))
+    return out
+
+
 # --- 統合: per-PJ material 収集 + queue result 組み立て -----------------------
 
 
@@ -176,13 +258,15 @@ def build_queue_result(
     activity_map: Dict[str, Dict[str, int]],
     generated_at: str,
     pj_paths: Optional[Dict[str, str]] = None,
+    material_slugs: Optional[List[str]] = None,
+    untracked_dir_map: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """各 PJ の学習素材を集計し、Phase 1b #80 契約の queue result dict を返す。
 
     schema:
-      {generated_at, threshold, tracked_total, skipped_dead, queue: [{pj_slug,
-       project_path, material_count, weak_unprocessed, new_corrections,
-       last_evolve_at, activity_since, reason}]}
+      {generated_at, threshold, tracked_total, skipped_dead, untracked_with_material,
+       queue: [{pj_slug, project_path, material_count, weak_unprocessed,
+       new_corrections, last_evolve_at, activity_since, reason}]}
 
     weak/corr の reader はそれぞれ ``weak_unprocessed_by_pj`` / ``new_corrections_by_pj``。
     queue は ``select_evolve_queue``（純関数）で閾値フィルタ + 降順ソートする。
@@ -192,6 +276,12 @@ def build_queue_result(
     透明化）。各 material/queue entry には ``project_path`` を添え、利用側が親 dir 推測なしに
     ``/cd`` できるようにする。``pj_paths=None``（未指定）は後方互換: dead 判定をせず全件 live・
     ``project_path=None``。``tracked_total`` は dead 含む全 tracked 数のまま。
+
+    ``material_slugs``（weak/corr に出現する全 slug）+ ``untracked_dir_map``（slug→実 dir）が
+    **両方**与えられたら、tracked 母集団に居ない material 持ち PJ を ``collect_untracked_materials``
+    で集計し ``untracked_with_material`` に入れる（#86 O2 — material 母集団まで母数を広げ
+    untracked を advisory 表示）。どちらか None なら ``untracked_with_material=[]``（後方互換）。
+    ``tracked_total`` は意味を変えず ``len(pj_slugs)``（tracked 母数）のまま。
     """
     paths = pj_paths or {}
     materials: List[Dict[str, Any]] = []
@@ -218,10 +308,24 @@ def build_queue_result(
         )
 
     queue = select_evolve_queue(materials, threshold=threshold)
+
+    if material_slugs is not None and untracked_dir_map is not None:
+        untracked = collect_untracked_materials(
+            material_slugs=material_slugs,
+            tracked_slugs=set(pj_slugs),
+            threshold=threshold,
+            weak_signals_path=weak_signals_path,
+            corrections_path=corrections_path,
+            dir_map=untracked_dir_map,
+        )
+    else:
+        untracked = []
+
     return {
         "generated_at": generated_at,
         "threshold": threshold,
         "tracked_total": len(pj_slugs),
         "queue": queue,
         "skipped_dead": skipped_dead,
+        "untracked_with_material": untracked,
     }
