@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from weak_signals.store import STORE_NAME as _WS_STORE_NAME, read_signals
+from weak_signals.ttl import is_effectively_expired
 
 # #46 read 層拡張: union read（昇格候補）+ union mark（再昇格防止）の候補 dir 解決を共有する。
 from store_read_union import iter_read_store_paths as _iter_read_store_paths  # noqa: E402
@@ -56,14 +57,17 @@ def read_unpromoted(
     """未昇格（promoted=False）の weak_signal レコードを返す。
 
     channel を渡すとそのチャネルだけに絞る（例: "llm_judge" で #431 のバッチ判定のみ）。
-    exclude_expired（既定 True）は TTL 失効（expired=True）レコードを昇格候補から外す
-    （#442。古い修正候補は腐る — TTL が品質フィルタとして機能する）。後方互換が必要な
-    呼び出しは exclude_expired=False で全件取得できる。
+    exclude_expired（既定 True）は TTL 失効レコードを昇格候補から外す（#442。古い修正
+    候補は腐る — TTL が品質フィルタとして機能する）。失効判定は ``expired`` フラグだけ
+    でなく ``detected_at`` からの age 再計算（``is_effectively_expired`` / #89）で行う。
+    標準フロー（dry-run → drain）は ``mark_expired`` を通らずフラグが書かれないため、
+    read 時に age を導出しないと 45 日超の腐った signal が永久に落ちないからである
+    （write 非依存）。後方互換が必要な呼び出しは exclude_expired=False で全件取得できる。
     """
     recs = read_signals(weak_signals_path)
     out = [r for r in recs if not r.get("promoted")]
     if exclude_expired:
-        out = [r for r in out if not r.get("expired")]
+        out = [r for r in out if not is_effectively_expired(r)]
     if channel is not None:
         out = [r for r in out if r.get("channel") == channel]
     return out

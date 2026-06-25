@@ -40,6 +40,33 @@ def _parse_iso(value: Any) -> Optional[datetime]:
     return dt
 
 
+def is_effectively_expired(rec: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """write 非依存に「実効的に期限切れか」を判定する純関数（#89）。
+
+    標準 evolve フロー（``--dry-run`` 分析 → ``--drain`` 適用）は ``mark_expired``
+    を一度も通らないため ``expired`` フラグが書かれない。read 側がフラグだけを見ると
+    45 日超の腐った signal が ``material_count`` から永久に落ちない。そこで TTL は
+    ``detected_at`` + now の純関数として **read 時に導出** する（store への書込に依存しない）。
+
+    True を返す条件（いずれか）:
+    - ``rec["expired"] is True``（既にマーク済み — 従来挙動を尊重）
+    - ``detected_at`` が parse でき、かつ ``detected_at < now - TTL_DAYS``
+
+    ``detected_at`` が None / 不正で parse 不能なら expired 扱いにしない（False 側に倒す
+    ＝安全側。age 不明のレコードを誤って昇格候補から落とさない）。``now=None`` のときは
+    ``datetime.now(timezone.utc)``。cutoff 比較は ``mark_expired`` と同じ ``<``（境界 ==
+    は expired ではない）で揃える。
+    """
+    if rec.get("expired") is True:
+        return True
+    detected = _parse_iso(rec.get("detected_at"))
+    if detected is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=TTL_DAYS)
+    return detected < cutoff
+
+
 def _is_expirable(rec: Dict[str, Any], cutoff: datetime) -> bool:
     """未昇格・未expired かつ detected_at が cutoff より古いレコードか。"""
     if rec.get("promoted"):

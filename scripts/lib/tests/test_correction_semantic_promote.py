@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _lib_dir = Path(__file__).resolve().parent.parent
@@ -170,6 +171,60 @@ def test_read_unpromoted_can_include_expired(tmp_path: Path) -> None:
     ws = tmp_path / "weak_signals.jsonl"
     _seed_with_expired(ws)
     assert len(cs_promote.read_unpromoted(weak_signals_path=ws, exclude_expired=False)) == 2
+
+
+# ── #89: read 時 age 計算で 45 日 TTL 失効を write 非依存化 ──
+# 標準フロー（--dry-run → --drain）は mark_expired を通らず expired フラグが書かれない
+# ため、read 側が detected_at から age を再計算しないと腐った signal が material_count
+# から落ちない。下記は **フラグ書込ゼロ** でも除外されること（write 非依存）を assert する。
+
+
+def _iso_days_ago(days: int) -> str:
+    """実時刻基準で days 日前の ISO8601 UTC（read_unpromoted は real now を使うため）。"""
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+def _seed_aged_unflagged(ws_path: Path, days_ago: int):
+    """detected_at が days_ago 日前・expired フラグ無し・promoted=False の 1 件を seed。
+
+    フラグを一切立てない（mark_expired を通さない標準フローの状態を再現）。
+    """
+    sig = WeakSignal("rephrase", {"line_no": 1}, _iso_days_ago(days_ago), "s1", "evolve-anything")
+    append_signals([sig], path=ws_path)
+    return sig
+
+
+def test_read_unpromoted_excludes_aged_signal_without_expired_flag(tmp_path: Path) -> None:
+    """detected_at 46 日前・expired フラグ無しは exclude_expired=True で除外（write 非依存）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    _seed_aged_unflagged(ws, days_ago=46)
+    # フラグが書かれていないことを確認（mark_expired を通していない）
+    recs = [json.loads(l) for l in ws.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert all("expired" not in r or r.get("expired") is False for r in recs)
+    # それでも read 時 age 計算で除外される
+    assert cs_promote.read_unpromoted(weak_signals_path=ws) == []
+
+
+def test_read_unpromoted_includes_aged_signal_when_exclude_off(tmp_path: Path) -> None:
+    """exclude_expired=False なら 46 日前でも返る（後方互換）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    _seed_aged_unflagged(ws, days_ago=46)
+    assert len(cs_promote.read_unpromoted(weak_signals_path=ws, exclude_expired=False)) == 1
+
+
+def test_read_unpromoted_keeps_signal_within_ttl(tmp_path: Path) -> None:
+    """44 日前（TTL 内）は除外されない（境界）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    _seed_aged_unflagged(ws, days_ago=44)
+    assert len(cs_promote.read_unpromoted(weak_signals_path=ws)) == 1
+
+
+def test_read_unpromoted_keeps_signal_with_unparsable_detected_at(tmp_path: Path) -> None:
+    """detected_at が parse 不能なら除外しない（安全側＝昇格候補に残す）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    sig = WeakSignal("rephrase", {"line_no": 1}, "not-a-date", "s1", "evolve-anything")
+    append_signals([sig], path=ws)
+    assert len(cs_promote.read_unpromoted(weak_signals_path=ws)) == 1
 
 
 # ── idiom_dict 昇格（ADR-047・source/promoted_by/idiom_key を残す） ────
