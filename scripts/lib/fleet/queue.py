@@ -98,6 +98,13 @@ def select_evolve_queue(
         count = weak + corr
         if count < threshold:
             continue
+        last_evolve = m.get("last_evolve_at")
+        # #92: 未 drain（last_evolve_at=None）は corr が「前回 evolve 以降の増分」でなく全件。
+        # 『new corr』だと never と矛盾して見えるので「全件・未 drain」と明示する。
+        if last_evolve is None:
+            reason = f"weak={weak} + corr={corr}（全件・未 drain）>= {threshold}"
+        else:
+            reason = f"weak={weak} + new corr={corr} >= {threshold}"
         selected.append(
             {
                 "pj_slug": m["pj_slug"],
@@ -105,9 +112,9 @@ def select_evolve_queue(
                 "material_count": count,
                 "weak_unprocessed": weak,
                 "new_corrections": corr,
-                "last_evolve_at": m.get("last_evolve_at"),
+                "last_evolve_at": last_evolve,
                 "activity_since": m.get("activity_since", {"subagents": 0, "sessions": 0}),
-                "reason": f"weak={weak} + new corr={corr} >= {threshold}",
+                "reason": reason,
             }
         )
     selected.sort(key=lambda x: (-x["material_count"], x["pj_slug"]))
@@ -231,6 +238,44 @@ def new_corrections_by_pj(
                 continue
         count += 1
     return count
+
+
+def count_unattributed_corrections(corrections_path: Path) -> Dict[str, Any]:
+    """``project_path`` 欠落で PJ 帰属不能な corrections を source 別に数える（#91）。
+
+    ``_correction_slug`` が空文字に落ちるレコード（``project_path`` が空/None）は、どの PJ の
+    ``material_count`` にも数えられず ``untracked_with_material`` にも ``skipped_phantom`` にも
+    出ないため queue から構造的に完全不可視になる（silent truncation の一種）。#86/#88 の
+    「無音で落とさない」原則の最後の穴埋めとして、件数 + source 内訳を advisory に surface する。
+
+    返り値: ``{"total": int, "by_source": {source: count}}``。``source`` 欠落は ``(unknown)``。
+    ファイル不在 / 読込失敗 → ``{"total": 0, "by_source": {}}``（advisory ゆえ落とさない）。
+    """
+    result: Dict[str, Any] = {"total": 0, "by_source": {}}
+    path = Path(corrections_path)
+    if not path.exists():
+        return result
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return result
+    by_source: Dict[str, int] = result["by_source"]
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            rec = json.loads(s)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if _correction_slug(rec.get("project_path")):
+            continue  # 帰属可能なものは対象外
+        result["total"] += 1
+        src = rec.get("source") or "(unknown)"
+        by_source[src] = by_source.get(src, 0) + 1
+    return result
 
 
 # --- untracked だが学習素材を持つ PJ の advisory 列挙（#86）-------------------
@@ -524,4 +569,6 @@ def build_queue_result(
         "skipped_dead": skipped_dead,
         "untracked_with_material": untracked,
         "skipped_phantom": phantom,
+        # #91: project_path 欠落で PJ 帰属不能な corrections（どの母数にも入らず不可視）を透明化。
+        "unattributed_corrections": count_unattributed_corrections(corrections_path),
     }

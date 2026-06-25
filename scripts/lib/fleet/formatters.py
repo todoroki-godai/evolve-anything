@@ -230,6 +230,30 @@ def _append_skipped_phantom(lines: list, result: dict) -> None:
     )
 
 
+def _append_unattributed(lines: list, result: dict) -> None:
+    """PJ 帰属不能な corrections（project_path 欠落）を件数 + source 内訳で透明化表示する（#91）。
+
+    ``_correction_slug`` が空に落ちるレコードはどの PJ の material にも数えられず queue から
+    構造的に不可視。``skipped_dead`` / ``skipped_phantom`` と同じ「無音で落とさない」方針で、
+    今後 hook 不具合等で欠落が増えたときに気づけるよう source 内訳まで出す。total 0 / キー
+    欠落なら何もしない。source は件数降順（同数は名前昇順）で並べる。
+    """
+    ua = result.get("unattributed_corrections") or {}
+    total = ua.get("total", 0)
+    if not total:
+        return
+    by_source = ua.get("by_source") or {}
+    parts = [
+        f"{src}={cnt}"
+        for src, cnt in sorted(by_source.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    breakdown = f" — {', '.join(parts)}" if parts else ""
+    lines.append(
+        f"（PJ 未帰属 corrections: {total} 件{breakdown}"
+        f" — project_path 欠落で queue 不可視）"
+    )
+
+
 def format_queue_table(result: dict) -> str:
     """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
@@ -250,6 +274,7 @@ def format_queue_table(result: dict) -> str:
         _append_skipped_dead(lines, result)
         _append_untracked(lines, result)
         _append_skipped_phantom(lines, result)
+        _append_unattributed(lines, result)
         return "\n".join(lines) + "\n"
 
     rows: list[list[str]] = []
@@ -282,4 +307,5 @@ def format_queue_table(result: dict) -> str:
     _append_skipped_dead(lines, result)
     _append_untracked(lines, result)
     _append_skipped_phantom(lines, result)
+    _append_unattributed(lines, result)
     return "\n".join(lines) + "\n"
