@@ -21,6 +21,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+# --- alias fold: rename 済 PJ の旧 slug を現 slug に畳む -----------------------
+
+
+def _aliases_for(slug: str) -> set:
+    """``slug``（現 slug）に集計すべき全 slug（自身 + 畳まれる旧名）の集合を返す。
+
+    rename 済 PJ（例: ``rl-anything`` → ``evolve-anything``）の旧 slug レコードを
+    現 slug の集計に含めるため、``pj_slug.pj_slug_aliases_for`` を read 層別名 SoT として
+    再利用する（write 側 deriver には適用しない）。import 失敗時は ``{slug}`` で保守的に
+    フォールバック（自身のみ・cross-PJ 副作用なし）。
+    """
+    try:
+        from pj_slug import pj_slug_aliases_for
+        a = pj_slug_aliases_for(slug)
+        return a or {slug}
+    except Exception:
+        return {slug}
+
+
 # --- 純関数: 閾値判定 + 並び替え ---------------------------------------------
 
 
@@ -45,6 +64,7 @@ def select_evolve_queue(
         selected.append(
             {
                 "pj_slug": m["pj_slug"],
+                "project_path": m.get("project_path"),
                 "material_count": count,
                 "weak_unprocessed": weak,
                 "new_corrections": corr,
@@ -75,7 +95,8 @@ def weak_unprocessed_by_pj(
     from correction_semantic.promote import read_unpromoted
 
     recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
-    return sum(1 for r in recs if r.get("pj_slug") == pj_slug)
+    aliases = _aliases_for(pj_slug)
+    return sum(1 for r in recs if r.get("pj_slug") in aliases)
 
 
 # --- store reader: 前回 evolve 以降の corrections カウント（PJ 別）------------
@@ -132,7 +153,7 @@ def new_corrections_by_pj(
             continue
         if not isinstance(rec, dict):
             continue
-        if _correction_slug(rec.get("project_path")) != pj_slug:
+        if _correction_slug(rec.get("project_path")) not in _aliases_for(pj_slug):
             continue
         if last_evolve_at is not None:
             ts = rec.get("timestamp")
@@ -154,22 +175,37 @@ def build_queue_result(
     last_evolve_map: Dict[str, str],
     activity_map: Dict[str, Dict[str, int]],
     generated_at: str,
+    pj_paths: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """各 PJ の学習素材を集計し、Phase 1b #80 契約の queue result dict を返す。
 
     schema:
-      {generated_at, threshold, tracked_total, queue: [{pj_slug, material_count,
-       weak_unprocessed, new_corrections, last_evolve_at, activity_since, reason}]}
+      {generated_at, threshold, tracked_total, skipped_dead, queue: [{pj_slug,
+       project_path, material_count, weak_unprocessed, new_corrections,
+       last_evolve_at, activity_since, reason}]}
 
     weak/corr の reader はそれぞれ ``weak_unprocessed_by_pj`` / ``new_corrections_by_pj``。
     queue は ``select_evolve_queue``（純関数）で閾値フィルタ + 降順ソートする。
+
+    ``pj_paths``（slug → 実パス）を渡すと、実ディレクトリが不在の PJ（rename 済の dead
+    パス等・#79）は queue に出さず ``skipped_dead`` に分離する（silent truncation 禁止＝
+    透明化）。各 material/queue entry には ``project_path`` を添え、利用側が親 dir 推測なしに
+    ``/cd`` できるようにする。``pj_paths=None``（未指定）は後方互換: dead 判定をせず全件 live・
+    ``project_path=None``。``tracked_total`` は dead 含む全 tracked 数のまま。
     """
+    paths = pj_paths or {}
     materials: List[Dict[str, Any]] = []
+    skipped_dead: List[Dict[str, Any]] = []
     for slug in pj_slugs:
+        path = paths.get(slug)
+        if path is not None and not Path(path).is_dir():
+            skipped_dead.append({"pj_slug": slug, "project_path": path})
+            continue
         last = last_evolve_map.get(slug)
         materials.append(
             {
                 "pj_slug": slug,
+                "project_path": path,
                 "weak_unprocessed": weak_unprocessed_by_pj(
                     slug, weak_signals_path=weak_signals_path
                 ),
@@ -187,4 +223,5 @@ def build_queue_result(
         "threshold": threshold,
         "tracked_total": len(pj_slugs),
         "queue": queue,
+        "skipped_dead": skipped_dead,
     }
