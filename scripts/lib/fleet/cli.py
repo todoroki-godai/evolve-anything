@@ -276,7 +276,10 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     from rl_common import project_name_from_dir
 
     from . import _current_data_dir
-    from .collectors import aggregate_subagents_by_project
+    from .collectors import (
+        aggregate_sessions_by_project,
+        aggregate_subagents_by_project,
+    )
     from .project_loader import enumerate_projects
     from .queue import build_queue_result
     from .queue_state import read_last_evolve
@@ -304,8 +307,12 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
 
     last_evolve_map = read_last_evolve(data_dir=data_dir)
     subagent_counts = aggregate_subagents_by_project()
+    session_counts = aggregate_sessions_by_project()
     activity_map = {
-        slug: {"subagents": subagent_counts.get(slug, 0), "sessions": 0}
+        slug: {
+            "subagents": subagent_counts.get(slug, 0),
+            "sessions": session_counts.get(slug, 0),
+        }
         for slug in pj_slugs
     }
 

@@ -456,3 +456,101 @@ class TestAliasFold:
         assert fq.new_corrections_by_pj(
             "other-pj", last_evolve_at=None, corrections_path=store
         ) == 1
+
+
+# --- aggregate_sessions_by_project（activity_since.sessions の実値配線・#85）----
+
+
+from fleet import collectors as fc  # noqa: E402
+
+
+def _sess(session_id, ts, project):
+    """テスト用 session レコード。distinct session_id を数えるので複数行で同 id を使える。"""
+    rec = {"session_id": session_id, "timestamp": ts, "project": project}
+    return rec
+
+
+class TestAggregateSessions:
+    """aggregate_sessions_by_project: session_store union read から distinct session_id を
+    project 別に数える（#85）。canonical を tmp/evolve-anything にすると iter_read_data_dirs
+    が canonical.parent を起点に候補を導出するため、兄弟 dir を作らなければ hermetic。
+    """
+
+    @staticmethod
+    def _canonical(root: Path) -> Path:
+        c = root / "evolve-anything"
+        c.mkdir(parents=True, exist_ok=True)
+        return c
+
+    @staticmethod
+    def _write(canonical: Path, records: list) -> None:
+        (canonical / "sessions.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in records)
+        )
+
+    def test_counts_distinct_session_ids_by_project(self, tmp_path):
+        """同一 session_id 複数行は 1 とカウントし、project 別に分ける。"""
+        canonical = self._canonical(tmp_path)
+        self._write(
+            canonical,
+            [
+                _sess("s1", "2026-06-20T00:00:00+00:00", "/p/alpha"),
+                _sess("s1", "2026-06-20T01:00:00+00:00", "/p/alpha"),  # 同 session の別行
+                _sess("s2", "2026-06-21T00:00:00+00:00", "/p/alpha"),
+                _sess("s3", "2026-06-21T00:00:00+00:00", "/p/beta"),
+            ],
+        )
+        now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
+        counts = fc.aggregate_sessions_by_project(canonical=canonical, now=now)
+        assert counts.get("alpha") == 2  # s1, s2（distinct）
+        assert counts.get("beta") == 1
+
+    def test_excludes_out_of_window(self, tmp_path):
+        """window_days より古い record は数えない。"""
+        canonical = self._canonical(tmp_path)
+        self._write(
+            canonical,
+            [
+                _sess("recent", "2026-06-24T00:00:00+00:00", "/p/alpha"),
+                _sess("old", "2026-01-01T00:00:00+00:00", "/p/alpha"),  # 窓外
+            ],
+        )
+        now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
+        counts = fc.aggregate_sessions_by_project(
+            canonical=canonical, now=now, window_days=30
+        )
+        assert counts.get("alpha") == 1  # recent のみ
+
+    def test_empty_project_goes_to_unknown(self, tmp_path):
+        """空 / 欠損 project は (unknown) に分類する。"""
+        canonical = self._canonical(tmp_path)
+        self._write(
+            canonical,
+            [
+                _sess("s1", "2026-06-20T00:00:00+00:00", ""),
+                {"session_id": "s2", "timestamp": "2026-06-20T00:00:00+00:00"},  # project 欠損
+            ],
+        )
+        now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
+        counts = fc.aggregate_sessions_by_project(canonical=canonical, now=now)
+        assert counts.get(fc._UNKNOWN_PROJECT_LABEL) == 2
+
+    def test_missing_session_id_not_counted(self, tmp_path):
+        """session_id 欠損 / 空の record は distinct 母数に入らない。"""
+        canonical = self._canonical(tmp_path)
+        self._write(
+            canonical,
+            [
+                _sess("s1", "2026-06-20T00:00:00+00:00", "/p/alpha"),
+                {"timestamp": "2026-06-20T00:00:00+00:00", "project": "/p/alpha"},  # id 欠損
+                _sess("", "2026-06-20T00:00:00+00:00", "/p/alpha"),  # 空 id
+            ],
+        )
+        now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
+        counts = fc.aggregate_sessions_by_project(canonical=canonical, now=now)
+        assert counts.get("alpha") == 1  # s1 のみ
+
+    def test_empty_when_no_data(self, tmp_path):
+        canonical = self._canonical(tmp_path)
+        now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
+        assert fc.aggregate_sessions_by_project(canonical=canonical, now=now) == {}
