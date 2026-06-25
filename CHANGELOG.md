@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(fleet): queue が PJ 帰属不能な corrections を advisory 透明化（closes #91）** — `/queue` 実機 dogfood（2026-06-25）で発見。`fleet.queue` は corrections の `project_path` を `_correction_slug` で bare slug 化して PJ ごとに集計するが、実コーパスの corrections.jsonl には `project_path` が空/None のレコードが **9 件**（backfill=8 / hook=1）あり、slug が空文字に落ちるためどの PJ の `material_count` にも数えられず `untracked_with_material` にも `skipped_phantom` にも出ず **queue から構造的に完全不可視**（silent truncation の一種・#86/#88 の「無音で落とさない」原則と非対称）。今後 hook 不具合等で `project_path` 欠落が増えても気づけない（実測で既に hook 由来 1 件あり）。**Fix**: `queue.count_unattributed_corrections`（決定論・`_correction_slug` が空に落ちるレコードを source 別に集計し `{total, by_source}` を返す・ファイル不在は 0）を新設し `build_queue_result` の result に `unattributed_corrections` キーを追加、formatters の `_append_unattributed` が footer に `（PJ 未帰属 corrections: 9 件 — backfill=8, hook=1 — project_path 欠落で queue 不可視）` を出す（total 0 / キー欠落は無音・後方互換）。daily consumer（`queue_notice`）は `.get()` 防御読みのためキー追加は非破壊。snapshot は未 re-export ゆえ不変。TDD 8件・read-only・決定論・LLM 非依存。
+
+### Fixed
+- **fix(fleet): queue の cold-start REASON が `never` と矛盾して見える文言を是正（closes #92）** — `/queue` dogfood（2026-06-25）で発見。`evolve-fleet queue` の表は初回（`evolve --drain` 未実行＝`evolve-queue-state.jsonl` 不在）で全 PJ が `LAST_EVOLVE=never` なのに REASON に `weak=35 + new corr=30 >= 5` と出し、`new_corrections_by_pj` が `last_evolve_at=None` で全件カウントする設計（初回＝全件待ち）は正しいが、CLI 表を直読みする人間には「一度も evolve してない（never）のに前回 evolve 以降の新規 corr が 30」が矛盾に見えた（SKILL.md の注記は素の CLI を叩く daily 通知・他 PJ 経路に届かない）。**Fix**: `select_evolve_queue` の reason を `last_evolve_at is None` のとき `weak=35 + corr=30（全件・未 drain）>= 5` に出し分け（drain 済は従来通り `new corr`）。ロジック・件数は不変、表示のみ。実コーパスで全 9 待ち PJ が「全件・未 drain」表記に切替を実測。TDD 2件・決定論・LLM 非依存。
+
 ## [1.112.1] - 2026-06-25
 
 ### Fixed

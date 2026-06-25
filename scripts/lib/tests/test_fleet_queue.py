@@ -71,9 +71,20 @@ class TestSelectEvolveQueue:
         assert out[0]["material_count"] == 4
 
     def test_reason_string_describes_breakdown(self):
-        mats = [_material("a", weak=7, corr=2)]
+        """drain 済（last_evolve_at あり）は『new corr』表記（前回 evolve 以降の増分）。"""
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
         out = fq.select_evolve_queue(mats, threshold=3)
         assert out[0]["reason"] == "weak=7 + new corr=2 >= 3"
+
+    def test_reason_coldstart_marks_all_unprocessed(self):
+        """last_evolve_at=None（未 drain）は corr 全件計上が一目で分かる文言にする（#92）。
+
+        never なのに『new corr』だと「一度も evolve してないのに前回以降の新規 corr」が
+        矛盾に見える。全件・未 drain と明示して CLI 直読みの誤読を防ぐ。
+        """
+        mats = [_material("a", weak=7, corr=2, last=None)]
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"] == "weak=7 + corr=2（全件・未 drain）>= 3"
 
     def test_sorted_by_material_count_desc(self):
         """material_count 降順で並ぶ（多い PJ が先頭）。"""
@@ -211,6 +222,46 @@ class TestNewCorrectionsByPj:
 # --- per-PJ last_evolve state（read / write barrier 経由）---------------------
 
 
+class TestCountUnattributedCorrections:
+    """project_path 欠落で PJ 帰属不能な corrections を source 別に数える（#91）。
+
+    ``_correction_slug`` が空文字に落ちるレコードはどの PJ の material にも数えられず、
+    untracked/phantom にも出ないため queue から構造的に不可視（silent truncation）。
+    #86/#88 の「無音で落とさない」原則の最後の穴埋めとして件数+source 内訳を advisory 化する。
+    """
+
+    def test_counts_empty_project_path_by_source(self, tmp_path):
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(
+            json.dumps({"project_path": "", "source": "backfill", "timestamp": "t"}) + "\n"
+            + json.dumps({"project_path": None, "source": "backfill", "timestamp": "t"}) + "\n"
+            + json.dumps({"project_path": None, "source": "hook", "timestamp": "t"}) + "\n"
+            + json.dumps(_corr("/Users/x/amamo", "t")) + "\n"  # 帰属可能 → 対象外
+        )
+        out = fq.count_unattributed_corrections(store)
+        assert out["total"] == 3
+        assert out["by_source"] == {"backfill": 2, "hook": 1}
+
+    def test_missing_source_falls_back_to_unknown(self, tmp_path):
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(json.dumps({"project_path": "", "timestamp": "t"}) + "\n")
+        out = fq.count_unattributed_corrections(store)
+        assert out == {"total": 1, "by_source": {"(unknown)": 1}}
+
+    def test_attributed_records_excluded(self, tmp_path):
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(
+            json.dumps(_corr("/Users/x/amamo", "t")) + "\n"
+            + json.dumps(_corr("sys-bots", "t")) + "\n"  # bare slug も帰属可能
+        )
+        out = fq.count_unattributed_corrections(store)
+        assert out == {"total": 0, "by_source": {}}
+
+    def test_missing_store_returns_zero(self, tmp_path):
+        out = fq.count_unattributed_corrections(tmp_path / "nope.jsonl")
+        assert out == {"total": 0, "by_source": {}}
+
+
 class TestQueueState:
     def test_read_empty_when_missing(self, tmp_path):
         assert qs.read_last_evolve(data_dir=tmp_path) == {}
@@ -296,7 +347,9 @@ class TestBuildQueueResult:
             "skipped_dead",
             "untracked_with_material",
             "skipped_phantom",
+            "unattributed_corrections",
         }
+        assert result["unattributed_corrections"] == {"total": 0, "by_source": {}}
         assert result["generated_at"] == "2026-06-25T09:00:00Z"
         assert result["threshold"] == 3
         assert result["tracked_total"] == 1
@@ -920,7 +973,13 @@ from fleet.formatters import format_queue_table  # noqa: E402
 
 
 def _result(
-    queue=None, tracked=10, untracked=None, skipped=None, phantom=None, threshold=5
+    queue=None,
+    tracked=10,
+    untracked=None,
+    skipped=None,
+    phantom=None,
+    threshold=5,
+    unattributed=None,
 ):
     return {
         "generated_at": "2026-06-25T09:00:00Z",
@@ -930,6 +989,7 @@ def _result(
         "skipped_dead": skipped or [],
         "untracked_with_material": untracked or [],
         "skipped_phantom": phantom or [],
+        "unattributed_corrections": unattributed or {"total": 0, "by_source": {}},
     }
 
 
@@ -982,6 +1042,43 @@ class TestFormatQueueTableUntracked:
         assert "pj4 (material 96)" in out
         assert "pj5" not in out  # 6 件目以降は出さない
         assert ", …" in out
+
+
+class TestFormatQueueTableUnattributed:
+    """PJ 未帰属 corrections の advisory 行（#91）。footer に件数 + source 内訳を出す。"""
+
+    def test_unattributed_line_when_nonempty(self):
+        ua = {"total": 9, "by_source": {"backfill": 8, "hook": 1}}
+        out = format_queue_table(_result(queue=[], unattributed=ua))
+        assert "PJ 未帰属 corrections: 9 件" in out
+        assert "backfill=8" in out
+        assert "hook=1" in out
+
+    def test_unattributed_silent_when_zero(self):
+        out = format_queue_table(_result(queue=[], unattributed={"total": 0, "by_source": {}}))
+        assert "未帰属" not in out
+
+    def test_unattributed_silent_when_key_absent(self):
+        """後方互換: unattributed_corrections キー欠落でも落ちず無音。"""
+        r = _result(queue=[])
+        del r["unattributed_corrections"]
+        out = format_queue_table(r)
+        assert "未帰属" not in out
+
+    def test_unattributed_line_on_waiting_path(self):
+        q = [
+            {
+                "pj_slug": "alpha",
+                "material_count": 7,
+                "weak_unprocessed": 5,
+                "new_corrections": 2,
+                "last_evolve_at": None,
+                "reason": "x",
+            }
+        ]
+        ua = {"total": 3, "by_source": {"hook": 3}}
+        out = format_queue_table(_result(queue=q, unattributed=ua))
+        assert "PJ 未帰属 corrections: 3 件" in out
 
 
 class TestFormatQueueTablePhantom:
