@@ -106,6 +106,7 @@
 | `skill_vuln_scan` | 取り込みスキルの静的脆弱性スキャン（SkillSpector 型）— `.md`/`.sh`/`.bash` を決定論・LLM 非依存で行スキャンし remote_exec/secret_exfil/destructive/prompt_injection/overbroad_tools を検出し audit observability に surface。combo 必須で FP 較正（`gh api ... | base64 -d` 等は非検出・#13） | `skill_vuln_scan.py` + `audit/sections_skill_vuln.py` |
 | `fanout_cost` | fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は #15 同様スパースゆえ各群 ≥5 の floor ゲート付き。subagents.jsonl(agent_type 空除外 #36) + sessions(union read #469) を `_normalize_pj` で当 PJ スコープ | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
 | `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出（human/machine 評価源の蓄積偏り・保守閾値, #73） | `audit/memory_contagion.py` |
+| `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知（#80 Phase 1b）— launchd で `fleet ingest`→`fleet queue --json` を毎朝1回走らせ `evolve-queue.json`（read 専用派生物・SoR でない・store_registry 非登録）に保存。SessionStart hook が待ち PJ を systemMessage（ADR-038）で通知（stale advisory 付き・空なら無音）。無人は決定論パイプラインまで＝適用は対話で人間承認。`bin/evolve-daily-install`(`--time`/`--uninstall`・冪等) + `bin/evolve-daily-run` | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
 
 ## クイックスタート
 
@@ -143,6 +144,10 @@ bin/evolve-fleet recall "認証 ルーティング" --json --limit 5
 # インストール済み CC プラグインの最新性診断（update/drift/unknown を決定論検出）
 bin/evolve-fleet plugins
 bin/evolve-fleet plugins --json
+
+# 毎朝の evolve queue 自動実行を launchd に登録（#80・既定 09:00 / --time HH:MM / --uninstall）
+bin/evolve-daily-install
+bin/evolve-daily-install --uninstall
 
 # エージェント品質診断
 /evolve-anything:agent-brushup

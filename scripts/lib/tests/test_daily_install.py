@@ -1,0 +1,84 @@
+"""daily install/uninstall（launchd ジョブ登録・撤去・冪等）の単体テスト（#80 Phase 1b）。
+
+launchctl は subprocess mock。plist の書き込み先 / LaunchAgents dir は tmp に向ける。
+- install: plist が書かれ launchctl load が呼ばれる
+- install 冪等: 2 回目でも壊れず（既存なら unload→load で再登録）
+- uninstall: launchctl unload + plist 削除。plist 無しでも壊れない
+"""
+import sys
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+from daily import install as inst
+
+
+@pytest.fixture
+def fake_paths(tmp_path, monkeypatch):
+    la = tmp_path / "LaunchAgents"
+    plist = la / f"{inst.LAUNCHD_LABEL}.plist"
+    monkeypatch.setattr(inst.plist_mod, "plist_path", lambda: plist)
+    return tmp_path, plist
+
+
+def test_install_writes_plist_and_loads(fake_paths, monkeypatch):
+    tmp_path, plist = fake_paths
+    calls = []
+    monkeypatch.setattr(inst, "_launchctl", lambda *a: calls.append(a) or 0)
+    rc = inst.install(
+        plugin_root="/p/evolve-anything",
+        data_dir=str(tmp_path / "data"),
+        hour=9,
+        minute=0,
+    )
+    assert rc == 0
+    assert plist.exists()
+    body = plist.read_text(encoding="utf-8")
+    assert inst.LAUNCHD_LABEL in body
+    assert "/p/evolve-anything/bin/evolve-daily-run" in body
+    # load が呼ばれた
+    assert any(c[0] == "load" for c in calls)
+
+
+def test_install_is_idempotent(fake_paths, monkeypatch):
+    tmp_path, plist = fake_paths
+    calls = []
+    monkeypatch.setattr(inst, "_launchctl", lambda *a: calls.append(a) or 0)
+    inst.install(plugin_root="/p", data_dir=str(tmp_path / "data"))
+    calls.clear()
+    # 2 回目: 既存 plist あり → unload してから load（再登録）。壊れない。
+    rc = inst.install(plugin_root="/p", data_dir=str(tmp_path / "data"))
+    assert rc == 0
+    assert plist.exists()
+    assert any(c[0] == "unload" for c in calls)
+    assert any(c[0] == "load" for c in calls)
+
+
+def test_uninstall_unloads_and_removes_plist(fake_paths, monkeypatch):
+    tmp_path, plist = fake_paths
+    calls = []
+    monkeypatch.setattr(inst, "_launchctl", lambda *a: calls.append(a) or 0)
+    inst.install(plugin_root="/p", data_dir=str(tmp_path / "data"))
+    calls.clear()
+    rc = inst.uninstall()
+    assert rc == 0
+    assert not plist.exists()
+    assert any(c[0] == "unload" for c in calls)
+
+
+def test_uninstall_without_plist_is_noop(fake_paths, monkeypatch):
+    tmp_path, plist = fake_paths
+    calls = []
+    monkeypatch.setattr(inst, "_launchctl", lambda *a: calls.append(a) or 0)
+    rc = inst.uninstall()
+    assert rc == 0
+    assert not plist.exists()
+
+
+def test_uninstall_is_idempotent(fake_paths, monkeypatch):
+    tmp_path, plist = fake_paths
+    monkeypatch.setattr(inst, "_launchctl", lambda *a: 0)
+    inst.install(plugin_root="/p", data_dir=str(tmp_path / "data"))
+    assert inst.uninstall() == 0
+    assert inst.uninstall() == 0  # 2 回目も壊れない
