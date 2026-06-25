@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""bin/evolve-daily-install — 毎朝の evolve queue 実行を macOS launchd に登録する（#80 Phase 1b）。
+
+毎朝 1 回、`fleet ingest`→`fleet queue --json` を走らせ待ち PJ を `evolve-queue.json` に保存する
+launchd ジョブを登録する。対話セッション開始時に SessionStart hook が待ち PJ を systemMessage で
+通知する。無人で回せるのは決定論パイプラインまで（適用＝evolve は対話セッションで人間が承認）。
+
+Usage:
+  evolve-daily-install [--time HH:MM]   毎朝の実行を登録（既定 09:00）。冪等。
+  evolve-daily-install --uninstall      撤去（launchctl unload + plist 削除）。冪等。
+
+ログ: $CLAUDE_PLUGIN_DATA/logs/evolve-daily.log（エラー時のスタックも残る）。
+plist: ~/Library/LaunchAgents/com.evolve-anything.daily.plist
+"""
+import argparse
+import os
+import sys
+from pathlib import Path
+
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
+
+import rl_common  # noqa: E402
+from daily import install as inst  # noqa: E402
+from daily import plist as plist_mod  # noqa: E402
+
+
+def _parse_time(value: str) -> "tuple[int, int]":
+    """'HH:MM' を (hour, minute) にパースする。"""
+    try:
+        hh, mm = value.split(":", 1)
+        hour, minute = int(hh), int(mm)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+        return hour, minute
+    except ValueError:
+        raise SystemExit(f"--time は HH:MM 形式で指定してください（例 09:00）。不正値: {value!r}")
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="evolve-daily-install", description=__doc__)
+    parser.add_argument("--time", default=None, help="毎朝の実行時刻 HH:MM（既定 09:00）")
+    parser.add_argument("--uninstall", action="store_true", help="launchd ジョブを撤去")
+    args = parser.parse_args(argv)
+
+    if args.uninstall:
+        inst.uninstall()
+        print(f"[evolve-daily-install] uninstalled: {plist_mod.plist_path()}")
+        return 0
+
+    hour, minute = plist_mod.DEFAULT_HOUR, plist_mod.DEFAULT_MINUTE
+    if args.time:
+        hour, minute = _parse_time(args.time)
+
+    env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+    data_dir = rl_common.resolve_data_dir(env)
+
+    inst.install(
+        plugin_root=str(_PLUGIN_ROOT),
+        data_dir=str(data_dir),
+        hour=hour,
+        minute=minute,
+    )
+    print(
+        f"[evolve-daily-install] installed: {plist_mod.plist_path()}\n"
+        f"  毎日 {hour:02d}:{minute:02d} に fleet ingest→queue を実行\n"
+        f"  queue 出力: {plist_mod.queue_json_path(str(data_dir))}\n"
+        f"  ログ: {plist_mod.log_path(str(data_dir))}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

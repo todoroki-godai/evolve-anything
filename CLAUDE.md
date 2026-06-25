@@ -107,6 +107,7 @@
 | `fanout_cost` | fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は #15 同様スパースゆえ各群 ≥5 の floor ゲート付き。subagents.jsonl(agent_type 空除外 #36) + sessions(union read #469) を `_normalize_pj` で当 PJ スコープ | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
 | `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出（human/machine 評価源の蓄積偏り・保守閾値, #73） | `audit/memory_contagion.py` |
 | `fleet_queue` | 学習素材ベースの evolve 待ち列挙 `evolve-fleet queue`（#79 Phase 1a）— material_count = weak 未処理 + 前回 evolve 以降の新規 corr が `--threshold`（既定5・env `EVOLVE_QUEUE_THRESHOLD`）以上の PJ を決定論・ゼロ LLM で列挙。`select_evolve_queue` 純関数。新ストア `evolve-queue-state.jsonl`（per-PJ `last_evolve_at`・store_registry active・`writer_locus="batch"`・store_write barrier 経由・`evolve --drain` apply 境界で書込）が「前回 evolve 以降」を PJ 別に測る（既存グローバル `evolve-state.json` を補完）。corrections の `project_path` は `project_name_from_dir` で weak_signals `pj_slug` と名前空間統一。`--json` は Phase 1b #80 契約。 | `fleet/queue.py` + `fleet/queue_state.py` |
+| `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知（#80 Phase 1b）— launchd で `fleet ingest`→`fleet queue --json` を毎朝1回走らせ `evolve-queue.json`（read 専用派生物・SoR でない・store_registry 非登録）に保存。SessionStart hook が待ち PJ を systemMessage（ADR-038）で通知（stale advisory 付き・空なら無音）。無人は決定論パイプラインまで＝適用は対話で人間承認。`bin/evolve-daily-install`(`--time`/`--uninstall`・冪等) + `bin/evolve-daily-run` | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
 
 ## クイックスタート
 
@@ -148,6 +149,9 @@ bin/evolve-fleet plugins --json
 # 学習素材ベースで「今 evolve すべき PJ」を列挙（決定論・ゼロ LLM）
 bin/evolve-fleet queue                    # weak 未処理 + 新規 corr >= 閾値（既定5）の PJ をテーブル表示
 bin/evolve-fleet queue --json --threshold 3
+# 毎朝の evolve queue 自動実行を launchd に登録（#80・既定 09:00 / --time HH:MM / --uninstall）
+bin/evolve-daily-install
+bin/evolve-daily-install --uninstall
 
 # エージェント品質診断
 /evolve-anything:agent-brushup

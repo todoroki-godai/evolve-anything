@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""bin/evolve-daily-run — launchd が毎朝呼ぶ daily runner（#80 Phase 1b）。
+
+`fleet ingest`（全 PJ 発話取込・ゼロ LLM）→ `fleet queue --json`（待ち判定）を順に実行し、
+queue の JSON を `$CLAUDE_PLUGIN_DATA/evolve-queue.json` に保存する。決定論パイプラインのみ
+（LLM 非依存）。SessionStart hook（restore_state）が保存結果を読んで通知する。
+
+stdout/stderr は launchd plist の StandardOut/ErrorPath（evolve-daily.log）に集約され、
+エラー時のスタックがログに残る。
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
+
+import rl_common  # noqa: E402
+from daily import plist as plist_mod  # noqa: E402
+
+
+def main() -> int:
+    env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+    data_dir = rl_common.resolve_data_dir(env)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "logs").mkdir(parents=True, exist_ok=True)
+
+    fleet_bin = str(_PLUGIN_ROOT / "bin" / "evolve-fleet")
+    out_path = Path(plist_mod.queue_json_path(str(data_dir)))
+
+    # 1) 全 PJ 発話取込（ゼロ LLM）。失敗しても queue は古い取込で判定できるので継続。
+    print(f"[evolve-daily-run] fleet ingest …", flush=True)
+    rc_ingest = subprocess.run([fleet_bin, "ingest"]).returncode
+    if rc_ingest != 0:
+        print(f"[evolve-daily-run] fleet ingest exited {rc_ingest}（continue）", file=sys.stderr, flush=True)
+
+    # 2) 待ち判定（--json）。stdout を evolve-queue.json に保存。
+    print(f"[evolve-daily-run] fleet queue --json → {out_path}", flush=True)
+    result = subprocess.run([fleet_bin, "queue", "--json"], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(
+            f"[evolve-daily-run] fleet queue failed (rc={result.returncode}):\n{result.stderr}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return result.returncode
+    out_path.write_text(result.stdout, encoding="utf-8")
+    print(f"[evolve-daily-run] wrote {out_path} ({len(result.stdout)} bytes)", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
