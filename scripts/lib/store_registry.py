@@ -330,6 +330,20 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "PJ slug スコープ（全PJ共通 DATA_DIR 単一ファイル pitfall 回避）・dry-run 非書込。"
         "肥大化しない（毎 run 上書き・未解決提案のみ保持）。",
     ),
+    StoreDeclaration(
+        name="evolve-queue-state.jsonl",
+        writer="scripts/lib/fleet/queue_state.persist_last_evolve（evolve --drain の "
+        "apply 境界が完了 PJ の last_evolve_at を 1 レコード追記）。hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="scripts/lib/fleet/queue.build_queue_result が read_last_evolve で per-PJ "
+        "last_evolve_at を読み『前回 evolve 以降』の学習素材を測る（fleet queue・#79）。",
+        retention="permanent",
+        note="#79 per-PJ last_evolve state。既存 evolve-state.json はグローバルで PJ 別に"
+        "測れないため新設。append-only jsonl（{pj_slug, last_evolve_at, ts}）+ "
+        "read 側 last-append-wins fold。reader は最新の last_evolve_at のみ参照・低書込"
+        "レート（per-evolve 1 件）なので permanent。writer は batch（apply 境界）のみ"
+        "（hook-writer stale 突合から writer_locus=batch で除外）。",
+    ),
 ]
 
 

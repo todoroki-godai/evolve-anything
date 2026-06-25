@@ -190,6 +190,7 @@ _EXPECTED_ACTIVE_STORES = [
     "correction_review_seen.jsonl",
     "corrections.jsonl",
     "errors.jsonl",
+    "evolve-queue-state.jsonl",
     "false_positives.jsonl",
     "remediation_suppression/<slug>.jsonl",
     "remediation_surfaced/<slug>.json",
