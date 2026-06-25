@@ -126,6 +126,7 @@ from .cli_tokens import (  # noqa: E402, F401
 # 学習素材ベースの evolve 待ち列挙（#79）は fleet/queue.py + queue_state.py に集約
 from .queue import (  # noqa: E402, F401
     build_queue_result,
+    collect_untracked_materials,
     new_corrections_by_pj,
     select_evolve_queue,
     weak_unprocessed_by_pj,

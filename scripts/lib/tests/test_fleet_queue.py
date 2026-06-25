@@ -263,7 +263,14 @@ class TestBuildQueueResult:
             activity_map={"alpha": {"subagents": 40, "sessions": 5}},
             generated_at="2026-06-25T09:00:00Z",
         )
-        assert set(result.keys()) == {"generated_at", "threshold", "tracked_total", "queue", "skipped_dead"}
+        assert set(result.keys()) == {
+            "generated_at",
+            "threshold",
+            "tracked_total",
+            "queue",
+            "skipped_dead",
+            "untracked_with_material",
+        }
         assert result["generated_at"] == "2026-06-25T09:00:00Z"
         assert result["threshold"] == 3
         assert result["tracked_total"] == 1
@@ -554,3 +561,254 @@ class TestAggregateSessions:
         canonical = self._canonical(tmp_path)
         now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
         assert fc.aggregate_sessions_by_project(canonical=canonical, now=now) == {}
+
+
+# --- collect_untracked_materials（material 母集団まで母数拡張・#86）------------
+
+
+class TestCollectUntrackedMaterials:
+    """material を持つ untracked PJ を advisory として surface する純関数（#86 O2）。"""
+
+    def _stores(self, tmp_path, weak_recs, corr_recs):
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(r) + "\n" for r in weak_recs))
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("".join(json.dumps(r) + "\n" for r in corr_recs))
+        return ws, corr
+
+    def test_surfaces_untracked_with_material_and_dir(self, tmp_path):
+        """tracked 外 + 実 dir あり + material >= threshold は surface する。"""
+        live = tmp_path / "amamo"
+        live.mkdir()
+        ws, corr = self._stores(
+            tmp_path,
+            [_ws("amamo", key=f"a{i}") for i in range(6)],
+            [],
+        )
+        out = fq.collect_untracked_materials(
+            material_slugs=["amamo"],
+            tracked_slugs={"evolve-anything"},
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={"amamo": str(live)},
+        )
+        assert len(out) == 1
+        item = out[0]
+        assert item["pj_slug"] == "amamo"
+        assert item["project_path"] == str(live)
+        assert item["material_count"] == 6
+        assert item["weak_unprocessed"] == 6
+        assert item["new_corrections"] == 0
+
+    def test_tracked_slug_excluded(self, tmp_path):
+        """tracked に既にある slug は untracked から除外する。"""
+        live = tmp_path / "amamo"
+        live.mkdir()
+        ws, corr = self._stores(tmp_path, [_ws("amamo", key=f"a{i}") for i in range(6)], [])
+        out = fq.collect_untracked_materials(
+            material_slugs=["amamo"],
+            tracked_slugs={"amamo"},  # 既に tracked
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={"amamo": str(live)},
+        )
+        assert out == []
+
+    def test_phantom_no_dir_excluded(self, tmp_path):
+        """dir_map に無い / 実 dir 不在の slug（phantom/temp）は除外する。"""
+        ws, corr = self._stores(tmp_path, [_ws("ghost", key=f"g{i}") for i in range(6)], [])
+        # dir_map に ghost が無い
+        out_missing = fq.collect_untracked_materials(
+            material_slugs=["ghost"],
+            tracked_slugs=set(),
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={},
+        )
+        assert out_missing == []
+        # dir_map にあるが dir 不在
+        out_dead = fq.collect_untracked_materials(
+            material_slugs=["ghost"],
+            tracked_slugs=set(),
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={"ghost": str(tmp_path / "no_such")},
+        )
+        assert out_dead == []
+
+    def test_below_threshold_excluded(self, tmp_path):
+        """material < threshold は surface しない。"""
+        live = tmp_path / "quiet"
+        live.mkdir()
+        ws, corr = self._stores(tmp_path, [_ws("quiet", key="q1")], [])
+        out = fq.collect_untracked_materials(
+            material_slugs=["quiet"],
+            tracked_slugs=set(),
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={"quiet": str(live)},
+        )
+        assert out == []
+
+    def test_legacy_slug_folds_into_tracked_and_excluded(self, tmp_path):
+        """canonical fold で旧 slug rl-anything が現 slug evolve-anything の tracked に畳まれ除外。"""
+        live = tmp_path / "evolve-anything"
+        live.mkdir()
+        ws, corr = self._stores(
+            tmp_path, [_ws("rl-anything", key=f"r{i}") for i in range(6)], []
+        )
+        out = fq.collect_untracked_materials(
+            material_slugs=["rl-anything"],  # 旧 slug の material
+            tracked_slugs={"evolve-anything"},  # 現 slug が tracked
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={"evolve-anything": str(live)},
+        )
+        # rl-anything は canonical_pj_slug で evolve-anything に畳まれ tracked 済み → 除外
+        assert out == []
+
+    def test_sorted_by_material_desc_then_slug(self, tmp_path):
+        """material_count 降順・同数は pj_slug 昇順で返す。"""
+        for name in ("aaa", "bbb", "ccc"):
+            (tmp_path / name).mkdir()
+        ws, corr = self._stores(
+            tmp_path,
+            [_ws("aaa", key=f"a{i}") for i in range(5)]
+            + [_ws("bbb", key=f"b{i}") for i in range(9)]
+            + [_ws("ccc", key=f"c{i}") for i in range(5)],
+            [],
+        )
+        out = fq.collect_untracked_materials(
+            material_slugs=["ccc", "aaa", "bbb"],
+            tracked_slugs=set(),
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={n: str(tmp_path / n) for n in ("aaa", "bbb", "ccc")},
+        )
+        assert [(o["pj_slug"], o["material_count"]) for o in out] == [
+            ("bbb", 9),
+            ("aaa", 5),
+            ("ccc", 5),
+        ]
+
+
+class TestBuildQueueResultUntracked:
+    def test_untracked_with_material_default_empty(self, tmp_path):
+        """material_slugs/untracked_dir_map 未指定（None）は untracked_with_material==[]（後方互換）。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(_ws("alpha", key=f"a{i}")) + "\n" for i in range(5)))
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        result = fq.build_queue_result(
+            pj_slugs=["alpha"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert result["untracked_with_material"] == []
+
+    def test_untracked_surfaced_when_inputs_given(self, tmp_path):
+        """material_slugs + untracked_dir_map を渡すと untracked が surface され tracked_total は不変。"""
+        # tracked: alpha（実 dir 任意）。untracked: amamo（material 6・実 dir あり）。
+        amamo = tmp_path / "amamo"
+        amamo.mkdir()
+        ws = tmp_path / "weak_signals.jsonl"
+        recs = [_ws("alpha", key=f"al{i}") for i in range(5)] + [
+            _ws("amamo", key=f"am{i}") for i in range(6)
+        ]
+        ws.write_text("".join(json.dumps(r) + "\n" for r in recs))
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        result = fq.build_queue_result(
+            pj_slugs=["alpha"],
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            material_slugs=["alpha", "amamo"],
+            untracked_dir_map={"amamo": str(amamo)},
+        )
+        assert result["tracked_total"] == 1  # tracked 母数のまま
+        um = result["untracked_with_material"]
+        assert [u["pj_slug"] for u in um] == ["amamo"]
+        assert um[0]["material_count"] == 6
+
+
+# --- format_queue_table の footer/untracked 表示（#86 O1+O2）-------------------
+
+
+from fleet.formatters import format_queue_table  # noqa: E402
+
+
+def _result(queue=None, tracked=10, untracked=None, skipped=None, threshold=5):
+    return {
+        "generated_at": "2026-06-25T09:00:00Z",
+        "threshold": threshold,
+        "tracked_total": tracked,
+        "queue": queue or [],
+        "skipped_dead": skipped or [],
+        "untracked_with_material": untracked or [],
+    }
+
+
+class TestFormatQueueTableUntracked:
+    def test_footer_marks_config_when_empty_queue(self):
+        """待ち 0 件パスの footer は `tracked (config)` 母数の出所を明示する（O1）。"""
+        out = format_queue_table(_result(queue=[]))
+        assert "10 tracked (config)" in out
+
+    def test_footer_marks_config_when_queue_present(self):
+        """待ちありパスの footer も `tracked (config)` を出す（O1・2 箇所目）。"""
+        q = [
+            {
+                "pj_slug": "alpha",
+                "material_count": 7,
+                "weak_unprocessed": 5,
+                "new_corrections": 2,
+                "last_evolve_at": None,
+                "reason": "x",
+            }
+        ]
+        out = format_queue_table(_result(queue=q))
+        assert "tracked (config)" in out
+
+    def test_untracked_line_when_nonempty(self):
+        """untracked_with_material が非空なら advisory 1 行を出す（O2）。"""
+        um = [
+            {"pj_slug": "amamo", "material_count": 64, "project_path": "/p/amamo"},
+            {"pj_slug": "foo", "material_count": 9, "project_path": "/p/foo"},
+        ]
+        out = format_queue_table(_result(queue=[], untracked=um))
+        assert "未追跡だが学習素材あり" in out
+        assert "amamo (material 64)" in out
+        assert "foo (material 9)" in out
+        assert "evolve-fleet discover" in out
+
+    def test_untracked_silent_when_empty(self):
+        """untracked が空なら advisory 行を出さない。"""
+        out = format_queue_table(_result(queue=[], untracked=[]))
+        assert "未追跡" not in out
+
+    def test_untracked_caps_at_five_with_ellipsis(self):
+        """untracked は上位 5 件まで、超過は … で省略する。"""
+        um = [
+            {"pj_slug": f"pj{i}", "material_count": 100 - i, "project_path": f"/p/{i}"}
+            for i in range(7)
+        ]
+        out = format_queue_table(_result(queue=[], untracked=um))
+        assert "pj0 (material 100)" in out
+        assert "pj4 (material 96)" in out
+        assert "pj5" not in out  # 6 件目以降は出さない
+        assert ", …" in out

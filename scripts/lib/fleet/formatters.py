@@ -187,6 +187,28 @@ def _append_skipped_dead(lines: list, result: dict) -> None:
     lines.append(f"（skipped {len(slugs)} dead: {', '.join(shown)}{suffix}）")
 
 
+def _append_untracked(lines: list, result: dict) -> None:
+    """material（weak/corr）を持つが tracked 母集団に居ない PJ を advisory 表示する（#86 O2）。
+
+    queue 母集団は fleet-config.json の tracked_projects 限定だが material 母集団の方が広い。
+    その差集合（untracked だが学習素材あり）を、待ちにも skipped_dead にも出ず沈黙させない
+    ため 1 行で surface する。``untracked_with_material`` が空なら何もしない。slug と
+    material_count を上位 5 件まで、超過は ``…`` で省略する。
+    """
+    untracked = result.get("untracked_with_material") or []
+    if not untracked:
+        return
+    shown = untracked[:5]
+    parts = [
+        f"{u.get('pj_slug', '')} (material {u.get('material_count', 0)})" for u in shown
+    ]
+    suffix = ", …" if len(untracked) > 5 else ""
+    lines.append(
+        f"（未追跡だが学習素材あり: {', '.join(parts)}{suffix}"
+        f" — tracked 追加を検討: evolve-fleet discover）"
+    )
+
+
 def format_queue_table(result: dict) -> str:
     """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
@@ -203,8 +225,9 @@ def format_queue_table(result: dict) -> str:
             f"[fleet:queue] 待ち PJ はありません"
             f"（閾値 {result.get('threshold')} 以上の学習素材なし）。"
         )
-        lines.append(f"（0 projects waiting / {tracked} tracked）")
+        lines.append(f"（0 projects waiting / {tracked} tracked (config)）")
         _append_skipped_dead(lines, result)
+        _append_untracked(lines, result)
         return "\n".join(lines) + "\n"
 
     rows: list[list[str]] = []
@@ -233,6 +256,7 @@ def format_queue_table(result: dict) -> str:
     for r in rows:
         lines.append(_fmt_row(r))
     lines.append("")
-    lines.append(f"（{len(queue)} projects waiting / {tracked} tracked）")
+    lines.append(f"（{len(queue)} projects waiting / {tracked} tracked (config)）")
     _append_skipped_dead(lines, result)
+    _append_untracked(lines, result)
     return "\n".join(lines) + "\n"
