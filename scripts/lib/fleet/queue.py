@@ -40,6 +40,42 @@ def _aliases_for(slug: str) -> set:
         return {slug}
 
 
+def _equivalence_slugs(slug: str) -> set:
+    """``slug`` と同一 PJ を指す全 slug（自身 + canonical + 双方の alias）の集合を返す。
+
+    ``_aliases_for`` は **現 slug** を渡したとき旧名を畳む（``evolve-anything`` →
+    ``{evolve-anything, rl-anything}``）が、**旧 slug** を渡すと自身しか返さない
+    （``rl-anything`` → ``{rl-anything}``）。activity counts は collectors が canonical
+    （現 slug）でキー付けするため、tracked slug が旧名のとき素の ``_aliases_for(旧名)``
+    では現 slug の値を回収できない（#87 ③）。canonical 方向も合算して両義性を解消する。
+    """
+    canon = _canonical_slug(slug)
+    out = set(_aliases_for(slug))
+    out |= _aliases_for(canon)
+    out.add(canon)
+    out.add(slug)
+    return {s for s in out if s}
+
+
+def fold_activity_counts(
+    slug: str,
+    subagent_counts: Dict[str, int],
+    session_counts: Dict[str, int],
+) -> Dict[str, int]:
+    """``slug`` の activity（subagents/sessions）を alias fold して合算する（#87 ③）。
+
+    weak/corr は ``_aliases_for`` で旧 slug を畳むのに対し、``activity_map`` は素の
+    ``.get(slug)`` で組まれていたため、tracked slug が旧名（``rl-anything``）だと
+    collectors が canonical（``evolve-anything``）でキー付けした実値（実 155 sessions 等）が
+    0 に落ちていた。同一 PJ を指す全 slug（``_equivalence_slugs``）にわたって合算し、
+    weak/corr と同じ namespace に揃える。event log は dir 跨ぎでも dedup 不要なので単純合算。
+    """
+    eq = _equivalence_slugs(slug)
+    sub = sum(int(subagent_counts.get(s, 0) or 0) for s in eq)
+    sess = sum(int(session_counts.get(s, 0) or 0) for s in eq)
+    return {"subagents": sub, "sessions": sess}
+
+
 # --- 純関数: 閾値判定 + 並び替え ---------------------------------------------
 
 
@@ -245,6 +281,68 @@ def collect_untracked_materials(
     return out
 
 
+def collect_phantom_materials(
+    *,
+    material_slugs: List[str],
+    tracked_slugs: set,
+    threshold: int,
+    weak_signals_path: Optional[Path],
+    corrections_path: Path,
+    dir_map: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """閾値以上 material を持つが実 dir に解決できない untracked slug を列挙する（#88）。
+
+    ``collect_untracked_materials`` の ``is_dir()`` ゲートで黙って drop される slug
+    （例: temp slug ``tmpdcm8avo8`` material=5）を透明化するための対称関数。
+    ``skipped_dead`` は透明化するのに phantom だけ不可視という非対称（O1 と非対称）を是正する。
+
+    対象 slug は: ① ``tracked_slugs``（canonical fold 後）に無い ② ``(unknown)`` でない
+    ③ ``dir_map`` で実 dir に**解決できない**（``collect_untracked_materials`` の補集合）
+    ④ material_count（weak + corr・untracked は全件）が threshold 以上。material_count 降順
+    （同数は pj_slug 昇順）で返す。waiting には昇格させない（temp slug は意図的に除外）。
+
+    Returns:
+        ``[{pj_slug, material_count, weak_unprocessed, new_corrections}]``（project_path は
+        解決できないので付けない）。純関数（store I/O は既存 reader 経由）。
+    """
+    tracked_canon = {_canonical_slug(s) for s in tracked_slugs}
+    seen: set = set()
+    candidates: List[str] = []
+    for raw in material_slugs:
+        slug = _canonical_slug(raw)
+        if not slug or slug == _UNKNOWN_PROJECT_LABEL:
+            continue
+        if slug in tracked_canon:
+            continue
+        path = dir_map.get(slug)
+        if path and Path(path).is_dir():
+            continue  # 実 dir 解決可 → untracked 側（phantom でない）
+        if slug in seen:
+            continue
+        seen.add(slug)
+        candidates.append(slug)
+
+    out: List[Dict[str, Any]] = []
+    for slug in candidates:
+        weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
+        corr = new_corrections_by_pj(
+            slug, last_evolve_at=None, corrections_path=corrections_path
+        )
+        count = weak + corr
+        if count < threshold:
+            continue
+        out.append(
+            {
+                "pj_slug": slug,
+                "material_count": count,
+                "weak_unprocessed": weak,
+                "new_corrections": corr,
+            }
+        )
+    out.sort(key=lambda x: (-x["material_count"], x["pj_slug"]))
+    return out
+
+
 # --- 統合: per-PJ material 収集 + queue result 組み立て -----------------------
 
 
@@ -282,14 +380,64 @@ def build_queue_result(
     で集計し ``untracked_with_material`` に入れる（#86 O2 — material 母集団まで母数を広げ
     untracked を advisory 表示）。どちらか None なら ``untracked_with_material=[]``（後方互換）。
     ``tracked_total`` は意味を変えず ``len(pj_slugs)``（tracked 母数）のまま。
+
+    #87: tracked path が dead でも ``_canonical_slug(slug)`` が ``untracked_dir_map`` の
+    live dir に解決できるなら、その live path に **redirect** して material を集計し waiting
+    候補に乗せる（``skipped_dead`` に入れない）。rename-but-live（tracked=旧 dead path・
+    store=旧 slug・discovery=新 live dir）で evolve-anything 自身が消えた dogfood バグの根治。
+    redirect できない真の dead は従来通り ``skipped_dead`` に入れるが、material 数を添えて
+    透明化する（``skipped_dead[*]`` に weak_unprocessed/new_corrections/material_count）。
+
+    #88: 閾値以上 material を持つが実 dir に解決できない untracked slug（temp slug 等）は
+    ``collect_phantom_materials`` で ``skipped_phantom`` に分離する（waiting には昇格しない）。
     """
     paths = pj_paths or {}
+    redirect_map = untracked_dir_map or {}
     materials: List[Dict[str, Any]] = []
     skipped_dead: List[Dict[str, Any]] = []
     for slug in pj_slugs:
         path = paths.get(slug)
         if path is not None and not Path(path).is_dir():
-            skipped_dead.append({"pj_slug": slug, "project_path": path})
+            # #87 ①: dead だが canonical 先が live dir に解決できれば redirect。
+            canon = _canonical_slug(slug)
+            live = redirect_map.get(canon)
+            if live and Path(live).is_dir():
+                last = last_evolve_map.get(canon, last_evolve_map.get(slug))
+                # activity は旧 slug（tracked 名）の entry を優先し、無ければ canonical。
+                act = activity_map.get(
+                    slug, activity_map.get(canon, {"subagents": 0, "sessions": 0})
+                )
+                materials.append(
+                    {
+                        "pj_slug": canon,
+                        "project_path": live,
+                        "weak_unprocessed": weak_unprocessed_by_pj(
+                            canon, weak_signals_path=weak_signals_path
+                        ),
+                        "new_corrections": new_corrections_by_pj(
+                            canon, last_evolve_at=last, corrections_path=corrections_path
+                        ),
+                        "last_evolve_at": last,
+                        "activity_since": act,
+                    }
+                )
+                continue
+            # #87 ②: 真の dead でも material 数を添えて透明化する。
+            d_weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
+            d_corr = new_corrections_by_pj(
+                slug,
+                last_evolve_at=last_evolve_map.get(slug),
+                corrections_path=corrections_path,
+            )
+            skipped_dead.append(
+                {
+                    "pj_slug": slug,
+                    "project_path": path,
+                    "weak_unprocessed": d_weak,
+                    "new_corrections": d_corr,
+                    "material_count": d_weak + d_corr,
+                }
+            )
             continue
         last = last_evolve_map.get(slug)
         materials.append(
@@ -309,10 +457,22 @@ def build_queue_result(
 
     queue = select_evolve_queue(materials, threshold=threshold)
 
+    # redirect で waiting に乗った canonical slug は untracked/phantom 母集団から除外する
+    # （二重列挙防止）。tracked + redirect 済 canonical を tracked 扱いにする。
+    tracked_for_untracked = set(pj_slugs) | {m["pj_slug"] for m in materials}
+
     if material_slugs is not None and untracked_dir_map is not None:
         untracked = collect_untracked_materials(
             material_slugs=material_slugs,
-            tracked_slugs=set(pj_slugs),
+            tracked_slugs=tracked_for_untracked,
+            threshold=threshold,
+            weak_signals_path=weak_signals_path,
+            corrections_path=corrections_path,
+            dir_map=untracked_dir_map,
+        )
+        phantom = collect_phantom_materials(
+            material_slugs=material_slugs,
+            tracked_slugs=tracked_for_untracked,
             threshold=threshold,
             weak_signals_path=weak_signals_path,
             corrections_path=corrections_path,
@@ -320,6 +480,7 @@ def build_queue_result(
         )
     else:
         untracked = []
+        phantom = []
 
     return {
         "generated_at": generated_at,
@@ -328,4 +489,5 @@ def build_queue_result(
         "queue": queue,
         "skipped_dead": skipped_dead,
         "untracked_with_material": untracked,
+        "skipped_phantom": phantom,
     }

@@ -209,6 +209,27 @@ def _append_untracked(lines: list, result: dict) -> None:
     )
 
 
+def _append_skipped_phantom(lines: list, result: dict) -> None:
+    """閾値以上 material を持つが実 dir に解決できず除外した untracked slug を透明化表示する（#88）。
+
+    ``skipped_dead`` / ``untracked_with_material`` は footer に出るのに、phantom（temp slug 等で
+    実 dir 不在）だけが完全沈黙する非対称を是正する。slug と material_count を上位 5 件まで、
+    超過は ``…`` で省略する。``skipped_phantom`` が空なら何もしない（temp slug が無いのが通常）。
+    """
+    phantom = result.get("skipped_phantom") or []
+    if not phantom:
+        return
+    shown = phantom[:5]
+    parts = [
+        f"{p.get('pj_slug', '')} (material {p.get('material_count', 0)})" for p in shown
+    ]
+    suffix = ", …" if len(phantom) > 5 else ""
+    lines.append(
+        f"（skipped {len(phantom)} phantom: {', '.join(parts)}{suffix}"
+        f" — 実 dir 未解決ゆえ除外）"
+    )
+
+
 def format_queue_table(result: dict) -> str:
     """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
@@ -228,6 +249,7 @@ def format_queue_table(result: dict) -> str:
         lines.append(f"（0 projects waiting / {tracked} tracked (config)）")
         _append_skipped_dead(lines, result)
         _append_untracked(lines, result)
+        _append_skipped_phantom(lines, result)
         return "\n".join(lines) + "\n"
 
     rows: list[list[str]] = []
@@ -259,4 +281,5 @@ def format_queue_table(result: dict) -> str:
     lines.append(f"（{len(queue)} projects waiting / {tracked} tracked (config)）")
     _append_skipped_dead(lines, result)
     _append_untracked(lines, result)
+    _append_skipped_phantom(lines, result)
     return "\n".join(lines) + "\n"

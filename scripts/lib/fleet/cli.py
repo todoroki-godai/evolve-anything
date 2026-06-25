@@ -281,7 +281,7 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         aggregate_subagents_by_project,
     )
     from .project_loader import enumerate_projects
-    from .queue import _correction_slug, build_queue_result
+    from .queue import _correction_slug, build_queue_result, fold_activity_counts
     from .queue_state import read_last_evolve
 
     config = fleet_config.load_config()
@@ -308,11 +308,11 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     last_evolve_map = read_last_evolve(data_dir=data_dir)
     subagent_counts = aggregate_subagents_by_project()
     session_counts = aggregate_sessions_by_project()
+    # activity は collectors が canonical（現 slug）でキー付けするのに対し pj_slugs は tracked
+    # config 由来で旧 slug（rl-anything）の場合がある。fold_activity_counts で alias fold して
+    # weak/corr と同じ namespace に揃える（#87 ③ — 旧 slug だと実 155 sessions が 0 に落ちていた）。
     activity_map = {
-        slug: {
-            "subagents": subagent_counts.get(slug, 0),
-            "sessions": session_counts.get(slug, 0),
-        }
+        slug: fold_activity_counts(slug, subagent_counts, session_counts)
         for slug in pj_slugs
     }
 

@@ -270,6 +270,7 @@ class TestBuildQueueResult:
             "queue",
             "skipped_dead",
             "untracked_with_material",
+            "skipped_phantom",
         }
         assert result["generated_at"] == "2026-06-25T09:00:00Z"
         assert result["threshold"] == 3
@@ -367,7 +368,16 @@ class TestPjPathsDeadSkip:
             pj_paths={"dead": dead_path},
         )
         assert result["queue"] == []
-        assert result["skipped_dead"] == [{"pj_slug": "dead", "project_path": dead_path}]
+        # #87 ②: skipped_dead entry は material 数を添えて透明化する
+        assert result["skipped_dead"] == [
+            {
+                "pj_slug": "dead",
+                "project_path": dead_path,
+                "weak_unprocessed": 7,
+                "new_corrections": 0,
+                "material_count": 7,
+            }
+        ]
         # tracked_total は dead 含む全 tracked 数のまま（沈黙させない・透明化）
         assert result["tracked_total"] == 1
 
@@ -411,6 +421,138 @@ class TestPjPathsDeadSkip:
         assert result["skipped_dead"] == []
         assert len(result["queue"]) == 1
         assert result["queue"][0]["project_path"] is None
+
+
+# --- #87: rename-but-live PJ の redirect + skipped_dead 透明化 + activity fold ---
+
+
+class TestRenameRedirect:
+    """tracked が旧 dead path を指すが canonical 先が live dir に解決できる PJ を
+    skipped_dead に飲み込まず live path に redirect して waiting に乗せる（#87 ①）。
+    """
+
+    def test_dead_tracked_redirects_to_canonical_live_dir(self, tmp_path):
+        # tracked slug = 旧 dead "rl-anything"、store も旧 slug、discovery は現 live dir。
+        live = tmp_path / "evolve-anything"
+        live.mkdir()
+        dead_path = str(tmp_path / "rl-anything")  # 実在しない（rename 済）
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text(
+            "".join(json.dumps(_ws("rl-anything", key=f"r{i}")) + "\n" for i in range(7))
+        )
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        result = fq.build_queue_result(
+            pj_slugs=["rl-anything"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            pj_paths={"rl-anything": dead_path},
+            untracked_dir_map={"evolve-anything": str(live)},
+        )
+        # skipped_dead に行かず waiting に出る（material は alias fold で 7 件）
+        assert result["skipped_dead"] == []
+        assert len(result["queue"]) == 1
+        item = result["queue"][0]
+        # redirect 後は canonical slug + live path で集計される
+        assert item["pj_slug"] == "evolve-anything"
+        assert item["project_path"] == str(live)
+        assert item["weak_unprocessed"] == 7
+        assert item["material_count"] == 7
+
+    def test_unresolvable_dead_stays_skipped_with_material_count(self, tmp_path):
+        """canonical 先が live dir に解決できない真の dead は skipped_dead に行き、
+        かつ material 数（weak/corr/total）が添えられる（#87 ②透明化）。"""
+        dead_path = str(tmp_path / "gone")  # 実在しない
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text(
+            "".join(json.dumps(_ws("gone", key=f"g{i}")) + "\n" for i in range(4))
+        )
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        result = fq.build_queue_result(
+            pj_slugs=["gone"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            pj_paths={"gone": dead_path},
+            untracked_dir_map={},  # 解決先なし
+        )
+        assert result["queue"] == []
+        assert len(result["skipped_dead"]) == 1
+        sd = result["skipped_dead"][0]
+        assert sd["pj_slug"] == "gone"
+        assert sd["project_path"] == dead_path
+        # 透明化: dead でも material 数を可視化
+        assert sd["weak_unprocessed"] == 4
+        assert sd["new_corrections"] == 0
+        assert sd["material_count"] == 4
+
+    def test_redirect_not_attempted_without_untracked_dir_map(self, tmp_path):
+        """untracked_dir_map=None（後方互換）なら redirect せず従来通り skipped_dead。
+        ただし material 数の透明化（②）は施す。"""
+        dead_path = str(tmp_path / "rl-anything")
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text(
+            "".join(json.dumps(_ws("rl-anything", key=f"r{i}")) + "\n" for i in range(7))
+        )
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        result = fq.build_queue_result(
+            pj_slugs=["rl-anything"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            pj_paths={"rl-anything": dead_path},
+        )
+        assert result["queue"] == []
+        assert len(result["skipped_dead"]) == 1
+        sd = result["skipped_dead"][0]
+        assert sd["pj_slug"] == "rl-anything"
+        # untracked_dir_map=None でも weak は alias 非依存で旧 slug 直集計 7 件
+        assert sd["material_count"] == 7
+
+
+class TestFoldActivityCounts:
+    """activity counts を alias fold して weak/corr と同じ namespace に揃える（#87 ③）。"""
+
+    def test_legacy_tracked_slug_folds_canonical_counts(self):
+        # counts は canonical slug "evolve-anything" でキー付け（collectors が畳む）。
+        # tracked slug は旧 "rl-anything"。fold で現 slug の値を回収する。
+        subagent_counts = {"evolve-anything": 12, "other": 3}
+        session_counts = {"evolve-anything": 155, "other": 9}
+        got = fq.fold_activity_counts(
+            "rl-anything", subagent_counts, session_counts
+        )
+        assert got == {"subagents": 12, "sessions": 155}
+
+    def test_plain_slug_passthrough(self):
+        got = fq.fold_activity_counts(
+            "other", {"other": 3}, {"other": 9}
+        )
+        assert got == {"subagents": 3, "sessions": 9}
+
+    def test_missing_slug_zero(self):
+        got = fq.fold_activity_counts("absent", {}, {})
+        assert got == {"subagents": 0, "sessions": 0}
+
+    def test_sums_across_aliases_when_both_present(self):
+        # 旧 slug と現 slug の両方に値があれば合算する（重複しない event log 前提）。
+        got = fq.fold_activity_counts(
+            "evolve-anything",
+            {"evolve-anything": 10, "rl-anything": 2},
+            {"evolve-anything": 100, "rl-anything": 55},
+        )
+        assert got == {"subagents": 12, "sessions": 155}
 
 
 class TestSelectQueueCarriesProjectPath:
@@ -752,7 +894,9 @@ class TestBuildQueueResultUntracked:
 from fleet.formatters import format_queue_table  # noqa: E402
 
 
-def _result(queue=None, tracked=10, untracked=None, skipped=None, threshold=5):
+def _result(
+    queue=None, tracked=10, untracked=None, skipped=None, phantom=None, threshold=5
+):
     return {
         "generated_at": "2026-06-25T09:00:00Z",
         "threshold": threshold,
@@ -760,6 +904,7 @@ def _result(queue=None, tracked=10, untracked=None, skipped=None, threshold=5):
         "queue": queue or [],
         "skipped_dead": skipped or [],
         "untracked_with_material": untracked or [],
+        "skipped_phantom": phantom or [],
     }
 
 
@@ -812,3 +957,35 @@ class TestFormatQueueTableUntracked:
         assert "pj4 (material 96)" in out
         assert "pj5" not in out  # 6 件目以降は出さない
         assert ", …" in out
+
+
+class TestFormatQueueTablePhantom:
+    def test_phantom_line_when_nonempty(self):
+        """skipped_phantom が非空なら footer に phantom 透明化 1 行を出す（#88）。"""
+        ph = [{"pj_slug": "tmpdcm8avo8", "material_count": 5}]
+        out = format_queue_table(_result(queue=[], phantom=ph))
+        assert "skipped 1 phantom" in out
+        assert "tmpdcm8avo8 (material 5)" in out
+        assert "実 dir 未解決" in out
+
+    def test_phantom_silent_when_empty(self):
+        """skipped_phantom が空/欠落なら phantom 行を出さない（temp slug が無いのが通常）。"""
+        out = format_queue_table(_result(queue=[], phantom=[]))
+        assert "phantom" not in out
+
+    def test_phantom_line_on_waiting_path(self):
+        """待ちあり path でも phantom footer を出す（2 箇所目）。"""
+        q = [
+            {
+                "pj_slug": "alpha",
+                "material_count": 7,
+                "weak_unprocessed": 5,
+                "new_corrections": 2,
+                "last_evolve_at": None,
+                "reason": "x",
+            }
+        ]
+        ph = [{"pj_slug": "tmpzzz", "material_count": 8}]
+        out = format_queue_table(_result(queue=q, phantom=ph))
+        assert "skipped 1 phantom" in out
+        assert "tmpzzz (material 8)" in out
