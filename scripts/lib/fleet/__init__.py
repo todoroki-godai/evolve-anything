@@ -122,10 +122,24 @@ from .cli_tokens import (  # noqa: E402, F401
 )
 
 
+# 学習素材ベースの evolve 待ち列挙（#79）は fleet/queue.py + queue_state.py に集約
+from .queue import (  # noqa: E402, F401
+    build_queue_result,
+    new_corrections_by_pj,
+    select_evolve_queue,
+    weak_unprocessed_by_pj,
+)
+from .queue_state import (  # noqa: E402, F401
+    persist_last_evolve,
+    read_last_evolve,
+)
+
+
 # CLI エントリポイント (main / _run_status / _run_test_guard / _run_discover) は
 # fleet/cli.py に集約済み（後方互換のため再エクスポート、bin/evolve-fleet は fleet.main を呼ぶ）
 from .cli import (  # noqa: E402, F401
     _run_discover,
+    _run_queue,
     _run_recall,
     _run_status,
     _run_test_guard,

@@ -127,6 +127,17 @@ def main() -> None:
         except Exception as e:
             summary["reward_ema_persisted"] = {"error": str(e)}
 
+        # #79: fleet queue の per-PJ last_evolve state を apply 境界で更新する
+        # （reward_ema #64 / weak_signals #484 と同型・非 dry-run・正準 DATA_DIR）。
+        # 次回 fleet queue が「前回 evolve 以降」を PJ 別に測れるようにする。
+        try:
+            from fleet.queue_state import persist_last_evolve
+
+            _q_slug = _resolve_pj_slug(args.project_dir)
+            summary["queue_state_persisted"] = persist_last_evolve(_q_slug)
+        except Exception as e:
+            summary["queue_state_persisted"] = {"error": str(e)}
+
         print(json.dumps(summary, ensure_ascii=False))
         return
 

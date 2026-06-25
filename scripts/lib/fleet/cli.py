@@ -131,6 +131,23 @@ def main(argv: list[str] | None = None) -> int:
                           help="projects ルート (default: ~/.claude/projects)")
     recall_p.add_argument("--json", action="store_true", help="JSON 出力")
 
+    queue_p = sub.add_parser(
+        "queue",
+        help="学習素材ベースで『今 evolve すべき PJ』を決定論・ゼロ LLM で列挙（#79）",
+    )
+    queue_p.add_argument(
+        "--threshold", type=int, default=_default_queue_threshold(),
+        help="待ち判定の学習素材（weak 未処理 + 新規 corr）合算下限。"
+             "env EVOLVE_QUEUE_THRESHOLD で上書き可（default: 5・実コーパス dry-run で決定）",
+    )
+    queue_p.add_argument("--root", type=Path, default=None,
+                         help="PJ 列挙のルート（fleet-config 未設定時の fallback、default: ~/tools）")
+    queue_p.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SEC,
+                         help="（予約・現状 queue は audit を回さないため未使用）")
+    queue_p.add_argument("--max-workers", type=int, default=_DEFAULT_MAX_WORKERS,
+                         help="（予約・現状 queue は逐次集計のため未使用）")
+    queue_p.add_argument("--json", action="store_true", help="JSON 出力（Phase 1b #80 契約）")
+
     args = parser.parse_args(argv)
 
     if args.command == "discover":
@@ -151,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_migrate_data(args)
     if args.command == "migrate-pj-slug":
         return _run_migrate_pj_slug(args)
+    if args.command == "queue":
+        return _run_queue(args)
 
     # default: status
     return _run_status(args)
@@ -222,6 +241,87 @@ def _run_recall(args: argparse.Namespace) -> int:
     print(format_hits(hits, as_json=args.json))
     # recall ヒットを access proxy として reinforce（#18）。書き込み失敗は recall 体験を壊さない。
     reinforce_recall_hits(hits)
+    return 0
+
+
+# --- queue サブコマンド（#79 Phase 1a）---------------------------------------
+
+_DEFAULT_QUEUE_THRESHOLD = 5  # 実コーパス dry-run で決定（gap: active 最小 5 vs trickle 2）
+
+
+def _default_queue_threshold() -> int:
+    """queue 閾値の既定。env EVOLVE_QUEUE_THRESHOLD があれば優先（不正値は既定）。"""
+    import os
+
+    raw = os.environ.get("EVOLVE_QUEUE_THRESHOLD")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_QUEUE_THRESHOLD
+
+
+def _gather_queue_result(args: argparse.Namespace) -> dict:
+    """tracked PJ を列挙し、各 PJ の学習素材を実ストアから集計して queue result を返す。
+
+    PJ 列挙は status と同じく fleet-config.json の tracked_projects を優先（未設定なら
+    --root fallback）。pj_slug は project_name_from_dir で本体 repo slug に正規化し
+    weak_signals.pj_slug / corrections の正規化 slug と名前空間を揃える。weak/corr は
+    canonical DATA_DIR の各ストアから読む（path=None で union read）。
+    """
+    from datetime import datetime, timezone
+
+    import fleet_config
+    from rl_common import project_name_from_dir
+
+    from . import _current_data_dir
+    from .collectors import aggregate_subagents_by_project
+    from .project_loader import enumerate_projects
+    from .queue import build_queue_result
+    from .queue_state import read_last_evolve
+
+    config = fleet_config.load_config()
+    tracked = config.get("tracked_projects", [])
+    if tracked:
+        projects = [Path(p) for p in tracked]
+    else:
+        root = args.root or Path.home() / "tools"
+        projects = enumerate_projects(root)
+
+    pj_slugs = sorted({project_name_from_dir(str(p)) for p in projects if p})
+
+    data_dir = _current_data_dir()
+    weak_path = data_dir / "weak_signals.jsonl"
+    corr_path = data_dir / "corrections.jsonl"
+
+    last_evolve_map = read_last_evolve(data_dir=data_dir)
+    subagent_counts = aggregate_subagents_by_project()
+    activity_map = {
+        slug: {"subagents": subagent_counts.get(slug, 0), "sessions": 0}
+        for slug in pj_slugs
+    }
+
+    return build_queue_result(
+        pj_slugs=pj_slugs,
+        threshold=args.threshold,
+        weak_signals_path=weak_path if weak_path.exists() else None,
+        corrections_path=corr_path,
+        last_evolve_map=last_evolve_map,
+        activity_map=activity_map,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _run_queue(args: argparse.Namespace) -> int:
+    """queue サブコマンド: 学習素材ベースで evolve 待ち PJ を列挙する（#79）。"""
+    from .formatters import format_queue_table
+
+    result = _gather_queue_result(args)
+    if getattr(args, "json", False):
+        print(_json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    print(format_queue_table(result), end="")
     return 0
 
 

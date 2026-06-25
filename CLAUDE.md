@@ -9,7 +9,7 @@
 | 自律進化 | evolve, discover, reorganize, prune, audit | Observe → Diagnose → Compile → Housekeeping → Report の3ステージパイプライン |
 | フィードバック | reflect, report-feedback | reflect=修正パターン検出 → corrections.jsonl → CLAUDE.md/rules に反映。report-feedback=evolve/audit レポートを LLM メタレビュー → evolve-anything 自身への改善 issue を todoroki-godai/evolve-anything に半自動起票（決定論 evolve_introspect が拾えない「読んで気づく」改善が対象。旧 feedback スキルの後継） |
 | 直接パッチ最適化 | optimize, evolve-loop, generate-fitness, evolve-fitness | corrections/context → LLM 1パスパッチ → regression gate（`scripts/lib/regression_gate.py` に共通化） |
-| **fleet 観測・介入** | fleet (`bin/evolve-fleet`) | 全 PJ 横断で env_score / 導入状況を一覧表示。`status` / `tokens` / `test-guard status`（no-llm-in-tests / pytest-no-llm 導入状況）/ `discover` / `recall`（全 PJ memory を keyword 横断検索、決定論・LLM 非依存）/ `plugins`（インストール済み CC プラグインの最新性診断 — update/drift/unknown を決定論検出。version 無しプラグインの silent stale を cache↔marketplace source の差分で検出） |
+| **fleet 観測・介入** | fleet (`bin/evolve-fleet`) | 全 PJ 横断で env_score / 導入状況を一覧表示。`status` / `tokens` / `test-guard status`（no-llm-in-tests / pytest-no-llm 導入状況）/ `discover` / `recall`（全 PJ memory を keyword 横断検索、決定論・LLM 非依存）/ `plugins`（インストール済み CC プラグインの最新性診断 — update/drift/unknown を決定論検出。version 無しプラグインの silent stale を cache↔marketplace source の差分で検出）/ `queue`（学習素材ベースで「今 evolve すべき PJ」を決定論・ゼロ LLM で列挙 — weak 未処理 + 新規 corr の合算が閾値以上の PJ・#79） |
 | エージェント管理 | agent-brushup | エージェント定義の品質診断・改善提案・新規作成・削除候補 |
 | セカンドオピニオン | second-opinion | Claude Agent による独立した cold-read セカンドオピニオン（codex 代替） |
 | 行き詰まり突破 | breakthrough | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動で解決 |
@@ -106,6 +106,7 @@
 | `skill_vuln_scan` | 取り込みスキルの静的脆弱性スキャン（SkillSpector 型）— `.md`/`.sh`/`.bash` を決定論・LLM 非依存で行スキャンし remote_exec/secret_exfil/destructive/prompt_injection/overbroad_tools を検出し audit observability に surface。combo 必須で FP 較正（`gh api ... | base64 -d` 等は非検出・#13） | `skill_vuln_scan.py` + `audit/sections_skill_vuln.py` |
 | `fanout_cost` | fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は #15 同様スパースゆえ各群 ≥5 の floor ゲート付き。subagents.jsonl(agent_type 空除外 #36) + sessions(union read #469) を `_normalize_pj` で当 PJ スコープ | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
 | `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出（human/machine 評価源の蓄積偏り・保守閾値, #73） | `audit/memory_contagion.py` |
+| `fleet_queue` | 学習素材ベースの evolve 待ち列挙 `evolve-fleet queue`（#79 Phase 1a）— material_count = weak 未処理 + 前回 evolve 以降の新規 corr が `--threshold`（既定5・env `EVOLVE_QUEUE_THRESHOLD`）以上の PJ を決定論・ゼロ LLM で列挙。`select_evolve_queue` 純関数。新ストア `evolve-queue-state.jsonl`（per-PJ `last_evolve_at`・store_registry active・`writer_locus="batch"`・store_write barrier 経由・`evolve --drain` apply 境界で書込）が「前回 evolve 以降」を PJ 別に測る（既存グローバル `evolve-state.json` を補完）。corrections の `project_path` は `project_name_from_dir` で weak_signals `pj_slug` と名前空間統一。`--json` は Phase 1b #80 契約。 | `fleet/queue.py` + `fleet/queue_state.py` |
 
 ## クイックスタート
 
@@ -143,6 +144,10 @@ bin/evolve-fleet recall "認証 ルーティング" --json --limit 5
 # インストール済み CC プラグインの最新性診断（update/drift/unknown を決定論検出）
 bin/evolve-fleet plugins
 bin/evolve-fleet plugins --json
+
+# 学習素材ベースで「今 evolve すべき PJ」を列挙（決定論・ゼロ LLM）
+bin/evolve-fleet queue                    # weak 未処理 + 新規 corr >= 閾値（既定5）の PJ をテーブル表示
+bin/evolve-fleet queue --json --threshold 3
 
 # エージェント品質診断
 /evolve-anything:agent-brushup

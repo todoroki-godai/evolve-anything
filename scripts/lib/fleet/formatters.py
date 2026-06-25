@@ -165,3 +165,57 @@ def format_status_json(rows: list[FleetRow]) -> str:
         d["latest_audit"] = la.isoformat() if la is not None else None
         projects.append(d)
     return _json.dumps({"projects": projects}, ensure_ascii=False, indent=2, default=str) + "\n"
+
+
+# --- queue サブコマンド（#79）表示 -------------------------------------------
+
+_QUEUE_HEADERS = ["PROJECT", "MATERIAL", "WEAK", "CORR", "LAST_EVOLVE", "REASON"]
+
+
+def format_queue_table(result: dict) -> str:
+    """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
+    テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
+
+    待ち 0 件でも tracked 総数は表示する（沈黙させない）。LAST_EVOLVE は ISO 文字列の
+    先頭 10 文字（日付）を出し、None は `never`（初回＝全件待ち）と表示する。
+    """
+    queue = result.get("queue", [])
+    tracked = result.get("tracked_total", 0)
+
+    lines: list[str] = []
+    if not queue:
+        lines.append(
+            f"[fleet:queue] 待ち PJ はありません"
+            f"（閾値 {result.get('threshold')} 以上の学習素材なし）。"
+        )
+        lines.append(f"（0 projects waiting / {tracked} tracked）")
+        return "\n".join(lines) + "\n"
+
+    rows: list[list[str]] = []
+    for item in queue:
+        last = item.get("last_evolve_at")
+        last_str = (last[:10] if isinstance(last, str) and last else "never")
+        rows.append([
+            str(item.get("pj_slug", "")),
+            str(item.get("material_count", 0)),
+            str(item.get("weak_unprocessed", 0)),
+            str(item.get("new_corrections", 0)),
+            last_str,
+            str(item.get("reason", "")),
+        ])
+
+    widths = [len(h) for h in _QUEUE_HEADERS]
+    for r in rows:
+        for i, cell in enumerate(r):
+            widths[i] = max(widths[i], len(cell))
+
+    def _fmt_row(cells: list[str]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+    lines.append(_fmt_row(_QUEUE_HEADERS))
+    lines.append(_fmt_row(["-" * w for w in widths]))
+    for r in rows:
+        lines.append(_fmt_row(r))
+    lines.append("")
+    lines.append(f"（{len(queue)} projects waiting / {tracked} tracked）")
+    return "\n".join(lines) + "\n"
