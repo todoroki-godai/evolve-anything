@@ -172,6 +172,21 @@ def format_status_json(rows: list[FleetRow]) -> str:
 _QUEUE_HEADERS = ["PROJECT", "MATERIAL", "WEAK", "CORR", "LAST_EVOLVE", "REASON"]
 
 
+def _append_skipped_dead(lines: list, result: dict) -> None:
+    """dead な tracked PJ（実 dir 不在で queue から外したもの）を footer 下に透明化表示する。
+
+    silent truncation 禁止: queue から消えた理由をユーザーに見せる。slug をカンマ区切りで
+    最大 5 個まで、超過は ``…`` で省略する（#79）。``skipped_dead`` が空なら何もしない。
+    """
+    skipped = result.get("skipped_dead") or []
+    if not skipped:
+        return
+    slugs = [str(d.get("pj_slug", "")) for d in skipped]
+    shown = slugs[:5]
+    suffix = ", …" if len(slugs) > 5 else ""
+    lines.append(f"（skipped {len(slugs)} dead: {', '.join(shown)}{suffix}）")
+
+
 def format_queue_table(result: dict) -> str:
     """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
@@ -189,6 +204,7 @@ def format_queue_table(result: dict) -> str:
             f"（閾値 {result.get('threshold')} 以上の学習素材なし）。"
         )
         lines.append(f"（0 projects waiting / {tracked} tracked）")
+        _append_skipped_dead(lines, result)
         return "\n".join(lines) + "\n"
 
     rows: list[list[str]] = []
@@ -218,4 +234,5 @@ def format_queue_table(result: dict) -> str:
         lines.append(_fmt_row(r))
     lines.append("")
     lines.append(f"（{len(queue)} projects waiting / {tracked} tracked）")
+    _append_skipped_dead(lines, result)
     return "\n".join(lines) + "\n"

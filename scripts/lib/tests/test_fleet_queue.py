@@ -263,7 +263,7 @@ class TestBuildQueueResult:
             activity_map={"alpha": {"subagents": 40, "sessions": 5}},
             generated_at="2026-06-25T09:00:00Z",
         )
-        assert set(result.keys()) == {"generated_at", "threshold", "tracked_total", "queue"}
+        assert set(result.keys()) == {"generated_at", "threshold", "tracked_total", "queue", "skipped_dead"}
         assert result["generated_at"] == "2026-06-25T09:00:00Z"
         assert result["threshold"] == 3
         assert result["tracked_total"] == 1
@@ -271,6 +271,7 @@ class TestBuildQueueResult:
         item = result["queue"][0]
         assert set(item.keys()) == {
             "pj_slug",
+            "project_path",
             "material_count",
             "weak_unprocessed",
             "new_corrections",
@@ -335,3 +336,123 @@ class TestQueueCli:
         assert data["threshold"] == 3
         assert data["queue"][0]["pj_slug"] == "alpha"
         assert data["queue"][0]["material_count"] == 4
+
+
+# --- pj_paths: dead PJ skip + project_path 伝播（繋ぎ目バグ #79）--------------
+
+
+class TestPjPathsDeadSkip:
+    def test_dead_dir_skipped_and_recorded(self, tmp_path):
+        """pj_paths が指す dir が不在の PJ は queue に出ず skipped_dead に入る。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(_ws("dead", key=f"d{i}")) + "\n" for i in range(7)))
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        dead_path = str(tmp_path / "no_such_pj")  # 実在しない
+        result = fq.build_queue_result(
+            pj_slugs=["dead"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            pj_paths={"dead": dead_path},
+        )
+        assert result["queue"] == []
+        assert result["skipped_dead"] == [{"pj_slug": "dead", "project_path": dead_path}]
+        # tracked_total は dead 含む全 tracked 数のまま（沈黙させない・透明化）
+        assert result["tracked_total"] == 1
+
+    def test_live_dir_carries_project_path(self, tmp_path):
+        """pj_paths が実在 dir を指す PJ は queue/material entry に project_path を持つ。"""
+        live = tmp_path / "live_pj"
+        live.mkdir()
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(_ws("live", key=f"l{i}")) + "\n" for i in range(5)))
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        result = fq.build_queue_result(
+            pj_slugs=["live"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            pj_paths={"live": str(live)},
+        )
+        assert result["skipped_dead"] == []
+        assert len(result["queue"]) == 1
+        assert result["queue"][0]["project_path"] == str(live)
+
+    def test_pj_paths_none_is_backward_compatible(self, tmp_path):
+        """pj_paths 未指定（None）は全件 live・project_path=None・skipped_dead=[]（後方互換）。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(_ws("alpha", key=f"a{i}")) + "\n" for i in range(5)))
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        result = fq.build_queue_result(
+            pj_slugs=["alpha"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert result["skipped_dead"] == []
+        assert len(result["queue"]) == 1
+        assert result["queue"][0]["project_path"] is None
+
+
+class TestSelectQueueCarriesProjectPath:
+    def test_project_path_propagated_to_selected(self):
+        """select_evolve_queue は material の project_path を selected entry へ伝播する。"""
+        mats = [
+            {
+                "pj_slug": "a",
+                "weak_unprocessed": 3,
+                "new_corrections": 0,
+                "last_evolve_at": None,
+                "activity_since": {"subagents": 0, "sessions": 0},
+                "project_path": "/some/path/a",
+            }
+        ]
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["project_path"] == "/some/path/a"
+
+
+# --- alias fold: rename 済 PJ の旧 slug レコードを現 slug に集計（#79）---------
+
+
+class TestAliasFold:
+    def test_weak_unprocessed_folds_legacy_slug(self, tmp_path):
+        """weak_signals の旧 slug "rl-anything" を現 slug "evolve-anything" で数える。"""
+        store = tmp_path / "weak_signals.jsonl"
+        recs = [
+            _ws("rl-anything", key="r1"),
+            _ws("rl-anything", key="r2"),
+            _ws("unrelated", key="u1"),
+        ]
+        store.write_text("".join(json.dumps(r) + "\n" for r in recs))
+        assert fq.weak_unprocessed_by_pj("evolve-anything", weak_signals_path=store) == 2
+        # 無関係 slug は数えない
+        assert fq.weak_unprocessed_by_pj("unrelated", weak_signals_path=store) == 1
+
+    def test_new_corrections_folds_legacy_slug(self, tmp_path):
+        """corrections の旧 slug "rl-anything" を現 slug "evolve-anything" で数える。"""
+        store = tmp_path / "corrections.jsonl"
+        recs = [
+            _corr("rl-anything", "2026-06-10T00:00:00+00:00"),
+            _corr("rl-anything", "2026-06-11T00:00:00+00:00"),
+            _corr("other-pj", "2026-06-10T00:00:00+00:00"),
+        ]
+        store.write_text("".join(json.dumps(r) + "\n" for r in recs))
+        assert fq.new_corrections_by_pj(
+            "evolve-anything", last_evolve_at=None, corrections_path=store
+        ) == 2
+        # 無関係 slug は数えない
+        assert fq.new_corrections_by_pj(
+            "other-pj", last_evolve_at=None, corrections_path=store
+        ) == 1

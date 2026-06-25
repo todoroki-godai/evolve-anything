@@ -290,6 +290,13 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         projects = enumerate_projects(root)
 
     pj_slugs = sorted({project_name_from_dir(str(p)) for p in projects if p})
+    # slug → 実パス map（queue が dead PJ を skip し、利用側が親 dir 推測なしに /cd できるように
+    # project_path を伝播させる・#79）。同 slug 複数 path は最初の登録を採る（setdefault）。
+    pj_paths: dict = {}
+    for p in projects:
+        if not p:
+            continue
+        pj_paths.setdefault(project_name_from_dir(str(p)), str(p))
 
     data_dir = _current_data_dir()
     weak_path = data_dir / "weak_signals.jsonl"
@@ -310,6 +317,7 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         last_evolve_map=last_evolve_map,
         activity_map=activity_map,
         generated_at=datetime.now(timezone.utc).isoformat(),
+        pj_paths=pj_paths,
     )
 
 
