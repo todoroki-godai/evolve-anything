@@ -17,6 +17,7 @@ reader は副作用なし（読み取りのみ）。書込（per-PJ last_evolve 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -158,6 +159,38 @@ def _correction_slug(project_path: Any) -> str:
     return Path(project_path).name
 
 
+def _parse_iso(s: Any) -> Optional[datetime]:
+    """ISO8601 文字列を tz-aware datetime にする。`Z` / `+00:00` 終端を吸収。
+
+    naive（tz 無し）は UTC とみなして aware 比較を可能にする。パース不能 → None。
+    """
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _ts_strictly_after(ts: Any, last: str) -> bool:
+    """``ts`` が ``last`` より厳密に後なら True（同一 instant は False＝除外）。
+
+    実コーパスの corrections は `Z` 終端 / `+00:00` 終端が混在し、``last_evolve_at`` は
+    ``persist_last_evolve`` が ``.isoformat()``＝`+00:00` で書く。辞書順だと
+    ``"...Z" > "...+00:00"`` が同一 instant でも True になり drain と同時刻の corr を
+    誤って新規計上する。両者を datetime にパースして比較し、片方でもパース不能なときのみ
+    辞書順へフォールバック（旧挙動温存）。
+    """
+    a = _parse_iso(ts)
+    b = _parse_iso(last)
+    if a is not None and b is not None:
+        return a > b
+    return isinstance(ts, str) and ts > last
+
+
 def new_corrections_by_pj(
     pj_slug: str,
     *,
@@ -168,8 +201,9 @@ def new_corrections_by_pj(
 
     ``last_evolve_at=None``（state 不在 = 初回）は全件カウント（初回＝全件待ち）。
     corrections は ``project_path`` を bare slug に正規化（``_correction_slug``）してから
-    scope する（実コーパスでフルパス / slug が混在するため）。timestamp は ISO8601 文字列の
-    辞書順比較で十分（None 時は全件なので影響しない）。ファイル不在 → 0。
+    scope する（実コーパスでフルパス / slug が混在するため）。timestamp は ``_ts_strictly_after``
+    で datetime 比較する（`Z` / `+00:00` 終端混在を吸収・None 時は全件なので影響しない）。
+    ファイル不在 → 0。
     """
     path = Path(corrections_path)
     if not path.exists():
@@ -193,7 +227,7 @@ def new_corrections_by_pj(
             continue
         if last_evolve_at is not None:
             ts = rec.get("timestamp")
-            if not isinstance(ts, str) or ts <= last_evolve_at:
+            if not _ts_strictly_after(ts, last_evolve_at):
                 continue
         count += 1
     return count

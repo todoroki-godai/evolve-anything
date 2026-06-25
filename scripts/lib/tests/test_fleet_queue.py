@@ -182,6 +182,31 @@ class TestNewCorrectionsByPj:
     def test_missing_store_returns_zero(self, tmp_path):
         assert fq.new_corrections_by_pj("alpha", last_evolve_at=None, corrections_path=tmp_path / "x.jsonl") == 0
 
+    def test_mixed_tz_suffix_same_instant_excluded(self, tmp_path):
+        """`Z` 終端 corr と `+00:00` 終端 last_evolve が同一 instant なら新規にカウントしない。
+
+        実コーパスの corrections.jsonl は `Z` 終端 / `+00:00` 終端が混在し、
+        `persist_last_evolve` は ``.isoformat()``＝`+00:00` を書く。辞書順比較だと
+        ``"...Z" > "...+00:00"`` が同一 instant でも True になり、drain と同時刻の
+        `Z` 終端 corr を誤って「前回 evolve 以降の新規」に数えてしまう（潜在シーム）。
+        """
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(json.dumps(_corr("alpha", "2026-06-23T10:00:00Z")) + "\n")
+        # last_evolve とちょうど同一 instant（表記だけ +00:00）→ ts <= last → 除外（0 件）
+        n = fq.new_corrections_by_pj(
+            "alpha", last_evolve_at="2026-06-23T10:00:00+00:00", corrections_path=store
+        )
+        assert n == 0
+
+    def test_mixed_tz_suffix_after_still_counted(self, tmp_path):
+        """suffix 違いでも実時刻が後なら新規としてカウントする（修正が過剰除外しない保証）。"""
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(json.dumps(_corr("alpha", "2026-06-23T10:00:01Z")) + "\n")
+        n = fq.new_corrections_by_pj(
+            "alpha", last_evolve_at="2026-06-23T10:00:00+00:00", corrections_path=store
+        )
+        assert n == 1
+
 
 # --- per-PJ last_evolve state（read / write barrier 経由）---------------------
 

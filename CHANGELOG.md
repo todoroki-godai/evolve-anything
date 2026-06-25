@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(fleet): queue の `new_corrections` timestamp 比較を `Z`/`+00:00` 終端混在に対応（refs #79）** — `fleet.queue.new_corrections_by_pj` は「前回 evolve 以降の corrections」を ISO8601 文字列の**辞書順比較**（`ts <= last_evolve_at`）で判定していたが、実コーパスの corrections.jsonl は `Z` 終端（8件）と `+00:00` 終端（82件）が混在し、`persist_last_evolve` は `.isoformat()`＝`+00:00` を書くため、`"...Z" > "...+00:00"` が**同一 instant でも True**になり、初回 `evolve --drain` 後に drain と同時刻帯の `Z` 終端 corr を誤って新規計上しうる潜在シーム（実機 dogfood で発見・現状は last_evolve=None で全件計上のため休眠）。**Fix**: `_parse_iso`（`Z`→`+00:00` 正規化 + naive を UTC 補完）+ `_ts_strictly_after`（datetime 比較・同一 instant は除外・両者パース不能時のみ辞書順フォールバックで旧挙動温存）を新設し比較を置換。docstring の「辞書順比較で十分」の事実誤りも訂正。TDD 2件（同一 instant Z 終端を除外 / 実時刻後は計上維持）・決定論・LLM 非依存。
+
 ## [1.112.0] - 2026-06-25
 
 ### Added
