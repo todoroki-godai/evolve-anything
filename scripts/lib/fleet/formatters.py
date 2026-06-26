@@ -292,6 +292,23 @@ def _append_bootstrap_consumed(lines: list, result: dict) -> None:
     )
 
 
+def _append_weak_semantics(lines: list, result: dict) -> None:
+    """WEAK 列が「未処理のみ」である意味を明示し、生検出数との乖離の誤読を防ぐ（②）。
+
+    WEAK は ``weak_unprocessed``（promoted=False かつ未 TTL 失効）から bootstrap 消化分を
+    除いた実残数で、検出された weak の生総数とは一致しない（promoted 昇格済み・TTL 失効・
+    bootstrap 破棄が差分）。生数しか知らないと「なぜ table の数が生検出より少ないのか」と
+    誤読する（実機 dogfood で amamo 生 64 → WEAK 16 のギャップが不可解に見えた）。待ち PJ が
+    あるとき列の意味を脚注で明示する。集計でなく定数注記（footer ノイズと算出コストを抑える）。
+    """
+    if not result.get("queue"):
+        return
+    lines.append(
+        "（WEAK は未処理のみ＝promoted 昇格済み・TTL 失効・bootstrap 消化済みを除いた実残数。"
+        "検出された weak の生総数とは一致しません）"
+    )
+
+
 def format_queue_table(result: dict) -> str:
     """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
@@ -344,6 +361,7 @@ def format_queue_table(result: dict) -> str:
     lines.append("")
     lines.append(f"（{len(queue)} projects waiting / {tracked} tracked (config)）")
     _append_coldstart_notice(lines, result)
+    _append_weak_semantics(lines, result)
     _append_bootstrap_consumed(lines, result)
     _append_skipped_dead(lines, result)
     _append_untracked(lines, result)
