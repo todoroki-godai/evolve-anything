@@ -121,8 +121,12 @@ def main() -> None:
             from audit.reward_ema import persist_reward_ema_batch
 
             _ema_slug = _resolve_pj_slug(args.project_dir)
+            # --project-dir 既定は None。reward_ema は project_dir を直接 Path() に渡す
+            # （load_usage_data の project_root）ため、None だと Path(None) で落ちる。
+            # weak_signals / queue_state は slug だけ使うので None を吸収するが、ここは
+            # cwd にフォールバックする（line 92 の非 drain パスと同じ idiom・#64 drain 盲点）。
             summary["reward_ema_persisted"] = persist_reward_ema_batch(
-                args.project_dir, slug=_ema_slug
+                args.project_dir or str(Path.cwd()), slug=_ema_slug
             )
         except Exception as e:
             summary["reward_ema_persisted"] = {"error": str(e)}
