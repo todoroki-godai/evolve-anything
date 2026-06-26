@@ -99,10 +99,11 @@ def select_evolve_queue(
         if count < threshold:
             continue
         last_evolve = m.get("last_evolve_at")
-        # #92: 未 drain（last_evolve_at=None）は corr が「前回 evolve 以降の増分」でなく全件。
-        # 『new corr』だと never と矛盾して見えるので「全件・未 drain」と明示する。
+        # #92→A: 初回（last_evolve_at=None）は corr が「前回 evolve 以降の増分」でなく全件。
+        # 『new corr』だと never と矛盾して見える。`未 drain` は emit→drain 2 相の内部
+        # plumbing 用語なので、CLI 直読みの利用者向けには `初回・全件` の業務語で明示する。
         if last_evolve is None:
-            reason = f"weak={weak} + corr={corr}（全件・未 drain）>= {threshold}"
+            reason = f"weak={weak} + corr={corr}（初回・全件）>= {threshold}"
         else:
             reason = f"weak={weak} + new corr={corr} >= {threshold}"
         selected.append(
