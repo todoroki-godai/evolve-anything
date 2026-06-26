@@ -125,23 +125,85 @@ def select_evolve_queue(
 # --- store reader: weak_signals 未処理カウント（PJ 別）-----------------------
 
 
+def _exclude_bootstrap_consumed(
+    recs: List[Dict[str, Any]],
+    pj_slug: str,
+    marker_base: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """bootstrap で判断済み（marker 設置以前に detected）の weak を除外する（#94）。
+
+    bootstrap phase で「破棄」「TTL 任せ」を人間が選ぶと marker が立つが weak_signals.jsonl
+    は不変（破棄＝TTL 自然失効に委ねる意図的設計）。queue はそれを TTL まで material に数え
+    続け待ち件数を膨らませて誤読を誘発するため、marker 設置時刻より前に detected した weak
+    を「判断済み」として落とす。``is_effectively_expired``（#89）と同じ **read 時導出**で、
+    store は書き換えない。marker 設置**後**に溜まった新規 weak は正当な待ちとして残す。
+    detected_at が parse 不能なら安全側で残す（誤って queue から落とさない）。
+    """
+    from correction_semantic.bootstrap_backlog import (
+        bootstrap_done_at,
+        default_marker_path,
+    )
+    from weak_signals.ttl import _parse_iso
+
+    marker_path = (
+        default_marker_path(pj_slug, base=marker_base)
+        if marker_base is not None
+        else None
+    )
+    done_at = bootstrap_done_at(pj_slug, marker_path=marker_path)
+    if done_at is None:
+        return recs
+    out: List[Dict[str, Any]] = []
+    for r in recs:
+        det = _parse_iso(r.get("detected_at"))
+        if det is not None and det < done_at:
+            continue  # marker 以前に検出 → bootstrap で判断済み
+        out.append(r)
+    return out
+
+
 def weak_unprocessed_by_pj(
     pj_slug: str,
     *,
     weak_signals_path: Optional[Path] = None,
+    marker_base: Optional[Path] = None,
 ) -> int:
-    """pj_slug の未処理（promoted=False かつ expired=False）weak_signals 件数を返す。
+    """pj_slug の未処理（promoted=False / 未expired / 未 bootstrap 消化）weak 件数を返す。
 
     既存 reader（``correction_semantic.promote.read_unpromoted``）を再利用し、pj_slug で
     scope する（weak_signals.jsonl は単一 DATA_DIR ファイル・pj_slug は record 属性）。
     ``weak_signals_path`` を渡すとそのファイルのみ（hermetic・テスト注入）。未指定なら
     production 既定（union read）。ファイル不在 → 0。
+
+    #94: bootstrap で破棄/TTL 任せと判断済み（marker 以前 detected）の weak は除外する
+    （``_exclude_bootstrap_consumed``）。``marker_base`` はテスト注入（未指定は DATA_DIR）。
     """
     from correction_semantic.promote import read_unpromoted
 
     recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
     aliases = _aliases_for(pj_slug)
-    return sum(1 for r in recs if r.get("pj_slug") in aliases)
+    scoped = [r for r in recs if r.get("pj_slug") in aliases]
+    return len(_exclude_bootstrap_consumed(scoped, pj_slug, marker_base=marker_base))
+
+
+def bootstrap_consumed_by_pj(
+    pj_slug: str,
+    *,
+    weak_signals_path: Optional[Path] = None,
+    marker_base: Optional[Path] = None,
+) -> int:
+    """bootstrap 消化済み（marker 以前 detected）で material から除外した weak 件数（#94）。
+
+    queue footer の透明化用。bootstrap marker が無い PJ は常に 0。``weak_unprocessed_by_pj``
+    と同じ scope/除外ロジックを通し、除外前後の差を返す（二重集計を避けるため共有 helper）。
+    """
+    from correction_semantic.promote import read_unpromoted
+
+    recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
+    aliases = _aliases_for(pj_slug)
+    scoped = [r for r in recs if r.get("pj_slug") in aliases]
+    kept = _exclude_bootstrap_consumed(scoped, pj_slug, marker_base=marker_base)
+    return len(scoped) - len(kept)
 
 
 # --- store reader: 前回 evolve 以降の corrections カウント（PJ 別）------------
@@ -562,6 +624,18 @@ def build_queue_result(
         untracked = []
         phantom = []
 
+    # #94: bootstrap で消化済み（marker 以前 detected）として material から除外した weak を
+    # 透明化する（silent truncation 禁止 — 除外しないと TTL まで material を膨らませ誤読を
+    # 招くが、黙って除外すると「なぜ消えたか」が不明になる）。consumed>0 の PJ のみ。
+    consumed_slugs = sorted(
+        {m["pj_slug"] for m in materials} | {d["pj_slug"] for d in skipped_dead}
+    )
+    bootstrap_consumed: List[Dict[str, Any]] = []
+    for s in consumed_slugs:
+        c = bootstrap_consumed_by_pj(s, weak_signals_path=weak_signals_path)
+        if c > 0:
+            bootstrap_consumed.append({"pj_slug": s, "consumed": c})
+
     return {
         "generated_at": generated_at,
         "threshold": threshold,
@@ -570,6 +644,8 @@ def build_queue_result(
         "skipped_dead": skipped_dead,
         "untracked_with_material": untracked,
         "skipped_phantom": phantom,
+        # #94: bootstrap 消化済み（破棄/TTL 任せ判断済み）で material から除外した weak の透明化。
+        "bootstrap_consumed": bootstrap_consumed,
         # #91: project_path 欠落で PJ 帰属不能な corrections（どの母数にも入らず不可視）を透明化。
         "unattributed_corrections": count_unattributed_corrections(corrections_path),
     }

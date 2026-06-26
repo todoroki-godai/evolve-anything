@@ -275,6 +275,23 @@ def _append_coldstart_notice(lines: list, result: dict) -> None:
     )
 
 
+def _append_bootstrap_consumed(lines: list, result: dict) -> None:
+    """bootstrap で消化済み（破棄/TTL 任せと判断済み）として待ちから除外した weak を透明化（#94）。
+
+    silent truncation 禁止: 人間が bootstrap で判断済みの素材を queue から落とした事実を脚注に
+    出す。除外しないと TTL（45日）まで material を膨らませ誤読を招くが、黙って除外すると「なぜ
+    その PJ が待ちから消えたか」が分からなくなる。``bootstrap_consumed`` が空なら何も出さない。
+    """
+    bc = result.get("bootstrap_consumed") or []
+    if not bc:
+        return
+    parts = [f"{e.get('pj_slug')} {e.get('consumed')}件" for e in bc]
+    lines.append(
+        f"（bootstrap 消化済みを待ちから除外: {', '.join(parts)}"
+        f" — 破棄/TTL 任せと判断済み・TTL 失効まで再カウントしません）"
+    )
+
+
 def format_queue_table(result: dict) -> str:
     """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
@@ -292,6 +309,7 @@ def format_queue_table(result: dict) -> str:
             f"（閾値 {result.get('threshold')} 以上の学習素材なし）。"
         )
         lines.append(f"（0 projects waiting / {tracked} tracked (config)）")
+        _append_bootstrap_consumed(lines, result)
         _append_skipped_dead(lines, result)
         _append_untracked(lines, result)
         _append_skipped_phantom(lines, result)
@@ -326,6 +344,7 @@ def format_queue_table(result: dict) -> str:
     lines.append("")
     lines.append(f"（{len(queue)} projects waiting / {tracked} tracked (config)）")
     _append_coldstart_notice(lines, result)
+    _append_bootstrap_consumed(lines, result)
     _append_skipped_dead(lines, result)
     _append_untracked(lines, result)
     _append_skipped_phantom(lines, result)

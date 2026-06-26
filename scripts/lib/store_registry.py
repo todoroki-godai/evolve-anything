@@ -221,11 +221,13 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "hot path（hooks）からは書かない。",
         writer_locus="batch",
         reader="bootstrap_backlog.build / is_done が初回判定に参照（自己消費）。"
-        "marker 立ち後は is_bootstrap=False で即返す。",
+        "marker 立ち後は is_bootstrap=False で即返す。#94: fleet.queue.weak_unprocessed_by_pj が"
+        " bootstrap_done_at 経由で marker 時刻を読み、消化済み weak を material から除外する。",
         retention="permanent",
         disposition="drain",
-        note="初回バックログ bootstrap の完了 marker（#443）。空ファイル。PJ slug スコープ"
-        "（bootstrap_done-<slug>.marker・全PJ共通 DATA_DIR 単一ファイル pitfall 回避）。"
+        note="初回バックログ bootstrap の完了 marker（#443）。bootstrap 完了 ISO8601 時刻 1行"
+        "（#94。旧形式の空 marker は bootstrap_done_at が mtime fallback で後方互換）。PJ slug "
+        "スコープ（bootstrap_done-<slug>.marker・全PJ共通 DATA_DIR 単一ファイル pitfall 回避）。"
         "立ったら以後 bootstrap を再提示しない（TTL #5 が残りを間引く）。",
     ),
     StoreDeclaration(
