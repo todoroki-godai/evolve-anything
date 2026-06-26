@@ -169,16 +169,33 @@ def test_build_review_excludes_promoted_and_expired(tmp_path: Path):
     assert total == 1
 
 
-def test_build_review_only_llm_judge_channel(tmp_path: Path):
+def test_build_review_includes_content_rich_excludes_content_poor(tmp_path: Path):
+    # #99: content-rich（llm_judge + rephrase + permission_deny）は対象、
+    # content-poor（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ除外。
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)
-    other = WeakSignal("rephrase", {"text": "別チャネル"}, "t", "s", "evolve-anything")
-    append_signals([other], path=ws)
+    rephrase = WeakSignal("rephrase", {"text": "言い直し"}, "t", "s", "evolve-anything")
+    deny = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        "t", "s", "evolve-anything",
+    )
+    esc = WeakSignal(
+        "esc_interrupt", {"evidence": "[Request interrupted]"}, "t", "s", "evolve-anything"
+    )
+    edit = WeakSignal(
+        "manual_edit_after_ai", {"evidence": "File has been modified"}, "t", "s",
+        "evolve-anything",
+    )
+    append_signals([rephrase, deny, esc, edit], path=ws)
     res = dr.build_review(
         "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
     )
     total = sum(len(g["signal_keys"]) for g in res["groups"])
-    assert total == 1
+    # llm_judge + rephrase + permission_deny = 3（esc / manual_edit は除外）。
+    assert total == 3
+    channels = {g["channel"] for g in res["groups"]}
+    assert channels == {"llm_judge", "rephrase", "permission_deny"}
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(evolve): daily_review/bootstrap を content-rich チャネルへ拡張し決定論 weak を evolve 一発で昇格可能化（closes #99）** — 実機 `/evolve` dogfood（2026-06-26・evolve-anything）で発見。evolve の対話昇格 phase（bootstrap_backlog / daily_review）は channel="llm_judge" 固定で、決定論チャネル（#432: manual_edit_after_ai / esc_interrupt / rephrase / permission_deny）は `evolve --drain` で永続化されるだけで昇格入口が無く、`evolve-reflect --promote-weak` でしか昇格できなかった。結果「evolve をフル実行しても決定論 weak が queue から減らない」非対称（#443/#446 が llm_judge のみ移植して止まった seam・`learning_weak_promotion_channel_asymmetry`）。**調査で判明した root cause**: 決定論チャネルは保存される中身の濃さで 2 層に分かれる — content-rich（`rephrase`=言い直し前後発話 / `permission_deny`=拒否コマンド）と content-poor（`esc_interrupt`/`manual_edit_after_ai`=`"[Request interrupted]"`/`"File has been modified"` の汎用マーカーのみで detector が周辺文脈未保存）。実データで evolve-anything 未昇格 41 件中 **36 件が content-poor**（昇格しても message=channel 名の空 correction にしかならない）。**Fix（content-rich のみ surface）**: 対象チャネルの単一ソース `correction_semantic/review_channels.py`（`REVIEW_CHANNELS`=llm_judge/rephrase/permission_deny + `signal_text(rec)`=channel 別 actionable 代表テキスト）を新設し bootstrap_backlog/daily_review/promote が共有（コピー慣習 partial fix 回避）。content-poor は y/n 確認の判断材料が無いため除外し observability 集計に残す。promote の `_correction_message` も signal_text へ fallback し permission_deny 昇格が拒否コマンドを message に持つ（channel 名の空 correction を防止）。TDD 14件・決定論・LLM 非依存。
+
 ## [1.113.2] - 2026-06-26
 
 ### Fixed

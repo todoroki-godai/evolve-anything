@@ -1,7 +1,7 @@
 """correction_semantic.bootstrap_backlog — 初回バックログ bootstrap モード（#443）。
 
-既存の weak_signals バックログ（channel=llm_judge・未昇格）を初回 evolve 時にまとめて
-確認する入口を提供する。設計（daily-evolve-reward-loop-design.md §機能#3 ハイブリッド方式）:
+既存の weak_signals バックログ（channel ∈ REVIEW_CHANNELS=content-rich・未昇格・#99）を初回
+evolve 時にまとめて確認する入口を提供する。設計（daily-evolve-reward-loop-design.md §機能#3）:
 
 - アクティブ PJ のみ初回 bootstrap でまとめて確認（per-PJ 15-30 分）。残り PJ は日次 5 件 +
   TTL 45 日の自然失効に任せる。**bootstrap 対象 PJ の選択は実行時に AskUserQuestion で人間が
@@ -32,13 +32,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from correction_semantic.idiom_filter import idiom_eligible
-from correction_semantic.representative import user_only_text
+from correction_semantic.review_channels import REVIEW_CHANNELS, signal_text
 from weak_signals.store import default_store_path, read_signals
 
 MARKER_PREFIX = "bootstrap_done-"
 MARKER_SUFFIX = ".marker"
 
-# backlog の対象チャネル。#431 のバッチ LLM 意味判定レーン（313 件はこのチャネル）。
+# #431 のバッチ LLM 意味判定レーンのチャネル名（後方互換で残置・daily_review が group の
+# 既定 channel に使う）。bootstrap/daily の **対象チャネル集合**は review_channels.REVIEW_CHANNELS
+# が単一ソース（#99 で llm_judge 固定から content-rich 3 チャネルへ拡張）。
 BACKLOG_CHANNEL = "llm_judge"
 
 # 内容キーワードの jaccard 類似度しきい値（設計 §機能#3・実データで最も効いた値）。
@@ -106,11 +108,10 @@ def _jaccard(a: Set[str], b: Set[str]) -> float:
 def _idiom_text(rec: Dict[str, Any]) -> str:
     """weak_signal レコードから idiom 本文（発話断片）を取り出す。
 
-    #528-3: assistant の過去レポート引用混入（「ℹ️ データ蓄積待ち…」等）を strip し
-    user 発話のみを representative にする。
+    #99: channel 別の actionable 代表テキストを単一ソース signal_text から取る
+    （llm_judge/rephrase=user 発話・assistant 引用除去 #528-3 / permission_deny=拒否コマンド合成）。
     """
-    prov = rec.get("provenance") or {}
-    return user_only_text(prov.get("text") or "")
+    return signal_text(rec)
 
 
 def group_signals(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -337,13 +338,17 @@ def _read_backlog(
     pj_slug: str,
     weak_signals_path: Optional[Path],
 ) -> List[Dict[str, Any]]:
-    """当該 PJ slug の未昇格 llm_judge backlog を返す（expired は防御的に除外）。"""
+    """当該 PJ slug の未昇格 content-rich backlog を返す（expired は防御的に除外）。
+
+    #99: 対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
+    チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ bootstrap でも除外。
+    """
     recs = read_signals(weak_signals_path)
     out: List[Dict[str, Any]] = []
     for r in recs:
         if r.get("pj_slug") != pj_slug:
             continue
-        if r.get("channel") != BACKLOG_CHANNEL:
+        if r.get("channel") not in REVIEW_CHANNELS:
             continue
         if r.get("promoted"):
             continue

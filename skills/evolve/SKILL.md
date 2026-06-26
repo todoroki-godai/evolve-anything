@@ -438,7 +438,7 @@ reflect は独立フェーズではなく discover に統合済み。**`phases.d
 
 ### Step 6.1: 初回バックログ bootstrap（#443）
 
-既存の weak_signals バックログ（channel=llm_judge・未昇格）を初回 evolve でまとめて確認する入口。**判定は phase 出力 `result.correction_review.bootstrap` を読むだけで行う（散文ステップで判定しない）。** 機械は「アクティブ PJ」を判定しない — 件数は人間の判断材料として表示するだけ。
+既存の weak_signals バックログ（channel ∈ content-rich = llm_judge / rephrase / permission_deny・未昇格・#99）を初回 evolve でまとめて確認する入口。**判定は phase 出力 `result.correction_review.bootstrap` を読むだけで行う（散文ステップで判定しない）。** 機械は「アクティブ PJ」を判定しない — 件数は人間の判断材料として表示するだけ。content-poor チャネル（esc_interrupt / manual_edit_after_ai）は detector 文脈未保存ゆえ対象外（#99）。
 
 - `bootstrap.is_bootstrap != True`（marker 立ち済み or backlog 0 / error）→ **スキップ**（沈黙≠評価のため `bootstrap.is_bootstrap=False` のときのみ「bootstrap: 消化済み ✓」を1行表示）
 - `bootstrap.is_bootstrap == True` → **AskUserQuestion で 3 択を人間に選ばせる（MUST — テキスト表示だけで済ませない）**。question に `bootstrap.pj_total` 件・`bootstrap.groups_total` グループを判断材料として提示する。**各 option の `detail` に下記の副作用1行を必ず添える（MUST）** — 3択は「marker を立てるか立てないか」で以後の再表示挙動が非対称になり、取り違えると bootstrap が永久に消える / 永久に再提示される（#51 MEDIUM）:
@@ -475,7 +475,7 @@ res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)
 
 ### Step 6.2: 今日の修正確認（daily_review・#446）
 
-前回 evolve 以降の**新規** weak_signal（channel=llm_judge・未昇格・非expired・既読集合に無いもの）を idiom 単位で確認する日次入口。reflect SKILL Step 7.7 の散文ステップからの移植（learning_skill_md_must_not_enforcement — 毎日叩かれる evolve の決定論 phase 出力を消費する）。**判定は phase 出力 `result.correction_review.daily` を読むだけで行う。**
+前回 evolve 以降の**新規** weak_signal（channel ∈ content-rich = llm_judge / rephrase / permission_deny・未昇格・非expired・既読集合に無いもの・#99）を idiom 単位で確認する日次入口。reflect SKILL Step 7.7 の散文ステップからの移植（learning_skill_md_must_not_enforcement — 毎日叩かれる evolve の決定論 phase 出力を消費する）。**判定は phase 出力 `result.correction_review.daily` を読むだけで行う。** content-poor チャネル（esc_interrupt / manual_edit_after_ai）は detector が周辺文脈を保存せず y/n 確認の判断材料が無いため対象外で、observability の weak_signals matrix に件数として残る（#99）。
 
 **二重提示の解消（#476-3）**: Step 6.1 で `bootstrap.is_bootstrap == True` の run では、daily phase は bootstrap groups が保持する signal_key を自動的に除外して emit する（evolve.py が `exclude_signal_keys` で配線済み）。そのため Step 6.1（まとめて確認）→ Step 6.2 を順に実行しても同じシグナルを 2 回質問しない。`daily.remaining` も bootstrap-pending を除いた「前回以降の新規」だけを数える。
 

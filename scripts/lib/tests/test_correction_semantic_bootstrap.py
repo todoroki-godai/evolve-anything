@@ -162,14 +162,24 @@ def test_build_only_counts_unpromoted(tmp_path: Path):
     assert res["pj_total"] == 1
 
 
-def test_build_only_counts_llm_judge_channel(tmp_path: Path):
-    # backlog は llm_judge チャネル（#431 のバッチ判定）のみが対象
+def test_build_counts_content_rich_excludes_content_poor(tmp_path: Path):
+    # #99: backlog は content-rich（llm_judge + rephrase + permission_deny）が対象。
+    # content-poor（esc_interrupt / manual_edit_after_ai）は detector 文脈未保存ゆえ除外。
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)
-    other = WeakSignal("rephrase", {"text": "別チャネル"}, "t", "s", "evolve-anything")
-    append_signals([other], path=ws)
+    rephrase = WeakSignal("rephrase", {"text": "言い直し"}, "t", "s", "evolve-anything")
+    deny = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "git push"},
+        "t", "s", "evolve-anything",
+    )
+    esc = WeakSignal(
+        "esc_interrupt", {"evidence": "[Request interrupted]"}, "t", "s", "evolve-anything"
+    )
+    append_signals([rephrase, deny, esc], path=ws)
     res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
-    assert res["pj_total"] == 1
+    # llm_judge + rephrase + permission_deny = 3（esc は除外）。
+    assert res["pj_total"] == 3
 
 
 def test_build_excludes_expired_defensively(tmp_path: Path):
