@@ -348,6 +348,7 @@ class TestBuildQueueResult:
             "skipped_dead",
             "untracked_with_material",
             "skipped_phantom",
+            "bootstrap_consumed",
             "unattributed_corrections",
         }
         assert result["unattributed_corrections"] == {"total": 0, "by_source": {}}

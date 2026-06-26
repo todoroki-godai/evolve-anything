@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(fleet): queue が bootstrap 消化済み weak を material から除外（closes #94）** — `/queue` 実機 dogfood（2026-06-26・figma-to-code）で発見。figma の evolve セッションが bootstrap phase で未処理 116 件を「全件破棄（昇格ゼロ）」と判断し `bootstrap_done-figma-to-code.marker` を設置したのに、queue は依然 `MATERIAL=116` で待ちトップに表示し続けた。原因は `fleet.queue.weak_unprocessed_by_pj` が `promoted=False && not expired` だけを数え `bootstrap_done` marker を見ていなかったこと（bootstrap の「破棄＝TTL 任せ」設計は weak_signals.jsonl を書き換えず marker のみ立てるため、queue が TTL 45日まで二重計上）。`is_effectively_expired`（#89）と同じ **read 時導出**で是正: `mark_done` が marker に完了 ISO8601 時刻を書き（旧形式の空 marker は `bootstrap_done_at` の mtime fallback で後方互換）、`weak_unprocessed_by_pj` が marker 設置時刻より前に detected した weak を除外する（tz 比較罠 #79 は `_parse_iso` で回避・detected_at parse 不能は安全側で残す）。marker 設置**後**の新規 weak は正当な待ちとして残す。除外は silent truncation を避けるため queue footer に `（bootstrap 消化済みを待ちから除外: <slug> N件…）` で透明化。TDD 13件・read-only・決定論・LLM 非依存。
+
 ## [1.113.1] - 2026-06-26
 
 ### Fixed

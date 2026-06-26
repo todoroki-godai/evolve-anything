@@ -28,13 +28,19 @@ from correction_semantic import bootstrap_backlog as bb  # noqa: E402
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
 
 
-def _sig(text: str, line_no: int, pj_slug: str = "evolve-anything", **prov_extra) -> WeakSignal:
+def _sig(
+    text: str,
+    line_no: int,
+    pj_slug: str = "evolve-anything",
+    detected_at: str = "2026-06-10T00:00:00+00:00",
+    **prov_extra,
+) -> WeakSignal:
     prov = {"source_path": "/a.jsonl", "line_no": line_no, "text": text, "reason": "r"}
     prov.update(prov_extra)
     return WeakSignal(
         channel="llm_judge",
         provenance=prov,
-        detected_at="2026-06-10T00:00:00+00:00",
+        detected_at=detected_at,
         session_id="s1",
         pj_slug=pj_slug,
     )
@@ -459,3 +465,47 @@ def test_build_buckets_above_threshold(tmp_path: Path):
     # 取りこぼし無し
     covered = sorted(i for b in buckets for i in b["group_indices"])
     assert covered == list(range(res["groups_total"]))
+
+
+# ─────────────────────────────────────────────────────────────────
+# bootstrap_done_at: marker 完了時刻の read 時導出（#94）
+# ─────────────────────────────────────────────────────────────────
+def test_mark_done_writes_iso_timestamp(tmp_path: Path):
+    # mark_done は marker に bootstrap 完了 ISO8601 時刻（tz-aware）を書く（空でない）。
+    from datetime import datetime
+
+    marker = _marker(tmp_path)
+    bb.mark_done("evolve-anything", marker_path=marker, dry_run=False)
+    content = marker.read_text(encoding="utf-8").strip()
+    dt = datetime.fromisoformat(content)
+    assert dt.tzinfo is not None
+
+
+def test_bootstrap_done_at_none_when_no_marker(tmp_path: Path):
+    assert bb.bootstrap_done_at("evolve-anything", marker_path=_marker(tmp_path)) is None
+
+
+def test_bootstrap_done_at_parses_iso_content(tmp_path: Path):
+    marker = _marker(tmp_path)
+    marker.write_text("2026-06-25T16:32:00+00:00", encoding="utf-8")
+    dt = bb.bootstrap_done_at("evolve-anything", marker_path=marker)
+    assert dt is not None
+    assert (dt.year, dt.month, dt.day) == (2026, 6, 25)
+    assert dt.tzinfo is not None
+
+
+def test_bootstrap_done_at_mtime_fallback_for_empty_marker(tmp_path: Path):
+    # 旧形式の空 marker（mark_done 改修前）は mtime にフォールバック（後方互換）。
+    marker = _marker(tmp_path)
+    marker.write_text("", encoding="utf-8")
+    dt = bb.bootstrap_done_at("evolve-anything", marker_path=marker)
+    assert dt is not None
+    assert dt.tzinfo is not None  # aware UTC
+
+
+def test_bootstrap_done_at_roundtrip(tmp_path: Path):
+    # mark_done → bootstrap_done_at が同じ時刻を読み戻せる（書込↔読出の単一契約）。
+    marker = _marker(tmp_path)
+    bb.mark_done("evolve-anything", marker_path=marker, dry_run=False)
+    dt = bb.bootstrap_done_at("evolve-anything", marker_path=marker)
+    assert dt is not None and dt.tzinfo is not None

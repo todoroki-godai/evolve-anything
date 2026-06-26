@@ -37,5 +37,5 @@ recall(query: 'str', *, limit: 'int' = 10, projects_root: 'Path | None' = None) 
 resolve_auto_memory_dir(pj_path: 'Path') -> 'Path'
 run_audit_subprocess(pj_path: 'Path', timeout: 'float' = 10.0, data_dir: 'Path | None' = None, rl_audit_bin: 'Path | None' = None) -> 'AuditResult'
 select_evolve_queue(pj_materials: 'List[Dict[str, Any]]', threshold: 'int') -> 'List[Dict[str, Any]]'
-weak_unprocessed_by_pj(pj_slug: 'str', *, weak_signals_path: 'Optional[Path]' = None) -> 'int'
+weak_unprocessed_by_pj(pj_slug: 'str', *, weak_signals_path: 'Optional[Path]' = None, marker_base: 'Optional[Path]' = None) -> 'int'
 write_fleet_run(rows: 'list[FleetRow]', fleet_runs_dir: 'Path | None' = None, now: 'datetime | None' = None) -> 'Path'
