@@ -254,6 +254,27 @@ def _append_unattributed(lines: list, result: dict) -> None:
     )
 
 
+def _append_coldstart_notice(lines: list, result: dict) -> None:
+    """純 cold-start（全待ち PJ が未 evolve）時のみ material の意味を警告する（A）。
+
+    cold-start では ``new_corrections`` が「前回 evolve 以降の増分」でなく **全履歴 backlog**
+    の全件計上になる（``new_corrections_by_pj`` の ``last_evolve_at=None`` 分岐）。よって
+    ``material_count`` は velocity（最近の勢い）でなく累積量を表し、ランキングも累積順になる。
+    初回 ``/evolve`` 適用（drain）後は増分のみになり数値が大きく下がる。この非互換を知らずに
+    上位 PJ を選ぶと stale な backlog を掴むため、純 cold-start 時だけ surface する。一部でも
+    drained なら混在ノイズになるので出さない（純 cold-start は自己消滅する一過性状態）。
+    """
+    queue = result.get("queue") or []
+    if not queue:
+        return
+    if not all(item.get("last_evolve_at") is None for item in queue):
+        return
+    lines.append(
+        "（初回表示: corr は全履歴を計上＝累積量順で velocity ではありません。"
+        "evolve 適用後は増分のみになり数値が下がります）"
+    )
+
+
 def format_queue_table(result: dict) -> str:
     """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
@@ -304,6 +325,7 @@ def format_queue_table(result: dict) -> str:
         lines.append(_fmt_row(r))
     lines.append("")
     lines.append(f"（{len(queue)} projects waiting / {tracked} tracked (config)）")
+    _append_coldstart_notice(lines, result)
     _append_skipped_dead(lines, result)
     _append_untracked(lines, result)
     _append_skipped_phantom(lines, result)

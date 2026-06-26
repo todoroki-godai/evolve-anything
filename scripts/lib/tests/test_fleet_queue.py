@@ -77,14 +77,15 @@ class TestSelectEvolveQueue:
         assert out[0]["reason"] == "weak=7 + new corr=2 >= 3"
 
     def test_reason_coldstart_marks_all_unprocessed(self):
-        """last_evolve_at=None（未 drain）は corr 全件計上が一目で分かる文言にする（#92）。
+        """last_evolve_at=None（初回）は corr 全件計上が一目で分かる業務語にする（#92→A）。
 
         never なのに『new corr』だと「一度も evolve してないのに前回以降の新規 corr」が
-        矛盾に見える。全件・未 drain と明示して CLI 直読みの誤読を防ぐ。
+        矛盾に見える。`未 drain` は emit→drain 2 相の内部 plumbing 用語なので、毎朝 queue を
+        叩くだけの利用者に意味を要求しないよう `初回・全件` の業務語へ落とす（tacchi ①）。
         """
         mats = [_material("a", weak=7, corr=2, last=None)]
         out = fq.select_evolve_queue(mats, threshold=3)
-        assert out[0]["reason"] == "weak=7 + corr=2（全件・未 drain）>= 3"
+        assert out[0]["reason"] == "weak=7 + corr=2（初回・全件）>= 3"
 
     def test_sorted_by_material_count_desc(self):
         """material_count 降順で並ぶ（多い PJ が先頭）。"""
@@ -991,6 +992,45 @@ def _result(
         "skipped_phantom": phantom or [],
         "unattributed_corrections": unattributed or {"total": 0, "by_source": {}},
     }
+
+
+class TestFormatQueueTableColdstart:
+    """純 cold-start（全待ち PJ が未 evolve）時の material 意味警告（A・tacchi 採点）。
+
+    cold-start では new_corrections が「前回 evolve 以降の増分」でなく全履歴 backlog の
+    全件計上になるため、material_count は velocity でなく累積量を表す。この非互換を
+    純 cold-start 時だけ surface する（一部でも drained なら混在ノイズなので出さない）。
+    """
+
+    @staticmethod
+    def _q(slug, last):
+        return {
+            "pj_slug": slug,
+            "material_count": 9,
+            "weak_unprocessed": 5,
+            "new_corrections": 4,
+            "last_evolve_at": last,
+            "reason": "x",
+        }
+
+    def test_coldstart_notice_when_all_never(self):
+        """全待ち PJ が last_evolve_at=None なら累積量順の警告を出す。"""
+        q = [self._q("a", None), self._q("b", None)]
+        out = format_queue_table(_result(queue=q))
+        assert "累積量順" in out
+        assert "velocity" in out
+        assert "増分のみ" in out
+
+    def test_coldstart_silent_when_any_drained(self):
+        """1 件でも drain 済（last_evolve_at あり）なら混在ノイズなので出さない。"""
+        q = [self._q("a", None), self._q("b", "2026-06-01T00:00:00+00:00")]
+        out = format_queue_table(_result(queue=q))
+        assert "累積量順" not in out
+
+    def test_coldstart_silent_when_empty_queue(self):
+        """待ち 0 件なら誤ランキングの余地がないので出さない。"""
+        out = format_queue_table(_result(queue=[]))
+        assert "累積量順" not in out
 
 
 class TestFormatQueueTableUntracked:

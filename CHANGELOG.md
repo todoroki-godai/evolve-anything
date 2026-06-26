@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(fleet): queue の cold-start material の意味を明示 + REASON を業務語化（refs #92 #79）** — v1.113.0 リリース後の `/queue` 再 dogfood（2026-06-26）を tacchi（senior reviewer agent）に採点させて確定した 2 点。⑴ **A（cold-start cliff）**: 純 cold-start（`evolve-queue-state.jsonl` 不在で全待ち PJ が `LAST_EVOLVE=never`）では `new_corrections_by_pj(last_evolve_at=None)` が増分でなく**全履歴 backlog の全件**を計上するため、`material_count` は velocity（最近の勢い）でなく累積量を表しランキングも累積順になる。これを知らず上位 PJ を選ぶと stale な backlog を掴む（weak 側は bootstrap_backlog #443 で手当て済みだが queue corr 側は未手当てだった）。`formatters._append_coldstart_notice` を新設し、**全待ち PJ が `last_evolve_at is None` のとき限定**で footer に `（初回表示: corr は全履歴を計上＝累積量順で velocity ではありません。evolve 適用後は増分のみになり数値が下がります）` を surface（一部でも drained なら混在ノイズゆえ非表示・純 cold-start は初回 drain で自己消滅する一過性状態）。⑵ **①（REASON 業務語化）**: `select_evolve_queue` の reason 内部 plumbing 語 `（全件・未 drain）`（emit→drain 2 相 #402 の用語）を業務語 `（初回・全件）` に置換（毎朝 queue を叩くだけの利用者に内部用語を要求しない）。**見送り判定（同 dogfood・tacchi 採点）**: B（below-threshold 件数 surface）=`tracked−waiting` で導出可能・非 actionable・意図的フィルタは silent truncation と別カテゴリ / C（calibration ゲートの daily 監視）=検出器 `evolve_introspect._detect_calibration_regression` はデータ生産者 `/evolve` と同居ゆえ cron 化は未変化データ再スキャン / ②（未帰属 hook=1）=実測で全 9 件が 2026-05-19 以前・以降ゼロの歴史的残渣と判明し live writer リーク否定。ロジック・件数は不変、表示のみ。実コーパスで全 9 待ち PJ の表記切替 + cold-start notice の surface を実測。TDD 4件・read-only・決定論・LLM 非依存。
+
 ## [1.113.0] - 2026-06-25
 
 ### Added
