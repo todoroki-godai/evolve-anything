@@ -138,3 +138,33 @@ def test_format_queue_table_silent_when_no_consumed():
 
     out = format_queue_table({"queue": [], "tracked_total": 5, "threshold": 5})
     assert "bootstrap 消化済み" not in out
+
+
+def test_format_queue_table_weak_semantics_when_waiting():
+    # 待ち PJ があるとき WEAK 列の意味（未処理のみ）を脚注で明示する（②）。
+    from fleet.formatters import format_queue_table
+
+    result = {
+        "queue": [
+            {
+                "pj_slug": "amamo",
+                "material_count": 56,
+                "weak_unprocessed": 16,
+                "new_corrections": 40,
+                "last_evolve_at": None,
+                "reason": "weak=16 + corr=40",
+            }
+        ],
+        "tracked_total": 5,
+        "threshold": 5,
+    }
+    out = format_queue_table(result)
+    assert "WEAK は未処理のみ" in out
+
+
+def test_format_queue_table_weak_semantics_absent_when_empty():
+    # 待ち 0（WEAK 列が無い）では列の意味注記を出さない。
+    from fleet.formatters import format_queue_table
+
+    out = format_queue_table({"queue": [], "tracked_total": 5, "threshold": 5})
+    assert "WEAK は未処理のみ" not in out
