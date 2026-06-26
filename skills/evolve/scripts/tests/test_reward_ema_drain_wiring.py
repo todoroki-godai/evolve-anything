@@ -59,6 +59,42 @@ def test_drain_branch_persists_reward_ema(monkeypatch, capsys):
     assert calls["project_dir"] == "/tmp/whatever"
 
 
+def test_drain_without_project_dir_passes_non_none_to_reward_ema(monkeypatch, capsys):
+    """`evolve --drain`（--project-dir 無し＝Step 7.8 の標準形）でも reward_ema に
+    None でない project_dir が渡る（Path(None) クラッシュ根治・#64 drain 盲点）。
+
+    `--project-dir` の argparse 既定は None。weak_signals / queue_state は
+    `_resolve_pj_slug(None)` 経由で None を吸収するが、reward_ema は project_dir を
+    直接 `Path()` に渡すため None だと TypeError で落ちていた（実 PJ drain で常時失敗）。
+    """
+    import evolve_decisions as ed
+    from audit import reward_ema as re
+
+    monkeypatch.setattr(
+        ed, "drain_pending", lambda **kw: {"accepted": [], "rejected": [], "skipped": []}
+    )
+    _stub_weak_signals(monkeypatch)
+
+    calls = {}
+
+    def _fake_persist(project_dir, **kw):
+        calls["project_dir"] = project_dir
+        # 渡された project_dir が Path() に通せる（= None でない）ことを実地で固定する。
+        Path(project_dir)
+        return {"persisted": 0, "reason": "insufficient_skills"}
+
+    monkeypatch.setattr(re, "persist_reward_ema_batch", _fake_persist)
+    # --project-dir を付けない（標準の drain 起動形）。
+    monkeypatch.setattr(sys, "argv", ["evolve.py", "--drain"])
+
+    evolve.main()
+
+    out = json.loads(capsys.readouterr().out)
+    # Path(None) で落ちず error キーにならない。
+    assert "error" not in out["reward_ema_persisted"]
+    assert calls["project_dir"] is not None
+
+
 def test_drain_branch_swallows_reward_ema_error(monkeypatch, capsys):
     """reward_ema 永続化が失敗しても drain 本体は完走し error を surface する。"""
     import evolve_decisions as ed
