@@ -136,6 +136,11 @@ CANONICAL: List[Key] = [
     Key("phases.split_archive_reconcile.suppressed", list, optional=True),
     Key("phases.skill_evolve_archive_reconcile.suppressed", list, optional=True,
         note="skill_evolve↔archive reconcile で archive 優先除外したスキル名（#400 バグ#2）"),
+    Key("phases.fitness.generation_advice", dict, optional=True,
+        note="Step 2 の fitness 生成提案を structural 判定で抑制すべきか（#105）。"
+             "{suppress, reason, note}。suppress=True で SKILL.md Step 2 は AskUserQuestion を"
+             "出さず note を 1 行 surface。reason=skill_evolve_not_scored/env_tier_small。"
+             "phases_remediate Phase 5 で fitness_evolution 確定後に付与"),
     Key("phases.fitness_evolution.next_action", str, optional=True,
         note="insufficient_data 時の結論 1 行（#400 バグ#5）。evolve.py が提案有無で確定"),
     Key("phases.fitness_evolution.verdict", str, optional=True,
@@ -209,7 +214,6 @@ UNCOVERED_PHASES: Set[str] = {
     "quality_patterns",
     "quality_traces",
     "rationalization_table",
-    "fitness",
     "self_evolution",
     "prune",
     "enrich",

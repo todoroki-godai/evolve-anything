@@ -345,13 +345,8 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         # skill_evolve high/medium も discover matched_skills も 0 = 提案が構造的に出ない PJ →
         # 「fitness は使わない設計。対応不要」。1 つでも提案があれば「放置でOK（継続で貯まる）」。
         if fitness_evo_result.get("status") == "insufficient_data":
-            _se = result["phases"].get("skill_evolve", {})
-            _disc = result["phases"].get("discover", {})
-            _proposals_available = (
-                _se.get("high_suitability", 0) > 0
-                or _se.get("medium_suitability", 0) > 0
-                or len(_disc.get("matched_skills", []) or []) > 0
-            )
+            import evolve as _ev
+            _proposals_available = _ev._skill_proposals_available(result)
             _na = fitness_next_action(_proposals_available)
             fitness_evo_result["next_action"] = _na
             # #559: 冗長フィールドは details に隔離済み。top-level の上書きを details にも追従させ
@@ -361,6 +356,20 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         result["phases"]["fitness_evolution"] = fitness_evo_result
     except Exception as e:
         result["phases"]["fitness_evolution"] = {"error": str(e)}
+
+    # #105: Step 2 の fitness 生成提案を structural 判定で抑制すべきか確定し、phases.fitness に
+    # 添える。fitness_evolution（structural_reason）と skill_evolve/discover（提案有無）が
+    # 揃った後でないと判定できないため、ここで算出する。fitness phase 未設定（観測失敗等）の
+    # 場合は触らない（後方互換）。
+    try:
+        import evolve as _ev
+        if isinstance(result["phases"].get("fitness"), dict):
+            result["phases"]["fitness"]["generation_advice"] = (
+                _ev.fitness_generation_advice(result)
+            )
+    except Exception:
+        # advice は advisory（生成提案の既定値だけに影響）。算出失敗で本流を止めない。
+        pass
 
     # Phase 6: Self-Evolution（パイプライン自己改善）
     try:

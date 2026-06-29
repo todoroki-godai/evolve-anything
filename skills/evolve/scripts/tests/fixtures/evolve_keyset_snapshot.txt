@@ -95,6 +95,10 @@ phases.enrich.unmatched_patterns
 phases.fitness
 phases.fitness.fitness_dir
 phases.fitness.fitness_functions
+phases.fitness.generation_advice
+phases.fitness.generation_advice.note
+phases.fitness.generation_advice.reason
+phases.fitness.generation_advice.suppress
 phases.fitness.has_criteria
 phases.fitness.has_fitness
 phases.fitness_evolution

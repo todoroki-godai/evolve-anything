@@ -94,6 +94,8 @@ from ._state import (  # noqa: E402
     check_data_sufficiency,
     _count_total_observations,
     check_fitness_function,
+    _skill_proposals_available,
+    fitness_generation_advice,
 )
 
 

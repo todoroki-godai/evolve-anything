@@ -268,3 +268,77 @@ def check_fitness_function(project_dir: Optional[str] = None) -> Dict[str, Any]:
         "fitness_functions": fitness_files,
         "fitness_dir": str(fitness_dir),
     }
+
+
+def _skill_proposals_available(result: Dict[str, Any]) -> bool:
+    """現 run で skill 提案（skill_evolve high/medium / discover matched_skills）が出ているか。
+
+    fitness 母集団が積み上がる経路があるかの判定。phases_remediate Phase 5 が
+    next_action を確定するために使う条件（#400 バグ#5）と同一ロジックの単一ソース。
+    """
+    phases = result.get("phases", {}) if isinstance(result, dict) else {}
+    se = phases.get("skill_evolve") or {}
+    disc = phases.get("discover") or {}
+    return (
+        se.get("high_suitability", 0) > 0
+        or se.get("medium_suitability", 0) > 0
+        or len(disc.get("matched_skills", []) or []) > 0
+    )
+
+
+def fitness_generation_advice(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Step 2 の fitness 生成提案を structural 判定で抑制すべきか決める（#105）。
+
+    `phases.fitness.has_fitness == False` でも、fitness_evolution が structural に
+    「母集団が貯まらない」と判定する PJ（skill_evolve 未採点 + 現 run で skill 提案も
+    構造的に出ない）では、固有 fitness を生成しても評価にほぼ使われず空振りになる。
+    Step 2 の MUST AskUserQuestion がこの structural 判定を無視して出ると、
+    fitness_evolution の one_liner「このPJでは fitness は使わない設計。対応不要」と
+    矛盾する（#105）。env_tier=small も生成効果が薄い弱シグナルとして抑制側に倒す。
+
+    Returns:
+        {"suppress": bool, "reason": str|None, "note": str|None}
+        suppress=True のとき Step 2 は AskUserQuestion を出さず note を 1 行 surface する。
+    """
+    phases = result.get("phases", {}) if isinstance(result, dict) else {}
+    fitness = phases.get("fitness") or {}
+    if fitness.get("has_fitness"):
+        # 既に固有 fitness あり = そもそも生成提案は出ない。
+        return {"suppress": False, "reason": None, "note": None}
+
+    fe = phases.get("fitness_evolution") or {}
+    structural_reason = fe.get("structural_reason")
+    if not structural_reason and isinstance(fe.get("details"), dict):
+        # #559 で冗長フィールドは details に隔離されたため fallback で拾う。
+        structural_reason = fe["details"].get("structural_reason")
+
+    # 構造的に母集団が貯まらない PJ（skill_evolve 未採点 + 現 run で提案も出ない）。
+    # structural_reason 単独は insufficient_data 全件で立つため、提案有無も併せて判定し
+    # 「放置で貯まる」PJ（提案あり）を誤抑制しない（fitness_next_action の分岐と同型）。
+    if (
+        fe.get("status") == "insufficient_data"
+        and structural_reason == "skill_evolve_not_scored"
+        and not _skill_proposals_available(result)
+    ):
+        return {
+            "suppress": True,
+            "reason": "skill_evolve_not_scored",
+            "note": (
+                "このPJでは fitness は使わない設計（skill_evolve 未採点・skill 提案が"
+                "構造的に出ない）。固有 fitness を生成しても評価に使われにくく空振りに"
+                "なりやすいため、生成提案は抑制（要対応なし）。"
+            ),
+        }
+
+    # env_tier=small はスキル数・母集団とも小さく生成効果が薄い見込み（弱シグナル）。
+    if result.get("env_tier") == "small":
+        return {
+            "suppress": True,
+            "reason": "env_tier_small",
+            "note": (
+                "小規模 PJ（env_tier=small）では固有 fitness 生成の効果が薄い見込み。"
+                "デフォルトはスキップ寄り（必要なときだけ generate-fitness）。"
+            ),
+        }
+
+    return {"suppress": False, "reason": None, "note": None}
