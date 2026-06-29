@@ -153,6 +153,7 @@ phases.prune.duplicate_candidates
 phases.prune.global_candidates
 phases.prune.global_candidates.count
 phases.prune.global_candidates.pointer
+phases.prune.global_candidates.suppressed
 phases.prune.merge_result
 phases.prune.merge_result.merge_proposals
 phases.prune.merge_result.total_proposals
@@ -189,6 +190,8 @@ phases.remediation.proposable_custom
 phases.remediation.proposable_custom_batch_skip
 phases.remediation.proposable_custom_individual
 phases.remediation.proposable_global
+phases.remediation.proposable_global_suppressed
+phases.remediation.rule_violation_suppressed
 phases.remediation.suppressed_by_ledger
 phases.remediation.total_issues
 phases.reorganize

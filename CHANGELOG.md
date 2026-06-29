@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(evolve): 情報レーン advisory（rule_violation_observed / proposable_global / prune.global_candidates）に dismiss 入口を追加（closes #103）** — PJ 単独 evolve で「対応しない」と判断した advisory が却下/既読を記録する経路を持たず毎回 surface され続けていた（`proposable_custom_individual` には #477 の suppression ledger があるが情報レーンには無かった＝#26 と同型の別レーンでの再発）。既存 `remediation_suppression/<slug>.jsonl` ストアを**再利用**（新ストアを増やさず DRY）し、issue 形を持たない生 advisory（rule_violation の `{violated_command,count}` 等）を `make_advisory_issue(lane, identity)` で issue 形に整形して既存 `record_rejection`/`is_suppressed`/`dedup_key` に委譲。⑴ `rule_violation_observed`（identity=violated_command）は read 側 filter で Step 3 surface と hook_candidate 昇格の両方から除外、⑵ `proposable_global` は issue 形のまま `_apply_remediation_suppression` 再利用、⑶ `prune.global_candidates` 件数サマリは `phases.prune.global_candidates.suppressed` bool を付与。SKILL.md に dismiss 入口（「このPJでは意図的運用 — 以後抑制」で `record_rejection` を呼ぶ手順・**dry-run では記録しない MUST NOT**・ユーザー明示時のみ）を追加。抑制件数は `phases.remediation.{rule_violation_suppressed,proposable_global_suppressed}` に surface（silence != evaluated）。PJスコープ・TTL45日・冪等を既存 ledger から継承。決定論・読み取り側は dry-run 安全。TDD 多数。
+
 ## [1.113.2] - 2026-06-26
 
 ### Fixed
