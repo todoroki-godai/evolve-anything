@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **fix(glossary): jargon 検出が PJ 固有でない汎用語を候補に出す #23 regression を修正（closes #106）** — `glossary_drift.find_undefined_terms` が errno コード（ENOENT/EACCES 等）・JS 標準ビルトイン型（Uint8Array/ArrayBuffer/BigInt 等）・一般略語（ESM/IoT/OAI/PKCE/EOA）を undefined_terms（用語集未登録 jargon 候補）に誤って surface していた。いずれも特定 PJ に固有でなくどの分野でも通用する汎用語で、用語集に載せても decode 価値が薄い。除外は既存 #23 の仕組みに統合し単一ソース化: errno/一般略語は `DEFAULT_STOPLIST` の #106 グループ、CamelCase の JS 標準型は `STDLIB_SYMBOLS`（並行除外辞書は新設しない）。過剰除外の回帰防止として PJ 固有語（AMAMO/AnchorRegistry/JCM/MRV/BES 等）が引き続き候補に残ることもテストで封じた。EOA/PKCE は #554 当初 PJ 固有語と分類していたが汎用略語へ再分類。決定論・LLM 非依存。
+
 ## [1.113.2] - 2026-06-26
 
 ### Fixed

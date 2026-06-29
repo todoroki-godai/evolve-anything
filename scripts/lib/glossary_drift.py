@@ -166,6 +166,32 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
             "UTC", "GMT", "PST", "JST", "EST",
         }
     )
+    # --- #106 追加: errno コード / 汎用略語（#23 regression 修正） ---
+    # glossary jargon 検出が PJ 固有でない汎用語を候補に出していた回帰の根治。
+    # 辞書に小文字形を持たないため辞書フィルタでは落ちず、明示除外する。
+    # JS 標準型（Uint8Array/ArrayBuffer/BigInt 等）は CamelCase なので STDLIB_SYMBOLS 側。
+    | frozenset(
+        {
+            # POSIX / Node errno コード（ENOENT/EACCES 等）。どの言語・OS でも
+            # 共通のシステムエラー定数で PJ 固有 jargon ではない。
+            "EPERM", "ENOENT", "ESRCH", "EINTR", "EIO", "ENXIO",
+            "ENOEXEC", "EBADF", "ECHILD", "EAGAIN", "ENOMEM", "EACCES",
+            "EFAULT", "ENOTBLK", "EBUSY", "EEXIST", "EXDEV", "ENODEV",
+            "ENOTDIR", "EISDIR", "EINVAL", "ENFILE", "EMFILE", "ENOTTY",
+            "ETXTBSY", "EFBIG", "ENOSPC", "ESPIPE", "EROFS", "EMLINK",
+            "EPIPE", "EDOM", "ERANGE", "EDEADLK", "ENAMETOOLONG", "ENOLCK",
+            "ENOSYS", "ENOTEMPTY", "ELOOP", "EWOULDBLOCK", "ENOMSG",
+            "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ETIMEDOUT",
+            "EADDRINUSE", "EADDRNOTAVAIL", "ENETDOWN", "ENETUNREACH",
+            "EHOSTUNREACH", "ENOTFOUND", "EAI_AGAIN", "EPROTO",
+            # 広く通用する一般略語（特定 PJ に固有でない）。
+            "ESM",   # ECMAScript Module
+            "IoT",   # Internet of Things（CamelCase）
+            "OAI",   # OpenAI
+            "PKCE",  # Proof Key for Code Exchange（OAuth）
+            "EOA",   # Externally Owned Account
+        }
+    )
 )
 
 # #23: 標準ライブラリ/フレームワークの既知シンボル名。CamelCase のため
@@ -188,6 +214,13 @@ STDLIB_SYMBOLS: frozenset[str] = frozenset(
         "DateTime",
         # 広く使われる data/科学計算フレームワークの型名
         "DataFrame", "Series", "ndarray",
+        # JS/TS 標準ビルトイン型（CamelCase ゆえ _CANDIDATE_RE に拾われるが
+        # ECMAScript 標準で PJ 固有 jargon ではない・#106）。
+        "ArrayBuffer", "SharedArrayBuffer", "DataView", "BigInt", "BigInt64Array",
+        "BigUint64Array", "Int8Array", "Uint8Array", "Uint8ClampedArray",
+        "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+        "Float32Array", "Float64Array", "WeakMap", "WeakSet", "WeakRef",
+        "ReadableStream", "WritableStream", "TransformStream",
     }
 )
 

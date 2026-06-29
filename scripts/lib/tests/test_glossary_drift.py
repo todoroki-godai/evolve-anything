@@ -109,8 +109,11 @@ class TestAWSServiceNamesExcluded:
 class TestProjectJargonNotExcluded:
     """汎用語追加が PJ 固有語を巻き込まないことを確認する。"""
 
+    # NOTE: EOA / PKCE は #554 当初 PJ 固有語と分類したが、#106 で「特定 PJ に
+    # 固有でない汎用略語」と再分類し DEFAULT_STOPLIST へ移した（errno/JS 標準型と同列）。
+    # ここでは真に PJ 固有な語のみを対象にする。
     @pytest.mark.parametrize("tok", [
-        "AMAMO", "AnchorRegistry", "JCM", "MRV", "EOA", "PKCE",
+        "AMAMO", "AnchorRegistry", "JCM", "MRV",
     ])
     def test_pj_jargon_not_in_stoplist(self, tok: str):
         """PJ 固有語は DEFAULT_STOPLIST に入っていない。"""
@@ -420,3 +423,62 @@ class TestMaskedPlaceholderExcluded:
         source = _make_source(tmp_path, "BES と RRF を使う。", "src_real.md")
         result = find_undefined_terms(_entries(), [source])
         assert "BES" in result and "RRF" in result
+
+
+# ---------------------------------------------------------------------------
+# #106: errno コード / JS 標準型 / 汎用略語の除外（#23 regression 修正）
+# ---------------------------------------------------------------------------
+
+class TestIssue106GenericTermsExcluded:
+    """issue #106 — PJ 固有でない汎用語が jargon 候補に出ない（#23 の regression）。
+
+    glossary jargon 検出が errno コード（ENOENT/EACCES 等）・JS 標準型
+    （Uint8Array/ArrayBuffer/BigInt 等）・一般略語（ESM/IoT/OAI/PKCE/EOA）を
+    誤って undefined_terms に出していた。これらは特定 PJ に固有でなくどの分野でも
+    通用する汎用語のため除外する。
+    """
+
+    # issue 報告の混入語 + 同種の代表語。
+    @pytest.mark.parametrize("tok", [
+        # errno 系（POSIX / Node）
+        "ENOENT", "EACCES", "EEXIST", "EPERM", "EISDIR", "ENOTDIR",
+        "ECONNREFUSED", "ETIMEDOUT", "EADDRINUSE", "ENOTFOUND",
+        # JS 標準型（CamelCase）
+        "Uint8Array", "ArrayBuffer", "BigInt", "Int8Array",
+        "Float32Array", "Uint16Array",
+        # 一般略語
+        "ESM", "IoT", "OAI", "PKCE", "EOA",
+    ])
+    def test_generic_term_not_reported_as_undefined(self, tmp_path: Path, tok: str):
+        source = _make_source(tmp_path, f"It throws {tok} sometimes.", f"src106_{tok}.md")
+        result = find_undefined_terms(_entries(), [source])
+        assert tok not in result, (
+            f"'{tok}' は汎用語なので undefined_terms に出てはいけない (#106)"
+        )
+
+    @pytest.mark.parametrize("tok", [
+        # errno / 一般略語は DEFAULT_STOPLIST、JS 標準型は STDLIB_SYMBOLS に
+        # 単一ソースで登録される（並行除外辞書を新設しない）。
+        "ENOENT", "EACCES", "ESM", "IoT", "OAI", "PKCE", "EOA",
+        "Uint8Array", "ArrayBuffer", "BigInt",
+    ])
+    def test_generic_term_in_single_source(self, tok: str):
+        from glossary_drift import STDLIB_SYMBOLS
+
+        assert tok in DEFAULT_STOPLIST or tok in STDLIB_SYMBOLS, (
+            f"'{tok}' は単一ソース（DEFAULT_STOPLIST / STDLIB_SYMBOLS）で除外されるべき (#106)"
+        )
+
+    @pytest.mark.parametrize("tok", [
+        "AMAMO", "AnchorRegistry", "JCM", "MRV", "BES", "RRF", "MemTrace",
+    ])
+    def test_does_not_suppress_project_jargon(self, tmp_path: Path, tok: str):
+        """#106 の除外が PJ 固有語を巻き込まない（過剰除外の回帰防止）。
+
+        stoplist を空にしても STDLIB_SYMBOLS/辞書フィルタに無いので残るべき。
+        """
+        source = _make_source(tmp_path, f"The {tok} runs.", f"src106pj_{tok}.md")
+        result = find_undefined_terms(_entries(), [source], stoplist=frozenset())
+        assert tok in result, (
+            f"'{tok}' は PJ 固有語として undefined_terms に残るべき (#106)"
+        )
