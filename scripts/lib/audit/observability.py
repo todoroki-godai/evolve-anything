@@ -27,6 +27,7 @@ from .sections_capture import build_capture_rate_section
 from .sections_eval import build_eval_saturation_section
 from .sections_fanout import build_fanout_cost_section
 from .sections_hook import build_hook_drift_section
+from .sections_conflict import build_memory_conflict_section
 from .sections_contagion import build_memory_contagion_section
 from .sections_measurement import build_measurement_bug_section
 from .sections_memory import build_memory_capability_section
@@ -66,6 +67,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("paired_trajectory", build_paired_trajectory_section),
     ("measurement_bug", build_measurement_bug_section),
     ("memory_contagion", build_memory_contagion_section),
+    ("memory_conflict", build_memory_conflict_section),
     ("promotion_readiness", build_promotion_readiness_section),
     ("weak_signals", build_weak_signals_section),
     ("testpaths_coverage", build_testpaths_coverage_section),

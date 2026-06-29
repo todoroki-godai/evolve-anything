@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(audit): 同一 PJ 内の非両立記憶ペアを検出する `Memory Conflict` section を追加（closes #83）** — fleet recall が矛盾する2記憶を両方掴むと提案が汚染される盲点を塞ぐ、記憶健全性の第3軸（memory_temporal=時間降格 / memory_contagion=評価源偏り と直交）。当 PJ の active memory fact（`~/.claude/projects/<encoded>/memory/` を `resolve_cc_memory_dir` で解決・PJ スコープ厳守・MEMORY.md と superseded を除外）から「同一 specific key（backtick code span / 識別子トークン）を一方が肯定・他方が否定で言及する非両立ペア」を決定論・LLM 非依存で検出する。極性判定は SOV/SVO の語順非対称（日本語否定=object の後＝forward 窓 / 英語否定=object の前＝backward 窓）を使い「A ではなく B」型を A=否定 / B=肯定 に正しく割り当て、文内に肯定否定が同居しても自己矛盾扱いしない。捏造閾値を置かず「明確な対立のみ」に限定し FP を回避（同一ファイル内で両極性の key は ambiguous として drop）。floor3 件・silence≠evaluated（矛盾ゼロは `✓ no conflicts (N facts scanned)`）。矛盾検出時は ⚠ + 各ペアの evidence（肯定/否定 2 fact のパス・対立値）を audit に surface。重み非干渉の advisory（dry-run 安全・新ストアを作らない読み取り専用）。TDD 12件。
+
 ## [1.113.2] - 2026-06-26
 
 ### Fixed
