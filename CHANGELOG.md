@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(evolve): Step 2 の fitness 生成提案が fitness_evolution の structural 判定を無視し矛盾していたのを抑制（closes #105）** — custom skill を持たない PJ で、同一 run が「fitness を生成しろ（Step 2 の MUST AskUserQuestion）」と「このPJでは fitness は使わない設計（fitness_evolution `structural_reason=skill_evolve_not_scored`）」を同時提示する矛盾。`_state.fitness_generation_advice(result)` を新設し、`has_fitness=false` でも ⑴ `fitness_evolution.status==insufficient_data` かつ `structural_reason==skill_evolve_not_scored` かつ現 run で skill 提案が構造的に出ない（`_skill_proposals_available`）／⑵ `env_tier==small` のとき `{suppress:true, reason, note}` を `phases.fitness.generation_advice` に付与（phases_remediate Phase 5 で fitness_evolution 確定後に算出）。SKILL.md Step 2 は `suppress==true` で AskUserQuestion を出さず（MUST NOT）note を 1 行 surface。structural_reason 単独でなく提案有無も AND 条件にし「放置で母集団が貯まる PJ」の誤抑制を防止（fitness_next_action と同型ロジックを単一ソース化）。`generation_advice` 欠落の古い result は従来挙動（後方互換）。TDD 37件・決定論・LLM 非依存。
+
 ## [1.113.2] - 2026-06-26
 
 ### Fixed

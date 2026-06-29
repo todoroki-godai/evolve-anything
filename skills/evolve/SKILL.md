@@ -100,7 +100,7 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 各 Step の入口に「`result.phases.X` が〜の場合」「候補があれば」等の発火条件がある。条件に当てはまらなければ
 1 行 surface（✓ クリーン）して**次へ進む**。当てはまった時だけ本文の AskUserQuestion / 適用フローを実行する。
 
-- **[Step 2](#step-2-fitness-関数チェック)** Fitness 関数チェック（`has_fitness: false` のとき生成提案）
+- **[Step 2](#step-2-fitness-関数チェック)** Fitness 関数チェック（`has_fitness: false` かつ `generation_advice.suppress != true` のとき生成提案。structural な PJ では抑制 #105）
 - **[Step 2.5](#step-25-意図確認チェックintention-check)** 意図確認（パッチ候補があるとき）
 - **[Step 3.6](#step-36-スキル自己進化適性判定)** スキル自己進化適性判定（`batch_guard_trigger` 非 null のときインタラクティブ）
 - **[Step 5.5](#step-55-remediation-フェーズ)** Remediation（`total_issues > 0` のとき分類・承認）
@@ -191,7 +191,9 @@ evolve --project-dir "$(pwd)" --dry-run --observe-first --output "$OUT"
 
 evolve.py の出力に含まれる `fitness` フェーズを確認する。
 
-- `has_fitness: false` の場合:
+- **まず `result.phases.fitness.generation_advice` を確認する（#105・structural 抑制ゲート）**。これは fitness_evolution（`structural_reason`）と skill_evolve/discover（提案有無）を踏まえて生成提案を出すべきか決定論で判定した結果（`{suppress, reason, note}`）:
+  - `generation_advice.suppress == true` の場合（`reason` = `skill_evolve_not_scored`〔skill_evolve 未採点 + skill 提案が構造的に出ない PJ〕または `env_tier_small`〔小規模 PJ〕）→ **AskUserQuestion を出さない（MUST NOT）**。`generation_advice.note` を**1行そのまま surface** して次へ進む。fitness_evolution の one_liner「このPJでは fitness は使わない設計。対応不要」と矛盾させないため、生成提案はここで抑制する（生成しても空振りになりやすい）。`generation_advice` キーが無い古い result（後方互換）では従来どおり下記の `has_fitness` 分岐に従う
+- `has_fitness: false` かつ（`generation_advice` が無い or `suppress == false`）の場合:
   - **提案詳細プロトコルに従う**: 質問前に判断材料を提示する。CLAUDE.md / rules / skills からドメイン（ゲーム/API/Bot/ドキュメント等）を1行で推定し、「生成すると何が変わるか」（組み込み default 汎用評価 → ドメイン特化の評価軸）と、生成をスキップした場合に使われる組み込み関数名（default）を明示する
   - AskUserQuestion ツールで以下を質問する（MUST — テキスト表示だけで済ませてはならない）:
     - question: 「プロジェクト固有の評価関数が未生成です（推定ドメイン: {domain}）。生成しますか？」
