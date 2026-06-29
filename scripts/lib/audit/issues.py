@@ -55,10 +55,39 @@ def collect_hardcoded_value_issues(
 # 更新回数単独では「活発に正しく更新した健全なメモリ」を誤検知するため、
 # 行数（= 内容の肥大化）との複合条件にする（#353）。
 MEMORY_HEAVY_UPDATE_THRESHOLD = 3
-# 行数がこの値未満なら update_count が閾値を超えても警告しない。
-# memory ファイルの上限 (LIMITS["memory"] = 120 行) の 25% 相当。
-# 小さなメモリの活発更新は正常運用とみなす（コスト最適化メモリ 7 回更新の誤検知が動機）。
-MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 30
+# 肥大化（= 構造的劣化）の判定行数。これ未満は「軽微」とみなし、update_count が
+# 閾値を超えても警告しない。memory ファイルの上限 (LIMITS["memory"] = 120 行) の 50% 相当。
+#
+# #104: 旧 30 行 (25%) は frontmatter 込で 33〜46 行の健全な活発メモリを誤検知していた。
+# update_count は memory_capability の use 軸では「活性=良」として加点される指標であり、
+# 同じ run で memory_capability=健全(1.00) と判定された memory を remediation が
+# 「要対応」と flag するのは矛盾だった。肥大化判定を行数という構造指標へ寄せ、
+# 実測の軽微範囲 (〜46 行) より上 (= 60 行) に引き上げて活発な健全メモリを除外する。
+MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 60
+# 重複セクション（同一見出しの反復）がこの数以上なら、行数が軽微でも肥大化とみなす。
+# arXiv:2605.12978 の劣化は LLM 再要約による同一見出しの反復追記として現れるため、
+# 行数だけでなく「構造的冗長性」も肥大化シグナルとして扱う（#104）。
+MEMORY_HEAVY_UPDATE_DUP_SECTION_THRESHOLD = 1
+
+
+def _count_duplicate_section_headings(content: str) -> int:
+    """memory 本文中の重複セクション見出しの「超過分」を数える（#104・構造的肥大化指標）。
+
+    LLM 再要約による劣化 (arXiv:2605.12978) は同一見出しの反復追記として現れる。
+    markdown 見出し (``#`` 始まり) を正規化（先頭 ``#`` 群と前後空白を除去し小文字化）し、
+    2 回以上現れる見出しの超過回数の総和を返す（例: 同じ見出しが 3 回 → 2）。
+
+    決定論・LLM 非依存。frontmatter の ``name:`` 等は ``#`` 始まりでないため対象外。
+    """
+    seen: Dict[str, int] = {}
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
+        heading = stripped.lstrip("#").strip().lower()
+        if heading:
+            seen[heading] = seen.get(heading, 0) + 1
+    return sum(count - 1 for count in seen.values() if count > 1)
 
 
 def claude_md_unparseable(project_dir: Optional[Path]) -> bool:
@@ -243,13 +272,24 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
             })
 
         # memory_heavy_update: LLM 自己更新が閾値超え (Issue #97 / arXiv:2605.12978)
-        # 更新回数単独では正常な活発更新を誤検知するため、行数との複合条件にする（#353）。
+        # update_count は memory_capability の use 軸では「活性=良」として加点される指標。
+        # 更新回数単独で flag すると活発な健全メモリを誤検知し、同一 run の
+        # memory_capability=健全 判定と矛盾する（#104）。よって update_count を gate に
+        # 残しつつ、肥大化（要対応）の判定は構造指標へ寄せる:
+        #   - line_count が肥大化閾値以上（#353 の行数複合・#104 で閾値引上げ）、または
+        #   - 重複セクション（同一見出しの反復 = 再要約の構造的冗長性）が閾値以上。
+        # 軽微な行数で重複もない活発メモリは「正常な活発運用」とみなし flag しない。
         try:
             temporal = parse_memory_temporal(path)
             update_count = temporal.get("update_count", 0)
+            dup_sections = _count_duplicate_section_headings(content)
+            structural_bloat = (
+                line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
+                or dup_sections >= MEMORY_HEAVY_UPDATE_DUP_SECTION_THRESHOLD
+            )
             if (
                 update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD
-                and line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
+                and structural_bloat
             ):
                 issues.append({
                     "type": "memory_heavy_update",
@@ -259,6 +299,8 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
                         "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
                         "line_count": line_count,
                         "line_threshold": MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
+                        "duplicate_sections": dup_sections,
+                        "dup_section_threshold": MEMORY_HEAVY_UPDATE_DUP_SECTION_THRESHOLD,
                     },
                     "source": "build_memory_health_section",
                 })

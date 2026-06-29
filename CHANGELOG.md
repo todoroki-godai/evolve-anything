@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(audit): memory_heavy_update が memory_capability=健全 と矛盾する誤検知を解消（closes #104）** — 同一 run で `memory_capability` が use 軸（活性）として `update_count` を「高いほど健全=良」と加点する一方、remediation の `memory_heavy_update` は `update_count >= 3 かつ 行数 >= 30` を「要対応」と flag していた。`update_count` という同一指標を片方で良・片方で要対応とするため、健全(1.00)判定された活発メモリ（frontmatter 込 33〜46 行・update 11〜55）を肥大化扱いして矛盾していた。**Fix**: 肥大化判定を構造指標へ寄せる。⑴ 行数閾値を 30（上限 120 行の 25%）→ 60（50%）に引き上げ、実測の軽微範囲（〜46 行）より上にして活発な健全メモリを除外。⑵ 重複セクション（同一見出しの反復＝LLM 再要約 arXiv:2605.12978 の構造的冗長性）を `_count_duplicate_section_headings` で検出し、行数が軽微でも本物の肥大化を捉える（過剰緩和の回帰防止）。`update_count` は research 由来の gate として残しつつ、要対応判定は「行数 >= 閾値 OR 重複セクション >= 1」の構造シグナルに依存させる。issue detail に `duplicate_sections` を追加。TDD 5件追加・決定論・LLM 非依存。
+
 ## [1.113.2] - 2026-06-26
 
 ### Fixed
