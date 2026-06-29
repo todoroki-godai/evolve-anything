@@ -36,7 +36,7 @@ from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
 
 from ._capture import _capture_warnings
-from ._env import _apply_remediation_suppression
+from ._env import _apply_remediation_suppression, _apply_advisory_suppression
 
 
 def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
@@ -47,6 +47,10 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
             Phase 1〜3.4 を書き込んだ result dict。in-place mutate する。
         ctx: EvolveContext（引数 + 初期化フェーズ共有ローカル）。
     """
+    # #103: 情報レーン advisory の dismiss 抑制で全レーンが共有する worktree 安全 slug。
+    # Phase 3.5 で解決するが、Phase 3.5 が早期に raise しても Phase 4（prune）が参照できるよう
+    # 関数スコープで初期化しておく（None なら Phase 4 が遅延解決する）。
+    _suppress_slug = None
     # Phase 3.5: Remediation（audit + discover + skill_evolve の結果を統合）
     try:
         import evolve as _evolve_mod2
@@ -57,6 +61,15 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         from remediation import classify_issues as classify_remediation_issues
         proj = Path(ctx.project_dir) if ctx.project_dir else Path.cwd()
         issues = collect_issues(proj)
+
+        # #103: 情報レーン advisory の dismiss 抑制に使う worktree 安全 slug を一度だけ解決し、
+        # rule_violation_observed / proposable_global / prune.global_candidates の全レーンで
+        # 共有する（read=write の slug 一致を構造的に保証）。
+        try:
+            from remediation.suppression_ledger import resolve_slug as _rem_resolve_slug
+            _suppress_slug = _rem_resolve_slug(cwd=proj)
+        except Exception:
+            _suppress_slug = proj.name
 
         # --- discover の tool_usage 結果を issue に変換 ---
         from issue_schema import (
@@ -71,6 +84,23 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
             make_skill_quality_issue,
         )
         discover_data = result["phases"].get("discover", {})
+
+        # #103: rule_violation_observed レーンの dismiss 抑制。「このPJでは `cd` は意図的運用」
+        # 等で却下記録された違反コマンドを、Step 3 の surface（phases.discover 直読み）と下流の
+        # hook_candidate 昇格の**両方**から外すため、discover lane を in-place で filter する
+        # （discover_data は result["phases"]["discover"] の同一参照）。filter は読み取りのみで
+        # dry-run 安全。抑制件数は remediation_data に surface する（silence != evaluated）。
+        rule_violation_suppressed = 0
+        _rv_all = discover_data.get("rule_violation_observed", [])
+        if _rv_all:
+            _rv_surface, rule_violation_suppressed = _apply_advisory_suppression(
+                _rv_all,
+                lane="rule_violation_observed",
+                identity_of=lambda v: str(v.get("violated_command", "")),
+                slug=_suppress_slug,
+            )
+            discover_data["rule_violation_observed"] = _rv_surface
+
         tool_usage = discover_data.get("tool_usage_patterns", {})
         if tool_usage:
             rule_candidates = tool_usage.get("rule_candidates", [])
@@ -195,13 +225,17 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         # （副作用なし）なので dry-run でも適用してよい。書込（record_rejection）は SKILL.md
         # 側が個別承認の確定時に行い、dry-run では呼ばない。
         # 抑制件数は observability として result に残す（silence != evaluated）。
-        try:
-            from remediation.suppression_ledger import resolve_slug as _rem_resolve_slug
-            _suppress_slug = _rem_resolve_slug(cwd=proj)
-        except Exception:
-            _suppress_slug = proj.name
+        # _suppress_slug は phase 冒頭で一度だけ解決済み（#103 で全レーン共有）。
         proposable_custom, suppressed_count = _apply_remediation_suppression(
             proposable_custom, slug=_suppress_slug
+        )
+
+        # #103: proposable_global レーンも dismiss 抑制する。proposable_global は issue 形
+        # （type/file/detail）を持つため、_apply_remediation_suppression（dedup_key 直適用）を
+        # そのまま再利用できる（rule_violation のような identity_of 整形は不要）。SKILL.md が
+        # 「global のみ {M}件（参考値）」と surface する前に却下済みを件数から畳む。
+        proposable_global, proposable_global_suppressed = _apply_remediation_suppression(
+            proposable_global, slug=_suppress_slug
         )
 
         # classified にも split リストを追加し、トップレベルの count と整合させる。
@@ -245,6 +279,11 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
             "proposable_custom_batch_skip": len(_partition["batch_skip"]),
             # #477-2: suppression ledger により次回再提示を抑制した件数（silence != evaluated）。
             "suppressed_by_ledger": suppressed_count,
+            # #103: 情報レーン advisory の dismiss 抑制件数（silence != evaluated）。
+            # rule_violation_observed = 「このPJでは意図的運用」で抑制した違反観測数、
+            # proposable_global = global 参考値レーンで却下記録した提案数。
+            "rule_violation_suppressed": rule_violation_suppressed,
+            "proposable_global_suppressed": proposable_global_suppressed,
             # #494: 連続再出で自動却下した件数（SKILL.md record_rejection の決定論 fallback）。
             "auto_rejected_by_reconcile": auto_rejected_count,
             "manual_required": len(classified["manual_required"]),
@@ -274,6 +313,32 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         merge_groups = reorganize_data.get("merge_groups", []) if not reorganize_data.get("skipped") else []
         prune_result = run_prune(ctx.project_dir, reorganize_merge_groups=merge_groups)
         result["phases"]["prune"] = prune_result
+
+        # #103: prune.global_candidates 件数サマリの dismiss 抑制。PJスコープ evolve では
+        # global_candidates は判断材料不足ゆえ件数サマリ {count, pointer} に畳まれており
+        # （#586）、その「N件あります」advisory 自体が毎回 surface される。ユーザーが
+        # 「このPJでは確認不要」と dismiss したら以後 surface しないよう、件数サマリに
+        # suppressed フラグ（TTL 内 True）を決定論で付与する。is_suppressed は読み取りのみ
+        # （dry-run 安全）。記録（record_rejection）は SKILL.md の dismiss 入口が担う。
+        try:
+            _gc = prune_result.get("global_candidates")
+            if isinstance(_gc, dict) and "count" in _gc:
+                _slug = _suppress_slug
+                if _slug is None:
+                    from remediation.suppression_ledger import (
+                        resolve_slug as _rrs,
+                    )
+                    _proot = Path(ctx.project_dir) if ctx.project_dir else Path.cwd()
+                    _slug = _rrs(cwd=_proot)
+                from remediation.suppression_ledger import (
+                    is_suppressed as _is_sup,
+                    make_advisory_issue as _mai,
+                )
+                _gc["suppressed"] = _is_sup(
+                    _mai("prune_global_candidates", "summary"), slug=_slug
+                )
+        except Exception:
+            pass
     except Exception as e:
         result["phases"]["prune"] = {"error": str(e)}
 

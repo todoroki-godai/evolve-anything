@@ -97,6 +97,71 @@ def dedup_key(issue: Dict[str, Any]) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────
+# advisory レーンの一般化（#103）
+# ─────────────────────────────────────────────────────────────────
+# 背景: #477-2 は個別承認レーン（proposable_custom_individual）に suppression ledger を
+# 配線したが、情報レーンの advisory（rule_violation_observed / proposable_global /
+# prune.global_candidates）には dismiss 経路が無く、毎回 1 行 surface され続けていた
+# （#26 と同型の別レーンでの再発・#103）。
+#
+# これらのレーンの項目は issue 形（type/file/detail）を持たない生 dict（rule_violation は
+# {violated_command, count, ...}、prune は件数サマリ {count, pointer}）。新ストアを増やさず
+# 既存 `remediation_suppression/<slug>.jsonl` を再利用するため、lane（type に対応）+ identity
+# （detail.name に対応）を issue 形に整形して既存 dedup_key / record_rejection / is_suppressed
+# に委譲する。これで PJスコープ・TTL45日・冪等・dry-run 非書込が自動的に踏襲される。
+def make_advisory_issue(lane: str, identity: str, file: str = "") -> Dict[str, Any]:
+    """情報レーン advisory の 1 項目を issue 形（type/file/detail）に整形する。
+
+    lane（例: "rule_violation_observed" / "prune_global_candidates"）を type に、
+    identity（例: 違反コマンド head "cd" / 件数サマリの "summary"）を detail.name に置く。
+    record_rejection / is_suppressed / dedup_key はこの issue 形を受け取れば既存ロジックで
+    advisory を抑制できる（dedup_key は type + file + detail.name で安定キーを作る）。
+    """
+    return {"type": lane, "file": file, "detail": {"name": str(identity)}}
+
+
+def filter_suppressed_advisories(
+    items: List[Dict[str, Any]],
+    *,
+    lane: str,
+    identity_of,
+    slug: str,
+    now: Optional[float] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """生 advisory item のリストを lane + identity で抑制対象 / surface 対象に2分割する。
+
+    `filter_suppressed`（issue 形が前提）と違い、ここでは原型を保ったままの生 item を返す
+    （rule_violation の {violated_command, count, ...} 等）。各 item の安定 identity は
+    `identity_of(item)`（例: violated_command）で取り出し、`make_advisory_issue(lane, ...)`
+    経由で ledger を照合する。identity が空の item は抑制せず常に surface する（安全側）。
+    副作用なし（読み取りのみ）なので dry-run でも適用してよい。
+
+    Returns:
+        {"surface": [...], "suppressed": [...]}。入力順を保つ。
+    """
+    now = _now() if now is None else now
+    ledger = load_ledger(slug)
+
+    def _suppressed(it: Dict[str, Any]) -> bool:
+        ident = identity_of(it)
+        if not ident:
+            return False
+        key = dedup_key(make_advisory_issue(lane, ident))
+        record = ledger.get(key)
+        if record is None:
+            return False
+        decided_at = float(record.get("decided_at", 0.0))
+        rec_ttl_days = int(record.get("ttl_days", DEFAULT_TTL_DAYS))
+        return now <= decided_at + rec_ttl_days * DAY_SECONDS
+
+    surface: List[Dict[str, Any]] = []
+    suppressed: List[Dict[str, Any]] = []
+    for it in items:
+        (suppressed if _suppressed(it) else surface).append(it)
+    return {"surface": surface, "suppressed": suppressed}
+
+
+# ─────────────────────────────────────────────────────────────────
 # ストア
 # ─────────────────────────────────────────────────────────────────
 def ledger_path(slug: str) -> Path:

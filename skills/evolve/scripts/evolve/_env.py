@@ -190,6 +190,33 @@ def _apply_remediation_suppression(proposable, slug, now=None):
     return out["surface"], len(out["suppressed"])
 
 
+def _apply_advisory_suppression(items, *, lane, identity_of, slug, now=None):
+    """情報レーン advisory を suppression ledger で除外する（#103 配線）。
+
+    `_apply_remediation_suppression`（個別承認レーン用・issue 形が前提）の情報レーン版。
+    rule_violation_observed（identity=violated_command）や prune.global_candidates 等、
+    issue 形を持たない生 dict を lane + identity で抑制判定し、過去に「このPJでは意図的運用」
+    として却下記録された項目（dedup_key 一致・TTL 内）を除外する。filter_suppressed_advisories
+    は読み取りのみ（副作用なし）なので dry-run でも安全。
+
+    suppression_ledger が import できない場合は全件 surface（フェーズを壊さない）。
+
+    Returns:
+        (surviving, suppressed_count) のタプル。
+    """
+    try:
+        from remediation.suppression_ledger import filter_suppressed_advisories
+    except Exception:
+        return list(items), 0
+    try:
+        out = filter_suppressed_advisories(
+            items, lane=lane, identity_of=identity_of, slug=slug, now=now
+        )
+    except Exception:
+        return list(items), 0
+    return out["surface"], len(out["suppressed"])
+
+
 def _surface_constitutional_status(
     project_dir: Path,
     warning_sink: List[Dict[str, Any]],
