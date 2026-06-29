@@ -82,6 +82,9 @@ CANONICAL: List[Key] = [
     Key("phases.remediation.proposable_custom_individual", int, note="件数（#377-3）。conf>=0.7 で個別承認対象。実体は classified.proposable_custom_individual[]"),
     Key("phases.remediation.proposable_custom_batch_skip", int, note="件数（#377-3）。conf<0.7 でまとめてスキップ対象。実体は classified.proposable_custom_batch_skip[]"),
     Key("phases.remediation.suppressed_by_ledger", int, note="件数（#477-2）。suppression ledger で次回再提示を抑制した却下済み提案数（silence != evaluated）"),
+    Key("phases.remediation.rule_violation_suppressed", int, note="件数（#103）。情報レーン rule_violation_observed で「このPJでは意図的運用」として dismiss 抑制した違反観測数（silence != evaluated）"),
+    Key("phases.remediation.proposable_global_suppressed", int, note="件数（#103）。情報レーン proposable_global で却下記録して件数から畳んだ提案数（silence != evaluated）"),
+    Key("phases.prune.global_candidates.suppressed", bool, optional=True, note="#103。PJスコープ prune の global_candidates 件数サマリを「このPJでは確認不要」として dismiss 抑制中なら True（TTL内・silence != evaluated）"),
     Key("phases.remediation.auto_rejected_by_reconcile", int, note="件数（#494）。連続再出で自動却下した提案数（SKILL.md record_rejection の決定論 fallback）"),
     Key("phases.remediation.manual_required", int, note="件数。実体は classified.manual_required[]"),
     Key("phases.remediation.classified", dict),
@@ -136,6 +139,11 @@ CANONICAL: List[Key] = [
     Key("phases.split_archive_reconcile.suppressed", list, optional=True),
     Key("phases.skill_evolve_archive_reconcile.suppressed", list, optional=True,
         note="skill_evolve↔archive reconcile で archive 優先除外したスキル名（#400 バグ#2）"),
+    Key("phases.fitness.generation_advice", dict, optional=True,
+        note="Step 2 の fitness 生成提案を structural 判定で抑制すべきか（#105）。"
+             "{suppress, reason, note}。suppress=True で SKILL.md Step 2 は AskUserQuestion を"
+             "出さず note を 1 行 surface。reason=skill_evolve_not_scored/env_tier_small。"
+             "phases_remediate Phase 5 で fitness_evolution 確定後に付与"),
     Key("phases.fitness_evolution.next_action", str, optional=True,
         note="insufficient_data 時の結論 1 行（#400 バグ#5）。evolve.py が提案有無で確定"),
     Key("phases.fitness_evolution.verdict", str, optional=True,
@@ -209,9 +217,7 @@ UNCOVERED_PHASES: Set[str] = {
     "quality_patterns",
     "quality_traces",
     "rationalization_table",
-    "fitness",
     "self_evolution",
-    "prune",
     "enrich",
     "pitfall_hygiene",
 }

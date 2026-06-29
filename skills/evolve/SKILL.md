@@ -100,7 +100,7 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 各 Step の入口に「`result.phases.X` が〜の場合」「候補があれば」等の発火条件がある。条件に当てはまらなければ
 1 行 surface（✓ クリーン）して**次へ進む**。当てはまった時だけ本文の AskUserQuestion / 適用フローを実行する。
 
-- **[Step 2](#step-2-fitness-関数チェック)** Fitness 関数チェック（`has_fitness: false` のとき生成提案）
+- **[Step 2](#step-2-fitness-関数チェック)** Fitness 関数チェック（`has_fitness: false` かつ `generation_advice.suppress != true` のとき生成提案。structural な PJ では抑制 #105）
 - **[Step 2.5](#step-25-意図確認チェックintention-check)** 意図確認（パッチ候補があるとき）
 - **[Step 3.6](#step-36-スキル自己進化適性判定)** スキル自己進化適性判定（`batch_guard_trigger` 非 null のときインタラクティブ）
 - **[Step 5.5](#step-55-remediation-フェーズ)** Remediation（`total_issues > 0` のとき分類・承認）
@@ -191,7 +191,9 @@ evolve --project-dir "$(pwd)" --dry-run --observe-first --output "$OUT"
 
 evolve.py の出力に含まれる `fitness` フェーズを確認する。
 
-- `has_fitness: false` の場合:
+- **まず `result.phases.fitness.generation_advice` を確認する（#105・structural 抑制ゲート）**。これは fitness_evolution（`structural_reason`）と skill_evolve/discover（提案有無）を踏まえて生成提案を出すべきか決定論で判定した結果（`{suppress, reason, note}`）:
+  - `generation_advice.suppress == true` の場合（`reason` = `skill_evolve_not_scored`〔skill_evolve 未採点 + skill 提案が構造的に出ない PJ〕または `env_tier_small`〔小規模 PJ〕）→ **AskUserQuestion を出さない（MUST NOT）**。`generation_advice.note` を**1行そのまま surface** して次へ進む。fitness_evolution の one_liner「このPJでは fitness は使わない設計。対応不要」と矛盾させないため、生成提案はここで抑制する（生成しても空振りになりやすい）。`generation_advice` キーが無い古い result（後方互換）では従来どおり下記の `has_fitness` 分岐に従う
+- `has_fitness: false` かつ（`generation_advice` が無い or `suppress == false`）の場合:
   - **提案詳細プロトコルに従う**: 質問前に判断材料を提示する。CLAUDE.md / rules / skills からドメイン（ゲーム/API/Bot/ドキュメント等）を1行で推定し、「生成すると何が変わるか」（組み込み default 汎用評価 → ドメイン特化の評価軸）と、生成をスキップした場合に使われる組み込み関数名（default）を明示する
   - AskUserQuestion ツールで以下を質問する（MUST — テキスト表示だけで済ませてはならない）:
     - question: 「プロジェクト固有の評価関数が未生成です（推定ドメイン: {domain}）。生成しますか？」
@@ -232,7 +234,23 @@ evolve.py の出力に含まれる `fitness` フェーズを確認する。
 - **繰り返しパターン**: 上位パターンとサブカテゴリをスキル候補として提案
 - **Bash 割合**: 全ツール呼び出し数と Bash の割合（例: `Bash: 31.8% (127/400)`）
 
-**`phases.discover.rule_violation_observed`（list、#522-3）が存在する場合は別レーンとして surface する（MUST）**: 既存 rules で禁止済みのコマンド（例: `cd` 禁止なのに 626 回観測）は「スキル候補」ではなく**ルール導入済みだが実行が止まっていない違反観測**（rule installed != enforced）として、`violated_command` / `count` / `recommendation`（hook enforce 検討）を1行ずつ表示する。これらは repeating_patterns から除外済みのためスキル候補としては提案しない。違反ゼロ時はキーが欠落するので省略してよい。
+**`phases.discover.rule_violation_observed`（list、#522-3）が存在する場合は別レーンとして surface する（MUST）**: 既存 rules で禁止済みのコマンド（例: `cd` 禁止なのに 626 回観測）は「スキル候補」ではなく**ルール導入済みだが実行が止まっていない違反観測**（rule installed != enforced）として、`violated_command` / `count` / `recommendation`（hook enforce 検討）を1行ずつ表示する。これらは repeating_patterns から除外済みのためスキル候補としては提案しない。違反ゼロ時はキーが欠落するので省略してよい。**run_evolve は dismiss 済みの違反コマンドを既にこの list から除外し、抑制件数を `phases.remediation.rule_violation_suppressed` に surface しているので、`> 0` のときは「{S}件は『このPJでは意図的運用』として抑制中（TTL45日）」を1行添える（silence != evaluated、#103）。**
+
+> **dismiss（このPJでは意図的運用 — 以後抑制、#103）**: ユーザーが「この違反は当 PJ では意図的運用なので毎回出さなくてよい」と判断した `violated_command` があれば、情報レーン用 suppression ledger に記録して以後 surface しない（`proposable_custom_individual` の Step 5.5 record_rejection と同じ `remediation_suppression/<slug>.jsonl` ストアを再利用・dedup_key 単位・TTL45日・PJスコープ・冪等）。**ユーザーが明示的に「抑制する」と言った場合のみ記録する**（自動で記録しない）。**dry-run（`--dry-run`）のときは記録しない（MUST NOT）**。記録は lane="rule_violation_observed"・identity=violated_command で行う:
+>
+> ```python
+> import os, sys
+> _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+> sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+> from remediation.suppression_ledger import record_rejection, make_advisory_issue, resolve_slug
+>
+> slug = resolve_slug()  # worktree 安全 slug（git-common-dir の親 basename・read 側 phases_remediate と一致）
+> for cmd in dismissed_commands:  # ユーザーが「意図的運用」と判断した violated_command のリスト
+>     record_rejection(make_advisory_issue("rule_violation_observed", cmd), slug=slug)
+> print(f"rule_violation suppression: {len(dismissed_commands)} 件を抑制記録（次回 evolve で再 surface しない・TTL45日）")
+> ```
+>
+> 同じ作法で `proposable_global`（issue dict をそのまま `record_rejection(issue, slug=slug)`）と `prune.global_candidates`（`record_rejection(make_advisory_issue("prune_global_candidates", "summary"), slug=slug)`）も dismiss できる。prune は `phases.prune.global_candidates.suppressed == True` のとき「global 淘汰候補 {count}件は確認不要として抑制中」と1行に畳んで surface を省く。
 
 discover の出力に含まれる enrich 結果（Jaccard 照合）を確認する。
 discover.py は Discover のパターン（error/rejection/behavior）を既存スキルと Jaccard 係数で照合し、`matched_skills` と `unmatched_patterns` を出力する（型A パターン: LLM 呼び出しなし）。
@@ -371,7 +389,7 @@ confidence/scope で3カテゴリに動的分類される。各カテゴリの M
   - **個別承認対象 = `proposable_custom_individual`（conf ≥ 0.7、実体 `classified.proposable_custom_individual[]`）**: 提案詳細プロトコルに従い `generate_proposals` を1件ずつ提示してから AskUserQuestion（MUST）。**補足説明は Q&A の前 / options は最大4択（MUST）**。同 type 複数でも件数に丸めない。
   - **まとめてスキップ対象 = `proposable_custom_batch_skip`（conf < 0.7、実体 `classified.proposable_custom_batch_skip[]`）**: FP 集中帯（hardcoded/duplicate/skill_evolve medium 等）。**デフォルトはスキップ**で「低 confidence の proposable {batch_skip}件をまとめてスキップしました（個別に見る場合は展開可）」と1行表示する。1件ずつ AskUserQuestion を出さない（MUST NOT）。ユーザーが希望した場合のみ提案詳細プロトコルで個別展開する。
   - `proposable_custom_individual == 0`（＝個別対象なし）の場合は AskUserQuestion を出さず、batch_skip の1行表示のみで Step を終える（沈黙≠評価のため、batch_skip が0件でも個別対象0件なら「proposable: 個別対象なし ✓」を残す）。
-  - `proposable_custom == 0 かつ proposable_global > 0` は「global のみ {M}件（参考値）— 対応不要」と1行でスキップ。
+  - `proposable_custom == 0 かつ proposable_global > 0` は「global のみ {M}件（参考値）— 対応不要」と1行でスキップ。`phases.remediation.proposable_global_suppressed > 0` のときは「（うち {S}件は dismiss 済みで抑制中・TTL45日）」を添える（silence != evaluated、#103）。この global レーンも上の dismiss 手順（`record_rejection(issue, slug=slug)`）で「以後抑制」できる。
   - **却下/スキップの記録（べき等性 — 重複提案 MUST NOT、#477）**: 個別承認 AskUserQuestion でユーザーが**却下／スキップ**を選んだ提案は、`record_rejection` で suppression ledger に記録する（dedup_key 単位・TTL45日）。これにより次回 evolve で同じ提案が再出しない（run_evolve が `_apply_remediation_suppression` で却下済みを既に除外し、`remediation.suppressed_by_ledger` 件数を surface する）。**dry-run（`--dry-run`）のときは記録しない（MUST NOT）**。記録対象は「採用しなかった issue dict」（`classified.proposable_custom_individual[]` の要素そのもの）。下記コードで一括記録する（**#479: 直 import は ModuleNotFoundError になるため sys.path 設定込みの完全コードで実行する**）:
 
     ```python

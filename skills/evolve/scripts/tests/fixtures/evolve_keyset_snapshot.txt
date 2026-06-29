@@ -95,6 +95,10 @@ phases.enrich.unmatched_patterns
 phases.fitness
 phases.fitness.fitness_dir
 phases.fitness.fitness_functions
+phases.fitness.generation_advice
+phases.fitness.generation_advice.note
+phases.fitness.generation_advice.reason
+phases.fitness.generation_advice.suppress
 phases.fitness.has_criteria
 phases.fitness.has_fitness
 phases.fitness_evolution
@@ -153,6 +157,7 @@ phases.prune.duplicate_candidates
 phases.prune.global_candidates
 phases.prune.global_candidates.count
 phases.prune.global_candidates.pointer
+phases.prune.global_candidates.suppressed
 phases.prune.merge_result
 phases.prune.merge_result.merge_proposals
 phases.prune.merge_result.total_proposals
@@ -189,6 +194,8 @@ phases.remediation.proposable_custom
 phases.remediation.proposable_custom_batch_skip
 phases.remediation.proposable_custom_individual
 phases.remediation.proposable_global
+phases.remediation.proposable_global_suppressed
+phases.remediation.rule_violation_suppressed
 phases.remediation.suppressed_by_ledger
 phases.remediation.total_issues
 phases.reorganize

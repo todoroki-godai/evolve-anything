@@ -30,6 +30,7 @@ from ._env import (  # noqa: E402
     _compute_env_score_struct,
     _env_score_degraded,
     _apply_remediation_suppression,
+    _apply_advisory_suppression,
     _surface_constitutional_status,
     _count_env_artifacts,
     _tier_from_count,
@@ -94,6 +95,8 @@ from ._state import (  # noqa: E402
     check_data_sufficiency,
     _count_total_observations,
     check_fitness_function,
+    _skill_proposals_available,
+    fitness_generation_advice,
 )
 
 
