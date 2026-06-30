@@ -1,5 +1,6 @@
 {
   "name": "evolve-anything",
+  "description": "Self-evolving Claude Code plugin: autonomous skill/rule optimization, correction feedback loops, direct-patch tuning, and cross-project fleet observability.",
   "owner": {
     "name": "todoroki-godai"
   },
