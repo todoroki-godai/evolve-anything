@@ -71,7 +71,13 @@ def signal_text(rec: Dict[str, Any]) -> str:
         reason = str(prov.get("denial_reason") or "").strip()
         head = f"{tool} の実行を拒否" if tool else "ツール実行を拒否"
         if summary:
-            summary = " ".join(summary.split())[:_DENY_SUMMARY_TRUNC]
+            summary = " ".join(summary.split())
+            if len(summary) > _DENY_SUMMARY_TRUNC:
+                # 単語途中で切らず最後の空白境界で切って省略記号を添える（判読性）。
+                cut = summary[:_DENY_SUMMARY_TRUNC]
+                if " " in cut:
+                    cut = cut.rsplit(" ", 1)[0]
+                summary = cut + "…"
             head = f"{head}: {summary}"
         if reason and reason.lower() != "unknown":
             head = f"{head}（{reason}）"
@@ -85,6 +91,17 @@ def signal_text(rec: Dict[str, Any]) -> str:
 _CMD_TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 
 
+def _strip_path_words(text: str) -> str:
+    """空白区切りで '/' を含む語（絶対/相対パス）を落とす（#99 F1 follow）。
+
+    実 dogfood: 拒否コマンドの作業ディレクトリ（例 ``/Users/.../docs-platform-drift-semantic``）
+    から ``users/matsukaze/updater/docs/...`` 等の path segment が毎回 token 化され、別コマンド
+    （push vs checkout）が共通パスの jaccard で同一 group に collapse していた。grouping は
+    「何を拒否されたか（コマンド種別）」で決めるべきで、作業パスは分離軸から外す。
+    """
+    return " ".join(w for w in text.split() if "/" not in w)
+
+
 def grouping_keywords(rec: Dict[str, Any]) -> Set[str]:
     """group 化に使うキーワード集合を channel 別に返す（決定論）。
 
@@ -95,6 +112,9 @@ def grouping_keywords(rec: Dict[str, Any]) -> Set[str]:
     トークンで group 化し、別コマンド→別 group・同一コマンド→同 group にする。他チャネル
     （llm_judge / rephrase）は従来どおり signal_text の漢字/カタカナ keyword（挙動不変）。
 
+    パス様トークン（'/' を含む語）は除外する（#99 F1 follow）。作業ディレクトリの segment が
+    grouping を支配して別コマンドが collapse する over-merge を実 dogfood で発見したため。
+
     extract_keywords は bootstrap_backlog 側にあり、そちらが本モジュールを import するため、
     循環回避に関数内 import を使う（promote._correction_message と同じ確立パターン）。
     """
@@ -102,8 +122,8 @@ def grouping_keywords(rec: Dict[str, Any]) -> Set[str]:
         prov = rec.get("provenance") or {}
         raw = "{} {}".format(
             prov.get("tool_name") or "", prov.get("tool_input_summary") or ""
-        ).lower()
-        return set(_CMD_TOKEN_RE.findall(raw))
+        )
+        return set(_CMD_TOKEN_RE.findall(_strip_path_words(raw).lower()))
 
     from correction_semantic.bootstrap_backlog import extract_keywords
 

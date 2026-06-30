@@ -161,3 +161,72 @@ def test_grouping_keywords_llm_judge_unchanged():
 
     rec = {"channel": "llm_judge", "provenance": {"text": "金額がきれてる"}}
     assert rc.grouping_keywords(rec) == extract_keywords(rc.signal_text(rec))
+
+
+# ─────────────────────────────────────────────────────────────────
+# grouping_keywords パス除外 / signal_text 単語境界
+# （#99 F1 follow・実 dogfood で over-merge / 途中切れ発見）
+# ─────────────────────────────────────────────────────────────────
+
+
+def test_grouping_keywords_permission_deny_strips_path_tokens():
+    # 実 dogfood: 絶対パスの segment（作業ディレクトリ）が grouping を支配し、別コマンドが
+    # 同一 group に collapse していた。パス様トークン（'/' を含む語）は group 化から除く。
+    rec = {
+        "channel": "permission_deny",
+        "provenance": {
+            "tool_name": "Bash",
+            "tool_input_summary": "cd /Users/foo/updater/docs-platform-drift && git push --force",
+        },
+    }
+    kws = rc.grouping_keywords(rec)
+    assert {"git", "push", "force"} <= kws  # コマンド動詞は残る
+    for seg in ("users", "foo", "updater", "docs", "platform", "drift"):
+        assert seg not in kws  # パス segment は group 化から除外
+
+
+def test_grouping_keywords_permission_deny_same_dir_distinct_verbs_separate():
+    # 同一作業ディレクトリでも別コマンド（push vs checkout/pull）は jaccard<0.5 で別 group。
+    # パストークン支配だと同 dir の別コマンドが collapse する（実 dogfood で発見）。
+    # fixture は実データ忠実（長い作業パス + tail パイプ）。短いパスだと共通トークンが
+    # 少なく偽陰性（修正前でも分離）になるため＝synthetic fixture false confidence の罠。
+    base = "cd /Users/matsukaze-takashi/updater/docs-platform-drift-semantic && "
+    push = {
+        "channel": "permission_deny",
+        "provenance": {
+            "tool_name": "Bash",
+            "tool_input_summary": base + "git push --force-with-lease 2>&1 | tail -3",
+        },
+    }
+    checkout = {
+        "channel": "permission_deny",
+        "provenance": {
+            "tool_name": "Bash",
+            "tool_input_summary": base
+            + "git checkout main 2>&1 | tail -3 && git pull origin main --ff-only",
+        },
+    }
+    kp = rc.grouping_keywords(push)
+    kc = rc.grouping_keywords(checkout)
+    union = len(kp | kc)
+    assert union and len(kp & kc) / union < 0.5
+
+
+def test_signal_text_permission_deny_truncates_at_word_boundary():
+    # 120字超の長い拒否コマンドが単語途中で切れず省略記号で終わる（representative の判読性）。
+    long_cmd = (
+        "git checkout main && git pull origin main --ff-only && "
+        "git log --oneline --decorate --graph --all "
+        "--pretty=format:%h%d%s --author=matsukaze-takashi --since=2.weeks.ago"
+    )
+    assert len(long_cmd) > 120  # 切り詰めが発動する長さであることを保証
+    rec = {
+        "channel": "permission_deny",
+        "provenance": {"tool_name": "Bash", "tool_input_summary": long_cmd},
+    }
+    out = rc.signal_text(rec)
+    assert out.endswith("…")
+    body = out[:-1].split(": ", 1)[1].rstrip()  # "Bash の実行を拒否: <body>"
+    words = long_cmd.split()
+    # body は元コマンドの単語 prefix（途中で切れた語の残骸がない）。
+    assert body.split() == words[: len(body.split())]

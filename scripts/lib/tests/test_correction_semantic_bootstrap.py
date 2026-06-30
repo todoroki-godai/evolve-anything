@@ -223,6 +223,36 @@ def test_group_signals_permission_deny_identical_commands_merge():
     assert sorted(groups[0]["signal_keys"]) == ["k1", "k2"]
 
 
+def test_group_signals_permission_deny_same_dir_distinct_commands_separate():
+    # 実 dogfood (#99 F1 follow): 同一作業ディレクトリへの force push と checkout/pull は
+    # コマンド実体が別物なので別 group。パストークン支配だと同 dir の別コマンドが collapse
+    # していた（共通パス segment が jaccard を 0.5 以上に押し上げる）。fixture は実データ
+    # 忠実な長い作業パス + tail パイプ（短いパスだと修正前でも偶然分離する偽陰性になる）。
+    base = "cd /Users/matsukaze-takashi/updater/docs-platform-drift-semantic && "
+    recs = [
+        {
+            "channel": "permission_deny",
+            "signal_key": "k1",
+            "provenance": {
+                "tool_name": "Bash",
+                "tool_input_summary": base + "git push --force-with-lease 2>&1 | tail -3",
+            },
+        },
+        {
+            "channel": "permission_deny",
+            "signal_key": "k2",
+            "provenance": {
+                "tool_name": "Bash",
+                "tool_input_summary": base
+                + "git checkout main 2>&1 | tail -3 && git pull origin main --ff-only",
+            },
+        },
+    ]
+    groups = bb.group_signals(recs)
+    assert len(groups) == 2
+    assert sorted(k for g in groups for k in g["signal_keys"]) == ["k1", "k2"]
+
+
 def test_build_excludes_expired_defensively(tmp_path: Path):
     # #442 TTL 連携: read 時に expired フィールドがあれば除外する（浅い防御的読み）
     ws = tmp_path / "weak_signals.jsonl"
