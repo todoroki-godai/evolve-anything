@@ -31,11 +31,14 @@ from typing import Any, Dict, List, Optional, Set
 from correction_semantic.bootstrap_backlog import (
     BACKLOG_CHANNEL,
     JACCARD_THRESHOLD,
-    extract_keywords,
 )
 from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.representative import prev_action_summary
-from correction_semantic.review_channels import REVIEW_CHANNELS, signal_text
+from correction_semantic.review_channels import (
+    REVIEW_CHANNELS,
+    grouping_keywords,
+    signal_text,
+)
 from correction_semantic.store import read_idioms
 from weak_signals.store import read_signals
 
@@ -246,6 +249,9 @@ def _group_new(
     for rec in records:
         key = rec.get("signal_key", "")
         text = _idiom_text(rec)
+        # #99 F1: group 化キーワードは channel 別（permission_deny は拒否コマンドで分離）。
+        # representative 表示は text（signal_text）のまま。
+        kws = grouping_keywords(rec)
         phys = _phys_key(rec)
         matched_idiom = phys_to_idiom.get(phys)
 
@@ -255,7 +261,6 @@ def _group_new(
             if matched_idiom in idiom_index:
                 gi = idiom_index[matched_idiom]
         if gi is None and matched_idiom is None:
-            kws = extract_keywords(text)
             if kws:
                 for i, gk in enumerate(group_kws):
                     if gk and _jaccard(kws, gk) >= JACCARD_THRESHOLD:
@@ -264,7 +269,6 @@ def _group_new(
                         break
 
         if gi is None:
-            kws = extract_keywords(text)
             new = {
                 "idiom": matched_idiom,
                 "representative": text,

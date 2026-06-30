@@ -198,6 +198,28 @@ def test_build_review_includes_content_rich_excludes_content_poor(tmp_path: Path
     assert channels == {"llm_judge", "rephrase", "permission_deny"}
 
 
+def test_build_review_permission_deny_distinct_commands_not_collapsed(tmp_path: Path):
+    # #99 F1: 異なる拒否コマンドは固定 head「…の実行を拒否」で 1 group に潰れず、別 group
+    # として個別に y/n 確認できる（旧 extract_keywords では {実行,拒否} で collapse していた）。
+    ws = tmp_path / "weak_signals.jsonl"
+    push = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        "t", "s", "evolve-anything",
+    )
+    rm = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "rm -rf /tmp/x"},
+        "t", "s", "evolve-anything",
+    )
+    append_signals([push, rm], path=ws)
+    res = dr.build_review(
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+    )
+    deny_groups = [g for g in res["groups"] if g["channel"] == "permission_deny"]
+    assert len(deny_groups) == 2
+
+
 # ─────────────────────────────────────────────────────────────────
 # build_review: 頻度降順 + max_groups 切り + remaining
 # ─────────────────────────────────────────────────────────────────

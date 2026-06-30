@@ -25,7 +25,8 @@ evolve の対話昇格 phase（bootstrap_backlog / daily_review）はかつて c
 """
 from __future__ import annotations
 
-from typing import Any, Dict, FrozenSet
+import re
+from typing import Any, Dict, FrozenSet, Set
 
 from correction_semantic.representative import user_only_text
 
@@ -78,3 +79,32 @@ def signal_text(rec: Dict[str, Any]) -> str:
 
     # llm_judge / rephrase（および text を持つ将来チャネル）は user 発話のみ抽出。
     return user_only_text(prov.get("text") or "")
+
+
+# 拒否コマンドの latin トークン抽出（permission_deny の group 化用・#99 F1）。
+_CMD_TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
+
+
+def grouping_keywords(rec: Dict[str, Any]) -> Set[str]:
+    """group 化に使うキーワード集合を channel 別に返す（決定論）。
+
+    representative の表示テキスト（signal_text）とは**分離**する。permission_deny の
+    signal_text は固定 head「<tool> の実行を拒否」しか漢字を持たず、extract_keywords が
+    全件 {実行, 拒否} に潰れて**異なる拒否コマンドが 1 group に collapse する**（#99 F1）。
+    そこで permission_deny だけは拒否コマンド（tool_name + tool_input_summary）の latin
+    トークンで group 化し、別コマンド→別 group・同一コマンド→同 group にする。他チャネル
+    （llm_judge / rephrase）は従来どおり signal_text の漢字/カタカナ keyword（挙動不変）。
+
+    extract_keywords は bootstrap_backlog 側にあり、そちらが本モジュールを import するため、
+    循環回避に関数内 import を使う（promote._correction_message と同じ確立パターン）。
+    """
+    if rec.get("channel") == "permission_deny":
+        prov = rec.get("provenance") or {}
+        raw = "{} {}".format(
+            prov.get("tool_name") or "", prov.get("tool_input_summary") or ""
+        ).lower()
+        return set(_CMD_TOKEN_RE.findall(raw))
+
+    from correction_semantic.bootstrap_backlog import extract_keywords
+
+    return extract_keywords(signal_text(rec))

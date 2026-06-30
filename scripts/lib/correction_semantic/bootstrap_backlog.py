@@ -32,7 +32,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from correction_semantic.idiom_filter import idiom_eligible
-from correction_semantic.review_channels import REVIEW_CHANNELS, signal_text
+from correction_semantic.review_channels import (
+    REVIEW_CHANNELS,
+    grouping_keywords,
+    signal_text,
+)
 from weak_signals.store import default_store_path, read_signals
 
 MARKER_PREFIX = "bootstrap_done-"
@@ -132,7 +136,9 @@ def group_signals(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     group_kws: List[Set[str]] = []
     for rec in records:
         text = _idiom_text(rec)
-        kws = extract_keywords(text)
+        # #99 F1: group 化キーワードは channel 別（permission_deny は拒否コマンドで分離）。
+        # representative 表示は text（signal_text）のまま。
+        kws = grouping_keywords(rec)
         key = rec.get("signal_key", "")
         placed = False
         if kws:

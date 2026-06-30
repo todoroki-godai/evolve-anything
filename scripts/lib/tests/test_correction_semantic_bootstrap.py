@@ -182,6 +182,47 @@ def test_build_counts_content_rich_excludes_content_poor(tmp_path: Path):
     assert res["pj_total"] == 3
 
 
+def test_group_signals_permission_deny_distinct_commands_not_collapsed():
+    # #99 F1: 固定 head「…の実行を拒否」しか漢字が無いため、旧 extract_keywords では
+    # 全 permission_deny が {実行,拒否} で 1 group に collapse していた。grouping_keywords
+    # が拒否コマンドのトークンで group 化するので、異なるコマンドは別 group になる。
+    recs = [
+        {
+            "channel": "permission_deny",
+            "signal_key": "k1",
+            "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        },
+        {
+            "channel": "permission_deny",
+            "signal_key": "k2",
+            "provenance": {"tool_name": "Bash", "tool_input_summary": "rm -rf /tmp/x"},
+        },
+    ]
+    groups = bb.group_signals(recs)
+    assert len(groups) == 2
+    # 取りこぼし防止: 全レコードがいずれかの group に 1 回だけ入る。
+    assert sorted(k for g in groups for k in g["signal_keys"]) == ["k1", "k2"]
+
+
+def test_group_signals_permission_deny_identical_commands_merge():
+    # 同一コマンドは 1 group にまとまる（過分割しない）。
+    recs = [
+        {
+            "channel": "permission_deny",
+            "signal_key": "k1",
+            "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        },
+        {
+            "channel": "permission_deny",
+            "signal_key": "k2",
+            "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        },
+    ]
+    groups = bb.group_signals(recs)
+    assert len(groups) == 1
+    assert sorted(groups[0]["signal_keys"]) == ["k1", "k2"]
+
+
 def test_build_excludes_expired_defensively(tmp_path: Path):
     # #442 TTL 連携: read 時に expired フィールドがあれば除外する（浅い防御的読み）
     ws = tmp_path / "weak_signals.jsonl"

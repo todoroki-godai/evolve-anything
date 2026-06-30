@@ -108,3 +108,56 @@ def test_signal_text_content_poor_returns_empty():
 def test_signal_text_unknown_channel_empty():
     rec = {"channel": "verbosity", "provenance": {}}
     assert rc.signal_text(rec) == ""
+
+
+# ─────────────────────────────────────────────────────────────────
+# grouping_keywords（#99 F1: permission_deny の group collapse 解消）
+# ─────────────────────────────────────────────────────────────────
+
+
+def test_grouping_keywords_permission_deny_uses_command_tokens():
+    rec = {
+        "channel": "permission_deny",
+        "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+    }
+    kws = rc.grouping_keywords(rec)
+    # 固定 head「実行/拒否」でなく拒否コマンドの latin トークンで group 化する。
+    assert {"git", "push", "force"} <= kws
+    assert "実行" not in kws and "拒否" not in kws
+
+
+def test_grouping_keywords_permission_deny_distinct_commands_separate():
+    # #99 F1: 異なる拒否コマンドは共通トークン（bash）だけ共有し jaccard<0.5 で別 group。
+    push = {
+        "channel": "permission_deny",
+        "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+    }
+    rm = {
+        "channel": "permission_deny",
+        "provenance": {"tool_name": "Bash", "tool_input_summary": "rm -rf /tmp/x"},
+    }
+    kp = rc.grouping_keywords(push)
+    kr = rc.grouping_keywords(rm)
+    union = len(kp | kr)
+    assert union and len(kp & kr) / union < 0.5
+
+
+def test_grouping_keywords_permission_deny_identical_commands_merge():
+    a = {
+        "channel": "permission_deny",
+        "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+    }
+    b = {
+        "channel": "permission_deny",
+        "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+    }
+    assert rc.grouping_keywords(a) == rc.grouping_keywords(b)
+    assert rc.grouping_keywords(a)  # 非空
+
+
+def test_grouping_keywords_llm_judge_unchanged():
+    # llm_judge / rephrase は従来どおり signal_text の漢字/カタカナ keyword（挙動不変）。
+    from correction_semantic.bootstrap_backlog import extract_keywords
+
+    rec = {"channel": "llm_judge", "provenance": {"text": "金額がきれてる"}}
+    assert rc.grouping_keywords(rec) == extract_keywords(rc.signal_text(rec))
