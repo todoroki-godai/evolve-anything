@@ -40,6 +40,30 @@ def test_read_unpromoted_returns_all_when_none_promoted(tmp_path: Path) -> None:
     assert len(unp) == 2
 
 
+def test_promote_permission_deny_has_meaningful_message(tmp_path: Path) -> None:
+    # #99: text/reason 無しの決定論チャネルは channel 名でなく拒否コマンドを message にする。
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    deny = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "git push --force-with-lease",
+         "denial_reason": "unknown"},
+        "2026-06-10T00:00:00+00:00", "s1", "evolve-anything",
+    )
+    append_signals([deny], path=ws)
+    res = cs_promote.promote_signals(
+        [deny.signal_key], weak_signals_path=ws, corrections_path=corr,
+        project_path="/Users/x/evolve-anything",
+    )
+    assert res["promoted"] == 1
+    rec = json.loads(corr.read_text(encoding="utf-8").splitlines()[0])
+    msg = rec.get("message", "")
+    # message=channel 名の空 correction にならず、拒否されたコマンドが入る。
+    assert msg != "permission_deny"
+    assert "Bash" in msg
+    assert "git push --force-with-lease" in msg
+
+
 def test_read_unpromoted_filters_by_channel(tmp_path: Path) -> None:
     ws = tmp_path / "weak_signals.jsonl"
     _seed_signals(ws)

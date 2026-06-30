@@ -169,16 +169,55 @@ def test_build_review_excludes_promoted_and_expired(tmp_path: Path):
     assert total == 1
 
 
-def test_build_review_only_llm_judge_channel(tmp_path: Path):
+def test_build_review_includes_content_rich_excludes_content_poor(tmp_path: Path):
+    # #99: content-rich（llm_judge + rephrase + permission_deny）は対象、
+    # content-poor（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ除外。
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)
-    other = WeakSignal("rephrase", {"text": "別チャネル"}, "t", "s", "evolve-anything")
-    append_signals([other], path=ws)
+    rephrase = WeakSignal("rephrase", {"text": "言い直し"}, "t", "s", "evolve-anything")
+    deny = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        "t", "s", "evolve-anything",
+    )
+    esc = WeakSignal(
+        "esc_interrupt", {"evidence": "[Request interrupted]"}, "t", "s", "evolve-anything"
+    )
+    edit = WeakSignal(
+        "manual_edit_after_ai", {"evidence": "File has been modified"}, "t", "s",
+        "evolve-anything",
+    )
+    append_signals([rephrase, deny, esc, edit], path=ws)
     res = dr.build_review(
         "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
     )
     total = sum(len(g["signal_keys"]) for g in res["groups"])
-    assert total == 1
+    # llm_judge + rephrase + permission_deny = 3（esc / manual_edit は除外）。
+    assert total == 3
+    channels = {g["channel"] for g in res["groups"]}
+    assert channels == {"llm_judge", "rephrase", "permission_deny"}
+
+
+def test_build_review_permission_deny_distinct_commands_not_collapsed(tmp_path: Path):
+    # #99 F1: 異なる拒否コマンドは固定 head「…の実行を拒否」で 1 group に潰れず、別 group
+    # として個別に y/n 確認できる（旧 extract_keywords では {実行,拒否} で collapse していた）。
+    ws = tmp_path / "weak_signals.jsonl"
+    push = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        "t", "s", "evolve-anything",
+    )
+    rm = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "rm -rf /tmp/x"},
+        "t", "s", "evolve-anything",
+    )
+    append_signals([push, rm], path=ws)
+    res = dr.build_review(
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+    )
+    deny_groups = [g for g in res["groups"] if g["channel"] == "permission_deny"]
+    assert len(deny_groups) == 2
 
 
 # ─────────────────────────────────────────────────────────────────

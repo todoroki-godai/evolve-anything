@@ -130,13 +130,22 @@ def resolve_idiom_keys_for_signals(
 
 
 def _correction_message(rec: Dict[str, Any]) -> str:
-    """weak_signal の provenance から corrections の message 本文を組み立てる。"""
+    """weak_signal の provenance から corrections の message 本文を組み立てる。
+
+    #99: text/reason を持たない決定論チャネル（permission_deny 等）は channel 別の actionable
+    テキスト（review_channels.signal_text）に fallback し、message=channel 名の空 correction を防ぐ。
+    """
     prov = rec.get("provenance") or {}
     text = prov.get("text") or ""
     reason = prov.get("reason") or ""
     if text and reason:
         return f"{text}（{reason}）"
-    return text or reason or rec.get("channel", "weak_signal")
+    if text or reason:
+        return text or reason
+    # 決定論チャネル: channel 別 actionable テキストへ fallback（最後の砦が channel 名）。
+    from correction_semantic.review_channels import signal_text
+
+    return signal_text(rec) or rec.get("channel", "weak_signal")
 
 
 def _build_correction_record(

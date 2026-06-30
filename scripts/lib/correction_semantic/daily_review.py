@@ -5,8 +5,8 @@ group 化し最大 5 件確認」を移植する。昇格経路が reflect SKILL
 だった頃は昇格 0 件だった（learning_skill_md_must_not_enforcement）ため、確認入口を毎日叩かれる
 evolve の決定論 phase に降ろす。
 
-build_review() は当該 PJ slug の未昇格（channel=llm_judge・非expired）weak_signal のうち、
-**既読集合（correction_review_seen.jsonl）に含まれない signal_key**（= 前回以降の新規）だけを
+build_review() は当該 PJ slug の未昇格（channel ∈ REVIEW_CHANNELS=content-rich・非expired）
+weak_signal のうち、**既読集合（correction_review_seen.jsonl）に含まれない signal_key**（= 前回以降の新規）だけを
 idiom 単位で group 化し、頻度（同 idiom の再発回数）降順・上位 max_groups を返す。残りは
 remaining。新規 0 件でも eligible=False / groups=[] を**常時 emit**する（SKILL.md は eligible
 で AskUserQuestion 出力を分岐する）。判断は SKILL.md（AskUserQuestion）が担い、本モジュールは
@@ -31,10 +31,14 @@ from typing import Any, Dict, List, Optional, Set
 from correction_semantic.bootstrap_backlog import (
     BACKLOG_CHANNEL,
     JACCARD_THRESHOLD,
-    extract_keywords,
 )
 from correction_semantic.idiom_filter import idiom_eligible
-from correction_semantic.representative import prev_action_summary, user_only_text
+from correction_semantic.representative import prev_action_summary
+from correction_semantic.review_channels import (
+    REVIEW_CHANNELS,
+    grouping_keywords,
+    signal_text,
+)
 from correction_semantic.store import read_idioms
 from weak_signals.store import read_signals
 
@@ -169,8 +173,10 @@ def _read_new(
     weak_signals_path: Optional[Path],
     seen_keys: Set[str],
 ) -> List[Dict[str, Any]]:
-    """当該 PJ slug の「新規」未昇格 llm_judge weak_signal を返す。
+    """当該 PJ slug の「新規」未昇格 content-rich weak_signal を返す（#99）。
 
+    対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
+    チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ除外する。
     新規 = 既読集合（seen_keys）に signal_key が無いもの。promoted / expired は除外。
     """
     recs = read_signals(weak_signals_path)
@@ -179,7 +185,7 @@ def _read_new(
         # #46 read 層拡張: legacy weak_signal（旧 slug タグ）も alias で当 PJ として拾う。
         if not _pj_slug_match(r.get("pj_slug"), pj_slug):
             continue
-        if r.get("channel") != BACKLOG_CHANNEL:
+        if r.get("channel") not in REVIEW_CHANNELS:
             continue
         if r.get("promoted"):
             continue
@@ -215,9 +221,9 @@ def _phys_key(rec: Dict[str, Any]) -> str:
 
 
 def _idiom_text(rec: Dict[str, Any]) -> str:
-    # #528-3: assistant の過去レポート引用混入を除き user 発話のみを representative にする。
-    prov = rec.get("provenance") or {}
-    return user_only_text(prov.get("text") or "")
+    # #99: channel 別の actionable 代表テキスト（llm_judge/rephrase=user 発話・#528-3 /
+    # permission_deny=拒否コマンド合成）を単一ソース signal_text から取る。
+    return signal_text(rec)
 
 
 def _prev_action(rec: Dict[str, Any]) -> str:
@@ -243,6 +249,9 @@ def _group_new(
     for rec in records:
         key = rec.get("signal_key", "")
         text = _idiom_text(rec)
+        # #99 F1: group 化キーワードは channel 別（permission_deny は拒否コマンドで分離）。
+        # representative 表示は text（signal_text）のまま。
+        kws = grouping_keywords(rec)
         phys = _phys_key(rec)
         matched_idiom = phys_to_idiom.get(phys)
 
@@ -252,7 +261,6 @@ def _group_new(
             if matched_idiom in idiom_index:
                 gi = idiom_index[matched_idiom]
         if gi is None and matched_idiom is None:
-            kws = extract_keywords(text)
             if kws:
                 for i, gk in enumerate(group_kws):
                     if gk and _jaccard(kws, gk) >= JACCARD_THRESHOLD:
@@ -261,7 +269,6 @@ def _group_new(
                         break
 
         if gi is None:
-            kws = extract_keywords(text)
             new = {
                 "idiom": matched_idiom,
                 "representative": text,
@@ -325,7 +332,7 @@ def build_review(
           {"idiom": str | None,           # 代表 idiom（個人辞書から照合・無ければ None）
            "representative": str,         # 代表発話断片（user 発話のみ・assistant 引用除去・#528-3）
            "confirmable_idiom": str|None, # 「はい」確定で confirmed になる idiom（eligible 時のみ・#527-4）
-           "channel": "llm_judge",
+           "channel": str,                # llm_judge / rephrase / permission_deny（#99）
            "signal_keys": [str, ...],     # この group に属する weak_signal の signal_key
            "evidence": {"text": str, "prev_action": str,  # prev_action=直前 AI 行動の 1 行要約（#528-3）
                         "reason": str, "session_id": str, "count": int},

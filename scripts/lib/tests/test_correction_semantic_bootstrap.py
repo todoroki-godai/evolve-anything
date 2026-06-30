@@ -162,14 +162,95 @@ def test_build_only_counts_unpromoted(tmp_path: Path):
     assert res["pj_total"] == 1
 
 
-def test_build_only_counts_llm_judge_channel(tmp_path: Path):
-    # backlog は llm_judge チャネル（#431 のバッチ判定）のみが対象
+def test_build_counts_content_rich_excludes_content_poor(tmp_path: Path):
+    # #99: backlog は content-rich（llm_judge + rephrase + permission_deny）が対象。
+    # content-poor（esc_interrupt / manual_edit_after_ai）は detector 文脈未保存ゆえ除外。
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)
-    other = WeakSignal("rephrase", {"text": "別チャネル"}, "t", "s", "evolve-anything")
-    append_signals([other], path=ws)
+    rephrase = WeakSignal("rephrase", {"text": "言い直し"}, "t", "s", "evolve-anything")
+    deny = WeakSignal(
+        "permission_deny",
+        {"tool_name": "Bash", "tool_input_summary": "git push"},
+        "t", "s", "evolve-anything",
+    )
+    esc = WeakSignal(
+        "esc_interrupt", {"evidence": "[Request interrupted]"}, "t", "s", "evolve-anything"
+    )
+    append_signals([rephrase, deny, esc], path=ws)
     res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
-    assert res["pj_total"] == 1
+    # llm_judge + rephrase + permission_deny = 3（esc は除外）。
+    assert res["pj_total"] == 3
+
+
+def test_group_signals_permission_deny_distinct_commands_not_collapsed():
+    # #99 F1: 固定 head「…の実行を拒否」しか漢字が無いため、旧 extract_keywords では
+    # 全 permission_deny が {実行,拒否} で 1 group に collapse していた。grouping_keywords
+    # が拒否コマンドのトークンで group 化するので、異なるコマンドは別 group になる。
+    recs = [
+        {
+            "channel": "permission_deny",
+            "signal_key": "k1",
+            "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        },
+        {
+            "channel": "permission_deny",
+            "signal_key": "k2",
+            "provenance": {"tool_name": "Bash", "tool_input_summary": "rm -rf /tmp/x"},
+        },
+    ]
+    groups = bb.group_signals(recs)
+    assert len(groups) == 2
+    # 取りこぼし防止: 全レコードがいずれかの group に 1 回だけ入る。
+    assert sorted(k for g in groups for k in g["signal_keys"]) == ["k1", "k2"]
+
+
+def test_group_signals_permission_deny_identical_commands_merge():
+    # 同一コマンドは 1 group にまとまる（過分割しない）。
+    recs = [
+        {
+            "channel": "permission_deny",
+            "signal_key": "k1",
+            "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        },
+        {
+            "channel": "permission_deny",
+            "signal_key": "k2",
+            "provenance": {"tool_name": "Bash", "tool_input_summary": "git push --force"},
+        },
+    ]
+    groups = bb.group_signals(recs)
+    assert len(groups) == 1
+    assert sorted(groups[0]["signal_keys"]) == ["k1", "k2"]
+
+
+def test_group_signals_permission_deny_same_dir_distinct_commands_separate():
+    # 実 dogfood (#99 F1 follow): 同一作業ディレクトリへの force push と checkout/pull は
+    # コマンド実体が別物なので別 group。パストークン支配だと同 dir の別コマンドが collapse
+    # していた（共通パス segment が jaccard を 0.5 以上に押し上げる）。fixture は実データ
+    # 忠実な長い作業パス + tail パイプ（短いパスだと修正前でも偶然分離する偽陰性になる）。
+    base = "cd /Users/matsukaze-takashi/updater/docs-platform-drift-semantic && "
+    recs = [
+        {
+            "channel": "permission_deny",
+            "signal_key": "k1",
+            "provenance": {
+                "tool_name": "Bash",
+                "tool_input_summary": base + "git push --force-with-lease 2>&1 | tail -3",
+            },
+        },
+        {
+            "channel": "permission_deny",
+            "signal_key": "k2",
+            "provenance": {
+                "tool_name": "Bash",
+                "tool_input_summary": base
+                + "git checkout main 2>&1 | tail -3 && git pull origin main --ff-only",
+            },
+        },
+    ]
+    groups = bb.group_signals(recs)
+    assert len(groups) == 2
+    assert sorted(k for g in groups for k in g["signal_keys"]) == ["k1", "k2"]
 
 
 def test_build_excludes_expired_defensively(tmp_path: Path):
