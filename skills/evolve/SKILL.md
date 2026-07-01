@@ -191,13 +191,16 @@ evolve --project-dir "$(pwd)" --dry-run --observe-first --output "$OUT"
 
 evolve.py の出力に含まれる `fitness` フェーズを確認する。
 
-- `has_fitness: false` の場合:
+- `has_fitness: false` かつ `generation_advised != false` の場合:
   - **提案詳細プロトコルに従う**: 質問前に判断材料を提示する。CLAUDE.md / rules / skills からドメイン（ゲーム/API/Bot/ドキュメント等）を1行で推定し、「生成すると何が変わるか」（組み込み default 汎用評価 → ドメイン特化の評価軸）と、生成をスキップした場合に使われる組み込み関数名（default）を明示する
   - AskUserQuestion ツールで以下を質問する（MUST — テキスト表示だけで済ませてはならない）:
     - question: 「プロジェクト固有の評価関数が未生成です（推定ドメイン: {domain}）。生成しますか？」
     - options: 「生成する（generate-fitness --ask）」「スキップ（組み込み default で続行）」
   - ユーザーが「生成する」を選んだ場合: `/evolve-anything:generate-fitness --ask` を実行してから Step 3 に進む（MUST）
   - ユーザーが「スキップ」を選んだ場合: 組み込み評価関数（default）で続行
+- `has_fitness: false` かつ `generation_advised: false` の場合（#105）:
+  - fitness フェーズの `generation_note` を1行で surface し、**デフォルトはスキップ**とする。`fitness_evolution` が「この PJ では fitness を使わない設計（skill 提案が構造的に出ないため calibration 母集団が貯まらない）」と判定しており、生成しても空振りになりやすいため、`fitness_evolution` の結論（Step 8）と矛盾しないよう生成提案を出さない
+  - どうしても生成したい場合のみユーザーが明示的に `/evolve-anything:generate-fitness --ask` を叩く（MUST の AskUserQuestion は出さない）
 - `has_fitness: true` の場合: 利用可能な fitness 関数名を表示して次へ
 
 ---
@@ -232,7 +235,7 @@ evolve.py の出力に含まれる `fitness` フェーズを確認する。
 - **繰り返しパターン**: 上位パターンとサブカテゴリをスキル候補として提案
 - **Bash 割合**: 全ツール呼び出し数と Bash の割合（例: `Bash: 31.8% (127/400)`）
 
-**`phases.discover.rule_violation_observed`（list、#522-3）が存在する場合は別レーンとして surface する（MUST）**: 既存 rules で禁止済みのコマンド（例: `cd` 禁止なのに 626 回観測）は「スキル候補」ではなく**ルール導入済みだが実行が止まっていない違反観測**（rule installed != enforced）として、`violated_command` / `count` / `recommendation`（hook enforce 検討）を1行ずつ表示する。これらは repeating_patterns から除外済みのためスキル候補としては提案しない。違反ゼロ時はキーが欠落するので省略してよい。
+**`phases.discover.rule_violation_observed`（list、#522-3）が存在する場合は別レーンとして surface する（MUST）**: 既存 rules で禁止済みのコマンド（例: `cd` 禁止なのに 626 回観測）は「スキル候補」ではなく**ルール導入済みだが実行が止まっていない違反観測**（rule installed != enforced）として、`violated_command` / `count` / `recommendation`（hook enforce 検討）を1行ずつ表示する。これらは repeating_patterns から除外済みのためスキル候補としては提案しない。違反ゼロ時はキーが欠落するので省略してよい。この list は既に dismiss 済み（意図的運用として `record_rejection` 記録・TTL 内）の違反を除外した surface 対象で、畳んだ件数は `remediation.rule_violation_suppressed` に出る（#103）。「この PJ では意図的運用」と判断したら Step 5.5 の情報レーン dismiss で以後抑制できる。
 
 discover の出力に含まれる enrich 結果（Jaccard 照合）を確認する。
 discover.py は Discover のパターン（error/rejection/behavior）を既存スキルと Jaccard 係数で照合し、`matched_skills` と `unmatched_patterns` を出力する（型A パターン: LLM 呼び出しなし）。
@@ -372,6 +375,23 @@ confidence/scope で3カテゴリに動的分類される。各カテゴリの M
   - **まとめてスキップ対象 = `proposable_custom_batch_skip`（conf < 0.7、実体 `classified.proposable_custom_batch_skip[]`）**: FP 集中帯（hardcoded/duplicate/skill_evolve medium 等）。**デフォルトはスキップ**で「低 confidence の proposable {batch_skip}件をまとめてスキップしました（個別に見る場合は展開可）」と1行表示する。1件ずつ AskUserQuestion を出さない（MUST NOT）。ユーザーが希望した場合のみ提案詳細プロトコルで個別展開する。
   - `proposable_custom_individual == 0`（＝個別対象なし）の場合は AskUserQuestion を出さず、batch_skip の1行表示のみで Step を終える（沈黙≠評価のため、batch_skip が0件でも個別対象0件なら「proposable: 個別対象なし ✓」を残す）。
   - `proposable_custom == 0 かつ proposable_global > 0` は「global のみ {M}件（参考値）— 対応不要」と1行でスキップ。
+  - **情報レーンの dismiss（#103）**: `proposable_global` / `phases.discover.rule_violation_observed` は「対応しない」判断をしても却下記録の入口が無く**毎回再提示**されていた（#26 の対象外レーンで同型再発）。ユーザーが「この PJ では意図的運用なので以後出さなくてよい」と判断したら下記で dismiss を記録する（PJ スコープ・TTL45日）。dismiss 済みは `remediation.proposable_global_suppressed` / `remediation.rule_violation_suppressed` に件数で畳んで surface する（silence != evaluated）。**dry-run のときは記録しない（MUST NOT）**。明示 dismiss しなくても、連続提示された advisory は `reconcile_surfaced` が閾値回数（既定2）で自動畳み込みする（下記 #494 fallback が情報レーンにも効く）。
+
+    ```python
+    import os, sys
+    _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+    sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+    from remediation.suppression_ledger import record_rejection, resolve_slug
+    from rule_violation_lane import rule_violation_suppression_issue
+
+    slug = resolve_slug()
+    # (a) proposable_global の issue dict を dismiss（classified.proposable_global[] の要素）
+    for issue in dismissed_global_issues:
+        record_rejection(issue, slug=slug)
+    # (b) rule_violation_observed を violated_command 単位で dismiss（意図的運用フラグ）
+    for v in dismissed_rule_violations:  # phases.discover.rule_violation_observed[] の要素
+        record_rejection(rule_violation_suppression_issue(v), slug=slug)
+    ```
   - **却下/スキップの記録（べき等性 — 重複提案 MUST NOT、#477）**: 個別承認 AskUserQuestion でユーザーが**却下／スキップ**を選んだ提案は、`record_rejection` で suppression ledger に記録する（dedup_key 単位・TTL45日）。これにより次回 evolve で同じ提案が再出しない（run_evolve が `_apply_remediation_suppression` で却下済みを既に除外し、`remediation.suppressed_by_ledger` 件数を surface する）。**dry-run（`--dry-run`）のときは記録しない（MUST NOT）**。記録対象は「採用しなかった issue dict」（`classified.proposable_custom_individual[]` の要素そのもの）。下記コードで一括記録する（**#479: 直 import は ModuleNotFoundError になるため sys.path 設定込みの完全コードで実行する**）:
 
     ```python

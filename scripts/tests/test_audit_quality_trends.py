@@ -211,6 +211,53 @@ def test_memory_health_stale_reference(tmp_path):
     assert "skills/update" in text
 
 
+def test_memory_health_heavy_update_rendered(tmp_path):
+    """#104: update_count>=10 かつ 行数>=80 の memory を Heavy Update 節に表示する。
+
+    従来 build_memory_health_section は heavy_update を一切 render せず（collect_issues のみ
+    生成し audit テキストに非表示だった）。#104 で advisory 節を追加し可視化する。
+    """
+    from audit import build_memory_health_section
+
+    mem_file = tmp_path / "churned.md"  # MEMORY.md 以外 → limit=120, near_limit 閾値=96
+    body = "\n".join([f"- item {i}" for i in range(84)])  # 総行数 ≈ 89（80<89<96）
+    mem_file.write_text(
+        f"---\nname: churned\nupdate_count: 15\n---\n# Body\n{body}\n",
+        encoding="utf-8",
+    )
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Heavy Update" in text
+    assert "churned.md" in text
+    assert "update_count 15" in text
+    assert "dismiss" in text  # 意図的な追記ログの dismiss 導線
+    # 行数 89 < near_limit 96 なので Near Limit には出ない（節が独立していることの確認）
+    assert "Near Limit" not in text
+
+
+def test_memory_health_no_heavy_update_when_concise(tmp_path):
+    """#104 FP 回帰封じ: 行数<80 なら update_count が高くても Heavy Update 節は出ない。"""
+    from audit import build_memory_health_section
+
+    mem_file = tmp_path / "concise.md"
+    body = "\n".join([f"- item {i}" for i in range(40)])  # 総行数 ≈ 46 < 80
+    mem_file.write_text(
+        f"---\nname: concise\nupdate_count: 55\n---\n# Body\n{body}\n",
+        encoding="utf-8",
+    )
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Heavy Update" not in text
+
+
 def test_memory_health_near_limit(tmp_path):
     """NEAR_LIMIT_RATIO 超過で Near Limit 警告が表示される。"""
     from audit import build_memory_health_section, NEAR_LIMIT_RATIO

@@ -339,6 +339,28 @@ def make_hook_candidate_issues_from_rule_violations(
     return [issue]
 
 
+def rule_violation_suppression_issue(violation: Dict[str, Any]) -> Dict[str, Any]:
+    """rule_violation_observed 項目を suppression_ledger 用の安定 identity issue に変換する（#103）。
+
+    rule_violation_observed は `{pattern, count, examples, violated_command, ...}` 形で、
+    remediation の issue 形（type/file/detail）を持たない。そのまま suppression_ledger.dedup_key に
+    渡すと type/file/detail が空になり全項目が同一キーへ collapse してしまう。
+
+    `violated_command`（禁止コマンド head。例: "cd"）を identity の核にすることで、
+    「同じ禁止コマンドの再観測は同じ dismiss で抑制する」PJ スコープの意図的運用フラグを実現する。
+    決定論・LLM 非依存。
+    """
+    head = str(
+        violation.get("violated_command")
+        or _command_head(str(violation.get("pattern", "")))
+    )
+    return {
+        "type": "rule_violation_observed",
+        "file": "",
+        "detail": {"target": head},
+    }
+
+
 def default_rule_dirs(project_root: Path) -> List[Path]:
     """突合対象の rules ディレクトリ（global ~/.claude/rules + PJ .claude/rules）を返す。"""
     return [

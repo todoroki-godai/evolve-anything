@@ -204,6 +204,46 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
             proposable_custom, slug=_suppress_slug
         )
 
+        # #103: 情報レーンの advisory（proposable_global / rule_violation_observed）にも
+        # dismiss（確認済み・以後抑制）の入口を配線する。従来 suppression が効くのは
+        # proposable_custom_individual のみで、情報レーンは却下記録の経路すら無く「毎回再提示」
+        # されていた（#26 の対象外レーンで同型再発）。filter_suppressed は読み取りのみ（副作用なし）
+        # なので dry-run でも適用してよい。書込（record_rejection）は下の reconcile / SKILL.md が担う。
+        proposable_global_suppressed = 0
+        rule_violation_suppressed = 0
+        _rv_synthetics_surface = []
+        try:
+            from remediation.suppression_ledger import (
+                filter_suppressed as _filter_suppressed,
+                is_suppressed as _is_suppressed,
+            )
+            # (a) proposable_global: issue dict そのままで dedup 可能。
+            _pg = _filter_suppressed(proposable_global, slug=_suppress_slug)
+            proposable_global = _pg["surface"]
+            proposable_global_suppressed = len(_pg["suppressed"])
+
+            # (b) rule_violation_observed: issue 形を持たないため violated_command 単位の
+            # 安定 identity へ変換して判定し、抑制済みは discover 出力から落とす（surface 元）。
+            _rv_list = discover_data.get("rule_violation_observed", []) or []
+            if _rv_list:
+                from rule_violation_lane import rule_violation_suppression_issue
+                _rv_kept = []
+                for _v in _rv_list:
+                    _syn = rule_violation_suppression_issue(_v)
+                    if _is_suppressed(_syn, slug=_suppress_slug):
+                        rule_violation_suppressed += 1
+                    else:
+                        _rv_kept.append(_v)
+                        _rv_synthetics_surface.append(_syn)
+                # discover_data は result["phases"]["discover"] と同一 dict（surface 元）。
+                # 抑制済みを落とした list を書き戻すと SKILL.md の rule_violation_observed 表示が畳まれる。
+                if "discover" in result["phases"]:
+                    result["phases"]["discover"]["rule_violation_observed"] = _rv_kept
+        except Exception:
+            proposable_global_suppressed = 0
+            rule_violation_suppressed = 0
+            _rv_synthetics_surface = []
+
         # classified にも split リストを追加し、トップレベルの count と整合させる。
         # 修正前は classified に proposable_custom キーがなかったため、
         # jq で classified.proposable_custom を参照すると null になり、
@@ -222,14 +262,22 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         # #494 発見1: record_rejection の決定論 fallback。SKILL.md Step 5.5 の inline
         # record_rejection を取りこぼしても、解決されないまま連続して個別承認に出続けた
         # 提案を自動却下し「毎回再出」を断つ。surfaced マーカーで連続提示回数を追跡する。
-        # 読み取り→閾値判定は dry-run でも実行できるが、書込（marker / ledger）は persist で
-        # ゲートする（dry-run 非書込・pitfall_dryrun_stateful_store_write）。import 失敗時は
-        # フェーズを壊さず 0 件にフォールバックする。
+        # #103: proposable_global / rule_violation_observed の情報レーンも同じ safety net で
+        # 追跡し、未対応のまま連続提示された advisory を閾値回数で自動畳み込みする（dismiss 入口が
+        # 無くても「毎回再提示」を断つ）。reconcile_surfaced は marker を全置換するため、二重書込を
+        # 避けるべく **1 回の呼び出しに全レーンの surface 対象を束ねて**渡す（dedup_key はレーンごとに
+        # 相異なるため衝突しない）。読み取り→閾値判定は dry-run でも実行できるが、書込（marker /
+        # ledger）は persist でゲートする（dry-run 非書込・pitfall_dryrun_stateful_store_write）。
         auto_rejected_count = 0
         try:
             from remediation.suppression_ledger import reconcile_surfaced as _reconcile
+            _tracked = (
+                list(_partition["individual"])
+                + list(proposable_global)
+                + list(_rv_synthetics_surface)
+            )
             _recon = _reconcile(
-                _partition["individual"], slug=_suppress_slug, persist=not ctx.dry_run
+                _tracked, slug=_suppress_slug, persist=not ctx.dry_run
             )
             auto_rejected_count = int(_recon.get("auto_rejected", 0))
         except Exception:
@@ -245,7 +293,11 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
             "proposable_custom_batch_skip": len(_partition["batch_skip"]),
             # #477-2: suppression ledger により次回再提示を抑制した件数（silence != evaluated）。
             "suppressed_by_ledger": suppressed_count,
+            # #103: 情報レーンの dismiss 済み（TTL 内）を surface から畳んだ件数（silence != evaluated）。
+            "proposable_global_suppressed": proposable_global_suppressed,
+            "rule_violation_suppressed": rule_violation_suppressed,
             # #494: 連続再出で自動却下した件数（SKILL.md record_rejection の決定論 fallback）。
+            # #103 以降は情報レーンの自動畳み込みも含む。
             "auto_rejected_by_reconcile": auto_rejected_count,
             "manual_required": len(classified["manual_required"]),
             "classified": classified,
@@ -359,6 +411,14 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
             if isinstance(fitness_evo_result.get("details"), dict):
                 fitness_evo_result["details"]["next_action"] = _na
         result["phases"]["fitness_evolution"] = fitness_evo_result
+
+        # #105: Step 2 の fitness 生成提案を fitness_evolution の structural 判定と整合させる。
+        # custom skill を持たない PJ で「fitness を生成しろ」と「この PJ では fitness を使わない設計」を
+        # 同時提示する矛盾を断つ。判定・note は _state.annotate_fitness_generation_advice に集約（単体テスト用）。
+        import evolve as _evolve_mod3
+        _evolve_mod3.annotate_fitness_generation_advice(
+            result["phases"].get("fitness"), fitness_evo_result
+        )
     except Exception as e:
         result["phases"]["fitness_evolution"] = {"error": str(e)}
 

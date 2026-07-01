@@ -17,6 +17,7 @@ if str(_lib_dir) not in sys.path:
 
 from glossary_drift import (  # noqa: E402
     DEFAULT_STOPLIST,
+    STDLIB_SYMBOLS,
     GlossaryEntry,
     find_undefined_terms,
     load_common_english_words,
@@ -109,8 +110,10 @@ class TestAWSServiceNamesExcluded:
 class TestProjectJargonNotExcluded:
     """汎用語追加が PJ 固有語を巻き込まないことを確認する。"""
 
+    # #106: EOA/PKCE は「PJ 固有」でなく汎用略語（外部所有アカウント / OAuth 拡張）だった。
+    # MRV（Measurement/Reporting/Verification）はカーボンドメイン固有 jargon なので残す。
     @pytest.mark.parametrize("tok", [
-        "AMAMO", "AnchorRegistry", "JCM", "MRV", "EOA", "PKCE",
+        "AMAMO", "AnchorRegistry", "JCM", "MRV",
     ])
     def test_pj_jargon_not_in_stoplist(self, tok: str):
         """PJ 固有語は DEFAULT_STOPLIST に入っていない。"""
@@ -119,7 +122,7 @@ class TestProjectJargonNotExcluded:
         )
 
     @pytest.mark.parametrize("tok", [
-        "AMAMO", "AnchorRegistry", "JCM",
+        "AMAMO", "AnchorRegistry", "JCM", "MRV",
     ])
     def test_pj_jargon_reported_as_undefined(self, tmp_path: Path, tok: str):
         """PJ 固有語は用語集未登録のとき undefined_terms に上がる。"""
@@ -136,6 +139,50 @@ class TestProjectJargonNotExcluded:
         result = find_undefined_terms(entries, [source])
         assert "AMAMO" not in result
         assert "AnchorRegistry" not in result
+
+
+# ---------------------------------------------------------------------------
+# #106 回帰テスト: errno / 汎用略語 / JS 標準型が FP として検出されない（#23 regression）
+# ---------------------------------------------------------------------------
+
+class TestGenericTechAcronymsExcluded:
+    """issue #106 — errno コード・汎用略語・JS 標準型が jargon 候補に混入しないこと。"""
+
+    @pytest.mark.parametrize("tok", [
+        "ENOENT", "EACCES", "EEXIST", "EPERM",   # errno
+        "ESM", "IoT", "OAI", "PKCE", "EOA",      # 汎用略語
+    ])
+    def test_generic_in_stoplist(self, tok: str):
+        assert tok in DEFAULT_STOPLIST, (
+            f"'{tok}' は汎用略語/errno として DEFAULT_STOPLIST で除外されるべき (#106)"
+        )
+
+    @pytest.mark.parametrize("tok", [
+        "Uint8Array", "ArrayBuffer", "BigInt", "DataView", "Float32Array",
+    ])
+    def test_js_builtin_types_in_stdlib(self, tok: str):
+        assert tok in STDLIB_SYMBOLS, (
+            f"'{tok}' は JS 標準ビルトイン型として STDLIB_SYMBOLS で除外されるべき (#106)"
+        )
+
+    @pytest.mark.parametrize("tok", [
+        "ENOENT", "EOA", "ESM", "IoT", "OAI", "PKCE", "Uint8Array",
+    ])
+    def test_not_reported_as_undefined(self, tmp_path: Path, tok: str):
+        """SoT に出現しても find_undefined_terms が汎用語を返さない（#106）。"""
+        source = _make_source(
+            tmp_path, f"The handler raises {tok} on failure.", f"src106_{tok}.md"
+        )
+        result = find_undefined_terms(_entries(), [source])
+        assert tok not in result, (
+            f"'{tok}' は汎用語として undefined_terms に現れてはいけない (#106)"
+        )
+
+    def test_mrv_still_reported_as_pj_jargon(self, tmp_path: Path):
+        """ドメイン固有略語 MRV は除外せず候補に残す（over-exclusion 回帰の封じ）。"""
+        source = _make_source(tmp_path, "The MRV process verifies emission reductions.")
+        result = find_undefined_terms(_entries(), [source])
+        assert "MRV" in result, "MRV はカーボンドメイン固有 jargon として候補に残すべき"
 
 
 # ---------------------------------------------------------------------------

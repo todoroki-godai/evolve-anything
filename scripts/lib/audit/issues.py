@@ -54,11 +54,39 @@ def collect_hardcoded_value_issues(
 # 複数ラウンドの再要約で誤りが指数的に増幅することを示す (docs/research/faulty-updated-memories.md)。
 # 更新回数単独では「活発に正しく更新した健全なメモリ」を誤検知するため、
 # 行数（= 内容の肥大化）との複合条件にする（#353）。
-MEMORY_HEAVY_UPDATE_THRESHOLD = 3
+MEMORY_HEAVY_UPDATE_THRESHOLD = 10
 # 行数がこの値未満なら update_count が閾値を超えても警告しない。
-# memory ファイルの上限 (LIMITS["memory"] = 120 行) の 25% 相当。
-# 小さなメモリの活発更新は正常運用とみなす（コスト最適化メモリ 7 回更新の誤検知が動機）。
-MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 30
+# memory ファイルの上限 (LIMITS["memory"] = 120 行) の約 67% 相当。#104 で 30→80 に引き上げた:
+# 旧 30 は amamo の簡潔メモリ（update 55 / 40 行）を誤検知した。80 に上げ「churn + 肥大化」の
+# 劣化シグナルに純化することで、簡潔だが活発なメモリ（＝正常運用）を除外する。
+MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 80
+
+
+def detect_memory_heavy_update(
+    path: Path, line_count: int
+) -> Optional[Dict[str, Any]]:
+    """memory_heavy_update（churn + 肥大化）判定の単一ソース predicate（#104）。
+
+    collect_issues（issue 収集）と build_memory_health_section（audit テキスト表示）が
+    共有し、閾値ロジックの二重実装＝partial-fix を防ぐ。update_count と line_count が
+    両閾値以上なら detail dict、非該当・frontmatter 不正時は None を返す（既存挙動を壊さない）。
+    """
+    try:
+        temporal = parse_memory_temporal(path)
+        update_count = temporal.get("update_count", 0)
+    except Exception:
+        return None
+    if (
+        update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD
+        and line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
+    ):
+        return {
+            "update_count": update_count,
+            "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
+            "line_count": line_count,
+            "line_threshold": MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
+        }
+    return None
 
 
 def claude_md_unparseable(project_dir: Optional[Path]) -> bool:
@@ -243,27 +271,22 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
             })
 
         # memory_heavy_update: LLM 自己更新が閾値超え (Issue #97 / arXiv:2605.12978)
-        # 更新回数単独では正常な活発更新を誤検知するため、行数との複合条件にする（#353）。
-        try:
-            temporal = parse_memory_temporal(path)
-            update_count = temporal.get("update_count", 0)
-            if (
-                update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD
-                and line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
-            ):
-                issues.append({
-                    "type": "memory_heavy_update",
-                    "file": str(path),
-                    "detail": {
-                        "update_count": update_count,
-                        "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
-                        "line_count": line_count,
-                        "line_threshold": MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
-                    },
-                    "source": "build_memory_health_section",
-                })
-        except Exception:
-            pass  # frontmatter 不正は既存挙動を壊さない
+        # 更新回数単独では正常な活発更新を誤検知するため、行数（= 内容の肥大化）との複合条件にする（#353）。
+        # #104 再設計: 「churn + 肥大化」の劣化シグナルに純化する。update_count は memory_capability の
+        # use_read 軸で「活性（良）」として加点される指標（＝正の信号）なので、低い閾値で heavy_update を
+        # 発火させると同一 run で「活性（良）」と「要対応（悪）」に二重分類する矛盾を生む。閾値を
+        # update>=10 / 行数>=80 に引き上げ、簡潔だが活発なメモリ（amamo: update 55 / 40 行）を誤検知しない。
+        # 旧 #104 は maintain 軸（freshness）の健全性ゲートで除外したが、temporal メタデータの無い通常
+        # メモリでは detector がほぼ発火せず near-inert になったため撤去した（健全/非健全を問わず肥大化で発火）。
+        # 判定は detect_memory_heavy_update に集約し build_memory_health_section の表示と共有する（#104 表示配線）。
+        heavy = detect_memory_heavy_update(path, line_count)
+        if heavy is not None:
+            issues.append({
+                "type": "memory_heavy_update",
+                "file": str(path),
+                "detail": heavy,
+                "source": "build_memory_health_section",
+            })
 
     # duplicates（重複候補）
     duplicates = detect_duplicates_simple(artifacts)

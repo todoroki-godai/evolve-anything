@@ -17,6 +17,7 @@ from path_extractor import extract_paths_outside_codeblocks as _extract_paths_ou
 from line_limit import NEAR_LIMIT_RATIO
 
 from ._constants import LIMITS, _STOPWORDS
+from .issues import detect_memory_heavy_update
 
 
 def _extract_section_keywords(text: str) -> List[str]:
@@ -271,6 +272,7 @@ def build_memory_health_section(
     near_limits: List[Dict[str, Any]] = []
     broken_detail_files: List[Dict[str, Any]] = _check_detail_file_links(memory_files, project_dir)
     low_importance: List[Dict[str, Any]] = []
+    heavy_updates: List[Dict[str, Any]] = []
 
     for path, content in memory_files:
         # 陳腐化参照の検出
@@ -311,6 +313,13 @@ def build_memory_health_section(
                 "pct": pct,
             })
 
+        # memory_heavy_update: churn（多回更新）+ 肥大化の劣化リスク (#104)。
+        # 判定は issues.detect_memory_heavy_update に集約（collect_issues と共有・partial-fix 回避）。
+        # 従来 audit テキストには非表示だった（collect_issues のみ生成）ため advisory 節で可視化する。
+        heavy = detect_memory_heavy_update(path, line_count)
+        if heavy is not None:
+            heavy_updates.append({"file": str(path), **heavy})
+
         # 低重要度メモリ候補の検出 (importance_score ≤ 0.3)
         fields = _parse_frontmatter_fields(content)
         raw_score = fields.get("importance_score")
@@ -328,7 +337,13 @@ def build_memory_health_section(
                 pass
 
     # 問題なしなら空リスト
-    if not stale_refs and not near_limits and not broken_detail_files and not low_importance:
+    if (
+        not stale_refs
+        and not near_limits
+        and not broken_detail_files
+        and not low_importance
+        and not heavy_updates
+    ):
         return []
 
     lines = ["## Memory Health", ""]
@@ -357,6 +372,19 @@ def build_memory_health_section(
             lines.append(f"- {li['file']}: {li['score']:.2f}")
         lines.append("")
 
+    if heavy_updates:
+        lines.append("### Heavy Update（churn + 肥大化・advisory）")
+        for hu in heavy_updates:
+            lines.append(
+                f"- {hu['file']}: update_count {hu['update_count']} / {hu['line_count']} 行"
+                f"（閾値 update≥{hu['threshold']} かつ 行数≥{hu['line_threshold']}）"
+            )
+        lines.append(
+            "  → 多回更新かつ肥大化 = LLM 自己更新による劣化リスク (arXiv:2605.12978)。"
+            "意図した追記ログなら dismiss、そうでなければ要約・分割を検討。"
+        )
+        lines.append("")
+
     # Suggestions
     suggestions = []
     if stale_refs:
@@ -365,6 +393,8 @@ def build_memory_health_section(
         suggestions.append("Update or remove broken detail_file references in memory frontmatter")
     if near_limits:
         suggestions.append("Split large MEMORY.md entries into topic files")
+    if heavy_updates:
+        suggestions.append("Heavy update メモリは要約・分割を検討（意図的な追記ログは dismiss 可）")
     if suggestions:
         lines.append("### Suggestions")
         for s in suggestions:

@@ -103,6 +103,26 @@ def test_rationale_hooks_unconfigured():
     assert "hooks" in r
 
 
+def test_rationale_memory_heavy_update():
+    """#104: memory_heavy_update は総称フォールバックでなく、update_count/行数を明示し
+    「意図的な追記ログなら dismiss」導線を含む具体文言を返す。"""
+    issue = {
+        "type": "memory_heavy_update",
+        "file": "/x/release_notes_last_checked.md",
+        "detail": {
+            "update_count": 71,
+            "line_count": 174,
+            "threshold": 10,
+            "line_threshold": 80,
+        },
+    }
+    r = generate_rationale(issue, "proposable")
+    assert "問題タイプ" not in r  # 総称フォールバックに落ちていない
+    assert "71" in r  # update_count を明示
+    assert "174" in r  # line_count を明示
+    assert "dismiss" in r  # 意図的ログの dismiss 導線（log 過検知の reframe）
+
+
 def test_rationale_claudemd_phantom_ref():
     issue = {
         "type": "claudemd_phantom_ref",
