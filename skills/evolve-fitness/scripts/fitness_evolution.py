@@ -346,6 +346,27 @@ def fitness_next_action(proposals_available: bool) -> str:
     return "このPJでは fitness は使わない設計。対応不要（提案が構造的に出ないため母集団は貯まらない）"
 
 
+def is_structural_skip(fe_result: Optional[Dict[str, Any]]) -> bool:
+    """fitness_evolution の結果が「構造的に fitness を使わない設計の PJ」を示すか判定する。
+
+    母集団（accept/reject）は『提案が出て初めて』積み上がるため、skill 提案が構造的に出ない
+    PJ（skill_evolve_not_scored / bootstrap）では fitness calibration は永久に機能しない。
+    その判定を単一ソース化し、消費側（audit/sections.py の calibration_drift 文言・
+    evolve の Step 2 fitness 生成提案）で同じ predicate を使えるようにする（#479/#584/#105）。
+
+      - insufficient_data + structural_reason → 構造的スキップ
+      - bootstrap（BOOTSTRAP_MIN〜MIN_DATA_COUNT 未満）→ structural_reason を持たない契約だが
+        同じく「提案が出て初めて積み上がる」ため構造シグナルとして畳む。
+    """
+    if not fe_result:
+        return False
+    status = fe_result.get("status")
+    return bool(
+        (status == "insufficient_data" and fe_result.get("structural_reason"))
+        or status == "bootstrap"
+    )
+
+
 def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """評価関数の改善レポートを生成する。"""
     if history is None:

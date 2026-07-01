@@ -591,17 +591,10 @@ def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
         structural = False
         try:
             fe_result = fe.run_fitness_evolution()
-            # #479: insufficient_data（< BOOTSTRAP_MIN）で structural_reason が立つ PJ。
-            # #584: bootstrap（BOOTSTRAP_MIN〜MIN_DATA_COUNT 未満）でも同じ誤読が起きる。
-            # 母集団は『提案が出て初めて』積み上がるため、skill 提案が構造的に出ない PJ では
-            # optimize/evolve-loop 由来の少数 accept/reject が history に残るだけで bootstrap に入り、
-            # MIN_DATA_COUNT へ永久に届かない。bootstrap 戻り値は structural_reason を持たない
-            # （fitness_evolution の契約）ため、status==bootstrap も構造シグナルとして畳む。
-            status = fe_result.get("status")
-            structural = bool(
-                (status == "insufficient_data" and fe_result.get("structural_reason"))
-                or status == "bootstrap"
-            )
+            # #479/#584/#105: 構造的スキップ判定は fitness_evolution.is_structural_skip に単一ソース化。
+            # insufficient_data + structural_reason、または bootstrap（structural_reason を持たない契約
+            # だが同じく提案が出て初めて積み上がる）を「構造的に対象外」として畳む。
+            structural = fe.is_structural_skip(fe_result)
         except Exception:
             structural = False
 

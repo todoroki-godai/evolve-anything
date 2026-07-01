@@ -166,6 +166,28 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
             "UTC", "GMT", "PST", "JST", "EST",
         }
     )
+    # --- #106 追加: errno コード / 汎用略語（#23 regression の再混入根治） ---
+    # ENOENT/EOA/ESM/IoT/OAI/PKCE 等が「PJ 固有 jargon」として再検出された。これらは
+    # POSIX/Node errno コードや、特定 PJ に固有でない広く通用する技術略語であり、
+    # 用語集に載せても decode 価値が薄い。#567 辞書フィルタは小文字英単語しか落とさず
+    # 全大文字略語には効かないため、明示 denylist で除外する（#23 と同じカテゴリ列挙手法）。
+    # 注: MRV（Measurement/Reporting/Verification）等のドメイン固有略語は PJ 固有 jargon
+    # なので**追加しない**（用語集に載せる価値がある）。
+    | frozenset(
+        {
+            # POSIX/Node errno コード（全大文字で jargon らしく見えるが PJ 固有でない）
+            "ENOENT", "EACCES", "EEXIST", "ENOTDIR", "EISDIR",
+            "EPERM", "EAGAIN", "EPIPE", "EINTR", "EINVAL",
+            "ENOSPC", "EMFILE", "ENFILE", "EBADF", "EBUSY",
+            "ENOMEM", "EROFS", "ENOTEMPTY", "EADDRINUSE",
+            "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT",
+            "EHOSTUNREACH", "ENETUNREACH", "EPROTO", "ERANGE", "ENXIO",
+            # モジュールシステム / 汎用テック略語
+            "ESM", "CJS", "IoT", "OAI", "PKCE", "EOA",
+            # 汎用認証/認可略語（特定 PJ に固有でない）
+            "SSO", "OIDC", "MFA", "TOTP", "HOTP",
+        }
+    )
 )
 
 # #23: 標準ライブラリ/フレームワークの既知シンボル名。CamelCase のため
@@ -188,6 +210,13 @@ STDLIB_SYMBOLS: frozenset[str] = frozenset(
         "DateTime",
         # 広く使われる data/科学計算フレームワークの型名
         "DataFrame", "Series", "ndarray",
+        # JS/TS 標準ビルトイン型（#106: Uint8Array 等が CamelCase で jargon 誤検知）。
+        # PJ 固有でない言語標準型のため除外する。
+        "Uint8Array", "Int8Array", "Uint8ClampedArray",
+        "Uint16Array", "Int16Array", "Uint32Array", "Int32Array",
+        "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
+        "ArrayBuffer", "SharedArrayBuffer", "DataView",
+        "BigInt", "WeakMap", "WeakSet", "WeakRef",
     }
 )
 

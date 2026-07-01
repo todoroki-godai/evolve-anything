@@ -268,3 +268,37 @@ def check_fitness_function(project_dir: Optional[str] = None) -> Dict[str, Any]:
         "fitness_functions": fitness_files,
         "fitness_dir": str(fitness_dir),
     }
+
+
+# #105: fitness 生成提案（SKILL.md Step 2）を fitness_evolution の structural 判定と整合させる。
+_FITNESS_GENERATION_SKIP_NOTE = (
+    "fitness_evolution が構造的スキップ（skill 提案が構造的に出ない PJ）と判定。"
+    "fitness を生成しても calibration 母集団が貯まらず空振りになりやすい。"
+    "デフォルトはスキップ推奨（生成は禁止しない）。"
+)
+
+
+def annotate_fitness_generation_advice(
+    fitness_phase: Optional[Dict[str, Any]],
+    fitness_evo_result: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """`phases.fitness` に `generation_advised` を back-annotate する（#105）。
+
+    has_fitness=false の PJ で、fitness_evolution が構造的スキップ
+    （skill_evolve_not_scored / bootstrap）と判定していれば `generation_advised=false` +
+    `generation_note` を付与する。SKILL.md Step 2 はこれを見て「効果が薄い見込み」と注記し
+    デフォルトを skip 寄りにする（「fitness 生成しろ」と「fitness は使わない設計」の同時提示矛盾を断つ）。
+    生成自体は禁止しない。has_fitness=true / fitness_phase 不正時は無変更。副作用で dict を書き換える。
+    """
+    if not isinstance(fitness_phase, dict) or fitness_phase.get("has_fitness"):
+        return fitness_phase
+    try:
+        from fitness_evolution import is_structural_skip
+    except Exception:
+        return fitness_phase
+    if is_structural_skip(fitness_evo_result):
+        fitness_phase["generation_advised"] = False
+        fitness_phase["generation_note"] = _FITNESS_GENERATION_SKIP_NOTE
+    else:
+        fitness_phase["generation_advised"] = True
+    return fitness_phase

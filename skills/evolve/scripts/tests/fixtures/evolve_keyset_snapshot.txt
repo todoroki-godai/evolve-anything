@@ -189,6 +189,8 @@ phases.remediation.proposable_custom
 phases.remediation.proposable_custom_batch_skip
 phases.remediation.proposable_custom_individual
 phases.remediation.proposable_global
+phases.remediation.proposable_global_suppressed
+phases.remediation.rule_violation_suppressed
 phases.remediation.suppressed_by_ledger
 phases.remediation.total_issues
 phases.reorganize

@@ -14,7 +14,7 @@ from reflect_utils import read_auto_memory
 from path_extractor import extract_paths_outside_codeblocks as _extract_paths_outside_codeblocks, KNOWN_DIR_PREFIXES
 from hardcoded_detector import detect_hardcoded_values
 from line_limit import NEAR_LIMIT_RATIO
-from memory_temporal import parse_memory_temporal
+from memory_temporal import parse_memory_temporal, is_stale, is_superseded
 
 from ._constants import LIMITS
 from .classification import classify_artifact_origin
@@ -59,6 +59,16 @@ MEMORY_HEAVY_UPDATE_THRESHOLD = 3
 # memory ファイルの上限 (LIMITS["memory"] = 120 行) の 25% 相当。
 # 小さなメモリの活発更新は正常運用とみなす（コスト最適化メモリ 7 回更新の誤検知が動機）。
 MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 30
+
+
+def _memory_is_healthy(temporal: Dict[str, Any]) -> bool:
+    """memory_capability の maintain 軸と同一の健全性判定（#104）。
+
+    健全 = 非 stale かつ 非 superseded（memory_capability.compute_memory_capability の
+    maintain 軸と同一定義）。両者で同じ predicate を使うことで、同一 run で
+    「memory_capability=健全」と「memory_heavy_update=要対応」が矛盾するのを構造的に防ぐ。
+    """
+    return not is_stale(temporal) and not is_superseded(temporal)
 
 
 def claude_md_unparseable(project_dir: Optional[Path]) -> bool:
@@ -244,12 +254,17 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
 
         # memory_heavy_update: LLM 自己更新が閾値超え (Issue #97 / arXiv:2605.12978)
         # 更新回数単独では正常な活発更新を誤検知するため、行数との複合条件にする（#353）。
+        # さらに #104: memory_capability が「健全（非 stale・非 superseded）」と判定する memory は
+        # update_count が「活性（良）」として加点される対象なので heavy_update から除外する。
+        # 健全な高頻度更新メモリ（amamo で update 55 / 40 行が誤検知）を「健全 1.00」と
+        # 「要対応」に同時分類する矛盾を、memory_capability と同一 predicate で構造的に断つ。
         try:
             temporal = parse_memory_temporal(path)
             update_count = temporal.get("update_count", 0)
             if (
                 update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD
                 and line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
+                and not _memory_is_healthy(temporal)  # #104: 健全メモリは活性として除外
             ):
                 issues.append({
                     "type": "memory_heavy_update",
@@ -259,6 +274,9 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
                         "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
                         "line_count": line_count,
                         "line_threshold": MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
+                        # 発火時は必ず stale か superseded のいずれか（健全でない）。判断材料に添える。
+                        "stale": is_stale(temporal),
+                        "superseded": is_superseded(temporal),
                     },
                     "source": "build_memory_health_section",
                 })
