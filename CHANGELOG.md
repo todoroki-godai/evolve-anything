@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.114.1] - 2026-07-01
 
 ### Fixed
 - **fix(evolve): advisory 情報レーンに dismiss/自動畳み込みの入口を配線（closes #103）** — amamo 実 dry-run（2026-06-28）で発見。`proposable_custom_individual` には suppression ledger（`record_rejection` + `reconcile_surfaced`）が配線されていたが、情報レーンの advisory（`proposable_global` / `phases.discover.rule_violation_observed`）は却下記録の経路すら無く、ユーザーが「対応しない」と判断しても**毎回1行 surface され続けた**（#26 の対象外レーンで同型再発）。**Fix**: ⑴ 読み取り側で `filter_suppressed`（proposable_global は native issue dict）/ `rule_violation_suppression_issue`（rule_violation は issue 形を持たないため violated_command 単位の安定 identity へ変換・全項目 collapse を回避）で dismiss 済み（TTL 内）を surface から除外し、rule_violation は discover 出力へ書き戻して SKILL.md 表示を畳む。⑵ `reconcile_surfaced` の追跡対象を「個別承認＋proposable_global＋rule_violation synthetics」の**1 呼び出しに束ねて**渡し（marker 全置換による二重書込を回避）、未対応のまま連続提示された advisory を閾値回数（既定2）で自動畳み込み。⑶ 畳んだ件数を `remediation.proposable_global_suppressed` / `rule_violation_suppressed` に surface（silence != evaluated）+ SKILL.md Step 5.5 に「この PJ では意図的運用」明示 dismiss 入口を追記。dry-run 非書込（`persist=not dry_run`）。TDD 12件・決定論・LLM 非依存。
