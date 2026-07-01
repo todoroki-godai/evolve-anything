@@ -292,20 +292,39 @@ def _append_bootstrap_consumed(lines: list, result: dict) -> None:
     )
 
 
-def _append_weak_semantics(lines: list, result: dict) -> None:
-    """WEAK 列が「未処理のみ」である意味を明示し、生検出数との乖離の誤読を防ぐ（②）。
+def _append_weak_content_poor(lines: list, result: dict) -> None:
+    """content-poor channel（昇格不能）で material から除外した weak を透明化表示する（#113）。
 
-    WEAK は ``weak_unprocessed``（promoted=False かつ未 TTL 失効）から bootstrap 消化分を
-    除いた実残数で、検出された weak の生総数とは一致しない（promoted 昇格済み・TTL 失効・
-    bootstrap 破棄が差分）。生数しか知らないと「なぜ table の数が生検出より少ないのか」と
-    誤読する（実機 dogfood で amamo 生 64 → WEAK 16 のギャップが不可解に見えた）。待ち PJ が
-    あるとき列の意味を脚注で明示する。集計でなく定数注記（footer ノイズと算出コストを抑える）。
+    silent truncation 禁止: esc_interrupt / manual_edit_after_ai 等の content-poor channel は
+    y/n 確認から除外され promote しても signal_text が空で昇格不能な死荷重ゆえ material_count に
+    載せないが、黙って落とすと「なぜ WEAK が生検出より少ないか」が不明になる。除外した PJ と
+    件数を脚注に出す。``weak_content_poor`` が空なら何も出さない。
+    """
+    wcp = result.get("weak_content_poor") or []
+    if not wcp:
+        return
+    parts = [f"{e.get('pj_slug')} {e.get('content_poor')}件" for e in wcp]
+    lines.append(
+        f"（content-poor channel を material から除外: {', '.join(parts)}"
+        f" — esc/手編集等は昇格手段が無く material に数えません）"
+    )
+
+
+def _append_weak_semantics(lines: list, result: dict) -> None:
+    """WEAK 列が「content-rich 未処理のみ」である意味を明示し、生検出数との乖離の誤読を防ぐ（②/#113）。
+
+    WEAK は ``weak_unprocessed``（promoted=False・未 TTL 失効・content-rich channel）から
+    bootstrap 消化分を除いた実残数で、検出された weak の生総数とは一致しない（promoted 昇格済み・
+    TTL 失効・bootstrap 破棄・content-poor channel 除外が差分）。生数しか知らないと「なぜ table の
+    数が生検出より少ないのか」と誤読する（実機 dogfood で amamo 生 64 → WEAK 16 のギャップが不可解
+    に見えた）。待ち PJ があるとき列の意味を脚注で明示する。集計でなく定数注記（footer ノイズと
+    算出コストを抑える）。
     """
     if not result.get("queue"):
         return
     lines.append(
-        "（WEAK は未処理のみ＝promoted 昇格済み・TTL 失効・bootstrap 消化済みを除いた実残数。"
-        "検出された weak の生総数とは一致しません）"
+        "（WEAK は content-rich 未処理のみ＝promoted 昇格済み・TTL 失効・bootstrap 消化済み・"
+        "content-poor channel（昇格不能）を除いた実残数。検出された weak の生総数とは一致しません）"
     )
 
 
@@ -327,6 +346,7 @@ def format_queue_table(result: dict) -> str:
         )
         lines.append(f"（0 projects waiting / {tracked} tracked (config)）")
         _append_bootstrap_consumed(lines, result)
+        _append_weak_content_poor(lines, result)
         _append_skipped_dead(lines, result)
         _append_untracked(lines, result)
         _append_skipped_phantom(lines, result)
@@ -363,6 +383,7 @@ def format_queue_table(result: dict) -> str:
     _append_coldstart_notice(lines, result)
     _append_weak_semantics(lines, result)
     _append_bootstrap_consumed(lines, result)
+    _append_weak_content_poor(lines, result)
     _append_skipped_dead(lines, result)
     _append_untracked(lines, result)
     _append_skipped_phantom(lines, result)

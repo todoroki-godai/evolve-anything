@@ -159,7 +159,7 @@ def test_format_queue_table_weak_semantics_when_waiting():
         "threshold": 5,
     }
     out = format_queue_table(result)
-    assert "WEAK は未処理のみ" in out
+    assert "WEAK は content-rich 未処理のみ" in out
 
 
 def test_format_queue_table_weak_semantics_absent_when_empty():
@@ -167,4 +167,4 @@ def test_format_queue_table_weak_semantics_absent_when_empty():
     from fleet.formatters import format_queue_table
 
     out = format_queue_table({"queue": [], "tracked_total": 5, "threshold": 5})
-    assert "WEAK は未処理のみ" not in out
+    assert "WEAK は content-rich 未処理のみ" not in out

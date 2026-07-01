@@ -114,8 +114,10 @@ class TestSelectEvolveQueue:
 
 
 def _ws(pj_slug, *, promoted=False, expired=False, detected="2026-06-20T00:00:00+00:00", key=None):
+    # content-rich channel（#113: material 計数は REVIEW_CHANNELS のみ）。この helper の
+    # weak は promoted/expired/scope/dead/untracked 判定の検証用ゆえ昇格可能 channel を使う。
     return {
-        "channel": "manual_edit",
+        "channel": "llm_judge",
         "provenance": {"k": key or pj_slug + str(promoted) + str(expired) + detected},
         "detected_at": detected,
         "session_id": "s",
@@ -349,6 +351,7 @@ class TestBuildQueueResult:
             "untracked_with_material",
             "skipped_phantom",
             "bootstrap_consumed",
+            "weak_content_poor",
             "unattributed_corrections",
         }
         assert result["unattributed_corrections"] == {"total": 0, "by_source": {}}

@@ -4,9 +4,10 @@
 列挙する。毎朝の定期実行（Phase 1b #80）の入口で、ユーザーが対話で処理する PJ を選ぶ。
 
 待ち定義:
-  material_count = weak_unprocessed（未昇格・未expired の weak_signals）
+  material_count = weak_unprocessed（未昇格・未expired・**content-rich** channel の weak_signals）
                  + new_corrections（前回 evolve 以降の新規 corrections）
   material_count >= threshold の PJ を待ちとする。
+  content-poor channel（REVIEW_CHANNELS 外・昇格不能）は material に載せず footer で透明化（#113）。
 
 補助シグナル（フィルタには使わず列挙理由に併記）:
   activity_since = {subagents, sessions}（前回 evolve 以降の活動量）。
@@ -162,13 +163,33 @@ def _exclude_bootstrap_consumed(
     return out
 
 
+def _scoped_kept_signals(
+    pj_slug: str,
+    *,
+    weak_signals_path: Optional[Path],
+    marker_base: Optional[Path],
+) -> List[Dict[str, Any]]:
+    """pj_slug scope + bootstrap 消化除外を通した未処理 weak レコードを返す（共有 helper）。
+
+    ``weak_unprocessed_by_pj`` / ``weak_content_poor_by_pj`` /
+    ``bootstrap_consumed_by_pj`` が同じ read/scope/除外パスを通すための単一ソース
+    （partial fix で reader が食い違うのを避ける）。channel フィルタは呼び側で行う。
+    """
+    from correction_semantic.promote import read_unpromoted
+
+    recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
+    aliases = _aliases_for(pj_slug)
+    scoped = [r for r in recs if r.get("pj_slug") in aliases]
+    return _exclude_bootstrap_consumed(scoped, pj_slug, marker_base=marker_base)
+
+
 def weak_unprocessed_by_pj(
     pj_slug: str,
     *,
     weak_signals_path: Optional[Path] = None,
     marker_base: Optional[Path] = None,
 ) -> int:
-    """pj_slug の未処理（promoted=False / 未expired / 未 bootstrap 消化）weak 件数を返す。
+    """pj_slug の未処理 **content-rich** weak 件数を返す（material 計数用・#113）。
 
     既存 reader（``correction_semantic.promote.read_unpromoted``）を再利用し、pj_slug で
     scope する（weak_signals.jsonl は単一 DATA_DIR ファイル・pj_slug は record 属性）。
@@ -177,13 +198,39 @@ def weak_unprocessed_by_pj(
 
     #94: bootstrap で破棄/TTL 任せと判断済み（marker 以前 detected）の weak は除外する
     （``_exclude_bootstrap_consumed``）。``marker_base`` はテスト注入（未指定は DATA_DIR）。
-    """
-    from correction_semantic.promote import read_unpromoted
 
-    recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
-    aliases = _aliases_for(pj_slug)
-    scoped = [r for r in recs if r.get("pj_slug") in aliases]
-    return len(_exclude_bootstrap_consumed(scoped, pj_slug, marker_base=marker_base))
+    #113: content-poor channel（``REVIEW_CHANNELS`` 外 = esc_interrupt /
+    manual_edit_after_ai 等）は material_count に載せない。y/n 確認から除外され promote しても
+    signal_text が空で昇格不能な死荷重ゆえ、「今 evolve すべき PJ」判定を歪めないため。channel
+    集合は ``correction_semantic.review_channels.REVIEW_CHANNELS`` を単一ソースとして参照する
+    （リスト複製しない）。除外件数は ``weak_content_poor_by_pj`` が footer 透明化用に返す。
+    """
+    from correction_semantic.review_channels import REVIEW_CHANNELS
+
+    kept = _scoped_kept_signals(
+        pj_slug, weak_signals_path=weak_signals_path, marker_base=marker_base
+    )
+    return sum(1 for r in kept if r.get("channel") in REVIEW_CHANNELS)
+
+
+def weak_content_poor_by_pj(
+    pj_slug: str,
+    *,
+    weak_signals_path: Optional[Path] = None,
+    marker_base: Optional[Path] = None,
+) -> int:
+    """material から除外した content-poor（``REVIEW_CHANNELS`` 外）weak 件数を返す（#113）。
+
+    queue footer / ``--json`` の透明化用（silent truncation 禁止）。``weak_unprocessed_by_pj``
+    と同じ scope/bootstrap 除外パス（``_scoped_kept_signals``）を通し、REVIEW_CHANNELS に**入ら
+    ない**未処理 weak を数える。両者を足すと bootstrap 消化後の scoped 全件になる（相補的）。
+    """
+    from correction_semantic.review_channels import REVIEW_CHANNELS
+
+    kept = _scoped_kept_signals(
+        pj_slug, weak_signals_path=weak_signals_path, marker_base=marker_base
+    )
+    return sum(1 for r in kept if r.get("channel") not in REVIEW_CHANNELS)
 
 
 def bootstrap_consumed_by_pj(
@@ -202,7 +249,9 @@ def bootstrap_consumed_by_pj(
     recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
     aliases = _aliases_for(pj_slug)
     scoped = [r for r in recs if r.get("pj_slug") in aliases]
-    kept = _exclude_bootstrap_consumed(scoped, pj_slug, marker_base=marker_base)
+    kept = _scoped_kept_signals(
+        pj_slug, weak_signals_path=weak_signals_path, marker_base=marker_base
+    )
     return len(scoped) - len(kept)
 
 
@@ -636,6 +685,15 @@ def build_queue_result(
         if c > 0:
             bootstrap_consumed.append({"pj_slug": s, "consumed": c})
 
+    # #113: content-poor channel（REVIEW_CHANNELS 外）で material から除外した weak を透明化する。
+    # y/n 確認から除外され promote しても昇格不能な死荷重ゆえ material_count には載せないが、黙って
+    # 落とすと「なぜ WEAK が生検出より少ないか」が不明になる（silent truncation 禁止）。poor>0 のみ。
+    weak_content_poor: List[Dict[str, Any]] = []
+    for s in consumed_slugs:
+        p = weak_content_poor_by_pj(s, weak_signals_path=weak_signals_path)
+        if p > 0:
+            weak_content_poor.append({"pj_slug": s, "content_poor": p})
+
     return {
         "generated_at": generated_at,
         "threshold": threshold,
@@ -646,6 +704,8 @@ def build_queue_result(
         "skipped_phantom": phantom,
         # #94: bootstrap 消化済み（破棄/TTL 任せ判断済み）で material から除外した weak の透明化。
         "bootstrap_consumed": bootstrap_consumed,
+        # #113: content-poor channel（昇格不能）で material から除外した weak の透明化。
+        "weak_content_poor": weak_content_poor,
         # #91: project_path 欠落で PJ 帰属不能な corrections（どの母数にも入らず不可視）を透明化。
         "unattributed_corrections": count_unattributed_corrections(corrections_path),
     }
