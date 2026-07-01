@@ -33,6 +33,7 @@ _RATIONALE_TEMPLATES = {
     "orphan_rule": "ルール「{name}」はどのスキル・CLAUDE.md からも参照されていません。",
     "stale_rule": "ルール内で参照されている「{path}」が存在しません。参照の更新または削除を検討してください。",
     "stale_memory": "MEMORY.md 内の「{path}」への言及は実体が見つかりません。エントリの更新または削除を検討してください。",
+    "memory_heavy_update": "メモリ「{name}」は update_count {update_count} 回・{line_count} 行で、多回更新による肥大化（churn + bloat）が LLM 自己更新の劣化リスク (arXiv:2605.12978) に該当します。意図した追記ログなら dismiss、そうでなければ要約・分割を検討してください。",
     "memory_duplicate": "MEMORY.md のセクション「{section_a}」と「{section_b}」は内容が重複しています（類似度: {similarity}）。統合を検討してください。",
     "hooks_unconfigured": "hooks 設定が見つかりません。observe hooks の設定を検討してください。",
     "claudemd_phantom_ref": "CLAUDE.md 内で言及された{ref_type}「{name}」が存在しません。",
@@ -120,6 +121,16 @@ def generate_rationale(issue: Dict[str, Any], category: str) -> str:
     if issue_type == "stale_memory":
         return _RATIONALE_TEMPLATES["stale_memory"].format(
             path=detail.get("path", "unknown"),
+        )
+
+    if issue_type == "memory_heavy_update":
+        # #104: 総称フォールバックに落とさず update_count/行数を明示し、log 過検知の
+        # reframe（意図的な追記ログなら dismiss）を導線として持たせる。
+        name = (issue.get("file") or "").rsplit("/", 1)[-1] or "unknown"
+        return _RATIONALE_TEMPLATES["memory_heavy_update"].format(
+            name=name,
+            update_count=detail.get("update_count", 0),
+            line_count=detail.get("line_count", 0),
         )
 
     if issue_type == "memory_duplicate":

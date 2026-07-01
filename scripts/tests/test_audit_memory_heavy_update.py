@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from audit.issues import (  # noqa: E402
     collect_issues,
+    detect_memory_heavy_update,
     MEMORY_HEAVY_UPDATE_THRESHOLD,
     MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
 )
@@ -177,3 +178,40 @@ def test_high_update_count_and_large_content_detected(tmp_path):
     heavy = _heavy(collect_issues(tmp_path))
     assert len(heavy) == 1
     assert heavy[0]["detail"]["update_count"] == 15
+
+
+def test_detect_predicate_single_source_fires(tmp_path):
+    """単一ソース predicate detect_memory_heavy_update が detail を返す（#104）。
+
+    collect_issues と build_memory_health_section が閾値ロジックを二重実装しないための
+    共有 predicate。両閾値以上で detail dict を返す。
+    """
+    _setup_minimal_project(tmp_path)
+    f = _make_memory(tmp_path, "h.md", update_count=12,
+                     extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD)
+    line_count = f.read_text(encoding="utf-8").count("\n") + 1
+
+    d = detect_memory_heavy_update(f, line_count)
+    assert d is not None
+    assert d["update_count"] == 12
+    assert d["line_count"] == line_count
+    assert d["threshold"] == MEMORY_HEAVY_UPDATE_THRESHOLD
+    assert d["line_threshold"] == MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
+
+
+def test_detect_predicate_single_source_below_returns_none(tmp_path):
+    """predicate は閾値未満で None（行数<80）。"""
+    _setup_minimal_project(tmp_path)
+    f = _make_memory(tmp_path, "s.md", update_count=55, extra_lines=40)  # line_count ≈ 46
+    line_count = f.read_text(encoding="utf-8").count("\n") + 1
+
+    assert detect_memory_heavy_update(f, line_count) is None
+
+
+def test_detect_predicate_malformed_frontmatter_returns_none(tmp_path):
+    """frontmatter 不正（update_count なし）でも例外を出さず None（既存挙動維持）。"""
+    _setup_minimal_project(tmp_path)
+    f = _make_memory(tmp_path, "nofm.md", update_count=None)  # frontmatter なし
+    line_count = f.read_text(encoding="utf-8").count("\n") + 1
+
+    assert detect_memory_heavy_update(f, line_count) is None

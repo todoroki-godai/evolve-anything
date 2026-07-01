@@ -62,6 +62,33 @@ MEMORY_HEAVY_UPDATE_THRESHOLD = 10
 MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 80
 
 
+def detect_memory_heavy_update(
+    path: Path, line_count: int
+) -> Optional[Dict[str, Any]]:
+    """memory_heavy_update（churn + 肥大化）判定の単一ソース predicate（#104）。
+
+    collect_issues（issue 収集）と build_memory_health_section（audit テキスト表示）が
+    共有し、閾値ロジックの二重実装＝partial-fix を防ぐ。update_count と line_count が
+    両閾値以上なら detail dict、非該当・frontmatter 不正時は None を返す（既存挙動を壊さない）。
+    """
+    try:
+        temporal = parse_memory_temporal(path)
+        update_count = temporal.get("update_count", 0)
+    except Exception:
+        return None
+    if (
+        update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD
+        and line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
+    ):
+        return {
+            "update_count": update_count,
+            "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
+            "line_count": line_count,
+            "line_threshold": MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
+        }
+    return None
+
+
 def claude_md_unparseable(project_dir: Optional[Path]) -> bool:
     """CLAUDE.md は在るが Skills セクションから trigger を 0 件しか抽出できない状態か (#295)。
 
@@ -251,26 +278,15 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
         # update>=10 / 行数>=80 に引き上げ、簡潔だが活発なメモリ（amamo: update 55 / 40 行）を誤検知しない。
         # 旧 #104 は maintain 軸（freshness）の健全性ゲートで除外したが、temporal メタデータの無い通常
         # メモリでは detector がほぼ発火せず near-inert になったため撤去した（健全/非健全を問わず肥大化で発火）。
-        try:
-            temporal = parse_memory_temporal(path)
-            update_count = temporal.get("update_count", 0)
-            if (
-                update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD
-                and line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
-            ):
-                issues.append({
-                    "type": "memory_heavy_update",
-                    "file": str(path),
-                    "detail": {
-                        "update_count": update_count,
-                        "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
-                        "line_count": line_count,
-                        "line_threshold": MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
-                    },
-                    "source": "build_memory_health_section",
-                })
-        except Exception:
-            pass  # frontmatter 不正は既存挙動を壊さない
+        # 判定は detect_memory_heavy_update に集約し build_memory_health_section の表示と共有する（#104 表示配線）。
+        heavy = detect_memory_heavy_update(path, line_count)
+        if heavy is not None:
+            issues.append({
+                "type": "memory_heavy_update",
+                "file": str(path),
+                "detail": heavy,
+                "source": "build_memory_health_section",
+            })
 
     # duplicates（重複候補）
     duplicates = detect_duplicates_simple(artifacts)
