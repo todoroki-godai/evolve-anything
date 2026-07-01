@@ -10,6 +10,10 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# #112 read 層 alias fold: legacy 旧 slug タグを canonical へ畳んで拾う共有ヘルパー
+# （daily_review._read_new と単一ソース・alias は read 専用・write は現 slug 固定）。
+from store_read_union import pj_slug_match as _pj_slug_match
+
 # ストアの basename（store_registry / store_write の単一キー）。
 CANDIDATES_STORE = "verbosity_candidates.jsonl"
 VERDICTS_STORE = "verbosity_verdicts.jsonl"
@@ -60,7 +64,8 @@ def read_candidates(slug: str, *, data_dir: Optional[Path] = None) -> List[dict]
     out: List[dict] = []
     seen: set = set()
     for rec in _read_jsonl(base / CANDIDATES_STORE):
-        if rec.get("pj_slug") != slug:
+        # #112 read 層 alias fold: legacy 旧 slug タグも canonical へ畳んで当 PJ として拾う。
+        if not _pj_slug_match(rec.get("pj_slug"), slug):
             continue
         h = rec.get("hash")
         if h is not None and h in seen:
@@ -80,7 +85,8 @@ def read_verdicts(slug: str, *, data_dir: Optional[Path] = None) -> Dict[str, di
     base = _base(data_dir)
     out: Dict[str, dict] = {}
     for rec in _read_jsonl(base / VERDICTS_STORE):
-        if rec.get("pj_slug") != slug:
+        # #112 read 層 alias fold: legacy 旧 slug タグも canonical へ畳んで当 PJ として拾う。
+        if not _pj_slug_match(rec.get("pj_slug"), slug):
             continue
         h = rec.get("hash")
         if not h:

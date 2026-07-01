@@ -152,6 +152,21 @@ def test_build_scopes_to_pj_slug_only(tmp_path: Path):
     assert res["pj_total"] == 1  # evolve-anything の 1 件のみ
 
 
+def test_build_folds_legacy_slug_alias(tmp_path: Path):
+    # #112 read 層 alias fold: PJ rename（rl-anything→evolve-anything）で旧 slug タグの
+    # legacy backlog も canonical slug の read で拾う（write は現 slug 固定）。
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("金額がきれてる", 1, pj_slug="evolve-anything"),
+            _sig("旧 slug の話", 2, pj_slug="rl-anything"),  # legacy
+        ],
+        path=ws,
+    )
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    assert res["pj_total"] == 2  # legacy rl-anything も canonical へ畳んで拾う
+
+
 def test_build_only_counts_unpromoted(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("金額がきれてる", 1)], path=ws)

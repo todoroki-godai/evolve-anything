@@ -75,6 +75,16 @@ def test_read_candidates_filters_by_slug_and_dedups_hash(data_dir):
     assert {c["hash"] for c in out} == {"aaa", "bbb"}
 
 
+def test_read_candidates_folds_legacy_slug_alias(data_dir):
+    """#112: PJ rename の legacy slug（rl-anything）も canonical slug の read で拾う。"""
+    _write_candidates(data_dir, [
+        _cand("aaa", slug="evolve-anything"),
+        _cand("bbb", slug="rl-anything"),  # legacy
+    ])
+    out = _vstore.read_candidates(SLUG, data_dir=data_dir)
+    assert {c["hash"] for c in out} == {"aaa", "bbb"}
+
+
 def test_read_candidates_missing_file_returns_empty_and_writes_nothing(data_dir):
     """ファイル不在でも [] を返し、ファイルを作らない（read-only 純度）。"""
     out = _vstore.read_candidates(SLUG, data_dir=data_dir)
@@ -113,6 +123,20 @@ def test_read_verdicts_last_append_wins(data_dir):
     )
     v = _vstore.read_verdicts(SLUG, data_dir=data_dir)
     assert v["aaa"]["verbose"] is True
+
+
+def test_read_verdicts_folds_legacy_slug_alias(data_dir):
+    """#112: PJ rename の legacy slug（rl-anything）も canonical slug の read で拾う。"""
+    path = data_dir / _vstore.VERDICTS_STORE
+    path.write_text(
+        "\n".join(json.dumps(r) for r in [
+            {"hash": "aaa", "pj_slug": "evolve-anything", "verbose": True},
+            {"hash": "bbb", "pj_slug": "rl-anything", "verbose": False},  # legacy
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    v = _vstore.read_verdicts(SLUG, data_dir=data_dir)
+    assert set(v) == {"aaa", "bbb"}
 
 
 # ───────────────────────────── query ─────────────────────────────

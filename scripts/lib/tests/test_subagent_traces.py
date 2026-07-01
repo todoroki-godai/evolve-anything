@@ -145,6 +145,14 @@ def test_write_then_read_roundtrip_scoped_by_slug(data_dir):
     assert got["a1"]["first_try_success"] is True
 
 
+def test_read_traces_folds_legacy_slug_alias(data_dir):
+    """#112: PJ rename の legacy slug（rl-anything）も canonical slug の read で拾う。"""
+    _tstore.write_trace({"agent_id": "a1", "pj_slug": "rl-anything", "first_try_success": True})
+    _tstore.write_trace({"agent_id": "b1", "pj_slug": "evolve-anything", "first_try_success": False})
+    got = _tstore.read_traces("evolve-anything")
+    assert set(got) == {"a1", "b1"}
+
+
 def test_read_traces_last_append_wins(data_dir):
     """同一 agent_id の再 ingest は last-append-wins。"""
     _tstore.write_trace({"agent_id": "a1", "pj_slug": "p", "tool_error_count": 2})

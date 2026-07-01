@@ -39,6 +39,10 @@ from correction_semantic.review_channels import (
 )
 from weak_signals.store import default_store_path, read_signals
 
+# #112 read 層 alias fold: legacy 旧 slug タグを canonical へ畳んで拾う共有ヘルパー
+# （daily_review._read_new と単一ソース・alias は read 専用・write は現 slug 固定）。
+from store_read_union import pj_slug_match as _pj_slug_match
+
 MARKER_PREFIX = "bootstrap_done-"
 MARKER_SUFFIX = ".marker"
 
@@ -352,7 +356,8 @@ def _read_backlog(
     recs = read_signals(weak_signals_path)
     out: List[Dict[str, Any]] = []
     for r in recs:
-        if r.get("pj_slug") != pj_slug:
+        # #112 read 層 alias fold: legacy 旧 slug タグも canonical へ畳んで当 PJ として拾う。
+        if not _pj_slug_match(r.get("pj_slug"), pj_slug):
             continue
         if r.get("channel") not in REVIEW_CHANNELS:
             continue

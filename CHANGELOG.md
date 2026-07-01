@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **fix(store): read 層の pj_slug alias fold を 5 reader に適用（closes #112）** — PJ rename（rl-anything→evolve-anything）で legacy 旧 slug タグのレコードが `rec.get("pj_slug") != slug` の厳密一致で落ち、canonical slug の read から不可視になっていた 5 reader（`correction_semantic/bootstrap_backlog._read_backlog` / `subagent_traces/store.read_traces` / `audit/reward_ema.read_reward_ema` / `verbosity/store.read_candidates` + `read_verdicts`）を、`daily_review._read_new` が既に使う `store_read_union.pj_slug_match`（canonical fold・alias は read 専用・write は現 slug 固定）へ統一。単一ソースに集約し二重実装を回避。TDD 5件・決定論・LLM 非依存。
+
 ## [1.114.1] - 2026-07-01
 
 ### Fixed

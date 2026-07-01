@@ -147,6 +147,20 @@ class TestReadRewardEma:
         assert set(result) == {"a"}
         assert result["a"]["ema"] == pytest.approx(0.2)
 
+    def test_folds_legacy_slug_alias(self, data_dir):
+        # #112 read 層 alias fold: legacy rl-anything も canonical slug の read で拾う。
+        self._write(
+            data_dir / "reward_ema.jsonl",
+            [
+                {"pj_slug": "rl-anything", "skill": "legacy", "ema": 0.3, "n_batches": 1,
+                 "advantage": 0.3, "ts": "2026-06-01T00:00:00+00:00"},
+                {"pj_slug": "evolve-anything", "skill": "current", "ema": 0.1, "n_batches": 1,
+                 "advantage": 0.1, "ts": "2026-06-01T00:00:00+00:00"},
+            ],
+        )
+        result = re.read_reward_ema("evolve-anything", data_dir=data_dir)
+        assert set(result) == {"legacy", "current"}
+
     def test_last_append_wins_per_skill(self, data_dir):
         self._write(
             data_dir / "reward_ema.jsonl",

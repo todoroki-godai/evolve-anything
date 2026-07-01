@@ -106,10 +106,14 @@ def read_reward_ema(
         {skill: {"ema": float, "n_batches": int, "last_advantage": float, "ts": str}}。
     ファイル不在 → {}（ファイルを作らない・書かない = dry-run 純度）。
     """
+    # #112 read 層 alias fold: legacy 旧 slug タグも canonical へ畳んで当 PJ として拾う
+    # （lazy import は memory_contagion と同じ audit-package idiom・alias は read 専用）。
+    from store_read_union import pj_slug_match as _pj_slug_match
+
     base = _base(data_dir)
     out: Dict[str, dict] = {}
     for rec in _om._read_jsonl(base / _STORE_NAME):
-        if rec.get("pj_slug") != slug:
+        if not _pj_slug_match(rec.get("pj_slug"), slug):
             continue
         skill = rec.get("skill")
         if not skill:
