@@ -14,7 +14,7 @@ from reflect_utils import read_auto_memory
 from path_extractor import extract_paths_outside_codeblocks as _extract_paths_outside_codeblocks, KNOWN_DIR_PREFIXES
 from hardcoded_detector import detect_hardcoded_values
 from line_limit import NEAR_LIMIT_RATIO
-from memory_temporal import parse_memory_temporal, is_stale, is_superseded
+from memory_temporal import parse_memory_temporal
 
 from ._constants import LIMITS
 from .classification import classify_artifact_origin
@@ -54,21 +54,12 @@ def collect_hardcoded_value_issues(
 # 複数ラウンドの再要約で誤りが指数的に増幅することを示す (docs/research/faulty-updated-memories.md)。
 # 更新回数単独では「活発に正しく更新した健全なメモリ」を誤検知するため、
 # 行数（= 内容の肥大化）との複合条件にする（#353）。
-MEMORY_HEAVY_UPDATE_THRESHOLD = 3
+MEMORY_HEAVY_UPDATE_THRESHOLD = 10
 # 行数がこの値未満なら update_count が閾値を超えても警告しない。
-# memory ファイルの上限 (LIMITS["memory"] = 120 行) の 25% 相当。
-# 小さなメモリの活発更新は正常運用とみなす（コスト最適化メモリ 7 回更新の誤検知が動機）。
-MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 30
-
-
-def _memory_is_healthy(temporal: Dict[str, Any]) -> bool:
-    """memory_capability の maintain 軸と同一の健全性判定（#104）。
-
-    健全 = 非 stale かつ 非 superseded（memory_capability.compute_memory_capability の
-    maintain 軸と同一定義）。両者で同じ predicate を使うことで、同一 run で
-    「memory_capability=健全」と「memory_heavy_update=要対応」が矛盾するのを構造的に防ぐ。
-    """
-    return not is_stale(temporal) and not is_superseded(temporal)
+# memory ファイルの上限 (LIMITS["memory"] = 120 行) の約 67% 相当。#104 で 30→80 に引き上げた:
+# 旧 30 は amamo の簡潔メモリ（update 55 / 40 行）を誤検知した。80 に上げ「churn + 肥大化」の
+# 劣化シグナルに純化することで、簡潔だが活発なメモリ（＝正常運用）を除外する。
+MEMORY_HEAVY_UPDATE_LINE_THRESHOLD = 80
 
 
 def claude_md_unparseable(project_dir: Optional[Path]) -> bool:
@@ -253,18 +244,19 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
             })
 
         # memory_heavy_update: LLM 自己更新が閾値超え (Issue #97 / arXiv:2605.12978)
-        # 更新回数単独では正常な活発更新を誤検知するため、行数との複合条件にする（#353）。
-        # さらに #104: memory_capability が「健全（非 stale・非 superseded）」と判定する memory は
-        # update_count が「活性（良）」として加点される対象なので heavy_update から除外する。
-        # 健全な高頻度更新メモリ（amamo で update 55 / 40 行が誤検知）を「健全 1.00」と
-        # 「要対応」に同時分類する矛盾を、memory_capability と同一 predicate で構造的に断つ。
+        # 更新回数単独では正常な活発更新を誤検知するため、行数（= 内容の肥大化）との複合条件にする（#353）。
+        # #104 再設計: 「churn + 肥大化」の劣化シグナルに純化する。update_count は memory_capability の
+        # use_read 軸で「活性（良）」として加点される指標（＝正の信号）なので、低い閾値で heavy_update を
+        # 発火させると同一 run で「活性（良）」と「要対応（悪）」に二重分類する矛盾を生む。閾値を
+        # update>=10 / 行数>=80 に引き上げ、簡潔だが活発なメモリ（amamo: update 55 / 40 行）を誤検知しない。
+        # 旧 #104 は maintain 軸（freshness）の健全性ゲートで除外したが、temporal メタデータの無い通常
+        # メモリでは detector がほぼ発火せず near-inert になったため撤去した（健全/非健全を問わず肥大化で発火）。
         try:
             temporal = parse_memory_temporal(path)
             update_count = temporal.get("update_count", 0)
             if (
                 update_count >= MEMORY_HEAVY_UPDATE_THRESHOLD
                 and line_count >= MEMORY_HEAVY_UPDATE_LINE_THRESHOLD
-                and not _memory_is_healthy(temporal)  # #104: 健全メモリは活性として除外
             ):
                 issues.append({
                     "type": "memory_heavy_update",
@@ -274,9 +266,6 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
                         "threshold": MEMORY_HEAVY_UPDATE_THRESHOLD,
                         "line_count": line_count,
                         "line_threshold": MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
-                        # 発火時は必ず stale か superseded のいずれか（健全でない）。判断材料に添える。
-                        "stale": is_stale(temporal),
-                        "superseded": is_superseded(temporal),
                     },
                     "source": "build_memory_health_section",
                 })

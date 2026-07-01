@@ -2,19 +2,24 @@
 """audit の memory_heavy_update 検出ロジックのテスト。
 
 Issue #97 / arXiv:2605.12978: LLM 自己更新メモリの劣化警告。
-update_count が閾値 (3) 以上 **かつ** 行数が行数閾値以上の memory entry を
-audit が warning として検出する（#353: 更新回数単独の誤検知を解消）。
+#104 再設計: heavy_update を「churn（高 update_count）+ 肥大化（大行数）」の劣化シグナルに純化する。
+`update_count >= 10` **かつ** 行数 >= 80 の 2 条件で発火（健全性は問わない）。
+
+- update_count は memory_capability の use_read 軸で「活性（良）」として加点される指標（正の信号）。
+  低い閾値（旧 3）で発火させると同一 run で「活性（良）」と「要対応（悪）」に二重分類する矛盾を生む。
+  閾値を引き上げ肥大化との複合に純化することで、通常の活発更新を誤検知しない。
+- amamo の簡潔メモリ（update 55 / 40 行）が誤検知された FP は、行数閾値 80 が救う（40 < 80）。
+- 旧 #104 の健全性ゲート（maintain 軸 = freshness に委ねる）は、temporal メタデータの無い通常メモリで
+  detector がほぼ発火せず near-inert になったため撤去した（健全/非健全を問わず肥大化で発火する）。
 詳細: docs/research/faulty-updated-memories.md
 """
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from audit.issues import (
+from audit.issues import (  # noqa: E402
     collect_issues,
     MEMORY_HEAVY_UPDATE_THRESHOLD,
     MEMORY_HEAVY_UPDATE_LINE_THRESHOLD,
@@ -38,104 +43,109 @@ def _make_memory(
     name: str,
     update_count: int | None,
     extra_lines: int = 0,
-    *,
-    superseded: bool = False,
 ) -> Path:
-    """update_count=None は frontmatter なしファイル。extra_lines で行数を増やす。
+    """update_count=None は frontmatter なしファイル。extra_lines で本文行数を増やす。
 
-    #104: memory_heavy_update は「健全でない（stale/superseded）」memory にのみ発火する。
-    superseded=True で過去日 superseded_at を付与し、非健全（要対応）メモリを作る。
+    line_count = content.count("\\n") + 1（全行数）。本テンプレでは extra_lines>=1 のとき
+    line_count = 6 + extra_lines（frontmatter 4 + `# Body` 1 + 本文 extra_lines）。
+    健全性は heavy_update の判定に無関係になったため superseded は付与しない。
     """
     f = tmp_path / ".claude" / "memory" / name
     if update_count is None:
         f.write_text("# No frontmatter\nContent.\n", encoding="utf-8")
     else:
         body_lines = "\n".join([f"- item {i}" for i in range(extra_lines)])
-        fm = [f"name: {name}", f"update_count: {update_count}"]
-        if superseded:
-            # YAML 非引用のタイムスタンプは datetime に変換されるため引用符で文字列固定
-            fm.append("superseded_at: '2020-01-01T00:00:00Z'")
-        fm_block = "\n".join(fm)
         f.write_text(
-            f"---\n{fm_block}\n---\n# Body\n{body_lines}\n",
+            f"---\nname: {name}\nupdate_count: {update_count}\n---\n# Body\n{body_lines}\n",
             encoding="utf-8",
         )
     return f
 
 
-def test_threshold_default_is_three():
-    """閾値定数は 3。"""
-    assert MEMORY_HEAVY_UPDATE_THRESHOLD == 3
+def _heavy(issues):
+    return [i for i in issues if i["type"] == "memory_heavy_update"]
 
 
-def test_line_threshold_exported():
-    """行数閾値定数が export されている（#353 の複合条件用）。"""
-    assert isinstance(MEMORY_HEAVY_UPDATE_LINE_THRESHOLD, int)
-    assert MEMORY_HEAVY_UPDATE_LINE_THRESHOLD > 0
+def test_update_threshold_default_is_ten():
+    """update 閾値定数は 10（#104 で 3→10 に引き上げ）。"""
+    assert MEMORY_HEAVY_UPDATE_THRESHOLD == 10
 
 
-def test_at_threshold_with_large_content_detected(tmp_path):
-    """update_count == 3 かつ 行数 >= 行数閾値 かつ 非健全（superseded）→ issue が出る（#104）。"""
+def test_line_threshold_default_is_eighty():
+    """行数閾値定数は 80（#104 で 30→80 に引き上げ・amamo 40 行を除外）。"""
+    assert MEMORY_HEAVY_UPDATE_LINE_THRESHOLD == 80
+
+
+def test_bloated_churned_memory_detected(tmp_path):
+    """update_count == 10 かつ 行数 >= 80 → issue が出る（健全でも発火）。"""
     _setup_minimal_project(tmp_path)
-    # 行数閾値を超えるコンテンツ + superseded（非健全）
-    _make_memory(tmp_path, "heavy.md", update_count=3,
-                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD, superseded=True)
+    _make_memory(tmp_path, "heavy.md", update_count=10,
+                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD)  # line_count = 86
 
-    issues = collect_issues(tmp_path)
-    heavy = [i for i in issues if i["type"] == "memory_heavy_update"]
-
+    heavy = _heavy(collect_issues(tmp_path))
     assert len(heavy) == 1
-    assert heavy[0]["detail"]["update_count"] == 3
-    assert heavy[0]["detail"]["threshold"] == 3
-    assert heavy[0]["detail"]["superseded"] is True
+    assert heavy[0]["detail"]["update_count"] == 10
+    assert heavy[0]["detail"]["threshold"] == 10
+    assert heavy[0]["detail"]["line_threshold"] == 80
     assert heavy[0]["source"] == "build_memory_health_section"
     assert heavy[0]["file"].endswith("heavy.md")
 
 
-def test_above_threshold_with_large_content_detected(tmp_path):
-    """update_count > 3 かつ 行数 >= 行数閾値 かつ 非健全 も検出される（#104）。"""
-    _setup_minimal_project(tmp_path)
-    _make_memory(tmp_path, "very_heavy.md", update_count=7,
-                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD, superseded=True)
+def test_healthy_bloated_memory_still_detected(tmp_path):
+    """#104 再設計の核: 健全（superseded なし）でも肥大化 + churn なら発火する。
 
-    issues = collect_issues(tmp_path)
-    heavy = [i for i in issues if i["type"] == "memory_heavy_update"]
-
-    assert len(heavy) == 1
-    assert heavy[0]["detail"]["update_count"] == 7
-
-
-def test_below_threshold_not_detected(tmp_path):
-    """update_count < 3 → memory_heavy_update 出ない（行数・健全性に関わらず）。"""
-    _setup_minimal_project(tmp_path)
-    _make_memory(tmp_path, "light.md", update_count=2,
-                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD, superseded=True)
-
-    issues = collect_issues(tmp_path)
-    heavy = [i for i in issues if i["type"] == "memory_heavy_update"]
-
-    assert heavy == []
-
-
-def test_healthy_heavy_memory_not_detected(tmp_path):
-    """#104: 健全（非 stale・非 superseded）memory は高 update_count・大行数でも検出しない。
-
-    amamo で update 55 / 40 行の健全メモリが memory_capability=1.00（健全）と
-    memory_heavy_update（要対応）に同時分類された矛盾の回帰封じ。update_count は
-    memory_capability の use 軸で「活性（良）」として加点される指標なので、健全メモリでは
-    heavy_update を出さない。
+    旧 #104 の健全性ゲートは metadata 無し通常メモリで detector を near-inert にした。
+    撤去後は健全メモリでも肥大化していれば警告する（元 detector の劣化検出目的を回復）。
     """
     _setup_minimal_project(tmp_path)
-    # 高 update_count + 大行数 だが superseded なし（= 健全）
-    _make_memory(tmp_path, "healthy_active.md", update_count=55,
-                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD + 10, superseded=False)
+    _make_memory(tmp_path, "healthy_bloated.md", update_count=55,
+                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD)  # line_count = 86, 健全
 
-    issues = collect_issues(tmp_path)
-    heavy = [i for i in issues if i["type"] == "memory_heavy_update"]
-
-    assert heavy == [], (
-        f"健全な高頻度更新メモリが誤検知された（#104 の矛盾再発）: {heavy}"
+    heavy = _heavy(collect_issues(tmp_path))
+    assert len(heavy) == 1, (
+        f"健全でも肥大化 + churn なら発火すべき（near-inert 回帰封じ）: {heavy}"
     )
+    assert heavy[0]["detail"]["update_count"] == 55
+
+
+def test_amamo_concise_active_not_detected(tmp_path):
+    """#104 FP 回帰封じ: update 55 / ~46 行（簡潔だが活発）は発火しない（行数 < 80）。"""
+    _setup_minimal_project(tmp_path)
+    # extra_lines=40 → line_count = 46（< 80）。amamo の実 FP を再現。
+    _make_memory(tmp_path, "amamo_concise.md", update_count=55, extra_lines=40)
+
+    heavy = _heavy(collect_issues(tmp_path))
+    assert heavy == [], (
+        f"簡潔だが活発なメモリ（amamo: update 55 / ~46 行）が誤検知された（#104 FP 再発）: {heavy}"
+    )
+
+
+def test_below_update_threshold_not_detected(tmp_path):
+    """update_count < 10 → 行数が大きくても発火しない。"""
+    _setup_minimal_project(tmp_path)
+    _make_memory(tmp_path, "few_updates.md", update_count=9,
+                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD)  # line_count = 86 だが update 9
+
+    assert _heavy(collect_issues(tmp_path)) == []
+
+
+def test_below_line_threshold_not_detected(tmp_path):
+    """行数 < 80 → update_count が大きくても発火しない（複合条件・#353）。"""
+    _setup_minimal_project(tmp_path)
+    _make_memory(tmp_path, "concise.md", update_count=15, extra_lines=40)  # line_count = 46
+
+    assert _heavy(collect_issues(tmp_path)) == []
+
+
+def test_boundary_exact_thresholds_detected(tmp_path):
+    """境界: update_count == 10 かつ line_count == 80 ちょうどで発火する（>= 判定）。"""
+    _setup_minimal_project(tmp_path)
+    # extra_lines=74 → line_count = 6 + 74 = 80 ちょうど。
+    _make_memory(tmp_path, "boundary.md", update_count=10, extra_lines=74)
+
+    heavy = _heavy(collect_issues(tmp_path))
+    assert len(heavy) == 1
+    assert heavy[0]["detail"]["line_count"] == 80
 
 
 def test_zero_update_count_not_detected(tmp_path):
@@ -143,47 +153,27 @@ def test_zero_update_count_not_detected(tmp_path):
     _setup_minimal_project(tmp_path)
     _make_memory(tmp_path, "untracked.md", update_count=None)
 
-    issues = collect_issues(tmp_path)
-    heavy = [i for i in issues if i["type"] == "memory_heavy_update"]
+    assert _heavy(collect_issues(tmp_path)) == []
 
-    assert heavy == []
-
-
-# ---------- #353: 複合条件テスト (更新回数単独では誤検知しない) ----------
 
 def test_high_update_count_but_small_content_not_detected(tmp_path):
-    """#353: 高 update_count でも行数が閾値未満なら memory_heavy_update を出さない。
+    """#353: 高 update_count でも行数が閾値未満なら発火しない。
 
-    コスト最適化メモリ（7回更新だが内容が少ない）を誤検知していた問題を修正。
-    更新回数だけ多いものは正常な活発運用とみなす。
+    コスト最適化メモリ（15回更新だが内容が少ない）を誤検知しない。更新だけ多いものは
+    正常な活発運用とみなす（heavy_update は肥大化との複合でのみ警告する）。
     """
     _setup_minimal_project(tmp_path)
-    # update_count = 7（高い）、extra_lines = 0（行数小）
-    _make_memory(tmp_path, "active_small.md", update_count=7, extra_lines=0)
+    _make_memory(tmp_path, "active_small.md", update_count=15, extra_lines=0)
 
-    issues = collect_issues(tmp_path)
-    heavy = [i for i in issues if i["type"] == "memory_heavy_update"]
-
-    assert heavy == [], (
-        f"高 update_count だが小さいメモリが誤検知された: {heavy}\n"
-        f"（行数閾値: {MEMORY_HEAVY_UPDATE_LINE_THRESHOLD}）"
-    )
+    assert _heavy(collect_issues(tmp_path)) == []
 
 
 def test_high_update_count_and_large_content_detected(tmp_path):
-    """#353/#104: 高 update_count かつ 行数大 かつ 非健全 → memory_heavy_update フラグが立つ。
-
-    3 条件が揃った場合のみ警告する（更新が多く内容も肥大化 かつ 健全でない = 劣化リスクあり）。
-    """
+    """#353/#104: 高 update_count かつ 行数大 → memory_heavy_update フラグが立つ。"""
     _setup_minimal_project(tmp_path)
-    # update_count = 7（高い）、extra_lines = 行数閾値（大きい）、superseded（非健全）
-    _make_memory(tmp_path, "active_large.md", update_count=7,
-                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD, superseded=True)
+    _make_memory(tmp_path, "active_large.md", update_count=15,
+                 extra_lines=MEMORY_HEAVY_UPDATE_LINE_THRESHOLD)  # line_count = 86
 
-    issues = collect_issues(tmp_path)
-    heavy = [i for i in issues if i["type"] == "memory_heavy_update"]
-
-    assert len(heavy) == 1, (
-        f"高 update_count かつ 大きい非健全メモリが未検出: {heavy}\n"
-        f"（行数閾値: {MEMORY_HEAVY_UPDATE_LINE_THRESHOLD}）"
-    )
+    heavy = _heavy(collect_issues(tmp_path))
+    assert len(heavy) == 1
+    assert heavy[0]["detail"]["update_count"] == 15
