@@ -4,6 +4,7 @@
 
 ### Fixed
 - **fix(store): read 層の pj_slug alias fold を 5 reader に適用（closes #112）** — PJ rename（rl-anything→evolve-anything）で legacy 旧 slug タグのレコードが `rec.get("pj_slug") != slug` の厳密一致で落ち、canonical slug の read から不可視になっていた 5 reader（`correction_semantic/bootstrap_backlog._read_backlog` / `subagent_traces/store.read_traces` / `audit/reward_ema.read_reward_ema` / `verbosity/store.read_candidates` + `read_verdicts`）を、`daily_review._read_new` が既に使う `store_read_union.pj_slug_match`（canonical fold・alias は read 専用・write は現 slug 固定）へ統一。単一ソースに集約し二重実装を回避。TDD 5件・決定論・LLM 非依存。
+- **test: test_pj_slug_extraction を worktree 非依存に hermetic 化（closes #114）** — `scripts/tests/test_token_usage_ingest.py::test_pj_slug_extraction` が `_REPO_ROOT` の basename を期待値に使い、worktree 実行では実 cwd basename（`agent-<hash>`）が漏れて落ちていた。`pj_slug.pj_id_to_slug` の `root` 引数で探索起点を tmp_path に固定し、tmp_path 下に実在 dir を作って cwd 非依存で検証する（本体コードは変更なし）。
 
 ## [1.114.1] - 2026-07-01
 

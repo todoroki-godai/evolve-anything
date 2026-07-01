@@ -147,15 +147,20 @@ def test_parse_sidechain_flag(ingest):
     assert rec["is_sidechain"] is True
 
 
-def test_pj_slug_extraction(ingest):
-    # #68: pj_slug.pj_id_to_slug に委譲。fs 上に実在する encoded path は正しい basename
-    # （`-` を含む dir 名でも貪欲復元）。この repo 自身の cwd は必ず実在する。
-    here = "-" + str(_REPO_ROOT).lstrip("/").replace("/", "-")
-    assert ingest._pj_slug_from_id(here) == "evolve-anything"
-    # fs 解決不能な相対/架空名は legacy 末尾 split に fallback（決定論）
-    assert ingest._pj_slug_from_id("evolve-anything") == "anything"
+def test_pj_slug_extraction(tmp_path):
+    # #68: _pj_slug_from_id は pj_slug.pj_id_to_slug に委譲する。fs 上に実在する encoded path は
+    # 正しい basename（`-` を含む dir 名でも貪欲復元）。
+    # #114: cwd/worktree 非依存に hermetic 化 — 実 cwd の basename（worktree 実行では
+    # `agent-<hash>`）に依存せず、pj_id_to_slug の root 引数で探索起点を tmp_path に固定し、
+    # tmp_path 下に実在 dir を作って検証する（本体コードは変更しない）。
+    from pj_slug import pj_id_to_slug
+
+    (tmp_path / "evolve-anything").mkdir()
+    assert pj_id_to_slug("-evolve-anything", root=tmp_path) == "evolve-anything"
+    # fs 解決不能な架空名（tmp_path 下に作らない）は legacy 末尾 split に fallback（決定論）
+    assert pj_id_to_slug("nope-missing-anything", root=tmp_path) == "anything"
     # フォールバック: 空文字列なら入力を返す
-    assert ingest._pj_slug_from_id("") == ""
+    assert pj_id_to_slug("", root=tmp_path) == ""
 
 
 def _write_pj(tmp_path, pj_name, lines, mtime=None):
