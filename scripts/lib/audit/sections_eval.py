@@ -5,7 +5,9 @@ sections.py が hard 行数バジェット（800）に達したため、eval sat
 契約（`(project_dir) -> Optional[List[str]]`）は sections.py の他 builder と同一。
 """
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+from .advisory import build_advisory_section
 
 
 def _triggers_by_skill(project_dir: Path) -> Optional[Dict[str, List[str]]]:
@@ -43,41 +45,46 @@ def build_eval_saturation_section(project_dir: Path) -> Optional[List[str]]:
     - eval set はあるが飽和なし → 「評価したが飽和兆候なし ✓」（silence != evaluated）
     - 飽和あり → ⚠ で対象スキルと飽和理由、eval 再生成 / near-miss 強化を提案
     """
-    try:
+    def compute(proj: Path) -> Optional[Dict[str, Any]]:
+        try:
+            import eval_saturation
+        except ImportError:
+            return None
+        triggers = _triggers_by_skill(proj)
+        try:
+            return eval_saturation.compute_eval_saturation(triggers_by_skill=triggers)
+        except Exception:
+            return None
+
+    def render(result: Dict[str, Any]) -> List[str]:
         import eval_saturation
-    except ImportError:
-        return None
 
-    triggers = _triggers_by_skill(project_dir)
-    try:
-        result = eval_saturation.compute_eval_saturation(triggers_by_skill=triggers)
-    except Exception:
-        return None
+        evaluated = result.get("evaluated", 0)
+        saturated = result.get("saturated", [])
+        if not saturated:
+            return [
+                f"✓ 評価したが飽和兆候なし（{evaluated} 件の eval set を診断、緑＝頑健とみなせる）",
+            ]
 
-    if not result.get("applicable"):
-        return None  # eval 未生成の環境 → 対象外
-
-    header = ["## Eval Saturation (trigger eval 飽和度)", ""]
-    evaluated = result.get("evaluated", 0)
-    saturated = result.get("saturated", [])
-    if not saturated:
-        return header + [
-            f"✓ 評価したが飽和兆候なし（{evaluated} 件の eval set を診断、緑＝頑健とみなせる）",
-            "",
+        lines = [
+            "⚠ trigger eval set に飽和兆候あり（緑でも頑健性を保証しない）。"
+            "fresh session で eval 再生成 or near-miss negative の追加を検討:",
         ]
+        for s in saturated:
+            labels = ", ".join(
+                eval_saturation.REASON_LABELS.get(r, r) for r in s.get("reasons", [])
+            )
+            nratio = s.get("negative_ratio", 0.0)
+            lines.append(
+                f"  - {s['skill']}: {labels} "
+                f"(queries={s.get('total', 0)}, neg={nratio:.0%})"
+            )
+        return lines
 
-    lines = header + [
-        "⚠ trigger eval set に飽和兆候あり（緑でも頑健性を保証しない）。"
-        "fresh session で eval 再生成 or near-miss negative の追加を検討:",
-    ]
-    for s in saturated:
-        labels = ", ".join(
-            eval_saturation.REASON_LABELS.get(r, r) for r in s.get("reasons", [])
-        )
-        nratio = s.get("negative_ratio", 0.0)
-        lines.append(
-            f"  - {s['skill']}: {labels} "
-            f"(queries={s.get('total', 0)}, neg={nratio:.0%})"
-        )
-    lines.append("")
-    return lines
+    return build_advisory_section(
+        project_dir,
+        title="Eval Saturation (trigger eval 飽和度)",
+        compute=compute,
+        applicable=lambda result: bool(result.get("applicable")),
+        render=render,
+    )

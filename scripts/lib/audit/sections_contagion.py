@@ -16,45 +16,53 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import memory_contagion
+from .advisory import build_advisory_section
 
 
 def build_memory_contagion_section(project_dir: Optional[Path]) -> Optional[List[str]]:
     """評価源バイアスの記憶伝播を audit に surface する（#73）。"""
-    report = memory_contagion.compute_contagion(Path(project_dir))
 
-    # 評価データが 1 件も無い PJ はこのチェック非該当 → 沈黙。
-    if not report.applicable:
-        return None
+    def compute(proj: Path):
+        return memory_contagion.compute_contagion(proj)
 
-    header = ["## Memory Contagion（評価源バイアス伝播）", ""]
-    breakdown = (
-        f"human={report.human_total} / machine={report.machine_total}"
-        f"（corrections: human {report.human_corrections} / machine {report.machine_corrections} ・ "
-        f"idioms: confirmed {report.confirmed_idioms} / unconfirmed {report.unconfirmed_idioms}）"
+    def applicable(report) -> bool:
+        # 評価データが 1 件も無い PJ はこのチェック非該当 → 沈黙。
+        return report.applicable
+
+    def render(report) -> List[str]:
+        breakdown = (
+            f"human={report.human_total} / machine={report.machine_total}"
+            f"（corrections: human {report.human_corrections} / machine {report.machine_corrections} ・ "
+            f"idioms: confirmed {report.confirmed_idioms} / unconfirmed {report.unconfirmed_idioms}）"
+        )
+
+        if report.verdict == "contagion_risk":
+            return [
+                "⚠ 機械評価源の蓄積が人間確認源を大きく上回っています（authority bias 増幅の兆候）。"
+                "偏った評価源の経験が記憶 / correction に蓄積され、将来の提案・採点に伝染する可能性"
+                "（Memory Contagion）。`/evolve-anything:reflect` の昇格や今日の修正確認で人間確認源を"
+                "増やし、評価源のバランスを取り戻してください（advisory・スコアには影響しません, #73）。",
+                breakdown,
+            ]
+
+        if report.verdict == "no_human_baseline":
+            return [
+                "ℹ 人間確認源がゼロのため評価源バイアスを判定できません（比較基準が無い）。"
+                "`/evolve-anything:reflect` / 今日の修正確認（daily-review）で確認を回すと基準が立ち、"
+                "以降は偏りを検出できるようになります（advisory, #73）。",
+                breakdown,
+            ]
+
+        # healthy
+        return [
+            "✓ no contagion signal（評価源バランス健全）",
+            breakdown,
+        ]
+
+    return build_advisory_section(
+        project_dir,
+        title="Memory Contagion（評価源バイアス伝播）",
+        compute=compute,
+        applicable=applicable,
+        render=render,
     )
-
-    if report.verdict == "contagion_risk":
-        return header + [
-            "⚠ 機械評価源の蓄積が人間確認源を大きく上回っています（authority bias 増幅の兆候）。"
-            "偏った評価源の経験が記憶 / correction に蓄積され、将来の提案・採点に伝染する可能性"
-            "（Memory Contagion）。`/evolve-anything:reflect` の昇格や今日の修正確認で人間確認源を"
-            "増やし、評価源のバランスを取り戻してください（advisory・スコアには影響しません, #73）。",
-            breakdown,
-            "",
-        ]
-
-    if report.verdict == "no_human_baseline":
-        return header + [
-            "ℹ 人間確認源がゼロのため評価源バイアスを判定できません（比較基準が無い）。"
-            "`/evolve-anything:reflect` / 今日の修正確認（daily-review）で確認を回すと基準が立ち、"
-            "以降は偏りを検出できるようになります（advisory, #73）。",
-            breakdown,
-            "",
-        ]
-
-    # healthy
-    return header + [
-        "✓ no contagion signal（評価源バランス健全）",
-        breakdown,
-        "",
-    ]

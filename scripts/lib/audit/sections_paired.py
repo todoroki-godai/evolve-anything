@@ -23,6 +23,8 @@ observability contract から参照される `build_*_section` 契約
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .advisory import build_advisory_section
+
 # usage/sessions の取得窓（sections_multiview / sections_outcome の days=30 と揃える）。
 _LOOKBACK_DAYS = 30
 
@@ -61,52 +63,52 @@ def build_paired_trajectory_section(project_dir: Path) -> Optional[List[str]]:
     - usage はあるが paired バケットが 1 つも組めない → 「評価したが対照対象なし」ℹ 行
     - paired デルタが算出できたら surface（regression が無くても「評価したが回帰なし ✓」を出す）
     """
-    proj = Path(project_dir)
-    inputs = _gather_inputs(proj)
-    if inputs is None:
-        return None
+    def compute(proj: Path) -> Optional[Dict[str, Any]]:
+        return _gather_inputs(proj)
 
-    from .usage import compute_paired_trajectory
+    def render(inputs: Dict[str, Any]) -> List[str]:
+        from .usage import compute_paired_trajectory
 
-    paired = compute_paired_trajectory(
-        usage=inputs["usage"], sessions=inputs["sessions"]
-    )
-
-    header = [
-        "## Paired Trajectory (同一タスク種別での skill 有/無の挙動対照・advisory — スコア重みには未反映)",
-        "",
-        "スキルを使ったセッションと使わなかったセッションで、一発成功率"
-        "（修正なしで完了できた割合）に差が出ているかを既存ログから比べます。"
-        "新たに実行し直すのではなく、すでに記録済みのテレメトリだけで観測します"
-        "（参考値・スコアには反映しません）。LLM を使わず決定論で算出。",
-        "",
-    ]
-
-    if not paired:
-        return header + [
-            "ℹ 評価したが paired 対照対象なし"
-            "（同一 task-type で skill 有/無の両群が揃うセッションが不足）。",
-            "",
-        ]
-
-    regressions = [r for r in paired if r.get("regression")]
-    if not regressions:
-        return header + [
-            f"✓ 評価したが挙動回帰なし（{len(paired)} スキルを paired 対照、"
-            "skill 有のほうが一発成功率を下げた事例は検出されず）。",
-            "",
-        ]
-
-    lines = header + [
-        "⚠ 同一タスクで skill 有のほうが一発成功率が低い（挙動を悪化させた疑い）。"
-        "`/evolve-anything:evolve-skill` で該当スキルの見直しを検討:",
-    ]
-    for r in regressions:
-        lines.append(
-            f"- **{r['skill']}** (Δ{r['behavior_delta']:+.0%}): "
-            f"有={r['with_success']:.0%} (n={r['n_with']}) / "
-            f"無={r['without_success']:.0%} (n={r['n_without']}) "
-            f"— {r['paired_task_types']} task-type で対照"
+        paired = compute_paired_trajectory(
+            usage=inputs["usage"], sessions=inputs["sessions"]
         )
-    lines.append("")
-    return lines
+
+        if not paired:
+            return [
+                "ℹ 評価したが paired 対照対象なし"
+                "（同一 task-type で skill 有/無の両群が揃うセッションが不足）。",
+            ]
+
+        regressions = [r for r in paired if r.get("regression")]
+        if not regressions:
+            return [
+                f"✓ 評価したが挙動回帰なし（{len(paired)} スキルを paired 対照、"
+                "skill 有のほうが一発成功率を下げた事例は検出されず）。",
+            ]
+
+        lines = [
+            "⚠ 同一タスクで skill 有のほうが一発成功率が低い（挙動を悪化させた疑い）。"
+            "`/evolve-anything:evolve-skill` で該当スキルの見直しを検討:",
+        ]
+        for r in regressions:
+            lines.append(
+                f"- **{r['skill']}** (Δ{r['behavior_delta']:+.0%}): "
+                f"有={r['with_success']:.0%} (n={r['n_with']}) / "
+                f"無={r['without_success']:.0%} (n={r['n_without']}) "
+                f"— {r['paired_task_types']} task-type で対照"
+            )
+        return lines
+
+    return build_advisory_section(
+        project_dir,
+        title="Paired Trajectory (同一タスク種別での skill 有/無の挙動対照・advisory — スコア重みには未反映)",
+        blurb=[
+            "スキルを使ったセッションと使わなかったセッションで、一発成功率"
+            "（修正なしで完了できた割合）に差が出ているかを既存ログから比べます。"
+            "新たに実行し直すのではなく、すでに記録済みのテレメトリだけで観測します"
+            "（参考値・スコアには反映しません）。LLM を使わず決定論で算出。",
+        ],
+        compute=compute,
+        applicable=lambda inputs: True,
+        render=render,
+    )

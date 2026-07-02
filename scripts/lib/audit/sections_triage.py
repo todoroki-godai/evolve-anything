@@ -19,6 +19,8 @@ observability contract から参照される `build_*_section` 契約
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .advisory import build_advisory_section
+
 # findings に件数を出す triage アクション（OK は「変更なし」なので件数行から除外）。
 _TRIAGE_COUNT_ACTIONS = ("CREATE", "UPDATE", "SPLIT", "MERGE")
 
@@ -54,17 +56,23 @@ def build_skill_triage_section(project_dir: Path) -> Optional[List[str]]:
     であって指示の置き場ではない。指示（MUST）は SKILL.md Step 3.8 に移管し、ここは
     「実データがどこにあるか」を案内する findings 行に留める。
     """
-    if not _has_custom_skills(project_dir):
-        return None
+    def compute(proj: Path) -> Optional[bool]:
+        return True if _has_custom_skills(proj) else None
 
-    return [
-        "## Skill Triage (CREATE/UPDATE/SPLIT/MERGE)",
-        "",
-        "実データは `result[\"phases\"][\"skill_triage\"]` の CREATE / UPDATE / "
-        "SPLIT / MERGE（各リストの件数と上位候補）にある。trajectory 由来の新スキル候補"
-        "（CREATE）は埋没しやすいレーン（#478）。表示手順は evolve SKILL.md Step 3.8。",
-        "",
-    ]
+    def render(_data: bool) -> List[str]:
+        return [
+            "実データは `result[\"phases\"][\"skill_triage\"]` の CREATE / UPDATE / "
+            "SPLIT / MERGE（各リストの件数と上位候補）にある。trajectory 由来の新スキル候補"
+            "（CREATE）は埋没しやすいレーン（#478）。表示手順は evolve SKILL.md Step 3.8。",
+        ]
+
+    return build_advisory_section(
+        project_dir,
+        title="Skill Triage (CREATE/UPDATE/SPLIT/MERGE)",
+        compute=compute,
+        applicable=lambda _data: True,
+        render=render,
+    )
 
 
 def build_skill_triage_counts_lines(
