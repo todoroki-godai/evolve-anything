@@ -102,10 +102,19 @@ def _builder_modules() -> List[str]:
     return sorted({builder.__module__ for _, builder in _obs._OBSERVABILITY_BUILDERS})
 
 
+# #122 Phase 4: observability builder を audit.sections → audit.sections_meta へ物理移設した。
+# report-format 系（build_corrections_insights_section 等）は audit.sections に残置しており、
+# その供給モジュール corrections_insights.CORRECTIONS_FILE は generate_report が読むため
+# snapshot テストの _isolate_env が今も中和する。builder が居なくなった audit.sections を
+# 走査集合に明示追加し、report-format 側供給定数への到達性（= ガードの検出力）を維持する。
+_REPORT_FORMAT_SECTION_MODULES = ("audit.sections",)
+
+
 def _candidate_modules() -> Set[str]:
-    """builder モジュール本体 + それらが import する供給モジュール群。"""
+    """builder モジュール本体 + それらが import する供給モジュール群（+ report-format 残置モジュール）。"""
     candidates: Set[str] = set(_builder_modules())
-    for bm in _builder_modules():
+    candidates |= set(_REPORT_FORMAT_SECTION_MODULES)
+    for bm in candidates.copy():
         candidates |= _imported_module_names(bm)
     return candidates
 
