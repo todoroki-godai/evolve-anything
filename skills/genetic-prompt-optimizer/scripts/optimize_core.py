@@ -21,6 +21,11 @@ if _LIB_PATH not in sys.path:
 PITFALLS_MAX_ROWS = 50
 PITFALLS_HEADER = "| Source | Pattern | Score |\n|--------|---------|-------|\n"
 
+# GEPA ガードレール（#120）: context に全文投入する pitfalls.md の文字数上限。
+# 入力肥大化（プロンプト bloat → 過学習）を抑える。値 8000 は他ドメイン流用でなく
+# 当 PJ の pitfalls.md 実測（最大 ≈3,900 chars）への dry-run 較正で決定した headroom 2x。
+MAX_CONTEXT_PITFALLS_CHARS = 8000
+
 
 # ── corrections / context 収集 ─────────────────────────────────────
 
@@ -86,7 +91,11 @@ def collect_context(
     try:
         pitfalls_file = target_path.parent / "references" / "pitfalls.md"
         if pitfalls_file.exists():
-            context["pitfalls"] = pitfalls_file.read_text(encoding="utf-8")
+            text = pitfalls_file.read_text(encoding="utf-8")
+            if len(text) > MAX_CONTEXT_PITFALLS_CHARS:
+                # 入力肥大化ガード（#120）: 先頭 N 文字に切り詰め、切り詰めた旨を明示。
+                text = text[:MAX_CONTEXT_PITFALLS_CHARS] + "\n…（context budget #120 で切り詰め）"
+            context["pitfalls"] = text
     except OSError as e:
         print(f"Warning: pitfalls.md 読み込み失敗: {e}", file=sys.stderr)
 
@@ -296,6 +305,8 @@ def format_gate_reason(reason: Optional[str]) -> str:
         return "パッチ内容が空です"
     if reason.startswith("line_limit_exceeded"):
         return f"行数制限超過（{reason}）"
+    if reason.startswith("char_limit_exceeded"):
+        return f"文字数制限超過（bloat 抑制・#120）（{reason}）"
     if reason.startswith("forbidden_pattern"):
         return f"禁止パターン検出（{reason}）"
     if reason.startswith("pitfall_pattern"):
@@ -313,12 +324,17 @@ def run_regression_gate(
     original: Optional[str],
     max_lines: int,
     pitfall_path: Optional[str],
+    max_chars: Optional[int] = None,
 ) -> Tuple[bool, Optional[str]]:
-    """構造的必要条件のハードゲートチェック。regression_gate に委譲。"""
+    """構造的必要条件のハードゲートチェック。regression_gate に委譲。
+
+    max_chars は #120 GEPA ガードレール（行内 bloat 捕捉）。None なら char ゲート非適用。
+    """
     result = check_gates(
         candidate=content,
         original=original,
         max_lines=max_lines,
+        max_chars=max_chars,
         pitfall_patterns_path=pitfall_path,
     )
     if result.passed:
@@ -479,11 +495,13 @@ def generate_candidate(
     claude_cwd: Optional[str],
     max_lines: int,
     pitfall_path: Optional[str],
+    max_chars: Optional[int] = None,
 ) -> Dict[str, Any]:
     """1候補を生成してゲート判定まで行う（PopulationBroadcastOptimizer から利用）。
 
     warn-only の pre_check を実行し、warnings を標準出力に出力する。
     regression_gate を通過した場合のみ passed=True を返す。
+    max_chars は #120 GEPA ガードレール（行内 bloat 捕捉）。None なら char ゲート非適用。
     """
     from regression_gate import pre_check  # type: ignore[import]
 
@@ -500,7 +518,7 @@ def generate_candidate(
         print(f"[pre_check warn] {w}")
 
     passed, gate_reason = run_regression_gate(
-        content, original_content, max_lines, pitfall_path
+        content, original_content, max_lines, pitfall_path, max_chars=max_chars
     )
     return {
         "content": content,

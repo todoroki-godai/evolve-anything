@@ -88,6 +88,36 @@ def test_format_gate_reason_frontmatter():
     assert core.format_gate_reason("frontmatter_lost") == "YAML frontmatter が消失しました"
 
 
+def test_format_gate_reason_char_limit():
+    # #120 GEPA: 文字数上限超過の理由がユーザー向けに変換される。
+    reason = "char_limit_exceeded(120000/100000)"
+    result = core.format_gate_reason(reason)
+    assert "文字数制限超過" in result
+    assert "char_limit_exceeded" in result
+
+
+# ── run_regression_gate max_chars 配線（#120）──────────────────────────
+
+
+def test_run_regression_gate_threads_max_chars():
+    # 行数は少なくても char_limit を超えれば block（行内 bloat 捕捉）。
+    content = "# Skill\n" + "x" * 500
+    passed, reason = core.run_regression_gate(
+        content, None, max_lines=500, pitfall_path=None, max_chars=100
+    )
+    assert passed is False
+    assert reason.startswith("char_limit_exceeded")
+
+
+def test_run_regression_gate_max_chars_none_skips():
+    # max_chars 未指定なら char ゲート非適用（後方互換）。
+    content = "# Skill\n" + "x" * 500
+    passed, reason = core.run_regression_gate(
+        content, None, max_lines=500, pitfall_path=None
+    )
+    assert passed is True
+
+
 # ── determine_strategy ──────────────────────────────────────────────
 
 
@@ -176,6 +206,37 @@ def test_collect_context_no_pitfalls(tmp_path):
 
     ctx = core.collect_context(skill_file, tmp_path, "sk")
     assert "pitfalls" not in ctx
+
+
+def test_collect_context_truncates_large_pitfalls(tmp_path):
+    # #120 GEPA 入力肥大化ガード: 上限超の pitfalls.md は切り詰めて context 投入する。
+    skill_dir = tmp_path / "my-skill"
+    (skill_dir / "references").mkdir(parents=True)
+    huge = "# pitfalls\n" + "x" * (core.MAX_CONTEXT_PITFALLS_CHARS + 5000)
+    (skill_dir / "references" / "pitfalls.md").write_text(huge, encoding="utf-8")
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text("---\nname: my-skill\n---\n", encoding="utf-8")
+
+    ctx = core.collect_context(skill_file, tmp_path, "my-skill")
+    assert "pitfalls" in ctx
+    # 上限 + 切り詰めマーカー分だけに収まる（原文全長は投入しない）。
+    assert len(ctx["pitfalls"]) < len(huge)
+    assert len(ctx["pitfalls"]) <= core.MAX_CONTEXT_PITFALLS_CHARS + 50
+    assert "切り詰め" in ctx["pitfalls"]
+
+
+def test_collect_context_keeps_small_pitfalls_intact(tmp_path):
+    # 上限内の pitfalls は全文保持（切り詰めない）。
+    skill_dir = tmp_path / "sk"
+    (skill_dir / "references").mkdir(parents=True)
+    body = "# pitfalls\n## foo\nbar"
+    (skill_dir / "references" / "pitfalls.md").write_text(body, encoding="utf-8")
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text("---\nname: sk\n---\n", encoding="utf-8")
+
+    ctx = core.collect_context(skill_file, tmp_path, "sk")
+    assert ctx["pitfalls"] == body
+    assert "切り詰め" not in ctx["pitfalls"]
 
 
 # ── record_pitfall ───────────────────────────────────────────────────

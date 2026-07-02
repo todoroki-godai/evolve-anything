@@ -25,12 +25,21 @@ from typing import Any, Dict, List, Optional, Tuple
 GENERATIONS_DIR = Path(__file__).parent / "generations"
 BACKUP_SUFFIX = ".backup"
 MAX_KEPT_RUNS = 5
+# GEPA ガードレール（#120）: 1 パッチに投入する corrections の上限。
+# GEPA 本番知見では最適化サンプルは 20-100 件が最適・500 件超で過学習 + プロンプト肥大化。
+# 当 PJ は最新 10 件（`collect_corrections` の `[-max_items:]`）に絞り過学習側の上限を守る
+# （下限側 20 未満でも error_guided は少数フィードバックで十分機能するため据え置き）。
 MAX_CORRECTIONS_PER_PATCH = 10
 
 # 行数制限は共通モジュールから取得
 _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-from line_limit import MAX_RULE_LINES, MAX_SKILL_LINES, suggest_separation
+from line_limit import (
+    MAX_RULE_LINES,
+    MAX_SKILL_LINES,
+    max_chars_for,
+    suggest_separation,
+)
 sys.path.insert(0, str(_plugin_root / "scripts"))
 from reflect_utils import suggest_paths_frontmatter
 
@@ -107,6 +116,11 @@ class DirectPatchOptimizer:
     @property
     def _max_lines(self) -> int:
         return MAX_RULE_LINES if self._is_rule_file else MAX_SKILL_LINES
+
+    @property
+    def _max_chars(self) -> int:
+        """パッチの文字数上限（#120 GEPA ガードレール・行内 bloat 捕捉）。"""
+        return max_chars_for(self._max_lines)
 
     @property
     def _claude_cwd(self) -> Optional[str]:
@@ -191,7 +205,8 @@ class DirectPatchOptimizer:
         pitfall_path = pitfall_path if Path(pitfall_path).exists() else None
 
         passed, gate_reason = run_regression_gate(
-            patched_content, original_content, self._max_lines, pitfall_path
+            patched_content, original_content, self._max_lines, pitfall_path,
+            max_chars=self._max_chars,
         )
         if not passed:
             reason_msg = format_gate_reason(gate_reason)
@@ -401,6 +416,7 @@ class PopulationBroadcastOptimizer:
 
         is_rule_file = ".claude/rules/" in str(self.target_path)
         max_lines = MAX_RULE_LINES if is_rule_file else MAX_SKILL_LINES
+        max_chars = max_chars_for(max_lines)  # #120 GEPA ガードレール（行内 bloat 捕捉）
         pitfall_path_obj = self.target_path.parent / "references" / "pitfalls.md"
         pitfall_path = str(pitfall_path_obj) if pitfall_path_obj.exists() else None
 
@@ -419,6 +435,7 @@ class PopulationBroadcastOptimizer:
                     self._claude_cwd,
                     max_lines,
                     pitfall_path,
+                    max_chars,
                 )
                 for _ in range(self.n)
             ]

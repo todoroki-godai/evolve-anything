@@ -83,6 +83,60 @@ class TestCheckGates:
         result = check_gates("# Content", max_lines=500)
         assert result.passed is True
 
+    def test_char_limit_超過でブロック(self):
+        # #120 GEPA: 行数は少なくても 1 行が異常に長い bloat を捕捉する。
+        content = "# Skill\n" + "x" * 100  # 2 行だが char は 108
+        result = check_gates(content, max_lines=500, max_chars=50)
+        assert result.passed is False
+        assert result.reason.startswith("char_limit_exceeded")
+        assert "108/50" in result.reason
+
+    def test_char_limit_境界内は通過(self):
+        content = "# Skill\n" + "x" * 40
+        result = check_gates(content, max_lines=500, max_chars=100)
+        assert result.passed is True
+
+    def test_char_limit_None_はスキップ(self):
+        # 既存呼び出し（max_chars 未指定）は char ゲートを適用しない後方互換。
+        content = "# Skill\n" + "x" * 100000
+        result = check_gates(content, max_lines=500)
+        assert result.passed is True
+
+    def test_char_limit_は行数超過より後(self):
+        # 行数超過が優先（先に line_limit_exceeded を返す）。
+        content = "\n".join(["line"] * 600)
+        result = check_gates(content, max_lines=500, max_chars=10)
+        assert result.passed is False
+        assert result.reason.startswith("line_limit_exceeded")
+
+
+class TestMaxCharsFor:
+    """max_chars_for() の較正導出テスト（#120）。"""
+
+    def test_skill_と_rule_で導出(self):
+        from line_limit import MAX_CHARS_PER_LINE, max_chars_for
+
+        assert max_chars_for(500) == 500 * MAX_CHARS_PER_LINE
+        assert max_chars_for(10) == 10 * MAX_CHARS_PER_LINE
+
+    def test_較正値は実ファイル誤ブロックを出さない(self):
+        # (c) dry-run 較正: 当 PJ の全 skill(≤500行)/rule(≤10行) が char 上限内。
+        import glob
+
+        from line_limit import MAX_RULE_LINES, MAX_SKILL_LINES, max_chars_for
+
+        root = Path(__file__).resolve().parents[3]
+        skill_cap = max_chars_for(MAX_SKILL_LINES)
+        for f in glob.glob(str(root / "skills" / "**" / "SKILL.md"), recursive=True):
+            text = Path(f).read_text(encoding="utf-8")
+            if text.count("\n") + 1 <= MAX_SKILL_LINES:
+                assert len(text) <= skill_cap, f"{f} が skill char 上限超過"
+        rule_cap = max_chars_for(MAX_RULE_LINES)
+        for f in glob.glob(str(root / ".claude" / "rules" / "*.md")):
+            text = Path(f).read_text(encoding="utf-8")
+            if text.count("\n") + 1 <= MAX_RULE_LINES:
+                assert len(text) <= rule_cap, f"{f} が rule char 上限超過"
+
 
 class TestGateResult:
     """GateResult dataclass の構造テスト。"""

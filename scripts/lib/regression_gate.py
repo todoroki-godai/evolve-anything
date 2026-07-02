@@ -40,6 +40,7 @@ def check_gates(
     original: Optional[str] = None,
     *,
     max_lines: int,
+    max_chars: Optional[int] = None,
     pitfall_patterns_path: Optional[str] = None,
 ) -> GateResult:
     """全ゲートチェックを実行し結果を返す。
@@ -48,6 +49,9 @@ def check_gates(
         candidate: パッチ候補テキスト
         original: 元のファイル内容（frontmatter 保持チェック用）
         max_lines: 行数上限（必須）。呼び出し側が line_limit.py の定数を参照して渡す
+        max_chars: 文字数上限（任意・#120 GEPA ガードレール）。None なら char ゲートを
+            適用しない（後方互換）。呼び出し側が ``line_limit.max_chars_for(max_lines)``
+            を渡す。行数ゲートを通っても 1 行が異常に長い bloat を捕捉する。
         pitfall_patterns_path: pitfalls.md のパス。None ならスキップ
     """
     # 空コンテンツチェック
@@ -59,6 +63,12 @@ def check_gates(
     if lines > max_lines:
         return GateResult(
             passed=False, reason=f"line_limit_exceeded({lines}/{max_lines})"
+        )
+
+    # 文字数制限チェック（#120 GEPA: 行内 bloat を捕捉。max_chars=None ならスキップ）
+    if max_chars is not None and len(candidate) > max_chars:
+        return GateResult(
+            passed=False, reason=f"char_limit_exceeded({len(candidate)}/{max_chars})"
         )
 
     # 禁止パターンチェック

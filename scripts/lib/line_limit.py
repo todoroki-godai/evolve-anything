@@ -15,6 +15,24 @@ MAX_RULE_LINES = 10
 MAX_PROJECT_RULE_LINES = 10
 CLAUDEMD_WARNING_LINES = 300
 
+# GEPA ガードレール（#120）: 最適化パッチの文字数上限を行上限から導出する。
+# 行数だけでは「行内 bloat（1 行が異常に長い）」を検出できないため、
+# ``max_lines × MAX_CHARS_PER_LINE`` をパッチの char 上限とする（GEPA の
+# プロンプト肥大化抑制知見: 上限を設けると性能低下ほぼ無しで 4x 圧縮）。
+# 値 200 は他ドメイン数値の流用でなく、当 PJ の skill/rule 実ファイルへの
+# dry-run 較正で決定した（誤ブロック 0 件・skill 実測最大 59.7 / rule 実測最大
+# 136.8 chars/line に対し headroom 1.5〜3.4x）。[[learning_gate_design_needs_real_corpus_dryrun]]
+MAX_CHARS_PER_LINE = 200
+
+
+def max_chars_for(max_lines: int) -> int:
+    """行上限からパッチの文字数上限を導出する（#120 GEPA ガードレール）。
+
+    行数ゲートを通っても 1 行あたりの文字数が異常に多いと bloat になるため、
+    ``max_lines × MAX_CHARS_PER_LINE`` を char 上限として regression gate に渡す。
+    """
+    return max_lines * MAX_CHARS_PER_LINE
+
 # Python source ファイルの行数バジェット（audit.py 2046行肥大化の反省、Slice 13）
 # warn: 分割検討を促す / hard: violation として issues に積む
 # __init__.py / migrations / 自動生成ファイルは除外（PYTHON_SOURCE_BUDGET_EXCLUDE_BASENAMES）
