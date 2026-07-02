@@ -64,6 +64,34 @@ def test_warn_line_with_recent_blocks(tmp_path, monkeypatch):
     assert "壊れた要約 A" in combined
 
 
+def test_byte_invariance_clean(tmp_path, monkeypatch):
+    """#115 advisory 共通枠への載せ替えで clean 出力を 1 バイトも変えない。"""
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+    _write_block(tmp_path, "古い block", age_days=90)  # ウィンドウ外
+    assert build_belief_blocks_section(tmp_path) == [
+        "## Belief Entropy Gate（全PJ横断・低信頼 memory ブロック）",
+        "",
+        "✓ 評価したが直近 30 日の block なし（auto-memory の要約はソース corrections を保持）",
+        "",
+    ]
+
+
+def test_byte_invariance_warn(tmp_path, monkeypatch):
+    """#115 載せ替えで warn（件数 + head 列挙）出力を 1 バイトも変えない。"""
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+    _write_block(tmp_path, "壊れた要約 A", age_days=1)
+    _write_block(tmp_path, "壊れた要約 B", age_days=2)
+    assert build_belief_blocks_section(tmp_path) == [
+        "## Belief Entropy Gate（全PJ横断・低信頼 memory ブロック）",
+        "",
+        "⚠ 直近 30 日で 2 件の低信頼要約を書込前に破棄（retention 低 or drift 過剰）。"
+        "頻発する場合は corrections の質か要約プロンプトを点検:",
+        "  - 壊れた要約 A",
+        "  - 壊れた要約 B",
+        "",
+    ]
+
+
 def test_registered_in_observability_contract():
     """belief_blocks が _OBSERVABILITY_BUILDERS に登録されている。"""
     keys = [k for k, _ in _OBSERVABILITY_BUILDERS]

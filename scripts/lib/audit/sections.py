@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .advisory import build_advisory_section
+
 
 def _format_constitutional_report(result: Optional[Dict[str, Any]]) -> Optional[List[str]]:
     """Constitutional Score をレポート用にフォーマットする。"""
@@ -483,45 +485,53 @@ def build_belief_blocks_section(project_dir: Path) -> Optional[List[str]]:
     直近ウィンドウの block が 0 件でも「評価したが直近 block なし ✓」を 1 行残す
     （silence ≠ evaluated）。ログ自体が無い環境（gate 未稼働）は None（対象外）—
     pitfalls.md / CONTEXT.md 不在時と同じ「アーティファクト駆動」の適用判定。
+
+    #115: header/trailer 規約は build_advisory_section に集約。import guard・ログ不在短絡は
+    compute 内に残し、log が存在すれば（count==0 でも）評価対象 → applicable=True。
     """
-    try:
-        import belief_entropy
-    except ImportError:
-        return None
 
-    try:
-        import rl_common
-        data_dir = Path(rl_common.DATA_DIR)
-    except Exception:
-        return None
+    def compute(_proj: Path):
+        try:
+            import belief_entropy
+        except ImportError:
+            return None
+        try:
+            import rl_common
+            data_dir = Path(rl_common.DATA_DIR)
+        except Exception:
+            return None
+        # belief_blocks.jsonl が無い = ゲート未稼働 → 対象外（None）
+        # #67: belief_blocks.jsonl は DATA_DIR 直下の全 PJ 共通ストア。PJ 別 audit でも横断集計。
+        if not (data_dir / belief_entropy.BLOCKS_FILENAME).exists():
+            return None
+        try:
+            return belief_entropy.summarize_blocks(
+                data_dir, days=_BELIEF_BLOCKS_WINDOW_DAYS
+            )
+        except Exception:
+            return None
 
-    # belief_blocks.jsonl が無い = ゲート未稼働 → 対象外（None）
-    if not (data_dir / belief_entropy.BLOCKS_FILENAME).exists():
-        return None
-
-    try:
-        count, heads = belief_entropy.summarize_blocks(
-            data_dir, days=_BELIEF_BLOCKS_WINDOW_DAYS
-        )
-    except Exception:
-        return None
-
-    # #67: belief_blocks.jsonl は DATA_DIR 直下の全 PJ 共通ストア。PJ 別 audit でも横断集計。
-    header = ["## Belief Entropy Gate（全PJ横断・低信頼 memory ブロック）", ""]
-    if count <= 0:
-        return header + [
-            f"✓ 評価したが直近 {_BELIEF_BLOCKS_WINDOW_DAYS} 日の block なし"
-            "（auto-memory の要約はソース corrections を保持）",
-            "",
+    def render(data) -> List[str]:
+        count, heads = data
+        if count <= 0:
+            return [
+                f"✓ 評価したが直近 {_BELIEF_BLOCKS_WINDOW_DAYS} 日の block なし"
+                "（auto-memory の要約はソース corrections を保持）",
+            ]
+        lines = [
+            f"⚠ 直近 {_BELIEF_BLOCKS_WINDOW_DAYS} 日で {count} 件の低信頼要約を書込前に破棄"
+            "（retention 低 or drift 過剰）。頻発する場合は corrections の質か要約プロンプトを点検:",
         ]
+        lines += [f"  - {h}" for h in heads]
+        return lines
 
-    lines = header + [
-        f"⚠ 直近 {_BELIEF_BLOCKS_WINDOW_DAYS} 日で {count} 件の低信頼要約を書込前に破棄"
-        "（retention 低 or drift 過剰）。頻発する場合は corrections の質か要約プロンプトを点検:",
-    ]
-    lines += [f"  - {h}" for h in heads]
-    lines.append("")
-    return lines
+    return build_advisory_section(
+        project_dir,
+        title="Belief Entropy Gate（全PJ横断・低信頼 memory ブロック）",
+        compute=compute,
+        applicable=lambda data: True,
+        render=render,
+    )
 
 
 def _load_fitness_evolution():
@@ -648,57 +658,67 @@ def build_negative_transfer_section(project_dir: Path) -> Optional[List[str]]:
       → 「評価したが算出対象なし」ℹ 行（silence != evaluated）
     - 算出できて回帰なし → 「評価したが negative transfer なし ✓」
     - 回帰あり → ⚠ で対象コンポーネントと影響スキル、evolve-skill 起動を提案
+
+    #115: skeleton（header/trailer + not-applicable 短絡）は build_advisory_section へ集約。
+    厚い render（ℹ/✓/⚠ 分岐・affected 入れ子 loop・軸別文言）は render callback に残置。
+    compute は「component 算出まで（[] も評価対象＝ℹ）」を返し、テレメトリ未蓄積のみ None。
     """
-    from .usage import compute_component_transfer, load_usage_data
 
-    try:
-        usage_data = load_usage_data(
-            days=_NEG_TRANSFER_WINDOW_DAYS, project_root=Path(project_dir)
-        )
-    except Exception:
-        return None
+    def compute(proj: Path):
+        from .usage import compute_component_transfer, load_usage_data
 
-    if not usage_data:
-        return None  # テレメトリ未蓄積 → 対象外
-
-    header = ["## Negative Transfer (更新コンポーネント別)", ""]
-
-    try:
-        components = compute_component_transfer(usage_data)
-    except Exception:
-        return None
-
-    if not components:
-        return header + [
-            "ℹ 評価したが component transfer 算出対象なし"
-            "（追加スキルの前後で既存スキルの success/error データが不足）。",
-            "",
-        ]
-
-    flagged = [c for c in components if c.get("negative_transfer")]
-    if not flagged:
-        return header + [
-            f"✓ 評価したが negative transfer なし（{len(components)} 件の更新コンポーネントを評価）",
-            "",
-        ]
-
-    lines = header + [
-        "⚠ 既存スキルの成功率を下げた更新コンポーネントあり。"
-        "`/evolve-anything:evolve-skill` で該当スキルの見直しを検討:",
-    ]
-    for c in flagged:
-        net = c.get("net_delta", 0.0)
-        lines.append(f"- **{c['component']}** (net Δ{net:+.0%}):")
-        for a in c.get("affected", []):
-            if not a.get("negative_transfer"):
-                continue
-            lines.append(
-                f"    - {a['skill_name']}: "
-                f"before={a['before_score']:.0%} → after={a['after_score']:.0%} "
-                f"(Δ{a['delta_score']:+.0%})"
+        try:
+            usage_data = load_usage_data(
+                days=_NEG_TRANSFER_WINDOW_DAYS, project_root=proj
             )
-    lines.append("")
-    return lines
+        except Exception:
+            return None
+        if not usage_data:
+            return None  # テレメトリ未蓄積 → 対象外
+        try:
+            return compute_component_transfer(usage_data)
+        except Exception:
+            return None
+
+    def render(components) -> List[str]:
+        # [] は「評価したが算出対象なし」＝ ℹ（silence != evaluated）。
+        if not components:
+            return [
+                "ℹ 評価したが component transfer 算出対象なし"
+                "（追加スキルの前後で既存スキルの success/error データが不足）。",
+            ]
+
+        flagged = [c for c in components if c.get("negative_transfer")]
+        if not flagged:
+            return [
+                f"✓ 評価したが negative transfer なし（{len(components)} 件の更新コンポーネントを評価）",
+            ]
+
+        lines = [
+            "⚠ 既存スキルの成功率を下げた更新コンポーネントあり。"
+            "`/evolve-anything:evolve-skill` で該当スキルの見直しを検討:",
+        ]
+        for c in flagged:
+            net = c.get("net_delta", 0.0)
+            lines.append(f"- **{c['component']}** (net Δ{net:+.0%}):")
+            for a in c.get("affected", []):
+                if not a.get("negative_transfer"):
+                    continue
+                lines.append(
+                    f"    - {a['skill_name']}: "
+                    f"before={a['before_score']:.0%} → after={a['after_score']:.0%} "
+                    f"(Δ{a['delta_score']:+.0%})"
+                )
+        return lines
+
+    # compute が None（テレメトリ未蓄積 / 算出失敗）→ 沈黙。[] を含む list は評価対象。
+    return build_advisory_section(
+        project_dir,
+        title="Negative Transfer (更新コンポーネント別)",
+        compute=compute,
+        applicable=lambda components: True,
+        render=render,
+    )
 
 
 def build_glossary_drift_section(project_dir: Path) -> Optional[List[str]]:

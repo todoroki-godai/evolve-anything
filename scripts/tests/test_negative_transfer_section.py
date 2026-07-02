@@ -74,6 +74,57 @@ def test_warn_line_with_regression(tmp_path, monkeypatch):
     assert "ship" in combined
 
 
+def test_byte_invariance_info(tmp_path, monkeypatch):
+    """#115 advisory 共通枠への載せ替えで ℹ（算出対象なし）出力を 1 バイトも変えない。"""
+    _patch_usage(monkeypatch, [
+        {"skill_name": "ship", "ts": "2026-01-01T00:00:00Z", "outcome": "success"},
+        {"skill_name": "ship", "ts": "2026-01-02T00:00:00Z", "outcome": "success"},
+    ])
+    assert build_negative_transfer_section(tmp_path) == [
+        "## Negative Transfer (更新コンポーネント別)",
+        "",
+        "ℹ 評価したが component transfer 算出対象なし"
+        "（追加スキルの前後で既存スキルの success/error データが不足）。",
+        "",
+    ]
+
+
+def test_byte_invariance_clean(tmp_path, monkeypatch):
+    """#115 載せ替えで ✓（回帰なし）出力を 1 バイトも変えない。"""
+    _patch_usage(monkeypatch, [
+        {"skill_name": "ship", "ts": "2026-01-01T00:00:00Z", "outcome": "success"},
+        {"skill_name": "ship", "ts": "2026-01-01T01:00:00Z", "outcome": "success"},
+        {"skill_name": "review", "ts": "2026-01-02T00:00:00Z", "outcome": "success"},
+        {"skill_name": "ship", "ts": "2026-01-03T00:00:00Z", "outcome": "success"},
+    ])
+    assert build_negative_transfer_section(tmp_path) == [
+        "## Negative Transfer (更新コンポーネント別)",
+        "",
+        "✓ 評価したが negative transfer なし（1 件の更新コンポーネントを評価）",
+        "",
+    ]
+
+
+def test_byte_invariance_warn(tmp_path, monkeypatch):
+    """#115 載せ替えで ⚠（affected 入れ子 loop）出力を 1 バイトも変えない。"""
+    _patch_usage(monkeypatch, [
+        {"skill_name": "ship", "ts": "2026-01-01T00:00:00Z", "outcome": "success"},
+        {"skill_name": "ship", "ts": "2026-01-01T01:00:00Z", "outcome": "success"},
+        {"skill_name": "review", "ts": "2026-01-02T00:00:00Z", "outcome": "success"},
+        {"skill_name": "ship", "ts": "2026-01-03T00:00:00Z", "outcome": "error"},
+        {"skill_name": "ship", "ts": "2026-01-03T01:00:00Z", "outcome": "error"},
+    ])
+    assert build_negative_transfer_section(tmp_path) == [
+        "## Negative Transfer (更新コンポーネント別)",
+        "",
+        "⚠ 既存スキルの成功率を下げた更新コンポーネントあり。"
+        "`/evolve-anything:evolve-skill` で該当スキルの見直しを検討:",
+        "- **review** (net Δ-100%):",
+        "    - ship: before=100% → after=0% (Δ-100%)",
+        "",
+    ]
+
+
 def test_registered_in_observability_contract():
     keys = [k for k, _ in _OBSERVABILITY_BUILDERS]
     assert "negative_transfer" in keys
