@@ -59,7 +59,8 @@
 | pitfall 自動強制 | pitfalls.md の編集時 lint + commit ゲート（オプトイン）[ADR-027] | `pitfall_registry.py` |
 | `agent_team` | エージェント間の役割重複・孤立の決定論検出（#326） | `agent_team.py` |
 | observability contract | 必ず surface すべき行の単一ソース（markdown/構造化 両経路）[ADR-028] | `audit/observability.py` |
-| `evolve_introspect` | evolve result の自己解析→issue 候補生成（3カテゴリ）[ADR-033, ADR-034] | `evolve_introspect.py` |
+| advisory section 共通枠 | 全 observability section の header/trailer 規約を単一化する2層 helper（`advisory_header`/`finalize` + `build_advisory_section`）+ `_OBSERVABILITY_BUILDERS` 横断の契約テストで silence≠evaluated を構造担保。builder 20個が経由、CUSTOM 8個は据え置き（#115） | `audit/advisory.py` |
+| `evolve_introspect` | evolve result の自己解析→issue 候補生成（3カテゴリ）[ADR-033, ADR-034] | `evolve_introspect/`（#122 で detectors/render/dedup/helpers に分割・re-export） |
 | `evolve_result_schema` | result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379） | `evolve_result_schema.py` |
 | `evolve_consistency` | P1 invariant の runtime self-detect（型 drift のみ）（#377-5） | `evolve_consistency.py` |
 | `hook_drift` | 他ツール追従 hook の陳腐化検出（stale_pin + dead_ref: flow-chain 参照スキルの実在突合、正規化 FP guard 付き #316）[ADR-036] | `hook_drift.py` |
