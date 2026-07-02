@@ -29,7 +29,12 @@ from .sections_fanout import build_fanout_cost_section
 from .sections_hook import build_hook_drift_section
 from .sections_contagion import build_memory_contagion_section
 from .sections_measurement import build_measurement_bug_section
-from .sections_memory import build_memory_capability_section
+from .sections_memory import (
+    build_memory_capability_section,
+    build_memory_dup_residue_section,
+    build_memory_index_orphan_section,
+    build_memory_schema_section,
+)
 from .sections_multiview import build_multiview_eval_section
 from .sections_orphan import build_orphan_store_section, build_store_contract_section
 from .sections_outcome import build_outcome_metrics_section
@@ -62,6 +67,9 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("subagent_traces", build_subagent_traces_section),
     ("verbosity", build_verbosity_section),
     ("memory_capability", build_memory_capability_section),
+    ("memory_index_orphan", build_memory_index_orphan_section),
+    ("memory_schema", build_memory_schema_section),
+    ("memory_dup_residue", build_memory_dup_residue_section),
     ("multiview_eval", build_multiview_eval_section),
     ("paired_trajectory", build_paired_trajectory_section),
     ("measurement_bug", build_measurement_bug_section),

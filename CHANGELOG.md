@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(audit): memory dir 衛生の決定論検出器3件を追加（closes #127 #128 #131）** — memory dir 走査系の advisory observability を3本追加し、`audit/sections_memory.py` から surface。⑴ **#127 索引孤児**（`memory_index_orphan.py`）: MEMORY.md 本文の `[text](file.md)` リンク集合と `memory/*.md` 実ファイル集合を突合し、索引に無い実ファイル（unindexed＝recall/注入で想起されない）と実体の無いリンク（stale）を列挙。`memory_capability._memory_files`（MEMORY.md 除外）を再利用。⑵ **#128 frontmatter スキーマ検証**（`memory_schema_check.py`）: `name`（kebab-case）/ `description` / `metadata.type`（user|feedback|project|reference）の欠落・kebab-case 逸脱・不正 type を検出。MEMORY.md（索引・frontmatter 無し仕様）は対象外。⑶ **#131 完全重複残骸検出**（`memory_dup_residue.py`・fleet 横断）: `~/.claude/projects/*/memory/*.md`（*.md のみ・非再帰・jsonl 非対象・MEMORY.md 除外）の内容 hash 集合を dir 間で突合し、ある dir の全ファイルが別 dir に完全包含される残骸候補を退避削除手順つきで提案（auto-apply しない）。`PJ_SLUG_ALIASES` の旧 slug dir は rename 由来ラベル。memory dir 解決は `resolve_cc_memory_dir` 単一ソース（#19 の repo-basename slug 混同を回避）、projects dir は隔離ガード対策で call-time 関数解決。全検出関数は走査 base dir を引数受けで実 ~/.claude 非依存。3件とも「無ければ非表示」（issue 受け入れ基準）。TDD +28件・決定論・LLM 非依存。
+
 ## [1.115.0] - 2026-07-02
 
 ### Added

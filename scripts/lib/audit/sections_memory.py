@@ -108,3 +108,136 @@ def build_memory_capability_section(project_dir: Path) -> Optional[List[str]]:
         applicable=applicable,
         render=render,
     )
+
+
+def build_memory_index_orphan_section(project_dir: Path) -> Optional[List[str]]:
+    """MEMORY.md 索引と実 memory ファイルの孤児（不整合）を audit に advisory 表示する（#127）。
+
+    観測可能性:
+    - memory_index_orphan / memory_capability 未解決 → None（沈黙）
+    - MEMORY.md が無い PJ（索引が無いので検査対象外）→ None（沈黙）
+    - 孤児なし → None（「無ければ非表示」= issue #127 の受け入れ基準）
+    - 孤児あり → ⚠ で unindexed（索引に無い実ファイル）/ stale リンク（実体の無いリンク）を列挙
+    """
+
+    def compute(proj: Path):
+        try:
+            import memory_capability
+            import memory_index_orphan
+        except ImportError:
+            return None
+        memory_dir = memory_capability._resolve_memory_dir(proj)
+        return memory_index_orphan.detect_index_orphans(memory_dir)
+
+    def render(report) -> List[str]:
+        lines: List[str] = []
+        if report.unindexed_files:
+            lines.append(
+                f"⚠ MEMORY.md 索引に載っていない memory ファイルが "
+                f"{len(report.unindexed_files)} 件（索引から不可視＝recall/注入で想起されない）:"
+            )
+            for name in report.unindexed_files:
+                lines.append(f"  ・{name}（索引に未掲載）")
+        if report.indexed_missing:
+            lines.append(
+                f"⚠ MEMORY.md にリンクがあるのに実体が無い（stale リンク）ファイルが "
+                f"{len(report.indexed_missing)} 件:"
+            )
+            for name in report.indexed_missing:
+                lines.append(f"  ・{name}（リンク先が不在）")
+        return lines
+
+    return build_advisory_section(
+        project_dir,
+        title="Memory Index Orphans (MEMORY.md 索引 ↔ 実ファイルの不整合 — advisory)",
+        compute=compute,
+        applicable=lambda report: report.has_index and report.has_findings,
+        render=render,
+    )
+
+
+def build_memory_schema_section(project_dir: Path) -> Optional[List[str]]:
+    """auto-memory frontmatter スキーマ違反を audit に advisory 表示する（#128）。
+
+    観測可能性:
+    - memory_schema_check / memory_capability 未解決 → None（沈黙）
+    - memory 実体 0 件 → None（沈黙）
+    - 違反なし → None（「無ければ非表示」= issue #128 の受け入れ基準）
+    - 違反あり → ⚠ でファイル名 + 違反内容（欠落 / kebab-case 逸脱 / 不正 type）を列挙
+    """
+
+    def compute(proj: Path):
+        try:
+            import memory_capability
+            import memory_schema_check
+        except ImportError:
+            return None
+        memory_dir = memory_capability._resolve_memory_dir(proj)
+        return memory_schema_check.detect_schema_violations(memory_dir)
+
+    def render(report) -> List[str]:
+        lines = [
+            f"⚠ auto-memory frontmatter スキーマ違反が {len(report.violations)} 件。"
+            "name（kebab-case）/ description / metadata.type"
+            "（user|feedback|project|reference）を揃えること（#128）:",
+        ]
+        for v in report.violations:
+            lines.append(f"  ・{v.filename}: {', '.join(v.issues)}")
+        return lines
+
+    return build_advisory_section(
+        project_dir,
+        title="Memory Frontmatter Schema (auto-memory スキーマ違反 — advisory)",
+        compute=compute,
+        applicable=lambda report: report.has_findings,
+        render=render,
+    )
+
+
+def build_memory_dup_residue_section(project_dir: Path) -> Optional[List[str]]:
+    """旧 PJ memory の完全重複残骸（rename 由来 orphan dir）を advisory 表示する（#131）。
+
+    全 PJ 横断走査（``~/.claude/projects/*/memory``）のため project_dir に依存しない
+    fleet 向き検出。削除は提案のみで auto-apply しない。
+
+    観測可能性:
+    - memory_dup_residue 未解決 → None（沈黙）
+    - 完全重複ペアなし → None（「無ければ非表示」= issue #131 の受け入れ基準）
+    - 完全重複ペアあり → ℹ で残骸候補 dir / 重複先 dir / ファイル件数 + 退避削除手順を列挙
+    """
+
+    def compute(_proj: Path):
+        try:
+            import memory_dup_residue
+        except ImportError:
+            return None
+        return memory_dup_residue.detect_duplicate_memory_dirs(
+            memory_dup_residue.default_projects_dir()
+        )
+
+    def render(report) -> List[str]:
+        lines = [
+            f"ℹ 内容が完全重複する memory ディレクトリ（残骸候補）が {len(report.pairs)} 組。"
+            "rename 由来の旧 PJ memory が残置している可能性があります（削除は提案のみ・"
+            "auto-apply しません・#131）:",
+        ]
+        for pair in report.pairs:
+            label = "（rename 由来の可能性大）" if pair.rename_suspected else ""
+            lines.append(f"  ・残骸候補: {pair.residue_dir}{label}")
+            lines.append(
+                f"      重複先: {pair.target_dir} / ファイル {pair.file_count} 件"
+            )
+            lines.append(
+                f"      退避してから削除: "
+                f"tar czf {pair.residue_dir}-memory-backup.tgz -C \"{pair.residue_path}\" . "
+                f"&& rm -rf \"{pair.residue_path}\""
+            )
+        return lines
+
+    return build_advisory_section(
+        project_dir,
+        title="Memory Duplicate Residue (旧 PJ memory の完全重複残骸 — advisory)",
+        compute=compute,
+        applicable=lambda report: report.has_findings,
+        render=render,
+    )
