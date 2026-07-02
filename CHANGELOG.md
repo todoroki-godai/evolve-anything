@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(audit): artifact 衛生の決定論検出器4件を observability に追加（closes #124 #125 #126 #129）** — `artifacts.py` 近傍の新モジュール `scripts/lib/audit/sections_artifacts.py` に skills 走査を相乗りする4検出器を追加し、`build_advisory_section`（#115 共通枠）経由で `_OBSERVABILITY_BUILDERS` に登録して markdown / 構造化 両経路へ advisory surface する。⑴ **#124 グローバル CLAUDE.md 空/未存在**（`detect_global_claude_md`）: `~/.claude/CLAUDE.md` が未存在または strip 後空のときだけ ⚠、中身があれば沈黙（healthy は None）。⑵ **#125 SKILL.md 欠落ディレクトリ**（`detect_missing_skill_md`）: `.claude/skills`（plugin レイアウトは `skills/`）直下でSKILL.md を配下に1件も持たないディレクトリ（skill-creator の `<skill>-workspace/` 残骸等）を列挙、`EXCLUDED_SKILL_DIRS`/dot-dir は除外。⑶ **#126 残置バックアップ**（`detect_backup_files`）: skills 配下の `*.md.bak`/`*.backup`/`*.orig` を列挙。⑷ **#129 skill 名跨 scope 重複**（`detect_duplicate_skill_names`）: `find_artifacts` 収集後に frontmatter `name` でグルーピングし実体2件以上を報告、symlink wrapper（`_gstack-command` 等）は重複計上から除外し `symlink_paths` に区別表示。各検出関数は走査 base を引数で受け取り実 `~/.claude` はデフォルト値解決時のみ読む。TDD +21件・決定論・LLM 非依存。
+
 ## [1.115.0] - 2026-07-02
 
 ### Added

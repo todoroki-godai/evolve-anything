@@ -23,6 +23,12 @@ from .sections import (
     build_unmanaged_pitfalls_section,
 )
 from .sections_agent import build_agent_team_section
+from .sections_artifacts import (
+    build_backup_files_section,
+    build_duplicate_skill_names_section,
+    build_global_claude_md_section,
+    build_missing_skill_md_section,
+)
 from .sections_capture import build_capture_rate_section
 from .sections_eval import build_eval_saturation_section
 from .sections_fanout import build_fanout_cost_section
@@ -71,6 +77,10 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("testpaths_coverage", build_testpaths_coverage_section),
     ("skill_triage", build_skill_triage_section),
     ("skill_vuln", build_skill_vuln_section),
+    ("global_claude_md", build_global_claude_md_section),
+    ("missing_skill_md", build_missing_skill_md_section),
+    ("backup_files", build_backup_files_section),
+    ("duplicate_skill_names", build_duplicate_skill_names_section),
 ]
 
 

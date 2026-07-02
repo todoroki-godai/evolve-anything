@@ -66,6 +66,11 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data.mkdir()
     home = tmp_path / "home"
     home.mkdir()
+    # グローバル CLAUDE.md を healthy（非空）にして build_global_claude_md_section（#124）を
+    # 沈黙させる。実環境の代表として「グローバル指示あり」を模し、snapshot を本チェックの
+    # 有無に依存させない（未存在/空検出は test_artifacts_hygiene.py が個別に担保）。
+    (home / ".claude").mkdir()
+    (home / ".claude" / "CLAUDE.md").write_text("# global instructions\n", encoding="utf-8")
     proj = tmp_path / "proj"
     proj.mkdir()
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data))

@@ -113,6 +113,17 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr(
         memory_capability, "_resolve_memory_dir", lambda project_dir: tmp_path / "no-memory"
     )
+    # global_claude_md も環境グローバル（~/.claude/CLAUDE.md）を読む builder のため、実機に
+    # グローバル CLAUDE.md が無い/空だと「PJ アーティファクト無し」前提が崩れる。detect を
+    # healthy（非空）に向けて None（沈黙）させ、契約を隔離する（#124）。
+    from audit import sections_artifacts
+    monkeypatch.setattr(
+        sections_artifacts,
+        "detect_global_claude_md",
+        lambda home=None: sections_artifacts.GlobalClaudeMdReport(
+            path=tmp_path / "no-global-claude-md", exists=True, is_empty=False
+        ),
+    )
     result = collect_observability(tmp_path)
     assert result == {}
 
