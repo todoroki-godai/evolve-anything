@@ -26,6 +26,7 @@ from lib.agent_quality import (
     scan_agents,
 )
 from lib.agent_quality import check_model_pin  # noqa: F401 — new in #449
+from lib.agent_quality import check_tools_grant_divergence  # noqa: F401 — new in #130
 
 
 # --- Fixtures ---
@@ -758,6 +759,194 @@ Include specific examples of how to fix issues.
 
         issue_types = {i["type"] for i in result["issues"]}
         assert "exact_model_id_pin" not in issue_types
+
+
+# --- check_tools_grant_divergence tests ---
+
+
+class TestCheckToolsGrantDivergence:
+    """check_tools_grant_divergence() のテスト: memory: あり + tools に Write/Edit なしの検出。"""
+
+    def test_memory_without_write_edit_flagged(self, global_agents_dir, tmp_path):
+        """memory: あり + tools に Write/Edit なし → diverged=True。"""
+        content = """\
+---
+name: advisor-bot
+description: An advisory-only agent that keeps persistent memory but declares no write tools.
+tools: Read, Grep, Glob
+memory: user
+---
+
+# Advisor Bot
+
+1. Read the code
+2. Analyze it
+3. Report findings
+
+Provide feedback organized by priority.
+"""
+        path = _write_agent(global_agents_dir, "advisor", content)
+        agent = AgentInfo(name="advisor", path=path, scope="global")
+
+        result = check_tools_grant_divergence(agent)
+
+        assert result["diverged"] is True
+        assert result["has_memory"] is True
+        assert result["file"] == str(path)
+        assert "Write" not in result["declared_tools"]
+        assert "Edit" not in result["declared_tools"]
+
+    def test_memory_with_write_not_flagged(self, global_agents_dir, tmp_path):
+        """memory: あり + tools に Write あり → diverged=False（乖離なし）。"""
+        content = """\
+---
+name: writer-bot
+description: An agent with memory that already declares Write in its tools list.
+tools: Read, Write, Grep
+memory: user
+---
+
+# Writer Bot
+
+1. Read the code
+2. Write output
+3. Verify
+
+Provide feedback organized by priority.
+"""
+        path = _write_agent(global_agents_dir, "writer", content)
+        agent = AgentInfo(name="writer", path=path, scope="global")
+
+        result = check_tools_grant_divergence(agent)
+
+        assert result["diverged"] is False
+
+    def test_memory_with_edit_not_flagged(self, global_agents_dir, tmp_path):
+        """memory: あり + tools に Edit あり → diverged=False。"""
+        content = """\
+---
+name: editor-bot
+description: An agent with memory that declares Edit in its tools list explicitly.
+tools: Read, Edit
+memory: user
+---
+
+# Editor Bot
+
+1. Read the file
+2. Edit it
+3. Verify
+
+Provide feedback organized by priority.
+"""
+        path = _write_agent(global_agents_dir, "editor", content)
+        agent = AgentInfo(name="editor", path=path, scope="global")
+
+        result = check_tools_grant_divergence(agent)
+
+        assert result["diverged"] is False
+
+    def test_no_memory_not_flagged(self, global_agents_dir, tmp_path):
+        """memory: なし → diverged=False（対象外）。"""
+        path = _write_agent(global_agents_dir, "reviewer", _good_agent())
+        agent = AgentInfo(name="reviewer", path=path, scope="global")
+
+        result = check_tools_grant_divergence(agent)
+
+        assert result["diverged"] is False
+        assert result["has_memory"] is False
+
+    def test_no_tools_field_not_flagged(self, global_agents_dir, tmp_path):
+        """tools: 宣言自体が無い（全ツール継承）→ 対象外（誤検知回避）。"""
+        content = """\
+---
+name: inherit-tools-bot
+description: An agent with memory but no tools field, inheriting all tools by default.
+memory: user
+---
+
+# Inherit Tools Bot
+
+1. Do this
+2. Do that
+3. Review
+
+Provide feedback organized by priority.
+"""
+        path = _write_agent(global_agents_dir, "inherit-tools", content)
+        agent = AgentInfo(name="inherit-tools", path=path, scope="global")
+
+        result = check_tools_grant_divergence(agent)
+
+        assert result["diverged"] is False
+
+    def test_tools_as_yaml_list(self, global_agents_dir, tmp_path):
+        """tools が YAML リスト形式でも Write/Edit 判定が効く。"""
+        content = """\
+---
+name: list-tools-bot
+description: An agent whose tools are declared as a YAML block list, with memory enabled.
+tools:
+  - Read
+  - Grep
+  - Glob
+memory: user
+---
+
+# List Tools Bot
+
+1. Read the code
+2. Analyze
+3. Report
+
+Provide feedback organized by priority.
+"""
+        path = _write_agent(global_agents_dir, "list-tools", content)
+        agent = AgentInfo(name="list-tools", path=path, scope="global")
+
+        result = check_tools_grant_divergence(agent)
+
+        assert result["diverged"] is True
+        assert "Read" in result["declared_tools"]
+
+    def test_check_quality_includes_tools_grant_divergence(self, global_agents_dir, tmp_path):
+        """check_quality() の issues に tools_grant_divergence が含まれる。"""
+        content = """\
+---
+name: advisor-quality
+description: An advisory agent with memory and no write tools declared for quality context.
+tools: Read, Grep
+memory: user
+---
+
+# Advisor Quality Bot
+
+1. Read the code
+2. Analyze it
+3. Report findings
+
+Provide feedback organized by priority.
+Include specific examples of how to fix issues.
+"""
+        path = _write_agent(global_agents_dir, "advisor-quality", content)
+        agent = AgentInfo(name="advisor-quality", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "tools_grant_divergence" in issue_types
+        issue = next(i for i in result["issues"] if i["type"] == "tools_grant_divergence")
+        assert "Write/Edit" in issue["detail"]
+
+    def test_check_quality_no_divergence_for_no_memory(self, global_agents_dir, tmp_path):
+        """check_quality() で memory: なしなら tools_grant_divergence が出ない。"""
+        path = _write_agent(global_agents_dir, "clean-tools", _good_agent())
+        agent = AgentInfo(name="clean-tools", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "tools_grant_divergence" not in issue_types
 
 
 # --- Constants tests ---

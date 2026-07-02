@@ -72,6 +72,7 @@ for a in agents:
 - **[agent-name]** missing_frontmatter: YAML frontmatter が欠落
 - **[agent-name]** knowledge_hardcoding: バージョン番号・具体パス・固有名詞のハードコード（陳腐化リスク）
 - **[agent-name]** exact_model_id_pin: model フィールドに exact ID（claude-*-N 形式）を pin — 新モデルリリース後に silent stale になるリスク。推奨エイリアスに置き換えること
+- **[agent-name]** tools_grant_divergence: memory: 宣言があり tools に Write/Edit が無い — 実行時は harness が Write/Edit を自動付与するため、助言専用 agent なら本文にスコープ限定の安全弁（例: 『Write/Edit は Persistent Agent Memory への自己メモ更新のみ』）を明記すること
 
 ### ベストプラクティス提案
 - **[agent-name]** に success_metrics セクション追加を推奨
