@@ -209,6 +209,15 @@ def check_quality(agent: AgentInfo) -> Dict[str, Any]:
         })
         score -= 0.1
 
+    grant_result = check_tools_grant_divergence(agent)
+    if grant_result["diverged"]:
+        issues.append({
+            "type": "tools_grant_divergence",
+            "detail": TOOLS_GRANT_DIVERGENCE_ADVISORY,
+            "severity": "low",
+        })
+        score -= 0.05
+
     for bp_name, bp_info in BEST_PRACTICES.items():
         if not _has_section(agent.content, bp_info["detect_patterns"]):
             suggestions.append({
@@ -292,6 +301,71 @@ def _suggest_alias(model_id: str) -> str:
         if alias in lower:
             return alias
     return "sonnet"  # フォールバック
+
+
+TOOLS_GRANT_DIVERGENCE_ADVISORY = (
+    "memory: 宣言があるため実行時は Write/Edit が自動付与されます"
+    "（tools 宣言と独立）。助言専用 agent なら本文にスコープ限定の安全弁"
+    "（例: 『Write/Edit は Persistent Agent Memory への自己メモ更新のみ。"
+    "成果物ファイルの作成・編集はしない』）を明記してください"
+)
+
+
+def _normalize_tools(tools_value: Any) -> List[str]:
+    """frontmatter の tools: 値をツール名リストに正規化する。
+
+    tools は文字列（"Read, Grep, Glob" のカンマ区切り）でも
+    YAML リスト（["Read", "Grep"]）でも宣言され得るため両対応する。
+    """
+    if isinstance(tools_value, str):
+        return [t.strip() for t in tools_value.split(",") if t.strip()]
+    if isinstance(tools_value, (list, tuple)):
+        return [str(t).strip() for t in tools_value if str(t).strip()]
+    return []
+
+
+def check_tools_grant_divergence(agent: AgentInfo) -> Dict[str, Any]:
+    """tools 宣言と実付与の乖離を検出する（#130）。
+
+    助言専用設計の agent（tools 宣言に Write/Edit なし）でも、frontmatter に
+    `memory:` があると harness が Persistent Agent Memory 書込用に Write/Edit を
+    自動付与する（tools 宣言と独立）。実行時付与は静的 audit から見えないが、
+    「memory: あり + tools: に Write/Edit なし」という宣言ベースヒューリスティック
+    で決定論検出できる。
+
+    `tools:` 宣言自体が無い agent（全ツール継承）は乖離が存在しないため対象外。
+
+    Returns:
+        {
+            "diverged": bool,
+            "file": str,
+            "declared_tools": List[str],  # 正規化済みツール名
+            "has_memory": bool,
+        }
+    """
+    if not agent.frontmatter:
+        if agent.path.exists():
+            agent.frontmatter = parse_frontmatter(agent.path)
+        else:
+            return {"diverged": False, "file": str(agent.path), "declared_tools": [], "has_memory": False}
+
+    fm = agent.frontmatter or {}
+    has_memory = "memory" in fm and fm.get("memory") is not None
+    declared_tools = _normalize_tools(fm.get("tools"))
+
+    # tools 宣言が無い（全ツール継承）→ 乖離なし（誤検知回避）
+    if not declared_tools:
+        return {"diverged": False, "file": str(agent.path), "declared_tools": [], "has_memory": has_memory}
+
+    has_write_or_edit = any(t in ("Write", "Edit") for t in declared_tools)
+    diverged = has_memory and not has_write_or_edit
+
+    return {
+        "diverged": diverged,
+        "file": str(agent.path),
+        "declared_tools": declared_tools,
+        "has_memory": has_memory,
+    }
 
 
 def _count_vague_keywords(content: str) -> int:
