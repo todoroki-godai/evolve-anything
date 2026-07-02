@@ -17,10 +17,14 @@ if str(_lib_dir) not in sys.path:
 
 from glossary_drift import (  # noqa: E402
     DEFAULT_STOPLIST,
+    MAX_COMPONENT_CELL_LEN,
     STDLIB_SYMBOLS,
+    ComponentCellIssue,
     GlossaryEntry,
+    check_component_table_cells,
     find_undefined_terms,
     load_common_english_words,
+    main,
 )
 
 
@@ -467,3 +471,135 @@ class TestMaskedPlaceholderExcluded:
         source = _make_source(tmp_path, "BES と RRF を使う。", "src_real.md")
         result = find_undefined_terms(_entries(), [source])
         assert "BES" in result and "RRF" in result
+
+
+# ---------------------------------------------------------------------------
+# #116: CLAUDE.md コンポーネント表のセル長 lint
+# ---------------------------------------------------------------------------
+
+def _write_claude_md(tmp_path: Path, cell_body: str, name: str = "CLAUDE.md") -> str:
+    """「## コンポーネント」表を持つ最小 CLAUDE.md を書く（1 行だけ可変セル）。"""
+    content = (
+        "# Plugin\n\n"
+        "## コンポーネント\n\n"
+        "各コンポーネントの詳細は spec/components.md（SoT）。\n\n"
+        "| コンポーネント | 一言サマリ | 実体 |\n"
+        "|----------------|-----------|------|\n"
+        f"| `foo` | {cell_body} | `foo.py` |\n"
+        "| `bar` | 短いサマリ（#1） | `bar.py` |\n\n"
+        "## クイックスタート\n\nsome text\n"
+    )
+    p = tmp_path / name
+    p.write_text(content, encoding="utf-8")
+    return str(p)
+
+
+class TestComponentTableCellLint:
+    """issue #116 — CLAUDE.md コンポーネント表のセルが上限超過なら検出する。"""
+
+    def test_oversized_cell_detected(self, tmp_path: Path):
+        """上限超過の 1 行サマリが ComponentCellIssue として返る。"""
+        body = "あ" * (MAX_COMPONENT_CELL_LEN + 50)
+        path = _write_claude_md(tmp_path, body)
+        issues = check_component_table_cells(path)
+        assert len(issues) == 1
+        assert isinstance(issues[0], ComponentCellIssue)
+        assert issues[0].name == "`foo`"
+        # 超過セルの実文字数を返す（サマリ本文の長さ）
+        assert issues[0].length == len(body)
+
+    def test_within_limit_not_detected(self, tmp_path: Path):
+        """上限内のセルは検出しない。"""
+        path = _write_claude_md(tmp_path, "あ" * 100)
+        assert check_component_table_cells(path) == []
+
+    def test_boundary_exactly_max_is_ok(self, tmp_path: Path):
+        """ちょうど上限のセルは超過ではない（strict >）。"""
+        path = _write_claude_md(tmp_path, "あ" * MAX_COMPONENT_CELL_LEN)
+        assert check_component_table_cells(path) == []
+
+    def test_custom_max_len(self, tmp_path: Path):
+        """max_len を明示すると閾値が切り替わる。"""
+        path = _write_claude_md(tmp_path, "あ" * 100)
+        issues = check_component_table_cells(path, max_len=50)
+        assert len(issues) == 1
+        assert issues[0].length == 100
+
+    def test_missing_file_returns_empty(self, tmp_path: Path):
+        """ファイル不在なら空リスト（例外を投げない）。"""
+        assert check_component_table_cells(str(tmp_path / "nope.md")) == []
+
+    def test_no_components_section_returns_empty(self, tmp_path: Path):
+        """「## コンポーネント」節が無ければ空リスト。"""
+        p = tmp_path / "CLAUDE.md"
+        p.write_text("# Plugin\n\n本文にテーブルなし\n", encoding="utf-8")
+        assert check_component_table_cells(str(p)) == []
+
+    def test_only_scans_components_section(self, tmp_path: Path):
+        """コンポーネント表の外にある長大セルは無視する（節スコープ限定）。"""
+        long_cell = "b" * (MAX_COMPONENT_CELL_LEN + 100)
+        content = (
+            "# Plugin\n\n"
+            "## コンポーネント\n\n"
+            "| コンポーネント | 一言サマリ | 実体 |\n"
+            "|--|--|--|\n"
+            "| `foo` | 短い（#1） | `foo.py` |\n\n"
+            "## 別の表\n\n"
+            "| 列A | 列B |\n"
+            "|--|--|\n"
+            f"| x | {long_cell} |\n"
+        )
+        p = tmp_path / "CLAUDE.md"
+        p.write_text(content, encoding="utf-8")
+        # 別表の長大セルは検出対象外
+        assert check_component_table_cells(str(p)) == []
+
+    def test_header_and_separator_rows_ignored(self, tmp_path: Path):
+        """ヘッダ行・区切り行は行としてカウントしない。"""
+        path = _write_claude_md(tmp_path, "あ" * 100)  # 全セル上限内
+        assert check_component_table_cells(path) == []
+
+    def test_real_claude_md_within_limit(self):
+        """回帰: 実 CLAUDE.md（切り詰め後）に上限超過セルが無いこと（#116）。"""
+        repo_root = Path(__file__).resolve().parents[3]
+        claude = repo_root / "CLAUDE.md"
+        if not claude.exists():
+            import pytest
+            pytest.skip("CLAUDE.md が無い")
+        issues = check_component_table_cells(str(claude))
+        assert issues == [], (
+            "CLAUDE.md コンポーネント表に上限超過セル: "
+            f"{[(i.name, i.length) for i in issues]} — 詳細は spec/components.md へ移す"
+        )
+
+
+class TestComponentCellLintCLIWiring:
+    """issue #116 — CLI（spec-keeper update 経路）がセル長警告を surface する。"""
+
+    def _minimal_context(self, tmp_path: Path) -> str:
+        ctx = tmp_path / "CONTEXT.md"
+        ctx.write_text(
+            "| 用語 | 意味 | 初出 |\n|--|--|--|\n| Foo | ばー | #1 |\n",
+            encoding="utf-8",
+        )
+        return str(ctx)
+
+    def test_main_surfaces_oversized_cell(self, tmp_path: Path, capsys):
+        """CLAUDE.md を source に渡すと main がセル長警告を出す。"""
+        ctx = self._minimal_context(tmp_path)
+        claude = _write_claude_md(tmp_path, "あ" * (MAX_COMPONENT_CELL_LEN + 20))
+        rc = main([ctx, str(tmp_path / "SPEC.md"), claude])
+        out = capsys.readouterr().out
+        assert "コンポーネント表" in out
+        assert "`foo`" in out
+        # 構造 drift が無ければ cell lint 単独では exit code を変えない（advisory）
+        assert rc == 0
+
+    def test_main_no_warning_when_within_limit(self, tmp_path: Path, capsys):
+        """上限内なら警告を出さない。"""
+        ctx = self._minimal_context(tmp_path)
+        claude = _write_claude_md(tmp_path, "あ" * 100)
+        rc = main([ctx, claude])
+        out = capsys.readouterr().out
+        assert "上限超過" not in out
+        assert rc == 0

@@ -26,6 +26,14 @@ from pathlib import Path
 # （jargon の薄い PJ に空の用語集を作らない）。
 SEED_MIN_CANDIDATES = 3
 
+# CLAUDE.md「## コンポーネント」表の 1 セルあたり文字数上限（#116）。
+# この表は「1 行サマリのみ」が運用ルールだが、設計経緯まで書き込まれ肥大化する
+# （実測: fleet_queue セル ≈3,285 字）。上限を超えるセルは詳細を spec/components.md（SoT）
+# へ移すべき兆候として検出し、spec-keeper update の drift 検出経路で advisory surface する。
+# 閾値 400 の根拠: #116 で長大 9 セルを切り詰めた後の最長セル（evolve-release-sync ≈368 字）が
+# 収まり、かつ再肥大（400 字超）を早期に捕捉できる値。1 行サマリとしては十分広い。
+MAX_COMPONENT_CELL_LEN = 400
+
 # jargon 候補: ALLCAPS 頭字語(2-6文字) または 内部に大文字を持つ CamelCase。
 # 例: BES, RRF, BM25, MemTrace, DuckDB。先頭小文字の通常語は拾わない。
 _CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*|[A-Z]{2,6})\b")
@@ -250,6 +258,15 @@ class GlossaryEntry:
 
 
 @dataclass
+class ComponentCellIssue:
+    """CLAUDE.md コンポーネント表で上限超過したセルの位置と長さ（#116）。"""
+
+    name: str      # コンポーネント名（表の 1 列目・生テキスト）
+    length: int    # 超過したセルの文字数（そのセルの最大長）
+    lineno: int    # CLAUDE.md 内の行番号（1 始まり）
+
+
+@dataclass
 class GlossaryReport:
     entries: list[GlossaryEntry] = field(default_factory=list)
     malformed_lines: list[tuple[int, str]] = field(default_factory=list)
@@ -434,6 +451,66 @@ def write_context_seed(
     return context_path
 
 
+def check_component_table_cells(
+    claude_md_path: str,
+    *,
+    max_len: int = MAX_COMPONENT_CELL_LEN,
+) -> list[ComponentCellIssue]:
+    """CLAUDE.md の「## コンポーネント」表で、いずれかのセルが max_len を超える行を返す。
+
+    肥大化した 1 行サマリ（設計経緯まで書き込まれた行）を検出し、詳細を
+    spec/components.md（SoT）へ移すよう促すための決定論・LLM 非依存 lint（#116）。
+    節スコープを「## コンポーネント」見出し〜次の「## 」見出しに限定し、他の表は見ない。
+    ヘッダ行（コンポーネント/実体）と区切り行（---）はスキップする。
+    ファイル不在・表なしなら空リスト。返り値は行番号昇順。
+    """
+    try:
+        with open(claude_md_path, encoding="utf-8") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return []
+
+    issues: list[ComponentCellIssue] = []
+    in_section = False
+    for lineno, line in enumerate(raw.splitlines(), start=1):
+        stripped = line.strip()
+        # 節スコープの開閉。「## コンポーネント」で開き、次の「## 」見出しで閉じる。
+        if stripped.startswith("## "):
+            in_section = stripped.startswith("## コンポーネント")
+            continue
+        if not in_section or not stripped.startswith("|"):
+            continue
+        if _SEP_RE.match(stripped):
+            continue
+        cells = _split_row(stripped)
+        # ヘッダ行（用語集と同じ方針でスキップ）
+        if any("コンポーネント" in c for c in cells) and any("実体" in c for c in cells):
+            continue
+        if not cells or not cells[0]:
+            continue
+        longest = max(len(c) for c in cells)
+        if longest > max_len:
+            issues.append(
+                ComponentCellIssue(name=cells[0], length=longest, lineno=lineno)
+            )
+    return issues
+
+
+def _format_component_cell_issues(
+    issues: list[ComponentCellIssue], *, max_len: int = MAX_COMPONENT_CELL_LEN
+) -> str:
+    """コンポーネント表セル長 lint の結果を人間可読に整形する（#116・advisory）。"""
+    if not issues:
+        return f"  ✓ コンポーネント表セル長 OK（上限 {max_len} 字）"
+    lines = [
+        f"  ⚠ コンポーネント表に上限超過セル ({len(issues)}) "
+        f"— 詳細を spec/components.md（SoT）へ移し 1 行サマリに戻す（上限 {max_len} 字）:"
+    ]
+    for it in issues:
+        lines.append(f"      L{it.lineno}: {it.name} — {it.length} 字")
+    return "\n".join(lines)
+
+
 def _format_report(report: GlossaryReport) -> str:
     lines = [f"用語集エントリ: {len(report.entries)} 件"]
     if report.malformed_lines:
@@ -467,6 +544,14 @@ def main(argv: list[str]) -> int:
     context_path, source_paths = argv[0], argv[1:]
     report = check_glossary(context_path, source_paths)
     print(_format_report(report))
+
+    # #116: source_paths に CLAUDE.md があれば、コンポーネント表のセル長 lint を
+    # advisory として surface する（exit code は用語集の構造 drift のみで決める）。
+    for sp in source_paths:
+        if os.path.basename(sp) == "CLAUDE.md":
+            cell_issues = check_component_table_cells(sp)
+            print(_format_component_cell_issues(cell_issues))
+
     return 1 if report.has_drift() else 0
 
 
