@@ -221,14 +221,19 @@ Layer3、約十数秒。重い Layer1b drain と ingest E2E を除外）が `pre
 `bash scripts/git-hooks/install.sh`（gstack-redact の managed pre-push が chain する `pre-push.local`
 へコピー。共有 hooks なので worktree 横断で1回でよい）。
 
-**run_evolve を呼ぶ新規テストを書くときは HOME を隔離すること（#457）。** `run_evolve` は
+**HOME 隔離は root conftest の autouse が全テストへ自動適用する（#119・旧 #457）。** `run_evolve` は
 `project_dir=tmp_path` でも後段フェーズ（utterance ingest / prune global check /
 weak_signals / correction_semantic）が `Path.home()/.claude/projects`（実環境 ≈9925 jsonl /
-1.9GB）を default 走査するため、未隔離だと 1 件数十秒に膨張する。`skills/evolve/scripts/tests/`
-配下は conftest の autouse fixture が自動隔離する。別ディレクトリでは
-`from test_home_isolation import isolate_home`（`scripts/lib/`）を import し、autouse fixture で
-`isolate_home(monkeypatch, tmp_path)` を呼ぶ。ルート conftest の `CLAUDE_PLUGIN_DATA`(=DATA_DIR)
-隔離は `Path.home()` 由来パスには効かない点に注意。
+1.9GB）を default 走査するため、未隔離だと 1 件数十秒に膨張する。以前は
+`skills/evolve/scripts/tests/` の conftest autouse と各テストの手動
+`from test_home_isolation import isolate_home` 頼みで「隔離を知らないと膨張する罠」が残っていた
+（#457）。#119 で root `conftest.py` の autouse（`isolate_home` を single source から import）へ
+昇格し、**全 testpath を一律に隔離する**（新規テストは何もしなくても隔離される）。隔離 HOME は
+test の `tmp_path` の外（`tmp_path_factory` 側）に作る（`tmp_path` を列挙する fleet
+enumerate / does-not-write 系を汚染しないため）。実 `~/.claude` を読む必要があるテスト
+（live API bench / 実 PJ ingest）は `@pytest.mark.real_home`（または `bench` / `bench_ingest`）で
+opt-out する。ルート conftest の `CLAUDE_PLUGIN_DATA`(=DATA_DIR) 隔離は `Path.home()` 由来パスには
+効かないため、HOME 隔離はこの autouse が担う。
 
 ## Specification
 - 現在の仕様全体像: [SPEC.md](SPEC.md)

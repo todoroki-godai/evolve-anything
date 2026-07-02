@@ -19,18 +19,12 @@ _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
-from test_home_isolation import isolate_home  # noqa: E402
 
 import rl_common  # noqa: E402
 from subagent_traces import extractor as _ext  # noqa: E402
 from subagent_traces import ingest as _ingest  # noqa: E402
 from subagent_traces import query as _query  # noqa: E402
 from subagent_traces import store as _tstore  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def _home(monkeypatch, tmp_path):
-    isolate_home(monkeypatch, tmp_path)
 
 
 @pytest.fixture

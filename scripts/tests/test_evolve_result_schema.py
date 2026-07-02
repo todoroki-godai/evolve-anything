@@ -25,20 +25,9 @@ import evolve_result_schema as ers  # noqa: E402
 # スコープ（skills/evolve/scripts/tests/conftest.py の autouse）の恩恵が及ばない。
 # 同じ HOME 隔離 helper（scripts/lib/test_home_isolation.py — conftest 名衝突回避の
 # ため専用モジュール）を import して本ファイルでも明示適用する（#457）。
-from test_home_isolation import isolate_home  # noqa: E402
 
 _REPO = _ROOT.parent  # <repo>
 _SKILL_MD = _REPO / "skills" / "evolve" / "SKILL.md"
-
-
-@pytest.fixture(autouse=True)
-def _isolate_home_for_schema_tests(monkeypatch, tmp_path):
-    """run_evolve が実 ~/.claude/projects を走査して激遅化するのを防ぐ（#457）。
-
-    dry-run の result 構造（phase キー集合・型）は走査先が空でも不変なので、本契約
-    テスト（CANONICAL 準拠 / phase 登録漏れ検出）の意図には触れない。I/O 先のみ隔離。
-    """
-    isolate_home(monkeypatch, tmp_path)
 
 
 # ── 1. check_conformance のユニット（関数ロジック） ──────────────

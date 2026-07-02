@@ -15,7 +15,6 @@ _lib_dir = Path(__file__).resolve().parent.parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
-from test_home_isolation import isolate_home  # noqa: E402
 
 from dogfood import ingest_check  # noqa: E402
 
@@ -26,11 +25,6 @@ except Exception:
     _HAS_DUCKDB = False
 
 pytestmark = pytest.mark.skipif(not _HAS_DUCKDB, reason="DuckDB 未インストール")
-
-
-@pytest.fixture(autouse=True)
-def _isolate(monkeypatch, tmp_path):
-    isolate_home(monkeypatch, tmp_path / "_home")
 
 
 def _user_line(text, ts, sid, uuid, cwd="/Users/x/tools/evolve-anything"):

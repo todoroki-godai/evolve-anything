@@ -8,9 +8,9 @@ weak_signals 言い直し検出 / correction_semantic）が ``Path.home() / ".cl
 1.9GB）を読んでいた。``conftest`` の DATA_DIR(=CLAUDE_PLUGIN_DATA) 隔離は
 ``Path.home()`` 由来パスには効かないため、本フェーズだけ実 home を読んでいた。
 
-本テストは ``skills/evolve/scripts/tests/conftest.py`` の autouse fixture が
-``HOME`` を tmp に隔離していることを契約として固定する。fixture が外れたら即赤に
-なるので、再発（フルスイートの再激遅化）を検出できる。
+本テストは root ``conftest.py`` の autouse fixture（#119 で skills/evolve 限定の
+autouse を root 全体へ昇格）が ``HOME`` を tmp に隔離していることを契約として固定
+する。fixture が外れたら即赤になるので、再発（フルスイートの再激遅化）を検出できる。
 """
 from pathlib import Path
 
@@ -23,7 +23,7 @@ def test_home_is_isolated_to_tmp():
     current = Path.home().resolve()
     assert current != _REAL_HOME, (
         f"HOME is not isolated: Path.home()={current} == real home. "
-        "skills/evolve/scripts/tests/conftest.py の isolate_home fixture が "
+        "root conftest.py の isolate_home autouse fixture（#119）が "
         "効いていない（run_evolve 系テストが実 ~/.claude/projects を走査して激遅化する）。"
     )
 

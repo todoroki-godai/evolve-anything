@@ -17,14 +17,12 @@ _LIB = _PLUGIN_ROOT / "lib"
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
-from test_home_isolation import isolate_home  # noqa: E402
 import fanout_cost  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
-    """実 HOME / 実 DATA_DIR を読まないよう隔離する（#457）。"""
-    isolate_home(monkeypatch, tmp_path)
+    """実 DATA_DIR を読まないよう隔離する（HOME 隔離は root conftest の autouse・#119）。"""
     monkeypatch.setattr(fanout_cost, "DATA_DIR", tmp_path)
     return tmp_path
 

@@ -8,20 +8,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 _lib_dir = Path(__file__).resolve().parent.parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
-from test_home_isolation import isolate_home  # noqa: E402
 
 from dogfood import layer1  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def _isolate(monkeypatch, tmp_path):
-    isolate_home(monkeypatch, tmp_path / "_home")
 
 
 def test_dry_run_invariance_green_when_no_change(monkeypatch, tmp_path):

@@ -25,15 +25,8 @@ _LIB = Path(__file__).resolve().parent.parent / "lib"
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
-from test_home_isolation import isolate_home  # noqa: E402
 
 import discover  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def _home(monkeypatch, tmp_path):
-    """run_discover が実 home（~/.claude/projects ≈9925 jsonl）を走査しないよう隔離。"""
-    isolate_home(monkeypatch, tmp_path)
 
 
 # ── #521: 各 subscript ブロックの None 耐性 ───────────────────

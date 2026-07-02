@@ -33,6 +33,18 @@ import tempfile
 
 import pytest
 
+# HOME 隔離 helper（#457/#119）を single source から取り込む。scripts/lib を path に
+# 載せる（top-level に stdlib 名衝突が無いことを確認済み。#119）。個別ディレクトリの
+# conftest 頼みだった HOME 隔離を root 全体の autouse へ昇格するための import。
+_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from test_home_isolation import isolate_home  # noqa: E402
+
+# 実 HOME を必要とするテスト（live API bench / 実 PJ ingest 等）の opt-out マーカー。
+# これらは実 ~/.claude を読む正当な用途なので HOME 隔離をスキップする（#119）。
+_REAL_HOME_MARKERS = ("real_home", "bench", "bench_ingest")
+
 
 def _isolate_data_dir_at_import() -> None:
     """全テストモジュールの import より先に CLAUDE_PLUGIN_DATA を tmp に固定する。
@@ -156,7 +168,7 @@ def _rebase_module_data_dirs(monkeypatch, sys_modules, tmp_path) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_plugin_data(tmp_path, monkeypatch):
+def _isolate_plugin_data(tmp_path, tmp_path_factory, monkeypatch, request):
     """per-test の追加隔離。
 
     トップレベル ``_isolate_data_dir_at_import`` が session 一時 dir を固定する
@@ -170,6 +182,23 @@ def _isolate_plugin_data(tmp_path, monkeypatch):
     optimize_history_store の 3 件ベタ書き）はこの機械 sweep で撤去した。許可
     リストは新 store 追加時に「次のモグラ」を生む構造的欠陥で、機械 sweep が
     その根を断つ（漏れが原理的に起きない）。
+
+    【HOME 隔離 — #119】
+    ``CLAUDE_PLUGIN_DATA``(=DATA_DIR) 隔離は ``Path.home()`` 由来パスには効かない。
+    run_evolve 系は後段フェーズで ``Path.home()/.claude/projects``（実環境
+    ≈9925 jsonl / 1.9GB）を default 走査し、未隔離だと 1 件数十秒に膨張する
+    （#457）。従来この HOME 隔離は ``skills/evolve/scripts/tests/`` の autouse と
+    各テストの手動 ``isolate_home`` import 頼みで、「隔離を知らないと膨張する罠」が
+    残っていた。ここで root 全体の autouse へ昇格し、全 testpath を一律に隔離する。
+    実 HOME を要するテスト（live API bench / 実 PJ ingest）は ``_REAL_HOME_MARKERS``
+    （real_home / bench / bench_ingest）で opt-out する。
     """
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
     _rebase_module_data_dirs(monkeypatch, sys.modules, tmp_path)
+    if not any(request.node.get_closest_marker(m) for m in _REAL_HOME_MARKERS):
+        # 隔離 HOME は **test の tmp_path の外**（factory 側の別 basetemp）に作る。
+        # tmp_path 直下に置くと、tmp_path を列挙・監視するテスト（fleet
+        # enumerate_projects / *.iterdir() == [] の does-not-write 系）に
+        # ``isolated-home`` が混入して壊れる（#119）。
+        home_base = tmp_path_factory.mktemp("isolated-home-base")
+        isolate_home(monkeypatch, home_base)

@@ -21,17 +21,10 @@ for _p in (_LIB, _SCRIPTS):
 
 import pytest  # noqa: E402
 
-from test_home_isolation import isolate_home  # noqa: E402
 
 import memory_capability  # noqa: E402
 from audit.sections_memory import build_memory_capability_section  # noqa: E402
 from pj_slug import resolve_cc_memory_dir, resolve_pj_slug  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(monkeypatch, tmp_path):
-    """全テストで HOME を隔離する（実環境 memory を読ませない・#457）。"""
-    isolate_home(monkeypatch, tmp_path)
 
 
 def _memory_dir_for(project_dir: Path) -> Path:
