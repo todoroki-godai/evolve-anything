@@ -504,6 +504,43 @@ class TestCLI:
         assert output["status"] == "empty"
 
 
+# --- Test: weak_signals レーンは view-only 診断・昇格は evolve へ委譲（#117） ---
+
+class TestWeakSignalsDelegation:
+    """#117: reflect の weak_signals レーンは view-only 診断で、確認・昇格の主入口は evolve の
+    「今日の修正確認」phase（daily_review）へ委譲する。--show-weak-signals 出力は昇格入口を指す
+    promotion_hint を必ず含む（散文 SKILL.md だけに頼らず出力自体が委譲先を示す）。
+    """
+
+    def test_show_weak_signals_includes_promotion_hint(self, tmp_path, capsys):
+        weak_file = tmp_path / "weak_signals.jsonl"
+        weak_file.write_text("", encoding="utf-8")
+        with mock.patch("sys.argv", [
+            "reflect.py", "--show-weak-signals", "--weak-signals-file", str(weak_file),
+        ]):
+            reflect.main()
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "weak_signals"
+        assert "promotion_hint" in output
+        # 昇格の主入口が evolve であることを機械可読に示す。
+        assert "evolve" in output["promotion_hint"]
+
+    def test_show_weak_signals_context_branch_includes_promotion_hint(self, tmp_path, capsys):
+        # --context（relevance_gate）経路でも同じ委譲 hint を出す（両経路で非対称にしない）。
+        weak_file = tmp_path / "weak_signals.jsonl"
+        weak_file.write_text("", encoding="utf-8")
+        with mock.patch("sys.argv", [
+            "reflect.py", "--show-weak-signals", "--weak-signals-file", str(weak_file),
+            "--context", "認証ルーティングを直している",
+        ]):
+            reflect.main()
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "weak_signals"
+        assert "relevance_gate" in output  # --context 経路である確認
+        assert "promotion_hint" in output
+        assert "evolve" in output["promotion_hint"]
+
+
 # --- Test: semantic validation failure does not zero out corrections ---
 
 class TestSemanticValidationFallback:

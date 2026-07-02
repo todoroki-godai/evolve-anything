@@ -198,6 +198,43 @@ def test_build_review_includes_content_rich_excludes_content_poor(tmp_path: Path
     assert channels == {"llm_judge", "rephrase", "permission_deny"}
 
 
+def test_build_review_channels_track_review_channels_single_source(tmp_path: Path):
+    # #117 seam fence: 昇格入口（build_review）が surface する channel 集合は
+    # review_channels.REVIEW_CHANNELS を単一ソースとして追従することを保証する。
+    # daily_review._read_new が独自の literal をハードコードして分岐したら（= 昇格入口と
+    # audit 導線・reflect の一本化が崩れたら）検出する。全チャネルを流し込み、surface される
+    # channel 集合が REVIEW_CHANNELS と厳密一致・CONTENT_POOR と交わらないことを確認する。
+    from correction_semantic.review_channels import (
+        CONTENT_POOR_CHANNELS,
+        REVIEW_CHANNELS,
+    )
+
+    # 各 content-rich チャネルに互いに非類似な発話を与え 1 チャネル 1 group にする
+    # （keyword jaccard で跨チャネル merge しないよう固有語を使う）。
+    text_by_channel = {
+        "llm_judge": "認証ルーティングの設定を直す",
+        "rephrase": "データベース接続プールの変更",
+    }
+    ws = tmp_path / "weak_signals.jsonl"
+    sigs = []
+    line = 0
+    for ch in sorted(REVIEW_CHANNELS | CONTENT_POOR_CHANNELS):
+        line += 1
+        if ch == "permission_deny":
+            prov = {"tool_name": "Bash", "tool_input_summary": "git push --force",
+                    "line_no": line, "source_path": "/a.jsonl"}
+        elif ch in text_by_channel:
+            prov = {"text": text_by_channel[ch], "line_no": line, "source_path": "/a.jsonl"}
+        else:  # content-poor（周辺文脈なし）
+            prov = {"evidence": "[Request interrupted]", "line_no": line, "source_path": "/a.jsonl"}
+        sigs.append(WeakSignal(ch, prov, "t", f"s{line}", "evolve-anything"))
+    append_signals(sigs, path=ws)
+    res = dr.build_review("evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
+    surfaced = {g["channel"] for g in res["groups"]}
+    assert surfaced == set(REVIEW_CHANNELS)
+    assert surfaced.isdisjoint(CONTENT_POOR_CHANNELS)
+
+
 def test_build_review_permission_deny_distinct_commands_not_collapsed(tmp_path: Path):
     # #99 F1: 異なる拒否コマンドは固定 head「…の実行を拒否」で 1 group に潰れず、別 group
     # として個別に y/n 確認できる（旧 extract_keywords では {実行,拒否} で collapse していた）。

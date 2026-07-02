@@ -373,50 +373,61 @@ def test_contract_drift_does_not_flag_weak_signals_stale() -> None:
     assert "weak_signals.jsonl" not in drift.stale
 
 
-# ── #562: hint チャネルスコープ修正 ─────────────────────────────────────────
+# ── #117: 昇格導線を daily_review の #99 カバレッジ（content-rich）に追随させる ──
+# 旧 #562 は「llm_judge のみ evolve・残り決定論は reflect」で二分していたが、#99 で
+# daily_review が content-rich（llm_judge / rephrase / permission_deny）を昇格するよう拡張
+# されたので、導線も REVIEW_CHANNELS 単位で content-rich→evolve / content-poor→観測のみに揃える。
 
 
-def test_hint_evolve_absent_when_only_deterministic_channels_unread(
+def test_hint_evolve_absent_when_only_content_poor_unread(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """決定論チャネル（manual_edit_after_ai等）のみ未読の場合、
-    「今日の修正確認 phase」行が出ないこと（#562）。
+    """content-poor（esc / 手編集）のみ未読なら「今日の修正確認 phase」行を出さず、
+    昇格導線ではなく観測のみの注記を出すこと（#117）。
 
-    llm_judge 未読 0 件なら daily_review phase は 0 件しか出さず、
-    「今日の修正確認 phase で昇格可能」という hint が誤誘導になる。
+    content-poor は detector が周辺文脈を保存しないため昇格しても空 correction になる。
+    reflect --promote-weak へ誘導すると空昇格を招くので、導線を出してはならない。
     """
     current_slug = tmp_path.name
     _seed_multi_pj(tmp_path, monkeypatch, [
-        # 決定論チャネルのみ: 当PJ未昇格・未読
+        # content-poor のみ: 当PJ未昇格・未読
         {"channel": "manual_edit_after_ai", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
         {"channel": "esc_interrupt", "promoted": False, "pj_slug": current_slug, "signal_key": "d2"},
-        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "d3"},
-        # llm_judge は 0 件
     ])
     section = build_weak_signals_section(tmp_path)
     assert section is not None
     body = "\n".join(section)
-    # 決定論チャネルのみ → evolve の「今日の修正確認 phase」行は出ない
+    # content-rich 未読 0 → evolve の「今日の修正確認 phase」行は出ない
     assert "今日の修正確認" not in body
-    # 代わりに reflect 誘導行が出る
-    assert "reflect" in body or "--promote-weak" in body
+    # content-poor は昇格対象外（観測のみ）→ promote 導線を出さない
+    assert "--promote-weak" not in body
+    assert "対象外" in body
+    assert "2" in body  # content-poor 件数が含まれる
 
 
-def test_hint_reflect_shown_for_deterministic_unread(
+def test_hint_content_rich_deterministic_routes_to_evolve(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """決定論チャネル未読 M 件は reflect --promote-weak 誘導行が出ること（#562）。"""
+    """content-rich な決定論チャネル（rephrase / permission_deny）未読は reflect でなく
+    evolve の今日の修正確認 phase へ誘導すること（#117 の核心・#99 非対称の根治）。
+
+    #99 で daily_review が rephrase / permission_deny を拾うよう拡張されたのに、旧 #562 は
+    これらを「決定論チャネル → reflect」へ誤誘導していた。
+    """
     current_slug = tmp_path.name
     _seed_multi_pj(tmp_path, monkeypatch, [
-        {"channel": "manual_edit_after_ai", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
-        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "d2"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
+        {"channel": "permission_deny", "promoted": False, "pj_slug": current_slug, "signal_key": "d2"},
     ])
     section = build_weak_signals_section(tmp_path)
     assert section is not None
     body = "\n".join(section)
-    # 決定論チャネル 2 件 → reflect --promote-weak 誘導
-    assert "--promote-weak" in body
-    assert "2" in body  # 件数が含まれる
+    # content-rich 2 件 → evolve 今日の修正確認 phase 誘導（reflect ではない）
+    assert "今日の修正確認" in body
+    assert "content-rich" in body
+    assert "2" in body
+    # content-poor 注記は出ない（content-rich のみ）
+    assert "対象外" not in body
 
 
 def test_hint_evolve_shown_for_llm_judge_unread(
@@ -435,10 +446,14 @@ def test_hint_evolve_shown_for_llm_judge_unread(
     assert "evolve" in body
 
 
-def test_hint_evolve_absent_when_llm_judge_unread_is_zero(
+def test_hint_evolve_absent_when_content_rich_unread_is_zero(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """llm_judge 未読 0 件（全員昇格済みまたは既読）なら今日の修正確認行が出ないこと（#562）。"""
+    """content-rich 未読 0 件（既読 or 全昇格済み）なら今日の修正確認行を出さないこと（#117）。
+
+    content-rich（llm_judge）が既読で、未読が content-poor だけのとき、evolve 導線は出さず
+    content-poor 観測注記だけを出す。
+    """
     import correction_semantic.daily_review as dr
     current_slug = tmp_path.name
     seen_path = tmp_path / "correction_review_seen.jsonl"
@@ -449,24 +464,26 @@ def test_hint_evolve_absent_when_llm_judge_unread_is_zero(
     monkeypatch.setattr(dr, "default_seen_path", lambda base=None: seen_path)
 
     _seed_multi_pj(tmp_path, monkeypatch, [
-        # llm_judge: 未昇格だが既読（= daily phase 対象外）
+        # content-rich（llm_judge）: 未昇格だが既読（= daily phase 対象外）
         {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "j1"},
-        # 決定論チャネル: 未昇格・未読
-        {"channel": "rephrase", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
+        # content-poor: 未昇格・未読
+        {"channel": "manual_edit_after_ai", "promoted": False, "pj_slug": current_slug, "signal_key": "d1"},
     ])
     section = build_weak_signals_section(tmp_path)
     assert section is not None
     body = "\n".join(section)
-    # llm_judge 未読 0 → 今日の修正確認行なし
+    # content-rich 未読 0 → 今日の修正確認行なし
     assert "今日の修正確認" not in body
-    # 決定論チャネル未読あり → reflect 誘導あり
-    assert "--promote-weak" in body
+    # content-poor 未読あり → 観測のみ（promote 導線なし）
+    assert "対象外" in body
+    assert "--promote-weak" not in body
 
 
-def test_hint_both_channels_when_mixed(
+def test_hint_both_buckets_when_content_rich_and_poor_mixed(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """llm_judge と決定論チャネルの両方が未読なら両方の誘導行が出ること（#562）。"""
+    """content-rich と content-poor の両方が未読なら、content-rich→evolve 誘導と
+    content-poor→観測のみ注記の両方が出ること（#117）。"""
     current_slug = tmp_path.name
     _seed_multi_pj(tmp_path, monkeypatch, [
         {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "j1"},
@@ -475,10 +492,11 @@ def test_hint_both_channels_when_mixed(
     section = build_weak_signals_section(tmp_path)
     assert section is not None
     body = "\n".join(section)
-    # llm_judge あり → evolve 誘導
+    # content-rich → evolve 誘導
     assert "今日の修正確認" in body
-    # 決定論チャネルあり → reflect 誘導
-    assert "--promote-weak" in body
+    # content-poor → 観測のみ注記（promote 導線ではない）
+    assert "対象外" in body
+    assert "--promote-weak" not in body
 
 
 # ── #583: 過去未読 backlog（daily phase 圏外）の昇格導線を別レーンで surface ──

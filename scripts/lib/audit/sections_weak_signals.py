@@ -186,16 +186,24 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
 
     # チャネル別の (全PJ件数 / 当PJ未昇格 / 当PJ未昇格かつ未読) を集計する。
     # slug が取れない / レコードに pj_slug が無い場合は当PJ扱い（後方互換・#490）。
-    # #562: 未読を llm_judge チャネルと決定論チャネルに分けて集計する。
-    # daily_review phase（evolve）は llm_judge のみ対象。決定論チャネルは reflect 経路。
-    _LLM_JUDGE_CHANNEL = "llm_judge"
+    # #117: 未読を content-rich（REVIEW_CHANNELS）と content-poor に分けて集計する。
+    # 昇格入口は #99 で daily_review（evolve）が content-rich = llm_judge / rephrase /
+    # permission_deny を拾うよう拡張された。旧 #562 は「llm_judge のみ evolve・残り決定論は
+    # reflect」で二分していたが、それだと content-rich な rephrase / permission_deny を
+    # reflect へ誤誘導し、逆に昇格すると空 correction にしかならない content-poor（esc /
+    # 手編集）を「reflect で昇格可能」と誤って案内していた（learning_weak_promotion_channel_asymmetry）。
+    # バケットを REVIEW_CHANNELS 単一ソースに揃えることで導線を daily_review の実カバレッジに追随させる。
+    from correction_semantic.review_channels import (
+        CONTENT_POOR_CHANNELS,
+        REVIEW_CHANNELS,
+    )
 
     all_by_channel: dict = {}            # 全PJ件数（matrix の左）
     cur_unpromoted_by_channel: dict = {}  # 当PJ未昇格（matrix の右）
     unpromoted = 0      # 当PJ未昇格 合計
     unread = 0          # 当PJ未昇格かつ未読 合計（#525-1）
-    unread_llm_judge = 0       # #562: llm_judge チャネルの未読（daily phase 対象）
-    unread_deterministic = 0   # #562: 決定論チャネルの未読（reflect 経路）
+    unread_review = 0       # #117: content-rich チャネルの未読（daily_review/evolve が昇格）
+    unread_content_poor = 0  # #117: content-poor チャネルの未読（detector 文脈未保存・観測のみ）
     for r in records:
         ch = r.get("channel", "unknown")
         all_by_channel[ch] = all_by_channel.get(ch, 0) + 1
@@ -209,10 +217,10 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
             unpromoted += 1
             if r.get("signal_key") not in reviewed_keys:
                 unread += 1
-                if ch == _LLM_JUDGE_CHANNEL:
-                    unread_llm_judge += 1
-                else:
-                    unread_deterministic += 1
+                if ch in REVIEW_CHANNELS:
+                    unread_review += 1
+                elif ch in CONTENT_POOR_CHANNELS:
+                    unread_content_poor += 1
 
     # #528-2: チャネル別×スコープ matrix（1 行ずつ）。順序は既知チャネル → その他。
     ordered_channels = [c for c in _CHANNEL_ORDER if c in all_by_channel]
@@ -234,21 +242,20 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         " corrections capture が枯渇しているときの語彙非依存な代替報酬源"
         "（advisory・スコア非関与, #432）。チャネル別×スコープは次の matrix で内訳を示す:"
     )
-    # #525-1 / #562: 昇格導線文は当PJ未昇格と未読を分離する。
-    # #562: hint をチャネル別に分ける。
-    #   - llm_judge 未読 → 今日の修正確認 phase（evolve）で昇格
-    #   - 決定論チャネル未読 → reflect --promote-weak で昇格
-    # llm_judge 未読 0 のときは「今日の修正確認 phase」行を出さない（誤誘導防止）。
+    # #525-1 / #117: 昇格導線文は当PJ未昇格と未読を分離し、未読をチャネル層別に案内する。
+    #   - content-rich 未読（llm_judge / rephrase / permission_deny）→ 今日の修正確認 phase（evolve）で昇格
+    #   - content-poor 未読（esc / 手編集）→ detector 文脈未保存ゆえ個別昇格の対象外（観測のみ）
+    # content-rich 未読 0 のときは「今日の修正確認 phase」行を出さない（誤誘導防止）。
     trailer: List[str] = []
     if unpromoted > 0:
         trailer.append(
             f"当PJ未昇格 {unpromoted} 件（うち未読 {unread} 件）。"
         )
-        if unread_llm_judge > 0:
+        if unread_review > 0:
             trailer.append(
-                f"  うち llm_judge {unread_llm_judge} 件は"
+                f"  うち content-rich チャネル {unread_review} 件は"
                 " `/evolve-anything:evolve` の今日の修正確認 phase で昇格可能"
-                "（既読済は再提示されない）。"
+                "（llm_judge / 言い直し / permission deny・既読済は再提示されない）。"
             )
             # #583: 「今日の修正確認 phase で昇格可能」の案内と実導線の食い違いを解消する。
             # daily_review は max_groups（既定 5）で上位 group しか提示せず、bootstrap も
@@ -261,10 +268,11 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
             # 取得失敗時は従来挙動（誘導なし）にフォールバックする。
             for backlog_line in _backlog_lane_lines(current_slug):
                 trailer.append(backlog_line)
-        if unread_deterministic > 0:
+        if unread_content_poor > 0:
             trailer.append(
-                f"  うち決定論チャネル {unread_deterministic} 件は"
-                " `/evolve-anything:reflect --promote-weak` で昇格可能。"
+                f"  うち content-poor チャネル {unread_content_poor} 件"
+                "（Esc 中断 / 直後手編集）は detector が周辺文脈を保存しないため個別昇格の対象外"
+                "（昇格しても channel 名だけの空 correction になる・件数のみ観測・#99）。"
             )
 
     # 安全弁②（ADR-047）: idiom_dict 自動昇格を毎回 surface（黙って進まない）。

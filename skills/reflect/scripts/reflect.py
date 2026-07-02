@@ -710,7 +710,8 @@ def main():
     parser.add_argument("--session-id", type=str, default=None, help="--promote-episodic: 昇格する correction の session_id")
     parser.add_argument("--timestamp", type=str, default=None, help="--promote-episodic: 昇格する correction の timestamp")
     parser.add_argument("--show-weak-signals", action="store_true",
-                        help="weak_signals レーンの未昇格レコードを表示（#431/#432 の二層化）")
+                        help="weak_signals レーンの未昇格レコードを view-only 表示（診断・#431/#432 二層化。"
+                             "確認/昇格は evolve の今日の修正確認 phase へ・#117）")
     parser.add_argument("--weak-channel", type=str, default=None,
                         help="--show-weak-signals/--promote-weak: チャネルで絞る（例: llm_judge）")
     parser.add_argument("--context", type=str, default=None,
@@ -743,6 +744,17 @@ def main():
         unp = _cs_promote.read_unpromoted(
             weak_signals_path=weak_signals_file, channel=args.weak_channel
         )
+        # #117: reflect の weak レーンは view-only 診断。日次の確認・昇格の主入口は
+        # evolve の「今日の修正確認」phase（daily_review・Step 6.2）に一本化されており、
+        # reflect はここから昇格をドライブしない。どこで昇格するかを出力自体が示すよう、
+        # 両出力経路（plain / --context）に昇格入口 hint を機械可読に添える（散文 SKILL.md
+        # だけに頼らない）。手動昇格の低レベルプリミティブ --promote-weak は残す（evolve の
+        # daily_review / bootstrap も内部でこの CLI を使う共有プリミティブ）。
+        _promotion_hint = (
+            "確認・昇格は /evolve-anything:evolve の『今日の修正確認』phase（Step 6.2）に一本化"
+            "（reflect は view-only 診断・#117）。full-backlog の手動/スクリプト昇格は "
+            "evolve-reflect --promote-weak <signal_key,...>（evolve も内部で使う共有プリミティブ）。"
+        )
         if args.context is not None:
             from correction_semantic import relevance_gate as _rg
             thr = (
@@ -760,6 +772,7 @@ def main():
                 "suppressed": gated["suppressed"],
                 "channel": args.weak_channel,
                 "relevance_gate": _rg.summarize_gate(gated),
+                "promotion_hint": _promotion_hint,
             }, ensure_ascii=False, indent=2))
             return
         print(json.dumps({
@@ -767,6 +780,7 @@ def main():
             "unpromoted": unp,
             "count": len(unp),
             "channel": args.weak_channel,
+            "promotion_hint": _promotion_hint,
         }, ensure_ascii=False, indent=2))
         return
 

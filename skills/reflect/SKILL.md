@@ -12,6 +12,10 @@ description: |
 corrections.jsonl に蓄積されたユーザー修正を分析し、
 適切なメモリ層（CLAUDE.md / rules / auto-memory）にルーティングして反映する。
 
+> weak_signals（暗黙修正シグナル）の日次確認・昇格は `/evolve-anything:evolve` の「今日の修正確認」phase に
+> 一本化された（#117）。reflect 側の weak レーンは **view-only 診断**（`--show-weak-signals`）と
+> **idiom 自動昇格の取り消し**（`--revoke-idiom`）を専任する。
+
 ## Usage
 
 ```
@@ -22,7 +26,9 @@ corrections.jsonl に蓄積されたユーザー修正を分析し、
 /evolve-anything:reflect --apply-all            # 高信頼度を自動適用
 /evolve-anything:reflect --min-confidence 0.70  # 閾値変更
 /evolve-anything:reflect --skip-semantic        # セマンティック検証スキップ
-/evolve-anything:reflect --revoke-idiom <key>   # idiom 自動昇格の取り消し（ADR-047 安全弁③）
+/evolve-anything:reflect --revoke-idiom <key>   # idiom 自動昇格の取り消し（ADR-047 安全弁③・reflect 専任）
+/evolve-anything:reflect --show-weak-signals    # weak_signals レーンを view-only 表示（診断。昇格は evolve へ・#117）
+/evolve-anything:reflect --promote-weak <keys>  # full-backlog の手動昇格プリミティブ（対話確認は evolve の今日の修正確認 phase）
 ```
 
 ## 実行手順
@@ -228,15 +234,16 @@ audit の `memory_heavy_update` issue は `update_count >= 10` **かつ** 行数
 
 ユーザーが「そのまま更新（リセットなし）」と答えた場合は通常通り更新して `update_count` を `+1` する。
 
-### Step 7.7: weak_signals レーンの確認と corrections への昇格（#431/#432 二層化）
+### Step 7.7: weak_signals レーンの診断ビュー（昇格は evolve へ委譲・#117）
 
-> **Note（#446）**: 日次の新規 weak_signal 確認は evolve の Step 6.2「今日の修正確認」に移植済み
-> （毎日叩かれる evolve の決定論 phase 出力を消費する経路が主・既読集合 correction_review_seen.jsonl
-> で重複提示を防ぐ）。本 Step は手動の全件レビュー・channel 絞り込み確認用として残す（後方互換）。
+> **確認・昇格の主入口は evolve に一本化された（#117）。** 日次の新規 weak_signal の y/n 確認・昇格は
+> `/evolve-anything:evolve` の Step 6.2「今日の修正確認」（初回は Step 6.1 bootstrap）が担う
+> — 毎日叩かれる決定論 phase 出力を消費し、既読集合 correction_review_seen.jsonl で重複提示を防ぐ。
+> **reflect の本 Step は昇格をドライブしない** — weak_signals レーンを **view-only で診断**する
+> ためだけに残す（全件の俯瞰・channel 絞り込み・関連度ゲートの確認）。reflect 専任は
+> corrections 本流のレビュー（Step 1-7.6）+ 本 Step の診断ビュー + idiom 取り消し（`--revoke-idiom`）。
 
-corrections 本流のレビュー完了後、**weak_signals レーン**（hot hook が語彙で拾えない暗黙修正シグナル + #431 のバッチ LLM 意味判定）の未昇格レコードを人間確認する。
-
-1. **未昇格レコードを表示**:
+1. **未昇格レコードを view-only で表示**（診断のみ・ここから昇格はしない）:
 
 ```
 evolve-reflect --show-weak-signals
@@ -244,9 +251,13 @@ evolve-reflect --show-weak-signals
 evolve-reflect --show-weak-signals --weak-channel llm_judge
 ```
 
-出力 JSON の `unpromoted` 配列を読み、各レコードの `channel`（`llm_judge` = LLM 意味判定 / `rephrase` = 言い直し / `manual_edit_after_ai` / `permission_deny` / `esc_interrupt`）・`provenance.text`（元発話）・`provenance.reason`（判定理由）・`signal_key` を一覧表示する。
+出力 JSON の `unpromoted` 配列を読み、各レコードの `channel`・`provenance.text`（元発話）・`signal_key` を一覧表示する。チャネルは中身の濃さで2層に分かれる（`review_channels.py` が単一ソース・#99）:
+- **content-rich**（`llm_judge` = LLM 意味判定 / `rephrase` = 言い直し / `permission_deny` = 拒否コマンド）→ evolve の今日の修正確認 phase が昇格する。
+- **content-poor**（`esc_interrupt` / `manual_edit_after_ai`）→ detector が周辺文脈を保存しないため**個別昇格の対象外**（昇格しても channel 名だけの空 correction になる）。observability の weak_signals matrix に件数としてのみ残る。
 
-**関連度ゲート（#565・FinAcumen 流）**: 現在の作業文脈に無関係な過去経験が提案根拠に混じるのを防ぎたい場合、`--context` に現在の文脈（自由文・直近の作業内容や扱っているテーマ）を渡す:
+出力末尾の `promotion_hint` が昇格入口（evolve の今日の修正確認 phase）を指す。
+
+**関連度ゲート（#565・FinAcumen 流）**: 現在の作業文脈に無関係な過去経験が診断に混じるのを避けたい場合、`--context` に現在の文脈（自由文）を渡すと各候補に **関連度スコア**（0.0-1.0）が付き、校正済み閾値を超えた経験だけが `unpromoted` に**関連度降順**で残る。閾値未満は**黙って消さず** `suppressed` に分離され `suppressed_reason` が残る（出力末尾 `relevance_gate` で抑制の効きを確認）:
 
 ```
 evolve-reflect --show-weak-signals --weak-channel llm_judge --context "認証ルーティングの設定を直している"
@@ -254,17 +265,7 @@ evolve-reflect --show-weak-signals --weak-channel llm_judge --context "認証ル
 evolve-reflect --show-weak-signals --context "..." --relevance-threshold 0.6
 ```
 
-`--context` を渡すと各候補に **関連度スコア**（`relevance_score`・0.0-1.0）が付き、校正済み閾値を超えた経験だけが `unpromoted`（提案根拠）に**関連度降順**で残る。閾値未満の無関係な経験は**黙って消さず** `suppressed` 配列に分離され、`suppressed_reason`（なぜ落としたか）が残る。出力末尾の `relevance_gate`（`{kept, suppressed, total, threshold, gate_applied}`）で抑制の効きを確認できる。文脈キーワードが抽出できない（空 context 等）場合は `gate_applied=False` で全件素通し（安全側フォールバック・経験を勝手に隠さない）。決定論・LLM 非依存。
-
-2. **本物の修正だけを昇格**: ユーザーに各レコードが**本物の修正か**を確認する（weak_signals は本質的にノイジーなので、機械的に全部昇格しない）。本物と確認できた `signal_key` だけを昇格する:
-
-```
-evolve-reflect --promote-weak <signal_key1>,<signal_key2>
-```
-
-昇格すると corrections.jsonl に **source=reflect_confirmed**（human-source）のレコードが書かれ、weak_signal 側は `promoted=True` にマークされる（二重昇格防止）。**フェーズ昇格カウントは source=reflect_confirmed 等の human-source のみで駆動される**（機械ノイズの Stop hook 等では動かない・`provenance_weight`）。
-
-3. 昇格は**ユーザー判断に委ねる**（自動実行しない）。確認が取れないものは未昇格のまま残し、次回 reflect で再提示する。
+2. **昇格したいシグナルがあれば evolve へ**: 診断で「本物の修正」を見つけたら、`/evolve-anything:evolve` を実行して Step 6.2「今日の修正確認」で y/n 確認・昇格する（新規シグナルは既読集合で自動的に未確認分だけ提示される）。スクリプト/手動で full-backlog を昇格したい場合の低レベルプリミティブは `evolve-reflect --promote-weak <signal_key1>,<signal_key2>` で、CLI が promote と同時に対応 idiom を confirmed=True 化する（#463。evolve の Step 6.1/6.2 もこの CLI を内部で使う共有プリミティブ）。昇格すると corrections.jsonl に **source=reflect_confirmed**（human-source）が書かれ weak_signal 側は `promoted=True` になる（二重昇格防止）。**フェーズ昇格カウントは human-source のみで駆動される**（`provenance_weight`）。content-poor チャネルはこの経路でも昇格しない（空 correction を作らない）。
 
 ### Step 8: 完了サマリを表示
 
@@ -272,7 +273,7 @@ evolve-reflect --promote-weak <signal_key1>,<signal_key2>
 - 重複検出数
 - promotion 候補数
 - MEMORY 更新候補数
-- weak_signals 未昇格数 / 昇格数（#431/#432）
+- weak_signals 未昇格数（view-only 診断。確認/昇格は evolve の今日の修正確認 phase・#117）
 
 ## allowed-tools
 
