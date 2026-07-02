@@ -190,6 +190,44 @@ class TestArchiveFileDepGuard:
         assert not target.exists()
 
 
+class TestArchiveTimestampTzAware:
+    """#121: archive_file のタイムスタンプは tz-aware（naive datetime.now() を禁止）。
+
+    ISO8601 辞書順比較罠（#79）の温床解消。archive のファイル名 suffix・meta timestamp が
+    どちらも tz-aware になっていること（naive な datetime.now() 呼び出しが残っていないこと）を、
+    archive.datetime を差し替えて全 now() 呼び出しの tz 引数で検証する。
+    """
+
+    def test_all_now_calls_are_tz_aware(self, tmp_path: Path, monkeypatch) -> None:
+        import datetime as _dt
+
+        import prune
+        import prune.archive as _arch
+
+        monkeypatch.setattr(prune, "ARCHIVE_DIR", tmp_path / "_archive")
+
+        recorded_tz = []
+
+        class _RecordingDateTime:
+            @staticmethod
+            def now(tz=None):
+                recorded_tz.append(tz)
+                return _dt.datetime.now(tz)
+
+        # archive.py は `from datetime import datetime, timezone` なので
+        # モジュール属性 `datetime` を差し替えれば now() 呼び出しを捕捉できる。
+        monkeypatch.setattr(_arch, "datetime", _RecordingDateTime)
+
+        target = tmp_path / "some_file.md"
+        target.write_text("hello", encoding="utf-8")
+        result = prune.archive_file(str(target), "test")
+
+        assert result is not None
+        assert recorded_tz, "datetime.now() が一度も呼ばれていない"
+        # naive（tz=None）な now() 呼び出しが 1 つも残っていないこと。
+        assert all(tz is not None for tz in recorded_tz), recorded_tz
+
+
 class TestSkillDependencyError:
     def test_error_class_exists(self) -> None:
         from prune import SkillDependencyError

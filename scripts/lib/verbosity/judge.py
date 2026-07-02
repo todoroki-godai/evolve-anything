@@ -127,7 +127,8 @@ def build_suggestion(pat_counter: collections.Counter) -> Optional[str]:
             lines.append(_RULES_FOR[p])
     lines.append("")
     lines.append(
-        f"<!-- suggestion generated {datetime.datetime.now().isoformat(timespec='minutes')}"
+        f"<!-- suggestion generated "
+        f"{datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='minutes')}"
         " by verbosity.judge (#75) -->"
     )
     return "\n".join(lines) + "\n"

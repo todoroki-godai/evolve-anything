@@ -320,3 +320,23 @@ def test_judge_runs_as_direct_script_dry_run(tmp_path):
     # dry-run は 1 バイトも書かない。
     assert not (data / _vstore.CANDIDATES_STORE).exists()
     assert not (data / _vstore.VERDICTS_STORE).exists()
+
+
+# ──────────────────── build_suggestion: tz-aware timestamp（#121）─────────────
+
+def test_build_suggestion_timestamp_is_tz_aware():
+    """#121: 提案コメントの `suggestion generated <ts>` は tz-aware（ISO8601 辞書順比較罠 #79 の温床解消）。
+
+    naive `datetime.now().isoformat()` だと tz 情報が欠落し、他 store の tz-aware
+    timestamp と辞書順比較したとき Z/+00:00 有無で誤序列になりうる（#79）。
+    """
+    import collections
+    import datetime as _dt
+    import re
+
+    out = _judge.build_suggestion(collections.Counter({"preamble": 3}))
+    assert out is not None
+    m = re.search(r"suggestion generated (\S+) by verbosity\.judge", out)
+    assert m is not None, out
+    parsed = _dt.datetime.fromisoformat(m.group(1))
+    assert parsed.tzinfo is not None, f"naive timestamp: {m.group(1)}"

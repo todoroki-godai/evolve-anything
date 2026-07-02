@@ -78,8 +78,8 @@ def archive_file(
 
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # タイムスタンプ付きでアーカイブ
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # タイムスタンプ付きでアーカイブ（tz-aware・UTC 基準。ISO8601 辞書順比較罠 #79 の温床解消）
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     dest = ARCHIVE_DIR / f"{timestamp}_{src.name}"
     shutil.move(str(src), str(dest))
 

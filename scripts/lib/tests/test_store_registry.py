@@ -245,9 +245,84 @@ def test_status_defaults_to_active() -> None:
     assert decl.status == "active"
 
 
-def test_all_real_declarations_are_active() -> None:
-    """同梱 SoT の全ストアは現状 active（legacy/dead は #46/#54 で段階導入）。"""
-    assert all(d.status == "active" for d in store_registry.declarations())
+# #121: 未登録 legacy ストア11件を registry 宣言（status=legacy、hook 未登録で
+# もう書かれない deferred_tasks.jsonl のみ dead）。writer/reader を実 grep で確認済み。
+_LEGACY_STORES_121 = [
+    "audit-history.jsonl",       # writer live: audit orchestrator _record_audit_completion
+    "belief_blocks.jsonl",       # writer live: auto_memory_broker _record_belief_block
+    "discover-suppression.jsonl",  # writer live: discover/suppression の record 群
+    "episodic.db",               # writer live: reflect の promote_to_episodic→insert_event
+    "evolution_memory.jsonl",    # writer live: genetic-prompt-optimizer optimize.save_winner
+    "growth-journal.jsonl",      # writer 現存(backfill 経由・dormant)・reader live(query_crystallizations)
+    "quality-baselines.jsonl",   # writer live: quality_monitor save_baselines/append_record
+    "quality-scores.jsonl",      # writer live: evolve phases_diagnose.record_quality_score
+    "sessions.db",               # writer live: session_store.ingest (batch)
+    "token_usage.db",            # writer live: token_usage_store の bulk INSERT
+]
+_DEAD_STORES_121 = ["deferred_tasks.jsonl"]  # hook detect-deferred-task.py 未登録＝もう書かれない
+
+
+def test_legacy_and_dead_stores_declared_121() -> None:
+    """#121: legacy 10 件 + dead 1 件が正しい status で宣言されている。
+
+    旧 test_all_real_declarations_are_active（全 active 前提）を #121 の段階導入に更新。
+    active は既存のまま、legacy/dead は #121 で新規宣言した既知集合のみが持つ。
+    """
+    by_status = {}
+    for d in store_registry.declarations():
+        by_status.setdefault(d.status, set()).add(d.name)
+    assert set(_LEGACY_STORES_121) <= by_status.get("legacy", set())
+    assert set(_DEAD_STORES_121) <= by_status.get("dead", set())
+    # legacy/dead は #121 で導入した既知集合に限定（意図しない降格を検出）。
+    assert by_status.get("legacy", set()) == set(_LEGACY_STORES_121)
+    assert by_status.get("dead", set()) == set(_DEAD_STORES_121)
+
+
+def test_legacy_dead_stores_not_active_121() -> None:
+    """#121: legacy/dead ストアは active でない（write barrier が store_write を弾く）。
+
+    これらは直接 writer（open/INSERT・store_write 非経由）で書くため、非 active でも
+    実行時には壊れない。active でないことで write barrier の active-only 集合から外れる。
+    """
+    for name in _LEGACY_STORES_121 + _DEAD_STORES_121:
+        assert store_registry.is_active_store(name) is False, name
+        assert name not in store_registry.active_store_names(), name
+
+
+def test_active_store_names_unchanged_by_121() -> None:
+    """#121: legacy/dead 追加で active 集合（write-path-set snapshot）は不変。"""
+    active = set(store_registry.active_store_names())
+    assert active.isdisjoint(set(_LEGACY_STORES_121) | set(_DEAD_STORES_121))
+
+
+def test_legacy_dead_stores_not_flagged_as_stale_121() -> None:
+    """#121: legacy/dead 宣言は contract-drift の stale に誤検知されない（#55 status の意図）。
+
+    stale = 宣言ありだが実 hook writer 不在。legacy/dead は writer が batch/直接 or
+    退役済み（dead）なので hook writer 突合に出ないのは当然であり drift ではない。
+    stale_exempt を status-aware にして誤検知を防ぐ。
+    """
+    drift = orphan_store.detect_store_contract_drift()
+    for name in _LEGACY_STORES_121 + _DEAD_STORES_121:
+        assert name not in drift.stale, name
+    # real tree の stale は空を維持（全 legacy/dead は exempt/batch/db）。
+    assert drift.stale == []
+
+
+def test_stale_exempt_includes_non_active_121() -> None:
+    """#121: 非 active（legacy/dead）ストアは stale_exempt に含まれる。"""
+    exempt = set(store_registry.stale_exempt_names())
+    assert "deferred_tasks.jsonl" in exempt  # dead + hook writer_locus でも exempt
+    assert set(_LEGACY_STORES_121) <= exempt
+
+
+def test_episodic_and_sessions_and_token_declared_as_db_121() -> None:
+    """#121: 3 つの .db legacy ストアは kind='db' で宣言（hook-writer 突合の母集団外）。"""
+    for name in ("episodic.db", "sessions.db", "token_usage.db"):
+        decl = store_registry.declaration_for(name)
+        assert decl is not None, name
+        assert decl.kind == "db", name
+        assert decl.status == "legacy", name
 
 
 def test_status_can_be_legacy_or_dead() -> None:

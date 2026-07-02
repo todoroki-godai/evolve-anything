@@ -346,6 +346,148 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "レート（per-evolve 1 件）なので permanent。writer は batch（apply 境界）のみ"
         "（hook-writer stale 突合から writer_locus=batch で除外）。",
     ),
+    # ------------------------------------------------------------------------
+    # #121: 未登録 legacy ストア群のバックフィル宣言。
+    #
+    # 以下は store_registry 導入前（#434 以前）からある旧ストアで、writer が hooks でなく
+    # batch script / DuckDB ingest / 直接 open() のため store_write barrier を経由しない。
+    # active（write barrier の許可対象）ではないので status=legacy（実体がもう書かれない
+    # deferred_tasks.jsonl のみ dead）で宣言し、registry を全ストアの SoT に近づける。
+    # writer/reader の live 判定は grep で実確認（各エントリの writer/reader/note に根拠を明記）。
+    # 非 active なので active_store_names()（write-path-set snapshot）には現れず、
+    # stale_exempt（status-aware）で contract-drift の stale にも載らない。
+    # ------------------------------------------------------------------------
+    StoreDeclaration(
+        name="audit-history.jsonl",
+        writer="scripts/lib/audit/orchestrator.py の _record_audit_completion→"
+        "_append_audit_history（audit 完了時・非 dry-run）。batch writer。",
+        writer_locus="batch",
+        reader="同 orchestrator が劣化検出（check_environment_degradation 相当）で読む。",
+        retention="compaction",
+        compaction="_append_audit_history が直近 _MAX_AUDIT_HISTORY=100 件に pruning。",
+        status="legacy",
+        note="#121: audit 完了履歴。store_registry 導入前からの旧ストアで writer は batch "
+        "（hook 非経由）。active でないので write barrier の許可集合には含めない。",
+    ),
+    StoreDeclaration(
+        name="belief_blocks.jsonl",
+        writer="scripts/lib/auto_memory_broker.py の _record_belief_block（belief_entropy "
+        "ゲートで block した要約を記録）。batch writer。",
+        writer_locus="batch",
+        reader="scripts/lib/belief_entropy.py（直近 days 日の block 集計）・"
+        "scripts/lib/audit/sections.py。",
+        retention="permanent",
+        status="legacy",
+        note="#121: belief_entropy ゲートのブロック記録。append-only（prune/上限なし）。"
+        "writer は batch（hook 非経由）。",
+    ),
+    StoreDeclaration(
+        name="deferred_tasks.jsonl",
+        writer="hooks/detect-deferred-task.py の log_deferral（Stop hook）。ただし当該 hook は "
+        "hooks.json に未登録＝発火せず、実体はもう書かれない。",
+        writer_locus="hook",
+        reader="なし（jsonl データを読む consumer は不在。discover/artifacts.py は hook "
+        "スクリプトのパスを推奨 artifact として参照するのみでデータは読まない）。",
+        retention="permanent",
+        disposition="remove",
+        status="dead",
+        note="#121: hook detect-deferred-task.py は hooks.json 未登録のため発火せず、この "
+        "ストアはもう書かれない（=dead）。discover が導入を推奨できる artifact なので、"
+        "ユーザーが hook を登録したら writer が live 化する。その際は status を legacy/active に見直す。",
+    ),
+    StoreDeclaration(
+        name="discover-suppression.jsonl",
+        writer="scripts/lib/discover/suppression.py の記録関数群（merge/pattern/artifact の "
+        "見送りを discover flow から記録）。batch writer。",
+        writer_locus="batch",
+        reader="同 suppression.py の is_*_suppressed / filter 群（TTL 窓内は畳む）。",
+        retention="ttl",
+        ttl_days=45,
+        status="legacy",
+        note="#121: discover 提案の見送りレジャー。ARTIFACT_SUPPRESSION_TTL_DAYS=45 の"
+        "read 時窓（物理 prune はせず weak_signals と同型の read-time 失効）。writer は batch。",
+    ),
+    StoreDeclaration(
+        name="episodic.db",
+        kind="db",
+        writer="scripts/lib/episodic_store.py の insert_event（reflect が approve 済み "
+        "correction を promote_to_episodic 経由で挿入）。batch writer（DuckDB）。",
+        reader="scripts/lib/episodic_store.query_relevant（audit/memory・memory_trace 帰属）。",
+        retention="ttl",
+        ttl_days=30,
+        status="legacy",
+        note="#121: episodic 層（適用済み修正の DuckDB TTL 管理）。ttl_days 既定 30 で "
+        "expires_at を設定し prune_expired が削除。db なので hook-writer 突合の母集団外。",
+    ),
+    StoreDeclaration(
+        name="evolution_memory.jsonl",
+        writer="scripts/lib/evolution_memory.py の save_winner（genetic-prompt-optimizer の "
+        "optimize.py が成功パターンを追記）。batch writer。",
+        writer_locus="batch",
+        reader="evolution_memory の union read（canonical + legacy dir を cross-dir 合算・#45）。",
+        retention="compaction",
+        compaction="save_winner が _MAX_RECORDS=1000 件で古い順ローテーション。",
+        status="legacy",
+        note="#121: 直接パッチ最適化の成功パターン記憶。writer は batch（optimize skill）。",
+    ),
+    StoreDeclaration(
+        name="growth-journal.jsonl",
+        writer="scripts/lib/growth_journal.py の emit_crystallization（現状は "
+        "backfill_from_git_log 経由のみで dormant・production の常時 writer なし）。batch writer。",
+        writer_locus="batch",
+        reader="query_crystallizations / count_crystallized_rules（growth_narrative・"
+        "audit/orchestrator・sections_milestone が成長ストーリー素材に消費）。reader は live。",
+        retention="permanent",
+        status="legacy",
+        note="#121: 結晶化イベント記録。reader は live だが writer は backfill 経由で dormant。"
+        "append-only（_patch_last_event_ts で末尾行更新はするが rotation/上限なし）。",
+    ),
+    StoreDeclaration(
+        name="quality-baselines.jsonl",
+        writer="scripts/quality_monitor.py の save_baselines / append_record（audit の "
+        "quality 2 相オーケストレーションが呼ぶ）。batch writer。",
+        writer_locus="batch",
+        reader="scripts/lib/audit/quality.py の load_quality_baselines・quality_monitor 自身。",
+        retention="compaction",
+        compaction="append_record がスキルあたり MAX_RECORDS_PER_SKILL=100 件に上限適用。",
+        status="legacy",
+        note="#121: スキル品質ベースライン。writer は batch（quality_monitor / audit）。",
+    ),
+    StoreDeclaration(
+        name="quality-scores.jsonl",
+        writer="scripts/lib/quality_engine.py の record_quality_score（evolve の "
+        "phases_diagnose がスキル採点を追記）。batch writer。",
+        writer_locus="batch",
+        reader="現状 consumer 未検出（スコアボード用途の writer-only 傾向）。",
+        retention="permanent",
+        status="legacy",
+        note="#121: スキル品質スコアのスコアボード。writer live（evolve 採点）だが専用 reader は "
+        "未検出。append-only（rotation/上限なし）。writer は batch。",
+    ),
+    StoreDeclaration(
+        name="sessions.db",
+        kind="db",
+        writer="scripts/lib/session_store.py の ingest（sessions.jsonl → sessions.db の "
+        "batch 取り込み）。batch writer（DuckDB）。",
+        reader="session_store の union read（audit / trigger / capture_rate / fleet 等が "
+        "SoR として参照）。reader 多数。",
+        retention="compaction",
+        compaction="file_size vs rows×平均行長 の乖離 >10倍 で rebuild（free page 解放）。",
+        status="legacy",
+        note="#121: セッションテレメトリの DuckDB SoR。active な sessions.jsonl（hot-path 緩衝）が "
+        "ingest されてくる先。db なので hook-writer 突合の母集団外。",
+    ),
+    StoreDeclaration(
+        name="token_usage.db",
+        kind="db",
+        writer="scripts/lib/token_usage_store.py の bulk INSERT（transcript 由来の "
+        "token 消費を INSERT OR IGNORE で冪等取り込み）。batch writer（DuckDB）。",
+        reader="token_usage_store の query 群（fleet tokens・fitness_history_store）。",
+        retention="permanent",
+        status="legacy",
+        note="#121: PJ 別 LLM トークン消費の DuckDB SoR。PK は transcript 各行 top-level uuid・"
+        "prune なし（permanent）。db なので hook-writer 突合の母集団外。",
+    ),
 ]
 
 
@@ -359,13 +501,21 @@ def stale_exempt_names() -> List[str]:
 
     hook-writer 突合（find_store_writers）に現れない writer を持つストアは、
     宣言があっても「実 writer 見当たらず」で stale 誤検知になる。除外対象:
-    - kind="db"          : writer が batch ingest（utterances.db）
+    - kind="db"           : writer が batch ingest（utterances.db）
     - writer_locus="batch": writer が batch script（weak_signals.jsonl 等）
+    - status != "active"  : legacy/dead は writer が batch/直接 or 退役済み（dead）で
+                            hook writer 突合に出ないのが当然（#121・#55 status の意図）。
+                            特に dead な hook writer（deferred_tasks.jsonl は hook 未登録で
+                            発火せず）を「writer 消えた」と drift 扱いするのは冗長なので除外する。
 
-    両者は同じ理由（hook に現れない writer）なので 1 関数で集約する（#432）。
+    いずれも同じ理由（hook writer 突合に現れない）なので 1 関数で集約する（#432・#121）。
     """
     return sorted(
-        {d.name for d in _DECLARATIONS if d.kind == "db" or d.writer_locus == "batch"}
+        {
+            d.name
+            for d in _DECLARATIONS
+            if d.kind == "db" or d.writer_locus == "batch" or d.status != "active"
+        }
     )
 
 
