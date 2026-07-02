@@ -25,6 +25,8 @@ observability contract から参照される `build_*_section` 契約
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .advisory import build_advisory_section
+
 # custom スキルを探す候補ディレクトリ（sections_triage と同一の判定）。
 _SKILL_DIR_CANDIDATES = (
     Path(".claude") / "skills",
@@ -99,65 +101,74 @@ def build_multiview_eval_section(project_dir: Path) -> Optional[List[str]]:
     - multiview_eval / telemetry が未解決、または usage が空 → None（沈黙）
     - 集約できたら、ラベルが付いたスキルを surface（全スキル中立でも「評価したが該当なし ✓」を出す）
     """
-    proj = Path(project_dir)
-    skills = _custom_skill_names(proj)
-    if not skills:
-        return None
+    def compute(proj: Path) -> Optional[Dict[str, Any]]:
+        skills = _custom_skill_names(proj)
+        if not skills:
+            return None
+        inputs = _gather_inputs(proj)
+        if inputs is None:
+            return None
+        return {"skills": skills, "inputs": inputs}
 
-    inputs = _gather_inputs(proj)
-    if inputs is None:
-        return None
+    def render(data: Dict[str, Any]) -> List[str]:
+        from . import multiview_eval
 
-    from . import multiview_eval
+        skills = data["skills"]
+        inputs = data["inputs"]
 
-    classified = multiview_eval.classify_multiview(
-        target_skills=skills,
-        chaos_result=None,  # 重い chaos は再実行しない（上記設計判断）。
-        outcome_attribution=inputs["attribution"],
-        negative_transfer=inputs["negative_transfer"],
-    )
-    counts = multiview_eval.summarize_labels(classified)
+        classified = multiview_eval.classify_multiview(
+            target_skills=skills,
+            chaos_result=None,  # 重い chaos は再実行しない（上記設計判断）。
+            outcome_attribution=inputs["attribution"],
+            negative_transfer=inputs["negative_transfer"],
+        )
+        counts = multiview_eval.summarize_labels(classified)
 
-    header = [
-        "## Multiview Eval (evolve 提案の多視点評価・advisory — スコア重みには未反映)",
-        "",
-        "evolve 対象スキルを4視点で決定論分類する（accept/reject の単一軸を多視点に拡張, #564）。"
-        "chaos（SPOF）は重いため本セクションでは再実行せず、outcome/negative-transfer 由来の"
-        "視点のみ集約。決定論・LLM 非依存。",
-        "",
-    ]
-
-    # ラベルが1つでも付いたスキルを列挙（unknown / 中立は明細から除外し件数だけ示す）。
-    flagged = [
-        (skill, rec)
-        for skill, rec in sorted(classified.items())
-        if rec.get("labels") and rec["labels"] != [multiview_eval.LABEL_UNKNOWN]
-    ]
-
-    if not flagged:
-        return header + [
-            f"✓ 評価したが該当視点なし（custom スキル {len(skills)} 件を評価、"
-            "退行リスク / 過学習疑い / コスト増 いずれも非該当）。",
-            "",
+        # ラベルが1つでも付いたスキルを列挙（unknown / 中立は明細から除外し件数だけ示す）。
+        flagged = [
+            (skill, rec)
+            for skill, rec in sorted(classified.items())
+            if rec.get("labels") and rec["labels"] != [multiview_eval.LABEL_UNKNOWN]
         ]
 
-    body: List[str] = []
-    for skill, rec in flagged:
-        labels = rec["labels"]
-        jp = ", ".join(
-            multiview_eval.LABEL_DESCRIPTIONS.get(label, label) for label in labels
+        if not flagged:
+            return [
+                f"✓ 評価したが該当視点なし（custom スキル {len(skills)} 件を評価、"
+                "退行リスク / 過学習疑い / コスト増 いずれも非該当）。",
+            ]
+
+        body: List[str] = []
+        for skill, rec in flagged:
+            labels = rec["labels"]
+            jp = ", ".join(
+                multiview_eval.LABEL_DESCRIPTIONS.get(label, label) for label in labels
+            )
+            body.append(f"- **{skill}**: {jp}")
+            ev = rec.get("evidence", {})
+            body.append("    " + _format_evidence(ev))
+
+        summary = "件数: " + " / ".join(
+            f"{multiview_eval.LABEL_DESCRIPTIONS.get(label, label).split('（')[0]} {n}"
+            for label, n in sorted(counts.items())
+            if label != multiview_eval.LABEL_UNKNOWN
         )
-        body.append(f"- **{skill}**: {jp}")
-        ev = rec.get("evidence", {})
-        body.append("    " + _format_evidence(ev))
 
-    summary = "件数: " + " / ".join(
-        f"{multiview_eval.LABEL_DESCRIPTIONS.get(label, label).split('（')[0]} {n}"
-        for label, n in sorted(counts.items())
-        if label != multiview_eval.LABEL_UNKNOWN
+        # render は末尾空行を含めない（finalize が trailer 1 本足す）。summary 行を本文扱いに
+        # して trailer との二重空行を避ける（元 `header + body + ["", summary, ""]` を再現）。
+        return body + ["", summary]
+
+    return build_advisory_section(
+        project_dir,
+        title="Multiview Eval (evolve 提案の多視点評価・advisory — スコア重みには未反映)",
+        blurb=[
+            "evolve 対象スキルを4視点で決定論分類する（accept/reject の単一軸を多視点に拡張, #564）。"
+            "chaos（SPOF）は重いため本セクションでは再実行せず、outcome/negative-transfer 由来の"
+            "視点のみ集約。決定論・LLM 非依存。",
+        ],
+        compute=compute,
+        applicable=lambda _data: True,
+        render=render,
     )
-
-    return header + body + ["", summary, ""]
 
 
 def _format_evidence(ev: Dict[str, Any]) -> str:

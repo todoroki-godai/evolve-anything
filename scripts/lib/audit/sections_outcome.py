@@ -16,6 +16,8 @@ project_dir の basename を当PJ識別子として当PJスコープに直す（
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .advisory import build_advisory_section
+
 
 _AXIS_LABELS = {
     "correction_recurrence": ("correction 再発率", "低いほど良い（同型修正の繰り返し減）"),
@@ -89,30 +91,39 @@ def build_outcome_metrics_section(project_dir: Path) -> Optional[List[str]]:
       評価対象がある場合にのみ適用）
     - いずれかの軸にデータがあれば 3 軸を出力（データ不足の軸は「データ不足」と明示）
     """
-    try:
-        from . import outcome_metrics
-    except ImportError:
-        return None
+    def compute(proj: Path) -> Optional[Dict[str, Any]]:
+        try:
+            from . import outcome_metrics
+        except ImportError:
+            return None
+        # #489: 当PJスコープに直す。project_dir を worktree 安全 slug に正規化して渡す
+        # （本体 / worktree どちらから audit しても同じ slug になり取りこぼしを防ぐ）。
+        return outcome_metrics.compute_outcome_metrics(
+            days=30, project=outcome_metrics._normalize_pj(str(proj))
+        )
 
-    # #489: 当PJスコープに直す。project_dir を worktree 安全 slug に正規化して渡す
-    # （本体 / worktree どちらから audit しても同じ slug になり取りこぼしを防ぐ）。
-    metrics = outcome_metrics.compute_outcome_metrics(
-        days=30, project=outcome_metrics._normalize_pj(str(project_dir))
+    def applicable(metrics: Dict[str, Any]) -> bool:
+        # 評価対象（該当ストア）が 1 つも無い環境は沈黙する。
+        return not all(
+            metrics[k].get("value") is None
+            for k in ("correction_recurrence", "first_try_success", "rework")
+        )
+
+    def render(metrics: Dict[str, Any]) -> List[str]:
+        body: List[str] = []
+        for key in ("correction_recurrence", "first_try_success", "rework"):
+            body.extend(_format_axis(key, metrics[key]))
+        return body
+
+    return build_advisory_section(
+        project_dir,
+        title="Outcome Metrics v1 (当PJ・advisory — スコア重みには未反映)",
+        blurb=[
+            "作業の手戻り・やり直しを直接測る 3 つの指標です（このプロジェクトのみ集計, #489）。"
+            "2〜4 週間データを貯めてから、スコアの重みに取り込むか判断します（内部設計 ADR-046）。"
+            "LLM を使わず決定論で算出。",
+        ],
+        compute=compute,
+        applicable=applicable,
+        render=render,
     )
-
-    # 評価対象（該当ストア）が 1 つも無い環境は沈黙する。
-    if all(metrics[k].get("value") is None for k in ("correction_recurrence", "first_try_success", "rework")):
-        return None
-
-    header = [
-        "## Outcome Metrics v1 (当PJ・advisory — スコア重みには未反映)",
-        "",
-        "作業の手戻り・やり直しを直接測る 3 つの指標です（このプロジェクトのみ集計, #489）。"
-        "2〜4 週間データを貯めてから、スコアの重みに取り込むか判断します（内部設計 ADR-046）。"
-        "LLM を使わず決定論で算出。",
-        "",
-    ]
-    body: List[str] = []
-    for key in ("correction_recurrence", "first_try_success", "rework"):
-        body.extend(_format_axis(key, metrics[key]))
-    return header + body + [""]

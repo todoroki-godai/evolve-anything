@@ -12,7 +12,9 @@ fitness の重み軸にはしない（outcome_metrics / fanout_cost と同じ ad
   silence != evaluated: 評価対象があるのに floor 未満なら沈黙でなく不足を明示する。
 """
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
+from .advisory import build_advisory_section
 
 # #76 Finding A: floor を満たす agent_type のうち、内部品質が悪い種別に ⚠ を付けて
 # report.py の畳み込み（⚠/🔴 だけ full-text 展開）に乗せ、『✓ 評価済みクリーン』への
@@ -41,72 +43,80 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
     - 1 件以上 → agent_type 別の内部一発成功率 + 平均 tool error。floor 未満の agent_type
       しか無ければデータ不足を明示する。
     """
-    try:
-        from subagent_traces import query as _q
-        from subagent_traces import store as _store
-    except ImportError:
-        return None
+    def compute(proj: Path) -> Optional[Dict[str, Any]]:
+        try:
+            from subagent_traces import query as _q  # noqa: F401
+            from subagent_traces import store as _store
+        except ImportError:
+            return None
+        slug = _slug_for(proj)
+        if not slug:
+            return None
+        traces = _store.read_traces(slug)
+        if not traces:
+            # 評価対象（当 PJ の軌跡）が 1 件も無い環境は沈黙する。
+            return None
+        return {"traces": traces, "summaries": _q.per_agent_type_summary(slug)}
 
-    slug = _slug_for(Path(project_dir))
-    if not slug:
-        return None
+    def render(data: Dict[str, Any]) -> List[str]:
+        from subagent_traces import query as _q  # DEFAULT_MIN_TRACES 参照用
 
-    traces = _store.read_traces(slug)
-    if not traces:
-        # 評価対象（当 PJ の軌跡）が 1 件も無い環境は沈黙する。
-        return None
+        traces = data["traces"]
+        summaries = data["summaries"]
 
-    summaries = _q.per_agent_type_summary(slug)
-
-    header = [
-        "## Subagent Internal Traces (当PJ・advisory — スコア重みには未反映)",
-        "",
-        "subagent が内部で何回エラーしてからやり直したかを transcript から測ります（#38）。"
-        "親セッションの error_count だけ見ると、subagent が内部で何度も失敗して最終的に"
-        "成功した場合に『一発成功』と誤記録されます。その盲点を agent 種別ごとに可視化します。"
-        "LLM を使わず決定論で算出。",
-        "",
-    ]
-
-    body: List[str] = []
-    if not summaries:
-        # 軌跡はあるが各 agent_type が floor 未満 → 沈黙でなくデータ不足を明示。
-        body.append(
-            f"  ・agent 種別別の内部一発成功率: データ不足 — 集計対象 {len(traces)} 件はあるが、"
-            f"各 agent 種別が最小サンプル数（{_q.DEFAULT_MIN_TRACES} 件）に満たないため率は非表示。"
-        )
-        body.append(
-            f"      蓄積条件: 同一 agent 種別の subagent 軌跡が {_q.DEFAULT_MIN_TRACES} 件以上"
-            "貯まると種別ごとに算出されます。"
-        )
-        return header + body + [""]
-
-    flagged = False
-    for s in summaries:
-        rate = s["first_try_success_rate"]
-        ate = s["avg_tool_error"]
-        low_rate = rate < LOW_FIRST_TRY_SUCCESS
-        high_err = ate >= HIGH_AVG_TOOL_ERROR
-        if low_rate or high_err:
-            flagged = True
-            reasons: List[str] = []
-            if low_rate:
-                reasons.append(f"内部リトライ多（一発成功率 < {LOW_FIRST_TRY_SUCCESS:.2f}）")
-            if high_err:
-                reasons.append(f"tool error 過多（平均 ≥ {HIGH_AVG_TOOL_ERROR:.1f}）")
+        body: List[str] = []
+        if not summaries:
+            # 軌跡はあるが各 agent_type が floor 未満 → 沈黙でなくデータ不足を明示。
             body.append(
-                f"  ・⚠ {s['agent_type']}: 内部一発成功率 {rate:.2f}"
-                f"（{s['n']} 件）・平均 tool error {ate:.2f} — {' / '.join(reasons)}"
+                f"  ・agent 種別別の内部一発成功率: データ不足 — 集計対象 {len(traces)} 件はあるが、"
+                f"各 agent 種別が最小サンプル数（{_q.DEFAULT_MIN_TRACES} 件）に満たないため率は非表示。"
             )
-        else:
             body.append(
-                f"  ・{s['agent_type']}: 内部一発成功率 {rate:.2f}"
-                f"（{s['n']} 件）— 高いほど内部リトライ少。平均 tool error {ate:.2f}"
+                f"      蓄積条件: 同一 agent 種別の subagent 軌跡が {_q.DEFAULT_MIN_TRACES} 件以上"
+                "貯まると種別ごとに算出されます。"
             )
-    if flagged:
-        body.append("")
-        body.append(
-            "  → ⚠ の agent 種別は親セッションでは『一発成功』に見えても内部で失敗を"
-            "繰り返しています（#38）。当該 agent 定義のツール手順・前提・権限を見直してください。"
-        )
-    return header + body + [""]
+            return body
+
+        flagged = False
+        for s in summaries:
+            rate = s["first_try_success_rate"]
+            ate = s["avg_tool_error"]
+            low_rate = rate < LOW_FIRST_TRY_SUCCESS
+            high_err = ate >= HIGH_AVG_TOOL_ERROR
+            if low_rate or high_err:
+                flagged = True
+                reasons: List[str] = []
+                if low_rate:
+                    reasons.append(f"内部リトライ多（一発成功率 < {LOW_FIRST_TRY_SUCCESS:.2f}）")
+                if high_err:
+                    reasons.append(f"tool error 過多（平均 ≥ {HIGH_AVG_TOOL_ERROR:.1f}）")
+                body.append(
+                    f"  ・⚠ {s['agent_type']}: 内部一発成功率 {rate:.2f}"
+                    f"（{s['n']} 件）・平均 tool error {ate:.2f} — {' / '.join(reasons)}"
+                )
+            else:
+                body.append(
+                    f"  ・{s['agent_type']}: 内部一発成功率 {rate:.2f}"
+                    f"（{s['n']} 件）— 高いほど内部リトライ少。平均 tool error {ate:.2f}"
+                )
+        if flagged:
+            body.append("")
+            body.append(
+                "  → ⚠ の agent 種別は親セッションでは『一発成功』に見えても内部で失敗を"
+                "繰り返しています（#38）。当該 agent 定義のツール手順・前提・権限を見直してください。"
+            )
+        return body
+
+    return build_advisory_section(
+        project_dir,
+        title="Subagent Internal Traces (当PJ・advisory — スコア重みには未反映)",
+        blurb=[
+            "subagent が内部で何回エラーしてからやり直したかを transcript から測ります（#38）。"
+            "親セッションの error_count だけ見ると、subagent が内部で何度も失敗して最終的に"
+            "成功した場合に『一発成功』と誤記録されます。その盲点を agent 種別ごとに可視化します。"
+            "LLM を使わず決定論で算出。",
+        ],
+        compute=compute,
+        applicable=lambda _data: True,
+        render=render,
+    )
