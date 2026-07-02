@@ -89,6 +89,7 @@
 | `cross_pj_priority` | confirmed idiom の PJ 横断優先提示 — 他 PJ 承認済みと同テキストの確認 group に `cross_pj_confirmed` ラベル + 先頭表示（提示のみ・自動承認しない、normalize は autopromote と1関数共有）（#462） | `correction_semantic/cross_pj_priority.py` |
 | `testpaths_coverage` | pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468） | `testpaths_coverage.py` |
 | `plugin_self` origin | プラグイン本体リポジトリ自身の repo 直下 `skills/` を evolve 診断対象化 — `.claude-plugin/plugin.json` 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185） | `skill_origin.py` |
+| `scaffold_advisory` | advisory 3点セット追加の scaffold — #115 共通枠を使った observability builder stub のテンプレ生成 + 多点配線チェックリストで keyset snapshot 追従漏れ等のミス面を下げる。`bin/evolve-scaffold-advisory <name> [--with-store] [--write]`（既定 dry-run）。(c) 低トラフィック畳み込みは既存 fold_clean_observability で対応済（#118 (b)） | `scaffold_advisory.py` |
 | `dogfood gate` | 通し評価ゲート `bin/evolve-dogfood-gate` — Layer1: dry-run SHA256 不変 + 非 dry-run store 差分 + 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック実行。`--layer light` を pre-push hook が非ブロッキング警告で自動実行（#496, #513, #517, #518） | `scripts/lib/dogfood/`, `scripts/git-hooks/` |
 | `evolve-release-sync` | リリース後のローカルプラグイン自動同期 `bin/evolve-release-sync` — marketplace は Directory source（ローカル作業ディレクトリ）を見るため、リリースが origin/main に入ってもローカル main を pull しないと `claude plugin update` が古いバージョンを返す穴を塞ぐ。`tag --push` 直後に「ローカル main ff → marketplace update → plugin update」を一括実行。worktree から呼んでも git-common-dir で本体 repo を解決、main 以外チェックアウト中は exit 2。`--dry-run` 対応。`commit-version.md` のリリース手順に組込 | `bin/evolve-release-sync` |
 | `pj_slug` | PJ slug 導出の単一ソース — `resolve_pj_slug`（git-common-dir 親・authoritative）/ `pj_slug_fast`（hooks hot path）/ `pj_id_to_slug`（CC pj_id → 実 dir 貪欲復元・#68）。read/write 同一関数で worktree slug 食い違いを防ぎ、sibling worktree の幻 slug は SessionStart cache で根治（#492, #29） | `pj_slug.py` + `hooks/restore_state.py` |
@@ -155,6 +156,10 @@ bin/evolve-fleet queue --json --threshold 3
 # 毎朝の evolve queue 自動実行を launchd に登録（#80・既定 09:00 / --time HH:MM / --uninstall）
 bin/evolve-daily-install
 bin/evolve-daily-install --uninstall
+
+# advisory 3点セット追加の scaffold（module stub 生成 + 多点配線チェックリスト・#118）
+bin/evolve-scaffold-advisory my_check                 # dry-run（stub + checklist 表示）
+bin/evolve-scaffold-advisory my_check --with-store --write
 
 # エージェント品質診断
 /evolve-anything:agent-brushup

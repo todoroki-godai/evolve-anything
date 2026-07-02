@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""bin/evolve-scaffold-advisory — advisory 3点セット（module+store+section）の scaffold（#118）。
+
+新規 advisory コンポーネント追加時の多点同時更新（module + store_registry + observability
+builder + keyset snapshot + CONTEXT.md + CLAUDE.md）を、#115 共通枠を使ったテンプレ生成 +
+手動配線チェックリストで摩擦・追従漏れを下げる。既定 dry-run、--write で書き出し。
+
+使用例:
+    bin/evolve-scaffold-advisory my_check                # dry-run（stub + checklist 表示）
+    bin/evolve-scaffold-advisory my_check --with-store --write
+"""
+import sys
+from pathlib import Path
+
+_lib = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_lib))
+
+from scaffold_advisory import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
