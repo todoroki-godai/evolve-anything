@@ -1,41 +1,20 @@
-"""evolve_introspect — evolve 実行後の自己解析（#299）。
+"""evolve_introspect.detectors — 3 カテゴリの決定論検出群（#299 / #122-P5）。
 
-evolve は Observe → Diagnose → Compile → Housekeeping → Report を回すが、
-**evolve 自身の実行結果（提案の質・誤検出・実行時エラー）を振り返る経路が無い**。
-本モジュールは evolve の result dict を入力に取り、決定論で 3 カテゴリの
-GitHub issue 候補を生成する（「install != enforcement」と同型の配線漏れを塞ぐ）。
+evolve の result dict から issue 候補を検出する:
+  1. self_detection — 提案・パッチ自体の質の問題（split↔archive 矛盾 / budget 悪化 / FP landing）
+  2. runtime_errors — 各フェーズで握り潰された例外・observability 取得失敗・stderr 警告
+  3. improvement_opportunities — 系統的却下・calibration regression・整合性 drift
 
-3 カテゴリ:
-  1. self_detection         — evolve が出した提案・パッチ自体の質の問題
-     （split↔archive 矛盾、line budget を悪化させる content 追加提案）
-  2. runtime_errors         — 各フェーズで握り潰された例外 / observability の取得失敗
-  3. improvement_opportunities — 構造的な改善機会
-     （系統的に却下される提案 type、calibration regression）
-
-設計原則:
-  - 決定論・LLM 非依存。入力は evolve.run_evolve() の戻り値 dict のみ。
-  - 各カテゴリは検出 0 件でも summary_line に「✓ 評価したが該当なし」を残す
-    （silence != evaluated。沈黙＝配線漏れ誤認を防ぐ）。
-  - 起票は半自動: 本モジュールは候補と dedup までを担い、gh issue create は
-    SKILL 側が人間承認の後に行う。dedup_key は root cause 単位で安定させ、
-    body に隠しマーカーを埋め込むことで毎 evolve の重複起票を防ぐ。
-
-起票先は常に todoroki-godai/evolve-anything（検出対象はパイプライン自身のバグであり、
-evolve がどの PJ 上で動いても起票先は固定）。SKILL 側で --repo を固定する。
+各カテゴリは検出 0 件でも summary_line に「✓ 評価したが該当なし」を残す
+（silence != evaluated）。共有の低レベルヘルパ（_section / _skill_name /
+_issue_file / _error_signature）と検出用定数もここに置く。
 """
 from __future__ import annotations
 
 import re
-from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-# body に埋め込む隠しマーカー。これがあれば既存 issue と root cause 単位で
-# 確実に dedup できる（タイトル類似度より強いシグナル）。
-MARKER_PREFIX = "evolve-introspect"
-_MARKER_RE = re.compile(r"<!--\s*" + re.escape(MARKER_PREFIX) + r":([^\s>]+)\s*-->")
-
-# タイトル類似度で dup と見なす閾値（marker なしで手動起票された既存 issue 向け）。
-_TITLE_SIMILARITY_THRESHOLD = 0.80
+from .helpers import _issue_file, _section, _skill_name
 
 # remediation の「content を追加する」種別の fix。これらを line-limit 超過ファイルに
 # 当てると budget をさらに悪化させる（自己矛盾した提案）。
@@ -52,112 +31,9 @@ _LINE_LIMIT_TYPES = frozenset({"line_limit_violation", "near_limit"})
 # prune のうち「アーカイブ寄り」の候補キー（= 消そうとしている対象）。
 _PRUNE_ARCHIVE_KEYS = ("zero_invocations", "retirement_candidates", "decay_candidates")
 
-
-# ── 公開 API ─────────────────────────────────────────
-
-
-def analyze_evolve_result(result: Dict[str, Any], project_dir: Optional[str] = None) -> Dict[str, Any]:
-    """evolve の result dict を解析し 3 カテゴリの issue 候補を返す。
-
-    Returns:
-        {
-          "self_detection":          {"candidates": [...], "summary_line": str},
-          "runtime_errors":          {"candidates": [...], "summary_line": str},
-          "improvement_opportunities": {"candidates": [...], "summary_line": str},
-          "total_candidates": int,
-        }
-    各 candidate: {category, title, body, suggested_label, dedup_key, severity}
-    """
-    result = result or {}
-    self_detection = _detect_self_issues(result)
-    runtime_errors = _detect_runtime_errors(result)
-    improvement = _detect_improvement_opportunities(result)
-
-    total = sum(len(s["candidates"]) for s in (self_detection, runtime_errors, improvement))
-    return {
-        "self_detection": self_detection,
-        "runtime_errors": runtime_errors,
-        "improvement_opportunities": improvement,
-        "total_candidates": total,
-    }
-
-
-# ── 相互排他 reconcile（split↔archive の root cause fix / #301 #302） ──
-
-
-def reconcile_split_archive(result: Dict[str, Any]) -> Dict[str, Any]:
-    """split（reorganize）と archive（prune）の相互排他を解決する。
-
-    同一スキルが分割候補かつアーカイブ候補のとき **archive を優先** し、
-    そのスキルを `reorganize.split_candidates`（および派生 `issues`）から除外する。
-    消そうとしている対象を同じ run で分割提案するのは矛盾だからだ
-    （#301 #302。`_detect_split_archive_contradiction` が検出していた root cause）。
-
-    除外した内容は透明性のため `reorganize.split_suppressed_by_archive` に記録する
-    （silent に消さない）。evolve.py が prune フェーズ直後・self-analysis の前に呼ぶ。
-
-    Returns:
-        {"suppressed": [skill, ...], "remaining_split": int}
-    """
-    phases = result.get("phases") if isinstance(result, dict) else None
-    if not isinstance(phases, dict):
-        return {"suppressed": [], "remaining_split": 0}
-    reorganize = phases.get("reorganize")
-    if not isinstance(reorganize, dict) or reorganize.get("skipped"):
-        return {"suppressed": [], "remaining_split": 0}
-    split_candidates = reorganize.get("split_candidates")
-    if not isinstance(split_candidates, list) or not split_candidates:
-        return {"suppressed": [], "remaining_split": 0}
-
-    archive_skills = _collect_archive_skills(phases)
-    if not archive_skills:
-        return {"suppressed": [], "remaining_split": len(split_candidates)}
-
-    kept: List[Any] = []
-    suppressed: List[str] = []
-    for sc in split_candidates:
-        name = _skill_name(sc)
-        if name and name in archive_skills:
-            suppressed.append(name)
-        else:
-            kept.append(sc)
-
-    if not suppressed:
-        return {"suppressed": [], "remaining_split": len(split_candidates)}
-
-    suppressed_sorted = sorted(set(suppressed))
-    suppressed_set = set(suppressed_sorted)
-    reorganize["split_candidates"] = kept
-    reorganize["total_split_candidates"] = len(kept)
-    reorganize["split_suppressed_by_archive"] = suppressed_sorted
-
-    # split_candidate 由来の issue も除外する（skill 名は detail に入る）。
-    issues = reorganize.get("issues")
-    if isinstance(issues, list):
-        reorganize["issues"] = [
-            i for i in issues if _issue_skill_name(i) not in suppressed_set
-        ]
-
-    return {"suppressed": suppressed_sorted, "remaining_split": len(kept)}
-
-
-# skill_evolve↔archive の reconcile（#400 バグ#2）と remediation batch_skip の observability 昇格
-# （#400 バグ#6）は file-size budget のため evolve_reconcile.py へ分離した。reconcile_split_archive
-# と対をなすので、利用側は evolve_reconcile.reconcile_skill_evolve_archive /
-# build_remediation_batch_skip_observability を参照する。
-
-
-def _issue_skill_name(issue: Any) -> str:
-    """reorganize の split issue から skill 名を取り出す（top-level / detail 両対応）。"""
-    if not isinstance(issue, dict):
-        return ""
-    top = _skill_name(issue)
-    if top:
-        return top
-    detail = issue.get("detail")
-    if isinstance(detail, dict):
-        return _skill_name(detail)
-    return ""
+# confidence>=この値で auto_fixable に入ると無確認で自動適用され得るため、
+# FP が混ざっていると最も危険。AUTO_FIX_CONFIDENCE（remediation 側）と同値。
+_AUTO_FIX_FP_CONFIDENCE = 0.9
 
 
 # ── カテゴリ2: 実行時エラー / 誤検出 ─────────────────
@@ -317,11 +193,6 @@ def _detect_self_issues(result: Dict[str, Any]) -> Dict[str, Any]:
         hit_template="⚠ 自己検出 {n} 件: {names}",
         name_of=lambda c: c.get("subject", c["dedup_key"]),
     )
-
-
-# confidence>=この値で auto_fixable に入ると無確認で自動適用され得るため、
-# FP が混ざっていると最も危険。AUTO_FIX_CONFIDENCE（remediation 側）と同値。
-_AUTO_FIX_FP_CONFIDENCE = 0.9
 
 
 def _detect_fp_in_auto_fixable(phases: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -606,185 +477,5 @@ def _detect_calibration_regression(se: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-# ── dedup ────────────────────────────────────────────
-
-
-def render_issue_body(candidate: Dict[str, Any]) -> str:
-    """候補本文の末尾に dedup マーカーを埋め込んで返す。"""
-    marker = f"<!-- {MARKER_PREFIX}:{candidate['dedup_key']} -->"
-    return f"{candidate.get('body', '').rstrip()}\n\n{marker}\n"
-
-
-def render_regression_body(candidate: Dict[str, Any], prev_number: int) -> str:
-    """regression（前回 closed と同一 root cause の再発）候補の body を生成する。
-
-    body 冒頭に「#N の regression（前回 closed）」のバックリンクを差し込み、
-    一度直したはずが再発した＝不完全な修正だった文脈をレビュアーに伝える（#33）。
-    末尾には通常通り dedup マーカーを残し、再発分も次回以降の dedup 対象に保つ。
-    """
-    note = (
-        f"> ⚠️ #{prev_number} の regression（前回 closed）。"
-        f"同一 root cause が再発しており、前回の修正が不完全だった可能性があります。"
-    )
-    base = render_issue_body(candidate)
-    return f"{note}\n\n{base}"
-
-
-def extract_marker(text: str) -> Optional[str]:
-    """body から dedup_key を取り出す。無ければ None。"""
-    m = _MARKER_RE.search(text or "")
-    return m.group(1) if m else None
-
-
-def filter_duplicates(
-    candidates: List[Dict[str, Any]],
-    existing_issues: List[Dict[str, Any]],
-    title_threshold: float = _TITLE_SIMILARITY_THRESHOLD,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """既存 issue と重複する候補を仕分ける（open/closed を区別）。
-
-    1) body の隠しマーカー（dedup_key）が **open** issue に一致 → dup（最強シグナル）。
-    2) マーカーが無い手動起票でも、**open** issue とタイトル類似度が閾値以上なら dup。
-    3) マーカーが **closed** issue にのみ一致 → regression（再発）。dup にはせず unique に
-       残しつつ、前歴 #N を呼び出し側へ surface する（#33）。一度直したはずが再発した
-       ＝不完全な修正だった文脈をレビュアーに伝えるため、新規起票時に backlink を添える。
-
-    closed issue へのタイトル類似一致は「確実に前歴へ紐づけられない」ため regression
-    扱いしない（誤バックリンク防止）。マーカー一致のみを regression シグナルとする。
-
-    Args:
-        candidates: analyze_evolve_result が出した候補リスト。
-        existing_issues: [{"number": int, "title": str, "body": str, "state": str}, ...]
-            （gh issue list 由来）。state 欠落は後方互換で open 扱い。
-
-    Returns:
-        {
-          "unique": [...],
-          "duplicates": [{**candidate, "existing_number": int, "reason": str}],
-          "regressions": [{**candidate, "existing_number": int, "reason": "closed_marker"}],
-        }
-    """
-    open_marker_index: Dict[str, int] = {}
-    closed_marker_index: Dict[str, int] = {}
-    open_issues: List[Dict[str, Any]] = []
-    for issue in existing_issues or []:
-        if _is_closed(issue):
-            key = extract_marker(issue.get("body", ""))
-            # open が後で勝てるよう、closed は open に無いときだけ採用（open 優先）
-            if key and key not in closed_marker_index:
-                closed_marker_index[key] = issue.get("number")
-        else:
-            open_issues.append(issue)
-            key = extract_marker(issue.get("body", ""))
-            if key:
-                open_marker_index[key] = issue.get("number")
-
-    unique: List[Dict[str, Any]] = []
-    duplicates: List[Dict[str, Any]] = []
-    regressions: List[Dict[str, Any]] = []
-    for cand in candidates:
-        dup_number, reason = _match_existing(cand, open_issues, open_marker_index, title_threshold)
-        if dup_number is not None:
-            duplicates.append({**cand, "existing_number": dup_number, "reason": reason})
-            continue
-        # open に dup が無い場合のみ closed マーカー（regression）を判定
-        prev_closed = closed_marker_index.get(cand["dedup_key"])
-        if prev_closed is not None:
-            regressions.append({**cand, "existing_number": prev_closed, "reason": "closed_marker"})
-        unique.append(cand)
-    return {"unique": unique, "duplicates": duplicates, "regressions": regressions}
-
-
-def _is_closed(issue: Dict[str, Any]) -> bool:
-    """issue が closed かを判定する。state 欠落（旧 gh 出力）は open 扱い（後方互換）。"""
-    state = issue.get("state")
-    return isinstance(state, str) and state.strip().lower() == "closed"
-
-
-def _match_existing(
-    cand: Dict[str, Any],
-    existing_issues: List[Dict[str, Any]],
-    marker_index: Dict[str, int],
-    title_threshold: float,
-) -> tuple:
-    if cand["dedup_key"] in marker_index:
-        return marker_index[cand["dedup_key"]], "marker"
-    cand_title = _normalize_title(cand.get("title", ""))
-    best_num, best_ratio = None, 0.0
-    for issue in existing_issues:
-        ratio = SequenceMatcher(None, cand_title, _normalize_title(issue.get("title", ""))).ratio()
-        if ratio > best_ratio:
-            best_num, best_ratio = issue.get("number"), ratio
-    if best_ratio >= title_threshold:
-        return best_num, f"title_similarity={best_ratio:.2f}"
-    return None, ""
-
-
-def _normalize_title(title: str) -> str:
-    s = (title or "").lower()
-    s = s.replace("`", "")
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-# ── surface 整形 ─────────────────────────────────────
-
-
-_CATEGORY_KEYS = ("self_detection", "runtime_errors", "improvement_opportunities")
-
-
-def flatten_candidates(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """analyze_evolve_result の 3 カテゴリの candidates を 1 リストに平坦化する。
-
-    SKILL Step 11 が dedup・起票へ渡す前段。prose で 3 カテゴリを手で集める実装だと
-    カテゴリを 1 つ取りこぼす事故が起きるため、決定論ヘルパーに一本化する。
-    """
-    out: List[Dict[str, Any]] = []
-    for key in _CATEGORY_KEYS:
-        section = analysis.get(key, {})
-        if isinstance(section, dict):
-            out.extend(section.get("candidates", []) or [])
-    return out
-
-
-def summary_lines(analysis: Dict[str, Any]) -> List[str]:
-    """SKILL がそのまま列挙する surface 行を返す（0 件でも ✓ を残す）。"""
-    return [
-        f"- 自己検出: {analysis['self_detection']['summary_line']}",
-        f"- 実行時エラー: {analysis['runtime_errors']['summary_line']}",
-        f"- 改善余地: {analysis['improvement_opportunities']['summary_line']}",
-    ]
-
-
-# ── 内部ヘルパ ───────────────────────────────────────
-
-
-def _section(candidates, zero_line, hit_template, name_of) -> Dict[str, Any]:
-    if not candidates:
-        return {"candidates": [], "summary_line": zero_line}
-    names = ", ".join(name_of(c) for c in candidates[:5])
-    if len(candidates) > 5:
-        names += f", 他 {len(candidates) - 5} 件"
-    return {
-        "candidates": candidates,
-        "summary_line": hit_template.format(n=len(candidates), names=names),
-    }
-
-
-def _skill_name(entry: Any) -> str:
-    if isinstance(entry, str):
-        return entry
-    if isinstance(entry, dict):
-        for key in ("skill_name", "skill", "name"):
-            val = entry.get(key)
-            if isinstance(val, str) and val:
-                return val
-    return ""
-
-
-def _issue_file(issue: Dict[str, Any]) -> str:
-    for key in ("file", "filename", "target", "path"):
-        val = issue.get(key)
-        if isinstance(val, str) and val:
-            return val
-    return ""
+# 共有低レベルヘルパ（_section / _skill_name / _issue_file）は helpers.py が SoT。
+# detectors と orchestration（reconcile）の両方が使うため leaf モジュールへ分離した。
