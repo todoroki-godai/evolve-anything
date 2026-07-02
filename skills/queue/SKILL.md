@@ -36,11 +36,13 @@ evolve-usage-log "queue"
 evolve-fleet queue          # ユーザーが --threshold N を渡したら付与する
 ```
 
-`material_count = weak_unprocessed`（未昇格・未 expired の weak_signals）`+ new_corrections`（前回
-evolve 以降の新規 corrections）。これが threshold（既定 5）以上の PJ が「待ち」。bootstrap phase で
-破棄/TTL 任せと判断済み（`bootstrap_done-<slug>.marker` 設置以前に検出）の weak は material から除外
-される（#94）。`WEAK` 列は未処理のみ＝promoted 昇格済み・TTL 失効・bootstrap 消化を除いた実残数で、
-検出された weak の生総数とは一致しない（待ち時に footer で明示・②）。
+`material_count = weak_unprocessed`（未昇格・未 expired・content-rich channel の weak_signals）`+
+new_corrections`（前回 evolve 以降の新規 corrections）。これが threshold（既定 5）以上の PJ が「待ち」。
+bootstrap phase で破棄/TTL 任せと判断済み（`bootstrap_done-<slug>.marker` 設置以前に検出）の weak は
+material から除外される（#94）。content-poor channel（esc/手編集＝昇格手段なし）も material に数えず
+footer + `--json` の `weak_content_poor` で透明化される（#113）。`WEAK` 列は content-rich 未処理のみ＝
+promoted 昇格済み・TTL 失効・bootstrap 消化・content-poor を除いた実残数で、検出された weak の生総数
+とは一致しない（待ち時に footer で明示・②）。
 
 ### Step 2: 結果を読み解いて提示
 
