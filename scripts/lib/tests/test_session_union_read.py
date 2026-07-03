@@ -39,20 +39,15 @@ def _ingest_into_db(data_dir: Path, records: list[dict]) -> None:
     """records を sessions.jsonl に書いて ingest()（DATA_DIR を data_dir へ向ける）。"""
     import duckdb  # noqa: F401 -- ある前提でしか呼ばない
 
-    # ingest はモジュール定数を読むので、その場限りで差し替える。
-    old_dir = session_store.DATA_DIR
-    old_db = session_store.SESSIONS_DB
-    old_jsonl = session_store.SESSIONS_JSONL
+    # #137: session_store は call-time 解決。_DATA_DIR_OVERRIDE 1 本で
+    # DATA_DIR / SESSIONS_DB / SESSIONS_JSONL を data_dir 配下へ向ける。
+    old_override = session_store._DATA_DIR_OVERRIDE
     try:
-        session_store.DATA_DIR = data_dir
-        session_store.SESSIONS_DB = data_dir / "sessions.db"
-        session_store.SESSIONS_JSONL = data_dir / "sessions.jsonl"
-        _write_jsonl(session_store.SESSIONS_JSONL, records)
+        session_store._DATA_DIR_OVERRIDE = data_dir
+        _write_jsonl(data_dir / "sessions.jsonl", records)
         session_store.ingest()  # jsonl→db に取り込み + jsonl を rotate
     finally:
-        session_store.DATA_DIR = old_dir
-        session_store.SESSIONS_DB = old_db
-        session_store.SESSIONS_JSONL = old_jsonl
+        session_store._DATA_DIR_OVERRIDE = old_override
 
 
 requires_duckdb = pytest.mark.skipif(

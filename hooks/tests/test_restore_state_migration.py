@@ -42,9 +42,25 @@ def test_reminder_fires_when_split_unresolved(env, capsys):
     assert "evolve-fleet migrate-data" in out
 
 
-def test_reminder_silent_when_marker_exists(env, capsys):
+def test_reminder_fires_on_resplit_when_marker_exists(env, capsys):
+    """#137: marker 済みでも source に未マージのストアが再蓄積したら再警告する。
+
+    marker は「一度 migrate した」事実しか意味しない。旧版 hook が plugin-data に
+    書き続ける等で分裂が再発した場合、旧実装は ``if marker.exists(): return`` で
+    永久に沈黙していた（split-brain の恒久沈黙）。再分裂を検出して案内する。
+    """
     canonical, source = env
     (source / "usage.jsonl").write_text("{}\n")
+    (canonical / ddm._marker_name()).write_text("{}")
+    restore_state._deliver_data_dir_migration_reminder()
+    out = capsys.readouterr().out
+    assert "evolve-fleet migrate-data" in out
+    assert "#137" in out, "再分裂の案内は #137 を参照する"
+
+
+def test_reminder_silent_when_marker_exists_and_source_clean(env, capsys):
+    """#137: marker 済み × source に未マージストアなし（migrate 完了の定常状態）は沈黙。"""
+    canonical, _ = env
     (canonical / ddm._marker_name()).write_text("{}")
     restore_state._deliver_data_dir_migration_reminder()
     assert capsys.readouterr().out == ""

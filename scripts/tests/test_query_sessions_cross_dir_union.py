@@ -54,10 +54,12 @@ def _session(sid: str, ts: str, project: str | None = "evolve-anything", **extra
 
 
 def _point_session_store(monkeypatch, canonical: Path) -> None:
-    """session_store の DATA_DIR を canonical に向ける（union の既定 canonical 解決）。"""
-    monkeypatch.setattr(session_store, "DATA_DIR", canonical)
-    monkeypatch.setattr(session_store, "SESSIONS_DB", canonical / "sessions.db")
-    monkeypatch.setattr(session_store, "SESSIONS_JSONL", canonical / "sessions.jsonl")
+    """session_store の DATA_DIR を canonical に向ける（union の既定 canonical 解決）。
+
+    #137: call-time 解決になったので _DATA_DIR_OVERRIDE 1 本で DATA_DIR /
+    SESSIONS_DB / SESSIONS_JSONL が canonical 配下に追従する。
+    """
+    monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", canonical)
 
 
 @pytest.fixture

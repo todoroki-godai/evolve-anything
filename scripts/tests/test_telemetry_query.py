@@ -166,9 +166,7 @@ class TestTimeRangeFallback:
             pytest.skip("duckdb not installed")
 
         import session_store
-        monkeypatch.setattr(session_store, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
-        monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
+        monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", tmp_path)  # #137 call-time 解決
 
         session_store.append({"session_id": "s1", "timestamp": "2026-02-01T00:00:00+00:00", "project": "atlas"})
         session_store.append({"session_id": "s2", "timestamp": "2026-03-01T00:00:00+00:00", "project": "beta"})
@@ -185,9 +183,7 @@ class TestTimeRangeFallback:
             pytest.skip("duckdb not installed")
 
         import session_store
-        monkeypatch.setattr(session_store, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
-        monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
+        monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", tmp_path)  # #137 call-time 解決
 
         session_store.append({"session_id": "s1", "timestamp": "2026-02-01T00:00:00+00:00", "project": "atlas"})
         session_store.append({"session_id": "s2", "timestamp": "2026-03-01T00:00:00+00:00", "project": "atlas"})
@@ -204,9 +200,7 @@ class TestTimeRangeFallback:
             pytest.skip("duckdb not installed")
 
         import session_store
-        monkeypatch.setattr(session_store, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
-        monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
+        monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", tmp_path)  # #137 call-time 解決
 
         assert telemetry_query.query_sessions(project="atlas") == []
 

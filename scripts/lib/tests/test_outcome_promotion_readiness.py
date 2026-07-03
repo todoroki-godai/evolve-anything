@@ -910,21 +910,17 @@ def _ingest_sessions_db(data_dir: Path, records: list[dict]) -> None:
     ingest 後 live jsonl は rotate されるため、その後の読みは db 経由になる
     （実環境: #415 で sessions.jsonl がほぼ常に空になっている状態を再現する）。
     """
-    old_dir = session_store.DATA_DIR
-    old_db = session_store.SESSIONS_DB
-    old_jsonl = session_store.SESSIONS_JSONL
+    # #137: session_store は call-time 解決。_DATA_DIR_OVERRIDE 1 本で DATA_DIR /
+    # SESSIONS_DB / SESSIONS_JSONL が data_dir 配下に追従する。
+    old_override = session_store._DATA_DIR_OVERRIDE
     try:
-        session_store.DATA_DIR = data_dir
-        session_store.SESSIONS_DB = data_dir / "sessions.db"
-        session_store.SESSIONS_JSONL = data_dir / "sessions.jsonl"
+        session_store._DATA_DIR_OVERRIDE = data_dir
         path = data_dir / "sessions.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
         session_store.ingest()
     finally:
-        session_store.DATA_DIR = old_dir
-        session_store.SESSIONS_DB = old_db
-        session_store.SESSIONS_JSONL = old_jsonl
+        session_store._DATA_DIR_OVERRIDE = old_override
 
 
 class TestSessionDenominatorFromDb:

@@ -135,21 +135,16 @@ class TestSubagentsBackfill:
 
 def _seed_sessions_db(data_dir: Path, records: list[dict]) -> None:
     """records を sessions.jsonl に書いて session_store.ingest() で db へ取り込む。"""
-    old_dir = session_store.DATA_DIR
-    old_db = session_store.SESSIONS_DB
-    old_jsonl = session_store.SESSIONS_JSONL
+    # #137: session_store は call-time 解決。_DATA_DIR_OVERRIDE 1 本で追従する。
+    old_override = session_store._DATA_DIR_OVERRIDE
     try:
-        session_store.DATA_DIR = data_dir
-        session_store.SESSIONS_DB = data_dir / "sessions.db"
-        session_store.SESSIONS_JSONL = data_dir / "sessions.jsonl"
+        session_store._DATA_DIR_OVERRIDE = data_dir
         path = data_dir / "sessions.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
         session_store.ingest()
     finally:
-        session_store.DATA_DIR = old_dir
-        session_store.SESSIONS_DB = old_db
-        session_store.SESSIONS_JSONL = old_jsonl
+        session_store._DATA_DIR_OVERRIDE = old_override
 
 
 def _read_db_projects(db_path: Path):
