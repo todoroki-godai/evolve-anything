@@ -214,6 +214,29 @@ def test_starvation_includes_cause_hints(tmp_path, monkeypatch):
     assert ("worktree" in combined) or ("slug" in combined)  # slug 食い違い
 
 
+def test_llm_judge_branch_classifies_as_watch(tmp_path, monkeypatch):
+    """#141-7b: hook 0% + llm_judge 捕捉ありの中間分岐は ℹ マーカーで観察中に分類される。
+
+    従来この分岐はマーカー（✓/ℹ/⚠）が無く、classify_section が default で clean と誤判定し
+    『✓ 評価済みクリーン』に畳まれてラベルと中身が矛盾していた。ℹ 付与で watch に載せる。
+    """
+    from audit.sections_summary import classify_section
+
+    _setup_stores(
+        tmp_path,
+        monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    _seed_weak_signals(tmp_path, monkeypatch, this_pj=13)
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    # 中間分岐の実質的所見にマーカー ℹ が付く（clean にも critical にも分類されない）
+    assert "ℹ" in combined
+    assert classify_section(section) == "watch"
+
+
 def test_other_pj_llm_judge_not_counted(tmp_path, monkeypatch):
     """他PJ の llm_judge シグナルは当PJ の枯渇判定を抑制しない（#476 fixup スコープ混在）。"""
     _setup_stores(
