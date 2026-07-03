@@ -75,8 +75,14 @@ def test_store_modules_discovered():
     """機械発見が空でない（パターン崩れの早期検知）。"""
     assert _STORE_MODULES, "no store modules discovered — discovery pattern may be broken"
     # 既知の代表 store が含まれていることを確認（発見ロジックの sanity check）。
-    for expected in ("session_store", "token_usage_store"):
+    for expected in ("token_usage_store",):
         assert expected in _STORE_MODULES, f"{expected} not discovered"
+    # session_store は #137 で call-time 解決（_data_dir() + module __getattr__）へ移行し
+    # import 時キャプチャを構造的に排除した（本テストが守る不変条件の恒久達成側）。
+    # ここに再出現したら module-level DATA_DIR 捕捉への退行なので fail させる。
+    assert "session_store" not in _STORE_MODULES, (
+        "session_store regressed to module-level DATA_DIR capture (#137 の退行)"
+    )
 
 
 @pytest.mark.parametrize("mod_name", _STORE_MODULES)
