@@ -198,27 +198,34 @@ _OPAQUE_ID_RE = re.compile(r"^[0-9a-fA-F-]+$")
 _OPAQUE_ID_MIN_HEX_DIGITS = 12
 
 
+def noise_agent_type_kind(agent_type):
+    """ノイズ agent_type の種別を返す（内訳分解の単一ソース・#142-8b）。
+
+    is_noise_agent_type と同じ判定基準を **種別付き**で返す（`is_noise = kind is not None`）。
+    subagents.jsonl のノイズ（本物の Task subagent でない）を 2 種に分ける:
+    - ``"empty"``: 空 / 空白のみ（#36）。SubagentStop は本物の Task agent 以外
+      （compaction 要約・メインセッション Stop・rate-limit メッセージ等）でも発火し空になる。
+    - ``"id_form"``: harness が agent_type に ID 形の値（pure hex `aab2173eb119c5b91` /
+      UUID / `agent_id` 形）を渡すケース（#44）。hex 桁とハイフンのみ・hex 桁が floor 以上。
+
+    本物の agent 種別名（build-a1 / gamer-mvp29 / fapo-impl 等）は非 hex 文字を含むので None。
+    """
+    s = str(agent_type or "").strip()
+    if not s:
+        return "empty"
+    if _OPAQUE_ID_RE.match(s):
+        hex_digits = sum(1 for c in s if c in "0123456789abcdefABCDEF")
+        if hex_digits >= _OPAQUE_ID_MIN_HEX_DIGITS:
+            return "id_form"
+    return None
+
+
 def is_noise_agent_type(agent_type) -> bool:
     """subagents.jsonl の agent_type がノイズ（本物の Task subagent でない）か判定する。
 
     writer（subagent_observe）と reader（fleet.collectors / fanout_cost）が同じ判定を
     共有するための単一ソース。片側だけ直すと read/write が desync するため
     （copied-parse-convention pitfall・#40 の教訓）、全 call site はこの関数を呼ぶ。
-
-    除外するノイズ:
-    - #36: 空 / 空白のみの agent_type。SubagentStop は本物の Task agent 以外
-      （compaction 要約・メインセッション Stop・rate-limit メッセージ等）でも発火し、
-      それらは agent_type が空になる。
-    - ID 形: harness が agent_type に ID 形の値（pure hex `aab2173eb119c5b91` /
-      UUID / `agent_id` 形）を渡すケース。本物の agent 種別名は人間可読で必ず非 hex 文字を
-      含むため、hex 桁とハイフンのみ・hex 桁が floor 以上の値は opaque identifier として除外する。
-      カスタム agent 名（build-a1 / gamer-mvp29 / fapo-impl 等）は非 hex 文字を含むので保持される。
+    ノイズ種別（空 / ID 形）の内訳は noise_agent_type_kind を参照（#142-8b）。
     """
-    s = str(agent_type or "").strip()
-    if not s:
-        return True
-    if _OPAQUE_ID_RE.match(s):
-        hex_digits = sum(1 for c in s if c in "0123456789abcdefABCDEF")
-        if hex_digits >= _OPAQUE_ID_MIN_HEX_DIGITS:
-            return True
-    return False
+    return noise_agent_type_kind(agent_type) is not None

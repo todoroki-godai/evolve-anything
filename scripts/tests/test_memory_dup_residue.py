@@ -132,3 +132,22 @@ def test_section_lists_dup_pairs(tmp_path, monkeypatch):
     combined = "\n".join(section)
     assert "old-pj" in combined
     assert "new-pj" in combined
+
+
+def test_section_heading_marks_cross_pj_scope(tmp_path, monkeypatch):
+    """#142-8a: 見出しに「全PJ横断」を明記する（belief_blocks/Token Consumption と同慣習）。
+
+    このセクションは ``~/.claude/projects/*/memory`` を全 PJ 走査するため、当 PJ 別 audit
+    でも無関係 PJ の重複が出る。見出しにスコープを明記しないと当 PJ 固有と誤解されるため、
+    既存の全PJ横断セクションと同じく見出しに明示する。
+    """
+    projects = tmp_path / "projects"
+    same = {"m.md": "shared"}
+    _make_memory_dir(projects, "old-pj", dict(same))
+    _make_memory_dir(projects, "new-pj", {**same, "extra.md": "x"})
+    monkeypatch.setattr(memory_dup_residue, "default_projects_dir", lambda: projects)
+    section = build_memory_dup_residue_section(tmp_path)
+    assert section is not None
+    heading = section[0]
+    assert heading.startswith("## ")
+    assert "全PJ横断" in heading
