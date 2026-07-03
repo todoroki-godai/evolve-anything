@@ -35,9 +35,14 @@ def _sess(sid: str, ts: str, project) -> dict:
 
 
 def _point_module_at(tmp_path, monkeypatch) -> None:
-    """query が読む module 定数を tmp に向け、db は使わず jsonl のみを読ませる。"""
-    monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
-    monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
+    """query が読む解決先を tmp に向け、db は使わず jsonl のみを読ませる（#137 慣習）。
+
+    SESSIONS_JSONL/SESSIONS_DB は #137 で module `__getattr__` 化されており、
+    monkeypatch.setattr は「getattr の計算値」を元値として保存→teardown で実属性に
+    pin してしまい後続テストの `__getattr__` を恒久 shadow する（xdist で発覚した
+    汚染の根因）。隔離は `_DATA_DIR_OVERRIDE` 1 本で行う。
+    """
+    monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", tmp_path)
 
 
 class TestQueryProjectFilter:
