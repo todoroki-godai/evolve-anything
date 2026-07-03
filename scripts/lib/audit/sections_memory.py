@@ -236,7 +236,9 @@ def build_memory_dup_residue_section(project_dir: Path) -> Optional[List[str]]:
 
     return build_advisory_section(
         project_dir,
-        title="Memory Duplicate Residue (旧 PJ memory の完全重複残骸 — advisory)",
+        # #142-8a: 全 PJ 走査（当 PJ 別 audit でも無関係 PJ の重複が出る）ゆえ見出しにスコープ
+        # を明記する（belief_blocks / Token Consumption / 繰り返し失敗パターンと同慣習）。
+        title="Memory Duplicate Residue（全PJ横断・旧 PJ memory の完全重複残骸 — advisory）",
         compute=compute,
         applicable=lambda report: report.has_findings,
         render=render,

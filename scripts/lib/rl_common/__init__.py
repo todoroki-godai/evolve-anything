@@ -185,6 +185,7 @@ from .detection import (  # noqa: F401, E402
     detect_all_patterns,
     detect_correction,
     is_noise_agent_type,
+    noise_agent_type_kind,
     sanitize_message,
     should_include_message,
 )

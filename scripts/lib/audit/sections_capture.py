@@ -142,9 +142,12 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
 
     # #476-1: hook capture が低くても llm_judge が捕捉していれば「枯渇」ではない。
     # 誤警告を避け、weak_signals → 昇格フローへ誘導する。
+    # #141-7b: この分岐は「実質的所見あり（未昇格シグナルが溜まっている）」なので ℹ を付け
+    # observability の watch（観察中）に載せる。マーカーが無いと classify_section が clean と
+    # 誤判定し『✓ 評価済みクリーン』へ畳まれ、ラベルと中身が矛盾していた。
     if llm_judge > 0:
         return header + [
-            f"hook 経由の capture 率は低い（{rate:.0%}）が、意味判定レーン（llm_judge）で "
+            f"ℹ hook 経由の capture 率は低い（{rate:.0%}）が、意味判定レーン（llm_judge）で "
             f"{llm_judge} 件捕捉済み。{channel_line}",
             "未昇格の llm_judge シグナルは `/evolve-anything:evolve` の今日の修正確認 phase で昇格可能"
             "（報酬入力は枯渇していない・advisory・スコア非関与, #421/#476）。",

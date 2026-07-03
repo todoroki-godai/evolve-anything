@@ -47,6 +47,7 @@ from .sections_outcome import build_outcome_metrics_section
 from .sections_paired import build_paired_trajectory_section
 from .sections_promotion_readiness import build_promotion_readiness_section
 from .sections_skill_vuln import build_skill_vuln_section
+from .sections_subagent_noise import build_subagent_noise_section
 from .sections_subagent_traces import build_subagent_traces_section
 from .sections_testpaths import build_testpaths_coverage_section
 from .sections_triage import build_skill_triage_section
@@ -71,6 +72,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("outcome_metrics", build_outcome_metrics_section),
     ("fanout_cost", build_fanout_cost_section),
     ("subagent_traces", build_subagent_traces_section),
+    ("subagent_noise", build_subagent_noise_section),
     ("verbosity", build_verbosity_section),
     ("memory_capability", build_memory_capability_section),
     ("memory_index_orphan", build_memory_index_orphan_section),

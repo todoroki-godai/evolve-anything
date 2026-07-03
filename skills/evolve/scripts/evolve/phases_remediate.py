@@ -351,6 +351,10 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
     # Phase 4.3: remediation batch_skip を observability に強制昇格（#400 バグ#6）。
     # reconcile 後の最終 batch_skip 件数を result["observability"] に注入し、Step 3.8 が必ず
     # surface する構造化経路に乗せる（SKILL.md の surface MUST 依存をやめ silence != evaluated を担保）。
+    # #141-7a: 注入は audit フェーズが Markdown/TL;DR を確定した後に走るため、そのままだと
+    # レンダリング済み phases.audit.report に反映されず TL;DR 件数（要対応 6）が top-level
+    # observability の再集計（要対応 7）と食い違い、注入行が Markdown 本文に grep 0 件になる。
+    # reconcile_injected_observability で Markdown 側の TL;DR を +1 し本文へ追記して一致させる。
     try:
         from evolve_reconcile import build_remediation_batch_skip_observability
         _bs_line = build_remediation_batch_skip_observability(result)
@@ -360,6 +364,18 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
                 obs = {} if not isinstance(obs, dict) else obs
                 result["observability"] = obs
             obs["remediation_batch_skip"] = _bs_line
+            # Markdown レポート（phases.audit.report）と TL;DR を注入行に追随させる（#141-7a）。
+            try:
+                from audit.sections_summary import reconcile_injected_observability
+                audit_phase = result.get("phases", {}).get("audit")
+                if isinstance(audit_phase, dict) and isinstance(
+                    audit_phase.get("report"), str
+                ):
+                    audit_phase["report"] = reconcile_injected_observability(
+                        audit_phase["report"], "Remediation Batch Skip", _bs_line
+                    )
+            except Exception:
+                pass
     except Exception:
         pass
 

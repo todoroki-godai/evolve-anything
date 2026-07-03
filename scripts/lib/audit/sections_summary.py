@@ -7,12 +7,19 @@ audit の標準出力が冗長で「今すぐ見るべき Top3」と「次の一
 追加・削除はしない。畳んだクリーンセクションも `## ✓ クリーン: ...` の1行に名前を残すため
 silence != evaluated は保たれる（evolve SKILL.md Step 9 と同じ折り畳み規則を audit 単体に移植）。
 """
+import re
 from typing import Any, Dict, List, Tuple
 
 # セクション本文が「要対応」「データ不足/情報」「クリーン」のどれかを判定するマーカー。
 # 各 observability builder の慣習に合わせる: ⚠/🔴=要対応, ℹ/データ不足=観察, ✓=clean。
 _CRITICAL_MARKERS = ("⚠", "🔴")
 _WATCH_MARKERS = ("ℹ", "データ不足")
+
+# TL;DR 件数行（build_tldr_block の 2 行目）の 3 数字を捕捉する。前後テキストは
+# group で保持して置換時に再構成する（フォーマット変更に 1 箇所で追随するため）。
+_TLDR_COUNTS_RE = re.compile(
+    r"(要対応 )(\d+)( 件 / 観察中 )(\d+)( 件 / 評価済みクリーン )(\d+)( 件)"
+)
 
 
 def classify_section(lines: List[str]) -> str:
@@ -85,6 +92,55 @@ def build_clean_fold_line(clean_names: List[str], watch_names: List[str]) -> Lis
         lines.append(", ".join(watch_names))
         lines.append("")
     return lines
+
+
+def reconcile_injected_observability(
+    report_md: str, heading: str, section_lines: List[str]
+) -> str:
+    """audit 完了後に注入された observability 行を Markdown レポートへ反映する（#141-7a）。
+
+    evolve フルランでは audit フェーズが Markdown + TL;DR を確定した後に remediation
+    フェーズが `result["observability"]` へ remediation_batch_skip を注入する。既に
+    レンダリング済みの Markdown（phases.audit.report）には反映されず、TL;DR 件数が
+    top-level observability の ⚠/🔴 再集計と食い違い（要対応 6 vs 7）、注入行が Markdown
+    本文に grep 0 件になる（「必ず surface する」修正が表示経路とのズレを生む）。
+
+    フェーズ順序上、注入は Markdown 生成後にしか行えない。そこで差分追記方式で
+    両契約を満たす:
+      1. section_lines の分類（critical/watch/clean）に応じ TL;DR の該当件数を +1
+         する（Markdown TL;DR と top-level observability 再集計を一致させる）。
+      2. `## {heading}` 見出し + section_lines を推奨アクションカードの直前へ追記し、
+         本文に surface する（grep 可視化・#400 バグ#6 の「必ず surface」契約を維持）。
+
+    注: TL;DR は先頭 1 箇所のみ置換する。batch_skip 以外の post-audit 注入
+    （constitutional 等・条件付きで marker 無し）を巻き込まないよう、全件再集計では
+    なく注入セクション単位の増分に限定する。
+    """
+    kind = classify_section(section_lines)
+
+    def _bump(m: "re.Match[str]") -> str:
+        critical, watch, clean = int(m.group(2)), int(m.group(4)), int(m.group(6))
+        if kind == "critical":
+            critical += 1
+        elif kind == "watch":
+            watch += 1
+        else:
+            clean += 1
+        return (
+            f"{m.group(1)}{critical}{m.group(3)}{watch}"
+            f"{m.group(5)}{clean}{m.group(7)}"
+        )
+
+    patched = _TLDR_COUNTS_RE.sub(_bump, report_md, count=1)
+
+    section_text = "\n".join([f"## {heading}", "", *section_lines, ""])
+    marker = "## 推奨アクション"
+    idx = patched.rfind(marker)
+    if idx != -1:
+        patched = patched[:idx] + section_text + "\n" + patched[idx:]
+    else:
+        patched = patched.rstrip("\n") + "\n\n" + section_text
+    return patched
 
 
 def build_recommended_actions_section(
