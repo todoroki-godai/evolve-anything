@@ -41,7 +41,7 @@ def stub_observe(monkeypatch):
             "message": "stub",
         }
         suff.update(action_kwargs)
-        monkeypatch.setattr(evolve, "check_data_sufficiency", lambda: dict(suff))
+        monkeypatch.setattr(evolve, "check_data_sufficiency", lambda project_dir=None: dict(suff))
         monkeypatch.setattr(
             evolve, "check_fitness_function",
             lambda project_dir=None: {"has_fitness": False, "fitness_functions": []},

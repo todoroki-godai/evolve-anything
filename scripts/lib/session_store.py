@@ -393,15 +393,52 @@ def count_unique_since(timestamp: str) -> int:
     return len({sid for sid, _ in pairs})
 
 
-def query(since: str | None = None, limit: int | None = None) -> list[dict]:
+def _canonical_pj_slug(slug):
+    """rename 旧 slug を現 slug に畳む（read 層別名 SoT・#136）。
+
+    pj_slug.canonical_pj_slug（rl-anything→evolve-anything）を再利用する。import 不能
+    環境（pj_slug 未解決）は原値をそのまま返す（非破壊フォールバック）。
+    """
+    try:
+        from pj_slug import canonical_pj_slug
+        return canonical_pj_slug(slug)
+    except Exception:
+        return slug
+
+
+def _filter_by_project_slug(records: list[dict], project: str) -> list[dict]:
+    """records を PJ slug で絞る（#136）。
+
+    telemetry_query の ``_filter_by_project(alias_aware=True)`` と同意味論:
+    ``canonical_pj_slug`` で両辺を畳んで rename alias（rl-anything→evolve-anything）を
+    回収し、``project`` 欠落（None）レコードは他 PJ 誤混入を避けるため strict に除外する
+    （データ十分性は「この PJ に十分か」を厳密に測るため未帰属を数えない）。
+    """
+    target = _canonical_pj_slug(project)
+    out: list[dict] = []
+    for rec in records:
+        rp = rec.get("project")
+        if rp is not None and _canonical_pj_slug(rp) == target:
+            out.append(rec)
+    return out
+
+
+def query(
+    since: str | None = None,
+    limit: int | None = None,
+    *,
+    project: str | None = None,
+) -> list[dict]:
     """セッションレコードを返す（union read）。
 
     db の結果 + 未 ingest jsonl の結果を (session_id, timestamp) で dedup して合算し、
-    timestamp 昇順に並べて返す。limit は union 後に適用する。
+    timestamp 昇順に並べて返す。project フィルタ（指定時）→ limit の順で適用する。
 
     Args:
         since: ISO 8601 timestamp。指定時はこれより新しいレコードのみ。
-        limit: 返す件数の上限（union 後に適用）。
+        limit: 返す件数の上限（project フィルタ後に適用）。
+        project: PJ slug。指定時は当 PJ（canonical fold で alias 回収）のレコードのみ。
+                 None（既定）は全 PJ = 既存 caller の後方互換（#136）。
     """
     # dedup キー → レコード。db を先に入れ、jsonl は未取り込み分のみ補完する。
     by_key: dict[tuple[str, str], dict] = {}
@@ -441,6 +478,8 @@ def query(since: str | None = None, limit: int | None = None) -> list[dict]:
             by_key[key] = rec
 
     results = sorted(by_key.values(), key=lambda r: r.get("timestamp", ""))
+    if project is not None:
+        results = _filter_by_project_slug(results, project)
     if limit:
         results = results[: int(limit)]
     return results
