@@ -91,12 +91,15 @@ def compute_capture_rate(
 
     cutoff = _iso_days_ago(days)
 
+    # usage.jsonl の ts/timestamp 両対応は rl_common 単一ソース（#139）。
+    from rl_common import usage_timestamp
+
     # usage.jsonl → session_id ごとのターン数（窓内のみ）。
     turns_by_session: Dict[str, int] = {}
     for rec in _load_jsonl(Path(usage_file)):
         if project is not None and not _project_match(rec, project):
             continue
-        ts = rec.get("ts") or rec.get("timestamp") or ""
+        ts = usage_timestamp(rec)
         if ts and ts < cutoff:
             continue
         sid = rec.get("session_id") or ""

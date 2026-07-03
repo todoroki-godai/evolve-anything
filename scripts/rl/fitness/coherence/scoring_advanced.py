@@ -227,8 +227,19 @@ def score_efficiency(project_dir: Path, *, data_dir: Optional[Path] = None) -> T
 
 
 def _get_used_skills(usage_file: Path, days: int) -> set:
-    """usage.jsonl から直近 N 日間で使用されたスキル名を返す。"""
+    """usage.jsonl から直近 N 日間で使用されたスキル名（bare 形）を返す。
+
+    usage.jsonl は skill_name/skill・ts/timestamp の 3 スキーマ混在（#139）。片側の
+    フィールドだけを見ると常に空集合になり全 custom skill が永遠に「未使用」判定に倒れる
+    ため、レコードパースは ``rl_common`` の単一ソースに委譲する。返すスキル名は plugin 修飾
+    形（``<plugin>:<skill>``）を bare 名へ正規化して、比較先の SKILL.md dir 名と名前空間を
+    揃える（#577/#578 の join-key 不一致対策）。``Agent:*`` は subagent 帰属でスキルでない
+    ため除外する。
+    """
     from datetime import datetime, timedelta, timezone
+
+    _ensure_paths()
+    from rl_common import usage_skill_name, usage_timestamp
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     used = set()
@@ -242,16 +253,28 @@ def _get_used_skills(usage_file: Path, days: int) -> set:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                ts = record.get("timestamp", "")
+                ts = usage_timestamp(record)
                 try:
                     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     if dt < cutoff:
                         continue
                 except (ValueError, AttributeError):
                     continue
-                skill = record.get("skill", "")
-                if skill:
-                    used.add(skill)
+                bare = _bare_used_skill(usage_skill_name(record))
+                if bare:
+                    used.add(bare)
     except (OSError, UnicodeDecodeError):
         pass
     return used
+
+
+def _bare_used_skill(skill: str) -> str:
+    """起動時スキル名を bare 名（SKILL.md dir 名）へ正規化する。
+
+    ``<plugin>:<skill>`` は最後の ``:`` 以降が skill 名（dir 名に ``:`` は含まれない）。
+    ``Agent:*`` は subagent 帰属でありスキルでないため "" を返し join 対象から外す。
+    audit.multiview_eval._bare_skill_name と同方式（#577）。
+    """
+    if not skill or skill.startswith("Agent:"):
+        return ""
+    return skill.rsplit(":", 1)[-1]

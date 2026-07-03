@@ -198,6 +198,12 @@ from .persistence import (  # noqa: F401, E402
     project_name_from_dir,
 )
 
+# usage.jsonl レコードパース単一ソース — #139
+from .usage_schema import (  # noqa: F401, E402
+    usage_skill_name,
+    usage_timestamp,
+)
+
 # write barrier 単一書込ゲート — ADR-049 / #55
 from .store_write import (  # noqa: F401, E402
     StoreWriteError,

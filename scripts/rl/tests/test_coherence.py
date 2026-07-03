@@ -185,6 +185,64 @@ class TestScoreEfficiency:
         score, details = score_efficiency(project, data_dir=empty_data)
         assert details["unused_skills"]["skipped"] is True
 
+    def _add_skill(self, project, name):
+        """テスト用 custom skill を1つ追加する（本文はスキル名で差別化して重複検出を避ける）。"""
+        d = project / ".claude" / "skills" / name
+        d.mkdir(parents=True, exist_ok=True)
+        body = (
+            f"# {name}\n\n## Usage\n\nUse {name}.\n\n## Steps\n\n"
+            + "\n".join(f"Step {i} for {name}" for i in range(50))
+        )
+        (d / "SKILL.md").write_text(body, encoding="utf-8")
+
+    def test_used_skills_detected_across_3_schemas(self, tmp_path):
+        """usage.jsonl の 3 スキーマ混在でも使用スキルを取りこぼさない（#139 回帰）。
+
+        schema A) skill_name + ts / B) skill + ts / C) skill_name + timestamp。
+        それぞれ別スキルを使用記録し、全て「未使用」判定から外れることを固定する。
+        修正前は timestamp/skill 単一フィールド前提で常に空集合 → 全 custom skill が
+        永遠に未使用判定だった。
+        """
+        from datetime import datetime, timezone
+
+        project = _make_project(tmp_path)  # sample-skill を作る
+        self._add_skill(project, "implement-skill")
+        self._add_skill(project, "agent-skill")
+
+        now = datetime.now(timezone.utc)
+        ts_z = now.isoformat().replace("+00:00", "Z")      # Z 終端（schema A/B）
+        ts_off = now.isoformat()                            # +00:00 終端（schema C）
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        records = [
+            {"skill_name": "sample-skill", "ts": ts_z},         # A
+            {"skill": "implement-skill", "ts": ts_z},           # B
+            {"skill_name": "agent-skill", "timestamp": ts_off},  # C
+        ]
+        (data_dir / "usage.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8"
+        )
+        score, details = score_efficiency(project, data_dir=data_dir)
+        assert details["unused_skills"]["skills"] == []
+        assert details["unused_skills"]["pass"] is True
+
+    def test_used_skills_join_normalizes_plugin_prefix(self, tmp_path):
+        """usage.jsonl が plugin:skill 形でも bare な dir 名と join できる（#139/#577）。"""
+        from datetime import datetime, timezone
+
+        project = _make_project(tmp_path)  # dir 名 = sample-skill
+        now = datetime.now(timezone.utc)
+        ts_z = now.isoformat().replace("+00:00", "Z")
+        data_dir = tmp_path / "_data"
+        data_dir.mkdir()
+        records = [{"skill_name": "some-plugin:sample-skill", "ts": ts_z}]
+        (data_dir / "usage.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8"
+        )
+        score, details = score_efficiency(project, data_dir=data_dir)
+        assert "sample-skill" not in details["unused_skills"]["skills"]
+        assert details["unused_skills"]["pass"] is True
+
 
 # ============================================================
 # 5. 統合テスト

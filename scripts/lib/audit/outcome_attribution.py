@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from rl_common import usage_skill_name
+
 from .outcome_metrics import _EDIT_TOOLS, _has_edit_burst
 from .outcome_promotion_readiness import check_variance
 
@@ -38,13 +40,16 @@ _REWORK_MIN_CONSECUTIVE = 3
 
 
 def _skill_of(rec: Dict[str, Any]) -> str:
-    """usage レコードからスキル名を取り出す（skill_name 優先、skill フォールバック）。"""
-    return rec.get("skill_name") or rec.get("skill") or ""
+    """usage レコードからスキル名を取り出す（skill_name 優先、skill フォールバック）。
+
+    usage.jsonl の 3 スキーマ耐性は rl_common の単一ソースに委譲する（#139）。
+    """
+    return usage_skill_name(rec)
 
 
 def _skill_of_correction(rec: Dict[str, Any]) -> str:
     """correction レコードからスキル名を取り出す（correction_detect が書く last_skill）。"""
-    return rec.get("last_skill") or rec.get("skill_name") or rec.get("skill") or ""
+    return rec.get("last_skill") or usage_skill_name(rec)
 
 
 def attribute_outcomes(
