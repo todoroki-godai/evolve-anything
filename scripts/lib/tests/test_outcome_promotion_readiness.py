@@ -280,6 +280,44 @@ class TestPerPjSession:
         monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
         assert opr.per_pj_first_try_success(days=30) == {}
 
+    def test_folds_duplicate_session_rows(self, tmp_path, monkeypatch):
+        """#138: 分母は distinct session（error_count 保有行あり）で数える。
+
+        行数ベースだと s1 の重複行で分母が水増しされる。distinct 化 + 分母を
+        scored session に限定し、error_count なし行を分母から除外する。
+        """
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        records = [
+            # s1: session_summary が 2 回発火（別 timestamp）で clean。
+            _session("/p/a", "s1", now, error_count=0),
+            _session("/p/a", "s1", now - timedelta(minutes=1), error_count=0),
+            # s2: 非 clean。
+            _session("/p/a", "s2", now, error_count=2),
+            # instructions_loaded 型（error_count なし）。分母に混入してはならない。
+            {"project": "/p/a", "session_id": "x1", "timestamp": _iso(now),
+             "type": "instructions_loaded"},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        out = opr.per_pj_first_try_success(days=30)
+        # distinct scored session = {s1, s2} = 2, clean = 1 → 0.5。
+        assert out["a"]["value"] == 0.5
+        assert out["a"]["denominator"] == 2
+
+    def test_within_session_error_makes_non_clean(self, tmp_path, monkeypatch):
+        """#138: 同一 session 内に 1 行でも error>0 があれば non-clean（max 合成）。"""
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        records = [
+            _session("/p/a", "s1", now, error_count=0),
+            _session("/p/a", "s1", now - timedelta(minutes=1), error_count=4),
+            _session("/p/a", "s2", now, error_count=0),
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        out = opr.per_pj_first_try_success(days=30)
+        assert out["a"]["value"] == 0.5  # s1 non-clean / s2 clean
+        assert out["a"]["denominator"] == 2
+
 
 class TestPerPjReworkFloor:
     """#569: per_pj_rework も最小分母 floor を欠く（#563-2 の同類残）。

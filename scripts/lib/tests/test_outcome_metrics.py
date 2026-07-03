@@ -534,3 +534,148 @@ class TestSectionBuilder:
         # （first_try_success の 1.00 は出る可能性があるが rework 軸の行では出ない）
         rework_lines = [l for l in lines if "rework" in l.lower()]
         assert any("サンプル不足" in l for l in rework_lines)
+
+
+# ---------- #138: 一発成功率の session 単位畳み込み ----------
+
+class TestFoldSessionErrorCounts:
+    """#138: 生レコード行を session_id 単位に畳み込むヘルパの単体テスト。"""
+
+    def test_duplicate_rows_folded_to_max(self):
+        # 同一 session の複数行（Stop hook 複数発火）。1 行でも error>0 なら non-clean（max 合成）。
+        records = [
+            {"session_id": "s1", "error_count": 0},
+            {"session_id": "s1", "error_count": 3},
+            {"session_id": "s2", "error_count": 0},
+        ]
+        folded = outcome_metrics.fold_session_error_counts(records)
+        assert folded == {"s1": 3, "s2": 0}
+
+    def test_error_count_absent_rows_yield_none(self):
+        # error_count を持たない record 型（instructions_loaded 等）は None を値にする。
+        records = [
+            {"session_id": "s1"},  # error_count なし
+            {"session_id": "s1", "error_count": 0},  # 同 session に scored 行あり
+            {"session_id": "s2"},  # scored 行が一切ない session
+        ]
+        folded = outcome_metrics.fold_session_error_counts(records)
+        assert folded == {"s1": 0, "s2": None}
+
+    def test_missing_session_id_skipped(self):
+        records = [
+            {"error_count": 0},  # session_id 無し → distinct session へ帰属不能
+            {"session_id": "", "error_count": 0},  # 空 session_id → skip
+            {"session_id": "s1", "error_count": 0},
+        ]
+        folded = outcome_metrics.fold_session_error_counts(records)
+        assert folded == {"s1": 0}
+
+
+class TestFirstTrySuccessDistinctSessions:
+    """#138: 分母は distinct session（error_count 保有行あり）で数える。"""
+
+    def test_duplicate_session_rows_folded(self, tmp_path, monkeypatch):
+        # 行数分母だと 3clean/4=0.75。distinct 化で s1 は 1 セッション → 1clean/2=0.50。
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        records = [
+            {"session_id": "s1", "error_count": 0,
+             "timestamp": _iso(now - timedelta(minutes=2)), "first_timestamp": _iso(now)},
+            {"session_id": "s1", "error_count": 0,
+             "timestamp": _iso(now - timedelta(minutes=1)), "first_timestamp": _iso(now)},
+            {"session_id": "s1", "error_count": 0,
+             "timestamp": _iso(now), "first_timestamp": _iso(now)},
+            {"session_id": "s2", "error_count": 2,
+             "timestamp": _iso(now), "first_timestamp": _iso(now)},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.first_try_success_rate(days=30)
+        assert value == pytest.approx(0.5)
+        assert evidence["total_sessions"] == 2
+        assert evidence["clean_sessions"] == 1
+
+    def test_error_count_absent_rows_excluded_from_denominator(self, tmp_path, monkeypatch):
+        # #138 の核心（非対称希薄化）: error_count なし行は分子からだけでなく分母からも除外する。
+        # 行数分母だと 2clean/4=0.50。distinct・scored 限定で 2clean/2=1.00。
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"session_id": "s1", "error_count": 0, "timestamp": ts, "first_timestamp": ts},
+            {"session_id": "s2", "error_count": 0, "timestamp": ts, "first_timestamp": ts},
+            # instructions_loaded 型（error_count なし）。分母に混入してはならない。
+            {"session_id": "x1", "type": "instructions_loaded", "timestamp": ts, "first_timestamp": ts},
+            {"session_id": "x2", "type": "instructions_loaded", "timestamp": ts, "first_timestamp": ts},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.first_try_success_rate(days=30)
+        assert value == pytest.approx(1.0)
+        assert evidence["total_sessions"] == 2
+        assert evidence["clean_sessions"] == 2
+
+    def test_mixed_error_within_session_is_non_clean(self, tmp_path, monkeypatch):
+        # 同一 session 内で 1 行でも error>0 → そのセッションは non-clean（max 合成）。
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        records = [
+            {"session_id": "s1", "error_count": 0,
+             "timestamp": _iso(now - timedelta(minutes=1)), "first_timestamp": _iso(now)},
+            {"session_id": "s1", "error_count": 3,
+             "timestamp": _iso(now), "first_timestamp": _iso(now)},
+            {"session_id": "s2", "error_count": 0,
+             "timestamp": _iso(now), "first_timestamp": _iso(now)},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.first_try_success_rate(days=30)
+        assert value == pytest.approx(0.5)
+        assert evidence["total_sessions"] == 2
+        assert evidence["clean_sessions"] == 1
+
+    def test_issue_138_reproduction_gap(self, tmp_path, monkeypatch):
+        """#138 の再現: 行数分母 + none 混入で大幅過小になるケースを distinct 化で救う。
+
+        25 distinct scored session（24 clean / 1 non-clean）を、重複 session_summary 行と
+        error_count なし行で水増しして書く。distinct 化で 24/25 = 0.96 に戻る。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        records: list[dict] = []
+        for i in range(24):
+            sid = f"c{i:02d}"
+            # session_summary 型を 2 回発火（別 timestamp なので union dedup を生き残る）。
+            records.append({"session_id": sid, "error_count": 0,
+                            "timestamp": _iso(now - timedelta(minutes=2 * i)),
+                            "first_timestamp": _iso(now)})
+            records.append({"session_id": sid, "error_count": 0,
+                            "timestamp": _iso(now - timedelta(minutes=2 * i, seconds=30)),
+                            "first_timestamp": _iso(now)})
+            # 同 session の instructions_loaded 行（error_count なし）。
+            records.append({"session_id": sid, "type": "instructions_loaded",
+                            "timestamp": _iso(now - timedelta(minutes=2 * i, seconds=5)),
+                            "first_timestamp": _iso(now)})
+        # 非 clean セッション 1 件。
+        records.append({"session_id": "b00", "error_count": 1,
+                        "timestamp": _iso(now), "first_timestamp": _iso(now)})
+        # scored 行を一切持たない session（分母に入れてはならない）。
+        for i in range(6):
+            records.append({"session_id": f"n{i}", "type": "instructions_loaded",
+                            "timestamp": _iso(now - timedelta(seconds=i)),
+                            "first_timestamp": _iso(now)})
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.first_try_success_rate(days=30)
+        assert evidence["total_sessions"] == 25
+        assert evidence["clean_sessions"] == 24
+        assert value == pytest.approx(0.96)
+
+    def test_only_absent_error_count_returns_no_data(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"session_id": "x1", "type": "instructions_loaded", "timestamp": ts, "first_timestamp": ts},
+            {"session_id": "x2", "type": "instructions_loaded", "timestamp": ts, "first_timestamp": ts},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.first_try_success_rate(days=30)
+        assert value is None
+        assert evidence["reason"] == "no_data"

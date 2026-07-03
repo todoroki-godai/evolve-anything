@@ -252,15 +252,53 @@ def correction_recurrence_rate(
     }
 
 
+def fold_session_error_counts(
+    records: List[Dict[str, Any]],
+) -> Dict[str, Optional[int]]:
+    """生セッションレコードを session_id 単位に畳み込み error_count を合成する（#138）。
+
+    sessions ストアには 1 セッションにつき Stop hook（session_summary 型）が複数回発火した
+    複数行 + error_count を持たない record 型（instructions_loaded 型等）が混在する。生行数を
+    分母にすると (a) 同一セッションの重複計上と (b) error_count 欠損行の非対称希薄化
+    （分子から除外されるが分母には残る）で一発成功率が大幅過小になる（#138）。本ヘルパで
+    session_id ごとに 1 値へ畳んでから率を出すことで両方を根治する。
+
+    合成規則: 同一 session_id 内で error_count を持つ行の **max** を採る
+    （1 行でも error>0 なら non-clean = 保守側。fanout_cost._success_by_session の
+    「いずれかにエラーなら失敗扱い」と同方針）。error_count を全く持たないセッション
+    （scored 行なし）は None を値にし、呼び出し側で分母から除外する。session_id を持たない
+    レコードは distinct セッションへ帰属できないためスキップする。
+
+    Returns: {session_id: folded_error_count(int) | None}。
+    """
+    folded: Dict[str, Optional[int]] = {}
+    for r in records:
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        if sid not in folded:
+            folded[sid] = None
+        ec = r.get("error_count")
+        if ec is None:
+            continue
+        prev = folded[sid]
+        folded[sid] = ec if prev is None else max(prev, ec)
+    return folded
+
+
 def first_try_success_rate(
     days: int = 30, *, data_dir: Optional[Path] = None, project: Optional[str] = None
 ) -> Tuple[Optional[float], Dict[str, Any]]:
     """エラーが 1 件も発生しなかったセッションの割合（error→retry 連鎖なし）。
 
-    分母 = 窓内のセッション数
-    分子 = error_count == 0 のセッション数
+    分母 = 窓内の distinct session 数（error_count を持つ行が 1 つでもある session のみ）
+    分子 = 畳み込み後の error_count == 0 の session 数
 
     値が高いほど「一発で通った」= 良い。
+
+    #138: 生行数を分母にすると Stop hook 複数発火の重複行と error_count 欠損行
+    （instructions_loaded 型）の非対称希薄化で率が大幅過小になるため、
+    ``fold_session_error_counts`` で session_id 単位に畳んでから率を算出する。
 
     project（PJ basename）指定時は当PJ分のみを対象にする（#489）。None なら全PJ集計。
     """
@@ -274,17 +312,15 @@ def first_try_success_rate(
     if not records:
         return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
 
-    clean: List[str] = []
-    for r in records:
-        ec = r.get("error_count")
-        if ec is None:
-            continue
-        if ec == 0:
-            clean.append(r.get("session_id") or "")
-    total = len(records)
-    rate = round(len(clean) / total, 4) if total else None
-    if rate is None:
+    # #138: session_id 単位に畳み込み、scored（error_count を持つ）session のみを分母にする。
+    folded = fold_session_error_counts(records)
+    scored = {sid: ec for sid, ec in folded.items() if ec is not None}
+    if not scored:
         return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
+
+    clean = [sid for sid, ec in scored.items() if ec == 0]
+    total = len(scored)
+    rate = round(len(clean) / total, 4)
     return rate, {
         "total_sessions": total,
         "clean_sessions": len(clean),

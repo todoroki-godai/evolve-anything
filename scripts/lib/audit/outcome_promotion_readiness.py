@@ -150,9 +150,13 @@ def per_pj_correction_recurrence(
 def per_pj_first_try_success(
     days: int = 30, *, data_dir: Optional[Path] = None
 ) -> Dict[str, Dict[str, Any]]:
-    """PJ 別の一発成功率 + 分母（session 数）。
+    """PJ 別の一発成功率 + 分母（distinct session 数）。
 
     Returns: {pj: {"value": float, "denominator": int}}。
+
+    #138: 分母は生行数でなく distinct session 数（error_count を持つ行がある session のみ）。
+    ``outcome_metrics.fold_session_error_counts`` を first_try_success_rate と共有し、
+    Stop hook 複数発火の重複行と error_count 欠損行による過小算出を両 call site で同時に潰す。
     """
     base = _base(data_dir)
     grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -164,10 +168,11 @@ def per_pj_first_try_success(
 
     out: Dict[str, Dict[str, Any]] = {}
     for pj, recs in grouped.items():
-        scored = [r for r in recs if r.get("error_count") is not None]
+        folded = _om.fold_session_error_counts(recs)
+        scored = {sid: ec for sid, ec in folded.items() if ec is not None}
         if not scored:
             continue
-        clean = sum(1 for r in scored if r.get("error_count") == 0)
+        clean = sum(1 for ec in scored.values() if ec == 0)
         out[pj] = {"value": round(clean / len(scored), 4), "denominator": len(scored)}
     return out
 
