@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.116.0] - 2026-07-03
 
 ### Added
 - **feat(agent-brushup): agent tools 宣言と実付与の乖離検出（memory: frontmatter の Write/Edit 自動付与）（closes #130）** — 助言専用設計の agent（tools 宣言に Write/Edit なし）でも frontmatter に `memory:` があると harness が Persistent Agent Memory 書込用に Write/Edit を自動付与する（tools 宣言と独立）。実行時付与は静的 audit から見えないが「memory: あり + tools に Write/Edit なし」という宣言ベースヒューリスティックで決定論検出できる。`agent_quality.check_tools_grant_divergence`（#449 の model exact-ID pin 検出と同型）が該当 agent を列挙し `check_quality` の issue `tools_grant_divergence`（severity low・advisory）に surface。`tools:` 宣言自体が無い agent（全ツール継承）は乖離が存在しないため対象外（誤検知回避）。tools は文字列/YAML リスト両形式に対応。列挙のみ・auto-fix しない。TDD +8件・決定論・LLM 非依存。
