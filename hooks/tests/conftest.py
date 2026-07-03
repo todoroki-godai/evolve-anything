@@ -52,15 +52,13 @@ def patch_data_dir(tmp_data_dir):
     """
     checkpoints = tmp_data_dir / "checkpoints"
     fp_file = tmp_data_dir / "false_positives.jsonl"
-    sessions_db = tmp_data_dir / "sessions.db"
-    sessions_jsonl = tmp_data_dir / "sessions.jsonl"
+    # session_store は call-time 解決（#137）。_DATA_DIR_OVERRIDE 1 本で DATA_DIR /
+    # SESSIONS_DB / SESSIONS_JSONL がすべて tmp_data_dir 配下に追従する。
     with mock.patch.object(common, "DATA_DIR", tmp_data_dir), \
          mock.patch.object(common, "CHECKPOINTS_DIR", checkpoints), \
          mock.patch.object(common, "FALSE_POSITIVES_FILE", fp_file), \
          mock.patch.object(rl_common, "DATA_DIR", tmp_data_dir), \
          mock.patch.object(rl_common, "CHECKPOINTS_DIR", checkpoints), \
          mock.patch.object(rl_common, "FALSE_POSITIVES_FILE", fp_file), \
-         mock.patch.object(session_store, "DATA_DIR", tmp_data_dir), \
-         mock.patch.object(session_store, "SESSIONS_DB", sessions_db), \
-         mock.patch.object(session_store, "SESSIONS_JSONL", sessions_jsonl):
+         mock.patch.object(session_store, "_DATA_DIR_OVERRIDE", tmp_data_dir):
         yield tmp_data_dir

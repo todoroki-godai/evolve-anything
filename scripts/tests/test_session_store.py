@@ -38,14 +38,12 @@ def _import_session_store(env: dict[str, str] | None = None) -> dict:
 def fresh_store(tmp_path, monkeypatch):
     """各テスト独立の SessionStore インスタンス。
 
-    monkeypatch.setattr で DATA_DIR / SESSIONS_DB / SESSIONS_JSONL を一時パッチ。
-    teardown で自動復元されるため、他テストへ汚染しない。
+    #137: session_store は call-time 解決。_DATA_DIR_OVERRIDE 1 本で DATA_DIR /
+    SESSIONS_DB / SESSIONS_JSONL が tmp_path 配下に追従する。teardown で自動復元。
     """
     sys.path.insert(0, _LIB)
     import session_store
-    monkeypatch.setattr(session_store, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
-    monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
+    monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", tmp_path)
     return session_store
 
 

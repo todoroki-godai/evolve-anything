@@ -208,11 +208,23 @@ def _deliver_evolve_drain() -> None:
 
 
 def _deliver_data_dir_migration_reminder() -> None:
-    """DATA_DIR 分裂が未解消なら `evolve-fleet migrate-data` を1行案内する（#364）。
+    """DATA_DIR 分裂が未解消なら `evolve-fleet migrate-data` を1行案内する（#364/#137）。
 
-    marker（一元化済）があれば沈黙。marker 無し & 旧 plugin-data dir に
-    ストアが残っていれば案内する。migration 実行で marker が立ち自然終息
-    （install ≠ enforcement 対策の検出層、#402 の drain リマインドと同型）。
+    判定の要は「source（plugin-data dir）に未マージのストアが残っているか」
+    （``needs_migration``）であり、**marker の有無ではない**。marker は「一度 migrate
+    した」事実しか意味しないため、marker 済みでも旧版 hook の書込等で分裂が再発した
+    場合に案内し続ける必要がある（#137: 旧実装は ``if marker.exists(): return`` で
+    再分裂を恒久沈黙させていた split-brain の根因）。
+
+    - source に未マージストアなし → 沈黙（migrate 完了の定常状態。marker 有無を問わない）
+    - source に未マージストアあり:
+        - marker 無し → 初回分裂の案内（#364）
+        - marker 有り → 再分裂（recurrence）の案内（#137）。旧版プラグインを掴んだ
+          セッションが plugin-data に書き続けている等が原因。migrate-data 再実行で回収
+
+    レイテンシ: ``needs_migration`` は source を1回 ``iterdir()`` するだけ（deep walk /
+    DuckDB import なし）。SessionStart hot path に重い走査を足さない（#hot_hook_eager_import）。
+    install ≠ enforcement 対策の検出層（#402 の drain リマインドと同型）。
     """
     if _data_dir_migration is None:
         return
@@ -223,11 +235,20 @@ def _deliver_data_dir_migration_reminder() -> None:
         source = Path(env)
         if not _data_dir_migration.is_cc_install_layout(source):
             return  # テスト isolation / custom 環境
+        # marker の有無に関わらず「未マージストアが残っているか」を毎回評価する（#137）。
+        if not _data_dir_migration.needs_migration(source=source):
+            return  # 定常状態（source は空 / marker のみ）→ 沈黙
         canonical = _data_dir_migration.default_canonical()
         marker = canonical / _data_dir_migration._marker_name()
         if marker.exists():
-            return
-        if _data_dir_migration.needs_migration(source=source):
+            # marker 済みなのに未マージストアが再蓄積 = 分裂の再発（recurrence）。
+            print(
+                "[evolve-anything] DATA_DIR 分裂が再発しています（#137）。marker は設置済みですが"
+                " plugin-data 側に未マージのストアが再蓄積しています（旧版 hook が書き続けている"
+                "可能性）。`evolve-fleet migrate-data --dry-run` で内容確認後、"
+                "`evolve-fleet migrate-data` で再度一元化してください。"
+            )
+        else:
             print(
                 "[evolve-anything] DATA_DIR が hook/tool 文脈で分裂しています（#364）。"
                 "`evolve-fleet migrate-data --dry-run` で内容確認後、"

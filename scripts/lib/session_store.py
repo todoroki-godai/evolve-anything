@@ -14,6 +14,19 @@
   **非同期**（セッションイベント時）に count を読むため、「ingest 直後にしか読まない」
   仮定は成立しない。db 不在 / DuckDB 無の場合は jsonl のみを読む（後方互換）。
 
+DATA_DIR 解決（#137 / ADR-042）:
+- 従来は module import 時に生 ``CLAUDE_PLUGIN_DATA`` を直読みして DATA_DIR を確定して
+  いたため、他ストアが使う ``rl_common.resolve_data_dir()`` の marker ゲート redirect を
+  経由せず、hook 文脈（env=plugins-data）と tool 文脈（env なし）で読み書きが別 dir に
+  分裂した（split-brain）。本モジュールは DATA_DIR を **call-time** に
+  ``rl_common.resolve_data_dir(env)`` で解決し、marker（``.data-dir-unified``）が立って
+  いれば hook/tool どちらの文脈でも同一 canonical に収束させる（read/write 同一関数の
+  原則 #492）。内部関数はモジュール定数でなく ``_data_dir()`` /``_sessions_db()`` /
+  ``_sessions_jsonl()`` を参照する。外部からの ``session_store.DATA_DIR`` /
+  ``SESSIONS_DB`` / ``SESSIONS_JSONL`` 読み取りは module ``__getattr__`` が同一値を返す
+  （import 時固定コピーの pitfall #96 を構造回避）。テストは ``_DATA_DIR_OVERRIDE`` を
+  立てて env/marker を迂回する。
+
 LLM 呼び出しは行わない（MUST NOT）。
 """
 from __future__ import annotations
@@ -24,10 +37,50 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
-SESSIONS_DB = DATA_DIR / "sessions.db"
-SESSIONS_JSONL = DATA_DIR / "sessions.jsonl"
+# テスト専用 override。非 None のとき ``_data_dir()`` は env/marker 解決を迂回して
+# この値を返す。production では常に None（call-time env 解決を使う）。
+_DATA_DIR_OVERRIDE: "Path | None" = None
+
+
+def _data_dir() -> Path:
+    """DATA_DIR を call-time に解決する（marker ゲート経由・#137）。
+
+    ``_DATA_DIR_OVERRIDE`` が立っていればそれを返す（テスト経路）。それ以外は
+    ``rl_common.resolve_data_dir(CLAUDE_PLUGIN_DATA)`` で hook/tool 文脈を marker
+    ゲート経由に統一する（import 時固定でなく毎回解決＝env/monkeypatch 追従）。
+    """
+    if _DATA_DIR_OVERRIDE is not None:
+        return _DATA_DIR_OVERRIDE
+    import rl_common
+
+    return rl_common.resolve_data_dir(os.environ.get("CLAUDE_PLUGIN_DATA", ""))
+
+
+def _sessions_db() -> Path:
+    return _data_dir() / "sessions.db"
+
+
+def _sessions_jsonl() -> Path:
+    return _data_dir() / "sessions.jsonl"
+
+
+def __getattr__(name: str):
+    """後方互換の外部読み取り shim（``session_store.DATA_DIR`` 等）。
+
+    内部は ``_data_dir()`` 系を使うが、外部 reader（migrate CLI・契約テスト）は
+    従来 ``session_store.DATA_DIR`` / ``SESSIONS_DB`` / ``SESSIONS_JSONL`` を参照する。
+    module ``__getattr__``（PEP 562）で call-time 解決値を返し、内部/外部で単一の
+    解決経路にする（import 時固定コピーを構造的に排除・#137/#96）。
+    """
+    if name == "DATA_DIR":
+        return _data_dir()
+    if name == "SESSIONS_DB":
+        return _sessions_db()
+    if name == "SESSIONS_JSONL":
+        return _sessions_jsonl()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 # rotate 済み jsonl の glob パターン（ingest 対象から恒久除外する）。
 _ROTATED_GLOB = "sessions.jsonl.ingested-*"
 # 保険 compaction: file_size が rows×平均行長 のこの倍率を超えたら rebuild。
@@ -61,8 +114,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id);
 
 def _connect():
     """DuckDB 接続を返す。スキーマを保証する。"""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    con = _duckdb.connect(str(SESSIONS_DB))
+    _data_dir().mkdir(parents=True, exist_ok=True)
+    con = _duckdb.connect(str(_sessions_db()))
     con.execute(_SCHEMA_SQL)
     return con
 
@@ -76,7 +129,7 @@ def _connect_ro():
     呼び出し側が ``SESSIONS_DB.exists()`` で事前ガードする前提。``read_session_records`` の
     read_only パターン（416）と同一の流儀。
     """
-    return _duckdb.connect(str(SESSIONS_DB), read_only=True)
+    return _duckdb.connect(str(_sessions_db()), read_only=True)
 
 
 def append(record: dict) -> None:
@@ -97,10 +150,10 @@ def _append_jsonl(record: dict) -> None:
     write/read が同一 DATA_DIR を見続けるので #364 の hook/tool 乖離を持ち込まない）。
     """
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _data_dir().mkdir(parents=True, exist_ok=True)
         from rl_common import store_write_raw
 
-        store_write_raw(SESSIONS_JSONL, record)
+        store_write_raw(_sessions_jsonl(), record)
     except OSError:
         pass
 
@@ -145,7 +198,8 @@ def ingest() -> int:
     """
     if not HAS_DUCKDB:
         return 0
-    if not SESSIONS_JSONL.exists():
+    jsonl = _sessions_jsonl()
+    if not jsonl.exists():
         # live が無くても compaction の機会としては使えるが、ここでは noop に倒す。
         return 0
 
@@ -158,7 +212,7 @@ def ingest() -> int:
         }
 
         inserted = 0
-        for rec in _iter_jsonl_records(SESSIONS_JSONL):
+        for rec in _iter_jsonl_records(jsonl):
             sid = rec.get("session_id", "")
             ts = rec.get("timestamp", "")
             if not sid or not ts:
@@ -197,13 +251,15 @@ def ingest() -> int:
 def _rotate_jsonl() -> None:
     """live jsonl を `.ingested-<ts>` へ rename し、古い rotate 済みを 1 世代に削る。"""
     try:
-        if not SESSIONS_JSONL.exists():
+        jsonl = _sessions_jsonl()
+        if not jsonl.exists():
             return
+        dd = _data_dir()
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
-        rotated = DATA_DIR / f"sessions.jsonl.ingested-{ts}"
-        SESSIONS_JSONL.rename(rotated)
+        rotated = dd / f"sessions.jsonl.ingested-{ts}"
+        jsonl.rename(rotated)
         # 1世代保持: 最新の rotate 済み 1 件を残して残りを削除。
-        all_rotated = sorted(DATA_DIR.glob(_ROTATED_GLOB))
+        all_rotated = sorted(dd.glob(_ROTATED_GLOB))
         for old in all_rotated[:-1]:
             try:
                 old.unlink()
@@ -229,7 +285,7 @@ def _needs_compaction(con) -> bool:
         if rows == 0:
             return False
         try:
-            file_size = SESSIONS_DB.stat().st_size
+            file_size = _sessions_db().stat().st_size
         except OSError:
             return False
         # 最小ファイルサイズの床近辺は縮める余地が無いので compaction しない。
@@ -250,16 +306,17 @@ def _compact_db() -> None:
     ATTACH した新規 db へ `CREATE TABLE AS` でコピー → 元ファイルを差し替える。
     connection は呼び出し前に閉じておくこと（ファイル swap のため）。
     """
-    if not HAS_DUCKDB or not SESSIONS_DB.exists():
+    db_path = _sessions_db()
+    if not HAS_DUCKDB or not db_path.exists():
         return
-    fresh = SESSIONS_DB.with_suffix(".db.compact")
+    fresh = db_path.with_suffix(".db.compact")
     con = None
     try:
         # 既存の中途半端な compact ファイルを除去。
         for p in (fresh, Path(str(fresh) + ".wal")):
             if p.exists():
                 p.unlink()
-        con = _duckdb.connect(str(SESSIONS_DB))
+        con = _duckdb.connect(str(db_path))
         con.execute(f"ATTACH '{fresh}' AS fresh")
         con.execute("CREATE TABLE fresh.sessions AS SELECT * FROM sessions")
         con.execute(
@@ -271,10 +328,10 @@ def _compact_db() -> None:
         con.close()
         con = None
         # 元ファイルを新規ファイルで差し替え（WAL も掃除）。
-        wal = Path(str(SESSIONS_DB) + ".wal")
+        wal = Path(str(db_path) + ".wal")
         if wal.exists():
             wal.unlink()
-        os.replace(str(fresh), str(SESSIONS_DB))
+        os.replace(str(fresh), str(db_path))
     except Exception:
         # compaction はベストエフォート。失敗時は元ファイルを温存する。
         if con is not None:
@@ -294,7 +351,7 @@ def _uningested_jsonl_records():
 
     rotate 済み（`.ingested-*`）は ingest 後の重複なので除外する。
     """
-    yield from _iter_jsonl_records(SESSIONS_JSONL)
+    yield from _iter_jsonl_records(_sessions_jsonl())
 
 
 def count_unique_since(timestamp: str) -> int:
@@ -304,7 +361,7 @@ def count_unique_since(timestamp: str) -> int:
     """
     pairs: set[tuple[str, str]] = set()
 
-    if HAS_DUCKDB and SESSIONS_DB.exists():
+    if HAS_DUCKDB and _sessions_db().exists():
         con = None
         try:
             con = _connect_ro()  # #65: read は read_only 接続（byte を書き換えない）
@@ -349,7 +406,7 @@ def query(since: str | None = None, limit: int | None = None) -> list[dict]:
     # dedup キー → レコード。db を先に入れ、jsonl は未取り込み分のみ補完する。
     by_key: dict[tuple[str, str], dict] = {}
 
-    if HAS_DUCKDB and SESSIONS_DB.exists():
+    if HAS_DUCKDB and _sessions_db().exists():
         con = None
         try:
             con = _connect_ro()  # #65: read は read_only 接続（byte を書き換えない）
@@ -407,15 +464,15 @@ def read_session_records(
     行わない。dry-run の「1バイトも書かない」契約（#461）を壊さないため。
 
     Args:
-        data_dir: 読む対象 dir。None ならモジュール定数 ``DATA_DIR``（= 既定の解決パス）。
-                  outcome 系は tmp DATA_DIR を monkeypatch するため、その値をここへ渡す。
+        data_dir: 読む対象 dir。None なら ``_data_dir()``（= call-time 解決の既定パス）。
+                  outcome 系は tmp DATA_DIR を渡すため、その値をここへ渡す。
         since: ISO 8601 timestamp。指定時は ``timestamp > since`` のレコードのみ返す。
                None なら窓フィルタなし（呼び出し側が ``_in_window`` 等で別途窓判定する想定）。
 
     Returns:
         session レコード dict の list（timestamp 昇順）。
     """
-    base = data_dir if data_dir is not None else DATA_DIR
+    base = data_dir if data_dir is not None else _data_dir()
     db_path = base / "sessions.db"
     jsonl_path = base / "sessions.jsonl"
 
@@ -483,7 +540,7 @@ def read_session_records_union(
     dry-run の「1バイトも書かない」契約（#461）を維持する。
 
     Args:
-        canonical: 起点となる canonical dir。None ならモジュール定数 ``DATA_DIR``。
+        canonical: 起点となる canonical dir。None なら ``_data_dir()``（call-time 解決）。
                    候補 dir はこの ``canonical.parent`` から導出される（tmp 渡しで hermetic）。
         since: ISO 8601 timestamp。指定時は各候補 dir で ``timestamp > since`` のみ。
 
@@ -492,7 +549,7 @@ def read_session_records_union(
     """
     from rl_common import iter_read_data_dirs
 
-    base = canonical if canonical is not None else DATA_DIR
+    base = canonical if canonical is not None else _data_dir()
     by_key: dict[tuple[str, str], dict] = {}
     for d in iter_read_data_dirs(base):
         for rec in read_session_records(d, since=since):
@@ -518,7 +575,8 @@ def migrate_from_jsonl(skip_if_db_has_data: bool = False) -> int:
     """
     if not HAS_DUCKDB:
         return 0
-    if not SESSIONS_JSONL.exists():
+    jsonl = _sessions_jsonl()
+    if not jsonl.exists():
         return 0
 
     con = None
@@ -535,7 +593,7 @@ def migrate_from_jsonl(skip_if_db_has_data: bool = False) -> int:
         }
 
         inserted = 0
-        for rec in _iter_jsonl_records(SESSIONS_JSONL):
+        for rec in _iter_jsonl_records(jsonl):
             sid = rec.get("session_id", "")
             ts = rec.get("timestamp", "")
             if not sid or not ts:
@@ -576,7 +634,7 @@ def delete_by_session_ids(session_ids: list[str], source: str | None = None) -> 
         return 0
 
     deleted = 0
-    if HAS_DUCKDB and SESSIONS_DB.exists():
+    if HAS_DUCKDB and _sessions_db().exists():
         con = None
         try:
             con = _connect()
@@ -603,12 +661,13 @@ def delete_by_session_ids(session_ids: list[str], source: str | None = None) -> 
 
 
 def _delete_by_session_ids_jsonl(session_ids: list[str], source: str | None = None) -> int:
-    if not SESSIONS_JSONL.exists() or not session_ids:
+    jsonl = _sessions_jsonl()
+    if not jsonl.exists() or not session_ids:
         return 0
     target = set(session_ids)
     kept: list[str] = []
     deleted = 0
-    for line in SESSIONS_JSONL.read_text(encoding="utf-8").splitlines():
+    for line in jsonl.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
@@ -620,5 +679,5 @@ def _delete_by_session_ids_jsonl(session_ids: list[str], source: str | None = No
             deleted += 1
             continue
         kept.append(line)
-    SESSIONS_JSONL.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+    jsonl.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
     return deleted
