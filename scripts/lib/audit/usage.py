@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent_classifier import BUILTIN_AGENT_NAMES
+from rl_common import usage_skill_name, usage_timestamp
 
 from .classification import classify_usage_skill
 from .gstack import _is_gstack_skill
@@ -72,7 +73,7 @@ def load_usage_data(
             )
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    return [r for r in records if (r.get("ts") or r.get("timestamp") or "") >= cutoff]
+    return [r for r in records if usage_timestamp(r) >= cutoff]
 
 
 def _is_openspec_skill(skill_name: str) -> bool:
@@ -112,7 +113,7 @@ def aggregate_usage(
     counts: Dict[str, int] = {}
     for rec in records:
         # implement 等は skill フィールドで自己報告するため skill_name → skill の順でフォールバック
-        skill = rec.get("skill_name") or rec.get("skill") or "unknown"
+        skill = usage_skill_name(rec) or "unknown"
         if skill in _BUILTIN_TOOLS:
             continue
         if exclude_plugins and _is_plugin_skill(skill):
@@ -195,14 +196,10 @@ def compute_negative_transfer(
     if not usage_data:
         return []
 
-    def _get_ts(rec: Dict[str, Any]) -> str:
-        """ts または timestamp フィールドを取得する。"""
-        return rec.get("ts") or rec.get("timestamp") or ""
-
-    # タイムスタンプでソート
+    # タイムスタンプでソート（ts/timestamp 両対応は rl_common 単一ソース #139）
     sorted_data = sorted(
-        [r for r in usage_data if _get_ts(r)],
-        key=_get_ts,
+        [r for r in usage_data if usage_timestamp(r)],
+        key=usage_timestamp,
     )
 
     if not sorted_data:
@@ -215,7 +212,7 @@ def compute_negative_transfer(
         if not skill:
             continue
         if skill not in skill_first_seen:
-            skill_first_seen[skill] = _get_ts(rec)
+            skill_first_seen[skill] = usage_timestamp(rec)
 
     # スキルが1種類以下（新規追加スキルを検出できない）
     if len(skill_first_seen) < 2:
@@ -247,7 +244,7 @@ def compute_negative_transfer(
     for rec in sorted_data:
         skill = rec.get("skill_name", "")
         outcome = rec.get("outcome")
-        ts = _get_ts(rec)
+        ts = usage_timestamp(rec)
         if not skill or outcome not in ("success", "error") or not ts:
             continue
         if skill not in existing_skills:
@@ -323,12 +320,9 @@ def compute_component_transfer(
     if not usage_data:
         return []
 
-    def _get_ts(rec: Dict[str, Any]) -> str:
-        return rec.get("ts") or rec.get("timestamp") or ""
-
     sorted_data = sorted(
-        [r for r in usage_data if _get_ts(r)],
-        key=_get_ts,
+        [r for r in usage_data if usage_timestamp(r)],
+        key=usage_timestamp,
     )
     if not sorted_data:
         return []
@@ -337,7 +331,7 @@ def compute_component_transfer(
     for rec in sorted_data:
         skill = rec.get("skill_name", "")
         if skill and skill not in skill_first_seen:
-            skill_first_seen[skill] = _get_ts(rec)
+            skill_first_seen[skill] = usage_timestamp(rec)
 
     if len(skill_first_seen) < 2:
         return []
@@ -364,7 +358,7 @@ def compute_component_transfer(
         for rec in sorted_data:
             skill = rec.get("skill_name", "")
             outcome = rec.get("outcome")
-            ts = _get_ts(rec)
+            ts = usage_timestamp(rec)
             if not skill or outcome not in ("success", "error") or not ts:
                 continue
             if skill not in existing:
@@ -458,7 +452,7 @@ def compute_paired_trajectory(
     # session_id → そのセッションで呼ばれたスキル集合。
     skills_by_session: Dict[str, set] = {}
     for rec in usage:
-        skill = rec.get("skill_name") or rec.get("skill") or ""
+        skill = usage_skill_name(rec)
         sid = rec.get("session_id") or ""
         if not skill or sid_excluded(skill) or not sid:
             continue
