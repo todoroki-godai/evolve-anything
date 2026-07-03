@@ -83,6 +83,12 @@ def test_store_modules_discovered():
     assert "session_store" not in _STORE_MODULES, (
         "session_store regressed to module-level DATA_DIR capture (#137 の退行)"
     )
+    # spec_trigger も #148 で call-time 解決（_data_dir() + module __getattr__）へ移行し
+    # import 時 env 直読み（DATA_DIR = Path(_PLUGIN_DATA_ENV)）を排除した。ここに再出現
+    # したら hook 文脈での marker gate bypass 再分裂への退行なので fail させる。
+    assert "spec_trigger" not in _STORE_MODULES, (
+        "spec_trigger regressed to module-level DATA_DIR capture (#148 の退行)"
+    )
 
 
 @pytest.mark.parametrize("mod_name", _STORE_MODULES)

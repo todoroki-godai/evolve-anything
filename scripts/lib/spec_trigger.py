@@ -51,10 +51,55 @@ from typing import Any, Dict, List, Optional, Tuple
 # slug は正準解決器を再利用（worktree 安全: git --git-common-dir 親 basename）
 from optimize_history_store import resolve_slug, UNATTRIBUTED_SLUG  # noqa: F401
 
-_PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
-# テストは spec_trigger.MARKER_ROOT を monkeypatch して隔離する
-MARKER_ROOT = DATA_DIR / "spec_trigger"
+# DATA_DIR 解決（#148 / ADR-042・#137 同型）:
+# 従来は module import 時に生 ``CLAUDE_PLUGIN_DATA`` を直読みして DATA_DIR を確定して
+# いたため、他ストアが使う ``rl_common.resolve_data_dir()`` の marker ゲート redirect を
+# 経由せず、hook 文脈（env=plugins-data）と tool 文脈（env なし）で marker JSON の
+# 読み書きが別 dir に分裂した（実測 copied:4）。DATA_DIR を **call-time** に
+# ``rl_common.resolve_data_dir(env)`` で解決し、marker（``.data-dir-unified``）が立って
+# いれば hook/tool どちらの文脈でも同一 canonical に収束させる（read/write 同一関数 #492）。
+#
+# テスト専用 override。非 None のとき ``_data_dir()`` は env/marker 解決を迂回して
+# この値を返す。production では常に None（call-time env 解決を使う）。
+_DATA_DIR_OVERRIDE: "Path | None" = None
+
+
+def _data_dir() -> Path:
+    """DATA_DIR を call-time に解決する（marker ゲート経由・#148 / #137 同型）。
+
+    ``_DATA_DIR_OVERRIDE`` が立っていればそれを返す（テスト経路）。それ以外は
+    ``rl_common.resolve_data_dir(CLAUDE_PLUGIN_DATA)`` で hook/tool 文脈を marker
+    ゲート経由に統一する（import 時固定でなく毎回解決＝env/monkeypatch 追従）。
+    """
+    if _DATA_DIR_OVERRIDE is not None:
+        return _DATA_DIR_OVERRIDE
+    import rl_common
+
+    return rl_common.resolve_data_dir(os.environ.get("CLAUDE_PLUGIN_DATA", ""))
+
+
+def _marker_root() -> Path:
+    return _data_dir() / "spec_trigger"
+
+
+def __getattr__(name: str):
+    """後方互換の外部読み取り shim（``spec_trigger.DATA_DIR`` / ``MARKER_ROOT``）。
+
+    内部は ``_data_dir()`` / ``_marker_root()`` を使うが、外部 reader は従来
+    ``spec_trigger.DATA_DIR`` / ``MARKER_ROOT`` を参照する。module ``__getattr__``
+    （PEP 562）で call-time 解決値を返し、内部/外部で単一の解決経路にする
+    （import 時固定コピーを構造的に排除・#148/#96）。
+
+    NOTE: ここが提供する名前（``DATA_DIR`` / ``MARKER_ROOT``）を
+    ``monkeypatch.setattr`` で直接 patch してはならない。teardown で実属性が pin
+    され、以後 ``__getattr__`` を恒久 shadow するため（#136 のテストで実際に発生した
+    プロセス汚染）。テストの隔離は ``_DATA_DIR_OVERRIDE`` を立てて行う。
+    """
+    if name == "DATA_DIR":
+        return _data_dir()
+    if name == "MARKER_ROOT":
+        return _marker_root()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ── ゲートのパラメータ ───────────────────────────────────────────
 SPEC_RELEVANT_TYPES = ("feat", "refactor")
@@ -172,7 +217,7 @@ def commit_files(cwd: Path, sha: str) -> List[str]:
 # マーカー（PJ スコープ・単一 JSON）
 # ─────────────────────────────────────────────────────────────────
 def marker_path(slug: str) -> Path:
-    return MARKER_ROOT / f"{slug}.json"
+    return _marker_root() / f"{slug}.json"
 
 
 def load_marker(slug: str) -> Dict[str, Any]:

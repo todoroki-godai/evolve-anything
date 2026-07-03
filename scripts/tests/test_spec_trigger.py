@@ -149,8 +149,9 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     _git(r, "config", "user.name", "t")
     _git(r, "checkout", "-q", "-b", "main")
     _commit(r, "chore: init", {"README.md": "init"})
-    # marker を temp に隔離
-    monkeypatch.setattr(spec_trigger, "MARKER_ROOT", tmp_path / "spec_trigger")
+    # marker を temp に隔離（_DATA_DIR_OVERRIDE 経由。__getattr__ 提供名の直 patch は
+    # 恒久 shadow するため使わない・#148/#136）。marker root は tmp_path/"spec_trigger"。
+    monkeypatch.setattr(spec_trigger, "_DATA_DIR_OVERRIDE", tmp_path)
     return r
 
 
@@ -248,7 +249,7 @@ def test_breaking_change_suggests_adr(repo: Path):
 
 
 def test_non_git_dir_is_silent(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(spec_trigger, "MARKER_ROOT", tmp_path / "st")
+    monkeypatch.setattr(spec_trigger, "_DATA_DIR_OVERRIDE", tmp_path)
     res = spec_trigger.detect(cwd=tmp_path / "nope", now=1000.0)
     assert res["message"] is None
 
@@ -263,7 +264,7 @@ def test_no_main_or_master_stays_silent_not_head(tmp_path: Path, monkeypatch):
     _git(r, "config", "user.name", "t")
     _git(r, "checkout", "-q", "-b", "feature/wip")
     _commit(r, "feat(x): work in progress", {"scripts/lib/x.py": "code"})
-    monkeypatch.setattr(spec_trigger, "MARKER_ROOT", tmp_path / "st")
+    monkeypatch.setattr(spec_trigger, "_DATA_DIR_OVERRIDE", tmp_path)
     # head_sha は main も master も無いので None → detect は沈黙、マーカーも作らない
     assert spec_trigger.head_sha(r) is None
     res = spec_trigger.detect(cwd=r, now=1000.0)
