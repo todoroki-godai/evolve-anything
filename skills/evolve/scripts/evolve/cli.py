@@ -142,6 +142,39 @@ def main() -> None:
         except Exception as e:
             summary["queue_state_persisted"] = {"error": str(e)}
 
+        # #135: subagent 内部軌跡（subagents.jsonl → subagent_traces.jsonl）の増分 ingest を
+        # apply 境界で実効化する。根因: run_evolve(dry_run=False) に到達する標準経路が存在
+        # せず、phases_capture の `if not dry_run:` 配下（subagent_traces ingest）が構造的
+        # 死蔵だった＝代替経路ゼロで全PJ横断 2026-06-23 以降ゼロ成長（唯一の実害）。
+        # weak_signals #484 / reward_ema #64 / queue_state #79 と同型に drain 境界へ移植する。
+        # 既存セマンティクス（max_new cap・agent_transcript_path に名指しされた本のみ読む・
+        # 決定論ゼロ LLM）は ingest_all_projects 側で維持され、ここでは呼ぶだけ。
+        try:
+            from subagent_traces import ingest as _st_ingest
+
+            _st_res = _st_ingest.ingest_all_projects(progress=False)
+            summary["subagent_traces_ingest"] = {
+                "ingested": _st_res.get("ingested", 0),
+                "skipped": _st_res.get("skipped", 0),
+                "capped": _st_res.get("capped", False),
+                "remaining": _st_res.get("remaining", 0),
+            }
+        except Exception as e:
+            summary["subagent_traces_ingest"] = {"error": str(e)}
+
+        # #135/#136: last_run_timestamp を apply 境界で前進させる。死蔵で永久未書込だった
+        # ため fleet queue / count_new_* / trigger の「前回 evolve 以降」時間フィルタが
+        # 進まず #136 の直接原因になっていた。drain は observe を回さず sessions/observations
+        # カウントを持たないので、読み手のいない informational snapshot は触らず時間フィルタが
+        # 依存する last_run_timestamp のみ前進させる（persist_last_run_timestamp が state の
+        # 他キーを保つ・#135）。他 persist と同じく error は握り潰して drain 本体を完走する。
+        try:
+            from ._state import persist_last_run_timestamp
+
+            summary["last_run_persisted"] = persist_last_run_timestamp()
+        except Exception as e:
+            summary["last_run_persisted"] = {"error": str(e)}
+
         print(json.dumps(summary, ensure_ascii=False))
         return
 
