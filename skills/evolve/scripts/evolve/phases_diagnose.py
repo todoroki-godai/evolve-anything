@@ -74,8 +74,9 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
     # 構造的に防げる。module-level の `import evolve` は循環 import になるため関数内で行う。
     import evolve as _ev
 
-    # Phase 1: Observe データ確認
-    sufficiency = _ev.check_data_sufficiency()
+    # Phase 1: Observe データ確認（当 PJ スコープ・#136）。ctx.project_dir を渡し、
+    # 全 PJ・全期間のグローバル集計でなく当 PJ のテレメトリで十分性を判定させる。
+    sufficiency = _ev.check_data_sufficiency(ctx.project_dir)
     result["phases"]["observe"] = sufficiency
 
     if not sufficiency["sufficient"]:

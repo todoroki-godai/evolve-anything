@@ -23,6 +23,89 @@ from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
 
 
+def _parse_iso(ts_str: Optional[str]) -> Optional[datetime]:
+    """ISO 8601 文字列を tz-aware datetime に変換する（#136）。
+
+    ``Z`` 終端も ``+00:00`` として解釈し、tz naive は UTC を補う。tz suffix の
+    辞書順比較の罠（Z vs +00:00 で同一 instant が不一致・pitfall_iso8601_lexical_compare）を
+    避けるための正規化。空 / 不正は None。
+    """
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+def _ts_after(ts_str: str, last_run_dt: Optional[datetime]) -> bool:
+    """``ts_str`` が前回 evolve 時刻より後か（datetime 比較で tz suffix 罠を回避・#136）。
+
+    ``last_run_dt`` が None（cold-start / 空 last_run = 全期間）のときは、値のある
+    タイムスタンプを一律 True にする（旧挙動 ``ts > ""`` と同じく「全期間」を維持）。
+    """
+    if last_run_dt is None:
+        return bool(ts_str)
+    dt = _parse_iso(ts_str)
+    if dt is None:
+        return False
+    return dt > last_run_dt
+
+
+def _canonical_slug(slug):
+    """rename 旧 slug を現 slug に畳む（read 層別名 SoT・#136）。import 不能は原値。"""
+    try:
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from pj_slug import canonical_pj_slug
+        return canonical_pj_slug(slug)
+    except Exception:
+        return slug
+
+
+def _resolve_project_slug(project_dir: Optional[str]) -> Optional[str]:
+    """``project_dir`` から当 PJ slug を導出する（None なら None＝スコープなし・#136）。
+
+    hooks が sessions/usage の ``project`` フィールドに書くのと**同じ**
+    ``project_name_from_dir``（pj_slug_fast 経由・worktree 安全）を使うため、書込側と
+    read 側が同一 namespace になる。マッチ側は ``_canonical_slug`` で畳むので rename alias
+    も回収される。解決不能環境 / 空 path は None（＝後方互換の全 PJ 集計に倒す）。
+    """
+    if not project_dir:
+        return None
+    try:
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from rl_common import project_name_from_dir
+        slug = project_name_from_dir(str(project_dir))
+        return slug or None
+    except Exception:
+        return None
+
+
+def _load_last_run(project: Optional[str]) -> str:
+    """時間フィルタ下限（前回 evolve 時刻）を返す（#136）。
+
+    ``project``（slug）が判れば per-PJ の ``evolve-queue-state.jsonl``（#79）の
+    ``last_evolve_at`` を優先する。グローバル単一の ``evolve-state.json``
+    ``last_run_timestamp`` を全 PJ で共有すると、PJ A の drain で PJ B の「前回以降」窓が
+    縮む PJ 間汚染が起きるため（#136 修正方針 5）。per-PJ 値が無ければグローバルへ
+    フォールバックし、それも無ければ空文字（＝ cold-start / 全期間）を返す（後方互換）。
+    """
+    if project:
+        try:
+            sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+            from fleet.queue_state import read_last_evolve
+            per_pj = read_last_evolve().get(project)
+            if per_pj:
+                return str(per_pj)
+        except Exception:
+            pass
+    state = load_evolve_state()
+    return state.get("last_run_timestamp", "")
+
+
 def load_evolve_state() -> Dict[str, Any]:
     """前回の evolve 実行状態を読み込む。"""
     import evolve as _ev
@@ -73,21 +156,24 @@ def persist_last_run_timestamp(
     return {"written": 1, "last_run_timestamp": ts, "dry_run": False}
 
 
-def count_new_sessions() -> int:
-    """前回 evolve 実行以降のセッション数を数える。
+def count_new_sessions(project: Optional[str] = None) -> int:
+    """前回 evolve 実行以降のセッション数を数える（当 PJ スコープ・#136）。
 
     sessions テーブル（DuckDB）と usage.jsonl 両方からユニーク session_id を集計する。
-    backfill データ（usage 経由）も含めてカウントできる。
+    backfill データ（usage 経由）も含めてカウントできる。``project``（slug）指定時は
+    当 PJ のレコードのみ数える（旧 slug rl-anything 等の全 PJ 混入を排除）。None は
+    全 PJ 集計（後方互換）。時間下限は per-PJ の last_evolve_at を優先する（#136-5）。
     """
     import evolve as _ev
-    state = load_evolve_state()
-    last_run = state.get("last_run_timestamp", "")
+    last_run = _load_last_run(project)
+    last_run_dt = _parse_iso(last_run)
+    target = _canonical_slug(project) if project is not None else None
     session_ids: set = set()
 
-    # sessions テーブルから集計
+    # sessions テーブルから集計（union read・project フィルタは store 側で fold）
     sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
     import session_store
-    for rec in session_store.query(since=last_run):
+    for rec in session_store.query(since=last_run, project=project):
         sid = rec.get("session_id", "")
         if sid:
             session_ids.add(sid)
@@ -98,22 +184,28 @@ def count_new_sessions() -> int:
         for line in usage_file.read_text(encoding="utf-8").splitlines():
             try:
                 rec = json.loads(line)
-                ts = rec.get("timestamp", "")
-                if ts > last_run:
-                    sid = rec.get("session_id", "")
-                    if sid:
-                        session_ids.add(sid)
             except json.JSONDecodeError:
                 continue
+            if target is not None and _canonical_slug(rec.get("project")) != target:
+                continue
+            if _ts_after(rec.get("timestamp", ""), last_run_dt):
+                sid = rec.get("session_id", "")
+                if sid:
+                    session_ids.add(sid)
 
     return len(session_ids)
 
 
-def count_new_observations() -> int:
-    """前回 evolve 実行以降の観測数を数える。"""
+def count_new_observations(project: Optional[str] = None) -> int:
+    """前回 evolve 実行以降の観測数を数える（当 PJ スコープ・#136）。
+
+    ``project``（slug）指定時は usage.jsonl の当 PJ レコードのみを数える。None は全 PJ
+    集計（後方互換）。時間下限は per-PJ の last_evolve_at を優先する（#136-5）。
+    """
     import evolve as _ev
-    state = load_evolve_state()
-    last_run = state.get("last_run_timestamp", "")
+    last_run = _load_last_run(project)
+    last_run_dt = _parse_iso(last_run)
+    target = _canonical_slug(project) if project is not None else None
 
     usage_file = _ev.DATA_DIR / "usage.jsonl"
     if not usage_file.exists():
@@ -123,11 +215,12 @@ def count_new_observations() -> int:
     for line in usage_file.read_text(encoding="utf-8").splitlines():
         try:
             rec = json.loads(line)
-            ts = rec.get("timestamp", "")
-            if ts > last_run:
-                count += 1
         except json.JSONDecodeError:
             continue
+        if target is not None and _canonical_slug(rec.get("project")) != target:
+            continue
+        if _ts_after(rec.get("timestamp", ""), last_run_dt):
+            count += 1
     return count
 
 
@@ -203,22 +296,28 @@ def compute_trend(
     return trends
 
 
-def check_data_sufficiency() -> Dict[str, Any]:
-    """観測データの十分性をチェックする。
+def check_data_sufficiency(project_dir: Optional[str] = None) -> Dict[str, Any]:
+    """観測データの十分性をチェックする（当 PJ スコープ・#136）。
 
     判定基準: セッション3+かつ観測10+、
     または全観測が20+（backfill で大量データがある場合を考慮）。
+
+    ``project_dir`` 指定時は当 PJ のテレメトリのみで判定する（旧実装は PJ フィルタが無く
+    全 PJ・全期間のグローバル集計で判定していたため、cold-start / 小規模 PJ の「データ
+    不足」を検出できなかった #136）。None は全 PJ 集計（後方互換）。呼び出し元
+    （phases_diagnose）は ``ctx.project_dir`` を渡す。
     """
     # 内部 helper は package namespace 経由で呼ぶ（_ev.<name>）。分割前は同一 module
     # globals 解決だったため `mock.patch.object(evolve, "count_new_sessions", ...)` が
     # 効いた（test_evolve_backfill_suggestion）。_state へ移しても束縛先を evolve
     # package に集約してこの差し替え契約を保つ。
     import evolve as _ev
-    sessions = _ev.count_new_sessions()
-    observations = _ev.count_new_observations()
+    project = _resolve_project_slug(project_dir)
+    sessions = _ev.count_new_sessions(project=project)
+    observations = _ev.count_new_observations(project=project)
 
     # 全データ（last_run 以前も含む）の観測数もフォールバックで確認
-    total_observations = _ev._count_total_observations()
+    total_observations = _ev._count_total_observations(project=project)
 
     sufficient = (
         (sessions >= 3 and observations >= 10)
@@ -271,16 +370,31 @@ def check_data_sufficiency() -> Dict[str, Any]:
     }
 
 
-def _count_total_observations() -> int:
-    """usage.jsonl の全レコード数を返す。"""
+def _count_total_observations(project: Optional[str] = None) -> int:
+    """usage.jsonl の全レコード数を返す（当 PJ スコープ・#136）。
+
+    ``project``（slug）指定時は当 PJ のレコードのみ数える。None は全 PJ の非空行を数える
+    （後方互換・パース不要の軽量パス）。
+    """
     import evolve as _ev
     usage_file = _ev.DATA_DIR / "usage.jsonl"
     if not usage_file.exists():
         return 0
-    return sum(
-        1 for line in usage_file.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    )
+    lines = usage_file.read_text(encoding="utf-8").splitlines()
+    if project is None:
+        return sum(1 for line in lines if line.strip())
+    target = _canonical_slug(project)
+    count = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if _canonical_slug(rec.get("project")) == target:
+            count += 1
+    return count
 
 
 def check_fitness_function(project_dir: Optional[str] = None) -> Dict[str, Any]:

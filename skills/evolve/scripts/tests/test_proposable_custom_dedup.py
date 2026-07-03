@@ -192,7 +192,7 @@ class TestRunEvolveRemediation:
         """
         import evolve as _evolve_mod
 
-        monkeypatch.setattr(_evolve_mod, "check_data_sufficiency", lambda: {
+        monkeypatch.setattr(_evolve_mod, "check_data_sufficiency", lambda project_dir=None: {
             "sufficient": True, "sessions": 5, "observations": 20,
             "total_observations": 50, "telemetry_empty": False,
             "backfill_recommended": False, "message": "OK",

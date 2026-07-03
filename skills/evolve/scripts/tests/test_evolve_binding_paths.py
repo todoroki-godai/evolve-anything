@@ -33,7 +33,7 @@ def test_setattr_check_data_sufficiency_reaches_run_evolve(monkeypatch):
     """`setattr(evolve, "check_data_sufficiency", X)` が run_evolve の Phase 1 呼び出しに効く。"""
     calls = {"n": 0}
 
-    def _sentinel():
+    def _sentinel(project_dir=None):
         calls["n"] += 1
         return {
             "sessions": 0, "observations": 0, "total_observations": 100,
@@ -62,7 +62,7 @@ def test_setattr_check_fitness_function_reaches_run_evolve(monkeypatch):
 
     monkeypatch.setattr(
         evolve, "check_data_sufficiency",
-        lambda: {
+        lambda project_dir=None: {
             "sessions": 0, "observations": 0, "total_observations": 100,
             "sufficient": True, "telemetry_empty": False,
             "backfill_recommended": False, "no_new_observations": False, "message": "x",
