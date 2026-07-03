@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.115.0</span>
+    <span class="header-version">v1.116.0</span>
   </div>
 </header>
 
@@ -355,11 +355,14 @@
           <tr><td>fanout_cost</td><td>fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は各群 ≥5 の floor ゲート付き</td></tr>
           <tr><td>paired_trajectory</td><td>paired trajectory auditing（観測版）— 同一タスク種別を「スキル使用群 vs 非使用群」に分け既存テレメトリからアウトカム差を決定論対照集計し advisory surface（能動再実行なし）。outcome_attribution/multiview_eval/negative_transfer と相補（#15）</td></tr>
           <tr><td>subagent_traces</td><td>subagent 内部軌跡ストア — transcript の tool_use/tool_result/is_error をパースし内部一発成功率を per-agent_type で advisory 表示。親セッションの error_count しか見ない既存 outcome 帰属の盲点（内部 error 連発でも最終成功なら一発成功と誤記録）を塞ぐ（#38）</td></tr>
+          <tr><td>subagent_noise</td><td>subagents.jsonl の agent_type ノイズ内訳を advisory 分解表示 — 当 PJ スコープで空文字/ID 形に分け件数・率・最古/最新 timestamp を surface。最新ノイズが直近7日内なら ⚠（live writer 疑い）、古ければ ℹ（historical residue・現行 writer は #36/#44 guard 済で表示のみ）。ノイズ0は非表示（#142）</td></tr>
           <tr><td>reward_ema</td><td>バッチ跨ぎ符号付き advantage の EMA 累積（MAA）— baseline 比 一発成功率差を evolve サイクル跨ぎで符号付き EMA（α=0.3）累積し「通時で安定して効くか」を RODS（単一スナップショット分散）と相補的に区別。書込は evolve --drain の apply 境界のみ・閾値は捏造せず符号＋サイクル数のみ（#64, arXiv 2606.20475）</td></tr>
           <tr><td>predictive_validity</td><td>重み昇格レディネスの第4条件 — skill 一発成功率を ts 中央値で in/out-of-sample 分割し純 Python Spearman 順位相関で予測妥当性を判定。rho≥0.5 で pass、insufficient_data は「データ不足」明示で保守的に昇格ブロック（#42, arXiv 2606.19704）</td></tr>
           <tr><td>memory_contagion</td><td>評価源バイアスの記憶伝播を audit advisory で検出 — corrections/idioms を human/machine に分解し蓄積偏りを保守 verdict 4分類（MACHINE_FLOOR=10/RATIO=3.0）で surface。閾値は実コーパス校正前提（#73）</td></tr>
           <tr><td>skill_vuln_scan</td><td>取り込みスキルの静的脆弱性スキャン（SkillSpector 型）— skills/ の .md/.sh/.bash を決定論・LLM 非依存で行スキャンし remote_exec/secret_exfil/destructive/prompt_injection/overbroad_tools を検出。combo 必須で FP 較正（<code>gh api … | base64 -d</code> 等は非検出）（#13）</td></tr>
           <tr><td>verbosity</td><td>回答冗長性の学習ループ — Stop hook がゼロ LLM で足切り超の長応答を記録し judge が Haiku バッチで「無駄に冗長か」+7パターンを判定、verbose を weak_signals <code>channel=verbosity</code> に emit（reflect 昇格に相乗り）。多発パターンから rules/concise.md 追記案を提示（auto-apply しない・protected）（#75）</td></tr>
+          <tr><td>artifacts_hygiene</td><td>artifact 衛生4検出器（グローバル CLAUDE.md 空/未存在 / SKILL.md 欠落 dir / バックアップ残置 / skill 名跨 scope 重複・symlink wrapper 除外）を advisory 共通枠で observability に surface。決定論・LLM 非依存（#124, #125, #126, #129）</td></tr>
+          <tr><td>memory_hygiene</td><td>memory dir 衛生3検出器（MEMORY.md 索引孤児 / auto-memory frontmatter スキーマ検証 / 旧 PJ memory 完全重複残骸=fleet 横断・退避手順提案のみ auto-apply なし）。3件とも clean 時非表示・走査は *.md のみ（#127, #128, #131）</td></tr>
         </tbody>
       </table>
 
