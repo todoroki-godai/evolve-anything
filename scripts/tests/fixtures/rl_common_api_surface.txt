@@ -32,6 +32,7 @@ last_skill_path(session_id: str) -> pathlib.Path
 load_false_positives() -> set[str]
 load_user_config() -> dict
 message_hash(text: str) -> str
+noise_agent_type_kind(agent_type)
 project_name_from_dir(project_dir: str) -> str
 read_last_skill(session_id: str) -> str | None
 read_skill_stack(session_id: str) -> list
