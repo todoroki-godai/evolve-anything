@@ -23,9 +23,7 @@ def project_dir(tmp_path, monkeypatch):
     # session_store のパスを tmp_path に向ける（本番 DATA_DIR を汚さない）
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    monkeypatch.setattr(session_store, "DATA_DIR", data_dir)
-    monkeypatch.setattr(session_store, "SESSIONS_DB", data_dir / "sessions.db")
-    monkeypatch.setattr(session_store, "SESSIONS_JSONL", data_dir / "sessions.jsonl")
+    monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", data_dir)
     monkeypatch.setattr(discover, "DATA_DIR", data_dir)
 
     # CLAUDE.md
@@ -114,9 +112,7 @@ def test_no_session_data(tmp_path, monkeypatch):
     # session_store を空ディレクトリに向ける
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    monkeypatch.setattr(session_store, "DATA_DIR", data_dir)
-    monkeypatch.setattr(session_store, "SESSIONS_DB", data_dir / "sessions.db")
-    monkeypatch.setattr(session_store, "SESSIONS_JSONL", data_dir / "sessions.jsonl")
+    monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", data_dir)
     monkeypatch.setattr(discover, "DATA_DIR", data_dir)
 
     result = discover.detect_missed_skills(project_root=tmp_path)

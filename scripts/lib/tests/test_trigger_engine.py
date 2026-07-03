@@ -41,11 +41,7 @@ def data_dir(tmp_path):
     ), mock.patch(
         "trigger_engine.PENDING_TRIGGER_FILE", tmp_path / "pending-trigger.json"
     ), mock.patch.object(
-        session_store, "DATA_DIR", tmp_path
-    ), mock.patch.object(
-        session_store, "SESSIONS_DB", tmp_path / "sessions.db"
-    ), mock.patch.object(
-        session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl"
+        session_store, "_DATA_DIR_OVERRIDE", tmp_path
     ):
         yield tmp_path
 
