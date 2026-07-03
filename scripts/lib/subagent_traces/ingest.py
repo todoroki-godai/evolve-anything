@@ -96,7 +96,9 @@ def ingest_all_projects(
 
     Args:
         max_new:  1 回の ingest で書き込む最大件数（runaway 防止の打ち切り）。
-        data_dir: DATA_DIR（未指定なら ADR-042 resolver で解決）。
+        data_dir: DATA_DIR（未指定なら ADR-042 resolver で解決＝本番 canonical へ barrier 書込）。
+                  **指定時は read / dedup / write すべて data_dir 配下に閉じる**（#140:
+                  read だけ隔離され write が常に本番へ漏れる非対称を解消）。
         progress: True なら 1 件ごとに進捗を stderr に flush 出力。
 
     Returns:
@@ -154,7 +156,9 @@ def ingest_all_projects(
             "trace_version": TRACE_VERSION,
             **trace,
         }
-        _store.write_trace(record)
+        # #140: 元の data_dir（None=本番 barrier / 明示=隔離 raw）をそのまま貫通させ、
+        # read/dedup と write の隔離先を一致させる（base は解決済みなので使わない）。
+        _store.write_trace(record, data_dir=data_dir)
         seen_ids.add(agent_id)
         ingested += 1
 

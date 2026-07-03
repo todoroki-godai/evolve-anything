@@ -291,6 +291,105 @@ def test_ingest_no_subagents_file_is_graceful(data_dir):
     assert res == {"ingested": 0, "skipped": 0, "capped": False, "remaining": 0}
 
 
+# ─────────────── #140 write の data_dir 対称性（read/write 隔離） ───────────────
+
+def test_write_trace_data_dir_writes_isolated_not_canonical(data_dir, tmp_path):
+    """#140: write_trace(data_dir=) は隔離先へ書き、canonical(barrier)へは 1 バイトも書かない。
+
+    data_dir fixture が rl_common.DATA_DIR(=barrier の canonical 解決先) を tmp に向けている。
+    隔離 dir を明示指定した write は store_write_raw で隔離先に閉じ、canonical は不変であること
+    を固定する（read は隔離・write は常に本番、の非対称契約の回帰防止）。
+    """
+    scratch = tmp_path / "scratch"  # 未作成 = write_trace が parent を掘る
+    _tstore.write_trace({"agent_id": "x", "pj_slug": "p"}, data_dir=scratch)
+
+    # 隔離先に書かれている。
+    assert (scratch / _tstore.STORE_NAME).exists()
+    assert _tstore.read_traces("p", data_dir=scratch) == {
+        "x": {"agent_id": "x", "pj_slug": "p"}
+    }
+    # canonical(barrier 解決先) には 1 バイトも書かれていない。
+    assert not (data_dir / _tstore.STORE_NAME).exists()
+
+
+def test_write_trace_none_uses_barrier_canonical(data_dir, tmp_path):
+    """#140: data_dir 省略時は従来どおり barrier 経由で canonical へ（隔離 dir は触らない）。"""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    _tstore.write_trace({"agent_id": "x", "pj_slug": "p"})
+    assert (data_dir / _tstore.STORE_NAME).exists()
+    assert not (scratch / _tstore.STORE_NAME).exists()
+
+
+def test_ingest_with_data_dir_does_not_write_canonical(data_dir, tmp_path):
+    """#140 does-not-write: ingest(data_dir=隔離) は canonical(barrier)へ 1 バイトも書かない。
+
+    - subagents.jsonl / dedup / write すべて隔離先に閉じる。
+    - barrier(store_write) が一度も呼ばれない（＝canonical への書込経路を踏まない）ことを spy で固定。
+    - canonical path が不在のままであることを直接監視（実害の再発防止 assertion）。
+    """
+    import importlib
+    sw_mod = importlib.import_module("rl_common.store_write")
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    tr = tmp_path / "agent1.jsonl"
+    _write_transcript(tr, [
+        _assistant_line([{"type": "tool_use", "id": "1", "name": "Bash", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "1", "content": "ok", "is_error": False},
+        ]}},
+    ])
+    _write_subagents(scratch, [{
+        "agent_id": "a1", "agent_type": "impl-worker",
+        "agent_transcript_path": str(tr), "project": "/home/u/myproj",
+    }])
+
+    with pytest.MonkeyPatch.context() as mp:
+        calls = []
+        mp.setattr(sw_mod, "store_write", lambda *a, **k: calls.append(a))
+        res = _ingest.ingest_all_projects(data_dir=scratch)
+
+    assert res["ingested"] == 1
+    # barrier(canonical 書込)を一度も踏んでいない。
+    assert calls == []
+    # 隔離先に閉じている。
+    assert (scratch / _tstore.STORE_NAME).exists()
+    assert set(_tstore.read_traces("myproj", data_dir=scratch)) == {"a1"}
+    # canonical(barrier 解決先)には何も書かれていない。
+    assert not (data_dir / _tstore.STORE_NAME).exists()
+
+
+def test_ingest_data_dir_read_write_dedup_all_isolated(data_dir, tmp_path):
+    """#140: data_dir 指定時は read/write/dedup すべて隔離先に閉じ、canonical と干渉しない。
+
+    canonical(data_dir fixture)に同 agent_id を先置きしても、隔離 ingest はそれを dedup 参照せず
+    隔離先に書く（read が隔離先を見るため）。隔離先の再 ingest は自身の dedup で二重書きしない。
+    """
+    # canonical には別内容の a1 が既在（隔離 ingest がこれを読んだら誤 dedup / 誤上書きになる）。
+    _tstore.write_trace({"agent_id": "a1", "pj_slug": "myproj", "sentinel": "canonical"})
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    tr = tmp_path / "a.jsonl"
+    _write_transcript(tr, [_assistant_line([{"type": "tool_use", "id": "1", "name": "Read", "input": {}}])])
+    _write_subagents(scratch, [{
+        "agent_id": "a1", "agent_type": "t",
+        "agent_transcript_path": str(tr), "project": "/p/myproj",
+    }])
+
+    res = _ingest.ingest_all_projects(data_dir=scratch)
+    assert res["ingested"] == 1  # canonical の a1 を dedup 参照していない
+    # 隔離先に軌跡が書かれ、canonical の sentinel レコードは無傷。
+    assert _tstore.read_traces("myproj", data_dir=scratch)["a1"].get("sentinel") is None
+    assert _tstore.read_traces("myproj", data_dir=data_dir)["a1"]["sentinel"] == "canonical"
+
+    # 隔離先の再 ingest は隔離先 dedup で二重書きしない。
+    res2 = _ingest.ingest_all_projects(data_dir=scratch)
+    assert res2["ingested"] == 0
+    assert res2["skipped"] == 1
+
+
 # ─────────────────────────── query ───────────────────────────
 
 def test_per_agent_type_summary_floor_and_rates(data_dir):
