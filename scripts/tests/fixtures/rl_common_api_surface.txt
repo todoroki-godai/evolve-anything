@@ -42,6 +42,8 @@ should_include_message(text: str) -> bool
 skill_stack_path(session_id: str) -> pathlib.Path
 store_write(store_name: 'str', record: 'dict', *, guard_mode: 'Optional[str]' = None) -> 'None'
 store_write_raw(filepath: 'Path', record: 'dict') -> 'None'
+usage_skill_name(record: Dict[str, Any]) -> str
+usage_timestamp(record: Dict[str, Any]) -> str
 workflow_context_path(session_id: str) -> pathlib.Path
 write_last_skill(session_id: str, skill_name: str) -> None
 write_skill_stack(session_id: str, stack: list) -> None
