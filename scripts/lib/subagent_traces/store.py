@@ -54,15 +54,27 @@ def _read_jsonl(path: Path) -> List[dict]:
     return out
 
 
-def write_trace(record: dict) -> None:
-    """1 件の軌跡レコードを store_write barrier 経由で追記する（ADR-049）。
+def write_trace(record: dict, *, data_dir: Optional[Path] = None) -> None:
+    """1 件の軌跡レコードを追記する（#140: read と write の隔離先を対称化する）。
 
-    保存先は store_write が canonical DATA_DIR/<STORE_NAME> へ内部解決する
-    （呼び出し側は場所を決めない）。
+    - ``data_dir=None``（本番）: store_write barrier（ADR-049）経由で canonical
+      ``DATA_DIR/<STORE_NAME>`` へ。保存先は barrier が内部解決する（呼び出し側は場所を決めない）。
+    - ``data_dir`` 指定（隔離・テスト・scratch 実行）: ``store_write_raw`` で
+      ``data_dir/<STORE_NAME>`` へ直接書込む。barrier は本番書込の守り神ゆえ隔離書込に
+      緩和は入れず、例外口 ``store_write_raw`` を通す（ADR-049 決定5）。これで
+      ``read_traces`` / ``read_all_agent_ids`` の ``data_dir`` と write の隔離先が一致し、
+      「read は隔離を尊重するが write だけ常に本番」という非対称契約（#140 実害）を解消する。
     """
-    from rl_common.store_write import store_write
+    if data_dir is None:
+        from rl_common.store_write import store_write
 
-    store_write(STORE_NAME, record)
+        store_write(STORE_NAME, record)
+        return
+    from rl_common.store_write import store_write_raw
+
+    base = Path(data_dir)
+    base.mkdir(parents=True, exist_ok=True)  # append_jsonl は parent を掘らない
+    store_write_raw(base / STORE_NAME, record)
 
 
 def read_traces(slug: str, *, data_dir: Optional[Path] = None) -> Dict[str, dict]:
