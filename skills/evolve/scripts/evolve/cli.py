@@ -175,6 +175,33 @@ def main() -> None:
         except Exception as e:
             summary["last_run_persisted"] = {"error": str(e)}
 
+        # #150 (#415 Phase A): sessions.jsonl → sessions.db の batch ingest を apply 境界で
+        # 実効化する。根因: run_evolve(dry_run=False) に到達する標準経路が無く、phases_capture の
+        # `if not dry_run:` 配下（session_store.ingest）が構造死蔵で sessions.db が stale・
+        # sessions.jsonl が単調肥大していた。weak_signals #484 / subagent_traces #135 と同型に
+        # drain 境界へ移植する。session_store は call-time に DATA_DIR を解決する
+        # （env/marker ベース）ので slug/project_dir を渡さない＝Path(None) の懸念もない。
+        # phases_capture 側の既存ブロックは run_evolve(dry_run=False) 直接実行時の互換で残す
+        # （ingest は (session_id, timestamp) dedup で冪等なので二重実行は無害）。
+        try:
+            import session_store
+
+            summary["sessions_ingested"] = session_store.ingest()
+        except Exception as e:
+            summary["sessions_ingested"] = {"error": str(e)}
+
+        # #150: evolve 実行完了によるスヌーズ自動解除を apply 境界で実効化する。
+        # apply 境界＝drain 時点が「evolve を回した」意味論と一致する（標準フローは
+        # dry-run 分析 → 対話適用 → drain なので phases_capture の clear_snooze は通らない）。
+        # 既存項目と同型に error を surface（無音握り潰しで新しい死蔵を作らない）。
+        try:
+            from trigger_engine import clear_snooze
+
+            clear_snooze()
+            summary["snooze_cleared"] = True
+        except Exception as e:
+            summary["snooze_cleared"] = {"error": str(e)}
+
         print(json.dumps(summary, ensure_ascii=False))
         return
 
