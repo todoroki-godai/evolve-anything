@@ -15,6 +15,7 @@ def run_prune(
     reorganize_merge_groups: Optional[list] = None,
     now: Optional[datetime] = None,
     pj_scoped: bool = True,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Prune を実行して候補を返す。
 
@@ -24,6 +25,9 @@ def run_prune(
     ``pj_scoped`` が真（既定）のとき、global 淘汰候補は PJ 単独では判断不能なため
     フル配列を result に積まず件数サマリ（``{"count", "pointer"}``）に畳む（#586）。
     cross-PJ で全件評価したい場合（CLI 全 PJ 走査）は ``pj_scoped=False`` でフル配列を返す。
+
+    ``dry_run`` が真の場合、corrections.jsonl のクリーンアップ（``cleanup_corrections``）を
+    書き戻しなしで実行する（#154）。候補算出そのものは dry_run に関わらず行われる。
     """
     # mock.patch("prune.detect_X", ...) / mock.patch("prune.find_artifacts", ...) 追従のため package 経由で参照
     from . import (  # noqa: PLC0415
@@ -102,7 +106,7 @@ def run_prune(
         for p in rules
     ]
 
-    cleanup_result = cleanup_corrections()
+    cleanup_result = cleanup_corrections(dry_run=dry_run)
     candidates["corrections_cleanup"] = cleanup_result
 
     merge_result = merge_duplicates(

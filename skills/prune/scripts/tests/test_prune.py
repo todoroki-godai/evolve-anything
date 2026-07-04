@@ -747,6 +747,54 @@ class TestCleanupCorrections:
         assert result["removed"] == 0
         assert result["kept"] == 0
 
+    def test_dry_run_does_not_write(self, patch_data_dir):
+        """dry_run=True では削除対象があっても corrections.jsonl を書き戻さない（#154）。"""
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        original_bytes = (
+            self._make_correction(reflect_status="applied", decay_days=30, age_days=60) + "\n"
+        ).encode("utf-8")
+        corrections_file.write_bytes(original_bytes)
+
+        result = prune.cleanup_corrections(dry_run=True)
+
+        # 集計は従来どおり算出される（removed 件数の報告は生きる）
+        assert result["removed"] == 1
+        assert result["kept"] == 0
+        # だがファイルのバイト内容は不変
+        assert corrections_file.read_bytes() == original_bytes
+
+    def test_dry_run_false_still_writes(self, patch_data_dir):
+        """dry_run=False（既定）では従来どおり削除が書き戻される。"""
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        corrections_file.write_text(
+            self._make_correction(reflect_status="applied", decay_days=30, age_days=60) + "\n"
+        )
+
+        result = prune.cleanup_corrections(dry_run=False)
+
+        assert result["removed"] == 1
+        assert result["kept"] == 0
+        assert corrections_file.read_text(encoding="utf-8") == ""
+
+    def test_run_prune_dry_run_does_not_write_corrections(self, patch_data_dir, tmp_path):
+        """run_prune(dry_run=True) 経由でも corrections.jsonl は書き換わらない（#154）。"""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        (project_dir / ".claude" / "skills").mkdir(parents=True)
+        (project_dir / ".claude" / "rules").mkdir(parents=True)
+
+        (patch_data_dir / "usage.jsonl").write_text("")
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        original_bytes = (
+            self._make_correction(reflect_status="applied", decay_days=30, age_days=60) + "\n"
+        ).encode("utf-8")
+        corrections_file.write_bytes(original_bytes)
+
+        result = prune.run_prune(str(project_dir), dry_run=True)
+
+        assert result["corrections_cleanup"]["removed"] == 1
+        assert corrections_file.read_bytes() == original_bytes
+
 
 class TestIsReferenceSkill:
     """is_reference_skill のユニットテスト。"""

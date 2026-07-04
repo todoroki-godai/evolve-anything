@@ -324,7 +324,9 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         # Reorganize の merge_groups を Prune に渡す
         reorganize_data = result["phases"].get("reorganize", {})
         merge_groups = reorganize_data.get("merge_groups", []) if not reorganize_data.get("skipped") else []
-        prune_result = run_prune(ctx.project_dir, reorganize_merge_groups=merge_groups)
+        prune_result = run_prune(
+            ctx.project_dir, reorganize_merge_groups=merge_groups, dry_run=ctx.dry_run
+        )
         result["phases"]["prune"] = prune_result
     except Exception as e:
         result["phases"]["prune"] = {"error": str(e)}
