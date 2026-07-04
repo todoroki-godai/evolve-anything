@@ -183,11 +183,12 @@ def check_predictive_validity(
         }
 
     # 3. session_id -> error_count マップ（union read）。
-    error_by_session: Dict[str, Optional[int]] = {}
-    for s in _om.read_sessions(base):
-        sid = s.get("session_id")
-        if sid:
-            error_by_session[str(sid)] = s.get("error_count")
+    # #144: read_sessions は 1 セッションにつき session_summary 型（error_count あり）と
+    # instructions_loaded 型（error_count なし）の複数行を返す。手書きの単純代入は
+    # 最後に読んだ行が先行行を無条件に上書きするため、error_count 欠損行が後発 timestamp だと
+    # 実測値を None に潰し scored（分母）から丸ごと除外してしまう（#138 と同型 seam）。
+    # fold_session_error_counts（error_count を持つ行の max・欠損行は既存値を壊さない）で畳む。
+    error_by_session = _om.fold_session_error_counts(list(_om.read_sessions(base)))
 
     # 4. ts の中央値で時系列分割（古い半分 = in-sample / 新しい半分 = out-of-sample）。
     def _ts(r: Dict[str, Any]) -> str:
