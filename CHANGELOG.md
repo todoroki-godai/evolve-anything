@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.116.1] - 2026-07-04
 
 ### Fixed
 - **fix(prune): cleanup_corrections に dry_run を貫通し dry-run 実行時の corrections.jsonl 書き戻しを遮断（closes #154）** — `scripts/lib/prune/corrections.py` の `cleanup_corrections()` が dry_run 引数を持たず、reflect_status が applied/skipped かつ decay_days 超過のレコードを常に削除して無条件 `write_text` で書き戻していた。経路: `evolve --dry-run` → `phases_remediate.py` Phase 4（Prune）→ `run_prune()`（同様に dry_run 引数なし）→ `cleanup_corrections()`。分析目的のはずの dry-run 実行が decay_days 超過レコードの存在するタイミングで実データを破壊する構造的欠陥（時刻×データで顕在化）。**Fix**: `cleanup_corrections(dry_run=False)` / `run_prune(..., dry_run=False)` を追加し、`dry_run=True` では removed/kept の算出・報告は従来どおり行うが `write_text` をスキップする。呼び出し元 `phases_remediate.py` は `ctx.dry_run` を貫通（`persist=not ctx.dry_run` と同型の既存パターンに追従）。他の call site（`prune` スキル CLI の `run_prune(project)`）は apply 専用ゆえ既定 False で後方互換。TDD +3件（dry_run=True で corrections.jsonl バイト不変 / dry_run=False で従来削除挙動保全 / run_prune 経由の貫通確認）・決定論・LLM 非依存。
