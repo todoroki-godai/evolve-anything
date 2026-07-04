@@ -203,11 +203,16 @@ def merge_db(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
     スキーマ乖離耐性（#417-1）: src/old で同名テーブルの列が食い違っても永久失敗
     させない。列追加/削除は superset union（NULL 補完）、和解不能な型差は両保持で
     退避する（``_merge_table_both``）。``UNION``（``UNION ALL`` でない）はキー無し
-    テーブルの正当な重複行も折り畳むが、これは jsonl 行 dedup と同じ意図的設計で、
-    PK を持つストア（token_usage の uuid 等）は無害（#417-3）。
+    テーブルの正当な重複行も折り畳む（jsonl 行 dedup と同じ意図的設計）。
 
-    注意: CREATE TABLE AS のため PK/index は引き継がない（対象の telemetry 系
-    ストアは制約なしの append ログ）。
+    制約保存（#156）: ``CREATE TABLE AS SELECT``（CTAS）は PRIMARY KEY / UNIQUE index を
+    引き継がない。旧コメントは「PK を持つストアは無害（#417-3）」としていたが**誤り** —
+    DuckDB の ``INSERT OR IGNORE`` / ``ON CONFLICT DO NOTHING`` は制約が無いと
+    ``BinderException`` で落ち、token_usage / utterances の writer が全停止する。
+    そこで CTAS マージ直後に ``store_schema_repair.repair_known_tables`` を呼び、
+    既知ストア（token_usage / session_progress / utterances / ingest_state）については
+    canonical ``_SCHEMA_SQL``（store モジュールから import・単一ソース）で PK/UNIQUE を
+    dedup 付き rebuild して復元する。未知テーブルは従来通り制約なしの CTAS 結果を保つ。
     """
     if dry_run:
         return {"action": "would_merge_db"}
@@ -225,6 +230,7 @@ def merge_db(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
     if tmp.exists():
         tmp.unlink()
     con = duckdb.connect(str(tmp))
+    repaired: list = []
     try:
         # READ_ONLY を付けない: src に WAL（未 checkpoint の追記）が残っている場合、
         # 書込可 ATTACH でないと WAL が replay されず末尾の行を取りこぼす。
@@ -260,14 +266,37 @@ def merge_db(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:
                 con.execute("DETACH old")
             except Exception:
                 pass
+        # CTAS が落とした PK/UNIQUE 制約を既知ストアについて復元する（#156）。
+        # 未知テーブルは対象外（present_tables で絞る）。
+        repaired = _repair_known_constraints(con, src_tables | old_tables)
     finally:
         con.close()
     tmp.replace(dst)  # 旧 bloat ファイルを置換 = compaction
-    return {
+    result = {
         "action": "merged_db",
         "tables": sorted(src_tables | old_tables),
         "schema_notes": schema_notes,
     }
+    if repaired:
+        result["schema_repaired"] = repaired
+    return result
+
+
+def _repair_known_constraints(con, present_tables: set) -> list:
+    """CTAS マージ直後、既知ストアテーブルの PK/UNIQUE 制約を復元する（#156）。
+
+    ``store_schema_repair.repair_known_tables`` に委譲（schema は store モジュール由来の
+    単一ソース）。import 失敗・DuckDB 無しは空スキップ（migration を落とさない）。
+    """
+    try:
+        import store_schema_repair
+    except ImportError:
+        return []
+    try:
+        return store_schema_repair.repair_known_tables(con, present_tables=present_tables)
+    except Exception as e:  # 制約復元の失敗で migration 全体を落とさない
+        print(f"[evolve-anything:migrate] schema repair skipped: {e}", file=sys.stderr)
+        return []
 
 
 def merge_file_newer_wins(src: Path, dst: Path, dry_run: bool = False) -> Dict[str, Any]:

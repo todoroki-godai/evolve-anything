@@ -80,12 +80,38 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _repair_schema(con: Any) -> None:
+    """CTAS で PK/UNIQUE index を落とされた utterances を自己修復する（#156）。
+
+    ``data_dir_migration.merge_db`` の CTAS rebuild は物理 PK (source_path,line_no) と
+    論理 UNIQUE index (session_id,timestamp,text_hash) を引き継がず、constraints=[] の
+    まま ``ON CONFLICT DO NOTHING`` が BinderException で全停止する。``store_schema_repair``
+    が制約欠落を決定論検出し 物理 PK → 論理 UNIQUE の順で dedup + rebuild で復元する。
+    read 経路（query_utterances）は ``repair=False`` を渡して発火させない。
+    """
+    try:
+        import store_schema_repair
+    except ImportError:
+        return
+    store_schema_repair.repair_table(
+        con, "utterances", _SCHEMA_SQL,
+        [("source_path", "line_no"), ("session_id", "timestamp", "text_hash")],
+        require_unique_index=True,
+    )
+    store_schema_repair.repair_table(
+        con, "ingest_state", _SCHEMA_SQL, [("source_path",)]
+    )
+
+
 @contextmanager
-def connection(db_path: Path) -> Iterator[Any]:
+def connection(db_path: Path, repair: bool = True) -> Iterator[Any]:
     """utterances.db への 1 connection を with-block 全体で共有する。
 
     file ごとに connect/close を繰り返さず checkpoint を 1 回に集約する
     （DuckDB checkpoint pitfall, #28）。DuckDB 未インストールなら None を yield。
+
+    ``repair``: True（既定・write 経路 = ingest）なら制約欠落を自己修復する（#156）。
+    read 経路（query.py）は ``repair=False`` を渡し、読み取りで書き込みを発火させない。
     """
     if not HAS_DUCKDB:
         yield None
@@ -93,6 +119,10 @@ def connection(db_path: Path) -> Iterator[Any]:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = _duckdb.connect(str(db_path))
+    # 修復は _SCHEMA_SQL の前: 破損テーブルに論理重複があると _SCHEMA_SQL の
+    # CREATE UNIQUE INDEX が重複で即死する（#156 の実発火経路）。read 経路は repair=False。
+    if repair:
+        _repair_schema(con)
     con.execute(_SCHEMA_SQL)
     try:
         yield con

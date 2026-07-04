@@ -98,7 +98,7 @@ def query_utterances(
         pj_slug=pj_slug, since=since, keyword=keyword,
         session_id=session_id, source_kinds=tuple(source_kinds), limit=limit,
     )
-    with _store.connection(db_path) as con:
+    with _store.connection(db_path, repair=False) as con:
         if con is None:
             return []
         rows = con.execute(sql, params).fetchall()
@@ -124,7 +124,7 @@ def query_utterances_all_projects(
         pj_slug=None, since=since, keyword=keyword,
         session_id=None, source_kinds=tuple(source_kinds), limit=limit,
     )
-    with _store.connection(db_path) as con:
+    with _store.connection(db_path, repair=False) as con:
         if con is None:
             return []
         rows = con.execute(sql, params).fetchall()

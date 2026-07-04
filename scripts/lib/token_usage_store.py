@@ -76,10 +76,33 @@ _INSERT_FIELDS = [
 ]
 
 
+def _repair_schema(con) -> None:
+    """CTAS で PK を落とされた token_usage を write 経路の connect 時に自己修復する（#156）。
+
+    ``data_dir_migration.merge_db`` の CTAS rebuild は PRIMARY KEY を引き継がず、
+    constraints=[] のまま ``INSERT OR IGNORE`` が BinderException で全停止する。
+    ``store_schema_repair`` が制約欠落を決定論検出し dedup + rebuild で復元する。
+    read_only 経路（``_connect_ro``）からは呼ばない（dry-run byte 契約 #65）。
+    """
+    try:
+        import store_schema_repair
+    except ImportError:
+        return
+    store_schema_repair.repair_table(con, "token_usage", _SCHEMA_SQL, [("uuid",)])
+    store_schema_repair.repair_table(
+        con, "session_progress", _SCHEMA_SQL, [("pj_id", "session_id")]
+    )
+
+
 def _connect():
-    """DuckDB 接続を返す。スキーマを保証する。"""
+    """DuckDB 接続を返す。制約欠落があれば自己修復してからスキーマを保証する（#156）。
+
+    修復は ``_SCHEMA_SQL`` の前に行う: 破損テーブルに重複行がある場合、``_SCHEMA_SQL`` を
+    先に走らせると ``CREATE UNIQUE INDEX`` が重複で即死する（#156 の実発火経路）。
+    """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     con = _duckdb.connect(str(USAGE_DB))
+    _repair_schema(con)
     con.execute(_SCHEMA_SQL)
     return con
 

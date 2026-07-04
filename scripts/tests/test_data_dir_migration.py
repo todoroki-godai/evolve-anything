@@ -199,6 +199,78 @@ class TestMergeDbSchemaDivergence:
         assert not (source / "d.db").exists()
 
 
+class TestMergeDbConstraintPreservation:
+    """#156: CTAS が落とす PK/UNIQUE 制約を既知ストアについて merge 後に復元する。"""
+
+    duckdb = pytest.importorskip("duckdb")
+
+    def _tus(self):
+        import token_usage_store as tus  # noqa
+        return tus
+
+    def _make_token_db(self, path, uuids):
+        tus = self._tus()
+        con = self.duckdb.connect(str(path))
+        con.execute(tus._SCHEMA_SQL)
+        for u in uuids:
+            con.execute(
+                "INSERT INTO token_usage (uuid, ts, pj_id, session_id) "
+                "VALUES (?, '2026-06-01 00:00:00', 'pj', 'sess')",
+                [u],
+            )
+        con.close()
+
+    def _pk_count(self, path, table):
+        con = self.duckdb.connect(str(path), read_only=True)
+        n = con.execute(
+            "SELECT COUNT(*) FROM duckdb_constraints() "
+            "WHERE table_name = ? AND constraint_type = 'PRIMARY KEY'",
+            [table],
+        ).fetchone()[0]
+        con.close()
+        return n
+
+    def test_token_usage_pk_restored_after_merge(self, dirs):
+        canonical, source = dirs
+        # dst と src の両方に token_usage.db（uuid 'b' が交差重複）
+        self._make_token_db(canonical / "token_usage.db", ["a", "b"])
+        self._make_token_db(source / "token_usage.db", ["b", "c"])
+        info = ddm.merge_db(source / "token_usage.db", canonical / "token_usage.db")
+        # CTAS は制約を落とすが _repair_known_constraints が復元する
+        assert self._pk_count(canonical / "token_usage.db", "token_usage") == 1
+        assert "token_usage" in info.get("schema_repaired", [])
+        # uuid 単位 dedup（a, b, c の 3 件）
+        con = self.duckdb.connect(str(canonical / "token_usage.db"), read_only=True)
+        uuids = sorted(r[0] for r in con.execute("SELECT uuid FROM token_usage").fetchall())
+        con.close()
+        assert uuids == ["a", "b", "c"]
+
+    def test_repaired_token_usage_insert_or_ignore_works(self, dirs):
+        """復元後の DB で INSERT OR IGNORE が BinderException にならず冪等に動く。"""
+        canonical, source = dirs
+        self._make_token_db(source / "token_usage.db", ["a"])
+        ddm.merge_db(source / "token_usage.db", canonical / "token_usage.db")
+        con = self.duckdb.connect(str(canonical / "token_usage.db"))
+        con.execute(
+            "INSERT OR IGNORE INTO token_usage (uuid, ts, pj_id, session_id) "
+            "VALUES ('a', '2026-06-02 00:00:00', 'pj', 'sess')"
+        )
+        n = con.execute("SELECT COUNT(*) FROM token_usage").fetchone()[0]
+        con.close()
+        assert n == 1  # 冪等（重複 uuid は無視）
+
+    def test_unknown_table_not_repaired(self, dirs):
+        """未知テーブルは制約復元の対象外（従来の CTAS 挙動を保つ）。"""
+        canonical, source = dirs
+        con = self.duckdb.connect(str(source / "misc.db"))
+        con.execute("CREATE TABLE widgets (id INTEGER, name VARCHAR)")
+        con.execute("INSERT INTO widgets VALUES (1, 'x')")
+        con.close()
+        info = ddm.merge_db(source / "misc.db", canonical / "misc.db")
+        assert "schema_repaired" not in info  # 未知テーブルは触らない
+        assert self._pk_count(canonical / "misc.db", "widgets") == 0
+
+
 class TestConcurrentWriteWindow:
     """#417-2: マージ中に別セッションが source へ追記しても行を失わない。"""
 
