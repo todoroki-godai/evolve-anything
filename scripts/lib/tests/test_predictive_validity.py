@@ -236,6 +236,46 @@ class TestPredictiveValidity:
         pv.check_predictive_validity(days=60)
         assert _snapshot() == before
 
+    def test_multi_record_session_folds_not_last_wins(self, tmp_path, monkeypatch):
+        """同一 session_id に error_count を持つ行と持たない行が混在しても実測値を保持する（#144）。
+
+        sessions ストアは 1 セッションに session_summary 型（error_count あり）と
+        instructions_loaded 型（error_count なし）の複数行が混ざる。read_sessions は
+        (session_id, timestamp) で dedup し **timestamp 昇順** で返すため、error_count 欠損行が
+        後発 timestamp だと last-wins 上書きで先行の実測 error_count が None に潰れ、当該
+        セッションが scored（分母）から丸ごと除外される（#138 と同型 seam）。
+        fold_session_error_counts 経由（error_count を持つ行の max・欠損行は既存値を壊さない）で
+        構築すれば実測値が保持され、5 skill が ranked される。
+        """
+        monkeypatch.setattr(pv, "DATA_DIR", tmp_path)
+        now = _now()
+        old = now - timedelta(days=20)  # in-sample（古い半分）
+        new = now - timedelta(days=2)   # out-of-sample（新しい半分）
+        acts: list[dict] = []
+        sess: list[dict] = []
+        for i in range(5):
+            for label, half_dt in (("old", old), ("new", new)):
+                for j in range(4):
+                    sid = f"s{i}_{label}_{j}"
+                    ec = 0 if j < i else 1
+                    acts.append(_activation(f"s{i}", sid, half_dt))
+                    # error_count を持つ session_summary 行（先発 timestamp）
+                    sess.append(_session(sid, half_dt, error_count=ec))
+                    # error_count を持たない record 行（後発 timestamp → last-wins ならこれが勝つ）
+                    sess.append({
+                        "session_id": sid,
+                        "project": "p",
+                        "timestamp": _iso(half_dt + timedelta(seconds=1)),
+                    })
+        _write_jsonl(tmp_path / "skill_activations.jsonl", acts)
+        _write_jsonl(tmp_path / "sessions.jsonl", sess)
+
+        result = pv.check_predictive_validity(days=60)
+        # fold されていれば全 session の実測 error_count が保持され 5 skill が ranked される。
+        # last-wins だと後発の欠損行が全 session を None 化 → scored=0 → n_skills=0 (insufficient)。
+        assert result["reason"] != "insufficient_data"
+        assert result["n_skills"] == 5
+
 
 # ============================================================================
 # section 行: pass / insufficient / 低rho の3分岐
