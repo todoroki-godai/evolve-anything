@@ -48,12 +48,16 @@ def load_corrections() -> Dict[str, List[Dict]]:
     return by_skill
 
 
-def cleanup_corrections() -> Dict[str, int]:
+def cleanup_corrections(dry_run: bool = False) -> Dict[str, int]:
     """corrections.jsonl から decay_days 超過の applied/skipped レコードを削除する。
 
     - applied/skipped で decay_days 超過 → 削除
     - pending レコード → 保持（削除しない）
     - decay_days 未設定のレコードは DEFAULT_DECAY_DAYS を使用
+
+    ``dry_run`` が真の場合、removed/kept の算出・返り値は従来どおり行うが
+    ファイルへの書き戻しは行わない（#154: dry-run 実行で corrections.jsonl が
+    書き換わっていた不具合の修正）。
 
     Returns:
         {"removed": int, "kept": int} の統計情報。
@@ -103,10 +107,11 @@ def cleanup_corrections() -> Dict[str, int]:
         else:
             kept_lines.append(line)
 
-    # ファイルを書き戻し
-    corrections_file.write_text(
-        "\n".join(kept_lines) + "\n" if kept_lines else "",
-        encoding="utf-8",
-    )
+    # ファイルを書き戻し（dry_run 時はスキップ）
+    if not dry_run:
+        corrections_file.write_text(
+            "\n".join(kept_lines) + "\n" if kept_lines else "",
+            encoding="utf-8",
+        )
 
     return {"removed": removed, "kept": len(kept_lines)}
