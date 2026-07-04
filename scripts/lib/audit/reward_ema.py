@@ -140,7 +140,14 @@ def persist_reward_ema_batch(
 
     slug 未指定なら project_dir から resolve_pj_slug で解決。usage/sessions を読んで
     ``attribute_outcomes`` で帰属し、compute_batch_advantage → 既存 EMA に fold_ema して
-    各 skill 1 レコードを store_write（ADR-049 write barrier）経由で追記する。
+    各 skill 1 レコードを追記する。
+
+    書き込み先は read（``_base(data_dir)``）と対称化する（#143・subagent_traces #140 と同型）:
+      - ``data_dir=None``（本番）: store_write barrier（ADR-049）経由で canonical DATA_DIR へ。
+      - ``data_dir`` 指定（隔離・テスト・scratch）: ``store_write_raw`` で ``data_dir/<STORE_NAME>``
+        へ直接書込む。barrier は本番書込の守り神ゆえ隔離書込に緩和は入れず例外口を通す
+        （ADR-049 決定5）。これで read の ``data_dir`` と write の隔離先が一致し、「read は隔離を
+        尊重するが write だけ常に本番」の非対称契約（#140 実害）を解消する。
 
     有効スキル < 2（compute_batch_advantage が {}）のときは
     ``{"persisted": 0, "reason": "insufficient_skills"}`` を返し、何も書かない。
@@ -162,7 +169,19 @@ def persist_reward_ema_batch(
     prior = read_reward_ema(slug, data_dir=data_dir)
     ts = ts or datetime.now(timezone.utc).isoformat()
 
-    from rl_common.store_write import store_write
+    if data_dir is None:
+        from rl_common.store_write import store_write
+
+        def _write(record: Dict[str, Any]) -> None:
+            store_write(_STORE_NAME, record)
+    else:
+        from rl_common.store_write import store_write_raw
+
+        base = Path(data_dir)
+        base.mkdir(parents=True, exist_ok=True)  # append_jsonl は parent を掘らない
+
+        def _write(record: Dict[str, Any]) -> None:
+            store_write_raw(base / _STORE_NAME, record)
 
     persisted_skills = []
     for skill, adv in sorted(batch_adv.items()):
@@ -177,7 +196,7 @@ def persist_reward_ema_batch(
             "alpha": EMA_ALPHA,
             "ts": ts,
         }
-        store_write(_STORE_NAME, record)
+        _write(record)
         persisted_skills.append(skill)
 
     return {"persisted": len(persisted_skills), "skills": persisted_skills, "ts": ts}

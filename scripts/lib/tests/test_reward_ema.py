@@ -239,6 +239,39 @@ class TestPersistRewardEmaBatch:
         # 書き込みゼロ（store を作らない）
         assert not (data_dir / "reward_ema.jsonl").exists()
 
+    # ─────── #143 write の data_dir 対称性（read/write 隔離） ───────
+
+    def test_persist_data_dir_writes_isolated_not_canonical(self, monkeypatch, data_dir):
+        """#143: persist(data_dir=隔離) は隔離先へ書き、canonical(barrier)へは 1 バイトも書かない。
+
+        _attribution_via_real_join が rl_common.DATA_DIR(=barrier の canonical 解決先) を
+        data_dir に向けている。隔離 scratch を明示指定した write は store_write_raw で scratch に
+        閉じ、canonical(data_dir) は不変であること（read は隔離・write は常に本番、の #140 型
+        非対称契約の回帰防止）を固定する。
+        """
+        self._attribution_via_real_join(monkeypatch, data_dir)
+        scratch = data_dir / "scratch"  # 未作成 = persist が parent を掘る
+        summary = re.persist_reward_ema_batch(
+            "/tmp/proj", slug="s", data_dir=scratch, ts="2026-06-10T00:00:00+00:00"
+        )
+        assert summary["persisted"] == 2
+
+        # 隔離先に書かれ、読み戻せる。
+        assert (scratch / "reward_ema.jsonl").exists()
+        prior = re.read_reward_ema("s", data_dir=scratch)
+        assert prior["good"]["ema"] == pytest.approx(0.5)
+        assert prior["bad"]["ema"] == pytest.approx(-0.5)
+        # canonical(barrier 解決先) には 1 バイトも書かれていない。
+        assert not (data_dir / "reward_ema.jsonl").exists()
+
+    def test_persist_none_uses_barrier_canonical(self, monkeypatch, data_dir):
+        """#143: data_dir 省略時は従来どおり barrier 経由で canonical へ（隔離 dir は触らない）。"""
+        self._attribution_via_real_join(monkeypatch, data_dir)
+        scratch = data_dir / "scratch"
+        re.persist_reward_ema_batch("/tmp/proj", slug="s", ts="2026-06-10T00:00:00+00:00")
+        assert (data_dir / "reward_ema.jsonl").exists()
+        assert not (scratch / "reward_ema.jsonl").exists()
+
 
 # ---------- ema_stability_label ----------
 
