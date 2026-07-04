@@ -25,10 +25,18 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import _DEFAULT_SETTINGS_PATH
+from .project_loader import _load_settings_with_retry
+
 # diff 比較から除外するノイズ（実行時生成物・利用マーカー）
 _IGNORE_NAMES = {".in_use", "__pycache__", ".DS_Store", ".git"}
 
 _SEMVER_RE = re.compile(r"^\d+(\.\d+)*$")
+
+_DISABLED_HINT = (
+    "disabled — 先に `claude plugin enable {name}` が必要"
+    "（disabled 運用なら update 後に disable で戻す）"
+)
 
 
 @dataclass
@@ -41,6 +49,7 @@ class PluginFreshness:
     latest_version: str | None
     status: str  # ok | update | drift | unknown
     detail: str = ""
+    disabled: bool = False  # settings.json の enabledPlugins で明示 false（#153）
 
 
 def _default_plugins_root() -> Path:
@@ -135,7 +144,24 @@ def _split_key(key: str) -> tuple[str, str]:
     return key, ""
 
 
-def check_plugin_freshness(plugins_root: Path | None = None) -> list[PluginFreshness]:
+def _disabled_plugin_keys(settings_path: Path) -> set[str]:
+    """settings.json の enabledPlugins で明示的に false のプラグインキー集合を返す。
+
+    キー欠落・settings.json 不在・パース失敗時は空集合（従来表示にフォールバック、#153）。
+    """
+    settings = _load_settings_with_retry(settings_path)
+    if not isinstance(settings, dict):
+        return set()
+    enabled = settings.get("enabledPlugins")
+    if not isinstance(enabled, dict):
+        return set()
+    return {key for key, value in enabled.items() if value is False}
+
+
+def check_plugin_freshness(
+    plugins_root: Path | None = None,
+    settings_path: Path | None = None,
+) -> list[PluginFreshness]:
     """インストール済みプラグインの最新性を診断して結果リストを返す。"""
     root = plugins_root or _default_plugins_root()
     installed_path = root / "installed_plugins.json"
@@ -148,6 +174,17 @@ def check_plugin_freshness(plugins_root: Path | None = None) -> list[PluginFresh
 
     plugins = installed.get("plugins", {}) if isinstance(installed, dict) else {}
     mp_index = _load_marketplace_index(root)
+    disabled_keys = _disabled_plugin_keys(settings_path or _DEFAULT_SETTINGS_PATH)
+
+    def _add(rows: list[PluginFreshness], **kwargs) -> None:
+        row = PluginFreshness(**kwargs)
+        # disabled プラグインは update/drift の案内コマンドが "Plugin not found" で
+        # 失敗するため、先に enable が必要である旨を detail に付記する（#153）。
+        if row.status in ("update", "drift") and row.name in disabled_keys:
+            row.disabled = True
+            hint = _DISABLED_HINT.format(name=row.name)
+            row.detail = f"{row.detail}。{hint}" if row.detail else hint
+        rows.append(row)
 
     rows: list[PluginFreshness] = []
     for key, installs in sorted(plugins.items()):
@@ -162,11 +199,12 @@ def check_plugin_freshness(plugins_root: Path | None = None) -> list[PluginFresh
 
         mp_entry = mp_index.get(mp_name, {}).get(plug_name)
         if mp_entry is None:
-            rows.append(PluginFreshness(
+            _add(
+                rows,
                 name=key, marketplace=mp_name, installed_version=inst_ver,
                 latest_version=None, status="unknown",
                 detail="marketplace に該当プラグインなし（Directory marketplace 等）",
-            ))
+            )
             continue
 
         latest_ver = mp_entry.get("version")
@@ -177,11 +215,12 @@ def check_plugin_freshness(plugins_root: Path | None = None) -> list[PluginFresh
         iv = _parse_version_tuple(inst_ver)
         lv = _parse_version_tuple(latest_ver_s or "")
         if iv is not None and lv is not None and lv > iv:
-            rows.append(PluginFreshness(
+            _add(
+                rows,
                 name=key, marketplace=mp_name, installed_version=inst_ver,
                 latest_version=latest_ver_s, status="update",
                 detail=f"{inst_ver} → {latest_ver_s} が利用可能",
-            ))
+            )
             continue
 
         # 1.5) git-sha 管理プラグイン（semver 比較不能）は HEAD sha 比較を優先。
@@ -189,13 +228,14 @@ def check_plugin_freshness(plugins_root: Path | None = None) -> list[PluginFresh
         head_sha = mp_entry.get("head_sha")
         if iv is None and lv is None and head_sha and inst_sha:
             git_status = "ok" if head_sha.startswith(inst_sha[:12]) else "update"
-            rows.append(PluginFreshness(
+            _add(
+                rows,
                 name=key, marketplace=mp_name, installed_version=inst_ver,
                 latest_version=latest_ver_s,
                 status=git_status,
                 detail=("git marketplace に新しい commit あり（再インストール推奨）"
                         if git_status == "update" else ""),
-            ))
+            )
             continue
 
         version_comparable = iv is not None and lv is not None
@@ -208,28 +248,31 @@ def check_plugin_freshness(plugins_root: Path | None = None) -> list[PluginFresh
         # 2) コンテンツ差分で drift を検出（version 比較不能 or 同版での乖離）
         if content_comparable:
             if _dirs_differ(source_dir, install_path):
-                rows.append(PluginFreshness(
+                _add(
+                    rows,
                     name=key, marketplace=mp_name, installed_version=inst_ver,
                     latest_version=latest_ver_s, status="drift",
                     detail="cache コンテンツが marketplace source と乖離（再インストール推奨）",
-                ))
+                )
                 continue
 
         # 3) いずれの検証も行えなかった場合は ok と誤認せず unknown を返す
         #    （silence≠verified: 外部 git source + version 無しのプラグイン等）
         if not version_comparable and not content_comparable:
-            rows.append(PluginFreshness(
+            _add(
+                rows,
                 name=key, marketplace=mp_name, installed_version=inst_ver,
                 latest_version=latest_ver_s, status="unknown",
                 detail="version 比較不能 + source 取得不能（外部 git source 等）で検証できず",
-            ))
+            )
             continue
 
         # 4) いずれかの検証を通過 → 最新
-        rows.append(PluginFreshness(
+        _add(
+            rows,
             name=key, marketplace=mp_name, installed_version=inst_ver,
             latest_version=latest_ver_s, status="ok",
-        ))
+        )
     return rows
 
 
@@ -246,6 +289,7 @@ def format_plugin_freshness_table(rows: list[PluginFreshness], as_json: bool = F
             "latest_version": r.latest_version,
             "status": r.status,
             "detail": r.detail,
+            "disabled": r.disabled,
         } for r in rows], indent=2, ensure_ascii=False)
 
     if not rows:

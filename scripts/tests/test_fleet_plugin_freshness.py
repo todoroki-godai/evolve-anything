@@ -57,6 +57,13 @@ def _write_cache(root: Path, mp_name: str, plug: str, version: str, files: dict[
     return base
 
 
+def _write_settings(path: Path, enabled_plugins: dict) -> None:
+    path.write_text(
+        json.dumps({"enabledPlugins": enabled_plugins}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def _write_installed(root: Path, entries: dict[str, dict]) -> None:
     plugins = {}
     for key, info in entries.items():
@@ -266,3 +273,115 @@ def test_missing_installed_file_returns_empty(tmp_path):
     root.mkdir()
     rows = check_plugin_freshness(plugins_root=root)
     assert rows == []
+
+
+# --- disabled プラグイン注記（#153） ---------------------------------------
+
+
+def test_disabled_plugin_annotates_update_detail(tmp_path):
+    """enabledPlugins で false のプラグインは update 行の detail に enable 手順が付く。"""
+    root = tmp_path / "plugins"
+    _write_marketplace(root, "mp1", [{"name": "lib", "version": "1.2.1", "source": "./plugins/lib"}])
+    _write_source(root, "mp1", "./plugins/lib", {"SKILL.md": "v2\n"})
+    cache = _write_cache(root, "mp1", "lib", "1.2.0", {"SKILL.md": "v1\n"})
+    _write_installed(root, {"lib@mp1": {"installPath": cache, "version": "1.2.0"}})
+    settings_path = tmp_path / "settings.json"
+    _write_settings(settings_path, {"lib@mp1": False})
+
+    rows = check_plugin_freshness(plugins_root=root, settings_path=settings_path)
+    r = _by_name(rows)["lib@mp1"]
+    assert r.status == "update"
+    assert r.disabled is True
+    assert "disabled" in r.detail
+    assert "claude plugin enable lib@mp1" in r.detail
+
+
+def test_disabled_plugin_annotates_drift_detail(tmp_path):
+    """enabledPlugins で false のプラグインは drift 行の detail にも enable 手順が付く。"""
+    root = tmp_path / "plugins"
+    _write_marketplace(root, "mp1", [{"name": "sc", "source": "./plugins/sc"}])
+    _write_source(root, "mp1", "./plugins/sc", {"SKILL.md": "NEW source\n"})
+    cache = _write_cache(root, "mp1", "sc", "unknown", {"SKILL.md": "OLD cache\n"})
+    _write_installed(root, {"sc@mp1": {"installPath": cache, "version": "unknown"}})
+    settings_path = tmp_path / "settings.json"
+    _write_settings(settings_path, {"sc@mp1": False})
+
+    rows = check_plugin_freshness(plugins_root=root, settings_path=settings_path)
+    r = _by_name(rows)["sc@mp1"]
+    assert r.status == "drift"
+    assert r.disabled is True
+    assert "claude plugin enable sc@mp1" in r.detail
+
+
+def test_enabled_plugin_no_annotation(tmp_path):
+    """enabledPlugins で true のプラグインは注記されない。"""
+    root = tmp_path / "plugins"
+    _write_marketplace(root, "mp1", [{"name": "lib", "version": "1.2.1", "source": "./plugins/lib"}])
+    _write_source(root, "mp1", "./plugins/lib", {"SKILL.md": "v2\n"})
+    cache = _write_cache(root, "mp1", "lib", "1.2.0", {"SKILL.md": "v1\n"})
+    _write_installed(root, {"lib@mp1": {"installPath": cache, "version": "1.2.0"}})
+    settings_path = tmp_path / "settings.json"
+    _write_settings(settings_path, {"lib@mp1": True})
+
+    rows = check_plugin_freshness(plugins_root=root, settings_path=settings_path)
+    r = _by_name(rows)["lib@mp1"]
+    assert r.disabled is False
+    assert "disabled" not in r.detail
+
+
+def test_missing_enabled_plugins_key_falls_back(tmp_path):
+    """enabledPlugins にキーが無い場合は従来表示にフォールバック（注記なし・非クラッシュ）。"""
+    root = tmp_path / "plugins"
+    _write_marketplace(root, "mp1", [{"name": "lib", "version": "1.2.1", "source": "./plugins/lib"}])
+    _write_source(root, "mp1", "./plugins/lib", {"SKILL.md": "v2\n"})
+    cache = _write_cache(root, "mp1", "lib", "1.2.0", {"SKILL.md": "v1\n"})
+    _write_installed(root, {"lib@mp1": {"installPath": cache, "version": "1.2.0"}})
+    settings_path = tmp_path / "settings.json"
+    _write_settings(settings_path, {"other@mp1": False})
+
+    rows = check_plugin_freshness(plugins_root=root, settings_path=settings_path)
+    r = _by_name(rows)["lib@mp1"]
+    assert r.disabled is False
+
+
+def test_missing_settings_file_falls_back(tmp_path):
+    """settings.json 不在でもクラッシュせず従来表示にフォールバックする。"""
+    root = tmp_path / "plugins"
+    _write_marketplace(root, "mp1", [{"name": "lib", "version": "1.2.1", "source": "./plugins/lib"}])
+    _write_source(root, "mp1", "./plugins/lib", {"SKILL.md": "v2\n"})
+    cache = _write_cache(root, "mp1", "lib", "1.2.0", {"SKILL.md": "v1\n"})
+    _write_installed(root, {"lib@mp1": {"installPath": cache, "version": "1.2.0"}})
+
+    rows = check_plugin_freshness(plugins_root=root, settings_path=tmp_path / "no-such-settings.json")
+    r = _by_name(rows)["lib@mp1"]
+    assert r.disabled is False
+    assert r.status == "update"
+
+
+def test_format_table_json_includes_disabled_field(tmp_path):
+    root = tmp_path / "plugins"
+    _write_marketplace(root, "mp1", [{"name": "lib", "version": "1.2.1", "source": "./plugins/lib"}])
+    _write_source(root, "mp1", "./plugins/lib", {"SKILL.md": "v2\n"})
+    cache = _write_cache(root, "mp1", "lib", "1.2.0", {"SKILL.md": "v1\n"})
+    _write_installed(root, {"lib@mp1": {"installPath": cache, "version": "1.2.0"}})
+    settings_path = tmp_path / "settings.json"
+    _write_settings(settings_path, {"lib@mp1": False})
+
+    rows = check_plugin_freshness(plugins_root=root, settings_path=settings_path)
+    out = format_plugin_freshness_table(rows, as_json=True)
+    data = json.loads(out)
+    assert data[0]["disabled"] is True
+
+
+def test_format_table_text_shows_disabled_annotation(tmp_path):
+    root = tmp_path / "plugins"
+    _write_marketplace(root, "mp1", [{"name": "lib", "version": "1.2.1", "source": "./plugins/lib"}])
+    _write_source(root, "mp1", "./plugins/lib", {"SKILL.md": "v2\n"})
+    cache = _write_cache(root, "mp1", "lib", "1.2.0", {"SKILL.md": "v1\n"})
+    _write_installed(root, {"lib@mp1": {"installPath": cache, "version": "1.2.0"}})
+    settings_path = tmp_path / "settings.json"
+    _write_settings(settings_path, {"lib@mp1": False})
+
+    rows = check_plugin_freshness(plugins_root=root, settings_path=settings_path)
+    out = format_plugin_freshness_table(rows, as_json=False)
+    assert "claude plugin enable lib@mp1" in out
