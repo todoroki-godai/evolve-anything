@@ -3,8 +3,12 @@
 LLM も git も呼ばない決定論テスト。run_git を注入し、staged 内容に応じて
 deny（danger）/ warn（drift）/ allow（ok・対象なし）を返すことを検証する。
 """
+import io
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 _hooks = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_hooks))
@@ -127,3 +131,52 @@ def test_managed_but_not_staged_allows(tmp_path):
     # 別ファイルだけ staged → 管理対象は staged されていないので通す
     runner = _make_runner(["README.md"], {})
     assert gate.evaluate(_commit_event(), str(tmp_path), runner)["decision"] == "allow"
+
+
+def _feed_stdin(monkeypatch, event):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+
+
+def test_main_warn_emits_systemmessage_json(monkeypatch, capsys):
+    """#110: warn（非ブロッキング）は裸テキストでなく systemMessage JSON で出す。
+
+    PreToolUse の warn 出力も裸テキストだと表示層に混入しうるため、user 向け
+    systemMessage チャネル（ADR-038）に載せる。deny の exit 2 契約とは独立。
+    """
+    monkeypatch.setattr(
+        gate, "evaluate",
+        lambda *a, **k: {"decision": "warn", "message": "DRIFT-WARN-XYZ"},
+    )
+    _feed_stdin(monkeypatch, _commit_event())
+    gate.main()
+    out = capsys.readouterr().out.strip()
+    parsed = json.loads(out)  # 裸テキストならここで落ちる
+    assert parsed == {"systemMessage": "DRIFT-WARN-XYZ"}
+
+
+def test_main_deny_stays_stderr_and_exit2(monkeypatch, capsys):
+    """deny は従来どおり stderr + exit 2（ブロッキング契約）を維持し stdout を汚さない。"""
+    monkeypatch.setattr(
+        gate, "evaluate",
+        lambda *a, **k: {"decision": "deny", "message": "DENY-ABC"},
+    )
+    _feed_stdin(monkeypatch, _commit_event())
+    with pytest.raises(SystemExit) as ei:
+        gate.main()
+    assert ei.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "DENY-ABC" in captured.err
+
+
+def test_main_allow_is_silent(monkeypatch, capsys):
+    """allow は stdout/stderr ともに無音。"""
+    monkeypatch.setattr(
+        gate, "evaluate",
+        lambda *a, **k: {"decision": "allow", "message": ""},
+    )
+    _feed_stdin(monkeypatch, _commit_event())
+    gate.main()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
