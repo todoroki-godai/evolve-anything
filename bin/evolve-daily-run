@@ -35,6 +35,14 @@ def main() -> int:
     if rc_ingest != 0:
         print(f"[evolve-daily-run] fleet ingest exited {rc_ingest}（continue）", file=sys.stderr, flush=True)
 
+    # 1b) 増分 token 消費取込（ゼロ LLM・#157）。token_usage_ingest は session_progress
+    # カーソル + INSERT OR IGNORE で冪等・増分。既定の 90 日ウィンドウで transcript を走査する。
+    # 失敗しても queue 判定には無関係なので継続（ingest と同じ扱い）。
+    print(f"[evolve-daily-run] fleet tokens --backfill …", flush=True)
+    rc_tokens = subprocess.run([fleet_bin, "tokens", "--backfill"]).returncode
+    if rc_tokens != 0:
+        print(f"[evolve-daily-run] fleet tokens --backfill exited {rc_tokens}（continue）", file=sys.stderr, flush=True)
+
     # 2) 待ち判定（--json）。stdout を evolve-queue.json に保存。
     print(f"[evolve-daily-run] fleet queue --json → {out_path}", flush=True)
     result = subprocess.run([fleet_bin, "queue", "--json"], capture_output=True, text=True)
