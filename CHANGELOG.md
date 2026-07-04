@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **fix(hooks): PostToolUse 警告の裸 stdout を systemMessage JSON 化し tool_result 汚染を根治（closes #110）** — `hooks/pitfall_lint.py` の PostToolUse（Edit/Write/MultiEdit matcher）警告が `print(msg, flush=True)` で裸テキストを stdout に出し、CC が tool_result に連結して表示層を汚染していた（hooks/ 全数 grep で唯一の PostToolUse 裸 stdout offender）。警告を user 向け `{"systemMessage": msg}` JSON（ADR-038）へ載せ替え。同型の `hooks/pitfall_commit_gate.py` の PreToolUse warn（非ブロッキング）も同一チャネルへ統一（deny の stderr + exit 2 ブロッキング契約は不変）。TDD +5件・決定論・LLM 非依存。
+- **fix(audit): predictive_validity の error_by_session を fold_session_error_counts へ集約し last-wins 欠落を根治（closes #144）** — `check_predictive_validity` が error_by_session を dict 単純代入（last-wins）で構築し、同一 session の後発 error_count 欠損行が実測値を None に潰して n_skills=0 / reason=insufficient_data に落ちるバグ。#138 で確立済みの `outcome_metrics.fold_session_error_counts`（max 合成・欠損行は既存値を壊さない）へ置換し partial-fix を回避。TDD +1件・consumer 側統合 120 passed。
+- **fix(audit): reward_ema persist の write を data_dir 対称化（closes #143）** — `persist_reward_ema_batch` の read は data_dir 引数を尊重するが write が無視して canonical へ書く非対称（#140 write_trace と同型）。None=store_write barrier / data_dir 指定=`store_write_raw` で隔離先へ直接書込む同型分岐に統一。本番 caller（`evolve --drain`）は None パスで振る舞い不変。TDD +2件（隔離 write が canonical 不変を assert）。
+- **fix(evolve): count_new_sessions/count_new_observations の timestamp 解決を単一ソース化し ts レコード取りこぼしを根治（closes #147）** — `_state.py` の両関数が `rec.get("timestamp","")` のみ参照し usage.jsonl の `ts` フィールドレコードを取りこぼして新規件数を過小計上（queue material / trigger の精度に影響）。`rl_common.usage_timestamp` を単一ソースにした `_usage_timestamp` helper へ置換（`ts` 優先・`timestamp` フォールバック）。_state.py 内の同型残存は全数確認済みでこの2箇所のみ。TDD +3件。
+
 ## [1.116.0] - 2026-07-03
 
 ### Added
