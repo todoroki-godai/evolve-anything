@@ -10,7 +10,7 @@ usage.jsonl は 3 スキーマ混在:
 同じ解決規則を共有するための単一ソース（copied-parse-convention pitfall #40 の教訓・
 `is_noise_agent_type` と同方針）。usage.jsonl を読む全 call site はこの関数を呼ぶ。
 """
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def usage_skill_name(record: Dict[str, Any]) -> str:
@@ -30,3 +30,22 @@ def usage_timestamp(record: Dict[str, Any]) -> str:
     どちらも無ければ ""。
     """
     return record.get("ts") or record.get("timestamp") or ""
+
+
+def bare_skill_name(key: Optional[str]) -> Optional[str]:
+    """起動時のスキル名 ``<plugin>:<skill>`` を bare な skill 名（SKILL.md dir 名）へ正規化する。
+
+    dir 名に ``:`` は含まれないため、修飾形は最後の ``:`` 以降が skill 名
+    （``evolve-anything:cleanup`` -> ``cleanup``、``update-config`` -> ``update-config``）。
+    ``Agent:*`` は subagent 帰属でありスキルではないため None（集計/join 対象外）。
+
+    3 実装が別々に同じロジックを持っていたのを単一化した（#145・pitfall #40 と同型の
+    copied-parse-convention）。旧: coherence.scoring_advanced._bare_used_skill（空値 ""）/
+    audit.multiview_eval._bare_skill_name（空値 None）/ audit.predictive_validity._bare
+    （空値 None）。空値時の戻り値は呼び出し側で ``bare_skill_name(x) or ""`` 等に吸収する。
+    """
+    if not key:
+        return None
+    if key.startswith("Agent:"):
+        return None
+    return key.rsplit(":", 1)[-1]

@@ -14,8 +14,8 @@ in-sample で高評価でも out-of-sample で順位が崩れる（rho が低い
   1. skill_activations.jsonl（DATA_DIR グローバル）を window 内で読む。
      各レコード: {"skill","session_id","project","ts","invocation_trigger","parent_skill"}。
   2. skill 名は namespace prefix（``rl-anything:docs-refresh`` 等）が混じるため bare 名に
-     正規化してから集計（#577 pitfall_join_key_namespace_mismatch。multiview_eval の
-     ``_bare_skill_name`` と同方式 = 最後の ``:`` 以降）。
+     正規化してから集計（#577 pitfall_join_key_namespace_mismatch。
+     ``rl_common.bare_skill_name`` の単一ソースに委譲 = 最後の ``:`` 以降・#145）。
   3. sessions は outcome_metrics.read_sessions(base) の union read で
      session_id -> error_count マップを作る（db + 未 ingest jsonl, dedup 済み）。
   4. ts の中央値で時系列分割: 古い半分 = in-sample / 新しい半分 = out-of-sample。
@@ -39,9 +39,16 @@ from . import outcome_metrics as _om
 # テストは ``monkeypatch.setattr(predictive_validity, "DATA_DIR", tmp_path)`` で
 # 直接この module 属性を差し替える（文字列ターゲット patch を避ける既知 pitfall 準拠）。
 try:
-    from rl_common import DATA_DIR
+    from rl_common import DATA_DIR, bare_skill_name
 except ImportError:  # pragma: no cover - パス未解決時のフォールバック
     DATA_DIR = Path.home() / ".claude" / "evolve-anything"
+
+    def bare_skill_name(name: Optional[str]) -> Optional[str]:  # noqa: D401
+        if not name:
+            return None
+        if name.startswith("Agent:"):
+            return None
+        return name.rsplit(":", 1)[-1]
 
 # 各半分（in/out-of-sample）で 1 skill を採用する最小 session 数。これ未満だと
 # first_try_success が 1〜2 session の結果で 0.0/1.0 に振れ、順位が統計的に無意味になる。
@@ -60,22 +67,6 @@ PREDICTIVE_VALIDITY_RHO_FLOOR = 0.5
 
 def _base(data_dir: Optional[Path]) -> Path:
     return data_dir if data_dir is not None else DATA_DIR
-
-
-def _bare(name: Optional[str]) -> Optional[str]:
-    """起動時のスキル名 ``<plugin>:<skill>`` を bare な skill 名へ正規化する（#577）。
-
-    skill_activations の ``skill`` は namespace prefix 付き（``rl-anything:docs-refresh``）と
-    bare（``review``）が混在する。両者を join するには名前空間を揃える必要がある
-    （pitfall_join_key_namespace_mismatch）。multiview_eval._bare_skill_name と同方式
-    （最後の ``:`` 以降。dir 名に ``:`` は含まれない）。``Agent:*`` は subagent 帰属で
-    skill ではないため None（集計対象外）。
-    """
-    if not name:
-        return None
-    if name.startswith("Agent:"):
-        return None
-    return name.rsplit(":", 1)[-1]
 
 
 def _ranks(values: List[float]) -> List[float]:
@@ -134,7 +125,7 @@ def _first_try_by_skill(
     """
     sessions_by_skill: Dict[str, set] = {}
     for rec in activations:
-        skill = _bare(rec.get("skill"))
+        skill = bare_skill_name(rec.get("skill"))
         sid = rec.get("session_id")
         if not skill or not sid:
             continue

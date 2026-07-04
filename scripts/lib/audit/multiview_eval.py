@@ -41,6 +41,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from rl_common import bare_skill_name
+
 # 4視点ラベルの単一ソース（report/section がこれを参照して意味を添える）。
 LABEL_REUSABLE = "reusable_improvement"
 LABEL_OVERFIT = "overfit_suspect"
@@ -200,7 +202,7 @@ def classify_multiview(
     chaos_by_skill = _index_chaos(chaos_result)  # chaos の name は dir 名（bare）なので正規化不要。
     neg_by_skill: Dict[str, Dict[str, Any]] = {}
     for rec in (negative_transfer or []):
-        bare = _bare_skill_name(rec.get("skill_name", ""))
+        bare = bare_skill_name(rec.get("skill_name", ""))
         if bare and bare not in neg_by_skill:
             neg_by_skill[bare] = rec
     attr_by_skill = _index_outcomes(outcome_attribution)
@@ -216,36 +218,18 @@ def classify_multiview(
     return out
 
 
-def _bare_skill_name(key: Optional[str]) -> Optional[str]:
-    """起動時のスキル名 `<plugin>:<skill>` を bare な skill 名（SKILL.md dir 名）へ正規化する。
-
-    outcome_attribution / negative_transfer のキーは attribute_outcomes が記録する「起動時の
-    スキル名」= プラグイン修飾形（例 `evolve-anything:cleanup`）。一方 evolve 対象（target_skills）は
-    SKILL.md のディレクトリ名（bare `cleanup`）。両者を skill 名で join するには名前空間を揃える
-    必要がある（#577: 不一致で交差が空集合になり、実データで常に「該当視点なし」に倒れていた）。
-
-    `Agent:*` は subagent 帰属でありスキルではないので None（join 対象外）。dir 名に `:` は
-    含まれないため、修飾形は最後の `:` 以降が skill 名（`evolve-anything:cleanup` → `cleanup`、
-    `Agent:evolve-anything:second-opinion` → None、`update-config` → `update-config`）。
-    """
-    if not key:
-        return None
-    if key.startswith("Agent:"):
-        return None
-    return key.rsplit(":", 1)[-1]
-
-
 def _index_outcomes(
     outcome_attribution: Optional[Dict[str, Dict[str, Any]]],
 ) -> Dict[str, Dict[str, Any]]:
     """outcome_attribution のキーを bare skill 名へ正規化して index する（#577）。
 
     `Agent:*`（subagent 帰属）は除外。bare と修飾形（`<plugin>:<skill>`）が同一 skill に
-    衝突したら exact bare を優先する（順序非依存・決定論）。
+    衝突したら exact bare を優先する（順序非依存・決定論）。bare 化は
+    ``rl_common.bare_skill_name`` の単一ソースに委譲（#145）。
     """
     out: Dict[str, Dict[str, Any]] = {}
     for key, value in (outcome_attribution or {}).items():
-        bare = _bare_skill_name(key)
+        bare = bare_skill_name(key)
         if bare is None:
             continue
         if key == bare:

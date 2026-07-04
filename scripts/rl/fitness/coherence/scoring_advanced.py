@@ -239,7 +239,7 @@ def _get_used_skills(usage_file: Path, days: int) -> set:
     from datetime import datetime, timedelta, timezone
 
     _ensure_paths()
-    from rl_common import usage_skill_name, usage_timestamp
+    from rl_common import bare_skill_name, usage_skill_name, usage_timestamp
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     used = set()
@@ -260,21 +260,9 @@ def _get_used_skills(usage_file: Path, days: int) -> set:
                         continue
                 except (ValueError, AttributeError):
                     continue
-                bare = _bare_used_skill(usage_skill_name(record))
+                bare = bare_skill_name(usage_skill_name(record))
                 if bare:
                     used.add(bare)
     except (OSError, UnicodeDecodeError):
         pass
     return used
-
-
-def _bare_used_skill(skill: str) -> str:
-    """起動時スキル名を bare 名（SKILL.md dir 名）へ正規化する。
-
-    ``<plugin>:<skill>`` は最後の ``:`` 以降が skill 名（dir 名に ``:`` は含まれない）。
-    ``Agent:*`` は subagent 帰属でありスキルでないため "" を返し join 対象から外す。
-    audit.multiview_eval._bare_skill_name と同方式（#577）。
-    """
-    if not skill or skill.startswith("Agent:"):
-        return ""
-    return skill.rsplit(":", 1)[-1]

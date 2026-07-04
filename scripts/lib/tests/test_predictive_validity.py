@@ -95,13 +95,16 @@ class TestSpearmanPure:
 
 # ============================================================================
 # bare skill 名の正規化（#577 の罠: namespace prefix を畳む）
+# 正規化ロジック本体は rl_common.bare_skill_name に単一化済み（#145）。
+# predictive_validity は re-export したものをそのまま使うので、ここでは
+# 同モジュール経由の呼び出しが動くこと（配線）だけを確認する。
 # ============================================================================
 
 class TestBareSkillNormalization:
     def test_namespace_prefix_stripped(self):
-        assert pv._bare("rl-anything:docs-refresh") == "docs-refresh"
-        assert pv._bare("skill-creator:skill-creator") == "skill-creator"
-        assert pv._bare("review") == "review"
+        assert pv.bare_skill_name("rl-anything:docs-refresh") == "docs-refresh"
+        assert pv.bare_skill_name("skill-creator:skill-creator") == "skill-creator"
+        assert pv.bare_skill_name("review") == "review"
 
 
 # ============================================================================

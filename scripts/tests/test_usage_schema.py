@@ -51,3 +51,20 @@ def test_usage_skill_name_全スキーマで解決(record, expected):
 )
 def test_usage_timestamp_両フィールド対応(record, expected):
     assert rl_common.usage_timestamp(record) == expected
+
+
+# --- bare skill 名正規化（#145: 3実装並存の単一化） -----------------------------
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("evolve-anything:cleanup", "cleanup"),
+        ("update-config", "update-config"),
+        ("Agent:general-purpose", None),
+        ("Agent:evolve-anything:second-opinion", None),
+        (None, None),
+        ("", None),
+        ("a:b:c", "c"),
+    ],
+)
+def test_bare_skill_name_正規化(key, expected):
+    assert rl_common.bare_skill_name(key) == expected

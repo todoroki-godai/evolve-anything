@@ -200,7 +200,9 @@ from .persistence import (  # noqa: F401, E402
 )
 
 # usage.jsonl レコードパース単一ソース — #139
+# bare_skill_name（<plugin>:<skill> → bare 正規化の単一ソース）— #145
 from .usage_schema import (  # noqa: F401, E402
+    bare_skill_name,
     usage_skill_name,
     usage_timestamp,
 )
