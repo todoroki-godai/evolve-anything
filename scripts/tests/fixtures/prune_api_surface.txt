@@ -12,7 +12,7 @@ ZERO_INVOCATION_DAYS = 30
 SkillDependencyError(message: str, referrers: List[Dict[str, Any]] | None = None)
 archive_file(filepath: str, reason: str, *, force: bool = False, repo_root: pathlib.Path | None = None) -> str | None
 check_import_dependencies(skill_path: pathlib.Path, repo_root: pathlib.Path) -> List[Dict[str, Any]]
-cleanup_corrections() -> Dict[str, int]
+cleanup_corrections(dry_run: bool = False) -> Dict[str, int]
 compute_decay_score(age_days: float, correction_count: int = 0, decay_days: float = 90) -> float
 detect_dead_globs(project_dir: pathlib.Path) -> List[Dict[str, Any]]
 detect_decay_candidates(artifacts: Dict[str, List[pathlib.Path]], decay_days: float = 90) -> List[Dict[str, Any]]
@@ -35,7 +35,7 @@ make_global_candidates_summary(count: int) -> Dict[str, Any]
 make_zero_invocation_suppression_summary(suppressed_count: int) -> Dict[str, Any]
 merge_duplicates(duplicate_candidates: List[Dict[str, Any]], reorganize_merge_groups: List[Dict[str, Any]] | None = None, project_dir: str | None = None) -> Dict[str, Any]
 restore_file(archive_path: str) -> str | None
-run_prune(project_dir: str | None = None, reorganize_merge_groups: list | None = None, now: datetime.datetime | None = None, pj_scoped: bool = True) -> Dict[str, Any]
+run_prune(project_dir: str | None = None, reorganize_merge_groups: list | None = None, now: datetime.datetime | None = None, pj_scoped: bool = True, dry_run: bool = False) -> Dict[str, Any]
 safe_global_check(artifacts: Dict[str, List[pathlib.Path]]) -> List[Dict[str, Any]]
 suggest_recommendation(skill_info: Dict[str, Any]) -> str
 zero_invocation_reeval_date(days: int = 30) -> str
