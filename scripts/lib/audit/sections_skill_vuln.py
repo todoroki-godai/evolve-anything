@@ -31,32 +31,61 @@ def build_skill_vuln_section(project_dir: Path) -> Optional[List[str]]:
         return skill_vuln_scan.scan_skills(proj)
 
     def render(report) -> List[str]:
-        if not report.findings:
+        static_findings = report.findings
+        # flow_findings は #123 で追加。古い report との後方互換のため getattr。
+        flow_findings = getattr(report, "flow_findings", [])
+        static_n = len(static_findings)
+        flow_n = len(flow_findings)
+
+        if static_n == 0 and flow_n == 0:
             return [
-                f"✓ 評価したが該当なし（skills/ 配下 {report.scanned_files} ファイルを静的スキャン、"
-                "危険パターン検出なし）",
+                f"✓ 評価したが該当なし（skills/ 配下 {report.scanned_files} ファイルを"
+                "静的スキャン + 系列フロー解析、危険パターン検出なし）",
             ]
 
-        # severity 別内訳。
-        by_sev: dict[str, int] = {}
-        for f in report.findings:
-            by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
-        breakdown = " / ".join(
-            f"{sev} {by_sev[sev]}" for sev in ("HIGH", "MEDIUM", "LOW") if sev in by_sev
-        )
-
         lines = [
-            f"⚠ 取り込みスキルに危険パターンを {len(report.findings)} 件検出（{breakdown}）。"
-            "外部由来スキルの混入・prompt injection・破壊的コマンドの可能性。取り込み前に確認すること（#13）。",
+            f"⚠ 取り込みスキルに危険パターンを検出（静的 {static_n} 件 / 系列 {flow_n} 件）。"
+            "外部由来スキルの混入・prompt injection・破壊的コマンド・多段注入の可能性。"
+            "取り込み前に確認すること（#13 #123）。",
         ]
-        # HIGH を上に並べる（同 severity 内は安定ソート＝rel_path,line 順を維持）。
-        ordered = sorted(
-            report.findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 9)
-        )
-        for f in ordered:
-            lines.append(
-                f"  ・{f.rel_path}:{f.line} [{f.severity}/{f.category}] {f.snippet}"
+
+        # 静的行スキャンの検出（既存表示互換: rel_path:line [severity/category] snippet）。
+        if static_n:
+            by_sev: dict[str, int] = {}
+            for f in static_findings:
+                by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+            breakdown = " / ".join(
+                f"{sev} {by_sev[sev]}" for sev in ("HIGH", "MEDIUM", "LOW") if sev in by_sev
             )
+            lines.append(f"  [静的 {static_n} 件（{breakdown}）]")
+            # HIGH を上に並べる（同 severity 内は安定ソート＝rel_path,line 順を維持）。
+            ordered = sorted(
+                static_findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 9)
+            )
+            for f in ordered:
+                lines.append(
+                    f"  ・{f.rel_path}:{f.line} [{f.severity}/{f.category}] {f.snippet}"
+                )
+
+        # 系列（マルチステップ）フロー検出（各行単体では benign・組み合わせで悪性）。
+        if flow_n:
+            lines.append(
+                f"  [系列 {flow_n} 件（各行単体では benign・組み合わせで悪性 = 多段注入）]"
+            )
+            ordered_flow = sorted(
+                flow_findings,
+                key=lambda ff: (
+                    _SEVERITY_ORDER.get(ff.severity, 9),
+                    ff.rel_path,
+                    ff.producer_line,
+                ),
+            )
+            for ff in ordered_flow:
+                lines.append(
+                    f"  ・{ff.rel_path}:{ff.producer_line}→{ff.consumer_line} "
+                    f"[{ff.severity}/{ff.category}] "
+                    f"{ff.producer_snippet} ⇒ {ff.consumer_snippet}"
+                )
         return lines
 
     # skills/ が無い PJ はこのチェック非該当 → 沈黙。
