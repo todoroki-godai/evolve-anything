@@ -298,6 +298,32 @@ def test_write_context_seed_escapes_pipe(tmp_path):
     assert report.entries[0].term == "Foo"
 
 
+def test_write_context_seed_includes_anti_pollution_caution(tmp_path):
+    """seed 冒頭に「用語集以外を追記しない」注意書きが含まれる（#111）。
+
+    後からエージェントが調査ログ等の無関係な長文を追記して
+    glossary_drift の表パースが壊れる事象の再発防止。
+    """
+    ctx = str(tmp_path / "CONTEXT.md")
+    gd.write_context_seed(ctx, [("Foo", "意味A")], project_name="proj")
+    content = Path(ctx).read_text(encoding="utf-8")
+    assert "用語集以外の内容" in content
+    assert "追記しない" in content
+    # 用語追加・意味確定・UNVERIFIED 解除は歓迎する旨も明記する
+    assert "歓迎" in content
+
+
+def test_write_context_seed_caution_does_not_break_parsing(tmp_path):
+    """caution ヘッダを含む seed でも表パースは malformed にならない（#111）。"""
+    ctx = str(tmp_path / "CONTEXT.md")
+    gd.write_context_seed(
+        ctx, [("Foo", "意味A"), ("Bar", "意味B")], project_name="proj"
+    )
+    report = gd.check_glossary(ctx, [])
+    assert report.malformed_lines == []
+    assert {e.term for e in report.entries} == {"Foo", "Bar"}
+
+
 def test_audit_section_surfaces_unverified(tmp_path):
     """seed 直後の CONTEXT.md は audit section で未検証 advisory を出す。"""
     from lib.audit.sections import build_glossary_drift_section
