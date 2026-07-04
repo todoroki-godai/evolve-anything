@@ -100,7 +100,9 @@ def main() -> None:
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
         msg = evaluate(event, project_dir)
         if msg:
-            print(msg, flush=True)
+            # PostToolUse hook の裸 stdout は tool_result に連結され表示層を汚染する
+            # （#110）。警告は user 向け systemMessage チャネル（ADR-038）にのみ載せる。
+            print(json.dumps({"systemMessage": msg}, ensure_ascii=False), flush=True)
     except Exception:
         pass  # サイレント失敗（セッションをブロックしない）
 

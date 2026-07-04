@@ -160,7 +160,9 @@ def main() -> None:
             print(res["message"], file=sys.stderr, flush=True)
             sys.exit(2)
         if res["decision"] == "warn":
-            print(res["message"], flush=True)
+            # 非ブロッキング警告も裸 stdout だと表示層に混入しうる（#110）。user 向け
+            # systemMessage チャネル（ADR-038）に載せる。deny の exit 2 契約とは独立。
+            print(json.dumps({"systemMessage": res["message"]}, ensure_ascii=False), flush=True)
     except SystemExit:
         raise
     except Exception:

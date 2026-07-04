@@ -3,6 +3,8 @@
 LLM を呼ばない決定論テスト。evaluate() を直接叩き、enable 済みファイルにのみ
 反応し・ファイルを書き換えず・状態に応じた警告を返すことを検証する。
 """
+import io
+import json
 import sys
 from pathlib import Path
 
@@ -84,3 +86,34 @@ def test_non_edit_tool_is_silent(tmp_path):
     pitfall_registry.add_managed(tmp_path, pf)
     ev = {"tool_name": "Bash", "tool_input": {"file_path": str(pf)}}
     assert pitfall_lint.evaluate(ev, str(tmp_path)) is None
+
+
+def _run_main(monkeypatch, event, project_dir):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    pitfall_lint.main()
+
+
+def test_main_drift_emits_systemmessage_json(tmp_path, monkeypatch, capsys):
+    """#110: PostToolUse hook は裸テキストでなく systemMessage JSON を stdout に出す。
+
+    裸テキストは tool_result に連結され表示層を汚染する。警告は user 向け
+    systemMessage チャネル（ADR-038）にのみ載せる。stdout がそのまま JSON パース
+    できることを assert する（裸テキストなら json.loads がここで落ちる）。
+    """
+    pf = _setup(tmp_path, DRIFT)
+    pitfall_registry.add_managed(tmp_path, pf)
+    _run_main(monkeypatch, _event(pf), tmp_path)
+    out = capsys.readouterr().out.strip()
+    assert out
+    parsed = json.loads(out)
+    assert set(parsed.keys()) == {"systemMessage"}
+    assert "差分" in parsed["systemMessage"]
+
+
+def test_main_ok_is_silent(tmp_path, monkeypatch, capsys):
+    """ok 状態では stdout に何も出さない（tool_result 非汚染）。"""
+    pf = _setup(tmp_path, CANONICAL)
+    pitfall_registry.add_managed(tmp_path, pf)
+    _run_main(monkeypatch, _event(pf), tmp_path)
+    assert capsys.readouterr().out == ""
