@@ -55,6 +55,24 @@ def _ts_after(ts_str: str, last_run_dt: Optional[datetime]) -> bool:
     return dt > last_run_dt
 
 
+def _usage_timestamp(rec: Dict[str, Any]) -> str:
+    """usage.jsonl レコードの timestamp を解決する（``ts`` 優先・``timestamp`` フォールバック・#147）。
+
+    usage.jsonl は 3 スキーマ混在（``skill_name``+``ts`` / ``skill``+``ts`` /
+    ``skill_name``+``timestamp``）で、通常スキル使用レコードの大多数は ``ts`` キーのみを
+    持つ。片側（``timestamp``）だけを見る弱いパース式はそれらを空文字扱いして時間窓外と
+    誤判定し過小計上する（copied-parse-convention pitfall #40）。解決規則は
+    ``rl_common.usage_timestamp`` を単一ソースとして共有する（#139）。import 不能環境では
+    同型の ``ts``→``timestamp`` フォールバックへ退避する。
+    """
+    try:
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from rl_common import usage_timestamp
+        return usage_timestamp(rec)
+    except Exception:
+        return rec.get("ts") or rec.get("timestamp") or ""
+
+
 def _canonical_slug(slug):
     """rename 旧 slug を現 slug に畳む（read 層別名 SoT・#136）。import 不能は原値。"""
     try:
@@ -188,7 +206,7 @@ def count_new_sessions(project: Optional[str] = None) -> int:
                 continue
             if target is not None and _canonical_slug(rec.get("project")) != target:
                 continue
-            if _ts_after(rec.get("timestamp", ""), last_run_dt):
+            if _ts_after(_usage_timestamp(rec), last_run_dt):
                 sid = rec.get("session_id", "")
                 if sid:
                     session_ids.add(sid)
@@ -219,7 +237,7 @@ def count_new_observations(project: Optional[str] = None) -> int:
             continue
         if target is not None and _canonical_slug(rec.get("project")) != target:
             continue
-        if _ts_after(rec.get("timestamp", ""), last_run_dt):
+        if _ts_after(_usage_timestamp(rec), last_run_dt):
             count += 1
     return count
 

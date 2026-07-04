@@ -134,6 +134,69 @@ class TestPerPjTimeFilter:
         assert evolve.count_new_observations(project="proj-a") == 1
 
 
+class TestTsFieldTimestamp:
+    """usage.jsonl の ``ts`` フィールド（通常スキル呼出）が時間窓カウントに入る（#147）。
+
+    通常スキル使用レコード（大多数を占める）は ``ts`` キーで書かれ ``timestamp`` キーを
+    持たない（#139 の 3 スキーマ混在）。弱いパース式 ``rec.get("timestamp", "")`` はこれらを
+    全て空文字 → ``_ts_after`` が False → 時間窓外と誤判定し過小計上していた。
+    ``rl_common.usage_timestamp`` で ``ts`` 優先解決する。
+    """
+
+    def test_observations_count_ts_field_records(self, tmp_path, monkeypatch):
+        """ts フィールドのみのレコードが count_new_observations に入る（通常運用）。"""
+        import evolve
+        _isolate(tmp_path, monkeypatch)
+        # per-PJ last_evolve を設定（cold-start でない通常運用 = last_run_dt 非 None）
+        _write_jsonl(
+            tmp_path / "evolve-queue-state.jsonl",
+            [{"pj_slug": "proj-a", "last_evolve_at": "2026-06-05T00:00:00+00:00", "ts": "2026-06-05T00:00:00+00:00"}],
+        )
+        # 通常スキル使用レコードは "ts" キー（"timestamp" キー無し）
+        _write_jsonl(
+            tmp_path / "usage.jsonl",
+            [
+                {"ts": "2026-06-01T00:00:00+00:00", "session_id": "old", "project": "proj-a"},
+                {"ts": "2026-06-10T00:00:00+00:00", "session_id": "new1", "project": "proj-a"},
+                {"ts": "2026-06-11T00:00:00+00:00", "session_id": "new2", "project": "proj-a"},
+            ],
+        )
+        # 06-05 境界後の 2 件が新規（修正前は timestamp キー無しで全て 0 件）。
+        assert evolve.count_new_observations(project="proj-a") == 2
+
+    def test_sessions_count_ts_field_records(self, tmp_path, monkeypatch):
+        """ts フィールドのみのレコードが count_new_sessions に入る（通常運用）。"""
+        import evolve
+        _isolate(tmp_path, monkeypatch)
+        _write_jsonl(
+            tmp_path / "evolve-queue-state.jsonl",
+            [{"pj_slug": "proj-a", "last_evolve_at": "2026-06-05T00:00:00+00:00", "ts": "2026-06-05T00:00:00+00:00"}],
+        )
+        _write_jsonl(
+            tmp_path / "usage.jsonl",
+            [
+                {"ts": "2026-06-10T00:00:00+00:00", "session_id": "u1", "project": "proj-a"},
+                {"ts": "2026-06-11T00:00:00+00:00", "session_id": "u2", "project": "proj-a"},
+            ],
+        )
+        # distinct session u1, u2 の 2 件（修正前は 0 件）。
+        assert evolve.count_new_sessions(project="proj-a") == 2
+
+    def test_cold_start_counts_ts_field_records(self, tmp_path, monkeypatch):
+        """cold-start（last_run 空）でも ts フィールドが数えられる（bool(ts_str) 経路）。"""
+        import evolve
+        _isolate(tmp_path, monkeypatch)
+        _write_jsonl(
+            tmp_path / "usage.jsonl",
+            [
+                {"ts": "2026-06-01T00:00:00+00:00", "session_id": "c1", "project": "proj-a"},
+                {"ts": "2026-06-02T00:00:00+00:00", "session_id": "c2", "project": "proj-a"},
+            ],
+        )
+        # last_run 未設定 = 全期間。ts のみでも 2 件数える（修正前は timestamp 空で 0 件）。
+        assert evolve.count_new_observations(project="proj-a") == 2
+
+
 class TestCheckDataSufficiencyScope:
     def test_dry_run_summary_reflects_pj_scope(self, tmp_path, monkeypatch):
         """サマリ行「N セッション…」が他 PJ を混ぜず当 PJ スコープ値になる（#136 現象の直接再現）。"""
