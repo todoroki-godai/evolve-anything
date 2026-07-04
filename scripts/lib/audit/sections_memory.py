@@ -194,6 +194,51 @@ def build_memory_schema_section(project_dir: Path) -> Optional[List[str]]:
     )
 
 
+def build_memory_contamination_section(project_dir: Path) -> Optional[List[str]]:
+    """memory ファイルに着地した記憶汚染パターンを audit に advisory 表示する（#108）。
+
+    書込境界（`auto_memory_broker` + `memory_guard`）は新規汚染を弾くが、guard 導入前に
+    書かれた / 別経路で紛れ込んだ汚染は残りうる。ここで read-time に再スキャンして surface
+    する（read-only・削除は提案のみ・auto-apply しない）。
+
+    観測可能性:
+    - memory_capability / memory_guard 未解決 → None（沈黙）
+    - memory dir 不在 / 走査対象 0 件（applicable=False）→ None（沈黙）
+    - 汚染なし → None（「無ければ非表示」）
+    - 汚染あり → ⚠ でファイル名 / カテゴリ / snippet を列挙
+    """
+
+    def compute(proj: Path):
+        try:
+            import memory_capability
+            import memory_guard
+        except ImportError:
+            return None
+        memory_dir = memory_capability._resolve_memory_dir(proj)
+        return memory_guard.scan_memory_dir(memory_dir)
+
+    def render(report) -> List[str]:
+        lines = [
+            f"⚠ memory ファイルに記憶汚染パターン（prompt injection / secret exfil）が "
+            f"{len(report.hits)} 件（走査 {report.scanned_files} 件中）。書込境界（#108）を"
+            "通らずに紛れ込んだ / guard 導入前の記憶の可能性があります。内容を確認し、"
+            "汚染であれば該当ファイルを削除してください（削除は提案のみ・auto-apply しません）:",
+        ]
+        for h in report.hits:
+            lines.append(
+                f"  ・{h.filename}:{h.line} [{h.category}/{h.severity}] {h.snippet}"
+            )
+        return lines
+
+    return build_advisory_section(
+        project_dir,
+        title="Memory Contamination（記憶汚染パターン検出 — advisory, スコア重みには未反映）",
+        compute=compute,
+        applicable=lambda report: report.has_findings,
+        render=render,
+    )
+
+
 def build_memory_dup_residue_section(project_dir: Path) -> Optional[List[str]]:
     """旧 PJ memory の完全重複残骸（rename 由来 orphan dir）を advisory 表示する（#131）。
 

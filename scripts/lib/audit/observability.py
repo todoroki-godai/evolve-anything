@@ -37,6 +37,7 @@ from .sections_contagion import build_memory_contagion_section
 from .sections_measurement import build_measurement_bug_section
 from .sections_memory import (
     build_memory_capability_section,
+    build_memory_contamination_section,
     build_memory_dup_residue_section,
     build_memory_index_orphan_section,
     build_memory_schema_section,
@@ -78,6 +79,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("memory_index_orphan", build_memory_index_orphan_section),
     ("memory_schema", build_memory_schema_section),
     ("memory_dup_residue", build_memory_dup_residue_section),
+    ("memory_contamination", build_memory_contamination_section),
     ("multiview_eval", build_multiview_eval_section),
     ("paired_trajectory", build_paired_trajectory_section),
     ("measurement_bug", build_measurement_bug_section),

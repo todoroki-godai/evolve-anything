@@ -68,6 +68,13 @@ try:
 except ImportError:
     _HAS_MEMORY_TEMPORAL = False
 
+# runtime 記憶汚染検出（#108）— オプショナル import。未解決なら fail-open（belief と同方針）。
+try:
+    from memory_guard import inspect_content as _inspect_memory_content
+    _HAS_MEMORY_GUARD = True
+except ImportError:
+    _HAS_MEMORY_GUARD = False
+
 # MEMORY.md の行数上限（超えたら archive）
 MEMORY_LINE_LIMIT = 200
 
@@ -561,14 +568,17 @@ def ingest_memory_results(
     各 request について:
       1. parse_responses + passthrough で生成テキストを回収
       2. 空/missing はスキップ（処理済み扱いせずキューに残す）
-      3. belief_entropy 生成後ゲート（block なら _record_belief_block + スキップ、書込なし）
-      4. pass なら _write_entry_file + _apply_importance_score + _append_index_line + _archive_old_entries
+      3. runtime 記憶汚染検出（#108・importance 採点前）: prompt injection / secret exfil
+         を含む生成物は書込 skip（reject モード）。汚染は terminal 判断として消化する。
+      4. belief_entropy 生成後ゲート（block なら _record_belief_block + スキップ、書込なし）
+      5. pass なら _write_entry_file + _apply_importance_score + _append_index_line + _archive_old_entries
 
-    処理し終えた（stored または blocked）record の dedup_key を集め、最後に
+    処理し終えた（stored / blocked / contaminated）record の dedup_key を集め、最後に
     clear_queue_entries でキューから除去する。空/missing はキューに残す（次 drain で再試行）。
 
     Returns:
-        {"stored": int, "blocked": int, "skipped": int, "entries": [str paths]}
+        {"stored": int, "blocked": int, "skipped": int, "contaminated": int,
+         "contamination_hits": [{"pattern_id", "category", "line"}], "entries": [str paths]}
     """
     memory_dir = Path(memory_dir)
     memory_md_path = Path(memory_md_path)
@@ -586,6 +596,8 @@ def ingest_memory_results(
     stored = 0
     blocked = 0
     skipped = 0
+    contaminated = 0
+    contamination_hits: List[dict] = []
     entries: List[str] = []
     consumed_keys: Set[str] = set()
     slug: Optional[str] = None
@@ -607,6 +619,36 @@ def ingest_memory_results(
             # 空/missing: 処理済みにせずキューに残し次 drain で再試行
             skipped += 1
             continue
+
+        # runtime 記憶汚染検出（#108）: prompt injection / secret exfil の payload を
+        # 含む生成物は memory へ書き込まない（免疫層）。importance 採点・belief ゲートの
+        # 前に走らせ、汚染がスコアリング/ログにも到達しないようにする。fail-open。
+        if _HAS_MEMORY_GUARD:
+            try:
+                guard = _inspect_memory_content(llm_output)
+            except Exception:
+                guard = None
+            if guard and guard.get("hits"):
+                hit_details = [
+                    {"pattern_id": h.pattern_id, "category": h.category, "line": h.line}
+                    for h in guard["hits"]
+                ]
+                contamination_hits.extend(hit_details)
+                pattern_ids = [h["pattern_id"] for h in hit_details]
+                if guard.get("block"):
+                    # reject: 書込せず消化（terminal 判断・再キューで無限リトライしない）
+                    contaminated += 1
+                    consumed_keys.add(key)
+                    print(
+                        f"[evolve-anything:memory-guard] 汚染検出のため書込 skip: {pattern_ids}",
+                        file=sys.stderr,
+                    )
+                    continue
+                # warn: 書込は継続するが可視化する（緊急避難・無音にしない）
+                print(
+                    f"[evolve-anything:memory-guard] 汚染検出（warn・書込継続）: {pattern_ids}",
+                    file=sys.stderr,
+                )
 
         # 生成後ゲート（belief_entropy）
         if gating_on:
@@ -644,5 +686,7 @@ def ingest_memory_results(
         "stored": stored,
         "blocked": blocked,
         "skipped": skipped,
+        "contaminated": contaminated,
+        "contamination_hits": contamination_hits,
         "entries": entries,
     }
