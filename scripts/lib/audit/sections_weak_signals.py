@@ -209,9 +209,16 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
         all_by_channel[ch] = all_by_channel.get(ch, 0) + 1
 
         rec_slug = r.get("pj_slug")
-        is_current = not (
-            current_slug is not None and rec_slug is not None and rec_slug != current_slug
-        )
+        # #159: PJ rename の legacy slug タグ（rl-anything）も当PJへ畳む。#112 が 5 reader を
+        # alias-fold（canonical_pj_slug）へ統一した際、この matrix reader だけ生比較のまま
+        # 取り残され、bootstrap の _read_backlog（同じ pj_slug_match）と当PJ未昇格数が矛盾して
+        # いた。判定を共有 predicate へ集約する（ロジックを複製しない）。
+        # current_slug is None / rec_slug is None は従来どおり当PJ扱い（後方互換・#490）。
+        if current_slug is None or rec_slug is None:
+            is_current = True
+        else:
+            from store_read_union import pj_slug_match
+            is_current = pj_slug_match(rec_slug, current_slug)
         if is_current and not r.get("promoted"):
             cur_unpromoted_by_channel[ch] = cur_unpromoted_by_channel.get(ch, 0) + 1
             unpromoted += 1
