@@ -18,17 +18,33 @@ _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
+import json  # noqa: E402
+
 from audit.sections_artifacts import (  # noqa: E402
     build_backup_files_section,
     build_duplicate_skill_names_section,
     build_global_claude_md_section,
+    build_global_hook_plugin_dup_section,
     build_missing_skill_md_section,
     detect_backup_files,
     detect_duplicate_skill_names,
     detect_global_claude_md,
+    detect_global_hook_plugin_dup,
     detect_missing_skill_md,
     skill_roots,
 )
+
+
+def _write_hooks_file(path: Path, hooks: dict) -> Path:
+    """settings.json / hooks.json 形式（{"hooks": {<event>: [...]}}）を書いて返す。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"hooks": hooks}), encoding="utf-8")
+    return path
+
+
+def _matcher_group(command: str) -> dict:
+    """1 コマンドの matcher-group（settings/hooks の hooks[event] 要素）を返す。"""
+    return {"matcher": "", "hooks": [{"type": "command", "command": command}]}
 
 
 def _write_skill(skill_dir: Path, name: str) -> Path:
@@ -272,3 +288,128 @@ def test_skill_roots_excludes_plugin_layout_without_manifest(tmp_path: Path) -> 
     (proj / "skills").mkdir()  # plugin.json 無し → plugin レイアウトとして扱わない
     roots = skill_roots(proj)
     assert (proj / "skills") not in roots
+
+
+# --------------------------------------------------------------------------
+# #155 グローバル hook × プラグイン hook 残骸重複
+# --------------------------------------------------------------------------
+
+
+def _write_global_settings(tmp_path: Path, hooks: dict) -> Path:
+    return _write_hooks_file(tmp_path / ".claude" / "settings.json", hooks)
+
+
+def test_global_hook_plugin_dup_same_event_normalized_match(tmp_path: Path) -> None:
+    """(a) 同一 Stop で ハイフン版グローバル vs アンダースコア版プラグイン → 1 件検出。"""
+    _write_global_settings(
+        tmp_path,
+        {"Stop": [_matcher_group('python3 "~/.claude/hooks/record-verbosity.py"')]},
+    )
+    plugin = _write_hooks_file(
+        tmp_path / "plugin" / "hooks.json",
+        {"Stop": [_matcher_group('python3 "${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py"')]},
+    )
+    dups = detect_global_hook_plugin_dup(home=tmp_path, plugin_hooks_path=plugin)
+    assert len(dups) == 1
+    d = dups[0]
+    assert d.event == "Stop"
+    assert d.normalized == "recordverbosity"
+    assert "record-verbosity.py" in d.global_command
+    assert "record_verbosity.py" in d.plugin_command
+
+
+def test_global_hook_plugin_dup_different_event_no_match(tmp_path: Path) -> None:
+    """(b) 同一 basename だが別イベント（global PreToolUse / plugin Stop）→ 0 件。"""
+    _write_global_settings(
+        tmp_path,
+        {"PreToolUse": [_matcher_group('python3 "~/.claude/hooks/record-verbosity.py"')]},
+    )
+    plugin = _write_hooks_file(
+        tmp_path / "plugin" / "hooks.json",
+        {"Stop": [_matcher_group('python3 "${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py"')]},
+    )
+    assert detect_global_hook_plugin_dup(home=tmp_path, plugin_hooks_path=plugin) == []
+
+
+def test_global_hook_plugin_dup_no_intersection(tmp_path: Path) -> None:
+    """(c) 交差なし（別 script）→ 空。"""
+    _write_global_settings(
+        tmp_path,
+        {"Stop": [_matcher_group('python3 "~/.claude/hooks/some-other.py"')]},
+    )
+    plugin = _write_hooks_file(
+        tmp_path / "plugin" / "hooks.json",
+        {"Stop": [_matcher_group('python3 "${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py"')]},
+    )
+    assert detect_global_hook_plugin_dup(home=tmp_path, plugin_hooks_path=plugin) == []
+
+
+def test_global_hook_plugin_dup_missing_settings(tmp_path: Path) -> None:
+    """settings.json 未存在 → 空（握り確認）。"""
+    plugin = _write_hooks_file(
+        tmp_path / "plugin" / "hooks.json",
+        {"Stop": [_matcher_group('python3 "${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py"')]},
+    )
+    assert detect_global_hook_plugin_dup(home=tmp_path, plugin_hooks_path=plugin) == []
+
+
+def test_global_hook_plugin_dup_broken_json(tmp_path: Path) -> None:
+    """settings.json 壊れ JSON → 空（握り確認、advisory を壊さない）。"""
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{ not valid json ", encoding="utf-8")
+    plugin = _write_hooks_file(
+        tmp_path / "plugin" / "hooks.json",
+        {"Stop": [_matcher_group('python3 "${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py"')]},
+    )
+    assert detect_global_hook_plugin_dup(home=tmp_path, plugin_hooks_path=plugin) == []
+
+
+def test_global_hook_plugin_dup_section_silent_when_clean(tmp_path: Path, monkeypatch) -> None:
+    """(d) 残骸ゼロ → None（沈黙）。"""
+    _write_global_settings(
+        tmp_path,
+        {"Stop": [_matcher_group('python3 "~/.claude/hooks/some-other.py"')]},
+    )
+    plugin = _write_hooks_file(
+        tmp_path / "plugin" / "hooks.json",
+        {"Stop": [_matcher_group('python3 "${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py"')]},
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    from audit import sections_artifacts
+
+    monkeypatch.setattr(
+        sections_artifacts,
+        "_default_plugin_hooks_path",
+        lambda: plugin,
+    )
+    assert build_global_hook_plugin_dup_section(tmp_path / "proj") is None
+
+
+def test_global_hook_plugin_dup_section_warns_with_evidence(tmp_path: Path, monkeypatch) -> None:
+    """(d) 残骸あり → advisory 行が返り event / 両コマンドが載る。"""
+    _write_global_settings(
+        tmp_path,
+        {"Stop": [_matcher_group('python3 "~/.claude/hooks/record-verbosity.py"')]},
+    )
+    plugin = _write_hooks_file(
+        tmp_path / "plugin" / "hooks.json",
+        {"Stop": [_matcher_group('python3 "${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py"')]},
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    from audit import sections_artifacts
+
+    monkeypatch.setattr(
+        sections_artifacts,
+        "_default_plugin_hooks_path",
+        lambda: plugin,
+    )
+    section = build_global_hook_plugin_dup_section(tmp_path / "proj")
+    assert section is not None
+    joined = "\n".join(section)
+    assert section[0].startswith("## ")
+    assert section[-1] == ""
+    assert "⚠" in joined
+    assert "Stop" in joined
+    assert "record-verbosity.py" in joined
+    assert "record_verbosity.py" in joined
