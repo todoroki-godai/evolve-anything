@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(audit): weak_signals observability の当PJ判定を alias-fold predicate へ統一し legacy slug 取りこぼしを根治（closes #159）** — `audit/sections_weak_signals.py` の当PJ未昇格集計が生比較 `rec_slug != current_slug`（#490 厳密一致）のまま取り残され、PJ rename（rl-anything→evolve-anything）の legacy slug タグを除外していた。#112 が 5 reader を alias-fold（`canonical_pj_slug`）へ統一した際にこの observability matrix reader だけ漏れ、同一 evolve run で bootstrap `_read_backlog`（`pj_slug_match` 使用）と「当PJ未昇格」数が矛盾していた。共有 predicate `store_read_union.pj_slug_match` を import 再利用して判定を単一ソースへ集約（ロジック非複製）。`current_slug is None` / `rec_slug is None` の後方互換（当PJ扱い）は維持。TDD +2件（legacy fold カウント / reader 間一致契約）・決定論・LLM 非依存。
+
 ## [1.117.0] - 2026-07-06
 
 ### Added

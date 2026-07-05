@@ -172,6 +172,71 @@ def test_evolve_hint_absent_when_no_current_pj_unpromoted(tmp_path: Path, monkey
     assert "今日の修正確認" not in body
 
 
+# ── #159: PJ rename の legacy slug alias fold（reader 間一致） ───────────
+
+def test_unpromoted_folds_legacy_slug_alias(tmp_path: Path, monkeypatch) -> None:
+    """PJ rename の legacy slug タグ（rl-anything）が当PJ（evolve-anything）未昇格に
+    カウントされる（#159 繋ぎ目バグ）。
+
+    #112 は 5 reader を alias-fold（canonical_pj_slug）へ統一したが、この observability
+    matrix reader だけ生比較 `rec_slug != current_slug` のままで legacy を除外していた
+    （当PJ未昇格 0 になる）。共有 predicate `pj_slug_match` に統一し、rename 前に書かれた
+    legacy-tagged 未昇格が当PJ未昇格として拾われることを担保する。
+    """
+    # DATA_DIR は autouse conftest が CLAUDE_PLUGIN_DATA=tmp_path に固定するため、store は
+    # tmp_path 直下に置く。当PJ slug（evolve-anything）は project_dir の basename から導出する。
+    proj = tmp_path / "evolve-anything"
+    proj.mkdir()
+    from pj_slug import PJ_SLUG_ALIASES, pj_slug_fast
+    # 前提: pj_slug_fast は非 git dir の basename を返す / alias が定義されている
+    assert pj_slug_fast(proj) == "evolve-anything"
+    assert "rl-anything" in PJ_SLUG_ALIASES
+
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        # 当PJの legacy slug タグ（rename 前に書かれた未昇格 2 件）
+        {"channel": "llm_judge", "promoted": False, "pj_slug": "rl-anything", "signal_key": "a"},
+        {"channel": "rephrase", "promoted": False, "pj_slug": "rl-anything", "signal_key": "b"},
+        # 別PJ（畳んでも当PJにならない → 当PJ未昇格に含めない）
+        {"channel": "rephrase", "promoted": False, "pj_slug": "other-pj", "signal_key": "c"},
+    ])
+    section = build_weak_signals_section(proj)
+    assert section is not None
+    body = "\n".join(section)
+
+    # legacy-tagged 2 件が当PJ未昇格にカウントされる（生比較なら 0 で fail）
+    assert "当PJ未昇格 2 件" in body
+    # チャネル別 matrix でも legacy 分が当PJ未昇格に反映される
+    assert "言い直し（rephrase）: 全PJ 2 / 当PJ未昇格 1" in body
+
+
+def test_readers_agree_on_legacy_slug(tmp_path: Path, monkeypatch) -> None:
+    """同じ legacy-tagged 未昇格 signal が bootstrap `_read_backlog` と observability
+    matrix の両方で当PJ扱いになる（reader 間一致契約・#159）。
+
+    #112 が統一しようとした「判定を単一 predicate に集約」を reader 横断で担保し、
+    再度片方だけ生比較へ退行するのを防ぐ。
+    """
+    proj = tmp_path / "evolve-anything"
+    proj.mkdir()
+
+    records = [
+        {"channel": "llm_judge", "promoted": False, "pj_slug": "rl-anything", "signal_key": "a"},
+    ]
+    # store は DATA_DIR（=tmp_path）直下。matrix は no-arg read（DATA_DIR union）で拾う。
+    store = _seed_multi_pj(tmp_path, monkeypatch, records)
+
+    # observability matrix: 当PJ未昇格 1 件として拾う
+    section = build_weak_signals_section(proj)
+    assert section is not None
+    assert "当PJ未昇格 1 件" in "\n".join(section)
+
+    # bootstrap _read_backlog: 同じ legacy signal を当PJ backlog として拾う
+    from correction_semantic.bootstrap_backlog import _read_backlog
+    backlog = _read_backlog("evolve-anything", store)
+    assert len(backlog) == 1
+    assert backlog[0].get("pj_slug") == "rl-anything"
+
+
 def test_builder_registered_in_observability_contract() -> None:
     from audit.observability import _OBSERVABILITY_BUILDERS
 
