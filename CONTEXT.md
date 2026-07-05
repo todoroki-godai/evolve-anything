@@ -12,6 +12,7 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | 用語 | 意味 | 初出 |
 |------|------|------|
 | BES | 進化探索。後ろ向きサブゴール分解(#253)と前向き進化探索(#256)の総称 | #253 |
+| CTAS | `CREATE TABLE AS SELECT`。DuckDB では PK/UNIQUE を引き継がず INSERT OR IGNORE が Binder Error で writer 全停止する（`store_schema_repair` で修復・#156） | #156 |
 | MemTrace | episodic 検索エラーを 3 類型に分類し event_id へ帰属する診断 | #254 |
 | slop | AI 定型句。日英 10 パターンを決定論 regex で検出 | #255 |
 | subgoal fitness | 候補を 5 サブゴールに分解して返す密な中間フィードバック | #253 |
