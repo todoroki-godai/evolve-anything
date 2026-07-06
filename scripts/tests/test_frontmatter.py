@@ -8,6 +8,7 @@ sys.path.insert(0, str(_root))
 
 from lib.frontmatter import (
     count_content_lines,
+    detect_frontmatter_error,
     extract_description,
     find_frontmatter_close,
     parse_frontmatter,
@@ -106,6 +107,72 @@ def test_parse_frontmatter_value_contains_inline_dashes(tmp_path):
     f.write_text("---\nname: foo\ndescription: uses --- as separator\n---\n# Body")
     result = parse_frontmatter(f)
     assert result == {"name": "foo", "description": "uses --- as separator"}
+
+
+# --- detect_frontmatter_error (#167: CC 発火不能な壊れ frontmatter の直接検出) ---
+
+
+def test_detect_frontmatter_error_valid_dict(tmp_path):
+    """正常な dict frontmatter は None（エラーなし）。"""
+    f = tmp_path / "SKILL.md"
+    f.write_text("---\nname: foo\ndescription: bar\n---\n# Body")
+    assert detect_frontmatter_error(f) is None
+
+
+def test_detect_frontmatter_error_no_frontmatter(tmp_path):
+    """frontmatter が無ければ None（検出対象外）。"""
+    f = tmp_path / "SKILL.md"
+    f.write_text("# Just a heading\nSome content")
+    assert detect_frontmatter_error(f) is None
+
+
+def test_detect_frontmatter_error_empty_frontmatter(tmp_path):
+    """空の frontmatter は None（壊れではない）。"""
+    f = tmp_path / "SKILL.md"
+    f.write_text("---\n---\n# Body")
+    assert detect_frontmatter_error(f) is None
+
+
+def test_detect_frontmatter_error_colon_space_plain_scalar(tmp_path):
+    """atlas-breeaders の実際の壊れ方を写した fixture（#167）。
+
+    description の非引用スカラーに `トリガー: `（コロン+空白）が入り yaml.safe_load が
+    ScannerError（mapping values are not allowed here）を投げる。CC は frontmatter を
+    yaml.safe_load で読むため name/description/trigger を読めず**自動発火しない**。
+    合成 fixture ではなく実際の壊れ方（colon-space plain scalar）を写す。
+    """
+    f = tmp_path / "SKILL.md"
+    f.write_text(
+        "---\nname: atlas-breed\n"
+        "description: 血統管理スキル。トリガー: (1) 交配計画 (2) 血統照会\n"
+        "---\n# Body"
+    )
+    err = detect_frontmatter_error(f)
+    assert err is not None
+    assert isinstance(err, str)
+    # 1 行に畳まれている（改行を含まない）
+    assert "\n" not in err
+
+
+def test_detect_frontmatter_error_non_mapping(tmp_path):
+    """frontmatter が dict でない（list 等）→ error を返す。"""
+    f = tmp_path / "SKILL.md"
+    f.write_text("---\n- a\n- b\n---\n# Body")
+    err = detect_frontmatter_error(f)
+    assert err is not None
+    assert "not a mapping" in err
+
+
+def test_detect_frontmatter_error_unterminated_is_none(tmp_path):
+    """閉じ `---` が無い（unterminated）は検出しない（保守側・本文の水平線 FP 回避）。"""
+    f = tmp_path / "SKILL.md"
+    f.write_text("---\nname: foo\n# no closing delimiter, and : broken: here")
+    assert detect_frontmatter_error(f) is None
+
+
+def test_detect_frontmatter_error_nonexistent_file(tmp_path):
+    """読取不能（未存在）は None。"""
+    assert detect_frontmatter_error(tmp_path / "nonexistent.md") is None
 
 
 # --- extract_description ---

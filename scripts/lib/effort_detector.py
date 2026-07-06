@@ -9,7 +9,11 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List
 
-from frontmatter import count_content_lines, parse_frontmatter
+from frontmatter import (
+    count_content_lines,
+    detect_frontmatter_error,
+    parse_frontmatter,
+)
 
 # ── 閾値定数 ─────────────────────────────────────────────
 
@@ -135,6 +139,11 @@ def detect_missing_effort_frontmatter(project_dir: Path) -> Dict[str, Any]:
         # アーカイブ/無効化/バックアップ配下は対象外（#337）。
         # effort 付与を提案しても無意味で、約80%の誤検知の一因だった。
         if is_excluded_skill_path(skill_md):
+            continue
+        # YAML パース不能な frontmatter は invalid_frontmatter 検出器（#167）が拾う。
+        # parse_frontmatter が {} を返すため effort 無し扱いになり missing_effort に誤計上
+        # されるのを防ぐ（二重計上の回避）。
+        if detect_frontmatter_error(skill_md):
             continue
         fm = parse_frontmatter(skill_md)
         if fm.get("effort"):
