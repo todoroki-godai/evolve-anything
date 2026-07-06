@@ -325,6 +325,9 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
                     "file": ev["skill_path"],
                     "detail": {
                         "skill_name": ev["skill_name"],
+                        # canonical schema(issue_schema.make_missing_effort_issue)と揃える。
+                        # fixer は detail['skill_path'] を読むため必須（#166）。
+                        "skill_path": ev["skill_path"],
                         "proposed_effort": ev["proposed_effort"],
                         "confidence": ev["confidence"],
                         "reason": ev.get("reason", ""),

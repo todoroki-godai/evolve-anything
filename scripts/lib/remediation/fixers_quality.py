@@ -208,7 +208,10 @@ def fix_missing_effort(
         if issue["type"] != MISSING_EFFORT_CANDIDATE:
             continue
         detail = issue.get("detail", {})
-        skill_path = Path(detail.get(MEC_SKILL_PATH, ""))
+        # audit/issues.py の producer は detail に skill_path を入れず top-level file に
+        # path を置く。canonical(issue_schema) は detail に入れる。両 shape を受けるため
+        # detail['skill_path'] → issue['file'] の順に fallback する（#166）。
+        skill_path = Path(detail.get(MEC_SKILL_PATH) or issue.get("file", ""))
         proposed = detail.get(MEC_PROPOSED_EFFORT, "medium")
         reason = detail.get(MEC_REASON, "")
 
