@@ -202,6 +202,57 @@ def main() -> None:
         except Exception as e:
             summary["snooze_cleared"] = {"error": str(e)}
 
+        # #146 (ADR-051): result 依存3項目（calibration state / tool_usage_snapshot /
+        # growth crystallization）を apply 境界で発火する。上の result 非依存 persist 群
+        # （#150 で移植）と違い、これらは run_evolve が result に書いた phases 値を必要とする。
+        # dry-run が `--output "$OUT"` で書いた full result JSON を drain が読み、値を運搬して
+        # 確定する（emit→drain 2相の「値運搬」版）。標準フロー（dry-run→drain）は
+        # run_evolve(dry_run=False) に到達せず phases_capture の該当ブロックが死蔵する #146 の根治。
+        # graceful degradation: --result-json 無し / 読めない / phases 欠落 → 3項目のみ skip し
+        # 他 persist は継続（silence≠evaluated を summary に surface）。時刻は drain 時刻。
+        _evolve_result = None
+        _result_skip_reason = None
+        if args.result_json:
+            try:
+                _rj_path = Path(args.result_json)
+                if _rj_path.exists():
+                    _loaded = json.loads(_rj_path.read_text(encoding="utf-8"))
+                    if isinstance(_loaded, dict):
+                        _evolve_result = _loaded
+                    else:
+                        _result_skip_reason = "result_json_not_dict"
+                else:
+                    _result_skip_reason = "result_json_not_found"
+            except Exception as e:
+                _result_skip_reason = f"result_json_unreadable: {e}"
+        else:
+            _result_skip_reason = "no_result_json"
+
+        # calibration state + tool_usage_snapshot（result 依存・グローバル state 確定）。
+        try:
+            if _evolve_result is not None:
+                from ._state import persist_result_dependent_state
+
+                summary["result_state_persisted"] = persist_result_dependent_state(
+                    _evolve_result
+                )
+            else:
+                summary["result_state_persisted"] = {"skipped": _result_skip_reason}
+        except Exception as e:
+            summary["result_state_persisted"] = {"error": str(e)}
+
+        # growth crystallization emit（result 依存・journal 記録）。
+        try:
+            if _evolve_result is not None:
+                from ._report import _emit_growth_crystallization
+
+                _emit_growth_crystallization(_evolve_result, args.project_dir)
+                summary["growth_crystallized"] = True
+            else:
+                summary["growth_crystallized"] = {"skipped": _result_skip_reason}
+        except Exception as e:
+            summary["growth_crystallized"] = {"error": str(e)}
+
         print(json.dumps(summary, ensure_ascii=False))
         return
 

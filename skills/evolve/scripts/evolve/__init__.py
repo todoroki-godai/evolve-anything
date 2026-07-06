@@ -88,6 +88,7 @@ from ._state import (  # noqa: E402
     load_evolve_state,
     save_evolve_state,
     persist_last_run_timestamp,
+    persist_result_dependent_state,
     count_new_sessions,
     count_new_observations,
     _build_trigger_summary,

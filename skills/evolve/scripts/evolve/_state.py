@@ -174,6 +174,122 @@ def persist_last_run_timestamp(
     return {"written": 1, "last_run_timestamp": ts, "dry_run": False}
 
 
+def persist_result_dependent_state(
+    result: Dict[str, Any], *, ts: Optional[str] = None, dry_run: bool = False
+) -> Dict[str, Any]:
+    """apply 境界（`evolve --drain`）で result 依存の state 2項目を確定する（#146・ADR-051）。
+
+    根因（#146 / #135）: dry-run→drain の標準フローは ``run_evolve(dry_run=False)`` に
+    到達しないため、phases_capture の ``if not dry_run:`` 配下で行う
+
+    - self-evolution 較正状態（``last_calibration_timestamp`` / ``calibration_history``）
+    - tool usage snapshot（``tool_usage_snapshot``）
+
+    が構造的に死蔵していた（calibration/tool 使用トレンドが標準フローで永久に貯まらない）。
+    weak_signals #484 / reward_ema #64 / queue_state #79 / last_run #135 と同型に apply 境界へ
+    移植するが、これらは result（dry-run が ``--output`` で書いた JSON）を必要とする「値運搬」版
+    （drain は run_evolve を回さず result を持たないため、値は result から取る・ADR-051）。
+
+    算出ロジックは phases_capture の非 dry-run ブロックと一字一句同じ（``calibrations`` /
+    ``proposals`` / ``tool_usage_patterns`` の集計）。時刻は **drain 時刻**（apply 境界＝
+    成果確定時点）を使い、中身は result から取る。state store は ``load_evolve_state`` /
+    ``save_evolve_state``（グローバル ``evolve-state.json``）を再利用する。
+
+    二重 append 回避（ADR-051）: ``run_evolve(dry_run=False)`` 直接実行が phases_capture で
+    既に同一 run を append 済みの場合（直接実行 → drain の両走）、直近 ``calibration_history``
+    エントリの ``calibrations`` / ``proposals_count`` が今回と一致すれば append しない
+    （``calibration_deduped=True`` で surface）。標準フロー（drain のみ）では前回 run の
+    エントリと内容が異なるため通常通り append される。tool usage snapshot は upsert なので
+    二重実行は無害（そのまま上書き）。
+
+    ``dry_run=True`` は state に一切触れず件数だけ返す（#491 契約・
+    pitfall_dryrun_stateful_store_write）。標準運用では drain（apply 境界）から
+    ``dry_run=False`` で呼ぶため通常は書き込むが、契約を関数レベルで固定する。
+
+    Returns:
+        {"written": int, "calibration_written": bool, "calibration_deduped": bool,
+         "tool_usage_written": bool, "dry_run": bool}。``result`` に ``phases`` が無い等で
+        何も書けない場合は ``{"written": 0, "reason": <理由>, "dry_run": bool}``。
+    """
+    ts = ts or datetime.now(timezone.utc).isoformat()
+    phases = (result or {}).get("phases")
+    if not isinstance(phases, dict):
+        return {"written": 0, "reason": "no_phases", "dry_run": dry_run}
+
+    se_phase = phases.get("self_evolution", {}) or {}
+    discover_data = phases.get("discover", {}) or {}
+    tool_usage = discover_data.get("tool_usage_patterns", {}) or {}
+
+    # Self-evolution 較正は skipped / error でない場合のみ記録する（phases_capture と同基準）。
+    cal_eligible = bool(se_phase) and not se_phase.get("skipped") and not se_phase.get("error")
+
+    if dry_run:
+        return {
+            "written": 0,
+            "calibration_written": False,
+            "calibration_deduped": False,
+            "tool_usage_written": False,
+            "dry_run": True,
+        }
+
+    state = load_evolve_state()
+    calibration_written = False
+    calibration_deduped = False
+    tool_usage_written = False
+
+    if cal_eligible:
+        entry = {
+            "timestamp": ts,
+            "calibrations": se_phase.get("calibrations", {}),
+            "proposals_count": len(se_phase.get("proposals", [])),
+        }
+        history = state.get("calibration_history", [])
+        last = history[-1] if history else None
+        if (
+            last is not None
+            and last.get("calibrations") == entry["calibrations"]
+            and last.get("proposals_count") == entry["proposals_count"]
+        ):
+            # 直接実行が既に同一 run を append 済み。二重 append を避ける。
+            calibration_deduped = True
+        else:
+            history.append(entry)
+            state["calibration_history"] = history
+            state["last_calibration_timestamp"] = ts
+            calibration_written = True
+
+    if tool_usage:
+        state["tool_usage_snapshot"] = {
+            "timestamp": ts,
+            "builtin_replaceable": sum(
+                item.get("count", 0)
+                for item in tool_usage.get("builtin_replaceable", [])
+            ),
+            "sleep_patterns": sum(
+                p.get("count", 0)
+                for p in tool_usage.get("repeating_patterns", [])
+                if "sleep" in p.get("pattern", "").lower()
+            ),
+            "bash_ratio": (
+                tool_usage.get("bash_calls", 0) / tool_usage.get("total_tool_calls", 1)
+                if tool_usage.get("total_tool_calls", 0) > 0
+                else 0.0
+            ),
+        }
+        tool_usage_written = True
+
+    if calibration_written or tool_usage_written:
+        save_evolve_state(state)
+
+    return {
+        "written": int(calibration_written) + int(tool_usage_written),
+        "calibration_written": calibration_written,
+        "calibration_deduped": calibration_deduped,
+        "tool_usage_written": tool_usage_written,
+        "dry_run": False,
+    }
+
+
 def count_new_sessions(project: Optional[str] = None) -> int:
     """前回 evolve 実行以降のセッション数を数える（当 PJ スコープ・#136）。
 
