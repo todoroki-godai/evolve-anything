@@ -148,6 +148,26 @@ class TestDetectMissingEffortFrontmatter:
         result = detect_missing_effort_frontmatter(tmp_path)
         assert result["applicable"] is False
 
+    def test_skips_invalid_frontmatter_skills(self, skills_dir):
+        """#167: YAML パース不能な frontmatter のスキルは missing_effort に含めない。
+
+        壊れた frontmatter（colon-space plain scalar）のスキルは parse_frontmatter が
+        {} を返すため effort 無し扱いになり missing_effort に誤計上されていた。invalid は
+        invalid_frontmatter 検出器が拾うので、ここでは二重計上しない（#166 と #167 の相互作用）。
+        """
+        _make_skill(skills_dir, "healthy", ["name: healthy", "description: test"])
+        # atlas-breeaders の実際の壊れ方を写す（description に `トリガー: ` colon-space）
+        broken_dir = skills_dir / "broken"
+        broken_dir.mkdir()
+        (broken_dir / "SKILL.md").write_text(
+            "---\nname: broken\n"
+            "description: 血統管理。トリガー: (1) 交配 (2) 照会\n"
+            "---\n\nbody\n"
+        )
+        result = detect_missing_effort_frontmatter(skills_dir.parent.parent)
+        names = {e["skill_name"] for e in result["evidence"]}
+        assert names == {"healthy"}  # broken は invalid_frontmatter 側で拾うので入らない
+
     def test_skips_archived_skills(self, skills_dir):
         """`_archived/` / `.archive/` / `disabled/` 配下スキルは検出対象外（#337）。
 
