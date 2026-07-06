@@ -218,6 +218,51 @@ class TestFixMissingEffort:
         results = fix_missing_effort([issue])
         assert results[0]["fixed"] is False
 
+    def test_fix_resolves_path_from_file_when_detail_lacks_skill_path(self, skills_dir):
+        """#166: audit/issues.py の producer は detail に skill_path を入れず top-level
+        file に path を置く。fixer はその shape でも path を解決して成功しなければならない
+        （旧実装は detail['skill_path'] だけ読み Path("") → 'file not found: .' で全滅）。"""
+        _remediation_root = Path(__file__).resolve().parent.parent.parent / "skills" / "evolve" / "scripts"
+        sys.path.insert(0, str(_remediation_root))
+        from remediation import fix_missing_effort
+
+        path = _make_skill(skills_dir, "target", ["name: target", "description: test"])
+        # audit/issues.py:322-333 が実際に出す shape（detail に skill_path 無し）
+        issue = {
+            "type": "missing_effort",
+            "file": str(path),
+            "detail": {
+                "skill_name": "target",
+                "proposed_effort": "medium",
+                "confidence": 0.75,
+                "reason": "default",
+            },
+            "source": "detect_missing_effort_frontmatter",
+        }
+        results = fix_missing_effort([issue])
+        assert len(results) == 1
+        assert results[0]["fixed"] is True, results[0].get("error")
+
+        from lib.frontmatter import parse_frontmatter
+        assert parse_frontmatter(path)["effort"] == "medium"
+
+
+class TestCollectIssuesMissingEffortSchema:
+    """#166: audit の producer(collect_issues) が missing_effort issue の detail に
+    skill_path を含む（正準スキーマ issue_schema と揃える）ことを検証する。"""
+
+    def test_collect_issues_missing_effort_includes_skill_path(self, skills_dir):
+        from lib.audit.issues import collect_issues
+
+        path = _make_skill(skills_dir, "needseffort", ["name: needseffort", "description: test"])
+        project_dir = skills_dir.parent.parent
+        issues = collect_issues(project_dir)
+        me = [i for i in issues if i["type"] == "missing_effort"]
+        assert me, "missing_effort issue が collect_issues から出ていない"
+        target = [i for i in me if i["file"] == str(path)]
+        assert target, "作成したスキルの missing_effort issue が見つからない"
+        assert target[0]["detail"].get("skill_path") == str(path)
+
 
 class TestMakeEffortIssue:
     """issue_schema の factory 関数テスト。"""
