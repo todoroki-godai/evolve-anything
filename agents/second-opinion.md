@@ -10,7 +10,9 @@ description: |
     assistant: "second-opinion エージェントで独立した見解を取得します。"
   - user: "この設計案を別の視点でレビューして"
     assistant: "second-opinion エージェントに独立レビューを依頼します。"
-model: sonnet
+model: fable
+tier: REVIEW
+effort: high
 tools: Read, Grep, Glob, WebSearch, WebFetch
 color: yellow
 memory: global

@@ -23,6 +23,7 @@ from .sections import (
     build_unmanaged_pitfalls_section,
 )
 from .sections_agent import build_agent_team_section
+from .sections_agent_tier import build_agent_tier_section
 from .sections_artifacts import (
     build_backup_files_section,
     build_duplicate_skill_names_section,
@@ -69,6 +70,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("negative_transfer", build_negative_transfer_section),
     ("hook_drift", build_hook_drift_section),
     ("agent_team", build_agent_team_section),
+    ("agent_tier", build_agent_tier_section),
     ("correction_capture", build_capture_rate_section),
     ("orphan_store", build_orphan_store_section),
     ("store_contract", build_store_contract_section),
