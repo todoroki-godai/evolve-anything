@@ -11,6 +11,15 @@ from pathlib import Path
 
 import common
 
+# SessionStart で Claude に注入する corrections_snapshot の上限（セキュリティ監査）。
+# restore_state は checkpoint 全体を print するため、corrections.jsonl 全件を含む
+# corrections_snapshot がそのまま Claude context に注入され、毎セッション巨大テキスト
+# （実測 ~102KB）を無駄消費し、外部テキストが correction に化けた場合は無期限で再注入
+# される運び屋になりうる。raw correction は復元に使われない（post_compact は件数のみ
+# 参照）ため、直近 N 件 + 合計文字数上限に truncate し真の総数は別フィールドで保持する。
+MAX_SNAPSHOT_ITEMS = 20
+MAX_SNAPSHOT_CHARS = 8000
+
 # trigger_engine import (optional)
 _trigger_engine = None
 try:
@@ -62,6 +71,36 @@ try:
     from daily import queue_notice as _queue_notice
 except ImportError:
     pass
+
+
+def _summarize_checkpoint_for_output(checkpoint: dict) -> dict:
+    """SessionStart stdout に載せる checkpoint を安全なサイズに要約する（セキュリティ監査）。
+
+    save_state（保存）は corrections_snapshot を全件ディスク保存したまま無改変。ここで縮めるのは
+    「SessionStart で Claude に print する分」だけ（保存と表示の分離）。raw correction text は
+    復元に使われない（post_compact は件数のみ参照）ため、直近 ``MAX_SNAPSHOT_ITEMS`` 件かつ
+    合計 ``MAX_SNAPSHOT_CHARS`` 文字に truncate し、真の総数は ``corrections_snapshot_count``
+    に保持する。これにより毎セッションの巨大注入と、外部テキスト由来 correction の無期限再注入
+    （運び屋化）を抑える。
+
+    corrections_snapshot キーが無い旧 checkpoint は無改変で返す（後方互換）。
+    """
+    snapshot = checkpoint.get("corrections_snapshot")
+    if not isinstance(snapshot, list):
+        return checkpoint
+
+    total = len(snapshot)
+    # 末尾＝最新（corrections.jsonl は追記順）。直近 N 件を残す。
+    recent = snapshot[-MAX_SNAPSHOT_ITEMS:] if MAX_SNAPSHOT_ITEMS > 0 else []
+    # 合計文字数上限: 収まるまで古い方（先頭）から落とす。単体で超過する場合は空に degrade。
+    while recent and len(json.dumps(recent, ensure_ascii=False)) > MAX_SNAPSHOT_CHARS:
+        recent = recent[1:]
+
+    summarized = dict(checkpoint)
+    summarized["corrections_snapshot"] = recent
+    summarized["corrections_snapshot_count"] = total
+    summarized["corrections_snapshot_truncated"] = len(recent) < total
+    return summarized
 
 
 def _make_session_title(checkpoint: dict) -> str:
@@ -400,7 +439,11 @@ def handle_session_start(event: dict) -> None:
     try:
         # 復元した状態を stdout に出力（Claude Code が利用可能）
         session_title = _make_session_title(checkpoint)
-        output: dict = {"restored": True, "checkpoint": checkpoint}
+        # corrections_snapshot を上限内に要約してから print する（保存と表示の分離・監査対応）
+        output: dict = {
+            "restored": True,
+            "checkpoint": _summarize_checkpoint_for_output(checkpoint),
+        }
         if session_title:
             output["hookSpecificOutput"] = {"sessionTitle": session_title}
         print(json.dumps(output, ensure_ascii=False))
