@@ -63,6 +63,7 @@ idiom_autopromote.promoted
 idiom_autopromote.promoted_idioms
 idiom_autopromote.slug
 observability
+observability.agent_tier
 observability.backup_files
 observability.constitutional
 observability.duplicate_skill_names
