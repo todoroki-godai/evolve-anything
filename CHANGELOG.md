@@ -4,6 +4,7 @@
 
 ### Added
 - **feat(daily): icebox 棚卸しの気づきトリガーを追加（#194）** — `bin/evolve-daily-run` に `gh issue list --repo todoroki-godai/evolve-anything --label icebox --state closed --json closedAt --limit 100`（read-only）のステップを追加し、件数・最古経過日数を `icebox-status.json` に保存する（既存 ingest/tokens と同じ fail-open。`gh` 失敗/バイナリ不在でも daily-run 全体を落とさず既存ファイルを壊さない）。新モジュール `scripts/lib/daily/icebox_notice.py`（`queue_notice.py` と同型の read 専用・純関数・決定論）が `oldest_days>=閾値(既定90日)` のときだけ 1 行に集約した systemMessage を生成し、`hooks/restore_state.py` の `_deliver_icebox_notice()` が SessionStart で通知する。icebox は evolve-anything 自身の issue backlog のため、`.claude-plugin/plugin.json` を持つ本体リポジトリで作業している時だけ判定し、他 PJ では沈黙する。TDD 39件（新規37: icebox_notice 17 / daily-run ステップ 11 / restore_state 配線 9、既存 daily-run テスト2件を4ステップ順序検証に更新）・決定論・LLM 非依存。レビュー反映: queue 失敗時も icebox ステップを実行（fail-open 一貫性・終了コードは queue の失敗を報告）、`gh` 呼び出しに timeout=30s、closedAt 全件パース不能（gh JSON 形式変更等の恒久沈黙モード）を stderr warning で可視化。
+- **feat(release-notes-review): 健康診断の軽量モード・🟡保留トラッキング・memory スリム運用を追加** — 差分が bug fix のみで環境影響の新機能がゼロなら Step 2/2.5 のフル走査（全 rules/skills/agents Read）をスキップし件数+pin+hook実在+MEMORY行数の軽量診断で終える早期 return ゲート（Step 1.5）を追加。フル診断は新機能検出時 or `--env-only` 時のみ。加えて 🟡 保留を毎回 resolved/dropped/carry で決着させ死蔵を防ぐトラッキング（Step 0.5・carried_count>3 で dropped）と、last_checked memory を version+date+pending のスリム運用に移行し詳細所見を `release_notes_review_history.md` へ分離（Step 5）。直近14レビューで即適用が1件のみ・毎回フル診断が空振り・note 肥大という運用逓減の解消（project_critique_20260706 の「観測→作用変換率低下・advisory 書きっぱなし」と同構造の自己適用）。
 
 ## [1.121.0] - 2026-07-10
 
