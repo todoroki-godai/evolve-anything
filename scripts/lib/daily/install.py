@@ -6,6 +6,7 @@
 launchctl 呼び出しは `_launchctl`（subprocess）に集約し、単体テストで mock 可能にする。
 """
 import subprocess
+import sys
 from pathlib import Path
 
 from daily import plist as plist_mod
@@ -30,12 +31,16 @@ def install(
     data_dir: str,
     hour: int = plist_mod.DEFAULT_HOUR,
     minute: int = plist_mod.DEFAULT_MINUTE,
+    python_exe: str = "",
 ) -> int:
     """launchd ジョブを登録する（冪等）。
 
     - LaunchAgents dir を作成し plist を書く（既存なら上書き）。
     - 既存 plist があれば一度 unload してから load し直す（再登録・設定変更を反映）。
     - data_dir/logs を作りログ出力先を用意する。
+    - `python_exe` を渡すと plist に焼く。空なら install を走らせている `sys.executable` を
+      pin する（＝この install を叩いた Python で毎朝の runner を実行する）。launchd の PATH
+      先頭 /usr/bin の古い Python を拾う事故を防ぐ。
     Returns: 0（plist 書き込み成功）。launchctl の非ゼロは握りつぶす（冪等運用）。
     """
     plist_file = plist_mod.plist_path()
@@ -53,6 +58,7 @@ def install(
         data_dir=data_dir,
         hour=hour,
         minute=minute,
+        python_exe=python_exe or sys.executable,
     )
     plist_file.write_text(body, encoding="utf-8")
 

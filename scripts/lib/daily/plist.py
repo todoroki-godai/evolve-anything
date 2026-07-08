@@ -54,15 +54,21 @@ def build_plist(
     data_dir: str,
     hour: int = DEFAULT_HOUR,
     minute: int = DEFAULT_MINUTE,
+    python_exe: str = "",
 ) -> str:
     """launchd plist の XML 文字列を生成する。
 
-    ProgramArguments は `bin/evolve-daily-run`（runner スクリプト）を直接起動する。runner が
-    内部で `daily_command_str` 相当の ingest→queue→保存を実行する。StartCalendarInterval で
-    毎日 hour:minute に発火。stdout/stderr を `log_path` に集約しエラー時のスタックを残す。
+    ProgramArguments は `bin/evolve-daily-run`（runner スクリプト）を起動する。`python_exe` を
+    渡すと `[python_exe, runner]` の順で並べ、runner の `#!/usr/bin/env python3` シェバンを迂回して
+    そのインタプリタで直接実行する（launchd の PATH 先頭 /usr/bin の古い Python を拾って
+    `str | None` 等の新記法が import 時 TypeError で死ぬのを防ぐ）。空なら従来通り runner のみ。
+    runner が内部で ingest→queue→保存を実行する。StartCalendarInterval で毎日 hour:minute に
+    発火。stdout/stderr を `log_path` に集約しエラー時のスタックを残す。
     """
     runner = runner_path(plugin_root)
     log = log_path(data_dir)
+    program_args = [python_exe, runner] if python_exe else [runner]
+    args_xml = "\n".join(f"        <string>{escape(a)}</string>" for a in program_args)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -71,7 +77,7 @@ def build_plist(
     <string>{escape(LAUNCHD_LABEL)}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{escape(runner)}</string>
+{args_xml}
     </array>
     <key>EnvironmentVariables</key>
     <dict>

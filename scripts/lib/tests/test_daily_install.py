@@ -36,9 +36,26 @@ def test_install_writes_plist_and_loads(fake_paths, monkeypatch):
     assert plist.exists()
     body = plist.read_text(encoding="utf-8")
     assert inst.LAUNCHD_LABEL in body
-    assert "/p/evolve-anything/bin/evolve-daily-run" in body
+    runner = "/p/evolve-anything/bin/evolve-daily-run"
+    assert runner in body
+    # python_exe を省略すると install が sys.executable で pin し、runner より前に入る
+    assert f"<string>{sys.executable}</string>" in body
+    assert body.index(f"<string>{sys.executable}</string>") < body.index(f"<string>{runner}</string>")
     # load が呼ばれた
     assert any(c[0] == "load" for c in calls)
+
+
+def test_install_pins_explicit_python_exe(fake_paths, monkeypatch):
+    """python_exe を明示指定すると plist にそのインタプリタが焼かれる。"""
+    tmp_path, plist = fake_paths
+    monkeypatch.setattr(inst, "_launchctl", lambda *a: 0)
+    inst.install(
+        plugin_root="/p/evolve-anything",
+        data_dir=str(tmp_path / "data"),
+        python_exe="/opt/homebrew/bin/python3.14",
+    )
+    body = plist.read_text(encoding="utf-8")
+    assert "<string>/opt/homebrew/bin/python3.14</string>" in body
 
 
 def test_install_is_idempotent(fake_paths, monkeypatch):

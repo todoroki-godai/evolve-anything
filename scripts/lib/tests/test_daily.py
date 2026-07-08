@@ -80,6 +80,31 @@ def test_build_plist_default_time_is_0900():
     assert "<integer>0</integer>" in out  # Minute
 
 
+def test_build_plist_pins_python_exe_when_given():
+    """python_exe 指定時、ProgramArguments が [python_exe, runner] の順（shebang 迂回で 3.9 死回避）。"""
+    out = plist_mod.build_plist(
+        plugin_root="/p/evolve-anything",
+        data_dir="/d",
+        python_exe="/opt/homebrew/bin/python3.14",
+    )
+    runner = "/p/evolve-anything/bin/evolve-daily-run"
+    py = "/opt/homebrew/bin/python3.14"
+    assert f"<string>{py}</string>" in out
+    assert f"<string>{runner}</string>" in out
+    # python_exe が runner より前（launchd は python_exe に runner を渡して起動する）
+    assert out.index(f"<string>{py}</string>") < out.index(f"<string>{runner}</string>")
+
+
+def test_build_plist_omits_python_exe_by_default():
+    """python_exe 省略時は ProgramArguments が runner のみ（後方互換）。"""
+    out = plist_mod.build_plist(plugin_root="/p/evolve-anything", data_dir="/d")
+    runner = "/p/evolve-anything/bin/evolve-daily-run"
+    # ProgramArguments の array に runner だけ入る
+    array = out.split("<key>ProgramArguments</key>", 1)[1].split("</array>", 1)[0]
+    assert f"<string>{runner}</string>" in array
+    assert array.count("<string>") == 1
+
+
 def test_plist_path_under_launchagents():
     p = plist_mod.plist_path()
     assert p.name == f"{plist_mod.LAUNCHD_LABEL}.plist"
