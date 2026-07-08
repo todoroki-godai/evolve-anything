@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.118.0] - 2026-07-08
+
 ### Added
 - **feat(audit): agent モデルティア適合ゲート（`agent_tier`）を追加し frontmatter のティア↔model/effort 不整合を advisory surface** — agent の frontmatter を読みモデル割り振りポリシー（HEAD=opus/xhigh, HARD=opus/high, NORMAL=sonnet/medium, MECH=haiku/effort無し, REVIEW=fable/high）への適合を決定論・ゼロ LLM で検査する純関数 `agent_tier.check_agent_tier`（findings: `tier_model_mismatch` / `tier_effort_mismatch` / `exact_id_pin`（#449 の `EXACT_MODEL_ID_PATTERN`/`MODEL_ALIASES` を再利用）/ `missing_tier`）と env 検査 `check_subagent_model_env_override`（`CLAUDE_CODE_SUBAGENT_MODEL` 設定時に frontmatter 全上書きを warning）。ティア宣言は **frontmatter の `tier:` キー**で行う（`claude plugin validate` が未知キーを許容することを実プラグイン agent で検証済み・sidecar registry 不要）。audit advisory section `agent_tier`（#115 共通枠 `build_advisory_section`・`_OBSERVABILITY_BUILDERS` 登録・mismatch/pin は per-agent ⚠ / missing_tier は件数集約 ℹ / clean 時 ✓・auto-fix なし＝agent は protected #185）。model 未宣言（inherit）と effort 未宣言（非 MECH）は FP 回避で非検出。TDD +31件（純関数23 / section8）・決定論・LLM 非依存。
 - **chore(agents): セカンドオピニオン agent を REVIEW ティア（Fable）に** — `agents/second-opinion.md` を model: sonnet→fable + tier: REVIEW + effort: high に。頭が難所だけ呼ぶ「低volume×判断重の cold-read 顧問席」（Fable=$10/$50＝Opus 2倍ゆえ判断重の席限定）。model-routing の REVIEW ティア新設（2026-07-08）の初適用。evolve-scorer/evolve-anything-advisor は tier を安易に付けず保留（gate の missing_tier ℹ で可視化）。
