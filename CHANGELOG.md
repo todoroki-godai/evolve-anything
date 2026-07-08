@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(hooks): SessionStart 出力の corrections_snapshot に上限を設け context 注入を抑制** — グローバル環境のセキュリティ監査で、`restore_state.py`（SessionStart）が checkpoint 全体を `print(json.dumps(...))` する際に `corrections_snapshot`（corrections.jsonl 全件）をそのまま Claude context へ注入し、実測 ~102KB の巨大テキストを毎セッション無駄消費していた（外部テキストが correction 化した場合は無期限で再注入される「運び屋」化リスクも内包）。raw correction text は復元に使われない（`post_compact` は件数のみ参照）ため、定数 `MAX_SNAPSHOT_ITEMS=20` / `MAX_SNAPSHOT_CHARS=8000` で直近 N 件かつ合計文字数上限まで truncate する純関数 `_summarize_checkpoint_for_output` を追加し、真の総数は `corrections_snapshot_count`（+ `corrections_snapshot_truncated` フラグ）に保持する。save_state のディスク checkpoint 保存は無改変＝「保存と表示の分離」で `post_compact` の件数正確性を維持、キー無し旧 checkpoint は無改変で後方互換。実測 114,779→8,211 bytes（約93%削減）。TDD +6件・決定論・LLM 非依存。
+
 ## [1.118.0] - 2026-07-08
 
 ### Added
