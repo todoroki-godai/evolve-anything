@@ -52,6 +52,8 @@ evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-
 | 7.8 | 決定論 weak_signals の永続化（manual_edit / esc / rephrase / permission_deny） | `evolve --drain`（`persist_weak_signals_drain`） | **書く**（drain の apply 境界・#484/#513） | 書く |
 | 7.8 | calibration state + tool_usage_snapshot 確定（result 依存） | `evolve --drain --result-json "$OUT"`（`persist_result_dependent_state`） | **書く**（drain の apply 境界・result 由来値を運搬・#146/ADR-051） | 書く |
 | 7.8 | growth 結晶化イベント emit（result 依存） | `evolve --drain --result-json "$OUT"`（`_emit_growth_crystallization`） | **書く**（drain の apply 境界・#146/ADR-051） | 書く |
+| 3.5 | remediation 連続提示 count marker 更新＋閾値到達で自動却下 | phases_remediate の `reconcile_surfaced(persist=not dry_run)` | **書かない**（persist=False は marker を読むだけの表示用判定） | 書く |
+| 7.8 | remediation 連続提示 count marker の実書込＋閾値到達 record_rejection（result 依存） | `evolve --drain --result-json "$OUT"`（`reconcile_surfaced(persist=True)`） | **書く**（drain の apply 境界・result 由来の tracked を運搬・#186） | 書く |
 
 **2 つの設計の違いを取り違えない（MUST）**:
 
@@ -64,6 +66,13 @@ evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-
   （#505 の誤ゲートを revert した経緯）。drain は tool 文脈（CLI）で apply 境界に走り、検出は冪等（dedup）
   なので dry-run 分析後に走らせて書くのが正。pending marker も drain 検出に必要なので dry-run でも書く
   （store/queue とは別状態の運用マーカー）。
+- **remediation 連続提示 count marker（#186）も drain の apply 境界が唯一の書き手**。phases_remediate の
+  `reconcile_surfaced` は dry-run では `persist=False`（marker を読むだけの表示用判定）で、count は進めない。
+  count marker の実書込と閾値（`DEFAULT_AUTO_REJECT_AFTER_RUNS=2`）到達時の自動却下は
+  `evolve --drain --result-json "$OUT"` が result 由来の tracked を再構築して確定する
+  （`build_reconcile_tracked` が phases 側と同一構成）。標準フローが dry-run のみで marker が永久未書込
+  → 閾値未達で自動却下が全 PJ 死蔵していた #494 の穴の根治（weak_signals #484 と同型）。dry-run 連打で
+  誤って count が進む事故を防ぐため、書込は drain の1点に集約する（pitfall_dryrun_stateful_store_write）。
 
 ## 提案詳細プロトコル（全 AskUserQuestion 共通）
 

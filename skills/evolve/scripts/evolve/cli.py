@@ -25,7 +25,7 @@ from pathlib import Path
 from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
 
-from ._env import _resolve_pj_slug
+from ._env import _resolve_pj_slug, build_reconcile_tracked
 
 
 def main() -> None:
@@ -252,6 +252,43 @@ def main() -> None:
                 summary["growth_crystallized"] = {"skipped": _result_skip_reason}
         except Exception as e:
             summary["growth_crystallized"] = {"error": str(e)}
+
+        # #186: remediation reconcile_surfaced の連続提示 count marker を apply 境界で永続化する。
+        # #494 の「毎回再提示を断つ」自動却下セーフティネットは phases_remediate の
+        # persist=not ctx.dry_run 経由でしか呼ばれず、標準フロー（evolve --dry-run のみ）では
+        # 常に persist=False → marker（remediation_surfaced/<slug>.json）が永久未書込で閾値
+        # DEFAULT_AUTO_REJECT_AFTER_RUNS に届かず全 PJ で死蔵していた。weak_signals #484 /
+        # reward_ema #64 / subagent_traces #135 と同型に、count marker の実書込 + 閾値到達時の
+        # record_rejection を drain（非 dry-run・正準 DATA_DIR）へ移設する。_tracked は
+        # build_reconcile_tracked で phases 側と同一構成に再構築する（result 由来・#186）。
+        # slug は phases_remediate / SKILL.md inline record_rejection と同じ
+        # remediation.suppression_ledger.resolve_slug（git-common-dir 親）で解決し read/write を一致させる。
+        # graceful degradation: --result-json 無し/不読/phases 欠落 → skip して他 persist は継続。
+        try:
+            if _evolve_result is not None:
+                from remediation.suppression_ledger import (
+                    reconcile_surfaced as _reconcile_surfaced,
+                    resolve_slug as _rem_resolve_slug,
+                )
+
+                _rem_proj = Path(args.project_dir) if args.project_dir else Path.cwd()
+                _rem_slug = _rem_resolve_slug(cwd=_rem_proj)
+                _phases = _evolve_result.get("phases", {}) or {}
+                _classified = (_phases.get("remediation", {}) or {}).get("classified", {}) or {}
+                _rv_observed = (_phases.get("discover", {}) or {}).get(
+                    "rule_violation_observed", []
+                ) or []
+                _tracked = build_reconcile_tracked(_classified, _rv_observed)
+                _recon = _reconcile_surfaced(_tracked, slug=_rem_slug, persist=True)
+                summary["remediation_surfaced_persisted"] = {
+                    "tracked": _recon.get("tracked", 0),
+                    "auto_rejected": _recon.get("auto_rejected", 0),
+                    "resolved": _recon.get("resolved", 0),
+                }
+            else:
+                summary["remediation_surfaced_persisted"] = {"skipped": _result_skip_reason}
+        except Exception as e:
+            summary["remediation_surfaced_persisted"] = {"error": str(e)}
 
         print(json.dumps(summary, ensure_ascii=False))
         return
