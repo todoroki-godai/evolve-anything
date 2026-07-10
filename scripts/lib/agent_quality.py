@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from frontmatter import count_content_lines, parse_frontmatter
+from frontmatter import count_content_lines, find_frontmatter_close, parse_frontmatter
 from agent_quality_catalog import (
     ANTI_PATTERNS,
     BEST_PRACTICES,
@@ -218,6 +218,15 @@ def check_quality(agent: AgentInfo) -> Dict[str, Any]:
         })
         score -= 0.05
 
+    fallback_result = check_ask_before_fallback(agent)
+    if fallback_result["missing"]:
+        issues.append({
+            "type": "missing_ask_before_fallback",
+            "detail": f"{ASK_BEFORE_FALLBACK_ADVISORY} ({agent.path})",
+            "severity": "low",
+        })
+        score -= 0.05
+
     for bp_name, bp_info in BEST_PRACTICES.items():
         if not _has_section(agent.content, bp_info["detect_patterns"]):
             suggestions.append({
@@ -366,6 +375,66 @@ def check_tools_grant_divergence(agent: AgentInfo) -> Dict[str, Any]:
         "declared_tools": declared_tools,
         "has_memory": has_memory,
     }
+
+
+ASK_BEFORE_FALLBACK_ADVISORY = (
+    "参照物欠落・指示欠落時に、選択肢+タイムアウト付きデフォルトを添えて"
+    "orchestrator に確認質問する規定（ask-before-fallback）が本文に見当たりません"
+)
+
+
+def _strip_frontmatter(content: str) -> str:
+    """frontmatter を除いた本文を返す（`find_frontmatter_close` を単一ソースに使用）。"""
+    if not content.startswith("---"):
+        return content
+    end = find_frontmatter_close(content)
+    if end == -1:
+        return content
+    return content[end + 3:]
+
+
+def check_ask_before_fallback(agent: AgentInfo) -> Dict[str, Any]:
+    """worker 系 agent が ask-before-fallback を明文化しているか検査する（#192）。
+
+    frontmatter `name`（無ければファイル名 stem）が case-insensitive で
+    "worker" を含む agent のみ対象とする（FP 回避のため保守的なスコープ）。
+    対象 agent の本文（frontmatter 除く body）に次のいずれかがあれば OK:
+      - 正規化後テキスト（lowercase + `-` → 空白）に "ask before fallback" を含む
+      - "確認質問" を含む
+    どちらも無ければ missing=True（列挙のみ・auto-fix しない）。
+
+    Returns:
+        {
+            "missing": bool,
+            "file": str,
+            "is_worker": bool,
+        }
+    """
+    if not agent.frontmatter:
+        if agent.path.exists():
+            agent.frontmatter = parse_frontmatter(agent.path)
+        else:
+            return {"missing": False, "file": str(agent.path), "is_worker": False}
+
+    fm = agent.frontmatter or {}
+    name = str(fm.get("name") or agent.path.stem)
+    is_worker = "worker" in name.lower()
+
+    if not is_worker:
+        return {"missing": False, "file": str(agent.path), "is_worker": False}
+
+    content = agent.content
+    if not content and agent.path.exists():
+        content = agent.path.read_text(encoding="utf-8")
+        agent.content = content
+
+    body = _strip_frontmatter(content)
+    normalized = body.lower().replace("-", " ")
+
+    has_marker = "ask before fallback" in normalized or "確認質問" in normalized
+    missing = not has_marker
+
+    return {"missing": missing, "file": str(agent.path), "is_worker": True}
 
 
 def _count_vague_keywords(content: str) -> int:

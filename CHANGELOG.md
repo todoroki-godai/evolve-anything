@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(agent-brushup): worker 系 agent の ask-before-fallback 明文化検査を追加（closes #192）** — frontmatter `name`（無ければファイル名 stem）が case-insensitive で "worker" を含む agent のみを対象に、本文（frontmatter 除く body）へ「参照物欠落・指示欠落時に選択肢+タイムアウト付きデフォルトを添えて orchestrator に確認質問する」規定（正規化後テキストに "ask before fallback" または "確認質問" を含む）が明文化されているかを決定論検査する `check_ask_before_fallback()` を追加し、`check_quality()` の issues（`missing_ask_before_fallback`・severity low・advisory・auto-fix なし）に配線した。既存 `check_tools_grant_divergence()`（#130）と同型のスタイル・走査入力契約に揃えている。TDD +6件・決定論・LLM 非依存。
+
 ### Fixed
 - **fix(audit): agent_tier の TIER_POLICY を opus 4.8 退役へ追従（HEAD=sonnet/max, HARD=sonnet/xhigh）** — opus 4.8 使用セッションに自己汚染ハルシネーション指紋が集中する実測（self_contamination Layer 2 計測・PR #190・汚染49件中48件が opus 4.8）を受けたグローバル model-routing 改定（HEAD/HARD の opus 撤去 + 能力低下補償の effort 1段引き上げ: HEAD xhigh→max / HARD high→xhigh）に、ティア↔model/effort 正典 `TIER_POLICY` と関連テスト（test_agent_tier / test_sections_agent_tier 計31件）を追従。HEAD は同日中に fable⇄sonnet を往来した末 sonnet・max に確定——この往来が「モデル変更を1箇所で一元管理する仕組みが無い」ことの実例であり、一元管理ツール evolve-tier を #193 で起票（実装されたら tier→model/effort の正典は外部 config へ移る）。決定論・LLM 非依存。
 
