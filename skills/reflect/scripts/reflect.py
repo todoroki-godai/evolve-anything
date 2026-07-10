@@ -29,7 +29,7 @@ from reflect_utils import (
 )
 from line_limit import check_line_limit, suggest_separation
 from semantic_detector import detect_contradictions, validate_corrections
-from similarity import tokenize
+from similarity import jaccard_coefficient, tokenize
 
 from rl_common import cleanup_false_positives
 
@@ -52,6 +52,11 @@ ERRORS_FILE = Path.home() / ".claude" / "evolve-anything" / "errors.jsonl"
 # promotion 閾値
 PROMOTION_MIN_OCCURRENCES = 2
 PROMOTION_MIN_AGE_DAYS = 14
+# #184: reoccurrence / occurrences は correction_type バケット総数でなく
+# message/extracted_learning の意味的類似度クラスタで数える。この閾値以上の
+# Jaccard 係数で「同じ趣旨の指摘」とみなしクラスタにまとめる（layer_diagnose の
+# MEMORY_DUPLICATE_JACCARD_THRESHOLD / regression_gate の _JACCARD_WARN_THRESHOLD と同値）。
+PROMOTION_SIMILARITY_THRESHOLD = 0.5
 
 # memory update candidates 閾値
 MIN_KEYWORD_MATCH = 3
@@ -273,66 +278,105 @@ def route_corrections(
     return result
 
 
+def _promotion_signal_text(record: dict) -> str:
+    """昇格判定に使う代表テキスト（extracted_learning 優先・無ければ message）。"""
+    return (record.get("extracted_learning") or record.get("message") or "").strip()
+
+
+def _cluster_applied_by_similarity(
+    applied: list[dict],
+) -> list[list[dict]]:
+    """applied な correction を message/extracted_learning の Jaccard 類似度で
+    クラスタ化する（#184）。
+
+    correction_type バケット総数でなく「同じ趣旨の指摘」単位で再発回数を数えるための
+    決定論クラスタリング。各 record を既存クラスタ代表との Jaccard 係数が
+    ``PROMOTION_SIMILARITY_THRESHOLD`` 以上なら合流、無ければ新規クラスタを作る
+    （単一パス greedy・入力順で決定論）。
+    """
+    clusters: list[list[dict]] = []
+    cluster_tokens: list[set] = []
+    for r in applied:
+        tokens = tokenize(_promotion_signal_text(r))
+        placed = False
+        for i, rep_tokens in enumerate(cluster_tokens):
+            if jaccard_coefficient(tokens, rep_tokens) >= PROMOTION_SIMILARITY_THRESHOLD:
+                clusters[i].append(r)
+                placed = True
+                break
+        if not placed:
+            clusters.append([r])
+            cluster_tokens.append(tokens)
+    return clusters
+
+
 def find_promotion_candidates(
     all_records: list[dict],
     project_root: Path | None = None,
 ) -> list[dict]:
     """auto-memory 昇格候補を検出する。
 
-    同一 correction_type が2回以上出現、または14日以上経過で未矛盾 → 候補。
+    同じ趣旨の指摘（message/extracted_learning の類似度クラスタ）が2回以上再発、
+    または14日以上経過で未矛盾 → 候補（#184）。correction_type バケット総数では数えない。
     """
     auto_memory = read_auto_memory()
     auto_content = "\n".join(e.get("content", "") for e in auto_memory).lower()
 
-    # correction_type ごとの出現回数
-    type_counts: Counter = Counter()
-    for r in all_records:
-        ctype = r.get("correction_type")
-        if ctype:
-            type_counts[ctype] += 1
+    # applied のみを message/extracted_learning の類似度でクラスタ化し、
+    # occurrences = クラスタ内の重複除去件数（= 同じ趣旨の指摘の再発回数）とする。
+    applied = [r for r in all_records if r.get("reflect_status") == "applied"]
+    clusters = _cluster_applied_by_similarity(applied)
 
     candidates = []
     seen_messages = set()
 
-    for r in all_records:
-        if r.get("reflect_status") != "applied":
-            continue
+    for cluster in clusters:
+        # クラスタ内の一意 message 数を再発回数とする（同一 message の重複は数えない）
+        cluster_messages = {r.get("message", "") for r in cluster}
+        occurrences = len(cluster_messages)
+        reoccurrence = occurrences >= PROMOTION_MIN_OCCURRENCES
 
-        msg = r.get("message", "")
+        # 代表 record（クラスタ先頭）で message/type/age を表現する
+        rep = cluster[0]
+        msg = rep.get("message", "")
         if msg in seen_messages:
             continue
         seen_messages.add(msg)
 
-        ctype = r.get("correction_type", "")
-        timestamp_str = r.get("timestamp", "")
+        ctype = rep.get("correction_type", "")
+        timestamp_str = rep.get("timestamp", "")
 
-        # 出現回数チェック
-        reoccurrence = type_counts.get(ctype, 0) >= PROMOTION_MIN_OCCURRENCES
-
-        # 経過日数チェック
+        # 経過日数チェック（クラスタ内で最も古い timestamp を採用）
         age_qualified = False
-        if timestamp_str:
+        oldest_ts = None
+        for r in cluster:
+            ts_str = r.get("timestamp", "")
+            if not ts_str:
+                continue
             try:
-                ts = datetime.fromisoformat(timestamp_str)
+                ts = datetime.fromisoformat(ts_str)
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
-                age_days = (datetime.now(timezone.utc) - ts).days
-                age_qualified = age_days >= PROMOTION_MIN_AGE_DAYS
             except (ValueError, TypeError):
-                pass
+                continue
+            if oldest_ts is None or ts < oldest_ts:
+                oldest_ts = ts
+        if oldest_ts is not None:
+            age_days = (datetime.now(timezone.utc) - oldest_ts).days
+            age_qualified = age_days >= PROMOTION_MIN_AGE_DAYS
 
         if not (reoccurrence or age_qualified):
             continue
 
         # auto-memory に既に含まれていないか
-        learning = (r.get("extracted_learning") or msg).lower()
+        learning = (rep.get("extracted_learning") or msg).lower()
         if learning and learning in auto_content:
             continue
 
         candidates.append({
             "message": msg,
             "correction_type": ctype,
-            "occurrences": type_counts.get(ctype, 0),
+            "occurrences": occurrences,
             "age_qualified": age_qualified,
             "suggested_topic": suggest_auto_memory_topic(msg),
         })

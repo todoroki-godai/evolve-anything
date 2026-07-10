@@ -4,6 +4,7 @@
 
 ### Fixed
 - **fix(store): episodic_events を store_schema_repair の自己修復対象に登録（closes #173）** — `episodic.db` の `episodic_events` が全履歴 0 行で停止（mtime = migrate-data 実行時刻）していた根本原因は、#156 の CTAS rebuild 自己修復 `known_store_specs()` に `episodic_events` が未登録だったこと。migrate-data の `CREATE TABLE AS SELECT`（CTAS）rebuild が PRIMARY KEY を落とし、制約欠落のまま `INSERT OR IGNORE` が `BinderException` で writer 全死していた（token_usage / utterances が #156 で同型復元済みだったのに episodic だけ対象外）。`known_store_specs()` に `episodic_events`（schema=`episodic_store._SCHEMA_SQL`・dedup キー `id`）を登録し、以後の migration rebuild から保護する。TDD +4件・決定論・LLM 非依存。
+- **fix(reflect): promotion_candidates を type 総数から類似クラスタ集計へ分解（closes #184）** — `find_promotion_candidates` が applied な correction を correction_type バケット総数で数え `occurrences` に代入していたため、semantic_idiom が 94 件あると全件が reoccurrence ゲートを通過し `occurrences=94` 一律で dump されていた（昇格シグナルとして機能せず・pitfall_aggregate_without_decomposition と同型）。message/extracted_learning の Jaccard 類似度（閾値 0.5）で「同じ趣旨の指摘」をクラスタ化し、`occurrences` をクラスタ内の再発回数、候補を 1 クラスタ = 1 件に分解する。age 判定はクラスタ内最古 timestamp を採用。TDD +1件（回帰: 同一 type で無関係 message を混同しないこと）・決定論・LLM 非依存。
 
 ## [1.119.0] - 2026-07-10
 

@@ -339,17 +339,40 @@ class TestApplyAllMode:
 
 class TestPromotionCandidates:
     def test_reoccurrence_promotion(self):
-        """同一 correction_type が2回以上 → 昇格候補。"""
+        """趣旨が類似した message が2回以上再発 → 1クラスタ = 1昇格候補（#184:
+        message/extracted_learning の類似度クラスタで判定。correction_type バケット総数
+        では判定しない）。occurrences はクラスタ内の再発回数。"""
         old_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
         records = [
-            _make_correction(correction_type="iya", reflect_status="applied", timestamp=old_ts),
             _make_correction(correction_type="iya", reflect_status="applied",
-                             message="いや、そうじゃない", timestamp=old_ts),
+                             message="always run tests before commit", timestamp=old_ts),
+            _make_correction(correction_type="iya", reflect_status="applied",
+                             message="always run tests before merge", timestamp=old_ts),
         ]
         with mock.patch("reflect.read_auto_memory", return_value=[]):
             result = reflect.find_promotion_candidates(records)
-        assert len(result) >= 1
-        assert result[0]["occurrences"] >= 2
+        # 2つの類似 message は1クラスタに合流し occurrences=2 の候補1件になる
+        assert len(result) == 1
+        assert result[0]["occurrences"] == 2
+
+    def test_same_type_unrelated_messages_not_conflated(self):
+        """同一 correction_type でも message が無関係なら再発件数を混同しない（#184 回帰）。
+
+        修正前は correction_type バケット総数を occurrences に代入していたため、
+        無関係な message でも同一 type というだけで昇格候補が誤検出されていた。
+        """
+        recent_ts = datetime.now(timezone.utc).isoformat()
+        records = [
+            _make_correction(correction_type="iya", reflect_status="applied",
+                             message="always run tests before commit", timestamp=recent_ts),
+            _make_correction(correction_type="iya", reflect_status="applied",
+                             message="please write clear docstrings for new functions",
+                             timestamp=recent_ts),
+        ]
+        with mock.patch("reflect.read_auto_memory", return_value=[]):
+            result = reflect.find_promotion_candidates(records)
+        # 両方 recent（age 未達）かつ意味的に無関係（occurrences=1）なので昇格候補なし
+        assert result == []
 
     def test_age_promotion(self):
         """14日以上経過 → 昇格候補。"""
