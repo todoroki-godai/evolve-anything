@@ -1,8 +1,8 @@
 """evolve-fleet CLI エントリポイント (argparse + status / discover / test-guard サブコマンド)。
 
-`tokens` サブコマンドは `cli_tokens.py`、`propose` サブコマンド本体は `cli_propose.py` に
-分離済み（800 行ハード上限対策）。fleet/__init__.py から re-export される
-（後方互換、`bin/evolve-fleet` は `fleet.main` を呼ぶ）。
+`tokens` サブコマンドは `cli_tokens.py`、`propose` サブコマンド本体は `cli_propose.py`、
+`pr-start`/`pr-finish` サブコマンド本体は `cli_pr.py` に分離済み（800 行ハード上限対策）。
+fleet/__init__.py から re-export される（後方互換、`bin/evolve-fleet` は `fleet.main` を呼ぶ）。
 """
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from . import (
     _DEFAULT_MAX_WORKERS,
     _DEFAULT_TIMEOUT_SEC,
 )
+from .cli_pr import run_pr_finish_command as _run_pr_finish
+from .cli_pr import run_pr_start_command as _run_pr_start
 from .cli_propose import run_propose_command as _run_propose
 from .cli_tokens import _inject_token_metrics, _run_tokens
 from .collectors import collect_fleet_status, detect_equal_issue_counts, write_fleet_run
@@ -165,6 +167,28 @@ def main(argv: list[str] | None = None) -> int:
     propose_p.add_argument("--threshold", type=int, default=_default_queue_threshold(),
                            help="--live 時の待ち判定閾値（default: 5。env EVOLVE_QUEUE_THRESHOLD で上書き可）")
 
+    pr_start_p = sub.add_parser(
+        "pr-start",
+        help="承認済み evolve 提案（propose レポート）を元に対象 PJ で worktree を準備する（#82）",
+    )
+    pr_start_p.add_argument(
+        "pj_slug", help="対象 PJ の pj_slug（最新 propose レポートに存在し status=ok であること）"
+    )
+
+    pr_finish_p = sub.add_parser(
+        "pr-finish",
+        help="worktree の変更を commit→push→PR 化する（マージは人間・#82）",
+    )
+    pr_finish_p.add_argument("pj_slug", help="対象 PJ の pj_slug")
+    pr_finish_p.add_argument("--draft", action="store_true", help="draft PR として作成する")
+    pr_finish_p.add_argument(
+        "--dry-run", action="store_true", help="実行せず予定アクションを表示のみ（commit/push/PR 作成しない）"
+    )
+    pr_finish_p.add_argument(
+        "--date", type=str, default=None,
+        help="worktree の日付（YYYYMMDD）。同一 PJ に複数 worktree がある場合に指定する",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "discover":
@@ -189,6 +213,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_queue(args)
     if args.command == "propose":
         return _run_propose(args)
+    if args.command == "pr-start":
+        return _run_pr_start(args)
+    if args.command == "pr-finish":
+        return _run_pr_finish(args)
 
     # default: status
     return _run_status(args)

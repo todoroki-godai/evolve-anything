@@ -11,6 +11,7 @@ fixture 更新は `UPDATE_SNAPSHOTS=1 pytest scripts/tests/test_fleet_snapshot.p
 """
 import inspect
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -52,7 +53,10 @@ def _collect_api_surface() -> str:
         obj = getattr(fleet, name)
         try:
             sig = inspect.signature(obj)
-            lines.append(f"{name}{sig}")
+            # デフォルト値が関数オブジェクト（例: run=subprocess.run）だと repr に
+            # メモリアドレスが混入しプロセスごとに変わる。アドレスを正規化して hermetic に保つ
+            sig_text = re.sub(r" at 0x[0-9a-fA-F]+", " at 0x...", str(sig))
+            lines.append(f"{name}{sig_text}")
         except (TypeError, ValueError):
             lines.append(f"{name} (no signature)")
     return "\n".join(lines) + "\n"

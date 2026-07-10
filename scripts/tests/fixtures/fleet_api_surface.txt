@@ -8,45 +8,73 @@ STATUS_NOT_ENABLED = 'NOT_ENABLED'
 STATUS_STALE = 'STALE'
 
 # fleet public function / class signatures
+AccountMismatchError (no signature)
 AuditResult(status: 'str', env_score: 'float | None' = None, phase: 'str | None' = None, growth_level: 'int | None' = None, latest_audit: 'datetime | None' = None, message: 'str' = '', issues_summary: 'IssuesSummary | None' = None) -> None
 Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False, links: 'list[str]' = <factory>, is_stale: 'bool' = False, is_superseded: 'bool' = False) -> None
 FleetRow(pj_name: 'str', status: 'str', env_score: 'float | None' = None, growth_level: 'int | None' = None, phase: 'str | None' = None, latest_audit: 'datetime | None' = None, audit_status: 'str' = 'OK', message: 'str' = '', issues_summary: 'IssuesSummary | None' = None, subagents_30d: 'int' = 0, tokens_30d: 'int | None' = None, cache_hit_pct: 'float | None' = None, cache_reuse_factor: 'float | None' = None) -> None
+GitCommandError(cmd: 'List[str]', returncode: 'int', stderr: 'str')
 IssuesSummary(line_violations: 'int' = 0, hardcoded_values: 'int' = 0, potential_duplicates: 'int' = 0, corrections_unprocessed: 'int' = 0, skill_quality_degraded_count: 'int' = 0) -> None
 MemoryDir(memory_dir: Path, pj_display: str)
+ProposalTargetError (no signature)
 RecallHit(pj_display: 'str', file_path: 'Path', score: 'float', snippet: 'str', is_index: 'bool', is_linked: 'bool' = False, linked: "list['RecallHit']" = <factory>) -> None
+WorktreeError (no signature)
 aggregate_sessions_by_project(*, window_days: 'int' = 30, now: 'datetime | None' = None, canonical: 'Path | None' = None) -> 'dict[str, int]'
 aggregate_subagents_by_project(subagents_path: 'Path | None' = None, *, window_days: 'int' = 30, now: 'datetime | None' = None) -> 'dict[str, int]'
+branch_name(date_str: 'str') -> 'str'
 build_batch_report(batch: 'List[Dict[str, Any]]', *, generated_at: 'str', cost: 'Dict[str, Any]') -> 'Dict[str, Any]'
+build_pr_body(entry: 'Dict[str, Any]', *, report: 'Dict[str, Any]', diff_stat_text: 'str') -> 'str'
+build_pr_title(pj_slug: 'str', date_str: 'str') -> 'str'
 build_queue_result(*, pj_slugs: 'List[str]', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', last_evolve_map: 'Dict[str, str]', activity_map: 'Dict[str, Dict[str, int]]', generated_at: 'str', pj_paths: 'Optional[Dict[str, str]]' = None, material_slugs: 'Optional[List[str]]' = None, untracked_dir_map: 'Optional[Dict[str, str]]' = None) -> 'Dict[str, Any]'
 classify_project(pj_path: 'Path', settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, stale_days: 'int' = 30, now: 'datetime | None' = None) -> 'str'
 collect_fleet_status(root: 'Path | None' = None, settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, data_dir: 'Path | None' = None, timeout: 'float' = 30.0, max_workers: 'int' = 2, projects: 'list[Path] | None' = None) -> 'list[FleetRow]'
 collect_phantom_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]') -> 'List[Dict[str, Any]]'
 collect_untracked_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]') -> 'List[Dict[str, Any]]'
+commit_all(worktree: 'Path', message: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'None'
+commits_ahead(worktree: 'Path', base_branch: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'int'
 confirm_batch(*, yes: 'bool', input_func: 'Callable[[str], str]' = <built-in function input>) -> 'bool'
+create_pr(worktree: 'Path', *, title: 'str', body: 'str', base: 'str', draft: 'bool' = False, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'Dict[str, Any]'
+create_worktree(project_path: 'Path', date_str: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'Dict[str, Any]'
+default_branch(repo_path: 'Path', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
 detect_equal_issue_counts(rows: 'list[FleetRow]') -> 'list[dict]'
+diff_stat(worktree: 'Path', base_branch: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
 enumerate_memory_dirs(projects_root: 'Path | None' = None) -> 'list[MemoryDir]'
 enumerate_projects(root: 'Path') -> 'list[Path]'
 estimate_cost(targets: 'List[Dict[str, Any]]') -> 'Dict[str, Any]'
+expected_account(owner: 'str') -> 'str'
 filter_previously_rejected_candidates(result: 'Dict[str, Any]', slug: 'str', *, history: 'Optional[List[Dict[str, Any]]]' = None) -> 'Dict[str, Any]'
+find_existing_worktrees(project_path: 'Path') -> 'List[Path]'
+find_latest_proposals_json(data_dir: 'Path') -> 'Optional[Path]'
+find_pj_entry(report: 'Dict[str, Any]', pj_slug: 'str') -> 'Optional[Dict[str, Any]]'
 fold_activity_counts(slug: 'str', subagent_counts: 'Dict[str, int]', session_counts: 'Dict[str, int]') -> 'Dict[str, int]'
 format_cost_confirmation(cost: 'Dict[str, Any]') -> 'str'
 format_hits(hits: 'list[RecallHit]', *, as_json: 'bool') -> 'str'
 format_status_json(rows: 'list[FleetRow]') -> 'str'
 format_status_table(rows: 'list[FleetRow]', now: 'datetime | None' = None) -> 'str'
+has_uncommitted_changes(worktree: 'Path', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'bool'
+load_proposals_report(path: 'Path') -> 'Dict[str, Any]'
 main(argv: 'list[str] | None' = None) -> 'int'
 new_corrections_by_pj(pj_slug: 'str', *, last_evolve_at: 'Optional[str]' = None, corrections_path: 'Path') -> 'int'
+parse_active_gh_account(gh_auth_status_output: 'str') -> 'Optional[str]'
 parse_fact_file(path: 'Path') -> 'Fact'
 persist_last_evolve(pj_slug: 'str', *, ts: 'Optional[str]' = None, dry_run: 'bool' = False) -> 'Dict[str, Any]'
+push_branch(worktree: 'Path', branch: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'None'
 read_last_evolve(*, data_dir: 'Optional[Path]' = None) -> 'Dict[str, str]'
 recall(query: 'str', *, limit: 'int' = 10, projects_root: 'Path | None' = None) -> 'list[RecallHit]'
 render_cli_summary(report: 'Dict[str, Any]', md_path: 'Path', json_path: 'Path') -> 'str'
 render_markdown_report(report: 'Dict[str, Any]') -> 'str'
 resolve_auto_memory_dir(pj_path: 'Path') -> 'Path'
+resolve_target(data_dir: 'Path', pj_slug: 'str') -> "'tuple[Dict[str, Any], Dict[str, Any], Path]'"
+resolve_worktree(project_path: 'Path', *, date_str: 'Optional[str]' = None) -> 'Path'
 run_audit_subprocess(pj_path: 'Path', timeout: 'float' = 10.0, data_dir: 'Path | None' = None, rl_audit_bin: 'Path | None' = None) -> 'AuditResult'
 run_propose_batch(targets: 'List[Dict[str, Any]]', *, run_evolve_fn: 'Optional[Callable[..., Dict[str, Any]]]' = None) -> 'List[Dict[str, Any]]'
 select_evolve_queue(pj_materials: 'List[Dict[str, Any]]', threshold: 'int') -> 'List[Dict[str, Any]]'
 select_targets(queue_data: 'Optional[Dict[str, Any]]', *, max_pj: 'int') -> 'List[Dict[str, Any]]'
 summarize_pj_result(result: 'Dict[str, Any]', *, suppressed_rejected_count: 'int' = 0) -> 'Dict[str, Any]'
+today_str() -> 'str'
+touched_skill_names(diff_stat_text: 'str') -> 'List[str]'
+validate_branch(worktree: 'Path', date_str: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
+verify_push_account(project_path: 'Path', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
 weak_unprocessed_by_pj(pj_slug: 'str', *, weak_signals_path: 'Optional[Path]' = None, marker_base: 'Optional[Path]' = None) -> 'int'
+worktree_path(project_path: 'Path', date_str: 'str') -> 'Path'
 write_fleet_run(rows: 'list[FleetRow]', fleet_runs_dir: 'Path | None' = None, now: 'datetime | None' = None) -> 'Path'
 write_reports(report: 'Dict[str, Any]', *, data_dir: 'Path', date_str: 'Optional[str]' = None) -> "'tuple[Path, Path]'"
