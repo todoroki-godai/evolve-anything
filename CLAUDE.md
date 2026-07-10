@@ -118,6 +118,7 @@
 | `artifacts_hygiene` | artifact 衛生5検出器（#124 グローバル CLAUDE.md 空/未存在 / #125 SKILL.md 欠落 dir / #126 バックアップ残置 / #129 skill 名跨 scope 重複・symlink wrapper 除外 / #155 plugin と重複するグローバル hook 残骸・同一イベント×正規化 basename 一致）を #115 advisory 共通枠で observability に surface。2026-07-03 PC 環境手動監査の検出器ギャップ起票分（決定論・LLM 非依存） | `audit/sections_artifacts.py` |
 | `memory_hygiene` | memory dir 衛生3検出器（#127 MEMORY.md 索引孤児 / #128 auto-memory frontmatter スキーマ検証 / #131 旧 PJ memory 完全重複残骸=fleet 横断・tar 退避手順提案のみ auto-apply なし）。3件とも clean 時非表示・走査は *.md のみで jsonl 非対象 | `memory_index_orphan.py` + `memory_schema_check.py` + `memory_dup_residue.py` + `audit/sections_memory.py` |
 | `invalid_frontmatter` | YAML frontmatter が壊れて CC 発火不能なスキルを直接 surface する observability section（#167）。`parse_frontmatter` が YAMLError を握り潰し `{}` 返却する穴を検出コア `detect_frontmatter_error`（純関数・`parse_frontmatter` 無改変）で塞ぎ、effort_detector が invalid を skip（missing_effort 誤分類根治・#166 相互作用）+ advisory section（⚠・clean時沈黙・auto-fix なし人手提案）。scope は `.claude/skills/**/SKILL.md` | `frontmatter.py` + `effort_detector.py` + `audit/sections_invalid_frontmatter.py` |
+| `self_contamination` | 自己汚染ハルシネーション指紋（A=生タグ漏出 / B=偽 system-reminder / C-lite=汚染宣言×tool_result 原文非在）を transcript 走査で恒久計測する Layer 2 observability section（ゼロLLM・read-only・hook/store 新設なし）。tool_result 原文と assistant text/thinking を厳密分離し byte 照合、operational/話題PJ 分離集計、clean 時沈黙。live 抑止 Layer 1 hook は要否をこの計測で判断 | `self_contamination_scan.py` + `audit/sections_self_contamination.py` |
 
 ## クイックスタート
 

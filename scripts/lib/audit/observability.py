@@ -50,6 +50,7 @@ from .sections_orphan import build_orphan_store_section, build_store_contract_se
 from .sections_outcome import build_outcome_metrics_section
 from .sections_paired import build_paired_trajectory_section
 from .sections_promotion_readiness import build_promotion_readiness_section
+from .sections_self_contamination import build_self_contamination_section
 from .sections_skill_vuln import build_skill_vuln_section
 from .sections_subagent_noise import build_subagent_noise_section
 from .sections_subagent_traces import build_subagent_traces_section
@@ -89,6 +90,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("measurement_bug", build_measurement_bug_section),
     ("memory_contagion", build_memory_contagion_section),
     ("promotion_readiness", build_promotion_readiness_section),
+    ("self_contamination", build_self_contamination_section),
     ("weak_signals", build_weak_signals_section),
     ("testpaths_coverage", build_testpaths_coverage_section),
     ("skill_triage", build_skill_triage_section),
