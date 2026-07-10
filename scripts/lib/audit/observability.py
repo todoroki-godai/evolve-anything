@@ -55,6 +55,7 @@ from .sections_self_contamination import build_self_contamination_section
 from .sections_skill_vuln import build_skill_vuln_section
 from .sections_subagent_noise import build_subagent_noise_section
 from .sections_subagent_traces import build_subagent_traces_section
+from .sections_takeoff import build_worker_takeoff_section
 from .sections_testpaths import build_testpaths_coverage_section
 from .sections_triage import build_skill_triage_section
 from .sections_verbosity import build_verbosity_section
@@ -80,6 +81,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("fanout_cost", build_fanout_cost_section),
     ("subagent_traces", build_subagent_traces_section),
     ("subagent_noise", build_subagent_noise_section),
+    ("worker_takeoff", build_worker_takeoff_section),
     ("verbosity", build_verbosity_section),
     ("memory_capability", build_memory_capability_section),
     ("memory_index_orphan", build_memory_index_orphan_section),
