@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.117.0</span>
+    <span class="header-version">v1.119.0</span>
   </div>
 </header>
 
@@ -295,7 +295,7 @@
       <table class="arch-table">
         <thead><tr><th>コンポーネント</th><th>説明</th></tr></thead>
         <tbody>
-          <tr><td>Observe hooks (23個)</td><td>LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録する</td></tr>
+          <tr><td>Observe hooks (24個)</td><td>LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録する</td></tr>
           <tr><td>Auto Trigger</td><td>セッション終了・corrections 蓄積・ファイル変更時に evolve/audit 実行を自動提案する (<code>trigger_engine.py</code>)</td></tr>
           <tr><td>spec_trigger</td><td>main に着地した「挙動コード（<code>scripts/**.py</code>・<code>hooks/**.py</code>）を変えたのに仕様アーティファクト（SPEC.md・CLAUDE.md・spec/・docs/decisions/ 等）を未更新」のマージを SessionStart で検出し spec-keeper update / ADR 化を1回提案する（[ADR-044]）。/ship を経ない <code>gh pr merge</code> 直叩き・GitHub web squash マージの無音穴を塞ぐ。ゲートは実コーパス 40 commit の dry 適用で較正（feat/refactor/feat! を信号源とし fix は除外）。cooldown(3日)+リマインド1回+解消プロキシで重複抑制、<code>spec_trigger_enabled</code> で無効化可。決定論・LLM 非依存</td></tr>
           <tr><td>capture_rate</td><td>correction capture 率（20+ ターン session のうち correction 検出割合）を決定論算出し audit に advisory surface（#421）</td></tr>
@@ -363,6 +363,9 @@
           <tr><td>verbosity</td><td>回答冗長性の学習ループ — Stop hook がゼロ LLM で足切り超の長応答を記録し judge が Haiku バッチで「無駄に冗長か」+7パターンを判定、verbose を weak_signals <code>channel=verbosity</code> に emit（reflect 昇格に相乗り）。多発パターンから rules/concise.md 追記案を提示（auto-apply しない・protected）（#75）</td></tr>
           <tr><td>artifacts_hygiene</td><td>artifact 衛生4検出器（グローバル CLAUDE.md 空/未存在 / SKILL.md 欠落 dir / バックアップ残置 / skill 名跨 scope 重複・symlink wrapper 除外）を advisory 共通枠で observability に surface。決定論・LLM 非依存（#124, #125, #126, #129）</td></tr>
           <tr><td>memory_hygiene</td><td>memory dir 衛生3検出器（MEMORY.md 索引孤児 / auto-memory frontmatter スキーマ検証 / 旧 PJ memory 完全重複残骸=fleet 横断・退避手順提案のみ auto-apply なし）。3件とも clean 時非表示・走査は *.md のみ（#127, #128, #131）</td></tr>
+          <tr><td>agent_tier</td><td>agent frontmatter の <code>tier:</code> 宣言とモデル割り振りポリシー（HEAD=opus/xhigh 〜 REVIEW=fable/high）の不整合を決定論検査する advisory ゲート — tier↔model/effort 不一致・exact-ID pin・missing_tier・env 上書きを surface。auto-fix なし（agent は protected）（#180）</td></tr>
+          <tr><td>invalid_frontmatter</td><td>YAML frontmatter が壊れて CC 発火不能なスキルを直接 surface する observability section — <code>detect_frontmatter_error</code>（純関数）が YAMLError/非dict を検出し missing_effort への誤分類も根治。clean 時沈黙・auto-fix なし（#167）</td></tr>
+          <tr><td>self_contamination</td><td>自己汚染ハルシネーション指紋（生タグ漏出 / 偽 system-reminder / 汚染宣言×tool_result 原文非在）を transcript の byte-level 照合で恒久計測する read-only advisory — opus 1M 長大セッションで増加した #70900 型の作話を週次推移で監視し Layer 1 hook 要否を判断（#190）</td></tr>
         </tbody>
       </table>
 
