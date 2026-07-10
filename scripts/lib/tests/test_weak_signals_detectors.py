@@ -157,3 +157,21 @@ def test_rephrase_skips_short_utterances() -> None:
         _utt("s1", 2, "はい"),
     ]
     assert detect_rephrase(utts, "evolve-anything") == []
+
+
+def test_rephrase_excludes_teammate_message(tmp_path: Path) -> None:
+    """teammate-message / idle_notification は inter-agent 機械ノイズであり言い直しでない（#185 claim1）。
+
+    実コーパス（evolve-anything weak_signals.jsonl）で 38 件中 25 件が
+    "Another Claude session sent a message:\\n<teammate-message ...>{\"type\":\"idle_notification\"...}"
+    形状で rephrase 誤検出していた。
+    """
+    utts = [
+        _utt("s1", 67, "Another Claude session sent a message:\n"
+             "<teammate-message teammate_id=\"collector-b\" color=\"green\">\n"
+             "{\"type\":\"idle_notification\",\"agent\":\"collector-b\"}"),
+        _utt("s1", 90, "Another Claude session sent a message:\n"
+             "<teammate-message teammate_id=\"collector-a\" color=\"blue\">\n"
+             "{\"type\":\"idle_notification\",\"agent\":\"collector-a\"}"),
+    ]
+    assert detect_rephrase(utts, "evolve-anything") == []

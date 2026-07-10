@@ -401,3 +401,47 @@ def test_resolve_idiom_keys_unknown_signal_returns_empty(tmp_path: Path) -> None
         ["nonexistent"], weak_signals_path=ws, idioms_path=idioms,
     )
     assert mapping == {}
+
+
+# ── #185 claim3: reject/既読（record_reviewed）を read_unpromoted の除外条件に含める ──
+# daily_review.record_reviewed(decision="rejected") で却下された weak_signal は promoted=True
+# にならないため、既読ストア（correction_review_seen.jsonl）を参照しないと read_unpromoted /
+# material_count に永遠に残り続け「reject しても件数が減らない」非対称が起きる（#185）。
+
+
+def test_read_unpromoted_excludes_rejected_signal(tmp_path: Path) -> None:
+    """既読ストアで decision=rejected と記録された signal は候補から除外される。"""
+    from correction_semantic import daily_review as cs_daily_review
+
+    ws = tmp_path / "weak_signals.jsonl"
+    seen = tmp_path / "correction_review_seen.jsonl"
+    sigs = _seed_signals(ws)
+    cs_daily_review.record_reviewed(
+        [sigs[0].signal_key], "evolve-anything", decision="rejected", path=seen,
+    )
+    unp = cs_promote.read_unpromoted(weak_signals_path=ws, seen_path=seen)
+    assert [r["signal_key"] for r in unp] == [sigs[1].signal_key]
+
+
+def test_read_unpromoted_can_include_reviewed_when_disabled(tmp_path: Path) -> None:
+    """exclude_reviewed=False なら既読でも除外しない（後方互換）。"""
+    from correction_semantic import daily_review as cs_daily_review
+
+    ws = tmp_path / "weak_signals.jsonl"
+    seen = tmp_path / "correction_review_seen.jsonl"
+    sigs = _seed_signals(ws)
+    cs_daily_review.record_reviewed(
+        [sigs[0].signal_key], "evolve-anything", decision="rejected", path=seen,
+    )
+    unp = cs_promote.read_unpromoted(
+        weak_signals_path=ws, seen_path=seen, exclude_reviewed=False,
+    )
+    assert len(unp) == 2
+
+
+def test_read_unpromoted_unaffected_when_no_seen_store(tmp_path: Path) -> None:
+    """既読ストアが存在しなければ従来どおり全件返る（後方互換）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    seen = tmp_path / "correction_review_seen.jsonl"  # 未作成
+    _seed_signals(ws)
+    assert len(cs_promote.read_unpromoted(weak_signals_path=ws, seen_path=seen)) == 2
