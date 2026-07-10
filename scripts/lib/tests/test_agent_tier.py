@@ -5,8 +5,8 @@
 `check_subagent_model_env_override` を検証する。
 
 ポリシー（ティア↔model/effort の正典）:
-    HEAD   → model=opus,   effort=xhigh
-    HARD   → model=opus,   effort=high
+    HEAD   → model=sonnet, effort=max
+    HARD   → model=sonnet, effort=xhigh
     NORMAL → model=sonnet, effort=medium
     MECH   → model=haiku,  effort=無し（haiku は effort 非対応）
     REVIEW → model=fable,  effort=high
@@ -21,13 +21,13 @@ def _types(findings):
 # --- 正例（適合）: findings 無し ------------------------------------------
 
 
-def test_head_opus_xhigh_is_clean():
-    fm = {"name": "head-agent", "tier": "HEAD", "model": "opus", "effort": "xhigh"}
+def test_head_sonnet_max_is_clean():
+    fm = {"name": "head-agent", "tier": "HEAD", "model": "sonnet", "effort": "max"}
     assert agent_tier.check_agent_tier(fm) == []
 
 
-def test_hard_opus_high_is_clean():
-    fm = {"name": "hard-agent", "tier": "HARD", "model": "opus", "effort": "high"}
+def test_hard_sonnet_xhigh_is_clean():
+    fm = {"name": "hard-agent", "tier": "HARD", "model": "sonnet", "effort": "xhigh"}
     assert agent_tier.check_agent_tier(fm) == []
 
 
@@ -79,11 +79,11 @@ def test_model_absent_does_not_flag_mismatch():
 
 
 def test_tier_effort_mismatch_head_with_medium():
-    fm = {"name": "h", "tier": "HEAD", "model": "opus", "effort": "medium"}
+    fm = {"name": "h", "tier": "HEAD", "model": "sonnet", "effort": "medium"}
     findings = agent_tier.check_agent_tier(fm)
     assert "tier_effort_mismatch" in _types(findings)
     em = next(f for f in findings if f["type"] == "tier_effort_mismatch")
-    assert "xhigh" in em["detail"]
+    assert "max" in em["detail"]
 
 
 def test_mech_with_effort_is_mismatch():
@@ -95,7 +95,7 @@ def test_mech_with_effort_is_mismatch():
 
 def test_effort_absent_not_flagged_for_non_mech():
     # effort 未宣言はセッション既定に委ねる正当な選択。mismatch にしない
-    fm = {"name": "h", "tier": "HEAD", "model": "opus"}
+    fm = {"name": "h", "tier": "HEAD", "model": "sonnet"}
     assert "tier_effort_mismatch" not in _types(agent_tier.check_agent_tier(fm))
 
 
@@ -111,14 +111,14 @@ def test_exact_id_pin_detected():
 
 
 def test_exact_id_pin_does_not_produce_model_mismatch_when_tier_matches():
-    # claude-opus-4-8 は HEAD の期待モデル opus に解決されるので mismatch は出ない
-    fm = {"name": "h", "tier": "HEAD", "model": "claude-opus-4-8", "effort": "xhigh"}
+    # claude-sonnet-5 は HEAD の期待モデル sonnet に解決されるので mismatch は出ない
+    fm = {"name": "h", "tier": "HEAD", "model": "claude-sonnet-5", "effort": "max"}
     types = _types(agent_tier.check_agent_tier(fm))
     assert "tier_model_mismatch" not in types
 
 
 def test_alias_model_not_flagged_as_pin():
-    fm = {"name": "h", "tier": "HEAD", "model": "opus", "effort": "xhigh"}
+    fm = {"name": "h", "tier": "HEAD", "model": "sonnet", "effort": "max"}
     assert "exact_id_pin" not in _types(agent_tier.check_agent_tier(fm))
 
 
