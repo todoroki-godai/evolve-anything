@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.120.0</span>
+    <span class="header-version">v1.121.0</span>
   </div>
 </header>
 
@@ -370,6 +370,8 @@
           <tr><td>tier スキル</td><td><code>/evolve-anything:tier</code> — <code>evolve_tier</code> CLI の対話 UX ラッパー。現状表示→発話解釈（曖昧なら AskUserQuestion）→<code>set</code>→<code>sync</code> の dry-run diff 提示→明示承認後のみ <code>--apply</code>→<code>drift</code> advisory の順で安全に操作。ファイル直接編集はしない（#193）</td></tr>
           <tr><td>judge_audit</td><td>LLM judge の false-pass（失敗を合格と誤判定）欠陥注入監査（The Blind Curator、arXiv 2607.07436）。既知の欠陥 fixture 6件を judge の実プロンプト/パーサに流し、スキル退役ゲートを無音で無効化しうる false-pass 率を opt-in CLI ハーネスで計測。floor=min(5, fixture総数)・20% 超で ⚠（#188）</td></tr>
           <tr><td>memory_guard（TRUSTMEM 型拡張）</td><td>auto-memory が同名の既存 memory エントリを更新する書込に対し coverage（重要行の大量欠落）/ preservation（<code>metadata.type</code> の矛盾上書き）/ fidelity（冒頭行の極性反転疑い）を difflib ベースで決定論検証するゲート。同名エントリが無い書込は対象外（block しない）。#108 の汚染検出の拡張（#93, arXiv 2606.25161）</td></tr>
+          <tr><td>skill_reachability</td><td>SKILL.md 散文が宣言する callable が production コードから到達不能な「ゾンビ宣言」を AST 静的解析で決定論検出。実較正で真のゾンビ11件検出（FP 0）。audit advisory + dogfood gate light 非ブロッキング警告（#191）</td></tr>
+          <tr><td>worker_takeoff</td><td>subagent の「completed 報告」↔実際の完遂の意味的乖離を決定論検知 — 最終 assistant メッセージの完了署名欠如×前向きナレーション終端の2シグナル AND で判定し、疑いのある agent_type のみ ⚠ advisory 表示（#161）</td></tr>
         </tbody>
       </table>
 
@@ -397,6 +399,8 @@
           <tr><td>measurement_bug</td><td>複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185）</td></tr>
           <tr><td>fleet_queue</td><td>学習素材ベースの evolve 待ち列挙 <code>evolve-fleet queue</code> — material_count = weak 未処理 + 前回 evolve 以降の新規 corr が閾値（既定5）以上の PJ を決定論・ゼロ LLM で列挙。新ストア <code>evolve-queue-state.jsonl</code> が per-PJ の前回 evolve 時刻を測る。dead/rename/phantom PJ を透明化（#79, #85–#88）</td></tr>
           <tr><td>daily</td><td>毎朝の evolve queue 自動実行 + SessionStart 通知 — launchd で <code>fleet ingest</code>→<code>fleet queue --json</code> を毎朝1回走らせ、待ち PJ を systemMessage で通知（無人は決定論まで・適用は対話で人間承認）。<code>bin/evolve-daily-install</code> で登録（#80）</td></tr>
+          <tr><td>fleet_propose</td><td><code>evolve-fleet propose</code> — queue 待ち PJ へ <code>run_evolve(dry_run=True)</code> を順次実行し提案を集約レポート <code>evolve-proposals-&lt;date&gt;.md/.json</code> に束ねる。llm-batch-guard 承認ゲート + reject 済み提案の再提示抑制付き（#81）</td></tr>
+          <tr><td>fleet_pr</td><td><code>evolve-fleet pr-start</code>/<code>pr-finish</code> — 承認済み提案の worktree 準備→（対話 evolve で人間が適用）→commit→push アカウント検証→PR 作成。適用とマージは常に人間、自動化は外殻のみ（#82）</td></tr>
           <tr><td>testpaths_coverage</td><td>pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468）</td></tr>
           <tr><td>plugin_self origin</td><td>プラグイン本体リポジトリ自身の repo 直下 skills/ を evolve 診断対象化 — <code>.claude-plugin/plugin.json</code> 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185）</td></tr>
           <tr><td>dogfood gate</td><td>通し評価ゲート <code>bin/evolve-dogfood-gate</code> — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 非 dry-run store 差分（Layer1b・<code>evolve --drain --result-json</code> の隔離実行で weak_signals 永続化方向を assert）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。evolve.py の DATA_DIR を env 優先解決に統一（#517）。<code>--layer light</code>（Layer1a 不変 + Layer2 + Layer3、約十数秒・Layer1b drain と ingest 除外）を pre-push hook（<code>scripts/git-hooks/pre-push.local</code>・非ブロッキング警告。gate 終了コードを区別し古い gate を誤警告しない）が自動実行。リリース前の実環境 dogfood E2E（#496, #513, #517, #518）</td></tr>
