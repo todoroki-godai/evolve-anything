@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.119.1</span>
+    <span class="header-version">v1.120.0</span>
   </div>
 </header>
 
@@ -366,6 +366,10 @@
           <tr><td>agent_tier</td><td>agent frontmatter の <code>tier:</code> 宣言とモデル割り振りポリシー（HEAD=opus/xhigh 〜 REVIEW=fable/high）の不整合を決定論検査する advisory ゲート — tier↔model/effort 不一致・exact-ID pin・missing_tier・env 上書きを surface。auto-fix なし（agent は protected）（#180）</td></tr>
           <tr><td>invalid_frontmatter</td><td>YAML frontmatter が壊れて CC 発火不能なスキルを直接 surface する observability section — <code>detect_frontmatter_error</code>（純関数）が YAMLError/非dict を検出し missing_effort への誤分類も根治。clean 時沈黙・auto-fix なし（#167）</td></tr>
           <tr><td>self_contamination</td><td>自己汚染ハルシネーション指紋（生タグ漏出 / 偽 system-reminder / 汚染宣言×tool_result 原文非在）を transcript の byte-level 照合で恒久計測する read-only advisory — opus 1M 長大セッションで増加した #70900 型の作話を週次推移で監視し Layer 1 hook 要否を判断（#190）</td></tr>
+          <tr><td>evolve_tier</td><td>モデルティア（HEAD/HARD/NORMAL/MECH/REVIEW ↔ model/effort）の正典を <code>~/.claude/model-tiers.json</code> に一元化する CLI（<code>bin/evolve-tier</code>）— 正典散在による手動追従漏れを解消。<code>set</code>（正典更新）と <code>sync [--apply]</code>（agent frontmatter・settings.json・routing rule マーカーへ反映・既定 dry-run・冪等）を分離、<code>drift</code> で stale なモデルエイリアスの散文残存を advisory 検出。<code>agent_tier</code> gate は call-time でこの config を参照（#193）</td></tr>
+          <tr><td>tier スキル</td><td><code>/evolve-anything:tier</code> — <code>evolve_tier</code> CLI の対話 UX ラッパー。現状表示→発話解釈（曖昧なら AskUserQuestion）→<code>set</code>→<code>sync</code> の dry-run diff 提示→明示承認後のみ <code>--apply</code>→<code>drift</code> advisory の順で安全に操作。ファイル直接編集はしない（#193）</td></tr>
+          <tr><td>judge_audit</td><td>LLM judge の false-pass（失敗を合格と誤判定）欠陥注入監査（The Blind Curator、arXiv 2607.07436）。既知の欠陥 fixture 6件を judge の実プロンプト/パーサに流し、スキル退役ゲートを無音で無効化しうる false-pass 率を opt-in CLI ハーネスで計測。floor=min(5, fixture総数)・20% 超で ⚠（#188）</td></tr>
+          <tr><td>memory_guard（TRUSTMEM 型拡張）</td><td>auto-memory が同名の既存 memory エントリを更新する書込に対し coverage（重要行の大量欠落）/ preservation（<code>metadata.type</code> の矛盾上書き）/ fidelity（冒頭行の極性反転疑い）を difflib ベースで決定論検証するゲート。同名エントリが無い書込は対象外（block しない）。#108 の汚染検出の拡張（#93, arXiv 2606.25161）</td></tr>
         </tbody>
       </table>
 
