@@ -3,7 +3,7 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-05-21 (implement スキルに depends_on グラフ追加)
+Last updated: 2026-07-10 (`/evolve-anything:tier` 追加 #193)
 
 ## スキルコマンド
 
@@ -22,6 +22,7 @@ Last updated: 2026-05-21 (implement スキルに depends_on グラフ追加)
 | `/evolve-anything:second-opinion` | Claude Agent セカンドオピニオン（startup/builder/general） | low || `/evolve-anything:implement` | plan artifact → 複雑性アセスメント（shallow/standard/deep）→ 深度別実装（Standard/Parallel）→ テレメトリ記録。タスク表に depends_on グラフ（task # 列記）を追加し循環依存を topological sort で検出、Ralph Loop 開始前に Ready/Blocked 一覧を表示して依存順に実行 | high |
 | `/evolve-anything:version` | バージョン・ステータス表示 | low |
 | `/evolve-anything:spec-keeper` | SPEC.md + ADR 管理（init/update/adr/status） | medium |
+| `/evolve-anything:tier` | モデルティア（HEAD/HARD/NORMAL/MECH/REVIEW）変更の対話 UX ラッパー。現状表示→発話解釈→`set`→`sync` dry-run diff 提示→明示承認後 `--apply`→`drift` advisory の順で安全に操作（実体は `bin/evolve-tier`、#193） | medium |
 | `/evolve-anything:philosophy-review` | セッション履歴を Judge LLM で評価し哲学原則違反を corrections.jsonl 注入 | medium |
 | `/evolve-anything:import <source>` | コミュニティリポジトリからスキルをインポート（`bin/evolve-fleet import` のラッパー） | low |
 | `/evolve-anything:cleanup` | PR マージ・デプロイ後の後片付け（マージ済みブランチ / remote refs prune / 一時 worktree / 一時ディレクトリ / close 候補 Issue / PR Test plan 残件）を候補提示→個別承認→実行 | low |
