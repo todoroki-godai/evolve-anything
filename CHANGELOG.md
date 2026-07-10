@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **fix(weak): queue/weak material がレビュー不能ノイズを計上し reject で減らない問題を是正（closes #185）** — (claim1) rephrase detector の機構ターン除外（`_DISPATCH_MARKERS`）に `<teammate-message` / `idle_notification` を追加し、inter-agent の機械メッセージ（"Another Claude session sent a message:\n<teammate-message ...>{\"type\":\"idle_notification\"...}"）を「言い直し」として誤検出しないようにした（実 corpus で rephrase 38 件中 25 件がこの teammate ノイズだった）。(claim3) `correction_semantic.promote.read_unpromoted` に `exclude_reviewed`（既定 True）を追加し、既読ストア `correction_review_seen.jsonl`（daily_review の record_reviewed で promoted/rejected を記録）に含まれる signal_key を **read 時導出**で候補から除外（`is_effectively_expired` #89 と同じ forward-write 非依存方針）。daily_review.record_reviewed(decision="rejected") は weak_signal の promoted フラグを立てないため、既読を見ないと reject 済みが material_count に永遠に残り「reject しても件数が減らない」非対称が起きていた。除外ロジックは read_unpromoted 単一関数に集約し、全 reader（fleet/queue.py の weak_unprocessed_by_pj / bootstrap_consumed_by_pj、fleet/cli.py の _collect_material_slugs、idiom_autopromote）へ自動反映（#94 の2系統分裂を回避）。実データ検証で reject/既読 41 件が material から除外。TDD +4件・決定論・LLM 非依存。
+
 ## [1.119.0] - 2026-07-10
 
 ### Added
