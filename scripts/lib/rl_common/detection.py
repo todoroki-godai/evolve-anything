@@ -229,3 +229,91 @@ def is_noise_agent_type(agent_type) -> bool:
     ノイズ種別（空 / ID 形）の内訳は noise_agent_type_kind を参照（#142-8b）。
     """
     return noise_agent_type_kind(agent_type) is not None
+
+
+# worker-takeoff（completed≠完遂）の決定論検知（#161）。
+# hooks/subagent_observe.py の MAX_MESSAGE_LENGTH と同値（値のみ複製・意図的）。
+# last_assistant_message はそこで**先頭から**この長さに切り詰められるため、切り詰め後の
+# 末尾は実際の文末ではない（元がもっと長ければ、完了署名がちょうど末尾に来る規約
+# （例: `=== IMPL COMPLETE ... ===`）でも打ち切りで欠落しうる）。判定材料として
+# 信用できないため、この長さに達したメッセージは判定不能（None）として扱う。
+TRUNCATED_LEN = 500
+
+# 完了署名: `=== ... ===` 終端マーカー（IMPL COMPLETE / IMPL BLOCKED / SCOUT COMPLETE 等の
+# 具体語彙を限定せず、bookend 構造そのものを見る）。
+_TAKEOFF_COMPLETION_MARKER_RE = re.compile(r"^===\s*\S.*\S\s*===\s*$")
+# 報告見出し（`## 実装完了報告` 等）。markdown 見出し行に完了/報告語を含むかで判定。
+_TAKEOFF_REPORT_HEADING_KEYWORDS = ("完了報告", "完了", "レポート", "報告")
+# 前向きナレーション終端: 最終行が Now/Next/Let's 系の進行形で始まる（英語）。
+_TAKEOFF_FORWARD_START_RE = re.compile(
+    r"^(now|next|let[\'’]?s|let me|i\'ll|i will|going to|we\'ll|we will)\b",
+    re.IGNORECASE,
+)
+
+
+def _takeoff_has_completion_signature(text: str) -> bool:
+    """完了署名（=== ... === マーカー or 完了/報告見出し）がテキスト中に無いかを判定する。"""
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if _TAKEOFF_COMPLETION_MARKER_RE.match(s):
+            return True
+        if s.startswith("#") and any(kw in s for kw in _TAKEOFF_REPORT_HEADING_KEYWORDS):
+            return True
+    return False
+
+
+_TAKEOFF_SENTENCE_SPLIT_RE = re.compile(r"[\n。！？.!?]")
+
+
+def _takeoff_last_segment(text: str) -> str:
+    """改行 or 文末記号（。！？.!?）で区切った最後の非空セグメントを返す。
+
+    1 行の中に複数文が詰まっている（transcript のテキストブロックは改行を挟まないことが
+    多い）ケースでも、"...しました。Now let's ..." のように**文単位**で前向きナレーション
+    開始を検出できるようにする（行単位だと文頭にならず検出漏れになるため）。
+    """
+    for seg in reversed(_TAKEOFF_SENTENCE_SPLIT_RE.split(text)):
+        s = seg.strip()
+        if s:
+            return s
+    return ""
+
+
+def _takeoff_ends_with_forward_narration(text: str) -> bool:
+    """最終行が `:`/`：` 終端、または最終文が Now/Next/Let's 系進行形で始まるかを判定する。"""
+    stripped = text.strip()
+    if stripped.endswith(":") or stripped.endswith("："):
+        return True
+    last = _takeoff_last_segment(text)
+    if not last:
+        return False
+    return bool(_TAKEOFF_FORWARD_START_RE.match(last))
+
+
+def detect_takeoff_divergence(last_assistant_message):
+    """worker-takeoff（completed≠完遂）の疑いを最終 assistant メッセージから判定する（#161）。
+
+    subagent が harness に completed 扱いされたのに、報告テキストが「完了報告」でなく
+    中間ナレーションのまま終わっている疑いを検出する。保守側（FP 抑制）の2シグナル AND:
+    ① 完了署名が無い（`=== ... ===` マーカー / 報告見出しがテキスト中に見当たらない）
+    ② 前向きナレーション終端（最終行が `:`/`：` で終わる、または Now/Next/Let's 系の
+       進行形で始まる）
+    ①単独では flag しない（終端マーカー規約を持たない agent 種で FP になるため）。
+
+    Returns:
+        True: 疑いあり（① and ②）
+        False: 疑いなし（完了署名がある、または前向きナレーション終端でない）
+        None: 判定不能（空 / 非文字列 / TRUNCATED_LEN 到達で末尾情報が信用できない）
+    """
+    if not isinstance(last_assistant_message, str):
+        return None
+    if len(last_assistant_message) >= TRUNCATED_LEN:
+        return None
+    text = last_assistant_message.strip()
+    if not text:
+        return None
+    no_signature = not _takeoff_has_completion_signature(text)
+    forward_ending = _takeoff_ends_with_forward_narration(text)
+    return no_signature and forward_ending

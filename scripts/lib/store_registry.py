@@ -158,7 +158,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
     StoreDeclaration(
         name="subagents.jsonl",
         writer="hooks（サブエージェント生成の記録）",
-        reader="audit / subagent 観測が消費",
+        reader="audit / subagent 観測が消費。"
+        "audit/sections_takeoff.py（worker_takeoff）が `last_assistant_message` を "
+        "read-time で判定し完了報告↔内部完遂の乖離を advisory surface（#161）。",
         retention="permanent",
         note="サブエージェントテレメトリ。",
     ),

@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(audit): worker-takeoff（completed≠完遂）の決定論検知を追加（`worker_takeoff`、closes #161）** — subagent が harness に completed 扱いされたのに最終出力が完了報告でなく中間ナレーションのまま止まっている乖離（arXiv 2607.02507 の off-record/public 乖離検知を自己運用に転写）を、これまでは頭が毎回手で git 突合して回収していた。subagents.jsonl の既存フィールド `last_assistant_message`（SubagentStop hook が記録する最終 assistant テキスト）から `rl_common.detect_takeoff_divergence` で read 時に判定する決定論2シグナル AND（①完了署名`=== ... ===`マーカー/報告見出しの欠如 ②前向きナレーション終端＝行末`:`/Now・Next・Let's系。①単独では flag しない・FP 保守側）。最終メッセージが hooks 側 `MAX_MESSAGE_LENGTH`(=500) で切り詰められている場合は末尾情報が信用できないため判定不能（None・未評価）として除外する。新ストア・新フィールドは追加せず既存 subagents.jsonl を直接読む（`sections_subagent_noise.py` と同型の union read + pj_slug scope + `is_noise_agent_type` 除外 + agent_id 単位 last-append-wins）。`audit/sections_takeoff.build_worker_takeoff_section` が疑いのある agent_type のみ ⚠ で advisory surface（疑い0件は沈黙・スコア重み非関与）。LLM 判定（Haiku 格上げ）は今回スコープ外（issue の再評価条件に残す）。TDD +18件・決定論・LLM 非依存。
+
 ## [1.120.0] - 2026-07-10
 
 ### Added
