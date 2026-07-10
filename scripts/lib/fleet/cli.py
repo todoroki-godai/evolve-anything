@@ -1,7 +1,8 @@
 """evolve-fleet CLI エントリポイント (argparse + status / discover / test-guard サブコマンド)。
 
-`tokens` サブコマンドは `cli_tokens.py` に分離済み。fleet/__init__.py から
-re-export される（後方互換、`bin/evolve-fleet` は `fleet.main` を呼ぶ）。
+`tokens` サブコマンドは `cli_tokens.py`、`propose` サブコマンド本体は `cli_propose.py` に
+分離済み（800 行ハード上限対策）。fleet/__init__.py から re-export される
+（後方互換、`bin/evolve-fleet` は `fleet.main` を呼ぶ）。
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from . import (
     _DEFAULT_MAX_WORKERS,
     _DEFAULT_TIMEOUT_SEC,
 )
+from .cli_propose import run_propose_command as _run_propose
 from .cli_tokens import _inject_token_metrics, _run_tokens
 from .collectors import collect_fleet_status, detect_equal_issue_counts, write_fleet_run
 from .formatters import format_status_json, format_status_table
@@ -148,6 +150,21 @@ def main(argv: list[str] | None = None) -> int:
                          help="（予約・現状 queue は逐次集計のため未使用）")
     queue_p.add_argument("--json", action="store_true", help="JSON 出力（Phase 1b #80 契約）")
 
+    propose_p = sub.add_parser(
+        "propose",
+        help="queue の待ち PJ に evolve --dry-run 提案をバッチ生成し、集約レポート（md+json）を作る（#81）",
+    )
+    propose_p.add_argument(
+        "--live", action="store_true",
+        help="evolve-queue.json でなく fleet queue ロジックを直接実行して対象を最新化する",
+    )
+    propose_p.add_argument("--max-pj", type=int, default=5, help="対象 PJ 数の上限（default: 5）")
+    propose_p.add_argument("--yes", "-y", action="store_true", help="コスト確認プロンプトをスキップ")
+    propose_p.add_argument("--root", type=Path, default=None,
+                           help="--live 時の PJ 列挙ルート（fleet-config 未設定時の fallback）")
+    propose_p.add_argument("--threshold", type=int, default=_default_queue_threshold(),
+                           help="--live 時の待ち判定閾値（default: 5。env EVOLVE_QUEUE_THRESHOLD で上書き可）")
+
     args = parser.parse_args(argv)
 
     if args.command == "discover":
@@ -170,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_migrate_pj_slug(args)
     if args.command == "queue":
         return _run_queue(args)
+    if args.command == "propose":
+        return _run_propose(args)
 
     # default: status
     return _run_status(args)

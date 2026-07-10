@@ -139,10 +139,27 @@ from .queue_state import (  # noqa: E402, F401
 )
 
 
+# queue の待ち PJ への evolve --dry-run 提案バッチ生成（#81 Phase 2）は fleet/propose.py に集約
+from .propose import (  # noqa: E402, F401
+    build_batch_report,
+    confirm_batch,
+    estimate_cost,
+    filter_previously_rejected_candidates,
+    format_cost_confirmation,
+    render_cli_summary,
+    render_markdown_report,
+    run_propose_batch,
+    select_targets,
+    summarize_pj_result,
+    write_reports,
+)
+
+
 # CLI エントリポイント (main / _run_status / _run_test_guard / _run_discover) は
 # fleet/cli.py に集約済み（後方互換のため再エクスポート、bin/evolve-fleet は fleet.main を呼ぶ）
 from .cli import (  # noqa: E402, F401
     _run_discover,
+    _run_propose,
     _run_queue,
     _run_recall,
     _run_status,
