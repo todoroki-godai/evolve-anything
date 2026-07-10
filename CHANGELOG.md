@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.119.0] - 2026-07-10
 
 ### Added
 - **feat(audit): 自己汚染ハルシネーション指紋を測る Layer 2 observability section を追加（`self_contamination`）** — opus 1M 長大セッションで assistant が tool_result 原文に無い偽指示を自己生成し「外部汚染」と誤認してラッチする現象（Anthropic #70900 型・2026-07-10 実測で operational 23→49 件/週に増加確認・外部実 injection はゼロ・fable 頭は反証）の指紋率を、既存 transcript の audit 実行時走査で恒久計測する read-only advisory（hook / store 新設なし。live 抑止 Layer 1 hook の前に価値と検出精度を証明する Layer 2・tacchi 設計レビュー条件付きGO準拠）。検出コア `self_contamination_scan.py`（純関数・ゼロ LLM）が 3 系統を検出: Family A=生タグ漏出（code fence 除外＋invoke 開き+parameter/閉じの構造完全性要求で散文言及 FP を排除）/ B=偽 system-reminder / C-lite=汚染宣言×原文非在（汚染語彙×引用リテラル≥12字×直前 K=5 tool_result への空白正規化照合の 3 条件 AND・高精度低再現と明記・path/code/衛生ルール引用を除外）。tool_result 原文（外部）と assistant text/thinking（内部）を厳密分離。operational PJ と話題 PJ（evolve-anything 自身＝FP 源）を分離集計し section で明示注記。実 corpus 較正（直近7日窓 477 セッション・wall 5s）: Family A 43 件で oracle 厳密再現（recall 実質100%）・figma 既知 positive 3 件取りこぼしなし・Family C は FP 除去で 48→29 件（precision 約45%が zero-LLM 上限＝低精度レーンと注記）。advisory は #115 共通枠（scaffold 経由）・clean 時沈黙・period-over-period 推移＋代表例（作話 vs 原文の対比）表示。TDD +30件・決定論・LLM 非依存。
