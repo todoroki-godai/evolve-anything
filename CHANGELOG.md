@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **fix(verbosity): channel="verbosity" を REVIEW_CHANNELS に追加し昇格導線へ接続（closes #171）** — #75 の冗長性学習ループが書く weak_signals `channel="verbosity"` は「reflect 昇格フローに相乗り」と記述しながら、`correction_semantic/review_channels.py` の `REVIEW_CHANNELS`（content-rich）にも `CONTENT_POOR_CHANNELS`（意図的除外）にも不在で、daily_review / bootstrap_backlog の `channel not in REVIEW_CHANNELS` skip により evolve の y/n 確認に一度も出ない write-only 経路だった（昇格実績 0 件）。verbosity は judge verdict 由来の `provenance.note`（Haiku 判定理由）+ `patterns`（冗長パターン名）を保持する content-rich チャネルなので REVIEW_CHANNELS に追加。`signal_text` に verbosity 分岐を追加し note+patterns を actionable テキストへ合成（note/patterns が無くても "冗長と判定された応答" を返し message=channel 名の空 correction を防止・#99 同注意点）、`grouping_keywords` は自由文の note でなく安定した分類名 patterns で group 化（同一パターン集合を確実に同 group へ寄せる）。**judge 自動実行導線（judge.py の定期実行化）はスコープ外**（別途対応）。TDD +11件（review_channels 単体9 / daily_review 実 provenance 形 E2E 1 + 単一ソース追従の既存 seam fence が verbosity 込みで green）・決定論・LLM 非依存。
+
 ## [1.119.0] - 2026-07-10
 
 ### Added
