@@ -38,7 +38,7 @@ def test_none_when_no_agents_and_no_env(tmp_path, monkeypatch):
 
 def test_clean_when_all_compliant(tmp_path, monkeypatch):
     agents = [
-        _agent("h", {"name": "h", "tier": "HEAD", "model": "opus", "effort": "xhigh"}),
+        _agent("h", {"name": "h", "tier": "HEAD", "model": "sonnet", "effort": "max"}),
         _agent("m", {"name": "m", "tier": "MECH", "model": "haiku"}),
     ]
     _patch(monkeypatch, agents)
@@ -78,7 +78,7 @@ def test_missing_tier_shown_as_info_count(tmp_path, monkeypatch):
 def test_exact_id_pin_surfaced(tmp_path, monkeypatch):
     agents = [
         _agent("h", {"name": "h", "tier": "HEAD", "model": "claude-opus-4-8",
-                     "effort": "xhigh"}),
+                     "effort": "max"}),
     ]
     _patch(monkeypatch, agents)
     section = build_agent_tier_section(tmp_path)
@@ -89,7 +89,7 @@ def test_exact_id_pin_surfaced(tmp_path, monkeypatch):
 
 def test_env_override_surfaced(tmp_path, monkeypatch):
     agents = [
-        _agent("h", {"name": "h", "tier": "HEAD", "model": "opus", "effort": "xhigh"}),
+        _agent("h", {"name": "h", "tier": "HEAD", "model": "sonnet", "effort": "max"}),
     ]
     _patch(monkeypatch, agents, env={"CLAUDE_CODE_SUBAGENT_MODEL": "haiku"})
     section = build_agent_tier_section(tmp_path)
