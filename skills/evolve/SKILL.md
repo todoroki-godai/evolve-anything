@@ -106,13 +106,12 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 4. **[Step 9](#step-9-report-フェーズ)** Report（TL;DR + 成長レベル + 成長状態）
 5. **[Step 10](#step-10-推奨アクションmust--スキップ厳禁)** 推奨アクション（スキップ厳禁・該当ゼロでも「なし」を出す）
 
-### (B) 条件付き — フェーズ出力にデータ／発見があった時だけ（10 ステップ）
+### (B) 条件付き — フェーズ出力にデータ／発見があった時だけ（9 ステップ）
 
 各 Step の入口に「`result.phases.X` が〜の場合」「候補があれば」等の発火条件がある。条件に当てはまらなければ
 1 行 surface（✓ クリーン）して**次へ進む**。当てはまった時だけ本文の AskUserQuestion / 適用フローを実行する。
 
 - **[Step 2](#step-2-fitness-関数チェック)** Fitness 関数チェック（`has_fitness: false` のとき生成提案）
-- **[Step 2.5](#step-25-意図確認チェックintention-check)** 意図確認（パッチ候補があるとき）
 - **[Step 3.6](#step-36-スキル自己進化適性判定)** スキル自己進化適性判定（`batch_guard_trigger` 非 null のときインタラクティブ）
 - **[Step 5.5](#step-55-remediation-フェーズ)** Remediation（`total_issues > 0` のとき分類・承認）
 - **[Step 6.1](#step-61-初回バックログ-bootstrap443)** 初回バックログ bootstrap（`bootstrap.is_bootstrap == True` のとき 3 択）
@@ -213,25 +212,6 @@ evolve.py の出力に含まれる `fitness` フェーズを確認する。
   - fitness フェーズの `generation_note` を1行で surface し、**デフォルトはスキップ**とする。`fitness_evolution` が「この PJ では fitness を使わない設計（skill 提案が構造的に出ないため calibration 母集団が貯まらない）」と判定しており、生成しても空振りになりやすいため、`fitness_evolution` の結論（Step 8）と矛盾しないよう生成提案を出さない
   - どうしても生成したい場合のみユーザーが明示的に `/evolve-anything:generate-fitness --ask` を叩く（MUST の AskUserQuestion は出さない）
 - `has_fitness: true` の場合: 利用可能な fitness 関数名を表示して次へ
-
----
-
-### Step 2.5: 意図確認チェック（Intention Check）
-
-各スキルのパッチ候補に対して `intention_check(candidate, original)` を実行し、意図逸脱を検出する。
-
-- **BLOCK** 検出条件（パッチを適用せず次のスキルへスキップ）:
-  - Trigger 行削除率 ≥ 30%
-  - `description:` キー消失
-  - `disable-model-invocation: true` → `false` への変化
-  - `## Usage` セクション完全消失
-- **WARN** 検出条件（適用はするが注意喚起）:
-  - `effort:` 値の昇降（`low` ↔ `high`）
-  - Jaccard 係数 < 0.5（テキスト類似度が低い）
-
-パイプライン完了後サマリに出力する:
-- BLOCK: `BLOCKED: {skill} ({reason})`
-- WARN: `WARNED: {skill} ({reason})`
 
 ---
 
