@@ -85,6 +85,43 @@ def _print_layer3(l3: Dict[str, Any]) -> None:
                 print(f"       {src}:{b['line']} [{b['mode']}] {b['detail']}")
 
 
+def _run_skill_reachability_advisory(repo_root: Path) -> Dict[str, Any]:
+    """SKILL.md 宣言↔実装 到達可能性の非ブロッキング advisory（#191）。
+
+    Layer1/2/3 と異なり **exit code に一切影響しない**。静的解析ゆえ FP 較正コストが高く
+    （実 SKILL.md 全件較正でも ambiguous/unresolved の判定除外が必要だった）、dogfood gate では
+    push を止めない警告として surface するだけに留める。詳細は audit の advisory section
+    （`audit/sections_skill_reachability.py`）にも同じ検出結果が出る。
+    """
+    try:
+        import skill_declaration_reachability as sdr
+    except ImportError:
+        return {"applicable": False}
+    report = sdr.detect_unreachable_declarations(repo_root)
+    return {
+        "applicable": report.has_skills,
+        "evaluated_count": report.evaluated_count,
+        "unreachable": [
+            {"name": u.name, "source": u.source, "line": u.line, "def_files": list(u.def_files)}
+            for u in report.unreachable
+        ],
+    }
+
+
+def _print_skill_reachability_advisory(advisory: Dict[str, Any]) -> None:
+    print("=== Advisory: Skill Declaration Reachability（非ブロッキング, #191） ===")
+    if not advisory.get("applicable"):
+        print("  — 非該当（skills/*/SKILL.md 無し、または skill_declaration_reachability 未解決）")
+        return
+    unreachable = advisory.get("unreachable", [])
+    if not unreachable:
+        print(f"  ✓ 評価したが該当なし（宣言 {advisory.get('evaluated_count', 0)} 件を判定）")
+        return
+    print(f"  ⚠ {len(unreachable)} 件の宣言が実装から到達不能（#170 ゾンビ宣言と同型）")
+    for u in unreachable:
+        print(f"    ・`{u['name']}()`（宣言: {u['source']}:{u['line']} / 定義: {', '.join(u['def_files'])}）")
+
+
 def _layer2_has_red(l2: Dict[str, Any]) -> bool:
     if l2.get("error"):
         return True
@@ -153,6 +190,9 @@ def main(argv: List[str] | None = None) -> int:
         report["layer3"] = l3
         exit_red = exit_red or _layer3_has_red(l3)
 
+        # 非ブロッキング advisory（#191）: exit_red / exit_error に一切加算しない。
+        report["skill_reachability"] = _run_skill_reachability_advisory(repo_root)
+
     if args.json:
         out = json.dumps(report, ensure_ascii=False, indent=2)
         print(out)
@@ -163,6 +203,8 @@ def main(argv: List[str] | None = None) -> int:
             _print_layer2(report["layer2"])
         if "layer3" in report:
             _print_layer3(report["layer3"])
+        if "skill_reachability" in report:
+            _print_skill_reachability_advisory(report["skill_reachability"])
 
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)

@@ -52,6 +52,7 @@ from .sections_outcome import build_outcome_metrics_section
 from .sections_paired import build_paired_trajectory_section
 from .sections_promotion_readiness import build_promotion_readiness_section
 from .sections_self_contamination import build_self_contamination_section
+from .sections_skill_reachability import build_skill_reachability_section
 from .sections_skill_vuln import build_skill_vuln_section
 from .sections_subagent_noise import build_subagent_noise_section
 from .sections_subagent_traces import build_subagent_traces_section
@@ -105,6 +106,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("duplicate_skill_names", build_duplicate_skill_names_section),
     ("invalid_frontmatter", build_invalid_frontmatter_section),
     ("judge_audit", build_judge_audit_section),
+    ("skill_reachability", build_skill_reachability_section),
 ]
 
 
