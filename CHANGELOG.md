@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.121.0] - 2026-07-10
 
 ### Added
 - **feat(audit): SKILL.md 宣言↔実装 到達可能性チェックを追加（`skill_reachability`、closes #191）** — #170（`intention_check` が SKILL.md 散文で「実行する」と宣言されていたが定義モジュール自身と test 以外どこからも呼ばれていなかったゾンビ宣言）の再発防止。`skill_declaration_reachability.py` が①`extract_declared_calls` で skills/\*/SKILL.md の散文（fenced code block 除く）からバッククォート inline code span `` `func(args)` `` 形の宣言 callable を抽出、②`build_call_graph_index` で scripts/\*\*.py + skills/\*\*/scripts/\*\*.py を AST 走査し定義/参照（`import ... as` エイリアス越しの参照も解決）索引を構築、③定義モジュール自身と `tests/` 配下のみが caller なら「到達不能」と判定する。caller 判定は scripts/\*\*.py の AST 参照に加え skills/\*/SKILL.md の fenced code block（python/bash）本文のテキスト一致も見る（当初 .py のみで設計したところ agent-brushup の `check_quality()` 等、SKILL.md の code block からのみ呼ばれる関数を誤って zombie 判定した実較正結果を受けての設計）。複数モジュールに同名定義がある candidate（ambiguous）・自コードベースに定義が無い candidate（unresolved、Python 標準関数/外部ライブラリ/CLI コマンド形）は誤帰属回避のため判定対象から除外する。実 SKILL.md 全件（25個）較正で `check_upstream` / `verify_fix`+`check_regression`+`rollback_fix`+`record_outcome` 等 11 件の真のゾンビ宣言を検出（false positive 0件、手動 grep で全件裏取り済み）。`audit/sections_skill_reachability.py`（#115 共通枠 `build_advisory_section` 経由、`_OBSERVABILITY_BUILDERS` 登録）で audit に advisory surface + `bin/evolve-dogfood-gate --layer light`（および `all`）に非ブロッキング警告として組込（exit code に一切影響しない）。新ストアなし・read-time 決定論・LLM 非依存。TDD +30件（core 20 / section 3 / dogfood advisory 7）。実装中に worktree 隔離下で `.claude` 除外フィルタが repo_root 自身の絶対パス（`<repo>/.claude/worktrees/<id>/...`）に反応し全ファイルを誤除外する false negative を発見・相対パス判定に修正（回帰テスト追加）。
