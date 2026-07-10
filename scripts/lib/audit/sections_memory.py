@@ -79,7 +79,8 @@ def build_memory_capability_section(project_dir: Path) -> Optional[List[str]]:
                 maintain,
                 "高いほど良い（腐敗を管理できている）",
                 f"stale {me.get('stale', 0)} / superseded {me.get('superseded', 0)} "
-                f"/ 総 {me.get('total', 0)} 件",
+                f"/ 総 {me.get('total', 0)} 件 / 記憶遷移検証(#93) reject "
+                f"{me.get('transition_rejected', 0)}/{me.get('transition_checked', 0)} 件",
             )
         )
         body.extend(
