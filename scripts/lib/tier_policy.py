@@ -204,7 +204,10 @@ def set_tier(
         raise ValueError("haiku は effort 非対応です（--effort を指定しないでください）")
 
     path = config_path if config_path is not None else tiers_config_path()
-    config = load_tiers_config(strict=False, config_path=path)
+    # strict=True: 破損 config を fail-open の defaults で黙って上書きすると
+    # targets manifest が silent 消失するため、書込系は明示エラーで止める
+    # （ファイル不在は strict でも defaults 生成なので新規作成フローは不変）。
+    config = load_tiers_config(strict=True, config_path=path)
     config.pop("_source", None)
     config.pop("_load_error", None)
     config.setdefault("version", CONFIG_VERSION)

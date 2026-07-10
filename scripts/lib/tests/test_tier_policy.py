@@ -228,6 +228,17 @@ class TestSetTier:
         leftovers = list(tmp_path.glob("*.tmp"))
         assert leftovers == []
 
+    def test_corrupt_config_rejected_not_overwritten(self, tmp_path):
+        # 手編集 typo で壊れた config を fail-open の defaults で黙って上書きすると
+        # targets manifest が silent 消失する。set は strict で明示エラーにし
+        # ファイルを無傷で残すこと。
+        path = tmp_path / "model-tiers.json"
+        corrupt = '{"tiers": {'
+        path.write_text(corrupt, encoding="utf-8")
+        with pytest.raises(ValueError):
+            tier_policy.set_tier("HEAD", "sonnet", "max", config_path=path)
+        assert path.read_text(encoding="utf-8") == corrupt
+
 
 # --- init_config -----------------------------------------------------------
 
