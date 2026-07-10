@@ -9,7 +9,7 @@
       "name": "evolve-anything",
       "source": "./",
       "description": "Automatic skill/rule optimization using direct LLM patches with fitness evaluation and human approval workflow",
-      "version": "1.119.1",
+      "version": "1.120.0",
       "author": {
         "name": "todoroki-godai"
       },

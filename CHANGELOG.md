@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.120.0] - 2026-07-10
 
 ### Added
 - **feat(skill): モデルティア変更スキル `/evolve-anything:tier` を追加**（#193 関連） — `bin/evolve-tier` CLI（#193）は実装済みだが、直接叩くには引数を覚える必要があり、安全確認（sync diff の事前提示・適用前承認）も CLI 単体では強制されない。`skills/tier/SKILL.md` を追加し、「現状表示（`show`）→ ユーザー発話から tier/model/effort を解釈（曖昧なら `AskUserQuestion`）→ `set` で正典更新 → `sync` の dry-run diff を全件提示 → **明示承認後にのみ** `sync --apply` → `drift` advisory 表示」の対話フローを提供する薄い UX ラッパー。CLI 側の設計確定事項（`drift` が見つけた散文中の古いモデルエイリアスは自動書換禁止・`~/.claude/model-tiers.json` 破損時の strict エラーを握り潰さない）をスキル本文にも明記し、頭のセッション自体のモデル変更（`/model`）は sync 対象外で別 concern であることも案内する。スキル自体はファイルを直接編集せず、全ての変更は CLI 経由（`${CLAUDE_PLUGIN_ROOT}/bin/evolve-tier` 絶対参照）。

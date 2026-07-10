@@ -1,6 +1,6 @@
 {
   "name": "evolve-anything",
-  "version": "1.119.1",
+  "version": "1.120.0",
   "description": "スキル/ルールの直接パッチ最適化と自律進化ループ",
   "author": {
     "name": "todoroki-godai"
