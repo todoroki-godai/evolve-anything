@@ -4,17 +4,9 @@ optimize.py / evolve-loop で共有するゲートチェックを一元管理す
 """
 
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-# similarity モジュール（Jaccard 係数）
-try:
-    from similarity import jaccard_coefficient, tokenize
-except ImportError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from similarity import jaccard_coefficient, tokenize
+from typing import List, Optional
 
 FORBIDDEN_PATTERNS = ["TODO", "FIXME", "HACK", "XXX"]
 
@@ -132,133 +124,6 @@ def pre_check(candidate: str, original: str) -> PreCheckResult:
         warnings.append("Frontmatter deleted")
 
     return PreCheckResult(passed=True, warnings=warnings)
-
-
-@dataclass
-class IntentionCheckResult:
-    """intention_check() の結果。"""
-
-    severity: str  # "block" | "warn" | "ok"
-    reason: str
-    details: Dict[str, Any] = field(default_factory=dict)
-
-
-# Trigger 行を検出する正規表現
-_TRIGGER_LINE_RE = re.compile(r"^\s*Trigger\s*:", re.MULTILINE | re.IGNORECASE)
-
-# Usage 大見出しを検出する正規表現
-_USAGE_HEADER_RE = re.compile(r"^#{1,3}\s+Usage\b", re.MULTILINE)
-
-# Jaccard 類似度の warn 閾値
-_JACCARD_WARN_THRESHOLD = 0.5
-
-# Trigger 行削除率の block 閾値
-_TRIGGER_DELETE_RATE_THRESHOLD = 0.3
-
-
-def intention_check(candidate: str, original: str) -> IntentionCheckResult:
-    """evolve 実行前の意図確認。候補テキストが元スキルの意図を逸脱していないか検証。
-
-    severity 優先順位: block > warn > ok。最初の block 検出で即返す。
-
-    BLOCK 検出ロジック:
-    1. Trigger 行削除率 ≥ 30%
-    2. description キー消失
-    3. disable-model-invocation: true → false への変化
-    4. Usage/実行セクション完全消失
-
-    WARN 検出ロジック:
-    1. effort 昇降 (low ↔ high)
-    2. Jaccard 係数 < 0.5
-
-    Args:
-        candidate: パッチ候補テキスト
-        original: 元のファイル内容
-
-    Returns:
-        IntentionCheckResult(severity, reason, details)
-    """
-    # ── BLOCK チェック ────────────────────────────────────────────────
-
-    # 1. Trigger 行削除率チェック
-    original_trigger_count = len(_TRIGGER_LINE_RE.findall(original))
-    if original_trigger_count > 0:
-        candidate_trigger_count = len(_TRIGGER_LINE_RE.findall(candidate))
-        deleted = original_trigger_count - candidate_trigger_count
-        delete_rate = deleted / original_trigger_count
-        if delete_rate >= _TRIGGER_DELETE_RATE_THRESHOLD:
-            return IntentionCheckResult(
-                severity="block",
-                reason=f"trigger_deletion_rate({delete_rate:.0%})",
-                details={
-                    "original_trigger_count": original_trigger_count,
-                    "candidate_trigger_count": candidate_trigger_count,
-                    "delete_rate": delete_rate,
-                },
-            )
-
-    # 2. description キー消失チェック
-    if re.search(r"^description\s*:", original, re.MULTILINE | re.IGNORECASE):
-        if not re.search(r"^description\s*:", candidate, re.MULTILINE | re.IGNORECASE):
-            return IntentionCheckResult(
-                severity="block",
-                reason="description_key_lost",
-                details={},
-            )
-
-    # 3. disable-model-invocation: true → false チェック
-    original_dmi = re.search(
-        r"^disable-model-invocation\s*:\s*(true|false)", original, re.MULTILINE | re.IGNORECASE
-    )
-    candidate_dmi = re.search(
-        r"^disable-model-invocation\s*:\s*(true|false)", candidate, re.MULTILINE | re.IGNORECASE
-    )
-    if original_dmi and original_dmi.group(1).lower() == "true":
-        if not candidate_dmi or candidate_dmi.group(1).lower() != "true":
-            return IntentionCheckResult(
-                severity="block",
-                reason="disable-model-invocation が削除または false に変更されました",
-                details={
-                    "original_dmi": original_dmi.group(0),
-                    "candidate_dmi": str(candidate_dmi.group(0)) if candidate_dmi else "None",
-                },
-            )
-
-    # 4. Usage/実行セクション完全消失チェック
-    if _USAGE_HEADER_RE.search(original) and not _USAGE_HEADER_RE.search(candidate):
-        return IntentionCheckResult(
-            severity="block",
-            reason="usage_section_lost",
-            details={},
-        )
-
-    # ── WARN チェック ────────────────────────────────────────────────
-
-    # 1. effort 昇降チェック
-    original_effort = re.search(r"^effort\s*:\s*(\w+)", original, re.MULTILINE | re.IGNORECASE)
-    candidate_effort = re.search(r"^effort\s*:\s*(\w+)", candidate, re.MULTILINE | re.IGNORECASE)
-    if original_effort and candidate_effort:
-        orig_val = original_effort.group(1).lower()
-        cand_val = candidate_effort.group(1).lower()
-        if orig_val != cand_val and {orig_val, cand_val} == {"low", "high"}:
-            return IntentionCheckResult(
-                severity="warn",
-                reason=f"effort_changed({orig_val}→{cand_val})",
-                details={"original_effort": orig_val, "candidate_effort": cand_val},
-            )
-
-    # 2. Jaccard 係数チェック
-    original_tokens = tokenize(original)
-    candidate_tokens = tokenize(candidate)
-    jaccard = jaccard_coefficient(original_tokens, candidate_tokens)
-    if jaccard < _JACCARD_WARN_THRESHOLD:
-        return IntentionCheckResult(
-            severity="warn",
-            reason=f"jaccard_low({jaccard:.2f})",
-            details={"jaccard": jaccard},
-        )
-
-    return IntentionCheckResult(severity="ok", reason="ok", details={})
 
 
 def _load_pitfall_patterns(pitfall_patterns_path: str) -> List[str]:

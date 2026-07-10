@@ -13,6 +13,7 @@ evolve の対話昇格 phase（bootstrap_backlog / daily_review）はかつて c
   - ``llm_judge``: provenance.text=ユーザー発話 + reason=Haiku 判定（#431）
   - ``rephrase``: provenance.text=言い直し後の発話（detector が保存・#432③）
   - ``permission_deny``: provenance.tool_name + tool_input_summary=拒否されたコマンド（#432②）
+  - ``verbosity``: provenance.note=Haiku 判定理由 + patterns=冗長パターン（#75 judge.py 由来・#171）
 - **content-poor（``CONTENT_POOR_CHANNELS``）** = 個別昇格に出さない:
   - ``esc_interrupt``: provenance.evidence="[Request interrupted…]" のみ
   - ``manual_edit_after_ai``: provenance.evidence="File has been modified…" のみ
@@ -31,8 +32,10 @@ from typing import Any, Dict, FrozenSet, Set
 from correction_semantic.representative import user_only_text
 
 # y/n 確認に出す content-rich チャネル（単一ソース）。
+# verbosity（#75 の Haiku judge 由来）は provenance.note/patterns に判定理由を保持する
+# content-rich チャネルなので #171 で追加（judge 自動実行導線の追加はスコープ外）。
 REVIEW_CHANNELS: FrozenSet[str] = frozenset(
-    {"llm_judge", "rephrase", "permission_deny"}
+    {"llm_judge", "rephrase", "permission_deny", "verbosity"}
 )
 
 # 個別昇格に出さない content-poor チャネル（observability 集計のみ・#99）。
@@ -60,10 +63,24 @@ def signal_text(rec: Dict[str, Any]) -> str:
       （assistant 引用ブロック混入の除去・#528-3）
     - ``permission_deny``: tool_name + tool_input_summary（拒否されたコマンド）を合成。
       denial_reason は実データで "unknown" が大半なので、意味があるときだけ添える
+    - ``verbosity``: provenance.note（Haiku 判定理由）+ patterns（冗長パターン名）を合成。
+      text/reason を持たないため fallback しないと message=channel 名の空 correction になる（#171）
     - content-poor / 未知 channel: "" を返す（呼び出し側が channel 名へ fallback）
     """
     prov = rec.get("provenance") or {}
     channel = rec.get("channel")
+
+    if channel == "verbosity":
+        note = str(prov.get("note") or "").strip()
+        patterns = [str(p) for p in (prov.get("patterns") or []) if p]
+        pat_str = "・".join(patterns)
+        if note and pat_str:
+            return f"冗長判定（{pat_str}）: {note}"
+        if note:
+            return f"冗長判定: {note}"
+        if pat_str:
+            return f"冗長判定（{pat_str}）"
+        return "冗長と判定された応答"
 
     if channel == "permission_deny":
         tool = str(prov.get("tool_name") or "").strip()
@@ -115,15 +132,26 @@ def grouping_keywords(rec: Dict[str, Any]) -> Set[str]:
     パス様トークン（'/' を含む語）は除外する（#99 F1 follow）。作業ディレクトリの segment が
     grouping を支配して別コマンドが collapse する over-merge を実 dogfood で発見したため。
 
+    ``verbosity`` は signal_text（判定理由の自然文）でなく provenance.patterns（Haiku が
+    分類した固定語彙・#75）そのものを keyword にする。note は自由文で表記揺れが大きく
+    jaccard がノイズに弱いが、patterns は安定した分類名なので同一パターン集合の record を
+    確実に同一 group へ寄せられる（#171）。
+
     extract_keywords は bootstrap_backlog 側にあり、そちらが本モジュールを import するため、
     循環回避に関数内 import を使う（promote._correction_message と同じ確立パターン）。
     """
-    if rec.get("channel") == "permission_deny":
+    channel = rec.get("channel")
+
+    if channel == "permission_deny":
         prov = rec.get("provenance") or {}
         raw = "{} {}".format(
             prov.get("tool_name") or "", prov.get("tool_input_summary") or ""
         )
         return set(_CMD_TOKEN_RE.findall(_strip_path_words(raw).lower()))
+
+    if channel == "verbosity":
+        prov = rec.get("provenance") or {}
+        return set(str(p) for p in (prov.get("patterns") or []) if p)
 
     from correction_semantic.bootstrap_backlog import extract_keywords
 

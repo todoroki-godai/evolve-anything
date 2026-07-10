@@ -1,11 +1,13 @@
 """correction_semantic.review_channels のテスト（#99 content-rich チャネル単一ソース）。
 
 検証観点:
-- REVIEW_CHANNELS = content-rich の 3 チャネル（llm_judge / rephrase / permission_deny）。
+- REVIEW_CHANNELS = content-rich の 4 チャネル（llm_judge / rephrase / permission_deny /
+  verbosity・#171）。
 - CONTENT_POOR_CHANNELS（esc_interrupt / manual_edit_after_ai）は REVIEW から除外。
 - signal_text が channel 別に actionable テキストを返す:
   - llm_judge / rephrase: provenance.text を user 発話のみ抽出
   - permission_deny: tool_name + tool_input_summary（拒否コマンド）を合成
+  - verbosity: provenance.note + patterns を合成（#171）
   - content-poor: "" を返す
 決定論・LLM 非依存。
 """
@@ -23,7 +25,7 @@ from correction_semantic import review_channels as rc  # noqa: E402
 
 def test_review_channels_are_content_rich():
     assert rc.REVIEW_CHANNELS == frozenset(
-        {"llm_judge", "rephrase", "permission_deny"}
+        {"llm_judge", "rephrase", "permission_deny", "verbosity"}
     )
 
 
@@ -39,6 +41,7 @@ def test_is_review_channel():
     assert rc.is_review_channel("llm_judge") is True
     assert rc.is_review_channel("rephrase") is True
     assert rc.is_review_channel("permission_deny") is True
+    assert rc.is_review_channel("verbosity") is True
     assert rc.is_review_channel("esc_interrupt") is False
     assert rc.is_review_channel("manual_edit_after_ai") is False
     assert rc.is_review_channel(None) is False
@@ -106,8 +109,70 @@ def test_signal_text_content_poor_returns_empty():
 
 
 def test_signal_text_unknown_channel_empty():
-    rec = {"channel": "verbosity", "provenance": {}}
+    rec = {"channel": "totally_unknown_channel", "provenance": {}}
     assert rc.signal_text(rec) == ""
+
+
+# ─────────────────────────────────────────────────────────────────
+# signal_text / grouping_keywords（channel=verbosity・#171）
+# provenance shape は verbosity/judge.py._emit_weak_signals 準拠:
+# {"hash", "project", "patterns": [...], "note": str, "char_len": int}
+# ─────────────────────────────────────────────────────────────────
+
+
+def test_signal_text_verbosity_uses_note_and_patterns():
+    rec = {
+        "channel": "verbosity",
+        "provenance": {"patterns": ["preamble", "filler"], "note": "前置きが冗長"},
+    }
+    out = rc.signal_text(rec)
+    assert "前置きが冗長" in out
+    assert "preamble" in out
+    assert "filler" in out
+
+
+def test_signal_text_verbosity_note_only():
+    rec = {"channel": "verbosity", "provenance": {"patterns": [], "note": "水増しが多い"}}
+    out = rc.signal_text(rec)
+    assert "水増しが多い" in out
+
+
+def test_signal_text_verbosity_patterns_only():
+    rec = {"channel": "verbosity", "provenance": {"patterns": ["meta"], "note": ""}}
+    out = rc.signal_text(rec)
+    assert "meta" in out
+
+
+def test_signal_text_verbosity_no_note_no_patterns_nonempty():
+    # #99 と同じ注意点: message=channel 名の空 correction を防ぐ。note/patterns が
+    # どちらも無くても signal_text は非空を返す（fallback しても channel 名の空にならない）。
+    rec = {"channel": "verbosity", "provenance": {}}
+    out = rc.signal_text(rec)
+    assert out != ""
+
+
+def test_grouping_keywords_verbosity_uses_pattern_names():
+    rec = {
+        "channel": "verbosity",
+        "provenance": {"patterns": ["preamble", "filler"], "note": "前置きが冗長"},
+    }
+    kws = rc.grouping_keywords(rec)
+    assert {"preamble", "filler"} <= kws
+
+
+def test_grouping_keywords_verbosity_distinct_patterns_separate():
+    a = {"channel": "verbosity", "provenance": {"patterns": ["preamble"], "note": "x"}}
+    b = {"channel": "verbosity", "provenance": {"patterns": ["repetition"], "note": "y"}}
+    ka = rc.grouping_keywords(a)
+    kb = rc.grouping_keywords(b)
+    union = len(ka | kb)
+    assert union and len(ka & kb) / union < 0.5
+
+
+def test_grouping_keywords_verbosity_identical_patterns_merge():
+    a = {"channel": "verbosity", "provenance": {"patterns": ["preamble", "filler"], "note": "x"}}
+    b = {"channel": "verbosity", "provenance": {"patterns": ["filler", "preamble"], "note": "y"}}
+    assert rc.grouping_keywords(a) == rc.grouping_keywords(b)
 
 
 # ─────────────────────────────────────────────────────────────────
