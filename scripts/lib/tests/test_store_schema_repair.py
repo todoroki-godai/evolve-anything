@@ -26,6 +26,7 @@ import store_schema_repair as ssr  # noqa: E402
 # ── canonical schema（テスト内では store の実 _SCHEMA_SQL を import して単一ソース確認）──
 import token_usage_store as tus  # noqa: E402
 from utterance_archive import store as ustore  # noqa: E402
+import episodic_store  # noqa: E402
 
 
 def _damaged_token_usage_db(path: Path, rows: list) -> None:
@@ -248,5 +249,105 @@ def test_repair_known_tables_selects_present(tmp_path):
         repaired = ssr.repair_known_tables(con, present_tables=present)
         assert "token_usage" in repaired
         assert con.execute("SELECT COUNT(*) FROM token_usage").fetchone()[0] == 1
+    finally:
+        con.close()
+
+
+# ── episodic_events registration (#173) ─────────────────────────────────────
+# #156 の CTAS rebuild 自己修復は known_store_specs() に登録されたテーブルのみが対象。
+# episodic_events が未登録だったため migrate-data の CTAS rebuild で PK が落ちたまま
+# 復元されず、INSERT OR IGNORE が BinderException で writer 全死していた（episodic.db
+# が全履歴 0 行のまま停止）。known_store_specs() への登録でこの経路を塞ぐ。
+
+
+def _damaged_episodic_db(path: Path, rows: list) -> None:
+    """CTAS 相当で制約なしの episodic_events テーブルを作る（constraints=[]）。"""
+    con = duckdb.connect(str(path))
+    con.execute(
+        "CREATE TABLE episodic_events ("
+        "id TEXT, session_id TEXT, project_path TEXT, timestamp TIMESTAMP,"
+        "content TEXT, correction_type TEXT, confidence REAL,"
+        "ttl_days INTEGER, expires_at TIMESTAMP)"
+    )
+    con.executemany(
+        "INSERT INTO episodic_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+    )
+    con.close()
+
+
+def _episodic_row(id_, sid, ts, content, ctype="semantic_idiom"):
+    return [id_, sid, "pj", ts, content, ctype, 0.9, 30, "2099-01-01 00:00:00"]
+
+
+def test_known_store_specs_includes_episodic_events():
+    """known_store_specs() に episodic_events が登録されている（#173）。"""
+    tables = {spec[0] for spec in ssr.known_store_specs()}
+    assert "episodic_events" in tables
+
+
+def test_detects_missing_primary_key_episodic_events(tmp_path):
+    db = tmp_path / "episodic.db"
+    _damaged_episodic_db(db, [_episodic_row("a#1", "s", "2026-06-01 00:00:00", "hi")])
+    con = duckdb.connect(str(db))
+    try:
+        assert ssr.needs_repair(con, "episodic_events") is True
+    finally:
+        con.close()
+
+
+def test_repair_episodic_events_dedups_and_restores_pk(tmp_path):
+    db = tmp_path / "episodic.db"
+    _damaged_episodic_db(
+        db,
+        [
+            _episodic_row("a#1", "s", "2026-06-01 00:00:00", "hi"),
+            _episodic_row("a#1", "s", "2026-06-01 00:00:00", "hi"),  # 重複
+            _episodic_row("b#2", "s2", "2026-06-02 00:00:00", "bye"),
+        ],
+    )
+    con = duckdb.connect(str(db))
+    try:
+        assert ssr.repair_table(
+            con, "episodic_events", episodic_store._SCHEMA_SQL, [("id",)]
+        ) is True
+        pk = con.execute(
+            "SELECT COUNT(*) FROM duckdb_constraints() "
+            "WHERE table_name='episodic_events' AND constraint_type='PRIMARY KEY'"
+        ).fetchone()[0]
+        assert pk == 1
+        rows = con.execute(
+            "SELECT id FROM episodic_events ORDER BY id"
+        ).fetchall()
+        assert [r[0] for r in rows] == ["a#1", "b#2"]
+        # 復元後は INSERT OR IGNORE が動作し冪等
+        con.execute(
+            "INSERT OR IGNORE INTO episodic_events "
+            "(id, session_id, project_path, timestamp, content, correction_type,"
+            " confidence, ttl_days, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            _episodic_row("a#1", "s", "2026-06-01 00:00:00", "hi"),
+        )
+        assert con.execute("SELECT COUNT(*) FROM episodic_events").fetchone()[0] == 2
+    finally:
+        con.close()
+
+
+def test_repair_known_tables_includes_episodic_events(tmp_path):
+    """repair_known_tables は present な episodic_events も修復する（#173）。"""
+    db = tmp_path / "episodic.db"
+    _damaged_episodic_db(
+        db,
+        [
+            _episodic_row("a#1", "s", "2026-06-01 00:00:00", "hi"),
+            _episodic_row("a#1", "s", "2026-06-01 00:00:00", "hi"),
+        ],
+    )
+    con = duckdb.connect(str(db))
+    try:
+        present = {r[0] for r in con.execute(
+            "SELECT table_name FROM duckdb_tables()"
+        ).fetchall()}
+        repaired = ssr.repair_known_tables(con, present_tables=present)
+        assert "episodic_events" in repaired
+        assert con.execute("SELECT COUNT(*) FROM episodic_events").fetchone()[0] == 1
     finally:
         con.close()
