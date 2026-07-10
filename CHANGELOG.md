@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **feat(memory): 記憶更新の遷移検証（TRUSTMEM 型・決定論版）を auto-memory write 前ゲートに追加（closes #93）** — `memory_guard.py` を拡張し、同名（frontmatter `name` 一致）の既存 memory エントリがある auto-memory 書込に対して coverage（重要行の大量欠落）/ preservation（`metadata.type` の矛盾上書き）/ fidelity（冒頭行の極性反転疑い）を決定論・difflib ベースで検証する `inspect_transition` を追加。`auto_memory_broker.ingest_memory_results` の write 直前（#108 汚染検出の直後）に配線し、reject 候補は書込せず消化する。イベントは新ストア `memory_transition_checks.jsonl`（store_registry active 登録・store_write barrier 経由）に記録し、audit の Memory Capability maintain 軸 evidence に reject件数/検査件数を surface。description/importance は自然に書き換わりうるため preservation の比較対象から除外（over-detection 回避）。同名の既存エントリが無い大多数の書込は検証対象外（checked=False）で block しない。TDD +25件・決定論・LLM 非依存。
 - **feat(agent-brushup): worker 系 agent の ask-before-fallback 明文化検査を追加（closes #192）** — frontmatter `name`（無ければファイル名 stem）が case-insensitive で "worker" を含む agent のみを対象に、本文（frontmatter 除く body）へ「参照物欠落・指示欠落時に選択肢+タイムアウト付きデフォルトを添えて orchestrator に確認質問する」規定（正規化後テキストに "ask before fallback" または "確認質問" を含む）が明文化されているかを決定論検査する `check_ask_before_fallback()` を追加し、`check_quality()` の issues（`missing_ask_before_fallback`・severity low・advisory・auto-fix なし）に配線した。既存 `check_tools_grant_divergence()`（#130）と同型のスタイル・走査入力契約に揃えている。TDD +6件・決定論・LLM 非依存。
 
 ### Fixed

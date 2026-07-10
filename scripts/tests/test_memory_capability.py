@@ -203,3 +203,74 @@ def test_section_returns_lines_when_memory_exists(tmp_path):
     assert "maintain" in combined
     # use/read 軸の限界注記（reinforce は全件発火）が1行ある
     assert "SessionStart" in combined
+
+
+# ── #93: 記憶遷移検証の maintain 軸 evidence ───────────────────────────
+
+
+def test_maintain_evidence_includes_transition_counts_when_zero(tmp_path):
+    """遷移検証イベントが無い（同名衝突なし）環境では checked=0/rejected=0 を含む。"""
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    mem = _memory_dir_for(project_dir)
+    _write_memory(mem, "f1.md", ["name: f1"])
+
+    result = memory_capability.compute_memory_capability(project_dir)
+    evidence = result["maintain"]["evidence"]
+    assert evidence["transition_checked"] == 0
+    assert evidence["transition_rejected"] == 0
+
+
+def test_maintain_evidence_reflects_persisted_transition_events(tmp_path, monkeypatch):
+    """memory_transition_checks.jsonl の当 PJ 分が maintain evidence に集計される。"""
+    import json
+    import rl_common
+    from pj_slug import pj_slug_fast
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    mem = _memory_dir_for(project_dir)
+    _write_memory(mem, "f1.md", ["name: f1"])
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(rl_common, "DATA_DIR", data_dir)
+
+    slug = pj_slug_fast(str(project_dir))
+    store = data_dir / "memory_transition_checks.jsonl"
+    lines = [
+        json.dumps({"pj_slug": slug, "rejected": True}),
+        json.dumps({"pj_slug": slug, "rejected": False}),
+        json.dumps({"pj_slug": "other-pj", "rejected": True}),
+    ]
+    store.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    result = memory_capability.compute_memory_capability(project_dir)
+    evidence = result["maintain"]["evidence"]
+    assert evidence["transition_checked"] == 2
+    assert evidence["transition_rejected"] == 1
+
+
+def test_section_surfaces_transition_reject_evidence(tmp_path, monkeypatch):
+    """build_memory_capability_section の maintain 行に #93 の reject/検査件数が出る。"""
+    import json
+    import rl_common
+    from pj_slug import pj_slug_fast
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    mem = _memory_dir_for(project_dir)
+    _write_memory(mem, "f1.md", ["name: f1"])
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(rl_common, "DATA_DIR", data_dir)
+    slug = pj_slug_fast(str(project_dir))
+    (data_dir / "memory_transition_checks.jsonl").write_text(
+        json.dumps({"pj_slug": slug, "rejected": True}) + "\n", encoding="utf-8",
+    )
+
+    section = build_memory_capability_section(project_dir)
+    combined = "\n".join(section)
+    assert "記憶遷移検証(#93)" in combined
+    assert "reject 1/1 件" in combined

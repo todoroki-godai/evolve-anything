@@ -66,6 +66,15 @@ def _llm_output(summary: str = "test summary") -> str:
     )
 
 
+def _llm_output_named(name: str, body: str) -> str:
+    # description は body の要約想定なので改行を含めない（YAML frontmatter が壊れないよう）。
+    desc = " ".join(body.split())[:40]
+    return (
+        f"---\nname: {name}\ndescription: {desc}\n"
+        f"metadata:\n  type: feedback\nimportance: medium\n---\n\n{body}"
+    )
+
+
 # ─── compute_dedup_key ──────────────────────────────────────────────────────
 
 
@@ -466,6 +475,146 @@ def test_ingest_clean_not_flagged(tmp_data_dir, tmp_memory_dir):
     assert result["stored"] == 1
 
 
+# ─── 記憶遷移検証（#93・TRUSTMEM Memory Transition Verifier の決定論移植） ────────
+
+_TRANSITION_OLD_BODY = (
+    "重要な事実その1についての長い説明文です。\n"
+    "重要な事実その2についての長い説明文です。\n"
+    "重要な事実その3についての長い説明文です。"
+)
+
+
+def test_ingest_transition_reject_blocks_when_existing_entry_conflicts(
+    tmp_data_dir, tmp_memory_dir, monkeypatch
+):
+    """同名の既存エントリの重要事実を大量に失う書込は reject される（既定 reject）。"""
+    import rl_common
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_data_dir)
+
+    (tmp_memory_dir / "existing.md").write_text(
+        _llm_output_named("dup", _TRANSITION_OLD_BODY), encoding="utf-8",
+    )
+
+    corrections = _corrections(2)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output_named("dup", "全く関係ない短い一言だけ。")}
+
+    memory_md = tmp_memory_dir.parent / "MEMORY.md"
+    memory_md.write_text("# MEMORY\n\n")
+
+    with mock.patch.dict(
+        "os.environ", {"RL_GATING_DISABLED": "1", "EVOLVE_MEMORY_GUARD": "reject"}
+    ):
+        result = amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, memory_md, tmp_data_dir,
+        )
+
+    assert result["transition_checked"] == 1
+    assert result["transition_rejected"] == 1
+    assert result["stored"] == 0
+    # 新規ファイルは書かれない（既存の existing.md のみ残る）
+    assert [p.name for p in tmp_memory_dir.glob("auto_*.md")] == []
+    # block は処理済み → キューから消化される
+    assert amb.read_queue("slug", tmp_data_dir) == []
+
+    # store_write barrier 経由で1件記録される
+    events_file = tmp_data_dir / "memory_transition_checks.jsonl"
+    assert events_file.exists()
+    lines = events_file.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["rejected"] is True
+    assert rec["matched_name"] == "dup"
+
+
+def test_ingest_transition_warn_mode_writes(tmp_data_dir, tmp_memory_dir, monkeypatch):
+    """warn 降格時は書込を継続するが transition_checked には計上される。"""
+    import rl_common
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_data_dir)
+
+    (tmp_memory_dir / "existing.md").write_text(
+        _llm_output_named("dup", _TRANSITION_OLD_BODY), encoding="utf-8",
+    )
+
+    corrections = _corrections(2)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output_named("dup", "全く関係ない短い一言だけ。")}
+
+    with mock.patch.dict(
+        "os.environ", {"RL_GATING_DISABLED": "1", "EVOLVE_MEMORY_GUARD": "warn"}
+    ):
+        result = amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    assert result["transition_checked"] == 1
+    assert result["transition_rejected"] == 0
+    assert result["stored"] == 1
+    assert len(list(tmp_memory_dir.glob("auto_*.md"))) == 1
+
+
+def test_ingest_transition_clean_match_not_rejected(tmp_data_dir, tmp_memory_dir, monkeypatch):
+    """FP 回帰（E2E）: 同名でも既存の重要事実を保存していれば正常に書き込まれる。"""
+    import rl_common
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_data_dir)
+
+    (tmp_memory_dir / "existing.md").write_text(
+        _llm_output_named("dup", "重要な事実その1です。設定手順は絶対パスを使うこと。"),
+        encoding="utf-8",
+    )
+
+    corrections = _corrections(2)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output_named(
+        "dup",
+        "重要な事実その1です。設定手順は絶対パスを使うこと。追加の補足も書いておく。",
+    )}
+
+    with mock.patch.dict(
+        "os.environ", {"RL_GATING_DISABLED": "1", "EVOLVE_MEMORY_GUARD": "reject"}
+    ):
+        result = amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    assert result["transition_checked"] == 1
+    assert result["transition_rejected"] == 0
+    assert result["stored"] == 1
+    assert len(list(tmp_memory_dir.glob("auto_*.md"))) == 1
+
+
+def test_ingest_transition_unique_name_not_checked(tmp_data_dir, tmp_memory_dir):
+    """同名の既存エントリが無ければ検証対象外（checked=0）で通常通り書き込まれる。"""
+    corrections = _corrections(2)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output("普通の内容です。")}
+
+    with mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        result = amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    assert result["transition_checked"] == 0
+    assert result["transition_rejected"] == 0
+    assert result["stored"] == 1
+
+
 def test_ingest_archive_when_memory_over_limit(tmp_data_dir, tmp_memory_dir):
     """MEMORY.md が 200 行超 → archive.md に古いエントリを移す。"""
     corrections = _corrections(3)
@@ -500,7 +649,9 @@ def test_ingest_empty_records_noop(tmp_data_dir, tmp_memory_dir):
     )
     assert result == {
         "stored": 0, "blocked": 0, "skipped": 0,
-        "contaminated": 0, "contamination_hits": [], "entries": [],
+        "contaminated": 0, "contamination_hits": [],
+        "transition_checked": 0, "transition_rejected": 0,
+        "entries": [],
     }
 
 
