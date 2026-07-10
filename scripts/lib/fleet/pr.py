@@ -159,7 +159,12 @@ def branch_exists(project_path: Path, branch: str, *, run: RunFunc = subprocess.
 def create_worktree(
     project_path: Path, date_str: str, *, run: RunFunc = subprocess.run
 ) -> Dict[str, Any]:
-    """``git worktree add <path> -b <branch>`` を実行する。既存 worktree/branch は上書きしない。"""
+    """``git worktree add <path> -b <branch> <base_ref>`` を実行する。既存 worktree/branch は上書きしない。
+
+    分岐元は origin の既定ブランチ（無ければローカル既定ブランチ）に**明示固定**する。
+    start point を省略するとカレントブランチから分岐し、対象 PJ が未マージの作業ブランチを
+    checkout していた場合に無関係なコミットが PR へ丸ごと混入するため（実PJ通し検証で発症）。
+    """
     wt_path = worktree_path(project_path, date_str)
     branch = branch_name(date_str)
     if wt_path.exists():
@@ -167,15 +172,27 @@ def create_worktree(
     if branch_exists(project_path, branch, run=run):
         raise WorktreeError(f"branch '{branch}' が既に存在します（上書きしません）。")
 
+    base = default_branch(project_path, run=run)
+    base_ref = next(
+        (c for c in (f"origin/{base}", base) if branch_exists(project_path, c, run=run)),
+        None,
+    )
+    if base_ref is None:
+        raise WorktreeError(
+            f"分岐元を解決できません（origin/{base} も {base} も存在しません）。"
+        )
+
     proc = _run(
-        ["git", "-C", str(project_path), "worktree", "add", str(wt_path), "-b", branch],
+        ["git", "-C", str(project_path), "worktree", "add", str(wt_path), "-b", branch, base_ref],
         run=run,
     )
     if proc.returncode != 0:
         raise GitCommandError(
-            ["git", "worktree", "add", str(wt_path), "-b", branch], proc.returncode, proc.stderr or ""
+            ["git", "worktree", "add", str(wt_path), "-b", branch, base_ref],
+            proc.returncode,
+            proc.stderr or "",
         )
-    return {"worktree_path": wt_path, "branch": branch}
+    return {"worktree_path": wt_path, "branch": branch, "base_ref": base_ref}
 
 
 # --- worktree 検出・検証（pr-finish）--------------------------------------------
