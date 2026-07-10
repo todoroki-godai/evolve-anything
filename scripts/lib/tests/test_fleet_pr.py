@@ -74,7 +74,9 @@ def _init_real_git_repo(path: Path) -> None:
     （push/PR は絶対に実行しない、ローカル worktree 作成のみ）。
     """
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    # 初期ブランチ名を明示（git config init.defaultBranch 依存を排除。
+    # create_worktree の base_ref 解決は origin/main → main の順で probe するため）
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.name", "test"], cwd=path, check=True)
     (path / "README.md").write_text("test\n", encoding="utf-8")
@@ -140,15 +142,52 @@ class TestCreateWorktree:
         project = tmp_path / "proj"
         project.mkdir()
         run = ScriptedRun([
-            (lambda cmd: "rev-parse" in cmd, _FakeProc(returncode=1)),  # branch not exists
+            (lambda cmd: "symbolic-ref" in cmd, _FakeProc(returncode=0, stdout="origin/main\n")),
+            (lambda cmd: "rev-parse" in cmd and cmd[-1] == "evolve/20260710-proposals",
+             _FakeProc(returncode=1)),  # branch not exists
+            (lambda cmd: "rev-parse" in cmd and cmd[-1] == "origin/main", _FakeProc(returncode=0)),
             (lambda cmd: "worktree" in cmd and "add" in cmd, _FakeProc(returncode=0)),
         ])
         result = fpr.create_worktree(project, "20260710", run=run)
         assert result["branch"] == "evolve/20260710-proposals"
         assert result["worktree_path"] == project / ".claude" / "worktrees" / "evolve-apply-20260710"
+        assert result["base_ref"] == "origin/main"
         add_calls = [c for c, _ in run.calls if "worktree" in c]
         assert len(add_calls) == 1
         assert add_calls[0][:2] == ["git", "-C"]
+        # base_ref が start point として明示されている（カレントブランチ分岐の混入バグ再発防止）
+        assert add_calls[0][-1] == "origin/main"
+
+    def test_unresolvable_base_ref_raises(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        run = ScriptedRun([
+            (lambda cmd: "symbolic-ref" in cmd, _FakeProc(returncode=1)),
+            (lambda cmd: "rev-parse" in cmd, _FakeProc(returncode=1)),  # 全 probe 失敗
+        ])
+        with pytest.raises(fpr.WorktreeError, match="分岐元"):
+            fpr.create_worktree(project, "20260710", run=run)
+
+    def test_real_git_bases_on_default_branch_not_current(self, tmp_path):
+        """カレントが未マージ作業ブランチでも base（main）から分岐する（実PJ検証で発症したバグの回帰）。"""
+        project = tmp_path / "proj"
+        _init_real_git_repo(project)
+        main_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True
+        ).stdout.strip()
+        subprocess.run(["git", "checkout", "-q", "-b", "feat/wip"], cwd=project, check=True)
+        (project / "wip.txt").write_text("wip\n", encoding="utf-8")
+        subprocess.run(["git", "add", "wip.txt"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "wip"], cwd=project, check=True)
+
+        result = fpr.create_worktree(project, "20260710")
+
+        wt_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=result["worktree_path"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        assert wt_sha == main_sha  # feat/wip のコミットが混入しない
+        assert result["base_ref"] == "main"
 
     def test_existing_worktree_dir_raises_without_running_git(self, tmp_path):
         project = tmp_path / "proj"
@@ -174,7 +213,10 @@ class TestCreateWorktree:
         project = tmp_path / "proj"
         project.mkdir()
         run = ScriptedRun([
-            (lambda cmd: "rev-parse" in cmd, _FakeProc(returncode=1)),
+            (lambda cmd: "symbolic-ref" in cmd, _FakeProc(returncode=0, stdout="origin/main\n")),
+            (lambda cmd: "rev-parse" in cmd and cmd[-1] == "evolve/20260710-proposals",
+             _FakeProc(returncode=1)),
+            (lambda cmd: "rev-parse" in cmd and cmd[-1] == "origin/main", _FakeProc(returncode=0)),
             (lambda cmd: "worktree" in cmd, _FakeProc(returncode=128, stderr="fatal: boom")),
         ])
         with pytest.raises(fpr.GitCommandError, match="boom"):
@@ -599,12 +641,14 @@ class TestPrFinishCli:
         from fleet import cli_pr
 
         self._setup(tmp_path, monkeypatch, dirty=False, ahead=0)
+        # アカウント検証は no-changes 判定より先に走る（順序修正後）ため pass させる
+        monkeypatch.setattr(cli_pr.pr_lib, "verify_push_account", lambda *a, **kw: "shohu")
 
         rc = fcli.main(["pr-finish", "alpha"])
         assert rc == 1
         assert "スキップ" in capsys.readouterr().out
 
-    def test_dirty_commits_then_verifies_pushes_and_creates_pr(self, tmp_path, monkeypatch, capsys):
+    def test_verifies_account_before_commit_then_pushes_and_creates_pr(self, tmp_path, monkeypatch, capsys):
         from fleet import cli as fcli
         from fleet import cli_pr
 
@@ -622,18 +666,18 @@ class TestPrFinishCli:
 
         rc = fcli.main(["pr-finish", "alpha"])
         assert rc == 0
-        assert calls == ["commit", "verify", "push", "pr"]
+        # アカウント検証が commit より先（不整合時に commit 副作用を残さない・実PJ検証の指摘）
+        assert calls == ["verify", "commit", "push", "pr"]
         out = capsys.readouterr().out
         assert "https://github.com/x/y/pull/9" in out
         assert "マージは人間" in out
         assert "cleanup" in out
 
-    def test_account_mismatch_stops_before_push(self, tmp_path, monkeypatch, capsys):
+    def test_account_mismatch_stops_before_commit_and_push(self, tmp_path, monkeypatch, capsys):
         from fleet import cli as fcli
         from fleet import cli_pr
 
         self._setup(tmp_path, monkeypatch, dirty=True)
-        monkeypatch.setattr(cli_pr.pr_lib, "commit_all", lambda *a, **kw: None)
 
         def _mismatch(*a, **kw):
             raise cli_pr.pr_lib.AccountMismatchError("アカウント不整合: ...")
@@ -641,8 +685,10 @@ class TestPrFinishCli:
         monkeypatch.setattr(cli_pr.pr_lib, "verify_push_account", _mismatch)
 
         def _boom(*a, **kw):
-            raise AssertionError("push must not run after account mismatch")
+            raise AssertionError("commit/push must not run after account mismatch")
 
+        # 不整合時は commit も走らない（順序修正の回帰・実PJ検証の指摘）
+        monkeypatch.setattr(cli_pr.pr_lib, "commit_all", _boom)
         monkeypatch.setattr(cli_pr.pr_lib, "push_branch", _boom)
         monkeypatch.setattr(cli_pr.pr_lib, "create_pr", _boom)
 

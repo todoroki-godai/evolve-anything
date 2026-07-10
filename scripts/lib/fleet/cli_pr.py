@@ -30,7 +30,7 @@ def run_pr_start_command(args: argparse.Namespace) -> int:
         return 1
 
     print(f"[fleet:pr-start] worktree を作成しました: {result['worktree_path']}")
-    print(f"[fleet:pr-start] branch: {result['branch']}")
+    print(f"[fleet:pr-start] branch: {result['branch']}（分岐元: {result['base_ref']}）")
     print()
     print("次のステップ:")
     print(f"  1. `/cd {result['worktree_path']}` で worktree に移動")
@@ -85,6 +85,13 @@ def run_pr_finish_command(args: argparse.Namespace) -> int:
         print(f"  gh pr create --base {base_branch} --title ... --body ...{' --draft' if args.draft else ''}")
         return 0
 
+    # アカウント検証は commit より先（不整合時にローカル commit の副作用も残さない）
+    try:
+        pr_lib.verify_push_account(project_path)
+    except (pr_lib.AccountMismatchError, pr_lib.WorktreeError) as e:
+        print(f"[fleet:pr-finish] エラー: {e}")
+        return 1
+
     if dirty:
         try:
             pr_lib.commit_all(worktree, commit_message)
@@ -100,12 +107,6 @@ def run_pr_finish_command(args: argparse.Namespace) -> int:
                 "（対話 evolve で何も適用されていない可能性）。PR 作成をスキップします。"
             )
             return 1
-
-    try:
-        pr_lib.verify_push_account(project_path)
-    except (pr_lib.AccountMismatchError, pr_lib.WorktreeError) as e:
-        print(f"[fleet:pr-finish] エラー: {e}")
-        return 1
 
     try:
         pr_lib.push_branch(worktree, branch)
