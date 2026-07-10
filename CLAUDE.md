@@ -119,6 +119,7 @@
 | `memory_hygiene` | memory dir 衛生3検出器（#127 MEMORY.md 索引孤児 / #128 auto-memory frontmatter スキーマ検証 / #131 旧 PJ memory 完全重複残骸=fleet 横断・tar 退避手順提案のみ auto-apply なし）。3件とも clean 時非表示・走査は *.md のみで jsonl 非対象 | `memory_index_orphan.py` + `memory_schema_check.py` + `memory_dup_residue.py` + `audit/sections_memory.py` |
 | `invalid_frontmatter` | YAML frontmatter が壊れて CC 発火不能なスキルを直接 surface する observability section（#167）。`parse_frontmatter` が YAMLError を握り潰し `{}` 返却する穴を検出コア `detect_frontmatter_error`（純関数・`parse_frontmatter` 無改変）で塞ぎ、effort_detector が invalid を skip（missing_effort 誤分類根治・#166 相互作用）+ advisory section（⚠・clean時沈黙・auto-fix なし人手提案）。scope は `.claude/skills/**/SKILL.md` | `frontmatter.py` + `effort_detector.py` + `audit/sections_invalid_frontmatter.py` |
 | `self_contamination` | 自己汚染ハルシネーション指紋（A=生タグ漏出 / B=偽 system-reminder / C-lite=汚染宣言×tool_result 原文非在）を transcript 走査で恒久計測する Layer 2 observability section（ゼロLLM・read-only・hook/store 新設なし）。tool_result 原文と assistant text/thinking を厳密分離し byte 照合、operational/話題PJ 分離集計、clean 時沈黙。live 抑止 Layer 1 hook は要否をこの計測で判断 | `self_contamination_scan.py` + `audit/sections_self_contamination.py` |
+| `evolve-tier` | モデルティア（HEAD/HARD/NORMAL/MECH/REVIEW ↔ model/effort）の正典を `~/.claude/model-tiers.json` に一元化する CLI（#193）— `set`（正典更新）/`sync [--apply]`（agent frontmatter・settings.json・routing rule マーカーへ反映、既定 dry-run・冪等）/`drift`（stale なモデルエイリアスの散文残存を advisory 検出）。`agent_tier` の gate は call-time でこの config を参照 | `bin/evolve-tier` + `tier_policy.py` + `tier_policy_sync.py` + `tier_policy_drift.py` + `tier_policy_cli.py` |
 
 ## クイックスタート
 
@@ -167,6 +168,13 @@ bin/evolve-daily-install --uninstall
 # advisory 3点セット追加の scaffold（module stub 生成 + 多点配線チェックリスト・#118）
 bin/evolve-scaffold-advisory my_check                 # dry-run（stub + checklist 表示）
 bin/evolve-scaffold-advisory my_check --with-store --write
+
+# モデルティア正典の一元管理（#193）
+bin/evolve-tier show                      # ティア表 + 正典ソース（file/defaults）を表示
+bin/evolve-tier set HEAD --model sonnet --effort max   # 正典を更新（atomic write）
+bin/evolve-tier sync                      # targets への反映を dry-run（diff 表示のみ）
+bin/evolve-tier sync --apply              # drift のみ実書込（冪等）
+bin/evolve-tier drift                     # 正典に無いモデルエイリアスの散文残存を検出
 
 # エージェント品質診断
 /evolve-anything:agent-brushup
