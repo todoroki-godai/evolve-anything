@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(agent-brushup): worker 系 agent の ask-before-fallback 明文化検査を追加（closes #192）** — frontmatter `name`（無ければファイル名 stem）が case-insensitive で "worker" を含む agent のみを対象に、本文（frontmatter 除く body）へ「参照物欠落・指示欠落時に選択肢+タイムアウト付きデフォルトを添えて orchestrator に確認質問する」規定（正規化後テキストに "ask before fallback" または "確認質問" を含む）が明文化されているかを決定論検査する `check_ask_before_fallback()` を追加し、`check_quality()` の issues（`missing_ask_before_fallback`・severity low・advisory・auto-fix なし）に配線した。既存 `check_tools_grant_divergence()`（#130）と同型のスタイル・走査入力契約に揃えている。TDD +6件・決定論・LLM 非依存。
+
 ## [1.119.1] - 2026-07-10
 
 ### Fixed

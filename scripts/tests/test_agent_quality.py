@@ -27,6 +27,7 @@ from lib.agent_quality import (
 )
 from lib.agent_quality import check_model_pin  # noqa: F401 — new in #449
 from lib.agent_quality import check_tools_grant_divergence  # noqa: F401 — new in #130
+from lib.agent_quality import check_ask_before_fallback  # noqa: F401 — new in #192
 
 
 # --- Fixtures ---
@@ -947,6 +948,143 @@ Include specific examples of how to fix issues.
 
         issue_types = {i["type"] for i in result["issues"]}
         assert "tools_grant_divergence" not in issue_types
+
+
+# --- check_ask_before_fallback tests ---
+
+
+class TestCheckAskBeforeFallback:
+    """check_ask_before_fallback() のテスト: worker 系 agent の ask-before-fallback 明文化検査（#192）。"""
+
+    def test_worker_without_section_flagged(self, global_agents_dir, tmp_path):
+        """worker 名 + ask-before-fallback / 確認質問 の記述なし → missing=True。"""
+        content = """\
+---
+name: impl-worker
+description: Implementation worker that receives a scoped task and implements it in a worktree.
+tools: Read, Write, Edit, Bash
+---
+
+# Impl Worker
+
+1. Read the task spec
+2. Implement it
+3. Commit
+
+Provide feedback organized by priority.
+"""
+        path = _write_agent(global_agents_dir, "impl-worker", content)
+        agent = AgentInfo(name="impl-worker", path=path, scope="global")
+
+        result = check_ask_before_fallback(agent)
+
+        assert result["missing"] is True
+        assert result["is_worker"] is True
+        assert result["file"] == str(path)
+
+    def test_worker_with_ask_before_fallback_wording_not_flagged(self, global_agents_dir, tmp_path):
+        """worker 名 + 'ask-before-fallback' 表記あり → missing=False。"""
+        content = """\
+---
+name: impl-worker
+description: Implementation worker that receives a scoped task and implements it in a worktree.
+tools: Read, Write, Edit, Bash
+---
+
+# Impl Worker
+
+**Missing referenced artifact — ask-before-fallback.** If a referenced
+artifact is missing, ask the orchestrator instead of silently recreating it.
+
+1. Read the task spec
+2. Implement it
+3. Commit
+
+Provide feedback organized by priority.
+"""
+        path = _write_agent(global_agents_dir, "impl-worker", content)
+        agent = AgentInfo(name="impl-worker", path=path, scope="global")
+
+        result = check_ask_before_fallback(agent)
+
+        assert result["missing"] is False
+        assert result["is_worker"] is True
+
+    def test_worker_with_kakunin_shitsumon_wording_not_flagged(self, global_agents_dir, tmp_path):
+        """worker 名 + '確認質問' 表記あり → missing=False。"""
+        content = """\
+---
+name: design-worker
+description: Design worker that drafts a design doc from a scoped task spec.
+tools: Read, Write
+---
+
+# Design Worker
+
+参照物が見つからない場合は自走せず、選択肢+タイムアウト付きデフォルトを添えて
+オーケストレーターに確認質問すること。
+
+1. Read the task spec
+2. Draft the design
+3. Report
+
+Provide feedback organized by priority.
+"""
+        path = _write_agent(global_agents_dir, "design-worker", content)
+        agent = AgentInfo(name="design-worker", path=path, scope="global")
+
+        result = check_ask_before_fallback(agent)
+
+        assert result["missing"] is False
+        assert result["is_worker"] is True
+
+    def test_non_worker_without_section_not_flagged(self, global_agents_dir, tmp_path):
+        """非 worker 名 + 記述なし → 対象外（is_worker=False, missing=False）。"""
+        path = _write_agent(global_agents_dir, "code-reviewer", _good_agent())
+        agent = AgentInfo(name="code-reviewer", path=path, scope="global")
+
+        result = check_ask_before_fallback(agent)
+
+        assert result["missing"] is False
+        assert result["is_worker"] is False
+
+    def test_check_quality_includes_missing_ask_before_fallback(self, global_agents_dir, tmp_path):
+        """check_quality() の issues に missing_ask_before_fallback + agent path が含まれる。"""
+        content = """\
+---
+name: build-worker
+description: Build worker that compiles a scoped task into working code changes.
+tools: Read, Write, Edit, Bash
+---
+
+# Build Worker
+
+1. Read the task spec
+2. Implement it
+3. Commit
+
+Provide feedback organized by priority.
+Include specific examples of how to fix issues.
+"""
+        path = _write_agent(global_agents_dir, "build-worker", content)
+        agent = AgentInfo(name="build-worker", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "missing_ask_before_fallback" in issue_types
+        issue = next(i for i in result["issues"] if i["type"] == "missing_ask_before_fallback")
+        assert str(path) in issue["detail"]
+
+    def test_check_quality_no_issue_for_non_worker(self, global_agents_dir, tmp_path):
+        """check_quality() で非 worker 名なら missing_ask_before_fallback が出ない。"""
+        path = _write_agent(global_agents_dir, "clean-reviewer", _good_agent())
+        agent = AgentInfo(name="clean-reviewer", path=path, scope="global")
+
+        result = check_quality(agent)
+
+        issue_types = {i["type"] for i in result["issues"]}
+        assert "missing_ask_before_fallback" not in issue_types
 
 
 # --- Constants tests ---
