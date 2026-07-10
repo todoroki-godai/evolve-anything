@@ -11,6 +11,7 @@
 | 直接パッチ最適化 | optimize, evolve-loop, generate-fitness, evolve-fitness | corrections/context → LLM 1パスパッチ → regression gate（`scripts/lib/regression_gate.py` に共通化）+ GEPA 数値ガードレール（入力/パッチ char 上限・実データ dry-run 較正・#120） |
 | **fleet 観測・介入** | fleet (`bin/evolve-fleet`) | 全 PJ 横断で env_score / 導入状況を一覧表示。`status` / `tokens` / `test-guard status`（no-llm-in-tests / pytest-no-llm 導入状況）/ `discover` / `recall`（全 PJ memory を keyword 横断検索、決定論・LLM 非依存）/ `plugins`（インストール済み CC プラグインの最新性診断 — update/drift/unknown を決定論検出。version 無しプラグインの silent stale を cache↔marketplace source の差分で検出）/ `queue`（学習素材ベースで「今 evolve すべき PJ」を決定論・ゼロ LLM で列挙 — weak 未処理 + 新規 corr の合算が閾値以上の PJ・#79） |
 | daily-evolve 入口 | queue | 全 PJ 横断の evolve 待ち一覧を表示し上から対話 evolve するガイド（pull 型・ADR-050 手動運用入口）。`evolve-fleet queue` の薄いラッパー（read-only・ゼロ LLM）+ 次アクション提示。`/cd <PJ>`→`/evolve-anything:evolve` の導線。CC 起動後タイミングの良い日に手で叩く想定（#80 launchd 自動登録の代替手段） |
+| モデルティア変更 | tier | `bin/evolve-tier`（#193）の対話 UX ラッパー。現状表示（`show`）→ ユーザー発話から tier/model/effort を解釈（曖昧なら `AskUserQuestion`）→ `set` で正典更新 → `sync` の dry-run diff を全件提示 → **明示承認後にのみ** `sync --apply` → `drift` advisory 表示、の順でモデルティア正典を安全に変更。スキル自体はファイルを直接編集せず全変更は CLI 経由 |
 | エージェント管理 | agent-brushup | エージェント定義の品質診断・改善提案・新規作成・削除候補 |
 | セカンドオピニオン | second-opinion | Claude Agent による独立した cold-read セカンドオピニオン（codex 代替） |
 | 行き詰まり突破 | breakthrough | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動で解決 |
@@ -112,7 +113,7 @@
 | `skill_vuln_scan` | 取り込みスキルの静的脆弱性スキャン（SkillSpector 型）— `.md`/`.sh`/`.bash` を決定論・LLM 非依存で行スキャンし remote_exec/secret_exfil/destructive/prompt_injection/overbroad_tools を検出し audit observability に surface。combo 必須で FP 較正（`gh api ... | base64 -d` 等は非検出・#13）+ 同一スコープ内のマルチステップ攻撃系列（fetch→変数/ファイル経由 exec）の静的フロー検出（#123） | `skill_vuln_scan.py` + `audit/sections_skill_vuln.py` |
 | `fanout_cost` | fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は #15 同様スパースゆえ各群 ≥5 の floor ゲート付き。subagents.jsonl(agent_type 空除外 #36) + sessions(union read #469) を `_normalize_pj` で当 PJ スコープ | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
 | `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出（human/machine 評価源の蓄積偏り・保守閾値, #73） | `audit/memory_contagion.py` |
-| `memory_guard` | auto-memory 書込境界の runtime 記憶汚染検出（#108）— skill_vuln_scan の較正済みパターンを再利用し prompt_injection / secret_exfil の2カテゴリのみ reject（誤 reject コスト大ゆえ限定）。broker の `ingest_memory_results` が write 前に検査（fail-open・contaminated は consumed で無限リトライなし・`EVOLVE_MEMORY_GUARD=warn` で降格）。audit に汚染 advisory surface | `memory_guard.py` + `auto_memory_broker.py` + `audit/sections_memory.py` |
+| `memory_guard` | auto-memory 書込境界の runtime 記憶汚染検出（#108）— skill_vuln_scan の較正済みパターンを再利用し prompt_injection / secret_exfil の2カテゴリのみ reject。broker の `ingest_memory_results` が write 前に検査（fail-open・`EVOLVE_MEMORY_GUARD=warn` で降格）。**#93**: 同名エントリの書込を TRUSTMEM 型決定論遷移検証（coverage/preservation/fidelity）でゲート。新ストア `memory_transition_checks.jsonl`（active・batch）。maintain 軸に reject/検査件数を surface | `memory_guard.py` + `auto_memory_broker.py` + `memory_capability.py` + `audit/sections_memory.py` |
 | `fleet_queue` | 学習素材ベースの evolve 待ち列挙 `evolve-fleet queue`（#79）— material_count = weak 未処理（content-rich channel 限定・#113）+ 前回 evolve 以降の新規 corr が閾値以上（既定5）の PJ を決定論・ゼロ LLM で列挙。新ストア `evolve-queue-state.jsonl`（active・batch writer）。dead/phantom/未帰属 corr を footer で透明化（#85-#96） | `fleet/queue.py` + `fleet/queue_state.py` + `fleet/cli.py` + `fleet/collectors.py` + `fleet/formatters.py` |
 | `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知（#80 Phase 1b）— launchd で `fleet ingest`→`fleet tokens --backfill`（増分・#157）→`fleet queue --json` を毎朝1回走らせ `evolve-queue.json`（read 専用派生物・SoR でない・store_registry 非登録）に保存。SessionStart hook が待ち PJ を systemMessage（ADR-038）で通知（stale advisory 付き・空なら無音）。無人は決定論パイプラインまで＝適用は対話で人間承認。`bin/evolve-daily-install`(`--time`/`--uninstall`・冪等) + `bin/evolve-daily-run` | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
 | `artifacts_hygiene` | artifact 衛生5検出器（#124 グローバル CLAUDE.md 空/未存在 / #125 SKILL.md 欠落 dir / #126 バックアップ残置 / #129 skill 名跨 scope 重複・symlink wrapper 除外 / #155 plugin と重複するグローバル hook 残骸・同一イベント×正規化 basename 一致）を #115 advisory 共通枠で observability に surface。2026-07-03 PC 環境手動監査の検出器ギャップ起票分（決定論・LLM 非依存） | `audit/sections_artifacts.py` |
@@ -176,6 +177,9 @@ bin/evolve-tier set HEAD --model sonnet --effort max   # 正典を更新（atomi
 bin/evolve-tier sync                      # targets への反映を dry-run（diff 表示のみ）
 bin/evolve-tier sync --apply              # drift のみ実書込（冪等）
 bin/evolve-tier drift                     # 正典に無いモデルエイリアスの散文残存を検出
+
+# モデルティアを対話的に変更（上記 CLI の対話 UX ラッパー・diff 提示+承認フロー付き）
+/evolve-anything:tier
 
 # エージェント品質診断
 /evolve-anything:agent-brushup

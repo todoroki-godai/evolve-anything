@@ -71,6 +71,8 @@ except ImportError:
 # runtime 記憶汚染検出（#108）— オプショナル import。未解決なら fail-open（belief と同方針）。
 try:
     from memory_guard import inspect_content as _inspect_memory_content
+    from memory_guard import inspect_transition as _inspect_memory_transition
+    from memory_guard import TRANSITION_STORE_NAME as _TRANSITION_STORE_NAME
     _HAS_MEMORY_GUARD = True
 except ImportError:
     _HAS_MEMORY_GUARD = False
@@ -465,6 +467,30 @@ def _record_belief_block(data_dir: Path, belief, summary: str) -> None:
         pass
 
 
+def _record_transition_event(
+    data_dir: Path, slug: Optional[str], transition: Dict[str, Any]
+) -> None:
+    """記憶遷移検証（#93）の1件を memory_transition_checks.jsonl に記録する。
+
+    store_write barrier（ADR-049）経由の唯一の書込口。audit の memory_capability
+    maintain 軸が「reject 件数 / 検査件数」を surface するための読み取り専用ログ。
+    checked=True（同名衝突を実際に比較した）イベントのみ呼ばれる想定。
+    失敗してもサイレント継続（検証自体のブロック判断は既に確定済みのため）。
+    """
+    try:
+        from rl_common.store_write import store_write as _store_write
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "pj_slug": slug or "",
+            "matched_name": transition.get("matched_name") or "",
+            "rejected": bool(transition.get("block")),
+            "axes": sorted({i.axis for i in transition.get("issues", [])}),
+        }
+        _store_write(_TRANSITION_STORE_NAME, record)
+    except Exception:
+        pass  # サイレント継続
+
+
 def _archive_old_entries(memory_md_path: Path, memory_dir: Path) -> None:
     """MEMORY.md が MEMORY_LINE_LIMIT 行超の場合、古い index エントリを archive.md に移動する。
 
@@ -570,15 +596,20 @@ def ingest_memory_results(
       2. 空/missing はスキップ（処理済み扱いせずキューに残す）
       3. runtime 記憶汚染検出（#108・importance 採点前）: prompt injection / secret exfil
          を含む生成物は書込 skip（reject モード）。汚染は terminal 判断として消化する。
-      4. belief_entropy 生成後ゲート（block なら _record_belief_block + スキップ、書込なし）
-      5. pass なら _write_entry_file + _apply_importance_score + _append_index_line + _archive_old_entries
+      4. 記憶遷移検証（#93・TRUSTMEM Memory Transition Verifier の決定論移植）: 同名の
+         既存エントリがあれば coverage/preservation/fidelity を検証し、汚染候補（大量欠落 /
+         値矛盾 / 極性反転）は書込 skip（reject モード）。同名なしは no-op。
+      5. belief_entropy 生成後ゲート（block なら _record_belief_block + スキップ、書込なし）
+      6. pass なら _write_entry_file + _apply_importance_score + _append_index_line + _archive_old_entries
 
-    処理し終えた（stored / blocked / contaminated）record の dedup_key を集め、最後に
-    clear_queue_entries でキューから除去する。空/missing はキューに残す（次 drain で再試行）。
+    処理し終えた（stored / blocked / contaminated / transition_rejected）record の dedup_key
+    を集め、最後に clear_queue_entries でキューから除去する。空/missing はキューに残す
+    （次 drain で再試行）。
 
     Returns:
         {"stored": int, "blocked": int, "skipped": int, "contaminated": int,
-         "contamination_hits": [{"pattern_id", "category", "line"}], "entries": [str paths]}
+         "contamination_hits": [{"pattern_id", "category", "line"}],
+         "transition_checked": int, "transition_rejected": int, "entries": [str paths]}
     """
     memory_dir = Path(memory_dir)
     memory_md_path = Path(memory_md_path)
@@ -598,6 +629,8 @@ def ingest_memory_results(
     skipped = 0
     contaminated = 0
     contamination_hits: List[dict] = []
+    transition_checked = 0
+    transition_rejected = 0
     entries: List[str] = []
     consumed_keys: Set[str] = set()
     slug: Optional[str] = None
@@ -650,6 +683,36 @@ def ingest_memory_results(
                     file=sys.stderr,
                 )
 
+        # 記憶遷移検証（#93・TRUSTMEM Memory Transition Verifier の決定論移植）:
+        # 同名（frontmatter name 一致）の既存エントリがあれば coverage/preservation/
+        # fidelity を検証し、汚染候補（大量欠落 / 値矛盾 / 極性反転）を reject する。
+        # 同名の既存エントリが無ければ no-op（checked=False・書込には影響しない）。
+        if _HAS_MEMORY_GUARD:
+            try:
+                transition = _inspect_memory_transition(llm_output, memory_dir)
+            except Exception:
+                transition = None
+            if transition and transition.get("checked"):
+                transition_checked += 1
+                _record_transition_event(data_dir, slug, transition)
+                if transition.get("issues"):
+                    axis_details = sorted({i.axis for i in transition["issues"]})
+                    if transition.get("block"):
+                        # reject: 書込せず消化（terminal 判断・再キューで無限リトライしない）
+                        transition_rejected += 1
+                        consumed_keys.add(key)
+                        print(
+                            f"[evolve-anything:memory-guard] 記憶遷移検証で reject: {axis_details}",
+                            file=sys.stderr,
+                        )
+                        continue
+                    # warn: 書込は継続するが可視化する（緊急避難・無音にしない）
+                    print(
+                        f"[evolve-anything:memory-guard] 記憶遷移検証ヒット（warn・書込継続）: "
+                        f"{axis_details}",
+                        file=sys.stderr,
+                    )
+
         # 生成後ゲート（belief_entropy）
         if gating_on:
             try:
@@ -688,5 +751,7 @@ def ingest_memory_results(
         "skipped": skipped,
         "contaminated": contaminated,
         "contamination_hits": contamination_hits,
+        "transition_checked": transition_checked,
+        "transition_rejected": transition_rejected,
         "entries": entries,
     }

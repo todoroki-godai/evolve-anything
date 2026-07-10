@@ -331,6 +331,23 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "judge が batch で書く（writer_locus=batch で hook-writer stale 突合から除外）。",
     ),
     StoreDeclaration(
+        name="memory_transition_checks.jsonl",
+        writer="scripts/lib/auto_memory_broker.ingest_memory_results（#93 記憶遷移検証 = "
+        "TRUSTMEM Memory Transition Verifier の決定論移植。同名 frontmatter の既存エントリ"
+        "との coverage/preservation/fidelity 比較を実施した都度1行）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="audit/sections_memory.build_memory_capability_section（maintain 軸の "
+        "evidence に reject 件数 / 検査件数を surface）。",
+        retention="permanent",
+        note="#93: memory_guard.inspect_transition が同名（frontmatter name 一致）の既存 "
+        "エントリを検出した場合のみ1件記録する（未マッチ=検証対象外の書込は記録しない）。"
+        "coverage（重要行の大量欠落）/ preservation（metadata.type の矛盾上書き）/ "
+        "fidelity（冒頭行の極性反転疑い）を決定論・文字列比較ベースで判定し、"
+        "rejected=True/False と axes を記録する。誤 reject を避ける保守的較正"
+        "（同名一致が前提・difflib 類似度しきい値・description/importance は対象外）。",
+    ),
+    StoreDeclaration(
         name="remediation_surfaced/<slug>.json",
         writer="scripts/lib/remediation/suppression_ledger.reconcile_surfaced"
         "（evolve の remediation phase が個別承認候補確定後に毎 run 1 回呼ぶ）。"

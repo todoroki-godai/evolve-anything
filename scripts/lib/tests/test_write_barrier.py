@@ -193,6 +193,7 @@ _EXPECTED_ACTIVE_STORES = [
     "evolve-queue-state.jsonl",
     "false_positives.jsonl",
     "judge_audit_verdicts.jsonl",
+    "memory_transition_checks.jsonl",
     "remediation_suppression/<slug>.jsonl",
     "remediation_surfaced/<slug>.json",
     "reward_ema.jsonl",
