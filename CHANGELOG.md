@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(daily): icebox 棚卸しの気づきトリガーを追加（#194）** — `bin/evolve-daily-run` に `gh issue list --repo todoroki-godai/evolve-anything --label icebox --state closed --json closedAt --limit 100`（read-only）のステップを追加し、件数・最古経過日数を `icebox-status.json` に保存する（既存 ingest/tokens と同じ fail-open。`gh` 失敗/バイナリ不在でも daily-run 全体を落とさず既存ファイルを壊さない）。新モジュール `scripts/lib/daily/icebox_notice.py`（`queue_notice.py` と同型の read 専用・純関数・決定論）が `oldest_days>=閾値(既定90日)` のときだけ 1 行に集約した systemMessage を生成し、`hooks/restore_state.py` の `_deliver_icebox_notice()` が SessionStart で通知する。icebox は evolve-anything 自身の issue backlog のため、`.claude-plugin/plugin.json` を持つ本体リポジトリで作業している時だけ判定し、他 PJ では沈黙する。TDD +31件（icebox_notice 14 / daily-run ステップ 8 / restore_state 配線 9）・決定論・LLM 非依存。
+
 ## [1.121.0] - 2026-07-10
 
 ### Added

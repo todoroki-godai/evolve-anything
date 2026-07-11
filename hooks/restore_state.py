@@ -72,6 +72,13 @@ try:
 except ImportError:
     pass
 
+# daily.icebox_notice import (optional) — icebox 棚卸しの気づきトリガー（#194）
+_icebox_notice = None
+try:
+    from daily import icebox_notice as _icebox_notice
+except ImportError:
+    pass
+
 
 def _summarize_checkpoint_for_output(checkpoint: dict) -> dict:
     """SessionStart stdout に載せる checkpoint を安全なサイズに要約する（セキュリティ監査）。
@@ -379,6 +386,48 @@ def _deliver_evolve_queue_notice() -> None:
         print(f"[evolve-anything:restore_state] evolve-queue notice error: {e}", file=sys.stderr)
 
 
+def _deliver_icebox_notice() -> None:
+    """毎朝の `gh issue list --label icebox --state closed` が保存した icebox-status.json の
+    棚卸し気づきトリガーを systemMessage で通知する（#194）。
+
+    icebox は evolve-anything 自身の GitHub issue backlog なので、**本体リポジトリ
+    （`.claude-plugin/plugin.json` を持つ repo）で作業しているときだけ**判定する。他 PJ で
+    作業中は plugin_self 判定で即 return し、何も print しない（沈黙）。
+
+    実環境ガード: `CLAUDE_PLUGIN_DATA` が CC install レイアウト配下のときだけ判定する
+    （evolve-queue notice と同型）。テスト isolation の tmp env / 非 hook 文脈では実環境を
+    一切 probe せず沈黙し、JSON stdout を汚さない。
+
+    observe-first pre-flight: icebox-status.json を読むだけ（DuckDB 接続なし・走査なし）。
+    閾値未満 or ファイル無し → 沈黙。出力は `systemMessage` を含む 1 行 JSON
+    （ADR-038 = user 向けチャネル）。
+    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
+    """
+    if _icebox_notice is None or _data_dir_migration is None:
+        return
+    try:
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        if not project_dir:
+            return  # cwd 不明なら plugin_self 判定不能 = 沈黙
+        if not (Path(project_dir) / ".claude-plugin" / "plugin.json").exists():
+            return  # evolve-anything 本体以外の PJ では沈黙
+
+        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+
+        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        if not env:
+            return  # hook 文脈でなければ判定しない（実環境を probe しない）
+        if not _data_dir_migration.is_cc_install_layout(Path(env)):
+            return  # テスト isolation / custom 環境
+        data_dir = rl_common.resolve_data_dir(env)
+        status = _icebox_notice.read_icebox_status(data_dir)
+        output = _icebox_notice.icebox_notice_output(status)
+        if output:
+            print(json.dumps(output, ensure_ascii=False))
+    except Exception as e:
+        print(f"[evolve-anything:restore_state] icebox notice error: {e}", file=sys.stderr)
+
+
 def _persist_pj_slug_cache() -> None:
     """sibling-dir worktree の write 時 slug 解決のため authoritative slug を cache する（#29/#593）。
 
@@ -429,6 +478,8 @@ def handle_session_start(event: dict) -> None:
     _deliver_utterance_staleness()
     # 毎朝の evolve-queue 待ち PJ 通知（#80・evolve-queue.json 読みのみ）
     _deliver_evolve_queue_notice()
+    # icebox 棚卸しの気づきトリガー（#194・evolve-anything 本体リポジトリのみ・icebox-status.json 読みのみ）
+    _deliver_icebox_notice()
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
     checkpoint = common.find_latest_checkpoint(project_dir)
