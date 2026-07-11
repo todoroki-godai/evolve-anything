@@ -29,9 +29,14 @@ def main() -> int:
     fleet_bin = str(_PLUGIN_ROOT / "bin" / "evolve-fleet")
     out_path = Path(plist_mod.queue_json_path(str(data_dir)))
 
+    # evolve-fleet を bare パスで起動すると shebang（#!/usr/bin/env python3）が launchd の
+    # 最小 PATH で /usr/bin の古い Python に落ちて import 時 TypeError で死ぬ。この runner が走る
+    # インタプリタ（launchd plist で pin 済み）を明示的に渡して同じ Python で子を実行する。
+    fleet = [sys.executable, fleet_bin]
+
     # 1) 全 PJ 発話取込（ゼロ LLM）。失敗しても queue は古い取込で判定できるので継続。
     print(f"[evolve-daily-run] fleet ingest …", flush=True)
-    rc_ingest = subprocess.run([fleet_bin, "ingest"]).returncode
+    rc_ingest = subprocess.run(fleet + ["ingest"]).returncode
     if rc_ingest != 0:
         print(f"[evolve-daily-run] fleet ingest exited {rc_ingest}（continue）", file=sys.stderr, flush=True)
 
@@ -39,13 +44,13 @@ def main() -> int:
     # カーソル + INSERT OR IGNORE で冪等・増分。既定の 90 日ウィンドウで transcript を走査する。
     # 失敗しても queue 判定には無関係なので継続（ingest と同じ扱い）。
     print(f"[evolve-daily-run] fleet tokens --backfill …", flush=True)
-    rc_tokens = subprocess.run([fleet_bin, "tokens", "--backfill"]).returncode
+    rc_tokens = subprocess.run(fleet + ["tokens", "--backfill"]).returncode
     if rc_tokens != 0:
         print(f"[evolve-daily-run] fleet tokens --backfill exited {rc_tokens}（continue）", file=sys.stderr, flush=True)
 
     # 2) 待ち判定（--json）。stdout を evolve-queue.json に保存。
     print(f"[evolve-daily-run] fleet queue --json → {out_path}", flush=True)
-    result = subprocess.run([fleet_bin, "queue", "--json"], capture_output=True, text=True)
+    result = subprocess.run(fleet + ["queue", "--json"], capture_output=True, text=True)
     if result.returncode != 0:
         print(
             f"[evolve-daily-run] fleet queue failed (rc={result.returncode}):\n{result.stderr}",

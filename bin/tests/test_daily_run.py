@@ -9,6 +9,7 @@ subprocess は mock（単体テストで別プロセス / LLM を起動しない
 from __future__ import annotations
 
 import importlib.util
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -73,3 +74,21 @@ def test_token_ingest_failure_continues_to_queue(monkeypatch):
     assert rc == 0
     joined = [" ".join(c) for c in calls]
     assert any("queue --json" in c for c in joined), joined
+
+
+def test_runner_pins_interpreter_for_fleet_subprocess(monkeypatch):
+    """全 fleet 呼び出しが sys.executable を先頭に付けて起動する（launchd 最小 PATH で子が 3.9 に落ちない）。
+
+    runner 自身は pin された homebrew python で走るので sys.executable = homebrew。それを
+    evolve-fleet の起動に明示的に渡し、bare パス起動時の #!/usr/bin/env python3 → /usr/bin 3.9
+    解決を回避する（PATH 非依存の決定論伝播）。
+    """
+    mod = _load_module()
+    calls = _install_fake_run(mod, monkeypatch)
+    rc = mod.main()
+    assert rc == 0
+    # fleet を叩く呼び出し（evolve-fleet を含む）はすべて cmd[0] == sys.executable
+    fleet_calls = [c for c in calls if any("evolve-fleet" in part for part in c)]
+    assert fleet_calls, calls
+    for c in fleet_calls:
+        assert c[0] == sys.executable, c
