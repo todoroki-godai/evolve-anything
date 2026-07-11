@@ -67,6 +67,21 @@ def test_build_icebox_notice_missing_oldest_days_is_silent():
     assert ibn.build_icebox_notice(status) is None
 
 
+def test_build_icebox_notice_missing_count_is_silent():
+    status = {"oldest_days": 200, "generated_at": "2026-07-11T09:00:00Z"}
+    assert ibn.build_icebox_notice(status) is None
+
+
+def test_build_icebox_notice_non_numeric_count_is_silent():
+    status = {"count": "12", "oldest_days": 200, "generated_at": "2026-07-11T09:00:00Z"}
+    assert ibn.build_icebox_notice(status) is None
+
+
+def test_build_icebox_notice_bool_count_is_silent():
+    status = {"count": True, "oldest_days": 200, "generated_at": "2026-07-11T09:00:00Z"}
+    assert ibn.build_icebox_notice(status) is None
+
+
 def test_build_icebox_notice_default_threshold_is_90():
     status = {"count": 12, "oldest_days": 89, "generated_at": "2026-07-11T09:00:00Z"}
     assert ibn.build_icebox_notice(status) is None
