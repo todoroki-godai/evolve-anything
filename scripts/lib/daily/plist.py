@@ -65,9 +65,10 @@ def build_plist(
     そのインタプリタで直接実行する（launchd の PATH 先頭 /usr/bin の古い Python を拾って
     `str | None` 等の新記法が import 時 TypeError で死ぬのを防ぐ）。加えて EnvironmentVariables に
     `PATH`（python_exe の dir を先頭付与）を設定し、runner が bare パスで spawn する子プロセス
-    （evolve-fleet の `#!/usr/bin/env python3`）も同じ Python に解決させる。空なら従来通り runner
-    のみ・PATH 注入なし。`extra_path_dirs` は python dir の後に追加する子ツールの dir
-    （gh 等。launchd 最小 PATH に無い homebrew ツールを install 時検出で焼き込む・#196）。
+    （evolve-fleet の `#!/usr/bin/env python3`）も同じ Python に解決させる。空なら ProgramArguments
+    は runner のみ。`extra_path_dirs` は python dir の後に追加する子ツールの dir
+    （gh 等。launchd 最小 PATH に無い homebrew ツールを install 時検出で焼き込む・#196）で、
+    python_exe 非依存に単独でも PATH に入る。python dir も extra も無ければ PATH 注入なし。
     StartCalendarInterval で毎日 hour:minute に発火。stdout/stderr を `log_path` に集約し
     エラー時のスタックを残す。
     """
@@ -77,13 +78,19 @@ def build_plist(
     args_xml = "\n".join(f"        <string>{escape(a)}</string>" for a in program_args)
 
     env_entries = [("CLAUDE_PLUGIN_DATA", data_dir)]
-    if python_exe:
-        # launchd の既定 PATH は /usr/bin:/bin:... で homebrew を含まない。python_exe の dir を
-        # 先頭に足し、子プロセスの `env python3` を pin した Python と同 dir に解決させる。
-        # extra_path_dirs（gh 等の子ツール dir）はその後ろ・system パスの前（重複は除去）。
-        path_dirs = [os.path.dirname(python_exe)]
-        path_dirs += [d for d in extra_path_dirs if d and d not in path_dirs]
-        env_entries.append(("PATH", ":".join(path_dirs) + ":/usr/bin:/bin:/usr/sbin:/sbin"))
+    # launchd の既定 PATH は /usr/bin:/bin:... で homebrew を含まない。python_exe の dir を
+    # 先頭に足し、子プロセスの `env python3` を pin した Python と同 dir に解決させる。
+    # extra_path_dirs（gh 等の子ツール dir）はその後ろ・system パスの前。重複（python dir・
+    # system パス含む）は除去。bare 名の python_exe は dirname が空になり、空セグメント＝
+    # カレントディレクトリ優先の PATH インジェクションを焼き込むことになるため除外する。
+    system_dirs = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+    py_dir = os.path.dirname(python_exe) if python_exe else ""
+    path_dirs = []
+    for d in (py_dir, *extra_path_dirs):
+        if d and d not in path_dirs and d not in system_dirs:
+            path_dirs.append(d)
+    if path_dirs:
+        env_entries.append(("PATH", ":".join(path_dirs + list(system_dirs))))
     env_xml = "\n".join(
         f"        <key>{escape(k)}</key>\n        <string>{escape(v)}</string>"
         for k, v in env_entries
