@@ -12,7 +12,8 @@ OPD-Evolver（arXiv 2606.17628）由来の「記憶操作能力」を read/use/w
 （near-constant）にしかならない。よって **read/use を統合して3軸** で算出する:
 
 1. write（記憶量）: temporal frontmatter を持つ件数 / 総 memory 件数。
-2. maintain（維持・健全度）: (非 stale かつ 非 superseded) / 総件数。
+2. maintain（維持・健全度）: (非 stale かつ 非 superseded) / 総件数。evidence には
+   #93 記憶遷移検証（memory_guard.transition_check_counts）の reject件数/検査件数も含む。
 3. use_read（活性）: last_reinforced_at を持つ件数 / 総件数 + update_count 中央値。
 
 スコープ（DATA_DIR 単一ファイル pitfall の再来防止）: 当 PJ の slug が解決した
@@ -105,9 +106,29 @@ def compute_memory_capability(project_dir: Path) -> Dict[str, Any]:
         "value": round(with_frontmatter / total, 4),
         "evidence": {"with_frontmatter": with_frontmatter, "total": total},
     }
+    # #93: 記憶遷移検証（coverage/preservation/fidelity）の reject 件数 / 検査件数を
+    # maintain 軸 evidence に追加する。matched_name（同名 frontmatter）が無い書込は
+    # そもそも検証対象外なので checked=0 は「健全」ではなく「該当なし」を意味する。
+    try:
+        import memory_guard
+        from pj_slug import pj_slug_fast
+        transition_slug = pj_slug_fast(str(project_dir))
+        transition_counts = (
+            memory_guard.transition_check_counts(transition_slug)
+            if transition_slug else {"checked": 0, "rejected": 0}
+        )
+    except ImportError:
+        transition_counts = {"checked": 0, "rejected": 0}
+
     maintain_axis = {
         "value": round(healthy / total, 4),
-        "evidence": {"stale": stale, "superseded": superseded, "total": total},
+        "evidence": {
+            "stale": stale,
+            "superseded": superseded,
+            "total": total,
+            "transition_checked": transition_counts["checked"],
+            "transition_rejected": transition_counts["rejected"],
+        },
     }
     use_read_axis = {
         "value": round(reinforced / total, 4),

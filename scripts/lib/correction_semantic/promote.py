@@ -53,6 +53,8 @@ def read_unpromoted(
     weak_signals_path: Optional[Path] = None,
     channel: Optional[str] = None,
     exclude_expired: bool = True,
+    exclude_reviewed: bool = True,
+    seen_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """未昇格（promoted=False）の weak_signal レコードを返す。
 
@@ -63,11 +65,26 @@ def read_unpromoted(
     標準フロー（dry-run → drain）は ``mark_expired`` を通らずフラグが書かれないため、
     read 時に age を導出しないと 45 日超の腐った signal が永久に落ちないからである
     （write 非依存）。後方互換が必要な呼び出しは exclude_expired=False で全件取得できる。
+
+    exclude_reviewed（既定 True・#185 claim3）は既読ストア（correction_review_seen.jsonl）
+    に記録済み（decision="promoted"/"rejected" どちらも）の signal_key を候補から外す。
+    ``daily_review.record_reviewed(decision="rejected")`` は weak_signal 側の ``promoted``
+    フラグを立てない（却下＝昇格しない、が正しい仕様）ため、これを見ないと reject 済みの
+    signal が material_count/read_unpromoted に永遠に残り「reject しても件数が減らない」
+    非対称が起きる。TTL 失効（#89）と同じ **read 時導出**方針（forward write に頼らない）。
+    ``seen_path`` はテスト isolation 用の明示パス（未指定は既読ストアの production 既定
+    ＝union read）。後方互換が必要な呼び出しは exclude_reviewed=False で無視できる。
     """
     recs = read_signals(weak_signals_path)
     out = [r for r in recs if not r.get("promoted")]
     if exclude_expired:
         out = [r for r in out if not is_effectively_expired(r)]
+    if exclude_reviewed:
+        from correction_semantic.daily_review import read_reviewed_keys
+
+        seen = read_reviewed_keys(seen_path)
+        if seen:
+            out = [r for r in out if r.get("signal_key") not in seen]
     if channel is not None:
         out = [r for r in out if r.get("channel") == channel]
     return out

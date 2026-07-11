@@ -11,6 +11,15 @@ from pathlib import Path
 
 import common
 
+# SessionStart で Claude に注入する corrections_snapshot の上限（セキュリティ監査）。
+# restore_state は checkpoint 全体を print するため、corrections.jsonl 全件を含む
+# corrections_snapshot がそのまま Claude context に注入され、毎セッション巨大テキスト
+# （実測 ~102KB）を無駄消費し、外部テキストが correction に化けた場合は無期限で再注入
+# される運び屋になりうる。raw correction は復元に使われない（post_compact は件数のみ
+# 参照）ため、直近 N 件 + 合計文字数上限に truncate し真の総数は別フィールドで保持する。
+MAX_SNAPSHOT_ITEMS = 20
+MAX_SNAPSHOT_CHARS = 8000
+
 # trigger_engine import (optional)
 _trigger_engine = None
 try:
@@ -62,6 +71,43 @@ try:
     from daily import queue_notice as _queue_notice
 except ImportError:
     pass
+
+# daily.icebox_notice import (optional) — icebox 棚卸しの気づきトリガー（#194）
+_icebox_notice = None
+try:
+    from daily import icebox_notice as _icebox_notice
+except ImportError:
+    pass
+
+
+def _summarize_checkpoint_for_output(checkpoint: dict) -> dict:
+    """SessionStart stdout に載せる checkpoint を安全なサイズに要約する（セキュリティ監査）。
+
+    save_state（保存）は corrections_snapshot を全件ディスク保存したまま無改変。ここで縮めるのは
+    「SessionStart で Claude に print する分」だけ（保存と表示の分離）。raw correction text は
+    復元に使われない（post_compact は件数のみ参照）ため、直近 ``MAX_SNAPSHOT_ITEMS`` 件かつ
+    合計 ``MAX_SNAPSHOT_CHARS`` 文字に truncate し、真の総数は ``corrections_snapshot_count``
+    に保持する。これにより毎セッションの巨大注入と、外部テキスト由来 correction の無期限再注入
+    （運び屋化）を抑える。
+
+    corrections_snapshot キーが無い旧 checkpoint は無改変で返す（後方互換）。
+    """
+    snapshot = checkpoint.get("corrections_snapshot")
+    if not isinstance(snapshot, list):
+        return checkpoint
+
+    total = len(snapshot)
+    # 末尾＝最新（corrections.jsonl は追記順）。直近 N 件を残す。
+    recent = snapshot[-MAX_SNAPSHOT_ITEMS:] if MAX_SNAPSHOT_ITEMS > 0 else []
+    # 合計文字数上限: 収まるまで古い方（先頭）から落とす。単体で超過する場合は空に degrade。
+    while recent and len(json.dumps(recent, ensure_ascii=False)) > MAX_SNAPSHOT_CHARS:
+        recent = recent[1:]
+
+    summarized = dict(checkpoint)
+    summarized["corrections_snapshot"] = recent
+    summarized["corrections_snapshot_count"] = total
+    summarized["corrections_snapshot_truncated"] = len(recent) < total
+    return summarized
 
 
 def _make_session_title(checkpoint: dict) -> str:
@@ -340,6 +386,48 @@ def _deliver_evolve_queue_notice() -> None:
         print(f"[evolve-anything:restore_state] evolve-queue notice error: {e}", file=sys.stderr)
 
 
+def _deliver_icebox_notice() -> None:
+    """毎朝の `gh issue list --label icebox --state closed` が保存した icebox-status.json の
+    棚卸し気づきトリガーを systemMessage で通知する（#194）。
+
+    icebox は evolve-anything 自身の GitHub issue backlog なので、**本体リポジトリ
+    （`.claude-plugin/plugin.json` を持つ repo）で作業しているときだけ**判定する。他 PJ で
+    作業中は plugin_self 判定で即 return し、何も print しない（沈黙）。
+
+    実環境ガード: `CLAUDE_PLUGIN_DATA` が CC install レイアウト配下のときだけ判定する
+    （evolve-queue notice と同型）。テスト isolation の tmp env / 非 hook 文脈では実環境を
+    一切 probe せず沈黙し、JSON stdout を汚さない。
+
+    observe-first pre-flight: icebox-status.json を読むだけ（DuckDB 接続なし・走査なし）。
+    閾値未満 or ファイル無し → 沈黙。出力は `systemMessage` を含む 1 行 JSON
+    （ADR-038 = user 向けチャネル）。
+    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
+    """
+    if _icebox_notice is None or _data_dir_migration is None:
+        return
+    try:
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        if not project_dir:
+            return  # cwd 不明なら plugin_self 判定不能 = 沈黙
+        if not (Path(project_dir) / ".claude-plugin" / "plugin.json").exists():
+            return  # evolve-anything 本体以外の PJ では沈黙
+
+        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+
+        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        if not env:
+            return  # hook 文脈でなければ判定しない（実環境を probe しない）
+        if not _data_dir_migration.is_cc_install_layout(Path(env)):
+            return  # テスト isolation / custom 環境
+        data_dir = rl_common.resolve_data_dir(env)
+        status = _icebox_notice.read_icebox_status(data_dir)
+        output = _icebox_notice.icebox_notice_output(status)
+        if output:
+            print(json.dumps(output, ensure_ascii=False))
+    except Exception as e:
+        print(f"[evolve-anything:restore_state] icebox notice error: {e}", file=sys.stderr)
+
+
 def _persist_pj_slug_cache() -> None:
     """sibling-dir worktree の write 時 slug 解決のため authoritative slug を cache する（#29/#593）。
 
@@ -390,6 +478,8 @@ def handle_session_start(event: dict) -> None:
     _deliver_utterance_staleness()
     # 毎朝の evolve-queue 待ち PJ 通知（#80・evolve-queue.json 読みのみ）
     _deliver_evolve_queue_notice()
+    # icebox 棚卸しの気づきトリガー（#194・evolve-anything 本体リポジトリのみ・icebox-status.json 読みのみ）
+    _deliver_icebox_notice()
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
     checkpoint = common.find_latest_checkpoint(project_dir)
@@ -400,7 +490,11 @@ def handle_session_start(event: dict) -> None:
     try:
         # 復元した状態を stdout に出力（Claude Code が利用可能）
         session_title = _make_session_title(checkpoint)
-        output: dict = {"restored": True, "checkpoint": checkpoint}
+        # corrections_snapshot を上限内に要約してから print する（保存と表示の分離・監査対応）
+        output: dict = {
+            "restored": True,
+            "checkpoint": _summarize_checkpoint_for_output(checkpoint),
+        }
         if session_title:
             output["hookSpecificOutput"] = {"sessionTitle": session_title}
         print(json.dumps(output, ensure_ascii=False))

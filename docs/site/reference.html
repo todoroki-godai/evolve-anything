@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.117.0</span>
+    <span class="header-version">v1.121.0</span>
   </div>
 </header>
 
@@ -295,7 +295,7 @@
       <table class="arch-table">
         <thead><tr><th>コンポーネント</th><th>説明</th></tr></thead>
         <tbody>
-          <tr><td>Observe hooks (23個)</td><td>LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録する</td></tr>
+          <tr><td>Observe hooks (24個)</td><td>LLM コストゼロで使用・エラー・修正フィードバック・ワークフロー・ファイル変更を自動記録する</td></tr>
           <tr><td>Auto Trigger</td><td>セッション終了・corrections 蓄積・ファイル変更時に evolve/audit 実行を自動提案する (<code>trigger_engine.py</code>)</td></tr>
           <tr><td>spec_trigger</td><td>main に着地した「挙動コード（<code>scripts/**.py</code>・<code>hooks/**.py</code>）を変えたのに仕様アーティファクト（SPEC.md・CLAUDE.md・spec/・docs/decisions/ 等）を未更新」のマージを SessionStart で検出し spec-keeper update / ADR 化を1回提案する（[ADR-044]）。/ship を経ない <code>gh pr merge</code> 直叩き・GitHub web squash マージの無音穴を塞ぐ。ゲートは実コーパス 40 commit の dry 適用で較正（feat/refactor/feat! を信号源とし fix は除外）。cooldown(3日)+リマインド1回+解消プロキシで重複抑制、<code>spec_trigger_enabled</code> で無効化可。決定論・LLM 非依存</td></tr>
           <tr><td>capture_rate</td><td>correction capture 率（20+ ターン session のうち correction 検出割合）を決定論算出し audit に advisory surface（#421）</td></tr>
@@ -363,6 +363,15 @@
           <tr><td>verbosity</td><td>回答冗長性の学習ループ — Stop hook がゼロ LLM で足切り超の長応答を記録し judge が Haiku バッチで「無駄に冗長か」+7パターンを判定、verbose を weak_signals <code>channel=verbosity</code> に emit（reflect 昇格に相乗り）。多発パターンから rules/concise.md 追記案を提示（auto-apply しない・protected）（#75）</td></tr>
           <tr><td>artifacts_hygiene</td><td>artifact 衛生4検出器（グローバル CLAUDE.md 空/未存在 / SKILL.md 欠落 dir / バックアップ残置 / skill 名跨 scope 重複・symlink wrapper 除外）を advisory 共通枠で observability に surface。決定論・LLM 非依存（#124, #125, #126, #129）</td></tr>
           <tr><td>memory_hygiene</td><td>memory dir 衛生3検出器（MEMORY.md 索引孤児 / auto-memory frontmatter スキーマ検証 / 旧 PJ memory 完全重複残骸=fleet 横断・退避手順提案のみ auto-apply なし）。3件とも clean 時非表示・走査は *.md のみ（#127, #128, #131）</td></tr>
+          <tr><td>agent_tier</td><td>agent frontmatter の <code>tier:</code> 宣言とモデル割り振りポリシー（HEAD=opus/xhigh 〜 REVIEW=fable/high）の不整合を決定論検査する advisory ゲート — tier↔model/effort 不一致・exact-ID pin・missing_tier・env 上書きを surface。auto-fix なし（agent は protected）（#180）</td></tr>
+          <tr><td>invalid_frontmatter</td><td>YAML frontmatter が壊れて CC 発火不能なスキルを直接 surface する observability section — <code>detect_frontmatter_error</code>（純関数）が YAMLError/非dict を検出し missing_effort への誤分類も根治。clean 時沈黙・auto-fix なし（#167）</td></tr>
+          <tr><td>self_contamination</td><td>自己汚染ハルシネーション指紋（生タグ漏出 / 偽 system-reminder / 汚染宣言×tool_result 原文非在）を transcript の byte-level 照合で恒久計測する read-only advisory — opus 1M 長大セッションで増加した #70900 型の作話を週次推移で監視し Layer 1 hook 要否を判断（#190）</td></tr>
+          <tr><td>evolve_tier</td><td>モデルティア（HEAD/HARD/NORMAL/MECH/REVIEW ↔ model/effort）の正典を <code>~/.claude/model-tiers.json</code> に一元化する CLI（<code>bin/evolve-tier</code>）— 正典散在による手動追従漏れを解消。<code>set</code>（正典更新）と <code>sync [--apply]</code>（agent frontmatter・settings.json・routing rule マーカーへ反映・既定 dry-run・冪等）を分離、<code>drift</code> で stale なモデルエイリアスの散文残存を advisory 検出。<code>agent_tier</code> gate は call-time でこの config を参照（#193）</td></tr>
+          <tr><td>tier スキル</td><td><code>/evolve-anything:tier</code> — <code>evolve_tier</code> CLI の対話 UX ラッパー。現状表示→発話解釈（曖昧なら AskUserQuestion）→<code>set</code>→<code>sync</code> の dry-run diff 提示→明示承認後のみ <code>--apply</code>→<code>drift</code> advisory の順で安全に操作。ファイル直接編集はしない（#193）</td></tr>
+          <tr><td>judge_audit</td><td>LLM judge の false-pass（失敗を合格と誤判定）欠陥注入監査（The Blind Curator、arXiv 2607.07436）。既知の欠陥 fixture 6件を judge の実プロンプト/パーサに流し、スキル退役ゲートを無音で無効化しうる false-pass 率を opt-in CLI ハーネスで計測。floor=min(5, fixture総数)・20% 超で ⚠（#188）</td></tr>
+          <tr><td>memory_guard（TRUSTMEM 型拡張）</td><td>auto-memory が同名の既存 memory エントリを更新する書込に対し coverage（重要行の大量欠落）/ preservation（<code>metadata.type</code> の矛盾上書き）/ fidelity（冒頭行の極性反転疑い）を difflib ベースで決定論検証するゲート。同名エントリが無い書込は対象外（block しない）。#108 の汚染検出の拡張（#93, arXiv 2606.25161）</td></tr>
+          <tr><td>skill_reachability</td><td>SKILL.md 散文が宣言する callable が production コードから到達不能な「ゾンビ宣言」を AST 静的解析で決定論検出。実較正で真のゾンビ11件検出（FP 0）。audit advisory + dogfood gate light 非ブロッキング警告（#191）</td></tr>
+          <tr><td>worker_takeoff</td><td>subagent の「completed 報告」↔実際の完遂の意味的乖離を決定論検知 — 最終 assistant メッセージの完了署名欠如×前向きナレーション終端の2シグナル AND で判定し、疑いのある agent_type のみ ⚠ advisory 表示（#161）</td></tr>
         </tbody>
       </table>
 
@@ -390,6 +399,8 @@
           <tr><td>measurement_bug</td><td>複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185）</td></tr>
           <tr><td>fleet_queue</td><td>学習素材ベースの evolve 待ち列挙 <code>evolve-fleet queue</code> — material_count = weak 未処理 + 前回 evolve 以降の新規 corr が閾値（既定5）以上の PJ を決定論・ゼロ LLM で列挙。新ストア <code>evolve-queue-state.jsonl</code> が per-PJ の前回 evolve 時刻を測る。dead/rename/phantom PJ を透明化（#79, #85–#88）</td></tr>
           <tr><td>daily</td><td>毎朝の evolve queue 自動実行 + SessionStart 通知 — launchd で <code>fleet ingest</code>→<code>fleet queue --json</code> を毎朝1回走らせ、待ち PJ を systemMessage で通知（無人は決定論まで・適用は対話で人間承認）。<code>bin/evolve-daily-install</code> で登録（#80）</td></tr>
+          <tr><td>fleet_propose</td><td><code>evolve-fleet propose</code> — queue 待ち PJ へ <code>run_evolve(dry_run=True)</code> を順次実行し提案を集約レポート <code>evolve-proposals-&lt;date&gt;.md/.json</code> に束ねる。llm-batch-guard 承認ゲート + reject 済み提案の再提示抑制付き（#81）</td></tr>
+          <tr><td>fleet_pr</td><td><code>evolve-fleet pr-start</code>/<code>pr-finish</code> — 承認済み提案の worktree 準備→（対話 evolve で人間が適用）→commit→push アカウント検証→PR 作成。適用とマージは常に人間、自動化は外殻のみ（#82）</td></tr>
           <tr><td>testpaths_coverage</td><td>pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468）</td></tr>
           <tr><td>plugin_self origin</td><td>プラグイン本体リポジトリ自身の repo 直下 skills/ を evolve 診断対象化 — <code>.claude-plugin/plugin.json</code> 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185）</td></tr>
           <tr><td>dogfood gate</td><td>通し評価ゲート <code>bin/evolve-dogfood-gate</code> — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 非 dry-run store 差分（Layer1b・<code>evolve --drain --result-json</code> の隔離実行で weak_signals 永続化方向を assert）+ 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック抽出実行。evolve.py の DATA_DIR を env 優先解決に統一（#517）。<code>--layer light</code>（Layer1a 不変 + Layer2 + Layer3、約十数秒・Layer1b drain と ingest 除外）を pre-push hook（<code>scripts/git-hooks/pre-push.local</code>・非ブロッキング警告。gate 終了コードを区別し古い gate を誤警告しない）が自動実行。リリース前の実環境 dogfood E2E（#496, #513, #517, #518）</td></tr>

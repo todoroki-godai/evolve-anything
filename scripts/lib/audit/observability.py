@@ -23,6 +23,7 @@ from .sections import (
     build_unmanaged_pitfalls_section,
 )
 from .sections_agent import build_agent_team_section
+from .sections_agent_tier import build_agent_tier_section
 from .sections_artifacts import (
     build_backup_files_section,
     build_duplicate_skill_names_section,
@@ -35,6 +36,7 @@ from .sections_eval import build_eval_saturation_section
 from .sections_fanout import build_fanout_cost_section
 from .sections_hook import build_hook_drift_section
 from .sections_invalid_frontmatter import build_invalid_frontmatter_section
+from .sections_judge_audit import build_judge_audit_section
 from .sections_contagion import build_memory_contagion_section
 from .sections_measurement import build_measurement_bug_section
 from .sections_memory import (
@@ -49,9 +51,12 @@ from .sections_orphan import build_orphan_store_section, build_store_contract_se
 from .sections_outcome import build_outcome_metrics_section
 from .sections_paired import build_paired_trajectory_section
 from .sections_promotion_readiness import build_promotion_readiness_section
+from .sections_self_contamination import build_self_contamination_section
+from .sections_skill_reachability import build_skill_reachability_section
 from .sections_skill_vuln import build_skill_vuln_section
 from .sections_subagent_noise import build_subagent_noise_section
 from .sections_subagent_traces import build_subagent_traces_section
+from .sections_takeoff import build_worker_takeoff_section
 from .sections_testpaths import build_testpaths_coverage_section
 from .sections_triage import build_skill_triage_section
 from .sections_verbosity import build_verbosity_section
@@ -69,6 +74,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("negative_transfer", build_negative_transfer_section),
     ("hook_drift", build_hook_drift_section),
     ("agent_team", build_agent_team_section),
+    ("agent_tier", build_agent_tier_section),
     ("correction_capture", build_capture_rate_section),
     ("orphan_store", build_orphan_store_section),
     ("store_contract", build_store_contract_section),
@@ -76,6 +82,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("fanout_cost", build_fanout_cost_section),
     ("subagent_traces", build_subagent_traces_section),
     ("subagent_noise", build_subagent_noise_section),
+    ("worker_takeoff", build_worker_takeoff_section),
     ("verbosity", build_verbosity_section),
     ("memory_capability", build_memory_capability_section),
     ("memory_index_orphan", build_memory_index_orphan_section),
@@ -87,6 +94,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("measurement_bug", build_measurement_bug_section),
     ("memory_contagion", build_memory_contagion_section),
     ("promotion_readiness", build_promotion_readiness_section),
+    ("self_contamination", build_self_contamination_section),
     ("weak_signals", build_weak_signals_section),
     ("testpaths_coverage", build_testpaths_coverage_section),
     ("skill_triage", build_skill_triage_section),
@@ -97,6 +105,8 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("backup_files", build_backup_files_section),
     ("duplicate_skill_names", build_duplicate_skill_names_section),
     ("invalid_frontmatter", build_invalid_frontmatter_section),
+    ("judge_audit", build_judge_audit_section),
+    ("skill_reachability", build_skill_reachability_section),
 ]
 
 

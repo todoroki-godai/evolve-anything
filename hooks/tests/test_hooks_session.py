@@ -439,3 +439,128 @@ class TestRestoreState:
         assert "作業コンテキスト復元" not in captured.out
 
 
+class TestRestoreStateSnapshotCap:
+    """corrections_snapshot が SessionStart 出力を肥大化させない上限の回帰テスト。
+
+    背景（セキュリティ監査）: restore_state が checkpoint 全体を print するため、
+    corrections.jsonl 全件を含む corrections_snapshot がそのまま Claude context に注入され、
+    毎セッション巨大テキスト（実測 ~102KB）を無駄消費し、外部テキストが correction に化けた
+    場合に無期限で再注入される運び屋になりうる。raw correction は復元に使われない
+    （post_compact は件数のみ参照）ため、直近 N 件 + 文字数上限に truncate し件数を保持する。
+    """
+
+    def _write_checkpoint(self, patch_data_dir, data):
+        cp_dir = patch_data_dir / "checkpoints"
+        cp_dir.mkdir(exist_ok=True)
+        (cp_dir / f"{data['session_id']}.json").write_text(json.dumps(data))
+
+    def _run(self, patch_data_dir, checkpoint, capsys):
+        self._write_checkpoint(patch_data_dir, checkpoint)
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/proj/cap"}):
+            restore_state.handle_session_start({})
+        captured = capsys.readouterr()
+        line0 = captured.out.strip().split("\n")[0]
+        return json.loads(line0), captured.out
+
+    def test_large_snapshot_bounded_in_output(self, patch_data_dir, capsys):
+        """大量 corrections でも SessionStart stdout が件数/文字数上限に収まる。"""
+        big = [
+            {"original": "x" * 200, "corrected": "y" * 200, "session_id": f"s{i}"}
+            for i in range(200)
+        ]
+        checkpoint = {
+            "session_id": "sess-cap-01",
+            "project_dir": "/proj/cap",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "evolve_state": {"generation": 7},
+            "corrections_snapshot": big,
+        }
+        result, out = self._run(patch_data_dir, checkpoint, capsys)
+        cp = result["checkpoint"]
+
+        assert result["restored"] is True
+        # 他フィールドは復元されたまま
+        assert cp["evolve_state"]["generation"] == 7
+        # 真の総数は保持
+        assert cp["corrections_snapshot_count"] == 200
+        assert cp["corrections_snapshot_truncated"] is True
+        # 件数上限内
+        assert len(cp["corrections_snapshot"]) <= restore_state.MAX_SNAPSHOT_ITEMS
+        # 文字数上限内
+        serialized = json.dumps(cp["corrections_snapshot"], ensure_ascii=False)
+        assert len(serialized) <= restore_state.MAX_SNAPSHOT_CHARS
+        # 全体 stdout が元の巨大サイズ（~128KB）から大幅削減
+        assert len(out.encode("utf-8")) < 20000
+
+    def test_small_snapshot_preserved(self, patch_data_dir, capsys):
+        """少数 corrections は truncate されず全件残る。"""
+        small = [
+            {"original": "a", "corrected": "b"},
+            {"original": "c", "corrected": "d"},
+        ]
+        checkpoint = {
+            "session_id": "sess-cap-02",
+            "project_dir": "/proj/cap",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "evolve_state": {},
+            "corrections_snapshot": small,
+        }
+        result, _ = self._run(patch_data_dir, checkpoint, capsys)
+        cp = result["checkpoint"]
+        assert cp["corrections_snapshot"] == small
+        assert cp["corrections_snapshot_count"] == 2
+        assert cp["corrections_snapshot_truncated"] is False
+
+    def test_empty_snapshot(self, patch_data_dir, capsys):
+        """corrections_snapshot が空でも壊れない。"""
+        checkpoint = {
+            "session_id": "sess-cap-03",
+            "project_dir": "/proj/cap",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "evolve_state": {},
+            "corrections_snapshot": [],
+        }
+        result, _ = self._run(patch_data_dir, checkpoint, capsys)
+        cp = result["checkpoint"]
+        assert cp["corrections_snapshot"] == []
+        assert cp["corrections_snapshot_count"] == 0
+        assert cp["corrections_snapshot_truncated"] is False
+
+    def test_checkpoint_without_snapshot_unchanged(self, patch_data_dir, capsys):
+        """corrections_snapshot キー無しの旧 checkpoint は無改変で通す。"""
+        checkpoint = {
+            "session_id": "sess-cap-04",
+            "project_dir": "/proj/cap",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "evolve_state": {"generation": 3},
+        }
+        result, _ = self._run(patch_data_dir, checkpoint, capsys)
+        cp = result["checkpoint"]
+        assert cp["evolve_state"]["generation"] == 3
+        assert "corrections_snapshot_count" not in cp
+
+    def test_summarize_helper_char_cap_drops_oldest(self):
+        """純関数: 各レコードが大きく単体で上限超なら空に degrade しつつ件数は保持。"""
+        huge = [{"blob": "z" * (restore_state.MAX_SNAPSHOT_CHARS + 100)} for _ in range(3)]
+        checkpoint = {"corrections_snapshot": huge, "evolve_state": {}}
+        out = restore_state._summarize_checkpoint_for_output(checkpoint)
+        assert out["corrections_snapshot_count"] == 3
+        assert out["corrections_snapshot_truncated"] is True
+        serialized = json.dumps(out["corrections_snapshot"], ensure_ascii=False)
+        assert len(serialized) <= restore_state.MAX_SNAPSHOT_CHARS
+
+    def test_summarize_helper_keeps_most_recent(self):
+        """純関数: truncate 時は末尾（最新）を残す。"""
+        records = [{"i": i, "pad": "p" * 100} for i in range(100)]
+        out = restore_state._summarize_checkpoint_for_output(
+            {"corrections_snapshot": records}
+        )
+        kept = out["corrections_snapshot"]
+        assert kept  # 何か残る
+        # 残ったものは元リストの末尾側（最新）
+        assert kept[-1]["i"] == 99
+        kept_indices = [r["i"] for r in kept]
+        assert kept_indices == sorted(kept_indices)
+        assert min(kept_indices) > 0  # 古い方が落ちている
+
+

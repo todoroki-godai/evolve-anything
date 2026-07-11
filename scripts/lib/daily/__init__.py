@@ -5,9 +5,11 @@ Phase 1a の `evolve-fleet queue`（学習素材ベース・ゼロ LLM）を mac
 
 無人で回せるのは決定論パイプライン（ingest→queue）まで。適用は対話セッションで人間が承認する。
 
-- ``plist``        — launchd plist 生成 + runner コマンド文字列（場所・実行時刻・ラベル）
-- ``queue_notice`` — evolve-queue.json reader + SessionStart 通知メッセージ生成（stale 判定）
+- ``plist``         — launchd plist 生成 + runner コマンド文字列（場所・実行時刻・ラベル）
+- ``queue_notice``  — evolve-queue.json reader + SessionStart 通知メッセージ生成（stale 判定）
+- ``icebox_notice`` — icebox-status.json reader + SessionStart 通知メッセージ生成（icebox 棚卸しの
+  気づきトリガー、#194）
 
-``evolve-queue.json`` は ``fleet queue --json`` 出力をそのまま保存した read 専用の派生物
-（SoR ではない）。store_registry には登録しない。
+``evolve-queue.json`` / ``icebox-status.json`` は各コマンドの出力をそのまま保存した read 専用の
+派生物（SoR ではない）。store_registry には登録しない。
 """

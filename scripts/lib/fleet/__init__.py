@@ -139,10 +139,62 @@ from .queue_state import (  # noqa: E402, F401
 )
 
 
+# queue の待ち PJ への evolve --dry-run 提案バッチ生成（#81 Phase 2）は fleet/propose.py に集約
+from .propose import (  # noqa: E402, F401
+    build_batch_report,
+    confirm_batch,
+    estimate_cost,
+    filter_previously_rejected_candidates,
+    format_cost_confirmation,
+    render_cli_summary,
+    render_markdown_report,
+    run_propose_batch,
+    select_targets,
+    summarize_pj_result,
+    write_reports,
+)
+
+
+# 承認済み evolve 提案の worktree→commit→push→PR 化（#82 Phase 3）は fleet/pr.py に集約
+from .pr import (  # noqa: E402, F401
+    AccountMismatchError,
+    GitCommandError,
+    ProposalTargetError,
+    WorktreeError,
+    branch_name,
+    build_pr_body,
+    build_pr_title,
+    commit_all,
+    commits_ahead,
+    create_pr,
+    create_worktree,
+    default_branch,
+    diff_stat,
+    expected_account,
+    find_existing_worktrees,
+    find_latest_proposals_json,
+    find_pj_entry,
+    has_uncommitted_changes,
+    load_proposals_report,
+    parse_active_gh_account,
+    push_branch,
+    resolve_target,
+    resolve_worktree,
+    today_str,
+    touched_skill_names,
+    validate_branch,
+    verify_push_account,
+    worktree_path,
+)
+
+
 # CLI エントリポイント (main / _run_status / _run_test_guard / _run_discover) は
 # fleet/cli.py に集約済み（後方互換のため再エクスポート、bin/evolve-fleet は fleet.main を呼ぶ）
 from .cli import (  # noqa: E402, F401
     _run_discover,
+    _run_pr_finish,
+    _run_pr_start,
+    _run_propose,
     _run_queue,
     _run_recall,
     _run_status,

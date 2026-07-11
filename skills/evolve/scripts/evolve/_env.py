@@ -190,6 +190,44 @@ def _apply_remediation_suppression(proposable, slug, now=None):
     return out["surface"], len(out["suppressed"])
 
 
+def build_reconcile_tracked(classified, rule_violation_observed):
+    """reconcile_surfaced に渡す surface 対象 issue list を組む単一ソース（#186）。
+
+    連続提示 count marker の追跡対象は 3 レーンの連結:
+      1. `classified["proposable_custom_individual"]`（個別承認候補）
+      2. `classified["proposable_global"]`（情報レーン global advisory）
+      3. `rule_violation_observed` を `rule_violation_suppression_issue` で安定 identity 化した
+         synthetic issue 群（rule_violation は issue 形を持たないため変換する・#103）
+
+    phases_remediate（dry-run 表示用 `persist=False`）と cli `--drain`（apply 境界の
+    `persist=True`）の両方がこの同一構成で `_tracked` を渡すための共通ヘルパー。二重実装すると
+    レーン構成・連結順が desync する（pitfall_copied_parse_convention_partial_fix）。決定論・LLM 非依存。
+
+    Args:
+        classified: remediation の classified dict（proposable_custom_individual /
+            proposable_global を読む）。None/欠落は空扱い。
+        rule_violation_observed: 抑制済みを除いた（surface 対象の）rule_violation_observed list。
+            None/空は synthetic を生成しない。
+
+    Returns:
+        追跡対象 issue の連結 list（individual + global + rule_violation synthetics の順）。
+    """
+    _classified = classified or {}
+    individual = list(_classified.get("proposable_custom_individual", []) or [])
+    proposable_global = list(_classified.get("proposable_global", []) or [])
+    rv_synthetics: List[Dict[str, Any]] = []
+    if rule_violation_observed:
+        try:
+            from rule_violation_lane import rule_violation_suppression_issue
+        except Exception:
+            rule_violation_suppression_issue = None  # type: ignore[assignment]
+        if rule_violation_suppression_issue is not None:
+            rv_synthetics = [
+                rule_violation_suppression_issue(v) for v in rule_violation_observed
+            ]
+    return individual + proposable_global + rv_synthetics
+
+
 def _surface_constitutional_status(
     project_dir: Path,
     warning_sink: List[Dict[str, Any]],

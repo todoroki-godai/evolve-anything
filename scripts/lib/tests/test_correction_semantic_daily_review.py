@@ -257,6 +257,60 @@ def test_build_review_permission_deny_distinct_commands_not_collapsed(tmp_path: 
     assert len(deny_groups) == 2
 
 
+def test_build_review_verbosity_channel_surfaces_with_real_shaped_provenance(
+    tmp_path: Path,
+):
+    # #171: verbosity/judge.py._emit_weak_signals 実装が実際に書く provenance 形
+    # {"hash", "project", "patterns": [...], "note": str, "char_len": int}（"text" 無し）
+    # を忠実に再現し、review group に乗ること（= 昇格導線への接続）を確認する。
+    ws = tmp_path / "weak_signals.jsonl"
+    same_pattern = WeakSignal(
+        "verbosity",
+        {
+            "hash": "h1",
+            "project": "evolve-anything",
+            "patterns": ["preamble", "filler"],
+            "note": "前置きが冗長",
+            "char_len": 900,
+        },
+        "t", "s1", "evolve-anything",
+    )
+    same_pattern_2 = WeakSignal(
+        "verbosity",
+        {
+            "hash": "h2",
+            "project": "evolve-anything",
+            "patterns": ["filler", "preamble"],
+            "note": "同じような前置きが続く",
+            "char_len": 950,
+        },
+        "t", "s2", "evolve-anything",
+    )
+    distinct_pattern = WeakSignal(
+        "verbosity",
+        {
+            "hash": "h3",
+            "project": "evolve-anything",
+            "patterns": ["repetition"],
+            "note": "同じ主張を繰り返す",
+            "char_len": 1000,
+        },
+        "t", "s3", "evolve-anything",
+    )
+    append_signals([same_pattern, same_pattern_2, distinct_pattern], path=ws)
+
+    res = dr.build_review("evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
+
+    verbosity_groups = [g for g in res["groups"] if g["channel"] == "verbosity"]
+    # 同一パターン集合（preamble+filler）は 1 group に集約、別パターン（repetition）は別 group。
+    assert len(verbosity_groups) == 2
+    total_signals = sum(len(g["signal_keys"]) for g in verbosity_groups)
+    assert total_signals == 3
+    # representative（=signal_text）が非空で判定理由を含む（channel 名の空 correction 化を防ぐ）。
+    for g in verbosity_groups:
+        assert g["representative"] != ""
+
+
 # ─────────────────────────────────────────────────────────────────
 # build_review: 頻度降順 + max_groups 切り + remaining
 # ─────────────────────────────────────────────────────────────────

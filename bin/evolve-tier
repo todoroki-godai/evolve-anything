@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""bin/evolve-tier — モデルティア（HEAD/HARD/NORMAL/MECH/REVIEW）の正典を一元管理する CLI（#193）。
+
+正典は `~/.claude/model-tiers.json`。model-routing rule・agent frontmatter・
+settings.json への追従は `sync` サブコマンドが担う（targets 明示列挙のみ・自動検出なし）。
+
+使用例:
+    bin/evolve-tier show
+    bin/evolve-tier init
+    bin/evolve-tier set HEAD --model sonnet --effort max
+    bin/evolve-tier sync            # dry-run（diff 表示のみ）
+    bin/evolve-tier sync --apply    # 実書込
+    bin/evolve-tier drift           # stale なモデルエイリアスの散文残存を検出
+"""
+import sys
+from pathlib import Path
+
+_lib = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_lib))
+
+from tier_policy_cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

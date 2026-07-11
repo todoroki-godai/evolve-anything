@@ -30,6 +30,7 @@ from ._env import (  # noqa: E402
     _compute_env_score_struct,
     _env_score_degraded,
     _apply_remediation_suppression,
+    build_reconcile_tracked,
     _surface_constitutional_status,
     _count_env_artifacts,
     _tier_from_count,

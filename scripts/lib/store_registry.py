@@ -158,7 +158,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
     StoreDeclaration(
         name="subagents.jsonl",
         writer="hooks（サブエージェント生成の記録）",
-        reader="audit / subagent 観測が消費",
+        reader="audit / subagent 観測が消費。"
+        "audit/sections_takeoff.py（worker_takeoff）が `last_assistant_message` を "
+        "read-time で判定し完了報告↔内部完遂の乖離を advisory surface（#161）。",
         retention="permanent",
         note="サブエージェントテレメトリ。",
     ),
@@ -292,6 +294,21 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "突合から writer_locus=batch で除外）。",
     ),
     StoreDeclaration(
+        name="judge_audit_verdicts.jsonl",
+        writer="scripts/lib/judge_audit/harness.py（--run の欠陥注入判定後 write_verdict）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="scripts/lib/judge_audit/query.py（false-pass 率集計）+ "
+        "audit/sections_judge_audit（advisory surface）。",
+        retention="permanent",
+        note="#188 The Blind Curator（arXiv 2607.07436）: 既知の欠陥 fixture を judge の実"
+        "プロンプト（constitutional._build_eval_prompt/_parse_layer_response 再利用）に流し、"
+        "合格(false-pass)判定率を計測する欠陥注入監査。fixture id 単位 last-append-wins・"
+        "pj_slug スコープ。judge が false-pass を出すとスキル退役（negative_transfer "
+        "rollback）が無音で無効化されるため事前計測する。書込は harness の batch 実行のみ"
+        "（hook-writer stale 突合から writer_locus=batch で除外）。",
+    ),
+    StoreDeclaration(
         name="verbosity_candidates.jsonl",
         writer="hooks/record_verbosity.py（Stop hook がゼロ LLM で足切り超の長応答を記録）。",
         reader="scripts/lib/verbosity/judge.py（Haiku バッチ判定）+ "
@@ -314,6 +331,23 @@ _DECLARATIONS: List[StoreDeclaration] = [
         retention="permanent",
         note="#75 回答冗長性の判定結果（hash 単位 last-append-wins・pj_slug スコープ）。"
         "judge が batch で書く（writer_locus=batch で hook-writer stale 突合から除外）。",
+    ),
+    StoreDeclaration(
+        name="memory_transition_checks.jsonl",
+        writer="scripts/lib/auto_memory_broker.ingest_memory_results（#93 記憶遷移検証 = "
+        "TRUSTMEM Memory Transition Verifier の決定論移植。同名 frontmatter の既存エントリ"
+        "との coverage/preservation/fidelity 比較を実施した都度1行）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="audit/sections_memory.build_memory_capability_section（maintain 軸の "
+        "evidence に reject 件数 / 検査件数を surface）。",
+        retention="permanent",
+        note="#93: memory_guard.inspect_transition が同名（frontmatter name 一致）の既存 "
+        "エントリを検出した場合のみ1件記録する（未マッチ=検証対象外の書込は記録しない）。"
+        "coverage（重要行の大量欠落）/ preservation（metadata.type の矛盾上書き）/ "
+        "fidelity（冒頭行の極性反転疑い）を決定論・文字列比較ベースで判定し、"
+        "rejected=True/False と axes を記録する。誤 reject を避ける保守的較正"
+        "（同名一致が前提・difflib 類似度しきい値・description/importance は対象外）。",
     ),
     StoreDeclaration(
         name="remediation_surfaced/<slug>.json",

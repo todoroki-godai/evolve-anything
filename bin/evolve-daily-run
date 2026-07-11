@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""bin/evolve-daily-run — launchd が毎朝呼ぶ daily runner（#80 Phase 1b）。
+"""bin/evolve-daily-run — launchd が毎朝呼ぶ daily runner（#80 Phase 1b, #194）。
 
 `fleet ingest`（全 PJ 発話取込・ゼロ LLM）→ `fleet queue --json`（待ち判定）を順に実行し、
 queue の JSON を `$CLAUDE_PLUGIN_DATA/evolve-queue.json` に保存する。決定論パイプラインのみ
 （LLM 非依存）。SessionStart hook（restore_state）が保存結果を読んで通知する。
 
+加えて `gh issue list --label icebox --state closed`（read-only）で icebox 棚卸しの
+気づきトリガー用の集計（件数・最古経過日数）を `$CLAUDE_PLUGIN_DATA/icebox-status.json` に
+保存する（#194）。read-only の issue 一覧取得なので account switch は不要。
+
 stdout/stderr は launchd plist の StandardOut/ErrorPath（evolve-daily.log）に集約され、
 エラー時のスタックがログに残る。
 """
+import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -18,6 +24,39 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
 
 import rl_common  # noqa: E402
 from daily import plist as plist_mod  # noqa: E402
+
+# icebox 棚卸し対象リポジトリ（evolve-anything 自身）。
+ICEBOX_REPO = "todoroki-godai/evolve-anything"
+ICEBOX_STATUS_FILE_NAME = "icebox-status.json"
+# gh はネットワークを叩く最初の daily ステップ。ハングすると launchd の daily-run が
+# 無期限ブロックするため timeout で保険をかける（fail-open で継続）。
+ICEBOX_GH_TIMEOUT_SECONDS = 30
+
+
+def _icebox_oldest_days(issues, now: datetime) -> "tuple[int, int]":
+    """`gh issue list --json closedAt` の出力（dict のリスト）から (最古経過日数, パース成功件数) を返す。
+
+    issues が空、または全要素の closedAt がパース不能なら oldest_days=0 を返す
+    （threshold 未満なので icebox_notice.build_icebox_notice は沈黙する。count は
+    len(issues) で独立に計算されるため、パース不能時も 0 とは限らない）。
+    パース成功件数は呼び出し側が「count>0 なのにパース成功 0 件」という恒久沈黙モード
+    （gh の JSON 形式変更等）を stderr warning で可視化するための値。
+    """
+    days = []
+    for item in issues:
+        if not isinstance(item, dict):
+            continue
+        ts = item.get("closedAt")
+        if not isinstance(ts, str) or not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        days.append((now - dt).days)
+    return (max(days) if days else 0, len(days))
 
 
 def main() -> int:
@@ -51,16 +90,82 @@ def main() -> int:
     # 2) 待ち判定（--json）。stdout を evolve-queue.json に保存。
     print(f"[evolve-daily-run] fleet queue --json → {out_path}", flush=True)
     result = subprocess.run(fleet + ["queue", "--json"], capture_output=True, text=True)
-    if result.returncode != 0:
+    queue_rc = result.returncode
+    if queue_rc != 0:
+        # queue 失敗は run 失敗として最後に非ゼロで返すが、後続の icebox ステップは
+        # 実行する（補助ステップまで巻き添えにしない）。
         print(
-            f"[evolve-daily-run] fleet queue failed (rc={result.returncode}):\n{result.stderr}",
+            f"[evolve-daily-run] fleet queue failed (rc={queue_rc}):\n{result.stderr}",
             file=sys.stderr,
             flush=True,
         )
-        return result.returncode
-    out_path.write_text(result.stdout, encoding="utf-8")
-    print(f"[evolve-daily-run] wrote {out_path} ({len(result.stdout)} bytes)", flush=True)
-    return 0
+    else:
+        out_path.write_text(result.stdout, encoding="utf-8")
+        print(f"[evolve-daily-run] wrote {out_path} ({len(result.stdout)} bytes)", flush=True)
+
+    # 3) icebox 棚卸しの気づきトリガー（read-only gh issue list、#194）。失敗しても
+    # daily-run 全体は落とさない（ingest/tokens と同じ fail-open）。gh バイナリ自体が
+    # 無い環境（FileNotFoundError 等）・非ゼロ終了・想定外の JSON 形状のいずれも
+    # 既存 icebox-status.json を壊さず（書き込みをスキップして前回生成分を残す）継続する。
+    icebox_path = data_dir / ICEBOX_STATUS_FILE_NAME
+    print(f"[evolve-daily-run] gh issue list --label icebox --state closed …", flush=True)
+    try:
+        gh_result = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                ICEBOX_REPO,
+                "--label",
+                "icebox",
+                "--state",
+                "closed",
+                "--json",
+                "closedAt",
+                "--limit",
+                "100",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=ICEBOX_GH_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"[evolve-daily-run] gh issue list error: {e}（continue）", file=sys.stderr, flush=True)
+    else:
+        if gh_result.returncode != 0:
+            print(
+                f"[evolve-daily-run] gh issue list exited {gh_result.returncode}（continue）: {gh_result.stderr}",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            try:
+                issues = json.loads(gh_result.stdout)
+                if not isinstance(issues, list):
+                    raise ValueError(f"expected list, got {type(issues).__name__}")
+                now = datetime.now(timezone.utc)
+                oldest_days, parsed = _icebox_oldest_days(issues, now)
+                if issues and parsed == 0:
+                    # count>0 なのにパース成功 0 件＝gh の JSON 形式変更等で機能が
+                    # 恒久沈黙するモード。書き込みは続けるが warning で可視化する。
+                    print(
+                        f"[evolve-daily-run] icebox closedAt parse 0/{len(issues)}"
+                        "（gh JSON 形式変更の疑い・oldest_days=0 で通知は沈黙）",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                payload = {
+                    "count": len(issues),
+                    "oldest_days": oldest_days,
+                    "generated_at": now.isoformat(),
+                }
+                icebox_path.write_text(json.dumps(payload), encoding="utf-8")
+                print(f"[evolve-daily-run] wrote {icebox_path} ({payload['count']} icebox issues)", flush=True)
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"[evolve-daily-run] icebox status parse error: {e}（continue）", file=sys.stderr, flush=True)
+
+    return queue_rc
 
 
 if __name__ == "__main__":

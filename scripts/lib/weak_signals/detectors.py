@@ -44,6 +44,8 @@ _DISPATCH_MARKERS = (
     "エージェントです",
     "比較実験パターン",
     "experiment ",
+    "<teammate-message",
+    "idle_notification",
 )
 
 # ① 直後手編集の transcript シグナル（CC が Edit/Write 試行時に出す tool_use_error）。

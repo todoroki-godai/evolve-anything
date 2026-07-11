@@ -211,7 +211,9 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         # なので dry-run でも適用してよい。書込（record_rejection）は下の reconcile / SKILL.md が担う。
         proposable_global_suppressed = 0
         rule_violation_suppressed = 0
-        _rv_synthetics_surface = []
+        # surface 対象（抑制済みを除いた）rule_violation_observed。reconcile の _tracked 再構築に使う。
+        # 例外パスでは空のまま（従来 _tracked が synthetics を含まなかった挙動を維持）。
+        _rv_kept_surface = []
         try:
             from remediation.suppression_ledger import (
                 filter_suppressed as _filter_suppressed,
@@ -234,15 +236,15 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
                         rule_violation_suppressed += 1
                     else:
                         _rv_kept.append(_v)
-                        _rv_synthetics_surface.append(_syn)
                 # discover_data は result["phases"]["discover"] と同一 dict（surface 元）。
                 # 抑制済みを落とした list を書き戻すと SKILL.md の rule_violation_observed 表示が畳まれる。
                 if "discover" in result["phases"]:
                     result["phases"]["discover"]["rule_violation_observed"] = _rv_kept
+                _rv_kept_surface = _rv_kept
         except Exception:
             proposable_global_suppressed = 0
             rule_violation_suppressed = 0
-            _rv_synthetics_surface = []
+            _rv_kept_surface = []
 
         # classified にも split リストを追加し、トップレベルの count と整合させる。
         # 修正前は classified に proposable_custom キーがなかったため、
@@ -266,15 +268,18 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         # 追跡し、未対応のまま連続提示された advisory を閾値回数で自動畳み込みする（dismiss 入口が
         # 無くても「毎回再提示」を断つ）。reconcile_surfaced は marker を全置換するため、二重書込を
         # 避けるべく **1 回の呼び出しに全レーンの surface 対象を束ねて**渡す（dedup_key はレーンごとに
-        # 相異なるため衝突しない）。読み取り→閾値判定は dry-run でも実行できるが、書込（marker /
-        # ledger）は persist でゲートする（dry-run 非書込・pitfall_dryrun_stateful_store_write）。
+        # 相異なるため衝突しない）。_tracked の再構築は build_reconcile_tracked に単一ソース化し、
+        # cli --drain 側と同一構成で組む（#186・pitfall_copied_parse_convention_partial_fix）。
+        # #186: ここでの呼び出しは dry-run 表示用に persist=not ctx.dry_run（標準フローは dry-run
+        # なので persist=False = marker を読むだけで書かない）。count marker の実書込 + 閾値到達時の
+        # 自動却下は drain の apply 境界（persist=True）へ移設した。標準フローが dry-run のみで
+        # marker が永久未書込 = 閾値未達で自動却下が死蔵していた根治（weak_signals #484 と同型）。
         auto_rejected_count = 0
         try:
+            import evolve as _evolve_mod4
             from remediation.suppression_ledger import reconcile_surfaced as _reconcile
-            _tracked = (
-                list(_partition["individual"])
-                + list(proposable_global)
-                + list(_rv_synthetics_surface)
+            _tracked = _evolve_mod4.build_reconcile_tracked(
+                classified, _rv_kept_surface
             )
             _recon = _reconcile(
                 _tracked, slug=_suppress_slug, persist=not ctx.dry_run
