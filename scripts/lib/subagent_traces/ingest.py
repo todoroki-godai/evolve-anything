@@ -22,7 +22,8 @@ from . import store as _store
 from .extractor import extract_trace
 
 # extractor のバージョン。軌跡パースを変えたら +1（再 ingest 判断の手掛かり）。
-TRACE_VERSION = 1
+# 2: #200 で delegation_prompt / delegation_prompt_truncated の抽出を追加。
+TRACE_VERSION = 2
 
 
 def _default_data_dir() -> Path:

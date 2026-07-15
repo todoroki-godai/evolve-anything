@@ -49,6 +49,11 @@ def _assistant_line(blocks: list) -> dict:
     return {"type": "assistant", "message": {"role": "assistant", "content": blocks}}
 
 
+def _user_line(content, parent_uuid=None) -> dict:
+    """#200: 委任プロンプトの起点行を作る。root user 行は parentUuid=None。"""
+    return {"type": "user", "parentUuid": parent_uuid, "message": {"role": "user", "content": content}}
+
+
 # ─────────────────────────── extractor ───────────────────────────
 
 def test_extract_trace_counts_tool_use_result_error(tmp_path):
@@ -126,6 +131,120 @@ def test_extract_trace_unparseable_file_returns_none(tmp_path):
     t = tmp_path / "broken.jsonl"
     t.write_text("not json at all\n{also bad\n", encoding="utf-8")
     assert _ext.extract_trace(t) is None
+
+
+# ─────────────────── extractor: delegation_prompt (#200) ───────────────────
+
+def test_extract_trace_captures_delegation_prompt_from_first_line(tmp_path):
+    """最初の行が root user 行なら、そこから委任プロンプトを拾う。"""
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        _user_line("evolve-anything リポジトリの issue #200 を実装してください。"),
+        _assistant_line([{"type": "tool_use", "id": "1", "name": "Bash", "input": {}}]),
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["delegation_prompt"] == "evolve-anything リポジトリの issue #200 を実装してください。"
+    assert tr["delegation_prompt_truncated"] is False
+
+
+def test_extract_trace_scans_past_non_root_lines_for_delegation_prompt(tmp_path):
+    """先頭行決め打ちにせず、走査で最初の root user 行（parentUuid is None）を探す。
+
+    compaction summary 行や非 root（parentUuid あり）の user 行は候補から除外する。
+    """
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        {"type": "summary", "summary": "compacted context"},
+        _user_line("これは孫ターンの発話（root ではない）", parent_uuid="some-parent-uuid"),
+        _user_line("本当の委任プロンプトはここ", parent_uuid=None),
+        _assistant_line([{"type": "tool_use", "id": "1", "name": "Read", "input": {}}]),
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["delegation_prompt"] == "本当の委任プロンプトはここ"
+
+
+def test_extract_trace_truncates_delegation_prompt_over_300_chars(tmp_path):
+    """300 字超は先頭 300 字 + "…" に truncate。"""
+    long_text = "あ" * 310
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [_user_line(long_text)])
+    tr = _ext.extract_trace(t)
+    assert tr["delegation_prompt"] == long_text[:300] + "…"
+    assert tr["delegation_prompt_truncated"] is True
+
+
+def test_extract_trace_short_delegation_prompt_not_truncated(tmp_path):
+    """300 字以下はそのまま・truncated=False。"""
+    short_text = "短い委任プロンプト"
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [_user_line(short_text)])
+    tr = _ext.extract_trace(t)
+    assert tr["delegation_prompt"] == short_text
+    assert tr["delegation_prompt_truncated"] is False
+
+
+def test_extract_trace_strips_system_reminder_tags(tmp_path):
+    """<system-reminder>...</system-reminder> 等の注入ブロックは除去してから採用する。"""
+    content = (
+        "実装してください。"
+        "<system-reminder>secret internal context that must not leak</system-reminder>"
+        "以上です。"
+    )
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [_user_line(content)])
+    tr = _ext.extract_trace(t)
+    assert "secret internal context" not in tr["delegation_prompt"]
+    assert "system-reminder" not in tr["delegation_prompt"]
+    assert "実装してください。" in tr["delegation_prompt"]
+    assert "以上です。" in tr["delegation_prompt"]
+
+
+def test_extract_trace_delegation_prompt_from_list_content_first_text_block_only(tmp_path):
+    """content が list なら最初の type=="text" ブロックのみ採用（他ブロックは無視）。"""
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        _user_line([
+            {"type": "text", "text": "最初のテキストブロック"},
+            {"type": "text", "text": "2番目は無視される"},
+        ]),
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["delegation_prompt"] == "最初のテキストブロック"
+
+
+def test_extract_trace_delegation_prompt_skips_non_text_blocks_before_first_text(tmp_path):
+    """text 以外のブロックが先に来ても、最初の text ブロックを探して採用する。"""
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        _user_line([
+            {"type": "tool_result", "tool_use_id": "1", "content": "x"},
+            {"type": "text", "text": "これが採用される"},
+        ]),
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["delegation_prompt"] == "これが採用される"
+
+
+def test_extract_trace_no_delegation_line_returns_empty(tmp_path):
+    """該当する root user 行が無ければ delegation_prompt="", truncated=False。"""
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        _assistant_line([{"type": "tool_use", "id": "1", "name": "Bash", "input": {}}]),
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["delegation_prompt"] == ""
+    assert tr["delegation_prompt_truncated"] is False
+
+
+def test_extract_trace_delegation_prompt_empty_content_returns_empty(tmp_path):
+    """root user 行はあるが content が空 / text ブロックが無ければ空文字。"""
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        _user_line([{"type": "tool_use", "id": "1", "name": "Bash", "input": {}}]),
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["delegation_prompt"] == ""
+    assert tr["delegation_prompt_truncated"] is False
 
 
 # ─────────────────────────── store ───────────────────────────
@@ -289,6 +408,25 @@ def test_ingest_no_subagents_file_is_graceful(data_dir):
     """subagents.jsonl が無くても例外を出さず 0 件で返す。"""
     res = _ingest.ingest_all_projects()
     assert res == {"ingested": 0, "skipped": 0, "capped": False, "remaining": 0}
+
+
+def test_ingest_propagates_delegation_prompt_and_bumps_trace_version(data_dir, tmp_path):
+    """#200: ingest した record に delegation_prompt が乗り、trace_version が 2 になる。"""
+    tr = tmp_path / "agent1.jsonl"
+    _write_transcript(tr, [
+        _user_line("evolve-anything の issue #200 を実装してください。"),
+        _assistant_line([{"type": "tool_use", "id": "1", "name": "Bash", "input": {}}]),
+    ])
+    _write_subagents(data_dir, [{
+        "agent_id": "a1", "agent_type": "impl-worker",
+        "agent_transcript_path": str(tr), "project": "/home/u/myproj",
+    }])
+    assert _ingest.ingest_all_projects()["ingested"] == 1
+    rec = _tstore.read_traces("myproj")["a1"]
+    assert rec["delegation_prompt"] == "evolve-anything の issue #200 を実装してください。"
+    assert rec["delegation_prompt_truncated"] is False
+    assert rec["trace_version"] == 2
+    assert _ingest.TRACE_VERSION == 2
 
 
 # ─────────────── #140 write の data_dir 対称性（read/write 隔離） ───────────────
@@ -530,3 +668,84 @@ def test_section_borderline_half_rate_not_flagged(data_dir, monkeypatch):
     joined = "\n".join(out)
     assert "⚠" not in joined
     assert classify_section(out) == "clean"
+
+
+# ────────────── audit section: delegation_prompt 表示 (#200) ──────────────
+
+def test_section_shows_delegation_prompt_excerpt_for_healthy_agent_type(data_dir, monkeypatch):
+    """⚠ が無い健全な agent_type でも委任プロンプト抜粋を表示する（issue #200 の受け入れ条件）。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(4):
+        _tstore.write_trace({
+            "agent_id": f"s{i}", "pj_slug": "p", "agent_type": "senpai",
+            "first_try_success": True, "tool_error_count": 0,
+            "delegation_prompt": f"docs-platform リポジトリで Issue #{900 + i} を実装してください。",
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "└ 直近の委任" in joined
+    assert "Issue #9" in joined
+
+
+def test_section_shows_delegation_prompt_excerpt_for_flagged_agent_type(data_dir, monkeypatch):
+    """⚠ が付いた agent_type でも同様に委任プロンプト抜粋を表示する。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(6):
+        _tstore.write_trace({
+            "agent_id": f"g{i}", "pj_slug": "p", "agent_type": "general-purpose",
+            "first_try_success": i == 0, "tool_error_count": 0 if i == 0 else 2,
+            "delegation_prompt": "figma リポジトリのデザインを実装してください。",
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "⚠" in joined
+    assert "└ 直近の委任" in joined
+    assert "figma リポジトリ" in joined
+
+
+def test_section_delegation_excerpt_truncates_at_150_chars(data_dir, monkeypatch):
+    """audit 表示は 150 字を超える場合、末尾に "…" を付けて truncate する。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    long_prompt = "あ" * 200
+    for i in range(3):
+        _tstore.write_trace({
+            "agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+            "first_try_success": True, "tool_error_count": 0,
+            "delegation_prompt": long_prompt,
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert ("あ" * 150 + "…") in joined
+    assert ("あ" * 151) not in joined
+
+
+def test_section_omits_delegation_line_when_prompt_empty(data_dir, monkeypatch):
+    """delegation_prompt が空文字の record しか無い agent_type は「└」行を省略する。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(3):
+        _tstore.write_trace({
+            "agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+            "first_try_success": True, "tool_error_count": 0,
+            "delegation_prompt": "",
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "直近の委任" not in joined
+
+
+def test_section_handles_missing_delegation_prompt_field_gracefully(data_dir, monkeypatch):
+    """delegation_prompt フィールドが無い既存レコード（TRACE_VERSION 1 以前）でも壊れない（後方互換）。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(3):
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": True, "tool_error_count": 0})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    assert out is not None
+    joined = "\n".join(out)
+    assert "impl-worker" in joined
+    assert "直近の委任" not in joined
