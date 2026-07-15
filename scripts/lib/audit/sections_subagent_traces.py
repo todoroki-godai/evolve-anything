@@ -1,4 +1,4 @@
-"""subagent 内部軌跡の observability セクション生成（#38, advisory）。
+"""subagent 内部軌跡の observability セクション生成（#38, advisory / #200 委任プロンプト）。
 
 親セッションの error_count しか見ない既存 outcome 帰属の盲点 — subagent が内部で error
 連発しても最終成功すれば「一発成功」と誤記録される — を、subagent transcript の
@@ -10,11 +10,40 @@ fitness の重み軸にはしない（outcome_metrics / fanout_cost と同じ ad
 - 当 PJ の軌跡レコードが 0 件（評価対象なし）→ None（沈黙）
 - 1 件以上 → ヘッダ + agent_type 別行（floor 未満は zero_line でデータ不足明示）
   silence != evaluated: 評価対象があるのに floor 未満なら沈黙でなく不足を明示する。
+
+#200: 全 agent_type（⚠ の有無に関わらず）の集計行の下に、直近1件の委任プロンプト
+（何を頼んだか）先頭150字を「└ 直近の委任: "..."」として添える。事後監査で
+「何を委任したか」まで audit から辿れるようにする（record に delegation_prompt が
+無い/空の既存レコードは省略・後方互換）。
 """
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .advisory import build_advisory_section
+
+# audit 表示側の委任プロンプト抜粋の truncate 上限（extractor の 300 字とは別の上限。
+# audit 本文を長くしすぎないための表示制約）。
+DELEGATION_EXCERPT_MAX_CHARS = 150
+
+
+def _delegation_excerpt_for_agent_type(traces: Dict[str, dict], agent_type: str) -> str:
+    """指定 agent_type の record 1 件から委任プロンプト先頭150字の抜粋を選ぶ。
+
+    ``traces`` は agent_id → record の dict。同一 agent_type の record が複数あれば
+    timestamp を持つものの中で最大（＝直近）を優先、無ければ最初に見つかったものでよい。
+    delegation_prompt が空/欠如の record しか無ければ空文字を返す（呼び出し側で省略）。
+    """
+    candidates = [r for r in traces.values() if r.get("agent_type") == agent_type]
+    if not candidates:
+        return ""
+    with_ts = [r for r in candidates if r.get("timestamp")]
+    chosen = max(with_ts, key=lambda r: r["timestamp"]) if with_ts else candidates[0]
+    prompt = chosen.get("delegation_prompt") or ""
+    if not prompt:
+        return ""
+    if len(prompt) > DELEGATION_EXCERPT_MAX_CHARS:
+        return prompt[:DELEGATION_EXCERPT_MAX_CHARS] + "…"
+    return prompt
 
 # #76 Finding A: floor を満たす agent_type のうち、内部品質が悪い種別に ⚠ を付けて
 # report.py の畳み込み（⚠/🔴 だけ full-text 展開）に乗せ、『✓ 評価済みクリーン』への
@@ -99,6 +128,10 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
                     f"  ・{s['agent_type']}: 内部一発成功率 {rate:.2f}"
                     f"（{s['n']} 件）— 高いほど内部リトライ少。平均 tool error {ate:.2f}"
                 )
+            # #200: ⚠ の有無に関わらず、集計行の下に直近1件の委任プロンプト抜粋を添える。
+            excerpt = _delegation_excerpt_for_agent_type(traces, s["agent_type"])
+            if excerpt:
+                body.append(f'      └ 直近の委任: "{excerpt}"')
         if flagged:
             body.append("")
             body.append(
