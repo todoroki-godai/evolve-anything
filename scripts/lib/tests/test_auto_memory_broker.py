@@ -840,3 +840,55 @@ def test_enqueue_normal_corrections_unaffected(tmp_data_dir):
     records = amb.read_queue("slug", tmp_data_dir)
     assert len(records) == 1
     assert len(records[0]["corrections"]) == 3
+
+
+# ─── enqueue project スコープ不一致 reject（#206・多層防御の最終防衛ライン）───────
+
+
+def test_enqueue_rejects_mismatched_project_correction(tmp_data_dir, capsys):
+    """project_path が slug と不一致の correction は enqueue 前に reject される。"""
+    mixed = [
+        {"session_id": "s1", "timestamp": "t1", "project_path": "myproject"},
+        {"session_id": "s2", "timestamp": "t2", "project_path": "otherproject"},
+    ]
+    result = amb.enqueue(mixed, "myproject", tmp_data_dir)
+
+    assert result is True
+    records = amb.read_queue("myproject", tmp_data_dir)
+    assert len(records) == 1
+    kept = records[0]["corrections"]
+    assert len(kept) == 1
+    assert kept[0]["project_path"] == "myproject"
+    # silent drop にしない: reject 件数を stderr に surface する
+    captured = capsys.readouterr()
+    assert "myproject" in captured.err
+
+
+def test_enqueue_rejects_all_when_all_mismatched(tmp_data_dir):
+    """全件が他 PJ の project_path なら enqueue しない（False 返却・キュー空）。"""
+    mismatched = [{"session_id": "s1", "timestamp": "t1", "project_path": "otherproject"}]
+    result = amb.enqueue(mismatched, "myproject", tmp_data_dir)
+    assert result is False
+    assert amb.read_queue("myproject", tmp_data_dir) == []
+
+
+def test_enqueue_allows_project_path_none(tmp_data_dir):
+    """project_path 無し（汎用スコープ）は許容される。"""
+    generic = [{"session_id": "s1", "timestamp": "t1"}]
+    result = amb.enqueue(generic, "myproject", tmp_data_dir)
+    assert result is True
+    records = amb.read_queue("myproject", tmp_data_dir)
+    assert len(records[0]["corrections"]) == 1
+
+
+def test_enqueue_all_matching_no_stderr_noise(tmp_data_dir, capsys):
+    """全件一致時は reject メッセージを出さない（無用なノイズを増やさない）。"""
+    matching = [{"session_id": "s1", "timestamp": "t1", "project_path": "myproject"}]
+    amb.enqueue(matching, "myproject", tmp_data_dir)
+    captured = capsys.readouterr()
+    assert "scope mismatch" not in captured.err
+
+
+# purge_mismatched_pending のテストは scripts/lib/tests/test_auto_memory_purge.py
+# （auto_memory_purge.py・#206）に分離済み。auto_memory_broker.py の 800 行バジェット
+# 超過を避けるため、purge 機能は新規モジュールとして切り出した。
