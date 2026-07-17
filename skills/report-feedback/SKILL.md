@@ -154,10 +154,13 @@ existing = json.load(open(sys.argv[2]))
 res = filter_duplicates(cands, existing)
 json.dump(res, open(sys.argv[3],"w"), ensure_ascii=False)
 for d in res["duplicates"]:
-    print(f"  重複→ #{d[\"existing_number\"]} とスキップ（{d[\"reason\"]}）: {d[\"title\"]}")
+    num, reason, title = d["existing_number"], d["reason"], d["title"]
+    print(f"  重複→ #{num} とスキップ（{reason}）: {title}")
 for r in res["regressions"]:
-    print(f"  ⚠️ 再発→ #{r[\"existing_number\"]}（前回 closed）の regression: {r[\"title\"]}")
-print(f"unique: {len(res[\"unique\"])} 件 / duplicates: {len(res[\"duplicates\"])} 件 / regressions: {len(res[\"regressions\"])} 件")
+    num, title = r["existing_number"], r["title"]
+    print(f"  ⚠️ 再発→ #{num}（前回 closed）の regression: {title}")
+n_unique, n_dup, n_regr = len(res["unique"]), len(res["duplicates"]), len(res["regressions"])
+print(f"unique: {n_unique} 件 / duplicates: {n_dup} 件 / regressions: {n_regr} 件")
 ' "$RF_DIR/rf_candidates.json" "$RF_DIR/rf_existing.json" "$RF_DIR/rf_filtered.json"
 ```
 
