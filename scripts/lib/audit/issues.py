@@ -357,4 +357,13 @@ def collect_issues(project_dir: Path) -> List[Dict[str, Any]]:
     except Exception:
         pass  # untagged 検出のエラーは既存機能に影響しない
 
+    # split_candidates（reorganize の分割候補・#223）
+    try:
+        from reorganize import detect_split_candidates
+        from issue_schema import make_split_candidate_issue
+        for sc in detect_split_candidates(artifacts):
+            issues.append(make_split_candidate_issue(sc))
+    except Exception:
+        pass  # reorganize 検出のエラーは既存機能に影響しない
+
     return issues
