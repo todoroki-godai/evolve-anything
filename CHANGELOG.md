@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+## [1.123.0] - 2026-07-17
+
 ### Added
 - **feat(spec-keeper): Progressive Disclosure 閾値を chars ベースへ是正（#216）** — 肥大化判定を行数のみから bytes（`wc -c`）主体へ改訂。単一 md ファイル（hot/cold 問わず）は 50KB 超で caution・100KB 超で分割必須、hot（SPEC.md）は 20KB 超で caution・35KB 超で cold へ移動。cold 合計の行数閾値（旧 >300行で L3 検討）は廃止し単一ファイル bytes 判定に統一（行数は補助指標として残す）。Step 1 の構造突合コマンドに `wc -c` 計測（spec/ 配下はファイル単位の最大値も出力）を追加。CLAUDE.md コンポーネント表等の「1行サマリ」契約に ≤400字の数値上限を明記し update フローのチェック項目に追加。>50KB の cold ファイルは丸読みせず Grep→部分 Read で消費する旨も明記。実PJ検証で見つかった残件3点を追加是正: status レポート例（`昇格候補`）と templates.md の Layer Split Guide が旧「>100行」単独判定のまま残っていたため bytes 優先（>35KB、行数は目安として併記）へ伝播。「1エントリ ≤400字」の対象があいまいだった点を「サマリ列（説明文言）のみが対象、名称・実体パス列は対象外」と明確化。
+
+### Fixed
+- **docs(spec): tool_usage_analyzer を components.md に追記 + Observe hooks 数値 drift 修正 + Grep 消費ルール明記（#216）** — CLAUDE.md コンポーネント表 / spec/components.md の双方に既存パッケージ `tool_usage_analyzer`（discover/audit 向けツール呼び出し分析。旧 867 行単一ファイルを Phase 6 で6分割・#107/#110/#113、#457 の HOME 隔離すり抜け修正込み）の記載が欠落していたため追記。CLAUDE.md の「Observe hooks (20個)」表記が `hooks/hooks.json` 実登録数（24個 registered）と乖離していた drift を修正。spec/components.md 冒頭に「本ファイルは丸読み不可サイズ、消費は Grep→部分 Read で行う」旨の消費ルールを明記（#216 の Progressive Disclosure 是正と対応）。
 
 ## [1.122.0] - 2026-07-17
 
