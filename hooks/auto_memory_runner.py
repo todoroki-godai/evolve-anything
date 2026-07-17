@@ -6,7 +6,8 @@ LLM 生成・生成後ゲート（belief_entropy）・memory 書き込みは evo
 （auto_memory_broker）へ移設した。
 
 動作:
-1. corrections.jsonl の直近 5 件を読む
+1. corrections.jsonl（全 PJ 共有ストア）の直近 5 件を、当 PJ スコープ（project_path が
+   一致 or 未帰属のもの）でフィルタしてから読む（#206: 他 PJ の correction 混入防止）
 2. memory_gating（生成前ゲート, LLM 不要）で重要度の低い correction を落とす
 3. 生き残りを内容ハッシュ dedup して PJ スコープキュー
    `DATA_DIR/auto_memory_queue/<slug>.jsonl` に enqueue する（.md 書込なし /
@@ -33,6 +34,7 @@ sys.path.insert(0, str(_lib))
 
 import rl_common
 import auto_memory_broker
+import pj_slug
 
 DATA_DIR: Path = rl_common.DATA_DIR
 
@@ -52,8 +54,15 @@ def _is_gating_enabled() -> bool:
     return os.environ.get("RL_GATING_DISABLED", "0") != "1"
 
 
-def read_recent_corrections(data_dir: Optional[Path] = None) -> List[dict]:
-    """corrections.jsonl から最新 MAX_CORRECTIONS 件を返す。
+def read_recent_corrections(
+    data_dir: Optional[Path] = None, slug: Optional[str] = None,
+) -> List[dict]:
+    """corrections.jsonl から最新 MAX_CORRECTIONS 件を返す（#206: project スコープでフィルタ）。
+
+    corrections.jsonl は全 PJ 共有ストアのため、slug 指定時は他 PJ の project_path を持つ
+    correction（``pj_slug.record_project_match`` で不一致判定）を除外してから直近件数を
+    切り出す。フィルタ→スライスの順序を守ること（他 PJ の割り込みで自 PJ 分が押し出されない
+    ようにするため）。slug 未指定（後方互換）はフィルタしない。
 
     ファイル不在・空の場合は [] を返す。
     """
@@ -74,6 +83,9 @@ def read_recent_corrections(data_dir: Optional[Path] = None) -> List[dict]:
                 continue
     except (OSError, UnicodeDecodeError):
         return []
+
+    if slug is not None:
+        records = [r for r in records if pj_slug.record_project_match(r, slug)]
 
     return records[-MAX_CORRECTIONS:]
 
@@ -108,8 +120,13 @@ def _load_existing_memory_texts(memory_dir: Optional[Path] = None) -> List[str]:
     return texts
 
 
-def _load_all_corrections(data_dir: Optional[Path] = None, max_records: int = 50) -> List[dict]:
-    """corrections.jsonl から最大 max_records 件を返す（ゲーティング用ウィンドウ）。
+def _load_all_corrections(
+    data_dir: Optional[Path] = None, max_records: int = 50, slug: Optional[str] = None,
+) -> List[dict]:
+    """corrections.jsonl から最大 max_records 件を返す（ゲーティング用ウィンドウ・#206）。
+
+    slug 指定時は read_recent_corrections と同じ project スコープ述語でフィルタしてから
+    直近件数を切り出す（フィルタ→スライスの順序）。slug 未指定（後方互換）はフィルタしない。
 
     ファイル不在・空の場合は [] を返す。
     """
@@ -130,6 +147,9 @@ def _load_all_corrections(data_dir: Optional[Path] = None, max_records: int = 50
                 continue
     except (OSError, UnicodeDecodeError):
         return []
+
+    if slug is not None:
+        records = [r for r in records if pj_slug.record_project_match(r, slug)]
 
     return records[-max_records:]
 
@@ -165,16 +185,22 @@ def run(
     """
     _data_dir = data_dir or DATA_DIR
 
-    # 1. corrections.jsonl から直近5件を読む
-    corrections = read_recent_corrections(data_dir=_data_dir)
+    # 1. slug 解決（memory dir と一致させる・#206: project スコープフィルタに必要なため先に解決する）
+    if slug is None:
+        slug = _resolve_slug()
+        if slug is None:
+            return  # graceful exit: project_dir 不明
+
+    # 2. corrections.jsonl から直近5件を読む（当PJ スコープのみ・#206）
+    corrections = read_recent_corrections(data_dir=_data_dir, slug=slug)
     if not corrections:
         return  # graceful exit
 
-    # 2. 生成前ゲート（memory_gating, LLM 不要）: 重要度スコアが低い correction はスキップ
+    # 3. 生成前ゲート（memory_gating, LLM 不要）: 重要度スコアが低い correction はスキップ
     if _HAS_MEMORY_GATING and _is_gating_enabled():
         try:
-            # all_corrections は重複検出のウィンドウ用（最大50件）
-            all_corrections = _load_all_corrections(data_dir=_data_dir)
+            # all_corrections は重複検出のウィンドウ用（最大50件・当PJ スコープのみ）
+            all_corrections = _load_all_corrections(data_dir=_data_dir, slug=slug)
             existing_memories = _load_existing_memory_texts(memory_dir=memory_dir)
             filtered = [
                 c for c in corrections
@@ -185,12 +211,6 @@ def run(
             corrections = filtered
         except Exception:
             pass  # ゲーティングは optional。例外時は元の corrections をそのまま使う
-
-    # 3. slug 解決（memory dir と一致させる）
-    if slug is None:
-        slug = _resolve_slug()
-        if slug is None:
-            return  # graceful exit: project_dir 不明
 
     # 4. キューに enqueue するだけ（LLM 呼び出し・memory 書込・belief ゲートは一切しない）
     try:

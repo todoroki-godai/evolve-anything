@@ -327,3 +327,50 @@ def test_pj_id_to_slug_recovers_renamed_leaf_via_parent(tmp_path):
 def test_pj_id_to_slug_empty_and_none():
     assert pj_slug.pj_id_to_slug("") == ""
     assert pj_slug.pj_id_to_slug(None) == ""
+
+
+# ── record_project_match（correction 等の project スコープ述語の単一ソース・#206）────
+def test_record_match_true_when_project_path_matches_slug():
+    rec = {"project_path": "myproject"}
+    assert pj_slug.record_project_match(rec, "myproject") is True
+
+
+def test_record_match_false_when_project_path_differs():
+    """他 PJ の project_path を持つレコードは False（auto-memory 汚染の再発防止）。"""
+    rec = {"project_path": "otherproject"}
+    assert pj_slug.record_project_match(rec, "myproject") is False
+
+
+def test_record_match_true_when_project_path_missing():
+    """project_path 欠落（未帰属）は寛容に許容する（他PJ誤混入と区別できないため）。"""
+    assert pj_slug.record_project_match({}, "myproject") is True
+    assert pj_slug.record_project_match({"project_path": None}, "myproject") is True
+
+
+def test_record_match_true_when_current_slug_is_none():
+    """current_slug 未指定は判定不能につき常に True（呼び出し側の graceful 挙動を壊さない）。"""
+    assert pj_slug.record_project_match({"project_path": "otherproject"}, None) is True
+
+
+def test_record_match_normalizes_full_worktree_path():
+    """project_path がフルパス（worktree cwd 由来）でも本体 slug に正規化して突合する。"""
+    rec = {"project_path": "/x/evolve-anything/.claude/worktrees/feedback"}
+    assert pj_slug.record_project_match(rec, "evolve-anything") is True
+
+
+def test_record_match_folds_legacy_renamed_slug():
+    """旧 slug（rl-anything）で書かれたレコードも現 slug（evolve-anything）に畳んで一致する。"""
+    rec = {"project_path": "rl-anything"}
+    assert pj_slug.record_project_match(rec, "evolve-anything") is True
+
+
+def test_record_match_falls_back_to_project_field():
+    """project_path が無い場合は project → project_name の順にフォールバックする。"""
+    assert pj_slug.record_project_match({"project": "otherproject"}, "myproject") is False
+    assert pj_slug.record_project_match({"project_name": "otherproject"}, "myproject") is False
+
+
+def test_record_match_project_path_takes_priority_over_project():
+    """project_path が存在すれば project フィールドより優先される。"""
+    rec = {"project_path": "myproject", "project": "otherproject"}
+    assert pj_slug.record_project_match(rec, "myproject") is True
