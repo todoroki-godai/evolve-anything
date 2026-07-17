@@ -15,6 +15,11 @@ try:  # scripts/lib が sys.path のとき（runtime / 一部テスト）
 except ImportError:  # scripts/ が sys.path のとき（lib.* 経由の import 文脈）
     from lib.frontmatter import find_frontmatter_close
 
+try:  # scripts/lib が sys.path のとき（runtime / 一部テスト）
+    from pj_slug import record_project_match
+except ImportError:  # scripts/ が sys.path のとき（lib.* 経由の import 文脈）
+    from lib.pj_slug import record_project_match
+
 logger = logging.getLogger(__name__)
 
 # ── DATA_DIR（テスト時 mock 対象）──────────────────────
@@ -429,6 +434,12 @@ def _detect_gaps_impl(
     """ギャップ検出の実装。"""
     corrections = _load_jsonl(DATA_DIR / "corrections.jsonl")
     errors = _load_jsonl(DATA_DIR / "errors.jsonl")
+
+    # corrections.jsonl は全 PJ 共有ストアのため、project スコープでフィルタしてから
+    # keyword マッチに使う（#208: #206 で導入した単一ソース述語 record_project_match の
+    # 横展開。他 PJ の correction が当 PJ のスキル改善提案 evidence_count に混入しない
+    # ようにする。project_path 欠落＝未帰属レコードは寛容に許容）。
+    corrections = [c for c in corrections if record_project_match(c, str(project_dir))]
 
     gaps: List[Dict[str, Any]] = []
 
