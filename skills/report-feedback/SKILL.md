@@ -58,9 +58,14 @@ issue 候補を出す。だがそれは機械が拾える矛盾だけ（split↔
 ```bash
 evolve-usage-log "report-feedback"
 gh auth status 2>&1 | head -3
+mktemp -d "${TMPDIR:-/tmp}/rf.XXXXXX"
 ```
 
 - 起票先は **常に `todoroki-godai/evolve-anything`**（検出対象はパイプライン自身。どのPJで動いても固定）。
+- `mktemp -d` の出力（絶対パス）を **このラン専用のスコープ**として控え、以降のステップで
+  `$RF_DIR` と書いている箇所はこの絶対パスに読み替える（**固定 `/tmp/rf_*.json` は使わない**）。
+  Bash 呼び出し間でシェル変数は引き継がれないため、各ステップのコマンドに値をそのまま埋め込む
+  （並行セッションが互いの中間ファイルを読み込み/上書きする事故の防止・#224）。
 - 未認証なら候補を `~/.claude/evolve-anything/feedback-drafts/` にローカル保存し（MUST）、
   「`gh auth login` 後に再実行」と案内して終了する。
 
@@ -88,8 +93,8 @@ from evolve_introspect import flatten_candidates, summary_lines
 result = json.load(open(sys.argv[1]))
 analysis = result.get("self_analysis", {})
 print("\n".join(summary_lines(analysis)) if analysis else "(self_analysis なし)")
-json.dump(flatten_candidates(analysis), open("/tmp/rf_seed.json","w"), ensure_ascii=False)
-' "<result.json path>"
+json.dump(flatten_candidates(analysis), open(sys.argv[2],"w"), ensure_ascii=False)
+' "<result.json path>" "$RF_DIR/rf_seed.json"
 ```
 
 **会話経路**: result JSON は無いので Step 2 はスキップし、会話コンテキストをそのまま Step 3 に渡す。
@@ -126,9 +131,9 @@ json.dump(flatten_candidates(analysis), open("/tmp/rf_seed.json","w"), ensure_as
 - 英小文字 + ハイフンの短い slug（2〜5 語）。`コンポーネント名-問題` の形を基本にする。
 - 同じ root cause を別 dedup_key で二重起票しないか、Step 4 の既存 issue タイトルとも見比べる。
 
-Step 2 の `/tmp/rf_seed.json`（決定論の土台）があれば、それと自分の候補を 1 リストに統合し、
-**統合した候補リストを Write ツールで `/tmp/rf_candidates.json` に保存する**（Step 4 がこのファイルを読む）。
-seed が無い会話経路でも、生成した候補を同じく `/tmp/rf_candidates.json` に保存する。
+Step 2 の `$RF_DIR/rf_seed.json`（決定論の土台）があれば、それと自分の候補を 1 リストに統合し、
+**統合した候補リストを Write ツールで `$RF_DIR/rf_candidates.json` に保存する**（Step 4 がこのファイルを読む）。
+seed が無い会話経路でも、生成した候補を同じく `$RF_DIR/rf_candidates.json` に保存する。
 
 ### Step 4: 既存 issue と dedup
 
@@ -137,23 +142,23 @@ closed も取るのは、過去に直したはずの issue が再発（regressio
 
 ```bash
 gh issue list --repo todoroki-godai/evolve-anything --state all --limit 300 \
-  --json number,title,body,state > /tmp/rf_existing.json
+  --json number,title,body,state > "$RF_DIR/rf_existing.json"
 ```
 
 ```bash
 PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts/lib" python3 -c '
-import json
+import json, sys
 from evolve_introspect import filter_duplicates
-cands = json.load(open("/tmp/rf_candidates.json"))      # Step 3 で書き出した候補
-existing = json.load(open("/tmp/rf_existing.json"))
+cands = json.load(open(sys.argv[1]))      # Step 3 で書き出した候補
+existing = json.load(open(sys.argv[2]))
 res = filter_duplicates(cands, existing)
-json.dump(res, open("/tmp/rf_filtered.json","w"), ensure_ascii=False)
+json.dump(res, open(sys.argv[3],"w"), ensure_ascii=False)
 for d in res["duplicates"]:
     print(f"  重複→ #{d[\"existing_number\"]} とスキップ（{d[\"reason\"]}）: {d[\"title\"]}")
 for r in res["regressions"]:
     print(f"  ⚠️ 再発→ #{r[\"existing_number\"]}（前回 closed）の regression: {r[\"title\"]}")
 print(f"unique: {len(res[\"unique\"])} 件 / duplicates: {len(res[\"duplicates\"])} 件 / regressions: {len(res[\"regressions\"])} 件")
-'
+' "$RF_DIR/rf_candidates.json" "$RF_DIR/rf_existing.json" "$RF_DIR/rf_filtered.json"
 ```
 
 duplicates は「既存 #N と重複 — スキップ」と1行ずつ表示する（沈黙させない）。
@@ -184,16 +189,16 @@ Step 4 の `regressions` に同 dedup_key がある候補は、代わりに `ren
 
 ```bash
 PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts/lib" python3 -c '
-import json
+import json, sys
 from evolve_introspect import render_issue_body, render_regression_body
-cand = json.load(open("/tmp/rf_one.json"))   # 承認された1候補
+cand = json.load(open(sys.argv[1]))   # 承認された1候補
 prev = cand.get("_regression_of")            # regression なら前回 closed の番号、無ければ None
 print(render_regression_body(cand, prev) if prev else render_issue_body(cand))
-' > /tmp/rf_body.md
+' "$RF_DIR/rf_one.json" > "$RF_DIR/rf_body.md"
 
 gh issue create --repo todoroki-godai/evolve-anything \
   --title "[report-feedback] {title}" \
-  --body-file /tmp/rf_body.md \
+  --body-file "$RF_DIR/rf_body.md" \
   --label "{suggested_label}"
 ```
 
