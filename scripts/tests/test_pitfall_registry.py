@@ -146,3 +146,45 @@ def test_unmanaged_candidates_empty_when_all_registered(tmp_path):
     (a / "pitfalls.md").write_text("# Pitfalls\n", encoding="utf-8")
     reg.add_managed(tmp_path, a / "pitfalls.md")
     assert reg.unmanaged_candidates(tmp_path) == []
+
+
+def test_load_managed_falls_back_to_legacy_path(tmp_path):
+    # #220: ツール名リネーム経緯のある PJ では登録簿が旧パス
+    # (.claude/rl-anything/pitfall-managed.json) に残ったままのことがある。
+    # canonical が無ければ legacy にフォールバックして「登録済み」と判定する。
+    legacy = tmp_path / ".claude" / "rl-anything" / "pitfall-managed.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        '{"managed": ["docs/pitfalls.md"]}\n', encoding="utf-8"
+    )
+    assert reg.load_managed(tmp_path) == ["docs/pitfalls.md"]
+    pf = tmp_path / "docs" / "pitfalls.md"
+    assert reg.is_managed(tmp_path, pf) is True
+
+
+def test_canonical_registry_preferred_over_legacy(tmp_path):
+    # canonical と legacy が両方存在する場合は canonical を優先する。
+    canonical = tmp_path / ".claude" / "evolve-anything" / "pitfall-managed.json"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text(
+        '{"managed": ["docs/canonical.md"]}\n', encoding="utf-8"
+    )
+    legacy = tmp_path / ".claude" / "rl-anything" / "pitfall-managed.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        '{"managed": ["docs/legacy.md"]}\n', encoding="utf-8"
+    )
+    assert reg.load_managed(tmp_path) == ["docs/canonical.md"]
+
+
+def test_add_managed_writes_only_canonical_path(tmp_path):
+    # 書き込みは常に canonical のみ（legacy は更新しない）。
+    legacy = tmp_path / ".claude" / "rl-anything" / "pitfall-managed.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"managed": ["docs/legacy.md"]}\n', encoding="utf-8")
+    pf = tmp_path / "docs" / "new.md"
+    reg.add_managed(tmp_path, pf)
+    canonical = tmp_path / ".claude" / "evolve-anything" / "pitfall-managed.json"
+    assert canonical.exists()
+    # legacy ファイルは書き換えられない
+    assert legacy.read_text(encoding="utf-8") == '{"managed": ["docs/legacy.md"]}\n'
