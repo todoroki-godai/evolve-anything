@@ -17,6 +17,9 @@
 - **fix(pitfall_registry): 登録簿読み出しに legacy パスへのフォールバックを追加（#220）** — `unmanaged_candidates()`/`load_managed()` が canonical パス `.claude/evolve-anything/pitfall-managed.json` のみを見ていたため、ツール名リネーム（rl-anything→evolve-anything）経緯のある PJ で旧パス `.claude/rl-anything/pitfall-managed.json` に残った登録簿を見落とし、evolve 側「未登録」警告と prune 側 `git grep`「登録済み」が矛盾する挙動になっていた。`rl_common.DATA_DIR` の「書込は canonical のみ・読出は canonical→legacy」という既存慣行と同じパターンで読み出しを canonical→legacy の順に探索するフォールバックを追加（書き込みは従来通り canonical のみ）。TDD +3件。
 - **fix(report-feedback): 中間ファイルの固定 /tmp パスをラン専用ディレクトリへスコープ化（#224）** — `skills/report-feedback/SKILL.md` の Step 1-4/6 が `/tmp/rf_seed.json` 等の固定パスに書いていたため、並行セッションが互いの候補/既存issueキャッシュ/起票直前 body を読み込み・上書きして誤起票する race condition があった。Step 1 で `mktemp -d` によりラン専用ディレクトリを作成し、以降の全ステップの中間ファイルをそこへ書く（`$RF_DIR` として文書化）よう記述を修正。
 
+### Changed
+- **fix(remediation): hook インストール系提案を scope-based な折り畳みから除外（#225）** — `partition_proposable_by_scope` が `*_hook_candidate` 型（`~/.claude/hooks/` 等の共有設定を書き換える hook install アクション）を impact_scope/origin に関わらず常に custom 側（個別承認レーン）へ合流させるよう修正。従来は影響半径最大の global scope 提案が `proposable_global`（「参考値・対応不要」の1行サマリ）に折り畳まれ、生成スクリプト/diff 全文がレビューされずに埋もれる逆転が起きていた。折り畳みは line_limit_violation 等の低リスク型専用に限定。
+
 ## [1.123.0] - 2026-07-17
 
 ### Added

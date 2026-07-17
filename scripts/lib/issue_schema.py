@@ -14,6 +14,18 @@ VERIFICATION_RULE_CANDIDATE = "verification_rule_candidate"
 SPLIT_CANDIDATE = "split_candidate"
 HIERARCHY_CANDIDATE = "hierarchy_candidate"
 
+# ── hook install アクション判定（#225） ──────────────
+# type が "*_hook_candidate" にマッチする issue は、そのアクションが
+# ~/.claude 等の共有設定へ hook をインストールするものであり、impact_scope が
+# global（影響半径が最大）でも scope-based な折り畳み（proposable_global の
+# 1行サマリ）を経由させてはならない。単一ソースとして remediation 側が
+# import して partition 判定に使う。
+
+
+def is_hook_install_issue_type(issue_type: str) -> bool:
+    """issue type が hook インストール系アクション（`*_hook_candidate`）かを判定する。"""
+    return bool(issue_type) and issue_type.endswith("_hook_candidate")
+
 # ── skill_triage 定数 ──────────────────────────────
 
 SKILL_TRIAGE_CREATE = "skill_triage_create"
