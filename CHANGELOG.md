@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [1.122.0] - 2026-07-17
+
+### Added
+- **feat(subagent_traces): 委任プロンプト先頭300字を trace に追加保存（#200, #202）** — `extractor.extract_trace` が transcript を走査し、`parentUuid is None` かつ `type=="user"` を満たす最初の行から委任プロンプトを抽出する（content が str ならそのまま、list なら最初の text ブロックのみ採用。`<system-reminder>` 等の reminder タグ相当ブロックを除去してから先頭300字に truncate、超過時は末尾に `…` を付与）。`delegation_prompt`/`delegation_prompt_truncated` を record に追加し、`ingest.TRACE_VERSION` を 1→2 に bump（既存レコードは遡及 ingest 対象外・フィールド欠如は read 側 `.get` で後方互換吸収）。`sections_subagent_traces` が全 agent_type の集計行の下に直近1件の委任プロンプト先頭150字を「└ 直近の委任」として追加表示。`store_registry` の `subagent_traces.jsonl` note に、retention=permanent により transcript 本体削除後も先頭300字が恒久的に平文で残る露出について明記。
 
 ### Fixed
 - **chore(test): evolve keyset snapshot を二層 golden 方式に変更 — 本 PJ 実データ依存の条件付きキー drift を恒久解消** — `test_evolve_keyset_snapshot.py` は evolve-anything 自身の実スキル構成に対し dry-run するため、`phases.prune.zero_invocations_suppressed`（計測窓 suppress の暦日境界）/ `phases.reorganize.split_suppressed_by_archive` / `phases.skill_evolve.evolve_suppressed_by_archive`（archive 候補との衝突が「非空時のみ」キーを追加）が実行時刻・本 PJ 自身の skill 増減で出たり消えたりし、regression でないのに fail していた。`fixtures/evolve_keyset_optional.txt` に「条件付き透明化キー」の prefix を宣言し、宣言済み prefix に一致する増減のみ許容（それ以外の hard な増減は従来通り fail し構造 drift 検知は維持）。`UPDATE_SNAPSHOTS=1` は golden を上書きせず既存キーとの union merge に変更（条件付きキーが golden から消えないようにする）。TDD +2件（optional/hard 4象限の純関数判定）。
