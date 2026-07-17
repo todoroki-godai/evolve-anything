@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **chore(prune): rules 同士の重複候補に triage ガイダンスを付与（#226）** — skills 同士の重複候補には Merge サブフロー（`merge_duplicates`）という消費者があるが、rules 同士のペアには何もなく類似度スコアだけが提示されていた（実例: 0.92 類似だが実際は非重複だったケース）。`detect_duplicates()` が各候補に `kind`（`skills`/`rules`）を付与し、rules 同士のペアには `triage_note`（両ファイルを読み指示内容の重複を確認してから判断すべき旨）を添えるよう変更。`skills/prune/SKILL.md` にも rules ペアの triage ステップ（Read で両ファイル確認→実重複のみ手動提案・自動 merge しない）を明記。検出のスコープ自体は変更なし。
+
 ### Fixed
 - **fix(report-feedback): SKILL.md Step 4 の f-string 式内 `\"` エスケープが Python 3.12 未満で SyntaxError になる問題を修正（#229）** — `filter_duplicates` 呼び出し後の print 4行が `d[\"existing_number\"]` のようにバックスラッシュで二重引用符をエスケープしており、f-string 式部分にバックスラッシュを含めると Python 3.12 未満で SyntaxError（このリポジトリの実行環境である 3.14 でも同様に SyntaxError になることを実測確認）。ブロック全体を shell の single quote で囲む都合上、式内に生の `'` を使う回避策（`d['key']`）はシェル解釈自体を壊す（クォートが早期終端し変数名が未クォートのまま渡り NameError 化することを実測確認）ため、dict アクセスを一旦変数へ代入してから f-string に埋め込む形へ修正。契約テストに `SKILL.md` の全 `python3 -c` ブロックを `compile()` で構文検証するテストを追加。
 - **fix(self_contamination): ドメイン語彙起因の Family C FP を PJ slug×語彙ペアで別バケット集計に分離（#203）** — Whisper 文字起こし校正 PJ（slug に `bots` を含む）で「ハルシネーション」が正常業務語彙として頻出し、Family C（汚染宣言×tool_result 原文非在）の FP を量産していた。`self_contamination_scan.py` に `_DOMAIN_VOCAB_FP_MARKERS`（PJ slug マーカー→除外語彙のモジュール定数、初期エントリ: `bots`×「ハルシネーション」）と `domain_vocab_fp_words()` を追加し、`is_topic_pj` と同型の PJ slug マッチングで対象を判定。ハード除外ではなく、該当語彙**のみ**が根拠の候補を `ScanReport.domain_vocab_fp` という別バケットへ振り分け（他の汚染語彙が近傍にあれば従来どおり Family C として発火）、`scan_records`/`scan_file`/`scan_project_transcripts` に `excluded_vocab` を配線。`sections_self_contamination.py` が除外件数を audit に常時 surface（真のヒットが 0 件でも ℹ で表示、silence≠evaluated）。TDD +11件（core 9 / observability 2）・決定論・LLM 非依存。

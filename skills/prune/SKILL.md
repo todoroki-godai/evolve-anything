@@ -44,7 +44,9 @@ evolve-prune "$(pwd)"
   - **観測窓が usage 記録修正日 (#478) をまたぐ間は zero_invocation 全体を suppress（#522-2/#529-1）**。この期間は欠損データで「未使用」を断定できないため、候補を出さず `zero_invocations_suppressed.message`（「計測待ち N 件」）を**1行 surface するだけに留める（MUST）**。per-item 調査・個別承認は行わない（advisory↔MUST 矛盾の解消）。**suppress は永久保留にはならない（#587）**: 解除予定日 `zero_invocations_suppressed.reeval_date`（= 計測修正日 + 観測窓日数）と自動再評価フラグ `auto_reeval` を構造化 + message に surface する。この日以降の prune/evolve 実行で `zero_invocation_window_suppressed` が False に転じ通常判定へ**自動復帰**する（別途トリガー不要）。
 - **Plugin Unused**: プラグイン由来で未使用のスキル（レポートのみ、アーカイブ対象外）
 - **Global 候補**: `skill_activations.jsonl` で90日間未使用・低頻度のグローバルスキルを検出（データなし時は usage-registry.jsonl フォールバック）
-- **重複候補**: audit-report の意味的類似度検出結果
+- **重複候補**: audit-report の意味的類似度検出結果。各候補には `kind`（`skills` / `rules`）が付く。
+  - `kind: "skills"` → 後述 Merge サブステップ（`skills/evolve/references/prune-merge.md`）で処理する
+  - `kind: "rules"`（rules 同士のペア）→ `triage_note` が付き、Merge サブフローの消費者がない（#226）。**両ファイルを Read で全文読み、指示内容が実際に重複しているかを確認してから判断する（MUST）**。類似度スコアだけで自動的に重複と決めつけない（同じツール名・ディレクトリ名への言及だけで lexical 類似度が高くなることがある）。実重複と確認できた場合のみ、どちらを残しどちらを削るかを人間に個別提案する。自動 merge は行わない（MUST NOT）
 
 Plugin Unused のスキルはアーカイブ対象外とする（MUST）。
 「未使用。`claude plugin uninstall` を検討？」とレポートのみ出力する。
