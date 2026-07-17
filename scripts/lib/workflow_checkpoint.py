@@ -435,11 +435,12 @@ def _detect_gaps_impl(
     corrections = _load_jsonl(DATA_DIR / "corrections.jsonl")
     errors = _load_jsonl(DATA_DIR / "errors.jsonl")
 
-    # corrections.jsonl は全 PJ 共有ストアのため、project スコープでフィルタしてから
-    # keyword マッチに使う（#208: #206 で導入した単一ソース述語 record_project_match の
-    # 横展開。他 PJ の correction が当 PJ のスキル改善提案 evidence_count に混入しない
-    # ようにする。project_path 欠落＝未帰属レコードは寛容に許容）。
+    # corrections.jsonl / errors.jsonl は全 PJ 共有ストアのため、project スコープでフィルタ
+    # してから keyword マッチに使う（#208, #228: #206 で導入した単一ソース述語
+    # record_project_match の横展開。他 PJ の correction/error が当 PJ のスキル改善提案
+    # evidence_count に混入しないようにする。project_path 欠落＝未帰属レコードは寛容に許容）。
     corrections = [c for c in corrections if record_project_match(c, str(project_dir))]
+    errors = [e for e in errors if record_project_match(e, str(project_dir))]
 
     gaps: List[Dict[str, Any]] = []
 
