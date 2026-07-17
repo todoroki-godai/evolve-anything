@@ -93,6 +93,36 @@ class TestComputeConfidence:
         c = compute_confidence("CREATE", session_count=0)
         assert c == BASE_CONFIDENCE["CREATE"]
 
+    def test_low_generalizability_penalizes_confidence(self):
+        """#221: 実例回帰 — session_count=3, generalizability_score=0.34 で
+        confidence(0.75) が明確に下がる（かつ個別承認レーン閾値 0.70 を下回る）。
+        """
+        baseline = compute_confidence("CREATE", session_count=3)
+        assert baseline == 0.75  # 修正前の実測値（BASE 0.70 + session_bonus 0.05）
+
+        penalized = compute_confidence(
+            "CREATE", session_count=3, generalizability_score=0.34,
+        )
+        assert penalized < baseline - 0.05  # 明確な低下
+        assert penalized < 0.70  # 個別承認レーン閾値を下回る
+
+    def test_high_generalizability_no_penalty(self):
+        """generalizability_score が閾値以上なら confidence は変化しない。"""
+        baseline = compute_confidence("CREATE", session_count=3)
+        unpenalized = compute_confidence(
+            "CREATE", session_count=3, generalizability_score=0.9,
+        )
+        assert unpenalized == baseline
+
+    def test_generalizability_none_preserves_backward_compat(self):
+        """generalizability_score 未指定（None）は既存呼び出しと同じ挙動。"""
+        c = compute_confidence("CREATE", session_count=3, generalizability_score=None)
+        assert c == compute_confidence("CREATE", session_count=3)
+
+    def test_generalizability_penalty_does_not_go_negative(self):
+        c = compute_confidence("CREATE", session_count=0, generalizability_score=0.0)
+        assert c >= 0.0
+
 
 class TestTriageSkill:
     def test_create_judgment(self, sessions, usage, skill_triggers_list):
@@ -132,6 +162,43 @@ class TestTriageSkill:
             skill_triggers_list=skill_triggers_list,
         )
         assert result["action"] == "OK"
+
+    def test_create_low_generalizability_reduces_confidence(self, sessions, usage, skill_triggers_list):
+        """#221: missed_skills に generalizability_score が同梱されている場合、
+        CREATE confidence の減点に使われ、結果にも並記される。
+        """
+        missed = [{
+            "skill": "deploy-check",
+            "triggers_matched": ["deploy"],
+            "session_count": 3,
+            "generalizability_score": 0.34,
+        }]
+        result = triage_skill(
+            "deploy-check",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills={"aws-cdk-deploy", "channel-routing", "commit"},
+            skill_triggers_list=skill_triggers_list,
+        )
+        assert result["action"] == "CREATE"
+        assert result["confidence"] < 0.70  # 修正前は 0.75（減点なし）
+        assert result["generalizability_score"] == 0.34
+
+    def test_create_without_generalizability_score_key_unaffected(self, sessions, usage, skill_triggers_list):
+        """generalizability_score が無い missed_skill（旧来の検出経路）は減点されない。"""
+        missed = [{"skill": "deploy-check", "triggers_matched": ["deploy"], "session_count": 4}]
+        result = triage_skill(
+            "deploy-check",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills={"aws-cdk-deploy", "channel-routing", "commit"},
+            skill_triggers_list=skill_triggers_list,
+        )
+        assert result["action"] == "CREATE"
+        assert result["confidence"] == 0.80  # BASE 0.70 + session_bonus 0.10、減点なし
+        assert result["generalizability_score"] is None
 
     def test_missed_below_threshold(self, sessions, usage, skill_triggers_list):
         missed = [{"skill": "rare-skill", "triggers_matched": ["rare"], "session_count": 1}]
