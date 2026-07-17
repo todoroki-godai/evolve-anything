@@ -35,6 +35,7 @@
 | `evolve-loop-orchestrator` | ベースライン→バリエーション→評価→人間確認のループ統合 | agent |
 | `evolve-scorer` | オーケストレーター + 3並列サブエージェントで3軸採点 | agent |
 | `skill-triage` | CREATE/UPDATE/SPLIT/MERGE/OK の5択判定 | `skill_triage.py` |
+| `tool_usage_analyzer` | セッション JSONL からツール呼び出し抽出・分類、discover/audit 向け rule/hook 候補生成（evolve Step 10.2 閾値定数を保持。#457 で HOME 隔離すり抜けを修正） | `scripts/lib/tool_usage_analyzer/` |
 | `trigger-eval-generator` | sessions+usage → skill-creator 互換 evals.json 自動生成 | `trigger_eval_generator.py` |
 | `evolve-skill` | 自己進化パターン（Pre-flight / pitfalls.md）のピンポイント組み込み | skill |
 | `agent-brushup` | エージェント定義の品質診断・改善提案・upstream 監視・model exact-ID pin 検出（#449）+ addyosmani skill anatomy 欠落節の根拠付き改善提案（#63）+ tools 宣言と実付与の乖離検出（`memory:` の Write/Edit 自動付与・#130）+ worker agent の ask-before-fallback 明文化検査（#192） | `agent_quality.py` |
