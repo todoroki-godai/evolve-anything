@@ -366,6 +366,7 @@ confidence/scope で3カテゴリに動的分類される。各カテゴリの M
   - **まとめてスキップ対象 = `proposable_custom_batch_skip`（conf < 0.7、実体 `classified.proposable_custom_batch_skip[]`）**: FP 集中帯（hardcoded/duplicate/skill_evolve medium 等）。**デフォルトはスキップ**で「低 confidence の proposable {batch_skip}件をまとめてスキップしました（個別に見る場合は展開可）」と1行表示する。1件ずつ AskUserQuestion を出さない（MUST NOT）。ユーザーが希望した場合のみ提案詳細プロトコルで個別展開する。
   - `proposable_custom_individual == 0`（＝個別対象なし）の場合は AskUserQuestion を出さず、batch_skip の1行表示のみで Step を終える（沈黙≠評価のため、batch_skip が0件でも個別対象0件なら「proposable: 個別対象なし ✓」を残す）。
   - `proposable_custom == 0 かつ proposable_global > 0` は「global のみ {M}件（参考値）— 対応不要」と1行でスキップ。
+  - **hook インストール系は折り畳み対象外（#225）**: `tool_usage_hook_candidate` 等 type が `*_hook_candidate` にマッチする issue は、impact_scope が global（`~/.claude/hooks/` 等の共有設定を書き換える＝影響半径が最大）でも `partition_proposable_by_scope` が custom 側へ強制合流させるため `proposable_global` には現れない。generate_proposals の1件ずつ表示（`detail` の script_content/settings_diff 実値を含む）を必ず経由する — scope-based な折り畳みは line_limit_violation 等の低リスク型専用であり、hook install のような高リスクアクションを「参考値・対応不要」で埋もれさせてはならない。
   - **情報レーンの dismiss（#103）**: `proposable_global` / `phases.discover.rule_violation_observed` は「対応しない」判断をしても却下記録の入口が無く**毎回再提示**されていた（#26 の対象外レーンで同型再発）。ユーザーが「この PJ では意図的運用なので以後出さなくてよい」と判断したら下記で dismiss を記録する（PJ スコープ・TTL45日）。dismiss 済みは `remediation.proposable_global_suppressed` / `remediation.rule_violation_suppressed` に件数で畳んで surface する（silence != evaluated）。**dry-run のときは記録しない（MUST NOT）**。明示 dismiss しなくても、連続提示された advisory は `reconcile_surfaced` が閾値回数（既定2）で自動畳み込みする（下記 #494 fallback が情報レーンにも効く）。
 
     ```python
