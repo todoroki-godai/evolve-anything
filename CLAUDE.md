@@ -45,7 +45,7 @@
 | `evolve_decisions` | evolve 提案の accept/reject を emit→drain 2相で決定論キャプチャ（`evolve --drain`）[ADR-041, #400, #402] | `evolve_decisions.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400） | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
-| `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込 [ADR-037] | `auto_memory_*.py` |
+| `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込 [ADR-037]。**project スコープ4層防御（#206）**: 全PJ共有ストア corrections.jsonl/auto_memory_queue の他PJ混入を `pj_slug.record_project_match` 単一述語で読み出しフィルタ+enqueue reject+修復ツール `auto_memory_purge.py`（dry-run既定）の4層で遮断 | `auto_memory_*.py` |
 | `meta_quality` | スキル追加前の品質フィルタ（CREATE/REVIEW/SKIP） | `meta_quality.py` |
 | `triage_ledger` | SKIP 判断の状態管理（TTL 45日・再発昇格・dry-run 非書込）（#308） | `triage_ledger.py` |
 | `constraint_decay` | セッション後半に集中する correction の decay 検出 | `discover/patterns.py` |
@@ -242,6 +242,8 @@ claude plugin validate
 収集パスは `pytest.ini` の `testpaths` が単一ソース。新しい tests/ を足したら testpaths に追記する
 （漏れは audit の Testpaths Coverage チェック = `scripts/lib/testpaths_coverage.py` が検出する。#468）。
 pytest-xdist `-n auto` で並列実行（`pytest.ini` の `addopts` に設定済み）、2026-06-12 時点で約 32 秒・4972件（直列だと約 135 秒）。#457 で run_evolve 系の実環境ストア読みを隔離し直列 32 分→1 分→xdist で約 32 秒に短縮。**並行 worker に回させるときは `-n 0` で直列**（targeted テストまで多プロセス化し CPU 飢餓するため）。
+
+`test_evolve_keyset_snapshot.py` は evolve-anything 自身の実スキル構成に dry-run するため、計測窓 suppress の暦日境界等で regression でないのに出たり消えたりするキーがある。`fixtures/evolve_keyset_optional.txt` に条件付き透明化キーの prefix を宣言し、宣言済み prefix の増減のみ許容する二層 golden 方式（#209）。`UPDATE_SNAPSHOTS=1` は golden 上書きでなく既存キーとの union merge（条件付きキーを golden から消さない）。
 
 リリース前は `bin/evolve-dogfood-gate --layer all` も全緑を確認する（pytest が掬えない実環境の繋ぎ目
 — dry-run 不変 / report invariants / SKILL.md コードブロック — を検査する。#496）。フル `all` は
