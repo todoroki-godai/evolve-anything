@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **feat(spec-keeper): Progressive Disclosure 閾値を chars ベースへ是正（#216）** — 肥大化判定を行数のみから bytes（`wc -c`）主体へ改訂。単一 md ファイル（hot/cold 問わず）は 50KB 超で caution・100KB 超で分割必須、hot（SPEC.md）は 20KB 超で caution・35KB 超で cold へ移動。cold 合計の行数閾値（旧 >300行で L3 検討）は廃止し単一ファイル bytes 判定に統一（行数は補助指標として残す）。Step 1 の構造突合コマンドに `wc -c` 計測（spec/ 配下はファイル単位の最大値も出力）を追加。CLAUDE.md コンポーネント表等の「1行サマリ」契約に ≤400字の数値上限を明記し update フローのチェック項目に追加。>50KB の cold ファイルは丸読みせず Grep→部分 Read で消費する旨も明記。
+
 ## [1.122.0] - 2026-07-17
 
 ### Added
