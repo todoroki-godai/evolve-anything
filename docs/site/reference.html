@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.122.0</span>
+    <span class="header-version">v1.123.0</span>
   </div>
 </header>
 
@@ -314,6 +314,7 @@
           <tr><td>evolve-loop-orchestrator</td><td>ベースライン取得 → バリエーション生成 → 評価 → 人間確認のループを統合する</td></tr>
           <tr><td>evolve-scorer エージェント</td><td>オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点する</td></tr>
           <tr><td>skill-triage</td><td>テレメトリ + trigger eval で CREATE/UPDATE/SPLIT/MERGE/OK の5択判定する</td></tr>
+          <tr><td>tool_usage_analyzer</td><td>セッション JSONL からツール呼び出しを抽出・分類し、discover/audit 向けの rule/hook 候補を生成する（evolve Step 10.2 閾値定数を保持。#457 で HOME 隔離すり抜けを修正）（<code>scripts/lib/tool_usage_analyzer/</code>）</td></tr>
           <tr><td>trigger-eval-generator</td><td>sessions.jsonl + usage.jsonl → skill-creator 互換 evals.json を自動生成する</td></tr>
           <tr><td>evolve-skill</td><td>特定スキルに自己進化パターン（Pre-flight / pitfalls.md）をピンポイント組み込みする (<code>assess_single_skill</code> + <code>apply_evolve_proposal</code>)</td></tr>
           <tr><td>agent-brushup</td><td>エージェント定義の品質診断・改善提案・upstream 監視・model exact-ID pin 検出（#449） (<code>scripts/lib/agent_quality.py</code>)</td></tr>
