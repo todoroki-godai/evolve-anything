@@ -293,7 +293,7 @@ echo "feat_refactor: $(git log --oneline --since="$(git log -1 --format=%ci -- S
    - **L2 で hot > 80行** → cold 移動候補セクションを提示し、承認で移動実行
    - **cold 配下の単一ファイルが > 100KB（bytes）** → 分割必須。承認されたらセクション単位で新規 cold ファイルに分割
    - **L2 の場合**: spec/ ファイルの `Last updated:` も確認し、古い場合は SPEC.md と同時に更新
-   - **1行サマリ字数チェック（MUST）**: CLAUDE.md のコンポーネント表など「1行サマリ」を運用契約とする箇所は **1エントリ ≤400字**。超過エントリがあれば要約を切り詰め、詳細は spec/components.md 等の cold 側へ委譲する（本文はポインタのみ残す）
+   - **1行サマリ字数チェック（MUST）**: CLAUDE.md のコンポーネント表など「1行サマリ」を運用契約とする箇所は、**サマリ列（説明文言）のみ 1エントリ ≤400字**（名称・実体パス列は対象外）。超過エントリがあれば要約を切り詰め、詳細は spec/components.md 等の cold 側へ委譲する（本文はポインタのみ残す）
 5. **用語集 drift チェック（`CONTEXT.md` が存在する場合のみ）**:
    ```bash
    [ -f CONTEXT.md ] && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/glossary_drift.py" CONTEXT.md SPEC.md CLAUDE.md || true
@@ -403,7 +403,7 @@ SPEC.md Status:
   未反映コミット: {N}件
   README.md: {Last updated 日付 or "日付不明"} [{最新/要確認}]   ← README.md が存在する場合のみ
   判定: 最新 or 更新推奨
-  昇格候補: なし or L2昇格推奨（SPEC.md > 100行）
+  昇格候補: なし or L2昇格推奨（SPEC.md > 35KB、行数目安 >100行）
 ```
 
 健全性判定は「Progressive Disclosure レイヤー」セクションの閾値表に従う。
