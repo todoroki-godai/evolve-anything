@@ -121,6 +121,43 @@ def test_extract_trace_ignores_string_content(tmp_path):
     assert tr["text_block_count"] == 0
 
 
+def test_extract_trace_counts_effort_levels(tmp_path):
+    """#219: type=='assistant' 行のトップレベル 'effort' を分布として数える。"""
+    t = tmp_path / "effort.jsonl"
+
+    def _assistant_line_with_effort(effort):
+        return {"type": "assistant", "effort": effort,
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "x"}]}}
+
+    _write_transcript(t, [
+        _assistant_line_with_effort("high"),
+        _assistant_line_with_effort("high"),
+        _assistant_line_with_effort("max"),
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["effort_counts"] == {"high": 2, "max": 1}
+
+
+def test_extract_trace_effort_counts_empty_when_field_missing(tmp_path):
+    """effort フィールドが無い transcript（旧 CC バージョン等）は未計測＝空 dict。"""
+    t = tmp_path / "no_effort.jsonl"
+    _write_transcript(t, [
+        _assistant_line([{"type": "tool_use", "id": "1", "name": "Bash", "input": {}}]),
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["effort_counts"] == {}
+
+
+def test_extract_trace_ignores_effort_on_non_assistant_lines(tmp_path):
+    """type != 'assistant' の行にトップレベル 'effort' があっても数えない。"""
+    t = tmp_path / "user_effort.jsonl"
+    _write_transcript(t, [
+        {"type": "user", "effort": "high", "message": {"role": "user", "content": "x"}},
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["effort_counts"] == {}
+
+
 def test_extract_trace_missing_file_returns_none(tmp_path):
     """存在しないファイルは None。"""
     assert _ext.extract_trace(tmp_path / "nope.jsonl") is None
@@ -564,6 +601,34 @@ def test_per_agent_type_summary_empty_when_no_data(data_dir):
     assert _query.per_agent_type_summary("p") == []
 
 
+def test_per_agent_type_summary_aggregates_effort_distribution(data_dir):
+    """#219: agent_type 単位で effort_counts を合算し、多数派を dominant_effort に出す。"""
+    _tstore.write_trace({"agent_id": "w1", "pj_slug": "p", "agent_type": "impl-worker",
+                         "first_try_success": True, "tool_error_count": 0,
+                         "effort_counts": {"xhigh": 3}})
+    _tstore.write_trace({"agent_id": "w2", "pj_slug": "p", "agent_type": "impl-worker",
+                         "first_try_success": True, "tool_error_count": 0,
+                         "effort_counts": {"xhigh": 2, "high": 1}})
+    _tstore.write_trace({"agent_id": "w3", "pj_slug": "p", "agent_type": "impl-worker",
+                         "first_try_success": True, "tool_error_count": 0,
+                         "effort_counts": {"xhigh": 1}})
+    out = _query.per_agent_type_summary("p", min_traces=3)
+    assert len(out) == 1
+    s = out[0]
+    assert s["effort_counts"] == {"high": 1, "xhigh": 6}
+    assert s["dominant_effort"] == "xhigh"
+
+
+def test_per_agent_type_summary_dominant_effort_none_when_unmeasured(data_dir):
+    """effort_counts が全レコードで空（旧 CC バージョン等）なら dominant_effort=None。"""
+    for i in range(3):
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": True, "tool_error_count": 0})
+    out = _query.per_agent_type_summary("p", min_traces=3)
+    assert out[0]["dominant_effort"] is None
+    assert out[0]["effort_counts"] == {}
+
+
 # ─────────────────────────── audit section ───────────────────────────
 
 def test_section_silent_when_no_traces(data_dir, monkeypatch):
@@ -749,3 +814,118 @@ def test_section_handles_missing_delegation_prompt_field_gracefully(data_dir, mo
     joined = "\n".join(out)
     assert "impl-worker" in joined
     assert "直近の委任" not in joined
+
+
+# ──────────── audit section: 実測 effort 分布 + tier drift (#219) ────────────
+
+def _agent(name, frontmatter):
+    from agent_quality import AgentInfo
+    return AgentInfo(name=name, path=Path(f"/tmp/{name}.md"), scope="global",
+                     frontmatter=frontmatter)
+
+
+def test_section_shows_effort_distribution_when_measured(data_dir, monkeypatch):
+    """#219: effort_counts が計測されている agent_type は実測 effort 分布を表示する。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    monkeypatch.setattr(sec, "scan_agents", lambda project_root=None: [])
+    for i in range(3):
+        _tstore.write_trace({
+            "agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+            "first_try_success": True, "tool_error_count": 0,
+            "effort_counts": {"xhigh": 1},
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "実測 effort" in joined
+    assert "xhigh" in joined
+
+
+def test_section_omits_effort_line_when_unmeasured(data_dir, monkeypatch):
+    """effort_counts が全レコードで空（旧 CC バージョン）なら実測 effort 行を省略する。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    monkeypatch.setattr(sec, "scan_agents", lambda project_root=None: [])
+    for i in range(3):
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": True, "tool_error_count": 0})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "実測 effort" not in joined
+
+
+def test_section_warns_on_effort_drift_from_tier_policy(data_dir, monkeypatch):
+    """agent frontmatter の tier 宣言（tier_policy 期待値）と実測 effort が乖離したら ⚠。"""
+    from audit import sections_subagent_traces as sec
+    from audit.sections_summary import classify_section
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    # HARD tier の既定 effort は xhigh（tier_policy.DEFAULT_TIER_POLICY）。実測は high で乖離。
+    agents = [_agent("impl-worker", {"name": "impl-worker", "tier": "HARD",
+                                      "model": "sonnet", "effort": "xhigh"})]
+    monkeypatch.setattr(sec, "scan_agents", lambda project_root=None: agents)
+    for i in range(3):
+        _tstore.write_trace({
+            "agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+            "first_try_success": True, "tool_error_count": 0,
+            "effort_counts": {"high": 1},
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "⚠" in joined
+    assert "effort drift" in joined or "乖離" in joined
+    assert "xhigh" in joined and "high" in joined
+    assert classify_section(out) == "critical"
+
+
+def test_section_no_drift_warning_when_effort_matches_tier_policy(data_dir, monkeypatch):
+    """実測 effort が tier 宣言の期待値と一致すれば drift 行は出さない（clean 時沈黙）。"""
+    from audit import sections_subagent_traces as sec
+    from audit.sections_summary import classify_section
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    agents = [_agent("impl-worker", {"name": "impl-worker", "tier": "HARD",
+                                      "model": "sonnet", "effort": "xhigh"})]
+    monkeypatch.setattr(sec, "scan_agents", lambda project_root=None: agents)
+    for i in range(4):
+        _tstore.write_trace({
+            "agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+            "first_try_success": True, "tool_error_count": 0,
+            "effort_counts": {"xhigh": 1},
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "effort drift" not in joined and "乖離" not in joined
+    assert classify_section(out) == "clean"
+
+
+def test_section_no_drift_check_when_agent_has_no_tier_declared(data_dir, monkeypatch):
+    """agent frontmatter に tier 宣言が無ければ期待値が判定不能→drift 行は出さない。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    agents = [_agent("impl-worker", {"name": "impl-worker", "model": "sonnet"})]
+    monkeypatch.setattr(sec, "scan_agents", lambda project_root=None: agents)
+    for i in range(3):
+        _tstore.write_trace({
+            "agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+            "first_try_success": True, "tool_error_count": 0,
+            "effort_counts": {"high": 1},
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "effort drift" not in joined and "乖離" not in joined
+    assert "実測 effort" in joined  # b: 分布自体は表示される
+
+
+def test_section_no_drift_check_when_agent_type_unmatched(data_dir, monkeypatch):
+    """scan_agents に一致する agent 定義が無ければ期待値判定不能→drift 行を出さない。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    monkeypatch.setattr(sec, "scan_agents", lambda project_root=None: [])
+    for i in range(3):
+        _tstore.write_trace({
+            "agent_id": f"w{i}", "pj_slug": "p", "agent_type": "unknown-agent",
+            "first_try_success": True, "tool_error_count": 0,
+            "effort_counts": {"high": 1},
+        })
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "effort drift" not in joined and "乖離" not in joined

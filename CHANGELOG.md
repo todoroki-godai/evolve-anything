@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(subagent_traces): transcript の per-message 実測 effort を tier drift 検証に活用（#219）** — CC v2.1.212 以降、`type=="assistant"` の行がトップレベル（`message` の外）に実測 reasoning effort（`"effort":"high"` 等）を記録するようになったことを実 transcript で確認し、`extractor.extract_trace` に `effort_counts`（分布・欠損時は空 dict=未計測）の抽出を追加。`query.per_agent_type_summary` が agent_type 単位で分布を合算し `dominant_effort`（最頻値、同数タイは辞書順で決定論的に確定）を添える。`audit/sections_subagent_traces.py` が実測 effort 分布を表示し、agent frontmatter の `tier:` 宣言から `tier_policy.py`（model-tiers.json）で期待 effort を引いて乖離があれば ⚠ で advisory surface（tier 未宣言・一致する agent 定義なし・未計測はいずれも判定不能として drift 非表示・#115 共通枠準拠・clean 時沈黙）。新ストアは追加せず read-time 導出のみ。TDD +9件・決定論・LLM 非依存。
+
 ### Changed
 - **chore(prune): rules 同士の重複候補に triage ガイダンスを付与（#226）** — skills 同士の重複候補には Merge サブフロー（`merge_duplicates`）という消費者があるが、rules 同士のペアには何もなく類似度スコアだけが提示されていた（実例: 0.92 類似だが実際は非重複だったケース）。`detect_duplicates()` が各候補に `kind`（`skills`/`rules`）を付与し、rules 同士のペアには `triage_note`（両ファイルを読み指示内容の重複を確認してから判断すべき旨）を添えるよう変更。`skills/prune/SKILL.md` にも rules ペアの triage ステップ（Read で両ファイル確認→実重複のみ手動提案・自動 merge しない）を明記。検出のスコープ自体は変更なし。
+- **fix(remediation): hook インストール系提案を scope-based な折り畳みから除外（#225）** — `partition_proposable_by_scope` が `*_hook_candidate` 型（`~/.claude/hooks/` 等の共有設定を書き換える hook install アクション）を impact_scope/origin に関わらず常に custom 側（個別承認レーン）へ合流させるよう修正。従来は影響半径最大の global scope 提案が `proposable_global`（「参考値・対応不要」の1行サマリ）に折り畳まれ、生成スクリプト/diff 全文がレビューされずに埋もれる逆転が起きていた。折り畳みは line_limit_violation 等の低リスク型専用に限定。
 
 ### Fixed
 - **fix(report-feedback): SKILL.md Step 4 の f-string 式内 `\"` エスケープが Python 3.12 未満で SyntaxError になる問題を修正（#229）** — `filter_duplicates` 呼び出し後の print 4行が `d[\"existing_number\"]` のようにバックスラッシュで二重引用符をエスケープしており、f-string 式部分にバックスラッシュを含めると Python 3.12 未満で SyntaxError（このリポジトリの実行環境である 3.14 でも同様に SyntaxError になることを実測確認）。ブロック全体を shell の single quote で囲む都合上、式内に生の `'` を使う回避策（`d['key']`）はシェル解釈自体を壊す（クォートが早期終端し変数名が未クォートのまま渡り NameError 化することを実測確認）ため、dict アクセスを一旦変数へ代入してから f-string に埋め込む形へ修正。契約テストに `SKILL.md` の全 `python3 -c` ブロックを `compile()` で構文検証するテストを追加。
@@ -16,9 +20,6 @@
 - **fix(workflow_checkpoint): gap 検出の errors.jsonl 読み出しにも project スコープフィルタを適用（#228）** — `_detect_gaps_impl` が全 PJ 共有ストア `errors.jsonl` を project 未フィルタのまま読み、`_match_error_keywords` のキーワード一致数を skill checkpoint 提案の `evidence_count` に使っていたため、他 PJ のエラーが混入していた（#208 の同型残件）。corrections と同じ単一ソース述語 `pj_slug.record_project_match(rec, current_slug)` を errors 読み出し直後にも適用（project_path 欠落＝未帰属レコードは寛容に許容）。TDD +3件（他PJ除外/当PJ精密カウント/未帰属許容）。決定論・LLM 非依存。
 - **fix(pitfall_registry): 登録簿読み出しに legacy パスへのフォールバックを追加（#220）** — `unmanaged_candidates()`/`load_managed()` が canonical パス `.claude/evolve-anything/pitfall-managed.json` のみを見ていたため、ツール名リネーム（rl-anything→evolve-anything）経緯のある PJ で旧パス `.claude/rl-anything/pitfall-managed.json` に残った登録簿を見落とし、evolve 側「未登録」警告と prune 側 `git grep`「登録済み」が矛盾する挙動になっていた。`rl_common.DATA_DIR` の「書込は canonical のみ・読出は canonical→legacy」という既存慣行と同じパターンで読み出しを canonical→legacy の順に探索するフォールバックを追加（書き込みは従来通り canonical のみ）。TDD +3件。
 - **fix(report-feedback): 中間ファイルの固定 /tmp パスをラン専用ディレクトリへスコープ化（#224）** — `skills/report-feedback/SKILL.md` の Step 1-4/6 が `/tmp/rf_seed.json` 等の固定パスに書いていたため、並行セッションが互いの候補/既存issueキャッシュ/起票直前 body を読み込み・上書きして誤起票する race condition があった。Step 1 で `mktemp -d` によりラン専用ディレクトリを作成し、以降の全ステップの中間ファイルをそこへ書く（`$RF_DIR` として文書化）よう記述を修正。
-
-### Changed
-- **fix(remediation): hook インストール系提案を scope-based な折り畳みから除外（#225）** — `partition_proposable_by_scope` が `*_hook_candidate` 型（`~/.claude/hooks/` 等の共有設定を書き換える hook install アクション）を impact_scope/origin に関わらず常に custom 側（個別承認レーン）へ合流させるよう修正。従来は影響半径最大の global scope 提案が `proposable_global`（「参考値・対応不要」の1行サマリ）に折り畳まれ、生成スクリプト/diff 全文がレビューされずに埋もれる逆転が起きていた。折り畳みは line_limit_violation 等の低リスク型専用に限定。
 
 ## [1.123.0] - 2026-07-17
 
