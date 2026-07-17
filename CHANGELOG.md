@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(daily): launchd 実環境で gh が PATH 不在 → icebox 集計（#194）が恒久 fail-open になる穴を install 時 which 検出で根治（closes #196）** — launchd の最小 PATH は `/opt/homebrew/bin` を含まず、daily runner の icebox 棚卸しステップ（#194）の `gh issue list` が FileNotFoundError で毎回 fail-open（icebox-status.json が一度も生成されず SessionStart 通知が恒久沈黙）。`install()` が `shutil.which('gh')` の dir を install 環境（対話シェル PATH）から検出し、`build_plist(extra_path_dirs=)` で launchd PATH（python dir の後・system パスの前・重複除去）に焼き込む。gh 不在でも install は成功し fail-open 維持。Apple Silicon パスのハードコード無し（which 検出）。あわせて #178 根治3層のうち commit 漏れだった残り2層 — ①EnvironmentVariables への PATH 注入（子プロセスの `env python3` を pin と同 dir に解決）②runner が evolve-fleet 子プロセスを `sys.executable` 明示で起動 — を収載（f36591b は entry pin のみだった）。TDD +6件（extra_path_dirs 挿入位置/重複除去/which mock で gh dir 焼き込み/gh 不在 graceful/fleet 全呼び出しの interpreter 明示）・決定論・LLM 非依存。レビュー反映（+4 tests）: `build_plist` の PATH 構築を硬化 — bare 名 python_exe（dirname 空）で空セグメント＝カレントディレクトリ優先の PATH インジェクションを焼き込まない・`extra_path_dirs` を python_exe 非依存に独立化（silent drop 解消）・末尾 system パスとの重複除去・`CLAUDE_PLUGIN_DATA` が plist に残る回帰ガード assertion を追加。
+
 ## [1.123.0] - 2026-07-17
 
 ### Added
