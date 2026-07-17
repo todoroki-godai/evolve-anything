@@ -11,8 +11,10 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import common
+import pj_slug
 
 _MAX_UNCOMMITTED_FILES = 30
 _MAX_RECENT_COMMITS = 5
@@ -72,9 +74,19 @@ def _collect_work_context() -> dict:
     return context
 
 
-def _load_corrections_snapshot() -> list:
-    """corrections.jsonl のスナップショットを読み込む。存在しない場合は空リスト。"""
-    corrections_file = common.DATA_DIR / "corrections.jsonl"
+def _load_corrections_snapshot(
+    data_dir: Optional[Path] = None, slug: Optional[str] = None,
+) -> list:
+    """corrections.jsonl のスナップショットを読み込む。存在しない場合は空リスト。
+
+    corrections.jsonl は全 PJ 共有ストアのため、slug 指定時は他 PJ の project_path を持つ
+    correction（``pj_slug.record_project_match`` で不一致判定）を除外する（#206:
+    restore_state.py が SessionStart/PostCompact でこの snapshot を Claude context に直接
+    注入するため、auto_memory_runner の enqueue 経路より露出範囲が広い）。slug 未指定
+    （後方互換）はフィルタしない。
+    """
+    _data_dir = data_dir if data_dir is not None else common.DATA_DIR
+    corrections_file = _data_dir / "corrections.jsonl"
     if not corrections_file.exists():
         return []
     records = []
@@ -87,6 +99,8 @@ def _load_corrections_snapshot() -> list:
                     continue
     except OSError:
         pass
+    if slug is not None:
+        records = [r for r in records if pj_slug.record_project_match(r, slug)]
     return records
 
 
@@ -99,13 +113,17 @@ def handle_pre_compact(event: dict) -> None:
     """PreCompact イベントを処理し、進化状態を保存する。"""
     common.ensure_data_dir()
 
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    # #206: project スコープフィルタ用の slug 解決（project_dir 不明ならフィルタしない）。
+    slug = common.project_name_from_dir(project_dir) if project_dir else None
+
     checkpoint = {
         "session_id": event.get("session_id", ""),
-        "project_dir": os.environ.get("CLAUDE_PROJECT_DIR", ""),
+        "project_dir": project_dir,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "evolve_state": event.get("evolve_state", {}),
         "context_summary": event.get("context_summary", ""),
-        "corrections_snapshot": _load_corrections_snapshot(),
+        "corrections_snapshot": _load_corrections_snapshot(slug=slug),
         "work_context": _collect_work_context(),
     }
 

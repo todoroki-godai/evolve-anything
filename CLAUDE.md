@@ -35,6 +35,7 @@
 | `evolve-loop-orchestrator` | ベースライン→バリエーション→評価→人間確認のループ統合 | agent |
 | `evolve-scorer` | オーケストレーター + 3並列サブエージェントで3軸採点 | agent |
 | `skill-triage` | CREATE/UPDATE/SPLIT/MERGE/OK の5択判定 | `skill_triage.py` |
+| `tool_usage_analyzer` | セッション JSONL からツール呼び出し抽出・分類、discover/audit 向け rule/hook 候補生成（evolve Step 10.2 閾値定数を保持。#457 で HOME 隔離すり抜けを修正） | `scripts/lib/tool_usage_analyzer/` |
 | `trigger-eval-generator` | sessions+usage → skill-creator 互換 evals.json 自動生成 | `trigger_eval_generator.py` |
 | `evolve-skill` | 自己進化パターン（Pre-flight / pitfalls.md）のピンポイント組み込み | skill |
 | `agent-brushup` | エージェント定義の品質診断・改善提案・upstream 監視・model exact-ID pin 検出（#449）+ addyosmani skill anatomy 欠落節の根拠付き改善提案（#63）+ tools 宣言と実付与の乖離検出（`memory:` の Write/Edit 自動付与・#130）+ worker agent の ask-before-fallback 明文化検査（#192） | `agent_quality.py` |
@@ -45,7 +46,7 @@
 | `evolve_decisions` | evolve 提案の accept/reject を emit→drain 2相で決定論キャプチャ（`evolve --drain`）[ADR-041, #400, #402] | `evolve_decisions.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400） | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
-| `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込 [ADR-037] | `auto_memory_*.py` |
+| `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込 [ADR-037]。**project スコープ4層防御（#206）**: 全PJ共有ストア corrections.jsonl/auto_memory_queue の他PJ混入を `pj_slug.record_project_match` 単一述語で読み出しフィルタ+enqueue reject+修復ツール `auto_memory_purge.py`（dry-run既定）の4層で遮断 | `auto_memory_*.py` |
 | `meta_quality` | スキル追加前の品質フィルタ（CREATE/REVIEW/SKIP） | `meta_quality.py` |
 | `triage_ledger` | SKIP 判断の状態管理（TTL 45日・再発昇格・dry-run 非書込）（#308） | `triage_ledger.py` |
 | `constraint_decay` | セッション後半に集中する correction の decay 検出 | `discover/patterns.py` |
@@ -85,7 +86,7 @@
 | `outcome_promotion_readiness` | ADR-046 重み昇格レディネスの4条件決定論判定（分散 / 件数下限 / 方向妥当性 / 予測妥当性#42）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母は session_store union read（db read_only + 未 ingest jsonl）で実効化済み。条件3 は同一 apply の二重 anchor を `(pj,axis,before,after)` dedup で非独立証拠の二重計上から救出（#77）。`per_pj_first_try_success` の分母も `fold_session_error_counts` 共有で distinct session 化（#138）（#461, #469, #42, #77, #138） | `audit/outcome_promotion_readiness.py` |
 | `predictive_validity` | 重み昇格レディネスの第4条件（#42）— skill_activations×sessions の per-skill 一発成功率を ts 中央値で in/out-of-sample 分割し、共通出現 skill（≥5）の順位を純Python Spearman で相関。rho≥0.5 で pass、insufficient_data は「データ不足」明示で捏造せず保守的に昇格ブロック（誤昇格抑制）。集計平均順位の分布外転移を検出（arXiv 2606.19704） | `audit/predictive_validity.py` |
 | `reward_ema` | バッチ跨ぎ符号付き advantage の EMA 累積（MAA・α=0.3）で「通時で安定して効くか」を RODS（単一スナップショット分散・#28）と相補判定。新ストア `reward_ema.jsonl`（active・batch writer）。読み=phases_diagnose の advisory 列（順位非影響）・書き=`evolve --drain`（#64, arXiv 2606.20475） | `audit/reward_ema.py` |
-| `subagent_traces` | subagent 内部軌跡ストア（#38）— transcript の内部 tool error/やり直しを per-agent_type で advisory 表示し親 error_count のみの outcome 帰属盲点を塞ぐ。ストア `subagent_traces.jsonl`（active・batch）。⚠＝一発成功率<0.5 or 平均 tool error≥5（#76）。増分 ingest は `evolve --drain` 境界（#135）。`write_trace(data_dir=)` で read/write 隔離を対称化（#140） | `subagent_traces/` + `audit/sections_subagent_traces.py` |
+| `subagent_traces` | subagent 内部軌跡ストア（#38）— transcript の内部 tool error/やり直しを per-agent_type で advisory 表示し親 error_count のみの outcome 帰属盲点を塞ぐ。ストア `subagent_traces.jsonl`（active・batch）。⚠＝一発成功率<0.5 or 平均 tool error≥5（#76）。増分 ingest は `evolve --drain` 境界（#135）。`write_trace(data_dir=)` で read/write 隔離を対称化（#140）。委任プロンプト先頭300字を `delegation_prompt` として保持し audit に直近委任150字を表示、事後監査可能化（#200） | `subagent_traces/` + `audit/sections_subagent_traces.py` |
 | `subagent_noise` | subagents.jsonl の agent_type ノイズ内訳を advisory 分解表示（#142-8b）— 当PJスコープで空文字/ID形に分け件数・率・最古/最新 timestamp を surface。判定は `noise_agent_type_kind`（`is_noise_agent_type` と同基準の種別付き単一ソース）。最新ノイズが直近7日内なら ⚠（live writer 疑い）、古ければ ℹ（residue・現行 writer は #36/#44 で guard 済ゆえ表示のみ・reader は既に除外・スコア非関与）。ノイズ0は None（無ければ非表示） | `audit/sections_subagent_noise.py` + `rl_common/detection.py` |
 | `worker_takeoff` | subagent の「completed 報告」↔実際の完遂の意味的乖離を決定論検知（worker-takeoff、closes #161）。`last_assistant_message`（SubagentStop hook 記録の最終 assistant テキスト）に①完了署名（`=== ... ===` マーカー/報告見出し）欠如 ②前向きナレーション終端（行末 `:` / Now・Next・Let's 系）の2シグナル AND で判定（①単独では非flag・保守側）。500字打ち切り到達時は判定不能で除外。suspected>0 の agent_type のみ advisory 表示（0件は沈黙）。新ストアなし・read-time 導出 | `rl_common/detection.py`(`detect_takeoff_divergence`) + `audit/sections_takeoff.py` |
 | `verbosity` | 回答冗長性の学習ループ（#75）— Stop hook `record_verbosity.py`（ゼロLLM）→ `verbosity/judge.py`（Haiku バッチ判定）が冗長を weak_signals `channel=verbosity` に emit（reflect 昇格に相乗り）。多発パターンから rules/concise.md 追記案を提示（auto-apply しない）。`audit/sections_verbosity` が冗長率を advisory 表示 | `verbosity/` + `hooks/record_verbosity.py` + `audit/sections_verbosity.py` |
@@ -242,6 +243,8 @@ claude plugin validate
 収集パスは `pytest.ini` の `testpaths` が単一ソース。新しい tests/ を足したら testpaths に追記する
 （漏れは audit の Testpaths Coverage チェック = `scripts/lib/testpaths_coverage.py` が検出する。#468）。
 pytest-xdist `-n auto` で並列実行（`pytest.ini` の `addopts` に設定済み）、2026-06-12 時点で約 32 秒・4972件（直列だと約 135 秒）。#457 で run_evolve 系の実環境ストア読みを隔離し直列 32 分→1 分→xdist で約 32 秒に短縮。**並行 worker に回させるときは `-n 0` で直列**（targeted テストまで多プロセス化し CPU 飢餓するため）。
+
+`test_evolve_keyset_snapshot.py` は evolve-anything 自身の実スキル構成に dry-run するため、計測窓 suppress の暦日境界等で regression でないのに出たり消えたりするキーがある。`fixtures/evolve_keyset_optional.txt` に条件付き透明化キーの prefix を宣言し、宣言済み prefix の増減のみ許容する二層 golden 方式（#209）。`UPDATE_SNAPSHOTS=1` は golden 上書きでなく既存キーとの union merge（条件付きキーを golden から消さない）。
 
 リリース前は `bin/evolve-dogfood-gate --layer all` も全緑を確認する（pytest が掬えない実環境の繋ぎ目
 — dry-run 不変 / report invariants / SKILL.md コードブロック — を検査する。#496）。フル `all` は
