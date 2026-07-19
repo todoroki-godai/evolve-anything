@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""bin/evolve-loop-ablation — 設計文脈 vs naive 生成比較の較正実験 CLI（#234 PR3）。"""
+import sys
+from pathlib import Path
+
+_lib = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+_scripts = Path(__file__).resolve().parent.parent / "skills" / "evolve-loop-orchestrator" / "scripts"
+sys.path.insert(0, str(_lib))
+sys.path.insert(0, str(_scripts))
+
+from loop_ablation import main
+
+if __name__ == "__main__":
+    main()

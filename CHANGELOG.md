@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **feat(evolve-loop-orchestrator): 設計文脈 vs naive 生成比較の較正実験を opt-in CLI として追加（#234 PR3）** — harness 自動進化の改善が「探索予算増加（単純サンプリング, test-time scaling）」由来か「設計改善（corrections/context を使った誘導）」由来かを切り分ける較正実験（arXiv 2607.12227）。毎ループ実行の `run_loop.py` に統計的対照実験を混ぜ込まず、新規 `bin/evolve-loop-ablation`（`skills/evolve-loop-orchestrator/scripts/loop_ablation.py`）として分離。designed（corrections/context 込みプロンプト）と naive（空プロンプト）でそれぞれ n 件を並行生成（`generate_candidate`/`_score_variant_axes` を再利用、単一変数分離）し 3 軸スコアを比較。judge_audit.harness と同型の dry-run 既定パターン（`--run` で LLM 呼び出し・比較不能なら `--force` 未指定時に自動中断）で対象ファイルは書き換えない。統計判定コア（比較可能性判定・スコア比較・コスト見積もり）は LLM 非依存の純粋関数 `scripts/lib/loop_ablation_stats.py` に分離。TDD +29件（stats 16 / orchestration 13）・決定論部分は mock 不要、LLM 呼び出しは mock 必須。
 - **feat(subagent_traces): transcript の per-message 実測 effort を tier drift 検証に活用（#219）** — CC v2.1.212 以降、`type=="assistant"` の行がトップレベル（`message` の外）に実測 reasoning effort（`"effort":"high"` 等）を記録するようになったことを実 transcript で確認し、`extractor.extract_trace` に `effort_counts`（分布・欠損時は空 dict=未計測）の抽出を追加。`query.per_agent_type_summary` が agent_type 単位で分布を合算し `dominant_effort`（最頻値、同数タイは辞書順で決定論的に確定）を添える。`audit/sections_subagent_traces.py` が実測 effort 分布を表示し、agent frontmatter の `tier:` 宣言から `tier_policy.py`（model-tiers.json）で期待 effort を引いて乖離があれば ⚠ で advisory surface（tier 未宣言・一致する agent 定義なし・未計測はいずれも判定不能として drift 非表示・#115 共通枠準拠・clean 時沈黙）。新ストアは追加せず read-time 導出のみ。TDD +9件・決定論・LLM 非依存。
 
 ### Changed
