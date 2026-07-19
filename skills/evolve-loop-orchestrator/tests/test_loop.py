@@ -83,19 +83,16 @@ class TestRunLoop:
 
             # generate_variants のモック
             mock_gen.return_value = {
-                "history": [{
-                    "generation": 0,
-                    "individuals": [
-                        {
-                            "id": "test_variant_0",
-                            "content": "# 改善版スキル\n改善された内容。\n",
-                        },
-                        {
-                            "id": "test_variant_1",
-                            "content": "# 別の改善版\n別の改善された内容。\n",
-                        },
-                    ],
-                }],
+                "candidates": [
+                    {
+                        "id": "test_variant_0",
+                        "content": "# 改善版スキル\n改善された内容。\n",
+                    },
+                    {
+                        "id": "test_variant_1",
+                        "content": "# 別の改善版\n別の改善された内容。\n",
+                    },
+                ],
             }
 
             results = run_loop_mod.run_loop(
@@ -111,6 +108,48 @@ class TestRunLoop:
             assert "baseline_score" in results[0]
             assert "best_score" in results[0]
 
+    def test_keystone_generate_variants_not_mocked_e2e(self, tmp_path):
+        """keystone regression test: generate_variants を一切 mock せず、
+        run_loop() を dry-run で end-to-end 実行する。
+
+        #234 の背景: 旧 generate_variants() は genetic-prompt-optimizer/scripts/
+        optimize.py を `--generations 1 --population <N>` で subprocess 呼び出し
+        していたが、この2オプションは optimize.py 側で廃止済み
+        (`_DEPRECATED_OPTIONS`) のため、dry-run 含め常時失敗していた。既存
+        テストは全て generate_variants 自体を patch.object で mock していたため
+        このバグは検出されずに埋もれていた。実配線
+        （run_loop → variant_generation.generate_variants → optimize_core の
+        低レベル関数）を通しで検証できるのは本テストのみであり、これが今回の
+        バグを実際に検出できる唯一の形のテストである。
+        """
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text(
+            "---\ndescription: テストスキル\n---\n\n# テスト\nテスト内容です。\n",
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # generate_variants は一切 mock しない（旧実装のバグは patch.object 越しでは
+        # 検出できなかったため）。dry-run のため claude CLI（LLM）は呼ばれない前提。
+        # 注意: collect_context 経由で git（pj_slug 解決）等の非LLM subprocess が
+        # 呼ばれることがあるため、subprocess.run の呼び出し回数自体は検証しない
+        # （0回である保証は本テストの目的ではない。variant_generation.py 単体の
+        # 「dry_run で subprocess.run が0回」検証は test_variant_generation.py が担う）。
+        results = run_loop_mod.run_loop(
+            target_path=str(skill_file),
+            loops=1,
+            population=2,
+            dry_run=True,
+            output_dir=str(output_dir),
+        )
+
+        assert len(results) == 1
+        assert results[0]["dry_run"] is True
+        assert results[0]["variants_count"] == 2
+        assert "baseline_score" in results[0]
+        assert "best_score" in results[0]
+
     def test_multiple_loops(self, tmp_path):
         """複数ループが実行される"""
         skill_file = tmp_path / "test-skill.md"
@@ -122,12 +161,9 @@ class TestRunLoop:
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
 
             mock_gen.return_value = {
-                "history": [{
-                    "generation": 0,
-                    "individuals": [
-                        {"id": "v0", "content": "# V0\n内容"},
-                    ],
-                }],
+                "candidates": [
+                    {"id": "v0", "content": "# V0\n内容"},
+                ],
             }
 
             results = run_loop_mod.run_loop(
@@ -155,12 +191,9 @@ class TestRunLoop:
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
 
             mock_gen.return_value = {
-                "history": [{
-                    "generation": 0,
-                    "individuals": [
-                        {"id": "v0", "content": "# V0\n内容"},
-                    ],
-                }],
+                "candidates": [
+                    {"id": "v0", "content": "# V0\n内容"},
+                ],
             }
 
             run_loop_mod.run_loop(
@@ -190,9 +223,9 @@ class TestVerdict:
 
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": "# V0\n内容"},
-                ]}],
+                ],
             }
             results = run_loop_mod.run_loop(
                 target_path=str(skill_file),
@@ -231,9 +264,9 @@ class TestVerdict:
 
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": "# V0\n内容"},
-                ]}],
+                ],
             }
             run_loop_mod.run_loop(
                 target_path=str(skill_file),
@@ -259,9 +292,9 @@ class TestHBest:
 
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": "# V0\n内容"},
-                ]}],
+                ],
             }
             results = run_loop_mod.run_loop(
                 target_path=str(skill_file),
@@ -288,9 +321,9 @@ class TestHBest:
 
             mock_baseline.return_value = {"integrated_score": 0.60}
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": improved_content},
-                ]}],
+                ],
             }
 
             def score_side_effect(content, target_path, dry_run=False):
@@ -331,10 +364,10 @@ class TestEvolveSearch:
 
     def _mock_gen(self):
         return {
-            "history": [{"generation": 0, "individuals": [
+            "candidates": [
                 {"id": "v0", "content": self.SKILL + "\n## Examples\n\nex0\n"},
                 {"id": "v1", "content": self.SKILL + "\n## Tips\n\ntip1\n"},
-            ]}],
+            ],
         }
 
     def test_evolve_search_dry_run_completes(self, tmp_path):
@@ -477,9 +510,9 @@ class TestParetoDominance:
                 },
             }
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "axis_killer", "content": "# Bad\n内容"},
-                ]}],
+                ],
             }
             # variant: tech 0.40 (大幅劣化) なのに domain 0.95 で押し上げて integrated 0.78
             mock_axes.return_value = {
@@ -521,9 +554,9 @@ class TestRegressedPitfalls:
 
             mock_baseline.return_value = {"integrated_score": 0.80}
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "regressed_v0", "content": regressed_content},
-                ]}],
+                ],
             }
             mock_score.return_value = {"technical": 0.60, "domain": 0.60, "structure": 0.60, "integrated": 0.60}
 
@@ -554,9 +587,9 @@ class TestRegressedPitfalls:
 
             mock_baseline.return_value = {"integrated_score": 0.80}
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "stable_v0", "content": "# Same\n似た内容"},
-                ]}],
+                ],
             }
             mock_score.return_value = {"technical": 0.81, "domain": 0.81, "structure": 0.81, "integrated": 0.81}
 
@@ -586,9 +619,9 @@ class TestRegressedPitfalls:
              patch.object(run_loop_mod, "_record_pitfall") as mock_pitfall:
 
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": "# V0\n内容"},
-                ]}],
+                ],
             }
 
             run_loop_mod.run_loop(
@@ -619,7 +652,7 @@ class TestEdgeCases:
 
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
 
-            mock_gen.return_value = {"history": []}
+            mock_gen.return_value = {"candidates": []}
 
             results = run_loop_mod.run_loop(
                 target_path=str(skill_file),

@@ -42,13 +42,13 @@ try:
 except ImportError:
     _run_subgoal_scoring = None  # type: ignore
 
+# --- バリエーション生成（#234 PR1: optimize.py subprocess 呼び出しの配線drift修理） ---
+_own_scripts_dir = Path(__file__).parent
+if str(_own_scripts_dir) not in sys.path:
+    sys.path.insert(0, str(_own_scripts_dir))
+from variant_generation import generate_variants
+
 # --- パス設定 ---
-OPTIMIZER_SCRIPT = (
-    Path(__file__).parent.parent.parent
-    / "genetic-prompt-optimizer"
-    / "scripts"
-    / "optimize.py"
-)
 DEFAULT_OUTPUT_DIR = Path.cwd() / ".evolve-loop"
 MAX_KEPT_RUNS = 10  # evolve-loop 結果の保持数
 SCORE_EPSILON = 0.05  # 採点ノイズ実測値（2σ ≈ 0.05）に基づく IMPROVED/REGRESSED 判定閾値
@@ -175,47 +175,6 @@ def get_baseline_score(target_path: str, dry_run: bool = False) -> Dict[str, Any
         },
         "summary": "3軸並列スコアリング",
     }
-
-
-def generate_variants(
-    target_path: str,
-    population: int = 3,
-    dry_run: bool = False,
-) -> Dict[str, Any]:
-    """直接パッチ最適化でバリエーションを生成"""
-    args = [
-        sys.executable,
-        str(OPTIMIZER_SCRIPT),
-        "--target", target_path,
-        "--generations", "1",
-        "--population", str(population),
-    ]
-    if dry_run:
-        args.append("--dry-run")
-
-    try:
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode == 0:
-            # optimizer の出力からラン結果を取得
-            # generations/ ディレクトリから最新のresult.jsonを読む
-            gen_dir = OPTIMIZER_SCRIPT.parent / "generations"
-            if gen_dir.exists():
-                run_dirs = sorted(gen_dir.iterdir(), reverse=True)
-                if run_dirs:
-                    result_file = run_dirs[0] / "result.json"
-                    if result_file.exists():
-                        return json.loads(
-                            result_file.read_text(encoding="utf-8")
-                        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    return {"error": "バリエーション生成に失敗"}
 
 
 # --- 3軸並列スコアリング ---
@@ -614,21 +573,19 @@ def run_loop(
         # Step 3: 評価
         print("Step 3: バリエーション評価...")
         variants = []
-        history = optimizer_result.get("history", [])
-        if history:
-            last_gen = history[-1]
-            for ind in last_gen.get("individuals", []):
-                content = ind.get("content", "")
-                axes = _score_variant_axes(content, target_path, dry_run=dry_run)
-                score = axes.get("integrated", FALLBACK_SCORE)
-                variants.append({
-                    "id": ind.get("id", "unknown"),
-                    "score": score,
-                    "axes": axes,
-                    "content": content,
-                    "content_length": len(content),
-                })
-                print(f"  {ind.get('id', '?')}: スコア {score} (tech={axes.get('technical', '-'):.2f} dom={axes.get('domain', '-'):.2f} struct={axes.get('structure', '-'):.2f})")
+        candidates = optimizer_result.get("candidates", [])
+        for cand in candidates:
+            content = cand.get("content", "")
+            axes = _score_variant_axes(content, target_path, dry_run=dry_run)
+            score = axes.get("integrated", FALLBACK_SCORE)
+            variants.append({
+                "id": cand.get("id", "unknown"),
+                "score": score,
+                "axes": axes,
+                "content": content,
+                "content_length": len(content),
+            })
+            print(f"  {cand.get('id', '?')}: スコア {score} (tech={axes.get('technical', '-'):.2f} dom={axes.get('domain', '-'):.2f} struct={axes.get('structure', '-'):.2f})")
 
         if dry_run and variants:
             print("  注意: dry-run モードのスコアは実際の品質を反映しません", file=sys.stderr)
