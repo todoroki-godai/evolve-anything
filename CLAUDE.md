@@ -33,6 +33,9 @@
 | `userConfig` | trigger 閾値・各種上限など 20 項目をプラグイン有効化時に設定可能 | manifest |
 | `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチ + GEPA 数値ガードレール（入力件数/pitfalls char 上限・パッチ `char_limit` gate・実データ dry-run 較正 #120） | agent |
 | `evolve-loop-orchestrator` | ベースライン→バリエーション→評価→人間確認のループ統合 | agent |
+| `variant_generation` | バリエーション生成の配線drift修理 — optimize.py subprocess呼び出しから直接import方式へ（#234 PR1） | `skills/evolve-loop-orchestrator/scripts/variant_generation.py` |
+| `selection_reeval` | 採用前再評価によるwinner's curse補正（#234 PR2） | `skills/evolve-loop-orchestrator/scripts/selection_reeval.py` |
+| `loop_ablation` | 設計文脈 vs naive 生成比較のopt-in較正実験（#234 PR3, arXiv 2607.12227） | `scripts/lib/loop_ablation_stats.py` + `skills/evolve-loop-orchestrator/scripts/loop_ablation.py` |
 | `evolve-scorer` | オーケストレーター + 3並列サブエージェントで3軸採点 | agent |
 | `skill-triage` | CREATE/UPDATE/SPLIT/MERGE/OK の5択判定 | `skill_triage.py` |
 | `tool_usage_analyzer` | セッション JSONL からツール呼び出し抽出・分類、discover/audit 向け rule/hook 候補生成（evolve Step 10.2 閾値定数を保持。#457 で HOME 隔離すり抜けを修正） | `scripts/lib/tool_usage_analyzer/` |
