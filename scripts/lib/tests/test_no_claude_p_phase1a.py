@@ -44,6 +44,7 @@ CONVERTED_MODULES = [
 # どちらかに必ず載る（台帳を網羅的に保つ）。
 KNOWN_REMAINING = [
     "scripts/lib/score_noise.py",                   # _run_claude_prompt（bin/evolve-prompt-compare 後方互換、DEPRECATED）
+    "skills/evolve-loop-orchestrator/scripts/run_loop.py",  # _score_single_axis / run_adversarial_agent（#234 PR2 で呼び出し回数がさらに増加）
 ]
 
 _SUBPROCESS_CALLERS = {"run", "Popen", "call", "check_output", "check_call"}

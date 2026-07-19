@@ -48,6 +48,13 @@ if str(_own_scripts_dir) not in sys.path:
     sys.path.insert(0, str(_own_scripts_dir))
 from variant_generation import generate_variants
 
+# --- 採用前再評価（#234 PR2: winner's curse 補正） ---
+from selection_reeval import (  # noqa: E402
+    run_selection_reeval_step,
+    build_reeval_fields,
+    format_reeval_tag,
+)
+
 # --- パス設定 ---
 DEFAULT_OUTPUT_DIR = Path.cwd() / ".evolve-loop"
 MAX_KEPT_RUNS = 10  # evolve-loop 結果の保持数
@@ -492,6 +499,8 @@ def run_loop(
     output_dir: Optional[str] = None,
     evolve: bool = False,
     evolve_search: bool = False,
+    selection_reeval_enabled: bool = True,
+    selection_reeval_n: int = 3,
 ) -> List[Dict[str, Any]]:
     """メインループを実行"""
     results = []
@@ -514,6 +523,10 @@ def run_loop(
     print(f"自動モード: {auto}")
     print(f"dry-run: {dry_run}")
     print(f"出力先: {out_dir}")
+    if selection_reeval_enabled:
+        print(f"選定後再評価: 有効 (N={selection_reeval_n})")
+    else:
+        print("選定後再評価: 無効")
     print()
 
     # H_best 追跡: 常に最良ハーネスから進化する
@@ -618,6 +631,16 @@ def run_loop(
                 pareto_ok = False
                 verdict = "STABLE"
                 print("  ⚠️  Pareto 非優越: 軸別劣化があるため STABLE に格下げ")
+
+        # Step 3.6: 採用前再評価（selection re-eval, winner's curse 補正 #234 PR2）。
+        # Pareto チェックの後に置く: 無駄な追加 LLM 呼び出しを避け、人間確認の
+        # 判断材料自体を補正済みの値にする（詳細は selection_reeval.py 参照）。
+        best, improvement, verdict, pre_reeval_score, reeval_result = run_selection_reeval_step(
+            best, target_path, global_best_score, global_best_axes, improvement, verdict,
+            selection_reeval_enabled, selection_reeval_n, SCORE_EPSILON, dry_run,
+            score_fn=_score_variant_axes, verdict_fn=_compute_verdict, dominates_fn=_dominates,
+        )
+
         print(f"\n  最良: {best['id']} (スコア {best['score']})")
         print(f"  ベースライン (H_best): {global_best_score}")
         print(f"  改善幅: {improvement:+.2f}  [{verdict}]")
@@ -696,6 +719,11 @@ def run_loop(
             "timestamp": datetime.now().isoformat(),
             "variants_count": len(variants),
         }
+        loop_result.update(
+            build_reeval_fields(
+                reeval_result, pre_reeval_score, selection_reeval_enabled, selection_reeval_n
+            )
+        )
         if evolve_result:
             loop_result["evolve_suitability"] = evolve_result["evolve_suitability"]
             loop_result["evolve_applied"] = evolve_result["evolve_applied"]
@@ -713,6 +741,7 @@ def run_loop(
             f"  ループ {r['loop'] + 1}: "
             f"{r['baseline_score']:.2f} → {r['best_score']:.2f} "
             f"({r['improvement']:+.2f}) [{r.get('verdict', '?')}] [{status}]"
+            f"{format_reeval_tag(r)}"
         )
     print(f"  最終 H_best スコア: {global_best_score:.2f}")
 
@@ -737,6 +766,14 @@ def main():
     parser.add_argument("--output-dir", help="出力ディレクトリ（デフォルト: .evolve-loop/）")
     parser.add_argument("--evolve", action="store_true", help="自己進化パターン組み込みを有効化")
     parser.add_argument("--evolve-search", action="store_true", help="BES 前向き進化探索を有効化 (#256)")
+    parser.add_argument(
+        "--no-selection-reeval", action="store_true",
+        help="採用前再評価（winner's curse 補正 #234）を無効化（デフォルトは有効）",
+    )
+    parser.add_argument(
+        "--selection-reeval-n", type=int, default=3,
+        help="採用前再評価の回数（デフォルト: 3）",
+    )
 
     args = parser.parse_args()
 
@@ -749,6 +786,8 @@ def main():
         output_dir=args.output_dir,
         evolve=args.evolve,
         evolve_search=args.evolve_search,
+        selection_reeval_enabled=not args.no_selection_reeval,
+        selection_reeval_n=args.selection_reeval_n,
     )
 
 

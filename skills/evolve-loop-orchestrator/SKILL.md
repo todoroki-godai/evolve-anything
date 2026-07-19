@@ -37,6 +37,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Agent
 | `--output-dir DIR` | 出力ディレクトリ | `.evolve-loop/` |
 | `--evolve` | 自己進化パターン組み込みを有効化（Step 5.5） | false |
 | `--evolve-search` | BES 前向き進化探索（#256）を有効化。subgoal fitness で重み付けした crossover/mutate の子候補を既存 variants に合流させる | false |
+| `--no-selection-reeval` | 採用前再評価（winner's curse 補正、#234）を無効化 | false（=再評価は既定で有効） |
+| `--selection-reeval-n N` | 採用前再評価の回数 | 3 |
 
 TARGET がスキル名（例: `my-skill`）の場合、`.claude/skills/{name}/SKILL.md` に解決する。
 ファイルパスが直接指定された場合はそのまま使用する。
@@ -75,6 +77,9 @@ evolve-loop \
 [Step 2] 直接パッチ: genetic-prompt-optimizer で corrections/context ベースの LLM 1パスパッチを生成
     ↓
 [Step 3] 評価: 各バリエーションを evolve-scorer で採点、ベースラインと比較
+    ↓
+[Step 3.6] 採用前再評価（winner's curse 補正、#234）: IMPROVED 候補のみ追加 N 回
+           再評価し、平均値で改善が消えれば格下げ（--no-selection-reeval で無効化）
     ↓
 [Step 4] 選択と人間確認: 最高スコアのバリエーションを提示 → 承認/却下
     ↓
