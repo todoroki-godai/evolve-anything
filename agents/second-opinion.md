@@ -3,7 +3,9 @@ name: second-opinion
 description: |
   独立したセカンドオピニオンを提供する読み取り専用エージェント。
   問題定義・前提・設計案を受け取り、cold-read の構造化された独立見解を返す。
-  gstack office-hours Phase 3.5 の codex 代替、または汎用的なセカンドオピニオンとして使用。
+  second-opinion スキルのルートA（既定）として、gstack office-hours Phase 3.5 や
+  汎用的なセカンドオピニオンで使用。codex CLI 検出時に選べるルートB（外部 cold-read）は
+  このエージェントを介さず SKILL.md が直接 `codex exec` を呼ぶ。
 
   使用例:
   - user: "このアイデアにセカンドオピニオンがほしい"
