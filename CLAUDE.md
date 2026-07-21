@@ -13,7 +13,7 @@
 | daily-evolve 入口 | queue | 全 PJ 横断の evolve 待ち一覧を表示し上から対話 evolve するガイド（pull 型・ADR-050 手動運用入口）。`evolve-fleet queue` の薄いラッパー（read-only・ゼロ LLM）+ 次アクション提示。`/cd <PJ>`→`/evolve-anything:evolve` の導線。CC 起動後タイミングの良い日に手で叩く想定（#80 launchd 自動登録の代替手段） |
 | モデルティア変更 | tier | `bin/evolve-tier`（#193）の対話 UX ラッパー。現状表示（`show`）→ ユーザー発話から tier/model/effort を解釈（曖昧なら `AskUserQuestion`）→ `set` で正典更新 → `sync` の dry-run diff を全件提示 → **明示承認後にのみ** `sync --apply` → `drift` advisory 表示、の順でモデルティア正典を安全に変更。スキル自体はファイルを直接編集せず全変更は CLI 経由 |
 | エージェント管理 | agent-brushup | エージェント定義の品質診断・改善提案・新規作成・削除候補 |
-| セカンドオピニオン | second-opinion | Claude Agent による独立した cold-read セカンドオピニオン（codex 代替） |
+| セカンドオピニオン | second-opinion | codex CLI 検出時は外部 cold-read ルートB、それ以外は Claude Agent ルートA によるセカンドオピニオン |
 | 行き詰まり突破 | breakthrough | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動で解決 |
 | 構造化実装 | implement | plan artifact → タスク分解 → 実装（single/parallel）→ 検証 → テレメトリ記録 |
 | pitfall 運用 | pitfall-curate | 任意PJの pitfalls.md を育てる PJ非依存ツール。類似 dedup / 普遍性分類（universal/project/instance + 汎用度1-5）/ 三段階開示の配布版(Top-N)生成 / 記録↔分類↔配布の同期ゲート。判断は agent、決定論処理は `scripts/pitfall_curate.py`。`pitfall_manager`（自己進化専用）とは別物 |
@@ -43,7 +43,7 @@
 | `evolve-skill` | 自己進化パターン（Pre-flight / pitfalls.md）のピンポイント組み込み | skill |
 | `agent-brushup` | エージェント定義の品質診断・改善提案・upstream 監視・model exact-ID pin 検出（#449）+ addyosmani skill anatomy 欠落節の根拠付き改善提案（#63）+ tools 宣言と実付与の乖離検出（`memory:` の Write/Edit 自動付与・#130）+ worker agent の ask-before-fallback 明文化検査（#192） | `agent_quality.py` |
 | `critical-instruction-compliance` | critical 行抽出+リフレーズ+違反検出+pitfall 自動学習 | `critical_instruction_extractor.py` |
-| `second-opinion` | cold-read セカンドオピニオン（3モード、codex 不要） | agent |
+| `second-opinion` | cold-read セカンドオピニオン（3モード）。codex 検出時は外部 cold-read ルートBも選択可 | skill + agent |
 | `growth-level` | env_score → Lv.1-10 + 日英称号マッピング | `growth_level.py` |
 | `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug）[ADR-031] | `optimize_history_store.py` |
 | `evolve_decisions` | evolve 提案の accept/reject を emit→drain 2相で決定論キャプチャ（`evolve --drain`）[ADR-041, #400, #402] | `evolve_decisions.py` |
