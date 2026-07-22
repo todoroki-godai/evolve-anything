@@ -70,17 +70,18 @@ Prune candidates (3):
   2. skills/legacy-migrate — 0 invocations (60日) [zero invocation]
      → archive? [y/N]
 
-  3. rules/test-order.md ≈ rules/ci-flow.md (87% similar) [duplicate]
+  3. rules/test-order.md ≈ rules/ci-flow.md (82% similar) [duplicate]
      → merge into ci-flow.md? [y/N]
 ```
 
 ## 重複検出の詳細
 
-意味的類似度で判定:
+TF-IDF + コサイン類似度による決定論検出（LLM 非依存、`semantic_similarity_check`）:
 
-1. 両方のルール/スキルを LLM に投入
-2. 「同じ意図を表現しているか」を判定
-3. 87% 以上の類似度で候補に
-4. 統合案を生成して提案
+1. 各ルール/スキルのテキストを TF-IDF ベクトル化
+2. 全ペアのコサイン類似度を計算
+3. 80% 以上の類似度で候補に
+4. rules 同士のペアには triage ガイダンス（`triage_note`）を添える — lexical 類似（同じツール名等への言及）は実重複とは限らないため、両ファイルを読んで指示内容の重複を確認してから merge を判断する（#226）
+5. 統合案を生成して提案
 
 統合時は、両方の内容を保持しつつ構造的制約（rules: 3行以内、skills: 500行以内）内に収める。
