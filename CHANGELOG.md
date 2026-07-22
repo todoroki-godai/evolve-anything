@@ -27,6 +27,9 @@
 - **fix(pitfall_registry): 登録簿読み出しに legacy パスへのフォールバックを追加（#220）** — `unmanaged_candidates()`/`load_managed()` が canonical パス `.claude/evolve-anything/pitfall-managed.json` のみを見ていたため、ツール名リネーム（rl-anything→evolve-anything）経緯のある PJ で旧パス `.claude/rl-anything/pitfall-managed.json` に残った登録簿を見落とし、evolve 側「未登録」警告と prune 側 `git grep`「登録済み」が矛盾する挙動になっていた。`rl_common.DATA_DIR` の「書込は canonical のみ・読出は canonical→legacy」という既存慣行と同じパターンで読み出しを canonical→legacy の順に探索するフォールバックを追加（書き込みは従来通り canonical のみ）。TDD +3件。
 - **fix(report-feedback): 中間ファイルの固定 /tmp パスをラン専用ディレクトリへスコープ化（#224）** — `skills/report-feedback/SKILL.md` の Step 1-4/6 が `/tmp/rf_seed.json` 等の固定パスに書いていたため、並行セッションが互いの候補/既存issueキャッシュ/起票直前 body を読み込み・上書きして誤起票する race condition があった。Step 1 で `mktemp -d` によりラン専用ディレクトリを作成し、以降の全ステップの中間ファイルをそこへ書く（`$RF_DIR` として文書化）よう記述を修正。
 
+### Removed
+- **chore(evolve-loop-orchestrator): 未配線の disagreement score / adversarial agent 機構を削除（#237）** — `run_loop.py` の `compute_disagreement_score()`/`run_adversarial_agent()`/`run_loop_with_adversarial()` は本線の `run_loop()` から一度も呼ばれておらず未配線の dead code だった。単純配線ではなく削除を選んだ理由は次の3点が独立に成立するため（`selection_reeval.py` が"完全代替"だからではない — セカンドオピニオンで指摘を受け、主張を修正: 同じ `score_noise.compute_stats()` の std を使う点は実装部品の共通性に過ぎず、機能的等価性の証明ではない）: (1) 本線から一度も呼ばれておらず外部参照もない dead code (2) `run_adversarial_agent()` が `subprocess.run(["claude", "-p", ...])` を直接呼び出し ADR-037（claude -p 全廃・Agent SDK への集約）に明確に違反する (3) disagreement score は std を計算し print 警告するのみで採用判定に反映されず、`selection_reeval.py`（#234 PR2、再評価結果を verdict 再判定・降格まで反映）の方が意思決定への統合という点で設計が先行している。評価者間の不一致検知や反証的（adversarial）観点そのものに将来価値があるなら、ADR-037準拠の新設計として別issueで再検討する余地は残す。3関数と対応する専用テスト `scripts/tests/test_loop.py` を削除し、未使用になった import（`score_noise.compute_stats`/`to_confidence_interval`/`scorer_schema.ConfidenceInterval`）も除去。ADR-037 台帳 `KNOWN_REMAINING` の run_loop.py コメントを更新（`_score_single_axis` のみ残存）。
+
 ## [1.123.0] - 2026-07-17
 
 ### Added
