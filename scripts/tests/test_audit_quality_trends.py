@@ -305,6 +305,51 @@ def test_memory_health_codeblock_excluded(tmp_path):
     assert lines == []
 
 
+def test_memory_health_slash_enumeration_not_stale(tmp_path):
+    """#252: `A.md/B.md/C.md` のようなスラッシュ区切り列挙を1つのネストパスと誤読しない。
+
+    地の文の並列列挙表現は実在ファイルの列挙であり、
+    `project_dir/A.md/B.md/C.md` という単一ネストパスとして不在誤判定してはならない。
+    """
+    from audit import build_memory_health_section
+
+    (tmp_path / "A.md").write_text("a", encoding="utf-8")
+    (tmp_path / "B.md").write_text("b", encoding="utf-8")
+    (tmp_path / "C.md").write_text("c", encoding="utf-8")
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- 既存の A.md/B.md/C.md を修正済み\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" not in text
+
+
+def test_memory_health_slash_enumeration_partial_missing(tmp_path):
+    """#252: 列挙中の一部が本当に不在なら、その項目だけ Stale として検出する。"""
+    from audit import build_memory_health_section
+
+    (tmp_path / "A.md").write_text("a", encoding="utf-8")
+    (tmp_path / "C.md").write_text("c", encoding="utf-8")
+    # B.md は作らない（本当に不在）
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- 既存の A.md/B.md/C.md を修正済み\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" in text
+    assert '"B.md" not found on disk' in text
+    assert '"A.md" not found on disk' not in text
+    assert '"C.md" not found on disk' not in text
+
+
 def test_memory_health_split_suggestion(tmp_path):
     """Near Limit 時に Suggestions にトピックファイル分割が含まれる。"""
     from audit import build_memory_health_section

@@ -9,6 +9,11 @@ from typing import List, Tuple
 # 既知のプロジェクトディレクトリプレフィックス（2セグメントパスフィルタ用）
 KNOWN_DIR_PREFIXES = {"skills", "scripts", "hooks", ".claude", "openspec", "docs"}
 
+# スラッシュ区切り列挙のセグメント判定（例: "A.md/B.md/C.md" の各要素）。
+# 拡張子付きの独立ファイル名に見えるセグメントにマッチする。隠しディレクトリ（.claude 等）は
+# "." 始まりのため対象外（先頭は英数字必須）。
+_ENUM_SEGMENT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9]+$')
+
 
 def extract_paths_outside_codeblocks(text: str) -> List[Tuple[int, str]]:
     """テキストからコードブロック外のファイルパス参照を抽出する。
@@ -50,6 +55,17 @@ def extract_paths_outside_codeblocks(text: str) -> List[Tuple[int, str]]:
                 continue
             # Python シンボル参照 (CONST/func) を除外 — 全大文字セグメントを含む場合
             segments = path_str.split("/")
+            # スラッシュ区切りの並列列挙 (`A.md/B.md/C.md`) を1つのネストパスと誤読しない。
+            # 全セグメントが拡張子付きの独立ファイル名に見える場合は列挙とみなし、
+            # 各セグメントを個別のパス候補として展開する（#252）
+            if (
+                not path_str.startswith("/")
+                and len(segments) >= 2
+                and all(_ENUM_SEGMENT_RE.match(s) for s in segments)
+            ):
+                for seg in segments:
+                    results.append((i + 1, seg))
+                continue
             if not path_str.startswith("/") and any(s.isupper() for s in segments if s):
                 continue
             # 全セグメントが数値パターンのパスを除外（HTTP ステータスコード 429/500/503、バージョン 1.0/2.1 等）

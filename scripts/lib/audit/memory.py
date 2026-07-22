@@ -290,7 +290,10 @@ def build_memory_health_section(
                     if file_relative.exists():
                         continue
                 # トップレベルディレクトリがプロジェクトルートに存在しない場合は除外
-                if not ref_path.startswith("/"):
+                # （ref_path が実際にネストしている場合のみ。単一セグメント — 例: スラッシュ
+                # 区切り列挙 "A.md/B.md/C.md" を展開した個別ファイル名 — は top_dir が
+                # ref_path 自身と一致し、この除外が「不在＝ノイズ」と誤判定してしまうため対象外 #252）
+                if "/" in ref_path and not ref_path.startswith("/"):
                     top_dir = ref_path.split("/")[0]
                     if top_dir not in KNOWN_DIR_PREFIXES and not (project_dir / top_dir).exists():
                         continue
