@@ -350,6 +350,32 @@ def test_memory_health_slash_enumeration_partial_missing(tmp_path):
     assert '"C.md" not found on disk' not in text
 
 
+def test_memory_health_slash_enumeration_all_missing_suppressed(tmp_path):
+    """#252 較正: 列挙内の全セグメントが不在なら非ファイル列挙とみなしノイズ除外する。
+
+    実コーパス較正で "episodic.db/sessions.db/token_usage.db" のような、実ファイルへの
+    参照ではなく DB ストア名を説明的に並べた地の文が見つかった。これらは project_dir にも
+    参照元ファイルの隣接にも実在しないため、列挙内の全セグメントが不在＝ファイル列挙で
+    ある証拠が無いと判断し、旧来の非ファイル列挙ノイズ除外（top_dir フィルタ）と同様に
+    stale として検出しない（少なくとも1セグメントが実在する場合のみ #252 の列挙展開を
+    適用する）。
+    """
+    from audit import build_memory_health_section
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text(
+        "# Memory\n\n"
+        "- `evolve --dry-run` が episodic.db/sessions.db/token_usage.db の byte を書き換えていた\n"
+    )
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" not in text
+
+
 def test_memory_health_split_suggestion(tmp_path):
     """Near Limit 時に Suggestions にトピックファイル分割が含まれる。"""
     from audit import build_memory_health_section

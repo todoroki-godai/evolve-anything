@@ -4,7 +4,7 @@ audit.py の _extract_paths_outside_codeblocks() を共有化。
 suggest_paths_frontmatter() からも利用する。
 """
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 # 既知のプロジェクトディレクトリプレフィックス（2セグメントパスフィルタ用）
 KNOWN_DIR_PREFIXES = {"skills", "scripts", "hooks", ".claude", "openspec", "docs"}
@@ -13,6 +13,32 @@ KNOWN_DIR_PREFIXES = {"skills", "scripts", "hooks", ".claude", "openspec", "docs
 # 拡張子付きの独立ファイル名に見えるセグメントにマッチする。隠しディレクトリ（.claude 等）は
 # "." 始まりのため対象外（先頭は英数字必須）。
 _ENUM_SEGMENT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9]+$')
+
+
+def split_enumeration_segments(path_str: str) -> Optional[List[str]]:
+    """スラッシュ区切りの並列列挙（例: "A.md/B.md/C.md"）かどうかを判定する。
+
+    地の文の日本語並列表現（「〜は A.md/B.md/C.md を修正済み」等）は、実在する
+    複数ファイルの列挙であり、単一のネストパス（project_dir/A.md/B.md/C.md）
+    ではない（#252）。全セグメントが拡張子付きの独立ファイル名に見える場合のみ
+    列挙と判定する。ディレクトリ名に拡張子が無い通常のネストパス
+    （"skills/lib/foo.py" 等）や隠しディレクトリ始まり（".claude/settings.json"）は
+    対象外とし None を返す。
+
+    存在確認は行わない（純粋なテキスト形状判定）。呼び出し側が既存ファイルとの
+    突合を担う。
+
+    Returns:
+        列挙とみなせる場合は各セグメントのリスト、そうでなければ None。
+    """
+    if path_str.startswith("/"):
+        return None
+    segments = path_str.split("/")
+    if len(segments) < 2:
+        return None
+    if all(_ENUM_SEGMENT_RE.match(s) for s in segments):
+        return segments
+    return None
 
 
 def extract_paths_outside_codeblocks(text: str) -> List[Tuple[int, str]]:
@@ -55,17 +81,6 @@ def extract_paths_outside_codeblocks(text: str) -> List[Tuple[int, str]]:
                 continue
             # Python シンボル参照 (CONST/func) を除外 — 全大文字セグメントを含む場合
             segments = path_str.split("/")
-            # スラッシュ区切りの並列列挙 (`A.md/B.md/C.md`) を1つのネストパスと誤読しない。
-            # 全セグメントが拡張子付きの独立ファイル名に見える場合は列挙とみなし、
-            # 各セグメントを個別のパス候補として展開する（#252）
-            if (
-                not path_str.startswith("/")
-                and len(segments) >= 2
-                and all(_ENUM_SEGMENT_RE.match(s) for s in segments)
-            ):
-                for seg in segments:
-                    results.append((i + 1, seg))
-                continue
             if not path_str.startswith("/") and any(s.isupper() for s in segments if s):
                 continue
             # 全セグメントが数値パターンのパスを除外（HTTP ステータスコード 429/500/503、バージョン 1.0/2.1 等）

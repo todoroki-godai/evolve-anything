@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from rl_common import DATA_DIR
 from reflect_utils import read_all_memory_entries, read_auto_memory, split_memory_sections
-from path_extractor import extract_paths_outside_codeblocks as _extract_paths_outside_codeblocks, KNOWN_DIR_PREFIXES
+from path_extractor import (
+    extract_paths_outside_codeblocks as _extract_paths_outside_codeblocks,
+    split_enumeration_segments as _split_enumeration_segments,
+    KNOWN_DIR_PREFIXES,
+)
 from line_limit import NEAR_LIMIT_RATIO
 
 from ._constants import LIMITS, _STOPWORDS
@@ -289,11 +293,33 @@ def build_memory_health_section(
                     file_relative = path.parent / ref_path
                     if file_relative.exists():
                         continue
+
+                # スラッシュ区切りの並列列挙（例: "A.md/B.md/C.md"）を1つのネストパスと
+                # 誤読しない（#252）。ただし列挙内のセグメントが1つも実在しない場合は、
+                # DB ファイル名の説明的言及等の非ファイル列挙である可能性が高く、無条件に
+                # 全セグメントを stale 化すると新規 FP を増やす（実コーパス較正で
+                # "episodic.db/sessions.db/token_usage.db" のような列挙を確認）。
+                # 「列挙内の少なくとも1セグメントが実在」を証拠として要求し、証拠が無ければ
+                # 列挙全体を旧来どおりノイズとして除外する。
+                enum_segments = None if ref_path.startswith("/") else _split_enumeration_segments(ref_path)
+                if enum_segments is not None:
+                    segment_exists = [
+                        (project_dir / seg).exists() or (path.parent / seg).exists()
+                        for seg in enum_segments
+                    ]
+                    if any(segment_exists):
+                        for seg, exists in zip(enum_segments, segment_exists):
+                            if exists:
+                                continue
+                            stale_refs.append({
+                                "file": str(path),
+                                "line": line_num,
+                                "path": seg,
+                            })
+                    continue
+
                 # トップレベルディレクトリがプロジェクトルートに存在しない場合は除外
-                # （ref_path が実際にネストしている場合のみ。単一セグメント — 例: スラッシュ
-                # 区切り列挙 "A.md/B.md/C.md" を展開した個別ファイル名 — は top_dir が
-                # ref_path 自身と一致し、この除外が「不在＝ノイズ」と誤判定してしまうため対象外 #252）
-                if "/" in ref_path and not ref_path.startswith("/"):
+                if not ref_path.startswith("/"):
                     top_dir = ref_path.split("/")[0]
                     if top_dir not in KNOWN_DIR_PREFIXES and not (project_dir / top_dir).exists():
                         continue
