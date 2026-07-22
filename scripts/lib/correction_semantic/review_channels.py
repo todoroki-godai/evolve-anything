@@ -29,7 +29,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, FrozenSet, Set
 
-from correction_semantic.representative import user_only_text
+from correction_semantic.representative import trim_to_idiom_sentence, user_only_text
 
 # y/n 確認に出す content-rich チャネル（単一ソース）。
 # verbosity（#75 の Haiku judge 由来）は provenance.note/patterns に判定理由を保持する
@@ -60,7 +60,9 @@ def signal_text(rec: Dict[str, Any]) -> str:
     単一ソースを通す（チャネル別抽出を二重実装しない）:
 
     - ``llm_judge`` / ``rephrase``: provenance.text を user_only_text で user 発話のみ抽出
-      （assistant 引用ブロック混入の除去・#528-3）
+      （assistant 引用ブロック混入の除去・#528-3）。さらに provenance.idiom があれば
+      trim_to_idiom_sentence で複数トピック発言を idiom の属するセグメントだけにトリムする
+      （主要な指摘＋ついでの別要望が同居する問題の解消・#253）
     - ``permission_deny``: tool_name + tool_input_summary（拒否されたコマンド）を合成。
       denial_reason は実データで "unknown" が大半なので、意味があるときだけ添える
     - ``verbosity``: provenance.note（Haiku 判定理由）+ patterns（冗長パターン名）を合成。
@@ -101,7 +103,10 @@ def signal_text(rec: Dict[str, Any]) -> str:
         return head
 
     # llm_judge / rephrase（および text を持つ将来チャネル）は user 発話のみ抽出。
-    return user_only_text(prov.get("text") or "")
+    text = user_only_text(prov.get("text") or "")
+    # #253: idiom が保存されていれば複数トピック発言をそのセグメントだけにトリムする
+    # （idiom 無し・不一致・曖昧のいずれも trim_to_idiom_sentence 内で全文フォールバック）。
+    return trim_to_idiom_sentence(text, prov.get("idiom"))
 
 
 # 拒否コマンドの latin トークン抽出（permission_deny の group 化用・#99 F1）。

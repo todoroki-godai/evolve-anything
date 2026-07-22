@@ -130,6 +130,27 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(tmp_path: Path
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
 
 
+def test_ingest_stores_idiom_in_weak_signal_provenance(tmp_path: Path) -> None:
+    """#253: provenance.idiom を保存し signal_text の多トピックトリムに使えるようにする。"""
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = _responses_for(emitted, {
+        (rid, 0): {"is_correction": True, "idiom": "四国めたんじゃなくて", "reason": "後置型"},
+    })
+    cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    ws_lines = [json.loads(l) for l in ws_store.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert ws_lines[0]["provenance"]["idiom"] == "四国めたんじゃなくて"
+
+
 def test_ingest_filters_overbroad_idioms_from_dictionary(tmp_path: Path) -> None:
     """#527: 過汎用 idiom（極短/相槌/日付断片）は weak_signal は残すが個人辞書に入れない。"""
     ws_store = tmp_path / "weak_signals.jsonl"
