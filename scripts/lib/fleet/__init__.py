@@ -80,6 +80,17 @@ from .audit_runner import (  # noqa: E402, F401
 )
 
 
+# codex CLI 利用状況の read-only 集計は fleet/codex_usage.py に集約（#245）
+from .codex_usage import (  # noqa: E402, F401
+    CODEX_STATUS_LOCKED,
+    CODEX_STATUS_MISSING,
+    CODEX_STATUS_OK,
+    CODEX_STATUS_SCHEMA_MISMATCH,
+    CodexUsageResult,
+    collect_codex_usage,
+)
+
+
 # Format helpers / status table は fleet/formatters.py に集約済み（後方互換のため再エクスポート）
 from .formatters import (  # noqa: E402, F401
     _TABLE_HEADERS,
@@ -96,6 +107,7 @@ from .formatters import (  # noqa: E402, F401
     _format_cell_subagents,
     format_status_table,
     format_status_json,
+    format_codex_usage_section,
 )
 
 
