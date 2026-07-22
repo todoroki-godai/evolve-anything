@@ -62,6 +62,8 @@ Prune 候補に対して以下のラベルを付与:
 
 ## 出力例
 
+数値は説明用の架空例（実際の類似度は算出結果による。閾値 80% 以上で候補になる）。
+
 ```
 Prune candidates (3):
   1. rules/old-deploy.md — glob matches 0 files [dead glob]
