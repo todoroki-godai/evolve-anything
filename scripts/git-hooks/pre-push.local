@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # evolve-anything pre-push.local — gstack-redact の managed pre-push hook から chain される
 # ローカル拡張フック。push 前に dogfood-gate の light 層（Layer1a 不変 + Layer2 + Layer3、
-# 約十数秒）を走らせる。
+# 約十数秒）と diff-scoped 兄弟コピー検出（sibling_copy_guard, #210）を走らせる。
 #
 # 設計（1人開発前提）:
 #   - **非ブロッキング**: 赤でも push は止めない（警告のみ）。1人開発でブロッキングにすると
@@ -44,6 +44,58 @@ case "${_rc}" in
     echo "[pre-push] dogfood-gate light をスキップ（gate を実行できず exit ${_rc}・light 非対応の可能性）。" >&2
     ;;
 esac
+
+# --- diff-scoped 兄弟コピー検出（sibling_copy_guard, #210） ------------------
+# push 対象コミット（upstream との差分。無ければ origin/main との差分）の変更行と
+# 同型の未変更行が repo 内の他所に残っていないか（片側修正の疑い）を検出する。
+# CLI の終了コード契約は 0=該当なし / 1=検出あり の2値のみ（dogfood-gate のような
+# light 非対応 exit 2 契約は無い）。それ以外（クラッシュ等）も含め非0/1 は fail-open
+# で無音スキップし、push を止めない。
+#
+# **大規模 merge push の noise ガード**（実コーパス dry-run #210 で発見）: 長期間 main
+# から離れた worktree branch を `git merge origin/main` してから push すると、その
+# merge が持ち込む main 側の非merge commit 全部が対象範囲に入り、変更行照合が
+# main の既存コード同士の一致（`if X is None:` 等の汎用イディオム）を大量検出して
+# 1回で 14 グループ・100 箇所超のノイズになった（実測）。1〜2 コミット程度の通常 push
+# では発生しない規模の問題。非ブロッキングとはいえ読めない量の警告は「片側修正の疑い」
+# という本来のシグナルを埋もれさせるため、対象範囲の非merge commit 数が
+# `_SIB_MAX_COMMITS` を超える場合はチェック自体を skip する（狼少年回避。dogfood-gate
+# の「light 非対応は soft skip」と同じ思想）。
+_SIB_MAX_COMMITS=15
+_sibling_guard="${_root}/scripts/lib/sibling_copy_guard.py"
+if [ -x "$(command -v python3)" ] && [ -f "${_sibling_guard}" ]; then
+  if git -C "${_root}" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    _sib_base="@{u}"
+  elif git -C "${_root}" rev-parse --verify origin/main >/dev/null 2>&1; then
+    _sib_base="origin/main"
+  else
+    _sib_base=""
+  fi
+
+  if [ -n "${_sib_base}" ]; then
+    _sib_commit_count="$(git -C "${_root}" rev-list --no-merges --count "${_sib_base}..HEAD" 2>/dev/null || echo 0)"
+    if [ "${_sib_commit_count}" -gt "${_SIB_MAX_COMMITS}" ]; then
+      echo "[pre-push] diff-scoped 兄弟コピー検出: 対象 ${_sib_commit_count} commit（>${_SIB_MAX_COMMITS}・merge 由来の大規模差分の可能性）のため skip。" >&2
+    else
+      python3 "${_sibling_guard}" "${_sib_base}...HEAD" --repo-root "${_root}" \
+        >/tmp/rl-prepush-sibling-copy.log 2>&1
+      _sib_rc=$?
+      case "${_sib_rc}" in
+        0)
+          : # 該当なし。dogfood-gate と違い緑ノイズは出さない（無音）。
+          ;;
+        1)
+          echo "[pre-push] ⚠ diff-scoped 兄弟コピー検出: 片側修正の疑いあり（push は継続＝非ブロッキング）。" >&2
+          cat /tmp/rl-prepush-sibling-copy.log >&2
+          ;;
+        *)
+          # クラッシュ・引数不正等。fail-open で無音スキップ（狼少年回避）。
+          :
+          ;;
+      esac
+    fi
+  fi
+fi
 
 # 常に 0 で返す（非ブロッキング）。managed hook の `|| exit $?` で push を止めない。
 exit 0
