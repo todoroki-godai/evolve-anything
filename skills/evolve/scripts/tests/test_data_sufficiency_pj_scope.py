@@ -28,15 +28,22 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def _isolate(tmp_path, monkeypatch):
-    """evolve / session_store / rl_common の DATA_DIR を tmp に固定する。"""
+    """evolve / session_store / rl_common の DATA_DIR を tmp に固定する。
+
+    session_store.SESSIONS_JSONL / SESSIONS_DB は module __getattr__（PEP 562）
+    専用の擬似属性で実体を持たない（#137）。直接 monkeypatch.setattr すると
+    teardown の復元 setattr が実属性を module.__dict__ に永続生成し、以後
+    __getattr__ が呼ばれなくなって同一 xdist worker 内の後続テストが stale な
+    値を掴む（flake の実根因）。隔離は必ず _DATA_DIR_OVERRIDE（真の module-level
+    属性）を使う。
+    """
     import evolve
     import session_store
     import rl_common
 
     monkeypatch.setattr(evolve, "DATA_DIR", tmp_path)
     monkeypatch.setattr(evolve, "EVOLVE_STATE_FILE", tmp_path / "evolve-state.json")
-    monkeypatch.setattr(session_store, "SESSIONS_JSONL", tmp_path / "sessions.jsonl")
-    monkeypatch.setattr(session_store, "SESSIONS_DB", tmp_path / "sessions.db")
+    monkeypatch.setattr(session_store, "_DATA_DIR_OVERRIDE", tmp_path)
     monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
 
 
