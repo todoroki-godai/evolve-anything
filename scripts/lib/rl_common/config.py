@@ -47,6 +47,9 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # weak_signal を 1 回の evolve で自動昇格する件数上限。超過分は次回 run に持ち越す
     # （capped で surface）。1 回の confirmed 化が引き金で大量昇格する暴走を量で抑える。
     "idiom_autopromote_daily_cap": 10,
+    # icebox_notice（#194）: icebox issue の最古経過日数がこの値以上で SessionStart 気づき
+    # 通知を発火する閾値（日）。audit_interval_days と同じ 30 日周期をデフォルトに揃える。
+    "icebox_review_threshold_days": 30,
 }
 
 

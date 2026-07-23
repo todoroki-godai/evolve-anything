@@ -16,6 +16,9 @@ from pathlib import Path
 ICEBOX_FILE_NAME = "icebox-status.json"
 
 # oldest_days がこの日数以上なら通知する既定閾値。
+# 実運用（hooks/restore_state.py 経由）ではこの値でなく rl_common.config の
+# userConfig 既定 `icebox_review_threshold_days`（既定30・呼び出し側で override 可）が渡される。
+# ここでの 90 は呼び出し元が threshold_days を明示しない場合のライブラリ関数フォールバックに留まる。
 DEFAULT_THRESHOLD_DAYS = 90
 
 

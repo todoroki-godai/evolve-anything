@@ -130,3 +130,44 @@ def test_handle_session_start_invokes_icebox_notice(tmp_path, monkeypatch, capsy
     restore_state.handle_session_start({})
     out = capsys.readouterr().out
     assert "12件" in out
+
+
+def test_deliver_respects_custom_threshold_from_user_config(tmp_path, monkeypatch, capsys):
+    """icebox_review_threshold_days を userConfig で下げると、デフォルト閾値未満の
+    oldest_days でも発火する（#194 拡張）。"""
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    status = {"count": 2, "oldest_days": 25, "generated_at": "2026-07-01T00:00:00Z"}
+    _write_status(source, status)
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_icebox_review_threshold_days", "20")
+    restore_state._deliver_icebox_notice()
+    out = capsys.readouterr().out
+    assert out
+    payload = json.loads(out.strip())
+    assert "25日" in payload["systemMessage"]
+
+
+def test_deliver_silent_below_custom_threshold(tmp_path, monkeypatch, capsys):
+    """カスタム閾値未満なら（デフォルト閾値より小さい oldest_days でも）沈黙する。"""
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    status = {"count": 2, "oldest_days": 45, "generated_at": "2026-07-01T00:00:00Z"}
+    _write_status(source, status)
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_icebox_review_threshold_days", "60")
+    restore_state._deliver_icebox_notice()
+    assert capsys.readouterr().out == ""
+
+
+def test_deliver_fires_with_default_threshold_no_override(tmp_path, monkeypatch, capsys):
+    """env var 未設定でも新デフォルト30日が実際に使われ、30-89日の範囲
+    （旧ライブラリデフォルト90日では沈黙するはずの範囲）で発火することを保証する。"""
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    status = {"count": 4, "oldest_days": 45, "generated_at": "2026-07-01T00:00:00Z"}
+    _write_status(source, status)
+    monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_icebox_review_threshold_days", raising=False)
+    restore_state._deliver_icebox_notice()
+    out = capsys.readouterr().out
+    assert out
+    payload = json.loads(out.strip())
+    assert "45日" in payload["systemMessage"]

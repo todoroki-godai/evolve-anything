@@ -161,3 +161,16 @@ class TestLoadUserConfig:
         """未設定の場合は is_user_config_explicit は False を返す。"""
         with mock.patch.dict(os.environ, {}, clear=True):
             assert common.is_user_config_explicit("cleanup_tmp_prefixes") is False
+
+    def test_icebox_review_threshold_days_default(self):
+        """icebox_review_threshold_days のデフォルトは 30。"""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = common.load_user_config()
+        assert config["icebox_review_threshold_days"] == 30
+
+    def test_icebox_review_threshold_days_override(self):
+        """icebox_review_threshold_days は環境変数で上書き可能。"""
+        env = {"CLAUDE_PLUGIN_OPTION_icebox_review_threshold_days": "14"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            config = common.load_user_config()
+        assert config["icebox_review_threshold_days"] == 14

@@ -421,7 +421,8 @@ def _deliver_icebox_notice() -> None:
             return  # テスト isolation / custom 環境
         data_dir = rl_common.resolve_data_dir(env)
         status = _icebox_notice.read_icebox_status(data_dir)
-        output = _icebox_notice.icebox_notice_output(status)
+        threshold_days = rl_common.load_user_config().get("icebox_review_threshold_days", 30)
+        output = _icebox_notice.icebox_notice_output(status, threshold_days=threshold_days)
         if output:
             print(json.dumps(output, ensure_ascii=False))
     except Exception as e:
