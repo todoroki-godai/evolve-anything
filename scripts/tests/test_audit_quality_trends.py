@@ -376,6 +376,76 @@ def test_memory_health_slash_enumeration_all_missing_suppressed(tmp_path):
     assert "Stale References" not in text
 
 
+def test_memory_health_slash_enumeration_real_directory_prefix_not_enumeration(tmp_path):
+    """#252 round2: 先頭セグメントが実ディレクトリならネストパスとして扱い列挙化しない。
+
+    "config.d/rules.json" は "config.d" が拡張子付きに見えるが実際は実在ディレクトリ。
+    列挙として分解し project_dir 直下の同名ファイル "rules.json" を誤って個別確認して
+    はならず（別ファイルの偶然の存在で握りつぶされる）、ネストパス "config.d/rules.json"
+    自体が不在として検出されるべき。
+    """
+    from audit import build_memory_health_section
+
+    (tmp_path / "config.d").mkdir()
+    # config.d/rules.json は作らない（真に不在）。project_dir 直下には同名の別ファイルが
+    # 存在する（列挙誤判定だと "rules.json" セグメントがこちらにマッチし握りつぶされる罠）
+    (tmp_path / "rules.json").write_text("{}", encoding="utf-8")
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- config.d/rules.json を確認\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" in text
+    assert '"config.d/rules.json" not found on disk' in text
+
+
+def test_memory_health_slash_enumeration_minority_exists_suppressed(tmp_path):
+    """#252 round2: 3件中1件だけ実在する列挙は過半数未満のため非ファイル列挙とみなし抑制する。
+
+    偶然の同名ファイル1件だけで残り2件を stale FP 化しないための境界テスト。
+    """
+    from audit import build_memory_health_section
+
+    (tmp_path / "A.md").write_text("a", encoding="utf-8")
+    # B.md, C.md は作らない
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- 既存の A.md/B.md/C.md を修正済み\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" not in text
+
+
+def test_memory_health_slash_enumeration_majority_exists_detects_missing(tmp_path):
+    """#252 round2: 3件中2件実在する列挙は過半数を満たすため欠損1件のみ検出する。"""
+    from audit import build_memory_health_section
+
+    (tmp_path / "A.md").write_text("a", encoding="utf-8")
+    (tmp_path / "B.md").write_text("b", encoding="utf-8")
+    # C.md は作らない
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- 既存の A.md/B.md/C.md を修正済み\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" in text
+    assert '"C.md" not found on disk' in text
+    assert '"A.md" not found on disk' not in text
+    assert '"B.md" not found on disk' not in text
+
+
 def test_memory_health_split_suggestion(tmp_path):
     """Near Limit 時に Suggestions にトピックファイル分割が含まれる。"""
     from audit import build_memory_health_section
