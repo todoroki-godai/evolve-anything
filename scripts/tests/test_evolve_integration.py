@@ -211,7 +211,7 @@ def test_run_loop_evolve_flag_calls_try_evolve(run_loop_mod, tmp_path):
          mock.patch.object(run_loop_mod, "_try_evolve_skill") as mock_try_evolve:
         mock_baseline.return_value = {"integrated_score": 0.65}
         mock_variants.return_value = {
-            "history": [{"individuals": [{"id": "v1", "content": "# Improved\n"}]}],
+            "candidates": [{"id": "v1", "content": "# Improved\n"}],
         }
         mock_axes.return_value = {
             "technical": 0.70, "domain": 0.70, "structure": 0.70, "integrated": 0.70,
@@ -246,7 +246,7 @@ def test_run_loop_no_evolve_flag(run_loop_mod, tmp_path):
          mock.patch.object(run_loop_mod, "_try_evolve_skill") as mock_try_evolve:
         mock_baseline.return_value = {"integrated_score": 0.65}
         mock_variants.return_value = {
-            "history": [{"individuals": [{"id": "v1", "content": "# Improved\n"}]}],
+            "candidates": [{"id": "v1", "content": "# Improved\n"}],
         }
         mock_axes.return_value = {
             "technical": 0.70, "domain": 0.70, "structure": 0.70, "integrated": 0.70,

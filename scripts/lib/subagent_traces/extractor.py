@@ -1,4 +1,4 @@
-"""subagent_traces.extractor — transcript 1 本 → 軌跡メトリクス（#38, #200）。
+"""subagent_traces.extractor — transcript 1 本 → 軌跡メトリクス（#38, #200, #219）。
 
 決定論・ゼロ LLM。design「軌跡メトリクス」の SoT 実装。
 
@@ -12,6 +12,13 @@ transcript jsonl の各行は ``{"type": "user"|"assistant", "message": {...}, .
 #200: 委任内容（何を頼んだか）を事後監査可能にするため、transcript の起点行
 （``parentUuid is None and type == "user"``）から委任プロンプト先頭 300 字を
 ``delegation_prompt`` として併せて抽出する（詳細は各 helper の docstring 参照）。
+
+#219: CC v2.1.212 以降、``type == "assistant"`` の行はトップレベル（``message`` の外、
+``timestamp``/``session_id`` と同階層）に ``"effort": "high"`` 等の実測 reasoning
+effort レベルを記録する（実 transcript で確認済み・2026-07-17）。この分布を
+``effort_counts`` として集計し、tier 宣言 effort との drift 検出に使う
+（``audit/sections_subagent_traces.py`` 側）。フィールドが無い行（旧 CC バージョン等）
+は単に数えない — 全行に無ければ ``effort_counts == {}``（「未計測」を意味する）。
 """
 from __future__ import annotations
 
@@ -106,6 +113,7 @@ def extract_trace(transcript_path: Union[str, Path]) -> Optional[Dict[str, Any]]
           "tools":             {tool名: 回数},
           "delegation_prompt": str,   # #200: 委任プロンプト先頭300字（見つからなければ ""）
           "delegation_prompt_truncated": bool,  # 300字超で truncate したら True
+          "effort_counts":     {effort名: 回数},  # #219: 実測 effort 分布（空={}=未計測）
         }
     """
     path = Path(transcript_path)
@@ -125,6 +133,7 @@ def extract_trace(transcript_path: Union[str, Path]) -> Optional[Dict[str, Any]]
     delegation_prompt = ""
     delegation_prompt_truncated = False
     delegation_line_found = False
+    effort_counts: Dict[str, int] = {}
 
     for line in text.splitlines():
         s = line.strip()
@@ -142,6 +151,11 @@ def extract_trace(transcript_path: Union[str, Path]) -> Optional[Dict[str, Any]]
             delegation_line_found = True
             raw_text = _extract_message_text(rec.get("message"))
             delegation_prompt, delegation_prompt_truncated = _build_delegation_prompt(raw_text)
+
+        if rec.get("type") == "assistant":
+            effort_val = rec.get("effort")
+            if isinstance(effort_val, str) and effort_val:
+                effort_counts[effort_val] = effort_counts.get(effort_val, 0) + 1
 
         for block in _iter_content_blocks(rec.get("message")):
             btype = block.get("type")
@@ -169,4 +183,5 @@ def extract_trace(transcript_path: Union[str, Path]) -> Optional[Dict[str, Any]]
         "tools": tools,
         "delegation_prompt": delegation_prompt,
         "delegation_prompt_truncated": delegation_prompt_truncated,
+        "effort_counts": effort_counts,
     }

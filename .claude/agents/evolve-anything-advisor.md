@@ -22,7 +22,7 @@ maxTurns: 30
 
 | 質問カテゴリ | 読むべきファイル |
 |------------|----------------|
-| スキル一覧・構造 | `/Users/todoroki/tools/evolve-anything/SPEC.md` (冒頭60行) |
+| スキル一覧・構造 | `/Users/matsukaze-takashi/matsukaze-utils/evolve-anything/SPEC.md` (冒頭60行) |
 | 特定スキルの詳細 | `~/.claude/evolve-anything/` の該当 SKILL.md を Glob で探して Read |
 | テレメトリ・使用状況 | `~/.claude/evolve-anything/usage.jsonl` (tail 相当) + `evolve-state.json` |
 | エラー傾向 | `~/.claude/evolve-anything/errors.jsonl` (recent) |
@@ -39,7 +39,7 @@ maxTurns: 30
 
 ## PC 環境の固定情報
 
-- **evolve-anything プラグインディレクトリ**: `/Users/todoroki/tools/evolve-anything/`
+- **evolve-anything プラグインディレクトリ**: `/Users/matsukaze-takashi/matsukaze-utils/evolve-anything/`
 - **テレメトリデータ**: `~/.claude/evolve-anything/` (usage/errors/corrections/sessions/workflows.jsonl 等)
 - **エージェント定義**: `~/.claude/agents/` (ambiguous-intent-resolver, senior-engineer, evolve-anything-advisor)
 - **グローバルルール**: `~/.claude/rules/`

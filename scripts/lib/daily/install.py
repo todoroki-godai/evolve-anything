@@ -5,6 +5,8 @@
 
 launchctl 呼び出しは `_launchctl`（subprocess）に集約し、単体テストで mock 可能にする。
 """
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +28,21 @@ def _launchctl(subcommand: str, target: str) -> int:
     ).returncode
 
 
+def _child_tool_dirs() -> "tuple[str, ...]":
+    """runner の子プロセスが使う外部ツール（gh 等）の dir を install 環境から検出する。
+
+    launchd の最小 PATH は /opt/homebrew/bin を含まないため、icebox 集計（#194）の gh が
+    FileNotFoundError で恒久 fail-open になる（#196）。install は対話シェルで走るので、
+    その PATH で which した実体の dir を plist に焼き込む。見つからなければ空
+    （icebox は fail-open のまま・install は成功する）。
+    """
+    dirs = []
+    gh = shutil.which("gh")
+    if gh:
+        dirs.append(os.path.dirname(gh))
+    return tuple(dirs)
+
+
 def install(
     plugin_root: str,
     data_dir: str,
@@ -41,6 +58,7 @@ def install(
     - `python_exe` を渡すと plist に焼く。空なら install を走らせている `sys.executable` を
       pin する（＝この install を叩いた Python で毎朝の runner を実行する）。launchd の PATH
       先頭 /usr/bin の古い Python を拾う事故を防ぐ。
+    - 子ツール（gh 等）の dir を install 環境の which で検出し PATH に焼き込む（#196）。
     Returns: 0（plist 書き込み成功）。launchctl の非ゼロは握りつぶす（冪等運用）。
     """
     plist_file = plist_mod.plist_path()
@@ -59,6 +77,7 @@ def install(
         hour=hour,
         minute=minute,
         python_exe=python_exe or sys.executable,
+        extra_path_dirs=_child_tool_dirs(),
     )
     plist_file.write_text(body, encoding="utf-8")
 

@@ -315,6 +315,189 @@ class TestDetectCheckpointGaps:
         infra_gaps = [g for g in gaps if g["category"] == "infra_deploy"]
         assert len(infra_gaps) == 0
 
+    # ── project スコープフィルタ（#208: #206 単一ソース述語の横展開）────────
+
+    def test_other_project_corrections_excluded_from_evidence(self, tmp_path):
+        """他 PJ の project_path を持つ correction は evidence_count に混入しない。"""
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        (project_dir / "cdk.json").write_text("{}")
+
+        skill_dir = tmp_path / "skill"
+        self._make_skill(skill_dir)
+
+        data_dir = tmp_path / "data"
+        corrections = [
+            {
+                "last_skill": "verify", "correction": "prodデプロイ忘れた",
+                "timestamp": "2026-03-01T00:00:00", "project_path": "otherproject",
+            },
+            {
+                "last_skill": "verify", "correction": "deploy確認漏れ",
+                "timestamp": "2026-03-02T00:00:00", "project_path": "otherproject",
+            },
+            {
+                "last_skill": "verify", "correction": "本番にデプロイしてなかった",
+                "timestamp": "2026-03-03T00:00:00", "project_path": "otherproject",
+            },
+        ]
+        self._make_corrections_file(data_dir, corrections)
+
+        with mock.patch("lib.workflow_checkpoint.DATA_DIR", data_dir):
+            gaps = detect_checkpoint_gaps("verify", skill_dir, project_dir)
+
+        infra_gaps = [g for g in gaps if g["category"] == "infra_deploy"]
+        # 全件が他 PJ の project_path → evidence_count 0 → MIN_CHECKPOINT_EVIDENCE 未満で検出なし
+        assert infra_gaps == []
+
+    def test_matching_project_corrections_counted_precisely(self, tmp_path):
+        """当PJ の project_path の correction のみ evidence_count に算入される（混入しない）。"""
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        (project_dir / "cdk.json").write_text("{}")
+
+        skill_dir = tmp_path / "skill"
+        self._make_skill(skill_dir)
+
+        data_dir = tmp_path / "data"
+        corrections = [
+            {
+                "last_skill": "verify", "correction": "prodデプロイ忘れた",
+                "timestamp": "2026-03-01T00:00:00", "project_path": "myproject",
+            },
+            {
+                "last_skill": "verify", "correction": "deploy確認漏れ",
+                "timestamp": "2026-03-02T00:00:00", "project_path": "myproject",
+            },
+            {
+                "last_skill": "verify", "correction": "本番にデプロイしてなかった",
+                "timestamp": "2026-03-03T00:00:00", "project_path": "myproject",
+            },
+            {
+                "last_skill": "verify", "correction": "deployチェック忘れ",
+                "timestamp": "2026-03-04T00:00:00", "project_path": "myproject",
+            },
+            {
+                "last_skill": "verify", "correction": "deploy確認漏れ2",
+                "timestamp": "2026-03-05T00:00:00", "project_path": "otherproject",
+            },
+            {
+                "last_skill": "verify", "correction": "本番反映漏れ",
+                "timestamp": "2026-03-06T00:00:00", "project_path": "otherproject",
+            },
+        ]
+        self._make_corrections_file(data_dir, corrections)
+
+        with mock.patch("lib.workflow_checkpoint.DATA_DIR", data_dir):
+            gaps = detect_checkpoint_gaps("verify", skill_dir, project_dir)
+
+        infra_gaps = [g for g in gaps if g["category"] == "infra_deploy"]
+        assert len(infra_gaps) == 1
+        # 6件中 myproject 分の4件のみ算入（otherproject の2件は混入しない）
+        assert infra_gaps[0]["evidence_count"] == 4
+
+    def test_unattributed_corrections_still_counted(self, tmp_path):
+        """project_path 欠落（未帰属）の correction は寛容に含める（後方互換）。"""
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        (project_dir / "cdk.json").write_text("{}")
+
+        skill_dir = tmp_path / "skill"
+        self._make_skill(skill_dir)
+
+        data_dir = tmp_path / "data"
+        corrections = [
+            {"last_skill": "verify", "correction": "prodデプロイ忘れた", "timestamp": "2026-03-01T00:00:00"},
+            {"last_skill": "verify", "correction": "deploy確認漏れ", "timestamp": "2026-03-02T00:00:00"},
+            {"last_skill": "verify", "correction": "本番にデプロイしてなかった", "timestamp": "2026-03-03T00:00:00"},
+        ]
+        self._make_corrections_file(data_dir, corrections)
+
+        with mock.patch("lib.workflow_checkpoint.DATA_DIR", data_dir):
+            gaps = detect_checkpoint_gaps("verify", skill_dir, project_dir)
+
+        infra_gaps = [g for g in gaps if g["category"] == "infra_deploy"]
+        assert len(infra_gaps) == 1
+        assert infra_gaps[0]["evidence_count"] == 3
+
+    # ── project スコープフィルタ（#228: errors.jsonl も #206 単一ソース述語で横展開）────
+
+    def test_other_project_errors_excluded_from_evidence(self, tmp_path):
+        """他 PJ の project_path を持つ error は evidence_count に混入しない。"""
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        (project_dir / "cdk.json").write_text("{}")
+
+        skill_dir = tmp_path / "skill"
+        self._make_skill(skill_dir)
+
+        data_dir = tmp_path / "data"
+        errors = [
+            {"error": "prodデプロイ忘れた", "timestamp": "2026-03-01T00:00:00", "project_path": "otherproject"},
+            {"error": "deploy確認漏れ", "timestamp": "2026-03-02T00:00:00", "project_path": "otherproject"},
+            {"error": "本番にデプロイしてなかった", "timestamp": "2026-03-03T00:00:00", "project_path": "otherproject"},
+        ]
+        self._make_errors_file(data_dir, errors)
+
+        with mock.patch("lib.workflow_checkpoint.DATA_DIR", data_dir):
+            gaps = detect_checkpoint_gaps("verify", skill_dir, project_dir)
+
+        infra_gaps = [g for g in gaps if g["category"] == "infra_deploy"]
+        # 全件が他 PJ の project_path → evidence_count 0 → MIN_CHECKPOINT_EVIDENCE 未満で検出なし
+        assert infra_gaps == []
+
+    def test_matching_project_errors_counted_precisely(self, tmp_path):
+        """当PJ の project_path の error のみ evidence_count に算入される（混入しない）。"""
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        (project_dir / "cdk.json").write_text("{}")
+
+        skill_dir = tmp_path / "skill"
+        self._make_skill(skill_dir)
+
+        data_dir = tmp_path / "data"
+        errors = [
+            {"error": "prodデプロイ忘れた", "timestamp": "2026-03-01T00:00:00", "project_path": "myproject"},
+            {"error": "deploy確認漏れ", "timestamp": "2026-03-02T00:00:00", "project_path": "myproject"},
+            {"error": "本番にデプロイしてなかった", "timestamp": "2026-03-03T00:00:00", "project_path": "myproject"},
+            {"error": "deployチェック忘れ", "timestamp": "2026-03-04T00:00:00", "project_path": "myproject"},
+            {"error": "deploy確認漏れ2", "timestamp": "2026-03-05T00:00:00", "project_path": "otherproject"},
+            {"error": "本番反映漏れ", "timestamp": "2026-03-06T00:00:00", "project_path": "otherproject"},
+        ]
+        self._make_errors_file(data_dir, errors)
+
+        with mock.patch("lib.workflow_checkpoint.DATA_DIR", data_dir):
+            gaps = detect_checkpoint_gaps("verify", skill_dir, project_dir)
+
+        infra_gaps = [g for g in gaps if g["category"] == "infra_deploy"]
+        assert len(infra_gaps) == 1
+        # 6件中 myproject 分の4件のみ算入（otherproject の2件は混入しない）
+        assert infra_gaps[0]["evidence_count"] == 4
+
+    def test_unattributed_errors_still_counted(self, tmp_path):
+        """project_path 欠落（未帰属）の error は寛容に含める（後方互換）。"""
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        (project_dir / "cdk.json").write_text("{}")
+
+        skill_dir = tmp_path / "skill"
+        self._make_skill(skill_dir)
+
+        data_dir = tmp_path / "data"
+        errors = [
+            {"error": "prodデプロイ忘れた", "timestamp": "2026-03-01T00:00:00"},
+            {"error": "deploy確認漏れ", "timestamp": "2026-03-02T00:00:00"},
+            {"error": "本番にデプロイしてなかった", "timestamp": "2026-03-03T00:00:00"},
+        ]
+        self._make_errors_file(data_dir, errors)
+
+        with mock.patch("lib.workflow_checkpoint.DATA_DIR", data_dir):
+            gaps = detect_checkpoint_gaps("verify", skill_dir, project_dir)
+
+        infra_gaps = [g for g in gaps if g["category"] == "infra_deploy"]
+        assert len(infra_gaps) == 1
+        assert infra_gaps[0]["evidence_count"] == 3
+
 
 # ── confidence scoring ────────────────────────────────
 

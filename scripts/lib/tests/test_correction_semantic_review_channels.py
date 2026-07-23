@@ -114,6 +114,47 @@ def test_signal_text_unknown_channel_empty():
 
 
 # ─────────────────────────────────────────────────────────────────
+# signal_text 多トピックトリム（#253: 主要な指摘＋ついでの別要望の混同解消）
+# ─────────────────────────────────────────────────────────────────
+
+
+def test_signal_text_llm_judge_trims_multi_topic_to_idiom_segment():
+    rec = {
+        "channel": "llm_judge",
+        "provenance": {
+            "text": "字幕がずれてるので直して。あと、レポート表示の形式も変えてほしいんだけど",
+            "idiom": "字幕がずれてる",
+            "reason": "ソフト指摘",
+        },
+    }
+    assert rc.signal_text(rec) == "字幕がずれてるので直して。"
+
+
+def test_signal_text_llm_judge_no_idiom_key_unchanged():
+    # idiom 未保存（後方互換・旧レコード）は従来どおり全文を返す。
+    rec = {
+        "channel": "llm_judge",
+        "provenance": {
+            "text": "字幕がずれてるので直して。あと、レポート表示の形式も変えてほしいんだけど",
+            "reason": "ソフト指摘",
+        },
+    }
+    text = rec["provenance"]["text"]
+    assert rc.signal_text(rec) == text
+
+
+def test_signal_text_rephrase_does_not_trim_multi_topic():
+    # #253 ROUND2: idiom は Haiku バッチ判定（llm_judge 限定）でしか生成されない契約なので、
+    # rephrase は idiom が provenance にあってもトリムせず全文のまま返す。
+    text = "字幕がずれてるから直して、あとレポート表示の形式も変えて"
+    rec = {
+        "channel": "rephrase",
+        "provenance": {"text": text, "idiom": "字幕がずれてる"},
+    }
+    assert rc.signal_text(rec) == text
+
+
+# ─────────────────────────────────────────────────────────────────
 # signal_text / grouping_keywords（channel=verbosity・#171）
 # provenance shape は verbosity/judge.py._emit_weak_signals 準拠:
 # {"hash", "project", "patterns": [...], "note": str, "char_len": int}

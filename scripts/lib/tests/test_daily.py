@@ -95,14 +95,110 @@ def test_build_plist_pins_python_exe_when_given():
     assert out.index(f"<string>{py}</string>") < out.index(f"<string>{runner}</string>")
 
 
+def test_build_plist_sets_path_env_to_pin_child_python():
+    """python_exe 指定時、EnvironmentVariables の PATH に python の dir を先頭付与する。
+
+    runner が bare パスで spawn する子（evolve-fleet の #!/usr/bin/env python3）が launchd の
+    最小 PATH（/opt/homebrew 無し）で /usr/bin の 3.9 に落ちるのを防ぐ。
+    """
+    out = plist_mod.build_plist(
+        plugin_root="/p/evolve-anything",
+        data_dir="/d",
+        python_exe="/opt/homebrew/opt/python@3.14/bin/python3.14",
+    )
+    assert "<key>PATH</key>" in out
+    # python の dir が先頭、system パスが後続
+    assert "/opt/homebrew/opt/python@3.14/bin:/usr/bin:/bin:/usr/sbin:/sbin" in out
+
+
+def test_build_plist_appends_extra_path_dirs_for_child_tools():
+    """extra_path_dirs（gh 等の子ツール dir）が python dir の後・system パスの前に入る（#196）。
+
+    launchd の最小 PATH には /opt/homebrew/bin が無く、icebox 集計（#194）の gh が
+    FileNotFoundError で恒久 fail-open になる。install 時に検出した gh の dir を焼き込む。
+    """
+    out = plist_mod.build_plist(
+        plugin_root="/p/evolve-anything",
+        data_dir="/d",
+        python_exe="/opt/homebrew/opt/python@3.14/bin/python3.14",
+        extra_path_dirs=("/opt/homebrew/bin",),
+    )
+    assert (
+        "/opt/homebrew/opt/python@3.14/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        in out
+    )
+
+
+def test_build_plist_dedupes_extra_path_dirs():
+    """extra dir が python dir と同一なら重複させない。"""
+    out = plist_mod.build_plist(
+        plugin_root="/p/evolve-anything",
+        data_dir="/d",
+        python_exe="/opt/homebrew/bin/python3.14",
+        extra_path_dirs=("/opt/homebrew/bin",),
+    )
+    assert "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" in out
+    assert "/opt/homebrew/bin:/opt/homebrew/bin" not in out
+
+
+def test_build_plist_env_includes_claude_plugin_data():
+    """CLAUDE_PLUGIN_DATA が EnvironmentVariables に残る（env_entries ループ化後の回帰ガード）。"""
+    out = plist_mod.build_plist(plugin_root="/p/evolve-anything", data_dir="/d & e")
+    assert "<key>CLAUDE_PLUGIN_DATA</key>" in out
+    assert "<string>/d &amp; e</string>" in out
+
+
+def test_build_plist_bare_python_exe_does_not_inject_empty_path_segment():
+    """bare 名の python_exe（dirname が空）で PATH に空セグメントを作らない。
+
+    POSIX の PATH 空エントリはカレントディレクトリを意味し、launchd ジョブの CWD に置かれた
+    同名バイナリが優先実行される PATH インジェクションになるため、plist に焼き込まない。
+    現行の install() は常に絶対パス（sys.executable）を渡すが、build_plist は public 関数
+    なので将来の呼び出し元に対するガード。
+    """
+    out = plist_mod.build_plist(
+        plugin_root="/p/evolve-anything", data_dir="/d", python_exe="python3.14"
+    )
+    assert "<key>PATH</key>" not in out
+
+    out = plist_mod.build_plist(
+        plugin_root="/p/evolve-anything",
+        data_dir="/d",
+        python_exe="python3.14",
+        extra_path_dirs=("/opt/homebrew/bin",),
+    )
+    assert "<string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>" in out
+
+
+def test_build_plist_extra_path_dirs_without_python_exe():
+    """extra_path_dirs は python_exe 無しでも silent drop されず PATH に入る。"""
+    out = plist_mod.build_plist(
+        plugin_root="/p/evolve-anything", data_dir="/d", extra_path_dirs=("/opt/homebrew/bin",)
+    )
+    assert "<string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>" in out
+
+
+def test_build_plist_dedupes_system_dirs_in_extra():
+    """extra_path_dirs が末尾 system パスと同一なら重複させない。"""
+    out = plist_mod.build_plist(
+        plugin_root="/p/evolve-anything",
+        data_dir="/d",
+        python_exe="/opt/homebrew/bin/python3.14",
+        extra_path_dirs=("/usr/bin",),
+    )
+    assert "<string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>" in out
+
+
 def test_build_plist_omits_python_exe_by_default():
-    """python_exe 省略時は ProgramArguments が runner のみ（後方互換）。"""
+    """python_exe 省略時は ProgramArguments が runner のみ・PATH 無し（後方互換）。"""
     out = plist_mod.build_plist(plugin_root="/p/evolve-anything", data_dir="/d")
     runner = "/p/evolve-anything/bin/evolve-daily-run"
     # ProgramArguments の array に runner だけ入る
     array = out.split("<key>ProgramArguments</key>", 1)[1].split("</array>", 1)[0]
     assert f"<string>{runner}</string>" in array
     assert array.count("<string>") == 1
+    # python_exe も extra_path_dirs も無しなら PATH 注入もしない
+    assert "<key>PATH</key>" not in out
 
 
 def test_plist_path_under_launchagents():
