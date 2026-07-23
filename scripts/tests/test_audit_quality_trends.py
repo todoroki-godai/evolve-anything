@@ -305,6 +305,147 @@ def test_memory_health_codeblock_excluded(tmp_path):
     assert lines == []
 
 
+def test_memory_health_slash_enumeration_not_stale(tmp_path):
+    """#252: `A.md/B.md/C.md` のようなスラッシュ区切り列挙を1つのネストパスと誤読しない。
+
+    地の文の並列列挙表現は実在ファイルの列挙であり、
+    `project_dir/A.md/B.md/C.md` という単一ネストパスとして不在誤判定してはならない。
+    """
+    from audit import build_memory_health_section
+
+    (tmp_path / "A.md").write_text("a", encoding="utf-8")
+    (tmp_path / "B.md").write_text("b", encoding="utf-8")
+    (tmp_path / "C.md").write_text("c", encoding="utf-8")
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- 既存の A.md/B.md/C.md を修正済み\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" not in text
+
+
+def test_memory_health_slash_enumeration_partial_missing(tmp_path):
+    """#252: 列挙中の一部が本当に不在なら、その項目だけ Stale として検出する。"""
+    from audit import build_memory_health_section
+
+    (tmp_path / "A.md").write_text("a", encoding="utf-8")
+    (tmp_path / "C.md").write_text("c", encoding="utf-8")
+    # B.md は作らない（本当に不在）
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- 既存の A.md/B.md/C.md を修正済み\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" in text
+    assert '"B.md" not found on disk' in text
+    assert '"A.md" not found on disk' not in text
+    assert '"C.md" not found on disk' not in text
+
+
+def test_memory_health_slash_enumeration_all_missing_suppressed(tmp_path):
+    """#252 較正: 列挙内の全セグメントが不在なら非ファイル列挙とみなしノイズ除外する。
+
+    実コーパス較正で "episodic.db/sessions.db/token_usage.db" のような、実ファイルへの
+    参照ではなく DB ストア名を説明的に並べた地の文が見つかった。これらは project_dir にも
+    参照元ファイルの隣接にも実在しないため、列挙内の全セグメントが不在＝ファイル列挙で
+    ある証拠が無いと判断し、旧来の非ファイル列挙ノイズ除外（top_dir フィルタ）と同様に
+    stale として検出しない（少なくとも1セグメントが実在する場合のみ #252 の列挙展開を
+    適用する）。
+    """
+    from audit import build_memory_health_section
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text(
+        "# Memory\n\n"
+        "- `evolve --dry-run` が episodic.db/sessions.db/token_usage.db の byte を書き換えていた\n"
+    )
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" not in text
+
+
+def test_memory_health_slash_enumeration_real_directory_prefix_not_enumeration(tmp_path):
+    """#252 round2: 先頭セグメントが実ディレクトリならネストパスとして扱い列挙化しない。
+
+    "config.d/rules.json" は "config.d" が拡張子付きに見えるが実際は実在ディレクトリ。
+    列挙として分解し project_dir 直下の同名ファイル "rules.json" を誤って個別確認して
+    はならず（別ファイルの偶然の存在で握りつぶされる）、ネストパス "config.d/rules.json"
+    自体が不在として検出されるべき。
+    """
+    from audit import build_memory_health_section
+
+    (tmp_path / "config.d").mkdir()
+    # config.d/rules.json は作らない（真に不在）。project_dir 直下には同名の別ファイルが
+    # 存在する（列挙誤判定だと "rules.json" セグメントがこちらにマッチし握りつぶされる罠）
+    (tmp_path / "rules.json").write_text("{}", encoding="utf-8")
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- config.d/rules.json を確認\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" in text
+    assert '"config.d/rules.json" not found on disk' in text
+
+
+def test_memory_health_slash_enumeration_minority_exists_suppressed(tmp_path):
+    """#252 round2: 3件中1件だけ実在する列挙は過半数未満のため非ファイル列挙とみなし抑制する。
+
+    偶然の同名ファイル1件だけで残り2件を stale FP 化しないための境界テスト。
+    """
+    from audit import build_memory_health_section
+
+    (tmp_path / "A.md").write_text("a", encoding="utf-8")
+    # B.md, C.md は作らない
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- 既存の A.md/B.md/C.md を修正済み\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" not in text
+
+
+def test_memory_health_slash_enumeration_majority_exists_detects_missing(tmp_path):
+    """#252 round2: 3件中2件実在する列挙は過半数を満たすため欠損1件のみ検出する。"""
+    from audit import build_memory_health_section
+
+    (tmp_path / "A.md").write_text("a", encoding="utf-8")
+    (tmp_path / "B.md").write_text("b", encoding="utf-8")
+    # C.md は作らない
+
+    mem_file = tmp_path / "MEMORY.md"
+    mem_file.write_text("# Memory\n\n- 既存の A.md/B.md/C.md を修正済み\n")
+
+    artifacts = {"memory": [mem_file]}
+    with patch("audit.read_auto_memory", return_value=[]):
+        lines = build_memory_health_section(artifacts, tmp_path)
+
+    text = "\n".join(lines)
+    assert "Stale References" in text
+    assert '"C.md" not found on disk' in text
+    assert '"A.md" not found on disk' not in text
+    assert '"B.md" not found on disk' not in text
+
+
 def test_memory_health_split_suggestion(tmp_path):
     """Near Limit 時に Suggestions にトピックファイル分割が含まれる。"""
     from audit import build_memory_health_section

@@ -69,3 +69,60 @@ def test_prev_action_summary_truncates():
 def test_prev_action_summary_none():
     assert r.prev_action_summary(None) == ""
     assert r.prev_action_summary("") == ""
+
+
+# ── trim_to_idiom_sentence: 複数トピック混在発言のトリム（#253） ──────────────
+def test_trim_to_idiom_sentence_multi_topic_sentence_split():
+    # 「。」区切りの複数トピックのうち idiom が含まれるセンテンスだけ残す。
+    text = "字幕がずれてるので直して。あと、レポート表示の形式も変えてほしいんだけど"
+    idiom = "字幕がずれてる"
+    assert r.trim_to_idiom_sentence(text, idiom) == "字幕がずれてるので直して。"
+
+
+def test_trim_to_idiom_sentence_multi_topic_comma_shift_split():
+    # 句点が無くても「、あと」等の話題転換語で分割する。
+    text = "字幕がずれてるから直して、あとレポート表示の形式も変えて"
+    idiom = "字幕がずれてる"
+    assert r.trim_to_idiom_sentence(text, idiom) == "字幕がずれてるから直して"
+
+
+def test_trim_to_idiom_sentence_single_topic_unchanged():
+    text = "字幕がずれてるので直して"
+    assert r.trim_to_idiom_sentence(text, "字幕がずれてる") == text
+
+
+def test_trim_to_idiom_sentence_no_idiom_returns_full_text():
+    text = "字幕がずれてるので直して。あと、レポート表示の形式も変えてほしいんだけど"
+    assert r.trim_to_idiom_sentence(text, None) == text
+    assert r.trim_to_idiom_sentence(text, "") == text
+
+
+def test_trim_to_idiom_sentence_idiom_not_found_returns_full_text():
+    # idiom が本文どこにも見つからない（Haiku の言い換え等）→ 安全側で全文を返す。
+    text = "字幕がずれてるので直して。あと、レポート表示の形式も変えてほしいんだけど"
+    assert r.trim_to_idiom_sentence(text, "存在しない言い回し") == text
+
+
+def test_trim_to_idiom_sentence_ambiguous_multi_match_returns_full_text():
+    # idiom が複数トピックのセグメントに同時マッチ（曖昧）→ 安全側で全文を返す。
+    text = "直してほしい。あとこれも直してほしいんだけど"
+    assert r.trim_to_idiom_sentence(text, "直してほしい") == text
+
+
+def test_trim_to_idiom_sentence_empty_text():
+    assert r.trim_to_idiom_sentence("", "何か") == ""
+    assert r.trim_to_idiom_sentence(None, "何か") == ""
+
+
+# ── ROUND2 回帰: 話題転換語が無い単一トピックは句点/疑問符だけでは絶対にトリムしない ──
+def test_trim_to_idiom_sentence_single_topic_multi_sentence_period_unchanged():
+    # 「字幕がずれています。タイムコードを基準に直してください。」は句点区切りの
+    # 2文だが単一トピック（指摘＋修正手段）。話題転換語が無いのでトリムしない。
+    text = "字幕がずれています。タイムコードを基準に直してください。"
+    assert r.trim_to_idiom_sentence(text, "字幕がずれています") == text
+
+
+def test_trim_to_idiom_sentence_single_topic_question_mark_unchanged():
+    # 疑問符区切りの複数文も話題転換語が無ければトリムしない。
+    text = "字幕は本当にずれていますか？至急確認してください"
+    assert r.trim_to_idiom_sentence(text, "ずれていますか") == text
