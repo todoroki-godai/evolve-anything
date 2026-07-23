@@ -12,6 +12,10 @@ if TYPE_CHECKING:
     from . import FleetRow
 
 from . import STATUS_ENABLED, STATUS_NOT_ENABLED
+from .codex_usage import CODEX_STATUS_LOCKED, CODEX_STATUS_OK
+
+if TYPE_CHECKING:
+    from .codex_usage import CodexUsageResult
 
 _TABLE_HEADERS = ["PJ", "STATUS", "SCORE", "LV", "PHASE", "LAST_AUDIT", "AUDIT", "ISSUES", "SUBAGENTS_30d", "TOKENS_30d", "CACHE_HIT", "REUSE"]
 
@@ -388,4 +392,47 @@ def format_queue_table(result: dict) -> str:
     _append_untracked(lines, result)
     _append_skipped_phantom(lines, result)
     _append_unattributed(lines, result)
+    return "\n".join(lines) + "\n"
+
+
+# --- codex CLI 利用状況 advisory セクション（#245） --------------------------
+
+
+def format_codex_usage_section(result: "CodexUsageResult", now: datetime | None = None) -> str:
+    """codex CLI (`~/.codex/state_5.sqlite`) 利用状況を advisory 表示する（#245）。
+
+    - status=missing（codex 未導入）/ schema_mismatch（スキーマ相違）→ 空文字列（無音）
+    - status=ok かつ by_project 空（sessions 0）→ 空文字列（無音、既存表示を壊さない）
+    - status=locked（open/query 失敗）→ 警告 1 行のみ（fail-open）
+    - status=ok かつ by_project あり → PJ 別サマリ + CC 側 token_usage と合算していない旨の注記
+
+    ``by_project`` の中身は collector 側でも防御済みだが、advisory セクションが
+    本体の status/tokens 表示を巻き添えで落とすことは絶対に避けたいため、整形処理
+    全体を broad except で包み、失敗時は空文字列を返す（#245 レビュー指摘）。
+    """
+    try:
+        return _format_codex_usage_section_impl(result, now)
+    except Exception:  # noqa: BLE001 - advisory 経路: 整形失敗で本体表示を落とさない
+        return ""
+
+
+def _format_codex_usage_section_impl(result: "CodexUsageResult", now: datetime | None) -> str:
+    if result.status == CODEX_STATUS_LOCKED:
+        return f"[fleet] codex 利用状況の取得に失敗しました（{result.error}）— スキップします\n"
+    if result.status != CODEX_STATUS_OK or not result.by_project:
+        return ""
+
+    now = now or datetime.now(timezone.utc)
+    lines = ["", "## Codex CLI 利用状況（直近30日）"]
+    for slug, entry in sorted(
+        result.by_project.items(), key=lambda kv: -kv[1].get("tokens_used", 0)
+    ):
+        last = entry.get("last_used")
+        last_str = _format_relative(datetime.fromisoformat(last), now) if last else "—"
+        lines.append(
+            f"  {slug}\t{entry.get('sessions', 0)} sessions"
+            f"\t{_format_short_int(entry.get('tokens_used', 0))} tokens"
+            f"\tlast: {last_str}"
+        )
+    lines.append("（CC 側トークン集計とは合算していません — 累積値/単位が異なるため）")
     return "\n".join(lines) + "\n"

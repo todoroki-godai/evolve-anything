@@ -21,8 +21,9 @@ from .cli_pr import run_pr_start_command as _run_pr_start
 from .cli_propose import run_propose_command as _run_propose
 from .cli_purge import _run_purge
 from .cli_tokens import _inject_token_metrics, _run_tokens
+from .codex_usage import collect_codex_usage
 from .collectors import collect_fleet_status, detect_equal_issue_counts, write_fleet_run
-from .formatters import format_status_json, format_status_table
+from .formatters import format_codex_usage_section, format_status_json, format_status_table
 from .project_loader import enumerate_projects
 from .recall import format_hits, recall, reinforce_recall_hits
 
@@ -554,6 +555,8 @@ def _run_status(args) -> int:
             write_fleet_run(rows)
         return 0
     print(format_status_table(rows), end="")
+    # codex CLI 利用状況 advisory（#245・read-only・CC 側 token_usage とは合算しない）
+    print(format_codex_usage_section(collect_codex_usage()), end="")
     # 複数 PJ の ISSUES total が完全一致 = 検出パイプラインの測定バグの強シグナル（#419）
     for alarm in detect_equal_issue_counts(rows):
         pjs = ", ".join(alarm["projects"])

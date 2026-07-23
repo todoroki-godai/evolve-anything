@@ -3,6 +3,10 @@ AUDIT_CACHED = 'CACHED'
 AUDIT_ERROR = 'ERROR'
 AUDIT_OK = 'OK'
 AUDIT_TIMEOUT = 'TIMEOUT'
+CODEX_STATUS_LOCKED = 'locked'
+CODEX_STATUS_MISSING = 'missing'
+CODEX_STATUS_OK = 'ok'
+CODEX_STATUS_SCHEMA_MISMATCH = 'schema_mismatch'
 STATUS_ENABLED = 'ENABLED'
 STATUS_NOT_ENABLED = 'NOT_ENABLED'
 STATUS_STALE = 'STALE'
@@ -10,6 +14,7 @@ STATUS_STALE = 'STALE'
 # fleet public function / class signatures
 AccountMismatchError (no signature)
 AuditResult(status: 'str', env_score: 'float | None' = None, phase: 'str | None' = None, growth_level: 'int | None' = None, latest_audit: 'datetime | None' = None, message: 'str' = '', issues_summary: 'IssuesSummary | None' = None) -> None
+CodexUsageResult(by_project: 'dict[str, dict]' = <factory>, status: 'str' = 'ok', error: 'str | None' = None) -> None
 Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False, links: 'list[str]' = <factory>, is_stale: 'bool' = False, is_superseded: 'bool' = False) -> None
 FleetRow(pj_name: 'str', status: 'str', env_score: 'float | None' = None, growth_level: 'int | None' = None, phase: 'str | None' = None, latest_audit: 'datetime | None' = None, audit_status: 'str' = 'OK', message: 'str' = '', issues_summary: 'IssuesSummary | None' = None, subagents_30d: 'int' = 0, tokens_30d: 'int | None' = None, cache_hit_pct: 'float | None' = None, cache_reuse_factor: 'float | None' = None) -> None
 GitCommandError(cmd: 'List[str]', returncode: 'int', stderr: 'str')
@@ -26,6 +31,7 @@ build_pr_body(entry: 'Dict[str, Any]', *, report: 'Dict[str, Any]', diff_stat_te
 build_pr_title(pj_slug: 'str', date_str: 'str') -> 'str'
 build_queue_result(*, pj_slugs: 'List[str]', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', last_evolve_map: 'Dict[str, str]', activity_map: 'Dict[str, Dict[str, int]]', generated_at: 'str', pj_paths: 'Optional[Dict[str, str]]' = None, material_slugs: 'Optional[List[str]]' = None, untracked_dir_map: 'Optional[Dict[str, str]]' = None) -> 'Dict[str, Any]'
 classify_project(pj_path: 'Path', settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, stale_days: 'int' = 30, now: 'datetime | None' = None) -> 'str'
+collect_codex_usage(db_path: 'Path | None' = None, *, window_days: 'int' = 30, now: 'datetime | None' = None) -> 'CodexUsageResult'
 collect_fleet_status(root: 'Path | None' = None, settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, data_dir: 'Path | None' = None, timeout: 'float' = 30.0, max_workers: 'int' = 2, projects: 'list[Path] | None' = None) -> 'list[FleetRow]'
 collect_phantom_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]') -> 'List[Dict[str, Any]]'
 collect_untracked_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]') -> 'List[Dict[str, Any]]'
@@ -46,6 +52,7 @@ find_existing_worktrees(project_path: 'Path') -> 'List[Path]'
 find_latest_proposals_json(data_dir: 'Path') -> 'Optional[Path]'
 find_pj_entry(report: 'Dict[str, Any]', pj_slug: 'str') -> 'Optional[Dict[str, Any]]'
 fold_activity_counts(slug: 'str', subagent_counts: 'Dict[str, int]', session_counts: 'Dict[str, int]') -> 'Dict[str, int]'
+format_codex_usage_section(result: "'CodexUsageResult'", now: 'datetime | None' = None) -> 'str'
 format_cost_confirmation(cost: 'Dict[str, Any]') -> 'str'
 format_hits(hits: 'list[RecallHit]', *, as_json: 'bool') -> 'str'
 format_status_json(rows: 'list[FleetRow]') -> 'str'
