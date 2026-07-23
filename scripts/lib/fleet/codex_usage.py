@@ -14,6 +14,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 _DEFAULT_CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 
@@ -52,19 +53,34 @@ def collect_codex_usage(
         now: 基準時刻（テスト注入用）。
 
     書込は一切行わない（``file:...?mode=ro`` URI で open）。例外は握り潰し、
-    ``CodexUsageResult.status`` で呼び出し側に degrade 理由を伝える。
+    ``CodexUsageResult.status`` で呼び出し側に degrade 理由を伝える。予期しない
+    例外（行の型不正・環境差異等）で fleet CLI 全体を落とさないよう、集計本体を
+    broad except で包み ``CODEX_STATUS_LOCKED`` に fail-open する（保険の二段防御、
+    #245 レビュー指摘）。
     """
     db_path = db_path or _DEFAULT_CODEX_STATE_DB
     if not db_path.is_file():
         return CodexUsageResult(status=CODEX_STATUS_MISSING)
 
+    try:
+        return _collect_codex_usage_impl(db_path, window_days=window_days, now=now)
+    except Exception as e:  # noqa: BLE001 - advisory 経路: 未知の例外で fleet 全体を落とさない保険
+        return CodexUsageResult(status=CODEX_STATUS_LOCKED, error=str(e))
+
+
+def _collect_codex_usage_impl(
+    db_path: Path,
+    *,
+    window_days: int,
+    now: datetime | None,
+) -> CodexUsageResult:
     now = now or datetime.now(timezone.utc)
     cutoff_ms = int((now - timedelta(days=window_days)).timestamp() * 1000)
 
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.Error as e:
-        return CodexUsageResult(status=CODEX_STATUS_LOCKED, error=str(e))
+    # パスに `?`/`#` 等 URI 予約文字が含まれると mode=ro クエリの解釈が壊れるため
+    # quote() でエンコードしてから file: URI を組み立てる（#245 レビュー指摘）。
+    uri = f"file:{quote(str(db_path))}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
 
     try:
         try:
@@ -78,10 +94,7 @@ def collect_codex_usage(
             msg = str(e).lower()
             if any(marker in msg for marker in _SCHEMA_MISMATCH_MARKERS):
                 return CodexUsageResult(status=CODEX_STATUS_SCHEMA_MISMATCH, error=str(e))
-            return CodexUsageResult(status=CODEX_STATUS_LOCKED, error=str(e))
-        except sqlite3.DatabaseError as e:
-            # 破損ファイル等（"file is not a database" 等）も open 失敗と同様に fail-open
-            return CodexUsageResult(status=CODEX_STATUS_LOCKED, error=str(e))
+            raise  # 呼び出し元 collect_codex_usage の broad except で LOCKED に fail-open
     finally:
         conn.close()
 
@@ -94,19 +107,29 @@ def collect_codex_usage(
     by_project: dict[str, dict] = {}
     last_ms: dict[str, int] = {}
     for cwd, tokens_used, ts_ms in rows:
-        if not cwd:
-            continue
-        slug = _normalize_pj(cwd)
-        if not slug:
-            continue
-        entry = by_project.setdefault(slug, {"sessions": 0, "tokens_used": 0, "last_used": None})
-        entry["sessions"] += 1
-        entry["tokens_used"] += int(tokens_used or 0)
-        ts = int(ts_ms or 0)
-        if ts > last_ms.get(slug, 0):
-            last_ms[slug] = ts
-            entry["last_used"] = (
+        # SQLite は INTEGER 宣言列にも任意型を保存できる（動的型付け）ため、
+        # 1 行の型不正（tokens_used が文字列・ts_ms が巨大値等）が集計全体を
+        # 落とさないよう行単位で防御する（#245 レビュー指摘）。値の変換を先に
+        # 全て済ませてから state を更新する（例外発生時に部分更新を残さない）。
+        try:
+            if not cwd:
+                continue
+            slug = _normalize_pj(cwd)
+            if not slug:
+                continue
+            session_tokens = int(tokens_used or 0)
+            ts = int(ts_ms or 0)
+            last_used_str = (
                 datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat() if ts else None
             )
+        except Exception:  # noqa: BLE001 - 型不正行のみ skip、他行の集計は継続
+            continue
+
+        entry = by_project.setdefault(slug, {"sessions": 0, "tokens_used": 0, "last_used": None})
+        entry["sessions"] += 1
+        entry["tokens_used"] += session_tokens
+        if ts > last_ms.get(slug, 0):
+            last_ms[slug] = ts
+            entry["last_used"] = last_used_str
 
     return CodexUsageResult(by_project=by_project)
