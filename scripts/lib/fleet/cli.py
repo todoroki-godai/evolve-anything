@@ -19,9 +19,11 @@ from . import (
 from .cli_pr import run_pr_finish_command as _run_pr_finish
 from .cli_pr import run_pr_start_command as _run_pr_start
 from .cli_propose import run_propose_command as _run_propose
+from .cli_purge import _run_purge
 from .cli_tokens import _inject_token_metrics, _run_tokens
+from .codex_usage import collect_codex_usage
 from .collectors import collect_fleet_status, detect_equal_issue_counts, write_fleet_run
-from .formatters import format_status_json, format_status_table
+from .formatters import format_codex_usage_section, format_status_json, format_status_table
 from .project_loader import enumerate_projects
 from .recall import format_hits, recall, reinforce_recall_hits
 
@@ -112,6 +114,16 @@ def main(argv: list[str] | None = None) -> int:
                           help="実書込（既定は dry-run = 1バイトも書かず正規化予定件数だけ表示）")
     pjslug_p.add_argument("--data-dir", type=Path, default=None,
                           help="対象 DATA_DIR（default: ~/.claude/evolve-anything）。他の CC セッションを閉じた idle 時の --apply を推奨")
+
+    purge_p = sub.add_parser(
+        "purge-corrections",
+        help="pending auto_memory_queue から project スコープ不一致 correction を検出・除去（#206 運用対応）",
+    )
+    purge_p.add_argument("--apply", action="store_true",
+                         help="実書込（既定は dry-run = 1バイトも書かず検出結果だけ表示）")
+    purge_p.add_argument("--data-dir", type=Path, default=None,
+                         help="対象 DATA_DIR（default: ~/.claude/evolve-anything）")
+    purge_p.add_argument("--json", action="store_true", help="JSON 出力")
 
     uttr_p = sub.add_parser(
         "ingest",
@@ -209,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_migrate_data(args)
     if args.command == "migrate-pj-slug":
         return _run_migrate_pj_slug(args)
+    if args.command == "purge-corrections":
+        return _run_purge(args)
     if args.command == "queue":
         return _run_queue(args)
     if args.command == "propose":
@@ -541,6 +555,8 @@ def _run_status(args) -> int:
             write_fleet_run(rows)
         return 0
     print(format_status_table(rows), end="")
+    # codex CLI 利用状況 advisory（#245・read-only・CC 側 token_usage とは合算しない）
+    print(format_codex_usage_section(collect_codex_usage()), end="")
     # 複数 PJ の ISSUES total が完全一致 = 検出パイプラインの測定バグの強シグナル（#419）
     for alarm in detect_equal_issue_counts(rows):
         pjs = ", ".join(alarm["projects"])

@@ -291,7 +291,12 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "してからやり直したかを記録する。親セッションの error_count しか見ない既存 outcome "
         "帰属の盲点（内部 error 連発でも最終成功なら一発成功と誤記録）を塞ぐ。agent_id 単位 "
         "last-append-wins・pj_slug スコープ。writer は batch ingest のみ（hook-writer stale "
-        "突合から writer_locus=batch で除外）。",
+        "突合から writer_locus=batch で除外）。#200: 委任内容を事後監査可能にするため "
+        "delegation_prompt（委任プロンプト先頭300字、300字超は truncate 後 \"…\" 付与）も "
+        "併せて保存する。retention=permanent のため、subagent transcript 本体が掃除で消えた "
+        "後も delegation_prompt の一部（先頭300字）は恒久的に平文で残り続ける＝transcript "
+        "削除後もこの分だけ露出期間が延びる。300字の上限は恣意的な数値ではなく、この露出を "
+        "抑えるための設計上の妥協（tacchi レビュー指摘・#200）。",
     ),
     StoreDeclaration(
         name="judge_audit_verdicts.jsonl",

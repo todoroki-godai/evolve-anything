@@ -405,14 +405,49 @@ def safe_global_check(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
     return candidates
 
 
+_RULES_DUPLICATE_TRIAGE_NOTE = (
+    "これは lexical 類似であり実重複とは限らない。"
+    "両ファイルを読み、指示内容の重複を確認してから merge を判断してください。"
+)
+
+
+def _is_rule_path(path: str) -> bool:
+    """rules ファイルかどうかを判定する（親ディレクトリ名が ``rules``）。
+
+    find_artifacts() は rules を常に ``<claude_dir>/rules/*.md`` から収集するため、
+    親ディレクトリ名での判定で project/global 両方を一意に判別できる。
+    """
+    return bool(path) and Path(path).parent.name == "rules"
+
+
+def _annotate_duplicate_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
+    """duplicate_candidates の1件に ``kind`` / ``triage_note`` を付与する（#226）。
+
+    skills 同士のペアには既存の Merge サブフロー（merge_duplicates）という消費者が
+    あるが、rules 同士のペアには何もなく、類似度スコアだけが提示されると
+    lexical 類似（同じツール名等への言及）を実重複と誤認しかねない
+    （0.92 類似だが非重複だった実例）。rules 同士のペアにのみ、両ファイルを読んで
+    指示内容の重複を確認してから判断すべきという triage ガイダンスを添える。
+    検出のスコープ自体（閾値・対象）は変えない。
+    """
+    annotated = dict(item)
+    is_rules_pair = _is_rule_path(item.get("path_a", "")) and _is_rule_path(item.get("path_b", ""))
+    annotated["kind"] = "rules" if is_rules_pair else "skills"
+    if is_rules_pair:
+        annotated["triage_note"] = _RULES_DUPLICATE_TRIAGE_NOTE
+    return annotated
+
+
 def detect_duplicates(artifacts: Dict[str, List[Path]]) -> List[Dict[str, Any]]:
     """audit-report の重複検出結果（意味的類似度判定、閾値 80%）を利用する。
 
     audit.py の semantic_similarity_check() を再利用。
     plugin / global スキルは診断対象外のため事前に除外する。
+    rules 同士のペアには triage ガイダンス（``triage_note``）を添える（#226）。
     """
     from artifact_scope import filter_artifacts_to_target
-    return semantic_similarity_check(filter_artifacts_to_target(artifacts), threshold=0.80)
+    raw = semantic_similarity_check(filter_artifacts_to_target(artifacts), threshold=0.80)
+    return [_annotate_duplicate_candidate(item) for item in raw]
 
 
 def detect_retirement_candidates(

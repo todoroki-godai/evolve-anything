@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from rl_common import DATA_DIR
 from reflect_utils import read_all_memory_entries, read_auto_memory, split_memory_sections
-from path_extractor import extract_paths_outside_codeblocks as _extract_paths_outside_codeblocks, KNOWN_DIR_PREFIXES
+from path_extractor import (
+    extract_paths_outside_codeblocks as _extract_paths_outside_codeblocks,
+    split_enumeration_segments as _split_enumeration_segments,
+    KNOWN_DIR_PREFIXES,
+)
 from line_limit import NEAR_LIMIT_RATIO
 
 from ._constants import LIMITS, _STOPWORDS
@@ -289,6 +293,42 @@ def build_memory_health_section(
                     file_relative = path.parent / ref_path
                     if file_relative.exists():
                         continue
+
+                # スラッシュ区切りの並列列挙（例: "A.md/B.md/C.md"）を1つのネストパスと
+                # 誤読しない（#252）。
+                enum_segments = None if ref_path.startswith("/") else _split_enumeration_segments(ref_path)
+                if enum_segments is not None:
+                    # 実ディレクトリ優先（#252 round2）: 先頭セグメントが実在するディレクトリ
+                    # なら列挙ではなく通常のネストパス（例: "config.d/rules.json"）とみなし、
+                    # 列挙判定を取り消して以降の従来ロジックへフォールバックする。
+                    first_seg = enum_segments[0]
+                    if (project_dir / first_seg).is_dir() or (path.parent / first_seg).is_dir():
+                        enum_segments = None
+
+                if enum_segments is not None:
+                    segment_exists = [
+                        (project_dir / seg).exists() or (path.parent / seg).exists()
+                        for seg in enum_segments
+                    ]
+                    # 過半数ゲート（#252 round2）: 「≥1セグメント実在」だと偶然の同名ファイル
+                    # 1件（例: cache.db だけ実在）で残り全部を stale FP 化してしまう。
+                    # ceil(n/2) 以上のセグメントが実在する場合のみファイル列挙と判定し、
+                    # 満たさなければ DB ストア名の説明的言及等の非ファイル列挙とみなし
+                    # 列挙全体を旧来どおりノイズとして除外する（全セグメント不在の
+                    # 本物の列挙を見逃すのは実害の大きい偶然一致FPを避けるための
+                    # 意図したトレードオフ）。
+                    majority_needed = (len(enum_segments) + 1) // 2
+                    if sum(segment_exists) >= majority_needed:
+                        for seg, exists in zip(enum_segments, segment_exists):
+                            if exists:
+                                continue
+                            stale_refs.append({
+                                "file": str(path),
+                                "line": line_num,
+                                "path": seg,
+                            })
+                    continue
+
                 # トップレベルディレクトリがプロジェクトルートに存在しない場合は除外
                 if not ref_path.startswith("/"):
                     top_dir = ref_path.split("/")[0]

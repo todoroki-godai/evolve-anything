@@ -27,6 +27,27 @@ PITFALLS_HEADER = "| Source | Pattern | Score |\n|--------|---------|-------|\n"
 MAX_CONTEXT_PITFALLS_CHARS = 8000
 
 
+# ── scope 判定 ──────────────────────────────────────────────────────
+
+
+def detect_scope(target_path: Path) -> str:
+    """ターゲットスキルの scope を判定する。
+
+    #234 PR1 で optimize.py から移動（variant_generation.py が subprocess
+    経由でなく直接 import で使うため）。optimize.py は後方互換のため
+    re-export する。
+    """
+    resolved = target_path.resolve()
+    home = Path.home()
+    global_skills_dir = home / ".claude" / "skills"
+    if str(resolved).startswith(str(global_skills_dir) + os.sep):
+        return "global"
+    claude_dir = home / ".claude"
+    if str(resolved).startswith(str(claude_dir) + os.sep) and "/skills/" in str(resolved):
+        return "global"
+    return "project"
+
+
 # ── corrections / context 収集 ─────────────────────────────────────
 
 

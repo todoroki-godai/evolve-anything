@@ -83,3 +83,47 @@ class TestPartitionByScope:
     def test_empty(self):
         out = partition_proposable_by_scope([], origin_resolver=lambda p: "custom")
         assert out == {"custom": [], "global": []}
+
+
+class TestHookInstallBypassesScopeFolding:
+    """#225: hook インストール系アクション（type が `*_hook_candidate`）は impact_scope が
+    global でも scope-based な折り畳み（proposable_global の1行サマリ）を経由させず、
+    常に custom 側（個別承認レーン）へ合流させる。
+
+    hook install は ~/.claude 配下の共有設定を書き換える＝影響半径が最大の一方、
+    scope-based 折り畳みが「参考値・対応不要」として1行に潰してしまうと、生成された
+    スクリプト/diff の中身をユーザーが見ないまま承認されない/放置される逆転が起きる。
+    折り畳みは低リスク型（行数超過 advisory 等）専用に限定する。
+    """
+
+    def test_hook_candidate_global_scope_goes_to_custom(self):
+        """tool_usage_hook_candidate は impact_scope == "global" でも custom へ合流する。"""
+        items = [_issue("global", conf=0.75, file_="/home/x/.claude/hooks/check.py")]
+        items[0]["type"] = "tool_usage_hook_candidate"
+        out = partition_proposable_by_scope(items, origin_resolver=lambda p: "global")
+        assert len(out["custom"]) == 1
+        assert out["global"] == []
+
+    def test_low_risk_type_still_folds_to_global(self):
+        """line_limit_violation 等の低リスク型は従来どおり global へ折り畳まれる（回帰防止）。"""
+        items = [_issue("global", conf=0.75)]  # type == "line_limit_violation"（_issue の既定）
+        out = partition_proposable_by_scope(items, origin_resolver=lambda p: "global")
+        assert out["custom"] == []
+        assert len(out["global"]) == 1
+
+    def test_mixed_hook_and_low_risk_partition_independently(self):
+        hook_issue = _issue("global", conf=0.75, file_="/home/x/.claude/hooks/check.py")
+        hook_issue["type"] = "tool_usage_hook_candidate"
+        low_risk_issue = _issue("global", conf=0.75, file_="/home/x/.claude/rules/foo.md")
+        out = partition_proposable_by_scope(
+            [hook_issue, low_risk_issue], origin_resolver=lambda p: "global"
+        )
+        assert out["custom"] == [hook_issue]
+        assert out["global"] == [low_risk_issue]
+
+    def test_does_not_mutate_input(self):
+        hook_issue = _issue("global", conf=0.75, file_="/home/x/.claude/hooks/check.py")
+        hook_issue["type"] = "tool_usage_hook_candidate"
+        before = dict(hook_issue)
+        partition_proposable_by_scope([hook_issue], origin_resolver=lambda p: "global")
+        assert hook_issue == before

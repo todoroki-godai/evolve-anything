@@ -95,6 +95,39 @@ class TestMakeHookCandidateIssuesFromRuleViolations:
         assert issues[0]["source"] == "rule_violation_observed"
 
 
+class TestEnforcementHookScriptMultiwordMatching:
+    """#222: 生成された enforcement hook 自体が複数語 prohibited を
+    先頭語への縮約でなくトークン列 prefix 一致で判定すること。"""
+
+    @staticmethod
+    def _load_check_command(script_content):
+        namespace: dict = {}
+        exec(compile(script_content, "<generated-hook>", "exec"), namespace)  # noqa: S102
+        return namespace["check_command"]
+
+    def test_multiword_prohibited_matches_prefix_only(self):
+        violations = [
+            {
+                "pattern": "git checkout -b x",
+                "count": 30,
+                "violated_command": "git checkout -b",
+            },
+        ]
+        issues = make_hook_candidate_issues_from_rule_violations(violations)
+        check_command = self._load_check_command(issues[0]["detail"][HOOK_SCRIPT_CONTENT])
+        assert check_command("git status") is None
+        assert check_command("git checkout -b feature/x") is not None
+
+    def test_single_word_prohibited_still_blocks_all_invocations(self):
+        violations = [
+            {"pattern": "cd a", "count": 626, "violated_command": "cd"},
+        ]
+        issues = make_hook_candidate_issues_from_rule_violations(violations)
+        check_command = self._load_check_command(issues[0]["detail"][HOOK_SCRIPT_CONTENT])
+        assert check_command("cd foo") is not None
+        assert check_command("git status") is None
+
+
 class TestPromotedIssueLandsInRemediationProposable:
     """昇格した issue が remediation 分類で proposable に乗ることを確認する（#585 の眼目）。
 

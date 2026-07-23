@@ -44,6 +44,7 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 from llm_broker import build_requests, parse_responses, passthrough  # noqa: E402
+from pj_slug import record_project_match  # noqa: E402
 
 # 生成後ゲート（belief_entropy）— オプショナル import
 try:
@@ -229,6 +230,12 @@ def enqueue(corrections: List[dict], slug: str, data_dir: Path) -> bool:
     既存 rule slug を再掲するだけのリマインダを除外する。除外後に空になった場合は
     enqueue せず False を返す。
 
+    project スコープ不一致 reject（#206・多層防御の最終防衛ライン）: 各 correction を
+    `record_project_match(c, slug)` で検査し、他 PJ の project_path を持つ correction
+    （呼び出し元の読み出しフィルタをすり抜けた場合の最終防衛）を除外する。silent drop に
+    せず、reject 件数を stderr に出力して可視化する（memory_guard の warn/reject print と
+    同じ観測パターン）。除外後に空になった場合は enqueue せず False を返す。
+
     キューの未消化 dedup_key を best-effort で読み、同 key が既存なら enqueue を
     スキップして False を返す。新規なら record を append("a") して True を返す。
 
@@ -242,6 +249,19 @@ def enqueue(corrections: List[dict], slug: str, data_dir: Path) -> bool:
     if not filtered_corrections:
         return False  # 全件が rule citation → enqueue しない
     corrections = filtered_corrections
+
+    # project スコープ不一致 reject（#206）
+    scope_ok = [c for c in corrections if record_project_match(c, slug)]
+    n_rejected = len(corrections) - len(scope_ok)
+    if n_rejected:
+        print(
+            f"[evolve-anything:auto-memory] project scope mismatch: "
+            f"{n_rejected} correction(s) excluded (slug={slug})",
+            file=sys.stderr,
+        )
+    if not scope_ok:
+        return False  # 全件が他 PJ スコープ → enqueue しない
+    corrections = scope_ok
 
     key = compute_dedup_key(corrections)
     existing_keys = {r.get("dedup_key") for r in read_queue(slug, data_dir)}

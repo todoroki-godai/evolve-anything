@@ -58,6 +58,41 @@ def test_install_pins_explicit_python_exe(fake_paths, monkeypatch):
     assert "<string>/opt/homebrew/bin/python3.14</string>" in body
 
 
+def test_install_adds_gh_dir_to_path(fake_paths, monkeypatch):
+    """install が shutil.which('gh') の dir を PATH に焼き込む（#196）。
+
+    launchd 実環境の最小 PATH に /opt/homebrew/bin が無く、icebox 集計（#194）の
+    gh 起動が FileNotFoundError で恒久 fail-open になる穴を install 時検出で塞ぐ。
+    """
+    tmp_path, plist = fake_paths
+    monkeypatch.setattr(inst, "_launchctl", lambda *a: 0)
+    monkeypatch.setattr(
+        inst.shutil, "which", lambda cmd: "/opt/homebrew/bin/gh" if cmd == "gh" else None
+    )
+    inst.install(
+        plugin_root="/p/evolve-anything",
+        data_dir=str(tmp_path / "data"),
+        python_exe="/opt/homebrew/opt/python@3.14/bin/python3.14",
+    )
+    body = plist.read_text(encoding="utf-8")
+    assert "/opt/homebrew/opt/python@3.14/bin:/opt/homebrew/bin:/usr/bin" in body
+
+
+def test_install_without_gh_still_installs(fake_paths, monkeypatch):
+    """gh 不在（which=None）でも install は成功し PATH は python dir のみ（fail-open 維持）。"""
+    tmp_path, plist = fake_paths
+    monkeypatch.setattr(inst, "_launchctl", lambda *a: 0)
+    monkeypatch.setattr(inst.shutil, "which", lambda cmd: None)
+    rc = inst.install(
+        plugin_root="/p/evolve-anything",
+        data_dir=str(tmp_path / "data"),
+        python_exe="/opt/homebrew/opt/python@3.14/bin/python3.14",
+    )
+    assert rc == 0
+    body = plist.read_text(encoding="utf-8")
+    assert "/opt/homebrew/opt/python@3.14/bin:/usr/bin:/bin:/usr/sbin:/sbin" in body
+
+
 def test_install_is_idempotent(fake_paths, monkeypatch):
     tmp_path, plist = fake_paths
     calls = []

@@ -6,6 +6,9 @@ install で lint hook はプラグインに同梱・配布されるが、各 PJ 
 
 レジストリは PJ 直下の `.claude/evolve-anything/pitfall-managed.json` に、project_dir からの
 相対パス（プロジェクト外は絶対パス）で保存する。LLM は呼ばない・決定論。
+
+読み出しは canonical → legacy（`.claude/rl-anything/pitfall-managed.json` 等、ツール名リネーム
+以前の旧パス）の順で探索する union フォールバック、書き込みは常に canonical のみ（#220）。
 """
 from __future__ import annotations
 
@@ -14,6 +17,12 @@ from pathlib import Path
 from typing import List, Union
 
 _REGISTRY_REL = ".claude/evolve-anything/pitfall-managed.json"
+
+# read 統一（#220）: ツール名リネーム（rl-anything → evolve-anything）の経緯があるプロジェクトでは、
+# pitfall-curate を有効化した時点の登録簿が旧パスに残ったまま migrate されていないことがある。
+# rl_common.DATA_DIR の「書込は canonical のみ・読出は canonical→legacy の union」という
+# 既存慣行（#45/#46）と同じパターンをこのプロジェクト相対レジストリにも適用する。
+_LEGACY_REGISTRY_RELS = (".claude/rl-anything/pitfall-managed.json",)
 
 # 探索時に降りない重いディレクトリ。pitfalls.md がここに紛れても監視対象ではない。
 # worktrees: `.claude/worktrees/<name>/...` は一時的な作業コピー（git worktree）であり、
@@ -29,7 +38,26 @@ PathLike = Union[str, Path]
 
 
 def _registry_path(project_dir: PathLike) -> Path:
+    """書き込み先の登録簿パス（常に canonical。#220: legacy は write 対象外）。"""
     return Path(project_dir) / _REGISTRY_REL
+
+
+def _resolve_read_registry_path(project_dir: PathLike) -> "Path | None":
+    """読み出し用の登録簿パスを canonical → legacy の順で探索し、最初に存在したものを返す。
+
+    どちらも存在しなければ None（#220: ツール名リネームで旧パスの登録簿が見落とされ、
+    evolve 側「未登録」警告と prune 側 git grep「登録済み」が矛盾する挙動の修正）。
+    """
+    pd = Path(project_dir)
+    candidates = [pd / _REGISTRY_REL]
+    candidates.extend(pd / rel for rel in _LEGACY_REGISTRY_RELS)
+    for c in candidates:
+        try:
+            if c.exists():
+                return c
+        except OSError:
+            continue
+    return None
 
 
 def _to_key(project_dir: PathLike, pitfalls_path: PathLike) -> str:
@@ -43,9 +71,12 @@ def _to_key(project_dir: PathLike, pitfalls_path: PathLike) -> str:
 
 
 def load_managed(project_dir: PathLike) -> List[str]:
-    """管理対象キーの一覧を返す。未登録/破損時は空（例外を投げない）。"""
-    p = _registry_path(project_dir)
-    if not p.exists():
+    """管理対象キーの一覧を返す。未登録/破損時は空（例外を投げない）。
+
+    canonical に見つからなければ legacy パスへフォールバックする（#220）。
+    """
+    p = _resolve_read_registry_path(project_dir)
+    if p is None:
         return []
     try:
         data = json.loads(p.read_text(encoding="utf-8"))

@@ -59,6 +59,18 @@ class TestExtractProhibitedCommandHeads:
         heads = extract_prohibited_command_heads([tmp_path / "nope"])
         assert heads == set()
 
+    def test_multiword_banned_command_is_not_collapsed_to_first_word(self, tmp_path):
+        """#222: `git checkout -b` のような複数語禁止コマンドは先頭語 `git` に
+        縮約せずトークン列全体を保持する。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "worktree.md").write_text(
+            "- `git checkout -b` は worktree ワークフロー外で禁止\n"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "git checkout -b" in heads
+        assert "git" not in heads
+
 
 class TestPartitionRuleViolations:
     def test_splits_prohibited_pattern_into_violation_lane(self):
@@ -92,3 +104,24 @@ class TestPartitionRuleViolations:
         out = partition_rule_violations([], prohibited_heads={"cd"})
         assert out["skill_candidates"] == []
         assert out["rule_violation_observed"] == []
+
+    def test_multiword_prohibited_command_does_not_match_unrelated_head(self):
+        """#222: 禁止指定が `git checkout -b` のとき、無関係な `git status` は
+        誤マッチしない（先頭語 `git` への縮約バグの再発防止）。"""
+        patterns = [
+            {"pattern": "git status", "count": 50, "examples": []},
+            {"pattern": "git checkout -b x", "count": 30, "examples": []},
+        ]
+        out = partition_rule_violations(patterns, prohibited_heads={"git checkout -b"})
+        assert [p["pattern"] for p in out["skill_candidates"]] == ["git status"]
+        assert len(out["rule_violation_observed"]) == 1
+        viol = out["rule_violation_observed"][0]
+        assert viol["pattern"] == "git checkout -b x"
+        assert viol["violated_command"] == "git checkout -b"
+
+    def test_single_word_prohibited_command_still_matches_head_as_before(self):
+        """単一語の禁止コマンド（例: `cd`）は従来通り head 一致で判定する。"""
+        patterns = [{"pattern": "cd foo", "count": 10, "examples": []}]
+        out = partition_rule_violations(patterns, prohibited_heads={"cd"})
+        assert len(out["rule_violation_observed"]) == 1
+        assert out["rule_violation_observed"][0]["violated_command"] == "cd"

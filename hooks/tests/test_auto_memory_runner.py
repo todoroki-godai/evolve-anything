@@ -236,3 +236,109 @@ def test_read_recent_corrections_fewer_than_5(tmp_data_dir):
 
     corrections = auto_memory_runner.read_recent_corrections(data_dir=tmp_data_dir)
     assert len(corrections) == 3
+
+
+# ─── Test 8: project スコープフィルタ（#206） ────────────────────────────────
+
+
+def _write_correction(
+    data_dir: Path, session_id: str, timestamp: str, project_path=None,
+) -> None:
+    """project_path 付き / なしの correction 1件を corrections.jsonl に追記する。"""
+    record = {
+        "session_id": session_id,
+        "timestamp": timestamp,
+        "original": f"original {session_id}",
+        "corrected": f"corrected {session_id}",
+    }
+    if project_path is not None:
+        record["project_path"] = project_path
+    corrections_file = data_dir / "corrections.jsonl"
+    with corrections_file.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def test_read_recent_corrections_excludes_other_project(tmp_data_dir):
+    """他 PJ の project_path を持つ correction は除外される。"""
+    for i in range(3):
+        _write_correction(
+            tmp_data_dir, f"sess-mine-{i}", f"2026-05-25T10:0{i}:00Z", project_path="myproject",
+        )
+    for i in range(3):
+        _write_correction(
+            tmp_data_dir, f"sess-other-{i}", f"2026-05-25T11:0{i}:00Z", project_path="otherproject",
+        )
+
+    corrections = auto_memory_runner.read_recent_corrections(data_dir=tmp_data_dir, slug="myproject")
+
+    assert len(corrections) == 3
+    assert all(c["project_path"] == "myproject" for c in corrections)
+
+
+def test_read_recent_corrections_includes_unattributed(tmp_data_dir):
+    """project_path 欠落（未帰属）の correction は寛容に含める。"""
+    _write_correction(tmp_data_dir, "sess-generic", "2026-05-25T10:00:00Z")
+
+    corrections = auto_memory_runner.read_recent_corrections(data_dir=tmp_data_dir, slug="myproject")
+
+    assert len(corrections) == 1
+    assert corrections[0]["session_id"] == "sess-generic"
+
+
+def test_read_recent_corrections_no_slug_keeps_legacy_behavior(tmp_data_dir):
+    """slug 未指定（既存呼び出し元）はフィルタ無し（後方互換）。"""
+    _write_correction(tmp_data_dir, "sess-a", "2026-05-25T10:00:00Z", project_path="pj-a")
+    _write_correction(tmp_data_dir, "sess-b", "2026-05-25T10:01:00Z", project_path="pj-b")
+
+    corrections = auto_memory_runner.read_recent_corrections(data_dir=tmp_data_dir)
+
+    assert len(corrections) == 2
+
+
+def test_read_recent_corrections_filters_before_slicing_tail(tmp_data_dir):
+    """フィルタ後に直近 N 件を取る: 他 PJ の割り込みで自 PJ 分が押し出されない。"""
+    for i in range(6):
+        _write_correction(
+            tmp_data_dir, f"sess-mine-{i}", f"2026-05-25T10:0{i}:00Z", project_path="myproject",
+        )
+    for i in range(3):
+        _write_correction(
+            tmp_data_dir, f"sess-other-{i}", f"2026-05-25T11:0{i}:00Z", project_path="otherproject",
+        )
+
+    corrections = auto_memory_runner.read_recent_corrections(data_dir=tmp_data_dir, slug="myproject")
+
+    assert len(corrections) == 5
+    assert all(c["project_path"] == "myproject" for c in corrections)
+    assert corrections[0]["session_id"] == "sess-mine-1"
+    assert corrections[-1]["session_id"] == "sess-mine-5"
+
+
+def test_load_all_corrections_excludes_other_project(tmp_data_dir):
+    """_load_all_corrections（ゲーティング窓）も同じフィルタを適用する。"""
+    for i in range(2):
+        _write_correction(
+            tmp_data_dir, f"sess-mine-{i}", f"2026-05-25T10:0{i}:00Z", project_path="myproject",
+        )
+    _write_correction(tmp_data_dir, "sess-other", "2026-05-25T10:05:00Z", project_path="otherproject")
+
+    all_corrections = auto_memory_runner._load_all_corrections(data_dir=tmp_data_dir, slug="myproject")
+
+    assert len(all_corrections) == 2
+    assert all(c["project_path"] == "myproject" for c in all_corrections)
+
+
+def test_run_excludes_other_project_from_enqueue(tmp_data_dir, tmp_memory_dir):
+    """E2E: 他 PJ の project_path を持つ correction は enqueue に混入しない（#206 本体）。"""
+    _write_correction(tmp_data_dir, "sess-mine-0", "2026-05-25T10:00:00Z", project_path="myproject")
+    _write_correction(tmp_data_dir, "sess-other-0", "2026-05-25T10:01:00Z", project_path="otherproject")
+
+    with mock.patch("auto_memory_runner.DATA_DIR", tmp_data_dir), \
+         mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        auto_memory_runner.run(data_dir=tmp_data_dir, slug="myproject", memory_dir=tmp_memory_dir)
+
+    records = auto_memory_broker.read_queue("myproject", tmp_data_dir)
+    assert len(records) == 1
+    corrections = records[0]["corrections"]
+    assert len(corrections) == 1
+    assert corrections[0]["session_id"] == "sess-mine-0"

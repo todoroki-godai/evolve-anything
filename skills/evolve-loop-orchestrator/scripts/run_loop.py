@@ -42,13 +42,20 @@ try:
 except ImportError:
     _run_subgoal_scoring = None  # type: ignore
 
-# --- パス設定 ---
-OPTIMIZER_SCRIPT = (
-    Path(__file__).parent.parent.parent
-    / "genetic-prompt-optimizer"
-    / "scripts"
-    / "optimize.py"
+# --- バリエーション生成（#234 PR1: optimize.py subprocess 呼び出しの配線drift修理） ---
+_own_scripts_dir = Path(__file__).parent
+if str(_own_scripts_dir) not in sys.path:
+    sys.path.insert(0, str(_own_scripts_dir))
+from variant_generation import generate_variants
+
+# --- 採用前再評価（#234 PR2: winner's curse 補正） ---
+from selection_reeval import (  # noqa: E402
+    run_selection_reeval_step,
+    build_reeval_fields,
+    format_reeval_tag,
 )
+
+# --- パス設定 ---
 DEFAULT_OUTPUT_DIR = Path.cwd() / ".evolve-loop"
 MAX_KEPT_RUNS = 10  # evolve-loop 結果の保持数
 SCORE_EPSILON = 0.05  # 採点ノイズ実測値（2σ ≈ 0.05）に基づく IMPROVED/REGRESSED 判定閾値
@@ -62,8 +69,6 @@ _plugin_root = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 from line_limit import check_line_limit as _check_line_limit
 from skill_evolve import assess_single_skill, evolve_skill_proposal, apply_evolve_proposal
-from score_noise import compute_stats, to_confidence_interval
-from scorer_schema import ConfidenceInterval
 import evolution_operators as _evolution_operators
 
 
@@ -177,47 +182,6 @@ def get_baseline_score(target_path: str, dry_run: bool = False) -> Dict[str, Any
     }
 
 
-def generate_variants(
-    target_path: str,
-    population: int = 3,
-    dry_run: bool = False,
-) -> Dict[str, Any]:
-    """直接パッチ最適化でバリエーションを生成"""
-    args = [
-        sys.executable,
-        str(OPTIMIZER_SCRIPT),
-        "--target", target_path,
-        "--generations", "1",
-        "--population", str(population),
-    ]
-    if dry_run:
-        args.append("--dry-run")
-
-    try:
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode == 0:
-            # optimizer の出力からラン結果を取得
-            # generations/ ディレクトリから最新のresult.jsonを読む
-            gen_dir = OPTIMIZER_SCRIPT.parent / "generations"
-            if gen_dir.exists():
-                run_dirs = sorted(gen_dir.iterdir(), reverse=True)
-                if run_dirs:
-                    result_file = run_dirs[0] / "result.json"
-                    if result_file.exists():
-                        return json.loads(
-                            result_file.read_text(encoding="utf-8")
-                        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    return {"error": "バリエーション生成に失敗"}
-
-
 # --- 3軸並列スコアリング ---
 from scorer_prompts import DEFAULT_AXIS_WEIGHTS as AXIS_WEIGHTS, get_axis_prompts
 
@@ -288,109 +252,6 @@ def score_variant(content: str, target_path: str, dry_run: bool = False) -> floa
 
     scores = _parallel_score(content)
     return scores["integrated"]
-
-
-# ─── ALSO: 攻撃者エージェント ───────────────────────────────────────────────
-
-
-def run_adversarial_agent(skill_content: str, evaluator_scores: list) -> str:
-    """攻撃者エージェント: スキルの弱点を探索する。
-
-    subprocess で `claude -p` を呼び出し、スキルの問題点を返す。
-    失敗した場合は空文字を返す（graceful degradation）。
-
-    Args:
-        skill_content: 評価対象のスキル内容
-        evaluator_scores: 評価者3人のスコアリスト
-
-    Returns:
-        攻撃者の指摘（失敗時は ""）
-    """
-    avg_score = sum(evaluator_scores) / len(evaluator_scores) if evaluator_scores else 0.5
-    prompt = (
-        f"あなたはスキル評価の攻撃者エージェントです。\n"
-        f"以下のスキル定義を批判的に分析し、弱点・改善点・潜在的な問題を指摘してください。\n"
-        f"評価者スコア平均: {avg_score:.2f}\n\n"
-        f"=== スキル内容 ===\n{skill_content}\n\n"
-        f"弱点と改善提案を簡潔に述べてください。"
-    )
-    try:
-        result = subprocess.run(
-            ["claude", "-p", "--output-format", "text"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return ""
-    except Exception:
-        return ""
-
-
-def compute_disagreement_score(scores: list) -> float:
-    """評価者間の不一致スコアを計算する（標準偏差を使用）。
-
-    score_noise.compute_stats() を使って std を取得する。
-
-    Returns:
-        0.0〜1.0 の不一致スコア（std をそのまま返す）
-    """
-    if len(scores) < 2:
-        return 0.0
-    stats = compute_stats(scores)
-    return stats["std"]
-
-
-def run_loop_with_adversarial(
-    skill_path: str,
-    n_evaluators: int = 3,
-    adversarial: bool = True,
-) -> dict:
-    """評価者×n + 攻撃者エージェントで評価ループを実行。
-
-    フロー:
-    1. 既存の score_variant() を n_evaluators 回呼ぶ（スコア収集）
-    2. compute_disagreement_score() で不一致スコアを計算
-    3. disagreement > 0.15 なら「評価者間で意見が割れています (disagreement={:.2f})」を print
-    4. adversarial=True なら run_adversarial_agent() を呼ぶ
-    5. to_confidence_interval() で ConfidenceInterval を生成して返す
-
-    Returns:
-        {"scores": [...], "disagreement": float, "ci": ConfidenceInterval, "adversarial_findings": str}
-    """
-    try:
-        skill_content = Path(skill_path).read_text(encoding="utf-8")
-    except FileNotFoundError:
-        skill_content = ""
-
-    scores = []
-    for i in range(n_evaluators):
-        s = score_variant(skill_content, skill_path)
-        scores.append(s)
-
-    disagreement = compute_disagreement_score(scores)
-
-    if disagreement > 0.15:
-        print(f"評価者間で意見が割れています (disagreement={disagreement:.2f})")
-
-    adversarial_findings = ""
-    if adversarial:
-        adversarial_findings = run_adversarial_agent(skill_content, scores)
-
-    stats = compute_stats(scores)
-    ci = to_confidence_interval(stats)
-
-    return {
-        "scores": scores,
-        "disagreement": disagreement,
-        "ci": ci,
-        "adversarial_findings": adversarial_findings,
-    }
-
-
-# ─── ALSO: ここまで ──────────────────────────────────────────────────────────
 
 
 def _try_evolve_skill(
@@ -533,6 +394,8 @@ def run_loop(
     output_dir: Optional[str] = None,
     evolve: bool = False,
     evolve_search: bool = False,
+    selection_reeval_enabled: bool = True,
+    selection_reeval_n: int = 3,
 ) -> List[Dict[str, Any]]:
     """メインループを実行"""
     results = []
@@ -555,6 +418,10 @@ def run_loop(
     print(f"自動モード: {auto}")
     print(f"dry-run: {dry_run}")
     print(f"出力先: {out_dir}")
+    if selection_reeval_enabled:
+        print(f"選定後再評価: 有効 (N={selection_reeval_n})")
+    else:
+        print("選定後再評価: 無効")
     print()
 
     # H_best 追跡: 常に最良ハーネスから進化する
@@ -614,21 +481,19 @@ def run_loop(
         # Step 3: 評価
         print("Step 3: バリエーション評価...")
         variants = []
-        history = optimizer_result.get("history", [])
-        if history:
-            last_gen = history[-1]
-            for ind in last_gen.get("individuals", []):
-                content = ind.get("content", "")
-                axes = _score_variant_axes(content, target_path, dry_run=dry_run)
-                score = axes.get("integrated", FALLBACK_SCORE)
-                variants.append({
-                    "id": ind.get("id", "unknown"),
-                    "score": score,
-                    "axes": axes,
-                    "content": content,
-                    "content_length": len(content),
-                })
-                print(f"  {ind.get('id', '?')}: スコア {score} (tech={axes.get('technical', '-'):.2f} dom={axes.get('domain', '-'):.2f} struct={axes.get('structure', '-'):.2f})")
+        candidates = optimizer_result.get("candidates", [])
+        for cand in candidates:
+            content = cand.get("content", "")
+            axes = _score_variant_axes(content, target_path, dry_run=dry_run)
+            score = axes.get("integrated", FALLBACK_SCORE)
+            variants.append({
+                "id": cand.get("id", "unknown"),
+                "score": score,
+                "axes": axes,
+                "content": content,
+                "content_length": len(content),
+            })
+            print(f"  {cand.get('id', '?')}: スコア {score} (tech={axes.get('technical', '-'):.2f} dom={axes.get('domain', '-'):.2f} struct={axes.get('structure', '-'):.2f})")
 
         if dry_run and variants:
             print("  注意: dry-run モードのスコアは実際の品質を反映しません", file=sys.stderr)
@@ -661,6 +526,16 @@ def run_loop(
                 pareto_ok = False
                 verdict = "STABLE"
                 print("  ⚠️  Pareto 非優越: 軸別劣化があるため STABLE に格下げ")
+
+        # Step 3.6: 採用前再評価（selection re-eval, winner's curse 補正 #234 PR2）。
+        # Pareto チェックの後に置く: 無駄な追加 LLM 呼び出しを避け、人間確認の
+        # 判断材料自体を補正済みの値にする（詳細は selection_reeval.py 参照）。
+        best, improvement, verdict, pre_reeval_score, reeval_result = run_selection_reeval_step(
+            best, target_path, global_best_score, global_best_axes, improvement, verdict,
+            selection_reeval_enabled, selection_reeval_n, SCORE_EPSILON, dry_run,
+            score_fn=_score_variant_axes, verdict_fn=_compute_verdict, dominates_fn=_dominates,
+        )
+
         print(f"\n  最良: {best['id']} (スコア {best['score']})")
         print(f"  ベースライン (H_best): {global_best_score}")
         print(f"  改善幅: {improvement:+.2f}  [{verdict}]")
@@ -739,6 +614,11 @@ def run_loop(
             "timestamp": datetime.now().isoformat(),
             "variants_count": len(variants),
         }
+        loop_result.update(
+            build_reeval_fields(
+                reeval_result, pre_reeval_score, selection_reeval_enabled, selection_reeval_n
+            )
+        )
         if evolve_result:
             loop_result["evolve_suitability"] = evolve_result["evolve_suitability"]
             loop_result["evolve_applied"] = evolve_result["evolve_applied"]
@@ -756,6 +636,7 @@ def run_loop(
             f"  ループ {r['loop'] + 1}: "
             f"{r['baseline_score']:.2f} → {r['best_score']:.2f} "
             f"({r['improvement']:+.2f}) [{r.get('verdict', '?')}] [{status}]"
+            f"{format_reeval_tag(r)}"
         )
     print(f"  最終 H_best スコア: {global_best_score:.2f}")
 
@@ -780,6 +661,14 @@ def main():
     parser.add_argument("--output-dir", help="出力ディレクトリ（デフォルト: .evolve-loop/）")
     parser.add_argument("--evolve", action="store_true", help="自己進化パターン組み込みを有効化")
     parser.add_argument("--evolve-search", action="store_true", help="BES 前向き進化探索を有効化 (#256)")
+    parser.add_argument(
+        "--no-selection-reeval", action="store_true",
+        help="採用前再評価（winner's curse 補正 #234）を無効化（デフォルトは有効）",
+    )
+    parser.add_argument(
+        "--selection-reeval-n", type=int, default=3,
+        help="採用前再評価の回数（デフォルト: 3）",
+    )
 
     args = parser.parse_args()
 
@@ -792,6 +681,8 @@ def main():
         output_dir=args.output_dir,
         evolve=args.evolve,
         evolve_search=args.evolve_search,
+        selection_reeval_enabled=not args.no_selection_reeval,
+        selection_reeval_n=args.selection_reeval_n,
     )
 
 

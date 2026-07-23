@@ -83,19 +83,16 @@ class TestRunLoop:
 
             # generate_variants のモック
             mock_gen.return_value = {
-                "history": [{
-                    "generation": 0,
-                    "individuals": [
-                        {
-                            "id": "test_variant_0",
-                            "content": "# 改善版スキル\n改善された内容。\n",
-                        },
-                        {
-                            "id": "test_variant_1",
-                            "content": "# 別の改善版\n別の改善された内容。\n",
-                        },
-                    ],
-                }],
+                "candidates": [
+                    {
+                        "id": "test_variant_0",
+                        "content": "# 改善版スキル\n改善された内容。\n",
+                    },
+                    {
+                        "id": "test_variant_1",
+                        "content": "# 別の改善版\n別の改善された内容。\n",
+                    },
+                ],
             }
 
             results = run_loop_mod.run_loop(
@@ -111,6 +108,48 @@ class TestRunLoop:
             assert "baseline_score" in results[0]
             assert "best_score" in results[0]
 
+    def test_keystone_generate_variants_not_mocked_e2e(self, tmp_path):
+        """keystone regression test: generate_variants を一切 mock せず、
+        run_loop() を dry-run で end-to-end 実行する。
+
+        #234 の背景: 旧 generate_variants() は genetic-prompt-optimizer/scripts/
+        optimize.py を `--generations 1 --population <N>` で subprocess 呼び出し
+        していたが、この2オプションは optimize.py 側で廃止済み
+        (`_DEPRECATED_OPTIONS`) のため、dry-run 含め常時失敗していた。既存
+        テストは全て generate_variants 自体を patch.object で mock していたため
+        このバグは検出されずに埋もれていた。実配線
+        （run_loop → variant_generation.generate_variants → optimize_core の
+        低レベル関数）を通しで検証できるのは本テストのみであり、これが今回の
+        バグを実際に検出できる唯一の形のテストである。
+        """
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text(
+            "---\ndescription: テストスキル\n---\n\n# テスト\nテスト内容です。\n",
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # generate_variants は一切 mock しない（旧実装のバグは patch.object 越しでは
+        # 検出できなかったため）。dry-run のため claude CLI（LLM）は呼ばれない前提。
+        # 注意: collect_context 経由で git（pj_slug 解決）等の非LLM subprocess が
+        # 呼ばれることがあるため、subprocess.run の呼び出し回数自体は検証しない
+        # （0回である保証は本テストの目的ではない。variant_generation.py 単体の
+        # 「dry_run で subprocess.run が0回」検証は test_variant_generation.py が担う）。
+        results = run_loop_mod.run_loop(
+            target_path=str(skill_file),
+            loops=1,
+            population=2,
+            dry_run=True,
+            output_dir=str(output_dir),
+        )
+
+        assert len(results) == 1
+        assert results[0]["dry_run"] is True
+        assert results[0]["variants_count"] == 2
+        assert "baseline_score" in results[0]
+        assert "best_score" in results[0]
+
     def test_multiple_loops(self, tmp_path):
         """複数ループが実行される"""
         skill_file = tmp_path / "test-skill.md"
@@ -122,12 +161,9 @@ class TestRunLoop:
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
 
             mock_gen.return_value = {
-                "history": [{
-                    "generation": 0,
-                    "individuals": [
-                        {"id": "v0", "content": "# V0\n内容"},
-                    ],
-                }],
+                "candidates": [
+                    {"id": "v0", "content": "# V0\n内容"},
+                ],
             }
 
             results = run_loop_mod.run_loop(
@@ -155,12 +191,9 @@ class TestRunLoop:
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
 
             mock_gen.return_value = {
-                "history": [{
-                    "generation": 0,
-                    "individuals": [
-                        {"id": "v0", "content": "# V0\n内容"},
-                    ],
-                }],
+                "candidates": [
+                    {"id": "v0", "content": "# V0\n内容"},
+                ],
             }
 
             run_loop_mod.run_loop(
@@ -190,9 +223,9 @@ class TestVerdict:
 
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": "# V0\n内容"},
-                ]}],
+                ],
             }
             results = run_loop_mod.run_loop(
                 target_path=str(skill_file),
@@ -231,9 +264,9 @@ class TestVerdict:
 
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": "# V0\n内容"},
-                ]}],
+                ],
             }
             run_loop_mod.run_loop(
                 target_path=str(skill_file),
@@ -259,9 +292,9 @@ class TestHBest:
 
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": "# V0\n内容"},
-                ]}],
+                ],
             }
             results = run_loop_mod.run_loop(
                 target_path=str(skill_file),
@@ -288,9 +321,9 @@ class TestHBest:
 
             mock_baseline.return_value = {"integrated_score": 0.60}
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": improved_content},
-                ]}],
+                ],
             }
 
             def score_side_effect(content, target_path, dry_run=False):
@@ -331,10 +364,10 @@ class TestEvolveSearch:
 
     def _mock_gen(self):
         return {
-            "history": [{"generation": 0, "individuals": [
+            "candidates": [
                 {"id": "v0", "content": self.SKILL + "\n## Examples\n\nex0\n"},
                 {"id": "v1", "content": self.SKILL + "\n## Tips\n\ntip1\n"},
-            ]}],
+            ],
         }
 
     def test_evolve_search_dry_run_completes(self, tmp_path):
@@ -477,9 +510,9 @@ class TestParetoDominance:
                 },
             }
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "axis_killer", "content": "# Bad\n内容"},
-                ]}],
+                ],
             }
             # variant: tech 0.40 (大幅劣化) なのに domain 0.95 で押し上げて integrated 0.78
             mock_axes.return_value = {
@@ -521,9 +554,9 @@ class TestRegressedPitfalls:
 
             mock_baseline.return_value = {"integrated_score": 0.80}
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "regressed_v0", "content": regressed_content},
-                ]}],
+                ],
             }
             mock_score.return_value = {"technical": 0.60, "domain": 0.60, "structure": 0.60, "integrated": 0.60}
 
@@ -554,9 +587,9 @@ class TestRegressedPitfalls:
 
             mock_baseline.return_value = {"integrated_score": 0.80}
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "stable_v0", "content": "# Same\n似た内容"},
-                ]}],
+                ],
             }
             mock_score.return_value = {"technical": 0.81, "domain": 0.81, "structure": 0.81, "integrated": 0.81}
 
@@ -586,9 +619,9 @@ class TestRegressedPitfalls:
              patch.object(run_loop_mod, "_record_pitfall") as mock_pitfall:
 
             mock_gen.return_value = {
-                "history": [{"generation": 0, "individuals": [
+                "candidates": [
                     {"id": "v0", "content": "# V0\n内容"},
-                ]}],
+                ],
             }
 
             run_loop_mod.run_loop(
@@ -606,6 +639,377 @@ class TestRegressedPitfalls:
             assert len(regression_calls) == 0
 
 
+class TestSelectionReeval:
+    """採用前再評価（selection re-eval, winner's curse 補正 #234 PR2）のテスト。
+
+    population=1 の最小構成。_score_variant_axes の side_effect で Step 3 の
+    単発評価（1回目呼び出し）と selection_reeval の追加 n 回評価（2回目以降）
+    を呼び出し順で制御する。
+    """
+
+    BASELINE = {
+        "integrated_score": 0.60,
+        "scores": {
+            "technical": {"total": 0.60},
+            "domain_quality": {"total": 0.60},
+            "structure": {"total": 0.60},
+        },
+    }
+
+    def _skill_file(self, tmp_path):
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text("---\ndescription: test\n---\n# Test\n内容\n", encoding="utf-8")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        return skill_file, output_dir
+
+    @staticmethod
+    def _uniform_axes(v):
+        return {"technical": v, "domain": v, "structure": v, "integrated": v}
+
+    def _sequenced_score_fn(self, sequence):
+        """呼び出し順に sequence の値を軸別均一スコアとして返す side_effect。"""
+        calls = {"n": 0}
+
+        def _fn(content, target_path, dry_run=False):
+            idx = calls["n"]
+            calls["n"] += 1
+            return self._uniform_axes(sequence[idx])
+
+        return _fn, calls
+
+    def test_downgrade_improved_to_stable(self, tmp_path):
+        """再評価で IMPROVED→STABLE に格下げされる。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+        # 1回目=Step3単発(0.85, IMPROVED相当) / 以降3回=再評価(平均0.60=STABLE)
+        score_fn, calls = self._sequenced_score_fn([0.85, 0.62, 0.60, 0.58])
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes", side_effect=score_fn), \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+            )
+
+        assert calls["n"] == 4
+        r = results[0]
+        assert r["verdict"] == "STABLE"
+        assert r["approved"] is False
+        assert r["global_best_score"] == pytest.approx(0.60)
+        assert r["selection_reeval_ran"] is True
+        assert r["selection_reeval_downgraded"] is True
+        assert r["selection_reeval_mean_score"] == pytest.approx(0.60)
+        assert r["pre_reeval_score"] == pytest.approx(0.85)
+        # 対象ファイルは変更されていない
+        assert "# V0" not in skill_file.read_text(encoding="utf-8")
+
+    def test_improvement_maintained_uses_corrected_mean(self, tmp_path):
+        """再評価後も改善維持。global_best_score は単発値でなく補正後の平均値になる（核心的回帰テスト）。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+        # 1回目=Step3単発(0.85) / 以降3回=再評価(平均0.80, 単発とは異なる値)
+        score_fn, calls = self._sequenced_score_fn([0.85, 0.80, 0.82, 0.78])
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes", side_effect=score_fn), \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+            )
+
+        r = results[0]
+        assert r["verdict"] == "IMPROVED"
+        assert r["approved"] is True
+        # 単発値(0.85)でなく再評価平均(0.80)が採用されている
+        assert r["global_best_score"] == pytest.approx(0.80)
+        assert r["best_score"] == pytest.approx(0.80)
+        assert r["pre_reeval_score"] == pytest.approx(0.85)
+        assert r["selection_reeval_downgraded"] is False
+
+    def test_downgrade_does_not_reach_input(self, tmp_path, monkeypatch):
+        """格下げ後、人間確認 input() には到達しない。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+        score_fn, calls = self._sequenced_score_fn([0.85, 0.62, 0.60, 0.58])
+
+        def _fail_input(*args, **kwargs):
+            raise AssertionError("input() should not be called after downgrade")
+
+        monkeypatch.setattr("builtins.input", _fail_input)
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes", side_effect=score_fn), \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=False,
+                dry_run=False,
+                output_dir=str(output_dir),
+            )
+
+        assert results[0]["verdict"] == "STABLE"
+
+    def test_downgrade_pitfall_not_double_recorded(self, tmp_path):
+        """再評価で REGRESSED に格下げされても pitfall 記録は1回のみ（二重記録なし）。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+        # 1回目=Step3単発(0.90) / 以降3回=再評価(平均0.40 → REGRESSED)
+        score_fn, calls = self._sequenced_score_fn([0.90, 0.40, 0.42, 0.38])
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes", side_effect=score_fn), \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE), \
+             patch.object(run_loop_mod, "_record_pitfall") as mock_pitfall:
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+            )
+
+        assert results[0]["verdict"] == "REGRESSED"
+        regression_calls = [
+            c for c in mock_pitfall.call_args_list
+            if len(c.args) >= 2 and c.args[1] == "regression"
+        ]
+        assert len(regression_calls) == 1
+
+    def test_pareto_stable_skips_reeval(self, tmp_path):
+        """Pareto 非優越で既に STABLE に格下げされた場合、再評価は発火しない（コスト最適化）。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+        baseline = {
+            "integrated_score": 0.72,
+            "scores": {
+                "technical": {"total": 0.70},
+                "domain_quality": {"total": 0.70},
+                "structure": {"total": 0.80},
+            },
+        }
+        axes = {"technical": 0.40, "domain": 0.95, "structure": 0.80, "integrated": 0.78}
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes") as mock_axes, \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=baseline):
+            mock_gen.return_value = {"candidates": [{"id": "axis_killer", "content": "# Bad\n内容"}]}
+            mock_axes.return_value = axes
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+            )
+
+        assert results[0]["verdict"] == "STABLE"
+        assert results[0]["selection_reeval_ran"] is False
+        # Step3 の population 分（1回）のみ。再評価の追加呼び出しなし
+        assert mock_axes.call_count == 1
+
+    def test_initial_stable_skips_reeval(self, tmp_path):
+        """verdict が最初から STABLE（Pareto チェック前）なら再評価は発火しない。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes") as mock_axes, \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+            # improvement = 0.61 - 0.60 = 0.01 <= epsilon(0.05) → STABLE
+            mock_axes.return_value = self._uniform_axes(0.61)
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+            )
+
+        assert results[0]["verdict"] == "STABLE"
+        assert results[0]["selection_reeval_ran"] is False
+        assert mock_axes.call_count == 1
+
+    def test_disabled_skips_reeval(self, tmp_path):
+        """selection_reeval_enabled=False（--no-selection-reeval 相当）で無効化される。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes") as mock_axes, \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+            mock_axes.return_value = self._uniform_axes(0.85)
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+                selection_reeval_enabled=False,
+            )
+
+        assert results[0]["verdict"] == "IMPROVED"
+        assert results[0]["selection_reeval_enabled"] is False
+        assert results[0]["selection_reeval_ran"] is False
+        assert results[0]["global_best_score"] == pytest.approx(0.85)
+        # population 分のみ（1回）。再評価は発火しない
+        assert mock_axes.call_count == 1
+
+    def test_enabled_by_default(self, tmp_path):
+        """引数省略時、再評価はデフォルトで有効。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+        score_fn, calls = self._sequenced_score_fn([0.85, 0.80, 0.82, 0.78])
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes", side_effect=score_fn), \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+            )
+
+        assert results[0]["selection_reeval_enabled"] is True
+        assert results[0]["selection_reeval_ran"] is True
+        assert calls["n"] == 4
+
+    def test_configurable_n(self, tmp_path):
+        """selection_reeval_n が設定可能（既定3以外の値でも動く）。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+        score_fn, calls = self._sequenced_score_fn([0.85, 0.80, 0.82, 0.78, 0.81, 0.79])
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes", side_effect=score_fn), \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+                selection_reeval_n=5,
+            )
+
+        assert results[0]["selection_reeval_n"] == 5
+        assert len(results[0]["selection_reeval_raw_scores"]) == 5
+        assert calls["n"] == 6
+
+    def test_dry_run_uses_dummy_score_no_subprocess(self, tmp_path):
+        """dry_run 時は subprocess を呼ばずダミースコアで動作する。
+
+        既知の限界: dry-run のダミースコアは content の MD5 ハッシュのみに依存
+        する決定論関数なので、N回再評価しても常に同一値が返り分散ゼロ・
+        格下げは発生し得ない（バグではなく既存の性質の自然な延長）。
+        """
+        skill_file, output_dir = self._skill_file(tmp_path)
+        # dry-run ダミースコア base=0.77 の content（事前計算済み、technical/domain/
+        # structure/integrated 全軸で baseline(0.65) を Pareto 優越する）
+        candidate_content = "# reeval dry run candidate\n"
+
+        import optimize_history_store as store
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(store, "resolve_slug", return_value="testproj"), \
+             patch.object(run_loop_mod.subprocess, "run") as mock_subprocess:
+            # subprocess.run は単一モジュールを全 caller が共有するため、
+            # 履歴 slug 解決（pj_slug 経由の git 呼び出し）は先に無効化して
+            # LLM 経路（claude -p）以外の subprocess 呼び出しを排除する。
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": candidate_content}]}
+            mock_subprocess.side_effect = AssertionError("subprocess.run should not be called in dry_run")
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=True,
+                output_dir=str(output_dir),
+            )
+
+        mock_subprocess.assert_not_called()
+        r = results[0]
+        assert r["verdict"] == "IMPROVED"
+        assert r["selection_reeval_ran"] is True
+        # 決定論ダミースコアは分散ゼロ → 格下げは起きない、平均は単発値と同一
+        # （dry_run なので Step5 の H_best 適用自体はスキップされる。既存の
+        # 「dry_run 時はファイル/状態を変更しない」設計であり本テストの対象外）
+        assert r["selection_reeval_downgraded"] is False
+        assert r["selection_reeval_std"] == pytest.approx(0.0)
+        assert r["best_score"] == pytest.approx(r["pre_reeval_score"])
+
+    def test_summary_output_contains_reeval_tag(self, tmp_path, capsys):
+        """発火した場合、サマリー出力に再評価タグ文言が含まれる。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+        score_fn, calls = self._sequenced_score_fn([0.85, 0.80, 0.82, 0.78])
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(run_loop_mod, "_score_variant_axes", side_effect=score_fn), \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=self.BASELINE):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=False,
+                output_dir=str(output_dir),
+            )
+
+        captured = capsys.readouterr()
+        assert "reeval:" in captured.out
+        assert "選定後再評価: 有効" in captured.out
+
+    def test_header_shows_disabled_when_no_selection_reeval(self, tmp_path, capsys):
+        """--no-selection-reeval 相当時、ヘッダーに「無効」が表示される。"""
+        skill_file, output_dir = self._skill_file(tmp_path)
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen:
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                dry_run=True,
+                output_dir=str(output_dir),
+                selection_reeval_enabled=False,
+            )
+
+        captured = capsys.readouterr()
+        assert "選定後再評価: 無効" in captured.out
+
+
 class TestEdgeCases:
     """エッジケースのテスト"""
 
@@ -619,7 +1023,7 @@ class TestEdgeCases:
 
         with patch.object(run_loop_mod, "generate_variants") as mock_gen:
 
-            mock_gen.return_value = {"history": []}
+            mock_gen.return_value = {"candidates": []}
 
             results = run_loop_mod.run_loop(
                 target_path=str(skill_file),

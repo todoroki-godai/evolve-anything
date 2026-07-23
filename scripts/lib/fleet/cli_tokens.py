@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .collectors import FleetRow
 
-from .formatters import _format_short_int
+from .codex_usage import collect_codex_usage
+from .formatters import _format_short_int, format_codex_usage_section
 
 
 def _inject_token_metrics(rows: list[FleetRow], days: int = 30) -> None:
@@ -207,4 +208,6 @@ def _run_tokens(args) -> int:
             print(f"  • {a['pj_id']}: WoW +{a['wow_pct']:.0f}% ({_format_short_int(a['last_week'])} → {_format_short_int(a['this_week'])})")
         for a in cache:
             print(f"  • {a['pj_id']}: cache hit {a['last_hit_pct']:.0f}% → {a['this_hit_pct']:.0f}% (drop {a['drop_pt']:.0f}pt)")
+    # codex CLI 利用状況 advisory（#245・read-only・CC 側 token_usage とは合算しない）
+    print(format_codex_usage_section(collect_codex_usage()), end="")
     return 0

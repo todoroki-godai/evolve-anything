@@ -14,6 +14,12 @@
   ignore previous 等）を含み **かつ** 鉤括弧/quote 内の引用リテラル（>=12 文字）を持ち **かつ**
   その文字列が直前 K 個の tool_result 原文に **空白正規化 byte 照合で非在**。3 条件 AND のみ発火＝
   高精度・低再現（paraphrase 型の言い換え汚染宣言は取りこぼす＝仕様）。
+- **ドメイン語彙 FP 除外（#203）**: Family C の汚染語彙は PJ 非依存の汎用リストだが、特定ドメイン
+  PJ（例: Whisper 文字起こし校正 PJ・slug に ``bots`` を含む）では「ハルシネーション」等が正常業務
+  語彙として頻出し FP を量産する。PJ slug × 語彙のペア（``_DOMAIN_VOCAB_FP_MARKERS``）でその語彙
+  **のみ** が根拠の Family C 候補を ``domain_vocab_fp`` という別バケットへ振り分ける（ハード除外
+  でなく別集計・``is_topic_pj`` と同型。他の汚染語彙が近傍にあれば通常どおり Family C として発火
+  する）。除外件数は audit で常時 surface する（silence≠evaluated）。
 
 **tool_result 原文（role=user の tool_result / 先頭 toolUseResult）と assistant の text/thinking を
 厳密分離**して照合する（混同すると全て FP になる）。これが検出の核心。
@@ -91,6 +97,13 @@ _QUOTE_PAIRS = (("「", "」"), ('"', '"'), ("“", "”"), ("'", "'"), ("`", "`
 # 話題 PJ（この現象を扱う PJ＝Family C の FP 源）。operational と分離集計するため。
 _TOPIC_PJ_MARKERS = ("evolve-anything", "rl-anything")
 
+# ドメイン語彙 FP 除外（#203）: PJ slug マーカー → その PJ で正常業務語彙として頻出し Family C
+# 誤検出源になる汚染語彙のマッピング。初期エントリ: Whisper 文字起こし校正 PJ（slug に bots を
+# 含む）で「ハルシネーション」が業務語彙として頻出する FP。ハード除外でなく別バケット集計に使う。
+_DOMAIN_VOCAB_FP_MARKERS: Dict[str, Tuple[str, ...]] = {
+    "bots": ("ハルシネーション",),
+}
+
 _DEFAULT_K = 5
 _DEFAULT_MIN_LITERAL = 12
 _DEFAULT_MAX_FILES = 400
@@ -117,11 +130,17 @@ class Hit:
 
 @dataclass
 class ScanReport:
-    """1 transcript（または複数の集約）の検出結果。"""
+    """1 transcript（または複数の集約）の検出結果。
+
+    ``domain_vocab_fp`` は #203 のドメイン語彙 FP 除外バケット。Family C 候補のうち根拠が
+    PJ 固有のドメイン語彙のみだったものをここへ振り分ける（ハード除外でなく別集計）。
+    ``total`` / operational 集計には含めない。
+    """
 
     family_a: List[Hit] = field(default_factory=list)
     family_b: List[Hit] = field(default_factory=list)
     family_c: List[Hit] = field(default_factory=list)
+    domain_vocab_fp: List[Hit] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -134,6 +153,7 @@ class ScanReport:
         self.family_a.extend(other.family_a)
         self.family_b.extend(other.family_b)
         self.family_c.extend(other.family_c)
+        self.domain_vocab_fp.extend(other.domain_vocab_fp)
 
 
 @dataclass
@@ -314,10 +334,10 @@ def extract_quoted_literals(text: str, min_len: int = _DEFAULT_MIN_LITERAL) -> L
     return [lit for lit, _s, _e in _quoted_literal_spans(text, min_len)]
 
 
-def _vocab_positions(text: str) -> List[int]:
-    """汚染語彙の出現開始位置（文字 index）を全て返す。"""
+def _vocab_positions_with_kw(text: str) -> List[Tuple[int, str]]:
+    """汚染語彙の出現開始位置（文字 index）を、マッチした語彙そのものと対で全て返す。"""
     low = text.lower()
-    positions: List[int] = []
+    positions: List[Tuple[int, str]] = []
     for kw in _CONTAM_VOCAB:
         hay, needle = (low, kw.lower()) if kw.isascii() else (text, kw)
         start = 0
@@ -325,9 +345,73 @@ def _vocab_positions(text: str) -> List[int]:
             idx = hay.find(needle, start)
             if idx < 0:
                 break
-            positions.append(idx)
+            positions.append((idx, kw))
             start = idx + 1
     return positions
+
+
+def _vocab_positions(text: str) -> List[int]:
+    """汚染語彙の出現開始位置（文字 index）を全て返す。"""
+    return [pos for pos, _kw in _vocab_positions_with_kw(text)]
+
+
+def domain_vocab_fp_words(name: str) -> Tuple[str, ...]:
+    """PJ 名（encoded dir 名 or basename）がドメイン語彙 FP 除外対象なら、除外する汚染語彙を返す。
+
+    ``is_topic_pj`` と同型の PJ slug マッチング（部分一致）。ハード除外ではなく、呼び出し側
+    （``detect_confab_claim`` / ``scan_records``）が該当語彙のみを根拠にした Family C 候補を
+    ``domain_vocab_fp`` バケットへ振り分けるための情報を返す（#203）。非該当 PJ は空 tuple。
+    """
+    if not name:
+        return ()
+    words: List[str] = []
+    seen = set()
+    for marker, vocab in _DOMAIN_VOCAB_FP_MARKERS.items():
+        if marker in name:
+            for w in vocab:
+                if w not in seen:
+                    seen.add(w)
+                    words.append(w)
+    return tuple(words)
+
+
+def _confab_evidence(
+    text: str,
+    recent_tool_results: Iterable[str],
+    min_len: int = _DEFAULT_MIN_LITERAL,
+    proximity: int = _DEFAULT_PROXIMITY,
+    excluded_vocab: Iterable[str] = (),
+) -> Tuple[Optional[str], Optional[str]]:
+    """Family C-lite の判定本体。``(genuine_literal, domain_fp_literal)`` を返す（排他的）。
+
+    ``excluded_vocab`` に含まれる語彙**のみ**が根拠の候補は ``domain_fp_literal`` 側へ回し、
+    それ以外（除外対象でない汚染語彙が近傍にある）は従来どおり ``genuine_literal`` として返す。
+    """
+    literals = _quoted_literal_spans(text, min_len=min_len)
+    if not literals:
+        return None, None
+    vocab_hits = _vocab_positions_with_kw(text)
+    if not vocab_hits:
+        return None, None
+    excluded = set(excluded_vocab)
+    corpus = normalize_ws("\n".join(recent_tool_results))
+    domain_fp_lit: Optional[str] = None
+    for lit, start, end in literals:
+        if normalize_ws(lit) in corpus:
+            continue  # 原文に実在 → 誤認でない
+        fp_found = False
+        for vp, kw in vocab_hits:
+            if start <= vp < end:
+                continue  # 語彙が引用の内側（ルール文引用等）→ 主張でない
+            dist = (start - vp) if vp < start else (vp - end)
+            if 0 <= dist <= proximity:
+                if kw in excluded:
+                    fp_found = True
+                    continue  # 除外対象語彙のみでは genuine 扱いにしない
+                return lit, None  # 除外対象でない語彙が根拠 → genuine hit
+        if fp_found and domain_fp_lit is None:
+            domain_fp_lit = lit
+    return None, domain_fp_lit
 
 
 def detect_confab_claim(
@@ -335,6 +419,7 @@ def detect_confab_claim(
     recent_tool_results: Iterable[str],
     min_len: int = _DEFAULT_MIN_LITERAL,
     proximity: int = _DEFAULT_PROXIMITY,
+    excluded_vocab: Iterable[str] = (),
 ) -> Optional[str]:
     """Family C-lite（高精度・低再現）。条件を全て満たす引用リテラルを 1 件返す。
 
@@ -347,24 +432,14 @@ def detect_confab_claim(
     tool-call-hygiene.md を assistant がそのまま引用）を落とす。語彙は「これは汚染だ」という
     **主張**として引用の近傍散文に出ていなければならない。paraphrase 型の言い換え宣言は取り
     こぼす（＝仕様）。
+
+    ``excluded_vocab``（#203）を渡すと、その語彙のみが根拠の候補は genuine hit として返さない
+    （呼び出し元が ``domain_vocab_fp`` バケットへ振り分けたい場合は ``_confab_evidence`` を使う）。
     """
-    literals = _quoted_literal_spans(text, min_len=min_len)
-    if not literals:
-        return None
-    vocab_pos = _vocab_positions(text)
-    if not vocab_pos:
-        return None
-    corpus = normalize_ws("\n".join(recent_tool_results))
-    for lit, start, end in literals:
-        if normalize_ws(lit) in corpus:
-            continue  # 原文に実在 → 誤認でない
-        for vp in vocab_pos:
-            if start <= vp < end:
-                continue  # 語彙が引用の内側（ルール文引用等）→ 主張でない
-            dist = (start - vp) if vp < start else (vp - end)
-            if 0 <= dist <= proximity:
-                return lit
-    return None
+    genuine, _domain_fp = _confab_evidence(
+        text, recent_tool_results, min_len=min_len, proximity=proximity, excluded_vocab=excluded_vocab
+    )
+    return genuine
 
 
 # ------------------------------------------------------------------
@@ -376,10 +451,13 @@ def scan_records(
     k: int = _DEFAULT_K,
     session_id: str = "",
     min_literal: int = _DEFAULT_MIN_LITERAL,
+    excluded_vocab: Iterable[str] = (),
 ) -> ScanReport:
     """1 transcript（record 列）を走査し 3 系統の指紋を集める。
 
     Family C は「直前 K 個の tool_result 原文」を running window で保持して照合する。
+    ``excluded_vocab``（#203）に含まれる語彙のみが根拠の Family C 候補は ``family_c`` でなく
+    ``domain_vocab_fp`` バケットへ振り分ける（ハード除外でなく別集計）。
     """
     report = ScanReport()
     recent: Deque[str] = deque(maxlen=max(1, k))
@@ -399,14 +477,27 @@ def scan_records(
                 report.family_b.append(
                     Hit("B", ln, block, _snippet(text), session_id=session_id)
                 )
-            lit = detect_confab_claim(text, recent, min_len=min_literal)
-            if lit is not None:
+            genuine, domain_fp = _confab_evidence(
+                text, recent, min_len=min_literal, excluded_vocab=excluded_vocab
+            )
+            if genuine is not None:
                 report.family_c.append(
                     Hit(
                         "C",
                         ln,
                         block,
-                        lit,
+                        genuine,
+                        reference_text=_snippet("\n".join(recent), width=160),
+                        session_id=session_id,
+                    )
+                )
+            elif domain_fp is not None:
+                report.domain_vocab_fp.append(
+                    Hit(
+                        "C",
+                        ln,
+                        block,
+                        domain_fp,
                         reference_text=_snippet("\n".join(recent), width=160),
                         session_id=session_id,
                     )
@@ -419,7 +510,9 @@ def _snippet(text: str, width: int = 200) -> str:
     return s if len(s) <= width else s[:width] + "…"
 
 
-def scan_file(path: Path, *, k: int = _DEFAULT_K) -> ScanReport:
+def scan_file(
+    path: Path, *, k: int = _DEFAULT_K, excluded_vocab: Iterable[str] = ()
+) -> ScanReport:
     """1 jsonl transcript ファイルを走査する。session_id はファイル stem。"""
     path = Path(path)
     session_id = path.stem
@@ -436,7 +529,7 @@ def scan_file(path: Path, *, k: int = _DEFAULT_K) -> ScanReport:
                     continue
     except OSError:
         return ScanReport()
-    return scan_records(records, k=k, session_id=session_id)
+    return scan_records(records, k=k, session_id=session_id, excluded_vocab=excluded_vocab)
 
 
 def is_topic_pj(name: str) -> bool:
@@ -491,6 +584,7 @@ def scan_project_transcripts(
     baseline_cutoff = now - baseline_days * 86400
 
     is_topic = is_topic_pj(tdir.name)
+    excluded_vocab = domain_vocab_fp_words(tdir.name)
     report = ScanReport()
     recent_counts = {"A": 0, "B": 0, "C": 0}
     baseline_counts = {"A": 0, "B": 0, "C": 0}
@@ -503,9 +597,9 @@ def scan_project_transcripts(
         mt = _safe_mtime(f)
         if mt < baseline_cutoff:
             continue  # 窓より古い → skip
-        file_report = scan_file(f, k=k)
+        file_report = scan_file(f, k=k, excluded_vocab=excluded_vocab)
         files_scanned += 1
-        if file_report.total == 0:
+        if file_report.total == 0 and not file_report.domain_vocab_fp:
             continue
         report.extend(file_report)
         bucket = recent_counts if mt >= recent_cutoff else baseline_counts

@@ -1,14 +1,18 @@
-"""subagent_traces.query — agent_type 別の軌跡サマリ集計（#38）。
+"""subagent_traces.query — agent_type 別の軌跡サマリ集計（#38, #219）。
 
 read_traces（read-only 純度）の結果を agent_type 単位に集計し、
 内部「一発成功率」と平均 tool error を返す。``n >= min_traces`` の floor ゲートで
 サンプル不足のノイズを抑制。空 / ID 形 agent_type は除外（is_noise_agent_type 単一ソース）。
 決定論・ゼロ LLM。
+
+#219: 各レコードの ``effort_counts``（実測 reasoning effort 分布）も agent_type 単位で
+合算し、``dominant_effort``（最頻値。同数タイは辞書順で決定論的に確定）を添える。
+全レコードで空（旧 CC バージョン等の未計測）なら ``dominant_effort=None``。
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import store as _store
 
@@ -26,7 +30,8 @@ def per_agent_type_summary(
 
     Returns（agent_type のアルファベット順）:
         [{"agent_type": str, "n": int,
-          "first_try_success_rate": float, "avg_tool_error": float}, ...]
+          "first_try_success_rate": float, "avg_tool_error": float,
+          "effort_counts": {effort名: 回数}, "dominant_effort": str|None}, ...]
     n < min_traces の agent_type は除外。空 / ID 形 agent_type は除外。
     """
     try:
@@ -37,16 +42,20 @@ def per_agent_type_summary(
 
     traces = _store.read_traces(slug, data_dir=data_dir)
 
-    buckets: Dict[str, Dict[str, float]] = {}
+    buckets: Dict[str, Dict[str, Any]] = {}
     for rec in traces.values():
         at = rec.get("agent_type", "")
         if is_noise_agent_type(at):
             continue
-        b = buckets.setdefault(at, {"n": 0, "success": 0, "tool_error_sum": 0})
+        b = buckets.setdefault(
+            at, {"n": 0, "success": 0, "tool_error_sum": 0, "effort_counts": {}}
+        )
         b["n"] += 1
         if rec.get("first_try_success") is True:
             b["success"] += 1
         b["tool_error_sum"] += int(rec.get("tool_error_count", 0) or 0)
+        for effort_val, cnt in (rec.get("effort_counts") or {}).items():
+            b["effort_counts"][effort_val] = b["effort_counts"].get(effort_val, 0) + cnt
 
     out: List[Dict] = []
     for at in sorted(buckets):
@@ -54,12 +63,22 @@ def per_agent_type_summary(
         n = int(b["n"])
         if n < min_traces:
             continue
+        effort_counts: Dict[str, int] = dict(sorted(b["effort_counts"].items()))
+        dominant_effort: Optional[str] = None
+        if effort_counts:
+            max_count = max(effort_counts.values())
+            # タイは辞書順（sorted 済みなので先頭）で決定論的に確定する。
+            dominant_effort = next(
+                k for k, v in effort_counts.items() if v == max_count
+            )
         out.append(
             {
                 "agent_type": at,
                 "n": n,
                 "first_try_success_rate": round(b["success"] / n, 4),
                 "avg_tool_error": round(b["tool_error_sum"] / n, 4),
+                "effort_counts": effort_counts,
+                "dominant_effort": dominant_effort,
             }
         )
     return out

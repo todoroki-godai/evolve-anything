@@ -40,11 +40,27 @@ L3（ドメイン別3層）は該当PJ出現時に検討。
 
 ### 閾値
 
+**chars（bytes, `wc -c`）が主指標、行数は補助指標。** 根拠: Read ツールの実質上限（≈25K tokens）を超えると丸読みで truncate される実害があり、行数だけでは「読める量」を代表しない（1行あたりの情報量が巨大な md は行数基準では健全に見えてしまう。issue #216）。
+
+**単一ファイル閾値（hot/cold 問わず・最優先指標）**
+
+| 指標 | Healthy | Caution | Action |
+|------|---------|---------|--------|
+| 単一 md ファイル bytes | ~50KB以下 | 50-100KB | **>100KB: 分割必須** |
+
+**hot（SPEC.md）専用閾値**
+
 | Layer | 指標 | Healthy | Caution | Action |
 |-------|------|---------|---------|--------|
-| L1 | SPEC.md 行数 | ~80行以下 | 81-100行 | >100行: L2 昇格を提案 |
-| L2 | hot 行数 | ~60行以下 | 61-80行 | >80行: cold へセクション移動 |
-| L2 | cold 合計 | ~200行以下 | 201-300行 | >300行: L3 検討（将来） |
+| L1/L2 | SPEC.md bytes | ~20KB以下 | 20-35KB | >35KB: cold へセクション移動 |
+| L1 | SPEC.md 行数（補助） | ~80行以下 | 81-100行 | >100行: L2 昇格を提案 |
+| L2 | hot 行数（補助） | ~60行以下 | 61-80行 | >80行: cold へセクション移動 |
+
+**cold（spec/ 配下）**
+
+cold 合計の行数閾値（旧: >300行で L3 検討）は廃止。各 cold ファイルは上記「単一ファイル閾値」（bytes）で個別判定する。L3（ドメイン別3層）は該当PJ出現時に検討。
+
+**巨大 cold ファイルの消費ルール**: >50KB の cold ファイルは丸読みせず、Grep で該当箇所を特定してから部分 Read で消費する。該当ファイルの冒頭に消費ルール1行（例: 「本ファイルは大きいため Grep→部分 Read で読むこと」）を置く。
 
 ### レイヤー判定
 
@@ -220,14 +236,22 @@ CLAUDE.md に以下を追記（まだなければ）:
 SPEC.md を Read した後、以下を実行:
 
 1. **レイヤー判定**: `spec/` ディレクトリの存在を確認 → L1 or L2
-2. **行数チェック**: SPEC.md の行数を `wc -l` で取得。L2 の場合は spec/ 配下の行数も合計
+2. **行数+bytesチェック**: SPEC.md の行数を `wc -l`、bytes を `wc -c` で取得（bytes が主指標・「閾値」節参照）。L2 の場合は spec/ 配下の行数合計に加え、**ファイル単位の bytes 最大値**も取得する（cold 合計行数でなく個別ファイルの bytes で肥大判定するため）
 3. **数値突合（汎用）**: SPEC.md 内の「N個」「N モジュール」等の数値記載を Read で抽出し、対応するディレクトリの `ls` / `find` 結果と比較。PJ固有の数え方はせず、SPEC.md に書かれている数値だけを対象にする
 4. **feat+refactor コミット数**: SPEC.md 最終更新以降の変更規模を推定
 
 ```bash
-# SPEC.md 行数 + spec/ 行数（L2の場合）
+# SPEC.md 行数 + bytes
 echo "spec_md_lines: $(wc -l < SPEC.md | tr -d ' ')"
-[ -d spec ] && echo "spec_cold_lines: $(find spec -name '*.md' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')" || echo "spec_cold_lines: 0"
+echo "spec_md_bytes: $(wc -c < SPEC.md | tr -d ' ')"
+# spec/ 配下（L2の場合）: 合計行数 + ファイル単位の bytes 最大値
+if [ -d spec ]; then
+  echo "spec_cold_lines: $(find spec -name '*.md' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')"
+  echo "spec_cold_max_bytes:"
+  find spec -name '*.md' -exec wc -c {} \; | sort -rn | head -5
+else
+  echo "spec_cold_lines: 0"
+fi
 echo "adr: $(ls docs/decisions/*.md 2>/dev/null | wc -l | tr -d ' ')"
 echo "feat_refactor: $(git log --oneline --since="$(git log -1 --format=%ci -- SPEC.md)" --grep="^feat\|^refactor" 2>/dev/null | wc -l | tr -d ' ')"
 ```
@@ -264,10 +288,12 @@ echo "feat_refactor: $(git log --oneline --since="$(git log -1 --format=%ci -- S
    - **Current Limitations**: 解決済みの制限を削除、新たな制限を追加
    - **Next**: 次の計画を更新
 3. `Last updated:` の日付を更新
-4. **レイヤー健全性チェック（MUST）**: 更新後の行数を確認し、「Progressive Disclosure レイヤー」セクションの閾値表に従って判定:
-   - **L1 で SPEC.md > 100行** → L2 昇格を提案。承認されたら「L1 → L2 昇格手順」を即実行
+4. **レイヤー健全性チェック（MUST）**: 更新後の行数 **と bytes（`wc -c`）** を確認し、「Progressive Disclosure レイヤー」セクションの閾値表に従って判定（bytes が主指標、行数は補助）:
+   - **SPEC.md > 35KB（bytes）**、または **L1 で SPEC.md > 100行** → L2 昇格 / cold へのセクション移動を提案。承認されたら「L1 → L2 昇格手順」を即実行
    - **L2 で hot > 80行** → cold 移動候補セクションを提示し、承認で移動実行
+   - **cold 配下の単一ファイルが > 100KB（bytes）** → 分割必須。承認されたらセクション単位で新規 cold ファイルに分割
    - **L2 の場合**: spec/ ファイルの `Last updated:` も確認し、古い場合は SPEC.md と同時に更新
+   - **1行サマリ字数チェック（MUST）**: CLAUDE.md のコンポーネント表など「1行サマリ」を運用契約とする箇所は、**サマリ列（説明文言）のみ 1エントリ ≤400字**（名称・実体パス列は対象外）。超過エントリがあれば要約を切り詰め、詳細は spec/components.md 等の cold 側へ委譲する（本文はポインタのみ残す）
 5. **用語集 drift チェック（`CONTEXT.md` が存在する場合のみ）**:
    ```bash
    [ -f CONTEXT.md ] && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/glossary_drift.py" CONTEXT.md SPEC.md CLAUDE.md || true
@@ -377,7 +403,7 @@ SPEC.md Status:
   未反映コミット: {N}件
   README.md: {Last updated 日付 or "日付不明"} [{最新/要確認}]   ← README.md が存在する場合のみ
   判定: 最新 or 更新推奨
-  昇格候補: なし or L2昇格推奨（SPEC.md > 100行）
+  昇格候補: なし or L2昇格推奨（SPEC.md > 35KB、行数目安 >100行）
 ```
 
 健全性判定は「Progressive Disclosure レイヤー」セクションの閾値表に従う。
