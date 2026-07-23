@@ -30,9 +30,9 @@ store_registry, store_write
 
 weak_signals, correction_semantic, bootstrap_backlog, daily_review, review_channels,
 idiom_autopromote, measurement_bug, growth_report, outcome_promotion_readiness,
-cross_pj_priority, plugin_self, testpaths_coverage, dogfood gate, evolve-release-sync,
-pj_slug, weak_signals drain永続化, idiom_filter, representative, multiview_eval,
-relevance_gate, remediation参照リンク相対化, report-feedback, paired_trajectory
+cross_pj_priority, plugin_self, testpaths_coverage, dogfood gate, sibling_copy_guard,
+evolve-release-sync, pj_slug, weak_signals drain永続化, idiom_filter, representative,
+multiview_eval, relevance_gate, remediation参照リンク相対化, report-feedback, paired_trajectory
 
 ## fleet運用・記憶温度・環境衛生検出器 → [components-fleet.md](components-fleet.md)
 
