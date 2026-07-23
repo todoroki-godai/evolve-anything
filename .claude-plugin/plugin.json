@@ -135,6 +135,12 @@
       "type": "number",
       "description": "human-confirmed idiom に一致する新規 weak_signal を1回の evolve で自動昇格する件数上限 (default: 10・ADR-047 安全弁①)。超過分は次回 run に持ち越す (capped で surface)。1回の承認が引き金で大量昇格する暴走を量で抑える。",
       "sensitive": false
+    },
+    "icebox_review_threshold_days": {
+      "title": "Icebox Review Threshold (days)",
+      "type": "number",
+      "description": "icebox issue の最古経過日数がこの値以上で SessionStart 気づき通知を発火する (default: 30・#194)。audit_interval_days と同じ周期に揃えたデフォルト。",
+      "sensitive": false
     }
   }
 }
