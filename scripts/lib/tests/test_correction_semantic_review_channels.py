@@ -143,15 +143,15 @@ def test_signal_text_llm_judge_no_idiom_key_unchanged():
     assert rc.signal_text(rec) == text
 
 
-def test_signal_text_rephrase_trims_multi_topic_to_idiom_segment():
+def test_signal_text_rephrase_does_not_trim_multi_topic():
+    # #253 ROUND2: idiom は Haiku バッチ判定（llm_judge 限定）でしか生成されない契約なので、
+    # rephrase は idiom が provenance にあってもトリムせず全文のまま返す。
+    text = "字幕がずれてるから直して、あとレポート表示の形式も変えて"
     rec = {
         "channel": "rephrase",
-        "provenance": {
-            "text": "字幕がずれてるから直して、あとレポート表示の形式も変えて",
-            "idiom": "字幕がずれてる",
-        },
+        "provenance": {"text": text, "idiom": "字幕がずれてる"},
     }
-    assert rc.signal_text(rec) == "字幕がずれてるから直して"
+    assert rc.signal_text(rec) == text
 
 
 # ─────────────────────────────────────────────────────────────────

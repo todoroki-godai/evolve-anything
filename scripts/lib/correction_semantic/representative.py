@@ -10,10 +10,11 @@ bootstrap/daily の representative（確認 group の代表発話断片）に **
 2. ``prev_action_summary`` — 直前 AI 行動の 1 行要約（「やっぱり、高だけにして」のような
    一行 representative が何に対する修正か不明な問題を、evidence に prev_action を添えて解消する）。
 3. ``trim_to_idiom_sentence`` — 1 発言が複数トピック（主要な指摘＋ついでの別要望）を含む場合、
-   Haiku が抽出した idiom（修正を端的に表す言い回し）が属するセンテンス/セグメントだけに
-   evidence.text をトリムする（#253: 無関係な副次要望が evidence に同居する問題の解消）。
-   idiom が見つからない・複数セグメントに跨って曖昧・単一トピックしかない、のいずれでも
-   安全側（情報喪失を避け元テキストのまま）にフォールバックする。
+   Haiku が抽出した idiom（修正を端的に表す言い回し）が属するセグメントだけに evidence.text を
+   トリムする（#253: 無関係な副次要望が evidence に同居する問題の解消）。トピック分割は
+   話題転換語（あと/ついでに等）の直前でのみ行い、句点・疑問符だけの複数文（単一トピック）は
+   分割しない（#253 ROUND2）。idiom が見つからない・複数セグメントに跨って曖昧・話題転換語が
+   無い、のいずれでも安全側（情報喪失を避け元テキストのまま）にフォールバックする。
 
 決定論・LLM 非依存。bootstrap_backlog / daily_review の representative 生成経路と batch.ingest の
 provenance 保存がこのモジュールを通す（user-only 化を二重実装しない）。
@@ -79,26 +80,28 @@ def prev_action_summary(prev_action: Optional[str]) -> str:
 
 
 # ── トピック分割（#253: 多トピック発言の evidence トリム） ──────────────────
-# 文末（。！？改行）の直後で分割する（区切り記号は先行セグメントに残す）。
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？\n])")
-
-# 句点が無くても「あと」「ついでに」等の話題転換語の直前の読点で分割する。
-# 実 dogfood: 「字幕がずれてるので直して。あと、レポート表示の形式も…」のように主要な
-# 指摘＋ついでの別要望が句点 or 読点＋話題転換語で緩く繋がるパターンが多い（issue #253）。
+# 話題転換語（あと/ついでに等）の**直前でのみ**分割する。句点・疑問符だけでは分割しない
+# （#253 ROUND2: 「字幕がずれています。タイムコードを基準に直してください。」のような
+# 単一トピックの2文目＝修正手段まで誤ってトリムして落とすリグレッションが codex レビューで
+# 指摘された。句点区切りの複数文というだけでは複数トピックの根拠にならない）。
+#
+# 境界は「読点直後」だけでなく「文頭」（文末記号＝。！？改行の直後、または話題転換語が
+# テキスト先頭にある場合）も対象にする（「〜直して。あと、〜」の「。あと」を境界として
+# 扱うため）。読点は境界として消費（除去）し、文末記号は境界として残す（区切り記号は
+# 元の文に残したまま前のセグメントを保つ）。
 _TOPIC_SHIFT_RE = re.compile(
-    r"[、,]\s*(?=(?:あと|ついでに|ちなみに|それと|あわせて|ところで))"
+    r"(?:^|(?<=[。！？\n])|[、,])\s*"
+    r"(?=(?:あと|ついでに|ちなみに|それと|あわせて|ところで))"
 )
 
 
 def _split_topics(text: str) -> List[str]:
-    """発言をセンテンス＋話題転換語でトピック単位のセグメントに分割する（決定論）。"""
-    segments: List[str] = []
-    for sentence in _SENTENCE_SPLIT_RE.split(text):
-        if not sentence.strip():
-            continue
-        parts = [p for p in _TOPIC_SHIFT_RE.split(sentence) if p.strip()]
-        segments.extend(parts if parts else [sentence])
-    return [seg.strip() for seg in segments if seg.strip()]
+    """発言を話題転換語の直前でのみトピック単位のセグメントに分割する（決定論）。
+
+    話題転換語が無い発言（句点・疑問符だけの複数文を含む）は分割せず 1 セグメントのまま
+    返す（#253 ROUND2: 単一トピックの複数文を誤ってトリムしない）。
+    """
+    return [seg.strip() for seg in _TOPIC_SHIFT_RE.split(text) if seg.strip()]
 
 
 def trim_to_idiom_sentence(text: Optional[str], idiom: Optional[str]) -> str:

@@ -112,3 +112,17 @@ def test_trim_to_idiom_sentence_ambiguous_multi_match_returns_full_text():
 def test_trim_to_idiom_sentence_empty_text():
     assert r.trim_to_idiom_sentence("", "何か") == ""
     assert r.trim_to_idiom_sentence(None, "何か") == ""
+
+
+# ── ROUND2 回帰: 話題転換語が無い単一トピックは句点/疑問符だけでは絶対にトリムしない ──
+def test_trim_to_idiom_sentence_single_topic_multi_sentence_period_unchanged():
+    # 「字幕がずれています。タイムコードを基準に直してください。」は句点区切りの
+    # 2文だが単一トピック（指摘＋修正手段）。話題転換語が無いのでトリムしない。
+    text = "字幕がずれています。タイムコードを基準に直してください。"
+    assert r.trim_to_idiom_sentence(text, "字幕がずれています") == text
+
+
+def test_trim_to_idiom_sentence_single_topic_question_mark_unchanged():
+    # 疑問符区切りの複数文も話題転換語が無ければトリムしない。
+    text = "字幕は本当にずれていますか？至急確認してください"
+    assert r.trim_to_idiom_sentence(text, "ずれていますか") == text
