@@ -107,3 +107,19 @@ def test_override_wins_over_env_and_marker(layout, monkeypatch, tmp_path):
     assert session_store._data_dir() == override
     assert session_store._sessions_db() == override / "sessions.db"
     assert session_store.SESSIONS_JSONL == override / "sessions.jsonl"
+
+
+def test_getattr_shim_names_are_not_real_module_attrs():
+    """DATA_DIR / SESSIONS_DB / SESSIONS_JSONL は module ``__dict__`` に実体を持たない。
+
+    これらは PEP 562 ``__getattr__`` 経由の call-time 解決専用の擬似属性（#137）。
+    ``monkeypatch.setattr(session_store, "SESSIONS_JSONL", ...)`` のように直接 setattr
+    すると、teardown の復元 ``setattr(session_store, "SESSIONS_JSONL", <capture 時点の
+    computed 値>)`` が実属性を module.__dict__ に**永続生成**し、以後 ``__getattr__`` が
+    二度と呼ばれなくなる（別テストの stale tmp_path に恒久的に固定される xdist flake の
+    実根因）。隔離は必ず ``_DATA_DIR_OVERRIDE``（真の module-level 属性）を monkeypatch
+    する（``session_store._data_dir()`` 系がこれを最優先で読む・#137）。
+    """
+    assert "DATA_DIR" not in vars(session_store)
+    assert "SESSIONS_DB" not in vars(session_store)
+    assert "SESSIONS_JSONL" not in vars(session_store)
