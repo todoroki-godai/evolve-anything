@@ -34,6 +34,13 @@ EVIDENCE_BONUS_RATE = 0.03
 MAX_SESSION_BONUS = 0.25
 MAX_EVIDENCE_BONUS = 0.10
 
+# generalizability_score による confidence 減点（#221）。
+# トリガー証拠の汎用性・質が低い（generalizability_score が閾値未満）候補は、
+# session_count ベースのボーナスだけで confidence を稼いでいても実際には
+# 誤検知しやすい弱いシグナルであるため、閾値未満の幅に比例して減点する。
+GENERALIZABILITY_PENALTY_THRESHOLD = 0.5
+MAX_GENERALIZABILITY_PENALTY = 0.30
+
 # ── SPLIT / MERGE 定数 ──────────────────────────────
 
 SPLIT_CATEGORY_THRESHOLD = 3
@@ -45,8 +52,16 @@ def compute_confidence(
     action: str,
     session_count: int = 0,
     near_miss_count: int = 0,
+    generalizability_score: Optional[float] = None,
 ) -> float:
-    """D10 計算式に基づく confidence スコアを算出する。"""
+    """D10 計算式に基づく confidence スコアを算出する。
+
+    generalizability_score が渡され、かつ GENERALIZABILITY_PENALTY_THRESHOLD
+    未満の場合は、閾値からの乖離幅に比例して confidence を減点する（#221）。
+    None（未計測）の場合は減点しない — missed_skill_opportunities のうち
+    skill_extractor 由来の候補のみ generalizability_score を持つため、
+    未対応の検出経路を誤って減点しないための区別。
+    """
     base = BASE_CONFIDENCE.get(action, 0.50)
     session_bonus = min(
         MAX_SESSION_BONUS,
@@ -55,7 +70,17 @@ def compute_confidence(
     evidence_bonus = 0.0
     if action == "UPDATE":
         evidence_bonus = min(MAX_EVIDENCE_BONUS, near_miss_count * EVIDENCE_BONUS_RATE)
-    return min(1.0, base + session_bonus + evidence_bonus)
+    confidence = base + session_bonus + evidence_bonus
+    if (
+        generalizability_score is not None
+        and generalizability_score < GENERALIZABILITY_PENALTY_THRESHOLD
+    ):
+        penalty = MAX_GENERALIZABILITY_PENALTY * (
+            (GENERALIZABILITY_PENALTY_THRESHOLD - generalizability_score)
+            / GENERALIZABILITY_PENALTY_THRESHOLD
+        )
+        confidence -= penalty
+    return max(0.0, min(1.0, confidence))
 
 
 def triage_skill(
@@ -121,7 +146,14 @@ def triage_skill(
 
     # CREATE 判定: missed_skill 高 + 既存スキルなし
     if missed_info and missed_session_count >= MISSED_SKILL_THRESHOLD and skill_name not in existing_skills:
-        confidence = compute_confidence("CREATE", session_count=missed_session_count)
+        # generalizability_score は skill_extractor 由来の候補にのみ同梱される
+        # （#221）。無い場合は None のままにし compute_confidence 側で減点しない。
+        generalizability_score = missed_info.get("generalizability_score")
+        confidence = compute_confidence(
+            "CREATE",
+            session_count=missed_session_count,
+            generalizability_score=generalizability_score,
+        )
         # meta 品質フィルタ (#203): 重複・低頻度で SKIP/REVIEW に降格
         meta = meta_quality_check(
             skill_name=skill_name,
@@ -141,6 +173,10 @@ def triage_skill(
             "action": _action,
             "skill": skill_name,
             "confidence": round(confidence, 2),
+            # confidence と並記して人間が両方を見て判断できるようにする（#221）。
+            "generalizability_score": (
+                round(generalizability_score, 2) if generalizability_score is not None else None
+            ),
             "evidence": {
                 "missed_sessions": missed_session_count,
                 "triggers_matched": missed_info.get("triggers_matched", []),

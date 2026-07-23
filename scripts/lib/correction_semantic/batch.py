@@ -164,6 +164,7 @@ def ingest_judgement_results(
                 non_corrections += 1
                 continue
             corrections += 1
+            idiom_text = v.get("idiom")
             prov = {
                 "source_path": utt.get("source_path", ""),
                 "line_no": utt.get("line_no", ""),
@@ -173,6 +174,10 @@ def ingest_judgement_results(
                 "text": _representative.user_only_text(utt.get("text") or "")[:200],
                 "prev_action": (utt.get("prev_action") or "")[:120],
                 "reason": v.get("reason", ""),
+                # #253: Haiku が抽出した idiom を保存し、signal_text の多トピック発言トリム
+                # （trim_to_idiom_sentence）に使う。idiom_eligible（個人辞書用ゲート）とは
+                # 独立に保存する（トリム目的では eligibility を問わない）。
+                "idiom": idiom_text or "",
                 "judge": "llm_haiku",
             }
             detected_at = now_iso()
@@ -183,7 +188,6 @@ def ingest_judgement_results(
                 session_id=str(utt.get("session_id") or ""),
                 pj_slug=str(utt.get("pj_slug") or ""),
             ))
-            idiom_text = v.get("idiom")
             # #527: 過汎用 idiom（極短/相槌・推量/日付・数値断片）は個人辞書に入れない。
             # idiom 化を弾いても weak_signal は隔離記録済み（reflect で人間が拾える）。
             if idiom_text and _idiom_filter.idiom_eligible(idiom_text):

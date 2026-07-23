@@ -284,6 +284,34 @@ class TestCollectIssuesMissingEffortSchema:
         assert target[0]["detail"].get("skill_path") == str(path)
 
 
+class TestCollectIssuesSplitCandidate:
+    """#223: reorganize の split_candidate を collect_issues() へ配線したことを検証する。"""
+
+    def test_collect_issues_includes_split_candidate_for_oversized_skill(self, skills_dir):
+        """SKILL.md が 300 行を超えるスキルは split_candidate issue として現れる。"""
+        from lib.audit.issues import collect_issues
+
+        _make_skill(skills_dir, "oversized", ["name: oversized", "description: test"], body_lines=350)
+        project_dir = skills_dir.parent.parent
+        issues = collect_issues(project_dir)
+        split_issues = [i for i in issues if i["type"] == "split_candidate"]
+        assert split_issues, "split_candidate issue が collect_issues から出ていない"
+        target = [i for i in split_issues if i["detail"].get("skill_name") == "oversized"]
+        assert target, "作成したスキルの split_candidate issue が見つからない"
+        assert target[0]["file"] == ".claude/skills/oversized/SKILL.md"
+        assert target[0]["detail"]["line_count"] > target[0]["detail"]["threshold"]
+
+    def test_collect_issues_no_split_candidate_for_small_skill(self, skills_dir):
+        """300 行以下のスキルは split_candidate issue を発生させない。"""
+        from lib.audit.issues import collect_issues
+
+        _make_skill(skills_dir, "small", ["name: small", "description: test"], body_lines=10)
+        project_dir = skills_dir.parent.parent
+        issues = collect_issues(project_dir)
+        split_issues = [i for i in issues if i["type"] == "split_candidate"]
+        assert split_issues == []
+
+
 class TestMakeEffortIssue:
     """issue_schema の factory 関数テスト。"""
 

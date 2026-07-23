@@ -22,6 +22,7 @@ from issue_schema import (
     VRC_DETECTION_CONFIDENCE,
     WCC_CONFIDENCE,
     WORKFLOW_CHECKPOINT_CANDIDATE,
+    is_hook_install_issue_type,
 )
 
 # skill_triage の判定結果が detail に運ぶ confidence を top-level に引き継ぐ対象 (#522-1)
@@ -343,7 +344,7 @@ def partition_proposable_by_scope(
     proposable: List[Dict[str, Any]],
     origin_resolver=None,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """proposable issue を custom / global スコープに分割する（#477-1）。
+    """proposable issue を custom / global スコープに分割する（#477-1、#225）。
 
     `impact_scope`（impact 由来）と origin（パス由来）の判定が食い違っても、
     impact_scope を最終権威にして global へ寄せる。SKILL.md 上 global scope は
@@ -354,6 +355,14 @@ def partition_proposable_by_scope(
     分割すると proposable_custom_individual に流れ込み、proposable_global は 0 に
     なっていた。ここで impact_scope == "global" OR origin == "global" を global と
     判定して整合を取る（決定論・LLM 非依存）。
+
+    **#225 の例外**: hook インストール系アクション（type が `*_hook_candidate` に
+    マッチ、`is_hook_install_issue_type` で判定）は上記の scope 判定より優先し、
+    impact_scope/origin が global でも常に custom 側へ合流させる。hook install は
+    ~/.claude 配下の共有設定を書き換える＝影響半径が最大の一方、global scope の
+    折り畳み（1行サマリ「参考値・対応不要」）に埋もれると生成スクリプト/diff の
+    中身をユーザーが見ないまま放置される逆転が起きるため（issue #225 参照）。
+    scope-based な折り畳みは低リスク型（行数超過 advisory 等）専用に限定する。
 
     Args:
         proposable: 分類対象の proposable issue リスト。
@@ -366,6 +375,11 @@ def partition_proposable_by_scope(
     custom: List[Dict[str, Any]] = []
     glob: List[Dict[str, Any]] = []
     for issue in proposable:
+        if is_hook_install_issue_type(issue.get("type", "")):
+            # hook install アクションは scope 判定をバイパスして常に custom 側
+            # （個別承認レーン）へ。折り畳みで隠さない（#225）。
+            custom.append(issue)
+            continue
         is_global = issue.get("impact_scope") == "global"
         if not is_global and origin_resolver is not None:
             file_path = issue.get("file", "")

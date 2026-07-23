@@ -23,7 +23,7 @@
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
-    <span class="header-version">v1.121.0</span>
+    <span class="header-version">v1.123.0</span>
   </div>
 </header>
 
@@ -314,6 +314,7 @@
           <tr><td>evolve-loop-orchestrator</td><td>ベースライン取得 → バリエーション生成 → 評価 → 人間確認のループを統合する</td></tr>
           <tr><td>evolve-scorer エージェント</td><td>オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点する</td></tr>
           <tr><td>skill-triage</td><td>テレメトリ + trigger eval で CREATE/UPDATE/SPLIT/MERGE/OK の5択判定する</td></tr>
+          <tr><td>tool_usage_analyzer</td><td>セッション JSONL からツール呼び出しを抽出・分類し、discover/audit 向けの rule/hook 候補を生成する（evolve Step 10.2 閾値定数を保持。#457 で HOME 隔離すり抜けを修正）（<code>scripts/lib/tool_usage_analyzer/</code>）</td></tr>
           <tr><td>trigger-eval-generator</td><td>sessions.jsonl + usage.jsonl → skill-creator 互換 evals.json を自動生成する</td></tr>
           <tr><td>evolve-skill</td><td>特定スキルに自己進化パターン（Pre-flight / pitfalls.md）をピンポイント組み込みする (<code>assess_single_skill</code> + <code>apply_evolve_proposal</code>)</td></tr>
           <tr><td>agent-brushup</td><td>エージェント定義の品質診断・改善提案・upstream 監視・model exact-ID pin 検出（#449） (<code>scripts/lib/agent_quality.py</code>)</td></tr>
@@ -354,7 +355,7 @@
           <tr><td>memory_capability</td><td>記憶操作を read/use/write/maintain 観点で advisory 評価する observability section（OPD-Evolver #19）。reason 非永続化のため read/use 統合の3軸（write=記憶量 / maintain=健全度 / use_read=活性）。memory dir 解決は <code>resolve_cc_memory_dir</code> 単一ソース（CC パスエンコード）</td></tr>
           <tr><td>fanout_cost</td><td>fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は各群 ≥5 の floor ゲート付き</td></tr>
           <tr><td>paired_trajectory</td><td>paired trajectory auditing（観測版）— 同一タスク種別を「スキル使用群 vs 非使用群」に分け既存テレメトリからアウトカム差を決定論対照集計し advisory surface（能動再実行なし）。outcome_attribution/multiview_eval/negative_transfer と相補（#15）</td></tr>
-          <tr><td>subagent_traces</td><td>subagent 内部軌跡ストア — transcript の tool_use/tool_result/is_error をパースし内部一発成功率を per-agent_type で advisory 表示。親セッションの error_count しか見ない既存 outcome 帰属の盲点（内部 error 連発でも最終成功なら一発成功と誤記録）を塞ぐ（#38）</td></tr>
+          <tr><td>subagent_traces</td><td>subagent 内部軌跡ストア — transcript の tool_use/tool_result/is_error をパースし内部一発成功率を per-agent_type で advisory 表示。親セッションの error_count しか見ない既存 outcome 帰属の盲点（内部 error 連発でも最終成功なら一発成功と誤記録）を塞ぐ。委任プロンプト先頭300字を <code>delegation_prompt</code> として保持し audit に直近委任150字を表示、事後監査可能化（#38, #200）</td></tr>
           <tr><td>subagent_noise</td><td>subagents.jsonl の agent_type ノイズ内訳を advisory 分解表示 — 当 PJ スコープで空文字/ID 形に分け件数・率・最古/最新 timestamp を surface。最新ノイズが直近7日内なら ⚠（live writer 疑い）、古ければ ℹ（historical residue・現行 writer は #36/#44 guard 済で表示のみ）。ノイズ0は非表示（#142）</td></tr>
           <tr><td>reward_ema</td><td>バッチ跨ぎ符号付き advantage の EMA 累積（MAA）— baseline 比 一発成功率差を evolve サイクル跨ぎで符号付き EMA（α=0.3）累積し「通時で安定して効くか」を RODS（単一スナップショット分散）と相補的に区別。書込は evolve --drain の apply 境界のみ・閾値は捏造せず符号＋サイクル数のみ（#64, arXiv 2606.20475）</td></tr>
           <tr><td>predictive_validity</td><td>重み昇格レディネスの第4条件 — skill 一発成功率を ts 中央値で in/out-of-sample 分割し純 Python Spearman 順位相関で予測妥当性を判定。rho≥0.5 で pass、insufficient_data は「データ不足」明示で保守的に昇格ブロック（#42, arXiv 2606.19704）</td></tr>
@@ -399,6 +400,7 @@
           <tr><td>measurement_bug</td><td>複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185）</td></tr>
           <tr><td>fleet_queue</td><td>学習素材ベースの evolve 待ち列挙 <code>evolve-fleet queue</code> — material_count = weak 未処理 + 前回 evolve 以降の新規 corr が閾値（既定5）以上の PJ を決定論・ゼロ LLM で列挙。新ストア <code>evolve-queue-state.jsonl</code> が per-PJ の前回 evolve 時刻を測る。dead/rename/phantom PJ を透明化（#79, #85–#88）</td></tr>
           <tr><td>daily</td><td>毎朝の evolve queue 自動実行 + SessionStart 通知 — launchd で <code>fleet ingest</code>→<code>fleet queue --json</code> を毎朝1回走らせ、待ち PJ を systemMessage で通知（無人は決定論まで・適用は対話で人間承認）。<code>bin/evolve-daily-install</code> で登録（#80）</td></tr>
+          <tr><td>icebox_notice</td><td>daily runner の icebox 棚卸し気づきトリガー — runner 第4ステップが <code>gh issue list --label icebox --state closed</code>（read-only・closedAt のみ・timeout 30s・fail-open 4種で既存ファイル非破壊）を集計し <code>icebox-status.json</code> に保存、SessionStart hook が最古90日超で「icebox N件・最古M日」を systemMessage 1行通知（個別列挙しない・閾値未満は無音）（#194）</td></tr>
           <tr><td>fleet_propose</td><td><code>evolve-fleet propose</code> — queue 待ち PJ へ <code>run_evolve(dry_run=True)</code> を順次実行し提案を集約レポート <code>evolve-proposals-&lt;date&gt;.md/.json</code> に束ねる。llm-batch-guard 承認ゲート + reject 済み提案の再提示抑制付き（#81）</td></tr>
           <tr><td>fleet_pr</td><td><code>evolve-fleet pr-start</code>/<code>pr-finish</code> — 承認済み提案の worktree 準備→（対話 evolve で人間が適用）→commit→push アカウント検証→PR 作成。適用とマージは常に人間、自動化は外殻のみ（#82）</td></tr>
           <tr><td>testpaths_coverage</td><td>pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468）</td></tr>
@@ -412,8 +414,8 @@
           <tr><td>token_usage_store</td><td>プロジェクト別 LLM トークン消費の DuckDB SoR — PK uuid で冪等 ingest</td></tr>
           <tr><td>token_usage_ingest</td><td><code>~/.claude/projects/&lt;pj&gt;/*.jsonl</code> の message.usage を walker で取り込み、days mtime filter + batch insert する</td></tr>
           <tr><td>token_usage_query</td><td>TOP-N / WoW スパイク / cache hit 異常 / PJ ドリルダウン。fleet status・tokens サブコマンド・audit セクションが利用する</td></tr>
-          <tr><td>auto_memory_runner</td><td>Stop hook は corrections 直近 5 件を生成前ゲート（memory_gating）して PJ スコープキュー <code>auto_memory_queue/&lt;slug&gt;.jsonl</code> に内容ハッシュ dedup で enqueue するだけのゼロ LLM（ADR-037 Phase 2、claude -p 全廃）。LLM 生成・書込は auto_memory_broker が担う</td></tr>
-          <tr><td>auto_memory_broker</td><td>auto-memory の生成 + belief ゲート + memory 書込を担う2相ブローカ（emit→assistant インライン生成→ingest）。evolve SKILL Step 6.5 が drain を駆動。決定論・LLM 非依存（ADR-037 Phase 2）</td></tr>
+          <tr><td>auto_memory_runner</td><td>Stop hook は corrections 直近 5 件を生成前ゲート（memory_gating）して PJ スコープキュー <code>auto_memory_queue/&lt;slug&gt;.jsonl</code> に内容ハッシュ dedup で enqueue するだけのゼロ LLM（ADR-037 Phase 2、claude -p 全廃）。LLM 生成・書込は auto_memory_broker が担う。<code>corrections.jsonl</code> は全 PJ 共有ストアのため <code>pj_slug.record_project_match</code> で自 PJ 分のみにフィルタしてから直近件数を切り出す（フィルタ→スライスの順序厳守、#206）</td></tr>
+          <tr><td>auto_memory_broker</td><td>auto-memory の生成 + belief ゲート + memory 書込を担う2相ブローカ（emit→assistant インライン生成→ingest）。evolve SKILL Step 6.5 が drain を駆動。決定論・LLM 非依存（ADR-037 Phase 2）。project スコープ多層防御: 読み出し側フィルタをすり抜けた場合の最終防衛として <code>enqueue()</code> が他 PJ の correction を reject（silent drop にせず件数可視化）、既混入分は <code>auto_memory_purge.py</code> の <code>purge_mismatched_pending</code>（dry-run 既定）が検出・除去する（#206）</td></tr>
           <tr><td>memory_gating</td><td>correction の重要度スコアリングで auto_memory_runner のノイズを低減。<code>RL_GATING_DISABLED=1</code> で無効化可能</td></tr>
           <tr><td>fitness_history_store</td><td>fitness スコアの時系列記録 SoR（DuckDB）。<code>record_fitness_run()</code> で audit 実行時に自動記録、<code>get_axis_history()</code> でトレンド取得</td></tr>
           <tr><td>hypothesis_tracker</td><td>仮説の記録・更新・クエリを提供するストア。evolve/audit の改善仮説を追跡する</td></tr>

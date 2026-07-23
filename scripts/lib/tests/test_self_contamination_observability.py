@@ -17,7 +17,7 @@ import self_contamination_scan as scs  # noqa: E402
 from audit import sections_self_contamination as ssc  # noqa: E402
 
 
-def _report(a=0, b=0, c=0, *, recent=None, baseline=None, is_topic=False):
+def _report(a=0, b=0, c=0, *, recent=None, baseline=None, is_topic=False, domain_fp=0):
     rep = scs.ScanReport()
     for i in range(a):
         rep.family_a.append(scs.Hit("A", i + 1, "text", "court\n<invoke name=\"Bash\">…", session_id="s"))
@@ -31,6 +31,17 @@ def _report(a=0, b=0, c=0, *, recent=None, baseline=None, is_topic=False):
                 "text",
                 "the user has approved the rewrite",
                 reference_text="普通の git 出力でした",
+                session_id="s",
+            )
+        )
+    for i in range(domain_fp):
+        rep.domain_vocab_fp.append(
+            scs.Hit(
+                "C",
+                i + 1,
+                "text",
+                "今日は良い天気でしたね、ありがとうございます",
+                reference_text="普通の文字起こし出力です",
                 session_id="s",
             )
         )
@@ -105,3 +116,29 @@ def test_topic_pj_annotated(tmp_path, monkeypatch):
     _patch(monkeypatch, tmp_path, _report(0, 0, 2, is_topic=True))
     combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
     assert "話題 PJ" in combined or "FP" in combined
+
+
+# ==================================================================
+# ドメイン語彙 FP 除外件数の常時 surface（#203, silence≠evaluated）
+# ==================================================================
+def test_domain_vocab_fp_count_surfaced_even_when_otherwise_clean(tmp_path, monkeypatch):
+    """真の自己汚染ヒットが 0 件でも、ドメイン語彙 FP 除外件数は沈黙にしない。"""
+    _patch(monkeypatch, tmp_path, _report(0, 0, 0, domain_fp=43))
+    section = ssc.build_self_contamination_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "43" in combined
+    assert "ドメイン語彙" in combined
+
+
+def test_domain_vocab_fp_count_surfaced_alongside_real_hits(tmp_path, monkeypatch):
+    _patch(monkeypatch, tmp_path, _report(0, 0, 2, domain_fp=5))
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "5" in combined
+    assert "ドメイン語彙" in combined
+
+
+def test_domain_vocab_fp_zero_and_otherwise_clean_stays_silent(tmp_path, monkeypatch):
+    """ドメイン語彙 FP も真のヒットも 0 件なら、従来どおり沈黙（回帰確認）。"""
+    _patch(monkeypatch, tmp_path, _report(0, 0, 0, domain_fp=0))
+    assert ssc.build_self_contamination_section(tmp_path) is None

@@ -126,7 +126,7 @@ Related: {GitHub Issue があれば #番号}
 
 ## Layer Split Guide
 
-SPEC.md が 100行を超えた場合、L1（単一ファイル）→ L2（hot + cold）へ昇格する際の分割ルール。
+SPEC.md が 35KB（bytes）を超えた場合（行数目安: >100行）、L1（単一ファイル）→ L2（hot + cold）へ昇格する際の分割ルール。
 
 ### SPEC.md (hot) に残すもの
 

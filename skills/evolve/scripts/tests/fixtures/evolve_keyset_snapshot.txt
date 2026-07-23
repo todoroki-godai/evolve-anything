@@ -205,6 +205,7 @@ phases.reorganize.hierarchy_candidates
 phases.reorganize.issues
 phases.reorganize.skipped
 phases.reorganize.split_candidates
+phases.reorganize.split_suppressed_by_archive
 phases.reorganize.total_clusters
 phases.reorganize.total_hierarchy_candidates
 phases.reorganize.total_split_candidates
@@ -217,6 +218,7 @@ phases.skill_evolve
 phases.skill_evolve.already_evolved
 phases.skill_evolve.assessments
 phases.skill_evolve.batch_guard_trigger
+phases.skill_evolve.evolve_suppressed_by_archive
 phases.skill_evolve.excluded_global_count
 phases.skill_evolve.excluded_global_hint
 phases.skill_evolve.high_suitability

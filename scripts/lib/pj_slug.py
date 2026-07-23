@@ -246,6 +246,40 @@ def resolve_cc_memory_dir(path_or_cwd: Optional[Union[str, Path]] = None) -> Pat
     return base / encoded / "memory"
 
 
+def record_project_match(rec: dict, current_slug: Optional[str]) -> bool:
+    """レコード（corrections 等）が current_slug のスコープに属するか判定する（#206）。
+
+    auto_memory Stop hook が project_path フィルタ無しで全 PJ 共有ストア（corrections.jsonl）
+    を読み、他 PJ の correction を enqueue / checkpoint に混入させていた事故の再発防止用
+    単一ソース述語。既存の ``capture_rate._project_match`` / ``audit.outcome_metrics._project_match``
+    と同じ判定仕様（project_path 優先 → project → project_name、未帰属は寛容に許容）を
+    hooks hot path でも安全に使える形（subprocess なし・純文字列処理）で切り出したもの。
+
+    判定仕様:
+      - ``current_slug`` が None/空: 判定不能につき常に True（呼び出し側の graceful 挙動を壊さない）
+      - レコードの project_path（無ければ project → project_name）が None/空: 汎用スコープとして
+        許容（True）— 属性欠落は他 PJ 誤混入と区別できないため寛容側に倒す
+      - 双方を ``pj_slug_fast`` + ``canonical_pj_slug`` で正規化した後に一致すれば True
+        （フルパス・旧 rename slug も本体 slug に正規化してから突合する）
+      - 不一致なら False
+
+    Args:
+        rec: correction 等の 1 レコード（dict）。
+        current_slug: 当 PJ の slug（呼び出し側で解決済みのもの）。
+
+    Returns:
+        当 PJ スコープに属する（または判定不能で寛容に許容する）なら True。
+    """
+    if not current_slug:
+        return True
+    raw = rec.get("project_path") or rec.get("project") or rec.get("project_name")
+    if not raw:
+        return True
+    rec_slug = canonical_pj_slug(pj_slug_fast(str(raw)))
+    target_slug = canonical_pj_slug(pj_slug_fast(str(current_slug)))
+    return rec_slug == target_slug
+
+
 def pj_id_to_slug(pj_id: Optional[str], root: Optional[Union[str, Path]] = None) -> str:
     """CC エンコード pj_id（``-Users-x-updater-figma-to-code``）→ 実 dir basename（``figma-to-code``）。
 
