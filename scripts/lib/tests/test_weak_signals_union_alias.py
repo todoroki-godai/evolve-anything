@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _lib_dir = Path(__file__).resolve().parent.parent
@@ -33,6 +34,11 @@ from weak_signals import store as ws_store  # noqa: E402
 LEGACY_SLUG = "rl-anything"
 CUR_SLUG = "evolve-anything"
 ELIGIBLE_IDIOM = "テストを先に書くべき"  # 8文字以上・stopword/context-token 無し → idiom_eligible
+
+
+def _fresh_detected_at() -> str:
+    """TTL 対象の union fixture を実行時点で新しく保つ。"""
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _patch_union(monkeypatch, dirs) -> None:
@@ -56,7 +62,7 @@ def _write_signal(
     rec = ws_store.WeakSignal(
         channel=channel,
         provenance={"source_path": source_path, "line_no": line_no, "text": text},
-        detected_at="2026-06-10T00:00:00+00:00",
+        detected_at=_fresh_detected_at(),
         session_id="s1",
         pj_slug=pj_slug,
         promoted=promoted,

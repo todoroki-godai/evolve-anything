@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _lib_dir = Path(__file__).resolve().parent.parent
@@ -32,7 +33,7 @@ def _seed_idiom(idioms_path: Path, line_no, text="四国めたんじゃなくて
     """idiom を 1 件 seed。confirmed=True なら confirm_idioms で確認済みにする。"""
     it = cs_store.CorrectionIdiom(
         idiom=text, provenance=_prov(line_no, text),
-        detected_at="2026-06-10T00:00:00+00:00", pj_slug=SLUG,
+        detected_at=datetime.now(timezone.utc).isoformat(), pj_slug=SLUG,
     )
     cs_store.append_idioms([it], path=idioms_path)
     if confirmed:
@@ -44,7 +45,7 @@ def _seed_signal(ws_path: Path, line_no, text="四国めたんじゃなくて"):
     """idiom と同じ物理キー（prov）を共有する weak_signal を 1 件 seed。"""
     sig = WeakSignal(
         channel="llm_judge", provenance=_prov(line_no, text),
-        detected_at="2026-06-10T00:00:00+00:00", session_id="s1", pj_slug=SLUG,
+        detected_at=datetime.now(timezone.utc).isoformat(), session_id="s1", pj_slug=SLUG,
     )
     append_signals([sig], path=ws_path)
     return sig

@@ -50,6 +50,11 @@ def _write_corrections(tmp_path, corrections):
     return filepath
 
 
+def _fresh_detected_at() -> str:
+    """TTL 対象の weak signal を常に有効な時刻で seed する。"""
+    return datetime.now(timezone.utc).isoformat()
+
+
 # --- Test: extract_pending ---
 
 class TestExtractPending:
@@ -968,11 +973,12 @@ class TestWeakSignalPromotion:
         sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
         from weak_signals.store import WeakSignal, append_signals
         ws = tmp_path / "weak_signals.jsonl"
+        detected_at = _fresh_detected_at()
         sigs = [
             WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 1,
                                      "text": "緑にして赤じゃなくて", "reason": "後置型"},
-                       "2026-06-10T00:00:00+00:00", "s1", "evolve-anything"),
-            WeakSignal("rephrase", {"x": 1}, "2026-06-10T00:01:00+00:00", "s2", "evolve-anything"),
+                       detected_at, "s1", "evolve-anything"),
+            WeakSignal("rephrase", {"x": 1}, detected_at, "s2", "evolve-anything"),
         ]
         append_signals(sigs, path=ws)
         return ws, sigs
@@ -1076,10 +1082,11 @@ class TestPromoteWeakConfirmsIdiom:
         ws = tmp_path / "weak_signals.jsonl"
         idioms = tmp_path / "correction_idioms.jsonl"
         prov = self._prov(line_no, text)
-        sig = WeakSignal("llm_judge", prov, "2026-06-10T00:00:00+00:00", "s1", self.SLUG)
+        detected_at = _fresh_detected_at()
+        sig = WeakSignal("llm_judge", prov, detected_at, "s1", self.SLUG)
         append_signals([sig], path=ws)
         it = cs_store.CorrectionIdiom(
-            idiom=text, provenance=prov, detected_at="2026-06-10T00:00:00+00:00", pj_slug=self.SLUG,
+            idiom=text, provenance=prov, detected_at=detected_at, pj_slug=self.SLUG,
         )
         cs_store.append_idioms([it], path=idioms)
         return ws, idioms, sig, it
@@ -1131,10 +1138,11 @@ class TestPromoteWeakConfirmsIdiom:
 
         # (d) 同テキストの新規 weak_signal（別 phys）+ 新 idiom record を投入
         prov99 = self._prov(99, text)
-        append_signals([WeakSignal("llm_judge", prov99, "2026-06-20T00:00:00+00:00",
+        detected_at = _fresh_detected_at()
+        append_signals([WeakSignal("llm_judge", prov99, detected_at,
                                    "s1", self.SLUG)], path=ws)
         it99 = cs_store.CorrectionIdiom(
-            idiom=text, provenance=prov99, detected_at="2026-06-20T00:00:00+00:00", pj_slug=self.SLUG,
+            idiom=text, provenance=prov99, detected_at=detected_at, pj_slug=self.SLUG,
         )
         cs_store.append_idioms([it99], path=idioms)
 
@@ -1244,13 +1252,14 @@ class TestWeakSignalRelevanceGate:
         sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
         from weak_signals.store import WeakSignal, append_signals
         ws = tmp_path / "weak_signals.jsonl"
+        detected_at = _fresh_detected_at()
         sigs = [
             WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 1,
                                      "text": "認証ルーティングの設定を確認", "reason": "r"},
-                       "2026-06-10T00:00:00+00:00", "s1", "evolve-anything"),
+                       detected_at, "s1", "evolve-anything"),
             WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 2,
                                      "text": "チョコレートケーキのレシピ", "reason": "r"},
-                       "2026-06-10T00:01:00+00:00", "s2", "evolve-anything"),
+                       detected_at, "s2", "evolve-anything"),
         ]
         append_signals(sigs, path=ws)
         return ws
