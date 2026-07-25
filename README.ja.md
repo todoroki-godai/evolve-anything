@@ -4,6 +4,8 @@
 
 Claude Code のスキル/ルールを **自律的に観測・発見・淘汰・進化** させ、**LLM 直接パッチで最適化** する Claude Code Plugin。
 
+> リリース情報: **v1.123.0** ・ **21個の userConfig**
+
 ## クイックスタート
 
 ```bash
@@ -38,6 +40,26 @@ bin/evolve-fleet ingest
 ```
 
 普段は **`evolve` を日に1回叩くだけ**。データが足りなければ自動でスキップを提案してくれる。
+
+## Python 依存
+
+プラグインの source-tree 起動は維持しつつ、Python 依存グループの単一ソースを `pyproject.toml` に置く。使う機能に応じて導入する:
+
+```bash
+# 必須の parser のみ
+python3 -m pip install -e ".[core]"
+
+# DuckDB を使う telemetry / storage 機能
+python3 -m pip install -e ".[storage]"
+
+# TF-IDF・数値類似度・クラスタリング機能
+python3 -m pip install -e ".[analysis]"
+
+# contributor 向け: 全 runtime 機能 + pytest / pytest-xdist
+python3 -m pip install -e ".[dev]"
+```
+
+旧 `scripts/requirements.txt` は storage 専用の互換入口として残す。`scripts/` から `pip -r` で導入すると `../pyproject.toml` に委譲する。
 
 ## 全体像 — 4つの柱
 
@@ -82,12 +104,13 @@ evolve-anything は **4つの独立した柱** で構成される。
 | 蓄積されたフィードバックを確認 | `reflect --view` |
 | 全 skills/rules の棚卸し | `audit` |
 | プロジェクト固有の評価関数を作成 | `generate-fitness --ask` |
-| 過去セッションからデータ収集 | `backfill` |
+| テレメトリの収集を始める | 通常どおり Claude Code を使う（observe hooks が新規セッションを自動記録）→ `evolve` |
 | 評価関数自体を改善 | `evolve-fitness` |
 | エージェント定義を診断・改善 | `agent-brushup` |
 | 独立したセカンドオピニオンを取得 | `second-opinion` |
 | SPEC.md を初期化・更新 | `spec-keeper init` / `spec-keeper update` |
-| 行き詰まり問題の突破 | `breakthrough` || 環境の成長レポート | `audit --growth` |
+| 行き詰まり問題の突破 | `breakthrough` |
+| 環境の成長レポート | `audit --growth` |
 | マージ・デプロイ後の後片付け | `cleanup` |
 | 全 PJ 横断の fleet ステータス | `bin/evolve-fleet status` |
 | 全 PJ の memory を keyword 横断検索 | `bin/evolve-fleet recall "<query>"` |
@@ -97,49 +120,76 @@ evolve-anything は **4つの独立した柱** で構成される。
 
 > すべてのコマンドは `/evolve-anything:` プレフィックス付きで呼び出す（例: `/evolve-anything:evolve`）
 
-## スキル一覧（全18スキル）
+## スキル一覧（23個の公開スキル）
+
+> **方針**: `skills/*/SKILL.md` の各 `name:` が公開コマンドの単一ソース。slash command は `/evolve-anything:<skill>` で、実装ディレクトリ名が異なる場合がある。たとえば `/evolve-anything:evolve-loop` の実装は `skills/evolve-loop-orchestrator/` にある。
 
 | スキル | 柱 | 説明 |
 |--------|-----|------|
-| `evolve` | 自律進化 | 全フェーズ統合実行（日次運用） |
-| `discover` | 自律進化 | 観測データからパターン検出→スキル/ルール候補生成 |
-| `prune` | 自律進化 | 未使用・重複アーティファクトの淘汰（merge 統合対応） |
-| `audit` | 自律進化 | 全 skills/rules/memory の棚卸し＋健康診断＋Growth Report |
-| `backfill` | 自律進化 | 過去セッション履歴からデータ収集＋分析 |
-| `reflect` | フィードバック | corrections の修正フィードバックを CLAUDE.md/rules に反映 |
-| `evolve-loop` | 直接パッチ最適化 | ベースライン→直接パッチ→評価→人間確認ループ |
-| `generate-fitness` | 直接パッチ最適化 | プロジェクト固有の評価関数を自動生成 |
+| `agent-brushup` | エージェント管理 | エージェント定義を診断・改善 |
+| `audit` | 自律進化 | skills/rules/memory の棚卸しと健全性確認 |
+| `backfill` | 廃止済みリダイレクト | 現行の observe → evolve 取り込み経路を案内するだけで、backfill は実行しない |
+| `breakthrough` | 行き詰まり突破 | 停滞を診断し、戦略を提案 |
+| `cleanup` | ユーティリティ | マージ・デプロイ後の痕跡を安全に後片付け |
+| `discover` | 自律進化 | パターンを検出してスキル/ルール候補を生成 |
+| `docs-refresh` | ドキュメント | リリース後に HTML ドキュメントサイトを更新 |
+| `evolve` | 自律進化 | 日次進化パイプラインを実行 |
 | `evolve-fitness` | 直接パッチ最適化 | accept/reject データから評価関数を改善 |
-| `evolve-skill` | 直接パッチ最適化 | 特定スキルに自己進化パターン組み込み |
-| `agent-brushup` | エージェント管理 | エージェント定義の品質診断・改善提案 |
-| `second-opinion` | セカンドオピニオン | Claude Agent による独立した cold-read セカンドオピニオン |
-| `breakthrough` | 行き詰まり突破 | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動 |
-| `implement` | 構造化実装 | plan artifact → タスク分解 → 実装（Standard/Parallel）→ 計画準拠チェック → テレメトリ記録 |
-| `spec-keeper` | 仕様管理 | SPEC.md + ADR 管理、Progressive Disclosure L1/L2 自動昇格 || `cleanup` | 後片付け | PR マージ・デプロイ後の branches / remote refs / worktrees / tmp dirs / close 候補 Issue / PR Test plan 残件を個別承認→実行で処理。tmp dir default prefix は `evolve-anything-` のみ（詳細は [ADR-021](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)） |
-| `release-notes-review` | ユーティリティ | CC リリースノート分析＋グローバル環境健康診断（`--env-only` 対応） |
-| `report-feedback` | フィードバック | evolve/audit レポートを LLM メタレビューし evolve-anything 自身への改善 issue を半自動起票（旧 `feedback` の後継） |
+| `evolve-loop` | 直接パッチ最適化 | ベースライン→パッチ→評価→人間確認 |
+| `evolve-skill` | 直接パッチ最適化 | 1つのスキルに自己進化パターンを適用 |
+| `generate-fitness` | 直接パッチ最適化 | PJ 固有の評価関数を生成 |
+| `implement` | 構造化実装 | 承認済み計画を分解・実装・検証しテレメトリを記録 |
+| `import` | fleet | 確認ゲート付きでコミュニティスキルを import |
+| `pitfall-curate` | pitfall 運用 | pitfalls を分類・重複排除・配布 |
+| `prune` | 自律進化 | 未使用・重複アーティファクトを統合候補として検出 |
+| `queue` | fleet | 手動 evolve に十分な学習素材がある PJ を表示 |
+| `reflect` | フィードバック | 修正フィードバックを確認・昇格 |
+| `release-notes-review` | ユーティリティ | Claude Code リリースノートと環境健全性を確認 |
+| `report-feedback` | フィードバック | evolve-anything 自身への改善フィードバックを issue 候補化 |
+| `second-opinion` | セカンドオピニオン | 独立した cold-read レビューを取得 |
+| `spec-keeper` | 仕様管理 | SPEC.md と ADR を維持 |
+| `tier` | モデルティア管理 | モデルティア方針を安全に表示・更新 |
 
-内部スキル（evolve から自動呼出し）: `reorganize`（split 検出のみ）、`enrich`（discover に統合済み、deprecated）
+## bare CLI 一覧（22コマンド）
 
-## Hooks（データ収集）
+`bin/` が executable 名の単一ソース。bare CLI を使うときだけ `bin/` を `PATH` に追加し、通常のプラグイン操作には slash skill を使う。
 
-13個の hooks が LLM コストゼロでセッションライフサイクル全体をカバーする。
+| コマンド | コマンド | コマンド |
+|----------|----------|----------|
+| `evolve` | `evolve-audit` | `evolve-audit-aggregate` |
+| `evolve-backfill-turn-indices` | `evolve-daily-install` | `evolve-daily-run` |
+| `evolve-discover` | `evolve-dogfood-gate` | `evolve-fleet` |
+| `evolve-gain` | `evolve-loop` | `evolve-loop-ablation` |
+| `evolve-optimize` | `evolve-prompt-compare` | `evolve-prune` |
+| `evolve-reflect` | `evolve-release-sync` | `evolve-reorganize` |
+| `evolve-scaffold-advisory` | `evolve-score-noise` | `evolve-tier` |
+| `evolve-usage-log` |  |  |
 
-| Hook | イベント | 出力先 |
-|------|---------|--------|
-| `observe` | PostToolUse | `usage.jsonl`, `errors.jsonl` |
-| `correction_detect` | UserPromptSubmit | `corrections.jsonl` |
-| `subagent_observe` | SubagentStop | `subagents.jsonl` |
-| `instructions_loaded` | InstructionsLoaded | `sessions.jsonl` + Growth greeting |
-| `workflow_context` | PreToolUse | `$TMPDIR/evolve-anything-workflow-*.json` |
-| `skill_activation_log` | PostToolUse | `skill_activations.jsonl`（スキル発火記録） |
-| `file_changed` | FileChanged | stdout（audit 提案） |
-| `permission_denied` | PermissionDenied | `errors.jsonl`（パーミッション拒否記録） |
-| `stop_failure` | StopFailure | `errors.jsonl`（API エラー） |
-| `save_state` | PreCompact | `checkpoint.json` |
-| `post_compact` | PostCompact | stdout（compact 直後ガイダンス） |
-| `restore_state` | SessionStart | stdout |
-| `session_summary` | Stop | `sessions.jsonl`, `workflows.jsonl` |
+## Hooks（24件の登録、12イベント）
+
+`hooks/hooks.json` が単一ソース。24件の登録には Edit / Write / MultiEdit の重複した `PostToolUse` 登録が含まれ、LLM コストゼロで19個の異なる hook script を実行する。
+
+| Hook script | イベント / matcher | 主な効果 |
+|-------------|-------------------|----------|
+| `correction_detect` | UserPromptSubmit | 修正フィードバックを記録 |
+| `ctx_guard` | UserPromptSubmit | context 占有率が設定閾値を超えたら警告 |
+| `pitfall_injector` | UserPromptSubmit | 登録済みの関連 pitfall を注入 |
+| `workflow_context` | PreToolUse / Skill | workflow context を記録 |
+| `pitfall_commit_gate` | PreToolUse / Bash | 登録済み pitfall の危険な変更をブロック |
+| `skill_activation_log` | PostToolUse / Skill | スキル発火を記録 |
+| `observe` | PostToolUse / Skill, Agent | 使用状況とエラーを記録 |
+| `post_tool_use_memory` | PostToolUse / Edit, Write, MultiEdit | memory 候補を記録 |
+| `pitfall_lint` | PostToolUse / Edit, Write, MultiEdit | pitfall 形式 drift を警告 |
+| `subagent_observe` | SubagentStop | subagent 完遂情報を記録 |
+| `session_summary` | Stop | session / workflow summary を記録 |
+| `record_verbosity` | Stop | 回答長テレメトリを記録 |
+| `stop_failure` | StopFailure | API 失敗を記録 |
+| `instructions_loaded` | InstructionsLoaded | 状態を復元しガイダンスを出力 |
+| `save_state` | PreCompact | checkpoint を保存 |
+| `post_compact` | PostCompact | compact 後のガイダンスを出力 |
+| `file_changed` | FileChanged / CLAUDE.md\|SKILL.md | 関連編集後に audit を提案 |
+| `permission_denied` | PermissionDenied | denied permission を記録 |
+| `restore_state` | SessionStart | session state を復元 |
 
 ### Auto Trigger
 
@@ -279,11 +329,11 @@ bin/evolve-fleet ingest                # 全 PJ の human 発話を utterances.d
 
 | ファイル | 書き込み元 | 読み取り先 |
 |---------|-----------|-----------|
-| `usage.jsonl` | observe hook, backfill | discover, prune, audit |
+| `usage.jsonl` | observe hook | discover, prune, audit |
 | `errors.jsonl` | observe hook | discover, audit |
-| `sessions.jsonl` | session_summary hook, backfill | audit, evolve, discover |
-| `workflows.jsonl` | session_summary hook, backfill | audit, discover |
-| `corrections.jsonl` | correction_detect hook, backfill | reflect, discover, evolve, prune |
+| `sessions.jsonl` | session_summary hook | audit, evolve, discover |
+| `workflows.jsonl` | session_summary hook | audit, discover |
+| `corrections.jsonl` | correction_detect hook | reflect, discover, evolve, prune |
 | `false_positives.jsonl` | reflect | correction_detect |
 | `workflow_stats.json` | workflow_analysis.py | optimize, evolve-scorer, generate-fitness |
 | `checkpoint.json` | save_state hook | restore_state hook |
@@ -361,7 +411,7 @@ CLAUDE.md からドメインを推定し、評価軸を自動切替。
 
 ### 第1幕: Observe — データが貯まる
 
-インストール後、hooks が自動でスキル使用・エラー・修正フィードバックを記録。14個のスキルを運用中、`/bot-create` で personality 設定が抜け落ちる事故が起きていた。
+インストール後、hooks が自動でスキル使用・エラー・修正フィードバックを記録。あるプロジェクトでは、`/bot-create` で personality 設定が抜け落ちる事故が起きていた。
 
 ### 第2幕: Discover → Optimize — パターンから改善へ
 

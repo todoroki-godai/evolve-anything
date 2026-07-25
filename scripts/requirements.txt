@@ -1,1 +1,3 @@
-duckdb
+# Legacy bootstrap for storage users. Dependency groups are canonical in
+# ../pyproject.toml; from this directory, install this file with pip -r.
+-e ..[storage]
