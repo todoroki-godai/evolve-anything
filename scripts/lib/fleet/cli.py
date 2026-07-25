@@ -186,19 +186,24 @@ def main(argv: list[str] | None = None) -> int:
     pr_start_p.add_argument(
         "pj_slug", help="対象 PJ の pj_slug（最新 propose レポートに存在し status=ok であること）"
     )
+    pr_start_p.add_argument("--executor", choices=["claude", "codex"], required=True)
+    pr_start_p.add_argument("--task-id", required=True, help="<issue>-<slug>")
+    pr_start_p.add_argument("--worktree-root", type=Path, default=Path("/private/tmp"))
 
     pr_finish_p = sub.add_parser(
         "pr-finish",
         help="worktree の変更を commit→push→PR 化する（マージは人間・#82）",
     )
     pr_finish_p.add_argument("pj_slug", help="対象 PJ の pj_slug")
+    pr_finish_p.add_argument("--executor", choices=["claude", "codex"], required=True)
+    pr_finish_p.add_argument("--task-id", required=True, help="<issue>-<slug>")
+    pr_finish_p.add_argument(
+        "--commit-path", action="append", required=True,
+        help="commit 対象の repo-relative path（複数指定可）",
+    )
     pr_finish_p.add_argument("--draft", action="store_true", help="draft PR として作成する")
     pr_finish_p.add_argument(
         "--dry-run", action="store_true", help="実行せず予定アクションを表示のみ（commit/push/PR 作成しない）"
-    )
-    pr_finish_p.add_argument(
-        "--date", type=str, default=None,
-        help="worktree の日付（YYYYMMDD）。同一 PJ に複数 worktree がある場合に指定する",
     )
 
     args = parser.parse_args(argv)

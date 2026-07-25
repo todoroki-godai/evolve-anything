@@ -18,6 +18,7 @@ evolve の適用そのものは本質的に対話（人間が対象 PJ の workt
 from __future__ import annotations
 
 import re
+import secrets
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,10 +26,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .propose import PROPOSALS_FILE_PREFIX
 
-WORKTREE_SUBDIR = Path(".claude") / "worktrees"
-WORKTREE_PREFIX = "evolve-apply-"
-BRANCH_PREFIX = "evolve/"
-BRANCH_SUFFIX = "-proposals"
+DEFAULT_WORKTREE_ROOT = Path("/private/tmp")
+EXECUTORS = frozenset({"claude", "codex"})
+_TASK_ID_RE = re.compile(r"^[1-9][0-9]*-[a-z0-9][a-z0-9-]*$")
 
 # アカウントマッピング（~/.claude/hooks/account-org-guard.py と同期を保つこと）
 MINDEN_OWNERS = {"min-sys", "matsukaze-minden"}
@@ -82,12 +82,43 @@ def today_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d")
 
 
-def branch_name(date_str: str) -> str:
-    return f"{BRANCH_PREFIX}{date_str}{BRANCH_SUFFIX}"
+def validate_executor(executor: str) -> str:
+    if executor not in EXECUTORS:
+        raise WorktreeError(f"executor は claude|codex のいずれかです: {executor!r}")
+    return executor
 
 
-def worktree_path(project_path: Path, date_str: str) -> Path:
-    return Path(project_path) / WORKTREE_SUBDIR / f"{WORKTREE_PREFIX}{date_str}"
+def validate_task_id(task_id: str) -> str:
+    if not _TASK_ID_RE.fullmatch(task_id):
+        raise WorktreeError(
+            f"task_id は <issue>-<slug> 形式で指定してください: {task_id!r}"
+        )
+    return task_id
+
+
+def branch_name(executor: str, task_id: str) -> str:
+    return f"{validate_executor(executor)}/{validate_task_id(task_id)}"
+
+
+def worktree_path(
+    project_path: Path,
+    executor: str,
+    task_id: str,
+    *,
+    worktree_root: Path = DEFAULT_WORKTREE_ROOT,
+    random_suffix: Optional[str] = None,
+) -> Path:
+    """repo 外の executor 専用 worktree path を返す。"""
+    root = Path(worktree_root).resolve()
+    project = Path(project_path).resolve()
+    try:
+        root.relative_to(project)
+    except ValueError:
+        pass
+    else:
+        raise WorktreeError(f"worktree root は repo 外である必要があります: {root}")
+    suffix = random_suffix or secrets.token_hex(4)
+    return root / f"{project.name}-{validate_executor(executor)}-{validate_task_id(task_id)}-{suffix}"
 
 
 # --- proposals report からの対象解決 ------------------------------------------
@@ -157,7 +188,12 @@ def branch_exists(project_path: Path, branch: str, *, run: RunFunc = subprocess.
 
 
 def create_worktree(
-    project_path: Path, date_str: str, *, run: RunFunc = subprocess.run
+    project_path: Path,
+    task_id: str,
+    *,
+    executor: str,
+    worktree_root: Path = DEFAULT_WORKTREE_ROOT,
+    run: RunFunc = subprocess.run,
 ) -> Dict[str, Any]:
     """``git worktree add <path> -b <branch> <base_ref>`` を実行する。既存 worktree/branch は上書きしない。
 
@@ -165,8 +201,10 @@ def create_worktree(
     start point を省略するとカレントブランチから分岐し、対象 PJ が未マージの作業ブランチを
     checkout していた場合に無関係なコミットが PR へ丸ごと混入するため（実PJ通し検証で発症）。
     """
-    wt_path = worktree_path(project_path, date_str)
-    branch = branch_name(date_str)
+    wt_path = worktree_path(
+        project_path, executor, task_id, worktree_root=worktree_root
+    )
+    branch = branch_name(executor, task_id)
     if wt_path.exists():
         raise WorktreeError(f"worktree が既に存在します（上書きしません）: {wt_path}")
     if branch_exists(project_path, branch, run=run):
@@ -198,40 +236,41 @@ def create_worktree(
 # --- worktree 検出・検証（pr-finish）--------------------------------------------
 
 
-def find_existing_worktrees(project_path: Path) -> List[Path]:
-    """``.claude/worktrees/evolve-apply-*`` ディレクトリを列挙する（日付降順）。"""
-    root = Path(project_path) / WORKTREE_SUBDIR
-    if not root.is_dir():
-        return []
-    return sorted(
-        (p for p in root.iterdir() if p.is_dir() and p.name.startswith(WORKTREE_PREFIX)),
-        key=lambda p: p.name,
-        reverse=True,
-    )
+def _worktree_records(project_path: Path, *, run: RunFunc) -> List[Dict[str, str]]:
+    cmd = ["git", "-C", str(project_path), "worktree", "list", "--porcelain"]
+    proc = _run(cmd, run=run)
+    if proc.returncode != 0:
+        raise GitCommandError(cmd, proc.returncode, proc.stderr or "")
+    records: List[Dict[str, str]] = []
+    for block in (proc.stdout or "").strip().split("\n\n"):
+        record: Dict[str, str] = {}
+        for line in block.splitlines():
+            key, _, value = line.partition(" ")
+            if key in {"worktree", "branch"}:
+                record[key] = value
+        if record:
+            records.append(record)
+    return records
 
 
-def resolve_worktree(project_path: Path, *, date_str: Optional[str] = None) -> Path:
-    """pr-finish が操作対象とする worktree を1つ解決する。
-
-    ``date_str`` 指定時はその日付の worktree のみ許容する。未指定時は既存 worktree が
-    ちょうど1件ならそれを使う。0件は「先に pr-start を」、複数件は「--date で指定」を促す。
-    """
-    if date_str:
-        wt = worktree_path(project_path, date_str)
-        if not wt.is_dir():
-            raise WorktreeError(f"worktree が見つかりません: {wt}")
-        return wt
-
-    candidates = find_existing_worktrees(project_path)
+def resolve_worktree(
+    project_path: Path, *, executor: str, task_id: str, run: RunFunc = subprocess.run
+) -> Path:
+    """Git の worktree registry を branch で検索する。checkout は行わない。"""
+    expected = f"refs/heads/{branch_name(executor, task_id)}"
+    candidates = [
+        Path(r["worktree"]) for r in _worktree_records(project_path, run=run)
+        if r.get("branch") == expected and r.get("worktree")
+    ]
     if not candidates:
         raise WorktreeError(
-            "evolve-apply-* worktree が見つかりません。先に `pr-start` を実行してください。"
+            f"branch '{expected.removeprefix('refs/heads/')}' の worktree が見つかりません。"
+            "先に `pr-start` を実行してください。"
         )
-    if len(candidates) > 1:
-        names = ", ".join(p.name for p in candidates)
-        raise WorktreeError(
-            f"複数の worktree が見つかりました（{names}）。`--date YYYYMMDD` で指定してください。"
-        )
+    if len(candidates) != 1:
+        raise WorktreeError(f"branch '{expected}' に複数 worktree が登録されています。")
+    if not candidates[0].is_dir():
+        raise WorktreeError(f"登録済み worktree が不在です: {candidates[0]}")
     return candidates[0]
 
 
@@ -244,9 +283,11 @@ def current_branch(repo_path: Path, *, run: RunFunc = subprocess.run) -> str:
     return proc.stdout.strip()
 
 
-def validate_branch(worktree: Path, date_str: str, *, run: RunFunc = subprocess.run) -> str:
-    """worktree の現在ブランチが ``date_str`` から期待される名前と一致するか検証する。"""
-    expected = branch_name(date_str)
+def validate_branch(
+    worktree: Path, executor: str, task_id: str, *, run: RunFunc = subprocess.run
+) -> str:
+    """branch drift を検出して停止する（自動 checkout はしない）。"""
+    expected = branch_name(executor, task_id)
     actual = current_branch(worktree, run=run)
     if actual != expected:
         raise WorktreeError(
@@ -258,18 +299,65 @@ def validate_branch(worktree: Path, date_str: str, *, run: RunFunc = subprocess.
 # --- commit（pr-finish）---------------------------------------------------------
 
 
-def has_uncommitted_changes(worktree: Path, *, run: RunFunc = subprocess.run) -> bool:
-    proc = _run(["git", "-C", str(worktree), "status", "--porcelain"], run=run)
+def _validated_commit_paths(paths: List[str]) -> List[str]:
+    if not paths:
+        raise WorktreeError("commit paths は1件以上必要です。")
+    normalized: List[str] = []
+    for raw in paths:
+        path = Path(raw)
+        if (
+            path.is_absolute()
+            or raw in {"", ".", ".."}
+            or ".." in path.parts
+            or raw.startswith(":")
+            or any(char in raw for char in "*?[\\")
+        ):
+            raise WorktreeError(f"commit path は repo-relative で指定してください: {raw!r}")
+        value = path.as_posix().rstrip("/")
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def has_uncommitted_changes(
+    worktree: Path, *, paths: Optional[List[str]] = None, run: RunFunc = subprocess.run
+) -> bool:
+    cmd = ["git", "-C", str(worktree), "status", "--porcelain"]
+    if paths is not None:
+        cmd.extend(["--", *_validated_commit_paths(paths)])
+    proc = _run(cmd, run=run)
     if proc.returncode != 0:
         raise GitCommandError(["git", "status", "--porcelain"], proc.returncode, proc.stderr or "")
     return bool(proc.stdout.strip())
 
 
-def commit_all(worktree: Path, message: str, *, run: RunFunc = subprocess.run) -> None:
-    """``git add -A`` + ``git commit -m <message>``。Co-Authored-By は付けない。"""
-    proc = _run(["git", "-C", str(worktree), "add", "-A"], run=run)
+def _path_allowed(path: str, allowlist: List[str]) -> bool:
+    return any(path == allowed or path.startswith(f"{allowed}/") for allowed in allowlist)
+
+
+def commit_paths(
+    worktree: Path, message: str, paths: List[str], *, run: RunFunc = subprocess.run
+) -> None:
+    """明示 allowlist のみ stage し、cached 全件を NUL-safe に再検証して commit する。"""
+    allowlist = _validated_commit_paths(paths)
+    add_cmd = ["git", "-C", str(worktree), "add", "-A", "--", *allowlist]
+    proc = _run(add_cmd, run=run)
     if proc.returncode != 0:
-        raise GitCommandError(["git", "add", "-A"], proc.returncode, proc.stderr or "")
+        raise GitCommandError(add_cmd, proc.returncode, proc.stderr or "")
+    diff_cmd = [
+        "git", "-C", str(worktree), "diff", "--cached", "--name-only", "-z", "--",
+    ]
+    proc = _run(diff_cmd, run=run)
+    if proc.returncode != 0:
+        raise GitCommandError(diff_cmd, proc.returncode, proc.stderr or "")
+    staged = [p for p in (proc.stdout or "").split("\0") if p]
+    if not staged:
+        raise WorktreeError("allowlist 内に staged changes がありません。")
+    rejected = [p for p in staged if not _path_allowed(p, allowlist)]
+    if rejected:
+        raise WorktreeError(
+            "allowlist 外の staged changes を検出しました: " + ", ".join(rejected)
+        )
     proc = _run(["git", "-C", str(worktree), "commit", "-m", message], run=run)
     if proc.returncode != 0:
         raise GitCommandError(["git", "commit", "-m", message], proc.returncode, proc.stderr or "")

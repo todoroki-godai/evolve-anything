@@ -22,9 +22,11 @@ def run_pr_start_command(args: argparse.Namespace) -> int:
         print(f"[fleet:pr-start] エラー: {e}")
         return 1
 
-    date_str = pr_lib.today_str()
     try:
-        result = pr_lib.create_worktree(project_path, date_str)
+        result = pr_lib.create_worktree(
+            project_path, args.task_id, executor=args.executor,
+            worktree_root=args.worktree_root,
+        )
     except (pr_lib.WorktreeError, pr_lib.GitCommandError) as e:
         print(f"[fleet:pr-start] エラー: {e}")
         return 1
@@ -35,7 +37,10 @@ def run_pr_start_command(args: argparse.Namespace) -> int:
     print("次のステップ:")
     print(f"  1. `/cd {result['worktree_path']}` で worktree に移動")
     print("  2. `/evolve-anything:evolve` を対話実行し、提案を承認・適用")
-    print(f"  3. `bin/evolve-fleet pr-finish {args.pj_slug}` で commit→push→PR 作成")
+    print(
+        f"  3. `bin/evolve-fleet pr-finish {args.pj_slug} --executor {args.executor}"
+        f" --task-id {args.task_id} --commit-path <path>` で commit→push→PR 作成"
+    )
     return 0
 
 
@@ -49,14 +54,16 @@ def run_pr_finish_command(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        worktree = pr_lib.resolve_worktree(project_path, date_str=args.date)
-    except pr_lib.WorktreeError as e:
+        worktree = pr_lib.resolve_worktree(
+            project_path, executor=args.executor, task_id=args.task_id
+        )
+    except (pr_lib.WorktreeError, pr_lib.GitCommandError) as e:
         print(f"[fleet:pr-finish] エラー: {e}")
         return 1
 
-    date_str = worktree.name[len(pr_lib.WORKTREE_PREFIX):]
+    date_str = pr_lib.today_str()
     try:
-        branch = pr_lib.validate_branch(worktree, date_str)
+        branch = pr_lib.validate_branch(worktree, args.executor, args.task_id)
     except (pr_lib.WorktreeError, pr_lib.GitCommandError) as e:
         print(f"[fleet:pr-finish] エラー: {e}")
         return 1
@@ -68,7 +75,7 @@ def run_pr_finish_command(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        dirty = pr_lib.has_uncommitted_changes(worktree)
+        dirty = pr_lib.has_uncommitted_changes(worktree, paths=args.commit_path)
     except pr_lib.GitCommandError as e:
         print(f"[fleet:pr-finish] エラー: {e}")
         return 1
@@ -94,8 +101,8 @@ def run_pr_finish_command(args: argparse.Namespace) -> int:
 
     if dirty:
         try:
-            pr_lib.commit_all(worktree, commit_message)
-        except pr_lib.GitCommandError as e:
+            pr_lib.commit_paths(worktree, commit_message, args.commit_path)
+        except (pr_lib.GitCommandError, pr_lib.WorktreeError) as e:
             print(f"[fleet:pr-finish] エラー: {e}")
             return 1
         print(f"[fleet:pr-finish] commit しました: {commit_message}")
