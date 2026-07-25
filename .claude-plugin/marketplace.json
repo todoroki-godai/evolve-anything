@@ -25,34 +25,130 @@
       ],
       "category": "development",
       "userConfig": {
+        "auto_trigger": {
+          "title": "Auto Trigger",
+          "type": "boolean",
+          "description": "Enable auto-trigger for evolve/audit proposals",
+          "sensitive": false
+        },
+        "evolve_interval_days": {
+          "title": "Evolve Interval (days)",
+          "type": "number",
+          "description": "Days between evolve suggestions (default: 7)",
+          "sensitive": false
+        },
+        "audit_interval_days": {
+          "title": "Audit Interval (days)",
+          "type": "number",
+          "description": "Days between audit suggestions (default: 30)",
+          "sensitive": false
+        },
+        "min_sessions": {
+          "title": "Min Sessions",
+          "type": "number",
+          "description": "Minimum sessions before suggesting evolve (default: 10)",
+          "sensitive": false
+        },
+        "cooldown_hours": {
+          "title": "Cooldown (hours)",
+          "type": "number",
+          "description": "Cooldown hours between trigger evaluations (default: 24)",
+          "sensitive": false
+        },
+        "language": {
+          "title": "Language",
+          "type": "string",
+          "description": "Language for trigger messages: ja or en (default: ja)",
+          "sensitive": false
+        },
+        "growth_display": {
+          "title": "Growth Display",
+          "type": "boolean",
+          "description": "Show environment growth phase on session start (default: true)",
+          "sensitive": false
+        },
+        "cleanup_tmp_prefixes": {
+          "title": "Cleanup Tmp Prefixes",
+          "type": "string",
+          "description": "Comma-separated /tmp prefixes scanned by /evolve-anything:cleanup. Defaults to 'evolve-anything-' only for safety; claude-<uid> and claude-mcp-* are always excluded by scanner even if re-added (ADR-021).",
+          "sensitive": false
+        },
         "slow_threshold_ms": {
           "title": "Slow Threshold (ms)",
           "type": "number",
-          "description": "Bash commands slower than this (ms) are logged to tool_durations.jsonl (default: 1000)",
+          "description": "Currently unused (tool_duration hook removed in #426; key kept for manifest compatibility, reusable later) (default: 1000)",
           "sensitive": false
         },
         "subagent_warning_threshold": {
           "title": "Subagent Warning Threshold",
           "type": "number",
-          "description": "Warn when the number of subagents spawned within the recent time window (subagent_window_minutes) reaches this value (default: 5). Measured over a window, not cumulatively.",
+          "description": "Warn when the number of subagents spawned within the recent time window (subagent_window_minutes) reaches this value (default: 5). Measured over a window, not cumulatively, so long sessions are not false-flagged.",
           "sensitive": false
         },
         "subagent_window_minutes": {
           "title": "Subagent Window (minutes)",
           "type": "number",
-          "description": "Time window (minutes) over which subagent spawns are counted for the warning threshold (default: 5).",
+          "description": "Time window (minutes) over which subagent spawns are counted for the warning threshold. Smaller = catches short bursts only (default: 5).",
           "sensitive": false
         },
         "ctx_warn_percent": {
           "title": "Context Window Warning (%)",
           "type": "number",
-          "description": "Warn when latest message's context occupancy exceeds this percent of the model window (default: 20). Set to 0 to disable.",
+          "description": "Warn when latest message's context occupancy (input_tokens + cache_read + cache_creation) exceeds this percent of the model window (default: 20). Set to 0 to disable.",
           "sensitive": false
         },
         "ctx_window_tokens": {
           "title": "Context Window Size (tokens)",
           "type": "number",
-          "description": "Model context window in tokens used by ctx_guard (default: 1000000 for Opus 1M).",
+          "description": "Model context window in tokens used by ctx_guard (default: 1000000 for Opus 1M). Adjust if you primarily use a 200K-tier model.",
+          "sensitive": false
+        },
+        "evolve_global_allowlist": {
+          "title": "Evolve Global Allowlist",
+          "type": "string",
+          "description": "Comma-separated list of global skill names (~/.claude/skills/) to include in LLM evolution assessment. Default empty = all global skills excluded. Add user-created global skills here (e.g. 'my-skill,another-skill').",
+          "sensitive": false
+        },
+        "max_skill_count": {
+          "title": "Max Skill Count",
+          "type": "number",
+          "description": "Recommended skill collection cap shown in audit report Summary (default: 30). Based on Library Drift research (arXiv:2605.19576).",
+          "sensitive": false
+        },
+        "correction_preflight_threshold": {
+          "title": "Correction Pre-flight Threshold",
+          "type": "number",
+          "description": "Trigger active Pre-flight warning when corrections for the same skill reach this count (default: 3). Set higher to reduce noise.",
+          "sensitive": false
+        },
+        "error_preflight_threshold": {
+          "title": "Error Pre-flight Threshold",
+          "type": "number",
+          "description": "Trigger active Pre-flight warning when session errors reach this count (default: 3). Set higher to reduce noise.",
+          "sensitive": false
+        },
+        "skill_lr_budget": {
+          "title": "Skill LR Budget (lines)",
+          "type": "number",
+          "description": "evolve-skill の1回の変更で許容する最大差分行数（デフォルト: 30）。LLM 出力がこの行数を超えた場合はテンプレートにフォールバックする。",
+          "sensitive": false
+        },
+        "spec_trigger_enabled": {
+          "title": "Spec Trigger on Merge",
+          "type": "boolean",
+          "description": "SessionStart で main に着地した『挙動コードを変えたのに SPEC.md/CLAUDE.md 等の仕様を未更新』のマージを検出し spec-keeper update / ADR 化を1回提案する (default: true)。false で無効化。",
+          "sensitive": false
+        },
+        "idiom_autopromote_daily_cap": {
+          "title": "Idiom Autopromote Daily Cap",
+          "type": "number",
+          "description": "human-confirmed idiom に一致する新規 weak_signal を1回の evolve で自動昇格する件数上限 (default: 10・ADR-047 安全弁①)。超過分は次回 run に持ち越す (capped で surface)。1回の承認が引き金で大量昇格する暴走を量で抑える。",
+          "sensitive": false
+        },
+        "icebox_review_threshold_days": {
+          "title": "Icebox Review Threshold (days)",
+          "type": "number",
+          "description": "icebox issue の最古経過日数がこの値以上で SessionStart 気づき通知を発火する (default: 30・#194)。audit_interval_days と同じ周期に揃えたデフォルト。",
           "sensitive": false
         }
       }
