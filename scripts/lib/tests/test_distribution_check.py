@@ -117,6 +117,22 @@ def test_json_check_reports_invalid_file(tmp_path: Path) -> None:
     assert errors[0].startswith("broken.json: invalid JSON:")
 
 
+def test_json_check_prunes_repository_metadata_and_nested_worktrees(
+    tmp_path: Path,
+) -> None:
+    """Ignored trees are never descended into during repository validation."""
+    (tmp_path / "valid.json").write_text('{"ok": true}\n', encoding="utf-8")
+    ignored = [
+        tmp_path / ".git" / "broken.json",
+        tmp_path / ".claude" / "worktrees" / "other" / "broken.json",
+    ]
+    for path in ignored:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"broken": }\n', encoding="utf-8")
+
+    assert distribution_check.check_json_files(tmp_path) == []
+
+
 def test_skill_frontmatter_requires_parseable_name_and_description(
     tmp_path: Path,
 ) -> None:

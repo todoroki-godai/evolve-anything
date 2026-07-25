@@ -27,6 +27,7 @@ class PluginInventory:
     registered_hooks: int
     hook_events: int
     hook_scripts: tuple[str, ...]
+    hook_command_errors: tuple[str, ...]
     version: str
     user_config_options: int
 
@@ -52,7 +53,13 @@ def collect_inventory(root: Path) -> PluginInventory:
     if len(skills) != len(set(skills)):
         raise ValueError("duplicate public skill names in skills/*/SKILL.md")
 
-    commands = tuple(sorted(path.name for path in (root / "bin").iterdir() if path.is_file()))
+    commands = tuple(
+        sorted(
+            path.name
+            for path in (root / "bin").iterdir()
+            if path.is_file() and not path.name.startswith(".")
+        )
+    )
 
     plugin_manifest = json.loads(
         (root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
@@ -66,10 +73,14 @@ def collect_inventory(root: Path) -> PluginInventory:
         for hook in group.get("hooks", ())
     ]
     hook_scripts = set()
+    hook_command_errors = []
     for hook in hook_entries:
         match = re.search(r"/hooks/([^/\"\s]+)\.py", str(hook.get("command", "")))
         if match is None:
-            raise ValueError(f"unrecognized hook command: {hook.get('command')!r}")
+            hook_command_errors.append(
+                f"unrecognized hook command: {hook.get('command')!r}"
+            )
+            continue
         hook_scripts.add(match.group(1))
 
     return PluginInventory(
@@ -78,6 +89,7 @@ def collect_inventory(root: Path) -> PluginInventory:
         registered_hooks=len(hook_entries),
         hook_events=len(hook_config),
         hook_scripts=tuple(sorted(hook_scripts)),
+        hook_command_errors=tuple(hook_command_errors),
         version=str(plugin_manifest["version"]),
         user_config_options=len(plugin_manifest.get("userConfig", {})),
     )
@@ -149,6 +161,7 @@ def validate_readme(root: Path, path: Path, *, content: str | None = None) -> li
     content = path.read_text(encoding="utf-8") if content is None else content
     errors: list[str] = []
     japanese = path.name.endswith(".ja.md")
+    errors.extend(f"{path.name}: {error}" for error in inventory.hook_command_errors)
 
     release_pattern = (
         r"^> リリース情報: \*\*v(?P<version>[^*]+)\*\* ・ "

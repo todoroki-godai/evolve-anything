@@ -32,7 +32,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install project and test dependencies
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[core]"
       - name: Check manifests, JSON, skill frontmatter, and CLI startup
         run: python scripts/check_distribution.py
 
@@ -43,14 +43,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - python-version: "3.11"
+            extras: "dev,analysis"
+          - python-version: "3.12"
+            extras: "dev"
+          - python-version: "3.13"
+            extras: "dev"
+          - python-version: "3.14"
+            extras: "dev"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - name: Install build backend for metadata tests
+        run: python -m pip install --upgrade setuptools
       - name: Install project and test dependencies
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[${{ matrix.extras }}]"
       - name: Run full test suite
         run: python -m pytest -q

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fnmatch
 import json
 import os
 import subprocess
@@ -134,13 +135,20 @@ def sync_marketplace_manifest(root: Path) -> bool:
 
 
 def _repo_files(root: Path, pattern: str) -> Iterable[Path]:
-    for path in sorted(root.rglob(pattern)):
-        try:
-            relative = path.relative_to(root)
-        except ValueError:
-            continue
-        if path.is_file() and not (_IGNORED_DIRS & set(relative.parts)):
-            yield path
+    matches: list[Path] = []
+    for directory, subdirs, filenames in os.walk(root):
+        current = Path(directory)
+        relative = current.relative_to(root)
+        subdirs[:] = [
+            name
+            for name in subdirs
+            if name not in _IGNORED_DIRS
+            and not (relative == Path(".claude") and name == "worktrees")
+        ]
+        matches.extend(
+            current / name for name in filenames if fnmatch.fnmatch(name, pattern)
+        )
+    yield from sorted(matches)
 
 
 def check_json_files(root: Path) -> list[str]:

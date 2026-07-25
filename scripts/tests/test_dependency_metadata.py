@@ -30,6 +30,21 @@ def test_optional_dependency_groups_cover_runtime_imports() -> None:
         "scikit-learn>=1.3",
     ]
     assert {"pytest>=8.0", "pytest-xdist>=3.0"}.issubset(extras["dev"])
+    assert not set(extras["analysis"]) & set(extras["dev"])
+
+
+def test_release_rule_mentions_all_version_sources() -> None:
+    rule = (ROOT / ".claude" / "rules" / "commit-version.md").read_text(
+        encoding="utf-8"
+    )
+
+    for source in (
+        ".claude-plugin/plugin.json",
+        ".claude-plugin/marketplace.json",
+        "pyproject.toml",
+        "CHANGELOG.md",
+    ):
+        assert source in rule
 
 
 def test_package_metadata_can_be_installed_without_resolving_dependencies(tmp_path: Path) -> None:

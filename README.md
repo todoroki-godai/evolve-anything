@@ -58,8 +58,11 @@ python3 -m pip install -e ".[storage]"
 # TF-IDF, numerical similarity, and clustering features
 python3 -m pip install -e ".[analysis]"
 
-# Contributor setup: all runtime features plus pytest and pytest-xdist
+# Contributor setup: core/storage features plus pytest and pytest-xdist
 python3 -m pip install -e ".[dev]"
+
+# Add optional numerical-analysis capabilities when working on them
+python3 -m pip install -e ".[dev,analysis]"
 ```
 
 The legacy `scripts/requirements.txt` remains a storage-only compatibility entry point. It is intended to be installed from `scripts/` and delegates to `../pyproject.toml`.

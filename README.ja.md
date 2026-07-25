@@ -55,8 +55,11 @@ python3 -m pip install -e ".[storage]"
 # TF-IDF・数値類似度・クラスタリング機能
 python3 -m pip install -e ".[analysis]"
 
-# contributor 向け: 全 runtime 機能 + pytest / pytest-xdist
+# contributor 向け: core/storage 機能 + pytest / pytest-xdist
 python3 -m pip install -e ".[dev]"
+
+# 数値 analysis 機能も扱う場合だけ追加
+python3 -m pip install -e ".[dev,analysis]"
 ```
 
 旧 `scripts/requirements.txt` は storage 専用の互換入口として残す。`scripts/` から `pip -r` で導入すると `../pyproject.toml` に委譲する。
