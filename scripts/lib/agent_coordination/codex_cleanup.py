@@ -10,11 +10,12 @@ from typing import Any, Iterable
 
 from .core import CoordinationError
 
-FINGERPRINTS: tuple[tuple[str, str, str], ...] = (
+FINGERPRINTS: tuple[tuple[str, str, str | None], ...] = (
     ("dot_codex_plugin", ".Codex-plugin", ".claude-plugin"),
-    ("uppercase_codex_home", "~/.Codex/", "~/.codex/"),
+    ("uppercase_codex_home", ".Codex/", ".claude/"),
     ("missing_codex_validate", "Codex plugin validate", "claude plugin validate"),
-    ("codex_code_name", "Codex Code", "Codex"),
+    # 復元先が一意でないため検出だけ行い、自動置換しない。
+    ("codex_code_name", "Codex Code", None),
 )
 
 
@@ -59,18 +60,23 @@ def audit(root: Path) -> dict[str, Any]:
     }
 
 
+def _replacement(text: str) -> tuple[str, list[str]]:
+    after = text
+    applied: list[str] = []
+    for fingerprint, needle, replacement in FINGERPRINTS:
+        if replacement is not None and needle in after:
+            after = after.replace(needle, replacement)
+            applied.append(fingerprint)
+    return after, applied
+
+
 def build_plan(root: Path) -> dict[str, Any]:
     report = audit(root)
     changes: list[dict[str, Any]] = []
     for finding in report["files"]:
         path = Path(finding["path"])
         before = path.read_text(encoding="utf-8")
-        after = before
-        applied: list[str] = []
-        for fingerprint, needle, replacement in FINGERPRINTS:
-            if needle in after:
-                after = after.replace(needle, replacement)
-                applied.append(fingerprint)
+        after, applied = _replacement(before)
         if after != before:
             changes.append(
                 {
@@ -109,17 +115,36 @@ def apply_plan(plan_path: Path, *, confirmed: bool) -> dict[str, Any]:
     changes = plan.get("changes")
     if not isinstance(changes, list):
         raise CoordinationError("plan.changesが配列ではありません")
+    try:
+        root = Path(str(plan["root"])).resolve(strict=True)
+    except (KeyError, OSError) as exc:
+        raise CoordinationError(f"plan.rootが不正です: {exc}") from exc
 
     # 1件でもstaleなら1バイトも変更しない。
     for change in changes:
-        path = Path(str(change["path"]))
+        path = Path(str(change["path"])).resolve(strict=True)
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise CoordinationError(f"plan.root外のpathです: {path}") from exc
         current = path.read_bytes()
         if _sha256(current) != change.get("before_sha256"):
             raise CoordinationError(f"plan作成後に変更されています: {path}")
+        replacement_text, fingerprints = _replacement(current.decode("utf-8"))
+        if (
+            replacement_text != change.get("replacement_text")
+            or fingerprints != change.get("fingerprints")
+            or _sha256(replacement_text.encode("utf-8")) != change.get("after_sha256")
+        ):
+            raise CoordinationError(f"plan内容を既知fingerprintから再現できません: {path}")
 
     applied: list[dict[str, str]] = []
     for change in changes:
-        path = Path(str(change["path"]))
+        path = Path(str(change["path"])).resolve(strict=True)
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise CoordinationError(f"plan.root外のpathです: {path}") from exc
         before_sha = str(change["before_sha256"])
         backup = path.with_name(f"{path.name}.bak.{before_sha[:12]}")
         if backup.exists():

@@ -24,7 +24,7 @@ def _config(tmp_path: Path) -> Path:
     agents = root / "agents"
     agents.mkdir(parents=True)
     (root / "AGENTS.md").write_text(
-        "read ~/.Codex/x and .Codex-plugin/plugin.json\n"
+        "read <repo>/.Codex/rules and .Codex-plugin/plugin.json\n"
         "run Codex plugin validate in Codex Code\n",
         encoding="utf-8",
     )
@@ -50,10 +50,10 @@ def test_plan_then_apply_requires_yes_and_creates_hash_backup(tmp_path: Path) ->
         apply_plan(plan_path, confirmed=False)
     result = apply_plan(plan_path, confirmed=True)
     updated = (root / "AGENTS.md").read_text(encoding="utf-8")
-    assert "~/.codex/" in updated
+    assert "<repo>/.claude/" in updated
     assert ".claude-plugin" in updated
     assert "claude plugin validate" in updated
-    assert "Codex Code" not in updated
+    assert "Codex Code" in updated
     backup = Path(result["applied"][0]["backup"])
     assert backup.exists()
     assert "Codex Code" in backup.read_text(encoding="utf-8")
@@ -80,3 +80,36 @@ def test_plan_is_machine_readable(tmp_path: Path) -> None:
     loaded = json.loads(path.read_text(encoding="utf-8"))
     assert loaded["schema_version"] == 1
     assert loaded["changes"][0]["before_sha256"]
+
+
+def test_apply_rejects_path_outside_plan_root(tmp_path: Path) -> None:
+    root = _config(tmp_path)
+    plan_path = tmp_path / "plan.json"
+    plan = write_plan(root, plan_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text(".Codex/rules\n", encoding="utf-8")
+    replacement = ".claude/rules\n"
+    plan["changes"][0].update(
+        {
+            "path": str(outside),
+            "before_sha256": __import__("hashlib").sha256(outside.read_bytes()).hexdigest(),
+            "after_sha256": __import__("hashlib").sha256(
+                replacement.encode("utf-8")
+            ).hexdigest(),
+            "fingerprints": ["uppercase_codex_home"],
+            "replacement_text": replacement,
+        }
+    )
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    with pytest.raises(CoordinationError, match="root外"):
+        apply_plan(plan_path, confirmed=True)
+
+
+def test_apply_rejects_tampered_replacement(tmp_path: Path) -> None:
+    root = _config(tmp_path)
+    plan_path = tmp_path / "plan.json"
+    plan = write_plan(root, plan_path)
+    plan["changes"][0]["replacement_text"] = "arbitrary\n"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    with pytest.raises(CoordinationError, match="再現できません"):
+        apply_plan(plan_path, confirmed=True)

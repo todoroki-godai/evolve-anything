@@ -5,7 +5,8 @@ import argparse
 import json
 from pathlib import Path
 
-from .core import CoordinationError, finish_lane, handoff_lane, start_lane
+from .core import CoordinationError, finish_lane, force_unlock, handoff_lane, start_lane
+from .runtime_summary import summarize_runtime
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     finish = sub.add_parser("finish")
     finish.add_argument("--task-id", required=True)
+    unlock = sub.add_parser("force-unlock")
+    unlock.add_argument("--yes", action="store_true")
+    runtime = sub.add_parser("runtime-summary")
+    runtime.add_argument(
+        "--data-dir", type=Path, default=Path.home() / ".claude" / "evolve-anything"
+    )
     return parser
 
 
@@ -51,9 +58,13 @@ def main(argv: list[str] | None = None) -> int:
                 decisions=args.decision,
                 open_risks=args.open_risk,
             )
-        else:
+        elif args.command == "finish":
             result = finish_lane(args.repo, task_id=args.task_id)
-    except CoordinationError as exc:
+        elif args.command == "force-unlock":
+            result = {"removed": str(force_unlock(args.repo, confirmed=args.yes))}
+        else:
+            result = summarize_runtime(args.data_dir)
+    except (CoordinationError, OSError) as exc:
         print(f"[agent-task] error: {exc}")
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

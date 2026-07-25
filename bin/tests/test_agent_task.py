@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ if str(LIB) not in sys.path:
 from agent_coordination.core import (  # noqa: E402
     CoordinationError,
     finish_lane,
+    force_unlock,
     handoff_lane,
     normalize_owned_paths,
     start_lane,
@@ -126,6 +128,113 @@ def test_handoff_rejects_outside_owned_paths(tmp_path: Path) -> None:
     subprocess.run(["git", "commit", "-q", "-m", "outside"], cwd=worktree, check=True)
     with pytest.raises(CoordinationError, match="owned_paths外"):
         handoff_lane(repo, task_id="268-core", verification=["pytest: pass"])
+
+
+def test_handoff_rejects_rename_from_outside_owned_paths(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    worktrees = tmp_path / "worktrees"
+    worktrees.mkdir()
+    lane = start_lane(
+        repo,
+        task_id="268-rename",
+        runtime="codex",
+        owned_paths=["scripts"],
+        worktree_root=worktrees,
+    )
+    worktree = Path(lane["worktree"])
+    subprocess.run(
+        ["git", "mv", "docs/README.md", "scripts/README.md"],
+        cwd=worktree,
+        check=True,
+    )
+    subprocess.run(["git", "commit", "-q", "-m", "rename"], cwd=worktree, check=True)
+    with pytest.raises(CoordinationError, match="owned_paths外"):
+        handoff_lane(repo, task_id="268-rename", verification=["pytest: pass"])
+
+
+def test_handoff_same_head_is_idempotent(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    worktrees = tmp_path / "worktrees"
+    worktrees.mkdir()
+    start_lane(
+        repo,
+        task_id="268-idempotent",
+        runtime="codex",
+        owned_paths=["scripts"],
+        worktree_root=worktrees,
+    )
+    first = handoff_lane(
+        repo, task_id="268-idempotent", verification=["pytest: pass"]
+    )
+    second = handoff_lane(
+        repo, task_id="268-idempotent", verification=["pytest: pass"]
+    )
+    assert second == first
+
+
+def test_start_rolls_back_worktree_and_branch_when_manifest_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path)
+    worktrees = tmp_path / "worktrees"
+    worktrees.mkdir()
+
+    def fail_write(_path: Path, _value: dict[str, object]) -> None:
+        raise PermissionError("read only")
+
+    monkeypatch.setattr("agent_coordination.core._atomic_write", fail_write)
+    with pytest.raises(PermissionError, match="read only"):
+        start_lane(
+            repo,
+            task_id="268-rollback",
+            runtime="codex",
+            owned_paths=["scripts"],
+            worktree_root=worktrees,
+        )
+    assert not list(worktrees.iterdir())
+    branch = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/heads/codex/268-rollback"],
+        cwd=repo,
+    )
+    assert branch.returncode != 0
+
+
+def test_stale_lock_is_recovered_and_force_unlock_requires_confirmation(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    git_dir = Path(
+        subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    state = (repo / git_dir / "evolve-agents").resolve()
+    state.mkdir(parents=True)
+    lock = state / "coordination.lock"
+    lock.write_text(
+        json.dumps({"pid": 99999999, "started_at": "2020-01-01T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    lane = start_lane(
+        repo,
+        task_id="268-stale",
+        runtime="codex",
+        owned_paths=["scripts"],
+        worktree_root=tmp_path / "worktrees",
+    )
+    assert lane["status"] == "active"
+    lock.write_text(
+        json.dumps({"pid": os.getpid(), "started_at": "2099-01-01T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(CoordinationError, match="--yes"):
+        force_unlock(repo, confirmed=False)
+    force_unlock(repo, confirmed=True)
+    assert not lock.exists()
 
 
 def test_finish_releases_lane_without_deleting_worktree(tmp_path: Path) -> None:

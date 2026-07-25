@@ -5,7 +5,7 @@
 実 push / 実 PR 作成は一切行わない（no-llm-in-tests の外部プロセス版）。検証対象:
   - ``resolve_target``: 最新 proposals report からの対象 PJ 解決（未検出/status!=ok/不在）
   - ``create_worktree``: worktree 作成（既存 worktree/branch は上書きしない）
-  - ``find_existing_worktrees`` / ``resolve_worktree``: 既存 worktree の検出・曖昧性処理
+  - ``resolve_worktree``: git worktree metadataから既存worktreeを解決
   - ``validate_branch`` / ``current_branch``: ブランチ名検証
   - ``has_uncommitted_changes`` / ``commit_paths`` / ``commits_ahead``: commit 判定・実行
   - ``default_branch``: origin の既定ブランチ probe
@@ -312,6 +312,7 @@ class TestUncommittedAndCommit:
             ["skills/foo"], run=run,
         )
         assert run.calls[0][0][-2:] == ["--", "skills/foo"]
+        assert "--no-renames" in run.calls[1][0]
         commit_calls = [c for c, _ in run.calls if "commit" in c]
         assert len(commit_calls) == 1
         joined = " ".join(commit_calls[0])
@@ -351,6 +352,16 @@ class TestUncommittedAndCommit:
         ])
         with pytest.raises(fpr.WorktreeError, match="allowlist 外"):
             fpr.commit_paths(tmp_path, "msg", ["skills/foo"], run=run)
+
+    def test_commit_paths_diff_disables_rename_detection(self, tmp_path):
+        run = ScriptedRun([
+            (lambda cmd: cmd[3] == "add", _FakeProc()),
+            (lambda cmd: cmd[3] == "diff",
+             _FakeProc(stdout="outside/a.py\0owned/a.py\0")),
+        ])
+        with pytest.raises(fpr.WorktreeError, match="outside/a.py"):
+            fpr.commit_paths(tmp_path, "msg", ["owned"], run=run)
+        assert "--no-renames" in run.calls[1][0]
 
     def test_commits_ahead_parses_count(self, tmp_path):
         run = ScriptedRun([(_default_ok, _FakeProc(stdout="3\n"))])

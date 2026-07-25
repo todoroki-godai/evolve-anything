@@ -10,3 +10,9 @@
 8. `evolve-agent-task finish`でlaneを解放する。worktree/branchは自動削除しない。
 
 `start`とownership取得を別操作にしてはいけない。間に競合窓が生じるためである。
+
+lockはPID不在または1時間超過で自動回復する。誤ったlockを手動解除するときだけ
+`evolve-agent-task force-unlock --yes`を使う。
+
+runtime別の初期較正は
+`evolve-agent-task runtime-summary --data-dir ~/.claude/evolve-anything`で表示する。

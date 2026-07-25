@@ -345,7 +345,8 @@ def commit_paths(
     if proc.returncode != 0:
         raise GitCommandError(add_cmd, proc.returncode, proc.stderr or "")
     diff_cmd = [
-        "git", "-C", str(worktree), "diff", "--cached", "--name-only", "-z", "--",
+        "git", "-C", str(worktree), "diff", "--cached", "--name-only",
+        "--no-renames", "-z", "--",
     ]
     proc = _run(diff_cmd, run=run)
     if proc.returncode != 0:

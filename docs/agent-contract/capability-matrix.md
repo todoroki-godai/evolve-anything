@@ -17,9 +17,9 @@
 ## 禁止する機械置換指紋
 
 - `.Codex-plugin`
-- `~/.Codex/`
+- `.Codex/`
 - `Codex plugin validate`
-- `Codex Code`
+- `Codex Code`（復元先が一意でないためauditのみ・自動置換しない）
 
 既知指紋の棚卸しは `bin/evolve-codex-config-cleanup audit`、修復はhash付きplanと明示承認を
 経由する。未知の文字列は自動修正しない。

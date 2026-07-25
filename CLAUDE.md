@@ -140,8 +140,8 @@
 | `fleet_propose` | queue（#79/#80）の待ち PJ に `run_evolve(dry_run=True)` を順次実行し提案を集約レポート化する `bin/evolve-fleet propose`（closes #81）。llm-batch-guard 承認ゲート（対象PJ・material_count proxy・使用モデル提示 → y/n、`--yes`可）+ `evolve_decisions`/`optimize_history_store` 既存 API で reject 済み提案の再提示を抑制。出力 `evolve-proposals-<date>.md`+`.json`（read専用派生物・store_registry非登録）。1PJ失敗は他を止めない | `fleet/propose.py` + `fleet/cli_propose.py` |
 | `fleet_pr` | 承認済み evolve 提案（#81 レポート）の worktree→commit→push→PR 化（closes #82）。`pr-start` が worktree+branch を準備し適用は対話 evolve のまま人間が行う。`pr-finish` が commit（未コミットのみ・Co-Authored-By 禁止）→push アカウント検証（account-org-guard.py と同マッピング、不一致は自動切替せず停止）→push→`gh pr create`。マージは常に人間。詳細は spec/components.md | `fleet/pr.py` + `fleet/cli_pr.py` |
 | `agent_coordination` | Claude Code primary／Codex opt-inのtop-level executor lane管理。`start`がownership＋repo外worktreeをatomic取得、`handoff`がSHA固定証拠をgit-common-dirへ保存、`finish`はlaneのみ解放。fleet PR stagingもpath allowlist＋cached diff検証へ移行（#268） | `agent_coordination/` + `bin/evolve-agent-task` + `docs/agent-contract/` |
-| `codex_config_cleanup` | 既知4指紋だけをaudit→hash付きplan→明示承認＋backup付きapplyするCodex設定修復（#268） | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
-| `runtime_telemetry` | usage/sessions/errorsのhook recordに`runtime=claude|codex`を較正追加。payload→env→claudeの順で解決し、Codex hook本配線はpayload fixture取得まで保留（#268） | `hooks/common.py` + 5 writer |
+| `codex_config_cleanup` | 既知4指紋をauditし、復元先が一意な3種だけをhash付きplan→再導出検証→明示承認＋backup付きapplyするCodex設定修復（#268） | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
+| `runtime_telemetry` | usage/sessions/errorsのhook recordに`runtime=claude|codex`を較正追加。payload→env→claudeの順で解決し、`evolve-agent-task runtime-summary`でstore別・runtime別に分離表示。Codex hook本配線はpayload fixture取得まで保留（#268） | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
 | `codex_usage` | `evolve-fleet status`/`tokens` に codex CLI（`~/.codex/state_5.sqlite`）利用状況を advisory 表示 — PJ別セッション数/tokens_used合計/最終利用時刻、read-only URI + 2段fail-open（DB不在/スキーマ相違は無音、ロック中は警告1行）。CC 側 token_usage とは単位・粒度が異なるため合算しない（#245） | `fleet/codex_usage.py` + `fleet/formatters.py` |
 
 ## クイックスタート
