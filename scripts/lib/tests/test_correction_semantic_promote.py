@@ -20,14 +20,19 @@ from correction_semantic import promote as cs_promote  # noqa: E402
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
 
 
+def _fresh_detected_at() -> str:
+    """TTL 対象の通常シグナルを、テスト実行時点で有効に保つ。"""
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _seed_signals(ws_path: Path):
     sigs = [
         WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 1,
                                  "text": "緑にして赤じゃなくて", "reason": "後置型"},
-                   "2026-06-10T00:00:00+00:00", "s1", "evolve-anything"),
+                   _fresh_detected_at(), "s1", "evolve-anything"),
         WeakSignal("llm_judge", {"source_path": "/a.jsonl", "line_no": 2,
                                  "text": "P6が違う", "reason": "ソフト指摘"},
-                   "2026-06-10T00:01:00+00:00", "s1", "evolve-anything"),
+                   _fresh_detected_at(), "s1", "evolve-anything"),
     ]
     append_signals(sigs, path=ws_path)
     return sigs
@@ -48,7 +53,7 @@ def test_promote_permission_deny_has_meaningful_message(tmp_path: Path) -> None:
         "permission_deny",
         {"tool_name": "Bash", "tool_input_summary": "git push --force-with-lease",
          "denial_reason": "unknown"},
-        "2026-06-10T00:00:00+00:00", "s1", "evolve-anything",
+        _fresh_detected_at(), "s1", "evolve-anything",
     )
     append_signals([deny], path=ws)
     res = cs_promote.promote_signals(
@@ -344,10 +349,11 @@ def _seed_signal_and_idiom(ws_path: Path, idioms_path: Path, *, line_no, text, s
     import correction_semantic.store as cs_store
     prov = {"source_path": "/a.jsonl", "line_no": line_no,
             "session_id": "s1", "text": text, "reason": "後置型", "judge": "llm_haiku"}
-    sig = WeakSignal("llm_judge", prov, "2026-06-10T00:00:00+00:00", "s1", slug)
+    detected_at = _fresh_detected_at()
+    sig = WeakSignal("llm_judge", prov, detected_at, "s1", slug)
     append_signals([sig], path=ws_path)
     it = cs_store.CorrectionIdiom(
-        idiom=text, provenance=prov, detected_at="2026-06-10T00:00:00+00:00", pj_slug=slug,
+        idiom=text, provenance=prov, detected_at=detected_at, pj_slug=slug,
     )
     cs_store.append_idioms([it], path=idioms_path)
     return sig, it

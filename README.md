@@ -6,6 +6,8 @@
 
 A Claude Code Plugin that **autonomously observes, discovers, prunes, and evolves** Claude Code skills/rules, and **optimizes them via direct LLM patches**.
 
+> Release metadata: **v1.123.0** · **21 userConfig options**
+
 ## Quickstart
 
 ```bash
@@ -41,6 +43,29 @@ bin/evolve-fleet ingest
 ```
 
 In normal use, **just run `evolve` once a day**. If there isn't enough data, it will automatically suggest skipping.
+
+## Python dependencies
+
+The plugin keeps its source-tree launch model, while `pyproject.toml` is the single source of Python dependency groups. Install the group that enables the features you use:
+
+```bash
+# Required runtime parser only
+python3 -m pip install -e ".[core]"
+
+# DuckDB-backed telemetry and storage features
+python3 -m pip install -e ".[storage]"
+
+# TF-IDF, numerical similarity, and clustering features
+python3 -m pip install -e ".[analysis]"
+
+# Contributor setup: core/storage features plus pytest and pytest-xdist
+python3 -m pip install -e ".[dev]"
+
+# Add optional numerical-analysis capabilities when working on them
+python3 -m pip install -e ".[dev,analysis]"
+```
+
+The legacy `scripts/requirements.txt` remains a storage-only compatibility entry point. It is intended to be installed from `scripts/` and delegates to `../pyproject.toml`.
 
 ## Overview — The Four Pillars
 
@@ -86,12 +111,13 @@ evolve-anything consists of **four independent pillars**.
 | View accumulated feedback | `reflect --view` |
 | Inventory all skills/rules | `audit` |
 | Create a project-specific fitness function | `generate-fitness --ask` |
-| Collect data from past sessions | `backfill` |
+| Start collecting telemetry | Use Claude Code normally; observe hooks record new sessions automatically, then run `evolve` |
 | Improve the fitness function itself | `evolve-fitness` |
 | Diagnose & improve agent definitions | `agent-brushup` |
 | Get an independent second opinion | `second-opinion` |
 | Initialize / update SPEC.md | `spec-keeper init` / `spec-keeper update` |
-| Break through stuck problems | `breakthrough` || Environment growth report | `audit --growth` |
+| Break through stuck problems | `breakthrough` |
+| View an environment growth report | `audit --growth` |
 | Post-merge / post-deploy cleanup | `cleanup` |
 | Curate a project's pitfalls.md (dedup / classify / distill / sync) | `pitfall-curate` |
 | Cross-project fleet status | `bin/evolve-fleet status` |
@@ -101,52 +127,76 @@ evolve-anything consists of **four independent pillars**.
 
 > All commands are invoked with the `/evolve-anything:` prefix (e.g., `/evolve-anything:evolve`).
 
-## Skill Catalog (19 user-invocable skills)
+## Skill Catalog (23 user-invocable skills)
 
-> **Policy**: Only user-invocable skills (callable via `/evolve-anything:<skill>`) are listed here. Internal skills called automatically by evolve are noted below the table.
+> **Policy**: This catalog is generated from the `name:` field in every `skills/*/SKILL.md`. The public slash command is `/evolve-anything:<skill>`; a source directory may use a different implementation name. For example, `/evolve-anything:evolve-loop` is implemented in `skills/evolve-loop-orchestrator/`.
 
 | Skill | Pillar | Description |
 |-------|--------|-------------|
-| `evolve` | Autonomous Evolution | Run all phases together (daily operation) |
-| `discover` | Autonomous Evolution | Detect patterns from observation data → generate skill/rule candidates |
-| `prune` | Autonomous Evolution | Prune unused / duplicate artifacts (with merge consolidation) |
-| `audit` | Autonomous Evolution | Inventory & health check of skills/rules/memory + Growth Report |
-| `backfill` | Autonomous Evolution | Collect & analyze data from past session history |
-| `reflect` | Feedback | Reflect corrections into CLAUDE.md / rules |
-| `evolve-loop` | Direct-Patch Optimization | Baseline → direct patch → evaluation → human-confirmation loop (backed by `evolve-loop-orchestrator`) |
-| `generate-fitness` | Direct-Patch Optimization | Auto-generate project-specific fitness functions |
+| `agent-brushup` | Agent Management | Diagnose and improve agent definitions |
+| `audit` | Autonomous Evolution | Inventory and health-check skills, rules, and memory |
+| `backfill` | Deprecated redirect | Explains the supported observe → evolve ingestion flow; it performs no backfill |
+| `breakthrough` | Breakthrough | Diagnose stuck work and propose a strategy |
+| `cleanup` | Utility | Safely clean up post-merge and post-deploy artifacts |
+| `discover` | Autonomous Evolution | Detect patterns and generate skill/rule candidates |
+| `docs-refresh` | Documentation | Refresh the HTML documentation site after a release |
+| `evolve` | Autonomous Evolution | Run the daily evolution pipeline |
 | `evolve-fitness` | Direct-Patch Optimization | Improve fitness functions from accept/reject data |
-| `evolve-skill` | Direct-Patch Optimization | Inject self-evolution patterns into a specific skill |
-| `agent-brushup` | Agent Management | Quality diagnosis / improvement proposals for agent definitions |
-| `second-opinion` | Second Opinion | Independent cold-read second opinion via Claude Agent |
-| `breakthrough` | Breakthrough | Diagnose "almost-but-not-quite" stuck problems → strategy → spawn Agent |
-| `implement` | Structured Implementation | plan artifact → task decomposition → implementation (Standard/Parallel) → plan-conformance check → telemetry |
-| `spec-keeper` | Spec Management | SPEC.md + ADR management, Progressive Disclosure L1/L2 auto-promotion || `cleanup` | Post-merge cleanup | After PR merge / deploy: handle branches / remote refs / worktrees / tmp dirs / close-candidate Issues / leftover PR Test plan items via per-item approval. Default tmp-dir prefix is `evolve-anything-` only (see [ADR-021 (JA)](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md)) |
-| `pitfall-curate` | Pitfall Curation | Grow any project's pitfalls.md (project-agnostic): jaccard dedup + supersede / universality classification (`Transferability` × `Generality` 1–5) / three-tier disclosure top-N distillation / record↔classify↔distribute sync gate. Classification & reframing are the agent's judgment; deterministic work is `pitfall_curate.py`. Opt-in auto-enforcement: run `enable` once per project to register a pitfalls.md, then edit-time (`pitfall_lint`, warn-only) and commit-time (`pitfall_commit_gate`, blocks index/TOC wipe) hooks keep its canonical format automatically. Distinct from `pitfall_manager` (self-evolved-skill-only) |
-| `release-notes-review` | Utility | CC release-notes analysis + global environment health check (`--env-only` supported) |
-| `report-feedback` | Feedback | LLM meta-reviews evolve/audit reports and semi-automatically files improvement issues against evolve-anything itself (successor to the old `feedback`) |
+| `evolve-loop` | Direct-Patch Optimization | Baseline → patch → evaluation → human confirmation |
+| `evolve-skill` | Direct-Patch Optimization | Apply the self-evolution pattern to one skill |
+| `generate-fitness` | Direct-Patch Optimization | Generate a project-specific fitness function |
+| `implement` | Structured Implementation | Decompose an approved plan, implement, verify, and record telemetry |
+| `import` | Fleet | Import a community skill with a confirmation gate |
+| `pitfall-curate` | Pitfall Curation | Classify, deduplicate, and distribute a project's pitfalls |
+| `prune` | Autonomous Evolution | Identify unused or duplicate artifacts for consolidation |
+| `queue` | Fleet | Show projects with enough material for a manual evolve run |
+| `reflect` | Feedback | Review and promote correction feedback |
+| `release-notes-review` | Utility | Review Claude Code release notes and environment health |
+| `report-feedback` | Feedback | Turn feedback about evolve-anything into an issue proposal |
+| `second-opinion` | Second Opinion | Obtain an independent cold-read review |
+| `spec-keeper` | Spec Management | Maintain SPEC.md and ADRs |
+| `tier` | Model Tier Management | Safely inspect and update model-tier policy |
 
-**Internal skills** (called automatically, not user-invocable): `evolve-loop-orchestrator` (evolve-loop backend: baseline→patch→eval→confirm loop), `genetic-prompt-optimizer` (LLM direct-patch optimizer used by evolve-loop), `reorganize` (split detection, called by evolve), `enrich` (merged into discover, deprecated)
+## Bare CLI inventory (22 commands)
 
-## Hooks (Data Collection)
+`bin/` is the source of truth for these executable names. Add that directory to `PATH` only if you want bare CLI invocation; slash skills remain the normal plugin interface.
 
-13 hooks cover the full session lifecycle at zero LLM cost.
+| Command | Command | Command |
+|---------|---------|---------|
+| `evolve` | `evolve-audit` | `evolve-audit-aggregate` |
+| `evolve-backfill-turn-indices` | `evolve-daily-install` | `evolve-daily-run` |
+| `evolve-discover` | `evolve-dogfood-gate` | `evolve-fleet` |
+| `evolve-gain` | `evolve-loop` | `evolve-loop-ablation` |
+| `evolve-optimize` | `evolve-prompt-compare` | `evolve-prune` |
+| `evolve-reflect` | `evolve-release-sync` | `evolve-reorganize` |
+| `evolve-scaffold-advisory` | `evolve-score-noise` | `evolve-tier` |
+| `evolve-usage-log` |  |  |
 
-| Hook | Event | Output |
-|------|-------|--------|
-| `observe` | PostToolUse | `usage.jsonl`, `errors.jsonl` |
-| `correction_detect` | UserPromptSubmit | `corrections.jsonl` |
-| `subagent_observe` | SubagentStop | `subagents.jsonl` |
-| `instructions_loaded` | InstructionsLoaded | `sessions.jsonl` + Growth greeting |
-| `workflow_context` | PreToolUse | `$TMPDIR/evolve-anything-workflow-*.json` |
-| `skill_activation_log` | PostToolUse | `skill_activations.jsonl` (skill firing record) |
-| `file_changed` | FileChanged | stdout (audit suggestion) |
-| `permission_denied` | PermissionDenied | `errors.jsonl` (permission-denial record) |
-| `stop_failure` | StopFailure | `errors.jsonl` (API errors) |
-| `save_state` | PreCompact | `checkpoint.json` |
-| `post_compact` | PostCompact | stdout (post-compact guidance) |
-| `restore_state` | SessionStart | stdout |
-| `session_summary` | Stop | `sessions.jsonl`, `workflows.jsonl` |
+## Hooks (24 registered entries across 12 events)
+
+`hooks/hooks.json` is the source of truth. Its 24 registrations include repeated `PostToolUse` registrations for Edit, Write, and MultiEdit; those entries invoke 19 distinct hook scripts at zero LLM cost.
+
+| Hook script | Event / matcher | Primary effect |
+|-------------|-----------------|----------------|
+| `correction_detect` | UserPromptSubmit | Records correction feedback |
+| `ctx_guard` | UserPromptSubmit | Warns when context occupancy crosses its configured threshold |
+| `pitfall_injector` | UserPromptSubmit | Injects relevant registered pitfalls |
+| `workflow_context` | PreToolUse / Skill | Records workflow context |
+| `pitfall_commit_gate` | PreToolUse / Bash | Blocks unsafe registered-pitfall changes |
+| `skill_activation_log` | PostToolUse / Skill | Records skill activation |
+| `observe` | PostToolUse / Skill, Agent | Records usage and errors |
+| `post_tool_use_memory` | PostToolUse / Edit, Write, MultiEdit | Records memory candidates |
+| `pitfall_lint` | PostToolUse / Edit, Write, MultiEdit | Warns about pitfall-format drift |
+| `subagent_observe` | SubagentStop | Records subagent completion data |
+| `session_summary` | Stop | Records session and workflow summaries |
+| `record_verbosity` | Stop | Records answer-length telemetry |
+| `stop_failure` | StopFailure | Records API failures |
+| `instructions_loaded` | InstructionsLoaded | Restores state and emits guidance |
+| `save_state` | PreCompact | Saves the checkpoint |
+| `post_compact` | PostCompact | Emits compact-recovery guidance |
+| `file_changed` | FileChanged / CLAUDE.md\|SKILL.md | Suggests audit after relevant edits |
+| `permission_denied` | PermissionDenied | Records denied permissions |
+| `restore_state` | SessionStart | Restores session state |
 
 ### Auto Trigger
 
@@ -287,11 +337,11 @@ All data is stored under `~/.claude/evolve-anything/`.
 
 | File | Writer | Reader |
 |------|--------|--------|
-| `usage.jsonl` | observe hook, backfill | discover, prune, audit |
+| `usage.jsonl` | observe hook | discover, prune, audit |
 | `errors.jsonl` | observe hook | discover, audit |
-| `sessions.jsonl` | session_summary hook, backfill | audit, evolve, discover |
-| `workflows.jsonl` | session_summary hook, backfill | audit, discover |
-| `corrections.jsonl` | correction_detect hook, backfill | reflect, discover, evolve, prune |
+| `sessions.jsonl` | session_summary hook | audit, evolve, discover |
+| `workflows.jsonl` | session_summary hook | audit, discover |
+| `corrections.jsonl` | correction_detect hook | reflect, discover, evolve, prune |
 | `false_positives.jsonl` | reflect | correction_detect |
 | `workflow_stats.json` | workflow_analysis.py | optimize, evolve-scorer, generate-fitness |
 | `checkpoint.json` | save_state hook | restore_state hook |
@@ -369,7 +419,7 @@ Score composition: Technical quality (40%) + Domain quality (40%) + Structural q
 
 ### Act 1: Observe — Data accumulates
 
-After installation, hooks automatically record skill usage, errors, and correction feedback. With 14 skills in operation, `/bot-create` was repeatedly missing personality settings.
+After installation, hooks automatically record skill usage, errors, and correction feedback. In one project, `/bot-create` was repeatedly missing personality settings.
 
 ### Act 2: Discover → Optimize — From patterns to improvements
 

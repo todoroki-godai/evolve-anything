@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evolve-anything"
+version = "1.123.0"
+description = "Self-evolving Claude Code plugin utilities"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "todoroki-godai" }]
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+# The plugin runs from its installed directory today; these groups make its
+# Python runtime explicit without changing the existing Claude Code command UX.
+core = ["PyYAML>=6.0"]
+storage = ["duckdb>=1.1.0"]
+analysis = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+]
+dev = [
+    "PyYAML>=6.0",
+    "duckdb>=1.1.0",
+    "pytest>=8.0",
+    "pytest-xdist>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/todoroki-godai/evolve-anything"
+Repository = "https://github.com/todoroki-godai/evolve-anything"
+
+[tool.setuptools]
+# Phase one manages dependencies only. The plugin keeps its current source-tree
+# launch model until its many standalone scripts are intentionally packaged.
+packages = []

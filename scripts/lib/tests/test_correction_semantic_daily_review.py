@@ -17,6 +17,7 @@ group 化し、頻度降順・上位 max_groups を返す決定論 phase を検�
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _lib_dir = Path(__file__).resolve().parent.parent
@@ -34,7 +35,7 @@ def _sig(text: str, line_no: int, pj_slug: str = "evolve-anything", **prov_extra
     return WeakSignal(
         channel="llm_judge",
         provenance=prov,
-        detected_at="2026-06-10T00:00:00+00:00",
+        detected_at=datetime.now(timezone.utc).isoformat(),
         session_id="s1",
         pj_slug=pj_slug,
     )
