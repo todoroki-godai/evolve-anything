@@ -47,6 +47,20 @@ class TestObserve:
         record = json.loads(usage_file.read_text().strip())
         assert record["skill_name"] == "my-skill"
         assert record["session_id"] == "sess-001"
+        assert record["runtime"] == "claude"
+
+    def test_skill_usage_records_explicit_codex_runtime(self, patch_data_dir):
+        event = {
+            "runtime": "codex",
+            "tool_name": "Skill",
+            "tool_input": {"skill": "my-skill", "args": ""},
+            "tool_result": {},
+            "session_id": "sess-codex",
+        }
+        observe.handle_post_tool_use(event)
+
+        record = json.loads((patch_data_dir / "usage.jsonl").read_text().strip())
+        assert record["runtime"] == "codex"
 
     def test_skill_outcome_success(self, patch_data_dir):
         """Skill 呼び出し成功時は outcome="success" が記録される。"""
@@ -71,6 +85,11 @@ class TestObserve:
         observe.handle_post_tool_use(event)
         record = json.loads((patch_data_dir / "usage.jsonl").read_text().strip())
         assert record["outcome"] == "error"
+        errors = [
+            json.loads(line)
+            for line in (patch_data_dir / "errors.jsonl").read_text().splitlines()
+        ]
+        assert errors[0]["runtime"] == "claude"
 
     def test_skill_outcome_non_dict_tool_result(self, patch_data_dir):
         """tool_result が dict でない場合は outcome="success" にフォールバック。"""
@@ -890,5 +909,4 @@ class TestCountDistinctAgents:
 
         # distinct は worker-A / worker-B の 2 個 → 閾値 5 未満 → 警告なし
         assert capsys.readouterr().out.strip() == ""
-
 

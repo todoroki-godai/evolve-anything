@@ -46,6 +46,13 @@ class TestSessionSummary:
         assert record["skill_count"] == 2
         assert record["error_count"] == 0
         assert record["correction_count"] == 0
+        assert record["runtime"] == "claude"
+
+    def test_session_summary_records_explicit_codex_runtime(self, patch_data_dir):
+        session_summary.handle_stop({"session_id": "sess-codex", "runtime": "codex"})
+
+        record = session_store.query()[0]
+        assert record["runtime"] == "codex"
 
     def test_correction_count_recorded(self, patch_data_dir):
         """session END record に当該セッションの correction_count が入る（#2 項目5）。"""
@@ -562,5 +569,4 @@ class TestRestoreStateSnapshotCap:
         kept_indices = [r["i"] for r in kept]
         assert kept_indices == sorted(kept_indices)
         assert min(kept_indices) > 0  # 古い方が落ちている
-
 
