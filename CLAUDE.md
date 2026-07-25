@@ -1,5 +1,11 @@
 # evolve-anything Plugin
 
+> **Agent contract:** 作業開始前に
+> [`docs/agent-contract/policy.md`](docs/agent-contract/policy.md) を全文読むこと。
+> 通常のprimary executorはClaude Code、Codexはcold review・独立検証・ユーザー指定時に使う。
+> runtime差は
+> [`docs/agent-contract/capability-matrix.md`](docs/agent-contract/capability-matrix.md) が正典。
+
 スキル/ルールの **自律進化パイプライン**、**修正フィードバックループ**、**直接パッチ最適化**、**fleet 観測・介入** を提供する Claude Code Plugin。
 
 ## 4つの柱
@@ -133,6 +139,9 @@
 | `skill_reachability` | SKILL.md 散文が宣言する callable（`` `func(args)` `` 形）が production コードから到達不能（#170 ゾンビ宣言の再発防止・closes #191）かを AST 静的解析で決定論検出。caller 判定は scripts/\*\*.py の参照（import エイリアス解決込み）+ SKILL.md fenced code block テキスト一致の両方。ambiguous（複数定義）/ unresolved（自コードベースに定義なし＝stdlib/CLI等）は判定除外。実較正で真のゾンビ11件検出（false positive 0）。audit advisory + dogfood gate light 非ブロッキング警告 | `skill_declaration_reachability.py` + `audit/sections_skill_reachability.py` + `dogfood/cli.py` |
 | `fleet_propose` | queue（#79/#80）の待ち PJ に `run_evolve(dry_run=True)` を順次実行し提案を集約レポート化する `bin/evolve-fleet propose`（closes #81）。llm-batch-guard 承認ゲート（対象PJ・material_count proxy・使用モデル提示 → y/n、`--yes`可）+ `evolve_decisions`/`optimize_history_store` 既存 API で reject 済み提案の再提示を抑制。出力 `evolve-proposals-<date>.md`+`.json`（read専用派生物・store_registry非登録）。1PJ失敗は他を止めない | `fleet/propose.py` + `fleet/cli_propose.py` |
 | `fleet_pr` | 承認済み evolve 提案（#81 レポート）の worktree→commit→push→PR 化（closes #82）。`pr-start` が worktree+branch を準備し適用は対話 evolve のまま人間が行う。`pr-finish` が commit（未コミットのみ・Co-Authored-By 禁止）→push アカウント検証（account-org-guard.py と同マッピング、不一致は自動切替せず停止）→push→`gh pr create`。マージは常に人間。詳細は spec/components.md | `fleet/pr.py` + `fleet/cli_pr.py` |
+| `agent_coordination` | Claude Code primary／Codex opt-inのtop-level executor lane管理。`start`がownership＋repo外worktreeをatomic取得、`handoff`がSHA固定証拠をgit-common-dirへ保存、`finish`はlaneのみ解放。fleet PR stagingもpath allowlist＋cached diff検証へ移行（#268） | `agent_coordination/` + `bin/evolve-agent-task` + `docs/agent-contract/` |
+| `codex_config_cleanup` | 既知4指紋だけをaudit→hash付きplan→明示承認＋backup付きapplyするCodex設定修復（#268） | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
+| `runtime_telemetry` | usage/sessions/errorsのhook recordに`runtime=claude|codex`を較正追加。payload→env→claudeの順で解決し、Codex hook本配線はpayload fixture取得まで保留（#268） | `hooks/common.py` + 5 writer |
 | `codex_usage` | `evolve-fleet status`/`tokens` に codex CLI（`~/.codex/state_5.sqlite`）利用状況を advisory 表示 — PJ別セッション数/tokens_used合計/最終利用時刻、read-only URI + 2段fail-open（DB不在/スキーマ相違は無音、ロック中は警告1行）。CC 側 token_usage とは単位・粒度が異なるため合算しない（#245） | `fleet/codex_usage.py` + `fleet/formatters.py` |
 
 ## クイックスタート
