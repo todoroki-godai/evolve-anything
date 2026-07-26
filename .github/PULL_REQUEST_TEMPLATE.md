@@ -2,6 +2,9 @@
 
 <!-- What changed and why? -->
 
+関連 Issue: #
+<!-- 素の #<number> だけを書く。Closes/Fixes/Resolves は使わない（merge時のauto-close事故防止）。 -->
+
 ## Agent handoff
 
 - Task ID:

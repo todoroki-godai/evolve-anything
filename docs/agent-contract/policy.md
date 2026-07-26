@@ -51,7 +51,9 @@ bin/evolve-agent-task start \
 
 - commit前にbranchとowned pathsを確認する。
 - commitには関連Issueを素の `#<number>` で含める。
-- `Closes/Fixes/Resolves`は使わない。Issue closeはmerge後に人間が明示実行する。
+- `Closes/Fixes/Resolves`は使わない。commit messageだけでなく**PR本文も同様**
+  （GitHubはPR本文のclose keywordでもmerge時にauto-closeするため）。
+  Issue closeはmerge後に人間が明示実行する。
 - `Co-Authored-By`やAI生成フッターを付けない。
 - `git add -A`でworktree全体をstageしない。明示pathspecとcached diffを検証する。
 
