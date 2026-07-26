@@ -188,20 +188,21 @@ def write_pending_marker(
     `evolve --drain` の pending ソースとして使う。同じ run_id は置換し、別 run は
     保持するため concurrent session / worktree の pending を上書きしない（#267）。
 
-    同一 proposal ID（= 同一 skill_path の content identity）は古い run 側から除去する。
-    emit は毎回新しい run_id を採るため、supersede が無いと「並行 run」と「自分の
-    前回 run」を区別できず runs[] が単調増加する（#279）。別 worktree は skill_path が
-    絶対パスで異なるので、この dedup は並行 run の提案を潰さない。
+    supersede は **ID でなく対象パス単位**で行う（#290）。emit は毎回新しい run_id を
+    採るため、supersede が無いと「並行 run」と「自分の前回 run」を区別できず runs[] が
+    単調増加する（#279）。かといって ID 一致だけで消すと、`before_sha` を含む ID は
+    対象の内容が変わるたびに変わるので **同じファイルの pending が複数世代 residue** し、
+    ingest が「今のファイル ≠ その entry の before_sha」で全部 accept 判定する
+    ＝1回の apply が N 件記録される（#279 が潰した N 重記録の別経路再導入）。
+    1ファイルの未 drain 提案は最新1件だけが有効なので、パスで置換するのが正しい。
+    別 worktree は skill_path が絶対パスで異なるので並行 run の提案は潰さない。
     """
     run_id = run_id or _legacy_run_id(pending)
-    superseded = {entry.get("id") for entry in pending if entry.get("id")}
-    # 移行期: #279 のパス単独 ID で書かれた古い entry は新 ID と一致しないため、
-    # 同じスキルの提案が新旧2件並ぶ（SessionStart で二重通知）。同一パスの旧 ID も
-    # supersede 対象に含めて片付ける（新 ID 同士は before_sha で区別されるので誤削除しない）。
-    superseded |= {
-        _legacy_proposal_id(entry["skill_path"])
-        for entry in pending
-        if entry.get("skill_path")
+    superseded_ids = {entry.get("id") for entry in pending if entry.get("id")}
+    # パス単位 supersede は #279 のパス単独 ID で書かれた移行期 entry も自然に片付ける
+    # （旧 ID は新 ID と一致しないが skill_path は同じ）。
+    superseded_paths = {
+        entry["skill_path"] for entry in pending if entry.get("skill_path")
     }
     with _marker_lock(slug):
         current = _read_pending_marker_file(slug) or {}
@@ -212,7 +213,8 @@ def write_pending_marker(
             kept = [
                 entry
                 for entry in (run.get("pending") or [])
-                if entry.get("id") not in superseded
+                if entry.get("id") not in superseded_ids
+                and entry.get("skill_path") not in superseded_paths
             ]
             if kept:
                 runs.append({**run, "pending": kept})
@@ -331,29 +333,36 @@ def _legacy_run_id(pending: List[Dict[str, Any]]) -> str:
 
 
 def _proposal_id(skill_path: str, before_sha: str) -> str:
-    """提案の content identity = (対象パス, 適用前の内容)。
+    """**提案**の content identity = (対象パス, 適用前の内容)。
 
-    2つの失敗モードの間を通す唯一の identity（#279 → 外部 cold-read で #286 として顕在化）:
+    「同じ提案か」だけを表す。「同じ判断イベントか」は別キー（``_decision_event_id``）で
+    表す — 1つの ID に両方を兼ねさせると必ずどちらかが壊れる（#279→#286→#290 で
+    3回踏んだ）:
 
-    - **run_id を混ぜてはいけない**（#279）: ID が run ごとに変わると ``ingest_decisions`` の
-      ``entry_id`` が run 跨ぎで別物になり、1回の apply が optimize_history に N 重記録される。
-    - **パス単独にしてもいけない**（#286）: ``entry_id = f"{pid}_{kind}"`` は
-      ``record_evolve_diff_decision`` の冪等 dedup キーなので、パス単独だと恒久キーになる。
-      同じスキルの2回目以降の accept が「既存レコード」として捨てられ、fitness 母集団に
-      生涯1件しか入らない（母集団を貯めることがこのサブシステムの存在理由なのに）。
-
-    ``before_sha`` を混ぜると両立する: 同じファイル状態を何度 emit しても ID は同じ（冪等）／
-    accept でファイルが変われば次の提案は別 ID（2回目以降も記録される）。並行 run が同じ
-    ファイル状態を見たときだけ ID が一致する＝supersede が「本当に同じ提案」に限定される。
+    - **run_id を混ぜてはいけない**（#279）: ID が run ごとに変わると判断イベントも
+      run 跨ぎで別物になり、1回の apply が optimize_history に N 重記録される。
+    - **パス単独にしてもいけない**（#286）: 判断イベントキーが恒久キーになり、同じ
+      スキルの2回目以降の accept が冪等 dedup で捨てられる（生涯1件しか母集団に入らない）。
+    - **before_sha を混ぜても、これ単独では足りない**（#290）: 対象の内容が過去の状態へ
+      循環すると過去の ID が再利用されるため、判断イベントキーが再び衝突する。
     """
     return "evdiff_" + hashlib.sha1(
         f"{skill_path}\n{before_sha}".encode("utf-8")
     ).hexdigest()[:12]
 
 
-def _legacy_proposal_id(skill_path: str) -> str:
-    """#279 時点のパス単独 ID。移行期に古い marker entry を supersede するためだけに使う。"""
-    return "evdiff_" + hashlib.sha1(skill_path.encode("utf-8")).hexdigest()[:12]
+def _decision_event_id(proposal_id: str, kind: str, after_content: str) -> str:
+    """**判断イベント**の identity = (提案, 判断種別, 判断時点の内容)（#290）。
+
+    ``record_evolve_diff_decision`` の冪等 dedup キー。提案 ID と分離することで、
+
+    - 同じ apply を二重 drain しても after が同じ＝同キー（冪等は保つ）
+    - 内容が循環して提案 ID が再利用されても after が違う＝別キー（欠落しない）
+
+    の両方が成り立つ。提案 ID 側の identity 設計を変えても、この分離がある限り
+    判断イベントの冪等性は巻き添えにならない。
+    """
+    return f"{proposal_id}_{kind}_{_sha256(after_content)[:12]}"
 
 
 # 提案対象とみなす suitability（high/medium のみ issue 化される — evolve.py Phase 3.5）。
@@ -571,7 +580,7 @@ def ingest_decisions(
                 human_accepted=(kind == "accept"),
                 rejection_reason=reason,
                 history_file=history_file,
-                entry_id=f"{pid}_{kind}",
+                entry_id=_decision_event_id(pid, kind, after_content),
             )
         (accepted if kind == "accept" else rejected_out).append(pid)
 
@@ -604,8 +613,8 @@ def drain_pending(
     **単一コマンド `evolve --drain` を呼ぶだけ**にして縮める。drain は CLI＝**tool 文脈**で
     走るため optimize_history を reader と同一 DATA_DIR に書く＝#358（DATA_DIR split）を踏まない。
 
-    冪等: ingest が `{pid}_{kind}` entry_id で dedup するので、未 apply で空振り→後で apply→再 drain
-    でも accept は一度だけ記録される（apply タイミング非依存）。
+    冪等: ingest が `_decision_event_id`（提案 ID + 判断種別 + 判断時点の内容）で dedup するので、
+    未 apply で空振り→後で apply→再 drain でも accept は一度だけ記録される（apply タイミング非依存）。
 
     Args:
         slug: 未指定なら project_dir/cwd から worktree 安全に解決。

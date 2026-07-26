@@ -324,7 +324,11 @@ def test_proposal_id_changes_when_file_content_changes(result_with_match, skill_
 
 def test_legacy_path_only_id_entry_is_superseded(result_with_match, skill_file, isolated):
     """#279 のパス単独 ID で書かれた古い marker entry は新 emit で片付く（二重通知の防止）。"""
-    legacy_id = ed._legacy_proposal_id(str(skill_file))
+    import hashlib
+
+    legacy_id = (
+        "evdiff_" + hashlib.sha1(str(skill_file).encode("utf-8")).hexdigest()[:12]
+    )
     ed.write_pending_marker(
         "testslug",
         [
@@ -344,6 +348,41 @@ def test_legacy_path_only_id_entry_is_superseded(result_with_match, skill_file, 
     ids = [entry["id"] for entry in marker["pending"]]
     assert legacy_id not in ids
     assert len(ids) == 1
+
+
+def test_reemit_between_edits_records_single_accept(result_with_match, skill_file, isolated):
+    """未 drain のまま内容が変わって再 emit されても、1回の apply は accept 1件（#290）。
+
+    supersede が ID 一致だけだと、before_sha 違いの pending が同じファイルについて
+    複数世代 residue し、ingest が「今のファイル ≠ その entry の before_sha」で
+    **全部 accept 判定**する（1 apply が N 件記録＝#279 が潰した N 重記録の別経路再導入）。
+    """
+    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")  # before = A
+    skill_file.write_text(_AFTER, encoding="utf-8")  # 手で B へ
+    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")  # before = B
+    skill_file.write_text(_AFTER + "\n最終形。\n", encoding="utf-8")  # 適用して C へ
+
+    # 同一ファイルの未 drain 提案は最新1件だけが marker に残る
+    marker = ed.read_pending_marker("testslug")
+    assert len(marker["pending"]) == 1
+
+    ed.drain_pending(slug="testslug")
+    assert _store_count() == 1
+
+
+def test_content_cycle_does_not_drop_later_accept(result_with_match, skill_file, isolated):
+    """内容が過去の状態へ循環して提案 ID が再利用されても accept は欠落しない（#290）。
+
+    提案 ID は (パス, before_sha) なので A→B→A と戻ると過去の ID が復活する。
+    判断イベントキーを提案 ID 単独にしていると3回目が冪等 dedup で捨てられる。
+    """
+    contents = [_AFTER, _BEFORE, _AFTER + "\n三度目。\n"]  # A→B, B→A, A→C
+    for content in contents:
+        ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+        skill_file.write_text(content, encoding="utf-8")
+        ed.drain_pending(slug="testslug")
+
+    assert _store_count() == 3
 
 
 def test_drain_pending_explicit_reject_records_negative(result_with_match, isolated):
