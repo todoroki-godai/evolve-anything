@@ -24,6 +24,14 @@
 **tool_result 原文（role=user の tool_result / 先頭 toolUseResult）と assistant の text/thinking を
 厳密分離**して照合する（混同すると全て FP になる）。これが検出の核心。
 
+**text ブロックと thinking ブロックの層別（#277）**: 3 Family とも走査自体は text/thinking 両方の
+assistant ブロックに対して行うが、Family の定義（上記）はいずれも「**可視応答（text）**への漏出」を
+指す。thinking ブロックは harness が最終的にユーザーへ見せない内部下書きであり、そこに同じパターンが
+出ても意味合いが異なる（下書き段階の揺れ・可視面への影響なし）。``Hit.block`` にこの区別は元々記録
+されていたが集計・表示のどちらにも未消費だった（dead field）。``ScanReport.counts(block=...)`` /
+``total_text`` / ``total_thinking`` で層別集計を提供し、observability セクションは可視漏出（text）を
+主表示、thinking 内はあくまで参考の従表示とする。
+
 この module は決定論・純関数のみで LLM を呼ばない（no-llm-in-tests は自明に満たす）。audit の
 Layer 2 advisory（``sections_self_contamination``）が実行時に既存 transcript を走査して使う。
 hook / store は新設しない（read-only）。
@@ -122,7 +130,7 @@ class Hit:
 
     family: str  # "A" | "B" | "C"
     line: int
-    block: str  # "text" | "thinking"
+    block: str  # "text"（可視応答） | "thinking"（内部下書き）。#277 で集計・表示に消費される。
     confab_text: str
     reference_text: str = ""
     session_id: str = ""
@@ -135,6 +143,11 @@ class ScanReport:
     ``domain_vocab_fp`` は #203 のドメイン語彙 FP 除外バケット。Family C 候補のうち根拠が
     PJ 固有のドメイン語彙のみだったものをここへ振り分ける（ハード除外でなく別集計）。
     ``total`` / operational 集計には含めない。
+
+    各 Hit は ``block`` に ``"text"``（可視応答）/ ``"thinking"``（内部下書き）を保持する。
+    ``total`` / ``counts()``（引数なし）は従来互換で text+thinking 混合値を返すが、Family の
+    公式定義（モジュール docstring）は可視漏出（text）を指すため、``counts(block="text")`` /
+    ``total_text`` が「真の指紋率」に相当する（#277）。
     """
 
     family_a: List[Hit] = field(default_factory=list)
@@ -144,10 +157,32 @@ class ScanReport:
 
     @property
     def total(self) -> int:
+        """text+thinking 混合の合算（従来互換。「検出ゼロなら沈黙」ゲートに使う）。"""
         return len(self.family_a) + len(self.family_b) + len(self.family_c)
 
-    def counts(self) -> Dict[str, int]:
-        return {"A": len(self.family_a), "B": len(self.family_b), "C": len(self.family_c)}
+    @property
+    def total_text(self) -> int:
+        """可視 text ブロックへの漏出のみの合算（Family 公式定義に一致・#277）。"""
+        return sum(self.counts(block="text").values())
+
+    @property
+    def total_thinking(self) -> int:
+        """thinking ブロック内のみの合算（参考値。可視応答への漏出ではない・#277）。"""
+        return sum(self.counts(block="thinking").values())
+
+    def counts(self, block: Optional[str] = None) -> Dict[str, int]:
+        """family（A/B/C）別件数を返す。
+
+        ``block`` 未指定（既定）は text+thinking 混合値（従来互換）。
+        ``block="text"`` / ``"thinking"`` を渡すとその種別のみに絞った件数を返す。
+        """
+
+        def _n(lane: List[Hit]) -> int:
+            if block is None:
+                return len(lane)
+            return sum(1 for h in lane if h.block == block)
+
+        return {"A": _n(self.family_a), "B": _n(self.family_b), "C": _n(self.family_c)}
 
     def extend(self, other: "ScanReport") -> None:
         self.family_a.extend(other.family_a)
