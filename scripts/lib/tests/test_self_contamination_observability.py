@@ -191,3 +191,72 @@ def test_text_only_hits_render_unchanged_shape(tmp_path, monkeypatch):
     combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
     assert "生タグ漏出 (A): 2 件" in combined
     assert "参考" not in combined
+
+
+# ==================================================================
+# 曝露母数つき層別発生率（model × thinking_state 交差表）（#275）
+# ==================================================================
+def test_stratum_crosstab_rendered_with_numerator_denominator_and_rate(tmp_path, monkeypatch):
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "claude-opus-5" in combined
+    assert "thinking=present" in combined
+    assert "1 / 25" in combined
+
+
+def test_stratum_crosstab_low_denom_shows_notice(tmp_path, monkeypatch):
+    rep = scs.ScanReport()
+    rep.exposure[("claude-sonnet-5", "absent")] = 5
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-sonnet-5", thinking_state="absent"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "低母数" in combined
+    assert "1 / 5" in combined
+
+
+def test_stratum_crosstab_absent_when_exposure_empty(tmp_path, monkeypatch):
+    """exposure が空（未計測 fixture 等）なら交差表ブロック自体を出さない。"""
+    _patch(monkeypatch, tmp_path, _report(2, 1, 1))
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "分母 = text ブロック" not in combined
+
+
+def test_excluded_synthetic_surfaced_alongside_crosstab(tmp_path, monkeypatch):
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    rep.excluded_synthetic = 7
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "7" in combined
+    assert "synthetic" in combined.lower()
+
+
+def test_excluded_synthetic_not_shown_when_crosstab_absent(tmp_path, monkeypatch):
+    """交差表ブロック自体が出ない（exposure ゼロ）なら excluded_synthetic 行も出さない。"""
+    rep = scs.ScanReport()
+    for i in range(2):
+        rep.family_a.append(scs.Hit("A", i + 1, "text", "leak", session_id="s"))
+    rep.excluded_synthetic = 3
+    result = _project_report(rep, recent={"A": 2, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "分母 = text ブロック" not in combined

@@ -20,7 +20,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from self_contamination_scan import (
+    _MIN_STRATUM_DENOM,
     ProjectScanReport,
+    ScanReport,
+    build_stratum_rows,
     resolve_cc_transcript_dir,
     scan_project_transcripts,
 )
@@ -77,6 +80,7 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
             f"  ・偽 system-reminder (B): {c_text['B']} 件 — harness 注入のはずのタグを可視 text に自己出力",
             f"  ・汚染宣言×原文非在 (C): {c_text['C']} 件 — 引用リテラルが直前 tool_result 原文に不在（可視 text）",
         ]
+        body += _render_stratum_table(rep)
         if total_thinking:
             body.append(
                 f"  ・[参考] thinking 内（可視応答への漏出ではない下書き相当・件数のみ参考）: "
@@ -133,6 +137,41 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
         applicable=lambda result: result is not None,
         render=render,
     )
+
+
+def _render_stratum_table(rep: ScanReport) -> List[str]:
+    """曝露母数つき層別発生率（model × thinking_state 交差表）を描画する（#275）。
+
+    主要 outcome = Family A in text のみ。分母は ``rep.exposure``（唯一の分母ソース）が
+    空なら交差表ブロックごと出さない（余計な行を増やさない・観測が無いことと沈黙を区別しない）。
+    """
+    rows = build_stratum_rows(rep, family="A", block="text")
+    if not rows:
+        return []
+    lines = [
+        "  ・[主要指標] 生タグ漏出 (A) の可視 text 漏出率 — model × thinking_state",
+        "      （分子 = 影響を受けた assistant record / 分母 = text ブロックを持つ assistant record）",
+    ]
+    for row in rows:
+        label = f"{row.model} / thinking={row.thinking_state}"
+        if row.rate is None:
+            lines.append(
+                f"      {label} : {row.affected_records} / {row.exposed} "
+                f"(低母数 n<{_MIN_STRATUM_DENOM} のため率は非表示)"
+            )
+        else:
+            lines.append(f"      {label} : {row.affected_records} / {row.exposed} ({row.rate:.1%})")
+    if rep.excluded_synthetic:
+        lines.append(
+            f"      ・除外: <synthetic> 等の非実 model record {rep.excluded_synthetic} 件"
+            "（交差表対象外）"
+        )
+    lines.append("      ・注記: thinking_state は transcript 上の観測値であり設定値ではありません。")
+    lines.append(
+        "      ・注記: これは観察であり因果推論ではありません（model はランダム割当ではなく、"
+        "難しい長時間タスクだけ特定モデルを使っていた可能性があります）。"
+    )
+    return lines
 
 
 def _pick_examples(report) -> list:
