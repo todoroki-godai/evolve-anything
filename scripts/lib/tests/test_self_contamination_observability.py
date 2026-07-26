@@ -142,3 +142,52 @@ def test_domain_vocab_fp_zero_and_otherwise_clean_stays_silent(tmp_path, monkeyp
     """ドメイン語彙 FP も真のヒットも 0 件なら、従来どおり沈黙（回帰確認）。"""
     _patch(monkeypatch, tmp_path, _report(0, 0, 0, domain_fp=0))
     assert ssc.build_self_contamination_section(tmp_path) is None
+
+
+# ==================================================================
+# text/thinking ブロック層別表示（#277）
+# ==================================================================
+def _project_report(rep, *, recent=None, baseline=None, is_topic=False, files_scanned=1):
+    return scs.ProjectScanReport(
+        report=rep,
+        recent_counts=recent or {"A": 0, "B": 0, "C": 0},
+        baseline_counts=baseline or {"A": 0, "B": 0, "C": 0},
+        files_scanned=files_scanned,
+        is_topic=is_topic,
+    )
+
+
+def test_thinking_only_hits_not_counted_as_visible_leak_in_render(tmp_path, monkeypatch):
+    """thinking ブロックのみの漏出は「可視漏出（text）」0 件として表示される。"""
+    rep = scs.ScanReport()
+    rep.family_a.append(scs.Hit("A", 1, "thinking", "内部タグ漏出っぽい下書き", session_id="s"))
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    section = ssc.build_self_contamination_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "生タグ漏出 (A): 0 件" in combined
+    assert "thinking" in combined.lower()
+
+
+def test_text_and_thinking_hits_separated_in_render(tmp_path, monkeypatch):
+    """text 漏出は主表示、thinking 漏出は従（参考）表示として分離される。"""
+    rep = scs.ScanReport()
+    rep.family_a.append(scs.Hit("A", 1, "text", "visible leak", session_id="s"))
+    rep.family_a.append(scs.Hit("A", 2, "thinking", "thinking leak", session_id="s"))
+    result = _project_report(rep, recent={"A": 2, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "⚠" in combined
+    # 主表示の生タグ漏出(A) は可視 text のみ 1 件。
+    assert "生タグ漏出 (A): 1 件" in combined
+    # thinking 側は参考として別に表示される。
+    assert "thinking" in combined.lower()
+
+
+def test_text_only_hits_render_unchanged_shape(tmp_path, monkeypatch):
+    """全ヒットが text 由来なら、参考行（thinking 内訳）は表示されない。"""
+    _patch(monkeypatch, tmp_path, _report(2, 1, 1))
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "生タグ漏出 (A): 2 件" in combined
+    assert "参考" not in combined

@@ -366,3 +366,48 @@ def test_scan_project_transcripts_period_split(tmp_path):
 
 def test_scan_project_transcripts_absent_dir_returns_none(tmp_path):
     assert scs.scan_project_transcripts(tmp_path / "nope") is None
+
+
+# ==================================================================
+# ScanReport: block（text/thinking）別内訳（#277）
+# ==================================================================
+def test_counts_default_is_mixed_text_and_thinking_backward_compat():
+    # block 未指定（既定）は従来どおり text+thinking 混合値（後方互換）。
+    records = [
+        _assistant(_text(_LEAKED_TAG_TEXT)),
+        _assistant(_thinking(_LEAKED_TAG_TEXT)),
+    ]
+    report = scs.scan_records(records)
+    assert report.counts()["A"] == 2
+
+
+def test_counts_text_only_excludes_thinking_only_hit():
+    # thinking ブロックのみに内部タグを含む record は「可視漏出（text）」に計上されない。
+    records = [_assistant(_thinking(_LEAKED_TAG_TEXT))]
+    report = scs.scan_records(records)
+    assert report.counts(block="text")["A"] == 0
+    assert report.total_text == 0
+    # thinking 側には計上される（Hit.block は #277 まで dead field だった）。
+    assert report.counts(block="thinking")["A"] == 1
+    assert report.total_thinking == 1
+
+
+def test_counts_text_only_includes_text_hit_as_before():
+    # text ブロックの漏出は従来どおり「可視漏出」として計上される。
+    records = [_assistant(_text(_LEAKED_TAG_TEXT))]
+    report = scs.scan_records(records)
+    assert report.counts(block="text")["A"] == 1
+    assert report.total_text == 1
+    assert report.counts(block="thinking")["A"] == 0
+    assert report.total_thinking == 0
+
+
+def test_counts_both_blocks_leak_counted_separately():
+    # 同一 record の text/thinking 両方に漏出がある場合、それぞれの block バケットへ独立計上。
+    records = [_assistant(_text(_LEAKED_TAG_TEXT), _thinking(_LEAKED_TAG_TEXT))]
+    report = scs.scan_records(records)
+    assert len(report.family_a) == 2
+    assert report.counts(block="text")["A"] == 1
+    assert report.counts(block="thinking")["A"] == 1
+    assert report.total_text == 1
+    assert report.total_thinking == 1

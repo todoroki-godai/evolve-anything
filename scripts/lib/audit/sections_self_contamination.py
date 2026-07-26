@@ -47,13 +47,24 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
 
     def render(result: ProjectScanReport) -> List[str]:
         rep = result.report
-        c = rep.counts()
+        # 主表示＝可視 text 漏出（Family の公式定義）、従表示＝thinking 内（参考・#277）。
+        c_text = rep.counts(block="text")
+        c_thinking = rep.counts(block="thinking")
+        total_text = rep.total_text
+        total_thinking = rep.total_thinking
         domain_fp_n = len(rep.domain_vocab_fp)
         arrow = "→"
-        if rep.total > 0:
+        if total_text > 0:
             body: List[str] = [
-                f"⚠ 自己汚染指紋 {rep.total} 件を検出（走査 {result.files_scanned} セッション）。"
-                "tool_result 原文に無い偽指示を assistant が自己生成した痕跡です。",
+                f"⚠ 自己汚染指紋 {total_text} 件を検出（走査 {result.files_scanned} セッション）。"
+                "tool_result 原文に無い偽指示を assistant が可視応答に自己生成した痕跡です。",
+            ]
+        elif total_thinking > 0:
+            # 可視 text 漏出は 0 件だが thinking 内にのみ痕跡がある。可視応答への漏出ではないため
+            # ⚠ でなく ℹ とし、参考情報であることを明示する（#277）。
+            body = [
+                f"ℹ 可視 text 漏出は 0 件でした。thinking 内にのみ {total_thinking} 件検出"
+                f"（走査 {result.files_scanned} セッション・可視応答への漏出ではなく参考情報）。",
             ]
         else:
             # 真のヒットは 0 件（ドメイン語彙 FP 除外のみ存在）。silence≠evaluated を守るため
@@ -62,10 +73,15 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
                 f"ℹ 自己汚染指紋の真の検出は 0 件でした（走査 {result.files_scanned} セッション）。",
             ]
         body += [
-            f"  ・生タグ漏出 (A): {c['A']} 件 — 生の invoke/function_calls タグが text に漏出",
-            f"  ・偽 system-reminder (B): {c['B']} 件 — harness 注入のはずのタグを自己出力",
-            f"  ・汚染宣言×原文非在 (C): {c['C']} 件 — 引用リテラルが直前 tool_result 原文に不在",
+            f"  ・生タグ漏出 (A): {c_text['A']} 件 — 生の invoke/function_calls タグが可視 text に漏出",
+            f"  ・偽 system-reminder (B): {c_text['B']} 件 — harness 注入のはずのタグを可視 text に自己出力",
+            f"  ・汚染宣言×原文非在 (C): {c_text['C']} 件 — 引用リテラルが直前 tool_result 原文に不在（可視 text）",
         ]
+        if total_thinking:
+            body.append(
+                f"  ・[参考] thinking 内（可視応答への漏出ではない下書き相当・件数のみ参考）: "
+                f"A {c_thinking['A']} / B {c_thinking['B']} / C {c_thinking['C']}"
+            )
         if domain_fp_n:
             body.append(
                 f"  ・ドメイン語彙 FP 除外: {domain_fp_n} 件 — PJ 固有のドメイン語彙"
@@ -78,7 +94,7 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
         rc_total = rc["A"] + rc["B"] + rc["C"]
         bc_total = bc["A"] + bc["B"] + bc["C"]
         body.append(
-            f"  ・推移（baseline {bc_total} 件 {arrow} 直近 {rc_total} 件・mtime 窓）: "
+            f"  ・推移（baseline {bc_total} 件 {arrow} 直近 {rc_total} 件・mtime 窓・text+thinking 合算）: "
             f"A {bc['A']}{arrow}{rc['A']} / B {bc['B']}{arrow}{rc['B']} / C {bc['C']}{arrow}{rc['C']}"
         )
 
@@ -94,7 +110,7 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
             body.append("  ・代表例:")
             for h in examples:
                 body.append(
-                    f"      [{h.family}] {h.session_id}:{h.line} 作話: {_clip(h.confab_text)}"
+                    f"      [{h.family}/{h.block}] {h.session_id}:{h.line} 作話: {_clip(h.confab_text)}"
                 )
                 if h.reference_text:
                     body.append(f"          ↔ 直前 tool_result 原文: {_clip(h.reference_text)}")
