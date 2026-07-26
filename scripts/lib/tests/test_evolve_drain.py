@@ -12,6 +12,7 @@
 """
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -90,12 +91,110 @@ def test_emit_dry_run_writes_marker_but_not_queue_or_store(result_with_match, is
     assert _store_count() == 0
 
 
-def test_emit_empty_pending_clears_stale_marker(result_with_match, isolated):
-    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+def test_emit_empty_run_does_not_clear_another_runs_marker(result_with_match, isolated):
+    first = ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-a"
+    )
     assert ed.read_pending_marker("testslug") is not None
-    # 候補ゼロの run → 古い marker を消す（drain 待ちは無い）
-    ed.emit_decisions({"phases": {}}, dry_run=True, slug="testslug")
+    # 候補ゼロの別 run が、既存 run の drain 待ちを消してはならない。
+    ed.emit_decisions(
+        {"phases": {}}, dry_run=True, slug="testslug", run_id="run-b"
+    )
+    marker = ed.read_pending_marker("testslug")
+    assert [run["run_id"] for run in marker["runs"]] == ["run-a"]
+    assert marker["pending"][0]["id"] == first["pending"][0]["id"]
+
+
+def test_emit_same_skill_in_concurrent_runs_collapses_to_one_entry(result_with_match, isolated):
+    """同一 skill_path への提案は content identity が同じ＝1件に畳む。
+
+    proposal ID に run_id を混ぜると、同じファイルへの同じ提案が run ごとに別 entry として
+    積み上がり、marker/queue が単調増加して optimize_history の冪等記録も壊れる。
+    別 worktree は skill_path（絶対パス）が異なるので、この dedup は並行 run を潰さない。
+    """
+    first = ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-a"
+    )
+    second = ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-b"
+    )
+
+    assert first["pending"][0]["id"] == second["pending"][0]["id"]
+    marker = ed.read_pending_marker("testslug")
+    assert len(marker["pending"]) == 1
+    assert [run["run_id"] for run in marker["runs"]] == ["run-b"]
+
+
+def test_emit_keeps_other_runs_entries_for_different_skills(result_with_match, isolated, tmp_path):
+    """別 skill を提案する並行 run は互いに保持される（run 分離の本体要件）。"""
+    other = tmp_path / "skills" / "other-skill"
+    other.mkdir(parents=True)
+    other_md = other / "SKILL.md"
+    other_md.write_text(_BEFORE, encoding="utf-8")
+    other_result = {
+        "phases": {
+            "discover": {
+                "matched_skills": [
+                    {"matched_skill": "other-skill", "skill_path": str(other_md), "pattern": "p"}
+                ]
+            }
+        }
+    }
+
+    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug", run_id="run-a")
+    ed.emit_decisions(other_result, dry_run=True, slug="testslug", run_id="run-b")
+
+    marker = ed.read_pending_marker("testslug")
+    assert [run["run_id"] for run in marker["runs"]] == ["run-a", "run-b"]
+    assert {entry["skill_name"] for entry in marker["pending"]} == {"my-skill", "other-skill"}
+
+
+def test_repeated_dry_run_emits_do_not_accumulate(result_with_match, isolated):
+    """標準フロー（dry-run evolve）を繰り返しても marker は増えない（#279 回帰）。
+
+    emit は毎回 run_id 未指定＝新規 uuid になるため、supersede が無いと
+    「並行 run」と「自分の前回 run」が区別できず runs[] が単調増加する。
+    """
+    for _ in range(5):
+        ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+
+    marker = ed.read_pending_marker("testslug")
+    assert len(marker["runs"]) == 1
+    assert len(marker["pending"]) == 1
+
+
+def test_repeated_emits_then_single_apply_records_once(result_with_match, skill_file, isolated):
+    """人間の apply 1回は optimize_history 1行（run 跨ぎの冪等記録・#279 回帰）。"""
+    for _ in range(5):
+        ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    skill_file.write_text(_AFTER, encoding="utf-8")  # apply は1回だけ
+
+    summary = ed.drain_pending(slug="testslug")
+
+    assert len(summary["accepted"]) == 1
+    assert _store_count() == 1
+
+
+def test_undrained_applied_does_not_duplicate_same_skill(result_with_match, skill_file, isolated):
+    """SessionStart リマインドが同じスキルを重複表示しない（#279 回帰）。"""
+    for _ in range(5):
+        ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    skill_file.write_text(_AFTER, encoding="utf-8")
+
+    assert len(ed.undrained_applied("testslug")) == 1
+
+
+def test_expired_runs_are_dropped_at_read_time(result_with_match, isolated):
+    """TTL 超過 run は read 時に落とす（writer 不在でも滞留しない・#279）。"""
+    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug", run_id="run-old")
+    path = ed.marker_path("testslug")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    stale = datetime.now(timezone.utc) - timedelta(days=ed.PENDING_TTL_DAYS + 1)
+    data["runs"][0]["emitted_at"] = stale.isoformat()
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
     assert ed.read_pending_marker("testslug") is None
+    assert ed.undrained_applied("testslug") == []
 
 
 # ─── 3. undrained_applied は apply 済みのみ返し store を読まない ──────────────
@@ -137,7 +236,9 @@ def test_drain_pending_nothing_applied_records_nothing(result_with_match, isolat
     summary = ed.drain_pending(slug="testslug")  # 未 apply
     assert summary["accepted"] == []
     assert _store_count() == 0
-    assert ed.read_pending_marker("testslug") is None
+    assert summary["deferred"] == summary["skipped"]
+    # 未判断は deferred として保持し、後から apply/reject できる。
+    assert ed.read_pending_marker("testslug") is not None
 
 
 def test_drain_pending_reads_result_json_when_given(result_with_match, skill_file, isolated, tmp_path):
@@ -148,6 +249,38 @@ def test_drain_pending_reads_result_json_when_given(result_with_match, skill_fil
     summary = ed.drain_pending(slug="testslug", result_json=str(rj))
     assert len(summary["accepted"]) == 1
     assert _store_count() == 1
+
+
+def test_result_json_drain_consumes_only_that_runs_entries(
+    result_with_match, skill_file, isolated, tmp_path
+):
+    """result-json drain は当該 run の提案だけ消化し、他 run の別提案を残す。"""
+    other = tmp_path / "skills" / "other-skill"
+    other.mkdir(parents=True)
+    other_md = other / "SKILL.md"
+    other_md.write_text(_BEFORE, encoding="utf-8")
+    other_result = {
+        "phases": {
+            "discover": {
+                "matched_skills": [
+                    {"matched_skill": "other-skill", "skill_path": str(other_md), "pattern": "p"}
+                ]
+            }
+        }
+    }
+    first = ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-a"
+    )
+    ed.emit_decisions(other_result, dry_run=True, slug="testslug", run_id="run-b")
+    result_path = tmp_path / "run-a.json"
+    result_path.write_text(json.dumps({"evolve_decisions": first}), encoding="utf-8")
+    skill_file.write_text(_AFTER, encoding="utf-8")  # run-a 側だけ apply
+
+    ed.drain_pending(slug="testslug", result_json=str(result_path))
+
+    marker = ed.read_pending_marker("testslug")
+    assert [run["run_id"] for run in marker["runs"]] == ["run-b"]
+    assert [entry["skill_name"] for entry in marker["pending"]] == ["other-skill"]
 
 
 def test_drain_pending_idempotent_second_call_no_double(result_with_match, skill_file, isolated):
