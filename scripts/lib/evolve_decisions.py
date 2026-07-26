@@ -23,8 +23,9 @@ import json
 import sys
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 import fcntl
 
@@ -43,6 +44,10 @@ QUEUE_ROOT = DATA_DIR / "evolve_decisions"
 # 見ず home 基準で固定する。マーカーは評価状態(optimize_history/queue)ではなく「apply→drain 待ちの
 # 提案ポインタ」という運用状態で、fitness 母集団には入らず drain で消える。
 MARKER_ROOT = Path.home() / ".claude" / "evolve-anything" / "evolve_pending"
+
+# 未 drain 提案の保持上限（日）。他ストア（weak_signals / triage_ledger）と同じ 45 日。
+# 判定は read 時の age 導出で行う（forward write に依存しない・#279）。
+PENDING_TTL_DAYS = 45
 
 # MVP 対象は discover の matched_skills（#223/Step 3 と同じスキル diff クラス）。
 # skill_evolve / remediation への拡張は均質性を崩さないため follow-up（ADR-041）。
@@ -107,7 +112,27 @@ def _marker_lock(slug: str) -> Iterator[None]:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+def _run_is_expired(run: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """TTL 超過判定。``emitted_at`` を持たない旧 schema は age 不明ゆえ落とさない。"""
+    raw = run.get("emitted_at")
+    if not raw:
+        return False
+    try:
+        emitted = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return False
+    if emitted.tzinfo is None:
+        emitted = emitted.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return (now - emitted) > timedelta(days=PENDING_TTL_DAYS)
+
+
 def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
+    """marker を読む。TTL 超過 run は read 時に落とす（書き戻さない）。
+
+    TTL は forward write でなく read 時の age 導出で効かせる（writer が止まっても
+    滞留しない＝weak_signals の ``is_effectively_expired`` と同方針）。
+    """
     path = marker_path(slug)
     if not path.exists():
         return None
@@ -124,6 +149,16 @@ def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
                 "result_path": data.get("result_path"),
             }
         ]
+    runs = [
+        run
+        for run in data.get("runs", [])
+        if (run.get("pending") or []) and not _run_is_expired(run)
+    ]
+    if not runs:
+        return None
+    data["runs"] = runs
+    # pending は常に runs から再構成する（supersede / TTL を旧 reader にも反映）。
+    data["pending"] = [entry for run in runs for entry in (run.get("pending") or [])]
     return data
 
 
@@ -152,12 +187,41 @@ def write_pending_marker(
     マーカーは store/queue とは別の運用状態。SessionStart の drain リマインドと
     `evolve --drain` の pending ソースとして使う。同じ run_id は置換し、別 run は
     保持するため concurrent session / worktree の pending を上書きしない（#267）。
+
+    同一 proposal ID（= 同一 skill_path の content identity）は古い run 側から除去する。
+    emit は毎回新しい run_id を採るため、supersede が無いと「並行 run」と「自分の
+    前回 run」を区別できず runs[] が単調増加する（#279）。別 worktree は skill_path が
+    絶対パスで異なるので、この dedup は並行 run の提案を潰さない。
     """
     run_id = run_id or _legacy_run_id(pending)
+    superseded = {entry.get("id") for entry in pending if entry.get("id")}
     with _marker_lock(slug):
         current = _read_pending_marker_file(slug) or {}
-        runs = [run for run in current.get("runs", []) if run.get("run_id") != run_id]
-        runs.append({"run_id": run_id, "pending": pending, "result_path": result_path})
+        runs: List[Dict[str, Any]] = []
+        for run in current.get("runs", []):
+            if run.get("run_id") == run_id:
+                continue
+            kept = [
+                entry
+                for entry in (run.get("pending") or [])
+                if entry.get("id") not in superseded
+            ]
+            if kept:
+                runs.append({**run, "pending": kept})
+        if pending:
+            runs.append(
+                {
+                    "run_id": run_id,
+                    "pending": pending,
+                    "result_path": result_path,
+                    "emitted_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        if not runs:
+            path = marker_path(slug)
+            if path.exists():
+                path.unlink()
+            return
         runs.sort(key=lambda run: str(run.get("run_id", "")))
         flattened = [entry for run in runs for entry in (run.get("pending") or [])]
         _write_marker_file(
@@ -186,22 +250,32 @@ def clear_pending_marker(slug: str) -> bool:
         return False
 
 
-def clear_pending_run(slug: str, run_id: str) -> bool:
-    """指定 run のみ marker から除去し、他 run を保持する。"""
+def purge_marker_entries(slug: str, consumed: Set[str]) -> bool:
+    """drain 済み entry を全 run 横断で marker から除去する（空になった run は落とす）。
+
+    consumed は proposal ID の集合。ID は skill_path 由来の content identity なので、
+    どの run の envelope から drain しても「同じ提案」は一度で消える。
+    """
+    if not consumed:
+        return False
     with _marker_lock(slug):
         marker = _read_pending_marker_file(slug)
         if not marker:
             return False
-        remaining = [run for run in marker.get("runs", []) if run.get("run_id") != run_id]
-        if len(remaining) == len(marker.get("runs", [])):
-            return False
-        if not remaining:
+        runs: List[Dict[str, Any]] = []
+        for run in marker.get("runs", []):
+            kept = [
+                entry for entry in (run.get("pending") or []) if entry.get("id") not in consumed
+            ]
+            if kept:
+                runs.append({**run, "pending": kept})
+        if not runs:
             path = marker_path(slug)
             if path.exists():
                 path.unlink()
             return True
-        flattened = [entry for run in remaining for entry in (run.get("pending") or [])]
-        marker.update({"runs": remaining, "pending": flattened, "schema_version": 2})
+        flattened = [entry for run in runs for entry in (run.get("pending") or [])]
+        marker.update({"runs": runs, "pending": flattened, "schema_version": 2})
         _write_marker_file(slug, marker)
         return True
 
@@ -248,9 +322,14 @@ def _legacy_run_id(pending: List[Dict[str, Any]]) -> str:
     return "legacy_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
 
 
-def _proposal_id(run_id: str, skill_path: str) -> str:
-    identity = f"{run_id}\0{skill_path}"
-    return "evdiff_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16]
+def _proposal_id(skill_path: str) -> str:
+    """提案の content identity。**run_id を混ぜない**（#279）。
+
+    ID が run ごとに変わると ``ingest_decisions`` の ``entry_id`` が run 跨ぎで別物になり、
+    1回の apply が optimize_history に N 重記録される（冪等記録の破壊）。run 識別は
+    entry の ``run_id`` フィールドと marker の envelope が担う。
+    """
+    return "evdiff_" + hashlib.sha1(skill_path.encode("utf-8")).hexdigest()[:12]
 
 
 # 提案対象とみなす suitability（high/medium のみ issue 化される — evolve.py Phase 3.5）。
@@ -344,7 +423,7 @@ def emit_decisions(
             continue  # 読めないスキルは対象外
         pending.append(
             {
-                "id": _proposal_id(run_id, c["skill_path"]),
+                "id": _proposal_id(c["skill_path"]),
                 "run_id": run_id,
                 "skill_name": c["skill_name"],
                 "skill_path": c["skill_path"],
@@ -380,17 +459,11 @@ def emit_decisions(
             marker_written = True
         else:
             marker = read_pending_marker(slug)
-            if not marker:
-                marker_cleared = False
-            else:
-                # 旧 schema の stale marker だけは従来どおり候補ゼロ run で掃除する。
-                legacy_runs = [
-                    run
-                    for run in marker.get("runs", [])
-                    if str(run.get("run_id", "")).startswith("legacy_")
-                ]
-                for run in legacy_runs:
-                    marker_cleared = clear_pending_run(slug, run["run_id"]) or marker_cleared
+            runs = (marker or {}).get("runs", [])
+            # 旧 schema の stale marker だけは従来どおり候補ゼロ run で掃除する。
+            # run envelope を持つ marker は他 session の drain 待ちかもしれないので触らない。
+            if runs and all(str(run.get("run_id", "")).startswith("legacy_") for run in runs):
+                marker_cleared = clear_pending_marker(slug)
     except OSError:
         pass
 
@@ -518,12 +591,10 @@ def drain_pending(
     if slug is None:
         slug = resolve_slug(Path(project_dir) if project_dir else None)
 
-    selected_run_id: Optional[str] = None
     if result_json:
         data = json.loads(Path(result_json).read_text(encoding="utf-8"))
         envelope = data.get("evolve_decisions") or {}
         pending = envelope.get("pending") or []
-        selected_run_id = envelope.get("run_id")
     else:
         marker = read_pending_marker(slug)
         pending = (marker.get("pending") if marker else None) or []
@@ -533,23 +604,7 @@ def drain_pending(
     )
     consumed = set(summary["accepted"]) | set(summary["rejected"])
     remaining = [entry for entry in pending if entry.get("id") not in consumed]
+    # 未判断は deferred として marker に残し、後続 run で apply/reject できるようにする。
     summary["deferred"] = [entry.get("id") for entry in remaining]
-
-    if selected_run_id:
-        clear_pending_run(slug, selected_run_id)
-        if remaining:
-            write_pending_marker(slug, remaining, run_id=selected_run_id, result_path=result_json)
-    elif marker := read_pending_marker(slug):
-        for run in marker.get("runs", []):
-            run_pending = [
-                entry for entry in (run.get("pending") or []) if entry.get("id") not in consumed
-            ]
-            clear_pending_run(slug, run["run_id"])
-            if run_pending:
-                write_pending_marker(
-                    slug,
-                    run_pending,
-                    run_id=run["run_id"],
-                    result_path=run.get("result_path"),
-                )
+    purge_marker_entries(slug, consumed)
     return summary
