@@ -71,5 +71,6 @@ jobs:
         run: >-
           python -m pytest -q
           scripts/lib/tests/test_distribution_check.py
+          scripts/lib/tests/test_glossary_drift.py
           scripts/tests/test_dependency_metadata.py
           scripts/tests/test_readme_drift.py
