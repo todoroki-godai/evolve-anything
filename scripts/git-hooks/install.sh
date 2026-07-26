@@ -13,9 +13,19 @@ cp "${_src_dir}/pre-push.local" "${_dest}"
 chmod +x "${_dest}"
 echo "installed: ${_dest}"
 
-# managed pre-push hook（gstack-redact）が無い環境向けの注意喚起。
+# managed pre-push hook が無い場合は、追跡済み local hook を呼ぶ最小wrapperを作る。
+# 既存 hook は絶対に上書きしない。
 _managed="$(git rev-parse --git-path hooks/pre-push)"
-if ! grep -q "pre-push.local" "${_managed}" 2>/dev/null; then
+if [[ ! -e "${_managed}" ]]; then
+  cat >"${_managed}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+_local="$(git rev-parse --git-path hooks/pre-push.local)"
+[[ ! -x "${_local}" ]] || exec "${_local}" "$@"
+EOF
+  chmod +x "${_managed}"
+  echo "installed: ${_managed}"
+elif ! grep -q "pre-push.local" "${_managed}" 2>/dev/null; then
   echo "warn: ${_managed} が pre-push.local を chain しません。" >&2
-  echo "      managed hook（gstack-redact）が無い場合は pre-push 本体から手動で呼び出してください。" >&2
+  echo "      既存 hook は上書きしていません。pre-push.local を手動で chain してください。" >&2
 fi

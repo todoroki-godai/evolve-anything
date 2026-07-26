@@ -63,6 +63,7 @@ def handle_post_tool_use(event: dict) -> None:
     tool_input = event.get("tool_input", {})
     tool_result = event.get("tool_result", {})
     session_id = event.get("session_id", "")
+    runtime = common.resolve_runtime(event)
 
     # Skill ツール呼び出し時の usage 記録
     is_error = tool_result.get("is_error", False) if isinstance(tool_result, dict) else False
@@ -75,6 +76,7 @@ def handle_post_tool_use(event: dict) -> None:
             "file_path": tool_input.get("args", ""),
             "project": project,
             "outcome": "error" if is_error else "success",
+            "runtime": runtime,
         }
         wt_skill = common.extract_worktree_info(event)
         if wt_skill:
@@ -118,6 +120,7 @@ def handle_post_tool_use(event: dict) -> None:
             "parent_skill": wf_ctx["parent_skill"],
             "workflow_id": wf_ctx["workflow_id"],
             "project": project,
+            "runtime": runtime,
         }
         wt = common.extract_worktree_info(event)
         if wt:
@@ -134,6 +137,7 @@ def handle_post_tool_use(event: dict) -> None:
             "timestamp": now,
             "session_id": session_id,
             "project": project,
+            "runtime": runtime,
         }
         wt_err = common.extract_worktree_info(event)
         if wt_err:

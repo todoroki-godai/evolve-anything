@@ -33,6 +33,7 @@ def handle_permission_denied(event: dict) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "session_id": session_id,
         "project": project,
+        "runtime": common.resolve_runtime(event),
     }
     wt = common.extract_worktree_info(event)
     if wt:

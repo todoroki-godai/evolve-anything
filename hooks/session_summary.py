@@ -175,6 +175,7 @@ def handle_stop(event: dict) -> None:
         "correction_count": stats["correction_count"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "project": project,
+        "runtime": common.resolve_runtime(event),
     }
     if _session_store is not None:
         _session_store.append(session_record)

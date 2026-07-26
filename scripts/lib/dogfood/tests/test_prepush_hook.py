@@ -16,6 +16,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _HOOK = _REPO_ROOT / "scripts" / "git-hooks" / "pre-push.local"
+_INSTALL = _REPO_ROOT / "scripts" / "git-hooks" / "install.sh"
 
 
 def _make_stub_repo(tmp_path: Path) -> Path:
@@ -87,6 +88,34 @@ def test_missing_gate_passes_through_silently(tmp_path):
     # gate 不在経路は何も警告しない（全緑・赤・スキップのいずれも出さない）
     assert "全緑" not in res.stderr
     assert "赤を検出" not in res.stderr
+
+
+def test_install_creates_effective_wrapper_without_overwriting_existing(tmp_path):
+    repo = _make_stub_repo(tmp_path)
+    first = subprocess.run(
+        ["bash", str(_INSTALL)], cwd=repo, capture_output=True, text=True
+    )
+    assert first.returncode == 0, first.stderr
+    hooks = Path(
+        subprocess.run(
+            ["git", "rev-parse", "--git-path", "hooks"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    managed = repo / hooks / "pre-push"
+    local = repo / hooks / "pre-push.local"
+    assert managed.stat().st_mode & 0o111
+    assert local.stat().st_mode & 0o111
+    managed.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    second = subprocess.run(
+        ["bash", str(_INSTALL)], cwd=repo, capture_output=True, text=True
+    )
+    assert second.returncode == 0
+    assert managed.read_text(encoding="utf-8") == "#!/bin/sh\nexit 7\n"
+    assert "上書きしていません" in second.stderr
 
 
 # --- sibling_copy_guard 配線（#210）の回帰テスト ------------------------------

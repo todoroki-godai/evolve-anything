@@ -5,9 +5,9 @@
 実 push / 実 PR 作成は一切行わない（no-llm-in-tests の外部プロセス版）。検証対象:
   - ``resolve_target``: 最新 proposals report からの対象 PJ 解決（未検出/status!=ok/不在）
   - ``create_worktree``: worktree 作成（既存 worktree/branch は上書きしない）
-  - ``find_existing_worktrees`` / ``resolve_worktree``: 既存 worktree の検出・曖昧性処理
+  - ``resolve_worktree``: git worktree metadataから既存worktreeを解決
   - ``validate_branch`` / ``current_branch``: ブランチ名検証
-  - ``has_uncommitted_changes`` / ``commit_all`` / ``commits_ahead``: commit 判定・実行
+  - ``has_uncommitted_changes`` / ``commit_paths`` / ``commits_ahead``: commit 判定・実行
   - ``default_branch``: origin の既定ブランチ probe
   - ``expected_account`` / ``parse_active_gh_account`` / ``verify_push_account``:
     push アカウント判定（account-org-guard.py と同じマッピング）
@@ -143,14 +143,15 @@ class TestCreateWorktree:
         project.mkdir()
         run = ScriptedRun([
             (lambda cmd: "symbolic-ref" in cmd, _FakeProc(returncode=0, stdout="origin/main\n")),
-            (lambda cmd: "rev-parse" in cmd and cmd[-1] == "evolve/20260710-proposals",
+            (lambda cmd: "rev-parse" in cmd and cmd[-1] == "codex/268-core",
              _FakeProc(returncode=1)),  # branch not exists
             (lambda cmd: "rev-parse" in cmd and cmd[-1] == "origin/main", _FakeProc(returncode=0)),
             (lambda cmd: "worktree" in cmd and "add" in cmd, _FakeProc(returncode=0)),
         ])
-        result = fpr.create_worktree(project, "20260710", run=run)
-        assert result["branch"] == "evolve/20260710-proposals"
-        assert result["worktree_path"] == project / ".claude" / "worktrees" / "evolve-apply-20260710"
+        result = fpr.create_worktree(project, "268-core", executor="codex", worktree_root=tmp_path, run=run)
+        assert result["branch"] == "codex/268-core"
+        assert result["worktree_path"].parent == tmp_path
+        assert result["worktree_path"].name.startswith("proj-codex-268-core-")
         assert result["base_ref"] == "origin/main"
         add_calls = [c for c, _ in run.calls if "worktree" in c]
         assert len(add_calls) == 1
@@ -166,7 +167,7 @@ class TestCreateWorktree:
             (lambda cmd: "rev-parse" in cmd, _FakeProc(returncode=1)),  # 全 probe 失敗
         ])
         with pytest.raises(fpr.WorktreeError, match="分岐元"):
-            fpr.create_worktree(project, "20260710", run=run)
+            fpr.create_worktree(project, "268-core", executor="codex", worktree_root=tmp_path, run=run)
 
     def test_real_git_bases_on_default_branch_not_current(self, tmp_path):
         """カレントが未マージ作業ブランチでも base（main）から分岐する（実PJ検証で発症したバグの回帰）。"""
@@ -180,7 +181,7 @@ class TestCreateWorktree:
         subprocess.run(["git", "add", "wip.txt"], cwd=project, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "wip"], cwd=project, check=True)
 
-        result = fpr.create_worktree(project, "20260710")
+        result = fpr.create_worktree(project, "268-core", executor="codex", worktree_root=tmp_path)
 
         wt_sha = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=result["worktree_path"],
@@ -189,16 +190,22 @@ class TestCreateWorktree:
         assert wt_sha == main_sha  # feat/wip のコミットが混入しない
         assert result["base_ref"] == "main"
 
-    def test_existing_worktree_dir_raises_without_running_git(self, tmp_path):
+    def test_existing_worktree_dir_raises_without_running_git(self, tmp_path, monkeypatch):
         project = tmp_path / "proj"
-        wt = project / ".claude" / "worktrees" / "evolve-apply-20260710"
-        wt.mkdir(parents=True)
+        monkeypatch.setattr(fpr.secrets, "token_hex", lambda _n: "fixed")
+        wt = fpr.worktree_path(
+            project, "codex", "268-core", worktree_root=tmp_path, random_suffix="fixed"
+        )
+        wt.mkdir()
 
         def _boom(cmd, **kw):
             raise AssertionError("should not call git when worktree dir exists")
 
         with pytest.raises(fpr.WorktreeError, match="既に存在"):
-            fpr.create_worktree(project, "20260710", run=_boom)
+            fpr.create_worktree(
+                project, "268-core", executor="codex", worktree_root=tmp_path,
+                run=_boom,
+            )
 
     def test_existing_branch_raises(self, tmp_path):
         project = tmp_path / "proj"
@@ -207,20 +214,20 @@ class TestCreateWorktree:
             (lambda cmd: "rev-parse" in cmd, _FakeProc(returncode=0)),  # branch exists
         ])
         with pytest.raises(fpr.WorktreeError, match="branch"):
-            fpr.create_worktree(project, "20260710", run=run)
+            fpr.create_worktree(project, "268-core", executor="codex", worktree_root=tmp_path, run=run)
 
     def test_git_failure_raises_git_command_error(self, tmp_path):
         project = tmp_path / "proj"
         project.mkdir()
         run = ScriptedRun([
             (lambda cmd: "symbolic-ref" in cmd, _FakeProc(returncode=0, stdout="origin/main\n")),
-            (lambda cmd: "rev-parse" in cmd and cmd[-1] == "evolve/20260710-proposals",
+            (lambda cmd: "rev-parse" in cmd and cmd[-1] == "codex/268-core",
              _FakeProc(returncode=1)),
             (lambda cmd: "rev-parse" in cmd and cmd[-1] == "origin/main", _FakeProc(returncode=0)),
             (lambda cmd: "worktree" in cmd, _FakeProc(returncode=128, stderr="fatal: boom")),
         ])
         with pytest.raises(fpr.GitCommandError, match="boom"):
-            fpr.create_worktree(project, "20260710", run=run)
+            fpr.create_worktree(project, "268-core", executor="codex", worktree_root=tmp_path, run=run)
 
 
 # --- find_existing_worktrees / resolve_worktree ------------------------------------
@@ -228,34 +235,33 @@ class TestCreateWorktree:
 
 class TestResolveWorktree:
     def test_no_worktrees_raises(self, tmp_path):
+        run = ScriptedRun([(_default_ok, _FakeProc(stdout=""))])
         with pytest.raises(fpr.WorktreeError, match="pr-start"):
-            fpr.resolve_worktree(tmp_path / "proj")
+            fpr.resolve_worktree(
+                tmp_path / "proj", executor="codex", task_id="268-core", run=run
+            )
 
     def test_single_worktree_is_used(self, tmp_path):
         project = tmp_path / "proj"
-        wt = project / ".claude" / "worktrees" / "evolve-apply-20260710"
-        wt.mkdir(parents=True)
-        assert fpr.resolve_worktree(project) == wt
+        wt = tmp_path / "external-wt"
+        wt.mkdir()
+        listing = (
+            f"worktree {project}\nbranch refs/heads/main\n\n"
+            f"worktree {wt}\nbranch refs/heads/codex/268-core\n"
+        )
+        run = ScriptedRun([(_default_ok, _FakeProc(stdout=listing))])
+        assert fpr.resolve_worktree(
+            project, executor="codex", task_id="268-core", run=run
+        ) == wt
 
-    def test_multiple_worktrees_without_date_raises(self, tmp_path):
+    def test_does_not_scan_nested_claude_worktrees(self, tmp_path):
         project = tmp_path / "proj"
-        (project / ".claude" / "worktrees" / "evolve-apply-20260709").mkdir(parents=True)
-        (project / ".claude" / "worktrees" / "evolve-apply-20260710").mkdir(parents=True)
-        with pytest.raises(fpr.WorktreeError, match="--date"):
-            fpr.resolve_worktree(project)
-
-    def test_date_disambiguates(self, tmp_path):
-        project = tmp_path / "proj"
-        wt1 = project / ".claude" / "worktrees" / "evolve-apply-20260709"
-        wt2 = project / ".claude" / "worktrees" / "evolve-apply-20260710"
-        wt1.mkdir(parents=True)
-        wt2.mkdir(parents=True)
-        assert fpr.resolve_worktree(project, date_str="20260709") == wt1
-
-    def test_date_not_found_raises(self, tmp_path):
-        project = tmp_path / "proj"
-        with pytest.raises(fpr.WorktreeError, match="見つかりません"):
-            fpr.resolve_worktree(project, date_str="20260101")
+        (project / ".claude" / "worktrees" / "old").mkdir(parents=True)
+        run = ScriptedRun([(_default_ok, _FakeProc(stdout=""))])
+        with pytest.raises(fpr.WorktreeError):
+            fpr.resolve_worktree(
+                project, executor="codex", task_id="268-core", run=run
+            )
 
 
 # --- validate_branch / current_branch -----------------------------------------------
@@ -263,21 +269,21 @@ class TestResolveWorktree:
 
 class TestValidateBranch:
     def test_matching_branch_ok(self, tmp_path):
-        run = ScriptedRun([(_default_ok, _FakeProc(stdout="evolve/20260710-proposals\n"))])
-        assert fpr.validate_branch(tmp_path, "20260710", run=run) == "evolve/20260710-proposals"
+        run = ScriptedRun([(_default_ok, _FakeProc(stdout="codex/268-core\n"))])
+        assert fpr.validate_branch(tmp_path, "codex", "268-core", run=run) == "codex/268-core"
 
     def test_mismatched_branch_raises(self, tmp_path):
         run = ScriptedRun([(_default_ok, _FakeProc(stdout="main\n"))])
         with pytest.raises(fpr.WorktreeError, match="期待"):
-            fpr.validate_branch(tmp_path, "20260710", run=run)
+            fpr.validate_branch(tmp_path, "codex", "268-core", run=run)
 
     def test_git_failure_raises_git_command_error(self, tmp_path):
         run = ScriptedRun([(_default_ok, _FakeProc(returncode=1, stderr="not a git repo"))])
         with pytest.raises(fpr.GitCommandError):
-            fpr.validate_branch(tmp_path, "20260710", run=run)
+            fpr.validate_branch(tmp_path, "codex", "268-core", run=run)
 
 
-# --- has_uncommitted_changes / commit_all / commits_ahead ---------------------------
+# --- has_uncommitted_changes / commit_paths / commits_ahead ---------------------------
 
 
 class TestUncommittedAndCommit:
@@ -294,31 +300,68 @@ class TestUncommittedAndCommit:
         with pytest.raises(fpr.GitCommandError):
             fpr.has_uncommitted_changes(tmp_path, run=run)
 
-    def test_commit_all_runs_add_then_commit_no_co_authored_by(self, tmp_path):
+    def test_commit_paths_runs_add_then_commit_no_co_authored_by(self, tmp_path):
         run = ScriptedRun([
             (lambda cmd: cmd[3:5] == ["add", "-A"], _FakeProc(returncode=0)),
+            (lambda cmd: cmd[3:6] == ["diff", "--cached", "--name-only"],
+             _FakeProc(stdout="skills/foo/SKILL.md\0")),
             (lambda cmd: cmd[3] == "commit", _FakeProc(returncode=0)),
         ])
-        fpr.commit_all(tmp_path, "feat(evolve): apply evolve proposals 20260710", run=run)
+        fpr.commit_paths(
+            tmp_path, "feat(evolve): apply evolve proposals 20260710",
+            ["skills/foo"], run=run,
+        )
+        assert run.calls[0][0][-2:] == ["--", "skills/foo"]
+        assert "--no-renames" in run.calls[1][0]
         commit_calls = [c for c, _ in run.calls if "commit" in c]
         assert len(commit_calls) == 1
         joined = " ".join(commit_calls[0])
         assert "Co-Authored-By" not in joined
 
-    def test_commit_all_add_failure_raises(self, tmp_path):
+    def test_commit_paths_add_failure_raises(self, tmp_path):
         run = ScriptedRun([
             (lambda cmd: "add" in cmd, _FakeProc(returncode=1, stderr="add failed")),
         ])
         with pytest.raises(fpr.GitCommandError, match="add failed"):
-            fpr.commit_all(tmp_path, "msg", run=run)
+            fpr.commit_paths(tmp_path, "msg", ["skills/foo"], run=run)
 
-    def test_commit_all_commit_failure_raises(self, tmp_path):
+    def test_commit_paths_commit_failure_raises(self, tmp_path):
         run = ScriptedRun([
             (lambda cmd: cmd[3:5] == ["add", "-A"], _FakeProc(returncode=0)),
+            (lambda cmd: cmd[3:6] == ["diff", "--cached", "--name-only"],
+             _FakeProc(stdout="skills/foo/SKILL.md\0")),
             (lambda cmd: cmd[3] == "commit", _FakeProc(returncode=1, stderr="nothing to commit")),
         ])
         with pytest.raises(fpr.GitCommandError, match="nothing to commit"):
-            fpr.commit_all(tmp_path, "msg", run=run)
+            fpr.commit_paths(tmp_path, "msg", ["skills/foo"], run=run)
+
+    def test_commit_paths_rejects_empty_allowlist(self, tmp_path):
+        with pytest.raises(fpr.WorktreeError, match="1件以上"):
+            fpr.commit_paths(tmp_path, "msg", [])
+
+    @pytest.mark.parametrize("path", ["/tmp/x", "../x", ":(glob)**", "skills/*"])
+    def test_commit_paths_rejects_unsafe_pathspec(self, tmp_path, path):
+        with pytest.raises(fpr.WorktreeError, match="repo-relative"):
+            fpr.commit_paths(tmp_path, "msg", [path])
+
+    def test_commit_paths_rejects_prefix_collision_from_full_cached_list(self, tmp_path):
+        run = ScriptedRun([
+            (lambda cmd: cmd[3] == "add", _FakeProc()),
+            (lambda cmd: cmd[3] == "diff",
+             _FakeProc(stdout="skills/foo/SKILL.md\0skills/foobar/SKILL.md\0")),
+        ])
+        with pytest.raises(fpr.WorktreeError, match="allowlist 外"):
+            fpr.commit_paths(tmp_path, "msg", ["skills/foo"], run=run)
+
+    def test_commit_paths_diff_disables_rename_detection(self, tmp_path):
+        run = ScriptedRun([
+            (lambda cmd: cmd[3] == "add", _FakeProc()),
+            (lambda cmd: cmd[3] == "diff",
+             _FakeProc(stdout="outside/a.py\0owned/a.py\0")),
+        ])
+        with pytest.raises(fpr.WorktreeError, match="outside/a.py"):
+            fpr.commit_paths(tmp_path, "msg", ["owned"], run=run)
+        assert "--no-renames" in run.calls[1][0]
 
     def test_commits_ahead_parses_count(self, tmp_path):
         run = ScriptedRun([(_default_ok, _FakeProc(stdout="3\n"))])
@@ -458,15 +501,15 @@ class TestVerifyPushAccount:
 class TestPushDiffCreatePr:
     def test_push_branch_success(self, tmp_path):
         run = ScriptedRun([(_default_ok, _FakeProc(returncode=0))])
-        fpr.push_branch(tmp_path, "evolve/20260710-proposals", run=run)
+        fpr.push_branch(tmp_path, "codex/268-core", run=run)
         assert run.calls[0][0] == [
-            "git", "-C", str(tmp_path), "push", "-u", "origin", "evolve/20260710-proposals",
+            "git", "-C", str(tmp_path), "push", "-u", "origin", "codex/268-core",
         ]
 
     def test_push_branch_failure_raises(self, tmp_path):
         run = ScriptedRun([(_default_ok, _FakeProc(returncode=1, stderr="rejected"))])
         with pytest.raises(fpr.GitCommandError, match="rejected"):
-            fpr.push_branch(tmp_path, "evolve/20260710-proposals", run=run)
+            fpr.push_branch(tmp_path, "codex/268-core", run=run)
 
     def test_diff_stat_returns_stdout(self, tmp_path):
         run = ScriptedRun([(_default_ok, _FakeProc(stdout=" skills/foo/SKILL.md | 5 +--\n"))])
@@ -569,16 +612,14 @@ class TestPrStartCli:
         ])
         monkeypatch.setattr(cli_pr, "_current_data_dir", lambda: data_dir)
 
-        rc = fcli.main(["pr-start", "alpha"])
+        rc = fcli.main(["pr-start", "alpha", "--executor", "codex", "--task-id", "268-core", "--worktree-root", str(tmp_path)])
         assert rc == 0
         out = capsys.readouterr().out
         assert "worktree を作成しました" in out
         assert "evolve-anything:evolve" in out
         assert "pr-finish alpha" in out
         # 実 worktree が作られている（実 git 経由、DI していない=本当に動くことも確認）
-        wt = project / ".claude" / "worktrees"
-        assert wt.is_dir()
-        assert any(p.name.startswith("evolve-apply-") for p in wt.iterdir())
+        assert any(p.name.startswith("alpha-codex-268-core-") for p in tmp_path.iterdir())
 
     def test_unknown_pj_slug_returns_1(self, tmp_path, monkeypatch, capsys):
         from fleet import cli as fcli
@@ -588,7 +629,7 @@ class TestPrStartCli:
         _write_report(data_dir, "20260710", [])
         monkeypatch.setattr(cli_pr, "_current_data_dir", lambda: data_dir)
 
-        rc = fcli.main(["pr-start", "ghost"])
+        rc = fcli.main(["pr-start", "ghost", "--executor", "codex", "--task-id", "268-core"])
         assert rc == 1
         assert "エラー" in capsys.readouterr().out
 
@@ -599,7 +640,7 @@ class TestPrFinishCli:
 
         data_dir = tmp_path / "data"
         project = tmp_path / "alpha"
-        project.mkdir()
+        _init_real_git_repo(project)
         entry = {
             "pj_slug": "alpha", "status": "ok", "project_path": str(project),
             "summary": {"total_proposals": 3, "remediation_proposable": 3,
@@ -610,7 +651,8 @@ class TestPrFinishCli:
         wt = project / ".claude" / "worktrees" / "evolve-apply-20260710"
         wt.mkdir(parents=True)
         monkeypatch.setattr(cli_pr, "_current_data_dir", lambda: data_dir)
-        monkeypatch.setattr(cli_pr.pr_lib, "validate_branch", lambda *a, **kw: "evolve/20260710-proposals")
+        monkeypatch.setattr(cli_pr.pr_lib, "resolve_worktree", lambda *a, **kw: wt)
+        monkeypatch.setattr(cli_pr.pr_lib, "validate_branch", lambda *a, **kw: "codex/268-core")
         monkeypatch.setattr(cli_pr.pr_lib, "default_branch", lambda *a, **kw: "main")
         monkeypatch.setattr(cli_pr.pr_lib, "has_uncommitted_changes", lambda *a, **kw: dirty)
         monkeypatch.setattr(cli_pr.pr_lib, "commits_ahead", lambda *a, **kw: ahead)
@@ -625,12 +667,12 @@ class TestPrFinishCli:
         def _boom(*a, **kw):
             raise AssertionError("dry-run must not execute side effects")
 
-        monkeypatch.setattr(cli_pr.pr_lib, "commit_all", _boom)
+        monkeypatch.setattr(cli_pr.pr_lib, "commit_paths", _boom)
         monkeypatch.setattr(cli_pr.pr_lib, "verify_push_account", _boom)
         monkeypatch.setattr(cli_pr.pr_lib, "push_branch", _boom)
         monkeypatch.setattr(cli_pr.pr_lib, "create_pr", _boom)
 
-        rc = fcli.main(["pr-finish", "alpha", "--dry-run"])
+        rc = fcli.main(["pr-finish", "alpha", "--executor", "codex", "--task-id", "268-core", "--commit-path", "skills", "--dry-run"])
         assert rc == 0
         out = capsys.readouterr().out
         assert "--dry-run" in out
@@ -644,7 +686,7 @@ class TestPrFinishCli:
         # アカウント検証は no-changes 判定より先に走る（順序修正後）ため pass させる
         monkeypatch.setattr(cli_pr.pr_lib, "verify_push_account", lambda *a, **kw: "shohu")
 
-        rc = fcli.main(["pr-finish", "alpha"])
+        rc = fcli.main(["pr-finish", "alpha", "--executor", "codex", "--task-id", "268-core", "--commit-path", "skills"])
         assert rc == 1
         assert "スキップ" in capsys.readouterr().out
 
@@ -655,7 +697,7 @@ class TestPrFinishCli:
         _data_dir, project, _wt = self._setup(tmp_path, monkeypatch, dirty=True)
 
         calls = []
-        monkeypatch.setattr(cli_pr.pr_lib, "commit_all", lambda *a, **kw: calls.append("commit"))
+        monkeypatch.setattr(cli_pr.pr_lib, "commit_paths", lambda *a, **kw: calls.append("commit"))
         monkeypatch.setattr(cli_pr.pr_lib, "verify_push_account", lambda *a, **kw: calls.append("verify"))
         monkeypatch.setattr(cli_pr.pr_lib, "push_branch", lambda *a, **kw: calls.append("push"))
         monkeypatch.setattr(cli_pr.pr_lib, "diff_stat", lambda *a, **kw: " skills/foo/SKILL.md | 1 +\n")
@@ -664,7 +706,7 @@ class TestPrFinishCli:
             lambda *a, **kw: calls.append("pr") or {"url": "https://github.com/x/y/pull/9"},
         )
 
-        rc = fcli.main(["pr-finish", "alpha"])
+        rc = fcli.main(["pr-finish", "alpha", "--executor", "codex", "--task-id", "268-core", "--commit-path", "skills"])
         assert rc == 0
         # アカウント検証が commit より先（不整合時に commit 副作用を残さない・実PJ検証の指摘）
         assert calls == ["verify", "commit", "push", "pr"]
@@ -688,11 +730,11 @@ class TestPrFinishCli:
             raise AssertionError("commit/push must not run after account mismatch")
 
         # 不整合時は commit も走らない（順序修正の回帰・実PJ検証の指摘）
-        monkeypatch.setattr(cli_pr.pr_lib, "commit_all", _boom)
+        monkeypatch.setattr(cli_pr.pr_lib, "commit_paths", _boom)
         monkeypatch.setattr(cli_pr.pr_lib, "push_branch", _boom)
         monkeypatch.setattr(cli_pr.pr_lib, "create_pr", _boom)
 
-        rc = fcli.main(["pr-finish", "alpha"])
+        rc = fcli.main(["pr-finish", "alpha", "--executor", "codex", "--task-id", "268-core", "--commit-path", "skills"])
         assert rc == 1
         assert "アカウント不整合" in capsys.readouterr().out
 
@@ -701,7 +743,7 @@ class TestPrFinishCli:
         from fleet import cli_pr
 
         self._setup(tmp_path, monkeypatch, dirty=True)
-        monkeypatch.setattr(cli_pr.pr_lib, "commit_all", lambda *a, **kw: None)
+        monkeypatch.setattr(cli_pr.pr_lib, "commit_paths", lambda *a, **kw: None)
         monkeypatch.setattr(cli_pr.pr_lib, "verify_push_account", lambda *a, **kw: "shohu")
         monkeypatch.setattr(cli_pr.pr_lib, "push_branch", lambda *a, **kw: None)
         monkeypatch.setattr(cli_pr.pr_lib, "diff_stat", lambda *a, **kw: "")
@@ -714,7 +756,7 @@ class TestPrFinishCli:
 
         monkeypatch.setattr(cli_pr.pr_lib, "create_pr", _create_pr)
 
-        rc = fcli.main(["pr-finish", "alpha", "--draft"])
+        rc = fcli.main(["pr-finish", "alpha", "--executor", "codex", "--task-id", "268-core", "--commit-path", "skills", "--draft"])
         assert rc == 0
         assert captured_kwargs.get("draft") is True
 
@@ -726,7 +768,7 @@ class TestPrFinishCli:
         _write_report(data_dir, "20260710", [])
         monkeypatch.setattr(cli_pr, "_current_data_dir", lambda: data_dir)
 
-        rc = fcli.main(["pr-finish", "ghost"])
+        rc = fcli.main(["pr-finish", "ghost", "--executor", "codex", "--task-id", "268-core", "--commit-path", "skills"])
         assert rc == 1
         assert "エラー" in capsys.readouterr().out
 
@@ -736,12 +778,12 @@ class TestPrFinishCli:
 
         data_dir = tmp_path / "data"
         project = tmp_path / "alpha"
-        project.mkdir()
+        _init_real_git_repo(project)
         _write_report(data_dir, "20260710", [
             {"pj_slug": "alpha", "status": "ok", "project_path": str(project), "summary": {}}
         ])
         monkeypatch.setattr(cli_pr, "_current_data_dir", lambda: data_dir)
 
-        rc = fcli.main(["pr-finish", "alpha"])
+        rc = fcli.main(["pr-finish", "alpha", "--executor", "codex", "--task-id", "268-core", "--commit-path", "skills"])
         assert rc == 1
         assert "pr-start" in capsys.readouterr().out

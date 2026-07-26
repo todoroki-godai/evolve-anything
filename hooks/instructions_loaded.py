@@ -75,6 +75,7 @@ def handle_instructions_loaded(event: dict) -> None:
         "session_id": session_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "project": project,
+        "runtime": common.resolve_runtime(event),
     }
     _append_session(record)
 

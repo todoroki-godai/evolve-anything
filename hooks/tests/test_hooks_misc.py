@@ -41,6 +41,14 @@ class TestInstructionsLoaded:
         record = records[0]
         assert record["type"] == "instructions_loaded"
         assert record["session_id"] == "sess-il-001"
+        assert record["runtime"] == "claude"
+
+    def test_explicit_codex_runtime_recorded(self, patch_data_dir):
+        instructions_loaded.handle_instructions_loaded(
+            {"session_id": "sess-il-codex", "runtime": "codex"}
+        )
+
+        assert session_store.query()[0]["runtime"] == "codex"
 
     def test_second_call_dedup(self, patch_data_dir):
         """同一セッションの2回目は記録しない。"""

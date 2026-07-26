@@ -1,4 +1,7 @@
 # 単体テストで LLM を呼ばない
+
+正典: `docs/agent-contract/policy.md` の「TDD / root cause」。
+
 - 単体テストで `subprocess.run(["claude", ...])` / anthropic SDK / openai SDK を直接呼ぶことは禁止。必ず mock する
 - LLM を呼ぶプロダクトコードに対するテストは、対象関数または `subprocess.run`/`subprocess.Popen` を mock する
 - conftest.py の guard が claude CLI 呼び出しを検出して RuntimeError を投げる。回避は integration テストのみ `RL_ALLOW_LLM_IN_TESTS=1`
