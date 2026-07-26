@@ -20,7 +20,7 @@ slop_detector, skill_extractor, skill_rm
 
 ## observability・検出器・ストア契約 → [components-observability.md](components-observability.md)
 
-pitfall自動強制, agent_team, observability contract, scaffold_advisory, evolve_introspect,
+pitfall自動強制, agent_team, observability contract, advisory_proposals, scaffold_advisory, evolve_introspect,
 evolve_result_schema, evolve_consistency, hook_drift, data_dir_migration, spec_trigger,
 outcome_metrics, outcome_attribution, reward_ema, subagent_traces, subagent_noise, verbosity,
 capture_rate, orphan_store, utterance_archive, SessionStore, reader union網羅監査,
