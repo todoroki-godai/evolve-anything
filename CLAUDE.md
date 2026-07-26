@@ -72,6 +72,7 @@
 | observability contract | 必ず surface すべき行の単一ソース（markdown/構造化 両経路）[ADR-028] | `audit/observability.py` |
 | advisory section 共通枠 | 全 observability section の header/trailer 規約を単一化する2層 helper（`advisory_header`/`finalize` + `build_advisory_section`）+ `_OBSERVABILITY_BUILDERS` 横断の契約テストで silence≠evaluated を構造担保。builder 20個が経由、CUSTOM 8個は据え置き（#115） | `audit/advisory.py` |
 | `advisory_proposals` | detector 結果を副作用なしで decision lane 用 proposal に変換する adapter registry（初期2 detector・#267） | `advisory_proposals.py` |
+| `advisory_decision_log` | advisory 提案を emit→drain lane に載せた際の accept/reject 記録（#284）。専用ストア `advisory_decisions.jsonl` に分離し optimize_history（skill_quality 母集団）を汚さない。reader は audit の `Advisory Decisions` section（detector 別採用率 + accept 0 件 detector の淘汰候補 ⚠） | `advisory_decision_log.py` + `audit/sections_advisory_decisions.py` |
 | `evolve_introspect` | evolve result の自己解析→issue 候補生成（3カテゴリ）[ADR-033, ADR-034] | `evolve_introspect/`（#122 で detectors/render/dedup/helpers に分割・re-export） |
 | `evolve_result_schema` | result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379） | `evolve_result_schema.py` |
 | `evolve_consistency` | P1 invariant の runtime self-detect（型 drift のみ）（#377-5） | `evolve_consistency.py` |

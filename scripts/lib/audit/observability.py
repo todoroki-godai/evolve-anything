@@ -31,6 +31,7 @@ from .sections_artifacts import (
     build_global_hook_plugin_dup_section,
     build_missing_skill_md_section,
 )
+from .sections_advisory_decisions import build_advisory_decisions_section
 from .sections_capture import build_capture_rate_section
 from .sections_eval import build_eval_saturation_section
 from .sections_fanout import build_fanout_cost_section
@@ -105,6 +106,7 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("backup_files", build_backup_files_section),
     ("duplicate_skill_names", build_duplicate_skill_names_section),
     ("invalid_frontmatter", build_invalid_frontmatter_section),
+    ("advisory_decisions", build_advisory_decisions_section),
     ("judge_audit", build_judge_audit_section),
     ("skill_reachability", build_skill_reachability_section),
 ]
