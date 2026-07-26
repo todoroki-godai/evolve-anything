@@ -90,12 +90,32 @@ def test_emit_dry_run_writes_marker_but_not_queue_or_store(result_with_match, is
     assert _store_count() == 0
 
 
-def test_emit_empty_pending_clears_stale_marker(result_with_match, isolated):
-    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+def test_emit_empty_run_does_not_clear_another_runs_marker(result_with_match, isolated):
+    first = ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-a"
+    )
     assert ed.read_pending_marker("testslug") is not None
-    # 候補ゼロの run → 古い marker を消す（drain 待ちは無い）
-    ed.emit_decisions({"phases": {}}, dry_run=True, slug="testslug")
-    assert ed.read_pending_marker("testslug") is None
+    # 候補ゼロの別 run が、既存 run の drain 待ちを消してはならない。
+    ed.emit_decisions(
+        {"phases": {}}, dry_run=True, slug="testslug", run_id="run-b"
+    )
+    marker = ed.read_pending_marker("testslug")
+    assert [run["run_id"] for run in marker["runs"]] == ["run-a"]
+    assert marker["pending"][0]["id"] == first["pending"][0]["id"]
+
+
+def test_emit_same_skill_in_concurrent_runs_has_distinct_ids(result_with_match, isolated):
+    first = ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-a"
+    )
+    second = ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-b"
+    )
+
+    assert first["pending"][0]["id"] != second["pending"][0]["id"]
+    marker = ed.read_pending_marker("testslug")
+    assert [run["run_id"] for run in marker["runs"]] == ["run-a", "run-b"]
+    assert len(marker["pending"]) == 2
 
 
 # ─── 3. undrained_applied は apply 済みのみ返し store を読まない ──────────────
@@ -137,7 +157,9 @@ def test_drain_pending_nothing_applied_records_nothing(result_with_match, isolat
     summary = ed.drain_pending(slug="testslug")  # 未 apply
     assert summary["accepted"] == []
     assert _store_count() == 0
-    assert ed.read_pending_marker("testslug") is None
+    assert summary["deferred"] == summary["skipped"]
+    # 未判断は deferred として保持し、後から apply/reject できる。
+    assert ed.read_pending_marker("testslug") is not None
 
 
 def test_drain_pending_reads_result_json_when_given(result_with_match, skill_file, isolated, tmp_path):
@@ -148,6 +170,27 @@ def test_drain_pending_reads_result_json_when_given(result_with_match, skill_fil
     summary = ed.drain_pending(slug="testslug", result_json=str(rj))
     assert len(summary["accepted"]) == 1
     assert _store_count() == 1
+
+
+def test_result_json_drain_clears_only_selected_run(
+    result_with_match, skill_file, isolated, tmp_path
+):
+    first = ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-a"
+    )
+    ed.emit_decisions(
+        result_with_match, dry_run=True, slug="testslug", run_id="run-b"
+    )
+    result_path = tmp_path / "run-a.json"
+    result_path.write_text(
+        json.dumps({"evolve_decisions": first}), encoding="utf-8"
+    )
+    skill_file.write_text(_AFTER, encoding="utf-8")
+
+    ed.drain_pending(slug="testslug", result_json=str(result_path))
+
+    marker = ed.read_pending_marker("testslug")
+    assert [run["run_id"] for run in marker["runs"]] == ["run-b"]
 
 
 def test_drain_pending_idempotent_second_call_no_double(result_with_match, skill_file, isolated):

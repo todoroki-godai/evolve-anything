@@ -52,7 +52,7 @@
 | `second-opinion` | cold-read セカンドオピニオン（3モード）。codex 検出時は外部 cold-read ルートBも選択可 | skill + agent |
 | `growth-level` | env_score → Lv.1-10 + 日英称号マッピング | `growth_level.py` |
 | `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug）[ADR-031] | `optimize_history_store.py` |
-| `evolve_decisions` | evolve 提案の accept/reject を emit→drain 2相で決定論キャプチャ（`evolve --drain`）[ADR-041, #400, #402] | `evolve_decisions.py` |
+| `evolve_decisions` | run envelope 付き emit→drain で並行 run を分離し、未判断を deferred 保持（`evolve --drain`）[ADR-041, #267, #400, #402] | `evolve_decisions.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400） | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
 | `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込 [ADR-037]。**project スコープ4層防御（#206）**: 全PJ共有ストア corrections.jsonl/auto_memory_queue の他PJ混入を `pj_slug.record_project_match` 単一述語で読み出しフィルタ+enqueue reject+修復ツール `auto_memory_purge.py`（dry-run既定）の4層で遮断 | `auto_memory_*.py` |
@@ -71,6 +71,7 @@
 | `agent_team` | エージェント間の役割重複・孤立の決定論検出（#326） | `agent_team.py` |
 | observability contract | 必ず surface すべき行の単一ソース（markdown/構造化 両経路）[ADR-028] | `audit/observability.py` |
 | advisory section 共通枠 | 全 observability section の header/trailer 規約を単一化する2層 helper（`advisory_header`/`finalize` + `build_advisory_section`）+ `_OBSERVABILITY_BUILDERS` 横断の契約テストで silence≠evaluated を構造担保。builder 20個が経由、CUSTOM 8個は据え置き（#115） | `audit/advisory.py` |
+| `advisory_proposals` | detector 結果を副作用なしで decision lane 用 proposal に変換する adapter registry（初期2 detector・#267） | `advisory_proposals.py` |
 | `evolve_introspect` | evolve result の自己解析→issue 候補生成（3カテゴリ）[ADR-033, ADR-034] | `evolve_introspect/`（#122 で detectors/render/dedup/helpers に分割・re-export） |
 | `evolve_result_schema` | result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379） | `evolve_result_schema.py` |
 | `evolve_consistency` | P1 invariant の runtime self-detect（型 drift のみ）（#377-5） | `evolve_consistency.py` |
@@ -138,7 +139,7 @@
 | `judge_audit` | LLM judge の false-pass 欠陥注入監査（The Blind Curator arXiv 2607.07436・#188）。既知の欠陥 fixture 6件を judge の実プロンプト/パーサ（constitutional 再利用）に流し、失敗を合格と誤判定する割合を opt-in CLI ハーネス（dry-run 既定・llm-batch-guard 準拠）で計測。false-pass はスキル退役（negative_transfer rollback）を無音で無効化するため事前計測する。floor=min(5, fixture総数)・率20%超で ⚠ を advisory surface（verbosity #75 と同型の分離） | `scripts/lib/judge_audit/` + `audit/sections_judge_audit.py` |
 | `skill_reachability` | SKILL.md 散文が宣言する callable（`` `func(args)` `` 形）が production コードから到達不能（#170 ゾンビ宣言の再発防止・closes #191）かを AST 静的解析で決定論検出。caller 判定は scripts/\*\*.py の参照（import エイリアス解決込み）+ SKILL.md fenced code block テキスト一致の両方。ambiguous（複数定義）/ unresolved（自コードベースに定義なし＝stdlib/CLI等）は判定除外。実較正で真のゾンビ11件検出（false positive 0）。audit advisory + dogfood gate light 非ブロッキング警告 | `skill_declaration_reachability.py` + `audit/sections_skill_reachability.py` + `dogfood/cli.py` |
 | `fleet_propose` | queue（#79/#80）の待ち PJ に `run_evolve(dry_run=True)` を順次実行し提案を集約レポート化する `bin/evolve-fleet propose`（closes #81）。llm-batch-guard 承認ゲート（対象PJ・material_count proxy・使用モデル提示 → y/n、`--yes`可）+ `evolve_decisions`/`optimize_history_store` 既存 API で reject 済み提案の再提示を抑制。出力 `evolve-proposals-<date>.md`+`.json`（read専用派生物・store_registry非登録）。1PJ失敗は他を止めない | `fleet/propose.py` + `fleet/cli_propose.py` |
-| `fleet_pr` | 承認済み evolve 提案（#81 レポート）の worktree→commit→push→PR 化（closes #82）。`pr-start` が repo 外に `<executor>/<issue>-<slug>` の worktree+branch を準備し（`--executor` / `--task-id` 必須）適用は対話 evolve のまま人間が行う。`pr-finish` は `--commit-path` の allowlist だけを stage して commit（`--no-renames` cached diff で範囲外 path を拒否・Co-Authored-By 禁止）→push アカウント検証（account-org-guard.py と同マッピング、不一致は自動切替せず停止）→push→`gh pr create`。マージは常に人間。詳細は spec/components.md | `fleet/pr.py` + `fleet/cli_pr.py` |
+| `fleet_pr` | 承認済み evolve 提案を executor 別の repo 外 worktree で commit→push→PR 化。path allowlist・push account guard を強制し、適用とマージは人間が行う（#82, #268） | `fleet/pr.py` + `fleet/cli_pr.py` |
 | `agent_coordination` | Claude Code primary／Codex opt-inのtop-level executor lane管理。`start`がownership＋repo外worktreeをatomic取得、`handoff`がSHA固定証拠をgit-common-dirへ保存、`finish`はlaneのみ解放。fleet PR stagingもpath allowlist＋cached diff検証へ移行（#268） | `agent_coordination/` + `bin/evolve-agent-task` + `docs/agent-contract/` |
 | `codex_config_cleanup` | 既知4カテゴリをauditし、`<repo>/.Codex/`と`~/.Codex/`を文脈別の正しい宛先へ直す等、復元先が一意な指紋だけをplan/apply。裸の`.Codex/`と`Codex Code`はaudit-only（#268） | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
 | `runtime_telemetry` | usage/sessions/errorsのhook recordに`runtime=claude|codex`を較正追加。`runtime-summary`はsessionsを正準session_store（DB＋live JSONL union）から読みstore別・runtime別に分離表示。Codex hook本配線はpayload fixture取得まで保留（#268） | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
