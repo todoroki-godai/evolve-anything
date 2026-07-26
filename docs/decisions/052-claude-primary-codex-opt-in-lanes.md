@@ -19,6 +19,10 @@ review対象SHAの曖昧化が起きる。一方、常時2agentを動かす費�
 - tracked artifactへのHEAD SHA埋込は自己参照になるため採用しない。
 - stageは明示path＋cached diff全体のallowlist検証を必須とする。
 - runtime telemetryはusage/sessions/errorsの3storeから較正し、未実証hookを一括移植しない。
+- runtime集計でsessionsはlive JSONLを直読せず、sessions.db＋未ingest JSONLの正準union
+  readerを使う。
+- cleanupは`<repo>/.Codex/→<repo>/.claude/`と`~/.Codex/→~/.codex/`を別指紋にする。
+  文脈不明な裸の`.Codex/`は復元先が一意でないためaudit-onlyとする。
 - merge/release/Issue closeは人間authorityとする。
 
 ## Consequences

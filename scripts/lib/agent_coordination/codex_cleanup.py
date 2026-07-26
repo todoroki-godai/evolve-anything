@@ -10,12 +10,18 @@ from typing import Any, Iterable
 
 from .core import CoordinationError
 
-FINGERPRINTS: tuple[tuple[str, str, str | None], ...] = (
+AUDIT_FINGERPRINTS: tuple[tuple[str, str], ...] = (
+    ("dot_codex_plugin", ".Codex-plugin"),
+    ("dot_codex_dir", ".Codex/"),
+    ("missing_codex_validate", "Codex plugin validate"),
+    ("codex_code_name", "Codex Code"),
+)
+
+REPLACEMENTS: tuple[tuple[str, str, str], ...] = (
     ("dot_codex_plugin", ".Codex-plugin", ".claude-plugin"),
-    ("uppercase_codex_home", ".Codex/", ".claude/"),
+    ("repo_codex_dir", "<repo>/.Codex/", "<repo>/.claude/"),
+    ("uppercase_codex_home", "~/.Codex/", "~/.codex/"),
     ("missing_codex_validate", "Codex plugin validate", "claude plugin validate"),
-    # 復元先が一意でないため検出だけ行い、自動置換しない。
-    ("codex_code_name", "Codex Code", None),
 )
 
 
@@ -41,7 +47,7 @@ def audit(root: Path) -> dict[str, Any]:
         text = raw.decode("utf-8")
         findings = {
             fingerprint: text.count(before)
-            for fingerprint, before, _after in FINGERPRINTS
+            for fingerprint, before in AUDIT_FINGERPRINTS
             if before in text
         }
         if findings:
@@ -63,8 +69,8 @@ def audit(root: Path) -> dict[str, Any]:
 def _replacement(text: str) -> tuple[str, list[str]]:
     after = text
     applied: list[str] = []
-    for fingerprint, needle, replacement in FINGERPRINTS:
-        if replacement is not None and needle in after:
+    for fingerprint, needle, replacement in REPLACEMENTS:
+        if needle in after:
             after = after.replace(needle, replacement)
             applied.append(fingerprint)
     return after, applied

@@ -29,6 +29,11 @@ def _config(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (agents / "safe.toml").write_text('name = "safe"\n', encoding="utf-8")
+    (agents / "paths.toml").write_text(
+        'home = "~/.Codex/agent-memory/x"\n'
+        'ambiguous = ".Codex/rules/"\n',
+        encoding="utf-8",
+    )
     return root
 
 
@@ -36,7 +41,7 @@ def test_audit_is_read_only_and_only_reports_known_fingerprints(tmp_path: Path) 
     root = _config(tmp_path)
     before = (root / "AGENTS.md").read_bytes()
     report = audit(root)
-    assert report["finding_count"] == 4
+    assert report["finding_count"] == 6
     assert (root / "AGENTS.md").read_bytes() == before
     assert report["files"][0]["findings"]["missing_codex_validate"] == 1
 
@@ -45,7 +50,7 @@ def test_plan_then_apply_requires_yes_and_creates_hash_backup(tmp_path: Path) ->
     root = _config(tmp_path)
     plan_path = tmp_path / "plan.json"
     plan = write_plan(root, plan_path)
-    assert len(plan["changes"]) == 1
+    assert len(plan["changes"]) == 2
     with pytest.raises(CoordinationError, match="--yes"):
         apply_plan(plan_path, confirmed=False)
     result = apply_plan(plan_path, confirmed=True)
@@ -54,6 +59,9 @@ def test_plan_then_apply_requires_yes_and_creates_hash_backup(tmp_path: Path) ->
     assert ".claude-plugin" in updated
     assert "claude plugin validate" in updated
     assert "Codex Code" in updated
+    paths = (root / "agents" / "paths.toml").read_text(encoding="utf-8")
+    assert 'home = "~/.codex/agent-memory/x"' in paths
+    assert 'ambiguous = ".Codex/rules/"' in paths
     backup = Path(result["applied"][0]["backup"])
     assert backup.exists()
     assert "Codex Code" in backup.read_text(encoding="utf-8")

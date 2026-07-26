@@ -16,3 +16,5 @@ lockはPID不在または1時間超過で自動回復する。誤ったlockを�
 
 runtime別の初期較正は
 `evolve-agent-task runtime-summary --data-dir ~/.claude/evolve-anything`で表示する。
+sessionsはrotateされるlive JSONL直読ではなく、`session_store`のsessions.db＋未ingest
+JSONL union readerを使う。

@@ -17,7 +17,9 @@
 ## 禁止する機械置換指紋
 
 - `.Codex-plugin`
-- `.Codex/`
+- `<repo>/.Codex/`（`<repo>/.claude/`へ自動修復）
+- `~/.Codex/`（`~/.codex/`へ自動修復）
+- 文脈不明な裸の`.Codex/`（auditのみ・自動置換しない）
 - `Codex plugin validate`
 - `Codex Code`（復元先が一意でないためauditのみ・自動置換しない）
 
