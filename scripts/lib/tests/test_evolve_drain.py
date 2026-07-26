@@ -293,6 +293,59 @@ def test_drain_pending_idempotent_second_call_no_double(result_with_match, skill
     assert _store_count() == 1
 
 
+def test_second_accept_for_same_skill_is_recorded(result_with_match, skill_file, isolated):
+    """同じスキルの2回目以降の accept も母集団に入る（#286）。
+
+    proposal ID がパス単独だと ``entry_id = f"{pid}_accept"`` が恒久キーになり、
+    2回目の accept が `record_evolve_diff_decision` の冪等 dedup で捨てられていた
+    （1スキル生涯1件しか optimize_history に入らない）。ID に before_sha を混ぜて解消。
+    """
+    # 1周目: 提案 → 適用 → drain
+    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    skill_file.write_text(_AFTER, encoding="utf-8")
+    ed.drain_pending(slug="testslug")
+    assert _store_count() == 1
+
+    # 2周目: 同じスキルに別の提案 → 適用 → drain
+    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    skill_file.write_text(_AFTER + "\nさらに改善した手順。\n", encoding="utf-8")
+    ed.drain_pending(slug="testslug")
+
+    assert _store_count() == 2
+
+
+def test_proposal_id_changes_when_file_content_changes(result_with_match, skill_file, isolated):
+    first = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    skill_file.write_text(_AFTER, encoding="utf-8")
+    second = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+
+    assert first["pending"][0]["id"] != second["pending"][0]["id"]
+
+
+def test_legacy_path_only_id_entry_is_superseded(result_with_match, skill_file, isolated):
+    """#279 のパス単独 ID で書かれた古い marker entry は新 emit で片付く（二重通知の防止）。"""
+    legacy_id = ed._legacy_proposal_id(str(skill_file))
+    ed.write_pending_marker(
+        "testslug",
+        [
+            {
+                "id": legacy_id,
+                "skill_name": "my-skill",
+                "skill_path": str(skill_file),
+                "before_sha": ed._sha256(_BEFORE),
+            }
+        ],
+        run_id="legacy_run",
+    )
+
+    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+
+    marker = ed.read_pending_marker("testslug")
+    ids = [entry["id"] for entry in marker["pending"]]
+    assert legacy_id not in ids
+    assert len(ids) == 1
+
+
 def test_drain_pending_explicit_reject_records_negative(result_with_match, isolated):
     out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
     pid = out["pending"][0]["id"]

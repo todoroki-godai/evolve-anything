@@ -195,6 +195,14 @@ def write_pending_marker(
     """
     run_id = run_id or _legacy_run_id(pending)
     superseded = {entry.get("id") for entry in pending if entry.get("id")}
+    # 移行期: #279 のパス単独 ID で書かれた古い entry は新 ID と一致しないため、
+    # 同じスキルの提案が新旧2件並ぶ（SessionStart で二重通知）。同一パスの旧 ID も
+    # supersede 対象に含めて片付ける（新 ID 同士は before_sha で区別されるので誤削除しない）。
+    superseded |= {
+        _legacy_proposal_id(entry["skill_path"])
+        for entry in pending
+        if entry.get("skill_path")
+    }
     with _marker_lock(slug):
         current = _read_pending_marker_file(slug) or {}
         runs: List[Dict[str, Any]] = []
@@ -322,13 +330,29 @@ def _legacy_run_id(pending: List[Dict[str, Any]]) -> str:
     return "legacy_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
 
 
-def _proposal_id(skill_path: str) -> str:
-    """提案の content identity。**run_id を混ぜない**（#279）。
+def _proposal_id(skill_path: str, before_sha: str) -> str:
+    """提案の content identity = (対象パス, 適用前の内容)。
 
-    ID が run ごとに変わると ``ingest_decisions`` の ``entry_id`` が run 跨ぎで別物になり、
-    1回の apply が optimize_history に N 重記録される（冪等記録の破壊）。run 識別は
-    entry の ``run_id`` フィールドと marker の envelope が担う。
+    2つの失敗モードの間を通す唯一の identity（#279 → 外部 cold-read で #286 として顕在化）:
+
+    - **run_id を混ぜてはいけない**（#279）: ID が run ごとに変わると ``ingest_decisions`` の
+      ``entry_id`` が run 跨ぎで別物になり、1回の apply が optimize_history に N 重記録される。
+    - **パス単独にしてもいけない**（#286）: ``entry_id = f"{pid}_{kind}"`` は
+      ``record_evolve_diff_decision`` の冪等 dedup キーなので、パス単独だと恒久キーになる。
+      同じスキルの2回目以降の accept が「既存レコード」として捨てられ、fitness 母集団に
+      生涯1件しか入らない（母集団を貯めることがこのサブシステムの存在理由なのに）。
+
+    ``before_sha`` を混ぜると両立する: 同じファイル状態を何度 emit しても ID は同じ（冪等）／
+    accept でファイルが変われば次の提案は別 ID（2回目以降も記録される）。並行 run が同じ
+    ファイル状態を見たときだけ ID が一致する＝supersede が「本当に同じ提案」に限定される。
     """
+    return "evdiff_" + hashlib.sha1(
+        f"{skill_path}\n{before_sha}".encode("utf-8")
+    ).hexdigest()[:12]
+
+
+def _legacy_proposal_id(skill_path: str) -> str:
+    """#279 時点のパス単独 ID。移行期に古い marker entry を supersede するためだけに使う。"""
     return "evdiff_" + hashlib.sha1(skill_path.encode("utf-8")).hexdigest()[:12]
 
 
@@ -421,13 +445,14 @@ def emit_decisions(
             before = Path(c["skill_path"]).read_text(encoding="utf-8")
         except OSError:
             continue  # 読めないスキルは対象外
+        before_sha = _sha256(before)
         pending.append(
             {
-                "id": _proposal_id(c["skill_path"]),
+                "id": _proposal_id(c["skill_path"], before_sha),
                 "run_id": run_id,
                 "skill_name": c["skill_name"],
                 "skill_path": c["skill_path"],
-                "before_sha": _sha256(before),
+                "before_sha": before_sha,
                 "fitness_func": FITNESS_FUNC,
                 "pattern": c["pattern"],
                 "proposal_type": c.get("proposal_type", "skill_diff"),
