@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
 
 if TYPE_CHECKING:  # 循環 import 回避（self_contamination_scan がこの module を re-export する）
     from self_contamination_scan import Hit, ScanReport
@@ -52,6 +52,34 @@ def classify_thinking_state(record: dict) -> str:
     if has_redacted:
         return "unknown"
     return "absent"
+
+
+def classify_session_thinking_state(records: "Iterable[dict]") -> str:
+    """**セッション単位**の thinking 在否を3値で分類する（#275・層別の正準粒度）。
+
+    record 単位（``classify_thinking_state``）では判定が退化する: CC の transcript は
+    thinking ブロックと text ブロックを**別 record に分けて**保存することが多く、text を持つ
+    record（＝曝露母数の対象）にはほぼ thinking ブロックが同居しない。実機で確認すると
+    thinking 常時 on の fable でも text 保持 record の 356/357 が ``absent`` に落ち、交差表が
+    「全セル absent」に潰れて説明変数として機能しなかった。
+
+    thinking の有効/無効は本来セッション（設定）単位の性質なので、同一 transcript 内に
+    thinking ブロックを持つ assistant record が 1 つでもあれば、そのセッションの全 record を
+    ``"present"`` とする。判定順は ``classify_thinking_state`` と同じ（present > unknown >
+    absent）で、``redacted_thinking`` のみのセッションは absence 側を汚染しないよう
+    ``"unknown"``。あくまで **transcript 上の観測値であり設定値ではない**（保存されなかった・
+    短い応答で出なかった等でも absent になりうる）。
+    """
+    saw_unknown = False
+    for record in records:
+        if not isinstance(record, dict) or record.get("type") != "assistant":
+            continue
+        state = classify_thinking_state(record)
+        if state == "present":
+            return "present"
+        if state == "unknown":
+            saw_unknown = True
+    return "unknown" if saw_unknown else "absent"
 
 
 def _extract_model(record: dict) -> str:

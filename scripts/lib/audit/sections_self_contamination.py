@@ -161,12 +161,24 @@ def _render_stratum_table(rep: ScanReport) -> List[str]:
             )
         else:
             lines.append(f"      {label} : {row.affected_records} / {row.exposed} ({row.rate:.1%})")
+    states = {row.thinking_state for row in rows}
+    if len(states) == 1 and len(rows) >= 2:
+        # 全セルが同一 thinking_state ＝この窓では thinking の有無に差が無く、説明変数として
+        # 機能しない。判断契約（#275）の「差が再現しない」出口を読み手が判定できるよう明示する。
+        lines.append(
+            f"      ・注記: この窓では thinking_state が全て {states.pop()} で差がないため、"
+            "thinking の有無は説明変数として機能していません（model 間の比較のみ有効）。"
+        )
     if rep.excluded_synthetic:
         lines.append(
             f"      ・除外: <synthetic> 等の非実 model record {rep.excluded_synthetic} 件"
             "（交差表対象外）"
         )
-    lines.append("      ・注記: thinking_state は transcript 上の観測値であり設定値ではありません。")
+    lines.append(
+        "      ・注記: thinking_state は **セッション単位** の transcript 上の観測値であり"
+        "設定値ではありません（そのセッションのどの assistant record にも thinking ブロックが"
+        "無ければ absent）。"
+    )
     lines.append(
         "      ・注記: これは観察であり因果推論ではありません（model はランダム割当ではなく、"
         "難しい長時間タスクだけ特定モデルを使っていた可能性があります）。"

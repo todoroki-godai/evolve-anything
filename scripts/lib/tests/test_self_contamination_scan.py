@@ -465,10 +465,13 @@ def test_exposure_counts_only_text_bearing_assistant_records():
         _assistant_with_model("claude-opus-5", {"type": "tool_use", "name": "Bash"}),
     ]
     report = scs.scan_records(records)
-    assert report.exposure == {("claude-opus-5", "absent"): 1}
+    # 分母は text 保持 record のみ（1件）。thinking は別 record にあってもセッション単位の
+    # 判定なので present になる（CC の保存形＝thinking と text は別 record・#275）。
+    assert report.exposure == {("claude-opus-5", "present"): 1}
 
 
-def test_exposure_stratifies_by_model_and_thinking_state():
+def test_exposure_stratifies_by_model_within_session():
+    # model は record 単位（同一セッション内でモデルが変わりうる）、thinking_state はセッション単位。
     records = [
         _assistant_with_model("claude-opus-5", _text("a"), _thinking("b")),
         _assistant_with_model("claude-sonnet-5", _text("c")),
@@ -476,8 +479,52 @@ def test_exposure_stratifies_by_model_and_thinking_state():
     report = scs.scan_records(records)
     assert report.exposure == {
         ("claude-opus-5", "present"): 1,
+        ("claude-sonnet-5", "present"): 1,
+    }
+
+
+def test_exposure_thinking_state_is_session_scoped_not_record_scoped():
+    """CC は thinking と text を別 record に保存するため、record 単位判定だと分母がほぼ全て
+    absent に潰れて層別が退化する（実機で thinking 常時 on の fable が 356/357 absent）。
+    セッション内に thinking record が 1 つでもあれば全 record を present とする（#275）。"""
+    records = [
+        _assistant_with_model("claude-fable-5", _thinking("内部下書き")),
+        _assistant_with_model("claude-fable-5", _text("可視応答1")),
+        _assistant_with_model("claude-fable-5", _text("可視応答2")),
+    ]
+    report = scs.scan_records(records)
+    assert report.exposure == {("claude-fable-5", "present"): 2}
+
+
+def test_exposure_absent_and_present_sessions_merge_via_extend():
+    # 別セッション（別 scan_records 呼び出し）は独立に判定され、extend でマージされる。
+    with_thinking = scs.scan_records(
+        [
+            _assistant_with_model("claude-sonnet-5", _thinking("t")),
+            _assistant_with_model("claude-sonnet-5", _text("a")),
+        ]
+    )
+    without_thinking = scs.scan_records([_assistant_with_model("claude-sonnet-5", _text("b"))])
+    with_thinking.extend(without_thinking)
+    assert with_thinking.exposure == {
+        ("claude-sonnet-5", "present"): 1,
         ("claude-sonnet-5", "absent"): 1,
     }
+
+
+def test_session_thinking_state_unknown_for_redacted_only():
+    records = [
+        _assistant_with_model("claude-opus-5", {"type": "redacted_thinking", "data": "xxx"}),
+        _assistant_with_model("claude-opus-5", _text("hi")),
+    ]
+    assert scs.classify_session_thinking_state(records) == "unknown"
+    assert scs.scan_records(records).exposure == {("claude-opus-5", "unknown"): 1}
+
+
+def test_session_thinking_state_ignores_non_assistant_records():
+    # user record の中身は thinking 判定に使わない（assistant のみが対象）。
+    records = [_user_tool_result("外部原文"), _assistant_with_model("claude-opus-5", _text("hi"))]
+    assert scs.classify_session_thinking_state(records) == "absent"
 
 
 def test_exposure_defaults_to_unknown_model_when_missing():

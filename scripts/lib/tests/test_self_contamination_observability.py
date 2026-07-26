@@ -234,6 +234,37 @@ def test_stratum_crosstab_absent_when_exposure_empty(tmp_path, monkeypatch):
     assert "分母 = text ブロック" not in combined
 
 
+def test_crosstab_notes_when_thinking_state_has_no_contrast(tmp_path, monkeypatch):
+    """全セルが同一 thinking_state なら「説明変数として機能していない」と明示する（#275 判断契約）。"""
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.exposure[("claude-sonnet-5", "present")] = 40
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "説明変数として機能していません" in combined
+
+
+def test_crosstab_omits_no_contrast_note_when_thinking_state_varies(tmp_path, monkeypatch):
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.exposure[("claude-opus-5", "absent")] = 40
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="absent"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "説明変数として機能していません" not in combined
+
+
 def test_excluded_synthetic_surfaced_alongside_crosstab(tmp_path, monkeypatch):
     rep = scs.ScanReport()
     rep.exposure[("claude-opus-5", "present")] = 25

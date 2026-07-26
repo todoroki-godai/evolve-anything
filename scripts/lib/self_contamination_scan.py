@@ -39,9 +39,12 @@ assistant ブロックに対して行うが、Family の定義（上記）はい
 対策）が model × thinking_state の交差表を分子（affected record 数）/ 分母（exposure）/ 率で組む。
 分母は既存の走査ループ（``scan_records`` / ``scan_project_transcripts``）と**同一パスで**数える
 （別ロジックで数えると分子分母がズレる）。``<synthetic>`` 等の非実 model は交差表対象外とし
-``excluded_synthetic`` に別カウント（silence≠evaluated）。thinking_state は
-``classify_thinking_state`` が present/absent/unknown の3値で判定する（transcript 上の観測値で
-あり設定値ではない・redacted_thinking のみの場合は absence 側を汚染しないよう unknown）。
+``excluded_synthetic`` に別カウント（silence≠evaluated）。thinking_state は present/absent/unknown
+の3値で、**セッション単位**（``classify_session_thinking_state``）で判定する — CC は thinking と
+text を別 record に保存するため record 単位（``classify_thinking_state``）では text 保持 record が
+ほぼ全て absent に落ち層別が退化する（実機で fable の 356/357 が absent になることを確認）。
+transcript 上の観測値であり設定値ではない・redacted_thinking のみの場合は absence 側を汚染しない
+よう unknown。
 分母が閾値未満（既定 20）のセルは率を出さず「低母数」と明記する。セッション長・turn 位置・
 tool 密度等の交絡調整はスコープ外（観察であり因果推論ではない）。
 
@@ -68,6 +71,7 @@ from self_contamination_stratify import (  # noqa: F401
     _is_synthetic_model,
     StratumRow,
     build_stratum_rows,
+    classify_session_thinking_state,
     classify_thinking_state,
 )
 
@@ -563,11 +567,16 @@ def scan_records(
     ``excluded_vocab``（#203）に含まれる語彙のみが根拠の Family C 候補は ``family_c`` でなく
     ``domain_vocab_fp`` バケットへ振り分ける（ハード除外でなく別集計）。
 
-    ``exposure``（#275）: text ブロックを 1 つ以上持つ assistant record ごとに model /
-    thinking_state を1回だけ判定し、``(model, thinking_state)`` → 件数へ加算する。``<synthetic>``
-    等の非実 model は交差表対象外とし ``excluded_synthetic`` に計上する。判定結果は各 Hit にも
-    ``model`` / ``thinking_state`` として載せる。
+    ``exposure``（#275）: text ブロックを 1 つ以上持つ assistant record ごとに model を判定し、
+    ``(model, thinking_state)`` → 件数へ加算する。``<synthetic>`` 等の非実 model は交差表対象外と
+    し ``excluded_synthetic`` に計上する。判定結果は各 Hit にも ``model`` / ``thinking_state``
+    として載せる。model は record 単位（同一セッション内でモデルが変わりうる）だが
+    **thinking_state はセッション単位**（``classify_session_thinking_state``）で判定する — CC は
+    thinking と text を別 record に保存するため record 単位だと text 保持 record がほぼ全て
+    ``absent`` に落ち、層別が退化する（実機確認済み）。このため records を 1 度リスト化する。
     """
+    records = list(records)
+    session_thinking_state = classify_session_thinking_state(records)
     report = ScanReport()
     recent: Deque[str] = deque(maxlen=max(1, k))
     for ln, record in enumerate(records, 1):
@@ -581,7 +590,7 @@ def scan_records(
         if not blocks:
             continue
         model = _extract_model(record)
-        thinking_state = classify_thinking_state(record)
+        thinking_state = session_thinking_state
         has_text = any(kind == "text" for kind, _t in blocks)
         if has_text:
             if _is_synthetic_model(model):
