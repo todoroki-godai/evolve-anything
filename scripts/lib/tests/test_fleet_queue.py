@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -1430,3 +1431,238 @@ class TestFormatQueueTableStatus:
             _result(queue=q, queue_status="READY", queue_status_reason="待ち PJ 1 件")
         )
         assert "verify 待ち 2 件（前回 accept・検証可能）" in out
+
+
+# --- build_queue_result 統合テスト（#267 Phase 5・実ストア E2E）--------------
+#
+# conftest.py の autouse fixture ``_isolate_plugin_data`` が CLAUDE_PLUGIN_DATA=tmp_path に
+# 固定し、import 済み store モジュール（advisory_decision_log / optimize_history_store /
+# session_store）の DATA_DIR を機械的に同じ tmp_path へ rebase する（#420）。よってここでは
+# tmp_path 直下に各ストアの実ファイルを書くだけで、build_queue_result の実 I/O 経路
+# （advisory_decisions.jsonl 読込 → optimize_history alias union → session store since クエリ）を
+# hermetic に検証できる。
+
+
+def _write_advisory_decisions(tmp_path, records):
+    (tmp_path / "advisory_decisions.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records)
+    )
+
+
+def _write_optimize_history(tmp_path, slug, records):
+    d = tmp_path / "optimize_history"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{slug}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+def _write_sessions(tmp_path, records):
+    (tmp_path / "sessions.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records)
+    )
+
+
+class TestBuildQueueResultVerifyIntegration:
+    """build_queue_result 経由の E2E — verify_pending/queue_status の各 finding を通しで検証。"""
+
+    def _build(self, tmp_path, *, pj_slugs, threshold=5, weak=None, corr=None, **kwargs):
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(r) + "\n" for r in (weak or [])))
+        corr_path = tmp_path / "corrections.jsonl"
+        corr_path.write_text("".join(json.dumps(r) + "\n" for r in (corr or [])))
+        return fq.build_queue_result(
+            pj_slugs=pj_slugs,
+            threshold=threshold,
+            weak_signals_path=ws,
+            corrections_path=corr_path,
+            last_evolve_map=kwargs.pop("last_evolve_map", {}),
+            activity_map=kwargs.pop("activity_map", {}),
+            generated_at="2026-07-27T09:00:00+00:00",
+            **kwargs,
+        )
+
+    def test_exposure_counts_only_sessions_after_accept(self, tmp_path):
+        """C2 E2E: exposure は accept 記録時刻**以降**のセッションのみ数える。"""
+        now = datetime.now(timezone.utc)
+        accept_ts = (now - timedelta(hours=1)).isoformat()
+        _write_advisory_decisions(
+            tmp_path,
+            [
+                {
+                    "pj_slug": "alpha",
+                    "proposal_id": "p1",
+                    "decision": "accept",
+                    "run_id": "run1",
+                    "recorded_at": accept_ts,
+                }
+            ],
+        )
+        _write_sessions(
+            tmp_path,
+            [
+                _sess("before", (now - timedelta(hours=2)).isoformat(), "/p/alpha"),
+                _sess("after", (now - timedelta(minutes=10)).isoformat(), "/p/alpha"),
+            ],
+        )
+        weak = [_ws("alpha", key=f"a{i}") for i in range(7)]  # threshold 到達（C1 昇格と分離）
+        result = self._build(tmp_path, pj_slugs=["alpha"], threshold=5, weak=weak)
+
+        vp = result["queue"][0]["verify_pending"]
+        assert vp["exposure_sessions"] == 1  # after のみ
+        assert vp["status"] == "verifiable"
+
+    def test_ttl_15_days_is_none_13_days_still_active(self, tmp_path):
+        """I1 E2E: accept が 15日前なら status=none、13日前なら残る。"""
+        now = datetime.now(timezone.utc)
+
+        _write_advisory_decisions(
+            tmp_path,
+            [
+                {
+                    "pj_slug": "expired",
+                    "proposal_id": "p1",
+                    "decision": "accept",
+                    "run_id": "run_old",
+                    "recorded_at": (now - timedelta(days=15)).isoformat(),
+                },
+                {
+                    "pj_slug": "active",
+                    "proposal_id": "p2",
+                    "decision": "accept",
+                    "run_id": "run_recent",
+                    "recorded_at": (now - timedelta(days=13)).isoformat(),
+                },
+            ],
+        )
+        weak = [_ws("expired", key="e1", detected=now.isoformat())] + [
+            _ws("active", key="a1", detected=now.isoformat())
+        ]
+        result = self._build(
+            tmp_path, pj_slugs=["expired", "active"], threshold=1, weak=weak
+        )
+
+        by_slug = {m["pj_slug"]: m for m in result["queue"]}
+        assert by_slug["expired"]["verify_pending"]["status"] == "none"
+        assert by_slug["active"]["verify_pending"]["status"] != "none"
+
+    def test_material_zero_but_verify_pending_still_queues(self, tmp_path):
+        """C1 E2E: material=0 でも verify 待ちがあれば queue に出る。"""
+        now = datetime.now(timezone.utc)
+        _write_advisory_decisions(
+            tmp_path,
+            [
+                {
+                    "pj_slug": "alpha",
+                    "proposal_id": "p1",
+                    "decision": "accept",
+                    "run_id": "run1",
+                    "recorded_at": (now - timedelta(hours=1)).isoformat(),
+                }
+            ],
+        )
+        result = self._build(tmp_path, pj_slugs=["alpha"], threshold=5)  # weak/corr 無し
+
+        assert [m["pj_slug"] for m in result["queue"]] == ["alpha"]
+        item = result["queue"][0]
+        assert item["material_count"] == 0
+        assert item["verify_pending"]["status"] != "none"
+        assert "material=0 < 5" in item["reason"]
+
+    def test_naive_optimize_timestamp_mixed_with_aware_advisory_resolves_latest(
+        self, tmp_path
+    ):
+        """C3 E2E: naive local（optimize lane）と aware UTC（advisory lane）が混在しても
+        最新 run 判定が正しい（本 PR 前は naive を UTC 決め打ちし JST 環境で 9 時間ずれた）。
+        """
+        older_aware = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        newer_aware_instant = datetime.now(timezone.utc) - timedelta(hours=1)
+        # naive local 文字列を本番 writer と同じ変換（astimezone → tzinfo 剥がし）で導出する。
+        newer_naive = (
+            newer_aware_instant.astimezone().replace(tzinfo=None).isoformat()
+        )
+
+        _write_advisory_decisions(
+            tmp_path,
+            [
+                {
+                    "pj_slug": "alpha",
+                    "proposal_id": "p_old",
+                    "decision": "accept",
+                    "run_id": "run_old",
+                    "recorded_at": older_aware,
+                }
+            ],
+        )
+        _write_optimize_history(
+            tmp_path,
+            "alpha",
+            [
+                {
+                    "id": "e1",
+                    "human_accepted": True,
+                    "run_id": "run_new",
+                    "timestamp": newer_naive,
+                }
+            ],
+        )
+        result = self._build(tmp_path, pj_slugs=["alpha"], threshold=5)
+
+        vp = result["queue"][0]["verify_pending"]
+        assert vp["run_id"] == "run_new"
+        assert vp["accepted"] == 1
+
+    def test_dead_pj_zero_material_is_empty_not_setup_required(self, tmp_path):
+        """C4 E2E: material_count=0 の dead PJ だけがある状態は EMPTY（SETUP_REQUIRED でない）。"""
+        result = self._build(
+            tmp_path,
+            pj_slugs=["ghost"],
+            threshold=5,
+            pj_paths={"ghost": str(tmp_path / "does-not-exist")},
+        )
+        assert result["skipped_dead"] == [
+            {
+                "pj_slug": "ghost",
+                "project_path": str(tmp_path / "does-not-exist"),
+                "weak_unprocessed": 0,
+                "new_corrections": 0,
+                "material_count": 0,
+            }
+        ]
+        assert result["queue_status"] == "EMPTY"
+
+    def test_unattributed_correction_31_days_old_does_not_trigger_setup_required(
+        self, tmp_path
+    ):
+        """C5 E2E: 31日前の未帰属 correction のみでは SETUP_REQUIRED にならない。"""
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+        result = self._build(
+            tmp_path,
+            pj_slugs=[],
+            threshold=5,
+            corr=[{"project_path": "", "source": "backfill", "timestamp": old_ts}],
+        )
+        assert result["unattributed_corrections"]["total"] == 0
+        assert result["queue_status"] == "EMPTY"
+
+    def test_alias_optimize_history_accept_recovered_via_current_slug(self, tmp_path):
+        """I2 E2E: rename 済 PJ の旧 slug 名義 optimize_history accept が現 slug の
+        verify_pending に反映される（PJ_SLUG_ALIASES の実エントリ rl-anything→evolve-anything）。
+        """
+        now = datetime.now(timezone.utc)
+        _write_optimize_history(
+            tmp_path,
+            "rl-anything",  # 旧 slug（現 slug は evolve-anything）
+            [
+                {
+                    "id": "legacy1",
+                    "human_accepted": True,
+                    "run_id": "r1",
+                    "timestamp": (now - timedelta(hours=1)).isoformat(),
+                }
+            ],
+        )
+        result = self._build(tmp_path, pj_slugs=["evolve-anything"], threshold=5)
+
+        assert [m["pj_slug"] for m in result["queue"]] == ["evolve-anything"]
+        vp = result["queue"][0]["verify_pending"]
+        assert vp["accepted"] == 1
+        assert vp["run_id"] == "r1"
