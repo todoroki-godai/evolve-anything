@@ -43,6 +43,21 @@ def roots(monkeypatch, tmp_path):
     return tmp_path
 
 
+def _no_hang(fn, seconds: float = 30):
+    """`fn()` を daemon thread で走らせ、時間内に終わることを確かめて結果を返す。
+
+    ロック絡みの回帰は「失敗」でなく**ハング**として現れ、素朴に呼ぶとテストプロセス
+    ごと固まって以降のテストまで巻き添えにする。daemon にしておけば取り残されても
+    インタプリタは終了できる。
+    """
+    box = {}
+    thread = threading.Thread(target=lambda: box.update(value=fn()), daemon=True)
+    thread.start()
+    thread.join(timeout=seconds)
+    assert not thread.is_alive(), f"{seconds}s 以内に完了しなかった（ロック待ちの疑い）"
+    return box["value"]
+
+
 def _entry(path: str, sha: str) -> dict:
     return {
         "id": ed._proposal_id(path, sha),
@@ -122,12 +137,40 @@ def test_ingest_rereads_queue_before_write_so_concurrent_adds_survive(
 
     monkeypatch.setattr(ed, "_load_recorder", lambda: _fake_recorder)
 
-    summary = ed.ingest_decisions("s", history_file=tmp_path / "hist.jsonl")
+    summary = _no_hang(lambda: ed.ingest_decisions("s", history_file=tmp_path / "hist.jsonl"))
 
     assert len(summary["accepted"]) == 1
     remaining_ids = {e["id"] for e in ed.read_queue("s")}
     assert "evdiff_concurrent" in remaining_ids  # 並行追加が生き残る
     assert summary["accepted"][0] not in remaining_ids  # 消化済みは消える
+
+
+def test_queue_supersedes_by_target_path_not_id(roots, skill_file, tmp_path):
+    """#287-1: queue も marker と同じ「対象パス単位」で supersede する。
+
+    proposal ID は `(skill_path, before_sha)` なので、同じファイルを内容変更のたびに
+    再 emit すると ID が変わる。ID 一致だけで除去すると queue に世代が積み上がり、
+    その後1回 apply しただけで全世代が `after_sha != before_sha` で accept 判定される
+    ＝1 apply が N accept（#290 で marker を塞いだ N 重記録の queue 経路）。
+    """
+    result = {
+        "phases": {
+            "discover": {
+                "matched_skills": [
+                    {"matched_skill": "my-skill", "skill_path": str(skill_file), "pattern": "p"}
+                ]
+            }
+        }
+    }
+    ed.emit_decisions(result, dry_run=False, slug="s")  # 世代 A
+    skill_file.write_text("# my-skill\n\n世代B\n", encoding="utf-8")
+    ed.emit_decisions(result, dry_run=False, slug="s")  # 世代 B
+
+    assert len(ed.read_queue("s")) == 1  # 同じファイルの提案は最新1件だけ
+
+    skill_file.write_text("# my-skill\n\n世代C（適用）\n", encoding="utf-8")
+    summary = ed.ingest_decisions("s", history_file=tmp_path / "hist.jsonl")
+    assert len(summary["accepted"]) == 1  # 1回の apply が 1 accept
 
 
 # ─── 2. optimize_history の同時 append（#287-2）────────────────────────────
@@ -240,18 +283,58 @@ def test_drain_holds_one_lock_and_does_not_self_deadlock(roots, skill_file, tmp_
     ed.write_pending_marker("s", [_entry(str(skill_file), before)], run_id="evrun_test")
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")
 
-    box = {}
+    summary = _no_hang(lambda: ed.drain_pending(slug="s", history_file=tmp_path / "hist.jsonl"))
 
-    def _run():
-        box["summary"] = ed.drain_pending(slug="s", history_file=tmp_path / "hist.jsonl")
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    thread.join(timeout=30)
-
-    assert not thread.is_alive(), "drain が marker ロックで自己 deadlock した"
-    assert len(box["summary"]["accepted"]) == 1
+    assert len(summary["accepted"]) == 1
     assert ed.read_pending_marker("s") is None  # 消化済みなので marker は消える
+
+
+def test_drain_releases_marker_lock_during_ingest(roots, skill_file, monkeypatch, tmp_path):
+    """#287-3: ingest（skill_quality 採点で秒オーダー）中は marker ロックを握らない。
+
+    握ったままだと同一 slug の emit と SessionStart hook が pending 件数に比例して待たされる。
+    ingest 中に marker ロックを取ってみて、取れれば解放されている。取れなければ**ハング**
+    するので daemon thread + join(timeout) で検出する。
+    """
+    before = ed._sha256(skill_file.read_text(encoding="utf-8"))
+    ed.write_pending_marker("s", [_entry(str(skill_file), before)], run_id="evrun_test")
+    skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")
+
+    def _fake_recorder(**kwargs):
+        with ed._marker_lock("s"):  # ロックが解放されていなければここで自己 deadlock
+            pass
+        return {"id": kwargs.get("entry_id")}
+
+    monkeypatch.setattr(ed, "_load_recorder", lambda: _fake_recorder)
+
+    summary = _no_hang(lambda: ed.drain_pending(slug="s", history_file=tmp_path / "hist.jsonl"))
+    assert len(summary["accepted"]) == 1
+
+
+def test_drain_purge_does_not_swallow_a_newer_generation(roots, skill_file, monkeypatch, tmp_path):
+    """#287-3: drain 中に別 run が同じ対象を再 emit したら、その新世代は purge されない。
+
+    purge が ID だけで消すと、drain がスナップショットを取った後に emit された提案まで
+    巻き込む（TOCTOU）。世代キー（run_id + id + before_sha）一致を条件にして防ぐ。
+    """
+    before = ed._sha256(skill_file.read_text(encoding="utf-8"))
+    ed.write_pending_marker("s", [_entry(str(skill_file), before)], run_id="evrun_old")
+    skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")
+
+    def _fake_recorder(**kwargs):
+        # drain の判断中に別 run が同じ提案 ID で再 emit したのと同じ状況を作る。
+        newer = {**_entry(str(skill_file), before), "run_id": "evrun_new"}
+        ed.write_pending_marker("s", [newer], run_id="evrun_new")
+        return {"id": kwargs.get("entry_id")}
+
+    monkeypatch.setattr(ed, "_load_recorder", lambda: _fake_recorder)
+
+    summary = _no_hang(lambda: ed.drain_pending(slug="s", history_file=tmp_path / "hist.jsonl"))
+
+    assert len(summary["accepted"]) == 1
+    marker = ed.read_pending_marker("s")
+    assert marker is not None, "新しい世代まで purge された"
+    assert [run["run_id"] for run in marker["runs"]] == ["evrun_new"]
 
 
 def test_purge_locked_variant_does_not_take_the_lock(roots, skill_file):
@@ -259,18 +342,11 @@ def test_purge_locked_variant_does_not_take_the_lock(roots, skill_file):
     entry = _entry(str(skill_file), "sha")
     ed.write_pending_marker("s", [entry], run_id="evrun_test")
 
-    box = {}
-
     def _run():
         with ed._marker_lock("s"):
-            box["purged"] = ed._purge_marker_entries_locked("s", {entry["id"]})
+            return ed._purge_marker_entries_locked("s", {entry["id"]})
 
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    thread.join(timeout=30)
-
-    assert not thread.is_alive()
-    assert box["purged"] is True
+    assert _no_hang(_run) is True
 
 
 # ─── 4. TTL 切れ / 破損 marker の GC（#287-4）──────────────────────────────
@@ -339,13 +415,39 @@ def test_expired_marker_file_is_physically_removed(roots, skill_file):
     assert not path.exists()
 
 
-def test_corrupt_marker_file_is_physically_removed(roots):
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{ not json",  # 構文エラー
+        "[]",  # 構文は妥当だが top-level が list
+        '{"runs": [null]}',  # run が dict でない
+        '{"runs": {}}',  # runs が list でない
+        '{"runs": [{"pending": "x"}]}',  # pending が list でない
+        '{"pending": 5}',  # 旧 schema で pending が list でない
+    ],
+)
+def test_structurally_broken_marker_is_removed_not_raised(roots, body):
+    """#287-4: 構文が妥当でも構造が壊れた marker で例外を投げない（GC まで到達する）。
+
+    型を信じて `.get()` すると `AttributeError` が SessionStart hook まで伝播し、GC にも
+    到達せずファイルが永久に残る（read が None を返すだけでは残骸が消えない）。
+    """
     path = ed.marker_path("s")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{ not json", encoding="utf-8")
+    path.write_text(body, encoding="utf-8")
 
     assert ed.read_pending_marker("s") is None
     assert not path.exists()
+
+
+def test_broken_marker_does_not_break_drain(roots, tmp_path):
+    """壊れた marker でも drain は例外なく空サマリを返す（hook 経路の degrade）。"""
+    path = ed.marker_path("s")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"runs": [null]}', encoding="utf-8")
+
+    summary = _no_hang(lambda: ed.drain_pending(slug="s", history_file=tmp_path / "hist.jsonl"))
+    assert summary["accepted"] == [] and summary["rejected"] == []
 
 
 def test_live_marker_is_not_removed(roots, skill_file):

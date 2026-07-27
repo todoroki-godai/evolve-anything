@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 def _sha256(text: str) -> str:
@@ -70,3 +70,28 @@ def _tracked_path(entry: Dict[str, Any]) -> Optional[str]:
     ため、ingest・``undrained_applied``・marker supersede はこの1関数を共有する。
     """
     return entry.get("target_path") or entry.get("skill_path")
+
+
+def _supersede_keys(pending: List[Dict[str, Any]]) -> tuple:
+    """新しい pending が置き換える対象の判定材料（marker / queue の共有・#287-1）。
+
+    ID 一致だけで消すと、`before_sha` 込みの ID は内容が変わるたびに変わるので同じ
+    ファイルの提案が複数世代 residue し、1回の apply が全世代 accept 判定される（#290 で
+    marker を塞いだ N 重記録。queue も同契約でないと別経路で再発する）。
+    """
+    ids = {entry.get("id") for entry in pending if entry.get("id")}
+    paths = {path for path in (_tracked_path(entry) for entry in pending) if path}
+    return ids, paths
+
+
+def _is_superseded(entry: Dict[str, Any], ids: Set[str], paths: Set[str]) -> bool:
+    return entry.get("id") in ids or _tracked_path(entry) in paths
+
+
+def _entry_generation(entry: Dict[str, Any]) -> tuple:
+    """marker entry の「世代」= (run, 提案, 適用前の内容)（#287-3）。
+
+    drain 中に別 run が同じ対象を再 emit するとその entry は別世代になる。ID だけで
+    purge すると新世代を巻き込むので、世代一致するものだけを消す。
+    """
+    return (entry.get("run_id"), entry.get("id"), entry.get("before_sha"))
