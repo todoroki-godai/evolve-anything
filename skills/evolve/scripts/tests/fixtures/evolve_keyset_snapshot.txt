@@ -40,6 +40,7 @@ env_tier_reason.thresholds.medium
 evolve_decisions
 evolve_decisions.count
 evolve_decisions.marker_cleared
+evolve_decisions.marker_error
 evolve_decisions.marker_written
 evolve_decisions.pending
 evolve_decisions.persisted

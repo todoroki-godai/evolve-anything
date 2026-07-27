@@ -85,6 +85,24 @@ def test_summary_surfaces_env_score_when_present():
     assert summary_d["env_score"] == {"degraded": True, "previous_level": 6}
 
 
+def test_summary_surfaces_marker_write_failure():
+    """#287-5: pending marker の書込失敗を 1 行サマリに出す（無音で失うのを防ぐ）。"""
+    from pathlib import Path
+
+    failed = dict(_FAKE_RESULT)
+    failed["evolve_decisions"] = {
+        "count": 2,
+        "marker_written": False,
+        "marker_error": "PermissionError: [Errno 13] Permission denied",
+    }
+    summary = evolve._summarize_result(failed, Path("/tmp/out.json"))
+    assert summary["marker_error"].startswith("PermissionError")
+
+    ok = dict(_FAKE_RESULT)
+    ok["evolve_decisions"] = {"count": 2, "marker_written": True, "marker_error": None}
+    assert "marker_error" not in evolve._summarize_result(ok, Path("/tmp/out.json"))
+
+
 def test_no_output_flag_keeps_full_json_on_stdout(patched_run, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["evolve.py", "--dry-run"])
 

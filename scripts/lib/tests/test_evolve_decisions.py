@@ -143,6 +143,111 @@ def test_emit_overwrites_stale_queue(result_with_match, monkeypatch, tmp_path):
     assert all(q["id"] != "stale" for q in queued)  # 旧バッチは消える
 
 
+def test_emit_surfaces_marker_write_failure(result_with_match, monkeypatch, tmp_path):
+    """#287-5: marker 書込失敗を握り潰さず構造化 warning として返す。
+
+    標準フロー（dry-run 分析 → 対話適用 → drain）では marker が pending の唯一の
+    情報源なので、権限不足・ディスクフルで書けなかったのに emit が成功扱いになると
+    判断がまるごと失われる。emit 自体は落とさず（他フェーズの結果は返す）に surface する。
+    """
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    # MARKER_ROOT の位置に**ファイル**を置いて mkdir を OSError にする（root でも再現する）。
+    blocked = tmp_path / "evolve_pending"
+    blocked.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(ed, "MARKER_ROOT", blocked)
+
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+
+    assert out["count"] == 1  # emit 自体は完走する
+    assert out["marker_written"] is False
+    assert out["marker_error"]  # 失敗が surface される
+    assert "Error" in out["marker_error"]  # "<ExceptionName>: <msg>" 形
+
+
+def test_emit_marker_error_is_none_on_success(result_with_match, monkeypatch, tmp_path):
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    assert out["marker_written"] is True
+    assert out["marker_error"] is None
+
+
+# ─── flat 面の result_path（#283）──────────────────────────────────────────
+
+
+def _marker_entry(path: str, sha: str = "before") -> dict:
+    return {"id": ed._proposal_id(path, sha), "skill_path": path, "before_sha": sha}
+
+
+def test_flat_result_path_kept_when_single_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    ed.write_pending_marker(
+        "testslug", [_marker_entry("/a/SKILL.md")], run_id="r1", result_path="/tmp/r1.json"
+    )
+    marker = ed.read_pending_marker("testslug")
+    assert marker["result_path"] == "/tmp/r1.json"
+
+
+def test_flat_result_path_is_none_when_runs_disagree(monkeypatch, tmp_path):
+    """#283: flat `pending` は全 run 合成なので、`result_path` が最後の writer 勝ちだと
+    「run A の提案」に「run B の result JSON」が付く。一意でないなら値を出さない。"""
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    ed.write_pending_marker(
+        "testslug", [_marker_entry("/a/SKILL.md")], run_id="r1", result_path="/tmp/r1.json"
+    )
+    ed.write_pending_marker(
+        "testslug", [_marker_entry("/b/SKILL.md")], run_id="r2", result_path="/tmp/r2.json"
+    )
+
+    marker = ed.read_pending_marker("testslug")
+    assert len(marker["runs"]) == 2
+    assert len(marker["pending"]) == 2  # flat 面は両 run 合成のまま
+    assert marker["result_path"] is None  # どの run のものか決まらないので出さない
+    # 正典（run envelope）には情報が残る。
+    assert {run["result_path"] for run in marker["runs"]} == {"/tmp/r1.json", "/tmp/r2.json"}
+    # ディスク上の JSON 自体も嘘をつかない（外部 reader が生ファイルを読む場合）。
+    raw = json.loads(ed.marker_path("testslug").read_text(encoding="utf-8"))
+    assert raw["result_path"] is None
+
+
+def test_flat_result_path_is_none_when_runs_share_one_path(monkeypatch, tmp_path):
+    """#283: パスが一致していても run が複数なら出さない。
+
+    `--output` の既定は slug 由来の固定パス `/tmp/rl_evolve_<slug>.json` なので、同一 PJ の
+    2 run が**同じパス文字列を持つのが普通**。後の run がそのファイルを上書きしているため、
+    flat `pending`（両 run の合成）とは対応しない。「異なるパスが何種類あるか」で判定すると
+    この最も起きやすいケースを取りこぼす。
+    """
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    shared = "/tmp/rl_evolve_testslug.json"
+    ed.write_pending_marker(
+        "testslug", [_marker_entry("/a/SKILL.md")], run_id="r1", result_path=shared
+    )
+    ed.write_pending_marker(
+        "testslug", [_marker_entry("/b/SKILL.md")], run_id="r2", result_path=shared
+    )
+
+    marker = ed.read_pending_marker("testslug")
+    assert len(marker["runs"]) == 2
+    assert marker["result_path"] is None
+
+
+def test_flat_result_path_recovers_after_purge(monkeypatch, tmp_path):
+    """run が1つに減れば flat `result_path` は再び一意に決まる。"""
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    entry_a = _marker_entry("/a/SKILL.md")
+    ed.write_pending_marker("testslug", [entry_a], run_id="r1", result_path="/tmp/r1.json")
+    ed.write_pending_marker(
+        "testslug", [_marker_entry("/b/SKILL.md")], run_id="r2", result_path="/tmp/r2.json"
+    )
+
+    ed.purge_marker_entries("testslug", {entry_a["id"]})
+
+    marker = ed.read_pending_marker("testslug")
+    assert len(marker["runs"]) == 1
+    assert marker["result_path"] == "/tmp/r2.json"
+
+
 # ─── ingest ──────────────────────────────────────────────────────────────
 
 

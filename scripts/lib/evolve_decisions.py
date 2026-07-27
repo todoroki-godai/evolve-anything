@@ -27,13 +27,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set
 
-import fcntl
-
 _LIB = Path(__file__).resolve().parent
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
 import optimize_history_store as _store  # noqa: E402
+from rl_common.file_lock import atomic_write_text, file_lock  # noqa: E402
 
 DATA_DIR = _store.DATA_DIR
 QUEUE_ROOT = DATA_DIR / "evolve_decisions"
@@ -101,15 +100,13 @@ def marker_path(slug: str) -> Path:
 
 @contextmanager
 def _marker_lock(slug: str) -> Iterator[None]:
-    """marker の read-modify-write を process 間で直列化する。"""
-    lock_path = MARKER_ROOT / f"{_store._sanitize_slug(slug)}.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    """marker の read-modify-write を process 間で直列化する。
+
+    ⚠️ flock は open file description 単位なので入れ子に取ると自己 deadlock する。
+    このロック下から marker を触るときは `_locked` サフィックスの内部関数を使う。
+    """
+    with file_lock(MARKER_ROOT / f"{_store._sanitize_slug(slug)}.lock"):
+        yield
 
 
 def _run_is_expired(run: Dict[str, Any], now: Optional[datetime] = None) -> bool:
@@ -159,20 +156,29 @@ def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
     data["runs"] = runs
     # pending は常に runs から再構成する（supersede / TTL を旧 reader にも反映）。
     data["pending"] = [entry for run in runs for entry in (run.get("pending") or [])]
+    data["result_path"] = _flat_result_path(runs)
     return data
+
+
+def _flat_result_path(runs: List[Dict[str, Any]]) -> Optional[str]:
+    """後方互換の flat `result_path`（#283）。
+
+    flat 面の `pending` は全 run を合成した配列なので、`result_path` を「最後に書いた
+    run の値」にすると「run A の提案」に「run B の result JSON パス」が付く。組で読む
+    reader が別 run の result を開いて突き合わせるため、**run が1つのときだけ値を出す**
+    （`runs[].result_path` が正典で、そちらには情報が残っている）。
+
+    判定は「異なるパスが何種類あるか」ではなく **run の本数**で行う。`--output` の既定は
+    slug 由来の固定パス `/tmp/rl_evolve_<slug>.json` なので、同一 PJ の2 run は**同じ
+    パス文字列を持つのが普通**であり、後の run がそのファイルを上書きしている。パスが
+    一致していても flat `pending`（両 run の合成）とは対応しない。
+    """
+    return runs[0].get("result_path") if len(runs) == 1 else None
 
 
 def _write_marker_file(slug: str, data: Dict[str, Any]) -> None:
     """reader が部分 JSON を見ないよう sibling tmp から atomic replace する。"""
-    path = marker_path(slug)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    atomic_write_text(marker_path(slug), json.dumps(data, ensure_ascii=False))
 
 
 def write_pending_marker(
@@ -244,7 +250,7 @@ def write_pending_marker(
                 "runs": runs,
                 # 旧 reader と SessionStart hook の後方互換。
                 "pending": flattened,
-                "result_path": result_path,
+                "result_path": _flat_result_path(runs),
             },
         )
 
@@ -287,7 +293,14 @@ def purge_marker_entries(slug: str, consumed: Set[str]) -> bool:
                 path.unlink()
             return True
         flattened = [entry for run in runs for entry in (run.get("pending") or [])]
-        marker.update({"runs": runs, "pending": flattened, "schema_version": 2})
+        marker.update(
+            {
+                "runs": runs,
+                "pending": flattened,
+                "schema_version": 2,
+                "result_path": _flat_result_path(runs),
+            }
+        )
         _write_marker_file(slug, marker)
         return True
 
@@ -541,6 +554,7 @@ def emit_decisions(
     persisted = False
     marker_written = False
     marker_cleared = False
+    marker_error: Optional[str] = None
     if not dry_run:
         # run_id 無しは旧 schema の「前 run を上書き」キュー。新 envelope へ移る際に
         # stale として除去し、run_id 付きの未判断だけを保持する。
@@ -568,8 +582,12 @@ def emit_decisions(
             # run envelope を持つ marker は他 session の drain 待ちかもしれないので触らない。
             if runs and all(str(run.get("run_id", "")).startswith("legacy_") for run in runs):
                 marker_cleared = clear_pending_marker(slug)
-    except OSError:
-        pass
+    except OSError as e:
+        # #287-5: 握り潰すと権限不足・ディスクフルでも emit が成功扱いになる。標準フロー
+        # （dry-run → 適用 → drain）では marker が pending の唯一の情報源なので、書けて
+        # いなければ判断がまるごと失われる。emit 自体は落とさず（他の phase 結果は返す）
+        # 構造化 warning として surface し、CLI 1 行サマリにも出す。
+        marker_error = f"{type(e).__name__}: {e}"
 
     return {
         "pending": pending,
@@ -579,6 +597,7 @@ def emit_decisions(
         "run_id": run_id,
         "marker_written": marker_written,
         "marker_cleared": marker_cleared,
+        "marker_error": marker_error,
     }
 
 
