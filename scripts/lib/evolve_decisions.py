@@ -93,11 +93,20 @@ def read_queue(slug: str) -> List[Dict[str, Any]]:
 
 def _write_queue(slug: str, records: List[Dict[str, Any]]) -> None:
     """slug のキューを records で**上書き**する（emit は毎 run 現在バッチで置換）。"""
-    path = queue_path_for(slug)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
+    atomic_write_text(queue_path_for(slug), body)
+
+
+@contextmanager
+def _queue_lock(slug: str) -> Iterator[None]:
+    """キューの read-modify-write を process 間で直列化する（#287-1）。
+
+    `read_queue` → 編集 → `_write_queue` が2プロセスで交差すると最後の上書きが勝ち、
+    別 run の追加や drain 済み除去が失われる（ファイルは壊れないが判断は消える）。
+    marker とは別ファイル・別ロックなので、marker ロック下から取っても deadlock しない。
+    """
+    with file_lock(QUEUE_ROOT / f"{_store._sanitize_slug(slug)}.lock"):
+        yield
 
 
 # ─── pending marker（未 drain 提案ポインタ, #402）─────────────────────────────
@@ -118,14 +127,28 @@ def _marker_lock(slug: str) -> Iterator[None]:
         yield
 
 
-def _run_is_expired(run: Dict[str, Any], now: Optional[datetime] = None) -> bool:
-    """TTL 超過判定。``emitted_at`` を持たない旧 schema は age 不明ゆえ落とさない。"""
+def _run_is_expired(
+    run: Dict[str, Any],
+    now: Optional[datetime] = None,
+    fallback_emitted: Optional[datetime] = None,
+) -> bool:
+    """TTL 超過判定。
+
+    `emitted_at` が欠落・不正な run（旧 schema / 壊れた値）は age 不明だが、そのままだと
+    **永久に失効せず marker が残骸化する**（#287-4）。`fallback_emitted`（marker ファイルの
+    mtime）を保守的な上限として使う — 実際の emit は必ずそれ以前なので、mtime 基準で
+    TTL 超過なら本当の age も超過している。fallback も取れなければ従来どおり落とさない。
+    """
     raw = run.get("emitted_at")
-    if not raw:
-        return False
-    try:
-        emitted = datetime.fromisoformat(str(raw))
-    except ValueError:
+    emitted: Optional[datetime] = None
+    if raw:
+        try:
+            emitted = datetime.fromisoformat(str(raw))
+        except ValueError:
+            emitted = None
+    if emitted is None:
+        emitted = fallback_emitted
+    if emitted is None:
         return False
     if emitted.tzinfo is None:
         emitted = emitted.replace(tzinfo=timezone.utc)
@@ -144,7 +167,8 @@ def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except (json.JSONDecodeError, OSError):
         return None
     if "runs" not in data:
         pending = data.get("pending") or []
@@ -158,7 +182,8 @@ def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
     runs = [
         run
         for run in data.get("runs", [])
-        if (run.get("pending") or []) and not _run_is_expired(run)
+        if (run.get("pending") or [])
+        and not _run_is_expired(run, fallback_emitted=mtime)
     ]
     if not runs:
         return None
@@ -265,7 +290,28 @@ def write_pending_marker(
 
 
 def read_pending_marker(slug: str) -> Optional[Dict[str, Any]]:
-    return _read_pending_marker_file(slug)
+    """marker を読む。読めない/全 run が TTL 超過なら物理削除もする（#287-4）。"""
+    marker = _read_pending_marker_file(slug)
+    if marker is None and marker_path(slug).exists():
+        _gc_marker_file(slug)
+    return marker
+
+
+def _gc_marker_file(slug: str) -> bool:
+    """失効・破損した marker ファイルを物理削除する（#287-4）。
+
+    read が None を返すのでユーザーへの誤通知は起きないが、ファイルは削除も書き戻しも
+    されず**ディスク残骸として永久に残る**。判定と unlink の間に別 run が新しい marker を
+    書いている可能性があるので、ロック下で読み直して None のままのときだけ消す。
+    """
+    with _marker_lock(slug):
+        if _read_pending_marker_file(slug) is not None:
+            return False
+        path = marker_path(slug)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
 
 
 def clear_pending_marker(slug: str) -> bool:
@@ -283,35 +329,46 @@ def purge_marker_entries(slug: str, consumed: Set[str]) -> bool:
     consumed は proposal ID の集合。ID は skill_path 由来の content identity なので、
     どの run の envelope から drain しても「同じ提案」は一度で消える。
     """
+    with _marker_lock(slug):
+        return _purge_marker_entries_locked(slug, consumed)
+
+
+def _purge_marker_entries_locked(slug: str, consumed: Set[str]) -> bool:
+    """`purge_marker_entries` のロック無し版（marker ロック下から呼ぶ・#287-3）。
+
+    drain は「marker から pending を読む → ingest → purge」の3手で、この間ロックを
+    離すと別 run が emit した提案を purge が ID だけ見て巻き込む（TOCTOU）。
+    `drain_pending` がスナップショットから purge までを1つのロックで囲めるよう、
+    ロック取得と本体を分ける（flock は入れ子で自己 deadlock するため）。
+    """
     if not consumed:
         return False
-    with _marker_lock(slug):
-        marker = _read_pending_marker_file(slug)
-        if not marker:
-            return False
-        runs: List[Dict[str, Any]] = []
-        for run in marker.get("runs", []):
-            kept = [
-                entry for entry in (run.get("pending") or []) if entry.get("id") not in consumed
-            ]
-            if kept:
-                runs.append({**run, "pending": kept})
-        if not runs:
-            path = marker_path(slug)
-            if path.exists():
-                path.unlink()
-            return True
-        flattened = [entry for run in runs for entry in (run.get("pending") or [])]
-        marker.update(
-            {
-                "runs": runs,
-                "pending": flattened,
-                "schema_version": 2,
-                "result_path": _flat_result_path(runs),
-            }
-        )
-        _write_marker_file(slug, marker)
+    marker = _read_pending_marker_file(slug)
+    if not marker:
+        return False
+    runs: List[Dict[str, Any]] = []
+    for run in marker.get("runs", []):
+        kept = [
+            entry for entry in (run.get("pending") or []) if entry.get("id") not in consumed
+        ]
+        if kept:
+            runs.append({**run, "pending": kept})
+    if not runs:
+        path = marker_path(slug)
+        if path.exists():
+            path.unlink()
         return True
+    flattened = [entry for run in runs for entry in (run.get("pending") or [])]
+    marker.update(
+        {
+            "runs": runs,
+            "pending": flattened,
+            "schema_version": 2,
+            "result_path": _flat_result_path(runs),
+        }
+    )
+    _write_marker_file(slug, marker)
+    return True
 
 
 def undrained_applied(slug: str) -> List[Dict[str, Any]]:
@@ -510,12 +567,14 @@ def emit_decisions(
     if not dry_run:
         # run_id 無しは旧 schema の「前 run を上書き」キュー。新 envelope へ移る際に
         # stale として除去し、run_id 付きの未判断だけを保持する。
-        existing = [entry for entry in read_queue(slug) if entry.get("run_id")]
-        current_ids = {entry.get("id") for entry in pending}
-        _write_queue(
-            slug,
-            [entry for entry in existing if entry.get("id") not in current_ids] + pending,
-        )
+        # read→編集→write はロック下で行う（並行 emit が互いの追加を落とすのを防ぐ・#287-1）。
+        with _queue_lock(slug):
+            existing = [entry for entry in read_queue(slug) if entry.get("run_id")]
+            current_ids = {entry.get("id") for entry in pending}
+            _write_queue(
+                slug,
+                [entry for entry in existing if entry.get("id") not in current_ids] + pending,
+            )
         persisted = True
 
     # #402: drain 検出用の運用マーカー（dry-run でも書く。store/queue とは別状態）。
@@ -644,9 +703,11 @@ def ingest_decisions(
         # キューが SoT のときだけ消化済みを除去する。pending を直接渡された場合
         # （dry-run 運用経路）はキューを生成も変更もしない。
         # 未判断は deferred。後続 run で apply/reject できるようキューに残す。
+        # 判断（ファイル読み・採点）は重いのでロック外で行い、**書く直前にロック下で
+        # 読み直して**差分だけ適用する（その間に別 run が追加した entry を消さない・#287-1）。
         consumed = set(accepted) | set(rejected_out)
-        remaining = [e for e in pending if e["id"] not in consumed]
-        _write_queue(slug, remaining)
+        with _queue_lock(slug):
+            _write_queue(slug, [e for e in read_queue(slug) if e.get("id") not in consumed])
 
     return {"accepted": accepted, "rejected": rejected_out, "skipped": skipped}
 
@@ -681,20 +742,26 @@ def drain_pending(
     if slug is None:
         slug = resolve_slug(Path(project_dir) if project_dir else None)
 
-    if result_json:
-        data = json.loads(Path(result_json).read_text(encoding="utf-8"))
-        envelope = data.get("evolve_decisions") or {}
-        pending = envelope.get("pending") or []
-    else:
-        marker = read_pending_marker(slug)
-        pending = (marker.get("pending") if marker else None) or []
+    # #287-3: スナップショット取得 → ingest → purge を**1つのロック**で囲む。ロックを
+    # 離すと、その隙に別 run が emit した提案を purge が ID だけ見て巻き込む（purge は
+    # run/revision を見ず全 run 横断で消すため）。ロック下では marker を触る内部関数
+    # （`_read_pending_marker_file` / `_purge_marker_entries_locked`）を使う — 公開版は
+    # 自分でロックを取るので入れ子＝自己 deadlock になる。
+    with _marker_lock(slug):
+        if result_json:
+            data = json.loads(Path(result_json).read_text(encoding="utf-8"))
+            envelope = data.get("evolve_decisions") or {}
+            pending = envelope.get("pending") or []
+        else:
+            marker = _read_pending_marker_file(slug)
+            pending = (marker.get("pending") if marker else None) or []
 
-    summary = ingest_decisions(
-        slug, pending=pending, dry_run=False, rejected=rejected, history_file=history_file
-    )
-    consumed = set(summary["accepted"]) | set(summary["rejected"])
-    remaining = [entry for entry in pending if entry.get("id") not in consumed]
-    # 未判断は deferred として marker に残し、後続 run で apply/reject できるようにする。
-    summary["deferred"] = [entry.get("id") for entry in remaining]
-    purge_marker_entries(slug, consumed)
+        summary = ingest_decisions(
+            slug, pending=pending, dry_run=False, rejected=rejected, history_file=history_file
+        )
+        consumed = set(summary["accepted"]) | set(summary["rejected"])
+        remaining = [entry for entry in pending if entry.get("id") not in consumed]
+        # 未判断は deferred として marker に残し、後続 run で apply/reject できるようにする。
+        summary["deferred"] = [entry.get("id") for entry in remaining]
+        _purge_marker_entries_locked(slug, consumed)
     return summary
