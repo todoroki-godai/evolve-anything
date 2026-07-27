@@ -221,6 +221,29 @@ def resolve_pj_slug(path_or_cwd: Optional[Union[str, Path]] = None) -> str:
     return fast or UNATTRIBUTED_SLUG
 
 
+def cc_project_dir_candidates(path_or_cwd: Union[str, Path]) -> list:
+    """CC の ``~/.claude/projects/<encoded>`` に使う encoded 名の候補を優先順で返す（単一ソース）。
+
+    Claude Code は projects ディレクトリを cwd 絶対パスから作るが、置換対象は ``/`` **だけで
+    なく ``.`` も** 含む（実測: ``…/evolve-anything/.claude/worktrees/feedback`` →
+    ``…-evolve-anything--claude-worktrees-feedback``）。``/`` だけ置換した候補は
+    ``.claude/worktrees/*`` 配下で必ず外れ、その PJ が「dir 不在」として恒久的に沈黙する
+    （評価済み 0 件と未評価が区別できなくなる・#275）。
+
+    先頭 ``-`` の有無も candidate に含める（#18/#19 の既存規約）。**transcript dir
+    (``self_contamination_scan.resolve_cc_transcript_dir``) と memory dir
+    (``resolve_cc_memory_dir``) の両方がこの関数を使う** — 片側だけ置換規約を直すと
+    desync するため（sibling_copy_guard が検出した pitfall）。
+    """
+    encoded = str(Path(path_or_cwd)).replace("/", "-")
+    dotted = encoded.replace(".", "-")
+    out = []
+    for candidate in (encoded, encoded.lstrip("-"), dotted, dotted.lstrip("-")):
+        if candidate not in out:
+            out.append(candidate)
+    return out
+
+
 def resolve_cc_memory_dir(path_or_cwd: Optional[Union[str, Path]] = None) -> Path:
     """CC の ``~/.claude/projects/<path-encoded>/memory`` を返す（単一ソース・#18/#19）。
 
@@ -230,20 +253,21 @@ def resolve_cc_memory_dir(path_or_cwd: Optional[Union[str, Path]] = None) -> Pat
     ``resolve_pj_slug`` を使うと別の場所を指して section が常に沈黙する（#19 で実際に踏んだ
     バグ）。memory dir を引く箇所は必ず本関数を使うこと。
 
-    存在する candidate（先頭 ``-`` 有無の2通り）を優先して返す。どちらも無ければ primary
-    candidate（非存在 Path）を返すので、呼び出し側は ``is_dir()`` で不在を扱える。
+    存在する candidate（``cc_project_dir_candidates`` が返す優先順・``/`` 置換と ``.`` 置換 ×
+    先頭 ``-`` 有無）を優先して返す。どれも無ければ primary candidate（非存在 Path）を返す
+    ので、呼び出し側は ``is_dir()`` で不在を扱える。
 
     既知の限界: worktree から渡された path はその worktree の encoded dir を見る（#18 と同挙動。
     memory は CC が cwd 単位で projects dir を持つため本体 repo へは自動正規化しない）。
     """
     base = Path.home() / ".claude" / "projects"
     target = Path(path_or_cwd) if path_or_cwd is not None else Path.cwd()
-    encoded = str(target).replace("/", "-")
-    for candidate in (encoded, encoded.lstrip("-")):
+    candidates = cc_project_dir_candidates(target)
+    for candidate in candidates:
         memory_dir = base / candidate / "memory"
         if memory_dir.is_dir():
             return memory_dir
-    return base / encoded / "memory"
+    return base / candidates[0] / "memory"
 
 
 def record_project_match(rec: dict, current_slug: Optional[str]) -> bool:

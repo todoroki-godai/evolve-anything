@@ -32,6 +32,22 @@ assistant ブロックに対して行うが、Family の定義（上記）はい
 ``total_text`` / ``total_thinking`` で層別集計を提供し、observability セクションは可視漏出（text）を
 主表示、thinking 内はあくまで参考の従表示とする。
 
+**曝露母数つき層別発生率（#275）**: 件数の内訳だけでは model／thinking の相関を評価できない
+（分母を伴わない件数は「多い/少ない」の判断材料にならない）。``ScanReport.exposure`` に
+``(model, thinking_state)`` → text ブロックを 1 つ以上持つ assistant record 数（曝露母数）を
+蓄積し、``build_stratum_rows``（``self_contamination_stratify`` に分離。800 行ハードバジェット
+対策）が model × thinking_state の交差表を分子（affected record 数）/ 分母（exposure）/ 率で組む。
+分母は既存の走査ループ（``scan_records`` / ``scan_project_transcripts``）と**同一パスで**数える
+（別ロジックで数えると分子分母がズレる）。``<synthetic>`` 等の非実 model は交差表対象外とし
+``excluded_synthetic`` に別カウント（silence≠evaluated）。thinking_state は present/absent/unknown
+の3値で、**セッション単位**（``classify_session_thinking_state``）で判定する — CC は thinking と
+text を別 record に保存するため record 単位（``classify_thinking_state``）では text 保持 record が
+ほぼ全て absent に落ち層別が退化する（実機で fable の 356/357 が absent になることを確認）。
+transcript 上の観測値であり設定値ではない・redacted_thinking のみの場合は absence 側を汚染しない
+よう unknown。
+分母が閾値未満（既定 20）のセルは率を出さず「低母数」と明記する。セッション長・turn 位置・
+tool 密度等の交絡調整はスコープ外（観察であり因果推論ではない）。
+
 この module は決定論・純関数のみで LLM を呼ばない（no-llm-in-tests は自明に満たす）。audit の
 Layer 2 advisory（``sections_self_contamination``）が実行時に既存 transcript を走査して使う。
 hook / store は新設しない（read-only）。
@@ -45,6 +61,19 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple
+
+# #275: 曝露母数つき層別発生率は別 module に分離（800行ハードバジェット対策・file-size-budget.md）。
+# ここで re-export し、呼び出し側（テスト・observability セクション）は分割を意識せず
+# `self_contamination_scan.classify_thinking_state` 等としてそのまま参照できる。
+from self_contamination_stratify import (  # noqa: F401
+    _MIN_STRATUM_DENOM,
+    _extract_model,
+    _is_synthetic_model,
+    StratumRow,
+    build_stratum_rows,
+    classify_session_thinking_state,
+    classify_thinking_state,
+)
 
 # ------------------------------------------------------------------
 # 定数（検出パターン）
@@ -126,7 +155,11 @@ _DEFAULT_PROXIMITY = 50
 # ------------------------------------------------------------------
 @dataclass
 class Hit:
-    """1 件の指紋検出。confab_text=作話側、reference_text=対比する直前 tool_result 原文。"""
+    """1 件の指紋検出。confab_text=作話側、reference_text=対比する直前 tool_result 原文。
+
+    ``model`` / ``thinking_state`` は #275 で追加（層別発生率の分子側属性）。既存の位置引数
+    呼び出しを壊さないよう末尾に keyword 既定つきで追加している。
+    """
 
     family: str  # "A" | "B" | "C"
     line: int
@@ -134,6 +167,8 @@ class Hit:
     confab_text: str
     reference_text: str = ""
     session_id: str = ""
+    model: str = "unknown"  # record["message"]["model"] の原値（正規化しない）。#275
+    thinking_state: str = "unknown"  # "present" | "absent" | "unknown"。#275
 
 
 @dataclass
@@ -148,12 +183,19 @@ class ScanReport:
     ``total`` / ``counts()``（引数なし）は従来互換で text+thinking 混合値を返すが、Family の
     公式定義（モジュール docstring）は可視漏出（text）を指すため、``counts(block="text")`` /
     ``total_text`` が「真の指紋率」に相当する（#277）。
+
+    ``exposure`` / ``excluded_synthetic`` は #275 の曝露母数（分母）。``exposure`` は
+    ``(model, thinking_state)`` → text ブロックを 1 つ以上持つ assistant record 数。
+    ``<synthetic>`` 等の非実 model（先頭が ``<``）は交差表対象外とし ``excluded_synthetic`` に
+    別カウントする（silence≠evaluated・除外自体を常時 surface するため）。
     """
 
     family_a: List[Hit] = field(default_factory=list)
     family_b: List[Hit] = field(default_factory=list)
     family_c: List[Hit] = field(default_factory=list)
     domain_vocab_fp: List[Hit] = field(default_factory=list)
+    exposure: Dict[Tuple[str, str], int] = field(default_factory=dict)
+    excluded_synthetic: int = 0
 
     @property
     def total(self) -> int:
@@ -184,11 +226,42 @@ class ScanReport:
 
         return {"A": _n(self.family_a), "B": _n(self.family_b), "C": _n(self.family_c)}
 
+    def affected_record_keys(
+        self, *, family: Optional[str] = None, block: Optional[str] = None
+    ) -> "set[Tuple[str, int]]":
+        """``(session_id, line)`` の distinct 集合を返す（#275）。
+
+        ``family`` 未指定は A/B/C 全ヒットを合算する（同一 record の複数 Family ヒットも 1 と
+        数える）。``block`` 未指定は text/thinking 混合。
+        """
+        lanes = (
+            {"A": self.family_a, "B": self.family_b, "C": self.family_c}[family]
+            if family is not None
+            else [*self.family_a, *self.family_b, *self.family_c]
+        )
+        return {(h.session_id, h.line) for h in lanes if block is None or h.block == block}
+
+    def affected_record_count(
+        self, *, family: Optional[str] = None, block: Optional[str] = None
+    ) -> int:
+        """影響を受けた assistant record の distinct 数（#275）。"""
+        return len(self.affected_record_keys(family=family, block=block))
+
+    def affected_session_count(
+        self, *, family: Optional[str] = None, block: Optional[str] = None
+    ) -> int:
+        """影響を受けた session の distinct 数（#275）。"""
+        keys = self.affected_record_keys(family=family, block=block)
+        return len({sid for sid, _ln in keys})
+
     def extend(self, other: "ScanReport") -> None:
         self.family_a.extend(other.family_a)
         self.family_b.extend(other.family_b)
         self.family_c.extend(other.family_c)
         self.domain_vocab_fp.extend(other.domain_vocab_fp)
+        for key, n in other.exposure.items():
+            self.exposure[key] = self.exposure.get(key, 0) + n
+        self.excluded_synthetic += other.excluded_synthetic
 
 
 @dataclass
@@ -493,7 +566,17 @@ def scan_records(
     Family C は「直前 K 個の tool_result 原文」を running window で保持して照合する。
     ``excluded_vocab``（#203）に含まれる語彙のみが根拠の Family C 候補は ``family_c`` でなく
     ``domain_vocab_fp`` バケットへ振り分ける（ハード除外でなく別集計）。
+
+    ``exposure``（#275）: text ブロックを 1 つ以上持つ assistant record ごとに model を判定し、
+    ``(model, thinking_state)`` → 件数へ加算する。``<synthetic>`` 等の非実 model は交差表対象外と
+    し ``excluded_synthetic`` に計上する。判定結果は各 Hit にも ``model`` / ``thinking_state``
+    として載せる。model は record 単位（同一セッション内でモデルが変わりうる）だが
+    **thinking_state はセッション単位**（``classify_session_thinking_state``）で判定する — CC は
+    thinking と text を別 record に保存するため record 単位だと text 保持 record がほぼ全て
+    ``absent`` に落ち、層別が退化する（実機確認済み）。このため records を 1 度リスト化する。
     """
+    records = list(records)
+    session_thinking_state = classify_session_thinking_state(records)
     report = ScanReport()
     recent: Deque[str] = deque(maxlen=max(1, k))
     for ln, record in enumerate(records, 1):
@@ -503,14 +586,42 @@ def scan_records(
         for tr in tool_result_texts(record):
             if tr:
                 recent.append(tr)
-        for block, text in assistant_text_blocks(record):
+        blocks = assistant_text_blocks(record)
+        if not blocks:
+            continue
+        model = _extract_model(record)
+        thinking_state = session_thinking_state
+        has_text = any(kind == "text" for kind, _t in blocks)
+        if has_text:
+            if _is_synthetic_model(model):
+                report.excluded_synthetic += 1
+            else:
+                key = (model, thinking_state)
+                report.exposure[key] = report.exposure.get(key, 0) + 1
+        for block, text in blocks:
             if detect_raw_tag_leak(text):
                 report.family_a.append(
-                    Hit("A", ln, block, _snippet(text), session_id=session_id)
+                    Hit(
+                        "A",
+                        ln,
+                        block,
+                        _snippet(text),
+                        session_id=session_id,
+                        model=model,
+                        thinking_state=thinking_state,
+                    )
                 )
             if detect_fake_system_reminder(text):
                 report.family_b.append(
-                    Hit("B", ln, block, _snippet(text), session_id=session_id)
+                    Hit(
+                        "B",
+                        ln,
+                        block,
+                        _snippet(text),
+                        session_id=session_id,
+                        model=model,
+                        thinking_state=thinking_state,
+                    )
                 )
             genuine, domain_fp = _confab_evidence(
                 text, recent, min_len=min_literal, excluded_vocab=excluded_vocab
@@ -524,6 +635,8 @@ def scan_records(
                         genuine,
                         reference_text=_snippet("\n".join(recent), width=160),
                         session_id=session_id,
+                        model=model,
+                        thinking_state=thinking_state,
                     )
                 )
             elif domain_fp is not None:
@@ -535,6 +648,8 @@ def scan_records(
                         domain_fp,
                         reference_text=_snippet("\n".join(recent), width=160),
                         session_id=session_id,
+                        model=model,
+                        thinking_state=thinking_state,
                     )
                 )
     return report
@@ -580,15 +695,23 @@ def resolve_cc_transcript_dir(project_dir) -> Path:
     CC は projects dir を cwd 絶対パスの ``/`` → ``-`` 置換で持つ。存在する candidate
     （先頭 ``-`` 有無）を優先し、無ければ primary candidate（非存在 Path）を返す。
     resolve_cc_memory_dir と同じエンコード規約（#18/#19）。
+
+    **ドット入りパス（#275）**: CC は ``.`` も ``-`` に置換する（実測: ``…/evolve-anything/
+    .claude/worktrees/feedback`` → ``…-evolve-anything--claude-worktrees-feedback``）。``/`` だけ
+    置換した candidate は worktree 配下（``.claude/worktrees/*``）で必ず外れ、当該 PJ が
+    「transcript dir 不在」として恒久的に沈黙する（**評価済み 0 件と未評価が区別できなくなる**）。
+    candidate 生成は ``pj_slug.cc_project_dir_candidates`` が単一ソース（memory dir 側と同じ
+    規約を共有する。片側だけ直すと desync する）。
     """
+    from pj_slug import cc_project_dir_candidates  # 遅延 import（hot path でない・循環回避）
+
     base = Path.home() / ".claude" / "projects"
-    target = Path(project_dir)
-    encoded = str(target).replace("/", "-")
-    for candidate in (encoded, encoded.lstrip("-")):
+    candidates = cc_project_dir_candidates(project_dir)
+    for candidate in candidates:
         d = base / candidate
         if d.is_dir():
             return d
-    return base / encoded
+    return base / candidates[0]
 
 
 def scan_project_transcripts(
@@ -634,8 +757,10 @@ def scan_project_transcripts(
             continue  # 窓より古い → skip
         file_report = scan_file(f, k=k, excluded_vocab=excluded_vocab)
         files_scanned += 1
-        if file_report.total == 0 and not file_report.domain_vocab_fp:
-            continue
+        # #275: exposure（曝露母数）は指紋の有無に関わらず全走査 record から集める必要がある
+        # ため、以前あった「ヒット無しファイルは丸ごと skip」の早期 continue は撤去した（分母を
+        # 別ロジックで数えると分子分母がズレるため、既存の走査ループと同一パスで数える）。
+        # family 各リストが空なら extend は事実上無コストなので、常時 extend して問題ない。
         report.extend(file_report)
         bucket = recent_counts if mt >= recent_cutoff else baseline_counts
         for fam, n in file_report.counts().items():

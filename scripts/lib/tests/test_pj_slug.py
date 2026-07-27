@@ -374,3 +374,23 @@ def test_record_match_project_path_takes_priority_over_project():
     """project_path が存在すれば project フィールドより優先される。"""
     rec = {"project_path": "myproject", "project": "otherproject"}
     assert pj_slug.record_project_match(rec, "myproject") is True
+
+
+# ==================================================================
+# CC projects dir の encoded 名候補（transcript / memory の単一ソース）（#275）
+# ==================================================================
+def test_cc_project_dir_candidates_includes_dotted_encoding():
+    """CC は / だけでなく . も - に置換するため、ドット置換 candidate を必ず含める。"""
+    cands = pj_slug.cc_project_dir_candidates("/Users/x/proj/.claude/worktrees/feat")
+    assert "-Users-x-proj--claude-worktrees-feat" in cands
+    # 従来の / 置換のみの candidate が先頭（後方互換・既存 dir を優先）。
+    assert cands[0] == "-Users-x-proj-.claude-worktrees-feat"
+
+
+def test_resolve_cc_memory_dir_handles_dotted_path(tmp_path, monkeypatch):
+    """memory dir 側も transcript dir 側と同じ置換規約を共有する（片側修正の desync 防止）。"""
+    monkeypatch.setattr(pj_slug.Path, "home", staticmethod(lambda: tmp_path))
+    encoded = "-Users-x-proj--claude-worktrees-feat"
+    (tmp_path / ".claude" / "projects" / encoded / "memory").mkdir(parents=True)
+    got = pj_slug.resolve_cc_memory_dir("/Users/x/proj/.claude/worktrees/feat")
+    assert got.parent.name == encoded

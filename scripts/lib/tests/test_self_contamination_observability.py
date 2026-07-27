@@ -191,3 +191,153 @@ def test_text_only_hits_render_unchanged_shape(tmp_path, monkeypatch):
     combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
     assert "生タグ漏出 (A): 2 件" in combined
     assert "参考" not in combined
+
+
+# ==================================================================
+# 曝露母数つき層別発生率（model × thinking_state 交差表）（#275）
+# ==================================================================
+def test_stratum_crosstab_rendered_with_numerator_denominator_and_rate(tmp_path, monkeypatch):
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "claude-opus-5" in combined
+    assert "thinking=present" in combined
+    assert "1 / 25" in combined
+
+
+def test_stratum_crosstab_low_denom_shows_notice(tmp_path, monkeypatch):
+    rep = scs.ScanReport()
+    rep.exposure[("claude-sonnet-5", "absent")] = 5
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-sonnet-5", thinking_state="absent"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "低母数" in combined
+    assert "1 / 5" in combined
+
+
+def test_stratum_crosstab_absent_when_exposure_empty(tmp_path, monkeypatch):
+    """exposure が空（未計測 fixture 等）なら交差表ブロック自体を出さない。"""
+    _patch(monkeypatch, tmp_path, _report(2, 1, 1))
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "分母 = text ブロック" not in combined
+
+
+def test_zero_hits_with_exposure_surfaces_summary_not_silence(tmp_path, monkeypatch):
+    """指紋ゼロでも曝露があれば沈黙しない（#275）。汚染が枯れた窓こそ「常設検知網が動いて
+    0 件だった」と「未評価」を区別できる必要がある。交差表は展開せず要約行に畳む。"""
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 1386
+    rep.exposure[("claude-fable-5", "present")] = 357
+    result = _project_report(rep, files_scanned=145)
+    _patch(monkeypatch, tmp_path, result)
+    lines = ssc.build_self_contamination_section(tmp_path)
+    assert lines is not None
+    combined = "\n".join(lines)
+    assert "0 件" in combined
+    assert "1,743" in combined  # 曝露合計（分母）を surface する
+    assert "145 セッション" in combined
+    # 全セル 0 / n の交差表は展開しない（行数を畳む）。
+    assert "分母 = text ブロック" not in combined
+
+
+def test_zero_hits_without_exposure_stays_silent(tmp_path, monkeypatch):
+    """曝露もゼロ（走査対象そのものが無い）なら従来どおり沈黙する。"""
+    _patch(monkeypatch, tmp_path, _report(0, 0, 0))
+    assert ssc.build_self_contamination_section(tmp_path) is None
+
+
+def test_zero_hits_with_only_synthetic_records_surfaces_exclusion(tmp_path, monkeypatch):
+    """exposure は空だが synthetic のみ観測された窓も「評価済み」として surface する。"""
+    rep = scs.ScanReport()
+    rep.excluded_synthetic = 7
+    _patch(monkeypatch, tmp_path, _project_report(rep, files_scanned=3))
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "0 件" in combined
+    assert "7 件" in combined
+    assert "synthetic" in combined.lower()
+
+
+def test_crosstab_note_present_for_single_cell(tmp_path, monkeypatch):
+    """1 セルだけの窓も「thinking_state に差が無い」に含める（比較不能の明記が要る）。"""
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "説明変数として機能していません" in combined
+
+
+def test_crosstab_notes_when_thinking_state_has_no_contrast(tmp_path, monkeypatch):
+    """全セルが同一 thinking_state なら「説明変数として機能していない」と明示する（#275 判断契約）。"""
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.exposure[("claude-sonnet-5", "present")] = 40
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "説明変数として機能していません" in combined
+
+
+def test_crosstab_omits_no_contrast_note_when_thinking_state_varies(tmp_path, monkeypatch):
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.exposure[("claude-opus-5", "absent")] = 40
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="absent"
+        )
+    )
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "説明変数として機能していません" not in combined
+
+
+def test_excluded_synthetic_surfaced_alongside_crosstab(tmp_path, monkeypatch):
+    rep = scs.ScanReport()
+    rep.exposure[("claude-opus-5", "present")] = 25
+    rep.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    rep.excluded_synthetic = 7
+    result = _project_report(rep, recent={"A": 1, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "7" in combined
+    assert "synthetic" in combined.lower()
+
+
+def test_excluded_synthetic_not_shown_when_crosstab_absent(tmp_path, monkeypatch):
+    """交差表ブロック自体が出ない（exposure ゼロ）なら excluded_synthetic 行も出さない。"""
+    rep = scs.ScanReport()
+    for i in range(2):
+        rep.family_a.append(scs.Hit("A", i + 1, "text", "leak", session_id="s"))
+    rep.excluded_synthetic = 3
+    result = _project_report(rep, recent={"A": 2, "B": 0, "C": 0})
+    _patch(monkeypatch, tmp_path, result)
+    combined = "\n".join(ssc.build_self_contamination_section(tmp_path))
+    assert "分母 = text ブロック" not in combined

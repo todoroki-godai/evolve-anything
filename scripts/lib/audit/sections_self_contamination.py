@@ -10,8 +10,10 @@ opus 1M の長大セッションで、assistant が tool_result 原文に存在�
 原文の対比）を advisory surface する。
 
 観測可能性契約（build_verbosity_section / build_subagent_traces_section と同契約）:
-- transcript dir 不在 / 走査不能 → None（沈黙）
-- 指紋ゼロ かつ ドメイン語彙 FP 除外もゼロ（clean）→ None（沈黙・低ノイズ優先の advisory レーン）
+- transcript dir 不在 / 走査不能 / 曝露ゼロ（走査対象そのものが無い）→ None（沈黙）
+- 指紋ゼロ だが 曝露（分母）あり → ℹ 要約 1〜2 行のみ（#275）。交差表は展開しない。汚染が枯れた
+  窓こそ「常設検知網が動いて 0 件だった」と「未評価」を区別する必要があるため沈黙させず、
+  低ノイズ優先の advisory レーンと両立させるため行数を畳む
 - 指紋あり → ⚠ + 件数 + period 推移 + 代表例（#394: 数字だけでなく根拠まで）
 - 真のヒットは 0 件だがドメイン語彙 FP 除外（#203）が非ゼロ → ℹ + 除外件数（silence≠evaluated。
   ハード除外は「評価しなかった」と見分けがつかなくなるため、除外自体を常時 surface する）
@@ -20,7 +22,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from self_contamination_scan import (
+    _MIN_STRATUM_DENOM,
     ProjectScanReport,
+    ScanReport,
+    build_stratum_rows,
     resolve_cc_transcript_dir,
     scan_project_transcripts,
 )
@@ -40,13 +45,25 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
         result = scan_project_transcripts(tdir)
         if result is None:
             return None
-        if result.report.total == 0 and not result.report.domain_vocab_fp:
-            # 評価対象なし（transcript 不在）or 指紋ゼロ・ドメイン語彙 FP 除外もゼロ（clean）→ 沈黙。
+        rep = result.report
+        if (
+            rep.total == 0
+            and not rep.domain_vocab_fp
+            and not rep.exposure
+            and not rep.excluded_synthetic
+        ):
+            # 走査対象そのものが無い（transcript 不在・全窓外）→ 沈黙。
+            # 指紋ゼロでも **曝露（分母）があるなら沈黙しない**（#275）: 汚染が枯れた窓こそ
+            # 「常設検知網が動いていて 0 件だった」ことを示す必要があり、沈黙は「未評価」と
+            # 区別がつかなくなる。ノイズを抑えるため render 側で要約 1 行に畳む。
             return None
         return result
 
     def render(result: ProjectScanReport) -> List[str]:
         rep = result.report
+        if rep.total == 0 and not rep.domain_vocab_fp:
+            # 指紋ゼロ × 曝露あり: 常設検知網が動いて 0 件だったことだけを最小行数で示す（#275）。
+            return _render_zero_hit_summary(result)
         # 主表示＝可視 text 漏出（Family の公式定義）、従表示＝thinking 内（参考・#277）。
         c_text = rep.counts(block="text")
         c_thinking = rep.counts(block="thinking")
@@ -77,6 +94,7 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
             f"  ・偽 system-reminder (B): {c_text['B']} 件 — harness 注入のはずのタグを可視 text に自己出力",
             f"  ・汚染宣言×原文非在 (C): {c_text['C']} 件 — 引用リテラルが直前 tool_result 原文に不在（可視 text）",
         ]
+        body += _render_stratum_table(rep)
         if total_thinking:
             body.append(
                 f"  ・[参考] thinking 内（可視応答への漏出ではない下書き相当・件数のみ参考）: "
@@ -133,6 +151,82 @@ def build_self_contamination_section(project_dir: Path) -> Optional[List[str]]:
         applicable=lambda result: result is not None,
         render=render,
     )
+
+
+def _render_zero_hit_summary(result: ProjectScanReport) -> List[str]:
+    """指紋ゼロ × 曝露ありの窓を要約 1〜2 行で surface する（#275）。
+
+    交差表は全セル ``0 / n`` になり情報量に対して行数が多すぎるため展開しない（ヒット検出時
+    のみ展開）。それでも沈黙させないのは、汚染が枯れた窓こそ「常設検知網が動いていて 0 件
+    だった」ことと「そもそも評価していない」を読み手が区別できる必要があるため。
+    """
+    rep = result.report
+    exposed = sum(rep.exposure.values())
+    models = {model for model, _state in rep.exposure}
+    states = {state for _model, state in rep.exposure}
+    if len(states) == 1:
+        state_label = f"thinking={states.pop()}"
+    elif states:
+        state_label = f"thinking={len(states)}種混在"
+    else:
+        state_label = "thinking=不明"
+    head = (
+        f"ℹ 自己汚染指紋 0 件（評価済み・走査 {result.files_scanned} セッション / "
+        f"曝露 {exposed:,} records・model {len(models)} 種・{state_label}）"
+    )
+    tail = "      → 交差表はヒット検出時に展開。"
+    if rep.excluded_synthetic:
+        tail += f"<synthetic> 等の非実 model record {rep.excluded_synthetic} 件は交差表対象外。"
+    return [head, tail]
+
+
+def _render_stratum_table(rep: ScanReport) -> List[str]:
+    """曝露母数つき層別発生率（model × thinking_state 交差表）を描画する（#275）。
+
+    主要 outcome = Family A in text のみ。分母は ``rep.exposure``（唯一の分母ソース）が
+    空なら交差表ブロックごと出さない（余計な行を増やさない・観測が無いことと沈黙を区別しない）。
+    """
+    rows = build_stratum_rows(rep, family="A", block="text")
+    if not rows:
+        return []
+    lines = [
+        "  ・[主要指標] 生タグ漏出 (A) の可視 text 漏出率 — model × thinking_state",
+        "      （分子 = 影響を受けた assistant record / 分母 = text ブロックを持つ assistant record）",
+    ]
+    for row in rows:
+        label = f"{row.model} / thinking={row.thinking_state}"
+        if row.rate is None:
+            lines.append(
+                f"      {label} : {row.affected_records} / {row.exposed} "
+                f"(低母数 n<{_MIN_STRATUM_DENOM} のため率は非表示)"
+            )
+        else:
+            lines.append(f"      {label} : {row.affected_records} / {row.exposed} ({row.rate:.1%})")
+    states = {row.thinking_state for row in rows}
+    if len(states) == 1:
+        # 全セルが同一 thinking_state ＝この窓では thinking の有無に差が無く、説明変数として
+        # 機能しない。判断契約（#275）の「差が再現しない」出口を読み手が判定できるよう明示する。
+        # 1 セルだけの窓も「差が無い」に含める（比較不能であることこそ明記が要る）。
+        lines.append(
+            f"      ・注記: この窓では thinking_state が全て {states.pop()} で差がないため、"
+            "thinking の有無は説明変数として機能していません（model 別の記述は可能ですが、"
+            "低母数セルでは model 間の比較判断もできません）。"
+        )
+    if rep.excluded_synthetic:
+        lines.append(
+            f"      ・除外: <synthetic> 等の非実 model record {rep.excluded_synthetic} 件"
+            "（交差表対象外）"
+        )
+    lines.append(
+        "      ・注記: thinking_state は **セッション単位** の transcript 上の観測値であり"
+        "設定値ではありません（そのセッションのどの assistant record にも thinking ブロックが"
+        "無ければ absent）。"
+    )
+    lines.append(
+        "      ・注記: これは観察であり因果推論ではありません（model はランダム割当ではなく、"
+        "難しい長時間タスクだけ特定モデルを使っていた可能性があります）。"
+    )
+    return lines
 
 
 def _pick_examples(report) -> list:

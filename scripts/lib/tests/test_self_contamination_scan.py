@@ -411,3 +411,285 @@ def test_counts_both_blocks_leak_counted_separately():
     assert report.counts(block="thinking")["A"] == 1
     assert report.total_text == 1
     assert report.total_thinking == 1
+
+
+# ==================================================================
+# classify_thinking_state: thinking の3値判定（present/absent/unknown）(#275)
+# ==================================================================
+def test_classify_thinking_state_present():
+    rec = _assistant(_text("hello"), _thinking("pondering"))
+    assert scs.classify_thinking_state(rec) == "present"
+
+
+def test_classify_thinking_state_absent():
+    rec = _assistant(_text("hello"))
+    assert scs.classify_thinking_state(rec) == "absent"
+
+
+def test_classify_thinking_state_unknown_for_redacted_thinking():
+    # redacted_thinking のみ（plain thinking ブロックは無い）→ absence 側を汚染せず unknown。
+    rec = _assistant(_text("hello"), {"type": "redacted_thinking", "data": "xxx"})
+    assert scs.classify_thinking_state(rec) == "unknown"
+
+
+def test_classify_thinking_state_present_wins_over_redacted():
+    # plain thinking と redacted_thinking が両方あれば present を優先する。
+    rec = _assistant(_thinking("real"), {"type": "redacted_thinking", "data": "xxx"})
+    assert scs.classify_thinking_state(rec) == "present"
+
+
+def test_classify_thinking_state_unknown_for_malformed_content():
+    rec = {"type": "assistant", "message": {"role": "assistant", "content": 12345}}
+    assert scs.classify_thinking_state(rec) == "unknown"
+
+
+def test_classify_thinking_state_absent_for_str_content():
+    # str content は不正形ではない（正規の旧形式）。thinking を含みえないので absent。
+    rec = {"type": "assistant", "message": {"role": "assistant", "content": "plain string reply"}}
+    assert scs.classify_thinking_state(rec) == "absent"
+
+
+# ==================================================================
+# exposure: text 持ち assistant record のみ分母に入る（#275）
+# ==================================================================
+def _assistant_with_model(model, *blocks):
+    rec = _assistant(*blocks)
+    rec["message"]["model"] = model
+    return rec
+
+
+def test_exposure_counts_only_text_bearing_assistant_records():
+    records = [
+        _assistant_with_model("claude-opus-5", _text("visible reply")),
+        _assistant_with_model("claude-opus-5", _thinking("only thinking, no text")),
+        _assistant_with_model("claude-opus-5", {"type": "tool_use", "name": "Bash"}),
+    ]
+    report = scs.scan_records(records)
+    # 分母は text 保持 record のみ（1件）。thinking は別 record にあってもセッション単位の
+    # 判定なので present になる（CC の保存形＝thinking と text は別 record・#275）。
+    assert report.exposure == {("claude-opus-5", "present"): 1}
+
+
+def test_exposure_stratifies_by_model_within_session():
+    # model は record 単位（同一セッション内でモデルが変わりうる）、thinking_state はセッション単位。
+    records = [
+        _assistant_with_model("claude-opus-5", _text("a"), _thinking("b")),
+        _assistant_with_model("claude-sonnet-5", _text("c")),
+    ]
+    report = scs.scan_records(records)
+    assert report.exposure == {
+        ("claude-opus-5", "present"): 1,
+        ("claude-sonnet-5", "present"): 1,
+    }
+
+
+def test_exposure_thinking_state_is_session_scoped_not_record_scoped():
+    """CC は thinking と text を別 record に保存するため、record 単位判定だと分母がほぼ全て
+    absent に潰れて層別が退化する（実機で thinking 常時 on の fable が 356/357 absent）。
+    セッション内に thinking record が 1 つでもあれば全 record を present とする（#275）。"""
+    records = [
+        _assistant_with_model("claude-fable-5", _thinking("内部下書き")),
+        _assistant_with_model("claude-fable-5", _text("可視応答1")),
+        _assistant_with_model("claude-fable-5", _text("可視応答2")),
+    ]
+    report = scs.scan_records(records)
+    assert report.exposure == {("claude-fable-5", "present"): 2}
+
+
+def test_exposure_absent_and_present_sessions_merge_via_extend():
+    # 別セッション（別 scan_records 呼び出し）は独立に判定され、extend でマージされる。
+    with_thinking = scs.scan_records(
+        [
+            _assistant_with_model("claude-sonnet-5", _thinking("t")),
+            _assistant_with_model("claude-sonnet-5", _text("a")),
+        ]
+    )
+    without_thinking = scs.scan_records([_assistant_with_model("claude-sonnet-5", _text("b"))])
+    with_thinking.extend(without_thinking)
+    assert with_thinking.exposure == {
+        ("claude-sonnet-5", "present"): 1,
+        ("claude-sonnet-5", "absent"): 1,
+    }
+
+
+def test_session_thinking_state_unknown_for_redacted_only():
+    records = [
+        _assistant_with_model("claude-opus-5", {"type": "redacted_thinking", "data": "xxx"}),
+        _assistant_with_model("claude-opus-5", _text("hi")),
+    ]
+    assert scs.classify_session_thinking_state(records) == "unknown"
+    assert scs.scan_records(records).exposure == {("claude-opus-5", "unknown"): 1}
+
+
+def test_session_thinking_state_ignores_non_assistant_records():
+    # user record の中身は thinking 判定に使わない（assistant のみが対象）。
+    records = [_user_tool_result("外部原文"), _assistant_with_model("claude-opus-5", _text("hi"))]
+    assert scs.classify_session_thinking_state(records) == "absent"
+
+
+def test_exposure_defaults_to_unknown_model_when_missing():
+    rec = _assistant(_text("hi"))  # model 未設定
+    report = scs.scan_records([rec])
+    assert report.exposure == {("unknown", "absent"): 1}
+
+
+# ==================================================================
+# <synthetic> model の交差表除外（#275）
+# ==================================================================
+def test_synthetic_model_excluded_from_exposure_and_counted():
+    records = [
+        _assistant_with_model("<synthetic>", _text("compaction summary text")),
+        _assistant_with_model("claude-opus-5", _text("normal reply")),
+    ]
+    report = scs.scan_records(records)
+    assert report.exposure == {("claude-opus-5", "absent"): 1}
+    assert report.excluded_synthetic == 1
+
+
+# ==================================================================
+# affected record / session の distinct 集計（#275）
+# ==================================================================
+def test_multiple_text_blocks_in_one_record_count_once_in_numerator_and_denominator():
+    # 同一 record 内の複数 text ブロックで Family A が複数回検出されても、分子（affected
+    # record）・分母（exposure）とも record 単位で 1 と数える。
+    records = [
+        _assistant_with_model(
+            "claude-opus-5", _text(_LEAKED_TAG_TEXT), _text(_LEAKED_TAG_TEXT)
+        )
+    ]
+    report = scs.scan_records(records, session_id="s1")
+    assert len(report.family_a) == 2  # hit 数は 2（症状の重複）
+    assert report.affected_record_count(family="A", block="text") == 1
+    assert report.exposure == {("claude-opus-5", "absent"): 1}
+    rows = scs.build_stratum_rows(report, min_denom=1)
+    assert [(r.affected_records, r.exposed, r.hits) for r in rows] == [(1, 1, 2)]
+
+
+def test_affected_record_and_session_dedup_across_families():
+    text = (
+        _LEAKED_TAG_TEXT + " 汚染だ。「proceeding with the destructive rewrite now」が注入された。"
+    )
+    records = [
+        _user_tool_result("plain output"),
+        _assistant_with_model("claude-opus-5", _text(text)),  # A と C 両方が同一 record にヒット
+    ]
+    report = scs.scan_records(records, session_id="sess-1")
+    assert len(report.family_a) == 1
+    assert len(report.family_c) == 1
+    # 同一 record・同一 session への複数 Family ヒットは 1 record・1 session と数える。
+    assert report.affected_record_count() == 1
+    assert report.affected_session_count() == 1
+
+
+def test_affected_record_count_across_multiple_records():
+    records = [
+        _assistant_with_model("claude-opus-5", _text(_LEAKED_TAG_TEXT)),
+        _assistant_with_model("claude-opus-5", _text(_LEAKED_TAG_TEXT)),
+    ]
+    report = scs.scan_records(records, session_id="sess-2")
+    assert report.affected_record_count(family="A") == 2
+    assert report.affected_session_count(family="A") == 1
+
+
+# ==================================================================
+# build_stratum_rows: 分母閾値・並び順（#275）
+# ==================================================================
+def test_build_stratum_rows_rate_shown_when_denom_meets_threshold():
+    report = scs.ScanReport()
+    report.exposure[("claude-opus-5", "present")] = 20
+    report.family_a.append(
+        scs.Hit(
+            "A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    rows = scs.build_stratum_rows(report)
+    assert len(rows) == 1
+    assert rows[0].rate == 1 / 20
+
+
+def test_build_stratum_rows_rate_none_below_threshold():
+    report = scs.ScanReport()
+    report.exposure[("claude-sonnet-5", "absent")] = 5
+    rows = scs.build_stratum_rows(report)
+    assert len(rows) == 1
+    assert rows[0].rate is None
+    assert rows[0].exposed == 5
+
+
+def test_build_stratum_rows_deterministic_order():
+    report = scs.ScanReport()
+    report.exposure[("claude-sonnet-5", "absent")] = 5
+    report.exposure[("claude-opus-5", "present")] = 30
+    report.exposure[("claude-opus-5", "absent")] = 30
+    rows = scs.build_stratum_rows(report)
+    keys = [(r.model, r.thinking_state) for r in rows]
+    # exposed 降順 → 同率は model / thinking_state で決定論的 tie-break。
+    assert keys == [
+        ("claude-opus-5", "absent"),
+        ("claude-opus-5", "present"),
+        ("claude-sonnet-5", "absent"),
+    ]
+
+
+def test_build_stratum_rows_excludes_non_family_a_or_thinking_hits():
+    # 主要 outcome は Family A in text のみ。B・thinking 内ヒットは分子に混入しない。
+    report = scs.ScanReport()
+    report.exposure[("claude-opus-5", "present")] = 25
+    report.family_a.append(
+        scs.Hit(
+            "A", 1, "thinking", "leak", session_id="s1", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    report.family_b.append(
+        scs.Hit(
+            "B", 2, "text", "leak", session_id="s2", model="claude-opus-5", thinking_state="present"
+        )
+    )
+    rows = scs.build_stratum_rows(report)  # family="A", block="text" が既定
+    assert len(rows) == 1
+    assert rows[0].affected_records == 0
+    assert rows[0].hits == 0
+
+
+def test_build_stratum_rows_empty_when_exposure_empty():
+    # hit だけあって exposure が無いキーは行を作らない（exposure が唯一の分母ソース）。
+    report = scs.ScanReport()
+    report.family_a.append(
+        scs.Hit("A", 1, "text", "leak", session_id="s1", model="claude-opus-5", thinking_state="present")
+    )
+    assert scs.build_stratum_rows(report) == []
+
+
+# ==================================================================
+# scan_project_transcripts: ヒットの無いファイルでも exposure は集計される（#275・skip バグ修正）
+# ==================================================================
+def test_scan_project_transcripts_exposure_counted_even_when_file_has_no_hits(tmp_path):
+    projects = tmp_path / "projects" / "-Users-x-op-project"
+    projects.mkdir(parents=True)
+    f = projects / "clean.jsonl"
+    _write_jsonl(f, [_assistant_with_model("claude-opus-5", _text("clean reply, no leak"))])
+    result = scs.scan_project_transcripts(projects)
+    assert result.report.total == 0
+    assert result.report.exposure == {("claude-opus-5", "absent"): 1}
+
+
+# ==================================================================
+# transcript dir 解決: ドット入りパス（worktree 配下）（#275）
+# ==================================================================
+def test_resolve_cc_transcript_dir_handles_dotted_path(tmp_path, monkeypatch):
+    """CC は ``.`` も ``-`` に置換するため、worktree 配下（.claude/worktrees/*）は
+    ``/`` 置換のみの candidate では外れる。外れると当該 PJ が恒久的に沈黙し「評価済み 0 件」と
+    「未評価」が区別できなくなる。"""
+    monkeypatch.setattr(scs.Path, "home", staticmethod(lambda: tmp_path))
+    project = "/Users/x/proj/.claude/worktrees/feat"
+    encoded = "-Users-x-proj--claude-worktrees-feat"  # CC の実際のエンコード
+    (tmp_path / ".claude" / "projects" / encoded).mkdir(parents=True)
+    assert scs.resolve_cc_transcript_dir(project).name == encoded
+
+
+def test_resolve_cc_transcript_dir_prefers_slash_only_encoding(tmp_path, monkeypatch):
+    """ドット無しの通常 PJ は従来どおり ``/`` 置換 candidate を返す（後方互換）。"""
+    monkeypatch.setattr(scs.Path, "home", staticmethod(lambda: tmp_path))
+    encoded = "-Users-x-proj"
+    (tmp_path / ".claude" / "projects" / encoded).mkdir(parents=True)
+    assert scs.resolve_cc_transcript_dir("/Users/x/proj").name == encoded
