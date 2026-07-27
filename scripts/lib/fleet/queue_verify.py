@@ -11,8 +11,15 @@ verify 待ちの定義:
   直近 evolve run で accept された提案のうち、まだ効果を検証していないもの。
   「直近 run」は両レーンの accept 記録のうち recorded_at/timestamp が最も新しいものが
   属する run_id（run_id を持たない旧 schema レコードは対象外＝黙って混ぜない）。
-  exposure（前回 evolve 以降の sessions 数）が 0 なら「適用したがまだ実タスクが走っていない」
-  ＝ awaiting_exposure、1 以上なら verifiable。
+  exposure = **その直近 run の記録時刻以降に開始した** distinct session 数（#267 C2）。
+  rolling 30日窓ではなく accept 記録時刻そのものを起点にする — rolling 窓だと accept 前の
+  古いセッションが即座に verifiable を成立させ、そのセッションが窓から抜けると
+  awaiting_exposure に逆戻りするラッチ崩壊があったため。exposure が 0 なら「適用したが
+  まだ実タスクが走っていない」＝ awaiting_exposure、1 以上なら verifiable。
+
+  verify 待ちは記録から ``VERIFY_PENDING_TTL_DAYS`` 日を超えたら read 時に失効させる
+  （新ストアは作らず forward write もしない。``weak_signals`` の ``is_effectively_expired``
+  ＝#89 と同じ read 時 age 導出の流儀）。
 
 決定論・LLM 非依存。
 """
@@ -60,28 +67,16 @@ def _parse_iso(s: Any) -> Optional[datetime]:
 # --- verify_pending 純関数 ----------------------------------------------------
 
 
-def compute_verify_pending(
-    *,
+def _collect_accepts(
     advisory_records: List[Dict[str, Any]],
     optimize_records: List[Dict[str, Any]],
-    exposure_sessions: int,
-) -> Dict[str, Any]:
-    """2レーンの accept 記録から verify 待ちを算出する（純関数・store I/O なし）。
+) -> List[tuple]:
+    """2レーンの accept 記録から ``(timestamp, run_id)`` タプルのリストを返す（共有 helper）。
 
-    advisory_records は ``advisory_decision_log.read_advisory_decisions`` の形
-    （``decision`` / ``run_id`` / ``recorded_at``）、optimize_records は
-    ``optimize_history_store.load_history`` の形（``human_accepted`` / ``run_id`` /
-    ``timestamp``）を想定する。
-
-    accept 記録（advisory は ``decision == "accept"``、optimize は
-    ``human_accepted is True``）のうち run_id を持つものだけを対象に、記録時刻が最も新しい
-    ものが属する run_id を「直近 run」とする。その run に属する accept 件数を ``accepted``
-    とし、``exposure_sessions`` と合わせて status を決める。
-
-    Returns:
-        ``{"run_id": str|None, "accepted": int, "exposure_sessions": int, "status": str}``
+    ``compute_verify_pending`` と ``latest_accept_event``（#267 C2 の exposure 起点計算）が
+    同じ抽出ロジックを共有するための単一ソース（片側だけ直す desync を防ぐ）。
     """
-    accepts: List[tuple] = []  # (timestamp, run_id)
+    accepts: List[tuple] = []
     for rec in advisory_records:
         if rec.get("decision") != "accept":
             continue
@@ -102,6 +97,52 @@ def compute_verify_pending(
         if ts is None:
             continue
         accepts.append((ts, rid))
+    return accepts
+
+
+def latest_accept_event(
+    advisory_records: List[Dict[str, Any]],
+    optimize_records: List[Dict[str, Any]],
+) -> Optional[tuple]:
+    """最新 accept イベント ``(recorded_at, run_id)`` を返す。accept 記録が無ければ None。
+
+    ``verify_pending_by_pj``（#267 C2）が exposure（distinct session 数）を数える起点時刻を
+    決めるのに使う。「直近 evolve に紐づく accept」からの経過ではなく「その accept 自体の
+    記録時刻」からの経過を数える必要があるため、``compute_verify_pending`` が内部で選ぶ
+    「直近 run」の判定と同じロジックを公開する。
+    """
+    accepts = _collect_accepts(advisory_records, optimize_records)
+    if not accepts:
+        return None
+    return max(accepts, key=lambda pair: pair[0])
+
+
+def compute_verify_pending(
+    *,
+    advisory_records: List[Dict[str, Any]],
+    optimize_records: List[Dict[str, Any]],
+    exposure_sessions: int,
+) -> Dict[str, Any]:
+    """2レーンの accept 記録から verify 待ちを算出する（純関数・store I/O なし）。
+
+    advisory_records は ``advisory_decision_log.read_advisory_decisions`` の形
+    （``decision`` / ``run_id`` / ``recorded_at``）、optimize_records は
+    ``optimize_history_store.load_history`` の形（``human_accepted`` / ``run_id`` /
+    ``timestamp``）を想定する。
+
+    accept 記録（advisory は ``decision == "accept"``、optimize は
+    ``human_accepted is True``）のうち run_id を持つものだけを対象に、記録時刻が最も新しい
+    ものが属する run_id を「直近 run」とする。その run に属する accept 件数を ``accepted``
+    とし、``exposure_sessions`` と合わせて status を決める。
+
+    ``exposure_sessions``（#267 C2）は呼び側（``verify_pending_by_pj``）が「直近 run の記録
+    時刻以降の distinct session 数」として算出済みの値を渡す想定（この関数自体は store I/O を
+    行わないため、値の算出方法には関知しない）。
+
+    Returns:
+        ``{"run_id": str|None, "accepted": int, "exposure_sessions": int, "status": str}``
+    """
+    accepts = _collect_accepts(advisory_records, optimize_records)
 
     if not accepts:
         return {
@@ -124,10 +165,42 @@ def compute_verify_pending(
     }
 
 
+def _exposure_sessions_since_latest_accept(
+    pj_slug: str,
+    advisory_records: List[Dict[str, Any]],
+    optimize_records: List[Dict[str, Any]],
+) -> int:
+    """最新 accept run の記録時刻**以降に開始した** distinct session 数を返す（#267 C2）。
+
+    旧実装は ``activity_since["sessions"]``（rolling 30日窓・queue 補助シグナル表示用）を
+    そのまま exposure に転用していた。この窓は「今から30日前」を起点にする独立した集計の
+    ため、accept 前のセッションまで即座に ``verifiable`` を成立させてしまい、その古い
+    セッションが30日窓から抜けると ``awaiting_exposure`` へ逆戻りするラッチ崩壊があった。
+    exposure は必ず「その accept 自体の記録時刻」を起点に数え直す。
+
+    accept 記録が無ければ 0（``compute_verify_pending`` は accepts が無ければ status=none で
+    ``exposure_sessions`` を参照しないため、この値は無害）。
+    """
+    latest = latest_accept_event(advisory_records, optimize_records)
+    if latest is None:
+        return 0
+    latest_ts, _run_id = latest
+
+    from .collectors import aggregate_sessions_by_project
+
+    try:
+        from pj_slug import canonical_pj_slug
+        slug_canon = canonical_pj_slug(pj_slug) or pj_slug
+    except Exception:
+        slug_canon = pj_slug
+
+    counts = aggregate_sessions_by_project(since=latest_ts)
+    return int(counts.get(slug_canon, 0) or 0)
+
+
 def verify_pending_by_pj(
     pj_slug: str,
     *,
-    exposure_sessions: int,
     advisory_records: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """pj_slug の verify 待ちを実ストア（advisory_decisions.jsonl / optimize_history）から読む。
@@ -141,6 +214,9 @@ def verify_pending_by_pj(
     で1回だけ読み、pj_slug で group by した結果を渡す経路用。PJ 数 × ストア全件走査だった
     O(PJ数 × ログ全体) を解消する）。未指定なら従来通り自前で
     ``read_advisory_decisions(pj_slug)`` を読む（後方互換・単体利用時の薄い呼び出し口）。
+
+    exposure（#267 C2）は呼び出し元から受け取らず、最新 accept run の記録時刻以降の
+    distinct session 数として内部で算出する（``_exposure_sessions_since_latest_accept``）。
     """
     from optimize_history_store import load_history
 
@@ -148,9 +224,14 @@ def verify_pending_by_pj(
         from advisory_decision_log import read_advisory_decisions
         advisory_records = read_advisory_decisions(pj_slug)
 
+    optimize_records = load_history(pj_slug)
+    exposure_sessions = _exposure_sessions_since_latest_accept(
+        pj_slug, advisory_records, optimize_records
+    )
+
     return compute_verify_pending(
         advisory_records=advisory_records,
-        optimize_records=load_history(pj_slug),
+        optimize_records=optimize_records,
         exposure_sessions=exposure_sessions,
     )
 
@@ -169,6 +250,10 @@ def attach_verify_pending(
     ``canonicalize`` は呼び側（``fleet.queue._canonical_slug``）の rename fold 関数を注入する
     （queue_verify → queue への逆依存を避けるための関数注入。``fleet.queue`` は既にこの
     モジュールを import しているため、モジュールレベルの逆 import は循環になる）。
+
+    exposure（#267 C2）は ``m["activity_since"]["sessions"]``（rolling 30日窓・queue 補助
+    シグナル表示用に別途残る）はもう使わない。``verify_pending_by_pj`` が最新 accept run の
+    記録時刻を起点に個別に数え直す（``_exposure_sessions_since_latest_accept``）。
     """
     from advisory_decision_log import read_advisory_decisions
 
@@ -180,11 +265,9 @@ def attach_verify_pending(
         advisory_by_pj.setdefault(rec_slug, []).append(rec)
 
     for m in materials:
-        sessions = int((m.get("activity_since") or {}).get("sessions", 0) or 0)
         slug_canon = canonicalize(m["pj_slug"])
         m["verify_pending"] = verify_pending_by_pj(
             m["pj_slug"],
-            exposure_sessions=sessions,
             advisory_records=advisory_by_pj.get(slug_canon, []),
         )
 

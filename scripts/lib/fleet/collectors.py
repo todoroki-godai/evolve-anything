@@ -187,6 +187,7 @@ def aggregate_sessions_by_project(
     window_days: int = _SUBAGENTS_DEFAULT_WINDOW_DAYS,
     now: datetime | None = None,
     canonical: Path | None = None,
+    since: datetime | None = None,
 ) -> dict[str, int]:
     """sessions を session_store union read で読み、project 別に **distinct session 数** を返す（#85）。
 
@@ -205,12 +206,17 @@ def aggregate_sessions_by_project(
       ``outcome_metrics._normalize_pj``（path→worktree 安全 slug→canonical fold の単一ソース・
       fanout_cost と共有）で slug 化する。空 / 非 str / 解決不能は ``(unknown)`` に分類する。
       import 失敗時は basename 素通し。
+    - ``since``（#267 C2）: 指定時は ``window_days`` より優先し、その時刻ちょうどのカットオフを
+      使う（``now - window_days`` を計算しない）。fleet queue の exposure（前回 accept run 以降の
+      distinct session 数）は rolling 30 日窓と意味が違う — 「直近 evolve に紐づく accept」からの
+      経過ではなく「その accept 自体の記録時刻」からの経過を数える必要があるため。未指定は従来の
+      ``now - window_days`` 挙動のまま（後方互換）。
 
     Returns:
         {project_slug: distinct_session_count}。キーに ``(unknown)`` も含まれ得る。
     """
     now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=window_days)
+    cutoff = since if since is not None else now - timedelta(days=window_days)
 
     import session_store
 

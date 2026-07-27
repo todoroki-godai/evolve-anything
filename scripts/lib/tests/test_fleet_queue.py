@@ -868,6 +868,42 @@ class TestAggregateSessions:
         now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
         assert fc.aggregate_sessions_by_project(canonical=canonical, now=now) == {}
 
+    def test_since_overrides_window_days(self, tmp_path):
+        """C2: since 指定時は window_days より優先し、その時刻以降のみ数える。"""
+        import datetime as _dt
+
+        canonical = self._canonical(tmp_path)
+        self._write(
+            canonical,
+            [
+                _sess("before", "2026-06-10T00:00:00+00:00", "/p/alpha"),  # since より前
+                _sess("after", "2026-06-20T00:00:00+00:00", "/p/alpha"),  # since より後
+            ],
+        )
+        since = _dt.datetime(2026, 6, 15, tzinfo=_dt.timezone.utc)
+        # window_days=30・now=2026-06-25 だけなら両方窓内だが、since が優先されるべき。
+        now = _dt.datetime(2026, 6, 25, tzinfo=_dt.timezone.utc)
+        counts = fc.aggregate_sessions_by_project(
+            canonical=canonical, now=now, window_days=30, since=since
+        )
+        assert counts.get("alpha") == 1  # after のみ
+
+    def test_since_none_falls_back_to_window_days(self, tmp_path):
+        """C2: since 未指定は従来の window_days 挙動のまま（後方互換）。"""
+        canonical = self._canonical(tmp_path)
+        self._write(
+            canonical,
+            [
+                _sess("recent", "2026-06-24T00:00:00+00:00", "/p/alpha"),
+                _sess("old", "2026-01-01T00:00:00+00:00", "/p/alpha"),  # 窓外
+            ],
+        )
+        now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
+        counts = fc.aggregate_sessions_by_project(
+            canonical=canonical, now=now, window_days=30, since=None
+        )
+        assert counts.get("alpha") == 1  # recent のみ（旧挙動と同じ）
+
 
 # --- collect_untracked_materials（material 母集団まで母数拡張・#86）------------
 

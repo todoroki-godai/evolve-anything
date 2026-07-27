@@ -140,6 +140,43 @@ class TestLatestRunIdTimestampParsing:
         assert out["accepted"] == 1
 
 
+class TestExposureSessionsSinceLatestAccept:
+    """#267 C2: exposure は最新 accept run の記録時刻を since としてセッション数を数える。"""
+
+    def test_since_kwarg_equals_latest_accept_timestamp(self, monkeypatch):
+        received = {}
+
+        def _fake_sessions(*, since=None, **kwargs):
+            received["since"] = since
+            return {"alpha": 3}
+
+        from fleet import collectors as fcol
+        monkeypatch.setattr(fcol, "aggregate_sessions_by_project", _fake_sessions)
+
+        advisory_records = [
+            _adv("accept", "r1", "2026-07-10T00:00:00+00:00"),
+        ]
+        exposure = qv._exposure_sessions_since_latest_accept("alpha", advisory_records, [])
+
+        assert exposure == 3
+        assert received["since"] == qv._parse_iso("2026-07-10T00:00:00+00:00")
+
+    def test_no_accept_records_skips_session_query(self, monkeypatch):
+        """accept 記録が無ければ session store すら読まない（無駄クエリを避ける）。"""
+        called = []
+
+        def _fake_sessions(**kwargs):
+            called.append(kwargs)
+            return {}
+
+        from fleet import collectors as fcol
+        monkeypatch.setattr(fcol, "aggregate_sessions_by_project", _fake_sessions)
+
+        exposure = qv._exposure_sessions_since_latest_accept("alpha", [], [])
+        assert exposure == 0
+        assert called == []
+
+
 class TestParseIsoNaiveLocal:
     """#267 C3: naive（tz 無し）はローカル時刻として解釈する（UTC 決め打ちはしない）。
 
@@ -314,9 +351,17 @@ class TestAttachVerifyPending:
 
         import advisory_decision_log
         import optimize_history_store
+        from fleet import collectors as fcol
 
         monkeypatch.setattr(advisory_decision_log, "read_advisory_decisions", _fake_read)
         monkeypatch.setattr(optimize_history_store, "load_history", lambda slug: [])
+        # #267 C2: exposure は accept 記録時刻以降の session 数から算出する（since 窓クエリ）。
+        # alpha=露出あり(verifiable) / beta=露出なし(awaiting_exposure) を再現する。
+        monkeypatch.setattr(
+            fcol,
+            "aggregate_sessions_by_project",
+            lambda **kwargs: {"alpha": 2, "beta": 0},
+        )
 
         materials = [
             {"pj_slug": "alpha", "activity_since": {"sessions": 1}},
@@ -345,9 +390,15 @@ class TestAttachVerifyPending:
 
         import advisory_decision_log
         import optimize_history_store
+        from fleet import collectors as fcol
 
         monkeypatch.setattr(advisory_decision_log, "read_advisory_decisions", _fake_read)
         monkeypatch.setattr(optimize_history_store, "load_history", lambda slug: [])
+        monkeypatch.setattr(
+            fcol,
+            "aggregate_sessions_by_project",
+            lambda **kwargs: {"evolve-anything": 1},
+        )
 
         materials = [{"pj_slug": "evolve-anything", "activity_since": {"sessions": 1}}]
         qv.attach_verify_pending(
