@@ -18,10 +18,8 @@ optimize_history へ冪等記録）。母集団は「混合でなく増量」を
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
-import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +31,17 @@ if str(_LIB) not in sys.path:
 
 import optimize_history_store as _store  # noqa: E402
 from rl_common.file_lock import atomic_write_text, file_lock  # noqa: E402
+
+# identity 関数は別 module（#287）。ここでは名前を re-export し、既存の
+# `evolve_decisions._proposal_id` 参照（テスト含む）をそのまま動かす。
+from evolve_decision_ids import (  # noqa: E402,F401
+    _decision_event_id,
+    _legacy_run_id,
+    _new_run_id,
+    _proposal_id,
+    _sha256,
+    _tracked_path,
+)
 
 DATA_DIR = _store.DATA_DIR
 QUEUE_ROOT = DATA_DIR / "evolve_decisions"
@@ -331,63 +340,6 @@ def undrained_applied(slug: str) -> List[Dict[str, Any]]:
 
 
 # ─── helpers ───────────────────────────────────────────────────────────────
-
-
-def _sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _new_run_id() -> str:
-    return "evrun_" + uuid.uuid4().hex
-
-
-def _legacy_run_id(pending: List[Dict[str, Any]]) -> str:
-    """旧 marker を安定した synthetic run として扱う。"""
-    identity = "\n".join(sorted(str(entry.get("id", "")) for entry in pending))
-    return "legacy_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
-
-
-def _proposal_id(skill_path: str, before_sha: str) -> str:
-    """**提案**の content identity = (対象パス, 適用前の内容)。
-
-    「同じ提案か」だけを表す。「同じ判断イベントか」は別キー（``_decision_event_id``）で
-    表す — 1つの ID に両方を兼ねさせると必ずどちらかが壊れる（#279→#286→#290 で
-    3回踏んだ）:
-
-    - **run_id を混ぜてはいけない**（#279）: ID が run ごとに変わると判断イベントも
-      run 跨ぎで別物になり、1回の apply が optimize_history に N 重記録される。
-    - **パス単独にしてもいけない**（#286）: 判断イベントキーが恒久キーになり、同じ
-      スキルの2回目以降の accept が冪等 dedup で捨てられる（生涯1件しか母集団に入らない）。
-    - **before_sha を混ぜても、これ単独では足りない**（#290）: 対象の内容が過去の状態へ
-      循環すると過去の ID が再利用されるため、判断イベントキーが再び衝突する。
-    """
-    return "evdiff_" + hashlib.sha1(
-        f"{skill_path}\n{before_sha}".encode("utf-8")
-    ).hexdigest()[:12]
-
-
-def _decision_event_id(proposal_id: str, kind: str, after_content: str) -> str:
-    """**判断イベント**の identity = (提案, 判断種別, 判断時点の内容)（#290）。
-
-    ``record_evolve_diff_decision`` の冪等 dedup キー。提案 ID と分離することで、
-
-    - 同じ apply を二重 drain しても after が同じ＝同キー（冪等は保つ）
-    - 内容が循環して提案 ID が再利用されても after が違う＝別キー（欠落しない）
-
-    の両方が成り立つ。提案 ID 側の identity 設計を変えても、この分離がある限り
-    判断イベントの冪等性は巻き添えにならない。
-    """
-    return f"{proposal_id}_{kind}_{_sha256(after_content)[:12]}"
-
-
-def _tracked_path(entry: Dict[str, Any]) -> Optional[str]:
-    """entry が accept 判定に使うファイルパス（skill 提案 / advisory 提案の単一ソース）。
-
-    advisory は対象が SKILL.md とは限らない（pytest.ini 等）ので ``target_path`` を持つ。
-    パースを2箇所に分けると片側だけ直して desync する（pitfall_copied_parse_convention_partial_fix）
-    ため、ingest と undrained_applied はこの1関数を共有する。
-    """
-    return entry.get("target_path") or entry.get("skill_path")
 
 
 def _collect_advisory_proposals(project_dir: Path) -> List[Any]:
