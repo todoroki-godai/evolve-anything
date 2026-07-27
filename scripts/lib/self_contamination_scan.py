@@ -695,11 +695,18 @@ def resolve_cc_transcript_dir(project_dir) -> Path:
     CC は projects dir を cwd 絶対パスの ``/`` → ``-`` 置換で持つ。存在する candidate
     （先頭 ``-`` 有無）を優先し、無ければ primary candidate（非存在 Path）を返す。
     resolve_cc_memory_dir と同じエンコード規約（#18/#19）。
+
+    **ドット入りパス（#275）**: CC は ``.`` も ``-`` に置換する（実測: ``…/evolve-anything/
+    .claude/worktrees/feedback`` → ``…-evolve-anything--claude-worktrees-feedback``）。``/`` だけ
+    置換した candidate は worktree 配下（``.claude/worktrees/*``）で必ず外れるため、ドットも
+    置換した candidate を fallback として試す。これを欠くと当該 PJ が「transcript dir 不在」
+    として恒久的に沈黙し、**評価済み 0 件と未評価が区別できなくなる**。
     """
     base = Path.home() / ".claude" / "projects"
     target = Path(project_dir)
     encoded = str(target).replace("/", "-")
-    for candidate in (encoded, encoded.lstrip("-")):
+    dotted = encoded.replace(".", "-")
+    for candidate in (encoded, encoded.lstrip("-"), dotted, dotted.lstrip("-")):
         d = base / candidate
         if d.is_dir():
             return d

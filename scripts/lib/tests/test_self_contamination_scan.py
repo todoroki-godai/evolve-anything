@@ -549,6 +549,22 @@ def test_synthetic_model_excluded_from_exposure_and_counted():
 # ==================================================================
 # affected record / session の distinct 集計（#275）
 # ==================================================================
+def test_multiple_text_blocks_in_one_record_count_once_in_numerator_and_denominator():
+    # 同一 record 内の複数 text ブロックで Family A が複数回検出されても、分子（affected
+    # record）・分母（exposure）とも record 単位で 1 と数える。
+    records = [
+        _assistant_with_model(
+            "claude-opus-5", _text(_LEAKED_TAG_TEXT), _text(_LEAKED_TAG_TEXT)
+        )
+    ]
+    report = scs.scan_records(records, session_id="s1")
+    assert len(report.family_a) == 2  # hit 数は 2（症状の重複）
+    assert report.affected_record_count(family="A", block="text") == 1
+    assert report.exposure == {("claude-opus-5", "absent"): 1}
+    rows = scs.build_stratum_rows(report, min_denom=1)
+    assert [(r.affected_records, r.exposed, r.hits) for r in rows] == [(1, 1, 2)]
+
+
 def test_affected_record_and_session_dedup_across_families():
     text = (
         _LEAKED_TAG_TEXT + " 汚染だ。「proceeding with the destructive rewrite now」が注入された。"
@@ -655,3 +671,25 @@ def test_scan_project_transcripts_exposure_counted_even_when_file_has_no_hits(tm
     result = scs.scan_project_transcripts(projects)
     assert result.report.total == 0
     assert result.report.exposure == {("claude-opus-5", "absent"): 1}
+
+
+# ==================================================================
+# transcript dir 解決: ドット入りパス（worktree 配下）（#275）
+# ==================================================================
+def test_resolve_cc_transcript_dir_handles_dotted_path(tmp_path, monkeypatch):
+    """CC は ``.`` も ``-`` に置換するため、worktree 配下（.claude/worktrees/*）は
+    ``/`` 置換のみの candidate では外れる。外れると当該 PJ が恒久的に沈黙し「評価済み 0 件」と
+    「未評価」が区別できなくなる。"""
+    monkeypatch.setattr(scs.Path, "home", staticmethod(lambda: tmp_path))
+    project = "/Users/x/proj/.claude/worktrees/feat"
+    encoded = "-Users-x-proj--claude-worktrees-feat"  # CC の実際のエンコード
+    (tmp_path / ".claude" / "projects" / encoded).mkdir(parents=True)
+    assert scs.resolve_cc_transcript_dir(project).name == encoded
+
+
+def test_resolve_cc_transcript_dir_prefers_slash_only_encoding(tmp_path, monkeypatch):
+    """ドット無しの通常 PJ は従来どおり ``/`` 置換 candidate を返す（後方互換）。"""
+    monkeypatch.setattr(scs.Path, "home", staticmethod(lambda: tmp_path))
+    encoded = "-Users-x-proj"
+    (tmp_path / ".claude" / "projects" / encoded).mkdir(parents=True)
+    assert scs.resolve_cc_transcript_dir("/Users/x/proj").name == encoded
