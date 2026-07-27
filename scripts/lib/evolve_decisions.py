@@ -200,9 +200,11 @@ def write_pending_marker(
     run_id = run_id or _legacy_run_id(pending)
     superseded_ids = {entry.get("id") for entry in pending if entry.get("id")}
     # パス単位 supersede は #279 のパス単独 ID で書かれた移行期 entry も自然に片付ける
-    # （旧 ID は新 ID と一致しないが skill_path は同じ）。
+    # （旧 ID は新 ID と一致しないが対象パスは同じ）。判定は accept 判定と同じ
+    # `_tracked_path` を使う（advisory は対象が pytest.ini 等で skill_path を持たない。
+    # ここだけ skill_path 直読みにすると advisory の residue が素通りする）。
     superseded_paths = {
-        entry["skill_path"] for entry in pending if entry.get("skill_path")
+        path for path in (_tracked_path(entry) for entry in pending) if path
     }
     with _marker_lock(slug):
         current = _read_pending_marker_file(slug) or {}
@@ -214,7 +216,7 @@ def write_pending_marker(
                 entry
                 for entry in (run.get("pending") or [])
                 if entry.get("id") not in superseded_ids
-                and entry.get("skill_path") not in superseded_paths
+                and _tracked_path(entry) not in superseded_paths
             ]
             if kept:
                 runs.append({**run, "pending": kept})

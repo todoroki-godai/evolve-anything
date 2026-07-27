@@ -270,6 +270,67 @@ def test_later_decision_supersedes_earlier_for_same_proposal(isolated):
     assert records[0]["decision"] == "accept"
 
 
+def test_reemit_with_changed_evidence_records_single_accept(isolated, project):
+    """evidence が変わって advisory ID が変わっても、1回の修正は accept 1件（#290-3）。
+
+    advisory の提案 ID は evidence 込みなので、同じ対象でも evidence（未収集 dir の集合等）が
+    変わると別 ID になる。marker supersede が ID 一致だけだと同じ target の pending が
+    複数世代 residue し、1回直しただけで全部 accept 判定されて採用率が過大計上される。
+    """
+    skill = project / ".claude" / "skills" / "broken-skill" / "SKILL.md"
+    first = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
+    # 同じファイルの別の壊れ方 = YAML エラー文が変わる = evidence が変わる = 別 ID
+    skill.write_text(_BROKEN_SKILL.replace("[unclosed", "*undefined_alias"), encoding="utf-8")
+    second = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
+    assert (
+        _advisory_entries(first["pending"])[0]["id"]
+        != _advisory_entries(second["pending"])[0]["id"]
+    ), "前提: evidence が変われば advisory ID も変わる"
+
+    marker = ed.read_pending_marker("pj")
+    assert len(_advisory_entries(marker["pending"])) == 1
+
+    skill.write_text(_FIXED_SKILL, encoding="utf-8")
+    ed.drain_pending(slug="pj")
+
+    assert len(adl.read_advisory_decisions(slug="pj")) == 1
+
+
+def test_legacy_store_does_not_override_newer_canonical_decision(isolated, tmp_path, monkeypatch):
+    """union read の後段（legacy）にある**古い**判断が canonical の新しい判断を上書きしない（#290-4）。"""
+    canonical = tmp_path / "canonical"
+    legacy = tmp_path / "legacy"
+    for d in (canonical, legacy):
+        d.mkdir()
+    monkeypatch.setattr(
+        rl_common, "iter_read_data_dirs", lambda: [canonical, legacy]
+    )
+
+    def _write(path, decision, recorded_at):
+        path.write_text(
+            json.dumps(
+                {
+                    "pj_slug": "pj",
+                    "proposal_id": "adv_1",
+                    "detector_id": "invalid_frontmatter",
+                    "target_path": "a/SKILL.md",
+                    "decision": decision,
+                    "recorded_at": recorded_at,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    _write(canonical / adl.STORE_NAME, "accept", "2026-07-27T10:00:00+00:00")
+    _write(legacy / adl.STORE_NAME, "reject", "2026-01-01T00:00:00+00:00")
+
+    records = adl.read_advisory_decisions(slug="pj")
+
+    assert len(records) == 1
+    assert records[0]["decision"] == "accept"
+
+
 def test_store_is_declared_active_in_registry():
     import store_registry
 

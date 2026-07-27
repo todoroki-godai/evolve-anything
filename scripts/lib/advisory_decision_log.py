@@ -12,7 +12,9 @@ audit の advisory detector は「ファイルが変わったか」で accept �
 行い、audit の observability section が読む（write-only ストアを作らない）。
 
 冪等性は read 時 collapse で担保する（``(pj_slug, proposal_id)`` の last-write-wins）。
-同じ提案を複数回 drain しても最後の判断だけが残る。
+同じ提案を複数回 drain しても最後の判断だけが残る。「最後」は **``recorded_at`` で決める**
+のであって読み出し順ではない（#290-4）。union read は canonical 先頭で legacy が後に来るため、
+単純な後勝ちにすると legacy の**古い** reject が canonical の**新しい** accept を上書きする。
 
 決定論・LLM 非依存。
 """
@@ -67,21 +69,45 @@ def record_advisory_decision(
     )
 
 
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _recorded_at(rec: Dict[str, Any]) -> datetime:
+    """``recorded_at`` を比較可能な aware datetime にする（欠損・不正は最古扱い）。
+
+    文字列の辞書順比較はしない（``Z`` 終端と ``+00:00`` 終端で同一時刻が不一致になる
+    ISO8601 の罠）。naive は UTC とみなす。
+    """
+    raw = rec.get("recorded_at")
+    if not raw:
+        return _EPOCH
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return _EPOCH
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
 def read_advisory_decisions(slug: Optional[str] = None) -> List[Dict[str, Any]]:
-    """当 PJ の判断を read 時 collapse して返す（``proposal_id`` 単位 last-write-wins）。
+    """当 PJ の判断を read 時 collapse して返す（``(pj_slug, proposal_id)`` 単位）。
 
     read は寛容 union（canonical + legacy + plugins-data）。壊れた行は黙って捨てる
     （観測レーンなので1行の破損で全体を失わせない）。
+
+    勝者は ``recorded_at`` の新しい方（#290-4）。同時刻なら canonical 側（union の先頭
+    パス）を優先し、同一ファイル内の同時刻なら後の行（append 順＝時系列）を採る。
+    key に ``pj_slug`` を含めるのは ``slug=None``（全 PJ 読み）で別 PJ の同名提案が
+    互いを消さないようにするため。
     """
-    collapsed: Dict[str, Dict[str, Any]] = {}
-    for path in iter_read_store_paths(STORE_NAME):
+    best: Dict[tuple, tuple] = {}
+    for path_rank, path in enumerate(iter_read_store_paths(STORE_NAME)):
         if not path.exists():
             continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:
             continue
-        for line in lines:
+        for line_no, line in enumerate(lines):
             line = line.strip()
             if not line:
                 continue
@@ -96,8 +122,11 @@ def read_advisory_decisions(slug: Optional[str] = None) -> List[Dict[str, Any]]:
             pid = rec.get("proposal_id")
             if not pid:
                 continue
-            collapsed[str(pid)] = rec
-    return [collapsed[key] for key in sorted(collapsed)]
+            key = (str(rec.get("pj_slug") or ""), str(pid))
+            rank = (_recorded_at(rec), -path_rank, line_no)
+            if key not in best or rank > best[key][0]:
+                best[key] = (rank, rec)
+    return [best[key][1] for key in sorted(best)]
 
 
 def summarize_by_detector(
