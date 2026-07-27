@@ -99,26 +99,47 @@ def select_evolve_queue(
     呼び側 ``build_queue_result`` が store から読んで載せる）を持つ場合、accepted > 0 なら
     ``reason`` にその件数を追記し、返り値にも ``verify_pending`` をそのまま含める（#267
     Sprint 1）。verify_pending が無い/accepted=0 の PJ は従来通りの reason 文字列のまま。
+
+    #267 C1: ``verify_pending["status"]`` が ``"none"`` 以外（verifiable/awaiting_exposure）
+    の PJ は material_count が閾値未満でも queue に含める。evolve 直後（material がリセット
+    された直後）こそ verify 待ちが最も可視化されるべき瞬間であり、閾値フィルタだけだとその
+    瞬間に queue から消えてしまうため。閾値未満で昇格した item は reason の語順を反転し
+    verify 待ちを主節にする（``format_verify_pending_promoted_reason``）。ソート順は
+    material_count 降順のまま変えない（verify 昇格 item は定義上 material_count が低いので
+    自然に下位へ並ぶ — 「まだ実行してよい」の目印であり緊急度の逆転を意味しないため、
+    特別扱いの並び替えはしない）。
     """
-    from .queue_verify import format_verify_pending_suffix
+    from .queue_verify import (
+        STATUS_NONE,
+        format_verify_pending_promoted_reason,
+        format_verify_pending_suffix,
+    )
 
     selected: List[Dict[str, Any]] = []
     for m in pj_materials:
         weak = int(m.get("weak_unprocessed", 0) or 0)
         corr = int(m.get("new_corrections", 0) or 0)
         count = weak + corr
-        if count < threshold:
+        verify_pending = m.get("verify_pending")
+        vp_status = (verify_pending or {}).get("status", STATUS_NONE)
+        verify_promoted = count < threshold and vp_status != STATUS_NONE
+        if count < threshold and not verify_promoted:
             continue
         last_evolve = m.get("last_evolve_at")
-        # #92→A: 初回（last_evolve_at=None）は corr が「前回 evolve 以降の増分」でなく全件。
-        # 『new corr』だと never と矛盾して見える。`未 drain` は emit→drain 2 相の内部
-        # plumbing 用語なので、CLI 直読みの利用者向けには `初回・全件` の業務語で明示する。
-        if last_evolve is None:
-            reason = f"weak={weak} + corr={corr}（初回・全件）>= {threshold}"
+        if verify_promoted:
+            reason = format_verify_pending_promoted_reason(
+                verify_pending, material_count=count, threshold=threshold
+            )
         else:
-            reason = f"weak={weak} + new corr={corr} >= {threshold}"
-        verify_pending = m.get("verify_pending")
-        reason += format_verify_pending_suffix(verify_pending)
+            # #92→A: 初回（last_evolve_at=None）は corr が「前回 evolve 以降の増分」でなく
+            # 全件。『new corr』だと never と矛盾して見える。`未 drain` は emit→drain 2 相の
+            # 内部 plumbing 用語なので、CLI 直読みの利用者向けには `初回・全件` の業務語で
+            # 明示する。
+            if last_evolve is None:
+                reason = f"weak={weak} + corr={corr}（初回・全件）>= {threshold}"
+            else:
+                reason = f"weak={weak} + new corr={corr} >= {threshold}"
+            reason += format_verify_pending_suffix(verify_pending)
         selected.append(
             {
                 "pj_slug": m["pj_slug"],

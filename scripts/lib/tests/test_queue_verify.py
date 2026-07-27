@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 _test_dir = Path(__file__).resolve().parent
@@ -85,6 +85,67 @@ class TestComputeVerifyPendingStatus:
         assert out["accepted"] == 2
         assert out["run_id"] == "run3"
         assert out["status"] == "verifiable"
+
+
+class TestVerifyPendingTtl:
+    """#267 I1: verify 待ちは記録から VERIFY_PENDING_TTL_DAYS(=14) 日で read 時失効する。"""
+
+    def test_ttl_constant_is_14_days(self):
+        assert qv.VERIFY_PENDING_TTL_DAYS == 14
+
+    def test_expired_after_ttl_is_none(self):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+        old = (now - timedelta(days=15)).isoformat()
+        out = qv.compute_verify_pending(
+            advisory_records=[_adv("accept", "run1", old)],
+            optimize_records=[],
+            exposure_sessions=3,
+            now=now,
+        )
+        assert out["status"] == "none"
+        assert out["accepted"] == 0
+
+    def test_within_ttl_is_not_expired(self):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+        recent = (now - timedelta(days=13)).isoformat()
+        out = qv.compute_verify_pending(
+            advisory_records=[_adv("accept", "run1", recent)],
+            optimize_records=[],
+            exposure_sessions=3,
+            now=now,
+        )
+        assert out["status"] == "verifiable"
+        assert out["accepted"] == 1
+
+    def test_exactly_at_ttl_boundary_is_expired(self):
+        """境界（ちょうど14日）は失効側に倒す（14日『以内』でなく『未満』が有効）。"""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+        boundary = (now - timedelta(days=qv.VERIFY_PENDING_TTL_DAYS)).isoformat()
+        out = qv.compute_verify_pending(
+            advisory_records=[_adv("accept", "run1", boundary)],
+            optimize_records=[],
+            exposure_sessions=3,
+            now=now,
+        )
+        assert out["status"] == "none"
+
+    def test_default_now_is_current_time(self):
+        """now 省略時は datetime.now(timezone.utc) が既定（テスト容易性のための注入は任意）。"""
+        from datetime import datetime, timezone
+
+        just_now = datetime.now(timezone.utc).isoformat()
+        out = qv.compute_verify_pending(
+            advisory_records=[_adv("accept", "run1", just_now)],
+            optimize_records=[],
+            exposure_sessions=1,
+        )
+        assert out["status"] == "verifiable"  # 未失効（記録時刻がテスト実行時刻そのもの）
 
 
 class TestLatestRunIdTimestampParsing:
@@ -331,6 +392,9 @@ class TestAttachVerifyPending:
     def test_reads_advisory_store_exactly_once_for_all_materials(self, monkeypatch):
         """PJ 数に依らず read_advisory_decisions(None) は1回だけ呼ぶ（O(PJ数×ログ全体)の解消）。"""
         calls = []
+        # #267 I1: TTL(14日) 判定が実時刻基準で入るため、fixture は「今」を起点にする
+        # （固定日付だとテスト実行日によって TTL 失効し status="none" に化ける）。
+        recent = datetime.now(timezone.utc).isoformat()
 
         def _fake_read(slug=None):
             calls.append(slug)
@@ -339,13 +403,13 @@ class TestAttachVerifyPending:
                     "pj_slug": "alpha",
                     "decision": "accept",
                     "run_id": "r1",
-                    "recorded_at": "2026-07-01T00:00:00+00:00",
+                    "recorded_at": recent,
                 },
                 {
                     "pj_slug": "beta",
                     "decision": "accept",
                     "run_id": "r2",
-                    "recorded_at": "2026-07-02T00:00:00+00:00",
+                    "recorded_at": recent,
                 },
             ]
 
@@ -377,6 +441,7 @@ class TestAttachVerifyPending:
 
     def test_canonicalize_folds_alias_records_into_current_slug(self, monkeypatch):
         """advisory レコードが旧 slug タグでも canonicalize で現 slug の group に畳む。"""
+        recent = datetime.now(timezone.utc).isoformat()
 
         def _fake_read(slug=None):
             return [
@@ -384,7 +449,7 @@ class TestAttachVerifyPending:
                     "pj_slug": "rl-anything",  # 旧 slug のまま残る legacy レコード
                     "decision": "accept",
                     "run_id": "r1",
-                    "recorded_at": "2026-07-01T00:00:00+00:00",
+                    "recorded_at": recent,
                 }
             ]
 

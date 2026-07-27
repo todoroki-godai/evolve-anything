@@ -154,6 +154,82 @@ class TestSelectEvolveQueue:
         assert "verify 待ち 1 件" in out[0]["reason"]
         assert "露出セッションなし" in out[0]["reason"]
 
+    # --- C1: verify 待ちは material 閾値未満でも queue に含める ----------------
+
+    def test_below_threshold_with_verify_pending_verifiable_is_included(self):
+        """#267 C1: material が閾値未満でも verify 待ち（verifiable）なら queue に出す。"""
+        mats = [_material("a", weak=1, corr=0, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 2,
+            "exposure_sessions": 3,
+            "status": "verifiable",
+        }
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["a"]
+        assert out[0]["material_count"] == 1
+        assert "verify 待ち 2 件（前回 accept・検証可能）" in out[0]["reason"]
+        assert "material=1 < 5" in out[0]["reason"]
+
+    def test_below_threshold_with_verify_pending_awaiting_exposure_is_included(self):
+        """#267 C1: awaiting_exposure でも none でなければ昇格させる。"""
+        mats = [_material("a", weak=0, corr=0, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 1,
+            "exposure_sessions": 0,
+            "status": "awaiting_exposure",
+        }
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["a"]
+        assert "露出セッションなし" in out[0]["reason"]
+        assert "material=0 < 5" in out[0]["reason"]
+
+    def test_below_threshold_with_verify_pending_none_is_still_excluded(self):
+        """verify_pending の status が none（accept 記録なし/失効）なら従来通り除外する。"""
+        mats = [_material("a", weak=1, corr=0, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": None,
+            "accepted": 0,
+            "exposure_sessions": 0,
+            "status": "none",
+        }
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert out == []
+
+    def test_below_threshold_without_verify_pending_key_is_still_excluded(self):
+        """verify_pending キー自体が無い（後方互換）material は従来通り除外する。"""
+        mats = [_material("a", weak=1, corr=0, last="2026-06-01T00:00:00+00:00")]
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert out == []
+
+    def test_verify_promoted_items_sort_by_material_count_like_others(self):
+        """ソート順は material_count 降順のまま（verify 昇格でも特別扱いしない）。"""
+        mats = [
+            _material("low", weak=1, corr=0, last="2026-06-01T00:00:00+00:00"),
+            _material("high", weak=10, corr=0, last="2026-06-01T00:00:00+00:00"),
+        ]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 1,
+            "exposure_sessions": 1,
+            "status": "verifiable",
+        }
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["high", "low"]
+
+    def test_at_or_above_threshold_with_verify_pending_uses_normal_reason(self):
+        """閾値以上は通常の material 主体 reason のまま（C1 の語順反転が適用されない）。"""
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 2,
+            "exposure_sessions": 3,
+            "status": "verifiable",
+        }
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"].startswith("weak=7 + new corr=2 >= 3")
+
 
 # --- weak_signals 未処理カウント（PJ 別） -------------------------------------
 

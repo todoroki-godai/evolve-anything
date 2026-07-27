@@ -25,7 +25,7 @@ verify 待ちの定義:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 STATUS_NONE = "none"
@@ -35,6 +35,11 @@ STATUS_VERIFIABLE = "verifiable"
 QUEUE_STATUS_READY = "READY"
 QUEUE_STATUS_SETUP_REQUIRED = "SETUP_REQUIRED"
 QUEUE_STATUS_EMPTY = "EMPTY"
+
+# #267 I1: verify 待ちの解除は accept run 記録時刻からの TTL を read 時 age 導出で判定する
+# （新ストアは作らない・forward write しない。weak_signals の is_effectively_expired
+# ＝#89 と同じ流儀）。
+VERIFY_PENDING_TTL_DAYS = 14
 
 
 def _parse_iso(s: Any) -> Optional[datetime]:
@@ -122,6 +127,7 @@ def compute_verify_pending(
     advisory_records: List[Dict[str, Any]],
     optimize_records: List[Dict[str, Any]],
     exposure_sessions: int,
+    now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """2レーンの accept 記録から verify 待ちを算出する（純関数・store I/O なし）。
 
@@ -139,6 +145,12 @@ def compute_verify_pending(
     時刻以降の distinct session 数」として算出済みの値を渡す想定（この関数自体は store I/O を
     行わないため、値の算出方法には関知しない）。
 
+    ``now``（#267 I1・既定 ``datetime.now(timezone.utc)``。テスト容易性のため注入可能）:
+    直近 run の記録時刻から ``VERIFY_PENDING_TTL_DAYS``（14日）を**超えて**いたら、
+    verify 待ちを read 時に失効させ「accept 記録なし」と同じ ``status="none"`` を返す
+    （新ストアは作らず forward write もしない・age は呼ぶたびに read 時導出）。
+    境界（ちょうど14日）は失効側（``> TTL`` のみ有効・``== TTL`` は失効）。
+
     Returns:
         ``{"run_id": str|None, "accepted": int, "exposure_sessions": int, "status": str}``
     """
@@ -152,7 +164,17 @@ def compute_verify_pending(
             "status": STATUS_NONE,
         }
 
-    _latest_ts, latest_run = max(accepts, key=lambda pair: pair[0])
+    latest_ts, latest_run = max(accepts, key=lambda pair: pair[0])
+
+    now = now or datetime.now(timezone.utc)
+    if now - latest_ts >= timedelta(days=VERIFY_PENDING_TTL_DAYS):
+        return {
+            "run_id": None,
+            "accepted": 0,
+            "exposure_sessions": exposure_sessions,
+            "status": STATUS_NONE,
+        }
+
     accepted = sum(1 for _ts, rid in accepts if rid == latest_run)
 
     status = STATUS_AWAITING_EXPOSURE if exposure_sessions == 0 else STATUS_VERIFIABLE
@@ -272,11 +294,12 @@ def attach_verify_pending(
         )
 
 
-def format_verify_pending_suffix(vp: Optional[Dict[str, Any]]) -> str:
-    """verify_pending dict を REASON 文字列への追記断片にする（無ければ空文字列）。
+def _verify_pending_label(vp: Optional[Dict[str, Any]]) -> str:
+    """verify_pending dict から「verify 待ち N 件（...）」部分文字列を返す（無ければ空）。
 
-    ``accepted == 0``（status="none"）の PJ は追記しない — 既存 REASON 文字列の
-    後方互換を保つため（verify 待ちが無い PJ では従来通りの文字列のまま）。
+    ``format_verify_pending_suffix``（閾値以上 item の reason 追記用）と
+    ``format_verify_pending_promoted_reason``（#267 C1: 閾値未満 item の reason 主節用）が
+    同じラベル生成を共有するための単一ソース。
     """
     if not vp:
         return ""
@@ -285,10 +308,33 @@ def format_verify_pending_suffix(vp: Optional[Dict[str, Any]]) -> str:
         return ""
     status = vp.get("status")
     if status == STATUS_VERIFIABLE:
-        return f" / verify 待ち {accepted} 件（前回 accept・検証可能）"
+        return f"verify 待ち {accepted} 件（前回 accept・検証可能）"
     if status == STATUS_AWAITING_EXPOSURE:
-        return f" / verify 待ち {accepted} 件（前回 accept・露出セッションなし）"
+        return f"verify 待ち {accepted} 件（前回 accept・露出セッションなし）"
     return ""
+
+
+def format_verify_pending_suffix(vp: Optional[Dict[str, Any]]) -> str:
+    """verify_pending dict を REASON 文字列への追記断片にする（無ければ空文字列）。
+
+    ``accepted == 0``（status="none"）の PJ は追記しない — 既存 REASON 文字列の
+    後方互換を保つため（verify 待ちが無い PJ では従来通りの文字列のまま）。
+    """
+    label = _verify_pending_label(vp)
+    return f" / {label}" if label else ""
+
+
+def format_verify_pending_promoted_reason(
+    vp: Optional[Dict[str, Any]], *, material_count: int, threshold: int
+) -> str:
+    """#267 C1: material 閾値未満でも verify 待ちで queue に昇格した item 用の reason 文字列。
+
+    通常の reason（material 内容が主節、verify は末尾に追記）とは語順を反転し、verify 待ちを
+    主節にする — 「なぜ material 閾値未満なのに queue に出ているか」が REASON の先頭を見た
+    だけでわかるようにするため（末尾に埋もれると閾値未満昇格だと気づきにくい）。
+    """
+    label = _verify_pending_label(vp) or "verify 待ち"
+    return f"{label} / material={material_count} < {threshold}"
 
 
 # --- queue 全体状態ラベル ------------------------------------------------------
