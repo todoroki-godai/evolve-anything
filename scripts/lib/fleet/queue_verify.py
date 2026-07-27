@@ -220,6 +220,43 @@ def _exposure_sessions_since_latest_accept(
     return int(counts.get(slug_canon, 0) or 0)
 
 
+def _load_optimize_history_with_aliases(pj_slug: str) -> List[Dict[str, Any]]:
+    """optimize_history を rename alias 込みで union read する（#267 I2）。
+
+    advisory 側は ``pj_slug_match`` で alias（rename 旧 slug）対応済みだが、
+    ``optimize_history_store.load_history(slug)`` は ``HISTORY_ROOT/<slug>.jsonl`` の
+    完全一致のみで、2レーンの rename 耐性が非対称だった（rename 済 PJ の skill lane accept が
+    queue の verify_pending に反映されない）。``fleet.queue._equivalence_slugs``（現 slug +
+    canonical + 双方の旧名別名の合算・既存 SoT）を再利用し、alias 分の履歴を entry の ``id``
+    で dedup しつつ union read する（``id`` の無い entry は安全に dedup できないため全件保持。
+    ``optimize_history_store.load_history`` 自身の dedup 方針と同じ）。
+
+    ``fleet.queue`` は既に本モジュール（``queue_verify``）を呼ぶため、モジュールレベルの
+    逆 import は循環になる。関数スコープの遅延 import に留める（``attach_verify_pending`` の
+    ``canonicalize`` 注入と同じ設計判断）。import/属性解決に失敗したら自身のみで安全側に倒す
+    （cross-PJ 副作用なし）。
+    """
+    from optimize_history_store import load_history
+
+    try:
+        from .queue import _equivalence_slugs
+        aliases = sorted(_equivalence_slugs(pj_slug))
+    except Exception:
+        aliases = [pj_slug]
+
+    seen_ids: set = set()
+    out: List[Dict[str, Any]] = []
+    for alias in aliases:
+        for rec in load_history(alias):
+            rid = rec.get("id")
+            if rid is not None:
+                if rid in seen_ids:
+                    continue
+                seen_ids.add(rid)
+            out.append(rec)
+    return out
+
+
 def verify_pending_by_pj(
     pj_slug: str,
     *,
@@ -239,14 +276,16 @@ def verify_pending_by_pj(
 
     exposure（#267 C2）は呼び出し元から受け取らず、最新 accept run の記録時刻以降の
     distinct session 数として内部で算出する（``_exposure_sessions_since_latest_accept``）。
-    """
-    from optimize_history_store import load_history
 
+    optimize_history は rename alias 込みで union read する（#267 I2 —
+    ``_load_optimize_history_with_aliases``。advisory 側の ``pj_slug_match`` alias 対応との
+    rename 耐性の非対称を解消する）。
+    """
     if advisory_records is None:
         from advisory_decision_log import read_advisory_decisions
         advisory_records = read_advisory_decisions(pj_slug)
 
-    optimize_records = load_history(pj_slug)
+    optimize_records = _load_optimize_history_with_aliases(pj_slug)
     exposure_sessions = _exposure_sessions_since_latest_accept(
         pj_slug, advisory_records, optimize_records
     )
