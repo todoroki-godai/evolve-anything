@@ -698,19 +698,20 @@ def resolve_cc_transcript_dir(project_dir) -> Path:
 
     **ドット入りパス（#275）**: CC は ``.`` も ``-`` に置換する（実測: ``…/evolve-anything/
     .claude/worktrees/feedback`` → ``…-evolve-anything--claude-worktrees-feedback``）。``/`` だけ
-    置換した candidate は worktree 配下（``.claude/worktrees/*``）で必ず外れるため、ドットも
-    置換した candidate を fallback として試す。これを欠くと当該 PJ が「transcript dir 不在」
-    として恒久的に沈黙し、**評価済み 0 件と未評価が区別できなくなる**。
+    置換した candidate は worktree 配下（``.claude/worktrees/*``）で必ず外れ、当該 PJ が
+    「transcript dir 不在」として恒久的に沈黙する（**評価済み 0 件と未評価が区別できなくなる**）。
+    candidate 生成は ``pj_slug.cc_project_dir_candidates`` が単一ソース（memory dir 側と同じ
+    規約を共有する。片側だけ直すと desync する）。
     """
+    from pj_slug import cc_project_dir_candidates  # 遅延 import（hot path でない・循環回避）
+
     base = Path.home() / ".claude" / "projects"
-    target = Path(project_dir)
-    encoded = str(target).replace("/", "-")
-    dotted = encoded.replace(".", "-")
-    for candidate in (encoded, encoded.lstrip("-"), dotted, dotted.lstrip("-")):
+    candidates = cc_project_dir_candidates(project_dir)
+    for candidate in candidates:
         d = base / candidate
         if d.is_dir():
             return d
-    return base / encoded
+    return base / candidates[0]
 
 
 def scan_project_transcripts(
