@@ -165,11 +165,15 @@ def _flat_result_path(runs: List[Dict[str, Any]]) -> Optional[str]:
 
     flat 面の `pending` は全 run を合成した配列なので、`result_path` を「最後に書いた
     run の値」にすると「run A の提案」に「run B の result JSON パス」が付く。組で読む
-    reader が別 run の result を開いて突き合わせるため、**一意に決まらないなら値を
-    出さない**（`runs[].result_path` が正典で、そちらには情報が残っている）。
+    reader が別 run の result を開いて突き合わせるため、**run が1つのときだけ値を出す**
+    （`runs[].result_path` が正典で、そちらには情報が残っている）。
+
+    判定は「異なるパスが何種類あるか」ではなく **run の本数**で行う。`--output` の既定は
+    slug 由来の固定パス `/tmp/rl_evolve_<slug>.json` なので、同一 PJ の2 run は**同じ
+    パス文字列を持つのが普通**であり、後の run がそのファイルを上書きしている。パスが
+    一致していても flat `pending`（両 run の合成）とは対応しない。
     """
-    paths = {run.get("result_path") for run in runs}
-    return paths.pop() if len(paths) == 1 else None
+    return runs[0].get("result_path") if len(runs) == 1 else None
 
 
 def _write_marker_file(slug: str, data: Dict[str, Any]) -> None:

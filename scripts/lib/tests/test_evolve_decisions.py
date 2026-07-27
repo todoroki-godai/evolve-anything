@@ -210,6 +210,28 @@ def test_flat_result_path_is_none_when_runs_disagree(monkeypatch, tmp_path):
     assert raw["result_path"] is None
 
 
+def test_flat_result_path_is_none_when_runs_share_one_path(monkeypatch, tmp_path):
+    """#283: パスが一致していても run が複数なら出さない。
+
+    `--output` の既定は slug 由来の固定パス `/tmp/rl_evolve_<slug>.json` なので、同一 PJ の
+    2 run が**同じパス文字列を持つのが普通**。後の run がそのファイルを上書きしているため、
+    flat `pending`（両 run の合成）とは対応しない。「異なるパスが何種類あるか」で判定すると
+    この最も起きやすいケースを取りこぼす。
+    """
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    shared = "/tmp/rl_evolve_testslug.json"
+    ed.write_pending_marker(
+        "testslug", [_marker_entry("/a/SKILL.md")], run_id="r1", result_path=shared
+    )
+    ed.write_pending_marker(
+        "testslug", [_marker_entry("/b/SKILL.md")], run_id="r2", result_path=shared
+    )
+
+    marker = ed.read_pending_marker("testslug")
+    assert len(marker["runs"]) == 2
+    assert marker["result_path"] is None
+
+
 def test_flat_result_path_recovers_after_purge(monkeypatch, tmp_path):
     """run が1つに減れば flat `result_path` は再び一意に決まる。"""
     monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
