@@ -200,9 +200,11 @@ def write_pending_marker(
     run_id = run_id or _legacy_run_id(pending)
     superseded_ids = {entry.get("id") for entry in pending if entry.get("id")}
     # パス単位 supersede は #279 のパス単独 ID で書かれた移行期 entry も自然に片付ける
-    # （旧 ID は新 ID と一致しないが skill_path は同じ）。
+    # （旧 ID は新 ID と一致しないが対象パスは同じ）。判定は accept 判定と同じ
+    # `_tracked_path` を使う（advisory は対象が pytest.ini 等で skill_path を持たない。
+    # ここだけ skill_path 直読みにすると advisory の residue が素通りする）。
     superseded_paths = {
-        entry["skill_path"] for entry in pending if entry.get("skill_path")
+        path for path in (_tracked_path(entry) for entry in pending) if path
     }
     with _marker_lock(slug):
         current = _read_pending_marker_file(slug) or {}
@@ -214,7 +216,7 @@ def write_pending_marker(
                 entry
                 for entry in (run.get("pending") or [])
                 if entry.get("id") not in superseded_ids
-                and entry.get("skill_path") not in superseded_paths
+                and _tracked_path(entry) not in superseded_paths
             ]
             if kept:
                 runs.append({**run, "pending": kept})
@@ -302,7 +304,7 @@ def undrained_applied(slug: str) -> List[Dict[str, Any]]:
         return []
     out: List[Dict[str, Any]] = []
     for p in marker.get("pending", []) or []:
-        sp = p.get("skill_path")
+        sp = _tracked_path(p)
         before = p.get("before_sha")
         if not sp or not before:
             continue
@@ -363,6 +365,63 @@ def _decision_event_id(proposal_id: str, kind: str, after_content: str) -> str:
     判断イベントの冪等性は巻き添えにならない。
     """
     return f"{proposal_id}_{kind}_{_sha256(after_content)[:12]}"
+
+
+def _tracked_path(entry: Dict[str, Any]) -> Optional[str]:
+    """entry が accept 判定に使うファイルパス（skill 提案 / advisory 提案の単一ソース）。
+
+    advisory は対象が SKILL.md とは限らない（pytest.ini 等）ので ``target_path`` を持つ。
+    パースを2箇所に分けると片側だけ直して desync する（pitfall_copied_parse_convention_partial_fix）
+    ため、ingest と undrained_applied はこの1関数を共有する。
+    """
+    return entry.get("target_path") or entry.get("skill_path")
+
+
+def _collect_advisory_proposals(project_dir: Path) -> List[Any]:
+    """advisory detector の提案を集める（遅延 import・失敗は呼び出し側で握る）。"""
+    from advisory_proposals import collect_advisory_proposals
+
+    return collect_advisory_proposals(project_dir)
+
+
+def _advisory_pending(project_dir: Optional[str], run_id: str) -> List[Dict[str, Any]]:
+    """advisory 提案を pending entry へ変換する（#284）。
+
+    accept 判定は skill 提案と同じ「対象ファイルの sha が変わったか」。現行 adapter
+    （invalid_frontmatter / testpaths_coverage）はいずれも修正がファイル変更を伴うので
+    この判定で足りる。ファイル変更を伴わない advisory を足すときは判定方式から設計する
+    （#267 Sprint 1 の未決事項）。
+
+    ``fitness_func`` は付けない — advisory の判断は optimize_history でなく
+    advisory_decisions.jsonl に入るため（母集団の均質性を保つ）。
+    """
+    base = Path(project_dir) if project_dir else Path.cwd()
+    out: List[Dict[str, Any]] = []
+    for proposal in _collect_advisory_proposals(base):
+        target = proposal.target_paths[0] if proposal.target_paths else None
+        if not target:
+            continue
+        path = Path(target)
+        if not path.is_absolute():
+            path = base / path
+        try:
+            before = path.read_text(encoding="utf-8")
+        except OSError:
+            continue  # 読めない対象は accept 判定できないので載せない
+        out.append(
+            {
+                "id": proposal.id,
+                "run_id": run_id,
+                "detector_id": proposal.detector_id,
+                "title": proposal.title,
+                "action": proposal.action,
+                "target_path": str(path),
+                "before_sha": _sha256(before),
+                "pattern": f"advisory:{proposal.detector_id}",
+                "proposal_type": "advisory",
+            }
+        )
+    return out
 
 
 # 提案対象とみなす suitability（high/medium のみ issue 化される — evolve.py Phase 3.5）。
@@ -468,6 +527,17 @@ def emit_decisions(
             }
         )
 
+    # #284: advisory detector を同じ lane に載せる。detector が壊れてもスキル提案の
+    # emit は落とさない（advisory は付加価値レーン）。
+    seen_ids = {entry["id"] for entry in pending}
+    try:
+        for entry in _advisory_pending(project_dir, run_id):
+            if entry["id"] not in seen_ids:
+                seen_ids.add(entry["id"])
+                pending.append(entry)
+    except Exception:
+        pass
+
     persisted = False
     marker_written = False
     marker_cleared = False
@@ -555,8 +625,9 @@ def ingest_decisions(
 
     for entry in pending:
         pid = entry["id"]
+        tracked = _tracked_path(entry)
         try:
-            after = Path(entry["skill_path"]).read_text(encoding="utf-8")
+            after = Path(tracked).read_text(encoding="utf-8") if tracked else None
         except OSError:
             after = None
         after_sha = _sha256(after) if after is not None else None
@@ -570,7 +641,21 @@ def ingest_decisions(
             skipped.append(pid)
             continue
 
-        if not dry_run:
+        if not dry_run and entry.get("proposal_type") == "advisory":
+            # advisory は対象が pytest.ini / rules など異種なので skill_quality の
+            # 母集団（optimize_history）に入れず専用ストアへ記録する（#284）。
+            from advisory_decision_log import record_advisory_decision
+
+            record_advisory_decision(
+                slug=slug,
+                proposal_id=pid,
+                detector_id=str(entry.get("detector_id") or "unknown"),
+                target_path=str(tracked or ""),
+                decision=kind,
+                run_id=entry.get("run_id"),
+                reason=reason,
+            )
+        elif not dry_run:
             if recorder is None:
                 recorder = _load_recorder()
             recorder(
