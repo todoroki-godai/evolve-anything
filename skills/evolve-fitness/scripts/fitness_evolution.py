@@ -24,6 +24,7 @@ _LIB_DIR = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "l
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 import optimize_history_store as _history_store  # noqa: E402
+from rl_common.file_lock import file_lock  # noqa: E402
 
 
 def _default_history_file() -> Path:
@@ -127,14 +128,16 @@ def record_evolve_diff_decision(
         "rejection_reason": rejection_reason,
     }
 
-    # 冪等 ingest: 同一 id が既にあれば書き込まない
-    existing = load_history(history_file)
-    if any(rec.get("id") == entry_id for rec in existing):
-        return entry
-
+    # 冪等 ingest: 同一 id が既にあれば書き込まない。
+    # #287-2: 「既存確認 → append」をロック下で原子化する。非ロックだと2プロセスが同時に
+    # 確認を抜けて2行入り、accept 率・outcome_attribution・ADR-046 昇格判定に非独立証拠が
+    # 流入する（#279 の N 重記録と同じ汚染）。逐次2回の冪等テストでは検出できない。
     history_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(history_file, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    with file_lock(history_file.with_name(history_file.name + ".lock")):
+        if any(rec.get("id") == entry_id for rec in load_history(history_file)):
+            return entry
+        with open(history_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry
 
 

@@ -18,10 +18,8 @@ optimize_history へ冪等記録）。母集団は「混合でなく増量」を
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
-import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +31,19 @@ if str(_LIB) not in sys.path:
 
 import optimize_history_store as _store  # noqa: E402
 from rl_common.file_lock import atomic_write_text, file_lock  # noqa: E402
+
+# identity 関数は別 module（#287）。名前を re-export し既存参照をそのまま動かす。
+from evolve_decision_ids import (  # noqa: E402,F401
+    _decision_event_id,
+    _entry_generation,
+    _is_superseded,
+    _legacy_run_id,
+    _new_run_id,
+    _proposal_id,
+    _sha256,
+    _supersede_keys,
+    _tracked_path,
+)
 
 DATA_DIR = _store.DATA_DIR
 QUEUE_ROOT = DATA_DIR / "evolve_decisions"
@@ -84,11 +95,16 @@ def read_queue(slug: str) -> List[Dict[str, Any]]:
 
 def _write_queue(slug: str, records: List[Dict[str, Any]]) -> None:
     """slug のキューを records で**上書き**する（emit は毎 run 現在バッチで置換）。"""
-    path = queue_path_for(slug)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
+    atomic_write_text(queue_path_for(slug), body)
+
+
+@contextmanager
+def _queue_lock(slug: str) -> Iterator[None]:
+    """キューの RMW を直列化する（#287-1）。非ロックだと交差時に最後の上書きが勝ち、別 run の
+    追加や drain 済み除去が消える。marker とは別ファイル・別ロックなので入れ子にできる。"""
+    with file_lock(QUEUE_ROOT / f"{_store._sanitize_slug(slug)}.lock"):
+        yield
 
 
 # ─── pending marker（未 drain 提案ポインタ, #402）─────────────────────────────
@@ -109,14 +125,27 @@ def _marker_lock(slug: str) -> Iterator[None]:
         yield
 
 
-def _run_is_expired(run: Dict[str, Any], now: Optional[datetime] = None) -> bool:
-    """TTL 超過判定。``emitted_at`` を持たない旧 schema は age 不明ゆえ落とさない。"""
+def _run_is_expired(
+    run: Dict[str, Any],
+    now: Optional[datetime] = None,
+    fallback_emitted: Optional[datetime] = None,
+) -> bool:
+    """TTL 超過判定。
+
+    `emitted_at` 欠落・不正の run は age 不明だが、そのままだと永久に失効せず marker が
+    残骸化する（#287-4）。`fallback_emitted`（marker の mtime）を保守的な上限に使う —
+    実 emit は必ず mtime 以前なので、mtime 基準で超過なら本当の age も超過している。
+    """
     raw = run.get("emitted_at")
-    if not raw:
-        return False
-    try:
-        emitted = datetime.fromisoformat(str(raw))
-    except ValueError:
+    emitted: Optional[datetime] = None
+    if raw:
+        try:
+            emitted = datetime.fromisoformat(str(raw))
+        except ValueError:
+            emitted = None
+    if emitted is None:
+        emitted = fallback_emitted
+    if emitted is None:
         return False
     if emitted.tzinfo is None:
         emitted = emitted.replace(tzinfo=timezone.utc)
@@ -129,28 +158,38 @@ def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
 
     TTL は forward write でなく read 時の age 導出で効かせる（writer が止まっても
     滞留しない＝weak_signals の ``is_effectively_expired`` と同方針）。
+
+    構文は妥当でも構造が壊れた JSON（`[]` / `{"runs": [null]}` 等）は `None` に畳む。型を
+    信じて `.get()` すると `AttributeError` が hook まで伝播し GC にも到達しない（#287-4）。
     """
     path = marker_path(slug)
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
         return None
     if "runs" not in data:
-        pending = data.get("pending") or []
+        pending = data.get("pending")
+        pending = pending if isinstance(pending, list) else []
         data["runs"] = [
             {
-                "run_id": _legacy_run_id(pending),
+                "run_id": _legacy_run_id([e for e in pending if isinstance(e, dict)]),
                 "pending": pending,
                 "result_path": data.get("result_path"),
             }
         ]
-    runs = [
-        run
-        for run in data.get("runs", [])
-        if (run.get("pending") or []) and not _run_is_expired(run)
-    ]
+    runs = []
+    for run in data.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        entries = [e for e in (run.get("pending") or []) if isinstance(e, dict)]
+        if not entries or _run_is_expired(run, fallback_emitted=mtime):
+            continue
+        runs.append({**run, "pending": entries})
     if not runs:
         return None
     data["runs"] = runs
@@ -163,15 +202,11 @@ def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
 def _flat_result_path(runs: List[Dict[str, Any]]) -> Optional[str]:
     """後方互換の flat `result_path`（#283）。
 
-    flat 面の `pending` は全 run を合成した配列なので、`result_path` を「最後に書いた
-    run の値」にすると「run A の提案」に「run B の result JSON パス」が付く。組で読む
-    reader が別 run の result を開いて突き合わせるため、**run が1つのときだけ値を出す**
-    （`runs[].result_path` が正典で、そちらには情報が残っている）。
-
-    判定は「異なるパスが何種類あるか」ではなく **run の本数**で行う。`--output` の既定は
-    slug 由来の固定パス `/tmp/rl_evolve_<slug>.json` なので、同一 PJ の2 run は**同じ
-    パス文字列を持つのが普通**であり、後の run がそのファイルを上書きしている。パスが
-    一致していても flat `pending`（両 run の合成）とは対応しない。
+    flat `pending` は全 run の合成なので、最後の writer 勝ちにすると「run A の提案」に
+    「run B の result JSON」が付く。**run が1つのときだけ**値を出す（正典は
+    `runs[].result_path`）。判定はパスの種類数でなく run 本数 — `--output` の既定は
+    slug 由来の固定パスなので同一 PJ の2 run は同じパス文字列を持つのが普通で、
+    後の run が上書きしている以上 flat pending とは対応しない。
     """
     return runs[0].get("result_path") if len(runs) == 1 else None
 
@@ -256,7 +291,25 @@ def write_pending_marker(
 
 
 def read_pending_marker(slug: str) -> Optional[Dict[str, Any]]:
-    return _read_pending_marker_file(slug)
+    """marker を読む。読めない/全 run が TTL 超過なら物理削除もする（#287-4）。"""
+    marker = _read_pending_marker_file(slug)
+    if marker is None and marker_path(slug).exists():
+        _gc_marker_file(slug)
+    return marker
+
+
+def _gc_marker_file(slug: str) -> bool:
+    """失効・破損した marker を物理削除する（#287-4）。read が None を返しても誤通知は
+    起きないがファイルは永久に残る。判定と unlink の間に別 run が書いた marker を消さない
+    よう、ロック下で読み直して None のままのときだけ消す。"""
+    with _marker_lock(slug):
+        if _read_pending_marker_file(slug) is not None:
+            return False
+        path = marker_path(slug)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
 
 
 def clear_pending_marker(slug: str) -> bool:
@@ -274,35 +327,51 @@ def purge_marker_entries(slug: str, consumed: Set[str]) -> bool:
     consumed は proposal ID の集合。ID は skill_path 由来の content identity なので、
     どの run の envelope から drain しても「同じ提案」は一度で消える。
     """
+    with _marker_lock(slug):
+        return _purge_marker_entries_locked(slug, consumed)
+
+
+def _purge_marker_entries_locked(
+    slug: str,
+    consumed: Set[str],
+    generations: Optional[Set[tuple]] = None,
+) -> bool:
+    """`purge_marker_entries` のロック無し版（marker ロック下から呼ぶ・#287-3）。
+
+    `generations` を渡すと世代一致も条件に加える（drain 用）。flock は入れ子取得で自己
+    deadlock するため、ロック取得と本体を分けてある。"""
     if not consumed:
         return False
-    with _marker_lock(slug):
-        marker = _read_pending_marker_file(slug)
-        if not marker:
+    marker = _read_pending_marker_file(slug)
+    if not marker:
+        return False
+
+    def _drop(entry: Dict[str, Any]) -> bool:
+        if entry.get("id") not in consumed:
             return False
-        runs: List[Dict[str, Any]] = []
-        for run in marker.get("runs", []):
-            kept = [
-                entry for entry in (run.get("pending") or []) if entry.get("id") not in consumed
-            ]
-            if kept:
-                runs.append({**run, "pending": kept})
-        if not runs:
-            path = marker_path(slug)
-            if path.exists():
-                path.unlink()
-            return True
-        flattened = [entry for run in runs for entry in (run.get("pending") or [])]
-        marker.update(
-            {
-                "runs": runs,
-                "pending": flattened,
-                "schema_version": 2,
-                "result_path": _flat_result_path(runs),
-            }
-        )
-        _write_marker_file(slug, marker)
+        return generations is None or _entry_generation(entry) in generations
+
+    runs: List[Dict[str, Any]] = []
+    for run in marker.get("runs", []):
+        kept = [entry for entry in (run.get("pending") or []) if not _drop(entry)]
+        if kept:
+            runs.append({**run, "pending": kept})
+    if not runs:
+        path = marker_path(slug)
+        if path.exists():
+            path.unlink()
         return True
+    flattened = [entry for run in runs for entry in (run.get("pending") or [])]
+    marker.update(
+        {
+            "runs": runs,
+            "pending": flattened,
+            "schema_version": 2,
+            "result_path": _flat_result_path(runs),
+        }
+    )
+    _write_marker_file(slug, marker)
+    return True
 
 
 def undrained_applied(slug: str) -> List[Dict[str, Any]]:
@@ -331,63 +400,6 @@ def undrained_applied(slug: str) -> List[Dict[str, Any]]:
 
 
 # ─── helpers ───────────────────────────────────────────────────────────────
-
-
-def _sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _new_run_id() -> str:
-    return "evrun_" + uuid.uuid4().hex
-
-
-def _legacy_run_id(pending: List[Dict[str, Any]]) -> str:
-    """旧 marker を安定した synthetic run として扱う。"""
-    identity = "\n".join(sorted(str(entry.get("id", "")) for entry in pending))
-    return "legacy_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
-
-
-def _proposal_id(skill_path: str, before_sha: str) -> str:
-    """**提案**の content identity = (対象パス, 適用前の内容)。
-
-    「同じ提案か」だけを表す。「同じ判断イベントか」は別キー（``_decision_event_id``）で
-    表す — 1つの ID に両方を兼ねさせると必ずどちらかが壊れる（#279→#286→#290 で
-    3回踏んだ）:
-
-    - **run_id を混ぜてはいけない**（#279）: ID が run ごとに変わると判断イベントも
-      run 跨ぎで別物になり、1回の apply が optimize_history に N 重記録される。
-    - **パス単独にしてもいけない**（#286）: 判断イベントキーが恒久キーになり、同じ
-      スキルの2回目以降の accept が冪等 dedup で捨てられる（生涯1件しか母集団に入らない）。
-    - **before_sha を混ぜても、これ単独では足りない**（#290）: 対象の内容が過去の状態へ
-      循環すると過去の ID が再利用されるため、判断イベントキーが再び衝突する。
-    """
-    return "evdiff_" + hashlib.sha1(
-        f"{skill_path}\n{before_sha}".encode("utf-8")
-    ).hexdigest()[:12]
-
-
-def _decision_event_id(proposal_id: str, kind: str, after_content: str) -> str:
-    """**判断イベント**の identity = (提案, 判断種別, 判断時点の内容)（#290）。
-
-    ``record_evolve_diff_decision`` の冪等 dedup キー。提案 ID と分離することで、
-
-    - 同じ apply を二重 drain しても after が同じ＝同キー（冪等は保つ）
-    - 内容が循環して提案 ID が再利用されても after が違う＝別キー（欠落しない）
-
-    の両方が成り立つ。提案 ID 側の identity 設計を変えても、この分離がある限り
-    判断イベントの冪等性は巻き添えにならない。
-    """
-    return f"{proposal_id}_{kind}_{_sha256(after_content)[:12]}"
-
-
-def _tracked_path(entry: Dict[str, Any]) -> Optional[str]:
-    """entry が accept 判定に使うファイルパス（skill 提案 / advisory 提案の単一ソース）。
-
-    advisory は対象が SKILL.md とは限らない（pytest.ini 等）ので ``target_path`` を持つ。
-    パースを2箇所に分けると片側だけ直して desync する（pitfall_copied_parse_convention_partial_fix）
-    ため、ingest と undrained_applied はこの1関数を共有する。
-    """
-    return entry.get("target_path") or entry.get("skill_path")
 
 
 def _collect_advisory_proposals(project_dir: Path) -> List[Any]:
@@ -558,12 +570,16 @@ def emit_decisions(
     if not dry_run:
         # run_id 無しは旧 schema の「前 run を上書き」キュー。新 envelope へ移る際に
         # stale として除去し、run_id 付きの未判断だけを保持する。
-        existing = [entry for entry in read_queue(slug) if entry.get("run_id")]
-        current_ids = {entry.get("id") for entry in pending}
-        _write_queue(
-            slug,
-            [entry for entry in existing if entry.get("id") not in current_ids] + pending,
-        )
+        # read→編集→write はロック下で行う（並行 emit が互いの追加を落とすのを防ぐ・#287-1）。
+        # supersede は marker と同じ対象パス単位（ID 一致だけだと世代が queue に residue し
+        # 1回の apply が全世代 accept 判定になる＝#290 の queue 経路・#287-1）。
+        ids, paths = _supersede_keys(pending)
+        with _queue_lock(slug):
+            existing = [entry for entry in read_queue(slug) if entry.get("run_id")]
+            _write_queue(
+                slug,
+                [e for e in existing if not _is_superseded(e, ids, paths)] + pending,
+            )
         persisted = True
 
     # #402: drain 検出用の運用マーカー（dry-run でも書く。store/queue とは別状態）。
@@ -692,9 +708,11 @@ def ingest_decisions(
         # キューが SoT のときだけ消化済みを除去する。pending を直接渡された場合
         # （dry-run 運用経路）はキューを生成も変更もしない。
         # 未判断は deferred。後続 run で apply/reject できるようキューに残す。
+        # 判断（ファイル読み・採点）は重いのでロック外で行い、**書く直前にロック下で
+        # 読み直して**差分だけ適用する（その間に別 run が追加した entry を消さない・#287-1）。
         consumed = set(accepted) | set(rejected_out)
-        remaining = [e for e in pending if e["id"] not in consumed]
-        _write_queue(slug, remaining)
+        with _queue_lock(slug):
+            _write_queue(slug, [e for e in read_queue(slug) if e.get("id") not in consumed])
 
     return {"accepted": accepted, "rejected": rejected_out, "skipped": skipped}
 
@@ -729,13 +747,18 @@ def drain_pending(
     if slug is None:
         slug = resolve_slug(Path(project_dir) if project_dir else None)
 
-    if result_json:
-        data = json.loads(Path(result_json).read_text(encoding="utf-8"))
-        envelope = data.get("evolve_decisions") or {}
-        pending = envelope.get("pending") or []
-    else:
-        marker = read_pending_marker(slug)
-        pending = (marker.get("pending") if marker else None) or []
+    # #287-3: スナップショットと purge をそれぞれロック下で行い、**ingest はロック外**に置く
+    # （ingest は skill_quality 採点で秒オーダーになりうるので、握ると同一 slug の emit と
+    # SessionStart hook を飢餓させる）。TOCTOU は世代キー（`_entry_generation`）で防ぐ。
+    # ロック下では公開版でなく `_locked` / `_read_pending_marker_file` を使う（自己 deadlock）。
+    with _marker_lock(slug):
+        if result_json:
+            data = json.loads(Path(result_json).read_text(encoding="utf-8"))
+            envelope = data.get("evolve_decisions") or {}
+            pending = envelope.get("pending") or []
+        else:
+            marker = _read_pending_marker_file(slug)
+            pending = (marker.get("pending") if marker else None) or []
 
     summary = ingest_decisions(
         slug, pending=pending, dry_run=False, rejected=rejected, history_file=history_file
@@ -744,5 +767,9 @@ def drain_pending(
     remaining = [entry for entry in pending if entry.get("id") not in consumed]
     # 未判断は deferred として marker に残し、後続 run で apply/reject できるようにする。
     summary["deferred"] = [entry.get("id") for entry in remaining]
-    purge_marker_entries(slug, consumed)
+    generations = {
+        _entry_generation(entry) for entry in pending if entry.get("id") in consumed
+    }
+    with _marker_lock(slug):
+        _purge_marker_entries_locked(slug, consumed, generations=generations)
     return summary

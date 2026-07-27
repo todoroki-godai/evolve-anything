@@ -52,7 +52,9 @@
 | `second-opinion` | cold-read セカンドオピニオン（3モード）。codex 検出時は外部 cold-read ルートBも選択可 | skill + agent |
 | `growth-level` | env_score → Lv.1-10 + 日英称号マッピング | `growth_level.py` |
 | `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug）[ADR-031] | `optimize_history_store.py` |
-| `evolve_decisions` | run envelope 付き emit→drain で並行 run を分離し、未判断を deferred 保持。提案 identity `(skill_path, before_sha)` と判断イベント identity（+判断種別+判断時点の内容）を分離し、marker supersede は対象パス単位（run_id 混合=N重記録／パス単独=accept 永久欠落／ID 一致 supersede=再 emit で N 重記録、の3失敗モードを同時回避）+ TTL45日（`evolve --drain`）。flat `result_path` は一意な時だけ出し、marker 書込失敗は `marker_error` で surface [ADR-041, #267, #279, #283, #286, #290, #400, #402, #287] | `evolve_decisions.py` |
+| `evolve_decisions` | run envelope 付き emit→drain で並行 run を分離し、未判断を deferred 保持。提案 identity `(skill_path, before_sha)` と判断イベント identity を分離し marker supersede は対象パス単位（N 重記録／accept 永久欠落の3失敗モードを同時回避）+ TTL45日。marker/queue/history の3ロック + drain 単一ロック + 失効 marker GC。flat `result_path` は一意時のみ、書込失敗は `marker_error` で surface [ADR-041, #267, #279, #283, #286, #287, #290, #400, #402] | `evolve_decisions.py` |
+| `file_lock` | ファイル単位の排他ロックと atomic write の単一ソース（`file_lock` / `atomic_write_text`）。decision 状態が跨る marker / queue / optimize_history の read-modify-write がこの2関数を共有する。flock は open file description 単位なので入れ子取得は自己 deadlock する（ロック下から呼ぶ処理は `_locked` 版に分ける）（#287） | `rl_common/file_lock.py` |
+| `evolve_decision_ids` | 提案 identity（`_proposal_id`）と判断イベント identity（`_decision_event_id`）を隣り合わせに置く純関数 module。両者の取り違えが #279→#286→#290 の3連発の根因なので定義を1箇所に集約（#287） | `evolve_decision_ids.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400） | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
 | `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込 [ADR-037]。**project スコープ4層防御（#206）**: 全PJ共有ストア corrections.jsonl/auto_memory_queue の他PJ混入を `pj_slug.record_project_match` 単一述語で読み出しフィルタ+enqueue reject+修復ツール `auto_memory_purge.py`（dry-run既定）の4層で遮断 | `auto_memory_*.py` |
