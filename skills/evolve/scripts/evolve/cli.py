@@ -348,6 +348,13 @@ def _summarize_result(result: dict, output_path: Path) -> dict:
                 "score": es.get("score"),
                 "level": es.get("level"),
             }
+    # #287-5: pending marker の書込失敗を 1 行サマリにも出す。標準フロー（dry-run 分析 →
+    # 対話適用 → drain）では marker が pending の唯一の情報源なので、無音で失敗すると
+    # 判断がまるごと失われる。emit は落とさない設計なので、ここで surface しないと
+    # ユーザーは「提案は出たのに drain で何も記録されない」を後から知ることになる。
+    _ed = result.get("evolve_decisions")
+    if isinstance(_ed, dict) and _ed.get("marker_error"):
+        summary["marker_error"] = _ed["marker_error"]
     if result.get("observe_first"):
         summary["observe_first"] = True
         observe = result.get("phases", {}).get("observe", {})
