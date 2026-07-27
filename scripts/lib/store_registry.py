@@ -279,6 +279,22 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "reader は latest-per-skill のみ参照・低書込レート（per-evolve 数件）なので permanent。",
     ),
     StoreDeclaration(
+        name="advisory_decisions.jsonl",
+        writer="scripts/lib/evolve_decisions.py の ingest_decisions（`evolve --drain` の "
+        "apply 境界）が advisory 提案の accept/reject を記録。hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="audit の Advisory Decisions section（sections_advisory_decisions）が "
+        "read_advisory_decisions / summarize_by_detector で detector 別 accept/reject を "
+        "advisory surface。",
+        retention="permanent",
+        note="#284（#267 Sprint 1）: advisory detector を emit→drain の decision lane に "
+        "載せた際の判断記録先。optimize_history（fitness_func=skill_quality）と**分ける**のが "
+        "設計の核 — advisory の対象は pytest.ini / rules / SKILL.md と異種で、skill_quality の "
+        "母集団に混ぜると『混合でなく増量』の不変条件が壊れる（_extract_candidates が "
+        "remediation を除外しているのと同じ理由）。冪等性は read 時 collapse "
+        "（(pj_slug, proposal_id) last-write-wins）で担保し、二重 drain でも1件。",
+    ),
+    StoreDeclaration(
         name="subagent_traces.jsonl",
         writer="scripts/lib/subagent_traces/ingest.py（evolve batch の apply 境界 "
         "ingest_all_projects）。hot path（hooks）からは書かない。",

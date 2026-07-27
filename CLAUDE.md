@@ -52,7 +52,7 @@
 | `second-opinion` | cold-read セカンドオピニオン（3モード）。codex 検出時は外部 cold-read ルートBも選択可 | skill + agent |
 | `growth-level` | env_score → Lv.1-10 + 日英称号マッピング | `growth_level.py` |
 | `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug）[ADR-031] | `optimize_history_store.py` |
-| `evolve_decisions` | run envelope 付き emit→drain で並行 run を分離し、未判断を deferred 保持。proposal ID は skill_path の content identity（run_id を混ぜず冪等記録を保つ）+ supersede + TTL45日（`evolve --drain`）[ADR-041, #267, #279, #400, #402] | `evolve_decisions.py` |
+| `evolve_decisions` | run envelope 付き emit→drain で並行 run を分離し、未判断を deferred 保持。提案 identity `(skill_path, before_sha)` と判断イベント identity（+判断種別+判断時点の内容）を分離し、marker supersede は対象パス単位（run_id 混合=N重記録／パス単独=accept 永久欠落／ID 一致 supersede=再 emit で N 重記録、の3失敗モードを同時回避）+ TTL45日（`evolve --drain`）。flat `result_path` は一意な時だけ出し、marker 書込失敗は `marker_error` で surface [ADR-041, #267, #279, #283, #286, #290, #400, #402, #287] | `evolve_decisions.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400） | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
 | `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込 [ADR-037]。**project スコープ4層防御（#206）**: 全PJ共有ストア corrections.jsonl/auto_memory_queue の他PJ混入を `pj_slug.record_project_match` 単一述語で読み出しフィルタ+enqueue reject+修復ツール `auto_memory_purge.py`（dry-run既定）の4層で遮断 | `auto_memory_*.py` |
@@ -72,6 +72,7 @@
 | observability contract | 必ず surface すべき行の単一ソース（markdown/構造化 両経路）[ADR-028] | `audit/observability.py` |
 | advisory section 共通枠 | 全 observability section の header/trailer 規約を単一化する2層 helper（`advisory_header`/`finalize` + `build_advisory_section`）+ `_OBSERVABILITY_BUILDERS` 横断の契約テストで silence≠evaluated を構造担保。builder 20個が経由、CUSTOM 8個は据え置き（#115） | `audit/advisory.py` |
 | `advisory_proposals` | detector 結果を副作用なしで decision lane 用 proposal に変換する adapter registry（初期2 detector・#267） | `advisory_proposals.py` |
+| `advisory_decision_log` | advisory 提案を emit→drain lane に載せた際の accept/reject 記録（#284）。専用ストア `advisory_decisions.jsonl` に分離し optimize_history（skill_quality 母集団）を汚さない。reader は audit の `Advisory Decisions` section（detector 別採用率 + accept 0 件 detector の淘汰候補 ⚠） | `advisory_decision_log.py` + `audit/sections_advisory_decisions.py` |
 | `evolve_introspect` | evolve result の自己解析→issue 候補生成（3カテゴリ）[ADR-033, ADR-034] | `evolve_introspect/`（#122 で detectors/render/dedup/helpers に分割・re-export） |
 | `evolve_result_schema` | result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379） | `evolve_result_schema.py` |
 | `evolve_consistency` | P1 invariant の runtime self-detect（型 drift のみ）（#377-5） | `evolve_consistency.py` |

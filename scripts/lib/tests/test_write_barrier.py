@@ -184,6 +184,7 @@ def test_store_write_raw_does_not_consult_registry(tmp_path, monkeypatch):
 # 集合が変わるのは #46（legacy へ status 変更）/ #54（dead 削除）/ 新ストア追加の
 # 「意図した変更」のみ。意図せず変わったらこのテストが落ちる。
 _EXPECTED_ACTIVE_STORES = [
+    "advisory_decisions.jsonl",
     "bootstrap_done-<slug>.marker",
     "correction_idioms.jsonl",
     "correction_judged.jsonl",

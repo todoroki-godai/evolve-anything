@@ -27,13 +27,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set
 
-import fcntl
-
 _LIB = Path(__file__).resolve().parent
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
 import optimize_history_store as _store  # noqa: E402
+from rl_common.file_lock import atomic_write_text, file_lock  # noqa: E402
 
 DATA_DIR = _store.DATA_DIR
 QUEUE_ROOT = DATA_DIR / "evolve_decisions"
@@ -101,15 +100,13 @@ def marker_path(slug: str) -> Path:
 
 @contextmanager
 def _marker_lock(slug: str) -> Iterator[None]:
-    """marker の read-modify-write を process 間で直列化する。"""
-    lock_path = MARKER_ROOT / f"{_store._sanitize_slug(slug)}.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    """marker の read-modify-write を process 間で直列化する。
+
+    ⚠️ flock は open file description 単位なので入れ子に取ると自己 deadlock する。
+    このロック下から marker を触るときは `_locked` サフィックスの内部関数を使う。
+    """
+    with file_lock(MARKER_ROOT / f"{_store._sanitize_slug(slug)}.lock"):
+        yield
 
 
 def _run_is_expired(run: Dict[str, Any], now: Optional[datetime] = None) -> bool:
@@ -159,20 +156,29 @@ def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
     data["runs"] = runs
     # pending は常に runs から再構成する（supersede / TTL を旧 reader にも反映）。
     data["pending"] = [entry for run in runs for entry in (run.get("pending") or [])]
+    data["result_path"] = _flat_result_path(runs)
     return data
+
+
+def _flat_result_path(runs: List[Dict[str, Any]]) -> Optional[str]:
+    """後方互換の flat `result_path`（#283）。
+
+    flat 面の `pending` は全 run を合成した配列なので、`result_path` を「最後に書いた
+    run の値」にすると「run A の提案」に「run B の result JSON パス」が付く。組で読む
+    reader が別 run の result を開いて突き合わせるため、**run が1つのときだけ値を出す**
+    （`runs[].result_path` が正典で、そちらには情報が残っている）。
+
+    判定は「異なるパスが何種類あるか」ではなく **run の本数**で行う。`--output` の既定は
+    slug 由来の固定パス `/tmp/rl_evolve_<slug>.json` なので、同一 PJ の2 run は**同じ
+    パス文字列を持つのが普通**であり、後の run がそのファイルを上書きしている。パスが
+    一致していても flat `pending`（両 run の合成）とは対応しない。
+    """
+    return runs[0].get("result_path") if len(runs) == 1 else None
 
 
 def _write_marker_file(slug: str, data: Dict[str, Any]) -> None:
     """reader が部分 JSON を見ないよう sibling tmp から atomic replace する。"""
-    path = marker_path(slug)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    atomic_write_text(marker_path(slug), json.dumps(data, ensure_ascii=False))
 
 
 def write_pending_marker(
@@ -188,13 +194,24 @@ def write_pending_marker(
     `evolve --drain` の pending ソースとして使う。同じ run_id は置換し、別 run は
     保持するため concurrent session / worktree の pending を上書きしない（#267）。
 
-    同一 proposal ID（= 同一 skill_path の content identity）は古い run 側から除去する。
-    emit は毎回新しい run_id を採るため、supersede が無いと「並行 run」と「自分の
-    前回 run」を区別できず runs[] が単調増加する（#279）。別 worktree は skill_path が
-    絶対パスで異なるので、この dedup は並行 run の提案を潰さない。
+    supersede は **ID でなく対象パス単位**で行う（#290）。emit は毎回新しい run_id を
+    採るため、supersede が無いと「並行 run」と「自分の前回 run」を区別できず runs[] が
+    単調増加する（#279）。かといって ID 一致だけで消すと、`before_sha` を含む ID は
+    対象の内容が変わるたびに変わるので **同じファイルの pending が複数世代 residue** し、
+    ingest が「今のファイル ≠ その entry の before_sha」で全部 accept 判定する
+    ＝1回の apply が N 件記録される（#279 が潰した N 重記録の別経路再導入）。
+    1ファイルの未 drain 提案は最新1件だけが有効なので、パスで置換するのが正しい。
+    別 worktree は skill_path が絶対パスで異なるので並行 run の提案は潰さない。
     """
     run_id = run_id or _legacy_run_id(pending)
-    superseded = {entry.get("id") for entry in pending if entry.get("id")}
+    superseded_ids = {entry.get("id") for entry in pending if entry.get("id")}
+    # パス単位 supersede は #279 のパス単独 ID で書かれた移行期 entry も自然に片付ける
+    # （旧 ID は新 ID と一致しないが対象パスは同じ）。判定は accept 判定と同じ
+    # `_tracked_path` を使う（advisory は対象が pytest.ini 等で skill_path を持たない。
+    # ここだけ skill_path 直読みにすると advisory の residue が素通りする）。
+    superseded_paths = {
+        path for path in (_tracked_path(entry) for entry in pending) if path
+    }
     with _marker_lock(slug):
         current = _read_pending_marker_file(slug) or {}
         runs: List[Dict[str, Any]] = []
@@ -204,7 +221,8 @@ def write_pending_marker(
             kept = [
                 entry
                 for entry in (run.get("pending") or [])
-                if entry.get("id") not in superseded
+                if entry.get("id") not in superseded_ids
+                and _tracked_path(entry) not in superseded_paths
             ]
             if kept:
                 runs.append({**run, "pending": kept})
@@ -232,7 +250,7 @@ def write_pending_marker(
                 "runs": runs,
                 # 旧 reader と SessionStart hook の後方互換。
                 "pending": flattened,
-                "result_path": result_path,
+                "result_path": _flat_result_path(runs),
             },
         )
 
@@ -275,7 +293,14 @@ def purge_marker_entries(slug: str, consumed: Set[str]) -> bool:
                 path.unlink()
             return True
         flattened = [entry for run in runs for entry in (run.get("pending") or [])]
-        marker.update({"runs": runs, "pending": flattened, "schema_version": 2})
+        marker.update(
+            {
+                "runs": runs,
+                "pending": flattened,
+                "schema_version": 2,
+                "result_path": _flat_result_path(runs),
+            }
+        )
         _write_marker_file(slug, marker)
         return True
 
@@ -292,7 +317,7 @@ def undrained_applied(slug: str) -> List[Dict[str, Any]]:
         return []
     out: List[Dict[str, Any]] = []
     for p in marker.get("pending", []) or []:
-        sp = p.get("skill_path")
+        sp = _tracked_path(p)
         before = p.get("before_sha")
         if not sp or not before:
             continue
@@ -322,14 +347,94 @@ def _legacy_run_id(pending: List[Dict[str, Any]]) -> str:
     return "legacy_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
 
 
-def _proposal_id(skill_path: str) -> str:
-    """提案の content identity。**run_id を混ぜない**（#279）。
+def _proposal_id(skill_path: str, before_sha: str) -> str:
+    """**提案**の content identity = (対象パス, 適用前の内容)。
 
-    ID が run ごとに変わると ``ingest_decisions`` の ``entry_id`` が run 跨ぎで別物になり、
-    1回の apply が optimize_history に N 重記録される（冪等記録の破壊）。run 識別は
-    entry の ``run_id`` フィールドと marker の envelope が担う。
+    「同じ提案か」だけを表す。「同じ判断イベントか」は別キー（``_decision_event_id``）で
+    表す — 1つの ID に両方を兼ねさせると必ずどちらかが壊れる（#279→#286→#290 で
+    3回踏んだ）:
+
+    - **run_id を混ぜてはいけない**（#279）: ID が run ごとに変わると判断イベントも
+      run 跨ぎで別物になり、1回の apply が optimize_history に N 重記録される。
+    - **パス単独にしてもいけない**（#286）: 判断イベントキーが恒久キーになり、同じ
+      スキルの2回目以降の accept が冪等 dedup で捨てられる（生涯1件しか母集団に入らない）。
+    - **before_sha を混ぜても、これ単独では足りない**（#290）: 対象の内容が過去の状態へ
+      循環すると過去の ID が再利用されるため、判断イベントキーが再び衝突する。
     """
-    return "evdiff_" + hashlib.sha1(skill_path.encode("utf-8")).hexdigest()[:12]
+    return "evdiff_" + hashlib.sha1(
+        f"{skill_path}\n{before_sha}".encode("utf-8")
+    ).hexdigest()[:12]
+
+
+def _decision_event_id(proposal_id: str, kind: str, after_content: str) -> str:
+    """**判断イベント**の identity = (提案, 判断種別, 判断時点の内容)（#290）。
+
+    ``record_evolve_diff_decision`` の冪等 dedup キー。提案 ID と分離することで、
+
+    - 同じ apply を二重 drain しても after が同じ＝同キー（冪等は保つ）
+    - 内容が循環して提案 ID が再利用されても after が違う＝別キー（欠落しない）
+
+    の両方が成り立つ。提案 ID 側の identity 設計を変えても、この分離がある限り
+    判断イベントの冪等性は巻き添えにならない。
+    """
+    return f"{proposal_id}_{kind}_{_sha256(after_content)[:12]}"
+
+
+def _tracked_path(entry: Dict[str, Any]) -> Optional[str]:
+    """entry が accept 判定に使うファイルパス（skill 提案 / advisory 提案の単一ソース）。
+
+    advisory は対象が SKILL.md とは限らない（pytest.ini 等）ので ``target_path`` を持つ。
+    パースを2箇所に分けると片側だけ直して desync する（pitfall_copied_parse_convention_partial_fix）
+    ため、ingest と undrained_applied はこの1関数を共有する。
+    """
+    return entry.get("target_path") or entry.get("skill_path")
+
+
+def _collect_advisory_proposals(project_dir: Path) -> List[Any]:
+    """advisory detector の提案を集める（遅延 import・失敗は呼び出し側で握る）。"""
+    from advisory_proposals import collect_advisory_proposals
+
+    return collect_advisory_proposals(project_dir)
+
+
+def _advisory_pending(project_dir: Optional[str], run_id: str) -> List[Dict[str, Any]]:
+    """advisory 提案を pending entry へ変換する（#284）。
+
+    accept 判定は skill 提案と同じ「対象ファイルの sha が変わったか」。現行 adapter
+    （invalid_frontmatter / testpaths_coverage）はいずれも修正がファイル変更を伴うので
+    この判定で足りる。ファイル変更を伴わない advisory を足すときは判定方式から設計する
+    （#267 Sprint 1 の未決事項）。
+
+    ``fitness_func`` は付けない — advisory の判断は optimize_history でなく
+    advisory_decisions.jsonl に入るため（母集団の均質性を保つ）。
+    """
+    base = Path(project_dir) if project_dir else Path.cwd()
+    out: List[Dict[str, Any]] = []
+    for proposal in _collect_advisory_proposals(base):
+        target = proposal.target_paths[0] if proposal.target_paths else None
+        if not target:
+            continue
+        path = Path(target)
+        if not path.is_absolute():
+            path = base / path
+        try:
+            before = path.read_text(encoding="utf-8")
+        except OSError:
+            continue  # 読めない対象は accept 判定できないので載せない
+        out.append(
+            {
+                "id": proposal.id,
+                "run_id": run_id,
+                "detector_id": proposal.detector_id,
+                "title": proposal.title,
+                "action": proposal.action,
+                "target_path": str(path),
+                "before_sha": _sha256(before),
+                "pattern": f"advisory:{proposal.detector_id}",
+                "proposal_type": "advisory",
+            }
+        )
+    return out
 
 
 # 提案対象とみなす suitability（high/medium のみ issue 化される — evolve.py Phase 3.5）。
@@ -421,22 +526,35 @@ def emit_decisions(
             before = Path(c["skill_path"]).read_text(encoding="utf-8")
         except OSError:
             continue  # 読めないスキルは対象外
+        before_sha = _sha256(before)
         pending.append(
             {
-                "id": _proposal_id(c["skill_path"]),
+                "id": _proposal_id(c["skill_path"], before_sha),
                 "run_id": run_id,
                 "skill_name": c["skill_name"],
                 "skill_path": c["skill_path"],
-                "before_sha": _sha256(before),
+                "before_sha": before_sha,
                 "fitness_func": FITNESS_FUNC,
                 "pattern": c["pattern"],
                 "proposal_type": c.get("proposal_type", "skill_diff"),
             }
         )
 
+    # #284: advisory detector を同じ lane に載せる。detector が壊れてもスキル提案の
+    # emit は落とさない（advisory は付加価値レーン）。
+    seen_ids = {entry["id"] for entry in pending}
+    try:
+        for entry in _advisory_pending(project_dir, run_id):
+            if entry["id"] not in seen_ids:
+                seen_ids.add(entry["id"])
+                pending.append(entry)
+    except Exception:
+        pass
+
     persisted = False
     marker_written = False
     marker_cleared = False
+    marker_error: Optional[str] = None
     if not dry_run:
         # run_id 無しは旧 schema の「前 run を上書き」キュー。新 envelope へ移る際に
         # stale として除去し、run_id 付きの未判断だけを保持する。
@@ -464,8 +582,12 @@ def emit_decisions(
             # run envelope を持つ marker は他 session の drain 待ちかもしれないので触らない。
             if runs and all(str(run.get("run_id", "")).startswith("legacy_") for run in runs):
                 marker_cleared = clear_pending_marker(slug)
-    except OSError:
-        pass
+    except OSError as e:
+        # #287-5: 握り潰すと権限不足・ディスクフルでも emit が成功扱いになる。標準フロー
+        # （dry-run → 適用 → drain）では marker が pending の唯一の情報源なので、書けて
+        # いなければ判断がまるごと失われる。emit 自体は落とさず（他の phase 結果は返す）
+        # 構造化 warning として surface し、CLI 1 行サマリにも出す。
+        marker_error = f"{type(e).__name__}: {e}"
 
     return {
         "pending": pending,
@@ -475,6 +597,7 @@ def emit_decisions(
         "run_id": run_id,
         "marker_written": marker_written,
         "marker_cleared": marker_cleared,
+        "marker_error": marker_error,
     }
 
 
@@ -521,8 +644,9 @@ def ingest_decisions(
 
     for entry in pending:
         pid = entry["id"]
+        tracked = _tracked_path(entry)
         try:
-            after = Path(entry["skill_path"]).read_text(encoding="utf-8")
+            after = Path(tracked).read_text(encoding="utf-8") if tracked else None
         except OSError:
             after = None
         after_sha = _sha256(after) if after is not None else None
@@ -536,7 +660,21 @@ def ingest_decisions(
             skipped.append(pid)
             continue
 
-        if not dry_run:
+        if not dry_run and entry.get("proposal_type") == "advisory":
+            # advisory は対象が pytest.ini / rules など異種なので skill_quality の
+            # 母集団（optimize_history）に入れず専用ストアへ記録する（#284）。
+            from advisory_decision_log import record_advisory_decision
+
+            record_advisory_decision(
+                slug=slug,
+                proposal_id=pid,
+                detector_id=str(entry.get("detector_id") or "unknown"),
+                target_path=str(tracked or ""),
+                decision=kind,
+                run_id=entry.get("run_id"),
+                reason=reason,
+            )
+        elif not dry_run:
             if recorder is None:
                 recorder = _load_recorder()
             recorder(
@@ -546,7 +684,7 @@ def ingest_decisions(
                 human_accepted=(kind == "accept"),
                 rejection_reason=reason,
                 history_file=history_file,
-                entry_id=f"{pid}_{kind}",
+                entry_id=_decision_event_id(pid, kind, after_content),
             )
         (accepted if kind == "accept" else rejected_out).append(pid)
 
@@ -579,8 +717,8 @@ def drain_pending(
     **単一コマンド `evolve --drain` を呼ぶだけ**にして縮める。drain は CLI＝**tool 文脈**で
     走るため optimize_history を reader と同一 DATA_DIR に書く＝#358（DATA_DIR split）を踏まない。
 
-    冪等: ingest が `{pid}_{kind}` entry_id で dedup するので、未 apply で空振り→後で apply→再 drain
-    でも accept は一度だけ記録される（apply タイミング非依存）。
+    冪等: ingest が `_decision_event_id`（提案 ID + 判断種別 + 判断時点の内容）で dedup するので、
+    未 apply で空振り→後で apply→再 drain でも accept は一度だけ記録される（apply タイミング非依存）。
 
     Args:
         slug: 未指定なら project_dir/cwd から worktree 安全に解決。
