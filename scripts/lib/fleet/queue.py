@@ -91,7 +91,14 @@ def select_evolve_queue(
     last_evolve_at, activity_since}`` を持つ。material_count = weak + corr を算出し、
     閾値以上のものを material_count 降順（同数は pj_slug 昇順）で返す。各要素に
     ``material_count`` / ``reason`` を付与する。純関数（store I/O なし・テスト容易）。
+
+    material dict が ``verify_pending``（``queue_verify.compute_verify_pending`` の返り値。
+    呼び側 ``build_queue_result`` が store から読んで載せる）を持つ場合、accepted > 0 なら
+    ``reason`` にその件数を追記し、返り値にも ``verify_pending`` をそのまま含める（#267
+    Sprint 1）。verify_pending が無い/accepted=0 の PJ は従来通りの reason 文字列のまま。
     """
+    from .queue_verify import format_verify_pending_suffix
+
     selected: List[Dict[str, Any]] = []
     for m in pj_materials:
         weak = int(m.get("weak_unprocessed", 0) or 0)
@@ -107,6 +114,8 @@ def select_evolve_queue(
             reason = f"weak={weak} + corr={corr}（初回・全件）>= {threshold}"
         else:
             reason = f"weak={weak} + new corr={corr} >= {threshold}"
+        verify_pending = m.get("verify_pending")
+        reason += format_verify_pending_suffix(verify_pending)
         selected.append(
             {
                 "pj_slug": m["pj_slug"],
@@ -117,6 +126,7 @@ def select_evolve_queue(
                 "last_evolve_at": last_evolve,
                 "activity_since": m.get("activity_since", {"subagents": 0, "sessions": 0}),
                 "reason": reason,
+                "verify_pending": verify_pending,
             }
         )
     selected.sort(key=lambda x: (-x["material_count"], x["pj_slug"]))
@@ -553,9 +563,15 @@ def build_queue_result(
     """各 PJ の学習素材を集計し、Phase 1b #80 契約の queue result dict を返す。
 
     schema:
-      {generated_at, threshold, tracked_total, skipped_dead, untracked_with_material,
+      {generated_at, threshold, tracked_total, queue_status, queue_status_reason,
+       skipped_dead, untracked_with_material,
        queue: [{pj_slug, project_path, material_count, weak_unprocessed,
-       new_corrections, last_evolve_at, activity_since, reason}]}
+       new_corrections, last_evolve_at, activity_since, reason, verify_pending}]}
+
+    ``queue_status``（READY/SETUP_REQUIRED/EMPTY）+ ``queue_status_reason``（1行）は
+    queue が空のとき「本当に素材が無い」か「素材はあるのに処理できていない」かを区別する
+    （#267 Sprint 1）。各 queue item の ``verify_pending``（直近 run で accept 済・未検証の
+    提案）は ``queue_verify.verify_pending_by_pj`` の read-time 導出（新規ストアは作らない）。
 
     weak/corr の reader はそれぞれ ``weak_unprocessed_by_pj`` / ``new_corrections_by_pj``。
     queue は ``select_evolve_queue``（純関数）で閾値フィルタ + 降順ソートする。
@@ -646,6 +662,18 @@ def build_queue_result(
             }
         )
 
+    # #267 Sprint 1: verify 待ち（直近 run で accept 済・未検証の提案）を material dict に
+    # 載せる。store I/O はここ（build_queue_result）で行い、select_evolve_queue は純関数の
+    # ままにする。exposure は既存の activity_since["sessions"]（前回 evolve 以降の活動量）を
+    # 流用する（新規計測はしない）。
+    from .queue_verify import verify_pending_by_pj
+
+    for m in materials:
+        sessions = int((m.get("activity_since") or {}).get("sessions", 0) or 0)
+        m["verify_pending"] = verify_pending_by_pj(
+            m["pj_slug"], exposure_sessions=sessions
+        )
+
     queue = select_evolve_queue(materials, threshold=threshold)
 
     # redirect で waiting に乗った canonical slug は untracked/phantom 母集団から除外する
@@ -694,11 +722,27 @@ def build_queue_result(
         if p > 0:
             weak_content_poor.append({"pj_slug": s, "content_poor": p})
 
+    unattributed_corrections = count_unattributed_corrections(corrections_path)
+
+    # #267 Sprint 1: queue が空のとき「本当に素材が無い」(EMPTY) か「素材はあるのに処理
+    # できていない」(SETUP_REQUIRED) かを状態ラベル + 1行理由で明示する。
+    from .queue_verify import compute_queue_status
+
+    status = compute_queue_status(
+        queue=queue,
+        untracked_with_material=untracked,
+        skipped_dead=skipped_dead,
+        skipped_phantom=phantom,
+        unattributed_total=unattributed_corrections.get("total", 0),
+    )
+
     return {
         "generated_at": generated_at,
         "threshold": threshold,
         "tracked_total": len(pj_slugs),
         "queue": queue,
+        "queue_status": status["queue_status"],
+        "queue_status_reason": status["queue_status_reason"],
         "skipped_dead": skipped_dead,
         "untracked_with_material": untracked,
         "skipped_phantom": phantom,
@@ -707,5 +751,5 @@ def build_queue_result(
         # #113: content-poor channel（昇格不能）で material から除外した weak の透明化。
         "weak_content_poor": weak_content_poor,
         # #91: project_path 欠落で PJ 帰属不能な corrections（どの母数にも入らず不可視）を透明化。
-        "unattributed_corrections": count_unattributed_corrections(corrections_path),
+        "unattributed_corrections": unattributed_corrections,
     }

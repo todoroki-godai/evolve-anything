@@ -96,6 +96,7 @@ def record_evolve_diff_decision(
     rejection_reason: Optional[str] = None,
     history_file: Optional[Path] = None,
     entry_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """evolve の Compile/remediation でスキル diff を accept/reject した時点で、
     after content を skill_quality で採点し history.jsonl に正規記録する（issue #223）。
@@ -104,6 +105,11 @@ def record_evolve_diff_decision(
     記録するため母集団が「混合ではなく増量」になり相関が壊れない。
 
     冪等性: entry_id（未指定時は内容ハッシュ）で既存行と重複したら再書き込みしない。
+
+    ``run_id``（#267 Sprint 1）: emit→drain の run envelope（``evolve_decisions``）が
+    持つ run_id をそのまま entry に純加算する。既存 entry（run_id 無し・run_id=None）を
+    壊さない後方互換フィールド。queue の verify_pending（直近 run の accept 集計）が
+    この値を読む。
     """
     if history_file is None:
         history_file = _default_history_file()
@@ -126,6 +132,7 @@ def record_evolve_diff_decision(
         "best_fitness": best_fitness,
         "human_accepted": human_accepted,
         "rejection_reason": rejection_reason,
+        "run_id": run_id,
     }
 
     # 冪等 ingest: 同一 id が既にあれば書き込まない。

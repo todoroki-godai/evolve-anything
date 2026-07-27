@@ -332,17 +332,35 @@ def _append_weak_semantics(lines: list, result: dict) -> None:
     )
 
 
+def _append_queue_status(lines: list, result: dict) -> None:
+    """queue 全体の状態ラベル + 理由を先頭に1行出す（#267 Sprint 1）。
+
+    ``queue_status``（READY/SETUP_REQUIRED/EMPTY）が無いと、待ち 0 件が「本当に素材が
+    無い」(EMPTY) のか「素材はあるのに処理できていない」(SETUP_REQUIRED) のか表示から
+    見分けられない。queue が空でも必ず出す（silent truncation 禁止）。キー欠落（旧
+    schema の result dict を渡された場合の後方互換）は何も出さない。
+    """
+    status = result.get("queue_status")
+    reason = result.get("queue_status_reason")
+    if not status:
+        return
+    lines.append(f"[fleet:queue] status={status} — {reason or ''}".rstrip())
+
+
 def format_queue_table(result: dict) -> str:
     """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
 
     待ち 0 件でも tracked 総数は表示する（沈黙させない）。LAST_EVOLVE は ISO 文字列の
-    先頭 10 文字（日付）を出し、None は `never`（初回＝全件待ち）と表示する。
+    先頭 10 文字（日付）を出し、None は `never`（初回＝全件待ち）と表示する。REASON 列には
+    verify 待ち（直近 run で accept 済・未検証の提案）があれば ``select_evolve_queue`` が
+    追記した文言がそのまま乗る（#267 Sprint 1・別列を増やさず既存表幅を保つ）。
     """
     queue = result.get("queue", [])
     tracked = result.get("tracked_total", 0)
 
     lines: list[str] = []
+    _append_queue_status(lines, result)
     if not queue:
         lines.append(
             f"[fleet:queue] 待ち PJ はありません"

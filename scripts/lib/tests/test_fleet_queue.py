@@ -109,6 +109,51 @@ class TestSelectEvolveQueue:
         out = fq.select_evolve_queue(mats, threshold=3)
         assert [m["pj_slug"] for m in out] == ["fresh"]
 
+    def test_no_verify_pending_key_keeps_reason_unchanged(self):
+        """material dict に verify_pending キーが無ければ従来通りの reason 文字列（後方互換）。"""
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"] == "weak=7 + new corr=2 >= 3"
+        assert out[0]["verify_pending"] is None
+
+    def test_verify_pending_zero_accepted_keeps_reason_unchanged(self):
+        """verify_pending はあるが accepted=0（status=none）でも reason は従来通り。"""
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": None,
+            "accepted": 0,
+            "exposure_sessions": 0,
+            "status": "none",
+        }
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"] == "weak=7 + new corr=2 >= 3"
+
+    def test_verify_pending_verifiable_appends_reason_suffix(self):
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 2,
+            "exposure_sessions": 3,
+            "status": "verifiable",
+        }
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"] == (
+            "weak=7 + new corr=2 >= 3 / verify 待ち 2 件（前回 accept・検証可能）"
+        )
+        assert out[0]["verify_pending"]["status"] == "verifiable"
+
+    def test_verify_pending_awaiting_exposure_appends_reason_suffix(self):
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 1,
+            "exposure_sessions": 0,
+            "status": "awaiting_exposure",
+        }
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert "verify 待ち 1 件" in out[0]["reason"]
+        assert "露出セッションなし" in out[0]["reason"]
+
 
 # --- weak_signals 未処理カウント（PJ 別） -------------------------------------
 
@@ -347,6 +392,8 @@ class TestBuildQueueResult:
             "threshold",
             "tracked_total",
             "queue",
+            "queue_status",
+            "queue_status_reason",
             "skipped_dead",
             "untracked_with_material",
             "skipped_phantom",
@@ -358,12 +405,15 @@ class TestBuildQueueResult:
         assert result["generated_at"] == "2026-06-25T09:00:00Z"
         assert result["threshold"] == 3
         assert result["tracked_total"] == 1
+        assert result["queue_status"] == "READY"
+        assert result["queue_status_reason"]
         assert len(result["queue"]) == 1
         item = result["queue"][0]
         assert set(item.keys()) == {
             "pj_slug",
             "project_path",
             "material_count",
+            "verify_pending",
             "weak_unprocessed",
             "new_corrections",
             "last_evolve_at",
@@ -376,6 +426,7 @@ class TestBuildQueueResult:
         assert item["material_count"] == 9
         assert item["last_evolve_at"] is None
         assert item["activity_since"] == {"subagents": 40, "sessions": 5}
+        assert item["verify_pending"]["status"] == "none"  # accept 記録なし
 
     def test_below_threshold_pj_not_in_queue_but_counted(self, tmp_path):
         ws = tmp_path / "weak_signals.jsonl"
@@ -393,6 +444,8 @@ class TestBuildQueueResult:
         )
         assert result["tracked_total"] == 1
         assert result["queue"] == []
+        assert result["queue_status"] == "EMPTY"
+        assert result["queue_status_reason"]
 
 
 # --- CLI --json 出力 ----------------------------------------------------------
@@ -985,8 +1038,10 @@ def _result(
     phantom=None,
     threshold=5,
     unattributed=None,
+    queue_status=None,
+    queue_status_reason=None,
 ):
-    return {
+    out = {
         "generated_at": "2026-06-25T09:00:00Z",
         "threshold": threshold,
         "tracked_total": tracked,
@@ -996,6 +1051,10 @@ def _result(
         "skipped_phantom": phantom or [],
         "unattributed_corrections": unattributed or {"total": 0, "by_source": {}},
     }
+    if queue_status is not None:
+        out["queue_status"] = queue_status
+        out["queue_status_reason"] = queue_status_reason
+    return out
 
 
 class TestFormatQueueTableColdstart:
@@ -1155,3 +1214,79 @@ class TestFormatQueueTablePhantom:
         out = format_queue_table(_result(queue=q, phantom=ph))
         assert "skipped 1 phantom" in out
         assert "tmpzzz (material 8)" in out
+
+
+class TestFormatQueueTableStatus:
+    """queue_status / queue_status_reason を先頭に必ず1行出す（#267 Sprint 1）。
+
+    EMPTY と SETUP_REQUIRED が待ち 0 件という表示だけでは見分けられない現状を直す。
+    """
+
+    def test_ready_status_shown_with_nonempty_queue(self):
+        q = [
+            {
+                "pj_slug": "alpha",
+                "material_count": 5,
+                "weak_unprocessed": 3,
+                "new_corrections": 2,
+                "last_evolve_at": None,
+                "reason": "weak=3 + corr=2（初回・全件）>= 3",
+                "verify_pending": None,
+            }
+        ]
+        out = format_queue_table(
+            _result(queue=q, queue_status="READY", queue_status_reason="待ち PJ 1 件")
+        )
+        assert "status=READY" in out
+        assert "待ち PJ 1 件" in out
+
+    def test_empty_status_shown_when_queue_empty(self):
+        out = format_queue_table(
+            _result(
+                queue=[],
+                queue_status="EMPTY",
+                queue_status_reason="待ち PJ 0件・処理できない学習素材もありません（閾値未満か素材なし）",
+            )
+        )
+        assert "status=EMPTY" in out
+
+    def test_setup_required_status_shown_when_queue_empty_but_blocked(self):
+        out = format_queue_table(
+            _result(
+                queue=[],
+                queue_status="SETUP_REQUIRED",
+                queue_status_reason="待ち PJ は0件ですが処理できない学習素材があります: skipped_dead 1 件",
+                skipped=[{"pj_slug": "dead1", "material_count": 5}],
+            )
+        )
+        assert "status=SETUP_REQUIRED" in out
+        assert "skipped_dead 1 件" in out
+
+    def test_no_status_key_emits_no_status_line(self):
+        """queue_status キー無し（旧 schema）の result dict は何も出さない（後方互換）。"""
+        out = format_queue_table(_result(queue=[]))
+        assert "status=" not in out
+
+    def test_reason_column_carries_verify_pending_suffix(self):
+        """verify_pending suffix は select_evolve_queue が reason に既に埋め込んでいる。
+        formatters は REASON 列をそのまま出すだけで verify 待ちが可視化される。"""
+        q = [
+            {
+                "pj_slug": "alpha",
+                "material_count": 5,
+                "weak_unprocessed": 3,
+                "new_corrections": 2,
+                "last_evolve_at": "2026-06-01T00:00:00+00:00",
+                "reason": "weak=3 + new corr=2 >= 3 / verify 待ち 2 件（前回 accept・検証可能）",
+                "verify_pending": {
+                    "run_id": "run1",
+                    "accepted": 2,
+                    "exposure_sessions": 3,
+                    "status": "verifiable",
+                },
+            }
+        ]
+        out = format_queue_table(
+            _result(queue=q, queue_status="READY", queue_status_reason="待ち PJ 1 件")
+        )
+        assert "verify 待ち 2 件（前回 accept・検証可能）" in out

@@ -701,6 +701,9 @@ def ingest_decisions(
                 rejection_reason=reason,
                 history_file=history_file,
                 entry_id=_decision_event_id(pid, kind, after_content),
+                # #267 Sprint 1: pending entry の run_id（emit 時の run envelope）を
+                # optimize_history へ純加算する。queue の verify_pending が読む。
+                run_id=entry.get("run_id"),
             )
         (accepted if kind == "accept" else rejected_out).append(pid)
 
