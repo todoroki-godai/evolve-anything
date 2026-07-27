@@ -13,7 +13,7 @@ import math
 import sys
 import tempfile
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -127,7 +127,7 @@ def record_evolve_diff_decision(
         "source": EVOLVE_DIFF_SOURCE,
         "skill_name": skill_name,
         "diff_summary": diff_summary,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "fitness_func": EVOLVE_DIFF_FITNESS_FUNC,
         "best_fitness": best_fitness,
         "human_accepted": human_accepted,

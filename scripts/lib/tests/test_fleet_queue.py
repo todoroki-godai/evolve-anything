@@ -309,6 +309,34 @@ class TestCountUnattributedCorrections:
         out = fq.count_unattributed_corrections(tmp_path / "nope.jsonl")
         assert out == {"total": 0, "by_source": {}}
 
+    def test_since_none_counts_all_records_back_compat(self, tmp_path):
+        """C5: since 未指定は従来通り全件（後方互換）。"""
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(
+            json.dumps(
+                {"project_path": "", "source": "backfill", "timestamp": "2020-01-01T00:00:00+00:00"}
+            )
+            + "\n"
+        )
+        out = fq.count_unattributed_corrections(store)
+        assert out == {"total": 1, "by_source": {"backfill": 1}}
+
+    def test_since_filters_out_older_records(self, tmp_path):
+        """C5: since 指定時は、それより後の timestamp のみ数える。"""
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(
+            json.dumps(
+                {"project_path": "", "source": "backfill", "timestamp": "2026-06-01T00:00:00+00:00"}
+            )
+            + "\n"
+            + json.dumps(
+                {"project_path": "", "source": "backfill", "timestamp": "2026-07-01T00:00:00+00:00"}
+            )
+            + "\n"
+        )
+        out = fq.count_unattributed_corrections(store, since="2026-06-15T00:00:00+00:00")
+        assert out == {"total": 1, "by_source": {"backfill": 1}}
+
 
 class TestQueueState:
     def test_read_empty_when_missing(self, tmp_path):

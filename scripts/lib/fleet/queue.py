@@ -18,9 +18,12 @@ reader は副作用なし（読み取りのみ）。書込（per-PJ last_evolve 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# #267 C5: 未帰属 corrections の SETUP_REQUIRED 判定に使う集計窓（他の 30 日窓集計と統一）。
+_UNATTRIBUTED_WINDOW_DAYS = 30
 
 
 # --- alias fold: rename 済 PJ の旧 slug を現 slug に畳む -----------------------
@@ -362,13 +365,21 @@ def new_corrections_by_pj(
     return count
 
 
-def count_unattributed_corrections(corrections_path: Path) -> Dict[str, Any]:
+def count_unattributed_corrections(
+    corrections_path: Path, *, since: Optional[str] = None
+) -> Dict[str, Any]:
     """``project_path`` 欠落で PJ 帰属不能な corrections を source 別に数える（#91）。
 
     ``_correction_slug`` が空文字に落ちるレコード（``project_path`` が空/None）は、どの PJ の
     ``material_count`` にも数えられず ``untracked_with_material`` にも ``skipped_phantom`` にも
     出ないため queue から構造的に完全不可視になる（silent truncation の一種）。#86/#88 の
     「無音で落とさない」原則の最後の穴埋めとして、件数 + source 内訳を advisory に surface する。
+
+    ``since``（ISO8601、既定 None=全件・後方互換）: 指定時は ``timestamp`` が ``since`` より
+    厳密に後のレコードのみ数える（``_ts_strictly_after`` と同じ比較。#267 C5）。project_path
+    欠落は帰属先 PJ が無く自然失効しないため、時刻窓を付けないと1件の古い未帰属レコードが
+    ``unattributed_total`` を永久に非ゼロにし SETUP_REQUIRED を永久ラッチさせる。
+    ``build_queue_result`` は直近30日窓を渡す。
 
     返り値: ``{"total": int, "by_source": {source: count}}``。``source`` 欠落は ``(unknown)``。
     ファイル不在 / 読込失敗 → ``{"total": 0, "by_source": {}}``（advisory ゆえ落とさない）。
@@ -394,6 +405,8 @@ def count_unattributed_corrections(corrections_path: Path) -> Dict[str, Any]:
             continue
         if _correction_slug(rec.get("project_path")):
             continue  # 帰属可能なものは対象外
+        if since is not None and not _ts_strictly_after(rec.get("timestamp"), since):
+            continue
         result["total"] += 1
         src = rec.get("source") or "(unknown)"
         by_source[src] = by_source.get(src, 0) + 1
@@ -663,16 +676,12 @@ def build_queue_result(
         )
 
     # #267 Sprint 1: verify 待ち（直近 run で accept 済・未検証の提案）を material dict に
-    # 載せる。store I/O はここ（build_queue_result）で行い、select_evolve_queue は純関数の
-    # ままにする。exposure は既存の activity_since["sessions"]（前回 evolve 以降の活動量）を
-    # 流用する（新規計測はしない）。
-    from .queue_verify import verify_pending_by_pj
+    # 載せる。store I/O はここ（build_queue_result 経由で queue_verify に委譲）で行い、
+    # select_evolve_queue は純関数のままにする。バルク read + group by の実装（#267 I3）は
+    # queue.py の行数バジェット（800行分割必須）を圧迫しないよう queue_verify 側に置く。
+    from .queue_verify import attach_verify_pending
 
-    for m in materials:
-        sessions = int((m.get("activity_since") or {}).get("sessions", 0) or 0)
-        m["verify_pending"] = verify_pending_by_pj(
-            m["pj_slug"], exposure_sessions=sessions
-        )
+    attach_verify_pending(materials, canonicalize=_canonical_slug)
 
     queue = select_evolve_queue(materials, threshold=threshold)
 
@@ -722,7 +731,14 @@ def build_queue_result(
         if p > 0:
             weak_content_poor.append({"pj_slug": s, "content_poor": p})
 
-    unattributed_corrections = count_unattributed_corrections(corrections_path)
+    # #267 C5: 未帰属 corrections は帰属先 PJ が無く自然失効しないため、時刻窓なしで全件数える
+    # と1件の古いレコードが SETUP_REQUIRED を永久ラッチさせる。直近 30 日窓に絞る。
+    unattributed_since = (
+        datetime.now(timezone.utc) - timedelta(days=_UNATTRIBUTED_WINDOW_DAYS)
+    ).isoformat()
+    unattributed_corrections = count_unattributed_corrections(
+        corrections_path, since=unattributed_since
+    )
 
     # #267 Sprint 1: queue が空のとき「本当に素材が無い」(EMPTY) か「素材はあるのに処理
     # できていない」(SETUP_REQUIRED) かを状態ラベル + 1行理由で明示する。

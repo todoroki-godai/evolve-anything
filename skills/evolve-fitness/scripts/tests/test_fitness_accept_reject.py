@@ -6,6 +6,7 @@
 """
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,12 @@ class TestRecordEvolveDiffDecisionE2E:
         assert entry["skill_name"] == "my-skill"
         assert "timestamp" in entry
         assert "id" in entry
+
+        # #267 C3: naive local time は queue_verify._parse_iso と JST で 9 時間ずれるため
+        # aware UTC で書く（同一 instant の naive/aware 混在比較の罠を writer 側で防ぐ）。
+        parsed_ts = datetime.fromisoformat(entry["timestamp"])
+        assert parsed_ts.tzinfo is not None
+        assert parsed_ts.utcoffset().total_seconds() == 0
 
         # 書き込まれた行が読み戻せる
         lines = history_file.read_text(encoding="utf-8").splitlines()
