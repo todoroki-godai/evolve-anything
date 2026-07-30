@@ -76,29 +76,42 @@ def collect_signals(
     *,
     projects_root: Optional[Path] = None,
     errors_path: Optional[Path] = None,
+    errors: Optional[List[Dict[str, Any]]] = None,
     utterances: Optional[List[Dict[str, Any]]] = None,
     max_transcripts: int = DEFAULT_MAX_TRANSCRIPTS,
+    pj_dir: Optional[Path] = None,
 ) -> List[WeakSignal]:
     """4 チャネルを全部走らせて WeakSignal のフラットなリストを返す（書き込みなし）。
 
     各データソースは引数で注入できる（テストは tmp ファイル / 合成データを渡す）。
     未指定なら実環境の正準パスを解決する。
+
+    Args:
+        errors: パース済み errors 行。全 PJ を回すバッチ（``fleet.detect``）が
+            7MB 級の errors.jsonl を PJ 数だけ再パースしないための注入口（#304）。
+            指定時は ``errors_path`` を読まない。
+        pj_dir: transcript ディレクトリを明示指定する。未指定なら slug から
+            suffix 照合で解決する（従来動作）。worktree transcript を本体 repo の
+            slug で記録したい呼び出し側が使う（#304）。
     """
     signals: List[WeakSignal] = []
 
     # ② permission deny ← errors.jsonl
-    if errors_path is None:
-        from rl_common import hook_store_path
+    if errors is None:
+        if errors_path is None:
+            from rl_common import hook_store_path
 
-        import rl_common as _rc
+            import rl_common as _rc
 
-        errors_path = hook_store_path("errors.jsonl", base=_rc.DATA_DIR)
-    signals.extend(detect_permission_deny(_read_errors(errors_path), pj_slug))
+            errors_path = hook_store_path("errors.jsonl", base=_rc.DATA_DIR)
+        errors = _read_errors(errors_path)
+    signals.extend(detect_permission_deny(errors, pj_slug))
 
     # ① 直後手編集 / ④ Esc 中断 ← transcript jsonl 直読
     if projects_root is None:
         projects_root = Path.home() / ".claude" / "projects"
-    pj_dir = _project_dir_for_slug(projects_root, pj_slug)
+    if pj_dir is None:
+        pj_dir = _project_dir_for_slug(projects_root, pj_slug)
     if pj_dir is not None:
         for tp in _recent_transcripts(pj_dir, max_transcripts):
             signals.extend(detect_transcript_signals(tp, pj_slug))
@@ -131,8 +144,10 @@ def run_batch(
     store_path: Optional[Path] = None,
     projects_root: Optional[Path] = None,
     errors_path: Optional[Path] = None,
+    errors: Optional[List[Dict[str, Any]]] = None,
     utterances: Optional[List[Dict[str, Any]]] = None,
     max_transcripts: int = DEFAULT_MAX_TRANSCRIPTS,
+    pj_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """検出 → dedup → 書き込み（dry-run はゼロ書き込み）。
 
@@ -144,8 +159,10 @@ def run_batch(
         pj_slug,
         projects_root=projects_root,
         errors_path=errors_path,
+        errors=errors,
         utterances=utterances,
         max_transcripts=max_transcripts,
+        pj_dir=pj_dir,
     )
     counts = channel_counts(signals)
     write_res = append_signals(signals, path=store_path, dry_run=dry_run)

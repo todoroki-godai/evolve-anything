@@ -49,7 +49,7 @@ evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-
 | run 末尾 | evolve_decisions queue 書込（before_sha スナップショット） | `emit_decisions(...)` の `_write_queue` | **書かない** | 書く |
 | run 末尾 | drain 検出用 **pending marker** | `emit_decisions(...)` の `write_pending_marker` | **書く**（#402/ADR-041・文書化された意図的 dry-run 書込・#513） | 書く |
 | 7.8 | optimize_history へ accept/reject 記録 | `evolve --drain`（`drain_pending`） | **書く**（drain は dry-run 分析後でも必ず実行） | 書く |
-| 7.8 | 決定論 weak_signals の永続化（manual_edit / esc / rephrase / permission_deny） | `evolve --drain`（`persist_weak_signals_drain`） | **書く**（drain の apply 境界・#484/#513） | 書く |
+| 7.8 | 決定論 weak_signals の永続化（manual_edit / esc / rephrase / permission_deny） | `evolve --drain`（`persist_weak_signals_drain`）／`evolve-fleet detect`（全 PJ・daily runner step 1c・#304） | **書く**（drain の apply 境界・#484/#513。detect 側は evolve 非依存で毎朝書く。両者とも `signal_key` dedup で冪等） | 書く |
 | 7.8 | calibration state + tool_usage_snapshot 確定（result 依存） | `evolve --drain --result-json "$OUT"`（`persist_result_dependent_state`） | **書く**（drain の apply 境界・result 由来値を運搬・#146/ADR-051） | 書く |
 | 7.8 | growth 結晶化イベント emit（result 依存） | `evolve --drain --result-json "$OUT"`（`_emit_growth_crystallization`） | **書く**（drain の apply 境界・#146/ADR-051） | 書く |
 | 3.5 | remediation 連続提示 count marker 更新＋閾値到達で自動却下 | phases_remediate の `reconcile_surfaced(persist=not dry_run)` | **書かない**（persist=False は marker を読むだけの表示用判定） | 書く |

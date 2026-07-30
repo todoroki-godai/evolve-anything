@@ -68,13 +68,22 @@ def detect_permission_deny(
 ) -> List[WeakSignal]:
     """errors.jsonl の permission_denied レコードから弱シグナルを作る。
 
+    errors.jsonl は**全 PJ 共有ストア**なので、当 PJ に属する行だけを採る（#304 で発見）。
+    無条件にスタンプすると PJ ごとの呼び出しで同じ deny が複製され、どの PJ でも同じ件数が
+    出る（全PJ bit-exact 同値 = measurement_bug の指紋）。判定は #206 の単一ソース述語
+    ``record_project_match``（project_path → project → project_name、属性欠落は寛容）。
+
     Args:
         error_records: errors.jsonl をパースした dict のイテラブル
         pj_slug:       照合用 slug（呼び出し側が確定して渡す）
     """
+    from pj_slug import record_project_match
+
     out: List[WeakSignal] = []
     for rec in error_records:
         if rec.get("type") != "permission_denied":
+            continue
+        if not record_project_match(rec, pj_slug):
             continue
         provenance = {
             "detector": "permission_deny",

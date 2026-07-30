@@ -53,6 +53,10 @@ promoted 昇格済み・TTL 失効・bootstrap 消化・content-poor を除い�
 `untracked material 2 件` / `skipped_dead 1 件`）に沿って footer の該当セクションを確認する。
 
 - **待ち 0 件（`queue_status=EMPTY`）** → 「今日は evolve 待ちなし」で終了（無理に evolve しない）。
+  ただし**素材の検出自体が長期間走っていない**可能性は別途疑う。素材は daily runner の
+  `fleet detect`（#304・step 1c）が毎朝生成するので、launchd 未登録・runner 停止中は素材が
+  増えず永久に `EMPTY` になる。疑わしければ `evolve-fleet detect --dry-run` で「本当に素材が無い」
+  のか「検出が走っていないだけ」かを切り分ける（過去分の回収は `--backfill`）。
 - **待ち 0 件（`queue_status=SETUP_REQUIRED`）** → 「待ちは無いが処理できない学習素材がある」ことを
   `queue_status_reason` の内訳とともに提示する（放置しない方がよい）。
 - **待ちあり** → テーブルの上から、各 PJ の `REASON`（weak=… + new corr=…）をそのまま添えて提示する。
