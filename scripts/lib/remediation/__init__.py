@@ -173,6 +173,45 @@ from .fixers_quality import _build_fix_dispatch as _build_fix_dispatch  # noqa: 
 FIX_DISPATCH: Dict[str, Any] = _build_fix_dispatch()
 
 
+def detect_unresolvable_fix_targets(
+    classified: Dict[str, Any],
+) -> Dict[str, Any]:
+    """fixer を持つ issue のうち `file` が実在しないものを決定論で数える（#306）。
+
+    fixer は総じて `Path(issue["file"])` を読むため、file が不在だと承認しても
+    早期 return して何も起きない（ユーザー視点では silent no-op）。検出側の
+    パス生成 drift を毎 run 観測できるようにし、同型の再発を沈黙させない。
+
+    対象は FIX_DISPATCH に登録された type かつ `file` が非空のものだけ
+    （fixer を持たない type や file を使わない提案で FP を作らない）。
+    """
+    missing_files: List[str] = []
+    by_type: Dict[str, int] = {}
+    for lane in ("auto_fixable", "proposable"):
+        for issue in (classified or {}).get(lane) or []:
+            if not isinstance(issue, dict):
+                continue
+            itype = issue.get("type", "")
+            if itype not in FIX_DISPATCH:
+                continue
+            file_path = issue.get("file") or ""
+            if not file_path:
+                continue
+            try:
+                if Path(file_path).exists():
+                    continue
+            except OSError:
+                pass
+            missing_files.append(file_path)
+            by_type[itype] = by_type.get(itype, 0) + 1
+
+    return {
+        "count": len(missing_files),
+        "by_type": by_type,
+        "files": missing_files,
+    }
+
+
 
 
 # 検証エンジン + VERIFY_DISPATCH + check_regression / rollback_fix / record_outcome は

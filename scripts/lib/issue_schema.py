@@ -208,11 +208,18 @@ def make_verification_rule_issue(
 def make_split_candidate_issue(
     split_candidate: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """reorganize の split_candidate → issue dict 変換。"""
+    """reorganize の split_candidate → issue dict 変換。
+
+    `file` は検出元が載せた実パス（`path`）を最優先で使う（#306）。skill 名から
+    `.claude/skills/<name>/SKILL.md` を組み立て直すと repo 直下 `skills/` レイアウトで
+    不在パスになり、承認しても fixer が早期 return する silent no-op になる。
+    `path` を持たない旧形式の候補は従来のパス生成にフォールバックする。
+    """
     skill_name = split_candidate.get("skill_name", "")
+    detected_path = split_candidate.get("path") or ""
     return {
         "type": SPLIT_CANDIDATE,
-        "file": f".claude/skills/{skill_name}/SKILL.md",
+        "file": detected_path or f".claude/skills/{skill_name}/SKILL.md",
         "detail": {
             "skill_name": skill_name,
             "line_count": split_candidate.get("line_count", 0),

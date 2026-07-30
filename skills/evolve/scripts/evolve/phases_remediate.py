@@ -307,6 +307,20 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
             "manual_required": len(classified["manual_required"]),
             "classified": classified,
         }
+
+        # #306: fixer を持つ issue のうち file が実在しないものを毎 run 観測する。
+        # 検出側のパス生成 drift（reorganize が `.claude/skills/...` を組み立て直して
+        # 実在しないパスを載せていた）は「承認しても何も起きない」silent no-op を生む。
+        try:
+            from remediation import detect_unresolvable_fix_targets
+            remediation_data["unresolvable_fix_targets"] = detect_unresolvable_fix_targets(
+                classified
+            )
+        except Exception:
+            remediation_data["unresolvable_fix_targets"] = {
+                "count": 0, "by_type": {}, "files": []
+            }
+
         result["phases"]["remediation"] = remediation_data
     except Exception as e:
         result["phases"]["remediation"] = {"error": str(e)}
@@ -380,6 +394,41 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
                 ):
                     audit_phase["report"] = reconcile_injected_observability(
                         audit_phase["report"], "Remediation Batch Skip", _bs_line
+                    )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Phase 4.4: fixer 対象パスの実在率を observability に昇格（#306）。
+    # 「承認したのに何も起きない」を沈黙させないため、clean（0件）でも1行残す。
+    try:
+        _unres = result["phases"].get("remediation", {}).get("unresolvable_fix_targets")
+        if isinstance(_unres, dict):
+            _count = int(_unres.get("count", 0))
+            if _count:
+                _by = ", ".join(
+                    f"{k}: {v}件" for k, v in sorted(_unres.get("by_type", {}).items())
+                )
+                _line = (
+                    f"⚠ fixer 対象パスが実在しない issue {_count}件（{_by}）"
+                    f" — 承認しても no-op になる。検出側のパス生成を確認する"
+                )
+            else:
+                _line = "✓ fixer 対象パスは全件実在（承認 → 適用の経路は健全）"
+            obs = result.get("observability")
+            if not isinstance(obs, dict) or "error" in obs:
+                obs = {} if not isinstance(obs, dict) else obs
+                result["observability"] = obs
+            obs["remediation_fix_targets"] = _line
+            try:
+                from audit.sections_summary import reconcile_injected_observability
+                audit_phase = result.get("phases", {}).get("audit")
+                if _count and isinstance(audit_phase, dict) and isinstance(
+                    audit_phase.get("report"), str
+                ):
+                    audit_phase["report"] = reconcile_injected_observability(
+                        audit_phase["report"], "Remediation Fix Targets", _line
                     )
             except Exception:
                 pass

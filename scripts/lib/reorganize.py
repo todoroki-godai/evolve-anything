@@ -104,6 +104,11 @@ def detect_split_candidates(artifacts: Dict[str, List[Path]]) -> List[Dict[str, 
                 "skill_name": skill_name,
                 "line_count": line_count,
                 "threshold": SPLIT_LINE_THRESHOLD,
+                # 検出元の実パスをそのまま運ぶ（#306）。skill 名から
+                # `.claude/skills/<name>/SKILL.md` を組み立て直すと、repo 直下
+                # `skills/<name>/SKILL.md`（plugin_self origin, #185）では実在しない
+                # パスになり fixer が silent no-op する。
+                "path": str(path),
             })
     return candidates
 
