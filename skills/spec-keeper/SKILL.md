@@ -14,11 +14,11 @@ AI が新セッション開始時に SPEC.md を読むだけでプロジェク�
 
 ```
 README.md              <- 外部向け（人間ファースト）。インストール・使い方・主要コマンド
-CLAUDE.md              <- 動作ルール（ガードレール、スキル、規約）。AI 向け
+CLAUDE.md               <- 動作ルール（ガードレール、スキル、規約）。AI 向け
 SPEC.md                <- 現在の仕様全体像（AI がセッション開始時に読む）。AI 向け詳細
-CONTEXT.md             <- Ubiquitous Language（用語集）。PJ 固有 jargon を 1 語で decode（任意）
-docs/decisions/        <- ADR（設計判断の「なぜ」を記録）
-~/.gstack/projects/    <- セッション単位の設計ドック（gstack 管理）
+CONTEXT.md              <- Ubiquitous Language（用語集）。PJ 固有 jargon を 1 語で decode（任意）
+docs/decisions/         <- ADR（設計判断の「なぜ」を記録）
+~/.gstack/projects/     <- セッション単位の設計ドック（gstack 管理）
 ```
 
 README.md は「そのプロジェクトが何者か（外部視点）」、CLAUDE.md は「どう動くか（AI 行動ルール）」、SPEC.md は「今何ができるか（AI 詳細仕様）」、CONTEXT.md は「この PJ の用語は何を指すか」、ADR は「なぜそうなったか」。CONTEXT.md は存在する場合のみ管理対象（`glossary_drift.py` で鮮度検出）。
@@ -27,59 +27,15 @@ README.md と SPEC.md は **同じ情報を重複させない**。README.md は�
 
 ## Progressive Disclosure レイヤー
 
-SPEC.md は AI がセッション開始時に全量読むドキュメント。Context rot 研究により、無関係だが正しい情報が増えるほど LLM の出力品質が劣化することが実証されている。PJ 規模に応じて適切なレイヤー構成を取る。
+SPEC.md は AI がセッション開始時に全量読むドキュメント。無関係だが正しい情報が増えるほど LLM の出力品質が劣化する（Context rot）ため、PJ 規模に応じて適切なレイヤー構成を取る。
 
-### レイヤー定義
+- **L1**: SPEC.md のみ（~100行以下）。個人ツール、Bot、小さい API 向け
+- **L2**: SPEC.md (hot ~60行) + `spec/`（cold）。Plugin、SaaS バックエンド向け
+- `spec/` ディレクトリの存在で L1/L2 を判定する
 
-| Layer | 構成 | SPEC.md 目安 | 対象PJ |
-|-------|------|-------------|--------|
-| **L1** | SPEC.md のみ | ~100行以下 | 個人ツール、Bot、小さい API |
-| **L2** | SPEC.md (hot) + spec/ (cold) | hot ~60行 | Plugin、SaaS バックエンド |
+**MUST（閾値判定・主指標は bytes）**: 単一 md ファイル **>100KB は分割必須**（Healthy ~50KB以下）。SPEC.md **>35KB はcold へセクション移動**（Healthy ~20KB以下）。行数は補助指標（L1 >100行 / L2 hot >80行で移動・昇格を検討）。根拠: Read ツールの実質上限（≈25K tokens）超で丸読み truncate される実害があり行数だけでは代表しない（issue #216）。
 
-L3（ドメイン別3層）は該当PJ出現時に検討。
-
-### 閾値
-
-**chars（bytes, `wc -c`）が主指標、行数は補助指標。** 根拠: Read ツールの実質上限（≈25K tokens）を超えると丸読みで truncate される実害があり、行数だけでは「読める量」を代表しない（1行あたりの情報量が巨大な md は行数基準では健全に見えてしまう。issue #216）。
-
-**単一ファイル閾値（hot/cold 問わず・最優先指標）**
-
-| 指標 | Healthy | Caution | Action |
-|------|---------|---------|--------|
-| 単一 md ファイル bytes | ~50KB以下 | 50-100KB | **>100KB: 分割必須** |
-
-**hot（SPEC.md）専用閾値**
-
-| Layer | 指標 | Healthy | Caution | Action |
-|-------|------|---------|---------|--------|
-| L1/L2 | SPEC.md bytes | ~20KB以下 | 20-35KB | >35KB: cold へセクション移動 |
-| L1 | SPEC.md 行数（補助） | ~80行以下 | 81-100行 | >100行: L2 昇格を提案 |
-| L2 | hot 行数（補助） | ~60行以下 | 61-80行 | >80行: cold へセクション移動 |
-
-**cold（spec/ 配下）**
-
-cold 合計の行数閾値（旧: >300行で L3 検討）は廃止。各 cold ファイルは上記「単一ファイル閾値」（bytes）で個別判定する。L3（ドメイン別3層）は該当PJ出現時に検討。
-
-**巨大 cold ファイルの消費ルール**: >50KB の cold ファイルは丸読みせず、Grep で該当箇所を特定してから部分 Read で消費する。該当ファイルの冒頭に消費ルール1行（例: 「本ファイルは大きいため Grep→部分 Read で読むこと」）を置く。
-
-### レイヤー判定
-
-- `spec/` ディレクトリが存在する → L2
-- 存在しない → L1
-
-### L1 → L2 昇格手順（update 中に提案、承認で即実行）
-
-1. `spec/` ディレクトリを作成
-2. 最も行数の多いセクション（通常 Architecture）の詳細を `spec/architecture.md` に移動
-3. SPEC.md にサマリー + ポインタを残す（`references/templates.md` の Layer Split Guide 参照）
-4. 次に大きいセクションも同様に（hot が 60行以下になるまで）
-5. CLAUDE.md の Specification セクションに `- 詳細仕様: [spec/](spec/)` を追加
-
-### 原則
-
-- **ポインタ > インライン** — 詳細はファイルパスで参照し、エージェントが必要時に Read する
-- **全タスクに必要な情報のみ hot に残す** — 特定タスクにしか使わない情報は cold へ
-- **ツールに委譲できることは書かない** — linter/テストで保証できることは SPEC.md に不要
+**MUST**: レイヤー閾値の全表・L1→L2昇格手順・cold ファイル消費ルール・原則の詳細は [references/layers.md](references/layers.md) を参照する。
 
 ## コマンド
 
@@ -133,83 +89,9 @@ PJ の規模から初期レイヤーを判定する。以下のいずれかに�
 
 #### Step 4: ADR の自動生成（3層フィルタ）
 
-Claude Code の Glob→Grep→Read 階層戦略と同じ思想で、
-コストの低い操作から段階的に絞り込む。Read は最後の最後だけ。
+Claude Code の Glob→Grep→Read 階層戦略と同じ思想で、grep スキャン（Layer 1）→ヘッダ構造分類（Layer 2）→選択候補のみ Read（Layer 3）の順にコストの低い操作から段階的に絞り込む。High（アーキテクチャ）/Medium（機能設計）/Low（UI・修正）に自動分類しユーザーに選択候補を提示、選ばれた5-15件のみ並行 Agent で ADR ドラフトを生成する。
 
-**Layer 1: grep スキャン（数秒、Read なし、LLM 判定なし）**
-
-Bash grep のみで「設計判断を含む design.md」を高速抽出する。
-
-```bash
-evolve-usage-log "spec-keeper"
-# 設計判断セクションを含む design.md を抽出（数秒で完了）
-find openspec/changes/archive -name "design.md" \
-  -exec grep -l "^## Decision\|^# Decision\|^## Risks\|Trade-off\|Approach" {} \;
-```
-
-gstack の design doc も同様にスキャン:
-```bash
-grep -l "Approach\|Decision\|Trade-off" ~/.gstack/projects/*/\*-design-*.md 2>/dev/null
-```
-
-git log からも重要な設計変更コミットを抽出:
-```bash
-git log --oneline --all | grep -i "refactor\|migrate\|architect\|redesign\|breaking"
-```
-
-**Layer 2: ヘッダ構造分類（数秒、Read なし、grep 出力のみ）**
-
-Layer 1 の候補に対して、セクションヘッダだけを抽出してアーキテクチャ重要度を自動分類する。
-
-```bash
-# 各候補の design.md からセクションヘッダのみ抽出（本文は読まない）
-grep "^#" path/to/design.md
-```
-
-ディレクトリ名 + セクションヘッダから 3カテゴリに自動分類:
-
-| カテゴリ | 判定基準 | 例 |
-|----------|----------|-----|
-| **High** (アーキテクチャ) | `world`, `core`, `refactor`, `migrate`, `system`, `foundation`, `phase1` がディレクトリ名に含む。またはヘッダに `Architecture`, `Data Model`, `Store`, `State Management` がある | `add-world-core-shell-phase1` |
-| **Medium** (機能設計) | `Decisions` セクションがあるが High に該当しない | `implement-lie-system-foundation` |
-| **Low** (UI/修正) | `fix-`, `enhance-`, `polish-`, `cleanup-`, `improve-` で始まる。またはヘッダが `Visual`, `Layout`, `Style` のみ | `fix-toast-stack-management` |
-
-分類結果をユーザーに提示:
-```
-ADR 候補スキャン完了（{N} 秒）:
-  High（アーキテクチャ）: 8 件
-  Medium（機能設計）: 15 件
-  Low（UI/修正）: 40 件 ← 通常は除外
-
-High の候補:
-  1. [x] add-world-core-shell-phase1 — ## Decisions: ストア実装, データ責務分割, UI受け渡し
-  2. [x] implement-lie-system-foundation — ## Decisions: 嘘生成アルゴリズム, 信頼度モデル
-  ...
-
-High + Medium は全選択します。除外したいものがあれば番号で指定してください。
-Low から追加したいものがあれば番号で指定してください。
-```
-
-**Layer 3: 選択された候補のみ Read → 並行 ADR 生成**
-
-ユーザーが選んだ候補（5-15件）に対してのみ Read を実行する。
-
-5件以上なら Agent ツールで並行処理:
-- 各 Agent が design.md + proposal.md を Read
-- ADR ドラフトを生成して `docs/decisions/{NNN}-{slug}.md` に Write
-
-各 ADR は以下から構成:
-- **Context**: proposal.md の Problem Statement（あれば）
-- **Decision**: design.md の Decisions セクション
-- **Alternatives**: design.md の Approaches Considered / Risks / Trade-offs
-- **Consequences**: 後続の archive でその判断がどう影響したか（あれば）
-
-gstack の design doc (`~/.gstack/projects/`) に Approaches Considered がある場合も同様に抽出。
-
-**パフォーマンス目安**:
-- Layer 1+2: 150件 → 数秒（grep のみ）
-- Layer 3: 10件選択 → 並行 Agent で 30-60秒
-- 合計: 1分以内（旧方式: 5分以上 or タイムアウト）
+**MUST**: 各 Layer の grep コマンド・分類基準・ADR 構成（Context/Decision/Alternatives/Consequences）は [references/adr-generation.md](references/adr-generation.md) を参照して実行する。
 
 #### Step 5: CLAUDE.md 追記 + README.md 確認 + 完了
 
@@ -312,56 +194,9 @@ echo "feat_refactor: $(git log --oneline --since="$(git log -1 --format=%ci -- S
 
 #### Step R1: リカバリーモード（乖離度: 中〜大）
 
-通常の差分ベース更新では精度が落ちるため、**セクション単位の突合**に切り替える。
+通常の差分ベース更新（Step 2）では精度が落ちるため、セクション単位の突合に切り替える。feat/refactorコミットをA(Architecture)/B(API)/C(内部改善)に分類→差分セクション優先更新→大乖離時はADR救出→`Last updated:`に`(recovery)`付記。
 
-**R1-1: 変更の棚卸し**
-
-feat/refactor コミットを A/B/C に分類してユーザーに提示:
-
-```bash
-git log --oneline --since="$(git log -1 --format=%ci -- SPEC.md)" \
-  --grep="^feat\|^refactor" --format="%h %s"
-```
-
-| カテゴリ | 判定基準 | SPEC.md への影響 |
-|---------|---------|----------------|
-| **A: Architecture** | 新モジュール、ディレクトリ構造変更、大規模リファクタ | Architecture + API セクション要更新 |
-| **B: API/Interface** | 新コマンド、パラメータ変更、新スキル追加 | API/Capabilities セクション要更新 |
-| **C: 内部改善** | パフォーマンス、内部リファクタ、バグ修正 | 反映不要（Recent Changes のみ） |
-
-**R1-2: セクション単位の突合と更新**
-
-Step 1 の突合表で **差分があるセクションを優先的に更新** する。一度に全セクションを書き換えず、セクションごとに確認しながら更新する。
-
-差分があるセクションでは、`ls` や `find` の結果と SPEC.md のコンポーネント一覧を目視比較し、**何が増えて何が消えたか**を特定してから Edit する。
-
-| セクション | 突合先 | 数値差分時の確認方法 |
-|-----------|--------|-------------------|
-| Architecture（hooks） | `ls hooks/*.py` | SPEC.md の hooks 一覧と diff |
-| Architecture（scripts/lib） | `ls scripts/lib/*.py` | SPEC.md のモジュール一覧と diff |
-| Architecture（fitness） | `ls scripts/rl/fitness/*.py` | SPEC.md の適応度関数一覧と diff |
-| API/Interface / Capabilities | `ls -d skills/*/` | SPEC.md のスキルコマンド表と diff |
-| Design Decisions | `ls docs/decisions/*.md` | SPEC.md の ADR 件数・リンクと diff |
-| Recent Changes | git log | 直近5件に絞る、古い項目は CHANGELOG.md へ移動 |
-| Overview | CLAUDE.md | 差分検出不可、意味的に確認 |
-| 用語集（CONTEXT.md） | `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/glossary_drift.py" CONTEXT.md SPEC.md CLAUDE.md` | 構造 drift は exit 1。advisory は未登録 jargon |
-| Limitations / Next | コード観察 | 差分検出不可、意味的に確認 |
-
-**R1-3: 未記録の設計判断を ADR に救出（大乖離の場合のみ）**
-
-```bash
-git log --since="$(git log -1 --format=%ci -- SPEC.md)" \
-  --grep="廃止\|移行\|置換\|replace\|migrate\|deprecate\|breaking" --oneline
-```
-
-設計判断を含むコミットが見つかったら、ユーザーに ADR 作成を提案する。
-
-**R1-4: 更新完了**
-
-- `Last updated:` を更新（`(recovery)` を付記: 例 `Last updated: 2026-03-25 by /spec-keeper update (recovery)`）
-- 肥大化チェック実行
-- **README.md 更新（README.md が存在する場合のみ）**: リカバリーで更新したセクションのうち、ユーザー向けの変化があれば Step 2 の README.md 更新ルールに従って Edit する
-- 次回からの乖離防止のため、`/spec-keeper update` の実行タイミングをユーザーにリマインド
+**MUST**: 手順詳細（コミット分類基準・セクション別突合先コマンド・ADR救出手順）は [references/update-recovery.md](references/update-recovery.md) を参照して実行する。
 
 ### `/spec-keeper adr` — ADR の作成
 
