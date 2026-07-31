@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rl_common.detection import is_machinery_prompt
+
 DEFAULT_MIN_TURNS = 20
 DEFAULT_DAYS = 30
 
@@ -111,12 +113,24 @@ def compute_capture_rate(
     active_count = len(active)
 
     # corrections.jsonl → correction を持つ session_id 集合（窓内のみ）。
+    #
+    # #305/#323: 過去に backfill された correction には Stop hook の自己注入文
+    # （"Stop hook feedback:\n" 始まり）が混ざっている。これらはユーザー発話でなく
+    # システム自身の出力なので、capture 成功として数えると「修正を拾えている」と
+    # 誤読させる（実測では corrections.jsonl の hook 由来マッチ 6/6 が自己注入だった）。
+    # writer 側は `should_include_message` で塞いだが、既存レコードは残るため
+    # **read 時に導出して除外**する（ストアを遡及改変しない・#89 と同じ方針）。
+    # 除外件数は silence != evaluated のため戻り値に surface する。
     corrected_sessions: set = set()
+    machinery_excluded = 0
     for rec in _load_jsonl(Path(corrections_file)):
         if project is not None and not _project_match(rec, project):
             continue
         ts = rec.get("timestamp") or rec.get("ts") or ""
         if ts and ts < cutoff:
+            continue
+        if is_machinery_prompt(str(rec.get("message") or "")):
+            machinery_excluded += 1
             continue
         sid = rec.get("session_id") or ""
         if sid:
@@ -132,6 +146,7 @@ def compute_capture_rate(
         "capture_rate": rate,
         "min_turns": min_turns,
         "days": days,
+        "machinery_excluded": machinery_excluded,
     }
 
 

@@ -132,6 +132,14 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
         f"channel 別: hook {captured} 件（capture 率 {rate:.0%}）/ "
         f"llm_judge {llm_judge} 件（当PJ・weak_signals レーン・昇格前）"
     )
+    # #305/#323: 過去 backfill の自己注入 correction（Stop hook feedback 文）を read 時に
+    # 分子から除いた件数。0 件なら黙る（silence != evaluated は上の channel_line が担う）。
+    machinery_excluded = result.get("machinery_excluded", 0)
+    if machinery_excluded:
+        channel_line += (
+            f" / 自己注入除外 {machinery_excluded} 件"
+            "（Stop hook feedback 由来・read 時除外・ストアは不変, #305）"
+        )
 
     if rate >= _STARVATION_THRESHOLD:
         return header + [
