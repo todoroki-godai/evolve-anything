@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolve-anything"
-version = "1.124.0"
+version = "1.124.1"
 description = "Self-evolving Claude Code plugin utilities"
 readme = "README.md"
 requires-python = ">=3.10"
