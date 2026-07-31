@@ -13,9 +13,6 @@ from test_home_isolation import isolate_home  # noqa: E402
 
 def pytest_configure(config):
     config.addinivalue_line(
-        "markers", "real_marker_root: MARKER_ROOT を隔離せず実定義(home 基準)を検証するテスト用"
-    )
-    config.addinivalue_line(
         "markers",
         "real_home: 実 HOME / 実 ~/.claude を意図的に読むテスト（autouse の HOME 隔離をオプトアウト）",
     )
@@ -41,27 +38,12 @@ def _isolate_home_default(request, tmp_path_factory, monkeypatch):
       - 実 HOME を意図的に読むテスト（実機 E2E / home 固定定数の検証）は
         ``@pytest.mark.real_home`` でオプトアウトする。
 
-    ``_isolate_evolve_marker`` と同じ monkeypatch スコープ。HOME 変更は
-    ``MARKER_ROOT``（import 時に実 home で凍結済み）には影響しないため両 fixture は独立に働く。
+    root conftest の ``_isolate_evolve_marker``（MARKER_ROOT 隔離）と同じ monkeypatch
+    スコープ。HOME 変更は ``MARKER_ROOT``（import 時に凍結済み）には影響しないため両者は
+    独立に働く。MARKER_ROOT 隔離はここではなく root conftest が単一ソースで持つ
+    （他 testpath も一律に隔離するため昇格した）。
     """
     if request.node.get_closest_marker("real_home"):
         return
     home_root = tmp_path_factory.mktemp("isolated_home")
     isolate_home(monkeypatch, home_root)
-
-
-@pytest.fixture(autouse=True)
-def _isolate_evolve_marker(request, tmp_path, monkeypatch):
-    """emit_decisions(#402) は dry-run でも MARKER_ROOT にマーカーを書く。MARKER_ROOT は
-    env 非依存の実 home 固定（~/.claude/evolve-anything/evolve_pending）なので、隔離しないと
-    全テストが実 home を汚す（verify-side-effects）。temp へ向けて構造的に封じる。
-    個別テストが MARKER_ROOT を明示 setattr する場合はそちらが後勝ちで上書きする。
-    `@pytest.mark.real_marker_root` を付けたテストは隔離せず実定義を検証する。"""
-    if request.node.get_closest_marker("real_marker_root"):
-        return
-    try:
-        import evolve_decisions as _ed
-
-        monkeypatch.setattr(_ed, "MARKER_ROOT", tmp_path / "_evolve_pending_isolated", raising=False)
-    except Exception:
-        pass

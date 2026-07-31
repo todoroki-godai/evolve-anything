@@ -18,9 +18,12 @@ reader は副作用なし（読み取りのみ）。書込（per-PJ last_evolve 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# #267 C5: 未帰属 corrections の SETUP_REQUIRED 判定に使う集計窓（他の 30 日窓集計と統一）。
+_UNATTRIBUTED_WINDOW_DAYS = 30
 
 
 # --- alias fold: rename 済 PJ の旧 slug を現 slug に畳む -----------------------
@@ -91,22 +94,52 @@ def select_evolve_queue(
     last_evolve_at, activity_since}`` を持つ。material_count = weak + corr を算出し、
     閾値以上のものを material_count 降順（同数は pj_slug 昇順）で返す。各要素に
     ``material_count`` / ``reason`` を付与する。純関数（store I/O なし・テスト容易）。
+
+    material dict が ``verify_pending``（``queue_verify.compute_verify_pending`` の返り値。
+    呼び側 ``build_queue_result`` が store から読んで載せる）を持つ場合、accepted > 0 なら
+    ``reason`` にその件数を追記し、返り値にも ``verify_pending`` をそのまま含める（#267
+    Sprint 1）。verify_pending が無い/accepted=0 の PJ は従来通りの reason 文字列のまま。
+
+    #267 C1: ``verify_pending["status"]`` が ``"none"`` 以外（verifiable/awaiting_exposure）
+    の PJ は material_count が閾値未満でも queue に含める。evolve 直後（material がリセット
+    された直後）こそ verify 待ちが最も可視化されるべき瞬間であり、閾値フィルタだけだとその
+    瞬間に queue から消えてしまうため。閾値未満で昇格した item は reason の語順を反転し
+    verify 待ちを主節にする（``format_verify_pending_promoted_reason``）。ソート順は
+    material_count 降順のまま変えない（verify 昇格 item は定義上 material_count が低いので
+    自然に下位へ並ぶ — 「まだ実行してよい」の目印であり緊急度の逆転を意味しないため、
+    特別扱いの並び替えはしない）。
     """
+    from .queue_verify import (
+        STATUS_NONE,
+        format_verify_pending_promoted_reason,
+        format_verify_pending_suffix,
+    )
+
     selected: List[Dict[str, Any]] = []
     for m in pj_materials:
         weak = int(m.get("weak_unprocessed", 0) or 0)
         corr = int(m.get("new_corrections", 0) or 0)
         count = weak + corr
-        if count < threshold:
+        verify_pending = m.get("verify_pending")
+        vp_status = (verify_pending or {}).get("status", STATUS_NONE)
+        verify_promoted = count < threshold and vp_status != STATUS_NONE
+        if count < threshold and not verify_promoted:
             continue
         last_evolve = m.get("last_evolve_at")
-        # #92→A: 初回（last_evolve_at=None）は corr が「前回 evolve 以降の増分」でなく全件。
-        # 『new corr』だと never と矛盾して見える。`未 drain` は emit→drain 2 相の内部
-        # plumbing 用語なので、CLI 直読みの利用者向けには `初回・全件` の業務語で明示する。
-        if last_evolve is None:
-            reason = f"weak={weak} + corr={corr}（初回・全件）>= {threshold}"
+        if verify_promoted:
+            reason = format_verify_pending_promoted_reason(
+                verify_pending, material_count=count, threshold=threshold
+            )
         else:
-            reason = f"weak={weak} + new corr={corr} >= {threshold}"
+            # #92→A: 初回（last_evolve_at=None）は corr が「前回 evolve 以降の増分」でなく
+            # 全件。『new corr』だと never と矛盾して見える。`未 drain` は emit→drain 2 相の
+            # 内部 plumbing 用語なので、CLI 直読みの利用者向けには `初回・全件` の業務語で
+            # 明示する。
+            if last_evolve is None:
+                reason = f"weak={weak} + corr={corr}（初回・全件）>= {threshold}"
+            else:
+                reason = f"weak={weak} + new corr={corr} >= {threshold}"
+            reason += format_verify_pending_suffix(verify_pending)
         selected.append(
             {
                 "pj_slug": m["pj_slug"],
@@ -117,6 +150,7 @@ def select_evolve_queue(
                 "last_evolve_at": last_evolve,
                 "activity_since": m.get("activity_since", {"subagents": 0, "sessions": 0}),
                 "reason": reason,
+                "verify_pending": verify_pending,
             }
         )
     selected.sort(key=lambda x: (-x["material_count"], x["pj_slug"]))
@@ -352,13 +386,21 @@ def new_corrections_by_pj(
     return count
 
 
-def count_unattributed_corrections(corrections_path: Path) -> Dict[str, Any]:
+def count_unattributed_corrections(
+    corrections_path: Path, *, since: Optional[str] = None
+) -> Dict[str, Any]:
     """``project_path`` 欠落で PJ 帰属不能な corrections を source 別に数える（#91）。
 
     ``_correction_slug`` が空文字に落ちるレコード（``project_path`` が空/None）は、どの PJ の
     ``material_count`` にも数えられず ``untracked_with_material`` にも ``skipped_phantom`` にも
     出ないため queue から構造的に完全不可視になる（silent truncation の一種）。#86/#88 の
     「無音で落とさない」原則の最後の穴埋めとして、件数 + source 内訳を advisory に surface する。
+
+    ``since``（ISO8601、既定 None=全件・後方互換）: 指定時は ``timestamp`` が ``since`` より
+    厳密に後のレコードのみ数える（``_ts_strictly_after`` と同じ比較。#267 C5）。project_path
+    欠落は帰属先 PJ が無く自然失効しないため、時刻窓を付けないと1件の古い未帰属レコードが
+    ``unattributed_total`` を永久に非ゼロにし SETUP_REQUIRED を永久ラッチさせる。
+    ``build_queue_result`` は直近30日窓を渡す。
 
     返り値: ``{"total": int, "by_source": {source: count}}``。``source`` 欠落は ``(unknown)``。
     ファイル不在 / 読込失敗 → ``{"total": 0, "by_source": {}}``（advisory ゆえ落とさない）。
@@ -384,6 +426,8 @@ def count_unattributed_corrections(corrections_path: Path) -> Dict[str, Any]:
             continue
         if _correction_slug(rec.get("project_path")):
             continue  # 帰属可能なものは対象外
+        if since is not None and not _ts_strictly_after(rec.get("timestamp"), since):
+            continue
         result["total"] += 1
         src = rec.get("source") or "(unknown)"
         by_source[src] = by_source.get(src, 0) + 1
@@ -553,9 +597,15 @@ def build_queue_result(
     """各 PJ の学習素材を集計し、Phase 1b #80 契約の queue result dict を返す。
 
     schema:
-      {generated_at, threshold, tracked_total, skipped_dead, untracked_with_material,
+      {generated_at, threshold, tracked_total, queue_status, queue_status_reason,
+       skipped_dead, untracked_with_material,
        queue: [{pj_slug, project_path, material_count, weak_unprocessed,
-       new_corrections, last_evolve_at, activity_since, reason}]}
+       new_corrections, last_evolve_at, activity_since, reason, verify_pending}]}
+
+    ``queue_status``（READY/SETUP_REQUIRED/EMPTY）+ ``queue_status_reason``（1行）は
+    queue が空のとき「本当に素材が無い」か「素材はあるのに処理できていない」かを区別する
+    （#267 Sprint 1）。各 queue item の ``verify_pending``（直近 run で accept 済・未検証の
+    提案）は ``queue_verify.verify_pending_by_pj`` の read-time 導出（新規ストアは作らない）。
 
     weak/corr の reader はそれぞれ ``weak_unprocessed_by_pj`` / ``new_corrections_by_pj``。
     queue は ``select_evolve_queue``（純関数）で閾値フィルタ + 降順ソートする。
@@ -646,6 +696,14 @@ def build_queue_result(
             }
         )
 
+    # #267 Sprint 1: verify 待ち（直近 run で accept 済・未検証の提案）を material dict に
+    # 載せる。store I/O はここ（build_queue_result 経由で queue_verify に委譲）で行い、
+    # select_evolve_queue は純関数のままにする。バルク read + group by の実装（#267 I3）は
+    # queue.py の行数バジェット（800行分割必須）を圧迫しないよう queue_verify 側に置く。
+    from .queue_verify import attach_verify_pending
+
+    attach_verify_pending(materials, canonicalize=_canonical_slug)
+
     queue = select_evolve_queue(materials, threshold=threshold)
 
     # redirect で waiting に乗った canonical slug は untracked/phantom 母集団から除外する
@@ -694,11 +752,34 @@ def build_queue_result(
         if p > 0:
             weak_content_poor.append({"pj_slug": s, "content_poor": p})
 
+    # #267 C5: 未帰属 corrections は帰属先 PJ が無く自然失効しないため、時刻窓なしで全件数える
+    # と1件の古いレコードが SETUP_REQUIRED を永久ラッチさせる。直近 30 日窓に絞る。
+    unattributed_since = (
+        datetime.now(timezone.utc) - timedelta(days=_UNATTRIBUTED_WINDOW_DAYS)
+    ).isoformat()
+    unattributed_corrections = count_unattributed_corrections(
+        corrections_path, since=unattributed_since
+    )
+
+    # #267 Sprint 1: queue が空のとき「本当に素材が無い」(EMPTY) か「素材はあるのに処理
+    # できていない」(SETUP_REQUIRED) かを状態ラベル + 1行理由で明示する。
+    from .queue_verify import compute_queue_status
+
+    status = compute_queue_status(
+        queue=queue,
+        untracked_with_material=untracked,
+        skipped_dead=skipped_dead,
+        skipped_phantom=phantom,
+        unattributed_total=unattributed_corrections.get("total", 0),
+    )
+
     return {
         "generated_at": generated_at,
         "threshold": threshold,
         "tracked_total": len(pj_slugs),
         "queue": queue,
+        "queue_status": status["queue_status"],
+        "queue_status_reason": status["queue_status_reason"],
         "skipped_dead": skipped_dead,
         "untracked_with_material": untracked,
         "skipped_phantom": phantom,
@@ -707,5 +788,5 @@ def build_queue_result(
         # #113: content-poor channel（昇格不能）で material から除外した weak の透明化。
         "weak_content_poor": weak_content_poor,
         # #91: project_path 欠落で PJ 帰属不能な corrections（どの母数にも入らず不可視）を透明化。
-        "unattributed_corrections": count_unattributed_corrections(corrections_path),
+        "unattributed_corrections": unattributed_corrections,
     }

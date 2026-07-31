@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -108,6 +109,127 @@ class TestSelectEvolveQueue:
         mats = [_material("fresh", weak=3, corr=0, last=None)]
         out = fq.select_evolve_queue(mats, threshold=3)
         assert [m["pj_slug"] for m in out] == ["fresh"]
+
+    def test_no_verify_pending_key_keeps_reason_unchanged(self):
+        """material dict に verify_pending キーが無ければ従来通りの reason 文字列（後方互換）。"""
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"] == "weak=7 + new corr=2 >= 3"
+        assert out[0]["verify_pending"] is None
+
+    def test_verify_pending_zero_accepted_keeps_reason_unchanged(self):
+        """verify_pending はあるが accepted=0（status=none）でも reason は従来通り。"""
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": None,
+            "accepted": 0,
+            "exposure_sessions": 0,
+            "status": "none",
+        }
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"] == "weak=7 + new corr=2 >= 3"
+
+    def test_verify_pending_verifiable_appends_reason_suffix(self):
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 2,
+            "exposure_sessions": 3,
+            "status": "verifiable",
+        }
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"] == (
+            "weak=7 + new corr=2 >= 3 / verify 待ち 2 件（前回 accept・検証可能）"
+        )
+        assert out[0]["verify_pending"]["status"] == "verifiable"
+
+    def test_verify_pending_awaiting_exposure_appends_reason_suffix(self):
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 1,
+            "exposure_sessions": 0,
+            "status": "awaiting_exposure",
+        }
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert "verify 待ち 1 件" in out[0]["reason"]
+        assert "露出セッションなし" in out[0]["reason"]
+
+    # --- C1: verify 待ちは material 閾値未満でも queue に含める ----------------
+
+    def test_below_threshold_with_verify_pending_verifiable_is_included(self):
+        """#267 C1: material が閾値未満でも verify 待ち（verifiable）なら queue に出す。"""
+        mats = [_material("a", weak=1, corr=0, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 2,
+            "exposure_sessions": 3,
+            "status": "verifiable",
+        }
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["a"]
+        assert out[0]["material_count"] == 1
+        assert "verify 待ち 2 件（前回 accept・検証可能）" in out[0]["reason"]
+        assert "material=1 < 5" in out[0]["reason"]
+
+    def test_below_threshold_with_verify_pending_awaiting_exposure_is_included(self):
+        """#267 C1: awaiting_exposure でも none でなければ昇格させる。"""
+        mats = [_material("a", weak=0, corr=0, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 1,
+            "exposure_sessions": 0,
+            "status": "awaiting_exposure",
+        }
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["a"]
+        assert "露出セッションなし" in out[0]["reason"]
+        assert "material=0 < 5" in out[0]["reason"]
+
+    def test_below_threshold_with_verify_pending_none_is_still_excluded(self):
+        """verify_pending の status が none（accept 記録なし/失効）なら従来通り除外する。"""
+        mats = [_material("a", weak=1, corr=0, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": None,
+            "accepted": 0,
+            "exposure_sessions": 0,
+            "status": "none",
+        }
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert out == []
+
+    def test_below_threshold_without_verify_pending_key_is_still_excluded(self):
+        """verify_pending キー自体が無い（後方互換）material は従来通り除外する。"""
+        mats = [_material("a", weak=1, corr=0, last="2026-06-01T00:00:00+00:00")]
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert out == []
+
+    def test_verify_promoted_items_sort_by_material_count_like_others(self):
+        """ソート順は material_count 降順のまま（verify 昇格でも特別扱いしない）。"""
+        mats = [
+            _material("low", weak=1, corr=0, last="2026-06-01T00:00:00+00:00"),
+            _material("high", weak=10, corr=0, last="2026-06-01T00:00:00+00:00"),
+        ]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 1,
+            "exposure_sessions": 1,
+            "status": "verifiable",
+        }
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["high", "low"]
+
+    def test_at_or_above_threshold_with_verify_pending_uses_normal_reason(self):
+        """閾値以上は通常の material 主体 reason のまま（C1 の語順反転が適用されない）。"""
+        mats = [_material("a", weak=7, corr=2, last="2026-06-01T00:00:00+00:00")]
+        mats[0]["verify_pending"] = {
+            "run_id": "run1",
+            "accepted": 2,
+            "exposure_sessions": 3,
+            "status": "verifiable",
+        }
+        out = fq.select_evolve_queue(mats, threshold=3)
+        assert out[0]["reason"].startswith("weak=7 + new corr=2 >= 3")
 
 
 # --- weak_signals 未処理カウント（PJ 別） -------------------------------------
@@ -264,6 +386,34 @@ class TestCountUnattributedCorrections:
         out = fq.count_unattributed_corrections(tmp_path / "nope.jsonl")
         assert out == {"total": 0, "by_source": {}}
 
+    def test_since_none_counts_all_records_back_compat(self, tmp_path):
+        """C5: since 未指定は従来通り全件（後方互換）。"""
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(
+            json.dumps(
+                {"project_path": "", "source": "backfill", "timestamp": "2020-01-01T00:00:00+00:00"}
+            )
+            + "\n"
+        )
+        out = fq.count_unattributed_corrections(store)
+        assert out == {"total": 1, "by_source": {"backfill": 1}}
+
+    def test_since_filters_out_older_records(self, tmp_path):
+        """C5: since 指定時は、それより後の timestamp のみ数える。"""
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(
+            json.dumps(
+                {"project_path": "", "source": "backfill", "timestamp": "2026-06-01T00:00:00+00:00"}
+            )
+            + "\n"
+            + json.dumps(
+                {"project_path": "", "source": "backfill", "timestamp": "2026-07-01T00:00:00+00:00"}
+            )
+            + "\n"
+        )
+        out = fq.count_unattributed_corrections(store, since="2026-06-15T00:00:00+00:00")
+        assert out == {"total": 1, "by_source": {"backfill": 1}}
+
 
 class TestQueueState:
     def test_read_empty_when_missing(self, tmp_path):
@@ -347,6 +497,8 @@ class TestBuildQueueResult:
             "threshold",
             "tracked_total",
             "queue",
+            "queue_status",
+            "queue_status_reason",
             "skipped_dead",
             "untracked_with_material",
             "skipped_phantom",
@@ -358,12 +510,15 @@ class TestBuildQueueResult:
         assert result["generated_at"] == "2026-06-25T09:00:00Z"
         assert result["threshold"] == 3
         assert result["tracked_total"] == 1
+        assert result["queue_status"] == "READY"
+        assert result["queue_status_reason"]
         assert len(result["queue"]) == 1
         item = result["queue"][0]
         assert set(item.keys()) == {
             "pj_slug",
             "project_path",
             "material_count",
+            "verify_pending",
             "weak_unprocessed",
             "new_corrections",
             "last_evolve_at",
@@ -376,6 +531,7 @@ class TestBuildQueueResult:
         assert item["material_count"] == 9
         assert item["last_evolve_at"] is None
         assert item["activity_since"] == {"subagents": 40, "sessions": 5}
+        assert item["verify_pending"]["status"] == "none"  # accept 記録なし
 
     def test_below_threshold_pj_not_in_queue_but_counted(self, tmp_path):
         ws = tmp_path / "weak_signals.jsonl"
@@ -393,6 +549,8 @@ class TestBuildQueueResult:
         )
         assert result["tracked_total"] == 1
         assert result["queue"] == []
+        assert result["queue_status"] == "EMPTY"
+        assert result["queue_status_reason"]
 
 
 # --- CLI --json 出力 ----------------------------------------------------------
@@ -787,6 +945,42 @@ class TestAggregateSessions:
         now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
         assert fc.aggregate_sessions_by_project(canonical=canonical, now=now) == {}
 
+    def test_since_overrides_window_days(self, tmp_path):
+        """C2: since 指定時は window_days より優先し、その時刻以降のみ数える。"""
+        import datetime as _dt
+
+        canonical = self._canonical(tmp_path)
+        self._write(
+            canonical,
+            [
+                _sess("before", "2026-06-10T00:00:00+00:00", "/p/alpha"),  # since より前
+                _sess("after", "2026-06-20T00:00:00+00:00", "/p/alpha"),  # since より後
+            ],
+        )
+        since = _dt.datetime(2026, 6, 15, tzinfo=_dt.timezone.utc)
+        # window_days=30・now=2026-06-25 だけなら両方窓内だが、since が優先されるべき。
+        now = _dt.datetime(2026, 6, 25, tzinfo=_dt.timezone.utc)
+        counts = fc.aggregate_sessions_by_project(
+            canonical=canonical, now=now, window_days=30, since=since
+        )
+        assert counts.get("alpha") == 1  # after のみ
+
+    def test_since_none_falls_back_to_window_days(self, tmp_path):
+        """C2: since 未指定は従来の window_days 挙動のまま（後方互換）。"""
+        canonical = self._canonical(tmp_path)
+        self._write(
+            canonical,
+            [
+                _sess("recent", "2026-06-24T00:00:00+00:00", "/p/alpha"),
+                _sess("old", "2026-01-01T00:00:00+00:00", "/p/alpha"),  # 窓外
+            ],
+        )
+        now = __import__("datetime").datetime(2026, 6, 25, tzinfo=__import__("datetime").timezone.utc)
+        counts = fc.aggregate_sessions_by_project(
+            canonical=canonical, now=now, window_days=30, since=None
+        )
+        assert counts.get("alpha") == 1  # recent のみ（旧挙動と同じ）
+
 
 # --- collect_untracked_materials（material 母集団まで母数拡張・#86）------------
 
@@ -985,8 +1179,10 @@ def _result(
     phantom=None,
     threshold=5,
     unattributed=None,
+    queue_status=None,
+    queue_status_reason=None,
 ):
-    return {
+    out = {
         "generated_at": "2026-06-25T09:00:00Z",
         "threshold": threshold,
         "tracked_total": tracked,
@@ -996,6 +1192,10 @@ def _result(
         "skipped_phantom": phantom or [],
         "unattributed_corrections": unattributed or {"total": 0, "by_source": {}},
     }
+    if queue_status is not None:
+        out["queue_status"] = queue_status
+        out["queue_status_reason"] = queue_status_reason
+    return out
 
 
 class TestFormatQueueTableColdstart:
@@ -1155,3 +1355,314 @@ class TestFormatQueueTablePhantom:
         out = format_queue_table(_result(queue=q, phantom=ph))
         assert "skipped 1 phantom" in out
         assert "tmpzzz (material 8)" in out
+
+
+class TestFormatQueueTableStatus:
+    """queue_status / queue_status_reason を先頭に必ず1行出す（#267 Sprint 1）。
+
+    EMPTY と SETUP_REQUIRED が待ち 0 件という表示だけでは見分けられない現状を直す。
+    """
+
+    def test_ready_status_shown_with_nonempty_queue(self):
+        q = [
+            {
+                "pj_slug": "alpha",
+                "material_count": 5,
+                "weak_unprocessed": 3,
+                "new_corrections": 2,
+                "last_evolve_at": None,
+                "reason": "weak=3 + corr=2（初回・全件）>= 3",
+                "verify_pending": None,
+            }
+        ]
+        out = format_queue_table(
+            _result(queue=q, queue_status="READY", queue_status_reason="待ち PJ 1 件")
+        )
+        assert "status=READY" in out
+        assert "待ち PJ 1 件" in out
+
+    def test_empty_status_shown_when_queue_empty(self):
+        out = format_queue_table(
+            _result(
+                queue=[],
+                queue_status="EMPTY",
+                queue_status_reason="待ち PJ 0件・処理できない学習素材もありません（閾値未満か素材なし）",
+            )
+        )
+        assert "status=EMPTY" in out
+
+    def test_setup_required_status_shown_when_queue_empty_but_blocked(self):
+        out = format_queue_table(
+            _result(
+                queue=[],
+                queue_status="SETUP_REQUIRED",
+                queue_status_reason="待ち PJ は0件ですが処理できない学習素材があります: skipped_dead 1 件",
+                skipped=[{"pj_slug": "dead1", "material_count": 5}],
+            )
+        )
+        assert "status=SETUP_REQUIRED" in out
+        assert "skipped_dead 1 件" in out
+
+    def test_no_status_key_emits_no_status_line(self):
+        """queue_status キー無し（旧 schema）の result dict は何も出さない（後方互換）。"""
+        out = format_queue_table(_result(queue=[]))
+        assert "status=" not in out
+
+    def test_reason_column_carries_verify_pending_suffix(self):
+        """verify_pending suffix は select_evolve_queue が reason に既に埋め込んでいる。
+        formatters は REASON 列をそのまま出すだけで verify 待ちが可視化される。"""
+        q = [
+            {
+                "pj_slug": "alpha",
+                "material_count": 5,
+                "weak_unprocessed": 3,
+                "new_corrections": 2,
+                "last_evolve_at": "2026-06-01T00:00:00+00:00",
+                "reason": "weak=3 + new corr=2 >= 3 / verify 待ち 2 件（前回 accept・検証可能）",
+                "verify_pending": {
+                    "run_id": "run1",
+                    "accepted": 2,
+                    "exposure_sessions": 3,
+                    "status": "verifiable",
+                },
+            }
+        ]
+        out = format_queue_table(
+            _result(queue=q, queue_status="READY", queue_status_reason="待ち PJ 1 件")
+        )
+        assert "verify 待ち 2 件（前回 accept・検証可能）" in out
+
+
+# --- build_queue_result 統合テスト（#267 Phase 5・実ストア E2E）--------------
+#
+# conftest.py の autouse fixture ``_isolate_plugin_data`` が CLAUDE_PLUGIN_DATA=tmp_path に
+# 固定し、import 済み store モジュール（advisory_decision_log / optimize_history_store /
+# session_store）の DATA_DIR を機械的に同じ tmp_path へ rebase する（#420）。よってここでは
+# tmp_path 直下に各ストアの実ファイルを書くだけで、build_queue_result の実 I/O 経路
+# （advisory_decisions.jsonl 読込 → optimize_history alias union → session store since クエリ）を
+# hermetic に検証できる。
+
+
+def _write_advisory_decisions(tmp_path, records):
+    (tmp_path / "advisory_decisions.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records)
+    )
+
+
+def _write_optimize_history(tmp_path, slug, records):
+    d = tmp_path / "optimize_history"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{slug}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+def _write_sessions(tmp_path, records):
+    (tmp_path / "sessions.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records)
+    )
+
+
+class TestBuildQueueResultVerifyIntegration:
+    """build_queue_result 経由の E2E — verify_pending/queue_status の各 finding を通しで検証。"""
+
+    def _build(self, tmp_path, *, pj_slugs, threshold=5, weak=None, corr=None, **kwargs):
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(r) + "\n" for r in (weak or [])))
+        corr_path = tmp_path / "corrections.jsonl"
+        corr_path.write_text("".join(json.dumps(r) + "\n" for r in (corr or [])))
+        return fq.build_queue_result(
+            pj_slugs=pj_slugs,
+            threshold=threshold,
+            weak_signals_path=ws,
+            corrections_path=corr_path,
+            last_evolve_map=kwargs.pop("last_evolve_map", {}),
+            activity_map=kwargs.pop("activity_map", {}),
+            generated_at="2026-07-27T09:00:00+00:00",
+            **kwargs,
+        )
+
+    def test_exposure_counts_only_sessions_after_accept(self, tmp_path):
+        """C2 E2E: exposure は accept 記録時刻**以降**のセッションのみ数える。"""
+        now = datetime.now(timezone.utc)
+        accept_ts = (now - timedelta(hours=1)).isoformat()
+        _write_advisory_decisions(
+            tmp_path,
+            [
+                {
+                    "pj_slug": "alpha",
+                    "proposal_id": "p1",
+                    "decision": "accept",
+                    "run_id": "run1",
+                    "recorded_at": accept_ts,
+                }
+            ],
+        )
+        _write_sessions(
+            tmp_path,
+            [
+                _sess("before", (now - timedelta(hours=2)).isoformat(), "/p/alpha"),
+                _sess("after", (now - timedelta(minutes=10)).isoformat(), "/p/alpha"),
+            ],
+        )
+        weak = [_ws("alpha", key=f"a{i}") for i in range(7)]  # threshold 到達（C1 昇格と分離）
+        result = self._build(tmp_path, pj_slugs=["alpha"], threshold=5, weak=weak)
+
+        vp = result["queue"][0]["verify_pending"]
+        assert vp["exposure_sessions"] == 1  # after のみ
+        assert vp["status"] == "verifiable"
+
+    def test_ttl_15_days_is_none_13_days_still_active(self, tmp_path):
+        """I1 E2E: accept が 15日前なら status=none、13日前なら残る。"""
+        now = datetime.now(timezone.utc)
+
+        _write_advisory_decisions(
+            tmp_path,
+            [
+                {
+                    "pj_slug": "expired",
+                    "proposal_id": "p1",
+                    "decision": "accept",
+                    "run_id": "run_old",
+                    "recorded_at": (now - timedelta(days=15)).isoformat(),
+                },
+                {
+                    "pj_slug": "active",
+                    "proposal_id": "p2",
+                    "decision": "accept",
+                    "run_id": "run_recent",
+                    "recorded_at": (now - timedelta(days=13)).isoformat(),
+                },
+            ],
+        )
+        weak = [_ws("expired", key="e1", detected=now.isoformat())] + [
+            _ws("active", key="a1", detected=now.isoformat())
+        ]
+        result = self._build(
+            tmp_path, pj_slugs=["expired", "active"], threshold=1, weak=weak
+        )
+
+        by_slug = {m["pj_slug"]: m for m in result["queue"]}
+        assert by_slug["expired"]["verify_pending"]["status"] == "none"
+        assert by_slug["active"]["verify_pending"]["status"] != "none"
+
+    def test_material_zero_but_verify_pending_still_queues(self, tmp_path):
+        """C1 E2E: material=0 でも verify 待ちがあれば queue に出る。"""
+        now = datetime.now(timezone.utc)
+        _write_advisory_decisions(
+            tmp_path,
+            [
+                {
+                    "pj_slug": "alpha",
+                    "proposal_id": "p1",
+                    "decision": "accept",
+                    "run_id": "run1",
+                    "recorded_at": (now - timedelta(hours=1)).isoformat(),
+                }
+            ],
+        )
+        result = self._build(tmp_path, pj_slugs=["alpha"], threshold=5)  # weak/corr 無し
+
+        assert [m["pj_slug"] for m in result["queue"]] == ["alpha"]
+        item = result["queue"][0]
+        assert item["material_count"] == 0
+        assert item["verify_pending"]["status"] != "none"
+        assert "material=0 < 5" in item["reason"]
+
+    def test_naive_optimize_timestamp_mixed_with_aware_advisory_resolves_latest(
+        self, tmp_path
+    ):
+        """C3 E2E: naive local（optimize lane）と aware UTC（advisory lane）が混在しても
+        最新 run 判定が正しい（本 PR 前は naive を UTC 決め打ちし JST 環境で 9 時間ずれた）。
+        """
+        older_aware = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        newer_aware_instant = datetime.now(timezone.utc) - timedelta(hours=1)
+        # naive local 文字列を本番 writer と同じ変換（astimezone → tzinfo 剥がし）で導出する。
+        newer_naive = (
+            newer_aware_instant.astimezone().replace(tzinfo=None).isoformat()
+        )
+
+        _write_advisory_decisions(
+            tmp_path,
+            [
+                {
+                    "pj_slug": "alpha",
+                    "proposal_id": "p_old",
+                    "decision": "accept",
+                    "run_id": "run_old",
+                    "recorded_at": older_aware,
+                }
+            ],
+        )
+        _write_optimize_history(
+            tmp_path,
+            "alpha",
+            [
+                {
+                    "id": "e1",
+                    "human_accepted": True,
+                    "run_id": "run_new",
+                    "timestamp": newer_naive,
+                }
+            ],
+        )
+        result = self._build(tmp_path, pj_slugs=["alpha"], threshold=5)
+
+        vp = result["queue"][0]["verify_pending"]
+        assert vp["run_id"] == "run_new"
+        assert vp["accepted"] == 1
+
+    def test_dead_pj_zero_material_is_empty_not_setup_required(self, tmp_path):
+        """C4 E2E: material_count=0 の dead PJ だけがある状態は EMPTY（SETUP_REQUIRED でない）。"""
+        result = self._build(
+            tmp_path,
+            pj_slugs=["ghost"],
+            threshold=5,
+            pj_paths={"ghost": str(tmp_path / "does-not-exist")},
+        )
+        assert result["skipped_dead"] == [
+            {
+                "pj_slug": "ghost",
+                "project_path": str(tmp_path / "does-not-exist"),
+                "weak_unprocessed": 0,
+                "new_corrections": 0,
+                "material_count": 0,
+            }
+        ]
+        assert result["queue_status"] == "EMPTY"
+
+    def test_unattributed_correction_31_days_old_does_not_trigger_setup_required(
+        self, tmp_path
+    ):
+        """C5 E2E: 31日前の未帰属 correction のみでは SETUP_REQUIRED にならない。"""
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+        result = self._build(
+            tmp_path,
+            pj_slugs=[],
+            threshold=5,
+            corr=[{"project_path": "", "source": "backfill", "timestamp": old_ts}],
+        )
+        assert result["unattributed_corrections"]["total"] == 0
+        assert result["queue_status"] == "EMPTY"
+
+    def test_alias_optimize_history_accept_recovered_via_current_slug(self, tmp_path):
+        """I2 E2E: rename 済 PJ の旧 slug 名義 optimize_history accept が現 slug の
+        verify_pending に反映される（PJ_SLUG_ALIASES の実エントリ rl-anything→evolve-anything）。
+        """
+        now = datetime.now(timezone.utc)
+        _write_optimize_history(
+            tmp_path,
+            "rl-anything",  # 旧 slug（現 slug は evolve-anything）
+            [
+                {
+                    "id": "legacy1",
+                    "human_accepted": True,
+                    "run_id": "r1",
+                    "timestamp": (now - timedelta(hours=1)).isoformat(),
+                }
+            ],
+        )
+        result = self._build(tmp_path, pj_slugs=["evolve-anything"], threshold=5)
+
+        assert [m["pj_slug"] for m in result["queue"]] == ["evolve-anything"]
+        vp = result["queue"][0]["verify_pending"]
+        assert vp["accepted"] == 1
+        assert vp["run_id"] == "r1"

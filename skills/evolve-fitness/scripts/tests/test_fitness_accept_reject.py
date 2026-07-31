@@ -6,6 +6,7 @@
 """
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,12 @@ class TestRecordEvolveDiffDecisionE2E:
         assert "timestamp" in entry
         assert "id" in entry
 
+        # #267 C3: naive local time は queue_verify._parse_iso と JST で 9 時間ずれるため
+        # aware UTC で書く（同一 instant の naive/aware 混在比較の罠を writer 側で防ぐ）。
+        parsed_ts = datetime.fromisoformat(entry["timestamp"])
+        assert parsed_ts.tzinfo is not None
+        assert parsed_ts.utcoffset().total_seconds() == 0
+
         # 書き込まれた行が読み戻せる
         lines = history_file.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
@@ -88,6 +95,33 @@ class TestRecordEvolveDiffDecisionE2E:
         )
         assert entry["human_accepted"] is False
         assert entry["rejection_reason"] == "意味が変わる"
+
+    def test_run_id_is_recorded_when_provided(self, tmp_path):
+        """run_id を渡すと entry / history.jsonl に純加算される（#267 Sprint 1）。"""
+        history_file = tmp_path / "history.jsonl"
+        entry = fe.record_evolve_diff_decision(
+            skill_name="my-skill",
+            after_content=GOOD_SKILL,
+            diff_summary="x",
+            human_accepted=True,
+            history_file=history_file,
+            run_id="run-abc",
+        )
+        assert entry["run_id"] == "run-abc"
+        lines = history_file.read_text(encoding="utf-8").splitlines()
+        assert json.loads(lines[0])["run_id"] == "run-abc"
+
+    def test_run_id_defaults_to_none_when_omitted(self, tmp_path):
+        """run_id 未指定（既存呼び出し元との後方互換）は None（キー欠落でなく明示 None）。"""
+        history_file = tmp_path / "history.jsonl"
+        entry = fe.record_evolve_diff_decision(
+            skill_name="my-skill",
+            after_content=GOOD_SKILL,
+            diff_summary="x",
+            human_accepted=True,
+            history_file=history_file,
+        )
+        assert entry["run_id"] is None
 
     def test_idempotent_ingest_by_id(self, tmp_path):
         """同一 id の二重記録は1行に保たれる（冪等）。"""

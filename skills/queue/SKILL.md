@@ -46,9 +46,26 @@ promoted 昇格済み・TTL 失効・bootstrap 消化・content-poor を除い�
 
 ### Step 2: 結果を読み解いて提示
 
-- **待ち 0 件** → 「今日は evolve 待ちなし」で終了（無理に evolve しない）。
+先頭行に `queue_status`（`READY` / `SETUP_REQUIRED` / `EMPTY`）+ `queue_status_reason` が必ず1行出る
+（#267）。queue が空のとき「本当に素材が無い」(`EMPTY`) のか「素材はあるのに処理できていない」
+(`SETUP_REQUIRED` — untracked material / skipped_dead / skipped_phantom / 未帰属 corrections のいずれか
+が原因) のかをこの行で見分ける。`SETUP_REQUIRED` のときは `queue_status_reason` が示す内訳（例:
+`untracked material 2 件` / `skipped_dead 1 件`）に沿って footer の該当セクションを確認する。
+
+- **待ち 0 件（`queue_status=EMPTY`）** → 「今日は evolve 待ちなし」で終了（無理に evolve しない）。
+- **待ち 0 件（`queue_status=SETUP_REQUIRED`）** → 「待ちは無いが処理できない学習素材がある」ことを
+  `queue_status_reason` の内訳とともに提示する（放置しない方がよい）。
 - **待ちあり** → テーブルの上から、各 PJ の `REASON`（weak=… + new corr=…）をそのまま添えて提示する。
   `MATERIAL` が大きい PJ ほど溜まった学習素材が多い＝改善余地が大きい、という読み方を 1 行添える。
+
+`REASON` に `/ verify 待ち N 件（前回 accept・検証可能）` または `（…・露出セッションなし）` が付いて
+いたら、直近 evolve run で accept 済みだがまだ効果検証していない提案が N 件あることを示す（#267）。
+「検証可能」は accept 後に実タスクセッションが実行済み＝効果を確かめられる状態、「露出セッションなし」
+は accept 後まだ何もタスクをこなしていない＝評価材料が無い状態。この verify 待ちは **material が
+threshold 未満でも queue に残る**（`REASON` が `verify 待ち N 件（…） / material=M < threshold` の形なら
+material 閾値未満での昇格 — evolve 直後で material がリセットされた直後こそ、直前の accept を検証すべき
+タイミングだと示している）。verify 待ちは記録から14日経つと自動的に表示から外れる（read 時失効・
+新ストア不要）。
 
 ### Step 3: 上から処理する（適用は人間承認）
 

@@ -266,6 +266,21 @@ def test_ingest_applied_is_accept(result_with_match, skill_file, monkeypatch, tm
     assert recs[0]["fitness_func"] == "skill_quality"
 
 
+def test_ingest_applied_accept_carries_run_id(
+    result_with_match, skill_file, monkeypatch, tmp_path, hist
+):
+    """emit の run envelope が optimize_history の accept entry に純加算される（#267 Sprint 1）。"""
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    run_id = out["run_id"]
+    assert run_id  # emit は必ず run_id を割り当てる
+    skill_file.write_text("# my-skill\n\n改善されたトリガー: foo bar baz\n\n手順を踏む。\n", encoding="utf-8")
+    ed.ingest_decisions("testslug", dry_run=False, history_file=hist)
+    recs = _read_jsonl(hist)
+    assert len(recs) == 1
+    assert recs[0]["run_id"] == run_id
+
+
 def test_ingest_unchanged_with_explicit_reject(result_with_match, skill_file, monkeypatch, tmp_path, hist):
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
     out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
