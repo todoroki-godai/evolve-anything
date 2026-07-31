@@ -82,7 +82,10 @@ def main(argv: List[str] | None = None) -> int:
     p_norm.add_argument(
         "--check",
         action="store_true",
-        help="書き換えず lint のみ（ok=0 / drift=1 / danger=2）。diff を提示する",
+        help=(
+            "書き換えず lint のみ"
+            "（ok=0 / drift=1 / danger=2 / not_a_pitfalls_file=3）。diff を提示する"
+        ),
     )
 
     p_en = sub.add_parser(
@@ -180,6 +183,9 @@ def main(argv: List[str] | None = None) -> int:
             if res["state"] == "danger":
                 print(f"✗ {res['reason']}", file=sys.stderr)
                 return 2
+            if res["state"] == "not_a_pitfalls_file":
+                print(f"✗ {res['reason']}", file=sys.stderr)
+                return 3
             sys.stdout.write(res["diff"])
             print(
                 "\n⚠ 正準フォーマットと差分があります。"
@@ -206,13 +212,14 @@ def main(argv: List[str] | None = None) -> int:
             or os.getcwd()
         )
         res = core.check_normalized(_read(args.pitfalls))
-        if res["state"] == "danger":
+        if res["state"] in ("danger", "not_a_pitfalls_file"):
             print(f"✗ 登録できません: {res['reason']}", file=sys.stderr)
-            print(
-                "  index/TOC ファイルは pitfalls エントリファイルではありません。"
-                "category ファイルを指定してください。",
-                file=sys.stderr,
-            )
+            if res["state"] == "danger":
+                print(
+                    "  index/TOC ファイルは pitfalls エントリファイルではありません。"
+                    "category ファイルを指定してください。",
+                    file=sys.stderr,
+                )
             return 2
         added = pitfall_registry.add_managed(project_dir, args.pitfalls)
         if added:

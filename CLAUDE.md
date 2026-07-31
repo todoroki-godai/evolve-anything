@@ -69,7 +69,7 @@
 | `slop_detector` | AI slop 日英 10 パターンの決定論検出（#255） | `slop_detector.py` |
 | `skill_extractor` | 成功軌跡採掘→スキル候補生成 + 4軸分解 + 3層ノイズ除去（#291, #381, #387）+ failure-rollout マイニング + 失敗の罠軸 (#27) | `skill_extractor/` |
 | `skill_rm` | スキル軸の異種基準統一報酬 — 3軸射影で横断評価（#304） | `fitness/skill_rm.py` |
-| pitfall 自動強制 | pitfalls.md の編集時 lint + commit ゲート（オプトイン）[ADR-027] | `pitfall_registry.py` |
+| pitfall 自動強制 | pitfalls.md の編集時 lint + commit ゲート（オプトイン）[ADR-027]。lint は ok/drift/danger に加え `not_a_pitfalls_file`（gate スコア表等の非 pitfals データ）も検出し danger 同様ブロック。regression gate の書込先を `references/gate-failures.md` に分離し人間向け pitfalls.md との衝突を根治（#308） | `pitfall_registry.py` + `pitfall-curate/scripts/parse.py` + `genetic-prompt-optimizer/scripts/optimize_core.py` |
 | `agent_team` | エージェント間の役割重複・孤立の決定論検出（#326） | `agent_team.py` |
 | observability contract | 必ず surface すべき行の単一ソース（markdown/構造化 両経路）[ADR-028] | `audit/observability.py` |
 | advisory section 共通枠 | 全 observability section の header/trailer 規約を単一化する2層 helper（`advisory_header`/`finalize` + `build_advisory_section`）+ `_OBSERVABILITY_BUILDERS` 横断の契約テストで silence≠evaluated を構造担保。builder 20個が経由、CUSTOM 8個は据え置き（#115） | `audit/advisory.py` |

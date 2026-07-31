@@ -26,6 +26,8 @@ INDEX = (
     "# index\n\n> TOC\n\n| # | 問題 |\n|---|------|\n| 1 | a |\n\n"
     "- [pitfalls-x.md](pitfalls-x.md) — x\n- [pitfalls-y.md](pitfalls-y.md) — y\n"
 )
+# #308: regression_gate の gate スコア表が誤って pitfalls.md に書かれたケース
+GATE_TABLE = "| Source | Pattern | Score |\n|--------|---------|-------|\n| gate | frontmatter_lost | 0.00 |\n"
 
 
 def _setup(tmp_path, content):
@@ -71,6 +73,15 @@ def test_managed_danger_warns_about_data_loss(tmp_path):
     msg = pitfall_lint.evaluate(_event(pf), str(tmp_path))
     assert msg is not None
     assert "失う" in msg
+
+
+def test_managed_not_a_pitfalls_file_warns(tmp_path):
+    """#308: gate スコア表は danger と同様に強い警告を出す（generic drift 扱いにしない）。"""
+    pf = _setup(tmp_path, GATE_TABLE)
+    pitfall_registry.add_managed(tmp_path, pf)
+    msg = pitfall_lint.evaluate(_event(pf), str(tmp_path))
+    assert msg is not None
+    assert "pitfalls エントリファイルではない" in msg
 
 
 def test_error_result_is_silent(tmp_path):

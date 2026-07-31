@@ -31,6 +31,7 @@ from optimize_core import (
     extract_markdown,
     format_gate_reason,
     record_pitfall,
+    resolve_pitfall_patterns_path,
     restore_frontmatter_if_lost,
     run_regression_gate,
 )
@@ -636,6 +637,8 @@ class TestDeprecatedOptions:
 
 
 # --- Pitfall テスト ---
+# #308: record_pitfall の書込先は references/pitfalls.md（人間向け prose・
+# collect_context が読む）から独立した references/gate-failures.md に分離した。
 
 class TestPitfalls:
     def test_record_pitfall(self, temp_dir):
@@ -643,9 +646,9 @@ class TestPitfalls:
         skill_path.touch()
         record_pitfall(str(skill_path), "gate", "empty", 0.0)
 
-        pitfalls = temp_dir / "references" / "pitfalls.md"
-        assert pitfalls.exists()
-        content = pitfalls.read_text(encoding="utf-8")
+        gate_failures = temp_dir / "references" / "gate-failures.md"
+        assert gate_failures.exists()
+        content = gate_failures.read_text(encoding="utf-8")
         assert "empty" in content
 
     def test_pitfall_重複排除(self, temp_dir):
@@ -654,9 +657,191 @@ class TestPitfalls:
         record_pitfall(str(skill_path), "gate", "empty", 0.0)
         record_pitfall(str(skill_path), "gate", "empty", 0.0)
 
-        pitfalls = temp_dir / "references" / "pitfalls.md"
-        content = pitfalls.read_text(encoding="utf-8")
+        gate_failures = temp_dir / "references" / "gate-failures.md"
+        content = gate_failures.read_text(encoding="utf-8")
         assert content.count("empty") == 1
+
+    def test_record_pitfall_does_not_touch_prose_pitfalls_md(self, temp_dir):
+        """#308: gate 記録は pitfalls.md（人間向け prose）に一切書き込まない。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        refs_dir = temp_dir / "references"
+        refs_dir.mkdir()
+        prose_pitfalls = refs_dir / "pitfalls.md"
+        prose_content = (
+            "# Pitfalls\n\n## Active Pitfalls\n\n"
+            "### 実 pitfall\n- **Status**: Active\n- **Root-cause**: action — 何か\n"
+        )
+        prose_pitfalls.write_text(prose_content, encoding="utf-8")
+
+        record_pitfall(str(skill_path), "gate", "empty", 0.0)
+
+        # 人間向け pitfalls.md は無変更（散文が消失しない）
+        assert prose_pitfalls.read_text(encoding="utf-8") == prose_content
+        # gate 記録は別ファイルに書かれる
+        gate_failures = refs_dir / "gate-failures.md"
+        assert gate_failures.exists()
+        assert "empty" in gate_failures.read_text(encoding="utf-8")
+
+    def test_record_pitfall_refuses_to_overwrite_foreign_content(self, temp_dir, capsys):
+        """#308: gate-failures.md 自体に散文/表以外の内容が混入していたら上書きしない。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        refs_dir = temp_dir / "references"
+        refs_dir.mkdir()
+        gate_failures = refs_dir / "gate-failures.md"
+        foreign_content = "# Pitfalls\n\n## Active Pitfalls\n\n### 実 pitfall\n- **Status**: Active\n"
+        gate_failures.write_text(foreign_content, encoding="utf-8")
+
+        record_pitfall(str(skill_path), "gate", "empty", 0.0)
+
+        assert gate_failures.read_text(encoding="utf-8") == foreign_content
+        assert "書込をスキップ" in capsys.readouterr().err
+
+    def test_recorded_forbidden_pattern_is_read_back_from_new_path(self, temp_dir):
+        """#308: record_pitfall で書いた gate 行が、同じ新パスから regression gate に
+        読み戻され、新規パッチ候補を実際に拒否できる（読み書き経路の整合）。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+
+        record_pitfall(str(skill_path), "gate", "forbidden_pattern(BADWORD)", 0.0)
+
+        pitfall_path = resolve_pitfall_patterns_path(skill_path)
+        assert pitfall_path == str(temp_dir / "references" / "gate-failures.md")
+
+        passed, reason = run_regression_gate(
+            "candidate containing BADWORD here", None, max_lines=100,
+            pitfall_path=pitfall_path,
+        )
+        assert passed is False
+        assert reason == "pitfall_pattern(BADWORD)"
+
+    # --- #308 codex cold-read 指摘への回帰テスト ---
+
+    def test_legacy_forbidden_pattern_still_gates_after_upgrade(self, temp_dir):
+        """High: 分離アップグレード直後も旧 pitfalls.md の禁止パターンが効き続ける。
+
+        gate-failures.md がまだ無い状態（=アップグレード直後）で、旧ファイルの
+        `forbidden_pattern(X)` が失われると安全網が恒久的に消える（該当候補は gate 不合格に
+        ならないので新ファイルへ自然移行もしない）。read-only フォールバックで拾う。
+        """
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        refs_dir = temp_dir / "references"
+        refs_dir.mkdir()
+        legacy = refs_dir / "pitfalls.md"
+        legacy.write_text(
+            "| Source | Pattern | Score |\n|--------|---------|-------|\n"
+            "| gate | forbidden_pattern(LEGACYBAD) | 0.00 |\n",
+            encoding="utf-8",
+        )
+
+        pitfall_path = resolve_pitfall_patterns_path(skill_path)
+        assert pitfall_path == str(legacy)
+
+        passed, reason = run_regression_gate(
+            "candidate containing LEGACYBAD here", None, max_lines=100,
+            pitfall_path=pitfall_path,
+        )
+        assert passed is False
+        assert reason == "pitfall_pattern(LEGACYBAD)"
+
+    def test_prose_pitfalls_md_is_not_used_as_pattern_source(self, temp_dir):
+        """フォールバックは `forbidden_pattern(...)` 行を持つ旧ファイルだけを対象にする。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        refs_dir = temp_dir / "references"
+        refs_dir.mkdir()
+        (refs_dir / "pitfalls.md").write_text(
+            "# Pitfalls\n\n## Active Pitfalls\n\n### 実 pitfall\n- **Status**: Active\n",
+            encoding="utf-8",
+        )
+        assert resolve_pitfall_patterns_path(skill_path) is None
+
+    def test_new_path_wins_over_legacy(self, temp_dir):
+        """移行後は新ファイルだけを見る（旧ファイルが残っていても参照しない）。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        refs_dir = temp_dir / "references"
+        refs_dir.mkdir()
+        (refs_dir / "pitfalls.md").write_text(
+            "| Source | Pattern | Score |\n|--------|---------|-------|\n"
+            "| gate | forbidden_pattern(LEGACYBAD) | 0.00 |\n",
+            encoding="utf-8",
+        )
+        record_pitfall(str(skill_path), "gate", "forbidden_pattern(NEWBAD)", 0.0)
+
+        assert resolve_pitfall_patterns_path(skill_path) == str(refs_dir / "gate-failures.md")
+
+    def test_record_pitfall_refuses_foreign_pipe_table(self, temp_dir, capsys):
+        """Medium: 別用途の pipe テーブルを正規データと誤認して全上書きしない。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        refs_dir = temp_dir / "references"
+        refs_dir.mkdir()
+        gate_failures = refs_dir / "gate-failures.md"
+        foreign = "| Owner | Note |\n|-------|------|\n| Alice | retain this |\n"
+        gate_failures.write_text(foreign, encoding="utf-8")
+
+        record_pitfall(str(skill_path), "gate", "empty", 0.0)
+
+        assert gate_failures.read_text(encoding="utf-8") == foreign
+        assert "書込をスキップ" in capsys.readouterr().err
+
+    def test_record_pitfall_refuses_broken_header(self, temp_dir, capsys):
+        """ヘッダ2行が正規形と一致しないファイルは上書きしない。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        refs_dir = temp_dir / "references"
+        refs_dir.mkdir()
+        gate_failures = refs_dir / "gate-failures.md"
+        broken = "| Source | Pattern | Score |\n| gate | empty | 0.00 |\n"  # 区切り行が無い
+        gate_failures.write_text(broken, encoding="utf-8")
+
+        record_pitfall(str(skill_path), "gate", "other", 0.0)
+
+        assert gate_failures.read_text(encoding="utf-8") == broken
+        assert "書込をスキップ" in capsys.readouterr().err
+
+    def test_record_pitfall_refuses_non_numeric_score_column(self, temp_dir, capsys):
+        """score 列が数値でも `-` でもない行が混じるファイルは上書きしない。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        refs_dir = temp_dir / "references"
+        refs_dir.mkdir()
+        gate_failures = refs_dir / "gate-failures.md"
+        broken = (
+            "| Source | Pattern | Score |\n|--------|---------|-------|\n"
+            "| gate | empty | retain this |\n"
+        )
+        gate_failures.write_text(broken, encoding="utf-8")
+
+        record_pitfall(str(skill_path), "gate", "other", 0.0)
+
+        assert gate_failures.read_text(encoding="utf-8") == broken
+        assert "書込をスキップ" in capsys.readouterr().err
+
+    def test_record_pitfall_appends_to_its_own_table(self, temp_dir):
+        """自分が書いた正規の表には追記できる（ガードが自己ロックしない）。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        record_pitfall(str(skill_path), "gate", "empty", 0.0)
+        record_pitfall(str(skill_path), "gate", "frontmatter_lost", 0.5)
+
+        content = (temp_dir / "references" / "gate-failures.md").read_text(encoding="utf-8")
+        assert "empty" in content and "frontmatter_lost" in content
+
+    def test_record_pitfall_sanitizes_pipe_in_pattern(self, temp_dir):
+        """pattern 内の `|` は列ズレを起こすので置換する（読み戻せる表を保つ）。"""
+        skill_path = temp_dir / "SKILL.md"
+        skill_path.touch()
+        record_pitfall(str(skill_path), "gate", "forbidden_pattern(a|b)", 0.0)
+
+        gate_failures = temp_dir / "references" / "gate-failures.md"
+        assert "a/b" in gate_failures.read_text(encoding="utf-8")
+        # 自分が書いた表を再度読み書きできる（自己ロックしない）
+        record_pitfall(str(skill_path), "gate", "empty", 0.0)
+        assert "empty" in gate_failures.read_text(encoding="utf-8")
 
 
 # --- extract_markdown テスト ---

@@ -466,10 +466,27 @@ INDEX_FORMAT = """# aws-deploy: 既知の問題と対策
 """
 
 
+# #308: genetic-prompt-optimizer の regression_gate が誤った宛先（本来 gate-failures.md
+# であるべきパス）に書いた gate スコア表。エントリ0件・全行が pipe テーブルという構造的
+# 指紋を持つが、行数がわずか3行のため _NON_ENTRY_CONTENT_FLOOR（3）を超えず、素朴な
+# 行数閾値だけでは INDEX_FORMAT と同じ "danger" 判定に落ちてしまう（実際に spec-keeper で
+# drift 判定に素通りしていた）。
+GATE_SCORE_TABLE = """| Source | Pattern | Score |
+|--------|---------|-------|
+| gate | frontmatter_lost | 0.00 |
+"""
+
+
 def test_normalize_refuses_index_file():
     """エントリ0件だが実質コンテンツ（テーブル/リンク）がある index/TOC は wipe せず拒否する。"""
     with pytest.raises(ValueError):
         pc.normalize(INDEX_FORMAT)
+
+
+def test_normalize_refuses_gate_score_table():
+    """#308: gate スコア表（pipe テーブルのみ・3行）も wipe せず拒否する。"""
+    with pytest.raises(ValueError):
+        pc.normalize(GATE_SCORE_TABLE)
 
 
 def test_normalize_allows_empty_seed():
@@ -511,6 +528,31 @@ def test_check_normalized_danger_on_index_does_not_raise():
     assert res["diff"] == ""
 
 
+def test_check_normalized_not_a_pitfalls_file_on_gate_table():
+    """#308: gate スコア表は danger/drift と別カテゴリ not_a_pitfalls_file を返す。
+
+    3行という短さでも（_NON_ENTRY_CONTENT_FLOOR=3 を超えなくても）pipe テーブルのみという
+    構造で確実に検出できることを確認する（実際に issue #308 で drift 判定に素通りした事例）。
+    """
+    res = pc.check_normalized(GATE_SCORE_TABLE)
+    assert res["state"] == "not_a_pitfalls_file"
+    assert res["reason"]
+    assert res["diff"] == ""
+
+
+def test_check_normalized_not_a_pitfalls_file_distinct_from_danger():
+    """not_a_pitfalls_file と danger（index/TOC）は別カテゴリ。INDEX_FORMAT は danger のまま。"""
+    assert pc.check_normalized(INDEX_FORMAT)["state"] == "danger"
+    assert pc.check_normalized(GATE_SCORE_TABLE)["state"] == "not_a_pitfalls_file"
+
+
+def test_check_normalized_not_a_pitfalls_file_does_not_flag_normal_pitfalls():
+    """正常な pitfalls.md（canonical / drift / seed）は not_a_pitfalls_file にならない。"""
+    assert pc.check_normalized(pc.normalize(SAMPLE))["state"] != "not_a_pitfalls_file"
+    assert pc.check_normalized(NUMBERED_WITH_SUBSECTIONS)["state"] != "not_a_pitfalls_file"
+    assert pc.check_normalized(pc.render_seed())["state"] != "not_a_pitfalls_file"
+
+
 def test_check_normalized_after_normalize_is_ok():
     """drift なファイルも一度 normalize すれば ok になる（収束）。"""
     once = pc.normalize(NUMBERED_WITH_SUBSECTIONS)
@@ -541,6 +583,13 @@ def test_cli_check_exit_danger(tmp_path):
     import pitfall_curate as cli
     path = _write(tmp_path, INDEX_FORMAT)
     assert cli.main(["normalize", "--pitfalls", path, "--check"]) == 2
+
+
+def test_cli_check_exit_not_a_pitfalls_file(tmp_path):
+    """#308: gate スコア表は danger(2) と別の exit code 3 を返す。"""
+    import pitfall_curate as cli
+    path = _write(tmp_path, GATE_SCORE_TABLE)
+    assert cli.main(["normalize", "--pitfalls", path, "--check"]) == 3
 
 
 def test_cli_check_does_not_write(tmp_path):
@@ -587,6 +636,17 @@ def test_enable_refuses_index_file(tmp_path):
     import pitfall_registry as reg
     path = _enable_setup(tmp_path, INDEX_FORMAT)
     # index/TOC は pitfalls エントリファイルではないので登録を拒否する（exit 2）
+    assert cli.main(
+        ["enable", "--pitfalls", path, "--project-dir", str(tmp_path)]
+    ) == 2
+    assert reg.is_managed(tmp_path, path) is False
+
+
+def test_enable_refuses_gate_score_table(tmp_path):
+    """#308: gate スコア表（not_a_pitfalls_file）も enable を拒否する（exit 2）。"""
+    import pitfall_curate as cli
+    import pitfall_registry as reg
+    path = _enable_setup(tmp_path, GATE_SCORE_TABLE)
     assert cli.main(
         ["enable", "--pitfalls", path, "--project-dir", str(tmp_path)]
     ) == 2

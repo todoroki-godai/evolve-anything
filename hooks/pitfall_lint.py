@@ -80,6 +80,10 @@ def evaluate(event: dict, project_dir: str) -> Optional[str]:
             "  このまま commit すると内容を失う恐れがあります。"
             "`### タイトル` 形式のエントリへ再構成してください。"
         )
+    if res["state"] == "not_a_pitfalls_file":
+        # #308: gate スコア表等、そもそも pitfalls エントリファイルではないデータ。
+        # diff が空なので drift 用の generic メッセージには乗せず専用文言を返す。
+        return f"[evolve-anything:pitfall_lint] ⚠ {path.name}: {res['reason']}"
     return (
         f"[evolve-anything:pitfall_lint] ⚠ {path.name} が正準フォーマットと差分があります"
         "（自動修正はしません）。正準化の提案:\n"

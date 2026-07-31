@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # regression_gate を単独 import 可能にするため自己パス解決
 _CORE_PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -19,7 +19,14 @@ if _LIB_PATH not in sys.path:
     sys.path.insert(0, _LIB_PATH)
 
 PITFALLS_MAX_ROWS = 50
-PITFALLS_HEADER = "| Source | Pattern | Score |\n|--------|---------|-------|\n"
+GATE_FAILURES_HEADER = "| Source | Pattern | Score |\n|--------|---------|-------|\n"
+# 後方互換のためのエイリアス（旧名を参照するコードが残っていても壊れない）
+PITFALLS_HEADER = GATE_FAILURES_HEADER
+
+# #308: regression gate の失敗パターン記録は人間向け references/pitfalls.md
+# （collect_context が prompt context に読む prose）と衝突していた（同一パスへ writer と
+# reader Aが競合し、gate 不合格の度にスコア表で prose を全上書き）。専用ファイルへ分離する。
+GATE_FAILURES_FILENAME = "gate-failures.md"
 
 # GEPA ガードレール（#120）: context に全文投入する pitfalls.md の文字数上限。
 # 入力肥大化（プロンプト bloat → 過学習）を抑える。値 8000 は他ドメイン流用でなく
@@ -471,24 +478,114 @@ def run_subgoal_scoring(
 # ── pitfall 記録 ─────────────────────────────────────────────────────
 
 
+def gate_failures_path(target_path: Union[str, Path]) -> Path:
+    """target_path（スキル/ルールファイル）に対応する gate-failures.md のパスを返す。
+
+    #308: record_pitfall の書込先。人間向け references/pitfalls.md とは別ファイル。
+    """
+    return Path(target_path).parent / "references" / GATE_FAILURES_FILENAME
+
+
+_FORBIDDEN_ROW_RE = re.compile(r"^\|\s*gate\s*\|\s*forbidden_pattern\(.+\)\s*\|")
+
+
+def _has_forbidden_pattern_rows(path: Path) -> bool:
+    """ファイルが `| gate | forbidden_pattern(X) | ... |` 行を1つ以上含むか。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return any(_FORBIDDEN_ROW_RE.match(line.strip()) for line in text.splitlines())
+
+
+def resolve_pitfall_patterns_path(target_path: Union[str, Path]) -> Optional[str]:
+    """regression gate が読む「既知の失敗パターン」ファイルのパスを解決する。
+
+    #308: 書込先は専用ファイル references/gate-failures.md に分離したが、**読み取りは
+    旧 references/pitfalls.md への read-only フォールバックを残す**（codex cold-read 指摘）。
+    書込の分離と旧データの読み取りは独立した問題で、フォールバック無しだと分離した瞬間に
+    既存の `forbidden_pattern(X)`（regression gate が実際に消費している安全網）が恒久的に
+    失われる — しかも該当候補は gate 不合格にならないため新ファイルへ「自然に移行」もしない。
+
+    フォールバックは以下で FP を避ける:
+    - 新ファイルが存在すればそれだけを見る（移行後は旧ファイルを参照しない）
+    - 旧ファイルは `| gate | forbidden_pattern(...) | ... |` 行を実際に含むときだけ返す。
+      人間向け prose の pitfalls.md は当該行を持たないので参照対象にならない
+    - 返すのは読み取り用パスのみ（`record_pitfall` は旧パスへ一切書かない）
+    """
+    path = gate_failures_path(target_path)
+    if path.exists():
+        return str(path)
+    legacy = Path(target_path).parent / "references" / "pitfalls.md"
+    if legacy.exists() and _has_forbidden_pattern_rows(legacy):
+        return str(legacy)
+    return None
+
+
+def _is_pure_gate_table(text: str) -> bool:
+    """gate-failures.md が `record_pitfall` 自身が書いた正規のスコア表かを判定する。
+
+    #308（codex cold-read 指摘）: 「各行が `|` で始まる」だけでは別用途の pipe テーブル
+    （`| Owner | Note |` 等）まで正規データと誤認し、先頭2行をヘッダー扱いして全上書きして
+    しまう。`record_pitfall` が書く形式そのもの — ヘッダ2行が `GATE_FAILURES_HEADER` と
+    完全一致し、データ行が 3 列で score が数値か `-` — を満たすときだけ True を返す。
+    空ファイルは書き始めなので True。
+    """
+    stripped = text.strip()
+    if not stripped:
+        return True
+    lines = stripped.split("\n")
+    if [line.strip() for line in lines[:2]] != [
+        line.strip() for line in GATE_FAILURES_HEADER.strip().split("\n")
+    ]:
+        return False
+    for line in lines[2:]:
+        s = line.strip()
+        if not s:
+            continue
+        if not s.startswith("|") or not s.endswith("|"):
+            return False
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if len(cells) < 3:
+            return False
+        score = cells[-1]
+        if score != "-":
+            try:
+                float(score)
+            except ValueError:
+                return False
+    return True
+
+
 def record_pitfall(
     target_path: str,
     source: str,
     pattern: str,
     score: Optional[float] = None,
 ) -> None:
-    """失敗パターンを references/pitfalls.md に記録する。"""
+    """失敗パターンを references/gate-failures.md に記録する（#308: pitfalls.md から分離）。"""
     target = Path(target_path)
     refs_dir = target.parent / "references"
     refs_dir.mkdir(parents=True, exist_ok=True)
-    pitfalls_file = refs_dir / "pitfalls.md"
+    pitfalls_file = gate_failures_path(target)
 
     score_str = f"{score:.2f}" if score is not None else "-"
-    new_row = f"| {source} | {pattern} | {score_str} |"
+    # #308: セル区切りと衝突する `|` はエスケープでなく置換で潰す。混入すると
+    # `_load_pitfall_patterns`（`|` split で列位置を取る）が列ズレで読めなくなり、
+    # 自分が書いた行を読み戻せない壊れた表を作ってしまう。
+    new_row = f"| {source.replace('|', '/')} | {pattern.replace('|', '/')} | {score_str} |"
 
     existing_rows: List[str] = []
     if pitfalls_file.exists():
-        lines = pitfalls_file.read_text(encoding="utf-8").strip().split("\n")
+        existing_text = pitfalls_file.read_text(encoding="utf-8")
+        if not _is_pure_gate_table(existing_text):
+            print(
+                f"警告: {pitfalls_file} はスコア表以外の内容を含むため書込をスキップしました"
+                "（record_pitfall は gate 失敗パターン専用ファイルにのみ書きます。#308）",
+                file=sys.stderr,
+            )
+            return
+        lines = existing_text.strip().split("\n")
         for line in lines[2:]:
             if line.strip().startswith("|"):
                 existing_rows.append(line.strip())
@@ -503,7 +600,7 @@ def record_pitfall(
     if len(existing_rows) > PITFALLS_MAX_ROWS:
         existing_rows = existing_rows[-PITFALLS_MAX_ROWS:]
 
-    output = PITFALLS_HEADER + "\n".join(existing_rows) + "\n"
+    output = GATE_FAILURES_HEADER + "\n".join(existing_rows) + "\n"
     pitfalls_file.write_text(output, encoding="utf-8")
 
 

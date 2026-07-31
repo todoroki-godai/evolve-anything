@@ -51,6 +51,7 @@ from optimize_core import (  # noqa: E402
     detect_scope,
     determine_strategy,
     generate_candidate,
+    resolve_pitfall_patterns_path,
 )
 from line_limit import MAX_RULE_LINES, MAX_SKILL_LINES, max_chars_for  # noqa: E402
 import loop_ablation_stats as _stats  # noqa: E402
@@ -90,8 +91,7 @@ def _build_prompts(target: Path, original_content: str):
     is_rule_file = ".claude/rules/" in str(target)
     max_lines = MAX_RULE_LINES if is_rule_file else MAX_SKILL_LINES
     max_chars = max_chars_for(max_lines)
-    pitfall_path_obj = target.parent / "references" / "pitfalls.md"
-    pitfall_path = str(pitfall_path_obj) if pitfall_path_obj.exists() else None
+    pitfall_path = resolve_pitfall_patterns_path(target)  # #308
     claude_cwd: Optional[str] = str(Path.home()) if detect_scope(target) == "global" else None
 
     designed_strategy = determine_strategy("auto", corrections)

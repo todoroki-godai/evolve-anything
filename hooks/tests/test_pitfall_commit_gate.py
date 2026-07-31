@@ -28,6 +28,8 @@ INDEX = (
     "# index\n\n> TOC\n\n| # | 問題 |\n|---|------|\n| 1 | a |\n\n"
     "- [pitfalls-x.md](pitfalls-x.md) — x\n- [pitfalls-y.md](pitfalls-y.md) — y\n"
 )
+# #308: regression_gate の gate スコア表が誤って pitfalls.md に書かれたケース
+GATE_TABLE = "| Source | Pattern | Score |\n|--------|---------|-------|\n| gate | frontmatter_lost | 0.00 |\n"
 
 
 def _make_runner(staged_names, contents):
@@ -84,6 +86,15 @@ def test_no_managed_files_allows(tmp_path):
 def test_danger_staged_denies(tmp_path):
     _enable(tmp_path)
     runner = _make_runner([REL], {REL: INDEX})
+    res = gate.evaluate(_commit_event(), str(tmp_path), runner)
+    assert res["decision"] == "deny"
+    assert REL in res["message"]
+
+
+def test_not_a_pitfalls_file_staged_denies(tmp_path):
+    """#308: gate スコア表は danger と同様 commit をブロックする（generic allow に埋もれない）。"""
+    _enable(tmp_path)
+    runner = _make_runner([REL], {REL: GATE_TABLE})
     res = gate.evaluate(_commit_event(), str(tmp_path), runner)
     assert res["decision"] == "deny"
     assert REL in res["message"]

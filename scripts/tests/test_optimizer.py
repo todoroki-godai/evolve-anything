@@ -240,16 +240,21 @@ def test_collect_context_keeps_small_pitfalls_intact(tmp_path):
 
 
 # ── record_pitfall ───────────────────────────────────────────────────
+# #308: 書込先は human 向け references/pitfalls.md から references/gate-failures.md へ
+# 分離した。本ファイルは skills/genetic-prompt-optimizer/tests/test_optimizer.py の
+# 兄弟コピーなので、片方だけ直すと desync する（pitfall_copied_parse_convention_partial_fix）。
 
 
 def test_record_pitfall_creates_file(tmp_path):
     skill_file = tmp_path / "SKILL.md"
     core.record_pitfall(str(skill_file), "gate", "forbidden_pattern(TODO)", 0.5)
 
-    pitfalls_file = tmp_path / "references" / "pitfalls.md"
+    pitfalls_file = tmp_path / "references" / "gate-failures.md"
     assert pitfalls_file.exists()
     content = pitfalls_file.read_text(encoding="utf-8")
     assert "forbidden_pattern(TODO)" in content
+    # 人間向け pitfalls.md は作られない
+    assert not (tmp_path / "references" / "pitfalls.md").exists()
 
 
 def test_record_pitfall_no_duplicate(tmp_path):
@@ -257,7 +262,7 @@ def test_record_pitfall_no_duplicate(tmp_path):
     core.record_pitfall(str(skill_file), "gate", "some_pattern", None)
     core.record_pitfall(str(skill_file), "gate", "some_pattern", None)
 
-    pitfalls_file = tmp_path / "references" / "pitfalls.md"
+    pitfalls_file = tmp_path / "references" / "gate-failures.md"
     content = pitfalls_file.read_text(encoding="utf-8")
     assert content.count("some_pattern") == 1
 
@@ -269,11 +274,11 @@ def test_record_pitfall_rotation(tmp_path):
     # 既存の 1001 行分のエントリを作る（ローテーションが起きること）
     rows = [f"| gate | pattern_{i} | - |" for i in range(1001)]
     existing = "| Source | Pattern | Score |\n|--------|---------|-------|\n" + "\n".join(rows) + "\n"
-    (refs / "pitfalls.md").write_text(existing, encoding="utf-8")
+    (refs / "gate-failures.md").write_text(existing, encoding="utf-8")
 
     core.record_pitfall(str(skill_file), "gate", "new_pattern", None)
 
-    pitfalls_file = refs / "pitfalls.md"
+    pitfalls_file = refs / "gate-failures.md"
     content = pitfalls_file.read_text(encoding="utf-8")
     data_rows = [l for l in content.strip().split("\n") if l.strip().startswith("|") and "Source" not in l and "---" not in l]
     # 最大 PITFALLS_MAX_ROWS(50) に収まること
