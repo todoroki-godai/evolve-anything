@@ -93,6 +93,55 @@ _SANITIZE_XML_TAGS = [
 
 _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
+# 機構ターン判定（#387 で skill_extractor.trajectory_sampler に導入・#305/#323 で
+# correction 検出の写像先に単一ソース化）。type=user だがユーザー発話でない harness 注入
+# ターン（compaction サマリ・SKILL.md 本体注入・task-notification・system-reminder・
+# Stop hook の decision:block reason 文 等）を判定する。
+#
+# 実コーパス測定（8日窓・real user messages 4237件）: `detect_correction` がマッチした
+# 6件は全件 "Stop hook feedback:\n" で始まる Stop hook の自己注入文で、ユーザー発話由来の
+# マッチは 0 件だった（#305）。writer 側（`hooks/correction_detect.py` の live hook と
+# `scripts/backfill_preceding_tool_calls.py` の offline backfill）はいずれもこの
+# `should_include_message` を経由するため、ここに1箇所追加するだけで両方に効く。
+#
+# reader 側（`skill_extractor.trajectory_sampler._is_machinery_prompt`）とはこの関数を
+# 単一ソースとして共有する（片側だけ直すと desync する、pitfall_copied_parse_convention_
+# partial_fix）。
+_MACHINERY_PREFIXES = (
+    "<system-reminder>",
+    "<task-notification>",
+    "<local-command",
+    "<command-output>",
+    "<command-message>",
+    "[request interrupted",
+)
+"""lstrip 後この接頭辞で始まるテキストは機構ターン。"""
+
+_MACHINERY_MARKERS = (
+    "this session is being continued from a previous conversation",
+    "base directory for this skill:",
+    "stop hook feedback:",
+    "caveat: the messages below were generated",
+)
+"""lstrip+lower 後、先頭付近にこの語を含むテキストは機構ターン。"""
+
+_MACHINERY_MARKER_WINDOW = 300
+"""機構マーカーを探す先頭文字数（依頼文中の偶然一致を避けるため先頭付近に限定）。"""
+
+
+def is_machinery_prompt(content: str) -> bool:
+    """テキストが harness 注入の機構ターンか判定する（#387, #305）。
+
+    compaction サマリ・SKILL.md 本体・task-notification・system-reminder・
+    Stop hook feedback 等は type=user だがユーザー発話ではない。これらを
+    correction 検出・routing キーワード採掘の両方から除くための単一ソース述語。
+    """
+    low = content.lstrip().lower()
+    if low.startswith(_MACHINERY_PREFIXES):
+        return True
+    head = low[:_MACHINERY_MARKER_WINDOW]
+    return any(marker in head for marker in _MACHINERY_MARKERS)
+
 
 def sanitize_message(text: str, max_length: int = 500) -> str:
     """LLM に渡す corrections メッセージをサニタイズする。"""
@@ -107,6 +156,8 @@ def sanitize_message(text: str, max_length: int = 500) -> str:
 def should_include_message(text: str) -> bool:
     """メッセージが correction 検出対象かどうかを判定する。"""
     if not text.strip():
+        return False
+    if is_machinery_prompt(text.strip()):
         return False
     if re.search(r"(?i)^remember:", text.strip()):
         return True

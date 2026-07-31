@@ -16,41 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+from rl_common.detection import is_machinery_prompt as _is_machinery_prompt
+
 # ── 定数 ──────────────────────────────────────────────────
 
 DEFAULT_MAX_FILES = 50
 
 # <command-name> タグから skill 名を取り出す正規表現
 _COMMAND_NAME_RE = re.compile(r"<command-name>([^<]+)</command-name>")
-
-# 機構ターン判定（#387）。type=user だがユーザー発話でない harness 注入ターン。
-# これらを直前プロンプト探索で飛ばさないと、compaction サマリ・SKILL.md 本体・
-# task-notification のパスや tool-use-id が routing.trigger_keywords を汚す
-# （実 PJ E2E で claude/gstack/users/todoroki 等のノイズの最大の出所と判明）。
-_MACHINERY_PREFIXES = (
-    "<system-reminder>",
-    "<task-notification>",
-    "<local-command",
-    "<command-output>",
-    "<command-message>",
-    "[request interrupted",
-)
-"""lstrip 後この接頭辞で始まる user ターンは機構ターン。
-
-``[Request interrupted (by user|by user for tool use)]`` は Esc 中断の
-harness マーカー（weak_signals の ``_INTERRUPT_MARKER`` と同じ判定対象、#322）。
-turn 単体では ``isMeta`` が付かないため content の prefix で判定する。"""
-
-_MACHINERY_MARKERS = (
-    "this session is being continued from a previous conversation",
-    "base directory for this skill:",
-    "stop hook feedback:",
-    "caveat: the messages below were generated",
-)
-"""lstrip+lower 後、先頭付近にこの語を含む user ターンは機構ターン。"""
-
-_MACHINERY_MARKER_WINDOW = 300
-"""機構マーカーを探す先頭文字数（依頼文中の偶然一致を避けるため先頭付近に限定）。"""
 
 # ビルトインコマンド（スキルではない）
 _BUILTIN_COMMANDS = frozenset([
@@ -243,26 +216,6 @@ def _extract_skill_from_turn(turn: dict) -> Optional[str]:
         return None
 
     return skill_name
-
-
-def _is_machinery_prompt(content: str) -> bool:
-    """user ターンの content が harness 注入の機構ターンか判定する（#387）。
-
-    compaction サマリ・SKILL.md 注入・task-notification・system-reminder・
-    Stop hook feedback 等は type=user だがユーザー発話ではない。これらを
-    routing のキーワード採掘から除くために判定する。
-
-    Args:
-        content: user ターンの content 文字列。
-
-    Returns:
-        機構ターンなら True。
-    """
-    low = content.lstrip().lower()
-    if low.startswith(_MACHINERY_PREFIXES):
-        return True
-    head = low[:_MACHINERY_MARKER_WINDOW]
-    return any(marker in head for marker in _MACHINERY_MARKERS)
 
 
 def _find_preceding_user_prompt(turns: list, command_index: int) -> str:
