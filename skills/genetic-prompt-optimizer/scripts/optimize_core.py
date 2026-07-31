@@ -486,37 +486,74 @@ def gate_failures_path(target_path: Union[str, Path]) -> Path:
     return Path(target_path).parent / "references" / GATE_FAILURES_FILENAME
 
 
+_FORBIDDEN_ROW_RE = re.compile(r"^\|\s*gate\s*\|\s*forbidden_pattern\(.+\)\s*\|")
+
+
+def _has_forbidden_pattern_rows(path: Path) -> bool:
+    """ファイルが `| gate | forbidden_pattern(X) | ... |` 行を1つ以上含むか。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return any(_FORBIDDEN_ROW_RE.match(line.strip()) for line in text.splitlines())
+
+
 def resolve_pitfall_patterns_path(target_path: Union[str, Path]) -> Optional[str]:
     """regression gate が読む「既知の失敗パターン」ファイルのパスを解決する。
 
-    #308: 新規は専用ファイル references/gate-failures.md のみを見る（旧
-    references/pitfalls.md への読み取りフォールバックは意図的に行わない）。理由:
-    - `_load_pitfall_patterns` が実際に消費するのは `forbidden_pattern(X)` 形式の行のみで、
-      それ以外（frontmatter_lost 等）は元々 regex 不一致で無視されており、旧データを失っても
-      実効的な安全網の後退はごく小さい。
-    - pitfalls.md への読み取りフォールバックを残すと、この関数が再び「人間向け prose も
-      たまたま `| gate | forbidden_pattern(...) | ... |` に見える行を含んでいたら誤反応する」
-      経路を残してしまい、今回分離した衝突リスクを再導入する。
-    - 遡及 migration はしない方針（暫定判断で進める。#308 委譲仕様）。新規実行から
-      自然に gate-failures.md へ移行する。
+    #308: 書込先は専用ファイル references/gate-failures.md に分離したが、**読み取りは
+    旧 references/pitfalls.md への read-only フォールバックを残す**（codex cold-read 指摘）。
+    書込の分離と旧データの読み取りは独立した問題で、フォールバック無しだと分離した瞬間に
+    既存の `forbidden_pattern(X)`（regression gate が実際に消費している安全網）が恒久的に
+    失われる — しかも該当候補は gate 不合格にならないため新ファイルへ「自然に移行」もしない。
+
+    フォールバックは以下で FP を避ける:
+    - 新ファイルが存在すればそれだけを見る（移行後は旧ファイルを参照しない）
+    - 旧ファイルは `| gate | forbidden_pattern(...) | ... |` 行を実際に含むときだけ返す。
+      人間向け prose の pitfalls.md は当該行を持たないので参照対象にならない
+    - 返すのは読み取り用パスのみ（`record_pitfall` は旧パスへ一切書かない）
     """
     path = gate_failures_path(target_path)
-    return str(path) if path.exists() else None
+    if path.exists():
+        return str(path)
+    legacy = Path(target_path).parent / "references" / "pitfalls.md"
+    if legacy.exists() and _has_forbidden_pattern_rows(legacy):
+        return str(legacy)
+    return None
 
 
 def _is_pure_gate_table(text: str) -> bool:
-    """gate-failures.md が純粋なスコア表（ヘッダ + `|` 行のみ）かを判定する。
+    """gate-failures.md が `record_pitfall` 自身が書いた正規のスコア表かを判定する。
 
-    見出し（`# Pitfalls` 等）や地の文が混じっていれば False。record_pitfall はこれが
-    False の既存ファイルを上書きしない（#308: 誤って human pitfalls が書かれた場合の
-    silent wipe を防ぐガード）。
+    #308（codex cold-read 指摘）: 「各行が `|` で始まる」だけでは別用途の pipe テーブル
+    （`| Owner | Note |` 等）まで正規データと誤認し、先頭2行をヘッダー扱いして全上書きして
+    しまう。`record_pitfall` が書く形式そのもの — ヘッダ2行が `GATE_FAILURES_HEADER` と
+    完全一致し、データ行が 3 列で score が数値か `-` — を満たすときだけ True を返す。
+    空ファイルは書き始めなので True。
     """
     stripped = text.strip()
     if not stripped:
         return True
-    for line in stripped.split("\n"):
-        if not line.strip().startswith("|"):
+    lines = stripped.split("\n")
+    if [line.strip() for line in lines[:2]] != [
+        line.strip() for line in GATE_FAILURES_HEADER.strip().split("\n")
+    ]:
+        return False
+    for line in lines[2:]:
+        s = line.strip()
+        if not s:
+            continue
+        if not s.startswith("|") or not s.endswith("|"):
             return False
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if len(cells) < 3:
+            return False
+        score = cells[-1]
+        if score != "-":
+            try:
+                float(score)
+            except ValueError:
+                return False
     return True
 
 
@@ -533,7 +570,10 @@ def record_pitfall(
     pitfalls_file = gate_failures_path(target)
 
     score_str = f"{score:.2f}" if score is not None else "-"
-    new_row = f"| {source} | {pattern} | {score_str} |"
+    # #308: セル区切りと衝突する `|` はエスケープでなく置換で潰す。混入すると
+    # `_load_pitfall_patterns`（`|` split で列位置を取る）が列ズレで読めなくなり、
+    # 自分が書いた行を読み戻せない壊れた表を作ってしまう。
+    new_row = f"| {source.replace('|', '/')} | {pattern.replace('|', '/')} | {score_str} |"
 
     existing_rows: List[str] = []
     if pitfalls_file.exists():
