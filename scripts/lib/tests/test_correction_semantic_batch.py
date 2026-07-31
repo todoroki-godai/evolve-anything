@@ -251,6 +251,54 @@ def test_ingest_malformed_json_does_not_mark_judged(tmp_path: Path) -> None:
     assert not idioms_store.exists()
 
 
+def test_ingest_invalid_verdict_element_does_not_mark_judged(tmp_path: Path) -> None:
+    """#273 P1-1: 構文上 valid だが意味的に壊れた要素（型違い）混じりも、応答欠損と同様に未判定で残す。
+
+    従来は不正要素だけ黙って parse_verdicts から捨てられ、残りの空リストが
+    「該当なし（正当な空）」と誤読されて group 全件が judged_keys に確定していた。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # index が文字列型（"0"）の不正要素を含む応答（構文上は valid JSON）。
+    responses = {rid: json.dumps({"verdicts": [{"index": "0", "is_correction": True}]})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["corrections"] == 0
+    assert res["non_corrections"] == 0
+    assert res["parse_failed_batches"] == 1
+    assert cs_store.read_judged_keys(judged) == set()
+    assert not ws_store.exists()
+    assert not idioms_store.exists()
+
+
+def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(tmp_path: Path) -> None:
+    """#273 P1-1: is_correction が文字列 "false" は bool("false")==True の罠を踏まず失格にする。"""
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = {rid: json.dumps({"verdicts": [{"index": 0, "is_correction": "false"}]})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["parse_failed_batches"] == 1
+    assert res["corrections"] == 0
+    assert cs_store.read_judged_keys(judged) == set()
+
+
 def test_ingest_legitimate_empty_verdicts_still_marks_judged(tmp_path: Path) -> None:
     """正しい JSON で verdicts が空配列（モデルが「該当なし」と判定）は従来どおり判定済みにする。
 

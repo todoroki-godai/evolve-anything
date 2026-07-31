@@ -225,6 +225,57 @@ def test_parse_json_array_backward_compat_delegates_to_result() -> None:
     assert _judge.parse_json_array(raw) == _judge.parse_json_array_result(raw)["items"]
 
 
+# ── P1-2（codex 指摘）: 意味的に壊れた要素・部分応答の厳格検証 ─────────────
+
+
+def test_parse_json_array_result_ok_false_on_string_index() -> None:
+    """i が文字列型（"0"）は不正 — 型違いを黙って通さない。"""
+    raw = json.dumps([{"i": "0", "verbose": True}])
+    result = _judge.parse_json_array_result(raw)
+    assert result["ok"] is False
+    assert result["items"] == []
+
+
+def test_parse_json_array_result_ok_false_on_string_verbose() -> None:
+    """verbose が文字列 "false" は bool("false")==True の罠を踏まず不正として弾く。"""
+    raw = json.dumps([{"i": 0, "verbose": "false"}])
+    result = _judge.parse_json_array_result(raw)
+    assert result["ok"] is False
+
+
+def test_parse_json_array_result_ok_false_on_duplicate_index() -> None:
+    raw = json.dumps([{"i": 0, "verbose": True}, {"i": 0, "verbose": False}])
+    assert _judge.parse_json_array_result(raw)["ok"] is False
+
+
+def test_parse_json_array_result_expected_len_requires_full_coverage() -> None:
+    """expected_len=3 で i={0,1} しか無い（部分応答）は網羅性不足として ok=False。"""
+    raw = json.dumps([{"i": 0, "verbose": True}, {"i": 1, "verbose": False}])
+    result = _judge.parse_json_array_result(raw, expected_len=3)
+    assert result["ok"] is False
+    assert result["items"] == []
+
+
+def test_parse_json_array_result_expected_len_ok_when_full_coverage() -> None:
+    raw = json.dumps([{"i": 0, "verbose": True}, {"i": 1, "verbose": False}])
+    result = _judge.parse_json_array_result(raw, expected_len=2)
+    assert result["ok"] is True
+    assert len(result["items"]) == 2
+
+
+def test_parse_json_array_result_expected_len_ok_false_on_empty_array() -> None:
+    """非空バッチに空配列が返るのは網羅性を満たさないので不正（該当なしの明示ではない）。"""
+    result = _judge.parse_json_array_result("[]", expected_len=3)
+    assert result["ok"] is False
+
+
+def test_parse_json_array_result_legitimate_empty_when_no_expected_len() -> None:
+    """expected_len 無しの直接呼び出しは、空配列を従来どおり許容する（単体利用向け）。"""
+    result = _judge.parse_json_array_result("[]")
+    assert result["ok"] is True
+    assert result["items"] == []
+
+
 # ───────────────────────────── judge: --run (mock) ───────────────
 
 def test_judge_run_persists_verdicts_and_emits_weak_signals(data_dir, capsys):
@@ -299,6 +350,30 @@ def test_judge_run_malformed_json_does_not_persist_verdicts(data_dir, capsys):
     assert not weak_path.exists()
     err = capsys.readouterr().err
     assert "解釈失敗" in err
+
+
+def test_judge_run_partial_response_does_not_persist_any_verdict(data_dir, capsys):
+    """#273 P1-2: 6件中1件しか返らない部分応答は、バッチ全体を未判定のまま残す。
+
+    従来は返ってこなかった index を `by_i.get(i, {})` で空 dict 補完し verbose=False として
+    確定していた（偽陰性の永続化）。網羅性検証（expected_len）でバッチ全体を失格にする。
+    """
+    _write_candidates(data_dir, [_cand(f"h{i}") for i in range(6)])
+    weak_path = data_dir / "weak_signals.jsonl"
+    # 6 件中 index 0 のみ応答（部分応答）。
+    fake = json.dumps([{"i": 0, "verbose": True, "patterns": ["preamble"], "note": "x"}])
+
+    with mock.patch.object(_judge, "call_haiku", return_value=fake) as m_call:
+        res = _judge.run_judge(
+            SLUG, run=True, batch_size=6, data_dir=data_dir, weak_signals_path=weak_path
+        )
+
+    assert m_call.call_count == 1
+    assert res["judged_now"] == 0
+    assert res["parse_failed"] == 1
+    # verdicts が 1 件も永続化されない（h0 を含め全件 pending のまま）。
+    assert _vstore.read_verdicts(SLUG, data_dir=data_dir) == {}
+    assert not weak_path.exists()
 
 
 def test_judge_skips_already_judged(data_dir):

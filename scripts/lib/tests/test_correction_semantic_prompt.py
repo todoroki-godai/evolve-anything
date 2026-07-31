@@ -120,3 +120,51 @@ def test_parse_verdicts_backward_compat_delegates_to_result() -> None:
     """既存 API `parse_verdicts` は parse_verdicts_result の verdicts をそのまま返す（後方互換）。"""
     raw = json.dumps({"verdicts": [{"index": 0, "is_correction": True, "idiom": "x", "reason": "y"}]})
     assert cs_prompt.parse_verdicts(raw) == cs_prompt.parse_verdicts_result(raw)["verdicts"]
+
+
+# ── P1-1（codex 指摘）: 意味的に壊れた要素の厳格検証 ────────────────────────
+
+
+def test_parse_verdicts_result_ok_false_on_string_index() -> None:
+    """index が文字列型（"0"）は不正 — 従来は黙って捨てられ ok=True になっていた。"""
+    raw = json.dumps({"verdicts": [{"index": "0", "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is False
+    assert result["verdicts"] == []
+
+
+def test_parse_verdicts_result_ok_false_on_string_is_correction() -> None:
+    """is_correction が文字列 "false" は bool("false")==True の罠を踏まず不正として弾く。"""
+    raw = json.dumps({"verdicts": [{"index": 0, "is_correction": "false"}]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is False
+
+
+def test_parse_verdicts_result_ok_false_on_duplicate_index() -> None:
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True},
+        {"index": 0, "is_correction": False},
+    ]})
+    assert cs_prompt.parse_verdicts_result(raw)["ok"] is False
+
+
+def test_parse_verdicts_result_ok_false_on_one_invalid_among_valid() -> None:
+    """1件でも不正要素があれば正しい要素も含めてバッチ全体を失格にする（部分採用しない）。"""
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "四国めたんじゃなくて", "reason": "後置型"},
+        {"index": 1, "is_correction": "false"},  # 不正
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is False
+    assert result["verdicts"] == []
+
+
+def test_parse_verdicts_result_ok_true_when_all_valid() -> None:
+    """全要素が正しい型なら ok=True（回帰防止）。"""
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "x", "reason": "y"},
+        {"index": 1, "is_correction": False, "idiom": None, "reason": ""},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert len(result["verdicts"]) == 2

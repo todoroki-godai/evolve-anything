@@ -61,13 +61,56 @@ def build_batch_prompt(utterances: List[Dict[str, Any]]) -> str:
     )
 
 
+def _validate_verdict(v: object) -> Optional[Dict[str, Any]]:
+    """1 verdict 要素を厳格型検証し、正規化した dict を返す（不正なら None）。
+
+    #273 P1-1（codex 指摘）: 「構文上 valid だが意味的に壊れている」要素
+    （`"index": "0"` の型違い・`"is_correction": "false"` の文字列）を黙って捨てて続行すると、
+    捨てた分だけ verdicts が薄くなり `by_index.get(local_i)` が None になって「非修正」と
+    誤確定する（#273 が塞いだはずの事故が partial-invalid 型で再発する）。**1 要素でも
+    不正なら呼び出し側はバッチ全体を ok=False にすること**（不正要素だけ捨てて部分採用しない）。
+    `bool("false") == True` の罠を踏まないよう ``is_correction`` は実 bool のみ許容する。
+    """
+    if not isinstance(v, dict):
+        return None
+    idx = v.get("index")
+    if not isinstance(idx, int) or isinstance(idx, bool):  # bool は int のサブクラスなので明示除外
+        return None
+    is_correction = v.get("is_correction")
+    if not isinstance(is_correction, bool):
+        return None
+    idiom = v.get("idiom")
+    if idiom is not None and not isinstance(idiom, str):
+        return None
+    if isinstance(idiom, str) and not idiom.strip():
+        idiom = None
+    reason = v.get("reason", "")
+    if reason is None:
+        reason = ""
+    if not isinstance(reason, str):
+        return None
+    return {
+        "index": idx,
+        "is_correction": is_correction,
+        "idiom": idiom,
+        "reason": reason,
+    }
+
+
 def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
     """モデル応答（JSON 文字列）から verdict のリストを取り出し、パース成否も返す（#273）。
 
-    code fence・前後のノイズに頑健。「解釈できない」（応答欠損・壊れた JSON・期待した
-    `{"verdicts": [...]}` 形でない）場合は ``ok=False`` を返す — 呼び出し側はこれを
-    「該当なし（verdicts=[]）」と区別し、判定済みにせず次回再試行に回すこと。
+    code fence・前後のノイズに頑健。「解釈できない」場合は ``ok=False`` を返す — 呼び出し側は
+    これを「該当なし（verdicts=[]）」と区別し、判定済みにせず次回再試行に回すこと。
     正しく解釈できて verdicts が空配列（モデルが「該当なし」と明示判定）は ``ok=True``。
+    ``ok=False`` になる条件:
+      - 応答欠損・壊れた JSON・期待した `{"verdicts": [...]}` 形でない
+      - 要素の型が不正（`_validate_verdict` 参照。1 要素でも不正ならバッチ全体を失格にする）
+      - `index` の重複
+
+    index の**網羅性**（batch 内の全 index が揃っているか）はここでは検証しない
+    （batch.py の設計判断: モデルが一部 index を省略するのは「その発話は非修正」の
+    暗黙表現として許容している。verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称）。
 
     Returns:
         {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None, reason:str}]}
@@ -95,21 +138,13 @@ def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
         return {"ok": False, "verdicts": []}
 
     out: List[Dict[str, Any]] = []
+    seen_idx: set = set()
     for v in verdicts:
-        if not isinstance(v, dict):
-            continue
-        idx = v.get("index")
-        if not isinstance(idx, int):
-            continue
-        idiom = v.get("idiom")
-        if not isinstance(idiom, str) or not idiom.strip():
-            idiom = None
-        out.append({
-            "index": idx,
-            "is_correction": bool(v.get("is_correction", False)),
-            "idiom": idiom,
-            "reason": str(v.get("reason") or ""),
-        })
+        item = _validate_verdict(v)
+        if item is None or item["index"] in seen_idx:
+            return {"ok": False, "verdicts": []}
+        seen_idx.add(item["index"])
+        out.append(item)
     return {"ok": True, "verdicts": out}
 
 
