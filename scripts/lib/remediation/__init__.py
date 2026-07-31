@@ -175,6 +175,7 @@ FIX_DISPATCH: Dict[str, Any] = _build_fix_dispatch()
 
 def detect_unresolvable_fix_targets(
     classified: Dict[str, Any],
+    project_dir: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """fixer を持つ issue のうち `file` が実在しないものを決定論で数える（#306）。
 
@@ -184,7 +185,15 @@ def detect_unresolvable_fix_targets(
 
     対象は FIX_DISPATCH に登録された type かつ `file` が非空のものだけ
     （fixer を持たない type や file を使わない提案で FP を作らない）。
+
+    相対 `file`（例: `.claude/skills/<name>/SKILL.md`）は **`project_dir` 基準**で
+    解決する（#311）。evolve は `--project-dir` を明示的に受け取れるため cwd と
+    project_dir が食い違う実行があり、cwd 基準の判定は「実在するのに missing」
+    （誤報）と「cwd 側の同名ファイルで clean」（見逃し）を同時に生む。宣言パスと
+    実パスの drift を検知する機構自身が同型の drift を持たないようにする。
+    `project_dir` 未指定時は従来どおり cwd 基準（後方互換）。
     """
+    root = Path(project_dir) if project_dir else None
     missing_files: List[str] = []
     by_type: Dict[str, int] = {}
     for lane in ("auto_fixable", "proposable"):
@@ -198,10 +207,15 @@ def detect_unresolvable_fix_targets(
             if not file_path:
                 continue
             try:
-                if Path(file_path).exists():
+                candidate = Path(file_path)
+                if root is not None and not candidate.is_absolute():
+                    candidate = root / candidate
+                if candidate.exists():
                     continue
             except OSError:
                 pass
+            # surface するのは issue が宣言したパスそのもの（解決後の絶対パスでなく、
+            # ユーザーが提案で目にする文字列）。
             missing_files.append(file_path)
             by_type[itype] = by_type.get(itype, 0) + 1
 

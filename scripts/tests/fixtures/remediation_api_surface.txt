@@ -65,7 +65,7 @@ classify_issue(issue: Dict[str, Any]) -> Dict[str, Any]
 classify_issues(issues: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]
 compute_confidence_score(issue: Dict[str, Any]) -> float
 compute_impact_scope(file_path: str) -> str
-detect_unresolvable_fix_targets(classified: Dict[str, Any]) -> Dict[str, Any]
+detect_unresolvable_fix_targets(classified: Dict[str, Any], project_dir: Any | None = None) -> Dict[str, Any]
 fix_claudemd_missing_section(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 fix_claudemd_phantom_refs(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 fix_global_rule(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]

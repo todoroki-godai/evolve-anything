@@ -133,3 +133,76 @@ class TestUnresolvableFixTargets:
         assert "split_candidate" in FIX_DISPATCH
         res = detect_unresolvable_fix_targets({})
         assert res == {"count": 0, "by_type": {}, "files": []}
+
+
+class TestUnresolvableFixTargetsProjectDir:
+    """相対 `file` は cwd でなく project_dir 基準で解決する（#311）。
+
+    evolve は `--project-dir` を明示的に受け取れるため cwd ≠ project_dir で走りうる。
+    cwd 基準の `Path(file).exists()` はその実行で「実在するのに missing」（誤報）と
+    「cwd 側の同名ファイルで clean」（見逃し）の両方を起こす。
+    """
+
+    def _classified(self, rel: str):
+        return {"proposable": [{"type": "split_candidate", "file": rel}]}
+
+    def test_relative_resolved_against_project_dir(self, tmp_path, monkeypatch):
+        """project_dir 配下に実在すれば、cwd に無くても missing にしない（誤報しない）。"""
+        from remediation import detect_unresolvable_fix_targets
+
+        project = tmp_path / "target-project"
+        _write_long_skill(project / ".claude" / "skills" / "foo", "foo")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        rel = ".claude/skills/foo/SKILL.md"
+        assert not Path(rel).exists()  # cwd 基準では不在
+
+        res = detect_unresolvable_fix_targets(self._classified(rel), project_dir=project)
+
+        assert res["count"] == 0, res
+
+    def test_relative_missing_under_project_dir_is_flagged(self, tmp_path, monkeypatch):
+        """cwd 側に同名ファイルがあっても project_dir に無ければ missing（見逃さない）。"""
+        from remediation import detect_unresolvable_fix_targets
+
+        project = tmp_path / "target-project"
+        project.mkdir()
+        decoy = tmp_path / "decoy"
+        _write_long_skill(decoy / ".claude" / "skills" / "foo", "foo")
+        monkeypatch.chdir(decoy)
+
+        rel = ".claude/skills/foo/SKILL.md"
+        assert Path(rel).exists()  # cwd 基準では実在してしまう
+
+        res = detect_unresolvable_fix_targets(self._classified(rel), project_dir=project)
+
+        assert res["count"] == 1
+        assert res["files"] == [rel]  # 宣言されたパスをそのまま surface する
+
+    def test_absolute_path_unaffected_by_project_dir(self, tmp_path):
+        """絶対パスは project_dir に影響されない。"""
+        from remediation import detect_unresolvable_fix_targets
+
+        real = _write_long_skill(tmp_path / "skills" / "abs", "abs")
+
+        res = detect_unresolvable_fix_targets(
+            {"proposable": [{"type": "split_candidate", "file": str(real)}]},
+            project_dir=tmp_path / "unrelated",
+        )
+
+        assert res["count"] == 0
+
+    def test_project_dir_omitted_keeps_cwd_behavior(self, tmp_path, monkeypatch):
+        """project_dir 未指定時は従来どおり cwd 基準（後方互換）。"""
+        from remediation import detect_unresolvable_fix_targets
+
+        _write_long_skill(tmp_path / ".claude" / "skills" / "foo", "foo")
+        monkeypatch.chdir(tmp_path)
+
+        res = detect_unresolvable_fix_targets(
+            self._classified(".claude/skills/foo/SKILL.md")
+        )
+
+        assert res["count"] == 0

@@ -313,8 +313,10 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
         # 実在しないパスを載せていた）は「承認しても何も起きない」silent no-op を生む。
         try:
             from remediation import detect_unresolvable_fix_targets
+            # #311: 相対 file は cwd でなく対象 PJ ルート基準で解決する
+            # （evolve は --project-dir で cwd と異なる PJ を診断しうる）。
             remediation_data["unresolvable_fix_targets"] = detect_unresolvable_fix_targets(
-                classified
+                classified, project_dir=proj
             )
         except Exception:
             remediation_data["unresolvable_fix_targets"] = {
