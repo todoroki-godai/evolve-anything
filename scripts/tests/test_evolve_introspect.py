@@ -401,6 +401,42 @@ def test_measurement_bug_dedup_key_stable_across_value_change():
     assert key_a == key_b == "improvement:measurement_bug:issues_total"
 
 
+def test_measurement_bug_real_producer_output_is_consumed():
+    """**実 producer → consumer の結合テスト**（#324 codex cold-read 指摘）。
+
+    `_detect_measurement_bug` は表示行を正規表現で読むため、`sections_measurement.render()`
+    の文言を変えると「builder のテストも introspect のテストも緑のまま起票だけ 0 件」に
+    なる silent regression が起こりうる（手書き fixture では検出できない＝
+    learning_synthetic_fixture_false_confidence）。実 builder の出力をそのまま食わせて
+    両者のフォーマット契約を固定する。
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    from unittest.mock import patch as _patch
+
+    _lib = _Path(__file__).resolve().parents[1] / "lib"
+    if str(_lib) not in _sys.path:
+        _sys.path.insert(0, str(_lib))
+    from audit.sections_measurement import build_measurement_bug_section
+
+    alarms = [{"metric": "issues_total", "value": 4, "projects": ["amamo", "dpp", "receipt"]}]
+    with _patch("audit.measurement_bug.collect_cross_pj_metrics",
+                return_value={"amamo": {}, "dpp": {}, "receipt": {}}), \
+         _patch("audit.measurement_bug.detect_measurement_bug", return_value=alarms):
+        lines = build_measurement_bug_section(_Path("/tmp"))
+
+    assert lines, "実 builder が行を返さないと結合テストの意味がない"
+    result = _clean_result()
+    result["observability"]["measurement_bug"] = lines
+    analysis = ei.analyze_evolve_result(result)
+    cands = [
+        c for c in analysis["improvement_opportunities"]["candidates"]
+        if c["dedup_key"] == "improvement:measurement_bug:issues_total"
+    ]
+    assert len(cands) == 1
+    assert "amamo, dpp, receipt" in cands[0]["body"]
+
+
 # ── reconcile: split↔archive 相互排他（root cause fix / #301 #302） ──
 
 

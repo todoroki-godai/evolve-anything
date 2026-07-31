@@ -37,11 +37,40 @@ _MAX_AUDIT_HISTORY = 100
 _DEGRADATION_THRESHOLD = 0.10  # 10% drop
 
 
-def _quality_baselines_apply_to(proj: Path) -> bool:
-    """quality-baselines.jsonl の degraded count を、当 PJ の growth-state cache に属性してよいかを判定する（#324）。
+def _manifest_plugin_name(manifest: Path) -> Optional[str]:
+    """`.claude-plugin/plugin.json` の `name` を返す（読めない/壊れている場合は None）。"""
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = data.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def _is_plugin_self_repo(proj: Path) -> bool:
+    """`proj` が「今動いているプラグイン本体のリポジトリ（or その worktree）」か（#324）。
+
+    `.claude-plugin/plugin.json` の**存在だけ**では判定にならない — 同じ manifest は
+    他の Claude Code プラグインのリポジトリにも存在するため、存在チェックだけだと
+    別プラグインを監査したときに再び global baseline を注入してしまう（codex cold-read
+    指摘）。稼働中プラグイン自身の manifest 名と突き合わせる（リポジトリ改名
+    rl-anything→evolve-anything の実績があるため名前はハードコードせず manifest から引く）。
+    """
+    self_name = _manifest_plugin_name(PLUGIN_ROOT / ".claude-plugin" / "plugin.json")
+    if not self_name:
+        return False
+    return _manifest_plugin_name(proj / ".claude-plugin" / "plugin.json") == self_name
+
+
+def _scope_quality_baselines(
+    records: Optional[List[Dict[str, Any]]], proj: Path
+) -> Optional[List[Dict[str, Any]]]:
+    """growth-state cache に載せる baseline を当 PJ 帰属のものだけに絞る（#324）。
 
     quality_monitor.py が追跡するのは高頻度 global/plugin スキル（openspec-* /
-    spec-keeper / evolve-anything 自身のスキル等）であり、PJ でスコープされていない
+    spec-keeper / このプラグイン自身のスキル等）であり、PJ でスコープされていない
     （quality-baselines.jsonl の `project` フィールドは常に None・writer に PJ 分離が
     無い）。それにも関わらず旧実装は監査対象 PJ を問わず同じ degraded count を
     growth-state cache の issues_summary へ無条件注入しており、無関係な PJ 同士で
@@ -49,14 +78,34 @@ def _quality_baselines_apply_to(proj: Path) -> bool:
     （PJ横断で issues_total が同値に揃う）を招いていた（実機観測: 15 PJ 全件で
     skill_quality_degraded_count=1 が一致・#324）。
 
-    プラグイン本体リポジトリ（`.claude-plugin/plugin.json` を持つ = evolve-anything
-    自身、または開発用 worktree）を監査している時のみ true を返す。それ以外の PJ の
-    growth-state cache には反映しない（skill_quality_degraded_count=0）。
+    帰属は**リポジトリ単位の boolean でなく record 単位の出自**で決める:
+      - プラグイン本体リポジトリ以外を監査 → 一切載せない（None）
+      - プラグイン本体リポジトリを監査 → `skill_path` の出自が plugin / plugin_self の
+        record だけを載せる。`global`（`~/.claude/skills/` 配下）はどの PJ にも属さない
+        環境グローバル成果物なので、本体リポジトリの growth-state にも載せない
+        （実データ 17 件中 degraded 1 件はこの global 由来だった）。
 
     generate_report の Skill Quality Trends セクション（PJ 非依存の情報表示）は
-    この判定と無関係に、従来どおり全 PJ で表示する。
+    この絞り込みと無関係に、従来どおり全 PJ で全 record を表示するため観測は失われない。
     """
-    return (proj / ".claude-plugin" / "plugin.json").exists()
+    if not records:
+        return records
+    if not _is_plugin_self_repo(proj):
+        return None
+    from .classification import classify_artifact_origin
+
+    scoped: List[Dict[str, Any]] = []
+    for rec in records:
+        skill_path = rec.get("skill_path")
+        if not skill_path:
+            continue
+        try:
+            origin = classify_artifact_origin(Path(str(skill_path)))
+        except OSError:
+            continue
+        if origin in ("plugin", "plugin_self"):
+            scoped.append(rec)
+    return scoped
 
 
 def _summarize_skip_reason(exc: Exception, *, max_len: int = 160) -> str:
@@ -338,13 +387,11 @@ def run_audit(
         _project_name_for_issues = proj.resolve().name
         _corrections = query_corrections(project=_project_name_for_issues)
         # #324: quality_baselines は global/plugin スキル品質のみを追跡し PJ で
-        # スコープされていない（_quality_baselines_apply_to 参照）。growth-state
-        # cache（PJ 別 issues_summary）へは、プラグイン本体を監査している時のみ反映する。
+        # スコープされていない（_scope_quality_baselines 参照）。growth-state
+        # cache（PJ 別 issues_summary）へは、当 PJ 帰属の record だけを反映する。
         # Skill Quality Trends セクション（generate_report が使う quality_baselines
         # 変数そのもの）は PJ 非依存の情報表示のため、ここでは触れず従来どおり全 PJ に出す。
-        _issues_quality_baselines = (
-            quality_baselines if _quality_baselines_apply_to(proj) else None
-        )
+        _issues_quality_baselines = _scope_quality_baselines(quality_baselines, proj)
         _issues = compute_issues_summary(
             violations=violations,
             hardcoded_values=hardcoded_values,
