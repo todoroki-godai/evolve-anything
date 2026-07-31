@@ -176,6 +176,11 @@ def record_evolve_diff_decision(
     with file_lock(history_file.with_name(history_file.name + ".lock")):
         if any(rec.get("id") == entry_id for rec in load_history(history_file)):
             return entry
+        # #297: この writer は optimize_history_store.append_entry を経由しない直接書込
+        # 経路（optimize.py の save_history_entry と同型）。timestamp の tz 正規化は
+        # 単一ソース関数を writer 側から明示的に呼んで append_entry と同じ規約に揃える
+        # （normalize_entry_timestamp は純関数なのでロック下で呼んでよい）。
+        _history_store.normalize_entry_timestamp(entry)
         with open(history_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry

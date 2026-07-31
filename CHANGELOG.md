@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(optimize_history_store): timestamp の tz 不統一を正規化（#297）** — `optimize_history` の writer 3箇所のうち `run_loop.py` / `genetic-prompt-optimizer/scripts/optimize.py` が `datetime.now()`（naive ローカル）で書いており、`fitness_evolution.py`（PR #296 で aware UTC 修正済み）と混在すると JST 環境で 9 時間ずれた instant として比較されうる不整合があった。正規化ロジックの単一ソースとして `normalize_entry_timestamp` を追加し、writer の tz 実装に依存せず timestamp を aware UTC へ正規化（timestamp 欠落は現在時刻の aware UTC を付与、naive は読み側 `fleet.queue_verify._parse_iso` と同じ解釈＝`astimezone()` でローカル解釈してから UTC 化、aware は instant を変えず UTC 表記へ統一、非文字列・パース不能値は変更しない）。**単一 chokepoint ではない**: `optimize_history_store.append_entry` は書込直前に必ず通すが、3 writer のうち `append_entry` を経由するのは `run_loop.py` のみで、`fitness_evolution.record_evolve_diff_decision` と `optimize.py` の `save_history_entry` は `history_file` 直接指定を許す後方互換のため自前でファイルを開く別経路（外部 cold-read レビューでこの誤認を指摘され是正、両者とも正規化関数を明示的に呼ぶ規約に統一し、呼び忘れ検出のため各 writer に「naive を返す clock でも aware UTC で永続化される」回帰テストを追加）。TZ に依存した既存テストは同一プロセス TZ で期待値・実装の両方を計算しており「naive を UTC と誤認する実装」でも green になっていたため、TZ=Asia/Tokyo 固定+固定値検証のテストも追加。あわせて残り2 writer の `datetime.now()` も `datetime.now(timezone.utc)` に統一（二重の安全側）。既存 naive レコードは migration しないため writer TZ = reader TZ の前提が残る（新規データの混在を止めるのが本修正の範囲）。TDD +14件・決定論・LLM 非依存。
+
 ## [1.124.0] - 2026-07-31
 
 ### Added

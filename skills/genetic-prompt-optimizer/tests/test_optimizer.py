@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -15,6 +16,7 @@ sys.path.insert(
     0, str(Path(__file__).parent.parent / "scripts")
 )
 
+import optimize as optimize_module
 from optimize import (
     DirectPatchOptimizer,
     BACKUP_SUFFIX,
@@ -550,6 +552,36 @@ class TestHistory:
         record = json.loads(history_path.read_text(encoding="utf-8").strip())
         assert record["best_fitness"] == 0.8  # 採点結果の記録は止めない
         assert record["provenance"]["evaluation_kind"] == "unknown"
+
+    def test_naive_clock_still_persisted_as_aware_utc(
+        self, sample_skill, temp_dir, monkeypatch
+    ):
+        """#297 fixup: この writer は optimize_history_store.append_entry を経由しない
+        直接書込経路のため、naive timestamp を返す clock でも normalize_entry_timestamp
+        を明示的に通っていることを回帰的に検証する（chokepoint 呼び忘れの再発防止）。
+        """
+
+        class _NaiveClock(datetime):
+            @classmethod
+            def now(cls, tz=None):  # noqa: ARG003 — tz を無視する壊れた clock を模す
+                return datetime(2026, 7, 31, 9, 0, 0)
+
+        monkeypatch.setattr(optimize_module, "datetime", _NaiveClock)
+
+        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
+        optimizer.run_dir = temp_dir / "test_run"
+        result = {
+            "run_id": "test_run", "target": str(sample_skill), "strategy": "error_guided",
+            "corrections_used": 3, "fitness_func": "default",
+            "best_individual": {"fitness": 0.8},
+        }
+        history_path = optimizer.save_history_entry(
+            result, history_file=temp_dir / "history.jsonl"
+        )
+        record = json.loads(history_path.read_text(encoding="utf-8").strip())
+        dt = datetime.fromisoformat(record["timestamp"])
+        assert dt.tzinfo is not None
+        assert dt.utcoffset().total_seconds() == 0
 
     def test_record_human_decision(self, temp_dir):
         history_file = temp_dir / "history.jsonl"
