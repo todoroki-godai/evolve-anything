@@ -323,6 +323,66 @@ def test_ingest_legitimate_empty_verdicts_still_marks_judged(tmp_path: Path) -> 
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
 
 
+def test_ingest_processes_every_batch_not_just_the_first(tmp_path: Path) -> None:
+    """#273: 2 バッチ目以降も応答が回収される（変数 shadowing の回帰テスト）。
+
+    ingest 内でバッチごとのパース結果を、外側の応答マップと同名の変数に代入すると、
+    2 週目の `parsed.get(key)` が verdict dict を引いて空文字になり、以降の全バッチが
+    「応答欠損」として silent skip される（判定は永久に前進しない）。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=1, judged_path=judged,
+    )
+    assert len(emitted["requests"]) == 3  # 1 発話 = 1 バッチ
+
+    responses = _responses_for(
+        emitted,
+        {(req["id"], 0): {"is_correction": False, "idiom": None, "reason": "r"}
+         for req in emitted["requests"]},
+    )
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+
+    assert res["skipped_batches"] == 0
+    assert res["non_corrections"] == 3
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+
+
+def test_ingest_counts_omitted_verdicts(tmp_path: Path) -> None:
+    """#273: verdict が返らなかった発話は非修正として確定しつつ件数を surface する。"""
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # index 0 だけ返し、1/2 は省略された応答
+    responses = {rid: json.dumps(
+        {"verdicts": [{"index": 0, "is_correction": False, "idiom": None, "reason": "r"}]}
+    )}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["omitted_verdicts"] == 2
+    assert res["non_corrections"] == 3
+    assert len(cs_store.read_judged_keys(judged)) == 3
+
+
+def test_batch_prompt_requires_verdict_for_every_index() -> None:
+    """#273: プロンプトが「全 index を省略せず返す」契約を明示している。"""
+    prompt = cs_batch._prompt.build_batch_prompt(_utts())
+    assert "全 index" in prompt
+    assert "省略しない" in prompt
+
+
 def test_estimate_tokens() -> None:
     est = cs_batch.estimate_tokens(_utts(), batch_size=30)
     assert est["utterances"] == 3

@@ -123,7 +123,8 @@ def ingest_judgement_results(
       3. prompt.parse_verdicts_result で JSON 解釈し ok=False（パース失敗）ならスキップ（#273:
          応答欠損と同じ「未判定のまま残す」経路に合流。verdict.index → 発話を引く（ok=True 時）
       4. is_correction=True → WeakSignal(channel=llm_judge) + CorrectionIdiom を蓄積
-      5. バッチ内の全発話の物理キーを judged に記録（修正/非修正どちらも。ok=False バッチは対象外）
+      5. バッチ内の全発話の物理キーを judged に記録（修正/非修正どちらも。ok=False バッチは対象外）。
+         verdict が返らなかった発話は非修正として確定し、件数を omitted_verdicts に surface（#273）
 
     過汎用 idiom guard（#527）: floor（8 文字未満）/ stopword（相槌・推量・否定のみ）/
     文脈固有トークン（日付・割合・序数）に該当する idiom は **個人辞書に入れない**
@@ -131,7 +132,8 @@ def ingest_judgement_results(
 
     Returns:
         {"corrections", "non_corrections", "skipped_batches", "parse_failed_batches",
-         "weak_written", "idioms_written", "idioms_filtered", "judged_written", "dry_run"}
+         "omitted_verdicts", "weak_written", "idioms_written", "idioms_filtered",
+         "judged_written", "dry_run"}
     """
     from weak_signals.store import WeakSignal, append_signals, now_iso
 
@@ -146,6 +148,7 @@ def ingest_judgement_results(
     skipped_batches = 0
     parse_failed_batches = 0  # #273: 応答は届いたが JSON が解釈不能だったバッチ数
     idioms_filtered = 0  # #527: 過汎用 idiom（floor/stopword/context token）で弾いた件数
+    omitted_verdicts = 0  # #273: verdict が返らず非修正として確定した発話数（observability）
 
     for req in requests:
         key = req.get("id")
@@ -159,19 +162,31 @@ def ingest_judgement_results(
             skipped_batches += 1
             continue
 
-        parsed = _prompt.parse_verdicts_result(text)
-        if not parsed["ok"]:
+        # 変数名は `parsed`（= parse_responses の応答マップ）と必ず分ける。
+        # 同名にすると 2 バッチ目以降の `parsed.get(key)` が verdict dict を引いて
+        # 全バッチ silent skip する（#273 レビューで検出した shadowing 回帰）。
+        parsed_verdicts = _prompt.parse_verdicts_result(text)
+        if not parsed_verdicts["ok"]:
             # #273: JSON 解釈不能。応答欠損と同様、判定済みにせず次 drain で再試行する
             # （[] フォールバックを「該当なし」と誤読して judged_keys に積むと desync する）。
             parse_failed_batches += 1
             continue
 
-        by_index = {v["index"]: v for v in parsed["verdicts"]}
+        by_index = {v["index"]: v for v in parsed_verdicts["verdicts"]}
 
         for local_i, utt in enumerate(group):
             judged_keys.append(_store.utterance_key(utt))
             v = by_index.get(local_i)
-            if v is None or not v.get("is_correction"):
+            if v is None:
+                # verdict 欠落は「非修正」として扱い判定済みにする（既存契約）。
+                # プロンプトは全 index を返すよう明示しているので欠落は本来起きないが、
+                # 欠落を未判定に残す設計にすると「全件非修正のバッチにモデルが
+                # `{"verdicts": []}` で答える」正当なケースが毎 drain 再判定され費用が
+                # 際限なく積む。件数だけ surface して silence にはしない（#273）。
+                omitted_verdicts += 1
+                non_corrections += 1
+                continue
+            if not v.get("is_correction"):
                 non_corrections += 1
                 continue
             corrections += 1
@@ -223,6 +238,7 @@ def ingest_judgement_results(
         "weak_written": ws_res["written"],
         "idioms_written": idiom_res["written"],
         "idioms_filtered": idioms_filtered,  # #527: 過汎用で弾いた idiom 件数（observability）
+        "omitted_verdicts": omitted_verdicts,  # #273: verdict 欠落で非修正確定した発話数
         "judged_written": judged_res["written"],
         "dry_run": bool(dry_run),
     }

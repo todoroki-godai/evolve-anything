@@ -53,6 +53,8 @@ def build_batch_prompt(utterances: List[Dict[str, Any]]) -> str:
         "修正と判定した場合は、その修正を端的に表す**言い回し（idiom）**を発話から抜き出して\n"
         "ください（例: 「四国めたんじゃなくて」「違うんだけど」「気がする」）。\n"
         "修正でなければ idiom は null にします。\n\n"
+        "**判定対象の全 index について、必ず 1 件ずつ verdict を返してください**"
+        "（非修正の発話も is_correction=false で必ず含める。省略しない）。\n\n"
         "出力は厳格な JSON のみ（前後に説明文を付けない）。形式:\n"
         '{"verdicts": [{"index": 0, "is_correction": true, "idiom": "四国めたんじゃなくて", '
         '"reason": "正しい値を後置で言い直している"}, ...]}\n\n'
@@ -109,8 +111,12 @@ def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
       - `index` の重複
 
     index の**網羅性**（batch 内の全 index が揃っているか）はここでは検証しない
-    （batch.py の設計判断: モデルが一部 index を省略するのは「その発話は非修正」の
-    暗黙表現として許容している。verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称）。
+    （verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称）。プロンプトで全 index を
+    返すよう明示したうえで、欠落は `batch.ingest_judgement_results` が非修正として確定し
+    件数を `omitted_verdicts` に surface する。欠落を未判定に残す設計は「全件非修正の
+    バッチにモデルが `{"verdicts": []}` で答える」正当なケースを毎 drain 再判定させ費用が
+    際限なく積むため採らない（この契約は
+    `test_ingest_legitimate_empty_verdicts_still_marks_judged` が固定している）。
 
     Returns:
         {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None, reason:str}]}
