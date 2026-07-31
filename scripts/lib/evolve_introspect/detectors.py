@@ -399,7 +399,7 @@ def _detect_line_budget_conflict(phases: Dict[str, Any]) -> List[Dict[str, Any]]
 
 
 def _detect_improvement_opportunities(result: Dict[str, Any]) -> Dict[str, Any]:
-    """系統的却下・calibration regression・整合性 drift から構造的改善機会を抽出する。"""
+    """系統的却下・calibration regression・整合性 drift・measurement_bug から構造的改善機会を抽出する。"""
     candidates: List[Dict[str, Any]] = []
     phases = result.get("phases", {})
     if not isinstance(phases, dict):
@@ -414,12 +414,88 @@ def _detect_improvement_opportunities(result: Dict[str, Any]) -> Dict[str, Any]:
     # self_evolution の状態に依存せず常に評価する（健全時 0 件＝regression guard）。
     candidates.extend(_collect_consistency_candidates(result))
 
+    # #324: observability.measurement_bug の ⚠ を起票レーンへルーティング。
+    # 同様に self_evolution の状態に依存せず常に評価する。
+    candidates.extend(_detect_measurement_bug(result))
+
     return _section(
         candidates,
-        zero_line="✓ 改善余地: 系統的却下・calibration regression・整合性 drift（契約乖離/usage矛盾）なし",
+        zero_line="✓ 改善余地: 系統的却下・calibration regression・整合性 drift（契約乖離/usage矛盾）・"
+                   "measurement_bug（PJ横断bit-exact一致）なし",
         hit_template="⚠ 改善余地 {n} 件: {names}",
         name_of=lambda c: c.get("subject", c["dedup_key"]),
     )
+
+
+# #324: observability.measurement_bug の ⚠ 行フォーマット
+# （`sections_measurement.py` の render() が出す
+# "  ・⚠ {metric} = {value} が {n} PJ で完全一致: {projects}" と同じ形）。
+_MEASUREMENT_BUG_LINE_RE = re.compile(
+    r"⚠\s*(?P<metric>[A-Za-z0-9_]+)\s*=\s*(?P<value>\S+)\s*が\s*\d+\s*PJ\s*で完全一致:\s*(?P<projects>.+)$"
+)
+
+
+def _detect_measurement_bug(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """observability.measurement_bug の ⚠ を improvement_opportunities 候補へ変換する（#324）。
+
+    observability の measurement_bug（`audit/sections_measurement.py`）は PJ 横断の
+    bit-exact 一致を advisory surface するだけで、self_analysis（起票レーン）に配線されて
+    おらず、警告は各 PJ のレポートで読み流されるだけだった（検出と起票のレーンの分断）。
+
+    ここでは result["observability"] に**同じ evolve run で既に計算済み**の行
+    （`phases_diagnose` が `collect_observability` 経由で格納）を読むだけにとどめ、
+    measurement_bug 側の DATA_DIR を再 walk しない。measurement_bug モジュールは
+    `from rl_common import DATA_DIR` を import 時に固定するため、ここで再計算すると
+    テスト環境で実 HOME の growth-state を漏らしてしまう
+    （pitfall_module_level_datadir_import_copy と同型の罠、#96 で確認済み）。
+    """
+    obs = result.get("observability")
+    if not isinstance(obs, dict):
+        return []
+    section = obs.get("measurement_bug")
+    if not isinstance(section, list) or not section:
+        return []
+
+    # metric 単位でグルーピング（⚠ 行に続く説明行もまとめて evidence に含める）。
+    by_metric: Dict[str, List[str]] = {}
+    order: List[str] = []
+    current_metric = None
+    for raw_line in section:
+        text = str(raw_line)
+        m = _MEASUREMENT_BUG_LINE_RE.search(text)
+        if m:
+            current_metric = m.group("metric")
+            if current_metric not in by_metric:
+                by_metric[current_metric] = []
+                order.append(current_metric)
+        if current_metric is not None:
+            by_metric[current_metric].append(text)
+
+    out: List[Dict[str, Any]] = []
+    for metric in order:
+        evidence = "\n".join(by_metric[metric])
+        dedup_key = f"improvement:measurement_bug:{metric}"
+        body = (
+            f"## 自己解析: measurement_bug（PJ 横断 bit-exact 一致）\n\n"
+            f"observability の measurement_bug メタ検査が `{metric}` で、複数 PJ の集計値が "
+            f"bit-exact に一致する測定バグ候補を検出しました（#419-#423 の自動化 / #445）。"
+            f"独立に走査したはずの PJ が完全一致するのは、集計層のバグ（hardcoded 値の流用・"
+            f"共有 state の誤参照）を示唆する強いシグナルです。\n\n"
+            f"```\n{evidence}\n```\n\n"
+            f"writer / 種別 / source / 時間窓で分解して実データを確認してから結論すること"
+            f"（一致 = 即バグと決めつけない）。真の測定バグなら根因を修正し、偶然の一致（真に"
+            f"独立な計算が同値になった）なら measurement_bug 側の較正を見直してください。"
+        )
+        out.append({
+            "category": "improvement",
+            "subject": metric,
+            "title": f"[evolve introspect] measurement_bug: `{metric}` が PJ 横断で bit-exact 一致",
+            "body": body,
+            "suggested_label": "bug",
+            "dedup_key": dedup_key,
+            "severity": "medium",
+        })
+    return out
 
 
 def _detect_systematic_rejections(se: Dict[str, Any]) -> List[Dict[str, Any]]:
