@@ -35,7 +35,14 @@ Observe データ確認 → Diagnose → Compile → Housekeeping → Report の
 
 ## dry-run 記録可否の一元表（MUST — 手順本体に入る前に必ず確認する）
 
-evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-run（`--dry-run`）で記録するか否かが分岐する**。
+⚠️ **この表の「dry-run」＝スキル引数 `/evolve-anything:evolve --dry-run` のことだけを指す（MUST）**。
+Step 1 以降の分析コマンドが `evolve --project-dir ... --dry-run` で走ることとは**無関係**（分析エンジン側の
+`--dry-run` は標準フローで**常に**付く。それを見て「今回は dry-run」と判定してはならない — MUST NOT）。
+ユーザーが引数なしで `/evolve-anything:evolve` を起動したら、コマンド行に `--dry-run` が並んでいても
+**この表の「非 dry-run 時」列を適用する**（引数なし起動なのに dry-run 判定して Step 6.5 / 7.7 を誤スキップした
+実害あり・#320）。以降この文書で `dry_run` 変数と書いたら、値はスキル引数の有無だけで決まる。
+
+evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-run（スキル引数 `--dry-run`）で記録するか否かが分岐する**。
 長い手順の終盤で取り違えやすい（過去に実行ミスが起きた）ので、各書き込み操作の dry-run 記録可否をここに集約する。
 各 Step の本文に書かれた実際の挙動（`mark_done(dry_run=...)` / `record_reviewed(dry_run=...)` /
 `evolve --drain` の設計）を転記したもの。個々の Step の記述が正準で、この表は早見表として使う。
@@ -154,6 +161,9 @@ OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
 evolve --project-dir "$(pwd)" --dry-run --observe-first --output "$OUT"
 ```
 
+⚠️ **ここの `--dry-run` は分析エンジンのフラグ（MUST NOT 誤読）**: 標準フローでは**常に**付き、「分析だけ回して
+result JSON を作る」という意味しか持たない。**スキルレベルの dry-run 判定（記録可否の一元表）には一切使わない**。
+スキル引数に `--dry-run` が無ければ、このコマンドを実行しても `dry_run=False` のまま進む（#320）。
 ⚠️ **`--output` は必須（MUST）**: full JSON は `$OUT`（`/tmp/rl_evolve_<slug>.json`）に書かれ、stdout は1行サマリのみ。
 ⚠️ **slug 照合は MUST（#408-B）**: `$OUT` を Read したら `slug`/`project_dir`/`generated_at` が対象 PJ と一致するか検証してから進む。以降「evolve.py の出力に含まれる X フェーズを確認する」は**すべて `$OUT` を Read して参照する**（stdout を `head`/`tail` で読んではならない — MUST NOT。巨大 JSON が途中で切れて invalid になるため）。
 
