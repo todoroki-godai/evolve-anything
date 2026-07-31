@@ -210,6 +210,72 @@ class TestRunLoop:
             record = json.loads(lines[0])
             assert "baseline_score" in record
 
+    def test_history_record_carries_provenance(self, tmp_path, monkeypatch):
+        """履歴に評価実行条件を残す（#309・永続化境界で付与）。
+
+        dry-run の採点は hash ベースの決定論なので deterministic として記録する
+        （LLM 判定でないものに judge/model を付けると嘘の provenance になる）。
+        """
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        monkeypatch.setattr(store, "resolve_slug", lambda cwd=None: "testproj")
+
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text("# テスト\nテスト", encoding="utf-8")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen:
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+            run_loop_mod.run_loop(
+                target_path=str(skill_file), loops=1, dry_run=True, output_dir=str(output_dir),
+            )
+
+        record = json.loads(
+            store.history_path("testproj").read_text(encoding="utf-8").strip().split("\n")[0]
+        )
+        prov = record["provenance"]
+        assert prov["schema_version"] == 1
+        assert prov["evaluation_kind"] == "deterministic"
+        assert prov["producer"] == "evolve-loop-orchestrator.run_loop"
+        assert prov["plugin"]["version"]
+        # 決定論評価に judge/model は非該当（null を撒かない）
+        assert "judge" not in prov
+        # 評価結果自体の時刻は provenance に食われず残る
+        assert record["timestamp"]
+
+    def test_history_provenance_marks_llm_scoring_with_unobserved_model(
+        self, tmp_path, monkeypatch
+    ):
+        """非 dry-run は claude CLI 採点。--model 未指定なので model は観測不能 = None。"""
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        monkeypatch.setattr(store, "resolve_slug", lambda cwd=None: "testproj")
+
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text("# テスト\nテスト", encoding="utf-8")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        axes = {"technical": 0.7, "domain": 0.7, "structure": 0.7, "integrated": 0.7}
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+                patch.object(run_loop_mod, "_parallel_score", return_value=dict(axes)):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+            run_loop_mod.run_loop(
+                target_path=str(skill_file), loops=1, dry_run=False, output_dir=str(output_dir),
+                auto=True,
+            )
+
+        record = json.loads(
+            store.history_path("testproj").read_text(encoding="utf-8").strip().split("\n")[0]
+        )
+        prov = record["provenance"]
+        assert prov["evaluation_kind"] == "llm_judge"
+        # `claude -p` を --model なしで起動している → 判定モデルは観測できない
+        assert prov["judge"]["model"] is None
+        assert prov["judge"]["tool_policy"]["mode"] == "cli_default"
+        assert prov["runtime"]["name"] == "claude"
+
 
 class TestVerdict:
     """verdict（IMPROVED/STABLE/REGRESSED）のテスト"""

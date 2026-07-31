@@ -178,8 +178,13 @@ claude -p を全廃し、principles 抽出 → レイヤー評価をファイル
    形式の JSON でインライン採点して `{<layer名>: <JSON文字列>}` を `con-resp.json` に Write し:
    ```bash
    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/rl/fitness/constitutional.py --ingest "$(pwd)" \
-     --requests con-req.json --responses con-resp.json
+     --requests con-req.json --responses con-resp.json \
+     --judge-model <採点した自分のモデル alias> --judge-effort <effort>
    ```
+   **`--judge-model` は必ず渡す（#309）**。インライン採点なので判定モデルは自分しか知らず、
+   渡さないと「どのモデルで採点したか」が永久に失われ、後でスコア低下がモデル差か
+   スキル劣化かを分離できなくなる。alias（`opus` / `sonnet` 等）をそのまま渡す
+   — 分からない値を推測して埋めるのは禁止（省略すれば「観測不能」として正しく記録される）。
 3. 以降の `evolve-audit --constitutional-score` は更新後 cache を読んでスコアを表示する。
 
 ### Step 4: 意味的類似度の検出（オプション）

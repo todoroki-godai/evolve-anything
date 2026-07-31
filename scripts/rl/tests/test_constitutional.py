@@ -233,6 +233,102 @@ class TestScoreClamp:
         assert constitutional._clamp(0.7) == 0.7
 
 
+class TestLayerProvenance:
+    """#309: 判定条件を layer cache 単位で残す。
+
+    集約時点（compute_constitutional_score）では別時点・別モデルの layer が既に混ざっており
+    復元できないため、ingest の時点で layer ごとに記録する必要がある。
+    """
+
+    _CTX = {
+        "runtime": {"name": "claude", "session_id": "sess-1"},
+        "judge": {"model": "claude-opus-5", "effort": "high",
+                  "tool_policy": {"mode": "session", "allowed_tools": None}},
+    }
+
+    def test_ingest_stores_provenance_per_layer(self, tmp_path):
+        project = _make_project(tmp_path)
+        loader = _make_load_sibling()
+        with mock.patch.object(constitutional, "_load_sibling", side_effect=loader):
+            out = constitutional.emit_layer_requests(project, refresh=True)
+            responses = _layer_responses(out["requests"], score=0.8)
+            constitutional.ingest_layer_responses(
+                project, out["requests"], responses, evaluation_context=self._CTX
+            )
+
+        cache = constitutional._load_cache(project)
+        assert cache["layer_results"]
+        for lr in cache["layer_results"].values():
+            prov = lr["provenance"]
+            assert prov["evaluation_kind"] == "llm_judge"
+            assert prov["judge"]["model"] == "claude-opus-5"
+            assert prov["judge"]["effort"] == "high"
+            assert prov["runtime"]["session_id"] == "sess-1"
+
+    def test_ingest_without_context_records_unobserved_judge(self, tmp_path):
+        """条件を渡せなかった場合も推測せず None を記録する（judge キーは残す）。"""
+        project = _make_project(tmp_path)
+        _out, _result = _run_two_phase(project, score=0.8)
+        cache = constitutional._load_cache(project)
+        for lr in cache["layer_results"].values():
+            assert lr["provenance"]["judge"]["model"] is None
+
+    def test_result_carries_aggregate_provenance(self, tmp_path):
+        project = _make_project(tmp_path)
+        loader = _make_load_sibling()
+        with mock.patch.object(constitutional, "_load_sibling", side_effect=loader):
+            out = constitutional.emit_layer_requests(project, refresh=True)
+            responses = _layer_responses(out["requests"], score=0.8)
+            result = constitutional.ingest_layer_responses(
+                project, out["requests"], responses, evaluation_context=self._CTX
+            )
+
+        prov = result["provenance"]
+        assert prov["evaluation_kind"] == "llm_judge_aggregate"
+        assert prov["judge_models"] == ["claude-opus-5"]
+        assert prov["mixed_provenance"] is False
+        assert prov["layers_with_provenance"] == prov["layers_total"]
+
+    def test_mixed_models_are_surfaced_not_collapsed(self, tmp_path):
+        """別モデルで生成された layer が混在したら判定モデルを 1 つに潰さない。"""
+        project = _make_project(tmp_path)
+        loader = _make_load_sibling()
+        with mock.patch.object(constitutional, "_load_sibling", side_effect=loader):
+            out = constitutional.emit_layer_requests(project, refresh=True)
+            responses = _layer_responses(out["requests"], score=0.8)
+            constitutional.ingest_layer_responses(
+                project, out["requests"], responses, evaluation_context=self._CTX
+            )
+            # 1 レイヤーだけ別モデルで作り直したことにする
+            cache = constitutional._load_cache(project)
+            first = sorted(cache["layer_results"])[0]
+            cache["layer_results"][first]["provenance"]["judge"]["model"] = "haiku"
+            constitutional._save_cache(project, cache)
+
+            result = constitutional.compute_constitutional_score(project, refresh=False)
+
+        prov = result["provenance"]
+        assert prov["judge_models"] == ["claude-opus-5", "haiku"]
+        assert prov["mixed_provenance"] is True
+
+    def test_old_cache_without_provenance_still_aggregates(self, tmp_path):
+        """遡及埋めをしないので、provenance 無しの旧 cache でも壊れない。"""
+        project = _make_project(tmp_path)
+        _run_two_phase(project, score=0.8)
+        cache = constitutional._load_cache(project)
+        for lr in cache["layer_results"].values():
+            lr.pop("provenance", None)
+        constitutional._save_cache(project, cache)
+
+        loader = _make_load_sibling(principles_from_cache=True)
+        with mock.patch.object(constitutional, "_load_sibling", side_effect=loader):
+            result = constitutional.compute_constitutional_score(project, refresh=False)
+
+        assert result["overall"] is not None
+        assert result["provenance"]["layers_with_provenance"] == 0
+        assert result["provenance"]["judge_models"] == []
+
+
 class TestCacheSaveLoad:
     def test_cache_saves_layer_hashes(self, tmp_path):
         """ingest 後、キャッシュにレイヤーハッシュが保存される。"""

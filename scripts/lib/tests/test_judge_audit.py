@@ -265,6 +265,50 @@ def test_harness_skips_already_judged(data_dir):
     assert res["judged_now"] == len(FIXTURES) - 1
 
 
+# ─────────────────────────── provenance (#309) ────────────────────
+
+def test_harness_run_records_judge_model_in_provenance(data_dir):
+    """判定に使ったモデルを verdict に残す（#309: model が揮発すると条件差を分離できない）。"""
+    target = FIXTURES[0]
+    with mock.patch.object(
+        _harness, "call_judge_llm", return_value=_fake_judge_response(0.9, target["principle_id"])
+    ):
+        _harness.run_audit(SLUG, run=True, limit=1, model="haiku", data_dir=data_dir)
+
+    prov = _jstore.read_verdicts(SLUG, data_dir=data_dir)[target["id"]]["provenance"]
+    assert prov["evaluation_kind"] == "llm_judge"
+    assert prov["producer"] == "judge_audit"
+    # alias は verbatim（具体バージョンへ展開しない）
+    assert prov["judge"]["model"] == "haiku"
+    # `claude -p ... --model m` をツール指定なしで起動しているので観測済み扱い
+    assert prov["judge"]["tool_policy"]["mode"] == "cli_default"
+    assert prov["runtime"]["name"] == "claude"
+    assert prov["plugin"]["version"]
+    assert prov["schema_version"] == 1
+
+
+def test_harness_run_provenance_does_not_replace_judged_at(data_dir):
+    """recorded_at（provenance 組立時刻）と judged_at（評価時刻）は別物として両方残す。"""
+    target = FIXTURES[0]
+    with mock.patch.object(
+        _harness, "call_judge_llm", return_value=_fake_judge_response(0.9, target["principle_id"])
+    ):
+        _harness.run_audit(SLUG, run=True, limit=1, data_dir=data_dir)
+    rec = _jstore.read_verdicts(SLUG, data_dir=data_dir)[target["id"]]
+    assert rec["judged_at"]
+    assert rec["provenance"]["recorded_at"]
+
+
+def test_section_tolerates_old_verdicts_without_provenance(data_dir):
+    """遡及埋めをしないので旧レコード（provenance 欠損）が読めることが契約。"""
+    _write_verdicts(data_dir, [_verdict(f["id"]) for f in FIXTURES])
+    verdicts = _jstore.read_verdicts(SLUG, data_dir=data_dir)
+    assert all("provenance" not in v for v in verdicts.values())
+    # reader（advisory section）も落ちない
+    with mock.patch("audit.sections_judge_audit._slug_for", return_value=SLUG):
+        assert build_judge_audit_section(Path("/x/evolve-anything")) is not None
+
+
 def test_build_fixture_prompt_reuses_constitutional_eval_prompt():
     """build_fixture_prompt は constitutional._build_eval_prompt を再利用する（judge 経路に流す）。"""
     prompt = _harness.build_fixture_prompt(FIXTURES[0])
