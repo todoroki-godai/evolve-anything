@@ -48,7 +48,7 @@ def _project_dir_for_slug(projects_root: Path, pj_slug: str) -> Optional[Path]:
 
 def _recent_transcripts(pj_dir: Path, max_files: int) -> List[Path]:
     # 非正の上限は「走査なし」に畳む。素の slice だと max_files=-1 が `files[:-1]`
-    # （末尾 1 件だけ落とす）という意図しない挙動になる（#314）。
+    # （末尾 1 件だけ落とす）という意図しない挙動になる（#345）。
     if max_files <= 0:
         return []
     files = [p for p in pj_dir.glob("*.jsonl") if p.is_file()]
@@ -99,7 +99,7 @@ def collect_signals(
         pj_dir: transcript ディレクトリを明示指定する。未指定なら slug から
             suffix 照合で解決する（従来動作）。worktree transcript を本体 repo の
             slug で記録したい呼び出し側が使う（#304）。
-        transcripts: 走査する transcript ファイルを明示指定する（#314）。指定時は
+        transcripts: 走査する transcript ファイルを明示指定する（#345）。指定時は
             ``pj_dir`` / ``max_transcripts`` による選択を行わない。1 slug が複数 dir
             （本体 + worktree）を持つとき、**PJ 単位**で上限を掛けた選択結果を
             呼び出し側（``fleet.detect``）が配る。``[]`` は「走査対象なし」を意味する。

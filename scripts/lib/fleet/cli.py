@@ -29,7 +29,7 @@ from .recall import format_hits, recall, reinforce_recall_hits
 
 
 def _positive_int(value: str) -> int:
-    """1 以上の int だけを受ける argparse type（#314）。
+    """1 以上の int だけを受ける argparse type（#345）。
 
     負数は `files[:-1]` のような意図しないスライス挙動に、0 は「無制限」とも「走査なし」とも
     読めるので、どちらも明示的に拒否して曖昧さを残さない。

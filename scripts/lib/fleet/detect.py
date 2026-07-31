@@ -85,7 +85,7 @@ def _slug_for_project_dir(pj_dir: Path, fs_root: Optional[Path]) -> str:
 def _select_transcripts(
     dirs: List[Path], max_files: int
 ) -> tuple[List[Path], List[Dict[str, str]]]:
-    """1 slug の全 dir を合算してから mtime 降順で上限を掛ける（#314）。
+    """1 slug の全 dir を合算してから mtime 降順で上限を掛ける（#345）。
 
     ``max_transcripts`` は「PJ ごとの上限」と説明されているのに、dir ごとに適用すると
     実効上限が ``max_files × dir 数`` になる。worktree を多く持つ PJ では daily の走査量が
@@ -175,7 +175,7 @@ def detect_all_projects(
                        utterances.db を引く。``[]`` を渡すと DB 非依存で回せる
         max_transcripts: **PJ（slug）ごと**の transcript 上限（backfill は大きくする）。
                        1 slug が複数 dir（本体 + worktree）を持つ場合も合算してから
-                       上限を掛ける（#314）。非正値は走査なしに畳む
+                       上限を掛ける（#345）。非正値は走査なしに畳む
         dry_run:       ``True`` ならストアに一切触れない（#491 invariant）
         only:          対象 pj_slug の絞り込み
         fs_root:       pj_id → 実パス復元の探索起点（テスト用。default ``/``）
@@ -234,7 +234,7 @@ def detect_all_projects(
         # 突合するため、同一シグナルを dir 数ぶん重複計上してしまう（dry-run と実書込の
         # 件数が食い違う = 観測が嘘をつく）。
         # 上限は PJ 単位。全 dir の transcript を合算してから mtime 降順で上位 N を採る
-        # （dir ごとに掛けると実効上限が dir 数倍になる・#314）。
+        # （dir ごとに掛けると実効上限が dir 数倍になる・#345）。
         selected, enum_errors = _select_transcripts(dirs, max_transcripts)
         signals = []
         dir_errors: List[str] = []
