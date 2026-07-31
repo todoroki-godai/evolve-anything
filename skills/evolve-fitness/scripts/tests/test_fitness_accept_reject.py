@@ -63,6 +63,37 @@ class TestRecordEvolveDiffDecisionE2E:
         assert len(lines) == 1
         assert json.loads(lines[0])["best_fitness"] == entry["best_fitness"]
 
+    def test_naive_clock_still_persisted_as_aware_utc(self, tmp_path, monkeypatch):
+        """#297 fixup: この writer は append_entry を経由しない直接書込経路のため、
+        naive timestamp を返す clock でも normalize_entry_timestamp を明示的に
+        通っていることを回帰的に検証する（chokepoint 呼び忘れの再発防止）。
+        """
+        history_file = tmp_path / "history.jsonl"
+
+        class _NaiveClock(datetime):
+            @classmethod
+            def now(cls, tz=None):  # noqa: ARG003 — tz を無視する壊れた clock を模す
+                return datetime(2026, 7, 31, 9, 0, 0)
+
+        monkeypatch.setattr(fe, "datetime", _NaiveClock)
+
+        entry = fe.record_evolve_diff_decision(
+            skill_name="my-skill",
+            after_content=GOOD_SKILL,
+            diff_summary="naive clock regression",
+            human_accepted=True,
+            history_file=history_file,
+        )
+
+        parsed_ts = datetime.fromisoformat(entry["timestamp"])
+        assert parsed_ts.tzinfo is not None
+        assert parsed_ts.utcoffset().total_seconds() == 0
+
+        on_disk = json.loads(history_file.read_text(encoding="utf-8").splitlines()[0])
+        disk_ts = datetime.fromisoformat(on_disk["timestamp"])
+        assert disk_ts.tzinfo is not None
+        assert disk_ts.utcoffset().total_seconds() == 0
+
     def test_record_carries_provenance(self, tmp_path):
         """同じ optimize_history に書く第3の producer も実行条件を残す（#309）。
 
