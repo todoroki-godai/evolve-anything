@@ -16,8 +16,9 @@ group 化し、頻度降順・上位 max_groups を返す決定論 phase を検�
 """
 from __future__ import annotations
 
+import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _lib_dir = Path(__file__).resolve().parent.parent
@@ -168,6 +169,36 @@ def test_build_review_excludes_promoted_and_expired(tmp_path: Path):
     )
     total = sum(len(g["signal_keys"]) for g in res["groups"])
     assert total == 1
+
+
+def test_build_review_excludes_ttl_expired_signal_without_flag(tmp_path: Path):
+    """#326: split-brain 再現 — detected_at が TTL(45日)超・expired フラグ未設定でも
+    read 時導出（is_effectively_expired）で除外される。
+
+    標準フロー（--dry-run → --drain）は mark_expired を通らず expired フラグが書かれない。
+    従来の daily_review は永続化フラグ（``r.get("expired")``）だけを見ていたため、この
+    レコードを「昇格可能」として提示していた（promote 側は read 時導出で除外＝黙ってスキップ）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    old = WeakSignal(
+        channel="llm_judge",
+        provenance={"source_path": "/a.jsonl", "line_no": 9, "text": "腐った話", "reason": "r"},
+        detected_at=(datetime.now(timezone.utc) - timedelta(days=46)).isoformat(),
+        session_id="s1",
+        pj_slug="evolve-anything",
+    )
+    fresh = _sig("金額がきれてる", 1)
+    append_signals([old, fresh], path=ws)
+    # フラグは一切立てていないことを確認（mark_expired を通していない標準フローの状態）。
+    recs = [json.loads(l) for l in ws.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert all(r.get("expired") is False for r in recs)
+
+    res = dr.build_review(
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+    )
+    total_keys = {k for g in res["groups"] for k in g["signal_keys"]}
+    assert old.signal_key not in total_keys
+    assert fresh.signal_key in total_keys
 
 
 def test_build_review_includes_content_rich_excludes_content_poor(tmp_path: Path):

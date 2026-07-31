@@ -264,6 +264,23 @@ def _mark_promoted(
         _rewrite_promoted(p, promoted_keys)
 
 
+def _skip_reason(rec: Optional[Dict[str, Any]], *, reviewed: bool) -> str:
+    """requested だが昇格候補に入らなかった signal_key の理由を判定する（#326）。
+
+    read_unpromoted の除外条件（promoted / expired / reviewed）と対称に判定する。
+    rec が None（signal_key がそもそも weak_signals に存在しない）は "not_found"。
+    """
+    if rec is None:
+        return "not_found"
+    if rec.get("promoted"):
+        return "already_promoted"
+    if is_effectively_expired(rec):
+        return "expired"
+    if reviewed:
+        return "already_reviewed"
+    return "unknown"
+
+
 def promote_signals(
     signal_keys: List[str],
     *,
@@ -273,6 +290,7 @@ def promote_signals(
     source: str = "reflect_confirmed",
     idiom_keys: Optional[Dict[str, str]] = None,
     dry_run: bool = False,
+    seen_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """指定 signal_key の未昇格 weak_signal を corrections へ昇格する。
 
@@ -284,22 +302,64 @@ def promote_signals(
     idiom_keys: source="idiom_dict" のとき signal_key → 確認済み idiom_key の対応表。
                 昇格レコードに idiom_key を残し、安全弁③（revoke）で巻き戻せるようにする。
 
+    #326: requested と promoted の件数差が silent failure だった（どの key がなぜ落ちたか
+    分からない）。requested（重複除去した要求件数）/ promoted_keys（実際に昇格した signal_key
+    一覧）/ skipped（昇格されなかった signal_key と理由 ``not_found`` / ``already_promoted`` /
+    ``expired`` / ``already_reviewed`` の一覧）を追加する（既存キーは維持・純加算）。
+
     Returns:
-        {"promoted": int, "dry_run": bool}
+        {"promoted": int, "dry_run": bool, "requested": int,
+         "promoted_keys": [str, ...], "skipped": [{"signal_key": str, "reason": str}, ...]}
     """
-    target = set(signal_keys or [])
+    # dict.fromkeys で順序を保ったまま重複除去する（requested は一意な要求件数）。
+    requested_keys = list(dict.fromkeys(k for k in (signal_keys or []) if k))
+    target = set(requested_keys)
     # #46 read 層拡張: weak_signals_path=None（production）は read_unpromoted 経由で
     # canonical + legacy を union read し legacy 昇格候補を拾う。明示 path は単一（hermetic）。
     candidates = [
-        r for r in read_unpromoted(weak_signals_path)
+        r for r in read_unpromoted(weak_signals_path, seen_path=seen_path)
         if r.get("signal_key") in target
     ]
+    candidate_keys = {r.get("signal_key") for r in candidates}
+
+    def _build_skipped() -> List[Dict[str, str]]:
+        # 理由判定は全件読み（promoted/expired 済みでも rec を引けるようにする）+ 既読集合。
+        all_recs = read_signals(weak_signals_path)
+        by_key: Dict[str, Dict[str, Any]] = {}
+        for r in all_recs:
+            k = r.get("signal_key")
+            if k and k not in by_key:
+                by_key[k] = r
+        from correction_semantic.daily_review import read_reviewed_keys
+
+        reviewed_keys = read_reviewed_keys(seen_path)
+        out: List[Dict[str, str]] = []
+        for k in requested_keys:
+            if k in candidate_keys:
+                continue
+            out.append({
+                "signal_key": k,
+                "reason": _skip_reason(by_key.get(k), reviewed=k in reviewed_keys),
+            })
+        return out
 
     if dry_run:
-        return {"promoted": len(candidates), "dry_run": True}
+        return {
+            "promoted": len(candidates),
+            "dry_run": True,
+            "requested": len(requested_keys),
+            "promoted_keys": sorted(candidate_keys),
+            "skipped": _build_skipped(),
+        }
 
     if not candidates:
-        return {"promoted": 0, "dry_run": False}
+        return {
+            "promoted": 0,
+            "dry_run": False,
+            "requested": len(requested_keys),
+            "promoted_keys": [],
+            "skipped": _build_skipped(),
+        }
 
     # corrections に human-source レコードを追記
     # ADR-049 / #55: production（corrections_path 無し）は単一書込ゲート store_write、
@@ -331,7 +391,13 @@ def promote_signals(
     # weak_signal を promoted=True にマーク（再昇格防止・union dir 全て / hermetic）
     _mark_promoted(weak_signals_path, promoted_keys)
 
-    return {"promoted": len(promoted_keys), "dry_run": False}
+    return {
+        "promoted": len(promoted_keys),
+        "dry_run": False,
+        "requested": len(requested_keys),
+        "promoted_keys": sorted(promoted_keys),
+        "skipped": _build_skipped(),
+    }
 
 
 def invalidate_idiom_corrections(

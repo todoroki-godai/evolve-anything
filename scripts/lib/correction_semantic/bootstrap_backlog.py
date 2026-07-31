@@ -21,8 +21,11 @@ marker は slug スコープ（bootstrap_done-<slug>.marker）+ writer_locus=bat
 宣言済み（#434）。dry-run ゼロ書込（pitfall_dryrun_stateful_store_write）: mark_done は
 dry_run=True なら一切ファイルに触れない。build は読み取りのみ（marker を書かない）。
 
-#442（weak_signals TTL）が並行実装中。expired 除外の reader API はまだ無い前提で、read 時に
-レコードへ ``expired`` フィールドがあれば防御的に除外する（深い依存を作らない浅い連携）。
+TTL 除外（#442・#326）: 永続化フラグ（``expired``）だけでなく read 時導出
+``weak_signals.ttl.is_effectively_expired`` で判定する。標準フロー（``--dry-run`` →
+``--drain``）は ``mark_expired`` を通らずフラグが書かれないため、フラグだけを見ると
+TTL 超レコードを昇格候補として提示してしまい、promote 側（同じ read 時導出）と
+split-brain になる（#326 で daily_review と揃えて修正）。
 """
 from __future__ import annotations
 
@@ -38,6 +41,7 @@ from correction_semantic.review_channels import (
     signal_text,
 )
 from weak_signals.store import default_store_path, read_signals
+from weak_signals.ttl import is_effectively_expired
 
 # #112 read 層 alias fold: legacy 旧 slug タグを canonical へ畳んで拾う共有ヘルパー
 # （daily_review._read_new と単一ソース・alias は read 専用・write は現 slug 固定）。
@@ -342,13 +346,13 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────────────────────────
-# backlog 読み取り（slug スコープ + 未昇格 + 防御的 expired 除外）
+# backlog 読み取り（slug スコープ + 未昇格 + TTL 除外）
 # ─────────────────────────────────────────────────────────────────
 def _read_backlog(
     pj_slug: str,
     weak_signals_path: Optional[Path],
 ) -> List[Dict[str, Any]]:
-    """当該 PJ slug の未昇格 content-rich backlog を返す（expired は防御的に除外）。
+    """当該 PJ slug の未昇格 content-rich backlog を返す（TTL 失効は read 時導出で除外）。
 
     #99: 対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
     チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ bootstrap でも除外。
@@ -363,8 +367,9 @@ def _read_backlog(
             continue
         if r.get("promoted"):
             continue
-        # #442 TTL 連携（浅い防御的読み）: expired フィールドがあれば除外する。
-        if r.get("expired"):
+        # #326: 永続化フラグ（expired）でなく read 時導出（is_effectively_expired）で判定する
+        # （理由は daily_review._read_new と同一。TTL split-brain の再発防止）。
+        if is_effectively_expired(r):
             continue
         out.append(r)
     return out

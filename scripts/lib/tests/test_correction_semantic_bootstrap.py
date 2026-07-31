@@ -10,7 +10,8 @@
   signal_keys を返す（一括昇格 UX 用）。
 - marker が立っていたら is_bootstrap=False で即返す（pj_total/groups は計算しない＝早期 return）。
 - mark_done は dry_run でファイル不変（最下層まで dry-run ゲートを貫通）。
-- expired フィールドがあれば防御的に除外する（#442 TTL の reader API が無い前提の浅い連携）。
+- expired フィールドがあれば除外する。detected_at が TTL(45日)超なら未フラグでも read 時導出
+  （is_effectively_expired）で除外する（#326 split-brain 修正）。
 
 決定論・LLM 非依存。
 """
@@ -18,7 +19,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _lib_dir = Path(__file__).resolve().parent.parent
@@ -280,6 +281,25 @@ def test_build_excludes_expired_defensively(tmp_path: Path):
     )
     res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
     assert res["pj_total"] == 1
+
+
+def test_build_excludes_ttl_expired_signal_without_flag(tmp_path: Path):
+    """#326: split-brain 再現 — detected_at が TTL(45日)超・expired フラグ未設定でも
+    read 時導出（is_effectively_expired）で除外される（永続化フラグだけを見ない）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    old_detected = (datetime.now(timezone.utc) - timedelta(days=46)).isoformat()
+    old = _sig("腐った話", 9, detected_at=old_detected)
+    fresh = _sig("金額がきれてる", 1)
+    append_signals([old, fresh], path=ws)
+    recs = [json.loads(x) for x in ws.read_text(encoding="utf-8").splitlines() if x.strip()]
+    assert all(r.get("expired") is False for r in recs)
+
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    assert res["pj_total"] == 1
+    all_keys = {k for g in res["groups"] for k in g["signal_keys"]}
+    assert old.signal_key not in all_keys
+    assert fresh.signal_key in all_keys
 
 
 # ─────────────────────────────────────────────────────────────────

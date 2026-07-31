@@ -1064,6 +1064,31 @@ class TestWeakSignalPromotion:
         # 旧キー（全PJ集計値）は削除済み — per-PJ の growth_report.corrections_human と混同防止 (#557)
         assert "corrections_human" not in out
 
+    def test_promote_weak_surfaces_skip_reason_for_ttl_expired(self, tmp_path, capsys):
+        """#326: TTL 超・expired フラグ未設定の signal_key を --promote-weak に渡すと、従来は
+        promoted=0 のみで理由不明の silent failure だった。CLI 出力の skipped で理由が分かる。
+        """
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+
+        ws = tmp_path / "weak_signals.jsonl"
+        corr = tmp_path / "corrections.jsonl"
+        old = WeakSignal(
+            "rephrase", {"line_no": 1},
+            (datetime.now(timezone.utc) - timedelta(days=46)).isoformat(),
+            "s1", "evolve-anything",
+        )
+        append_signals([old], path=ws)
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", old.signal_key,
+                                     "--weak-signals-file", str(ws),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["promoted"] == 0
+        assert out["requested"] == 1
+        assert out["promoted_keys"] == []
+        assert out["skipped"] == [{"signal_key": old.signal_key, "reason": "expired"}]
+
 
 # --- Test: --promote-weak が idiom を confirmed 化する閉ループ（#463 配線漏れ修正） ---
 
