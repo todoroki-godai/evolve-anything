@@ -221,6 +221,168 @@ def test_ingest_missing_response_does_not_mark_judged(tmp_path: Path) -> None:
     assert cs_store.read_judged_keys(judged) == set()
 
 
+def test_ingest_malformed_json_does_not_mark_judged(tmp_path: Path) -> None:
+    """#273: 応答は届いたが JSON が壊れているバッチも、応答欠損と同様に未判定のまま残す。
+
+    従来は parse_verdicts が [] にフォールバックし、group 全件が「判定済み・非修正」として
+    judged_keys に確定していた（応答欠損は再試行されるのに壊れた応答は再試行されない非対称）。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # 応答テキストは届いているが JSON として壊れている。
+    responses = {rid: "```json\n{not valid json at all"}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["corrections"] == 0
+    assert res["non_corrections"] == 0
+    assert res["parse_failed_batches"] == 1
+    # 判定進捗に何も記録されない（対象発話が judged_keys に入らない = 次回再判定される）
+    assert cs_store.read_judged_keys(judged) == set()
+    # weak_signals / 個人辞書にも何も書かれない。
+    assert not ws_store.exists()
+    assert not idioms_store.exists()
+
+
+def test_ingest_invalid_verdict_element_does_not_mark_judged(tmp_path: Path) -> None:
+    """#273 P1-1: 構文上 valid だが意味的に壊れた要素（型違い）混じりも、応答欠損と同様に未判定で残す。
+
+    従来は不正要素だけ黙って parse_verdicts から捨てられ、残りの空リストが
+    「該当なし（正当な空）」と誤読されて group 全件が judged_keys に確定していた。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # index が文字列型（"0"）の不正要素を含む応答（構文上は valid JSON）。
+    responses = {rid: json.dumps({"verdicts": [{"index": "0", "is_correction": True}]})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["corrections"] == 0
+    assert res["non_corrections"] == 0
+    assert res["parse_failed_batches"] == 1
+    assert cs_store.read_judged_keys(judged) == set()
+    assert not ws_store.exists()
+    assert not idioms_store.exists()
+
+
+def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(tmp_path: Path) -> None:
+    """#273 P1-1: is_correction が文字列 "false" は bool("false")==True の罠を踏まず失格にする。"""
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = {rid: json.dumps({"verdicts": [{"index": 0, "is_correction": "false"}]})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["parse_failed_batches"] == 1
+    assert res["corrections"] == 0
+    assert cs_store.read_judged_keys(judged) == set()
+
+
+def test_ingest_legitimate_empty_verdicts_still_marks_judged(tmp_path: Path) -> None:
+    """正しい JSON で verdicts が空配列（モデルが「該当なし」と判定）は従来どおり判定済みにする。
+
+    パース失敗（ok=False）と正当な空リスト（ok=True・該当なし）を区別できないと、
+    正当な「該当なし」判定まで再試行対象にしてしまい無駄な再判定ループになる。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = {rid: json.dumps({"verdicts": []})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["parse_failed_batches"] == 0
+    assert res["non_corrections"] == 3
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+
+
+def test_ingest_processes_every_batch_not_just_the_first(tmp_path: Path) -> None:
+    """#273: 2 バッチ目以降も応答が回収される（変数 shadowing の回帰テスト）。
+
+    ingest 内でバッチごとのパース結果を、外側の応答マップと同名の変数に代入すると、
+    2 週目の `parsed.get(key)` が verdict dict を引いて空文字になり、以降の全バッチが
+    「応答欠損」として silent skip される（判定は永久に前進しない）。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=1, judged_path=judged,
+    )
+    assert len(emitted["requests"]) == 3  # 1 発話 = 1 バッチ
+
+    responses = _responses_for(
+        emitted,
+        {(req["id"], 0): {"is_correction": False, "idiom": None, "reason": "r"}
+         for req in emitted["requests"]},
+    )
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+
+    assert res["skipped_batches"] == 0
+    assert res["non_corrections"] == 3
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+
+
+def test_ingest_counts_omitted_verdicts(tmp_path: Path) -> None:
+    """#273: verdict が返らなかった発話は非修正として確定しつつ件数を surface する。"""
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # index 0 だけ返し、1/2 は省略された応答
+    responses = {rid: json.dumps(
+        {"verdicts": [{"index": 0, "is_correction": False, "idiom": None, "reason": "r"}]}
+    )}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["omitted_verdicts"] == 2
+    assert res["non_corrections"] == 3
+    assert len(cs_store.read_judged_keys(judged)) == 3
+
+
+def test_batch_prompt_requires_verdict_for_every_index() -> None:
+    """#273: プロンプトが「全 index を省略せず返す」契約を明示している。"""
+    prompt = cs_batch._prompt.build_batch_prompt(_utts())
+    assert "全 index" in prompt
+    assert "省略しない" in prompt
+
+
 def test_estimate_tokens() -> None:
     est = cs_batch.estimate_tokens(_utts(), batch_size=30)
     assert est["utterances"] == 3

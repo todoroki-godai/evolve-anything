@@ -76,3 +76,95 @@ def test_parse_verdicts_tolerates_missing_fields() -> None:
     raw = json.dumps({"verdicts": [{"index": 0, "is_correction": True}]})
     verdicts = cs_prompt.parse_verdicts(raw)
     assert verdicts[0]["idiom"] is None  # 欠落 idiom は None に正規化
+
+
+# ── parse_verdicts_result: 空リストとパース失敗の区別（#273）────────────────
+
+
+def test_parse_verdicts_result_ok_true_on_valid_json() -> None:
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "x", "reason": "y"},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert len(result["verdicts"]) == 1
+
+
+def test_parse_verdicts_result_ok_true_on_legitimate_empty_list() -> None:
+    """正しい JSON で verdicts が空配列（モデルが「該当なし」と判定）は ok=True。"""
+    raw = json.dumps({"verdicts": []})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert result["verdicts"] == []
+
+
+def test_parse_verdicts_result_ok_false_on_malformed_json() -> None:
+    """壊れた JSON はパース失敗（ok=False）。空リストと区別できないと #273 の非対称が再発する。"""
+    result = cs_prompt.parse_verdicts_result("not json at all {{{")
+    assert result["ok"] is False
+    assert result["verdicts"] == []
+
+
+def test_parse_verdicts_result_ok_false_on_missing_response() -> None:
+    assert cs_prompt.parse_verdicts_result("")["ok"] is False
+    assert cs_prompt.parse_verdicts_result(None)["ok"] is False
+
+
+def test_parse_verdicts_result_ok_false_on_missing_verdicts_key() -> None:
+    """"verdicts" キー自体が無い/リストでない応答は解釈不能として扱う。"""
+    assert cs_prompt.parse_verdicts_result(json.dumps({"foo": "bar"}))["ok"] is False
+    assert cs_prompt.parse_verdicts_result(json.dumps({"verdicts": "not a list"}))["ok"] is False
+
+
+def test_parse_verdicts_backward_compat_delegates_to_result() -> None:
+    """既存 API `parse_verdicts` は parse_verdicts_result の verdicts をそのまま返す（後方互換）。"""
+    raw = json.dumps({"verdicts": [{"index": 0, "is_correction": True, "idiom": "x", "reason": "y"}]})
+    assert cs_prompt.parse_verdicts(raw) == cs_prompt.parse_verdicts_result(raw)["verdicts"]
+
+
+# ── P1-1（codex 指摘）: 意味的に壊れた要素の厳格検証 ────────────────────────
+
+
+def test_parse_verdicts_result_ok_false_on_string_index() -> None:
+    """index が文字列型（"0"）は不正 — 従来は黙って捨てられ ok=True になっていた。"""
+    raw = json.dumps({"verdicts": [{"index": "0", "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is False
+    assert result["verdicts"] == []
+
+
+def test_parse_verdicts_result_ok_false_on_string_is_correction() -> None:
+    """is_correction が文字列 "false" は bool("false")==True の罠を踏まず不正として弾く。"""
+    raw = json.dumps({"verdicts": [{"index": 0, "is_correction": "false"}]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is False
+
+
+def test_parse_verdicts_result_ok_false_on_duplicate_index() -> None:
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True},
+        {"index": 0, "is_correction": False},
+    ]})
+    assert cs_prompt.parse_verdicts_result(raw)["ok"] is False
+
+
+def test_parse_verdicts_result_ok_false_on_one_invalid_among_valid() -> None:
+    """1件でも不正要素があれば正しい要素も含めてバッチ全体を失格にする（部分採用しない）。"""
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "四国めたんじゃなくて", "reason": "後置型"},
+        {"index": 1, "is_correction": "false"},  # 不正
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is False
+    assert result["verdicts"] == []
+
+
+def test_parse_verdicts_result_ok_true_when_all_valid() -> None:
+    """全要素が正しい型なら ok=True（回帰防止）。"""
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "x", "reason": "y"},
+        {"index": 1, "is_correction": False, "idiom": None, "reason": ""},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert len(result["verdicts"]) == 2
