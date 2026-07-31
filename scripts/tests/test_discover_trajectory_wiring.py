@@ -134,6 +134,43 @@ def test_empty_candidates():
     assert merged == []
 
 
+# ── 重複埋め込み排除（#322）──────────────────────────────
+# sample_prompts（候補直下）と decomposition.routing.sample_triggers は同じ
+# TrajectoryRecord 群から同じ手順で作られるため通常一致する。一致するときは
+# routing.sample_triggers を落とし、trajectory_skill_candidates /
+# missed_skill_opportunities の双方での二重埋め込み（実例で同文×4重複）を防ぐ。
+
+
+def test_dedupes_sample_triggers_when_identical_to_sample_prompts():
+    cand = _cand("foo", 0.8, prompts=["実装して"])
+    cand["decomposition"] = {
+        "routing": {"trigger_keywords": ["実装"], "sample_triggers": ["実装して"]},
+        "attachments": {"session_count": 1},
+        "failure_analysis": {"failure_count": 0},
+    }
+    surfaced, merged = _trajectory_candidates_to_missed([cand], threshold=0.3)
+
+    # trajectory_skill_candidates 側
+    assert "sample_triggers" not in surfaced[0]["decomposition"]["routing"]
+    assert surfaced[0]["decomposition"]["routing"]["trigger_keywords"] == ["実装"]
+    # missed_skill_opportunities 側
+    assert merged[0]["triggers_matched"] == ["実装して"]
+    assert "sample_triggers" not in merged[0]["routing"]
+
+
+def test_keeps_sample_triggers_when_diverged_from_sample_prompts():
+    """一致しない場合は情報欠落を避け両方とも保持する（安全側）。"""
+    cand = _cand("foo", 0.8, prompts=["実装して"])
+    cand["decomposition"] = {
+        "routing": {"trigger_keywords": [], "sample_triggers": ["別のトリガー"]},
+        "attachments": {},
+        "failure_analysis": {},
+    }
+    surfaced, merged = _trajectory_candidates_to_missed([cand], threshold=0.3)
+    assert surfaced[0]["decomposition"]["routing"]["sample_triggers"] == ["別のトリガー"]
+    assert merged[0]["routing"]["sample_triggers"] == ["別のトリガー"]
+
+
 # ── project スコープのエンコード契約 ──────────────────────
 
 

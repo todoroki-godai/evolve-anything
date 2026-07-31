@@ -33,8 +33,13 @@ _MACHINERY_PREFIXES = (
     "<local-command",
     "<command-output>",
     "<command-message>",
+    "[request interrupted",
 )
-"""lstrip 後この接頭辞で始まる user ターンは機構ターン。"""
+"""lstrip 後この接頭辞で始まる user ターンは機構ターン。
+
+``[Request interrupted (by user|by user for tool use)]`` は Esc 中断の
+harness マーカー（weak_signals の ``_INTERRUPT_MARKER`` と同じ判定対象、#322）。
+turn 単体では ``isMeta`` が付かないため content の prefix で判定する。"""
 
 _MACHINERY_MARKERS = (
     "this session is being continued from a previous conversation",
@@ -264,12 +269,20 @@ def _find_preceding_user_prompt(turns: list, command_index: int) -> str:
     """command_index より前の直近の「本物の」user プロンプトを返す。
 
     <command-name> を含む呼び出しターンと、harness 注入の機構ターン
-    （compaction/SKILL.md/notification/system-reminder/Stop hook）を飛ばし、
+    （compaction/SKILL.md/notification/system-reminder/Stop hook/isMeta）を飛ばし、
     本物のユーザー発話を探す。見つからない場合は空文字列を返す。
     """
     for j in range(command_index - 1, -1, -1):
         t = turns[j]
         if t.get("type") != "user":
+            continue
+        # isMeta=True は harness 注入ターン（SKILL.md base directory 注入・
+        # local-command-caveat・agent-message・artifact-design 等の長文 system
+        # prompt を含む）の構造フラグ。実例で 8k 字級の注入プロンプトがこの
+        # フラグを見ずに「本物の依頼」として拾われ result JSON が肥大化した
+        # ため、既存の文字列ベース判定 (_is_machinery_prompt) と独立に除外する
+        # （#322）。
+        if t.get("isMeta"):
             continue
         content = _get_content(t)
         if not content:

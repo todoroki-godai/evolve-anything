@@ -76,6 +76,38 @@ def _is_already_existing_skill(name: str, known_skills) -> bool:
     return name in known_skills
 
 
+def _dedupe_candidate_sample_triggers(candidate: dict) -> dict:
+    """candidate 直下の sample_prompts と decomposition.routing.sample_triggers が
+    同一内容なら routing 側から削り、二重埋め込みを防ぐ（#322）。
+
+    両者は同じ TrajectoryRecord 群から同じ手順（同じ truncate_sample_text）で
+    作られるため通常は完全一致する。一致しない（将来ロジックが分岐した等の）
+    ケースは情報欠落を避け両方とも保持する安全側。
+
+    実例: harness 注入の長文 system prompt（artifact-design 全文）が誤って
+    user_prompt に拾われたとき、この2フィールドに同文がそのまま重複していた。
+
+    Args:
+        candidate: ``extract_skill_candidates`` が返す候補 dict 1件。
+
+    Returns:
+        変更不要なら同じ dict をそのまま返す。変更が必要な場合は
+        decomposition.routing から sample_triggers を除いた新しい dict を返す
+        （元の candidate は変更しない）。
+    """
+    decomposition = candidate.get("decomposition")
+    if not isinstance(decomposition, dict):
+        return candidate
+    routing = decomposition.get("routing")
+    if not isinstance(routing, dict):
+        return candidate
+    if routing.get("sample_triggers") != candidate.get("sample_prompts", []):
+        return candidate
+    new_routing = {k: v for k, v in routing.items() if k != "sample_triggers"}
+    new_decomposition = {**decomposition, "routing": new_routing}
+    return {**candidate, "decomposition": new_decomposition}
+
+
 def _trajectory_candidates_to_missed(
     candidates: list,
     *,
@@ -98,7 +130,8 @@ def _trajectory_candidates_to_missed(
 
     Returns:
         ``(surfaced, merged)``。surfaced は閾値を満たした新規候補（decomposition 全4軸を
-        保持）、merged は triage が消費する ``{"skill", "session_count",
+        保持。sample_prompts と重複する routing.sample_triggers は削除済み・#322）、
+        merged は triage が消費する ``{"skill", "session_count",
         "triggers_matched", "routing", "attachments", ...}`` 形式のリスト。
     """
     existing = set(existing_skills)
@@ -112,6 +145,10 @@ def _trajectory_candidates_to_missed(
         # 既存スキル（プラグイン namespaced / 既存 project・global）は候補にしない
         if _is_already_existing_skill(name, known):
             continue
+        # sample_prompts と routing.sample_triggers の重複埋め込みを排除（#322）。
+        # merged 側の routing も同じ decomposition を参照するため、ここで1回
+        # 排除すれば surfaced/merged 両方に効く。
+        c = _dedupe_candidate_sample_triggers(c)
         surfaced.append(c)
         if name in existing:
             continue
