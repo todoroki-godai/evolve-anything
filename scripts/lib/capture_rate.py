@@ -171,6 +171,10 @@ def _project_match(rec: Dict[str, Any], project: str) -> bool:
     の当PJ slug。どの識別フィールドも持たない（未帰属）レコードは寛容に include する
     （unattributed 救済 = 他PJの誤混入でなく属性欠落なので、当PJ集計から除外しない）。
     """
-    raw = rec.get("project_path") or rec.get("project") or rec.get("project_name")
-    slug = _normalize_pj(raw)
+    # どのフィールドを見るかは `pj_slug.record_project_attribution` が単一ソース
+    # （3 箇所で同じ or 連鎖を書くと片方だけ直して desync する・#312）。
+    # 正規化だけはストア事情に合わせて本 module の `_normalize_pj` を使う。
+    from pj_slug import record_project_attribution
+
+    slug = _normalize_pj(record_project_attribution(rec))
     return slug == project or slug is None
