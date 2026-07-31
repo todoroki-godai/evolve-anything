@@ -37,8 +37,9 @@ _GLOBAL_SUFFIX = "_all_pj"
 # contract 外に書き込まれるが、既知・意図的なキーなので unknown 判定しない（#504）。
 # - constitutional: _surface_constitutional_status()（cache stale/未生成アラート）
 # - remediation_batch_skip: build_remediation_batch_skip_observability()（evolve result が引数）
+# - remediation_fix_targets: build_fix_targets_observability()（remediation phase 結果が引数・#306）
 _EVOLVE_ONLY_OBSERVABILITY_KEYS: frozenset = frozenset(
-    {"constitutional", "remediation_batch_skip"}
+    {"constitutional", "remediation_batch_skip", "remediation_fix_targets"}
 )
 
 

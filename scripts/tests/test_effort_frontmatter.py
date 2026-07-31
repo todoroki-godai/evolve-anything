@@ -298,7 +298,10 @@ class TestCollectIssuesSplitCandidate:
         assert split_issues, "split_candidate issue が collect_issues から出ていない"
         target = [i for i in split_issues if i["detail"].get("skill_name") == "oversized"]
         assert target, "作成したスキルの split_candidate issue が見つからない"
-        assert target[0]["file"] == ".claude/skills/oversized/SKILL.md"
+        # #306: file は検出元の実パス（fixer が読めるもの）。skill 名からの組み立て直しは
+        # repo 直下 skills/ レイアウトで不在パスになり silent no-op を生んだ。
+        assert Path(target[0]["file"]) == skills_dir / "oversized" / "SKILL.md"
+        assert Path(target[0]["file"]).exists()
         assert target[0]["detail"]["line_count"] > target[0]["detail"]["threshold"]
 
     def test_collect_issues_no_split_candidate_for_small_skill(self, skills_dir):

@@ -47,6 +47,10 @@ def _project_dir_for_slug(projects_root: Path, pj_slug: str) -> Optional[Path]:
 
 
 def _recent_transcripts(pj_dir: Path, max_files: int) -> List[Path]:
+    # 非正の上限は「走査なし」に畳む。素の slice だと max_files=-1 が `files[:-1]`
+    # （末尾 1 件だけ落とす）という意図しない挙動になる（#314）。
+    if max_files <= 0:
+        return []
     files = [p for p in pj_dir.glob("*.jsonl") if p.is_file()]
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return files[:max_files]
@@ -76,32 +80,56 @@ def collect_signals(
     *,
     projects_root: Optional[Path] = None,
     errors_path: Optional[Path] = None,
+    errors: Optional[List[Dict[str, Any]]] = None,
     utterances: Optional[List[Dict[str, Any]]] = None,
     max_transcripts: int = DEFAULT_MAX_TRANSCRIPTS,
+    pj_dir: Optional[Path] = None,
+    transcripts: Optional[List[Path]] = None,
+    strict_attribution: bool = False,
 ) -> List[WeakSignal]:
     """4 チャネルを全部走らせて WeakSignal のフラットなリストを返す（書き込みなし）。
 
     各データソースは引数で注入できる（テストは tmp ファイル / 合成データを渡す）。
     未指定なら実環境の正準パスを解決する。
+
+    Args:
+        errors: パース済み errors 行。全 PJ を回すバッチ（``fleet.detect``）が
+            7MB 級の errors.jsonl を PJ 数だけ再パースしないための注入口（#304）。
+            指定時は ``errors_path`` を読まない。
+        pj_dir: transcript ディレクトリを明示指定する。未指定なら slug から
+            suffix 照合で解決する（従来動作）。worktree transcript を本体 repo の
+            slug で記録したい呼び出し側が使う（#304）。
+        transcripts: 走査する transcript ファイルを明示指定する（#314）。指定時は
+            ``pj_dir`` / ``max_transcripts`` による選択を行わない。1 slug が複数 dir
+            （本体 + worktree）を持つとき、**PJ 単位**で上限を掛けた選択結果を
+            呼び出し側（``fleet.detect``）が配る。``[]`` は「走査対象なし」を意味する。
+        strict_attribution: permission_deny の PJ 帰属判定を厳格化する（#312）。
+            全 PJ へ fan-out する呼び出し側だけが True にする。
     """
     signals: List[WeakSignal] = []
 
     # ② permission deny ← errors.jsonl
-    if errors_path is None:
-        from rl_common import hook_store_path
+    if errors is None:
+        if errors_path is None:
+            from rl_common import hook_store_path
 
-        import rl_common as _rc
+            import rl_common as _rc
 
-        errors_path = hook_store_path("errors.jsonl", base=_rc.DATA_DIR)
-    signals.extend(detect_permission_deny(_read_errors(errors_path), pj_slug))
+            errors_path = hook_store_path("errors.jsonl", base=_rc.DATA_DIR)
+        errors = _read_errors(errors_path)
+    signals.extend(detect_permission_deny(errors, pj_slug, strict=strict_attribution))
 
     # ① 直後手編集 / ④ Esc 中断 ← transcript jsonl 直読
     if projects_root is None:
         projects_root = Path.home() / ".claude" / "projects"
-    pj_dir = _project_dir_for_slug(projects_root, pj_slug)
-    if pj_dir is not None:
-        for tp in _recent_transcripts(pj_dir, max_transcripts):
-            signals.extend(detect_transcript_signals(tp, pj_slug))
+    if transcripts is None:
+        if pj_dir is None:
+            pj_dir = _project_dir_for_slug(projects_root, pj_slug)
+        transcripts = (
+            _recent_transcripts(pj_dir, max_transcripts) if pj_dir is not None else []
+        )
+    for tp in transcripts:
+        signals.extend(detect_transcript_signals(tp, pj_slug))
 
     # ③ 言い直し ← utterances.db（query_utterances）
     if utterances is None:
@@ -131,8 +159,10 @@ def run_batch(
     store_path: Optional[Path] = None,
     projects_root: Optional[Path] = None,
     errors_path: Optional[Path] = None,
+    errors: Optional[List[Dict[str, Any]]] = None,
     utterances: Optional[List[Dict[str, Any]]] = None,
     max_transcripts: int = DEFAULT_MAX_TRANSCRIPTS,
+    pj_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """検出 → dedup → 書き込み（dry-run はゼロ書き込み）。
 
@@ -144,8 +174,10 @@ def run_batch(
         pj_slug,
         projects_root=projects_root,
         errors_path=errors_path,
+        errors=errors,
         utterances=utterances,
         max_transcripts=max_transcripts,
+        pj_dir=pj_dir,
     )
     counts = channel_counts(signals)
     write_res = append_signals(signals, path=store_path, dry_run=dry_run)

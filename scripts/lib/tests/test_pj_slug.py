@@ -376,6 +376,55 @@ def test_record_match_project_path_takes_priority_over_project():
     assert pj_slug.record_project_match(rec, "myproject") is True
 
 
+# ── strict モード（fan-out 文脈の未帰属除外・#312）────────────────────────
+def test_record_match_strict_rejects_unattributed():
+    """strict は未帰属レコードを除外する（全 PJ fan-out で 1 PJ に誤帰属させない）。"""
+    assert pj_slug.record_project_match({}, "myproject", strict=True) is False
+    assert pj_slug.record_project_match(
+        {"project_path": None}, "myproject", strict=True) is False
+
+
+def test_record_match_strict_keeps_matching_record():
+    """strict でも帰属が一致するレコードは通す（除外は判定不能のときだけ）。"""
+    assert pj_slug.record_project_match(
+        {"project_path": "myproject"}, "myproject", strict=True) is True
+
+
+def test_record_match_strict_rejects_when_slug_unknown():
+    """strict は slug 未確定（判定不能）も除外側に倒す。"""
+    assert pj_slug.record_project_match(
+        {"project_path": "myproject"}, "", strict=True) is False
+
+
+def test_attribution_precedence_shared_by_project_match_copies():
+    """帰属フィールドの優先順位を `_project_match` の 2 コピーも同じ規則で解く（#312）。
+
+    3 箇所が独立に ``rec.get("project_path") or ...`` を書くと片方だけ直して desync する
+    （pitfall_copied_parse_convention_partial_fix）。正規化の実装は各所で異なってよいが、
+    **どのフィールドを見るか**は `record_project_attribution` が単一ソース。
+    """
+    import capture_rate
+    from audit import outcome_metrics
+
+    for match in (capture_rate._project_match, outcome_metrics._project_match):
+        # project_path が project より優先される
+        assert match({"project_path": "myproject", "project": "other"}, "myproject") is True
+        # project_name までフォールバックする
+        assert match({"project_name": "myproject"}, "myproject") is True
+        # 他 PJ は除外、未帰属は寛容 include（この 2 者の既定は strict でない）
+        assert match({"project": "other"}, "myproject") is False
+        assert match({}, "myproject") is True
+
+
+def test_record_project_attribution_returns_raw_or_none():
+    """帰属値の抽出は単一ソース（strict 判定と未帰属カウントが同じ規則を使う）。"""
+    assert pj_slug.record_project_attribution({"project_path": "a"}) == "a"
+    assert pj_slug.record_project_attribution({"project": "b"}) == "b"
+    assert pj_slug.record_project_attribution({"project_name": "c"}) == "c"
+    assert pj_slug.record_project_attribution({}) is None
+    assert pj_slug.record_project_attribution({"project_path": ""}) is None
+
+
 # ==================================================================
 # CC projects dir の encoded 名候補（transcript / memory の単一ソース）（#275）
 # ==================================================================

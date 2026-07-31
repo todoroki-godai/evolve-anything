@@ -68,3 +68,73 @@ save_world_context(data_dir, ctx, env_score=<ENV_SCORE>, slug=slug)
 - 前回レベル不明（`previous_level` == null / 初回）:
   「**[Lv.{current_level}] {称号}**」
 - `env_score.degraded` が true（取得失敗）: 上記 degraded の 1 行を出す（**表示なしにはしない**）。
+
+## Step 9: Report フェーズの詳細フォーマット
+
+evolve の結果を**人間が読みやすい形式**で出力する。raw な audit テキストをコードブロックにそのまま貼り付けてはならない（MUST NOT）。
+
+**TL;DR を冒頭に必ず出す（MUST・#525-2）**: レポートの一番上に、3 つの数字を1行で出す。詳細セクションを全部読まなくても「今回の evolve で何が起きたか」が即わかるようにするため。
+
+```
+TL;DR: 変更 {N} 件 / 要対応 {M} 件 / 残りすべて評価済みクリーン
+```
+
+- **変更 N 件**: 今回 evolve で実際にファイルへ適用した件数（skill diff / remediation fix / memory 書込 / 昇格など、apply 実績の合算）。dry-run 分析のみで何も適用していなければ 0。
+- **要対応 M 件**: Step 10 の「🔴 要対応（実行コマンドあり）」の件数。
+- **残りすべて評価済みクリーン**: 上記以外の observability 項目（全 ✓ のもの）。
+
+**全 ✓ の observability 項目は1ブロックに畳む（MUST・#525-2）**: Step 3.8 で surface する observability の各 key のうち、「✓ クリーン（該当なし / drift なし）」だけのものは個別に1行ずつ展開せず、まとめて1行に畳む:
+
+```
+✓ クリーン: glossary / orphan_store / store_contract / hook_drift / agent_team / measurement_bug / promotion_readiness / testpaths_coverage
+```
+
+⚠ や ℹ（要注意・データ不足・要対応）を含む項目だけ個別に1行 surface する。これにより「全部 ✓ なのに項目数だけ多くて読みづらい」を防ぐ。**畳んでよいのは clean のものだけ**で、silence != evaluated は「✓ クリーン: ...」のブロックに名前を残すことで担保する（評価したことは見える）。
+
+**フォーマット規則（MUST）**:
+- 各セクションは `###` 見出しで区切る
+- 数値は「問題あり」「問題なし」の判定を添えて表示（数値だけでなく意味を伝える）
+- 重大な問題がなければ「✅ 問題なし」と明示する（沈黙は禁止）
+- 誤検知（スキップした理由）は「⚠ 誤検知 — スキップ: {理由}」と1行で示す
+
+**出力例（このフォーマットに従う）**:
+```
+### 今回の evolve まとめ
+
+#### アーティファクト概況
+- スキル: N件（custom: X / global: Y）
+- rules: Z件 / memory: W件
+
+#### 検出された問題
+- ⚠ 誤検知スキップ: stale_ref 6件（AWS SSM パス — バッククォート内のため対象外）
+- ✅ rules/memory/hooks/claudemd: 問題なし
+
+#### スキル品質
+- implement: 0.88 ✅
+- evolve: 0.76（要観察）
+```
+
+レポートには以下のセクションが含まれる:
+- **Usage (last 30 days)**: PJ 固有スキルのみのメインランキング（プラグインスキルは除外）
+- **Plugin usage**: プラグイン別の総使用回数サマリ（例: `gstack(340) / evolve-anything(30)`）
+- **gstack Workflow Analytics**: gstack スキルが検出された場合、ファネル（plan→refine→ship→document→spec→retro の完走率）、フェーズ別効率、品質トレンド、最適化候補を表示
+- **/simplify ゲート結果**: Step 5.6 で /simplify を実行した場合、「/simplify: N件の改善を適用」または「/simplify: 実行済み・変更なし」「/simplify: スキップ（対象なし or 未対応バージョン）」を Compile セクションに表示
+
+## 成長状態レポート（#448）
+
+成長レベル表示の直後に `result["growth_report"]` の `lines` を列挙する（MUST）。
+`growth_report` キーが存在しない / `error` キーが含まれる場合は表示をスキップ。
+`lines` が空リストの場合は「成長状態: データ不足」を 1 行表示する。
+表示例:
+- `corrections（human-confirmed のみ）7/10 — あと3件で構造化育成へ`
+- `  └ カウントされるアクション: /reflect で approve または --promote-weak で昇格した修正（自動検出・Stop hook 由来は除外）`（#51 LOW）
+- `本日累計 reflect 確認 2件 / idiom 1件 が自動化対象に昇格（このrunでは 1 件）`
+
+**対話前スナップショット問題の補正（#476-4・MUST。全PJ値の混入を断つ — #526-1）:** `growth_report` は analysis 時点で生成されるため `corrections_human` / `promoted_today` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合の上書きは、必ず **per-PJ の値に今回昇格数を加算する** 方式で行う（**`evolve-reflect --promote-weak` 出力の `corrections_human_allpj` をそのまま使ってはならない — MUST NOT**）:
+
+- **`corrections（human-confirmed のみ）` 行**: `result["growth_report"]["corrections_human"]`（= 当PJ analysis 時点の値）に、Step 6.2 で「はい」と答えて昇格に成功した件数を**足した値**を分子にする（分母は `corrections_target`）。
+  - ⚠ **`evolve-reflect --promote-weak` の出力 `corrections_human_allpj` は全PJ合計（例 41）を返す（#557 でリネーム済み）**ため、これで当PJ値（例 0/10）を上書きすると `41/10` という不整合表示になる（#526-1 の事故）。CLI 出力の `corrections_human_allpj` は当PJ分母 `/10` と意味が合わないので分子に使わない。
+- **`本日累計 ...（このrunでは M 件）` 行**: growth_report の `promoted_today` / `autopromoted_today`（本日累計・store 由来）と、`promoted_this_run` / `autopromoted_this_run`（このrun・明示渡し）をそのまま使う。Step 6.2 で承認した直後で store がまだ反映前なら、このrun件数を本日累計に足して表示してよい。
+- 昇格が 0 件だった場合は growth_report の値をそのまま表示する。
+
+`corrections（human-confirmed のみ）` は reflect 承認 / idiom_dict 自動昇格のみを数えた **当PJ** の数で、prune の `corrections kept`（全 correction を数える）とも、CLI の全PJ集計とも別物（行内の `（human-confirmed のみ）` ラベルと「当PJ」スコープで区別する）。

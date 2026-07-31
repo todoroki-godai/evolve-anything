@@ -139,3 +139,64 @@ proposal_text = ingest_split(issue, emit["requests"], responses)
 - `fixed=True` → ファイル書き込み完了（`ingest_compression` / `ingest_separation` が IO を担当）
 - `fixed=False` → `result["error"]` を表示し手動対応を案内
 - `ingest_split` は dict でなく `str`（提案テキスト）を返す — 書込なし
+
+## 情報レーンの dismiss（Step 5.5・#103）
+
+`proposable_global` / `phases.discover.rule_violation_observed` は「対応しない」判断をしても却下記録の入口が無く**毎回再提示**されていた（#26 の対象外レーンで同型再発）。ユーザーが「この PJ では意図的運用なので以後出さなくてよい」と判断したら下記で dismiss を記録する（PJ スコープ・TTL45日）。dismiss 済みは `remediation.proposable_global_suppressed` / `remediation.rule_violation_suppressed` に件数で畳んで surface する（silence != evaluated）。**dry-run のときは記録しない（MUST NOT）**。明示 dismiss しなくても、連続提示された advisory は `reconcile_surfaced` が閾値回数（既定2）で自動畳み込みする（下記 #494 fallback が情報レーンにも効く）。
+
+```python
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+from remediation.suppression_ledger import record_rejection, resolve_slug
+from rule_violation_lane import rule_violation_suppression_issue
+
+slug = resolve_slug()
+# (a) proposable_global の issue dict を dismiss（classified.proposable_global[] の要素）
+for issue in dismissed_global_issues:
+    record_rejection(issue, slug=slug)
+# (b) rule_violation_observed を violated_command 単位で dismiss（意図的運用フラグ）
+for v in dismissed_rule_violations:  # phases.discover.rule_violation_observed[] の要素
+    record_rejection(rule_violation_suppression_issue(v), slug=slug)
+```
+
+## 却下/スキップの記録（Step 5.5・べき等性 — 重複提案 MUST NOT、#477）
+
+個別承認 AskUserQuestion でユーザーが**却下／スキップ**を選んだ提案は、`record_rejection` で suppression ledger に記録する（dedup_key 単位・TTL45日）。これにより次回 evolve で同じ提案が再出しない（run_evolve が `_apply_remediation_suppression` で却下済みを既に除外し、`remediation.suppressed_by_ledger` 件数を surface する）。**dry-run（`--dry-run`）のときは記録しない（MUST NOT）**。記録対象は「採用しなかった issue dict」（`classified.proposable_custom_individual[]` の要素そのもの）。下記コードで一括記録する（**#479: 直 import は ModuleNotFoundError になるため sys.path 設定込みの完全コードで実行する**）:
+
+```python
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+from remediation.suppression_ledger import record_rejection, resolve_slug
+
+# rejected_issues = ユーザーが却下/スキップした issue dict のリスト（個別承認で不採用にしたもの）
+# dry_run = True のときは下のループを実行しない（MUST NOT — suppression ledger に書かない）
+slug = resolve_slug()  # worktree 安全 slug（git-common-dir の親 basename）
+for issue in rejected_issues:
+    record_rejection(issue, slug=slug)  # dedup_key 単位・TTL45日で記録（last-write-wins）
+print(f"suppression ledger: {len(rejected_issues)} 件を却下記録（次回 evolve で再提示しない）")
+```
+
+**決定論 fallback（#494）**: 上の inline 記録を取りこぼしても、run_evolve が remediation phase で `reconcile_surfaced` を毎 run 呼び、解決されないまま連続で個別承認に出続けた提案を閾値回数（既定2）で**自動却下**する安全網がある（`remediation.auto_rejected_by_reconcile` に件数 surface・dry-run 非書込）。これは Step 5.5 の散文 MUST が唯一の却下入口だった構造（却下が永久消失するレーン）を塞ぐためのもの。**それでもユーザーが明示却下した提案は上の record_rejection で即記録するのが正**（fallback は次回以降に効くため、即時抑制は inline 記録が担う）。
+
+## Step 5.6: /simplify ゲート
+
+Remediation でファイルが変更された場合、Python コードの品質チェックを行う。
+
+**判定条件**:
+1. Remediation の `record_outcome()` 結果から `fix_detail.changed_files` を集約する
+2. 以下の条件で分岐:
+   - `.py` ファイルが1つ以上含まれる → `/simplify` を実行
+   - `.md` ファイルのみ → スキップ（「/simplify: Markdown のみ — スキップ」と表示）
+   - 変更なし（0件 or dry-run）→ スキップ
+
+**実行手順** (`.py` ファイルあり):
+1. `/simplify` を実行する
+2. `/simplify` の結果（git diff）をユーザーに提示する
+3. AskUserQuestion で「適用」「元に戻す」を選択させる（MUST）
+4. 結果をレポートに記録:
+   - 適用: 「/simplify: N件の改善を適用」
+   - 元に戻す: 「/simplify: 実行済み・変更なし」
+
+**後方互換**: `/simplify` スキルが利用不可の場合（古い Claude Code）はスキップし、「/simplify: スキップ（未対応バージョン）」と表示する

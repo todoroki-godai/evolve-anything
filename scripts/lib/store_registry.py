@@ -177,7 +177,8 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="weak_signals.jsonl",
-        writer="scripts/lib/weak_signals/batch.py（evolve/audit batch から run_batch）。"
+        writer="scripts/lib/weak_signals/batch.py（evolve/audit batch から run_batch）＋ "
+        "scripts/lib/fleet/detect.py（`evolve-fleet detect` / daily runner の全 PJ 検出・#304）。"
         "hot path（hooks）からは書かない。",
         writer_locus="batch",
         reader="reflect が確認後に corrections 本流へ昇格（promoted フラグ）。"

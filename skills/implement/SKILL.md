@@ -107,157 +107,31 @@ grep や差分カウントは使わず、LLM がチェックリストを評価�
 
 ## standard / deep パス
 
-### Step 1: タスク分解
+### Step 1: タスク分解 / Step 1.5: インターフェース契約（deep のみ）
 
-計画を読んで、実装タスクに分解する。
-
-**分解ルール:**
-- 1 タスク = 1 ファイル or 1 つのまとまった機能
-- 各タスクにテストを含める（テスト専用タスクは作らない）
-- 同じディレクトリのファイルは同じレーンに割り当て
-- 「依存」列は完了待ちの task # を列記（例: `1` / `1,2` / `—`）。自由テキスト不可
-- 上限 15 タスク。超えたら「計画が大きすぎます。フェーズに分割してください」
-
-**deep のみ**: タスクリストの先頭に「インターフェース契約タスク（Task 0）」を追加し、
-ユーザー確認を取ってから残タスクに進む（→ Step 1.5 参照）。
-
-**出力:**
-
-```
-タスク分解
-═══════════
-| # | タスク | ファイル/モジュール | 依存 | レーン |
-|---|--------|-------------------|------|--------|
-| 1 | ... | src/lib/ | — | A |
-| 2 | ... | src/api/ | — | B |
-| 3 | ... | src/lib/ | 1 | A |
-```
-
-**循環依存チェック（ユーザーに見せる前に必ず実施）**: 全タスクの「依存」列を追跡し、topological sort で整列できない場合（例: T1→T2→T1）は `ERR: 循環依存 T1↔T2` を出力して停止する。依存なしのセンチネルは `—`（em-dash）のみ有効。`-`・`none`・空白・`T1` 形式は不正。
-
-ユーザーにタスク分解を見せ、OK をもらってから実装に入る。
-
----
-
-### Step 1.5: インターフェース契約（deep のみ）
-
-Task 0 として、実装前にインターフェース契約と影響範囲を明文化してユーザーに確認を求める。
-承認後に残タスクの実装を開始する。
-
-```
-インターフェース契約
-═══════════════════
-追加/変更するインターフェース:
-  - [関数シグネチャ / API エンドポイント / 型定義]
-
-影響範囲:
-  - 変更モジュール: [リスト]
-  - 呼び出し元: [リスト]
-  - 破壊的変更: あり / なし
-
-OK ですか？（承認後に実装開始）
-```
+計画を読んで実装タスクに分解し、ユーザーに見せて OK をもらってから実装に入る。
+**循環依存チェックはユーザーに見せる前に必ず実施する（MUST）。** deep のみ Task 0 として
+インターフェース契約をユーザー承認後に残タスクへ進む（MUST）。
+分解ルール・出力テンプレ・契約テンプレは [references/task-decomposition.md](references/task-decomposition.md) 参照。
 
 ---
 
 ### Step 2: モード選択と実行
 
-**Standard モード**（タスク 5 未満 or レーン 1 つ）:
+**Standard モード**（タスク 5 未満 or レーン 1 つ）: 依存が解決したタスクから
+Ralph Loop（マルチパス）で順に実装・テスト・コミットする。
+**テストが失敗したら次のタスクに進まず修正する（MUST）。**
+各タスク開始前に「タスク境界の認知分離」（スコープ・インターフェース契約・完了条件の宣言）を行い、
+前タスクの実装詳細で判断が汚染されないようにする。
 
-**実行前: Ready タスクを表示する**
+**Parallel モード**（タスク 5 以上 AND 独立レーン 2 以上）: Agent ツールの
+`isolation: "worktree"` でレーンごとに並列実行する。
+**クロスレーン depends_on がある場合は Standard モードにデグレードする（MUST）。**
+別途 read-only の検証エージェントでレーン成果物をレビューする。
+全レーン完了後に worktree ブランチをマージし、マージ後にフルテスト実行。
 
-`completed_ids = []` で初期化し、依存がゼロまたは全依存が完了済みのタスクを計算して表示する:
-
-```
-Ready:   T1, T3  （ブロッカーなし）
-Blocked: T2      （T1 完了待ち）
-```
-
-各タスクを **ready なものが残る限り** 繰り返す Ralph Loop（マルチパス — ブロック解消のたびに再評価）:
-0. **depends_on チェック**: このタスクの「依存」列の task # がすべて `completed_ids` に含まれるか確認。
-   含まれない場合はこのタスクをスキップし、次の ready タスクへ。このパスで ready が 0 なら次パスへ。
-   **全パス終了後に未完了タスクが残っている場合**、ユーザーに報告して停止（デッドロック検出）。
-1. 次のタスクを宣言: 「Task N: {description}」
-2. **タスク境界の認知分離**（後述）を宣言してから実装開始
-3. 実装
-4. テスト実行（プロジェクトのテストコマンドを使用）
-5. テスト通過 → コミット
-6. `completed_ids` にこのタスクの # を追加。タスクが永続的に失敗した場合はそのタスクに依存する後続タスクを Blocked から削除してユーザーに報告。
-
-テストが失敗したら、次のタスクに進まず修正する。
-
-#### タスク境界の認知分離（context: fresh 相当）
-
-単一会話で複数タスクを積み重ねると、前タスクの実装詳細・検討経緯・エラーメッセージが
-後タスクの判断を歪める「認知汚染」が起きる。
-
-各タスク開始前に以下を明示する:
-
-```
-━━━ Task N 開始 ━━━
-スコープ: [このタスクが変更するファイル・モジュール名]
-インターフェース契約: [前タスクが提供する関数シグネチャ/型定義/ファイルパスのみ]
-完了条件: [テストがパスする / 具体的な検証方法]
-━━━━━━━━━━━━━━━━
-```
-
-**渡すもの**: インターフェース契約（型定義・関数シグネチャ・ファイルパス）のみ
-**渡さないもの**: 前タスクの実装コード・検討した代替案・エラーの経緯
-
-前タスクの実装が必要な場合は、メモリから推測せず Read ツールでファイルを確認する。
-
-> **Parallel モードはこの問題を持たない**: `isolation: "worktree"` で各エージェントが
-> 独立した会話コンテキストを持つため、認知汚染は構造的に発生しない。
-
-**Parallel モード**（タスク 5 以上 AND 独立レーン 2 以上）:
-
-**クロスレーン依存チェック**: レーン B のタスクが他のレーン（A 等）のタスクを「依存」列に持つ場合、
-クロスレーン depends_on あり → **Standard モードにデグレード**して実行する（worktree 間状態共有は不要）。
-
-Agent ツールの `isolation: "worktree"` を使い、レーンごとに並列実行する。
-
-> **進捗モニタリング (CC v2.1.98+)**: `run_in_background: true` で起動した subagent の stdout は
-> `Monitor` tool で stream として受信できる。`sleep` ポーリングの代替として採用。
-
-各実装エージェントに渡すプロンプト:
-
-```
-あなたは大きな計画の一部を実装します。割り当てられたタスクを完了し、
-テストを書き、コミットしてください。
-
-タスク:
-{このレーンのタスクリスト}
-
-コード品質基準:
-- 全ての行・ファイル・抽象化・依存は「必要だから存在する」状態にする
-- 明示的 > 巧妙。一見して正しいとわかるコードを書く
-- テスタビリティのためだけの抽象化を作らない
-- 実装が1つしかないインターフェースを作らない
-- 内部データに対する防御的コードを書かない
-- 隣接ファイルを読んで既存スタイルに合わせる
-
-{CLAUDE.md のコンベンションがあれば含める}
-
-各タスクの手順:
-1. 実装
-2. テスト作成
-3. テスト実行: {テストコマンド}
-4. パス → コミット
-5. 次のタスクへ
-```
-
-別途、検証エージェント（read-only）を立てて各レーンの成果物をレビューする:
-
-```
-あなたはコードレビュアーです。各 diff について確認:
-1. 計画の要件を満たしているか？
-2. テストは存在し、意味があるか（スモークテストだけでないか）？
-3. セキュリティ問題、N+1 クエリ、エラーハンドリング漏れはないか？
-簡潔に。本当の問題だけ指摘する。
-```
-
-全レーン完了後、worktree ブランチをマージ。コンフリクトがあれば解決を試み、
-無理ならユーザーに提示する。マージ後にフルテスト実行。
+Ready/Blocked 表示・Ralph Loop の手順詳細・認知分離テンプレ・各エージェントへの委譲プロンプトは
+[references/execution-modes.md](references/execution-modes.md) 参照。
 
 ---
 
@@ -314,47 +188,9 @@ evolve のたびに効かせるなら audit に section を足す配線が必要
 
 ### Step 4: テレメトリ記録
 
-実装完了時に evolve-anything のテレメトリに記録する。
-
-```python
-import json, os, datetime
-
-data_dir = os.environ.get("CLAUDE_PLUGIN_DATA", os.path.expanduser("~/.claude/evolve-anything"))
-os.makedirs(data_dir, exist_ok=True)
-
-record = {
-    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    "skill": "implement",
-    "project": os.path.basename(os.getcwd()),
-    "depth": DEPTH,                      # "shallow" / "standard" / "deep"
-    "tasks_total": TASKS_TOTAL,
-    "tasks_completed": COMPLETED_IDS,    # list[str] e.g. ["T1","T2"] — 完了タスク ID 一覧
-    "tasks_count": len(COMPLETED_IDS),   # int — 集計用（後方互換）
-    "mode": MODE,                        # "standard" or "parallel" (shallow は "shallow")
-    "conformance_rate": CONFORMANCE,     # shallow は None
-    "lanes": LANES,
-    "outcome": OUTCOME,                  # "success" / "partial" / "blocked"
-}
-with open(os.path.join(data_dir, "usage.jsonl"), "a") as f:
-    f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-if OUTCOME in ("success", "partial"):
-    journal = {
-        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "type": "implementation",
-        "source": "implement-skill",
-        "depth": DEPTH,
-        "tasks_completed": COMPLETED_IDS,   # list[str]
-        "tasks_count": len(COMPLETED_IDS),
-        "conformance_rate": CONFORMANCE,
-        "mode": MODE,
-        "phase": "unknown",
-    }
-    with open(os.path.join(data_dir, "growth-journal.jsonl"), "a") as f:
-        f.write(json.dumps(journal, ensure_ascii=False) + "\n")
-```
-
-**上の Python は直接実行するのではなく、変数を実際の値に置き換えて実行する。**
+実装完了時に evolve-anything のテレメトリ（`usage.jsonl` / `growth-journal.jsonl`）に記録する。
+**下記コードは直接実行するのではなく、変数を実際の値に置き換えて実行する（MUST）。**
+記録フィールド定義とコード全文は [references/telemetry.md](references/telemetry.md) 参照。
 
 ---
 

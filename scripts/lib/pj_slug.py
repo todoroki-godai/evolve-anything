@@ -270,7 +270,24 @@ def resolve_cc_memory_dir(path_or_cwd: Optional[Union[str, Path]] = None) -> Pat
     return base / candidates[0] / "memory"
 
 
-def record_project_match(rec: dict, current_slug: Optional[str]) -> bool:
+def record_project_attribution(rec: dict) -> Optional[str]:
+    """レコードの PJ 帰属値（``project_path`` → ``project`` → ``project_name``）を返す。
+
+    帰属フィールドが 1 つも無い（＝未帰属）なら None。``record_project_match`` の判定と
+    「未帰属レコードを数える」側（fleet detect の除外カウント・#312）が同じ規則を使うための
+    単一ソース。両者が別々に `rec.get(...)` を書くと片方だけ直して desync する
+    （pitfall_copied_parse_convention_partial_fix）。
+    """
+    raw = rec.get("project_path") or rec.get("project") or rec.get("project_name")
+    return str(raw) if raw else None
+
+
+def record_project_match(
+    rec: dict,
+    current_slug: Optional[str],
+    *,
+    strict: bool = False,
+) -> bool:
     """レコード（corrections 等）が current_slug のスコープに属するか判定する（#206）。
 
     auto_memory Stop hook が project_path フィルタ無しで全 PJ 共有ストア（corrections.jsonl）
@@ -287,18 +304,25 @@ def record_project_match(rec: dict, current_slug: Optional[str]) -> bool:
         （フルパス・旧 rename slug も本体 slug に正規化してから突合する）
       - 不一致なら False
 
+    ``strict=True``（fan-out 文脈・#312）は上記 2 つの「判定不能なら許容」を**除外**に反転する。
+    単一 PJ 呼び出し（全 PJ 共有ストアから当 PJ 分を読む #206 の文脈）では寛容が安全側だが、
+    全 PJ へ fan-out する ``fleet detect`` では逆で、未帰属レコードが全 slug でマッチし
+    dedup 後に必ずどこか 1 PJ（slug 辞書順の先頭）へ決定論的に誤帰属する。同じ述語を
+    両文脈で共有しつつ、寛容側／厳格側を呼び出し側が明示的に選ぶ。
+
     Args:
         rec: correction 等の 1 レコード（dict）。
         current_slug: 当 PJ の slug（呼び出し側で解決済みのもの）。
+        strict: True なら判定不能（slug 未確定 / レコード未帰属）を除外する。
 
     Returns:
-        当 PJ スコープに属する（または判定不能で寛容に許容する）なら True。
+        当 PJ スコープに属する（strict でなければ判定不能も寛容に許容）なら True。
     """
     if not current_slug:
-        return True
-    raw = rec.get("project_path") or rec.get("project") or rec.get("project_name")
+        return not strict
+    raw = record_project_attribution(rec)
     if not raw:
-        return True
+        return not strict
     rec_slug = canonical_pj_slug(pj_slug_fast(str(raw)))
     target_slug = canonical_pj_slug(pj_slug_fast(str(current_slug)))
     return rec_slug == target_slug
@@ -321,11 +345,45 @@ def pj_id_to_slug(pj_id: Optional[str], root: Optional[Union[str, Path]] = None)
         pj_id: CC エンコード済みパス名（先頭 ``-`` 有無どちらでも可）。
         root:  探索起点（省略時 ``/``）。テストは tmp 構造を渡して hermetic に検証する。
     """
+    resolved, remainder, legacy = _pj_id_walk(pj_id, root)
+    if resolved is None:
+        return legacy                  # 何も解決できない架空パス → 末尾 split
+    if not remainder and resolved.name:
+        return resolved.name           # 完全解決 → basename
+    # 親 dir まで解決できた = 残りトークンが leaf（削除/改名で実在しなくても
+    # 内部の ``-`` は保持される）。``rl-anything`` 等を正しく復元する。
+    return "-".join(remainder)
+
+
+def pj_id_to_path(
+    pj_id: Optional[str], root: Optional[Union[str, Path]] = None
+) -> Optional[Path]:
+    """CC エンコード pj_id → 実在する cwd パス。復元できなければ None。
+
+    ``pj_id_to_slug`` と同じ貪欲探索を共有する（``/`` と ``-`` の両義性は文字列だけでは
+    解けないので実 fs を辿る）。slug だけでなくパス自体が要る呼び出し側
+    （worktree を本体 repo slug に寄せる ``fleet.detect`` 等）はこちらを使う。
+    パース規約をコピーせず 1 箇所に集約する（pitfall_copied_parse_convention_partial_fix）。
+    """
+    resolved, remainder, _legacy = _pj_id_walk(pj_id, root)
+    if resolved is None or remainder:
+        return None                    # 完全解決できたときだけ実パスとして返す
+    return resolved
+
+
+def _pj_id_walk(
+    pj_id: Optional[str], root: Optional[Union[str, Path]] = None
+) -> tuple:
+    """pj_id を実 fs 上で貪欲復元する共有コア。
+
+    Returns:
+        ``(resolved_path | None, remaining_tokens, legacy_fallback_slug)``
+    """
     if not pj_id:
-        return pj_id or ""
+        return None, [], pj_id or ""
     raw = pj_id.lstrip("-")
     if not raw:
-        return pj_id
+        return None, [], pj_id
     tokens = raw.split("-")
     legacy = tokens[-1] or pj_id  # 末尾 split fallback（旧挙動）
     base = Path("/") if root is None else Path(root)
@@ -338,18 +396,23 @@ def pj_id_to_slug(pj_id: Optional[str], root: Optional[Union[str, Path]] = None)
         # 「存在する最長 dir 名」を採る（実 dir 名を最大マッチで復元）。
         for j in range(n, i, -1):
             cand = "-".join(tokens[i:j])
-            if (cur / cand).is_dir():
-                best_j = j
-                cur = cur / cand
+            # CC のエンコードは `/` → `-` 置換で、隠し dir の先頭 `.` は落ちる
+            # （`/.claude-worktrees` → `--claude-worktrees`）。空トークン由来の
+            # 先頭 `-` を `.` に読み替えた候補も試し、worktree 配下を復元する。
+            variants = [cand]
+            if cand.startswith("-"):
+                variants.append("." + cand[1:])
+            for v in variants:
+                if v and (cur / v).is_dir():
+                    best_j = j
+                    cur = cur / v
+                    break
+            if best_j is not None:
                 break
         if best_j is None:
             break  # これ以上 fs 上で辿れない
         matched_any = True
         i = best_j
-    if matched_any:
-        if i == n and cur.name:
-            return cur.name           # 完全解決 → basename
-        # 親 dir まで解決できた = 残りトークンが leaf（削除/改名で実在しなくても
-        # 内部の ``-`` は保持される）。``rl-anything`` 等を正しく復元する。
-        return "-".join(tokens[i:])
-    return legacy                      # 何も解決できない架空パス → 末尾 split
+    if not matched_any:
+        return None, tokens, legacy
+    return cur, tokens[i:], legacy

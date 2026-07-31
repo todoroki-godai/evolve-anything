@@ -87,6 +87,23 @@ def main() -> int:
     if rc_tokens != 0:
         print(f"[evolve-daily-run] fleet tokens --backfill exited {rc_tokens}（continue）", file=sys.stderr, flush=True)
 
+    # 1c) 全 PJ の決定論 weak_signals 検出（ゼロ LLM・冪等・#304）。
+    # これが無いと素材は `evolve --drain` の apply 境界でしか生まれず、evolve を回さない限り
+    # queue が永久に EMPTY になる（鶏卵ループ）。検出は signal_key dedup で冪等なので毎朝
+    # 回してよい。LLM 判定を要するチャネルは従来どおり対話 evolve 側に残す（無人で承認待ち
+    # ハングしない設計は維持）。失敗しても queue 判定は続行（ingest と同じ fail-open）。
+    # detect の stdout（失敗 dir 数・全滅/一部失敗 PJ の内訳・未帰属除外件数を含む最終サマリ）は
+    # この runner のログにそのまま流れる。一部 dir だけ失敗した PJ も「一部」として出るので、
+    # rc=0 でも劣化は追える。非 zero は「全 PJ 失敗 or ソース読み込み失敗」だけを意味する（#313）。
+    print(f"[evolve-daily-run] fleet detect …", flush=True)
+    rc_detect = subprocess.run(fleet + ["detect", "--quiet"]).returncode
+    if rc_detect != 0:
+        print(
+            f"[evolve-daily-run] fleet detect exited {rc_detect}"
+            "（全 PJ 検出失敗 or ソース読み込み失敗 — 上のサマリ参照・continue）",
+            file=sys.stderr, flush=True,
+        )
+
     # 2) 待ち判定（--json）。stdout を evolve-queue.json に保存。
     print(f"[evolve-daily-run] fleet queue --json → {out_path}", flush=True)
     result = subprocess.run(fleet + ["queue", "--json"], capture_output=True, text=True)

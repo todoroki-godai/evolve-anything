@@ -65,16 +65,30 @@ def _is_dispatch(text: str) -> bool:
 def detect_permission_deny(
     error_records: Iterable[Dict[str, Any]],
     pj_slug: str,
+    *,
+    strict: bool = False,
 ) -> List[WeakSignal]:
     """errors.jsonl の permission_denied レコードから弱シグナルを作る。
+
+    errors.jsonl は**全 PJ 共有ストア**なので、当 PJ に属する行だけを採る（#304 で発見）。
+    無条件にスタンプすると PJ ごとの呼び出しで同じ deny が複製され、どの PJ でも同じ件数が
+    出る（全PJ bit-exact 同値 = measurement_bug の指紋）。判定は #206 の単一ソース述語
+    ``record_project_match``（project_path → project → project_name、属性欠落は寛容）。
 
     Args:
         error_records: errors.jsonl をパースした dict のイテラブル
         pj_slug:       照合用 slug（呼び出し側が確定して渡す）
+        strict:        未帰属レコードを除外する（全 PJ へ fan-out する ``fleet detect``
+                       専用・#312）。既定の寛容判定のまま fan-out すると、未帰属行が全 slug で
+                       マッチし dedup 後に slug 辞書順の先頭 PJ へ誤帰属する。
     """
+    from pj_slug import record_project_match
+
     out: List[WeakSignal] = []
     for rec in error_records:
         if rec.get("type") != "permission_denied":
+            continue
+        if not record_project_match(rec, pj_slug, strict=strict):
             continue
         provenance = {
             "detector": "permission_deny",

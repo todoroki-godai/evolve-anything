@@ -123,55 +123,10 @@ CC のリリースノートと突合し、新機能で代替可能になった�
 Step 1.5 で軽量モードと判定した場合は、この節の全 Read は行わず Step 1.5 の構造チェック（件数 +
 pin + hook 実在 + MEMORY 行数）で代替する。`--env-only` は常にフルモード。
 
-#### 2.5.1 Global Rules (`~/.claude/rules/*.md`)
-
-以下を検査:
-
-- **行数チェック**: `rules-style.md` ルールに従い、frontmatter 除外で 3 行以内か
-- **重複検出**: 複数ルールが同じことを異なる表現で指示していないか
-- **矛盾検出**: ルール間で相反する指示がないか
-- **陳腐化チェック**: 参照先ツール/ワークフロー/スキルが現在も存在するか
-- **CC 代替チェック**: CC 新機能がルールの役割を吸収していないか
-  （例: CC がビルトインで提供するようになった機能を手動ルールで指示している場合）
-
-#### 2.5.2 Global Skills (`~/.claude/skills/*/SKILL.md`)
-
-gstack 内蔵スキル（`~/.claude/skills/gstack/` 配下および `~/.claude/skills/gstack-*/`）を除外し、自作/サードパーティを対象:
-
-- **CC 機能重複チェック**: CC 新機能が自作スキルの役割を吸収していないか
-- **frontmatter 品質**: name, description が存在するか。description にトリガーワードがあるか
-- **新機能活用チャンス**: CC の新機能で既存スキルを強化できないか
-  （例: 新しい frontmatter フィールド、skill hooks、context:fork 等）
-
-#### 2.5.3 Global Agents (`~/.claude/agents/*.md`)
-
-各エージェント定義を Read で確認:
-
-- **品質チェック**: model 指定、maxTurns、disallowedTools の有無
-- **新機能活用**: CC の新エージェント機能（memory スコープ、isolation:worktree 等）の活用余地
-- **参照の有効性**: 参照しているスキルやツールが現存するか
-
-#### 2.5.4 Settings Hooks (`~/.claude/settings.json`)
-
-hooks 定義を確認:
-
-- **孤立検出**: 参照先スクリプトが存在するか
-- **新フックイベント活用**: CC が新たに追加したフックイベント（PostCompact, WorktreeCreate 等）の活用余地
-- **evolve-anything hooks との整合**: プラグインの hooks.json と settings.json で重複・競合がないか
-
-**重複判定は `if` 条件まで見る（誤検出防止）**: CC の hook の実効的な同一性は `command` 単独でなく
-`(event, matcher, command, if)` の組で決まる。同じ `command` でも `matcher` や `if` 条件
-（例: `if: Skill(gstack-ship)` と `if: Skill(commit)`）が異なれば、それは**別トリガーであり重複ではない**。
-hook を列挙・比較するときは command だけを抜き出さず、必ず `matcher` と `if` を併記して突合する。
-`if` を落として command だけで数えると、発火条件の違う hook を重複と誤検出する。
-Bash/Python で settings.json をパースして確認する場合も、`if` フィールドを必ず出力に含めること。
-
-#### 2.5.5 Memory (`~/.claude/projects/*/memory/MEMORY.md`)
-
-現在プロジェクトの MEMORY.md を Read で確認:
-
-- **エントリ数**: 200 行の上限に対する使用率
-- **陳腐化チェック**: 古いバージョン番号、完了済みタスク、存在しないファイルへの参照
+2.5.1〜2.5.5 の詳細チェック項目（Rules / Skills / Agents / Settings Hooks / Memory）は
+[references/env-health-checks.md](references/env-health-checks.md) を参照。
+**MUST**: Settings Hooks の重複判定は `command` 単独でなく `(event, matcher, command, if)` の組で行う
+（`if` を落として command だけで比較すると発火条件の違う hook を重複と誤検出する）。
 
 ### Step 3: What's New サマリー生成 & 突合分析
 
@@ -245,117 +200,9 @@ text ブロックが欠落）。表示・保存が保証されるのは、後続
 `release-notes-report-<YYYY-MM-DD>.md` として保存する。これは表示事故時の保険であり、恒久ストア
 ではないので `store_registry` への登録は不要。Step 7 で読み戻してチャットに出力する。
 
-```markdown
-# CC Release Notes & Environment Health Report
-
-**分析日**: YYYY-MM-DD
-**CC バージョン**: vX.Y.Z → vA.B.C（前回チェック: vX.Y.Z）
-
----
-
-## 前回保留の決着（`pending` が空なら省略）
-
-Step 0.5 の決着結果を1行ずつ:
-- ✅ [項目] — resolved: [CC 側で解消 / 適用済 / 観測して不要と確定]
-- 🗑 [項目] — dropped: [N レビュー持ち越しで棄却 / 前提消失]
-- 🟡 [項目] — carry(×N): [まだ何を待っているか]
-
----
-
-## Part 1: Release Notes Review
-
-### 🌟 新機能ハイライト（新コマンド・新スキル・大型機能）
-
-Step 3.0.1 の抽出結果。該当があれば What's New より先に1項目ずつ詳しく紹介する
-（見落とし防止の最優先セクション）。該当ゼロなら「今回ハイライトなし」と1行だけ書く。
-
-#### 🌟 [/コマンド名 or 機能名]（vX.Y.Z・種別: スラッシュコマンド / スキル / ツール / 大型機能）
-- **何ができるか**: 2〜4行。CHANGELOG の1行転記でなく用途と動作を説明する
-- **使い方**: 具体的な起動例（コマンド・引数・典型フロー）
-- **裏取り**: help 出力 / 公式 docs で確認済みか、「CHANGELOG 記載のみ・詳細未確認」か
-- **自分の環境との関係**: 既存 rules/skills/hooks との重複・代替・組み合わせ方（あれば）
-
-### What's New 📋（バージョン別サマリー）
-
-未チェック差分の各バージョンについて、主要な新機能・改善・バグ修正を全体概観として紹介する。
-プロジェクトへの適用可否は問わない。
-
-#### vX.Y.Z
-- [新機能・改善・バグ修正の箇条書き（主要 5〜10 件、多数のバグ修正はグループ化可）]
-
-#### vX.Y.(Z-1)
-- [同上、または「Internal fixes のみ」等]
-
----
-
-**プロジェクト環境への適用分析**（検出 N件: 即適用 X / 中期 Y / 長期 Z）
-
-### 即適用可能 🟢
-- frontmatter 1行追加、hooks.json エントリ追加等、コード変更不要 or 極めて軽微
-
-#### [項目名]
-- **バージョン**: vX.Y.Z
-- **適用先**: プラグイン / グローバル / 両方
-- **内容**: 1-2行の説明
-- **適用方法**: 具体的な変更手順
-- **影響ファイル**: 変更が必要なファイル一覧
-- **期待効果**: 何が改善されるか
-
-### 中期検討 🟡
-
-**この節に出した項目は Step 5 で `pending` に登録する**（観測待ち・保留はここで一元管理）。
-次回レビューの Step 0.5 で必ず決着させ、死蔵させない。
-
-#### [項目名]
-- **バージョン**: vX.Y.Z
-- **適用先**: プラグイン / グローバル / 両方
-- **内容**: 1-2行の説明
-- **必要な作業**: 実装ステップ概要
-- **影響範囲**: 変更が及ぶモジュール/スキル
-- **決着条件**: 何を観測できたら resolved / dropped と判定するか（pending の追跡根拠になる）
-
-### 長期 🔵
-
-#### [項目名]
-- **バージョン**: vX.Y.Z
-- **適用先**: プラグイン / グローバル / 両方
-- **内容**: 1-2行の説明
-- **検討理由**: なぜ今すぐ適用しないか
-
----
-
-## Part 2: Global Environment Health
-
-### Rules (N total)
-問題なし:
-- [rule] — OK
-
-要確認:
-- [rule] — [issue: 行数超過 / 重複 / 矛盾 / 陳腐化]
-
-CC 代替候補:
-- [rule] — CC [vX.Y.Z] の [feature] で代替可能
-
-### Custom Skills (N total, gstack 内蔵除外)
-問題なし:
-- [skill] — OK
-
-CC 機能重複:
-- [skill] — CC の [built-in feature] と重複
-
-強化チャンス:
-- [skill] — CC [vX.Y.Z] の [feature] で改善可能
-
-### Agents (N total)
-- [agent] — OK / [issue]
-
-### Settings Hooks
-- [hook event] — OK / [issue: 孤立 / 新イベント未活用]
-
-### Memory
-- エントリ数: N行 / 200行上限
-- 陳腐化候補: [entry] — [reason]
-```
+レポートの完全な markdown テンプレート（前回保留の決着 / Part 1: Release Notes Review /
+Part 2: Global Environment Health の全構成）は
+[references/report-template.md](references/report-template.md) を参照。
 
 ### Step 5: チェック済みバージョンの記録
 

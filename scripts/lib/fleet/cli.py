@@ -28,6 +28,21 @@ from .project_loader import enumerate_projects
 from .recall import format_hits, recall, reinforce_recall_hits
 
 
+def _positive_int(value: str) -> int:
+    """1 以上の int だけを受ける argparse type（#314）。
+
+    負数は `files[:-1]` のような意図しないスライス挙動に、0 は「無制限」とも「走査なし」とも
+    読めるので、どちらも明示的に拒否して曖昧さを残さない。
+    """
+    try:
+        num = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"整数を指定してください: {value!r}")
+    if num < 1:
+        raise argparse.ArgumentTypeError(f"1 以上を指定してください: {num}")
+    return num
+
+
 def main(argv: list[str] | None = None) -> int:
     """`bin/evolve-fleet` エントリポイント。"""
     parser = argparse.ArgumentParser(
@@ -137,6 +152,25 @@ def main(argv: list[str] | None = None) -> int:
                         help="PJ ごとの取り込みファイル上限（backfill bench 用サンプリング）")
     uttr_p.add_argument("--quiet", action="store_true", help="進捗 stderr を抑制")
 
+    detect_p = sub.add_parser(
+        "detect",
+        help="全 PJ の決定論 weak_signals を検出・永続化（#304・ゼロ LLM・冪等）",
+    )
+    detect_p.add_argument("--root", type=Path, default=None,
+                          help="transcript ルート (default: ~/.claude/projects)")
+    detect_p.add_argument("--pj", action="append", default=None,
+                          help="対象 pj_slug を絞る（複数指定可）")
+    detect_p.add_argument("--max-transcripts", type=_positive_int, default=None,
+                          help="PJ（slug）ごとの transcript 上限。本体 + worktree の"
+                               "全 dir を合算してから適用する "
+                               "(default: 60・--backfill 時 2000)")
+    detect_p.add_argument("--backfill", action="store_true",
+                          help="過去チャットを遡って取りこぼしを回収する（上限を引き上げる）")
+    detect_p.add_argument("--dry-run", action="store_true",
+                          help="検出のみ（ストアに一切書かない）")
+    detect_p.add_argument("--quiet", action="store_true", help="進捗 stderr を抑制")
+    detect_p.add_argument("--json", action="store_true", help="JSON 出力")
+
     recall_p = sub.add_parser(
         "recall",
         help="全 PJ の memory を横断 keyword 検索（決定論・LLM 非依存）",
@@ -222,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_recall(args)
     if args.command == "ingest":
         return _run_ingest(args)
+    if args.command == "detect":
+        return _run_detect(args)
     if args.command == "migrate-data":
         return _run_migrate_data(args)
     if args.command == "migrate-pj-slug":
@@ -239,6 +275,71 @@ def main(argv: list[str] | None = None) -> int:
 
     # default: status
     return _run_status(args)
+
+
+def _run_detect(args: argparse.Namespace) -> int:
+    """detect サブコマンド: 全 PJ の決定論 weak_signals を検出・永続化する（#304）。
+
+    evolve を回さなくても学習素材が溜まるようにするための入口。決定論・ゼロ LLM・冪等
+    （signal_key dedup）なので、何度回しても二重記録されない。
+    """
+    import json as _json
+
+    from fleet import detect as fleet_detect
+    from fleet.detect import BACKFILL_MAX_TRANSCRIPTS, detect_exit_code
+    from weak_signals.batch import DEFAULT_MAX_TRANSCRIPTS
+
+    max_transcripts = args.max_transcripts
+    if max_transcripts is None:
+        max_transcripts = (
+            BACKFILL_MAX_TRANSCRIPTS if args.backfill else DEFAULT_MAX_TRANSCRIPTS
+        )
+
+    res = fleet_detect.detect_all_projects(
+        projects_root=args.root,
+        max_transcripts=max_transcripts,
+        dry_run=args.dry_run,
+        only=args.pj,
+        progress=not args.quiet,
+    )
+    rc = detect_exit_code(res)
+
+    if args.json:
+        print(_json.dumps(res, ensure_ascii=False, indent=2))
+        return rc
+
+    mode = "dry-run（書き込みなし）" if args.dry_run else "書き込み"
+    print(f"[fleet:detect] {res['projects']} PJ / 検出 {res['total']} 件 "
+          f"→ 新規 {res['written']} 件・重複 {res['skipped_dup']} 件（{mode}）")
+    hot = [e for e in res["per_pj"] if e["written"]]
+    hot.sort(key=lambda e: e["written"], reverse=True)
+    for e in hot[:10]:
+        chans = ", ".join(f"{k}={v}" for k, v in sorted(e["detected"].items()))
+        print(f"  {e['pj_slug']}: 新規 {e['written']} 件（{chans}）")
+    if not hot:
+        print("  新規の学習素材はありません（既に検出済み or 素材なし）")
+
+    # 失敗・除外は --quiet でも必ず最終サマリに出す（daily ログで沈黙モードを検知する
+    # 唯一の手がかり。silence != evaluated・#313/#312）。
+    for src in res.get("source_errors") or []:
+        print(f"  ⚠ ソース読み込み失敗: {src}")
+    failed = res.get("failed_projects") or []
+    degraded = res.get("degraded_projects") or []
+    failed_dirs = res.get("failed_dirs") or []
+    # 表示を failed_projects（全 dir 失敗）でゲートしない。本体 dir 成功 + worktree dir 失敗
+    # という最も起きやすい部分失敗が daily ログで沈黙するため（codex cold-read P1）。
+    if failed_dirs or failed or degraded:
+        print(f"  ⚠ 検出失敗 dir {len(failed_dirs)} 件"
+              f"（全 dir 失敗 {len(failed)} PJ・一部 dir 失敗 {len(degraded)} PJ）")
+        for label, group in (("全滅", failed), ("一部", degraded)):
+            if not group:
+                continue
+            names = ", ".join(f["pj_slug"] for f in group[:5])
+            more = f" 他 {len(group) - 5} PJ" if len(group) > 5 else ""
+            print(f"    {label}: {names}{more}")
+    if res.get("unattributed_deny"):
+        print(f"  ℹ PJ 未帰属で除外した permission_deny: {res['unattributed_deny']} 件")
+    return rc
 
 
 def _run_ingest(args: argparse.Namespace) -> int:

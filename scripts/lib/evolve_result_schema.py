@@ -96,8 +96,11 @@ CANONICAL: List[Key] = [
     Key("phases.remediation.classified.proposable_custom_batch_skip", list),
     # --- reorganize: split は skill_name/line_count（.skill/.content_lines ではない）。
     #     skipped 時はこれらのキー自体が出ないため optional ---
-    Key("phases.reorganize.split_candidates", list, item_keys=["skill_name", "line_count"],
-        optional=True, note="skipped 時は欠落。item は skill_name/line_count（.skill/.content_lines は誤）"),
+    Key("phases.reorganize.split_candidates", list,
+        item_keys=["skill_name", "line_count", "path"],
+        optional=True,
+        note="skipped 時は欠落。item は skill_name/line_count/path（.skill/.content_lines は誤）。"
+             "path は検出元の実パスで issue['file'] の SoT（#306）"),
     Key("phases.reorganize.hierarchy_candidates", list, optional=True),
     Key("phases.reorganize.total_split_candidates", int, optional=True),
     # --- skill_evolve ---

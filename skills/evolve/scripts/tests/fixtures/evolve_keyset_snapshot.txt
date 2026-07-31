@@ -74,6 +74,7 @@ observability.glossary_drift
 observability.missing_skill_md
 observability.orphan_store
 observability.remediation_batch_skip
+observability.remediation_fix_targets
 observability.skill_reachability
 observability.skill_triage
 observability.skill_vuln
@@ -201,6 +202,10 @@ phases.remediation.proposable_global_suppressed
 phases.remediation.rule_violation_suppressed
 phases.remediation.suppressed_by_ledger
 phases.remediation.total_issues
+phases.remediation.unresolvable_fix_targets
+phases.remediation.unresolvable_fix_targets.by_type
+phases.remediation.unresolvable_fix_targets.count
+phases.remediation.unresolvable_fix_targets.files
 phases.reorganize
 phases.reorganize.clusters
 phases.reorganize.hierarchy_candidates

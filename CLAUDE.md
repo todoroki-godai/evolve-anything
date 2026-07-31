@@ -132,6 +132,7 @@
 | `memory_guard` | auto-memory 書込境界の runtime 記憶汚染検出（#108）— skill_vuln_scan の較正済みパターンを再利用し prompt_injection / secret_exfil の2カテゴリのみ reject。broker の `ingest_memory_results` が write 前に検査（fail-open・`EVOLVE_MEMORY_GUARD=warn` で降格）。**#93**: 同名エントリの書込を TRUSTMEM 型決定論遷移検証（coverage/preservation/fidelity）でゲート。新ストア `memory_transition_checks.jsonl`（active・batch）。maintain 軸に reject/検査件数を surface | `memory_guard.py` + `auto_memory_broker.py` + `memory_capability.py` + `audit/sections_memory.py` |
 | `fleet_queue` | 学習素材ベースの evolve 待ち列挙 `evolve-fleet queue`（#79）— material_count = weak 未処理（content-rich channel 限定・#113）+ 前回 evolve 以降の新規 corr が閾値以上（既定5）の PJ を決定論・ゼロ LLM で列挙。新ストア `evolve-queue-state.jsonl`（active・batch writer）。dead/phantom/未帰属 corr を footer で透明化（#85-#96） | `fleet/queue.py` + `fleet/queue_state.py` + `fleet/cli.py` + `fleet/collectors.py` + `fleet/formatters.py` |
 | `queue_verify` | queue の verify 待ち（直近 accept 済・未検証の提案）を read 時純粋導出 + queue 全体状態ラベル（READY/SETUP_REQUIRED/EMPTY）を付与（#267）。exposure=最新 accept run 記録時刻以降の distinct session 数、TTL 14日で read 時失効、material 閾値未満でも verify 待ちなら queue 昇格。新ストアは作らない | `fleet/queue_verify.py` |
+| `fleet_detect` | 全 PJ 横断の決定論 weak_signals 検出 `evolve-fleet detect`（#304）— 素材生成が `evolve --drain` にしか配線されず「回さない→素材ゼロ→queue EMPTY→回さない」の鶏卵ループだったのを根治。daily runner step 1c に配線し evolve 非依存で毎朝蓄積、`--backfill` で過去分回収。`detect_permission_deny` の PJ 無フィルタ（全PJ同値の measurement_bug 指紋）も修正 | `fleet/detect.py` + `bin/evolve-daily-run` |
 | `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知（#80 Phase 1b）— launchd で `fleet ingest`→`fleet tokens --backfill`（増分・#157）→`fleet queue --json` を毎朝1回走らせ `evolve-queue.json`（read 専用派生物・SoR でない・store_registry 非登録）に保存。SessionStart hook が待ち PJ を systemMessage（ADR-038）で通知（stale advisory 付き・空なら無音）。無人は決定論パイプラインまで＝適用は対話で人間承認。`bin/evolve-daily-install`(`--time`/`--uninstall`・冪等) + `bin/evolve-daily-run` | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
 | `icebox_notice` | daily runner の icebox 棚卸し気づきトリガー（#194）— runner 第4ステップが `gh issue list --label icebox --state closed`（read-only・closedAt のみ・timeout 30s・fail-open 4種で既存ファイル非破壊）を集計し `icebox-status.json` に保存、SessionStart hook が最古 N 日超（既定30日・`audit_interval_days` と同周期。userConfig `icebox_review_threshold_days` で調整可）で「icebox N件・最古M日」を systemMessage 1行通知（個別列挙しない・閾値未満は無音） | `scripts/lib/daily/icebox_notice.py` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
 | `artifacts_hygiene` | artifact 衛生5検出器（#124 グローバル CLAUDE.md 空/未存在 / #125 SKILL.md 欠落 dir / #126 バックアップ残置 / #129 skill 名跨 scope 重複・symlink wrapper 除外 / #155 plugin と重複するグローバル hook 残骸・同一イベント×正規化 basename 一致）を #115 advisory 共通枠で observability に surface。2026-07-03 PC 環境手動監査の検出器ギャップ起票分（決定論・LLM 非依存） | `audit/sections_artifacts.py` |
@@ -186,6 +187,11 @@ bin/evolve-fleet recall "認証 ルーティング" --json --limit 5
 # インストール済み CC プラグインの最新性診断（update/drift/unknown を決定論検出）
 bin/evolve-fleet plugins
 bin/evolve-fleet plugins --json
+
+# 全 PJ の学習素材（決定論 weak_signals）を検出・蓄積（#304・ゼロ LLM・冪等）
+bin/evolve-fleet detect                   # 直近セッションから検出（daily runner が毎朝自動実行）
+bin/evolve-fleet detect --backfill        # 過去チャットを遡って取りこぼしを回収
+bin/evolve-fleet detect --pj amamo --dry-run
 
 # 学習素材ベースで「今 evolve すべき PJ」を列挙（決定論・ゼロ LLM）
 bin/evolve-fleet queue                    # weak 未処理 + 新規 corr >= 閾値（既定5）の PJ をテーブル表示
