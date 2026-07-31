@@ -131,6 +131,40 @@ def _save_cache(project_dir: Path, data: Dict[str, Any]) -> None:
 # Layer evaluation (Phase B response parsing)
 # ---------------------------------------------------------------------------
 
+def _provenance_mod():
+    """scripts/lib/evaluation_provenance を遅延 import する（#309）。"""
+    _ensure_paths()
+    import evaluation_provenance as _ep
+
+    return _ep
+
+
+def _layer_provenance(evaluation_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Phase B の実行条件を layer 単位 provenance へ変換する（#309）。
+
+    Phase B の応答は対話セッションの Claude 自身が生成するため、判定モデルは Python から
+    観測できない。呼出側が申告した ``evaluation_context`` が正規経路で、渡されなければ
+    推測せず「観測不能」（model=None）として記録する。
+    """
+    ep = _provenance_mod()
+    ctx = evaluation_context if isinstance(evaluation_context, dict) else {}
+    judge_ctx = ctx.get("judge") if isinstance(ctx.get("judge"), dict) else {}
+    runtime = ctx.get("runtime") if isinstance(ctx.get("runtime"), dict) else {}
+    tool_policy = judge_ctx.get("tool_policy") if isinstance(judge_ctx.get("tool_policy"), dict) else {}
+    return ep.build_provenance(
+        evaluation_kind=ep.KIND_LLM_JUDGE,
+        producer="constitutional.ingest_layer_responses",
+        judge=ep.build_judge_context(
+            model=judge_ctx.get("model"),
+            effort=judge_ctx.get("effort"),
+            tool_policy_mode=tool_policy.get("mode") or ep.TOOL_POLICY_UNKNOWN,
+            allowed_tools=tool_policy.get("allowed_tools"),
+        ),
+        runtime_name=runtime.get("name"),
+        session_id=runtime.get("session_id"),
+    )
+
+
 def _build_eval_prompt(layer_name: str, layer_content: str, principles: List[Dict[str, Any]]) -> str:
     """レイヤー評価用プロンプトを構築する。"""
     principles_text = "\n".join(
@@ -340,6 +374,24 @@ def _aggregate_constitutional(
         "from_cache": from_cache_count > 0,
     }
 
+    # 集約は単一 model へ潰さない（別時点・別モデルの layer が混在しうる・#309）。
+    try:
+        ep = _provenance_mod()
+        result["provenance"] = ep.aggregate_provenance(
+            "constitutional",
+            [lr.get("provenance") for lr in layer_results.values()],
+            layers_total=len(layer_results),
+        )
+    except Exception as e:  # noqa: BLE001 - provenance の欠損はスコア算出を止めない
+        # キーごと落とすと契約 drift が全緑のままデータ欠損になるので unknown を残す。
+        print(f"[constitutional] provenance 集約に失敗: {e}", file=sys.stderr)
+        result["provenance"] = {
+            "schema_version": 1,
+            "evaluation_kind": "unknown",
+            "producer": "constitutional",
+            "error": str(e),
+        }
+
     # --- Slop detection (deterministic, no LLM) ---
     try:
         _ensure_paths()
@@ -519,10 +571,17 @@ def ingest_layer_responses(
     project_dir: str | Path,
     requests: List[Dict[str, Any]],
     responses: Dict[str, Any],
+    evaluation_context: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Phase C: レイヤー応答をパースし cache 命中分とマージして集約・保存する（決定論・LLM 非依存）。
 
     cache 済みレイヤー + 今回 ingest したレイヤーを合わせて集約する。評価が1つも無ければ None。
+
+    Args:
+        evaluation_context: Phase B の実行条件（#309）。
+            ``{"runtime": {"name", "session_id"}, "judge": {"model", "effort", "tool_policy"}}``。
+            Phase B の応答は対話セッションが生成するため Python からは観測できない。
+            呼出側からの明示引数が正規経路で、省略時は推測せず「観測不能」として記録する。
     """
     _ensure_paths()
     from llm_broker import parse_responses
@@ -550,11 +609,16 @@ def ingest_layer_responses(
 
     # 今回 ingest したレイヤーを上書き
     fresh = 0
+    # 今回 ingest する layer には、この Phase B の実行条件を不可分に付ける（#309）。
+    fresh_provenance = _layer_provenance(evaluation_context)
     for req in requests:
         lid = req["id"]
         parsed = parsed_map.get(lid)
         if parsed and parsed.get("evaluations"):
-            layer_results[lid] = {"evaluations": parsed["evaluations"]}
+            layer_results[lid] = {
+                "evaluations": parsed["evaluations"],
+                "provenance": fresh_provenance,
+            }
             fresh += 1
 
     if not layer_results:
@@ -586,6 +650,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--requests", help="Phase C: emit-requests の出力 JSON ファイル")
     parser.add_argument("--responses", help="Phase C: assistant 応答 JSON ファイル")
+    # #309: Phase B の判定条件は対話セッションしか知らないため呼出側から申告してもらう。
+    # 省略時は推測せず「観測不能」として記録する。
+    parser.add_argument("--judge-model", default=None, help="Phase C: 採点したモデル（alias のまま）")
+    parser.add_argument("--judge-effort", default=None, help="Phase C: 採点時の effort")
+    parser.add_argument("--session-id", default=None, help="Phase C: 採点したセッション ID")
     args = parser.parse_args()
 
     if args.emit_requests:
@@ -597,7 +666,22 @@ if __name__ == "__main__":
         requests = req_payload.get("requests", req_payload)
         with open(args.responses, encoding="utf-8") as f:
             responses = json.load(f)
-        result = ingest_layer_responses(Path(args.project_dir), requests, responses)
+        evaluation_context = {
+            "runtime": {"name": "claude" if args.judge_model else None,
+                        "session_id": args.session_id},
+            "judge": {
+                "model": args.judge_model,
+                "effort": args.judge_effort,
+                # インライン採点＝対話セッションのポリシー継承。実効ポリシーの観測ではなく
+                # 呼出側の申告なので mode で区別する。
+                "tool_policy": {"mode": "session" if args.judge_model else "unknown",
+                                "allowed_tools": None},
+            },
+        }
+        result = ingest_layer_responses(
+            Path(args.project_dir), requests, responses,
+            evaluation_context=evaluation_context,
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         result = compute_constitutional_score(Path(args.project_dir), refresh=args.refresh)

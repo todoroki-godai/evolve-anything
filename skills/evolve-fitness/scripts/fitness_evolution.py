@@ -88,6 +88,38 @@ def _score_skill_content(after_content: str, skill_name: str) -> Optional[float]
     return float(result.get("overall", 0.0))
 
 
+def _attach_provenance(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """評価実行条件を付ける（#309・optimize_history の第3 writer）。
+
+    optimize / evolve-loop と同じ母集団へ書くので、ここだけ条件不明のレコードを
+    混ぜると後から条件別に比較できない。skill_quality は LLM を呼ばないので
+    ``deterministic``（judge は非該当）。組立に失敗しても記録は止めないが、
+    provenance キーごと落とさず unknown として残す。
+    """
+    try:
+        import evaluation_provenance as _ep
+    except Exception as e:  # noqa: BLE001
+        entry["provenance"] = {
+            "schema_version": 1,
+            "evaluation_kind": "unknown",
+            "producer": "evolve-fitness.record_evolve_diff_decision",
+            "error": str(e),
+        }
+        return entry
+
+    prov = None
+    try:
+        prov = _ep.build_provenance(
+            evaluation_kind=_ep.KIND_DETERMINISTIC,
+            producer="evolve-fitness.record_evolve_diff_decision",
+            config={"fitness_func": EVOLVE_DIFF_FITNESS_FUNC},
+            inputs={"source": EVOLVE_DIFF_SOURCE},
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"[fitness_evolution] provenance 組立に失敗: {e}", file=sys.stderr)
+    return _ep.attach_provenance(entry, prov)
+
+
 def record_evolve_diff_decision(
     skill_name: str,
     after_content: str,
@@ -127,6 +159,7 @@ def record_evolve_diff_decision(
         "human_accepted": human_accepted,
         "rejection_reason": rejection_reason,
     }
+    _attach_provenance(entry)
 
     # 冪等 ingest: 同一 id が既にあれば書き込まない。
     # #287-2: 「既存確認 → append」をロック下で原子化する。非ロックだと2プロセスが同時に

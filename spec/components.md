@@ -16,7 +16,7 @@ critical-instruction-compliance, second-opinion, growth-level, optimize_history_
 evolve_decisions, evolve_reconcile, token_usage_store, token_usage_ingest, token_usage_query,
 auto_memory_runner, auto_memory_broker, meta_quality, triage_ledger, constraint_decay,
 negative_transfer, eval_saturation, subgoal_scorer, evolution_operators, memory_trace,
-slop_detector, skill_extractor, skill_rm
+slop_detector, skill_extractor, skill_rm, evaluation_provenance
 
 ## observability・検出器・ストア契約 → [components-observability.md](components-observability.md)
 
