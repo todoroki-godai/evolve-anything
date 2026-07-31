@@ -325,6 +325,34 @@ class DirectPatchOptimizer:
             "human_accepted": human_accepted,
             "rejection_reason": rejection_reason,
         }
+        # 永続化境界で評価実行条件を付ける（#309）。採点は fitness スクリプトの subprocess
+        # 実行（LLM 非依存）なので judge/model は非該当。どの fitness で測ったかは
+        # 結果を左右するので config に残す（パッチ生成に使った claude -p は --model
+        # 指定なし＝観測不能のため、生成モデルは記録できないものとして扱う）。
+        # 組立に失敗しても履歴記録は止めないが、provenance キーごと落とさない
+        # （無記録だと契約 drift が全緑のままデータ欠損になる）。
+        try:
+            import evaluation_provenance as _ep
+        except Exception as e:  # noqa: BLE001
+            print(f"[optimize] evaluation_provenance を import できず: {e}", file=sys.stderr)
+            entry["provenance"] = {
+                "schema_version": 1,
+                "evaluation_kind": "unknown",
+                "producer": "genetic-prompt-optimizer.save_history_entry",
+                "error": str(e),
+            }
+        else:
+            prov = None
+            try:
+                prov = _ep.build_provenance(
+                    evaluation_kind=_ep.KIND_DETERMINISTIC,
+                    producer="genetic-prompt-optimizer.save_history_entry",
+                    config={"fitness_func": entry["fitness_func"]},
+                    inputs={"corrections_used": entry["corrections_used"]},
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"[optimize] provenance 組立に失敗: {e}", file=sys.stderr)
+            _ep.attach_provenance(entry, prov)  # None なら unknown envelope
         history_file.parent.mkdir(parents=True, exist_ok=True)
         with open(history_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
