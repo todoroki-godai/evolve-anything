@@ -141,19 +141,27 @@ python3 "$PFC" enable --pitfalls <path>          # 管理対象に登録（--pro
 python3 "$PFC" disable --pitfalls <path>         # 管理対象から外す
 ```
 
-`enable` は登録前に lint し、index/TOC（エントリ0件で実質コンテンツあり）は「pitfalls
-エントリファイルではない」として登録を拒否する。drift があれば登録しつつ `normalize` を促す。
+`enable` は登録前に lint し、index/TOC（エントリ0件で実質コンテンツあり）や gate スコア表等
+の非 pitfalls データは「pitfals エントリファイルではない」として登録を拒否する。drift があれば
+登録しつつ `normalize` を促す。
 
-検査は決定論の `normalize --check`（lint）で行い、3状態を返す（**書き換えはしない**）:
+検査は決定論の `normalize --check`（lint）で行い、4状態を返す（**書き換えはしない**）:
 
 | 状態 | 意味 | 編集時 hook | commit時 gate |
 |------|------|------------|--------------|
 | ok | 既に正準形 | 無音 | 通す |
 | drift | 正準形と差分 | 警告 + 提案 diff | 警告のみで通す |
 | danger | index/TOC 等 wipe 危険 | 警告（非ブロック） | **commit をブロック**（exit 2）|
+| not_a_pitfalls_file | エントリ0件かつ内容が pipe テーブル行のみ（gate スコア表等、regression_gate 等の別用途データが誤った宛先に書かれたもの・#308） | 警告（非ブロック） | **commit をブロック**（exit 2）|
+
+danger と not_a_pitfalls_file の違い: danger は「人間が書いた非正準構造（index/TOC）」、
+not_a_pitfalls_file は「そもそも pitfalls エントリではない機械可読データ」。後者は
+`genetic-prompt-optimizer`/`evolve-loop-orchestrator` の regression gate 失敗記録
+（`references/gate-failures.md` が専用の書込先。pitfalls.md とは別ファイル）が誤った
+宛先に書かれた場合の再発防止として #308 で追加した。
 
 ```bash
-python3 "$PFC" normalize --pitfalls <path> --check   # ok=0 / drift=1 / danger=2、diff を提示
+python3 "$PFC" normalize --pitfalls <path> --check   # ok=0 / drift=1 / danger=2 / not_a_pitfalls_file=3、diff を提示
 ```
 
 二段にしているのは、編集時（PostToolUse `pitfall_lint`）は編集途中の中間状態を踏むと
@@ -190,8 +198,10 @@ python3 "$PFC" status --json
 出力の `items[]` は各 pitfalls.md について `{path, managed, state}` を持つ:
 
 - **未登録（`managed: false`）の候補がある場合** → AskUserQuestion で「これらを自動強制の
-  対象に登録しますか？」と確認する。提示時は各 path と `state`（ok / drift / danger）も見せる。
-  - `state: danger`（index/TOC）の候補は登録対象から外す（enable も拒否する）。理由を添える。
+  対象に登録しますか？」と確認する。提示時は各 path と `state`（ok / drift / danger /
+  not_a_pitfalls_file）も見せる。
+  - `state: danger`（index/TOC）・`state: not_a_pitfalls_file`（gate スコア表等）の候補は
+    登録対象から外す（enable も拒否する）。理由を添える。
   - 承認されたら未登録の各 path について `enable` を実行する:
     ```bash
     python3 "$PFC" enable --pitfalls <path>

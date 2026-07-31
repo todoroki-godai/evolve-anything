@@ -6,6 +6,8 @@
 方針（ユーザー確認済み）:
 - **danger（index/TOC 等 wipe 危険）→ commit をブロック**（exit 2）。silent wipe が
   履歴に入る最悪形を最後に止める。書き換えはしない（ブロックするだけ）。
+- **not_a_pitfalls_file（gate スコア表等、pitfalls エントリではないデータ・#308）
+  → danger と同様 commit をブロック**（exit 2）。
 - **drift（正準形と差分）→ 警告のみで通す**（自動書き換えはしない方針）。
 - ok / 対象なし → 何もせず通す。
 
@@ -100,6 +102,7 @@ def evaluate(event: dict, project_dir: str, run_git: GitRunner) -> Dict[str, str
 
     targets = _staged_managed_paths(project_dir, managed, run_git)
     danger: List[str] = []
+    not_pitfalls: List[str] = []
     drift: List[str] = []
     for rel in targets:
         try:
@@ -109,6 +112,8 @@ def evaluate(event: dict, project_dir: str, run_git: GitRunner) -> Dict[str, str
         state = check_normalized(content)["state"]
         if state == "danger":
             danger.append(rel)
+        elif state == "not_a_pitfalls_file":
+            not_pitfalls.append(rel)
         elif state == "drift":
             drift.append(rel)
 
@@ -121,6 +126,18 @@ def evaluate(event: dict, project_dir: str, run_git: GitRunner) -> Dict[str, str
                 f"{', '.join(danger)}\n"
                 "  `### タイトル` 形式へ再構成するか、index/TOC なら管理対象から外して"
                 "（pitfall_curate.py で disable）から commit してください。"
+            ),
+        }
+    if not_pitfalls:
+        # #308: gate スコア表等、そもそも pitfalls エントリファイルではないデータ。
+        return {
+            "decision": "deny",
+            "message": (
+                "[evolve-anything:pitfall_commit_gate] ✗ commit をブロックしました。\n"
+                f"  次のファイルは pitfalls エントリではありません（別用途データが誤った"
+                f"宛先に書かれた可能性・#308）: {', '.join(not_pitfalls)}\n"
+                "  正しい書込先に直すか、管理対象から外して（pitfall_curate.py で disable）"
+                "から commit してください。"
             ),
         }
     if drift:

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(pitfall-curate): regression gate のスコア表書込先を pitfalls.md から分離（#308）** — `genetic-prompt-optimizer`/`evolve-loop-orchestrator` の `record_pitfall` が gate 不合格パターンを人間向け `references/pitfalls.md`（`collect_context` が prompt context に読む prose）へ書いており、gate 不合格の度にスコア表で prose を全上書きする実データ消失リスクがあった（`skills/spec-keeper/references/pitfalls.md` がこの残骸で発見）。書込先を専用ファイル `references/gate-failures.md` に分離し、regression gate の読み取り側（4 call site）も同じ新パスを見るよう統一。`record_pitfall` は書込先が散文を含む場合も書き込まずスキップして警告する二重ガードを追加。pitfall-curate の lint（`check_normalized`）に新カテゴリ `not_a_pitfalls_file`（エントリ0件かつ pipe テーブル行のみ）を追加し、danger（index/TOC）と区別しつつ enable 拒否・commit ブロック（exit 2）まで同等に扱う。旧来は 3 行程度の短いテーブルが `_NON_ENTRY_CONTENT_FLOOR` の行数閾値を超えず drift 判定に素通りしていた。spec-keeper の残骸ファイルは pitfalls-managed 登録を解除のうえ削除（SKILL.md が pitfalls を参照しない設計のため seed でなく削除）。
+
 ## [1.124.0] - 2026-07-31
 
 ### Added

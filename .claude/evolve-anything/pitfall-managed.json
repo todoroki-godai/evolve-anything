@@ -1,7 +1,6 @@
 {
   "managed": [
     "skills/evolve/references/pitfalls.md",
-    "skills/evolve/templates/pitfalls.md",
-    "skills/spec-keeper/references/pitfalls.md"
+    "skills/evolve/templates/pitfalls.md"
   ]
 }

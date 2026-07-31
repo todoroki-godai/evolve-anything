@@ -294,25 +294,65 @@ def _count_orphan_content_lines(content: str) -> int:
     return n
 
 
+def _is_pipe_table_only(content: str) -> bool:
+    """コメント/空行/プレースホルダを除く全実質行が pipe テーブル行（`|` 始まり）かを判定する。
+
+    gate スコア表（`| Source | Pattern | Score |` 等、pitfalls とは無関係な機械可読データが
+    誤った宛先に書かれたもの）の構造的指紋。行数に依存しないため、
+    `_NON_ENTRY_CONTENT_FLOOR` を超えない短いテーブル（例: 3行のスコア表）でも確実に
+    検出できる（#308: INDEX_FORMAT 用の行数閾値だけでは 3行ちょうどの表を素通りさせていた）。
+    実質行が1つも無い（空/プレースホルダのみ）場合は False（対象は「エントリ0件の
+    テーブルのみ」であり、空ひな型はここに含めない）。
+    """
+    n = 0
+    in_comment = False
+    for line in content.splitlines():
+        s = line.strip()
+        if in_comment:
+            if "-->" in s:
+                in_comment = False
+            continue
+        if s.startswith("<!--"):
+            if "-->" not in s:
+                in_comment = True
+            continue
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("_") and s.endswith("_"):
+            continue
+        n += 1
+        if not s.startswith("|"):
+            return False
+    return n > 0
+
+
 def normalize(content: str) -> str:
     """任意フォーマットの pitfalls.md を正準フォーマットへ変換する（冪等）。
 
     セクション見出し・エントリ見出しレベル・メタdataのバレット化だけを揃え、本文は保持する。
     正準フォーマットを入力すると不変（idempotent）。
 
-    エントリが1件も無く実質コンテンツ（テーブル/リンク等）がある場合は、インデックス/TOC や
-    非エントリファイルとみなし ValueError を送出する（normalize で全足切り wipe するのを防ぐ）。
+    エントリが1件も無く、かつ (a) 実質行が全て pipe テーブル行（gate スコア表等の
+    非 pitfalls データ・#308）、または (b) 実質コンテンツ（テーブル/リンク等）がある
+    （インデックス/TOC）場合は ValueError を送出する（normalize で全足切り wipe するのを
+    防ぐ）。(a) は check_normalized 側で構造的に区別する（"not_a_pitfalls_file"）が、
+    normalize を直接呼ぶ経路（--check なし）でも wipe させないため本関数でも判定する。
     """
     content = _demote_subsection_headings(content)
     parsed = parse_pitfalls(content)
-    if sum(len(v) for v in parsed.values()) == 0 and (
-        _count_orphan_content_lines(content) > _NON_ENTRY_CONTENT_FLOOR
-    ):
-        raise ValueError(
-            "normalize: エントリが見つからないが実質コンテンツがあります"
-            "（インデックス/TOC や非正準ファイルの可能性）。wipe を避けるため中断しました。"
-            "`### タイトル` 形式のエントリへ再構成するか、別ファイルを指定してください。"
-        )
+    if sum(len(v) for v in parsed.values()) == 0:
+        if _is_pipe_table_only(content):
+            raise ValueError(
+                "normalize: pitfalls エントリが見つからず、内容がテーブル行のみです"
+                "（regression_gate 等の別用途データが誤った宛先に書かれた可能性・#308）。"
+                "pitfalls エントリファイルではないため中断しました。"
+            )
+        if _count_orphan_content_lines(content) > _NON_ENTRY_CONTENT_FLOOR:
+            raise ValueError(
+                "normalize: エントリが見つからないが実質コンテンツがあります"
+                "（インデックス/TOC や非正準ファイルの可能性）。wipe を避けるため中断しました。"
+                "`### タイトル` 形式のエントリへ再構成するか、別ファイルを指定してください。"
+            )
     title, preamble = _split_header(content)
     out: List[str] = [title, ""]
     if preamble:
@@ -330,13 +370,29 @@ def normalize(content: str) -> str:
 def check_normalized(content: str) -> Dict[str, str]:
     """書き換えずに正準フォーマットとの差分状態を返す lint（hook / --check 用）。
 
-    normalize と違い、決して例外を投げず・ファイルを変更しない。3状態を返す:
-    - "ok":     既に正準形（normalize しても不変）
-    - "drift":  正準形と差がある → 提案 diff を返す（呼び出し側が承認時に normalize）
-    - "danger": index/TOC 等で normalize すると全 wipe する → 中断推奨（diff は出さない）
+    normalize と違い、決して例外を投げず・ファイルを変更しない。4状態を返す:
+    - "ok":                既に正準形（normalize しても不変）
+    - "drift":              正準形と差がある → 提案 diff を返す（呼び出し側が承認時に normalize）
+    - "danger":             index/TOC 等で normalize すると全 wipe する → 中断推奨（diff は出さない）
+    - "not_a_pitfalls_file": エントリ0件かつ内容がテーブル行のみ（gate スコア表等、pitfalls とは
+      無関係な機械可読データが誤った宛先に書かれたもの・#308）。danger（index/TOC）とは別カテゴリ
+      — index/TOC は「人間が書いた非正準構造」だが、こちらは「そもそも pitfalls ではないデータ」。
+      enable / normalize のどちらも通さない。
 
-    返り値: {"state", "diff", "reason"}。drift のみ diff が非空、danger のみ reason が必須。
+    返り値: {"state", "diff", "reason"}。drift のみ diff が非空、
+    danger/not_a_pitfalls_file のみ reason が必須。
     """
+    parsed = parse_pitfalls(content)
+    if sum(len(v) for v in parsed.values()) == 0 and _is_pipe_table_only(content):
+        return {
+            "state": "not_a_pitfalls_file",
+            "diff": "",
+            "reason": (
+                "pitfalls エントリが見つからず、内容がテーブル行のみです"
+                "（regression_gate 等の別用途データが誤った宛先に書かれた可能性・#308）。"
+                "pitfalls エントリファイルではないため enable/normalize しないでください。"
+            ),
+        }
     try:
         normalized = normalize(content)
     except ValueError as e:

@@ -53,6 +53,7 @@ from optimize_core import (
     format_gate_reason,
     generate_candidate,
     record_pitfall,
+    resolve_pitfall_patterns_path,
     restore_frontmatter_if_lost,
     run_custom_fitness,
     run_regression_gate,
@@ -188,8 +189,7 @@ class DirectPatchOptimizer:
             self.save_history_entry(result)
             return result
 
-        pitfall_path = str(self.target_path.parent / "references" / "pitfalls.md")
-        pitfall_path = pitfall_path if Path(pitfall_path).exists() else None
+        pitfall_path = resolve_pitfall_patterns_path(self.target_path)  # #308
 
         passed, gate_reason = run_regression_gate(
             patched_content, original_content, self._max_lines, pitfall_path,
@@ -432,8 +432,7 @@ class PopulationBroadcastOptimizer:
         is_rule_file = ".claude/rules/" in str(self.target_path)
         max_lines = MAX_RULE_LINES if is_rule_file else MAX_SKILL_LINES
         max_chars = max_chars_for(max_lines)  # #120 GEPA ガードレール（行内 bloat 捕捉）
-        pitfall_path_obj = self.target_path.parent / "references" / "pitfalls.md"
-        pitfall_path = str(pitfall_path_obj) if pitfall_path_obj.exists() else None
+        pitfall_path = resolve_pitfall_patterns_path(self.target_path)  # #308
 
         prompt = build_patch_prompt(
             original_content, corrections, context, strategy, is_rule_file, max_lines
