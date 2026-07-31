@@ -9,8 +9,11 @@
 - 観察型:           「〜気がするんだよなぁ」
 
 応答は厳格な JSON（{"verdicts": [{index, is_correction, idiom, reason}]}）を要求する。
-パーサは code fence・前後ノイズに頑健で、壊れた応答は空リストにフォールバックする
-（llm_broker の「欠損は fallback で穴埋め」方針と整合）。
+パーサは code fence・前後ノイズに頑健。**「解釈できない（壊れた JSON）」と「正しく解釈できて
+verdicts が空」は意味が違う**（#273）ため `parse_verdicts_result` で `ok` フラグとして区別する。
+`ok=False`（壊れた JSON・応答欠損）を呼び出し側が「該当なし」と誤読すると、パース失敗バッチが
+判定済みとして確定し二度と再判定されない（応答欠損は再試行されるのに壊れた応答はされない、
+という非対称の温床になる）。`parse_verdicts`（後方互換）は従来どおり両ケースとも [] を返す。
 """
 from __future__ import annotations
 
@@ -50,6 +53,8 @@ def build_batch_prompt(utterances: List[Dict[str, Any]]) -> str:
         "修正と判定した場合は、その修正を端的に表す**言い回し（idiom）**を発話から抜き出して\n"
         "ください（例: 「四国めたんじゃなくて」「違うんだけど」「気がする」）。\n"
         "修正でなければ idiom は null にします。\n\n"
+        "**判定対象の全 index について、必ず 1 件ずつ verdict を返してください**"
+        "（非修正の発話も is_correction=false で必ず含める。省略しない）。\n\n"
         "出力は厳格な JSON のみ（前後に説明文を付けない）。形式:\n"
         '{"verdicts": [{"index": 0, "is_correction": true, "idiom": "四国めたんじゃなくて", '
         '"reason": "正しい値を後置で言い直している"}, ...]}\n\n'
@@ -58,14 +63,66 @@ def build_batch_prompt(utterances: List[Dict[str, Any]]) -> str:
     )
 
 
-def parse_verdicts(raw: Optional[Any]) -> List[Dict[str, Any]]:
-    """モデル応答（JSON 文字列）から verdict のリストを取り出す。
+def _validate_verdict(v: object) -> Optional[Dict[str, Any]]:
+    """1 verdict 要素を厳格型検証し、正規化した dict を返す（不正なら None）。
 
-    code fence・前後のノイズに頑健。壊れた/空の応答は [] にフォールバックする。
-    各 verdict は {index:int, is_correction:bool, idiom:str|None, reason:str} に正規化。
+    #273 P1-1（codex 指摘）: 「構文上 valid だが意味的に壊れている」要素
+    （`"index": "0"` の型違い・`"is_correction": "false"` の文字列）を黙って捨てて続行すると、
+    捨てた分だけ verdicts が薄くなり `by_index.get(local_i)` が None になって「非修正」と
+    誤確定する（#273 が塞いだはずの事故が partial-invalid 型で再発する）。**1 要素でも
+    不正なら呼び出し側はバッチ全体を ok=False にすること**（不正要素だけ捨てて部分採用しない）。
+    `bool("false") == True` の罠を踏まないよう ``is_correction`` は実 bool のみ許容する。
+    """
+    if not isinstance(v, dict):
+        return None
+    idx = v.get("index")
+    if not isinstance(idx, int) or isinstance(idx, bool):  # bool は int のサブクラスなので明示除外
+        return None
+    is_correction = v.get("is_correction")
+    if not isinstance(is_correction, bool):
+        return None
+    idiom = v.get("idiom")
+    if idiom is not None and not isinstance(idiom, str):
+        return None
+    if isinstance(idiom, str) and not idiom.strip():
+        idiom = None
+    reason = v.get("reason", "")
+    if reason is None:
+        reason = ""
+    if not isinstance(reason, str):
+        return None
+    return {
+        "index": idx,
+        "is_correction": is_correction,
+        "idiom": idiom,
+        "reason": reason,
+    }
+
+
+def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
+    """モデル応答（JSON 文字列）から verdict のリストを取り出し、パース成否も返す（#273）。
+
+    code fence・前後のノイズに頑健。「解釈できない」場合は ``ok=False`` を返す — 呼び出し側は
+    これを「該当なし（verdicts=[]）」と区別し、判定済みにせず次回再試行に回すこと。
+    正しく解釈できて verdicts が空配列（モデルが「該当なし」と明示判定）は ``ok=True``。
+    ``ok=False`` になる条件:
+      - 応答欠損・壊れた JSON・期待した `{"verdicts": [...]}` 形でない
+      - 要素の型が不正（`_validate_verdict` 参照。1 要素でも不正ならバッチ全体を失格にする）
+      - `index` の重複
+
+    index の**網羅性**（batch 内の全 index が揃っているか）はここでは検証しない
+    （verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称）。プロンプトで全 index を
+    返すよう明示したうえで、欠落は `batch.ingest_judgement_results` が非修正として確定し
+    件数を `omitted_verdicts` に surface する。欠落を未判定に残す設計は「全件非修正の
+    バッチにモデルが `{"verdicts": []}` で答える」正当なケースを毎 drain 再判定させ費用が
+    際限なく積むため採らない（この契約は
+    `test_ingest_legitimate_empty_verdicts_still_marks_judged` が固定している）。
+
+    Returns:
+        {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None, reason:str}]}
     """
     if not raw or not isinstance(raw, str):
-        return []
+        return {"ok": False, "verdicts": []}
     text = raw.strip()
     obj = None
     # まず素直に parse、ダメなら最初の {...} ブロックを拾う
@@ -77,27 +134,30 @@ def parse_verdicts(raw: Optional[Any]) -> List[Dict[str, Any]]:
             try:
                 obj = json.loads(m.group(0))
             except (json.JSONDecodeError, ValueError):
-                return []
+                return {"ok": False, "verdicts": []}
+        else:
+            return {"ok": False, "verdicts": []}
     if not isinstance(obj, dict):
-        return []
+        return {"ok": False, "verdicts": []}
     verdicts = obj.get("verdicts")
     if not isinstance(verdicts, list):
-        return []
+        return {"ok": False, "verdicts": []}
 
     out: List[Dict[str, Any]] = []
+    seen_idx: set = set()
     for v in verdicts:
-        if not isinstance(v, dict):
-            continue
-        idx = v.get("index")
-        if not isinstance(idx, int):
-            continue
-        idiom = v.get("idiom")
-        if not isinstance(idiom, str) or not idiom.strip():
-            idiom = None
-        out.append({
-            "index": idx,
-            "is_correction": bool(v.get("is_correction", False)),
-            "idiom": idiom,
-            "reason": str(v.get("reason") or ""),
-        })
-    return out
+        item = _validate_verdict(v)
+        if item is None or item["index"] in seen_idx:
+            return {"ok": False, "verdicts": []}
+        seen_idx.add(item["index"])
+        out.append(item)
+    return {"ok": True, "verdicts": out}
+
+
+def parse_verdicts(raw: Optional[Any]) -> List[Dict[str, Any]]:
+    """モデル応答（JSON 文字列）から verdict のリストを取り出す（後方互換 wrapper）。
+
+    壊れた/空の応答は [] にフォールバックする（従来どおり・ok/失敗の区別が要る呼び出し側は
+    `parse_verdicts_result` を使うこと。#273 で desync を避けるため両者は 1 実装を共有する）。
+    """
+    return parse_verdicts_result(raw)["verdicts"]
