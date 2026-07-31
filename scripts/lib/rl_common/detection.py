@@ -115,7 +115,11 @@ _MACHINERY_PREFIXES = (
     "<command-message>",
     "[request interrupted",
 )
-"""lstrip 後この接頭辞で始まるテキストは機構ターン。"""
+"""lstrip 後この接頭辞で始まるテキストは機構ターン。
+
+``[Request interrupted (by user|by user for tool use)]`` は Esc 中断の harness
+マーカー（weak_signals の ``_INTERRUPT_MARKER`` と同じ判定対象、#322）。turn 単体では
+``isMeta`` が付かないため content の prefix で判定する。"""
 
 _MACHINERY_MARKERS = (
     "this session is being continued from a previous conversation",
