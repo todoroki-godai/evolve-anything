@@ -390,6 +390,7 @@ def test_clean_run_has_empty_failure_fields(tmp_path):
         errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
         progress=False)
     assert res["failed_dirs"] == [] and res["failed_projects"] == []
+    assert res["degraded_projects"] == []
     assert res["source_errors"] == []
     assert detect_exit_code(res) == 0
 
@@ -454,8 +455,8 @@ def test_cli_rejects_non_positive_max_transcripts():
 def _fake_detect_result(**over) -> dict:
     base = {
         "projects": 0, "written": 0, "skipped_dup": 0, "total": 0, "dry_run": False,
-        "per_pj": [], "failed_dirs": [], "failed_projects": [], "source_errors": [],
-        "unattributed_deny": 0,
+        "per_pj": [], "failed_dirs": [], "failed_projects": [], "degraded_projects": [],
+        "source_errors": [], "unattributed_deny": 0,
     }
     base.update(over)
     return base
@@ -487,3 +488,97 @@ def test_cli_summary_reports_failures_even_when_quiet(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "失敗" in out and "amamo" in out
     assert "未帰属" in out
+
+
+# ── 部分失敗の沈黙（codex cold-read P1）─────────────────────────────
+
+def test_partial_dir_failure_is_surfaced_as_degraded(tmp_path, monkeypatch):
+    """1 slug の一部 dir だけ失敗しても結果に載せる（本体 OK・worktree NG が典型）。
+
+    ``failed_projects`` を「全 dir 失敗」に限定すると、最も起きやすい部分失敗が
+    ``failed_dirs`` にしか残らず、CLI サマリの表示ゲートも通らないため daily ログで
+    完全に沈黙する（#313 が塞ごうとした沈黙モードの別経路）。
+    """
+    fs_root, projects = _multi_dir_fixture(tmp_path)
+    real = fleet_detect.collect_signals
+
+    def _flaky(slug, **kw):
+        if "worktrees" in str(kw.get("pj_dir")):
+            raise RuntimeError("worktree dir unreadable")
+        return real(slug, **kw)
+
+    monkeypatch.setattr(fleet_detect, "collect_signals", _flaky)
+    res = detect_all_projects(
+        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
+        progress=False)
+
+    assert res["projects"] == 1, "成功した dir があるので PJ は成功扱い（fail-open 維持）"
+    assert res["failed_projects"] == [], "全滅ではない"
+    assert [d["pj_slug"] for d in res["degraded_projects"]] == ["rl-anything"]
+    assert [d["pj_slug"] for d in res["failed_dirs"]] == ["rl-anything"]
+    assert detect_exit_code(res) == 0
+
+
+def test_cli_reports_partial_dir_failure_even_when_quiet(monkeypatch, capsys):
+    """部分失敗も --quiet の最終サマリに出す（表示を failed_projects でゲートしない）。"""
+    from fleet import cli as fcli
+
+    res = _fake_detect_result(
+        projects=1,
+        degraded_projects=[{"pj_slug": "rl-anything", "errors": ["RuntimeError: x"]}],
+        failed_dirs=[{"pj_slug": "rl-anything", "dir": "d", "error": "RuntimeError: x"}],
+    )
+    monkeypatch.setattr(fleet_detect, "detect_all_projects", lambda **kw: res)
+    fcli.main(["detect", "--quiet"])
+    out = capsys.readouterr().out
+    assert "rl-anything" in out and "一部" in out
+
+
+# ── transcript 列挙失敗の握り潰し（codex cold-read P2）───────────────
+
+def _break_glob(monkeypatch, marker: str) -> None:
+    """dir 名に ``marker`` を含む dir の ``*.jsonl`` 列挙だけ OSError にする。"""
+    real_glob = Path.glob
+
+    def _glob(self, pattern, *a, **kw):
+        if pattern == "*.jsonl" and marker in str(self):
+            raise PermissionError("dir unreadable")
+        return real_glob(self, pattern, *a, **kw)
+
+    monkeypatch.setattr(Path, "glob", _glob)
+
+
+def test_unreadable_dir_enumeration_is_recorded_as_failure(tmp_path, monkeypatch):
+    """transcript 列挙が OSError の dir を無記録 skip せず失敗として記録する。
+
+    握り潰すと空の transcript リストが渡って ``collect_signals`` は正常終了し、
+    「1 件も読めていない PJ」が失敗ゼロ・終了コード 0 で完全に健全に見える。
+    """
+    fs_root, projects = _two_pj_fixture(tmp_path)
+    _break_glob(monkeypatch, "amamo")
+
+    res = detect_all_projects(
+        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
+        progress=False)
+
+    assert res["projects"] == 1, "読めた PJ だけ成功に数える"
+    assert [f["pj_slug"] for f in res["failed_projects"]] == ["amamo"]
+    assert any("PermissionError" in d["error"] for d in res["failed_dirs"]), res
+    assert detect_exit_code(res) == 0
+
+
+def test_all_dirs_unreadable_returns_nonzero_exit_code(tmp_path, monkeypatch):
+    """全 PJ の列挙が失敗したら全滅として非 zero（daily runner が検知できる）。"""
+    fs_root, projects = _two_pj_fixture(tmp_path)
+    _break_glob(monkeypatch, "-Users-u-updater-")
+
+    res = detect_all_projects(
+        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
+        progress=False)
+
+    assert res["projects"] == 0
+    assert len(res["failed_projects"]) == 2
+    assert detect_exit_code(res) != 0

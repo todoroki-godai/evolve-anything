@@ -324,11 +324,19 @@ def _run_detect(args: argparse.Namespace) -> int:
     for src in res.get("source_errors") or []:
         print(f"  ⚠ ソース読み込み失敗: {src}")
     failed = res.get("failed_projects") or []
-    if failed:
-        names = ", ".join(f["pj_slug"] for f in failed[:5])
-        more = f" 他 {len(failed) - 5} PJ" if len(failed) > 5 else ""
-        print(f"  ⚠ 検出失敗 {len(failed)} PJ（{names}{more}）"
-              f" / dir 単位 {len(res.get('failed_dirs') or [])} 件")
+    degraded = res.get("degraded_projects") or []
+    failed_dirs = res.get("failed_dirs") or []
+    # 表示を failed_projects（全 dir 失敗）でゲートしない。本体 dir 成功 + worktree dir 失敗
+    # という最も起きやすい部分失敗が daily ログで沈黙するため（codex cold-read P1）。
+    if failed_dirs or failed or degraded:
+        print(f"  ⚠ 検出失敗 dir {len(failed_dirs)} 件"
+              f"（全 dir 失敗 {len(failed)} PJ・一部 dir 失敗 {len(degraded)} PJ）")
+        for label, group in (("全滅", failed), ("一部", degraded)):
+            if not group:
+                continue
+            names = ", ".join(f["pj_slug"] for f in group[:5])
+            more = f" 他 {len(group) - 5} PJ" if len(group) > 5 else ""
+            print(f"    {label}: {names}{more}")
     if res.get("unattributed_deny"):
         print(f"  ℹ PJ 未帰属で除外した permission_deny: {res['unattributed_deny']} 件")
     return rc

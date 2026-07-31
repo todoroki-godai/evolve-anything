@@ -82,21 +82,33 @@ def _slug_for_project_dir(pj_dir: Path, fs_root: Optional[Path]) -> str:
     return pj_id_to_slug(name, root=fs_root)
 
 
-def _select_transcripts(dirs: List[Path], max_files: int) -> List[Path]:
+def _select_transcripts(
+    dirs: List[Path], max_files: int
+) -> tuple[List[Path], List[Dict[str, str]]]:
     """1 slug の全 dir を合算してから mtime 降順で上限を掛ける（#314）。
 
     ``max_transcripts`` は「PJ ごとの上限」と説明されているのに、dir ごとに適用すると
     実効上限が ``max_files × dir 数`` になる。worktree を多く持つ PJ では daily の走査量が
     事実上無制限化するため、選択を slug 単位に集約する。同 mtime のタイブレークはパス文字列で
     固定して決定論にする。
+
+    Returns:
+        ``(選択された transcript, dir 単位の列挙エラー [{"dir", "error"}...])``
+
+    列挙エラーを無記録で ``continue`` すると、その dir には空の transcript リストが渡って
+    ``collect_signals`` は正常終了し、**1 件も読めていない PJ が成功として数えられる**
+    （権限喪失が failed_dirs / failed_projects / 終了コード / daily ログの全経路で健全に
+    見える沈黙モード）。呼び出し側が failed_dirs へ畳めるよう理由付きで返す。
     """
     if max_files <= 0:
-        return []
+        return [], []
     files: List[Path] = []
+    errors: List[Dict[str, str]] = []
     for d in dirs:
         try:
             files.extend(p for p in d.glob("*.jsonl") if p.is_file())
-        except OSError:
+        except OSError as exc:
+            errors.append({"dir": str(d), "error": f"{type(exc).__name__}: {exc}"})
             continue
     def _key(p: Path):
         try:
@@ -105,7 +117,7 @@ def _select_transcripts(dirs: List[Path], max_files: int) -> List[Path]:
             mtime = 0.0
         return (-mtime, str(p))
     files.sort(key=_key)
-    return files[:max_files]
+    return files[:max_files], errors
 
 
 def _count_unattributed_denies(errors_rows: List[Dict[str, Any]]) -> int:
@@ -174,6 +186,7 @@ def detect_all_projects(
          "skipped_dup", "total"}...],
          "failed_dirs": [{"pj_slug", "dir", "error"}...],
          "failed_projects": [{"pj_slug", "errors"}...]（全 dir が失敗した PJ）,
+         "degraded_projects": [{"pj_slug", "errors"}...]（一部 dir だけ失敗した PJ）,
          "source_errors": [str...]（errors.jsonl 等の重大ソース失敗）,
          "unattributed_deny": int（PJ 帰属を持たず除外した deny 行数・#312）}
     """
@@ -181,8 +194,8 @@ def detect_all_projects(
     agg: Dict[str, Any] = {
         "projects": 0, "written": 0, "skipped_dup": 0, "total": 0,
         "dry_run": dry_run, "per_pj": [],
-        "failed_dirs": [], "failed_projects": [], "source_errors": [],
-        "unattributed_deny": 0,
+        "failed_dirs": [], "failed_projects": [], "degraded_projects": [],
+        "source_errors": [], "unattributed_deny": 0,
     }
     if not root.is_dir():
         return agg
@@ -222,15 +235,31 @@ def detect_all_projects(
         # 件数が食い違う = 観測が嘘をつく）。
         # 上限は PJ 単位。全 dir の transcript を合算してから mtime 降順で上位 N を採る
         # （dir ごとに掛けると実効上限が dir 数倍になる・#314）。
-        selected = _select_transcripts(dirs, max_transcripts)
+        selected, enum_errors = _select_transcripts(dirs, max_transcripts)
         signals = []
         dir_errors: List[str] = []
-        for idx, pj_dir in enumerate(dirs):
+        # 列挙できなかった dir は「読めていない」ので、素通りさせず先に失敗として記録する。
+        enum_failed = {e["dir"] for e in enum_errors}
+        for e in enum_errors:
+            dir_errors.append(e["error"])
+            agg["failed_dirs"].append(
+                {"pj_slug": slug, "dir": e["dir"], "error": e["error"]}
+            )
+            if progress:
+                sys.stderr.write(
+                    f"[fleet:detect] {slug}: transcript 列挙失敗 ({e['error']})\n"
+                )
+        # deny は PJ 単位で1回だけ渡す。列挙失敗 dir を飛ばすので enumerate の index ではなく
+        # 「実際に処理した回数」で判定する（先頭 dir が落ちても deny を取りこぼさない）。
+        processed = 0
+        for pj_dir in dirs:
+            if str(pj_dir) in enum_failed:
+                continue
             try:
                 signals.extend(collect_signals(
                     slug,
                     projects_root=root,
-                    errors=errors_rows if idx == 0 else [],  # deny は PJ 単位で1回
+                    errors=errors_rows if processed == 0 else [],
                     utterances=utterances,
                     pj_dir=pj_dir,
                     transcripts=[p for p in selected if p.parent == pj_dir],
@@ -245,6 +274,7 @@ def detect_all_projects(
                 if progress:
                     sys.stderr.write(f"[fleet:detect] {slug}: skipped ({exc})\n")
                 continue
+            processed += 1
 
         if dir_errors and len(dir_errors) == len(dirs):
             # 全 dir 失敗 = この PJ は検出できていない。成功件数に混ぜると
@@ -253,6 +283,10 @@ def detect_all_projects(
             if progress:
                 sys.stderr.write(f"[{i}/{total_slugs}] {slug}: FAILED\n")
             continue
+        if dir_errors:
+            # 一部 dir だけ失敗（本体 OK・worktree NG が典型）。fail-open のまま成功に数えるが、
+            # failed_projects だけを見ていると daily ログで完全に沈黙するので別レーンで surface。
+            agg["degraded_projects"].append({"pj_slug": slug, "errors": dir_errors})
 
         detected = channel_counts(signals)
         total = len(signals)

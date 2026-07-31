@@ -92,8 +92,9 @@ def main() -> int:
     # queue が永久に EMPTY になる（鶏卵ループ）。検出は signal_key dedup で冪等なので毎朝
     # 回してよい。LLM 判定を要するチャネルは従来どおり対話 evolve 側に残す（無人で承認待ち
     # ハングしない設計は維持）。失敗しても queue 判定は続行（ingest と同じ fail-open）。
-    # detect の stdout（失敗 PJ 数・未帰属除外件数を含む最終サマリ）はこの runner のログに
-    # そのまま流れる。非 zero は「全 PJ 失敗 or ソース読み込み失敗」だけを意味する（#313）。
+    # detect の stdout（失敗 dir 数・全滅/一部失敗 PJ の内訳・未帰属除外件数を含む最終サマリ）は
+    # この runner のログにそのまま流れる。一部 dir だけ失敗した PJ も「一部」として出るので、
+    # rc=0 でも劣化は追える。非 zero は「全 PJ 失敗 or ソース読み込み失敗」だけを意味する（#313）。
     print(f"[evolve-daily-run] fleet detect …", flush=True)
     rc_detect = subprocess.run(fleet + ["detect", "--quiet"]).returncode
     if rc_detect != 0:
