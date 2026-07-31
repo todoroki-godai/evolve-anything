@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(optimize_history_store): timestamp の tz 不統一を chokepoint で正規化（#297）** — `optimize_history` の writer 3箇所のうち `run_loop.py` / `genetic-prompt-optimizer/scripts/optimize.py` が `datetime.now()`（naive ローカル）で書いており、`fitness_evolution.py`（PR #296 で aware UTC 修正済み）と混在すると JST 環境で 9 時間ずれた instant として比較されうる不整合があった。`optimize_history_store.append_entry` が書き込み直前に必ず通す `normalize_entry_timestamp` を追加し、writer の tz 実装に依存せず timestamp を aware UTC へ正規化（timestamp 欠落は現在時刻の aware UTC を付与、naive は読み側 `fleet.queue_verify._parse_iso` と同じ解釈＝`astimezone()` でローカル解釈してから UTC 化、aware は instant を変えず UTC 表記へ統一）。`optimize.py` の `save_history_entry` は `history_file` 直接指定で `append_entry` を経由しない別書き込み経路のため、同じ chokepoint 関数を明示的に呼んで揃えた。あわせて残り2 writer も `datetime.now(timezone.utc)` に統一（二重の安全側）。TDD +9件・決定論・LLM 非依存。
+
 ## [1.124.0] - 2026-07-31
 
 ### Added

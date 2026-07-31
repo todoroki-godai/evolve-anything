@@ -16,7 +16,7 @@ import concurrent.futures
 import json
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -310,14 +310,14 @@ class DirectPatchOptimizer:
         history_file 未指定時は store 経由で current project slug を解決する。
         run 成果物（run_dir 配下）とは分離する。
         """
+        import optimize_history_store as _store
         if history_file is None:
-            import optimize_history_store as _store
             history_file = _store.history_path(_store.resolve_slug())
         best = result.get("best_individual", {})
         entry = {
             "run_id": result.get("run_id", self.run_id),
             "target": str(self.target_path),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "strategy": result.get("strategy", "auto"),
             "corrections_used": result.get("corrections_used", 0),
             "fitness_func": result.get("fitness_func", self.fitness_func),
@@ -353,6 +353,10 @@ class DirectPatchOptimizer:
             except Exception as e:  # noqa: BLE001
                 print(f"[optimize] provenance 組立に失敗: {e}", file=sys.stderr)
             _ep.attach_provenance(entry, prov)  # None なら unknown envelope
+        # この書き込みは optimize_history_store.append_entry を経由しない別経路
+        # （history_file を直接指定してテスト等から呼べる互換性のため）。#297: timestamp
+        # の tz 正規化は chokepoint 関数を共有し、append_entry と同じ規約に揃える。
+        _store.normalize_entry_timestamp(entry)
         history_file.parent.mkdir(parents=True, exist_ok=True)
         with open(history_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")

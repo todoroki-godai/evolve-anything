@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -111,11 +112,43 @@ def load_history(slug: str) -> List[Dict[str, Any]]:
     return out
 
 
+def normalize_entry_timestamp(entry: Dict[str, Any]) -> None:
+    """entry の ``timestamp`` を aware UTC の ISO8601 文字列へ正規化する（in-place）。
+
+    writer ごとに naive ローカル / aware UTC が混在する tz 不統一（#297）を、
+    writer 側の実装に依存せずここ 1 箇所で吸収する chokepoint。
+
+    - キー無し・None: 現在時刻の aware UTC を付与する
+    - naive（tz 情報無し）文字列: ``datetime.astimezone()`` でシステムローカル時刻として
+      解釈してから aware 化する。読み側 ``fleet.queue_verify._parse_iso`` と同じ解釈に
+      揃えないと、書き込み時と読み込み時で別の tz 前提を使うことになり 9 時間ずれが
+      別の形で再発するため、必ず同じ流儀（値は変えず tzinfo だけ付与）に合わせる
+    - aware 文字列: instant は変えず UTC 表記に統一する（表記ゆれの解消のみ）
+    - 文字列でない・パース不能: 変更しない（形式契約外のデータを壊さない）
+    """
+    ts = entry.get("timestamp")
+    if ts is None:
+        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        return
+    if not isinstance(ts, str):
+        return
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    entry["timestamp"] = dt.astimezone(timezone.utc).isoformat()
+
+
 def append_entry(entry: Dict[str, Any], slug: str) -> None:
     """slug の履歴に 1 レコード追記する（親ディレクトリは自動作成）。
 
-    冪等性（同一 id の二重記録防止）は呼び出し側の責務。本関数は純 append。
+    冪等性（同一 id の二重記録防止）は呼び出し側の責務。本関数は純 append だが、
+    ``timestamp`` だけは writer 依存の tz 不統一を防ぐため ``normalize_entry_timestamp``
+    で書き込み直前に正規化する（#297）。
     """
+    normalize_entry_timestamp(entry)
     path = history_path(slug)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:

@@ -8,6 +8,7 @@ git は subprocess で叩くが LLM は呼ばない（no-llm-in-tests 遵守）�
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,85 @@ class TestAppendAndLoad:
         path.write_text('{"id": "ok"}\n\nnot-json\n{"id": "ok2"}\n')
         loaded = store.load_history("proj")
         assert [r["id"] for r in loaded] == ["ok", "ok2"]
+
+    def test_append_entry_normalizes_naive_timestamp(self, tmp_path, monkeypatch):
+        """#297: append_entry を通した naive timestamp は aware UTC で永続化される。"""
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        entry = {"id": "a", "timestamp": "2026-07-31T09:00:00"}
+        store.append_entry(entry, "proj")
+        loaded = store.load_history("proj")
+        dt = datetime.fromisoformat(loaded[0]["timestamp"])
+        assert dt.tzinfo is not None
+        assert dt.utcoffset() == timedelta(0)
+
+    def test_append_entry_adds_timestamp_when_missing(self, tmp_path, monkeypatch):
+        """#297: timestamp キー無し entry にも store 側が aware UTC を付与する。"""
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        entry = {"id": "a"}
+        store.append_entry(entry, "proj")
+        loaded = store.load_history("proj")
+        assert "timestamp" in loaded[0]
+        dt = datetime.fromisoformat(loaded[0]["timestamp"])
+        assert dt.tzinfo is not None
+
+
+class TestNormalizeEntryTimestamp:
+    """#297: optimize_history の timestamp tz 不統一を chokepoint で吸収する。"""
+
+    def test_missing_timestamp_gets_aware_utc(self):
+        entry = {"id": "a"}
+        store.normalize_entry_timestamp(entry)
+        dt = datetime.fromisoformat(entry["timestamp"])
+        assert dt.tzinfo is not None
+        assert dt.utcoffset() == timedelta(0)
+
+    def test_none_timestamp_gets_aware_utc(self):
+        entry = {"id": "a", "timestamp": None}
+        store.normalize_entry_timestamp(entry)
+        dt = datetime.fromisoformat(entry["timestamp"])
+        assert dt.tzinfo is not None
+        assert dt.utcoffset() == timedelta(0)
+
+    def test_naive_timestamp_interpreted_as_local_then_converted_to_utc(self):
+        """naive は queue_verify._parse_iso と同じ流儀（astimezone）でローカル解釈してから
+        UTC 化する。読み書きの解釈がずれると 9 時間ずれが別の形で再発するため、
+        astimezone() を直接使った期待値と突き合わせて一致を検証する。
+        """
+        naive = "2026-07-31T09:00:00"
+        entry = {"id": "a", "timestamp": naive}
+        store.normalize_entry_timestamp(entry)
+
+        expected = datetime.fromisoformat(naive).astimezone().astimezone(timezone.utc)
+        dt = datetime.fromisoformat(entry["timestamp"])
+        assert dt.tzinfo is not None
+        assert dt == expected
+
+    def test_aware_timestamp_normalized_to_utc_without_changing_instant(self):
+        aware = "2026-07-31T09:00:00+09:00"
+        entry = {"id": "a", "timestamp": aware}
+        store.normalize_entry_timestamp(entry)
+
+        dt = datetime.fromisoformat(entry["timestamp"])
+        original = datetime.fromisoformat(aware)
+        assert dt.tzinfo is not None
+        assert dt == original  # instant は不変
+        assert dt.utcoffset() == timedelta(0)  # 表記は UTC に統一
+
+    def test_zulu_timestamp_normalized(self):
+        entry = {"id": "a", "timestamp": "2026-07-31T00:00:00Z"}
+        store.normalize_entry_timestamp(entry)
+        dt = datetime.fromisoformat(entry["timestamp"])
+        assert dt.utcoffset() == timedelta(0)
+
+    def test_non_string_timestamp_left_unchanged(self):
+        entry = {"id": "a", "timestamp": 12345}
+        store.normalize_entry_timestamp(entry)
+        assert entry["timestamp"] == 12345
+
+    def test_unparsable_timestamp_left_unchanged(self):
+        entry = {"id": "a", "timestamp": "not-a-timestamp"}
+        store.normalize_entry_timestamp(entry)
+        assert entry["timestamp"] == "not-a-timestamp"
 
 
 class TestLoadHistoryUnion:
