@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(correction_semantic, verbosity): LLM バッチ判定の JSON パース失敗が沈黙で握り潰される非対称を修正（#273）** — `correction_semantic/prompt.py` の `parse_verdicts` と `verbosity/judge.py` の `parse_json_array` は、応答が壊れた JSON のとき「該当なし（空リスト）」と区別なくフォールバックしていたため、応答**欠損**バッチは再試行される一方で応答が**壊れている**バッチだけ判定済みに確定し二度と再判定されない非対称があった（correction_semantic は group 全件が誤って `judged_keys` へ、verbosity は全件 `verbose=False` の偽陰性 verdict が永続化）。`parse_verdicts_result` / `parse_json_array_result` を新設し `{"ok": bool, ...}` でパース成否を分離、`ok=False` を応答欠損と同じ「未判定のまま再試行」経路へ合流させた（旧関数は後方互換 wrapper として残置）。失敗件数は `ingest_judgement_results` の `parse_failed_batches` / `run_judge` の `parse_failed` として返り値に追加。verbosity 側は新規ストア無しで既存の `audit/sections_verbosity.py` の「未判定」表示に自然合流する。TDD 新規テスト（副作用テスト含む）。
+
 ## [1.124.0] - 2026-07-31
 
 ### Added

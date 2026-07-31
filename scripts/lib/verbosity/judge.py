@@ -84,20 +84,41 @@ def call_haiku(prompt: str, model: str = "haiku") -> str:
     return out.stdout.strip()
 
 
-def parse_json_array(s: str) -> List[dict]:
-    """LLM 応答（前後にマークダウン混入しうる）から JSON 配列を抽出する。"""
+def parse_json_array_result(s: str) -> Dict[str, object]:
+    """LLM 応答（前後にマークダウン混入しうる）から JSON 配列を抽出し、パース成否も返す（#273）。
+
+    「解釈できない（壊れた JSON・配列の開始/終了が見つからない）」場合は ``ok=False``。
+    呼び出し側はこれを「該当なし（0件）」と区別し、verdict を書かず未判定のまま残す
+    こと（応答欠損時と同じ「再試行に回す」経路に合流させる）。
+
+    Returns:
+        {"ok": bool, "items": [dict, ...]}
+    """
     s = (s or "").strip()
+    if not s:
+        return {"ok": False, "items": []}
     if s.startswith("```"):
         s = s.split("```", 2)[1] if "```" in s[3:] else s
         s = s.lstrip("json").strip("`\n ")
     start, end = s.find("["), s.rfind("]")
     if start == -1 or end == -1:
-        return []
+        return {"ok": False, "items": []}
     try:
         arr = json.loads(s[start:end + 1])
     except (json.JSONDecodeError, ValueError):
-        return []
-    return [x for x in arr if isinstance(x, dict)]
+        return {"ok": False, "items": []}
+    if not isinstance(arr, list):
+        return {"ok": False, "items": []}
+    return {"ok": True, "items": [x for x in arr if isinstance(x, dict)]}
+
+
+def parse_json_array(s: str) -> List[dict]:
+    """LLM 応答（前後にマークダウン混入しうる）から JSON 配列を抽出する（後方互換 wrapper）。
+
+    壊れた/空の応答は [] を返す（従来どおり・ok/失敗の区別が要る呼び出し側は
+    `parse_json_array_result` を使うこと。#273 で desync を避けるため両者は 1 実装を共有する）。
+    """
+    return parse_json_array_result(s)["items"]
 
 
 def estimate_cost(pending: int, batch_size: int) -> Dict:
@@ -157,6 +178,7 @@ def run_judge(
         dry-run: {"dry_run": True, "candidates", "judged", "pending", "cost": {...}}
         run:     {"dry_run": False, "judged_now", "verbose", "verbose_rate",
                   "patterns": {pat: count}, "weak_written", "verdicts_written",
+                  "parse_failed"（#273: JSON 解釈不能で未判定のまま残したバッチ数）,
                   "suggestion": str|None}
     """
     out = out if out is not None else sys.stdout
@@ -203,6 +225,7 @@ def run_judge(
             "patterns": {},
             "weak_written": 0,
             "verdicts_written": 0,
+            "parse_failed": 0,
             "suggestion": None,
         }
 
@@ -210,6 +233,7 @@ def run_judge(
     verbose_count = 0
     new_verdicts: List[dict] = []
     verbose_records: List[dict] = []
+    parse_failed = 0  # #273: 応答は届いたが JSON 配列が解釈不能だったバッチ数
 
     for bi in range(0, len(target), batch_size):
         batch = target[bi: bi + batch_size]
@@ -219,7 +243,15 @@ def run_judge(
         except Exception as e:  # noqa: BLE001 - バッチ失敗は次バッチへ継続
             print(f"  batch {bi // batch_size}: 呼び出し失敗 ({e})", file=sys.stderr)
             continue
-        by_i = {v.get("i"): v for v in parse_json_array(raw)}
+        parsed = parse_json_array_result(raw)
+        if not parsed["ok"]:
+            # #273: JSON 解釈不能。verdict を書くと全件 verbose=False の偽陰性が永続化される
+            # ため、呼び出し失敗と同様にこのバッチをスキップし hash を pending のまま残す
+            # （次回 judge --run で再試行）。
+            parse_failed += 1
+            print(f"  batch {bi // batch_size}: 応答 JSON 解釈失敗（スキップ・次回再試行）", file=sys.stderr)
+            continue
+        by_i = {v.get("i"): v for v in parsed["items"]}
         for i, c in enumerate(batch):
             v = by_i.get(i, {})
             is_verbose = bool(v.get("verbose"))
@@ -252,6 +284,8 @@ def run_judge(
     rate = round(verbose_count / n, 4) if n else None
     print(f"\n=== 判定結果（今回 {n} 件 / PJ: {slug}）===", file=out)
     print(f"無駄に冗長と判定: {verbose_count} 件 ({(rate or 0) * 100:.0f}%)", file=out)
+    if parse_failed:
+        print(f"判定不能バッチ: {parse_failed} 件（次回 judge --run で再試行）", file=out)
     if pat_counter:
         print("\n冗長パターン（多い順）:", file=out)
         for p, c in pat_counter.most_common():
@@ -275,6 +309,7 @@ def run_judge(
         "patterns": dict(pat_counter),
         "weak_written": weak_written,
         "verdicts_written": n,
+        "parse_failed": parse_failed,
         "suggestion": suggestion,
     }
 

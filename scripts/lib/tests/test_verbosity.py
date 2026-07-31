@@ -200,6 +200,31 @@ def test_judge_dryrun_does_not_call_llm_or_write(data_dir, capsys):
     assert "--run" in out
 
 
+# ────────────── parse_json_array_result: 空とパース失敗の区別（#273）──────────
+
+def test_parse_json_array_result_ok_true_on_valid_array() -> None:
+    raw = json.dumps([{"i": 0, "verbose": True}])
+    result = _judge.parse_json_array_result(raw)
+    assert result["ok"] is True
+    assert len(result["items"]) == 1
+
+
+def test_parse_json_array_result_ok_false_on_malformed() -> None:
+    result = _judge.parse_json_array_result("not json at all {{{")
+    assert result["ok"] is False
+    assert result["items"] == []
+
+
+def test_parse_json_array_result_ok_false_on_empty_response() -> None:
+    assert _judge.parse_json_array_result("")["ok"] is False
+    assert _judge.parse_json_array_result(None)["ok"] is False
+
+
+def test_parse_json_array_backward_compat_delegates_to_result() -> None:
+    raw = json.dumps([{"i": 0, "verbose": True}])
+    assert _judge.parse_json_array(raw) == _judge.parse_json_array_result(raw)["items"]
+
+
 # ───────────────────────────── judge: --run (mock) ───────────────
 
 def test_judge_run_persists_verdicts_and_emits_weak_signals(data_dir, capsys):
@@ -251,6 +276,31 @@ def test_judge_run_no_pending_is_noop(data_dir):
     assert res["judged_now"] == 0
 
 
+def test_judge_run_malformed_json_does_not_persist_verdicts(data_dir, capsys):
+    """#273: 応答は届いたが JSON が壊れているバッチは verdict を書かず未判定のまま残す。
+
+    従来は parse_json_array が [] にフォールバックし、全件 verbose=False の verdict が
+    永続化されていた（偽陰性の永続化）。呼び出し失敗（call_haiku 例外）と同様に
+    スキップし、次回 judge --run で再試行できるようにする。
+    """
+    _write_candidates(data_dir, [_cand("h1"), _cand("h2")])
+    weak_path = data_dir / "weak_signals.jsonl"
+
+    with mock.patch.object(_judge, "call_haiku", return_value="not json at all {{{") as m_call:
+        res = _judge.run_judge(
+            SLUG, run=True, batch_size=6, data_dir=data_dir, weak_signals_path=weak_path
+        )
+
+    assert m_call.call_count == 1
+    assert res["judged_now"] == 0
+    assert res["parse_failed"] == 1
+    # verdicts が 1 件も永続化されない（対象 hash が judged に入らない = 次回再試行される）
+    assert _vstore.read_verdicts(SLUG, data_dir=data_dir) == {}
+    assert not weak_path.exists()
+    err = capsys.readouterr().err
+    assert "解釈失敗" in err
+
+
 def test_judge_skips_already_judged(data_dir):
     """判定済み hash は再判定対象から除外する（dedup）。"""
     _write_candidates(data_dir, [_cand("h1"), _cand("h2")])
@@ -278,7 +328,40 @@ def test_section_shows_pending_when_unjudged(data_dir):
     assert lines is not None
     body = "\n".join(lines)
     assert "未判定" in body
-    assert "judge.py --run" in body
+
+
+def test_section_silent_on_pending_after_parse_failure_when_fully_judged(data_dir, capsys):
+    """#273: パース失敗バッチ由来の pending は、全件が判定済みに転じれば advisory も沈黙する。
+
+    パース失敗（judge --run 1 回目）→ 未判定として残る → 再実行で正しく判定できれば
+    「未判定」行は出ない（clean 時は沈黙という observability 契約）。
+    """
+    _write_candidates(data_dir, [_cand(f"h{i}") for i in range(5)])
+    weak_path = data_dir / "weak_signals.jsonl"
+
+    # 1 回目: JSON が壊れていて誰も判定されない。
+    with mock.patch.object(_judge, "call_haiku", return_value="not json"):
+        res1 = _judge.run_judge(
+            SLUG, run=True, batch_size=6, data_dir=data_dir, weak_signals_path=weak_path
+        )
+    assert res1["parse_failed"] == 1
+    assert _vstore.read_judged_hashes(SLUG, data_dir=data_dir) == set()
+
+    # 2 回目: 正しい JSON で全件判定。
+    fake = json.dumps([{"i": i, "verbose": False, "patterns": [], "note": ""} for i in range(5)])
+    with mock.patch.object(_judge, "call_haiku", return_value=fake):
+        res2 = _judge.run_judge(
+            SLUG, run=True, batch_size=6, data_dir=data_dir, weak_signals_path=weak_path
+        )
+    assert res2["judged_now"] == 5
+
+    with mock.patch("audit.sections_verbosity._slug_for", return_value=SLUG):
+        lines = build_verbosity_section(Path("/x/evolve-anything"))
+    assert lines is not None
+    body = "\n".join(lines)
+    # 全件判定済み（未判定 0 件）なので judge --run 誘導行は出ない（silence when clean）。
+    assert "未判定 0 件" in body
+    assert "追加判定できます" not in body
 
 
 def test_section_shows_rate_and_patterns(data_dir):

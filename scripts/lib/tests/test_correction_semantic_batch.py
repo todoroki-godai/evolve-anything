@@ -221,6 +221,60 @@ def test_ingest_missing_response_does_not_mark_judged(tmp_path: Path) -> None:
     assert cs_store.read_judged_keys(judged) == set()
 
 
+def test_ingest_malformed_json_does_not_mark_judged(tmp_path: Path) -> None:
+    """#273: 応答は届いたが JSON が壊れているバッチも、応答欠損と同様に未判定のまま残す。
+
+    従来は parse_verdicts が [] にフォールバックし、group 全件が「判定済み・非修正」として
+    judged_keys に確定していた（応答欠損は再試行されるのに壊れた応答は再試行されない非対称）。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # 応答テキストは届いているが JSON として壊れている。
+    responses = {rid: "```json\n{not valid json at all"}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["corrections"] == 0
+    assert res["non_corrections"] == 0
+    assert res["parse_failed_batches"] == 1
+    # 判定進捗に何も記録されない（対象発話が judged_keys に入らない = 次回再判定される）
+    assert cs_store.read_judged_keys(judged) == set()
+    # weak_signals / 個人辞書にも何も書かれない。
+    assert not ws_store.exists()
+    assert not idioms_store.exists()
+
+
+def test_ingest_legitimate_empty_verdicts_still_marks_judged(tmp_path: Path) -> None:
+    """正しい JSON で verdicts が空配列（モデルが「該当なし」と判定）は従来どおり判定済みにする。
+
+    パース失敗（ok=False）と正当な空リスト（ok=True・該当なし）を区別できないと、
+    正当な「該当なし」判定まで再試行対象にしてしまい無駄な再判定ループになる。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = {rid: json.dumps({"verdicts": []})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["parse_failed_batches"] == 0
+    assert res["non_corrections"] == 3
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+
+
 def test_estimate_tokens() -> None:
     est = cs_batch.estimate_tokens(_utts(), batch_size=30)
     assert est["utterances"] == 3
