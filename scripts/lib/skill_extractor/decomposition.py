@@ -47,6 +47,14 @@ ROUTING_KEYWORD_LIMIT = 5
 SAMPLE_TRIGGER_LIMIT = 3
 """routing.sample_triggers に残す代表プロンプトの最大数。"""
 
+SAMPLE_TRIGGER_CHAR_LIMIT = 300
+"""sample_triggers / sample_failure_triggers 1件あたりの最大文字数（#322）。
+
+harness/スキルが注入する長文 system prompt（例: artifact-design 全文 約8k字）が
+誤って user_prompt として拾われた場合でも、代表プロンプトとして result JSON に
+埋め込む量を抑える切り詰め上限。件数上限は SAMPLE_TRIGGER_LIMIT が担い、こちらは
+1件あたりの文字数を担う。"""
+
 CORPUS_DF_MIN_SKILLS = 5
 """corpus document-frequency 減衰を適用する最小スキル数。
 
@@ -111,6 +119,27 @@ _BASE_EXCLUDE = _STOPWORDS | _EXTENSIONS
 
 
 # ── 公開関数 ──────────────────────────────────────────────
+
+
+def truncate_sample_text(text: str, limit: int = SAMPLE_TRIGGER_CHAR_LIMIT) -> str:
+    """sample prompt/trigger を limit 文字に切り詰める（#322）。
+
+    skill_extractor.py の ``sample_prompts`` とこのモジュールの
+    ``routing.sample_triggers`` は同じ TrajectoryRecord 群から同じ手順で作られる
+    ため、両者が同じ切り詰め結果になるよう単一ソースの関数として公開する
+    （discover/runner.py の重複排除が「一致すれば片方を削る」判定をするため、
+    切り詰め方式がずれると一致しなくなり判定が効かなくなる）。
+
+    Args:
+        text: 切り詰め対象の文字列。
+        limit: 最大文字数。
+
+    Returns:
+        limit 以下ならそのまま、超える場合は先頭 limit 文字 + 省略記号 "…"。
+    """
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
 
 
 def decompose_candidate(
@@ -206,7 +235,8 @@ def _routing(
     seen: set = set()
     for p in prompts:
         if p not in seen:
-            sample_triggers.append(p)
+            # dedup は切り詰め前の全文で判定（切り詰め後の衝突による誤 dedup を防ぐ）
+            sample_triggers.append(truncate_sample_text(p))
             seen.add(p)
         if len(sample_triggers) >= SAMPLE_TRIGGER_LIMIT:
             break
@@ -293,7 +323,7 @@ def _failure_analysis(records: List[TrajectoryRecord]) -> Dict[str, Any]:
         p = (r.user_prompt or "").strip()
         if not p or p in seen:
             continue
-        sample_failure_triggers.append(p)
+        sample_failure_triggers.append(truncate_sample_text(p))
         seen.add(p)
         if len(sample_failure_triggers) >= SAMPLE_TRIGGER_LIMIT:
             break

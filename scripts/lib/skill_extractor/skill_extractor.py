@@ -27,6 +27,7 @@ from skill_extractor.effectiveness import (
 from skill_extractor.decomposition import (
     decompose_candidate,
     corpus_frequent_tokens,
+    truncate_sample_text,
 )
 
 # ── 定数 ──────────────────────────────────────────────────
@@ -216,14 +217,17 @@ def _collect_sample_prompts(
         max_samples: 最大収集件数。
 
     Returns:
-        user_prompt の文字列リスト（重複除去済み）。
+        user_prompt の文字列リスト（重複除去済み・SAMPLE_TRIGGER_CHAR_LIMIT 文字に
+        切り詰め済み。#322: 注入プロンプト肥大化対策）。
     """
     seen: set = set()
     prompts: List[str] = []
     for rec in records:
         p = rec.user_prompt.strip()
         if p and p not in seen:
-            prompts.append(p)
+            # dedup は切り詰め前の全文で判定（decomposition.py の routing.sample_triggers
+            # と同じ切り詰め関数を使い、両者が一致する場合の重複排除 (#322) を成立させる）
+            prompts.append(truncate_sample_text(p))
             seen.add(p)
         if len(prompts) >= max_samples:
             break

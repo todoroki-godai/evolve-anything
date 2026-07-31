@@ -20,6 +20,7 @@ from skill_extractor.decomposition import (
     corpus_frequent_tokens,
     ROUTING_KEYWORD_LIMIT,
     SAMPLE_TRIGGER_LIMIT,
+    SAMPLE_TRIGGER_CHAR_LIMIT,
 )
 from skill_extractor.skill_extractor import extract_skill_candidates
 
@@ -95,6 +96,19 @@ class TestRouting:
         d = decompose_candidate(records)
         assert d["routing"]["sample_triggers"]
         assert all(isinstance(s, str) for s in d["routing"]["sample_triggers"])
+
+    def test_sample_triggers_truncated_to_char_limit(self):
+        """長文（注入プロンプト等）は SAMPLE_TRIGGER_CHAR_LIMIT 文字に切り詰める（#322）。"""
+        long_prompt = "A" * (SAMPLE_TRIGGER_CHAR_LIMIT + 500)
+        records = [_rec(user_prompt=long_prompt)]
+        d = decompose_candidate(records)
+        for trig in d["routing"]["sample_triggers"]:
+            assert len(trig) <= SAMPLE_TRIGGER_CHAR_LIMIT + 1  # +省略記号1字
+
+    def test_short_sample_triggers_not_truncated(self):
+        records = [_rec(user_prompt="実装して")]
+        d = decompose_candidate(records)
+        assert d["routing"]["sample_triggers"] == ["実装して"]
 
 
 # ── routing: stopword 拡充（#387 — 実 PJ で if/not/md ノイズ露見）──────
@@ -295,6 +309,14 @@ class TestFailureAnalysis:
         assert fa["failure_rate"] == 0.0
         assert fa["sample_failure_triggers"] == []
         assert fa["is_failure_derived"] is False
+
+    def test_sample_failure_triggers_truncated_to_char_limit(self):
+        """failure trigger も SAMPLE_TRIGGER_CHAR_LIMIT 文字に切り詰める（#322）。"""
+        long_prompt = "B" * (SAMPLE_TRIGGER_CHAR_LIMIT + 500)
+        records = [_rec(outcome="failure", user_prompt=long_prompt)]
+        fa = decompose_candidate(records)["failure_analysis"]
+        for trig in fa["sample_failure_triggers"]:
+            assert len(trig) <= SAMPLE_TRIGGER_CHAR_LIMIT + 1
 
 
 # ── extract_skill_candidates への統合 ─────────────────────────
