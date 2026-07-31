@@ -65,6 +65,8 @@ def _is_dispatch(text: str) -> bool:
 def detect_permission_deny(
     error_records: Iterable[Dict[str, Any]],
     pj_slug: str,
+    *,
+    strict: bool = False,
 ) -> List[WeakSignal]:
     """errors.jsonl の permission_denied レコードから弱シグナルを作る。
 
@@ -76,6 +78,9 @@ def detect_permission_deny(
     Args:
         error_records: errors.jsonl をパースした dict のイテラブル
         pj_slug:       照合用 slug（呼び出し側が確定して渡す）
+        strict:        未帰属レコードを除外する（全 PJ へ fan-out する ``fleet detect``
+                       専用・#312）。既定の寛容判定のまま fan-out すると、未帰属行が全 slug で
+                       マッチし dedup 後に slug 辞書順の先頭 PJ へ誤帰属する。
     """
     from pj_slug import record_project_match
 
@@ -83,7 +88,7 @@ def detect_permission_deny(
     for rec in error_records:
         if rec.get("type") != "permission_denied":
             continue
-        if not record_project_match(rec, pj_slug):
+        if not record_project_match(rec, pj_slug, strict=strict):
             continue
         provenance = {
             "detector": "permission_deny",

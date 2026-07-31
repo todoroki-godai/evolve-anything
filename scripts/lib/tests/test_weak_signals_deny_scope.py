@@ -55,3 +55,20 @@ def test_no_slug_keeps_everything():
     """slug 未確定なら判定不能として従来どおり全件返す。"""
     out = detect_permission_deny([_deny("docs-platform")], "")
     assert len(out) == 1
+
+
+# ── strict（fan-out 文脈）・#312 ───────────────────────────────────
+# 単一 PJ 文脈（evolve/reflect）は「判定不能なら落とさない」が安全側なので既定は寛容のまま。
+# 全 PJ へ fan-out する fleet detect は逆で、寛容に通すと未帰属レコードが必ずどこか 1 PJ
+# （dedup 後は slug 辞書順の先頭）に誤帰属する。同じ述語を文脈で切り替える。
+
+def test_strict_excludes_unattributed_deny():
+    """strict では未帰属 deny を当 PJ のシグナルにしない。"""
+    assert detect_permission_deny([_deny(None)], "amamo", strict=True) == []
+
+
+def test_strict_keeps_own_project_deny():
+    """strict でも当 PJ に帰属する deny は従来どおり検出する。"""
+    out = detect_permission_deny([_deny("amamo"), _deny(None)], "amamo", strict=True)
+    assert len(out) == 1
+    assert out[0].pj_slug == "amamo"

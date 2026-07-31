@@ -376,6 +376,35 @@ def test_record_match_project_path_takes_priority_over_project():
     assert pj_slug.record_project_match(rec, "myproject") is True
 
 
+# ── strict モード（fan-out 文脈の未帰属除外・#312）────────────────────────
+def test_record_match_strict_rejects_unattributed():
+    """strict は未帰属レコードを除外する（全 PJ fan-out で 1 PJ に誤帰属させない）。"""
+    assert pj_slug.record_project_match({}, "myproject", strict=True) is False
+    assert pj_slug.record_project_match(
+        {"project_path": None}, "myproject", strict=True) is False
+
+
+def test_record_match_strict_keeps_matching_record():
+    """strict でも帰属が一致するレコードは通す（除外は判定不能のときだけ）。"""
+    assert pj_slug.record_project_match(
+        {"project_path": "myproject"}, "myproject", strict=True) is True
+
+
+def test_record_match_strict_rejects_when_slug_unknown():
+    """strict は slug 未確定（判定不能）も除外側に倒す。"""
+    assert pj_slug.record_project_match(
+        {"project_path": "myproject"}, "", strict=True) is False
+
+
+def test_record_project_attribution_returns_raw_or_none():
+    """帰属値の抽出は単一ソース（strict 判定と未帰属カウントが同じ規則を使う）。"""
+    assert pj_slug.record_project_attribution({"project_path": "a"}) == "a"
+    assert pj_slug.record_project_attribution({"project": "b"}) == "b"
+    assert pj_slug.record_project_attribution({"project_name": "c"}) == "c"
+    assert pj_slug.record_project_attribution({}) is None
+    assert pj_slug.record_project_attribution({"project_path": ""}) is None
+
+
 # ==================================================================
 # CC projects dir の encoded 名候補（transcript / memory の単一ソース）（#275）
 # ==================================================================

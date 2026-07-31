@@ -270,7 +270,24 @@ def resolve_cc_memory_dir(path_or_cwd: Optional[Union[str, Path]] = None) -> Pat
     return base / candidates[0] / "memory"
 
 
-def record_project_match(rec: dict, current_slug: Optional[str]) -> bool:
+def record_project_attribution(rec: dict) -> Optional[str]:
+    """レコードの PJ 帰属値（``project_path`` → ``project`` → ``project_name``）を返す。
+
+    帰属フィールドが 1 つも無い（＝未帰属）なら None。``record_project_match`` の判定と
+    「未帰属レコードを数える」側（fleet detect の除外カウント・#312）が同じ規則を使うための
+    単一ソース。両者が別々に `rec.get(...)` を書くと片方だけ直して desync する
+    （pitfall_copied_parse_convention_partial_fix）。
+    """
+    raw = rec.get("project_path") or rec.get("project") or rec.get("project_name")
+    return str(raw) if raw else None
+
+
+def record_project_match(
+    rec: dict,
+    current_slug: Optional[str],
+    *,
+    strict: bool = False,
+) -> bool:
     """レコード（corrections 等）が current_slug のスコープに属するか判定する（#206）。
 
     auto_memory Stop hook が project_path フィルタ無しで全 PJ 共有ストア（corrections.jsonl）
@@ -287,18 +304,25 @@ def record_project_match(rec: dict, current_slug: Optional[str]) -> bool:
         （フルパス・旧 rename slug も本体 slug に正規化してから突合する）
       - 不一致なら False
 
+    ``strict=True``（fan-out 文脈・#312）は上記 2 つの「判定不能なら許容」を**除外**に反転する。
+    単一 PJ 呼び出し（全 PJ 共有ストアから当 PJ 分を読む #206 の文脈）では寛容が安全側だが、
+    全 PJ へ fan-out する ``fleet detect`` では逆で、未帰属レコードが全 slug でマッチし
+    dedup 後に必ずどこか 1 PJ（slug 辞書順の先頭）へ決定論的に誤帰属する。同じ述語を
+    両文脈で共有しつつ、寛容側／厳格側を呼び出し側が明示的に選ぶ。
+
     Args:
         rec: correction 等の 1 レコード（dict）。
         current_slug: 当 PJ の slug（呼び出し側で解決済みのもの）。
+        strict: True なら判定不能（slug 未確定 / レコード未帰属）を除外する。
 
     Returns:
-        当 PJ スコープに属する（または判定不能で寛容に許容する）なら True。
+        当 PJ スコープに属する（strict でなければ判定不能も寛容に許容）なら True。
     """
     if not current_slug:
-        return True
-    raw = rec.get("project_path") or rec.get("project") or rec.get("project_name")
+        return not strict
+    raw = record_project_attribution(rec)
     if not raw:
-        return True
+        return not strict
     rec_slug = canonical_pj_slug(pj_slug_fast(str(raw)))
     target_slug = canonical_pj_slug(pj_slug_fast(str(current_slug)))
     return rec_slug == target_slug

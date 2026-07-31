@@ -28,6 +28,21 @@ from .project_loader import enumerate_projects
 from .recall import format_hits, recall, reinforce_recall_hits
 
 
+def _positive_int(value: str) -> int:
+    """1 以上の int だけを受ける argparse type（#314）。
+
+    負数は `files[:-1]` のような意図しないスライス挙動に、0 は「無制限」とも「走査なし」とも
+    読めるので、どちらも明示的に拒否して曖昧さを残さない。
+    """
+    try:
+        num = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"整数を指定してください: {value!r}")
+    if num < 1:
+        raise argparse.ArgumentTypeError(f"1 以上を指定してください: {num}")
+    return num
+
+
 def main(argv: list[str] | None = None) -> int:
     """`bin/evolve-fleet` エントリポイント。"""
     parser = argparse.ArgumentParser(
@@ -145,8 +160,9 @@ def main(argv: list[str] | None = None) -> int:
                           help="transcript ルート (default: ~/.claude/projects)")
     detect_p.add_argument("--pj", action="append", default=None,
                           help="対象 pj_slug を絞る（複数指定可）")
-    detect_p.add_argument("--max-transcripts", type=int, default=None,
-                          help="PJ ごとの transcript 上限 "
+    detect_p.add_argument("--max-transcripts", type=_positive_int, default=None,
+                          help="PJ（slug）ごとの transcript 上限。本体 + worktree の"
+                               "全 dir を合算してから適用する "
                                "(default: 60・--backfill 時 2000)")
     detect_p.add_argument("--backfill", action="store_true",
                           help="過去チャットを遡って取りこぼしを回収する（上限を引き上げる）")
@@ -269,7 +285,8 @@ def _run_detect(args: argparse.Namespace) -> int:
     """
     import json as _json
 
-    from fleet.detect import BACKFILL_MAX_TRANSCRIPTS, detect_all_projects
+    from fleet import detect as fleet_detect
+    from fleet.detect import BACKFILL_MAX_TRANSCRIPTS, detect_exit_code
     from weak_signals.batch import DEFAULT_MAX_TRANSCRIPTS
 
     max_transcripts = args.max_transcripts
@@ -278,17 +295,18 @@ def _run_detect(args: argparse.Namespace) -> int:
             BACKFILL_MAX_TRANSCRIPTS if args.backfill else DEFAULT_MAX_TRANSCRIPTS
         )
 
-    res = detect_all_projects(
+    res = fleet_detect.detect_all_projects(
         projects_root=args.root,
         max_transcripts=max_transcripts,
         dry_run=args.dry_run,
         only=args.pj,
         progress=not args.quiet,
     )
+    rc = detect_exit_code(res)
 
     if args.json:
         print(_json.dumps(res, ensure_ascii=False, indent=2))
-        return 0
+        return rc
 
     mode = "dry-run（書き込みなし）" if args.dry_run else "書き込み"
     print(f"[fleet:detect] {res['projects']} PJ / 検出 {res['total']} 件 "
@@ -300,7 +318,20 @@ def _run_detect(args: argparse.Namespace) -> int:
         print(f"  {e['pj_slug']}: 新規 {e['written']} 件（{chans}）")
     if not hot:
         print("  新規の学習素材はありません（既に検出済み or 素材なし）")
-    return 0
+
+    # 失敗・除外は --quiet でも必ず最終サマリに出す（daily ログで沈黙モードを検知する
+    # 唯一の手がかり。silence != evaluated・#313/#312）。
+    for src in res.get("source_errors") or []:
+        print(f"  ⚠ ソース読み込み失敗: {src}")
+    failed = res.get("failed_projects") or []
+    if failed:
+        names = ", ".join(f["pj_slug"] for f in failed[:5])
+        more = f" 他 {len(failed) - 5} PJ" if len(failed) > 5 else ""
+        print(f"  ⚠ 検出失敗 {len(failed)} PJ（{names}{more}）"
+              f" / dir 単位 {len(res.get('failed_dirs') or [])} 件")
+    if res.get("unattributed_deny"):
+        print(f"  ℹ PJ 未帰属で除外した permission_deny: {res['unattributed_deny']} 件")
+    return rc
 
 
 def _run_ingest(args: argparse.Namespace) -> int:
