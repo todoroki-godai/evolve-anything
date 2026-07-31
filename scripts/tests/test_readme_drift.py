@@ -70,8 +70,16 @@ def test_validator_reports_a_missing_documented_hook() -> None:
 def test_validator_reports_stale_release_metadata() -> None:
     """Version and configurable-option claims are checked against plugin.json."""
     readme = ROOT / "README.md"
-    stale = readme.read_text(encoding="utf-8").replace(
-        "> Release metadata: **v1.123.0** · **21 userConfig options**",
+    # 現行バージョンは plugin.json から導出する（この fixture に版番号をハードコードすると
+    # リリース bump のたびにこのテストが落ち、release 手順に無関係な追従作業が生える）。
+    version = json.loads(
+        (ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )["version"]
+    current = f"> Release metadata: **v{version}** · **21 userConfig options**"
+    content = readme.read_text(encoding="utf-8")
+    assert current in content, f"README の Release metadata 行が想定と異なる: {current!r}"
+    stale = content.replace(
+        current,
         "> Release metadata: **v0.0.0** · **20 userConfig options**",
         1,
     )
