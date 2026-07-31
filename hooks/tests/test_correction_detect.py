@@ -47,6 +47,17 @@ class TestDetectCorrection:
         assert result[0] == "chigau"
         assert result[1] == 0.85
 
+    def test_chigau_pattern_hiragana(self):
+        """ひらがな「ちがう」も同義（#305 の実コーパス目視で未検出だった表記）。"""
+        result = common.detect_correction("ちがうちがう、最新にしておいてってこと")
+        assert result is not None
+        assert result[0] == "chigau"
+        assert result[1] == 0.85
+
+    def test_chigau_hiragana_requires_sentence_start(self):
+        """文中の「ちがう」では発火しない（文頭アンカーで偽陽性を抑える）。"""
+        assert common.detect_correction("この2つは実装がちがうので比較したい") is None
+
     def test_souja_nakute_pattern(self):
         result = common.detect_correction("そうじゃなくてこっちを使う")
         assert result is not None

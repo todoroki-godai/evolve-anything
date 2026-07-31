@@ -219,3 +219,53 @@ def test_malformed_lines_skipped(tmp_path):
         usage_file=usage, corrections_file=tmp_path / "c.jsonl", min_turns=20
     )
     assert result["active_sessions"] == 1
+
+
+def test_machinery_corrections_excluded_from_numerator(tmp_path):
+    """Stop hook 自己注入文の correction は capture 成功として数えない（#305/#323）。
+
+    writer 側（should_include_message）は塞いだが、過去 backfill されたレコードは
+    corrections.jsonl に残る。read 時に導出して除外し、ストアは遡及改変しない。
+    """
+    usage = tmp_path / "usage.jsonl"
+    _write_usage(usage, _usage_rows("s1", 25) + _usage_rows("s2", 25))
+    corr = tmp_path / "corr.jsonl"
+    with open(corr, "w", encoding="utf-8") as f:
+        # s1 は自己注入のみ → capture 成功として数えない
+        f.write(json.dumps({
+            "session_id": "s1",
+            "timestamp": _now_iso(),
+            "message": "Stop hook feedback:\n先送り表現を検出しました",
+        }) + "\n")
+        # s2 は本物のユーザー発話 → 数える
+        f.write(json.dumps({
+            "session_id": "s2",
+            "timestamp": _now_iso(),
+            "message": "いや、そうじゃなくて web 検索してほしい",
+        }) + "\n")
+
+    result = capture_rate.compute_capture_rate(
+        usage_file=usage, corrections_file=corr, min_turns=20,
+    )
+
+    assert result["active_sessions"] == 2
+    assert result["captured_sessions"] == 1  # s2 のみ
+    assert result["machinery_excluded"] == 1
+
+
+def test_machinery_excluded_is_zero_without_self_injection(tmp_path):
+    """自己注入が無ければ除外カウントは 0（通常時に余計な表示を出さない）。"""
+    usage = tmp_path / "usage.jsonl"
+    _write_usage(usage, _usage_rows("s1", 25))
+    corr = tmp_path / "corr.jsonl"
+    with open(corr, "w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "session_id": "s1", "timestamp": _now_iso(), "message": "ちがう、そっちじゃない",
+        }) + "\n")
+
+    result = capture_rate.compute_capture_rate(
+        usage_file=usage, corrections_file=corr, min_turns=20,
+    )
+
+    assert result["captured_sessions"] == 1
+    assert result["machinery_excluded"] == 0
