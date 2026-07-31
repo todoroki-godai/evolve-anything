@@ -102,6 +102,16 @@ def test_judge_kind_embeds_judge_context():
     assert prov["runtime"]["name"] == "claude"
 
 
+def test_deterministic_kind_rejects_judge_context():
+    """決定論評価に judge を渡すのは契約違反（非該当と観測不能の区別が壊れる）。"""
+    with pytest.raises(ValueError):
+        ep.build_provenance(
+            evaluation_kind=ep.KIND_DETERMINISTIC,
+            producer="p",
+            judge=ep.build_judge_context(model="sonnet"),
+        )
+
+
 def test_judge_kind_without_context_records_unobserved_judge():
     """判定は LLM だが条件を観測できなかった場合も、judge キー自体は残す。"""
     prov = ep.build_provenance(evaluation_kind=ep.KIND_LLM_JUDGE, producer="p")
@@ -158,6 +168,38 @@ def test_aggregate_with_no_provenance_at_all_does_not_fabricate_models():
     agg = ep.aggregate_provenance("constitutional", [None, None], layers_total=2)
     assert agg["judge_models"] == []
     assert agg["layers_with_provenance"] == 0
+
+
+def test_aggregate_detects_mixture_in_axes_other_than_model():
+    """model が同じでも effort / tool policy が違えば混在（交絡は model 軸だけではない）。"""
+    provs = [
+        ep.build_provenance(
+            evaluation_kind=ep.KIND_LLM_JUDGE,
+            producer="p",
+            judge=ep.build_judge_context(model="sonnet", effort=e),
+        )
+        for e in ("high", "max")
+    ]
+    agg = ep.aggregate_provenance("constitutional", provs, layers_total=2)
+    assert agg["judge_models"] == ["sonnet"]  # model 軸では見分けがつかない
+    assert agg["mixed_provenance"] is True
+    assert len(agg["harness_variants"]) == 2
+
+
+def test_aggregate_keeps_layer_plugin_versions_separate_from_envelope():
+    """envelope の plugin.version は「集約した時点」。layer 由来の版は別に保持する。"""
+    old = ep.build_provenance(
+        evaluation_kind=ep.KIND_LLM_JUDGE, producer="p", judge=ep.build_judge_context(model="a")
+    )
+    old["plugin"] = {"name": ep.PLUGIN_NAME, "version": "0.0.1-old"}
+    new = ep.build_provenance(
+        evaluation_kind=ep.KIND_LLM_JUDGE, producer="p", judge=ep.build_judge_context(model="a")
+    )
+    agg = ep.aggregate_provenance("constitutional", [old, new], layers_total=2)
+    assert "0.0.1-old" in agg["plugin_versions"]
+    assert agg["plugin"]["version"] == ep.plugin_version()
+    # 版が跨っていれば同一 model でも混在扱い
+    assert agg["mixed_provenance"] is True
 
 
 # --- writer 境界 -------------------------------------------------------------

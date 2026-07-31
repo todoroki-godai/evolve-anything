@@ -131,7 +131,8 @@ def build_provenance(
         # （決定論評価の「非該当」と区別するため）。
         prov["judge"] = judge if judge is not None else build_judge_context()
     elif judge is not None:
-        prov["judge"] = judge
+        # 決定論・unknown に judge を付けると「非該当」と「観測不能」の区別が壊れる。
+        raise ValueError(f"judge context is not allowed for kind {evaluation_kind!r}")
     if config is not None:
         prov["config"] = config
     if inputs is not None:
@@ -150,6 +151,25 @@ def judge_model(prov: Optional[Dict[str, Any]]) -> Optional[str]:
     return model if isinstance(model, str) and model else None
 
 
+def harness_variant(prov: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """provenance から交絡軸だけを抜いた正規形（model / effort / tool policy / 版 / runtime）。
+
+    交絡は model 軸だけではない。同じモデルでも effort やツールポリシー、プラグイン版が
+    違えば別条件なので、混在判定は model 単独でなくこの tuple 全体で行う。
+    """
+    prov = prov if isinstance(prov, dict) else {}
+    judge = prov.get("judge") if isinstance(prov.get("judge"), dict) else {}
+    plugin = prov.get("plugin") if isinstance(prov.get("plugin"), dict) else {}
+    runtime = prov.get("runtime") if isinstance(prov.get("runtime"), dict) else {}
+    return {
+        "model": judge.get("model"),
+        "effort": judge.get("effort"),
+        "tool_policy": judge.get("tool_policy"),
+        "plugin_version": plugin.get("version"),
+        "runtime": runtime.get("name"),
+    }
+
+
 def aggregate_provenance(
     producer: str,
     layer_provenances: Iterable[Optional[Dict[str, Any]]],
@@ -158,15 +178,33 @@ def aggregate_provenance(
     runtime_name: Optional[str] = None,
     recorded_at: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """レイヤー単位 provenance を集約する（単一 model へ潰さない）。
+    """レイヤー単位 provenance を集約する（単一条件へ潰さない）。
 
-    集約スコアに 1 つのモデル名を無理に入れると嘘になる。cache は別時点・別モデルで
-    生成されたレイヤーが混在しうるため、モデルの**集合**と混在フラグで表現する。
+    集約スコアに 1 つのモデル名を無理に入れると嘘になる。cache は別時点・別モデル・
+    別プラグイン版で生成されたレイヤーが混在しうるため、**集合**と混在フラグで表現する。
     provenance を持たないレイヤー（旧 cache）が 1 つでもあれば揃っていない扱いにする。
+
+    envelope の ``plugin.version`` は「集約を実行した時点」の版であって layer を作った版
+    ではない。layer 由来の版は ``plugin_versions`` に別に持つ（取り違えると、旧 cache の
+    スコアが新版で生成されたように見える）。
     """
     provs = list(layer_provenances)
     with_prov = [p for p in provs if isinstance(p, dict)]
     models = sorted({m for m in (judge_model(p) for p in with_prov) if m})
+    versions = sorted(
+        {
+            v for v in (harness_variant(p)["plugin_version"] for p in with_prov)
+            if isinstance(v, str) and v
+        }
+    )
+    variants: List[Dict[str, Any]] = []
+    seen: set = set()
+    for p in with_prov:
+        variant = harness_variant(p)
+        key = json.dumps(variant, sort_keys=True, ensure_ascii=False)
+        if key not in seen:
+            seen.add(key)
+            variants.append(variant)
     total = layers_total if layers_total is not None else len(provs)
     missing = total - len(with_prov)
 
@@ -178,7 +216,9 @@ def aggregate_provenance(
         recorded_at=recorded_at,
     )
     agg["judge_models"] = models
-    agg["mixed_provenance"] = bool(len(models) > 1 or (missing > 0 and with_prov))
+    agg["plugin_versions"] = versions
+    agg["harness_variants"] = variants
+    agg["mixed_provenance"] = bool(len(variants) > 1 or (missing > 0 and with_prov))
     agg["layers_with_provenance"] = len(with_prov)
     agg["layers_total"] = total
     return agg

@@ -383,7 +383,14 @@ def _aggregate_constitutional(
             layers_total=len(layer_results),
         )
     except Exception as e:  # noqa: BLE001 - provenance の欠損はスコア算出を止めない
-        print(f"[constitutional] provenance 集約スキップ: {e}", file=sys.stderr)
+        # キーごと落とすと契約 drift が全緑のままデータ欠損になるので unknown を残す。
+        print(f"[constitutional] provenance 集約に失敗: {e}", file=sys.stderr)
+        result["provenance"] = {
+            "schema_version": 1,
+            "evaluation_kind": "unknown",
+            "producer": "constitutional",
+            "error": str(e),
+        }
 
     # --- Slop detection (deterministic, no LLM) ---
     try:

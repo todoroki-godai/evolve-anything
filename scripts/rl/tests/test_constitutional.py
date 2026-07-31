@@ -328,6 +328,23 @@ class TestLayerProvenance:
         assert result["provenance"]["layers_with_provenance"] == 0
         assert result["provenance"]["judge_models"] == []
 
+    def test_aggregation_failure_records_unknown_not_missing(self, tmp_path):
+        """集約が壊れても provenance キーごと消さず unknown として残す（#309）。"""
+        project = _make_project(tmp_path)
+        _run_two_phase(project, score=0.8)
+
+        import evaluation_provenance as ep
+
+        loader = _make_load_sibling(principles_from_cache=True)
+        with mock.patch.object(constitutional, "_load_sibling", side_effect=loader), \
+                mock.patch.object(
+                    ep, "aggregate_provenance", side_effect=RuntimeError("broken")
+                ):
+            result = constitutional.compute_constitutional_score(project, refresh=False)
+
+        assert result["overall"] is not None  # スコア算出は止めない
+        assert result["provenance"]["evaluation_kind"] == "unknown"
+
 
 class TestCacheSaveLoad:
     def test_cache_saves_layer_hashes(self, tmp_path):

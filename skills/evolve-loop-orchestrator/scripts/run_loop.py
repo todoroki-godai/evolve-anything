@@ -218,10 +218,24 @@ def _attach_loop_provenance(record: Dict[str, Any], *, dry_run: bool) -> Dict[st
     ``_score_single_axis`` が ``claude -p`` を **--model なしで**起動するため、
     判定モデルは CLI 既定＝このコードからは観測できない。推測せず None を記録する
     （「不明と分かっている」ことが後の交絡分離では有用）。
+
+    組立に失敗しても採点結果の記録は止めないが、**provenance キーごと落とさない**。
+    無記録にすると契約 drift が全緑のままデータ欠損になるので unknown として残す。
     """
     try:
         import evaluation_provenance as _ep
+    except Exception as e:  # noqa: BLE001 - 契約 module 不在でも履歴記録は続ける
+        print(f"[run_loop] evaluation_provenance を import できず: {e}", file=sys.stderr)
+        record["provenance"] = {
+            "schema_version": 1,
+            "evaluation_kind": "unknown",
+            "producer": "evolve-loop-orchestrator.run_loop",
+            "error": str(e),
+        }
+        return record
 
+    prov = None
+    try:
         if dry_run:
             prov = _ep.build_provenance(
                 evaluation_kind=_ep.KIND_DETERMINISTIC,
@@ -239,9 +253,10 @@ def _attach_loop_provenance(record: Dict[str, Any], *, dry_run: bool) -> Dict[st
                 runtime_name="claude",
                 config={"axis_weights": dict(AXIS_WEIGHTS)},
             )
-        return _ep.attach_provenance(record, prov)
-    except Exception:  # noqa: BLE001 - provenance の欠損は履歴記録を止めない
-        return record
+    except Exception as e:  # noqa: BLE001 - 採点結果の記録は止めない
+        print(f"[run_loop] provenance 組立に失敗: {e}", file=sys.stderr)
+    # prov が None なら契約側が unknown envelope を作る（捏造しない）。
+    return _ep.attach_provenance(record, prov)
 
 
 def _parallel_score(content: str) -> Dict[str, float]:

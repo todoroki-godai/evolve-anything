@@ -276,6 +276,38 @@ class TestRunLoop:
         assert prov["judge"]["tool_policy"]["mode"] == "cli_default"
         assert prov["runtime"]["name"] == "claude"
 
+    def test_history_records_unknown_provenance_when_builder_fails(self, tmp_path, monkeypatch):
+        """provenance 組立が壊れても「無記録」にせず unknown として残す（#309）。
+
+        握り潰して provenance 無しで書くと、契約 drift が全緑のままデータ欠損になる。
+        """
+        import evaluation_provenance as ep
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        monkeypatch.setattr(store, "resolve_slug", lambda cwd=None: "testproj")
+
+        def _boom(**kwargs):
+            raise RuntimeError("builder broken")
+
+        monkeypatch.setattr(ep, "build_provenance", _boom)
+
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text("# テスト\nテスト", encoding="utf-8")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen:
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+            run_loop_mod.run_loop(
+                target_path=str(skill_file), loops=1, dry_run=True, output_dir=str(output_dir),
+            )
+
+        record = json.loads(
+            store.history_path("testproj").read_text(encoding="utf-8").strip().split("\n")[0]
+        )
+        assert record["baseline_score"] is not None  # 履歴記録自体は止めない
+        assert record["provenance"]["evaluation_kind"] == "unknown"
+
 
 class TestVerdict:
     """verdict（IMPROVED/STABLE/REGRESSED）のテスト"""
