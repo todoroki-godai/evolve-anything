@@ -395,7 +395,7 @@ def test_clean_run_has_empty_failure_fields(tmp_path):
     assert detect_exit_code(res) == 0
 
 
-# ── max_transcripts の適用単位（#314）───────────────────────────────
+# ── max_transcripts の適用単位（#345）───────────────────────────────
 
 def _multi_dir_fixture(tmp_path) -> tuple[Path, Path]:
     """1 slug に 2 dir（本体 + 撤去済み worktree）、各 2 transcript = 計 4 件。"""
@@ -440,7 +440,7 @@ def test_non_positive_max_transcripts_scans_nothing(tmp_path):
                                max_transcripts=-1, **kw)["total"] == 0
 
 
-# ── CLI 配線（#313 / #314）──────────────────────────────────────────
+# ── CLI 配線（#313 / #345）──────────────────────────────────────────
 
 def test_cli_rejects_non_positive_max_transcripts():
     """--max-transcripts の 0 / 負数を argparse で拒否する。"""
