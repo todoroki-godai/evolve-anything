@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -659,7 +659,7 @@ def run_loop(
             "pareto_dominates": pareto_ok,
             "approved": approved,
             "dry_run": dry_run,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "variants_count": len(variants),
         }
         loop_result.update(
