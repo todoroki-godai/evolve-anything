@@ -10,7 +10,8 @@ GitHub issue 候補を生成する（「install != enforcement」と同型の配
      （split↔archive 矛盾、line budget を悪化させる content 追加提案）
   2. runtime_errors         — 各フェーズで握り潰された例外 / observability の取得失敗
   3. improvement_opportunities — 構造的な改善機会
-     （系統的に却下される提案 type、calibration regression）
+     （系統的に却下される提案 type、calibration regression、
+      observability.measurement_bug の PJ 横断 bit-exact 一致 #324）
 
 設計原則:
   - 決定論・LLM 非依存。入力は evolve.run_evolve() の戻り値 dict のみ。
@@ -76,6 +77,8 @@ from .detectors import (  # noqa: F401
     _detect_improvement_opportunities,
     _detect_systematic_rejections,
     _detect_calibration_regression,
+    _detect_measurement_bug,
+    _MEASUREMENT_BUG_LINE_RE,
 )
 
 
