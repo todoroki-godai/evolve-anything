@@ -41,6 +41,7 @@ from correction_semantic.review_channels import (
 )
 from correction_semantic.store import read_idioms
 from weak_signals.store import read_signals
+from weak_signals.ttl import is_effectively_expired
 
 # #46 read 層拡張: 既読 union + slug alias は共有モジュール（idioms/weak_signals と単一ソース）。
 from store_read_union import (  # noqa: E402
@@ -189,7 +190,11 @@ def _read_new(
             continue
         if r.get("promoted"):
             continue
-        if r.get("expired"):
+        # #326: 永続化フラグ（expired）だけでなく read 時導出（is_effectively_expired）で
+        # 判定する。標準フロー（--dry-run → --drain）は mark_expired を通らずフラグが
+        # 書かれないため、フラグだけを見ると TTL 超レコードが「昇格可能」として提示され、
+        # promote 側（read_unpromoted は既に is_effectively_expired 済み）と split-brain になる。
+        if is_effectively_expired(r):
             continue
         if r.get("signal_key") in seen_keys:
             continue

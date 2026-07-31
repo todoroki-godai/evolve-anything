@@ -175,6 +175,98 @@ def test_promote_skips_unknown_keys(tmp_path: Path) -> None:
     assert not corr.exists()
 
 
+# ── #326: promote-weak の per-key 結果（silent failure の解消） ──
+# 従来の戻り値は {"promoted": int, "dry_run": bool} のみで、requested と promoted の件数差が
+# あっても「どの key が」「なぜ」落ちたか分からなかった（SKILL.md の「promote 成功を確認後に
+# 既読追記」手順が実行不能だった）。requested / promoted_keys / skipped（signal_key + reason）
+# を追加する。既存キーは維持（純加算・後方互換）。
+
+
+def test_promote_reports_requested_and_promoted_keys_on_success(tmp_path: Path) -> None:
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sigs = _seed_signals(ws)
+    keys = [s.signal_key for s in sigs]
+    res = cs_promote.promote_signals(
+        keys, weak_signals_path=ws, corrections_path=corr, project_path="/p",
+    )
+    assert res["requested"] == 2
+    assert sorted(res["promoted_keys"]) == sorted(keys)
+    assert res["skipped"] == []
+
+
+def test_promote_unknown_key_reports_not_found_reason(tmp_path: Path) -> None:
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    _seed_signals(ws)
+    res = cs_promote.promote_signals(
+        ["nonexistent"], weak_signals_path=ws, corrections_path=corr, project_path="/p",
+    )
+    assert res["requested"] == 1
+    assert res["promoted_keys"] == []
+    assert res["skipped"] == [{"signal_key": "nonexistent", "reason": "not_found"}]
+
+
+def test_promote_already_promoted_key_reports_reason(tmp_path: Path) -> None:
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sigs = _seed_signals(ws)
+    key = sigs[0].signal_key
+    cs_promote.promote_signals([key], weak_signals_path=ws, corrections_path=corr, project_path="/p")
+    # 同じ key をもう一度昇格しようとすると、二重昇格せず理由付きで skip される。
+    res = cs_promote.promote_signals([key], weak_signals_path=ws, corrections_path=corr, project_path="/p")
+    assert res["promoted"] == 0
+    assert res["promoted_keys"] == []
+    assert res["skipped"] == [{"signal_key": key, "reason": "already_promoted"}]
+
+
+def test_promote_ttl_expired_unflagged_key_reports_expired_reason(tmp_path: Path) -> None:
+    """#326 再現本体: detected_at が TTL 超・expired フラグ未設定の signal を promote すると、
+    従来は promoted=0 のみでエラー無し（黙ってスキップ）。理由 "expired" が返る。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sig = WeakSignal(
+        "rephrase", {"line_no": 1},
+        (datetime.now(timezone.utc) - timedelta(days=46)).isoformat(),
+        "s1", "evolve-anything",
+    )
+    append_signals([sig], path=ws)
+    res = cs_promote.promote_signals(
+        [sig.signal_key], weak_signals_path=ws, corrections_path=corr, project_path="/p",
+    )
+    assert res["promoted"] == 0
+    assert res["skipped"] == [{"signal_key": sig.signal_key, "reason": "expired"}]
+
+
+def test_promote_mixed_success_and_skip_keys(tmp_path: Path) -> None:
+    """requested のうち一部だけ昇格される混在ケース: promoted_keys/skipped が正しく分離される。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sigs = _seed_signals(ws)
+    good_key = sigs[0].signal_key
+    res = cs_promote.promote_signals(
+        [good_key, "nonexistent"], weak_signals_path=ws, corrections_path=corr, project_path="/p",
+    )
+    assert res["promoted"] == 1
+    assert res["promoted_keys"] == [good_key]
+    assert res["skipped"] == [{"signal_key": "nonexistent", "reason": "not_found"}]
+
+
+def test_promote_dry_run_reports_promoted_keys_without_writing(tmp_path: Path) -> None:
+    ws = tmp_path / "weak_signals.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    sigs = _seed_signals(ws)
+    keys = [s.signal_key for s in sigs]
+    res = cs_promote.promote_signals(
+        keys, weak_signals_path=ws, corrections_path=corr, project_path="/p", dry_run=True,
+    )
+    assert res["dry_run"] is True
+    assert sorted(res["promoted_keys"]) == sorted(keys)
+    assert res["skipped"] == []
+    assert not corr.exists()
+
+
 def _seed_with_expired(ws_path: Path):
     """1 件目を expired=True にして seed する（#442 TTL）。"""
     sigs = _seed_signals(ws_path)
