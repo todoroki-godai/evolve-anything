@@ -407,22 +407,15 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
     try:
         _unres = result["phases"].get("remediation", {}).get("unresolvable_fix_targets")
         if isinstance(_unres, dict):
+            from remediation import build_fix_targets_observability
             _count = int(_unres.get("count", 0))
-            if _count:
-                _by = ", ".join(
-                    f"{k}: {v}件" for k, v in sorted(_unres.get("by_type", {}).items())
-                )
-                _line = (
-                    f"⚠ fixer 対象パスが実在しない issue {_count}件（{_by}）"
-                    f" — 承認しても no-op になる。検出側のパス生成を確認する"
-                )
-            else:
-                _line = "✓ fixer 対象パスは全件実在（承認 → 適用の経路は健全）"
+            # 値は List[str]（section 契約）。生 str を入れると畳み込みが char 単位に壊れる。
+            _lines = build_fix_targets_observability(_unres)
             obs = result.get("observability")
             if not isinstance(obs, dict) or "error" in obs:
                 obs = {} if not isinstance(obs, dict) else obs
                 result["observability"] = obs
-            obs["remediation_fix_targets"] = _line
+            obs["remediation_fix_targets"] = _lines
             try:
                 from audit.sections_summary import reconcile_injected_observability
                 audit_phase = result.get("phases", {}).get("audit")
@@ -430,7 +423,7 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
                     audit_phase.get("report"), str
                 ):
                     audit_phase["report"] = reconcile_injected_observability(
-                        audit_phase["report"], "Remediation Fix Targets", _line
+                        audit_phase["report"], "Remediation Fix Targets", _lines
                     )
             except Exception:
                 pass

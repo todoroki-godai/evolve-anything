@@ -126,11 +126,20 @@ def test_observability_contract_remediation_batch_skip_not_unknown():
     assert all("remediation_batch_skip" not in f["detail"] for f in failures)
 
 
+def test_observability_contract_remediation_fix_targets_not_unknown():
+    """remediation_fix_targets も evolve-only observability キー（#306 で追加・#311 で登録）。"""
+    r = _ok_result()
+    r["observability"]["remediation_fix_targets"] = ["✓ fixer 対象パスは全件実在"]
+    failures = invariants.check_observability_contract(r)
+    assert all("remediation_fix_targets" not in f["detail"] for f in failures)
+
+
 def test_observability_contract_evolve_only_keys_in_known_set():
     """_observability_builder_keys() が evolve-only キーを含む（#504）。"""
     known = invariants._observability_builder_keys()
     assert "constitutional" in known, "constitutional が既知キーに含まれていない"
     assert "remediation_batch_skip" in known, "remediation_batch_skip が既知キーに含まれていない"
+    assert "remediation_fix_targets" in known, "remediation_fix_targets が既知キーに含まれていない"
 
 
 # --- run_all 集約 --------------------------------------------------------------

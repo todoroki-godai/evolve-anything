@@ -60,6 +60,7 @@ WCC_TEMPLATE = 'template'
 WORKFLOW_CHECKPOINT_CANDIDATE = 'workflow_checkpoint_candidate'
 
 # remediation public function / class signatures
+build_fix_targets_observability(unresolvable: Dict[str, Any] | None) -> List[str]
 check_regression(fixed_file: str, original_content: str) -> Dict[str, Any]
 classify_issue(issue: Dict[str, Any]) -> Dict[str, Any]
 classify_issues(issues: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]

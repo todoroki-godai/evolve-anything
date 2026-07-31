@@ -135,6 +135,57 @@ class TestUnresolvableFixTargets:
         assert res == {"count": 0, "by_type": {}, "files": []}
 
 
+class TestFixTargetsObservabilityLines:
+    """observability 行は **List[str]** で組む（#306 の配線ミス修正・#311 と同時）。
+
+    `result["observability"][key]` の値は全 section が行リストである契約で、
+    `classify_section` / `fold_clean_observability` は `"\\n".join(lines)` と
+    `extend(lines)` で消費する。生 str を入れると 1 文字ずつが 1 行に化けて
+    畳み込みレポートが壊れる（要対応判定も char 単位になる）。
+    """
+
+    def test_clean_shape_is_line_list(self):
+        from remediation import build_fix_targets_observability
+
+        lines = build_fix_targets_observability({"count": 0, "by_type": {}, "files": []})
+
+        assert isinstance(lines, list)
+        assert len(lines) == 1
+        assert lines[0].startswith("✓")
+
+    def test_dirty_shape_lists_by_type(self):
+        from remediation import build_fix_targets_observability
+
+        lines = build_fix_targets_observability(
+            {"count": 3, "by_type": {"split_candidate": 2, "stale_rule": 1}, "files": []}
+        )
+
+        assert isinstance(lines, list)
+        assert len(lines) == 1
+        assert "⚠" in lines[0]
+        assert "3件" in lines[0]
+        assert "split_candidate: 2件" in lines[0]
+        assert "stale_rule: 1件" in lines[0]
+
+    def test_classified_by_summary_folder(self):
+        """畳み込みが行単位で正しく分類される（str を渡すと char 単位に壊れる経路）。"""
+        from audit.sections_summary import classify_section
+        from remediation import build_fix_targets_observability
+
+        clean = build_fix_targets_observability({"count": 0, "by_type": {}, "files": []})
+        dirty = build_fix_targets_observability(
+            {"count": 1, "by_type": {"split_candidate": 1}, "files": ["x"]}
+        )
+
+        assert classify_section(clean) == "clean"
+        assert classify_section(dirty) == "critical"
+
+    def test_non_dict_input_is_empty(self):
+        from remediation import build_fix_targets_observability
+
+        assert build_fix_targets_observability(None) == []
+
+
 class TestUnresolvableFixTargetsProjectDir:
     """相対 `file` は cwd でなく project_dir 基準で解決する（#311）。
 

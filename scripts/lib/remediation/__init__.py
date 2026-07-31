@@ -226,6 +226,31 @@ def detect_unresolvable_fix_targets(
     }
 
 
+def build_fix_targets_observability(
+    unresolvable: Optional[Dict[str, Any]],
+) -> List[str]:
+    """`detect_unresolvable_fix_targets` の結果 → observability 行リスト（#306）。
+
+    値は **必ず List[str]**。`result["observability"]` の各 section は行リストで
+    ある契約で、`classify_section` は `"\\n".join(lines)`、`fold_clean_observability`
+    は `extend(lines)` で消費する。生 str を入れると 1 文字ずつが 1 行に化けて
+    畳み込みレポートが壊れる。
+    clean（0 件）でも 1 行残す（silence != evaluated）。
+    """
+    if not isinstance(unresolvable, dict):
+        return []
+    count = int(unresolvable.get("count", 0) or 0)
+    if not count:
+        return ["✓ fixer 対象パスは全件実在（承認 → 適用の経路は健全）"]
+    by_type = ", ".join(
+        f"{k}: {v}件" for k, v in sorted((unresolvable.get("by_type") or {}).items())
+    )
+    return [
+        f"⚠ fixer 対象パスが実在しない issue {count}件（{by_type}）"
+        f" — 承認しても no-op になる。検出側のパス生成を確認する"
+    ]
+
+
 
 
 # 検証エンジン + VERIFY_DISPATCH + check_regression / rollback_fix / record_outcome は
