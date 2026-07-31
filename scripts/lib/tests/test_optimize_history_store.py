@@ -6,8 +6,10 @@ git は subprocess で叩くが LLM は呼ばない（no-llm-in-tests 遵守）�
 """
 
 import json
+import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,6 +20,27 @@ _lib_dir = _test_dir.parent
 sys.path.insert(0, str(_lib_dir))
 
 import optimize_history_store as store
+
+
+@pytest.fixture
+def fixed_tz_tokyo():
+    """プロセス TZ を Asia/Tokyo に固定し、テスト後に必ず元へ戻す。
+
+    ``time.tzset()`` は環境全体（プロセス）に効くため、元に戻し忘れると同一
+    xdist worker 内の後続テストの ``datetime.astimezone()`` 解釈まで汚染する
+    （restore は monkeypatch の自動リストアに頼らず try/finally で自前保証する）。
+    """
+    original = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Tokyo"
+    time.tzset()
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original
+        time.tzset()
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -198,6 +221,34 @@ class TestNormalizeEntryTimestamp:
         entry = {"id": "a", "timestamp": "not-a-timestamp"}
         store.normalize_entry_timestamp(entry)
         assert entry["timestamp"] == "not-a-timestamp"
+
+
+class TestNormalizeEntryTimestampTZDependent:
+    """#297 fixup (P1-2): naive 解釈が実行機 TZ に依存する核心動作を固定値で検証する。
+
+    ``TestNormalizeEntryTimestamp`` の naive ケースは期待値・実装の両方を同じ
+    プロセスローカル ``astimezone()`` から計算しているため、CI が UTC 環境だと
+    「naive を誤って ``replace(tzinfo=UTC)`` する（TZ 変換をしない）実装」でも
+    green になり、#297 が直そうとしたバグそのものを検出できない。TZ=Asia/Tokyo に
+    固定し、期待値をハードコードして初めて「ローカル解釈→UTC変換」を検査できる。
+    """
+
+    def test_naive_interpreted_as_jst_converts_to_utc(self, fixed_tz_tokyo):
+        entry = {"id": "a", "timestamp": "2026-07-31T09:00:00"}
+        store.normalize_entry_timestamp(entry)
+        assert entry["timestamp"] == "2026-07-31T00:00:00+00:00"
+
+    def test_naive_interpreted_as_jst_across_midnight(self, fixed_tz_tokyo):
+        """日付を跨ぐケース（JST 03:00 = 前日 UTC 18:00）でも変換方向を取り違えない。"""
+        entry = {"id": "a", "timestamp": "2026-07-31T03:00:00"}
+        store.normalize_entry_timestamp(entry)
+        assert entry["timestamp"] == "2026-07-30T18:00:00+00:00"
+
+    def test_aware_timestamp_unaffected_by_process_tz(self, fixed_tz_tokyo):
+        """aware 入力は instant を持つため、プロセス TZ に関わらず変換結果は同じ。"""
+        entry = {"id": "a", "timestamp": "2026-07-31T09:00:00+09:00"}
+        store.normalize_entry_timestamp(entry)
+        assert entry["timestamp"] == "2026-07-31T00:00:00+00:00"
 
 
 class TestLoadHistoryUnion:

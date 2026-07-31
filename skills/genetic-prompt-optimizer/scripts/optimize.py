@@ -355,7 +355,9 @@ class DirectPatchOptimizer:
             _ep.attach_provenance(entry, prov)  # None なら unknown envelope
         # この書き込みは optimize_history_store.append_entry を経由しない別経路
         # （history_file を直接指定してテスト等から呼べる互換性のため）。#297: timestamp
-        # の tz 正規化は chokepoint 関数を共有し、append_entry と同じ規約に揃える。
+        # の tz 正規化は単一ソース関数を writer 側から明示的に呼んで append_entry と
+        # 同じ規約に揃える（append_entry 自体は経由しない — 3 writer は「共有 helper を
+        # 各自が書込直前に呼ぶ」規約で統一されている。単一 chokepoint ではない）。
         _store.normalize_entry_timestamp(entry)
         history_file.parent.mkdir(parents=True, exist_ok=True)
         with open(history_file, "a", encoding="utf-8") as f:
