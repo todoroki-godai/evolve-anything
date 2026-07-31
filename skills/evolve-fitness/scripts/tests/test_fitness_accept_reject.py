@@ -63,6 +63,26 @@ class TestRecordEvolveDiffDecisionE2E:
         assert len(lines) == 1
         assert json.loads(lines[0])["best_fitness"] == entry["best_fitness"]
 
+    def test_record_carries_provenance(self, tmp_path):
+        """同じ optimize_history に書く第3の producer も実行条件を残す（#309）。
+
+        ここが欠けると、同一母集団に「条件つき」と「条件不明」のレコードが混ざり、
+        後から条件別に比較できなくなる（後方互換の問題ではなく新規生成分の配線漏れ）。
+        """
+        history_file = tmp_path / "history.jsonl"
+        entry = fe.record_evolve_diff_decision(
+            skill_name="my-skill", after_content=GOOD_SKILL, diff_summary="x",
+            human_accepted=True, history_file=history_file,
+        )
+        prov = json.loads(history_file.read_text(encoding="utf-8").splitlines()[0])["provenance"]
+        assert prov == entry["provenance"]
+        assert prov["schema_version"] == 1
+        # skill_quality の採点は LLM を呼ばない
+        assert prov["evaluation_kind"] == "deterministic"
+        assert prov["producer"] == "evolve-fitness.record_evolve_diff_decision"
+        assert prov["config"]["fitness_func"] == "skill_quality"
+        assert "judge" not in prov
+
     def test_reject_records_human_accepted_false(self, tmp_path):
         history_file = tmp_path / "history.jsonl"
         entry = fe.record_evolve_diff_decision(

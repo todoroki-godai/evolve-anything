@@ -500,6 +500,57 @@ class TestHistory:
         assert entry["corrections_used"] == 3
         assert entry["human_accepted"] is None
 
+    def test_history_entry_carries_provenance(self, sample_skill, temp_dir):
+        """履歴に評価実行条件を残す（#309）。
+
+        採点は fitness スクリプトの subprocess 実行（決定論）なので judge/model は非該当。
+        どの fitness で測ったかは結果を左右するので config に残す。
+        """
+        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
+        optimizer.run_dir = temp_dir / "test_run"
+        result = {
+            "run_id": "test_run", "target": str(sample_skill), "strategy": "error_guided",
+            "corrections_used": 3, "fitness_func": "skill_quality",
+            "best_individual": {"fitness": 0.8},
+        }
+        history_path = optimizer.save_history_entry(
+            result, history_file=temp_dir / "history.jsonl"
+        )
+        prov = json.loads(history_path.read_text(encoding="utf-8").strip())["provenance"]
+        assert prov["schema_version"] == 1
+        assert prov["evaluation_kind"] == "deterministic"
+        assert prov["producer"] == "genetic-prompt-optimizer.save_history_entry"
+        assert prov["config"]["fitness_func"] == "skill_quality"
+        assert "judge" not in prov
+
+    def test_history_entry_records_unknown_provenance_when_builder_fails(
+        self, sample_skill, temp_dir, monkeypatch
+    ):
+        """provenance の組立に失敗しても「無記録」にはせず unknown として明示する（#309）。
+
+        握り潰して provenance 無しで書くと、契約 drift が全緑のままデータ欠損になる。
+        """
+        import evaluation_provenance as _ep
+
+        def _boom(**kwargs):
+            raise RuntimeError("builder broken")
+
+        monkeypatch.setattr(_ep, "build_provenance", _boom)
+
+        optimizer = DirectPatchOptimizer(target_path=str(sample_skill), dry_run=True)
+        optimizer.run_dir = temp_dir / "test_run"
+        result = {
+            "run_id": "test_run", "target": str(sample_skill), "strategy": "error_guided",
+            "corrections_used": 0, "fitness_func": "skill_quality",
+            "best_individual": {"fitness": 0.8},
+        }
+        history_path = optimizer.save_history_entry(
+            result, history_file=temp_dir / "history.jsonl"
+        )
+        record = json.loads(history_path.read_text(encoding="utf-8").strip())
+        assert record["best_fitness"] == 0.8  # 採点結果の記録は止めない
+        assert record["provenance"]["evaluation_kind"] == "unknown"
+
     def test_record_human_decision(self, temp_dir):
         history_file = temp_dir / "history.jsonl"
         entry = {

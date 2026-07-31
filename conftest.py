@@ -202,3 +202,33 @@ def _isolate_plugin_data(tmp_path, tmp_path_factory, monkeypatch, request):
         # ``isolated-home`` が混入して壊れる（#119）。
         home_base = tmp_path_factory.mktemp("isolated-home-base")
         isolate_home(monkeypatch, home_base)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_evolve_marker(request, tmp_path, monkeypatch):
+    """``evolve_decisions.MARKER_ROOT`` を per-test の tmp_path 配下へ隔離する。
+
+    ``emit_decisions``(#402) は dry-run でも MARKER_ROOT に pending marker を書く。
+    MARKER_ROOT は **env 非依存の import 時 home 固定**（``~/.claude/evolve-anything/
+    evolve_pending``）なので、``CLAUDE_PLUGIN_DATA`` 隔離でも ``_rebase_module_data_dirs``
+    の DATA_DIR 派生 rebase でも捕まらない。
+
+    従来この隔離は ``scripts/lib/tests/conftest.py`` の autouse だけにあり、他 testpath
+    （hooks / skills / bin）は素通しだった。素通しのテストが marker を書くと、import 時に
+    凍結された MARKER_ROOT は **session 共有の隔離 home** を指すため同一 xdist worker 内の
+    後続テストへ漏れる。実際に ``restore_state`` の自動 drain(#421) が他テストの残した
+    marker を拾い ``test_no_checkpoint_noop`` が落ちる order-dependent flake が出た
+    （テスト追加で xdist の配置が変わると顕在化する）。HOME 隔離を root へ昇格した #119 と
+    同じ理由で、ここを単一ソースにする。
+
+    個別テストが MARKER_ROOT を明示 setattr する場合はそちらが後勝ちで上書きする。
+    ``@pytest.mark.real_marker_root`` を付けたテストは隔離せず実定義を検証する。
+    """
+    if request.node.get_closest_marker("real_marker_root"):
+        return
+    try:
+        import evolve_decisions as _ed
+
+        monkeypatch.setattr(_ed, "MARKER_ROOT", tmp_path / "_evolve_pending_isolated", raising=False)
+    except Exception:
+        pass

@@ -32,6 +32,7 @@ if str(_lib_dir) not in sys.path:
 from judge_audit import PASS_THRESHOLD
 from judge_audit.fixtures import FIXTURES
 from judge_audit import store as _store
+import evaluation_provenance as _ep
 
 # 1 fixture あたりの概算トークン（プロンプト + 応答）。llm-batch-guard 用の粗い見積もり
 # （verbosity.judge._TOKENS_PER_CANDIDATE と同思想）。
@@ -158,6 +159,20 @@ def run_audit(
     new_verdicts: List[Dict[str, Any]] = []
     false_pass_count = 0
 
+    # 実行条件（harness）を run 単位で 1 度だけ組み立て、verdict 全件に同じものを付ける（#309）。
+    # model はここが唯一の観測地点（call_judge_llm に渡している実値）。
+    run_provenance = _ep.build_provenance(
+        evaluation_kind=_ep.KIND_LLM_JUDGE,
+        producer="judge_audit",
+        judge=_ep.build_judge_context(
+            model=model,
+            # `claude -p <prompt> --model <m>` をツール指定なしで起動している（観測済み）。
+            tool_policy_mode=_ep.TOOL_POLICY_CLI_DEFAULT,
+        ),
+        # subprocess で claude CLI を叩いているので runtime は推測でなく観測。
+        runtime_name="claude",
+    )
+
     for fixture in target:
         prompt = build_fixture_prompt(fixture)
         try:
@@ -178,6 +193,7 @@ def run_audit(
             "false_pass": judge_passed,
             "judged_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
+        _ep.attach_provenance(rec, run_provenance)
         new_verdicts.append(rec)
         if judge_passed:
             false_pass_count += 1
