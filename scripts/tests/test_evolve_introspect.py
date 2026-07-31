@@ -318,6 +318,89 @@ def test_clean_result_keeps_improvement_zero():
     assert analysis["improvement_opportunities"]["candidates"] == []
 
 
+# ── measurement_bug ⚠ が improvement_opportunities に合流（#324） ──
+
+
+def _measurement_bug_section(metric="issues_total", value="4", projects="ai-daily-report, amamo, dpp, receipt"):
+    """sections_measurement.build_measurement_bug_section が実際に返す行形式を再現する。"""
+    return [
+        "## Measurement Bug Meta-Check (advisory — スコア重みには未反映)",
+        "",
+        "複数 PJ で集計値が bit-exact 一致 = 独立走査のはずが揃う測定バグの強シグナル "
+        "（#419-#423 を自動化）。0 / 0.0 / None 同値は健全として除外済み。決定論・LLM 非依存。",
+        "",
+        f"  ・⚠ {metric} = {value} が 4 PJ で完全一致: {projects}",
+        "      → 集計層のバグ疑い（hardcoded / 共有 state 流用）。各 PJ の独立性を確認する",
+        "",
+    ]
+
+
+def test_measurement_bug_flows_into_improvement():
+    """observability.measurement_bug の ⚠ が improvement_opportunities 候補になる（#324）。"""
+    result = _clean_result()
+    result["observability"]["measurement_bug"] = _measurement_bug_section()
+    analysis = ei.analyze_evolve_result(result)
+    cands = analysis["improvement_opportunities"]["candidates"]
+    assert any(
+        c["dedup_key"] == "improvement:measurement_bug:issues_total" and c["suggested_label"] == "bug"
+        for c in cands
+    )
+
+
+def test_measurement_bug_evidence_embedded_in_body():
+    """body に PJ 名・値のエビデンスがそのまま埋め込まれる（数字だけで判断させない）。"""
+    result = _clean_result()
+    result["observability"]["measurement_bug"] = _measurement_bug_section()
+    analysis = ei.analyze_evolve_result(result)
+    cand = next(
+        c for c in analysis["improvement_opportunities"]["candidates"]
+        if c["dedup_key"] == "improvement:measurement_bug:issues_total"
+    )
+    assert "issues_total = 4" in cand["body"]
+    assert "ai-daily-report, amamo, dpp, receipt" in cand["body"]
+
+
+def test_measurement_bug_absent_no_candidate():
+    """observability に measurement_bug キー自体が無ければ候補ゼロ（沈黙、既存 clean と同型）。"""
+    analysis = ei.analyze_evolve_result(_clean_result())
+    keys = [c["dedup_key"] for c in analysis["improvement_opportunities"]["candidates"]]
+    assert not any("measurement_bug" in k for k in keys)
+
+
+def test_measurement_bug_multiple_metrics_produce_separate_candidates():
+    """env_score / issues_total の両方が⚠なら metric ごとに別候補（dedup_key も別）。"""
+    result = _clean_result()
+    result["observability"]["measurement_bug"] = (
+        _measurement_bug_section(metric="issues_total", value="4")
+        + _measurement_bug_section(metric="env_score", value="0.42", projects="a, b, c")
+    )
+    analysis = ei.analyze_evolve_result(result)
+    keys = {c["dedup_key"] for c in analysis["improvement_opportunities"]["candidates"] if "measurement_bug" in c["dedup_key"]}
+    assert keys == {
+        "improvement:measurement_bug:issues_total",
+        "improvement:measurement_bug:env_score",
+    }
+
+
+def test_measurement_bug_dedup_key_stable_across_value_change():
+    """metric が同じなら value/PJ 群が変わっても dedup_key は不変（root cause 単位で dedup）。"""
+    result_a = _clean_result()
+    result_a["observability"]["measurement_bug"] = _measurement_bug_section(value="4")
+    result_b = _clean_result()
+    result_b["observability"]["measurement_bug"] = _measurement_bug_section(
+        value="7", projects="amamo, dpp"
+    )
+    key_a = next(
+        c["dedup_key"] for c in ei.analyze_evolve_result(result_a)["improvement_opportunities"]["candidates"]
+        if "measurement_bug" in c["dedup_key"]
+    )
+    key_b = next(
+        c["dedup_key"] for c in ei.analyze_evolve_result(result_b)["improvement_opportunities"]["candidates"]
+        if "measurement_bug" in c["dedup_key"]
+    )
+    assert key_a == key_b == "improvement:measurement_bug:issues_total"
+
+
 # ── reconcile: split↔archive 相互排他（root cause fix / #301 #302） ──
 
 
