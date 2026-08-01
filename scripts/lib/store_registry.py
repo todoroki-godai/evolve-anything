@@ -389,6 +389,17 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "肥大化しない（毎 run 上書き・未解決提案のみ保持）。",
     ),
     StoreDeclaration(
+        name="icebox_verdict_seen.jsonl",
+        writer="hooks/restore_state.py の _deliver_icebox_notice（SessionStart が icebox "
+        "レーン1「成立」通知を名指しで表示した直後に icebox_verdict_seen.record_seen を呼ぶ）。"
+        "hot path（hook）書き込みだが低頻度（当PJで作業しているセッションの新規成立時のみ）。",
+        reader="icebox_verdict_seen.read_seen_keys / filter_unseen が次回表示判定に参照"
+        "（自己消費）。評価値（lane/value/reason）が変わるまで再提示しない。",
+        retention="permanent",
+        note="#352 icebox 3レーン棚卸しの既読集合（issue番号+評価値ハッシュの物理キー）。"
+        "correction_review_seen.jsonl と同型。低書込レート・肥大化しない。",
+    ),
+    StoreDeclaration(
         name="evolve-queue-state.jsonl",
         writer="scripts/lib/fleet/queue_state.persist_last_evolve（evolve --drain の "
         "apply 境界が完了 PJ の last_evolve_at を 1 レコード追記）。hot path（hooks）からは書かない。",

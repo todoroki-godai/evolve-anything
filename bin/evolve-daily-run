@@ -9,6 +9,13 @@ queue の JSON を `$CLAUDE_PLUGIN_DATA/evolve-queue.json` に保存する。決
 気づきトリガー用の集計（件数・最古経過日数）を `$CLAUDE_PLUGIN_DATA/icebox-status.json` に
 保存する（#194）。read-only の issue 一覧取得なので account switch は不要。
 
+さらに（#352）別の `gh issue list`（`--json number,body,closedAt,updatedAt`）で icebox issue
+本文の `reopen-when` ブロックを実ストアと決定論突合し、3レーン（成立/観測器不在/失効候補）
+判定を `$CLAUDE_PLUGIN_DATA/icebox-verdicts.json` に保存する。SessionStart hook
+（restore_state）がこれを読んで成立分のみ名指し、audit が観測器不在/失効候補を advisory
+surface する。gh 呼び出しは read-only なので account switch は不要。失敗しても daily-run
+全体は落とさない（fail-open、上の icebox 集計ステップと同型）。
+
 stdout/stderr は launchd plist の StandardOut/ErrorPath（evolve-daily.log）に集約され、
 エラー時のスタックがログに残る。
 """
@@ -22,12 +29,14 @@ from pathlib import Path
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
 
+import icebox_reconcile  # noqa: E402
 import rl_common  # noqa: E402
 from daily import plist as plist_mod  # noqa: E402
 
 # icebox 棚卸し対象リポジトリ（evolve-anything 自身）。
 ICEBOX_REPO = "todoroki-godai/evolve-anything"
 ICEBOX_STATUS_FILE_NAME = "icebox-status.json"
+ICEBOX_VERDICTS_FILE_NAME = "icebox-verdicts.json"
 # gh はネットワークを叩く最初の daily ステップ。ハングすると launchd の daily-run が
 # 無期限ブロックするため timeout で保険をかける（fail-open で継続）。
 ICEBOX_GH_TIMEOUT_SECONDS = 30
@@ -181,6 +190,63 @@ def main() -> int:
                 print(f"[evolve-daily-run] wrote {icebox_path} ({payload['count']} icebox issues)", flush=True)
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"[evolve-daily-run] icebox status parse error: {e}（continue）", file=sys.stderr, flush=True)
+
+    # 4) icebox 3レーン棚卸し（#352）。read-only gh issue list（body/closedAt/updatedAt）で
+    # reopen-when ブロックを取得し、icebox_reconcile.build_verdicts で決定論分類する。
+    # 失敗しても daily-run 全体は落とさない（fail-open、上の icebox 集計ステップと同型）。
+    verdicts_path = data_dir / ICEBOX_VERDICTS_FILE_NAME
+    print(f"[evolve-daily-run] gh issue list --json number,body,closedAt,updatedAt …", flush=True)
+    try:
+        gh_reconcile_result = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                ICEBOX_REPO,
+                "--label",
+                "icebox",
+                "--state",
+                "closed",
+                "--json",
+                "number,body,closedAt,updatedAt",
+                "--limit",
+                "100",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=ICEBOX_GH_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"[evolve-daily-run] icebox reconcile gh error: {e}（continue）", file=sys.stderr, flush=True)
+    else:
+        if gh_reconcile_result.returncode != 0:
+            print(
+                f"[evolve-daily-run] icebox reconcile gh exited {gh_reconcile_result.returncode}"
+                f"（continue）: {gh_reconcile_result.stderr}",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            try:
+                issues = json.loads(gh_reconcile_result.stdout)
+                if not isinstance(issues, list):
+                    raise ValueError(f"expected list, got {type(issues).__name__}")
+                payload = icebox_reconcile.build_verdicts(issues, data_dir=data_dir)
+                verdicts_path.write_text(
+                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+                )
+                print(
+                    f"[evolve-daily-run] wrote {verdicts_path} "
+                    f"({len(payload['verdicts'])} verdicts)",
+                    flush=True,
+                )
+            except (json.JSONDecodeError, ValueError) as e:
+                print(
+                    f"[evolve-daily-run] icebox reconcile parse error: {e}（continue）",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     return queue_rc
 

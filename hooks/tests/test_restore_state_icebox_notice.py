@@ -21,6 +21,8 @@ sys.path.insert(0, str(_HOOKS))
 sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
 
 import data_dir_migration as ddm  # noqa: E402
+import icebox_verdict_seen  # noqa: E402
+import rl_common  # noqa: E402
 import restore_state  # noqa: E402
 
 
@@ -156,6 +158,114 @@ def test_deliver_silent_below_custom_threshold(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_icebox_review_threshold_days", "60")
     restore_state._deliver_icebox_notice()
     assert capsys.readouterr().out == ""
+
+
+def _verdict(number=1, lane="met", reason="weak_signals.unprocessed_count = 10 > 5 を満たしました"):
+    return {"number": number, "lane": lane, "reason": reason, "value": 10}
+
+
+def _write_verdicts(data_dir: Path, payload: dict) -> None:
+    (data_dir / "icebox-verdicts.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+# ─────────────────────────────────────────────────────────────────
+# #352: icebox-verdicts.json レーン1「成立」通知 + 既読マーク
+# ─────────────────────────────────────────────────────────────────
+def test_deliver_names_met_issue_and_takes_priority_over_status(
+    tmp_path, monkeypatch, capsys
+):
+    """成立 verdict があれば、icebox-status.json が stale でも成立通知が優先される。"""
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    _write_status(source, STALE_STATUS)
+    _write_verdicts(
+        source,
+        {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99)]},
+    )
+    restore_state._deliver_icebox_notice()
+    out = capsys.readouterr().out
+    payload = json.loads(out.strip())
+    assert "#99" in payload["systemMessage"]
+    assert "weak_signals.unprocessed_count" in payload["systemMessage"]
+    assert "12件" not in payload["systemMessage"]  # 件数集約通知には流れない
+
+
+def test_deliver_records_shown_verdict_as_seen(tmp_path, monkeypatch, capsys):
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    _write_verdicts(
+        source,
+        {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99)]},
+    )
+    restore_state._deliver_icebox_notice()
+    capsys.readouterr()  # 消費
+    seen_keys = icebox_verdict_seen.read_seen_keys(source / "icebox_verdict_seen.jsonl")
+    assert icebox_verdict_seen.verdict_key(_verdict(number=99)) in seen_keys
+
+
+def test_deliver_does_not_repeat_already_seen_met_verdict(tmp_path, monkeypatch, capsys):
+    """1回目で成立通知→既読化。2回目（同じ評価値）は沈黙（icebox-status.json も無ければ）。"""
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    _write_verdicts(
+        source,
+        {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99)]},
+    )
+    restore_state._deliver_icebox_notice()
+    capsys.readouterr()
+    restore_state._deliver_icebox_notice()
+    assert capsys.readouterr().out == ""
+
+
+def test_deliver_reappears_when_value_changes(tmp_path, monkeypatch, capsys):
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    _write_verdicts(
+        source,
+        {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99, reason="A")]},
+    )
+    restore_state._deliver_icebox_notice()
+    capsys.readouterr()
+    _write_verdicts(
+        source,
+        {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99, reason="B")]},
+    )
+    restore_state._deliver_icebox_notice()
+    out = capsys.readouterr().out
+    assert out  # 評価値（reason）が変わったので再提示される
+
+
+def test_deliver_falls_back_to_status_when_no_met_verdicts(tmp_path, monkeypatch, capsys):
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    _write_status(source, STALE_STATUS)
+    _write_verdicts(
+        source,
+        {
+            "generated_at": "2026-08-01T09:00:00Z",
+            "verdicts": [_verdict(number=1, lane="observer_missing")],
+        },
+    )
+    restore_state._deliver_icebox_notice()
+    out = capsys.readouterr().out
+    payload = json.loads(out.strip())
+    assert "12件" in payload["systemMessage"]  # 従来の件数集約通知
+
+
+def test_deliver_no_verdicts_file_falls_back_to_status(tmp_path, monkeypatch, capsys):
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    _write_status(source, STALE_STATUS)
+    restore_state._deliver_icebox_notice()
+    out = capsys.readouterr().out
+    payload = json.loads(out.strip())
+    assert "12件" in payload["systemMessage"]
 
 
 def test_deliver_fires_with_default_threshold_no_override(tmp_path, monkeypatch, capsys):

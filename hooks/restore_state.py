@@ -72,10 +72,17 @@ try:
 except ImportError:
     pass
 
-# daily.icebox_notice import (optional) — icebox 棚卸しの気づきトリガー（#194）
+# daily.icebox_notice import (optional) — icebox 棚卸しの気づきトリガー（#194, #352）
 _icebox_notice = None
 try:
     from daily import icebox_notice as _icebox_notice
+except ImportError:
+    pass
+
+# icebox_verdict_seen import (optional) — icebox 3レーン棚卸しレーン1「成立」の既読管理（#352）
+_icebox_verdict_seen = None
+try:
+    import icebox_verdict_seen as _icebox_verdict_seen
 except ImportError:
     pass
 
@@ -387,8 +394,13 @@ def _deliver_evolve_queue_notice() -> None:
 
 
 def _deliver_icebox_notice() -> None:
-    """毎朝の `gh issue list --label icebox --state closed` が保存した icebox-status.json の
-    棚卸し気づきトリガーを systemMessage で通知する（#194）。
+    """icebox 棚卸しの気づきトリガーを systemMessage で通知する（#194, #352）。
+
+    #352: daily runner の icebox 3レーン棚卸しステップが書いた icebox-verdicts.json に
+    レーン1「成立」（未既読）があれば、それを**該当 issue だけ名指し + 根拠1行**で優先通知し、
+    表示した verdict を icebox_verdict_seen.jsonl（既読ストア）に記録する。成立が無ければ
+    （またはモジュール未解決なら）従来どおり icebox-status.json ベースの件数集約通知
+    （#194）にフォールバックする。
 
     icebox は evolve-anything 自身の GitHub issue backlog なので、**本体リポジトリ
     （`.claude-plugin/plugin.json` を持つ repo）で作業しているときだけ**判定する。他 PJ で
@@ -398,9 +410,9 @@ def _deliver_icebox_notice() -> None:
     （evolve-queue notice と同型）。テスト isolation の tmp env / 非 hook 文脈では実環境を
     一切 probe せず沈黙し、JSON stdout を汚さない。
 
-    observe-first pre-flight: icebox-status.json を読むだけ（DuckDB 接続なし・走査なし）。
-    閾値未満 or ファイル無し → 沈黙。出力は `systemMessage` を含む 1 行 JSON
-    （ADR-038 = user 向けチャネル）。
+    observe-first pre-flight: icebox-verdicts.json / icebox-status.json を読むだけ
+    （DuckDB 接続なし・走査なし）。閾値未満 or ファイル無し → 沈黙。出力は `systemMessage`
+    を含む 1 行 JSON（ADR-038 = user 向けチャネル）。
     fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
     """
     if _icebox_notice is None or _data_dir_migration is None:
@@ -420,6 +432,23 @@ def _deliver_icebox_notice() -> None:
         if not _data_dir_migration.is_cc_install_layout(Path(env)):
             return  # テスト isolation / custom 環境
         data_dir = rl_common.resolve_data_dir(env)
+
+        # #352 レーン1「成立」: 未既読の成立 verdict があれば名指しで優先通知する。
+        if _icebox_verdict_seen is not None:
+            verdicts_payload = _icebox_notice.read_icebox_verdicts(data_dir)
+            seen_path = _icebox_verdict_seen.default_seen_path(data_dir)
+            seen_keys = _icebox_verdict_seen.read_seen_keys(seen_path)
+            output, shown = _icebox_notice.icebox_verdicts_notice_output(
+                verdicts_payload, seen_keys
+            )
+            if output:
+                print(json.dumps(output, ensure_ascii=False))
+                # icebox_verdict_seen.jsonl（既読ストア・hook writer・低頻度: 新規成立時のみ）
+                # へ表示済み verdict を記録する。評価値が変わるまで再提示しない。path 未指定
+                # ＝ ADR-049 / #55 単一書込ゲート store_write 経由（registry guard を通す）。
+                _icebox_verdict_seen.record_seen(shown)
+                return
+
         status = _icebox_notice.read_icebox_status(data_dir)
         threshold_days = rl_common.load_user_config().get("icebox_review_threshold_days", 30)
         output = _icebox_notice.icebox_notice_output(status, threshold_days=threshold_days)
