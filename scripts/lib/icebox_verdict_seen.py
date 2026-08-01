@@ -1,8 +1,14 @@
 """icebox_verdict_seen — icebox 3レーン判定の既読ストア（#352）。
 
-一度提示した (issue番号, 評価値ハッシュ) は評価値が変わるまで再提示しない
-（correction_review_seen.jsonl と同型の物理キー集合パターン）。ハッシュは lane/value/reason
-から決定論に導出するため、評価値が変わればキーも変わり自然に再提示対象へ戻る。
+一度提示した (issue番号, lane+closed_at ハッシュ) は lane または closed_at（再凍結）が
+変わるまで再提示しない（correction_review_seen.jsonl と同型の物理キー集合パターン）。
+
+#352 B5: 当初は lane/value/reason からハッシュを導出していたが、value（token_usage の
+累積値等）は単調増加・reason には value が埋め込まれるため、成立を一度表示した後も評価値が
+動くたびに毎日 fingerprint が変わり続け、**同じ成立を永久に再通知**する事故になっていた
+（`store_registry.py` の「評価値が変わるまで再提示しない」宣言にも反する）。fingerprint から
+value/reason を外し lane のみを軸にする。ただし issue が再オープン→再クローズされた
+（再凍結）場合は新しい成立として再提示したいので closed_at は軸に残す。
 
 追記は SessionStart hook が「今回名指しで表示した」verdict に対してのみ行う（自動・確認不要。
 icebox lane1 通知は accept/reject を問う対話でなく受動的な気づき通知のため、daily_review の
@@ -14,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -22,16 +29,18 @@ SEEN_STORE_NAME = "icebox_verdict_seen.jsonl"
 
 
 def verdict_fingerprint(verdict: Dict[str, Any]) -> str:
-    """verdict の判定根拠（lane/value/reason）から短い決定論ハッシュを作る。
+    """verdict の判定根拠（lane/closed_at）から短い決定論ハッシュを作る（#352 B5）。
 
-    number は含めない（key 側で別途組み合わせる）。同じ lane/value/reason なら同じ
-    fingerprint になるので、評価値が変わらない限り再提示しない。
+    number は含めない（key 側で別途組み合わせる）。value/reason は**含めない**
+    （value は単調増加しうる指標のため、含めると評価値が動くたびに毎日再通知される
+    事故になる）。同じ lane・同じ closed_at なら同じ fingerprint になるので、
+    lane が変わる（例: met→再度別条件で met）か issue が再凍結される（closed_at 変化）
+    までは再提示しない。
     """
     payload = json.dumps(
         {
             "lane": verdict.get("lane"),
-            "value": verdict.get("value"),
-            "reason": verdict.get("reason"),
+            "closed_at": verdict.get("closed_at"),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -99,7 +108,11 @@ def record_seen(
 ) -> Dict[str, Any]:
     """verdict 群を既読集合に追記する（dedup + dry-run ゲート貫通）。
 
-    Returns: {"written": int, "dry_run": bool}
+    Returns: {"written": int, "dry_run": bool}. `written` は**書込を試みた件数**でなく
+    **実際に反映されたことを再読込で確認できた件数**（#352 P2: `store_write`/`store_write_raw`
+    の内部実装 `append_jsonl` は OSError を stderr に出すだけで例外化しないサイレント失敗の
+    ため、呼び出し元は例外を握り潰さずとも失敗を知りようがなかった。書込直後に再読込して
+    確認する verify-after-write で補う）。確認できなかった分は stderr に 1 行警告する。
     """
     store = path if path is not None else default_seen_path()
     existing = read_seen_keys(store)
@@ -116,16 +129,28 @@ def record_seen(
     if dry_run:
         return {"written": len(to_write), "dry_run": True}
 
-    if to_write:
-        from rl_common import store_write, store_write_raw
+    if not to_write:
+        return {"written": 0, "dry_run": False}
 
-        seen_at = datetime.now(timezone.utc).isoformat()
-        store.parent.mkdir(parents=True, exist_ok=True)
-        for v in to_write:
-            rec = {"key": verdict_key(v), "number": v.get("number"), "seen_at": seen_at}
-            if path is None:
-                store_write(SEEN_STORE_NAME, rec)
-            else:
-                store_write_raw(store, rec)
+    from rl_common import store_write, store_write_raw
 
-    return {"written": len(to_write), "dry_run": False}
+    seen_at = datetime.now(timezone.utc).isoformat()
+    store.parent.mkdir(parents=True, exist_ok=True)
+    for v in to_write:
+        rec = {"key": verdict_key(v), "number": v.get("number"), "seen_at": seen_at}
+        if path is None:
+            store_write(SEEN_STORE_NAME, rec)
+        else:
+            store_write_raw(store, rec)
+
+    confirmed = read_seen_keys(store)
+    attempted_keys = [verdict_key(v) for v in to_write]
+    written = sum(1 for k in attempted_keys if k in confirmed)
+    if written < len(to_write):
+        print(
+            f"[evolve-anything:icebox_verdict_seen] record_seen: "
+            f"{len(to_write) - written}/{len(to_write)} 件の書込を確認できませんでした"
+            f"（{store}）",
+            file=sys.stderr,
+        )
+    return {"written": written, "dry_run": False}

@@ -189,3 +189,16 @@ class TestBuildMetNotice:
     def test_malformed_generated_at_does_not_crash(self):
         msg = ibn.build_met_notice([_verdict(number=1)], generated_at="not-a-date", now=NOW)
         assert msg is not None  # 判定不能でも本体メッセージは出す（沈黙より安全側）
+
+    # ── B4: 総長 cap（audit 側 MAX_LISTED_ISSUES と対称） ─────────────
+    def test_caps_number_of_named_issues(self):
+        verdicts = [_verdict(number=i) for i in range(1, ibn.MAX_MET_ISSUES + 6)]
+        msg = ibn.build_met_notice(verdicts)
+        assert f"#{ibn.MAX_MET_ISSUES}" in msg
+        assert f"#{ibn.MAX_MET_ISSUES + 1}" not in msg
+        assert "...他 5 件" in msg
+
+    def test_below_cap_lists_all_without_truncation_suffix(self):
+        verdicts = [_verdict(number=i) for i in range(1, ibn.MAX_MET_ISSUES)]
+        msg = ibn.build_met_notice(verdicts)
+        assert "...他" not in msg

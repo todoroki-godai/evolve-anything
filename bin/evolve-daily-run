@@ -32,14 +32,19 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
 import icebox_reconcile  # noqa: E402
 import rl_common  # noqa: E402
 from daily import plist as plist_mod  # noqa: E402
+from rl_common.file_lock import atomic_write_text  # noqa: E402
 
 # icebox 棚卸し対象リポジトリ（evolve-anything 自身）。
 ICEBOX_REPO = "todoroki-godai/evolve-anything"
 ICEBOX_STATUS_FILE_NAME = "icebox-status.json"
-ICEBOX_VERDICTS_FILE_NAME = "icebox-verdicts.json"
 # gh はネットワークを叩く最初の daily ステップ。ハングすると launchd の daily-run が
 # 無期限ブロックするため timeout で保険をかける（fail-open で継続）。
 ICEBOX_GH_TIMEOUT_SECONDS = 30
+# #352 B8: gh は新しい順に返すため limit を超えると**最古**集合が切り捨てられる。
+# icebox 3レーン棚卸しのレーン3（失効候補）はまさに「凍結から最も古い」issue を対象に
+# するため、旧 limit=100 は運用が積み上がるとレーン3が構造的に消え「失効候補 0件 ✓」と
+# 嘘の clean を出しうる。十分大きい値にし、それでも達した場合は取りこぼしを可視化する。
+ICEBOX_GH_LIST_LIMIT = 1000
 
 
 def _icebox_oldest_days(issues, now: datetime) -> "tuple[int, int]":
@@ -150,7 +155,7 @@ def main() -> int:
                 "--json",
                 "closedAt",
                 "--limit",
-                "100",
+                str(ICEBOX_GH_LIST_LIMIT),
             ],
             capture_output=True,
             text=True,
@@ -181,12 +186,23 @@ def main() -> int:
                         file=sys.stderr,
                         flush=True,
                     )
+                # #352 B8: gh --limit に達した＝新しい順に返る gh の性質上、最古集合
+                # （このステップの oldest_days が直接対象）が切り捨てられている疑いがある。
+                truncated = len(issues) >= ICEBOX_GH_LIST_LIMIT
+                if truncated:
+                    print(
+                        f"[evolve-daily-run] icebox status: --limit {ICEBOX_GH_LIST_LIMIT} "
+                        "に到達（実件数がこれを超える場合、最古集合が取得できていません）",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 payload = {
                     "count": len(issues),
                     "oldest_days": oldest_days,
                     "generated_at": now.isoformat(),
+                    "truncated": truncated,
                 }
-                icebox_path.write_text(json.dumps(payload), encoding="utf-8")
+                atomic_write_text(icebox_path, json.dumps(payload))
                 print(f"[evolve-daily-run] wrote {icebox_path} ({payload['count']} icebox issues)", flush=True)
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"[evolve-daily-run] icebox status parse error: {e}（continue）", file=sys.stderr, flush=True)
@@ -194,7 +210,7 @@ def main() -> int:
     # 4) icebox 3レーン棚卸し（#352）。read-only gh issue list（body/closedAt/updatedAt）で
     # reopen-when ブロックを取得し、icebox_reconcile.build_verdicts で決定論分類する。
     # 失敗しても daily-run 全体は落とさない（fail-open、上の icebox 集計ステップと同型）。
-    verdicts_path = data_dir / ICEBOX_VERDICTS_FILE_NAME
+    verdicts_path = Path(plist_mod.icebox_verdicts_json_path(str(data_dir)))
     print(f"[evolve-daily-run] gh issue list --json number,body,closedAt,updatedAt …", flush=True)
     try:
         gh_reconcile_result = subprocess.run(
@@ -211,7 +227,7 @@ def main() -> int:
                 "--json",
                 "number,body,closedAt,updatedAt",
                 "--limit",
-                "100",
+                str(ICEBOX_GH_LIST_LIMIT),
             ],
             capture_output=True,
             text=True,
@@ -232,16 +248,28 @@ def main() -> int:
                 issues = json.loads(gh_reconcile_result.stdout)
                 if not isinstance(issues, list):
                     raise ValueError(f"expected list, got {type(issues).__name__}")
+                # #352 B8: レーン3「失効候補」はまさに最古集合が対象なので、切り捨てが
+                # 起きると「失効候補 0件 ✓」という嘘の clean を出しうる。可視化する。
+                truncated = len(issues) >= ICEBOX_GH_LIST_LIMIT
+                if truncated:
+                    print(
+                        f"[evolve-daily-run] icebox reconcile: --limit {ICEBOX_GH_LIST_LIMIT} "
+                        "に到達（レーン3の最古集合が欠落している疑い）",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 payload = icebox_reconcile.build_verdicts(issues, data_dir=data_dir)
-                verdicts_path.write_text(
-                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-                )
+                payload["truncated"] = truncated
+                atomic_write_text(verdicts_path, json.dumps(payload, ensure_ascii=False))
                 print(
                     f"[evolve-daily-run] wrote {verdicts_path} "
                     f"({len(payload['verdicts'])} verdicts)",
                     flush=True,
                 )
-            except (json.JSONDecodeError, ValueError) as e:
+            except Exception as e:
+                # #352 B1: untrusted YAML の型エラー等、icebox_reconcile 側の想定外例外も
+                # ここで吸収し daily-run 全体を落とさない（従来は JSONDecodeError/ValueError
+                # のみを捕捉しており TypeError 等で daily runner がクラッシュしていた）。
                 print(
                     f"[evolve-daily-run] icebox reconcile parse error: {e}（continue）",
                     file=sys.stderr,

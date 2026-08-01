@@ -26,6 +26,24 @@ def _is_self_repo(project_dir: Path) -> bool:
     return (Path(project_dir) / ".claude-plugin" / "plugin.json").exists()
 
 
+def _lane_lines(items: List[Dict[str, Any]], *, label: str, suffix: str) -> List[str]:
+    """観測器不在（レーン2）/ 失効候補（レーン3）の描画（#352 P7）。
+
+    2レーンの描画がほぼ同一のコピペだった（片側だけ直して desync する典型構造）ため、
+    ここへ1本化する。0件なら「✓」の1行、1件以上なら見出し + up to MAX_LISTED_ISSUES 件の
+    箇条書き + 残り件数のサマリを返す。
+    """
+    if not items:
+        return [f"  ・{label}: 0件 ✓"]
+    lines = [f"  ・⚠ {label}: {len(items)}件 — {suffix}"]
+    for v in items[:MAX_LISTED_ISSUES]:
+        lines.append(f"      #{v.get('number')}: {v.get('reason')}")
+    remaining = len(items) - MAX_LISTED_ISSUES
+    if remaining > 0:
+        lines.append(f"      ...他 {remaining} 件")
+    return lines
+
+
 def build_icebox_reconcile_section(project_dir: Path) -> Optional[List[str]]:
     """icebox 3レーン棚卸し結果を audit に advisory 表示する（決定論・gh 非呼び出し）。"""
 
@@ -51,7 +69,10 @@ def build_icebox_reconcile_section(project_dir: Path) -> Optional[List[str]]:
         from daily import icebox_notice as _ibn
 
         payload = data["payload"]
-        verdicts: List[Dict[str, Any]] = data["verdicts"]
+        # #352 P5: 想定外形状（非 dict 要素）が混入していても audit 全体を巻き込まない。
+        verdicts: List[Dict[str, Any]] = [
+            v for v in data["verdicts"] if isinstance(v, dict)
+        ]
         met = [v for v in verdicts if v.get("lane") == "met"]
         observer_missing = [v for v in verdicts if v.get("lane") == "observer_missing"]
         archive_candidates = [v for v in verdicts if v.get("lane") == "archive_candidate"]
@@ -60,36 +81,30 @@ def build_icebox_reconcile_section(project_dir: Path) -> Optional[List[str]]:
         stale = _ibn.stale_advisory(payload.get("generated_at"), None)
         if stale:
             body.append(f"  ・⚠ {stale}")
+        if payload.get("truncated"):
+            # #352 B8: gh --limit に到達＝レーン3「失効候補」の最古集合が欠落している疑い。
+            body.append(
+                "  ・⚠ daily runner の gh issue list が --limit 上限に到達しています"
+                "（実件数がこれを超える場合、レーン3の最古集合を取得できていません）"
+            )
 
         body.append(
             f"  ・成立（レーン1）: {len(met)}件 — SessionStart で名指し通知（詳細はそちら）。"
         )
-
-        if observer_missing:
-            body.append(
-                f"  ・⚠ 観測器不在（レーン2）: {len(observer_missing)}件 — "
-                "observer を実装すれば自動判定に乗ります:"
+        body.extend(
+            _lane_lines(
+                observer_missing,
+                label="観測器不在（レーン2）",
+                suffix="observer を実装すれば自動判定に乗ります:",
             )
-            for v in observer_missing[:MAX_LISTED_ISSUES]:
-                body.append(f"      #{v.get('number')}: {v.get('reason')}")
-            remaining = len(observer_missing) - MAX_LISTED_ISSUES
-            if remaining > 0:
-                body.append(f"      ...他 {remaining} 件")
-        else:
-            body.append("  ・観測器不在（レーン2）: 0件 ✓")
-
-        if archive_candidates:
-            body.append(
-                f"  ・失効候補（レーン3）: {len(archive_candidates)}件 — "
-                "自動 close はしません（棚卸し検討のみ）:"
+        )
+        body.extend(
+            _lane_lines(
+                archive_candidates,
+                label="失効候補（レーン3）",
+                suffix="自動 close はしません（棚卸し検討のみ）:",
             )
-            for v in archive_candidates[:MAX_LISTED_ISSUES]:
-                body.append(f"      #{v.get('number')}: {v.get('reason')}")
-            remaining = len(archive_candidates) - MAX_LISTED_ISSUES
-            if remaining > 0:
-                body.append(f"      ...他 {remaining} 件")
-        else:
-            body.append("  ・失効候補（レーン3）: 0件 ✓")
+        )
 
         return body
 

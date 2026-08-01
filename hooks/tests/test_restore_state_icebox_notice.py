@@ -220,7 +220,9 @@ def test_deliver_does_not_repeat_already_seen_met_verdict(tmp_path, monkeypatch,
     assert capsys.readouterr().out == ""
 
 
-def test_deliver_reappears_when_value_changes(tmp_path, monkeypatch, capsys):
+def test_deliver_does_not_reappear_when_only_reason_changes(tmp_path, monkeypatch, capsys):
+    """B5 回帰テスト: lane/closed_at が同じなら reason（評価値由来）が変わっても再提示しない
+    （fingerprint に value/reason を含めていた旧実装は毎日再通知される事故だった）。"""
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
     monkeypatch.setattr(rl_common, "DATA_DIR", source)
@@ -235,8 +237,25 @@ def test_deliver_reappears_when_value_changes(tmp_path, monkeypatch, capsys):
         {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99, reason="B")]},
     )
     restore_state._deliver_icebox_notice()
+    assert capsys.readouterr().out == ""
+
+
+def test_deliver_reappears_when_reclosed(tmp_path, monkeypatch, capsys):
+    """再凍結（closed_at が変わる）は fingerprint が変わり再提示される。"""
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    v1 = _verdict(number=99)
+    v1["closed_at"] = "2026-01-01T00:00:00Z"
+    _write_verdicts(source, {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [v1]})
+    restore_state._deliver_icebox_notice()
+    capsys.readouterr()
+    v2 = _verdict(number=99)
+    v2["closed_at"] = "2026-07-01T00:00:00Z"
+    _write_verdicts(source, {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [v2]})
+    restore_state._deliver_icebox_notice()
     out = capsys.readouterr().out
-    assert out  # 評価値（reason）が変わったので再提示される
+    assert out  # 再凍結なので再提示される
 
 
 def test_deliver_falls_back_to_status_when_no_met_verdicts(tmp_path, monkeypatch, capsys):
@@ -266,6 +285,68 @@ def test_deliver_no_verdicts_file_falls_back_to_status(tmp_path, monkeypatch, ca
     out = capsys.readouterr().out
     payload = json.loads(out.strip())
     assert "12件" in payload["systemMessage"]
+
+
+# ── P8: record_seen の write path が read path（seen_path）と明示的に一致する ──
+def test_deliver_passes_explicit_seen_path_to_record_seen(tmp_path, monkeypatch, capsys):
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    _write_verdicts(
+        source,
+        {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99)]},
+    )
+    calls = {}
+    orig = icebox_verdict_seen.record_seen
+
+    def spy(verdicts, *, path=None, dry_run=False):
+        calls["path"] = path
+        return orig(verdicts, path=path, dry_run=dry_run)
+
+    monkeypatch.setattr(icebox_verdict_seen, "record_seen", spy)
+    restore_state._deliver_icebox_notice()
+    capsys.readouterr()
+    assert calls["path"] == source / "icebox_verdict_seen.jsonl"
+
+
+# ── P1: read-decide-print-write を file_lock で1トランザクション化 ──────
+def test_deliver_serializes_via_file_lock(tmp_path, monkeypatch):
+    """同時 SessionStart による二重通知を防ぐため file_lock で直列化する。
+    外部でロックを保持している間は _deliver_icebox_notice が完了しないことを検証する
+    （learning_concurrency_test_by_lock_holding 方式・ロック保持中に進めないかを確認）。"""
+    import fcntl
+    import threading
+    import time
+
+    _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(rl_common, "DATA_DIR", source)
+    _write_verdicts(
+        source,
+        {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99)]},
+    )
+
+    lock_path = source / "icebox_verdict_seen.jsonl.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fh = open(lock_path, "a", encoding="utf-8")
+    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)  # 外部からロックを保持（他プロセス相当）
+
+    finished = threading.Event()
+
+    def _run():
+        restore_state._deliver_icebox_notice()
+        finished.set()
+
+    t = threading.Thread(target=_run)
+    t.start()
+    try:
+        time.sleep(0.2)
+        assert not finished.is_set()  # ロック保持中は完了しない
+    finally:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        lock_fh.close()
+    t.join(timeout=5)
+    assert finished.is_set()
 
 
 def test_deliver_fires_with_default_threshold_no_override(tmp_path, monkeypatch, capsys):

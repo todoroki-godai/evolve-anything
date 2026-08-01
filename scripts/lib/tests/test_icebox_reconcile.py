@@ -94,6 +94,62 @@ class TestExtractReopenWhen:
         block = ir.extract_reopen_when(_body(block_yaml))
         assert block["agent_type"] == "senpai"
 
+    # ── B1: untrusted YAML の型エラーでクラッシュしない ──────────────
+    def test_non_str_op_does_not_crash(self):
+        bad = (
+            "reopen-when:\n  source: weak_signals\n  metric: unprocessed_count\n"
+            "  op: []\n  threshold: 1\n"
+        )
+        assert ir.extract_reopen_when(_body(bad)) is None
+
+    def test_non_str_source_does_not_crash(self):
+        bad = (
+            "reopen-when:\n  source: []\n  metric: unprocessed_count\n"
+            '  op: ">"\n  threshold: 1\n'
+        )
+        assert ir.extract_reopen_when(_body(bad)) is None
+
+    def test_non_str_metric_does_not_crash(self):
+        bad = (
+            "reopen-when:\n  source: weak_signals\n  metric: {}\n"
+            '  op: ">"\n  threshold: 1\n'
+        )
+        assert ir.extract_reopen_when(_body(bad)) is None
+
+    # ── B4: source/metric の injection 耐性（制御文字・改行・過長は拒否） ──
+    def test_source_with_newline_is_rejected(self):
+        bad = (
+            "reopen-when:\n"
+            '  source: "weak_signals\\n## 別見出し\\n悪意のある本文"\n'
+            '  metric: unprocessed_count\n  op: ">"\n  threshold: 1\n'
+        )
+        assert ir.extract_reopen_when(_body(bad)) is None
+
+    def test_metric_too_long_is_rejected(self):
+        bad = (
+            "reopen-when:\n  source: weak_signals\n"
+            f"  metric: {'a' * 65}\n"
+            '  op: ">"\n  threshold: 1\n'
+        )
+        assert ir.extract_reopen_when(_body(bad)) is None
+
+    def test_source_with_spaces_is_rejected(self):
+        bad = (
+            "reopen-when:\n  source: not a valid token\n"
+            '  metric: unprocessed_count\n  op: ">"\n  threshold: 1\n'
+        )
+        assert ir.extract_reopen_when(_body(bad)) is None
+
+    # ── P4: 複数 reopen-when ブロックは ambiguous ──────────────────
+    def test_multiple_valid_blocks_first_wins_for_extract(self):
+        """extract_reopen_when 単体は従来どおり先頭優先（ambiguous 判定は classify_issue 側）。"""
+        body = (
+            f"{ir.REOPEN_HEADING}\n\n```yaml\n{VALID_BLOCK}```\n\n"
+            f"```yaml\n{VALID_BLOCK}```\n"
+        )
+        block = ir.extract_reopen_when(body)
+        assert block is not None
+
 
 # ─────────────────────────────────────────────────────────────────
 # evaluators
@@ -186,6 +242,78 @@ class TestSubagentTracesEvaluator:
         monkeypatch.setattr(q, "per_agent_type_summary", fake_summary)
         value = ir.EVALUATORS["subagent_traces"]["first_try_success_rate"](tmp_path, {})
         assert value == 0.75
+
+
+# ── B6: pj_slug 上書きの廃止（クロス PJ 情報開示防止） ────────────────
+class TestPjSlugOverrideRemoved:
+    def test_weak_signals_evaluator_ignores_extra_pj_slug(self, tmp_path):
+        import json
+
+        store = tmp_path / "weak_signals.jsonl"
+        recs = [
+            {
+                "promoted": False,
+                "detected_at": NOW.isoformat(),
+                "channel": "llm_judge",
+                "pj_slug": "some-other-pj",
+            },
+        ]
+        with open(store, "w", encoding="utf-8") as f:
+            for r in recs:
+                f.write(json.dumps(r) + "\n")
+        # extra で他 PJ の pj_slug を指定しても無視され、SELF_PJ_SLUG スコープのまま
+        # （このレコードは対象外なので 0 件のはず）。
+        value = ir.EVALUATORS["weak_signals"]["unprocessed_count"](
+            tmp_path, {"pj_slug": "some-other-pj"}
+        )
+        assert value == 0.0
+
+    def test_subagent_traces_evaluator_ignores_extra_pj_slug(self, tmp_path, monkeypatch):
+        captured_slug = {}
+
+        def fake_summary(slug, *, min_traces=3, data_dir=None):
+            captured_slug["slug"] = slug
+            return [{"agent_type": "senpai", "n": 5, "first_try_success_rate": 0.8}]
+
+        import subagent_traces.query as q
+
+        monkeypatch.setattr(q, "per_agent_type_summary", fake_summary)
+        ir.EVALUATORS["subagent_traces"]["first_try_success_rate"](
+            tmp_path, {"agent_type": "senpai", "pj_slug": "some-other-pj"}
+        )
+        assert captured_slug["slug"] == ir.SELF_PJ_SLUG
+
+
+# ── B9: weak_signals evaluator の union read ─────────────────────────
+class TestWeakSignalsEvaluatorUnionRead:
+    def test_counts_legacy_dir_records_too(self, tmp_path, monkeypatch):
+        """DATA_DIR 分裂時、canonical だけでなく legacy dir のレコードも合算する。"""
+        import json
+
+        import rl_common
+
+        canonical = tmp_path / "canonical"
+        legacy = tmp_path / "legacy"
+        canonical.mkdir()
+        legacy.mkdir()
+        monkeypatch.setattr(
+            rl_common, "iter_read_data_dirs", lambda canonical=None: [canonical, legacy]
+        )
+        with open(legacy / "weak_signals.jsonl", "w", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "promoted": False,
+                        "detected_at": NOW.isoformat(),
+                        "channel": "llm_judge",
+                        "pj_slug": ir.SELF_PJ_SLUG,
+                        "signal_key": "legacy-1",
+                    }
+                )
+                + "\n"
+            )
+        value = ir.EVALUATORS["weak_signals"]["unprocessed_count"](canonical, {})
+        assert value == 1.0
 
 
 class TestTokenUsageEvaluator:
@@ -354,6 +482,131 @@ class TestClassifyIssue:
         )
         assert v["days_since_closed"] is None
         assert v["lane"] is None
+
+    # ── B1: evaluator が例外を投げても classify_issue は落ちない ─────────
+    def test_evaluator_raising_exception_does_not_crash(self, tmp_path):
+        def _boom(data_dir, extra):
+            raise TypeError("cannot use 'list' as a dict key")
+
+        issue = {
+            "number": 111,
+            "body": _body(VALID_BLOCK),
+            "closedAt": (NOW - timedelta(days=10)).isoformat(),
+            "updatedAt": (NOW - timedelta(days=10)).isoformat(),
+        }
+        v = ir.classify_issue(
+            issue,
+            now=NOW,
+            data_dir=tmp_path,
+            evaluators={"weak_signals": {"unprocessed_count": _boom}},
+        )
+        assert v["lane"] is None
+        assert v["value"] is None
+
+    # ── B2: NaN/inf threshold は成立にならない ───────────────────────
+    def test_nan_threshold_is_observer_missing(self, tmp_path):
+        block_yaml = (
+            "reopen-when:\n  source: weak_signals\n  metric: unprocessed_count\n"
+            '  op: "!="\n  threshold: .nan\n'
+        )
+        issue = {
+            "number": 112,
+            "body": _body(block_yaml),
+            "closedAt": (NOW - timedelta(days=10)).isoformat(),
+            "updatedAt": (NOW - timedelta(days=10)).isoformat(),
+        }
+        v = ir.classify_issue(
+            issue, now=NOW, data_dir=tmp_path, evaluators=_fake_evaluators(5)
+        )
+        assert v["lane"] == "observer_missing"
+
+    def test_inf_threshold_is_observer_missing(self, tmp_path):
+        block_yaml = (
+            "reopen-when:\n  source: weak_signals\n  metric: unprocessed_count\n"
+            '  op: "<"\n  threshold: .inf\n'
+        )
+        issue = {
+            "number": 113,
+            "body": _body(block_yaml),
+            "closedAt": (NOW - timedelta(days=10)).isoformat(),
+            "updatedAt": (NOW - timedelta(days=10)).isoformat(),
+        }
+        v = ir.classify_issue(
+            issue, now=NOW, data_dir=tmp_path, evaluators=_fake_evaluators(5)
+        )
+        assert v["lane"] == "observer_missing"
+
+    def test_non_numeric_threshold_reason_does_not_echo_raw_value(self, tmp_path):
+        """B4: threshold が数値でない場合、issue 本文由来の生値を reason に埋め込まない。"""
+        block_yaml = (
+            "reopen-when:\n  source: weak_signals\n  metric: unprocessed_count\n"
+            '  op: ">"\n  threshold: "AAAA\\n## injected heading\\npwned"\n'
+        )
+        issue = {
+            "number": 114,
+            "body": _body(block_yaml),
+            "closedAt": (NOW - timedelta(days=10)).isoformat(),
+            "updatedAt": (NOW - timedelta(days=10)).isoformat(),
+        }
+        v = ir.classify_issue(issue, now=NOW, data_dir=tmp_path)
+        assert v["lane"] == "observer_missing"
+        assert "pwned" not in v["reason"]
+        assert "injected" not in v["reason"]
+
+    # ── B3: 評価値未計測（None）は archive 候補にしない ────────────────
+    def test_old_closed_with_none_value_is_not_archive_candidate(self, tmp_path):
+        closed = NOW - timedelta(days=200)
+        issue = {
+            "number": 115,
+            "body": _body(VALID_BLOCK),
+            "closedAt": closed.isoformat(),
+            "updatedAt": closed.isoformat(),
+        }
+        v = ir.classify_issue(
+            issue, now=NOW, data_dir=tmp_path, evaluators=_fake_evaluators(None)
+        )
+        assert v["lane"] is None
+        assert v["reason"] == "評価値を取得できませんでした（未計測）"
+
+    # ── P4: 複数 reopen-when ブロックは ambiguous として observer_missing ──
+    def test_multiple_reopen_when_blocks_is_ambiguous(self, tmp_path):
+        body = (
+            f"{ir.REOPEN_HEADING}\n\n```yaml\n{VALID_BLOCK}```\n\n"
+            f"```yaml\n{VALID_BLOCK}```\n"
+        )
+        issue = {
+            "number": 116,
+            "body": body,
+            "closedAt": (NOW - timedelta(days=10)).isoformat(),
+            "updatedAt": (NOW - timedelta(days=10)).isoformat(),
+        }
+        v = ir.classify_issue(
+            issue, now=NOW, data_dir=tmp_path, evaluators=_fake_evaluators(999)
+        )
+        assert v["lane"] == "observer_missing"
+        assert "複数" in v["reason"]
+
+
+# ─────────────────────────────────────────────────────────────────
+# P3: _edited_after_close の窓（実質48時間バグの回帰テスト）
+# ─────────────────────────────────────────────────────────────────
+class TestEditedAfterClose:
+    def test_25_hours_after_close_counts_as_edited(self):
+        """UPDATE_TOLERANCE_DAYS=1（=24h）超なら編集済みとみなす。
+        `.days` 比較の丸めバグは 25h 差を「未編集」に誤判定していた（実質48h窓）。"""
+        closed = NOW
+        updated = NOW + timedelta(hours=25)
+        assert ir._edited_after_close(closed, updated) is True
+
+    def test_exactly_24_hours_is_not_edited(self):
+        closed = NOW
+        updated = NOW + timedelta(hours=24)
+        assert ir._edited_after_close(closed, updated) is False
+
+    def test_47_hours_counts_as_edited(self):
+        closed = NOW
+        updated = NOW + timedelta(hours=47)
+        assert ir._edited_after_close(closed, updated) is True
 
 
 # ─────────────────────────────────────────────────────────────────

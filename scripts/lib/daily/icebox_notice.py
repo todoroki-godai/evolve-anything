@@ -19,12 +19,19 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import plist as _plist  # #352 P6: icebox-verdicts.json パスの単一ソース
+
 ICEBOX_FILE_NAME = "icebox-status.json"
-ICEBOX_VERDICTS_FILE_NAME = "icebox-verdicts.json"
 
 # icebox-verdicts.json の generated_at がこれより古ければ「daily runner が止まっている
 # 可能性」を通知に添える（daily runner は毎朝1回なので1日の実行漏れまでは許容する）。
 STALE_VERDICTS_DAYS = 2
+
+# レーン1「成立」通知で名指しする issue 数の上限（#352 B4）。audit 側の
+# MAX_LISTED_ISSUES（`audit/sections_icebox_reconcile.py`）と対称。全件成立が積み上がる
+# ケースで systemMessage が無制限に伸びるのを防ぐ（untrusted 入力由来ではないが、
+# 可読性・出力サイズの観点で同じ cap パターンを踏襲する）。
+MAX_MET_ISSUES = 10
 
 # oldest_days がこの日数以上なら通知する既定閾値。
 # 実運用（hooks/restore_state.py 経由）ではこの値でなく rl_common.config の
@@ -95,7 +102,7 @@ def icebox_notice_output(
 # ─────────────────────────────────────────────────────────────────
 def read_icebox_verdicts(data_dir) -> "dict | None":
     """data_dir/icebox-verdicts.json を読んで dict を返す。無い/壊れていれば None。"""
-    path = Path(data_dir) / ICEBOX_VERDICTS_FILE_NAME
+    path = Path(_plist.icebox_verdicts_json_path(str(data_dir)))
     try:
         if not path.exists():
             return None
@@ -154,14 +161,20 @@ def build_met_notice(
 ) -> "str | None":
     """レーン1「成立」verdict 群から SessionStart 通知メッセージを組み立てる。
 
-    verdicts が空なら None（沈黙）。1件以上あれば該当 issue を**すべて名指し**し、
-    根拠（verdict["reason"]）を添える（件数集約通知とは異なり個別列挙が仕様）。
+    verdicts が空なら None（沈黙）。1件以上あれば該当 issue を名指しし、根拠
+    （verdict["reason"]）を添える（件数集約通知とは異なり個別列挙が仕様）。`MAX_MET_ISSUES`
+    件を超える分は「...他 N 件」に畳む（#352 B4・audit 側 MAX_LISTED_ISSUES と対称）。
     generated_at が古ければ末尾に staleness advisory を付す。
     """
     if not verdicts:
         return None
-    segments = [f"#{v.get('number')}（{v.get('reason', '')}）" for v in verdicts]
-    msg = f"[evolve-anything] icebox 再開条件が成立しました: {' / '.join(segments)}"
+    shown = verdicts[:MAX_MET_ISSUES]
+    segments = [f"#{v.get('number')}（{v.get('reason', '')}）" for v in shown]
+    remaining = len(verdicts) - len(shown)
+    body = " / ".join(segments)
+    if remaining > 0:
+        body = f"{body} ...他 {remaining} 件"
+    msg = f"[evolve-anything] icebox 再開条件が成立しました: {body}"
     stale = stale_advisory(generated_at, now)
     if stale:
         msg = f"{msg} {stale}"
@@ -180,7 +193,10 @@ def icebox_verdicts_notice_output(
     shown = unseen_met_verdicts(verdicts_payload, seen_keys)
     if not shown:
         return None, []
-    generated_at = verdicts_payload.get("generated_at") if isinstance(verdicts_payload, dict) else None
+    # #352 P9: shown が非空になるのは unseen_met_verdicts 内の isinstance(verdicts_payload, dict)
+    # チェックを通過した場合のみ（そうでなければ [] で早期 return 済み）なので、ここで
+    # verdicts_payload が dict であることは保証済み。旧実装の isinstance 分岐は到達不能だった。
+    generated_at = verdicts_payload.get("generated_at")
     msg = build_met_notice(shown, generated_at=generated_at, now=now)
     if msg is None:
         return None, []

@@ -22,8 +22,9 @@ gh 呼び出しはこのモジュールの責務外（呼び出し側が issue �
 """
 from __future__ import annotations
 
+import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -49,8 +50,17 @@ _OPS: Dict[str, Callable[[float, float], bool]] = {
     "!=": lambda v, t: v != t,
 }
 
+# source/metric に許す文字種（#352 B4）。issue 本文は untrusted 入力のため、audit や
+# systemMessage の reason にそのまま埋め込んでよいのはこのパターンに適合する値だけに限る
+# （制御文字・改行・空白・過長文字列は reopen-when ブロックごと無効化＝レーン2「観測器不在」
+# の汎用理由へ合流させ、untrusted な生値を一切 echo しない）。
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
 # icebox 棚卸しは evolve-anything 自身の backlog に対してのみ動く（daily runner の
-# ICEBOX_REPO と同じスコープ）。reopen-when ブロックが `pj_slug` を明示しなければこれを使う。
+# ICEBOX_REPO と同じスコープ）。#352 B6: reopen-when ブロックの `pj_slug` extra キーによる
+# 上書きは廃止（issue 本文は untrusted 入力のため、これを許すと他 PJ のデータを覗く経路に
+# なる＝クロス PJ 情報開示。systemMessage/audit でユーザーに結果値が出るため影響が大きい）。
+# 評価器は常にこの定数を使う。
 SELF_PJ_SLUG = "evolve-anything"
 
 
@@ -72,23 +82,31 @@ def _fenced_blocks(section_text: str) -> List[str]:
     return re.findall(r"```(?:ya?ml)?\n(.*?)```", section_text, flags=re.DOTALL)
 
 
-def extract_reopen_when(body: Optional[str]) -> Optional[Dict[str, Any]]:
-    """issue 本文の `## 再開条件` 配下から reopen-when ブロック（dict）を抽出する。
+def _valid_blocks(body: Optional[str]) -> List[Dict[str, Any]]:
+    """issue 本文の `## 再開条件` 配下から有効な reopen-when ブロックを出現順に**すべて**返す。
 
-    以下はいずれも None（区別せずレーン2「観測器不在」に合流させるため）:
+    `extract_reopen_when`（先頭優先の後方互換 API）と `classify_issue`（ambiguous 判定に
+    件数が要る・#352 P4）が共有する内部実装。以下はいずれもブロックとして採用しない
+    （区別せずレーン2「観測器不在」に合流させるため）:
     - body が空 / `## 再開条件` 見出しが無い
     - 見出し配下に fenced YAML が無い / パース不能
     - トップレベルに `reopen-when` キーが無い、または値が dict でない
     - source/metric/op/threshold のいずれか欠落
+    - source/metric/op が str でない（#352 B1: YAML はどの値も list/dict/数値になりうる。
+      非 str のまま `dict` の key 照合に使うと unhashable な list/dict で TypeError が飛ぶ）
+    - source/metric が `_TOKEN_RE` に適合しない（制御文字・改行・空白・65文字以上・#352 B4:
+      issue 本文は untrusted 入力なので、reason に埋め込んでよい形へブロック単位で絞る）
     - op が未知の演算子
 
-    自由文併記や `agent_type`/`pj_slug` 等の追加キーはそのまま保持して返す。
+    自由文併記や `agent_type` 等の追加キーはそのまま保持して返す（`pj_slug` は #352 B6 で
+    評価器側が無視するため、ここで拒否する必要はない）。
     """
     if not isinstance(body, str) or not body:
-        return None
+        return []
     section = _section_after_heading(body, REOPEN_HEADING)
     if section is None:
-        return None
+        return []
+    out: List[Dict[str, Any]] = []
     for raw in _fenced_blocks(section):
         try:
             parsed = yaml.safe_load(raw)
@@ -101,10 +119,24 @@ def extract_reopen_when(body: Optional[str]) -> Optional[Dict[str, Any]]:
             continue
         if not all(k in block for k in _REQUIRED_BLOCK_KEYS):
             continue
-        if block.get("op") not in _OPS:
+        if not all(isinstance(block.get(k), str) for k in ("source", "metric", "op")):
             continue
-        return block
-    return None
+        if not (_TOKEN_RE.fullmatch(block["source"]) and _TOKEN_RE.fullmatch(block["metric"])):
+            continue
+        if block["op"] not in _OPS:
+            continue
+        out.append(block)
+    return out
+
+
+def extract_reopen_when(body: Optional[str]) -> Optional[Dict[str, Any]]:
+    """issue 本文の `## 再開条件` 配下から reopen-when ブロック（dict）を抽出する。
+
+    複数の有効なブロックが見つかった場合は先頭を返す（ambiguous 判定は `classify_issue`
+    が `_valid_blocks` を直接使って行う・#352 P4）。無効化条件は `_valid_blocks` 参照。
+    """
+    blocks = _valid_blocks(body)
+    return blocks[0] if blocks else None
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -113,9 +145,18 @@ def extract_reopen_when(body: Optional[str]) -> Optional[Dict[str, Any]]:
 def _eval_weak_signals_unprocessed_count(
     data_dir: Path, extra: Dict[str, Any]
 ) -> Optional[float]:
-    """当 PJ（既定 SELF_PJ_SLUG）の未昇格・非失効 weak_signal 件数。"""
+    """SELF_PJ_SLUG（当 PJ 固定・#352 B6）の未昇格・非失効 weak_signal 件数。
+
+    #352 B9: `weak_signals.store.read_signals` に明示 path を渡す従来実装は canonical
+    dir しか読まず、DATA_DIR 分裂（既知 pitfall_datadir_hook_tool_split）時に
+    legacy/plugins-data ストアを取りこぼして未処理件数を過少カウントし、`<=` 条件を
+    誤って成立させうる。weak_signals の他 reader（daily_review 等）が使う union read
+    （`rl_common.iter_read_data_dirs`）と同じ流儀に合わせ、`data_dir` を canonical 起点に
+    union 解決してから各 dir を読む（`data_dir` がテスト isolation の tmp_path でも、
+    legacy 候補は存在しなければ自動的に候補から外れるので既存の単一 dir テストは無改修で通る）。
+    """
     try:
-        from weak_signals.store import read_signals
+        from weak_signals.store import STORE_NAME, _read_one
         from weak_signals.ttl import is_effectively_expired
     except ImportError:
         return None
@@ -125,32 +166,44 @@ def _eval_weak_signals_unprocessed_count(
         def _pj_slug_match(a, b):  # type: ignore
             return a == b
 
-    slug = extra.get("pj_slug") or SELF_PJ_SLUG
-    path = Path(data_dir) / "weak_signals.jsonl"
-    recs = read_signals(path)
+    try:
+        import rl_common
+        dirs = rl_common.iter_read_data_dirs(canonical=Path(data_dir))
+    except Exception:
+        dirs = [Path(data_dir)]
+
     count = 0
-    for r in recs:
-        if not _pj_slug_match(r.get("pj_slug"), slug):
-            continue
-        if r.get("promoted"):
-            continue
-        if is_effectively_expired(r):
-            continue
-        count += 1
+    seen_keys: set = set()
+    for d in dirs:
+        for r in _read_one(Path(d) / STORE_NAME):
+            k = r.get("signal_key")
+            if k:
+                if k in seen_keys:
+                    continue
+                seen_keys.add(k)
+            if not _pj_slug_match(r.get("pj_slug"), SELF_PJ_SLUG):
+                continue
+            if r.get("promoted"):
+                continue
+            if is_effectively_expired(r):
+                continue
+            count += 1
     return float(count)
 
 
 def _eval_subagent_traces_first_try_success_rate(
     data_dir: Path, extra: Dict[str, Any]
 ) -> Optional[float]:
-    """当 PJ の agent_type 別内部一発成功率。`agent_type` 指定が無ければ n 加重平均。"""
+    """SELF_PJ_SLUG（当 PJ 固定・#352 B6）の agent_type 別内部一発成功率。
+
+    `agent_type` 指定が無ければ n 加重平均。
+    """
     try:
         from subagent_traces.query import per_agent_type_summary
     except ImportError:
         return None
 
-    slug = extra.get("pj_slug") or SELF_PJ_SLUG
-    summaries = per_agent_type_summary(slug, data_dir=Path(data_dir))
+    summaries = per_agent_type_summary(SELF_PJ_SLUG, data_dir=Path(data_dir))
     if not summaries:
         return None
 
@@ -235,10 +288,16 @@ def _parse_iso(value: Any) -> Optional[datetime]:
 
 
 def _edited_after_close(closed_dt: Optional[datetime], updated_dt: Optional[datetime]) -> bool:
-    """closedAt 以降に本文が実質編集されたとみなせるか（UPDATE_TOLERANCE_DAYS 超の差）。"""
+    """closedAt 以降に本文が実質編集されたとみなせるか（UPDATE_TOLERANCE_DAYS 超の差）。
+
+    #352 P3: `timedelta.days` は端数を切り捨てる（25時間差でも `.days == 1`）ため、
+    旧実装の `.days > UPDATE_TOLERANCE_DAYS`（=1）は「24時間超」でなく実質「48時間超」
+    でしか True にならなかった。timedelta 同士を直接比較し docstring 通りの
+    「UPDATE_TOLERANCE_DAYS 超」に一致させる。
+    """
     if not closed_dt or not updated_dt:
         return False
-    return (updated_dt - closed_dt).days > UPDATE_TOLERANCE_DAYS
+    return (updated_dt - closed_dt) > timedelta(days=UPDATE_TOLERANCE_DAYS)
 
 
 def _verdict(
@@ -281,6 +340,14 @@ def classify_issue(
 
     Returns: `_verdict` 形の dict。lane は "met" / "observer_missing" /
     "archive_candidate" / None（判定不能でも未成立でもなく単に「まだ何も言えない」）。
+
+    #352 の一発監査（レビュー指摘 B1-B4/P4）を踏まえ、issue 本文は untrusted 入力である
+    前提で全経路を固める:
+    - ブロックが複数見つかった場合は一意に定まらないので observer_missing（P4）
+    - evaluator 呼び出しは例外を投げても落ちない（B1）
+    - threshold は非有限（NaN/inf）なら成立させない（B2）。数値変換に失敗した理由は
+      issue 本文由来の生値を echo しない固定文言にする（B4）
+    - 評価値が実測できていない（None）のに凍結年齢だけで archive 候補にしない（B3）
     """
     evals = evaluators if evaluators is not None else EVALUATORS
     number = issue.get("number")
@@ -291,19 +358,32 @@ def classify_issue(
     updated_dt = _parse_iso(updated_at_raw)
     days_since_closed = (now - closed_dt).days if closed_dt else None
 
-    block = extract_reopen_when(body)
-    if block is None:
+    blocks = _valid_blocks(body)
+    if len(blocks) > 1:
         return _verdict(
             number,
             lane="observer_missing",
             reason=(
-                f"`{REOPEN_HEADING}` の reopen-when ブロックが無い、または"
-                "必須キー(source/metric/op/threshold)が欠落しています"
+                f"`{REOPEN_HEADING}` 配下に reopen-when ブロックが複数見つかりました"
+                "（条件が一意に定まらないため判定できません。1つに統合してください）"
             ),
             closed_at=closed_at_raw,
             updated_at=updated_at_raw,
             days_since_closed=days_since_closed,
         )
+    if not blocks:
+        return _verdict(
+            number,
+            lane="observer_missing",
+            reason=(
+                f"`{REOPEN_HEADING}` の reopen-when ブロックが無い、または"
+                "必須キー(source/metric/op/threshold)が欠落・不正な形式です"
+            ),
+            closed_at=closed_at_raw,
+            updated_at=updated_at_raw,
+            days_since_closed=days_since_closed,
+        )
+    block = blocks[0]
 
     source = block["source"]
     metric = block["metric"]
@@ -314,7 +394,19 @@ def classify_issue(
         return _verdict(
             number,
             lane="observer_missing",
-            reason=f"threshold が数値でない: {block['threshold']!r}",
+            reason="threshold が数値ではありません（reopen-when ブロックを確認してください）",
+            source=source,
+            metric=metric,
+            op=op,
+            closed_at=closed_at_raw,
+            updated_at=updated_at_raw,
+            days_since_closed=days_since_closed,
+        )
+    if not math.isfinite(threshold):
+        return _verdict(
+            number,
+            lane="observer_missing",
+            reason="threshold が有限の数値ではありません（NaN/inf は指定できません）",
             source=source,
             metric=metric,
             op=op,
@@ -341,7 +433,10 @@ def classify_issue(
             days_since_closed=days_since_closed,
         )
 
-    value = metric_fn(data_dir, block)
+    try:
+        value = metric_fn(data_dir, block)
+    except Exception:
+        value = None
 
     if value is not None and _OPS[op](value, threshold):
         return _verdict(
@@ -359,7 +454,8 @@ def classify_issue(
         )
 
     if (
-        days_since_closed is not None
+        value is not None
+        and days_since_closed is not None
         and days_since_closed >= ARCHIVE_AGE_DAYS
         and not _edited_after_close(closed_dt, updated_dt)
     ):

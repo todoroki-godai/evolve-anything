@@ -436,17 +436,39 @@ def _deliver_icebox_notice() -> None:
         # #352 レーン1「成立」: 未既読の成立 verdict があれば名指しで優先通知する。
         if _icebox_verdict_seen is not None:
             verdicts_payload = _icebox_notice.read_icebox_verdicts(data_dir)
-            seen_path = _icebox_verdict_seen.default_seen_path(data_dir)
-            seen_keys = _icebox_verdict_seen.read_seen_keys(seen_path)
-            output, shown = _icebox_notice.icebox_verdicts_notice_output(
-                verdicts_payload, seen_keys
-            )
+            output = None
+            # icebox-verdicts.json 自体が無い（daily runner 未実行 or #352 未対応期）場合は
+            # ロックファイルすら作らず read-only を維持する（icebox 通知は read-only という
+            # 既存契約・`test_deliver_does_not_write` を壊さない）。
+            if verdicts_payload is not None:
+                seen_path = _icebox_verdict_seen.default_seen_path(data_dir)
+
+                # #352 P1: read（seen_keys）→ decide（未既読判定）→ print（通知）→
+                # write（既読化）を file_lock で1トランザクション化する。同時に複数
+                # SessionStart（同一 PJ の並行セッション起動）が走ると、ロック無しでは両方が
+                # 「まだ未既読」を読んだ直後に両方通知・両方 record_seen する二重通知が起きうる。
+                # `rl_common.file_lock` は open file description 単位のロックなので、対象
+                # ファイルそのものでなく sidecar（`<store>.lock`）に取る（evolve_decisions と
+                # 同型）。
+                from rl_common.file_lock import file_lock as _file_lock  # 遅延 import
+
+                lock_path = seen_path.with_name(seen_path.name + ".lock")
+                with _file_lock(lock_path):
+                    seen_keys = _icebox_verdict_seen.read_seen_keys(seen_path)
+                    output, shown = _icebox_notice.icebox_verdicts_notice_output(
+                        verdicts_payload, seen_keys
+                    )
+                    if output:
+                        print(json.dumps(output, ensure_ascii=False))
+                        # icebox_verdict_seen.jsonl（既読ストア・hook writer・低頻度: 新規
+                        # 成立時のみ）へ表示済み verdict を記録する。lane/closed_at が変わる
+                        # まで再提示しない（#352 B5）。
+                        # #352 P8: read（上の seen_path）と write のパス解決を明示的に一致
+                        # させる（write 側が path 未指定で暗黙に env から再解決すると、
+                        # hook/tool の DATA_DIR 分裂時に read/write が別ファイルを見る既知
+                        # pitfall と同型になる）。
+                        _icebox_verdict_seen.record_seen(shown, path=seen_path)
             if output:
-                print(json.dumps(output, ensure_ascii=False))
-                # icebox_verdict_seen.jsonl（既読ストア・hook writer・低頻度: 新規成立時のみ）
-                # へ表示済み verdict を記録する。評価値が変わるまで再提示しない。path 未指定
-                # ＝ ADR-049 / #55 単一書込ゲート store_write 経由（registry guard を通す）。
-                _icebox_verdict_seen.record_seen(shown)
                 return
 
         status = _icebox_notice.read_icebox_status(data_dir)

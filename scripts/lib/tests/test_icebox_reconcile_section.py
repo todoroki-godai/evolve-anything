@@ -134,3 +134,62 @@ def test_truncates_long_lists(tmp_path, monkeypatch):
     lines = build_icebox_reconcile_section(proj)
     body = "\n".join(lines)
     assert "他 5 件" in body
+
+
+# ── P5: 非 dict 要素混在で audit 全体を巻き込まない ────────────────────
+def test_non_dict_verdict_elements_do_not_crash(tmp_path, monkeypatch):
+    proj = _self_project(tmp_path)
+    data_dir = tmp_path / "data"
+    _write_verdicts(
+        data_dir,
+        {
+            "generated_at": "2026-08-01T00:00:00Z",
+            "verdicts": [
+                _verdict(1, "observer_missing", reason="x"),
+                "not-a-dict",
+                123,
+                None,
+                _verdict(2, "archive_candidate", reason="y"),
+            ],
+        },
+    )
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
+    lines = build_icebox_reconcile_section(proj)
+    assert lines is not None
+    body = "\n".join(lines)
+    assert "#1" in body and "#2" in body
+
+
+# ── B8: gh --limit 到達（truncated）を advisory 表示 ──────────────────
+def test_truncated_flag_shows_warning(tmp_path, monkeypatch):
+    proj = _self_project(tmp_path)
+    data_dir = tmp_path / "data"
+    _write_verdicts(
+        data_dir,
+        {
+            "generated_at": "2026-08-01T00:00:00Z",
+            "truncated": True,
+            "verdicts": [_verdict(1, "observer_missing")],
+        },
+    )
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
+    lines = build_icebox_reconcile_section(proj)
+    body = "\n".join(lines)
+    assert "limit" in body.lower() or "上限" in body
+
+
+def test_not_truncated_shows_no_warning(tmp_path, monkeypatch):
+    proj = _self_project(tmp_path)
+    data_dir = tmp_path / "data"
+    _write_verdicts(
+        data_dir,
+        {
+            "generated_at": "2026-08-01T00:00:00Z",
+            "truncated": False,
+            "verdicts": [_verdict(1, "observer_missing")],
+        },
+    )
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
+    lines = build_icebox_reconcile_section(proj)
+    body = "\n".join(lines)
+    assert "上限" not in body

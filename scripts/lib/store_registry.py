@@ -394,9 +394,11 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "レーン1「成立」通知を名指しで表示した直後に icebox_verdict_seen.record_seen を呼ぶ）。"
         "hot path（hook）書き込みだが低頻度（当PJで作業しているセッションの新規成立時のみ）。",
         reader="icebox_verdict_seen.read_seen_keys / filter_unseen が次回表示判定に参照"
-        "（自己消費）。評価値（lane/value/reason）が変わるまで再提示しない。",
+        "（自己消費）。lane または closed_at（再凍結）が変わるまで再提示しない"
+        "（value/reason は fingerprint に含めない・#352 B5: 単調増加する value を含めると"
+        "毎日再通知される事故になるため）。",
         retention="permanent",
-        note="#352 icebox 3レーン棚卸しの既読集合（issue番号+評価値ハッシュの物理キー）。"
+        note="#352 icebox 3レーン棚卸しの既読集合（issue番号+lane/closed_atハッシュの物理キー）。"
         "correction_review_seen.jsonl と同型。低書込レート・肥大化しない。",
     ),
     StoreDeclaration(

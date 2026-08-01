@@ -103,8 +103,25 @@ def test_reconcile_gh_call_uses_expected_fields(monkeypatch):
         "--json",
         "number,body,closedAt,updatedAt",
         "--limit",
-        "100",
+        str(mod.ICEBOX_GH_LIST_LIMIT),
     ]
+
+
+def test_writes_icebox_verdicts_json_via_atomic_write_text(monkeypatch, tmp_path):
+    """#352 B7: icebox-verdicts.json も atomic_write_text 経由で書く。"""
+    mod = _load_module()
+    calls = []
+    orig = mod.atomic_write_text
+
+    def spy(path, text):
+        calls.append(Path(path))
+        return orig(path, text)
+
+    monkeypatch.setattr(mod, "atomic_write_text", spy)
+    _install_fake_run(mod, monkeypatch, reconcile_stdout="[]")
+    rc = mod.main()
+    assert rc == 0
+    assert tmp_path / "icebox-verdicts.json" in calls
 
 
 def test_writes_icebox_verdicts_json(monkeypatch, tmp_path):
@@ -127,6 +144,32 @@ def test_writes_icebox_verdicts_json(monkeypatch, tmp_path):
     assert len(payload["verdicts"]) == 1
     assert payload["verdicts"][0]["number"] == 321
     assert payload["verdicts"][0]["lane"] is None  # threshold 999999 は満たさない
+
+
+def test_reconcile_truncated_flag_and_warning(monkeypatch, tmp_path, capsys):
+    """#352 B8: 件数が --limit に達したら payload に truncated を立て stderr に warn する。"""
+    mod = _load_module()
+    now = datetime.now(timezone.utc)
+    closed = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    issues = [
+        {"number": i, "body": "", "closedAt": closed, "updatedAt": closed}
+        for i in range(mod.ICEBOX_GH_LIST_LIMIT)
+    ]
+    _install_fake_run(mod, monkeypatch, reconcile_stdout=json.dumps(issues))
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "icebox-verdicts.json").read_text(encoding="utf-8"))
+    assert payload["truncated"] is True
+    assert f"--limit {mod.ICEBOX_GH_LIST_LIMIT}" in capsys.readouterr().err
+
+
+def test_reconcile_not_truncated_below_limit(monkeypatch, tmp_path):
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch, reconcile_stdout="[]")
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "icebox-verdicts.json").read_text(encoding="utf-8"))
+    assert payload["truncated"] is False
 
 
 def test_reconcile_gh_failure_does_not_crash_daily_run(monkeypatch, tmp_path):
@@ -152,6 +195,21 @@ def test_reconcile_gh_missing_binary_does_not_crash_daily_run(monkeypatch, tmp_p
     _install_fake_run(mod, monkeypatch, reconcile_raises=FileNotFoundError("gh not found"))
     rc = mod.main()
     assert rc == 0
+
+
+def test_reconcile_unexpected_exception_does_not_crash_daily_run(monkeypatch, tmp_path):
+    """#352 B1 回帰: build_verdicts が想定外例外（TypeError 等）を投げても daily-run は落ちない
+    （旧実装は json.JSONDecodeError/ValueError のみ捕捉していた）。"""
+    mod = _load_module()
+
+    def _boom(issues, *, data_dir=None):
+        raise TypeError("boom")
+
+    monkeypatch.setattr(icebox_reconcile, "build_verdicts", _boom)
+    _install_fake_run(mod, monkeypatch, reconcile_stdout="[]")
+    rc = mod.main()
+    assert rc == 0
+    assert not (tmp_path / "icebox-verdicts.json").exists()
 
 
 def test_reconcile_malformed_json_does_not_crash_daily_run(monkeypatch, tmp_path):
