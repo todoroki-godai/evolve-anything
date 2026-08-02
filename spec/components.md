@@ -37,8 +37,12 @@ multiview_eval, relevance_gate, remediation参照リンク相対化, report-feed
 ## fleet運用・記憶温度・環境衛生検出器 → [components-fleet.md](components-fleet.md)
 
 recall link 1-hop, recall validity-aware ranking, reinforce_memory配線, memory_capability,
-skill_vuln_scan, fanout_cost, memory_contagion, memory_guard, fleet_queue, daily,
-icebox_notice, artifacts_hygiene, memory_hygiene, memory_stale_refs, invalid_frontmatter,
+skill_vuln_scan, fanout_cost, memory_contagion, memory_guard,
+artifacts_hygiene, memory_hygiene, memory_stale_refs, invalid_frontmatter,
 self_contamination, evolve_tier, tier_skill, judge_audit, worker_takeoff,
 skill_reachability, fleet_propose, fleet_pr, agent_coordination, codex_config_cleanup,
 runtime_telemetry, codex_usage
+
+## daily-evolve パイプライン・icebox 棚卸し → [components-daily.md](components-daily.md)
+
+fleet_queue, queue_verify, fleet_detect, daily, icebox_notice, icebox_reconcile
