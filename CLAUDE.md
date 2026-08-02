@@ -36,7 +36,7 @@
 |----------------|-----------|------|
 | Observe hooks (24個 registered) | LLM コストゼロで使用・エラー・修正・ワークフロー・ファイル変更を自動記録 | `hooks/` |
 | Auto Trigger | corrections 蓄積・セッション終了等で evolve/audit を自動提案 | `trigger_engine.py` |
-| `userConfig` | trigger 閾値・各種上限など 20 項目をプラグイン有効化時に設定可能 | manifest |
+| `userConfig` | trigger 閾値・各種上限など 21 項目をプラグイン有効化時に設定可能 | manifest |
 | `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチ + GEPA 数値ガードレール（入力件数/pitfalls char 上限・パッチ `char_limit` gate・実データ dry-run 較正 #120） | agent |
 | `evolve-loop-orchestrator` | ベースライン→バリエーション→評価→人間確認のループ統合 | agent |
 | `variant_generation` | バリエーション生成の配線drift修理 — optimize.py subprocess呼び出しから直接import方式へ（#234 PR1） | `skills/evolve-loop-orchestrator/scripts/variant_generation.py` |
