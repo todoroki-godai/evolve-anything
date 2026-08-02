@@ -50,6 +50,8 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | bootstrap backlog | 初回 evolve で既存 weak_signals バックログの消化方式を人間が3択（まとめて確認/日次5件/TTL 失効に任せる）で選ぶ phase。marker `bootstrap_done-<slug>.marker` で1回きり | #443 |
 | 今日の修正確認（daily review） | evolve の決定論 phase。新規 weak_signal を idiom 単位 group 化し最大5件を y/n 確認 → promote 成功後のみ既読追記（`correction_review_seen.jsonl`）。reflect Step 7.7 の移植 | #446 |
 | icebox | 再開条件付き凍結 issue。closed + label `icebox` で open バックログを汚さず評価内容を保持（tech-eval 3問ゲートの行き先）。daily runner が棚卸し集計し最古N日超（既定30日・userConfig `icebox_review_threshold_days` で調整可）を SessionStart で1行通知（`icebox_notice`） | #194 |
+| icebox 3レーン分類 | icebox の再開条件を実ストアと決定論突合し「成立」（レーン1）/「観測器不在」（レーン2）/「失効候補」（レーン3）へ判定する `icebox_reconcile` の分類（優先順位 met > observer_missing > archive_candidate）。成立分のみ SessionStart が名指し通知、観測器不在・失効候補は audit advisory | #352 |
+| reopen-when | icebox issue 本文 `## 再開条件` 配下の fenced YAML ブロック契約（`source`/`metric`/`op`/`threshold`）。`icebox_reconcile` が weak_signals/subagent_traces/token_usage 等の evaluator と決定論突合し成立判定する入力 | #352 |
 | idiom_autopromote（自動昇格） | confirmed idiom と同テキスト（pj_slug × idiom テキスト単位で照合）の再発 weak_signal を人間確認なしで corrections へ機械昇格。`source=idiom_dict` は HUMAN_SOURCES（根拠は人間の confirm）。安全弁: daily_cap / observability 常時 surface / revoke | #447, ADR-047 |
 | revoke（自動昇格の巻き戻し） | `evolve-reflect --revoke-idiom <idiom_key>`。idiom を confirmed=False に戻し（同テキスト全 record）、由来 corrections を `invalidated=True` に原子的 rewrite。invalidated は count_human_corrections から除外＝フェーズ進捗が巻き戻る | #447 |
 | measurement_bug（同値一致検査） | 複数 PJ（≥3）で非自明な集計値（0/None 除外）が bit-exact 一致したら測定バグ候補として advisory surface。「全 PJ 同値カウント＝測定バグ強シグナル」の自動化 | #445 |
