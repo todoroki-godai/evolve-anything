@@ -193,6 +193,7 @@ _EXPECTED_ACTIVE_STORES = [
     "errors.jsonl",
     "evolve-queue-state.jsonl",
     "false_positives.jsonl",
+    "icebox_verdict_seen.jsonl",
     "judge_audit_verdicts.jsonl",
     "memory_transition_checks.jsonl",
     "remediation_suppression/<slug>.jsonl",

@@ -37,6 +37,11 @@ def queue_json_path(data_dir: str) -> str:
     return str(Path(data_dir) / "evolve-queue.json")
 
 
+def icebox_verdicts_json_path(data_dir: str) -> str:
+    """icebox-verdicts.json（icebox 3レーン判定の保存先・read 専用派生物・#352）の絶対パスを返す。"""
+    return str(Path(data_dir) / "icebox-verdicts.json")
+
+
 def daily_command_str(fleet_bin: str, out_path: str) -> str:
     """runner が実行するシェルコマンド文字列を返す。
 

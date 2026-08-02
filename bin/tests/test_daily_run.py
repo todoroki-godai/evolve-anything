@@ -126,8 +126,51 @@ def test_gh_icebox_list_uses_expected_args(monkeypatch):
         "--json",
         "closedAt",
         "--limit",
-        "100",
+        str(mod.ICEBOX_GH_LIST_LIMIT),
     ]
+
+
+def test_icebox_status_truncated_flag_and_warning(monkeypatch, tmp_path, capsys):
+    """#352 B8: 件数が --limit に達したら truncated フラグを立て stderr に warn する。"""
+    mod = _load_module()
+    now = datetime.now(timezone.utc)
+    ts = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    gh_stdout = json.dumps([{"closedAt": ts}] * mod.ICEBOX_GH_LIST_LIMIT)
+    _install_fake_run(mod, monkeypatch, gh_stdout=gh_stdout)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "icebox-status.json").read_text(encoding="utf-8"))
+    assert payload["truncated"] is True
+    assert f"--limit {mod.ICEBOX_GH_LIST_LIMIT}" in capsys.readouterr().err
+
+
+def test_icebox_status_not_truncated_below_limit(monkeypatch, tmp_path):
+    mod = _load_module()
+    now = datetime.now(timezone.utc)
+    ts = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    gh_stdout = json.dumps([{"closedAt": ts}])
+    _install_fake_run(mod, monkeypatch, gh_stdout=gh_stdout)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "icebox-status.json").read_text(encoding="utf-8"))
+    assert payload["truncated"] is False
+
+
+def test_icebox_status_written_via_atomic_write_text(monkeypatch, tmp_path):
+    """#352 B7: 部分書込を避けるため atomic_write_text（sidecar tmp + rename）経由で書く。"""
+    mod = _load_module()
+    calls = []
+    orig = mod.atomic_write_text
+
+    def spy(path, text):
+        calls.append(Path(path))
+        return orig(path, text)
+
+    monkeypatch.setattr(mod, "atomic_write_text", spy)
+    _install_fake_run(mod, monkeypatch, gh_stdout="[]")
+    rc = mod.main()
+    assert rc == 0
+    assert tmp_path / "icebox-status.json" in calls
 
 
 def test_icebox_status_written_on_gh_success(monkeypatch, tmp_path):
