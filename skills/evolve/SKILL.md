@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 # /evolve-anything:evolve — 全フェーズ統合実行
 
-Observe データ確認 → Diagnose → Compile → Housekeeping → Report の全フェーズをワンコマンドで実行する。日次実行を想定（MUST）。
+Observe データ確認 → Diagnose → Compile → Housekeeping → Report の全フェーズをワンコマンドで実行する。日次実行を想定。
 
 ## Usage
 
@@ -102,7 +102,7 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 → 背景・方式 A/B の手順・`detail` 活用の詳細は **[references/proposal-protocol.md](references/proposal-protocol.md)**。
 このプロトコルは Step 2 / 5.5 / 7 / 7.5 など全提案ポイントに適用する（各 Step で再掲しない）。
 
-## 手順ナビ — 3 層に分けて読む（MUST — 本体に入る前に必ず読む・#49）
+## 手順ナビ — 3 層に分けて読む（#49）
 
 手順は Step 0.5〜11 と長く **27 ステップ・MUST 多数**で、毎回全部に同じ注意を払うと取りこぼす。
 そこで全ステップを「**毎回通る骨格 (A)**／**該当した時だけ (B)**／**特定状況の参照 (C)**」の3層に分類する。
@@ -223,14 +223,14 @@ audit の `collect_issues()`（layer_diagnose 統合済み・`memory_trace` / `c
 ユーザーが自作したスキル（custom / global）のみが対象。
 
 ### Step 5.5: Remediation フェーズ
-remediation.py が audit 結果を confidence_score / impact_scope で **auto_fixable**（conf≥0.9）/ **proposable**（conf≥0.5・custom は `partition_proposable_by_confidence` で conf≥0.7=個別承認・<0.7=まとめてスキップ #377-3）/ **manual_required**（conf<0.5 or global）の3カテゴリに動的分類する。`total_issues == 0` なら「問題なし」。各カテゴリとも AskUserQuestion の**前に**補足説明を出す（MUST）。`proposable_global` / `rule_violation_observed` の情報レーンは dismiss 記録（TTL45日）で以後抑制でき、個別承認で却下された提案は `record_rejection` で suppression ledger に記録する（**dry-run 時は記録しない — MUST NOT**）。決定論 fallback（`reconcile_surfaced`、既定2回で自動却下・#494）が inline 記録の取りこぼしを補完する。hook インストール系（`*_hook_candidate`）は影響半径が最大なので折り畳み対象外（#225）。
+remediation.py が audit 結果を confidence_score / impact_scope で **auto_fixable**（conf≥0.9）/ **proposable**（conf≥0.5・custom は `partition_proposable_by_confidence` で conf≥0.7=個別承認・<0.7=まとめてスキップ #377-3）/ **manual_required**（conf<0.5 or global）の3カテゴリに動的分類する。`total_issues == 0` なら「問題なし」。各カテゴリとも AskUserQuestion の**前に**補足説明を出す。`proposable_global` / `rule_violation_observed` の情報レーンは dismiss 記録（TTL45日）で以後抑制でき、個別承認で却下された提案は `record_rejection` で suppression ledger に記録する（**dry-run 時は記録しない — MUST NOT**）。決定論 fallback（`reconcile_surfaced`、既定2回で自動却下・#494）が inline 記録の取りこぼしを補完する。hook インストール系（`*_hook_candidate`）は影響半径が最大なので折り畳み対象外（#225）。
 サマリ: 「Remediation 完了: N件修正 / M件スキップ / K件ロールバック（要手動対応）」。`suppressed_by_ledger > 0` なら1行追記（#477）。
 → カテゴリ別出力テンプレ・dismiss/却下記録コード・対応 type 一覧は **[references/remediation.md](references/remediation.md)**。
 > 一言メモ: [references/report-narration.md](references/report-narration.md)
 
 #### Step 5.5.1: proposable の line_limit_violation / split_candidate に対する2相品質回復（[ADR-037] Phase 1d-ii）
 `fix_line_limit_violation` / `fix_split_candidate` は [ADR-037] で claude -p を全廃し決定論フォールバックで完走する。
-承認後に assistant がファイルベース2相（emit→インライン→ingest）で実際の圧縮/分離/分割を行う（MUST）。
+承認後に assistant がファイルベース2相（emit→インライン→ingest）で実際の圧縮/分離/分割を行う。
 対象 issue（line_limit_violation 非rule=圧縮 / rule=分離、split_candidate=分割）ごとに emit/ingest 関数の signature が異なる（#524-1）。
 → signature 表・実行コードは **[references/remediation.md](references/remediation.md) の Step 5.5.1 節**。`fixed=True` で書込完了、`fixed=False` は手動対応を案内。
 
@@ -260,18 +260,18 @@ reflect は独立フェーズではなく discover に統合済み。discover �
 
 ## Stage 3: Housekeeping（淘汰 + 評価関数改善）
 ### Step 7: Prune フェーズ（+Merge）
-淘汰候補をスキルの出自別に3セクションで表示する（MUST）:
-- **Custom Skills**: 「ゼロ呼び出し」だけでアーカイブと決めつけない。各候補を①SKILL.md+git log 調査 →②4種別分類 →③テキスト出力 →④個別 AskUserQuestion で承認（**全候補一括判断は禁止 — MUST**）。断った候補には `.pin` 案内を添える（MUST）。→ [references/prune-merge.md](references/prune-merge.md)
+淘汰候補をスキルの出自別に3セクションで表示する:
+- **Custom Skills**: 「ゼロ呼び出し」だけでアーカイブと決めつけない。各候補を①SKILL.md+git log 調査 →②4種別分類 →③テキスト出力 →④個別 AskUserQuestion で承認（**全候補一括判断は禁止 — MUST**）。断った候補には `.pin` 案内を添える。→ [references/prune-merge.md](references/prune-merge.md)
 - **Plugin Skills**: レポートのみ（アーカイブせず案内のみ）。
 - **Global Skills**: 件数1行に畳み `bin/evolve-fleet status` へ誘導する（PJ単独では判断材料不足・#525-3）。→ [references/housekeeping.md](references/housekeeping.md)
 - **Merge**: `prune.merge_result` の `status` に応じて統合版を生成し AskUserQuestion で承認/却下、却下は `add_merge_suppression()` で抑制（MUST）。→ [references/prune-merge.md](references/prune-merge.md)
 > 一言メモ — Prune / Housekeeping 完了後: 「整理完了。少し軽くなった。」を出力する。
 
 ### Step 7.5: Pitfall 剪定
-`pitfall_hygiene` フェーズを確認する: **graduation_candidates**（卒業候補・提案詳細プロトコルに従い AskUserQuestion で確認・MUST）/ **cap_exceeded**（Active pitfall が10件超のスキルは剪定レビュー推奨）/ **stale_warnings**（6ヶ月以上未更新は検証推奨）/ **cross_skill_analysis**（根本原因カテゴリの横断集中→共通ルール化提案）。
+`pitfall_hygiene` フェーズを確認する: **graduation_candidates**（卒業候補・提案詳細プロトコルに従い AskUserQuestion で確認）/ **cap_exceeded**（Active pitfall が10件超のスキルは剪定レビュー推奨）/ **stale_warnings**（6ヶ月以上未更新は検証推奨）/ **cross_skill_analysis**（根本原因カテゴリの横断集中→共通ルール化提案）。
 
 ### Step 7.6: 合理化防止テーブル
-`rationalization_table` フェーズがあれば言い訳×スキップ後エラー率×サンプル数のテーブルを表示する（MUST）。フェーズ自体が無ければ「データ不足 — スキップ」。
+`rationalization_table` フェーズがあれば言い訳×スキップ後エラー率×サンプル数のテーブルを表示する。フェーズ自体が無ければ「データ不足 — スキップ」。
 → テーブル形式・`enriched_pitfalls` 表示は **[references/housekeeping.md](references/housekeeping.md)**。
 
 ### Step 7.7: 用語集ブートストラップ（CONTEXT.md が無い場合）
@@ -294,21 +294,21 @@ evolve --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_re
 → 設計根拠（#400/#484/#494）・drain サマリの読み方・result-json 運搬の詳細は **[references/housekeeping.md](references/housekeeping.md)**。
 
 ### Step 8: Fitness Evolution — 評価関数の改善チェック
-evolve.py の出力に含まれる `fitness_evolution` フェーズを確認する。`status: "insufficient_data"` は **`one_liner` を1行そのまま出すのが結論（MUST）**。件数（`N/30`）や長文 `details.message` は既定で出さない（開示はユーザーが尋ねたときのみ・#559 で契約圧縮済み）。`status: "bootstrap"` は簡易統計（承認率・平均スコア・分布）のみ表示し相関分析は行わない。`status: "ready"` は score-acceptance 相関（<0.50 で警告）と頻出 rejection_reason を表示し、提案があれば AskUserQuestion で承認を求める（MUST）。
+evolve.py の出力に含まれる `fitness_evolution` フェーズを確認する。`status: "insufficient_data"` は **`one_liner` を1行そのまま出すのが結論**。件数（`N/30`）や長文 `details.message` は既定で出さない（開示はユーザーが尋ねたときのみ・#559 で契約圧縮済み）。`status: "bootstrap"` は簡易統計（承認率・平均スコア・分布）のみ表示し相関分析は行わない。`status: "ready"` は score-acceptance 相関（<0.50 で警告）と頻出 rejection_reason を表示し、提案があれば AskUserQuestion で承認を求める（MUST）。
 → 誤読防止の詳細（#400/#525-1/#479 統合）は **[references/housekeeping.md](references/housekeeping.md)**。
 
 ## Report
 ### Step 9: Report フェーズ
-evolve の結果を**人間が読みやすい形式**で出力する。raw な audit テキストをコードブロックにそのまま貼り付けてはならない（MUST NOT）。**冒頭に TL;DR を必ず出す（MUST・#525-2）**: 「TL;DR: 変更 {N}件 / 要対応 {M}件 / 残りすべて評価済みクリーン」。**全 ✓ の observability 項目は1ブロックに畳む（MUST・#525-2）**: ⚠/ℹ のみ個別表示し、✓ クリーンな key はまとめて1行に畳む。各セクションは `###` 見出し・数値には判定を添える・「✅ 問題なし」を沈黙させない（MUST）。
+evolve の結果を**人間が読みやすい形式**で出力する。raw な audit テキストをコードブロックにそのまま貼り付けてはならない。**冒頭に TL;DR を必ず出す（MUST・#525-2）**: 「TL;DR: 変更 {N}件 / 要対応 {M}件 / 残りすべて評価済みクリーン」。**全 ✓ の observability 項目は1ブロックに畳む（#525-2）**: ⚠/ℹ のみ個別表示し、✓ クリーンな key はまとめて1行に畳む。各セクションは `###` 見出し・数値には判定を添える・「✅ 問題なし」を沈黙させない（MUST）。
 レポートには Usage（PJ固有スキルのみ） / Plugin usage / gstack Workflow Analytics（検出時） / `/simplify` ゲート結果のセクションを含める。成長レベル表示の直後に `growth_report.lines` を列挙する（MUST）。**Step 6.2 で対話昇格した場合は per-PJ の値に今回昇格数を加算する方式で上書きする**（`evolve-reflect --promote-weak` 出力の `corrections_human_allpj` は全PJ合計であり、そのまま分子に使ってはならない — MUST NOT・#526-1）。
 → TL;DR/畳み込みブロック/フォーマット規則の全文と成長状態レポートの補正ロジックは **[references/report-narration.md](references/report-narration.md)**。
 
 ### Step 10: 推奨アクション（MUST — スキップ厳禁）
-**このセクションは必ず出力すること。条件判定の結果によらず、セクション見出し「推奨アクション」を必ずレポート末尾に表示する。** 該当項目がゼロの場合は「推奨アクション: なし」と1行表示する。各項目を 🔴要対応（実行コマンドあり）/ 🟡情報（対策済み・参考値・観察継続）/ ✅問題なし の3段階の判定カードで出力する（MUST）。カスタムスキルが0件の場合、Reorganize・Optimize・Pitfall剪定・Fitness を個別にスキップと書かず「✅ 問題なし」に1行でまとめる（繰り返し防止）。
+**このセクションはスキップせず出力すること。条件判定の結果によらず、セクション見出し「推奨アクション」をレポート末尾に表示する。** 該当項目がゼロの場合は「推奨アクション: なし」と1行表示する。各項目を 🔴要対応（実行コマンドあり）/ 🟡情報（対策済み・参考値・観察継続）/ ✅問題なし の3段階の判定カードで出力する（MUST）。カスタムスキルが0件の場合、Reorganize・Optimize・Pitfall剪定・Fitness を個別にスキップと書かず「✅ 問題なし」に1行でまとめる（繰り返し防止）。
 各サブ項目（10.1 Reflect / 10.2 ツール使用 / 10.3 自己進化 / 10.4 Workflow Checkpoint Gaps / 10.5 Process Stall Patterns / 10.6 Remediation サマリ）は**必ず**判定カードに反映する（沈黙禁止）。
 → 判定カード出力例・各サブ項目の判定ロジックと閾値定数は **[references/recommended-actions.md](references/recommended-actions.md)**。
 
-### Step 11: 自己解析 → issue 半自動起票（MUST — #299）
+### Step 11: 自己解析 → issue 半自動起票（#299）
 evolve は他フェーズで対象 PJ を改善するが、**evolve 自身の実行結果**（提案の質・実行時エラー・改善余地）を振り返る経路がこれまで無かった。このステップで evolve.py 出力トップレベル `self_analysis`（`analyze_evolve_result` が決定論生成・実モジュールは `evolve_introspect`、`self_analysis` という名前のモジュールは存在しない）の3カテゴリ（`self_detection` / `runtime_errors` / `improvement_opportunities`）を読む。
 **必ず以下を順に行う（MUST）**: ①3カテゴリとも `summary_line` を surface（0件でも省略しない） ②`total_candidates == 0` なら終了 ③`gh issue list --repo todoroki-godai/evolve-anything --state all` と突合し dedup（`regressions` は前回 closed への backlink 付き） ④unique のみ提案詳細プロトコルで個別承認 ⑤承認分のみ `gh issue create` で起票（`render_regression_body` で backlink 付与）。
 → 構造詳細・dedup/render の実コードは **[references/self-analysis.md](references/self-analysis.md)**。
