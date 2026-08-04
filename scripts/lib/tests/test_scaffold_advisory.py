@@ -15,6 +15,7 @@ if str(_lib) not in sys.path:
     sys.path.insert(0, str(_lib))
 
 import scaffold_advisory as sa  # noqa: E402
+import shrink_freeze as sf  # noqa: E402
 
 
 class TestScaffoldAdvisory:
@@ -91,7 +92,10 @@ class TestCli:
         assert not (tmp_path / "scripts/lib/audit/sections_my_check.py").exists()
 
     def test_write_creates_module(self, tmp_path, capsys, monkeypatch):
+        # #379 Step 1 新設凍結中は --write が拒否される（TestShrinkFreeze 参照）。
+        # ここは凍結解除後も --write の従来挙動（stub 生成）が壊れていないことを守る。
         monkeypatch.setattr(sa, "_repo_root", lambda: tmp_path)
+        monkeypatch.setattr(sf, "SHRINK_FREEZE_ACTIVE", False)
         (tmp_path / "scripts/lib/audit").mkdir(parents=True)
         rc = sa.main(["my_check", "--write"])
         assert rc == 0
@@ -100,7 +104,10 @@ class TestCli:
         ast.parse(target.read_text(encoding="utf-8"))
 
     def test_write_refuses_to_clobber(self, tmp_path, monkeypatch):
+        # freeze 解除後の従来挙動（clobber 保護）が壊れていないことを守る
+        # （凍結中の --write 拒否は TestShrinkFreeze で別途検証）。
         monkeypatch.setattr(sa, "_repo_root", lambda: tmp_path)
+        monkeypatch.setattr(sf, "SHRINK_FREEZE_ACTIVE", False)
         target = tmp_path / "scripts/lib/audit/sections_my_check.py"
         target.parent.mkdir(parents=True)
         target.write_text("# existing\n", encoding="utf-8")
@@ -108,3 +115,33 @@ class TestCli:
         assert rc != 0
         # 既存を上書きしない
         assert target.read_text(encoding="utf-8") == "# existing\n"
+
+
+class TestShrinkFreeze:
+    """#379 Step 1 新設凍結: --write は拒否、dry-run は警告付きで許可。"""
+
+    def test_write_rejected_when_frozen(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sa, "_repo_root", lambda: tmp_path)
+        rc = sa.main(["my_check", "--write"])
+        assert rc != 0
+        assert not (tmp_path / "scripts/lib/audit/sections_my_check.py").exists()
+
+    def test_write_rejected_message_mentions_379(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(sa, "_repo_root", lambda: tmp_path)
+        sa.main(["my_check", "--write"])
+        err = capsys.readouterr().err
+        assert "#379" in err
+
+    def test_dry_run_still_allowed_when_frozen(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(sa, "_repo_root", lambda: tmp_path)
+        rc = sa.main(["my_check"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "#379" in out  # dry-run 表示冒頭に凍結警告
+
+    def test_write_allowed_when_freeze_inactive(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sa, "_repo_root", lambda: tmp_path)
+        monkeypatch.setattr(sf, "SHRINK_FREEZE_ACTIVE", False)
+        rc = sa.main(["my_check", "--write"])
+        assert rc == 0
+        assert (tmp_path / "scripts/lib/audit/sections_my_check.py").exists()

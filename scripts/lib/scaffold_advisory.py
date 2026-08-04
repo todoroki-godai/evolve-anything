@@ -20,6 +20,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import shrink_freeze
+
+_FREEZE_NOTICE = (
+    "#379 Step 1 新設凍結中: 新しい advisory コンポーネントの --write 書き出しは"
+    "縮小完了まで停止しています。本当に必要なら SHRINK_FREEZE_ACTIVE の解除判断を"
+    "ユーザーに仰いでください。"
+)
+
 # snake_case 識別子（先頭は英小文字、以降 [a-z0-9_]）。observability key / module 名に使う。
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -155,6 +163,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.write and shrink_freeze.is_frozen():
+        print(f"エラー: {_FREEZE_NOTICE}", file=sys.stderr)
+        return 2
+
     try:
         res = scaffold_advisory(args.name, title=args.title, has_store=args.with_store)
     except ValueError as e:
@@ -162,6 +174,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     root = _repo_root()
+    if not args.write and shrink_freeze.is_frozen():
+        print(f"# {_FREEZE_NOTICE}\n")
     for rel, content in res.files.items():
         target = root / rel
         print(f"# {'書き出し' if args.write else 'dry-run（--write で書き出し）'}: {rel}")
