@@ -382,9 +382,20 @@ def detect_takeoff_divergence(last_assistant_message):
 # 両方に無かった `/effort` が CREATE 候補としてすり抜けていた（copied-parse-convention
 # pitfall と同型・#40）。新しい CC バージョンで組み込みが増えたらここに追記する
 # （両 call site とも import するので二重更新は不要）。
+#
+# 収録方針: 「漏れ」は組み込みコマンドが CREATE 候補ノイズとして triage 母集団を汚すが、
+# 「入れすぎ」のコストはほぼゼロ（同名の既存スキルは _is_already_existing_skill が別途
+# 除外し、組み込みと同名の新規スキルはそもそも CC 側で衝突する）。よって迷ったら入れる。
+# 下段は v2.1.221 の実バイナリ文字列で実在を確認した分（#333 レビュー時に追加）。
 CC_BUILTIN_COMMANDS = frozenset({
     "add-dir", "agents", "bug", "clear", "compact", "config", "cost",
     "doctor", "effort", "fast", "help", "init", "login", "logout", "loop",
     "mcp", "memory", "model", "permissions", "plugin", "reload-plugins",
     "rename", "resume", "status", "terminal-setup", "vim",
+    # v2.1.221 実測分
+    "allowed-tools", "bashes", "cd", "code-review", "context", "exit",
+    "export", "fork", "hooks", "ide", "install-github-app", "output-style",
+    "privacy-settings", "quit", "release-notes", "rewind", "security-review",
+    "statusline", "theme", "todos", "ultrareview", "upgrade", "usage",
+    "workflows",
 })
