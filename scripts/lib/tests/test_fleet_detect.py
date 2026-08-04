@@ -53,6 +53,18 @@ def _fake_repo(root: Path, *parts: str) -> Path:
     return p
 
 
+def _scratch_store(tmp_path_factory, name: str = "ws.jsonl") -> Path:
+    """weak_signals スクラッチストアの独立パス（#379 Step 1 修正4 対応）。
+
+    root conftest の autouse `_isolate_plugin_data` は per-test の ``tmp_path`` を
+    そのまま ``rl_common.DATA_DIR`` に rebase する（#420）。``store_path=tmp_path/"ws.jsonl"``
+    のような**非登録の短縮 basename**をそのまま tmp_path 配下に置くと、store_write_raw の
+    #379 凍結ゲートが「正準 DATA_DIR 配下の未登録ストア」と誤認する。``tmp_path_factory``
+    の別 mktemp で DATA_DIR と兄弟の独立ディレクトリを使う。
+    """
+    return tmp_path_factory.mktemp("ws-scratch") / name
+
+
 def test_detects_and_persists_for_all_projects(tmp_path, monkeypatch):
     """evolve を一度も回していない PJ でも、検出が走り weak_signals が永続化される。"""
     fs_root = tmp_path / "fs"
@@ -189,7 +201,7 @@ def test_removed_worktree_falls_back_to_main_repo_slug(tmp_path):
     assert {r["pj_slug"] for r in rows} == {"rl-anything"}, rows
 
 
-def test_dry_run_count_matches_actual_write_with_multiple_dirs(tmp_path):
+def test_dry_run_count_matches_actual_write_with_multiple_dirs(tmp_path, tmp_path_factory):
     """1 slug に複数 dir（本体 + worktree）があっても dry-run 件数が実書込と一致する。
 
     dir ごとに append すると dry-run は未書込ストアと突合するため同一シグナルを dir 数ぶん
@@ -206,8 +218,10 @@ def test_dry_run_count_matches_actual_write_with_multiple_dirs(tmp_path):
 
     kw = dict(projects_root=projects, errors_path=tmp_path / "errors.jsonl",
               fs_root=fs_root, utterances=[], progress=False)
-    planned = detect_all_projects(store_path=tmp_path / "a.jsonl", dry_run=True, **kw)
-    actual = detect_all_projects(store_path=tmp_path / "b.jsonl", **kw)
+    planned = detect_all_projects(
+        store_path=_scratch_store(tmp_path_factory, "a.jsonl"), dry_run=True, **kw)
+    actual = detect_all_projects(
+        store_path=_scratch_store(tmp_path_factory, "b.jsonl"), **kw)
 
     assert planned["written"] == actual["written"], (planned, actual)
 
@@ -251,10 +265,10 @@ def test_per_pj_breakdown_is_returned(tmp_path):
     assert isinstance(entry["detected"], dict)
 
 
-def test_empty_projects_root_is_noop(tmp_path):
+def test_empty_projects_root_is_noop(tmp_path, tmp_path_factory):
     """transcript が無い環境でも例外を投げず 0 件で返る（daily runner の fail-open 前提）。"""
     res = detect_all_projects(
-        projects_root=tmp_path / "nonexistent", store_path=tmp_path / "ws.jsonl",
+        projects_root=tmp_path / "nonexistent", store_path=_scratch_store(tmp_path_factory),
         errors_path=tmp_path / "errors.jsonl", fs_root=tmp_path, utterances=[],
         progress=False)
     assert res["projects"] == 0
@@ -330,7 +344,9 @@ def test_attributed_deny_is_still_detected(tmp_path):
 
 # ── 検出失敗の可視化と終了コード（#313）─────────────────────────────
 
-def test_failed_dir_is_surfaced_and_not_counted_as_success(tmp_path, monkeypatch):
+def test_failed_dir_is_surfaced_and_not_counted_as_success(
+    tmp_path, tmp_path_factory, monkeypatch
+):
     """collect_signals が落ちた PJ を成功件数に加算せず、理由つきで結果に載せる。"""
     fs_root, projects = _two_pj_fixture(tmp_path)
 
@@ -339,7 +355,7 @@ def test_failed_dir_is_surfaced_and_not_counted_as_success(tmp_path, monkeypatch
 
     monkeypatch.setattr(fleet_detect, "collect_signals", _boom)
     res = detect_all_projects(
-        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        projects_root=projects, store_path=_scratch_store(tmp_path_factory),
         errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
         progress=False)
 
@@ -349,19 +365,19 @@ def test_failed_dir_is_surfaced_and_not_counted_as_success(tmp_path, monkeypatch
     assert "permission denied" in res["failed_dirs"][0]["error"]
 
 
-def test_all_projects_failed_returns_nonzero_exit_code(tmp_path, monkeypatch):
+def test_all_projects_failed_returns_nonzero_exit_code(tmp_path, tmp_path_factory, monkeypatch):
     """全 PJ 失敗は非 zero（daily runner の沈黙モード再発を検知できるようにする）。"""
     fs_root, projects = _two_pj_fixture(tmp_path)
     monkeypatch.setattr(fleet_detect, "collect_signals",
                         lambda slug, **kw: (_ for _ in ()).throw(RuntimeError("x")))
     res = detect_all_projects(
-        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        projects_root=projects, store_path=_scratch_store(tmp_path_factory),
         errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
         progress=False)
     assert detect_exit_code(res) != 0
 
 
-def test_partial_failure_keeps_zero_exit_code(tmp_path, monkeypatch):
+def test_partial_failure_keeps_zero_exit_code(tmp_path, tmp_path_factory, monkeypatch):
     """1 PJ の失敗では止めない（fail-open 方針は維持・観測だけ足す）。"""
     fs_root, projects = _two_pj_fixture(tmp_path)
     real = fleet_detect.collect_signals
@@ -373,7 +389,7 @@ def test_partial_failure_keeps_zero_exit_code(tmp_path, monkeypatch):
 
     monkeypatch.setattr(fleet_detect, "collect_signals", _flaky)
     res = detect_all_projects(
-        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        projects_root=projects, store_path=_scratch_store(tmp_path_factory),
         errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
         progress=False)
 
@@ -382,11 +398,11 @@ def test_partial_failure_keeps_zero_exit_code(tmp_path, monkeypatch):
     assert detect_exit_code(res) == 0
 
 
-def test_clean_run_has_empty_failure_fields(tmp_path):
+def test_clean_run_has_empty_failure_fields(tmp_path, tmp_path_factory):
     """成功時も失敗フィールドは必ず存在する（キー欠落で reader が壊れない）。"""
     fs_root, projects = _two_pj_fixture(tmp_path)
     res = detect_all_projects(
-        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        projects_root=projects, store_path=_scratch_store(tmp_path_factory),
         errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
         progress=False)
     assert res["failed_dirs"] == [] and res["failed_projects"] == []
@@ -410,7 +426,7 @@ def _multi_dir_fixture(tmp_path) -> tuple[Path, Path]:
     return fs_root, projects
 
 
-def test_max_transcripts_is_per_project_not_per_dir(tmp_path):
+def test_max_transcripts_is_per_project_not_per_dir(tmp_path, tmp_path_factory):
     """上限は PJ 単位（slug 内の全 dir を合算してから適用）。
 
     dir ごとに適用すると実効上限が ``max_transcripts × dir 数`` になり、worktree を多く持つ
@@ -420,23 +436,23 @@ def test_max_transcripts_is_per_project_not_per_dir(tmp_path):
     kw = dict(projects_root=projects, errors_path=tmp_path / "errors.jsonl",
               fs_root=fs_root, utterances=[], progress=False)
 
-    capped = detect_all_projects(store_path=tmp_path / "a.jsonl",
+    capped = detect_all_projects(store_path=_scratch_store(tmp_path_factory, "a.jsonl"),
                                  max_transcripts=2, **kw)
     assert capped["total"] == 2, capped
 
-    uncapped = detect_all_projects(store_path=tmp_path / "b.jsonl",
+    uncapped = detect_all_projects(store_path=_scratch_store(tmp_path_factory, "b.jsonl"),
                                    max_transcripts=4, **kw)
     assert uncapped["total"] == 4, uncapped
 
 
-def test_non_positive_max_transcripts_scans_nothing(tmp_path):
+def test_non_positive_max_transcripts_scans_nothing(tmp_path, tmp_path_factory):
     """0 / 負数は「上限なし」でも ``files[:-1]`` でもなく走査ゼロに畳む（CLI では拒否）。"""
     fs_root, projects = _multi_dir_fixture(tmp_path)
     kw = dict(projects_root=projects, errors_path=tmp_path / "errors.jsonl",
               fs_root=fs_root, utterances=[], progress=False)
-    assert detect_all_projects(store_path=tmp_path / "z.jsonl",
+    assert detect_all_projects(store_path=_scratch_store(tmp_path_factory, "z.jsonl"),
                                max_transcripts=0, **kw)["total"] == 0
-    assert detect_all_projects(store_path=tmp_path / "n.jsonl",
+    assert detect_all_projects(store_path=_scratch_store(tmp_path_factory, "n.jsonl"),
                                max_transcripts=-1, **kw)["total"] == 0
 
 
@@ -492,7 +508,7 @@ def test_cli_summary_reports_failures_even_when_quiet(monkeypatch, capsys):
 
 # ── 部分失敗の沈黙（codex cold-read P1）─────────────────────────────
 
-def test_partial_dir_failure_is_surfaced_as_degraded(tmp_path, monkeypatch):
+def test_partial_dir_failure_is_surfaced_as_degraded(tmp_path, tmp_path_factory, monkeypatch):
     """1 slug の一部 dir だけ失敗しても結果に載せる（本体 OK・worktree NG が典型）。
 
     ``failed_projects`` を「全 dir 失敗」に限定すると、最も起きやすい部分失敗が
@@ -509,7 +525,7 @@ def test_partial_dir_failure_is_surfaced_as_degraded(tmp_path, monkeypatch):
 
     monkeypatch.setattr(fleet_detect, "collect_signals", _flaky)
     res = detect_all_projects(
-        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        projects_root=projects, store_path=_scratch_store(tmp_path_factory),
         errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
         progress=False)
 
@@ -549,7 +565,9 @@ def _break_glob(monkeypatch, marker: str) -> None:
     monkeypatch.setattr(Path, "glob", _glob)
 
 
-def test_unreadable_dir_enumeration_is_recorded_as_failure(tmp_path, monkeypatch):
+def test_unreadable_dir_enumeration_is_recorded_as_failure(
+    tmp_path, tmp_path_factory, monkeypatch
+):
     """transcript 列挙が OSError の dir を無記録 skip せず失敗として記録する。
 
     握り潰すと空の transcript リストが渡って ``collect_signals`` は正常終了し、
@@ -559,7 +577,7 @@ def test_unreadable_dir_enumeration_is_recorded_as_failure(tmp_path, monkeypatch
     _break_glob(monkeypatch, "amamo")
 
     res = detect_all_projects(
-        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        projects_root=projects, store_path=_scratch_store(tmp_path_factory),
         errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
         progress=False)
 
@@ -569,13 +587,13 @@ def test_unreadable_dir_enumeration_is_recorded_as_failure(tmp_path, monkeypatch
     assert detect_exit_code(res) == 0
 
 
-def test_all_dirs_unreadable_returns_nonzero_exit_code(tmp_path, monkeypatch):
+def test_all_dirs_unreadable_returns_nonzero_exit_code(tmp_path, tmp_path_factory, monkeypatch):
     """全 PJ の列挙が失敗したら全滅として非 zero（daily runner が検知できる）。"""
     fs_root, projects = _two_pj_fixture(tmp_path)
     _break_glob(monkeypatch, "-Users-u-updater-")
 
     res = detect_all_projects(
-        projects_root=projects, store_path=tmp_path / "ws.jsonl",
+        projects_root=projects, store_path=_scratch_store(tmp_path_factory),
         errors_path=tmp_path / "errors.jsonl", fs_root=fs_root, utterances=[],
         progress=False)
 

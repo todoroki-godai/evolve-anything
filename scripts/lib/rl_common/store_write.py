@@ -96,12 +96,60 @@ def store_write(
     append_jsonl(rl_common.DATA_DIR / store_name, record)
 
 
-def store_write_raw(filepath: Path, record: dict) -> None:
+def _raw_freeze_problem(filepath: Path) -> Optional[str]:
+    """store_write_raw への #379 Step 1 凍結ゲート（未登録 basename の raw 直書き穴・
+    外部レビュー指摘）。書込み先が正準 DATA_DIR 配下のときに限り basename を照合する。
+
+    DATA_DIR 外の明示パス（テスト isolation の tmp 等）は対象外＝store_write_raw 本来の
+    「場所を尊重する」契約は変えない。凍結解除中・shrink_freeze/store_registry へ
+    到達不能な環境は fail-open（`_guard_problem` と同じ流儀）。
+    """
+    try:
+        import shrink_freeze
+    except ImportError:
+        return None
+    if not shrink_freeze.is_frozen():
+        return None
+    try:
+        import rl_common
+
+        target = Path(filepath).resolve()
+        canonical = Path(rl_common.DATA_DIR).resolve()
+        if not target.is_relative_to(canonical):
+            return None
+    except (OSError, ValueError):
+        return None
+    try:
+        import store_registry
+    except ImportError:
+        return None
+    basename = Path(filepath).name
+    known = set(shrink_freeze.FROZEN_STORES) | set(store_registry.declared_store_names())
+    if basename not in known:
+        return f"未登録ストア '{basename}'（#379 Step 1 新設凍結中の store_write_raw 直書き）"
+    return None
+
+
+def store_write_raw(
+    filepath: Path, record: dict, *, guard_mode: Optional[str] = None
+) -> None:
     """明示パス指定の例外口（ADR-049 決定5）。store_registry 照合を通さない直接書込。
 
     テスト / 特殊ケース用。フラグでなく別名関数にすることで、raw を使う diff が
     静的 advisory（store_write 非経由の DATA_DIR 参照）の検出対象に上がる。
+
+    #379 Step 1 凍結ゲート（修正4）: 書込み先が正準 DATA_DIR 配下のときに限り、
+    basename を shrink_freeze.FROZEN_STORES ∪ store_registry 宣言名と照合し、未知なら
+    guard_mode（既定 reject、`store_write` と同じ env `EVOLVE_WRITE_GUARD` 解決）に従う。
     """
+    mode = _resolve_guard_mode(guard_mode)
+    problem = _raw_freeze_problem(filepath)
+    if problem is not None:
+        msg = f"[evolve-anything:write-barrier] {problem}"
+        if mode == "reject":
+            raise StoreWriteError(msg)
+        print(msg + "（warn-only: 書込は継続）", file=sys.stderr)
+
     from rl_common import append_jsonl
 
     append_jsonl(filepath, record)

@@ -16,12 +16,28 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 from correction_semantic import batch as cs_batch  # noqa: E402
 from correction_semantic import store as cs_store  # noqa: E402
+
+
+@pytest.fixture
+def scratch_dir(tmp_path_factory) -> Path:
+    """weak_signals/idioms/judged スクラッチ用の独立ディレクトリ。
+
+    root conftest の autouse `_isolate_plugin_data` は per-test の ``tmp_path`` を
+    そのまま ``rl_common.DATA_DIR`` に rebase する（#420）。本ファイルは
+    ``weak_signals.jsonl`` 等の**非登録の短縮 basename**（judged.jsonl / idioms.jsonl）を
+    直接ファイル名として使うため、素の ``tmp_path`` を使うと #379 Step 1 修正4
+    （store_write_raw の凍結ゲート）が「正準 DATA_DIR 配下の未登録 basename」と誤認する。
+    ``tmp_path_factory`` の別 mktemp で DATA_DIR と兄弟の独立ディレクトリを使う。
+    """
+    return tmp_path_factory.mktemp("scratch")
 
 
 def _utts():
@@ -41,10 +57,10 @@ def _utts():
 # ── Phase A: emit ────────────────────────────────────────────────
 
 
-def test_emit_batches_unjudged(tmp_path: Path) -> None:
+def test_emit_batches_unjudged(scratch_dir: Path) -> None:
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=2,
-        judged_path=tmp_path / "judged.jsonl",
+        judged_path=scratch_dir / "judged.jsonl",
     )
     # 3 発話 / batch_size 2 → 2 リクエスト
     assert len(emitted["requests"]) == 2
@@ -54,8 +70,8 @@ def test_emit_batches_unjudged(tmp_path: Path) -> None:
     assert "四国めたん" in req0["prompt"]
 
 
-def test_emit_skips_already_judged(tmp_path: Path) -> None:
-    judged = tmp_path / "judged.jsonl"
+def test_emit_skips_already_judged(scratch_dir: Path) -> None:
+    judged = scratch_dir / "judged.jsonl"
     cs_store.record_judged(["/a.jsonl:1", "/a.jsonl:2"], path=judged)
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
@@ -67,8 +83,8 @@ def test_emit_skips_already_judged(tmp_path: Path) -> None:
     assert "ボタンは緑" not in emitted["requests"][0]["prompt"]
 
 
-def test_emit_empty_when_all_judged(tmp_path: Path) -> None:
-    judged = tmp_path / "judged.jsonl"
+def test_emit_empty_when_all_judged(scratch_dir: Path) -> None:
+    judged = scratch_dir / "judged.jsonl"
     cs_store.record_judged(["/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"], path=judged)
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
@@ -93,10 +109,10 @@ def _responses_for(emitted, mapping):
     return responses
 
 
-def test_ingest_records_correction_to_weak_signals_and_dictionary(tmp_path: Path) -> None:
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+def test_ingest_records_correction_to_weak_signals_and_dictionary(scratch_dir: Path) -> None:
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
 
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
@@ -130,15 +146,15 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(tmp_path: Path
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
 
 
-def test_ingest_then_reemit_excludes_judged_utterances(tmp_path: Path) -> None:
+def test_ingest_then_reemit_excludes_judged_utterances(scratch_dir: Path) -> None:
     """#339 回帰: Phase C を通した発話は次の Phase A emit に再度現れない。
 
     production 未配線だった間は ingest が一度も呼ばれず、同じ未判定発話が毎回 emit され
     続けていた（#339 の症状そのもの）。Phase C → 再 emit の往復を1テストで固定する。
     """
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
 
     utts = _utts()
     emitted = cs_batch.emit_judgement_requests(
@@ -165,11 +181,11 @@ def test_ingest_then_reemit_excludes_judged_utterances(tmp_path: Path) -> None:
     assert re_emitted["requests"] == []
 
 
-def test_ingest_stores_idiom_in_weak_signal_provenance(tmp_path: Path) -> None:
+def test_ingest_stores_idiom_in_weak_signal_provenance(scratch_dir: Path) -> None:
     """#253: provenance.idiom を保存し signal_text の多トピックトリムに使えるようにする。"""
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
 
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
@@ -186,11 +202,11 @@ def test_ingest_stores_idiom_in_weak_signal_provenance(tmp_path: Path) -> None:
     assert ws_lines[0]["provenance"]["idiom"] == "四国めたんじゃなくて"
 
 
-def test_ingest_filters_overbroad_idioms_from_dictionary(tmp_path: Path) -> None:
+def test_ingest_filters_overbroad_idioms_from_dictionary(scratch_dir: Path) -> None:
     """#527: 過汎用 idiom（極短/相槌/日付断片）は weak_signal は残すが個人辞書に入れない。"""
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
 
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
@@ -215,10 +231,10 @@ def test_ingest_filters_overbroad_idioms_from_dictionary(tmp_path: Path) -> None
     assert {r["idiom"] for r in idiom_lines} == {"つむぎにしてほしいんだけど"}
 
 
-def test_ingest_dry_run_writes_nothing(tmp_path: Path) -> None:
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+def test_ingest_dry_run_writes_nothing(scratch_dir: Path) -> None:
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
 
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
@@ -238,11 +254,11 @@ def test_ingest_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert not judged.exists()
 
 
-def test_ingest_missing_response_does_not_mark_judged(tmp_path: Path) -> None:
+def test_ingest_missing_response_does_not_mark_judged(scratch_dir: Path) -> None:
     """応答欠損のバッチは判定済みにせず、次回再判定できる（broker の skip 方針と同型）。"""
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
@@ -256,15 +272,15 @@ def test_ingest_missing_response_does_not_mark_judged(tmp_path: Path) -> None:
     assert cs_store.read_judged_keys(judged) == set()
 
 
-def test_ingest_malformed_json_does_not_mark_judged(tmp_path: Path) -> None:
+def test_ingest_malformed_json_does_not_mark_judged(scratch_dir: Path) -> None:
     """#273: 応答は届いたが JSON が壊れているバッチも、応答欠損と同様に未判定のまま残す。
 
     従来は parse_verdicts が [] にフォールバックし、group 全件が「判定済み・非修正」として
     judged_keys に確定していた（応答欠損は再試行されるのに壊れた応答は再試行されない非対称）。
     """
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
@@ -286,15 +302,15 @@ def test_ingest_malformed_json_does_not_mark_judged(tmp_path: Path) -> None:
     assert not idioms_store.exists()
 
 
-def test_ingest_invalid_verdict_element_does_not_mark_judged(tmp_path: Path) -> None:
+def test_ingest_invalid_verdict_element_does_not_mark_judged(scratch_dir: Path) -> None:
     """#273 P1-1: 構文上 valid だが意味的に壊れた要素（型違い）混じりも、応答欠損と同様に未判定で残す。
 
     従来は不正要素だけ黙って parse_verdicts から捨てられ、残りの空リストが
     「該当なし（正当な空）」と誤読されて group 全件が judged_keys に確定していた。
     """
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
@@ -314,11 +330,11 @@ def test_ingest_invalid_verdict_element_does_not_mark_judged(tmp_path: Path) -> 
     assert not idioms_store.exists()
 
 
-def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(tmp_path: Path) -> None:
+def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(scratch_dir: Path) -> None:
     """#273 P1-1: is_correction が文字列 "false" は bool("false")==True の罠を踏まず失格にする。"""
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
@@ -334,15 +350,15 @@ def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(tmp_path:
     assert cs_store.read_judged_keys(judged) == set()
 
 
-def test_ingest_legitimate_empty_verdicts_still_marks_judged(tmp_path: Path) -> None:
+def test_ingest_legitimate_empty_verdicts_still_marks_judged(scratch_dir: Path) -> None:
     """正しい JSON で verdicts が空配列（モデルが「該当なし」と判定）は従来どおり判定済みにする。
 
     パース失敗（ok=False）と正当な空リスト（ok=True・該当なし）を区別できないと、
     正当な「該当なし」判定まで再試行対象にしてしまい無駄な再判定ループになる。
     """
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
@@ -358,16 +374,16 @@ def test_ingest_legitimate_empty_verdicts_still_marks_judged(tmp_path: Path) -> 
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
 
 
-def test_ingest_processes_every_batch_not_just_the_first(tmp_path: Path) -> None:
+def test_ingest_processes_every_batch_not_just_the_first(scratch_dir: Path) -> None:
     """#273: 2 バッチ目以降も応答が回収される（変数 shadowing の回帰テスト）。
 
     ingest 内でバッチごとのパース結果を、外側の応答マップと同名の変数に代入すると、
     2 週目の `parsed.get(key)` が verdict dict を引いて空文字になり、以降の全バッチが
     「応答欠損」として silent skip される（判定は永久に前進しない）。
     """
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=1, judged_path=judged,
     )
@@ -388,11 +404,11 @@ def test_ingest_processes_every_batch_not_just_the_first(tmp_path: Path) -> None
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
 
 
-def test_ingest_counts_omitted_verdicts(tmp_path: Path) -> None:
+def test_ingest_counts_omitted_verdicts(scratch_dir: Path) -> None:
     """#273: verdict が返らなかった発話は非修正として確定しつつ件数を surface する。"""
-    ws_store = tmp_path / "weak_signals.jsonl"
-    idioms_store = tmp_path / "idioms.jsonl"
-    judged = tmp_path / "judged.jsonl"
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
     emitted = cs_batch.emit_judgement_requests(
         "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
     )
