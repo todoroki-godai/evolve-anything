@@ -21,6 +21,16 @@ extractor.effort_counts / query.dominant_effort が SoT）を agent_type ごと�
 agent frontmatter の ``tier:`` 宣言から model-tiers.json（tier_policy.py）で期待 effort を
 引いて乖離があれば ⚠ を追加する。tier 未宣言・一致する agent 定義が無い・未計測のいずれか
 なら drift 判定はスキップ（判定不能を drift と誤認しない）。新ストアは作らず read-time 導出のみ。
+
+#342: この指標（``first_try_success_rate``）は「タスク完遂・commit 成否・ゲート合否」
+とは無関係で、実体は「1 回の subagent 実行で呼んだ tool のうち is_error が 1 件も
+無かった率」＝呼び出し回数に強く依存する構造的な値である（1 回あたりのエラー率が
+一定でも呼び出し回数が増えるほど値は指数的に下がる）。表示ラベルは「一発成功率」
+のような実装品質の指標に読める語を避け、依存関係が分かる語（tool-エラー0率）に
+是正する。あわせてエラー発生 tool の名前別内訳（``tool_errors``, #342）を surface し、
+低い値を見た時に「本当に無駄な失敗」か「意図された非ゼロ exit（残骸チェック・
+health-check ポーリング等）」かの手がかりを事後分離できるようにする（内訳の主観分類
+自体は本 issue のスコープ外・#342 issue 提案1）。
 """
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -34,6 +44,9 @@ from .advisory import build_advisory_section
 # audit 表示側の委任プロンプト抜粋の truncate 上限（extractor の 300 字とは別の上限。
 # audit 本文を長くしすぎないための表示制約）。
 DELEGATION_EXCERPT_MAX_CHARS = 150
+
+# #342: エラー内訳（tool別）表示の上位件数上限（audit 本文を長くしすぎないための表示制約）。
+TOOL_ERROR_BREAKDOWN_MAX = 5
 
 
 def _delegation_excerpt_for_agent_type(traces: Dict[str, dict], agent_type: str) -> str:
@@ -60,7 +73,9 @@ def _delegation_excerpt_for_agent_type(traces: Dict[str, dict], agent_type: str)
 # 埋没を防ぐ。閾値は実 PJ dogfood（v1.111.0）で較正:
 #   出すべき = 0.17(figma general-purpose) / 0.33(sys-bots general-purpose, tool error 8.33)
 #   出さない = senpai 1.0 / senior-engineer 0.90 / Plan 1.0 / Explore 0.50（境界・strict <）
-LOW_FIRST_TRY_SUCCESS = 0.5  # これ未満（strict）の内部一発成功率は ⚠。
+# これ未満（strict）の tool-エラー0率（#342: 旧称「内部一発成功率」— 呼び出し回数
+# 依存の構造的な値であり実装品質のスコアではない。定義は本ファイル冒頭 #342 節参照）は ⚠。
+LOW_FIRST_TRY_SUCCESS = 0.5
 HIGH_AVG_TOOL_ERROR = 5.0    # これ以上の平均 tool error は ⚠（rate 良好でも独立に発火）。
 
 
@@ -104,8 +119,9 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
     - subagent_traces モジュール未解決 → None（沈黙）
     - 当 PJ の軌跡が 0 件（評価対象なし）→ None（沈黙）
       （outcome_metrics / fanout_cost と同じ「評価対象が無ければ沈黙」境界）
-    - 1 件以上 → agent_type 別の内部一発成功率 + 平均 tool error。floor 未満の agent_type
-      しか無ければデータ不足を明示する。
+    - 1 件以上 → agent_type 別の tool-エラー0率（#342: 呼び出し回数依存の構造的な値。
+      旧称「内部一発成功率」は実装品質の指標に誤読されるため是正）+ 平均 tool error。
+      floor 未満の agent_type しか無ければデータ不足を明示する。
     """
     def compute(proj: Path) -> Optional[Dict[str, Any]]:
         try:
@@ -137,7 +153,7 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
         if not summaries:
             # 軌跡はあるが各 agent_type が floor 未満 → 沈黙でなくデータ不足を明示。
             body.append(
-                f"  ・agent 種別別の内部一発成功率: データ不足 — 集計対象 {len(traces)} 件はあるが、"
+                f"  ・agent 種別別の tool-エラー0率: データ不足 — 集計対象 {len(traces)} 件はあるが、"
                 f"各 agent 種別が最小サンプル数（{_q.DEFAULT_MIN_TRACES} 件）に満たないため率は非表示。"
             )
             body.append(
@@ -156,22 +172,47 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
                 flagged = True
                 reasons: List[str] = []
                 if low_rate:
-                    reasons.append(f"内部リトライ多（一発成功率 < {LOW_FIRST_TRY_SUCCESS:.2f}）")
+                    reasons.append(f"tool-エラー0率が低い（< {LOW_FIRST_TRY_SUCCESS:.2f}）")
                 if high_err:
                     reasons.append(f"tool error 過多（平均 ≥ {HIGH_AVG_TOOL_ERROR:.1f}）")
                 body.append(
-                    f"  ・⚠ {s['agent_type']}: 内部一発成功率 {rate:.2f}"
-                    f"（{s['n']} 件）・平均 tool error {ate:.2f} — {' / '.join(reasons)}"
+                    f"  ・⚠ {s['agent_type']}: tool-エラー0率 {rate:.2f}"
+                    f"（{s['n']} 件・呼び出し回数依存の指標）・平均 tool error {ate:.2f}"
+                    f" — {' / '.join(reasons)}"
                 )
             else:
                 body.append(
-                    f"  ・{s['agent_type']}: 内部一発成功率 {rate:.2f}"
-                    f"（{s['n']} 件）— 高いほど内部リトライ少。平均 tool error {ate:.2f}"
+                    f"  ・{s['agent_type']}: tool-エラー0率 {rate:.2f}"
+                    f"（{s['n']} 件・呼び出し回数依存の指標。実装品質のスコアではない）"
+                    f"— 高いほどエラー混入なしで完了。平均 tool error {ate:.2f}"
                 )
             # #200: ⚠ の有無に関わらず、集計行の下に直近1件の委任プロンプト抜粋を添える。
             excerpt = _delegation_excerpt_for_agent_type(traces, s["agent_type"])
             if excerpt:
                 body.append(f'      └ 直近の委任: "{excerpt}"')
+
+            # #342: エラー発生 tool の名前別内訳（上位 TOOL_ERROR_BREAKDOWN_MAX 件）。
+            #
+            # 「エラー0 だから内訳が空」と「旧レコード（TRACE_VERSION 2 以前）で内訳を
+            # 採っていないから空」を**同一視しない**。ingest は agent_id dedup なので
+            # TRACE_VERSION を上げても既存レコードは再 ingest されず、当面は後者が支配的。
+            # 沈黙させると「エラーが無い」と誤読され、内訳を見て判断せよという上の
+            # 注意書き自体が空振りする（silence ≠ evaluated）。
+            tool_errors = s.get("tool_errors") or {}
+            if tool_errors:
+                top = sorted(tool_errors.items(), key=lambda kv: (-kv[1], kv[0]))
+                top = top[:TOOL_ERROR_BREAKDOWN_MAX]
+                dist = " / ".join(f"{name}:{cnt}" for name, cnt in top)
+                remaining = len(tool_errors) - len(top)
+                if remaining > 0:
+                    dist += f"（他 {remaining} 種別）"
+                body.append(f"      └ エラー内訳（tool別）: {dist}")
+            elif ate > 0:
+                # エラーは起きているのに内訳が無い = 旧レコード。未計測を明示する。
+                body.append(
+                    "      └ エラー内訳（tool別）: 未計測"
+                    "（TRACE_VERSION 2 以前のレコード。以降の新規 trace から記録されます）"
+                )
 
             # #219: 実測 effort 分布（未計測=effort_counts 空なら省略）。
             dominant_effort = s.get("dominant_effort")
@@ -190,6 +231,9 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
             body.append(
                 "  → ⚠ の agent 種別は親セッションでは『一発成功』に見えても内部で失敗を"
                 "繰り返しています（#38）。当該 agent 定義のツール手順・前提・権限を見直してください。"
+                "ただし tool-エラー0率は呼び出し回数依存の構造的な値であり、意図された非ゼロ"
+                "exit（残骸チェック・health-check ポーリング等）も同じ集計に混じる（#342）。"
+                "上のエラー内訳（tool別）で本当に無駄な失敗かを確認してから対応してください。"
             )
         return body
 
@@ -201,6 +245,10 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
             "親セッションの error_count だけ見ると、subagent が内部で何度も失敗して最終的に"
             "成功した場合に『一発成功』と誤記録されます。その盲点を agent 種別ごとに可視化します。"
             "LLM を使わず決定論で算出。",
+            "注意（#342）: 下の「tool-エラー0率」は agent_type の実装品質のスコアではなく、"
+            "1 回の実行で呼んだ tool 数（呼び出しが多いほど 1 件でもエラーが混じる確率が"
+            "構造的に上がる）に強く依存します。低い値だけを見て『agent が壊れている』と"
+            "断定せず、下のエラー内訳（tool別）で内容を確認してください。",
         ],
         compute=compute,
         applicable=lambda _data: True,

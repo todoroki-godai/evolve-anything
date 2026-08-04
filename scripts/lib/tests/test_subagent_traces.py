@@ -81,6 +81,7 @@ def test_extract_trace_counts_tool_use_result_error(tmp_path):
     assert tr["tool_error_count"] == 1
     assert tr["text_block_count"] == 1
     assert tr["tools"] == {"Bash": 1, "Edit": 1}
+    assert tr["tool_errors"] == {"Bash": 1}
 
 
 def test_extract_trace_first_try_success_when_no_error(tmp_path):
@@ -107,6 +108,60 @@ def test_extract_trace_first_try_failure_when_error_present(tmp_path):
         ]}},
     ])
     assert _ext.extract_trace(t)["first_try_success"] is False
+
+
+# ─────────────────── extractor: tool_errors 内訳 (#342) ───────────────────
+
+def test_extract_trace_tool_errors_grouped_by_tool_name(tmp_path):
+    """#342: エラーは tool_use_id → tool 名の突合で tool 名別に集計される。"""
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        _assistant_line([
+            {"type": "tool_use", "id": "1", "name": "Bash", "input": {}},
+        ]),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "1", "content": "boom", "is_error": True},
+        ]}},
+        _assistant_line([
+            {"type": "tool_use", "id": "2", "name": "Bash", "input": {}},
+        ]),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "2", "content": "boom again", "is_error": True},
+        ]}},
+        _assistant_line([
+            {"type": "tool_use", "id": "3", "name": "Edit", "input": {}},
+        ]),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "3", "content": "e", "is_error": True},
+        ]}},
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["tool_errors"] == {"Bash": 2, "Edit": 1}
+
+
+def test_extract_trace_tool_errors_unmatched_tool_use_id_falls_back_to_unknown(tmp_path):
+    """対応する tool_use が transcript に無い tool_result エラーは "unknown" に計上する。"""
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "no-such-id", "content": "e", "is_error": True},
+        ]}},
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["tool_errors"] == {"unknown": 1}
+
+
+def test_extract_trace_tool_errors_empty_when_no_errors(tmp_path):
+    """エラーが無い transcript は tool_errors == {}。"""
+    t = tmp_path / "tr.jsonl"
+    _write_transcript(t, [
+        _assistant_line([{"type": "tool_use", "id": "1", "name": "Read", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "1", "content": "x", "is_error": False},
+        ]}},
+    ])
+    tr = _ext.extract_trace(t)
+    assert tr["tool_errors"] == {}
 
 
 def test_extract_trace_ignores_string_content(tmp_path):
@@ -448,7 +503,7 @@ def test_ingest_no_subagents_file_is_graceful(data_dir):
 
 
 def test_ingest_propagates_delegation_prompt_and_bumps_trace_version(data_dir, tmp_path):
-    """#200: ingest した record に delegation_prompt が乗り、trace_version が 2 になる。"""
+    """#200: ingest した record に delegation_prompt が乗り、trace_version が 3 になる（#342）。"""
     tr = tmp_path / "agent1.jsonl"
     _write_transcript(tr, [
         _user_line("evolve-anything の issue #200 を実装してください。"),
@@ -462,8 +517,26 @@ def test_ingest_propagates_delegation_prompt_and_bumps_trace_version(data_dir, t
     rec = _tstore.read_traces("myproj")["a1"]
     assert rec["delegation_prompt"] == "evolve-anything の issue #200 を実装してください。"
     assert rec["delegation_prompt_truncated"] is False
-    assert rec["trace_version"] == 2
-    assert _ingest.TRACE_VERSION == 2
+    assert rec["trace_version"] == 3
+    assert _ingest.TRACE_VERSION == 3
+
+
+def test_ingest_propagates_tool_errors_breakdown(data_dir, tmp_path):
+    """#342: ingest した record に tool_errors（tool名別エラー内訳）が乗る。"""
+    tr = tmp_path / "agent1.jsonl"
+    _write_transcript(tr, [
+        _assistant_line([{"type": "tool_use", "id": "1", "name": "Bash", "input": {}}]),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "1", "content": "e", "is_error": True},
+        ]}},
+    ])
+    _write_subagents(data_dir, [{
+        "agent_id": "a1", "agent_type": "impl-worker",
+        "agent_transcript_path": str(tr), "project": "/home/u/myproj",
+    }])
+    assert _ingest.ingest_all_projects()["ingested"] == 1
+    rec = _tstore.read_traces("myproj")["a1"]
+    assert rec["tool_errors"] == {"Bash": 1}
 
 
 # ─────────────── #140 write の data_dir 対称性（read/write 隔離） ───────────────
@@ -619,6 +692,31 @@ def test_per_agent_type_summary_aggregates_effort_distribution(data_dir):
     assert s["dominant_effort"] == "xhigh"
 
 
+def test_per_agent_type_summary_aggregates_tool_errors(data_dir):
+    """#342: agent_type 単位で tool_errors を tool 名別に合算する。"""
+    _tstore.write_trace({"agent_id": "w1", "pj_slug": "p", "agent_type": "impl-worker",
+                         "first_try_success": False, "tool_error_count": 2,
+                         "tool_errors": {"Bash": 2}})
+    _tstore.write_trace({"agent_id": "w2", "pj_slug": "p", "agent_type": "impl-worker",
+                         "first_try_success": False, "tool_error_count": 1,
+                         "tool_errors": {"Bash": 1, "Edit": 1}})
+    _tstore.write_trace({"agent_id": "w3", "pj_slug": "p", "agent_type": "impl-worker",
+                         "first_try_success": True, "tool_error_count": 0})
+    out = _query.per_agent_type_summary("p", min_traces=3)
+    assert len(out) == 1
+    assert out[0]["tool_errors"] == {"Bash": 3, "Edit": 1}
+
+
+def test_per_agent_type_summary_tool_errors_empty_for_legacy_records(data_dir):
+    """#342: tool_errors フィールドを持たない旧レコード（TRACE_VERSION 2 以前）でも壊れず、
+    集計対象から単に外れて空 dict になる（後方互換）。"""
+    for i in range(3):
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": True, "tool_error_count": 0})
+    out = _query.per_agent_type_summary("p", min_traces=3)
+    assert out[0]["tool_errors"] == {}
+
+
 def test_per_agent_type_summary_dominant_effort_none_when_unmeasured(data_dir):
     """effort_counts が全レコードで空（旧 CC バージョン等）なら dominant_effort=None。"""
     for i in range(3):
@@ -661,7 +759,7 @@ def test_section_emits_agent_type_rows(data_dir, monkeypatch):
     out = sec.build_subagent_traces_section(Path("/x/p"))
     joined = "\n".join(out)
     assert "impl-worker" in joined
-    assert "内部一発成功率" in joined
+    assert "tool-エラー0率" in joined
 
 
 def test_section_warns_on_low_first_try_success(data_dir, monkeypatch):
@@ -814,6 +912,91 @@ def test_section_handles_missing_delegation_prompt_field_gracefully(data_dir, mo
     joined = "\n".join(out)
     assert "impl-worker" in joined
     assert "直近の委任" not in joined
+
+
+# ──────────── audit section: エラー内訳（tool別）表示 (#342) ────────────
+
+def test_section_shows_tool_errors_breakdown(data_dir, monkeypatch):
+    """#342: エラーが記録された agent_type はエラー内訳（tool別）を表示する。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    _tstore.write_trace({"agent_id": "w0", "pj_slug": "p", "agent_type": "impl-worker",
+                         "first_try_success": False, "tool_error_count": 2,
+                         "tool_errors": {"Bash": 2}})
+    for i in range(1, 3):
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": True, "tool_error_count": 0})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "エラー内訳（tool別）" in joined
+    assert "Bash:2" in joined
+
+
+def test_section_omits_tool_errors_line_when_no_errors(data_dir, monkeypatch):
+    """#342: エラーが 1 件も無い agent_type はエラー内訳行を省略する（沈黙）。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(3):
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": True, "tool_error_count": 0,
+                             "tool_errors": {}})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "└ エラー内訳（tool別）" not in joined
+
+
+def test_section_handles_missing_tool_errors_field_gracefully(data_dir, monkeypatch):
+    """#342: tool_errors フィールドが無い既存レコード（TRACE_VERSION 2 以前）でも壊れない（後方互換）。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(3):
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": True, "tool_error_count": 0})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    assert out is not None
+    joined = "\n".join(out)
+    assert "impl-worker" in joined
+    assert "└ エラー内訳（tool別）" not in joined
+
+
+def test_section_marks_unmeasured_when_old_record_has_errors(data_dir, monkeypatch):
+    """#342: エラーは起きているのに tool_errors が無い旧レコードは「未計測」と明示する。
+
+    ingest は agent_id dedup なので TRACE_VERSION を上げても既存レコードは再 ingest
+    されない。ここで沈黙すると「エラーが無い」と誤読され、内訳を見て判断せよという
+    section の注意書きが空振りする（silence != evaluated・#351 と同クラス）。
+    """
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(3):
+        # TRACE_VERSION 2 以前の形: tool_error_count はあるが tool_errors が無い
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": False, "tool_error_count": 4})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "└ エラー内訳（tool別）: 未計測" in joined
+
+
+def test_section_tool_errors_breakdown_truncates_top_n_by_count(data_dir, monkeypatch):
+    """#342: tool_errors 内訳は件数降順で上位 TOOL_ERROR_BREAKDOWN_MAX 件のみ表示し、
+    残りは「他 N 種別」で件数だけ明示する（本文を長くしすぎない表示制約）。"""
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    # 7 tool 分のエラーを 1 レコードに詰める（TOOL_ERROR_BREAKDOWN_MAX=5 を超える）。
+    tool_errors = {f"Tool{i}": (7 - i) for i in range(7)}  # Tool0:7, Tool1:6, ... Tool6:1
+    _tstore.write_trace({"agent_id": "w0", "pj_slug": "p", "agent_type": "impl-worker",
+                         "first_try_success": False, "tool_error_count": sum(tool_errors.values()),
+                         "tool_errors": tool_errors})
+    for i in range(1, 3):
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": True, "tool_error_count": 0})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert sec.TOOL_ERROR_BREAKDOWN_MAX == 5
+    assert "Tool0:7" in joined
+    assert "Tool4:3" in joined  # 上位5件目
+    assert "Tool5:2" not in joined
+    assert "他 2 種別" in joined
 
 
 # ──────────── audit section: 実測 effort 分布 + tier drift (#219) ────────────
