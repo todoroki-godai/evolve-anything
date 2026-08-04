@@ -374,3 +374,17 @@ def detect_takeoff_divergence(last_assistant_message):
     no_signature = not _takeoff_has_completion_signature(text)
     forward_ending = _takeoff_ends_with_forward_narration(text)
     return no_signature and forward_ending
+
+
+# CC 組み込みスラッシュコマンド（`<command-name>` に現れるが SKILL.md を持たない）の
+# 単一ソース（#333）。skill_extractor.trajectory_sampler（session 採掘）と
+# discover.runner（候補判定）が別々のリテラルで持っていたため内容が食い違い、
+# 両方に無かった `/effort` が CREATE 候補としてすり抜けていた（copied-parse-convention
+# pitfall と同型・#40）。新しい CC バージョンで組み込みが増えたらここに追記する
+# （両 call site とも import するので二重更新は不要）。
+CC_BUILTIN_COMMANDS = frozenset({
+    "add-dir", "agents", "bug", "clear", "compact", "config", "cost",
+    "doctor", "effort", "fast", "help", "init", "login", "logout", "loop",
+    "mcp", "memory", "model", "permissions", "plugin", "reload-plugins",
+    "rename", "resume", "status", "terminal-setup", "vim",
+})

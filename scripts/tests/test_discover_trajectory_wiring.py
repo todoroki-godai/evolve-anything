@@ -100,11 +100,20 @@ def test_cc_builtin_commands_excluded():
     assert [m["skill"] for m in merged] == ["brandnew"]
 
 
+def test_cc_builtin_command_effort_excluded():
+    """/effort は #333 まで両リストに無く CREATE 候補としてすり抜けていた。"""
+    cands = [_cand("effort", 0.95), _cand("brandnew", 0.7)]
+    surfaced, merged = _trajectory_candidates_to_missed(cands, threshold=0.3)
+    assert [c["skill_name"] for c in surfaced] == ["brandnew"]
+    assert [m["skill"] for m in merged] == ["brandnew"]
+
+
 def test_is_already_existing_skill_predicate():
     assert _is_already_existing_skill("evolve-anything:evolve", set()) is True
     assert _is_already_existing_skill("review", {"review"}) is True
     assert _is_already_existing_skill("loop", set()) is True  # CC builtin
     assert _is_already_existing_skill("model", set()) is True  # CC builtin
+    assert _is_already_existing_skill("effort", set()) is True  # CC builtin (#333)
     assert _is_already_existing_skill("", set()) is True
     assert _is_already_existing_skill("brandnew", {"review"}) is False
 
