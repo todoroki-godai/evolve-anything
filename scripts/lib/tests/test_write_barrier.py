@@ -25,6 +25,7 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import rl_common  # noqa: E402
+import shrink_freeze  # noqa: E402
 import store_registry  # noqa: E402
 from rl_common import store_write, store_write_raw  # noqa: E402
 from rl_common.store_write import StoreWriteError  # noqa: E402
@@ -162,19 +163,100 @@ def test_invalid_guard_mode_falls_back_to_warn(data_dir, capsys):
 
 # --- store_write_raw: 明示パスの例外口 ---------------------------------------
 
-def test_store_write_raw_writes_explicit_path(tmp_path):
-    """store_write_raw は明示パスにそのまま追記する（registry 照合なし）。"""
-    target = tmp_path / "anywhere.jsonl"
+def test_store_write_raw_writes_explicit_path(tmp_path_factory):
+    """store_write_raw は明示パスにそのまま追記する（registry 照合なし）。
+
+    ``_isolate_plugin_data``（root conftest 自動隔離）は per-test の ``tmp_path`` を
+    rl_common.DATA_DIR にそのまま rebase するため、素の ``tmp_path`` は「DATA_DIR 配下」に
+    なってしまい #379 凍結ゲートの対象になる（テスト対象の意図＝DATA_DIR 外の明示パス、
+    とは無関係な confound）。``tmp_path_factory`` の別 mktemp で DATA_DIR と兄弟の
+    独立ディレクトリを使い、意図通り「DATA_DIR 外」を表す。
+    """
+    target = tmp_path_factory.mktemp("explicit") / "anywhere.jsonl"
     store_write_raw(target, {"r": 1})
     assert _read_lines(target) == [{"r": 1}]
 
 
-def test_store_write_raw_does_not_consult_registry(tmp_path, monkeypatch):
-    """store_write_raw は未登録名でも guard を発火しない（明示パス契約）。"""
+def test_store_write_raw_does_not_consult_registry(tmp_path_factory, monkeypatch):
+    """store_write_raw は未登録名でも guard を発火しない（DATA_DIR 外の明示パス契約）。"""
     monkeypatch.setattr(store_registry, "_DECLARATIONS", [], raising=True)
-    target = tmp_path / "undeclared.jsonl"
+    target = tmp_path_factory.mktemp("explicit") / "undeclared.jsonl"
     store_write_raw(target, {"r": 1})  # 例外を出さない
     assert _read_lines(target) == [{"r": 1}]
+
+
+# --- store_write_raw: #379 Step 1 凍結ゲート（修正4） -------------------------
+#
+# store_registry 未登録 basename でも書ける raw 経路の穴（外部レビュー指摘）を、
+# 書込み先が正準 DATA_DIR 配下のときに限って塞ぐ。DATA_DIR 外の明示パス（テスト
+# isolation の tmp 等）は従来通り対象外＝上の2テストの契約は変えない。
+
+def test_store_write_raw_rejects_unknown_basename_under_canonical_datadir_when_frozen(
+    data_dir,
+) -> None:
+    """凍結中、正準 DATA_DIR 配下への未登録 basename 書込みは reject する。"""
+    target = data_dir / "totally_new_store.jsonl"
+    with pytest.raises(StoreWriteError, match="未登録"):
+        store_write_raw(target, {"v": 1})
+    assert not target.exists()
+
+
+def test_store_write_raw_allows_known_basename_under_canonical_datadir(data_dir) -> None:
+    """凍結中でも登録済み basename（FROZEN_STORES ∪ store_registry 宣言）は通常通り書ける。"""
+    target = data_dir / "corrections.jsonl"
+    store_write_raw(target, {"v": 1})
+    assert _read_lines(target) == [{"v": 1}]
+
+
+def test_store_write_raw_ignores_unknown_basename_outside_canonical_datadir(
+    tmp_path_factory, data_dir
+) -> None:
+    """DATA_DIR 外の明示パスは凍結ゲートの対象外（store_write_raw 本来の「場所を尊重する」
+    契約を維持する）。``data_dir`` フィクスチャで DATA_DIR を tmp_path/evolve-anything に
+    固定した上で、それとは兄弟の独立ディレクトリへ書く（#420 の tmp_path rebase confound
+    を避ける・上の test_store_write_raw_writes_explicit_path と同じ理由）。"""
+    target = tmp_path_factory.mktemp("elsewhere") / "totally_new_store.jsonl"
+    store_write_raw(target, {"v": 1})  # 例外を出さない
+    assert _read_lines(target) == [{"v": 1}]
+
+
+def test_store_write_raw_allows_unknown_basename_when_unfrozen(
+    data_dir, monkeypatch
+) -> None:
+    """凍結解除中（SHRINK_FREEZE_ACTIVE=False）は正準 DATA_DIR 配下でも未登録 basename を通す。"""
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
+    target = data_dir / "totally_new_store.jsonl"
+    store_write_raw(target, {"v": 1})
+    assert _read_lines(target) == [{"v": 1}]
+
+
+def test_store_write_raw_warn_mode_downgrades_reject(data_dir, capsys) -> None:
+    """guard_mode="warn" 明示（緊急避難口）は reject を warn に降格し書込を継続する。"""
+    target = data_dir / "totally_new_store.jsonl"
+    store_write_raw(target, {"v": 1}, guard_mode="warn")
+    err = capsys.readouterr().err
+    assert "write-barrier" in err
+    assert "未登録" in err
+    assert _read_lines(target) == [{"v": 1}]
+
+
+def test_store_write_raw_env_warn_downgrades_reject(data_dir, monkeypatch, capsys) -> None:
+    """EVOLVE_WRITE_GUARD=warn（env）でも同様に降格する（既存 store_write の緊急避難と同一 env）。"""
+    monkeypatch.setenv("EVOLVE_WRITE_GUARD", "warn")
+    target = data_dir / "totally_new_store.jsonl"
+    store_write_raw(target, {"v": 1})
+    assert _read_lines(target) == [{"v": 1}]
+
+
+def test_store_write_raw_fail_open_when_store_registry_unavailable(
+    data_dir, monkeypatch
+) -> None:
+    """store_registry が import 不能な環境では凍結ゲート自体を fail-open する
+    （既存 write barrier の `_guard_problem` と同じ fail-open 流儀）。"""
+    monkeypatch.setitem(sys.modules, "store_registry", None)
+    target = data_dir / "totally_new_store.jsonl"
+    store_write_raw(target, {"v": 1})  # 例外を出さない
+    assert _read_lines(target) == [{"v": 1}]
 
 
 # --- write-path-set keyset snapshot（ADR-049 安全網）-------------------------

@@ -139,6 +139,29 @@ def existing_signal_keys(path: Optional[Path] = None) -> set:
     }
 
 
+def _reject_unknown_channels(signals: List[WeakSignal]) -> None:
+    """#379 Step 1 凍結ゲート: 凍結中は正準集合に無い channel の signal を書込み拒否する。
+
+    正準集合は producer 側（``weak_signals.channels.WEAK_SIGNAL_CHANNELS``）。
+    ``shrink_freeze.is_frozen()`` が False（凍結解除後）は no-op。read 側（``read_signals``
+    等）は一切変更しない — 既存ストアに残る未知/旧 channel のレコードは読めなくしない。
+    ファイルに触れないため dry-run 純度（pitfall_dryrun_stateful_store_write）を破らず、
+    dry-run でも実書込と同じタイミング（append_signals 冒頭）で検証する。
+    """
+    import shrink_freeze
+    from weak_signals.channels import WEAK_SIGNAL_CHANNELS
+
+    if not shrink_freeze.is_frozen():
+        return
+    unknown = sorted({sig.channel for sig in signals} - WEAK_SIGNAL_CHANNELS)
+    if unknown:
+        raise shrink_freeze.FreezeViolationError(
+            f"weak_signal_channel: 新規追加を検出しました {unknown}。"
+            "#379 Step 1 新設凍結中。本当に必要なら SHRINK_FREEZE_ACTIVE の解除判断を"
+            "ユーザーに仰ぐこと"
+        )
+
+
 def append_signals(
     signals: List[WeakSignal],
     path: Optional[Path] = None,
@@ -154,6 +177,7 @@ def append_signals(
         {"written": 新規書き込み件数, "skipped_dup": 重複でスキップした件数,
          "dry_run": bool}
     """
+    _reject_unknown_channels(signals)
     store = path if path is not None else default_store_path()
     seen = existing_signal_keys(store)
 
