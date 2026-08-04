@@ -185,6 +185,39 @@ def test_excludes_harness_markers(tmp_path: Path) -> None:
     assert list(extract_utterances(f, pj_slug="x")) == []
 
 
+def test_excludes_stop_hook_self_injection(tmp_path: Path) -> None:
+    """Stop hook 自己注入文は _HARNESS_MARKERS になくても除外される（#323）。
+
+    実測: extractor 固有の _HARNESS_MARKERS には無いが rl_common.detection の
+    is_machinery_prompt にはある markers（"Stop hook feedback:" 等）が dialogue として
+    utterances.db に漏れ、llm_judge チャネルの判定対象に混入していた（実 DB 26 件）。
+    """
+    text = (
+        "Stop hook feedback:\n"
+        "先送り表現を検出しました: 「後で対応」。ルールに従い background subagent を"
+        "即座に起動してください。"
+    )
+    f = tmp_path / "s1.jsonl"
+    f.write_text(_user_line(text) + "\n", encoding="utf-8")
+    assert list(extract_utterances(f, pj_slug="x")) == []
+
+
+def test_excludes_skill_base_directory_injection(tmp_path: Path) -> None:
+    """SKILL.md 注入の "Base directory for this skill:" も機構ターン（rl_common 単一ソース経由）。"""
+    text = "Base directory for this skill: /Users/x/.claude/skills/foo\n\n実行手順..."
+    f = tmp_path / "s1.jsonl"
+    f.write_text(_user_line(text) + "\n", encoding="utf-8")
+    assert list(extract_utterances(f, pj_slug="x")) == []
+
+
+def test_real_correction_not_excluded_by_shared_machinery_filter(tmp_path: Path) -> None:
+    """rl_common 単一ソースの追加判定は本物のユーザー発話を誤って除外しない。"""
+    f = tmp_path / "s1.jsonl"
+    f.write_text(_user_line("いや、そうじゃなくて、そっちのアプローチにして") + "\n", encoding="utf-8")
+    utts = list(extract_utterances(f, pj_slug="x"))
+    assert len(utts) == 1
+
+
 def test_skips_assistant_lines(tmp_path: Path) -> None:
     f = tmp_path / "s1.jsonl"
     f.write_text(_assistant_tooluse_line(["Bash"]) + "\n", encoding="utf-8")
