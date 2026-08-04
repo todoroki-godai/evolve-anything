@@ -126,6 +126,136 @@ def test_record_fitness_run_empty_scores_noop(fhs):
     assert fhs.get_axis_history("coherence", limit=5) == []
 
 
+# ── provenance（#316） ──────────────────────────────────────────────────────
+
+_OLD_SCHEMA_SQL = """
+CREATE SEQUENCE IF NOT EXISTS fitness_history_id_seq;
+CREATE TABLE IF NOT EXISTS fitness_history (
+    id        BIGINT DEFAULT nextval('fitness_history_id_seq'),
+    run_id    TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    axis      TEXT NOT NULL,
+    score     REAL NOT NULL,
+    weight_used REAL,
+    source    TEXT DEFAULT 'audit',
+    UNIQUE (run_id, axis)
+);
+"""
+
+
+def test_record_fitness_run_stores_provenance_json(fhs):
+    """axis 別 provenance を JSON で保存し、get_axis_history が dict として返す。"""
+    run_id = str(uuid.uuid4())
+    provenance = {
+        "coherence": {
+            "schema_version": 1,
+            "evaluation_kind": "deterministic",
+            "producer": "environment.coherence",
+        },
+    }
+    fhs.record_fitness_run(
+        run_id, {"coherence": 0.5}, {"coherence": 1.0}, provenance=provenance
+    )
+    history = fhs.get_axis_history("coherence", limit=1)
+    prov = history[0]["provenance"]
+    assert prov["evaluation_kind"] == "deterministic"
+    assert prov["producer"] == "environment.coherence"
+    assert "judge" not in prov  # 決定論評価に judge キーは持たせない契約
+
+
+def test_record_fitness_run_provenance_defaults_to_unknown_when_missing(fhs):
+    """provenance 未指定の axis は unknown envelope になる（fabricate しない）。"""
+    run_id = str(uuid.uuid4())
+    fhs.record_fitness_run(run_id, {"telemetry": 0.4}, {"telemetry": 1.0})
+    history = fhs.get_axis_history("telemetry", limit=1)
+    prov = history[0]["provenance"]
+    assert prov is not None
+    assert prov["evaluation_kind"] == "unknown"
+    assert prov["producer"] is None
+
+
+def test_record_fitness_run_llm_judge_provenance_keeps_judge_key(fhs):
+    """constitutional 等 LLM judge axis は judge キー（model 等）を保持したまま保存される。"""
+    run_id = str(uuid.uuid4())
+    provenance = {
+        "constitutional": {
+            "schema_version": 1,
+            "evaluation_kind": "llm_judge_aggregate",
+            "producer": "constitutional",
+            "judge": {
+                "model": None,
+                "effort": None,
+                "tool_policy": {"mode": "unknown", "allowed_tools": None},
+            },
+            "judge_models": ["sonnet"],
+        },
+    }
+    fhs.record_fitness_run(
+        run_id, {"constitutional": 0.8}, {"constitutional": 1.0}, provenance=provenance
+    )
+    history = fhs.get_axis_history("constitutional", limit=1)
+    prov = history[0]["provenance"]
+    assert prov["judge_models"] == ["sonnet"]
+    assert "judge" in prov
+
+
+def test_old_schema_db_migrates_and_keeps_existing_rows(tmp_path):
+    """provenance 列の無い旧スキーマ DB を新コードで開いても既存行が読める（migration）。
+
+    遡及埋めはしない前提なので、旧行の provenance は None のまま。
+    """
+    import duckdb
+    import lib.fitness_history_store as fhs_mod
+
+    with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(tmp_path)}):
+        importlib.reload(fhs_mod)
+
+        con = duckdb.connect(str(fhs_mod.USAGE_DB))
+        con.execute(_OLD_SCHEMA_SQL)
+        old_run_id = str(uuid.uuid4())
+        con.execute(
+            "INSERT INTO fitness_history (run_id, timestamp, axis, score, weight_used, source) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [old_run_id, "2026-01-01T00:00:00+00:00", "coherence", 0.6, 1.0, "audit"],
+        )
+        con.close()
+
+        new_run_id = str(uuid.uuid4())
+        fhs_mod.record_fitness_run(new_run_id, {"coherence": 0.7}, {"coherence": 1.0})
+
+        history = fhs_mod.get_axis_history("coherence", limit=10)
+        assert len(history) == 2
+        by_run_id = {h["run_id"]: h for h in history}
+        assert old_run_id in by_run_id
+        assert new_run_id in by_run_id
+        assert by_run_id[old_run_id]["provenance"] is None
+        assert by_run_id[new_run_id]["provenance"] is not None
+
+    importlib.reload(fhs_mod)
+
+
+def test_migration_preserves_unique_constraint(tmp_path):
+    """ALTER TABLE ADD COLUMN 後も UNIQUE (run_id, axis) が有効（同 run_id 二重 insert は弾かれる）。"""
+    import duckdb
+    import lib.fitness_history_store as fhs_mod
+
+    with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(tmp_path)}):
+        importlib.reload(fhs_mod)
+
+        con = duckdb.connect(str(fhs_mod.USAGE_DB))
+        con.execute(_OLD_SCHEMA_SQL)
+        con.close()
+
+        run_id = str(uuid.uuid4())
+        fhs_mod.record_fitness_run(run_id, {"coherence": 0.5}, {"coherence": 1.0})
+        fhs_mod.record_fitness_run(run_id, {"coherence": 0.9}, {"coherence": 1.0})  # 同 run_id 二重
+
+        history = fhs_mod.get_axis_history("coherence", limit=10)
+        assert len(history) == 1, "UNIQUE(run_id, axis) が生きていれば二重 insert は弾かれる"
+
+    importlib.reload(fhs_mod)
+
+
 def _load_environment_module(name: str):
     """environment.py を独立したモジュール名でロードして返す。"""
     scripts_dir = Path(__file__).resolve().parent.parent.parent
@@ -183,3 +313,158 @@ def test_environment_fitness_no_record_when_false(tmp_path):
     # tmp_path の DB は存在しないか空のはず
     history = fhs_mod.get_axis_history("coherence", limit=10)
     assert history == [], "record=False なら DB に書き込まれないはず"
+
+
+# ── environment.py の provenance 組立（#316） ───────────────────────────────
+
+def test_environment_fitness_provenance_deterministic_axes_no_judge_key(tmp_path):
+    """coherence/overall は deterministic axis として judge キー無しで provenance が渡る。"""
+    import types
+
+    env_mod = _load_environment_module("env_provenance_det_test")
+
+    def _mock_load_sibling(name):
+        if name == "coherence":
+            m = mock.MagicMock()
+            m.compute_coherence_score.return_value = {"overall": 0.72}
+            return m
+        raise RuntimeError(f"skipped: {name}")
+
+    captured: dict = {}
+
+    def _fake_record(run_id, axis_scores, weights, source="audit", provenance=None):
+        captured["provenance"] = provenance
+
+    fake_store = types.ModuleType("fitness_history_store")
+    fake_store.record_fitness_run = _fake_record
+
+    with mock.patch.object(env_mod, "_load_sibling", side_effect=_mock_load_sibling):
+        with mock.patch.dict(sys.modules, {"fitness_history_store": fake_store}):
+            env_mod.compute_environment_fitness(tmp_path, days=30, skip_llm=True, record=True)
+
+    prov = captured["provenance"]
+    assert prov["coherence"]["evaluation_kind"] == "deterministic"
+    assert prov["coherence"]["producer"] == "environment.coherence"
+    assert "judge" not in prov["coherence"]
+    assert prov["overall"]["evaluation_kind"] == "deterministic"
+    assert "judge" not in prov["overall"]
+
+
+def test_environment_fitness_provenance_records_days_window(tmp_path):
+    """集計窓 `days` に依存する axis は provenance の config に days を持つ（codex cold-read 指摘）。
+
+    telemetry / skill_quality は `--days`（既定30）でスコアが変わる。含めないと 7日窓の run と
+    30日窓の run が同一 provenance になり、#316 の目的（スコア変化が条件変化由来かの分離）が
+    そもそも成立しない。days を消費しない coherence には付けない。
+    """
+    import types
+
+    env_mod = _load_environment_module("env_provenance_days_test")
+
+    def _mock_load_sibling(name):
+        m = mock.MagicMock()
+        if name == "coherence":
+            m.compute_coherence_score.return_value = {"overall": 0.72}
+            return m
+        if name == "telemetry":
+            # data_sufficiency が真でないと axis_scores に載らない（environment.py:125）
+            m.compute_telemetry_score.return_value = {
+                "overall": 0.55,
+                "data_sufficiency": True,
+            }
+            return m
+        raise RuntimeError(f"skipped: {name}")
+
+    captured: dict = {}
+
+    def _fake_record(run_id, axis_scores, weights, source="audit", provenance=None):
+        captured["provenance"] = provenance
+
+    fake_store = types.ModuleType("fitness_history_store")
+    fake_store.record_fitness_run = _fake_record
+
+    with mock.patch.object(env_mod, "_load_sibling", side_effect=_mock_load_sibling):
+        with mock.patch.dict(sys.modules, {"fitness_history_store": fake_store}):
+            env_mod.compute_environment_fitness(tmp_path, days=7, skip_llm=True, record=True)
+
+    prov = captured["provenance"]
+    assert prov["telemetry"]["config"] == {"days": 7}
+    assert prov["overall"]["config"]["days"] == 7
+    # coherence は days を消費しないので config を持たせない（無い条件を捏造しない）。
+    assert not prov["coherence"].get("config")
+
+
+def test_environment_fitness_provenance_constitutional_reuses_layer_aggregate(tmp_path):
+    """constitutional 軸は constitutional_result['provenance']（llm_judge_aggregate）を再利用する。
+
+    environment 側で別の provenance を作り直すと、別時点の値を偽って合成することになる。
+    """
+    import types
+
+    env_mod = _load_environment_module("env_provenance_con_test")
+
+    con_provenance = {
+        "schema_version": 1,
+        "evaluation_kind": "llm_judge_aggregate",
+        "producer": "constitutional",
+        "judge_models": ["sonnet"],
+    }
+
+    def _mock_load_sibling(name):
+        if name == "coherence":
+            m = mock.MagicMock()
+            m.compute_coherence_score.return_value = {"overall": 0.72}
+            return m
+        if name == "constitutional":
+            m = mock.MagicMock()
+            m.compute_constitutional_score.return_value = {
+                "overall": 0.5,
+                "provenance": con_provenance,
+            }
+            return m
+        raise RuntimeError(f"skipped: {name}")
+
+    captured: dict = {}
+
+    def _fake_record(run_id, axis_scores, weights, source="audit", provenance=None):
+        captured["provenance"] = provenance
+
+    fake_store = types.ModuleType("fitness_history_store")
+    fake_store.record_fitness_run = _fake_record
+
+    with mock.patch.object(env_mod, "_load_sibling", side_effect=_mock_load_sibling):
+        with mock.patch.dict(sys.modules, {"fitness_history_store": fake_store}):
+            env_mod.compute_environment_fitness(tmp_path, days=30, skip_llm=False, record=True)
+
+    prov = captured["provenance"]
+    assert prov["constitutional"] == con_provenance
+
+
+def test_environment_fitness_provenance_missing_axis_not_fabricated(tmp_path):
+    """axis_results に provenance が無ければ environment 側で捏造しない（キー自体を作らない）。"""
+    import types
+
+    env_mod = _load_environment_module("env_provenance_missing_test")
+
+    def _mock_load_sibling(name):
+        if name == "constitutional":
+            m = mock.MagicMock()
+            # provenance キー無しの旧形式レスポンスを模す
+            m.compute_constitutional_score.return_value = {"overall": 0.5}
+            return m
+        raise RuntimeError(f"skipped: {name}")
+
+    captured: dict = {}
+
+    def _fake_record(run_id, axis_scores, weights, source="audit", provenance=None):
+        captured["provenance"] = provenance
+
+    fake_store = types.ModuleType("fitness_history_store")
+    fake_store.record_fitness_run = _fake_record
+
+    with mock.patch.object(env_mod, "_load_sibling", side_effect=_mock_load_sibling):
+        with mock.patch.dict(sys.modules, {"fitness_history_store": fake_store}):
+            env_mod.compute_environment_fitness(tmp_path, days=30, skip_llm=False, record=True)
+
+    prov = captured["provenance"]
+    assert "constitutional" not in prov

@@ -100,6 +100,121 @@ class TestDetectCorrection:
         assert result is None
 
 
+class TestJapaneseCalibration336:
+    """#336: 実コーパス目視で拾えていなかった日本語表現のパターン。"""
+
+    def test_iya_repeated(self):
+        """「いやいや」等の反復強調も iya と同義。"""
+        result = common.detect_correction("いやいや、そうじゃなくてこっちのアプローチにして")
+        assert result is not None
+        assert result[0] == "iya"
+
+    def test_itte_noni_quoted(self):
+        """引用マーカー付き「って言ったのに」= I-told-you の日本語相当。"""
+        result = common.detect_correction("って言ったのに、まだ直っていない")
+        assert result is not None
+        assert result[0] == "itte-noni"
+
+    def test_itte_noni_ends_with_question_mark(self):
+        """詰問形は疑問符終端でも除外されない（#336 の難所）。"""
+        result = common.detect_correction("っていったけど、見た目を確認したら全然ダメだったよね？")
+        assert result is not None
+        assert result[0] == "itte-noni"
+
+    def test_itte_noni_requires_quote_marker(self):
+        """引用マーカー無しの「いった」（行った、の意）は誤爆しない。"""
+        result = common.detect_correction("うまくいったのに、今回はなぜかダメだった")
+        assert result is None
+
+    def test_shiteki_noni(self):
+        result = common.detect_correction("さっき指摘したのに、まだ直っていない")
+        assert result is not None
+        assert result[0] == "shiteki-noni"
+
+    def test_shiteki_kedo_ends_with_question_mark(self):
+        """#336 issue 本文の実例相当（末尾疑問符でも除外されない）。"""
+        result = common.detect_correction("この設計の説明をわかりやすくしてって指摘あげたけど、何も変更していない？")
+        assert result is not None
+        assert result[0] == "shiteki-noni"
+
+    def test_itte_nai_yone(self):
+        """依頼していないことへの訂正。"""
+        result = common.detect_correction("そんなことしてっていってないんだよね")
+        assert result is not None
+        assert result[0] == "itte-nai-yone"
+
+    def test_naze_dekinakatta(self):
+        result = common.detect_correction("これって、なんであなたは実装できてなかったの？")
+        assert result is not None
+        assert result[0] == "naze-dekinakatta"
+
+    def test_naze_kugurinuketa(self):
+        """#336 issue 本文の実例。"""
+        result = common.detect_correction("なぜこれが評価をくぐりぬけた？")
+        assert result is not None
+        assert result[0] == "naze-dekinakatta"
+
+    def test_naze_plain_curiosity_not_matched(self):
+        """失敗語を伴わない素朴な「なぜ」は誤爆しない。"""
+        result = common.detect_correction("なぜ今このツールが話題なのかを教えて")
+        assert result is None
+
+    def test_naze_reversed_word_order(self):
+        """「〜できてないのはなんで？」のような語順が逆の詰問形も検出する（実コーパス実例）。"""
+        result = common.detect_correction(
+            "レポートみたけど、dpp pjの内容の記載がない。まるでキャッチアップできてないのはなんで？"
+        )
+        assert result is not None
+        assert result[0] == "naze-dekinakatta"
+
+    def test_naze_unrelated_words_across_sentence_boundary_not_matched(self):
+        """文区切りを跨いだ偶然の語の近接では誤爆しない（実コーパスで検出した誤爆の回帰防止）。
+
+        「各 fix に「なぜ」+ 見落としリスク」は設計テンプレの項目列挙であり、
+        「なぜ」と「見落と」の間に閉じ括弧 」 を挟むため詰問形ではない。
+        """
+        result = common.detect_correction(
+            "レビュー観点: 各 fix に「なぜ」+ 見落としリスクを記載してください。"
+        )
+        assert result is None
+
+    def test_shiteki_kedo_without_negation_not_matched(self):
+        """「指摘した + けど」だけでは新規タスク依頼を誤検出しない（実コーパスで検出した誤爆の回帰防止）。
+
+        「けど」は逆接だけでなく話題転換にも使われるため、直後に不履行を示す語
+        （何も/まだ/全然/一切 + 否定）を伴わない限り shiteki-noni は発火しない。
+        """
+        result = common.detect_correction(
+            "さっきシステムマネージャーに何度も指摘したけど、その内容をスキルにまとめておきたい"
+        )
+        assert result is None
+
+    def test_kanchigai_question(self):
+        result = common.detect_correction("何か勘違いしている？")
+        assert result is not None
+        assert result[0] == "kanchigai-question"
+
+    def test_kanchigai_negative_form(self):
+        result = common.detect_correction("私の指示を勘違いしていない？")
+        assert result is not None
+        assert result[0] == "kanchigai-question"
+
+    def test_kanchigai_self_retraction_not_matched(self):
+        """過去形の自己撤回（「勘違いだったかも」）は対象外（相手への訂正ではない）。"""
+        result = common.detect_correction("勘違いだったかも、無視して。いったんこのまま進めよう")
+        assert result is None
+
+    def test_kanchigai_past_tense_statement_not_matched(self):
+        """疑問符を伴わない断定形は対象外（過検出を避ける保守的な条件）。"""
+        result = common.detect_correction("あれは私の勘違いだね")
+        assert result is None
+
+    def test_plain_request_not_matched(self):
+        """通常の依頼文（新規タスク指示）は誤検出しない（#323）。"""
+        assert common.detect_correction("これを反映してください") is None
+        assert common.detect_correction("何ができるかを整理してください") is None
+
+
 class TestNewPatterns:
     """claude-reflect 由来のパターン検出テスト。"""
 
@@ -191,6 +306,15 @@ class TestFalsePositiveFilters:
         result = common.detect_correction("remember: always use bun for package management")
         assert result is not None
         assert result[0] == "remember"
+
+    def test_question_mark_filter_still_applies_to_non_reproach_patterns(self):
+        """疑問符終端フィルタの一般ケースは #336 の詰問形 override で壊れない。
+
+        「no」パターンにマッチしても詰問形 override 対象外なら従来どおり除外される
+        （回帰防止・_REPROACH_OVERRIDE_KEYS を全パターンに広げていないことの固定）。
+        """
+        result = common.detect_correction("no, is that right?")
+        assert result is None
 
 
 class TestShouldIncludeMessage:

@@ -33,7 +33,7 @@ SPEC.md は AI がセッション開始時に全量読むドキュメント。�
 - **L2**: SPEC.md (hot ~60行) + `spec/`（cold）。Plugin、SaaS バックエンド向け
 - `spec/` ディレクトリの存在で L1/L2 を判定する
 
-**MUST（閾値判定・主指標は bytes）**: 単一 md ファイル **>100KB は分割必須**（Healthy ~50KB以下）。SPEC.md **>35KB はcold へセクション移動**（Healthy ~20KB以下）。行数は補助指標（L1 >100行 / L2 hot >80行で移動・昇格を検討）。根拠: Read ツールの実質上限（≈25K tokens）超で丸読み truncate される実害があり行数だけでは代表しない（issue #216）。
+**MUST（閾値判定・主指標は bytes）**: 単一 md ファイル **>100KB は分割必須**（Healthy ~50KB以下）。SPEC.md **>35KB はcold へセクション移動**（Healthy ~20KB以下）。CLAUDE.md **>60KB は cold へ移動を検討**（Healthy ~40KB以下・毎セッション自動注入されるため per-session token コストが実害。暫定値、#319）。行数は補助指標（L1 >100行 / L2 hot >80行で移動・昇格を検討）。根拠: Read ツールの実質上限（≈25K tokens）超で丸読み truncate される実害があり行数だけでは代表しない（issue #216）。**この閾値の単一ソースは `scripts/lib/doc_budget.py`**（散文はここに二重定義しない）で、update を起動しなくても audit advisory + pre-push light（`bin/evolve-dogfood-gate --layer light`）が byte 予算・肥大セクション・リンク切れを自動検出する（#319 — SKILL.md の MUST は起動依存の下限、機械チェックが常設の上限）。
 
 **MUST**: レイヤー閾値の全表・L1→L2昇格手順・cold ファイル消費ルール・原則の詳細は [references/layers.md](references/layers.md) を参照する。
 
@@ -165,7 +165,9 @@ echo "feat_refactor: $(git log --oneline --since="$(git log -1 --format=%ci -- S
    - `git diff` で変更されたファイルを確認
 2. SPEC.md の該当セクションを Edit で更新:
    - **Current Capabilities** / **System Architecture**: 新機能・変更を反映
-   - **Recent Changes**: 変更サマリーを追記（改善型のみ）。**直近5件を超えたら古い項目を CHANGELOG.md へ移動（削除は絶対禁止 — 必ず移動先を先に確保してから SPEC.md を編集すること）**
+   - **Recent Changes**: **SPEC.md に変更サマリーを転記しない**（#318）。CHANGELOG.md が変更履歴の単一ソースで、SPEC.md 側は CHANGELOG.md への 1 行ポインタのみを持つ。追記が要ると感じたら CHANGELOG.md に書く
+     - 理由: hot な SPEC.md に「直近 N 件」を手書きで持つと CHANGELOG との二重メンテが必ず drift する。旧運用（直近5件を残し古い項目を CHANGELOG へ移動）は、移動作業が滞ると hot が肥大し、実際に SPEC.md 41KB 超過（MUST 閾値 35KB）の主因になった
+     - 直近 N 件を hot に出したい場合も**手書きしない**。CHANGELOG からの決定論生成（派生物）にする
    - **Key Design Decisions**: 新しい ADR があれば該当カテゴリにリンク追加 + Architecture 本文にインライン参照
    - **Current Limitations**: 解決済みの制限を削除、新たな制限を追加
    - **Next**: 次の計画を更新
@@ -176,6 +178,7 @@ echo "feat_refactor: $(git log --oneline --since="$(git log -1 --format=%ci -- S
    - **cold 配下の単一ファイルが > 100KB（bytes）** → 分割必須。承認されたらセクション単位で新規 cold ファイルに分割
    - **L2 の場合**: spec/ ファイルの `Last updated:` も確認し、古い場合は SPEC.md と同時に更新
    - **1行サマリ字数チェック（MUST）**: CLAUDE.md のコンポーネント表など「1行サマリ」を運用契約とする箇所は、**サマリ列（説明文言）のみ 1エントリ ≤400字**（名称・実体パス列は対象外）。超過エントリがあれば要約を切り詰め、詳細は spec/components.md 等の cold 側へ委譲する（本文はポインタのみ残す）
+   - **書込規約（MUST・#319）**: SPEC.md / CLAUDE.md への新規記述は **hot に 1 行サマリ + cold（spec/\*\*.md 等）に詳細**を鉄則にする。CLAUDE.md のコンポーネント表が既にこの規約を持ち `glossary_drift.check_component_table_cells`（1 セル ≤400字）で強制しているのと**同じ文言・同じ強制形**を SPEC.md にも適用する。hot 側にポインタリンクを必ず残し、cold へ移した後は `scripts/lib/doc_budget.py` の check_pointer_refs（audit advisory + pre-push light、hook_drift の dead_ref と同型）がリンク切れを検出する。⚠ このスキルは全PJ共通スキルであり本規約もPJ非依存（evolve-anything 固有の閾値数値は「閾値」節の CLAUDE.md 60KB/40KB のみで、他PJではその PJ の CLAUDE.md 実測に合わせて見直してよい）
 5. **用語集 drift チェック（`CONTEXT.md` が存在する場合のみ）**:
    ```bash
    [ -f CONTEXT.md ] && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/glossary_drift.py" CONTEXT.md SPEC.md CLAUDE.md || true

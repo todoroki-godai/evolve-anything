@@ -68,6 +68,7 @@ observability
 observability.agent_tier
 observability.backup_files
 observability.constitutional
+observability.doc_budget
 observability.duplicate_skill_names
 observability.global_claude_md
 observability.glossary_drift
@@ -239,6 +240,8 @@ phases.skill_triage
 phases.skill_triage.CREATE
 phases.skill_triage.MERGE
 phases.skill_triage.OK
+phases.skill_triage.REVIEW
+phases.skill_triage.SKIP
 phases.skill_triage.SKIP_SUPPRESSED
 phases.skill_triage.SPLIT
 phases.skill_triage.UPDATE

@@ -260,12 +260,22 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_ctx(ctx: dict) -> None:
-    """コンソール向けサマリと JSON を出力する。"""
+def _print_ctx(ctx: dict, *, already_incremented: bool = False) -> None:
+    """コンソール向けサマリと JSON を出力する。
+
+    冒険番号の表示（#N）は total_evolve_count の意味に合わせて出し分ける（#325 off-by-one）。
+    - already_incremented=False（--load）: ctx はまだ今回の実行分を含まない。
+      これから始まる回を予告するので count+1 を表示する。
+    - already_incremented=True（--save-from-response）: save_world_context が
+      呼び出し時点で total_evolve_count を今回分 +1 済みで返す。ここで再度 +1 すると
+      JSON の total_evolve_count と表示がずれるため、count をそのまま表示する。
+    """
     env_name = ctx.get("environment_name", "?")
     title = ctx.get("protagonist_title", "?")
     count = ctx.get("total_evolve_count", 0)
     last = ctx.get("last_evolve_date")
+
+    adventure_number = count if already_incremented else count + 1
 
     if count == 0:
         label = "初回"
@@ -279,7 +289,7 @@ def _print_ctx(ctx: dict) -> None:
     else:
         label = "継続"
 
-    print(f"世界: {env_name}（{label}）| {title} #{count + 1} の冒険が始まる…", file=sys.stderr)
+    print(f"世界: {env_name}（{label}）| {title} #{adventure_number} の冒険が始まる…", file=sys.stderr)
     print(json.dumps(ctx, ensure_ascii=False))
 
 
@@ -319,7 +329,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parsed = parse_responses([{"id": "world"}], responses, parser=passthrough)
     ctx = build_world_context_from_response(parsed["world"], args.slug)
     ctx = save_world_context(data_dir, ctx, slug=args.slug)
-    _print_ctx(ctx)
+    _print_ctx(ctx, already_incremented=True)
     return 0
 
 

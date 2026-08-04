@@ -235,9 +235,14 @@ class TestSelectEvolveQueue:
 # --- weak_signals 未処理カウント（PJ 別） -------------------------------------
 
 
-def _ws(pj_slug, *, promoted=False, expired=False, detected="2026-06-20T00:00:00+00:00", key=None):
+def _ws(pj_slug, *, promoted=False, expired=False, detected=None, key=None):
     # content-rich channel（#113: material 計数は REVIEW_CHANNELS のみ）。この helper の
     # weak は promoted/expired/scope/dead/untracked 判定の検証用ゆえ昇格可能 channel を使う。
+    # detected_at は TTL（weak_signals.ttl.TTL_DAYS）を read 時に実 clock（now）で導出する
+    # ため（#89 is_effectively_expired）、固定日だと TTL 境界を越えた日から判定が反転する
+    # （#370）。既定は「境界から十分内側」を意図した call 時 now-1日にする。
+    if detected is None:
+        detected = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     return {
         "channel": "llm_judge",
         "provenance": {"k": key or pj_slug + str(promoted) + str(expired) + detected},

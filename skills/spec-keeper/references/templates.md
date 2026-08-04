@@ -78,9 +78,9 @@ Last updated: {YYYY-MM-DD} by /spec-keeper
 
 ## Recent Changes
 
-{直近 5-10 件の変更サマリー。新しい順}
-
-- {YYYY-MM-DD}: {変更内容}（{ADR リンクがあれば}）
+変更履歴は **[CHANGELOG.md](CHANGELOG.md) が単一ソース**。ここには転記しない（#318）。
+hot な SPEC.md に直近 N 件を手書きで持つと CHANGELOG との二重メンテが必ず drift し、
+移動作業が滞った分だけ hot が肥大する（実際に SPEC.md 41KB 超過の主因になった）。
 
 ## Current Limitations / Known Issues
 
@@ -138,7 +138,7 @@ SPEC.md が 35KB（bytes）を超えた場合（行数目安: >100行）、L1（
 - API / Interface Spec **コマンド表のみ**（パラメータ詳細は cold）
 - Current Capabilities **サマリー**（1行/機能。実装詳細は cold）
 - Key Design Decisions（カテゴリ1行サマリー + ADR リンク）
-- Recent Changes（直近5件）
+- Recent Changes（CHANGELOG.md への 1 行ポインタのみ。転記しない・#318）
 - Current Limitations / Known Issues（箇条書き）
 - Next（箇条書き）
 

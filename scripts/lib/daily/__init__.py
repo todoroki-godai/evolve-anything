@@ -6,6 +6,8 @@ Phase 1a の `evolve-fleet queue`（学習素材ベース・ゼロ LLM）を mac
 無人で回せるのは決定論パイプライン（ingest→queue）まで。適用は対話セッションで人間が承認する。
 
 - ``plist``         — launchd plist 生成 + runner コマンド文字列（場所・実行時刻・ラベル）
+- ``freshness``     — generated_at の鮮度判定（FRESH/STALE/UNKNOWN）+ fail-safe health notice の
+  単一ソース（#351）。queue_notice / icebox_notice の両方が使う
 - ``queue_notice``  — evolve-queue.json reader + SessionStart 通知メッセージ生成（stale 判定）
 - ``icebox_notice`` — icebox-status.json reader + SessionStart 通知メッセージ生成（icebox 棚卸しの
   気づきトリガー、#194）

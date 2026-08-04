@@ -7,6 +7,7 @@
 
 ### Fixed
 - **fix(correction_semantic): Phase C（ingest_judgement_results）を production 配線し意味判定レーンの死蔵を解消（#339）** — Phase A（`emit_judgement_requests`）だけが `phases_capture.py` から常時呼ばれ、Phase C（`ingest_judgement_results`）に呼び出し元が無く `channel=llm_judge` の weak_signal が新規に生まれない状態だった。Phase B（Haiku 判定）は本質的に対話的なため非対話 CLI では実行できず、evolve SKILL.md **Step 6.6**（`references/correction-semantic-drain.md`）が Phase A→B をインラインで行い（llm-batch-guard: 件数・概算トークン提示 → y/n）、`responses` を一時ファイルへ保存。**Step 7.8 の `evolve --drain --correction-responses <path>`**（cli.py drain 分岐に新設）が apply 境界で Phase C を実行し `correction_judged.jsonl` へ記録する（weak_signals_persisted 等の既存 apply-系書込と同型）。これにより判定済み発話が `correction_judged.jsonl` へ記録され、同じ発話が毎回再 emit される問題も解消する。responses ファイル未指定/未読/不正 JSON は graceful skip し他の drain persist を継続する。
+- **fix(daily): SessionStart notice の freshness gate を共通化（#351）** — `icebox_notice.build_icebox_notice()` / `queue_notice.build_queue_notice()` が独立に持っていた「`generated_at` を検証せず業務値（count/oldest_days/queue 内容）を先に判定する」穴を `daily/freshness.py`（新設・単一ソース）へ集約。評価順序を (a) `generated_at` の鮮度判定 → (b) STALE/UNKNOWN なら業務値を一切解釈せず旧値を併記しない health notice → (c) FRESH のときだけ業務値評価、に固定した。producer が最後に「空 queue」や「閾値未満の値」を書いた直後に停止すると恒久的に沈黙していた回帰（22 回連続 fail-open が気づかれなかった原因）を解消し、そのケースでも stale 通知が出るようにした。`oldest_days=0` 等の正当な業務値の 0 と `generated_at` 判定不能（欠落・parse 不能・未来日時・tz 無し）を型的に区別する（前者は `age_days=int`、後者は `None`）。
 
 ## [1.124.1] - 2026-07-31
 

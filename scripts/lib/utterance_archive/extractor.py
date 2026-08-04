@@ -24,7 +24,11 @@ from pathlib import Path
 from typing import Iterator, List, Optional
 
 # extractor のバージョン。抽出ロジックを変えたら +1（再 ingest で source_kind 等を更新可能に）。
-EXTRACTOR_VERSION = 1
+# v2: #323 で harness 注入判定に rl_common.detection.is_machinery_prompt を追加適用
+# （既存の書込済み行は増分 ingest（mtime 判定）では再走査されないため遡及修正されない。
+# EXTRACTOR_VERSION は将来 version 差分ベースの再抽出/purge を実装する際の準備として
+# 記録するのみで、本 PR 時点でそれを読む consumer はまだ無い）。
+EXTRACTOR_VERSION = 2
 
 # 長文ペーストの閾値（字数）。これを超えると source_kind='long_paste'。
 LONG_PASTE_THRESHOLD = 2000
@@ -134,7 +138,31 @@ def _extract_text(content) -> Optional[str]:
 
 
 def _is_harness(text: str) -> bool:
-    return any(marker in text for marker in _HARNESS_MARKERS)
+    if any(marker in text for marker in _HARNESS_MARKERS):
+        return True
+    return _is_machinery_prompt_shared(text)
+
+
+def _is_machinery_prompt_shared(text: str) -> bool:
+    """rl_common.detection.is_machinery_prompt への遅延 import 委譲（#323）。
+
+    Stop hook 自己注入（"Stop hook feedback:"）・SKILL.md 本体注入（"Base directory for
+    this skill:"）等、extractor 固有の `_HARNESS_MARKERS` がカバーしない機構ターンを
+    遮断する。writer 側（`hooks/correction_detect.py` 経由の `should_include_message`）は
+    #335 でこの関数に単一ソース化済みだったが、utterance_archive.extractor は独立した
+    マーカー一覧を持ち続けていたため漏れていた。この漏れにより Stop hook nag が
+    `source_kind='dialogue'` として utterances.db に取り込まれ、llm_judge チャネル
+    （correction_semantic/batch.py が utterances.db を判定対象として読む）の判定対象に
+    混入していた（実測: 実 DB dialogue 26 件のリーク・5 PJ・#323）。
+    """
+    import sys as _sys
+
+    _lib = str(Path(__file__).resolve().parent.parent)
+    if _lib not in _sys.path:
+        _sys.path.insert(0, _lib)
+    from rl_common.detection import is_machinery_prompt
+
+    return is_machinery_prompt(text)
 
 
 def _tool_names_from_assistant(obj: dict) -> List[str]:

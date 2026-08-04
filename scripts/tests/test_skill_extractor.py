@@ -180,8 +180,8 @@ class TestExtractSkillFromTurn:
         assert _extract_skill_from_turn(turn) is None
 
     def test_ignores_builtin_commands(self):
-        """/compact, /rename などのビルトインコマンドを無視する。"""
-        for cmd in ["/compact", "/rename", "/reload-plugins", "/plugin", "/clear"]:
+        """/compact, /rename などのビルトインコマンドを無視する（#333: /effort も含む）。"""
+        for cmd in ["/compact", "/rename", "/reload-plugins", "/plugin", "/clear", "/effort"]:
             turn = {
                 "type": "user",
                 "message": {"role": "user", "content": f"<command-name>{cmd}</command-name>"},
