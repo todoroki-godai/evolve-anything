@@ -1,7 +1,8 @@
-"""Advisory Decisions observability section のテスト（#284）。
+"""Advisory Decisions observability section のテスト（#284 / #267 Sprint 1）。
 
 記録0件のPJでは沈黙する（observability を空に保つ既存契約）ことと、
-detector 別 accept/reject テーブル・accept 0 件 detector の ⚠ を byte で固定する。
+detector 別 surfaced/accept/reject/deferred テーブル・accept 0 件 detector の ⚠ を
+byte で固定する。
 """
 import sys
 from pathlib import Path
@@ -44,23 +45,51 @@ def test_section_is_silent_when_no_records(isolated, tmp_path):
 
 def test_section_renders_per_detector_table(isolated, tmp_path):
     slug = resolve_slug(tmp_path)
+    _record(slug, "invalid_frontmatter", "surfaced", "adv_1")
     _record(slug, "invalid_frontmatter", "accept", "adv_1")
+    _record(slug, "invalid_frontmatter", "surfaced", "adv_2")
     _record(slug, "invalid_frontmatter", "accept", "adv_2")
+    _record(slug, "invalid_frontmatter", "surfaced", "adv_3")
     _record(slug, "invalid_frontmatter", "reject", "adv_3")
 
     lines = build_advisory_decisions_section(tmp_path)
 
-    assert "| invalid_frontmatter | 2 | 1 | 67% |" in lines
+    assert "| invalid_frontmatter | 3 | 2 | 1 | 0 | 67% |" in lines
     assert not any(line.startswith("⚠") for line in lines)
 
 
 def test_section_flags_detector_with_zero_accepts(isolated, tmp_path):
     slug = resolve_slug(tmp_path)
+    _record(slug, "testpaths_coverage", "surfaced", "adv_1")
     _record(slug, "testpaths_coverage", "reject", "adv_1")
 
     lines = build_advisory_decisions_section(tmp_path)
 
     assert any("⚠ accept 0 件の detector: testpaths_coverage" in line for line in lines)
+
+
+def test_section_shows_deferred_count(isolated, tmp_path):
+    slug = resolve_slug(tmp_path)
+    _record(slug, "testpaths_coverage", "surfaced", "adv_1")
+    _record(slug, "testpaths_coverage", "deferred", "adv_1")
+
+    lines = build_advisory_decisions_section(tmp_path)
+
+    assert "| testpaths_coverage | 1 | 0 | 0 | 1 | 0% |" in lines
+
+
+def test_section_shows_dashed_rate_for_legacy_accept_without_surfaced(isolated, tmp_path):
+    """#284 時点（surfaced 未実装）の既存 accept 記録は surfaced=0 のまま残る。
+
+    分母（surfaced）が無い過去データを 0% と誤表示せず「-」にする（accept はあるのに
+    分母ゼロで割り算すると誤解を招くため）。
+    """
+    slug = resolve_slug(tmp_path)
+    _record(slug, "invalid_frontmatter", "accept", "adv_1")
+
+    lines = build_advisory_decisions_section(tmp_path)
+
+    assert "| invalid_frontmatter | 0 | 1 | 0 | 0 | - |" in lines
 
 
 def test_section_ignores_other_projects(isolated, tmp_path):
