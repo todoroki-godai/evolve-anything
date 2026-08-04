@@ -19,6 +19,8 @@
 
 **判断規則**: 新機能・変更・tech-eval 取り込みは、この体験の 1〜4 のどこかを直接強化するものだけ採用する。この流れに登場しないものは icebox（#379 縮小方針）。
 
+**新設凍結（#379 Step 1）**: 縮小完了まで新 store / observability section / advisory proposal adapter / weak_signal channel の追加は停止する（削除は許容）。単一ソースは `scripts/lib/shrink_freeze.py`。契約テスト（`test_shrink_freeze.py`）が新設のみ reject し、`scaffold_advisory --write` も凍結中は拒否する。
+
 ## 4つの柱
 
 | 柱 | スキル | 説明 |
@@ -104,7 +106,7 @@
 | `bootstrap_backlog` | 初回 evolve で既存 weak_signals バックログの消化方式を AskUserQuestion 3 択で選ぶ bootstrap phase（marker で1回きり・slug スコープ厳守・常時 emit）（#443）+ 対象チャネルを content-rich（llm_judge/rephrase/permission_deny）へ拡張（#99） | `correction_semantic/bootstrap_backlog.py` |
 | `daily_review` | evolve の「今日の修正確認」phase — 新規 weak_signal を idiom 単位 group 化し最大5件を y/n 確認、promote 成功後のみ既読追記（既読ストア correction_review_seen.jsonl）（#446）。対象チャネルを content-rich（llm_judge/rephrase/permission_deny）へ拡張し決定論チャネルも evolve 一発で昇格可能化、content-poor（esc/手編集）は detector 文脈未保存ゆえ除外し observability 集計に残す（#99） | `correction_semantic/daily_review.py` |
 | `review_channels` | y/n 確認に出す weak チャネルの単一ソース（#99）— `REVIEW_CHANNELS`（content-rich）+ channel 別代表テキスト `signal_text` + `grouping_keywords`（`_strip_path_words` で path 語を除外し over-merge 解消）を bootstrap_backlog/daily_review/promote が共有。`signal_text` は llm_judge チャネル限定で `trim_to_idiom_sentence` による多トピック発言トリムも適用（#253） | `correction_semantic/review_channels.py` |
-| `idiom_autopromote` | confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / `evolve-reflect --revoke-idiom` 巻き戻し（#447, ADR-047）。confirmed 化の正準経路は `evolve-reflect --promote-weak` の confirm 配線（#463） | `correction_semantic/idiom_autopromote.py` |
+| `idiom_autopromote` | confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / `evolve-reflect --revoke-idiom` 巻き戻し（#447, ADR-047）。confirmed 化の正準経路は `evolve-reflect --promote-weak` の confirm 配線（#463）。**#379 Step 1 で自動昇格を凍結中**（自動発火実績 0 件のため凍結コスト実質ゼロ。凍結解除まで `autopromote()` は即 no-op、対話昇格 `--promote-weak` は対象外） | `correction_semantic/idiom_autopromote.py` |
 | `measurement_bug` | 複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185） | `audit/measurement_bug.py` |
 | `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ / 今日の昇格成果。閾値は growth_engine の定数が単一ソース（#448） | `growth_report.py` |
 | `outcome_promotion_readiness` | ADR-046 重み昇格レディネスの4条件決定論判定（分散 / 件数下限 / 方向妥当性 / 予測妥当性#42）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母は session_store union read（db read_only + 未 ingest jsonl）で実効化済み。条件3 は同一 apply の二重 anchor を `(pj,axis,before,after)` dedup で非独立証拠の二重計上から救出（#77）。`per_pj_first_try_success` の分母も `fold_session_error_counts` 共有で distinct session 化（#138）（#461, #469, #42, #77, #138） | `audit/outcome_promotion_readiness.py` |
