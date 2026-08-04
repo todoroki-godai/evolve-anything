@@ -350,6 +350,50 @@ def test_environment_fitness_provenance_deterministic_axes_no_judge_key(tmp_path
     assert "judge" not in prov["overall"]
 
 
+def test_environment_fitness_provenance_records_days_window(tmp_path):
+    """集計窓 `days` に依存する axis は provenance の config に days を持つ（codex cold-read 指摘）。
+
+    telemetry / skill_quality は `--days`（既定30）でスコアが変わる。含めないと 7日窓の run と
+    30日窓の run が同一 provenance になり、#316 の目的（スコア変化が条件変化由来かの分離）が
+    そもそも成立しない。days を消費しない coherence には付けない。
+    """
+    import types
+
+    env_mod = _load_environment_module("env_provenance_days_test")
+
+    def _mock_load_sibling(name):
+        m = mock.MagicMock()
+        if name == "coherence":
+            m.compute_coherence_score.return_value = {"overall": 0.72}
+            return m
+        if name == "telemetry":
+            # data_sufficiency が真でないと axis_scores に載らない（environment.py:125）
+            m.compute_telemetry_score.return_value = {
+                "overall": 0.55,
+                "data_sufficiency": True,
+            }
+            return m
+        raise RuntimeError(f"skipped: {name}")
+
+    captured: dict = {}
+
+    def _fake_record(run_id, axis_scores, weights, source="audit", provenance=None):
+        captured["provenance"] = provenance
+
+    fake_store = types.ModuleType("fitness_history_store")
+    fake_store.record_fitness_run = _fake_record
+
+    with mock.patch.object(env_mod, "_load_sibling", side_effect=_mock_load_sibling):
+        with mock.patch.dict(sys.modules, {"fitness_history_store": fake_store}):
+            env_mod.compute_environment_fitness(tmp_path, days=7, skip_llm=True, record=True)
+
+    prov = captured["provenance"]
+    assert prov["telemetry"]["config"] == {"days": 7}
+    assert prov["overall"]["config"]["days"] == 7
+    # coherence は days を消費しないので config を持たせない（無い条件を捏造しない）。
+    assert not prov["coherence"].get("config")
+
+
 def test_environment_fitness_provenance_constitutional_reuses_layer_aggregate(tmp_path):
     """constitutional 軸は constitutional_result['provenance']（llm_judge_aggregate）を再利用する。
 

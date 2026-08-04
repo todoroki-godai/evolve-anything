@@ -226,6 +226,16 @@ def compute_environment_fitness(
                 import evaluation_provenance as _ep
 
                 # 決定論 axis（LLM を呼ばない）。judge キーは付けない契約。
+                # telemetry / skill_quality は集計窓 `days`（CLI `--days`・既定30）でスコアが
+                # 変わるため config に含める。含めないと 7日窓の run と 30日窓の run が
+                # 同一 provenance になり、時系列比較で条件差を分離できない（#316 の目的が
+                # そもそも「スコア変化が条件変化由来か」の分離なので、これが欠けると穴になる）。
+                # coherence は days を消費しない（compute_coherence_score(project_dir) のみ）。
+                _axis_config = {
+                    "coherence": None,
+                    "telemetry": {"days": days},
+                    "skill_quality": {"days": days},
+                }
                 for det_axis in ("coherence", "telemetry", "skill_quality"):
                     if det_axis not in axis_scores:
                         continue
@@ -233,6 +243,7 @@ def compute_environment_fitness(
                         axis_provenance[det_axis] = _ep.build_provenance(
                             evaluation_kind=_ep.KIND_DETERMINISTIC,
                             producer=f"environment.{det_axis}",
+                            config=_axis_config.get(det_axis),
                         )
                     except Exception:
                         pass
@@ -253,7 +264,7 @@ def compute_environment_fitness(
                     axis_provenance["overall"] = _ep.build_provenance(
                         evaluation_kind=_ep.KIND_DETERMINISTIC,
                         producer="environment.compute_environment_fitness",
-                        config={"weights": weights_used},
+                        config={"weights": weights_used, "days": days},
                         inputs={"sources": sources},
                     )
                 except Exception:
