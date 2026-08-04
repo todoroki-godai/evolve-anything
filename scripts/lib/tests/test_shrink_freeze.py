@@ -18,9 +18,22 @@ if str(_lib_dir) not in sys.path:
 import shrink_freeze as sf  # noqa: E402
 
 
-def test_freeze_active_by_default() -> None:
-    assert sf.SHRINK_FREEZE_ACTIVE is True
+def test_is_frozen_reflects_flag_state_when_active(monkeypatch) -> None:
+    """凍結中（SHRINK_FREEZE_ACTIVE=True）の挙動: is_frozen() が True。
+
+    値そのもの（モジュールの現在の既定値）でなく機構を検証するため、monkeypatch で
+    明示的に True にする。docstring の解除手順（``SHRINK_FREEZE_ACTIVE`` を False へ変更）を
+    実行してもこのテストは落ちない（#379 レビュー指摘: 旧テストは実際の既定値を
+    ``is True`` で直接 assert しており、解除手順の実行自体を妨げていた）。
+    """
+    monkeypatch.setattr(sf, "SHRINK_FREEZE_ACTIVE", True)
     assert sf.is_frozen() is True
+
+
+def test_is_frozen_reflects_flag_state_when_inactive(monkeypatch) -> None:
+    """解除中（SHRINK_FREEZE_ACTIVE=False）の挙動: is_frozen() が False。"""
+    monkeypatch.setattr(sf, "SHRINK_FREEZE_ACTIVE", False)
+    assert sf.is_frozen() is False
 
 
 def test_assert_no_new_keys_passes_for_subset() -> None:
@@ -29,7 +42,10 @@ def test_assert_no_new_keys_passes_for_subset() -> None:
     sf.assert_no_new_keys(set(), sf.FROZEN_STORES, "store")  # 全削除も通す
 
 
-def test_assert_no_new_keys_rejects_new_key_when_frozen() -> None:
+def test_assert_no_new_keys_rejects_new_key_when_frozen(monkeypatch) -> None:
+    # 凍結中の挙動を明示 monkeypatch で固定し、モジュールの実際の既定値（解除後は False）に
+    # 依存しないようにする。
+    monkeypatch.setattr(sf, "SHRINK_FREEZE_ACTIVE", True)
     with pytest.raises(AssertionError, match="#379"):
         sf.assert_no_new_keys(
             {"corrections.jsonl", "brand_new_store.jsonl"}, sf.FROZEN_STORES, "store"
