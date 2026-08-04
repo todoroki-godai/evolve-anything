@@ -65,9 +65,12 @@ def test_section_shows_pointer_findings(tmp_path: Path) -> None:
 
 
 def test_section_shows_section_findings(tmp_path: Path) -> None:
+    # セクション検査は healthy 超過ファイルを入口にするため、ファイル自体も healthy(20KB) を
+    # 超えるサイズにする（#319 `_section_budget_scope`）。
     root = tmp_path / "repo"
-    big = "z" * (9 * 1024)
-    _write(root / "SPEC.md", f"# Title\n\n## Small\nabc\n\n## Big\n{big}\n")
+    big = "z" * (12 * 1024)
+    rest = "a" * (10 * 1024)
+    _write(root / "SPEC.md", f"# Title\n\n## Small\n{rest}\n\n## Big\n{big}\n")
     section = build_doc_budget_section(root)
     assert section is not None
     joined = "\n".join(section)

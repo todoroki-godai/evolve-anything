@@ -1,13 +1,14 @@
 """doc_budget（hot ドキュメントの byte/セクション/ポインタ予算検査）のテスト（#319）。
 
 決定論・LLM 非依存。tmp_path に疑似リポジトリツリー（SPEC.md/CLAUDE.md/spec/**.md）を作って
-静的検査する。実 evolve-anything リポジトリの実データでの検証は
-test_doc_budget_real_repo.py（別ファイル・#319 のゼロ件確認用）で行う。
+静的検査する。
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+import pytest
 
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
@@ -19,6 +20,23 @@ import doc_budget  # noqa: E402
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+@pytest.fixture
+def tiny_file_budgets(monkeypatch: pytest.MonkeyPatch):
+    """file 予算の healthy を極小にして、セクション検査そのものを単離して検証する。
+
+    セクション検査は「healthy 超過ファイル」を入口にする（`_section_budget_scope`）。
+    実際の healthy（SPEC.md 20KB）まで fixture を膨らませると、比率ベースの閾値
+    （全体の 40% 超）を満たすセクションを同時に作れず（5KB は 20KB の 25%）、
+    2 つの閾値を1つの fixture で表現できなくなる。ゲート自体は
+    test_section_budget_skips_files_within_healthy が実閾値で検証する。
+    """
+    tiny = doc_budget.FileBudget(must_bytes=64 * 1024, healthy_bytes=64)
+    monkeypatch.setattr(doc_budget, "SPEC_MD_BUDGET", tiny)
+    monkeypatch.setattr(doc_budget, "CLAUDE_MD_BUDGET", tiny)
+    monkeypatch.setattr(doc_budget, "SINGLE_MD_BUDGET", tiny)
+    return tiny
 
 
 # --- (a) ファイル単位の byte 予算 --------------------------------------------
@@ -77,7 +95,7 @@ def test_missing_files_are_skipped(tmp_path: Path) -> None:
 # --- (b) セクション単位の byte 予算 -------------------------------------------
 
 
-def test_section_budget_flags_large_section_by_abs_threshold(tmp_path: Path) -> None:
+def test_section_budget_flags_large_section_by_abs_threshold(tmp_path: Path, tiny_file_budgets) -> None:
     root = tmp_path / "repo"
     big_section = "z" * (9 * 1024)  # 8KB 絶対閾値超
     _write(
@@ -90,7 +108,7 @@ def test_section_budget_flags_large_section_by_abs_threshold(tmp_path: Path) -> 
     assert "Small" not in headings
 
 
-def test_section_budget_flags_by_pct_and_min_bytes(tmp_path: Path) -> None:
+def test_section_budget_flags_by_pct_and_min_bytes(tmp_path: Path, tiny_file_budgets) -> None:
     root = tmp_path / "repo"
     # 全体の50%を超え、かつ 4KB 超（8KB 絶対閾値未満）のセクションを作る。
     dominant = "y" * (5 * 1024)
@@ -104,13 +122,13 @@ def test_section_budget_flags_by_pct_and_min_bytes(tmp_path: Path) -> None:
     assert "Rest" not in headings
 
 
-def test_section_budget_no_findings_when_all_small(tmp_path: Path) -> None:
+def test_section_budget_no_findings_when_all_small(tmp_path: Path, tiny_file_budgets) -> None:
     root = tmp_path / "repo"
     _write(root / "SPEC.md", "# Title\n\n## A\nabc\n\n## B\ndef\n")
     assert doc_budget.check_section_budgets(root) == []
 
 
-def test_section_budget_scans_spec_dir_files(tmp_path: Path) -> None:
+def test_section_budget_scans_spec_dir_files(tmp_path: Path, tiny_file_budgets) -> None:
     root = tmp_path / "repo"
     big_section = "w" * (9 * 1024)
     _write(root / "spec" / "architecture.md", f"# T\n\n## Huge\n{big_section}\n")
@@ -118,7 +136,7 @@ def test_section_budget_scans_spec_dir_files(tmp_path: Path) -> None:
     assert any(f.file == "spec/architecture.md" and f.heading == "Huge" for f in findings)
 
 
-def test_section_budget_does_not_confuse_h3_with_h2(tmp_path: Path) -> None:
+def test_section_budget_does_not_confuse_h3_with_h2(tmp_path: Path, tiny_file_budgets) -> None:
     """`### ` 見出しは `## ` セクションの一部として計上され、独立セクション扱いされない。"""
     root = tmp_path / "repo"
     big = "v" * (9 * 1024)
@@ -127,6 +145,31 @@ def test_section_budget_does_not_confuse_h3_with_h2(tmp_path: Path) -> None:
     headings = {f.heading for f in findings}
     assert "Parent" in headings
     assert "Child" not in headings
+
+
+def test_section_budget_skips_files_within_healthy(tmp_path: Path) -> None:
+    """healthy 内のファイルは、内部に大きなセクションがあってもセクション検査の対象外。
+
+    実閾値（monkeypatch なし）で検証する。セクション粒度が要るのは「ファイルが予算に
+    触れた時にどこが太っているかを指す」ためで、健全サイズのファイル内の比率は無害。
+    全ファイルを対象にすると実データで恒久表示 6 件の advisory ノイズになる（#319）。
+    """
+    root = tmp_path / "repo"
+    big = "z" * (9 * 1024)  # 8KB 絶対閾値は超えるが…
+    _write(root / "SPEC.md", f"# Title\n\n## Big\n{big}\n")  # …ファイルは healthy(20KB) 内
+    assert doc_budget.check_file_budgets(root) == []
+    assert doc_budget.check_section_budgets(root) == []
+
+
+def test_section_budget_flags_once_file_exceeds_healthy(tmp_path: Path) -> None:
+    """ファイルが healthy を超えた瞬間、肥大セクションが surface する（#318 の検出力）。"""
+    root = tmp_path / "repo"
+    bloat = "z" * (12 * 1024)
+    rest = "a" * (10 * 1024)
+    _write(root / "SPEC.md", f"# Title\n\n## Bloat\n{bloat}\n\n## Rest\n{rest}\n")
+    assert doc_budget.check_file_budgets(root)  # healthy(20KB) 超
+    headings = {f.heading for f in doc_budget.check_section_budgets(root)}
+    assert "Bloat" in headings
 
 
 # --- (c) ポインタ実在の突合 ----------------------------------------------------

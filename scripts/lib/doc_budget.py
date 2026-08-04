@@ -117,10 +117,10 @@ def check_file_budgets(repo_root: Path) -> List[FileBudgetFinding]:
 # --- (b) セクション単位の byte 予算 -------------------------------------------
 
 # 「セクション単体が (ファイル合計の 40% 超 かつ 4KB 超) または 8KB 超」。
-# この repo の SPEC.md/CLAUDE.md/spec/*.md 全部への dry-run 実測（#319）で 6 件検出
-# （SPEC.md: Recent Changes 45.2%・System Architecture 39.4%＝8KB超で捕捉 / CLAUDE.md:
-# コンポーネント表 73.8% / spec/architecture.md 2件・key-design-decisions.md 1件）。
-# 合成 fixture でなく実データで較正した値（#262/#166 の教訓）。
+# 合成 fixture でなく実データで較正した値（#262/#166 の教訓）。実測（2026-08-04・#319）:
+# 全ファイルを対象にすると 6 件（うち 4 件は healthy 内のファイル内の大セクション＝無害）。
+# `_section_budget_scope` で入口を healthy 超過ファイルに絞り 3 件へ。#318 が問題にした
+# 「SPEC.md の Recent Changes だけが 10KB(45.2%)」は絞った後も捕捉される。
 SECTION_PCT_THRESHOLD = 40.0
 SECTION_PCT_MIN_BYTES = 4 * 1024
 SECTION_ABS_BYTES = 8 * 1024
@@ -155,13 +155,36 @@ def _iter_sections(text: str) -> List[tuple[str, int]]:
 
 
 def _section_budget_scope(repo_root: Path) -> List[Path]:
-    """セクション予算の検査対象ファイル一覧（file budget と同じ群、#319 (b)）。"""
+    """セクション予算の検査対象ファイル一覧（#319 (b)）。
+
+    **file 予算の healthy を超えているファイルに限る**。セクション粒度が要るのは
+    「ファイルが予算に触れた時に、どこが太っているのかを指す」ためであって、健全な
+    サイズのファイル内で 1 セクションの比率が高いこと自体は無害（例: 本文が実質 1 つの
+    表である CLAUDE.md のコンポーネント表）。全ファイルを対象にすると実データで 6 件が
+    恒久表示になり、この repo が既に抱えている「advisory 書きっぱなし」を増やすだけになる
+    （観測→作用の変換率が落ちる）。healthy 超過を入口にすると #318 の検出力は保たれる
+    （SPEC.md 41KB は MUST 超過なので Recent Changes が surface される）。
+    """
     repo_root = Path(repo_root)
-    paths = [repo_root / "SPEC.md", repo_root / "CLAUDE.md"]
+    targets = [
+        (repo_root / "SPEC.md", SPEC_MD_BUDGET),
+        (repo_root / "CLAUDE.md", CLAUDE_MD_BUDGET),
+    ]
     spec_dir = repo_root / "spec"
     if spec_dir.is_dir():
-        paths.extend(sorted(spec_dir.rglob("*.md")))
-    return [p for p in paths if p.is_file()]
+        targets.extend((p, SINGLE_MD_BUDGET) for p in sorted(spec_dir.rglob("*.md")))
+
+    scope: List[Path] = []
+    for path, budget in targets:
+        if not path.is_file():
+            continue
+        try:
+            byte_size = path.stat().st_size
+        except OSError:
+            continue
+        if _classify(byte_size, budget) is not None:
+            scope.append(path)
+    return scope
 
 
 def check_section_budgets(repo_root: Path) -> List[SectionBudgetFinding]:
