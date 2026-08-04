@@ -214,6 +214,37 @@ def test_pointer_refs_missing_anchor(tmp_path: Path) -> None:
     assert findings[0].kind == "missing_anchor"
 
 
+def test_pointer_refs_resolves_root_relative_links(tmp_path: Path) -> None:
+    """GitHub 慣習のルート相対リンク `/spec/x.md` を repo_root 起点で解決する。
+
+    `src.parent / "/spec/x.md"` は Path の仕様で左辺が捨てられ、ホストの絶対パスを
+    見に行くため実在するリンクを missing_file と誤検出する（codex cold-read 指摘）。
+    """
+    root = tmp_path / "repo"
+    _write(root / "spec" / "architecture.md", "# Architecture\n\n## Foo\nbody\n")
+    _write(root / "SPEC.md", "詳細は [architecture](/spec/architecture.md) を参照。\n")
+    assert doc_budget.check_pointer_refs(root) == []
+
+
+def test_pointer_refs_root_relative_missing_is_still_detected(tmp_path: Path) -> None:
+    """ルート相対でも実在しなければ missing_file として検出する（沈黙で潰さない）。"""
+    root = tmp_path / "repo"
+    _write(root / "SPEC.md", "詳細は [ghost](/spec/ghost.md) を参照。\n")
+    findings = doc_budget.check_pointer_refs(root)
+    assert len(findings) == 1
+    assert findings[0].kind == "missing_file"
+
+
+def test_pointer_refs_root_relative_anchor_is_checked(tmp_path: Path) -> None:
+    """ルート相対リンクでもアンカー突合が働く。"""
+    root = tmp_path / "repo"
+    _write(root / "spec" / "architecture.md", "# Architecture\n\n## Real Section\nbody\n")
+    _write(root / "SPEC.md", "[x](/spec/architecture.md#does-not-exist)\n")
+    findings = doc_budget.check_pointer_refs(root)
+    assert len(findings) == 1
+    assert findings[0].kind == "missing_anchor"
+
+
 def test_pointer_refs_skips_external_urls(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     _write(

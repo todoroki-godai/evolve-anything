@@ -318,7 +318,15 @@ def check_pointer_refs(repo_root: Path) -> List[PointerRefFinding]:
                 continue
 
             path_part, _, anchor = target.partition("#")
-            resolved = src if path_part == "" else (src.parent / path_part).resolve()
+            if path_part == "":
+                resolved = src
+            elif path_part.startswith("/"):
+                # GitHub 慣習のルート相対リンク `/docs/foo.md`。`src.parent / "/docs/foo.md"` は
+                # Path の仕様で左辺が捨てられ**ホストの絶対パス** `/docs/foo.md` を見に行くため、
+                # 実在するリンクを missing_file と誤検出する。repo_root 起点で解決する。
+                resolved = (repo_root / path_part.lstrip("/")).resolve()
+            else:
+                resolved = (src.parent / path_part).resolve()
 
             exists = resolved.is_dir() if path_part.endswith("/") else resolved.is_file()
             if not exists:
