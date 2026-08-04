@@ -94,9 +94,14 @@ CORRECTION_PATTERNS = {
     "actually": {"pattern": r"(?i)^actually[,. ]", "confidence": 0.55, "type": "correction", "decay_days": 45},
 }
 
+# 疑問符終端フィルタ。詰問形のバイパス（#336・下の _bypasses_question_mark_filter）が
+# 名指しで参照するため、リスト内の位置に依存しない名前付き定数として切り出す
+# （添字参照だと並べ替えた瞬間に別のフィルタをバイパスする silent drift になる）。
+QUESTION_MARK_FILTER = r"[？\?]$"
+
 # 偽陽性フィルター
 FALSE_POSITIVE_FILTERS = [
-    r"[？\?]$",
+    QUESTION_MARK_FILTER,
     r"(?i)^(please|can you|could you|would you|help me)\b",
     r"(?i)(help|fix|check|review|figure out|set up)\s+(this|that|it|the)\b",
     r"(?i)(error|failed|could not|cannot|can't|unable to)\s+\w+",
@@ -118,7 +123,6 @@ FALSE_POSITIVE_FILTERS = [
 # パターン本体は CORRECTION_PATTERNS を単一ソースにし、ここではキー一覧だけを持つ
 # （別の正規表現をここに複製すると drift する。pitfall_copied_parse_convention_partial_fix
 # / #40 と同型のリスク）。
-_QUESTION_MARK_FP = FALSE_POSITIVE_FILTERS[0]
 _REPROACH_OVERRIDE_KEYS = ("naze-dekinakatta", "kanchigai-question", "itte-noni", "shiteki-noni")
 
 
@@ -275,7 +279,7 @@ def _fails_false_positive_filters(text_stripped: str) -> bool:
     重複実装すると片側だけ改修して desync する（#40 と同型のリスク）ため単一関数に集約する。
     """
     for fp in FALSE_POSITIVE_FILTERS:
-        if fp == _QUESTION_MARK_FP and _bypasses_question_mark_filter(text_stripped):
+        if fp == QUESTION_MARK_FILTER and _bypasses_question_mark_filter(text_stripped):
             continue
         if re.search(fp, text_stripped) or re.search(fp, text_stripped.lower()):
             return True
