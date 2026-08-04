@@ -84,7 +84,8 @@ def autopromote(
         "promoted_idioms": [str, ...],   # 昇格した idiom 本文の一覧（安全弁② surface 用）
         "slug": str,
         "dry_run": bool,
-        "frozen": bool,                  # #379 判断2: 凍結中は True（機械昇格を一切行わない）
+        "frozen": bool,                  # #379 判断2: 凍結中は True（機械昇格を一切行わない）。
+                                          # 常時 emit（他キーと同じ契約で凍結解除後も False を置く）
       }
     """
     if shrink_freeze.is_frozen():
@@ -102,7 +103,7 @@ def autopromote(
     if not confirmed_texts:
         return {
             "promoted": 0, "capped": 0, "promoted_idioms": [],
-            "slug": pj_slug, "dry_run": dry_run,
+            "slug": pj_slug, "dry_run": dry_run, "frozen": False,
         }
 
     phys_to_idiom = _phys_to_idiom(pj_slug, idioms_path)
@@ -143,7 +144,7 @@ def autopromote(
     if not signal_keys:
         return {
             "promoted": 0, "capped": capped, "promoted_idioms": [],
-            "slug": pj_slug, "dry_run": dry_run,
+            "slug": pj_slug, "dry_run": dry_run, "frozen": False,
         }
 
     from correction_semantic.promote import promote_signals
@@ -164,4 +165,5 @@ def autopromote(
         "promoted_idioms": promoted_idioms,
         "slug": pj_slug,
         "dry_run": bool(res.get("dry_run", dry_run)),
+        "frozen": False,
     }

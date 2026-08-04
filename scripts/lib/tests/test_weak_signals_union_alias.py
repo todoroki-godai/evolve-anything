@@ -21,11 +21,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import rl_common  # noqa: E402
+import shrink_freeze  # noqa: E402
 from correction_semantic import daily_review as dr  # noqa: E402
 from correction_semantic import idiom_autopromote as iap  # noqa: E402
 from correction_semantic import store as cs_store  # noqa: E402
@@ -34,6 +37,14 @@ from weak_signals import store as ws_store  # noqa: E402
 LEGACY_SLUG = "rl-anything"
 CUR_SLUG = "evolve-anything"
 ELIGIBLE_IDIOM = "テストを先に書くべき"  # 8文字以上・stopword/context-token 無し → idiom_eligible
+
+
+@pytest.fixture(autouse=True)
+def _default_freeze_inactive(monkeypatch):
+    """本ファイルは union+alias 読み取りロジックの検証が主目的（#379 Step 1 の凍結対象外の
+    関心事）なので、既定で凍結を解除する。凍結時の autopromote no-op 挙動は
+    test_correction_semantic_idiom_autopromote.py::TestShrinkFreeze で個別に検証済み。"""
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
 
 
 def _fresh_detected_at() -> str:

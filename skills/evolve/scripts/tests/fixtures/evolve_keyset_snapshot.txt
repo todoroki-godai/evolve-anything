@@ -61,6 +61,7 @@ growth_report.remaining_to_next
 idiom_autopromote
 idiom_autopromote.capped
 idiom_autopromote.dry_run
+idiom_autopromote.frozen
 idiom_autopromote.promoted
 idiom_autopromote.promoted_idioms
 idiom_autopromote.slug

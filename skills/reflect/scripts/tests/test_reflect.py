@@ -1139,12 +1139,18 @@ class TestPromoteWeakConfirmsIdiom:
         # 当該 idiom が confirmed=True
         assert cs_store.read_confirmed_idiom_texts(self.SLUG, idioms) == {text}
 
-    def test_closed_loop_autopromote_fires_after_confirm(self, tmp_path, capsys):
-        """閉ループ E2E: --promote-weak で confirmed 化 → 同テキストの新規 signal を autopromote が昇格。"""
+    def test_closed_loop_autopromote_fires_after_confirm(self, tmp_path, capsys, monkeypatch):
+        """閉ループ E2E: --promote-weak で confirmed 化 → 同テキストの新規 signal を autopromote が昇格。
+
+        本テストは confirm→autopromote の閉ループ配線を検証するのが目的で、#379 Step 1 の
+        凍結対象外の関心事。凍結中は autopromote が no-op になるため既定で凍結を解除する。
+        """
         sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
         from weak_signals.store import WeakSignal, append_signals
         import correction_semantic.store as cs_store
         from correction_semantic import idiom_autopromote as iap
+        import shrink_freeze
+        monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
         text = "四国めたんじゃなくて"
         ws, idioms, sig, it = self._seed(tmp_path, line_no=1, text=text)
         corr = tmp_path / "corrections.jsonl"
