@@ -40,11 +40,15 @@ MAX_MET_ISSUES = 10
 # ここでの 90 は呼び出し元が threshold_days を明示しない場合のライブラリ関数フォールバックに留まる。
 DEFAULT_THRESHOLD_DAYS = 90
 
-# icebox-status.json の generated_at がこれより古ければ freshness gate（#351）が
+# icebox-status.json の generated_at がこれ以上古ければ freshness gate（#351）が
 # 業務値（count/oldest_days）の解釈を止め health notice に差し替える。
-# STALE_VERDICTS_DAYS（icebox-verdicts.json 用）と同値にして daily runner の
-# 実行周期（毎朝1回）に対する許容度を揃える。
-STALE_STATUS_DAYS = STALE_VERDICTS_DAYS
+#
+# STALE_VERDICTS_DAYS（2日）より緩い 3 日にしてあるのは**効果の重さが違う**ため。
+# advisory は本来の通知に1文添えるだけだが、freshness gate は通知本体を差し替える
+# （＝待ち件数・棚卸し件数が見えなくなる）。PC を週末閉じるだけで launchd が2日走らず
+# 本体が消えるのは誤検知コストが高い。3 日なら金曜生成→月曜朝でも FRESH のまま、
+# #351 の16日沈黙のような恒久障害は依然として即日検出できる。
+STALE_STATUS_DAYS = 3
 
 ICEBOX_REMEDIATION_HINT = "bin/evolve-daily-install"
 

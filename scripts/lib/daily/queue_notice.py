@@ -15,7 +15,11 @@ from . import freshness as _freshness
 QUEUE_FILE_NAME = "evolve-queue.json"
 
 # generated_at がこの日数以上古ければ stale（#351 freshness gate の共通閾値として使う）。
-DEFAULT_STALE_DAYS = 2
+# #351 以前は「本来の通知に stale 一文を添える」だけだったので 2 日で足りたが、
+# gate 化で **通知本体（待ち PJ 一覧）が消える**ようになったため誤検知コストが上がった。
+# 週末に PC を閉じて launchd が2日走らないケースを FRESH に保つため 3 日に緩めている。
+# 恒久障害（#351 の16日沈黙）の検出力は 3 日でも変わらない。
+DEFAULT_STALE_DAYS = 3
 
 REMEDIATION_HINT = "bin/evolve-daily-install で日次更新が回っているか確認してください"
 

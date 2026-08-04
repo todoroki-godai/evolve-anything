@@ -128,3 +128,33 @@ def test_health_notice_unknown_has_no_day_count():
     assert "bin/evolve-daily-install" in msg
     # 日数を語れない状態なので数値の日数表現を含まない
     assert "日前" not in msg
+
+
+# ===== 既定閾値の意図（#351 レビュー時に 2→3 日へ緩和） =====
+def test_default_stale_days_tolerates_a_closed_weekend():
+    """金曜朝に生成 → 月曜朝のセッションで FRESH（通知本体が消えない）。
+
+    #351 以前は stale 判定が「本来の通知に一文添える」だけだったので 2 日で足りたが、
+    gate 化で通知本体（待ち PJ 一覧 / icebox 件数）が差し替わるようになり誤検知コストが
+    上がった。PC を週末閉じて launchd が走らないだけで本体が消えるのを防ぐ既定値を固定する。
+    """
+    from daily import icebox_notice as ic
+    from daily import queue_notice as qn
+
+    friday_morning = datetime(2026, 7, 31, 9, 0, 0, tzinfo=timezone.utc)
+    monday_morning = datetime(2026, 8, 3, 8, 0, 0, tzinfo=timezone.utc)
+
+    for stale_days in (qn.DEFAULT_STALE_DAYS, ic.STALE_STATUS_DAYS):
+        state, _ = fr.classify_freshness(
+            friday_morning.isoformat(), now=monday_morning, stale_days=stale_days
+        )
+        assert state == fr.Freshness.FRESH
+
+    # 一方、#351 の恒久障害（16 日沈黙）は依然として STALE として捕まる
+    state, age = fr.classify_freshness(
+        (monday_morning - timedelta(days=16)).isoformat(),
+        now=monday_morning,
+        stale_days=qn.DEFAULT_STALE_DAYS,
+    )
+    assert state == fr.Freshness.STALE
+    assert age == 16
