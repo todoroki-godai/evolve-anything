@@ -217,7 +217,64 @@ def compute_environment_fitness(
             all_scores["overall"] = result["overall"]
             all_weights = dict(weights_used)
             all_weights["overall"] = 1.0
-            record_fitness_run(str(uuid.uuid4()), all_scores, all_weights)
+
+            # axis 別の評価実行条件（provenance、#316）。組立に失敗しても axis_provenance は
+            # 空のまま record_fitness_run へ渡す（store 側の finalize_provenance が
+            # evaluation_kind=unknown で埋める・スコア記録自体は止めない）。
+            axis_provenance: Dict[str, Any] = {}
+            try:
+                import evaluation_provenance as _ep
+
+                # 決定論 axis（LLM を呼ばない）。judge キーは付けない契約。
+                # telemetry / skill_quality は集計窓 `days`（CLI `--days`・既定30）でスコアが
+                # 変わるため config に含める。含めないと 7日窓の run と 30日窓の run が
+                # 同一 provenance になり、時系列比較で条件差を分離できない（#316 の目的が
+                # そもそも「スコア変化が条件変化由来か」の分離なので、これが欠けると穴になる）。
+                # coherence は days を消費しない（compute_coherence_score(project_dir) のみ）。
+                _axis_config = {
+                    "coherence": None,
+                    "telemetry": {"days": days},
+                    "skill_quality": {"days": days},
+                }
+                for det_axis in ("coherence", "telemetry", "skill_quality"):
+                    if det_axis not in axis_scores:
+                        continue
+                    try:
+                        axis_provenance[det_axis] = _ep.build_provenance(
+                            evaluation_kind=_ep.KIND_DETERMINISTIC,
+                            producer=f"environment.{det_axis}",
+                            config=_axis_config.get(det_axis),
+                        )
+                    except Exception:
+                        pass
+
+                # constitutional は LLM judge。layer 集約済みの provenance
+                # （constitutional.compute_constitutional_score が #309 で組み立て済み）を
+                # そのまま使う。ここで作り直すと別時点の値を偽って合成することになる。
+                if "constitutional" in axis_scores:
+                    con_result = axis_results.get("constitutional")
+                    con_prov = (
+                        con_result.get("provenance") if isinstance(con_result, dict) else None
+                    )
+                    if con_prov is not None:
+                        axis_provenance["constitutional"] = con_prov
+
+                # overall はブレンド自体（決定論的な加重和）の実行条件。
+                try:
+                    axis_provenance["overall"] = _ep.build_provenance(
+                        evaluation_kind=_ep.KIND_DETERMINISTIC,
+                        producer="environment.compute_environment_fitness",
+                        config={"weights": weights_used, "days": days},
+                        inputs={"sources": sources},
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            record_fitness_run(
+                str(uuid.uuid4()), all_scores, all_weights, provenance=axis_provenance
+            )
         except Exception:
             pass
 
