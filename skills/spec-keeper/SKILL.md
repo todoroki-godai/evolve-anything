@@ -33,7 +33,7 @@ SPEC.md は AI がセッション開始時に全量読むドキュメント。�
 - **L2**: SPEC.md (hot ~60行) + `spec/`（cold）。Plugin、SaaS バックエンド向け
 - `spec/` ディレクトリの存在で L1/L2 を判定する
 
-**MUST（閾値判定・主指標は bytes）**: 単一 md ファイル **>100KB は分割必須**（Healthy ~50KB以下）。SPEC.md **>35KB はcold へセクション移動**（Healthy ~20KB以下）。行数は補助指標（L1 >100行 / L2 hot >80行で移動・昇格を検討）。根拠: Read ツールの実質上限（≈25K tokens）超で丸読み truncate される実害があり行数だけでは代表しない（issue #216）。
+**MUST（閾値判定・主指標は bytes）**: 単一 md ファイル **>100KB は分割必須**（Healthy ~50KB以下）。SPEC.md **>35KB はcold へセクション移動**（Healthy ~20KB以下）。CLAUDE.md **>60KB は cold へ移動を検討**（Healthy ~40KB以下・毎セッション自動注入されるため per-session token コストが実害。暫定値、#319）。行数は補助指標（L1 >100行 / L2 hot >80行で移動・昇格を検討）。根拠: Read ツールの実質上限（≈25K tokens）超で丸読み truncate される実害があり行数だけでは代表しない（issue #216）。**この閾値の単一ソースは `scripts/lib/doc_budget.py`**（散文はここに二重定義しない）で、update を起動しなくても audit advisory + pre-push light（`bin/evolve-dogfood-gate --layer light`）が byte 予算・肥大セクション・リンク切れを自動検出する（#319 — SKILL.md の MUST は起動依存の下限、機械チェックが常設の上限）。
 
 **MUST**: レイヤー閾値の全表・L1→L2昇格手順・cold ファイル消費ルール・原則の詳細は [references/layers.md](references/layers.md) を参照する。
 
@@ -178,6 +178,7 @@ echo "feat_refactor: $(git log --oneline --since="$(git log -1 --format=%ci -- S
    - **cold 配下の単一ファイルが > 100KB（bytes）** → 分割必須。承認されたらセクション単位で新規 cold ファイルに分割
    - **L2 の場合**: spec/ ファイルの `Last updated:` も確認し、古い場合は SPEC.md と同時に更新
    - **1行サマリ字数チェック（MUST）**: CLAUDE.md のコンポーネント表など「1行サマリ」を運用契約とする箇所は、**サマリ列（説明文言）のみ 1エントリ ≤400字**（名称・実体パス列は対象外）。超過エントリがあれば要約を切り詰め、詳細は spec/components.md 等の cold 側へ委譲する（本文はポインタのみ残す）
+   - **書込規約（MUST・#319）**: SPEC.md / CLAUDE.md への新規記述は **hot に 1 行サマリ + cold（spec/\*\*.md 等）に詳細**を鉄則にする。CLAUDE.md のコンポーネント表が既にこの規約を持ち `glossary_drift.check_component_table_cells`（1 セル ≤400字）で強制しているのと**同じ文言・同じ強制形**を SPEC.md にも適用する。hot 側にポインタリンクを必ず残し、cold へ移した後は `scripts/lib/doc_budget.py` の check_pointer_refs（audit advisory + pre-push light、hook_drift の dead_ref と同型）がリンク切れを検出する。⚠ このスキルは全PJ共通スキルであり本規約もPJ非依存（evolve-anything 固有の閾値数値は「閾値」節の CLAUDE.md 60KB/40KB のみで、他PJではその PJ の CLAUDE.md 実測に合わせて見直してよい）
 5. **用語集 drift チェック（`CONTEXT.md` が存在する場合のみ）**:
    ```bash
    [ -f CONTEXT.md ] && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/glossary_drift.py" CONTEXT.md SPEC.md CLAUDE.md || true

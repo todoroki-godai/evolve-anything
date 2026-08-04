@@ -68,6 +68,7 @@ observability
 observability.agent_tier
 observability.backup_files
 observability.constitutional
+observability.doc_budget
 observability.duplicate_skill_names
 observability.global_claude_md
 observability.glossary_drift
