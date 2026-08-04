@@ -259,14 +259,16 @@ def test_notice_none_input_is_silent():
     assert qn.build_queue_notice(None, now=now) is None
 
 
-def test_notice_stale_queue_gets_advisory():
-    # generated_at から 5 日後 → stale advisory が付く
-    now = datetime(2026, 6, 30, 9, 0, 0, tzinfo=timezone.utc)
+def test_notice_stale_queue_replaces_business_content_with_health_notice():
+    """#351: stale なら旧値（PJ 一覧）を併記せず、経過日数だけを伝える health notice に
+    差し替える（旧実装は業務値の後ろに advisory を追記するだけだった）。"""
+    now = datetime(2026, 6, 30, 9, 0, 0, tzinfo=timezone.utc)  # generated_at から 5 日後
     msg = qn.build_queue_notice(SAMPLE_QUEUE, now=now, stale_days=2)
     assert msg is not None
-    assert "figma-to-code" in msg
-    # stale 文言（日数）
-    assert "5" in msg
+    assert "figma-to-code" not in msg
+    assert "sys-bots" not in msg
+    assert "5日" in msg
+    assert "現在値は不明です" in msg
 
 
 def test_notice_fresh_queue_has_no_stale_advisory():
@@ -277,15 +279,55 @@ def test_notice_fresh_queue_has_no_stale_advisory():
     assert "日前" not in msg
 
 
-def test_notice_malformed_generated_at_does_not_crash():
-    bad = dict(SAMPLE_QUEUE)
+def test_notice_malformed_generated_at_is_unknown_and_does_not_leak_business_values():
+    """#351: generated_at がパース不能なら freshness gate が先に働き、業務値（PJ 名等）を
+    一切解釈しない health notice を返す（判定不能でも通知は出すが、旧仕様のように
+    queue の中身をそのまま見せない）。"""
     bad = json.loads(json.dumps(SAMPLE_QUEUE))
     bad["generated_at"] = "not-a-timestamp"
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
-    # クラッシュせず通知は出る（stale 判定不能なら advisory なし）
     msg = qn.build_queue_notice(bad, now=now, stale_days=2)
     assert msg is not None
-    assert "figma-to-code" in msg
+    assert "figma-to-code" not in msg
+    assert "現在値は不明です" in msg
+
+
+def test_notice_missing_generated_at_is_unknown():
+    bad = json.loads(json.dumps(SAMPLE_QUEUE))
+    del bad["generated_at"]
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_queue_notice(bad, now=now, stale_days=2)
+    assert msg is not None
+    assert "現在値は不明です" in msg
+
+
+def test_notice_future_generated_at_is_unknown():
+    bad = json.loads(json.dumps(SAMPLE_QUEUE))
+    bad["generated_at"] = "2099-01-01T00:00:00Z"
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_queue_notice(bad, now=now, stale_days=2)
+    assert msg is not None
+    assert "現在値は不明です" in msg
+
+
+def test_notice_naive_generated_at_without_tz_is_unknown():
+    bad = json.loads(json.dumps(SAMPLE_QUEUE))
+    bad["generated_at"] = "2026-06-25T09:00:00"
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_queue_notice(bad, now=now, stale_days=2)
+    assert msg is not None
+    assert "現在値は不明です" in msg
+
+
+def test_notice_empty_queue_with_stale_generated_at_still_warns():
+    """#351 回帰テスト: producer が最後に空 queue を書いた直後に停止すると、旧実装は
+    「業務値=空だから沈黙」を優先し stale を恒久的に見逃していた。空でも generated_at が
+    stale なら stale 通知が出ること。"""
+    stale_empty = json.loads(json.dumps(EMPTY_QUEUE))
+    now = datetime(2026, 7, 1, 9, 0, 0, tzinfo=timezone.utc)  # generated_at から 6 日後
+    msg = qn.build_queue_notice(stale_empty, now=now, stale_days=2)
+    assert msg is not None
+    assert "現在値は不明です" in msg
 
 
 def test_systemmessage_output_dict():

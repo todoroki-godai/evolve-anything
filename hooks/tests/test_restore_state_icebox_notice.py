@@ -14,6 +14,7 @@ env ガード: install レイアウト env のときだけ実環境 DATA_DIR を
 """
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _HOOKS = Path(__file__).resolve().parent.parent
@@ -26,8 +27,24 @@ import rl_common  # noqa: E402
 import restore_state  # noqa: E402
 
 
-STALE_STATUS = {"count": 12, "oldest_days": 200, "generated_at": "2026-06-01T09:00:00Z"}
-FRESH_STATUS = {"count": 3, "oldest_days": 10, "generated_at": "2026-07-11T09:00:00Z"}
+# #351: _deliver_icebox_notice() は now を省略して呼ぶため実際の現在時刻と比較される
+# （freshness gate）。固定の過去日付だと実行日が進むにつれ real now との差が
+# stale_days を越え、これらの配線テスト（oldest_days の閾値判定を検証する意図）が
+# 「generated_at 自体の stale 判定」を検証するテストに化けてしまう。生成時に毎回
+# fresh な generated_at を埋め込む。generated_at 自体の freshness gate は
+# scripts/lib/tests/test_icebox_notice.py が担当する。
+def _fresh_generated_at() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# 以下 2つは変数名の "STALE"/"FRESH" は icebox 業務値（oldest_days が閾値超過か否か）を
+# 指す（generated_at 自体の freshness とは無関係。generated_at は常に fresh に保つ）。
+def _stale_status() -> dict:
+    return {"count": 12, "oldest_days": 200, "generated_at": _fresh_generated_at()}
+
+
+def _fresh_status() -> dict:
+    return {"count": 3, "oldest_days": 10, "generated_at": _fresh_generated_at()}
 
 
 def _write_status(data_dir: Path, payload: dict) -> None:
@@ -57,7 +74,7 @@ def _install_plugin_self_project(tmp_path, monkeypatch, is_self: bool = True):
 def test_deliver_fires_with_stale_icebox_in_plugin_self_repo(tmp_path, monkeypatch, capsys):
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
-    _write_status(source, STALE_STATUS)
+    _write_status(source, _stale_status())
     restore_state._deliver_icebox_notice()
     out = capsys.readouterr().out
     assert out  # 非空
@@ -70,7 +87,7 @@ def test_deliver_fires_with_stale_icebox_in_plugin_self_repo(tmp_path, monkeypat
 def test_deliver_silent_when_below_threshold(tmp_path, monkeypatch, capsys):
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
-    _write_status(source, FRESH_STATUS)
+    _write_status(source, _fresh_status())
     restore_state._deliver_icebox_notice()
     assert capsys.readouterr().out == ""
 
@@ -101,7 +118,7 @@ def test_deliver_silent_outside_plugin_self_repo(tmp_path, monkeypatch, capsys):
     """evolve-anything 本体以外の PJ（plugin.json 無し）では、icebox が stale でも沈黙する。"""
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=False)
     source = _install_env(tmp_path, monkeypatch)
-    _write_status(source, STALE_STATUS)
+    _write_status(source, _stale_status())
     restore_state._deliver_icebox_notice()
     assert capsys.readouterr().out == ""
 
@@ -109,7 +126,7 @@ def test_deliver_silent_outside_plugin_self_repo(tmp_path, monkeypatch, capsys):
 def test_deliver_silent_without_project_dir_env(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     source = _install_env(tmp_path, monkeypatch)
-    _write_status(source, STALE_STATUS)
+    _write_status(source, _stale_status())
     restore_state._deliver_icebox_notice()
     assert capsys.readouterr().out == ""
 
@@ -117,7 +134,7 @@ def test_deliver_silent_without_project_dir_env(tmp_path, monkeypatch, capsys):
 def test_deliver_does_not_write(tmp_path, monkeypatch):
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
-    _write_status(source, STALE_STATUS)
+    _write_status(source, _stale_status())
     before = {p.name for p in source.iterdir()}
     restore_state._deliver_icebox_notice()
     after = {p.name for p in source.iterdir()}
@@ -128,7 +145,7 @@ def test_handle_session_start_invokes_icebox_notice(tmp_path, monkeypatch, capsy
     """handle_session_start が icebox 通知を配信フローに含む（配線回帰）。"""
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
-    _write_status(source, STALE_STATUS)
+    _write_status(source, _stale_status())
     restore_state.handle_session_start({})
     out = capsys.readouterr().out
     assert "12件" in out
@@ -139,7 +156,7 @@ def test_deliver_respects_custom_threshold_from_user_config(tmp_path, monkeypatc
     oldest_days でも発火する（#194 拡張）。"""
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
-    status = {"count": 2, "oldest_days": 25, "generated_at": "2026-07-01T00:00:00Z"}
+    status = {"count": 2, "oldest_days": 25, "generated_at": _fresh_generated_at()}
     _write_status(source, status)
     monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_icebox_review_threshold_days", "20")
     restore_state._deliver_icebox_notice()
@@ -153,7 +170,7 @@ def test_deliver_silent_below_custom_threshold(tmp_path, monkeypatch, capsys):
     """カスタム閾値未満なら（デフォルト閾値より小さい oldest_days でも）沈黙する。"""
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
-    status = {"count": 2, "oldest_days": 45, "generated_at": "2026-07-01T00:00:00Z"}
+    status = {"count": 2, "oldest_days": 45, "generated_at": _fresh_generated_at()}
     _write_status(source, status)
     monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_icebox_review_threshold_days", "60")
     restore_state._deliver_icebox_notice()
@@ -178,7 +195,7 @@ def test_deliver_names_met_issue_and_takes_priority_over_status(
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
     monkeypatch.setattr(rl_common, "DATA_DIR", source)
-    _write_status(source, STALE_STATUS)
+    _write_status(source, _stale_status())
     _write_verdicts(
         source,
         {"generated_at": "2026-08-01T09:00:00Z", "verdicts": [_verdict(number=99)]},
@@ -262,7 +279,7 @@ def test_deliver_falls_back_to_status_when_no_met_verdicts(tmp_path, monkeypatch
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
     monkeypatch.setattr(rl_common, "DATA_DIR", source)
-    _write_status(source, STALE_STATUS)
+    _write_status(source, _stale_status())
     _write_verdicts(
         source,
         {
@@ -280,7 +297,7 @@ def test_deliver_no_verdicts_file_falls_back_to_status(tmp_path, monkeypatch, ca
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
     monkeypatch.setattr(rl_common, "DATA_DIR", source)
-    _write_status(source, STALE_STATUS)
+    _write_status(source, _stale_status())
     restore_state._deliver_icebox_notice()
     out = capsys.readouterr().out
     payload = json.loads(out.strip())
@@ -354,7 +371,7 @@ def test_deliver_fires_with_default_threshold_no_override(tmp_path, monkeypatch,
     （旧ライブラリデフォルト90日では沈黙するはずの範囲）で発火することを保証する。"""
     _install_plugin_self_project(tmp_path, monkeypatch, is_self=True)
     source = _install_env(tmp_path, monkeypatch)
-    status = {"count": 4, "oldest_days": 45, "generated_at": "2026-07-01T00:00:00Z"}
+    status = {"count": 4, "oldest_days": 45, "generated_at": _fresh_generated_at()}
     _write_status(source, status)
     monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_icebox_review_threshold_days", raising=False)
     restore_state._deliver_icebox_notice()
