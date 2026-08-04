@@ -12,6 +12,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
@@ -21,7 +23,17 @@ from correction_semantic import provenance_weight as pw  # noqa: E402
 from correction_semantic import store as cs_store  # noqa: E402
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
 
+import shrink_freeze  # noqa: E402
+
 SLUG = "evolve-anything"
+
+
+@pytest.fixture(autouse=True)
+def _default_freeze_inactive(monkeypatch):
+    """本ファイルは照合ロジック（誰が何に一致して昇格するか）の検証が主目的なので、
+    既定で #379 Step 1 凍結を解除する。凍結時の no-op 挙動は TestShrinkFreeze で
+    個別に（このフィクスチャを test 内で再上書きして）検証する。"""
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
 
 
 def _prov(line_no, text="四国めたんじゃなくて"):
@@ -231,3 +243,55 @@ def test_pj_slug_scoping(tmp_path: Path) -> None:
     append_signals([sig], path=ws)
     res = iap.autopromote(SLUG, weak_signals_path=ws, idioms_path=idioms, corrections_path=corr)
     assert res["promoted"] == 0
+
+
+# ── #379 判断2: 新設凍結中は自動昇格を一切行わない ────────────────────
+
+
+class TestShrinkFreeze:
+    def test_no_promotion_when_frozen_even_with_confirmed_match(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """confirmed idiom に一致する新規シグナルがあっても凍結中は昇格しない。"""
+        monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", True)
+        ws = tmp_path / "weak_signals.jsonl"
+        idioms = tmp_path / "correction_idioms.jsonl"
+        corr = tmp_path / "corrections.jsonl"
+        _seed_idiom(idioms, line_no=1, confirmed=True)
+        _seed_signal(ws, line_no=1)
+
+        res = iap.autopromote(
+            SLUG, weak_signals_path=ws, idioms_path=idioms, corrections_path=corr,
+        )
+        assert res["promoted"] == 0
+        assert res["capped"] == 0
+        assert res["frozen"] is True
+        assert not corr.exists()  # corrections に一切書かれない
+
+    def test_frozen_result_still_has_standard_keys(self, tmp_path: Path, monkeypatch) -> None:
+        """凍結時の no-op 結果も他 caller（growth_report 等）が読む標準キーを持つ。"""
+        monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", True)
+        ws = tmp_path / "weak_signals.jsonl"
+        idioms = tmp_path / "correction_idioms.jsonl"
+        corr = tmp_path / "corrections.jsonl"
+        res = iap.autopromote(SLUG, weak_signals_path=ws, idioms_path=idioms, corrections_path=corr)
+        assert res["promoted"] == 0
+        assert res["capped"] == 0
+        assert res["promoted_idioms"] == []
+        assert res["slug"] == SLUG
+        assert res["dry_run"] is False
+
+    def test_promotion_resumes_when_freeze_inactive(self, tmp_path: Path, monkeypatch) -> None:
+        """凍結解除（SHRINK_FREEZE_ACTIVE=False）後は従来どおり昇格する。"""
+        monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
+        ws = tmp_path / "weak_signals.jsonl"
+        idioms = tmp_path / "correction_idioms.jsonl"
+        corr = tmp_path / "corrections.jsonl"
+        _seed_idiom(idioms, line_no=1, confirmed=True)
+        _seed_signal(ws, line_no=1)
+
+        res = iap.autopromote(
+            SLUG, weak_signals_path=ws, idioms_path=idioms, corrections_path=corr,
+        )
+        assert res["promoted"] == 1
+        assert res.get("frozen", False) is False
