@@ -48,6 +48,25 @@ L3（ドメイン別3層）は該当PJ出現時に検討。
 | L1 | SPEC.md 行数（補助） | ~80行以下 | 81-100行 | >100行: L2 昇格を提案 |
 | L2 | hot 行数（補助） | ~60行以下 | 61-80行 | >80行: cold へセクション移動 |
 
+**hot（CLAUDE.md）専用閾値（#319 で新規に決めた暫定値）**
+
+CLAUDE.md は毎セッション自動注入されるため実コストは per-session token。SPEC.md と異なり L1/L2 昇格の
+概念は無く、cold（`spec/components.md` 等）へ詳細を委譲するだけで足りる。
+
+| 指標 | Healthy | Caution | Action |
+|------|---------|---------|--------|
+| CLAUDE.md bytes | ~40KB以下 | 40-60KB | >60KB: cold へ詳細移動を検討 |
+
+閾値の単一ソースは `scripts/lib/doc_budget.py`（`CLAUDE_MD_BUDGET`）。実測を重ねて見直してよい。
+
+**セクション単位閾値（#319）**
+
+ファイル合計が閾値未満でも、1 セクションが局所的に肥大化することがある（例: SPEC.md の
+「Recent Changes」だけが 10KB）。`scripts/lib/doc_budget.py` の `check_section_budgets` が
+SPEC.md/CLAUDE.md/spec/\*\*.md の `## ` セクション単位で「セクション単体が (ファイル合計の 40% 超
+かつ 4KB 超) または 8KB 超」を検出する（この repo の実データ較正値、#319）。audit advisory + 
+`evolve-dogfood-gate --layer light` に常設し、update を起動しなくても検出される。
+
 **cold（spec/ 配下）**
 
 cold 合計の行数閾値（旧: >300行で L3 検討）は廃止。各 cold ファイルは上記「単一ファイル閾値」（bytes）で個別判定する。L3（ドメイン別3層）は該当PJ出現時に検討。
