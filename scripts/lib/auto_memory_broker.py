@@ -188,8 +188,17 @@ def compute_dedup_key(corrections: List[dict]) -> str:
 # ─────────────────────────────────────────────────────────────────
 # キューストア（PJ スコープ jsonl）
 # ─────────────────────────────────────────────────────────────────
-def queue_path_for(slug: str, data_dir: Path) -> Path:
-    """slug の auto-memory キューファイルパスを返す。"""
+def queue_path_for(slug: str, data_dir: Optional[Path] = None) -> Path:
+    """slug の auto-memory キューファイルパスを返す。
+
+    data_dir 省略時は呼び出し時点の rl_common.DATA_DIR を既定解決する（#325）。
+    `X = rl_common.DATA_DIR` のようにモジュールレベルへコピーすると import 時点で
+    値が固定され env/monkeypatch に追従しない既知 pitfall があるため、呼び出しの
+    たびに `rl_common` モジュール属性を動的参照する（call-time 解決）。
+    """
+    if data_dir is None:
+        import rl_common
+        data_dir = rl_common.DATA_DIR
     return Path(data_dir) / QUEUE_SUBDIR / f"{slug}.jsonl"
 
 
