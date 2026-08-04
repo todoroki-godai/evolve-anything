@@ -1,4 +1,4 @@
-"""advisory 提案の accept/reject 記録ストア（#284 / #267 Sprint 1）。
+"""advisory 提案の accept/reject/surfaced/deferred 記録ストア（#284 / #267 Sprint 1）。
 
 audit の advisory detector は「ファイルが変わったか」で accept を判定する emit→drain lane
 （``evolve_decisions``）に1件も載っていなかった。#284 でその配線を通したが、判断の記録先を
@@ -11,8 +11,18 @@ audit の advisory detector は「ファイルが変わったか」で accept �
 そのため advisory の判断は本モジュールの専用ストアへ分離して記録する。集計は detector 単位で
 行い、audit の observability section が読む（write-only ストアを作らない）。
 
-冪等性は read 時 collapse で担保する（``(pj_slug, proposal_id)`` の last-write-wins）。
-同じ提案を複数回 drain しても最後の判断だけが残る。「最後」は **``recorded_at`` で決める**
+採用率の分母は本来「判断された数」でなく「提示された数」（#267 実測）。この不変条件を保つため
+``decision`` は2系統に分かれる:
+
+  - **terminal**（``accept`` / ``reject``）: 同じ提案に対して排他的な最終状態。``recorded_at``
+    最新のものだけが勝つ（reject の後に accept すれば accept が残る）
+  - **fact**（``surfaced`` / ``deferred``）: 最終状態と独立に記録する事実。同じ提案が
+    「surfaced かつ deferred」「surfaced かつ accept」のように複数の fact/terminal を
+    **同時に持てる**（deferred のまま後日 accept された場合、両方の記録が残る）
+
+冪等性は read 時 collapse で担保する。terminal 同士は ``(pj_slug, proposal_id)`` 単位で
+last-write-wins、fact は ``(pj_slug, proposal_id, decision)`` 単位で last-write-wins（同じ
+fact を複数回書いても1件に畳む・件数を水増ししない）。「最後」は **``recorded_at`` で決める**
 のであって読み出し順ではない（#290-4）。union read は canonical 先頭で legacy が後に来るため、
 単純な後勝ちにすると legacy の**古い** reject が canonical の**新しい** accept を上書きする。
 
@@ -24,7 +34,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 _LIB = Path(__file__).resolve().parent
 if str(_LIB) not in sys.path:
@@ -35,8 +45,11 @@ from store_read_union import iter_read_store_paths, pj_slug_match  # noqa: E402
 
 STORE_NAME = "advisory_decisions.jsonl"
 
-# 記録対象の判断種別（skip は記録しない＝未判断は deferred として marker に残る）。
-DECISIONS = ("accept", "reject")
+# terminal（排他的な最終状態）と fact（最終状態と独立な事実）で collapse 単位が異なる。
+# #267 Sprint 1: surfaced/deferred を追加（旧 DECISIONS=("accept","reject") から拡張）。
+_TERMINAL_DECISIONS: FrozenSet[str] = frozenset({"accept", "reject"})
+_FACT_DECISIONS: FrozenSet[str] = frozenset({"surfaced", "deferred"})
+DECISIONS = tuple(sorted(_TERMINAL_DECISIONS | _FACT_DECISIONS))
 
 
 def record_advisory_decision(
@@ -88,8 +101,18 @@ def _recorded_at(rec: Dict[str, Any]) -> datetime:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
 
 
+def _collapse_key(pj_slug: str, proposal_id: str, decision: Any) -> Tuple[str, str, str]:
+    """collapse 単位を返す。terminal（accept/reject）は排他的な最終状態として1本に畳み、
+
+    fact（surfaced/deferred）は decision 別に独立して1本に畳む（同じ提案が terminal と
+    fact を同時に持てる。deferred のまま後日 accept された場合、両方の記録を残すため）。
+    """
+    bucket = "terminal" if decision in _TERMINAL_DECISIONS else str(decision)
+    return (pj_slug, proposal_id, bucket)
+
+
 def read_advisory_decisions(slug: Optional[str] = None) -> List[Dict[str, Any]]:
-    """当 PJ の判断を read 時 collapse して返す（``(pj_slug, proposal_id)`` 単位）。
+    """当 PJ の記録を read 時 collapse して返す（``_collapse_key`` 単位）。
 
     read は寛容 union（canonical + legacy + plugins-data）。壊れた行は黙って捨てる
     （観測レーンなので1行の破損で全体を失わせない）。
@@ -122,7 +145,7 @@ def read_advisory_decisions(slug: Optional[str] = None) -> List[Dict[str, Any]]:
             pid = rec.get("proposal_id")
             if not pid:
                 continue
-            key = (str(rec.get("pj_slug") or ""), str(pid))
+            key = _collapse_key(str(rec.get("pj_slug") or ""), str(pid), rec.get("decision"))
             rank = (_recorded_at(rec), -path_rank, line_no)
             if key not in best or rank > best[key][0]:
                 best[key] = (rank, rec)
@@ -132,11 +155,16 @@ def read_advisory_decisions(slug: Optional[str] = None) -> List[Dict[str, Any]]:
 def summarize_by_detector(
     records: List[Dict[str, Any]],
 ) -> Dict[str, Dict[str, int]]:
-    """detector 別の accept / reject 件数（#267 Sprint 1 の detector 別集計の土台）。"""
+    """detector 別の surfaced / accept / reject / deferred 件数（#267 Sprint 1）。
+
+    採用率の分母（surfaced）を分子（accept）と同じ表で見られるようにする土台。
+    """
     summary: Dict[str, Dict[str, int]] = {}
     for rec in records:
         detector_id = str(rec.get("detector_id") or "unknown")
-        bucket = summary.setdefault(detector_id, {"accept": 0, "reject": 0})
+        bucket = summary.setdefault(
+            detector_id, {"surfaced": 0, "accept": 0, "reject": 0, "deferred": 0}
+        )
         decision = rec.get("decision")
         if decision in bucket:
             bucket[decision] += 1

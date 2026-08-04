@@ -502,6 +502,23 @@ def _extract_candidates(result: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
+def _record_advisory_event(
+    slug: str, entry: Dict[str, Any], tracked: Optional[str], decision: str, *, reason: Optional[str] = None,
+) -> None:
+    """advisory pending 1件の terminal/fact を記録する（#267）。呼び側で not dry_run を確認済み前提。"""
+    from advisory_decision_log import record_advisory_decision
+
+    record_advisory_decision(
+        slug=slug,
+        proposal_id=entry["id"],
+        detector_id=str(entry.get("detector_id") or "unknown"),
+        target_path=str(tracked or ""),
+        decision=decision,
+        run_id=entry.get("run_id"),
+        reason=reason,
+    )
+
+
 def _load_recorder():
     """fitness_evolution.record_evolve_diff_decision を遅延 import（lib 外モジュール）。"""
     fe_dir = _LIB.parent.parent / "skills" / "evolve-fitness" / "scripts"
@@ -632,9 +649,13 @@ def ingest_decisions(
 
       after_sha != before_sha（適用された）→ accept（human_accepted=True）
       id in rejected（明示却下）          → reject（human_accepted=False, reason）
-      未変更かつ未却下（skip）            → 記録しない
+      未変更かつ未却下（skip）            → optimize_history には記録しない（deferred）
 
     accept/reject は record_evolve_diff_decision 経由で optimize_history へ冪等記録。
+
+    advisory 提案は optimize_history でなく ``advisory_decision_log`` へ記録する（#284）。
+    判断結果に関わらず drain 到達時に必ず ``surfaced`` を記録し、分類結果（accept/reject/
+    deferred）も続けて記録する（#267: 採用率の分母を分子と同じレーンに残す）。
 
     pending のソース（#400 バグ#1 根治）:
       - `pending=None`（既定）: キュー `DATA_DIR/evolve_decisions/<slug>.jsonl` から読む。
@@ -661,6 +682,7 @@ def ingest_decisions(
     for entry in pending:
         pid = entry["id"]
         tracked = _tracked_path(entry)
+        is_advisory = entry.get("proposal_type") == "advisory"
         try:
             after = Path(tracked).read_text(encoding="utf-8") if tracked else None
         except OSError:
@@ -668,28 +690,23 @@ def ingest_decisions(
         after_sha = _sha256(after) if after is not None else None
         applied = after_sha is not None and after_sha != entry.get("before_sha")
 
+        # #267: 判断結果と独立に surfaced（分母）を記録する。
+        if not dry_run and is_advisory:
+            _record_advisory_event(slug, entry, tracked, "surfaced")
+
         if applied:
             kind, after_content, reason = "accept", after, None
         elif pid in rejected:
             kind, after_content, reason = "reject", (after if after is not None else ""), rejected[pid]
         else:
             skipped.append(pid)
+            if not dry_run and is_advisory:
+                _record_advisory_event(slug, entry, tracked, "deferred")
             continue
 
-        if not dry_run and entry.get("proposal_type") == "advisory":
-            # advisory は対象が pytest.ini / rules など異種なので skill_quality の
-            # 母集団（optimize_history）に入れず専用ストアへ記録する（#284）。
-            from advisory_decision_log import record_advisory_decision
-
-            record_advisory_decision(
-                slug=slug,
-                proposal_id=pid,
-                detector_id=str(entry.get("detector_id") or "unknown"),
-                target_path=str(tracked or ""),
-                decision=kind,
-                run_id=entry.get("run_id"),
-                reason=reason,
-            )
+        if not dry_run and is_advisory:
+            # advisory は異種対象なので skill_quality 母集団に入れず専用ストアへ記録（#284）。
+            _record_advisory_event(slug, entry, tracked, kind, reason=reason)
         elif not dry_run:
             if recorder is None:
                 recorder = _load_recorder()
