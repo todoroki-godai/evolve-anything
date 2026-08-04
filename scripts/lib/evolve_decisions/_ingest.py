@@ -7,6 +7,7 @@ Step 7.8 drain の実体。振る舞いはゼロ変更で、`evolve_decisions/__
 （`_candidates.py`）は test の `monkeypatch.setattr(evolve_decisions, "_load_recorder", ...)`
 対象なので `import evolve_decisions as _ed` 経由で呼ぶ。`read_queue` / `_write_queue` /
 `_queue_lock`（`_queue.py`）は monkeypatch 対象でないため直接 import してよい。
+`_record_advisory_event`（`_candidates.py`）は monkeypatch 対象でないため直接 import する。
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from typing import Any, Dict, List, Optional, Set
 import optimize_history_store as _store
 from evolve_decision_ids import _decision_event_id, _sha256, _tracked_path
 
+from ._candidates import _record_advisory_event
 from ._queue import _queue_lock, _write_queue, read_queue
 
 
@@ -32,7 +34,7 @@ def ingest_decisions(
 
       id in accepted AND after_sha != before_sha（明示 accept + 適用実績）→ accept
       id in rejected（明示却下）                                        → reject（human_accepted=False, reason）
-      証跡なし（未決定 or diff だけ）                                    → skip（記録しない）
+      証跡なし（未決定 or diff だけ）                                    → optimize_history には記録しない（deferred）
 
     #376（AC1/AC2）: accept は「ディスク差分があった」だけでは成立しない。かつて
     ``after_sha != before_sha`` のみを accept 条件にしていたため、evolve 提案とは
@@ -44,6 +46,10 @@ def ingest_decisions(
     （評価詳細プロトコルの AskUserQuestion 承認から Step 7.8 へ inline で渡す）。
 
     accept/reject は record_evolve_diff_decision 経由で optimize_history へ冪等記録。
+
+    advisory 提案は optimize_history でなく ``advisory_decision_log`` へ記録する（#284）。
+    判断結果に関わらず drain 到達時に必ず ``surfaced`` を記録し、分類結果（accept/reject/
+    deferred）も続けて記録する（#267: 採用率の分母を分子と同じレーンに残す）。
 
     pending のソース（#400 バグ#1 根治）:
       - `pending=None`（既定）: キュー `DATA_DIR/evolve_decisions/<slug>.jsonl` から読む。
@@ -71,12 +77,17 @@ def ingest_decisions(
     for entry in pending:
         pid = entry["id"]
         tracked = _tracked_path(entry)
+        is_advisory = entry.get("proposal_type") == "advisory"
         try:
             after = Path(tracked).read_text(encoding="utf-8") if tracked else None
         except OSError:
             after = None
         after_sha = _sha256(after) if after is not None else None
         applied = after_sha is not None and after_sha != entry.get("before_sha")
+
+        # #267: 判断結果と独立に surfaced（分母）を記録する。
+        if not dry_run and is_advisory:
+            _record_advisory_event(slug, entry, tracked, "surfaced")
 
         # #376 AC1: accept は「明示的な decision イベント（accepted_ids）」と「実際に
         # 適用された（applied）」の AND。applied 単独では accept にしない（無関係な通常
@@ -88,22 +99,13 @@ def ingest_decisions(
             kind, after_content, reason = "reject", (after if after is not None else ""), rejected[pid]
         else:
             skipped.append(pid)
+            if not dry_run and is_advisory:
+                _record_advisory_event(slug, entry, tracked, "deferred")
             continue
 
-        if not dry_run and entry.get("proposal_type") == "advisory":
-            # advisory は対象が pytest.ini / rules など異種なので skill_quality の
-            # 母集団（optimize_history）に入れず専用ストアへ記録する（#284）。
-            from advisory_decision_log import record_advisory_decision
-
-            record_advisory_decision(
-                slug=slug,
-                proposal_id=pid,
-                detector_id=str(entry.get("detector_id") or "unknown"),
-                target_path=str(tracked or ""),
-                decision=kind,
-                run_id=entry.get("run_id"),
-                reason=reason,
-            )
+        if not dry_run and is_advisory:
+            # advisory は異種対象なので skill_quality 母集団に入れず専用ストアへ記録（#284）。
+            _record_advisory_event(slug, entry, tracked, kind, reason=reason)
         elif not dry_run:
             if recorder is None:
                 import evolve_decisions as _ed
