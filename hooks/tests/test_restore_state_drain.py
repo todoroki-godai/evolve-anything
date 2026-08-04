@@ -50,8 +50,11 @@ def skill_and_marker(tmp_path, monkeypatch):
     return sf, tmp_path
 
 
-def test_autodrain_records_to_store_when_applied(skill_and_marker, capsys):
-    """apply 済み → 自動 drain で optimize_history に accept が記録され marker が消える（E2E）。"""
+def test_autodrain_leaves_applied_pending_without_explicit_decision(skill_and_marker, capsys):
+    """#376: SessionStart には対話チャネルが無く明示 accept を渡せないため、ディスク diff
+    だけでは何も記録されない（証跡なし＝pending のまま）。marker も温存され、リマインドのみ
+    surface される（#421 が導入した無人 auto-accept の是正）。
+    """
     sf, tmp_path = skill_and_marker
     sf.write_text(_AFTER, encoding="utf-8")  # apply（apply 境界をまたぐ）
 
@@ -60,16 +63,17 @@ def test_autodrain_records_to_store_when_applied(skill_and_marker, capsys):
 
     restore_state._deliver_evolve_drain()
 
-    # after: store に accept が 1 件記録された（store 差分を assert）。
-    assert history_file.exists()
-    body = history_file.read_text(encoding="utf-8")
-    assert "evdiff_x_accept" in body
-    # marker が消えて自然終息する。
-    assert ed.read_pending_marker("testslug") is None
-    # 1 行サマリが surface される。
+    # after: 明示 decision イベントが無いので store には何も記録されない。
+    assert not history_file.exists()
+    # marker も消えない（次回対話 drain までリマインドし続ける）。
+    marker = ed.read_pending_marker("testslug")
+    assert marker is not None
+    assert marker["pending"][0]["id"] == "evdiff_x"
+    # リマインド文言が surface される（「記録した」と偽らない）。
     out = capsys.readouterr().out
-    assert "drain" in out.lower()
-    assert "accept 1 件" in out
+    assert "適用済みの evolve 提案が 1 件" in out
+    assert "evolve --drain" in out
+    assert "記録しました" not in out
 
 
 def test_silent_and_no_store_write_when_not_applied(skill_and_marker, capsys):
@@ -108,10 +112,16 @@ def test_early_return_when_marker_root_missing(tmp_path, monkeypatch):
 
 
 def test_silent_after_drain_clears_marker(skill_and_marker, capsys):
-    """drain 済み（marker クリア後）は沈黙する。"""
+    """明示 decision（対話 drain 相当）で消化済み（marker クリア後）は沈黙する。"""
     sf, tmp_path = skill_and_marker
     sf.write_text(_AFTER, encoding="utf-8")
-    ed.drain_pending(slug="testslug", history_file=tmp_path / "optimize_history" / "testslug.jsonl")
+    # #376: 明示 accept を渡す対話 drain 相当（Step 7.8）で先に消化しておく。
+    ed.drain_pending(
+        slug="testslug", accepted={"evdiff_x"},
+        history_file=tmp_path / "optimize_history" / "testslug.jsonl",
+    )
+    assert ed.read_pending_marker("testslug") is None  # 前提: marker は消えている
+
     restore_state._deliver_evolve_drain()
     assert capsys.readouterr().out == ""  # marker 消えた → 沈黙
 

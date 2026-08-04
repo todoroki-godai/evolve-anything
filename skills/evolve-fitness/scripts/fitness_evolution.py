@@ -129,6 +129,7 @@ def record_evolve_diff_decision(
     history_file: Optional[Path] = None,
     entry_id: Optional[str] = None,
     run_id: Optional[str] = None,
+    decision_source: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """evolve の Compile/remediation でスキル diff を accept/reject した時点で、
     after content を skill_quality で採点し history.jsonl に正規記録する（issue #223）。
@@ -142,6 +143,12 @@ def record_evolve_diff_decision(
     持つ run_id をそのまま entry に純加算する。既存 entry（run_id 無し・run_id=None）を
     壊さない後方互換フィールド。queue の verify_pending（直近 run の accept 集計）が
     この値を読む。
+
+    ``decision_source``（#376）: この記録が「明示的な decision イベント」から来たことの
+    出所ラベル（例: ``"explicit_accept"`` / ``"explicit_reject"``）。省略時は None
+    （既存 entry との後方互換フィールド）。移行スクリプト（legacy_accept_migration.py）が
+    「このフィールドを持たない accept 済み entry」＝旧 hash-proxy 単独判定で記録された
+    legacy レコードの判別条件として使う。
     """
     if history_file is None:
         history_file = _default_history_file()
@@ -165,6 +172,7 @@ def record_evolve_diff_decision(
         "human_accepted": human_accepted,
         "rejection_reason": rejection_reason,
         "run_id": run_id,
+        "decision_source": decision_source,
     }
     _attach_provenance(entry)
 
@@ -420,8 +428,13 @@ def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dic
     if history is None:
         history = load_history()
 
-    # データ十分性チェック
-    decisions = [r for r in history if r.get("human_accepted") is not None]
+    # データ十分性チェック。fitness_eligible=False（#376 の legacy hash-proxy 誤 accept
+    # migration で無効化された entry）は母集団から除外する。キー欠落は既存 entry との
+    # 後方互換のため既定 True（含める）。
+    decisions = [
+        r for r in history
+        if r.get("human_accepted") is not None and r.get("fitness_eligible", True)
+    ]
 
     if len(decisions) < BOOTSTRAP_MIN:
         # #559: insufficient_data の出力契約を圧縮する。誤読防止のため SKILL.md に注記が

@@ -55,3 +55,53 @@ skill_quality 母集団の均質性を壊すため**対象外**（意図的ス�
   シグナルを放棄（次 emit で上書き）。within-run の正しさを優先。
 - 新規ロジックは `scripts/lib/evolve_decisions.py` に隔離（evolve.py は budget 超過のため追記は
   emit 呼び出し1行のみ）。
+
+## Amendment (2026-08-04, #376): accept = ハッシュ差分単独では成立しない
+
+Decision の B案「accept = 適用実績（ディスク差分のみ）」を、B'案「accept = 適用実績 AND
+明示的な decision イベント」へ是正する。
+
+### 何が起きたか
+
+`ingest_decisions`（`scripts/lib/evolve_decisions.py`）の accept 判定は
+`after_sha != before_sha` の一致だけを見ており、**その diff が evolve 提案の承認によるものか、
+無関係な通常 commit（別作業でのファイル変更）によるものかを区別していなかった**。
+
+さらに #421 で追加した SessionStart 自動 drain（`restore_state._deliver_evolve_drain`）が、
+対話チャネルを持たないままこの判定をトリガーしていた。結果として、SessionStart のたびに
+「evolve 提案の対象ファイルがたまたま変わっていた」だけで自動的に accept が記録されるように
+なり、2026-08-04 に通常の実装コミット（spec-keeper/evolve の SKILL.md 変更）が accept として
+誤計上される実測事故が発生した（issue #376）。
+
+### 是正後の Decision
+
+```
+emit
+  └─ pending
+       ├─ 明示的な accept イベント AND after_sha != before_sha → accepted
+       ├─ 明示却下                                            → rejected
+       └─ 証跡なし                                            → pending のまま
+```
+
+`before_sha`（ディスク差分）は**捨てず整合性ガードとして残す**（明示 accept はあっても
+実際に適用されていなければ accept にしない）。ただし**単独では accept の十分条件にしない**。
+「明示的な accept イベント」は、`ingest_decisions(accepted={id, ...})` /
+`drain_pending(accepted={id, ...})` に proposal id の集合として渡す。この集合は評価詳細
+プロトコル（AskUserQuestion の承認）から Step 7.8 の drain 呼び出しへ inline で渡される
+人間の判断であり、SessionStart hook のような対話チャネルを持たない呼び出し元は空集合しか
+渡せない（＝正しく「何も記録しない」side に倒れる）。
+
+### 既存レコードの扱い
+
+是正前に記録された accept（`record_evolve_diff_decision` 経由・`decision_source` を持たない
+`source=evolve_remediation` レコード）は、削除でなく `fitness_eligible: false` で無効化し
+`skill_quality` の母集団（`fitness_evolution.run_fitness_evolution`）から除外する
+（`scripts/lib/legacy_accept_migration.py`、既定 dry-run）。
+
+### 波及
+
+- `evolve_decision_ids._proposal_id` を絶対パスから repo 相対パス + repo_id ベースへ変更
+  （worktree ごとに同一提案が別 ID になり pending が worktree 数だけ residue する副次バグの
+  同時是正）。
+- `is_orphaned_worktree` で削除済み worktree の pending を orphan として queue から分離。
+- 詳細は issue #376 参照。

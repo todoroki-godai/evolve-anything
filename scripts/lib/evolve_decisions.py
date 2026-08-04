@@ -40,9 +40,12 @@ from evolve_decision_ids import (  # noqa: E402,F401
     _legacy_run_id,
     _new_run_id,
     _proposal_id,
+    _proposal_id_from_identity,
+    _repo_identity,
     _sha256,
     _supersede_keys,
     _tracked_path,
+    is_orphaned_worktree,
 )
 
 DATA_DIR = _store.DATA_DIR
@@ -441,6 +444,10 @@ def _advisory_pending(project_dir: Optional[str], run_id: str) -> List[Dict[str,
                 "title": proposal.title,
                 "action": proposal.action,
                 "target_path": str(path),
+                # advisory の id は既に detector+相対targets ベースで worktree 非依存
+                # （advisory_proposals._proposal_id）。worktree_root は orphan 判定
+                # （#376 AC5）専用に別途付与する。
+                "worktree_root": _repo_identity(str(path)).get("worktree_root"),
                 "before_sha": _sha256(before),
                 "pattern": f"advisory:{proposal.detector_id}",
                 "proposal_type": "advisory",
@@ -539,12 +546,16 @@ def emit_decisions(
         except OSError:
             continue  # 読めないスキルは対象外
         before_sha = _sha256(before)
+        # identity は1回だけ解決し、id 計算（repo 相対パス基準・#376 AC4）と
+        # worktree_root（orphan 判定用・#376 AC5）の両方に使い回す。
+        identity = _repo_identity(c["skill_path"])
         pending.append(
             {
-                "id": _proposal_id(c["skill_path"], before_sha),
+                "id": _proposal_id_from_identity(identity, before_sha),
                 "run_id": run_id,
                 "skill_name": c["skill_name"],
                 "skill_path": c["skill_path"],
+                "worktree_root": identity.get("worktree_root"),
                 "before_sha": before_sha,
                 "fitness_func": FITNESS_FUNC,
                 "pattern": c["pattern"],
@@ -623,6 +634,7 @@ def emit_decisions(
 def ingest_decisions(
     slug: str,
     *,
+    accepted: Optional[Any] = None,
     rejected: Optional[Dict[str, str]] = None,
     dry_run: bool = False,
     history_file: Optional[Path] = None,
@@ -630,9 +642,18 @@ def ingest_decisions(
 ) -> Dict[str, Any]:
     """Step 7.8 drain。各 pending を分類して optimize_history に記録する。
 
-      after_sha != before_sha（適用された）→ accept（human_accepted=True）
-      id in rejected（明示却下）          → reject（human_accepted=False, reason）
-      未変更かつ未却下（skip）            → 記録しない
+      id in accepted AND after_sha != before_sha（明示 accept + 適用実績）→ accept
+      id in rejected（明示却下）                                        → reject（human_accepted=False, reason）
+      証跡なし（未決定 or diff だけ）                                    → skip（記録しない）
+
+    #376（AC1/AC2）: accept は「ディスク差分があった」だけでは成立しない。かつて
+    ``after_sha != before_sha`` のみを accept 条件にしていたため、evolve 提案とは
+    無関係な通常 commit で対象ファイルがたまたま変わっただけのケースまで accept と
+    誤記録していた（optimize_history の母集団が汚染される）。``before_sha`` は捨てず
+    整合性ガードとして残す（明示 accept はあっても実際に適用されていなければ pending
+    のまま＝skip）。``accepted`` は id の集合（Set[str] / Iterable[str]）で、
+    「この提案をユーザーが承認した」という明示的な decision イベントを表す
+    （評価詳細プロトコルの AskUserQuestion 承認から Step 7.8 へ inline で渡す）。
 
     accept/reject は record_evolve_diff_decision 経由で optimize_history へ冪等記録。
 
@@ -644,6 +665,7 @@ def ingest_decisions(
         書かないため、result 同梱の pending（before_sha 付き）を渡すことで apply 後の
         ディスク差分から accept を記録できる。この場合キューは SoT でないため触らない。
     """
+    accepted_ids: Set[str] = set(accepted) if accepted else set()
     rejected = rejected or {}
     from_queue = pending is None
     if from_queue:
@@ -653,7 +675,7 @@ def ingest_decisions(
     else:
         history_file = Path(history_file)
 
-    accepted: List[str] = []
+    accepted_out: List[str] = []
     rejected_out: List[str] = []
     skipped: List[str] = []
     recorder = None
@@ -668,7 +690,11 @@ def ingest_decisions(
         after_sha = _sha256(after) if after is not None else None
         applied = after_sha is not None and after_sha != entry.get("before_sha")
 
-        if applied:
+        # #376 AC1: accept は「明示的な decision イベント（accepted_ids）」と「実際に
+        # 適用された（applied）」の AND。applied 単独では accept にしない（無関係な通常
+        # commit の誤帰属防止）。accepted のみで applied が無い（未適用のまま承認だけ
+        # された）場合も、後続 run で apply されるまで pending のまま（skip）。
+        if pid in accepted_ids and applied:
             kind, after_content, reason = "accept", after, None
         elif pid in rejected:
             kind, after_content, reason = "reject", (after if after is not None else ""), rejected[pid]
@@ -704,8 +730,12 @@ def ingest_decisions(
                 # #267 Sprint 1: pending entry の run_id（emit 時の run envelope）を
                 # optimize_history へ純加算する。queue の verify_pending が読む。
                 run_id=entry.get("run_id"),
+                # #376: この記録が明示的な decision イベント由来であることの出所ラベル。
+                # legacy_accept_migration.py がこのフィールドの有無で旧 hash-proxy 単独
+                # 判定の記録（値なし）と新契約の記録（値あり）を判別する。
+                decision_source=f"explicit_{kind}",
             )
-        (accepted if kind == "accept" else rejected_out).append(pid)
+        (accepted_out if kind == "accept" else rejected_out).append(pid)
 
     if not dry_run and from_queue:
         # キューが SoT のときだけ消化済みを除去する。pending を直接渡された場合
@@ -713,14 +743,30 @@ def ingest_decisions(
         # 未判断は deferred。後続 run で apply/reject できるようキューに残す。
         # 判断（ファイル読み・採点）は重いのでロック外で行い、**書く直前にロック下で
         # 読み直して**差分だけ適用する（その間に別 run が追加した entry を消さない・#287-1）。
-        consumed = set(accepted) | set(rejected_out)
+        consumed = set(accepted_out) | set(rejected_out)
         with _queue_lock(slug):
             _write_queue(slug, [e for e in read_queue(slug) if e.get("id") not in consumed])
 
-    return {"accepted": accepted, "rejected": rejected_out, "skipped": skipped}
+    return {"accepted": accepted_out, "rejected": rejected_out, "skipped": skipped}
 
 
 # ─── drain（`evolve --drain` の実体, #402）────────────────────────────────
+
+
+def _partition_orphaned(
+    entries: List[Dict[str, Any]],
+) -> "tuple[List[Dict[str, Any]], List[Dict[str, Any]]]":
+    """entries を (生きている worktree の分, orphan の分) に分ける（#376 AC5）。
+
+    削除済み worktree（`worktree_root` がディスク上に存在しない）に属する pending は
+    永久に apply されようがない残骸なので、判定不能を保守的に残しつつ orphan だけを
+    分離する。呼び出し側が orphan を marker から取り除く。
+    """
+    kept: List[Dict[str, Any]] = []
+    orphaned: List[Dict[str, Any]] = []
+    for entry in entries:
+        (orphaned if is_orphaned_worktree(entry) else kept).append(entry)
+    return kept, orphaned
 
 
 def drain_pending(
@@ -728,11 +774,12 @@ def drain_pending(
     slug: Optional[str] = None,
     project_dir: Optional[str] = None,
     result_json: Optional[str] = None,
+    accepted: Optional[Any] = None,
     rejected: Optional[Dict[str, str]] = None,
     history_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`evolve --drain` の実体（#402）。pending を marker か result-json から取り、
-    apply 後のディスク差分から accept を ingest し、marker をクリアする。
+    明示 accept/reject を ingest し、marker をクリアする。
 
     enforcement gap（ingest が SKILL.md prose 依存）を、SKILL.md が inline python でなく
     **単一コマンド `evolve --drain` を呼ぶだけ**にして縮める。drain は CLI＝**tool 文脈**で
@@ -744,6 +791,9 @@ def drain_pending(
     Args:
         slug: 未指定なら project_dir/cwd から worktree 安全に解決。
         result_json: 指定時はこの result JSON の `evolve_decisions.pending` を使う（marker より優先）。
+            marker 由来でないため orphan 判定（下記）の対象外。
+        accepted: 明示 accept された id の集合（#376 AC1）。証跡が無い提案は
+            ディスク差分があっても accept にならず pending のまま。
         rejected: {pending_id: reason} の明示却下。
         history_file: テスト用の store 上書き。
     """
@@ -754,6 +804,7 @@ def drain_pending(
     # （ingest は skill_quality 採点で秒オーダーになりうるので、握ると同一 slug の emit と
     # SessionStart hook を飢餓させる）。TOCTOU は世代キー（`_entry_generation`）で防ぐ。
     # ロック下では公開版でなく `_locked` / `_read_pending_marker_file` を使う（自己 deadlock）。
+    orphaned_entries: List[Dict[str, Any]] = []
     with _marker_lock(slug):
         if result_json:
             data = json.loads(Path(result_json).read_text(encoding="utf-8"))
@@ -761,18 +812,25 @@ def drain_pending(
             pending = envelope.get("pending") or []
         else:
             marker = _read_pending_marker_file(slug)
-            pending = (marker.get("pending") if marker else None) or []
+            all_pending = (marker.get("pending") if marker else None) or []
+            # #376 AC5: 削除済み worktree の pending は orphan として先に切り離す
+            # （ingest に渡さない＝永遠に skip され続ける残骸を作らない）。
+            pending, orphaned_entries = _partition_orphaned(all_pending)
 
     summary = ingest_decisions(
-        slug, pending=pending, dry_run=False, rejected=rejected, history_file=history_file
+        slug, pending=pending, dry_run=False,
+        accepted=accepted, rejected=rejected, history_file=history_file,
     )
     consumed = set(summary["accepted"]) | set(summary["rejected"])
     remaining = [entry for entry in pending if entry.get("id") not in consumed]
     # 未判断は deferred として marker に残し、後続 run で apply/reject できるようにする。
     summary["deferred"] = [entry.get("id") for entry in remaining]
+    summary["orphaned"] = [entry.get("id") for entry in orphaned_entries]
     generations = {
         _entry_generation(entry) for entry in pending if entry.get("id") in consumed
-    }
+    } | {_entry_generation(entry) for entry in orphaned_entries}
     with _marker_lock(slug):
-        _purge_marker_entries_locked(slug, consumed, generations=generations)
+        _purge_marker_entries_locked(
+            slug, consumed | set(summary["orphaned"]), generations=generations
+        )
     return summary

@@ -142,6 +142,33 @@ class TestRecordEvolveDiffDecisionE2E:
         lines = history_file.read_text(encoding="utf-8").splitlines()
         assert json.loads(lines[0])["run_id"] == "run-abc"
 
+    def test_decision_source_is_recorded_when_provided(self, tmp_path):
+        """#376: 明示 decision イベントの出所を entry に残す（legacy レコードとの判別材料）。"""
+        history_file = tmp_path / "history.jsonl"
+        entry = fe.record_evolve_diff_decision(
+            skill_name="my-skill",
+            after_content=GOOD_SKILL,
+            diff_summary="x",
+            human_accepted=True,
+            history_file=history_file,
+            decision_source="explicit_accept",
+        )
+        assert entry["decision_source"] == "explicit_accept"
+        lines = history_file.read_text(encoding="utf-8").splitlines()
+        assert json.loads(lines[0])["decision_source"] == "explicit_accept"
+
+    def test_decision_source_defaults_to_none_when_omitted(self, tmp_path):
+        """後方互換: 未指定時はキー欠落でなく明示 None（#376 migration の判別条件に使う）。"""
+        history_file = tmp_path / "history.jsonl"
+        entry = fe.record_evolve_diff_decision(
+            skill_name="my-skill",
+            after_content=GOOD_SKILL,
+            diff_summary="x",
+            human_accepted=True,
+            history_file=history_file,
+        )
+        assert entry["decision_source"] is None
+
     def test_run_id_defaults_to_none_when_omitted(self, tmp_path):
         """run_id 未指定（既存呼び出し元との後方互換）は None（キー欠落でなく明示 None）。"""
         history_file = tmp_path / "history.jsonl"
@@ -298,3 +325,33 @@ class TestInsufficientDataMessage:
         assert result["status"] == "insufficient_data"
         assert "optimize" in result["details"]["message"]
         assert "evolve" in result["details"]["message"]
+
+
+# ========== #376 AC6: fitness_eligible=False は母集団から除外 ==========
+
+class TestFitnessEligibleExclusion:
+    def test_fitness_ineligible_records_excluded_from_data_count(self):
+        """無効化済み（legacy hash-proxy false positive）レコードは母集団に数えない。"""
+        history = [
+            {"best_fitness": 0.5, "human_accepted": True, "fitness_func": "skill_quality",
+             "fitness_eligible": False},
+        ] * 7  # #376 実測の legacy 7 件を模す
+        result = fe.run_fitness_evolution(history=history)
+        assert result["status"] == "insufficient_data"
+        assert result["data_count"] == 0
+
+    def test_fitness_eligible_true_records_still_counted(self):
+        history = [
+            {"best_fitness": 0.5, "human_accepted": True, "fitness_func": "skill_quality",
+             "fitness_eligible": True},
+        ] * 5
+        result = fe.run_fitness_evolution(history=history)
+        assert result["data_count"] == 5
+
+    def test_records_without_fitness_eligible_key_default_to_included(self):
+        """既存レコードの大半（このフィールド導入前）は後方互換で母集団に残る。"""
+        history = [
+            {"best_fitness": 0.5, "human_accepted": True, "fitness_func": "skill_quality"},
+        ] * 5
+        result = fe.run_fitness_evolution(history=history)
+        assert result["data_count"] == 5

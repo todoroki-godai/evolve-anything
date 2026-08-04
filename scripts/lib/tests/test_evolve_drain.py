@@ -165,11 +165,13 @@ def test_repeated_dry_run_emits_do_not_accumulate(result_with_match, isolated):
 
 def test_repeated_emits_then_single_apply_records_once(result_with_match, skill_file, isolated):
     """人間の apply 1回は optimize_history 1行（run 跨ぎの冪等記録・#279 回帰）。"""
+    out = None
     for _ in range(5):
-        ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+        out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
     skill_file.write_text(_AFTER, encoding="utf-8")  # apply は1回だけ
+    pid = out["pending"][0]["id"]
 
-    summary = ed.drain_pending(slug="testslug")
+    summary = ed.drain_pending(slug="testslug", accepted={pid})
 
     assert len(summary["accepted"]) == 1
     assert _store_count() == 1
@@ -222,9 +224,9 @@ def test_undrained_applied_empty_when_no_marker(isolated):
 
 
 def test_drain_pending_records_accept_and_clears_marker(result_with_match, skill_file, isolated):
-    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
     skill_file.write_text(_AFTER, encoding="utf-8")  # apply
-    summary = ed.drain_pending(slug="testslug")
+    summary = ed.drain_pending(slug="testslug", accepted={out["pending"][0]["id"]})
     assert len(summary["accepted"]) == 1
     assert _store_count() == 1  # 母集団 +1
     assert ohs.load_history("testslug")[-1]["human_accepted"] is True
@@ -246,7 +248,8 @@ def test_drain_pending_reads_result_json_when_given(result_with_match, skill_fil
     rj = tmp_path / "result.json"
     rj.write_text(json.dumps({"evolve_decisions": out}), encoding="utf-8")
     skill_file.write_text(_AFTER, encoding="utf-8")  # apply
-    summary = ed.drain_pending(slug="testslug", result_json=str(rj))
+    pid = out["pending"][0]["id"]
+    summary = ed.drain_pending(slug="testslug", result_json=str(rj), accepted={pid})
     assert len(summary["accepted"]) == 1
     assert _store_count() == 1
 
@@ -276,7 +279,8 @@ def test_result_json_drain_consumes_only_that_runs_entries(
     result_path.write_text(json.dumps({"evolve_decisions": first}), encoding="utf-8")
     skill_file.write_text(_AFTER, encoding="utf-8")  # run-a 側だけ apply
 
-    ed.drain_pending(slug="testslug", result_json=str(result_path))
+    pid = first["pending"][0]["id"]
+    ed.drain_pending(slug="testslug", result_json=str(result_path), accepted={pid})
 
     marker = ed.read_pending_marker("testslug")
     assert [run["run_id"] for run in marker["runs"]] == ["run-b"]
@@ -284,12 +288,13 @@ def test_result_json_drain_consumes_only_that_runs_entries(
 
 
 def test_drain_pending_idempotent_second_call_no_double(result_with_match, skill_file, isolated):
-    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
     skill_file.write_text(_AFTER, encoding="utf-8")
-    ed.drain_pending(slug="testslug")
+    pid = out["pending"][0]["id"]
+    ed.drain_pending(slug="testslug", accepted={pid})
     # 2回目（marker 再生成して再 drain しても二重記録なし＝冪等）
-    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
-    ed.drain_pending(slug="testslug")
+    out2 = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    ed.drain_pending(slug="testslug", accepted={out2["pending"][0]["id"]})
     assert _store_count() == 1
 
 
@@ -301,15 +306,15 @@ def test_second_accept_for_same_skill_is_recorded(result_with_match, skill_file,
     （1スキル生涯1件しか optimize_history に入らない）。ID に before_sha を混ぜて解消。
     """
     # 1周目: 提案 → 適用 → drain
-    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    out1 = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
     skill_file.write_text(_AFTER, encoding="utf-8")
-    ed.drain_pending(slug="testslug")
+    ed.drain_pending(slug="testslug", accepted={out1["pending"][0]["id"]})
     assert _store_count() == 1
 
     # 2周目: 同じスキルに別の提案 → 適用 → drain
-    ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+    out2 = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
     skill_file.write_text(_AFTER + "\nさらに改善した手順。\n", encoding="utf-8")
-    ed.drain_pending(slug="testslug")
+    ed.drain_pending(slug="testslug", accepted={out2["pending"][0]["id"]})
 
     assert _store_count() == 2
 
@@ -365,8 +370,9 @@ def test_reemit_between_edits_records_single_accept(result_with_match, skill_fil
     # 同一ファイルの未 drain 提案は最新1件だけが marker に残る
     marker = ed.read_pending_marker("testslug")
     assert len(marker["pending"]) == 1
+    pid = marker["pending"][0]["id"]
 
-    ed.drain_pending(slug="testslug")
+    ed.drain_pending(slug="testslug", accepted={pid})
     assert _store_count() == 1
 
 
@@ -378,9 +384,9 @@ def test_content_cycle_does_not_drop_later_accept(result_with_match, skill_file,
     """
     contents = [_AFTER, _BEFORE, _AFTER + "\n三度目。\n"]  # A→B, B→A, A→C
     for content in contents:
-        ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
+        out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
         skill_file.write_text(content, encoding="utf-8")
-        ed.drain_pending(slug="testslug")
+        ed.drain_pending(slug="testslug", accepted={out["pending"][0]["id"]})
 
     assert _store_count() == 3
 

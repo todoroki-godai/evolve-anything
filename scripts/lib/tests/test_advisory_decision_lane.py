@@ -127,11 +127,12 @@ def test_emit_survives_detector_failure(isolated, project, monkeypatch):
 
 
 def test_advisory_accept_goes_to_advisory_store_not_optimize_history(isolated, project):
-    ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
+    out = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
     skill = project / ".claude" / "skills" / "broken-skill" / "SKILL.md"
     skill.write_text(_FIXED_SKILL, encoding="utf-8")  # 人間が適用
+    pid = _advisory_entries(out["pending"])[0]["id"]
 
-    summary = ed.drain_pending(slug="pj")
+    summary = ed.drain_pending(slug="pj", accepted={pid})
 
     assert len(summary["accepted"]) == 1
     records = adl.read_advisory_decisions(slug="pj")
@@ -157,14 +158,18 @@ def test_advisory_reject_records_reason(isolated, project):
 
 
 def test_advisory_decision_is_recorded_once_across_repeated_drains(isolated, project):
-    ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
+    out = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
     skill = project / ".claude" / "skills" / "broken-skill" / "SKILL.md"
     skill.write_text(_FIXED_SKILL, encoding="utf-8")
+    pid = _advisory_entries(out["pending"])[0]["id"]
 
-    ed.drain_pending(slug="pj")
+    ed.drain_pending(slug="pj", accepted={pid})
     # marker は drain で消えるので、同じ pending を再投入して二重 drain を再現する。
-    ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
-    ed.drain_pending(slug="pj")
+    # 対象ファイルは既に修正済みなので再 emit は before_sha が変わり別 id になるが、
+    # 実ファイル内容は同じ＝再度 apply されていない（skip）ため、advisory 記録は増えない。
+    out2 = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
+    pid2 = next(iter(_advisory_entries(out2["pending"])), {}).get("id")
+    ed.drain_pending(slug="pj", accepted=({pid2} if pid2 else None))
 
     records = adl.read_advisory_decisions(slug="pj")
     assert len(records) == 1
@@ -184,10 +189,13 @@ def test_skill_proposal_still_recorded_in_optimize_history(isolated, tmp_path, p
             }
         }
     }
-    ed.emit_decisions(result, project_dir=str(project), dry_run=True, slug="pj")
+    out = ed.emit_decisions(result, project_dir=str(project), dry_run=True, slug="pj")
     skill.write_text("# my-skill\n\n改善された手順。\n", encoding="utf-8")
+    skill_pid = next(
+        p["id"] for p in out["pending"] if p.get("proposal_type") != "advisory"
+    )
 
-    ed.drain_pending(slug="pj")
+    ed.drain_pending(slug="pj", accepted={skill_pid})
 
     history = ohs.history_path("pj")
     assert history.exists()
@@ -288,10 +296,12 @@ def test_reemit_with_changed_evidence_records_single_accept(isolated, project):
     ), "前提: evidence が変われば advisory ID も変わる"
 
     marker = ed.read_pending_marker("pj")
-    assert len(_advisory_entries(marker["pending"])) == 1
+    advisory_pending = _advisory_entries(marker["pending"])
+    assert len(advisory_pending) == 1
+    pid = advisory_pending[0]["id"]
 
     skill.write_text(_FIXED_SKILL, encoding="utf-8")
-    ed.drain_pending(slug="pj")
+    ed.drain_pending(slug="pj", accepted={pid})
 
     assert len(adl.read_advisory_decisions(slug="pj")) == 1
 
