@@ -66,6 +66,17 @@ def main() -> None:
         help="--drain 時の pending ソース result JSON（未指定なら marker を使う）",
     )
     parser.add_argument(
+        "--correction-responses",
+        default=None,
+        help=(
+            "--drain 時に correction_semantic Phase C（ingest_judgement_results）へ渡す"
+            "{request_id: 生テキスト} JSON ファイル（#339）。SKILL.md の Step 6.6 で Phase A→B"
+            "（emit→インライン Haiku 判定）を行った後、responses をこのファイルへ書いて渡す。"
+            "未指定なら Phase C は実行しない（Phase B は本質的に対話的なので --drain 単体では"
+            "判定できない）。"
+        ),
+    )
+    parser.add_argument(
         "--output",
         default=None,
         help=(
@@ -114,6 +125,48 @@ def main() -> None:
             summary["weak_signals_persisted"] = _ws_batch.persist_weak_signals_drain(_ws_slug)
         except Exception as e:
             summary["weak_signals_persisted"] = {"error": str(e)}
+
+        # #339: correction_semantic の Phase C（ingest_judgement_results）を apply 境界で
+        # 実効化する。Phase A（emit・決定論・LLM 非呼出）は phases_capture が run_evolve 内で
+        # 常時走らせるが、Phase B（Haiku 判定）は本質的に対話的（assistant がインラインで
+        # 応答を生成する）ため、非対話の --drain 単体では実行できない。SKILL.md 側の新 Step
+        # （references/correction-semantic-drain.md）が Phase A→B を行い、生成した
+        # responses（{request_id: 生テキスト}）を JSON ファイルへ書き出し、このオプションで
+        # 渡す。emitted は Phase A 実行時と同じ入力（utterances.db・judged 進捗）が変化して
+        # いない前提で drain 側が emit_judgement_requests を再実行して再構成する（決定論・
+        # weak_signals #484 と同じ「apply 境界で確定させる」設計）。未指定/未読/不正 JSON は
+        # graceful skip で他 persist を継続する（result-json #146 と同型の skip 理由 surface）。
+        if args.correction_responses:
+            _cr_responses = None
+            _cr_skip_reason = None
+            try:
+                _cr_path = Path(args.correction_responses)
+                if _cr_path.exists():
+                    _cr_loaded = json.loads(_cr_path.read_text(encoding="utf-8"))
+                    if isinstance(_cr_loaded, dict):
+                        _cr_responses = _cr_loaded
+                    else:
+                        _cr_skip_reason = "correction_responses_not_dict"
+                else:
+                    _cr_skip_reason = "correction_responses_not_found"
+            except Exception as e:
+                _cr_skip_reason = f"correction_responses_unreadable: {e}"
+
+            if _cr_responses is not None:
+                try:
+                    from correction_semantic import batch as _cs_batch
+
+                    _cs_slug = _resolve_pj_slug(args.project_dir)
+                    _cs_emitted = _cs_batch.emit_judgement_requests(_cs_slug)
+                    summary["correction_semantic_persisted"] = _cs_batch.ingest_judgement_results(
+                        _cs_emitted, _cr_responses, dry_run=False
+                    )
+                except Exception as e:
+                    summary["correction_semantic_persisted"] = {"error": str(e)}
+            else:
+                summary["correction_semantic_persisted"] = {"skipped": _cr_skip_reason}
+        else:
+            summary["correction_semantic_persisted"] = {"skipped": "no_correction_responses"}
 
         # #64 MAA: バッチ跨ぎ符号付き advantage の EMA を apply 境界で永続化する
         # （weak_signals #484 と同型・非 dry-run・正準 DATA_DIR）。plant-the-seed 型。

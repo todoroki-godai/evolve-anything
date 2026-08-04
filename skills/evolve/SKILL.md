@@ -53,6 +53,8 @@ evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-
 | 6.1 | 初回 bootstrap 完了 marker | `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` | **書かない** | 書く |
 | 6.2 | 今日の修正確認 既読追記 | `daily_review.record_reviewed(..., dry_run=dry_run)` | **書かない** | 書く |
 | 6.5 | auto-memory drain（memory 書込 / belief_blocks） | `auto_memory_broker.ingest_memory_results(...)` | **書かない**（分析パスはゼロ書込） | 書く |
+| 6.6 | correction_semantic Phase A emit（読み取りのみ） | `correction_semantic.batch.emit_judgement_requests` | **読み取りのみ**（両列とも書込なし・dry-run 無関係に常時実行可） | 同左 |
+| 7.8 | correction_semantic Phase C（weak_signals 隔離記録 + 個人辞書 + 判定進捗） | `evolve --drain --correction-responses <path>`（`ingest_judgement_results`） | **書く**（drain の apply 境界・Step 6.6 で responses ファイルが作られた場合のみ実行される。無ければ `{"skipped": ...}` で graceful skip・#339） | 書く |
 | run 末尾 | evolve_decisions queue 書込（before_sha スナップショット） | `emit_decisions(...)` の `_write_queue` | **書かない** | 書く |
 | run 末尾 | drain 検出用 **pending marker** | `emit_decisions(...)` の `write_pending_marker` | **書く**（#402/ADR-041・文書化された意図的 dry-run 書込・#513） | 書く |
 | 7.8 | optimize_history へ accept/reject 記録 | `evolve --drain`（`drain_pending`） | **書く**（drain は dry-run 分析後でも必ず実行） | 書く |
@@ -80,6 +82,11 @@ evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-
   （`build_reconcile_tracked` が phases 側と同一構成）。標準フローが dry-run のみで marker が永久未書込
   → 閾値未達で自動却下が全 PJ 死蔵していた #494 の穴の根治（weak_signals #484 と同型）。dry-run 連打で
   誤って count が進む事故を防ぐため、書込は drain の1点に集約する（pitfall_dryrun_stateful_store_write）。
+- **correction_semantic Phase C（#339）も drain の apply 境界が唯一の書き手**。Phase B（Haiku 判定）は
+  本質的に対話的で非対話 CLI（`--drain`）内では実行できないため、Step 6.6 が Phase A→B を行い responses を
+  ファイルへ書き、Step 7.8 の `evolve --drain --correction-responses <path>` が Phase C（weak_signals 隔離
+  記録 + 個人辞書 + 判定進捗）を確定する。Step 6.6 で responses ファイルが作られなかった（`unjudged == 0`
+  またはユーザーがスキップを選んだ）場合は `--correction-responses` を付けず、drain 側は graceful skip する。
 
 ## 提案詳細プロトコル（全 AskUserQuestion 共通）
 
@@ -112,7 +119,7 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 4. **[Step 9](#step-9-report-フェーズ)** Report（TL;DR + 成長レベル + 成長状態）
 5. **[Step 10](#step-10-推奨アクションmust--スキップ厳禁)** 推奨アクション（スキップ厳禁・該当ゼロでも「なし」を出す）
 
-### (B) 条件付き — フェーズ出力にデータ／発見があった時だけ（9 ステップ）
+### (B) 条件付き — フェーズ出力にデータ／発見があった時だけ（10 ステップ）
 
 各 Step の入口に「`result.phases.X` が〜の場合」「候補があれば」等の発火条件がある。条件に当てはまらなければ
 1 行 surface（✓ クリーン）して**次へ進む**。当てはまった時だけ本文の AskUserQuestion / 適用フローを実行する。
@@ -122,6 +129,7 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 - **[Step 5.5](#step-55-remediation-フェーズ)** Remediation（`total_issues > 0` のとき分類・承認）
 - **[Step 6.1](#step-61-初回バックログ-bootstrap443)** 初回バックログ bootstrap（`bootstrap.is_bootstrap == True` のとき 3 択）
 - **[Step 6.2](#step-62-今日の修正確認daily_review446)** 今日の修正確認（`daily.eligible == True` のとき y/n 確認）
+- **[Step 6.6](#step-66-correction_semantic-意味判定2相-phase-ab-431339)** correction_semantic 意味判定（`correction_semantic.unjudged > 0` のとき llm-batch-guard 確認）
 - **[Step 7](#step-7-prune-フェーズmerge)** Prune（+Merge・淘汰候補があるとき個別承認）
 - **[Step 7.5](#step-75-pitfall-剪定)** Pitfall 剪定（卒業/剪定候補があるとき）
 - **[Step 7.8](#step-78-evolve-提案-acceptreject-drain決定論キャプチャ-360-a-adr-041)** accept/reject drain（Step 3 で適用 or 却下したとき。`evolve --drain` 1 コマンド）
@@ -246,6 +254,10 @@ reflect は独立フェーズではなく discover に統合済み。discover �
 `DATA_DIR/auto_memory_queue/<slug>.jsonl`（Stop hook がゼロ LLM で enqueue 済み）を Phase A（emit・LLM ゼロ）→ Phase B/C（インライン生成→ingest）の2相で消化する。ingest は生成後ゲート（belief_entropy）を内蔵し、ソースを落とした要約は書込なしで `belief_blocks.jsonl` に記録（blocked カウント）。空応答（skipped）はキューに残り次回再試行。空キューなら「0件 ✓」で終了。結果（stored/blocked/skipped）を Report に報告する。
 → 実行コードは **[references/auto-memory-drain.md](references/auto-memory-drain.md)**。
 
+### Step 6.6: correction_semantic 意味判定（2相 Phase A→B, #431/#339）
+`result.correction_semantic.unjudged` が未判定発話数（Phase A は `phases_capture` が既に emit 済みだが、requests 本体は result に載らないため本ステップで `emit_judgement_requests` を再実行して取得する）。`unjudged == 0` なら「correction_semantic 意味判定: 0件 ✓」で終了。`unjudged > 0` のときは **llm-batch-guard**（MUST）: 件数・概算トークン（`estimate_tokens`）を提示して AskUserQuestion で y/n 確認 → 承認時のみ Phase B（各 prompt をインラインで Haiku 相当の判定に回答・`claude -p` は呼ばない）を行い、`responses` を `/tmp/rl_correction_responses_<slug>.json` に保存する。**Phase C（ingest・weak_signals 記録）はここでは呼ばない** — Step 7.8 の `evolve --drain --correction-responses <path>` が apply 境界で実行する（#339）。
+→ 実行コードは **[references/correction-semantic-drain.md](references/correction-semantic-drain.md)**。
+
 ## Stage 3: Housekeeping（淘汰 + 評価関数改善）
 ### Step 7: Prune フェーズ（+Merge）
 淘汰候補をスキルの出自別に3セクションで表示する（MUST）:
@@ -267,14 +279,18 @@ Step 3.8 で surface した `observability.glossary_drift` の `用語集未作�
 → 詳細: **[references/glossary-seed.md](references/glossary-seed.md)**。
 
 ### Step 7.8: evolve 提案 accept/reject drain（決定論キャプチャ, #360-A [ADR-041]）
-fitness calibration の母集団 `optimize_history` を日次 evolve ループで育てるステップ。Step 3 の承認・適用フロー完了後、分析が `--dry-run` だったか否かに関わらず**必ず**以下の単一コマンドを実行する（MUST）:
+fitness calibration の母集団 `optimize_history` を日次 evolve ループで育てるステップ。Step 3 の承認・適用フロー完了後、分析が `--dry-run` だったか否かに関わらず**必ず**以下の単一コマンドを実行する（MUST）。**Step 6.6 で responses ファイルを保存した場合は `--correction-responses <path>` も付ける（MUST）**:
 
 ```bash
 OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
 evolve --drain --result-json "$OUT"
+# Step 6.6 で /tmp/rl_correction_responses_<slug>.json を保存した場合のみ追加:
+evolve --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_responses_<slug>.json
 ```
 
-**accept = 適用実績 / reject = 明示却下 / skip = 記録しない**（ADR-041, C）。適用済み（ディスク sha 変化あり）提案を accept、ユーザーが却下した提案 id を reject として optimize_history へ冪等記録し、同じ apply 境界で決定論 weak_signals（manual_edit/esc/rephrase/permission_deny）・calibration state・tool_usage_snapshot・growth 結晶化・remediation 連続提示 marker も確定する（`--result-json "$OUT"` が result 依存3項目を運搬・#146/ADR-051）。明示却下がある場合のみ inline で `ed.drain_pending(rejected={id: 理由})` を追加で使う（`id` は `result.evolve_decisions.pending[].id`）。drain を忘れても次回 SessionStart のリマインドが保険になる（#402）。`accepted >= 1` なら「fitness 母集団に +N 件記録 ✓」と1行 surface する。
+（上の2行は排他 — responses ファイルが無ければ1行目だけを1回実行する。両方実行して二重 drain する必要はない。）
+
+**accept = 適用実績 / reject = 明示却下 / skip = 記録しない**（ADR-041, C）。適用済み（ディスク sha 変化あり）提案を accept、ユーザーが却下した提案 id を reject として optimize_history へ冪等記録し、同じ apply 境界で決定論 weak_signals（manual_edit/esc/rephrase/permission_deny）・calibration state・tool_usage_snapshot・growth 結晶化・remediation 連続提示 marker・correction_semantic Phase C（#339・responses ファイルがあるときのみ）も確定する（`--result-json "$OUT"` が result 依存3項目を運搬・#146/ADR-051）。明示却下がある場合のみ inline で `ed.drain_pending(rejected={id: 理由})` を追加で使う（`id` は `result.evolve_decisions.pending[].id`）。drain を忘れても次回 SessionStart のリマインドが保険になる（#402）。`accepted >= 1` なら「fitness 母集団に +N 件記録 ✓」と1行 surface する。
 → 設計根拠（#400/#484/#494）・drain サマリの読み方・result-json 運搬の詳細は **[references/housekeeping.md](references/housekeeping.md)**。
 
 ### Step 8: Fitness Evolution — 評価関数の改善チェック

@@ -130,6 +130,41 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(tmp_path: Path
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
 
 
+def test_ingest_then_reemit_excludes_judged_utterances(tmp_path: Path) -> None:
+    """#339 回帰: Phase C を通した発話は次の Phase A emit に再度現れない。
+
+    production 未配線だった間は ingest が一度も呼ばれず、同じ未判定発話が毎回 emit され
+    続けていた（#339 の症状そのもの）。Phase C → 再 emit の往復を1テストで固定する。
+    """
+    ws_store = tmp_path / "weak_signals.jsonl"
+    idioms_store = tmp_path / "idioms.jsonl"
+    judged = tmp_path / "judged.jsonl"
+
+    utts = _utts()
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    assert emitted["unjudged"] == 3  # 消化前は全 3 件が対象
+
+    rid = emitted["requests"][0]["id"]
+    responses = _responses_for(emitted, {
+        (rid, 0): {"is_correction": True, "idiom": "四国めたんじゃなくて", "reason": "後置型"},
+        (rid, 1): {"is_correction": False, "idiom": None, "reason": ""},
+        (rid, 2): {"is_correction": True, "idiom": "色が違うから赤にして", "reason": "ソフト指摘"},
+    })
+    cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+
+    # 同じ utterances を渡しても、判定済みになった 3 件は再び emit されない。
+    re_emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    assert re_emitted["unjudged"] == 0
+    assert re_emitted["requests"] == []
+
+
 def test_ingest_stores_idiom_in_weak_signal_provenance(tmp_path: Path) -> None:
     """#253: provenance.idiom を保存し signal_text の多トピックトリムに使えるようにする。"""
     ws_store = tmp_path / "weak_signals.jsonl"
