@@ -23,7 +23,8 @@ from .extractor import extract_trace
 
 # extractor のバージョン。軌跡パースを変えたら +1（再 ingest 判断の手掛かり）。
 # 2: #200 で delegation_prompt / delegation_prompt_truncated の抽出を追加。
-TRACE_VERSION = 2
+# 3: #342 で tool_errors（エラー発生 tool の名前別内訳）の抽出を追加。
+TRACE_VERSION = 3
 
 
 def _default_data_dir() -> Path:

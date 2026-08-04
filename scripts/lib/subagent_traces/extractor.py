@@ -19,6 +19,12 @@ effort レベルを記録する（実 transcript で確認済み・2026-07-17）
 ``effort_counts`` として集計し、tier 宣言 effort との drift 検出に使う
 （``audit/sections_subagent_traces.py`` 側）。フィールドが無い行（旧 CC バージョン等）
 は単に数えない — 全行に無ければ ``effort_counts == {}``（「未計測」を意味する）。
+
+#342: ``tool_error_count`` の集計値だけでは「本当に無駄な失敗」と「意図された非ゼロ
+exit（残骸チェック・health-check ポーリング等）」が事後に区別できない。``tool_use``
+の ``id`` → 対応する ``tool_result`` の ``tool_use_id`` を突合し、エラーが発生した
+tool の名前別内訳を ``tool_errors`` として併せて抽出する。対応する ``tool_use`` が
+transcript 内で見つからないエラーは ``"unknown"`` に計上する（欠損を握り潰さない）。
 """
 from __future__ import annotations
 
@@ -114,6 +120,7 @@ def extract_trace(transcript_path: Union[str, Path]) -> Optional[Dict[str, Any]]
           "delegation_prompt": str,   # #200: 委任プロンプト先頭300字（見つからなければ ""）
           "delegation_prompt_truncated": bool,  # 300字超で truncate したら True
           "effort_counts":     {effort名: 回数},  # #219: 実測 effort 分布（空={}=未計測）
+          "tool_errors":       {tool名: エラー回数},  # #342: エラー発生 tool の名前別内訳
         }
     """
     path = Path(transcript_path)
@@ -134,6 +141,9 @@ def extract_trace(transcript_path: Union[str, Path]) -> Optional[Dict[str, Any]]
     delegation_prompt_truncated = False
     delegation_line_found = False
     effort_counts: Dict[str, int] = {}
+    # #342: tool_use の id → tool 名。対応する tool_result が来た時にエラー内訳へ引く。
+    tool_use_names: Dict[str, str] = {}
+    tool_errors: Dict[str, int] = {}
 
     for line in text.splitlines():
         s = line.strip()
@@ -164,10 +174,17 @@ def extract_trace(transcript_path: Union[str, Path]) -> Optional[Dict[str, Any]]
                 name = block.get("name")
                 if name:
                     tools[name] = tools.get(name, 0) + 1
+                    tid = block.get("id")
+                    if tid:
+                        tool_use_names[tid] = name
             elif btype == "tool_result":
                 tool_result_count += 1
                 if block.get("is_error") is True:
                     tool_error_count += 1
+                    tuid = block.get("tool_use_id")
+                    ename = tool_use_names.get(tuid) if tuid else None
+                    ename = ename or "unknown"
+                    tool_errors[ename] = tool_errors.get(ename, 0) + 1
             elif btype == "text":
                 text_block_count += 1
 
@@ -184,4 +201,5 @@ def extract_trace(transcript_path: Union[str, Path]) -> Optional[Dict[str, Any]]
         "delegation_prompt": delegation_prompt,
         "delegation_prompt_truncated": delegation_prompt_truncated,
         "effort_counts": effort_counts,
+        "tool_errors": tool_errors,
     }

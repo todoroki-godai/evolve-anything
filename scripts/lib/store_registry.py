@@ -301,7 +301,8 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "ingest_all_projects）。hot path（hooks）からは書かない。",
         writer_locus="batch",
         reader="audit の per-agent 品質 section（sections_subagent_traces）が "
-        "read_traces で読み、agent_type 別の内部一発成功率を advisory surface。",
+        "read_traces で読み、agent_type 別の tool-エラー0率（#342: 旧称「内部一発成功率」"
+        "から表示ラベルを是正）を advisory surface。",
         retention="permanent",
         note="#38 per-agent 品質帰属。subagents.jsonl の agent_transcript_path が指す "
         "transcript の tool_use/tool_result/is_error をパースし、subagent が内部で何回 error "
@@ -313,7 +314,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "併せて保存する。retention=permanent のため、subagent transcript 本体が掃除で消えた "
         "後も delegation_prompt の一部（先頭300字）は恒久的に平文で残り続ける＝transcript "
         "削除後もこの分だけ露出期間が延びる。300字の上限は恣意的な数値ではなく、この露出を "
-        "抑えるための設計上の妥協（tacchi レビュー指摘・#200）。",
+        "抑えるための設計上の妥協（tacchi レビュー指摘・#200）。#342: エラー発生 tool の "
+        "名前別内訳を tool_errors（{tool名: エラー回数}）として TRACE_VERSION 3 で追加。"
+        "旧レコード（TRACE_VERSION 2 以前）は tool_errors を持たず、read 側は欠損を空 dict "
+        "として graceful に扱う（後方互換）。",
     ),
     StoreDeclaration(
         name="judge_audit_verdicts.jsonl",

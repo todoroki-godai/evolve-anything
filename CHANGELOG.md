@@ -5,6 +5,9 @@
 ### Added
 - **feat(icebox_reconcile): icebox 棚卸しの3レーン決定論分類を追加（#352）** — icebox（凍結 issue）本文 `## 再開条件` 配下の fenced YAML `reopen-when:`（source/metric/op/threshold）を daily runner が実ストア（weak_signals / subagent_traces / token_usage の最小 evaluator セット）と決定論突合し、成立（レーン1）/観測器不在（レーン2）/失効候補（レーン3・180日+未成立+本文未更新）に分類。daily runner の第5ステップが `gh issue list --json number,body,closedAt,updatedAt` を read-only で叩き `icebox-verdicts.json` に保存し、SessionStart hook が成立分のみ該当 issue を名指し + 根拠1行で通知（既読ストア `icebox_verdict_seen.jsonl` は lane/closed_at が変わるまで再提示しない）。audit は `icebox-verdicts.json` を読むだけ（gh 非呼び出し）の advisory section で観測器不在/失効候補を surface する。close は自動化しない（提示のみ）。issue 本文は untrusted 入力である前提で全経路を固めている: reopen-when ブロックの型/値域検証（非 str・NaN/inf・複数ブロックの ambiguous 判定）、source/metric の injection 耐性トークン検証、evaluator 例外の吸収、gh --limit 到達の可視化、read-write 単一トランザクション化（file_lock）等。
 
+### Fixed
+- **fix(subagent_traces): 一発成功率の表示定義を是正しエラー内訳を追加（#342）** — `sections_subagent_traces` の advisory 表示ラベル「内部一発成功率」は、実体が「1 回の subagent 実行で呼んだ tool のうち is_error が 1 件も無かった率」＝呼び出し回数に強く依存する構造的な値であり、実装品質の指標に誤読されていた（1 回あたりのエラー率が一定でも呼び出し回数が増えるほど値が指数的に下がる）。表示ラベルを「tool-エラー0率（呼び出し回数依存の指標）」に是正し、⚠ の閾値説明・blurb にも同旨の注意書きを追加した。あわせて `extractor.extract_trace` が tool_use の `id` と tool_result の `tool_use_id` を突合し、エラー発生 tool の名前別内訳を `tool_errors` として記録（TRACE_VERSION 3、旧レコードは欠損を空 dict として graceful に扱う後方互換）。`per_agent_type_summary` が agent_type 単位で `tool_errors` を合算し、audit advisory が上位 5 件のエラー内訳を surface（エラー 0 件の agent_type は沈黙）。低い値を見ても「本当に無駄な失敗」か「意図された非ゼロ exit」かを事後分離できる手がかりを与える（内訳の主観分類自体はスコープ外）。
+
 ## [1.124.1] - 2026-07-31
 
 ### Fixed
