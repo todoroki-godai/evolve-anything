@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""bin/evolve-migrate-legacy-accept — #376 legacy accept レコードの無効化（既定 dry-run）。
+
+`ingest_decisions` の accept 条件が「ディスク差分のみ」から「明示 decision イベント AND
+ディスク差分」へ是正されたことに伴い、是正前に記録された accept レコード（hash-proxy
+単独判定の可能性がある）を削除でなく ``fitness_eligible: false`` で無効化する。
+
+使用例:
+    bin/evolve-migrate-legacy-accept --slug evolve-anything          # dry-run（候補提示のみ）
+    bin/evolve-migrate-legacy-accept --slug evolve-anything --apply  # 実際に書き込む
+    bin/evolve-migrate-legacy-accept --history-file /path/to/history.jsonl --apply
+"""
+import sys
+from pathlib import Path
+
+_lib = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_lib))
+
+from legacy_accept_migration import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

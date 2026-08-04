@@ -125,7 +125,8 @@ def test_ingest_rereads_queue_before_write_so_concurrent_adds_survive(
     直前にロック下で読み直す方式なら生き残る。
     """
     before = ed._sha256(skill_file.read_text(encoding="utf-8"))
-    ed._write_queue("s", [_entry(str(skill_file), before)])
+    entry = _entry(str(skill_file), before)
+    ed._write_queue("s", [entry])
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")  # accept 相当
 
     concurrent = {"id": "evdiff_concurrent", "run_id": "evrun_other", "skill_path": "/x"}
@@ -137,7 +138,11 @@ def test_ingest_rereads_queue_before_write_so_concurrent_adds_survive(
 
     monkeypatch.setattr(ed, "_load_recorder", lambda: _fake_recorder)
 
-    summary = _no_hang(lambda: ed.ingest_decisions("s", history_file=tmp_path / "hist.jsonl"))
+    summary = _no_hang(
+        lambda: ed.ingest_decisions(
+            "s", accepted={entry["id"]}, history_file=tmp_path / "hist.jsonl"
+        )
+    )
 
     assert len(summary["accepted"]) == 1
     remaining_ids = {e["id"] for e in ed.read_queue("s")}
@@ -166,10 +171,12 @@ def test_queue_supersedes_by_target_path_not_id(roots, skill_file, tmp_path):
     skill_file.write_text("# my-skill\n\n世代B\n", encoding="utf-8")
     ed.emit_decisions(result, dry_run=False, slug="s")  # 世代 B
 
-    assert len(ed.read_queue("s")) == 1  # 同じファイルの提案は最新1件だけ
+    queued = ed.read_queue("s")
+    assert len(queued) == 1  # 同じファイルの提案は最新1件だけ
+    pid = queued[0]["id"]
 
     skill_file.write_text("# my-skill\n\n世代C（適用）\n", encoding="utf-8")
-    summary = ed.ingest_decisions("s", history_file=tmp_path / "hist.jsonl")
+    summary = ed.ingest_decisions("s", accepted={pid}, history_file=tmp_path / "hist.jsonl")
     assert len(summary["accepted"]) == 1  # 1回の apply が 1 accept
 
 
@@ -280,10 +287,15 @@ def test_drain_holds_one_lock_and_does_not_self_deadlock(roots, skill_file, tmp_
     テストは失敗でなく**ハング**するので、daemon thread + join(timeout) で検出する。
     """
     before = ed._sha256(skill_file.read_text(encoding="utf-8"))
-    ed.write_pending_marker("s", [_entry(str(skill_file), before)], run_id="evrun_test")
+    entry = _entry(str(skill_file), before)
+    ed.write_pending_marker("s", [entry], run_id="evrun_test")
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")
 
-    summary = _no_hang(lambda: ed.drain_pending(slug="s", history_file=tmp_path / "hist.jsonl"))
+    summary = _no_hang(
+        lambda: ed.drain_pending(
+            slug="s", accepted={entry["id"]}, history_file=tmp_path / "hist.jsonl"
+        )
+    )
 
     assert len(summary["accepted"]) == 1
     assert ed.read_pending_marker("s") is None  # 消化済みなので marker は消える
@@ -297,7 +309,8 @@ def test_drain_releases_marker_lock_during_ingest(roots, skill_file, monkeypatch
     するので daemon thread + join(timeout) で検出する。
     """
     before = ed._sha256(skill_file.read_text(encoding="utf-8"))
-    ed.write_pending_marker("s", [_entry(str(skill_file), before)], run_id="evrun_test")
+    entry = _entry(str(skill_file), before)
+    ed.write_pending_marker("s", [entry], run_id="evrun_test")
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")
 
     def _fake_recorder(**kwargs):
@@ -307,7 +320,11 @@ def test_drain_releases_marker_lock_during_ingest(roots, skill_file, monkeypatch
 
     monkeypatch.setattr(ed, "_load_recorder", lambda: _fake_recorder)
 
-    summary = _no_hang(lambda: ed.drain_pending(slug="s", history_file=tmp_path / "hist.jsonl"))
+    summary = _no_hang(
+        lambda: ed.drain_pending(
+            slug="s", accepted={entry["id"]}, history_file=tmp_path / "hist.jsonl"
+        )
+    )
     assert len(summary["accepted"]) == 1
 
 
@@ -318,7 +335,8 @@ def test_drain_purge_does_not_swallow_a_newer_generation(roots, skill_file, monk
     巻き込む（TOCTOU）。世代キー（run_id + id + before_sha）一致を条件にして防ぐ。
     """
     before = ed._sha256(skill_file.read_text(encoding="utf-8"))
-    ed.write_pending_marker("s", [_entry(str(skill_file), before)], run_id="evrun_old")
+    entry = _entry(str(skill_file), before)
+    ed.write_pending_marker("s", [entry], run_id="evrun_old")
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")
 
     def _fake_recorder(**kwargs):
@@ -329,7 +347,11 @@ def test_drain_purge_does_not_swallow_a_newer_generation(roots, skill_file, monk
 
     monkeypatch.setattr(ed, "_load_recorder", lambda: _fake_recorder)
 
-    summary = _no_hang(lambda: ed.drain_pending(slug="s", history_file=tmp_path / "hist.jsonl"))
+    summary = _no_hang(
+        lambda: ed.drain_pending(
+            slug="s", accepted={entry["id"]}, history_file=tmp_path / "hist.jsonl"
+        )
+    )
 
     assert len(summary["accepted"]) == 1
     marker = ed.read_pending_marker("s")

@@ -253,10 +253,11 @@ def test_flat_result_path_recovers_after_purge(monkeypatch, tmp_path):
 
 def test_ingest_applied_is_accept(result_with_match, skill_file, monkeypatch, tmp_path, hist):
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
-    ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    pid = out["pending"][0]["id"]
     # 適用された体で内容を変更する
     skill_file.write_text("# my-skill\n\n改善されたトリガー: foo bar baz\n\n手順を踏む。\n", encoding="utf-8")
-    summary = ed.ingest_decisions("testslug", dry_run=False, history_file=hist)
+    summary = ed.ingest_decisions("testslug", accepted={pid}, dry_run=False, history_file=hist)
     assert len(summary["accepted"]) == 1
     assert summary["rejected"] == []
     assert summary["skipped"] == []
@@ -266,6 +267,41 @@ def test_ingest_applied_is_accept(result_with_match, skill_file, monkeypatch, tm
     assert recs[0]["fitness_func"] == "skill_quality"
 
 
+def test_ingest_applied_without_explicit_accept_stays_pending(
+    result_with_match, skill_file, monkeypatch, tmp_path, hist
+):
+    """#376 AC1/AC2: ディスク diff だけでは accept にならない（明示的な decision イベントが必須）。
+
+    無関係な通常 commit で対象ファイルがたまたま変わっただけのケースを accept と
+    誤記録しないための契約。証跡が無い提案は pending のまま（skip 扱い・記録しない）。
+    """
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    pid = out["pending"][0]["id"]
+    # 適用された体で内容を変更する（が、明示 accept イベントは無い）
+    skill_file.write_text("# my-skill\n\n無関係な通常 commit\n", encoding="utf-8")
+    summary = ed.ingest_decisions("testslug", dry_run=False, history_file=hist)
+    assert summary["accepted"] == []
+    assert summary["rejected"] == []
+    assert summary["skipped"] == [pid]
+    assert _read_jsonl(hist) == []  # fitness 母集団に記録しない
+    assert len(ed.read_queue("testslug")) == 1  # pending のままキューに残る
+
+
+def test_ingest_explicit_accept_without_diff_stays_pending(
+    result_with_match, monkeypatch, tmp_path, hist
+):
+    """明示 accept があっても diff が無ければ accept にしない（before_sha は整合性ガードとして残す）。"""
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    pid = out["pending"][0]["id"]
+    # 内容は変えない（未適用）が明示 accept だけ渡す
+    summary = ed.ingest_decisions("testslug", accepted={pid}, dry_run=False, history_file=hist)
+    assert summary["accepted"] == []
+    assert summary["skipped"] == [pid]
+    assert _read_jsonl(hist) == []
+
+
 def test_ingest_applied_accept_carries_run_id(
     result_with_match, skill_file, monkeypatch, tmp_path, hist
 ):
@@ -273,9 +309,10 @@ def test_ingest_applied_accept_carries_run_id(
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
     out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
     run_id = out["run_id"]
+    pid = out["pending"][0]["id"]
     assert run_id  # emit は必ず run_id を割り当てる
     skill_file.write_text("# my-skill\n\n改善されたトリガー: foo bar baz\n\n手順を踏む。\n", encoding="utf-8")
-    ed.ingest_decisions("testslug", dry_run=False, history_file=hist)
+    ed.ingest_decisions("testslug", accepted={pid}, dry_run=False, history_file=hist)
     recs = _read_jsonl(hist)
     assert len(recs) == 1
     assert recs[0]["run_id"] == run_id
@@ -310,9 +347,10 @@ def test_ingest_unchanged_no_reject_is_skip_not_recorded(result_with_match, monk
 
 def test_ingest_dry_run_no_write_no_queue_mutation(result_with_match, skill_file, monkeypatch, tmp_path, hist):
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
-    ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    pid = out["pending"][0]["id"]
     skill_file.write_text("# my-skill changed\n", encoding="utf-8")
-    summary = ed.ingest_decisions("testslug", dry_run=True, history_file=hist)
+    summary = ed.ingest_decisions("testslug", accepted={pid}, dry_run=True, history_file=hist)
     assert len(summary["accepted"]) == 1  # 分類はする
     assert _read_jsonl(hist) == []  # でも書かない
     assert len(ed.read_queue("testslug")) == 1  # キューも触らない
@@ -320,9 +358,10 @@ def test_ingest_dry_run_no_write_no_queue_mutation(result_with_match, skill_file
 
 def test_ingest_clears_consumed_queue(result_with_match, skill_file, monkeypatch, tmp_path, hist):
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
-    ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+    pid = out["pending"][0]["id"]
     skill_file.write_text("# my-skill changed\n", encoding="utf-8")
-    ed.ingest_decisions("testslug", dry_run=False, history_file=hist)
+    ed.ingest_decisions("testslug", accepted={pid}, dry_run=False, history_file=hist)
     assert ed.read_queue("testslug") == []  # 消化済みは消える
 
 
@@ -334,10 +373,11 @@ def test_ingest_accepts_pending_directly_without_queue(result_with_match, skill_
     out = ed.emit_decisions(result_with_match, dry_run=True, slug="testslug")
     assert out["persisted"] is False
     assert ed.read_queue("testslug") == []  # キューは空のまま
+    pid = out["pending"][0]["id"]
     # assistant が apply した体で内容変更
     skill_file.write_text("# my-skill\n\n改善: foo bar baz\n", encoding="utf-8")
     summary = ed.ingest_decisions(
-        "testslug", dry_run=False, history_file=hist, pending=out["pending"]
+        "testslug", accepted={pid}, dry_run=False, history_file=hist, pending=out["pending"]
     )
     assert len(summary["accepted"]) == 1  # キューが空でも result.pending から accept
     recs = _read_jsonl(hist)
@@ -376,12 +416,13 @@ def test_e2e_dry_run_cycle_increments_fitness_store(result_with_match, skill_fil
     # 1) dry-run の emit（キューは書かない）→ pending（before_sha 付き）を得る
     out = ed.emit_decisions(result_with_match, dry_run=True, slug=slug)
     assert ed.read_queue(slug) == []  # dry-run はストアに何も書かない（契約）
+    pid = out["pending"][0]["id"]
 
     # 2) assistant が apply（スキル内容を変更）
     skill_file.write_text("# my-skill\n\n改善されたトリガー: foo bar baz\n", encoding="utf-8")
 
     # 3) Step 7.8: result.pending を直接渡して ingest（明示 history_file なし＝正準ストアへ書く）
-    summary = ed.ingest_decisions(slug, dry_run=False, pending=out["pending"])
+    summary = ed.ingest_decisions(slug, accepted={pid}, dry_run=False, pending=out["pending"])
     assert len(summary["accepted"]) == 1
 
     # 4) fitness 側が同じ正準ストアを読んで +1 を観測する（0/30 から動いた）
@@ -472,3 +513,119 @@ def test_emit_dedups_across_discover_and_skill_evolve(skill_file, monkeypatch, t
     }
     out = ed.emit_decisions(result, dry_run=False, slug="testslug")
     assert out["count"] == 1  # 同一 skill_path は1件に畳む（discover 優先）
+
+
+# ─── orphaned worktree pending（#376 AC5）───────────────────────────────────
+
+
+def test_drain_moves_orphaned_entry_out_of_pending_without_recording(monkeypatch, tmp_path, hist):
+    """削除済み worktree の pending は orphan として除外され、accept/reject どちらにも記録されない。"""
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    gone_root = tmp_path / "worktrees" / "deleted-wt"  # 作らない（削除済みを模す）
+    entry = {
+        "id": ed._proposal_id(str(gone_root / "skills" / "s" / "SKILL.md"), "before"),
+        "run_id": "evrun_x",
+        "skill_name": "s",
+        "skill_path": str(gone_root / "skills" / "s" / "SKILL.md"),
+        "worktree_root": str(gone_root),
+        "before_sha": "before",
+        "fitness_func": "skill_quality",
+        "pattern": "p",
+    }
+    ed.write_pending_marker("testslug", [entry], run_id="evrun_x")
+
+    summary = ed.drain_pending(slug="testslug", history_file=hist)
+
+    assert summary["orphaned"] == [entry["id"]]
+    assert summary["accepted"] == []
+    assert summary["rejected"] == []
+    assert _read_jsonl(hist) == []
+    assert ed.read_pending_marker("testslug") is None  # marker から除去される
+
+
+def test_drain_keeps_pending_entry_when_worktree_still_exists(monkeypatch, tmp_path, hist):
+    """worktree がまだ存在するなら orphan 扱いせず pending のまま残す（未 apply の通常ケース）。"""
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    live_root = tmp_path / "worktrees" / "live-wt"
+    (live_root / "skills" / "s").mkdir(parents=True)
+    skill_path = live_root / "skills" / "s" / "SKILL.md"
+    skill_path.write_text("# s\n\n旧。\n", encoding="utf-8")
+    before_sha = ed._sha256(skill_path.read_text(encoding="utf-8"))
+    entry = {
+        "id": ed._proposal_id(str(skill_path), before_sha),
+        "run_id": "evrun_x",
+        "skill_name": "s",
+        "skill_path": str(skill_path),
+        "worktree_root": str(live_root),
+        "before_sha": before_sha,
+        "fitness_func": "skill_quality",
+        "pattern": "p",
+    }
+    ed.write_pending_marker("testslug", [entry], run_id="evrun_x")
+
+    summary = ed.drain_pending(slug="testslug", history_file=hist)
+
+    assert summary["orphaned"] == []
+    assert summary["skipped"] == [entry["id"]]  # 未 apply・未判断のまま
+    marker = ed.read_pending_marker("testslug")
+    assert marker is not None
+    assert marker["pending"][0]["id"] == entry["id"]  # marker に温存される
+
+
+# ─── worktree 間の重複登録防止（#376 AC4・実 git 統合）─────────────────────────
+
+
+def _git(cwd, *args):
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+
+
+def _init_repo(path):
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init", "-q")
+    _git(path, "config", "user.email", "t@example.com")
+    _git(path, "config", "user.name", "t")
+    (path / "README.md").write_text("x")
+    _git(path, "add", ".")
+    _git(path, "commit", "-q", "-m", "init")
+
+
+def test_emit_from_two_worktrees_does_not_duplicate_pending(monkeypatch, tmp_path):
+    """同一 repo の別 worktree から同じスキルを emit しても marker の pending は1件に畳まれる。
+
+    修正前は skill_path が worktree ごとの絶対パスだったため id が別物になり、
+    worktree の数だけ同じ提案が pending に residue していた（#376 実測証拠の再現）。
+    """
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+
+    repo = tmp_path / "main-repo"
+    _init_repo(repo)
+    (repo / "skills" / "my-skill").mkdir(parents=True)
+    skill_main = repo / "skills" / "my-skill" / "SKILL.md"
+    skill_main.write_text("# my-skill\n\n旧。\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "add skill")
+
+    wt = tmp_path / "worktrees" / "feature-x"
+    _git(repo, "worktree", "add", "-q", "-b", "feat-x", str(wt))
+    skill_wt = wt / "skills" / "my-skill" / "SKILL.md"
+
+    result_main = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill_main), "pattern": "p"}
+        ]}}
+    }
+    result_wt = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill_wt), "pattern": "p"}
+        ]}}
+    }
+
+    ed.emit_decisions(result_main, dry_run=False, slug="main-repo")
+    ed.emit_decisions(result_wt, dry_run=False, slug="main-repo")
+
+    marker = ed.read_pending_marker("main-repo")
+    assert marker is not None
+    assert len(marker["pending"]) == 1  # 別 worktree からの再 emit は重複せず1件に畳まれる

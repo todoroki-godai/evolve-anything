@@ -207,16 +207,26 @@ def _resolve_canonical_history_file(slug: str):
 
 
 def _deliver_evolve_drain() -> None:
-    """前回 evolve で emit→apply 済みの提案を SessionStart で自動 drain する（#421）。
+    """前回 evolve で emit→apply 済みの提案を SessionStart で検出し drain を試みる（#421, #376）。
 
-    #402 はリマインド表示のみで、実 drain は assistant が手で `evolve --drain` を叩く
-    SKILL.md prose 依存（install ≠ enforcement）だった。本関数はそれを人手ゼロの自動回収へ
-    昇格させ、apply 済み提案を optimize_history（fitness 母集団）へ決定論記録する。
+    #402 はリマインド表示のみだったが、#421 で「apply 済み提案を自動で optimize_history
+    （fitness 母集団）へ accept 記録する」処理へ昇格した。しかし SessionStart hook には
+    対話チャネルが無く、ユーザーが実際にその提案を承認したかを確認できない。#421 はこの
+    区別をせず「ディスク sha が変わっていれば accept」で記録していたため、evolve 提案とは
+    無関係な通常 commit（別作業でのファイル変更）まで accept と誤記録していた（#376）。
+
+    本関数は #376 の是正後の契約（明示的な decision イベント AND diff の両方が無いと
+    accept にならない、``evolve_decisions.ingest_decisions``）に合わせ、**明示 accept を
+    渡さずに** drain を呼ぶ。この hook からは常に「証跡なし」経路を通るため、実際には
+    optimize_history に何も記録されない（安全側のデフォルト）。marker は温存され、
+    次回の対話 drain（SKILL.md Step 7.8・``ed.drain_pending(accepted=...)``）でユーザーが
+    明示的に accept/reject するまでリマインドし続ける。orphan（削除済み worktree）だけは
+    ここで pending から取り除かれる（#376 AC5）。
 
     レイテンシ予算（pitfall_hot_hook_eager_import）:
       - pending marker が無いケースは MARKER_ROOT のディレクトリ存在チェック → slug 解決 →
-        marker ファイル存在チェックの軽い判定で early-return し、重い経路（optimize_history
-        書き込みを伴う drain_pending）に入らない。duckdb 等の eager import もしない。
+        marker ファイル存在チェックの軽い判定で early-return し、重い経路（drain_pending）に
+        入らない。duckdb 等の eager import もしない。
     DATA_DIR split（#364）:
       - drain の書き込み先は `_resolve_canonical_history_file` で tool reader と同一の正準
         DATA_DIR に固定する。
@@ -248,14 +258,25 @@ def _deliver_evolve_drain() -> None:
 
     try:
         history_file = _resolve_canonical_history_file(slug)
+        # #376: accepted を渡さない — SessionStart には対話チャネルが無く、この hook が
+        # 人間の承認を代弁することはできない。orphan 除去だけは行われる。
         summary = _evolve_decisions.drain_pending(slug=slug, history_file=history_file)
         accepted = summary.get("accepted") or []
         rejected = summary.get("rejected") or []
-        print(
-            f"[evolve-anything] evolve 提案を自動 drain しました: "
-            f"accept {len(accepted)} 件 / reject {len(rejected)} 件を "
-            f"fitness 母集団（optimize_history）に記録（#421）。"
-        )
+        if accepted or rejected:
+            print(
+                f"[evolve-anything] evolve 提案を自動 drain しました: "
+                f"accept {len(accepted)} 件 / reject {len(rejected)} 件を "
+                f"fitness 母集団（optimize_history）に記録（#421）。"
+            )
+        else:
+            # #376: 明示 decision イベントが無いので何も記録されない（正しい挙動）。
+            # 「記録した」と偽らず、対話 drain（Step 7.8）を促すリマインドに徹する。
+            print(
+                f"[evolve-anything] 適用済みの evolve 提案が {len(applied)} 件あります。"
+                f"次回セッションの `evolve --drain`（Step 7.8）で accept/reject を"
+                f"明示的に記録してください（#376）。"
+            )
     except Exception as e:
         print(f"[evolve-anything:restore_state] evolve-drain error: {e}", file=sys.stderr)
 

@@ -51,7 +51,8 @@ def test_nondryrun_apply_increments_fitness_population(tmp_path, monkeypatch):
     apply_skill_change(pj, "skill-used", _IMPROVED)
 
     # 3) Step 7.8 ingest（result の pending を直接渡す＝キュー不在でも動く）
-    summary = ed.ingest_decisions(pj.slug, dry_run=False, pending=out["pending"])
+    pid = out["pending"][0]["id"]
+    summary = ed.ingest_decisions(pj.slug, accepted={pid}, dry_run=False, pending=out["pending"])
     assert len(summary["accepted"]) == 1
 
     # 4) outcome: fitness が同じ正準 store を読んで +1 を観測する

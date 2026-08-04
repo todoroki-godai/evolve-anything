@@ -41,12 +41,21 @@ skill_evolve の high/medium 適性提案）の `before_sha` をキュー `DATA_
 
 > **なぜ drain が要るか**: 従来は Step 3 の inline python で assistant が手で
 > `record_evolve_diff_decision` を呼ぶ MUST だったが、実行されず optimize_history が空のままだった
-> （SKILL.md MUST ≠ 決定論強制 = `install ≠ enforcement` の細粒度版）。accept をディスク差分から
-> 決定論で取り、この drain を Step として固定することで「記録ステップ未実行」を構造的に塞ぐ。
+> （SKILL.md MUST ≠ 決定論強制 = `install ≠ enforcement` の細粒度版）。この drain を Step として
+> 固定することで「記録ステップ未実行」を構造的に塞ぐ。
 
-**accept = 適用実績 / reject = 明示却下 / skip = 記録しない**（ADR-041, C: ハイブリッド）。
-Step 3 でスキルファイルを実際に変更したもの（適用済み）が accept、ユーザーが「不要」と却下した
-提案 id が reject、未変更かつ未却下（保留）は母集団に入れない。
+**accept = 明示 accept イベント AND 適用実績 / reject = 明示却下 / skip = 記録しない**
+（ADR-041, C: ハイブリッド。#376 で是正）。Step 3 でユーザーが承認しスキルファイルを実際に
+変更したもの（明示 accept AND 適用済み）が accept、ユーザーが「不要」と却下した提案 id が
+reject、未変更かつ未却下（保留）は母集団に入れない。
+
+> **#376 是正**: 初版は「ディスク sha が変わっていれば accept」だったが、evolve 提案の適用と
+> 無関係な通常 commit（別作業でのファイル変更）でも対象ファイルの sha はたまたま変わりうる。
+> SessionStart 自動 drain（#421・対話チャネルを持たない）がこの判定をトリガーし、無関係な
+> commit を accept と誤記録する実測事故が発生した。是正後は「ディスク差分」に加えて
+> `ed.drain_pending(accepted={id, ...})` で渡す**明示的な decision イベント**の両方が揃わないと
+> accept にならない（下記参照）。ディスク差分は整合性ガードとして残る（明示 accept があっても
+> 未適用なら pending のまま）。
 
 > **#400 バグ#1 根治**: 旧版は「`--dry-run` の場合は未記録でスキップ」していたが、evolve の
 > 標準フローは `evolve --dry-run` で分析 → assistant が Step 3 で対話適用、である。この運用だと
@@ -71,9 +80,13 @@ evolve --drain --result-json "$OUT"
 ```
 
 - `evolve --drain` は marker（`emit_decisions` が `--dry-run` でも記録した `before_sha` 付き
-  pending）を読み、Step 3 で**適用済み**（ディスク sha が変わった）提案を accept として
+  pending）を読み、明示 decision イベント（下記の inline `accepted=`/`rejected=`）と突き合わせて
   optimize_history へ記録し、marker をクリアする。**tool 文脈（CLI）で走る**ため reader と同一
-  DATA_DIR に書く＝hook/tool の DATA_DIR split（#358）を踏まない。
+  DATA_DIR に書く＝hook/tool の DATA_DIR split（#358）を踏まない。**この単一コマンド単体では
+  evolve_decisions の accept/reject は記録しない**（#376）— weak_signals / calibration state /
+  tool_usage_snapshot / growth 結晶化 / remediation marker / correction_semantic Phase C は
+  この呼び出しだけで確定するが、fitness 母集団（optimize_history）への記録は下記の
+  `accepted=`/`rejected=` 付き inline 呼び出しが必要。
 - **`--result-json "$OUT"` で result 依存3項目も同居確定（#146/ADR-051）**: 標準フローは
   `evolve --dry-run` 分析 → 対話適用 → drain で完結し `run_evolve(dry_run=False)` に到達しない
   ため、phases_capture の `if not dry_run:` 配下（calibration state / tool_usage_snapshot /
@@ -83,14 +96,18 @@ evolve --drain --result-json "$OUT"
   結果は drain サマリの `result_state_persisted`（calibration_written / tool_usage_written）と
   `growth_crystallized` で surface される。**`$OUT` を渡し忘れ / 消えた場合は3項目のみ
   graceful skip**（`{"skipped": "no_result_json"}` 等）し、他 persist は無傷で完走する。
-- **明示却下がある場合**のみ inline で `ed.drain_pending(rejected={id: 理由})` を使う
-  （`--drain` CLI は accept/skip のみ扱い、却下理由は引数で渡す）。`id` は
-  `result.evolve_decisions.pending[].id`。
-- **enforcement の保険（#402）**: drain を忘れても、適用済みで未 drain な提案があれば
-  **次回 SessionStart で `restore_state` が `evolve --drain` を促すリマインド**を出す
+- **承認して適用した提案がある場合、または明示却下がある場合**は inline で
+  `ed.drain_pending(accepted={id, ...}, rejected={id: 理由, ...})` を**追加で**使う（MUST・#376）
+  — `--drain` CLI 単体では accept/reject を渡す手段が無いため、`accepted`/`rejected` はこの
+  inline 呼び出しでのみ渡せる。`id` は `result.evolve_decisions.pending[].id`（`skill_path` で
+  Step 3 の対象提案と対応づける）。承認も却下も無ければこの追加呼び出しは不要（pending のまま
+  次回に持ち越される）。
+- **enforcement の保険（#402、#376 で範囲縮小）**: drain を忘れても、適用済みで未 drain な提案が
+  あれば**次回 SessionStart で `restore_state` が `evolve --drain` を促すリマインド**を出す
   （`undrained_applied` が marker の before_sha と現ディスク sha を突合、store 非依存で #358 回避）。
-  drain 実行で marker が消えてリマインドは自然終息する。これで `SKILL.md MUST ≠ enforcement`
-  の穴を「単一コマンド化 + 決定論リマインド」で塞ぐ。
+  ただし SessionStart hook には対話チャネルが無く明示 accept を代弁できないため、**この保険は
+  リマインド表示のみで optimize_history への記録は行わない**（#421 が導入した無人 auto-accept は
+  #376 で撤回）。記録は Step 3 の対話 → Step 7.8 の明示 `accepted=`/`rejected=` 呼び出しでのみ成立する。
 
 - 何も適用せず（純粋プレビュー）何も却下しなければ、全件が skip に落ち記録されない（self-correcting）
 - accept/reject は `record_evolve_diff_decision` 経由で optimize_history（ADR-031）へ冪等記録され、

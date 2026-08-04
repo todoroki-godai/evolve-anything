@@ -11,7 +11,9 @@ module 定数を持たない純関数だけを置く（`evolve_decisions` 側の
 from __future__ import annotations
 
 import hashlib
+import subprocess
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 
@@ -29,8 +31,70 @@ def _legacy_run_id(pending: List[Dict[str, Any]]) -> str:
     return "legacy_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
 
 
+def _repo_identity(path: str) -> Dict[str, Optional[str]]:
+    """path の所属 repo 情報を返す（#376 AC4）。
+
+    ``repo_id``（git-common-dir の親 — worktree 間で共有される本体 repo の識別子）と
+    ``relative_path``（その worktree の toplevel から見た相対パス）を分離することで、
+    同じスキルを別 worktree の絶対パスで emit しても同一の論理 identity に畳める。
+    ``worktree_root``（``git rev-parse --show-toplevel``）は orphan 判定（#376 AC5）用に
+    別途返す — worktree ごとに異なる値になるのが意図（repo_id とは非対称）。
+
+    git 管理外 / git 不可 / 親ディレクトリ不在（未存在の対象パスを先読みするケース）は
+    全て None にフォールバックし、``relative_path`` には元の path をそのまま入れる
+    （＝旧来の絶対パスベース identity と同じ挙動に自然縮退する）。
+    """
+    p = Path(path)
+    directory = p.parent
+    if not directory.is_dir():
+        return {"repo_id": None, "relative_path": str(p), "worktree_root": None}
+    try:
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(directory), check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        common_dir = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=str(directory), check=True, capture_output=True, text=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return {"repo_id": None, "relative_path": str(p), "worktree_root": None}
+
+    if not toplevel or not common_dir:
+        return {"repo_id": None, "relative_path": str(p), "worktree_root": None}
+
+    top = Path(toplevel)
+    common = Path(common_dir)
+    if not common.is_absolute():
+        common = (directory / common).resolve()
+    repo_id = str(common.parent)  # 本体 repo root（worktree 間で共有）
+
+    try:
+        relative_path = str(p.resolve().relative_to(top.resolve()))
+    except ValueError:
+        relative_path = str(p)
+
+    return {
+        "repo_id": repo_id,
+        "relative_path": relative_path,
+        "worktree_root": str(top.resolve()),
+    }
+
+
+def _proposal_id_from_identity(
+    identity: Dict[str, Optional[str]], before_sha: str
+) -> str:
+    """``_repo_identity`` の結果 + before_sha から提案 ID を作る純関数版。
+
+    subprocess を伴う ``_repo_identity`` を呼び直さずに済むよう、既に identity を
+    持っている呼び出し元（emit_decisions）はこちらを直接使う。
+    """
+    key = f"{identity.get('repo_id') or ''}\n{identity.get('relative_path')}\n{before_sha}"
+    return "evdiff_" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+
 def _proposal_id(skill_path: str, before_sha: str) -> str:
-    """**提案**の content identity = (対象パス, 適用前の内容)。
+    """**提案**の content identity = (repo_id, repo 相対パス, 適用前の内容)（#376 AC4）。
 
     「同じ提案か」だけを表す。「同じ判断イベントか」は別キー（``_decision_event_id``）で
     表す — 1つの ID に両方を兼ねさせると必ずどちらかが壊れる（#279→#286→#290 で
@@ -42,10 +106,45 @@ def _proposal_id(skill_path: str, before_sha: str) -> str:
       スキルの2回目以降の accept が冪等 dedup で捨てられる（生涯1件しか母集団に入らない）。
     - **before_sha を混ぜても、これ単独では足りない**（#290）: 対象の内容が過去の状態へ
       循環すると過去の ID が再利用されるため、判断イベントキーが再び衝突する。
+
+    パス成分は絶対パスでなく ``_repo_identity`` の repo 相対パス + repo_id を使う
+    （#376）— worktree ごとに絶対パスが異なる同一スキルが別提案として重複登録される
+    バグ（同一 slug の queue/marker に worktree 数だけ residue し、1回の apply が
+    worktree 数だけ accept 計上される）の根治。git 管理外は絶対パスへ自然縮退する。
     """
-    return "evdiff_" + hashlib.sha1(
-        f"{skill_path}\n{before_sha}".encode("utf-8")
-    ).hexdigest()[:12]
+    return _proposal_id_from_identity(_repo_identity(skill_path), before_sha)
+
+
+def _entry_worktree_root(entry: Dict[str, Any]) -> Optional[str]:
+    """entry の所属 worktree ルート（emit 時に記録した ``worktree_root`` を優先）。
+
+    旧 entry（この項目導入前に emit された marker residue）は値を持たないため、
+    ``_tracked_path`` から都度導出する。ただし対象の worktree が既に消えていると
+    git コマンド自体が引けない（ディレクトリが無い）ため、その場合は None を返す
+    （＝判定不能・orphan とは断定しない。保守的に残す）。
+    """
+    root = entry.get("worktree_root")
+    if root:
+        return root
+    tracked = entry.get("target_path") or entry.get("skill_path")
+    if not tracked:
+        return None
+    return _repo_identity(tracked).get("worktree_root")
+
+
+def is_orphaned_worktree(entry: Dict[str, Any]) -> bool:
+    """entry の所属 worktree が既にディスク上から消えているか（#376 AC5）。
+
+    ``git worktree remove`` は登録解除と物理削除を通常同時に行うため、worktree
+    ルートディレクトリの存在有無で十分に判定できる（追加の ``git worktree list``
+    呼び出しは、削除済み worktree だと元 repo 側からの subprocess 依存を増やすだけで
+    判定精度は変わらない）。worktree_root が不明（判定不能）なときは保守的に
+    orphan でない扱いにする（誤って生きている pending を消さない）。
+    """
+    root = _entry_worktree_root(entry)
+    if not root:
+        return False
+    return not Path(root).is_dir()
 
 
 def _decision_event_id(proposal_id: str, kind: str, after_content: str) -> str:

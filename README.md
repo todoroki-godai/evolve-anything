@@ -157,7 +157,7 @@ evolve-anything consists of **four independent pillars**.
 | `spec-keeper` | Spec Management | Maintain SPEC.md and ADRs |
 | `tier` | Model Tier Management | Safely inspect and update model-tier policy |
 
-## Bare CLI inventory (24 commands)
+## Bare CLI inventory (25 commands)
 
 `bin/` is the source of truth for these executable names. Add that directory to `PATH` only if you want bare CLI invocation; slash skills remain the normal plugin interface.
 
@@ -167,10 +167,11 @@ evolve-anything consists of **four independent pillars**.
 | `evolve-agent-task` | `evolve-backfill-turn-indices` | `evolve-codex-config-cleanup` |
 | `evolve-daily-install` | `evolve-daily-run` | `evolve-discover` |
 | `evolve-dogfood-gate` | `evolve-fleet` | `evolve-gain` |
-| `evolve-loop` | `evolve-loop-ablation` | `evolve-optimize` |
-| `evolve-prompt-compare` | `evolve-prune` | `evolve-reflect` |
-| `evolve-release-sync` | `evolve-reorganize` | `evolve-scaffold-advisory` |
-| `evolve-score-noise` | `evolve-tier` | `evolve-usage-log` |
+| `evolve-loop` | `evolve-loop-ablation` | `evolve-migrate-legacy-accept` |
+| `evolve-optimize` | `evolve-prompt-compare` | `evolve-prune` |
+| `evolve-reflect` | `evolve-release-sync` | `evolve-reorganize` |
+| `evolve-scaffold-advisory` | `evolve-score-noise` | `evolve-tier` |
+| `evolve-usage-log` | | |
 
 ## Hooks (24 registered entries across 12 events)
 

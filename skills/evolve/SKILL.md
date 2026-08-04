@@ -290,7 +290,9 @@ evolve --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_re
 
 （上の2行は排他 — responses ファイルが無ければ1行目だけを1回実行する。両方実行して二重 drain する必要はない。）
 
-**accept = 適用実績 / reject = 明示却下 / skip = 記録しない**（ADR-041, C）。適用済み（ディスク sha 変化あり）提案を accept、ユーザーが却下した提案 id を reject として optimize_history へ冪等記録し、同じ apply 境界で決定論 weak_signals（manual_edit/esc/rephrase/permission_deny）・calibration state・tool_usage_snapshot・growth 結晶化・remediation 連続提示 marker・correction_semantic Phase C（#339・responses ファイルがあるときのみ）も確定する（`--result-json "$OUT"` が result 依存3項目を運搬・#146/ADR-051）。明示却下がある場合のみ inline で `ed.drain_pending(rejected={id: 理由})` を追加で使う（`id` は `result.evolve_decisions.pending[].id`）。drain を忘れても次回 SessionStart のリマインドが保険になる（#402）。`accepted >= 1` なら「fitness 母集団に +N 件記録 ✓」と1行 surface する。
+上のコマンドは、決定論 weak_signals（manual_edit/esc/rephrase/permission_deny）・calibration state・tool_usage_snapshot・growth 結晶化・remediation 連続提示 marker・correction_semantic Phase C（#339・responses ファイルがあるときのみ）を同じ apply 境界で確定する（`--result-json "$OUT"` が result 依存3項目を運搬・#146/ADR-051）。**これ単体では evolve 提案の accept/reject は記録しない**（#376 是正）。
+
+**accept = 明示 accept イベント AND 適用実績 / reject = 明示却下 / skip = 記録しない**（ADR-041 是正版, #376）。ディスク sha が変わっただけ（＝提案とは無関係な通常 commit の可能性がある）では accept にならない。Step 3 で承認して実際に適用した提案がある場合、その `id`（`result.evolve_decisions.pending[].id`、`skill_path` で対応する提案と突き合わせる）を集めて **inline で `ed.drain_pending(accepted={id, ...})` を追加実行する（MUST）** — これを省略すると diff が実際に適用されていても fitness 母集団に記録されない。却下がある場合は同じ呼び出しに `rejected={id: 理由, ...}` も併せて渡す（`ed.drain_pending(accepted={...}, rejected={id: 理由})`）。承認も却下も無ければこの追加呼び出しは不要（pending のまま次回 evolve に持ち越される）。drain を忘れても次回 SessionStart のリマインドが保険になる（#402、ただし SessionStart hook は対話チャネルを持たず明示 accept を渡せないため記録はされない — リマインド表示のみ）。`accepted >= 1` なら「fitness 母集団に +N 件記録 ✓」と1行 surface する。
 → 設計根拠（#400/#484/#494）・drain サマリの読み方・result-json 運搬の詳細は **[references/housekeeping.md](references/housekeeping.md)**。
 
 ### Step 8: Fitness Evolution — 評価関数の改善チェック
