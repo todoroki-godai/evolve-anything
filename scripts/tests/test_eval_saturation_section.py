@@ -66,7 +66,12 @@ def test_registered_in_observability_contract():
 
 
 def test_collect_observability_surfaces_eval_saturation(tmp_path, monkeypatch):
-    """collect_observability 経由でも eval_saturation key が立つ（両経路伝播）。"""
+    """collect_observability 経由でも eval_saturation key が立つ（両経路伝播）。
+
+    eval_saturation は #379 Step 2 で表示淘汰対象になったため、raw 配線を見るには
+    EVOLVE_SHOW_CULLED=1 が必要（淘汰そのものの挙動は test_observability_display_cull.py）。
+    """
+    monkeypatch.setenv("EVOLVE_SHOW_CULLED", "1")
     _patch(monkeypatch, {"applicable": True, "evaluated": 2, "saturated": []})
     result = collect_observability(tmp_path)
     assert "eval_saturation" in result

@@ -159,6 +159,62 @@ FROZEN_WEAK_SIGNAL_CHANNELS: FrozenSet[str] = frozenset(
 )
 
 
+# #379 Step 2「表示淘汰」の単一ソース。人間の行動（accept/reject 等）に繋がった実証の
+# ない observability section を audit の**表示からのみ**外す（コードは削除しない・builder も
+# _OBSERVABILITY_BUILDERS に登録されたまま）。除外は audit/observability.py の
+# collect_observability() が本集合を参照してループ内 skip するだけで、ここに列挙した
+# key は他のどこからも import 削除されない。解除は本集合から key を除くだけでよい
+# （skill 自体の削除・非活性化ではない）。
+#
+# 対象は FROZEN_OBSERVABILITY_SECTIONS（44 キー）から下記 KEEP 9 件を除いた全 35 件
+# （2026-08-04 ユーザー合意 #379）。KEEP 9: weak_signals / correction_capture /
+# skill_triage / skill_reachability / doc_budget / icebox_reconcile /
+# advisory_decisions / skill_vuln / invalid_frontmatter。
+#
+# エスケープハッチ: 環境変数 ``EVOLVE_SHOW_CULLED=1`` で一時的に全表示へ戻せる
+# （collect_observability が call-time に os.environ を読む・Step 3 の棚卸しや
+# デバッグ用）。
+CULLED_OBSERVABILITY_SECTIONS: FrozenSet[str] = frozenset(
+    {
+        "agent_team",
+        "agent_tier",
+        "backup_files",
+        "belief_blocks",
+        "calibration_drift",
+        "duplicate_skill_names",
+        "eval_saturation",
+        "fanout_cost",
+        "global_claude_md",
+        "global_hook_plugin_dup",
+        "glossary_drift",
+        "hook_drift",
+        "judge_audit",
+        "measurement_bug",
+        "memory_capability",
+        "memory_contagion",
+        "memory_contamination",
+        "memory_dup_residue",
+        "memory_index_orphan",
+        "memory_schema",
+        "missing_skill_md",
+        "multiview_eval",
+        "negative_transfer",
+        "orphan_store",
+        "outcome_metrics",
+        "paired_trajectory",
+        "promotion_readiness",
+        "self_contamination",
+        "store_contract",
+        "subagent_noise",
+        "subagent_traces",
+        "testpaths_coverage",
+        "unmanaged_pitfalls",
+        "verbosity",
+        "worker_takeoff",
+    }
+)
+
+
 class FreezeViolationError(AssertionError):
     """凍結中に新設を検出したときの例外。
 

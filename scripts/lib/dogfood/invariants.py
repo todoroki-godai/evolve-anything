@@ -38,8 +38,10 @@ _GLOBAL_SUFFIX = "_all_pj"
 # - constitutional: _surface_constitutional_status()（cache stale/未生成アラート）
 # - remediation_batch_skip: build_remediation_batch_skip_observability()（evolve result が引数）
 # - remediation_fix_targets: build_fix_targets_observability()（remediation phase 結果が引数・#306）
+# - display_cull: collect_observability() 自身が書く #379 Step 2 表示淘汰の 1 行 meta
+#   （builder registry 由来ではなく collect_observability の skip ループが直接生成する）
 _EVOLVE_ONLY_OBSERVABILITY_KEYS: frozenset = frozenset(
-    {"constitutional", "remediation_batch_skip", "remediation_fix_targets"}
+    {"constitutional", "remediation_batch_skip", "remediation_fix_targets", "display_cull"}
 )
 
 

@@ -140,8 +140,15 @@ def generate_report(
         from .observability import collect_observability
 
         observability = collect_observability(project_dir)
+        # #379 Step 2: display_cull は「淘汰した事実そのもの」の 1 行 meta なので、
+        # 通常セクションの clean/watch 折り畳み判定（fold_clean_observability）を経由させず
+        # 常に展開表示する（畳むとセクション名しか見えず本文が埋もれるため）。
+        display_cull_lines = observability.pop("display_cull", None)
         expanded, obs_clean_names, obs_watch_names = fold_clean_observability(observability)
         obs_critical_count = len(observability) - len(obs_clean_names) - len(obs_watch_names)
+        if display_cull_lines:
+            lines.extend(display_cull_lines)
+            lines.append("")
         lines.extend(expanded)
         lines.extend(build_clean_fold_line(obs_clean_names, obs_watch_names))
 

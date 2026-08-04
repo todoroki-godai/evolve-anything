@@ -29,6 +29,8 @@
 - /x/skill.md: 600/500 lines
 → `/evolve-anything:evolve` Step4 または手動分割で対処。800行超（分割必須）を優先する。
 
+ℹ 表示淘汰中: 35 section（#379 Step 2・コード非削除・EVOLVE_SHOW_CULLED=1 で一時表示）
+
 ## Usage (last 30 days)
 - foo: 3 invocations
 - bar: 1 invocations
