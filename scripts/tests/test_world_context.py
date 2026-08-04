@@ -361,6 +361,43 @@ def test_cli_save_from_response_saves_and_prints(
     assert parsed["protagonist_title"] == "魔法使い"
 
 
+def test_cli_save_from_response_narration_matches_total_evolve_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """初回生成直後のナレーションが total_evolve_count と一致する（#325 off-by-one）。
+
+    save_world_context は呼び出し時に total_evolve_count を +1 済みで返す
+    （初回は 0→1）。それを再度 _print_ctx が +1 する二重加算で「#2」と表示され
+    JSON の total_evolve_count: 1 と食い違っていた。
+    """
+    data_dir = tmp_path / "evolve-anything"
+    resp = _write_response(tmp_path, _VALID_WORLD)
+    ret = main([
+        "--save-from-response",
+        "--response", str(resp),
+        "--slug", "test-slug",
+        "--data-dir", str(data_dir),
+    ])
+    assert ret == 0
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed["total_evolve_count"] == 1
+    assert f"#{parsed['total_evolve_count']} の冒険が始まる" in captured.err
+
+
+def test_cli_load_narration_previews_upcoming_adventure_number(
+    tmp_data_dir: Path, sample_world: dict, capsys: pytest.CaptureFixture
+) -> None:
+    """--load はまだ実行前のため、次回の冒険番号（count+1）をプレビュー表示する。
+
+    sample_world fixture は total_evolve_count=3 で world-context.json を先行書込する。
+    """
+    ret = main(["--load", "--data-dir", str(tmp_data_dir)])
+    assert ret == 0
+    captured = capsys.readouterr()
+    assert "#4 の冒険が始まる" in captured.err
+
+
 def test_cli_save_from_response_missing_world_uses_default(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
