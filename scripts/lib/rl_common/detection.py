@@ -52,11 +52,35 @@ CORRECTION_PATTERNS = {
     "leave-alone": {"pattern": r"(?i)leave .{1,30} (?:alone|unchanged|as is)", "confidence": 0.85, "type": "guardrail", "decay_days": 90},
     "dont-add-annotations": {"pattern": r"(?i)don't (?:add|include) (?:comments|docstrings|type hints|annotations) (?:unless|to code)", "confidence": 0.85, "type": "guardrail", "decay_days": 90},
     "minimal-changes": {"pattern": r"(?i)(?:minimal|minimum|only necessary) changes", "confidence": 0.80, "type": "guardrail", "decay_days": 90},
-    "iya": {"pattern": r"^いや[、,.\s]|^いや違", "confidence": 0.85, "type": "correction", "decay_days": 90},
+    # 「いやいや」「いやいやいや」等の反復強調も同義（#336）。文頭アンカー + 区切り文字は
+    # 従来どおりで偽陽性リスクは変えない（{1,3} は暴走防止の保守的な上限）。
+    "iya": {"pattern": r"^(いや){1,3}[、,.\s]|^いや違", "confidence": 0.85, "type": "correction", "decay_days": 90},
     # ひらがな表記「ちがう」も同義（#305 の実コーパス目視で "ちがうちがう、…" が未検出だった）。
     # 文頭アンカー付きなので偽陽性リスクは漢字版と同等。
     "chigau": {"pattern": r"^違う[、，,.\s]|^ちがう", "confidence": 0.85, "type": "correction", "decay_days": 90},
     "souja-nakute": {"pattern": r"そうじゃなく[てけ]", "confidence": 0.80, "type": "correction", "decay_days": 90},
+    # 以下4パターンは #336（実コーパス 250 件目視で拾えていなかった典型表現）。
+    # 「引用マーカー（って/と）+ 言った/いった + のに/けど」＝ I-told-you の日本語相当。
+    # 引用マーカーを要求することで「うまくいったのに」（行く＝行った）等の同形異義語との
+    # 衝突を避ける（引用マーカー無しの「いった」は対象外）。
+    "itte-noni": {"pattern": r"(って|と)(言|い)った(のに|けど)", "confidence": 0.85, "type": "correction", "decay_days": 120, "strong": True},
+    # 「指摘した/あげた + のに/けど」＝ itte-noni と同系だが動詞が異なるため別パターン。
+    # 「けど」は日本語では逆接だけでなく単なる話題転換の軽い接続にも使われるため、単独では
+    # 過検出する（実測: 「何度も指摘したけど、その内容をスキルにまとめたい」という新規
+    # タスク依頼を誤検出した）。「のに」は逆接の意味が強く単独で許容するが、「けど」は
+    # 直後に不履行を示す語（何も/まだ/全然/一切 + 否定）を伴う場合のみ許容する。
+    "shiteki-noni": {"pattern": r"指摘(した|あげた)(のに|けど.{0,15}(何も|まだ|全然|一切))", "confidence": 0.85, "type": "correction", "decay_days": 120, "strong": True},
+    # 「依頼していないことへの訂正」＝「〜って言ってないんだよね」。
+    "itte-nai-yone": {"pattern": r"(言って|いって)(い)?ない.{0,6}(んだ)?よ?ね", "confidence": 0.75, "type": "correction", "decay_days": 90},
+    # 「品質ミスの追及」＝「なんで/なぜ + 失敗・見落としを示す語」（語順が逆の「〜できて
+    # ないのはなんで？」も別枝で許容）。素朴な質問（例:「なぜ今熱いのか」）や、失敗語を
+    # 含む無関係な語が偶然近くにある場合（実測: 設計テンプレの「各 fix に「なぜ」+
+    # 見落としリスク」を誤検出）と区別するため、(a) なんで/なぜ と失敗語の間に文区切り
+    # （。！？「」改行）を挟まない、(b) 具体的な失敗語を伴う、の2条件に限定する。
+    "naze-dekinakatta": {"pattern": r"(なんで|なぜ)[^。！？!?「」\n]{0,20}(でき(なかった|てない|ていない|てなかった)|くぐりぬけ|くぐり抜け|見落と|漏れ(て|た)|し(なかった|てない|ていない)|変(え|わ)って?(い)?ない|直って?(い)?ない)|(でき(なかった|てない|ていない|てなかった)|くぐりぬけ|くぐり抜け|見落と|漏れ(て|た)|し(なかった|てない|ていない)|変(え|わ)って?(い)?ない|直って?(い)?ない)[^。！？!?「」\n]{0,15}のは(なんで|なぜ)", "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True},
+    # 「出力そのものへの異議」＝「勘違いしている？／していない？」。過去形「勘違いだったかも」
+    # （自己の勘違いの撤回）とは区別するため、現在形 + 疑問符終端に限定する。
+    "kanchigai-question": {"pattern": r"勘違い(して)?(い)?(る|ない)[？?]", "confidence": 0.75, "type": "correction", "decay_days": 90},
     "perfect": {"pattern": r"(?i)perfect!|exactly right|that's exactly", "confidence": 0.70, "type": "positive", "decay_days": 90},
     "great-approach": {"pattern": r"(?i)that's what I wanted|great approach", "confidence": 0.70, "type": "positive", "decay_days": 90},
     "keep-doing": {"pattern": r"(?i)keep doing this|love it|excellent|nailed it", "confidence": 0.70, "type": "positive", "decay_days": 90},
@@ -70,9 +94,14 @@ CORRECTION_PATTERNS = {
     "actually": {"pattern": r"(?i)^actually[,. ]", "confidence": 0.55, "type": "correction", "decay_days": 45},
 }
 
+# 疑問符終端フィルタ。詰問形のバイパス（#336・下の _bypasses_question_mark_filter）が
+# 名指しで参照するため、リスト内の位置に依存しない名前付き定数として切り出す
+# （添字参照だと並べ替えた瞬間に別のフィルタをバイパスする silent drift になる）。
+QUESTION_MARK_FILTER = r"[？\?]$"
+
 # 偽陽性フィルター
 FALSE_POSITIVE_FILTERS = [
-    r"[？\?]$",
+    QUESTION_MARK_FILTER,
     r"(?i)^(please|can you|could you|would you|help me)\b",
     r"(?i)(help|fix|check|review|figure out|set up)\s+(this|that|it|the)\b",
     r"(?i)(error|failed|could not|cannot|can't|unable to)\s+\w+",
@@ -80,6 +109,39 @@ FALSE_POSITIVE_FILTERS = [
     r"(?i)^I (need|want|would like)\b",
     r"(?i)^(ok|okay|alright)[,.]?\s+(so|now|let)",
 ]
+
+# #336: 先頭の疑問符終端フィルタ（末尾が ? / ？ なら無条件除外）は素朴な質問には有効だが、
+# 「なんで/なぜ + 失敗語」「勘違いしている？」「〜って言ったのに/けど」のような**詰問形**
+# （既遂を前提に相手の理解・実行を問い詰める文）も疑問符で終わるため構造的に落ちる（issue
+# 本文の実測: 「〜勘違いしている？」「なんで〜できなかったの？」「何も変更していない？」は
+# いずれも疑問符終端）。この4パターンに限り疑問符終端フィルタをバイパスする。
+#
+# 対象を全 CORRECTION_PATTERNS に広げない（英語 "no, is that right?" 等、素朴な疑問文が
+# 既存パターンに偶然マッチするケースまでバイパスすると疑問符フィルタの本来の役目
+# ＝素朴な質問の除外が壊れる。test_question_mark_ascii 参照）。
+#
+# パターン本体は CORRECTION_PATTERNS を単一ソースにし、ここではキー一覧だけを持つ
+# （別の正規表現をここに複製すると drift する。pitfall_copied_parse_convention_partial_fix
+# / #40 と同型のリスク）。
+_REPROACH_OVERRIDE_KEYS = ("naze-dekinakatta", "kanchigai-question", "itte-noni", "shiteki-noni")
+
+
+def _bypasses_question_mark_filter(text: str) -> bool:
+    """詰問形パターンにマッチするか（疑問符終端フィルタの対象外か）を判定する（#336）。"""
+    for key in _REPROACH_OVERRIDE_KEYS:
+        pattern = CORRECTION_PATTERNS[key]["pattern"]
+        if re.search(pattern, text) or re.search(pattern, text.lower()):
+            return True
+    return False
+
+
+# リテラルマッチャ（このモジュール）と llm_judge チャネル（correction_semantic/）の線引き
+# （#336 次アクション3）: このモジュールは固定の語彙・文法パターン（否定語の文頭アンカー・
+# 引用マーカー付き再掲・疑問符終端の詰問形 等）のみを決定論で検出する。語彙マーカーを
+# 伴わない暗黙の異議（皮肉・婉曲な言い換え要求・文脈依存の是非判断）は正規表現で拾うと
+# 過検出が避けられないため対象外とし、`correction_semantic/`（utterances.db → Haiku 意味
+# 判定 → weak_signals channel=llm_judge）に委ねる。新パターンを足す際は「文字列だけで
+# 判定基準を説明できるか」を目安に、説明できなければ llm_judge 側の較正課題として起票する。
 
 _MAX_CAPTURE_PROMPT_LENGTH = 500
 _MIN_SHORT_CORRECTION_LENGTH = 80
@@ -211,14 +273,26 @@ def calculate_confidence(base_confidence: float, text: str, matched_count: int =
     return (confidence, decay_days)
 
 
+def _fails_false_positive_filters(text_stripped: str) -> bool:
+    """偽陽性フィルタに引っかかるか判定する（detect_correction / detect_all_patterns 共有）。
+
+    重複実装すると片側だけ改修して desync する（#40 と同型のリスク）ため単一関数に集約する。
+    """
+    for fp in FALSE_POSITIVE_FILTERS:
+        if fp == QUESTION_MARK_FILTER and _bypasses_question_mark_filter(text_stripped):
+            continue
+        if re.search(fp, text_stripped) or re.search(fp, text_stripped.lower()):
+            return True
+    return False
+
+
 def detect_correction(text: str):
     """テキストから修正パターンを検出する（最初のマッチのみ）。"""
     text_stripped = text.strip()
     if not text_stripped:
         return None
-    for fp in FALSE_POSITIVE_FILTERS:
-        if re.search(fp, text_stripped) or re.search(fp, text_stripped.lower()):
-            return None
+    if _fails_false_positive_filters(text_stripped):
+        return None
     # FALSE_POSITIVES_FILE 系は __init__.py に残置のため動的 lookup
     import rl_common as _root
     fp_hashes = _root.load_false_positives()
@@ -236,9 +310,8 @@ def detect_all_patterns(text: str) -> list[str]:
     text_stripped = text.strip()
     if not text_stripped:
         return []
-    for fp in FALSE_POSITIVE_FILTERS:
-        if re.search(fp, text_stripped) or re.search(fp, text_stripped.lower()):
-            return []
+    if _fails_false_positive_filters(text_stripped):
+        return []
     matched = []
     for key, info in CORRECTION_PATTERNS.items():
         pattern = info["pattern"]
@@ -374,3 +447,28 @@ def detect_takeoff_divergence(last_assistant_message):
     no_signature = not _takeoff_has_completion_signature(text)
     forward_ending = _takeoff_ends_with_forward_narration(text)
     return no_signature and forward_ending
+
+
+# CC 組み込みスラッシュコマンド（`<command-name>` に現れるが SKILL.md を持たない）の
+# 単一ソース（#333）。skill_extractor.trajectory_sampler（session 採掘）と
+# discover.runner（候補判定）が別々のリテラルで持っていたため内容が食い違い、
+# 両方に無かった `/effort` が CREATE 候補としてすり抜けていた（copied-parse-convention
+# pitfall と同型・#40）。新しい CC バージョンで組み込みが増えたらここに追記する
+# （両 call site とも import するので二重更新は不要）。
+#
+# 収録方針: 「漏れ」は組み込みコマンドが CREATE 候補ノイズとして triage 母集団を汚すが、
+# 「入れすぎ」のコストはほぼゼロ（同名の既存スキルは _is_already_existing_skill が別途
+# 除外し、組み込みと同名の新規スキルはそもそも CC 側で衝突する）。よって迷ったら入れる。
+# 下段は v2.1.221 の実バイナリ文字列で実在を確認した分（#333 レビュー時に追加）。
+CC_BUILTIN_COMMANDS = frozenset({
+    "add-dir", "agents", "bug", "clear", "compact", "config", "cost",
+    "doctor", "effort", "fast", "help", "init", "login", "logout", "loop",
+    "mcp", "memory", "model", "permissions", "plugin", "reload-plugins",
+    "rename", "resume", "status", "terminal-setup", "vim",
+    # v2.1.221 実測分
+    "allowed-tools", "bashes", "cd", "code-review", "context", "exit",
+    "export", "fork", "hooks", "ide", "install-github-app", "output-style",
+    "privacy-settings", "quit", "release-notes", "rewind", "security-review",
+    "statusline", "theme", "todos", "ultrareview", "upgrade", "usage",
+    "workflows",
+})

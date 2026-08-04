@@ -7,6 +7,7 @@
 
 ### Fixed
 - **fix(subagent_traces): 一発成功率の表示定義を是正しエラー内訳を追加（#342）** — `sections_subagent_traces` の advisory 表示ラベル「内部一発成功率」は、実体が「1 回の subagent 実行で呼んだ tool のうち is_error が 1 件も無かった率」＝呼び出し回数に強く依存する構造的な値であり、実装品質の指標に誤読されていた（1 回あたりのエラー率が一定でも呼び出し回数が増えるほど値が指数的に下がる）。表示ラベルを「tool-エラー0率（呼び出し回数依存の指標）」に是正し、⚠ の閾値説明・blurb にも同旨の注意書きを追加した。あわせて `extractor.extract_trace` が tool_use の `id` と tool_result の `tool_use_id` を突合し、エラー発生 tool の名前別内訳を `tool_errors` として記録（TRACE_VERSION 3、旧レコードは欠損を空 dict として graceful に扱う後方互換）。`per_agent_type_summary` が agent_type 単位で `tool_errors` を合算し、audit advisory が上位 5 件のエラー内訳を surface（エラー 0 件の agent_type は沈黙）。低い値を見ても「本当に無駄な失敗」か「意図された非ゼロ exit」かを事後分離できる手がかりを与える（内訳の主観分類自体はスコープ外）。
+- **fix(daily): SessionStart notice の freshness gate を共通化（#351）** — `icebox_notice.build_icebox_notice()` / `queue_notice.build_queue_notice()` が独立に持っていた「`generated_at` を検証せず業務値（count/oldest_days/queue 内容）を先に判定する」穴を `daily/freshness.py`（新設・単一ソース）へ集約。評価順序を (a) `generated_at` の鮮度判定 → (b) STALE/UNKNOWN なら業務値を一切解釈せず旧値を併記しない health notice → (c) FRESH のときだけ業務値評価、に固定した。producer が最後に「空 queue」や「閾値未満の値」を書いた直後に停止すると恒久的に沈黙していた回帰（22 回連続 fail-open が気づかれなかった原因）を解消し、そのケースでも stale 通知が出るようにした。`oldest_days=0` 等の正当な業務値の 0 と `generated_at` 判定不能（欠落・parse 不能・未来日時・tz 無し）を型的に区別する（前者は `age_days=int`、後者は `None`）。
 
 ## [1.124.1] - 2026-07-31
 

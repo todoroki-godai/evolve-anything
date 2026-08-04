@@ -142,6 +142,32 @@ def test_enqueue_different_windows_both_kept(tmp_data_dir):
     assert len(amb.read_queue("slug", tmp_data_dir)) == 2
 
 
+def test_queue_path_for_defaults_to_rl_common_data_dir(tmp_data_dir, monkeypatch):
+    """data_dir 省略時は call-time の rl_common.DATA_DIR を既定解決する（#325）。
+
+    module-level に `X = rl_common.DATA_DIR` とコピーすると import 時点で固定され
+    monkeypatch/env に追従しない既知 pitfall があるため、call-time 参照を検証する。
+    """
+    import rl_common
+
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_data_dir)
+    path = amb.queue_path_for("myslug")
+    assert path == tmp_data_dir / amb.QUEUE_SUBDIR / "myslug.jsonl"
+
+    # 別値に差し替えても再度 call-time で追従する（import 時固定でないことの確認）
+    other_dir = tmp_data_dir.parent / "other-data-dir"
+    monkeypatch.setattr(rl_common, "DATA_DIR", other_dir)
+    path2 = amb.queue_path_for("myslug")
+    assert path2 == other_dir / amb.QUEUE_SUBDIR / "myslug.jsonl"
+
+
+def test_queue_path_for_explicit_data_dir_still_wins(tmp_data_dir):
+    """明示 data_dir 指定時は従来通りそれを使う（後方互換）。"""
+    other_dir = tmp_data_dir.parent / "explicit-data-dir"
+    path = amb.queue_path_for("myslug", other_dir)
+    assert path == other_dir / amb.QUEUE_SUBDIR / "myslug.jsonl"
+
+
 def test_read_queue_dedups_appended_duplicates(tmp_data_dir):
     """append race で同 key が複数行入っても read_queue は1件に collapse する。"""
     path = amb.queue_path_for("slug", tmp_data_dir)

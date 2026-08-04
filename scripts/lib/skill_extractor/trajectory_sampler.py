@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from rl_common.detection import is_machinery_prompt as _is_machinery_prompt
+from rl_common.detection import CC_BUILTIN_COMMANDS as _BUILTIN_COMMANDS
 
 # ── 定数 ──────────────────────────────────────────────────
 
@@ -25,24 +26,9 @@ DEFAULT_MAX_FILES = 50
 # <command-name> タグから skill 名を取り出す正規表現
 _COMMAND_NAME_RE = re.compile(r"<command-name>([^<]+)</command-name>")
 
-# ビルトインコマンド（スキルではない）
-_BUILTIN_COMMANDS = frozenset([
-    "compact",
-    "rename",
-    "reload-plugins",
-    "plugin",
-    "clear",
-    "help",
-    "resume",
-    "init",
-    "config",
-    "memory",
-    "logout",
-    "login",
-    "status",
-    "vim",
-    "doctor",
-])
+# ビルトインコマンド（スキルではない）の判定は rl_common.detection.CC_BUILTIN_COMMANDS が
+# 単一ソース（#333・discover.runner と共有）。ここでは _BUILTIN_COMMANDS の名前だけ
+# エイリアスとして残し、下の call site を変更せずに済ませる。
 
 
 # ── データクラス ──────────────────────────────────────────

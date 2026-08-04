@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from audit.artifacts import find_project_skill_dirs  # (#325) 単一ソース化: skill_evolve と同じ実ディスク走査
 from meta_quality import meta_quality_check  # noqa: E402  # (#203)
 import triage_ledger  # noqa: E402  # (#308) SKIP 判断の TTL・再発カウンタ
 from similarity import jaccard_coefficient, tokenize
@@ -405,6 +406,20 @@ def triage_all_skills(
         }
     """
     skill_triggers_list = extract_skill_triggers(project_root=project_root)
+
+    # 発見ロジックの単一ソース化 (#325): CLAUDE.md の Skills テーブルをパースする
+    # extract_skill_triggers のみに頼ると、同一 run の skill_evolve
+    # （skill_evolve_assessment → audit.find_artifacts が実ディスクの
+    # `.claude/skills/*/SKILL.md` を走査）が N 件評価しているのに、CLAUDE.md 側の
+    # 見出し・テーブル形式が想定と違うだけで triage が no_skills_found を返す矛盾が
+    # 起きていた。find_project_skill_dirs で同じ実ディスク走査を行い、CLAUDE.md 未宣言の
+    # スキルもトリガーワード=スキル名のフォールバックで評価対象に加える。
+    proj_for_discovery = project_root or Path.cwd()
+    declared_names = {entry["skill"] for entry in skill_triggers_list}
+    disk_names = set(find_project_skill_dirs(proj_for_discovery))
+    for name in sorted(disk_names - declared_names):
+        skill_triggers_list.append({"skill": name, "triggers": [name]})
+
     if not skill_triggers_list:
         return _empty_result(reason="no_skills_found")
 

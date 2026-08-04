@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from rl_common.detection import CC_BUILTIN_COMMANDS as _CC_BUILTIN_COMMANDS
+
 
 def _project_transcript_dir(project_root: Path) -> Path:
     """project_root を CC のエンコード規則で ~/.claude/projects/<encoded> に変換する。
@@ -41,13 +43,9 @@ def _existing_skill_names(project_root: Path) -> set:
 
 
 # CC 組み込みスラッシュコマンド（`<command-name>` に現れるが SKILL.md を持たない）。
-# skill_extractor が採掘するため CREATE 候補から除外する。CC のバージョンアップで
-# 組み込みが増えたらここに追記する。
-_CC_BUILTIN_COMMANDS = frozenset({
-    "loop", "model", "compact", "clear", "help", "cost", "init", "config",
-    "doctor", "status", "resume", "memory", "permissions", "mcp", "agents",
-    "fast", "vim", "login", "logout", "add-dir", "bug", "terminal-setup",
-})
+# skill_extractor が採掘するため CREATE 候補から除外する。判定は
+# rl_common.detection.CC_BUILTIN_COMMANDS が単一ソース（#333・trajectory_sampler と共有）。
+# ここでは _CC_BUILTIN_COMMANDS の名前だけエイリアスとして残す。
 
 
 def _is_already_existing_skill(name: str, known_skills) -> bool:

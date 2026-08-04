@@ -122,6 +122,60 @@ def _print_skill_reachability_advisory(advisory: Dict[str, Any]) -> None:
         print(f"    ・`{u['name']}()`（宣言: {u['source']}:{u['line']} / 定義: {', '.join(u['def_files'])}）")
 
 
+def _run_doc_budget_advisory(repo_root: Path) -> Dict[str, Any]:
+    """hot ドキュメント（SPEC.md/CLAUDE.md/spec/**.md）の byte/セクション/ポインタ予算の
+    非ブロッキング advisory（#319）。SPEC.md が 41KB まで肥大してから初めて気づいた（#318）
+    再発防止の pre-push 面。skill_reachability advisory と同様 exit code に一切影響しない。
+    """
+    try:
+        import doc_budget
+    except ImportError:
+        return {"applicable": False}
+    report = doc_budget.check_doc_budget(repo_root)
+    return {
+        "applicable": report.applicable,
+        "file_findings": [
+            {
+                "path": f.path,
+                "byte_size": f.byte_size,
+                "must_bytes": f.must_bytes,
+                "healthy_bytes": f.healthy_bytes,
+                "severity": f.severity,
+            }
+            for f in report.file_findings
+        ],
+        "section_findings": [
+            {"file": s.file, "heading": s.heading, "byte_size": s.byte_size, "pct": s.pct}
+            for s in report.section_findings
+        ],
+        "pointer_findings": [
+            {"source_file": p.source_file, "link_text": p.link_text, "raw_target": p.raw_target, "kind": p.kind}
+            for p in report.pointer_findings
+        ],
+    }
+
+
+def _print_doc_budget_advisory(advisory: Dict[str, Any]) -> None:
+    print("=== Advisory: Doc Budget（非ブロッキング, #319） ===")
+    if not advisory.get("applicable"):
+        print("  — 非該当（SPEC.md/CLAUDE.md 無し、または doc_budget 未解決）")
+        return
+    file_findings = advisory.get("file_findings", [])
+    section_findings = advisory.get("section_findings", [])
+    pointer_findings = advisory.get("pointer_findings", [])
+    if not (file_findings or section_findings or pointer_findings):
+        print("  ✓ 評価したが該当なし（byte/セクション/ポインタ予算は健全）")
+        return
+    for f in file_findings:
+        mark = "⚠" if f["severity"] == "must" else "ℹ"
+        print(f"  {mark} {f['path']}: {f['byte_size']:,} bytes（{f['severity']} 閾値超過）")
+    for s in section_findings:
+        print(f"  ℹ 肥大セクション {s['file']} #{s['heading']}: {s['byte_size']:,} bytes（{s['pct']:.1f}%）")
+    for p in pointer_findings:
+        kind_label = "リンク先ファイル不在" if p["kind"] == "missing_file" else "アンカー不在"
+        print(f"  ⚠ {p['source_file']}: [{p['link_text']}]({p['raw_target']}) — {kind_label}")
+
+
 def _layer2_has_red(l2: Dict[str, Any]) -> bool:
     if l2.get("error"):
         return True
@@ -192,6 +246,8 @@ def main(argv: List[str] | None = None) -> int:
 
         # 非ブロッキング advisory（#191）: exit_red / exit_error に一切加算しない。
         report["skill_reachability"] = _run_skill_reachability_advisory(repo_root)
+        # 非ブロッキング advisory（#319）: hot ドキュメントの byte/セクション/ポインタ予算。
+        report["doc_budget"] = _run_doc_budget_advisory(repo_root)
 
     if args.json:
         out = json.dumps(report, ensure_ascii=False, indent=2)
@@ -205,6 +261,8 @@ def main(argv: List[str] | None = None) -> int:
             _print_layer3(report["layer3"])
         if "skill_reachability" in report:
             _print_skill_reachability_advisory(report["skill_reachability"])
+        if "doc_budget" in report:
+            _print_doc_budget_advisory(report["doc_budget"])
 
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)

@@ -17,7 +17,7 @@ git log --oneline --since="$(git log -1 --format=%ci -- SPEC.md)" \
 |---------|---------|----------------|
 | **A: Architecture** | 新モジュール、ディレクトリ構造変更、大規模リファクタ | Architecture + API セクション要更新 |
 | **B: API/Interface** | 新コマンド、パラメータ変更、新スキル追加 | API/Capabilities セクション要更新 |
-| **C: 内部改善** | パフォーマンス、内部リファクタ、バグ修正 | 反映不要（Recent Changes のみ） |
+| **C: 内部改善** | パフォーマンス、内部リファクタ、バグ修正 | SPEC.md は反映不要（CHANGELOG.md にのみ記載・#318） |
 
 ## R1-2: セクション単位の突合と更新
 
@@ -32,7 +32,7 @@ Step 1 の突合表で **差分があるセクションを優先的に更新** �
 | Architecture（fitness） | `ls scripts/rl/fitness/*.py` | SPEC.md の適応度関数一覧と diff |
 | API/Interface / Capabilities | `ls -d skills/*/` | SPEC.md のスキルコマンド表と diff |
 | Design Decisions | `ls docs/decisions/*.md` | SPEC.md の ADR 件数・リンクと diff |
-| Recent Changes | git log | 直近5件に絞る、古い項目は CHANGELOG.md へ移動 |
+| Recent Changes | — | 突合対象外。CHANGELOG.md が単一ソースで SPEC.md はポインタのみ（#318） |
 | Overview | CLAUDE.md | 差分検出不可、意味的に確認 |
 | 用語集（CONTEXT.md） | `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/glossary_drift.py" CONTEXT.md SPEC.md CLAUDE.md` | 構造 drift は exit 1。advisory は未登録 jargon |
 | Limitations / Next | コード観察 | 差分検出不可、意味的に確認 |

@@ -313,6 +313,38 @@ class TestTriageAllSkills:
         all_actions = result["CREATE"] + result["UPDATE"] + result["SPLIT"] + result["MERGE"] + result["OK"]
         assert len(all_actions) > 0
 
+    def test_filesystem_skills_without_claude_md_declaration_not_skipped(self, sessions, usage, tmp_path):
+        """CLAUDE.md に Skills セクションが無くても実ファイルの custom skill は評価対象に含める（#325）。
+
+        skill_evolve（skill_evolve_assessment → audit.find_artifacts）は実ディスクの
+        `.claude/skills/*/SKILL.md` を走査してスキルを発見するが、skill_triage は
+        CLAUDE.md の Skills テーブルをパースする extract_skill_triggers のみに依存していた。
+        CLAUDE.md にテーブルが無い（見出しが「## Skills」形式でない等）だけで
+        skill_triage が no_skills_found にスキップするのは、同一 run で skill_evolve が
+        件数を評価している事実と矛盾する。
+        """
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("# No skills section here\n")
+
+        skills_dir = tmp_path / ".claude" / "skills"
+        for name in ("aws-cdk-deploy", "channel-routing", "commit"):
+            skill_dir = skills_dir / name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(f"# {name}\n")
+
+        result = triage_all_skills(
+            sessions=sessions,
+            usage=usage,
+            missed_skills=[],
+            project_root=tmp_path,
+        )
+
+        assert not result["skipped"]
+        assert result["reason"] is None
+        all_actions = result["CREATE"] + result["UPDATE"] + result["SPLIT"] + result["MERGE"] + result["OK"]
+        evaluated_skills = {a.get("skill") for a in all_actions}
+        assert {"aws-cdk-deploy", "channel-routing", "commit"} <= evaluated_skills
+
     def test_review_and_skip_actions_have_buckets(self, sessions, usage, tmp_path, monkeypatch):
         """triage_skill が SKIP/REVIEW を返しても result バケツが在り KeyError しない（回帰）。
 
