@@ -192,8 +192,12 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
                 body.append(f'      └ 直近の委任: "{excerpt}"')
 
             # #342: エラー発生 tool の名前別内訳（上位 TOOL_ERROR_BREAKDOWN_MAX 件）。
-            # tool_errors が空（エラー0 or 旧レコードで未計測）の agent_type は省略する
-            # （数字だけ出して判断を誤らせない — evidence が無いなら沈黙する）。
+            #
+            # 「エラー0 だから内訳が空」と「旧レコード（TRACE_VERSION 2 以前）で内訳を
+            # 採っていないから空」を**同一視しない**。ingest は agent_id dedup なので
+            # TRACE_VERSION を上げても既存レコードは再 ingest されず、当面は後者が支配的。
+            # 沈黙させると「エラーが無い」と誤読され、内訳を見て判断せよという上の
+            # 注意書き自体が空振りする（silence ≠ evaluated）。
             tool_errors = s.get("tool_errors") or {}
             if tool_errors:
                 top = sorted(tool_errors.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -203,6 +207,12 @@ def build_subagent_traces_section(project_dir: Path) -> Optional[List[str]]:
                 if remaining > 0:
                     dist += f"（他 {remaining} 種別）"
                 body.append(f"      └ エラー内訳（tool別）: {dist}")
+            elif ate > 0:
+                # エラーは起きているのに内訳が無い = 旧レコード。未計測を明示する。
+                body.append(
+                    "      └ エラー内訳（tool別）: 未計測"
+                    "（TRACE_VERSION 2 以前のレコード。以降の新規 trace から記録されます）"
+                )
 
             # #219: 実測 effort 分布（未計測=effort_counts 空なら省略）。
             dominant_effort = s.get("dominant_effort")

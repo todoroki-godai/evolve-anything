@@ -959,6 +959,24 @@ def test_section_handles_missing_tool_errors_field_gracefully(data_dir, monkeypa
     assert "└ エラー内訳（tool別）" not in joined
 
 
+def test_section_marks_unmeasured_when_old_record_has_errors(data_dir, monkeypatch):
+    """#342: エラーは起きているのに tool_errors が無い旧レコードは「未計測」と明示する。
+
+    ingest は agent_id dedup なので TRACE_VERSION を上げても既存レコードは再 ingest
+    されない。ここで沈黙すると「エラーが無い」と誤読され、内訳を見て判断せよという
+    section の注意書きが空振りする（silence != evaluated・#351 と同クラス）。
+    """
+    from audit import sections_subagent_traces as sec
+    monkeypatch.setattr(sec, "_slug_for", lambda p: "p")
+    for i in range(3):
+        # TRACE_VERSION 2 以前の形: tool_error_count はあるが tool_errors が無い
+        _tstore.write_trace({"agent_id": f"w{i}", "pj_slug": "p", "agent_type": "impl-worker",
+                             "first_try_success": False, "tool_error_count": 4})
+    out = sec.build_subagent_traces_section(Path("/x/p"))
+    joined = "\n".join(out)
+    assert "└ エラー内訳（tool別）: 未計測" in joined
+
+
 def test_section_tool_errors_breakdown_truncates_top_n_by_count(data_dir, monkeypatch):
     """#342: tool_errors 内訳は件数降順で上位 TOOL_ERROR_BREAKDOWN_MAX 件のみ表示し、
     残りは「他 N 種別」で件数だけ明示する（本文を長くしすぎない表示制約）。"""
