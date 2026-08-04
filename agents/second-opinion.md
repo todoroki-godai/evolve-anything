@@ -10,8 +10,10 @@ description: |
   使用例:
   - user: "このアイデアにセカンドオピニオンがほしい"
     assistant: "second-opinion エージェントで独立した見解を取得します。"
-  - user: "この設計案を別の視点でレビューして"
-    assistant: "second-opinion エージェントに独立レビューを依頼します。"
+  使わない場面:
+  - 会話の文脈を踏まえた技術相談は senpai / senior-engineer に振る。
+    このエージェントは会話履歴を持たず、渡されたコンテキストだけで判断する cold-read 専用。
+  - 実装の是非を指摘してほしい場合は tacchi（実態突合・過剰約束の検出）に振る。
 model: fable
 tier: REVIEW
 effort: high

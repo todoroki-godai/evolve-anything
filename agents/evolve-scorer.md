@@ -8,8 +8,9 @@ description: |
   使用例:
   - user: "このスキルのスコアを出して"
     assistant: "evolve-scorer エージェントで多角的に採点します。"
-  - user: "narrative-ux-writing の品質を評価して"
-    assistant: "evolve-scorer エージェントに評価を依頼します。"
+  使わない場面:
+  - エージェント定義の品質診断は agent-brushup に振る（対象がスキル/ルールでなくエージェント）。
+  - 環境全体の健康診断・スコアは /evolve-anything:audit に振る（対象が単体でなく環境）。
 model: haiku
 color: purple
 memory: project
