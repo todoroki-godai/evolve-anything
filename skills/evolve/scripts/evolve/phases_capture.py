@@ -203,7 +203,9 @@ def run_capture_phases(result: Dict[str, Any], ctx) -> None:
 
     # ── correction capture の二層化: バッチ LLM 意味判定の Phase A emit（#431）─────
     # utterances.db の dialogue 発話を Haiku 判定リクエストに変換（決定論・ここでは LLM 非呼び出し）。
-    # 実際の判定（Phase B）と weak_signals 隔離記録（Phase C）は SKILL.md 側が担う。
+    # 実際の判定（Phase B・SKILL.md Step 6.6 でインライン生成）と weak_signals 隔離記録
+    # （Phase C・ingest_judgement_results）は `evolve --drain --correction-responses <path>`
+    # の apply 境界で実効化する（#339。他の apply 系書込＝weak_signals_persisted 等と同型）。
     # dry_run でも emit（読み取りのみ）は走るが書き込みはしない。ここでは件数とトークン見積もりのみ。
     try:
         from correction_semantic import batch as _cs_batch
