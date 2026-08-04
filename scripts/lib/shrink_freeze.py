@@ -12,11 +12,29 @@ FROZEN_* は本モジュール実装時点（#379 Step 1 PR）の各レジスト
 凍結解除手順: 縮小完了・ユーザー判断確定時に ``SHRINK_FREEZE_ACTIVE`` を ``False`` に
 変更する（#379 参照）。解除後は本モジュールの契約テストが自動的に skip 相当（全 assert
 が no-op）になる。FROZEN_* の凍結スナップショット自体は解除後も履歴として残してよい。
+（test_shrink_freeze.py はこの解除手順の実行自体を機構テストで検証しており、フラグを
+False にしてもテスト自体は落ちない契約になっている。）
 
 消費側への注意（module-level import copy pitfall）: ``SHRINK_FREEZE_ACTIVE`` を
 ``from shrink_freeze import SHRINK_FREEZE_ACTIVE`` で import 時にコピーすると
 monkeypatch/テストの差し替えに追従しない（pitfall_module_level_datadir_import_copy と
 同型）。消費側は必ず ``shrink_freeze.is_frozen()``（call-time 参照）を使うこと。
+
+強制の実体（3層・各層の守備範囲は限定的）:
+  1. **CI（blocking）** — ``scripts/lib/tests/test_shrink_freeze.py`` が
+     ``.github/workflows/ci.yml`` の portable contract suite に配線済み。PR/push で
+     ``store_registry`` / ``audit.observability._OBSERVABILITY_BUILDERS`` /
+     ``advisory_proposals.ADVISORY_PROPOSAL_ADAPTERS`` /
+     ``weak_signals.channels.WEAK_SIGNAL_CHANNELS`` の live 集合を検証する唯一の
+     **実効ゲート**（赤で PR がブロックされる）。
+  2. **pre-push light（非ブロッキング早期警告）** — ``dogfood.cli._run_shrink_freeze_advisory``
+     が同じ4集合を push 前にローカルで先出しするが、exit code には一切影響しない
+     （skill_reachability / doc_budget advisory と同型）。push 自体は止めない。
+  3. **runtime ゲート（書込み境界）** — ``weak_signals.store.append_signals`` と
+     ``rl_common.store_write.store_write_raw``（正準 DATA_DIR 配下に限る）が凍結中の
+     未登録書込みを reject する。ただしこれは「weak_signal channel」と「store basename」
+     の2軸のみをカバーし、observability section / advisory proposal adapter の新設は
+     runtime では検出しない（コードレビューと CI 契約テストが頼り）。
 """
 from __future__ import annotations
 
