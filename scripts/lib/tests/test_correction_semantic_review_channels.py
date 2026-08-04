@@ -37,6 +37,17 @@ def test_content_poor_disjoint_from_review():
     assert rc.REVIEW_CHANNELS.isdisjoint(rc.CONTENT_POOR_CHANNELS)
 
 
+def test_classified_channels_are_subset_of_producer_canonical_set():
+    """review_channels.py の分類集合（消費側）は producer 側正準集合の部分集合であるべき
+    （#379 Step 1 修正3）。新 detector が review_channels.py への追記を怠っても、正準集合
+    （weak_signals.channels.WEAK_SIGNAL_CHANNELS）には producer grep で必ず現れる契約。
+    """
+    from weak_signals.channels import WEAK_SIGNAL_CHANNELS
+
+    classified = rc.REVIEW_CHANNELS | rc.CONTENT_POOR_CHANNELS
+    assert classified <= WEAK_SIGNAL_CHANNELS
+
+
 def test_is_review_channel():
     assert rc.is_review_channel("llm_judge") is True
     assert rc.is_review_channel("rephrase") is True

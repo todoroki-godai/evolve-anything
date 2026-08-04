@@ -126,8 +126,9 @@ FROZEN_ADVISORY_PROPOSAL_ADAPTERS: FrozenSet[str] = frozenset(
     }
 )
 
-# 実装時点（#379 Step 1）の weak_signal channel 全種別（correction_semantic/review_channels.py
-# の REVIEW_CHANNELS | CONTENT_POOR_CHANNELS が正準の機械可読列挙）。
+# 実装時点（#379 Step 1）の weak_signal channel 全種別（weak_signals.channels.WEAK_SIGNAL_CHANNELS
+# が producer 側正準の機械可読列挙。correction_semantic/review_channels.py の
+# REVIEW_CHANNELS | CONTENT_POOR_CHANNELS はその部分集合＝消費側の分類にすぎない・修正3）。
 FROZEN_WEAK_SIGNAL_CHANNELS: FrozenSet[str] = frozenset(
     {
         "esc_interrupt",
@@ -140,13 +141,23 @@ FROZEN_WEAK_SIGNAL_CHANNELS: FrozenSet[str] = frozenset(
 )
 
 
+class FreezeViolationError(AssertionError):
+    """凍結中に新設を検出したときの例外。
+
+    ``AssertionError`` のサブクラスなので既存の ``pytest.raises(AssertionError, ...)`` は
+    そのまま通る。``assert_no_new_keys``（テスト時契約）と runtime ゲート
+    （``weak_signals.store.append_signals`` / ``rl_common.store_write.store_write_raw``）が
+    同じ例外型を共有し、「凍結違反」を検出箇所によらず一貫した型で扱えるようにする。
+    """
+
+
 def is_frozen() -> bool:
     """凍結が有効かを call-time 判定で返す（module-level コピー禁止）。"""
     return SHRINK_FREEZE_ACTIVE
 
 
 def assert_no_new_keys(current: Iterable[str], frozen: FrozenSet[str], kind: str) -> None:
-    """current が frozen に無い新規キーを含んでいたら AssertionError（凍結時のみ）。
+    """current が frozen に無い新規キーを含んでいたら FreezeViolationError（凍結時のみ）。
 
     削除方向（current が frozen の部分集合）は常に許容する。凍結解除中（is_frozen()
     が False）は何もチェックしない（縮小方針が変わったときの将来経路）。
@@ -155,7 +166,7 @@ def assert_no_new_keys(current: Iterable[str], frozen: FrozenSet[str], kind: str
         return
     extra = set(current) - set(frozen)
     if extra:
-        raise AssertionError(
+        raise FreezeViolationError(
             f"{kind}: 新規追加を検出しました {sorted(extra)}。"
             "#379 Step 1 新設凍結中。本当に必要なら SHRINK_FREEZE_ACTIVE の解除判断を"
             "ユーザーに仰ぐこと"

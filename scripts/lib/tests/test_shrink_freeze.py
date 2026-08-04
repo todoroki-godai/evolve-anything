@@ -87,10 +87,12 @@ class TestLiveAdvisoryProposalAdaptersWithinFrozenSnapshot:
 
 class TestLiveWeakSignalChannelsWithinFrozenSnapshot:
     def test_weak_signal_channels_no_new_channels(self) -> None:
-        from correction_semantic.review_channels import (
-            CONTENT_POOR_CHANNELS,
-            REVIEW_CHANNELS,
-        )
+        # producer 側正準集合（weak_signals.channels）を基準にする。review_channels.py の
+        # REVIEW_CHANNELS/CONTENT_POOR_CHANNELS は「y/n 確認に出すか」の消費側分類にすぎず、
+        # 新 channel の producer が review_channels.py への追記を怠っても正準集合には
+        # 現れる契約になっている（#379 レビュー指摘・修正3）。
+        from weak_signals.channels import WEAK_SIGNAL_CHANNELS
 
-        live = REVIEW_CHANNELS | CONTENT_POOR_CHANNELS
-        sf.assert_no_new_keys(live, sf.FROZEN_WEAK_SIGNAL_CHANNELS, "weak_signal_channel")
+        sf.assert_no_new_keys(
+            WEAK_SIGNAL_CHANNELS, sf.FROZEN_WEAK_SIGNAL_CHANNELS, "weak_signal_channel"
+        )

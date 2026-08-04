@@ -8,10 +8,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
+import shrink_freeze  # noqa: E402
 from weak_signals.store import (  # noqa: E402
     WeakSignal,
     append_signals,
@@ -104,3 +107,44 @@ def test_dry_run_does_not_create_parent_dir(tmp_path: Path) -> None:
 
 def test_existing_keys_empty_when_no_file(tmp_path: Path) -> None:
     assert existing_signal_keys(tmp_path / "nope.jsonl") == set()
+
+
+# --- #379 Step 1 修正3: 凍結中の未知 channel 書込みゲート -----------------------
+
+def test_append_signals_rejects_unknown_channel_when_frozen(tmp_path: Path, monkeypatch) -> None:
+    """凍結中は正準集合（weak_signals.channels.WEAK_SIGNAL_CHANNELS）に無い channel の
+    signal を書込み拒否する（未登録 channel が allowlist を経由せず書けていた穴の
+    再発防止・外部レビュー指摘）。
+    """
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", True)
+    store = tmp_path / "weak_signals.jsonl"
+    with pytest.raises(shrink_freeze.FreezeViolationError, match="#379"):
+        append_signals([_sig(channel="brand_new_channel", line_no=1)], path=store)
+    assert not store.exists()
+
+
+def test_append_signals_rejects_unknown_channel_even_in_dry_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """dry-run でも channel 検証は書込み前に走る（file に触れないので dry-run 純度は破らない）。"""
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", True)
+    store = tmp_path / "weak_signals.jsonl"
+    with pytest.raises(shrink_freeze.FreezeViolationError):
+        append_signals([_sig(channel="brand_new_channel", line_no=1)], path=store, dry_run=True)
+    assert not store.exists()
+
+
+def test_append_signals_allows_known_channel_when_frozen(tmp_path: Path, monkeypatch) -> None:
+    """既存 6 channel は凍結中でも通常通り書込める（削除方向でなく既存維持は常に許容）。"""
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", True)
+    store = tmp_path / "weak_signals.jsonl"
+    res = append_signals([_sig(channel="rephrase", line_no=1)], path=store)
+    assert res["written"] == 1
+
+
+def test_append_signals_allows_unknown_channel_when_unfrozen(tmp_path: Path, monkeypatch) -> None:
+    """凍結解除中（SHRINK_FREEZE_ACTIVE=False）は未知 channel も通す（将来の解除経路）。"""
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
+    store = tmp_path / "weak_signals.jsonl"
+    res = append_signals([_sig(channel="brand_new_channel", line_no=1)], path=store)
+    assert res["written"] == 1
