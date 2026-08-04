@@ -11,9 +11,19 @@ markdown 経路（report.py）と構造化経路（collect_observability → evo
 
 各 builder の契約: その PJ に非該当（CONTEXT.md / pitfalls.md が無い等）のときだけ None を返し、
 該当する場合は clean でも「評価したが該当なし ✓」を含む行リストを必ず返す。
+
+#379 Step 2「表示淘汰」: collect_observability は shrink_freeze.CULLED_OBSERVABILITY_SECTIONS
+に列挙された key を builder 呼び出し前に skip する（**表示のみ淘汰・builder 自体は
+_OBSERVABILITY_BUILDERS に登録されたまま・コード削除ではない**）。淘汰した事実は
+「display_cull」の 1 行 meta として必ず surface する（silence != evaluated を維持）。
+環境変数 EVOLVE_SHOW_CULLED=1 で一時的に全表示へ戻せる（call-time 参照。module-level
+import copy は monkeypatch/env 変更に追従しないため使わない）。
 """
+import os
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+
+import shrink_freeze
 
 from .sections import (
     build_belief_blocks_section,
@@ -116,16 +126,35 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
 ]
 
 
+def _display_cull_notice(culled_count: int) -> List[str]:
+    """#379 Step 2 の表示淘汰事実を 1 行で surface する（silence != evaluated）。"""
+    return [
+        f"ℹ 表示淘汰中: {culled_count} section"
+        "（#379 Step 2・コード非削除・EVOLVE_SHOW_CULLED=1 で一時表示）"
+    ]
+
+
 def collect_observability(project_dir: Path) -> Dict[str, List[str]]:
     """PJ に該当する observability セクションを key→行リストの dict で返す。
 
     builder が None を返す項目（その PJ に非該当）は除外する。
     evolve はこの dict を result["observability"] に格納し、必ずサマリに surface する。
+
+    #379 Step 2: shrink_freeze.CULLED_OBSERVABILITY_SECTIONS に列挙された key は
+    builder を呼ばず skip する（表示のみ淘汰）。EVOLVE_SHOW_CULLED=1 環境変数で
+    一時的に全表示へ戻せる（call-time 参照）。
     """
     proj = Path(project_dir)
     result: Dict[str, List[str]] = {}
+    show_culled = os.environ.get("EVOLVE_SHOW_CULLED") == "1"
+    culled_count = 0
     for key, builder in _OBSERVABILITY_BUILDERS:
+        if not show_culled and key in shrink_freeze.CULLED_OBSERVABILITY_SECTIONS:
+            culled_count += 1
+            continue
         section = builder(proj)
         if section:
             result[key] = section
+    if culled_count:
+        result["display_cull"] = _display_cull_notice(culled_count)
     return result

@@ -96,3 +96,41 @@ class TestLiveWeakSignalChannelsWithinFrozenSnapshot:
         sf.assert_no_new_keys(
             WEAK_SIGNAL_CHANNELS, sf.FROZEN_WEAK_SIGNAL_CHANNELS, "weak_signal_channel"
         )
+
+
+class TestCulledObservabilitySections:
+    """#379 Step 2「表示淘汰」の淘汰リスト契約（typo 防止 + KEEP との排他）。"""
+
+    # audit の観測性で「効いた」実証がある KEEP 9 件（淘汰しない）。
+    _KEEP = frozenset(
+        {
+            "weak_signals",
+            "correction_capture",
+            "skill_triage",
+            "skill_reachability",
+            "doc_budget",
+            "icebox_reconcile",
+            "advisory_decisions",
+            "skill_vuln",
+            "invalid_frontmatter",
+        }
+    )
+
+    def test_culled_sections_are_subset_of_live_registry(self) -> None:
+        from audit.observability import _OBSERVABILITY_BUILDERS
+
+        live = {key for key, _ in _OBSERVABILITY_BUILDERS}
+        assert sf.CULLED_OBSERVABILITY_SECTIONS <= live
+
+    def test_culled_sections_disjoint_from_keep(self) -> None:
+        assert sf.CULLED_OBSERVABILITY_SECTIONS & self._KEEP == set()
+
+    def test_culled_sections_plus_keep_equals_live_registry(self) -> None:
+        # KEEP 9 以外すべて CULL（レジストリと乖離した場合の正典判定・委譲仕様どおり）。
+        from audit.observability import _OBSERVABILITY_BUILDERS
+
+        live = {key for key, _ in _OBSERVABILITY_BUILDERS}
+        assert sf.CULLED_OBSERVABILITY_SECTIONS | self._KEEP == live
+
+    def test_culled_sections_count_is_35(self) -> None:
+        assert len(sf.CULLED_OBSERVABILITY_SECTIONS) == 35

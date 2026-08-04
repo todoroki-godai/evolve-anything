@@ -142,6 +142,14 @@ def test_observability_contract_evolve_only_keys_in_known_set():
     assert "remediation_fix_targets" in known, "remediation_fix_targets が既知キーに含まれていない"
 
 
+def test_observability_contract_display_cull_not_unknown():
+    """display_cull は #379 Step 2 表示淘汰の meta キー — contract violation にならない。"""
+    r = _ok_result()
+    r["observability"]["display_cull"] = ["ℹ 表示淘汰中: 35 section"]
+    failures = invariants.check_observability_contract(r)
+    assert all("display_cull" not in f["detail"] for f in failures)
+
+
 # --- run_all 集約 --------------------------------------------------------------
 
 def test_run_all_green_on_ok_result():
