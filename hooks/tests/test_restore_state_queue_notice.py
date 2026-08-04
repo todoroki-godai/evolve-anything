@@ -23,38 +23,52 @@ import data_dir_migration as ddm  # noqa: E402
 import restore_state  # noqa: E402
 
 
-SAMPLE_QUEUE = {
-    "generated_at": "2026-06-25T09:00:00Z",
-    "threshold": 3,
-    "tracked_total": 10,
-    "queue": [
-        {
-            "pj_slug": "figma-to-code",
-            "material_count": 9,
-            "weak_unprocessed": 7,
-            "new_corrections": 2,
-            "last_evolve_at": "2026-06-20T10:00:00Z",
-            "activity_since": {"subagents": 40, "sessions": 5},
-            "reason": "weak=7 + new corr=2 >= 3",
-        },
-        {
-            "pj_slug": "sys-bots",
-            "material_count": 4,
-            "weak_unprocessed": 4,
-            "new_corrections": 0,
-            "last_evolve_at": None,
-            "activity_since": {"subagents": 12, "sessions": 3},
-            "reason": "weak=4 (初回)",
-        },
-    ],
-}
+# #351: _deliver_evolve_queue_notice() は now を省略して呼ぶため実際の現在時刻と
+# 比較される（freshness gate）。固定の過去日付だと実行日が進むにつれ real now との
+# 差が stale_days を越え、これらの配線テストが「業務値を検証する」意図から外れて
+# 「stale 判定を検証する」テストに化けてしまう。生成時に毎回 fresh な generated_at を
+# 埋め込み、配線（figma-to-code が出るか等）を安定して検証する。stale 自体の判定は
+# scripts/lib/tests/test_daily.py::test_notice_stale_queue_replaces_business_content_with_health_notice
+# が担当する。
+def _fresh_generated_at() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-EMPTY_QUEUE = {
-    "generated_at": "2026-06-25T09:00:00Z",
-    "threshold": 3,
-    "tracked_total": 10,
-    "queue": [],
-}
+
+def _sample_queue() -> dict:
+    return {
+        "generated_at": _fresh_generated_at(),
+        "threshold": 3,
+        "tracked_total": 10,
+        "queue": [
+            {
+                "pj_slug": "figma-to-code",
+                "material_count": 9,
+                "weak_unprocessed": 7,
+                "new_corrections": 2,
+                "last_evolve_at": "2026-06-20T10:00:00Z",
+                "activity_since": {"subagents": 40, "sessions": 5},
+                "reason": "weak=7 + new corr=2 >= 3",
+            },
+            {
+                "pj_slug": "sys-bots",
+                "material_count": 4,
+                "weak_unprocessed": 4,
+                "new_corrections": 0,
+                "last_evolve_at": None,
+                "activity_since": {"subagents": 12, "sessions": 3},
+                "reason": "weak=4 (初回)",
+            },
+        ],
+    }
+
+
+def _empty_queue() -> dict:
+    return {
+        "generated_at": _fresh_generated_at(),
+        "threshold": 3,
+        "tracked_total": 10,
+        "queue": [],
+    }
 
 
 def _write_queue(data_dir: Path, payload: dict) -> None:
@@ -73,7 +87,7 @@ def _install_env(tmp_path, monkeypatch):
 
 def test_deliver_fires_with_waiting_queue(tmp_path, monkeypatch, capsys):
     source = _install_env(tmp_path, monkeypatch)
-    _write_queue(source, SAMPLE_QUEUE)
+    _write_queue(source, _sample_queue())
     restore_state._deliver_evolve_queue_notice()
     out = capsys.readouterr().out
     assert out  # 非空
@@ -85,7 +99,7 @@ def test_deliver_fires_with_waiting_queue(tmp_path, monkeypatch, capsys):
 
 def test_deliver_silent_on_empty_queue(tmp_path, monkeypatch, capsys):
     source = _install_env(tmp_path, monkeypatch)
-    _write_queue(source, EMPTY_QUEUE)
+    _write_queue(source, _empty_queue())
     restore_state._deliver_evolve_queue_notice()
     assert capsys.readouterr().out == ""
 
@@ -111,7 +125,7 @@ def test_deliver_silent_without_env(monkeypatch, capsys):
 
 def test_deliver_does_not_write(tmp_path, monkeypatch):
     source = _install_env(tmp_path, monkeypatch)
-    _write_queue(source, SAMPLE_QUEUE)
+    _write_queue(source, _sample_queue())
     before = {p.name for p in source.iterdir()}
     restore_state._deliver_evolve_queue_notice()
     after = {p.name for p in source.iterdir()}
@@ -121,7 +135,7 @@ def test_deliver_does_not_write(tmp_path, monkeypatch):
 def test_handle_session_start_invokes_queue_notice(tmp_path, monkeypatch, capsys):
     """handle_session_start が queue 通知を配信フローに含む（配線回帰）。"""
     source = _install_env(tmp_path, monkeypatch)
-    _write_queue(source, SAMPLE_QUEUE)
+    _write_queue(source, _sample_queue())
     # checkpoint 無し環境（CLAUDE_PROJECT_DIR を tmp に向ける）
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "proj"))
     restore_state.handle_session_start({})

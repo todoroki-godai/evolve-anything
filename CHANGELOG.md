@@ -5,6 +5,9 @@
 ### Added
 - **feat(icebox_reconcile): icebox 棚卸しの3レーン決定論分類を追加（#352）** — icebox（凍結 issue）本文 `## 再開条件` 配下の fenced YAML `reopen-when:`（source/metric/op/threshold）を daily runner が実ストア（weak_signals / subagent_traces / token_usage の最小 evaluator セット）と決定論突合し、成立（レーン1）/観測器不在（レーン2）/失効候補（レーン3・180日+未成立+本文未更新）に分類。daily runner の第5ステップが `gh issue list --json number,body,closedAt,updatedAt` を read-only で叩き `icebox-verdicts.json` に保存し、SessionStart hook が成立分のみ該当 issue を名指し + 根拠1行で通知（既読ストア `icebox_verdict_seen.jsonl` は lane/closed_at が変わるまで再提示しない）。audit は `icebox-verdicts.json` を読むだけ（gh 非呼び出し）の advisory section で観測器不在/失効候補を surface する。close は自動化しない（提示のみ）。issue 本文は untrusted 入力である前提で全経路を固めている: reopen-when ブロックの型/値域検証（非 str・NaN/inf・複数ブロックの ambiguous 判定）、source/metric の injection 耐性トークン検証、evaluator 例外の吸収、gh --limit 到達の可視化、read-write 単一トランザクション化（file_lock）等。
 
+### Fixed
+- **fix(daily): SessionStart notice の freshness gate を共通化（#351）** — `icebox_notice.build_icebox_notice()` / `queue_notice.build_queue_notice()` が独立に持っていた「`generated_at` を検証せず業務値（count/oldest_days/queue 内容）を先に判定する」穴を `daily/freshness.py`（新設・単一ソース）へ集約。評価順序を (a) `generated_at` の鮮度判定 → (b) STALE/UNKNOWN なら業務値を一切解釈せず旧値を併記しない health notice → (c) FRESH のときだけ業務値評価、に固定した。producer が最後に「空 queue」や「閾値未満の値」を書いた直後に停止すると恒久的に沈黙していた回帰（22 回連続 fail-open が気づかれなかった原因）を解消し、そのケースでも stale 通知が出るようにした。`oldest_days=0` 等の正当な業務値の 0 と `generated_at` 判定不能（欠落・parse 不能・未来日時・tz 無し）を型的に区別する（前者は `age_days=int`、後者は `None`）。
+
 ## [1.124.1] - 2026-07-31
 
 ### Fixed

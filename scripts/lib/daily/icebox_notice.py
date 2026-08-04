@@ -19,6 +19,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import freshness as _freshness  # #351 P0: freshness gate の単一ソース
 from . import plist as _plist  # #352 P6: icebox-verdicts.json パスの単一ソース
 
 ICEBOX_FILE_NAME = "icebox-status.json"
@@ -39,6 +40,14 @@ MAX_MET_ISSUES = 10
 # ここでの 90 は呼び出し元が threshold_days を明示しない場合のライブラリ関数フォールバックに留まる。
 DEFAULT_THRESHOLD_DAYS = 90
 
+# icebox-status.json の generated_at がこれより古ければ freshness gate（#351）が
+# 業務値（count/oldest_days）の解釈を止め health notice に差し替える。
+# STALE_VERDICTS_DAYS（icebox-verdicts.json 用）と同値にして daily runner の
+# 実行周期（毎朝1回）に対する許容度を揃える。
+STALE_STATUS_DAYS = STALE_VERDICTS_DAYS
+
+ICEBOX_REMEDIATION_HINT = "bin/evolve-daily-install"
+
 
 def read_icebox_status(data_dir) -> "dict | None":
     """data_dir/icebox-status.json を読んで dict を返す。無い/壊れていれば None。"""
@@ -55,21 +64,38 @@ def build_icebox_notice(
     status: "dict | None",
     now: "datetime | None" = None,
     threshold_days: int = DEFAULT_THRESHOLD_DAYS,
+    stale_days: int = STALE_STATUS_DAYS,
 ) -> "str | None":
     """icebox 棚卸しの気づき通知メッセージを生成する。閾値未満なら None（沈黙）。
 
-    - status が None / dict でない → None
-    - `oldest_days` が欠落・非数値 → None（判定不能として沈黙、queue_notice の
-      パース不能 generated_at と同じ fail-safe 方針）
-    - `oldest_days` が `threshold_days` 未満 → None（沈黙）
-    - `oldest_days` が `threshold_days` 以上 → 1行に集約したメッセージを返す
-      （個別 issue ごとの表示は絶対にしない）
+    評価順序（#351 freshness gate）: (a) `generated_at` の鮮度を先に判定する →
+    (b) FRESH でなければ `count`/`oldest_days` を一切解釈せず health notice を返す
+    （閾値未満の値でも stale なら通知する＝producer 停止の見逃しを防ぐ回帰対応）→
+    (c) FRESH のときだけ `count`/`oldest_days` を評価する。
 
-    `now` は queue_notice.build_queue_notice とのシグネチャ整合のために受け取るが、
-    `oldest_days` は生成時点（bin/evolve-daily-run）で計算済みのため現時点では未使用。
+    - status が None / dict でない → None
+    - FRESH かつ `oldest_days`/`count` が欠落・非数値 → None（判定不能として沈黙）
+    - FRESH かつ `oldest_days` が `threshold_days` 未満 → None（沈黙）
+    - FRESH かつ `oldest_days` が `threshold_days` 以上 → 1行に集約したメッセージを返す
+      （個別 issue ごとの表示は絶対にしない）
+    - STALE / UNKNOWN → `count`/`oldest_days` の値に関わらず health notice
+      （旧値は併記しない。`oldest_days=0` のような正当な業務値の 0 と混同しない）
     """
     if not isinstance(status, dict):
         return None
+
+    now = now or datetime.now(timezone.utc)
+    state, age_days = _freshness.classify_freshness(
+        status.get("generated_at"), now=now, stale_days=stale_days
+    )
+    if state != _freshness.Freshness.FRESH:
+        return _freshness.health_notice(
+            label="icebox 集計",
+            freshness=state,
+            age_days=age_days,
+            remediation=ICEBOX_REMEDIATION_HINT,
+        )
+
     oldest_days = status.get("oldest_days")
     count = status.get("count")
     if not isinstance(oldest_days, (int, float)) or isinstance(oldest_days, bool):
@@ -89,9 +115,10 @@ def icebox_notice_output(
     status: "dict | None",
     now: "datetime | None" = None,
     threshold_days: int = DEFAULT_THRESHOLD_DAYS,
+    stale_days: int = STALE_STATUS_DAYS,
 ) -> "dict | None":
     """CC hook 出力用に systemMessage dict を返す。閾値未満なら None。"""
-    msg = build_icebox_notice(status, now=now, threshold_days=threshold_days)
+    msg = build_icebox_notice(status, now=now, threshold_days=threshold_days, stale_days=stale_days)
     if msg is None:
         return None
     return {"systemMessage": msg}
