@@ -41,7 +41,20 @@ def _autopromote_lines() -> List[str]:
     idiom_autopromote は confirmed idiom に一致した新規 weak_signal を人間再確認なしで昇格する。
     黙って進まないよう、累計の自動昇格件数 + idiom 一覧を必ず可視化する（ADR-028 observability）。
     0 件ならノイズを足さないため空リストを返す。
+
+    #379 判断2: 縮小完了まで idiom_autopromote の自動昇格は凍結中（自動発火実績 0 件のため
+    凍結コスト実質ゼロ）。凍結中は corrections.jsonl の中身に関わらず「凍結中・自動昇格 0 件」
+    を常時 surface する（沈黙させない・過去の昇格残骸を誤って再カウントしない）。
     """
+    import shrink_freeze
+
+    if shrink_freeze.is_frozen():
+        return [
+            "idiom_autopromote: 凍結中（#379 判断2）・自動昇格 0 件。"
+            "human-confirmed idiom への機械昇格を縮小完了まで停止中"
+            "（evolve-reflect 経由の対話昇格は継続可）。"
+        ]
+
     path = _corrections_path()
     if not path.exists():
         return []

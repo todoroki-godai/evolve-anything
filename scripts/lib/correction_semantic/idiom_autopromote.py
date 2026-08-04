@@ -30,6 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import shrink_freeze
 from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.promote import read_unpromoted
 from correction_semantic.store import (
@@ -83,8 +84,18 @@ def autopromote(
         "promoted_idioms": [str, ...],   # 昇格した idiom 本文の一覧（安全弁② surface 用）
         "slug": str,
         "dry_run": bool,
+        "frozen": bool,                  # #379 判断2: 凍結中は True（機械昇格を一切行わない）
       }
     """
+    if shrink_freeze.is_frozen():
+        # #379 判断2: 縮小完了まで自動昇格を凍結する（自動発火実績 0 件のため凍結コスト
+        # 実質ゼロ）。confirmed idiom の照合ロジックに一切触れず即座に no-op を返す。
+        # 対話昇格（evolve-reflect --promote-weak 等）は本関数の対象外なので影響しない。
+        return {
+            "promoted": 0, "capped": 0, "promoted_idioms": [],
+            "slug": pj_slug, "dry_run": dry_run, "frozen": True,
+        }
+
     confirmed_texts = read_confirmed_idiom_texts(pj_slug, idioms_path)
 
     # 不変条件: confirmed が 1 件も無ければ即 promoted=0（雪崩防止）。

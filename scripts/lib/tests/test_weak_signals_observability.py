@@ -351,7 +351,13 @@ def _seed_autopromote(tmp_path: Path, monkeypatch, *, corrections, idioms=None) 
 
 
 def test_builder_surfaces_idiom_autopromote_count(tmp_path: Path, monkeypatch) -> None:
-    """corrections に idiom_dict 昇格があれば N 件 + idiom 一覧を surface する（安全弁②）。"""
+    """corrections に idiom_dict 昇格があれば N 件 + idiom 一覧を surface する（安全弁②）。
+
+    #379 判断2 の凍結中は autopromote 自体が no-op（新規昇格が発生しない）なので、
+    ここは凍結解除後の従来挙動（corrections.jsonl 走査ロジック）が壊れていないことを守る。
+    """
+    import shrink_freeze
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
     _seed_autopromote(
         tmp_path, monkeypatch,
         corrections=[
@@ -370,7 +376,9 @@ def test_builder_surfaces_idiom_autopromote_count(tmp_path: Path, monkeypatch) -
 
 
 def test_builder_excludes_invalidated_from_autopromote_count(tmp_path: Path, monkeypatch) -> None:
-    """invalidated=True（revoke 済み）は自動昇格件数から除外する。"""
+    """invalidated=True（revoke 済み）は自動昇格件数から除外する（freeze 解除後の従来挙動）。"""
+    import shrink_freeze
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
     _seed_autopromote(
         tmp_path, monkeypatch,
         corrections=[
@@ -386,7 +394,9 @@ def test_builder_excludes_invalidated_from_autopromote_count(tmp_path: Path, mon
 
 
 def test_builder_no_autopromote_line_when_none(tmp_path: Path, monkeypatch) -> None:
-    """idiom_dict 昇格が 0 件なら自動昇格行は出さない（ノイズを足さない）。"""
+    """idiom_dict 昇格が 0 件なら自動昇格行は出さない（freeze 解除後の従来挙動・ノイズを足さない）。"""
+    import shrink_freeze
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", False)
     _seed_autopromote(
         tmp_path, monkeypatch,
         corrections=[{"source": "reflect_confirmed", "message": "x"}],
@@ -394,6 +404,42 @@ def test_builder_no_autopromote_line_when_none(tmp_path: Path, monkeypatch) -> N
     section = build_weak_signals_section(tmp_path)
     body = "\n".join(section or [])
     assert "自動昇格" not in body
+
+
+# ── #379 判断2: idiom_autopromote 凍結の常時 surface ─────────────────
+
+
+def test_builder_surfaces_frozen_notice_regardless_of_corrections(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#379 Step 1 凍結中は corrections に idiom_dict 昇格が実在しても関係なく
+    「凍結中・自動昇格 0 件」を常時 surface する（沈黙させない）。"""
+    _seed_autopromote(
+        tmp_path, monkeypatch,
+        corrections=[
+            {"source": "idiom_dict", "promoted_by": "idiom_dict",
+             "message": "凍結前の昇格残骸", "invalidated": False},
+        ],
+    )
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "idiom_autopromote" in body
+    assert "凍結中" in body
+    assert "#379" in body
+    assert "0 件" in body
+
+
+def test_builder_surfaces_frozen_notice_even_with_no_corrections(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """corrections.jsonl が空でも凍結通知は出る（黙って進まない）。"""
+    _seed_autopromote(tmp_path, monkeypatch, corrections=[])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "idiom_autopromote" in body
+    assert "凍結中" in body
 
 
 # ── store_registry の宣言契約 ─────────────────────────────────────
