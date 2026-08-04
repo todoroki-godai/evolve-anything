@@ -131,7 +131,12 @@ def test_registered_in_observability_contract():
 
 
 def test_collect_observability_surfaces_negative_transfer(tmp_path, monkeypatch):
-    """collect_observability 経由でも negative_transfer key が立つ（両経路伝播）。"""
+    """collect_observability 経由でも negative_transfer key が立つ（両経路伝播）。
+
+    negative_transfer は #379 Step 2 で表示淘汰対象になったため、raw 配線を見るには
+    EVOLVE_SHOW_CULLED=1 が必要（淘汰そのものの挙動は test_observability_display_cull.py）。
+    """
+    monkeypatch.setenv("EVOLVE_SHOW_CULLED", "1")
     _patch_usage(monkeypatch, [
         {"skill_name": "ship", "ts": "2026-01-01T00:00:00Z", "outcome": "success"},
         {"skill_name": "review", "ts": "2026-01-02T00:00:00Z", "outcome": "success"},

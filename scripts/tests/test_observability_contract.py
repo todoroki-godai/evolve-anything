@@ -12,6 +12,8 @@ report.py の markdown 経路と同じ _OBSERVABILITY_BUILDERS を単一ソー�
 import sys
 from pathlib import Path
 
+import pytest
+
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 _LIB = _PLUGIN_ROOT / "scripts" / "lib"
 _SCRIPTS = _PLUGIN_ROOT / "scripts"
@@ -51,6 +53,18 @@ _CONTEXT = """# Glossary
 def _write(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _show_culled_sections(monkeypatch):
+    """#379 Step 2 表示淘汰は builder→collect_observability の配線契約とは別の関心事。
+
+    本モジュールは「builder が該当時に必ず key を立てるか」という契約（silence != evaluated）
+    を検証するので、EVOLVE_SHOW_CULLED=1 で淘汰を解除し Step 2 前と同じ raw 配線を見る。
+    淘汰そのものの挙動（デフォルトで隠れる／display_cull 通知）は
+    scripts/lib/tests/test_observability_display_cull.py が別途カバーする。
+    """
+    monkeypatch.setenv("EVOLVE_SHOW_CULLED", "1")
 
 
 def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):

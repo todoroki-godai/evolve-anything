@@ -99,7 +99,12 @@ def test_registered_in_observability_contract():
 
 
 def test_collect_observability_surfaces_belief_blocks(tmp_path, monkeypatch):
-    """collect_observability 経由でも belief_blocks key が立つ（両経路伝播）。"""
+    """collect_observability 経由でも belief_blocks key が立つ（両経路伝播）。
+
+    belief_blocks は #379 Step 2 で表示淘汰対象になったため、raw 配線を見るには
+    EVOLVE_SHOW_CULLED=1 が必要（淘汰そのものの挙動は test_observability_display_cull.py）。
+    """
+    monkeypatch.setenv("EVOLVE_SHOW_CULLED", "1")
     monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
     _write_block(tmp_path, "壊れた要約", age_days=1)
     result = collect_observability(tmp_path)

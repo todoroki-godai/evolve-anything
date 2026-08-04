@@ -95,9 +95,14 @@ def test_registered_in_observability_contract() -> None:
 
 
 def test_collect_observability_includes_multiview(tmp_path: Path, monkeypatch) -> None:
-    """collect_observability 経由でも多視点セクションが出る（両経路の単一ソース確認）。"""
+    """collect_observability 経由でも多視点セクションが出る（両経路の単一ソース確認）。
+
+    multiview_eval は #379 Step 2 で表示淘汰対象になったため、raw 配線を見るには
+    EVOLVE_SHOW_CULLED=1 が必要（淘汰そのものの挙動は test_observability_display_cull.py）。
+    """
     from audit.observability import collect_observability
 
+    monkeypatch.setenv("EVOLVE_SHOW_CULLED", "1")
     _make_skill(tmp_path, "bad")
     usage = [{"skill_name": "bad", "session_id": "s1"}]
     edit_seq = ["Edit", "Edit", "Edit"]
