@@ -165,7 +165,9 @@ echo "feat_refactor: $(git log --oneline --since="$(git log -1 --format=%ci -- S
    - `git diff` で変更されたファイルを確認
 2. SPEC.md の該当セクションを Edit で更新:
    - **Current Capabilities** / **System Architecture**: 新機能・変更を反映
-   - **Recent Changes**: 変更サマリーを追記（改善型のみ）。**直近5件を超えたら古い項目を CHANGELOG.md へ移動（削除は絶対禁止 — 必ず移動先を先に確保してから SPEC.md を編集すること）**
+   - **Recent Changes**: **SPEC.md に変更サマリーを転記しない**（#318）。CHANGELOG.md が変更履歴の単一ソースで、SPEC.md 側は CHANGELOG.md への 1 行ポインタのみを持つ。追記が要ると感じたら CHANGELOG.md に書く
+     - 理由: hot な SPEC.md に「直近 N 件」を手書きで持つと CHANGELOG との二重メンテが必ず drift する。旧運用（直近5件を残し古い項目を CHANGELOG へ移動）は、移動作業が滞ると hot が肥大し、実際に SPEC.md 41KB 超過（MUST 閾値 35KB）の主因になった
+     - 直近 N 件を hot に出したい場合も**手書きしない**。CHANGELOG からの決定論生成（派生物）にする
    - **Key Design Decisions**: 新しい ADR があれば該当カテゴリにリンク追加 + Architecture 本文にインライン参照
    - **Current Limitations**: 解決済みの制限を削除、新たな制限を追加
    - **Next**: 次の計画を更新
