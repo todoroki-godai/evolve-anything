@@ -176,6 +176,63 @@ def _print_doc_budget_advisory(advisory: Dict[str, Any]) -> None:
         print(f"  ⚠ {p['source_file']}: [{p['link_text']}]({p['raw_target']}) — {kind_label}")
 
 
+def _run_shrink_freeze_advisory(repo_root: Path) -> Dict[str, Any]:
+    """#379 Step 1 新設凍結の非ブロッキング早期警告（pre-push light、修正2）。
+
+    実効ゲートは CI の契約テスト（scripts/lib/tests/test_shrink_freeze.py、blocking）。
+    本 advisory は push 前に新設を早期検知するだけで、skill_reachability / doc_budget と
+    同様 **exit code に一切影響しない**。
+    """
+    try:
+        import shrink_freeze as sf
+        import store_registry
+        from advisory_proposals import ADVISORY_PROPOSAL_ADAPTERS
+        from audit.observability import _OBSERVABILITY_BUILDERS
+        from weak_signals.channels import WEAK_SIGNAL_CHANNELS
+    except ImportError:
+        return {"applicable": False}
+
+    checks = (
+        ("store", set(store_registry.declared_store_names()), sf.FROZEN_STORES),
+        (
+            "observability_section",
+            {key for key, _ in _OBSERVABILITY_BUILDERS},
+            sf.FROZEN_OBSERVABILITY_SECTIONS,
+        ),
+        (
+            "advisory_proposal_adapter",
+            set(ADVISORY_PROPOSAL_ADAPTERS),
+            sf.FROZEN_ADVISORY_PROPOSAL_ADAPTERS,
+        ),
+        ("weak_signal_channel", set(WEAK_SIGNAL_CHANNELS), sf.FROZEN_WEAK_SIGNAL_CHANNELS),
+    )
+    violations: List[Dict[str, str]] = []
+    for kind, live, frozen in checks:
+        try:
+            sf.assert_no_new_keys(live, frozen, kind)
+        except sf.FreezeViolationError as e:
+            violations.append({"kind": kind, "detail": str(e)})
+
+    return {"applicable": True, "frozen": sf.is_frozen(), "violations": violations}
+
+
+def _print_shrink_freeze_advisory(advisory: Dict[str, Any]) -> None:
+    print("=== Advisory: Shrink Freeze（非ブロッキング, #379 Step 1） ===")
+    if not advisory.get("applicable"):
+        print("  — 非該当（shrink_freeze / store_registry 等が未解決）")
+        return
+    if not advisory.get("frozen"):
+        print("  — 凍結解除中（SHRINK_FREEZE_ACTIVE=False）: 判定 no-op")
+        return
+    violations = advisory.get("violations", [])
+    if not violations:
+        print("  ✓ 新設なし（凍結スナップショットの範囲内）")
+        return
+    print(f"  ⚠ {len(violations)} 件の新設を検出（実効ゲートは CI の契約テスト・blocking）")
+    for v in violations:
+        print(f"    ・{v['detail']}")
+
+
 def _layer2_has_red(l2: Dict[str, Any]) -> bool:
     if l2.get("error"):
         return True
@@ -248,6 +305,8 @@ def main(argv: List[str] | None = None) -> int:
         report["skill_reachability"] = _run_skill_reachability_advisory(repo_root)
         # 非ブロッキング advisory（#319）: hot ドキュメントの byte/セクション/ポインタ予算。
         report["doc_budget"] = _run_doc_budget_advisory(repo_root)
+        # 非ブロッキング advisory（#379 Step 1 修正2）: 新設凍結の早期警告。
+        report["shrink_freeze"] = _run_shrink_freeze_advisory(repo_root)
 
     if args.json:
         out = json.dumps(report, ensure_ascii=False, indent=2)
@@ -263,6 +322,8 @@ def main(argv: List[str] | None = None) -> int:
             _print_skill_reachability_advisory(report["skill_reachability"])
         if "doc_budget" in report:
             _print_doc_budget_advisory(report["doc_budget"])
+        if "shrink_freeze" in report:
+            _print_shrink_freeze_advisory(report["shrink_freeze"])
 
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
