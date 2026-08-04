@@ -20,16 +20,29 @@ from . import _current_data_dir
 def _queue_staleness_note(queue_data: dict) -> Optional[str]:
     """既定（非 --live）入力の evolve-queue.json が古い場合の advisory 1 行を返す。
 
-    ``daily.queue_notice``（Phase 1b #80）の staleness 判定を再利用する（再実装しない）。
-    新しければ None（沈黙）。
+    鮮度判定は `daily.freshness`（#351 で単一ソース化）を再利用する（再実装しない）。
+    新しければ None（沈黙）。`generated_at` が判定不能（欠落・パース不能・tz なし・
+    未来日時）なら「古くない」と決めつけず UNKNOWN として警告する — 判定不能を沈黙に
+    倒すと producer 停止が恒久的に気づかれない（#351 と同じ失敗モード）。
     """
-    from daily.queue_notice import DEFAULT_STALE_DAYS, _stale_days
+    from daily.freshness import Freshness, classify_freshness
+    from daily.queue_notice import DEFAULT_STALE_DAYS
 
-    age = _stale_days(queue_data.get("generated_at", ""), datetime.now(timezone.utc))
-    if age is not None and age >= DEFAULT_STALE_DAYS:
+    freshness, age = classify_freshness(
+        queue_data.get("generated_at", ""),
+        datetime.now(timezone.utc),
+        stale_days=DEFAULT_STALE_DAYS,
+    )
+    if freshness == Freshness.STALE:
         return (
             f"[fleet:propose] ⚠ evolve-queue.json が {age} 日前に生成されています"
             f"（--live で最新化できます）。"
+        )
+    if freshness == Freshness.UNKNOWN:
+        return (
+            "[fleet:propose] ⚠ evolve-queue.json の生成時刻を判定できません"
+            "（欠落・不正な形式・未来日時のいずれか）。鮮度は不明です"
+            "（--live で最新化できます）。"
         )
     return None
 

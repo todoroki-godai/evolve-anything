@@ -98,15 +98,22 @@ class TestEvolveTriageIntegration:
         import triage_ledger
         monkeypatch.setattr(triage_ledger, "LEDGER_ROOT", tmp_path / "triage_decisions")
 
-    def test_triage_phase_included_in_evolve(self):
-        """triage 結果が phases["skill_triage"] に含まれる。"""
+    def test_triage_phase_included_in_evolve(self, tmp_path):
+        """スキルが1つも無い PJ では skipped になる。
+
+        `project_root` は明示的に空ディレクトリを渡す。#325 で discovery が
+        CLAUDE.md パースだけでなく `find_project_skill_dirs` の実ディスク走査にも
+        合流し、省略時は `Path.cwd()` を見るようになったため、`None` を渡すと
+        テスト実行時の cwd（= 本 repo。実スキルを持つ）を走査してしまい
+        「スキルなし」の検証にならない。
+        """
         from skill_triage import triage_all_skills
 
         result = triage_all_skills(
             sessions=[],
             usage=[],
             missed_skills=[],
-            project_root=None,
+            project_root=tmp_path,
         )
         # スキルなしの場合は skipped
         assert result["skipped"]
