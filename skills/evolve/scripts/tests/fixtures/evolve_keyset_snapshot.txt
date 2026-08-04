@@ -69,6 +69,7 @@ observability
 observability.constitutional
 observability.display_cull
 observability.doc_budget
+observability.glossary_drift
 observability.remediation_batch_skip
 observability.remediation_fix_targets
 observability.skill_reachability

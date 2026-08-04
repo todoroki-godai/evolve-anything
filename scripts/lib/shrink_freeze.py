@@ -166,10 +166,17 @@ FROZEN_WEAK_SIGNAL_CHANNELS: FrozenSet[str] = frozenset(
 # key は他のどこからも import 削除されない。解除は本集合から key を除くだけでよい
 # （skill 自体の削除・非活性化ではない）。
 #
-# 対象は FROZEN_OBSERVABILITY_SECTIONS（44 キー）から下記 KEEP 9 件を除いた全 35 件
-# （2026-08-04 ユーザー合意 #379）。KEEP 9: weak_signals / correction_capture /
-# skill_triage / skill_reachability / doc_budget / icebox_reconcile /
-# advisory_decisions / skill_vuln / invalid_frontmatter。
+# 対象は FROZEN_OBSERVABILITY_SECTIONS（44 キー）から下記 KEEP 11 件を除いた全 33 件
+# （2026-08-04 ユーザー合意 #379、2026-08-05 レビュー指摘で再分類）。KEEP 11 の内訳:
+#   ①行動配線の実証あり: correction_capture / skill_triage / skill_reachability /
+#     doc_budget / icebox_reconcile / measurement_bug（evolve_introspect の起票レーン
+#     #324 が構造化出力から読む）/ glossary_drift（evolve SKILL.md Step 7.7 の seed
+#     提案フローが構造化出力から読む）
+#   ②ミニマルコア表示面: weak_signals
+#   ③例外（①②と同列でない）: advisory_decisions（accept 記録 0 件だが淘汰基準の台帳
+#     自身＝基準観測の基盤として KEEP）
+#   ④例外（①②と同列でない）: rare-event 安全系は accept-0 淘汰の適用外
+#     （skill_vuln / invalid_frontmatter）
 #
 # エスケープハッチ: 環境変数 ``EVOLVE_SHOW_CULLED=1`` で一時的に全表示へ戻せる
 # （collect_observability が call-time に os.environ を読む・Step 3 の棚卸しや
@@ -186,10 +193,8 @@ CULLED_OBSERVABILITY_SECTIONS: FrozenSet[str] = frozenset(
         "fanout_cost",
         "global_claude_md",
         "global_hook_plugin_dup",
-        "glossary_drift",
         "hook_drift",
         "judge_audit",
-        "measurement_bug",
         "memory_capability",
         "memory_contagion",
         "memory_contamination",
