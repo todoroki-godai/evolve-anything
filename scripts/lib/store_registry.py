@@ -52,6 +52,19 @@ WriterLocus = Literal["hook", "batch"]
 # 全ストアは現状 active。legacy/dead は migration（#46/#54）で段階導入する。
 StoreStatus = Literal["active", "legacy", "dead"]
 
+# ストアの役割 4 分類（#379 Step 3「store 4分類と退役」）。status（write barrier の
+# 生死）とは独立の軸で、「このストアは何のためにあるか」を機械可読に表す。
+# - raw_event      : 一次イベントの SoR（hook/batch がユーザー操作やテレメトリを直接記録）。
+# - workflow_state : 判断・処理の進捗を追跡する状態（既読集合・suppression・カーソル等）。
+# - derived_cache   : raw_event からの派生・集計・ローカルキャッシュ（DuckDB SoR や
+#                     成功パターン記憶等。再構築可能なことが多い）。
+# - dead            : 廃止対象。reader 不在 or writer dormant/opt-in で削除候補
+#                     （orphan_store・reader/writer 到達性の既存機構で削除確定へ）。
+# classification="dead" は通常 status="dead" を伴うが、write barrier 経由の live な
+# writer が既存テストで回帰検証されている等、status 降格が別途の製品判断を要する場合は
+# 例外として先に classification のみ dead 化することがある（該当箇所は note に明記）。
+StoreClassification = Literal["raw_event", "workflow_state", "derived_cache", "dead"]
+
 
 @dataclass(frozen=True)
 class StoreDeclaration:
@@ -68,6 +81,7 @@ class StoreDeclaration:
     compaction:   retention="compaction" のときの圧縮条件（散文。それ以外は None）
     disposition:  reader 不在（orphan）ストアの処遇。reader がある通常ストアは None
     status:       生死（active 既定 / legacy / dead）。write barrier の write 許可は active のみ
+    classification: 役割 4 分類（raw_event / workflow_state / derived_cache / dead）。#379 Step 3
     note:         補足（任意）
     """
 
@@ -75,6 +89,7 @@ class StoreDeclaration:
     writer: str
     reader: str
     retention: RetentionKind
+    classification: StoreClassification
     kind: StoreKind = "jsonl"
     writer_locus: WriterLocus = "hook"
     ttl_days: Optional[int] = None
@@ -92,6 +107,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer="hooks/correction_detect.py（ユーザー修正の検出時）",
         reader="reflect / discover / optimize 等が消費（reader 多数）",
         retention="permanent",
+        classification="raw_event",
         note="修正フィードバックの SoR。reflect の入力源。",
     ),
     StoreDeclaration(
@@ -99,6 +115,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer="hooks/observe.py（スキル/コマンド使用ごと）",
         reader="audit / discover / trigger が集計",
         retention="permanent",
+        classification="raw_event",
         note="使用テレメトリの SoR。",
     ),
     StoreDeclaration(
@@ -106,6 +123,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer="hooks/observe.py（既知スキル/コマンド名の登録）",
         reader="usage 集計時に既知名の母集団として参照",
         retention="permanent",
+        classification="raw_event",
         note="usage の名前マスタ。",
     ),
     StoreDeclaration(
@@ -117,6 +135,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         compaction="batch ingest（evolve 同居）で sessions.db に取り込み後、live jsonl を "
         ".ingested-<ts> へ rotate（glob 恒久除外・1世代保持）。SoR は sessions.db。"
         "db 側は file_size vs rows×平均行長 の乖離 >10倍 で rebuild compaction",
+        classification="raw_event",
         disposition="drain",
         note="jsonl は hot path 緩衝。per-fire connect→INSERT→close による sessions.db "
         "再肥大（9.6GB）を根治するため jsonl-first + batch ingest に変更（#415）。",
@@ -126,6 +145,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer="hooks（ツールエラー検出時）",
         reader="audit / discover がエラー傾向分析に使用",
         retention="permanent",
+        classification="raw_event",
         note="エラーテレメトリ。",
     ),
     StoreDeclaration(
@@ -137,6 +157,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "（detection.detect_correction 経路）。",
         retention="ttl",
         ttl_days=180,
+        classification="workflow_state",
         note="偽陽性フィードバックストア（#55 で registry 登録）。180 日超を cleanup_false_positives "
         "が削除。writer は hook でなく library 関数（reflect/report-feedback から呼ぶ）なので "
         "writer_locus=batch で hook-writer stale 突合から除外。",
@@ -146,6 +167,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer="hooks（ワークフロー系イベント記録）",
         reader="audit / discover が消費",
         retention="permanent",
+        classification="raw_event",
         note="ワークフローテレメトリ。",
     ),
     StoreDeclaration(
@@ -153,6 +175,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer="hooks（スキル発火の記録）",
         reader="audit / negative_transfer が消費",
         retention="permanent",
+        classification="raw_event",
         note="スキル発火テレメトリ。",
     ),
     StoreDeclaration(
@@ -162,6 +185,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "audit/sections_takeoff.py（worker_takeoff）が `last_assistant_message` を "
         "read-time で判定し完了報告↔内部完遂の乖離を advisory surface（#161）。",
         retention="permanent",
+        classification="raw_event",
         note="サブエージェントテレメトリ。",
     ),
     StoreDeclaration(
@@ -172,6 +196,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="utterance_archive.query（query_utterances / query_utterances_all_projects）。"
         "下流: #431 個人辞書・#432 暗黙シグナル・遡及分析。",
         retention="permanent",
+        classification="raw_event",
         note="全PJ human 発話の恒久アーカイブ（#430）。物理 PK (source_path,line_no) + "
         "論理 UNIQUE (session_id,timestamp,text_hash)。writer は batch ingest のみ。",
     ),
@@ -186,6 +211,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "下流: #431 のバッチ LLM 判定もこのレーンを共有。",
         retention="ttl",
         ttl_days=45,
+        classification="workflow_state",
         note="暗黙修正シグナルの決定論検出レーン（#432）。4 チャネル（直後手編集 / "
         "permission deny / 言い直し / Esc 中断）。corrections に直接入れず昇格は reflect 確認後。"
         "TTL 45 日（#442・corrections decay と整合）: detected_at 超過は削除せず expired=True "
@@ -200,6 +226,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "idiom_autopromote が confirmed=True の idiom を read_confirmed_idiom_keys で読み自動昇格（ADR-047）。"
         "実コーパスで precision 検証後に hot hook の補助パターンへ昇格可能（#431 提案2）。",
         retention="permanent",
+        classification="workflow_state",
         note="バッチ LLM 意味判定が抽出した修正言い回しの個人辞書（#431）。provenance"
         "（元発話の物理キー・判定理由）付き。idiom+物理キーの安定ハッシュで dedup。"
         "confirmed/confirmed_at/confirmed_by/revoked_at を持ち（ADR-047・#447）、人間が #446 review で"
@@ -213,6 +240,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer_locus="batch",
         reader="correction_semantic.batch.emit_judgement_requests が再判定除外に参照（自己消費）。",
         retention="permanent",
+        classification="workflow_state",
         disposition="drain",
         note="バッチ LLM 意味判定の進捗カーソル（#431）。判定済み発話（source_path:line_no）を"
         "記録し、無駄な LLM 再判定を防ぐ。reader は同 package の emit のみ（自己消費）。",
@@ -227,6 +255,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "marker 立ち後は is_bootstrap=False で即返す。#94: fleet.queue.weak_unprocessed_by_pj が"
         " bootstrap_done_at 経由で marker 時刻を読み、消化済み weak を material から除外する。",
         retention="permanent",
+        classification="workflow_state",
         disposition="drain",
         note="初回バックログ bootstrap の完了 marker（#443）。bootstrap 完了 ISO8601 時刻 1行"
         "（#94。旧形式の空 marker は bootstrap_done_at が mtime fallback で後方互換）。PJ slug "
@@ -242,6 +271,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="daily_review.build_review / read_reviewed_keys が「新規」判定に参照（自己消費）。"
         "既読 signal_key は次回 evolve で再提示しない。",
         retention="permanent",
+        classification="workflow_state",
         disposition="drain",
         note="今日の修正確認の既読集合（#446）。correction_judged.jsonl と同方式の物理キー集合"
         "（append-only・1 行 {key, pj_slug, decision, reviewed_at}）。PJ slug スコープ"
@@ -259,6 +289,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "経由・自己消費）。",
         retention="ttl",
         ttl_days=45,
+        classification="workflow_state",
         disposition="drain",
         note="remediation 個別承認で却下された提案の suppression ledger（#477）。べき等性原則"
         "（重複提案 MUST NOT）の実装。dedup_key（type+file+主要detail の sha256 先頭16hex）単位の"
@@ -274,6 +305,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="apply_outcome_ranking が read_reward_ema で prior EMA を読み advisory 列を "
         "付与（順位は変えない）。",
         retention="permanent",
+        classification="derived_cache",
         note="MAA #64（arXiv:2606.20475）: 各スキルの符号付き advantage を evolve サイクル"
         "（バッチ）跨ぎで EMA 累積し『通時で安定して効くか』を判定する。RODS（#28・単一"
         "スナップショット reward 分散）と相補。plant-the-seed 型で 3-4 サイクルから意味を持つ。"
@@ -288,6 +320,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "read_advisory_decisions / summarize_by_detector で detector 別 accept/reject を "
         "advisory surface。",
         retention="permanent",
+        classification="workflow_state",
         note="#284（#267 Sprint 1）: advisory detector を emit→drain の decision lane に "
         "載せた際の判断記録先。optimize_history（fitness_func=skill_quality）と**分ける**のが "
         "設計の核 — advisory の対象は pytest.ini / rules / SKILL.md と異種で、skill_quality の "
@@ -304,6 +337,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "read_traces で読み、agent_type 別の tool-エラー0率（#342: 旧称「内部一発成功率」"
         "から表示ラベルを是正）を advisory surface。",
         retention="permanent",
+        classification="derived_cache",
         note="#38 per-agent 品質帰属。subagents.jsonl の agent_transcript_path が指す "
         "transcript の tool_use/tool_result/is_error をパースし、subagent が内部で何回 error "
         "してからやり直したかを記録する。親セッションの error_count しか見ない既存 outcome "
@@ -327,12 +361,20 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="scripts/lib/judge_audit/query.py（false-pass 率集計）+ "
         "audit/sections_judge_audit（advisory surface）。",
         retention="permanent",
+        classification="dead",
         note="#188 The Blind Curator（arXiv 2607.07436）: 既知の欠陥 fixture を judge の実"
         "プロンプト（constitutional._build_eval_prompt/_parse_layer_response 再利用）に流し、"
         "合格(false-pass)判定率を計測する欠陥注入監査。fixture id 単位 last-append-wins・"
         "pj_slug スコープ。judge が false-pass を出すとスキル退役（negative_transfer "
         "rollback）が無音で無効化されるため事前計測する。書込は harness の batch 実行のみ"
-        "（hook-writer stale 突合から writer_locus=batch で除外）。",
+        "（hook-writer stale 突合から writer_locus=batch で除外）。"
+        "#379 Step 3: 実 DATA_DIR に本ファイルが存在しない（--run が一度も実行されていない）+ "
+        "judge_audit section は Step 2 で culled 済み + research 系 icebox のユーザー確定方針"
+        "を根拠に classification=dead へ分類。ただし status は active のまま据え置く"
+        "（降格すると write barrier が --run のたびに StoreWriteError を送出し、"
+        "scripts/lib/tests/test_judge_audit.py の run_audit(run=True) 系テスト 6 件超が"
+        "同時に赤くなる。機能を止めて退役するか barrier だけ迂回させるかは製品判断であり "
+        "Step 3 のスコープ外＝実装報告で確認事項として明記）。",
     ),
     StoreDeclaration(
         name="verbosity_candidates.jsonl",
@@ -341,6 +383,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "audit/sections_verbosity（冗長率 / パターン Top-N を advisory surface）。",
         retention="ttl",
         ttl_days=45,
+        classification="raw_event",
         note="#75 回答冗長性の学習ループ。足切り 800 字超の最終 assistant 応答を pj_slug 付きで "
         "記録し、後段 Haiku バッチ（judge）が『無駄に冗長か』を判定する。standalone "
         "~/.claude/verbosity/candidates.jsonl の移植先。hook が書く（writer_locus=hook 既定）。"
@@ -355,6 +398,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "audit/sections_verbosity（冗長率集計）。verbose=True は weak_signals "
         "（channel=verbosity）にも emit され reflect 昇格フローに乗る。",
         retention="permanent",
+        classification="derived_cache",
         note="#75 回答冗長性の判定結果（hash 単位 last-append-wins・pj_slug スコープ）。"
         "judge が batch で書く（writer_locus=batch で hook-writer stale 突合から除外）。",
     ),
@@ -368,6 +412,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="audit/sections_memory.build_memory_capability_section（maintain 軸の "
         "evidence に reject 件数 / 検査件数を surface）。",
         retention="permanent",
+        classification="workflow_state",
         note="#93: memory_guard.inspect_transition が同名（frontmatter name 一致）の既存 "
         "エントリを検出した場合のみ1件記録する（未マッチ=検証対象外の書込は記録しない）。"
         "coverage（重要行の大量欠落）/ preservation（metadata.type の矛盾上書き）/ "
@@ -384,6 +429,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="reconcile_surfaced 自身が次回 evolve で前回の連続提示回数を参照（自己消費）。"
         "閾値到達で remediation_suppression へ自動却下を昇格させる。",
         retention="permanent",
+        classification="workflow_state",
         disposition="drain",
         note="record_rejection の決定論 fallback の surfaced マーカー（#494）。SKILL.md Step 5.5 の"
         "inline record_rejection を取りこぼしても、解決されないまま連続 surface された提案を"
@@ -402,6 +448,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "（value/reason は fingerprint に含めない・#352 B5: 単調増加する value を含めると"
         "毎日再通知される事故になるため）。",
         retention="permanent",
+        classification="workflow_state",
         note="#352 icebox 3レーン棚卸しの既読集合（issue番号+lane/closed_atハッシュの物理キー）。"
         "correction_review_seen.jsonl と同型。低書込レート・肥大化しない。",
     ),
@@ -413,6 +460,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="scripts/lib/fleet/queue.build_queue_result が read_last_evolve で per-PJ "
         "last_evolve_at を読み『前回 evolve 以降』の学習素材を測る（fleet queue・#79）。",
         retention="permanent",
+        classification="workflow_state",
         note="#79 per-PJ last_evolve state。既存 evolve-state.json はグローバルで PJ 別に"
         "測れないため新設。append-only jsonl（{pj_slug, last_evolve_at, ts}）+ "
         "read 側 last-append-wins fold。reader は最新の last_evolve_at のみ参照・低書込"
@@ -438,6 +486,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="同 orchestrator が劣化検出（check_environment_degradation 相当）で読む。",
         retention="compaction",
         compaction="_append_audit_history が直近 _MAX_AUDIT_HISTORY=100 件に pruning。",
+        classification="workflow_state",
         status="legacy",
         note="#121: audit 完了履歴。store_registry 導入前からの旧ストアで writer は batch "
         "（hook 非経由）。active でないので write barrier の許可集合には含めない。",
@@ -450,6 +499,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="scripts/lib/belief_entropy.py（直近 days 日の block 集計）・"
         "scripts/lib/audit/sections.py。",
         retention="permanent",
+        classification="workflow_state",
         status="legacy",
         note="#121: belief_entropy ゲートのブロック記録。append-only（prune/上限なし）。"
         "writer は batch（hook 非経由）。",
@@ -462,6 +512,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="なし（jsonl データを読む consumer は不在。discover/artifacts.py は hook "
         "スクリプトのパスを推奨 artifact として参照するのみでデータは読まない）。",
         retention="permanent",
+        classification="dead",
         disposition="remove",
         status="dead",
         note="#121: hook detect-deferred-task.py は hooks.json 未登録のため発火せず、この "
@@ -476,6 +527,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="同 suppression.py の is_*_suppressed / filter 群（TTL 窓内は畳む）。",
         retention="ttl",
         ttl_days=45,
+        classification="workflow_state",
         status="legacy",
         note="#121: discover 提案の見送りレジャー。ARTIFACT_SUPPRESSION_TTL_DAYS=45 の"
         "read 時窓（物理 prune はせず weak_signals と同型の read-time 失効）。writer は batch。",
@@ -488,6 +540,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="scripts/lib/episodic_store.query_relevant（audit/memory・memory_trace 帰属）。",
         retention="ttl",
         ttl_days=30,
+        classification="derived_cache",
         status="legacy",
         note="#121: episodic 層（適用済み修正の DuckDB TTL 管理）。ttl_days 既定 30 で "
         "expires_at を設定し prune_expired が削除。db なので hook-writer 突合の母集団外。",
@@ -500,6 +553,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="evolution_memory の union read（canonical + legacy dir を cross-dir 合算・#45）。",
         retention="compaction",
         compaction="save_winner が _MAX_RECORDS=1000 件で古い順ローテーション。",
+        classification="derived_cache",
         status="legacy",
         note="#121: 直接パッチ最適化の成功パターン記憶。writer は batch（optimize skill）。",
     ),
@@ -511,9 +565,14 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="query_crystallizations / count_crystallized_rules（growth_narrative・"
         "audit/orchestrator・sections_milestone が成長ストーリー素材に消費）。reader は live。",
         retention="permanent",
-        status="legacy",
+        classification="dead",
+        status="dead",
         note="#121: 結晶化イベント記録。reader は live だが writer は backfill 経由で dormant。"
-        "append-only（_patch_last_event_ts で末尾行更新はするが rotation/上限なし）。",
+        "append-only（_patch_last_event_ts で末尾行更新はするが rotation/上限なし）。"
+        "#379 Step 3: writer が dormant（production の常時 writer なし）+ issue #379 本文が"
+        "「修理より置換（optimize_history 直読みの戦果ボード）」を明記しているため dead へ降格。"
+        "writer（emit_crystallization）は store_write barrier 非経由の直接 open() のため、"
+        "降格しても実行時に壊れない（検証済み）。",
     ),
     StoreDeclaration(
         name="quality-baselines.jsonl",
@@ -523,6 +582,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         reader="scripts/lib/audit/quality.py の load_quality_baselines・quality_monitor 自身。",
         retention="compaction",
         compaction="append_record がスキルあたり MAX_RECORDS_PER_SKILL=100 件に上限適用。",
+        classification="derived_cache",
         status="legacy",
         note="#121: スキル品質ベースライン。writer は batch（quality_monitor / audit）。",
     ),
@@ -533,9 +593,13 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer_locus="batch",
         reader="現状 consumer 未検出（スコアボード用途の writer-only 傾向）。",
         retention="permanent",
-        status="legacy",
+        classification="dead",
+        status="dead",
         note="#121: スキル品質スコアのスコアボード。writer live（evolve 採点）だが専用 reader は "
-        "未検出。append-only（rotation/上限なし）。writer は batch。",
+        "未検出。append-only（rotation/上限なし）。writer は batch。"
+        "#379 Step 3: registry 自身が『consumer 未検出』と自己申告しているスコアボード用途の "
+        "writer-only ストアのため dead へ降格。writer（record_quality_score）は store_write "
+        "barrier 非経由の直接 open() のため、降格しても実行時に壊れない（検証済み）。",
     ),
     StoreDeclaration(
         name="sessions.db",
@@ -546,6 +610,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "SoR として参照）。reader 多数。",
         retention="compaction",
         compaction="file_size vs rows×平均行長 の乖離 >10倍 で rebuild（free page 解放）。",
+        classification="derived_cache",
         status="legacy",
         note="#121: セッションテレメトリの DuckDB SoR。active な sessions.jsonl（hot-path 緩衝）が "
         "ingest されてくる先。db なので hook-writer 突合の母集団外。",
@@ -557,6 +622,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "token 消費を INSERT OR IGNORE で冪等取り込み）。batch writer（DuckDB）。",
         reader="token_usage_store の query 群（fleet tokens・fitness_history_store）。",
         retention="permanent",
+        classification="derived_cache",
         status="legacy",
         note="#121: PJ 別 LLM トークン消費の DuckDB SoR。PK は transcript 各行 top-level uuid・"
         "prune なし（permanent）。db なので hook-writer 突合の母集団外。",
@@ -567,6 +633,13 @@ _DECLARATIONS: List[StoreDeclaration] = [
 def declarations_by_kind(kind: StoreKind) -> List[StoreDeclaration]:
     """指定 kind の宣言だけを返す（jsonl の hook-writer 突合などで使う）。"""
     return [d for d in _DECLARATIONS if d.kind == kind]
+
+
+def declarations_by_classification(
+    classification: StoreClassification,
+) -> List[StoreDeclaration]:
+    """指定 classification の宣言だけを返す（#379 Step 3・Step 4 の削除候補抽出等で使う）。"""
+    return [d for d in _DECLARATIONS if d.classification == classification]
 
 
 def stale_exempt_names() -> List[str]:

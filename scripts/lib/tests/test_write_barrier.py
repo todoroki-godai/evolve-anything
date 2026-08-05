@@ -384,5 +384,6 @@ def StoreDeclaration_legacy() -> "store_registry.StoreDeclaration":
         writer="（テスト用ダミー）",
         reader="（テスト用ダミー）",
         retention="permanent",
+        classification="workflow_state",
         status="legacy",
     )
