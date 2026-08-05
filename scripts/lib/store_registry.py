@@ -559,20 +559,29 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="growth-journal.jsonl",
-        writer="scripts/lib/growth_journal.py の emit_crystallization（現状は "
-        "backfill_from_git_log 経由のみで dormant・production の常時 writer なし）。batch writer。",
+        writer="scripts/lib/growth_journal.py の emit_crystallization（evolve --drain "
+        "--result-json の apply 境界・#146/ADR-051 から live に呼ばれる）+ "
+        "skills/implement/scripts/telemetry.py の record_growth_journal（SKILL.md の "
+        "実装完了時記録手順から呼ばれる）+ 同 implement_backfill.py の一時 backfill CLI。"
+        "3 writer とも batch/直接呼び出し（store_write barrier 非経由）。",
         writer_locus="batch",
         reader="query_crystallizations / count_crystallized_rules（growth_narrative・"
         "audit/orchestrator・sections_milestone が成長ストーリー素材に消費）。reader は live。",
         retention="permanent",
         classification="dead",
         status="dead",
-        note="#121: 結晶化イベント記録。reader は live だが writer は backfill 経由で dormant。"
+        note="#121: 結晶化イベント記録。reader は live。"
         "append-only（_patch_last_event_ts で末尾行更新はするが rotation/上限なし）。"
-        "#379 Step 3: writer が dormant（production の常時 writer なし）+ issue #379 本文が"
-        "「修理より置換（optimize_history 直読みの戦果ボード）」を明記しているため dead へ降格。"
-        "writer（emit_crystallization）は store_write barrier 非経由の直接 open() のため、"
-        "降格しても実行時に壊れない（検証済み）。",
+        "#379 Step 3: issue #379 本文が「修理より置換（optimize_history 直読みの戦果ボード）」"
+        "を明記しているため dead へ降格。"
+        "#379 Step 3 外部レビュー指摘: 降格時の note は『writer は backfill 経由で dormant』"
+        "と記していたが誤りだった（stale）。実際は emit_crystallization が evolve --drain の "
+        "apply 境界から常時呼ばれる live writer で、store_write barrier を経由しない直接 "
+        "open() のため status=dead 降格後も書き続けていた。契約テストの較正で "
+        "skills/implement 側の record_growth_journal / implement_backfill.py の2 writer も "
+        "同型の未ゲート barrier bypass だったと追加判明。3 writer とも冒頭で "
+        "store_registry.is_dead_store('growth-journal.jsonl') をチェックし、dead なら "
+        "書込せず return するゲートを追加して書込を停止した（#379 Step 3 レビュー修正）。",
     ),
     StoreDeclaration(
         name="quality-baselines.jsonl",
@@ -598,8 +607,14 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="#121: スキル品質スコアのスコアボード。writer live（evolve 採点）だが専用 reader は "
         "未検出。append-only（rotation/上限なし）。writer は batch。"
         "#379 Step 3: registry 自身が『consumer 未検出』と自己申告しているスコアボード用途の "
-        "writer-only ストアのため dead へ降格。writer（record_quality_score）は store_write "
-        "barrier 非経由の直接 open() のため、降格しても実行時に壊れない（検証済み）。",
+        "writer-only ストアのため dead へ降格。"
+        "#379 Step 3 外部レビュー指摘: 降格時の note は『降格しても実行時に壊れない（検証済み）』"
+        "としていたが、実際は record_quality_score が store_write barrier を経由しない直接 "
+        "open() writer で、evolve の phases_diagnose から通常フローで呼ばれ続け、status=dead "
+        "降格後も quality-scores.jsonl に書き続けていた（『壊れない』は確認したが『書込停止』は "
+        "未確認だった）。writer 冒頭で store_registry.is_dead_store('quality-scores.jsonl') を "
+        "チェックし、dead なら書込せず return するゲートを追加して書込を停止した"
+        "（#379 Step 3 レビュー修正）。",
     ),
     StoreDeclaration(
         name="sessions.db",
