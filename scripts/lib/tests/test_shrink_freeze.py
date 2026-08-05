@@ -101,7 +101,10 @@ class TestLiveWeakSignalChannelsWithinFrozenSnapshot:
 class TestCulledObservabilitySections:
     """#379 Step 2「表示淘汰」の淘汰リスト契約（typo 防止 + KEEP との排他）。"""
 
-    # audit の観測性で「効いた」実証がある KEEP 9 件（淘汰しない）。
+    # audit の観測性で「効いた」実証がある KEEP 11 件（淘汰しない）。measurement_bug と
+    # glossary_drift は非表示 consumer（evolve_introspect の起票レーン #324 / evolve
+    # SKILL.md Step 7.7 の seed 提案フロー）が構造化出力から読むため KEEP に再分類
+    # （2026-08-05 レビュー指摘）。
     _KEEP = frozenset(
         {
             "weak_signals",
@@ -113,6 +116,8 @@ class TestCulledObservabilitySections:
             "advisory_decisions",
             "skill_vuln",
             "invalid_frontmatter",
+            "measurement_bug",
+            "glossary_drift",
         }
     )
 
@@ -132,5 +137,5 @@ class TestCulledObservabilitySections:
         live = {key for key, _ in _OBSERVABILITY_BUILDERS}
         assert sf.CULLED_OBSERVABILITY_SECTIONS | self._KEEP == live
 
-    def test_culled_sections_count_is_35(self) -> None:
-        assert len(sf.CULLED_OBSERVABILITY_SECTIONS) == 35
+    def test_culled_sections_count_is_33(self) -> None:
+        assert len(sf.CULLED_OBSERVABILITY_SECTIONS) == 33

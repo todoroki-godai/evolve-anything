@@ -15,7 +15,7 @@ if str(_lib_dir) not in sys.path:
 
 from audit import report as report_mod  # noqa: E402
 
-_NOTICE = "ℹ 表示淘汰中: 35 section（#379 Step 2・コード非削除・EVOLVE_SHOW_CULLED=1 で一時表示）"
+_NOTICE = "ℹ 表示淘汰中: 33 section（#379 Step 2・コード非削除・EVOLVE_SHOW_CULLED=1 で一時表示）"
 
 
 def _fake_collect_with_cull(_project_dir):
