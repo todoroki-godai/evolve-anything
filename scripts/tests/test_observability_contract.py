@@ -55,7 +55,6 @@ def _write(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
 
 
-@pytest.fixture(autouse=True)
 def _show_culled_sections(monkeypatch):
     """#379 Step 2 表示淘汰は builder→collect_observability の配線契約とは別の関心事。
 
@@ -63,6 +62,10 @@ def _show_culled_sections(monkeypatch):
     を検証するので、EVOLVE_SHOW_CULLED=1 で淘汰を解除し Step 2 前と同じ raw 配線を見る。
     淘汰そのものの挙動（デフォルトで隠れる／display_cull 通知）は
     scripts/lib/tests/test_observability_display_cull.py が別途カバーする。
+
+    #379 レビュー指摘（P2）: 以前は autouse fixture で全テストに強制適用していたため、
+    production default（env 無し）を実際に検証するテストが本モジュールに存在しなかった。
+    淘汰解除が必要なテスト（culled key を対象にするテスト）にのみ明示的に呼ぶ。
     """
     monkeypatch.setenv("EVOLVE_SHOW_CULLED", "1")
 
@@ -81,7 +84,12 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     agent_team も環境グローバル（~/.claude/agents/）を読む builder のため、実機にエージェント
     定義があると同様に前提が崩れる。scan_agents を空に向けて「PJ アーティファクト無し」契約を
     隔離する（#326）。
+
+    本テストの関心は「builder 該当アーティファクト無し」契約であって表示淘汰そのものでは
+    ないため EVOLVE_SHOW_CULLED=1 で淘汰を解除する（解除しないと display_cull キーが常に
+    1件立ち result == {} が成立しなくなる）。
     """
+    _show_culled_sections(monkeypatch)
     import eval_saturation
     monkeypatch.setattr(
         eval_saturation, "_default_eval_sets_dir", lambda: tmp_path / "no-evalsets"
@@ -142,8 +150,13 @@ def test_empty_when_no_observability_artifacts(tmp_path, monkeypatch):
     assert result == {}
 
 
-def test_unmanaged_pitfalls_key_when_pitfalls_exist(tmp_path):
-    """pitfalls.md があれば unmanaged_pitfalls key が必ず立つ（clean でも ✓ 行）。"""
+def test_unmanaged_pitfalls_key_when_pitfalls_exist(tmp_path, monkeypatch):
+    """pitfalls.md があれば unmanaged_pitfalls key が必ず立つ（clean でも ✓ 行）。
+
+    unmanaged_pitfalls は #379 Step 2 で表示淘汰済みのため、builder 配線契約を見る
+    本テストでは EVOLVE_SHOW_CULLED=1 で淘汰を解除する。
+    """
+    _show_culled_sections(monkeypatch)
     _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
     result = collect_observability(tmp_path)
     assert "unmanaged_pitfalls" in result
@@ -174,16 +187,22 @@ def test_glossary_drift_surfaces_seed_when_context_absent(tmp_path):
     assert "用語集未作成" in combined
 
 
-def test_both_keys_when_both_artifacts_present(tmp_path):
-    """両アーティファクトがあれば両 key が surface される。"""
+def test_both_keys_when_both_artifacts_present(tmp_path, monkeypatch):
+    """両アーティファクトがあれば両 key が surface される。
+
+    unmanaged_pitfalls は淘汰済みのため EVOLVE_SHOW_CULLED=1 で解除する
+    （glossary_drift は KEEP なので env なしでも出る）。
+    """
+    _show_culled_sections(monkeypatch)
     _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
     _write(tmp_path / "CONTEXT.md", _CONTEXT)
     result = collect_observability(tmp_path)
     assert set(result.keys()) >= {"unmanaged_pitfalls", "glossary_drift"}
 
 
-def test_registered_pitfalls_still_emit_evaluated_line(tmp_path):
+def test_registered_pitfalls_still_emit_evaluated_line(tmp_path, monkeypatch):
     """登録済み（managed）でも沈黙せず ✓ 行を surface する（silence != evaluated）。"""
+    _show_culled_sections(monkeypatch)
     pf = tmp_path / "docs" / "pitfalls.md"
     _write(pf, _GROWN)
     reg.add_managed(tmp_path, pf)
@@ -193,7 +212,7 @@ def test_registered_pitfalls_still_emit_evaluated_line(tmp_path):
     assert "✓" in combined
 
 
-def test_report_markdown_uses_same_single_source(tmp_path):
+def test_report_markdown_uses_same_single_source(tmp_path, monkeypatch):
     """report.py(markdown) と collect_observability が同じ builder を消費する単一ソース契約。
 
     collect_observability が返す全セクションは generate_report の markdown に **到達する**
@@ -203,7 +222,11 @@ def test_report_markdown_uses_same_single_source(tmp_path):
     - 要対応（⚠/🔴）セクション → header が full-text で出る
     - クリーン（✓）/ 観察（ℹ・データ不足）セクション → key 名が折り畳み行に残る
     どちらでも「評価したことが見える」ので silence != evaluated は保たれる。
+
+    unmanaged_pitfalls は淘汰済みのため EVOLVE_SHOW_CULLED=1 で解除する（本テストの
+    関心は「淘汰されなければ両経路に到達するか」であり淘汰そのものではない）。
     """
+    _show_culled_sections(monkeypatch)
     import sys as _sys
     _sys.path.insert(0, str(_LIB))
     from audit.sections_summary import classify_section  # noqa: PLC0415
@@ -295,3 +318,27 @@ def test_triage_counts_lines_instruction_free():
     combined = "\n".join(build_skill_triage_counts_lines(_triage_result(CREATE=1)))
     assert "必ず" not in combined
     assert "せよ" not in combined
+
+
+def test_production_default_culls_without_env(tmp_path, monkeypatch):
+    """production default（EVOLVE_SHOW_CULLED 未設定）で実際に表示淘汰が効くこと（#379 P2）。
+
+    以前は本モジュール全体が autouse fixture で EVOLVE_SHOW_CULLED=1 を強制していたため、
+    「淘汰が実際に production default で機能しているか」を確認する統合テストが本モジュールに
+    存在しなかった（レビュー指摘）。unmanaged_pitfalls（淘汰済み）と glossary_drift（KEEP）
+    の両方を同時に作り、env なしで期待どおり片方だけ隠れることを検証する。
+    """
+    monkeypatch.delenv("EVOLVE_SHOW_CULLED", raising=False)
+    _write(tmp_path / "docs" / "pitfalls.md", _GROWN)
+    _write(tmp_path / "CONTEXT.md", _CONTEXT)
+
+    result = collect_observability(tmp_path)
+
+    # culled key: builder 該当アーティファクトがあっても production default では隠れる。
+    assert "unmanaged_pitfalls" not in result
+    # KEEP key: builder が非 None を返せば production default でも現れる。
+    assert "glossary_drift" in result
+    # 淘汰した事実自体は必ず surface する（silence != evaluated）。
+    assert "display_cull" in result
+    combined = "\n".join(result["display_cull"])
+    assert "33 section" in combined
