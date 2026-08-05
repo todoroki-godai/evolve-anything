@@ -28,6 +28,11 @@ _VALID_CLASSIFICATIONS = {"raw_event", "workflow_state", "derived_cache", "dead"
 # CLI 機能そのものと既存テスト 6 件超が同時に壊れる。「機能を止めてでも退役する」か
 # 「barrier だけ迂回させる」かは製品判断であり Step 3 のスコープ外のため、
 # classification のみ dead 化して status は保留する（実装報告で確認事項として明記）。
+#
+# 解消条件（#379 Step 3 レビュー）: Step 4 で judge_audit harness（judge_audit/harness.py
+# の --run CLI 機能）を削除し、上記テストごと退役するタイミングで status=dead に降格し、
+# 本例外集合を空にする。新規例外の無断追加は
+# test_status_dead_exempt_has_no_undocumented_additions が検出する。
 _STATUS_DEAD_EXEMPT = {"judge_audit_verdicts.jsonl"}
 
 _RAW_EVENT = {
@@ -98,6 +103,23 @@ def test_classification_dead_implies_status_dead_except_documented_exemptions() 
     for d in store_registry.declarations():
         if d.classification == "dead" and d.name not in _STATUS_DEAD_EXEMPT:
             assert d.status == "dead", d.name
+
+
+# golden: _STATUS_DEAD_EXEMPT の意図された内容（無断拡大の機械ガード・#379 Step 3 レビュー）。
+_STATUS_DEAD_EXEMPT_GOLDEN = frozenset({"judge_audit_verdicts.jsonl"})
+
+
+def test_status_dead_exempt_has_no_undocumented_additions() -> None:
+    """_STATUS_DEAD_EXEMPT が golden 集合から乖離していないこと。
+
+    新しい dead-but-status-active 例外を追加する場合は、このテストの golden 集合と
+    上の解消条件コメント（Step 4 で judge_audit harness を削除するタイミングで空にする）を
+    同時に更新すること。片方だけ変えて通ることを防ぎ、無言の例外拡大を機械的に禁止する。
+    """
+    assert _STATUS_DEAD_EXEMPT == _STATUS_DEAD_EXEMPT_GOLDEN, (
+        f"_STATUS_DEAD_EXEMPT が golden {_STATUS_DEAD_EXEMPT_GOLDEN} から乖離しています: "
+        f"{_STATUS_DEAD_EXEMPT}。新規追加は理由と解消条件をコメントに明記のうえ両方更新すること。"
+    )
 
 
 def test_classification_golden_counts_and_names() -> None:

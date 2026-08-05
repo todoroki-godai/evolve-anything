@@ -489,7 +489,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="workflow_state",
         status="legacy",
         note="#121: audit 完了履歴。store_registry 導入前からの旧ストアで writer は batch "
-        "（hook 非経由）。active でないので write barrier の許可集合には含めない。",
+        "（hook 非経由）。active でないので write barrier の許可集合には含めない。"
+        "#379 Step 3: 当面 legacy 維持（reader = orchestrator._check_degradation が "
+        "audit 完了ごとに劣化検出で読む機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="belief_blocks.jsonl",
@@ -502,7 +504,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="workflow_state",
         status="legacy",
         note="#121: belief_entropy ゲートのブロック記録。append-only（prune/上限なし）。"
-        "writer は batch（hook 非経由）。",
+        "writer は batch（hook 非経由）。"
+        "#379 Step 3: 当面 legacy 維持（reader = belief_entropy.summarize_blocks が "
+        "直近 N 日の block を集計する機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="deferred_tasks.jsonl",
@@ -530,7 +534,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="workflow_state",
         status="legacy",
         note="#121: discover 提案の見送りレジャー。ARTIFACT_SUPPRESSION_TTL_DAYS=45 の"
-        "read 時窓（物理 prune はせず weak_signals と同型の read-time 失効）。writer は batch。",
+        "read 時窓（物理 prune はせず weak_signals と同型の read-time 失効）。writer は batch。"
+        "#379 Step 3: 当面 legacy 維持（reader = suppression.is_artifact_suppressed 等の "
+        "is_*_suppressed 群が discover flow から読む機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="episodic.db",
@@ -543,7 +549,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="derived_cache",
         status="legacy",
         note="#121: episodic 層（適用済み修正の DuckDB TTL 管理）。ttl_days 既定 30 で "
-        "expires_at を設定し prune_expired が削除。db なので hook-writer 突合の母集団外。",
+        "expires_at を設定し prune_expired が削除。db なので hook-writer 突合の母集団外。"
+        "#379 Step 3: 当面 legacy 維持（reader = episodic_retriever / memory_trace / "
+        "audit/memory.py が query_relevant 経由で読む機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="evolution_memory.jsonl",
@@ -555,7 +563,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         compaction="save_winner が _MAX_RECORDS=1000 件で古い順ローテーション。",
         classification="derived_cache",
         status="legacy",
-        note="#121: 直接パッチ最適化の成功パターン記憶。writer は batch（optimize skill）。",
+        note="#121: 直接パッチ最適化の成功パターン記憶。writer は batch（optimize skill）。"
+        "#379 Step 3: 当面 legacy 維持（reader = genetic-prompt-optimizer/optimize.py・"
+        "pipeline_eval.py が union read で消費する機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="growth-journal.jsonl",
@@ -593,7 +603,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         compaction="append_record がスキルあたり MAX_RECORDS_PER_SKILL=100 件に上限適用。",
         classification="derived_cache",
         status="legacy",
-        note="#121: スキル品質ベースライン。writer は batch（quality_monitor / audit）。",
+        note="#121: スキル品質ベースライン。writer は batch（quality_monitor / audit）。"
+        "#379 Step 3: 当面 legacy 維持（reader = audit/quality.py の "
+        "load_quality_baselines が audit 品質フェーズから読む機能的 consumer。"
+        "grep 確認済み）。",
     ),
     StoreDeclaration(
         name="quality-scores.jsonl",
@@ -628,7 +641,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="derived_cache",
         status="legacy",
         note="#121: セッションテレメトリの DuckDB SoR。active な sessions.jsonl（hot-path 緩衝）が "
-        "ingest されてくる先。db なので hook-writer 突合の母集団外。",
+        "ingest されてくる先。db なので hook-writer 突合の母集団外。"
+        "#379 Step 3: 当面 legacy 維持（reader = session_store の union read を "
+        "audit / trigger / capture_rate / fleet 等 11 ファイルが利用する live な "
+        "DuckDB SoR。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="token_usage.db",
@@ -640,7 +656,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="derived_cache",
         status="legacy",
         note="#121: PJ 別 LLM トークン消費の DuckDB SoR。PK は transcript 各行 top-level uuid・"
-        "prune なし（permanent）。db なので hook-writer 突合の母集団外。",
+        "prune なし（permanent）。db なので hook-writer 突合の母集団外。"
+        "#379 Step 3: 当面 legacy 維持（reader = token_usage_store の query 群を "
+        "fleet tokens / fitness_history_store 等 9 ファイルが利用する live な "
+        "DuckDB SoR。grep 確認済み）。",
     ),
 ]
 
