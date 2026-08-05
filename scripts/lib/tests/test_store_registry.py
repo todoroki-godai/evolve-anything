@@ -38,14 +38,24 @@ def test_declaration_for_returns_entry_or_none() -> None:
 # --- validate_declarations のルール ------------------------------------------
 
 def test_ttl_requires_ttl_days() -> None:
-    bad = [StoreDeclaration(name="x.jsonl", writer="w", reader="r", retention="ttl")]
+    bad = [
+        StoreDeclaration(
+            name="x.jsonl", writer="w", reader="r", retention="ttl", classification="workflow_state"
+        )
+    ]
     problems = store_registry.validate_declarations(bad)
     assert any("ttl_days" in p for p in problems)
 
 
 def test_compaction_requires_condition() -> None:
     bad = [
-        StoreDeclaration(name="x.jsonl", writer="w", reader="r", retention="compaction")
+        StoreDeclaration(
+            name="x.jsonl",
+            writer="w",
+            reader="r",
+            retention="compaction",
+            classification="derived_cache",
+        )
     ]
     problems = store_registry.validate_declarations(bad)
     assert any("compaction" in p for p in problems)
@@ -54,7 +64,12 @@ def test_compaction_requires_condition() -> None:
 def test_permanent_rejects_ttl_or_compaction() -> None:
     bad = [
         StoreDeclaration(
-            name="x.jsonl", writer="w", reader="r", retention="permanent", ttl_days=7
+            name="x.jsonl",
+            writer="w",
+            reader="r",
+            retention="permanent",
+            classification="raw_event",
+            ttl_days=7,
         )
     ]
     problems = store_registry.validate_declarations(bad)
@@ -63,8 +78,12 @@ def test_permanent_rejects_ttl_or_compaction() -> None:
 
 def test_duplicate_names_flagged() -> None:
     dup = [
-        StoreDeclaration(name="x.jsonl", writer="w", reader="r", retention="permanent"),
-        StoreDeclaration(name="x.jsonl", writer="w2", reader="r2", retention="permanent"),
+        StoreDeclaration(
+            name="x.jsonl", writer="w", reader="r", retention="permanent", classification="raw_event"
+        ),
+        StoreDeclaration(
+            name="x.jsonl", writer="w2", reader="r2", retention="permanent", classification="raw_event"
+        ),
     ]
     problems = store_registry.validate_declarations(dup)
     assert any("重複" in p for p in problems)
@@ -73,13 +92,19 @@ def test_duplicate_names_flagged() -> None:
 def test_valid_ttl_and_compaction_pass() -> None:
     good = [
         StoreDeclaration(
-            name="a.jsonl", writer="w", reader="r", retention="ttl", ttl_days=14
+            name="a.jsonl",
+            writer="w",
+            reader="r",
+            retention="ttl",
+            classification="workflow_state",
+            ttl_days=14,
         ),
         StoreDeclaration(
             name="b.jsonl",
             writer="w",
             reader="r",
             retention="compaction",
+            classification="derived_cache",
             compaction="1MB でローテーション",
         ),
     ]
@@ -247,33 +272,41 @@ def test_status_defaults_to_active() -> None:
 
 # #121: 未登録 legacy ストア11件を registry 宣言（status=legacy、hook 未登録で
 # もう書かれない deferred_tasks.jsonl のみ dead）。writer/reader を実 grep で確認済み。
+# #379 Step 3: quality-scores.jsonl / growth-journal.jsonl は classification=dead に伴い
+# status も legacy→dead へ降格（writer が store_write barrier 非経由の直接 open() のため
+# 降格しても実行時に壊れないことを確認済み）。judge_audit_verdicts.jsonl は
+# classification=dead だが、writer が store_write barrier 経由の live なオプトイン CLI
+# 機能でテストが barrier を通す形で回帰検証しているため status は active のまま据え置き
+# （test_store_classification.py の `_STATUS_DEAD_EXEMPT` 参照）。
 _LEGACY_STORES_121 = [
     "audit-history.jsonl",       # writer live: audit orchestrator _record_audit_completion
     "belief_blocks.jsonl",       # writer live: auto_memory_broker _record_belief_block
     "discover-suppression.jsonl",  # writer live: discover/suppression の record 群
     "episodic.db",               # writer live: reflect の promote_to_episodic→insert_event
     "evolution_memory.jsonl",    # writer live: genetic-prompt-optimizer optimize.save_winner
-    "growth-journal.jsonl",      # writer 現存(backfill 経由・dormant)・reader live(query_crystallizations)
     "quality-baselines.jsonl",   # writer live: quality_monitor save_baselines/append_record
-    "quality-scores.jsonl",      # writer live: evolve phases_diagnose.record_quality_score
     "sessions.db",               # writer live: session_store.ingest (batch)
     "token_usage.db",            # writer live: token_usage_store の bulk INSERT
 ]
-_DEAD_STORES_121 = ["deferred_tasks.jsonl"]  # hook detect-deferred-task.py 未登録＝もう書かれない
+_DEAD_STORES_121 = [
+    "deferred_tasks.jsonl",  # hook detect-deferred-task.py 未登録＝もう書かれない
+    "quality-scores.jsonl",  # #379 Step 3: consumer 未検出のスコアボード。writer は raw open() でbarrier非経由
+    "growth-journal.jsonl",  # #379 Step 3: writer dormant + #379 本文が置換方針を明記。writer は raw open() でbarrier非経由
+]
 
 
 def test_legacy_and_dead_stores_declared_121() -> None:
-    """#121: legacy 10 件 + dead 1 件が正しい status で宣言されている。
+    """#121/#379 Step 3: legacy 8 件 + dead 3 件が正しい status で宣言されている。
 
     旧 test_all_real_declarations_are_active（全 active 前提）を #121 の段階導入に更新。
-    active は既存のまま、legacy/dead は #121 で新規宣言した既知集合のみが持つ。
+    active は既存のまま、legacy/dead は #121/#379 で新規宣言・降格した既知集合のみが持つ。
     """
     by_status = {}
     for d in store_registry.declarations():
         by_status.setdefault(d.status, set()).add(d.name)
     assert set(_LEGACY_STORES_121) <= by_status.get("legacy", set())
     assert set(_DEAD_STORES_121) <= by_status.get("dead", set())
-    # legacy/dead は #121 で導入した既知集合に限定（意図しない降格を検出）。
+    # legacy/dead は #121/#379 で導入・降格した既知集合に限定（意図しない降格を検出）。
     assert by_status.get("legacy", set()) == set(_LEGACY_STORES_121)
     assert by_status.get("dead", set()) == set(_DEAD_STORES_121)
 
@@ -328,10 +361,20 @@ def test_episodic_and_sessions_and_token_declared_as_db_121() -> None:
 def test_status_can_be_legacy_or_dead() -> None:
     """status は legacy / dead を取れる（migration で read-only 化・削除予定を表す）。"""
     legacy = StoreDeclaration(
-        name="x.jsonl", writer="w", reader="r", retention="permanent", status="legacy"
+        name="x.jsonl",
+        writer="w",
+        reader="r",
+        retention="permanent",
+        classification="workflow_state",
+        status="legacy",
     )
     dead = StoreDeclaration(
-        name="y.jsonl", writer="w", reader="r", retention="permanent", status="dead"
+        name="y.jsonl",
+        writer="w",
+        reader="r",
+        retention="permanent",
+        classification="dead",
+        status="dead",
     )
     assert legacy.status == "legacy"
     assert dead.status == "dead"
@@ -340,12 +383,24 @@ def test_status_can_be_legacy_or_dead() -> None:
 def test_active_store_names_returns_only_active_sorted() -> None:
     """active_store_names() は status=active のストア名のみソートして返す。"""
     decls = [
-        StoreDeclaration(name="a.jsonl", writer="w", reader="r", retention="permanent"),
         StoreDeclaration(
-            name="b.jsonl", writer="w", reader="r", retention="permanent", status="legacy"
+            name="a.jsonl", writer="w", reader="r", retention="permanent", classification="raw_event"
         ),
         StoreDeclaration(
-            name="c.jsonl", writer="w", reader="r", retention="permanent", status="dead"
+            name="b.jsonl",
+            writer="w",
+            reader="r",
+            retention="permanent",
+            classification="workflow_state",
+            status="legacy",
+        ),
+        StoreDeclaration(
+            name="c.jsonl",
+            writer="w",
+            reader="r",
+            retention="permanent",
+            classification="dead",
+            status="dead",
         ),
     ]
     assert store_registry.active_store_names(decls) == ["a.jsonl"]
@@ -361,7 +416,12 @@ def test_validate_declarations_accepts_status() -> None:
     """status 付き宣言も validate_declarations を通過する（既存ルール非破壊）。"""
     decls = [
         StoreDeclaration(
-            name="a.jsonl", writer="w", reader="r", retention="permanent", status="legacy"
+            name="a.jsonl",
+            writer="w",
+            reader="r",
+            retention="permanent",
+            classification="workflow_state",
+            status="legacy",
         ),
     ]
     assert store_registry.validate_declarations(decls) == []
