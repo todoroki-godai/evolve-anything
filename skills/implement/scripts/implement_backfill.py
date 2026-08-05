@@ -168,6 +168,13 @@ def backfill_implement(repo_dir: str) -> dict[str, int]:
     usage_path = dd / "usage.jsonl"
     journal_path = dd / "growth-journal.jsonl"
 
+    try:
+        import store_registry
+        skip_journal = store_registry.is_dead_store("growth-journal.jsonl")
+    except ImportError:
+        # #379 Step 3 レビュー: lookup 不能時は fail-open（journal も書込継続）。
+        skip_journal = False
+
     existing = _load_existing_backfill_hashes(usage_path)
     sessions = parse_git_sessions(repo_dir)
 
@@ -202,18 +209,22 @@ def backfill_implement(repo_dir: str) -> dict[str, int]:
         with open(usage_path, "a") as f:
             f.write(json.dumps(usage_record, ensure_ascii=False) + "\n")
 
-        journal_record = {
-            "ts": s["ts"],
-            "type": "implementation",
-            "source": "implement-backfill",
-            "tasks_completed": s["impl_commits"],
-            "conformance_rate": _DEFAULT_CONFORMANCE,
-            "mode": mode,
-            "phase": "unknown",
-            "backfill": True,
-        }
-        with open(journal_path, "a") as f:
-            f.write(json.dumps(journal_record, ensure_ascii=False) + "\n")
+        if not skip_journal:
+            # #379 Step 3 レビュー: status=dead ストアへの store_write barrier 非経由の
+            # 直接 open() writer を自ら止める（barrier bypass 修正）。usage.jsonl（active）
+            # は上の書込で対象外なので通常通り継続する。
+            journal_record = {
+                "ts": s["ts"],
+                "type": "implementation",
+                "source": "implement-backfill",
+                "tasks_completed": s["impl_commits"],
+                "conformance_rate": _DEFAULT_CONFORMANCE,
+                "mode": mode,
+                "phase": "unknown",
+                "backfill": True,
+            }
+            with open(journal_path, "a") as f:
+                f.write(json.dumps(journal_record, ensure_ascii=False) + "\n")
 
         written += 1
 

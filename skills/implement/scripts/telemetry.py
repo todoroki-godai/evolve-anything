@@ -57,6 +57,18 @@ def record_growth_journal(
         "mode": mode,
         "phase": "unknown",
     }
+
+    try:
+        import store_registry
+        if store_registry.is_dead_store("growth-journal.jsonl"):
+            # #379 Step 3 レビュー: status=dead ストアへの store_write barrier 非経由の
+            # 直接 open() writer を自ら止める（barrier bypass 修正）。戻り値契約（dict）は
+            # 呼び出し側互換のため維持し、書込のみスキップする。lookup 不能時は fail-open
+            # （下の import 失敗ケース）で従来通り書込を継続する。
+            return record
+    except ImportError:
+        pass
+
     path = _data_dir() / "growth-journal.jsonl"
     with open(path, "a") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
