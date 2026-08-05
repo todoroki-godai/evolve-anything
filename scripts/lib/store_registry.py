@@ -693,6 +693,18 @@ def is_active_store(name: str) -> bool:
     return decl is not None and decl.status == "active"
 
 
+def is_dead_store(name: str) -> bool:
+    """name が status=dead 登録ストアなら True（未登録 / active / legacy は False）。
+
+    store_write barrier 非経由の直接 open() writer（quality_engine.record_quality_score /
+    growth_journal.emit_crystallization 等）が、writer 関数の冒頭でこの判定を使って
+    dead ストアへの書込を自ら止めるためのゲート（#379 Step 3 レビュー: barrier bypass 修正）。
+    未登録 / lookup 不能時は False（fail-open で書込継続。ゲート起因で本体機能を壊さない）。
+    """
+    decl = declaration_for(name)
+    return decl is not None and decl.status == "dead"
+
+
 def declaration_for(name: str) -> Optional[StoreDeclaration]:
     """ストア名に対応する宣言を返す（無ければ None）。"""
     for d in _DECLARATIONS:

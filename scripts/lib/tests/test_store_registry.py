@@ -412,6 +412,17 @@ def test_is_active_store() -> None:
     assert store_registry.is_active_store("no_such_store.jsonl") is False
 
 
+def test_is_dead_store() -> None:
+    """is_dead_store は status=dead 宣言のみ True（#379 Step 3 レビュー: writer ゲート）。
+
+    未登録 / active / legacy は False。lookup 不能でも False（fail-open で書込継続）。
+    """
+    assert store_registry.is_dead_store("quality-scores.jsonl") is True
+    assert store_registry.is_dead_store("growth-journal.jsonl") is True
+    assert store_registry.is_dead_store("corrections.jsonl") is False
+    assert store_registry.is_dead_store("no_such_store.jsonl") is False
+
+
 def test_validate_declarations_accepts_status() -> None:
     """status 付き宣言も validate_declarations を通過する（既存ルール非破壊）。"""
     decls = [
