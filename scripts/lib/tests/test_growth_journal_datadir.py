@@ -36,9 +36,18 @@ def test_data_dir_tracks_repatched_value(monkeypatch, tmp_path):
 
 
 def test_emit_writes_to_patched_datadir(monkeypatch, tmp_path):
-    """patch 後の emit が tmp に書かれ実 home を汚染しない（汚染根治の本丸）。"""
+    """patch 後の emit が tmp に書かれ実 home を汚染しない（汚染根治の本丸）。
+
+    実 store_registry では growth-journal.jsonl は status=dead（PR #389・#379 Step 3
+    レビューで writer ゲート追加）のため、emit 自体の書込ロジックを検証するには
+    is_dead_store を False に固定する（dead ゲートの検証は本ファイル末尾の
+    test_emit_skips_write_when_dead 系に分離）。
+    """
     import rl_common
     import growth_journal
+    import store_registry
+
+    monkeypatch.setattr(store_registry, "is_dead_store", lambda name: False)
 
     real_home_evolve = (Path.home() / ".claude" / "evolve-anything").resolve()
     target = tmp_path / "isolated"
@@ -65,3 +74,44 @@ def test_data_dir_no_module_level_copy():
     assert not hasattr(growth_journal, "_DATA_DIR_VAL"), (
         "_DATA_DIR_VAL の import 時コピーが残存している。call-time 参照に統一すること。"
     )
+
+
+# --- status=dead ゲート（#379 Step 3 レビュー: barrier bypass 修正） -------------
+
+
+def test_emit_skips_write_when_dead(monkeypatch, tmp_path):
+    """実 registry で growth-journal.jsonl は status=dead のため write されない。"""
+    import rl_common
+    import growth_journal
+
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+
+    growth_journal.emit_crystallization(
+        project="should-not-write",
+        targets=["rules/x.md"],
+        evidence_count=1,
+        phase="proof",
+    )
+
+    assert not (tmp_path / "growth-journal.jsonl").exists()
+
+
+def test_emit_registry_import_failure_fails_open(monkeypatch, tmp_path):
+    """store_registry が import 不能な環境ではゲート起因で書込を止めない（fail-open）。"""
+    import sys
+    import rl_common
+    import growth_journal
+
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+    monkeypatch.setitem(sys.modules, "store_registry", None)
+
+    growth_journal.emit_crystallization(
+        project="fail-open-proof",
+        targets=["rules/x.md"],
+        evidence_count=1,
+        phase="proof",
+    )
+
+    written = tmp_path / "growth-journal.jsonl"
+    assert written.exists()
+    assert "fail-open-proof" in written.read_text(encoding="utf-8")

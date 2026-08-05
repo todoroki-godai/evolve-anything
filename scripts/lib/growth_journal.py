@@ -56,6 +56,16 @@ def emit_crystallization(
     commit: Optional[str] = None,
 ) -> None:
     """結晶化イベントを growth-journal.jsonl に追記。"""
+    try:
+        import store_registry
+        if store_registry.is_dead_store(JOURNAL_FILENAME):
+            # #379 Step 3 レビュー: status=dead ストアへの store_write barrier 非経由の
+            # 直接 open() writer を自ら止める（barrier bypass 修正）。lookup 不能時は
+            # fail-open（下の import 失敗ケース）で従来通り書込を継続する。
+            return
+    except ImportError:
+        pass
+
     data_dir = _data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
 
