@@ -25,6 +25,17 @@ from growth_journal import (
 
 
 class TestEmitCrystallization:
+    """growth-journal.jsonl は実 store_registry で status=dead（PR #389・#379 Step 3
+    レビューで writer ゲート追加）。本クラスは writer の書込ロジック自体を検証するため
+    is_dead_store を False に固定する（dead ゲートの検証は test_growth_journal_datadir.py
+    に分離済み）。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_not_dead(self, monkeypatch):
+        import store_registry
+        monkeypatch.setattr(store_registry, "is_dead_store", lambda name: False)
+
     def test_emit_writes_jsonl(self, tmp_path):
         """正常に JSONL 1 行を追記。"""
         with mock.patch("growth_journal._data_dir", return_value=tmp_path):
@@ -140,6 +151,13 @@ class TestCountCrystallizedRules:
 
 
 class TestBackfillFromGitLog:
+    """backfill_from_git_log は内部で emit_crystallization を呼ぶため同様にゲート対象。"""
+
+    @pytest.fixture(autouse=True)
+    def _force_not_dead(self, monkeypatch):
+        import store_registry
+        monkeypatch.setattr(store_registry, "is_dead_store", lambda name: False)
+
     def test_backfill_parses_git_output(self, tmp_path):
         """git log 出力をパースして結晶化イベントを生成。"""
         git_output = (

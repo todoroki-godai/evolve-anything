@@ -233,6 +233,16 @@ def record_quality_score(
         scores: スコア辞書（pattern_score, confusion_score, overall 等）。
         data_dir: 出力ディレクトリ（テスト用）。
     """
+    try:
+        import store_registry
+        if store_registry.is_dead_store("quality-scores.jsonl"):
+            # #379 Step 3 レビュー: status=dead ストアへの store_write barrier 非経由の
+            # 直接 open() writer を自ら止める（barrier bypass 修正）。lookup 不能時は
+            # fail-open（下の import 失敗ケース）で従来通り書込を継続する。
+            return
+    except ImportError:
+        pass
+
     if data_dir is None:
         # canonical な lib 経路の DATA_DIR を使う。旧 `from hooks.common import DATA_DIR`
         # は (a) standalone tool 実行で `hooks` が import 不能 (b) hooks/common.py に

@@ -466,7 +466,18 @@ class TestComputeOverallScore:
 # ---------------------------------------------------------------------------
 
 class TestRecordQualityScore:
-    """quality_engine.record_quality_score のテスト。"""
+    """quality_engine.record_quality_score のテスト。
+
+    実 store_registry では quality-scores.jsonl は status=dead（PR #389・#379 Step 3
+    レビューで writer ゲート追加）。本クラスは writer の書込ロジック自体を検証するため
+    is_dead_store を False に固定して振る舞いを維持する（dead ゲートの検証は
+    TestRecordQualityScoreDeadGate に分離）。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_not_dead(self, monkeypatch):
+        import store_registry
+        monkeypatch.setattr(store_registry, "is_dead_store", lambda name: False)
 
     def test_writes_jsonl(self, tmp_path):
         """quality-scores.jsonl に正しく書き込む。"""
@@ -516,3 +527,42 @@ class TestRecordQualityScore:
         filepath = tmp_path / "quality-scores.jsonl"
         assert filepath.exists()
         assert json.loads(filepath.read_text().strip())["skill"] == "default-dir-skill"
+
+
+class TestRecordQualityScoreDeadGate:
+    """quality-scores.jsonl の status=dead ゲート（#379 Step 3 レビュー対応）。
+
+    実 store_registry では quality-scores.jsonl は status=dead（PR #389）。
+    上の TestRecordQualityScore は writer の書込ロジック自体を検証するため
+    is_dead_store を False に固定して振る舞いを維持し、本クラスは実 registry の
+    dead 宣言に対しゲートが書込を止めることを検証する。
+    """
+
+    def test_dead_store_skips_write(self, tmp_path):
+        """実 registry で status=dead のため write されない（barrier bypass 修正の本体）。"""
+        quality_engine.record_quality_score(
+            "gated-skill", {"overall": 0.9}, data_dir=tmp_path
+        )
+        assert not (tmp_path / "quality-scores.jsonl").exists()
+
+    def test_active_override_still_writes(self, tmp_path, monkeypatch):
+        """is_dead_store が False を返す限り（例: 将来 active へ復帰）書込は継続する。"""
+        import store_registry
+        monkeypatch.setattr(store_registry, "is_dead_store", lambda name: False)
+        quality_engine.record_quality_score(
+            "ungated-skill", {"overall": 0.9}, data_dir=tmp_path
+        )
+        filepath = tmp_path / "quality-scores.jsonl"
+        assert filepath.exists()
+        assert json.loads(filepath.read_text().strip())["skill"] == "ungated-skill"
+
+    def test_registry_import_failure_fails_open(self, tmp_path, monkeypatch):
+        """store_registry が import 不能な環境ではゲート起因で書込を止めない（fail-open）。"""
+        import sys
+        monkeypatch.setitem(sys.modules, "store_registry", None)
+        quality_engine.record_quality_score(
+            "fail-open-skill", {"overall": 0.9}, data_dir=tmp_path
+        )
+        filepath = tmp_path / "quality-scores.jsonl"
+        assert filepath.exists()
+        assert json.loads(filepath.read_text().strip())["skill"] == "fail-open-skill"

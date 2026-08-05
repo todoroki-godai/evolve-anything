@@ -489,7 +489,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="workflow_state",
         status="legacy",
         note="#121: audit 完了履歴。store_registry 導入前からの旧ストアで writer は batch "
-        "（hook 非経由）。active でないので write barrier の許可集合には含めない。",
+        "（hook 非経由）。active でないので write barrier の許可集合には含めない。"
+        "#379 Step 3: 当面 legacy 維持（reader = orchestrator._check_degradation が "
+        "audit 完了ごとに劣化検出で読む機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="belief_blocks.jsonl",
@@ -502,7 +504,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="workflow_state",
         status="legacy",
         note="#121: belief_entropy ゲートのブロック記録。append-only（prune/上限なし）。"
-        "writer は batch（hook 非経由）。",
+        "writer は batch（hook 非経由）。"
+        "#379 Step 3: 当面 legacy 維持（reader = belief_entropy.summarize_blocks が "
+        "直近 N 日の block を集計する機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="deferred_tasks.jsonl",
@@ -530,7 +534,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="workflow_state",
         status="legacy",
         note="#121: discover 提案の見送りレジャー。ARTIFACT_SUPPRESSION_TTL_DAYS=45 の"
-        "read 時窓（物理 prune はせず weak_signals と同型の read-time 失効）。writer は batch。",
+        "read 時窓（物理 prune はせず weak_signals と同型の read-time 失効）。writer は batch。"
+        "#379 Step 3: 当面 legacy 維持（reader = suppression.is_artifact_suppressed 等の "
+        "is_*_suppressed 群が discover flow から読む機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="episodic.db",
@@ -543,7 +549,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="derived_cache",
         status="legacy",
         note="#121: episodic 層（適用済み修正の DuckDB TTL 管理）。ttl_days 既定 30 で "
-        "expires_at を設定し prune_expired が削除。db なので hook-writer 突合の母集団外。",
+        "expires_at を設定し prune_expired が削除。db なので hook-writer 突合の母集団外。"
+        "#379 Step 3: 当面 legacy 維持（reader = episodic_retriever / memory_trace / "
+        "audit/memory.py が query_relevant 経由で読む機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="evolution_memory.jsonl",
@@ -555,24 +563,35 @@ _DECLARATIONS: List[StoreDeclaration] = [
         compaction="save_winner が _MAX_RECORDS=1000 件で古い順ローテーション。",
         classification="derived_cache",
         status="legacy",
-        note="#121: 直接パッチ最適化の成功パターン記憶。writer は batch（optimize skill）。",
+        note="#121: 直接パッチ最適化の成功パターン記憶。writer は batch（optimize skill）。"
+        "#379 Step 3: 当面 legacy 維持（reader = genetic-prompt-optimizer/optimize.py・"
+        "pipeline_eval.py が union read で消費する機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="growth-journal.jsonl",
-        writer="scripts/lib/growth_journal.py の emit_crystallization（現状は "
-        "backfill_from_git_log 経由のみで dormant・production の常時 writer なし）。batch writer。",
+        writer="scripts/lib/growth_journal.py の emit_crystallization（evolve --drain "
+        "--result-json の apply 境界・#146/ADR-051 から live に呼ばれる）+ "
+        "skills/implement/scripts/telemetry.py の record_growth_journal（SKILL.md の "
+        "実装完了時記録手順から呼ばれる）+ 同 implement_backfill.py の一時 backfill CLI。"
+        "3 writer とも batch/直接呼び出し（store_write barrier 非経由）。",
         writer_locus="batch",
         reader="query_crystallizations / count_crystallized_rules（growth_narrative・"
         "audit/orchestrator・sections_milestone が成長ストーリー素材に消費）。reader は live。",
         retention="permanent",
         classification="dead",
         status="dead",
-        note="#121: 結晶化イベント記録。reader は live だが writer は backfill 経由で dormant。"
+        note="#121: 結晶化イベント記録。reader は live。"
         "append-only（_patch_last_event_ts で末尾行更新はするが rotation/上限なし）。"
-        "#379 Step 3: writer が dormant（production の常時 writer なし）+ issue #379 本文が"
-        "「修理より置換（optimize_history 直読みの戦果ボード）」を明記しているため dead へ降格。"
-        "writer（emit_crystallization）は store_write barrier 非経由の直接 open() のため、"
-        "降格しても実行時に壊れない（検証済み）。",
+        "#379 Step 3: issue #379 本文が「修理より置換（optimize_history 直読みの戦果ボード）」"
+        "を明記しているため dead へ降格。"
+        "#379 Step 3 外部レビュー指摘: 降格時の note は『writer は backfill 経由で dormant』"
+        "と記していたが誤りだった（stale）。実際は emit_crystallization が evolve --drain の "
+        "apply 境界から常時呼ばれる live writer で、store_write barrier を経由しない直接 "
+        "open() のため status=dead 降格後も書き続けていた。契約テストの較正で "
+        "skills/implement 側の record_growth_journal / implement_backfill.py の2 writer も "
+        "同型の未ゲート barrier bypass だったと追加判明。3 writer とも冒頭で "
+        "store_registry.is_dead_store('growth-journal.jsonl') をチェックし、dead なら "
+        "書込せず return するゲートを追加して書込を停止した（#379 Step 3 レビュー修正）。",
     ),
     StoreDeclaration(
         name="quality-baselines.jsonl",
@@ -584,7 +603,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         compaction="append_record がスキルあたり MAX_RECORDS_PER_SKILL=100 件に上限適用。",
         classification="derived_cache",
         status="legacy",
-        note="#121: スキル品質ベースライン。writer は batch（quality_monitor / audit）。",
+        note="#121: スキル品質ベースライン。writer は batch（quality_monitor / audit）。"
+        "#379 Step 3: 当面 legacy 維持（reader = audit/quality.py の "
+        "load_quality_baselines が audit 品質フェーズから読む機能的 consumer。"
+        "grep 確認済み）。",
     ),
     StoreDeclaration(
         name="quality-scores.jsonl",
@@ -598,8 +620,14 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="#121: スキル品質スコアのスコアボード。writer live（evolve 採点）だが専用 reader は "
         "未検出。append-only（rotation/上限なし）。writer は batch。"
         "#379 Step 3: registry 自身が『consumer 未検出』と自己申告しているスコアボード用途の "
-        "writer-only ストアのため dead へ降格。writer（record_quality_score）は store_write "
-        "barrier 非経由の直接 open() のため、降格しても実行時に壊れない（検証済み）。",
+        "writer-only ストアのため dead へ降格。"
+        "#379 Step 3 外部レビュー指摘: 降格時の note は『降格しても実行時に壊れない（検証済み）』"
+        "としていたが、実際は record_quality_score が store_write barrier を経由しない直接 "
+        "open() writer で、evolve の phases_diagnose から通常フローで呼ばれ続け、status=dead "
+        "降格後も quality-scores.jsonl に書き続けていた（『壊れない』は確認したが『書込停止』は "
+        "未確認だった）。writer 冒頭で store_registry.is_dead_store('quality-scores.jsonl') を "
+        "チェックし、dead なら書込せず return するゲートを追加して書込を停止した"
+        "（#379 Step 3 レビュー修正）。",
     ),
     StoreDeclaration(
         name="sessions.db",
@@ -613,7 +641,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="derived_cache",
         status="legacy",
         note="#121: セッションテレメトリの DuckDB SoR。active な sessions.jsonl（hot-path 緩衝）が "
-        "ingest されてくる先。db なので hook-writer 突合の母集団外。",
+        "ingest されてくる先。db なので hook-writer 突合の母集団外。"
+        "#379 Step 3: 当面 legacy 維持（reader = session_store の union read を "
+        "audit / trigger / capture_rate / fleet 等 11 ファイルが利用する live な "
+        "DuckDB SoR。grep 確認済み）。",
     ),
     StoreDeclaration(
         name="token_usage.db",
@@ -625,7 +656,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         classification="derived_cache",
         status="legacy",
         note="#121: PJ 別 LLM トークン消費の DuckDB SoR。PK は transcript 各行 top-level uuid・"
-        "prune なし（permanent）。db なので hook-writer 突合の母集団外。",
+        "prune なし（permanent）。db なので hook-writer 突合の母集団外。"
+        "#379 Step 3: 当面 legacy 維持（reader = token_usage_store の query 群を "
+        "fleet tokens / fitness_history_store 等 9 ファイルが利用する live な "
+        "DuckDB SoR。grep 確認済み）。",
     ),
 ]
 
@@ -691,6 +725,18 @@ def is_active_store(name: str) -> bool:
     """
     decl = declaration_for(name)
     return decl is not None and decl.status == "active"
+
+
+def is_dead_store(name: str) -> bool:
+    """name が status=dead 登録ストアなら True（未登録 / active / legacy は False）。
+
+    store_write barrier 非経由の直接 open() writer（quality_engine.record_quality_score /
+    growth_journal.emit_crystallization 等）が、writer 関数の冒頭でこの判定を使って
+    dead ストアへの書込を自ら止めるためのゲート（#379 Step 3 レビュー: barrier bypass 修正）。
+    未登録 / lookup 不能時は False（fail-open で書込継続。ゲート起因で本体機能を壊さない）。
+    """
+    decl = declaration_for(name)
+    return decl is not None and decl.status == "dead"
 
 
 def declaration_for(name: str) -> Optional[StoreDeclaration]:
