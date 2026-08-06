@@ -181,7 +181,10 @@ def build_patch_prompt(
 
     if strategy == "error_guided":
         prompt_parts.append("## 修正すべき問題点\n")
-        prompt_parts.append("以下のユーザー修正フィードバックに基づいて、スキルを改善してください:\n")
+        prompt_parts.append(
+            "以下のユーザー修正フィードバックを反映し、"
+            "同じ問題が再発しないようにスキルを修正してください:\n"
+        )
         for i, corr in enumerate(corrections, 1):
             msg = corr.get("message", "")
             ctype = corr.get("correction_type", "unknown")
@@ -191,7 +194,6 @@ def build_patch_prompt(
                 prompt_parts.append(f"メッセージ: {msg}")
             if learning:
                 prompt_parts.append(f"学習: {learning}")
-        prompt_parts.append("\n上記のフィードバックを反映し、同じ問題が再発しないようにスキルを修正してください。\n")
     else:
         prompt_parts.append("## 改善方針\n")
         # 汎用美徳の列挙（具体的な例を追加 / エッジケースを追加 …）は行数上限と
@@ -217,8 +219,11 @@ def build_patch_prompt(
     if context.get("pitfalls"):
         prompt_parts.append(f"\n## 過去の失敗パターン\n{context['pitfalls']}\n")
 
+    # 強調は `line_constraint`（gate が落とす＝復旧不能）側に集約する。
+    # frontmatter 消失は restore_frontmatter_if_lost が決定論的に補完するため、
+    # 指示は残しつつ `**重要**` の二重掛けはやめる（prompt-audit 2026-08-07・#3）。
     fm_note = (
-        "\n**重要**: ファイル先頭の `---` で始まる YAML frontmatter は"
+        "\nファイル先頭の `---` で始まる YAML frontmatter は"
         "必ずそのまま保持してください（削除・変更禁止）。"
         if skill_content.startswith("---")
         else ""
