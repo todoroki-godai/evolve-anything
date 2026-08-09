@@ -1,4 +1,4 @@
-"""~/.claude/hooks/detect-deferred-task.py のユニットテスト。
+"""hooks/detect-deferred-task.py のユニットテスト。
 
 v2.1.145 で追加された background_tasks / session_crons フィールドの
 処理を含む Stop フック全体をカバーする。
@@ -12,7 +12,7 @@ from unittest import mock
 
 import pytest
 
-_GLOBAL_HOOK = Path.home() / ".claude" / "hooks" / "detect-deferred-task.py"
+_GLOBAL_HOOK = Path(__file__).resolve().parent.parent / "detect-deferred-task.py"
 
 
 def _load_module():
