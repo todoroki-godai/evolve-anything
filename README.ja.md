@@ -95,7 +95,7 @@ evolve-anything は **4つの独立した柱** で構成される。
 | セカンドオピニオン | 独立した cold-read セカンドオピニオン | `/evolve-anything:second-opinion` |
 | 仕様管理 | SPEC.md + ADR の管理、L1/L2 自動昇格 | `/evolve-anything:spec-keeper` |
 | 行き詰まり突破 | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動 | `/evolve-anything:breakthrough` |
-| 成長可視化 (NFD) | Lv.1-10 レベルシステム + 4フェーズ自動判定 + 5 traits + 成長ストーリー | `/evolve-anything:audit --growth` |
+| 成長可視化 (NFD) | Lv.1-10 レベルシステム + フェーズ自動判定 + 🏆 戦果ボード（手直し回数の増減・accepted/rejected/pending/excluded・取り下げ候補） | `/evolve-anything:audit --growth` |
 
 ## やりたいこと別ガイド
 

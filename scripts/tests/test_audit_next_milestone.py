@@ -67,6 +67,47 @@ def test_next_milestone_section_uses_cache(tmp_path, monkeypatch):
     assert "Structured Nurturing" in text
 
 
+def test_next_milestone_section_ignores_legacy_mature_cache(tmp_path, monkeypatch):
+    """#398 round2 Must 1: 旧方式で保存された MATURE_OPERATION cache を信用せず再計算する。
+
+    growth-journal harness 削除（#379 Step 4）前に保存された phase=mature_operation の
+    cache が STALENESS_HIDE_DAYS（最大30日）以内でそのまま残っていても、「Mature 判定は
+    crystallized_rules 計測廃止により保留」契約に反して「最終フェーズに到達しています」を
+    出してはいけない。cache に mature_operation を見つけたら信用せず
+    detect_phase_no_crystallization で再計算する（縮退判定は Structured Nurturing が
+    上限なので保留契約と整合する）。
+    """
+    import growth_engine
+    import telemetry_query
+    from audit.sections_milestone import build_next_milestone_section
+
+    monkeypatch.setattr(growth_engine, "_DATA_DIR", tmp_path)
+    proj = tmp_path / "legacy-mature-proj"
+    proj.mkdir()
+    # 旧方式（#379 Step 4 以前）で保存された Mature cache を再現。
+    growth_engine.update_cache(
+        proj.resolve().name,
+        growth_engine.Phase.MATURE_OPERATION,
+        1.0,
+        {"sessions_count": 300},
+    )
+    # 再計算時に使われる telemetry（Structured Nurturing 到達水準）。
+    monkeypatch.setattr(
+        telemetry_query, "query_sessions", lambda **k: [{} for _ in range(60)],
+    )
+    monkeypatch.setattr(
+        telemetry_query, "query_corrections",
+        lambda **k: [{"source": "reflect_confirmed"} for _ in range(15)],
+    )
+
+    section = build_next_milestone_section(proj)
+    assert section is not None
+    text = "\n".join(section)
+    assert "最終フェーズに到達しています" not in text
+    assert "保留中" in text
+    assert "Structured Nurturing" in text
+
+
 def test_next_milestone_section_no_cache_falls_back_to_telemetry(tmp_path, monkeypatch):
     """cache が無くても telemetry から軽算出して Next Milestone を出す（沈黙しない）。
 

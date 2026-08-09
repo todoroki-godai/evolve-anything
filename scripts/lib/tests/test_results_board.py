@@ -5,9 +5,15 @@ classify_decision（optimize_history 1エントリ→accepted/rejected/pending/e
 build_results_board（optimize_history + corrections の直読み集計）を検証する。
 
 実データ較正（~/.claude/evolve-anything/optimize_history/evolve-anything.jsonl・38件・
-2026-08-10 読み取り時点）で判明した事実:
-  - source は None（optimize/evolve-loop）と "evolve_remediation" の2系統に分裂し、判定
-    フィールドがそれぞれ approved / human_accepted と異なる（#279/#286/#290 と同根の split）。
+2026-08-10 読み取り時点）と canonical writer 3種の実コード確認で判明した事実:
+  - classify_decision は source 文字列でなくフィールドの実在と bool 型を優先して判定する
+    （human_accepted が bool ならそれを採用 → 次に approved が bool なら採用 → どちらも
+    無ければ pending）。当初は「source=evolve_remediation→human_accepted /
+    source=None→approved」で判定していたが、`skills/genetic-prompt-optimizer/scripts/
+    optimize.py` の `save_history_entry` は source を一切書かず human_accepted のみを
+    書くため、この writer のレコードが全件 pending に落ちる構造的バグがあった
+    （#398 codex レビュー Must 1 是正・#279/#286/#290 の提案ID/判断イベントID分離と
+    同根の split 誤認）。
   - target/skill_name のテスト汚染パスは "pytest-of-" だけでなく macOS tmpfile 規約
     （/T/tmp<random>/ 等）にも及ぶ。狭い "pytest-of-" 限定では 30 件中 13 件を取り逃す。
   - fitness_eligible=False（#376 の無効化フラグ）は全件 source="evolve_remediation" だった。

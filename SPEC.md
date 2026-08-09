@@ -31,7 +31,7 @@ Claude Code Plugin。スキル/ルールの **自律進化パイプライン**�
 | セカンドオピニオン | second-opinion | Claude Agent による cold-read 独立見解（codex 代替、3モード） |
 | 行き詰まり突破 | breakthrough | 「惜しいがブレイクスルーしない」問題を診断→戦略提案→Agent起動で解決 |
 | 仕様管理 | spec-keeper | SPEC.md + ADR の管理、Progressive Disclosure L1/L2 自動昇格 |
-| **成長可視化 (NFD)** | audit --growth | NFD 論文ベースの Spiral Development Model — 4フェーズ自動判定 + Lv.1-10 レベルシステム + 環境プロファイル（5 traits）+ 成長ストーリー |
+| **成長可視化 (NFD)** | audit --growth | NFD 論文ベースの Spiral Development Model — フェーズ自動判定 + Lv.1-10 レベルシステム + 🏆 戦果ボード（手直し回数の増減・採用した改善 accepted/rejected/pending/excluded・取り下げ候補、#379 Step 4）。crystallized_rules 計測の廃止（growth-journal harness 削除）に伴い Mature Operation への昇格判定は保留中（旧「環境プロファイル・成長ストーリー」は戦果ボードへ置換済み） |
 | **ROI 可視化** | evolve-gain (`bin/evolve-gain`) | `rtk gain` 風 ASCII レポート — 推定節約時間・Growth Level・Efficiency meter・スキル別 Impact をワンビューで表示 |
 | **コミュニティスキル import** | import (`bin/evolve-fleet import`) | コミュニティリポジトリからスキルをワンコマンドで取得・インストール。`owner/repo`・ローカルパス・URL に対応。scripts/ 自動実行なし、[y/N] confirm のセキュリティゲート付き |
 | 後片付け | cleanup | PR マージ・デプロイ後の痕跡（マージ済みブランチ / remote refs / 一時 worktree / 一時ディレクトリ / 関連 Issue close 候補 / PR Test plan 残件 / CC プロジェクト状態パージ Category 7）を候補提示→`AskUserQuestion` 個別承認→実行で安全処理。一時ディレクトリ default prefix は `evolve-anything-` のみに限定 ([ADR-021](docs/decisions/021-cleanup-tmp-dir-prefix-safety.md))、`CLAUDE_PLUGIN_OPTION_cleanup_tmp_prefixes` / userConfig で拡張可能 |

@@ -71,6 +71,15 @@ def build_next_milestone_section(proj: Path) -> Optional[List[str]]:
             except ValueError:
                 phase = None
 
+    # #398 round2 Must 1: growth-journal harness 削除（#379 Step 4）前に保存された
+    # phase=mature_operation の cache は STALENESS_HIDE_DAYS（最大30日）以内なら
+    # そのまま読めてしまうが、Mature Operation は crystallized_rules 計測廃止により
+    # 本経路では判定しない契約（_next_milestone_lines 参照）に反する。信用せず
+    # telemetry から再計算する（detect_phase_no_crystallization は Mature を返さない
+    # ため、再計算結果は必ず Structured Nurturing 以下に収まり保留契約と整合する）。
+    if phase == Phase.MATURE_OPERATION:
+        phase = None
+
     if phase is None:
         # cache が無い → telemetry から軽算出（fitness/LLM は呼ばない）。
         # #379 Step 4: crystallized_rules は growth-journal harness 削除で恒久喪失した
