@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-HOOK_SCRIPT = Path.home() / ".claude" / "hooks" / "detect-deferred-task.py"
+HOOK_SCRIPT = Path(__file__).resolve().parents[4] / "hooks" / "detect-deferred-task.py"
 
 
 # 注: 本番 deferred_tasks.jsonl への書き込み防止は repo ルートの conftest.py
