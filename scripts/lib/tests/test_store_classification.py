@@ -69,7 +69,6 @@ _DERIVED_CACHE = {
 }
 
 _DEAD = {
-    "quality-scores.jsonl",
     "growth-journal.jsonl",
 }
 
@@ -113,7 +112,7 @@ def test_status_dead_exempt_has_no_undocumented_additions() -> None:
 
 
 def test_classification_golden_counts_and_names() -> None:
-    """4 分類の件数（10/15/8/2）と名前リストが棚卸し表と一致する（golden）。"""
+    """4 分類の件数（10/15/8/1）と名前リストが棚卸し表と一致する（golden）。"""
     by_classification: dict[str, set[str]] = {}
     for d in store_registry.declarations():
         by_classification.setdefault(d.classification, set()).add(d.name)
@@ -126,7 +125,7 @@ def test_classification_golden_counts_and_names() -> None:
     assert len(_RAW_EVENT) == 10
     assert len(_WORKFLOW_STATE) == 15
     assert len(_DERIVED_CACHE) == 8
-    assert len(_DEAD) == 2
+    assert len(_DEAD) == 1
 
 
 def test_classification_categories_partition_all_declarations() -> None:

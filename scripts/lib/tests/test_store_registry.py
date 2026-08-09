@@ -277,7 +277,8 @@ def test_status_defaults_to_active() -> None:
 # 降格しても実行時に壊れないことを確認済み）。judge_audit_verdicts.jsonl は当時
 # classification=dead だが status=active のまま据え置く例外だったが、#379 Step 4 で
 # judge_audit harness ごと宣言削除され例外自体が解消した
-# （test_store_classification.py の `_STATUS_DEAD_EXEMPT` 参照）。
+# （test_store_classification.py の `_STATUS_DEAD_EXEMPT` 参照）。quality-scores.jsonl も
+# #379 Step 4 第3弾で writer（quality_engine.record_quality_score）ごと宣言削除された。
 _LEGACY_STORES_121 = [
     "audit-history.jsonl",       # writer live: audit orchestrator _record_audit_completion
     "belief_blocks.jsonl",       # writer live: auto_memory_broker _record_belief_block
@@ -289,13 +290,12 @@ _LEGACY_STORES_121 = [
     "token_usage.db",            # writer live: token_usage_store の bulk INSERT
 ]
 _DEAD_STORES_121 = [
-    "quality-scores.jsonl",  # #379 Step 3: consumer 未検出のスコアボード。writer は raw open() でbarrier非経由
     "growth-journal.jsonl",  # #379 Step 3: writer dormant + #379 本文が置換方針を明記。writer は raw open() でbarrier非経由
 ]
 
 
 def test_legacy_and_dead_stores_declared_121() -> None:
-    """#121/#379 Step 3: legacy 8 件 + dead 2 件が正しい status で宣言されている。
+    """#121/#379 Step 3/4: legacy 8 件 + dead 1 件が正しい status で宣言されている。
 
     旧 test_all_real_declarations_are_active（全 active 前提）を #121 の段階導入に更新。
     active は既存のまま、legacy/dead は #121/#379 で新規宣言・降格した既知集合のみが持つ。
@@ -416,7 +416,6 @@ def test_is_dead_store() -> None:
 
     未登録 / active / legacy は False。lookup 不能でも False（fail-open で書込継続）。
     """
-    assert store_registry.is_dead_store("quality-scores.jsonl") is True
     assert store_registry.is_dead_store("growth-journal.jsonl") is True
     assert store_registry.is_dead_store("corrections.jsonl") is False
     assert store_registry.is_dead_store("no_such_store.jsonl") is False

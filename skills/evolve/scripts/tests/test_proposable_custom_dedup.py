@@ -232,7 +232,6 @@ class TestRunEvolveRemediation:
                     recommend_patterns=MagicMock(return_value={}),
                     analyze_traces=MagicMock(return_value={}),
                     compute_overall_score=MagicMock(return_value=0.5),
-                    record_quality_score=MagicMock(),
                 ),
                 "layer_diagnose": MagicMock(
                     diagnose_all_layers=MagicMock(return_value={})

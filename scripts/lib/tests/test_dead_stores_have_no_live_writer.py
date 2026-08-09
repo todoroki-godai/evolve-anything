@@ -36,7 +36,8 @@ _EXCLUDE_DIR_PARTS = {"tests", "fixtures"}
 # 新規追加時は理由を明記すること（モグラ叩き allowlist にしない）。
 _ALLOWED_RAW_WRITER_FILES = {
     # ゲート済み writer 自身（is_dead_store チェックを冒頭に持つ・#379 Step 3 レビュー修正）。
-    "scripts/lib/quality_engine.py",
+    # quality_engine.py（quality-scores.jsonl の writer）は #379 Step 4 で writer 関数
+    # ごと削除済みのため対象外。
     "scripts/lib/growth_journal.py",
     "skills/implement/scripts/telemetry.py",
     "skills/implement/scripts/implement_backfill.py",
@@ -142,7 +143,6 @@ def test_gated_writer_functions_actually_check_is_dead_store() -> None:
     主張する writer ファイルが is_dead_store 参照を実際に持つことを確認する。
     """
     gated_files = {
-        "scripts/lib/quality_engine.py",
         "scripts/lib/growth_journal.py",
         "skills/implement/scripts/telemetry.py",
         "skills/implement/scripts/implement_backfill.py",

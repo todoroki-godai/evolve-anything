@@ -571,27 +571,6 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "grep 確認済み）。",
     ),
     StoreDeclaration(
-        name="quality-scores.jsonl",
-        writer="scripts/lib/quality_engine.py の record_quality_score（evolve の "
-        "phases_diagnose がスキル採点を追記）。batch writer。",
-        writer_locus="batch",
-        reader="現状 consumer 未検出（スコアボード用途の writer-only 傾向）。",
-        retention="permanent",
-        classification="dead",
-        status="dead",
-        note="#121: スキル品質スコアのスコアボード。writer live（evolve 採点）だが専用 reader は "
-        "未検出。append-only（rotation/上限なし）。writer は batch。"
-        "#379 Step 3: registry 自身が『consumer 未検出』と自己申告しているスコアボード用途の "
-        "writer-only ストアのため dead へ降格。"
-        "#379 Step 3 外部レビュー指摘: 降格時の note は『降格しても実行時に壊れない（検証済み）』"
-        "としていたが、実際は record_quality_score が store_write barrier を経由しない直接 "
-        "open() writer で、evolve の phases_diagnose から通常フローで呼ばれ続け、status=dead "
-        "降格後も quality-scores.jsonl に書き続けていた（『壊れない』は確認したが『書込停止』は "
-        "未確認だった）。writer 冒頭で store_registry.is_dead_store('quality-scores.jsonl') を "
-        "チェックし、dead なら書込せず return するゲートを追加して書込を停止した"
-        "（#379 Step 3 レビュー修正）。",
-    ),
-    StoreDeclaration(
         name="sessions.db",
         kind="db",
         writer="scripts/lib/session_store.py の ingest（sessions.jsonl → sessions.db の "
@@ -691,9 +670,9 @@ def is_active_store(name: str) -> bool:
 def is_dead_store(name: str) -> bool:
     """name が status=dead 登録ストアなら True（未登録 / active / legacy は False）。
 
-    store_write barrier 非経由の直接 open() writer（quality_engine.record_quality_score /
-    growth_journal.emit_crystallization 等）が、writer 関数の冒頭でこの判定を使って
-    dead ストアへの書込を自ら止めるためのゲート（#379 Step 3 レビュー: barrier bypass 修正）。
+    store_write barrier 非経由の直接 open() writer（growth_journal.emit_crystallization 等）
+    が、writer 関数の冒頭でこの判定を使って dead ストアへの書込を自ら止めるためのゲート
+    （#379 Step 3 レビュー: barrier bypass 修正）。
     未登録 / lookup 不能時は False（fail-open で書込継続。ゲート起因で本体機能を壊さない）。
     """
     decl = declaration_for(name)

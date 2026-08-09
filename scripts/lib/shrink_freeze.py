@@ -64,7 +64,6 @@ FROZEN_STORES: FrozenSet[str] = frozenset(
         "icebox_verdict_seen.jsonl",
         "memory_transition_checks.jsonl",
         "quality-baselines.jsonl",
-        "quality-scores.jsonl",
         "remediation_suppression/<slug>.jsonl",
         "remediation_surfaced/<slug>.json",
         "reward_ema.jsonl",
