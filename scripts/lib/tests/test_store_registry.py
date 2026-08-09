@@ -270,8 +270,8 @@ def test_status_defaults_to_active() -> None:
     assert decl.status == "active"
 
 
-# #121: 未登録 legacy ストア11件を registry 宣言（status=legacy、hook 未登録で
-# もう書かれない deferred_tasks.jsonl のみ dead）。writer/reader を実 grep で確認済み。
+# #121: 未登録 legacy ストア11件を registry 宣言（status=legacy）。writer/reader を実 grep
+# で確認済み。
 # #379 Step 3: quality-scores.jsonl / growth-journal.jsonl は classification=dead に伴い
 # status も legacy→dead へ降格（writer が store_write barrier 非経由の直接 open() のため
 # 降格しても実行時に壊れないことを確認済み）。judge_audit_verdicts.jsonl は
@@ -289,14 +289,13 @@ _LEGACY_STORES_121 = [
     "token_usage.db",            # writer live: token_usage_store の bulk INSERT
 ]
 _DEAD_STORES_121 = [
-    "deferred_tasks.jsonl",  # hook detect-deferred-task.py 未登録＝もう書かれない
     "quality-scores.jsonl",  # #379 Step 3: consumer 未検出のスコアボード。writer は raw open() でbarrier非経由
     "growth-journal.jsonl",  # #379 Step 3: writer dormant + #379 本文が置換方針を明記。writer は raw open() でbarrier非経由
 ]
 
 
 def test_legacy_and_dead_stores_declared_121() -> None:
-    """#121/#379 Step 3: legacy 8 件 + dead 3 件が正しい status で宣言されている。
+    """#121/#379 Step 3: legacy 8 件 + dead 2 件が正しい status で宣言されている。
 
     旧 test_all_real_declarations_are_active（全 active 前提）を #121 の段階導入に更新。
     active は既存のまま、legacy/dead は #121/#379 で新規宣言・降格した既知集合のみが持つ。
@@ -345,8 +344,8 @@ def test_legacy_dead_stores_not_flagged_as_stale_121() -> None:
 def test_stale_exempt_includes_non_active_121() -> None:
     """#121: 非 active（legacy/dead）ストアは stale_exempt に含まれる。"""
     exempt = set(store_registry.stale_exempt_names())
-    assert "deferred_tasks.jsonl" in exempt  # dead + hook writer_locus でも exempt
     assert set(_LEGACY_STORES_121) <= exempt
+    assert set(_DEAD_STORES_121) <= exempt
 
 
 def test_episodic_and_sessions_and_token_declared_as_db_121() -> None:

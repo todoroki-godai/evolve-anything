@@ -14,14 +14,6 @@ from . import PLUGIN_ROOT
 # `recommendation_id` 付きエントリは _compute_mitigation_metrics で削減効果を計測。
 RECOMMENDED_ARTIFACTS = [
     {
-        "id": "no-defer-use-subagent",
-        "type": "rule",
-        "path": Path.home() / ".claude" / "rules" / "no-defer-use-subagent.md",
-        "description": "先送り禁止 — background subagent 即時委譲ルール",
-        "hook_path": Path.home() / ".claude" / "hooks" / "detect-deferred-task.py",
-        "hook_description": "Stop hook: 先送り表現検出 → 会話続行強制",
-    },
-    {
         "id": "avoid-bash-builtin",
         "type": "rule+hook",
         "path": Path.home() / ".claude" / "rules" / "avoid-bash-builtin.md",

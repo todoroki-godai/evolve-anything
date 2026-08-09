@@ -21,7 +21,6 @@ hooks/                  ← Observe 層（16個 + helpers、LLMコストゼロ�
   restore_state.py      ← セッション開始時の状態復元
   session_summary.py    ← セッションサマリー記録 + auto_trigger ゲート
   workflow_context.py   ← ワークフローコンテキスト記録
-  detect-deferred-task.py ← Stop hook: AI の先送り提案を検出し subagent 即時委譲を促す（CLAUDE_PLUGIN_DATA env var 対応、v1.43.0 で repo 取り込み）
   file_changed.py       ← FileChanged hook（CC v2.1.83）CLAUDE.md/SKILL.md/rules 変更検知
   skill_triage_runner.py← Stop hook で skill-triage を非同期実行（Popen）
   skill_activation_log.py← Skill PostToolUse — invocation_trigger（nested-skill/top-level）を skill_activations.jsonl に記録（CC v2.1.121+）

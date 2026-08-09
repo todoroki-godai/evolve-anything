@@ -54,7 +54,6 @@ FROZEN_STORES: FrozenSet[str] = frozenset(
         "correction_judged.jsonl",
         "correction_review_seen.jsonl",
         "corrections.jsonl",
-        "deferred_tasks.jsonl",
         "discover-suppression.jsonl",
         "episodic.db",
         "errors.jsonl",

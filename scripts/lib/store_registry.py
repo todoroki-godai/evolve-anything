@@ -472,8 +472,8 @@ _DECLARATIONS: List[StoreDeclaration] = [
     #
     # 以下は store_registry 導入前（#434 以前）からある旧ストアで、writer が hooks でなく
     # batch script / DuckDB ingest / 直接 open() のため store_write barrier を経由しない。
-    # active（write barrier の許可対象）ではないので status=legacy（実体がもう書かれない
-    # deferred_tasks.jsonl のみ dead）で宣言し、registry を全ストアの SoT に近づける。
+    # active（write barrier の許可対象）ではないので status=legacy で宣言し、registry を
+    # 全ストアの SoT に近づける。
     # writer/reader の live 判定は grep で実確認（各エントリの writer/reader/note に根拠を明記）。
     # 非 active なので active_store_names()（write-path-set snapshot）には現れず、
     # stale_exempt（status-aware）で contract-drift の stale にも載らない。
@@ -507,21 +507,6 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "writer は batch（hook 非経由）。"
         "#379 Step 3: 当面 legacy 維持（reader = belief_entropy.summarize_blocks が "
         "直近 N 日の block を集計する機能的 consumer。grep 確認済み）。",
-    ),
-    StoreDeclaration(
-        name="deferred_tasks.jsonl",
-        writer="hooks/detect-deferred-task.py の log_deferral（Stop hook）。ただし当該 hook は "
-        "hooks.json に未登録＝発火せず、実体はもう書かれない。",
-        writer_locus="hook",
-        reader="なし（jsonl データを読む consumer は不在。discover/artifacts.py は hook "
-        "スクリプトのパスを推奨 artifact として参照するのみでデータは読まない）。",
-        retention="permanent",
-        classification="dead",
-        disposition="remove",
-        status="dead",
-        note="#121: hook detect-deferred-task.py は hooks.json 未登録のため発火せず、この "
-        "ストアはもう書かれない（=dead）。discover が導入を推奨できる artifact なので、"
-        "ユーザーが hook を登録したら writer が live 化する。その際は status を legacy/active に見直す。",
     ),
     StoreDeclaration(
         name="discover-suppression.jsonl",
@@ -685,8 +670,7 @@ def stale_exempt_names() -> List[str]:
     - writer_locus="batch": writer が batch script（weak_signals.jsonl 等）
     - status != "active"  : legacy/dead は writer が batch/直接 or 退役済み（dead）で
                             hook writer 突合に出ないのが当然（#121・#55 status の意図）。
-                            特に dead な hook writer（deferred_tasks.jsonl は hook 未登録で
-                            発火せず）を「writer 消えた」と drift 扱いするのは冗長なので除外する。
+                            退役済みストアを「writer 消えた」と drift 扱いするのは冗長なので除外する。
 
     いずれも同じ理由（hook writer 突合に現れない）なので 1 関数で集約する（#432・#121）。
     """

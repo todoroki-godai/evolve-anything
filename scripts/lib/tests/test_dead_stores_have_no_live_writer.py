@@ -40,10 +40,6 @@ _ALLOWED_RAW_WRITER_FILES = {
     "scripts/lib/growth_journal.py",
     "skills/implement/scripts/telemetry.py",
     "skills/implement/scripts/implement_backfill.py",
-    # hooks.json 未登録で構造的に発火しない dormant hook（store_registry の
-    # deferred_tasks.jsonl 宣言 note に明記済み）。barrier bypass ではなく単純な
-    # 未配線であり本 PR のスコープ外（#379 Step 3）。
-    "hooks/detect-deferred-task.py",
 }
 
 
@@ -143,8 +139,7 @@ def test_gated_writer_functions_actually_check_is_dead_store() -> None:
     """allowlist の主要ゲート済み writer が is_dead_store 呼び出しを実際に含む（形骸化防止）。
 
     allowlist にファイルを足すだけでゲート実装を忘れる回帰を防ぐため、ゲート済みと
-    主張する writer ファイルが is_dead_store 参照を実際に持つことを確認する
-    （dormant hook である detect-deferred-task.py は対象外）。
+    主張する writer ファイルが is_dead_store 参照を実際に持つことを確認する。
     """
     gated_files = {
         "scripts/lib/quality_engine.py",
