@@ -78,6 +78,7 @@ def test_stop_hook_active_skips(mod):
 # ── v2.1.145 新機能: background_tasks / session_crons ──────────
 
 
+@pytest.mark.xfail(reason="background_tasks/session_crons 対応は削除済みグローバル hook にのみ実装され、リポジトリ内 hook へ未移植。deferred_tasks store は #379 Step 3 で dead 分類・hook は dormant のため再実装せず、Step 4 の harness 削除で本テストごと除去予定", strict=True)
 def test_background_tasks_only_logs_warning(mod, tmp_path):
     """先送りなし + background_tasks あり → ブロックせず stderr に警告を出す。"""
     result, stderr = _run(mod, {
@@ -90,6 +91,7 @@ def test_background_tasks_only_logs_warning(mod, tmp_path):
     assert "background" in stderr.lower() or "バックグラウンド" in stderr
 
 
+@pytest.mark.xfail(reason="background_tasks/session_crons 対応は削除済みグローバル hook にのみ実装され、リポジトリ内 hook へ未移植。deferred_tasks store は #379 Step 3 で dead 分類・hook は dormant のため再実装せず、Step 4 の harness 削除で本テストごと除去予定", strict=True)
 def test_session_crons_only_logs_warning(mod):
     """先送りなし + session_crons あり → ブロックせず stderr に警告を出す。"""
     result, stderr = _run(mod, {
@@ -102,6 +104,7 @@ def test_session_crons_only_logs_warning(mod):
     assert "cron" in stderr.lower() or "Cron" in stderr
 
 
+@pytest.mark.xfail(reason="background_tasks/session_crons 対応は削除済みグローバル hook にのみ実装され、リポジトリ内 hook へ未移植。deferred_tasks store は #379 Step 3 で dead 分類・hook は dormant のため再実装せず、Step 4 の harness 削除で本テストごと除去予定", strict=True)
 def test_deferral_with_background_tasks_includes_context(mod):
     """先送り + background_tasks → block かつ reason にバックグラウンド情報を含む。"""
     result, _ = _run(mod, {
@@ -115,6 +118,7 @@ def test_deferral_with_background_tasks_includes_context(mod):
     assert "2" in result["reason"] or "バックグラウンド" in result["reason"]
 
 
+@pytest.mark.xfail(reason="background_tasks/session_crons 対応は削除済みグローバル hook にのみ実装され、リポジトリ内 hook へ未移植。deferred_tasks store は #379 Step 3 で dead 分類・hook は dormant のため再実装せず、Step 4 の harness 削除で本テストごと除去予定", strict=True)
 def test_both_background_and_crons_warn(mod):
     """background_tasks + session_crons 両方あり → stderr に両方の情報が出る。"""
     result, stderr = _run(mod, {
