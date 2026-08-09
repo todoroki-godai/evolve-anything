@@ -44,9 +44,19 @@ from typing import FrozenSet, Iterable
 SHRINK_FREEZE_ACTIVE: bool = True
 
 # 実装時点（#379 Step 1）の store_registry 全宣言 name（active/legacy/dead 全部含む）。
+#
+# #379 Step 4 PR E で7件追加（evolve-state.json / remediation-outcomes.jsonl /
+# fleet-config.json / agent-brushup-state.json / skill-evolve-denylist.json /
+# pj_slug_cache.json / skill-evolve-cache.json）。これらは Step 1 凍結より前から
+# 実際に書き込まれ続けていた live store で、store_registry への宣言が単に漏れて
+# いただけ（#121 の legacy backfill と同型）。凍結の趣旨は「新しい書込経路・新しい
+# 機能を作らせない」ことであり、既存の実ファイル・既存の writer/reader コードを
+# registry へ追認する本件は「新設」ではない（詳細は store_registry.py 側の
+# StoreDeclaration note 参照）。
 FROZEN_STORES: FrozenSet[str] = frozenset(
     {
         "advisory_decisions.jsonl",
+        "agent-brushup-state.json",
         "audit-history.jsonl",
         "belief_blocks.jsonl",
         "bootstrap_done-<slug>.marker",
@@ -59,15 +69,21 @@ FROZEN_STORES: FrozenSet[str] = frozenset(
         "errors.jsonl",
         "evolution_memory.jsonl",
         "evolve-queue-state.jsonl",
+        "evolve-state.json",
         "false_positives.jsonl",
+        "fleet-config.json",
         "icebox_verdict_seen.jsonl",
         "memory_transition_checks.jsonl",
+        "pj_slug_cache.json",
         "quality-baselines.jsonl",
+        "remediation-outcomes.jsonl",
         "remediation_suppression/<slug>.jsonl",
         "remediation_surfaced/<slug>.json",
         "reward_ema.jsonl",
         "sessions.db",
         "sessions.jsonl",
+        "skill-evolve-cache.json",
+        "skill-evolve-denylist.json",
         "skill_activations.jsonl",
         "subagent_traces.jsonl",
         "subagents.jsonl",

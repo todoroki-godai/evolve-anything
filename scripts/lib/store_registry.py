@@ -576,6 +576,124 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "fleet tokens / fitness_history_store 等 9 ファイルが利用する live な "
         "DuckDB SoR。grep 確認済み）。",
     ),
+    # ── #379 Step 4 PR E: 未登録 live store の棚卸し宣言バックフィル ──────────
+    # 以下7件は issue #379 本文が指示する「未登録 store 棚卸し」で発見した、既に live に
+    # 書き込まれている store の宣言漏れ（#121 の legacy backfill と同型・新設ではない）。
+    # shrink_freeze の新設凍結（#379 Step 1）は「新しい store を作る」変更を止める契約
+    # だが、本件は既存の実ファイル・既存の writer/reader コードを registry へ追認するだけ
+    # で、新しい書込経路・新しい機能を一切追加しない。shrink_freeze.FROZEN_STORES へも
+    # 同時追加している（両側同時追加の理由は shrink_freeze.py 側のコメント参照）。
+    StoreDeclaration(
+        name="evolve-state.json",
+        writer="複数箇所が個別キーを書く単一 JSON 状態ファイル（グローバル・PJ 非スコープ）: "
+        "scripts/lib/trigger_engine/*.py の _save_state（trigger_history。hooks 経由で "
+        "file_change/session_corrections/self_evolution の各トリガー発火時に書込・"
+        "hooks/*.py 自体には basename 文字列が現れないため hook-writer 静的走査では "
+        "検出不能）/ skills/evolve/scripts/evolve/_state.py の save_evolve_state"
+        "（calibration_history・tool_usage_snapshot・last_run_timestamp・evolve --drain "
+        "apply 境界の batch 書込）/ scripts/lib/prune/skill_inspect.py の "
+        "_save_skill_type_cache（skill_type_cache・prune 実行時の batch 書込）/ "
+        "scripts/lib/audit/orchestrator.py の _record_audit_completion"
+        "（last_audit_timestamp・audit 完了時の batch 書込）。全 writer とも直接 "
+        "open()/write_text()（store_write barrier 非経由）。",
+        writer_locus="batch",
+        reader="trigger_engine/state.py の load_trigger_config・_is_in_cooldown"
+        "（trigger_config・trigger_history）/ skills/evolve/scripts/evolve/_state.py の "
+        "各関数（load_evolve_state・_load_last_run・_build_trigger_summary 等が "
+        "calibration_history/last_run_timestamp/trigger_history を参照）/ "
+        "scripts/lib/reorganize.py（reorganize_threshold）/ scripts/lib/prune/config.py"
+        "（reorganize_merge_similarity_threshold 等の閾値群）/ "
+        "scripts/lib/prune/skill_inspect.py（skill_type_cache）/ "
+        "scripts/lib/pipeline_reflector/outcomes.py（self_evolution config）。",
+        retention="compaction",
+        compaction="trigger_history は _MAX_HISTORY_ENTRIES=100 件で新しい順 pruning"
+        "（trigger_engine/state.py::_record_trigger）。calibration_history は無制限追記"
+        "（同一 run の二重 append は dedup で回避・#146）。skill_type_cache は skill 数で"
+        "自然に有界。last_run_timestamp/last_audit_timestamp/last_calibration_timestamp/"
+        "tool_usage_snapshot は上書きのみのスカラー値。",
+        classification="workflow_state",
+        note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。トリガー "
+        "cooldown・self-evolution 較正進捗・prune/reorganize 閾値キャッシュ・audit/evolve "
+        "の最終実行時刻を保持するグローバル単一 JSON。dogfood/layer1.py の dry-run "
+        "ambient write 監視対象にも含まれる既存の live 主要ストア。",
+    ),
+    StoreDeclaration(
+        name="remediation-outcomes.jsonl",
+        writer="scripts/lib/remediation/verify.py の record_outcome（evolve SKILL.md の "
+        "remediation phase・skills/evolve/references/remediation.md の inline 手順から "
+        "承認済み修正の適用結果を記録。dry_run=True では書かない）。",
+        writer_locus="batch",
+        reader="scripts/lib/trigger_engine/self_evolution.py（false positive 蓄積判定・"
+        "skill_evolve_candidate 種別の検出）/ scripts/lib/pipeline_reflector/outcomes.py"
+        "（issue_type 別集計・confidence キャリブレーション分析）。",
+        retention="permanent",
+        classification="raw_event",
+        note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。remediation "
+        "修正結果（category/action/result/user_decision/rationale 等）の一次イベント記録。",
+    ),
+    StoreDeclaration(
+        name="fleet-config.json",
+        writer="scripts/lib/fleet_config.py の save_config（fleet track/ignore コマンドが "
+        "ユーザー承認時に呼ぶ。atomic write）。",
+        writer_locus="batch",
+        reader="scripts/lib/fleet_config.py の load_config 経由で fleet status / 各 "
+        "bin/evolve-fleet サブコマンドが tracked_projects/ignored_projects を参照。",
+        retention="permanent",
+        classification="workflow_state",
+        note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。fleet 監視対象 "
+        "PJ のユーザー承認 track/ignore リスト。",
+    ),
+    StoreDeclaration(
+        name="agent-brushup-state.json",
+        writer="skills/agent-brushup/SKILL.md の Step 3（diagnose 実行時に upstream ハッシュを "
+        "inline python で保存。hot path（hooks）からは書かない）。",
+        writer_locus="batch",
+        reader="agent-brushup スキル自身が次回 diagnose で upstream 変更検知に参照（自己消費）。",
+        retention="permanent",
+        classification="derived_cache",
+        note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。upstream agent "
+        "定義の変更検知用ハッシュキャッシュ（再取得すれば再構築可能）。",
+    ),
+    StoreDeclaration(
+        name="skill-evolve-denylist.json",
+        writer="scripts/lib/skill_evolve/denylist.py の _save_denylist（add_to_denylist / "
+        "remove_from_denylist 経由。evolve のスキル改善提案でユーザーが「今後提案不要」を "
+        "選んだ時に batch 書込）。",
+        writer_locus="batch",
+        reader="scripts/lib/skill_evolve/assessment.py の get_denied_skill_names が評価対象 "
+        "スキルから除外するために参照。",
+        retention="permanent",
+        classification="workflow_state",
+        note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。ユーザーが明示的に "
+        "「以後提案不要」とした skill の deny リスト（ユーザー意思決定の記録でキャッシュではない）。",
+    ),
+    StoreDeclaration(
+        name="pj_slug_cache.json",
+        writer="scripts/lib/pj_slug.py の write_pj_slug_cache（SessionStart hook が cwd→"
+        "authoritative slug の対応を1回書く。hot path の pj_slug_fast 自体は書かない）。",
+        writer_locus="batch",
+        reader="scripts/lib/pj_slug.py の _lookup_pj_slug_cache（hot path hooks の "
+        "pj_slug_fast が worktree マーカーで畳めなかった sibling-dir worktree の write 時 "
+        "slug 解決に参照・#29/#593）。",
+        retention="permanent",
+        classification="derived_cache",
+        note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。cwd→slug 解決の "
+        "SessionStart キャッシュ（miss 時は従来の basename フォールバックへ後方互換・"
+        "再構築可能）。",
+    ),
+    StoreDeclaration(
+        name="skill-evolve-cache.json",
+        writer="scripts/lib/skill_evolve/classification.py の _save_cache（LLM スコアリング "
+        "結果のキャッシュ。skill_evolve の判定処理が batch 書込）。",
+        writer_locus="batch",
+        reader="scripts/lib/skill_evolve/classification.py の _load_cache（同 package の "
+        "llm_scoring が再判定を避けるために参照・自己消費）。",
+        retention="permanent",
+        classification="derived_cache",
+        note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。skill_evolve の "
+        "LLM スコアリングキャッシュ（再実行すれば再構築可能）。dogfood/layer1.py の "
+        "dry-run ambient write 監視対象にも含まれる既存の live ストア。",
+    ),
 ]
 
 
