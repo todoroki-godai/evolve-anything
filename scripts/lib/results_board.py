@@ -13,7 +13,6 @@ growth-journal harness（crystallization イベント記録・growth_narrative �
 """
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -27,9 +26,18 @@ _WINDOW_DAYS = 30
 # 38件・2026-08-10 読み取り時点）: pytest 実行由来の一時パス汚染は "pytest-of-" だけでなく
 # macOS tmpfile 規約（/T/tmp<random>/ 等）にも及ぶ。狭い "pytest-of-" 限定では 30 件中 13 件
 # （tmp<random> パターン）を取り逃し、真の accepted 件数が 1 件のところ複数件を誤って
-# accepted と数えてしまう。よって temp dir パターンも広く拾う。
+# accepted と数えてしまう。
+#
+# 当初は汎用正規表現 `/tmp[^/]*/` で拾っていたが、`/tmpl/`（"tmpl" で始まるディレクトリ名）
+# のような正当な skill パスまで汚染扱いする false positive があった（頭レビュー指摘）。
+# 既知の一時ディレクトリ・ルートに限定したリテラルマーカー方式へ変更する。実データの
+# tmp<random> パスは全件 `/private/var/folders/.../T/tmp<random>/` または
+# `/var/folders/.../T/tmp<random>/`（symlink 解決の有無で /private 有無が揺れる）の形で、
+# いずれも "/T/tmp" を含むため単一マーカーで両方を拾える。`/private/var/folders/` と
+# 素の `/tmp/` セグメントは将来の別由来汚染への保険として個別に持つ（`/tmpXXX/` のような
+# 曖昧一致は含めない）。
 _PYTEST_OF_MARKER = "pytest-of-"
-_TMP_DIR_RE = re.compile(r"/tmp[^/]*/")
+_TMP_ROOT_MARKERS = ("/private/var/folders/", "/tmp/", "/T/tmp")
 
 
 def _is_test_polluted(entry: Dict[str, Any]) -> bool:
@@ -38,7 +46,9 @@ def _is_test_polluted(entry: Dict[str, Any]) -> bool:
         value = str(entry.get(key) or "")
         if not value:
             continue
-        if _PYTEST_OF_MARKER in value or _TMP_DIR_RE.search(value):
+        if _PYTEST_OF_MARKER in value:
+            return True
+        if any(marker in value for marker in _TMP_ROOT_MARKERS):
             return True
     return False
 

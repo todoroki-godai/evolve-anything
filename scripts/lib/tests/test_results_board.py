@@ -79,6 +79,41 @@ class TestClassifyDecisionTestPollution:
         entry = {"source": None, "approved": True, "target": "skills/agent-brushup/SKILL.md"}
         assert results_board.classify_decision(entry) == "accepted"
 
+    def test_templates_dir_not_excluded(self):
+        """FP 修正: `/templates/` を含む正当な skill パスを汚染扱いしない（頭レビュー指摘）。"""
+        entry = {
+            "source": None, "approved": True,
+            "target": ".claude/skills/foo/templates/x.md",
+        }
+        assert results_board.classify_decision(entry) == "accepted"
+
+    def test_tmpl_dir_not_excluded(self):
+        """FP 修正: `/tmpl/` ディレクトリ名を含む正当な skill パスを汚染扱いしない。"""
+        entry = {
+            "source": None, "approved": True,
+            "skill_name": "skills/foo/tmpl/bar.md",
+        }
+        assert results_board.classify_decision(entry) == "accepted"
+
+    def test_bare_var_folders_tmp_prefix_still_excluded(self):
+        """/private プレフィックス無しの /var/folders/.../T/tmp<random>/ も汚染扱い（実データ較正）。"""
+        entry = {
+            "source": None, "approved": True,
+            "target": "/var/folders/gg/x/T/tmpiadtjmmn/test-skill/SKILL.md",
+        }
+        assert results_board.classify_decision(entry) == "excluded"
+
+    def test_private_var_folders_prefix_excluded(self):
+        entry = {
+            "source": None, "approved": True,
+            "target": "/private/var/folders/gg/x/T/tmpabc123/test-skill/SKILL.md",
+        }
+        assert results_board.classify_decision(entry) == "excluded"
+
+    def test_bare_unix_tmp_segment_excluded(self):
+        entry = {"source": None, "approved": True, "target": "/tmp/whatever/SKILL.md"}
+        assert results_board.classify_decision(entry) == "excluded"
+
 
 class TestClassifyDecisionEvolveRemediationSource:
     def test_human_accepted_true_is_accepted(self):
