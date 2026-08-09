@@ -223,6 +223,43 @@ class TestComputePhaseProgressNoCrystallization:
         assert progress <= 1.0
 
 
+# ── is_legacy_mature_phase（#398 round3 共有ヘルパー）──────────────
+# growth-journal harness 削除（#379 Step 4）前に保存された phase=mature_operation の
+# growth-state cache を、全 consumer（sections_milestone / instructions_loaded hook /
+# fleet audit_runner）が単一の述語で判定できるようにする（コピー慣習の partial fix
+# を避ける・pitfall_copied_parse_convention_partial_fix と同型の再発防止）。
+
+
+class TestIsLegacyMaturePhase:
+    def test_true_for_mature_enum(self):
+        from growth_engine import is_legacy_mature_phase, Phase
+        assert is_legacy_mature_phase(Phase.MATURE_OPERATION) is True
+
+    def test_true_for_mature_raw_string(self):
+        """Phase は str の Enum なので生文字列でも正しく判定できる
+        （instructions_loaded hook / fleet audit_runner は Phase enum に変換せず
+        生文字列のまま扱うため）。
+        """
+        from growth_engine import is_legacy_mature_phase
+        assert is_legacy_mature_phase("mature_operation") is True
+
+    def test_false_for_other_phase_enum(self):
+        from growth_engine import is_legacy_mature_phase, Phase
+        assert is_legacy_mature_phase(Phase.STRUCTURED_NURTURING) is False
+
+    def test_false_for_other_raw_string(self):
+        from growth_engine import is_legacy_mature_phase
+        assert is_legacy_mature_phase("structured_nurturing") is False
+
+    def test_false_for_none(self):
+        from growth_engine import is_legacy_mature_phase
+        assert is_legacy_mature_phase(None) is False
+
+    def test_false_for_unrelated_value(self):
+        from growth_engine import is_legacy_mature_phase
+        assert is_legacy_mature_phase("continuous_growth") is False
+
+
 # ── update_cache / read_cache ───────────────────────────────────
 
 

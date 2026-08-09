@@ -102,6 +102,29 @@ class TestGrowthGreeting:
         captured = capsys.readouterr()
         assert "stale" in captured.out
 
+    def test_no_output_for_legacy_mature_cache(self, tmp_path, capsys):
+        """#398 round3 Must: 旧方式で保存された phase=mature_operation の cache は
+        表示しない（growth-journal harness 削除後、Mature 判定は保留契約に反するため）。
+
+        hook はホットパスで telemetry 再計算をしない設計（sections_milestone.py と
+        異なる）ため、legacy Mature を検知したら cache 不在と同様に沈黙する。
+        """
+        cache_data = {
+            "phase": "mature_operation",
+            "progress": 1.0,
+            "updated_at": _RECENT_TS,
+            "level": 9,
+            "title_en": "Master",
+        }
+        cache_file = tmp_path / "growth-state-legacy-mature.json"
+        cache_file.write_text(json.dumps(cache_data))
+
+        with mock.patch("growth_engine._data_dir", return_value=tmp_path):
+            instructions_loaded._emit_growth_greeting("legacy-mature")
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
     def test_no_output_when_project_none(self, capsys):
         """project=None → 出力なし。"""
         instructions_loaded._emit_growth_greeting(None)

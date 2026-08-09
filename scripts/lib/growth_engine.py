@@ -66,6 +66,27 @@ PHASE_DISPLAY_NAMES: Dict[Phase, Dict[str, str]] = {
 }
 
 
+def is_legacy_mature_phase(phase_value: Any) -> bool:
+    """phase_value（Phase enum・生文字列 "mature_operation"・None いずれも可）が
+    Mature Operation を指すかを判定する（#379 Step 4・#398 round3 共有ヘルパー）。
+
+    growth-journal harness 削除後、crystallized_rules 計測廃止により Mature Operation
+    の判定は保留中の契約になった（本 module の `detect_phase_no_crystallization` は
+    Structured Nurturing を上限とし Mature を返さない）。harness 削除前（旧方式）に
+    保存された phase=mature_operation の growth-state cache は
+    STALENESS_HIDE_DAYS（最大30日）以内は正常キャッシュとしてそのまま読めてしまうため、
+    cache を読む全 consumer（sections_milestone.py / hooks/instructions_loaded.py /
+    fleet/audit_runner.py）がこの述語で判定し、True なら cache 値を信用せず各 consumer
+    の文脈に応じた縮退値へフォールバックする（consumer 別の重複対処＝
+    pitfall_copied_parse_convention_partial_fix を避け、単一ソースに集約する）。
+
+    Phase は str の Enum（`class Phase(str, Enum)`）なので、enum インスタンスと
+    生文字列のどちらを渡しても `Phase.MATURE_OPERATION == "mature_operation"` が
+    True になり正しく判定できる。
+    """
+    return phase_value == Phase.MATURE_OPERATION
+
+
 # ── データクラス ────────────────────────────────────────────────
 
 

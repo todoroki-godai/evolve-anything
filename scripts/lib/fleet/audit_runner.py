@@ -111,6 +111,14 @@ def _audit_result_from_state(state_path: Path, status: str) -> AuditResult | Non
         return None
     env_score = state.get("env_score")
     phase = state.get("phase")
+    # #398 round3 Must: growth-journal harness 削除（#379 Step 4）前に保存された
+    # phase=mature_operation の cache は「Mature 判定は保留中」契約に反するため
+    # 信用しない。本 reader は growth-state JSON を唯一の真実とする設計（telemetry
+    # 再計算をしない）ため、sections_milestone.py と異なり None（fleet status では
+    # "—" 表示・`fleet/formatters.py` の `row.phase or "—"`）へフォールバックする。
+    from growth_engine import is_legacy_mature_phase
+    if is_legacy_mature_phase(phase):
+        phase = None
     return AuditResult(
         status=status,
         env_score=env_score if isinstance(env_score, (int, float)) else None,

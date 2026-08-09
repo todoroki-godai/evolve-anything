@@ -164,13 +164,19 @@ def _emit_growth_greeting(project: str | None) -> None:
 
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "lib"))
-        from growth_engine import read_cache, PHASE_DISPLAY_NAMES, Phase
+        from growth_engine import read_cache, PHASE_DISPLAY_NAMES, Phase, is_legacy_mature_phase
 
         cache = read_cache(project)
         if cache is None:
             return
 
         phase_str = cache.get("phase", "bootstrap")
+        # #398 round3 Must: growth-journal harness 削除（#379 Step 4）前に保存された
+        # phase=mature_operation の cache は「Mature 判定は保留中」契約に反するため
+        # 表示しない。hook はホットパスで telemetry 再計算をしない設計
+        # （sections_milestone.py と異なり cache 不在と同様に沈黙する）。
+        if is_legacy_mature_phase(phase_str):
+            return
         progress = cache.get("progress", 0.0)
         stale = cache.get("stale", False)
         progress_pct = int(progress * 100)
