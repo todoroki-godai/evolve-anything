@@ -3,6 +3,10 @@
 機械ノイズ（Stop hook の source=hook/backfill）が 10 件あっても、human-confirmed が
 閾値未満なら Structured Nurturing に昇格しないことを E2E（レンダリング結果）で assert する。
 LLM 非依存（env fitness は skip_llm + mock で軽量化）。
+
+#379 Step 4: growth-journal harness 削除により phase 判定は crystallized_rules 非依存の
+detect_phase_no_crystallization（sessions + human corrections のみ）に切り替わった。
+growth_journal のモックは撤去済み（モジュール自体が存在しない）。
 """
 from __future__ import annotations
 
@@ -30,10 +34,6 @@ def _stub_growth_deps(monkeypatch, tmp_path):
     monkeypatch.setattr(telemetry_query, "query_sessions",
                         lambda **k: [{"session_id": f"s{i}"} for i in range(60)])
     monkeypatch.setattr(telemetry_query, "query_corrections", lambda **k: corrections)
-
-    import growth_journal
-    monkeypatch.setattr(growth_journal, "count_crystallized_rules", lambda **k: 5)
-    monkeypatch.setattr(growth_journal, "query_crystallizations", lambda **k: [])
 
     # env fitness を軽量 stub（coherence 0.5）
     _fitness_dir = orch.PLUGIN_ROOT / "scripts" / "rl" / "fitness"
@@ -71,14 +71,12 @@ def test_phase_not_promoted_on_machine_noise(_stub_growth_deps, tmp_path) -> Non
 
 def test_phase_promotes_when_human_corrections_sufficient(monkeypatch, tmp_path) -> None:
     import audit.orchestrator as orch
-    import telemetry_query, growth_journal, growth_engine
+    import telemetry_query, growth_engine
 
     human = [{"source": "reflect_confirmed", "correction_type": "idiom"} for _ in range(10)]
     monkeypatch.setattr(telemetry_query, "query_sessions",
                         lambda **k: [{"session_id": f"s{i}"} for i in range(60)])
     monkeypatch.setattr(telemetry_query, "query_corrections", lambda **k: human)
-    monkeypatch.setattr(growth_journal, "count_crystallized_rules", lambda **k: 5)
-    monkeypatch.setattr(growth_journal, "query_crystallizations", lambda **k: [])
     _fitness_dir = orch.PLUGIN_ROOT / "scripts" / "rl" / "fitness"
     if str(_fitness_dir) not in sys.path:
         sys.path.insert(0, str(_fitness_dir))
@@ -93,6 +91,6 @@ def test_phase_promotes_when_human_corrections_sufficient(monkeypatch, tmp_path)
     lines = orch._build_growth_report(proj, skip_llm=True)
     text = "\n".join(lines)
     assert "10 (human)" in text
-    # human=10 で sessions>=50 + crystallized>=3 → Structured Nurturing に昇格
+    # human=10 で sessions>=50 → Structured Nurturing に昇格
     phase_line = next(l for l in lines if l.startswith("**Phase:**"))
     assert "Structured Nurturing" in phase_line

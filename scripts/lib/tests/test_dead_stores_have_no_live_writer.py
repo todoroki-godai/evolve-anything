@@ -10,6 +10,11 @@ store_write barrier を経由しない直接 open()/write_text() writer が live
 手順から呼ばれる）も growth-journal.jsonl に直接書いていることが判明し、同様にゲートした
 （implement_backfill.py の一時 backfill writer も同様）。
 
+#379 Step 4: quality-scores.jsonl（writer 関数ごと削除）に続き growth-journal.jsonl も
+「修理より削除」で writer 3 箇所ごと・registry 宣言ごと削除した。dead ストア population は
+これで 1→0 件になった（恒久的に空でよい — 検出ロジック自体の健全性は合成文字列を使う
+test_has_live_writer_detects_known_write_shapes が population に非依存で担保する）。
+
 以後、dead ストアに新たな未ゲート直接 writer が増えないことを静的に固定する。
 
 検出対象: production コード（scripts/**/*.py + skills/**/*.py + hooks/**/*.py、tests/ 除外）で
@@ -34,14 +39,10 @@ _EXCLUDE_DIR_PARTS = {"tests", "fixtures"}
 
 # 未ゲート raw writer が既知で「有りうる」ことを許容するファイル（basename → 理由）。
 # 新規追加時は理由を明記すること（モグラ叩き allowlist にしない）。
-_ALLOWED_RAW_WRITER_FILES = {
-    # ゲート済み writer 自身（is_dead_store チェックを冒頭に持つ・#379 Step 3 レビュー修正）。
-    # quality_engine.py（quality-scores.jsonl の writer）は #379 Step 4 で writer 関数
-    # ごと削除済みのため対象外。
-    "scripts/lib/growth_journal.py",
-    "skills/implement/scripts/telemetry.py",
-    "skills/implement/scripts/implement_backfill.py",
-}
+# quality_engine.py（quality-scores.jsonl の writer）・growth_journal.py / telemetry.py /
+# implement_backfill.py（growth-journal.jsonl の writer）は #379 Step 4 で writer 関数
+# ごと削除済みのため、現時点で allowlist エントリは無い。
+_ALLOWED_RAW_WRITER_FILES: set = set()
 
 
 def _dead_store_names() -> List[str]:
@@ -116,9 +117,16 @@ def test_has_live_writer_detects_known_write_shapes() -> None:
     )
 
 
-def test_dead_store_population_is_nonempty() -> None:
-    """較正の前提: status=dead ストアが少なくとも1件は存在する（population が空だと空振り）。"""
-    assert _dead_store_names() != []
+def test_registry_itself_loads_and_has_declarations() -> None:
+    """registry 自体が読み込めており空でない（dead 部分集合は #379 Step 4 で 1→0 件になり得る）。
+
+    かつては「dead ストアが少なくとも1件は存在する」ことを較正前提にしていたが、
+    quality-scores.jsonl → growth-journal.jsonl の順で dead ストアが「修理より削除」
+    された結果、dead 部分集合は恒久的に空になり得る（それ自体が縮小方針の成果であり
+    バグではない）。空集合に対する未ゲート writer 検出ロジック自体の健全性は、population
+    に非依存の合成文字列テスト（test_has_live_writer_detects_known_write_shapes）が担保する。
+    """
+    assert store_registry.declarations() != []
 
 
 def test_dead_stores_have_no_unguarded_raw_writer() -> None:
@@ -136,17 +144,3 @@ def test_dead_stores_have_no_unguarded_raw_writer() -> None:
     )
 
 
-def test_gated_writer_functions_actually_check_is_dead_store() -> None:
-    """allowlist の主要ゲート済み writer が is_dead_store 呼び出しを実際に含む（形骸化防止）。
-
-    allowlist にファイルを足すだけでゲート実装を忘れる回帰を防ぐため、ゲート済みと
-    主張する writer ファイルが is_dead_store 参照を実際に持つことを確認する。
-    """
-    gated_files = {
-        "scripts/lib/growth_journal.py",
-        "skills/implement/scripts/telemetry.py",
-        "skills/implement/scripts/implement_backfill.py",
-    }
-    for rel in gated_files:
-        text = (_root / rel).read_text(encoding="utf-8")
-        assert "is_dead_store" in text, f"{rel} は is_dead_store ゲートを含んでいません"

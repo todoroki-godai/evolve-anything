@@ -16,31 +16,32 @@ def _next_milestone_lines(phase) -> List[str]:
 
     フル growth report（重い fitness 計算込み）と軽量 milestone（標準 audit 用）の
     どちらからも同じ文言を出す。phase は growth_engine.Phase。
+
+    #379 Step 4: growth-journal harness 削除で crystallized_rules の唯一のソースが
+    失われたため、Mature Operation への昇格判定は構造的に不可能になった
+    （growth_engine.detect_phase_no_crystallization は Mature を返さない）。
+    Structured Nurturing 到達時に「requires: crystallized_rules >= 10」等の到達不能な
+    条件文言は出さず、判定保留中である旨を明示する。
     """
     from growth_engine import Phase
 
     lines = ["### Next Milestone"]
     if phase == Phase.MATURE_OPERATION:
         lines.append("最終フェーズに到達しています。")
+    elif phase == Phase.STRUCTURED_NURTURING:
+        lines.append(
+            "現在計測可能な最終フェーズ（Structured Nurturing）に到達しています。"
+            "Mature Operation の判定は crystallized_rules 計測の廃止（#379）により保留中です。"
+        )
     else:
         next_phases = {
             Phase.BOOTSTRAP: ("Initial Nurturing", "sessions >= 10"),
-            Phase.INITIAL_NURTURING: ("Structured Nurturing", "sessions >= 50, corrections >= 10, crystallized_rules >= 3"),
-            Phase.STRUCTURED_NURTURING: ("Mature Operation", "sessions > 200, crystallized_rules >= 10, coherence >= 0.7"),
+            Phase.INITIAL_NURTURING: ("Structured Nurturing", "sessions >= 50, corrections >= 10"),
         }
         next_name, next_req = next_phases.get(phase, ("?", "?"))
         lines.append(f"Next phase: **{next_name}** — requires: {next_req}")
     lines.append("")
     return lines
-
-
-def _count_crystallized_safe(project_name: str) -> int:
-    """crystallized rule 件数を例外安全に数える（telemetry 未蓄積でも 0 を返す）。"""
-    try:
-        from growth_journal import count_crystallized_rules
-        return count_crystallized_rules(project=project_name)
-    except Exception:
-        return 0
 
 
 def build_next_milestone_section(proj: Path) -> Optional[List[str]]:
@@ -49,12 +50,12 @@ def build_next_milestone_section(proj: Path) -> Optional[List[str]]:
     フル growth report を常時 ON にすると別の冗長化になるため、標準 audit では
     Next Milestone の1ブロックのみを出す。phase 解決は:
       1. growth-state cache（既に算出済みなら最安）
-      2. cache が無ければ telemetry（sessions/corrections/crystallized）から detect_phase
-         （coherence は軽量化のため 0.0 固定 = fitness/LLM を呼ばない）
+      2. cache が無ければ telemetry（sessions/human corrections）から
+         detect_phase_no_crystallization（#379 Step 4・fitness/LLM は呼ばない）
     growth_engine 自体が import 不能な環境では None（沈黙）にフォールバックする。
     """
     try:
-        from growth_engine import Phase, detect_phase, read_cache
+        from growth_engine import Phase, read_cache
     except Exception:
         return None
 
@@ -71,19 +72,20 @@ def build_next_milestone_section(proj: Path) -> Optional[List[str]]:
                 phase = None
 
     if phase is None:
-        # cache が無い → telemetry から軽算出（fitness/LLM は呼ばない）
+        # cache が無い → telemetry から軽算出（fitness/LLM は呼ばない）。
+        # #379 Step 4: crystallized_rules は growth-journal harness 削除で恒久喪失した
+        # ため、human corrections ベースの縮退判定（growth_report.py #448 と同型）を使う。
         try:
+            from growth_engine import detect_phase_no_crystallization
             from telemetry_query import query_corrections, query_sessions
+            from correction_semantic.provenance_weight import count_human_corrections
             sessions = query_sessions(project=project_name)
             corrections = query_corrections(project=project_name)
             sessions_count = len(sessions) if sessions else 0
-            corrections_count = len(corrections) if corrections else 0
+            human_count = count_human_corrections(corrections or [])
         except Exception:
             sessions_count = 0
-            corrections_count = 0
-        crystallized = _count_crystallized_safe(project_name)
-        # coherence は軽量化のため 0.0 固定（fitness 計算を回避）。Mature 判定には
-        # coherence>=0.7 が必要なので、軽量経路では Mature には昇格しない（控えめ側）。
-        phase = detect_phase(sessions_count, corrections_count, crystallized, 0.0)
+            human_count = 0
+        phase = detect_phase_no_crystallization(sessions_count, human_count)
 
     return _next_milestone_lines(phase)

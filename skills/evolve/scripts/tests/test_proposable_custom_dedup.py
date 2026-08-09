@@ -284,7 +284,6 @@ class TestRunEvolveRemediation:
                     }),
                 ),
                 "trigger_engine": MagicMock(clear_snooze=MagicMock()),
-                "growth_journal": MagicMock(emit_crystallization=MagicMock()),
                 "growth_engine": MagicMock(read_cache=MagicMock(return_value=None)),
                 "session_store": MagicMock(query=MagicMock(return_value=[])),
             }):

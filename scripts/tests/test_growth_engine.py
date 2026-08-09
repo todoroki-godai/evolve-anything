@@ -144,6 +144,85 @@ class TestComputePhaseProgress:
         assert progress == 1.0
 
 
+# ── detect_phase_no_crystallization / compute_phase_progress_no_crystallization ──
+# #379 Step 4: growth-journal harness 削除で crystallized_rules の唯一のソースが
+# 失われたため追加した縮退版（detect_phase / compute_phase_progress は不変のまま残す）。
+
+
+class TestDetectPhaseNoCrystallization:
+    def test_bootstrap_when_sessions_below_target(self):
+        from growth_engine import detect_phase_no_crystallization, Phase, BOOTSTRAP_SESSIONS_TARGET
+        result = detect_phase_no_crystallization(BOOTSTRAP_SESSIONS_TARGET - 1, 0)
+        assert result == Phase.BOOTSTRAP
+
+    def test_initial_when_sessions_reached_but_corrections_below_target(self):
+        from growth_engine import (
+            detect_phase_no_crystallization, Phase,
+            STRUCTURED_SESSIONS_TARGET, STRUCTURED_CORRECTIONS_TARGET,
+        )
+        result = detect_phase_no_crystallization(
+            STRUCTURED_SESSIONS_TARGET, STRUCTURED_CORRECTIONS_TARGET - 1,
+        )
+        assert result == Phase.INITIAL_NURTURING
+
+    def test_structured_when_sessions_and_corrections_reached(self):
+        from growth_engine import (
+            detect_phase_no_crystallization, Phase,
+            STRUCTURED_SESSIONS_TARGET, STRUCTURED_CORRECTIONS_TARGET,
+        )
+        result = detect_phase_no_crystallization(
+            STRUCTURED_SESSIONS_TARGET, STRUCTURED_CORRECTIONS_TARGET,
+        )
+        assert result == Phase.STRUCTURED_NURTURING
+
+    def test_mature_is_structurally_unreachable(self):
+        """crystallized_rules 計測の廃止に伴い Mature 判定は本関数では行わない（#379 Step 4）。"""
+        from growth_engine import detect_phase_no_crystallization, Phase
+        result = detect_phase_no_crystallization(10_000, 10_000)
+        assert result == Phase.STRUCTURED_NURTURING
+
+    def test_never_returns_mature(self):
+        from growth_engine import detect_phase_no_crystallization, Phase
+        for sessions in (0, 10, 50, 200, 1000):
+            for corrections in (0, 5, 10, 100):
+                assert (
+                    detect_phase_no_crystallization(sessions, corrections)
+                    != Phase.MATURE_OPERATION
+                )
+
+
+class TestComputePhaseProgressNoCrystallization:
+    def test_bootstrap_uses_sessions_target(self):
+        from growth_engine import (
+            compute_phase_progress_no_crystallization, Phase, BOOTSTRAP_SESSIONS_TARGET,
+        )
+        progress = compute_phase_progress_no_crystallization(
+            Phase.BOOTSTRAP, BOOTSTRAP_SESSIONS_TARGET // 2, 0,
+        )
+        assert progress == pytest.approx(0.5, abs=0.1)
+
+    def test_initial_averages_sessions_and_corrections(self):
+        from growth_engine import (
+            compute_phase_progress_no_crystallization, Phase,
+            STRUCTURED_SESSIONS_TARGET, STRUCTURED_CORRECTIONS_TARGET,
+        )
+        progress = compute_phase_progress_no_crystallization(
+            Phase.INITIAL_NURTURING, STRUCTURED_SESSIONS_TARGET, STRUCTURED_CORRECTIONS_TARGET,
+        )
+        assert progress == pytest.approx(1.0)
+
+    def test_structured_is_capped_at_one(self):
+        """Mature への進捗軸が無いため Structured は常に 1.0（到達可能な最終状態）。"""
+        from growth_engine import compute_phase_progress_no_crystallization, Phase
+        progress = compute_phase_progress_no_crystallization(Phase.STRUCTURED_NURTURING, 999, 999)
+        assert progress == 1.0
+
+    def test_progress_never_exceeds_one(self):
+        from growth_engine import compute_phase_progress_no_crystallization, Phase
+        progress = compute_phase_progress_no_crystallization(Phase.INITIAL_NURTURING, 10_000, 10_000)
+        assert progress <= 1.0
+
+
 # ── update_cache / read_cache ───────────────────────────────────
 
 

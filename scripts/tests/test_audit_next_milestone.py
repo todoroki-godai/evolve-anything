@@ -28,6 +28,22 @@ def test_next_milestone_lines_for_each_phase():
     assert "最終フェーズ" in mature
 
 
+def test_next_milestone_lines_structured_notes_mature_pending():
+    """Structured Nurturing は #379 Step 4 で Mature 判定が保留中である旨を明示する。
+
+    crystallized_rules 計測が growth-journal harness 削除で失われたため、Mature への
+    「requires: crystallized_rules >= 10」等の到達不能な条件文言は出してはいけない。
+    """
+    from audit.sections_milestone import _next_milestone_lines
+    from growth_engine import Phase
+
+    text = "\n".join(_next_milestone_lines(Phase.STRUCTURED_NURTURING))
+    # 到達不能な「requires: crystallized_rules >= 10」形式の条件文言は出さない
+    # （crystallized_rules 自体への言及は「廃止した」旨の説明としてなら許容する）。
+    assert "requires:" not in text
+    assert "379" in text or "保留" in text
+
+
 def test_next_milestone_section_uses_cache(tmp_path, monkeypatch):
     """growth-state cache があれば fitness 計算なしで phase を解決して Next Milestone を出す。"""
     import growth_engine
@@ -52,17 +68,19 @@ def test_next_milestone_section_uses_cache(tmp_path, monkeypatch):
 
 
 def test_next_milestone_section_no_cache_falls_back_to_telemetry(tmp_path, monkeypatch):
-    """cache が無くても telemetry から軽算出して Next Milestone を出す（沈黙しない）。"""
+    """cache が無くても telemetry から軽算出して Next Milestone を出す（沈黙しない）。
+
+    #379 Step 4: crystallized_rules ソース（growth_journal）削除後は
+    detect_phase_no_crystallization（human corrections ベース）で判定する。
+    """
     import growth_engine
     import telemetry_query
-    from audit import sections_milestone
     from audit.sections_milestone import build_next_milestone_section
 
     monkeypatch.setattr(growth_engine, "_DATA_DIR", tmp_path / "no-cache")
     # telemetry を空に向ける（sessions/corrections 0 → BOOTSTRAP）
     monkeypatch.setattr(telemetry_query, "query_sessions", lambda **k: [])
     monkeypatch.setattr(telemetry_query, "query_corrections", lambda **k: [])
-    monkeypatch.setattr(sections_milestone, "_count_crystallized_safe", lambda name: 0)
 
     proj = tmp_path / "fresh"
     proj.mkdir()
@@ -72,3 +90,31 @@ def test_next_milestone_section_no_cache_falls_back_to_telemetry(tmp_path, monke
     assert "Next Milestone" in text
     # sessions 0 → BOOTSTRAP → 次は Initial Nurturing
     assert "Initial Nurturing" in text
+
+
+def test_next_milestone_section_no_cache_uses_human_corrections(tmp_path, monkeypatch):
+    """crystallized_rules 抜きでも sessions+human corrections が揃えば Structured へ判定する。"""
+    import growth_engine
+    import telemetry_query
+    from audit.sections_milestone import build_next_milestone_section
+    from growth_engine import STRUCTURED_SESSIONS_TARGET, STRUCTURED_CORRECTIONS_TARGET
+
+    monkeypatch.setattr(growth_engine, "_DATA_DIR", tmp_path / "no-cache-2")
+    monkeypatch.setattr(
+        telemetry_query, "query_sessions",
+        lambda **k: [{} for _ in range(STRUCTURED_SESSIONS_TARGET)],
+    )
+    monkeypatch.setattr(
+        telemetry_query, "query_corrections",
+        lambda **k: [
+            {"source": "reflect_confirmed"} for _ in range(STRUCTURED_CORRECTIONS_TARGET)
+        ],
+    )
+
+    proj = tmp_path / "structured-fresh"
+    proj.mkdir()
+    section = build_next_milestone_section(proj)
+    assert section is not None
+    text = "\n".join(section)
+    assert "Structured Nurturing" in text
+    assert "requires:" not in text

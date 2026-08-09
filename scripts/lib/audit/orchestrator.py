@@ -440,7 +440,14 @@ def run_audit(
 def _build_growth_report(
     proj: Path, *, skip_llm: bool = False, issues_summary: Optional[Any] = None
 ) -> List[str]:
-    """NFD Growth Report セクションを生成する。
+    """Growth Report セクションを生成する（#379 Step 4: 戦果ボードへ置換）。
+
+    Level/Environment Score/Phase/Progress/Sessions|Corrections の見出しブロックと
+    growth-state cache 書込みは維持する（fleet status / instructions_loaded hook /
+    measurement_bug が growth-state cache を消費する既存契約を壊さないため — #22, #178）。
+    crystallization 関連（Crystallization Log・growth_narrative の Environment Profile /
+    Growth Story）は growth-journal harness 削除に伴い削除し、戦果ボード（results_board・
+    optimize_history/corrections の直読み）に置換した。
 
     Args:
         proj: プロジェクトディレクトリ
@@ -458,15 +465,17 @@ def _build_growth_report(
         if str(_scripts_lib) not in sys.path:
             sys.path.insert(0, str(_scripts_lib))
 
-        from growth_engine import read_cache, detect_phase, compute_phase_progress, update_cache, PHASE_DISPLAY_NAMES, Phase
-        from growth_journal import query_crystallizations, count_crystallized_rules
-        from growth_narrative import compute_profile, generate_story
+        from growth_engine import (
+            detect_phase_no_crystallization,
+            compute_phase_progress_no_crystallization,
+            update_cache,
+            PHASE_DISPLAY_NAMES,
+        )
         from growth_level import compute_level
 
         from telemetry_query import query_sessions, query_corrections
         sessions = query_sessions(project=project_name)
         corrections = query_corrections(project=project_name)
-        crystallized = count_crystallized_rules(project=project_name)
         sessions_count = len(sessions) if sessions else 0
         # フェーズ昇格カウントは human-source のみで駆動する（#431 提案3）。
         # 機械ノイズ（Stop hook の source=hook/backfill + correction_type=stop）で
@@ -479,24 +488,27 @@ def _build_growth_report(
         if str(_fitness_dir) not in sys.path:
             sys.path.insert(0, str(_fitness_dir))
         env_score = 0.0
-        coherence_score = 0.0
         try:
             from environment import compute_environment_fitness
             env_result = compute_environment_fitness(proj, skip_llm=skip_llm)
             env_score = env_result.get("overall", 0.0) if isinstance(env_result, dict) else 0.0
-            coherence_score = env_result.get("axes", {}).get("coherence", {}).get("score", 0.0) if isinstance(env_result, dict) else 0.0
         except Exception:
             pass
 
-        phase = detect_phase(sessions_count, corrections_count, crystallized, coherence_score)
-        progress = compute_phase_progress(phase, sessions_count, corrections_count, crystallized, coherence_score)
+        # #379 Step 4: crystallized_rules は growth-journal harness 削除で恒久喪失した
+        # ため、human corrections ベースの縮退判定（sections_milestone.py と共通の
+        # detect_phase_no_crystallization）を使う。Mature Operation はこの経路では
+        # 判定しない（crystallized_rules の代替シグナルが無いため）。
+        phase = detect_phase_no_crystallization(sessions_count, corrections_count)
+        progress = compute_phase_progress_no_crystallization(
+            phase, sessions_count, corrections_count
+        )
         names = PHASE_DISPLAY_NAMES[phase]
 
         level_info = compute_level(env_score)
 
         _cache_extra = {
             "sessions_count": sessions_count,
-            "crystallizations_count": crystallized,
             "env_score": round(env_score, 4),
             "level": level_info.level,
             "title_en": level_info.title_en,
@@ -514,32 +526,20 @@ def _build_growth_report(
         lines.append(f"**Environment Score:** {env_score:.2f}")
         lines.append(f"**Phase:** {names['en']} ({names['ja']})")
         lines.append(f"**Progress:** [{bar}] {progress_pct}%")
-        lines.append(f"**Sessions:** {sessions_count} | **Corrections:** {corrections_count} (human) / {corrections_total} (total) | **Crystallizations:** {crystallized}")
+        lines.append(f"**Sessions:** {sessions_count} | **Corrections:** {corrections_count} (human) / {corrections_total} (total)")
         lines.append("")
 
-        events = query_crystallizations(project=project_name)
-        if events:
-            lines.append("### Crystallization Log")
-            for ev in events[-10:]:
-                ts = ev.get("ts", "")[:10]
-                targets = ", ".join(ev.get("targets", [])[:3]) or "(no targets)"
-                lines.append(f"- {ts}: {targets}")
-            lines.append("")
-
-        profile = compute_profile(project_name)
-        if profile.strengths or profile.personality_traits:
-            lines.append("### Environment Profile")
-            if profile.strengths:
-                lines.append(f"**Strengths:** {', '.join(profile.strengths)}")
-            if profile.personality_traits:
-                lines.append(f"**Traits:** {', '.join(profile.personality_traits)}")
-            lines.append(f"**Style:** {profile.crystallization_style}")
-            lines.append("")
-
-        story = generate_story(project_name)
-        if story and "まだ" not in story:
-            lines.append("### Growth Story")
-            lines.append(story)
+        # #379 Step 4: 戦果ボード（optimize_history/corrections 直読み・決定論）。
+        # 旧: Crystallization Log（growth_journal）/ Environment Profile・Growth Story
+        # （growth_narrative）はここに置換された。
+        try:
+            from pj_slug import resolve_pj_slug
+            from results_board import build_results_board, render_results_board
+            _slug = resolve_pj_slug(proj)
+            board = build_results_board(_slug)
+            lines.extend(render_results_board(board))
+        except Exception as e:
+            lines.append(f"戦果ボードの生成に失敗しました: {e}")
             lines.append("")
 
         # Next Milestone は軽量サブセット（標準 audit #52-2）と同一文言を共有する。

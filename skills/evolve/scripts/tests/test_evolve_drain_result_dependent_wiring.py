@@ -1,12 +1,14 @@
-"""#146 CLI 配線テスト: `evolve --drain --result-json <path>` が result 依存3項目
-（calibration state / tool_usage_snapshot / growth crystallization）を apply 境界で
-実効化する（ADR-051）。
+"""#146 CLI 配線テスト: `evolve --drain --result-json <path>` が result 依存2項目
+（calibration state / tool_usage_snapshot）を apply 境界で実効化する（ADR-051）。
 
 根因（#146 / #135）: dry-run→drain の標準フローは run_evolve(dry_run=False) に到達せず、
-phases_capture の `if not dry_run:` 配下（calibration/tool_usage/growth）が構造的に死蔵し、
-較正トレンド・tool 使用トレンド・成長結晶化が標準フローで永久に貯まらなかった。本テストは
-main() の --drain 分岐が dry-run の `--output` result JSON を読んで値を運搬し3項目を確定し、
+phases_capture の `if not dry_run:` 配下（calibration/tool_usage）が構造的に死蔵し、
+較正トレンド・tool 使用トレンドが標準フローで永久に貯まらなかった。本テストは main() の
+--drain 分岐が dry-run の `--output` result JSON を読んで値を運搬し2項目を確定し、
 result-json 欠落/不読時は graceful skip して他 persist を完走することを固定する。
+
+#379 Step 4: growth crystallization（journal 記録）は growth-journal harness 削除に伴い
+本 apply 境界から削除した（元は3項目だった）。
 
 HOME / DATA_DIR 隔離はルート conftest（#457/#119）が autouse で行う。
 """
@@ -86,15 +88,8 @@ def _stub_drain_neighbors(monkeypatch):
 
 
 def test_drain_persists_result_dependent_items(monkeypatch, capsys, tmp_path):
-    """--drain --result-json 有りで calibration/tool_usage が state に、growth が journal に確定する。"""
-    import growth_journal
-
+    """--drain --result-json 有りで calibration/tool_usage が state に確定する。"""
     _stub_drain_neighbors(monkeypatch)
-
-    emitted: dict = {}
-    monkeypatch.setattr(
-        growth_journal, "emit_crystallization", lambda **kw: emitted.update(kw)
-    )
 
     rj = tmp_path / "result.json"
     rj.write_text(json.dumps(_full_result()), encoding="utf-8")
@@ -108,7 +103,7 @@ def test_drain_persists_result_dependent_items(monkeypatch, capsys, tmp_path):
     out = json.loads(capsys.readouterr().out)
     assert out["result_state_persisted"]["calibration_written"] is True
     assert out["result_state_persisted"]["tool_usage_written"] is True
-    assert out["growth_crystallized"] is True
+    assert "growth_crystallized" not in out  # #379 Step 4: journal 記録は削除済み
 
     # グローバル state ファイルに実書込された（時刻は drain 時点・中身は result 由来）。
     state = json.loads(evolve.EVOLVE_STATE_FILE.read_text(encoding="utf-8"))
@@ -121,21 +116,10 @@ def test_drain_persists_result_dependent_items(monkeypatch, capsys, tmp_path):
     assert snap["sleep_patterns"] == 4
     assert snap["bash_ratio"] == 0.25
 
-    # growth crystallization が evolve source で発火した。
-    assert emitted.get("source") == "evolve"
-
 
 def test_drain_without_result_json_skips_gracefully(monkeypatch, capsys):
-    """--result-json 無しでは3項目 skip・growth 未発火だが他 persist は継続する。"""
-    import growth_journal
-
+    """--result-json 無しでは2項目 skip だが他 persist は継続する。"""
     _stub_drain_neighbors(monkeypatch)
-
-    called: dict = {}
-    monkeypatch.setattr(
-        growth_journal, "emit_crystallization",
-        lambda **kw: called.__setitem__("emitted", True),
-    )
 
     monkeypatch.setattr(sys, "argv", ["evolve.py", "--drain", "--project-dir", "/tmp/whatever"])
 
@@ -143,8 +127,6 @@ def test_drain_without_result_json_skips_gracefully(monkeypatch, capsys):
 
     out = json.loads(capsys.readouterr().out)
     assert out["result_state_persisted"] == {"skipped": "no_result_json"}
-    assert out["growth_crystallized"] == {"skipped": "no_result_json"}
-    assert not called  # growth crystallization は発火しない
     # result 非依存 persist は無傷（drain 本体を完走）。
     assert "weak_signals_persisted" in out
     assert out["snooze_cleared"] is True
@@ -164,7 +146,6 @@ def test_drain_with_missing_result_json_skips_gracefully(monkeypatch, capsys, tm
 
     out = json.loads(capsys.readouterr().out)
     assert out["result_state_persisted"] == {"skipped": "result_json_not_found"}
-    assert out["growth_crystallized"] == {"skipped": "result_json_not_found"}
     assert "weak_signals_persisted" in out
 
 
@@ -196,18 +177,13 @@ def test_persist_result_dependent_state_dedup_double_append(tmp_path):
 
 
 def test_dry_run_mode_does_not_persist_result_dependent(monkeypatch, capsys):
-    """`--dry-run`（非 --drain）モードでは result 依存3項目 persist を一切呼ばない。"""
+    """`--dry-run`（非 --drain）モードでは result 依存2項目 persist を一切呼ばない。"""
     from evolve import _state as state_mod
-    from evolve import _report as report_mod
 
-    calls = {"state": 0, "growth": 0}
+    calls = {"state": 0}
     monkeypatch.setattr(
         state_mod, "persist_result_dependent_state",
         lambda *a, **k: calls.__setitem__("state", calls["state"] + 1) or {},
-    )
-    monkeypatch.setattr(
-        report_mod, "_emit_growth_crystallization",
-        lambda *a, **k: calls.__setitem__("growth", calls["growth"] + 1),
     )
     monkeypatch.setattr(evolve, "run_evolve", lambda **kw: {"phases": {}})
     monkeypatch.setattr(sys, "argv", ["evolve.py", "--dry-run", "--project-dir", "/tmp/whatever"])
@@ -215,4 +191,3 @@ def test_dry_run_mode_does_not_persist_result_dependent(monkeypatch, capsys):
     evolve.main()
 
     assert calls["state"] == 0
-    assert calls["growth"] == 0

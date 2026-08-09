@@ -125,6 +125,41 @@ def detect_phase(
     return Phase.BOOTSTRAP
 
 
+def detect_phase_no_crystallization(sessions_count: int, human_corrections_count: int) -> Phase:
+    """crystallized_rules 非依存の phase 判定（#379 Step 4）。
+
+    growth-journal harness 削除（crystallized_rules の唯一のソースだった growth_journal.py
+    の削除）に伴い、Structured/Mature 判定から crystallized_rules の leg を外した縮退版。
+    Mature Operation は本関数では判定しない（crystallized_rules の代替シグナルが無いため、
+    恒久的に Structured Nurturing を上限とする — sections_milestone.py が従来から coherence を
+    0.0 固定にして Mature へ昇格させなかった方針と整合させる）。detect_phase（crystallized_rules
+    込みの元関数）は他 caller のため不変のまま残す。
+    """
+    if sessions_count < BOOTSTRAP_SESSIONS_TARGET:
+        return Phase.BOOTSTRAP
+    if (
+        sessions_count >= STRUCTURED_SESSIONS_TARGET
+        and human_corrections_count >= STRUCTURED_CORRECTIONS_TARGET
+    ):
+        return Phase.STRUCTURED_NURTURING
+    return Phase.INITIAL_NURTURING
+
+
+def compute_phase_progress_no_crystallization(
+    phase: Phase, sessions_count: int, human_corrections_count: int
+) -> float:
+    """crystallized_rules 非依存の進捗率（#379 Step 4）。Mature への進捗軸を持たない。"""
+    if phase == Phase.BOOTSTRAP:
+        return min(1.0, sessions_count / BOOTSTRAP_SESSIONS_TARGET)
+    if phase == Phase.INITIAL_NURTURING:
+        s = min(1.0, sessions_count / STRUCTURED_SESSIONS_TARGET)
+        c = min(1.0, human_corrections_count / STRUCTURED_CORRECTIONS_TARGET)
+        return (s + c) / 2.0
+    # Structured Nurturing（本関数での到達可能な最終状態）/ Mature（本関数は返さないが
+    # 万一 stale cache 由来で渡された場合の安全側フォールバック）はともに 1.0。
+    return 1.0
+
+
 # ── 進捗率 ──────────────────────────────────────────────────────
 
 

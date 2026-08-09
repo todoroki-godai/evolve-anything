@@ -2,11 +2,14 @@
 """キャプチャ／後段フェーズ群（block D）を run_evolve から抽出した module（#531 PR 8/8）。
 
 trigger_summary 確定 → Phase 7 Self-Analysis → state 更新（dry_run gate）→ session ingest →
-growth crystallization → utterance ingest → weak_signals batch/ttl → correction_semantic emit →
-bootstrap_backlog → daily_review → idiom_autopromote → evolve_decisions emit → growth_report
-までを `run_capture_phases(result, ctx)` に束ねる。振る舞いはゼロ変更で、run_evolve 本体の
+utterance ingest → weak_signals batch/ttl → correction_semantic emit → bootstrap_backlog →
+daily_review → idiom_autopromote → evolve_decisions emit → growth_report までを
+`run_capture_phases(result, ctx)` に束ねる。振る舞いはゼロ変更で、run_evolve 本体の
 ローカル/引数参照を `ctx.<field>`（EvolveContext）から取るよう置換しただけ（result を
 in-place mutate するだけで返り値なし）。
+
+#379 Step 4: growth crystallization emit（journal 記録・旧 `_emit_growth_crystallization`）は
+growth-journal harness 削除に伴い本ブロックから削除した。
 
 ⚠️ dry-run 書込ゲート（このブロック最大のリスク・#491/#513 契約）:
 post-batch 群（weak_signals batch/ttl・correction_semantic・bootstrap_backlog・daily_review・
@@ -20,10 +23,10 @@ write まで貫通**して「dry-run では 1 バイトも書かない」契約�
 本 module の名前空間ですり抜けると、テスト緑のまま実関数が走る silent fail になる。
 本ブロックの grep（test_evolve_binding_paths / test_evolve_*）の結果、抽出範囲が呼ぶ
 `evolve.<name>` 直接差し替え対象（setattr / patch.object）は **存在しない**
-（_build_trigger_summary / load_evolve_state / save_evolve_state / _resolve_pj_slug /
-_emit_growth_crystallization はいずれも setattr/patch.object 対象でなく、テストは
-`from evolve import _resolve_pj_slug` 等の re-export 参照のみ）。よって monkeypatch されない
-これら末端 helper は sub-module（_state / _env / _report）から直接 import する（PR#5/#6/#7 の流儀）。
+（_build_trigger_summary / load_evolve_state / save_evolve_state / _resolve_pj_slug は
+いずれも setattr/patch.object 対象でなく、テストは `from evolve import _resolve_pj_slug` 等の
+re-export 参照のみ）。よって monkeypatch されないこれら末端 helper は sub-module
+（_state / _env）から直接 import する（PR#5/#6/#7 の流儀）。
 self-mutation スロット（skill_evolve_assessment / collect_issues）の代入は本ブロックに無い。
 
 各 Phase 内の `from evolve_introspect import ...` / `from session_store import ...` /
@@ -41,7 +44,6 @@ from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
 
 from ._env import _resolve_pj_slug
-from ._report import _emit_growth_crystallization
 from ._state import _build_trigger_summary, load_evolve_state, save_evolve_state
 
 
@@ -136,13 +138,6 @@ def run_capture_phases(result: Dict[str, Any], ctx) -> None:
         except Exception as e:
             print(f"[evolve-anything:evolve] session ingest warning: {e}", file=sys.stderr)
             result["sessions_ingested"] = {"error": str(e)}
-
-    # ── NFD: 結晶化イベント emit + growth キャッシュ更新 ────────
-    if not dry_run:
-        try:
-            _emit_growth_crystallization(result, project_dir)
-        except Exception as e:
-            print(f"[evolve-anything:evolve] growth emit warning: {e}", file=sys.stderr)
 
     # ── utterance アーカイブの増分 ingest（#430）────────────────────
     # 全PJ human 発話を恒久アーカイブに batch 取り込み（hot path ゼロ・ゼロ LLM）。

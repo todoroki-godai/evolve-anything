@@ -1,7 +1,8 @@
 """query_sessions の cross-dir union + read 層 slug 別名テスト（#45 ① 残課題 ⒜）。
 
-telemetry_query.query_sessions は multiview / paired / missed-skill / growth_narrative が
-使う**第2の session reader**。PR1（#469 / bb83ae7）が outcome 系の reader を
+telemetry_query.query_sessions は multiview / paired / missed-skill が使う**第2の session
+reader**（growth_narrative は #379 Step 4 で growth-journal harness ごと削除済み）。
+PR1（#469 / bb83ae7）が outcome 系の reader を
 `read_session_records_union`（cross-dir）に張替えた一方、query_sessions の本体
 （`_query_sessions_via_store`）は `session_store.query()` ＝**単一 DATA_DIR 内の union のみ**
 （db + 未 ingest jsonl）で cross-dir 未対応のまま残っていた（PR1 の partial fix 残り・

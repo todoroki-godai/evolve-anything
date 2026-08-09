@@ -118,17 +118,6 @@ class TestEstimateMode:
 
 
 class TestBackfillImplement:
-    """growth-journal.jsonl は実 store_registry で status=dead（PR #389・#379 Step 3
-    レビューで writer ゲート追加）。本クラスは writer の書込ロジック自体を検証するため
-    is_dead_store を False に固定する（dead ゲートの検証は
-    TestBackfillImplementDeadGate に分離）。
-    """
-
-    @pytest.fixture(autouse=True)
-    def _force_not_dead(self, monkeypatch):
-        import store_registry
-        monkeypatch.setattr(store_registry, "is_dead_store", lambda name: False)
-
     def test_writes_usage_records(self, data_dir, git_repo):
         from implement_backfill import backfill_implement
 
@@ -141,48 +130,9 @@ class TestBackfillImplement:
         assert all(r["skill"] == "implement" for r in records)
         assert all(r.get("backfill") is True for r in records)
 
-    def test_writes_growth_journal(self, data_dir, git_repo):
-        from implement_backfill import backfill_implement
-
-        backfill_implement(str(git_repo))
-
-        records = _load_jsonl(data_dir / "growth-journal.jsonl")
-        assert len(records) >= 1
-        assert all(r["type"] == "implementation" for r in records)
-
     def test_idempotent(self, data_dir, git_repo):
         from implement_backfill import backfill_implement
 
         r1 = backfill_implement(str(git_repo))
         r2 = backfill_implement(str(git_repo))
         assert r2["records_written"] == 0  # 2回目は重複スキップ
-
-
-class TestBackfillImplementDeadGate:
-    """growth-journal.jsonl の status=dead ゲート（#379 Step 3 レビュー対応）。
-
-    quality_engine.record_quality_score / growth_journal.emit_crystallization のゲート
-    追加時に静的契約テストで発見された第4の未ゲート writer（一時 backfill CLI）。
-    usage.jsonl（active）は従来通り書かれる。
-    """
-
-    def test_dead_store_skips_journal_write_but_usage_still_writes(self, data_dir, git_repo):
-        from implement_backfill import backfill_implement
-
-        result = backfill_implement(str(git_repo))
-        assert result["records_written"] >= 1
-        assert not (data_dir / "growth-journal.jsonl").exists()
-
-        usage_records = _load_jsonl(data_dir / "usage.jsonl")
-        assert len(usage_records) >= 1
-
-    def test_registry_import_failure_fails_open(self, data_dir, git_repo, monkeypatch):
-        """store_registry が import 不能な環境ではゲート起因で書込を止めない（fail-open）。"""
-        import sys
-        monkeypatch.setitem(sys.modules, "store_registry", None)
-
-        from implement_backfill import backfill_implement
-
-        backfill_implement(str(git_repo))
-        records = _load_jsonl(data_dir / "growth-journal.jsonl")
-        assert len(records) >= 1

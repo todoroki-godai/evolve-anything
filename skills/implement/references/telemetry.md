@@ -25,21 +25,8 @@ record = {
 }
 with open(os.path.join(data_dir, "usage.jsonl"), "a") as f:
     f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-if OUTCOME in ("success", "partial"):
-    journal = {
-        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "type": "implementation",
-        "source": "implement-skill",
-        "depth": DEPTH,
-        "tasks_completed": COMPLETED_IDS,   # list[str]
-        "tasks_count": len(COMPLETED_IDS),
-        "conformance_rate": CONFORMANCE,
-        "mode": MODE,
-        "phase": "unknown",
-    }
-    with open(os.path.join(data_dir, "growth-journal.jsonl"), "a") as f:
-        f.write(json.dumps(journal, ensure_ascii=False) + "\n")
 ```
+
+（#379 Step 4: `growth-journal.jsonl` への記録は growth-journal harness 削除に伴い廃止した。）
 
 **上の Python は直接実行するのではなく、変数を実際の値に置き換えて実行する。**
