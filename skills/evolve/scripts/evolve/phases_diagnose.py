@@ -297,7 +297,7 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
     # Phase 3.3: Skill Quality Trace Analysis（テレメトリ依存 — data_sufficiency 後）
     try:
         sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-        from quality_engine import analyze_traces, compute_overall_score, record_quality_score
+        from quality_engine import analyze_traces, compute_overall_score
 
         proj = Path(ctx.project_dir) if ctx.project_dir else Path.cwd()
         quality_patterns = result["phases"].get("quality_patterns", {})
@@ -314,14 +314,6 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
                     "confusion_score": confusion,
                     "overall_score": overall,
                 }
-                if not ctx.dry_run:
-                    record_quality_score(skill_name, {
-                        "pattern_score": pattern_score,
-                        "confusion_score": confusion,
-                        "context_efficiency": ctx_eff,
-                        "defaults_first_score": defaults,
-                        "overall": overall,
-                    })
         result["phases"]["quality_traces"] = trace_results
     except Exception as e:
         result["phases"]["quality_traces"] = {"error": str(e)}

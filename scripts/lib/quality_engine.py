@@ -1,11 +1,10 @@
 """Skill Quality Engine — パターン認識ベースの品質エンジン。
 
-ExecutionTraceAnalyzer（混乱度測定）、PatternRecommender（ドメイン別推奨）、
-スコアボード記録を提供する。
+ExecutionTraceAnalyzer（混乱度測定）、PatternRecommender（ドメイン別推奨）を提供する。
+旧スコアボード記録機能（record_quality_score）は #379 Step 4 で quality-scores.jsonl
+harness ごと削除済み。
 """
-import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -214,50 +213,3 @@ def compute_overall_score(
     )
 
     return min(1.0, max(0.0, result))
-
-
-# ---------------------------------------------------------------------------
-# record_quality_score — スコアボード
-# ---------------------------------------------------------------------------
-
-def record_quality_score(
-    skill_name: str,
-    scores: Dict[str, Any],
-    *,
-    data_dir: Optional[Path] = None,
-) -> None:
-    """quality-scores.jsonl にスキルのスコアを追記する。
-
-    Args:
-        skill_name: スキル名。
-        scores: スコア辞書（pattern_score, confusion_score, overall 等）。
-        data_dir: 出力ディレクトリ（テスト用）。
-    """
-    try:
-        import store_registry
-        if store_registry.is_dead_store("quality-scores.jsonl"):
-            # #379 Step 3 レビュー: status=dead ストアへの store_write barrier 非経由の
-            # 直接 open() writer を自ら止める（barrier bypass 修正）。lookup 不能時は
-            # fail-open（下の import 失敗ケース）で従来通り書込を継続する。
-            return
-    except ImportError:
-        pass
-
-    if data_dir is None:
-        # canonical な lib 経路の DATA_DIR を使う。旧 `from hooks.common import DATA_DIR`
-        # は (a) standalone tool 実行で `hooks` が import 不能 (b) hooks/common.py に
-        # DATA_DIR シンボルが無い、の二重で壊れており非 dry-run の record で常時握り潰されていた。
-        from rl_common import DATA_DIR
-        data_dir = DATA_DIR
-
-    data_dir.mkdir(parents=True, exist_ok=True)
-    filepath = data_dir / "quality-scores.jsonl"
-
-    record = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "skill": skill_name,
-        **scores,
-    }
-
-    with open(filepath, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
