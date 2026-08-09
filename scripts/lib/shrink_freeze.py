@@ -62,7 +62,6 @@ FROZEN_STORES: FrozenSet[str] = frozenset(
         "false_positives.jsonl",
         "growth-journal.jsonl",
         "icebox_verdict_seen.jsonl",
-        "judge_audit_verdicts.jsonl",
         "memory_transition_checks.jsonl",
         "quality-baselines.jsonl",
         "quality-scores.jsonl",
@@ -165,7 +164,8 @@ FROZEN_WEAK_SIGNAL_CHANNELS: FrozenSet[str] = frozenset(
 # key は他のどこからも import 削除されない。解除は本集合から key を除くだけでよい
 # （skill 自体の削除・非活性化ではない）。
 #
-# 対象は FROZEN_OBSERVABILITY_SECTIONS（44 キー）から下記 KEEP 11 件を除いた全 33 件
+# 対象は FROZEN_OBSERVABILITY_SECTIONS（44 キー）から下記 KEEP 11 件を除いた 33 件のうち、
+# judge_audit を #379 Step 4 で harness ごと宣言削除したため現在は 32 件
 # （2026-08-04 ユーザー合意 #379、2026-08-05 レビュー指摘で再分類）。KEEP 11 の内訳:
 #   ①行動配線の実証あり: correction_capture / skill_triage / skill_reachability /
 #     doc_budget / icebox_reconcile / measurement_bug（evolve_introspect の起票レーン
@@ -193,7 +193,6 @@ CULLED_OBSERVABILITY_SECTIONS: FrozenSet[str] = frozenset(
         "global_claude_md",
         "global_hook_plugin_dup",
         "hook_drift",
-        "judge_audit",
         "memory_capability",
         "memory_contagion",
         "memory_contamination",

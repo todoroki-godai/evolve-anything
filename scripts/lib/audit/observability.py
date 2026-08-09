@@ -48,7 +48,6 @@ from .sections_fanout import build_fanout_cost_section
 from .sections_hook import build_hook_drift_section
 from .sections_icebox_reconcile import build_icebox_reconcile_section
 from .sections_invalid_frontmatter import build_invalid_frontmatter_section
-from .sections_judge_audit import build_judge_audit_section
 from .sections_contagion import build_memory_contagion_section
 from .sections_doc_budget import build_doc_budget_section
 from .sections_measurement import build_measurement_bug_section
@@ -119,7 +118,6 @@ _OBSERVABILITY_BUILDERS: List[Tuple[str, Callable[[Path], Optional[List[str]]]]]
     ("duplicate_skill_names", build_duplicate_skill_names_section),
     ("invalid_frontmatter", build_invalid_frontmatter_section),
     ("advisory_decisions", build_advisory_decisions_section),
-    ("judge_audit", build_judge_audit_section),
     ("skill_reachability", build_skill_reachability_section),
     ("icebox_reconcile", build_icebox_reconcile_section),
     ("doc_budget", build_doc_budget_section),

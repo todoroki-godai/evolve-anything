@@ -40,7 +40,7 @@ multiview_eval, relevance_gate, remediation参照リンク相対化, report-feed
 recall link 1-hop, recall validity-aware ranking, reinforce_memory配線, memory_capability,
 skill_vuln_scan, fanout_cost, memory_contagion, memory_guard,
 artifacts_hygiene, memory_hygiene, memory_stale_refs, invalid_frontmatter,
-self_contamination, evolve_tier, tier_skill, judge_audit, worker_takeoff,
+self_contamination, evolve_tier, tier_skill, worker_takeoff,
 skill_reachability, fleet_propose, fleet_pr, agent_coordination, codex_config_cleanup,
 runtime_telemetry, codex_usage
 

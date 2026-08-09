@@ -137,5 +137,5 @@ class TestCulledObservabilitySections:
         live = {key for key, _ in _OBSERVABILITY_BUILDERS}
         assert sf.CULLED_OBSERVABILITY_SECTIONS | self._KEEP == live
 
-    def test_culled_sections_count_is_33(self) -> None:
-        assert len(sf.CULLED_OBSERVABILITY_SECTIONS) == 33
+    def test_culled_sections_count_is_32(self) -> None:
+        assert len(sf.CULLED_OBSERVABILITY_SECTIONS) == 32

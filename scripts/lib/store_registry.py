@@ -354,29 +354,6 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "として graceful に扱う（後方互換）。",
     ),
     StoreDeclaration(
-        name="judge_audit_verdicts.jsonl",
-        writer="scripts/lib/judge_audit/harness.py（--run の欠陥注入判定後 write_verdict）。"
-        "hot path（hooks）からは書かない。",
-        writer_locus="batch",
-        reader="scripts/lib/judge_audit/query.py（false-pass 率集計）+ "
-        "audit/sections_judge_audit（advisory surface）。",
-        retention="permanent",
-        classification="dead",
-        note="#188 The Blind Curator（arXiv 2607.07436）: 既知の欠陥 fixture を judge の実"
-        "プロンプト（constitutional._build_eval_prompt/_parse_layer_response 再利用）に流し、"
-        "合格(false-pass)判定率を計測する欠陥注入監査。fixture id 単位 last-append-wins・"
-        "pj_slug スコープ。judge が false-pass を出すとスキル退役（negative_transfer "
-        "rollback）が無音で無効化されるため事前計測する。書込は harness の batch 実行のみ"
-        "（hook-writer stale 突合から writer_locus=batch で除外）。"
-        "#379 Step 3: 実 DATA_DIR に本ファイルが存在しない（--run が一度も実行されていない）+ "
-        "judge_audit section は Step 2 で culled 済み + research 系 icebox のユーザー確定方針"
-        "を根拠に classification=dead へ分類。ただし status は active のまま据え置く"
-        "（降格すると write barrier が --run のたびに StoreWriteError を送出し、"
-        "scripts/lib/tests/test_judge_audit.py の run_audit(run=True) 系テスト 6 件超が"
-        "同時に赤くなる。機能を止めて退役するか barrier だけ迂回させるかは製品判断であり "
-        "Step 3 のスコープ外＝実装報告で確認事項として明記）。",
-    ),
-    StoreDeclaration(
         name="verbosity_candidates.jsonl",
         writer="hooks/record_verbosity.py（Stop hook がゼロ LLM で足切り超の長応答を記録）。",
         reader="scripts/lib/verbosity/judge.py（Haiku バッチ判定）+ "

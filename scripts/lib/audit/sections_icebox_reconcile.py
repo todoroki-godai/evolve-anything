@@ -6,7 +6,7 @@ daily runner の icebox 3レーン棚卸しステップが書いた `icebox-verd
 役目のため、ここでは件数のみ添える。レーン2「観測器不在」とレーン3「失効候補」を主対象に
 advisory surface する。
 
-観測可能性契約（build_judge_audit_section と同契約）:
+観測可能性契約（advisory.build_advisory_section の共通契約に準拠）:
 - 当PJが evolve-anything 本体でない（`.claude-plugin/plugin.json` 無し）→ None（沈黙）
 - icebox-verdicts.json 未生成 / 壊れている → None（沈黙。daily runner 未実行なだけ）
 - verdicts が空リスト → None（沈黙。評価対象なし）
