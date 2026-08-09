@@ -530,32 +530,6 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "pipeline_eval.py が union read で消費する機能的 consumer。grep 確認済み）。",
     ),
     StoreDeclaration(
-        name="growth-journal.jsonl",
-        writer="scripts/lib/growth_journal.py の emit_crystallization（evolve --drain "
-        "--result-json の apply 境界・#146/ADR-051 から live に呼ばれる）+ "
-        "skills/implement/scripts/telemetry.py の record_growth_journal（SKILL.md の "
-        "実装完了時記録手順から呼ばれる）+ 同 implement_backfill.py の一時 backfill CLI。"
-        "3 writer とも batch/直接呼び出し（store_write barrier 非経由）。",
-        writer_locus="batch",
-        reader="query_crystallizations / count_crystallized_rules（growth_narrative・"
-        "audit/orchestrator・sections_milestone が成長ストーリー素材に消費）。reader は live。",
-        retention="permanent",
-        classification="dead",
-        status="dead",
-        note="#121: 結晶化イベント記録。reader は live。"
-        "append-only（_patch_last_event_ts で末尾行更新はするが rotation/上限なし）。"
-        "#379 Step 3: issue #379 本文が「修理より置換（optimize_history 直読みの戦果ボード）」"
-        "を明記しているため dead へ降格。"
-        "#379 Step 3 外部レビュー指摘: 降格時の note は『writer は backfill 経由で dormant』"
-        "と記していたが誤りだった（stale）。実際は emit_crystallization が evolve --drain の "
-        "apply 境界から常時呼ばれる live writer で、store_write barrier を経由しない直接 "
-        "open() のため status=dead 降格後も書き続けていた。契約テストの較正で "
-        "skills/implement 側の record_growth_journal / implement_backfill.py の2 writer も "
-        "同型の未ゲート barrier bypass だったと追加判明。3 writer とも冒頭で "
-        "store_registry.is_dead_store('growth-journal.jsonl') をチェックし、dead なら "
-        "書込せず return するゲートを追加して書込を停止した（#379 Step 3 レビュー修正）。",
-    ),
-    StoreDeclaration(
         name="quality-baselines.jsonl",
         writer="scripts/quality_monitor.py の save_baselines / append_record（audit の "
         "quality 2 相オーケストレーションが呼ぶ）。batch writer。",
@@ -670,9 +644,8 @@ def is_active_store(name: str) -> bool:
 def is_dead_store(name: str) -> bool:
     """name が status=dead 登録ストアなら True（未登録 / active / legacy は False）。
 
-    store_write barrier 非経由の直接 open() writer（growth_journal.emit_crystallization 等）
-    が、writer 関数の冒頭でこの判定を使って dead ストアへの書込を自ら止めるためのゲート
-    （#379 Step 3 レビュー: barrier bypass 修正）。
+    store_write barrier 非経由の直接 open() writer が、writer 関数の冒頭でこの判定を使って
+    dead ストアへの書込を自ら止めるためのゲート（#379 Step 3 レビュー: barrier bypass 修正）。
     未登録 / lookup 不能時は False（fail-open で書込継続。ゲート起因で本体機能を壊さない）。
     """
     decl = declaration_for(name)

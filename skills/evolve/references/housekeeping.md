@@ -70,7 +70,8 @@ reject、未変更かつ未却下（保留）は母集団に入れない。
 必ず以下の**単一コマンド**を実行する（#402: inline python をやめ、drain は1コマンドに集約。
 これにより「assistant が inline スクリプトを書き損ねる」失敗面を縮める）。**Step 1 の dry-run が
 `--output "$OUT"` で書いた `$OUT` を `--result-json` に渡す**（#146/ADR-051: calibration state /
-tool_usage_snapshot / growth 結晶化の result 依存3項目を drain の apply 境界で確定するため）:
+tool_usage_snapshot の result 依存2項目を drain の apply 境界で確定するため。growth crystallization
+emit は #379 Step 4 で growth-journal harness ごと削除済み・元は3項目だった）:
 
 ```bash
 # $OUT は Step 1 の dry-run が --output に書いた result JSON（/tmp/rl_evolve_<slug>.json）。
@@ -84,18 +85,19 @@ evolve --drain --result-json "$OUT"
   optimize_history へ記録し、marker をクリアする。**tool 文脈（CLI）で走る**ため reader と同一
   DATA_DIR に書く＝hook/tool の DATA_DIR split（#358）を踏まない。**この単一コマンド単体では
   evolve_decisions の accept/reject は記録しない**（#376）— weak_signals / calibration state /
-  tool_usage_snapshot / growth 結晶化 / remediation marker / correction_semantic Phase C は
+  tool_usage_snapshot / remediation marker / correction_semantic Phase C は
   この呼び出しだけで確定するが、fitness 母集団（optimize_history）への記録は下記の
   `accepted=`/`rejected=` 付き inline 呼び出しが必要。
-- **`--result-json "$OUT"` で result 依存3項目も同居確定（#146/ADR-051）**: 標準フローは
+- **`--result-json "$OUT"` で result 依存2項目も同居確定（#146/ADR-051）**: 標準フローは
   `evolve --dry-run` 分析 → 対話適用 → drain で完結し `run_evolve(dry_run=False)` に到達しない
-  ため、phases_capture の `if not dry_run:` 配下（calibration state / tool_usage_snapshot /
-  growth 結晶化）が構造死蔵していた（較正・tool 使用トレンド・成長イベントが標準フローで
-  永久に貯まらない #146 の実害）。dry-run が書いた `$OUT` を drain が読み値を運搬して
-  apply 境界で確定する（emit→drain 2相の値運搬版）。時刻は drain 時刻・中身は result 由来。
-  結果は drain サマリの `result_state_persisted`（calibration_written / tool_usage_written）と
-  `growth_crystallized` で surface される。**`$OUT` を渡し忘れ / 消えた場合は3項目のみ
-  graceful skip**（`{"skipped": "no_result_json"}` 等）し、他 persist は無傷で完走する。
+  ため、phases_capture の `if not dry_run:` 配下（calibration state / tool_usage_snapshot）が
+  構造死蔵していた（較正・tool 使用トレンドが標準フローで永久に貯まらない #146 の実害）。
+  dry-run が書いた `$OUT` を drain が読み値を運搬して apply 境界で確定する（emit→drain 2相の
+  値運搬版）。時刻は drain 時刻・中身は result 由来。結果は drain サマリの
+  `result_state_persisted`（calibration_written / tool_usage_written）で surface される
+  （growth crystallization emit・`growth_crystallized` キーは #379 Step 4 で削除済み）。
+  **`$OUT` を渡し忘れ / 消えた場合は2項目のみ graceful skip**
+  （`{"skipped": "no_result_json"}` 等）し、他 persist は無傷で完走する。
 - **承認して適用した提案がある場合、または明示却下がある場合**は inline で
   `ed.drain_pending(accepted={id, ...}, rejected={id: 理由, ...})` を**追加で**使う（MUST・#376）
   — `--drain` CLI 単体では accept/reject を渡す手段が無いため、`accepted`/`rejected` はこの

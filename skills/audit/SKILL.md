@@ -60,9 +60,12 @@ evolve-audit "$(pwd)" --coherence-score --telemetry-score --constitutional-score
 ```
 
 **Next Milestone は標準実行で常時出る（#52-2）**: `--growth` を付けるとフル成長レポート（Level /
-Crystallization Log / Growth Story 込み）を表示するが、付けなくても「次フェーズ到達条件」だけは
-軽量サブセット（`## 🌱 成長の次の一手` セクション）として常に出力される（phase は growth-state
-cache 優先・無ければ telemetry から軽算出し fitness/LLM は呼ばない）。フル成長レポートが要るときだけ
+Environment Score / Phase / Progress / Sessions|Corrections の見出しに加え、🏆 戦果ボード —
+手直し回数の増減・採用した改善（accepted/rejected/pending/excluded）・直近の採用・取り下げ候補
+（#379 Step 4・crystallization イベント記録は growth-journal harness ごと削除済み）込み）を
+表示するが、付けなくても「次フェーズ到達条件」だけは軽量サブセット（`## 🌱 成長の次の一手`
+セクション）として常に出力される（phase は growth-state cache 優先・無ければ telemetry から
+軽算出し fitness/LLM は呼ばない）。フル成長レポートが要るときだけ
 `evolve-audit "$(pwd)" --growth` を使う（常時 ON は冗長化を招くため標準では Next Milestone のみ）。
 
 ### Step 1: Audit スクリプト実行

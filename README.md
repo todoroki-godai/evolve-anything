@@ -99,7 +99,7 @@ evolve-anything consists of **four independent pillars**.
 | Spec Management | Manage SPEC.md + ADRs, automatic L1/L2 promotion | `/evolve-anything:spec-keeper` |
 | Breakthrough | Diagnose "almost-but-not-quite" stuck problems → strategy proposal → spawn Agent | `/evolve-anything:breakthrough` |
 | Pitfall Curation | Grow any project's pitfalls.md: dedup / universality classification / top-N distillation / sync gate | `/evolve-anything:pitfall-curate` |
-| Growth Visualization (NFD) | Lv.1–10 level system + 4-phase auto-detect + 5 traits + growth narrative | `/evolve-anything:audit --growth` |
+| Growth Visualization (NFD) | Lv.1–10 level system + phase auto-detect + 🏆 Results Board (rework count trend / accepted-rejected-pending-excluded decisions / withdrawal candidates) | `/evolve-anything:audit --growth` |
 
 ## Task-oriented Guide
 

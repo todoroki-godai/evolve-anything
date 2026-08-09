@@ -255,14 +255,16 @@ def main() -> None:
         except Exception as e:
             summary["snooze_cleared"] = {"error": str(e)}
 
-        # #146 (ADR-051): result 依存3項目（calibration state / tool_usage_snapshot /
-        # growth crystallization）を apply 境界で発火する。上の result 非依存 persist 群
-        # （#150 で移植）と違い、これらは run_evolve が result に書いた phases 値を必要とする。
-        # dry-run が `--output "$OUT"` で書いた full result JSON を drain が読み、値を運搬して
-        # 確定する（emit→drain 2相の「値運搬」版）。標準フロー（dry-run→drain）は
-        # run_evolve(dry_run=False) に到達せず phases_capture の該当ブロックが死蔵する #146 の根治。
-        # graceful degradation: --result-json 無し / 読めない / phases 欠落 → 3項目のみ skip し
+        # #146 (ADR-051): result 依存2項目（calibration state / tool_usage_snapshot）を
+        # apply 境界で発火する。上の result 非依存 persist 群（#150 で移植）と違い、これらは
+        # run_evolve が result に書いた phases 値を必要とする。dry-run が `--output "$OUT"` で
+        # 書いた full result JSON を drain が読み、値を運搬して確定する（emit→drain 2相の
+        # 「値運搬」版）。標準フロー（dry-run→drain）は run_evolve(dry_run=False) に到達せず
+        # phases_capture の該当ブロックが死蔵する #146 の根治。
+        # graceful degradation: --result-json 無し / 読めない / phases 欠落 → skip し
         # 他 persist は継続（silence≠evaluated を summary に surface）。時刻は drain 時刻。
+        # #379 Step 4: growth crystallization（journal 記録）は growth-journal harness
+        # 削除に伴い本 apply 境界から削除した（元は3項目だった）。
         _evolve_result = None
         _result_skip_reason = None
         if args.result_json:
@@ -293,18 +295,6 @@ def main() -> None:
                 summary["result_state_persisted"] = {"skipped": _result_skip_reason}
         except Exception as e:
             summary["result_state_persisted"] = {"error": str(e)}
-
-        # growth crystallization emit（result 依存・journal 記録）。
-        try:
-            if _evolve_result is not None:
-                from ._report import _emit_growth_crystallization
-
-                _emit_growth_crystallization(_evolve_result, args.project_dir)
-                summary["growth_crystallized"] = True
-            else:
-                summary["growth_crystallized"] = {"skipped": _result_skip_reason}
-        except Exception as e:
-            summary["growth_crystallized"] = {"error": str(e)}
 
         # #186: remediation reconcile_surfaced の連続提示 count marker を apply 境界で永続化する。
         # #494 の「毎回再提示を断つ」自動却下セーフティネットは phases_remediate の

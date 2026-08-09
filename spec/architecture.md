@@ -119,8 +119,7 @@ scripts/rl/fitness/     ← 適応度関数（8個組み込み: default + 7 .py 
       → optimize (直接パッチ → regression gate)
       → instruction compliance (corrections × critical指示 → 違反検出 → pitfall学習)
       → growth_engine (Phase判定 → growth-state.json キャッシュ)
-        → growth_journal (結晶化イベント記録)
-        → growth_narrative (環境プロファイル + 成長ストーリー)
+        → results_board (戦果ボード。optimize_history/corrections 直読み、#379 Step 4)
   → InstructionsLoaded hook (growth-state.json → Growth greeting stdout)
 ```
 

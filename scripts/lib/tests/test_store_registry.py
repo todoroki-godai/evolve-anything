@@ -278,7 +278,8 @@ def test_status_defaults_to_active() -> None:
 # classification=dead だが status=active のまま据え置く例外だったが、#379 Step 4 で
 # judge_audit harness ごと宣言削除され例外自体が解消した
 # （test_store_classification.py の `_STATUS_DEAD_EXEMPT` 参照）。quality-scores.jsonl も
-# #379 Step 4 第3弾で writer（quality_engine.record_quality_score）ごと宣言削除された。
+# growth-journal.jsonl も #379 Step 4 で writer（quality_engine.record_quality_score /
+# growth_journal.emit_crystallization 他）ごと宣言削除された。dead 集合は恒久的に空になり得る。
 _LEGACY_STORES_121 = [
     "audit-history.jsonl",       # writer live: audit orchestrator _record_audit_completion
     "belief_blocks.jsonl",       # writer live: auto_memory_broker _record_belief_block
@@ -289,13 +290,11 @@ _LEGACY_STORES_121 = [
     "sessions.db",               # writer live: session_store.ingest (batch)
     "token_usage.db",            # writer live: token_usage_store の bulk INSERT
 ]
-_DEAD_STORES_121 = [
-    "growth-journal.jsonl",  # #379 Step 3: writer dormant + #379 本文が置換方針を明記。writer は raw open() でbarrier非経由
-]
+_DEAD_STORES_121: list = []
 
 
 def test_legacy_and_dead_stores_declared_121() -> None:
-    """#121/#379 Step 3/4: legacy 8 件 + dead 1 件が正しい status で宣言されている。
+    """#121/#379 Step 3/4: legacy 8 件 + dead 0 件が正しい status で宣言されている。
 
     旧 test_all_real_declarations_are_active（全 active 前提）を #121 の段階導入に更新。
     active は既存のまま、legacy/dead は #121/#379 で新規宣言・降格した既知集合のみが持つ。
@@ -411,12 +410,27 @@ def test_is_active_store() -> None:
     assert store_registry.is_active_store("no_such_store.jsonl") is False
 
 
-def test_is_dead_store() -> None:
+def test_is_dead_store(monkeypatch) -> None:
     """is_dead_store は status=dead 宣言のみ True（#379 Step 3 レビュー: writer ゲート）。
 
     未登録 / active / legacy は False。lookup 不能でも False（fail-open で書込継続）。
+
+    #379 Step 4: growth-journal.jsonl（実 registry で唯一の dead ストアだった）を宣言ごと
+    削除したため、is_dead_store 自体の判定ロジックは合成の dead 宣言で検証する
+    （declaration_for が参照する _DECLARATIONS を差し替える・real registry 非依存）。
     """
-    assert store_registry.is_dead_store("growth-journal.jsonl") is True
+    synthetic = [
+        StoreDeclaration(
+            name="synthetic-dead.jsonl",
+            writer="test",
+            reader="test",
+            retention="permanent",
+            classification="dead",
+            status="dead",
+        ),
+    ]
+    monkeypatch.setattr(store_registry, "_DECLARATIONS", synthetic)
+    assert store_registry.is_dead_store("synthetic-dead.jsonl") is True
     assert store_registry.is_dead_store("corrections.jsonl") is False
     assert store_registry.is_dead_store("no_such_store.jsonl") is False
 

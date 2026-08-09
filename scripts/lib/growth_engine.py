@@ -66,6 +66,27 @@ PHASE_DISPLAY_NAMES: Dict[Phase, Dict[str, str]] = {
 }
 
 
+def is_legacy_mature_phase(phase_value: Any) -> bool:
+    """phase_value（Phase enum・生文字列 "mature_operation"・None いずれも可）が
+    Mature Operation を指すかを判定する（#379 Step 4・#398 round3 共有ヘルパー）。
+
+    growth-journal harness 削除後、crystallized_rules 計測廃止により Mature Operation
+    の判定は保留中の契約になった（本 module の `detect_phase_no_crystallization` は
+    Structured Nurturing を上限とし Mature を返さない）。harness 削除前（旧方式）に
+    保存された phase=mature_operation の growth-state cache は
+    STALENESS_HIDE_DAYS（最大30日）以内は正常キャッシュとしてそのまま読めてしまうため、
+    cache を読む全 consumer（sections_milestone.py / hooks/instructions_loaded.py /
+    fleet/audit_runner.py）がこの述語で判定し、True なら cache 値を信用せず各 consumer
+    の文脈に応じた縮退値へフォールバックする（consumer 別の重複対処＝
+    pitfall_copied_parse_convention_partial_fix を避け、単一ソースに集約する）。
+
+    Phase は str の Enum（`class Phase(str, Enum)`）なので、enum インスタンスと
+    生文字列のどちらを渡しても `Phase.MATURE_OPERATION == "mature_operation"` が
+    True になり正しく判定できる。
+    """
+    return phase_value == Phase.MATURE_OPERATION
+
+
 # ── データクラス ────────────────────────────────────────────────
 
 
@@ -123,6 +144,41 @@ def detect_phase(
 
     # Bootstrap (fallback)
     return Phase.BOOTSTRAP
+
+
+def detect_phase_no_crystallization(sessions_count: int, human_corrections_count: int) -> Phase:
+    """crystallized_rules 非依存の phase 判定（#379 Step 4）。
+
+    growth-journal harness 削除（crystallized_rules の唯一のソースだった growth_journal.py
+    の削除）に伴い、Structured/Mature 判定から crystallized_rules の leg を外した縮退版。
+    Mature Operation は本関数では判定しない（crystallized_rules の代替シグナルが無いため、
+    恒久的に Structured Nurturing を上限とする — sections_milestone.py が従来から coherence を
+    0.0 固定にして Mature へ昇格させなかった方針と整合させる）。detect_phase（crystallized_rules
+    込みの元関数）は他 caller のため不変のまま残す。
+    """
+    if sessions_count < BOOTSTRAP_SESSIONS_TARGET:
+        return Phase.BOOTSTRAP
+    if (
+        sessions_count >= STRUCTURED_SESSIONS_TARGET
+        and human_corrections_count >= STRUCTURED_CORRECTIONS_TARGET
+    ):
+        return Phase.STRUCTURED_NURTURING
+    return Phase.INITIAL_NURTURING
+
+
+def compute_phase_progress_no_crystallization(
+    phase: Phase, sessions_count: int, human_corrections_count: int
+) -> float:
+    """crystallized_rules 非依存の進捗率（#379 Step 4）。Mature への進捗軸を持たない。"""
+    if phase == Phase.BOOTSTRAP:
+        return min(1.0, sessions_count / BOOTSTRAP_SESSIONS_TARGET)
+    if phase == Phase.INITIAL_NURTURING:
+        s = min(1.0, sessions_count / STRUCTURED_SESSIONS_TARGET)
+        c = min(1.0, human_corrections_count / STRUCTURED_CORRECTIONS_TARGET)
+        return (s + c) / 2.0
+    # Structured Nurturing（本関数での到達可能な最終状態）/ Mature（本関数は返さないが
+    # 万一 stale cache 由来で渡された場合の安全側フォールバック）はともに 1.0。
+    return 1.0
 
 
 # ── 進捗率 ──────────────────────────────────────────────────────

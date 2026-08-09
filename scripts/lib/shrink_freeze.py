@@ -60,7 +60,6 @@ FROZEN_STORES: FrozenSet[str] = frozenset(
         "evolution_memory.jsonl",
         "evolve-queue-state.jsonl",
         "false_positives.jsonl",
-        "growth-journal.jsonl",
         "icebox_verdict_seen.jsonl",
         "memory_transition_checks.jsonl",
         "quality-baselines.jsonl",

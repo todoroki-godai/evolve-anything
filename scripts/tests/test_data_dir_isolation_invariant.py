@@ -112,10 +112,3 @@ def test_store_data_dir_not_real_home(mod_name):
     )
 
 
-def test_growth_journal_isolated():
-    """growth_journal（#420 の 4 匹目のモグラ）が明示的に隔離されている。"""
-    gj = importlib.import_module("growth_journal")
-    resolved = gj._data_dir().resolve()
-    assert _REAL_HOME_CLAUDE not in resolved.parents and resolved != _REAL_HOME_CLAUDE, (
-        f"growth_journal._data_dir() resolved to real home: {resolved}"
-    )

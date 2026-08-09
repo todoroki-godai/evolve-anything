@@ -188,7 +188,7 @@ evolve のたびに効かせるなら audit に section を足す配線が必要
 
 ### Step 4: テレメトリ記録
 
-実装完了時に evolve-anything のテレメトリ（`usage.jsonl` / `growth-journal.jsonl`）に記録する。
+実装完了時に evolve-anything のテレメトリ（`usage.jsonl`）に記録する。
 **下記コードは直接実行するのではなく、変数を実際の値に置き換えて実行する（MUST）。**
 記録フィールド定義とコード全文は [references/telemetry.md](references/telemetry.md) 参照。
 

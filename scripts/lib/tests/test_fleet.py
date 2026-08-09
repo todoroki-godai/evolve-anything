@@ -308,6 +308,27 @@ class TestRunAuditSubprocess:
         assert cmd.index("--") < cmd.index(str(pj))
         assert cmd.index("--growth") < cmd.index("--")
 
+    def test_legacy_mature_phase_is_sanitized_to_none(self, tmp_path):
+        """#398 round3 Must: 旧方式で保存された phase=mature_operation の cache は
+        None に落とす（growth-journal harness 削除後、Mature 判定は保留契約に反する）。
+
+        本 reader は「growth-state JSON を唯一の真実とする」設計（telemetry 再計算
+        をしない・#379 Step 4 以前は subprocess docstring に明記）ため、
+        sections_milestone.py と異なり None（= fleet status では "—" 表示）へ
+        フォールバックする。
+        """
+        pj = self._make_pj(tmp_path)
+        data_dir = tmp_path / "data"
+        self._write_growth_state(data_dir, pj, env_score=0.9, phase="mature_operation")
+
+        fake = _FakePopen(returncode=0)
+        with mock.patch("fleet.audit_runner.subprocess.Popen", return_value=fake):
+            result = run_audit_subprocess(pj, data_dir=data_dir)
+
+        assert result.status == AUDIT_OK
+        assert result.phase is None
+        assert result.env_score == 0.9  # env_score 自体はサニタイズ対象外
+
     def test_growth_state_欠損時は_OK_だがスコア_None(self, tmp_path):
         pj = self._make_pj(tmp_path)
         data_dir = tmp_path / "data"

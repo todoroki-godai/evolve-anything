@@ -41,10 +41,10 @@ from ._env import (  # noqa: E402
 # `from evolve import _capture_warnings, _TeeStderr, _capture_audit_stderr` の後方互換を維持。
 from ._capture import _capture_warnings, _TeeStderr, _capture_audit_stderr
 
-# report / growth・データ不足ガイダンス系 helper は _report.py に分離（#8 から先行分離, refs #531）。
-# 末端 helper（引数で完結・PLUGIN_ROOT 直参照のみ）。run_evolve 内の直接呼びは
-# re-export で __init__ 名前空間に名前が入るため解決される。
-from ._report import _emit_growth_crystallization, _warn_insufficient_data
+# report・データ不足ガイダンス系 helper は _report.py に分離（#8 から先行分離, refs #531）。
+# 末端 helper（引数で完結）。run_evolve 内の直接呼びは re-export で __init__ 名前空間に
+# 名前が入るため解決される。growth crystallization emit は #379 Step 4 で削除済み。
+from ._report import _warn_insufficient_data
 
 # run_evolve のフェーズ間共有ローカルを束ねる dataclass は _context.py に分離（PR 5/8, refs #531）。
 # `from evolve import EvolveContext` の後方互換を保つ。new_result() は束縛フェンスのため

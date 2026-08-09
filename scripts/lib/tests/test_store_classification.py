@@ -68,9 +68,9 @@ _DERIVED_CACHE = {
     "episodic.db",
 }
 
-_DEAD = {
-    "growth-journal.jsonl",
-}
+# #379 Step 4: growth-journal.jsonl（唯一の dead ストア）を registry ごと削除。
+# dead 分類の population は恒久的に空になり得る（縮小方針の成果）。
+_DEAD: set = set()
 
 
 def test_all_declarations_have_a_classification() -> None:
@@ -125,7 +125,7 @@ def test_classification_golden_counts_and_names() -> None:
     assert len(_RAW_EVENT) == 10
     assert len(_WORKFLOW_STATE) == 15
     assert len(_DERIVED_CACHE) == 8
-    assert len(_DEAD) == 1
+    assert len(_DEAD) == 0
 
 
 def test_classification_categories_partition_all_declarations() -> None:
