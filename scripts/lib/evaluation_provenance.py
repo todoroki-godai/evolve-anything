@@ -21,7 +21,7 @@
   3. writer 直前 — provenance の存在確認と共通項目の補完（``finalize_provenance``）
   4. store 関数 — 渡されたレコードをそのまま append（変更しない）
 
-新ストアは作らない。既存 jsonl（judge_audit_verdicts / optimize_history）と
+新ストアは作らない。既存 jsonl（optimize_history）と
 constitutional の中間 cache をフィールド拡張するだけで足りる
 （``store_write`` barrier はレコード内フィールドを検証しないため barrier 変更も不要）。
 """
@@ -106,7 +106,7 @@ def build_provenance(
 
     Args:
         evaluation_kind: ``KIND_*`` のいずれか。未知の値は ValueError（契約違反）。
-        producer:        評価を出した主体の識別子（例 ``judge_audit`` / ``chaos.compute_chaos_score``）。
+        producer:        評価を出した主体の識別子（例 ``constitutional`` / ``chaos.compute_chaos_score``）。
         judge:           ``build_judge_context`` の戻り。LLM judge 系 kind では省略しても
                          「観測不能」を表す空の judge が入る（キー自体は残す）。
         config:          結果を変え得る設定またはその fingerprint（決定論評価向け）。

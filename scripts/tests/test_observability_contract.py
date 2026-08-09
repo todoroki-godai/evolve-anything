@@ -341,4 +341,4 @@ def test_production_default_culls_without_env(tmp_path, monkeypatch):
     # 淘汰した事実自体は必ず surface する（silence != evaluated）。
     assert "display_cull" in result
     combined = "\n".join(result["display_cull"])
-    assert "33 section" in combined
+    assert "32 section" in combined

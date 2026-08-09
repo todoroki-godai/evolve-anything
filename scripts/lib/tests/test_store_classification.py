@@ -20,20 +20,11 @@ import store_registry  # noqa: E402
 _VALID_CLASSIFICATIONS = {"raw_event", "workflow_state", "derived_cache", "dead"}
 
 # classification="dead" だが status はまだ "active" のまま残す既知の例外
-# （#379 Step 3 棚卸しレビューで発見）。judge_audit_verdicts.jsonl の実 writer
-# （judge_audit/harness.py の --run）は store_write barrier を経由する live な
-# オプトイン CLI 機能で、scripts/lib/tests/test_judge_audit.py が
-# run_audit(run=True) を通じて実際に barrier を通過する形で回帰検証している。
-# status=dead に降格すると reject 既定の write barrier が StoreWriteError を送出し、
-# CLI 機能そのものと既存テスト 6 件超が同時に壊れる。「機能を止めてでも退役する」か
-# 「barrier だけ迂回させる」かは製品判断であり Step 3 のスコープ外のため、
-# classification のみ dead 化して status は保留する（実装報告で確認事項として明記）。
-#
-# 解消条件（#379 Step 3 レビュー）: Step 4 で judge_audit harness（judge_audit/harness.py
-# の --run CLI 機能）を削除し、上記テストごと退役するタイミングで status=dead に降格し、
-# 本例外集合を空にする。新規例外の無断追加は
-# test_status_dead_exempt_has_no_undocumented_additions が検出する。
-_STATUS_DEAD_EXEMPT = {"judge_audit_verdicts.jsonl"}
+# （#379 Step 3 棚卸しレビューで発見）。当時 judge_audit_verdicts.jsonl がこの例外に
+# 該当していたが、#379 Step 4 で judge_audit harness（judge_audit/harness.py の --run
+# CLI 機能）を宣言ごと削除し上記テストも退役したため、本例外集合は空に復帰した。
+# 新規例外の無断追加は test_status_dead_exempt_has_no_undocumented_additions が検出する。
+_STATUS_DEAD_EXEMPT: set[str] = set()
 
 _RAW_EVENT = {
     "corrections.jsonl",
@@ -80,7 +71,6 @@ _DERIVED_CACHE = {
 _DEAD = {
     "quality-scores.jsonl",
     "growth-journal.jsonl",
-    "judge_audit_verdicts.jsonl",
 }
 
 
@@ -105,15 +95,16 @@ def test_classification_dead_implies_status_dead_except_documented_exemptions() 
 
 
 # golden: _STATUS_DEAD_EXEMPT の意図された内容（無断拡大の機械ガード・#379 Step 3 レビュー）。
-_STATUS_DEAD_EXEMPT_GOLDEN = frozenset({"judge_audit_verdicts.jsonl"})
+# #379 Step 4 で judge_audit_verdicts.jsonl 例外が解消され、恒久的に空集合であるべき契約になった。
+_STATUS_DEAD_EXEMPT_GOLDEN: frozenset[str] = frozenset()
 
 
 def test_status_dead_exempt_has_no_undocumented_additions() -> None:
-    """_STATUS_DEAD_EXEMPT が golden 集合から乖離していないこと。
+    """_STATUS_DEAD_EXEMPT が golden 集合（空）から乖離していないこと。
 
     新しい dead-but-status-active 例外を追加する場合は、このテストの golden 集合と
-    上の解消条件コメント（Step 4 で judge_audit harness を削除するタイミングで空にする）を
-    同時に更新すること。片方だけ変えて通ることを防ぎ、無言の例外拡大を機械的に禁止する。
+    上のコメントを同時に更新すること。片方だけ変えて通ることを防ぎ、無言の例外拡大を
+    機械的に禁止する。
     """
     assert _STATUS_DEAD_EXEMPT == _STATUS_DEAD_EXEMPT_GOLDEN, (
         f"_STATUS_DEAD_EXEMPT が golden {_STATUS_DEAD_EXEMPT_GOLDEN} から乖離しています: "
@@ -122,7 +113,7 @@ def test_status_dead_exempt_has_no_undocumented_additions() -> None:
 
 
 def test_classification_golden_counts_and_names() -> None:
-    """4 分類の件数（10/15/8/3）と名前リストが棚卸し表と一致する（golden）。"""
+    """4 分類の件数（10/15/8/2）と名前リストが棚卸し表と一致する（golden）。"""
     by_classification: dict[str, set[str]] = {}
     for d in store_registry.declarations():
         by_classification.setdefault(d.classification, set()).add(d.name)
@@ -135,7 +126,7 @@ def test_classification_golden_counts_and_names() -> None:
     assert len(_RAW_EVENT) == 10
     assert len(_WORKFLOW_STATE) == 15
     assert len(_DERIVED_CACHE) == 8
-    assert len(_DEAD) == 3
+    assert len(_DEAD) == 2
 
 
 def test_classification_categories_partition_all_declarations() -> None:

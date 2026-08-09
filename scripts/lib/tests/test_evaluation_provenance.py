@@ -93,7 +93,7 @@ def test_judge_context_defaults_are_unknown_not_fabricated():
 def test_judge_kind_embeds_judge_context():
     prov = ep.build_provenance(
         evaluation_kind=ep.KIND_LLM_JUDGE,
-        producer="judge_audit",
+        producer="constitutional",
         judge=ep.build_judge_context(model="haiku", tool_policy_mode=ep.TOOL_POLICY_CLI_DEFAULT),
         runtime_name="claude",
     )
@@ -215,7 +215,7 @@ def test_finalize_fills_missing_common_fields():
 def test_finalize_does_not_overwrite_producer_supplied_values():
     prov = ep.build_provenance(
         evaluation_kind=ep.KIND_LLM_JUDGE,
-        producer="judge_audit",
+        producer="constitutional",
         judge=ep.build_judge_context(model="sonnet"),
         recorded_at="2026-01-01T00:00:00+00:00",
     )

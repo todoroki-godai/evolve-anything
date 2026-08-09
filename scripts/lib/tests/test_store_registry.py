@@ -274,9 +274,9 @@ def test_status_defaults_to_active() -> None:
 # で確認済み。
 # #379 Step 3: quality-scores.jsonl / growth-journal.jsonl は classification=dead に伴い
 # status も legacy→dead へ降格（writer が store_write barrier 非経由の直接 open() のため
-# 降格しても実行時に壊れないことを確認済み）。judge_audit_verdicts.jsonl は
-# classification=dead だが、writer が store_write barrier 経由の live なオプトイン CLI
-# 機能でテストが barrier を通す形で回帰検証しているため status は active のまま据え置き
+# 降格しても実行時に壊れないことを確認済み）。judge_audit_verdicts.jsonl は当時
+# classification=dead だが status=active のまま据え置く例外だったが、#379 Step 4 で
+# judge_audit harness ごと宣言削除され例外自体が解消した
 # （test_store_classification.py の `_STATUS_DEAD_EXEMPT` 参照）。
 _LEGACY_STORES_121 = [
     "audit-history.jsonl",       # writer live: audit orchestrator _record_audit_completion

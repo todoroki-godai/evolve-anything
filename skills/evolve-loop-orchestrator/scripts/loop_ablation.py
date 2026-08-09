@@ -7,7 +7,7 @@ opt-in 較正実験（arXiv 2607.12227）。社内シニアエンジニアレビ
 毎ループ実行の evolve-loop-orchestrator（run_loop.py）に統計的対照実験を混ぜ込むのは
 筋が悪いため、別コマンドの opt-in CLI として切り出した。
 
-judge_audit.harness（#188）と同型の dry-run 既定パターン（llm-batch-guard 準拠）:
+opt-in CLI の dry-run 既定パターン（llm-batch-guard 準拠）:
 - dry-run（既定）: 比較可能性チェック + コスト見積もりを print して終わる。
   **LLM 呼び出しゼロ**。対話確認（input()）は一切なし。実行は `--run` を付けて
   ユーザーが別途再実行する構造的ゲート。
