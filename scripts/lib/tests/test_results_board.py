@@ -148,6 +148,119 @@ class TestClassifyDecisionOptimizeSource:
         assert results_board.classify_decision(entry) == "pending"
 
 
+# ── canonical writer 契約テスト（codex #398 Must 1）─────────────────
+#
+# survey 段階の前提「source=None → approved で判定」は誤りだった。
+# optimize.py の save_history_entry は source を一切書かず human_accepted で
+# 判定するため、旧ロジックは全件 pending に落ちていた（実データでは
+# human_accepted が常に None のケースしか無く顕在化しなかったが、
+# human_accepted=True/False が来ると誤判定する構造的バグだった）。
+# 各 fixture は実コードを read して得た**実際の emit 形**（該当行を明記）。
+
+
+class TestClassifyDecisionOptimizePyWriterContract:
+    """skills/genetic-prompt-optimizer/scripts/optimize.py の save_history_entry が
+    append する実際のエントリ形（source キー無し・human_accepted で判定）。
+    """
+
+    def _entry(self, **overrides) -> dict:
+        # optimize.py:317-327 の save_history_entry が組み立てる dict と同一の
+        # キー集合（source は含まれない）。
+        base = {
+            "run_id": "20260810_120000",
+            "target": "skills/foo/SKILL.md",
+            "timestamp": "2026-08-10T12:00:00+00:00",
+            "strategy": "llm_improve",
+            "corrections_used": 3,
+            "fitness_func": "default",
+            "best_fitness": 0.7,
+            "human_accepted": None,
+            "rejection_reason": None,
+        }
+        base.update(overrides)
+        return base
+
+    def test_human_accepted_true_is_accepted(self):
+        entry = self._entry(human_accepted=True)
+        assert results_board.classify_decision(entry) == "accepted"
+
+    def test_human_accepted_false_is_rejected(self):
+        entry = self._entry(human_accepted=False, rejection_reason="score not improved")
+        assert results_board.classify_decision(entry) == "rejected"
+
+    def test_human_accepted_none_is_pending(self):
+        """dry-run 生成のみ・未決定（実データで確認した実際の状態）。"""
+        entry = self._entry(human_accepted=None)
+        assert results_board.classify_decision(entry) == "pending"
+
+
+class TestClassifyDecisionEvolveLoopWriterContract:
+    """skills/evolve-loop-orchestrator/scripts/run_loop.py が append する
+    loop_result の実際の emit 形（run_loop.py:649-664・approved で判定・source/
+    human_accepted キーなし）。
+    """
+
+    def _entry(self, **overrides) -> dict:
+        base = {
+            "loop": 0,
+            "run_id": "20260810_120000",
+            "target": "skills/foo/SKILL.md",
+            "baseline_score": 0.65,
+            "best_score": 0.7,
+            "improvement": 0.05,
+            "verdict": "IMPROVED",
+            "global_best_score": 0.7,
+            "best_axes": {"technical": 0.7},
+            "pareto_dominates": True,
+            "approved": True,
+            "dry_run": False,
+            "timestamp": "2026-08-10T12:00:00+00:00",
+            "variants_count": 1,
+        }
+        base.update(overrides)
+        return base
+
+    def test_approved_true_is_accepted(self):
+        entry = self._entry(approved=True)
+        assert results_board.classify_decision(entry) == "accepted"
+
+    def test_approved_false_is_rejected(self):
+        entry = self._entry(approved=False, verdict="STABLE")
+        assert results_board.classify_decision(entry) == "rejected"
+
+
+class TestClassifyDecisionEvolveRemediationWriterContract:
+    """skills/evolve-fitness/scripts/fitness_evolution.py の
+    record_evolve_diff_decision が append する実際のエントリ形
+    （fitness_evolution.py:164-176・source="evolve_remediation"・human_accepted で判定）。
+    """
+
+    def _entry(self, **overrides) -> dict:
+        base = {
+            "id": "evolve_diff_abc123",
+            "source": "evolve_remediation",
+            "skill_name": "queue",
+            "diff_summary": "evolve diff accepted: skill_evolve:medium",
+            "timestamp": "2026-08-10T12:00:00+00:00",
+            "fitness_func": "skill_quality",
+            "best_fitness": 0.6,
+            "human_accepted": True,
+            "rejection_reason": None,
+            "run_id": None,
+            "decision_source": "explicit_accept",
+        }
+        base.update(overrides)
+        return base
+
+    def test_human_accepted_true_is_accepted(self):
+        entry = self._entry(human_accepted=True)
+        assert results_board.classify_decision(entry) == "accepted"
+
+    def test_human_accepted_false_is_rejected(self):
+        entry = self._entry(human_accepted=False, decision_source="explicit_reject")
+        assert results_board.classify_decision(entry) == "rejected"
+
+
 # ── build_results_board ─────────────────────────────────────────────
 
 
@@ -306,6 +419,33 @@ class TestBuildResultsBoardAcceptedList:
         board = results_board.build_results_board("evolve-anything", now=_NOW)
 
         assert board["accepted_list"][0]["skill_name"] == "skills/foo/SKILL.md"
+
+    def test_sort_uses_parsed_datetime_not_raw_string(self, stub_history, stub_corrections):
+        """#398 Should 3: 生文字列の辞書順比較は tz offset 混在で誤順序になる
+        （ISO8601 辞書順比較の既知 pitfall と同型）。
+
+        "s_early"（+05:00 オフセット・実 UTC は早い時刻）と "s_late"（-05:00 オフセット・
+        実 UTC は10時間後）を用意する。生文字列を辞書順比較すると "23:00+05:00" の方が
+        "19:00-05:00" より大きく見えるため s_early が誤って先頭に来るが、実際の UTC 換算では
+        s_late の方が新しい。_parse_timestamp でパースした aware datetime を比較すれば
+        正しく s_late が先頭に来る。
+        """
+        stub_corrections([])
+        stub_history([
+            {
+                "source": None, "approved": True, "skill_name": "s_early",
+                "timestamp": "2026-08-07T23:00:00+05:00",  # UTC 2026-08-07T18:00:00
+            },
+            {
+                "source": None, "approved": True, "skill_name": "s_late",
+                "timestamp": "2026-08-07T19:00:00-05:00",  # UTC 2026-08-08T00:00:00（実は後）
+            },
+        ])
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+
+        names = [e["skill_name"] for e in board["accepted_list"]]
+        assert names == ["s_late", "s_early"]
 
 
 class TestBuildResultsBoardWithdrawalCandidates:

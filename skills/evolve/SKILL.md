@@ -60,7 +60,6 @@ evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-
 | 7.8 | optimize_history へ accept/reject 記録 | `evolve --drain`（`drain_pending`） | **書く**（drain は dry-run 分析後でも必ず実行） | 書く |
 | 7.8 | 決定論 weak_signals の永続化（manual_edit / esc / rephrase / permission_deny） | `evolve --drain`（`persist_weak_signals_drain`）／`evolve-fleet detect`（全 PJ・daily runner step 1c・#304） | **書く**（drain の apply 境界・#484/#513。detect 側は evolve 非依存で毎朝書く。両者とも `signal_key` dedup で冪等） | 書く |
 | 7.8 | calibration state + tool_usage_snapshot 確定（result 依存） | `evolve --drain --result-json "$OUT"`（`persist_result_dependent_state`） | **書く**（drain の apply 境界・result 由来値を運搬・#146/ADR-051） | 書く |
-| 7.8 | growth 結晶化イベント emit（result 依存） | `evolve --drain --result-json "$OUT"`（`_emit_growth_crystallization`） | **書く**（drain の apply 境界・#146/ADR-051） | 書く |
 | 3.5 | remediation 連続提示 count marker 更新＋閾値到達で自動却下 | phases_remediate の `reconcile_surfaced(persist=not dry_run)` | **書かない**（persist=False は marker を読むだけの表示用判定） | 書く |
 | 7.8 | remediation 連続提示 count marker の実書込＋閾値到達 record_rejection（result 依存） | `evolve --drain --result-json "$OUT"`（`reconcile_surfaced(persist=True)`） | **書く**（drain の apply 境界・result 由来の tracked を運搬・#186） | 書く |
 
@@ -290,7 +289,7 @@ evolve --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_re
 
 （上の2行は排他 — responses ファイルが無ければ1行目だけを1回実行する。両方実行して二重 drain する必要はない。）
 
-上のコマンドは、決定論 weak_signals（manual_edit/esc/rephrase/permission_deny）・calibration state・tool_usage_snapshot・growth 結晶化・remediation 連続提示 marker・correction_semantic Phase C（#339・responses ファイルがあるときのみ）を同じ apply 境界で確定する（`--result-json "$OUT"` が result 依存3項目を運搬・#146/ADR-051）。**これ単体では evolve 提案の accept/reject は記録しない**（#376 是正）。
+上のコマンドは、決定論 weak_signals（manual_edit/esc/rephrase/permission_deny）・calibration state・tool_usage_snapshot・remediation 連続提示 marker・correction_semantic Phase C（#339・responses ファイルがあるときのみ）を同じ apply 境界で確定する（`--result-json "$OUT"` が result 依存2項目（calibration state / tool_usage_snapshot）を運搬・#146/ADR-051。growth crystallization emit は #379 Step 4 で growth-journal harness ごと削除済み）。**これ単体では evolve 提案の accept/reject は記録しない**（#376 是正）。
 
 **accept = 明示 accept イベント AND 適用実績 / reject = 明示却下 / skip = 記録しない**（ADR-041 是正版, #376）。ディスク sha が変わっただけ（＝提案とは無関係な通常 commit の可能性がある）では accept にならない。Step 3 で承認して実際に適用した提案がある場合、その `id`（`result.evolve_decisions.pending[].id`、`skill_path` で対応する提案と突き合わせる）を集めて **inline で `ed.drain_pending(accepted={id, ...})` を追加実行する（MUST）** — これを省略すると diff が実際に適用されていても fitness 母集団に記録されない。却下がある場合は同じ呼び出しに `rejected={id: 理由, ...}` も併せて渡す（`ed.drain_pending(accepted={...}, rejected={id: 理由})`）。承認も却下も無ければこの追加呼び出しは不要（pending のまま次回 evolve に持ち越される）。drain を忘れても次回 SessionStart のリマインドが保険になる（#402、ただし SessionStart hook は対話チャネルを持たず明示 accept を渡せないため記録はされない — リマインド表示のみ）。`accepted >= 1` なら「fitness 母集団に +N 件記録 ✓」と1行 surface する。
 → 設計根拠（#400/#484/#494）・drain サマリの読み方・result-json 運搬の詳細は **[references/housekeeping.md](references/housekeeping.md)**。

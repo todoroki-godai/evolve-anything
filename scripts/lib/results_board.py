@@ -56,11 +56,22 @@ def _is_test_polluted(entry: Dict[str, Any]) -> bool:
 def classify_decision(entry: Dict[str, Any]) -> str:
     """optimize_history の1エントリを accepted/rejected/pending/excluded に正規化する。
 
-    実データのフィールド埋まり方は source によって3系統に分裂している
-    （#279/#286/#290 の提案ID/判断イベントID分離と同根の split）:
-      - source="evolve_remediation": human_accepted（bool）で判定
-      - source=None（optimize / evolve-loop 由来）: approved（bool）で判定
-      - それ以外の未知 source: pending（安全側フォールバック・将来 source 追加への耐性）
+    canonical writer 3種の実 emit 形を read して判定フィールドを確認した結果（#398 Must 1）:
+      - `fitness_evolution.record_evolve_diff_decision`（source="evolve_remediation"）:
+        `human_accepted`（bool）を持つ
+      - `run_loop.py`（evolve-loop）: `approved`（bool）を持つ。`source`/`human_accepted`
+        キー自体が無い
+      - `optimize.py` の `save_history_entry`: `human_accepted`（bool | None）を持つ。
+        `source`/`approved` キー自体が無い
+
+    **旧実装の誤り**: 「source=None → approved で判定」という survey 段階の前提は
+    optimize.py の存在を見落としていた。optimize.py も source=None を書くため、
+    旧ロジックでは human_accepted=True/False の optimize.py レコードが常に
+    approved（欠落＝None）を読み pending に落ちる構造的バグだった。
+
+    **是正**: source 文字列でなく**フィールドの実在と bool 型を優先**して正規化する
+    （`human_accepted` が bool ならそれを採用 → 次に `approved` が bool なら採用 →
+    どちらも無ければ pending）。3 writer とも同じ規則で正しく判定できる。
 
     優先順位: fitness_eligible=False（#376 の誤帰属 accept 無効化フラグ）を最優先で
     excluded。次点でテスト汚染パス（#420 growth-journal 汚染と同系統）を excluded。
@@ -70,8 +81,14 @@ def classify_decision(entry: Dict[str, Any]) -> str:
     if _is_test_polluted(entry):
         return "excluded"
 
-    source = entry.get("source")
-    decided = entry.get("human_accepted") if source == "evolve_remediation" else entry.get("approved")
+    human_accepted = entry.get("human_accepted")
+    approved = entry.get("approved")
+    if isinstance(human_accepted, bool):
+        decided: Optional[bool] = human_accepted
+    elif isinstance(approved, bool):
+        decided = approved
+    else:
+        decided = None
 
     if decided is True:
         return "accepted"
@@ -170,12 +187,19 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     def _label(entry: Dict[str, Any]) -> str:
         return entry.get("skill_name") or entry.get("target") or "(unknown)"
 
+    def _sort_key(raw_timestamp: Any) -> datetime:
+        # #398 Should 3: 生文字列の辞書順比較は tz 表記混在（"Z" vs "+00:00"）で誤順序に
+        # なる既知 pitfall（ISO8601 辞書順比較）と同型。_parse_timestamp でパースした
+        # aware datetime を比較する。パース不能/欠落は最古扱い（reverse=True で末尾に沈む）。
+        parsed = _parse_timestamp(raw_timestamp)
+        return parsed if parsed is not None else datetime.min.replace(tzinfo=timezone.utc)
+
     accepted_list = sorted(
         (
             {"skill_name": _label(e), "timestamp": e.get("timestamp")}
             for e in buckets["accepted"]
         ),
-        key=lambda x: x["timestamp"] or "",
+        key=lambda x: _sort_key(x["timestamp"]),
         reverse=True,
     )[:10]
 
