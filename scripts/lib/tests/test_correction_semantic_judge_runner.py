@@ -205,6 +205,27 @@ def test_run_call_failure_leaves_utterance_unjudged(tmp_path, monkeypatch):
     assert not ws.exists() or read_signals(ws) == []
 
 
+def test_run_claude_call_error_from_nonzero_returncode_leaves_utterance_unjudged(tmp_path, monkeypatch):
+    """#410 [Must]F: safe_llm_call.ClaudeCallError（非ゼロ終了）も call_failed 経路に合流する。"""
+    import safe_llm_call
+
+    ws = tmp_path / "weak_signals.jsonl"
+    judged = tmp_path / "correction_judged.jsonl"
+    u = _utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))
+
+    def _raise(prompt, *, model="haiku", **kwargs):
+        raise safe_llm_call.ClaudeCallError("claude -p exited 1: boom")
+
+    monkeypatch.setattr(judge_runner._safe_llm_call, "call_claude_headless", _raise)
+
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=[u], judged_path=judged, weak_signals_path=ws,
+    )
+    assert res["call_failed"] == 1
+    assert read_judged_keys(judged) == set()
+    assert not ws.exists() or read_signals(ws) == []
+
+
 def test_run_malformed_json_response_leaves_utterance_unjudged(tmp_path, monkeypatch):
     """応答は届くが JSON 解釈不能（#273）→ 未判定のまま残す。"""
     judged = tmp_path / "correction_judged.jsonl"
@@ -249,21 +270,23 @@ def test_phase_transition_log_lines_are_distinguishable(tmp_path, monkeypatch):
 # ─────────────────────────────────────────────────────────────────
 # call_haiku: subprocess の唯一の集約点
 # ─────────────────────────────────────────────────────────────────
-def test_call_haiku_invokes_claude_cli_via_subprocess(monkeypatch):
-    calls = []
+def test_call_haiku_delegates_to_safe_llm_call(monkeypatch):
+    """#410 [Must]A: call_haiku の実体は safe_llm_call.call_claude_headless（低レベルの
+    subprocess 呼び出し・ツール封じフラグ組み立ての契約は test_safe_llm_call.py が担う）。
+    ここでは judge_runner.call_haiku がその共有実装へ正しく委譲することだけを確認する。
+    """
+    captured = {}
 
-    class _FakeCompleted:
-        stdout = "ok"
+    def _fake(prompt, *, model="haiku", **kwargs):
+        captured["prompt"] = prompt
+        captured["model"] = model
+        return "ok"
 
-    def _fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        return _FakeCompleted()
-
-    monkeypatch.setattr(judge_runner.subprocess, "run", _fake_run)
+    monkeypatch.setattr(judge_runner._safe_llm_call, "call_claude_headless", _fake)
     out = judge_runner.call_haiku("prompt text", model="haiku")
     assert out == "ok"
-    assert calls[0][0] == "claude"
-    assert "haiku" in calls[0]
+    assert captured["prompt"] == "prompt text"
+    assert captured["model"] == "haiku"
 
 
 # ─────────────────────────────────────────────────────────────────

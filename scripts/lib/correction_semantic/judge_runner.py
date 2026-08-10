@@ -12,8 +12,10 @@ Phase B（LLM 判定）は docstring どおり「SKILL.md Step 6.6 の対話 y/n
 
 - **dry-run 既定**（llm-batch-guard 準拠）: 未判定件数 + 選定件数 + 推定トークンを
   print して終わる。実 LLM を呼ばない・1 バイトも書かない。
-- ``run=True``（CLI は ``--run``）で実判定。``subprocess.run(["claude",...])`` は
-  ``call_haiku`` 1 箇所に集約（単体テストはここを mock する。no-llm-in-tests 完全整合）。
+- ``run=True``（CLI は ``--run``）で実判定。LLM 呼び出しは ``call_haiku`` 1 箇所に集約
+  （単体テストはここを mock する。no-llm-in-tests 完全整合）。実体は ``safe_llm_call``
+  （#410 [Must]A: 判定対象の生ログに prompt injection が混入していてもツールを一切
+  実行させない無人セーフガード。``verbosity.judge.call_haiku`` と共有）。
 - 1 日の上限（件数・トークン）は呼び出し側が設定値として渡す（コード埋め込み禁止・
   ``rl_common.config`` の userConfig 流儀に合わせる。既定値 ``DEFAULT_DAILY_*`` は
   ユーザー承認済みの標準運用値: 200 件 / 150,000 トークン）。上限超過分は選定から
@@ -40,7 +42,6 @@ judged にせずスキップする（#273）ので、``call_haiku`` が例外を
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,7 @@ _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
+import safe_llm_call as _safe_llm_call  # noqa: E402
 from weak_signals.ttl import _parse_iso  # noqa: E402
 
 from . import DEFAULT_BATCH_SIZE  # noqa: E402
@@ -67,14 +69,16 @@ _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def call_haiku(prompt: str, model: str = "haiku") -> str:
-    """Haiku を 1 回呼ぶ（subprocess の唯一の集約点・単体テストはここを mock する）。"""
-    out = subprocess.run(
-        ["claude", "-p", prompt, "--model", model],
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    return out.stdout.strip()
+    """Haiku を 1 回呼ぶ（呼び出しの唯一の集約点・単体テストはここを mock する）。
+
+    実体は ``safe_llm_call.call_claude_headless`` — 判定対象の生ログに prompt injection が
+    混入していても無人実行でツールを一切動かさないことを実測済みの安全な呼び出し
+    （#410 [Must]A）。``verbosity.judge.call_haiku`` と同じ実装を共有する（片方だけ直す
+    partial fix を避けるため）。非ゼロ終了は ``safe_llm_call.ClaudeCallError`` を送出し
+    （#410 [Must]F）、呼び出し側の既存の「呼び出し失敗 → 未判定のまま次回に残す」経路に
+    合流させる。
+    """
+    return _safe_llm_call.call_claude_headless(prompt, model=model)
 
 
 def _sort_key(u: Dict[str, Any]):
