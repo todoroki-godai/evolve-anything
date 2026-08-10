@@ -64,6 +64,13 @@ def _guard_problem(store_name: str) -> Optional[str]:
     status = getattr(decl, "status", "active")
     if status != "active":
         return f"非 active ストア '{store_name}'（status={status}・write は active のみ許可）"
+    kind = getattr(decl, "kind", "jsonl")
+    if kind == "json":
+        return (
+            f"kind=json ストア '{store_name}' への store_write（jsonl append 専用）は禁止"
+            "（単一 JSON オブジェクトに jsonl 行を追記するとファイルが壊れる。各モジュール "
+            "固有の read-modify-write 関数を使う・#399）"
+        )
     return None
 
 

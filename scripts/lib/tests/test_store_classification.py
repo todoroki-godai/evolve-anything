@@ -76,6 +76,10 @@ _DERIVED_CACHE = {
     "agent-brushup-state.json",
     "pj_slug_cache.json",
     "skill-evolve-cache.json",
+    "evolve-queue.json",
+    "icebox-status.json",
+    "icebox-verdicts.json",
+    "evolve-proposals-<date>.json",
 }
 
 # #379 Step 4: growth-journal.jsonl（唯一の dead ストア）を registry ごと削除。
@@ -122,10 +126,12 @@ def test_status_dead_exempt_has_no_undocumented_additions() -> None:
 
 
 def test_classification_golden_counts_and_names() -> None:
-    """4 分類の件数（11/18/11/0）と名前リストが棚卸し表と一致する（golden）。
+    """4 分類の件数（11/18/15/0）と名前リストが棚卸し表と一致する（golden）。
 
-    #379 Step 4 PR E で raw_event +1 / workflow_state +3 / derived_cache +3
-    （旧: 10/15/8/0）。
+    #379 Step 4 PR E round1 で raw_event +1 / workflow_state +3 / derived_cache +3
+    （旧: 10/15/8/0）。round2（#399 codex Must 2）で derived_cache +4
+    （evolve-queue.json / icebox-status.json / icebox-verdicts.json /
+    evolve-proposals-<date>.json、旧: 11 → 15）。
     """
     by_classification: dict[str, set[str]] = {}
     for d in store_registry.declarations():
@@ -138,7 +144,7 @@ def test_classification_golden_counts_and_names() -> None:
 
     assert len(_RAW_EVENT) == 11
     assert len(_WORKFLOW_STATE) == 18
-    assert len(_DERIVED_CACHE) == 11
+    assert len(_DERIVED_CACHE) == 15
     assert len(_DEAD) == 0
 
 

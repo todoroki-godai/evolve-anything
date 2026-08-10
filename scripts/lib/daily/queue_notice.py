@@ -3,8 +3,10 @@
 毎朝の `fleet queue --json` が `$CLAUDE_PLUGIN_DATA/evolve-queue.json` に保存した待ち PJ を
 SessionStart で systemMessage（ADR-038 = user 向けチャネル）として surface する。
 
-すべて read 専用・純関数・決定論（LLM 非依存）。`evolve-queue.json` は派生物（SoR でない）ため
-store_registry には登録しない。
+すべて read 専用・純関数・決定論（LLM 非依存）。`evolve-queue.json` は派生物（SoR は
+`fleet queue` の元データで本ファイルではない）だが、writer（daily runner）/ reader
+（本モジュール・fleet propose 等）が実在するため store_registry に derived_cache として
+宣言済み（#399 codex round1 是正・「SoR でない」は分類理由であって非登録の理由ではない）。
 """
 import json
 from datetime import datetime, timezone

@@ -28,10 +28,14 @@ from typing import Dict, List, Literal, Optional
 # retention の種別。
 RetentionKind = Literal["permanent", "ttl", "compaction"]
 
-# ストアの物理形式。jsonl（hook append 系）と db（batch ingest 系 DuckDB SoR）を区別する。
+# ストアの物理形式。jsonl（hook append 系）・db（batch ingest 系 DuckDB SoR）・
+# json（単一 JSON オブジェクトの丸ごと上書き）を区別する。
 # orphan_store / contract-drift の hook-writer 突合は jsonl のみ対象（writer が hook の append
 # だから）。db ストアは writer が batch ingest なので、その突合の母集団には含めない（#430）。
-StoreKind = Literal["jsonl", "db"]
+# json ストアは store_write（jsonl append 専用の write barrier）に basename を渡すと
+# 単一 JSON オブジェクトへ jsonl 行を追記してファイルを破壊しうるため、store_write の
+# runtime guard が reject する（#399 codex round1 Should 1・rl_common/store_write.py 参照）。
+StoreKind = Literal["jsonl", "db", "json"]
 
 # orphan（reader 0）ストアの処遇分類。
 # - keep_future : 将来の基盤として意図的に reader 不在（消さない）
@@ -74,7 +78,8 @@ class StoreDeclaration:
     writer:       書き込み側の説明（どの hook/script が書くか — 人間可読 evidence）
     reader:       読み取り側の説明（誰が消費するか。reader 不在の場合は disposition で説明）
     retention:    保持ポリシー種別（permanent / ttl / compaction）
-    kind:         物理形式（"jsonl" 既定 / "db"）。db は hook-writer 突合の対象外（#430）
+    kind:         物理形式（"jsonl" 既定 / "db" / "json"）。db は hook-writer 突合の対象外
+                  （#430）。json は store_write の jsonl append を reject する対象（#399）
     writer_locus: 書き込み主体（"hook" 既定 / "batch"）。batch は hook-writer 突合に出ない
                   ため stale 突合の対象外（#432: weak_signals.jsonl は batch 書き込み jsonl）
     ttl_days:     retention="ttl" のときの失効日数（それ以外は None）
@@ -399,6 +404,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="remediation_surfaced/<slug>.json",
+        kind="json",
         writer="scripts/lib/remediation/suppression_ledger.reconcile_surfaced"
         "（evolve の remediation phase が個別承認候補確定後に毎 run 1 回呼ぶ）。"
         "hot path（hooks）からは書かない。",
@@ -585,6 +591,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     # 同時追加している（両側同時追加の理由は shrink_freeze.py 側のコメント参照）。
     StoreDeclaration(
         name="evolve-state.json",
+        kind="json",
         writer="複数箇所が個別キーを書く単一 JSON 状態ファイル（グローバル・PJ 非スコープ）: "
         "scripts/lib/trigger_engine/*.py の _save_state（trigger_history。hooks 経由で "
         "file_change/session_corrections/self_evolution の各トリガー発火時に書込・"
@@ -605,17 +612,18 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "（reorganize_merge_similarity_threshold 等の閾値群）/ "
         "scripts/lib/prune/skill_inspect.py（skill_type_cache）/ "
         "scripts/lib/pipeline_reflector/outcomes.py（self_evolution config）。",
-        retention="compaction",
-        compaction="trigger_history は _MAX_HISTORY_ENTRIES=100 件で新しい順 pruning"
-        "（trigger_engine/state.py::_record_trigger）。calibration_history は無制限追記"
-        "（同一 run の二重 append は dedup で回避・#146）。skill_type_cache は skill 数で"
-        "自然に有界。last_run_timestamp/last_audit_timestamp/last_calibration_timestamp/"
-        "tool_usage_snapshot は上書きのみのスカラー値。",
+        retention="permanent",
         classification="workflow_state",
         note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。トリガー "
         "cooldown・self-evolution 較正進捗・prune/reorganize 閾値キャッシュ・audit/evolve "
         "の最終実行時刻を保持するグローバル単一 JSON。dogfood/layer1.py の dry-run "
-        "ambient write 監視対象にも含まれる既存の live 主要ストア。",
+        "ambient write 監視対象にも含まれる既存の live 主要ストア。"
+        "#398 PR #399 round1 是正: 当初 retention=compaction としていたが、実際に "
+        "サイズ上限があるのは trigger_history（_MAX_HISTORY_ENTRIES=100・"
+        "trigger_engine/state.py::_record_trigger）のみで、calibration_history"
+        "（skills/evolve/scripts/evolve/_state.py:246）は無制限 append・ファイル全体の "
+        "圧縮/ローテーション条件も無いため retention=permanent に是正した。"
+        "calibration_history への上限導入は本 PR の対象外（別途フォローアップ候補）。",
     ),
     StoreDeclaration(
         name="remediation-outcomes.jsonl",
@@ -633,6 +641,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="fleet-config.json",
+        kind="json",
         writer="scripts/lib/fleet_config.py の save_config（fleet track/ignore コマンドが "
         "ユーザー承認時に呼ぶ。atomic write）。",
         writer_locus="batch",
@@ -645,10 +654,15 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="agent-brushup-state.json",
-        writer="skills/agent-brushup/SKILL.md の Step 3（diagnose 実行時に upstream ハッシュを "
-        "inline python で保存。hot path（hooks）からは書かない）。",
+        kind="json",
+        writer="scripts/lib/agent_quality_upstream.py::check_upstream(state_file=...)"
+        "（skills/agent-brushup/SKILL.md Step 3 の diagnose が state_file に "
+        "DATA_DIR/agent-brushup-state.json を明示指定して inline python 実行。"
+        "state_file 省略時（既定 None）は書かない — 必須引数を渡した呼び出しのみが "
+        "writer。hot path（hooks）からは書かない）。",
         writer_locus="batch",
-        reader="agent-brushup スキル自身が次回 diagnose で upstream 変更検知に参照（自己消費）。",
+        reader="check_upstream 自身が同じ state_file から前回コミットハッシュ "
+        "（upstream_commit_hash）を読み比較する（自己消費・次回 diagnose 呼び出し時）。",
         retention="permanent",
         classification="derived_cache",
         note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。upstream agent "
@@ -656,6 +670,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="skill-evolve-denylist.json",
+        kind="json",
         writer="scripts/lib/skill_evolve/denylist.py の _save_denylist（add_to_denylist / "
         "remove_from_denylist 経由。evolve のスキル改善提案でユーザーが「今後提案不要」を "
         "選んだ時に batch 書込）。",
@@ -669,6 +684,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="pj_slug_cache.json",
+        kind="json",
         writer="scripts/lib/pj_slug.py の write_pj_slug_cache（SessionStart hook が cwd→"
         "authoritative slug の対応を1回書く。hot path の pj_slug_fast 自体は書かない）。",
         writer_locus="batch",
@@ -683,6 +699,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="skill-evolve-cache.json",
+        kind="json",
         writer="scripts/lib/skill_evolve/classification.py の _save_cache（LLM スコアリング "
         "結果のキャッシュ。skill_evolve の判定処理が batch 書込）。",
         writer_locus="batch",
@@ -693,6 +710,79 @@ _DECLARATIONS: List[StoreDeclaration] = [
         note="#379 Step 4 PR E: 未登録の live store 棚卸し（issue #379 本文）。skill_evolve の "
         "LLM スコアリングキャッシュ（再実行すれば再構築可能）。dogfood/layer1.py の "
         "dry-run ambient write 監視対象にも含まれる既存の live ストア。",
+    ),
+    # ── PR #399 round1（codex Must 2）: read専用派生物 4件の宣言追加 ──────────
+    # 発端: 当初「read 専用派生物（SoR でない）ため store_registry には登録しない」と
+    # 各所（daily/queue_notice.py・daily/icebox_notice.py・daily/__init__.py・
+    # fleet/propose.py 等）に明記していたが、これは事前契約ゲート（#434）の SoT 契約
+    # （writer/reader が実在すれば derived_cache として登録する）と矛盾していた。
+    # 「SoR でない」は classification=derived_cache に分類する理由であって、
+    # 登録しない理由にはならない（PR E round1 で barrier 非経由の直接 writer 7件を
+    # 既に登録・追認しており、「barrier 管理対象に狭める」という解釈は自己矛盾する）。
+    # 上記4ファイルの「登録しない」文言は本 PR で是正済み（grep 全 corpus 一掃・
+    # 詳細は round2 実装完了報告の判断表参照）。
+    StoreDeclaration(
+        name="evolve-queue.json",
+        kind="json",
+        writer="scripts/lib/daily/plist.py が生成する launchd runner コマンド "
+        "（bin/evolve-daily-run 経由で `fleet queue --json` の stdout をそのまま "
+        "保存。毎朝1回・日次上書き）。",
+        writer_locus="batch",
+        reader="hooks/restore_state.py の _deliver_evolve_queue_notice（SessionStart "
+        "systemMessage 通知）/ scripts/lib/daily/queue_notice.py の read_queue（stale "
+        "判定）/ scripts/lib/fleet/cli_propose.py（--live 未指定時の propose 入力）。",
+        retention="permanent",
+        classification="derived_cache",
+        note="#379 Step 4 PR E round2（#399 codex Must 2）: `fleet queue --json` 出力の "
+        "日次スナップショット（毎朝上書き・SoR は fleet queue の元データ）。",
+    ),
+    StoreDeclaration(
+        name="icebox-status.json",
+        kind="json",
+        writer="scripts/lib/daily/icebox_notice.py が bin/evolve-daily-run 第4ステップから "
+        "呼ばれ、`gh issue list --label icebox --state closed` の集計結果 "
+        "（count/oldest_days/generated_at）を保存（毎朝1回・日次上書き・fail-open 4種は "
+        "既存ファイル非破壊）。",
+        writer_locus="batch",
+        reader="hooks/restore_state.py の _deliver_icebox_notice（SessionStart systemMessage "
+        "通知・閾値超過時のみ）。",
+        retention="permanent",
+        classification="derived_cache",
+        note="#379 Step 4 PR E round2（#399 codex Must 2）: icebox（凍結 issue）棚卸しの "
+        "日次スナップショット（SoR は gh issue の closedAt）。",
+    ),
+    StoreDeclaration(
+        name="icebox-verdicts.json",
+        kind="json",
+        writer="bin/evolve-daily-run（icebox reconcile ステップ・"
+        "atomic_write_text(verdicts_path, ...) で icebox_reconcile.build_verdicts の "
+        "結果を保存。毎朝1回・日次上書き）。",
+        writer_locus="batch",
+        reader="hooks/restore_state.py（SessionStart・成立レーンのみ名指し通知）/ "
+        "scripts/lib/audit/sections_icebox_reconcile.py（audit advisory・観測器不在/"
+        "失効候補の surface）。",
+        retention="permanent",
+        classification="derived_cache",
+        note="#379 Step 4 PR E round2（#399 codex Must 2）: icebox 3レーン判定"
+        "（成立/観測器不在/失効候補）の日次スナップショット（#352）。",
+    ),
+    StoreDeclaration(
+        name="evolve-proposals-<date>.json",
+        kind="json",
+        writer="scripts/lib/fleet/propose.py の write_reports（scripts/lib/fleet/cli_propose.py "
+        "の `bin/evolve-fleet propose` から呼ばれる。日付ごとに新規ファイル・同日再実行は "
+        "上書き）。",
+        writer_locus="batch",
+        reader="scripts/lib/fleet/pr.py の find_latest_proposals_json（`pr-start` が最新日付の "
+        "提案バッチから承認対象を解決）。",
+        retention="permanent",
+        classification="derived_cache",
+        note="#379 Step 4 PR E round2（#399 codex Must 2）: fleet propose の日次提案バッチ "
+        "レポート（SoR は run_evolve dry-run の生成結果）。`.md`（人間向け表示専用・"
+        "機械可読フィールドを持たず reader 無し）は本宣言の対象外、`.json`（機械可読・"
+        "fleet/pr.py が読む）のみ宣言する。同日再実行の上書きはあるが、日付をまたぐ "
+        "ファイルの自動ローテーション/削除は実装されていない（無制限累積、将来の "
+        "clean-up 候補）。",
     ),
 ]
 

@@ -17,7 +17,9 @@ discover 提案は既存 API（``evolve_decisions._extract_candidates`` / ``opti
 triage_ledger ベースの suppression を既に内蔵しているため対象外。
 
 ``evolve-proposals-<date>.md`` / ``.json`` は ``evolve-queue.json`` と同様の read 専用派生物
-（SoR でない）ため store_registry には登録しない。
+（SoR は run_evolve dry-run の生成結果で本ファイルではない）。``.json``（機械可読・
+``fleet/pr.py`` が読む）は store_registry に derived_cache として宣言済み（#399 codex round1
+是正）。``.md``（人間向け表示専用・機械可読 reader なし）は宣言対象外。
 
 決定論・LLM 非依存（テストは常に run_evolve をスタブ差し替え可能にする DI で LLM を呼ばない）。
 """
@@ -29,7 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-# 提案レポートのファイル名接頭辞（read 専用派生物・store_registry 非登録）。
+# 提案レポートのファイル名接頭辞（.json は store_registry 登録済み derived_cache、
+# .md は宣言対象外・#399 codex round1 是正）。
 PROPOSALS_FILE_PREFIX = "evolve-proposals-"
 
 _TRIAGE_ACTION_KEYS = ("CREATE", "UPDATE", "SPLIT", "MERGE")
@@ -414,8 +417,9 @@ def write_reports(
 ) -> "tuple[Path, Path]":
     """集約レポートを ``DATA_DIR/evolve-proposals-<date>.md`` + ``.json`` に書き出す。
 
-    ``evolve-queue.json`` と同じ read 専用派生物（SoR でない）。同日に複数回実行すると
-    上書きする（evolve-queue.json の日次上書きと同じ運用）。
+    ``evolve-queue.json`` と同じ read 専用派生物（``.json`` は store_registry 登録済み・
+    #399 codex round1 是正）。同日に複数回実行すると上書きする
+    （evolve-queue.json の日次上書きと同じ運用。日付をまたぐ古いファイルの自動削除はない）。
     """
     if date_str is None:
         date_str = datetime.now(timezone.utc).strftime("%Y%m%d")

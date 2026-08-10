@@ -328,6 +328,11 @@ _PR_E_STORES = [
     "skill-evolve-denylist.json",
     "pj_slug_cache.json",
     "skill-evolve-cache.json",
+    # round2（#399 codex Must 2）: read専用派生物 4件の宣言追加。
+    "evolve-queue.json",
+    "icebox-status.json",
+    "icebox-verdicts.json",
+    "evolve-proposals-<date>.json",
 ]
 
 _PR_E_CLASSIFICATION = {
@@ -338,11 +343,20 @@ _PR_E_CLASSIFICATION = {
     "skill-evolve-denylist.json": "workflow_state",
     "pj_slug_cache.json": "derived_cache",
     "skill-evolve-cache.json": "derived_cache",
+    "evolve-queue.json": "derived_cache",
+    "icebox-status.json": "derived_cache",
+    "icebox-verdicts.json": "derived_cache",
+    "evolve-proposals-<date>.json": "derived_cache",
 }
+
+# .json（単一オブジェクト・非 jsonl）basename の宣言は kind="json" が必須（#399 round1 Should 1）。
+_PR_E_JSON_KIND_STORES = [
+    name for name in _PR_E_STORES if name.endswith(".json")
+]
 
 
 def test_pr_e_stores_declared() -> None:
-    """#379 Step 4 PR E: 未登録だった7 live store を宣言バックフィルする（issue #379 本文）。"""
+    """#379 Step 4 PR E: 未登録だった live store を宣言バックフィルする（issue #379 本文）。"""
     declared_names = {d.name for d in store_registry.declarations()}
     for name in _PR_E_STORES:
         assert name in declared_names, f"{name} が未宣言"
@@ -359,8 +373,15 @@ def test_pr_e_stores_are_active_with_expected_classification() -> None:
         assert decl.reader, f"{name}: reader 未記述"
 
 
+def test_pr_e_json_named_stores_have_kind_json() -> None:
+    """PR E 追加分の `.json` basename は全て kind="json"（#399 round1 Should 1）。"""
+    by_name = {d.name: d for d in store_registry.declarations()}
+    for name in _PR_E_JSON_KIND_STORES:
+        assert by_name[name].kind == "json", name
+
+
 def test_pr_e_stores_pass_validate_declarations() -> None:
-    """新規宣言7件を含めて宣言 SoT 自身の整合性が壊れていない。"""
+    """新規宣言（7+4件）を含めて宣言 SoT 自身の整合性が壊れていない。"""
     problems = store_registry.validate_declarations()
     assert problems == [], problems
 

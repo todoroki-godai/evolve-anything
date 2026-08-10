@@ -8,7 +8,9 @@ icebox は evolve-anything 自身の GitHub issue backlog なので、本体リ�
 ときだけ配信対象になるべきだが、その plugin_self 判定は呼び出し側（hooks/restore_state.py）の
 責務とし、本モジュールは read 専用・純関数・決定論（LLM 非依存）に留める。
 
-`icebox-status.json` は派生物（SoR でない）ため store_registry には登録しない。
+`icebox-status.json` は派生物（SoR は gh issue の closedAt で本ファイルではない）だが、
+writer（daily runner）/ reader（本モジュール）が実在するため store_registry に
+derived_cache として宣言済み（#399 codex round1 是正）。
 
 #352: `icebox-verdicts.json`（daily runner の icebox 3レーン棚卸しステップが書く決定論分類
 結果）を読み、レーン1「成立」issue だけを名指しで通知するレーン1 SessionStart 通知も

@@ -45,14 +45,19 @@ SHRINK_FREEZE_ACTIVE: bool = True
 
 # 実装時点（#379 Step 1）の store_registry 全宣言 name（active/legacy/dead 全部含む）。
 #
-# #379 Step 4 PR E で7件追加（evolve-state.json / remediation-outcomes.jsonl /
+# #379 Step 4 PR E round1 で7件追加（evolve-state.json / remediation-outcomes.jsonl /
 # fleet-config.json / agent-brushup-state.json / skill-evolve-denylist.json /
-# pj_slug_cache.json / skill-evolve-cache.json）。これらは Step 1 凍結より前から
-# 実際に書き込まれ続けていた live store で、store_registry への宣言が単に漏れて
-# いただけ（#121 の legacy backfill と同型）。凍結の趣旨は「新しい書込経路・新しい
-# 機能を作らせない」ことであり、既存の実ファイル・既存の writer/reader コードを
-# registry へ追認する本件は「新設」ではない（詳細は store_registry.py 側の
-# StoreDeclaration note 参照）。
+# pj_slug_cache.json / skill-evolve-cache.json）。round2（#399 codex Must 2）で
+# さらに4件追加（evolve-queue.json / icebox-status.json / icebox-verdicts.json /
+# evolve-proposals-<date>.json）。これらは Step 1 凍結より前から実際に書き込まれ
+# 続けていた live store で、store_registry への宣言が単に漏れていただけ（#121 の
+# legacy backfill と同型）。round2 の4件はかつて「read 専用派生物のため
+# store_registry には登録しない」と各所に明記していたが、これは事前契約ゲート
+# （#434）の SoT 契約と矛盾していた（「SoR でない」は derived_cache 分類の理由で
+# あって非登録の理由にならない）。凍結の趣旨は「新しい書込経路・新しい機能を
+# 作らせない」ことであり、既存の実ファイル・既存の writer/reader コードを registry
+# へ追認する本件は「新設」ではない（詳細は store_registry.py 側の StoreDeclaration
+# note 参照）。
 FROZEN_STORES: FrozenSet[str] = frozenset(
     {
         "advisory_decisions.jsonl",
@@ -68,10 +73,14 @@ FROZEN_STORES: FrozenSet[str] = frozenset(
         "episodic.db",
         "errors.jsonl",
         "evolution_memory.jsonl",
+        "evolve-proposals-<date>.json",
         "evolve-queue-state.jsonl",
+        "evolve-queue.json",
         "evolve-state.json",
         "false_positives.jsonl",
         "fleet-config.json",
+        "icebox-status.json",
+        "icebox-verdicts.json",
         "icebox_verdict_seen.jsonl",
         "memory_transition_checks.jsonl",
         "pj_slug_cache.json",

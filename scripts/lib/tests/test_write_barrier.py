@@ -130,6 +130,43 @@ def test_reject_mode_active_store_writes_normally(data_dir):
     assert _read_lines(data_dir / "usage.jsonl") == [{"v": 1}]
 
 
+# --- runtime guard: kind=json ストアへの jsonl append 禁止（#399 codex round1 Should 1） -----
+#
+# kind=json は単一 JSON オブジェクトを丸ごと上書きするストア（evolve-state.json 等）。
+# store_write は jsonl append 専用のため、kind=json ストアへ渡すと jsonl 行を追記して
+# 単一 JSON オブジェクトを破壊しうる。runtime guard で reject する。
+
+def test_reject_kind_json_store_raises_and_does_not_write(data_dir, monkeypatch):
+    """kind=json ストアへの store_write は reject し書込しない（reject モード）。"""
+    monkeypatch.setattr(
+        store_registry, "_DECLARATIONS", [StoreDeclaration_json_kind()], raising=True
+    )
+    with pytest.raises(StoreWriteError, match="kind=json"):
+        store_write("single_object.json", {"v": 1}, guard_mode="reject")
+    assert not (data_dir / "single_object.json").exists()
+
+
+def test_kind_json_guard_warns_but_still_writes_in_warn_mode(data_dir, monkeypatch):
+    """warn モードでは kind=json でも警告のみで書込は継続する（既存 guard と同型の緊急避難）。"""
+    monkeypatch.setattr(
+        store_registry, "_DECLARATIONS", [StoreDeclaration_json_kind()], raising=True
+    )
+    store_write("single_object.json", {"v": 1}, guard_mode="warn")
+    assert _read_lines(data_dir / "single_object.json") == [{"v": 1}]
+
+
+def test_all_declared_json_named_stores_have_kind_json():
+    """basename が `.json` の宣言は全て kind=json（remediation_surfaced/<slug>.json 含む）。
+
+    #399 codex round1 Should 1: `.json`（単一オブジェクト）を jsonl 既定のまま宣言すると
+    store_write 経由の append が破壊しうる、という指摘の再発防止。新規 `.json` 宣言を
+    追加したら本テストが kind 指定漏れを検出する。
+    """
+    for d in store_registry.declarations():
+        if d.name.endswith(".json"):
+            assert d.kind == "json", f"{d.name}: kind=json の指定漏れ"
+
+
 def test_default_guard_mode_is_reject(data_dir):
     """guard_mode 未指定・env 未設定なら既定は reject（ADR-049 ②・#55 capstone）。
 
@@ -274,10 +311,14 @@ _EXPECTED_ACTIVE_STORES = [
     "correction_review_seen.jsonl",
     "corrections.jsonl",
     "errors.jsonl",
+    "evolve-proposals-<date>.json",
     "evolve-queue-state.jsonl",
+    "evolve-queue.json",
     "evolve-state.json",
     "false_positives.jsonl",
     "fleet-config.json",
+    "icebox-status.json",
+    "icebox-verdicts.json",
     "icebox_verdict_seen.jsonl",
     "memory_transition_checks.jsonl",
     "pj_slug_cache.json",
@@ -392,4 +433,16 @@ def StoreDeclaration_legacy() -> "store_registry.StoreDeclaration":
         retention="permanent",
         classification="workflow_state",
         status="legacy",
+    )
+
+
+def StoreDeclaration_json_kind() -> "store_registry.StoreDeclaration":
+    """kind=json のダミー宣言（guard テスト用ヘルパ・#399 codex round1 Should 1）。"""
+    return store_registry.StoreDeclaration(
+        name="single_object.json",
+        kind="json",
+        writer="（テスト用ダミー）",
+        reader="（テスト用ダミー）",
+        retention="permanent",
+        classification="derived_cache",
     )
