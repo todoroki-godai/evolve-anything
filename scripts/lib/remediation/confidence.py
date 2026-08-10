@@ -6,7 +6,7 @@ package 経由で遅延参照する（テスト patch 追従）。
 """
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from issue_schema import (
     SE_SUITABILITY,
@@ -210,8 +210,12 @@ def compute_confidence_score(issue: Dict[str, Any]) -> float:
     return 0.5
 
 
-def classify_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
+def classify_issue(issue: Dict[str, Any], project_root: Optional[Path] = None) -> Dict[str, Any]:
     """単一の issue を分類し、メタデータを付与する。
+
+    project_root: 保護スキルへの代替パス提案に使うプロジェクトルート。未指定時は従来どおり
+    cwd を使う（単一 cwd から他 PJ の issue を渡すバッチ経路で誤った代替パスを提案しない
+    ための明示指定・#400）。
 
     Returns:
         元の issue に confidence_score, impact_scope, category を追加した dict
@@ -256,8 +260,7 @@ def classify_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
                 skill_name = parts[skills_idx + 1]
         except ValueError:
             pass
-        project_root = Path.cwd()
-        alt_path, _ = suggest_local_alternative(skill_name, project_root)
+        alt_path, _ = suggest_local_alternative(skill_name, project_root or Path.cwd())
         protection_warning = generate_protection_warning(skill_name, alt_path)
 
     # 動的分類
@@ -396,8 +399,12 @@ def partition_proposable_by_scope(
     return {"custom": custom, "global": glob}
 
 
-def classify_issues(issues: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+def classify_issues(
+    issues: List[Dict[str, Any]], project_root: Optional[Path] = None
+) -> Dict[str, List[Dict[str, Any]]]:
     """issue リストを3カテゴリ + fp_excluded に分類する。
+
+    project_root は classify_issue に貫通し保護スキルの代替パス提案に使う（#400）。
 
     Returns:
         {"auto_fixable": [...], "proposable": [...], "manual_required": [...], "fp_excluded": [...]}
@@ -413,7 +420,7 @@ def classify_issues(issues: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, An
     }
 
     for issue in issues:
-        classified = _classify_issue(issue)
+        classified = _classify_issue(issue, project_root=project_root)
         category = classified["category"]
         if category in result:
             result[category].append(classified)

@@ -4,7 +4,7 @@ remediation/__init__.py から re-export される（後方互換）。
 FIX_DISPATCH は他 slice の fix 関数を遅延参照するため、テーブルは package 経由で構築する。
 """
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from issue_schema import (
     HOOK_SCRIPT_PATH,
@@ -323,8 +323,14 @@ def _build_fix_dispatch() -> Dict[str, Any]:
 
 def generate_proposals(
     issues: List[Dict[str, Any]],
+    project_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
-    """行数制限違反や肥大化警告に対する修正案を rationale 付きで生成する。"""
+    """行数制限違反や肥大化警告に対する修正案を rationale 付きで生成する。
+
+    project_root: paths_suggestion（VRC_EVIDENCE からの frontmatter 提案）に使う
+    プロジェクトルート。未指定時は従来どおり cwd を使う（単一 cwd から他 PJ の issue を
+    渡すバッチ経路で誤った PJ の frontmatter を提案しないための明示指定・#400）。
+    """
     from . import generate_rationale  # noqa: PLC0415
 
     proposals = []
@@ -433,7 +439,7 @@ def generate_proposals(
             if evidence:
                 try:
                     from reflect_utils import suggest_paths_frontmatter
-                    ps = suggest_paths_frontmatter(evidence, Path.cwd())
+                    ps = suggest_paths_frontmatter(evidence, project_root or Path.cwd())
                     if ps is not None:
                         entry["paths_suggestion"] = {
                             "patterns": ps.patterns,
@@ -449,12 +455,14 @@ def generate_proposals(
 
 def generate_auto_fix_summaries(
     issues: List[Dict[str, Any]],
+    project_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """auto_fixable に分類された issue を1件ずつ rationale 付きで列挙する。
 
     evolve の Remediation フェーズで「一括修正しますか？」と尋ねる前に、
     各 issue が「何をなぜどう直すのか」を1件単位で提示するために使う。
-    auto_fixable 以外の category は除外する。
+    auto_fixable 以外の category は除外する。project_root は generate_proposals に
+    貫通する（#400）。
 
     Returns:
         [{"issue": <classified issue>, "proposal": str, "rationale": str}, ...]
@@ -462,4 +470,4 @@ def generate_auto_fix_summaries(
     auto_fixable = [
         issue for issue in issues if issue.get("category") == "auto_fixable"
     ]
-    return generate_proposals(auto_fixable)
+    return generate_proposals(auto_fixable, project_root=project_root)

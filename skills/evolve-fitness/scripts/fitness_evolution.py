@@ -15,7 +15,7 @@ import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 # accept/reject 履歴の正準ストア（ADR-031）。保存先は DATA_DIR/optimize_history/<slug>.jsonl。
 # 従来は plugin 内 generations/history.jsonl を直接指していたが、更新リセット + split-brain の
@@ -27,9 +27,13 @@ import optimize_history_store as _history_store  # noqa: E402
 from rl_common.file_lock import file_lock  # noqa: E402
 
 
-def _default_history_file() -> Path:
-    """current project slug の履歴ファイルパス（store 経由）。"""
-    return _history_store.history_path(_history_store.resolve_slug())
+def _default_history_file(project_dir: Optional[Union[str, Path]] = None) -> Path:
+    """project_dir（未指定なら current cwd）の project slug の履歴ファイルパス（store 経由）。
+
+    project_dir は単一 cwd から他 PJ の project_dir を渡すバッチ経路（evolve --drain の
+    Phase 5 経由）で対象 PJ を正しく解決するために使う（#400）。
+    """
+    return _history_store.history_path(_history_store.resolve_slug(project_dir))
 
 
 MIN_DATA_COUNT = 30
@@ -44,14 +48,20 @@ EVOLVE_DIFF_FITNESS_FUNC = "skill_quality"
 EVOLVE_DIFF_SOURCE = "evolve_remediation"
 
 
-def load_history(history_file: Optional[Path] = None) -> List[Dict[str, Any]]:
+def load_history(
+    history_file: Optional[Path] = None,
+    project_dir: Optional[Union[str, Path]] = None,
+) -> List[Dict[str, Any]]:
     """history.jsonl（SSoT）を読み込む。
 
     optimize/evolve-loop の SSoT に加え、evolve diff 提案の採点記録も
     同じ history.jsonl に正規化して書き込まれる（issue #223）。
+
+    history_file 明示指定が最優先。未指定時は project_dir（指定されていればその PJ、
+    無ければ cwd）から slug を解決する（#400）。
     """
     if history_file is None:
-        history_file = _default_history_file()
+        history_file = _default_history_file(project_dir)
     if not history_file.exists():
         return []
 
@@ -423,10 +433,17 @@ def is_structural_skip(fe_result: Optional[Dict[str, Any]]) -> bool:
     )
 
 
-def run_fitness_evolution(history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    """評価関数の改善レポートを生成する。"""
+def run_fitness_evolution(
+    history: Optional[List[Dict[str, Any]]] = None,
+    project_dir: Optional[Union[str, Path]] = None,
+) -> Dict[str, Any]:
+    """評価関数の改善レポートを生成する。
+
+    history 明示指定が最優先。未指定時は project_dir（単一 cwd から他 PJ の project_dir を
+    渡すバッチ経路で対象 PJ を正しく解決するため・#400）を load_history に貫通させる。
+    """
     if history is None:
-        history = load_history()
+        history = load_history(project_dir=project_dir)
 
     # データ十分性チェック。fitness_eligible=False（#376 の legacy hash-proxy 誤 accept
     # migration で無効化された entry）は母集団から除外する。キー欠落は既存 entry との

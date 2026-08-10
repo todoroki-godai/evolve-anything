@@ -231,6 +231,50 @@ class TestDefaultHistoryRoutesToStore:
         assert history[0]["human_accepted"] is True
 
 
+# ========== #400 cwd-leak 修理: project_dir 明示指定が cwd より優先されること ==========
+# 単一 cwd から他 PJ の project_dir を渡すバッチ経路（evolve --drain の phases_remediate.py
+# Phase 5 経由）で、実行元 PJ（cwd）の fitness 履歴が対象 PJ の判定に混入しないことを保証する。
+
+class TestLoadHistoryProjectDirParam:
+    def test_load_history_project_dir_overrides_cwd_slug(self, tmp_path, monkeypatch):
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        monkeypatch.setattr(
+            store, "resolve_slug",
+            lambda cwd=None: Path(cwd).name if cwd else "cwd-slug",
+        )
+        store.append_entry({"human_accepted": True, "fitness_func": "cwd_func"}, "cwd-slug")
+        pj_b = tmp_path / "pj-b"
+        pj_b.mkdir()
+        store.append_entry({"human_accepted": True, "fitness_func": "pj_b_func"}, "pj-b")
+
+        history = fe.load_history(project_dir=pj_b)
+        funcs = {h["fitness_func"] for h in history}
+        assert funcs == {"pj_b_func"}
+
+    def test_run_fitness_evolution_project_dir_overrides_cwd_slug(self, tmp_path, monkeypatch):
+        """run_fitness_evolution(project_dir=...) が history=None のとき project_dir を貫通させること。"""
+        import optimize_history_store as store
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        monkeypatch.setattr(
+            store, "resolve_slug",
+            lambda cwd=None: Path(cwd).name if cwd else "cwd-slug",
+        )
+        # cwd 側（project_dir 未指定時の既定）は BOOTSTRAP_MIN 未満の少数決定のみ
+        for i in range(2):
+            store.append_entry({"human_accepted": True, "fitness_func": "cwd_func"}, "cwd-slug")
+        # 対象 PJ 側は insufficient_data を超える十分な件数
+        pj_b = tmp_path / "pj-b"
+        pj_b.mkdir()
+        for i in range(10):
+            store.append_entry({"human_accepted": (i % 2 == 0), "fitness_func": "pj_b_func"}, "pj-b")
+
+        result = fe.run_fitness_evolution(project_dir=pj_b)
+        # cwd 側 2件だけなら insufficient_data になるはずだが、pj_b 側 10件が読まれていれば
+        # bootstrap 以上のステータスになる（cwd の少数決定に引きずられない）。
+        assert result["status"] != "insufficient_data"
+
+
 # ========== (c) fitness_func グループ化 ==========
 
 class TestAnalyzeCorrelationsGrouping:

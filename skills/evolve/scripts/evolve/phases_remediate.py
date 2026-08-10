@@ -166,7 +166,7 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
                     skill_dir=str(proj / ".claude" / "skills" / skill_name),
                 ))
 
-        classified = classify_remediation_issues(issues)
+        classified = classify_remediation_issues(issues, project_root=proj)
 
         # proposable を custom/global スコープ別に集計（#183 false positive 可視化）。
         # #477-1: impact_scope（impact 由来）を最終権威にして global へ寄せる。
@@ -459,7 +459,7 @@ def run_remediate_phases(result: Dict[str, Any], ctx) -> None:
     # Phase 5: Fitness Evolution（評価関数の改善チェック）
     try:
         from fitness_evolution import run_fitness_evolution, fitness_next_action
-        fitness_evo_result = run_fitness_evolution()
+        fitness_evo_result = run_fitness_evolution(project_dir=ctx.project_dir)
         # #400 バグ#5: insufficient_data の結論 1 行（next_action）を現 run の提案有無で確定する。
         # skill_evolve high/medium も discover matched_skills も 0 = 提案が構造的に出ない PJ →
         # 「fitness は使わない設計。対応不要」。1 つでも提案があれば「放置でOK（継続で貯まる）」。
