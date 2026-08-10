@@ -219,6 +219,68 @@ class TestBashBlocksBindSlugBeforeUse:
         assert found, "どの bash ブロックも $SLUG を使っていない（検査対象が消失している疑い）"
 
 
+class TestSlugDerivationUsesCanonicalForm:
+    """round5c: slug 束縛の検査を「束縛が存在すること」（否定的検査）から「正しい導出形で
+    あること」（肯定的要求）へ強化する。
+
+    round5 までの `_SLUG_BINDING_RE`（`^SLUG="` があれば合格）は以下をすべて誤って
+    合格させていた:
+      - `SLUG="unknown"`（ハードコード）
+      - `SLUG="$(basename "$PJ")"`（ADR-031 の resolve_slug と異なる別導出）
+      - `PJ="$PJ"` の env assignment が欠落した resolve_slug 呼び出し
+
+    `$SLUG` を使う全 bash ブロックの SLUG 束縛行に対し、
+      1. `PJ="$PJ"`（env assignment）が同じ行に付いていること
+      2. `resolve_slug(cwd=os.environ['PJ'])`（または `"PJ"` 変種）の形で呼んでいること
+    の両方を positive に要求する。round5 の M1〜M3 と round5b が単一の契約で守られる。
+    """
+
+    _ENV_ASSIGNMENT_RE = re.compile(r'PJ="\$PJ"')
+    _CANONICAL_RESOLVE_SLUG_RE = re.compile(r"""resolve_slug\(cwd=os\.environ\[('PJ'|"PJ")\]\)""")
+
+    # SLUG="$SLUG" ... は「導出済みの値をそのまま次の python -c へ env 経由で渡す」
+    # passthrough 行であり、新規導出（resolve_slug 呼び出し）ではないため対象外にする
+    # （report-narration.md の save-from-response 相当ブロック）。
+    _SLUG_SELF_PASSTHROUGH_RE = re.compile(r'^SLUG="\$SLUG"')
+
+    def _slug_binding_lines(self, block_text: str):
+        return [
+            line for line in block_text.splitlines()
+            if _SLUG_BINDING_RE.match(line.strip())
+            and not self._SLUG_SELF_PASSTHROUGH_RE.match(line.strip())
+        ]
+
+    def test_slug_binding_lines_have_env_assignment_and_canonical_resolve_slug(self):
+        violations = []
+        checked_any = False
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            for lang, block in _fenced_blocks(text):
+                if lang not in ("bash", ""):
+                    continue
+                for line in self._slug_binding_lines(block):
+                    checked_any = True
+                    has_env_assignment = bool(self._ENV_ASSIGNMENT_RE.search(line))
+                    snippets = _embedded_python_snippets(line)
+                    has_canonical_call = any(
+                        self._CANONICAL_RESOLVE_SLUG_RE.search(s) for s in snippets
+                    )
+                    if not (has_env_assignment and has_canonical_call):
+                        violations.append((
+                            md_file.name,
+                            {
+                                "line": line[:200],
+                                "has_env_assignment": has_env_assignment,
+                                "has_canonical_resolve_slug_call": has_canonical_call,
+                            },
+                        ))
+        assert checked_any, "SLUG 束縛行が1件も見つからない（検査対象消失の疑い）"
+        assert not violations, (
+            "SLUG 束縛行が PJ=\"$PJ\"（env assignment）と resolve_slug(cwd=os.environ['PJ']) の"
+            f"両方を満たしていない（#400 round5c）: {violations!r}"
+        )
+
+
 class TestInlineProjectDirMentionsAreSelfContained:
     """コードブロック外（inline backtick）の --project-dir "$PJ" 言及が、
     新規実行を指示する場合は同じ行に束縛を伴う、出力フィールド参照の場合は除外する。
