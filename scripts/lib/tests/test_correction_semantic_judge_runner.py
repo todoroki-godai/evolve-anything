@@ -108,6 +108,149 @@ def test_daily_utterance_limit_truncates_selection(tmp_path):
     assert res["capped"] is True
 
 
+# ── #410 [Must]B: 「日次上限」が1回の呼び出し上限になっていた欠陥の是正 ──────
+# select_daily_batch は当日の累積使用量を見ておらず、cron 再実行や手動 --run の重ね掛け
+# のたびに上限までフル処理できてしまっていた。run_daily_judge は当日既に判定済みの件数・
+# 推定トークンを差し引いた「残り枠」で選定すること。
+
+
+def test_daily_cap_subtracts_already_judged_today(tmp_path):
+    from correction_semantic.store import record_judged
+
+    judged = tmp_path / "correction_judged.jsonl"
+    # 今日すでに 198 件処理済み（cron の1回目実行を模す）→ 残り枠は 2 件のみ。
+    record_judged([f"/prior.jsonl:{i}" for i in range(198)], path=judged)
+
+    utterances = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(5)]
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=utterances, judged_path=judged, daily_utterance_limit=200,
+    )
+    assert res["selected"] == 2
+    assert res["capped"] is True
+
+
+def test_daily_cap_already_at_limit_selects_nothing(tmp_path):
+    from correction_semantic.store import record_judged
+
+    judged = tmp_path / "correction_judged.jsonl"
+    record_judged([f"/prior.jsonl:{i}" for i in range(200)], path=judged)
+
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=utterances, judged_path=judged, daily_utterance_limit=200,
+    )
+    assert res["selected"] == 0
+    assert res["capped"] is True
+
+
+def test_daily_cap_token_budget_subtracted_from_prior_usage(tmp_path):
+    """#410 [Must]B: トークン上限側も当日累積を差し引く。"""
+    from correction_semantic.store import record_judged
+
+    judged = tmp_path / "correction_judged.jsonl"
+    record_judged(
+        ["/prior.jsonl:1"], path=judged, est_tokens_by_key={"/prior.jsonl:1": 100},
+    )
+
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=utterances, judged_path=judged,
+        daily_utterance_limit=200, daily_token_limit=100,  # 当日既に100消費済み→残り0
+    )
+    assert res["selected"] == 0
+    assert res["capped"] is True
+
+
+def test_daily_cap_yesterday_usage_does_not_count(tmp_path):
+    """前日分は当日累積に含めない（日付境界の正しさ）。"""
+    from datetime import timedelta, timezone as _tz
+
+    from correction_semantic.store import record_judged
+
+    judged = tmp_path / "correction_judged.jsonl"
+    record_judged(["/prior.jsonl:1"], path=judged)
+    # 書き込んだ行の judged_at を昨日に書き換える（実ファイルを直接編集してテスト用に固定）。
+    import json as _json
+
+    lines = [_json.loads(l) for l in judged.read_text(encoding="utf-8").splitlines() if l.strip()]
+    from datetime import datetime
+
+    yesterday = datetime.fromisoformat(lines[0]["judged_at"]) - timedelta(days=1)
+    lines[0]["judged_at"] = yesterday.isoformat()
+    judged.write_text("".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in lines), encoding="utf-8")
+
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=utterances, judged_path=judged, daily_utterance_limit=1,
+    )
+    assert res["selected"] == 1  # 前日分は差し引かれない
+    assert res["capped"] is False
+
+
+def test_daily_cap_second_run_same_day_respects_first_runs_consumption(tmp_path, monkeypatch):
+    """同日内の複数回実行（cron 再実行相当）を通しで検証する。1回目 run=True で2件処理
+    → 記録される → 2回目 run=False（dry-run 見積もり）は残り枠だけを見る。
+    """
+    def _fake_call_haiku(prompt, model="haiku"):
+        return _ok_verdict_response([(i, False) for i in range(1)])
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _fake_call_haiku)
+
+    judged = tmp_path / "correction_judged.jsonl"
+    first_batch = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(2)]
+    res1 = judge_runner.run_daily_judge(
+        run=True, utterances=first_batch, judged_path=judged,
+        daily_utterance_limit=3, batch_size=1,
+    )
+    assert res1["selected"] == 2
+
+    second_batch = [_utt("/b.jsonl", i, f"other{i}", "pj-b", ts=_ts(1)) for i in range(5)]
+    res2 = judge_runner.run_daily_judge(
+        run=False, utterances=second_batch, judged_path=judged, daily_utterance_limit=3,
+    )
+    assert res2["selected"] == 1  # 3 - 2(1回目) = 1 件分だけ残っている
+    assert res2["capped"] is True
+
+
+# ── #410 [Must]B: 選定〜記録の排他（ロック保持中は別経路が進めないことを検査）──
+# learning_concurrency_test_by_lock_holding: N プロセス同時起動は競合窓が µs で再現せず
+# 偽の安全網になる。ロックを外部で保持した状態で別スレッドが run_daily_judge を呼び、
+# 短いデッドライン内に完了しない（＝ブロックされている）ことを確認したうえで解放し、
+# 解放後に完了することまで確認する（hang→fail 変換）。
+
+
+def test_select_and_record_are_mutually_exclusive_via_lock(tmp_path):
+    import threading
+
+    from rl_common.file_lock import file_lock
+
+    judged = tmp_path / "correction_judged.jsonl"
+    lock_path = judged.with_name(judged.name + ".lock")
+
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+
+    completed = threading.Event()
+    started = threading.Event()
+
+    def _worker():
+        started.set()
+        judge_runner.run_daily_judge(run=False, utterances=utterances, judged_path=judged)
+        completed.set()
+
+    with file_lock(lock_path):
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        assert started.wait(timeout=2), "worker スレッドが開始しなかった"
+        # ロック保持中は run_daily_judge が完了しない（select_daily_batch の手前でブロック）。
+        blocked = not completed.wait(timeout=0.5)
+        assert blocked, "ロック保持中なのに run_daily_judge が完了した（排他が効いていない）"
+
+    # ロック解放後は速やかに完了する。
+    assert completed.wait(timeout=5), "ロック解放後も run_daily_judge が完了しなかった（hang）"
+    t.join(timeout=5)
+    assert not t.is_alive()
+
+
 def test_daily_token_limit_truncates_selection_even_under_count_limit(tmp_path):
     utterances = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(5)]
     res = judge_runner.run_daily_judge(

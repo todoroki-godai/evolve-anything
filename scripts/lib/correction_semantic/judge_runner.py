@@ -52,6 +52,7 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import safe_llm_call as _safe_llm_call  # noqa: E402
+from rl_common.file_lock import file_lock as _file_lock  # noqa: E402
 from weak_signals.ttl import _parse_iso  # noqa: E402
 
 from . import DEFAULT_BATCH_SIZE  # noqa: E402
@@ -147,123 +148,145 @@ def run_daily_judge(
         except Exception:  # noqa: BLE001 - DB 未セットアップ等は空扱い（fail-open）
             utterances = []
 
-    judged_keys = _store.read_judged_keys(judged_path)
-    unjudged_all = _store.filter_unjudged(utterances or [], judged_keys)
-    print(f"[judge_runner] 提示: 全PJ未判定発話 {len(unjudged_all)} 件", file=out)
+    # #410 [Must]B: 選定〜記録（判定済み記録の read-modify-write）を排他する。日次上限は
+    # 「当日どれだけ既に消費したか」を read 時導出して差し引かないと、cron 再実行や手動 --run
+    # の重ね掛けで実質「1 回の呼び出し上限」になってしまう（同じ日に何度呼んでも毎回フル
+    # 予算が使える）。ロックは対象ファイルでなく sidecar（file_lock の設計どおり）。
+    # flock は open file description 単位で入れ子取得すると自己 deadlock するが、
+    # store_write/store_write_raw は対象ファイル自身に別途ロックを取るだけで、この sidecar
+    # ロックとは異なるファイルのため入れ子にならない（rl_common.file_lock の注意点を参照）。
+    judged_target = Path(judged_path) if judged_path is not None else _store.default_judged_path()
+    lock_path = judged_target.with_name(judged_target.name + ".lock")
 
-    selected = select_daily_batch(
-        unjudged_all,
-        daily_utterance_limit=daily_utterance_limit,
-        daily_token_limit=daily_token_limit,
-        batch_size=batch_size,
-    )
-    capped = len(selected) < len(unjudged_all)
+    with _file_lock(lock_path):
+        judged_keys = _store.read_judged_keys(judged_path)
+        unjudged_all = _store.filter_unjudged(utterances or [], judged_keys)
+        print(f"[judge_runner] 提示: 全PJ未判定発話 {len(unjudged_all)} 件", file=out)
 
-    if not run:
-        cost = _batch.estimate_tokens(selected, batch_size)
-        print(
-            f"[judge_runner] [dry-run] 今日処理する対象: {len(selected)} 件 "
-            f"（推定 {cost['batches']} バッチ / 推定 ~{cost['est_total_tokens']} トークン、"
-            f"上限 {daily_utterance_limit} 件 / {daily_token_limit} トークン）",
-            file=out,
-        )
-        if capped:
+        today = _store.count_judged_today(judged_path)
+        remaining_utterance_limit = max(0, daily_utterance_limit - today["count"])
+        remaining_token_limit = max(0, daily_token_limit - today["est_tokens"])
+        if today["count"] or today["est_tokens"]:
             print(
-                f"[judge_runner] → 上限により {len(unjudged_all) - len(selected)} 件は"
-                "次回 run に持ち越します。",
+                f"[judge_runner] 当日実績: {today['count']} 件 / 推定 {today['est_tokens']} "
+                f"トークン消費済み（残り枠 {remaining_utterance_limit} 件 / "
+                f"{remaining_token_limit} トークン）",
                 file=out,
             )
+
+        selected = select_daily_batch(
+            unjudged_all,
+            daily_utterance_limit=remaining_utterance_limit,
+            daily_token_limit=remaining_token_limit,
+            batch_size=batch_size,
+        )
+        capped = len(selected) < len(unjudged_all)
+
+        if not run:
+            cost = _batch.estimate_tokens(selected, batch_size)
+            print(
+                f"[judge_runner] [dry-run] 今日処理する対象: {len(selected)} 件 "
+                f"（推定 {cost['batches']} バッチ / 推定 ~{cost['est_total_tokens']} トークン、"
+                f"上限 {daily_utterance_limit} 件 / {daily_token_limit} トークン）",
+                file=out,
+            )
+            if capped:
+                print(
+                    f"[judge_runner] → 上限により {len(unjudged_all) - len(selected)} 件は"
+                    "次回 run に持ち越します。",
+                    file=out,
+                )
+            return {
+                "dry_run": True,
+                "unjudged_total": len(unjudged_all),
+                "selected": len(selected),
+                "capped": capped,
+                "cost": cost,
+            }
+
+        if not selected:
+            print("[judge_runner] 未判定の対象がありません。", file=out)
+            return {
+                "dry_run": False,
+                "requested": 0,
+                "responded": 0,
+                "call_failed": 0,
+                "corrections": 0,
+                "non_corrections": 0,
+                "skipped_batches": 0,
+                "parse_failed_batches": 0,
+                "weak_written": 0,
+                "idioms_written": 0,
+                "judged_written": 0,
+                "unjudged_total": len(unjudged_all),
+                "selected": 0,
+                "capped": capped,
+            }
+
+        # Phase A（決定論）: "daily" はラベルに過ぎない（batch_id 構成のみに使われ、
+        # pj_slug 帰属は各 utterance の pj_slug フィールドが単一ソース。docstring 参照）。
+        emitted = _batch.emit_judgement_requests(
+            "daily", utterances=selected, batch_size=batch_size, judged_path=judged_path,
+        )
+        print(
+            f"[judge_runner] 実行: {emitted['batches']} バッチ（{emitted['unjudged']} 件）を"
+            " Haiku へ送信します",
+            file=out,
+        )
+
+        # Phase B（LLM・本 runner が非対話で肩代わりする区間）。
+        responses: Dict[str, str] = {}
+        call_failed = 0
+        for req in emitted["requests"]:
+            key = req.get("id")
+            prompt = req.get("prompt", "")
+            try:
+                raw = call_haiku(prompt, model)
+            except Exception as e:  # noqa: BLE001 - 1 バッチの失敗は次バッチへ継続（fail-open）
+                call_failed += 1
+                print(
+                    f"[judge_runner]   {key}: Haiku 呼び出し失敗 ({e}) — 未判定のまま次回に残す",
+                    file=sys.stderr,
+                )
+                continue  # responses に書かない → parse_responses が空文字列で穴埋めし
+                # ingest_judgement_results の「応答欠損」スキップ経路に自然に合流する。
+            responses[key] = raw
+        print(
+            f"[judge_runner] 応答: {len(responses)}/{len(emitted['requests'])} バッチ受信"
+            f"（失敗 {call_failed}）",
+            file=out,
+        )
+
+        # Phase C（決定論）。
+        result = _batch.ingest_judgement_results(
+            emitted, responses, dry_run=False,
+            weak_signals_path=weak_signals_path, idioms_path=idioms_path, judged_path=judged_path,
+        )
+        print(
+            f"[judge_runner] 永続化: corrections={result['corrections']} "
+            f"non_corrections={result['non_corrections']} "
+            f"skipped_batches={result['skipped_batches']} "
+            f"parse_failed_batches={result['parse_failed_batches']} "
+            f"weak_written={result['weak_written']} judged_written={result['judged_written']}",
+            file=out,
+        )
+
         return {
-            "dry_run": True,
+            "dry_run": False,
+            "requested": emitted["unjudged"],
+            "responded": len(responses),
+            "call_failed": call_failed,
+            "corrections": result["corrections"],
+            "non_corrections": result["non_corrections"],
+            "skipped_batches": result["skipped_batches"],
+            "parse_failed_batches": result["parse_failed_batches"],
+            "weak_written": result["weak_written"],
+            "idioms_written": result["idioms_written"],
+            "judged_written": result["judged_written"],
             "unjudged_total": len(unjudged_all),
             "selected": len(selected),
             "capped": capped,
-            "cost": cost,
         }
-
-    if not selected:
-        print("[judge_runner] 未判定の対象がありません。", file=out)
-        return {
-            "dry_run": False,
-            "requested": 0,
-            "responded": 0,
-            "call_failed": 0,
-            "corrections": 0,
-            "non_corrections": 0,
-            "skipped_batches": 0,
-            "parse_failed_batches": 0,
-            "weak_written": 0,
-            "idioms_written": 0,
-            "judged_written": 0,
-            "unjudged_total": len(unjudged_all),
-            "selected": 0,
-            "capped": capped,
-        }
-
-    # Phase A（決定論）: "daily" はラベルに過ぎない（batch_id 構成のみに使われ、
-    # pj_slug 帰属は各 utterance の pj_slug フィールドが単一ソース。docstring 参照）。
-    emitted = _batch.emit_judgement_requests(
-        "daily", utterances=selected, batch_size=batch_size, judged_path=judged_path,
-    )
-    print(
-        f"[judge_runner] 実行: {emitted['batches']} バッチ（{emitted['unjudged']} 件）を"
-        " Haiku へ送信します",
-        file=out,
-    )
-
-    # Phase B（LLM・本 runner が非対話で肩代わりする区間）。
-    responses: Dict[str, str] = {}
-    call_failed = 0
-    for req in emitted["requests"]:
-        key = req.get("id")
-        prompt = req.get("prompt", "")
-        try:
-            raw = call_haiku(prompt, model)
-        except Exception as e:  # noqa: BLE001 - 1 バッチの失敗は次バッチへ継続（fail-open）
-            call_failed += 1
-            print(
-                f"[judge_runner]   {key}: Haiku 呼び出し失敗 ({e}) — 未判定のまま次回に残す",
-                file=sys.stderr,
-            )
-            continue  # responses に書かない → parse_responses が空文字列で穴埋めし
-            # ingest_judgement_results の「応答欠損」スキップ経路に自然に合流する。
-        responses[key] = raw
-    print(
-        f"[judge_runner] 応答: {len(responses)}/{len(emitted['requests'])} バッチ受信"
-        f"（失敗 {call_failed}）",
-        file=out,
-    )
-
-    # Phase C（決定論）。
-    result = _batch.ingest_judgement_results(
-        emitted, responses, dry_run=False,
-        weak_signals_path=weak_signals_path, idioms_path=idioms_path, judged_path=judged_path,
-    )
-    print(
-        f"[judge_runner] 永続化: corrections={result['corrections']} "
-        f"non_corrections={result['non_corrections']} "
-        f"skipped_batches={result['skipped_batches']} "
-        f"parse_failed_batches={result['parse_failed_batches']} "
-        f"weak_written={result['weak_written']} judged_written={result['judged_written']}",
-        file=out,
-    )
-
-    return {
-        "dry_run": False,
-        "requested": emitted["unjudged"],
-        "responded": len(responses),
-        "call_failed": call_failed,
-        "corrections": result["corrections"],
-        "non_corrections": result["non_corrections"],
-        "skipped_batches": result["skipped_batches"],
-        "parse_failed_batches": result["parse_failed_batches"],
-        "weak_written": result["weak_written"],
-        "idioms_written": result["idioms_written"],
-        "judged_written": result["judged_written"],
-        "unjudged_total": len(unjudged_all),
-        "selected": len(selected),
-        "capped": capped,
-    }
 
 
 def main(argv: Optional[List[str]] = None) -> int:

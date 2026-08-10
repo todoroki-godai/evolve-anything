@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -433,8 +434,14 @@ def record_judged(
     keys: List[str],
     path: Optional[Path] = None,
     dry_run: bool = False,
+    *,
+    est_tokens_by_key: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """判定済み発話の物理キーを追記する（dedup + dry-run ゲート）。
+
+    各行に ``judged_at``（ISO8601 UTC）を自動付与する（#410 [Must]B: daily runner が
+    ``count_judged_today`` で当日累積を read 時導出する際の基準時刻）。``est_tokens_by_key``
+    を渡すと該当キーの行に ``est_tokens`` も付与する（未指定キーは付けない・後方互換）。
 
     Returns:
         {"written": int, "dry_run": bool}
@@ -454,16 +461,64 @@ def record_judged(
         return {"written": len(to_write), "dry_run": True}
 
     if to_write:
+        from weak_signals.store import now_iso
+
         from rl_common import store_write, store_write_raw
 
         store.parent.mkdir(parents=True, exist_ok=True)
+        judged_at = now_iso()
         for k in to_write:
+            rec: Dict[str, Any] = {"key": k, "judged_at": judged_at}
+            if est_tokens_by_key and k in est_tokens_by_key:
+                rec["est_tokens"] = est_tokens_by_key[k]
             if path is None:
-                store_write(JUDGED_STORE_NAME, {"key": k})
+                store_write(JUDGED_STORE_NAME, rec)
             else:
-                store_write_raw(store, {"key": k})
+                store_write_raw(store, rec)
 
     return {"written": len(to_write), "dry_run": False}
+
+
+def count_judged_today(
+    path: Optional[Path] = None, now: Optional[datetime] = None,
+) -> Dict[str, int]:
+    """当日（UTC 暦日）に判定済みとして記録された件数・推定トークン累計を返す（#410 [Must]B）。
+
+    daily runner の複数回実行（cron の再実行・手動 --run の重ね掛け）で「日次上限」が
+    実質「1 回の呼び出し上限」になっていた欠陥の是正。1 プロセスの記憶に頼らず、
+    ``correction_judged.jsonl`` の ``judged_at`` から read 時に導出する
+    （``weak_signals.is_effectively_expired`` と同じ「forward write に頼らない」流儀）。
+
+    ``judged_at`` 欠落（#410 以前の旧レコード）は「今日」と誤カウントしない安全側で除外する。
+    ``est_tokens`` 欠落は 0 として合算する（旧レコード・見積もり未提供キーとの後方互換）。
+
+    Returns:
+        {"count": int, "est_tokens": int}
+    """
+    now = now or datetime.now(timezone.utc)
+    today = now.date()
+
+    store = path if path is not None else default_judged_path()
+    count = 0
+    est_tokens = 0
+    for rec in _read_jsonl(store):
+        judged_at = rec.get("judged_at")
+        if not isinstance(judged_at, str) or not judged_at:
+            continue
+        try:
+            dt = datetime.fromisoformat(judged_at)
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt.date() != today:
+            continue
+        count += 1
+        tokens = rec.get("est_tokens")
+        if isinstance(tokens, (int, float)) and not isinstance(tokens, bool):
+            est_tokens += int(tokens)
+
+    return {"count": count, "est_tokens": est_tokens}
 
 
 def filter_unjudged(

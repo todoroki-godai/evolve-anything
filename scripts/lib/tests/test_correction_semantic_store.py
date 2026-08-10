@@ -96,6 +96,99 @@ def test_judged_keys_dedup_across_runs(tmp_path: Path) -> None:
     assert cs_store.read_judged_keys(prog) == {"/a.jsonl:1", "/a.jsonl:2"}
 
 
+# ── #410 [Must]B: judged_at / est_tokens（当日累積カウント用）────────────────
+
+
+def test_record_judged_attaches_judged_at_timestamp(tmp_path: Path) -> None:
+    import json as _json
+    from datetime import datetime
+
+    prog = tmp_path / "correction_judged.jsonl"
+    cs_store.record_judged(["/a.jsonl:1"], path=prog)
+    rec = _json.loads(prog.read_text(encoding="utf-8").splitlines()[0])
+    assert "judged_at" in rec
+    # tz-aware ISO8601 としてパースできる（他 store の judged_at/detected_at と同型）。
+    dt = datetime.fromisoformat(rec["judged_at"])
+    assert dt.tzinfo is not None
+
+
+def test_record_judged_stores_est_tokens_when_given(tmp_path: Path) -> None:
+    import json as _json
+
+    prog = tmp_path / "correction_judged.jsonl"
+    cs_store.record_judged(
+        ["/a.jsonl:1", "/a.jsonl:2"], path=prog,
+        est_tokens_by_key={"/a.jsonl:1": 42},
+    )
+    recs = {
+        r["key"]: r
+        for r in (_json.loads(l) for l in prog.read_text(encoding="utf-8").splitlines() if l.strip())
+    }
+    assert recs["/a.jsonl:1"]["est_tokens"] == 42
+    assert "est_tokens" not in recs["/a.jsonl:2"]  # 見積もり未指定キーは付与しない
+
+
+def test_count_judged_today_sums_count_and_tokens_for_today_only(tmp_path: Path) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    prog = tmp_path / "correction_judged.jsonl"
+    now = datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc)
+    yesterday = now - timedelta(days=1)
+    _write_judged_records(
+        prog,
+        [
+            {"key": "/a.jsonl:1", "judged_at": now.isoformat(), "est_tokens": 100},
+            {"key": "/a.jsonl:2", "judged_at": now.isoformat(), "est_tokens": 50},
+            {"key": "/a.jsonl:3", "judged_at": yesterday.isoformat(), "est_tokens": 999},
+        ],
+    )
+    out = cs_store.count_judged_today(path=prog, now=now)
+    assert out["count"] == 2  # 今日の2件のみ（昨日の1件は含めない）
+    assert out["est_tokens"] == 150
+
+
+def test_count_judged_today_missing_est_tokens_treated_as_zero(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    prog = tmp_path / "correction_judged.jsonl"
+    now = datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc)
+    _write_judged_records(prog, [{"key": "/a.jsonl:1", "judged_at": now.isoformat()}])
+    out = cs_store.count_judged_today(path=prog, now=now)
+    assert out["count"] == 1
+    assert out["est_tokens"] == 0
+
+
+def test_count_judged_today_legacy_record_without_judged_at_excluded(tmp_path: Path) -> None:
+    """judged_at 欠落（#410 以前の旧レコード）は当日集計に含めない（安全側 — count_judged_today
+    の目的は「今日どれだけ消費したか」で、日付不明を「今日」と誤カウントしない）。
+    """
+    from datetime import datetime, timezone
+
+    prog = tmp_path / "correction_judged.jsonl"
+    now = datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc)
+    _write_judged_records(prog, [{"key": "/a.jsonl:1"}])
+    out = cs_store.count_judged_today(path=prog, now=now)
+    assert out["count"] == 0
+    assert out["est_tokens"] == 0
+
+
+def test_count_judged_today_empty_store_is_zero(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    out = cs_store.count_judged_today(
+        path=tmp_path / "nope.jsonl", now=datetime(2026, 8, 10, tzinfo=timezone.utc)
+    )
+    assert out == {"count": 0, "est_tokens": 0}
+
+
+def _write_judged_records(path: Path, recs: list) -> None:
+    import json as _json
+
+    path.write_text(
+        "".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in recs), encoding="utf-8"
+    )
+
+
 def test_filter_unjudged(tmp_path: Path) -> None:
     prog = tmp_path / "correction_judged.jsonl"
     cs_store.record_judged(["/a.jsonl:1"], path=prog)

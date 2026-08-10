@@ -144,6 +144,12 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(scratch_dir: P
     assert {r["idiom"] for r in idiom_lines} == {"四国めたんじゃなくて", "色が違うから赤にして"}
     # 判定進捗に 3 件（修正/非修正どちらも判定済みに記録）
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+    # #410 [Must]B: 判定済みキーごとの推定トークンが記録され、count_judged_today で
+    # 当日累積として合算できる（daily runner の日次上限が「1回の呼び出し上限」に
+    # なっていた欠陥の是正・record_judged への配線を固定する）。
+    today_count = cs_store.count_judged_today(path=judged)
+    assert today_count["count"] == 3
+    assert today_count["est_tokens"] > 0
 
 
 def test_ingest_then_reemit_excludes_judged_utterances(scratch_dir: Path) -> None:

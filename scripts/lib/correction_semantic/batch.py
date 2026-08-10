@@ -154,6 +154,9 @@ def ingest_judgement_results(
     signals: List[WeakSignal] = []
     idioms: List[_store.CorrectionIdiom] = []
     judged_keys: List[str] = []
+    # #410 [Must]B: 判定済みキーごとの推定トークンを残し、daily runner が当日累積を
+    # read 時導出できるようにする（record_judged に渡す）。
+    est_tokens_by_key: Dict[str, int] = {}
     corrections = 0
     non_corrections = 0
     skipped_batches = 0
@@ -186,7 +189,9 @@ def ingest_judgement_results(
         by_index = {v["index"]: v for v in parsed_verdicts["verdicts"]}
 
         for local_i, utt in enumerate(group):
-            judged_keys.append(_store.utterance_key(utt))
+            key = _store.utterance_key(utt)
+            judged_keys.append(key)
+            est_tokens_by_key[key] = estimate_utterance_tokens(utt)
             v = by_index.get(local_i)
             if v is None:
                 # verdict 欠落は「非修正」として扱い判定済みにする（既存契約）。
@@ -239,7 +244,10 @@ def ingest_judgement_results(
 
     ws_res = append_signals(signals, path=weak_signals_path, dry_run=dry_run)
     idiom_res = _store.append_idioms(idioms, path=idioms_path, dry_run=dry_run)
-    judged_res = _store.record_judged(judged_keys, path=judged_path, dry_run=dry_run)
+    judged_res = _store.record_judged(
+        judged_keys, path=judged_path, dry_run=dry_run,
+        est_tokens_by_key=est_tokens_by_key,
+    )
 
     return {
         "corrections": corrections,
@@ -258,6 +266,20 @@ def ingest_judgement_results(
 # ─────────────────────────────────────────────────────────────────
 # トークン見積もり（llm-batch-guard: 実走前にユーザーへ提示）
 # ─────────────────────────────────────────────────────────────────
+def estimate_utterance_tokens(
+    utterance: Dict[str, Any], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
+) -> int:
+    """1 発話あたりの概算トークン（本文実長 + per-utterance オーバーヘッド）。
+
+    ``estimate_tokens``（バッチ集計）と ``ingest_judgement_results``（#410 [Must]B:
+    ``correction_judged.jsonl`` へ判定済みキーごとの推定コストを残し当日累積を導出する）が
+    同じ単価を共有する単一ソース。プロンプト雛形分（``_PROMPT_OVERHEAD_TOKENS``）は
+    バッチ単位のため含まない。
+    """
+    text = (utterance.get("text") or "")[:max_chars]
+    return math.ceil(len(text) / _CHARS_PER_TOKEN) + _PER_UTTERANCE_OVERHEAD_TOKENS
+
+
 def estimate_tokens(
     utterances: List[Dict[str, Any]],
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -273,11 +295,7 @@ def estimate_tokens(
     items = utterances or []
     n = len(items)
     batches = (n + max(1, batch_size) - 1) // max(1, batch_size)
-    body_tokens = 0
-    for u in items:
-        text = (u.get("text") or "")[:max_chars]
-        body_tokens += math.ceil(len(text) / _CHARS_PER_TOKEN)
-        body_tokens += _PER_UTTERANCE_OVERHEAD_TOKENS
+    body_tokens = sum(estimate_utterance_tokens(u, max_chars=max_chars) for u in items)
     est = body_tokens + batches * _PROMPT_OVERHEAD_TOKENS
     return {
         "utterances": n,
