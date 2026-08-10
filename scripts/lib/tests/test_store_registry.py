@@ -320,6 +320,78 @@ def test_legacy_dead_stores_not_active_121() -> None:
         assert name not in store_registry.active_store_names(), name
 
 
+_PR_E_STORES = [
+    "evolve-state.json",
+    "remediation-outcomes.jsonl",
+    "fleet-config.json",
+    "agent-brushup-state.json",
+    "skill-evolve-denylist.json",
+    "pj_slug_cache.json",
+    "skill-evolve-cache.json",
+    # round2（#399 codex Must 2）: read専用派生物 4件の宣言追加。
+    "evolve-queue.json",
+    "icebox-status.json",
+    "icebox-verdicts.json",
+    "evolve-proposals-<date>.json",
+]
+
+_PR_E_CLASSIFICATION = {
+    "evolve-state.json": "workflow_state",
+    "remediation-outcomes.jsonl": "raw_event",
+    "fleet-config.json": "workflow_state",
+    "agent-brushup-state.json": "derived_cache",
+    "skill-evolve-denylist.json": "workflow_state",
+    "pj_slug_cache.json": "derived_cache",
+    "skill-evolve-cache.json": "derived_cache",
+    "evolve-queue.json": "derived_cache",
+    "icebox-status.json": "derived_cache",
+    "icebox-verdicts.json": "derived_cache",
+    "evolve-proposals-<date>.json": "derived_cache",
+}
+
+# .json（単一オブジェクト・非 jsonl）basename の宣言は kind="json" が必須（#399 round1 Should 1）。
+_PR_E_JSON_KIND_STORES = [
+    name for name in _PR_E_STORES if name.endswith(".json")
+]
+
+
+def test_pr_e_stores_declared() -> None:
+    """#379 Step 4 PR E: 未登録だった live store を宣言バックフィルする（issue #379 本文）。"""
+    declared_names = {d.name for d in store_registry.declarations()}
+    for name in _PR_E_STORES:
+        assert name in declared_names, f"{name} が未宣言"
+
+
+def test_pr_e_stores_are_active_with_expected_classification() -> None:
+    """PR E 追加分は status=active（既定）・classification が実態に整合する。"""
+    by_name = {d.name: d for d in store_registry.declarations()}
+    for name, expected_classification in _PR_E_CLASSIFICATION.items():
+        decl = by_name[name]
+        assert decl.status == "active", name
+        assert decl.classification == expected_classification, name
+        assert decl.writer, f"{name}: writer 未記述"
+        assert decl.reader, f"{name}: reader 未記述"
+
+
+def test_pr_e_json_named_stores_have_kind_json() -> None:
+    """PR E 追加分の `.json` basename は全て kind="json"（#399 round1 Should 1）。"""
+    by_name = {d.name: d for d in store_registry.declarations()}
+    for name in _PR_E_JSON_KIND_STORES:
+        assert by_name[name].kind == "json", name
+
+
+def test_pr_e_stores_pass_validate_declarations() -> None:
+    """新規宣言（7+4件）を含めて宣言 SoT 自身の整合性が壊れていない。"""
+    problems = store_registry.validate_declarations()
+    assert problems == [], problems
+
+
+def test_pr_e_stores_included_in_active_store_names() -> None:
+    active = set(store_registry.active_store_names())
+    for name in _PR_E_STORES:
+        assert name in active, name
+
+
 def test_active_store_names_unchanged_by_121() -> None:
     """#121: legacy/dead 追加で active 集合（write-path-set snapshot）は不変。"""
     active = set(store_registry.active_store_names())

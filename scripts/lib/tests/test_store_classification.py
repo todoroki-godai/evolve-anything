@@ -26,6 +26,9 @@ _VALID_CLASSIFICATIONS = {"raw_event", "workflow_state", "derived_cache", "dead"
 # 新規例外の無断追加は test_status_dead_exempt_has_no_undocumented_additions が検出する。
 _STATUS_DEAD_EXEMPT: set[str] = set()
 
+# #379 Step 4 PR E: 未登録 live store 棚卸しで7件を追加宣言（issue #379 本文）。
+# 既存の実ファイル・writer/reader コードの宣言漏れバックフィルで新設ではない
+# （詳細は store_registry.py の該当 StoreDeclaration note 参照）。
 _RAW_EVENT = {
     "corrections.jsonl",
     "usage.jsonl",
@@ -37,6 +40,7 @@ _RAW_EVENT = {
     "subagents.jsonl",
     "utterances.db",
     "verbosity_candidates.jsonl",
+    "remediation-outcomes.jsonl",
 }
 
 _WORKFLOW_STATE = {
@@ -55,6 +59,9 @@ _WORKFLOW_STATE = {
     "advisory_decisions.jsonl",
     "correction_judged.jsonl",
     "memory_transition_checks.jsonl",
+    "evolve-state.json",
+    "fleet-config.json",
+    "skill-evolve-denylist.json",
 }
 
 _DERIVED_CACHE = {
@@ -66,6 +73,13 @@ _DERIVED_CACHE = {
     "evolution_memory.jsonl",
     "quality-baselines.jsonl",
     "episodic.db",
+    "agent-brushup-state.json",
+    "pj_slug_cache.json",
+    "skill-evolve-cache.json",
+    "evolve-queue.json",
+    "icebox-status.json",
+    "icebox-verdicts.json",
+    "evolve-proposals-<date>.json",
 }
 
 # #379 Step 4: growth-journal.jsonl（唯一の dead ストア）を registry ごと削除。
@@ -112,7 +126,13 @@ def test_status_dead_exempt_has_no_undocumented_additions() -> None:
 
 
 def test_classification_golden_counts_and_names() -> None:
-    """4 分類の件数（10/15/8/1）と名前リストが棚卸し表と一致する（golden）。"""
+    """4 分類の件数（11/18/15/0）と名前リストが棚卸し表と一致する（golden）。
+
+    #379 Step 4 PR E round1 で raw_event +1 / workflow_state +3 / derived_cache +3
+    （旧: 10/15/8/0）。round2（#399 codex Must 2）で derived_cache +4
+    （evolve-queue.json / icebox-status.json / icebox-verdicts.json /
+    evolve-proposals-<date>.json、旧: 11 → 15）。
+    """
     by_classification: dict[str, set[str]] = {}
     for d in store_registry.declarations():
         by_classification.setdefault(d.classification, set()).add(d.name)
@@ -122,9 +142,9 @@ def test_classification_golden_counts_and_names() -> None:
     assert by_classification.get("derived_cache", set()) == _DERIVED_CACHE
     assert by_classification.get("dead", set()) == _DEAD
 
-    assert len(_RAW_EVENT) == 10
-    assert len(_WORKFLOW_STATE) == 15
-    assert len(_DERIVED_CACHE) == 8
+    assert len(_RAW_EVENT) == 11
+    assert len(_WORKFLOW_STATE) == 18
+    assert len(_DERIVED_CACHE) == 15
     assert len(_DEAD) == 0
 
 

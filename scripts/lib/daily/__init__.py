@@ -13,5 +13,6 @@ Phase 1a の `evolve-fleet queue`（学習素材ベース・ゼロ LLM）を mac
   気づきトリガー、#194）
 
 ``evolve-queue.json`` / ``icebox-status.json`` は各コマンドの出力をそのまま保存した read 専用の
-派生物（SoR ではない）。store_registry には登録しない。
+派生物（SoR は各コマンドの元データで本ファイルではない）。writer/reader が実在するため
+store_registry に derived_cache として宣言済み（#399 codex round1 是正）。
 """
