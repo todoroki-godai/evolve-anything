@@ -323,6 +323,7 @@ def _build_fix_dispatch() -> Dict[str, Any]:
 
 def generate_proposals(
     issues: List[Dict[str, Any]],
+    *,
     project_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """行数制限違反や肥大化警告に対する修正案を rationale 付きで生成する。
@@ -455,6 +456,7 @@ def generate_proposals(
 
 def generate_auto_fix_summaries(
     issues: List[Dict[str, Any]],
+    *,
     project_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """auto_fixable に分類された issue を1件ずつ rationale 付きで列挙する。
@@ -462,7 +464,8 @@ def generate_auto_fix_summaries(
     evolve の Remediation フェーズで「一括修正しますか？」と尋ねる前に、
     各 issue が「何をなぜどう直すのか」を1件単位で提示するために使う。
     auto_fixable 以外の category は除外する。project_root は generate_proposals に
-    貫通する（#400）。
+    貫通する（#400）。未指定（None）のときは generate_proposals に project_root
+    キーワードを渡さず従来と同じ引数形で呼ぶ（1引数の monkeypatch/wrapper を壊さないため）。
 
     Returns:
         [{"issue": <classified issue>, "proposal": str, "rationale": str}, ...]
@@ -470,4 +473,6 @@ def generate_auto_fix_summaries(
     auto_fixable = [
         issue for issue in issues if issue.get("category") == "auto_fixable"
     ]
-    return generate_proposals(auto_fixable, project_root=project_root)
+    if project_root is not None:
+        return generate_proposals(auto_fixable, project_root=project_root)
+    return generate_proposals(auto_fixable)

@@ -50,6 +50,7 @@ EVOLVE_DIFF_SOURCE = "evolve_remediation"
 
 def load_history(
     history_file: Optional[Path] = None,
+    *,
     project_dir: Optional[Union[str, Path]] = None,
 ) -> List[Dict[str, Any]]:
     """history.jsonl（SSoT）を読み込む。
@@ -435,15 +436,21 @@ def is_structural_skip(fe_result: Optional[Dict[str, Any]]) -> bool:
 
 def run_fitness_evolution(
     history: Optional[List[Dict[str, Any]]] = None,
+    *,
     project_dir: Optional[Union[str, Path]] = None,
 ) -> Dict[str, Any]:
     """評価関数の改善レポートを生成する。
 
     history 明示指定が最優先。未指定時は project_dir（単一 cwd から他 PJ の project_dir を
     渡すバッチ経路で対象 PJ を正しく解決するため・#400）を load_history に貫通させる。
+    project_dir が未指定（None）のときは load_history に project_dir キーワードを渡さず
+    従来と同じ引数形で呼ぶ（1引数の monkeypatch/wrapper を壊さないため）。
     """
     if history is None:
-        history = load_history(project_dir=project_dir)
+        if project_dir is not None:
+            history = load_history(project_dir=project_dir)
+        else:
+            history = load_history()
 
     # データ十分性チェック。fitness_eligible=False（#376 の legacy hash-proxy 誤 accept
     # migration で無効化された entry）は母集団から除外する。キー欠落は既存 entry との

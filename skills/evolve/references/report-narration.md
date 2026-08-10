@@ -130,10 +130,10 @@ TL;DR: 変更 {N} 件 / 要対応 {M} 件 / 残りすべて評価済みクリー
 - `  └ カウントされるアクション: /reflect で approve または --promote-weak で昇格した修正（自動検出・Stop hook 由来は除外）`（#51 LOW）
 - `本日累計 reflect 確認 2件 / idiom 1件 が自動化対象に昇格（このrunでは 1 件）`
 
-**対話前スナップショット問題の補正（#476-4・MUST。全PJ値の混入を断つ — #526-1）:** `growth_report` は analysis 時点で生成されるため `corrections_human` / `promoted_today` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合の上書きは、必ず **per-PJ の値に今回昇格数を加算する** 方式で行う（**`evolve-reflect --promote-weak` 出力の `corrections_human_allpj` をそのまま使ってはならない — MUST NOT**）:
+**対話前スナップショット問題の補正（#476-4・MUST。全PJ値の混入を断つ — #526-1）:** `growth_report` は analysis 時点で生成されるため `corrections_human` / `promoted_today` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合の上書きは、必ず **per-PJ の値に今回昇格数を加算する** 方式で行う（**`evolve-reflect --project-dir "$(pwd)" --promote-weak` 出力の `corrections_human_allpj` をそのまま使ってはならない — MUST NOT**）:
 
 - **`corrections（human-confirmed のみ）` 行**: `result["growth_report"]["corrections_human"]`（= 当PJ analysis 時点の値）に、Step 6.2 で「はい」と答えて昇格に成功した件数を**足した値**を分子にする（分母は `corrections_target`）。
-  - ⚠ **`evolve-reflect --promote-weak` の出力 `corrections_human_allpj` は全PJ合計（例 41）を返す（#557 でリネーム済み）**ため、これで当PJ値（例 0/10）を上書きすると `41/10` という不整合表示になる（#526-1 の事故）。CLI 出力の `corrections_human_allpj` は当PJ分母 `/10` と意味が合わないので分子に使わない。
+  - ⚠ **`evolve-reflect --project-dir "$(pwd)" --promote-weak` の出力 `corrections_human_allpj` は全PJ合計（例 41）を返す（#557 でリネーム済み）**ため、これで当PJ値（例 0/10）を上書きすると `41/10` という不整合表示になる（#526-1 の事故）。CLI 出力の `corrections_human_allpj` は当PJ分母 `/10` と意味が合わないので分子に使わない。
 - **`本日累計 ...（このrunでは M 件）` 行**: growth_report の `promoted_today` / `autopromoted_today`（本日累計・store 由来）と、`promoted_this_run` / `autopromoted_this_run`（このrun・明示渡し）をそのまま使う。Step 6.2 で承認した直後で store がまだ反映前なら、このrun件数を本日累計に足して表示してよい。
 - 昇格が 0 件だった場合は growth_report の値をそのまま表示する。
 

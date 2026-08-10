@@ -210,7 +210,7 @@ def compute_confidence_score(issue: Dict[str, Any]) -> float:
     return 0.5
 
 
-def classify_issue(issue: Dict[str, Any], project_root: Optional[Path] = None) -> Dict[str, Any]:
+def classify_issue(issue: Dict[str, Any], *, project_root: Optional[Path] = None) -> Dict[str, Any]:
     """単一の issue を分類し、メタデータを付与する。
 
     project_root: 保護スキルへの代替パス提案に使うプロジェクトルート。未指定時は従来どおり
@@ -400,11 +400,13 @@ def partition_proposable_by_scope(
 
 
 def classify_issues(
-    issues: List[Dict[str, Any]], project_root: Optional[Path] = None
+    issues: List[Dict[str, Any]], *, project_root: Optional[Path] = None
 ) -> Dict[str, List[Dict[str, Any]]]:
     """issue リストを3カテゴリ + fp_excluded に分類する。
 
     project_root は classify_issue に貫通し保護スキルの代替パス提案に使う（#400）。
+    未指定（None）のときは classify_issue に project_root キーワードを渡さず従来と同じ
+    引数形で呼ぶ（1引数の monkeypatch/wrapper を壊さないため）。
 
     Returns:
         {"auto_fixable": [...], "proposable": [...], "manual_required": [...], "fp_excluded": [...]}
@@ -420,7 +422,10 @@ def classify_issues(
     }
 
     for issue in issues:
-        classified = _classify_issue(issue, project_root=project_root)
+        if project_root is not None:
+            classified = _classify_issue(issue, project_root=project_root)
+        else:
+            classified = _classify_issue(issue)
         category = classified["category"]
         if category in result:
             result[category].append(classified)
