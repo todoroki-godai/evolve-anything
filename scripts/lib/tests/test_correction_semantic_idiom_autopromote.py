@@ -104,6 +104,40 @@ def test_promotes_only_confirmed_match(tmp_path: Path) -> None:
     assert recs[0]["idiom_key"] == it.idiom_key
 
 
+def test_bootstrap_consumed_before_marker_not_promoted(tmp_path: Path) -> None:
+    """#405 round6 [Should]: bootstrap 消化除外（#94）が effective_actionable 判定に効く。
+
+    marker 設置**以前**に detected（bootstrap で「破棄」「TTL 任せ」と人間が判断済み）の
+    weak_signal は、confirmed idiom に一致していても自動昇格されない。marker はテスト
+    isolation の CLAUDE_PLUGIN_DATA（=tmp_path・root conftest が設定）経由で
+    ``bootstrap_backlog.default_marker_path`` が解決する既定パスに直接書く（marker_base を
+    明示注入しない・#94 [Should] 是正と同じ契約）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    idioms = tmp_path / "correction_idioms.jsonl"
+    corr = tmp_path / "corrections.jsonl"
+    from datetime import timedelta
+
+    _seed_idiom(idioms, line_no=1, text="四国めたんじゃなくて", confirmed=True)
+    sig = WeakSignal(
+        channel="llm_judge", provenance=_prov(1, "四国めたんじゃなくて"),
+        detected_at=(datetime.now(timezone.utc) - timedelta(days=3)).isoformat(),
+        session_id="s1", pj_slug=SLUG,
+    )
+    append_signals([sig], path=ws)
+
+    from correction_semantic.bootstrap_backlog import default_marker_path
+
+    marker = default_marker_path(SLUG)
+    marker.write_text(
+        (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(), encoding="utf-8",
+    )
+
+    res = iap.autopromote(SLUG, weak_signals_path=ws, idioms_path=idioms, corrections_path=corr)
+    assert res["promoted"] == 0
+    assert not corr.exists() or corr.read_text(encoding="utf-8").strip() == ""
+
+
 def test_promotes_same_text_new_occurrence(tmp_path: Path) -> None:
     """**本機能の核心**: 承認済み idiom テキストの「新規発話」（別 phys・別 idiom record）が昇格する。
 

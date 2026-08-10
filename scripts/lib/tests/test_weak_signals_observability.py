@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _lib_dir = Path(__file__).resolve().parent.parent
@@ -710,6 +711,60 @@ def test_backlog_lane_absent_when_bootstrap_pending(
     assert "今日の修正確認" in body
     # bootstrap pending → backlog 別レーンは出さない
     assert "--show-weak-signals" not in body
+
+
+# ── #94 Must（codex レビュー是正）: 当PJ集計から bootstrap 消化済みを除外 ──
+
+
+def test_unpromoted_excludes_bootstrap_consumed(tmp_path: Path, monkeypatch) -> None:
+    """bootstrap marker 設置以前に detected した当PJ未昇格は集計から除外する（#94 是正）。
+
+    queue（fleet.queue_materials）/ daily_review が既に除外しているのに、この observability
+    matrix reader だけ生の read_signals() を集計しており、marker 以前の「判断済み」項目まで
+    「未読・今日の修正確認 phase で昇格可能」と誤案内していた（#112/#117/#159 と同型の3回目の
+    reader 取りこぼし）。全PJ生総数（all_by_channel）は意図的に raw のまま残す。
+    """
+    current_slug = tmp_path.name
+    now = datetime.now(timezone.utc)
+    old = {
+        "channel": "llm_judge", "promoted": False, "pj_slug": current_slug,
+        "signal_key": "old1", "detected_at": (now - timedelta(days=3)).isoformat(),
+    }
+    fresh = {
+        "channel": "llm_judge", "promoted": False, "pj_slug": current_slug,
+        "signal_key": "new1", "detected_at": (now - timedelta(hours=1)).isoformat(),
+    }
+    _seed_multi_pj(tmp_path, monkeypatch, [old, fresh])
+
+    # CLAUDE_PLUGIN_DATA=tmp_path は root conftest の autouse fixture が固定済みのため、
+    # default_marker_path(current_slug) は tmp_path 直下に自然解決される（monkeypatch 不要）。
+    marker = tmp_path / f"bootstrap_done-{current_slug}.marker"
+    marker.write_text((now - timedelta(days=1)).isoformat(), encoding="utf-8")
+
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # 全PJ生総数は意図的に raw のまま 2 件（除外しない・観測値として維持）
+    assert "全PJ 2" in body
+    # 当PJ未昇格は bootstrap 消化除外後 1 件のみ（old1 は判断済みとして除外）
+    assert "当PJ未昇格 1" in body
+
+
+def test_unpromoted_keeps_all_when_no_marker(tmp_path: Path, monkeypatch) -> None:
+    """marker が無い PJ は従来通り全件を当PJ未昇格に数える（挙動不変）。"""
+    current_slug = tmp_path.name
+    now = datetime.now(timezone.utc)
+    old = {
+        "channel": "llm_judge", "promoted": False, "pj_slug": current_slug,
+        "signal_key": "old1", "detected_at": (now - timedelta(days=3)).isoformat(),
+    }
+    _seed_multi_pj(tmp_path, monkeypatch, [old])
+
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "全PJ 1" in body
+    assert "当PJ未昇格 1" in body
 
 
 def test_backlog_lane_absent_when_daily_covers_all(

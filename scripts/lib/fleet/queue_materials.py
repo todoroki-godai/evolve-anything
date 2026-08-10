@@ -46,42 +46,12 @@ def _aliases_for(slug: str) -> set:
 
 # --- store reader: weak_signals 未処理カウント（PJ 別）-----------------------
 
-
-def _exclude_bootstrap_consumed(
-    recs: List[Dict[str, Any]],
-    pj_slug: str,
-    marker_base: Optional[Path] = None,
-) -> List[Dict[str, Any]]:
-    """bootstrap で判断済み（marker 設置以前に detected）の weak を除外する（#94）。
-
-    bootstrap phase で「破棄」「TTL 任せ」を人間が選ぶと marker が立つが weak_signals.jsonl
-    は不変（破棄＝TTL 自然失効に委ねる意図的設計）。queue はそれを TTL まで material に数え
-    続け待ち件数を膨らませて誤読を誘発するため、marker 設置時刻より前に detected した weak
-    を「判断済み」として落とす。``is_effectively_expired``（#89）と同じ **read 時導出**で、
-    store は書き換えない。marker 設置**後**に溜まった新規 weak は正当な待ちとして残す。
-    detected_at が parse 不能なら安全側で残す（誤って queue から落とさない）。
-    """
-    from correction_semantic.bootstrap_backlog import (
-        bootstrap_done_at,
-        default_marker_path,
-    )
-    from weak_signals.ttl import _parse_iso
-
-    marker_path = (
-        default_marker_path(pj_slug, base=marker_base)
-        if marker_base is not None
-        else None
-    )
-    done_at = bootstrap_done_at(pj_slug, marker_path=marker_path)
-    if done_at is None:
-        return recs
-    out: List[Dict[str, Any]] = []
-    for r in recs:
-        det = _parse_iso(r.get("detected_at"))
-        if det is not None and det < done_at:
-            continue  # marker 以前に検出 → bootstrap で判断済み
-        out.append(r)
-    return out
+# #94 の除外 predicate は ``correction_semantic.bootstrap_backlog`` へ移設済み（daily_review
+# の毎日確認 phase も同じ判定を必要とするため・非対称是正）。ここは単一ソースからの re-export
+# （公開名 ``_exclude_bootstrap_consumed`` を参照する既存コード/テストとの後方互換のため）。
+from correction_semantic.bootstrap_backlog import (  # noqa: E402, F401 (re-export)
+    _exclude_bootstrap_consumed,
+)
 
 
 def _scoped_kept_signals(
@@ -90,18 +60,26 @@ def _scoped_kept_signals(
     weak_signals_path: Optional[Path],
     marker_base: Optional[Path],
 ) -> List[Dict[str, Any]]:
-    """pj_slug scope + bootstrap 消化除外を通した未処理 weak レコードを返す（共有 helper）。
+    """pj_slug scope + actionable 除外を通した未処理 weak レコードを返す（共有 helper）。
 
     ``weak_unprocessed_by_pj`` / ``weak_content_poor_by_pj`` /
     ``bootstrap_consumed_by_pj`` が同じ read/scope/除外パスを通すための単一ソース
     （partial fix で reader が食い違うのを避ける）。channel フィルタは呼び側で行う。
-    """
-    from correction_semantic.promote import read_unpromoted
 
-    recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
+    #405 round5 [Must]2 是正: promoted/TTL失効/既読・却下済み/bootstrap消化済みの4軸を
+    ``correction_semantic.promote.filter_actionable``（全 actionable reader の単一
+    predicate）経由で適用する。read（``read_signals``）と pj_slug スコープ（alias fold）は
+    従来どおりこの関数の責務のまま維持する（filter_actionable の契約：レコードは呼び出し側が
+    既にスコープ済みであること）。挙動は不変（``read_unpromoted`` の既定 exclude_reviewed=True
+    を暗黙に使っていた従来実装と同じ default を ``filter_actionable`` も持つ）。
+    """
+    from correction_semantic.promote import filter_actionable
+    from weak_signals.store import read_signals
+
+    recs = read_signals(weak_signals_path)
     aliases = _aliases_for(pj_slug)
     scoped = [r for r in recs if r.get("pj_slug") in aliases]
-    return _exclude_bootstrap_consumed(scoped, pj_slug, marker_base=marker_base)
+    return filter_actionable(scoped, pj_slug, marker_base=marker_base)
 
 
 def weak_unprocessed_by_pj(
@@ -162,18 +140,28 @@ def bootstrap_consumed_by_pj(
 ) -> int:
     """bootstrap 消化済み（marker 以前 detected）で material から除外した weak 件数（#94）。
 
-    queue footer の透明化用。bootstrap marker が無い PJ は常に 0。``weak_unprocessed_by_pj``
-    と同じ scope/除外ロジックを通し、除外前後の差を返す（二重集計を避けるため共有 helper）。
-    """
-    from correction_semantic.promote import read_unpromoted
+    queue footer の透明化用。bootstrap marker が無い PJ は常に 0。
 
-    recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
+    #405 round7 [Should]2 是正: 差分算出を bootstrap 除外（``_exclude_bootstrap_consumed``）
+    単独の適用結果から取る。以前は「``read_unpromoted`` ベースの独立集計（scoped）」と
+    「``_scoped_kept_signals``（＝``filter_actionable`` 経由・kept）」の差分を取っており、
+    両者はたまたま同じ3軸（promoted/TTL/reviewed）を ``_filter_unpromoted`` 経由で共有して
+    いたため一致していたが、``filter_actionable`` の本体に新しい軸が直接増えると kept 側
+    にしか反映されず、差分が bootstrap 軸以外まで拾ってしまう構造だった。``filter_actionable``
+    に ``pj_slug=None`` を渡すと「bootstrap 消化除外だけをスキップしつつ他の全軸を通常適用」
+    する契約（#405 round6 [Must]1）を利用し、bootstrap 以外の軸を反映した集合を得たうえで
+    そこに ``_exclude_bootstrap_consumed`` だけを適用する差分を取ることで、軸の増減に依存
+    せず常に bootstrap 軸だけの消化件数になる。
+    """
+    from correction_semantic.promote import filter_actionable
+    from weak_signals.store import read_signals
+
+    recs = read_signals(weak_signals_path)
     aliases = _aliases_for(pj_slug)
     scoped = [r for r in recs if r.get("pj_slug") in aliases]
-    kept = _scoped_kept_signals(
-        pj_slug, weak_signals_path=weak_signals_path, marker_base=marker_base
-    )
-    return len(scoped) - len(kept)
+    without_bootstrap = filter_actionable(scoped, None)
+    kept = _exclude_bootstrap_consumed(without_bootstrap, pj_slug, marker_base=marker_base)
+    return len(without_bootstrap) - len(kept)
 
 
 # --- store reader: 前回 evolve 以降の corrections カウント（PJ 別）------------

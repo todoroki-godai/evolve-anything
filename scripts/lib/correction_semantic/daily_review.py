@@ -28,10 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from correction_semantic.bootstrap_backlog import (
-    BACKLOG_CHANNEL,
-    JACCARD_THRESHOLD,
-)
+from correction_semantic.bootstrap_backlog import BACKLOG_CHANNEL, JACCARD_THRESHOLD
 from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.representative import prev_action_summary
 from correction_semantic.review_channels import (
@@ -41,7 +38,6 @@ from correction_semantic.review_channels import (
 )
 from correction_semantic.store import read_idioms
 from weak_signals.store import read_signals
-from weak_signals.ttl import is_effectively_expired
 
 # #46 read 層拡張: 既読 union + slug alias は共有モジュール（idioms/weak_signals と単一ソース）。
 from store_read_union import (  # noqa: E402
@@ -173,33 +169,42 @@ def _read_new(
     *,
     weak_signals_path: Optional[Path],
     seen_keys: Set[str],
+    marker_base: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """当該 PJ slug の「新規」未昇格 content-rich weak_signal を返す（#99）。
 
     対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
     チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ除外する。
     新規 = 既読集合（seen_keys）に signal_key が無いもの。promoted / expired は除外。
+
+    #94 非対称是正: bootstrap で「破棄」「TTL 任せ」と人間が判断済み（marker 設置以前に
+    detected）の weak は queue（``fleet.queue_materials``）と同じ predicate で除外する。
+    さもないと queue は待ち 0 と表示するのに daily_review だけが古い weak を延々確認に
+    出し続ける split-brain になる（learning_consumption_state_split と同型）。
+
+    #405 round5 [Must]2 是正: promoted/TTL失効/既読・却下済み/bootstrap消化済みの4軸を
+    ``correction_semantic.promote.filter_actionable``（全 actionable reader の単一
+    predicate）経由で適用する。read（``read_signals``）・pj_slug スコープ（alias fold）・
+    channel フィルタ（REVIEW_CHANNELS）は従来どおりこの関数の責務のまま維持する
+    （filter_actionable の契約：レコードは呼び出し側が既にスコープ済みであること。channel
+    は filter_actionable の関知しない軸なので、promoted/TTL/reviewed/bootstrap の判定と
+    独立に先に絞ってよい）。呼び出し元 ``build_review`` が既に読んだ ``seen_keys`` を
+    ``seen_keys=`` でそのまま渡し、既読ストアの二重 read を避ける。
     """
+    from correction_semantic.promote import filter_actionable
+
     recs = read_signals(weak_signals_path)
-    out: List[Dict[str, Any]] = []
+    scoped: List[Dict[str, Any]] = []
     for r in recs:
         # #46 read 層拡張: legacy weak_signal（旧 slug タグ）も alias で当 PJ として拾う。
         if not _pj_slug_match(r.get("pj_slug"), pj_slug):
             continue
         if r.get("channel") not in REVIEW_CHANNELS:
             continue
-        if r.get("promoted"):
-            continue
-        # #326: 永続化フラグ（expired）だけでなく read 時導出（is_effectively_expired）で
-        # 判定する。標準フロー（--dry-run → --drain）は mark_expired を通らずフラグが
-        # 書かれないため、フラグだけを見ると TTL 超レコードが「昇格可能」として提示され、
-        # promote 側（read_unpromoted は既に is_effectively_expired 済み）と split-brain になる。
-        if is_effectively_expired(r):
-            continue
-        if r.get("signal_key") in seen_keys:
-            continue
-        out.append(r)
-    return out
+        scoped.append(r)
+    return filter_actionable(
+        scoped, pj_slug, seen_keys=seen_keys, marker_base=marker_base,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -327,6 +332,7 @@ def build_review(
     max_groups: int = 5,
     exclude_signal_keys: Optional[Set[str]] = None,
     dry_run: bool = False,
+    marker_base: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """前回 evolve 以降の新規 unpromoted weak_signal を idiom 単位 group 化して返す。
 
@@ -357,10 +363,18 @@ def build_review(
     SKILL.md 手順通り Step 6.1（bootstrap まとめて確認）→ Step 6.2（daily）を実行すると同じ
     シグナルを 2 回質問することになるため、bootstrap-pending の signal_key をここで除外する。
     None / 空 set（非 bootstrap run）なら従来通り全件提示する。
+
+    marker_base（#94 非対称是正・テスト注入用）: bootstrap 消化除外（marker 設置以前に
+    detected した weak を落とす）の marker 探索起点。未指定（既定 None）は本番既定パス
+    （``correction_semantic.bootstrap_backlog.default_marker_path`` の DATA_DIR 解決）と
+    同一の挙動になる。marker が存在しない PJ は素通し（除外なし・挙動不変）。
     """
     seen_keys = read_reviewed_keys(seen_path)
     new_records = _read_new(
-        pj_slug, weak_signals_path=weak_signals_path, seen_keys=seen_keys
+        pj_slug,
+        weak_signals_path=weak_signals_path,
+        seen_keys=seen_keys,
+        marker_base=marker_base,
     )
     # #476-3: bootstrap-pending の signal_key を daily から除外し二重提示を防ぐ。
     if exclude_signal_keys:

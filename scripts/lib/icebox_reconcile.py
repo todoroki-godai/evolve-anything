@@ -154,10 +154,30 @@ def _eval_weak_signals_unprocessed_count(
     （`rl_common.iter_read_data_dirs`）と同じ流儀に合わせ、`data_dir` を canonical 起点に
     union 解決してから各 dir を読む（`data_dir` がテスト isolation の tmp_path でも、
     legacy 候補は存在しなければ自動的に候補から外れるので既存の単一 dir テストは無改修で通る）。
+
+    #405 round4 [Must]3 是正: この値は `classify_issue` の `<=`/`>=` 閾値判定に直接使われる
+    （`lane="met"` の成立条件）ため、判断済み（bootstrap で「破棄」「TTL 任せ」と人間が
+    選んだ）weak_signal を未処理として数えると、判断済み項目だけで再開条件が誤って成立し
+    うる。promoted / TTL 失効に加え bootstrap 消化除外（#94）を、全 actionable reader の
+    単一 predicate（`correction_semantic.promote.filter_actionable`）経由で適用する。
+
+    #405 round5 [Must]1 是正: この評価器は元々既読ストアの axis を持たず
+    `exclude_reviewed=False` だったが、「行動可能性を判定する評価器」では reviewed（daily
+    review で "却下" と人間が判断済み）を含めたままにする理由がない。daily review で
+    rejected と判断されても weak_signal 側の `promoted` は False のままなので、
+    reviewed 軸を欠くと marker 設置後に却下された項目**だけ**で閾値（`>= N` 等）が誤って
+    成立しうる。`exclude_reviewed=True` に変更した。
+
+    #405 round6 [Must]2 是正: round5 の初回実装は既読ストアを
+    `default_seen_path(base=Path(data_dir))`（canonical の1ファイルのみ）で読んでいたが、
+    weak_signal 側は `dirs`（canonical + legacy の union）を読んでいた。この read 範囲の
+    非対称により、legacy 側で「却下」と判断済みの signal が既読集合に載らず actionable
+    として復活し、round5 [Must]1 で塞いだはずの穴が開き直っていた。既読も weak_signal と
+    同じ `dirs` で union read する（`correction_semantic.daily_review._read_seen_one` を
+    dir ごとに呼ぶ最小追加。新しいストア・新しい読み方は作らない）。
     """
     try:
         from weak_signals.store import STORE_NAME, _read_one
-        from weak_signals.ttl import is_effectively_expired
     except ImportError:
         return None
     try:
@@ -165,6 +185,11 @@ def _eval_weak_signals_unprocessed_count(
     except ImportError:
         def _pj_slug_match(a, b):  # type: ignore
             return a == b
+    try:
+        from correction_semantic.promote import filter_actionable
+        from correction_semantic.daily_review import SEEN_STORE_NAME, _read_seen_one
+    except ImportError:
+        return None
 
     try:
         import rl_common
@@ -172,8 +197,9 @@ def _eval_weak_signals_unprocessed_count(
     except Exception:
         dirs = [Path(data_dir)]
 
-    count = 0
+    records: List[Dict[str, Any]] = []
     seen_keys: set = set()
+    reviewed_keys: set = set()
     for d in dirs:
         for r in _read_one(Path(d) / STORE_NAME):
             k = r.get("signal_key")
@@ -183,12 +209,16 @@ def _eval_weak_signals_unprocessed_count(
                 seen_keys.add(k)
             if not _pj_slug_match(r.get("pj_slug"), SELF_PJ_SLUG):
                 continue
-            if r.get("promoted"):
-                continue
-            if is_effectively_expired(r):
-                continue
-            count += 1
-    return float(count)
+            records.append(r)
+        reviewed_keys |= _read_seen_one(Path(d) / SEEN_STORE_NAME)
+
+    actionable = filter_actionable(
+        records,
+        SELF_PJ_SLUG,
+        seen_keys=reviewed_keys,
+        marker_base=Path(data_dir),
+    )
+    return float(len(actionable))
 
 
 def _eval_subagent_traces_first_try_success_rate(
