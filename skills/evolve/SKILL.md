@@ -152,8 +152,11 @@ per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>
 まず既存の世界観をロードする（LLM 不要）:
 
 ```bash
-# cd せず対象 PJ の cwd で実行。slug は resolve_slug（git-common-dir 親, ADR-031）— worktree でも本体 PJ slug に正規化（#408-C）。
-SLUG="$(python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug())" 2>/dev/null || echo unknown)"
+# 対象 PJ の cwd で実行。slug は resolve_slug（git-common-dir 親, ADR-031）— worktree でも本体 PJ slug に正規化（#408-C）。
+PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス。bash は呼び出しごとに独立プロセスのため、$PJ を使う
+                     # 全ブロックの冒頭でこの行を置く（env の PJ があれば優先・無ければ cwd。
+                     # バッチ経路 #400 本体では呼び出し側が PJ を env で渡すだけで対応できる）
+SLUG="$(python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug(cwd='$PJ'))" 2>/dev/null || echo unknown)"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/world_context.py" --load --slug "$SLUG"
 ```
 

@@ -1,27 +1,30 @@
-"""#400 codex レビュー是正（round1〜4）: SKILL.md / references/*.md 全体の project_dir 貫通手順が
+"""#400 codex レビュー是正（round1〜5）: SKILL.md / references/*.md 全体の project_dir 貫通手順が
 文字列だけでなく「対象 PJ を正しく指す形」になっていることを検査する契約テスト。
 
-背景（round2/round3/round4 の指摘の積み重ね）:
+背景（round2〜round5 の指摘の積み重ね）:
   - round1: `--project-dir` という文字列の存在しか見ない検査では `--project-dir "$(pwd)"` の
     ような誤った形でも緑になる。
   - round2: `--project-dir "$(pwd)"` / `project_root=Path.cwd()` を「足すだけ」では、単一 cwd
     から他 PJ の project_dir を渡すバッチ経路（#400 本体）で実行元 cwd が再選択され修理が
     形だけに終わる。→ `$PJ` 変数への統一に変更。
   - round3: SKILL.md 側だけを直し references/ 配下の `$(pwd)` 直書きを見落とした。
-    → references/ 配下も全ファイル対象にする（司令塔がスコープ判断を撤回）。
+    → references/ 配下も全ファイル対象にする。
   - round4: `$PJ` はシェルプロセスをまたがない（bash は Bash tool 呼び出しごとに独立プロセス）
     ため、束縛行の無いブロックで `$PJ` を参照すると空文字になる。さらに suppression ledger
     等の**書込経路**で無引数 `resolve_slug()` / `Path.cwd()` / 空文字 fallback の
     `CLAUDE_PROJECT_DIR` が残っていると、対象 PJ でなく実行元 PJ に書き込む。
-    → ブロック単位で束縛行の有無を検査し、書込経路の無引数呼び出しも検出する。
+  - round5: round4 の契約テストにも5つの盲点があった:
+    1. fenced ```python ブロックしか検査せず、bash ブロック内の `python3 -c "..."` を見ていない
+       （SKILL.md Step 0.5 / world-context.md / report-narration.md の `resolve_slug()` 呼び出しは
+       すべて `python3 -c` の中にあり、素通りしていた）
+    2. `$PJ` の束縛しか見ておらず、`$SLUG` の束縛を検査していない（別ブロックで `$SLUG` を前提に
+       すると空文字になる同型バグ）
+    3. 旧形 `PJ="$(pwd)"`（`:-` 無し・env 上書き不可）も束縛として合格させていた
+    4. 束縛が使用より前にあることを検査していない（束縛行がブロック末尾にあっても緑になっていた）
+    5. `git rev-parse --show-toplevel` による slug 再導出（ADR-031 の `--git-common-dir` と異なり
+       worktree で本体と食い違う既知バグ）を検出しない
 
-本テストは SKILL.md と references/ 配下の**全 .md ファイル**を対象に、
-(1) fenced ```bash ブロック単位で「$PJ を使うなら同じブロック内に束縛行がある」こと、
-(2) 単発の呼び出し文言（コードブロック外の inline mention）は同じ行に束縛が同居しているか、
-    出力フィールドの説明（新規実行を伴わない）であること、
-(3) references/ の python スニペットに無引数 `resolve_slug()` / 素の `Path.cwd()` /
-    空文字 fallback の `CLAUDE_PROJECT_DIR` 読み取りが残っていないこと、
-を assert する。
+本テストは 5 点すべてをカバーする。
 """
 import re
 import sys
@@ -42,14 +45,29 @@ _PROJECT_DIR_PJ_RE = re.compile(r'--project-dir "\$PJ"')
 # $(pwd) が --project-dir の値として直書きされている誤り（round2 指摘の再発検出）。
 _PROJECT_DIR_POPEN_PWD_RE = re.compile(r'--project-dir "\$\(pwd\)"')
 
-# PJ="${PJ:-$(pwd)}"（推奨形） または PJ="$(pwd)"（旧形）の束縛行。
-_PJ_BINDING_RE = re.compile(r'^PJ="(\$\{PJ:-\$\(pwd\)\}|\$\(pwd\))"')
+# PJ="${PJ:-$(pwd)}"（推奨形のみ）の束縛行。旧形 PJ="$(pwd)"（:- 無し）は env の PJ を
+# 上書きしてしまうため round5 で非推奨・非合格化した（round4 の盲点3）。
+_PJ_BINDING_RE = re.compile(r'^PJ="\$\{PJ:-\$\(pwd\)\}"')
+
+# 旧形（:- 無し）の検出用（非推奨形が紛れ込んでいないかの検査に使う）。
+_PJ_BINDING_OLD_FORM_RE = re.compile(r'^PJ="\$\(pwd\)"$')
+
+# SLUG="..." 形の束縛行（導出方法は resolve_slug 経由なら形が一定しないため緩く判定する）。
+_SLUG_BINDING_RE = re.compile(r'^SLUG="')
 
 # fenced code block 抽出（```lang\n...\n```）。リスト項目内でインデントされたブロック
 # （開始・終了フェンスが同じ字下げ幅）にも対応するため、字下げをグループ化し閉じフェンスで
 # 同じ字下げをバックリファレンスで要求する（さもないと閉じフェンスを見失い、後方の別ブロックの
 # 閉じフェンスまで誤って呑み込む）。
 _FENCED_BLOCK_RE = re.compile(r"^([ \t]*)```(\w*)\n(.*?)\n\1```", re.DOTALL | re.MULTILINE)
+
+# bash ブロック内に埋め込まれた python3 -c "..." / python3 -c '...' の中身を抽出する
+# （round5 盲点1: fenced ```python ブロックしか見ないと python3 -c 埋め込みを見落とす）。
+_PYTHON_DASH_C_RE = re.compile(r"""python3\s+-c\s+"((?:[^"\\]|\\.)*)"|python3\s+-c\s+'((?:[^'\\]|\\.)*)'""", re.DOTALL)
+
+# git rev-parse --show-toplevel による slug 再導出（ADR-031 は --git-common-dir 親を正とする。
+# --show-toplevel は worktree で本体 PJ と食い違う既知の別バグ・round5 盲点5）。
+_SHOW_TOPLEVEL_RE = re.compile(r"git rev-parse --show-toplevel")
 
 # 出力フィールドの説明（新規実行を指示しない）を示す近傍語。
 _OUTPUT_REFERENCE_MARKERS = ("出力の", "の出力")
@@ -65,16 +83,43 @@ def _strip_fenced_blocks(text: str) -> str:
     return _FENCED_BLOCK_RE.sub("", text)
 
 
-def _block_has_pj_binding(block_text: str) -> bool:
-    return any(_PJ_BINDING_RE.match(line.strip()) for line in block_text.splitlines())
+def _block_has_binding(block_text: str, binding_re: "re.Pattern") -> bool:
+    return any(binding_re.match(line.strip()) for line in block_text.splitlines())
 
 
-def _block_uses_pj(block_text: str) -> bool:
-    return "$PJ" in block_text
+def _block_uses_var(block_text: str, token: str) -> bool:
+    return token in block_text
+
+
+def _embedded_python_snippets(text: str):
+    """テキスト中の python3 -c "..." / '...' の中身を抽出する（bash ブロック内でも検出可能）。"""
+    out = []
+    for m in _PYTHON_DASH_C_RE.finditer(text):
+        snippet = m.group(1) if m.group(1) is not None else m.group(2)
+        out.append(snippet)
+    return out
+
+
+def _binding_and_first_usage_idx(block_text: str, binding_re: "re.Pattern", token: str):
+    """束縛行のインデックスと、束縛行を除いた最初の使用行のインデックスを返す（順序検査用）。"""
+    lines = block_text.splitlines()
+    binding_idx = None
+    first_usage_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if binding_idx is None and binding_re.match(stripped):
+            binding_idx = i
+            continue
+        # コメント（行頭 # または コード部の # 以降）は「使用」に数えない。解説コメントが
+        # 束縛行より前に変数名へ言及しているだけの偽陽性を避ける。
+        code_part = line.split("#", 1)[0]
+        if first_usage_idx is None and token in code_part:
+            first_usage_idx = i
+    return binding_idx, first_usage_idx
 
 
 class TestBashBlocksBindPjBeforeUse:
-    """fenced ```bash ブロックが $PJ を使うなら、同じブロック内に束縛行があること（round4 Must 2）。"""
+    """fenced ```bash ブロックが $PJ を使うなら、同じブロック内に束縛行（かつ使用より前）があること。"""
 
     def test_all_bash_blocks_using_pj_have_binding(self):
         violations = []
@@ -83,12 +128,41 @@ class TestBashBlocksBindPjBeforeUse:
             for lang, block in _fenced_blocks(text):
                 if lang not in ("bash", ""):
                     continue
-                if _block_uses_pj(block) and not _block_has_pj_binding(block):
+                if _block_uses_var(block, "$PJ") and not _block_has_binding(block, _PJ_BINDING_RE):
                     violations.append((md_file.name, block[:200]))
         assert not violations, (
-            "$PJ を使う bash ブロックに束縛行（PJ=\"${PJ:-$(pwd)}\" 相当）が無い"
+            "$PJ を使う bash ブロックに束縛行（PJ=\"${PJ:-$(pwd)}\"）が無い"
             "（bash は呼び出しごとに独立プロセスのため $PJ が空文字になる・#400 round4）: "
             f"{violations!r}"
+        )
+
+    def test_pj_binding_precedes_first_usage(self):
+        """round5 盲点4: 束縛行がブロック内にあっても、使用より後ろにあれば無意味（空文字参照）。"""
+        violations = []
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            for lang, block in _fenced_blocks(text):
+                if lang not in ("bash", ""):
+                    continue
+                if not _block_uses_var(block, "$PJ"):
+                    continue
+                binding_idx, usage_idx = _binding_and_first_usage_idx(block, _PJ_BINDING_RE, "$PJ")
+                if usage_idx is not None and (binding_idx is None or usage_idx < binding_idx):
+                    violations.append((md_file.name, block[:200]))
+        assert not violations, (
+            f"$PJ の束縛行が最初の使用より後ろにある（#400 round5 盲点4）: {violations!r}"
+        )
+
+    def test_no_old_form_pj_binding(self):
+        """round5 盲点3: 旧形 PJ="$(pwd)"（:- 無し）は env の PJ を上書きするため非合格化する。"""
+        violations = []
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if _PJ_BINDING_OLD_FORM_RE.match(line.strip()):
+                    violations.append((md_file.name, line[:200]))
+        assert not violations, (
+            f'旧形の束縛 PJ="$(pwd)"（:- 無し）が残っている（env 上書き不可・#400 round5）: {violations!r}'
         )
 
     def test_at_least_one_bash_block_uses_pj(self):
@@ -97,9 +171,52 @@ class TestBashBlocksBindPjBeforeUse:
         for md_file in ALL_TARGET_MD_FILES:
             text = md_file.read_text(encoding="utf-8")
             for lang, block in _fenced_blocks(text):
-                if lang == "bash" and _block_uses_pj(block):
+                if lang in ("bash", "") and _block_uses_var(block, "$PJ"):
                     found = True
         assert found, "どの bash ブロックも $PJ を使っていない（検査対象が消失している疑い）"
+
+
+class TestBashBlocksBindSlugBeforeUse:
+    """round5 盲点2: $SLUG も $PJ と同型の空文字リスクを持つため同じ検査を適用する。"""
+
+    def test_all_bash_blocks_using_slug_have_binding(self):
+        violations = []
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            for lang, block in _fenced_blocks(text):
+                if lang not in ("bash", ""):
+                    continue
+                if _block_uses_var(block, "$SLUG") and not _block_has_binding(block, _SLUG_BINDING_RE):
+                    violations.append((md_file.name, block[:200]))
+        assert not violations, (
+            "$SLUG を使う bash ブロックに束縛行（SLUG=...）が無い（bash は呼び出しごとに独立"
+            f"プロセスのため $SLUG が空文字になる・#400 round5 盲点2）: {violations!r}"
+        )
+
+    def test_slug_binding_precedes_first_usage(self):
+        violations = []
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            for lang, block in _fenced_blocks(text):
+                if lang not in ("bash", ""):
+                    continue
+                if not _block_uses_var(block, "$SLUG"):
+                    continue
+                binding_idx, usage_idx = _binding_and_first_usage_idx(block, _SLUG_BINDING_RE, "$SLUG")
+                if usage_idx is not None and (binding_idx is None or usage_idx < binding_idx):
+                    violations.append((md_file.name, block[:200]))
+        assert not violations, (
+            f"$SLUG の束縛行が最初の使用より後ろにある（#400 round5 盲点4）: {violations!r}"
+        )
+
+    def test_at_least_one_bash_block_uses_slug(self):
+        found = False
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            for lang, block in _fenced_blocks(text):
+                if lang in ("bash", "") and _block_uses_var(block, "$SLUG"):
+                    found = True
+        assert found, "どの bash ブロックも $SLUG を使っていない（検査対象が消失している疑い）"
 
 
 class TestInlineProjectDirMentionsAreSelfContained:
@@ -168,9 +285,33 @@ class TestNoRawPwdOrUnboundProjectDir:
         assert bindings, "SKILL.md に PJ 束縛行が見つからない（#400 round3 Must 1）"
 
 
+class TestNoShowToplevelSlugDerivation:
+    """round5 盲点5: git rev-parse --show-toplevel による slug 再導出を検出する
+    （ADR-031 は --git-common-dir 親を正とする。--show-toplevel は worktree で本体と食い違う）。
+    """
+
+    def test_no_show_toplevel_in_code(self):
+        violations = []
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            for lang, block in _fenced_blocks(text):
+                if lang not in ("bash", ""):
+                    continue
+                for line in block.splitlines():
+                    code_part = line.split("#", 1)[0]
+                    if _SHOW_TOPLEVEL_RE.search(code_part):
+                        violations.append((md_file.name, line[:200]))
+        assert not violations, (
+            f"git rev-parse --show-toplevel による slug 再導出が残っている"
+            f"（ADR-031 の --git-common-dir と異なり worktree で本体 PJ と食い違う・"
+            f"#400 round5 盲点5）: {violations!r}"
+        )
+
+
 class TestReferencesHaveNoUnattributedWritePaths:
-    """references/ の python スニペットに無引数 resolve_slug() / 素の Path.cwd() /
-    空文字 fallback の CLAUDE_PROJECT_DIR 読み取りが残っていないこと（round4 Must 3）。
+    """python スニペット（fenced ```python ブロック **および** bash 内 python3 -c 埋め込みの
+    両方・round5 盲点1）に無引数 resolve_slug() / 素の Path.cwd() / 空文字 fallback の
+    CLAUDE_PROJECT_DIR 読み取りが残っていないこと（round4 Must 3, round5 盲点1）。
     """
 
     _BARE_RESOLVE_SLUG_RE = re.compile(r"(?<!def )resolve_slug\(\s*\)")
@@ -180,13 +321,18 @@ class TestReferencesHaveNoUnattributedWritePaths:
     )
 
     def _code_lines(self, md_file: Path):
-        """python fenced block の非コメント行を返す。"""
+        """python fenced block の非コメント行 + bash 内 python3 -c 埋め込みの行を返す。"""
         text = md_file.read_text(encoding="utf-8")
         out = []
         for lang, block in _fenced_blocks(text):
-            if lang != "python":
-                continue
-            for line in block.splitlines():
+            if lang == "python":
+                for line in block.splitlines():
+                    code_part = line.split("#", 1)[0]
+                    out.append((line, code_part))
+        # round5 盲点1: fenced ```python 以外に、bash ブロックの中に埋め込まれた
+        # python3 -c "..." / python3 -c '...' も同じ検査対象にする。
+        for snippet in _embedded_python_snippets(text):
+            for line in snippet.splitlines():
                 code_part = line.split("#", 1)[0]
                 out.append((line, code_part))
         return out
@@ -198,8 +344,9 @@ class TestReferencesHaveNoUnattributedWritePaths:
                 if self._BARE_RESOLVE_SLUG_RE.search(code):
                     violations.append((md_file.name, raw[:200]))
         assert not violations, (
-            f"無引数 resolve_slug() が references の python スニペットに残っている"
-            f"（書込経路が cwd 側 PJ に誤帰属する・#400 round4）: {violations!r}"
+            f"無引数 resolve_slug() が references/SKILL.md の python スニペット"
+            f"（fenced ```python または python3 -c 埋め込み）に残っている"
+            f"（書込経路が cwd 側 PJ に誤帰属する・#400 round4/round5）: {violations!r}"
         )
 
     def test_no_bare_path_cwd_calls(self):
@@ -209,7 +356,7 @@ class TestReferencesHaveNoUnattributedWritePaths:
                 if self._BARE_PATH_CWD_RE.search(code):
                     violations.append((md_file.name, raw[:200]))
         assert not violations, (
-            f"素の Path.cwd() が references の python スニペットに残っている"
+            f"素の Path.cwd() が references/SKILL.md の python スニペットに残っている"
             f"（単一 cwd から他 PJ を渡すバッチ経路で誤った PJ を指す・#400 round4）: {violations!r}"
         )
 
@@ -224,28 +371,43 @@ class TestReferencesHaveNoUnattributedWritePaths:
             f"（未設定/バッチ経路で誤った PJ・空 slug になる・#400 round4）: {violations!r}"
         )
 
+    def test_embedded_python_snippets_are_actually_detected(self):
+        """検査自体が空振りでないことの自己チェック（round5 盲点1 の検出経路が生きていること）。"""
+        found = False
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            if _embedded_python_snippets(text):
+                found = True
+        assert found, "python3 -c 埋め込みスニペットが1件も検出されていない（抽出ロジック破損の疑い）"
 
-class TestRemediationMdGenerateCallsUseResultProjectDir:
-    """remediation.md の generate_proposals()/generate_auto_fix_summaries() 呼び出し手順が
+
+class TestGenerateProposalsUseResultProjectDir:
+    """generate_proposals()/generate_auto_fix_summaries() の呼び出し・言及が全ファイルで
     Path.cwd() でなく解析対象 PJ の確定値（result["project_dir"]）を渡す形になっていることを
-    検査する契約テスト（#400 codex レビュー round3 Must 2）。
+    検査する契約テスト（round3 Must 2 + round5 M4: remediation.md だけでなく
+    proposal-protocol.md の言及も対象に含める）。
     """
 
-    REMEDIATION_MD = REFERENCES_DIR / "remediation.md"
     _CALL_RE = re.compile(r"generate_(?:proposals|auto_fix_summaries)\([^)]*\)")
 
-    def test_remediation_md_generate_calls_pass_result_project_dir(self):
-        text = self.REMEDIATION_MD.read_text(encoding="utf-8")
-        calls = self._CALL_RE.findall(text)
-        assert calls, "remediation.md に generate_proposals/generate_auto_fix_summaries の呼び出しが見つからない"
-        for call in calls:
-            assert 'result["project_dir"]' in call, (
-                f"remediation.md の呼び出しは project_root=Path(result[\"project_dir\"]) の形で"
-                f"解析対象 PJ の確定値を渡さなければならない: {call!r}"
-            )
-            assert "Path.cwd()" not in call, (
-                f"remediation.md の呼び出しに Path.cwd() フォールバックが残っている: {call!r}"
-            )
+    def test_all_generate_calls_pass_result_project_dir(self):
+        checked_any = False
+        violations = []
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            calls = self._CALL_RE.findall(text)
+            for call in calls:
+                checked_any = True
+                if 'result["project_dir"]' not in call:
+                    violations.append((md_file.name, call))
+                if "Path.cwd()" in call:
+                    violations.append((md_file.name, call))
+        assert checked_any, "generate_proposals/generate_auto_fix_summaries の呼び出しが1件も見つからない"
+        assert not violations, (
+            f"generate_proposals/generate_auto_fix_summaries の呼び出しが"
+            f"project_root=Path(result[\"project_dir\"]) の形になっていない"
+            f"（#400 round3 Must2 / round5 M4）: {violations!r}"
+        )
 
 
 class TestPromoteWeakInvocationsUseProjectDirPj:
