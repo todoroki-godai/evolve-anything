@@ -511,3 +511,76 @@ def test_build_review_no_exclusion_when_set_empty(tmp_path: Path):
     )
     assert res["eligible"] is True
     assert len(res["groups"]) == 1
+
+
+# ─────────────────────────────────────────────────────────────────
+# build_review: bootstrap 消化除外（#94 非対称是正・queue_materials と同一 predicate）
+# ─────────────────────────────────────────────────────────────────
+def _write_bootstrap_marker(tmp_path: Path, slug: str, content: str) -> None:
+    (tmp_path / f"bootstrap_done-{slug}.marker").write_text(content, encoding="utf-8")
+
+
+def test_build_review_excludes_pre_marker_weak(tmp_path: Path):
+    # bootstrap marker 設置以前に detected した weak は「判断済み」として daily からも除外する
+    # （queue_materials._scoped_kept_signals と同じ predicate・#94）。
+    ws = tmp_path / "weak_signals.jsonl"
+    now = datetime.now(timezone.utc)
+    old = WeakSignal(
+        channel="llm_judge",
+        provenance={"source_path": "/a.jsonl", "line_no": 1, "text": "古い指摘", "reason": "r"},
+        detected_at=(now - timedelta(days=3)).isoformat(),
+        session_id="s1",
+        pj_slug="evolve-anything",
+    )
+    append_signals([old], path=ws)
+    _write_bootstrap_marker(tmp_path, "evolve-anything", (now - timedelta(days=1)).isoformat())
+
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        marker_base=tmp_path,
+    )
+    assert res["eligible"] is False
+    assert res["groups"] == []
+
+
+def test_build_review_keeps_post_marker_weak(tmp_path: Path):
+    # marker 設置後に検出された weak は正当な待ちとして残る。
+    ws = tmp_path / "weak_signals.jsonl"
+    now = datetime.now(timezone.utc)
+    append_signals([_sig("新しい指摘", 1)], path=ws)
+    _write_bootstrap_marker(tmp_path, "evolve-anything", (now - timedelta(days=1)).isoformat())
+
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        marker_base=tmp_path,
+    )
+    assert res["eligible"] is True
+    assert len(res["groups"]) == 1
+
+
+def test_build_review_no_marker_keeps_all_weak(tmp_path: Path):
+    # marker が無い PJ は従来通り全件提示（挙動不変）。detected_at は TTL(45日) 内に収める
+    # （bootstrap 除外でなく TTL 除外で偽陽性にならないよう now - 10日 を使う）。
+    ws = tmp_path / "weak_signals.jsonl"
+    now = datetime.now(timezone.utc)
+    old = WeakSignal(
+        channel="llm_judge",
+        provenance={"source_path": "/a.jsonl", "line_no": 1, "text": "古い指摘", "reason": "r"},
+        detected_at=(now - timedelta(days=10)).isoformat(),
+        session_id="s1",
+        pj_slug="evolve-anything",
+    )
+    append_signals([old], path=ws)
+
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        marker_base=tmp_path,
+    )
+    assert res["eligible"] is True
+    assert len(res["groups"]) == 1

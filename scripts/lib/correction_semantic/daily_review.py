@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Set
 from correction_semantic.bootstrap_backlog import (
     BACKLOG_CHANNEL,
     JACCARD_THRESHOLD,
+    _exclude_bootstrap_consumed,
 )
 from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.representative import prev_action_summary
@@ -173,12 +174,19 @@ def _read_new(
     *,
     weak_signals_path: Optional[Path],
     seen_keys: Set[str],
+    marker_base: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """当該 PJ slug の「新規」未昇格 content-rich weak_signal を返す（#99）。
 
     対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
     チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ除外する。
     新規 = 既読集合（seen_keys）に signal_key が無いもの。promoted / expired は除外。
+
+    #94 非対称是正: bootstrap で「破棄」「TTL 任せ」と人間が判断済み（marker 設置以前に
+    detected）の weak は queue（``fleet.queue_materials``）と同じ predicate
+    （``correction_semantic.bootstrap_backlog._exclude_bootstrap_consumed``）で除外する。
+    さもないと queue は待ち 0 と表示するのに daily_review だけが古い weak を延々確認に
+    出し続ける split-brain になる（learning_consumption_state_split と同型）。
     """
     recs = read_signals(weak_signals_path)
     out: List[Dict[str, Any]] = []
@@ -199,7 +207,7 @@ def _read_new(
         if r.get("signal_key") in seen_keys:
             continue
         out.append(r)
-    return out
+    return _exclude_bootstrap_consumed(out, pj_slug, marker_base=marker_base)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -327,6 +335,7 @@ def build_review(
     max_groups: int = 5,
     exclude_signal_keys: Optional[Set[str]] = None,
     dry_run: bool = False,
+    marker_base: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """前回 evolve 以降の新規 unpromoted weak_signal を idiom 単位 group 化して返す。
 
@@ -357,10 +366,18 @@ def build_review(
     SKILL.md 手順通り Step 6.1（bootstrap まとめて確認）→ Step 6.2（daily）を実行すると同じ
     シグナルを 2 回質問することになるため、bootstrap-pending の signal_key をここで除外する。
     None / 空 set（非 bootstrap run）なら従来通り全件提示する。
+
+    marker_base（#94 非対称是正・テスト注入用）: bootstrap 消化除外（marker 設置以前に
+    detected した weak を落とす）の marker 探索起点。未指定（既定 None）は本番既定パス
+    （``correction_semantic.bootstrap_backlog.default_marker_path`` の DATA_DIR 解決）と
+    同一の挙動になる。marker が存在しない PJ は素通し（除外なし・挙動不変）。
     """
     seen_keys = read_reviewed_keys(seen_path)
     new_records = _read_new(
-        pj_slug, weak_signals_path=weak_signals_path, seen_keys=seen_keys
+        pj_slug,
+        weak_signals_path=weak_signals_path,
+        seen_keys=seen_keys,
+        marker_base=marker_base,
     )
     # #476-3: bootstrap-pending の signal_key を daily から除外し二重提示を防ぐ。
     if exclude_signal_keys:

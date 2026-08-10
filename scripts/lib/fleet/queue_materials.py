@@ -46,42 +46,12 @@ def _aliases_for(slug: str) -> set:
 
 # --- store reader: weak_signals 未処理カウント（PJ 別）-----------------------
 
-
-def _exclude_bootstrap_consumed(
-    recs: List[Dict[str, Any]],
-    pj_slug: str,
-    marker_base: Optional[Path] = None,
-) -> List[Dict[str, Any]]:
-    """bootstrap で判断済み（marker 設置以前に detected）の weak を除外する（#94）。
-
-    bootstrap phase で「破棄」「TTL 任せ」を人間が選ぶと marker が立つが weak_signals.jsonl
-    は不変（破棄＝TTL 自然失効に委ねる意図的設計）。queue はそれを TTL まで material に数え
-    続け待ち件数を膨らませて誤読を誘発するため、marker 設置時刻より前に detected した weak
-    を「判断済み」として落とす。``is_effectively_expired``（#89）と同じ **read 時導出**で、
-    store は書き換えない。marker 設置**後**に溜まった新規 weak は正当な待ちとして残す。
-    detected_at が parse 不能なら安全側で残す（誤って queue から落とさない）。
-    """
-    from correction_semantic.bootstrap_backlog import (
-        bootstrap_done_at,
-        default_marker_path,
-    )
-    from weak_signals.ttl import _parse_iso
-
-    marker_path = (
-        default_marker_path(pj_slug, base=marker_base)
-        if marker_base is not None
-        else None
-    )
-    done_at = bootstrap_done_at(pj_slug, marker_path=marker_path)
-    if done_at is None:
-        return recs
-    out: List[Dict[str, Any]] = []
-    for r in recs:
-        det = _parse_iso(r.get("detected_at"))
-        if det is not None and det < done_at:
-            continue  # marker 以前に検出 → bootstrap で判断済み
-        out.append(r)
-    return out
+# #94 の除外 predicate は ``correction_semantic.bootstrap_backlog`` へ移設済み（daily_review
+# の毎日確認 phase も同じ判定を必要とするため・非対称是正）。ここは単一ソースからの re-export
+# （公開名 ``_exclude_bootstrap_consumed`` を参照する既存コード/テストとの後方互換のため）。
+from correction_semantic.bootstrap_backlog import (  # noqa: E402, F401 (re-export)
+    _exclude_bootstrap_consumed,
+)
 
 
 def _scoped_kept_signals(

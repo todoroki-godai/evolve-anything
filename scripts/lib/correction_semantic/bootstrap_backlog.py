@@ -419,6 +419,43 @@ def mark_done(
     return {"written": True, "dry_run": False, "path": str(marker)}
 
 
+def _exclude_bootstrap_consumed(
+    recs: List[Dict[str, Any]],
+    pj_slug: str,
+    marker_base: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """bootstrap で判断済み（marker 設置以前に detected）の weak を除外する（#94）。
+
+    bootstrap phase で「破棄」「TTL 任せ」を人間が選ぶと marker が立つが weak_signals.jsonl
+    は不変（破棄＝TTL 自然失効に委ねる意図的設計）。queue はそれを TTL まで material に数え
+    続け待ち件数を膨らませて誤読を誘発するため、marker 設置時刻より前に detected した weak
+    を「判断済み」として落とす。``is_effectively_expired``（#89）と同じ **read 時導出**で、
+    store は書き換えない。marker 設置**後**に溜まった新規 weak は正当な待ちとして残す。
+    detected_at が parse 不能なら安全側で残す（誤って queue から落とさない）。
+
+    移設元: ``fleet/queue_materials.py``（#94 実装時点）。daily_review（毎日の y/n 確認）も
+    同じ判定を必要とするため（#94 非対称是正）、fleet より下位層の本モジュールへ移設し
+    ``queue_materials`` / ``daily_review`` 双方がここから import する単一ソースにした。
+    """
+    from weak_signals.ttl import _parse_iso
+
+    marker_path = (
+        default_marker_path(pj_slug, base=marker_base)
+        if marker_base is not None
+        else None
+    )
+    done_at = bootstrap_done_at(pj_slug, marker_path=marker_path)
+    if done_at is None:
+        return recs
+    out: List[Dict[str, Any]] = []
+    for r in recs:
+        det = _parse_iso(r.get("detected_at"))
+        if det is not None and det < done_at:
+            continue  # marker 以前に検出 → bootstrap で判断済み
+        out.append(r)
+    return out
+
+
 def bootstrap_done_at(
     pj_slug: str,
     marker_path: Optional[Path] = None,
