@@ -252,22 +252,22 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     # 集計しており、marker 以前の項目まで「未読・今日の修正確認 phase で昇格可能」と誤案内
     # していた（#112/#117/#159 と同型の reader 取りこぼしが3回目に再発）。
     #
-    # #405 round4 [Must]2 是正: bootstrap 消化除外に加え TTL 失効（#89）も欠けていた。marker
-    # 不在、または marker 設置後に detected してから TTL 失効したレコードは bootstrap 消化
-    # 除外だけでは落ちず、queue/daily が 0 件でもこのセクションだけ「昇格可能」と誤案内
-    # しうる。全 actionable reader の単一 predicate
-    # （``correction_semantic.promote.filter_actionable``）に揃える。reviewed（既読）は
-    # ここでは適用しない — unread はこのセクションが「未昇格のうち未読」を独立軸として
-    # 別途集計するための分離指標であり（#525-1）、reviewed 済み（却下済み含む）も
-    # 「未昇格」総数には残す設計を維持する。current_slug が解決できない場合は bootstrap
-    # marker 探索の基準 slug が無いため bootstrap 除外は適用できないが、TTL 失効は slug
-    # 非依存の predicate なので常に適用する（従来の「除外なし」フォールバックを縮小）。
-    from weak_signals.ttl import is_effectively_expired
-    cur_candidates = [r for r in cur_candidates if not is_effectively_expired(r)]
-
-    if current_slug is not None:
-        from correction_semantic.promote import filter_actionable
-        cur_candidates = filter_actionable(cur_candidates, current_slug, exclude_reviewed=False)
+    # #405 round4 [Must]2 是正: bootstrap 消化除外に加え TTL 失効（#89）も欠けていた。全
+    # actionable reader の単一 predicate（``correction_semantic.promote.filter_actionable``）
+    # に揃える。reviewed（既読）はここでは適用しない — unread はこのセクションが
+    # 「未昇格のうち未読」を独立軸として別途集計するための分離指標であり（#525-1）、
+    # reviewed 済み（却下済み含む）も「未昇格」総数には残す設計を維持する。
+    #
+    # #405 round6 [Must]1 是正: 以前は current_slug が None のとき（bootstrap marker
+    # 探索の基準 slug が無い）filter_actionable を呼べないという理由で、TTL 失効
+    # （is_effectively_expired）だけをここで独自に事前適用する分岐があった。TTL predicate
+    # の仕様が変わった際にこの独自適用だけ追随せず取り残されるリスクがあるため撤去し、
+    # filter_actionable 側の pj_slug=None 契約（promoted/TTL/reviewed は適用・bootstrap
+    # 消化除外のみスキップ）に委譲する。呼び出し側は分岐せず常に1回だけ呼ぶ。
+    from correction_semantic.promote import filter_actionable
+    cur_candidates = filter_actionable(
+        cur_candidates, current_slug, exclude_reviewed=False,
+    )
 
     for r in cur_candidates:
         ch = r.get("channel", "unknown")

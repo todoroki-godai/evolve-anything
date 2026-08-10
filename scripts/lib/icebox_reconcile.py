@@ -166,9 +166,15 @@ def _eval_weak_signals_unprocessed_count(
     review で "却下" と人間が判断済み）を含めたままにする理由がない。daily review で
     rejected と判断されても weak_signal 側の `promoted` は False のままなので、
     reviewed 軸を欠くと marker 設置後に却下された項目**だけ**で閾値（`>= N` 等）が誤って
-    成立しうる。`exclude_reviewed=True` に変更し、既読ストアの読み口は既存の
-    `correction_semantic.daily_review.default_seen_path` を再利用して `data_dir` 起点で
-    解決する（marker_base と同じ流儀・新しい読み方を発明しない・テスト isolation 対応）。
+    成立しうる。`exclude_reviewed=True` に変更した。
+
+    #405 round6 [Must]2 是正: round5 の初回実装は既読ストアを
+    `default_seen_path(base=Path(data_dir))`（canonical の1ファイルのみ）で読んでいたが、
+    weak_signal 側は `dirs`（canonical + legacy の union）を読んでいた。この read 範囲の
+    非対称により、legacy 側で「却下」と判断済みの signal が既読集合に載らず actionable
+    として復活し、round5 [Must]1 で塞いだはずの穴が開き直っていた。既読も weak_signal と
+    同じ `dirs` で union read する（`correction_semantic.daily_review._read_seen_one` を
+    dir ごとに呼ぶ最小追加。新しいストア・新しい読み方は作らない）。
     """
     try:
         from weak_signals.store import STORE_NAME, _read_one
@@ -181,7 +187,7 @@ def _eval_weak_signals_unprocessed_count(
             return a == b
     try:
         from correction_semantic.promote import filter_actionable
-        from correction_semantic.daily_review import default_seen_path
+        from correction_semantic.daily_review import SEEN_STORE_NAME, _read_seen_one
     except ImportError:
         return None
 
@@ -193,6 +199,7 @@ def _eval_weak_signals_unprocessed_count(
 
     records: List[Dict[str, Any]] = []
     seen_keys: set = set()
+    reviewed_keys: set = set()
     for d in dirs:
         for r in _read_one(Path(d) / STORE_NAME):
             k = r.get("signal_key")
@@ -203,11 +210,12 @@ def _eval_weak_signals_unprocessed_count(
             if not _pj_slug_match(r.get("pj_slug"), SELF_PJ_SLUG):
                 continue
             records.append(r)
+        reviewed_keys |= _read_seen_one(Path(d) / SEEN_STORE_NAME)
 
     actionable = filter_actionable(
         records,
         SELF_PJ_SLUG,
-        seen_path=default_seen_path(base=Path(data_dir)),
+        seen_keys=reviewed_keys,
         marker_base=Path(data_dir),
     )
     return float(len(actionable))

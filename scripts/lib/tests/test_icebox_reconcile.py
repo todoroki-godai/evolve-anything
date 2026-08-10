@@ -315,6 +315,50 @@ class TestWeakSignalsEvaluatorUnionRead:
         value = ir.EVALUATORS["weak_signals"]["unprocessed_count"](canonical, {})
         assert value == 1.0
 
+    def test_reviewed_in_legacy_dir_is_excluded_from_actionable(self, tmp_path, monkeypatch):
+        """#405 round6 [Must]2: 既読ストアも weak_signal と同じ dir 集合で union read する。
+
+        weak_signal・既読(rejected) の両方を legacy dir に置いた構成で、read 範囲が
+        weak_signal 側だけ union・既読側は canonical 単一のまま（round5 初回実装のバグ）だと
+        既読が見えず actionable として復活し value=1.0 になる。両方 union read すれば
+        0.0 になる。
+        """
+        import json
+
+        import rl_common
+
+        canonical = tmp_path / "canonical"
+        legacy = tmp_path / "legacy"
+        canonical.mkdir()
+        legacy.mkdir()
+        monkeypatch.setattr(
+            rl_common, "iter_read_data_dirs", lambda canonical=None: [canonical, legacy]
+        )
+        signal_key = "legacy-reviewed-1"
+        with open(legacy / "weak_signals.jsonl", "w", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "promoted": False,
+                        "detected_at": NOW.isoformat(),
+                        "channel": "llm_judge",
+                        "pj_slug": ir.SELF_PJ_SLUG,
+                        "signal_key": signal_key,
+                    }
+                )
+                + "\n"
+            )
+        with open(legacy / "correction_review_seen.jsonl", "w", encoding="utf-8") as f:
+            f.write(
+                json.dumps({
+                    "key": signal_key, "pj_slug": ir.SELF_PJ_SLUG,
+                    "decision": "rejected", "reviewed_at": NOW.isoformat(),
+                })
+                + "\n"
+            )
+        value = ir.EVALUATORS["weak_signals"]["unprocessed_count"](canonical, {})
+        assert value == 0.0
+
 
 class TestTokenUsageEvaluator:
     def test_no_duckdb_returns_none(self, tmp_path, monkeypatch):

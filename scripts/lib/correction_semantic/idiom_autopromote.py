@@ -32,13 +32,14 @@ from typing import Any, Dict, List, Optional
 
 import shrink_freeze
 from correction_semantic.idiom_filter import idiom_eligible
-from correction_semantic.promote import read_unpromoted
+from correction_semantic.promote import filter_actionable
 from correction_semantic.store import (
     _pj_slug_match,
     normalize_idiom_text,
     read_confirmed_idiom_texts,
     read_idioms,
 )
+from weak_signals.store import read_signals
 
 
 def _phys(prov: Dict[str, Any]) -> str:
@@ -107,13 +108,24 @@ def autopromote(
         }
 
     phys_to_idiom = _phys_to_idiom(pj_slug, idioms_path)
-    unpromoted = read_unpromoted(weak_signals_path, channel="llm_judge")
+    # #405 round6 [Should]: 全 actionable reader の単一 predicate
+    # （correction_semantic.promote.filter_actionable）へ統合する。以前は read_unpromoted
+    # （promoted/TTL/既読・却下済みのみ除外）を直接使っており、bootstrap 消化除外（#94）を
+    # 経由しなかった。#379 判断2 で自動昇格自体が凍結中（is_frozen() が先に return するため
+    # 本行より前で抜ける）で実害はないが、凍結解除後に marker 設置以前 detected の
+    # 「判断済み」signal を自動昇格しうる穴を事前に塞ぐ。read（read_signals）と pj_slug
+    # スコープ（alias fold）は従来どおりこの関数の責務のまま維持する（filter_actionable の
+    # 契約: レコードは呼び出し側が既にスコープ済みであること）。
+    llm_judge_signals = [r for r in read_signals(weak_signals_path) if r.get("channel") == "llm_judge"]
+    scoped = [
+        r for r in llm_judge_signals
+        # #46 read 層拡張: legacy weak_signal（旧 slug タグ）も alias で当 PJ として拾う。
+        if _pj_slug_match(r.get("pj_slug"), pj_slug)
+    ]
+    actionable = filter_actionable(scoped, pj_slug)
 
     matched: List[Dict[str, Any]] = []
-    for r in unpromoted:
-        # #46 read 層拡張: legacy weak_signal（旧 slug タグ）も alias で当 PJ として拾う。
-        if not _pj_slug_match(r.get("pj_slug"), pj_slug):
-            continue
+    for r in actionable:
         info = phys_to_idiom.get(_phys(r.get("provenance") or {}))
         if info is None:
             continue

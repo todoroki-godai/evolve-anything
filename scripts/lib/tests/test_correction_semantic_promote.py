@@ -161,6 +161,46 @@ def test_filter_actionable_keeps_genuinely_actionable() -> None:
     assert {r.get("signal_key") for r in out} == {sig.signal_key}
 
 
+def test_filter_actionable_pj_slug_none_skips_bootstrap_but_keeps_other_axes(
+    tmp_path: Path,
+) -> None:
+    """#405 round6 [Must]1: pj_slug=None は bootstrap 消化除外だけをスキップし、
+    promoted / TTL / reviewed の3軸は通常どおり適用する契約を固定する。
+
+    marker が存在しても pj_slug=None なら bootstrap 除外は適用されない（marker 探索の
+    基準が無いため）。一方 TTL 失効・promoted は pj_slug に依存しない軸なので、
+    pj_slug 指定時と同じ結果になる。
+    """
+    now = datetime.now(timezone.utc)
+    fresh = _fresh_detected_at()
+    stale = (now - timedelta(days=46)).isoformat()
+    before_marker = (now - timedelta(days=3)).isoformat()
+
+    pre_marker = _sig("marker前だが pj_slug None なら bootstrap 非適用", 1, before_marker)
+    ttl_expired = _sig("TTL失効は pj_slug 非依存で効く", 2, stale)
+    kept = _sig("残る", 3, fresh)
+    promoted = _sig("昇格済み", 4, fresh, promoted=True)
+
+    marker = tmp_path / f"bootstrap_done-{SLUG}.marker"
+    marker.write_text((now - timedelta(days=1)).isoformat(), encoding="utf-8")
+
+    records = [
+        pre_marker.to_record(), ttl_expired.to_record(),
+        kept.to_record(), promoted.to_record(),
+    ]
+
+    out_no_slug = cs_promote.filter_actionable(records, None, marker_base=tmp_path)
+    # bootstrap 消化除外は効かない（pre_marker は marker 前 detected でも生き残る）が、
+    # TTL・promoted は通常どおり除外される。
+    assert {r.get("signal_key") for r in out_no_slug} == {
+        pre_marker.signal_key, kept.signal_key,
+    }
+
+    # 対照: pj_slug を指定すれば pre_marker は bootstrap 消化除外で落ちる（従来契約）。
+    out_with_slug = cs_promote.filter_actionable(records, SLUG, marker_base=tmp_path)
+    assert {r.get("signal_key") for r in out_with_slug} == {kept.signal_key}
+
+
 def test_promote_writes_human_source_correction(tmp_path: Path) -> None:
     ws = tmp_path / "weak_signals.jsonl"
     corr = tmp_path / "corrections.jsonl"

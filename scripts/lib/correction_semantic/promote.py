@@ -124,7 +124,7 @@ def read_unpromoted(
 
 def filter_actionable(
     records: List[Dict[str, Any]],
-    pj_slug: str,
+    pj_slug: Optional[str],
     *,
     exclude_reviewed: bool = True,
     seen_path: Optional[Path] = None,
@@ -162,6 +162,13 @@ def filter_actionable(
     独立軸として別途集計する場合（例: 「未昇格 N 件（うち未読 M 件）」表示）は False を渡す。
     ``seen_keys`` は呼び出し側が既に読み終えた既読集合をそのまま使う（``_filter_unpromoted``
     を参照。二重 read 回避）。
+
+    ``pj_slug=None`` 契約（#405 round6 [Must]1）: bootstrap marker 探索の基準となる PJ slug が
+    解決できない呼び出し元（例: ``sections_weak_signals`` の current_slug 未解決フォールバック）
+    向けに、promoted / TTL / reviewed の3軸は通常どおり適用しつつ **bootstrap 消化除外だけを
+    スキップ**する。これにより、呼び出し側が「slug 解決可否で分岐し、片方だけ TTL を独自適用
+    する」回避策（TTL predicate の仕様変更に追随しない独自実装の温床）を作らずに済み、常に
+    本関数を単一の呼び出し口にできる。
     """
     out = _filter_unpromoted(
         records,
@@ -170,6 +177,8 @@ def filter_actionable(
         seen_path=seen_path,
         seen_keys=seen_keys,
     )
+    if pj_slug is None:
+        return out
     from correction_semantic.bootstrap_backlog import _exclude_bootstrap_consumed
 
     return _exclude_bootstrap_consumed(out, pj_slug, marker_base=marker_base)
