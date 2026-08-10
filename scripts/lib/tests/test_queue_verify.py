@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import ast
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +37,16 @@ def _opt(human_accepted, run_id, timestamp):
     return {"human_accepted": human_accepted, "run_id": run_id, "timestamp": timestamp}
 
 
+# time bomb 対策: このファイルの一部テストは固定の絶対日付（2026-07-27 の各時刻）を
+# accept レコードの recorded_at/timestamp に使う。``compute_verify_pending`` は
+# VERIFY_PENDING_TTL_DAYS（14日）で read 時失効するため、``now`` を省略して実行時刻
+# （wall clock）に判定させると実行日が14日進むたびに status="none"/run_id=None へ
+# 静かに反転して壊れる（#410 実測: 2026-08-10 09:00 UTC の境界超過で3件が同時に赤化）。
+# 固定レコード日より後・TTL 内に収まる固定 now を明示的に渡し、実行時刻に一切依存させない
+# （``TestVerifyPendingTtl`` が既に確立している「now を明示注入する」流儀を踏襲）。
+_FIXED_NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
+
+
 class TestComputeVerifyPendingStatus:
     def test_no_accept_records_is_none(self):
         out = qv.compute_verify_pending(
@@ -52,6 +64,7 @@ class TestComputeVerifyPendingStatus:
             advisory_records=[_adv("accept", "run1", "2026-07-27T10:00:00+00:00")],
             optimize_records=[],
             exposure_sessions=0,
+            now=_FIXED_NOW,
         )
         assert out["accepted"] == 1
         assert out["run_id"] == "run1"
@@ -62,6 +75,7 @@ class TestComputeVerifyPendingStatus:
             advisory_records=[],
             optimize_records=[_opt(True, "run2", "2026-07-27T10:00:00+00:00")],
             exposure_sessions=3,
+            now=_FIXED_NOW,
         )
         assert out["accepted"] == 1
         assert out["run_id"] == "run2"
@@ -72,6 +86,7 @@ class TestComputeVerifyPendingStatus:
             advisory_records=[_adv("reject", "run1", "2026-07-27T10:00:00+00:00")],
             optimize_records=[],
             exposure_sessions=5,
+            now=_FIXED_NOW,
         )
         assert out["accepted"] == 0
         assert out["status"] == "none"
@@ -81,6 +96,7 @@ class TestComputeVerifyPendingStatus:
             advisory_records=[_adv("accept", "run3", "2026-07-27T10:00:00+00:00")],
             optimize_records=[_opt(True, "run3", "2026-07-27T10:05:00+00:00")],
             exposure_sessions=1,
+            now=_FIXED_NOW,
         )
         assert out["accepted"] == 2
         assert out["run_id"] == "run3"
@@ -154,7 +170,8 @@ class TestLatestRunIdTimestampParsing:
         older = _adv("accept", "run_old", "2026-07-27T09:00:00Z")
         newer = _adv("accept", "run_new", "2026-07-27T09:00:01+00:00")
         out = qv.compute_verify_pending(
-            advisory_records=[older, newer], optimize_records=[], exposure_sessions=1
+            advisory_records=[older, newer], optimize_records=[], exposure_sessions=1,
+            now=_FIXED_NOW,
         )
         assert out["run_id"] == "run_new"
         assert out["accepted"] == 1
@@ -163,7 +180,8 @@ class TestLatestRunIdTimestampParsing:
         older = _adv("accept", "run_old", "2026-07-27T09:00:00+00:00")
         newer = _adv("accept", "run_new", "2026-07-27T10:00:00Z")
         out = qv.compute_verify_pending(
-            advisory_records=[older, newer], optimize_records=[], exposure_sessions=1
+            advisory_records=[older, newer], optimize_records=[], exposure_sessions=1,
+            now=_FIXED_NOW,
         )
         assert out["run_id"] == "run_new"
 
@@ -175,14 +193,22 @@ class TestLatestRunIdTimestampParsing:
             advisory_records=[legacy, older_with_run],
             optimize_records=[],
             exposure_sessions=1,
+            now=_FIXED_NOW,
         )
         assert out["run_id"] == "run_a"
         assert out["accepted"] == 1  # legacy はどちらの集計にも入らない
 
     def test_all_records_without_run_id_is_none(self):
+        """accepts=[] は TTL 判定に到達する前に return するため now 非依存で安全（不変）。
+
+        機能的には now 省略でも安全だが、静的ガード（下記
+        test_no_fixed_iso_date_without_now_kwarg_regression_guard）が例外を持たずに
+        済むよう他の呼び出しと揃えて now を明示する。
+        """
         legacy = _adv("accept", None, "2026-07-27T12:00:00+00:00")
         out = qv.compute_verify_pending(
-            advisory_records=[legacy], optimize_records=[], exposure_sessions=1
+            advisory_records=[legacy], optimize_records=[], exposure_sessions=1,
+            now=_FIXED_NOW,
         )
         assert out == {
             "run_id": None,
@@ -195,10 +221,74 @@ class TestLatestRunIdTimestampParsing:
         bad = _adv("accept", "run_bad", "not-a-timestamp")
         good = _adv("accept", "run_good", "2026-07-27T09:00:00+00:00")
         out = qv.compute_verify_pending(
-            advisory_records=[bad, good], optimize_records=[], exposure_sessions=1
+            advisory_records=[bad, good], optimize_records=[], exposure_sessions=1,
+            now=_FIXED_NOW,
         )
         assert out["run_id"] == "run_good"
         assert out["accepted"] == 1
+
+
+# ─────────────────────────────────────────────────────────────────
+# #410 time bomb 再発防止（静的契約テスト）
+# ─────────────────────────────────────────────────────────────────
+# このファイル自身が「固定の絶対 ISO 日付を compute_verify_pending の accept 記録に渡すのに
+# now= を伴わない」誤りを踏んだ実例（VERIFY_PENDING_TTL_DAYS=14 を実行時刻基準で判定するため、
+# 記録した固定日付から 14 日進むと実行時刻に応じて黙って赤化する。2026-08-10 に3件同時発火）。
+# 新ストア・新 observability section を作らず、既存テストの1関数として同型の再発を検出する
+# （このファイル自身のソースを ``ast`` で静的走査する自己参照テスト）。
+#
+# 検出単位はテスト**関数**（呼び出し引数の字面ではない）: このファイルの実バグ事例
+# （test_unparsable_timestamp_excluded 等）は accept レコードを ``good = _adv(..., "2026-...")``
+# のように呼び出しの**手前**で変数に組み立ててから渡す書き方が大半で、呼び出し引数の字面だけを
+# 見る素朴な文字列スキャンでは日付リテラルを取りこぼす（実測: paren 深さで引数ブロックだけを
+# 抽出する試作版は、まさにこのファイルの主要な違反パターンを検出できなかった）。関数本体全体に
+# 固定 ISO 日付リテラルが1つでもあれば、その関数内の compute_verify_pending 呼び出し全てに
+# now= キーワードを要求する。
+_ISO_DATE_LITERAL_RE = re.compile(r"^202\d-\d{2}-\d{2}T")
+
+
+def _is_compute_verify_pending_call(node: "ast.AST") -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "compute_verify_pending"
+    )
+
+
+def test_no_fixed_iso_date_without_now_kwarg_regression_guard() -> None:
+    """compute_verify_pending への呼び出しが固定 ISO 日付リテラルを使う関数なら now= も伴うこと。
+
+    このファイル自身のソースを ``ast`` で静的走査する（新規テストが同じ誤りを再導入したら
+    赤くする）。テスト対象は本ファイル限定（他の TTL コンポーネント — weak_signals/
+    evolve_decisions/triage_ledger/icebox 系 — の既存テストは #410 是正時に横断調査済みで、
+    いずれも相対日付（``datetime.now(timezone.utc) - timedelta(...)``）か固定 now とのペアで
+    安全と確認済み。汎用の全ファイル走査は過剰と判断しこのファイルに閉じた最小ガードに留める）。
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    offenders: "list[str]" = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        calls = [n for n in ast.walk(node) if _is_compute_verify_pending_call(n)]
+        if not calls:
+            continue
+        has_fixed_date = any(
+            isinstance(n, ast.Constant)
+            and isinstance(n.value, str)
+            and _ISO_DATE_LITERAL_RE.match(n.value)
+            for n in ast.walk(node)
+        )
+        if not has_fixed_date:
+            continue
+        if any(not any(kw.arg == "now" for kw in call.keywords) for call in calls):
+            offenders.append(node.name)
+
+    assert not offenders, (
+        "固定 ISO 日付リテラルを使う関数なのに now= を伴わない compute_verify_pending 呼び出しを"
+        f"検出しました（time bomb・#410 再発）: {offenders}"
+    )
 
 
 class TestExposureSessionsSinceLatestAccept:
