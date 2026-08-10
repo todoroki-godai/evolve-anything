@@ -164,8 +164,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/world_context.py" --load --slug "$SLU
 
 ```bash
 evolve-usage-log "evolve"
-PJ="$(pwd)"  # 対象 PJ の絶対パス。以降このスキル手順内の全 --project-dir が参照する唯一の束縛点
-             # （バッチ経路 #400 本体では queue の project_path をこの行に代入する差し替えだけで対応できる）
+PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス。bash は呼び出しごとに独立プロセスのため、$PJ を使う
+                     # 全ブロックの冒頭でこの行を置く（env の PJ があれば優先・無ければ cwd。
+                     # バッチ経路 #400 本体では呼び出し側が PJ を env で渡すだけで対応できる）
 OUT="$(evolve --project-dir "$PJ" --print-out-path)"
 evolve --project-dir "$PJ" --dry-run --observe-first --output "$OUT"
 ```
@@ -248,7 +249,7 @@ reflect は独立フェーズではなく discover に統合済み。discover �
 → 3択の副作用詳細・multiSelect/per-group フロー・`mark_done` コードは **[references/correction-review.md](references/correction-review.md)**。
 
 ### Step 6.2: 今日の修正確認（daily_review・#446）
-`result.correction_review.daily.eligible == True` のとき、前回以降の新規 weak_signal（最大5件）を AskUserQuestion で y/n 確認する（MUST — 最大5問を1バッチで）。「はい」→ `evolve-reflect --project-dir "$PJ" --promote-weak` で昇格 + `record_reviewed(decision="promoted")`、「いいえ」→ `record_reviewed(decision="rejected")`。Step 6.1 の bootstrap 対象は自動的に除外されるため二重提示しない（#476-3）。
+`result.correction_review.daily.eligible == True` のとき、前回以降の新規 weak_signal（最大5件）を AskUserQuestion で y/n 確認する（MUST — 最大5問を1バッチで）。「はい」→ `PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --promote-weak` で昇格 + `record_reviewed(decision="promoted")`、「いいえ」→ `record_reviewed(decision="rejected")`。Step 6.1 の bootstrap 対象は自動的に除外されるため二重提示しない（#476-3）。
 → 判定条件・AskUserQuestion テンプレ・コードは **[references/correction-review.md](references/correction-review.md)**。
 
 ### Step 6.5: auto-memory キュー drain（2相, [ADR-037] Phase 2）
@@ -283,8 +284,7 @@ Step 3.8 で surface した `observability.glossary_drift` の `用語集未作�
 fitness calibration の母集団 `optimize_history` を日次 evolve ループで育てるステップ。Step 3 の承認・適用フロー完了後、分析が `--dry-run` だったか否かに関わらず**必ず**以下の単一コマンドを実行する（MUST）。**Step 6.6 で responses ファイルを保存した場合は `--correction-responses <path>` も付ける（MUST）**:
 
 ```bash
-PJ="$(pwd)"  # Step 1 と同一の束縛（bash プロセスは呼び出しごとに独立するため各ブロックで再束縛する。
-             # バッチ経路 #400 本体では Step 1 と同じ差し替えをここにも適用する）
+PJ="${PJ:-$(pwd)}"  # Step 1 と同一の束縛（bash は呼び出しごとに独立プロセスのため各ブロックで再束縛する）
 OUT="$(evolve --project-dir "$PJ" --print-out-path)"
 evolve --project-dir "$PJ" --drain --result-json "$OUT"
 # Step 6.6 で /tmp/rl_correction_responses_<slug>.json を保存した場合のみ追加:

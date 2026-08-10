@@ -146,12 +146,16 @@ proposal_text = ingest_split(issue, emit["requests"], responses)
 
 ```python
 import os, sys
+from pathlib import Path
 _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from remediation.suppression_ledger import record_rejection, resolve_slug
 from rule_violation_lane import rule_violation_suppression_issue
 
-slug = resolve_slug()
+# result は Step 1 で Read した $OUT の JSON。resolve_slug() を無引数で呼ぶと cwd から
+# slug を解決し、単一 cwd から他 PJ の issue を渡すバッチ経路（#400）で dismiss が cwd 側
+# PJ の suppression ledger に誤記録される。解析対象 PJ を明示する。
+slug = resolve_slug(cwd=Path(result["project_dir"]))
 # (a) proposable_global の issue dict を dismiss（classified.proposable_global[] の要素）
 for issue in dismissed_global_issues:
     record_rejection(issue, slug=slug)
@@ -166,13 +170,16 @@ for v in dismissed_rule_violations:  # phases.discover.rule_violation_observed[]
 
 ```python
 import os, sys
+from pathlib import Path
 _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from remediation.suppression_ledger import record_rejection, resolve_slug
 
 # rejected_issues = ユーザーが却下/スキップした issue dict のリスト（個別承認で不採用にしたもの）
 # dry_run = True のときは下のループを実行しない（MUST NOT — suppression ledger に書かない）
-slug = resolve_slug()  # worktree 安全 slug（git-common-dir の親 basename）
+# result は Step 1 で Read した $OUT の JSON。無引数 resolve_slug() は cwd から解決するため、
+# 単一 cwd から他 PJ の issue を渡すバッチ経路（#400）で却下記録が cwd 側 PJ に誤って書かれる。
+slug = resolve_slug(cwd=Path(result["project_dir"]))  # worktree 安全 slug（git-common-dir の親 basename）
 for issue in rejected_issues:
     record_rejection(issue, slug=slug)  # dedup_key 単位・TTL45日で記録（last-write-wins）
 print(f"suppression ledger: {len(rejected_issues)} 件を却下記録（次回 evolve で再提示しない）")

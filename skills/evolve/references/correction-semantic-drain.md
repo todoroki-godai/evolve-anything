@@ -21,7 +21,9 @@ sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 import rl_common
 from correction_semantic import batch as cs_batch
 
-slug = rl_common.project_name_from_dir(os.environ.get("CLAUDE_PROJECT_DIR", ""))
+# result は Step 1 で Read した $OUT の JSON。env CLAUDE_PROJECT_DIR は未設定/空文字になりうる
+# うえ、単一 cwd から他 PJ の project_dir を渡すバッチ経路（#400）では実行元 PJ を指してしまう。
+slug = rl_common.project_name_from_dir(result["project_dir"])
 emitted = cs_batch.emit_judgement_requests(slug)
 
 if emitted["unjudged"] == 0:
@@ -74,8 +76,10 @@ print(f"correction_semantic responses: {resp_path}")
 1 フラグを追加する:
 
 ```bash
-OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
-evolve --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_responses_<slug>.json
+PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（env の PJ があれば優先・無ければ cwd。バッチ経路 #400 本体では
+                     # 呼び出し側が PJ を env で渡すだけで対応できる）
+OUT="$(evolve --project-dir "$PJ" --print-out-path)"
+evolve --project-dir "$PJ" --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_responses_<slug>.json
 ```
 
 drain 側は `emit_judgement_requests(slug)` を再実行して `emitted` を再構成し

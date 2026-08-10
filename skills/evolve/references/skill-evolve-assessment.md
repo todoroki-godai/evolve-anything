@@ -14,7 +14,9 @@ import os, sys
 sys.path.insert(0, os.path.join(os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd(), "scripts", "lib"))
 from pathlib import Path
 from skill_evolve import emit_judgment_requests, ingest_judgment_scores
-proj = Path.cwd()
+# result は Step 1 で Read した $OUT の JSON。Path.cwd() は単一 cwd から他 PJ の評価対象を
+# 渡すバッチ経路（#400）で judgment_complexity キャッシュを cwd 側 PJ に誤って書き込む。
+proj = Path(result["project_dir"])
 skill_dirs = [...]  # 評価対象スキルの SKILL.md 親ディレクトリ群
 emit = emit_judgment_requests(proj, skill_dirs)  # static / 欠落のみ emit
 # emit["requests"] の各 prompt を Phase B でインライン採点（claude -p なし＝subscription 課金）し、
@@ -56,8 +58,9 @@ ingest_judgment_scores(proj, emit["requests"], responses)
    "
    ```
 4. 「今回のみスキップ」と「永続スキップ」の両方のスキル名を `--skip-skills` に渡し、**必ず `--confirmed-batch` を付けて** 再実行する（`--confirmed-batch` がないと guard が再発火する）。**インストール時に PATH に入る `evolve` ラッパーを使う**（`evolve.py` の実パスを glob 探索しない — #395）:
-   ```
-   evolve --confirmed-batch [--skip-skills=skill-a,skill-b] --output "$OUT" [既存の引数]
+   ```bash
+   PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（Step 1 と同一の束縛。bash は呼び出しごとに独立プロセスのため再束縛する）
+   evolve --project-dir "$PJ" --confirmed-batch [--skip-skills=skill-a,skill-b] --output "$OUT" [既存の引数]
    ```
    （`evolve` は `skills/evolve/scripts/evolve/`（パッケージ）の `main` を呼ぶ薄いラッパー。PATH に無い特殊環境でのみ
    `PYTHONPATH=<plugin_root>/scripts/lib:<plugin_root>/skills/evolve/scripts python3 -m evolve ...` を直接叩く（#531 でパッケージ化したため旧 `evolve.py` 直叩きは不可）。Step 1 同様 `--output` 必須で、

@@ -75,9 +75,11 @@ emit は #379 Step 4 で growth-journal harness ごと削除済み・元は3項�
 
 ```bash
 # $OUT は Step 1 の dry-run が --output に書いた result JSON（/tmp/rl_evolve_<slug>.json）。
-# Bash 呼び出しは別シェルなので $OUT を再導出してから渡す（#525-3）。
-OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
-evolve --drain --result-json "$OUT"
+# Bash 呼び出しは別シェルなので $OUT/$PJ を再導出してから渡す（#525-3）。
+PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（env の PJ があれば優先・無ければ cwd。バッチ経路 #400 本体では
+                     # 呼び出し側が PJ を env で渡すだけで対応できる）
+OUT="$(evolve --project-dir "$PJ" --print-out-path)"
+evolve --project-dir "$PJ" --drain --result-json "$OUT"
 ```
 
 - `evolve --drain` は marker（`emit_decisions` が `--dry-run` でも記録した `before_sha` 付き
