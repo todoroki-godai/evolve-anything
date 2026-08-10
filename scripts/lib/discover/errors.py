@@ -108,16 +108,22 @@ def detect_repeated_correction_patterns(
 
 
 def detect_rejection_patterns(
-    threshold: int = 3, *, history_file: Optional[Path] = None
+    threshold: int = 3,
+    *,
+    history_file: Optional[Path] = None,
+    project_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """繰り返し却下理由の検出（rejection_reason、3+閾値）。
 
     accept/reject 履歴は ADR-031 で DATA_DIR/optimize_history/<slug>.jsonl に集約。
-    history_file 未指定時は store 経由で current project slug を解決して読む。
+    history_file 未指定時は store 経由で slug を解決して読む。project_root が指定されて
+    いればその slug（単一 cwd から他 PJ の project_dir を渡すバッチ経路で対象 PJ を正しく
+    解決する・#400）、未指定なら従来どおり cwd から解決する。history_file 明示指定は
+    project_root より優先する（後方互換）。
     """
     if history_file is None:
         import optimize_history_store as store  # scripts/lib は __init__ で sys.path 済み
-        history_file = store.history_path(store.resolve_slug())
+        history_file = store.history_path(store.resolve_slug(project_root))
     records = load_jsonl(history_file)
 
     counter: Counter = Counter()

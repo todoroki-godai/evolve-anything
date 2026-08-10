@@ -228,7 +228,7 @@ class TestRunDiscoverRuleViolationExamplesTruncate:
 
         monkeypatch.setattr(discover, "detect_behavior_patterns", lambda **kw: [])
         monkeypatch.setattr(discover, "detect_error_patterns", lambda **kw: [])
-        monkeypatch.setattr(discover, "detect_rejection_patterns", lambda: [])
+        monkeypatch.setattr(discover, "detect_rejection_patterns", lambda **kw: [])
         monkeypatch.setattr(discover, "load_claude_reflect_data", lambda: [])
         monkeypatch.setattr(discover, "detect_missed_skills", lambda **kw: {"missed": [], "message": ""})
         monkeypatch.setattr(discover, "detect_recommended_artifacts", lambda **kw: [])
@@ -248,3 +248,31 @@ class TestRunDiscoverRuleViolationExamplesTruncate:
         assert len(violations) == 1
         for ex in violations[0].get("examples", []):
             assert "\n" not in ex, f"example contains newline: {ex!r}"
+
+    def test_project_root_threaded_into_detect_rejection_patterns(self, tmp_path, monkeypatch):
+        """run_discover(project_root=...) が detect_rejection_patterns に project_root を貫通させること
+        （#400 cwd-leak 修理: 従来は引数なしで呼ばれ、対象 PJ でなく cwd の履歴が混入していた）。
+        """
+        import lib.discover as discover
+
+        monkeypatch.setattr(discover, "detect_behavior_patterns", lambda **kw: [])
+        monkeypatch.setattr(discover, "detect_error_patterns", lambda **kw: [])
+        received = {}
+
+        def _fake_detect_rejection_patterns(**kw):
+            received.update(kw)
+            return []
+
+        monkeypatch.setattr(discover, "detect_rejection_patterns", _fake_detect_rejection_patterns)
+        monkeypatch.setattr(discover, "load_claude_reflect_data", lambda: [])
+        monkeypatch.setattr(discover, "detect_missed_skills", lambda **kw: {"missed": [], "message": ""})
+        monkeypatch.setattr(discover, "detect_recommended_artifacts", lambda **kw: [])
+        monkeypatch.setattr(discover, "detect_installed_artifacts", lambda **kw: [])
+        monkeypatch.setattr(discover, "determine_scope", lambda p: "global")
+        monkeypatch.setattr(discover, "_enrich_patterns", lambda patterns, **kw: {"matched_skills": [], "unmatched_patterns": []})
+
+        pj_b = tmp_path / "pj-b"
+        pj_b.mkdir()
+        discover.run_discover(project_root=pj_b)
+
+        assert received.get("project_root") == pj_b

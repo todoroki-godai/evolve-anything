@@ -197,7 +197,7 @@ def run_discover(
     errors = detect_error_patterns(
         project_root=project_root, include_unknown=include_unknown,
     )
-    rejections = detect_rejection_patterns()
+    rejections = detect_rejection_patterns(project_root=project_root)
 
     result: Dict[str, Any] = {
         "behavior_patterns": behavior,

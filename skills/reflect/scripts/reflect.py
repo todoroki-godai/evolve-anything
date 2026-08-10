@@ -771,10 +771,14 @@ def main():
                         help="指定 idiom_key の自動昇格を取り消す（ADR-047 安全弁③・confirmed=False + corrections invalidate）")
     parser.add_argument("--idioms-file", type=str, default=None,
                         help="correction_idioms.jsonl のパス（テスト用）")
+    parser.add_argument("--project-dir", type=str, default=None,
+                        help="対象プロジェクトディレクトリ（明示指定。優先順位: 本フラグ > "
+                             "env CLAUDE_PROJECT_DIR > cwd。単一 cwd から他 PJ の project_dir を"
+                             "渡すバッチ経路 — evolve-fleet propose 等 — で project_path の混入を防ぐ・#400）")
     args = parser.parse_args()
 
     corrections_file = Path(args.corrections_file) if args.corrections_file else CORRECTIONS_FILE
-    current_project = os.environ.get("CLAUDE_PROJECT_DIR")
+    current_project = args.project_dir or os.environ.get("CLAUDE_PROJECT_DIR")
     project_root = Path(current_project) if current_project else Path.cwd()
     weak_signals_file = Path(args.weak_signals_file) if args.weak_signals_file else None
     idioms_file = Path(args.idioms_file) if args.idioms_file else None
