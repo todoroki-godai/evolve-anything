@@ -1,6 +1,6 @@
 # SPEC.md — evolve-anything
 
-Last updated: 2026-08-02 by /spec-keeper update (recovery) — #352/#353（icebox 3レーン決定論分類 `icebox_reconcile`）を Recent Changes に反映。構造対応: `spec/components-fleet.md` が単一ファイル閾値（>100KB）超過のため daily-evolve パイプライン + icebox 棚卸しを `spec/components-daily.md` へ分割、SPEC.md 本体が hot 閾値（>35KB）超過のため Observe/報酬信号レイヤー詳細を `spec/architecture.md`、Key Design Decisions の ADR 履歴（ADR-051 以前）を `spec/key-design-decisions.md` へ cold 移動。Key Design Decisions の最新を ADR-052（Claude Code primary / Codex opt-in executor lanes）へ更新。前回: 2026-07-31 #309/#267/#279/#283/#284/#286/#287/#290/#275/#277/#268 反映
+Last updated: 2026-08-10 by /spec-keeper update — #379 Step 4「段階削除」完走を反映（PR #395-#399: detect-deferred-task / judge_audit / quality-scores / growth-journal の各 harness 削除 + 戦果ボード `results_board.py` 置換 + 未登録 live store 11件の宣言バックフィル・StoreKind "json" 新設・store_write の kind=json reject ガード。dead ストア 0件）。hot の成長可視化行は PR #398 内で更新済み、cold は `spec/components-observability.md`（store_registry / store_write）を本 update で追随。#379 close 済み・残ギャップは #400/#401/#402 へ引き継ぎ。前回: 2026-08-02 (recovery) #352/#353 反映 + L2 cold 分割
 
 ## Overview
 
