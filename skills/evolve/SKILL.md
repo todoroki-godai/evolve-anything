@@ -282,9 +282,9 @@ fitness calibration の母集団 `optimize_history` を日次 evolve ループ�
 
 ```bash
 OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
-evolve --drain --result-json "$OUT"
+evolve --project-dir "$(pwd)" --drain --result-json "$OUT"
 # Step 6.6 で /tmp/rl_correction_responses_<slug>.json を保存した場合のみ追加:
-evolve --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_responses_<slug>.json
+evolve --project-dir "$(pwd)" --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_responses_<slug>.json
 ```
 
 （上の2行は排他 — responses ファイルが無ければ1行目だけを1回実行する。両方実行して二重 drain する必要はない。）
