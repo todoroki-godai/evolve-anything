@@ -60,18 +60,26 @@ def _scoped_kept_signals(
     weak_signals_path: Optional[Path],
     marker_base: Optional[Path],
 ) -> List[Dict[str, Any]]:
-    """pj_slug scope + bootstrap 消化除外を通した未処理 weak レコードを返す（共有 helper）。
+    """pj_slug scope + actionable 除外を通した未処理 weak レコードを返す（共有 helper）。
 
     ``weak_unprocessed_by_pj`` / ``weak_content_poor_by_pj`` /
     ``bootstrap_consumed_by_pj`` が同じ read/scope/除外パスを通すための単一ソース
     （partial fix で reader が食い違うのを避ける）。channel フィルタは呼び側で行う。
-    """
-    from correction_semantic.promote import read_unpromoted
 
-    recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
+    #405 round5 [Must]2 是正: promoted/TTL失効/既読・却下済み/bootstrap消化済みの4軸を
+    ``correction_semantic.promote.filter_actionable``（全 actionable reader の単一
+    predicate）経由で適用する。read（``read_signals``）と pj_slug スコープ（alias fold）は
+    従来どおりこの関数の責務のまま維持する（filter_actionable の契約：レコードは呼び出し側が
+    既にスコープ済みであること）。挙動は不変（``read_unpromoted`` の既定 exclude_reviewed=True
+    を暗黙に使っていた従来実装と同じ default を ``filter_actionable`` も持つ）。
+    """
+    from correction_semantic.promote import filter_actionable
+    from weak_signals.store import read_signals
+
+    recs = read_signals(weak_signals_path)
     aliases = _aliases_for(pj_slug)
     scoped = [r for r in recs if r.get("pj_slug") in aliases]
-    return _exclude_bootstrap_consumed(scoped, pj_slug, marker_base=marker_base)
+    return filter_actionable(scoped, pj_slug, marker_base=marker_base)
 
 
 def weak_unprocessed_by_pj(

@@ -42,6 +42,16 @@ bootstrap消化済み(#94) の除外軸の一部が抜けていた。全 actiona
 signal_key 集合の一致（件数だけでなく「どのレコードが生き残ったか」）として検証する。
 ``sections_capture._llm_judge_count``（raw・promoted 含む）はこの拡張後も対象外のまま
 （観測値としての意味を変えない設計は #94 から不変）。
+
+**#405 round5 是正**: round4 では ``filter_actionable`` を通っていたのは上記3箇所だけで、
+``fleet.queue_materials._scoped_kept_signals`` と ``correction_semantic.daily_review._read_new``
+は独自実装（``read_unpromoted`` + ``_exclude_bootstrap_consumed`` の個別合成）のまま残って
+おり、除外軸が増えるたびにまた分裂しうる構造だった（round1→5 で同型の非対称が5回露出）。
+この2箇所も ``filter_actionable`` へ差し替え、**全5 reader**が単一 predicate を経由するように
+した（[Must]2）。加えて ``icebox_reconcile._eval_weak_signals_unprocessed_count`` は既読/却下
+済み軸（#185）を持っていなかった（[Must]1・`exclude_reviewed=True` へ変更）。契約テストは
+既読/却下済みレコードを含む fixture（[Should]2）と、件数 API（capture/icebox/section）向けの
+差分（mutation）検査（[Should]1）で強化した。
 """
 from __future__ import annotations
 
@@ -244,23 +254,30 @@ def test_default_marker_base_resolves_production_data_dir(tmp_path: Path, monkey
 
 
 # ─────────────────────────────────────────────────────────────────
-# #405 round4 是正: capture / weak_signals section / icebox_reconcile を含む
-# 全 actionable reader の合意（TTL失効 + bootstrap消化除外）
+# #405 round4/round5 是正: queue / daily_review / capture / weak_signals section /
+# icebox_reconcile の全5 reader の合意（TTL失効 + 既読・却下済み + bootstrap消化除外）
 # ─────────────────────────────────────────────────────────────────
 def test_all_actionable_readers_agree_on_ttl_and_bootstrap_exclusion(
     tmp_path: Path, monkeypatch
 ):
-    """queue / daily_review / capture / weak_signals section / icebox_reconcile の
-    actionable 母集団が、TTL失効(#89)・bootstrap消化除外(#94) の両軸について一致することを
-    signal_key 集合（件数だけでなく「どのレコードが生き残ったか」）で検証する（round3 の
-    「件数だけだと真逆の実装が通る」指摘を踏襲）。
+    """5 reader（queue / daily_review / capture / weak_signals section / icebox_reconcile）
+    の actionable 母集団が、TTL失効(#89)・既読/却下済み(#185)・bootstrap消化除外(#94) の
+    3軸について一致することを検証する。
 
-    3種のレコードを用意し、各 reader が同じ1件（actionable）だけを残すことを確認する:
+    4種のレコードを用意し、各 reader が同じ1件（actionable）だけを残すことを確認する:
       - pre_marker: marker 設置以前に detected（bootstrap で判断済み）かつ TTL 超過
         （両軸のどちらでも落ちる）
       - ttl_only_expired: marker 設置**後**に detected（bootstrap 消化除外は適用されない）
         だが TTL（45日）超過 — TTL 軸単独の除外を検証する
-      - actionable: marker 設置後・TTL 内 — 唯一生き残るべきレコード
+      - reviewed_rejected: marker 設置後・TTL 内だが既読ストアに rejected 記録済み
+        — 既読/却下済み軸単独の除外を検証する（#405 round5 [Should]2）
+      - actionable: marker 設置後・TTL 内・未読 — 唯一生き残るべきレコード
+
+    識別性（round3/round5 [Should]1）: queue/daily_review は record 実体（signal_key 集合）で
+    直接検証する。capture/icebox/section は件数しか返さない API のため、「actionable レコード
+    だけを取り除いた版」で再計測し、件数が期待どおり減ることを確認する差分（mutation）検査で
+    「たまたま件数が一致した誤実装」を弾く（件数だけだと真逆の実装が通る、という round3 指摘
+    への対応）。
     """
     import icebox_reconcile as ir
     from audit.sections_capture import _llm_judge_actionable_count, _llm_judge_count
@@ -276,6 +293,7 @@ def test_all_actionable_readers_agree_on_ttl_and_bootstrap_exclusion(
 
     now = datetime.now(timezone.utc)
     store = tmp_path / "weak_signals.jsonl"  # production union read の canonical 実体でもある
+    seen_store = tmp_path / "correction_review_seen.jsonl"  # 同上（既読ストア）
 
     def _isig(text: str, line_no: int, detected_at: str) -> WeakSignal:
         return WeakSignal(
@@ -288,12 +306,23 @@ def test_all_actionable_readers_agree_on_ttl_and_bootstrap_exclusion(
 
     pre_marker = _isig("marker前かつTTL超", 1, (now - timedelta(days=120)).isoformat())
     ttl_only_expired = _isig("marker後だがTTL失効", 2, (now - timedelta(days=50)).isoformat())
-    actionable = _isig("actionable", 3, (now - timedelta(hours=1)).isoformat())
-    append_signals([pre_marker, ttl_only_expired, actionable], path=store)
+    reviewed_rejected = _isig("marker後・TTL内・既読却下済み", 3, (now - timedelta(hours=2)).isoformat())
+    actionable = _isig("actionable", 4, (now - timedelta(hours=1)).isoformat())
+    all_records = [pre_marker, ttl_only_expired, reviewed_rejected, actionable]
+    append_signals(all_records, path=store)
 
     _write_marker(tmp_path, islug, (now - timedelta(days=100)).isoformat())
+    import json as _json
+    seen_store.write_text(
+        _json.dumps({
+            "key": reviewed_rejected.signal_key, "pj_slug": islug,
+            "decision": "rejected", "reviewed_at": now.isoformat(),
+        }) + "\n",
+        encoding="utf-8",
+    )
 
-    # queue: record 実体で actionable のみ残ることを直接検査する。
+    # queue: record 実体で actionable のみ残ることを直接検査する（#405 round5 [Must]2:
+    # queue も filter_actionable 経由になったため既読/却下済み軸も効く）。
     kept = queue_materials._scoped_kept_signals(
         islug, weak_signals_path=store, marker_base=tmp_path
     )
@@ -301,30 +330,52 @@ def test_all_actionable_readers_agree_on_ttl_and_bootstrap_exclusion(
 
     # daily_review: 新規 group の signal_keys が actionable のみ。
     res = dr.build_review(
-        islug,
-        weak_signals_path=store,
-        seen_path=tmp_path / "correction_review_seen.jsonl",
-        marker_base=tmp_path,
+        islug, weak_signals_path=store, seen_path=seen_store, marker_base=tmp_path,
     )
     daily_keys = {k for g in res["groups"] for k in g["signal_keys"]}
     assert daily_keys == {actionable.signal_key}
 
     # capture: production union read（CLAUDE_PLUGIN_DATA は root conftest が tmp_path に
     # 隔離済み・rl_common.DATA_DIR も per-test に rebase 済みのため store をそのまま拾う）。
-    # raw（_llm_judge_count）は除外されず 3 件のまま、actionable は 1 件だけに絞られることを
+    # raw（_llm_judge_count）は除外されず 4 件のまま、actionable は 1 件だけに絞られることを
     # 対で確認する（「actionable からは消えるが raw 表示からは消えない」を実測する）。
-    assert _llm_judge_count(proj) == 3
+    # #405 round5 [Must]1: icebox も既読/却下済み軸を持つようになったため capture と揃う。
+    assert _llm_judge_count(proj) == 4
     assert _llm_judge_actionable_count(proj) == 1
 
-    # icebox_reconcile: 同じ predicate 経由で 1.0 のみ残る。
+    # icebox_reconcile: 同じ predicate 経由で 1.0 のみ残る（既読/却下済み軸も効く）。
     icebox_value = ir.EVALUATORS["weak_signals"]["unprocessed_count"](tmp_path, {})
     assert icebox_value == 1.0
 
-    # weak_signals section: 全PJ生総数（raw）は 3 のまま、当PJ未昇格（actionable）は 1。
+    # weak_signals section: 全PJ生総数（raw）は 4 のまま。当PJ未昇格（unpromoted）は
+    # reviewed（却下済み）を除外しない設計（#525-1）なので reviewed_rejected + actionable の
+    # 2 件、うち未読（unread）は既読ストアで除外され actionable の 1 件のみ。
     section = build_weak_signals_section(proj)
     assert section is not None
     body = "\n".join(section)
-    assert "全PJ 3 / 当PJ未昇格 1" in body
+    assert "全PJ 4 / 当PJ未昇格 2" in body
+    assert "当PJ未昇格 2 件（うち未読 1 件）" in body
+
+    # ── 識別性検査（round3/round5 [Should]1）: actionable レコードだけを取り除いた版で
+    # capture / icebox / section を再計測し、件数が期待どおり 0 側へ落ちることを確認する。
+    # 「たまたま件数だけ一致した誤実装」（例: reviewed_rejected を誤って残す代わりに
+    # actionable を誤って落とす実装）は、この差分検査で検出できる。
+    store.unlink()
+    append_signals([pre_marker, ttl_only_expired, reviewed_rejected], path=store)
+
+    assert _llm_judge_count(proj) == 3
+    assert _llm_judge_actionable_count(proj) == 0
+
+    icebox_value_without_actionable = ir.EVALUATORS["weak_signals"]["unprocessed_count"](
+        tmp_path, {}
+    )
+    assert icebox_value_without_actionable == 0.0
+
+    section_without_actionable = build_weak_signals_section(proj)
+    assert section_without_actionable is not None
+    body_without_actionable = "\n".join(section_without_actionable)
+    assert "全PJ 3 / 当PJ未昇格 1" in body_without_actionable
+    assert "当PJ未昇格 1 件（うち未読 0 件）" in body_without_actionable
 
 
 def test_icebox_lane_not_falsely_met_from_bootstrap_consumed_only(tmp_path: Path):

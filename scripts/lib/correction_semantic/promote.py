@@ -55,6 +55,7 @@ def _filter_unpromoted(
     exclude_expired: bool = True,
     exclude_reviewed: bool = True,
     seen_path: Optional[Path] = None,
+    seen_keys: Optional[Set[str]] = None,
 ) -> List[Dict[str, Any]]:
     """promoted / TTL失効 / 既読・却下済みの3軸を適用する（``read_unpromoted`` と
     ``filter_actionable`` の共有 predicate。#405 round4 是正で分離・単一ソース化）。
@@ -72,15 +73,22 @@ def _filter_unpromoted(
     フラグを立てない（却下＝昇格しない、が正しい仕様）ため、これを見ないと reject 済みの
     signal が永遠に残り「reject しても件数が減らない」非対称が起きる。TTL 失効（#89）と
     同じ **read 時導出**方針（forward write に頼らない）。``seen_path`` はテスト isolation
-    用の明示パス（未指定は既読ストアの production 既定＝union read）。
+    用の明示パス（未指定は既読ストアの production 既定＝union read）。``seen_keys`` を渡すと
+    既読ストアの read をスキップしてそのまま使う（#405 round5 [Must]2: daily_review が
+    ``build_review`` で既に読んだ既読集合を ``reviewed_keys_count`` 表示用に保持しており、
+    ``filter_actionable`` へ委譲する際に二重 read を避けるため）。``seen_keys`` 指定時は
+    ``seen_path`` は無視する。
     """
     out = [r for r in records if not r.get("promoted")]
     if exclude_expired:
         out = [r for r in out if not is_effectively_expired(r)]
     if exclude_reviewed:
-        from correction_semantic.daily_review import read_reviewed_keys
+        if seen_keys is not None:
+            seen = seen_keys
+        else:
+            from correction_semantic.daily_review import read_reviewed_keys
 
-        seen = read_reviewed_keys(seen_path)
+            seen = read_reviewed_keys(seen_path)
         if seen:
             out = [r for r in out if r.get("signal_key") not in seen]
     return out
@@ -120,6 +128,7 @@ def filter_actionable(
     *,
     exclude_reviewed: bool = True,
     seen_path: Optional[Path] = None,
+    seen_keys: Optional[Set[str]] = None,
     marker_base: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """指定 PJ に**既にスコープ済み**の weak_signal レコード群から actionable 分だけ返す。
@@ -129,7 +138,13 @@ def filter_actionable(
     （``icebox_reconcile._eval_weak_signals_unprocessed_count``）の3箇所が、それぞれ別々に
     「actionable（行動を促す・閾値判定に使う）」母集団を組み立てており、除外軸の一部が
     欠落する非対称が3回連続で見つかった（TTL失効・既読/却下済み・bootstrap消化済みの
-    組み合わせが reader ごとに違った）。本関数を全 actionable reader の単一ソースにする。
+    組み合わせが reader ごとに違った）。
+
+    round5 [Must]2 是正: round4 では上記3箇所しか本関数を経由しておらず、
+    ``fleet.queue_materials._scoped_kept_signals`` / ``correction_semantic.daily_review._read_new``
+    が独自実装のまま残っていた（除外軸が増えるたび再分裂する構造）。全5 reader
+    （queue_materials / daily_review / capture / weak_signals section / icebox_reconcile）が
+    本関数を単一ソースとして経由する。
 
     read（store からのレコード取得）と pj_slug スコープは呼び出し側の責務のまま維持する
     （production union read / icebox の ``data_dir`` 起点 union read / legacy no-slug
@@ -145,12 +160,15 @@ def filter_actionable(
 
     ``exclude_reviewed`` の既定は True（安全側＝厳密な actionable）。呼び出し側が既読を
     独立軸として別途集計する場合（例: 「未昇格 N 件（うち未読 M 件）」表示）は False を渡す。
+    ``seen_keys`` は呼び出し側が既に読み終えた既読集合をそのまま使う（``_filter_unpromoted``
+    を参照。二重 read 回避）。
     """
     out = _filter_unpromoted(
         records,
         exclude_expired=True,
         exclude_reviewed=exclude_reviewed,
         seen_path=seen_path,
+        seen_keys=seen_keys,
     )
     from correction_semantic.bootstrap_backlog import _exclude_bootstrap_consumed
 

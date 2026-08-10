@@ -155,14 +155,20 @@ def _eval_weak_signals_unprocessed_count(
     union 解決してから各 dir を読む（`data_dir` がテスト isolation の tmp_path でも、
     legacy 候補は存在しなければ自動的に候補から外れるので既存の単一 dir テストは無改修で通る）。
 
-    #405 round4 [Must]3 是正: この値は `classify_issue` の `<=` 閾値判定に直接使われる
+    #405 round4 [Must]3 是正: この値は `classify_issue` の `<=`/`>=` 閾値判定に直接使われる
     （`lane="met"` の成立条件）ため、判断済み（bootstrap で「破棄」「TTL 任せ」と人間が
     選んだ）weak_signal を未処理として数えると、判断済み項目だけで再開条件が誤って成立し
     うる。promoted / TTL 失効に加え bootstrap 消化除外（#94）を、全 actionable reader の
     単一 predicate（`correction_semantic.promote.filter_actionable`）経由で適用する。
-    reviewed（既読）は他 reader と違いこの評価器には既読ストアの axis が無かったため
-    従来挙動を保つ（exclude_reviewed=False・スコープ外の変更をしない）。marker 探索は
-    `data_dir`（テスト isolation 起点）に anchor する。
+
+    #405 round5 [Must]1 是正: この評価器は元々既読ストアの axis を持たず
+    `exclude_reviewed=False` だったが、「行動可能性を判定する評価器」では reviewed（daily
+    review で "却下" と人間が判断済み）を含めたままにする理由がない。daily review で
+    rejected と判断されても weak_signal 側の `promoted` は False のままなので、
+    reviewed 軸を欠くと marker 設置後に却下された項目**だけ**で閾値（`>= N` 等）が誤って
+    成立しうる。`exclude_reviewed=True` に変更し、既読ストアの読み口は既存の
+    `correction_semantic.daily_review.default_seen_path` を再利用して `data_dir` 起点で
+    解決する（marker_base と同じ流儀・新しい読み方を発明しない・テスト isolation 対応）。
     """
     try:
         from weak_signals.store import STORE_NAME, _read_one
@@ -175,6 +181,7 @@ def _eval_weak_signals_unprocessed_count(
             return a == b
     try:
         from correction_semantic.promote import filter_actionable
+        from correction_semantic.daily_review import default_seen_path
     except ImportError:
         return None
 
@@ -198,7 +205,10 @@ def _eval_weak_signals_unprocessed_count(
             records.append(r)
 
     actionable = filter_actionable(
-        records, SELF_PJ_SLUG, exclude_reviewed=False, marker_base=Path(data_dir)
+        records,
+        SELF_PJ_SLUG,
+        seen_path=default_seen_path(base=Path(data_dir)),
+        marker_base=Path(data_dir),
     )
     return float(len(actionable))
 
