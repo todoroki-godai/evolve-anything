@@ -75,7 +75,7 @@ def test_validator_reports_stale_release_metadata() -> None:
     version = json.loads(
         (ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
     )["version"]
-    current = f"> Release metadata: **v{version}** · **21 userConfig options**"
+    current = f"> Release metadata: **v{version}** · **23 userConfig options**"
     content = readme.read_text(encoding="utf-8")
     assert current in content, f"README の Release metadata 行が想定と異なる: {current!r}"
     stale = content.replace(

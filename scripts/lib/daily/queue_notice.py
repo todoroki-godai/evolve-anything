@@ -90,3 +90,63 @@ def queue_notice_output(
     if msg is None:
         return None
     return {"systemMessage": msg}
+
+
+# ─────────────────────────────────────────────────────────────────
+# llm_judge 日次上限到達通知（#408）
+# ─────────────────────────────────────────────────────────────────
+# daily runner（evolve-daily-run）が judge_runner.run_daily_judge の結果を
+# evolve-queue.json["llm_judge"] へ埋め込む（新ストアを作らず既存の read 専用派生物を
+# 再利用・#379 Step 1 新設凍結中）。上限に当たった日だけ 1 行通知し、当たらない日は
+# 沈黙する（承認済み standing budget なので毎日 y/n は挟まない）。
+
+
+def build_judge_cap_notice(
+    queue_data: "dict | None",
+    now: "datetime | None" = None,
+    stale_days: int = DEFAULT_STALE_DAYS,
+) -> "str | None":
+    """llm_judge の日次処理が上限に達した日だけ 1 行通知する。当たらない日は None（沈黙）。
+
+    freshness gate は ``build_queue_notice`` と同じ ``generated_at``（evolve-queue.json
+    全体）を共有する。STALE / UNKNOWN のときは health notice を二重に出さず沈黙する
+    （health notice 自体は ``build_queue_notice`` 側が既に出すため）。
+    """
+    if not isinstance(queue_data, dict):
+        return None
+
+    now = now or datetime.now(timezone.utc)
+    state, _age_days = _freshness.classify_freshness(
+        queue_data.get("generated_at"), now=now, stale_days=stale_days
+    )
+    if state != _freshness.Freshness.FRESH:
+        return None
+
+    judge = queue_data.get("llm_judge")
+    if not isinstance(judge, dict) or not judge.get("capped"):
+        return None
+
+    selected = judge.get("selected")
+    unjudged_before = judge.get("unjudged_before")
+    if not isinstance(selected, (int, float)) or isinstance(selected, bool):
+        return None
+    if not isinstance(unjudged_before, (int, float)) or isinstance(unjudged_before, bool):
+        return None
+
+    remaining = int(unjudged_before) - int(selected)
+    return (
+        f"[evolve-anything] llm_judge 日次上限に到達（{int(selected)}件処理・"
+        f"残り{remaining}件は翌日以降に持ち越し）。"
+    )
+
+
+def judge_cap_notice_output(
+    queue_data: "dict | None",
+    now: "datetime | None" = None,
+    stale_days: int = DEFAULT_STALE_DAYS,
+) -> "dict | None":
+    """CC hook 出力用に systemMessage dict を返す。上限未到達なら None。"""
+    msg = build_judge_cap_notice(queue_data, now=now, stale_days=stale_days)
+    if msg is None:
+        return None
+    return {"systemMessage": msg}

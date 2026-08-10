@@ -342,3 +342,77 @@ def test_systemmessage_output_dict():
 def test_systemmessage_output_silent_when_empty():
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     assert qn.queue_notice_output(EMPTY_QUEUE, now=now) is None
+
+
+# ===== llm_judge 日次上限到達通知（#408・evolve-queue.json の llm_judge フィールドを再利用）=====
+CAPPED_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 250,
+        "selected": 200,
+        "capped": True,
+        "corrections": 5,
+        "call_failed": 0,
+    },
+}
+
+NOT_CAPPED_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 3,
+        "selected": 3,
+        "capped": False,
+        "corrections": 1,
+        "call_failed": 0,
+    },
+}
+
+
+def test_judge_cap_notice_fires_when_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(CAPPED_QUEUE, now=now)
+    assert msg is not None
+    assert "200" in msg
+    assert "50" in msg  # 残り件数 = 250 - 200
+
+
+def test_judge_cap_notice_silent_when_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(NOT_CAPPED_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_silent_when_llm_judge_key_missing():
+    """llm_judge フィールドが無い（旧世代の evolve-queue.json）→ 沈黙。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(SAMPLE_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_silent_when_none_input():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(None, now=now) is None
+
+
+def test_judge_cap_notice_silent_when_stale():
+    """freshness gate は evolve-queue.json 全体の generated_at を共有する（二重通知しない
+    — health notice は build_queue_notice 側が既に出すため、こちらは沈黙する）。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    stale = dict(CAPPED_QUEUE, generated_at="2026-06-01T00:00:00Z")
+    assert qn.build_judge_cap_notice(stale, now=now, stale_days=2) is None
+
+
+def test_judge_cap_notice_output_dict():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    out = qn.judge_cap_notice_output(CAPPED_QUEUE, now=now)
+    assert out is not None
+    assert "systemMessage" in out
+
+
+def test_judge_cap_notice_output_silent_when_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.judge_cap_notice_output(NOT_CAPPED_QUEUE, now=now) is None

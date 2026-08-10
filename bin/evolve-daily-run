@@ -31,7 +31,9 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
 
 import icebox_reconcile  # noqa: E402
 import rl_common  # noqa: E402
+from correction_semantic import judge_runner  # noqa: E402
 from daily import plist as plist_mod  # noqa: E402
+from rl_common.config import load_user_config  # noqa: E402
 from rl_common.file_lock import atomic_write_text  # noqa: E402
 
 # icebox 棚卸し対象リポジトリ（evolve-anything 自身）。
@@ -118,7 +120,37 @@ def main() -> int:
             file=sys.stderr, flush=True,
         )
 
-    # 2) 待ち判定（--json）。stdout を evolve-queue.json に保存。
+    # 1d) llm_judge Phase B（意味判定）を非対話で回す（#408）。SKILL.md Step 6.6 の
+    # 対話 y/n 承認時インライン判定にしか実体が無く2ヶ月供給が止まっていた区間を、daily
+    # runner から直接 Python 呼び出しする（icebox_reconcile と同型・非 subprocess）。
+    # queue の material 計数に載るよう queue 判定より前に置く。1日の件数/トークン上限は
+    # userConfig（judge_daily_utterance_limit / judge_daily_token_limit）から渡す。
+    # 失敗しても daily-run 全体は落とさない（fail-open、他ステップと同型）。
+    print(f"[evolve-daily-run] llm_judge daily run …", flush=True)
+    judge_summary = None
+    try:
+        user_config = load_user_config()
+        judge_result = judge_runner.run_daily_judge(
+            run=True,
+            daily_utterance_limit=int(user_config.get(
+                "judge_daily_utterance_limit", judge_runner.DEFAULT_DAILY_UTTERANCE_LIMIT
+            )),
+            daily_token_limit=int(user_config.get(
+                "judge_daily_token_limit", judge_runner.DEFAULT_DAILY_TOKEN_LIMIT
+            )),
+        )
+        judge_summary = {
+            "unjudged_before": judge_result.get("unjudged_total", 0),
+            "selected": judge_result.get("selected", 0),
+            "capped": bool(judge_result.get("capped", False)),
+            "corrections": judge_result.get("corrections", 0),
+            "call_failed": judge_result.get("call_failed", 0),
+        }
+    except Exception as e:  # noqa: BLE001 - fail-open（他ステップと同型）
+        print(f"[evolve-daily-run] llm_judge daily run error: {e}（continue）", file=sys.stderr, flush=True)
+
+    # 2) 待ち判定（--json）。stdout に llm_judge サマリを追加して evolve-queue.json に保存
+    # （新ストアを作らず既存の read 専用派生物を再利用・#408）。
     print(f"[evolve-daily-run] fleet queue --json → {out_path}", flush=True)
     result = subprocess.run(fleet + ["queue", "--json"], capture_output=True, text=True)
     queue_rc = result.returncode
@@ -131,8 +163,17 @@ def main() -> int:
             flush=True,
         )
     else:
-        out_path.write_text(result.stdout, encoding="utf-8")
-        print(f"[evolve-daily-run] wrote {out_path} ({len(result.stdout)} bytes)", flush=True)
+        out_text = result.stdout
+        if judge_summary is not None:
+            try:
+                payload = json.loads(result.stdout)
+                if isinstance(payload, dict):
+                    payload["llm_judge"] = judge_summary
+                    out_text = json.dumps(payload, ensure_ascii=False)
+            except (json.JSONDecodeError, ValueError):
+                pass  # queue 出力が想定外形式でも従来どおり生の stdout を書く（continue）
+        out_path.write_text(out_text, encoding="utf-8")
+        print(f"[evolve-daily-run] wrote {out_path} ({len(out_text)} bytes)", flush=True)
 
     # 3) icebox 棚卸しの気づきトリガー（read-only gh issue list、#194）。失敗しても
     # daily-run 全体は落とさない（ingest/tokens と同じ fail-open）。gh バイナリ自体が

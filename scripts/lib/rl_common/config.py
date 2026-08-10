@@ -50,6 +50,11 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # icebox_notice（#194）: icebox issue の最古経過日数がこの値以上で SessionStart 気づき
     # 通知を発火する閾値（日）。audit_interval_days と同じ 30 日周期をデフォルトに揃える。
     "icebox_review_threshold_days": 30,
+    # correction_semantic.judge_runner（#408）: llm_judge Phase B（意味判定）を daily runner
+    # から非対話で回す際の1日の上限。標準運用値としてユーザー承認済み（200件/150,000トークン）。
+    # コードに埋め込まず設定値として持つ（idiom_autopromote_daily_cap と同型の安全弁）。
+    "judge_daily_utterance_limit": 200,
+    "judge_daily_token_limit": 150_000,
 }
 
 
