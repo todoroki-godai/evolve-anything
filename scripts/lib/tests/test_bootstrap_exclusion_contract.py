@@ -32,6 +32,16 @@
    sections_weak_signals の all_by_channel（生総数）は除外**されない**ことも同テストで確認する。
 3. 公開 API の既定引数 ``marker_base=None`` が実際に本番 DATA_DIR（``CLAUDE_PLUGIN_DATA``）の
    marker を探索する契約を検証する（marker_base を明示注入しない・#94 [Should] 是正）。
+
+**#405 round4 是正**: 上記2「待ち/backlog」系の合意を、外部レビュー round4 の [Must] 3件
+（``audit.sections_capture._llm_judge_actionable_count`` / ``audit.sections_weak_signals``
+の当PJ未昇格集計 / ``icebox_reconcile._eval_weak_signals_unprocessed_count``）へ拡張する。
+これら3箇所は「actionable（行動可能・閾値判定に使う）」母集団を組み立てる際、TTL失効(#89)・
+bootstrap消化済み(#94) の除外軸の一部が抜けていた。全 actionable reader の単一 predicate
+（``correction_semantic.promote.filter_actionable``）に揃えたことを、以下のテストで
+signal_key 集合の一致（件数だけでなく「どのレコードが生き残ったか」）として検証する。
+``sections_capture._llm_judge_count``（raw・promoted 含む）はこの拡張後も対象外のまま
+（観測値としての意味を変えない設計は #94 から不変）。
 """
 from __future__ import annotations
 
@@ -231,3 +241,131 @@ def test_default_marker_base_resolves_production_data_dir(tmp_path: Path, monkey
     )
     daily_keys = {k for g in res["groups"] for k in g["signal_keys"]}
     assert daily_keys == {post_marker.signal_key}
+
+
+# ─────────────────────────────────────────────────────────────────
+# #405 round4 是正: capture / weak_signals section / icebox_reconcile を含む
+# 全 actionable reader の合意（TTL失効 + bootstrap消化除外）
+# ─────────────────────────────────────────────────────────────────
+def test_all_actionable_readers_agree_on_ttl_and_bootstrap_exclusion(
+    tmp_path: Path, monkeypatch
+):
+    """queue / daily_review / capture / weak_signals section / icebox_reconcile の
+    actionable 母集団が、TTL失効(#89)・bootstrap消化除外(#94) の両軸について一致することを
+    signal_key 集合（件数だけでなく「どのレコードが生き残ったか」）で検証する（round3 の
+    「件数だけだと真逆の実装が通る」指摘を踏襲）。
+
+    3種のレコードを用意し、各 reader が同じ1件（actionable）だけを残すことを確認する:
+      - pre_marker: marker 設置以前に detected（bootstrap で判断済み）かつ TTL 超過
+        （両軸のどちらでも落ちる）
+      - ttl_only_expired: marker 設置**後**に detected（bootstrap 消化除外は適用されない）
+        だが TTL（45日）超過 — TTL 軸単独の除外を検証する
+      - actionable: marker 設置後・TTL 内 — 唯一生き残るべきレコード
+    """
+    import icebox_reconcile as ir
+    from audit.sections_capture import _llm_judge_actionable_count, _llm_judge_count
+    from audit.sections_weak_signals import build_weak_signals_section
+
+    # icebox_reconcile.SELF_PJ_SLUG は #352 B6 で固定値（extra 経由の上書き不可）なので、
+    # 5 reader すべてが同じ母集団に合意することを検証するため、このテストでは
+    # モジュール定数 SLUG（"contract-test-pj"）でなく ir.SELF_PJ_SLUG をレコードの
+    # pj_slug に使う。
+    islug = ir.SELF_PJ_SLUG
+    proj = tmp_path / islug
+    proj.mkdir()
+
+    now = datetime.now(timezone.utc)
+    store = tmp_path / "weak_signals.jsonl"  # production union read の canonical 実体でもある
+
+    def _isig(text: str, line_no: int, detected_at: str) -> WeakSignal:
+        return WeakSignal(
+            channel="llm_judge",
+            provenance={"source_path": "/a.jsonl", "line_no": line_no, "text": text, "reason": "r"},
+            detected_at=detected_at,
+            session_id="s1",
+            pj_slug=islug,
+        )
+
+    pre_marker = _isig("marker前かつTTL超", 1, (now - timedelta(days=120)).isoformat())
+    ttl_only_expired = _isig("marker後だがTTL失効", 2, (now - timedelta(days=50)).isoformat())
+    actionable = _isig("actionable", 3, (now - timedelta(hours=1)).isoformat())
+    append_signals([pre_marker, ttl_only_expired, actionable], path=store)
+
+    _write_marker(tmp_path, islug, (now - timedelta(days=100)).isoformat())
+
+    # queue: record 実体で actionable のみ残ることを直接検査する。
+    kept = queue_materials._scoped_kept_signals(
+        islug, weak_signals_path=store, marker_base=tmp_path
+    )
+    assert {r.get("signal_key") for r in kept} == {actionable.signal_key}
+
+    # daily_review: 新規 group の signal_keys が actionable のみ。
+    res = dr.build_review(
+        islug,
+        weak_signals_path=store,
+        seen_path=tmp_path / "correction_review_seen.jsonl",
+        marker_base=tmp_path,
+    )
+    daily_keys = {k for g in res["groups"] for k in g["signal_keys"]}
+    assert daily_keys == {actionable.signal_key}
+
+    # capture: production union read（CLAUDE_PLUGIN_DATA は root conftest が tmp_path に
+    # 隔離済み・rl_common.DATA_DIR も per-test に rebase 済みのため store をそのまま拾う）。
+    # raw（_llm_judge_count）は除外されず 3 件のまま、actionable は 1 件だけに絞られることを
+    # 対で確認する（「actionable からは消えるが raw 表示からは消えない」を実測する）。
+    assert _llm_judge_count(proj) == 3
+    assert _llm_judge_actionable_count(proj) == 1
+
+    # icebox_reconcile: 同じ predicate 経由で 1.0 のみ残る。
+    icebox_value = ir.EVALUATORS["weak_signals"]["unprocessed_count"](tmp_path, {})
+    assert icebox_value == 1.0
+
+    # weak_signals section: 全PJ生総数（raw）は 3 のまま、当PJ未昇格（actionable）は 1。
+    section = build_weak_signals_section(proj)
+    assert section is not None
+    body = "\n".join(section)
+    assert "全PJ 3 / 当PJ未昇格 1" in body
+
+
+def test_icebox_lane_not_falsely_met_from_bootstrap_consumed_only(tmp_path: Path):
+    """判断済み（bootstrap 消化済み）項目だけの母集団で、閾値条件が誤って成立しないことを
+    検証する（PR #405 round4 [Must]3・icebox_reconcile の実害が最も大きい箇所）。
+
+    marker 設置以前に detected（TTL内・判断済み）のレコード3件のみを用意する。bootstrap
+    消化除外を通さない旧実装は actionable=3 を返し `unprocessed_count >= 1` を満たして
+    誤って ``lane="met"`` になる。除外を通す新実装は actionable=0 で met にならない。
+    """
+    import icebox_reconcile as ir
+
+    # icebox_reconcile.SELF_PJ_SLUG は固定値（#352 B6）なので、レコードもこの slug で作る。
+    islug = ir.SELF_PJ_SLUG
+    now = datetime.now(timezone.utc)
+    store = tmp_path / "weak_signals.jsonl"
+    judged = [
+        WeakSignal(
+            channel="llm_judge",
+            provenance={"source_path": "/a.jsonl", "line_no": i,
+                        "text": f"marker前・判断済み{i}", "reason": "r"},
+            detected_at=(now - timedelta(days=3)).isoformat(),
+            session_id="s1",
+            pj_slug=islug,
+        )
+        for i in range(1, 4)
+    ]
+    append_signals(judged, path=store)
+    _write_marker(tmp_path, islug, (now - timedelta(days=1)).isoformat())
+
+    value = ir.EVALUATORS["weak_signals"]["unprocessed_count"](tmp_path, {})
+    assert value == 0.0
+
+    issue = {
+        "number": 1,
+        "body": (
+            "## 再開条件\n```yaml\nreopen-when:\n  source: weak_signals\n"
+            "  metric: unprocessed_count\n  op: \">=\"\n  threshold: 1\n```\n"
+        ),
+        "closedAt": (now - timedelta(days=200)).isoformat(),
+        "updatedAt": (now - timedelta(days=200)).isoformat(),
+    }
+    verdict = ir.classify_issue(issue, now=now, data_dir=tmp_path)
+    assert verdict["lane"] != "met"

@@ -172,10 +172,12 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     #525-1: 当PJ未昇格を「未昇格 N 件（うち未読 M 件）」に分離し、daily phase
       「新規なし（既読済）」との噛み合わせを取る（既読ストアと突合）。
     daily_review が pj_slug フィルタで当PJのみ昇格する実装（daily_review.py:153）と一致させる。
-    #94（codex レビュー Must 是正）: 当PJ未昇格集計（cur_unpromoted_by_channel / unpromoted /
-      unread 系）は queue_materials / daily_review と同じ predicate
-      （``correction_semantic.bootstrap_backlog._exclude_bootstrap_consumed``）で bootstrap
-      marker 設置以前に detected した weak を除外する。all_by_channel（全PJ生総数）は意図的に
+    #94（codex レビュー Must 是正）/ #405 round4 [Must]2: 当PJ未昇格集計
+      （cur_unpromoted_by_channel / unpromoted / unread 系）は queue_materials /
+      daily_review / capture と同じ単一 predicate
+      （``correction_semantic.promote.filter_actionable``。内部で bootstrap marker 設置以前
+      検出の除外 + TTL 失効(#89) 除外を行う）を通す。reviewed（既読）はこのセクション独自の
+      分離軸（unread）として別集計するため適用しない。all_by_channel（全PJ生総数）は意図的に
       raw のまま維持する（観測値としての意味を変えないため）。
     """
     try:
@@ -222,7 +224,7 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     unread = 0          # 当PJ未昇格かつ未読 合計（#525-1）
     unread_review = 0       # #117: content-rich チャネルの未読（daily_review/evolve が昇格）
     unread_content_poor = 0  # #117: content-poor チャネルの未読（detector 文脈未保存・観測のみ）
-    cur_candidates: List[dict] = []  # 当PJ未昇格候補（bootstrap 消化除外を通す前・#94 是正）
+    cur_candidates: List[dict] = []  # 当PJ未昇格候補（actionable 除外を通す前・#94/#405 是正）
     for r in records:
         ch = r.get("channel", "unknown")
         # #94（codex レビュー Must 是正）: all_by_channel（全PJ生総数）は意図的に raw のまま
@@ -248,12 +250,24 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     # / daily_review（毎日の y/n 確認）は既に marker 設置以前 detected の weak を「判断済み」
     # として除外しているのに、この observability matrix reader だけ生の read_signals() を
     # 集計しており、marker 以前の項目まで「未読・今日の修正確認 phase で昇格可能」と誤案内
-    # していた（#112/#117/#159 と同型の reader 取りこぼしが3回目に再発）。current_slug が
-    # 解決できない場合は marker 探索の基準 slug が無いため除外しない（従来挙動・#490 と同じ
-    # フォールバック方針）。
+    # していた（#112/#117/#159 と同型の reader 取りこぼしが3回目に再発）。
+    #
+    # #405 round4 [Must]2 是正: bootstrap 消化除外に加え TTL 失効（#89）も欠けていた。marker
+    # 不在、または marker 設置後に detected してから TTL 失効したレコードは bootstrap 消化
+    # 除外だけでは落ちず、queue/daily が 0 件でもこのセクションだけ「昇格可能」と誤案内
+    # しうる。全 actionable reader の単一 predicate
+    # （``correction_semantic.promote.filter_actionable``）に揃える。reviewed（既読）は
+    # ここでは適用しない — unread はこのセクションが「未昇格のうち未読」を独立軸として
+    # 別途集計するための分離指標であり（#525-1）、reviewed 済み（却下済み含む）も
+    # 「未昇格」総数には残す設計を維持する。current_slug が解決できない場合は bootstrap
+    # marker 探索の基準 slug が無いため bootstrap 除外は適用できないが、TTL 失効は slug
+    # 非依存の predicate なので常に適用する（従来の「除外なし」フォールバックを縮小）。
+    from weak_signals.ttl import is_effectively_expired
+    cur_candidates = [r for r in cur_candidates if not is_effectively_expired(r)]
+
     if current_slug is not None:
-        from correction_semantic.bootstrap_backlog import _exclude_bootstrap_consumed
-        cur_candidates = _exclude_bootstrap_consumed(cur_candidates, current_slug)
+        from correction_semantic.promote import filter_actionable
+        cur_candidates = filter_actionable(cur_candidates, current_slug, exclude_reviewed=False)
 
     for r in cur_candidates:
         ch = r.get("channel", "unknown")

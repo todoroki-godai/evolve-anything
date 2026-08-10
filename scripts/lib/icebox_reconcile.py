@@ -154,10 +154,18 @@ def _eval_weak_signals_unprocessed_count(
     （`rl_common.iter_read_data_dirs`）と同じ流儀に合わせ、`data_dir` を canonical 起点に
     union 解決してから各 dir を読む（`data_dir` がテスト isolation の tmp_path でも、
     legacy 候補は存在しなければ自動的に候補から外れるので既存の単一 dir テストは無改修で通る）。
+
+    #405 round4 [Must]3 是正: この値は `classify_issue` の `<=` 閾値判定に直接使われる
+    （`lane="met"` の成立条件）ため、判断済み（bootstrap で「破棄」「TTL 任せ」と人間が
+    選んだ）weak_signal を未処理として数えると、判断済み項目だけで再開条件が誤って成立し
+    うる。promoted / TTL 失効に加え bootstrap 消化除外（#94）を、全 actionable reader の
+    単一 predicate（`correction_semantic.promote.filter_actionable`）経由で適用する。
+    reviewed（既読）は他 reader と違いこの評価器には既読ストアの axis が無かったため
+    従来挙動を保つ（exclude_reviewed=False・スコープ外の変更をしない）。marker 探索は
+    `data_dir`（テスト isolation 起点）に anchor する。
     """
     try:
         from weak_signals.store import STORE_NAME, _read_one
-        from weak_signals.ttl import is_effectively_expired
     except ImportError:
         return None
     try:
@@ -165,6 +173,10 @@ def _eval_weak_signals_unprocessed_count(
     except ImportError:
         def _pj_slug_match(a, b):  # type: ignore
             return a == b
+    try:
+        from correction_semantic.promote import filter_actionable
+    except ImportError:
+        return None
 
     try:
         import rl_common
@@ -172,7 +184,7 @@ def _eval_weak_signals_unprocessed_count(
     except Exception:
         dirs = [Path(data_dir)]
 
-    count = 0
+    records: List[Dict[str, Any]] = []
     seen_keys: set = set()
     for d in dirs:
         for r in _read_one(Path(d) / STORE_NAME):
@@ -183,12 +195,12 @@ def _eval_weak_signals_unprocessed_count(
                 seen_keys.add(k)
             if not _pj_slug_match(r.get("pj_slug"), SELF_PJ_SLUG):
                 continue
-            if r.get("promoted"):
-                continue
-            if is_effectively_expired(r):
-                continue
-            count += 1
-    return float(count)
+            records.append(r)
+
+    actionable = filter_actionable(
+        records, SELF_PJ_SLUG, exclude_reviewed=False, marker_base=Path(data_dir)
+    )
+    return float(len(actionable))
 
 
 def _eval_subagent_traces_first_try_success_rate(

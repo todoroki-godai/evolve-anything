@@ -78,6 +78,89 @@ def test_read_unpromoted_filters_by_channel(tmp_path: Path) -> None:
     assert len(cs_promote.read_unpromoted(weak_signals_path=ws, channel="llm_judge")) == 2
 
 
+# ─────────────────────────────────────────────────────────────────
+# filter_actionable（#405 round4 是正: 全 actionable reader の単一 predicate）
+# ─────────────────────────────────────────────────────────────────
+SLUG = "evolve-anything"
+
+
+def _sig(text: str, line_no: int, detected_at: str, *, promoted: bool = False) -> WeakSignal:
+    return WeakSignal(
+        channel="llm_judge",
+        provenance={"source_path": "/a.jsonl", "line_no": line_no, "text": text, "reason": "r"},
+        detected_at=detected_at,
+        session_id="s1",
+        pj_slug=SLUG,
+        promoted=promoted,
+    )
+
+
+def test_filter_actionable_excludes_promoted() -> None:
+    fresh = _fresh_detected_at()
+    kept = _sig("残る", 1, fresh)
+    promoted = _sig("昇格済み", 2, fresh, promoted=True)
+    out = cs_promote.filter_actionable([kept.to_record(), promoted.to_record()], SLUG)
+    keys = {r.get("signal_key") for r in out}
+    assert keys == {kept.signal_key}
+
+
+def test_filter_actionable_excludes_ttl_expired() -> None:
+    fresh = _fresh_detected_at()
+    stale = (datetime.now(timezone.utc) - timedelta(days=46)).isoformat()
+    kept = _sig("残る", 1, fresh)
+    expired = _sig("TTL失効", 2, stale)
+    out = cs_promote.filter_actionable([kept.to_record(), expired.to_record()], SLUG)
+    keys = {r.get("signal_key") for r in out}
+    assert keys == {kept.signal_key}
+
+
+def test_filter_actionable_reviewed_toggle(tmp_path: Path) -> None:
+    fresh = _fresh_detected_at()
+    unread = _sig("未読", 1, fresh)
+    reviewed = _sig("既読・却下済み", 2, fresh)
+    seen_path = tmp_path / "correction_review_seen.jsonl"
+    seen_path.write_text(
+        json.dumps({"key": reviewed.signal_key, "pj_slug": SLUG, "decision": "rejected",
+                    "reviewed_at": fresh}) + "\n",
+        encoding="utf-8",
+    )
+    records = [unread.to_record(), reviewed.to_record()]
+
+    # 既定（exclude_reviewed=True）: 既読・却下済みは落ちる。
+    out_default = cs_promote.filter_actionable(records, SLUG, seen_path=seen_path)
+    assert {r.get("signal_key") for r in out_default} == {unread.signal_key}
+
+    # exclude_reviewed=False: 既読でも「未昇格」総数には残る（sections_weak_signals の
+    # unread 分離軸のための挙動・#525-1）。
+    out_no_exclude = cs_promote.filter_actionable(
+        records, SLUG, exclude_reviewed=False, seen_path=seen_path,
+    )
+    assert {r.get("signal_key") for r in out_no_exclude} == {
+        unread.signal_key, reviewed.signal_key,
+    }
+
+
+def test_filter_actionable_excludes_bootstrap_consumed(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    pre_marker = _sig("marker前", 1, (now - timedelta(days=3)).isoformat())
+    post_marker = _sig("marker後", 2, (now - timedelta(hours=1)).isoformat())
+    marker = tmp_path / f"bootstrap_done-{SLUG}.marker"
+    marker.write_text((now - timedelta(days=1)).isoformat(), encoding="utf-8")
+
+    out = cs_promote.filter_actionable(
+        [pre_marker.to_record(), post_marker.to_record()], SLUG, marker_base=tmp_path,
+    )
+    keys = {r.get("signal_key") for r in out}
+    assert keys == {post_marker.signal_key}
+
+
+def test_filter_actionable_keeps_genuinely_actionable() -> None:
+    fresh = _fresh_detected_at()
+    sig = _sig("残る", 1, fresh)
+    out = cs_promote.filter_actionable([sig.to_record()], SLUG)
+    assert {r.get("signal_key") for r in out} == {sig.signal_key}
+
+
 def test_promote_writes_human_source_correction(tmp_path: Path) -> None:
     ws = tmp_path / "weak_signals.jsonl"
     corr = tmp_path / "corrections.jsonl"

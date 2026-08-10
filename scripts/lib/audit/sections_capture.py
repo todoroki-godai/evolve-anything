@@ -67,26 +67,24 @@ def _llm_judge_count(project_dir: Optional[Path] = None) -> int:
 
 
 def _llm_judge_actionable_count(project_dir: Optional[Path] = None) -> int:
-    """当PJ slug の llm_judge channel のうち **actionable**（未昇格・bootstrap 消化除外後）件数。
+    """当PJ slug の llm_judge channel のうち **actionable** 件数。
 
     #94（codex round2 [Must]）是正: ``build_capture_rate_section`` は表示用の raw 値
-    （``_llm_judge_count``・promoted 含む・bootstrap 除外なし）を「未昇格の llm_judge
-    シグナルは...今日の修正確認 phase で昇格可能」という **actionable な案内**の分岐条件に
-    誤って使っていた。全件 promoted 済み・全件 bootstrap marker 以前 detected（=
-    queue_materials / daily_review / sections_weak_signals が既に「判断済み」として除外
-    している状態）でも raw は非ゼロのため、案内が実態と食い違って表示され続ける（4つ目の
-    reader 非対称）。
+    （``_llm_judge_count``・promoted 含む・除外なし）を「未昇格の llm_judge シグナルは...
+    今日の修正確認 phase で昇格可能」という **actionable な案内**の分岐条件に誤って
+    使っていた。全件 promoted 済み・全件 bootstrap marker 以前 detected（= queue_materials /
+    daily_review / sections_weak_signals が既に「判断済み」として除外している状態）でも
+    raw は非ゼロのため、案内が実態と食い違って表示され続ける（4つ目の reader 非対称）。
 
-    本関数は queue_materials._scoped_kept_signals / daily_review._read_new と同じ predicate
-    （``correction_semantic.bootstrap_backlog._exclude_bootstrap_consumed``）+ promoted
-    フィルタを適用した actionable 件数を返し、**案内を出すかどうかの判定にのみ**使う
-    （表示の raw 値とは別変数として区別する。呼び出し側 ``build_capture_rate_section`` を
-    参照）。store / slug 未解決 / 読込失敗は 0（防御的フォールバック）。
+    #405 round4 [Must]1 是正: 除外軸が promoted + bootstrap 消化済みだけで、TTL 失効（#89）・
+    既読/却下済み（#185）が欠けていた（queue_materials / daily_review は両方適用済み）。
+    全 actionable reader の単一 predicate（``correction_semantic.promote.filter_actionable``）
+    に揃え、4軸（promoted / TTL失効 / 既読・却下済み / bootstrap消化済み）を通す。
+
+    store / slug 未解決 / 読込失敗は 0（防御的フォールバック）。この戻り値は「昇格可能」の
+    案内を出すか否かにのみ使われ、誤って案内を出す（判断済みの項目を再提示する）方が
+    誤って案内を出さない（1日待てば次回出る）より害が大きいため、失敗時は安全側（0）。
     """
-    try:
-        from weak_signals.store import read_signals
-    except ImportError:
-        return 0
     try:
         from pj_slug import pj_slug_fast
         slug = pj_slug_fast(project_dir if project_dir is not None else Path.cwd())
@@ -95,23 +93,16 @@ def _llm_judge_actionable_count(project_dir: Optional[Path] = None) -> int:
     if not slug:
         return 0
     try:
+        from weak_signals.store import read_signals
         from store_read_union import pj_slug_match
-        candidates = [
+        from correction_semantic.promote import filter_actionable
+
+        records = [
             r
             for r in read_signals()
-            if r.get("channel") == "llm_judge"
-            and pj_slug_match(r.get("pj_slug"), slug)
-            and not r.get("promoted")
+            if r.get("channel") == "llm_judge" and pj_slug_match(r.get("pj_slug"), slug)
         ]
-    except Exception:
-        return 0
-    # PR #405 round3 [Should]: 共有除外関数（marker 解決を含む）が失敗したら、除外されて
-    # いない raw candidates をそのまま actionable として返さず 0（安全側）に倒す。この
-    # 戻り値は「昇格可能」の案内を出すか否かにのみ使われ、誤って案内を出す（判断済みの
-    # 項目を再提示する）方が誤って案内を出さない（1日待てば次回出る）より害が大きい。
-    try:
-        from correction_semantic.bootstrap_backlog import _exclude_bootstrap_consumed
-        candidates = _exclude_bootstrap_consumed(candidates, slug)
+        candidates = filter_actionable(records, slug)
     except Exception:
         return 0
     return len(candidates)
