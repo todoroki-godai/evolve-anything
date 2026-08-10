@@ -200,6 +200,18 @@ def test_filter_actionable_pj_slug_none_skips_bootstrap_but_keeps_other_axes(
     out_with_slug = cs_promote.filter_actionable(records, SLUG, marker_base=tmp_path)
     assert {r.get("signal_key") for r in out_with_slug} == {kept.signal_key}
 
+    # #405 round7 [Should]1: reviewed（既読・却下済み）軸も pj_slug 非依存で通常どおり
+    # 適用される（docstring の「promoted / TTL / reviewed の3軸は通常適用」を固定する）。
+    reviewed = _sig("既読・却下済み", 5, fresh)
+    records_with_reviewed = records + [reviewed.to_record()]
+    out_reviewed = cs_promote.filter_actionable(
+        records_with_reviewed, None, marker_base=tmp_path,
+        seen_keys={reviewed.signal_key},
+    )
+    assert {r.get("signal_key") for r in out_reviewed} == {
+        pre_marker.signal_key, kept.signal_key,
+    }
+
 
 def test_promote_writes_human_source_correction(tmp_path: Path) -> None:
     ws = tmp_path / "weak_signals.jsonl"

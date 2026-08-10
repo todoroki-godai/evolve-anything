@@ -108,6 +108,48 @@ def test_unparseable_detected_at_kept(tmp_path):
     assert weak_unprocessed_by_pj(SLUG, weak_signals_path=ws, marker_base=tmp_path) == 1
 
 
+def test_bootstrap_consumed_isolates_bootstrap_axis_from_future_filter_actionable_growth(
+    tmp_path, monkeypatch,
+):
+    """#405 round7 [Should]2: bootstrap_consumed_by_pj の差分は bootstrap 軸だけを反映する。
+
+    以前の実装は「``read_unpromoted`` ベースの独立集計（scoped）」と「``filter_actionable``
+    経由の集計（kept）」の差分を取っていた。両者はたまたま同じ3軸（promoted/TTL/reviewed）を
+    ``_filter_unpromoted`` 経由で共有していたため一致していたが、``filter_actionable`` の
+    本体に（``_filter_unpromoted`` を経由しない）新しい軸が直接足されると、その軸は kept
+    側にしか反映されず、差分が bootstrap 軸以外まで拾ってしまう構造だった。
+
+    ここでは ``correction_semantic.promote.filter_actionable`` を monkeypatch し「bootstrap
+    と独立な仮想の新軸（line_no==2 を追加除外）」を足しても、``bootstrap_consumed_by_pj`` が
+    返す値が bootstrap 消化分（marker 前 detected の 1 件）だけを反映し、新軸で除外された分
+    まで誤って含めないことを固定する。
+    """
+    now = datetime.now(timezone.utc)
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("old", 1, _iso(now - timedelta(days=3))),   # marker 前 → bootstrap 除外対象
+            _sig("new", 2, _iso(now - timedelta(hours=1))),  # marker 後・仮想の新軸で除外される想定
+        ],
+        path=ws,
+    )
+    _write_marker(tmp_path, SLUG, _iso(now - timedelta(days=1)))
+
+    import correction_semantic.promote as cs_promote_module
+
+    real_filter_actionable = cs_promote_module.filter_actionable
+
+    def _fake_filter_actionable(records, pj_slug, **kwargs):
+        out = real_filter_actionable(records, pj_slug, **kwargs)
+        # 仮想の「新軸」: bootstrap 非依存に line_no==2 のレコードを追加除外する。
+        return [r for r in out if r.get("provenance", {}).get("line_no") != 2]
+
+    monkeypatch.setattr(cs_promote_module, "filter_actionable", _fake_filter_actionable)
+
+    # bootstrap 消化はあくまで「old」1件のみ（新軸で除外された「new」を含めない）。
+    assert bootstrap_consumed_by_pj(SLUG, weak_signals_path=ws, marker_base=tmp_path) == 1
+
+
 def test_marker_scoped_to_pj(tmp_path):
     # 別 PJ の marker は当該 PJ の weak を除外しない（slug スコープ）。
     now = datetime.now(timezone.utc)

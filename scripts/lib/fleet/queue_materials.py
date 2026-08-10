@@ -140,18 +140,28 @@ def bootstrap_consumed_by_pj(
 ) -> int:
     """bootstrap 消化済み（marker 以前 detected）で material から除外した weak 件数（#94）。
 
-    queue footer の透明化用。bootstrap marker が無い PJ は常に 0。``weak_unprocessed_by_pj``
-    と同じ scope/除外ロジックを通し、除外前後の差を返す（二重集計を避けるため共有 helper）。
-    """
-    from correction_semantic.promote import read_unpromoted
+    queue footer の透明化用。bootstrap marker が無い PJ は常に 0。
 
-    recs = read_unpromoted(weak_signals_path=weak_signals_path, exclude_expired=True)
+    #405 round7 [Should]2 是正: 差分算出を bootstrap 除外（``_exclude_bootstrap_consumed``）
+    単独の適用結果から取る。以前は「``read_unpromoted`` ベースの独立集計（scoped）」と
+    「``_scoped_kept_signals``（＝``filter_actionable`` 経由・kept）」の差分を取っており、
+    両者はたまたま同じ3軸（promoted/TTL/reviewed）を ``_filter_unpromoted`` 経由で共有して
+    いたため一致していたが、``filter_actionable`` の本体に新しい軸が直接増えると kept 側
+    にしか反映されず、差分が bootstrap 軸以外まで拾ってしまう構造だった。``filter_actionable``
+    に ``pj_slug=None`` を渡すと「bootstrap 消化除外だけをスキップしつつ他の全軸を通常適用」
+    する契約（#405 round6 [Must]1）を利用し、bootstrap 以外の軸を反映した集合を得たうえで
+    そこに ``_exclude_bootstrap_consumed`` だけを適用する差分を取ることで、軸の増減に依存
+    せず常に bootstrap 軸だけの消化件数になる。
+    """
+    from correction_semantic.promote import filter_actionable
+    from weak_signals.store import read_signals
+
+    recs = read_signals(weak_signals_path)
     aliases = _aliases_for(pj_slug)
     scoped = [r for r in recs if r.get("pj_slug") in aliases]
-    kept = _scoped_kept_signals(
-        pj_slug, weak_signals_path=weak_signals_path, marker_base=marker_base
-    )
-    return len(scoped) - len(kept)
+    without_bootstrap = filter_actionable(scoped, None)
+    kept = _exclude_bootstrap_consumed(without_bootstrap, pj_slug, marker_base=marker_base)
+    return len(without_bootstrap) - len(kept)
 
 
 # --- store reader: 前回 evolve 以降の corrections カウント（PJ 別）------------
