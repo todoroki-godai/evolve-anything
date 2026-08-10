@@ -37,3 +37,9 @@ LLM_JUDGE_CHANNEL = "llm_judge"
 
 # 1 LLM call にまとめる発話件数（#431: 30 件程度を 1 call）。
 DEFAULT_BATCH_SIZE = 30
+
+# 1 発話あたりプロンプトに含める本文の最大文字数（#410 [Must]C）。verbosity/judge.py の
+# max_chars（既定 4000）と同じ値・同じ思想（貼り付けられた長文で1発話が青天井に膨張する
+# のを防ぐ）。prompt.build_batch_prompt（実送信）と batch.estimate_tokens（見積もり）が
+# 同じ値を参照し、見積もりと実送信の乖離を防ぐ単一ソース。
+MAX_CHARS_PER_UTTERANCE = 4000

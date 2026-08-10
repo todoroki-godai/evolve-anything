@@ -29,6 +29,7 @@ weak_signals / 個人辞書 / 判定進捗のどれにも一切書かない（�
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -39,15 +40,25 @@ if str(_lib_dir) not in sys.path:
 
 from llm_broker import build_requests, parse_responses, passthrough  # noqa: E402
 
-from . import DEFAULT_BATCH_SIZE, LLM_JUDGE_CHANNEL
+from . import DEFAULT_BATCH_SIZE, LLM_JUDGE_CHANNEL, MAX_CHARS_PER_UTTERANCE
 from . import idiom_filter as _idiom_filter
 from . import prompt as _prompt
 from . import representative as _representative
 from . import store as _store
 
-# 1 発話あたりの概算トークン（プロンプト雛形 + 発話本文）。est 用の粗い係数。
-# 日本語は 1 字 ≈ 1 トークン超だが、入力 + 出力 + 雛形オーバーヘッドを丸めた係数で十分。
-_TOKENS_PER_UTTERANCE = 80
+# #410 [Must]C 是正: 旧実装は「件数 × 80 + バッチ数 × 400」の固定係数で本文長を一切見て
+# おらず、長文1件を短文1件と同じ 80 トークンに見積もっていた（15万トークン上限が実質
+# 無効化しうる）。実入力の文字数に連動する保守的な見積もりに変える。
+#
+# 日本語は概ね 1〜2 文字 ≈ 1 トークン（英数字混在では 4 字弱/トークンになることも多いが、
+# 判定対象は日本語ユーザー発話が主）。安全側（過大に出す）に倒すため 2 文字/トークンで
+# 見積もる。``prompt.build_batch_prompt`` と同じ ``MAX_CHARS_PER_UTTERANCE`` で本文長を
+# 頭打ちし、見積もりと実送信の乖離を防ぐ（単一ソース）。
+_CHARS_PER_TOKEN = 2.0
+# 1 発話あたりのプロンプト整形オーバーヘッド（"[i] 直前のClaudeの操作: ...\n    ユーザー
+# 発話: " のラベル + prev_action 分）。
+_PER_UTTERANCE_OVERHEAD_TOKENS = 30
+# プロンプト雛形（PROMPT_HEAD 相当の指示文・出力形式説明）の固定オーバーヘッド（バッチ単位）。
 _PROMPT_OVERHEAD_TOKENS = 400
 
 
@@ -250,11 +261,24 @@ def ingest_judgement_results(
 def estimate_tokens(
     utterances: List[Dict[str, Any]],
     batch_size: int = DEFAULT_BATCH_SIZE,
+    *,
+    max_chars: int = MAX_CHARS_PER_UTTERANCE,
 ) -> Dict[str, Any]:
-    """判定対象発話の概算トークン消費を返す（llm-batch-guard 用・決定論）。"""
-    n = len(utterances or [])
+    """判定対象発話の概算トークン消費を返す（llm-batch-guard 用・決定論・#410 [Must]C）。
+
+    各発話の本文実長（``max_chars`` で頭打ち・``build_batch_prompt`` と同じ切り詰め）に
+    連動する。固定件数係数（旧実装）だと長文1件が短文1件と同じ見積もりになり、
+    トークン上限が実効性を持たなかった。
+    """
+    items = utterances or []
+    n = len(items)
     batches = (n + max(1, batch_size) - 1) // max(1, batch_size)
-    est = n * _TOKENS_PER_UTTERANCE + batches * _PROMPT_OVERHEAD_TOKENS
+    body_tokens = 0
+    for u in items:
+        text = (u.get("text") or "")[:max_chars]
+        body_tokens += math.ceil(len(text) / _CHARS_PER_TOKEN)
+        body_tokens += _PER_UTTERANCE_OVERHEAD_TOKENS
+    est = body_tokens + batches * _PROMPT_OVERHEAD_TOKENS
     return {
         "utterances": n,
         "batches": batches,

@@ -21,20 +21,32 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from . import MAX_CHARS_PER_UTTERANCE
+
 # 抽出する JSON object をテキストから拾うための緩い探索（code fence 等を剥がす）。
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# prev_action（直前 Claude 操作の1行要約）の切り詰め上限。text ほど長大化しない想定だが
+# 防御的に上限を設ける（#410 [Must]C）。
+_MAX_PREV_ACTION_CHARS = 300
 
-def build_batch_prompt(utterances: List[Dict[str, Any]]) -> str:
+
+def build_batch_prompt(
+    utterances: List[Dict[str, Any]], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
+) -> str:
     """発話リストから 1 バッチ分の判定プロンプトを組み立てる（決定論・IO なし）。
 
     各発話に 0 始まりの index を振り、index でひも付けて判定を返させる。
     prev_action（直前の Claude のツール操作）を文脈として渡す（修正の判定材料）。
+
+    ``max_chars``（既定 ``MAX_CHARS_PER_UTTERANCE``・#410 [Must]C）: 本文が貼り付けられた
+    長文等で青天井に膨張しないよう切り詰める。``batch.estimate_tokens`` も同じ上限を参照し、
+    見積もりと実送信の文字数が乖離しないようにする（単一ソース）。
     """
     lines: List[str] = []
     for i, u in enumerate(utterances):
-        prev = u.get("prev_action") or "(なし)"
-        text = (u.get("text") or "").replace("\n", " ").strip()
+        prev = (u.get("prev_action") or "(なし)")[:_MAX_PREV_ACTION_CHARS]
+        text = (u.get("text") or "").replace("\n", " ").strip()[:max_chars]
         lines.append(f"[{i}] 直前のClaudeの操作: {prev}\n    ユーザー発話: {text}")
     listing = "\n".join(lines)
 

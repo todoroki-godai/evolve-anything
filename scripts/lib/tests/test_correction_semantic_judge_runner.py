@@ -122,6 +122,33 @@ def test_daily_token_limit_truncates_selection_even_under_count_limit(tmp_path):
     assert res["capped"] is True
 
 
+def test_daily_token_limit_exact_boundary_is_inclusive(tmp_path):
+    """#410 [Must]C: est_total_tokens == daily_token_limit ちょうどは選定に含める境界。"""
+    from correction_semantic.batch import estimate_tokens
+
+    utterances = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(3)]
+    exact_budget_for_one = estimate_tokens(utterances[:1], batch_size=30)["est_total_tokens"]
+
+    res = judge_runner.run_daily_judge(
+        run=False,
+        utterances=utterances,
+        judged_path=tmp_path / "correction_judged.jsonl",
+        daily_utterance_limit=200,
+        daily_token_limit=exact_budget_for_one,
+    )
+    assert res["selected"] == 1  # ちょうど収まる1件目までは選ばれる
+    assert res["capped"] is True
+
+    res_short_by_one = judge_runner.run_daily_judge(
+        run=False,
+        utterances=utterances,
+        judged_path=tmp_path / "correction_judged2.jsonl",
+        daily_utterance_limit=200,
+        daily_token_limit=exact_budget_for_one - 1,
+    )
+    assert res_short_by_one["selected"] == 0  # 1トークンでも超えれば選ばれない
+
+
 def test_oldest_utterances_prioritized_when_capped(tmp_path):
     old = _utt("/a.jsonl", 1, "old", "pj-a", ts=_ts(days_ago=10))
     new = _utt("/a.jsonl", 2, "new", "pj-a", ts=_ts(days_ago=0))

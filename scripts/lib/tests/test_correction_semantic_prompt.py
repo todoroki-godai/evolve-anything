@@ -40,6 +40,26 @@ def test_build_prompt_asks_for_json() -> None:
     assert "idiom" in p
 
 
+# ── #410 [Must]C: 極端に長い本文を切り詰める（青天井のトークン消費を防ぐ）──────
+
+
+def test_build_prompt_truncates_long_utterance_text() -> None:
+    from correction_semantic import MAX_CHARS_PER_UTTERANCE
+
+    # "X" は雛形文（日本語の指示文・記号のみ）に出現しないマーカー文字として使う
+    # （「あ」等の日本語文字だと雛形自身の地の文に紛れてカウントがずれる）。
+    huge = [{"source_path": "/a.jsonl", "line_no": 1,
+             "text": "X" * (MAX_CHARS_PER_UTTERANCE * 3), "prev_action": None}]
+    p = cs_prompt.build_batch_prompt(huge)
+    assert p.count("X") <= MAX_CHARS_PER_UTTERANCE
+
+
+def test_build_prompt_short_utterance_unaffected_by_truncation() -> None:
+    p = cs_prompt.build_batch_prompt(_utts())
+    assert "四国めたん" in p
+    assert "ありがとう" in p
+
+
 # ── verdict パース ────────────────────────────────────────────────
 
 

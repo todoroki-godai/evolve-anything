@@ -439,3 +439,35 @@ def test_estimate_tokens() -> None:
     assert est["utterances"] == 3
     assert est["batches"] == 1
     assert est["est_total_tokens"] > 0
+
+
+# ── #410 [Must]C: 固定係数でなく実入力長に連動する見積もりに固定する ──────────
+
+
+def test_estimate_tokens_scales_with_actual_text_length() -> None:
+    """#410: 「件数×80」固定だと長文1件と短文1件が同じ扱いになる。実長差を反映すること。"""
+    short = [{"text": "短い", "prev_action": None}]
+    long_utt = [{"text": "あ" * 5000, "prev_action": None}]
+    est_short = cs_batch.estimate_tokens(short, batch_size=30)
+    est_long = cs_batch.estimate_tokens(long_utt, batch_size=30)
+    # 長文側が短文側より明確に高いこと（固定係数だと同数になっていた）。
+    assert est_long["est_total_tokens"] > est_short["est_total_tokens"] * 5
+
+
+def test_estimate_tokens_reflects_truncation_cap() -> None:
+    """本文が MAX_CHARS_PER_UTTERANCE を超えても、実送信されるプロンプトと同じ切り詰め後の
+    長さで見積もる（青天井にしない・#410）。
+    """
+    from correction_semantic import MAX_CHARS_PER_UTTERANCE
+
+    huge = [{"text": "あ" * (MAX_CHARS_PER_UTTERANCE * 10), "prev_action": None}]
+    capped = [{"text": "あ" * MAX_CHARS_PER_UTTERANCE, "prev_action": None}]
+    est_huge = cs_batch.estimate_tokens(huge, batch_size=30)
+    est_capped = cs_batch.estimate_tokens(capped, batch_size=30)
+    assert est_huge["est_total_tokens"] == est_capped["est_total_tokens"]
+
+
+def test_estimate_tokens_empty_text_is_small() -> None:
+    est = cs_batch.estimate_tokens([{"text": "", "prev_action": None}], batch_size=30)
+    assert est["est_total_tokens"] > 0  # per-batch/per-utterance overhead は残る
+    assert est["est_total_tokens"] < 500  # だが本文ゼロなら十分小さい
