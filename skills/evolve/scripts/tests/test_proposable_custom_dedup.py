@@ -315,3 +315,287 @@ class TestRunEvolveRemediation:
             if "cannot import" in str(e).lower() or "no module" in str(e).lower():
                 pytest.skip(f"モジュール import エラーでスキップ: {e}")
             raise
+
+    def test_project_dir_threaded_into_classify_issues_and_fitness_evolution(
+        self, tmp_path, monkeypatch
+    ):
+        """#400 codex レビュー是正（Should 5）: run_evolve(project_dir=...) の Phase 3.5/5 が
+        cwd と異なる project_dir を classify_issues()/run_fitness_evolution() に貫通させること。
+
+        run_remediate_phases 内の project_root=proj / project_dir=ctx.project_dir キーワードを
+        誤って外すと本テストは落ちる（phases_remediate.py:169, :462 の退行フェンス）。
+        """
+        import evolve as _evolve_mod
+
+        # cwd を project_dir とは別ディレクトリに固定し、cwd フォールバックとの取り違えを検出可能にする。
+        cwd_dir = tmp_path / "cwd-dir"
+        cwd_dir.mkdir()
+        monkeypatch.chdir(cwd_dir)
+        pj_b = tmp_path / "pj-b"
+        pj_b.mkdir()
+
+        monkeypatch.setattr(_evolve_mod, "check_data_sufficiency", lambda project_dir=None: {
+            "sufficient": True, "sessions": 5, "observations": 20,
+            "total_observations": 50, "telemetry_empty": False,
+            "backfill_recommended": False, "message": "OK",
+        })
+        monkeypatch.setattr(_evolve_mod, "check_fitness_function", lambda pd=None: {
+            "has_fitness": False, "has_criteria": False,
+            "fitness_functions": [], "fitness_dir": str(pj_b),
+        })
+
+        mock_discover = {
+            "matched_skills": [], "unmatched_patterns": [],
+            "missed_skill_opportunities": [], "tool_usage_patterns": {},
+            "verification_needs": [], "stall_recovery_patterns": [],
+            "workflow_checkpoint_gaps": [],
+        }
+        mock_classified = {
+            "auto_fixable": [], "proposable": [], "manual_required": [], "fp_excluded": [],
+        }
+        classify_issues_mock = MagicMock(return_value=mock_classified)
+        run_fitness_evolution_mock = MagicMock(return_value={
+            "status": "insufficient_data", "data_count": 0, "required": 30,
+        })
+
+        try:
+            with patch.dict(sys.modules, {
+                "discover": MagicMock(run_discover=MagicMock(return_value=mock_discover)),
+                "skill_triage": MagicMock(triage_all_skills=MagicMock(return_value={})),
+                "telemetry_query": MagicMock(
+                    query_sessions=MagicMock(return_value=[]),
+                    query_usage=MagicMock(return_value=[]),
+                ),
+                "instruction_patterns": MagicMock(
+                    detect_patterns=MagicMock(return_value={"score": 0.5}),
+                    check_defaults_first=MagicMock(return_value=1.0),
+                    analyze_context_efficiency=MagicMock(return_value={"efficiency_score": 0.5}),
+                ),
+                "quality_engine": MagicMock(
+                    recommend_patterns=MagicMock(return_value={}),
+                    analyze_traces=MagicMock(return_value={}),
+                    compute_overall_score=MagicMock(return_value=0.5),
+                ),
+                "layer_diagnose": MagicMock(
+                    diagnose_all_layers=MagicMock(return_value={})
+                ),
+                "audit": MagicMock(
+                    run_audit=MagicMock(return_value="report"),
+                    collect_observability=MagicMock(return_value={}),
+                    collect_issues=MagicMock(return_value=[]),
+                    classify_artifact_origin=MagicMock(return_value="custom"),
+                ),
+                "skill_evolve": MagicMock(
+                    skill_evolve_assessment=MagicMock(return_value=[])
+                ),
+                "remediation": MagicMock(classify_issues=classify_issues_mock),
+                "issue_schema": MagicMock(
+                    make_rule_candidate_issue=MagicMock(return_value={}),
+                    make_hook_candidate_issue=MagicMock(return_value={}),
+                    make_skill_evolve_issue=MagicMock(return_value={}),
+                    make_skill_triage_issue=MagicMock(return_value=None),
+                    make_verification_rule_issue=MagicMock(return_value={}),
+                    make_workflow_checkpoint_issue=MagicMock(return_value={}),
+                    make_stall_recovery_issue=MagicMock(return_value={}),
+                    make_skill_quality_issue=MagicMock(return_value={}),
+                    VERIFICATION_RULE_CANDIDATE="verification_rule_candidate",
+                ),
+                "reorganize": MagicMock(
+                    run_reorganize=MagicMock(return_value={"skipped": True})
+                ),
+                "prune": MagicMock(
+                    run_prune=MagicMock(return_value={})
+                ),
+                "evolve_introspect": MagicMock(
+                    reconcile_split_archive=MagicMock(return_value={}),
+                    analyze_evolve_result=MagicMock(return_value={}),
+                ),
+                "pitfall_manager": MagicMock(
+                    pitfall_hygiene=MagicMock(return_value={})
+                ),
+                "fitness_evolution": MagicMock(
+                    run_fitness_evolution=run_fitness_evolution_mock,
+                ),
+                "pipeline_reflector": MagicMock(
+                    load_self_evolution_config=MagicMock(return_value={}),
+                    analyze_trajectory=MagicMock(return_value={
+                        "sufficient": False, "diagnosis": "skip", "total": 0, "min_required": 10,
+                    }),
+                ),
+                "trigger_engine": MagicMock(clear_snooze=MagicMock()),
+                "growth_engine": MagicMock(read_cache=MagicMock(return_value=None)),
+                "session_store": MagicMock(query=MagicMock(return_value=[])),
+            }):
+                result = _evolve_mod.run_evolve(
+                    project_dir=str(pj_b),
+                    dry_run=True,
+                )
+                remediation = result.get("phases", {}).get("remediation", {})
+                # #400 codex レビュー round3 Should 5: フェーズ error を skip に変換すると
+                # 配線が壊れてフェーズが丸ごと落ちても本テストが偽陽性で通ってしまう
+                # （退行フェンスとして弱い）。エラー無しを直接 assert する。
+                assert "error" not in remediation, (
+                    f"remediation フェーズがエラーで落ちている（退行フェンスが機能しない）: "
+                    f"{remediation.get('error')}"
+                )
+
+                assert classify_issues_mock.called, "classify_issues が呼ばれていない"
+                _, classify_kwargs = classify_issues_mock.call_args
+                assert classify_kwargs.get("project_root") == Path(str(pj_b)), (
+                    "classify_issues に project_root=proj が貫通していない（phases_remediate.py:169 の"
+                    f"キーワードが外れた疑い）。call_args kwargs: {classify_kwargs}"
+                )
+
+                fitness_evolution = result.get("phases", {}).get("fitness_evolution", {})
+                assert "error" not in fitness_evolution, (
+                    f"fitness_evolution フェーズがエラーで落ちている（退行フェンスが機能しない）: "
+                    f"{fitness_evolution.get('error')}"
+                )
+                assert run_fitness_evolution_mock.called, "run_fitness_evolution が呼ばれていない"
+                _, fe_kwargs = run_fitness_evolution_mock.call_args
+                assert fe_kwargs.get("project_dir") == str(pj_b), (
+                    "run_fitness_evolution に project_dir=ctx.project_dir が貫通していない"
+                    f"（phases_remediate.py:462 のキーワードが外れた疑い）。call_args kwargs: {fe_kwargs}"
+                )
+        except Exception as e:
+            if "cannot import" in str(e).lower() or "no module" in str(e).lower():
+                pytest.skip(f"モジュール import エラーでスキップ: {e}")
+            raise
+
+    def test_project_dir_none_delegates_classify_issues_and_fitness_evolution_with_old_signature(
+        self, tmp_path, monkeypatch
+    ):
+        """#400 codex レビュー round3 Must 3: ctx.project_dir が None（run_evolve に project_dir
+        未指定）のときは、phases_remediate.py が classify_issues()/run_fitness_evolution() に
+        project_root/project_dir キーワードを渡さず旧来どおり呼ぶこと（1引数 monkeypatch/wrapper
+        を壊さないため）。strict な（kwargs を受け付けない）関数を差し込んで検証する。
+        """
+        import evolve as _evolve_mod
+
+        cwd_dir = tmp_path / "cwd-dir"
+        cwd_dir.mkdir()
+        monkeypatch.chdir(cwd_dir)
+
+        monkeypatch.setattr(_evolve_mod, "check_data_sufficiency", lambda project_dir=None: {
+            "sufficient": True, "sessions": 5, "observations": 20,
+            "total_observations": 50, "telemetry_empty": False,
+            "backfill_recommended": False, "message": "OK",
+        })
+        monkeypatch.setattr(_evolve_mod, "check_fitness_function", lambda pd=None: {
+            "has_fitness": False, "has_criteria": False,
+            "fitness_functions": [], "fitness_dir": str(cwd_dir),
+        })
+
+        mock_discover = {
+            "matched_skills": [], "unmatched_patterns": [],
+            "missed_skill_opportunities": [], "tool_usage_patterns": {},
+            "verification_needs": [], "stall_recovery_patterns": [],
+            "workflow_checkpoint_gaps": [],
+        }
+        mock_classified = {
+            "auto_fixable": [], "proposable": [], "manual_required": [], "fp_excluded": [],
+        }
+        classify_calls = []
+        fitness_calls = []
+
+        def _strict_classify_issues(issues):
+            classify_calls.append(())
+            return mock_classified
+
+        def _strict_run_fitness_evolution():
+            fitness_calls.append(())
+            return {"status": "insufficient_data", "data_count": 0, "required": 30}
+
+        try:
+            with patch.dict(sys.modules, {
+                "discover": MagicMock(run_discover=MagicMock(return_value=mock_discover)),
+                "skill_triage": MagicMock(triage_all_skills=MagicMock(return_value={})),
+                "telemetry_query": MagicMock(
+                    query_sessions=MagicMock(return_value=[]),
+                    query_usage=MagicMock(return_value=[]),
+                ),
+                "instruction_patterns": MagicMock(
+                    detect_patterns=MagicMock(return_value={"score": 0.5}),
+                    check_defaults_first=MagicMock(return_value=1.0),
+                    analyze_context_efficiency=MagicMock(return_value={"efficiency_score": 0.5}),
+                ),
+                "quality_engine": MagicMock(
+                    recommend_patterns=MagicMock(return_value={}),
+                    analyze_traces=MagicMock(return_value={}),
+                    compute_overall_score=MagicMock(return_value=0.5),
+                ),
+                "layer_diagnose": MagicMock(
+                    diagnose_all_layers=MagicMock(return_value={})
+                ),
+                "audit": MagicMock(
+                    run_audit=MagicMock(return_value="report"),
+                    collect_observability=MagicMock(return_value={}),
+                    collect_issues=MagicMock(return_value=[]),
+                    classify_artifact_origin=MagicMock(return_value="custom"),
+                ),
+                "skill_evolve": MagicMock(
+                    skill_evolve_assessment=MagicMock(return_value=[])
+                ),
+                "remediation": MagicMock(classify_issues=_strict_classify_issues),
+                "issue_schema": MagicMock(
+                    make_rule_candidate_issue=MagicMock(return_value={}),
+                    make_hook_candidate_issue=MagicMock(return_value={}),
+                    make_skill_evolve_issue=MagicMock(return_value={}),
+                    make_skill_triage_issue=MagicMock(return_value=None),
+                    make_verification_rule_issue=MagicMock(return_value={}),
+                    make_workflow_checkpoint_issue=MagicMock(return_value={}),
+                    make_stall_recovery_issue=MagicMock(return_value={}),
+                    make_skill_quality_issue=MagicMock(return_value={}),
+                    VERIFICATION_RULE_CANDIDATE="verification_rule_candidate",
+                ),
+                "reorganize": MagicMock(
+                    run_reorganize=MagicMock(return_value={"skipped": True})
+                ),
+                "prune": MagicMock(
+                    run_prune=MagicMock(return_value={})
+                ),
+                "evolve_introspect": MagicMock(
+                    reconcile_split_archive=MagicMock(return_value={}),
+                    analyze_evolve_result=MagicMock(return_value={}),
+                ),
+                "pitfall_manager": MagicMock(
+                    pitfall_hygiene=MagicMock(return_value={})
+                ),
+                "fitness_evolution": MagicMock(
+                    run_fitness_evolution=_strict_run_fitness_evolution,
+                ),
+                "pipeline_reflector": MagicMock(
+                    load_self_evolution_config=MagicMock(return_value={}),
+                    analyze_trajectory=MagicMock(return_value={
+                        "sufficient": False, "diagnosis": "skip", "total": 0, "min_required": 10,
+                    }),
+                ),
+                "trigger_engine": MagicMock(clear_snooze=MagicMock()),
+                "growth_engine": MagicMock(read_cache=MagicMock(return_value=None)),
+                "session_store": MagicMock(query=MagicMock(return_value=[])),
+            }):
+                result = _evolve_mod.run_evolve(dry_run=True)  # project_dir 省略 → ctx.project_dir is None
+
+                remediation = result.get("phases", {}).get("remediation", {})
+                assert "error" not in remediation, (
+                    f"remediation フェーズがエラーで落ちている（退行フェンスが機能しない）: "
+                    f"{remediation.get('error')}"
+                )
+                assert classify_calls == [()], (
+                    "ctx.project_dir=None のとき classify_issues に project_root キーワードを"
+                    "渡してはならない（phases_remediate.py:169）"
+                )
+
+                fitness_evolution = result.get("phases", {}).get("fitness_evolution", {})
+                assert "error" not in fitness_evolution, (
+                    f"fitness_evolution フェーズがエラーで落ちている（退行フェンスが機能しない）: "
+                    f"{fitness_evolution.get('error')}"
+                )
+                assert fitness_calls == [()], (
+                    "ctx.project_dir=None のとき run_fitness_evolution に project_dir キーワードを"
+                    "渡してはならない（phases_remediate.py:462）"
+                )
+        except Exception as e:
+            if "cannot import" in str(e).lower() or "no module" in str(e).lower():
+                pytest.skip(f"モジュール import エラーでスキップ: {e}")
+            raise

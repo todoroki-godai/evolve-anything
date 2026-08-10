@@ -4,6 +4,8 @@ evolve は世界観（Step 0.5）に沿って各ステージ完了後に短い�
 これは flavor（演出）であり主機能ではない。スクリプトが利用できない場合はスキップしてよい。
 SKILL.md 各 Step の「一言メモ → references/report-narration.md」ポインタからここを参照する。
 
+`$PJ` は対象 PJ の絶対パス（束縛パターン: `PJ="${PJ:-$(pwd)}"`。env の `PJ` があれば優先・無ければ cwd。バッチ経路 #400 本体では呼び出し側が `PJ` を env で渡すだけで対応できる）。本ファイルの `$PJ` 言及は SKILL.md Step 6.2 で既に実行済みのコマンドの**出力フィールドを指す説明**であり、新たな実行を指示するものではない（新規実行を伴う手順は SKILL.md / correction-review.md 側にあり、いずれも同じ行・同一コードブロック内で束縛済み）。
+
 ## 各ステージ完了後の一言メモ
 
 **Discover / Diagnose 完了後**（発見パターン数 = `unmatched_patterns` + `matched_skills`）:
@@ -43,11 +45,16 @@ evolve.py の出力 JSON のトップレベル `result["env_score"]` は**構造
   1 行で surface する。黙って表示なしにはしない（取得失敗を観測可能にするのが原則）。
 
 次に成功時のみ `save_world_context` で world-context.json に保存する（`<ENV_SCORE>` =
-`result["env_score"]["score"]`。`SLUG` は Step 0.5 と同じ PJ 別スコープ値。
+`result["env_score"]["score"]`。bash は呼び出しごとに独立プロセスのため `$PJ`/`$SLUG` は
+Step 0.5 の値を前提にせずこのブロックで自前に再導出する（プロセスをまたいだ前提は置かない）。
 slug は env 経由で渡す＝python -c へ直接埋め込むと repo 名に `'` を含む場合に壊れる）:
 
 ```bash
-SLUG="$(basename $(git rev-parse --show-toplevel 2>/dev/null || echo unknown))"
+PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（Step 0.5 と同一の束縛パターン）
+# resolve_slug（git-common-dir 親, ADR-031）— worktree でも本体 PJ slug に正規化。
+# 旧実装（basename $(git rev-parse --show-toplevel)）は cwd 依存かつ worktree で本体と
+# 食い違う別導出だったため、SKILL.md/世界観ロードと同じ resolve_slug に統一した（#400 round5）。
+SLUG="$(PJ="$PJ" python3 -c "import os, sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug(cwd=os.environ['PJ']))" 2>/dev/null || echo unknown)"
 SLUG="$SLUG" python3 -c "
 import sys, os; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib')
 from world_context import load_world_context, save_world_context
@@ -130,10 +137,10 @@ TL;DR: 変更 {N} 件 / 要対応 {M} 件 / 残りすべて評価済みクリー
 - `  └ カウントされるアクション: /reflect で approve または --promote-weak で昇格した修正（自動検出・Stop hook 由来は除外）`（#51 LOW）
 - `本日累計 reflect 確認 2件 / idiom 1件 が自動化対象に昇格（このrunでは 1 件）`
 
-**対話前スナップショット問題の補正（#476-4・MUST。全PJ値の混入を断つ — #526-1）:** `growth_report` は analysis 時点で生成されるため `corrections_human` / `promoted_today` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合の上書きは、必ず **per-PJ の値に今回昇格数を加算する** 方式で行う（**`evolve-reflect --promote-weak` 出力の `corrections_human_allpj` をそのまま使ってはならない — MUST NOT**）:
+**対話前スナップショット問題の補正（#476-4・MUST。全PJ値の混入を断つ — #526-1）:** `growth_report` は analysis 時点で生成されるため `corrections_human` / `promoted_today` は **Step 6.2 の対話で昇格する前の値**で固定される。Step 6.2 で実際に昇格した場合の上書きは、必ず **per-PJ の値に今回昇格数を加算する** 方式で行う（**`evolve-reflect --project-dir "$PJ" --promote-weak` 出力の `corrections_human_allpj` をそのまま使ってはならない — MUST NOT**）:
 
 - **`corrections（human-confirmed のみ）` 行**: `result["growth_report"]["corrections_human"]`（= 当PJ analysis 時点の値）に、Step 6.2 で「はい」と答えて昇格に成功した件数を**足した値**を分子にする（分母は `corrections_target`）。
-  - ⚠ **`evolve-reflect --promote-weak` の出力 `corrections_human_allpj` は全PJ合計（例 41）を返す（#557 でリネーム済み）**ため、これで当PJ値（例 0/10）を上書きすると `41/10` という不整合表示になる（#526-1 の事故）。CLI 出力の `corrections_human_allpj` は当PJ分母 `/10` と意味が合わないので分子に使わない。
+  - ⚠ **`evolve-reflect --project-dir "$PJ" --promote-weak` の出力 `corrections_human_allpj` は全PJ合計（例 41）を返す（#557 でリネーム済み）**ため、これで当PJ値（例 0/10）を上書きすると `41/10` という不整合表示になる（#526-1 の事故）。CLI 出力の `corrections_human_allpj` は当PJ分母 `/10` と意味が合わないので分子に使わない。
 - **`本日累計 ...（このrunでは M 件）` 行**: growth_report の `promoted_today` / `autopromoted_today`（本日累計・store 由来）と、`promoted_this_run` / `autopromoted_this_run`（このrun・明示渡し）をそのまま使う。Step 6.2 で承認した直後で store がまだ反映前なら、このrun件数を本日累計に足して表示してよい。
 - 昇格が 0 件だった場合は growth_report の値をそのまま表示する。
 

@@ -228,7 +228,7 @@ def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
         return None
 
     try:
-        history = fe.load_history()
+        history = fe.load_history(project_dir=project_dir)
     except Exception:
         return None
     if not history:
@@ -252,7 +252,7 @@ def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
         # 3 箇所（Step 2 / fitness_evolution / calibration_drift）の文言を統一する。
         structural = False
         try:
-            fe_result = fe.run_fitness_evolution()
+            fe_result = fe.run_fitness_evolution(project_dir=project_dir)
             # #479/#584/#105: 構造的スキップ判定は fitness_evolution.is_structural_skip に単一ソース化。
             # insufficient_data + structural_reason、または bootstrap（structural_reason を持たない契約
             # だが同じく提案が出て初めて積み上がる）を「構造的に対象外」として畳む。

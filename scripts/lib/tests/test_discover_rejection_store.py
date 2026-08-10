@@ -51,3 +51,67 @@ def test_below_threshold_not_reported(tmp_path):
     _write(hf, [{"rejection_reason": "rare"}] * 2)
     patterns = detect_rejection_patterns(threshold=3, history_file=hf)
     assert all(p["pattern"] != "rare" for p in patterns)
+
+
+# --- project_root 明示指定が cwd より優先されること（#400 cwd-leak 修理） ---
+# 単一 cwd から他 PJ の project_dir を渡すバッチ経路（evolve-fleet propose / run_discover）で、
+# 実行元 PJ（cwd）の rejection 履歴が対象 PJ の判定に混入しないことを保証する。
+
+def test_project_root_param_overrides_cwd_slug(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+    # store.resolve_slug は cwd 引数の有無で異なる slug を返す（実装同型の簡易フェイク）。
+    monkeypatch.setattr(
+        store, "resolve_slug",
+        lambda cwd=None: Path(cwd).name if cwd else "cwd-slug",
+    )
+    # cwd（project_root 未指定時の既定）側の履歴 — 混入してはいけない
+    store.append_entry({"rejection_reason": "cwd_reason"}, "cwd-slug")
+    store.append_entry({"rejection_reason": "cwd_reason"}, "cwd-slug")
+    store.append_entry({"rejection_reason": "cwd_reason"}, "cwd-slug")
+    # project_root で明示指定する対象 PJ 側の履歴
+    pj_b = tmp_path / "pj-b"
+    pj_b.mkdir()
+    store.append_entry({"rejection_reason": "pj_b_reason"}, "pj-b")
+    store.append_entry({"rejection_reason": "pj_b_reason"}, "pj-b")
+    store.append_entry({"rejection_reason": "pj_b_reason"}, "pj-b")
+
+    patterns = detect_rejection_patterns(threshold=3, project_root=pj_b)
+    reasons = {p["pattern"] for p in patterns}
+    assert "pj_b_reason" in reasons
+    assert "cwd_reason" not in reasons
+
+
+def test_history_file_still_wins_over_project_root(tmp_path, monkeypatch):
+    """history_file 明示指定は project_root より優先される（既存の優先度を維持）。"""
+    monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+    hf = tmp_path / "explicit_history.jsonl"
+    _write(hf, [{"rejection_reason": "explicit_reason"}] * 3)
+    pj_b = tmp_path / "pj-b"
+    pj_b.mkdir()
+
+    patterns = detect_rejection_patterns(threshold=3, history_file=hf, project_root=pj_b)
+    reasons = {p["pattern"] for p in patterns}
+    assert "explicit_reason" in reasons
+
+
+def test_project_root_none_calls_resolve_slug_with_old_signature(tmp_path, monkeypatch):
+    """project_root 未指定（None）のときは store.resolve_slug に project_root キーワード/
+    位置引数を渡さず旧来どおり無引数で呼ぶ（1引数 monkeypatch/wrapper を壊さないため・
+    #400 codex レビュー round3 Must 3）。
+    """
+    monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+    calls = []
+
+    def _strict_zero_arg_resolve_slug():
+        calls.append(())
+        return "cwd-slug"
+
+    monkeypatch.setattr(store, "resolve_slug", _strict_zero_arg_resolve_slug)
+    store.append_entry({"rejection_reason": "x"}, "cwd-slug")
+    store.append_entry({"rejection_reason": "x"}, "cwd-slug")
+    store.append_entry({"rejection_reason": "x"}, "cwd-slug")
+
+    patterns = detect_rejection_patterns(threshold=3)  # project_root 省略
+    assert calls == [()], "project_root=None のとき resolve_slug に引数を渡してはならない"
+    reasons = {p["pattern"] for p in patterns}
+    assert "x" in reasons

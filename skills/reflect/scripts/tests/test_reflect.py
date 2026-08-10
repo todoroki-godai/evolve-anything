@@ -1090,6 +1090,74 @@ class TestWeakSignalPromotion:
         assert out["skipped"] == [{"signal_key": old.signal_key, "reason": "expired"}]
 
 
+# --- Test: --project-dir が cwd/env より優先して project_path を決める（#400 cwd-leak 修理） ---
+
+class TestProjectDirFlag:
+    """単一 cwd から他 PJ の project_dir を渡すバッチ経路（fleet propose 等）で、
+    実行元 PJ の cwd/env が対象 PJ の project_path に混入しないことを保証する。
+    優先順位: --project-dir（明示引数） > env CLAUDE_PROJECT_DIR > cwd。
+    """
+
+    def _seed_ws(self, tmp_path):
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+        ws = tmp_path / "weak_signals.jsonl"
+        detected_at = _fresh_detected_at()
+        sig = WeakSignal(
+            "llm_judge",
+            {"source_path": "/a.jsonl", "line_no": 1, "text": "project-dir 経路のテスト", "reason": "後置型"},
+            detected_at, "s1", "evolve-anything",
+        )
+        append_signals([sig], path=ws)
+        return ws, sig
+
+    def _promote(self, tmp_path, argv_extra):
+        ws, sig = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", [
+            "reflect", "--promote-weak", sig.signal_key,
+            "--weak-signals-file", str(ws),
+            "--corrections-file", str(corr),
+            *argv_extra,
+        ]):
+            reflect.main()
+        return [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    def test_project_dir_overrides_cwd(self, tmp_path, monkeypatch):
+        """cwd=PJ-A のまま --project-dir PJ-B を渡すと、昇格レコードは PJ-B に帰属する。"""
+        pj_a = tmp_path / "pj-a"
+        pj_b = tmp_path / "pj-b"
+        pj_a.mkdir()
+        pj_b.mkdir()
+        monkeypatch.chdir(pj_a)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+        recs = self._promote(tmp_path, ["--project-dir", str(pj_b)])
+        assert len(recs) == 1
+        assert recs[0]["project_path"] == "pj-b"
+        assert recs[0]["project_path"] != "pj-a"
+
+    def test_project_dir_overrides_env_var(self, tmp_path, monkeypatch):
+        """env CLAUDE_PROJECT_DIR が別 PJ を指していても --project-dir が優先される。"""
+        pj_env = tmp_path / "pj-env"
+        pj_explicit = tmp_path / "pj-explicit"
+        pj_env.mkdir()
+        pj_explicit.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(pj_env))
+
+        recs = self._promote(tmp_path, ["--project-dir", str(pj_explicit)])
+        assert recs[0]["project_path"] == "pj-explicit"
+
+    def test_env_var_still_used_when_project_dir_omitted(self, tmp_path, monkeypatch):
+        """--project-dir 省略時は従来どおり env CLAUDE_PROJECT_DIR にフォールバックする（後方互換）。"""
+        pj_env = tmp_path / "pj-env2"
+        pj_env.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(pj_env))
+
+        recs = self._promote(tmp_path, [])
+        assert recs[0]["project_path"] == "pj-env2"
+
+
 # --- Test: --promote-weak が idiom を confirmed 化する閉ループ（#463 配線漏れ修正） ---
 
 class TestPromoteWeakConfirmsIdiom:

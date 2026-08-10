@@ -144,3 +144,36 @@ def test_registered_in_observability_contract():
     """calibration_drift が _OBSERVABILITY_BUILDERS に登録されている。"""
     keys = [k for k, _ in _OBSERVABILITY_BUILDERS]
     assert "calibration_drift" in keys
+
+
+# --- #400 codex レビュー是正: project_dir が load_history/run_fitness_evolution に
+# 貫通すること（従来は受け取った project_dir を無視して cwd フォールバックに落ちていた）。
+
+def test_project_dir_threaded_into_load_history(monkeypatch, tmp_path):
+    received = {}
+
+    def _fake_load_history(*a, **k):
+        received["kwargs"] = k
+        received["args"] = a
+        return []
+
+    monkeypatch.setattr(fitness_evolution, "load_history", _fake_load_history)
+    build_calibration_drift_section(tmp_path)
+
+    assert received["kwargs"].get("project_dir") == tmp_path
+
+
+def test_project_dir_threaded_into_run_fitness_evolution(monkeypatch, tmp_path):
+    """insufficient_data の structural 判定経路で run_fitness_evolution にも project_dir が貫通する。"""
+    received = {}
+
+    def _fake_run_fitness_evolution(*a, **k):
+        received["kwargs"] = k
+        received["args"] = a
+        return {"status": "insufficient_data", "structural_reason": True}
+
+    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(2))
+    monkeypatch.setattr(fitness_evolution, "run_fitness_evolution", _fake_run_fitness_evolution)
+    build_calibration_drift_section(tmp_path)
+
+    assert received["kwargs"].get("project_dir") == tmp_path

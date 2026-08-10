@@ -62,8 +62,8 @@ WORKFLOW_CHECKPOINT_CANDIDATE = 'workflow_checkpoint_candidate'
 # remediation public function / class signatures
 build_fix_targets_observability(unresolvable: Dict[str, Any] | None) -> List[str]
 check_regression(fixed_file: str, original_content: str) -> Dict[str, Any]
-classify_issue(issue: Dict[str, Any]) -> Dict[str, Any]
-classify_issues(issues: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]
+classify_issue(issue: Dict[str, Any], *, project_root: pathlib.Path | None = None) -> Dict[str, Any]
+classify_issues(issues: List[Dict[str, Any]], *, project_root: pathlib.Path | None = None) -> Dict[str, List[Dict[str, Any]]]
 compute_confidence_score(issue: Dict[str, Any]) -> float
 compute_impact_scope(file_path: str) -> str
 detect_unresolvable_fix_targets(classified: Dict[str, Any], project_dir: Any | None = None) -> Dict[str, Any]
@@ -85,8 +85,8 @@ fix_stale_rules(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 fix_untagged_reference(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 fix_verification_rule(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 fix_workflow_checkpoint(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
-generate_auto_fix_summaries(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
-generate_proposals(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
+generate_auto_fix_summaries(issues: List[Dict[str, Any]], *, project_root: pathlib.Path | None = None) -> List[Dict[str, Any]]
+generate_proposals(issues: List[Dict[str, Any]], *, project_root: pathlib.Path | None = None) -> List[Dict[str, Any]]
 generate_rationale(issue: Dict[str, Any], category: str) -> str
 partition_proposable_by_confidence(proposable: List[Dict[str, Any]], threshold: float = None) -> Dict[str, List[Dict[str, Any]]]
 partition_proposable_by_scope(proposable: List[Dict[str, Any]], origin_resolver=None) -> Dict[str, List[Dict[str, Any]]]

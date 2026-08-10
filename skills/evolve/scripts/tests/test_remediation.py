@@ -2,6 +2,7 @@
 import json
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -54,6 +55,7 @@ from issue_schema import (
     HOOK_TOTAL_COUNT,
     SE_SKILL_NAME,
     SE_TOTAL_SCORE,
+    VRC_EVIDENCE,
 )
 
 
@@ -952,6 +954,55 @@ class TestToolUsageProposals:
         assert len(proposals) == 1
         assert "hook" in proposals[0]["proposal"].lower() or "Hook" in proposals[0]["proposal"]
         assert "check-bash-builtin.py" in proposals[0]["proposal"]
+
+
+# ---------- #400 cwd-leak 修理: generate_proposals の project_root パラメータ ----------
+
+class TestGenerateProposalsProjectRoot:
+    """paths_suggestion 生成が Path.cwd() 固定でなく project_root 明示指定に従うこと
+    （単一 cwd から他 PJ の issue を渡すバッチ経路で誤った PJ の frontmatter を提案しないため）。
+    """
+
+    def _issue_with_evidence(self):
+        return [{
+            "type": TOOL_USAGE_RULE_CANDIDATE,
+            "file": "~/.claude/rules/avoid-bash-builtin.md",
+            "detail": {
+                RULE_FILENAME: "avoid-bash-builtin.md",
+                RULE_TARGET_COMMANDS: ["grep", "cat"],
+                RULE_TOTAL_COUNT: 15,
+                VRC_EVIDENCE: "grep 'foo' file.txt",
+            },
+            "category": "proposable",
+        }]
+
+    def test_project_root_param_used_instead_of_cwd(self, tmp_path):
+        pj_b = tmp_path / "pj-b"
+        pj_b.mkdir()
+        captured = {}
+
+        def _fake_suggest_paths_frontmatter(evidence, project_root):
+            captured["project_root"] = project_root
+            return None
+
+        with mock.patch("reflect_utils.suggest_paths_frontmatter", side_effect=_fake_suggest_paths_frontmatter):
+            generate_proposals(self._issue_with_evidence(), project_root=pj_b)
+
+        assert captured["project_root"] == pj_b
+
+    def test_project_root_omitted_falls_back_to_cwd(self, monkeypatch, tmp_path):
+        """project_root 省略時は従来どおり cwd を使う（後方互換）。"""
+        monkeypatch.chdir(tmp_path)
+        captured = {}
+
+        def _fake_suggest_paths_frontmatter(evidence, project_root):
+            captured["project_root"] = project_root
+            return None
+
+        with mock.patch("reflect_utils.suggest_paths_frontmatter", side_effect=_fake_suggest_paths_frontmatter):
+            generate_proposals(self._issue_with_evidence())
+
+        assert captured["project_root"] == tmp_path
 
 
 # ---------- rule 分離モードテスト ----------

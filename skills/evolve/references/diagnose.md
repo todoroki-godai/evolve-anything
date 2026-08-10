@@ -8,10 +8,13 @@ SKILL.md 側には各 Step の見出し・要点・MUST の1行要約のみを�
 
 ```bash
 evolve-usage-log "evolve"
+PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（bash は呼び出しごとに独立プロセスのため各ブロック冒頭で束縛する。
+                     # env の PJ があれば優先・無ければ cwd。バッチ経路 #400 本体では呼び出し側が
+                     # PJ を env で渡すだけで対応できる）
 # 出力は PJ 別パスに書く（共有固定パスだと別 PJ の stale 出力を誤読する, #408-A）。
 # #525-3: evolve が slug 解決済みの OUT パスを返すので SLUG/OUT 再導出を1コマンドに短縮。
-OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
-evolve --project-dir "$(pwd)" --dry-run --observe-first --output "$OUT"
+OUT="$(evolve --project-dir "$PJ" --print-out-path)"
+evolve --project-dir "$PJ" --dry-run --observe-first --output "$OUT"
 ```
 
 ⚠️ **`--output` は必須（MUST）**: result JSON はフェーズ全部入りで数十〜数百 KB になる。`--output` を付けると full JSON は `$OUT`（`/tmp/rl_evolve_<slug>.json`）に書かれ、stdout には `{"output": "...", "slug": ..., "generated_at": ..., "phases": [...], "env_tier": ...}` の **1行サマリ**だけが出る。
@@ -34,8 +37,9 @@ evolve --project-dir "$(pwd)" --dry-run --observe-first --output "$OUT"
   - **MUST: フル dry-run の所要時間目安をユーザーに伝えてから実行する**（無音で長時間ハングと誤解されるのを防ぐ, #407）。目安は `env_tier` で示す（[ADR-037] で audit/skill_evolve が LLM-free 化されて以降の実測ベース・#479）: `small` ≈ 〜15 秒 / `medium` ≈ 15〜30 秒 / `large` ≈ 30〜60 秒（観測 161 件・skills+rules 64 件の large 環境で実測約 34 秒）。auto-memory drain（Step 6.5）など assistant インライン LLM 生成を伴う対話フェーズは別途時間がかかる。
   - 重いフェーズ込みの dry-run を **`--observe-first` 無し**で同じ PJ 別パスに書き直す（Bash の各呼び出しは別シェルで `$OUT` が引き継がれないため、このブロック内で再導出する。#525-3 で `--print-out-path` に短縮済み）:
     ```bash
-    OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
-    evolve --project-dir "$(pwd)" --dry-run --output "$OUT"
+    PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（各ブロック冒頭で束縛。env の PJ があれば優先・無ければ cwd）
+    OUT="$(evolve --project-dir "$PJ" --print-out-path)"
+    evolve --project-dir "$PJ" --dry-run --output "$OUT"
     ```
   - 完了後、`$OUT`（=`/tmp/rl_evolve_<slug>.json`）を Read して再度 slug を照合し、Step 2 以降へ進む。
 

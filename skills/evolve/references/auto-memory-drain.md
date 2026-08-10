@@ -16,7 +16,9 @@ _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 import rl_common, auto_memory_broker
 
-slug = rl_common.project_name_from_dir(os.environ.get("CLAUDE_PROJECT_DIR", ""))
+# result は Step 1 で Read した $OUT の JSON。env CLAUDE_PROJECT_DIR は未設定/空文字になりうる
+# うえ、単一 cwd から他 PJ の project_dir を渡すバッチ経路（#400）では実行元 PJ を指してしまう。
+slug = rl_common.project_name_from_dir(result["project_dir"])
 records = auto_memory_broker.read_queue(slug, rl_common.DATA_DIR)
 if not records:
     print("auto-memory キュー: 0 件 ✓")  # 沈黙≠評価。ここで終了

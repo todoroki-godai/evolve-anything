@@ -8,7 +8,7 @@ remediation.py は audit の検出結果を confidence_score / impact_scope ベ�
 
 ### auto_fixable (confidence ≥ 0.9, impact_scope in (file, project))
 
-`generate_auto_fix_summaries(issues)` を呼び出し、**AskUserQuestion の前に**以下のフォーマットでテキスト出力する（MUST）:
+`generate_auto_fix_summaries(issues, project_root=Path(result["project_dir"]))` を呼び出し、**AskUserQuestion の前に**以下のフォーマットでテキスト出力する（MUST。`result` は Step 1 で Read した `$OUT`（`evolve --project-dir "$PJ" ...` の出力）の JSON — `result["project_dir"]` は解析対象 PJ の絶対パス（`EvolveContext.new_result()` が `str(self.proj_root.resolve())` で設定）。`Path.cwd()` に頼ると単一 cwd から他 PJ の issue を渡すバッチ経路（#400）で誤った PJ の代替パスを提案する）:
 
 ```
 **修正候補 N件:**
@@ -39,7 +39,7 @@ SKILL は count を消費するだけで、しきい値判定はコード側に�
 **個別承認対象 = `proposable_custom_individual`（conf ≥ 0.7）:**
 
 - `proposable_custom_individual > 0` の場合のみ個別承認フローを実行（MUST）
-- **提案詳細プロトコルに従う**: `generate_proposals(issues)` で各 issue の `{proposal, rationale}` を取得し、**1件ずつ**「対象・根拠（detail の実値）・変更内容」を提示してから AskUserQuestion で個別承認（MUST）
+- **提案詳細プロトコルに従う**: `generate_proposals(issues, project_root=Path(result["project_dir"]))` で各 issue の `{proposal, rationale}` を取得し、**1件ずつ**「対象・根拠（detail の実値）・変更内容」を提示してから AskUserQuestion で個別承認（MUST。`result["project_dir"]` は Step 1 で Read した `$OUT` の解析対象 PJ 絶対パス。`Path.cwd()` に頼ると単一 cwd から他 PJ の issue を渡すバッチ経路（#400）で誤った PJ の代替パスを提案する）
 - **⚠ pitfall — 補足説明は Q&A の前に出す（MUST）**: 「なぜ必要か」「どんな効果があるか」を AskUserQuestion と同じターン内の Q&A より前のテキストとして先に出力すること。ユーザーが Yes/No を判断できる状態を作ってから質問する。
 - **⚠ pitfall — AskUserQuestion の options は最大 4 択（MUST）**: individual が 5 件以上の場合に 5 択以上の options を1問で出してはならない。proposal-protocol.md の方式 A（1件ずつ）または方式 B（グループ分割）を使う。
 - 同じ type の issue が複数あっても件数に丸めない（例: `missing_effort` が 10 スキル分あるなら各スキル名 + 推定 effort + reason を per-item で展開する。10 件超は他 M 件と誘導）
@@ -146,12 +146,16 @@ proposal_text = ingest_split(issue, emit["requests"], responses)
 
 ```python
 import os, sys
+from pathlib import Path
 _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from remediation.suppression_ledger import record_rejection, resolve_slug
 from rule_violation_lane import rule_violation_suppression_issue
 
-slug = resolve_slug()
+# result は Step 1 で Read した $OUT の JSON。resolve_slug() を無引数で呼ぶと cwd から
+# slug を解決し、単一 cwd から他 PJ の issue を渡すバッチ経路（#400）で dismiss が cwd 側
+# PJ の suppression ledger に誤記録される。解析対象 PJ を明示する。
+slug = resolve_slug(cwd=Path(result["project_dir"]))
 # (a) proposable_global の issue dict を dismiss（classified.proposable_global[] の要素）
 for issue in dismissed_global_issues:
     record_rejection(issue, slug=slug)
@@ -166,13 +170,16 @@ for v in dismissed_rule_violations:  # phases.discover.rule_violation_observed[]
 
 ```python
 import os, sys
+from pathlib import Path
 _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from remediation.suppression_ledger import record_rejection, resolve_slug
 
 # rejected_issues = ユーザーが却下/スキップした issue dict のリスト（個別承認で不採用にしたもの）
 # dry_run = True のときは下のループを実行しない（MUST NOT — suppression ledger に書かない）
-slug = resolve_slug()  # worktree 安全 slug（git-common-dir の親 basename）
+# result は Step 1 で Read した $OUT の JSON。無引数 resolve_slug() は cwd から解決するため、
+# 単一 cwd から他 PJ の issue を渡すバッチ経路（#400）で却下記録が cwd 側 PJ に誤って書かれる。
+slug = resolve_slug(cwd=Path(result["project_dir"]))  # worktree 安全 slug（git-common-dir の親 basename）
 for issue in rejected_issues:
     record_rejection(issue, slug=slug)  # dedup_key 単位・TTL45日で記録（last-write-wins）
 print(f"suppression ledger: {len(rejected_issues)} 件を却下記録（次回 evolve で再提示しない）")

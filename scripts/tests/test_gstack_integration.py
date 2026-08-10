@@ -209,3 +209,56 @@ class TestPrinciplePromotion:
         assert result["category"] == "auto_fixable"
         mock_apply.assert_not_called()
         assert "principle_promoted" not in result
+
+
+class TestClassifyIssueProjectRoot:
+    """#400 cwd-leak 修理: 保護スキル警告の project_root が Path.cwd() 固定でなく
+    明示指定に従うこと（単一 cwd から他 PJ の issue を渡すバッチ経路で誤った代替パスを
+    提案しないため）。
+    """
+
+    def test_project_root_param_used_instead_of_cwd(self, tmp_path):
+        from remediation import classify_issue
+
+        pj_b = tmp_path / "pj-b"
+        pj_b.mkdir()
+        captured = {}
+
+        def _fake_suggest_local_alternative(skill_name, project_root):
+            captured["project_root"] = project_root
+            return (str(project_root / "alt.md"), False)
+
+        issue = {
+            "type": "stale_ref",
+            "file": str(pj_b / ".claude" / "skills" / "my-skill" / "SKILL.md"),
+            "detail": {},
+        }
+        with mock.patch("remediation.is_protected_skill", return_value=True), \
+             mock.patch("remediation.suggest_local_alternative", side_effect=_fake_suggest_local_alternative), \
+             mock.patch("remediation.generate_protection_warning", return_value="warn"):
+            classify_issue(issue, project_root=pj_b)
+
+        assert captured["project_root"] == pj_b
+
+    def test_project_root_omitted_falls_back_to_cwd(self, monkeypatch, tmp_path):
+        """project_root 省略時は従来どおり cwd を使う（後方互換）。"""
+        from remediation import classify_issue
+
+        monkeypatch.chdir(tmp_path)
+        captured = {}
+
+        def _fake_suggest_local_alternative(skill_name, project_root):
+            captured["project_root"] = project_root
+            return (str(project_root / "alt.md"), False)
+
+        issue = {
+            "type": "stale_ref",
+            "file": str(tmp_path / ".claude" / "skills" / "my-skill" / "SKILL.md"),
+            "detail": {},
+        }
+        with mock.patch("remediation.is_protected_skill", return_value=True), \
+             mock.patch("remediation.suggest_local_alternative", side_effect=_fake_suggest_local_alternative), \
+             mock.patch("remediation.generate_protection_warning", return_value="warn"):
+            classify_issue(issue)
+
+        assert captured["project_root"] == tmp_path

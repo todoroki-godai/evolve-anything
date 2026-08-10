@@ -35,7 +35,10 @@ proposable 件数が 5 件以上の場合、1度の質問にまとめてはな�
 ## Python が detail を持っている前提
 
 多くの提案は issue の `detail`（`skill_name` / `confidence` / `reason` 等）や
-`generate_proposals(issues)` の `{proposal, rationale}` に per-item の判断材料が既に入っている。
+`generate_proposals(issues, project_root=Path(result["project_dir"]))`（[references/remediation.md](remediation.md) 参照。
+`result` は Step 1 で Read した `$OUT` の JSON — `Path.cwd()` は単一 cwd から他 PJ の issue を
+渡すバッチ経路（#400）で誤った PJ の代替パスを提案する）の `{proposal, rationale}` に
+per-item の判断材料が既に入っている。
 件数に丸めるのは表示側の問題なので、`detail` を読んで展開すれば追加の集計は不要。
 
 このプロトコルは Step 2 / Step 5.5 / Step 7 / Step 7.5 など全提案ポイントに適用する。
