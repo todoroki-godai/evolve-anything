@@ -35,6 +35,14 @@ def _llm_judge_count(project_dir: Optional[Path] = None) -> int:
     ``project_dir`` を引数で受け、``pj_slug_fast`` で書込側と同一の slug に揃える。
 
     store / slug 未解決 / 読込失敗は 0（防御的・沈黙でなく従来挙動へフォールバック）。
+
+    **#94（codex round2 [Must]）: この関数は表示専用の raw 値**。promoted も bootstrap
+    消化除外も適用しない（「捕捉済み総数」という観測値の意味を変えないため意図的に raw）。
+    「未昇格の llm_judge シグナルは...昇格可能」という actionable な案内の分岐条件には
+    **絶対にこの raw 値を使わない**こと — 全件 promoted 済み・全件 bootstrap 消化済みでも
+    raw は非ゼロのままなので、案内の誤表示を招く（実データで確認済み: 全PJ合計 313 件中
+    123 件が promoted 済みで raw に混入していた）。案内の判定には
+    ``_llm_judge_actionable_count`` を使う。
     """
     try:
         from weak_signals.store import read_signals
@@ -55,6 +63,52 @@ def _llm_judge_count(project_dir: Optional[Path] = None) -> int:
         )
     except Exception:
         return 0
+
+
+def _llm_judge_actionable_count(project_dir: Optional[Path] = None) -> int:
+    """当PJ slug の llm_judge channel のうち **actionable**（未昇格・bootstrap 消化除外後）件数。
+
+    #94（codex round2 [Must]）是正: ``build_capture_rate_section`` は表示用の raw 値
+    （``_llm_judge_count``・promoted 含む・bootstrap 除外なし）を「未昇格の llm_judge
+    シグナルは...今日の修正確認 phase で昇格可能」という **actionable な案内**の分岐条件に
+    誤って使っていた。全件 promoted 済み・全件 bootstrap marker 以前 detected（=
+    queue_materials / daily_review / sections_weak_signals が既に「判断済み」として除外
+    している状態）でも raw は非ゼロのため、案内が実態と食い違って表示され続ける（4つ目の
+    reader 非対称）。
+
+    本関数は queue_materials._scoped_kept_signals / daily_review._read_new と同じ predicate
+    （``correction_semantic.bootstrap_backlog._exclude_bootstrap_consumed``）+ promoted
+    フィルタを適用した actionable 件数を返し、**案内を出すかどうかの判定にのみ**使う
+    （表示の raw 値とは別変数として区別する。呼び出し側 ``build_capture_rate_section`` を
+    参照）。store / slug 未解決 / 読込失敗は 0（防御的フォールバック）。
+    """
+    try:
+        from weak_signals.store import read_signals
+    except ImportError:
+        return 0
+    try:
+        from pj_slug import pj_slug_fast
+        slug = pj_slug_fast(project_dir if project_dir is not None else Path.cwd())
+    except Exception:
+        slug = None
+    if not slug:
+        return 0
+    try:
+        candidates = [
+            r
+            for r in read_signals()
+            if r.get("channel") == "llm_judge"
+            and r.get("pj_slug") == slug
+            and not r.get("promoted")
+        ]
+    except Exception:
+        return 0
+    try:
+        from correction_semantic.bootstrap_backlog import _exclude_bootstrap_consumed
+        candidates = _exclude_bootstrap_consumed(candidates, slug)
+    except Exception:
+        pass
+    return len(candidates)
 
 
 def _resolve_store_files() -> Tuple[Path, Path]:
@@ -121,7 +175,11 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
     # 分子、意味判定系（weak_signals の llm_judge channel）は別レーン。両方を併記して
     # 「hook 0% だが llm_judge が大量捕捉」の実態を可視化する。
     # #492: project_dir を渡し、weak_signals 書込側（pj_slug_fast）と同じ slug で照合する。
+    # 表示用（raw・promoted 含む・bootstrap 除外なし＝観測値としての捕捉総数）と
+    # 判定用（actionable・未昇格 + bootstrap 消化除外後）を別変数で明確に区別する
+    # （#94 codex round2 [Must]・raw 値を actionable な案内の分岐条件に使わない）。
     llm_judge = _llm_judge_count(project_dir)
+    llm_judge_actionable = _llm_judge_actionable_count(project_dir)
 
     header = ["## Correction Capture (報酬入力の捕捉率)", ""]
     detail = (
@@ -154,13 +212,21 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
     # observability の watch（観察中）に載せる。マーカーが無いと classify_section が clean と
     # 誤判定し『✓ 評価済みクリーン』へ畳まれ、ラベルと中身が矛盾していた。
     if llm_judge > 0:
-        return header + [
+        lines = header + [
             f"ℹ hook 経由の capture 率は低い（{rate:.0%}）が、意味判定レーン（llm_judge）で "
             f"{llm_judge} 件捕捉済み。{channel_line}",
-            "未昇格の llm_judge シグナルは `/evolve-anything:evolve` の今日の修正確認 phase で昇格可能"
-            "（報酬入力は枯渇していない・advisory・スコア非関与, #421/#476）。",
-            "",
         ]
+        # #94（codex round2 [Must]）: 「昇格可能」の案内は actionable（未昇格 + bootstrap
+        # 消化除外後）が 1 件以上あるときだけ出す。raw（llm_judge）が非ゼロでも全件 promoted
+        # 済み・全件 bootstrap で判断済みなら実際には昇格対象が無いため、案内を省く。
+        # capture 自体は起きているので枯渇警告（⚠ 分岐）へは落とさない（#476-1 の意図を保つ）。
+        if llm_judge_actionable > 0:
+            lines.append(
+                "未昇格の llm_judge シグナルは `/evolve-anything:evolve` の今日の修正確認 phase で昇格可能"
+                "（報酬入力は枯渇していない・advisory・スコア非関与, #421/#476）。"
+            )
+        lines.append("")
+        return lines
 
     # #52-6: 具体手順を番号付きで添える（何をどの順で確認すればよいかを明示）。
     # #48-F3: 「次の一手」の前に、低 capture を生む決定論的な原因の当たりを付けられる

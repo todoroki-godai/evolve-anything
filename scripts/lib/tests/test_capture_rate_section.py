@@ -6,7 +6,7 @@ advisory 表示のみ（スコア重み非関与）。決定論・LLM 非依存�
 """
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _LIB = Path(__file__).resolve().parent.parent
@@ -235,6 +235,112 @@ def test_llm_judge_branch_classifies_as_watch(tmp_path, monkeypatch):
     # 中間分岐の実質的所見にマーカー ℹ が付く（clean にも critical にも分類されない）
     assert "ℹ" in combined
     assert classify_section(section) == "watch"
+
+
+# ── #94 codex round2 [Must]: 昇格案内の分岐条件は actionable（未昇格+bootstrap消化除外後）を使う ──
+
+
+def test_all_promoted_llm_judge_shows_no_promotion_hint(tmp_path, monkeypatch):
+    """llm_judge が全件 promoted 済みなら「昇格可能」の案内は出さない（actionable 0 件）。
+
+    従来の _llm_judge_count は promoted フィルタが無く、全件 promoted 済みでも「未昇格の
+    llm_judge シグナルは...昇格可能」と誤案内していた。raw 捕捉数の表示（channel_line）は
+    維持しつつ、案内の1行だけを省く。capture 自体は起きているので枯渇警告（⚠）へは落とさない
+    （#476-1 の意図を保つ・codex round2 [Must]）。
+    """
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    from pj_slug import pj_slug_fast
+    import weak_signals.store as ws_store
+
+    this_slug = pj_slug_fast(tmp_path)
+    store = tmp_path / "weak_signals.jsonl"
+    with open(store, "w", encoding="utf-8") as f:
+        for i in range(5):
+            f.write(json.dumps({
+                "channel": "llm_judge", "promoted": True,
+                "signal_key": f"p{i}", "pj_slug": this_slug,
+            }) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
+
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    # raw 捕捉数（表示用）は維持される
+    assert "llm_judge 5 件" in combined
+    # 全件 promoted 済み → actionable 0 → 「昇格可能」案内は出ない
+    assert "昇格可能" not in combined
+    # capture 自体は起きているので枯渇警告には落ちない
+    assert "枯渇している可能性" not in combined
+
+
+def test_bootstrap_consumed_llm_judge_shows_no_promotion_hint(tmp_path, monkeypatch):
+    """marker 設置以前に detected した未昇格 llm_judge は actionable から除外される
+    （queue/daily_review/観測matrix と同じ predicate・#94 codex round2 [Must]）。
+    """
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    from pj_slug import pj_slug_fast
+    import weak_signals.store as ws_store
+
+    this_slug = pj_slug_fast(tmp_path)
+    now = datetime.now(timezone.utc)
+    store = tmp_path / "weak_signals.jsonl"
+    with open(store, "w", encoding="utf-8") as f:
+        for i in range(4):
+            f.write(json.dumps({
+                "channel": "llm_judge", "promoted": False,
+                "signal_key": f"o{i}", "pj_slug": this_slug,
+                "detected_at": (now - timedelta(days=3)).isoformat(),
+            }) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
+
+    # CLAUDE_PLUGIN_DATA は autouse conftest で tmp_path に固定されるため、marker は
+    # default_marker_path(this_slug) が自然解決する場所に直接書く（monkeypatch 不要）。
+    marker = tmp_path / f"bootstrap_done-{this_slug}.marker"
+    marker.write_text((now - timedelta(days=1)).isoformat(), encoding="utf-8")
+
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "llm_judge 4 件" in combined  # raw 捕捉数は維持
+    assert "昇格可能" not in combined     # actionable 0（marker 以前 detected）
+    assert "枯渇している可能性" not in combined
+
+
+def test_unpromoted_post_marker_llm_judge_still_shows_promotion_hint(tmp_path, monkeypatch):
+    """未昇格・bootstrap 消化除外後も残る llm_judge があれば従来通り「昇格可能」案内を出す
+    （回帰防止・actionable>0 のときの挙動は変えない）。"""
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    from pj_slug import pj_slug_fast
+    import weak_signals.store as ws_store
+
+    this_slug = pj_slug_fast(tmp_path)
+    now = datetime.now(timezone.utc)
+    store = tmp_path / "weak_signals.jsonl"
+    with open(store, "w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "channel": "llm_judge", "promoted": False,
+            "signal_key": "new1", "pj_slug": this_slug,
+            "detected_at": (now - timedelta(hours=1)).isoformat(),
+        }) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
+
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "llm_judge 1 件" in combined
+    assert "昇格可能" in combined
 
 
 def test_other_pj_llm_judge_not_counted(tmp_path, monkeypatch):

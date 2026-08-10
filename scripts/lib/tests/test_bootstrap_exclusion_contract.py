@@ -50,9 +50,9 @@ from weak_signals.store import WeakSignal, append_signals  # noqa: E402
 SLUG = "contract-test-pj"
 
 
-def _sig(text: str, line_no: int, detected_at: str) -> WeakSignal:
+def _sig(text: str, line_no: int, detected_at: str, channel: str = "llm_judge") -> WeakSignal:
     return WeakSignal(
-        channel="llm_judge",
+        channel=channel,
         provenance={"source_path": "/a.jsonl", "line_no": line_no, "text": text, "reason": "r"},
         detected_at=detected_at,
         session_id="s1",
@@ -130,6 +130,13 @@ def test_all_three_backlog_readers_agree_and_raw_total_unaffected(
     """queue / daily_review / observability matrix の当PJ未昇格集計が bootstrap 消化除外に
     ついて一致し、observability matrix の全PJ生総数（all_by_channel）は除外されず raw のまま
     残ることを確認する（codex [Must] 是正・3つ目の reader の非対称解消）。
+
+    codex round2 [Should] 是正: pre_marker と post_marker を**異なる channel**にする。
+    同一 channel だと「件数だけ」の一致（例: 当PJ未昇格 1）は、真逆の実装（pre を残し post を
+    落とす）でも偶然同じ件数になり通ってしまう（集合の同一性を固定できない）。channel を
+    分けることで、queue（`_scoped_kept_signals` の record 実体）・daily_review（signal_keys
+    集合）・observability matrix（channel 別 matrix 行）の全てで「どちらの record が
+    生き残ったか」を直接検査できるようにする。
     """
     import weak_signals.store as ws_store
     from audit.sections_weak_signals import build_weak_signals_section
@@ -138,8 +145,13 @@ def test_all_three_backlog_readers_agree_and_raw_total_unaffected(
     proj.mkdir()
 
     now = datetime.now(timezone.utc)
-    pre_marker = _sig("marker前の指摘", 1, (now - timedelta(days=3)).isoformat())
-    post_marker = _sig("marker後の指摘", 2, (now - timedelta(hours=1)).isoformat())
+    # 異なる channel にして「どちらが生き残ったか」を channel 単位で判別可能にする。
+    pre_marker = _sig(
+        "marker前の指摘", 1, (now - timedelta(days=3)).isoformat(), channel="rephrase"
+    )
+    post_marker = _sig(
+        "marker後の指摘", 2, (now - timedelta(hours=1)).isoformat(), channel="llm_judge"
+    )
 
     store = tmp_path / "weak_signals.jsonl"
     append_signals([pre_marker, post_marker], path=store)
@@ -147,13 +159,16 @@ def test_all_three_backlog_readers_agree_and_raw_total_unaffected(
 
     _write_marker(tmp_path, SLUG, (now - timedelta(days=1)).isoformat())
 
-    # queue 側: post_marker の 1 件のみ。
-    queue_count = queue_materials.weak_unprocessed_by_pj(
+    # queue 側: record 実体（_scoped_kept_signals）で post_marker の signal_key のみ残ることを
+    # 直接検査する（件数一致だけだと pre/post 逆転の誤実装を見逃す）。
+    kept = queue_materials._scoped_kept_signals(
         SLUG, weak_signals_path=store, marker_base=tmp_path
     )
-    assert queue_count == 1
+    kept_keys = {r.get("signal_key") for r in kept}
+    assert kept_keys == {post_marker.signal_key}
+    assert pre_marker.signal_key not in kept_keys
 
-    # daily_review 側: 新規 group も post_marker の 1 件のみ。
+    # daily_review 側: 新規 group の signal_keys 集合が post_marker のみ（既に identity 検査）。
     res = dr.build_review(
         SLUG,
         weak_signals_path=store,
@@ -163,13 +178,14 @@ def test_all_three_backlog_readers_agree_and_raw_total_unaffected(
     daily_keys = {k for g in res["groups"] for k in g["signal_keys"]}
     assert daily_keys == {post_marker.signal_key}
 
-    # observability matrix 側: 当PJ未昇格は post_marker の 1 件のみ（bootstrap 消化除外後）。
-    # 全PJ生総数（all_by_channel）は raw のまま 2 件（意図的に除外しない・観測値として維持）。
+    # observability matrix 側: channel 別 matrix 行で pre_marker（rephrase）が当PJ未昇格 0、
+    # post_marker（llm_judge）が当PJ未昇格 1 であることを個別に検査する（集合の同一性を固定）。
+    # 全PJ生総数（all_by_channel）はどちらも raw のまま 1 件ずつ（意図的に除外しない）。
     section = build_weak_signals_section(proj)
     assert section is not None
     body = "\n".join(section)
-    assert "全PJ 2" in body
-    assert "当PJ未昇格 1" in body
+    assert "言い直し（rephrase）: 全PJ 1 / 当PJ未昇格 0" in body
+    assert "llm_judge" in body and "全PJ 1 / 当PJ未昇格 1" in body
 
 
 # ─────────────────────────────────────────────────────────────────
