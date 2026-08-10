@@ -411,7 +411,11 @@ def test_ingest_processes_every_batch_not_just_the_first(scratch_dir: Path) -> N
 
 
 def test_ingest_counts_omitted_verdicts(scratch_dir: Path) -> None:
-    """#273: verdict が返らなかった発話は非修正として確定しつつ件数を surface する。"""
+    """#410 [Must]D 是正: 個別 index の verdict 欠落は「非修正」で恒久確定させず、その
+    index の発話だけ未判定のまま残す（次回 drain で再試行）。揃っている index は
+    従来どおり確定する（head-of-line blocking を避ける — バッチ全体は戻さない）。
+    欠落件数は omitted_verdicts に維持して observability を保つ（#273 由来）。
+    """
     ws_store = scratch_dir / "weak_signals.jsonl"
     idioms_store = scratch_dir / "idioms.jsonl"
     judged = scratch_dir / "judged.jsonl"
@@ -429,8 +433,39 @@ def test_ingest_counts_omitted_verdicts(scratch_dir: Path) -> None:
         weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
     )
     assert res["omitted_verdicts"] == 2
-    assert res["non_corrections"] == 3
-    assert len(cs_store.read_judged_keys(judged)) == 3
+    assert res["non_corrections"] == 1  # 揃っていた index 0 のみ確定
+    # index 0（/a.jsonl:1）だけ判定済み。1/2（欠落）は次回 drain で再試行できるよう未判定のまま。
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1"}
+
+
+def test_ingest_partial_omission_retries_only_missing_indices_on_reemit(scratch_dir: Path) -> None:
+    """#410 [Must]D E2E: 欠落した index の発話は次の emit で再度対象になり、確定済みの
+    発話は対象にならない（部分応答の欠落だけを retry する、というのが本修正の目的）。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # index 0 のみ返り、1/2 は欠落。
+    responses = {rid: json.dumps(
+        {"verdicts": [{"index": 0, "is_correction": False, "idiom": None, "reason": "r"}]}
+    )}
+    cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+
+    re_emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    assert re_emitted["unjudged"] == 2  # 欠落していた 1/2（/a.jsonl:2, /a.jsonl:3）だけ
+    re_group = re_emitted["requests"][0]["meta"]["utterances"]
+    re_keys = {cs_store.utterance_key(u) for u in re_group}
+    assert re_keys == {"/a.jsonl:2", "/a.jsonl:3"}
 
 
 def test_batch_prompt_requires_verdict_for_every_index() -> None:

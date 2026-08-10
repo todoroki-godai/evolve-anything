@@ -134,8 +134,12 @@ def ingest_judgement_results(
       3. prompt.parse_verdicts_result で JSON 解釈し ok=False（パース失敗）ならスキップ（#273:
          応答欠損と同じ「未判定のまま残す」経路に合流。verdict.index → 発話を引く（ok=True 時）
       4. is_correction=True → WeakSignal(channel=llm_judge) + CorrectionIdiom を蓄積
-      5. バッチ内の全発話の物理キーを judged に記録（修正/非修正どちらも。ok=False バッチは対象外）。
-         verdict が返らなかった発話は非修正として確定し、件数を omitted_verdicts に surface（#273）
+      5. バッチ内の発話の物理キーを judged に記録（修正/非修正どちらも。ok=False バッチは対象外）。
+         verdicts が正当に空配列（モデルが「該当なし」と明示判定）ならバッチ全体を非修正
+         として確定する（#273: 未判定に残すと再判定費用が際限なく積むため）。一部 index だけ
+         verdict が欠けた**部分応答**は、揃っている index だけ確定し、欠落した index の発話は
+         未判定のまま残す（judged に積まない・次回 drain で再試行。#410 [Must]D: バッチ全体を
+         戻すと head-of-line blocking になるため避ける）。件数は omitted_verdicts に surface
 
     過汎用 idiom guard（#527）: floor（8 文字未満）/ stopword（相槌・推量・否定のみ）/
     文脈固有トークン（日付・割合・序数）に該当する idiom は **個人辞書に入れない**
@@ -187,21 +191,29 @@ def ingest_judgement_results(
             continue
 
         by_index = {v["index"]: v for v in parsed_verdicts["verdicts"]}
+        # #410 [Must]D: 「正当な全件非修正」（verdicts=[] を明示的に返した・#273）と
+        # 「一部 index だけ欠落した部分応答」を区別する。前者はバッチ全体を確定させないと
+        # 正当なケースが毎 drain 再判定され費用が積む（既存契約・
+        # test_ingest_legitimate_empty_verdicts_still_marks_judged が固定）。後者は
+        # バッチ全体を戻すと head-of-line blocking になるため、欠落した index の発話だけ
+        # 未判定のまま残し、揃っている index は従来どおり確定する。
+        legitimate_empty_batch = len(parsed_verdicts["verdicts"]) == 0
 
         for local_i, utt in enumerate(group):
             key = _store.utterance_key(utt)
-            judged_keys.append(key)
-            est_tokens_by_key[key] = estimate_utterance_tokens(utt)
             v = by_index.get(local_i)
             if v is None:
-                # verdict 欠落は「非修正」として扱い判定済みにする（既存契約）。
-                # プロンプトは全 index を返すよう明示しているので欠落は本来起きないが、
-                # 欠落を未判定に残す設計にすると「全件非修正のバッチにモデルが
-                # `{"verdicts": []}` で答える」正当なケースが毎 drain 再判定され費用が
-                # 際限なく積む。件数だけ surface して silence にはしない（#273）。
+                if legitimate_empty_batch:
+                    judged_keys.append(key)
+                    est_tokens_by_key[key] = estimate_utterance_tokens(utt)
+                    non_corrections += 1
+                    continue
+                # 部分応答の欠落: judged_keys に積まない（未判定のまま次回 drain で再試行）。
+                # 件数だけ surface して silence にはしない（#273）。
                 omitted_verdicts += 1
-                non_corrections += 1
                 continue
+            judged_keys.append(key)
+            est_tokens_by_key[key] = estimate_utterance_tokens(utt)
             if not v.get("is_correction"):
                 non_corrections += 1
                 continue
