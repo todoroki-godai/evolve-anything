@@ -343,6 +343,100 @@ def test_unpromoted_post_marker_llm_judge_still_shows_promotion_hint(tmp_path, m
     assert "昇格可能" in combined
 
 
+# ── PR #405 round3 [Must]: actionable count の slug 判定を alias-fold に揃える ──
+
+
+def test_legacy_slug_llm_judge_counted_as_actionable_via_alias_fold(tmp_path, monkeypatch):
+    """PJ rename 前の旧 slug（rl-anything）でタグ付けされた未昇格 llm_judge も actionable に
+    数える（round3 [Must]）。
+
+    `_llm_judge_actionable_count` は従来 `r.get("pj_slug") == slug` の完全一致で判定して
+    おり、他 reader（daily_review / bootstrap_backlog / sections_weak_signals）が使う
+    `store_read_union.pj_slug_match`（`pj_slug.PJ_SLUG_ALIASES` 経由の alias-fold）と非対称
+    だった。完全一致だと legacy slug タグの record が actionable 0 に化け、「昇格可能」の
+    案内が誤って消える。
+
+    fixture の alias 関係は `pj_slug.PJ_SLUG_ALIASES`（実データ: rl-anything→evolve-anything）
+    に依存する。テスト内で任意の alias 関係を作れる独立注入口が無いため、他 reader の
+    回帰テスト（test_weak_signals_observability.py の同種テスト）と同じ precedent に倣う。
+    """
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    from pj_slug import PJ_SLUG_ALIASES, pj_slug_fast
+    import weak_signals.store as ws_store
+
+    proj = tmp_path / "evolve-anything"
+    proj.mkdir()
+    assert pj_slug_fast(proj) == "evolve-anything"
+    assert "rl-anything" in PJ_SLUG_ALIASES
+
+    now = datetime.now(timezone.utc)
+    store = tmp_path / "weak_signals.jsonl"
+    with open(store, "w", encoding="utf-8") as f:
+        for i in range(3):
+            f.write(json.dumps({
+                "channel": "llm_judge", "promoted": False,
+                "signal_key": f"legacy{i}", "pj_slug": "rl-anything",
+                "detected_at": (now - timedelta(hours=1)).isoformat(),
+            }) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
+
+    section = build_capture_rate_section(proj)
+    assert section is not None
+    combined = "\n".join(section)
+    # 完全一致なら raw 表示（_llm_judge_count も同じ非対称の対象）・actionable とも 0 で
+    # 「昇格可能」案内が出ない。alias-fold なら raw/actionable とも 3 件で案内が出る。
+    assert "llm_judge 3 件" in combined
+    assert "昇格可能" in combined
+
+
+# ── PR #405 round3 [Should]: 共有除外関数の失敗は安全側（actionable 0）に倒す ──
+
+
+def test_exclude_bootstrap_consumed_failure_fails_closed(tmp_path, monkeypatch):
+    """`_exclude_bootstrap_consumed` が例外を投げたら actionable は 0（安全側）に倒れる。
+
+    誤って「昇格可能」の案内を出す（判断済みの項目を再提示する）方が、誤って案内を
+    出さない（1日待てば次回出る）より害が大きい（round3 [Should] 判断基準）。
+    """
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    from pj_slug import pj_slug_fast
+    import weak_signals.store as ws_store
+
+    this_slug = pj_slug_fast(tmp_path)
+    now = datetime.now(timezone.utc)
+    store = tmp_path / "weak_signals.jsonl"
+    with open(store, "w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "channel": "llm_judge", "promoted": False,
+            "signal_key": "new1", "pj_slug": this_slug,
+            "detected_at": (now - timedelta(hours=1)).isoformat(),
+        }) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
+
+    import correction_semantic.bootstrap_backlog as backlog_mod
+
+    def _boom(candidates, slug):
+        raise RuntimeError("marker 解決に失敗した想定")
+
+    monkeypatch.setattr(backlog_mod, "_exclude_bootstrap_consumed", _boom)
+
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    # raw 表示は維持される（表示用 _llm_judge_count は影響を受けない）
+    assert "llm_judge 1 件" in combined
+    # 除外関数が失敗した以上、actionable は安全側の 0 に倒れ「昇格可能」案内は出ない
+    assert "昇格可能" not in combined
+
+
 def test_other_pj_llm_judge_not_counted(tmp_path, monkeypatch):
     """他PJ の llm_judge シグナルは当PJ の枯渇判定を抑制しない（#476 fixup スコープ混在）。"""
     _setup_stores(

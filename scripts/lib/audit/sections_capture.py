@@ -56,10 +56,11 @@ def _llm_judge_count(project_dir: Optional[Path] = None) -> int:
     if not slug:
         return 0
     try:
+        from store_read_union import pj_slug_match
         return sum(
             1
             for r in read_signals()
-            if r.get("channel") == "llm_judge" and r.get("pj_slug") == slug
+            if r.get("channel") == "llm_judge" and pj_slug_match(r.get("pj_slug"), slug)
         )
     except Exception:
         return 0
@@ -94,20 +95,25 @@ def _llm_judge_actionable_count(project_dir: Optional[Path] = None) -> int:
     if not slug:
         return 0
     try:
+        from store_read_union import pj_slug_match
         candidates = [
             r
             for r in read_signals()
             if r.get("channel") == "llm_judge"
-            and r.get("pj_slug") == slug
+            and pj_slug_match(r.get("pj_slug"), slug)
             and not r.get("promoted")
         ]
     except Exception:
         return 0
+    # PR #405 round3 [Should]: 共有除外関数（marker 解決を含む）が失敗したら、除外されて
+    # いない raw candidates をそのまま actionable として返さず 0（安全側）に倒す。この
+    # 戻り値は「昇格可能」の案内を出すか否かにのみ使われ、誤って案内を出す（判断済みの
+    # 項目を再提示する）方が誤って案内を出さない（1日待てば次回出る）より害が大きい。
     try:
         from correction_semantic.bootstrap_backlog import _exclude_bootstrap_consumed
         candidates = _exclude_bootstrap_consumed(candidates, slug)
     except Exception:
-        pass
+        return 0
     return len(candidates)
 
 
