@@ -164,8 +164,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/world_context.py" --load --slug "$SLU
 
 ```bash
 evolve-usage-log "evolve"
-OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
-evolve --project-dir "$(pwd)" --dry-run --observe-first --output "$OUT"
+PJ="$(pwd)"  # 対象 PJ の絶対パス。以降このスキル手順内の全 --project-dir が参照する唯一の束縛点
+             # （バッチ経路 #400 本体では queue の project_path をこの行に代入する差し替えだけで対応できる）
+OUT="$(evolve --project-dir "$PJ" --print-out-path)"
+evolve --project-dir "$PJ" --dry-run --observe-first --output "$OUT"
 ```
 
 ⚠️ **ここの `--dry-run` は分析エンジンのフラグ（MUST NOT 誤読）**: 標準フローでは**常に**付き、「分析だけ回して
@@ -246,7 +248,7 @@ reflect は独立フェーズではなく discover に統合済み。discover �
 → 3択の副作用詳細・multiSelect/per-group フロー・`mark_done` コードは **[references/correction-review.md](references/correction-review.md)**。
 
 ### Step 6.2: 今日の修正確認（daily_review・#446）
-`result.correction_review.daily.eligible == True` のとき、前回以降の新規 weak_signal（最大5件）を AskUserQuestion で y/n 確認する（MUST — 最大5問を1バッチで）。「はい」→ `evolve-reflect --project-dir "$(pwd)" --promote-weak` で昇格 + `record_reviewed(decision="promoted")`、「いいえ」→ `record_reviewed(decision="rejected")`。Step 6.1 の bootstrap 対象は自動的に除外されるため二重提示しない（#476-3）。
+`result.correction_review.daily.eligible == True` のとき、前回以降の新規 weak_signal（最大5件）を AskUserQuestion で y/n 確認する（MUST — 最大5問を1バッチで）。「はい」→ `evolve-reflect --project-dir "$PJ" --promote-weak` で昇格 + `record_reviewed(decision="promoted")`、「いいえ」→ `record_reviewed(decision="rejected")`。Step 6.1 の bootstrap 対象は自動的に除外されるため二重提示しない（#476-3）。
 → 判定条件・AskUserQuestion テンプレ・コードは **[references/correction-review.md](references/correction-review.md)**。
 
 ### Step 6.5: auto-memory キュー drain（2相, [ADR-037] Phase 2）
@@ -281,10 +283,12 @@ Step 3.8 で surface した `observability.glossary_drift` の `用語集未作�
 fitness calibration の母集団 `optimize_history` を日次 evolve ループで育てるステップ。Step 3 の承認・適用フロー完了後、分析が `--dry-run` だったか否かに関わらず**必ず**以下の単一コマンドを実行する（MUST）。**Step 6.6 で responses ファイルを保存した場合は `--correction-responses <path>` も付ける（MUST）**:
 
 ```bash
-OUT="$(evolve --project-dir "$(pwd)" --print-out-path)"
-evolve --project-dir "$(pwd)" --drain --result-json "$OUT"
+PJ="$(pwd)"  # Step 1 と同一の束縛（bash プロセスは呼び出しごとに独立するため各ブロックで再束縛する。
+             # バッチ経路 #400 本体では Step 1 と同じ差し替えをここにも適用する）
+OUT="$(evolve --project-dir "$PJ" --print-out-path)"
+evolve --project-dir "$PJ" --drain --result-json "$OUT"
 # Step 6.6 で /tmp/rl_correction_responses_<slug>.json を保存した場合のみ追加:
-evolve --project-dir "$(pwd)" --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_responses_<slug>.json
+evolve --project-dir "$PJ" --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_responses_<slug>.json
 ```
 
 （上の2行は排他 — responses ファイルが無ければ1行目だけを1回実行する。両方実行して二重 drain する必要はない。）
@@ -301,7 +305,7 @@ evolve.py の出力に含まれる `fitness_evolution` フェーズを確認す�
 ## Report
 ### Step 9: Report フェーズ
 evolve の結果を**人間が読みやすい形式**で出力する。raw な audit テキストをコードブロックにそのまま貼り付けてはならない。**冒頭に TL;DR を必ず出す（MUST・#525-2）**: 「TL;DR: 変更 {N}件 / 要対応 {M}件 / 残りすべて評価済みクリーン」。**全 ✓ の observability 項目は1ブロックに畳む（#525-2）**: ⚠/ℹ のみ個別表示し、✓ クリーンな key はまとめて1行に畳む。各セクションは `###` 見出し・数値には判定を添える・「✅ 問題なし」を沈黙させない（MUST）。
-レポートには Usage（PJ固有スキルのみ） / Plugin usage / gstack Workflow Analytics（検出時） / `/simplify` ゲート結果のセクションを含める。成長レベル表示の直後に `growth_report.lines` を列挙する（MUST）。**Step 6.2 で対話昇格した場合は per-PJ の値に今回昇格数を加算する方式で上書きする**（`evolve-reflect --project-dir "$(pwd)" --promote-weak` 出力の `corrections_human_allpj` は全PJ合計であり、そのまま分子に使ってはならない — MUST NOT・#526-1）。
+レポートには Usage（PJ固有スキルのみ） / Plugin usage / gstack Workflow Analytics（検出時） / `/simplify` ゲート結果のセクションを含める。成長レベル表示の直後に `growth_report.lines` を列挙する（MUST）。**Step 6.2 で対話昇格した場合は per-PJ の値に今回昇格数を加算する方式で上書きする**（`evolve-reflect --project-dir "$PJ" --promote-weak` 出力の `corrections_human_allpj` は全PJ合計であり、そのまま分子に使ってはならない — MUST NOT・#526-1）。
 → TL;DR/畳み込みブロック/フォーマット規則の全文と成長状態レポートの補正ロジックは **[references/report-narration.md](references/report-narration.md)**。
 
 ### Step 10: 推奨アクション（MUST — スキップ厳禁）

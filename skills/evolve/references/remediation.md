@@ -8,7 +8,7 @@ remediation.py は audit の検出結果を confidence_score / impact_scope ベ�
 
 ### auto_fixable (confidence ≥ 0.9, impact_scope in (file, project))
 
-`generate_auto_fix_summaries(issues, project_root=Path.cwd())` を呼び出し、**AskUserQuestion の前に**以下のフォーマットでテキスト出力する（MUST。`project_root` を明示しないと `paths_suggestion` 生成が暗黙 `Path.cwd()` フォールバックに依存する — #400）:
+`generate_auto_fix_summaries(issues, project_root=Path(result["project_dir"]))` を呼び出し、**AskUserQuestion の前に**以下のフォーマットでテキスト出力する（MUST。`result` は Step 1 で Read した `$OUT`（`evolve --project-dir "$PJ" ...` の出力）の JSON — `result["project_dir"]` は解析対象 PJ の絶対パス（`EvolveContext.new_result()` が `str(self.proj_root.resolve())` で設定）。`Path.cwd()` に頼ると単一 cwd から他 PJ の issue を渡すバッチ経路（#400）で誤った PJ の代替パスを提案する）:
 
 ```
 **修正候補 N件:**
@@ -39,7 +39,7 @@ SKILL は count を消費するだけで、しきい値判定はコード側に�
 **個別承認対象 = `proposable_custom_individual`（conf ≥ 0.7）:**
 
 - `proposable_custom_individual > 0` の場合のみ個別承認フローを実行（MUST）
-- **提案詳細プロトコルに従う**: `generate_proposals(issues, project_root=Path.cwd())` で各 issue の `{proposal, rationale}` を取得し、**1件ずつ**「対象・根拠（detail の実値）・変更内容」を提示してから AskUserQuestion で個別承認（MUST。`project_root` を明示しないと `paths_suggestion` 生成が暗黙 `Path.cwd()` フォールバックに依存する — #400）
+- **提案詳細プロトコルに従う**: `generate_proposals(issues, project_root=Path(result["project_dir"]))` で各 issue の `{proposal, rationale}` を取得し、**1件ずつ**「対象・根拠（detail の実値）・変更内容」を提示してから AskUserQuestion で個別承認（MUST。`result["project_dir"]` は Step 1 で Read した `$OUT` の解析対象 PJ 絶対パス。`Path.cwd()` に頼ると単一 cwd から他 PJ の issue を渡すバッチ経路（#400）で誤った PJ の代替パスを提案する）
 - **⚠ pitfall — 補足説明は Q&A の前に出す（MUST）**: 「なぜ必要か」「どんな効果があるか」を AskUserQuestion と同じターン内の Q&A より前のテキストとして先に出力すること。ユーザーが Yes/No を判断できる状態を作ってから質問する。
 - **⚠ pitfall — AskUserQuestion の options は最大 4 択（MUST）**: individual が 5 件以上の場合に 5 択以上の options を1問で出してはならない。proposal-protocol.md の方式 A（1件ずつ）または方式 B（グループ分割）を使う。
 - 同じ type の issue が複数あっても件数に丸めない（例: `missing_effort` が 10 スキル分あるなら各スキル名 + 推定 effort + reason を per-item で展開する。10 件超は他 M 件と誘導）
