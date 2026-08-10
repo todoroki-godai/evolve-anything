@@ -19,7 +19,10 @@ Phase B（LLM 判定）は docstring どおり「SKILL.md Step 6.6 の対話 y/n
 - 1 日の上限（件数・トークン）は呼び出し側が設定値として渡す（コード埋め込み禁止・
   ``rl_common.config`` の userConfig 流儀に合わせる。既定値 ``DEFAULT_DAILY_*`` は
   ユーザー承認済みの標準運用値: 200 件 / 150,000 トークン）。上限超過分は選定から
-  外れ次回 run に持ち越す（**古い発話を優先**して選ぶ＝在庫の頭から着実に消化する）。
+  外れ次回 run に持ち越す（**新しい発話を優先**して選ぶ・#410 [Must]G — weak_signal は
+  TTL 45日で腐るため、在庫を古い順に流すと判定した端から失効しかねない。加えて直近の
+  発話ほど記憶が新しく修正としての価値が高い。timestamp パース不能/欠落は最下位に
+  落とす＝有効な日時を持つ発話を優先する）。
 
 **fleet 横断の設計判断**: Phase A（``emit_judgement_requests``）は ``pj_slug`` 引数を
 取るが、これは (a) ``utterances=None`` のときの自動クエリと (b) batch_id のラベル生成
@@ -83,8 +86,16 @@ def call_haiku(prompt: str, model: str = "haiku") -> str:
 
 
 def _sort_key(u: Dict[str, Any]):
-    """timestamp 昇順（古い順優先）。パース不能/欠落は最も古い扱いで先頭に残す（安全側）。"""
-    return _parse_iso(u.get("timestamp")) or _EPOCH
+    """新しい順（降順）優先のソートキー（#410 [Must]G）。
+
+    timestamp パース不能/欠落は「有効な日時グループの外」として最下位に落とす
+    （曖昧な日付を実発話の新しさより優先させない・安全側）。有効な日時同士は
+    ``sorted(..., reverse=True)`` により新しい順に並ぶ。
+    """
+    dt = _parse_iso(u.get("timestamp"))
+    if dt is None:
+        return (0, _EPOCH)
+    return (1, dt)
 
 
 def select_daily_batch(
@@ -94,12 +105,16 @@ def select_daily_batch(
     daily_token_limit: int,
     batch_size: int,
 ) -> List[Dict[str, Any]]:
-    """未判定発話から 1 日の件数・トークン上限内に収まる分だけを古い順に選ぶ（#408）。
+    """未判定発話から 1 日の件数・トークン上限内に収まる分だけを新しい順に選ぶ（#408, #410 [Must]G）。
+
+    weak_signal は TTL 45日で腐るため、在庫を古い順に流すと判定した端から失効しかねない。
+    直近の発話ほど記憶が新しく修正としての価値も高いため、新しい順に優先して選定する
+    （旧実装は古い順だったが issue #408 のスコープに反していたため是正）。
 
     件数上限で先に打ち切ってから、推定トークン（``batch.estimate_tokens``・#431 の
     係数思想を再利用）が上限を超えない最大件数まで追加で切り詰める。
     """
-    ordered = sorted(unjudged, key=_sort_key)
+    ordered = sorted(unjudged, key=_sort_key, reverse=True)
     by_count = ordered[: max(0, int(daily_utterance_limit))]
     n = len(by_count)
     while n > 0:

@@ -292,17 +292,41 @@ def test_daily_token_limit_exact_boundary_is_inclusive(tmp_path):
     assert res_short_by_one["selected"] == 0  # 1トークンでも超えれば選ばれない
 
 
-def test_oldest_utterances_prioritized_when_capped(tmp_path):
+def test_newest_utterances_prioritized_when_capped(tmp_path, monkeypatch):
+    """#410 [Must]G: 上限で切り詰めるときは新しい発話を優先する（TTL 45日で腐る前に判定する
+    ため・旧実装は逆に古い順だった）。selected 件数だけでなく emit 対象そのものを固定する
+    （件数だけの検証だとソート方向を消しても通ってしまう・[Should] 補強）。
+    """
+    from correction_semantic.store import read_judged_keys, utterance_key
+
     old = _utt("/a.jsonl", 1, "old", "pj-a", ts=_ts(days_ago=10))
     new = _utt("/a.jsonl", 2, "new", "pj-a", ts=_ts(days_ago=0))
+    judged = tmp_path / "correction_judged.jsonl"
+
+    monkeypatch.setattr(
+        judge_runner, "call_haiku", lambda prompt, model="haiku": _ok_verdict_response([(0, False)])
+    )
     res = judge_runner.run_daily_judge(
-        run=False,
-        utterances=[new, old],
-        judged_path=tmp_path / "correction_judged.jsonl",
+        run=True,
+        utterances=[old, new],  # あえて old を先頭に渡し、ソート未実装でも通る偽陽性を排除
+        judged_path=judged,
         daily_utterance_limit=1,
     )
     assert res["selected"] == 1
-    # 内部選定を確認するため run=True で実際に emit された対象を見る（call_haiku は不要=0件）
+    judged_keys = read_judged_keys(judged)
+    assert judged_keys == {utterance_key(new)}, judged_keys
+    assert utterance_key(old) not in judged_keys
+
+
+def test_unparseable_timestamp_sorts_last(tmp_path):
+    """timestamp パース不能/欠落は最下位（有効日時を持つ発話を優先）。"""
+    bad = _utt("/a.jsonl", 1, "bad-ts", "pj-a", ts="not-a-date")
+    good = _utt("/a.jsonl", 2, "good-ts", "pj-a", ts=_ts(days_ago=5))
+    selected = judge_runner.select_daily_batch(
+        [bad, good], daily_utterance_limit=1, daily_token_limit=10_000, batch_size=30,
+    )
+    assert len(selected) == 1
+    assert selected[0]["text"] == "good-ts"
 
 
 def test_already_judged_utterances_excluded_from_selection(tmp_path):
@@ -329,8 +353,11 @@ def test_run_writes_weak_signal_with_correct_pj_slug_across_mixed_pj_batch(tmp_p
     corr_idioms = tmp_path / "correction_idioms.jsonl"
     judged = tmp_path / "correction_judged.jsonl"
 
+    # #410 [Must]G: 選定は新しい順（降順）。index 0 = 最新であることを固定するため
+    # 明確に異なる timestamp を与える（同一 timestamp は呼び出し順の微小な実時刻差に
+    # 依存し偽の安定性になるため避ける）。
     u_a = _utt("/a.jsonl", 1, "つむぎにしてほしい、四国めたんじゃなくて", "pj-a", ts=_ts(1))
-    u_b = _utt("/b.jsonl", 1, "ありがとう", "pj-b", ts=_ts(1))
+    u_b = _utt("/b.jsonl", 1, "ありがとう", "pj-b", ts=_ts(2))
 
     def _fake_call_haiku(prompt, model="haiku"):
         return _ok_verdict_response([(0, True), (1, False)])
