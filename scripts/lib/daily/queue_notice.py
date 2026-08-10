@@ -106,11 +106,16 @@ def build_judge_cap_notice(
     now: "datetime | None" = None,
     stale_days: int = DEFAULT_STALE_DAYS,
 ) -> "str | None":
-    """llm_judge の日次処理が上限に達した日だけ 1 行通知する。当たらない日は None（沈黙）。
+    """llm_judge の日次処理が上限到達 or 障害だった日だけ 1 行通知する。当たらない日は
+    None（沈黙）。
 
     freshness gate は ``build_queue_notice`` と同じ ``generated_at``（evolve-queue.json
     全体）を共有する。STALE / UNKNOWN のときは health notice を二重に出さず沈黙する
     （health notice 自体は ``build_queue_notice`` 側が既に出すため）。
+
+    ``source_failed=True``（#410 [Must]E: 発話ソース取得の DB/schema 障害）は
+    ``capped`` の値に関わらず優先して通知する（silence != evaluated — capped=False の
+    健康そうな値に障害シグナルを埋もれさせない）。
     """
     if not isinstance(queue_data, dict):
         return None
@@ -123,7 +128,14 @@ def build_judge_cap_notice(
         return None
 
     judge = queue_data.get("llm_judge")
-    if not isinstance(judge, dict) or not judge.get("capped"):
+    if not isinstance(judge, dict):
+        return None
+
+    if judge.get("source_failed"):
+        error = judge.get("source_error") or "詳細は daily runner のログを確認してください"
+        return f"[evolve-anything] llm_judge の発話ソース取得に失敗しました: {error}"
+
+    if not judge.get("capped"):
         return None
 
     selected = judge.get("selected")

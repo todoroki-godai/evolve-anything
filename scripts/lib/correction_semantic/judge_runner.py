@@ -132,20 +132,39 @@ def run_daily_judge(
         out:    出力先（既定 stdout）。フェーズ遷移ログ（提示/実行/応答/永続化）をここに書く。
 
     Returns:
-        dry-run: {"dry_run": True, "unjudged_total", "selected", "capped", "cost"}
+        dry-run: {"dry_run": True, "unjudged_total", "selected", "capped", "cost",
+                   "source_failed", "source_error"}
         run:     {"dry_run": False, "requested", "responded", "call_failed",
                    "corrections", "non_corrections", "skipped_batches",
                    "parse_failed_batches", "weak_written", "idioms_written",
-                   "judged_written", "unjudged_total", "selected", "capped"}
+                   "judged_written", "unjudged_total", "selected", "capped",
+                   "source_failed", "source_error"}
+
+        ``source_failed``（#410 [Must]E）: True なら発話ソース（utterances.db）取得が例外
+        送出し 0 件として fail-open した（DB/schema 障害等）。``unjudged_total=0`` と正当な
+        「未判定なし」を区別するための observability フィールド（沈黙させない）。
+        ``source_error`` は例外の型+メッセージ（source_failed=False のときは None）。
     """
     out = out if out is not None else sys.stdout
 
+    # #410 [Must]E: 発話ソース（utterances.db）の import/query 例外を「未判定0件」と
+    # 区別できるよう surface する。fail-open（0件として継続）は維持するが、沈黙させない
+    # （silence != evaluated）— DB/schema 障害で今回と同じ無期限供給停止が再発しても
+    # 「call_failed=0・capped=false」の健康そうなサマリだけが残る事故を防ぐ。
+    source_failed = False
+    source_error: Optional[str] = None
     if utterances is None:
         try:
             from utterance_archive.query import query_utterances_all_projects
 
             utterances = query_utterances_all_projects()
-        except Exception:  # noqa: BLE001 - DB 未セットアップ等は空扱い（fail-open）
+        except Exception as e:  # noqa: BLE001 - fail-open（0件として継続）だが沈黙しない
+            source_failed = True
+            source_error = f"{type(e).__name__}: {e}"
+            print(
+                f"[judge_runner] 発話ソース取得に失敗しました: {source_error}（0件として継続）",
+                file=sys.stderr,
+            )
             utterances = []
 
     # #410 [Must]B: 選定〜記録（判定済み記録の read-modify-write）を排他する。日次上限は
@@ -202,6 +221,8 @@ def run_daily_judge(
                 "selected": len(selected),
                 "capped": capped,
                 "cost": cost,
+                "source_failed": source_failed,
+                "source_error": source_error,
             }
 
         if not selected:
@@ -221,6 +242,8 @@ def run_daily_judge(
                 "unjudged_total": len(unjudged_all),
                 "selected": 0,
                 "capped": capped,
+                "source_failed": source_failed,
+                "source_error": source_error,
             }
 
         # Phase A（決定論）: "daily" はラベルに過ぎない（batch_id 構成のみに使われ、
@@ -286,6 +309,8 @@ def run_daily_judge(
             "unjudged_total": len(unjudged_all),
             "selected": len(selected),
             "capped": capped,
+            "source_failed": source_failed,
+            "source_error": source_error,
         }
 
 

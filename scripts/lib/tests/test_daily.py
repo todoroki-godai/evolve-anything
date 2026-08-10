@@ -416,3 +416,42 @@ def test_judge_cap_notice_output_dict():
 def test_judge_cap_notice_output_silent_when_not_capped():
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     assert qn.judge_cap_notice_output(NOT_CAPPED_QUEUE, now=now) is None
+
+
+# ── #410 [Must]E: 発話ソース DB/schema 障害は capped=False でも沈黙させない ──────
+SOURCE_FAILED_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 0,
+        "selected": 0,
+        "capped": False,
+        "corrections": 0,
+        "call_failed": 0,
+        "source_failed": True,
+        "source_error": "RuntimeError: duckdb schema mismatch",
+    },
+}
+
+
+def test_judge_cap_notice_fires_when_source_failed_even_if_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(SOURCE_FAILED_QUEUE, now=now)
+    assert msg is not None
+    assert "duckdb schema mismatch" in msg
+
+
+def test_judge_cap_notice_silent_when_source_failed_false_and_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(NOT_CAPPED_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_source_failed_takes_priority_over_capped_message():
+    """source_failed=True かつ capped=True でも障害の方を優先して伝える（原因の方が重要）。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    both = dict(CAPPED_QUEUE)
+    both["llm_judge"] = dict(CAPPED_QUEUE["llm_judge"], source_failed=True, source_error="boom")
+    msg = qn.build_judge_cap_notice(both, now=now)
+    assert "boom" in msg

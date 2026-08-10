@@ -413,6 +413,48 @@ def test_run_no_pending_utterances_is_noop(tmp_path):
     assert res["requested"] == 0
     assert res["corrections"] == 0
     assert res["capped"] is False
+    assert res["source_failed"] is False
+
+
+# ─────────────────────────────────────────────────────────────────
+# #410 [Must]E: 発話ソース（utterances.db）例外を「0件」に化かさず surface する
+# ─────────────────────────────────────────────────────────────────
+def test_source_exception_surfaces_source_failed_dry_run(monkeypatch, tmp_path, capsys):
+    """utterances=None（production 経路）で query が例外を送出したら 0 件と区別可能にする。"""
+    def _raise(*a, **kw):
+        raise RuntimeError("duckdb schema mismatch")
+
+    import utterance_archive.query as _uq
+    monkeypatch.setattr(_uq, "query_utterances_all_projects", _raise)
+
+    res = judge_runner.run_daily_judge(run=False, judged_path=tmp_path / "correction_judged.jsonl")
+    assert res["source_failed"] is True
+    assert "duckdb schema mismatch" in (res.get("source_error") or "")
+    assert res["unjudged_total"] == 0
+    assert "発話ソース取得に失敗" in capsys.readouterr().err
+
+
+def test_source_exception_surfaces_source_failed_run_true(monkeypatch, tmp_path):
+    def _raise(*a, **kw):
+        raise RuntimeError("duckdb schema mismatch")
+
+    import utterance_archive.query as _uq
+    monkeypatch.setattr(_uq, "query_utterances_all_projects", _raise)
+
+    res = judge_runner.run_daily_judge(run=True, judged_path=tmp_path / "correction_judged.jsonl")
+    assert res["source_failed"] is True
+    assert res["requested"] == 0
+    assert res["capped"] is False  # 0件はcapped扱いにしない（別の障害シグナルとして区別する）
+
+
+def test_no_source_exception_source_failed_is_false(tmp_path):
+    """DI で utterances を明示注入するテストパス（多数）は source_failed=False を維持する。"""
+    u = _utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[u], judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["source_failed"] is False
+    assert res.get("source_error") is None
 
 
 # ─────────────────────────────────────────────────────────────────

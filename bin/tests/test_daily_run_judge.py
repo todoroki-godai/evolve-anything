@@ -126,6 +126,8 @@ def test_judge_result_embedded_in_evolve_queue_json(monkeypatch, tmp_path):
         "capped": True,
         "corrections": 5,
         "call_failed": 1,
+        "source_failed": False,
+        "source_error": None,
     }
     # queue 本体の既存フィールドは維持される（上書きでなく追加）。
     assert payload["queue"] == []
@@ -160,3 +162,40 @@ def test_judge_not_capped_omits_capped_notice_fields_but_still_embeds(monkeypatc
     assert rc == 0
     payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
     assert payload["llm_judge"]["capped"] is False
+
+
+def test_judge_source_failed_propagates_to_evolve_queue_json(monkeypatch, tmp_path):
+    """#410 [Must]E: 発話ソース取得の DB/schema 障害は capped=False でも silent にせず
+    evolve-queue.json の llm_judge.source_failed に残す（SessionStart 通知の材料）。
+    """
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+
+    def fake_judge(**kwargs):
+        return {
+            "unjudged_total": 0, "selected": 0, "capped": False,
+            "corrections": 0, "call_failed": 0,
+            "source_failed": True, "source_error": "RuntimeError: duckdb schema mismatch",
+        }
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
+    assert payload["llm_judge"]["source_failed"] is True
+    assert "duckdb schema mismatch" in payload["llm_judge"]["source_error"]
+
+
+def test_judge_source_failed_false_when_not_provided(monkeypatch, tmp_path):
+    """run_daily_judge の返り値に source_failed が無くても（防御的に）False として扱う。"""
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+
+    def fake_judge(**kwargs):
+        return {"unjudged_total": 0, "selected": 0, "capped": False, "corrections": 0, "call_failed": 0}
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
+    assert payload["llm_judge"]["source_failed"] is False

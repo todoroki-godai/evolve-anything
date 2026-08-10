@@ -145,6 +145,10 @@ def main() -> int:
             "capped": bool(judge_result.get("capped", False)),
             "corrections": judge_result.get("corrections", 0),
             "call_failed": judge_result.get("call_failed", 0),
+            # #410 [Must]E: 発話ソース（utterances.db）取得の DB/schema 障害を
+            # capped=False の健康そうなサマリに埋もれさせない（silence != evaluated）。
+            "source_failed": bool(judge_result.get("source_failed", False)),
+            "source_error": judge_result.get("source_error"),
         }
     except Exception as e:  # noqa: BLE001 - fail-open（他ステップと同型）
         print(f"[evolve-daily-run] llm_judge daily run error: {e}（continue）", file=sys.stderr, flush=True)

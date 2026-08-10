@@ -59,6 +59,24 @@ def _not_capped_queue() -> dict:
     }
 
 
+def _source_failed_queue() -> dict:
+    return {
+        "generated_at": _fresh_generated_at(),
+        "threshold": 3,
+        "tracked_total": 10,
+        "queue": [],
+        "llm_judge": {
+            "unjudged_before": 0,
+            "selected": 0,
+            "capped": False,
+            "corrections": 0,
+            "call_failed": 0,
+            "source_failed": True,
+            "source_error": "RuntimeError: duckdb schema mismatch",
+        },
+    }
+
+
 def _write_queue(data_dir: Path, payload: dict) -> None:
     (data_dir / "evolve-queue.json").write_text(json.dumps(payload), encoding="utf-8")
 
@@ -80,6 +98,17 @@ def test_deliver_fires_when_capped(tmp_path, monkeypatch, capsys):
     payload = json.loads(out.strip())
     assert "systemMessage" in payload
     assert "200" in payload["systemMessage"]
+
+
+def test_deliver_fires_when_source_failed(tmp_path, monkeypatch, capsys):
+    """#410 [Must]E: capped=False でも source_failed=True なら沈黙しない。"""
+    source = _install_env(tmp_path, monkeypatch)
+    _write_queue(source, _source_failed_queue())
+    restore_state._deliver_judge_cap_notice()
+    out = capsys.readouterr().out
+    assert out
+    payload = json.loads(out.strip())
+    assert "duckdb schema mismatch" in payload["systemMessage"]
 
 
 def test_deliver_silent_when_not_capped(tmp_path, monkeypatch, capsys):
