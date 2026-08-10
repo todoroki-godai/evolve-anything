@@ -739,10 +739,11 @@ _DECLARATIONS: List[StoreDeclaration] = [
     StoreDeclaration(
         name="icebox-status.json",
         kind="json",
-        writer="scripts/lib/daily/icebox_notice.py が bin/evolve-daily-run 第4ステップから "
-        "呼ばれ、`gh issue list --label icebox --state closed` の集計結果 "
-        "（count/oldest_days/generated_at）を保存（毎朝1回・日次上書き・fail-open 4種は "
-        "既存ファイル非破壊）。",
+        writer="bin/evolve-daily-run（icebox 棚卸しステップ・`gh issue list --label icebox "
+        "--state closed` の結果を atomic_write_text(icebox_path, ...) で直接保存。"
+        "scripts/lib/daily/icebox_notice.py は集計/判定ロジック（build_icebox_notice 等）の "
+        "提供のみで本ファイルを書かない。毎朝1回・日次上書き・fail-open 4種は既存ファイル "
+        "非破壊）。",
         writer_locus="batch",
         reader="hooks/restore_state.py の _deliver_icebox_notice（SessionStart systemMessage "
         "通知・閾値超過時のみ）。",
