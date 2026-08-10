@@ -275,6 +275,36 @@ class TestLoadHistoryProjectDirParam:
         assert result["status"] != "insufficient_data"
 
 
+class TestProjectDirNoneDelegation:
+    """project_dir 未指定（None）のときは内部委譲に project_dir キーワード/位置引数を渡さず
+    旧来どおり無引数で呼ぶ（1引数 monkeypatch/wrapper を壊さないため・
+    #400 codex レビュー round3 Must 3）。
+    """
+
+    def test_default_history_file_none_calls_resolve_slug_with_old_signature(self, monkeypatch):
+        import optimize_history_store as store
+        calls = []
+
+        def _strict_zero_arg_resolve_slug():
+            calls.append(())
+            return "cwd-slug"
+
+        monkeypatch.setattr(store, "resolve_slug", _strict_zero_arg_resolve_slug)
+        fe._default_history_file()  # project_dir 省略
+        assert calls == [()], "project_dir=None のとき resolve_slug に引数を渡してはならない"
+
+    def test_load_history_none_calls_default_history_file_with_old_signature(self, monkeypatch):
+        calls = []
+
+        def _strict_zero_arg_default_history_file():
+            calls.append(())
+            return Path("/nonexistent/history.jsonl")
+
+        monkeypatch.setattr(fe, "_default_history_file", _strict_zero_arg_default_history_file)
+        fe.load_history()  # history_file/project_dir とも省略
+        assert calls == [()], "project_dir=None のとき _default_history_file に引数を渡してはならない"
+
+
 # ========== (c) fitness_func グループ化 ==========
 
 class TestAnalyzeCorrelationsGrouping:

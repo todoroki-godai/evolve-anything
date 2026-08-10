@@ -276,3 +276,30 @@ class TestRunDiscoverRuleViolationExamplesTruncate:
         discover.run_discover(project_root=pj_b)
 
         assert received.get("project_root") == pj_b
+
+    def test_project_root_none_calls_detect_rejection_patterns_with_old_signature(self, monkeypatch):
+        """run_discover(project_root 省略) のときは detect_rejection_patterns に project_root
+        キーワードを渡さず旧来どおり無引数で呼ぶ（1引数 monkeypatch/wrapper を壊さないため・
+        #400 codex レビュー round3 Must 3）。
+        """
+        import lib.discover as discover
+
+        monkeypatch.setattr(discover, "detect_behavior_patterns", lambda **kw: [])
+        monkeypatch.setattr(discover, "detect_error_patterns", lambda **kw: [])
+        calls = []
+
+        def _strict_zero_arg_detect_rejection_patterns():
+            calls.append(())
+            return []
+
+        monkeypatch.setattr(discover, "detect_rejection_patterns", _strict_zero_arg_detect_rejection_patterns)
+        monkeypatch.setattr(discover, "load_claude_reflect_data", lambda: [])
+        monkeypatch.setattr(discover, "detect_missed_skills", lambda **kw: {"missed": [], "message": ""})
+        monkeypatch.setattr(discover, "detect_recommended_artifacts", lambda **kw: [])
+        monkeypatch.setattr(discover, "detect_installed_artifacts", lambda **kw: [])
+        monkeypatch.setattr(discover, "determine_scope", lambda p: "global")
+        monkeypatch.setattr(discover, "_enrich_patterns", lambda patterns, **kw: {"matched_skills": [], "unmatched_patterns": []})
+
+        discover.run_discover()  # project_root 省略
+
+        assert calls == [()], "project_root=None のとき detect_rejection_patterns に引数を渡してはならない"

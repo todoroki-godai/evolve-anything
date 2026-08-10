@@ -92,3 +92,26 @@ def test_history_file_still_wins_over_project_root(tmp_path, monkeypatch):
     patterns = detect_rejection_patterns(threshold=3, history_file=hf, project_root=pj_b)
     reasons = {p["pattern"] for p in patterns}
     assert "explicit_reason" in reasons
+
+
+def test_project_root_none_calls_resolve_slug_with_old_signature(tmp_path, monkeypatch):
+    """project_root 未指定（None）のときは store.resolve_slug に project_root キーワード/
+    位置引数を渡さず旧来どおり無引数で呼ぶ（1引数 monkeypatch/wrapper を壊さないため・
+    #400 codex レビュー round3 Must 3）。
+    """
+    monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+    calls = []
+
+    def _strict_zero_arg_resolve_slug():
+        calls.append(())
+        return "cwd-slug"
+
+    monkeypatch.setattr(store, "resolve_slug", _strict_zero_arg_resolve_slug)
+    store.append_entry({"rejection_reason": "x"}, "cwd-slug")
+    store.append_entry({"rejection_reason": "x"}, "cwd-slug")
+    store.append_entry({"rejection_reason": "x"}, "cwd-slug")
+
+    patterns = detect_rejection_patterns(threshold=3)  # project_root 省略
+    assert calls == [()], "project_root=None のとき resolve_slug に引数を渡してはならない"
+    reasons = {p["pattern"] for p in patterns}
+    assert "x" in reasons

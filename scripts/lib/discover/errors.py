@@ -123,7 +123,10 @@ def detect_rejection_patterns(
     """
     if history_file is None:
         import optimize_history_store as store  # scripts/lib は __init__ で sys.path 済み
-        history_file = store.history_path(store.resolve_slug(project_root))
+        if project_root is not None:
+            history_file = store.history_path(store.resolve_slug(project_root))
+        else:
+            history_file = store.history_path(store.resolve_slug())
     records = load_jsonl(history_file)
 
     counter: Counter = Counter()
