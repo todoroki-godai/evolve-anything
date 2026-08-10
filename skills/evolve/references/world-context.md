@@ -10,7 +10,7 @@ bash は呼び出しごとに独立プロセスのため、`$SLUG`（と `$PJ`�
 1. **Phase A — 生成リクエストを得る（LLM ゼロ）**:
    ```bash
    PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（Step 0.5 と同一の束縛パターン。各ブロックで再束縛する）
-   SLUG="$(python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug(cwd='$PJ'))" 2>/dev/null || echo unknown)"
+   SLUG="$(PJ="$PJ" python3 -c "import os, sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug(cwd=os.environ['PJ']))" 2>/dev/null || echo unknown)"
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/world_context.py" --emit-request \
      --claude-md "$PJ/CLAUDE.md" --slug "$SLUG"
    ```
@@ -24,7 +24,7 @@ bash は呼び出しごとに独立プロセスのため、`$SLUG`（と `$PJ`�
 3. **Phase C — 保存（LLM ゼロ）**:
    ```bash
    PJ="${PJ:-$(pwd)}"  # 同上（各ブロックで再束縛する）
-   SLUG="$(python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug(cwd='$PJ'))" 2>/dev/null || echo unknown)"
+   SLUG="$(PJ="$PJ" python3 -c "import os, sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug(cwd=os.environ['PJ']))" 2>/dev/null || echo unknown)"
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lib/world_context.py" --save-from-response \
      --response world-resp.json --slug "$SLUG"
    ```

@@ -308,6 +308,47 @@ class TestNoShowToplevelSlugDerivation:
         )
 
 
+class TestPythonDashCHasNoDirectShellVarInterpolation:
+    """round5b: python3 -c 本文にシェル変数（$PJ / $SLUG）を直接埋め込まないこと。
+
+    PJ の絶対パスに `'` が含まれると python 文字列リテラルが壊れる（report-narration.md
+    が自ら述べていた既存規約: 「slug は env 経由で渡す＝python -c へ直接埋め込むと repo 名に
+    `'` を含む場合に壊れる」）。round5 で SLUG 導出を修正した際、この規約に反して
+    `resolve_slug(cwd='$PJ')` のように $PJ を python -c へ直接埋め込んでしまっていた。
+    正しい形は `VAR="$VAR" python3 -c "... os.environ['VAR'] ..."` の env 経由。
+
+    `${CLAUDE_PLUGIN_ROOT}` はプラグインインストールパス（ユーザー入力ではない）で、
+    このリポジトリ全体で python -c への直接埋め込みが確立された慣習のため対象外。
+    """
+
+    _SHELL_VAR_IN_PYTHON_RE = re.compile(r"\$PJ\b|\$SLUG\b")
+
+    def test_no_direct_shell_var_interpolation_in_python_dash_c(self):
+        violations = []
+        for md_file in ALL_TARGET_MD_FILES:
+            text = md_file.read_text(encoding="utf-8")
+            for snippet in _embedded_python_snippets(text):
+                if self._SHELL_VAR_IN_PYTHON_RE.search(snippet):
+                    violations.append((md_file.name, snippet[:200]))
+        assert not violations, (
+            "python3 -c 本文に $PJ / $SLUG が直接埋め込まれている（'含む値で文字列リテラルが"
+            f"壊れる。env 経由（os.environ[...]）に統一する・#400 round5b）: {violations!r}"
+        )
+
+    def test_env_passthrough_form_is_accepted(self):
+        """検査自体が「env 経由の正しい形」まで拒否する過剰検知でないことの自己チェック。"""
+        text = SKILL_MD.read_text(encoding="utf-8")
+        snippets = [s for s in _embedded_python_snippets(text) if "resolve_slug" in s]
+        assert snippets, "SKILL.md に resolve_slug を呼ぶ python3 -c スニペットが見つからない"
+        for snippet in snippets:
+            assert "os.environ['PJ']" in snippet or 'os.environ["PJ"]' in snippet, (
+                f"env 経由の正しい形（os.environ['PJ']）になっていない: {snippet!r}"
+            )
+            assert not self._SHELL_VAR_IN_PYTHON_RE.search(snippet), (
+                f"env 経由のはずが $PJ/$SLUG の直接埋め込みが残っている: {snippet!r}"
+            )
+
+
 class TestReferencesHaveNoUnattributedWritePaths:
     """python スニペット（fenced ```python ブロック **および** bash 内 python3 -c 埋め込みの
     両方・round5 盲点1）に無引数 resolve_slug() / 素の Path.cwd() / 空文字 fallback の

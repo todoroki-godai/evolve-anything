@@ -54,7 +54,7 @@ PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（Step 0.5 と同一の束縛パ
 # resolve_slug（git-common-dir 親, ADR-031）— worktree でも本体 PJ slug に正規化。
 # 旧実装（basename $(git rev-parse --show-toplevel)）は cwd 依存かつ worktree で本体と
 # 食い違う別導出だったため、SKILL.md/世界観ロードと同じ resolve_slug に統一した（#400 round5）。
-SLUG="$(python3 -c "import sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug(cwd='$PJ'))" 2>/dev/null || echo unknown)"
+SLUG="$(PJ="$PJ" python3 -c "import os, sys; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib'); from optimize_history_store import resolve_slug; print(resolve_slug(cwd=os.environ['PJ']))" 2>/dev/null || echo unknown)"
 SLUG="$SLUG" python3 -c "
 import sys, os; sys.path.insert(0,'${CLAUDE_PLUGIN_ROOT}/scripts/lib')
 from world_context import load_world_context, save_world_context
