@@ -46,6 +46,7 @@
 
 各コンポーネントの設計経緯・根拠・issue/ADR 参照を含む詳細は **[spec/components.md](spec/components.md)**（SoT）。
 ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する（サマリは「何をするか1文 + 契約フラグ」で構成し目安 ≤130 字。`凍結`/`reject`/`dry-run`/`fail-open`/`人間承認`/`単一ソース`等の動作を縛る語は要約時も必ず残す）。**
+**契約フラグを省略してよいかの判断基準は「runtime guard が実際に阻止するか」**（cold に書いてあるかは基準にしない）: runtime guard が阻止する制約（未登録ストアの reject 等）は省略可、**人間・AI が守るしかない制約（関数の単一ソース・dry-run 純度等、破っても何も鳴らない契約）は必ず残す**。
 
 | コンポーネント | 一言サマリ | 実体 |
 |----------------|-----------|------|
@@ -102,7 +103,7 @@
 | `store_write` write barrier | 全ストア書込の単一ゲート。store_registry の active 登録外は既定 reject、registry 不在は fail-open（例外口 `store_write_raw`） | `rl_common/store_write.py` |
 | `outcome_metrics` | 行動アウトカム3軸（correction 再発率/一発成功率/rework率）を advisory 表示 | `audit/outcome_metrics.py` |
 | `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query） | `utterance_archive/` |
-| `outcome_attribution` | outcome 3軸を per-skill 帰属し evolve ターゲットランキングへ自動入力。負の転移は末尾 rollback | `audit/outcome_attribution.py` |
+| `outcome_attribution` | outcome 3軸を per-skill 帰属し evolve ターゲットランキングへ自動入力。負の転移は末尾 rollback、dry-run に before/after 順位差分を surface | `audit/outcome_attribution.py` |
 | `weak_signals` | 暗黙修正シグナルの決定論検出→weak_signals.jsonl レーン。reflect 確認後に corrections へ昇格 | `weak_signals/` |
 | `correction_semantic` | correction capture の二層化。utterances.db の発話を Haiku がバッチ意味判定し weak_signals へ隔離 | `correction_semantic/` |
 | `bootstrap_backlog` | 初回 evolve で weak_signals バックログの消化方式を AskUserQuestion 3択で選ぶ bootstrap phase | `correction_semantic/bootstrap_backlog.py` |
@@ -117,7 +118,7 @@
 | `predictive_validity` | 重み昇格レディネス第4条件 — in/out-of-sample の順位相関で予測妥当性を判定 | `audit/predictive_validity.py` |
 | `reward_ema` | バッチ跨ぎ符号付き advantage の EMA 累積で通時の安定効果を判定 | `audit/reward_ema.py` |
 | `subagent_traces` | subagent 内部軌跡ストア — tool error/やり直しを per-agent_type で advisory 表示 | `subagent_traces/` + `audit/sections_subagent_traces.py` |
-| `subagent_noise` | subagents.jsonl の agent_type ノイズ内訳を advisory 分解表示 | `audit/sections_subagent_noise.py` + `rl_common/detection.py` |
+| `subagent_noise` | subagents.jsonl の agent_type ノイズ内訳を advisory 分解表示。判定は `noise_agent_type_kind` が単一ソース | `audit/sections_subagent_noise.py` + `rl_common/detection.py` |
 | `worker_takeoff` | subagent の「completed 報告」↔実際の完遂の意味的乖離を決定論検知 | `rl_common/detection.py`(`detect_takeoff_divergence`) + `audit/sections_takeoff.py` |
 | `verbosity` | 回答冗長性の学習ループ。Haiku バッチ判定が weak_signals へ emit、auto-apply しない | `verbosity/` + `hooks/record_verbosity.py` + `audit/sections_verbosity.py` |
 | `cross_pj_priority` | confirmed idiom の PJ 横断優先提示（提示のみ・自動承認しない） | `correction_semantic/cross_pj_priority.py` |
@@ -130,7 +131,7 @@
 | `evolve-release-sync` | リリース後のローカルプラグイン自動同期。`tag --push` 直後に実行、`--dry-run` 対応 | `bin/evolve-release-sync` |
 | `pj_slug` | PJ slug 導出の単一ソース。read/write 同一関数で worktree slug 食い違いを防止 | `pj_slug.py` + `hooks/restore_state.py` |
 | weak_signals drain 永続化 | 決定論3チャネルの永続化を `evolve --drain` の apply 境界に配線。pending marker の dry-run 書込は意図された設計（消さない） | `weak_signals/batch.py` |
-| reconcile_surfaced drain 永続化 | remediation 連続提示の count marker 書込と閾値到達時の自動却下を `evolve --drain` の apply 境界へ移設 | `cli.py` + `_env.py` + `phases_remediate.py` |
+| reconcile_surfaced drain 永続化 | remediation 連続提示の count marker 書込と閾値到達時の自動却下を `evolve --drain` の apply 境界へ移設。phases の dry-run は `persist=False` で非書込 | `cli.py` + `_env.py` + `phases_remediate.py` |
 | `idiom_filter` | 過汎用 idiom の FP guard — 3ゲートで confirmed→idiom_autopromote の FP 製造を遮断。SKILL.md の AskUserQuestion で idiom 単位拒否も可能 | `correction_semantic/idiom_filter.py` |
 | `representative` | correction group の representative 品質改善 — user 発話のみ抽出・直前行動要約を添付 | `correction_semantic/representative.py` |
 | remediation 参照リンク相対化 | separation emit prompt のマシン固有絶対パスを PJ ルート相対化 | `remediation/fixers_llm.py` |
@@ -142,8 +143,8 @@
 | recall validity-aware ranking | stale/superseded memory を validity metadata で降格（ハード除外はしない） | `fleet/recall.py` |
 | reinforce_memory 配線 | dead-code だった `reinforce_memory` を recall/SessionStart 注入時に本番配線（CLI opt-in で recall 純粋性維持） | `memory_temporal.py` + `fleet/recall.py` + `hooks/instructions_loaded.py` |
 | temporal provenance 書込配線 | APEX-MEM の valid_from/source_correction_ids write 側配線を活性化。importance 採点前に発火（純加算、stale/superseded 非発火） | `memory_temporal.py` + `auto_memory_broker.py` + `hooks/session_summary.py` |
-| subagents/errors 測定バグ修正 | subagents.jsonl の agent_type ノイズを writer/reader 二重防御で遮断 + errors.jsonl の error_type unknown を決定論分類で修正 | `hooks/subagent_observe.py` + `fleet/collectors.py` + `fanout_cost.py` + `hooks/stop_failure.py` + `rl_common/detection.py` |
-| `memory_capability` | 記憶操作を read/use/write/maintain 観点で advisory 評価 | `scripts/lib/memory_capability.py` + `audit/sections_memory.py` + `pj_slug.resolve_cc_memory_dir` |
+| subagents/errors 測定バグ修正 | subagents.jsonl の agent_type ノイズを writer/reader 二重防御（`is_noise_agent_type` 単一ソース）で遮断 + errors.jsonl の error_type unknown を決定論分類 | `hooks/subagent_observe.py` + `fleet/collectors.py` + `fanout_cost.py` + `hooks/stop_failure.py` + `rl_common/detection.py` |
+| `memory_capability` | 記憶操作を read/use/write/maintain 観点で advisory 評価。memory dir 解決は `resolve_cc_memory_dir` が単一ソース | `scripts/lib/memory_capability.py` + `audit/sections_memory.py` + `pj_slug.resolve_cc_memory_dir` |
 | `skill_vuln_scan` | 取り込みスキルの静的脆弱性スキャン — remote_exec/secret_exfil 等を combo 必須で検出 | `skill_vuln_scan.py` + `audit/sections_skill_vuln.py` |
 | `fanout_cost` | fan-out 費用対効果の advisory section。advantage は各群≥5件の floor ゲート付き | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
 | `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出 | `audit/memory_contagion.py` |
@@ -160,7 +161,7 @@
 | `invalid_frontmatter` | 壊れた frontmatter で発火不能なスキルを直接 surface（auto-fix せず人手修正提案） | `frontmatter.py` + `effort_detector.py` + `audit/sections_invalid_frontmatter.py` |
 | `self_contamination` | 自己汚染ハルシネーション指紋を transcript 走査で恒久計測（ゼロLLM・read-only） | `self_contamination_scan.py` + `audit/sections_self_contamination.py` |
 | `evolve-tier` | モデルティア正典を一元化する CLI — set/sync[--apply]/drift の3コマンド。sync は既定 dry-run、`--apply` のみ書込 | `bin/evolve-tier` + `tier_policy.py` + `tier_policy_sync.py` + `tier_policy_drift.py` + `tier_policy_cli.py` |
-| `evaluation_provenance` | 評価スコアに紐づく実行条件（model/effort/tool policy）の記録契約。不明値は推測せず None | `scripts/lib/evaluation_provenance.py` |
+| `evaluation_provenance` | 評価スコアに紐づく実行条件（model/effort/tool policy）の記録契約。envelope が単一ソース。不明値は推測せず None | `scripts/lib/evaluation_provenance.py` |
 | `skill_reachability` | SKILL.md 宣言 callable が production コードから到達不能かを AST 静的解析で検出 | `skill_declaration_reachability.py` + `audit/sections_skill_reachability.py` + `dogfood/cli.py` |
 | `fleet_propose` | queue 待ち PJ に `evolve --dry-run` を順次実行し提案を集約レポート化。承認ゲート付き、reject 済み提案は再提示しない | `fleet/propose.py` + `fleet/cli_propose.py` |
 | `fleet_pr` | 承認済み evolve 提案を repo 外 worktree で commit→push→PR 化。path allowlist・push account guard で強制、マージは人間 | `fleet/pr.py` + `fleet/cli_pr.py` |
