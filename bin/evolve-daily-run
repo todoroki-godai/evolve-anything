@@ -41,6 +41,7 @@ import icebox_reconcile  # noqa: E402
 import rl_common  # noqa: E402
 from correction_semantic import judge_runner  # noqa: E402
 from daily import plist as plist_mod  # noqa: E402
+from daily import queue_notice as _queue_notice  # noqa: E402
 from rl_common.config import load_user_config  # noqa: E402
 from rl_common.file_lock import atomic_write_text  # noqa: E402
 
@@ -147,21 +148,10 @@ def main() -> int:
                 "judge_daily_token_limit", judge_runner.DEFAULT_DAILY_TOKEN_LIMIT
             )),
         )
-        judge_summary = {
-            "unjudged_before": judge_result.get("unjudged_total", 0),
-            "selected": judge_result.get("selected", 0),
-            "capped": bool(judge_result.get("capped", False)),
-            "corrections": judge_result.get("corrections", 0),
-            "call_failed": judge_result.get("call_failed", 0),
-            # #410 [Must]E: 発話ソース（utterances.db）取得の DB/schema 障害を
-            # capped=False の健康そうなサマリに埋もれさせない（silence != evaluated）。
-            "source_failed": bool(judge_result.get("source_failed", False)),
-            "source_error": judge_result.get("source_error"),
-            # #410 round2 [Should]②: 別プロセスが lock 保持中で non-blocking skip したことを
-            # 沈黙させない（無期限待機の代わりに skip する設計にしたため、skip 自体が
-            # observability から消えないよう surface する）。
-            "skipped_locked": bool(judge_result.get("skipped_locked", False)),
-        }
+        # #410 round4 [Should]4: queue.json への転記は build_judge_summary に集約する
+        # （転記漏れの単一ソース対策 — out_of_range_verdicts / reserved_batches が従来
+        # ここに含まれておらず SessionStart から観測できなかった）。
+        judge_summary = _queue_notice.build_judge_summary(judge_result)
     except Exception as e:  # noqa: BLE001 - fail-open（他ステップと同型）
         print(f"[evolve-daily-run] llm_judge daily run error: {e}（continue）", file=sys.stderr, flush=True)
 

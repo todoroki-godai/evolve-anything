@@ -101,6 +101,40 @@ def queue_notice_output(
 # 沈黙する（承認済み standing budget なので毎日 y/n は挟まない）。
 
 
+def build_judge_summary(judge_result: "dict | None") -> dict:
+    """run_daily_judge の戻り値から evolve-queue.json["llm_judge"] へ転記するサマリを
+    組み立てる（#410 round4 [Should]4: この転記の単一ソース）。
+
+    evolve-daily-run が judge_result（run_daily_judge の全フィールドを持つ大きな dict）を
+    そのまま queue.json へ書くと運用者向けの表示が肥大化するため、observability に必要な
+    フィールドだけを選んで転記する。従来は転記漏れ（out_of_range_verdicts / reserved_batches
+    が queue.json に含まれず SessionStart から観測できなかった）が起きていたため、転記先を
+    1 関数に集約しテストで固定する。
+
+    欠けているキーは KeyError にせず既定値で埋める（``run_daily_judge`` の早期 return dict
+    が将来フィールド増減しても呼び出し側を壊さないため）。``judge_result=None``（llm_judge
+    ステップ自体が例外送出した場合）も全既定値の dict を返す。
+    """
+    judge_result = judge_result or {}
+    return {
+        "unjudged_before": judge_result.get("unjudged_total", 0),
+        "selected": judge_result.get("selected", 0),
+        "capped": bool(judge_result.get("capped", False)),
+        "corrections": judge_result.get("corrections", 0),
+        "call_failed": judge_result.get("call_failed", 0),
+        # #410 [Must]E: 発話ソース（utterances.db）取得の DB/schema 障害を
+        # capped=False の健康そうなサマリに埋もれさせない（silence != evaluated）。
+        "source_failed": bool(judge_result.get("source_failed", False)),
+        "source_error": judge_result.get("source_error"),
+        # #410 round2 [Should]②: 別プロセスが lock 保持中で non-blocking skip したことを
+        # 沈黙させない。
+        "skipped_locked": bool(judge_result.get("skipped_locked", False)),
+        # #410 round4 [Should]4: 従来は転記漏れで queue.json に含まれていなかった。
+        "out_of_range_verdicts": judge_result.get("out_of_range_verdicts", 0),
+        "reserved_batches": judge_result.get("reserved_batches", 0),
+    }
+
+
 def build_judge_cap_notice(
     queue_data: "dict | None",
     now: "datetime | None" = None,
@@ -121,6 +155,12 @@ def build_judge_cap_notice(
     ロックを保持中で non-blocking 取得に失敗し即座に skip した・round2 [Should]②）も
     ``source_failed`` に次いで優先通知する。連日 skip が続くと供給が実質止まるのに、
     ``capped=False``（0件処理・上限未到達）の健康そうな値に埋もれて沈黙していた。
+
+    ``out_of_range_verdicts > 0``（#410 round4 [Should]4）: モデルがバッチ対象外の
+    verdict index を返した件数。judge_runner の戻り値・ログには出るが、従来
+    evolve-daily-run の judge_summary 転記に含まれておらず SessionStart から観測
+    できなかった（連日発生してもモデル応答の質劣化に気づけない）。``capped`` より
+    優先度は下げる（capped=True は供給が現に止まっている状態で運用上より緊急度が高い）。
     """
     if not isinstance(queue_data, dict):
         return None
@@ -147,6 +187,16 @@ def build_judge_cap_notice(
         )
 
     if not judge.get("capped"):
+        out_of_range = judge.get("out_of_range_verdicts")
+        if (
+            isinstance(out_of_range, (int, float))
+            and not isinstance(out_of_range, bool)
+            and out_of_range > 0
+        ):
+            return (
+                f"[evolve-anything] llm_judge が範囲外の verdict index を"
+                f"{int(out_of_range)}件無視しました（モデル応答の質を確認してください）。"
+            )
         return None
 
     selected = judge.get("selected")

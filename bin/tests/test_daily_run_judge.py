@@ -129,9 +129,50 @@ def test_judge_result_embedded_in_evolve_queue_json(monkeypatch, tmp_path):
         "source_failed": False,
         "source_error": None,
         "skipped_locked": False,
+        # #410 round4 [Should]4: 従来はここに含まれず SessionStart から観測できなかった。
+        "out_of_range_verdicts": 0,
+        "reserved_batches": 0,
     }
     # queue 本体の既存フィールドは維持される（上書きでなく追加）。
     assert payload["queue"] == []
+
+
+def test_judge_out_of_range_verdicts_propagates_to_evolve_queue_json(monkeypatch, tmp_path):
+    """#410 round4 [Should]4: out_of_range_verdicts が evolve-queue.json の llm_judge へ
+    伝播する（従来は転記から漏れており SessionStart から観測できなかった）。
+    """
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+
+    def fake_judge(**kwargs):
+        return {
+            "unjudged_total": 0, "selected": 0, "capped": False,
+            "corrections": 0, "call_failed": 0, "out_of_range_verdicts": 3,
+        }
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
+    assert payload["llm_judge"]["out_of_range_verdicts"] == 3
+
+
+def test_judge_reserved_batches_propagates_to_evolve_queue_json(monkeypatch, tmp_path):
+    """#410 round4 [Should]4: reserved_batches が evolve-queue.json の llm_judge へ伝播する。"""
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+
+    def fake_judge(**kwargs):
+        return {
+            "unjudged_total": 0, "selected": 0, "capped": False,
+            "corrections": 0, "call_failed": 0, "reserved_batches": 4,
+        }
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
+    assert payload["llm_judge"]["reserved_batches"] == 4
 
 
 def test_judge_failure_does_not_crash_daily_run(monkeypatch, tmp_path, capsys):

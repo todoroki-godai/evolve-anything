@@ -499,3 +499,81 @@ def test_judge_cap_notice_source_failed_takes_priority_over_skipped_locked_messa
     )
     msg = qn.build_judge_cap_notice(both, now=now)
     assert "boom" in msg
+
+
+# ── #410 round4 [Should]4: out_of_range_verdicts / reserved_batches が queue.json の
+# llm_judge へ転記されず SessionStart から観測できなかった（judge_runner の戻り値と daily
+# ログには出るが、evolve-daily-run の judge_summary 転記に含まれていなかった）。
+# build_judge_summary（転記の単一ソース）でこれを埋め、build_judge_cap_notice にも
+# out_of_range_verdicts>0 の通知を追加する（skipped_locked と同様の伝播）。
+
+
+def test_build_judge_summary_includes_out_of_range_verdicts_and_reserved_batches():
+    judge_result = {
+        "unjudged_total": 10, "selected": 5, "capped": False, "corrections": 1,
+        "call_failed": 0, "source_failed": False, "source_error": None,
+        "skipped_locked": False, "out_of_range_verdicts": 2, "reserved_batches": 3,
+    }
+    summary = qn.build_judge_summary(judge_result)
+    assert summary["out_of_range_verdicts"] == 2
+    assert summary["reserved_batches"] == 3
+
+
+def test_build_judge_summary_defaults_missing_fields_to_zero():
+    """judge_result に欠けているキーがあっても KeyError にせず既定値で埋める
+    （run_daily_judge の早期 return dict は将来キーが増減しても壊れないようにする）。
+    """
+    summary = qn.build_judge_summary({})
+    assert summary["out_of_range_verdicts"] == 0
+    assert summary["reserved_batches"] == 0
+    assert summary["capped"] is False
+    assert summary["source_failed"] is False
+
+
+def test_build_judge_summary_none_input_returns_all_defaults():
+    summary = qn.build_judge_summary(None)
+    assert summary["unjudged_before"] == 0
+    assert summary["out_of_range_verdicts"] == 0
+
+
+OUT_OF_RANGE_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 5,
+        "selected": 5,
+        "capped": False,
+        "corrections": 1,
+        "call_failed": 0,
+        "source_failed": False,
+        "source_error": None,
+        "skipped_locked": False,
+        "out_of_range_verdicts": 3,
+        "reserved_batches": 2,
+    },
+}
+
+
+def test_judge_cap_notice_fires_when_out_of_range_verdicts_even_if_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(OUT_OF_RANGE_QUEUE, now=now)
+    assert msg is not None
+    assert "3" in msg
+
+
+def test_judge_cap_notice_silent_when_out_of_range_verdicts_zero_and_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(NOT_CAPPED_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_capped_takes_priority_over_out_of_range_verdicts_message():
+    """capped=True の方が運用上の優先度が高い（供給が上限で止まっている）ため、
+    out_of_range_verdicts と同時発生時は capped メッセージを優先する。
+    """
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    both = dict(CAPPED_QUEUE)
+    both["llm_judge"] = dict(CAPPED_QUEUE["llm_judge"], out_of_range_verdicts=3)
+    msg = qn.build_judge_cap_notice(both, now=now)
+    assert "200" in msg  # capped メッセージ（selected 件数）が出る
