@@ -196,8 +196,14 @@ def run_daily_judge(
         run:     {"dry_run": False, "requested", "responded", "call_failed",
                    "corrections", "non_corrections", "skipped_batches",
                    "parse_failed_batches", "omitted_verdicts", "out_of_range_verdicts",
-                   "weak_written", "idioms_written", "judged_written", "unjudged_total",
-                   "selected", "capped", "source_failed", "source_error", "skipped_locked"}
+                   "billed_attempts", "weak_written", "idioms_written", "judged_written",
+                   "unjudged_total", "selected", "capped", "source_failed", "source_error",
+                   "skipped_locked"}
+
+        ``billed_attempts``（#410 round3 [Must]2）: LLM 呼び出し自体は成功した（＝課金が
+        発生した）が判定を確定できなかった試行数（応答欠損・JSON パース失敗）。判定は
+        未確定のまま次回再試行できるが、コストは当日累積（daily_token_limit）へ計上する
+        （同日中に何度でも無料で再送信できる billed-but-unconfirmed 抜け穴の是正）。
 
         ``source_failed``（#410 [Must]E）: True なら発話ソース（utterances.db）取得が例外
         送出し 0 件として fail-open した（DB/schema 障害等）。``unjudged_total=0`` と正当な
@@ -300,6 +306,7 @@ def run_daily_judge(
                 "parse_failed_batches": 0,
                 "omitted_verdicts": 0,
                 "out_of_range_verdicts": 0,
+                "billed_attempts": 0,
                 "weak_written": 0,
                 "idioms_written": 0,
                 "judged_written": 0,
@@ -332,6 +339,7 @@ def run_daily_judge(
                 "parse_failed_batches": 0,
                 "omitted_verdicts": 0,
                 "out_of_range_verdicts": 0,
+                "billed_attempts": 0,
                 "weak_written": 0,
                 "idioms_written": 0,
                 "judged_written": 0,
@@ -395,6 +403,10 @@ def run_daily_judge(
             # observability。バッチ全体は失格にしないため、モデルが返す範囲外 index が
             # 常態化していないかをログ差分で気づけるようにする）。
             f"out_of_range_verdicts={result['out_of_range_verdicts']} "
+            # #410 round3 [Must]2: billed_attempts（課金済みだが判定を確定できなかった
+            # 試行数）をログにも出す。この件数が続くと同日中の予算を消費しているのに
+            # 供給が進まない状態が続くため、運用で気づける必要がある。
+            f"billed_attempts={result['billed_attempts']} "
             f"weak_written={result['weak_written']} judged_written={result['judged_written']}",
             file=out,
         )
@@ -410,6 +422,7 @@ def run_daily_judge(
             "parse_failed_batches": result["parse_failed_batches"],
             "omitted_verdicts": result["omitted_verdicts"],
             "out_of_range_verdicts": result["out_of_range_verdicts"],
+            "billed_attempts": result["billed_attempts"],
             "weak_written": result["weak_written"],
             "idioms_written": result["idioms_written"],
             "judged_written": result["judged_written"],

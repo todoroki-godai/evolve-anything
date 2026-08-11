@@ -210,6 +210,61 @@ def _write_judged_records(path: Path, recs: list) -> None:
     )
 
 
+# ── #410 round3 [Must]2: 課金済みだが判定確定できなかった試行（billed-but-unconfirmed）──
+# 応答欠損（billed）・パース失敗は LLM 呼び出し自体は成功し課金が発生しているのに、
+# 従来は correction_judged.jsonl に一切記録せず「未判定のまま」にしていた。これは同日中に
+# 何度でも同じ対象へ再送信でき、当日累積の予算（daily_token_limit）が事実上機能しない
+# 抜け穴になる。#379 新設凍結のため新ストアは作らず、既存 correction_judged.jsonl に
+# "key" フィールドを持たない record（billed_attempt）を追記する。read_judged_keys は
+# "key" の有無だけを見るため billed_attempt には反応せず（＝未判定のまま次回再試行できる）、
+# count_judged_today は judged_at のある全レコードを合算するため billed_attempt のコストも
+# 当日累積へ正しく計上される。
+
+
+def test_record_billed_attempts_dry_run_writes_nothing(tmp_path: Path) -> None:
+    prog = tmp_path / "correction_judged.jsonl"
+    res = cs_store.record_billed_attempts([100], path=prog, dry_run=True)
+    assert res == {"written": 1, "dry_run": True}
+    assert not prog.exists()
+
+
+def test_record_billed_attempts_writes_keyless_records(tmp_path: Path) -> None:
+    import json as _json
+
+    prog = tmp_path / "correction_judged.jsonl"
+    res = cs_store.record_billed_attempts([100, 200], path=prog)
+    assert res == {"written": 2, "dry_run": False}
+    recs = [_json.loads(l) for l in prog.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(recs) == 2
+    assert all("key" not in r for r in recs)
+    assert all(r.get("billed_attempt") is True for r in recs)
+    assert {r["est_tokens"] for r in recs} == {100, 200}
+    assert all("judged_at" in r for r in recs)
+
+
+def test_record_billed_attempts_not_treated_as_judged(tmp_path: Path) -> None:
+    """billed_attempt record は read_judged_keys に一切現れない（未判定のまま残る）。"""
+    prog = tmp_path / "correction_judged.jsonl"
+    cs_store.record_billed_attempts([100], path=prog)
+    assert cs_store.read_judged_keys(prog) == set()
+
+
+def test_record_billed_attempts_counted_in_count_judged_today(tmp_path: Path) -> None:
+    """billed_attempt record は当日累積コストに合算される（同日の予算を正しく消費する）。"""
+    prog = tmp_path / "correction_judged.jsonl"
+    cs_store.record_billed_attempts([100, 50], path=prog)
+    out = cs_store.count_judged_today(path=prog)
+    assert out["count"] == 2
+    assert out["est_tokens"] == 150
+
+
+def test_record_billed_attempts_empty_list_writes_nothing(tmp_path: Path) -> None:
+    prog = tmp_path / "correction_judged.jsonl"
+    res = cs_store.record_billed_attempts([], path=prog)
+    assert res == {"written": 0, "dry_run": False}
+    assert not prog.exists()
+
+
 def test_filter_unjudged(tmp_path: Path) -> None:
     prog = tmp_path / "correction_judged.jsonl"
     cs_store.record_judged(["/a.jsonl:1"], path=prog)

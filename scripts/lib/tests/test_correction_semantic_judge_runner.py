@@ -659,8 +659,67 @@ def test_out_of_range_verdicts_surfaced_in_return_value_and_log(tmp_path, monkey
     assert "out_of_range_verdicts=1" in out.getvalue()
 
 
-# ─────────────────────────────────────────────────────────────────
-# call_haiku: subprocess の唯一の集約点
+# ── #410 round3 [Must]2: 課金済みだが判定確定できなかった試行の予算計上 ──────────
+# call_haiku 呼び出し自体は成功した（＝課金済み）が応答が壊れていて判定を確定できない
+# ケースを従来は当日累積に一切計上していなかった。同じ発話が同日中に何度でも billed の
+# まま再送信され、daily_token_limit が事実上機能しない抜け穴になっていた。
+
+
+def test_billed_attempts_surfaced_in_return_value_and_log(tmp_path, monkeypatch):
+    """billed_attempts（課金済み未確定試行数）が戻り値・フェーズ遷移ログの両方に伝播する。"""
+    import io
+
+    out = io.StringIO()
+    utterances = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(3)]
+    # 応答は届くが JSON として壊れている（課金済みだが判定確定できない）。
+    monkeypatch.setattr(
+        judge_runner, "call_haiku", lambda prompt, model="haiku": "not valid json {{{"
+    )
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=utterances, judged_path=tmp_path / "correction_judged.jsonl",
+        weak_signals_path=tmp_path / "weak_signals.jsonl", out=out, batch_size=30,
+    )
+    assert res["billed_attempts"] == 1
+    assert "billed_attempts=1" in out.getvalue()
+
+
+def test_billed_but_unconfirmed_attempt_closes_infinite_same_day_retry_loop(tmp_path, monkeypatch):
+    """#410 round3 [Must]2 の核心受け入れ基準: 課金済み未確定の試行を当日累積に計上し、
+    同じ日に無限に無料で再送信できる抜け穴を塞ぐ。1回目 run=True（応答が壊れて判定
+    未確定・課金だけ発生）の実コストちょうどを2回目の daily_token_limit に設定すると、
+    2回目は残り予算0で選定できないことを確認する（test_daily_cap_token_budget_across_runs_
+    includes_batch_fixed_cost と同じ「exact_cost 一致」方式 — billed_attempt を記録しない
+    巻き戻しだと est_tokens=0 のままで残り予算が満額残り、2回目も選定されてしまう）。
+    """
+    from correction_semantic.batch import _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens
+    from correction_semantic.store import count_judged_today
+
+    monkeypatch.setattr(
+        judge_runner, "call_haiku", lambda prompt, model="haiku": "not valid json {{{"
+    )
+
+    judged_path = tmp_path / "correction_judged.jsonl"
+    first = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+    per_utt = estimate_utterance_tokens(first[0])
+    # batch_size=1 の1バッチ分の丸ごとコスト（按分ではなく _batch_cost_tokens と同型）。
+    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS
+
+    res1 = judge_runner.run_daily_judge(
+        run=True, utterances=first, judged_path=judged_path,
+        daily_utterance_limit=200, daily_token_limit=exact_cost * 2, batch_size=1,
+    )
+    assert res1["billed_attempts"] == 1
+    assert read_judged_keys(judged_path) == set()  # 判定は確定していない（未判定のまま）
+    today = count_judged_today(path=judged_path)
+    assert today["est_tokens"] == exact_cost
+
+    second = [_utt("/b.jsonl", 1, "text2", "pj-b", ts=_ts(1))]
+    res2 = judge_runner.run_daily_judge(
+        run=False, utterances=second, judged_path=judged_path,
+        daily_utterance_limit=200, daily_token_limit=exact_cost,  # 1回目の実コストちょうど
+    )
+    assert res2["selected"] == 0
+    assert res2["capped"] is True
 # ─────────────────────────────────────────────────────────────────
 def test_call_haiku_delegates_to_safe_llm_call(monkeypatch):
     """#410 [Must]A: call_haiku の実体は safe_llm_call.call_claude_headless（低レベルの

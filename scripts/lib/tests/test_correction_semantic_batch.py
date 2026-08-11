@@ -315,6 +315,92 @@ def test_ingest_missing_response_does_not_mark_judged(scratch_dir: Path) -> None
     assert cs_store.read_judged_keys(judged) == set()
 
 
+# ── #410 round3 [Must]2: 課金済みだが判定確定できなかった試行の予算計上 ──────────
+# call_haiku 呼び出し自体が成功した（＝実際に課金が発生した）のに応答が空/パース不能で
+# 判定を確定できないケースは、従来は correction_judged.jsonl に一切記録しておらず
+# 「未判定のまま」だった。これは同日中に何度でも同じ対象へ再送信でき、当日累積の予算
+# （daily_token_limit）が事実上機能しない抜け穴になる。call_haiku 自体が失敗（例外）した
+# 場合は課金が発生していないため対象外（judge_runner が responses dict に key を積まない
+# ことで「課金あり/なし」を区別する。responses に key が無い＝未課金）。
+
+
+def test_ingest_never_billed_missing_response_records_no_billed_attempt(scratch_dir: Path) -> None:
+    """responses に key が一切無い（= call_haiku が例外送出し課金が発生していない）場合は
+    billed_attempt を記録しない（無課金の試行に予算を計上しない）。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    res = cs_batch.ingest_judgement_results(
+        emitted, {}, weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["billed_attempts"] == 0
+    assert cs_store.count_judged_today(path=judged)["count"] == 0
+
+
+def test_ingest_billed_but_empty_response_records_billed_attempt(scratch_dir: Path) -> None:
+    """responses に key はあるが空文字列（= call_haiku 呼び出しは成功=課金済みだが応答が
+    空だった）場合は billed_attempt として記録し、当日累積コストに計上する。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    res = cs_batch.ingest_judgement_results(
+        emitted, {rid: ""},
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["skipped_batches"] == 1
+    assert res["billed_attempts"] == 1
+    assert cs_store.count_judged_today(path=judged)["count"] == 1
+    assert cs_store.count_judged_today(path=judged)["est_tokens"] > 0
+    # billed_attempt は未判定のまま（次回 drain で再試行できる）。
+    assert cs_store.read_judged_keys(judged) == set()
+
+
+def test_ingest_malformed_json_records_billed_attempt(scratch_dir: Path) -> None:
+    """応答は届いた（=課金済み）が JSON が壊れていたバッチも billed_attempt として記録する。"""
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = {rid: "```json\n{not valid json at all"}
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["parse_failed_batches"] == 1
+    assert res["billed_attempts"] == 1
+    assert cs_store.count_judged_today(path=judged)["count"] == 1
+    assert cs_store.count_judged_today(path=judged)["est_tokens"] > 0
+    assert cs_store.read_judged_keys(judged) == set()
+
+
+def test_ingest_billed_attempt_dry_run_writes_nothing(scratch_dir: Path) -> None:
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    res = cs_batch.ingest_judgement_results(
+        emitted, {rid: ""}, dry_run=True,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["billed_attempts"] == 1
+    assert not judged.exists()
+
+
 def test_ingest_malformed_json_does_not_mark_judged(scratch_dir: Path) -> None:
     """#273: 応答は届いたが JSON が壊れているバッチも、応答欠損と同様に未判定のまま残す。
 
@@ -610,6 +696,23 @@ def test_estimate_tokens_empty_text_is_small() -> None:
     assert est["est_total_tokens"] < 500  # だが本文ゼロなら十分小さい
 
 
+def test_estimate_tokens_uses_real_batch_local_index_not_hardcoded_zero() -> None:
+    """#410 round3 [Must]2: 旧実装は estimate_tokens 内部でも index=0 固定のまま
+    estimate_utterance_tokens を呼んでおり、1バッチに詰め込まれる実際の index
+    （0..batch_size-1）を反映しない過小評価だった。batch_size=15 で15件を1バッチに
+    詰めると index 10〜14 が2桁化するため、全件 index=0 で見積もった場合より
+    大きくなるはずである。
+    """
+    u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
+    utts = [dict(u) for _ in range(15)]
+    est = cs_batch.estimate_tokens(utts, batch_size=15)
+    naive_all_index_zero = (
+        sum(cs_batch.estimate_utterance_tokens(x, index=0) for x in utts)
+        + cs_batch._PROMPT_OVERHEAD_TOKENS
+    )
+    assert est["est_total_tokens"] > naive_all_index_zero
+
+
 # ── #410 round2 codex [Must]C: 見積もりが実送信（prev_action 含む）と一致しない是正 ──
 # build_batch_prompt は prev_action を最大300字送るのに、旧見積もりは本文長のみを測り
 # prev_action・ラベル・出力形式を固定オーバーヘッドで丸めていた。長い日本語 prev_action が
@@ -636,3 +739,29 @@ def test_estimate_utterance_tokens_measures_actual_prompt_line(scratch_dir: Path
     line = cs_prompt.format_utterance_line(0, u)
     expected = -(-len(line) // 2)  # ceil(len(line) / _CHARS_PER_TOKEN=2.0)
     assert cs_batch.estimate_utterance_tokens(u) == expected
+
+
+# ── #410 round3 [Must]2: バッチ内の実 index を使う（旧実装は index=0 固定で過小評価）───
+
+
+def test_estimate_utterance_tokens_index_param_matches_real_prompt_line() -> None:
+    """index を渡せば、その index で組み立てた実際のプロンプト行の長さで見積もる。
+    旧実装は呼び出し側で常に index=0 をハードコードしており、バッチ内で2桁以上の
+    位置になる発話ほど（"[10]" は "[0]" より1文字長い）過小評価していた。
+    """
+    from correction_semantic import prompt as cs_prompt
+
+    u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
+    line10 = cs_prompt.format_utterance_line(10, u)
+    expected10 = -(-len(line10) // 2)
+    assert cs_batch.estimate_utterance_tokens(u, index=10) == expected10
+    # 実測: この発話では index 2桁化で ceil 後のトークンが 24→25 と実際に増える
+    # （切り上げ境界に依存しない具体値でここに固定する）。
+    assert cs_batch.estimate_utterance_tokens(u, index=0) == 24
+    assert cs_batch.estimate_utterance_tokens(u, index=10) == 25
+
+
+def test_estimate_utterance_tokens_index_defaults_to_zero_for_backward_compat() -> None:
+    """index 省略時は従来どおり 0（既存呼び出し側との後方互換）。"""
+    u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
+    assert cs_batch.estimate_utterance_tokens(u) == cs_batch.estimate_utterance_tokens(u, index=0)

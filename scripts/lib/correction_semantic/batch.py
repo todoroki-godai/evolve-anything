@@ -117,6 +117,19 @@ def emit_judgement_requests(
 # ─────────────────────────────────────────────────────────────────
 # Phase C: ingest
 # ─────────────────────────────────────────────────────────────────
+def _batch_cost_tokens(group: List[Dict[str, Any]]) -> int:
+    """1 バッチ試行分の概算トークン（本文合計 + バッチ固定費）。
+
+    #410 round3 [Must]2: 課金済みだが判定を確定できなかった試行（billed_attempt）の
+    コスト算出に使う。確定した個々のキーへ按分する record_judged の按分方式とは異なり、
+    誰にも確定的に帰属しない試行なのでバッチ丸ごと 1 件のコストとして扱う。
+    """
+    return (
+        sum(estimate_utterance_tokens(u, index=i) for i, u in enumerate(group))
+        + _PROMPT_OVERHEAD_TOKENS
+    )
+
+
 def ingest_judgement_results(
     emitted: Dict[str, Any],
     responses: Dict[str, Any],
@@ -147,13 +160,14 @@ def ingest_judgement_results(
 
     Returns:
         {"corrections", "non_corrections", "skipped_batches", "parse_failed_batches",
-         "omitted_verdicts", "out_of_range_verdicts", "weak_written", "idioms_written",
-         "idioms_filtered", "judged_written", "dry_run"}
+         "omitted_verdicts", "out_of_range_verdicts", "billed_attempts", "weak_written",
+         "idioms_written", "idioms_filtered", "judged_written", "dry_run"}
     """
     from weak_signals.store import WeakSignal, append_signals, now_iso
 
     requests = emitted.get("requests", [])
-    parsed = parse_responses(requests, responses or {}, parser=passthrough)
+    responses = responses or {}
+    parsed = parse_responses(requests, responses, parser=passthrough)
 
     signals: List[WeakSignal] = []
     idioms: List[_store.CorrectionIdiom] = []
@@ -161,6 +175,9 @@ def ingest_judgement_results(
     # #410 [Must]B: 判定済みキーごとの推定トークンを残し、daily runner が当日累積を
     # read 時導出できるようにする（record_judged に渡す）。
     est_tokens_by_key: Dict[str, int] = {}
+    # #410 round3 [Must]2: 課金済み（call_haiku 呼び出し自体は成功した）だが判定を確定
+    # できなかったバッチのトークン概算（billed-but-unconfirmed 予算漏れの是正）。
+    billed_attempt_tokens: List[int] = []
     corrections = 0
     non_corrections = 0
     skipped_batches = 0
@@ -178,8 +195,13 @@ def ingest_judgement_results(
         raw = parsed.get(key)
         text = raw.strip() if isinstance(raw, str) else ""
         if not text:
-            # 応答欠損: 判定済みにせず次 drain で再試行
+            # 応答欠損: 判定済みにせず次 drain で再試行。
             skipped_batches += 1
+            # #410 round3 [Must]2: responses に key があれば call_haiku 呼び出し自体は
+            # 成功している（＝課金済み）。呼び出し自体が例外送出で失敗した場合（judge_runner
+            # が responses に key を積まない）は課金が発生していないため対象外にする。
+            if key in responses:
+                billed_attempt_tokens.append(_batch_cost_tokens(group))
             continue
 
         # 変数名は `parsed`（= parse_responses の応答マップ）と必ず分ける。
@@ -194,6 +216,9 @@ def ingest_judgement_results(
             # #273: JSON 解釈不能。応答欠損と同様、判定済みにせず次 drain で再試行する
             # （[] フォールバックを「該当なし」と誤読して judged_keys に積むと desync する）。
             parse_failed_batches += 1
+            # #410 round3 [Must]2: text が非空 = 応答は届いている = 課金済み（このパスは
+            # 常に billed）。
+            billed_attempt_tokens.append(_batch_cost_tokens(group))
             continue
         # #410 round3 [Should]⑤: バッチ対象外の index はパーサ側で個別に無視され
         # verdicts から除外済み（バッチ全体は失格にしない）。無視した件数だけ observability
@@ -219,7 +244,8 @@ def ingest_judgement_results(
                 if legitimate_empty_batch:
                     judged_keys.append(key)
                     batch_judged_keys.append(key)
-                    est_tokens_by_key[key] = estimate_utterance_tokens(utt)
+                    # #410 round3 [Must]2: local_i（バッチ内の実 index）を渡す。
+                    est_tokens_by_key[key] = estimate_utterance_tokens(utt, index=local_i)
                     non_corrections += 1
                     continue
                 # 部分応答の欠落: judged_keys に積まない（未判定のまま次回 drain で再試行）。
@@ -228,7 +254,7 @@ def ingest_judgement_results(
                 continue
             judged_keys.append(key)
             batch_judged_keys.append(key)
-            est_tokens_by_key[key] = estimate_utterance_tokens(utt)
+            est_tokens_by_key[key] = estimate_utterance_tokens(utt, index=local_i)
             if not v.get("is_correction"):
                 non_corrections += 1
                 continue
@@ -288,6 +314,11 @@ def ingest_judgement_results(
         judged_keys, path=judged_path, dry_run=dry_run,
         est_tokens_by_key=est_tokens_by_key,
     )
+    # #410 round3 [Must]2: billed-but-unconfirmed の試行を当日累積へ計上する（無限再試行×
+    # 予算漏れの是正）。
+    billed_res = _store.record_billed_attempts(
+        billed_attempt_tokens, path=judged_path, dry_run=dry_run,
+    )
 
     return {
         "corrections": corrections,
@@ -299,6 +330,7 @@ def ingest_judgement_results(
         "idioms_filtered": idioms_filtered,  # #527: 過汎用で弾いた idiom 件数（observability）
         "omitted_verdicts": omitted_verdicts,  # #273: verdict 欠落で非修正確定した発話数
         "out_of_range_verdicts": out_of_range_verdicts,  # #410 round3 [Should]⑤: 無視した範囲外件数
+        "billed_attempts": billed_res["written"],  # #410 round3 [Must]2: 課金済み未確定試行数
         "judged_written": judged_res["written"],
         "dry_run": bool(dry_run),
     }
@@ -308,7 +340,7 @@ def ingest_judgement_results(
 # トークン見積もり（llm-batch-guard: 実走前にユーザーへ提示）
 # ─────────────────────────────────────────────────────────────────
 def estimate_utterance_tokens(
-    utterance: Dict[str, Any], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
+    utterance: Dict[str, Any], *, index: int = 0, max_chars: int = MAX_CHARS_PER_UTTERANCE
 ) -> int:
     """1 発話あたりの概算トークン。
 
@@ -325,8 +357,13 @@ def estimate_utterance_tokens(
     2箇所（見積もりと実送信）に複製すると片方だけ切り詰め幅を変えたときに乖離が再発する
     ため、行の組み立てそのものを単一ソース化した（固定の per-utterance オーバーヘッド
     加算はもう不要 — ラベル文言も実測に含まれるため）。
+
+    ``index``（#410 round3 [Must]2 是正）: バッチ内での実位置（0 始まり）。呼び出し側が
+    常に ``index=0`` を渡していたため、"[10]" のように2桁以上になる発話ほど（"[0]" より
+    1文字長い）過小評価していた。既定 0 は単発の発話単価見積もり（呼び出し側がバッチ内
+    位置を持たない箇所）との後方互換のため維持する。
     """
-    line = _prompt.format_utterance_line(0, utterance, max_chars=max_chars)
+    line = _prompt.format_utterance_line(index, utterance, max_chars=max_chars)
     return math.ceil(len(line) / _CHARS_PER_TOKEN)
 
 
@@ -341,11 +378,21 @@ def estimate_tokens(
     各発話の本文実長（``max_chars`` で頭打ち・``build_batch_prompt`` と同じ切り詰め）に
     連動する。固定件数係数（旧実装）だと長文1件が短文1件と同じ見積もりになり、
     トークン上限が実効性を持たなかった。
+
+    #410 round3 [Must]2 是正: 実際の emit（``_chunk`` で ``batch_size`` ごとに分割し、
+    各バッチ内で 0 始まりの index を振る）と同じ分割・index 付けで見積もる。旧実装は
+    件数から batches 数だけ算出し、各発話の index を意識せず一律 index=0 で見積もって
+    いたため、1バッチが大きく2桁 index が生じる構成ほど過小評価になっていた。
     """
     items = utterances or []
     n = len(items)
-    batches = (n + max(1, batch_size) - 1) // max(1, batch_size)
-    body_tokens = sum(estimate_utterance_tokens(u, max_chars=max_chars) for u in items)
+    groups = _chunk(items, batch_size)
+    batches = len(groups)
+    body_tokens = sum(
+        estimate_utterance_tokens(u, index=i, max_chars=max_chars)
+        for group in groups
+        for i, u in enumerate(group)
+    )
     est = body_tokens + batches * _PROMPT_OVERHEAD_TOKENS
     return {
         "utterances": n,

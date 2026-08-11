@@ -4,7 +4,10 @@
 - ``correction_idioms.jsonl`` — 検出した修正言い回し（イディオム）の個人辞書。
   provenance（元発話の物理キー・判定理由）付き。dedup キー = idiom + 元発話の物理キー。
 - ``correction_judged.jsonl`` — LLM 判定済み発話の物理キー進捗。再判定（無駄な LLM call）を
-  防ぐために utterance の物理 PK（source_path:line_no）で突合する。
+  防ぐために utterance の物理 PK（source_path:line_no）で突合する。"key" フィールドを持たない
+  record（``billed_attempt``: True）も同居する（#410 round3 [Must]2）— 課金済みだが判定を
+  確定できなかった試行のコストのみを当日累積に計上する keyless record。
+  ``read_judged_keys`` は "key" の有無だけを見るためこの record には一切反応しない。
 
 dry-run ゼロ書込（pitfall_dryrun_stateful_store_write）: append 系は ``dry_run`` を受け、
 True なら **一切ファイルに触れない**（ディレクトリ作成も append も行わない）。
@@ -477,6 +480,62 @@ def record_judged(
                 store_write_raw(store, rec)
 
     return {"written": len(to_write), "dry_run": False}
+
+
+def record_billed_attempts(
+    tokens_list: List[int],
+    path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """LLM を実際に呼び出し課金が発生したが判定を確定できなかった試行を記録する
+    （#410 round3 [Must]2: billed-but-unconfirmed 予算漏れの是正）。
+
+    応答欠損（呼び出しは成功したが空応答）・JSON パース失敗は、LLM 呼び出し自体は成功し
+    課金が発生しているにもかかわらず、従来は correction_judged.jsonl に一切記録せず
+    「未判定のまま」にしていた。これは同日中に何度でも同じ対象へ再送信でき、当日累積の
+    予算（daily_token_limit）が事実上機能しない抜け穴になる（call_haiku 自体が例外送出で
+    失敗した場合は課金が発生していないため対象外・呼び出し側で判別する）。
+
+    #379 新設凍結中のため新ストアは作らず、既存 ``correction_judged.jsonl`` に **"key"
+    フィールドを持たない** record を追記する。``read_judged_keys`` は "key" の有無だけを
+    見るためこの record には一切反応せず（＝対象発話は未判定のまま残り次回 drain で
+    再試行できる）、``count_judged_today`` は "key" の有無を問わず ``judged_at`` のある
+    全レコードを合算するため、このコストは当日累積へ正しく計上される。
+
+    各要素は 1 バッチ試行分の概算トークン（本文合計 + バッチ固定費）。個々のキーへ
+    按分しない（確定していないキーに恒久コストを帰属させない設計・record_judged の
+    按分方式とは意図的に非対称）。
+
+    dry-run ゼロ書込: dry_run=True なら一切ファイルに触れず「書くはずだった件数」を返す。
+
+    Returns:
+        {"written": int, "dry_run": bool}
+    """
+    store = path if path is not None else default_judged_path()
+    if not tokens_list:
+        return {"written": 0, "dry_run": dry_run}
+
+    if dry_run:
+        return {"written": len(tokens_list), "dry_run": True}
+
+    from weak_signals.store import now_iso
+
+    from rl_common import store_write, store_write_raw
+
+    store.parent.mkdir(parents=True, exist_ok=True)
+    judged_at = now_iso()
+    for tokens in tokens_list:
+        rec: Dict[str, Any] = {
+            "billed_attempt": True,
+            "judged_at": judged_at,
+            "est_tokens": int(tokens),
+        }
+        if path is None:
+            store_write(JUDGED_STORE_NAME, rec)
+        else:
+            store_write_raw(store, rec)
+
+    return {"written": len(tokens_list), "dry_run": False}
 
 
 def count_judged_today(
