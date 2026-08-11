@@ -44,15 +44,23 @@ _SKIP_MODULES = {
 
 
 def _discover_store_modules():
-    """scripts/lib 配下から DATA_DIR を module-level 参照するモジュール名を機械発見。"""
+    """scripts/lib 配下から DATA_DIR を module-level 参照するモジュール名を機械発見。
+
+    単一ファイル module（``foo.py``）と**パッケージ**（``foo/__init__.py``）の両方を走査する。
+    パッケージを含めるのは、単一ファイルが file-size-budget でパッケージへ分割されたときに
+    検査対象から静かに落ちるのを防ぐため（#383 で ``evolve_decisions.py`` →
+    ``evolve_decisions/`` の分割により、この不変条件が当該 store に対して効かなくなった）。
+    """
+    candidates = list(_LIB_DIR.glob("*.py")) + list(_LIB_DIR.glob("*/__init__.py"))
     found = []
-    for py in sorted(_LIB_DIR.glob("*.py")):
-        if py.name.startswith("_"):
+    for py in sorted(candidates):
+        # module 名はファイル名（単一ファイル）またはパッケージディレクトリ名。
+        mod = py.parent.name if py.name == "__init__.py" else py.stem
+        if mod.startswith("_"):
             continue
         text = py.read_text(encoding="utf-8")
         if not _DATA_DIR_CAPTURE.search(text):
             continue
-        mod = py.stem
         if mod in _SKIP_MODULES:
             continue
         found.append(mod)
@@ -75,7 +83,10 @@ def test_store_modules_discovered():
     """機械発見が空でない（パターン崩れの早期検知）。"""
     assert _STORE_MODULES, "no store modules discovered — discovery pattern may be broken"
     # 既知の代表 store が含まれていることを確認（発見ロジックの sanity check）。
-    for expected in ("token_usage_store",):
+    # evolve_decisions は #383 でパッケージへ分割された代表例。単一ファイルだけを走査すると
+    # ここから静かに落ちるので、パッケージ形式の発見が生きていることの回帰フェンスを兼ねる
+    # （call-time 解決へ移行するなら session_store と同じく「含まれないこと」側へ移すこと）。
+    for expected in ("token_usage_store", "evolve_decisions"):
         assert expected in _STORE_MODULES, f"{expected} not discovered"
     # session_store は #137 で call-time 解決（_data_dir() + module __getattr__）へ移行し
     # import 時キャプチャを構造的に排除した（本テストが守る不変条件の恒久達成側）。
