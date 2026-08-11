@@ -70,7 +70,7 @@
 | `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug） | `optimize_history_store.py` |
 | `evolve_decisions` | run envelope で並行 run を分離し未判断は deferred 保持。marker 書込失敗は `marker_error` で surface。supersede は対象パス単位、flat `result_path` は run 1件時のみ | `evolve_decisions.py` |
 | `file_lock` | ファイル単位排他ロックと atomic write の単一ソース。ロック下からは `_locked` 版を使い自己 deadlock を回避 | `rl_common/file_lock.py` |
-| `evolve_decision_ids` | 提案 identity `(skill_path, before_sha)` と判断イベント identity を隣接定義する純関数 module（取り違え防止） | `evolve_decision_ids.py` |
+| `evolve_decision_ids` | 提案 identity `(repo_id, repo相対path, before_sha)` と判断イベント identity を隣接定義する純関数 module（取り違え防止） | `evolve_decision_ids.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格 | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
 | `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込。project スコープ4層防御で他PJ混入を reject、purge ツールは dry-run 既定 | `auto_memory_*.py` |
