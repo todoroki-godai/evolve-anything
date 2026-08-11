@@ -1407,3 +1407,85 @@ class TestWeakSignalRelevanceGate:
         assert out["count"] == 2
         assert "suppressed" not in out
         assert "relevance_gate" not in out
+
+
+# --- Test: --reject-weak / --promote-weak の既読化配線（#409 SessionStart 改善案提示） ---
+
+class TestWeakReviewRecording:
+    """SessionStart の改善案提示（daily.proposal_digest）が既読ストア
+    （correction_review_seen.jsonl）を見て再提示を止められるよう、--promote-weak /
+    --reject-weak の両方が daily_review.record_reviewed を呼ぶことを検証する。
+    """
+
+    def _seed_ws(self, tmp_path):
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+        ws = tmp_path / "weak_signals.jsonl"
+        detected_at = _fresh_detected_at()
+        sig = WeakSignal(
+            "llm_judge",
+            {"source_path": "/a.jsonl", "line_no": 1, "text": "既読化のテスト", "reason": "r"},
+            detected_at, "s1", "evolve-anything",
+        )
+        append_signals([sig], path=ws)
+        return ws, sig
+
+    def test_promote_weak_records_reviewed_as_promoted(self, tmp_path, capsys):
+        ws, sig = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sig.signal_key,
+                                     "--weak-signals-file", str(ws),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        json.loads(capsys.readouterr().out)  # 既存フォーマットが壊れていないことも確認
+
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from correction_semantic.daily_review import read_reviewed_keys
+        assert sig.signal_key in read_reviewed_keys()
+
+    def test_promote_weak_dry_run_does_not_record_reviewed(self, tmp_path, capsys):
+        ws, sig = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", sig.signal_key,
+                                     "--dry-run",
+                                     "--weak-signals-file", str(ws),
+                                     "--corrections-file", str(corr)]):
+            reflect.main()
+        capsys.readouterr()
+
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from correction_semantic.daily_review import read_reviewed_keys
+        assert sig.signal_key not in read_reviewed_keys()
+
+    def test_reject_weak_records_reviewed_as_rejected(self, tmp_path, capsys):
+        with mock.patch("sys.argv", ["reflect", "--reject-weak", "k1,k2", "--pj", "myproj"]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "rejected_weak"
+        assert out["pj_slug"] == "myproj"
+        assert out["written"] == 2
+
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from correction_semantic.daily_review import read_reviewed_keys
+        seen = read_reviewed_keys()
+        assert "k1" in seen
+        assert "k2" in seen
+
+    def test_reject_weak_dry_run_writes_nothing(self, tmp_path, capsys):
+        with mock.patch("sys.argv", ["reflect", "--reject-weak", "k1", "--pj", "myproj",
+                                     "--dry-run"]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["dry_run"] is True
+
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from correction_semantic.daily_review import read_reviewed_keys
+        assert "k1" not in read_reviewed_keys()
+
+    def test_reject_weak_defaults_pj_to_resolved_slug(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+        with mock.patch("sys.argv", ["reflect", "--reject-weak", "k1"]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "rejected_weak"
+        assert out["pj_slug"]  # 空でない（resolve_pj_slug が basename 等を返す）

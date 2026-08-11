@@ -765,6 +765,12 @@ def main():
                         help="--context: 関連度ゲートの閾値（既定は校正済み 0.5・#565）")
     parser.add_argument("--promote-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）の weak_signal を corrections へ昇格")
+    parser.add_argument("--reject-weak", type=str, default=None,
+                        help="指定 signal_key（カンマ区切り）を『いいえ』として既読化する"
+                             "（#409・weak_signal 自体は昇格しない）")
+    parser.add_argument("--pj", type=str, default=None,
+                        help="--promote-weak/--reject-weak: 既読記録の pj_slug（未指定は"
+                             "現在の PJ を pj_slug.resolve_pj_slug で解決）")
     parser.add_argument("--weak-signals-file", type=str, default=None,
                         help="weak_signals.jsonl のパス（テスト用）")
     parser.add_argument("--revoke-idiom", type=str, default=None,
@@ -840,6 +846,8 @@ def main():
     if args.promote_weak:
         from correction_semantic import promote as _cs_promote
         from correction_semantic import store as _cs_store
+        from correction_semantic.daily_review import record_reviewed as _record_reviewed
+        from pj_slug import resolve_pj_slug as _resolve_pj_slug
         keys = [k.strip() for k in args.promote_weak.split(",") if k.strip()]
         res = _cs_promote.promote_signals(
             keys,
@@ -858,6 +866,12 @@ def main():
             confirmed_by="reflect_promote_weak",
             dry_run=args.dry_run,
         )
+        # #409: 「はい」を既読ストアへ記録する。SessionStart の改善案提示
+        # （daily.proposal_digest.build_session_proposals）はこの既読集合を見て再提示を止める
+        # （promoted フラグだけでは同日中の digest 再提示を防げない — digest は日次生成のスナップ
+        # ショットで再生成まで promoted 反映を待つため）。
+        pj_slug_value = args.pj or _resolve_pj_slug(current_project or str(project_root))
+        _record_reviewed(keys, pj_slug_value, decision="promoted", dry_run=args.dry_run)
         # #476-4: 昇格後の corrections_human_allpj を返す（growth_report の promoted_today は対話前
         # スナップショットで固定されるため、CLI が更新後カウントを返し assistant が最新値を
         # 表示できるようにする）。dry_run は corrections に書かないため pre-promotion 値のまま。
@@ -877,6 +891,23 @@ def main():
             **res,
             "confirmed_idioms": confirm_res.get("confirmed", 0),
             "corrections_human_allpj": _human,  # 全PJ集計値（per-PJの growth_report.corrections_human とは別物 — #557）
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # --reject-weak: 指定 signal_key を「いいえ」として既読化する（#409）。weak_signal 自体は
+    # promoted にしない（却下＝昇格しない、が正しい仕様）。record_reviewed が
+    # correction_review_seen.jsonl へ decision="rejected" を追記し、以後 daily_review /
+    # SessionStart 提示（exclude_reviewed・#185 と同じ predicate）から除外する。
+    if args.reject_weak is not None:
+        from correction_semantic.daily_review import record_reviewed as _record_reviewed
+        from pj_slug import resolve_pj_slug as _resolve_pj_slug
+        keys = [k.strip() for k in args.reject_weak.split(",") if k.strip()]
+        pj_slug_value = args.pj or _resolve_pj_slug(current_project or str(project_root))
+        res = _record_reviewed(keys, pj_slug_value, decision="rejected", dry_run=args.dry_run)
+        print(json.dumps({
+            "status": "rejected_weak",
+            "pj_slug": pj_slug_value,
+            **res,
         }, ensure_ascii=False, indent=2))
         return
 

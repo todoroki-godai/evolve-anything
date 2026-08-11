@@ -79,6 +79,13 @@ try:
 except ImportError:
     pass
 
+# daily.proposal_digest import (optional) — 改善案 digest の SessionStart 提示（#409）
+_proposal_digest = None
+try:
+    from daily import proposal_digest as _proposal_digest
+except ImportError:
+    pass
+
 # icebox_verdict_seen import (optional) — icebox 3レーン棚卸しレーン1「成立」の既読管理（#352）
 _icebox_verdict_seen = None
 try:
@@ -414,6 +421,69 @@ def _deliver_evolve_queue_notice() -> None:
         print(f"[evolve-anything:restore_state] evolve-queue notice error: {e}", file=sys.stderr)
 
 
+def _deliver_session_proposals() -> None:
+    """毎朝の改善案 digest（evolve-queue.json の proposals フィールド）を additionalContext で
+    提示し、Claude に AskUserQuestion で y/n 提示するよう指示する（#409）。
+
+    出力チャネルは systemMessage（user 向け）でなく hookSpecificOutput.additionalContext
+    （ADR-038 = Claude 向け・sessionTitle と同型のキー構造）。Claude にしか届かない文脈へ
+    「ユーザーの依頼が無いときだけ提示せよ」という行動指示を書き込む必要があるため。
+
+    実環境ガード・observe-first pre-flight（evolve-queue.json 読み込みのみ・DuckDB 接続や
+    transcript 走査なし）は他 deliver 関数と同型。既読フィルタ（correction_review_seen.jsonl）
+    は 1 回の read_reviewed_keys 呼び出しのみで、書き込みは一切しない（read-only）。
+    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
+    """
+    if _proposal_digest is None or _queue_notice is None or _data_dir_migration is None:
+        return
+    try:
+        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+
+        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        if not env:
+            return  # hook 文脈でなければ判定しない（実環境を probe しない）
+        if not _data_dir_migration.is_cc_install_layout(Path(env)):
+            return  # テスト isolation / custom 環境
+
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        if not project_dir or _pj_slug is None:
+            return  # cwd 不明 / pj_slug モジュール不在なら判定不能
+        slug = _pj_slug.resolve_pj_slug(project_dir)
+        if not slug or slug == _pj_slug.UNATTRIBUTED_SLUG:
+            return  # 帰属不能な PJ は判定しない
+
+        data_dir = rl_common.resolve_data_dir(env)
+        queue_data = _queue_notice.read_queue(data_dir)
+        if not isinstance(queue_data, dict):
+            return
+
+        from correction_semantic import daily_review as _daily_review
+
+        # 既読ストアは digest 生成（bin/evolve-daily-run）と同じ data_dir を明示指定して読む。
+        # daily_review.read_reviewed_keys() の既定（path 省略）は rl_common.DATA_DIR という
+        # import 時固定のモジュール global を経由する union read であり、ここで解決した
+        # data_dir（env 由来・call-time）とは別物になりうる。明示 path で一致させる。
+        seen_path = _daily_review.default_seen_path(base=data_dir)
+        seen_keys = _daily_review.read_reviewed_keys(path=seen_path)
+        groups = _proposal_digest.build_session_proposals(queue_data, slug, seen_keys=seen_keys)
+        if not groups:
+            return
+        # 回答コマンドは**絶対パス**で埋め込む。提示先は他 PJ の cwd であり、相対
+        # `bin/evolve-reflect` は "No such file" になる（pitfall_skill_md_plugin_root と同型）。
+        reflect_cmd = str(Path(__file__).resolve().parent.parent / "bin" / "evolve-reflect")
+        message = _proposal_digest.build_proposal_prompt(groups, slug, reflect_cmd=reflect_cmd)
+        # hookEventName は ADR-038 のスキーマ必須項目（subagent_observe.py と同型）。
+        # 省略すると additionalContext が解釈されず機能が無言で死ぬ。
+        print(json.dumps(
+            {"hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": message,
+            }}, ensure_ascii=False,
+        ))
+    except Exception as e:
+        print(f"[evolve-anything:restore_state] session proposals error: {e}", file=sys.stderr)
+
+
 def _deliver_judge_cap_notice() -> None:
     """llm_judge Phase B の日次上限到達を systemMessage で通知する（#408）。
 
@@ -581,6 +651,8 @@ def handle_session_start(event: dict) -> None:
     _deliver_utterance_staleness()
     # 毎朝の evolve-queue 待ち PJ 通知（#80・evolve-queue.json 読みのみ）
     _deliver_evolve_queue_notice()
+    # 毎朝の改善案 digest を AskUserQuestion 指示として提示（#409・evolve-queue.json + 既読ストア読みのみ）
+    _deliver_session_proposals()
     # llm_judge 日次上限到達通知（#408・evolve-queue.json の llm_judge フィールド読みのみ）
     _deliver_judge_cap_notice()
     # icebox 棚卸しの気づきトリガー（#194・evolve-anything 本体リポジトリのみ・icebox-status.json 読みのみ）

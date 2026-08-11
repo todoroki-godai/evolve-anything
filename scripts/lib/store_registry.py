@@ -725,16 +725,19 @@ _DECLARATIONS: List[StoreDeclaration] = [
         name="evolve-queue.json",
         kind="json",
         writer="scripts/lib/daily/plist.py が生成する launchd runner コマンド "
-        "（bin/evolve-daily-run 経由で `fleet queue --json` の stdout をそのまま "
+        "（bin/evolve-daily-run 経由で `fleet queue --json` の stdout に llm_judge サマリ "
+        "+ proposals digest（#409・scripts/lib/daily/proposal_digest.py）を埋め込んで "
         "保存。毎朝1回・日次上書き）。",
         writer_locus="batch",
         reader="hooks/restore_state.py の _deliver_evolve_queue_notice（SessionStart "
-        "systemMessage 通知）/ scripts/lib/daily/queue_notice.py の read_queue（stale "
+        "systemMessage 通知）/ 同 _deliver_session_proposals（#409・proposals digest の "
+        "additionalContext 提示）/ scripts/lib/daily/queue_notice.py の read_queue（stale "
         "判定）/ scripts/lib/fleet/cli_propose.py（--live 未指定時の propose 入力）。",
         retention="permanent",
         classification="derived_cache",
         note="#379 Step 4 PR E round2（#399 codex Must 2）: `fleet queue --json` 出力の "
-        "日次スナップショット（毎朝上書き・SoR は fleet queue の元データ）。",
+        "日次スナップショット（毎朝上書き・SoR は fleet queue の元データ）。#409 で "
+        "proposals フィールド（改善案 digest）を追加。",
     ),
     StoreDeclaration(
         name="icebox-status.json",
