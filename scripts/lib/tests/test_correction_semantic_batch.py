@@ -152,6 +152,43 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(scratch_dir: P
     assert today_count["est_tokens"] > 0
 
 
+# ── #410 round2 codex [Must]B: 当日累積がバッチ固定費を取りこぼす是正 ───────────
+# estimate_tokens は batches × _PROMPT_OVERHEAD_TOKENS(400) を含むのに、record_judged に
+# 残す est_tokens は発話単価のみだった。batch_size=1 で再実行を繰り返すと毎回 400 トークン
+# ずつ上限を超過できる（次回実行が前回のバッチ固定費を全く覚えていない）。
+
+
+def test_ingest_distributes_batch_fixed_cost_into_est_tokens_by_key(scratch_dir: Path) -> None:
+    """バッチ固定費（_PROMPT_OVERHEAD_TOKENS）を、このバッチで実際に確定したキーへ均等
+    按分して記録する。按分方式を選んだ理由: 特定1キー（例: 先頭）に全額寄せると、そのキーが
+    別の事情で再判定対象になった場合に固定費だけ二重計上/消失する非対称が生まれるため、
+    確定した全キーに均等に配る方が扱いやすい。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()  # 3 発話・batch_size=30 → 1 バッチ
+
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = _responses_for(emitted, {
+        (rid, i): {"is_correction": False, "idiom": None, "reason": "r"} for i in range(3)
+    })
+    cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+
+    today = cs_store.count_judged_today(path=judged)
+    per_utterance_only_sum = sum(cs_batch.estimate_utterance_tokens(u) for u in utts)
+    # バッチ固定費（400トークン）が含まれるため、発話単価だけの合計より明確に大きい
+    # （按分丸めの誤差はキー数未満に収まる）。
+    assert today["est_tokens"] > per_utterance_only_sum
+    assert today["est_tokens"] - per_utterance_only_sum >= cs_batch._PROMPT_OVERHEAD_TOKENS - len(utts)
+
+
 def test_ingest_then_reemit_excludes_judged_utterances(scratch_dir: Path) -> None:
     """#339 回帰: Phase C を通した発話は次の Phase A emit に再度現れない。
 
@@ -512,3 +549,31 @@ def test_estimate_tokens_empty_text_is_small() -> None:
     est = cs_batch.estimate_tokens([{"text": "", "prev_action": None}], batch_size=30)
     assert est["est_total_tokens"] > 0  # per-batch/per-utterance overhead は残る
     assert est["est_total_tokens"] < 500  # だが本文ゼロなら十分小さい
+
+
+# ── #410 round2 codex [Must]C: 見積もりが実送信（prev_action 含む）と一致しない是正 ──
+# build_batch_prompt は prev_action を最大300字送るのに、旧見積もりは本文長のみを測り
+# prev_action・ラベル・出力形式を固定オーバーヘッドで丸めていた。長い日本語 prev_action が
+# 多いバッチで大幅な過小評価になりうる。
+
+
+def test_estimate_utterance_tokens_reflects_prev_action_length() -> None:
+    short_prev = {"text": "x", "prev_action": "a"}
+    long_prev = {"text": "x", "prev_action": "あ" * 300}
+    assert (
+        cs_batch.estimate_utterance_tokens(long_prev)
+        > cs_batch.estimate_utterance_tokens(short_prev) * 5
+    )
+
+
+def test_estimate_utterance_tokens_measures_actual_prompt_line(scratch_dir: Path) -> None:
+    """理想解: 実際に組み立てるプロンプト行（prompt.format_utterance_line）の長さを
+    そのまま測る。見積もりロジックを prompt.py 側の組み立てロジックと重複実装すると、
+    どちらかだけ切り詰め幅を変えたときに乖離が再発するため、単一ソースにする。
+    """
+    from correction_semantic import prompt as cs_prompt
+
+    u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
+    line = cs_prompt.format_utterance_line(0, u)
+    expected = -(-len(line) // 2)  # ceil(len(line) / _CHARS_PER_TOKEN=2.0)
+    assert cs_batch.estimate_utterance_tokens(u) == expected

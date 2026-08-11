@@ -55,9 +55,9 @@ from . import store as _store
 # 見積もる。``prompt.build_batch_prompt`` と同じ ``MAX_CHARS_PER_UTTERANCE`` で本文長を
 # 頭打ちし、見積もりと実送信の乖離を防ぐ（単一ソース）。
 _CHARS_PER_TOKEN = 2.0
-# 1 発話あたりのプロンプト整形オーバーヘッド（"[i] 直前のClaudeの操作: ...\n    ユーザー
-# 発話: " のラベル + prev_action 分）。
-_PER_UTTERANCE_OVERHEAD_TOKENS = 30
+# #410 round2 [Must]C: per-utterance の固定オーバーヘッド係数は廃止した。
+# estimate_utterance_tokens が実際に組み立てるプロンプト行（prompt.format_utterance_line、
+# ラベル文言 + prev_action + text）の長さをそのまま測るため、別途の固定加算が不要になった。
 # プロンプト雛形（PROMPT_HEAD 相当の指示文・出力形式説明）の固定オーバーヘッド（バッチ単位）。
 _PROMPT_OVERHEAD_TOKENS = 400
 
@@ -198,6 +198,9 @@ def ingest_judgement_results(
         # バッチ全体を戻すと head-of-line blocking になるため、欠落した index の発話だけ
         # 未判定のまま残し、揃っている index は従来どおり確定する。
         legitimate_empty_batch = len(parsed_verdicts["verdicts"]) == 0
+        # #410 round2 [Must]B: このバッチで実際に確定するキー（未判定のまま残す部分応答の
+        # 欠落分は含めない）。バッチ固定費の按分対象を決めるために保持する。
+        batch_judged_keys: List[str] = []
 
         for local_i, utt in enumerate(group):
             key = _store.utterance_key(utt)
@@ -205,6 +208,7 @@ def ingest_judgement_results(
             if v is None:
                 if legitimate_empty_batch:
                     judged_keys.append(key)
+                    batch_judged_keys.append(key)
                     est_tokens_by_key[key] = estimate_utterance_tokens(utt)
                     non_corrections += 1
                     continue
@@ -213,6 +217,7 @@ def ingest_judgement_results(
                 omitted_verdicts += 1
                 continue
             judged_keys.append(key)
+            batch_judged_keys.append(key)
             est_tokens_by_key[key] = estimate_utterance_tokens(utt)
             if not v.get("is_correction"):
                 non_corrections += 1
@@ -254,6 +259,19 @@ def ingest_judgement_results(
             elif idiom_text:
                 idioms_filtered += 1
 
+        # #410 round2 [Must]B: バッチ固定費（_PROMPT_OVERHEAD_TOKENS）を、このバッチで
+        # 実際に確定したキーへ均等按分して当日累積に反映する（部分応答の欠落で未確定の
+        # キーには課さない）。estimate_tokens（見積もり）は batches × _PROMPT_OVERHEAD_TOKENS
+        # を含むのに、旧実装はここで発話単価しか記録しておらず、次回実行が前回バッチの
+        # 固定費を一切覚えていなかった（batch_size=1 を繰り返すと毎回 400 トークンずつ
+        # 上限を超過できた）。按分方式を選んだ理由: 特定1キー（例: 先頭）へ全額寄せると、
+        # そのキーが別経路で再判定対象になった場合に固定費だけ二重計上/消失する非対称が
+        # 生まれるため、確定した全キーに均等に配る。
+        if batch_judged_keys:
+            per_key_overhead = -(-_PROMPT_OVERHEAD_TOKENS // len(batch_judged_keys))  # ceil
+            for bkey in batch_judged_keys:
+                est_tokens_by_key[bkey] = est_tokens_by_key.get(bkey, 0) + per_key_overhead
+
     ws_res = append_signals(signals, path=weak_signals_path, dry_run=dry_run)
     idiom_res = _store.append_idioms(idioms, path=idioms_path, dry_run=dry_run)
     judged_res = _store.record_judged(
@@ -281,15 +299,24 @@ def ingest_judgement_results(
 def estimate_utterance_tokens(
     utterance: Dict[str, Any], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
 ) -> int:
-    """1 発話あたりの概算トークン（本文実長 + per-utterance オーバーヘッド）。
+    """1 発話あたりの概算トークン。
 
     ``estimate_tokens``（バッチ集計）と ``ingest_judgement_results``（#410 [Must]B:
     ``correction_judged.jsonl`` へ判定済みキーごとの推定コストを残し当日累積を導出する）が
     同じ単価を共有する単一ソース。プロンプト雛形分（``_PROMPT_OVERHEAD_TOKENS``）は
     バッチ単位のため含まない。
+
+    #410 round2 [Must]C 是正: 旧実装は本文（``text``）長のみを測り、prev_action
+    （実送信では最大300字）・ラベル文言（"[i] 直前のClaudeの操作: " 等）を固定係数
+    ``_PER_UTTERANCE_OVERHEAD_TOKENS`` で丸めていたため、長い日本語 prev_action が多い
+    バッチで大幅な過小評価になっていた。理想解として「実際に組み立てるプロンプト行
+    （``prompt.format_utterance_line``）の長さをそのまま測る」方式にした — ロジックを
+    2箇所（見積もりと実送信）に複製すると片方だけ切り詰め幅を変えたときに乖離が再発する
+    ため、行の組み立てそのものを単一ソース化した（固定の per-utterance オーバーヘッド
+    加算はもう不要 — ラベル文言も実測に含まれるため）。
     """
-    text = (utterance.get("text") or "")[:max_chars]
-    return math.ceil(len(text) / _CHARS_PER_TOKEN) + _PER_UTTERANCE_OVERHEAD_TOKENS
+    line = _prompt.format_utterance_line(0, utterance, max_chars=max_chars)
+    return math.ceil(len(line) / _CHARS_PER_TOKEN)
 
 
 def estimate_tokens(

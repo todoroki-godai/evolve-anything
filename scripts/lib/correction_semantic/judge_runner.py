@@ -126,6 +126,49 @@ def select_daily_batch(
     return by_count[:n]
 
 
+def _select_for_today(
+    utterances: List[Dict[str, Any]],
+    judged_path: Optional[Path],
+    *,
+    daily_utterance_limit: int,
+    daily_token_limit: int,
+    batch_size: int,
+    out,
+) -> "tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]":
+    """未判定発話を読み、当日累積を差し引いた残り枠で選定する（read-only・副作用なし）。
+
+    dry-run（read のみ）と run（read の後にロック下で選定〜記録）の両方が同じロジックを
+    共有する単一ソース（#410 round2 [Must]dry-run: dry-run はこの関数を file_lock の外で
+    呼ぶため sidecar ``.lock`` を一切生成しない）。
+
+    Returns:
+        (unjudged_all, selected, capped)
+    """
+    judged_keys = _store.read_judged_keys(judged_path)
+    unjudged_all = _store.filter_unjudged(utterances or [], judged_keys)
+    print(f"[judge_runner] 提示: 全PJ未判定発話 {len(unjudged_all)} 件", file=out)
+
+    today = _store.count_judged_today(judged_path)
+    remaining_utterance_limit = max(0, daily_utterance_limit - today["count"])
+    remaining_token_limit = max(0, daily_token_limit - today["est_tokens"])
+    if today["count"] or today["est_tokens"]:
+        print(
+            f"[judge_runner] 当日実績: {today['count']} 件 / 推定 {today['est_tokens']} "
+            f"トークン消費済み（残り枠 {remaining_utterance_limit} 件 / "
+            f"{remaining_token_limit} トークン）",
+            file=out,
+        )
+
+    selected = select_daily_batch(
+        unjudged_all,
+        daily_utterance_limit=remaining_utterance_limit,
+        daily_token_limit=remaining_token_limit,
+        batch_size=batch_size,
+    )
+    capped = len(selected) < len(unjudged_all)
+    return unjudged_all, selected, capped
+
+
 def run_daily_judge(
     *,
     run: bool = False,
@@ -183,6 +226,41 @@ def run_daily_judge(
             )
             utterances = []
 
+    # #410 round2 [Must]dry-run: dry-run は read のみで排他不要（pitfall_dryrun_stateful_store_write
+    # と同型の再発防止 — 以前は run 判定より前に file_lock へ入っており、dry-run でも sidecar
+    # `.lock` を生成し「1バイトも書かない」契約に違反していた）。file_lock は run=True の
+    # ときだけ取得する。
+    if not run:
+        unjudged_all, selected, capped = _select_for_today(
+            utterances, judged_path,
+            daily_utterance_limit=daily_utterance_limit,
+            daily_token_limit=daily_token_limit,
+            batch_size=batch_size,
+            out=out,
+        )
+        cost = _batch.estimate_tokens(selected, batch_size)
+        print(
+            f"[judge_runner] [dry-run] 今日処理する対象: {len(selected)} 件 "
+            f"（推定 {cost['batches']} バッチ / 推定 ~{cost['est_total_tokens']} トークン、"
+            f"上限 {daily_utterance_limit} 件 / {daily_token_limit} トークン）",
+            file=out,
+        )
+        if capped:
+            print(
+                f"[judge_runner] → 上限により {len(unjudged_all) - len(selected)} 件は"
+                "次回 run に持ち越します。",
+                file=out,
+            )
+        return {
+            "dry_run": True,
+            "unjudged_total": len(unjudged_all),
+            "selected": len(selected),
+            "capped": capped,
+            "cost": cost,
+            "source_failed": source_failed,
+            "source_error": source_error,
+        }
+
     # #410 [Must]B: 選定〜記録（判定済み記録の read-modify-write）を排他する。日次上限は
     # 「当日どれだけ既に消費したか」を read 時導出して差し引かないと、cron 再実行や手動 --run
     # の重ね掛けで実質「1 回の呼び出し上限」になってしまう（同じ日に何度呼んでも毎回フル
@@ -194,52 +272,13 @@ def run_daily_judge(
     lock_path = judged_target.with_name(judged_target.name + ".lock")
 
     with _file_lock(lock_path):
-        judged_keys = _store.read_judged_keys(judged_path)
-        unjudged_all = _store.filter_unjudged(utterances or [], judged_keys)
-        print(f"[judge_runner] 提示: 全PJ未判定発話 {len(unjudged_all)} 件", file=out)
-
-        today = _store.count_judged_today(judged_path)
-        remaining_utterance_limit = max(0, daily_utterance_limit - today["count"])
-        remaining_token_limit = max(0, daily_token_limit - today["est_tokens"])
-        if today["count"] or today["est_tokens"]:
-            print(
-                f"[judge_runner] 当日実績: {today['count']} 件 / 推定 {today['est_tokens']} "
-                f"トークン消費済み（残り枠 {remaining_utterance_limit} 件 / "
-                f"{remaining_token_limit} トークン）",
-                file=out,
-            )
-
-        selected = select_daily_batch(
-            unjudged_all,
-            daily_utterance_limit=remaining_utterance_limit,
-            daily_token_limit=remaining_token_limit,
+        unjudged_all, selected, capped = _select_for_today(
+            utterances, judged_path,
+            daily_utterance_limit=daily_utterance_limit,
+            daily_token_limit=daily_token_limit,
             batch_size=batch_size,
+            out=out,
         )
-        capped = len(selected) < len(unjudged_all)
-
-        if not run:
-            cost = _batch.estimate_tokens(selected, batch_size)
-            print(
-                f"[judge_runner] [dry-run] 今日処理する対象: {len(selected)} 件 "
-                f"（推定 {cost['batches']} バッチ / 推定 ~{cost['est_total_tokens']} トークン、"
-                f"上限 {daily_utterance_limit} 件 / {daily_token_limit} トークン）",
-                file=out,
-            )
-            if capped:
-                print(
-                    f"[judge_runner] → 上限により {len(unjudged_all) - len(selected)} 件は"
-                    "次回 run に持ち越します。",
-                    file=out,
-                )
-            return {
-                "dry_run": True,
-                "unjudged_total": len(unjudged_all),
-                "selected": len(selected),
-                "capped": capped,
-                "cost": cost,
-                "source_failed": source_failed,
-                "source_error": source_error,
-            }
 
         if not selected:
             print("[judge_runner] 未判定の対象がありません。", file=out)

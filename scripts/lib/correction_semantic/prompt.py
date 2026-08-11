@@ -31,6 +31,23 @@ _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 _MAX_PREV_ACTION_CHARS = 300
 
 
+def format_utterance_line(
+    index: int, u: Dict[str, Any], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
+) -> str:
+    """1 発話分のプロンプト行を組み立てる（決定論・IO なし）。
+
+    ``build_batch_prompt``（実送信）と ``batch.estimate_utterance_tokens``（見積もり）の
+    単一ソース（#410 round2 [Must]C）。見積もりが本文長のみを測り prev_action（最大
+    ``_MAX_PREV_ACTION_CHARS`` 字）・ラベル文言を固定オーバーヘッドで丸めていたため、
+    長い日本語 prev_action が多いバッチで大幅な過小評価になっていた。ロジックを2箇所に
+    複製すると片方だけ切り詰め幅を変えたときに乖離が再発するため、行の組み立てそのものを
+    共有し「実際に組み立てたプロンプトの長さをそのまま測る」方式にした。
+    """
+    prev = (u.get("prev_action") or "(なし)")[:_MAX_PREV_ACTION_CHARS]
+    text = (u.get("text") or "").replace("\n", " ").strip()[:max_chars]
+    return f"[{index}] 直前のClaudeの操作: {prev}\n    ユーザー発話: {text}"
+
+
 def build_batch_prompt(
     utterances: List[Dict[str, Any]], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
 ) -> str:
@@ -43,11 +60,7 @@ def build_batch_prompt(
     長文等で青天井に膨張しないよう切り詰める。``batch.estimate_tokens`` も同じ上限を参照し、
     見積もりと実送信の文字数が乖離しないようにする（単一ソース）。
     """
-    lines: List[str] = []
-    for i, u in enumerate(utterances):
-        prev = (u.get("prev_action") or "(なし)")[:_MAX_PREV_ACTION_CHARS]
-        text = (u.get("text") or "").replace("\n", " ").strip()[:max_chars]
-        lines.append(f"[{i}] 直前のClaudeの操作: {prev}\n    ユーザー発話: {text}")
+    lines = [format_utterance_line(i, u, max_chars=max_chars) for i, u in enumerate(utterances)]
     listing = "\n".join(lines)
 
     return (

@@ -80,6 +80,33 @@ def test_dry_run_calls_no_llm_and_writes_nothing(tmp_path, monkeypatch):
     assert not judged.exists()
 
 
+def test_dry_run_creates_no_files_at_all_including_lock_sidecar(tmp_path, monkeypatch):
+    """#410 round2 [Must]dry-run: dry-run が run 判定より前に file_lock に入ると、排他不要な
+    のに sidecar ``.lock`` を生成してしまい「1バイトも書かない」契約に違反する
+    （pitfall_dryrun_stateful_store_write と同型の再発）。tmp_path 配下のファイル一覧が
+    dry-run 前後で完全に不変であることを検査し、``.lock`` も含め一切のファイル生成を
+    許さない（既存テストは weak_signals/idioms/judged の3ファイルの非存在しか見ておらず
+    lock ファイルの生成を見落としていた）。
+    """
+    def _boom(*a, **kw):
+        raise AssertionError("dry-run で call_haiku が呼ばれた")
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _boom)
+
+    before = sorted(p.name for p in tmp_path.iterdir())
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+    res = judge_runner.run_daily_judge(
+        run=False,
+        utterances=utterances,
+        judged_path=tmp_path / "correction_judged.jsonl",
+        weak_signals_path=tmp_path / "weak_signals.jsonl",
+        idioms_path=tmp_path / "correction_idioms.jsonl",
+    )
+    assert res["dry_run"] is True
+    after = sorted(p.name for p in tmp_path.iterdir())
+    assert after == before == [], f"dry-run がファイルを作成した: {after}"
+
+
 def test_dry_run_reports_unjudged_and_selected_counts(tmp_path):
     utterances = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(3)]
     res = judge_runner.run_daily_judge(
@@ -212,6 +239,44 @@ def test_daily_cap_second_run_same_day_respects_first_runs_consumption(tmp_path,
     assert res2["capped"] is True
 
 
+def test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost(tmp_path, monkeypatch):
+    """#410 round2 codex [Must]B: 同日複数実行のトークン累積がバッチ固定費
+    （batch._PROMPT_OVERHEAD_TOKENS）を含むことを固定する。件数だけを見るテスト
+    （上のテスト）はバッチ固定費の按分を巻き戻しても赤にならないという指摘の是正。
+    """
+    from correction_semantic.batch import _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens
+    from correction_semantic.store import count_judged_today
+
+    monkeypatch.setattr(
+        judge_runner, "call_haiku", lambda prompt, model="haiku": _ok_verdict_response([(0, False)])
+    )
+
+    judged = tmp_path / "correction_judged.jsonl"
+    first = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+    per_utt = estimate_utterance_tokens(first[0])
+    # batch_size=1 なので今回の 1 バッチの固定費（400トークン）は全額この1キーに乗る
+    # （按分の分母が1件のため丸め誤差なし）。
+    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS
+
+    judge_runner.run_daily_judge(
+        run=True, utterances=first, judged_path=judged,
+        daily_utterance_limit=200, daily_token_limit=exact_cost * 2, batch_size=1,
+    )
+    today = count_judged_today(path=judged)
+    assert today["est_tokens"] == exact_cost
+
+    second = [_utt("/b.jsonl", 1, "text2", "pj-b", ts=_ts(1))]
+    res2 = judge_runner.run_daily_judge(
+        run=False, utterances=second, judged_path=judged,
+        daily_utterance_limit=200, daily_token_limit=exact_cost,  # 1回目の実コストちょうど
+    )
+    # 1回目でバッチ固定費込みの exact_cost を消費済みのため、2回目の残り予算は 0 で選定
+    # できない。バッチ固定費を記録しない巻き戻しだと est_tokens=per_utt にしかならず、
+    # 残り予算が _PROMPT_OVERHEAD_TOKENS 分余って2回目も選定されてしまう。
+    assert res2["selected"] == 0
+    assert res2["capped"] is True
+
+
 # ── #410 [Must]B: 選定〜記録の排他（ロック保持中は別経路が進めないことを検査）──
 # learning_concurrency_test_by_lock_holding: N プロセス同時起動は競合窓が µs で再現せず
 # 偽の安全網になる。ロックを外部で保持した状態で別スレッドが run_daily_judge を呼び、
@@ -219,7 +284,11 @@ def test_daily_cap_second_run_same_day_respects_first_runs_consumption(tmp_path,
 # 解放後に完了することまで確認する（hang→fail 変換）。
 
 
-def test_select_and_record_are_mutually_exclusive_via_lock(tmp_path):
+def test_select_and_record_are_mutually_exclusive_via_lock(tmp_path, monkeypatch):
+    """#410 round2 [Must]dry-run: dry-run（run=False）はロックを取得しなくなったため
+    （read-only・排他不要）、この排他検証は run=True（選定〜記録の critical section）で
+    行う。call_haiku は mock して実 LLM を呼ばない。
+    """
     import threading
 
     from rl_common.file_lock import file_lock
@@ -228,20 +297,23 @@ def test_select_and_record_are_mutually_exclusive_via_lock(tmp_path):
     lock_path = judged.with_name(judged.name + ".lock")
 
     utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+    monkeypatch.setattr(
+        judge_runner, "call_haiku", lambda prompt, model="haiku": _ok_verdict_response([(0, False)])
+    )
 
     completed = threading.Event()
     started = threading.Event()
 
     def _worker():
         started.set()
-        judge_runner.run_daily_judge(run=False, utterances=utterances, judged_path=judged)
+        judge_runner.run_daily_judge(run=True, utterances=utterances, judged_path=judged)
         completed.set()
 
     with file_lock(lock_path):
         t = threading.Thread(target=_worker, daemon=True)
         t.start()
         assert started.wait(timeout=2), "worker スレッドが開始しなかった"
-        # ロック保持中は run_daily_judge が完了しない（select_daily_batch の手前でブロック）。
+        # ロック保持中は run_daily_judge が完了しない（選定〜記録の手前でブロック）。
         blocked = not completed.wait(timeout=0.5)
         assert blocked, "ロック保持中なのに run_daily_judge が完了した（排他が効いていない）"
 
@@ -249,6 +321,22 @@ def test_select_and_record_are_mutually_exclusive_via_lock(tmp_path):
     assert completed.wait(timeout=5), "ロック解放後も run_daily_judge が完了しなかった（hang）"
     t.join(timeout=5)
     assert not t.is_alive()
+
+
+def test_dry_run_does_not_acquire_lock_and_proceeds_while_lock_held(tmp_path):
+    """#410 round2 [Must]dry-run: dry-run は排他不要（read-only）なので、外部でロックを
+    保持していても即座に完了する（run=True と対照的な振る舞いを固定する）。
+    """
+    from rl_common.file_lock import file_lock
+
+    judged = tmp_path / "correction_judged.jsonl"
+    lock_path = judged.with_name(judged.name + ".lock")
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+
+    with file_lock(lock_path):
+        res = judge_runner.run_daily_judge(run=False, utterances=utterances, judged_path=judged)
+    assert res["dry_run"] is True
+    assert res["selected"] == 1
 
 
 def test_daily_token_limit_truncates_selection_even_under_count_limit(tmp_path):
