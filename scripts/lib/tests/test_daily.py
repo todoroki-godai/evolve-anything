@@ -455,3 +455,47 @@ def test_judge_cap_notice_source_failed_takes_priority_over_capped_message():
     both["llm_judge"] = dict(CAPPED_QUEUE["llm_judge"], source_failed=True, source_error="boom")
     msg = qn.build_judge_cap_notice(both, now=now)
     assert "boom" in msg
+
+
+# ── #410 round3 [Should]4: skipped_locked（別プロセスが lock 保持中で non-blocking skip
+# した）は source_failed / capped と並んで surface すべきなのに、build_judge_cap_notice は
+# この2つしか見ていなかった。skip が連日続く（供給停止）のに沈黙するのを防ぐ。
+SKIPPED_LOCKED_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 0,
+        "selected": 0,
+        "capped": False,
+        "corrections": 0,
+        "call_failed": 0,
+        "source_failed": False,
+        "source_error": None,
+        "skipped_locked": True,
+    },
+}
+
+
+def test_judge_cap_notice_fires_when_skipped_locked_even_if_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(SKIPPED_LOCKED_QUEUE, now=now)
+    assert msg is not None
+    assert "別プロセス" in msg
+
+
+def test_judge_cap_notice_silent_when_skipped_locked_false_and_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(NOT_CAPPED_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_source_failed_takes_priority_over_skipped_locked_message():
+    """source_failed=True かつ skipped_locked=True でも障害の方を優先して伝える。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    both = dict(SKIPPED_LOCKED_QUEUE)
+    both["llm_judge"] = dict(
+        SKIPPED_LOCKED_QUEUE["llm_judge"], source_failed=True, source_error="boom",
+    )
+    msg = qn.build_judge_cap_notice(both, now=now)
+    assert "boom" in msg

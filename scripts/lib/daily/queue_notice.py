@@ -116,6 +116,11 @@ def build_judge_cap_notice(
     ``source_failed=True``（#410 [Must]E: 発話ソース取得の DB/schema 障害）は
     ``capped`` の値に関わらず優先して通知する（silence != evaluated — capped=False の
     健康そうな値に障害シグナルを埋もれさせない）。
+
+    ``skipped_locked=True``（#410 round3 [Should]4: 別プロセスが選定〜記録の sidecar
+    ロックを保持中で non-blocking 取得に失敗し即座に skip した・round2 [Should]②）も
+    ``source_failed`` に次いで優先通知する。連日 skip が続くと供給が実質止まるのに、
+    ``capped=False``（0件処理・上限未到達）の健康そうな値に埋もれて沈黙していた。
     """
     if not isinstance(queue_data, dict):
         return None
@@ -134,6 +139,12 @@ def build_judge_cap_notice(
     if judge.get("source_failed"):
         error = judge.get("source_error") or "詳細は daily runner のログを確認してください"
         return f"[evolve-anything] llm_judge の発話ソース取得に失敗しました: {error}"
+
+    if judge.get("skipped_locked"):
+        return (
+            "[evolve-anything] llm_judge は別プロセスが実行中のためスキップしました"
+            "（翌日以降に再試行）。"
+        )
 
     if not judge.get("capped"):
         return None
