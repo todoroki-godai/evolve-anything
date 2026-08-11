@@ -147,6 +147,27 @@ def test_count_judged_today_sums_count_and_tokens_for_today_only(tmp_path: Path)
     assert out["est_tokens"] == 150
 
 
+def test_count_judged_today_normalizes_offset_to_utc_calendar_day(tmp_path: Path) -> None:
+    """#410 round2 [Should]① UTC暦日正規化: dt.date() を offset のまま直接比較すると、
+    UTC の「今日」に属するレコードでも、他 offset の wall-clock 日付が別日になる境界で
+    誤って除外/混入する。dt.astimezone(timezone.utc).date() で正規化すること。
+
+    "2026-08-11T01:00:00+09:00" は UTC 換算で "2026-08-10T16:00:00+00:00"
+    （JST は UTC+9 なので 9 時間引く）＝ UTC の 8/10。now が UTC の 8/10 なら、この
+    レコードは「今日」に含めるのが正しい（offset のまま .date() を取ると誤って 8/11 と
+    判定し除外してしまう）。
+    """
+    from datetime import datetime, timezone
+
+    prog = tmp_path / "correction_judged.jsonl"
+    now = datetime(2026, 8, 10, 20, 0, 0, tzinfo=timezone.utc)
+    jst_but_utc_today = "2026-08-11T01:00:00+09:00"  # UTC 換算では 8/10 16:00
+    _write_judged_records(prog, [{"key": "/a.jsonl:1", "judged_at": jst_but_utc_today, "est_tokens": 10}])
+    out = cs_store.count_judged_today(path=prog, now=now)
+    assert out["count"] == 1
+    assert out["est_tokens"] == 10
+
+
 def test_count_judged_today_missing_est_tokens_treated_as_zero(tmp_path: Path) -> None:
     from datetime import datetime, timezone
 

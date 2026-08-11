@@ -496,6 +496,7 @@ def count_judged_today(
         {"count": int, "est_tokens": int}
     """
     now = now or datetime.now(timezone.utc)
+    now = now.astimezone(timezone.utc) if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
     today = now.date()
 
     store = path if path is not None else default_judged_path()
@@ -511,7 +512,10 @@ def count_judged_today(
             continue
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        if dt.date() != today:
+        # #410 round2 [Should]①: dt.date() を offset のまま比較すると、UTC の「今日」に
+        # 属するレコードでも他 offset の wall-clock 日付が別日になる境界で誤判定する
+        # （例: JST 01:00 は UTC では前日16:00）。UTC 暦日へ正規化してから比較する。
+        if dt.astimezone(timezone.utc).date() != today:
             continue
         count += 1
         tokens = rec.get("est_tokens")
