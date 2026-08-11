@@ -26,13 +26,16 @@ from pathlib import Path
 # （jargon の薄い PJ に空の用語集を作らない）。
 SEED_MIN_CANDIDATES = 3
 
-# CLAUDE.md「## コンポーネント」表の 1 セルあたり文字数上限（#116）。
+# CLAUDE.md「## コンポーネント」表の 1 セルあたり文字数上限（#116, #415）。
 # この表は「1 行サマリのみ」が運用ルールだが、設計経緯まで書き込まれ肥大化する
 # （実測: fleet_queue セル ≈3,285 字）。上限を超えるセルは詳細を spec/components.md（SoT）
 # へ移すべき兆候として検出し、spec-keeper update の drift 検出経路で advisory surface する。
-# 閾値 400 の根拠: #116 で長大 9 セルを切り詰めた後の最長セル（evolve-release-sync ≈368 字）が
-# 収まり、かつ再肥大（400 字超）を早期に捕捉できる値。1 行サマリとしては十分広い。
-MAX_COMPONENT_CELL_LEN = 400
+# 閾値 130 の根拠（#415）: 旧閾値 400 は #116 当時の最長セルに合わせた値で、CLAUDE.md が
+# doc_budget MUST 閾値の 98% まで肥大した事実（#415）が、advisory だけでは creep-back を
+# 止められないことを実証した。サマリ列を「1文 + 契約フラグ」規約へ圧縮した後の実測最大
+# セル長（subagents/errors 測定バグ修正 行の実体列 123 字）を上回るキリの良い値として設定。
+# 行を書き足すその場で効く gate にするため、旧閾値のような大きな余白は持たせない。
+MAX_COMPONENT_CELL_LEN = 130
 
 # jargon 候補: ALLCAPS 頭字語(2-6文字) または 内部に大文字を持つ CamelCase。
 # 例: BES, RRF, BM25, MemTrace, DuckDB。先頭小文字の通常語は拾わない。

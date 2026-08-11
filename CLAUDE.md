@@ -45,7 +45,7 @@
 ## コンポーネント
 
 各コンポーネントの設計経緯・根拠・issue/ADR 参照を含む詳細は **[spec/components.md](spec/components.md)**（SoT）。
-ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する（サマリは 1 文・目安 ≤130 バイト）。**
+ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する（サマリは「何をするか1文 + 契約フラグ」で構成し目安 ≤130 バイト。`凍結`/`reject`/`dry-run`/`fail-open`/`人間承認`/`単一ソース`等の動作を縛る語は要約時も必ず残す）。**
 
 | コンポーネント | 一言サマリ | 実体 |
 |----------------|-----------|------|
@@ -72,7 +72,7 @@
 | `evolve_decision_ids` | 提案 identity と判断イベント identity を隣接定義する純関数 module（取り違え防止） | `evolve_decision_ids.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格 | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
-| `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込。project スコープ4層防御で他PJ混入を遮断 | `auto_memory_*.py` |
+| `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込。project スコープ4層防御で他PJ混入を reject、purge ツールは dry-run 既定 | `auto_memory_*.py` |
 | `meta_quality` | スキル追加前の品質フィルタ（CREATE/REVIEW/SKIP） | `meta_quality.py` |
 | `triage_ledger` | SKIP 判断の状態管理（TTL 45日・再発昇格・dry-run 非書込） | `triage_ledger.py` |
 | `constraint_decay` | セッション後半に集中する correction の decay 検出 | `discover/patterns.py` |
@@ -98,8 +98,8 @@
 | `spec_trigger` | 仕様未更新マージの SessionStart 検出→spec-keeper 提案 | `spec_trigger.py` |
 | `capture_rate` | correction capture 率を決定論算出し audit に advisory surface | `capture_rate.py` |
 | `orphan_store` | writer あり reader なしの jsonl ストアを決定論検出 | `orphan_store.py` |
-| `store_registry` | ストア新設の事前契約ゲート — writer/reader/retention 宣言の機械可読 SoT。`status` が write 許可を制御 | `store_registry.py` |
-| `store_write` write barrier | 全ストア書込の単一ゲート。store_registry の active 登録外は既定 reject（例外口 `store_write_raw`） | `rl_common/store_write.py` |
+| `store_registry` | ストア新設の事前契約ゲート — writer/reader/retention 宣言の機械可読 SoT。`status`（active/legacy/dead）が write 許可を制御 | `store_registry.py` |
+| `store_write` write barrier | 全ストア書込の単一ゲート。store_registry の active 登録外は既定 reject、registry 不在は fail-open（例外口 `store_write_raw`） | `rl_common/store_write.py` |
 | `outcome_metrics` | 行動アウトカム3軸（correction 再発率/一発成功率/rework率）を advisory 表示 | `audit/outcome_metrics.py` |
 | `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query） | `utterance_archive/` |
 | `outcome_attribution` | outcome 3軸を per-skill 帰属し evolve ターゲットランキングへ自動入力。負の転移は末尾 rollback | `audit/outcome_attribution.py` |
@@ -109,9 +109,9 @@
 | `judge_runner` / `safe_llm_call` | llm_judge の意味判定を daily runner の非対話実行へ移設。無人呼び出しは `safe_llm_call` に一点集約し4重防御、費用は呼び出し直前に事前予約 | `correction_semantic/judge_runner.py` + `safe_llm_call.py` |
 | `daily_review` | evolve の「今日の修正確認」phase — 新規 weak_signal を最大5件 y/n 確認し promote | `correction_semantic/daily_review.py` |
 | `review_channels` | y/n 確認に出す weak チャネルの単一ソース。content-rich チャネルのみ対象 | `correction_semantic/review_channels.py` |
-| `idiom_autopromote` | confirmed idiom と同テキストの再発 weak_signal を機械昇格。**#379 Step1 で自動発火は凍結中** | `correction_semantic/idiom_autopromote.py` |
+| `idiom_autopromote` | confirmed idiom の再発 weak_signal を機械昇格。**#379 Step1 で凍結中、`autopromote()` は no-op** | `correction_semantic/idiom_autopromote.py` |
 | `measurement_bug` | 複数 PJ の非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface | `audit/measurement_bug.py` |
-| `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ | `growth_report.py` |
+| `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ。閾値は growth_engine が単一ソース | `growth_report.py` |
 | `results_board`（戦果ボード） | growth-journal harness 削除の置換成果物。optimize_history/corrections を直読みし戦果を決定論表示 | `results_board.py` |
 | `outcome_promotion_readiness` | 重み昇格レディネスの4条件決定論判定。全 ✓ で「重み昇格を提案」 | `audit/outcome_promotion_readiness.py` |
 | `predictive_validity` | 重み昇格レディネス第4条件 — in/out-of-sample の順位相関で予測妥当性を判定 | `audit/predictive_validity.py` |
@@ -124,10 +124,10 @@
 | `testpaths_coverage` | pytest 収集漏れの決定論検出 — testpaths 宣言と実 tests/ ツリーを静的突合 | `testpaths_coverage.py` |
 | `doc_budget` | hot ドキュメントの byte 予算・セクション別予算・リンク実在突合を決定論検出 | `doc_budget.py` + `audit/sections_doc_budget.py` |
 | `plugin_self` origin | プラグイン本体 repo 直下 skills/ を診断対象化。auto-apply は人間承認必須に降格 | `skill_origin.py` |
-| `scaffold_advisory` | advisory 3点セット追加の scaffold — builder stub 生成 + 配線チェックリスト | `scaffold_advisory.py` |
+| `scaffold_advisory` | advisory 3点セット追加の scaffold — builder stub 生成 + 配線チェックリスト。CLI は既定 dry-run | `scaffold_advisory.py` |
 | `dogfood gate` | 通し評価ゲート — 3層検査（dry-run 不変/report invariants/コードブロック実行）。`--layer light` は pre-push で非ブロッキング自動実行 | `scripts/lib/dogfood/`, `scripts/git-hooks/` |
 | `sibling_copy_guard` | diff-scoped 兄弟コピー検出。pre-push に非ブロッキング警告配線 | `scripts/lib/sibling_copy_guard.py` + `scripts/git-hooks/pre-push.local` |
-| `evolve-release-sync` | リリース後のローカルプラグイン自動同期。`tag --push` 直後に実行 | `bin/evolve-release-sync` |
+| `evolve-release-sync` | リリース後のローカルプラグイン自動同期。`tag --push` 直後に実行、`--dry-run` 対応 | `bin/evolve-release-sync` |
 | `pj_slug` | PJ slug 導出の単一ソース。read/write 同一関数で worktree slug 食い違いを防止 | `pj_slug.py` + `hooks/restore_state.py` |
 | weak_signals drain 永続化 | 決定論3チャネルの永続化を `evolve --drain` の apply 境界に配線。pending marker の dry-run 書込は意図された設計（消さない） | `weak_signals/batch.py` |
 | reconcile_surfaced drain 永続化 | remediation 連続提示の count marker 書込と閾値到達時の自動却下を `evolve --drain` の apply 境界へ移設 | `cli.py` + `_env.py` + `phases_remediate.py` |
@@ -152,7 +152,7 @@
 | `queue_verify` | queue の verify 待ちを read 時純粋導出。新ストアは作らない | `fleet/queue_verify.py` |
 | `fleet_detect` | 全 PJ 横断の決定論 weak_signals 検出。daily runner が毎朝蓄積 | `fleet/detect.py` + `bin/evolve-daily-run` |
 | `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知。適用は対話で人間承認 | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
-| `icebox_notice` | daily runner の icebox 棚卸し気づきトリガー。閾値未満は無音 | `scripts/lib/daily/icebox_notice.py` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
+| `icebox_notice` | daily runner の icebox 棚卸し気づきトリガー。fail-open で既存ファイル非破壊、閾値未満は無音 | `scripts/lib/daily/icebox_notice.py` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
 | `icebox_reconcile` | icebox 棚卸しを3レーン決定論分類（成立/観測器不在/失効候補） | `scripts/lib/icebox_reconcile.py` + `bin/evolve-daily-run` + `scripts/lib/audit/sections_icebox_reconcile.py` |
 | `artifacts_hygiene` | artifact 衛生5検出器を observability に surface（決定論・LLM 非依存） | `audit/sections_artifacts.py` |
 | `memory_hygiene` | memory dir 衛生3検出器。clean 時は非表示、重複残骸は手順提案のみで auto-apply しない | `memory_index_orphan.py` + `memory_schema_check.py` + `memory_dup_residue.py` + `audit/sections_memory.py` |
@@ -162,12 +162,12 @@
 | `evolve-tier` | モデルティア正典を一元化する CLI — set/sync[--apply]/drift の3コマンド | `bin/evolve-tier` + `tier_policy.py` + `tier_policy_sync.py` + `tier_policy_drift.py` + `tier_policy_cli.py` |
 | `evaluation_provenance` | 評価スコアに紐づく実行条件（model/effort/tool policy）の記録契約。不明値は推測せず None | `scripts/lib/evaluation_provenance.py` |
 | `skill_reachability` | SKILL.md 宣言 callable が production コードから到達不能かを AST 静的解析で検出 | `skill_declaration_reachability.py` + `audit/sections_skill_reachability.py` + `dogfood/cli.py` |
-| `fleet_propose` | queue 待ち PJ に `evolve --dry-run` を順次実行し提案を集約レポート化。承認ゲート付き | `fleet/propose.py` + `fleet/cli_propose.py` |
-| `fleet_pr` | 承認済み evolve 提案を repo 外 worktree で commit→push→PR 化。path allowlist で強制、マージは人間 | `fleet/pr.py` + `fleet/cli_pr.py` |
+| `fleet_propose` | queue 待ち PJ に `evolve --dry-run` を順次実行し提案を集約レポート化。承認ゲート付き、reject 済み提案は再提示しない | `fleet/propose.py` + `fleet/cli_propose.py` |
+| `fleet_pr` | 承認済み evolve 提案を repo 外 worktree で commit→push→PR 化。path allowlist・push account guard で強制、マージは人間 | `fleet/pr.py` + `fleet/cli_pr.py` |
 | `agent_coordination` | Claude Code primary／Codex opt-in の top-level executor lane 管理 | `agent_coordination/` + `bin/evolve-agent-task` + `docs/agent-contract/` |
 | `codex_config_cleanup` | 既知4カテゴリの Codex 設定残骸を検出し復元先が一意な指紋だけ plan/apply | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
 | `runtime_telemetry` | usage/sessions/errors の hook record に `runtime=claude|codex` を較正追加 | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
-| `codex_usage` | codex CLI 利用状況を advisory 表示。CC 側 token_usage とは合算しない | `fleet/codex_usage.py` + `fleet/formatters.py` |
+| `codex_usage` | codex CLI 利用状況を advisory 表示（fail-open）。CC 側 token_usage とは合算しない | `fleet/codex_usage.py` + `fleet/formatters.py` |
 
 ## クイックスタート
 
