@@ -1,6 +1,6 @@
 # SPEC.md — evolve-anything
 
-Last updated: 2026-08-10 by /spec-keeper update — #379 Step 4「段階削除」完走を反映（PR #395-#399: detect-deferred-task / judge_audit / quality-scores / growth-journal の各 harness 削除 + 戦果ボード `results_board.py` 置換 + 未登録 live store 11件の宣言バックフィル・StoreKind "json" 新設・store_write の kind=json reject ガード。dead ストア 0件）。hot の成長可視化行は PR #398 内で更新済み、cold は `spec/components-observability.md`（store_registry / store_write）を本 update で追随。#379 close 済み・残ギャップは #400/#401/#402 へ引き継ぎ。前回: 2026-08-02 (recovery) #352/#353 反映 + L2 cold 分割
+Last updated: 2026-08-11 by /spec-keeper update — 毎朝の無人パイプライン2件を反映（#408/#410 llm_judge Phase B の非対話化 + `safe_llm_call` 4重防御・費用の事前予約 / #409/#412 SessionStart の改善案 y/n 提示・global レーン）。hot は「毎朝の無人パイプライン」1段落 + コンポーネント表1行、詳細は cold（`spec/components-feedback.md` / `spec/components-daily.md`）。あわせて stale だった構成数値を実測へ是正（共通ロジック 24→25 パッケージ・bin コマンド 24→25）。前回: 2026-08-10 #379 Step 4「段階削除」完走を反映（PR #395-#399: detect-deferred-task / judge_audit / quality-scores / growth-journal の各 harness 削除 + 戦果ボード `results_board.py` 置換 + 未登録 live store 11件の宣言バックフィル・StoreKind "json" 新設・store_write の kind=json reject ガード。dead ストア 0件）。hot の成長可視化行は PR #398 内で更新済み、cold は `spec/components-observability.md`（store_registry / store_write）を本 update で追随。#379 close 済み・残ギャップは #400/#401/#402 へ引き継ぎ。前回: 2026-08-02 (recovery) #352/#353 反映 + L2 cold 分割
 
 ## Overview
 
@@ -41,7 +41,9 @@ Claude Code Plugin。スキル/ルールの **自律進化パイプライン**�
 「4本目の柱」は fleet 観測・介入としての evolve-anything 拡張。per-PJ 自己進化から fleet 自己進化への昇格（[ADR-022](docs/decisions/022-fleet-observation-plus-intervention.md)）。
 
 Observe hooks（24個登録・LLMコストゼロ）→ テレメトリ JSONL → evolve/discover/reflect/audit → remediation → 自動改善の基本ループに加え、報酬信号レイヤー（`utterance_archive`/`weak_signals`/`correction_semantic` 等）、pitfall 自動強制 hook、observability contract（`_OBSERVABILITY_BUILDERS` 単一ソース、markdown/構造化 両経路が消費）、環境衛生検出器群（artifact/memory 衛生・agent_team・hook_drift 等）を備える。詳細は [spec/architecture.md](spec/architecture.md#observe--報酬信号レイヤー詳細) を参照。
-スキル25個・共通ロジック24パッケージ（`scripts/lib/` 配下）・bin/ コマンド24個・適応度関数8個組み込み（`default`/`skill_quality`/`coherence`/`telemetry`/`constitutional`/`chaos`/`environment`/`plugin`）・userConfig 21項目で構成。個別モジュール・パッケージの詳細は [spec/architecture.md](spec/architecture.md#observe--報酬信号レイヤー詳細) を参照。
+スキル25個・共通ロジック25パッケージ（`scripts/lib/` 配下）・bin/ コマンド25個・適応度関数8個組み込み（`default`/`skill_quality`/`coherence`/`telemetry`/`constitutional`/`chaos`/`environment`/`plugin`）・userConfig 21項目で構成。個別モジュール・パッケージの詳細は [spec/architecture.md](spec/architecture.md#observe--報酬信号レイヤー詳細) を参照。
+
+**毎朝の無人パイプライン（#408 / #409）**: `bin/evolve-daily-run`（launchd・毎朝1回）が ingest → tokens → `fleet detect` → **llm_judge Phase B（意味判定）** → `fleet queue --json` + **改善案 digest** の順に走り、`evolve-queue.json` に「待ち PJ」と「改善案そのもの」を書く。SessionStart hook がそれを読み、**コマンドを叩かずに** 改善案を最大2件 y/n 提示する（案が無い日は完全沈黙）。無人でやるのは候補づくりまでで、採否は必ず人間の y/n（無人適用しない）。判定の日次上限は件数/トークンの userConfig 2本で、無人 `claude -p` は `scripts/lib/safe_llm_call.py` 一点に集約し4重防御を張る。詳細は [spec/components-feedback.md](spec/components-feedback.md)（judge_runner / safe_llm_call）と [spec/components-daily.md](spec/components-daily.md)（proposal_digest）を参照。
 
 **通し評価ゲート（#496）**: `bin/evolve-dogfood-gate`（pytest 非依存 CLI、ロジックは `scripts/lib/dogfood/`）がリリース前に「テスト緑・evolve 無エラー・でも成果物がバグだらけ」を3層で防ぐ — Layer1: dry-run SHA256 不変（隔離コピー方式 + 文書化された三層除外）+ 実PJ ingest E2E / Layer2: report invariants（observability contract 突合）/ Layer3: SKILL.md コードブロック抽出実行（素の起動経路）。PJ slug 導出は `scripts/lib/pj_slug.py` が単一ソース（#492: `resolve_pj_slug`=git-common-dir 親・authoritative / `pj_slug_fast`=文字列処理・hooks hot path 用。read/write 同一関数の原則）。
 
