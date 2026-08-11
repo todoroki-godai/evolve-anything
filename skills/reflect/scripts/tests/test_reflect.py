@@ -1207,6 +1207,50 @@ class TestPromoteWeakConfirmsIdiom:
         # 当該 idiom が confirmed=True
         assert cs_store.read_confirmed_idiom_texts(self.SLUG, idioms) == {text}
 
+    def test_promote_weak_partial_failure_only_confirms_succeeded_idiom(self, tmp_path, capsys):
+        """#412 round2 [Must]B: 昇格に失敗した key（expired）の idiom まで confirmed 化しない。
+
+        旧実装は resolve_idiom_keys_for_signals に要求 key 全件（成功/失敗問わず）を渡して
+        いたため、expired で昇格に失敗した key の idiom まで confirmed になり、将来の
+        idiom_autopromote（ADR-047）の発火ゲートを誤って開いてしまう。
+        """
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        import correction_semantic.store as cs_store
+        ok_text = "成功する方のidiom"
+        expired_text = "失敗する方のidiom"
+        ws, idioms, ok_sig, _ok_it = self._seed(tmp_path, line_no=1, text=ok_text)
+
+        # 2件目（expired）を同じストアに追加で seed する。
+        from weak_signals.store import WeakSignal, append_signals
+        expired_prov = self._prov(2, expired_text)
+        expired_sig = WeakSignal(
+            "llm_judge", expired_prov,
+            (datetime.now(timezone.utc) - timedelta(days=46)).isoformat(),
+            "s2", self.SLUG,
+        )
+        append_signals([expired_sig], path=ws)
+        expired_it = cs_store.CorrectionIdiom(
+            idiom=expired_text, provenance=expired_prov,
+            detected_at=(datetime.now(timezone.utc) - timedelta(days=46)).isoformat(),
+            pj_slug=self.SLUG,
+        )
+        cs_store.append_idioms([expired_it], path=idioms)
+
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", [
+            "reflect", "--promote-weak", f"{ok_sig.signal_key},{expired_sig.signal_key}",
+            "--weak-signals-file", str(ws), "--idioms-file", str(idioms),
+            "--corrections-file", str(corr),
+        ]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["promoted"] == 1
+        assert out["promoted_keys"] == [ok_sig.signal_key]
+
+        confirmed = cs_store.read_confirmed_idiom_texts(self.SLUG, idioms)
+        assert confirmed == {ok_text}
+        assert expired_text not in confirmed
+
     def test_closed_loop_autopromote_fires_after_confirm(self, tmp_path, capsys, monkeypatch):
         """閉ループ E2E: --promote-weak で confirmed 化 → 同テキストの新規 signal を autopromote が昇格。
 

@@ -22,12 +22,14 @@ SessionStart 提示（``build_session_proposals``）は digest（per_pj[pj_slug]
 """
 from __future__ import annotations
 
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from correction_semantic import daily_review as _daily_review
 from correction_semantic import store as _cs_store
+from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.store import normalize_idiom_text
 from weak_signals.store import default_store_path as _default_weak_signals_path
 
@@ -39,6 +41,11 @@ DEFAULT_MAX_PER_PJ = 3
 
 # 1 セッションで提示する改善案の上限（受け入れ条件「1セッションの提示件数が上限を超えない」）。
 MAX_SESSION_PROPOSALS = 2
+
+# global レーンへマージする連結成分（connected component）のサイズ上限（#412 round2 [Must]D-3）。
+# 同一 idiom テキストで多数の group が連結された場合、成分全体を無条件で1つの global group に
+# 丸めると人間が精査しきれない量になる。上限超過時は global 化せず per_pj に残す（安全側）。
+MAX_GLOBAL_COMPONENT_GROUPS = 5
 
 _EVIDENCE_TEXT_TRUNC = 200
 _PREV_ACTION_TRUNC = 120
@@ -102,13 +109,22 @@ def _slim_group(g: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _group_norm_texts(g: Dict[str, Any]) -> List[str]:
-    """slim group から照合対象の正規化テキスト候補を返す（cross_pj_priority と同方針）。"""
-    out: List[str] = []
-    for key in ("idiom", "representative"):
-        norm = normalize_idiom_text(g.get(key))
-        if norm and norm not in out:
-            out.append(norm)
-    return out
+    """slim group から照合対象の正規化テキスト候補を返す。
+
+    #412 round2 [Must]D-1: 照合対象は ``idiom`` フィールドのみに限定する（``representative``
+    は生の発話断片であり、「テストを書く」「確認する」のような短い一般文が多数の案を連結して
+    しまう暴走の原因だった。正規化完全一致という粗い判定と組み合わさると、意味の異なる案まで
+    1 成分に取り込まれ、しかも代表表示は先頭 1 件だけなのに「はい」は成分内の全 key を昇格する
+    ＝人間が見ていない案まで承認されてしまう）。
+
+    #412 round2 [Must]D-2: 既存の較正済み FP ガード ``idiom_eligible``（最小長 floor / 日常語
+    stopword / 文脈固有トークンの3ゲート・#527）を再利用し、これを通らない idiom テキストは
+    union に使わない（新しい閾値を発明しない）。
+    """
+    norm = normalize_idiom_text(g.get("idiom"))
+    if norm and idiom_eligible(norm):
+        return [norm]
+    return []
 
 
 def _extract_global_groups(
@@ -178,11 +194,16 @@ def _extract_global_groups(
                 distinct_slugs.append(slug)
         if len(distinct_slugs) < 2:
             continue  # 1 PJ しか含まない成分は per_pj に残す（global 扱いにしない）
+        # #412 round2 [Must]D-3: 成分サイズ上限。超過分は global 化せず per_pj に残す
+        # （consume しない＝filtered_per_pj に自然に残る）。
+        if len(member_node_ids) > MAX_GLOBAL_COMPONENT_GROUPS:
+            continue
 
         merged_keys: List[str] = []
         keys_by_pj: Dict[str, List[str]] = {}
         merged: Optional[Dict[str, Any]] = None
         total_count = 0
+        all_representatives: List[str] = []
         for node_i in member_node_ids:
             slug, idx = nodes[node_i]
             g = per_pj[slug][idx]
@@ -196,6 +217,12 @@ def _extract_global_groups(
             total_count += g["count"]
             if merged is None:
                 merged = dict(g)
+            # #412 round2 [Must]D-4: 成分内の全 group の代表文を保持する。global group の
+            # 提示は成分の先頭1件だけでなく全代表文を列挙し、「はい」で全 key を昇格する前に
+            # 人間が見ていない案が含まれていないか確認できるようにする。
+            rep = g.get("representative") or g.get("evidence_text") or ""
+            if rep and rep not in all_representatives:
+                all_representatives.append(rep)
 
         if not merged_keys or merged is None:
             continue
@@ -205,6 +232,7 @@ def _extract_global_groups(
         # #412 [Must]4: origin PJ ごとの signal_key を保持する。global group の「はい」が
         # 現在 PJ の実績として誤帰属されないよう、reflect 呼び出し時に PJ ごと分離するため。
         merged["keys_by_pj"] = keys_by_pj
+        merged["all_representatives"] = all_representatives
         global_groups.append(merged)
 
     filtered_per_pj: Dict[str, List[Dict[str, Any]]] = {}
@@ -281,8 +309,14 @@ def build_session_proposals(
 ) -> List[Dict[str, Any]]:
     """SessionStart で提示する改善案 group を返す（read-only・既読フィルタ済み）。
 
-    per_pj[pj_slug] + global を結合し、signal_keys が 1 つでも既読なら group ごと除外し、
-    先頭 ``limit`` 件を返す。該当なしなら空リスト（呼び出し側が完全沈黙する）。
+    per_pj[pj_slug] + global を結合し、group から既読 signal_key を差し引く（group ごと
+    除外はしない）。残り key が 0 件になった group だけを除外し、先頭 ``limit`` 件を返す。
+    該当なしなら空リスト（呼び出し側が完全沈黙する）。
+
+    #412 round2 [Must]A: 「group 内に既読キーが1つでもあれば group 全体を除外」だと、
+    ``--promote-weak`` が成功キーだけ既読化する（round1 是正済み）ため、
+    ``{成功キー, expired キー}`` の group は expired キーが未既読のまま group ごと消え、
+    二度と再提示されなくなる。既読キーだけを差し引いて残りキーで再提示することで解消する。
     """
     if not isinstance(queue_data, dict):
         return []
@@ -305,8 +339,19 @@ def build_session_proposals(
         keys = g.get("signal_keys") or []
         if not keys:
             continue
-        if any(k in seen_keys for k in keys):
+        remaining_keys = [k for k in keys if k not in seen_keys]
+        if not remaining_keys:
             continue
+        g = dict(g)
+        g["signal_keys"] = remaining_keys
+        keys_by_pj = g.get("keys_by_pj")
+        if isinstance(keys_by_pj, dict):
+            new_keys_by_pj: Dict[str, List[str]] = {}
+            for origin_slug, origin_keys in keys_by_pj.items():
+                remaining_origin_keys = [k for k in origin_keys if k not in seen_keys]
+                if remaining_origin_keys:
+                    new_keys_by_pj[origin_slug] = remaining_origin_keys
+            g["keys_by_pj"] = new_keys_by_pj
         out.append(g)
         if len(out) >= limit:
             break
@@ -339,31 +384,48 @@ def build_proposal_prompt(
     （project_paths が無い origin は ``--project-path`` を省略し、reflect 側の
     ``CLAUDE_PROJECT_DIR``/cwd フォールバックに委ねる）。
     """
+    # #412 round2 [Must]C: 提示コマンドは実行ファイルパス・project_path・pj_slug・
+    # signal_key を無 quoting で埋め込んでおり、空白を含む絶対パスで argparse が壊れ、
+    # shell metacharacter を含む値は別コマンドとして解釈されうる。埋め込む値は全て
+    # shlex.quote する（keys はカンマ区切りの1トークンとして shell に渡るため、
+    # join 後の文字列をまるごと quote する）。
+    q_reflect_cmd = shlex.quote(reflect_cmd)
     lines = [
         "[evolve-anything] 改善案があります。ユーザーの最初のメッセージへの応答を終えた"
         "直後に、以下を AskUserQuestion で1件ずつ y/n 提示してください。ユーザーの依頼より"
         "先に割り込まないこと。ユーザーが提示を断ったらその場では再提示しないこと。",
     ]
     for g in groups:
-        rep = g.get("representative") or g.get("evidence_text") or ""
-        lines.append(f"- 案: {rep}")
+        # #412 round2 [Must]D-4: all_representatives（成分内の全 group の代表文）があれば
+        # 先頭1件だけでなく全て列挙する。1件しか見せずに成分内の全 key を承認させないため。
+        all_reps = g.get("all_representatives")
+        if isinstance(all_reps, list) and len(all_reps) > 1:
+            lines.append("- 案（複数件をまとめて確認）:")
+            for r in all_reps:
+                lines.append(f"  - {r}")
+        else:
+            rep = g.get("representative") or g.get("evidence_text") or ""
+            lines.append(f"- 案: {rep}")
         keys_by_pj = g.get("keys_by_pj")
         if isinstance(keys_by_pj, dict) and keys_by_pj:
             for origin_slug, origin_keys in keys_by_pj.items():
-                keys = ",".join(origin_keys)
+                keys = shlex.quote(",".join(origin_keys))
+                q_origin_slug = shlex.quote(origin_slug)
                 origin_path = (project_paths or {}).get(origin_slug)
-                path_flag = f" --project-path {origin_path}" if origin_path else ""
+                path_flag = f" --project-path {shlex.quote(origin_path)}" if origin_path else ""
                 lines.append(
-                    f"  はい({origin_slug}): {reflect_cmd} --promote-weak {keys}"
-                    f"{path_flag} --pj {origin_slug}"
+                    f"  はい({origin_slug}): {q_reflect_cmd} --promote-weak {keys}"
+                    f"{path_flag} --pj {q_origin_slug}"
                 )
                 lines.append(
-                    f"  いいえ({origin_slug}): {reflect_cmd} --reject-weak {keys} --pj {origin_slug}"
+                    f"  いいえ({origin_slug}): {q_reflect_cmd} --reject-weak {keys}"
+                    f" --pj {q_origin_slug}"
                 )
         else:
-            keys = ",".join(g.get("signal_keys") or [])
-            lines.append(f"  はい: {reflect_cmd} --promote-weak {keys}")
-            lines.append(f"  いいえ: {reflect_cmd} --reject-weak {keys} --pj {pj_slug}")
+            keys = shlex.quote(",".join(g.get("signal_keys") or []))
+            q_pj_slug = shlex.quote(pj_slug)
+            lines.append(f"  はい: {q_reflect_cmd} --promote-weak {keys}")
+            lines.append(f"  いいえ: {q_reflect_cmd} --reject-weak {keys} --pj {q_pj_slug}")
     return "\n".join(lines)
 
 
@@ -371,15 +433,35 @@ def build_proposal_systemmessage(groups: List[Dict[str, Any]]) -> str:
     """改善案の代表テキストを systemMessage（user 可視チャネル）本文として組み立てる（#412 [Must]1）。
 
     additionalContext（Claude 可視）だけでは、ユーザーがコマンドを打つまで中身が見えない。
-    先頭 ``MAX_SESSION_PROPOSALS`` 件の代表テキストを並べて可視化し、「この後 y/n で確認する」
-    ことを伝える。ADR-038 の代替案C（両チャネル同時出力）と同型。
+    先頭 ``MAX_SESSION_PROPOSALS`` 件の代表テキストを並べて可視化する。ADR-038 の代替案C
+    （両チャネル同時出力）と同型。
+
+    #412 round2 [Should]E: 「この後 y/n で確認します」は additionalContext 側の prompt
+    instruction 遵守に依存しており機械的に保証できない。実際に保証できるのは「応答の後で
+    採否を聞く」という意図の伝達までで、聞き逃された場合は次回また出る（表示されなかった
+    場合に何が起きるかを正確に書く）。
     """
-    reps = []
+    reps: List[str] = []
     for g in groups[:MAX_SESSION_PROPOSALS]:
-        rep = (g.get("representative") or g.get("evidence_text") or "").strip()
-        if rep:
-            reps.append(rep)
+        # #412 round2 [Must]D-4: all_representatives（成分内の全 group の代表文）があれば
+        # 先頭1件だけでなく全て列挙する。
+        all_reps = g.get("all_representatives")
+        if isinstance(all_reps, list) and all_reps:
+            for r in all_reps:
+                r = (r or "").strip()
+                if r and r not in reps:
+                    reps.append(r)
+        else:
+            rep = (g.get("representative") or g.get("evidence_text") or "").strip()
+            if rep and rep not in reps:
+                reps.append(rep)
     if not reps:
-        return "[evolve-anything] 改善案があります。この後 y/n で確認します。"
+        return (
+            "[evolve-anything] 改善案があります。応答のあとで採否をお聞きします。"
+            "表示されなかった場合は未処理のまま次回また出ます。"
+        )
     joined = " / ".join(f"「{r}」" for r in reps)
-    return f"[evolve-anything] 改善案があります: {joined}。この後 y/n で確認します。"
+    return (
+        f"[evolve-anything] 改善案があります: {joined}。応答のあとで採否をお聞きします。"
+        "表示されなかった場合は未処理のまま次回また出ます。"
+    )

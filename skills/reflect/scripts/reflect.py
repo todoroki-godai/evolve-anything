@@ -867,8 +867,11 @@ def main():
             dry_run=args.dry_run,
         )
         # 承認したシグナルに対応する idiom を confirmed 化（signal→idiom は provenance 突合）。
+        # #412 round2 [Must]B: 渡すのは実際に昇格できた key（res["promoted_keys"]）だけに
+        # 限定する。要求 keys 全件を渡すと expired 等で昇格に失敗した key の idiom まで
+        # confirmed 化され、idiom_autopromote（ADR-047）の発火ゲートを誤って開いてしまう。
         idiom_key_map = _cs_promote.resolve_idiom_keys_for_signals(
-            keys, weak_signals_path=weak_signals_file, idioms_path=idioms_file,
+            res["promoted_keys"], weak_signals_path=weak_signals_file, idioms_path=idioms_file,
         )
         confirm_res = _cs_store.confirm_idioms(
             list(set(idiom_key_map.values())),

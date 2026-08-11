@@ -3,8 +3,9 @@
 毎朝の digest（``evolve-queue.json`` の ``proposals`` フィールド）から、当該 PJ 向け改善案
 （per_pj[pj_slug] + global の既読フィルタ後）を **2 チャネル同時出力**する（#412 [Must]1）:
 
-- ``systemMessage``（user 可視）: 代表テキストを提示件数分並べ、「この後 y/n で確認します」と
-  伝える
+- ``systemMessage``（user 可視）: 代表テキストを提示件数分並べ、「応答のあとで採否をお聞き
+  します。表示されなかった場合は未処理のまま次回また出ます」と伝える（#412 round2 [Should]E:
+  additionalContext 側の prompt instruction 遵守に依存する文言を機械的に保証できる範囲へ修正）
 - ``hookSpecificOutput.additionalContext``（Claude 可視・ADR-038）: 「最初の応答を終えた直後に
   AskUserQuestion で y/n 提示せよ」という行動指示
 

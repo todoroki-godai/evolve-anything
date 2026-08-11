@@ -23,8 +23,16 @@ _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
+from correction_semantic.store import CorrectionIdiom, append_idioms  # noqa: E402
 from daily import proposal_digest as pd  # noqa: E402
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
+
+# idiom_eligible（#527: 最小長8文字/日常語stopword無し/文脈固有トークン無し）を満たすテキスト。
+# #412 round2 [Must]D の union 照合は idiom フィールド限定になるため、group.idiom を populate
+# するテキストはこのゲートを通す必要がある。
+ELIGIBLE_IDIOM_TEXT = "設定ファイルのパスを直接指定してください"
+# floor（8文字）未満・stopword「いやいや」のみ = idiom_eligible を通らない。
+INELIGIBLE_IDIOM_TEXT = "いやいや"
 
 
 def _sig(text: str, line_no: int, pj_slug: str, session_id: str = "s1") -> WeakSignal:
@@ -39,6 +47,25 @@ def _sig(text: str, line_no: int, pj_slug: str, session_id: str = "s1") -> WeakS
         session_id=session_id,
         pj_slug=pj_slug,
     )
+
+
+def _sig_and_idiom(text: str, line_no: int, pj_slug: str, session_id: str = "s1"):
+    """weak_signal + 同一 phys key（source_path:line_no）の correction_idiom を対で作る。
+
+    #412 round2 [Must]D-1: global レーンの union 照合対象は idiom フィールドに限定される
+    ため、group.idiom を populate するには correction_idioms.jsonl 側にも
+    daily_review._idiom_by_phys が突合できる同一 phys のレコードが要る。
+    """
+    prov = {"source_path": f"/{pj_slug}.jsonl", "line_no": line_no, "text": text, "reason": "r"}
+    detected_at = datetime.now(timezone.utc).isoformat()
+    sig = WeakSignal(
+        channel="llm_judge", provenance=prov, detected_at=detected_at,
+        session_id=session_id, pj_slug=pj_slug,
+    )
+    idiom = CorrectionIdiom(
+        idiom=text, provenance=prov, detected_at=detected_at, pj_slug=pj_slug,
+    )
+    return sig, idiom
 
 
 def _queue(*slugs: str) -> list:
@@ -124,13 +151,11 @@ def test_pj_failure_does_not_abort_other_pjs(tmp_path: Path, monkeypatch):
 
 def test_global_lane_merges_same_idiom_text_across_two_pjs(tmp_path: Path):
     ws = tmp_path / "weak_signals.jsonl"
-    append_signals(
-        [
-            _sig("git statusじゃなくてgit diffを使って", 1, "pj-a"),
-            _sig("git statusじゃなくてgit diffを使って", 1, "pj-b"),
-        ],
-        path=ws,
-    )
+    idioms_path = tmp_path / "correction_idioms.jsonl"
+    sig_a, idiom_a = _sig_and_idiom(ELIGIBLE_IDIOM_TEXT, 1, "pj-a")
+    sig_b, idiom_b = _sig_and_idiom(ELIGIBLE_IDIOM_TEXT, 1, "pj-b")
+    append_signals([sig_a, sig_b], path=ws)
+    append_idioms([idiom_a, idiom_b], path=idioms_path)
 
     out = pd.build_proposal_digest(_queue("pj-a", "pj-b"), data_dir=tmp_path)
     assert len(out["global"]) == 1
@@ -153,13 +178,11 @@ def test_single_pj_occurrence_stays_in_per_pj_not_global(tmp_path: Path):
 def test_global_group_carries_project_paths_from_queue_entries(tmp_path: Path):
     """#412 [Must]4: digest は各 PJ の project_path（queue エントリの絶対パス）を保持する。"""
     ws = tmp_path / "weak_signals.jsonl"
-    append_signals(
-        [
-            _sig("git statusじゃなくてgit diffを使って", 1, "pj-a"),
-            _sig("git statusじゃなくてgit diffを使って", 1, "pj-b"),
-        ],
-        path=ws,
-    )
+    idioms_path = tmp_path / "correction_idioms.jsonl"
+    sig_a, idiom_a = _sig_and_idiom(ELIGIBLE_IDIOM_TEXT, 1, "pj-a")
+    sig_b, idiom_b = _sig_and_idiom(ELIGIBLE_IDIOM_TEXT, 1, "pj-b")
+    append_signals([sig_a, sig_b], path=ws)
+    append_idioms([idiom_a, idiom_b], path=idioms_path)
     queue_entries = [
         {"pj_slug": "pj-a", "project_path": "/abs/pj-a"},
         {"pj_slug": "pj-b", "project_path": "/abs/pj-b"},
@@ -191,8 +214,8 @@ def _slim(keys, rep=None, idiom=None) -> dict:
 
 def test_extract_global_groups_two_pj_same_text_merges():
     per_pj = {
-        "pj-a": [_slim(["ka"], rep="共通テキスト")],
-        "pj-b": [_slim(["kb"], rep="共通テキスト")],
+        "pj-a": [_slim(["ka"], idiom=ELIGIBLE_IDIOM_TEXT)],
+        "pj-b": [_slim(["kb"], idiom=ELIGIBLE_IDIOM_TEXT)],
     }
     global_groups, remaining = pd._extract_global_groups(per_pj)
     assert len(global_groups) == 1
@@ -200,38 +223,80 @@ def test_extract_global_groups_two_pj_same_text_merges():
     assert remaining == {}
 
 
-def test_extract_global_groups_chain_does_not_promote_single_pj_group():
-    """A-B が text1（representative）で一致、B-C が text2（B の idiom / C の representative）で
-    一致するチェーン。旧実装は「消費前」distinct_slugs>=2 の判定だけで text2 を通し、text1 で
-    既に消費済みの B を merge ループで skip した結果、**C 単独**の group が誤って global 扱い
-    されていた。連結成分でマージすれば A/B/C の 3 PJ が 1 つの global group に正しく統合される
-    （C だけの偽 global group は作られない）。
-    """
-    per_pj = {
-        "pj-a": [_slim(["ka"], rep="共通テキスト1")],
-        "pj-b": [_slim(["kb"], rep="共通テキスト1", idiom="共通テキスト2")],
-        "pj-c": [_slim(["kc"], rep="共通テキスト2")],
-    }
-    global_groups, remaining = pd._extract_global_groups(per_pj)
-    assert len(global_groups) == 1
-    g = global_groups[0]
-    assert set(g["signal_keys"]) == {"ka", "kb", "kc"}
-    assert set(g["origin_pjs"]) == {"pj-a", "pj-b", "pj-c"}
-    assert set(g["keys_by_pj"]) == {"pj-a", "pj-b", "pj-c"}
-    assert g["keys_by_pj"]["pj-a"] == ["ka"]
-    assert g["keys_by_pj"]["pj-b"] == ["kb"]
-    assert g["keys_by_pj"]["pj-c"] == ["kc"]
-    # C 単独の偽 global group が per_pj に取りこぼされていないこと（全 3 PJ が global に吸収済み）
-    assert remaining == {}
-
-
 def test_extract_global_groups_single_pj_component_stays_per_pj():
     per_pj = {
-        "pj-a": [_slim(["ka"], rep="孤立テキスト")],
+        "pj-a": [_slim(["ka"], rep="孤立テキスト", idiom=ELIGIBLE_IDIOM_TEXT)],
     }
     global_groups, remaining = pd._extract_global_groups(per_pj)
     assert global_groups == []
     assert remaining == per_pj
+
+
+# ─────────────────────────────────────────────────────────────────
+# _extract_global_groups（#412 round2 [Must]D: 連結成分の暴走防止）
+# ─────────────────────────────────────────────────────────────────
+def test_extract_global_groups_representative_overlap_alone_does_not_merge():
+    """#412 round2 [Must]D-1: union の照合対象は idiom フィールドのみ。representative が
+    同一でも idiom が無ければ連結しない（旧実装は representative も照合対象にしていたため、
+    短い一般文が多数の案を連結する暴走の原因だった）。
+    """
+    per_pj = {
+        "pj-a": [_slim(["ka"], rep="共通の発話断片")],
+        "pj-b": [_slim(["kb"], rep="共通の発話断片")],
+    }
+    global_groups, remaining = pd._extract_global_groups(per_pj)
+    assert global_groups == []
+    assert remaining == per_pj
+
+
+def test_extract_global_groups_ineligible_idiom_text_not_merged():
+    """#412 round2 [Must]D-2: idiom_eligible（#527 較正済み FP ガード）を通らない idiom
+    （過短・stopword のみ等）は union に使わない。同一テキストが2 PJ に出現しても
+    global 化しない。
+    """
+    per_pj = {
+        "pj-a": [_slim(["ka"], idiom=INELIGIBLE_IDIOM_TEXT)],
+        "pj-b": [_slim(["kb"], idiom=INELIGIBLE_IDIOM_TEXT)],
+    }
+    global_groups, remaining = pd._extract_global_groups(per_pj)
+    assert global_groups == []
+    assert remaining == per_pj
+
+
+def test_extract_global_groups_component_size_cap_keeps_per_pj():
+    """#412 round2 [Must]D-3: 成分サイズが上限（既定 MAX_GLOBAL_COMPONENT_GROUPS）を超えたら
+    global 化せず per_pj に残す（安全側 — 人間が個別に見る）。
+    """
+    per_pj = {
+        f"pj-{i}": [_slim([f"k{i}"], idiom=ELIGIBLE_IDIOM_TEXT)]
+        for i in range(pd.MAX_GLOBAL_COMPONENT_GROUPS + 1)
+    }
+    global_groups, remaining = pd._extract_global_groups(per_pj)
+    assert global_groups == []
+    assert remaining == per_pj
+
+
+def test_extract_global_groups_component_at_cap_still_merges():
+    """成分サイズがちょうど上限のときは通常通りマージされる（境界値）。"""
+    per_pj = {
+        f"pj-{i}": [_slim([f"k{i}"], idiom=ELIGIBLE_IDIOM_TEXT)]
+        for i in range(pd.MAX_GLOBAL_COMPONENT_GROUPS)
+    }
+    global_groups, remaining = pd._extract_global_groups(per_pj)
+    assert len(global_groups) == 1
+    assert remaining == {}
+
+
+def test_extract_global_groups_carries_all_representatives():
+    """#412 round2 [Must]D-4: merge 後の group は成分内の全 group の代表文を保持する
+    （1件しか見せずに全キーを承認させないための提示材料）。
+    """
+    per_pj = {
+        "pj-a": [_slim(["ka"], rep="代表文A", idiom=ELIGIBLE_IDIOM_TEXT)],
+        "pj-b": [_slim(["kb"], rep="代表文B", idiom=ELIGIBLE_IDIOM_TEXT)],
+    }
+    global_groups, _remaining = pd._extract_global_groups(per_pj)
+    assert global_groups[0]["all_representatives"] == ["代表文A", "代表文B"]
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -280,7 +345,8 @@ def test_build_session_proposals_excludes_other_pj():
     assert [g["signal_keys"] for g in out] == [["k1"]]
 
 
-def test_build_session_proposals_excludes_group_with_any_seen_key():
+def test_build_session_proposals_subtracts_seen_key_leaves_other_groups_and_keys():
+    """#412 round2 [Must]A: 既読 key は group から差し引くだけで group ごとは消さない。"""
     queue_data = {
         "proposals": {
             "per_pj": {"pj-a": [_group(["k1", "k2"]), _group(["k3"])]},
@@ -288,7 +354,54 @@ def test_build_session_proposals_excludes_group_with_any_seen_key():
         }
     }
     out = pd.build_session_proposals(queue_data, "pj-a", seen_keys={"k2"})
-    assert [g["signal_keys"] for g in out] == [["k3"]]
+    assert [g["signal_keys"] for g in out] == [["k1"], ["k3"]]
+
+
+def test_build_session_proposals_subtracts_seen_keys_instead_of_dropping_group():
+    """#412 round2 [Must]A: group 内の一部 key だけ既読（部分昇格失敗等）でも group ごと
+    消さず、既読 key を差し引いた残りで再提示する（残り 0 件の group のみ除外）。
+    """
+    queue_data = {
+        "proposals": {
+            "per_pj": {"pj-a": [_group(["k1", "k2"])]},
+            "global": [],
+        }
+    }
+    out = pd.build_session_proposals(queue_data, "pj-a", seen_keys={"k1"})
+    assert len(out) == 1
+    assert out[0]["signal_keys"] == ["k2"]
+
+
+def test_build_session_proposals_drops_group_when_all_keys_seen():
+    queue_data = {
+        "proposals": {
+            "per_pj": {"pj-a": [_group(["k1", "k2"])]},
+            "global": [],
+        }
+    }
+    out = pd.build_session_proposals(queue_data, "pj-a", seen_keys={"k1", "k2"})
+    assert out == []
+
+
+def test_build_session_proposals_subtracts_seen_keys_in_keys_by_pj():
+    """global group の ``keys_by_pj`` からも既読 key を差し引く。"""
+    group = {
+        "signal_keys": ["ka", "kb"],
+        "representative": "共通テキスト",
+        "idiom": None,
+        "confirmable_idiom": None,
+        "channel": "llm_judge",
+        "count": 2,
+        "evidence_text": "共通テキスト",
+        "prev_action": "",
+        "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
+        "origin_pjs": ["pj-a", "pj-b"],
+    }
+    queue_data = {"proposals": {"per_pj": {}, "global": [group]}}
+    out = pd.build_session_proposals(queue_data, "pj-a", seen_keys={"ka"})
+    assert len(out) == 1
+    assert out[0]["signal_keys"] == ["kb"]
+    assert out[0]["keys_by_pj"] == {"pj-b": ["kb"]}
 
 
 def test_build_session_proposals_respects_limit():
@@ -367,6 +480,70 @@ def test_build_proposal_prompt_global_group_emits_per_origin_pj_commands():
     assert "/abs/bin/evolve-reflect --reject-weak kb --pj pj-b" in msg
 
 
+def test_build_proposal_prompt_lists_all_representatives_for_merged_group():
+    """#412 round2 [Must]D-4: all_representatives を持つ group は成分内の全代表文を列挙する。
+    「はい」で成分内の全キーを承認する前に、人間が見ていない案まで含まれていないか
+    確認できるようにするため。
+    """
+    group = {
+        "signal_keys": ["ka", "kb"],
+        "representative": "代表文A",
+        "idiom": None,
+        "confirmable_idiom": None,
+        "channel": "llm_judge",
+        "count": 2,
+        "evidence_text": "代表文A",
+        "prev_action": "",
+        "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
+        "origin_pjs": ["pj-a", "pj-b"],
+        "all_representatives": ["代表文A", "代表文B"],
+    }
+    msg = pd.build_proposal_prompt([group], "pj-a")
+    assert "代表文A" in msg
+    assert "代表文B" in msg
+
+
+def test_build_proposal_prompt_quotes_reflect_cmd_with_spaces():
+    """#412 round2 [Must]C: reflect_cmd 絶対パスに空白があると argparse が壊れる。shlex.quote する。"""
+    import shlex
+    groups = [_group(["k1"], rep="rep")]
+    reflect_cmd = "/Users/matsukaze takashi/plugin/bin/evolve-reflect"
+    msg = pd.build_proposal_prompt(groups, "pj-a", reflect_cmd=reflect_cmd)
+    assert shlex.quote(reflect_cmd) in msg
+    assert "matsukaze takashi/plugin/bin/evolve-reflect --promote-weak" not in msg
+
+
+def test_build_proposal_prompt_quotes_project_path_with_spaces():
+    """#412 round2 [Must]C: global group の --project-path も quote する。"""
+    import shlex
+    group = {
+        "signal_keys": ["ka"],
+        "representative": "共通テキスト",
+        "idiom": None,
+        "confirmable_idiom": None,
+        "channel": "llm_judge",
+        "count": 1,
+        "evidence_text": "共通テキスト",
+        "prev_action": "",
+        "keys_by_pj": {"pj-a": ["ka"]},
+        "origin_pjs": ["pj-a"],
+    }
+    project_path = "/abs/pj a/with space"
+    msg = pd.build_proposal_prompt(
+        [group], "pj-a", project_paths={"pj-a": project_path},
+    )
+    assert f"--project-path {shlex.quote(project_path)}" in msg
+
+
+def test_build_proposal_prompt_quotes_shell_metacharacter_pj_slug():
+    """#412 round2 [Must]C: pj_slug に shell metacharacter が含まれても別コマンドに解釈されない。"""
+    import shlex
+    groups = [_group(["k1"], rep="rep")]
+    pj_slug = "pj; rm -rf /"
+    msg = pd.build_proposal_prompt(groups, pj_slug)
+    assert f"--pj {shlex.quote(pj_slug)}" in msg
+
+
 # ─────────────────────────────────────────────────────────────────
 # build_proposal_systemmessage（#412 [Must]1: 2チャネル同時出力）
 # ─────────────────────────────────────────────────────────────────
@@ -375,7 +552,18 @@ def test_build_proposal_systemmessage_lists_representatives():
     msg = pd.build_proposal_systemmessage(groups)
     assert "rep1" in msg
     assert "rep2" in msg
-    assert "y/n" in msg
+    assert "応答のあとで採否をお聞きします" in msg
+
+
+def test_build_proposal_systemmessage_wording_does_not_overpromise():
+    """#412 round2 [Should]E: 「この後 y/n で確認します」は additionalContext 側の prompt
+    instruction 遵守に依存し機械的に保証できない。実際に保証できる内容（応答後に聞く・
+    表示されなければ次回また出る）だけを書く。
+    """
+    msg = pd.build_proposal_systemmessage([])
+    assert "応答のあとで採否をお聞きします" in msg
+    assert "表示されなかった場合は未処理のまま次回また出ます" in msg
+    assert "この後 y/n で確認します" not in msg
 
 
 def test_build_proposal_systemmessage_caps_at_max_session_proposals():
@@ -384,3 +572,23 @@ def test_build_proposal_systemmessage_caps_at_max_session_proposals():
     assert "rep0" in msg
     assert "rep1" in msg
     assert "rep2" not in msg
+
+
+def test_build_proposal_systemmessage_lists_all_representatives_for_merged_group():
+    """#412 round2 [Must]D-4: merge 済み group は代表文を1件だけでなく成分内の全代表文を出す。"""
+    group = {
+        "signal_keys": ["ka", "kb"],
+        "representative": "代表文A",
+        "idiom": None,
+        "confirmable_idiom": None,
+        "channel": "llm_judge",
+        "count": 2,
+        "evidence_text": "代表文A",
+        "prev_action": "",
+        "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
+        "origin_pjs": ["pj-a", "pj-b"],
+        "all_representatives": ["代表文A", "代表文B"],
+    }
+    msg = pd.build_proposal_systemmessage([group])
+    assert "代表文A" in msg
+    assert "代表文B" in msg
