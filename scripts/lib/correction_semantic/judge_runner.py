@@ -56,7 +56,7 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import safe_llm_call as _safe_llm_call  # noqa: E402
-from rl_common.file_lock import file_lock as _file_lock  # noqa: E402
+from rl_common.file_lock import try_file_lock as _try_file_lock  # noqa: E402
 from weak_signals.ttl import _parse_iso  # noqa: E402
 
 from . import DEFAULT_BATCH_SIZE  # noqa: E402
@@ -192,17 +192,22 @@ def run_daily_judge(
 
     Returns:
         dry-run: {"dry_run": True, "unjudged_total", "selected", "capped", "cost",
-                   "source_failed", "source_error"}
+                   "source_failed", "source_error", "skipped_locked"}
         run:     {"dry_run": False, "requested", "responded", "call_failed",
                    "corrections", "non_corrections", "skipped_batches",
                    "parse_failed_batches", "weak_written", "idioms_written",
                    "judged_written", "unjudged_total", "selected", "capped",
-                   "source_failed", "source_error"}
+                   "source_failed", "source_error", "skipped_locked"}
 
         ``source_failed``（#410 [Must]E）: True なら発話ソース（utterances.db）取得が例外
         送出し 0 件として fail-open した（DB/schema 障害等）。``unjudged_total=0`` と正当な
         「未判定なし」を区別するための observability フィールド（沈黙させない）。
         ``source_error`` は例外の型+メッセージ（source_failed=False のときは None）。
+
+        ``skipped_locked``（#410 round2 [Should]②）: True なら別プロセスが選定〜記録の
+        sidecar ロックを保持中で non-blocking 取得に失敗し、無期限待機せず即座に skip した
+        （dry-run は排他不要のため常に False）。daily runner は1日1回・skip しても翌日回る
+        ため損失は小さい。
     """
     out = out if out is not None else sys.stdout
 
@@ -259,6 +264,7 @@ def run_daily_judge(
             "cost": cost,
             "source_failed": source_failed,
             "source_error": source_error,
+            "skipped_locked": False,
         }
 
     # #410 [Must]B: 選定〜記録（判定済み記録の read-modify-write）を排他する。日次上限は
@@ -268,10 +274,41 @@ def run_daily_judge(
     # flock は open file description 単位で入れ子取得すると自己 deadlock するが、
     # store_write/store_write_raw は対象ファイル自身に別途ロックを取るだけで、この sidecar
     # ロックとは異なるファイルのため入れ子にならない（rl_common.file_lock の注意点を参照）。
+    #
+    # #410 round2 [Should]②: 旧実装は無期限 blocking の file_lock を使っており、ロック保持中
+    # の後続プロセスを最大 ceil(件数上限/batch_size) × timeout 秒止めうる欠陥だった（codex
+    # 指摘）。non-blocking 取得（try_file_lock）を試み、取れなければ「別プロセスが実行中」
+    # として即座に skip する（daily runner は1日1回・skip しても翌日回るため損失が小さい。
+    # 予約/lease のような複雑な仕組みより単純）。
     judged_target = Path(judged_path) if judged_path is not None else _store.default_judged_path()
     lock_path = judged_target.with_name(judged_target.name + ".lock")
 
-    with _file_lock(lock_path):
+    with _try_file_lock(lock_path) as acquired:
+        if not acquired:
+            print(
+                f"[judge_runner] 別プロセスが実行中のためスキップします（lock: {lock_path}）",
+                file=out,
+            )
+            return {
+                "dry_run": False,
+                "requested": 0,
+                "responded": 0,
+                "call_failed": 0,
+                "corrections": 0,
+                "non_corrections": 0,
+                "skipped_batches": 0,
+                "parse_failed_batches": 0,
+                "weak_written": 0,
+                "idioms_written": 0,
+                "judged_written": 0,
+                "unjudged_total": 0,
+                "selected": 0,
+                "capped": False,
+                "source_failed": source_failed,
+                "source_error": source_error,
+                "skipped_locked": True,
+            }
+
         unjudged_all, selected, capped = _select_for_today(
             utterances, judged_path,
             daily_utterance_limit=daily_utterance_limit,
@@ -299,6 +336,7 @@ def run_daily_judge(
                 "capped": capped,
                 "source_failed": source_failed,
                 "source_error": source_error,
+                "skipped_locked": False,
             }
 
         # Phase A（決定論）: "daily" はラベルに過ぎない（batch_id 構成のみに使われ、
@@ -366,6 +404,7 @@ def run_daily_judge(
             "capped": capped,
             "source_failed": source_failed,
             "source_error": source_error,
+            "skipped_locked": False,
         }
 
 

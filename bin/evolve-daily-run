@@ -157,6 +157,10 @@ def main() -> int:
             # capped=False の健康そうなサマリに埋もれさせない（silence != evaluated）。
             "source_failed": bool(judge_result.get("source_failed", False)),
             "source_error": judge_result.get("source_error"),
+            # #410 round2 [Should]②: 別プロセスが lock 保持中で non-blocking skip したことを
+            # 沈黙させない（無期限待機の代わりに skip する設計にしたため、skip 自体が
+            # observability から消えないよう surface する）。
+            "skipped_locked": bool(judge_result.get("skipped_locked", False)),
         }
     except Exception as e:  # noqa: BLE001 - fail-open（他ステップと同型）
         print(f"[evolve-daily-run] llm_judge daily run error: {e}（continue）", file=sys.stderr, flush=True)

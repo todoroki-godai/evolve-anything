@@ -277,50 +277,72 @@ def test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost(tmp_path, 
     assert res2["capped"] is True
 
 
-# ── #410 [Must]B: 選定〜記録の排他（ロック保持中は別経路が進めないことを検査）──
+# ── #410 [Must]B: 選定〜記録の排他 → round2 [Should]② で non-blocking skip に変更 ──
+# 旧実装は無期限 blocking の file_lock を使っており、ロック保持中の後続プロセスを
+# 最大 ceil(200/30)×180秒 止めうる欠陥だった（codex 指摘）。non-blocking 取得を試み、
+# 取れなければ「別プロセスが実行中」として即座に skip する方式に変更した（daily runner は
+# 1日1回・skip しても翌日回るため損失が小さい）。
 # learning_concurrency_test_by_lock_holding: N プロセス同時起動は競合窓が µs で再現せず
-# 偽の安全網になる。ロックを外部で保持した状態で別スレッドが run_daily_judge を呼び、
-# 短いデッドライン内に完了しない（＝ブロックされている）ことを確認したうえで解放し、
-# 解放後に完了することまで確認する（hang→fail 変換）。
+# 偽の安全網になる。ロックを外部で保持した状態で run_daily_judge を直接呼び、即座に
+# （blocking せず）skip 応答が返ることを確認する。
 
 
-def test_select_and_record_are_mutually_exclusive_via_lock(tmp_path, monkeypatch):
-    """#410 round2 [Must]dry-run: dry-run（run=False）はロックを取得しなくなったため
-    （read-only・排他不要）、この排他検証は run=True（選定〜記録の critical section）で
-    行う。call_haiku は mock して実 LLM を呼ばない。
+def test_run_skips_immediately_when_lock_held_by_another_process(tmp_path, monkeypatch):
+    """#410 round2 [Should]②: ロックが別プロセス保持中なら無期限待機せず即座に skip する。
+    call_haiku が呼ばれない（=Phase A/B/C に一切進まない）ことも確認する。
     """
-    import threading
+    from rl_common.file_lock import file_lock
+
+    judged = tmp_path / "correction_judged.jsonl"
+    lock_path = judged.with_name(judged.name + ".lock")
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+
+    def _boom(*a, **kw):
+        raise AssertionError("ロック未取得なのに call_haiku が呼ばれた")
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _boom)
+
+    with file_lock(lock_path):
+        res = judge_runner.run_daily_judge(run=True, utterances=utterances, judged_path=judged)
+
+    assert res["skipped_locked"] is True
+    assert res["selected"] == 0
+    assert not judged.exists()  # 何も記録していない
+
+
+def test_run_skipped_locked_returns_promptly_not_hanging(tmp_path, monkeypatch):
+    """skip 応答が実際に即座（無期限待機でない）に返ることを時間で固定する（hang→fail 変換）。"""
+    import time
 
     from rl_common.file_lock import file_lock
 
     judged = tmp_path / "correction_judged.jsonl"
     lock_path = judged.with_name(judged.name + ".lock")
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
 
+    def _boom(*a, **kw):
+        raise AssertionError("ロック未取得なのに call_haiku が呼ばれた")
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _boom)
+
+    with file_lock(lock_path):
+        started = time.monotonic()
+        judge_runner.run_daily_judge(run=True, utterances=utterances, judged_path=judged)
+        elapsed = time.monotonic() - started
+    assert elapsed < 2.0, f"skip が遅すぎる（{elapsed:.2f}秒・無期限待機の疑い）"
+
+
+def test_run_not_locked_proceeds_normally(tmp_path, monkeypatch):
+    """ロックが空いていれば通常どおり選定〜記録まで完了する（回帰防止）。"""
+    judged = tmp_path / "correction_judged.jsonl"
     utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
     monkeypatch.setattr(
         judge_runner, "call_haiku", lambda prompt, model="haiku": _ok_verdict_response([(0, False)])
     )
-
-    completed = threading.Event()
-    started = threading.Event()
-
-    def _worker():
-        started.set()
-        judge_runner.run_daily_judge(run=True, utterances=utterances, judged_path=judged)
-        completed.set()
-
-    with file_lock(lock_path):
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-        assert started.wait(timeout=2), "worker スレッドが開始しなかった"
-        # ロック保持中は run_daily_judge が完了しない（選定〜記録の手前でブロック）。
-        blocked = not completed.wait(timeout=0.5)
-        assert blocked, "ロック保持中なのに run_daily_judge が完了した（排他が効いていない）"
-
-    # ロック解放後は速やかに完了する。
-    assert completed.wait(timeout=5), "ロック解放後も run_daily_judge が完了しなかった（hang）"
-    t.join(timeout=5)
-    assert not t.is_alive()
+    res = judge_runner.run_daily_judge(run=True, utterances=utterances, judged_path=judged)
+    assert res["skipped_locked"] is False
+    assert res["selected"] == 1
+    assert judged.exists()
 
 
 def test_dry_run_does_not_acquire_lock_and_proceeds_while_lock_held(tmp_path):

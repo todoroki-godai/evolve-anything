@@ -11,7 +11,7 @@ from pathlib import Path
 _LIB = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_LIB))
 
-from rl_common.file_lock import atomic_write_text, file_lock  # noqa: E402
+from rl_common.file_lock import atomic_write_text, file_lock, try_file_lock  # noqa: E402
 
 
 def test_atomic_write_creates_parents_and_leaves_no_tmp(tmp_path):
@@ -56,6 +56,39 @@ for _ in range(20):
         time.sleep(0.001)  # read と write の間を広げ、ロック無しなら必ず落ちるようにする
         atomic_write_text(counter, str(value + 1))
 """
+
+
+# ── try_file_lock（#410 round2 [Should]②: non-blocking 取得）────────────────
+
+
+def test_try_file_lock_acquires_when_free(tmp_path):
+    lock = tmp_path / "slug.lock"
+    with try_file_lock(lock) as acquired:
+        assert acquired is True
+        assert lock.exists()
+
+
+def test_try_file_lock_yields_false_when_already_locked(tmp_path):
+    """既存 file_lock（blocking）が保持中は、try_file_lock は待たずに False を返す。"""
+    lock = tmp_path / "slug.lock"
+    with file_lock(lock):
+        with try_file_lock(lock) as acquired:
+            assert acquired is False
+
+
+def test_try_file_lock_releases_and_allows_next_acquire(tmp_path):
+    lock = tmp_path / "slug.lock"
+    with try_file_lock(lock) as acquired1:
+        assert acquired1 is True
+    with try_file_lock(lock) as acquired2:
+        assert acquired2 is True
+
+
+def test_try_file_lock_does_not_change_existing_file_lock_behavior(tmp_path):
+    """既存の file_lock（blocking）は try_file_lock 追加後も従来どおり動く（回帰防止）。"""
+    lock = tmp_path / "slug.lock"
+    with file_lock(lock):
+        assert lock.exists()
 
 
 def test_concurrent_read_modify_write_does_not_lose_updates(tmp_path):

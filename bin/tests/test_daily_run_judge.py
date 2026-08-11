@@ -128,6 +128,7 @@ def test_judge_result_embedded_in_evolve_queue_json(monkeypatch, tmp_path):
         "call_failed": 1,
         "source_failed": False,
         "source_error": None,
+        "skipped_locked": False,
     }
     # queue 本体の既存フィールドは維持される（上書きでなく追加）。
     assert payload["queue"] == []
@@ -199,3 +200,37 @@ def test_judge_source_failed_false_when_not_provided(monkeypatch, tmp_path):
     assert rc == 0
     payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
     assert payload["llm_judge"]["source_failed"] is False
+
+
+def test_judge_skipped_locked_propagates_to_evolve_queue_json(monkeypatch, tmp_path):
+    """#410 round2 [Should]②: 別プロセスが lock 保持中で skip したことを evolve-queue.json
+    の llm_judge.skipped_locked へ surface する（daily runner のサマリまで伝播）。
+    """
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+
+    def fake_judge(**kwargs):
+        return {
+            "unjudged_total": 0, "selected": 0, "capped": False,
+            "corrections": 0, "call_failed": 0, "skipped_locked": True,
+        }
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
+    assert payload["llm_judge"]["skipped_locked"] is True
+
+
+def test_judge_skipped_locked_false_when_not_provided(monkeypatch, tmp_path):
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+
+    def fake_judge(**kwargs):
+        return {"unjudged_total": 0, "selected": 0, "capped": False, "corrections": 0, "call_failed": 0}
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
+    assert payload["llm_judge"]["skipped_locked"] is False
