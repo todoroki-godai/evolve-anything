@@ -243,6 +243,13 @@ def test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost(tmp_path, 
     """#410 round2 codex [Must]B: 同日複数実行のトークン累積がバッチ固定費
     （batch._PROMPT_OVERHEAD_TOKENS）を含むことを固定する。件数だけを見るテスト
     （上のテスト）はバッチ固定費の按分を巻き戻しても赤にならないという指摘の是正。
+
+    **このテストの限界（#410 round3 [Should]6）**: batch_size=1 で対象キーが1件しか
+    ないため、按分ロジックが「均等」かどうかはこのテストでは検証できない（1件しか無ければ
+    「均等に配る」も「1件に全額寄せる」も結果が同じになる）。按分の均等性そのものの検証は
+    ``test_correction_semantic_batch.py::
+    test_ingest_distributes_batch_fixed_cost_evenly_not_concentrated_on_one_key``
+    （複数キーのバッチで個々のキーの est_tokens を比較する）が担う。
     """
     from correction_semantic.batch import _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens
     from correction_semantic.store import count_judged_today

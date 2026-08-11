@@ -163,6 +163,12 @@ def test_ingest_distributes_batch_fixed_cost_into_est_tokens_by_key(scratch_dir:
     按分して記録する。按分方式を選んだ理由: 特定1キー（例: 先頭）に全額寄せると、そのキーが
     別の事情で再判定対象になった場合に固定費だけ二重計上/消失する非対称が生まれるため、
     確定した全キーに均等に配る方が扱いやすい。
+
+    **このテストの限界（#410 round3 [Should]6）**: このテストは当日累積の**合計値**しか
+    見ておらず、合計は按分方式に依存しない（全額を1キーへ寄せる regression でも合計は
+    変わらない）ため、按分が本当に「均等」かは検証できていない（実測でこの regression が
+    green のまま通ることを確認済み）。均等性そのものの検証は下の
+    ``test_ingest_distributes_batch_fixed_cost_evenly_not_concentrated_on_one_key`` が担う。
     """
     ws_store = scratch_dir / "weak_signals.jsonl"
     idioms_store = scratch_dir / "idioms.jsonl"
@@ -187,6 +193,62 @@ def test_ingest_distributes_batch_fixed_cost_into_est_tokens_by_key(scratch_dir:
     # （按分丸めの誤差はキー数未満に収まる）。
     assert today["est_tokens"] > per_utterance_only_sum
     assert today["est_tokens"] - per_utterance_only_sum >= cs_batch._PROMPT_OVERHEAD_TOKENS - len(utts)
+
+
+def test_ingest_distributes_batch_fixed_cost_evenly_not_concentrated_on_one_key(
+    scratch_dir: Path,
+) -> None:
+    """#410 round3 [Should]6: 按分が「均等」であることを個々のキーの est_tokens レコードを
+    直接読んで検証する（上のテストは合計値しか見ておらず、全額を1キーへ寄せる regression
+    でも合計は変わらないため検出できないことを実測で確認済み）。
+
+    実測（このテストを追加する前）: バッチ固定費を「按分せず先頭キー1件に全額寄せる」
+    regression に一時的に差し替えて既存2テスト（本ファイルの上のテスト・
+    test_correction_semantic_judge_runner.py の
+    test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost）を実行したところ、
+    どちらも green のまま通った（judge_runner 側は batch_size=1 でキーが1件しかないため
+    按分の偏りが原理的に観測できない・batch.py 側は合計値しか見ないため偏りに無反応）。
+    このテストは「先頭キーへの上乗せ分」と「他キーへの上乗せ分」の差を直接比較することで、
+    その regression を実際に検出する（このテストを regression 状態に対して実行し赤化を
+    確認してから、正しい実装に戻して緑化を確認した）。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()  # 3 発話・batch_size=30 → 1 バッチ
+
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = _responses_for(emitted, {
+        (rid, i): {"is_correction": False, "idiom": None, "reason": "r"} for i in range(3)
+    })
+    cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+
+    import json as _json
+
+    recs = [
+        _json.loads(line)
+        for line in judged.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    per_key_tokens = {r["key"]: r["est_tokens"] for r in recs if "key" in r}
+    assert len(per_key_tokens) == 3
+
+    # 発話ごとの本文単価（実 index 込み）を差し引き、バッチ固定費由来の上乗せ分だけを
+    # キーごとに取り出す。均等按分なら全キーとも同じ値（ceil(400/3)）になる。
+    overhead_per_key = []
+    for i, u in enumerate(utts):
+        key = cs_store.utterance_key(u)
+        body = cs_batch.estimate_utterance_tokens(u, index=i)
+        overhead_per_key.append(per_key_tokens[key] - body)
+
+    expected_overhead = -(-cs_batch._PROMPT_OVERHEAD_TOKENS // 3)  # ceil(400/3)
+    assert overhead_per_key == [expected_overhead] * 3
 
 
 def test_ingest_then_reemit_excludes_judged_utterances(scratch_dir: Path) -> None:
