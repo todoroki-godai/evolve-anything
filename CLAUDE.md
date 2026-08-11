@@ -45,129 +45,129 @@
 ## コンポーネント
 
 各コンポーネントの設計経緯・根拠・issue/ADR 参照を含む詳細は **[spec/components.md](spec/components.md)**（SoT）。
-ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する。**
+ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する（サマリは 1 文・目安 ≤130 バイト）。**
 
 | コンポーネント | 一言サマリ | 実体 |
 |----------------|-----------|------|
 | Observe hooks (24個 registered) | LLM コストゼロで使用・エラー・修正・ワークフロー・ファイル変更を自動記録 | `hooks/` |
 | Auto Trigger | corrections 蓄積・セッション終了等で evolve/audit を自動提案 | `trigger_engine.py` |
 | `userConfig` | trigger 閾値・各種上限など 21 項目をプラグイン有効化時に設定可能 | manifest |
-| `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチ + GEPA 数値ガードレール（入力件数/pitfalls char 上限・パッチ `char_limit` gate・実データ dry-run 較正 #120） | agent |
+| `genetic-prompt-optimizer` | corrections/context ベースの LLM 1パス直接パッチ + GEPA 数値ガードレールで暴走を抑制 | agent |
 | `evolve-loop-orchestrator` | ベースライン→バリエーション→評価→人間確認のループ統合 | agent |
-| `variant_generation` | バリエーション生成の配線drift修理 — optimize.py subprocess呼び出しから直接import方式へ（#234 PR1） | `skills/evolve-loop-orchestrator/scripts/variant_generation.py` |
-| `selection_reeval` | 採用前再評価によるwinner's curse補正（#234 PR2） | `skills/evolve-loop-orchestrator/scripts/selection_reeval.py` |
-| `loop_ablation` | 設計文脈 vs naive 生成比較のopt-in較正実験（#234 PR3, arXiv 2607.12227） | `scripts/lib/loop_ablation_stats.py` + `skills/evolve-loop-orchestrator/scripts/loop_ablation.py` |
+| `variant_generation` | バリエーション生成を direct import 方式に修理（旧 subprocess 経路を廃止） | `skills/evolve-loop-orchestrator/scripts/variant_generation.py` |
+| `selection_reeval` | 採用前再評価で winner's curse を補正 | `skills/evolve-loop-orchestrator/scripts/selection_reeval.py` |
+| `loop_ablation` | 設計文脈 vs naive 生成比較の opt-in 較正実験 | `scripts/lib/loop_ablation_stats.py` + `skills/evolve-loop-orchestrator/scripts/loop_ablation.py` |
 | `evolve-scorer` | オーケストレーター + 3並列サブエージェントで3軸採点 | agent |
 | `skill-triage` | CREATE/UPDATE/SPLIT/MERGE/OK の5択判定 | `skill_triage.py` |
-| `tool_usage_analyzer` | セッション JSONL からツール呼び出し抽出・分類、discover/audit 向け rule/hook 候補生成（evolve Step 10.2 閾値定数を保持。#457 で HOME 隔離すり抜けを修正） | `scripts/lib/tool_usage_analyzer/` |
+| `tool_usage_analyzer` | セッション JSONL からツール呼び出しを抽出・分類し rule/hook 候補を生成 | `scripts/lib/tool_usage_analyzer/` |
 | `trigger-eval-generator` | sessions+usage → skill-creator 互換 evals.json 自動生成 | `trigger_eval_generator.py` |
 | `evolve-skill` | 自己進化パターン（Pre-flight / pitfalls.md）のピンポイント組み込み | skill |
-| `agent-brushup` | エージェント定義の品質診断・改善提案・upstream 監視・model exact-ID pin 検出（#449）+ addyosmani skill anatomy 欠落節の根拠付き改善提案（#63）+ tools 宣言と実付与の乖離検出（`memory:` の Write/Edit 自動付与・#130）+ worker agent の ask-before-fallback 明文化検査（#192） | `agent_quality.py` |
+| `agent-brushup` | エージェント定義の品質診断・改善提案・model exact-ID pin 検出・ask-before-fallback 検査 | `agent_quality.py` |
 | `critical-instruction-compliance` | critical 行抽出+リフレーズ+違反検出+pitfall 自動学習 | `critical_instruction_extractor.py` |
-| `second-opinion` | cold-read セカンドオピニオン（3モード）。codex 検出時は外部 cold-read ルートBも選択可 | skill + agent |
+| `second-opinion` | cold-read セカンドオピニオン（3モード）。codex 検出時は外部ルートBも選択可 | skill + agent |
 | `growth-level` | env_score → Lv.1-10 + 日英称号マッピング | `growth_level.py` |
-| `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug）[ADR-031] | `optimize_history_store.py` |
-| `evolve_decisions` | run envelope 付き emit→drain で並行 run を分離し、未判断を deferred 保持。提案 identity `(skill_path, before_sha)` と判断イベント identity を分離し marker supersede は対象パス単位（N 重記録／accept 永久欠落の3失敗モードを同時回避）+ TTL45日。marker/queue/history の3ロック + drain 単一ロック + 失効 marker GC。flat `result_path` は一意時のみ、書込失敗は `marker_error` で surface [ADR-041, #267, #279, #283, #286, #287, #290, #400, #402] | `evolve_decisions.py` |
-| `file_lock` | ファイル単位の排他ロックと atomic write の単一ソース（`file_lock` / `atomic_write_text`）。decision 状態が跨る marker / queue / optimize_history の read-modify-write がこの2関数を共有する。flock は open file description 単位なので入れ子取得は自己 deadlock する（ロック下から呼ぶ処理は `_locked` 版に分ける）（#287） | `rl_common/file_lock.py` |
-| `evolve_decision_ids` | 提案 identity（`_proposal_id`）と判断イベント identity（`_decision_event_id`）を隣り合わせに置く純関数 module。両者の取り違えが #279→#286→#290 の3連発の根因なので定義を1箇所に集約（#287） | `evolve_decision_ids.py` |
-| `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格（#400） | `evolve_reconcile.py` |
+| `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug） | `optimize_history_store.py` |
+| `evolve_decisions` | run envelope 付き emit→drain で並行 run を分離。提案 identity と判断イベント identity を分離し多重記録/欠落を回避 | `evolve_decisions.py` |
+| `file_lock` | ファイル単位排他ロックと atomic write の単一ソース。ロック下からは `_locked` 版を使い自己 deadlock を回避 | `rl_common/file_lock.py` |
+| `evolve_decision_ids` | 提案 identity と判断イベント identity を隣接定義する純関数 module（取り違え防止） | `evolve_decision_ids.py` |
+| `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格 | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
-| `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込 [ADR-037]。**project スコープ4層防御（#206）**: 全PJ共有ストア corrections.jsonl/auto_memory_queue の他PJ混入を `pj_slug.record_project_match` 単一述語で読み出しフィルタ+enqueue reject+修復ツール `auto_memory_purge.py`（dry-run既定）の4層で遮断 | `auto_memory_*.py` |
+| `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込。project スコープ4層防御で他PJ混入を遮断 | `auto_memory_*.py` |
 | `meta_quality` | スキル追加前の品質フィルタ（CREATE/REVIEW/SKIP） | `meta_quality.py` |
-| `triage_ledger` | SKIP 判断の状態管理（TTL 45日・再発昇格・dry-run 非書込）（#308） | `triage_ledger.py` |
+| `triage_ledger` | SKIP 判断の状態管理（TTL 45日・再発昇格・dry-run 非書込） | `triage_ledger.py` |
 | `constraint_decay` | セッション後半に集中する correction の decay 検出 | `discover/patterns.py` |
-| `negative_transfer` | スキル追加前後の success delta 計測 + 更新コンポーネント別帰属（#288） | `audit/usage.py` |
-| `eval_saturation` | trigger eval の飽和兆候診断（#292） | `eval_saturation.py` |
-| `subgoal_scorer` | BES 後ろ向き分解 — 5 サブゴール中間フィードバック（#253） | `subgoal_scorer.py` |
-| `evolution_operators` | BES 前向き進化探索の決定論演算子（#256） | `evolution_operators.py` |
-| `memory_trace` | episodic 検索エラーの3類型帰属（#254） | `memory_trace.py` |
-| `slop_detector` | AI slop 日英 10 パターンの決定論検出（#255） | `slop_detector.py` |
-| `skill_extractor` | 成功軌跡採掘→スキル候補生成 + 4軸分解 + 3層ノイズ除去（#291, #381, #387）+ failure-rollout マイニング + 失敗の罠軸 (#27) | `skill_extractor/` |
-| `skill_rm` | スキル軸の異種基準統一報酬 — 3軸射影で横断評価（#304） | `fitness/skill_rm.py` |
-| pitfall 自動強制 | pitfalls.md の編集時 lint + commit ゲート（オプトイン）[ADR-027]。lint は ok/drift/danger に加え `not_a_pitfalls_file`（gate スコア表等の非 pitfals データ）も検出し danger 同様ブロック。regression gate の書込先を `references/gate-failures.md` に分離し人間向け pitfalls.md との衝突を根治（#308） | `pitfall_registry.py` + `pitfall-curate/scripts/parse.py` + `genetic-prompt-optimizer/scripts/optimize_core.py` |
-| `agent_team` | エージェント間の役割重複・孤立の決定論検出（#326） | `agent_team.py` |
-| observability contract | 必ず surface すべき行の単一ソース（markdown/構造化 両経路）[ADR-028] | `audit/observability.py` |
-| advisory section 共通枠 | 全 observability section の header/trailer 規約を単一化する2層 helper（`advisory_header`/`finalize` + `build_advisory_section`）+ `_OBSERVABILITY_BUILDERS` 横断の契約テストで silence≠evaluated を構造担保。builder 20個が経由、CUSTOM 8個は据え置き（#115） | `audit/advisory.py` |
-| `advisory_proposals` | detector 結果を副作用なしで decision lane 用 proposal に変換する adapter registry（初期2 detector・#267） | `advisory_proposals.py` |
-| `advisory_decision_log` | advisory 提案を emit→drain lane に載せた際の accept/reject 記録（#284）。専用ストア `advisory_decisions.jsonl` に分離し optimize_history（skill_quality 母集団）を汚さない。reader は audit の `Advisory Decisions` section（detector 別採用率 + accept 0 件 detector の淘汰候補 ⚠） | `advisory_decision_log.py` + `audit/sections_advisory_decisions.py` |
-| `evolve_introspect` | evolve result の自己解析→issue 候補生成（3カテゴリ）[ADR-033, ADR-034] | `evolve_introspect/`（#122 で detectors/render/dedup/helpers に分割・re-export） |
-| `evolve_result_schema` | result JSON の正準スキーマ契約 — impl/doc 両 drift 検出（#375, #379） | `evolve_result_schema.py` |
-| `evolve_consistency` | P1 invariant の runtime self-detect（型 drift のみ）（#377-5） | `evolve_consistency.py` |
-| `hook_drift` | 他ツール追従 hook の陳腐化検出（stale_pin + dead_ref: flow-chain 参照スキルの実在突合、正規化 FP guard 付き #316）[ADR-036] | `hook_drift.py` |
-| `data_dir_migration` | DATA_DIR hook/tool 分裂の一元化 migration（marker ゲート redirect + DuckDB rebuild マージ、`evolve-fleet migrate-data`）。session_store も call-time `resolve_data_dir` へ統一し hook/tool split-brain を根治 + marker 済みでも `needs_migration` 再評価で再分裂を再警告（#137）[#364, ADR-042] | `data_dir_migration.py` |
-| `spec_trigger` | 仕様未更新マージの SessionStart 検出→spec-keeper 提案 [ADR-044] | `spec_trigger.py` |
-| `capture_rate` | correction capture 率（20+ ターン session のうち correction 検出割合）を決定論算出し audit に advisory surface（#421） | `capture_rate.py` |
-| `orphan_store` | writer あり reader なしの jsonl ストアを決定論検出（hooks=writer / scripts+skills=reader 静的突合）（#422） | `orphan_store.py` |
-| `store_registry` | ストア新設の事前契約ゲート — writer/reader/retention 宣言の機械可読 SoT（jsonl/db/json 3形式、writer_locus で batch 書込を stale 突合から除外。`status` active/legacy/dead で write 許可を制御 #55）。`classification`（raw_event/workflow_state/derived_cache/dead）で store の役割 4 分類を SoT 化。#379 Step 4 PR #399 で未登録 live store 11件を宣言バックフィル（dead 0件・「SoR でない」は derived_cache 分類の理由であって非登録の理由にならない）（#430-#434, #55, #379, #399） | `store_registry.py` |
-| `store_write` write barrier | 全ストア書込の単一ゲート — canonical `DATA_DIR/<name>` を内部解決し store_registry の active 登録を runtime guard で照合、登録外は既定 reject（`StoreWriteError`／env `EVOLVE_WRITE_GUARD=warn` で緊急避難／registry 不在は fail-open）。例外口は別名 `store_write_raw`。read（union 寛容）と write（厳格）を分離。kind=json ストア（単一 JSON 丸ごと上書き）への jsonl append は reject（#399） [ADR-049, #55] | `rl_common/store_write.py` |
-| `outcome_metrics` | 行動アウトカム3軸（correction 再発率 / 一発成功率 / rework 率近似）を advisory 表示。一発成功率は `fold_session_error_counts` で distinct session 単位に畳み込み（max 合成）、行数分母と error_count 欠損行の非対称希薄化を根治（#138）。utilization の plugin レイアウト探索修理も同梱 [#423, ADR-046, #138] | `audit/outcome_metrics.py` |
-| `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query）。物理PK+論理UNIQUEで resume 複製を弾く・cwd 由来 pj_slug・evolve/audit batch + evolve-fleet ingest + SessionStart staleness advisory（#430） | `utterance_archive/` |
-| `outcome_attribution` | outcome 3軸（一発成功率 / rework 率 / correction 再発率）を per-skill 帰属し evolve ターゲットランキングへ自動入力 + negative_transfer gate で退行スキルを末尾 rollback（#10）+ RODS reward 分散列（#28）+ reward EMA 列（バッチ跨ぎ符号付き advantage・#64）。dry-run に before/after 順位差分を surface [#433, #10, #28, #64] | `audit/outcome_attribution.py` |
-| `weak_signals` | 暗黙修正シグナルの決定論検出（直後手編集 / permission deny / 言い直し jaccard 0.8 / Esc 中断）→ weak_signals.jsonl レーン。corrections 直入れせず reflect 確認後に昇格。45日 TTL は read 時 age 導出（`is_effectively_expired`）で writer-death 非依存化（#89）（#442, #444, #432） | `weak_signals/` |
-| `correction_semantic` | correction capture の二層化（#431）。utterances.db の dialogue 発話を Haiku がバッチ意味判定（auto_memory 2 相と同型）→ weak_signals(channel=llm_judge) 隔離 + 個人辞書（correction_idioms.jsonl）。フェーズ昇格は human-source のみ駆動（provenance_weight）/ reflect 昇格フロー（--show-weak-signals / --promote-weak）[#431] | `correction_semantic/` |
-| `bootstrap_backlog` | 初回 evolve で既存 weak_signals バックログの消化方式を AskUserQuestion 3 択で選ぶ bootstrap phase（marker で1回きり・slug スコープ厳守・常時 emit）（#443）+ 対象チャネルを content-rich（llm_judge/rephrase/permission_deny）へ拡張（#99） | `correction_semantic/bootstrap_backlog.py` |
-| `judge_runner` / `safe_llm_call` | llm_judge Phase B（意味判定）を対話フロー奥から daily runner の非対話実行へ移設し、2ヶ月ゼロだった供給を復旧（#408）。日次上限は件数/トークンの userConfig 2本、**新しい発話を優先**（TTL 45日で腐るため）。無人 `claude -p` は `safe_llm_call` 一点に集約し4重防御（`--tools ""` / `--safe-mode` / `--strict-mcp-config` / `--settings` deny）、費用は呼び出し**直前**の事前予約方式。詳細は [spec/components-feedback.md](spec/components-feedback.md)（#410） | `correction_semantic/judge_runner.py` + `safe_llm_call.py` |
-| `daily_review` | evolve の「今日の修正確認」phase — 新規 weak_signal を idiom 単位 group 化し最大5件を y/n 確認、promote 成功後のみ既読追記（既読ストア correction_review_seen.jsonl）（#446）。対象チャネルを content-rich（llm_judge/rephrase/permission_deny）へ拡張し決定論チャネルも evolve 一発で昇格可能化、content-poor（esc/手編集）は detector 文脈未保存ゆえ除外し observability 集計に残す（#99） | `correction_semantic/daily_review.py` |
-| `review_channels` | y/n 確認に出す weak チャネルの単一ソース（#99）— `REVIEW_CHANNELS`（content-rich）+ channel 別代表テキスト `signal_text` + `grouping_keywords`（`_strip_path_words` で path 語を除外し over-merge 解消）を bootstrap_backlog/daily_review/promote が共有。`signal_text` は llm_judge チャネル限定で `trim_to_idiom_sentence` による多トピック発言トリムも適用（#253） | `correction_semantic/review_channels.py` |
-| `idiom_autopromote` | confirmed idiom と同テキストの再発 weak_signal を機械昇格（照合は pj_slug × idiom テキスト単位）。安全弁3つ: daily_cap / observability 常時 surface / `evolve-reflect --revoke-idiom` 巻き戻し（#447, ADR-047）。confirmed 化の正準経路は `evolve-reflect --promote-weak` の confirm 配線（#463）。**#379 Step 1 で自動昇格を凍結中**（自動発火実績 0 件のため凍結コスト実質ゼロ。凍結解除まで `autopromote()` は即 no-op、対話昇格 `--promote-weak` は対象外） | `correction_semantic/idiom_autopromote.py` |
-| `measurement_bug` | 複数 PJ で非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface（≥3 PJ・0/None は構造的に除外）（#445, #185） | `audit/measurement_bug.py` |
-| `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ / 今日の昇格成果。閾値は growth_engine の定数が単一ソース（#448） | `growth_report.py` |
-| `results_board`（戦果ボード） | growth-journal harness（結晶化イベント記録・成長ストーリー）削除の置換成果物（#379 Step 4）。新規ストアを作らず optimize_history/corrections を直読みし「手直し回数の増減」「採用した改善（accepted/rejected/pending/excluded）」「取り下げ候補（accepted かつ verdict=REGRESSED）」を決定論表示。audit の Growth Report セクションに組込 | `results_board.py` |
-| `outcome_promotion_readiness` | ADR-046 重み昇格レディネスの4条件決定論判定（分散 / 件数下限 / 方向妥当性 / 予測妥当性#42）— ✓✗ + evidence で advisory surface、全 ✓ で「重み昇格を提案」。session 系分母は session_store union read（db read_only + 未 ingest jsonl）で実効化済み。条件3 は同一 apply の二重 anchor を `(pj,axis,before,after)` dedup で非独立証拠の二重計上から救出（#77）。`per_pj_first_try_success` の分母も `fold_session_error_counts` 共有で distinct session 化（#138）（#461, #469, #42, #77, #138） | `audit/outcome_promotion_readiness.py` |
-| `predictive_validity` | 重み昇格レディネスの第4条件（#42）— skill_activations×sessions の per-skill 一発成功率を ts 中央値で in/out-of-sample 分割し、共通出現 skill（≥5）の順位を純Python Spearman で相関。rho≥0.5 で pass、insufficient_data は「データ不足」明示で捏造せず保守的に昇格ブロック（誤昇格抑制）。集計平均順位の分布外転移を検出（arXiv 2606.19704） | `audit/predictive_validity.py` |
-| `reward_ema` | バッチ跨ぎ符号付き advantage の EMA 累積（MAA・α=0.3）で「通時で安定して効くか」を RODS（単一スナップショット分散・#28）と相補判定。新ストア `reward_ema.jsonl`（active・batch writer）。読み=phases_diagnose の advisory 列（順位非影響）・書き=`evolve --drain`（#64, arXiv 2606.20475） | `audit/reward_ema.py` |
-| `subagent_traces` | subagent 内部軌跡ストア（#38）— transcript の内部 tool error/やり直しを per-agent_type で advisory 表示し親 error_count のみの outcome 帰属盲点を塞ぐ。ストア `subagent_traces.jsonl`（active・batch）。⚠＝一発成功率<0.5 or 平均 tool error≥5（#76）。増分 ingest は `evolve --drain` 境界（#135）。`write_trace(data_dir=)` で read/write 隔離を対称化（#140）。委任プロンプト先頭300字を `delegation_prompt` として保持し audit に直近委任150字を表示、事後監査可能化（#200） | `subagent_traces/` + `audit/sections_subagent_traces.py` |
-| `subagent_noise` | subagents.jsonl の agent_type ノイズ内訳を advisory 分解表示（#142-8b）— 当PJスコープで空文字/ID形に分け件数・率・最古/最新 timestamp を surface。判定は `noise_agent_type_kind`（`is_noise_agent_type` と同基準の種別付き単一ソース）。最新ノイズが直近7日内なら ⚠（live writer 疑い）、古ければ ℹ（residue・現行 writer は #36/#44 で guard 済ゆえ表示のみ・reader は既に除外・スコア非関与）。ノイズ0は None（無ければ非表示） | `audit/sections_subagent_noise.py` + `rl_common/detection.py` |
-| `worker_takeoff` | subagent の「completed 報告」↔実際の完遂の意味的乖離を決定論検知（worker-takeoff、closes #161）。`last_assistant_message`（SubagentStop hook 記録の最終 assistant テキスト）に①完了署名（`=== ... ===` マーカー/報告見出し）欠如 ②前向きナレーション終端（行末 `:` / Now・Next・Let's 系）の2シグナル AND で判定（①単独では非flag・保守側）。500字打ち切り到達時は判定不能で除外。suspected>0 の agent_type のみ advisory 表示（0件は沈黙）。新ストアなし・read-time 導出 | `rl_common/detection.py`(`detect_takeoff_divergence`) + `audit/sections_takeoff.py` |
-| `verbosity` | 回答冗長性の学習ループ（#75）— Stop hook `record_verbosity.py`（ゼロLLM）→ `verbosity/judge.py`（Haiku バッチ判定）が冗長を weak_signals `channel=verbosity` に emit（reflect 昇格に相乗り）。多発パターンから rules/concise.md 追記案を提示（auto-apply しない）。`audit/sections_verbosity` が冗長率を advisory 表示 | `verbosity/` + `hooks/record_verbosity.py` + `audit/sections_verbosity.py` |
-| `cross_pj_priority` | confirmed idiom の PJ 横断優先提示 — 他 PJ 承認済みと同テキストの確認 group に `cross_pj_confirmed` ラベル + 先頭表示（提示のみ・自動承認しない、normalize は autopromote と1関数共有）（#462） | `correction_semantic/cross_pj_priority.py` |
-| `testpaths_coverage` | pytest 収集漏れの決定論検出 — pytest.ini の testpaths 宣言と実 tests/ ツリーを静的突合し、収集されない tests/ を audit に surface（bare pytest 全件収集の再発防止ゲート）（#468） | `testpaths_coverage.py` |
-| `doc_budget` | hot ドキュメント（SPEC.md/CLAUDE.md/spec/\*\*.md）の byte 予算・セクション別 byte 予算・リンク実在突合を決定論検出（#318 の再発防止・spec-keeper MUST の起動依存を解消）。CLAUDE.md 60KB/40KB は新規暫定値、他は spec-keeper 既存定義を単一ソース化。audit advisory + `evolve-dogfood-gate --layer light` の非ブロッキング advisory に配線（#319） | `doc_budget.py` + `audit/sections_doc_budget.py` |
-| `plugin_self` origin | プラグイン本体リポジトリ自身の repo 直下 `skills/` を evolve 診断対象化 — `.claude-plugin/plugin.json` 検出時のみ find_artifacts が追加スキャン、評価は custom 同等・auto-apply は protected（人間承認必須）に降格（#185） | `skill_origin.py` |
-| `scaffold_advisory` | advisory 3点セット追加の scaffold — #115 共通枠を使った observability builder stub のテンプレ生成 + 多点配線チェックリストで keyset snapshot 追従漏れ等のミス面を下げる。`bin/evolve-scaffold-advisory <name> [--with-store] [--write]`（既定 dry-run）。(c) 低トラフィック畳み込みは既存 fold_clean_observability で対応済（#118 (b)） | `scaffold_advisory.py` |
-| `dogfood gate` | 通し評価ゲート `bin/evolve-dogfood-gate` — Layer1: dry-run SHA256 不変 + 非 dry-run store 差分 + 実PJ ingest E2E / Layer2: report invariants / Layer3: SKILL.md コードブロック実行。`--layer light` を pre-push hook が非ブロッキング警告で自動実行（#496, #513, #517, #518） | `scripts/lib/dogfood/`, `scripts/git-hooks/` |
-| `sibling_copy_guard` | diff-scoped 兄弟コピー検出（pitfall #40 再発防止）— commit/push 対象の削除行と同一正規化形のコードが repo 内に未変更で残っていないか検出。`pre-push.local` に非ブロッキング警告配線（merge push時は非merge commit数上限15でノイズを抑制、#210） | `scripts/lib/sibling_copy_guard.py` + `scripts/git-hooks/pre-push.local` |
-| `evolve-release-sync` | リリース後のローカルプラグイン自動同期 `bin/evolve-release-sync` — marketplace は Directory source（ローカル作業ディレクトリ）を見るため、リリースが origin/main に入ってもローカル main を pull しないと `claude plugin update` が古いバージョンを返す穴を塞ぐ。`tag --push` 直後に「ローカル main ff → marketplace update → plugin update」を一括実行。worktree から呼んでも git-common-dir で本体 repo を解決、main 以外チェックアウト中は exit 2。`--dry-run` 対応。`commit-version.md` のリリース手順に組込 | `bin/evolve-release-sync` |
-| `pj_slug` | PJ slug 導出の単一ソース — `resolve_pj_slug`（git-common-dir 親・authoritative）/ `pj_slug_fast`（hooks hot path）/ `pj_id_to_slug`（CC pj_id → 実 dir 貪欲復元・#68）。read/write 同一関数で worktree slug 食い違いを防ぎ、sibling worktree の幻 slug は SessionStart cache で根治（#492, #29） | `pj_slug.py` + `hooks/restore_state.py` |
-| weak_signals drain 永続化 | 決定論3チャネルの永続化を `evolve --drain` の apply 境界に配線（`persist_weak_signals_drain`）— 標準フロー＝dry-run 分析のみで書込経路が構造的に死んでいた #484 の根治。pending marker の dry-run 書込は #402/ADR-041 の意図された設計（#513 で復元） | `weak_signals/batch.py` |
-| reconcile_surfaced drain 永続化 | remediation 連続提示 count marker（`remediation_surfaced/<slug>.json`）の書込＋閾値到達 record_rejection を `evolve --drain --result-json` の apply 境界へ移設（#186）— phases は dry-run で `persist=False` の表示用判定のみ。標準フロー＝dry-run のみで marker が永久未書込＝閾値未達で #494 の自動却下が全 PJ 死蔵していた根治。`_tracked` 再構築は `build_reconcile_tracked` で phases/drain 単一ソース化（weak_signals #484 と同型） | `cli.py` + `_env.py` + `phases_remediate.py` |
-| `idiom_filter` | 過汎用 idiom の FP guard — 3 ゲート（最小長 floor 8 / 日常語 stopword / 文脈固有トークン）を `idiom_eligible` に集約し confirmed→idiom_autopromote の FP 製造を遮断。`confirmable_idiom` を bootstrap/daily group に emit し SKILL.md の AskUserQuestion で idiom 単位拒否を可能化（#527, #527-4） | `correction_semantic/idiom_filter.py` |
-| `representative` | correction group の representative 品質改善 — `user_only_text` が assistant 引用ブロックを strip し user 発話のみ抽出、`prev_action_summary` が直前 AI 行動 1 行要約を evidence に添える（#528-3 部分）、`trim_to_idiom_sentence` が多トピック発言の evidence を idiom セグメントへトリム（llm_judge 限定・#253） | `correction_semantic/representative.py` |
-| remediation 参照リンク相対化 | separation emit prompt のマシン固有絶対パスを PJ ルート相対化（`reference_link_for_prompt`）+ `references/remediation.md` に emit/ingest 6 関数の実 signature 表（#524） | `remediation/fixers_llm.py` |
-| `multiview_eval` | evolve 提案を4視点（再利用可能 / 過学習疑い / 退行リスク / コスト増）で決定論分類し audit/evolve に advisory surface。chaos/outcome_attribution/negative_transfer を join、replay は将来フックのみ（#564, tech-eval SEAGym） | `audit/multiview_eval.py`, `audit/sections_multiview.py` |
-| `relevance_gate` | 過去経験（weak_signal/idiom）提案を現在文脈との関連度（jaccard 流儀）でゲートし、無関係を理由付きで `suppressed` 分離。`evolve-reflect --show-weak-signals --context` に配線（#565, tech-eval FinAcumen） | `correction_semantic/relevance_gate.py` |
-| `report-feedback` | evolve/audit レポートを LLM メタレビューし evolve-anything 自身への改善 issue を todoroki-godai/evolve-anything に半自動起票するスキル。決定論 `evolve_introspect` が拾えない「読んで気づく」改善（表示・提案の質・バグ・UX）が対象で、その dedup/render 配線を再利用。旧 `feedback` スキルの後継として統合・削除 | `skills/report-feedback/`, 契約 `scripts/lib/tests/test_report_feedback_contract.py` |
-| `paired_trajectory` | paired trajectory auditing（観測版）— 同一タスク種別を「スキル使用群 vs 非使用群」に分け既存テレメトリからアウトカム差を決定論対照集計し advisory surface（能動再実行なし）。outcome_attribution/multiview_eval/negative_transfer と相補（#15） | `audit/sections_paired.py` + `audit/usage.py` |
-| recall `[[link]]` 1-hop | `evolve-fleet recall` の芋づる想起 — fact 本文の `[[name]]` を `Fact.links` 抽出しキーワードヒット fact の同一PJ内 1-hop 先も加算（dangling 無視・重複排除・スコア外）。ADR-025 決定論検索整合（#11） | `fleet/recall.py` |
-| recall validity-aware ranking | grounding metadata（valid_from/superseded_at/decay_days）を `recall._score` が消費し stale/superseded memory を降格（superseded>stale・stack しない）。ハード除外せずフォールバック保持＝RaMem(iii)。memory_temporal の既存 API 再利用・SessionStart は #18 で既配線ゆえ対象外（#74） | `fleet/recall.py` |
-| reinforce_memory 配線 | dead-code だった `memory_temporal.reinforce_memory()` を recall ヒット時（CLI opt-in でrecall純粋性維持）と SessionStart MEMORY 注入時（有効 memory のみ・stale skip）に本番配線＝忘却曲線強化を実効化（#18） | `memory_temporal.py` + `fleet/recall.py` + `hooks/instructions_loaded.py` |
-| temporal provenance 書込配線 | APEX-MEM の `valid_from`+`source_correction_ids`（memory→correction 因果リンク）write 側休眠配線を活性化 — `write_temporal_metadata` を broker `ingest_memory_results` が importance 採点の前に発火（純加算・stale/superseded 非発火）。項目5: session END record に `correction_count`（#2） | `memory_temporal.py` + `auto_memory_broker.py` + `hooks/session_summary.py` |
-| subagents/errors 測定バグ修正 | subagents.jsonl の `agent_type` 空ノイズ（約58%）を writer/reader 二重防御で遮断（#36）+ **ID 形ノイズ（pure hex 等・harness が agent_type に ID を渡す）を `rl_common.is_noise_agent_type` 単一ソースで writer+reader 2箇所同時遮断（#44）** + errors.jsonl の `error_type` 常時 unknown を `error_message` 本文から決定論分類（#37）。senpai 独立検証で「集計を分解せず結論した誤診」由来の実バグとして発見・#44 は実 PJ dogfood で発見 | `hooks/subagent_observe.py` + `fleet/collectors.py` + `fanout_cost.py` + `hooks/stop_failure.py` + `rl_common/detection.py` |
-| `memory_capability` | 記憶操作を read/use/write/maintain 観点で advisory 評価する observability section（OPD-Evolver #19）。reason 非永続化のため read/use 統合の3軸（write=記憶量 / maintain=健全度 / use_read=活性）。memory dir 解決は `resolve_cc_memory_dir` 単一ソース（CC パスエンコード・#18 と共有。`resolve_pj_slug` repo-basename slug を使うと名前空間食い違いで常時沈黙する dogfood 発見バグの根治） | `scripts/lib/memory_capability.py` + `audit/sections_memory.py` + `pj_slug.resolve_cc_memory_dir` |
-| `skill_vuln_scan` | 取り込みスキルの静的脆弱性スキャン（SkillSpector 型）— `.md`/`.sh`/`.bash` を決定論・LLM 非依存で行スキャンし remote_exec/secret_exfil/destructive/prompt_injection/overbroad_tools を検出し audit observability に surface。combo 必須で FP 較正（`gh api ... | base64 -d` 等は非検出・#13）+ 同一スコープ内のマルチステップ攻撃系列（fetch→変数/ファイル経由 exec）の静的フロー検出（#123） | `skill_vuln_scan.py` + `audit/sections_skill_vuln.py` |
-| `fanout_cost` | fan-out 費用対効果の advisory observability section（#14, arXiv 2606.13003）。cost（fan-out session 率 / 平均 subagent / agent_type 内訳・token は体数 proxy）は非スパースで常時算出、advantage（fan-out 群 vs single 群の一発成功率 delta）は #15 同様スパースゆえ各群 ≥5 の floor ゲート付き。subagents.jsonl(agent_type 空除外 #36) + sessions(union read #469) を `_normalize_pj` で当 PJ スコープ | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
-| `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出（human/machine 評価源の蓄積偏り・保守閾値, #73） | `audit/memory_contagion.py` |
-| `memory_guard` | auto-memory 書込境界の runtime 記憶汚染検出（#108）— skill_vuln_scan の較正済みパターンを再利用し prompt_injection / secret_exfil の2カテゴリのみ reject。broker の `ingest_memory_results` が write 前に検査（fail-open・`EVOLVE_MEMORY_GUARD=warn` で降格）。**#93**: 同名エントリの書込を TRUSTMEM 型決定論遷移検証（coverage/preservation/fidelity）でゲート。新ストア `memory_transition_checks.jsonl`（active・batch）。maintain 軸に reject/検査件数を surface | `memory_guard.py` + `auto_memory_broker.py` + `memory_capability.py` + `audit/sections_memory.py` |
-| `fleet_queue` | 学習素材ベースの evolve 待ち列挙 `evolve-fleet queue`（#79）— material_count = weak 未処理（content-rich channel 限定・#113）+ 前回 evolve 以降の新規 corr が閾値以上（既定5）の PJ を決定論・ゼロ LLM で列挙。新ストア `evolve-queue-state.jsonl`（active・batch writer）。dead/phantom/未帰属 corr を footer で透明化（#85-#96） | `fleet/queue.py` + `fleet/queue_state.py` + `fleet/cli.py` + `fleet/collectors.py` + `fleet/formatters.py` |
-| `queue_verify` | queue の verify 待ち（直近 accept 済・未検証の提案）を read 時純粋導出 + queue 全体状態ラベル（READY/SETUP_REQUIRED/EMPTY）を付与（#267）。exposure=最新 accept run 記録時刻以降の distinct session 数、TTL 14日で read 時失効、material 閾値未満でも verify 待ちなら queue 昇格。新ストアは作らない | `fleet/queue_verify.py` |
-| `fleet_detect` | 全 PJ 横断の決定論 weak_signals 検出 `evolve-fleet detect`（#304）— 素材生成が `evolve --drain` にしか配線されず「回さない→素材ゼロ→queue EMPTY→回さない」の鶏卵ループだったのを根治。daily runner step 1c に配線し evolve 非依存で毎朝蓄積、`--backfill` で過去分回収。`detect_permission_deny` の PJ 無フィルタ（全PJ同値の measurement_bug 指紋）も修正 | `fleet/detect.py` + `bin/evolve-daily-run` |
-| `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知（#80 Phase 1b）— launchd で `fleet ingest`→`fleet tokens --backfill`→`fleet queue --json` を毎朝1回走らせ `evolve-queue.json`（derived_cache）に保存、SessionStart が待ち PJ を systemMessage で通知。`proposals`（改善案 digest・#409）も同時保存し、SessionStart が既読フィルタ後の改善案を additionalContext で AskUserQuestion 誘導。無人は決定論パイプラインまで＝適用は対話で人間承認。`bin/evolve-daily-install` + `bin/evolve-daily-run` | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
-| `icebox_notice` | daily runner の icebox 棚卸し気づきトリガー（#194）— runner 第4ステップが `gh issue list --label icebox --state closed`（read-only・closedAt のみ・timeout 30s・fail-open 4種で既存ファイル非破壊）を集計し `icebox-status.json` に保存、SessionStart hook が最古 N 日超（既定30日・`audit_interval_days` と同周期。userConfig `icebox_review_threshold_days` で調整可）で「icebox N件・最古M日」を systemMessage 1行通知（個別列挙しない・閾値未満は無音） | `scripts/lib/daily/icebox_notice.py` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
-| `icebox_reconcile` | icebox（凍結 issue）棚卸しの3レーン決定論分類（#352, #353）— reopen-when YAML（source/metric/op/threshold）を実ストアと決定論突合し成立/観測器不在/失効候補に分類。daily runner が `icebox-verdicts.json` を生成、SessionStart が成立分のみ名指し通知（既読ストア `icebox_verdict_seen.jsonl`）、audit advisory（gh非呼出）が観測器不在/失効候補を surface。型検証・untrusted echo対策・fingerprint安定性・gh --limit truncation可視化・file_lock排他をPR#353で是正 | `scripts/lib/icebox_reconcile.py` + `bin/evolve-daily-run` + `scripts/lib/audit/sections_icebox_reconcile.py` |
-| `artifacts_hygiene` | artifact 衛生5検出器（#124 グローバル CLAUDE.md 空/未存在 / #125 SKILL.md 欠落 dir / #126 バックアップ残置 / #129 skill 名跨 scope 重複・symlink wrapper 除外 / #155 plugin と重複するグローバル hook 残骸・同一イベント×正規化 basename 一致）を #115 advisory 共通枠で observability に surface。2026-07-03 PC 環境手動監査の検出器ギャップ起票分（決定論・LLM 非依存） | `audit/sections_artifacts.py` |
-| `memory_hygiene` | memory dir 衛生3検出器（#127 MEMORY.md 索引孤児 / #128 auto-memory frontmatter スキーマ検証 / #131 旧 PJ memory 完全重複残骸=fleet 横断・tar 退避手順提案のみ auto-apply なし）。3件とも clean 時非表示・走査は *.md のみで jsonl 非対象 | `memory_index_orphan.py` + `memory_schema_check.py` + `memory_dup_residue.py` + `audit/sections_memory.py` |
-| `memory_stale_refs` | audit の Memory Health（stale reference 検出）がスラッシュ区切り列挙「A.md/B.md/C.md」を単一ネストパスと誤読していた誤検知を修正 — 列挙判定を分離し過半数存在ゲート + 実ディレクトリ優先で非ファイル列挙・偶然一致 FP を除外（#252） | `path_extractor.py` + `audit/memory.py` |
-| `invalid_frontmatter` | YAML frontmatter が壊れて CC 発火不能なスキルを直接 surface する observability section（#167）。`parse_frontmatter` が YAMLError を握り潰し `{}` 返却する穴を検出コア `detect_frontmatter_error`（純関数・`parse_frontmatter` 無改変）で塞ぎ、effort_detector が invalid を skip（missing_effort 誤分類根治・#166 相互作用）+ advisory section（⚠・clean時沈黙・auto-fix なし人手提案）。scope は `.claude/skills/**/SKILL.md` | `frontmatter.py` + `effort_detector.py` + `audit/sections_invalid_frontmatter.py` |
-| `self_contamination` | 自己汚染ハルシネーション指紋（A=生タグ漏出 / B=偽 system-reminder / C-lite=汚染宣言×tool_result 原文非在）を transcript 走査で恒久計測する Layer 2 observability section（ゼロLLM・read-only・hook/store 新設なし）。tool_result 原文と assistant text/thinking を厳密分離し byte 照合、operational/話題PJ 分離集計、clean 時沈黙。live 抑止 Layer 1 hook は要否をこの計測で判断 | `self_contamination_scan.py` + `audit/sections_self_contamination.py` |
-| `evolve-tier` | モデルティア（HEAD/HARD/NORMAL/MECH/REVIEW ↔ model/effort）の正典を `~/.claude/model-tiers.json` に一元化する CLI（#193）— `set`（正典更新）/`sync [--apply]`（agent frontmatter・settings.json・routing rule マーカーへ反映、既定 dry-run・冪等）/`drift`（stale なモデルエイリアスの散文残存を advisory 検出）。`agent_tier` の gate は call-time でこの config を参照 | `bin/evolve-tier` + `tier_policy.py` + `tier_policy_sync.py` + `tier_policy_drift.py` + `tier_policy_cli.py` |
-| `evaluation_provenance` | 評価スコアに紐づく実行条件（model / effort / tool policy / plugin version）の記録契約。envelope 単一ソース + 責務分離4段（producer が捕捉 → 共通ビルダーが正規化 → 永続化境界で補完 → store はそのまま append）。不明値は推測せず None、決定論評価に `judge` を付けない。配線先は constitutional の layer cache 単位 / optimize_history の 2 writer（judge_audit writer は #379 Step 4 で削除済み）。集約は model 単独でなく harness tuple で混在判定。組立失敗時も unknown で残す。新ストア・barrier 変更・遡及埋めなし（#309） | `scripts/lib/evaluation_provenance.py` |
-| `skill_reachability` | SKILL.md 散文が宣言する callable（`` `func(args)` `` 形）が production コードから到達不能（#170 ゾンビ宣言の再発防止・closes #191）かを AST 静的解析で決定論検出。caller 判定は scripts/\*\*.py の参照（import エイリアス解決込み）+ SKILL.md fenced code block テキスト一致の両方。ambiguous（複数定義）/ unresolved（自コードベースに定義なし＝stdlib/CLI等）は判定除外。実較正で真のゾンビ11件検出（false positive 0）。audit advisory + dogfood gate light 非ブロッキング警告 | `skill_declaration_reachability.py` + `audit/sections_skill_reachability.py` + `dogfood/cli.py` |
-| `fleet_propose` | queue（#79/#80）の待ち PJ に `run_evolve(dry_run=True)` を順次実行し提案を集約レポート化する `bin/evolve-fleet propose`（closes #81）。llm-batch-guard 承認ゲート（対象PJ・material_count proxy・使用モデル提示 → y/n、`--yes`可）+ `evolve_decisions`/`optimize_history_store` 既存 API で reject 済み提案の再提示を抑制。出力 `evolve-proposals-<date>.md`+`.json`（read専用派生物・`.json` は store_registry に derived_cache 登録済み・`.md` は宣言対象外）。1PJ失敗は他を止めない | `fleet/propose.py` + `fleet/cli_propose.py` |
-| `fleet_pr` | 承認済み evolve 提案を executor 別の repo 外 worktree で commit→push→PR 化。path allowlist・push account guard を強制し、適用とマージは人間が行う（#82, #268） | `fleet/pr.py` + `fleet/cli_pr.py` |
-| `agent_coordination` | Claude Code primary／Codex opt-inのtop-level executor lane管理。`start`がownership＋repo外worktreeをatomic取得、`handoff`がSHA固定証拠をgit-common-dirへ保存、`finish`はlaneのみ解放。fleet PR stagingもpath allowlist＋cached diff検証へ移行（#268） | `agent_coordination/` + `bin/evolve-agent-task` + `docs/agent-contract/` |
-| `codex_config_cleanup` | 既知4カテゴリをauditし、`<repo>/.Codex/`と`~/.Codex/`を文脈別の正しい宛先へ直す等、復元先が一意な指紋だけをplan/apply。裸の`.Codex/`と`Codex Code`はaudit-only（#268） | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
-| `runtime_telemetry` | usage/sessions/errorsのhook recordに`runtime=claude|codex`を較正追加。`runtime-summary`はsessionsを正準session_store（DB＋live JSONL union）から読みstore別・runtime別に分離表示。Codex hook本配線はpayload fixture取得まで保留（#268） | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
-| `codex_usage` | `evolve-fleet status`/`tokens` に codex CLI（`~/.codex/state_5.sqlite`）利用状況を advisory 表示 — PJ別セッション数/tokens_used合計/最終利用時刻、read-only URI + 2段fail-open（DB不在/スキーマ相違は無音、ロック中は警告1行）。CC 側 token_usage とは単位・粒度が異なるため合算しない（#245） | `fleet/codex_usage.py` + `fleet/formatters.py` |
+| `negative_transfer` | スキル追加前後の success delta 計測 + 更新コンポーネント別帰属 | `audit/usage.py` |
+| `eval_saturation` | trigger eval の飽和兆候診断 | `eval_saturation.py` |
+| `subgoal_scorer` | BES 後ろ向き分解 — 5 サブゴール中間フィードバック | `subgoal_scorer.py` |
+| `evolution_operators` | BES 前向き進化探索の決定論演算子 | `evolution_operators.py` |
+| `memory_trace` | episodic 検索エラーの3類型帰属 | `memory_trace.py` |
+| `slop_detector` | AI slop 日英 10 パターンの決定論検出 | `slop_detector.py` |
+| `skill_extractor` | 成功軌跡採掘→スキル候補生成 + 4軸分解 + 3層ノイズ除去 + 失敗ロールアウトのマイニング | `skill_extractor/` |
+| `skill_rm` | スキル軸の異種基準統一報酬 — 3軸射影で横断評価 | `fitness/skill_rm.py` |
+| pitfall 自動強制 | pitfalls.md の編集時 lint + commit ゲート（オプトイン）。danger 判定は commit をブロック | `pitfall_registry.py` + `pitfall-curate/scripts/parse.py` + `genetic-prompt-optimizer/scripts/optimize_core.py` |
+| `agent_team` | エージェント間の役割重複・孤立の決定論検出 | `agent_team.py` |
+| observability contract | 必ず surface すべき observability 行の単一ソース（markdown/構造化 両経路） | `audit/observability.py` |
+| advisory section 共通枠 | observability section の header/trailer 規約を単一化する共通 helper。20個の builder が経由 | `audit/advisory.py` |
+| `advisory_proposals` | detector 結果を副作用なしで decision lane 用 proposal に変換する adapter registry | `advisory_proposals.py` |
+| `advisory_decision_log` | advisory 提案の emit→drain lane での accept/reject を専用ストアに記録。optimize_history とは別ストアに分離 | `advisory_decision_log.py` + `audit/sections_advisory_decisions.py` |
+| `evolve_introspect` | evolve result の自己解析→issue 候補生成（3カテゴリ） | `evolve_introspect/`（#122 で detectors/render/dedup/helpers に分割・re-export） |
+| `evolve_result_schema` | result JSON の正準スキーマ契約 — impl/doc 両 drift 検出 | `evolve_result_schema.py` |
+| `evolve_consistency` | P1 invariant の runtime self-detect（型 drift のみ） | `evolve_consistency.py` |
+| `hook_drift` | 他ツール追従 hook の陳腐化検出（stale_pin + dead_ref、FP guard 付き） | `hook_drift.py` |
+| `data_dir_migration` | DATA_DIR hook/tool 分裂の一元化 migration。marker 済みでも再分裂を再警告 | `data_dir_migration.py` |
+| `spec_trigger` | 仕様未更新マージの SessionStart 検出→spec-keeper 提案 | `spec_trigger.py` |
+| `capture_rate` | correction capture 率を決定論算出し audit に advisory surface | `capture_rate.py` |
+| `orphan_store` | writer あり reader なしの jsonl ストアを決定論検出 | `orphan_store.py` |
+| `store_registry` | ストア新設の事前契約ゲート — writer/reader/retention 宣言の機械可読 SoT。`status` が write 許可を制御 | `store_registry.py` |
+| `store_write` write barrier | 全ストア書込の単一ゲート。store_registry の active 登録外は既定 reject（例外口 `store_write_raw`） | `rl_common/store_write.py` |
+| `outcome_metrics` | 行動アウトカム3軸（correction 再発率/一発成功率/rework率）を advisory 表示 | `audit/outcome_metrics.py` |
+| `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query） | `utterance_archive/` |
+| `outcome_attribution` | outcome 3軸を per-skill 帰属し evolve ターゲットランキングへ自動入力。負の転移は末尾 rollback | `audit/outcome_attribution.py` |
+| `weak_signals` | 暗黙修正シグナルの決定論検出→weak_signals.jsonl レーン。reflect 確認後に corrections へ昇格 | `weak_signals/` |
+| `correction_semantic` | correction capture の二層化。utterances.db の発話を Haiku がバッチ意味判定し weak_signals へ隔離 | `correction_semantic/` |
+| `bootstrap_backlog` | 初回 evolve で weak_signals バックログの消化方式を AskUserQuestion 3択で選ぶ bootstrap phase | `correction_semantic/bootstrap_backlog.py` |
+| `judge_runner` / `safe_llm_call` | llm_judge の意味判定を daily runner の非対話実行へ移設。無人呼び出しは `safe_llm_call` に一点集約し4重防御、費用は呼び出し直前に事前予約 | `correction_semantic/judge_runner.py` + `safe_llm_call.py` |
+| `daily_review` | evolve の「今日の修正確認」phase — 新規 weak_signal を最大5件 y/n 確認し promote | `correction_semantic/daily_review.py` |
+| `review_channels` | y/n 確認に出す weak チャネルの単一ソース。content-rich チャネルのみ対象 | `correction_semantic/review_channels.py` |
+| `idiom_autopromote` | confirmed idiom と同テキストの再発 weak_signal を機械昇格。**#379 Step1 で自動発火は凍結中** | `correction_semantic/idiom_autopromote.py` |
+| `measurement_bug` | 複数 PJ の非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface | `audit/measurement_bug.py` |
+| `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ | `growth_report.py` |
+| `results_board`（戦果ボード） | growth-journal harness 削除の置換成果物。optimize_history/corrections を直読みし戦果を決定論表示 | `results_board.py` |
+| `outcome_promotion_readiness` | 重み昇格レディネスの4条件決定論判定。全 ✓ で「重み昇格を提案」 | `audit/outcome_promotion_readiness.py` |
+| `predictive_validity` | 重み昇格レディネス第4条件 — in/out-of-sample の順位相関で予測妥当性を判定 | `audit/predictive_validity.py` |
+| `reward_ema` | バッチ跨ぎ符号付き advantage の EMA 累積で通時の安定効果を判定 | `audit/reward_ema.py` |
+| `subagent_traces` | subagent 内部軌跡ストア — tool error/やり直しを per-agent_type で advisory 表示 | `subagent_traces/` + `audit/sections_subagent_traces.py` |
+| `subagent_noise` | subagents.jsonl の agent_type ノイズ内訳を advisory 分解表示 | `audit/sections_subagent_noise.py` + `rl_common/detection.py` |
+| `worker_takeoff` | subagent の「completed 報告」↔実際の完遂の意味的乖離を決定論検知 | `rl_common/detection.py`(`detect_takeoff_divergence`) + `audit/sections_takeoff.py` |
+| `verbosity` | 回答冗長性の学習ループ。Haiku バッチ判定が weak_signals へ emit、auto-apply しない | `verbosity/` + `hooks/record_verbosity.py` + `audit/sections_verbosity.py` |
+| `cross_pj_priority` | confirmed idiom の PJ 横断優先提示（提示のみ・自動承認しない） | `correction_semantic/cross_pj_priority.py` |
+| `testpaths_coverage` | pytest 収集漏れの決定論検出 — testpaths 宣言と実 tests/ ツリーを静的突合 | `testpaths_coverage.py` |
+| `doc_budget` | hot ドキュメントの byte 予算・セクション別予算・リンク実在突合を決定論検出 | `doc_budget.py` + `audit/sections_doc_budget.py` |
+| `plugin_self` origin | プラグイン本体 repo 直下 skills/ を診断対象化。auto-apply は人間承認必須に降格 | `skill_origin.py` |
+| `scaffold_advisory` | advisory 3点セット追加の scaffold — builder stub 生成 + 配線チェックリスト | `scaffold_advisory.py` |
+| `dogfood gate` | 通し評価ゲート — 3層検査（dry-run 不変/report invariants/コードブロック実行）。`--layer light` は pre-push で非ブロッキング自動実行 | `scripts/lib/dogfood/`, `scripts/git-hooks/` |
+| `sibling_copy_guard` | diff-scoped 兄弟コピー検出。pre-push に非ブロッキング警告配線 | `scripts/lib/sibling_copy_guard.py` + `scripts/git-hooks/pre-push.local` |
+| `evolve-release-sync` | リリース後のローカルプラグイン自動同期。`tag --push` 直後に実行 | `bin/evolve-release-sync` |
+| `pj_slug` | PJ slug 導出の単一ソース。read/write 同一関数で worktree slug 食い違いを防止 | `pj_slug.py` + `hooks/restore_state.py` |
+| weak_signals drain 永続化 | 決定論3チャネルの永続化を `evolve --drain` の apply 境界に配線。pending marker の dry-run 書込は意図された設計（消さない） | `weak_signals/batch.py` |
+| reconcile_surfaced drain 永続化 | remediation 連続提示の count marker 書込と閾値到達時の自動却下を `evolve --drain` の apply 境界へ移設 | `cli.py` + `_env.py` + `phases_remediate.py` |
+| `idiom_filter` | 過汎用 idiom の FP guard — 3ゲートで confirmed→idiom_autopromote の FP 製造を遮断。SKILL.md の AskUserQuestion で idiom 単位拒否も可能 | `correction_semantic/idiom_filter.py` |
+| `representative` | correction group の representative 品質改善 — user 発話のみ抽出・直前行動要約を添付 | `correction_semantic/representative.py` |
+| remediation 参照リンク相対化 | separation emit prompt のマシン固有絶対パスを PJ ルート相対化 | `remediation/fixers_llm.py` |
+| `multiview_eval` | evolve 提案を4視点（再利用可能/過学習疑い/退行リスク/コスト増）で決定論分類 | `audit/multiview_eval.py`, `audit/sections_multiview.py` |
+| `relevance_gate` | 過去経験の提案を現在文脈との関連度でゲートし、無関係を理由付きで `suppressed` 分離 | `correction_semantic/relevance_gate.py` |
+| `report-feedback` | evolve/audit レポートを LLM メタレビューし改善 issue を半自動起票 | `skills/report-feedback/`, 契約 `scripts/lib/tests/test_report_feedback_contract.py` |
+| `paired_trajectory` | スキル使用群 vs 非使用群でアウトカム差を決定論対照集計（能動再実行なし） | `audit/sections_paired.py` + `audit/usage.py` |
+| recall `[[link]]` 1-hop | `evolve-fleet recall` の芋づる想起 — fact 本文の `[[link]]` を1-hop 先まで加算 | `fleet/recall.py` |
+| recall validity-aware ranking | stale/superseded memory を validity metadata で降格（ハード除外はしない） | `fleet/recall.py` |
+| reinforce_memory 配線 | dead-code だった `reinforce_memory` を recall/SessionStart 注入時に本番配線（CLI opt-in で recall 純粋性維持） | `memory_temporal.py` + `fleet/recall.py` + `hooks/instructions_loaded.py` |
+| temporal provenance 書込配線 | APEX-MEM の valid_from/source_correction_ids write 側配線を活性化。importance 採点前に発火（純加算、stale/superseded 非発火） | `memory_temporal.py` + `auto_memory_broker.py` + `hooks/session_summary.py` |
+| subagents/errors 測定バグ修正 | subagents.jsonl の agent_type ノイズを writer/reader 二重防御で遮断 + errors.jsonl の error_type unknown を決定論分類で修正 | `hooks/subagent_observe.py` + `fleet/collectors.py` + `fanout_cost.py` + `hooks/stop_failure.py` + `rl_common/detection.py` |
+| `memory_capability` | 記憶操作を read/use/write/maintain 観点で advisory 評価 | `scripts/lib/memory_capability.py` + `audit/sections_memory.py` + `pj_slug.resolve_cc_memory_dir` |
+| `skill_vuln_scan` | 取り込みスキルの静的脆弱性スキャン — remote_exec/secret_exfil 等を combo 必須で検出 | `skill_vuln_scan.py` + `audit/sections_skill_vuln.py` |
+| `fanout_cost` | fan-out 費用対効果の advisory section。advantage は各群≥5件の floor ゲート付き | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
+| `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出 | `audit/memory_contagion.py` |
+| `memory_guard` | auto-memory 書込境界の runtime 記憶汚染検出。prompt_injection/secret_exfil を fail-open で reject。同名エントリの上書きは決定論遷移検証でゲート | `memory_guard.py` + `auto_memory_broker.py` + `memory_capability.py` + `audit/sections_memory.py` |
+| `fleet_queue` | 学習素材ベースの evolve 待ち PJ を決定論・ゼロ LLM で列挙 | `fleet/queue.py` + `fleet/queue_state.py` + `fleet/cli.py` + `fleet/collectors.py` + `fleet/formatters.py` |
+| `queue_verify` | queue の verify 待ちを read 時純粋導出。新ストアは作らない | `fleet/queue_verify.py` |
+| `fleet_detect` | 全 PJ 横断の決定論 weak_signals 検出。daily runner が毎朝蓄積 | `fleet/detect.py` + `bin/evolve-daily-run` |
+| `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知。適用は対話で人間承認 | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
+| `icebox_notice` | daily runner の icebox 棚卸し気づきトリガー。閾値未満は無音 | `scripts/lib/daily/icebox_notice.py` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
+| `icebox_reconcile` | icebox 棚卸しを3レーン決定論分類（成立/観測器不在/失効候補） | `scripts/lib/icebox_reconcile.py` + `bin/evolve-daily-run` + `scripts/lib/audit/sections_icebox_reconcile.py` |
+| `artifacts_hygiene` | artifact 衛生5検出器を observability に surface（決定論・LLM 非依存） | `audit/sections_artifacts.py` |
+| `memory_hygiene` | memory dir 衛生3検出器。clean 時は非表示、重複残骸は手順提案のみで auto-apply しない | `memory_index_orphan.py` + `memory_schema_check.py` + `memory_dup_residue.py` + `audit/sections_memory.py` |
+| `memory_stale_refs` | Memory Health の stale reference 誤検知（スラッシュ列挙の誤読）を修正 | `path_extractor.py` + `audit/memory.py` |
+| `invalid_frontmatter` | 壊れた frontmatter で発火不能なスキルを直接 surface（auto-fix せず人手修正提案） | `frontmatter.py` + `effort_detector.py` + `audit/sections_invalid_frontmatter.py` |
+| `self_contamination` | 自己汚染ハルシネーション指紋を transcript 走査で恒久計測（ゼロLLM・read-only） | `self_contamination_scan.py` + `audit/sections_self_contamination.py` |
+| `evolve-tier` | モデルティア正典を一元化する CLI — set/sync[--apply]/drift の3コマンド | `bin/evolve-tier` + `tier_policy.py` + `tier_policy_sync.py` + `tier_policy_drift.py` + `tier_policy_cli.py` |
+| `evaluation_provenance` | 評価スコアに紐づく実行条件（model/effort/tool policy）の記録契約。不明値は推測せず None | `scripts/lib/evaluation_provenance.py` |
+| `skill_reachability` | SKILL.md 宣言 callable が production コードから到達不能かを AST 静的解析で検出 | `skill_declaration_reachability.py` + `audit/sections_skill_reachability.py` + `dogfood/cli.py` |
+| `fleet_propose` | queue 待ち PJ に `evolve --dry-run` を順次実行し提案を集約レポート化。承認ゲート付き | `fleet/propose.py` + `fleet/cli_propose.py` |
+| `fleet_pr` | 承認済み evolve 提案を repo 外 worktree で commit→push→PR 化。path allowlist で強制、マージは人間 | `fleet/pr.py` + `fleet/cli_pr.py` |
+| `agent_coordination` | Claude Code primary／Codex opt-in の top-level executor lane 管理 | `agent_coordination/` + `bin/evolve-agent-task` + `docs/agent-contract/` |
+| `codex_config_cleanup` | 既知4カテゴリの Codex 設定残骸を検出し復元先が一意な指紋だけ plan/apply | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
+| `runtime_telemetry` | usage/sessions/errors の hook record に `runtime=claude|codex` を較正追加 | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
+| `codex_usage` | codex CLI 利用状況を advisory 表示。CC 側 token_usage とは合算しない | `fleet/codex_usage.py` + `fleet/formatters.py` |
 
 ## クイックスタート
 
