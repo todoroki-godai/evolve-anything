@@ -387,7 +387,41 @@ def _deliver_utterance_staleness() -> None:
         print(f"[evolve-anything:restore_state] utterance staleness check error: {e}", file=sys.stderr)
 
 
-def _deliver_evolve_queue_notice() -> None:
+def _resolve_queue_data() -> "tuple":
+    """evolve-queue.json の env ガード + read を1回だけ行う（#412 [Should]6）。
+
+    `_deliver_evolve_queue_notice` / `_build_session_proposal_output` / `_deliver_judge_cap_notice`
+    が個別に env ガード〜read_queue を行っていた（同じ内容を1セッション開始ごとに3回パース）。
+    ``handle_session_start`` がここで1回だけ解決し、3箇所へ ``(data_dir, queue_data)`` を配る。
+
+    実測: evolve-queue.json は queue エントリ + proposals（per_pj/global の group 群）を含めても
+    通常運用規模（数PJ〜十数PJ、group はPJあたり数件）で数十KB程度。DuckDB 接続や transcript
+    走査を伴わない単純 JSON パースなので、3回読んでも SessionStart のレイテンシ予算
+    （pitfall_hot_hook_eager_import）を脅かすほど重くはない。本関数の意図は「同じ値を3回
+    計算する」重複コードの整理であり、性能問題の解消が主目的ではない。
+
+    Returns: ``(None, None)`` — hook 文脈でない/install レイアウト外/モジュール未解決のいずれか
+             （呼び出し側は data_dir が None なら判定不能として早期 return する）。
+    """
+    if _queue_notice is None or _data_dir_migration is None:
+        return None, None
+    try:
+        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+
+        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        if not env:
+            return None, None  # hook 文脈でなければ判定しない（実環境を probe しない）
+        if not _data_dir_migration.is_cc_install_layout(Path(env)):
+            return None, None  # テスト isolation / custom 環境
+        data_dir = rl_common.resolve_data_dir(env)
+        queue_data = _queue_notice.read_queue(data_dir)
+        return data_dir, queue_data
+    except Exception as e:
+        print(f"[evolve-anything:restore_state] evolve-queue resolve error: {e}", file=sys.stderr)
+        return None, None
+
+
+def _deliver_evolve_queue_notice(shared: "tuple | None" = None) -> None:
     """毎朝の `fleet queue` が保存した evolve-queue.json の待ち PJ を systemMessage で通知する（#80）。
 
     無人で回せる決定論パイプライン（ingest→queue）の結果を、対話セッション開始時にユーザーが
@@ -401,19 +435,27 @@ def _deliver_evolve_queue_notice() -> None:
     pitfall_hot_hook_eager_import）。queue が空 or ファイル無し → 沈黙。
     出力は `systemMessage` を含む 1 行 JSON（ADR-038 = user 向けチャネル）。
     fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
+
+    ``shared``: ``_resolve_queue_data()`` の戻り値（#412 [Should]6）。None（省略）なら本関数が
+    自前で env ガード〜read_queue を行う（直接呼び出す単体テストとの後方互換）。
     """
     if _queue_notice is None or _data_dir_migration is None:
         return
     try:
-        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+        if shared is not None:
+            data_dir, queue_data = shared
+            if data_dir is None:
+                return
+        else:
+            import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
 
-        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-        if not env:
-            return  # hook 文脈でなければ判定しない（実環境を probe しない）
-        if not _data_dir_migration.is_cc_install_layout(Path(env)):
-            return  # テスト isolation / custom 環境
-        data_dir = rl_common.resolve_data_dir(env)
-        queue_data = _queue_notice.read_queue(data_dir)
+            env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+            if not env:
+                return  # hook 文脈でなければ判定しない（実環境を probe しない）
+            if not _data_dir_migration.is_cc_install_layout(Path(env)):
+                return  # テスト isolation / custom 環境
+            data_dir = rl_common.resolve_data_dir(env)
+            queue_data = _queue_notice.read_queue(data_dir)
         output = _queue_notice.queue_notice_output(queue_data)
         if output:
             print(json.dumps(output, ensure_ascii=False))
@@ -421,41 +463,57 @@ def _deliver_evolve_queue_notice() -> None:
         print(f"[evolve-anything:restore_state] evolve-queue notice error: {e}", file=sys.stderr)
 
 
-def _deliver_session_proposals() -> None:
-    """毎朝の改善案 digest（evolve-queue.json の proposals フィールド）を additionalContext で
-    提示し、Claude に AskUserQuestion で y/n 提示するよう指示する（#409）。
+def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | None":
+    """毎朝の改善案 digest（evolve-queue.json の proposals フィールド）から SessionStart 提示用の
+    出力 dict を組み立てる（#409, #412）。**print しない純関数**（#412 [Must]2）— SessionStart
+    hook の stdout は「hookSpecificOutput を含む行が高々1つ」でなければならず（複数行に分かれると
+    片方が黙って捨てられうる）、checkpoint 側の hookSpecificOutput（sessionTitle）と本関数の
+    additionalContext は同一行へマージする必要がある。マージの実際は ``handle_session_start`` が
+    checkpoint の有無を見てから行い、本関数はマージ対象の dict を返すだけに徹する。
 
-    出力チャネルは systemMessage（user 向け）でなく hookSpecificOutput.additionalContext
-    （ADR-038 = Claude 向け・sessionTitle と同型のキー構造）。Claude にしか届かない文脈へ
-    「ユーザーの依頼が無いときだけ提示せよ」という行動指示を書き込む必要があるため。
+    出力は 2 チャネル同時（#412 [Must]1・ADR-038 代替案C と同型）:
+    - ``systemMessage``（user 向け）: 代表テキストの可視化。additionalContext は Claude にしか
+      届かず、ユーザーが何か打つまで中身を確認する手段が無いため
+    - ``hookSpecificOutput.additionalContext``（Claude 向け）: 「ユーザーの最初の応答を終えた
+      直後に必ず AskUserQuestion で y/n 提示せよ」という行動指示。旧文言「依頼が無い場合のみ
+      提示」は次のユーザー入力まで評価されず永久に発火しなかった不具合の修正
 
     実環境ガード・observe-first pre-flight（evolve-queue.json 読み込みのみ・DuckDB 接続や
     transcript 走査なし）は他 deliver 関数と同型。既読フィルタ（correction_review_seen.jsonl）
     は 1 回の read_reviewed_keys 呼び出しのみで、書き込みは一切しない（read-only）。
-    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
+    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行、None を返す）。
+
+    ``shared``: ``_resolve_queue_data()`` が返す ``(data_dir, queue_data)`` タプル（#412 [Should]6:
+    evolve-queue.json の3重読みを1回に集約）。None（省略）なら本関数が自前で env ガード〜
+    read_queue を行う（直接呼び出す単体テストとの後方互換）。
     """
     if _proposal_digest is None or _queue_notice is None or _data_dir_migration is None:
-        return
+        return None
     try:
-        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+        if shared is not None:
+            data_dir, queue_data = shared
+            if data_dir is None:
+                return None  # env ガード不通過（呼び出し元が既に判定済み）
+        else:
+            import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
 
-        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-        if not env:
-            return  # hook 文脈でなければ判定しない（実環境を probe しない）
-        if not _data_dir_migration.is_cc_install_layout(Path(env)):
-            return  # テスト isolation / custom 環境
+            env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+            if not env:
+                return None  # hook 文脈でなければ判定しない（実環境を probe しない）
+            if not _data_dir_migration.is_cc_install_layout(Path(env)):
+                return None  # テスト isolation / custom 環境
+            data_dir = rl_common.resolve_data_dir(env)
+            queue_data = _queue_notice.read_queue(data_dir)
 
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
         if not project_dir or _pj_slug is None:
-            return  # cwd 不明 / pj_slug モジュール不在なら判定不能
+            return None  # cwd 不明 / pj_slug モジュール不在なら判定不能
         slug = _pj_slug.resolve_pj_slug(project_dir)
         if not slug or slug == _pj_slug.UNATTRIBUTED_SLUG:
-            return  # 帰属不能な PJ は判定しない
+            return None  # 帰属不能な PJ は判定しない
 
-        data_dir = rl_common.resolve_data_dir(env)
-        queue_data = _queue_notice.read_queue(data_dir)
         if not isinstance(queue_data, dict):
-            return
+            return None
 
         from correction_semantic import daily_review as _daily_review
 
@@ -467,24 +525,32 @@ def _deliver_session_proposals() -> None:
         seen_keys = _daily_review.read_reviewed_keys(path=seen_path)
         groups = _proposal_digest.build_session_proposals(queue_data, slug, seen_keys=seen_keys)
         if not groups:
-            return
+            return None
         # 回答コマンドは**絶対パス**で埋め込む。提示先は他 PJ の cwd であり、相対
         # `bin/evolve-reflect` は "No such file" になる（pitfall_skill_md_plugin_root と同型）。
         reflect_cmd = str(Path(__file__).resolve().parent.parent / "bin" / "evolve-reflect")
-        message = _proposal_digest.build_proposal_prompt(groups, slug, reflect_cmd=reflect_cmd)
+        # #412 [Must]4: global レーンの group を PJ ごとの --project-path で正しく帰属させる。
+        proposals = queue_data.get("proposals")
+        project_paths = proposals.get("project_paths") if isinstance(proposals, dict) else None
+        message = _proposal_digest.build_proposal_prompt(
+            groups, slug, reflect_cmd=reflect_cmd, project_paths=project_paths,
+        )
+        system_message = _proposal_digest.build_proposal_systemmessage(groups)
         # hookEventName は ADR-038 のスキーマ必須項目（subagent_observe.py と同型）。
         # 省略すると additionalContext が解釈されず機能が無言で死ぬ。
-        print(json.dumps(
-            {"hookSpecificOutput": {
+        return {
+            "systemMessage": system_message,
+            "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": message,
-            }}, ensure_ascii=False,
-        ))
+            },
+        }
     except Exception as e:
         print(f"[evolve-anything:restore_state] session proposals error: {e}", file=sys.stderr)
+        return None
 
 
-def _deliver_judge_cap_notice() -> None:
+def _deliver_judge_cap_notice(shared: "tuple | None" = None) -> None:
     """llm_judge Phase B の日次上限到達を systemMessage で通知する（#408）。
 
     daily runner（evolve-daily-run）が `judge_runner.run_daily_judge` の結果を
@@ -494,19 +560,27 @@ def _deliver_judge_cap_notice() -> None:
 
     実環境ガード・observe-first pre-flight は evolve-queue notice と同型
     （DuckDB 接続なし・走査なし、pitfall_hot_hook_eager_import）。
+
+    ``shared``: ``_resolve_queue_data()`` の戻り値（#412 [Should]6）。None（省略）なら本関数が
+    自前で env ガード〜read_queue を行う（直接呼び出す単体テストとの後方互換）。
     """
     if _queue_notice is None or _data_dir_migration is None:
         return
     try:
-        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+        if shared is not None:
+            data_dir, queue_data = shared
+            if data_dir is None:
+                return
+        else:
+            import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
 
-        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-        if not env:
-            return  # hook 文脈でなければ判定しない（実環境を probe しない）
-        if not _data_dir_migration.is_cc_install_layout(Path(env)):
-            return  # テスト isolation / custom 環境
-        data_dir = rl_common.resolve_data_dir(env)
-        queue_data = _queue_notice.read_queue(data_dir)
+            env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+            if not env:
+                return  # hook 文脈でなければ判定しない（実環境を probe しない）
+            if not _data_dir_migration.is_cc_install_layout(Path(env)):
+                return  # テスト isolation / custom 環境
+            data_dir = rl_common.resolve_data_dir(env)
+            queue_data = _queue_notice.read_queue(data_dir)
         output = _queue_notice.judge_cap_notice_output(queue_data)
         if output:
             print(json.dumps(output, ensure_ascii=False))
@@ -649,12 +723,16 @@ def handle_session_start(event: dict) -> None:
     _deliver_data_dir_migration_reminder()
     # utterance アーカイブの staleness advisory（#430・marker 読みのみ）
     _deliver_utterance_staleness()
-    # 毎朝の evolve-queue 待ち PJ 通知（#80・evolve-queue.json 読みのみ）
-    _deliver_evolve_queue_notice()
-    # 毎朝の改善案 digest を AskUserQuestion 指示として提示（#409・evolve-queue.json + 既読ストア読みのみ）
-    _deliver_session_proposals()
+    # evolve-queue.json の env ガード + read を1回だけ行い、以下3箇所に使い回す（#412 [Should]6）。
+    shared_queue = _resolve_queue_data()
+    # 毎朝の evolve-queue 待ち PJ 通知（#80）
+    _deliver_evolve_queue_notice(shared=shared_queue)
+    # 毎朝の改善案 digest を AskUserQuestion 指示として提示（#409・既読ストア読みのみ追加）。
+    # print はせず、checkpoint の hookSpecificOutput（sessionTitle）とマージしてから1回で出す
+    # （#412 [Must]2: hookSpecificOutput を含む行が複数に分かれると片方が黙って捨てられうる）。
+    proposal_output = _build_session_proposal_output(shared=shared_queue)
     # llm_judge 日次上限到達通知（#408・evolve-queue.json の llm_judge フィールド読みのみ）
-    _deliver_judge_cap_notice()
+    _deliver_judge_cap_notice(shared=shared_queue)
     # icebox 棚卸しの気づきトリガー（#194・evolve-anything 本体リポジトリのみ・icebox-status.json 読みのみ）
     _deliver_icebox_notice()
 
@@ -662,6 +740,12 @@ def handle_session_start(event: dict) -> None:
     checkpoint = common.find_latest_checkpoint(project_dir)
 
     if not checkpoint:
+        # checkpoint が無くても改善案提示は出す（#412 [Must]2 回帰: 従来は checkpoint 節の
+        # print だけがここで return して終わっており、実際には proposal_output は checkpoint
+        # 節の外＝上の _deliver_session_proposals() 呼び出し時点で既に print 済みだったため
+        # 消えてはいなかった。純関数化した今、ここで明示的に出す必要がある）。
+        if proposal_output:
+            print(json.dumps(proposal_output, ensure_ascii=False))
         return
 
     try:
@@ -672,8 +756,20 @@ def handle_session_start(event: dict) -> None:
             "restored": True,
             "checkpoint": _summarize_checkpoint_for_output(checkpoint),
         }
+        # #412 [Must]2: 改善案提示（systemMessage + hookSpecificOutput.additionalContext）と
+        # checkpoint 側（hookSpecificOutput.sessionTitle）を**同一 JSON 行**にマージする。
+        # 別行に分けると hookSpecificOutput を名乗る行が2つになり、片方が黙って捨てられうる
+        # （subagent_observe.py の precedent と同型: 1 dict に統合してから1回 print する）。
+        hook_specific: dict = {}
+        if proposal_output:
+            if proposal_output.get("systemMessage"):
+                output["systemMessage"] = proposal_output["systemMessage"]
+            hook_specific.update(proposal_output.get("hookSpecificOutput") or {})
         if session_title:
-            output["hookSpecificOutput"] = {"sessionTitle": session_title}
+            hook_specific["hookEventName"] = "SessionStart"
+            hook_specific["sessionTitle"] = session_title
+        if hook_specific:
+            output["hookSpecificOutput"] = hook_specific
         print(json.dumps(output, ensure_ascii=False))
 
         # work_context がある場合はサマリーも出力

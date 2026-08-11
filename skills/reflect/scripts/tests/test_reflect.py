@@ -1489,3 +1489,126 @@ class TestWeakReviewRecording:
         out = json.loads(capsys.readouterr().out)
         assert out["status"] == "rejected_weak"
         assert out["pj_slug"]  # 空でない（resolve_pj_slug が basename 等を返す）
+
+    # --- #412 [Must]5: promote 失敗時に既読化しない ---
+
+    def test_promote_weak_partial_failure_only_records_succeeded_key(self, tmp_path, capsys):
+        """requested 2件中 1件が expired で失敗した場合、成功した key だけ既読化される。
+
+        旧実装は record_reviewed に args.promote_weak が要求した keys（全件）をそのまま渡して
+        いたため、promoted=0 でも「はい」を押したこと自体が既読化され、次回セッションでも
+        digest から永久に外れる silent failure だった（#412 [Must]5）。
+        """
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+        ws = tmp_path / "weak_signals.jsonl"
+        corr = tmp_path / "corrections.jsonl"
+        ok = WeakSignal(
+            "llm_judge", {"source_path": "/a.jsonl", "line_no": 1, "text": "成功する方", "reason": "r"},
+            _fresh_detected_at(), "s1", "evolve-anything",
+        )
+        expired = WeakSignal(
+            "rephrase", {"line_no": 2},
+            (datetime.now(timezone.utc) - timedelta(days=46)).isoformat(),
+            "s2", "evolve-anything",
+        )
+        append_signals([ok, expired], path=ws)
+
+        with mock.patch("sys.argv", [
+            "reflect", "--promote-weak", f"{ok.signal_key},{expired.signal_key}",
+            "--weak-signals-file", str(ws), "--corrections-file", str(corr),
+        ]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["promoted"] == 1
+        assert out["promoted_keys"] == [ok.signal_key]
+        assert out["skipped"] == [{"signal_key": expired.signal_key, "reason": "expired"}]
+
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from correction_semantic.daily_review import read_reviewed_keys
+        seen = read_reviewed_keys()
+        assert ok.signal_key in seen
+        assert expired.signal_key not in seen  # 失敗した key は既読化されない
+
+    def test_promote_weak_all_failed_writes_nothing_to_seen_store(self, tmp_path, capsys):
+        """requested 全件が失敗（not_found）した場合、既読ストアに1行も書かれない。"""
+        with mock.patch("sys.argv", [
+            "reflect", "--promote-weak", "does-not-exist-key",
+            "--weak-signals-file", str(tmp_path / "weak_signals.jsonl"),
+            "--corrections-file", str(tmp_path / "corrections.jsonl"),
+        ]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["promoted"] == 0
+        assert out["promoted_keys"] == []
+
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from correction_semantic.daily_review import read_reviewed_keys
+        assert read_reviewed_keys() == set()
+
+
+# --- Test: --project-path が global 提案の origin PJ 帰属を正しくする（#412 [Must]4） ---
+
+class TestProjectPathFlag:
+    """global レーンの改善案は複数 PJ のキーを束ねるため、単一 cwd（現在 PJ）から
+    ``--promote-weak`` を叩くと従来は全 correction の project_path が現在 PJ に固定され、
+    他PJ由来の signal が誤って現在PJの実績として記録された。``--project-path`` は
+    ``--project-dir`` と独立に、``promote_signals(project_path=...)`` にだけ渡す絶対パスを
+    指定する。
+    """
+
+    def _seed_ws(self, tmp_path):
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from weak_signals.store import WeakSignal, append_signals
+        ws = tmp_path / "weak_signals.jsonl"
+        sig = WeakSignal(
+            "llm_judge",
+            {"source_path": "/other-pj.jsonl", "line_no": 1, "text": "他PJ由来の指摘", "reason": "r"},
+            _fresh_detected_at(), "s1", "other-pj",
+        )
+        append_signals([sig], path=ws)
+        return ws, sig
+
+    def test_project_path_overrides_attributed_project_path(self, tmp_path, monkeypatch, capsys):
+        ws, sig = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        current_pj = tmp_path / "current-pj"
+        current_pj.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(current_pj))
+        other_pj_path = str(tmp_path / "other-pj-abs")
+
+        with mock.patch("sys.argv", [
+            "reflect", "--promote-weak", sig.signal_key,
+            "--weak-signals-file", str(ws), "--corrections-file", str(corr),
+            "--project-path", other_pj_path, "--pj", "other-pj",
+        ]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "promoted_weak"
+        assert out["promoted"] == 1
+
+        recs = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(recs) == 1
+        # promote_signals は project_path を worktree 安全 slug に正規化する（#593・既存契約）。
+        # ここでの回帰確認は「どちらの PJ に帰属したか」— 明示した other_pj_path 由来であり、
+        # 現在 PJ（current_pj）ではないこと。
+        assert recs[0]["project_path"] == Path(other_pj_path).name
+        assert recs[0]["project_path"] != current_pj.name
+
+    def test_project_path_omitted_falls_back_to_current_project(self, tmp_path, monkeypatch, capsys):
+        """--project-path 省略時は従来どおり現在 PJ（CLAUDE_PROJECT_DIR）に帰属する（後方互換）。"""
+        ws, sig = self._seed_ws(tmp_path)
+        corr = tmp_path / "corrections.jsonl"
+        current_pj = tmp_path / "current-pj"
+        current_pj.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(current_pj))
+
+        with mock.patch("sys.argv", [
+            "reflect", "--promote-weak", sig.signal_key,
+            "--weak-signals-file", str(ws), "--corrections-file", str(corr),
+        ]):
+            reflect.main()
+        json.loads(capsys.readouterr().out)
+
+        recs = [json.loads(l) for l in corr.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert recs[0]["project_path"] == current_pj.name

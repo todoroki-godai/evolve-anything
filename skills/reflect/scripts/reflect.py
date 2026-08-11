@@ -781,6 +781,12 @@ def main():
                         help="対象プロジェクトディレクトリ（明示指定。優先順位: 本フラグ > "
                              "env CLAUDE_PROJECT_DIR > cwd。単一 cwd から他 PJ の project_dir を"
                              "渡すバッチ経路 — evolve-fleet propose 等 — で project_path の混入を防ぐ・#400）")
+    parser.add_argument("--project-path", type=str, default=None,
+                        help="--promote-weak: 昇格レコードの project_path を明示指定（未指定は"
+                             "従来どおり現在 PJ = --project-dir/env CLAUDE_PROJECT_DIR/cwd）。"
+                             "SessionStart の global 改善案（複数 PJ 由来の signal を束ねた提案）は"
+                             "単一 cwd から他 PJ の signal_key を昇格するため、現在 PJ への"
+                             "固定帰属を避けて origin PJ の絶対パスを渡す用途（#412 [Must]4）")
     args = parser.parse_args()
 
     corrections_file = Path(args.corrections_file) if args.corrections_file else CORRECTIONS_FILE
@@ -849,11 +855,15 @@ def main():
         from correction_semantic.daily_review import record_reviewed as _record_reviewed
         from pj_slug import resolve_pj_slug as _resolve_pj_slug
         keys = [k.strip() for k in args.promote_weak.split(",") if k.strip()]
+        # #412 [Must]4: --project-path が明示されればそれを優先する。global 改善案（複数 PJ
+        # 由来の signal を束ねた提案）は単一 cwd（現在 PJ）から他PJの signal_key を昇格するため、
+        # --project-dir/env/cwd による現在 PJ への固定帰属をここだけ迂回できるようにする。
+        promote_project_path = args.project_path or current_project or str(project_root)
         res = _cs_promote.promote_signals(
             keys,
             weak_signals_path=weak_signals_file,
             corrections_path=corrections_file if args.corrections_file else None,
-            project_path=current_project or str(project_root),
+            project_path=promote_project_path,
             dry_run=args.dry_run,
         )
         # 承認したシグナルに対応する idiom を confirmed 化（signal→idiom は provenance 突合）。
@@ -870,8 +880,12 @@ def main():
         # （daily.proposal_digest.build_session_proposals）はこの既読集合を見て再提示を止める
         # （promoted フラグだけでは同日中の digest 再提示を防げない — digest は日次生成のスナップ
         # ショットで再生成まで promoted 反映を待つため）。
+        # #412 [Must]5: 既読化するのは実際に昇格できた key（res["promoted_keys"]）だけにする。
+        # 従来は要求 keys 全件を既読化していたため、日次スナップショットの stale・キー不在・
+        # TTL 失効等で promoted=0 になっても既読化され、以後の digest から永久に外れる
+        # silent failure だった（「採用したつもりが何も昇格せず二度と出ない」）。
         pj_slug_value = args.pj or _resolve_pj_slug(current_project or str(project_root))
-        _record_reviewed(keys, pj_slug_value, decision="promoted", dry_run=args.dry_run)
+        _record_reviewed(res["promoted_keys"], pj_slug_value, decision="promoted", dry_run=args.dry_run)
         # #476-4: 昇格後の corrections_human_allpj を返す（growth_report の promoted_today は対話前
         # スナップショットで固定されるため、CLI が更新後カウントを返し assistant が最新値を
         # 表示できるようにする）。dry_run は corrections に書かないため pre-promotion 値のまま。

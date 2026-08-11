@@ -150,6 +150,90 @@ def test_single_pj_occurrence_stays_in_per_pj_not_global(tmp_path: Path):
     assert len(out["per_pj"]["pj-a"]) == 1
 
 
+def test_global_group_carries_project_paths_from_queue_entries(tmp_path: Path):
+    """#412 [Must]4: digest は各 PJ の project_path（queue エントリの絶対パス）を保持する。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("git statusじゃなくてgit diffを使って", 1, "pj-a"),
+            _sig("git statusじゃなくてgit diffを使って", 1, "pj-b"),
+        ],
+        path=ws,
+    )
+    queue_entries = [
+        {"pj_slug": "pj-a", "project_path": "/abs/pj-a"},
+        {"pj_slug": "pj-b", "project_path": "/abs/pj-b"},
+    ]
+    out = pd.build_proposal_digest(queue_entries, data_dir=tmp_path)
+    assert out["project_paths"]["pj-a"] == "/abs/pj-a"
+    assert out["project_paths"]["pj-b"] == "/abs/pj-b"
+    g = out["global"][0]
+    assert set(g["keys_by_pj"]) == {"pj-a", "pj-b"}
+    assert len(g["keys_by_pj"]["pj-a"]) == 1
+    assert len(g["keys_by_pj"]["pj-b"]) == 1
+
+
+# ─────────────────────────────────────────────────────────────────
+# _extract_global_groups（#412 [Must]3: 連結成分マージ）
+# ─────────────────────────────────────────────────────────────────
+def _slim(keys, rep=None, idiom=None) -> dict:
+    return {
+        "signal_keys": list(keys),
+        "representative": rep,
+        "idiom": idiom,
+        "confirmable_idiom": None,
+        "channel": "llm_judge",
+        "count": len(keys),
+        "evidence_text": rep or "",
+        "prev_action": "",
+    }
+
+
+def test_extract_global_groups_two_pj_same_text_merges():
+    per_pj = {
+        "pj-a": [_slim(["ka"], rep="共通テキスト")],
+        "pj-b": [_slim(["kb"], rep="共通テキスト")],
+    }
+    global_groups, remaining = pd._extract_global_groups(per_pj)
+    assert len(global_groups) == 1
+    assert set(global_groups[0]["signal_keys"]) == {"ka", "kb"}
+    assert remaining == {}
+
+
+def test_extract_global_groups_chain_does_not_promote_single_pj_group():
+    """A-B が text1（representative）で一致、B-C が text2（B の idiom / C の representative）で
+    一致するチェーン。旧実装は「消費前」distinct_slugs>=2 の判定だけで text2 を通し、text1 で
+    既に消費済みの B を merge ループで skip した結果、**C 単独**の group が誤って global 扱い
+    されていた。連結成分でマージすれば A/B/C の 3 PJ が 1 つの global group に正しく統合される
+    （C だけの偽 global group は作られない）。
+    """
+    per_pj = {
+        "pj-a": [_slim(["ka"], rep="共通テキスト1")],
+        "pj-b": [_slim(["kb"], rep="共通テキスト1", idiom="共通テキスト2")],
+        "pj-c": [_slim(["kc"], rep="共通テキスト2")],
+    }
+    global_groups, remaining = pd._extract_global_groups(per_pj)
+    assert len(global_groups) == 1
+    g = global_groups[0]
+    assert set(g["signal_keys"]) == {"ka", "kb", "kc"}
+    assert set(g["origin_pjs"]) == {"pj-a", "pj-b", "pj-c"}
+    assert set(g["keys_by_pj"]) == {"pj-a", "pj-b", "pj-c"}
+    assert g["keys_by_pj"]["pj-a"] == ["ka"]
+    assert g["keys_by_pj"]["pj-b"] == ["kb"]
+    assert g["keys_by_pj"]["pj-c"] == ["kc"]
+    # C 単独の偽 global group が per_pj に取りこぼされていないこと（全 3 PJ が global に吸収済み）
+    assert remaining == {}
+
+
+def test_extract_global_groups_single_pj_component_stays_per_pj():
+    per_pj = {
+        "pj-a": [_slim(["ka"], rep="孤立テキスト")],
+    }
+    global_groups, remaining = pd._extract_global_groups(per_pj)
+    assert global_groups == []
+    assert remaining == per_pj
+
+
 # ─────────────────────────────────────────────────────────────────
 # build_session_proposals
 # ─────────────────────────────────────────────────────────────────
@@ -244,3 +328,59 @@ def test_build_proposal_prompt_honors_absolute_reflect_cmd():
     assert "/abs/plugin/bin/evolve-reflect --promote-weak k1" in msg
     assert "/abs/plugin/bin/evolve-reflect --reject-weak k1 --pj pj-a" in msg
     assert "\n  はい: bin/evolve-reflect" not in msg
+
+
+def test_build_proposal_prompt_instructs_after_first_reply_not_interrupt():
+    """#412 [Must]1: additionalContext は「ユーザーの最初の応答を終えた直後」に発火させる
+    行動指示にする（従来の「依頼が無い場合のみ」だと永久に発火しない）。
+    """
+    groups = [_group(["k1"], rep="rep")]
+    msg = pd.build_proposal_prompt(groups, "pj-a")
+    assert "AskUserQuestion" in msg
+    assert "最初のメッセージへの応答を終えた直後" in msg
+    assert "割り込ま" in msg  # 「ユーザーの依頼より先に割り込むな」系の文言
+
+
+def test_build_proposal_prompt_global_group_emits_per_origin_pj_commands():
+    """#412 [Must]4: global group（keys_by_pj あり）は origin PJ ごとに --project-path/--pj を
+    明示したコマンド行を出す。他PJ由来の signal が現在 PJ に誤帰属しないようにするため。
+    """
+    group = {
+        "signal_keys": ["ka", "kb"],
+        "representative": "共通テキスト",
+        "idiom": None,
+        "confirmable_idiom": None,
+        "channel": "llm_judge",
+        "count": 2,
+        "evidence_text": "共通テキスト",
+        "prev_action": "",
+        "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
+        "origin_pjs": ["pj-a", "pj-b"],
+    }
+    project_paths = {"pj-a": "/abs/pj-a", "pj-b": "/abs/pj-b"}
+    msg = pd.build_proposal_prompt(
+        [group], "pj-a", reflect_cmd="/abs/bin/evolve-reflect", project_paths=project_paths,
+    )
+    assert "/abs/bin/evolve-reflect --promote-weak ka --project-path /abs/pj-a --pj pj-a" in msg
+    assert "/abs/bin/evolve-reflect --reject-weak ka --pj pj-a" in msg
+    assert "/abs/bin/evolve-reflect --promote-weak kb --project-path /abs/pj-b --pj pj-b" in msg
+    assert "/abs/bin/evolve-reflect --reject-weak kb --pj pj-b" in msg
+
+
+# ─────────────────────────────────────────────────────────────────
+# build_proposal_systemmessage（#412 [Must]1: 2チャネル同時出力）
+# ─────────────────────────────────────────────────────────────────
+def test_build_proposal_systemmessage_lists_representatives():
+    groups = [_group(["k1"], rep="rep1"), _group(["k2"], rep="rep2")]
+    msg = pd.build_proposal_systemmessage(groups)
+    assert "rep1" in msg
+    assert "rep2" in msg
+    assert "y/n" in msg
+
+
+def test_build_proposal_systemmessage_caps_at_max_session_proposals():
+    groups = [_group([f"k{i}"], rep=f"rep{i}") for i in range(5)]
+    msg = pd.build_proposal_systemmessage(groups)
+    assert "rep0" in msg
+    assert "rep1" in msg
+    assert "rep2" not in msg

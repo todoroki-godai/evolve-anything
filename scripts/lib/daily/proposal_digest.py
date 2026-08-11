@@ -65,6 +65,24 @@ def _pj_slugs(queue_entries: Optional[List[Dict[str, Any]]]) -> List[str]:
     return out
 
 
+def _pj_project_paths(queue_entries: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
+    """queue エントリから ``{pj_slug: project_path}`` を抽出する（#412 [Must]4）。
+
+    global レーンの group から origin PJ ごとの ``--project-path`` を組み立てるために使う
+    （``fleet queue`` の各エントリは既に絶対パス ``project_path`` を持つ・新しい解決経路は作らない）。
+    project_path が無い/文字列でないエントリは除外する。
+    """
+    out: Dict[str, str] = {}
+    for item in queue_entries or []:
+        if not isinstance(item, dict):
+            continue
+        slug = item.get("pj_slug")
+        path = item.get("project_path")
+        if slug and isinstance(path, str) and path:
+            out.setdefault(slug, path)
+    return out
+
+
 def _slim_group(g: Dict[str, Any]) -> Dict[str, Any]:
     """daily_review group を提示に必要な最小限へ縮める。"""
     evidence = g.get("evidence") or {}
@@ -96,35 +114,85 @@ def _group_norm_texts(g: Dict[str, Any]) -> List[str]:
 def _extract_global_groups(
     per_pj: Dict[str, List[Dict[str, Any]]],
 ) -> "tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]":
-    """同一テキストが 2 PJ 以上に出現する group を global レーンへマージし、per_pj から除外する。"""
-    text_to_locs: Dict[str, List[tuple]] = {}
+    """同一テキストで繋がる group を **連結成分（connected components）** で global レーンへ
+    マージし、per_pj から除外する（#412 [Must]3）。
+
+    旧実装は「消費前」（他 text による消費を考慮する前）の distinct_slugs>=2 だけでテキスト
+    ごとに独立判定していた。A の idiom が B の representative と一致（text1）、B の idiom が
+    C の representative と一致（text2）という連鎖では、text1 の処理で A/B が先に消費され、
+    text2 の distinct_slugs 判定は「消費前」の {B, C} で通過してしまう。しかし実際に merge
+    ループへ入れるのは未消費の C だけなので、**C 1 PJ だけの group が誤って global 扱い**に
+    なっていた（distinct_slugs>=2 の判定条件と実際にマージされる中身が食い違う）。
+
+    連結成分なら「同じテキストで直接・間接に繋がっている group 全体」を 1 単位として扱うため、
+    この食い違いが起きない — 成分内の distinct slug 数で判定し、成分全体を丸ごとマージする。
+    """
+    # ノード = (slug, idx) の1本の配列に平坦化し、union-find で連結成分を求める。
+    nodes: List[tuple] = []
+    node_index: Dict[tuple, int] = {}
+    for slug, groups in per_pj.items():
+        for idx in range(len(groups)):
+            node_index[(slug, idx)] = len(nodes)
+            nodes.append((slug, idx))
+
+    parent = list(range(len(nodes)))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    text_to_node_ids: Dict[str, List[int]] = {}
     for slug, groups in per_pj.items():
         for idx, g in enumerate(groups):
+            node_i = node_index[(slug, idx)]
             for text in _group_norm_texts(g):
-                text_to_locs.setdefault(text, []).append((slug, idx))
+                text_to_node_ids.setdefault(text, []).append(node_i)
 
-    consumed: Dict[str, Set[int]] = {slug: set() for slug in per_pj}
+    for _text, node_ids in text_to_node_ids.items():
+        first = node_ids[0]
+        for other in node_ids[1:]:
+            union(first, other)
+
+    components: Dict[int, List[int]] = {}
+    for node_i in range(len(nodes)):
+        root = find(node_i)
+        components.setdefault(root, []).append(node_i)
+
     global_groups: List[Dict[str, Any]] = []
+    consumed_node_ids: Set[int] = set()
 
-    for text, locs in text_to_locs.items():
-        distinct_slugs = {slug for slug, _idx in locs}
+    # 出現順（node id 昇順 = per_pj.items() の走査順）で成分を処理し、出力順を決定論にする。
+    for root in sorted(components, key=lambda r: min(components[r])):
+        member_node_ids = sorted(components[root])
+        distinct_slugs: List[str] = []
+        for node_i in member_node_ids:
+            slug, _idx = nodes[node_i]
+            if slug not in distinct_slugs:
+                distinct_slugs.append(slug)
         if len(distinct_slugs) < 2:
-            continue
+            continue  # 1 PJ しか含まない成分は per_pj に残す（global 扱いにしない）
 
         merged_keys: List[str] = []
-        origin_pjs: List[str] = []
+        keys_by_pj: Dict[str, List[str]] = {}
         merged: Optional[Dict[str, Any]] = None
         total_count = 0
-        for slug, idx in locs:
-            if idx in consumed[slug]:
-                continue  # 既に別 global group へ統合済み（多重テキスト一致の二重計上を防ぐ）
+        for node_i in member_node_ids:
+            slug, idx = nodes[node_i]
             g = per_pj[slug][idx]
-            consumed[slug].add(idx)
-            if slug not in origin_pjs:
-                origin_pjs.append(slug)
+            consumed_node_ids.add(node_i)
+            pj_keys = keys_by_pj.setdefault(slug, [])
             for k in g["signal_keys"]:
                 if k not in merged_keys:
                     merged_keys.append(k)
+                if k not in pj_keys:
+                    pj_keys.append(k)
             total_count += g["count"]
             if merged is None:
                 merged = dict(g)
@@ -133,12 +201,17 @@ def _extract_global_groups(
             continue
         merged["signal_keys"] = merged_keys
         merged["count"] = total_count
-        merged["origin_pjs"] = origin_pjs
+        merged["origin_pjs"] = distinct_slugs
+        # #412 [Must]4: origin PJ ごとの signal_key を保持する。global group の「はい」が
+        # 現在 PJ の実績として誤帰属されないよう、reflect 呼び出し時に PJ ごと分離するため。
+        merged["keys_by_pj"] = keys_by_pj
         global_groups.append(merged)
 
     filtered_per_pj: Dict[str, List[Dict[str, Any]]] = {}
     for slug, groups in per_pj.items():
-        remaining = [g for idx, g in enumerate(groups) if idx not in consumed[slug]]
+        remaining = [
+            g for idx, g in enumerate(groups) if node_index[(slug, idx)] not in consumed_node_ids
+        ]
         if remaining:
             filtered_per_pj[slug] = remaining
 
@@ -193,6 +266,9 @@ def build_proposal_digest(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "per_pj": per_pj,
         "global": global_groups,
+        # #412 [Must]4: global group を PJ ごとの --project-path で正しく帰属させるための
+        # 絶対パス表（queue エントリが既に持つ project_path をそのまま転記・新しい解決経路は作らない）。
+        "project_paths": _pj_project_paths(queue_entries),
     }
 
 
@@ -242,6 +318,7 @@ def build_proposal_prompt(
     pj_slug: str,
     *,
     reflect_cmd: str = "bin/evolve-reflect",
+    project_paths: Optional[Dict[str, str]] = None,
 ) -> str:
     """AskUserQuestion 指示 + 各 group の回答コマンドを additionalContext 本文として組み立てる。
 
@@ -249,16 +326,60 @@ def build_proposal_prompt(
     提示先は他 PJ の cwd なので、相対 ``bin/evolve-reflect`` を埋め込むと "No such file"
     になる（pitfall: SKILL.md script は ``${CLAUDE_PLUGIN_ROOT}`` 起点で書く、と同型）。
     既定値は単体テスト・手動確認向けのフォールバック。
+
+    #412 [Must]1: additionalContext は SessionStart 時点で Claude に届くだけで、
+    「ユーザーの依頼が無いときだけ提示する」という条件はユーザーが何か打つまで永久に評価
+    されない（対話ターンが始まらないため）。行動指示を「最初の応答を終えた直後に必ず提示する
+    （ただし作業には割り込まない）」へ変更する。あわせて systemMessage（``build_proposal_systemmessage``）
+    を同時出力し、ユーザーがコマンド無しでも中身に到達できるようにする（2チャネル同時出力）。
+
+    #412 [Must]4: global レーンの group（``keys_by_pj`` を持つ）は origin PJ ごとに
+    ``--project-path``/``--pj`` を明示したコマンド行を出す。他PJ由来の signal_key を現在 PJ の
+    project_path で昇格すると、昇格した correction が誤って現在 PJ の実績として記録される
+    （project_paths が無い origin は ``--project-path`` を省略し、reflect 側の
+    ``CLAUDE_PROJECT_DIR``/cwd フォールバックに委ねる）。
     """
     lines = [
-        "[evolve-anything] 改善案があります。ユーザーの最初の依頼があればそれを優先し、"
-        "依頼が無い場合のみ、以下を AskUserQuestion で1件ずつ y/n 提示してください"
-        "（作業中の割り込みはしない）。",
+        "[evolve-anything] 改善案があります。ユーザーの最初のメッセージへの応答を終えた"
+        "直後に、以下を AskUserQuestion で1件ずつ y/n 提示してください。ユーザーの依頼より"
+        "先に割り込まないこと。ユーザーが提示を断ったらその場では再提示しないこと。",
     ]
     for g in groups:
-        keys = ",".join(g.get("signal_keys") or [])
         rep = g.get("representative") or g.get("evidence_text") or ""
         lines.append(f"- 案: {rep}")
-        lines.append(f"  はい: {reflect_cmd} --promote-weak {keys}")
-        lines.append(f"  いいえ: {reflect_cmd} --reject-weak {keys} --pj {pj_slug}")
+        keys_by_pj = g.get("keys_by_pj")
+        if isinstance(keys_by_pj, dict) and keys_by_pj:
+            for origin_slug, origin_keys in keys_by_pj.items():
+                keys = ",".join(origin_keys)
+                origin_path = (project_paths or {}).get(origin_slug)
+                path_flag = f" --project-path {origin_path}" if origin_path else ""
+                lines.append(
+                    f"  はい({origin_slug}): {reflect_cmd} --promote-weak {keys}"
+                    f"{path_flag} --pj {origin_slug}"
+                )
+                lines.append(
+                    f"  いいえ({origin_slug}): {reflect_cmd} --reject-weak {keys} --pj {origin_slug}"
+                )
+        else:
+            keys = ",".join(g.get("signal_keys") or [])
+            lines.append(f"  はい: {reflect_cmd} --promote-weak {keys}")
+            lines.append(f"  いいえ: {reflect_cmd} --reject-weak {keys} --pj {pj_slug}")
     return "\n".join(lines)
+
+
+def build_proposal_systemmessage(groups: List[Dict[str, Any]]) -> str:
+    """改善案の代表テキストを systemMessage（user 可視チャネル）本文として組み立てる（#412 [Must]1）。
+
+    additionalContext（Claude 可視）だけでは、ユーザーがコマンドを打つまで中身が見えない。
+    先頭 ``MAX_SESSION_PROPOSALS`` 件の代表テキストを並べて可視化し、「この後 y/n で確認する」
+    ことを伝える。ADR-038 の代替案C（両チャネル同時出力）と同型。
+    """
+    reps = []
+    for g in groups[:MAX_SESSION_PROPOSALS]:
+        rep = (g.get("representative") or g.get("evidence_text") or "").strip()
+        if rep:
+            reps.append(rep)
+    if not reps:
+        return "[evolve-anything] 改善案があります。この後 y/n で確認します。"
+    joined = " / ".join(f"「{r}」" for r in reps)
+    return f"[evolve-anything] 改善案があります: {joined}。この後 y/n で確認します。"

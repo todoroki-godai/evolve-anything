@@ -730,7 +730,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "保存。毎朝1回・日次上書き）。",
         writer_locus="batch",
         reader="hooks/restore_state.py の _deliver_evolve_queue_notice（SessionStart "
-        "systemMessage 通知）/ 同 _deliver_session_proposals（#409・proposals digest の "
+        "systemMessage 通知）/ 同 _build_session_proposal_output（#409, #412・proposals digest の "
         "additionalContext 提示）/ scripts/lib/daily/queue_notice.py の read_queue（stale "
         "判定）/ scripts/lib/fleet/cli_propose.py（--live 未指定時の propose 入力）。",
         retention="permanent",
