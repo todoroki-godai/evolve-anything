@@ -46,7 +46,7 @@
 
 各コンポーネントの設計経緯・根拠・issue/ADR 参照を含む詳細は **[spec/components.md](spec/components.md)**（SoT）。
 ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する（サマリは「何をするか1文 + 契約フラグ」で構成し目安 ≤130 字。`凍結`/`reject`/`dry-run`/`fail-open`/`人間承認`/`単一ソース`等の動作を縛る語は要約時も必ず残す）。**
-**契約フラグを省略してよいかの判断基準は「runtime guard が実際に阻止するか」**（cold に書いてあるかは基準にしない）: runtime guard が阻止する制約（未登録ストアの reject 等）は省略可、**人間・AI が守るしかない制約（関数の単一ソース・dry-run 純度等、破っても何も鳴らない契約）は必ず残す**。
+**契約フラグを省略してよいかの判断基準**（cold に書いてあるかは基準にしない）: **独立した強制境界があり、全 write/遷移入口が必ず経由し、違反時に失敗または明示 surface する場合のみ省略可**（例: store_write barrier の未登録ストア reject）。**通常ロジック・テストのみで守られている契約・warn/fail-open・意図的な例外口があるものは、その入口を素通りされると静かに破れるため hot に必ず残す**（例: 関数の単一ソース・TTL の read 時導出・dry-run 純度）。
 
 | コンポーネント | 一言サマリ | 実体 |
 |----------------|-----------|------|
@@ -68,7 +68,7 @@
 | `second-opinion` | cold-read セカンドオピニオン（3モード）。codex 検出時は外部ルートBも選択可 | skill + agent |
 | `growth-level` | env_score → Lv.1-10 + 日英称号マッピング | `growth_level.py` |
 | `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug） | `optimize_history_store.py` |
-| `evolve_decisions` | run envelope 付き emit→drain で並行 run を分離。提案 identity と判断イベント identity を分離し多重記録/欠落を回避 | `evolve_decisions.py` |
+| `evolve_decisions` | run envelope で emit→drain の並行 run を分離。未判断は deferred 保持、失敗は `marker_error` で surface。marker supersede は対象パス単位・`result_path` は一意時のみ | `evolve_decisions.py` |
 | `file_lock` | ファイル単位排他ロックと atomic write の単一ソース。ロック下からは `_locked` 版を使い自己 deadlock を回避 | `rl_common/file_lock.py` |
 | `evolve_decision_ids` | 提案 identity と判断イベント identity を隣接定義する純関数 module（取り違え防止） | `evolve_decision_ids.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格 | `evolve_reconcile.py` |
@@ -104,11 +104,11 @@
 | `outcome_metrics` | 行動アウトカム3軸（correction 再発率/一発成功率/rework率）を advisory 表示 | `audit/outcome_metrics.py` |
 | `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query） | `utterance_archive/` |
 | `outcome_attribution` | outcome 3軸を per-skill 帰属し evolve ターゲットランキングへ自動入力。負の転移は末尾 rollback、dry-run に before/after 順位差分を surface | `audit/outcome_attribution.py` |
-| `weak_signals` | 暗黙修正シグナルの決定論検出→weak_signals.jsonl レーン。reflect 確認後に corrections へ昇格 | `weak_signals/` |
-| `correction_semantic` | correction capture の二層化。utterances.db の発話を Haiku がバッチ意味判定し weak_signals へ隔離 | `correction_semantic/` |
+| `weak_signals` | 暗黙修正シグナルの決定論検出→weak_signals.jsonl レーン。reflect 確認後に corrections へ昇格。45日 TTL は read 時 age 導出で writer-death 非依存 | `weak_signals/` |
+| `correction_semantic` | correction capture の二層化。utterances.db の発話を Haiku がバッチ意味判定し weak_signals へ隔離。フェーズ昇格は human-source のみ駆動 | `correction_semantic/` |
 | `bootstrap_backlog` | 初回 evolve で weak_signals バックログの消化方式を AskUserQuestion 3択で選ぶ bootstrap phase | `correction_semantic/bootstrap_backlog.py` |
 | `judge_runner` / `safe_llm_call` | llm_judge の意味判定を daily runner の非対話実行へ移設。無人呼び出しは `safe_llm_call` に一点集約し4重防御、費用は呼び出し直前に事前予約 | `correction_semantic/judge_runner.py` + `safe_llm_call.py` |
-| `daily_review` | evolve の「今日の修正確認」phase — 新規 weak_signal を最大5件 y/n 確認し promote | `correction_semantic/daily_review.py` |
+| `daily_review` | evolve の「今日の修正確認」phase — 新規 weak_signal を最大5件 y/n 確認し promote 成功後のみ既読追記（部分失敗は対象外） | `correction_semantic/daily_review.py` |
 | `review_channels` | y/n 確認に出す weak チャネルの単一ソース。content-rich チャネルのみ対象 | `correction_semantic/review_channels.py` |
 | `idiom_autopromote` | confirmed idiom の再発 weak_signal を機械昇格。**#379 Step1 で凍結中、`autopromote()` は no-op** | `correction_semantic/idiom_autopromote.py` |
 | `measurement_bug` | 複数 PJ の非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface | `audit/measurement_bug.py` |
