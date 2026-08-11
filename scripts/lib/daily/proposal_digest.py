@@ -204,6 +204,10 @@ def _extract_global_groups(
         merged: Optional[Dict[str, Any]] = None
         total_count = 0
         all_representatives: List[str] = []
+        # #413: 代表文を PJ 別にも保持する。all_representatives は成分全体のフラット表示用、
+        # reps_by_pj は「既読差し引き」用の帰属情報 — keys_by_pj と同じ粒度（origin PJ）で
+        # 持たせておき、部分処理後は build_session_proposals で keys_by_pj と一緒に絞る。
+        reps_by_pj: Dict[str, List[str]] = {}
         for node_i in member_node_ids:
             slug, idx = nodes[node_i]
             g = per_pj[slug][idx]
@@ -223,6 +227,10 @@ def _extract_global_groups(
             rep = g.get("representative") or g.get("evidence_text") or ""
             if rep and rep not in all_representatives:
                 all_representatives.append(rep)
+            if rep:
+                pj_reps = reps_by_pj.setdefault(slug, [])
+                if rep not in pj_reps:
+                    pj_reps.append(rep)
 
         if not merged_keys or merged is None:
             continue
@@ -233,6 +241,7 @@ def _extract_global_groups(
         # 現在 PJ の実績として誤帰属されないよう、reflect 呼び出し時に PJ ごと分離するため。
         merged["keys_by_pj"] = keys_by_pj
         merged["all_representatives"] = all_representatives
+        merged["reps_by_pj"] = reps_by_pj
         global_groups.append(merged)
 
     filtered_per_pj: Dict[str, List[Dict[str, Any]]] = {}
@@ -317,6 +326,11 @@ def build_session_proposals(
     ``--promote-weak`` が成功キーだけ既読化する（round1 是正済み）ため、
     ``{成功キー, expired キー}`` の group は expired キーが未既読のまま group ごと消え、
     二度と再提示されなくなる。既読キーだけを差し引いて残りキーで再提示することで解消する。
+
+    #413: global group の ``keys_by_pj``（実行コマンドの絞り込み）に加え ``reps_by_pj``
+    （PJ 別代表文）も同じ既読差し引きを適用する。処理済み PJ の代表文が ``all_representatives``
+    に再掲されると「もう答えた案がまた出た」という誤認を招くため、表示（代表文）と実体
+    （実行コマンド）を同じ既読集合で絞る。
     """
     if not isinstance(queue_data, dict):
         return []
@@ -345,13 +359,31 @@ def build_session_proposals(
         g = dict(g)
         g["signal_keys"] = remaining_keys
         keys_by_pj = g.get("keys_by_pj")
+        new_keys_by_pj: Optional[Dict[str, List[str]]] = None
         if isinstance(keys_by_pj, dict):
-            new_keys_by_pj: Dict[str, List[str]] = {}
+            new_keys_by_pj = {}
             for origin_slug, origin_keys in keys_by_pj.items():
                 remaining_origin_keys = [k for k in origin_keys if k not in seen_keys]
                 if remaining_origin_keys:
                     new_keys_by_pj[origin_slug] = remaining_origin_keys
             g["keys_by_pj"] = new_keys_by_pj
+        # #413: keys_by_pj と同じ既読差し引きを reps_by_pj にも適用する。実行コマンドが
+        # 絞られた origin PJ の代表文だけを残し、既に答えた PJ の代表文が再掲されないように
+        # する（表示 = all_representatives と実体 = signal_keys/keys_by_pj の食い違い是正）。
+        reps_by_pj = g.get("reps_by_pj")
+        if isinstance(reps_by_pj, dict) and new_keys_by_pj is not None:
+            new_reps_by_pj = {
+                origin_slug: origin_reps
+                for origin_slug, origin_reps in reps_by_pj.items()
+                if origin_slug in new_keys_by_pj
+            }
+            g["reps_by_pj"] = new_reps_by_pj
+            flattened_reps: List[str] = []
+            for origin_reps in new_reps_by_pj.values():
+                for r in origin_reps:
+                    if r and r not in flattened_reps:
+                        flattened_reps.append(r)
+            g["all_representatives"] = flattened_reps
         out.append(g)
         if len(out) >= limit:
             break
