@@ -120,13 +120,48 @@ def emit_judgement_requests(
 def _batch_cost_tokens(group: List[Dict[str, Any]]) -> int:
     """1 バッチ試行分の概算トークン（本文合計 + バッチ固定費）。
 
-    #410 round3 [Must]2: 課金済みだが判定を確定できなかった試行（billed_attempt）の
-    コスト算出に使う。確定した個々のキーへ按分する record_judged の按分方式とは異なり、
-    誰にも確定的に帰属しない試行なのでバッチ丸ごと 1 件のコストとして扱う。
+    #410 round4 [Must]1+2: ``reserve_batch_cost`` が呼び出し直前の予約記録に使う唯一の
+    コスト算出関数（誰にも確定的に帰属しない試行なのでバッチ丸ごと 1 件のコストとして扱う。
+    round3 の per-key 按分方式は round4 で廃止した）。
     """
     return (
         sum(estimate_utterance_tokens(u, index=i) for i, u in enumerate(group))
         + _PROMPT_OVERHEAD_TOKENS
+    )
+
+
+def reserve_batch_cost(
+    group: List[Dict[str, Any]],
+    *,
+    judged_path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """1 バッチの見積コストを、LLM を呼ぶ**前**に予約記録する（#410 round4 [Must]1+2）。
+
+    **設計変更（round3→round4）**: round3 は「呼び出し後に課金が確定したと判明した試行だけ
+    事後記録する」方式だったが、codex round4 レビューで構造的な穴を指摘された:
+      - 範囲内 verdict が1件でもあれば billed_attempt を作らないため、未返却 index の
+        本文コスト（同じプロンプトで送信・課金済み）が丸ごと未計上になっていた
+      - CLI 例外を「未課金」とみなす前提が成立しない（API 到達後のタイムアウト・応答受信後の
+        異常終了・プロセス中断は課金済みでありうる）
+      - 全呼び出し後にまとめて記録するため、Phase B 中のプロセス終了で当日分が全損する
+
+    round4 は ``judge_runner`` の Phase B ループが本関数を **各 call_haiku 呼び出しの直前に
+    1バッチずつ即時に** 呼ぶ。呼んだ時点で「課金される可能性がある」とみなし無条件に予約
+    するため、事後の「課金されたか否か」判別が一切不要になる（例外・タイムアウト・プロセス
+    中断のいずれでも予約は残る）。過大計上（実際には無課金だった呼び出し分も予約される）に
+    倒れるが、予算の歯止めとしては保守側が正しい。
+
+    このコストが当日累積の**唯一のソース**になる（``ingest_judgement_results``（Phase C）
+    側の per-key est_tokens 記録・バッチ固定費按分は round4 で完全に廃止した。二重計上を
+    避けるため）。実体は ``_store.record_billed_attempts``（"key" を持たない keyless
+    record・#379 新設凍結中のため新ストアは作らず既存 ``correction_judged.jsonl`` を再利用）。
+
+    Returns:
+        {"written": int, "dry_run": bool}
+    """
+    return _store.record_billed_attempts(
+        [_batch_cost_tokens(group)], path=judged_path, dry_run=dry_run,
     )
 
 
@@ -158,10 +193,16 @@ def ingest_judgement_results(
     文脈固有トークン（日付・割合・序数）に該当する idiom は **個人辞書に入れない**
     （weak_signal は隔離記録するので reflect で人間が拾える）。弾いた件数は idioms_filtered。
 
+    **課金コストはここでは記録しない（#410 round4 [Must]1+2）**: round3 まではここで
+    per-key est_tokens・バッチ固定費按分・billed_attempt を記録していたが、応答の解釈結果
+    次第で課金の一部が計上漏れになる構造的な穴があった。round4 は判定結果に一切依存しない
+    「呼ぶ前に予約する」方式（``reserve_batch_cost``。呼び出し元 ``judge_runner`` の Phase B
+    ループが担う）に一本化し、この Phase C（decision-dependent）からは完全に切り離した。
+
     Returns:
         {"corrections", "non_corrections", "skipped_batches", "parse_failed_batches",
-         "omitted_verdicts", "out_of_range_verdicts", "billed_attempts", "weak_written",
-         "idioms_written", "idioms_filtered", "judged_written", "dry_run"}
+         "omitted_verdicts", "out_of_range_verdicts", "weak_written", "idioms_written",
+         "idioms_filtered", "judged_written", "dry_run"}
     """
     from weak_signals.store import WeakSignal, append_signals, now_iso
 
@@ -172,12 +213,6 @@ def ingest_judgement_results(
     signals: List[WeakSignal] = []
     idioms: List[_store.CorrectionIdiom] = []
     judged_keys: List[str] = []
-    # #410 [Must]B: 判定済みキーごとの推定トークンを残し、daily runner が当日累積を
-    # read 時導出できるようにする（record_judged に渡す）。
-    est_tokens_by_key: Dict[str, int] = {}
-    # #410 round3 [Must]2: 課金済み（call_haiku 呼び出し自体は成功した）だが判定を確定
-    # できなかったバッチのトークン概算（billed-but-unconfirmed 予算漏れの是正）。
-    billed_attempt_tokens: List[int] = []
     corrections = 0
     non_corrections = 0
     skipped_batches = 0
@@ -196,12 +231,10 @@ def ingest_judgement_results(
         text = raw.strip() if isinstance(raw, str) else ""
         if not text:
             # 応答欠損: 判定済みにせず次 drain で再試行。
+            # #410 round4 [Must]1+2: このバッチのコストは判定結果を問わず judge_runner の
+            # Phase B が呼び出し直前に既に予約済み（reserve_batch_cost）。ここでの billed
+            # 判別・追加記録は不要になった。
             skipped_batches += 1
-            # #410 round3 [Must]2: responses に key があれば call_haiku 呼び出し自体は
-            # 成功している（＝課金済み）。呼び出し自体が例外送出で失敗した場合（judge_runner
-            # が responses に key を積まない）は課金が発生していないため対象外にする。
-            if key in responses:
-                billed_attempt_tokens.append(_batch_cost_tokens(group))
             continue
 
         # 変数名は `parsed`（= parse_responses の応答マップ）と必ず分ける。
@@ -216,9 +249,6 @@ def ingest_judgement_results(
             # #273: JSON 解釈不能。応答欠損と同様、判定済みにせず次 drain で再試行する
             # （[] フォールバックを「該当なし」と誤読して judged_keys に積むと desync する）。
             parse_failed_batches += 1
-            # #410 round3 [Must]2: text が非空 = 応答は届いている = 課金済み（このパスは
-            # 常に billed）。
-            billed_attempt_tokens.append(_batch_cost_tokens(group))
             continue
         # #410 round3 [Should]⑤: バッチ対象外の index はパーサ側で個別に無視され
         # verdicts から除外済み（バッチ全体は失格にしない）。無視した件数だけ observability
@@ -232,10 +262,17 @@ def ingest_judgement_results(
         # test_ingest_legitimate_empty_verdicts_still_marks_judged が固定）。後者は
         # バッチ全体を戻すと head-of-line blocking になるため、欠落した index の発話だけ
         # 未判定のまま残し、揃っている index は従来どおり確定する。
-        legitimate_empty_batch = len(parsed_verdicts["verdicts"]) == 0
-        # #410 round2 [Must]B: このバッチで実際に確定するキー（未判定のまま残す部分応答の
-        # 欠落分は含めない）。バッチ固定費の按分対象を決めるために保持する。
-        batch_judged_keys: List[str] = []
+        #
+        # #410 round4 [Must]3 是正: 「元々 verdicts=[]（モデルが明示的に該当なしと判定）」と
+        # 「範囲外 index を除去した結果 verdicts=[] に収束した」は意味が違う。後者は
+        # 「対象発話を判定していない」のであって「対象発話には修正が無い」のではない
+        # （round3 はこの区別をせず全件を非修正として誤確定させていた＝データ損失）。
+        # out_of_range が1件でも発生していれば legitimate_empty_batch にせず、対象発話は
+        # 未判定のまま残す（下の omitted_verdicts 経路に自然に合流する）。
+        legitimate_empty_batch = (
+            len(parsed_verdicts["verdicts"]) == 0
+            and parsed_verdicts.get("out_of_range", 0) == 0
+        )
 
         for local_i, utt in enumerate(group):
             key = _store.utterance_key(utt)
@@ -243,9 +280,6 @@ def ingest_judgement_results(
             if v is None:
                 if legitimate_empty_batch:
                     judged_keys.append(key)
-                    batch_judged_keys.append(key)
-                    # #410 round3 [Must]2: local_i（バッチ内の実 index）を渡す。
-                    est_tokens_by_key[key] = estimate_utterance_tokens(utt, index=local_i)
                     non_corrections += 1
                     continue
                 # 部分応答の欠落: judged_keys に積まない（未判定のまま次回 drain で再試行）。
@@ -253,8 +287,6 @@ def ingest_judgement_results(
                 omitted_verdicts += 1
                 continue
             judged_keys.append(key)
-            batch_judged_keys.append(key)
-            est_tokens_by_key[key] = estimate_utterance_tokens(utt, index=local_i)
             if not v.get("is_correction"):
                 non_corrections += 1
                 continue
@@ -295,30 +327,11 @@ def ingest_judgement_results(
             elif idiom_text:
                 idioms_filtered += 1
 
-        # #410 round2 [Must]B: バッチ固定費（_PROMPT_OVERHEAD_TOKENS）を、このバッチで
-        # 実際に確定したキーへ均等按分して当日累積に反映する（部分応答の欠落で未確定の
-        # キーには課さない）。estimate_tokens（見積もり）は batches × _PROMPT_OVERHEAD_TOKENS
-        # を含むのに、旧実装はここで発話単価しか記録しておらず、次回実行が前回バッチの
-        # 固定費を一切覚えていなかった（batch_size=1 を繰り返すと毎回 400 トークンずつ
-        # 上限を超過できた）。按分方式を選んだ理由: 特定1キー（例: 先頭）へ全額寄せると、
-        # そのキーが別経路で再判定対象になった場合に固定費だけ二重計上/消失する非対称が
-        # 生まれるため、確定した全キーに均等に配る。
-        if batch_judged_keys:
-            per_key_overhead = -(-_PROMPT_OVERHEAD_TOKENS // len(batch_judged_keys))  # ceil
-            for bkey in batch_judged_keys:
-                est_tokens_by_key[bkey] = est_tokens_by_key.get(bkey, 0) + per_key_overhead
-
     ws_res = append_signals(signals, path=weak_signals_path, dry_run=dry_run)
     idiom_res = _store.append_idioms(idioms, path=idioms_path, dry_run=dry_run)
-    judged_res = _store.record_judged(
-        judged_keys, path=judged_path, dry_run=dry_run,
-        est_tokens_by_key=est_tokens_by_key,
-    )
-    # #410 round3 [Must]2: billed-but-unconfirmed の試行を当日累積へ計上する（無限再試行×
-    # 予算漏れの是正）。
-    billed_res = _store.record_billed_attempts(
-        billed_attempt_tokens, path=judged_path, dry_run=dry_run,
-    )
+    # #410 round4 [Must]1+2: est_tokens は渡さない（judge_runner の Phase B が呼び出し
+    # 直前に reserve_batch_cost で既に予約済み。ここで再度付与すると二重計上になる）。
+    judged_res = _store.record_judged(judged_keys, path=judged_path, dry_run=dry_run)
 
     return {
         "corrections": corrections,
@@ -330,7 +343,6 @@ def ingest_judgement_results(
         "idioms_filtered": idioms_filtered,  # #527: 過汎用で弾いた idiom 件数（observability）
         "omitted_verdicts": omitted_verdicts,  # #273: verdict 欠落で非修正確定した発話数
         "out_of_range_verdicts": out_of_range_verdicts,  # #410 round3 [Should]⑤: 無視した範囲外件数
-        "billed_attempts": billed_res["written"],  # #410 round3 [Must]2: 課金済み未確定試行数
         "judged_written": judged_res["written"],
         "dry_run": bool(dry_run),
     }

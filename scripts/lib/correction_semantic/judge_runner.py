@@ -196,14 +196,19 @@ def run_daily_judge(
         run:     {"dry_run": False, "requested", "responded", "call_failed",
                    "corrections", "non_corrections", "skipped_batches",
                    "parse_failed_batches", "omitted_verdicts", "out_of_range_verdicts",
-                   "billed_attempts", "weak_written", "idioms_written", "judged_written",
+                   "reserved_batches", "weak_written", "idioms_written", "judged_written",
                    "unjudged_total", "selected", "capped", "source_failed", "source_error",
                    "skipped_locked"}
 
-        ``billed_attempts``（#410 round3 [Must]2）: LLM 呼び出し自体は成功した（＝課金が
-        発生した）が判定を確定できなかった試行数（応答欠損・JSON パース失敗）。判定は
-        未確定のまま次回再試行できるが、コストは当日累積（daily_token_limit）へ計上する
-        （同日中に何度でも無料で再送信できる billed-but-unconfirmed 抜け穴の是正）。
+        ``reserved_batches``（#410 round4 [Must]1+2・事前予約方式）: Phase B ループが
+        call_haiku を呼ぶ**前**に見積コストを予約記録したバッチ数。判定結果（応答欠損・
+        パース失敗・呼び出し例外のいずれ）を問わず、呼ぼうとした時点で必ず1件積む。
+        round3 は「呼び出し後に課金が確定したと判明した試行だけ事後記録する」方式
+        （billed_attempts）だったが、(a) 範囲内 verdict が1件でもあれば記録されず未返却
+        index の本文コストが未計上になる、(b) CLI 例外を「未課金」とみなす前提が成立しない、
+        (c) 全呼び出し後にまとめて記録するためプロセス中断で当日分が全損する、という3つの
+        構造的な穴があった（codex round4 指摘）。事前予約方式はこれらを一括で解消する
+        （過大計上に倒れるが、予算の歯止めとしては保守側が正しい）。
 
         ``source_failed``（#410 [Must]E）: True なら発話ソース（utterances.db）取得が例外
         送出し 0 件として fail-open した（DB/schema 障害等）。``unjudged_total=0`` と正当な
@@ -306,7 +311,7 @@ def run_daily_judge(
                 "parse_failed_batches": 0,
                 "omitted_verdicts": 0,
                 "out_of_range_verdicts": 0,
-                "billed_attempts": 0,
+                "reserved_batches": 0,
                 "weak_written": 0,
                 "idioms_written": 0,
                 "judged_written": 0,
@@ -339,7 +344,7 @@ def run_daily_judge(
                 "parse_failed_batches": 0,
                 "omitted_verdicts": 0,
                 "out_of_range_verdicts": 0,
-                "billed_attempts": 0,
+                "reserved_batches": 0,
                 "weak_written": 0,
                 "idioms_written": 0,
                 "judged_written": 0,
@@ -365,15 +370,24 @@ def run_daily_judge(
         # Phase B（LLM・本 runner が非対話で肩代わりする区間）。
         responses: Dict[str, str] = {}
         call_failed = 0
+        reserved_batches = 0
         for req in emitted["requests"]:
             key = req.get("id")
             prompt = req.get("prompt", "")
+            group = (req.get("meta") or {}).get("utterances", [])
+            # #410 round4 [Must]1+2: call_haiku を呼ぶ**前**にこのバッチの見積コストを
+            # 予約記録する（唯一の課金ソース）。呼んだ時点で「課金される可能性がある」と
+            # みなし無条件で予約するため、以後の応答欠損・パース失敗・呼び出し例外の
+            # いずれでも予約は残る（事後の billed 判別を完全に不要にする設計）。
+            _batch.reserve_batch_cost(group, judged_path=judged_path, dry_run=False)
+            reserved_batches += 1
             try:
                 raw = call_haiku(prompt, model)
             except Exception as e:  # noqa: BLE001 - 1 バッチの失敗は次バッチへ継続（fail-open）
                 call_failed += 1
                 print(
-                    f"[judge_runner]   {key}: Haiku 呼び出し失敗 ({e}) — 未判定のまま次回に残す",
+                    f"[judge_runner]   {key}: Haiku 呼び出し失敗 ({e}) — 未判定のまま次回に残す"
+                    "（コストは呼び出し前に予約済み）",
                     file=sys.stderr,
                 )
                 continue  # responses に書かない → parse_responses が空文字列で穴埋めし
@@ -403,10 +417,10 @@ def run_daily_judge(
             # observability。バッチ全体は失格にしないため、モデルが返す範囲外 index が
             # 常態化していないかをログ差分で気づけるようにする）。
             f"out_of_range_verdicts={result['out_of_range_verdicts']} "
-            # #410 round3 [Must]2: billed_attempts（課金済みだが判定を確定できなかった
-            # 試行数）をログにも出す。この件数が続くと同日中の予算を消費しているのに
-            # 供給が進まない状態が続くため、運用で気づける必要がある。
-            f"billed_attempts={result['billed_attempts']} "
+            # #410 round4 [Must]1+2: reserved_batches（Phase B で呼び出し前に予約した
+            # バッチ数）をログにも出す。応答結果に関わらず「呼ぼうとした」時点で必ず1件
+            # 積むため、この件数が emitted['batches'] と乖離しないかで予約漏れを検知できる。
+            f"reserved_batches={reserved_batches} "
             f"weak_written={result['weak_written']} judged_written={result['judged_written']}",
             file=out,
         )
@@ -422,7 +436,7 @@ def run_daily_judge(
             "parse_failed_batches": result["parse_failed_batches"],
             "omitted_verdicts": result["omitted_verdicts"],
             "out_of_range_verdicts": result["out_of_range_verdicts"],
-            "billed_attempts": result["billed_attempts"],
+            "reserved_batches": reserved_batches,
             "weak_written": result["weak_written"],
             "idioms_written": result["idioms_written"],
             "judged_written": result["judged_written"],

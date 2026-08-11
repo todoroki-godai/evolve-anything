@@ -144,111 +144,24 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(scratch_dir: P
     assert {r["idiom"] for r in idiom_lines} == {"四国めたんじゃなくて", "色が違うから赤にして"}
     # 判定進捗に 3 件（修正/非修正どちらも判定済みに記録）
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
-    # #410 [Must]B: 判定済みキーごとの推定トークンが記録され、count_judged_today で
-    # 当日累積として合算できる（daily runner の日次上限が「1回の呼び出し上限」に
-    # なっていた欠陥の是正・record_judged への配線を固定する）。
+    # #410 round4 [Must]1+2: est_tokens の記録は ingest（Phase C）の責務ではなくなった
+    # （judge_runner の Phase B が呼び出し直前に reserve_batch_cost で予約する事前予約方式へ
+    # 移行・二重計上を避けるため ingest 側は判定結果の確定のみを行い、コスト記録は一切しない）。
+    # count はキー付きレコードの件数のみを見るため 3 のまま、est_tokens は 0（このテストは
+    # 予約を呼んでいないため）。
     today_count = cs_store.count_judged_today(path=judged)
     assert today_count["count"] == 3
-    assert today_count["est_tokens"] > 0
+    assert today_count["est_tokens"] == 0
 
 
-# ── #410 round2 codex [Must]B: 当日累積がバッチ固定費を取りこぼす是正 ───────────
-# estimate_tokens は batches × _PROMPT_OVERHEAD_TOKENS(400) を含むのに、record_judged に
-# 残す est_tokens は発話単価のみだった。batch_size=1 で再実行を繰り返すと毎回 400 トークン
-# ずつ上限を超過できる（次回実行が前回のバッチ固定費を全く覚えていない）。
-
-
-def test_ingest_distributes_batch_fixed_cost_into_est_tokens_by_key(scratch_dir: Path) -> None:
-    """バッチ固定費（_PROMPT_OVERHEAD_TOKENS）を、このバッチで実際に確定したキーへ均等
-    按分して記録する。按分方式を選んだ理由: 特定1キー（例: 先頭）に全額寄せると、そのキーが
-    別の事情で再判定対象になった場合に固定費だけ二重計上/消失する非対称が生まれるため、
-    確定した全キーに均等に配る方が扱いやすい。
-
-    **このテストの限界（#410 round3 [Should]6）**: このテストは当日累積の**合計値**しか
-    見ておらず、合計は按分方式に依存しない（全額を1キーへ寄せる regression でも合計は
-    変わらない）ため、按分が本当に「均等」かは検証できていない（実測でこの regression が
-    green のまま通ることを確認済み）。均等性そのものの検証は下の
-    ``test_ingest_distributes_batch_fixed_cost_evenly_not_concentrated_on_one_key`` が担う。
-    """
-    ws_store = scratch_dir / "weak_signals.jsonl"
-    idioms_store = scratch_dir / "idioms.jsonl"
-    judged = scratch_dir / "judged.jsonl"
-    utts = _utts()  # 3 発話・batch_size=30 → 1 バッチ
-
-    emitted = cs_batch.emit_judgement_requests(
-        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
-    )
-    rid = emitted["requests"][0]["id"]
-    responses = _responses_for(emitted, {
-        (rid, i): {"is_correction": False, "idiom": None, "reason": "r"} for i in range(3)
-    })
-    cs_batch.ingest_judgement_results(
-        emitted, responses,
-        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
-    )
-
-    today = cs_store.count_judged_today(path=judged)
-    per_utterance_only_sum = sum(cs_batch.estimate_utterance_tokens(u) for u in utts)
-    # バッチ固定費（400トークン）が含まれるため、発話単価だけの合計より明確に大きい
-    # （按分丸めの誤差はキー数未満に収まる）。
-    assert today["est_tokens"] > per_utterance_only_sum
-    assert today["est_tokens"] - per_utterance_only_sum >= cs_batch._PROMPT_OVERHEAD_TOKENS - len(utts)
-
-
-def test_ingest_distributes_batch_fixed_cost_evenly_not_concentrated_on_one_key(
-    scratch_dir: Path,
-) -> None:
-    """#410 round3 [Should]6: 按分が「均等」であることを個々のキーの est_tokens レコードを
-    直接読んで検証する（上のテストは合計値しか見ておらず、全額を1キーへ寄せる regression
-    でも合計は変わらないため検出できないことを実測で確認済み）。
-
-    実測（このテストを追加する前）: バッチ固定費を「按分せず先頭キー1件に全額寄せる」
-    regression に一時的に差し替えて既存2テスト（本ファイルの上のテスト・
-    test_correction_semantic_judge_runner.py の
-    test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost）を実行したところ、
-    どちらも green のまま通った（judge_runner 側は batch_size=1 でキーが1件しかないため
-    按分の偏りが原理的に観測できない・batch.py 側は合計値しか見ないため偏りに無反応）。
-    このテストは「先頭キーへの上乗せ分」と「他キーへの上乗せ分」の差を直接比較することで、
-    その regression を実際に検出する（このテストを regression 状態に対して実行し赤化を
-    確認してから、正しい実装に戻して緑化を確認した）。
-    """
-    ws_store = scratch_dir / "weak_signals.jsonl"
-    idioms_store = scratch_dir / "idioms.jsonl"
-    judged = scratch_dir / "judged.jsonl"
-    utts = _utts()  # 3 発話・batch_size=30 → 1 バッチ
-
-    emitted = cs_batch.emit_judgement_requests(
-        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
-    )
-    rid = emitted["requests"][0]["id"]
-    responses = _responses_for(emitted, {
-        (rid, i): {"is_correction": False, "idiom": None, "reason": "r"} for i in range(3)
-    })
-    cs_batch.ingest_judgement_results(
-        emitted, responses,
-        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
-    )
-
-    import json as _json
-
-    recs = [
-        _json.loads(line)
-        for line in judged.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    per_key_tokens = {r["key"]: r["est_tokens"] for r in recs if "key" in r}
-    assert len(per_key_tokens) == 3
-
-    # 発話ごとの本文単価（実 index 込み）を差し引き、バッチ固定費由来の上乗せ分だけを
-    # キーごとに取り出す。均等按分なら全キーとも同じ値（ceil(400/3)）になる。
-    overhead_per_key = []
-    for i, u in enumerate(utts):
-        key = cs_store.utterance_key(u)
-        body = cs_batch.estimate_utterance_tokens(u, index=i)
-        overhead_per_key.append(per_key_tokens[key] - body)
-
-    expected_overhead = -(-cs_batch._PROMPT_OVERHEAD_TOKENS // 3)  # ceil(400/3)
-    assert overhead_per_key == [expected_overhead] * 3
+# ── #410 round4 [Must]1+2: バッチ固定費の記録は ingest から呼び出し前の予約へ移動 ─────
+# round2/round3 は record_judged への per-key 按分でバッチ固定費（_PROMPT_OVERHEAD_TOKENS）
+# を記録していたが、判定結果次第で計上漏れが生じる構造的な穴があった（codex round4 指摘）。
+# round4 は「LLM を呼ぶ前にそのバッチの見積コストを予約する」方式（reserve_batch_cost・
+# judge_runner の Phase B が担う）に一本化し、ingest（Phase C）からコスト記録を完全に
+# 除去した。予約方式の単体テストは test_correction_semantic_store.py
+# （record_billed_attempts）と test_correction_semantic_judge_runner.py（Phase B 配線）が
+# 担う。
 
 
 def test_ingest_then_reemit_excludes_judged_utterances(scratch_dir: Path) -> None:
@@ -377,92 +290,6 @@ def test_ingest_missing_response_does_not_mark_judged(scratch_dir: Path) -> None
     assert cs_store.read_judged_keys(judged) == set()
 
 
-# ── #410 round3 [Must]2: 課金済みだが判定確定できなかった試行の予算計上 ──────────
-# call_haiku 呼び出し自体が成功した（＝実際に課金が発生した）のに応答が空/パース不能で
-# 判定を確定できないケースは、従来は correction_judged.jsonl に一切記録しておらず
-# 「未判定のまま」だった。これは同日中に何度でも同じ対象へ再送信でき、当日累積の予算
-# （daily_token_limit）が事実上機能しない抜け穴になる。call_haiku 自体が失敗（例外）した
-# 場合は課金が発生していないため対象外（judge_runner が responses dict に key を積まない
-# ことで「課金あり/なし」を区別する。responses に key が無い＝未課金）。
-
-
-def test_ingest_never_billed_missing_response_records_no_billed_attempt(scratch_dir: Path) -> None:
-    """responses に key が一切無い（= call_haiku が例外送出し課金が発生していない）場合は
-    billed_attempt を記録しない（無課金の試行に予算を計上しない）。
-    """
-    ws_store = scratch_dir / "weak_signals.jsonl"
-    idioms_store = scratch_dir / "idioms.jsonl"
-    judged = scratch_dir / "judged.jsonl"
-    emitted = cs_batch.emit_judgement_requests(
-        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
-    )
-    res = cs_batch.ingest_judgement_results(
-        emitted, {}, weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
-    )
-    assert res["billed_attempts"] == 0
-    assert cs_store.count_judged_today(path=judged)["count"] == 0
-
-
-def test_ingest_billed_but_empty_response_records_billed_attempt(scratch_dir: Path) -> None:
-    """responses に key はあるが空文字列（= call_haiku 呼び出しは成功=課金済みだが応答が
-    空だった）場合は billed_attempt として記録し、当日累積コストに計上する。
-    """
-    ws_store = scratch_dir / "weak_signals.jsonl"
-    idioms_store = scratch_dir / "idioms.jsonl"
-    judged = scratch_dir / "judged.jsonl"
-    emitted = cs_batch.emit_judgement_requests(
-        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
-    )
-    rid = emitted["requests"][0]["id"]
-    res = cs_batch.ingest_judgement_results(
-        emitted, {rid: ""},
-        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
-    )
-    assert res["skipped_batches"] == 1
-    assert res["billed_attempts"] == 1
-    assert cs_store.count_judged_today(path=judged)["count"] == 1
-    assert cs_store.count_judged_today(path=judged)["est_tokens"] > 0
-    # billed_attempt は未判定のまま（次回 drain で再試行できる）。
-    assert cs_store.read_judged_keys(judged) == set()
-
-
-def test_ingest_malformed_json_records_billed_attempt(scratch_dir: Path) -> None:
-    """応答は届いた（=課金済み）が JSON が壊れていたバッチも billed_attempt として記録する。"""
-    ws_store = scratch_dir / "weak_signals.jsonl"
-    idioms_store = scratch_dir / "idioms.jsonl"
-    judged = scratch_dir / "judged.jsonl"
-    emitted = cs_batch.emit_judgement_requests(
-        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
-    )
-    rid = emitted["requests"][0]["id"]
-    responses = {rid: "```json\n{not valid json at all"}
-    res = cs_batch.ingest_judgement_results(
-        emitted, responses,
-        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
-    )
-    assert res["parse_failed_batches"] == 1
-    assert res["billed_attempts"] == 1
-    assert cs_store.count_judged_today(path=judged)["count"] == 1
-    assert cs_store.count_judged_today(path=judged)["est_tokens"] > 0
-    assert cs_store.read_judged_keys(judged) == set()
-
-
-def test_ingest_billed_attempt_dry_run_writes_nothing(scratch_dir: Path) -> None:
-    ws_store = scratch_dir / "weak_signals.jsonl"
-    idioms_store = scratch_dir / "idioms.jsonl"
-    judged = scratch_dir / "judged.jsonl"
-    emitted = cs_batch.emit_judgement_requests(
-        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
-    )
-    rid = emitted["requests"][0]["id"]
-    res = cs_batch.ingest_judgement_results(
-        emitted, {rid: ""}, dry_run=True,
-        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
-    )
-    assert res["billed_attempts"] == 1
-    assert not judged.exists()
-
-
 def test_ingest_malformed_json_does_not_mark_judged(scratch_dir: Path) -> None:
     """#273: 応答は届いたが JSON が壊れているバッチも、応答欠損と同様に未判定のまま残す。
 
@@ -541,13 +368,18 @@ def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(scratch_d
     assert cs_store.read_judged_keys(judged) == set()
 
 
-def test_ingest_all_out_of_range_index_treated_as_legitimate_empty(scratch_dir: Path) -> None:
-    """#410 round3 [Should]⑤ 是正: バッチ対象外の index はその要素だけ無視し、件数を
-    out_of_range_verdicts に surface する（round2 の「バッチ全体を parse_failed にして
-    無限再試行させる」設計は過剰だったため方針変更・詳細は prompt.parse_verdicts_result の
-    docstring 参照）。全件が範囲外だと verdicts=[] に収束するため、モデルが明示的に
-    「該当なし」と答えた場合（legitimate_empty_batch）と同様にバッチ全体を非修正確定する
-    （無限再試行を避けるための既定の挙動・#273 契約と同型）。
+def test_ingest_all_out_of_range_index_is_not_treated_as_legitimate_empty(
+    scratch_dir: Path,
+) -> None:
+    """#410 round4 [Must]3 是正: round3 は「全件が範囲外で verdicts=[] に収束したケース」を
+    「モデルが明示的に該当なしと答えたケース（legitimate_empty_batch）」と区別せず、
+    バッチ全体を非修正確定していた。これはデータ損失（永久に再判定されない）— モデルが
+    実在しない index（99等）だけを返した応答は「対象発話を判定していない」ことを意味する
+    のであって「対象発話には修正が無い」ことを意味しない。両者は意味が違う。
+
+    round4 是正: verdicts が空でも ``out_of_range`` が1件でもあれば legitimate_empty_batch
+    にせず、対象発話は未判定のまま残す（次回 drain で再試行できる。#410 [Must]D の部分応答
+    欠落と同じ扱い）。
     """
     ws_store = scratch_dir / "weak_signals.jsonl"
     idioms_store = scratch_dir / "idioms.jsonl"
@@ -566,8 +398,9 @@ def test_ingest_all_out_of_range_index_treated_as_legitimate_empty(scratch_dir: 
     assert res["parse_failed_batches"] == 0
     assert res["out_of_range_verdicts"] == 1
     assert res["corrections"] == 0
-    assert res["non_corrections"] == 3
-    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+    assert res["non_corrections"] == 0
+    assert res["omitted_verdicts"] == 3  # 全3発話とも未判定のまま残す（誤確定しない）
+    assert cs_store.read_judged_keys(judged) == set()
 
 
 def test_ingest_legitimate_empty_verdicts_still_marks_judged(scratch_dir: Path) -> None:
@@ -827,3 +660,43 @@ def test_estimate_utterance_tokens_index_defaults_to_zero_for_backward_compat() 
     """index 省略時は従来どおり 0（既存呼び出し側との後方互換）。"""
     u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
     assert cs_batch.estimate_utterance_tokens(u) == cs_batch.estimate_utterance_tokens(u, index=0)
+
+
+# ── #410 round4 [Must]1+2: reserve_batch_cost（呼び出し前の事前予約） ────────────────
+
+
+def test_reserve_batch_cost_writes_keyless_record_equal_to_batch_cost(scratch_dir: Path) -> None:
+    """reserve_batch_cost は _batch_cost_tokens（本文合計 + バッチ固定費）を "key" を持たない
+    record として予約する。count には数えないが est_tokens には計上される。
+    """
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()  # 3 発話
+    expected_cost = cs_batch._batch_cost_tokens(utts)
+
+    res = cs_batch.reserve_batch_cost(utts, judged_path=judged)
+    assert res == {"written": 1, "dry_run": False}
+
+    today = cs_store.count_judged_today(path=judged)
+    assert today["count"] == 0  # key 無しなので判定件数には数えない
+    assert today["est_tokens"] == expected_cost
+    assert cs_store.read_judged_keys(judged) == set()  # 未判定のまま
+
+
+def test_reserve_batch_cost_dry_run_writes_nothing(scratch_dir: Path) -> None:
+    judged = scratch_dir / "judged.jsonl"
+    res = cs_batch.reserve_batch_cost(_utts(), judged_path=judged, dry_run=True)
+    assert res == {"written": 1, "dry_run": True}
+    assert not judged.exists()
+
+
+def test_reserve_batch_cost_called_multiple_times_accumulates(scratch_dir: Path) -> None:
+    """1バッチごとに呼ぶ設計（まとめ書きしない）なので、複数回呼べば累積する。"""
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()
+    cost = cs_batch._batch_cost_tokens(utts)
+
+    cs_batch.reserve_batch_cost(utts, judged_path=judged)
+    cs_batch.reserve_batch_cost(utts, judged_path=judged)
+
+    today = cs_store.count_judged_today(path=judged)
+    assert today["est_tokens"] == cost * 2

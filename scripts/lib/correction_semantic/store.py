@@ -487,24 +487,36 @@ def record_billed_attempts(
     path: Optional[Path] = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """LLM を実際に呼び出し課金が発生したが判定を確定できなかった試行を記録する
-    （#410 round3 [Must]2: billed-but-unconfirmed 予算漏れの是正）。
+    """LLM を呼び出す（呼び出そうとする）バッチの推定コストを予約記録する（#410 round4
+    [Must]1+2 是正: 事前予約方式）。
 
-    応答欠損（呼び出しは成功したが空応答）・JSON パース失敗は、LLM 呼び出し自体は成功し
-    課金が発生しているにもかかわらず、従来は correction_judged.jsonl に一切記録せず
-    「未判定のまま」にしていた。これは同日中に何度でも同じ対象へ再送信でき、当日累積の
-    予算（daily_token_limit）が事実上機能しない抜け穴になる（call_haiku 自体が例外送出で
-    失敗した場合は課金が発生していないため対象外・呼び出し側で判別する）。
+    **round3 との設計変更点**: round3 は「呼び出し後に課金が確定したと判明した試行だけ
+    事後記録する」方式だったが、これは構造的に穴が塞ぎきれなかった（codex round4 指摘）:
+      - 範囲内 verdict が1件でもあれば billed_attempt を作らないため、未返却 index の
+        本文コスト（同じプロンプトで送信・課金済み）が丸ごと未計上になる
+      - CLI 例外を「未課金」とみなす前提が成立しない（API 到達後のタイムアウト・応答受信後の
+        異常終了・プロセス中断は課金済みでありうる）
+      - 全呼び出し後にまとめて記録するため、Phase B 中のプロセス終了で当日分が全損する
+
+    round4 は ``judge_runner`` の Phase B ループが **各 ``call_haiku`` 呼び出しの直前**に
+    そのバッチ全体の見積トークン（本文合計 + バッチ固定費）を本関数で **1バッチずつ即時に**
+    予約記録する（呼び出し後にまとめて書かない）。これにより「課金されたか否か」の事後判別が
+    一切不要になる（呼ぶ前に必ず記録されるため、例外・タイムアウト・プロセス中断のいずれでも
+    予約は残る）。過大計上（実際には無課金だった呼び出し分も予約される）に倒れるが、予算の
+    歯止めとしては保守側が正しい設計判断（このコストは当日累積の**唯一のソース**になる —
+    ``ingest_judgement_results``（Phase C）側の per-key est_tokens 記録は round4 で廃止した。
+    二重計上を避けるため）。
 
     #379 新設凍結中のため新ストアは作らず、既存 ``correction_judged.jsonl`` に **"key"
     フィールドを持たない** record を追記する。``read_judged_keys`` は "key" の有無だけを
     見るためこの record には一切反応せず（＝対象発話は未判定のまま残り次回 drain で
-    再試行できる）、``count_judged_today`` は "key" の有無を問わず ``judged_at`` のある
-    全レコードを合算するため、このコストは当日累積へ正しく計上される。
+    再試行できる）。``count_judged_today`` は "key" の有無で ``count``/``est_tokens`` を
+    分離しており、この record は ``est_tokens`` にのみ計上される（``count`` には数えない
+    — 予約段階では判定はまだ確定していないため）。
 
     各要素は 1 バッチ試行分の概算トークン（本文合計 + バッチ固定費）。個々のキーへ
-    按分しない（確定していないキーに恒久コストを帰属させない設計・record_judged の
-    按分方式とは意図的に非対称）。
+    按分しない（round4 で per-key 按分ロジック自体を廃止した。確定した発話の判定記録
+    ``record_judged`` とはコスト記録を完全に分離する設計にした）。
 
     dry-run ゼロ書込: dry_run=True なら一切ファイルに触れず「書くはずだった件数」を返す。
 
@@ -551,6 +563,15 @@ def count_judged_today(
     ``judged_at`` 欠落（#410 以前の旧レコード）は「今日」と誤カウントしない安全側で除外する。
     ``est_tokens`` 欠落は 0 として合算する（旧レコード・見積もり未提供キーとの後方互換）。
 
+    ``count`` と ``est_tokens`` は単位が異なる（#410 round4 [Must]1+2 是正）: ``count`` は
+    **"key" を持つレコードのみ**（＝実際に判定が確定した発話数・``daily_utterance_limit`` の
+    分母）。``est_tokens`` は "key" の有無を問わず**全レコード**を合算する（``billed_attempts``
+    経由の予約 record は "key" を持たないが実際に課金が発生しているため・``daily_token_limit``
+    の分母）。以前は両方とも「judged_at を持つ全レコード」を同じ単位で数えており、
+    ``record_billed_attempts`` の予約 record（判定未確定）まで件数上限に計上され保守側に
+    ずれていた（例: 予約 record 2件で件数上限を2件消費したことになるが、実際にはまだ
+    1件も判定は確定していない）。
+
     Returns:
         {"count": int, "est_tokens": int}
     """
@@ -576,7 +597,8 @@ def count_judged_today(
         # （例: JST 01:00 は UTC では前日16:00）。UTC 暦日へ正規化してから比較する。
         if dt.astimezone(timezone.utc).date() != today:
             continue
-        count += 1
+        if "key" in rec:
+            count += 1
         tokens = rec.get("est_tokens")
         if isinstance(tokens, (int, float)) and not isinstance(tokens, bool):
             est_tokens += int(tokens)

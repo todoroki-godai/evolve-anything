@@ -707,19 +707,22 @@ def test_out_of_range_verdicts_surfaced_in_return_value_and_log(tmp_path, monkey
     assert "out_of_range_verdicts=1" in out.getvalue()
 
 
-# ── #410 round3 [Must]2: 課金済みだが判定確定できなかった試行の予算計上 ──────────
-# call_haiku 呼び出し自体は成功した（＝課金済み）が応答が壊れていて判定を確定できない
-# ケースを従来は当日累積に一切計上していなかった。同じ発話が同日中に何度でも billed の
-# まま再送信され、daily_token_limit が事実上機能しない抜け穴になっていた。
+# ── #410 round4 [Must]1+2: 費用の事前予約方式（call_haiku 呼び出し直前に予約） ────────
+# round3 は「呼び出し後に課金が確定したと判明した試行だけ事後記録する」方式だったが、
+# (a) 範囲内 verdict が1件でもあれば billed_attempt を作らないため未返却 index の本文
+# コストが未計上になる、(b) CLI 例外を「未課金」とみなす前提が成立しない、(c) 全呼び出し後に
+# まとめて記録するため Phase B 中のプロセス終了で当日分が全損する、という3つの構造的な穴が
+# あった（codex round4 指摘）。round4 は各 call_haiku 呼び出しの**直前**にそのバッチの
+# 見積コストを予約記録する方式へ変更し、これらを一括で解消する。
 
 
-def test_billed_attempts_surfaced_in_return_value_and_log(tmp_path, monkeypatch):
-    """billed_attempts（課金済み未確定試行数）が戻り値・フェーズ遷移ログの両方に伝播する。"""
+def test_reserved_batches_surfaced_in_return_value_and_log(tmp_path, monkeypatch):
+    """reserved_batches（予約したバッチ数）が戻り値・フェーズ遷移ログの両方に伝播する。"""
     import io
 
     out = io.StringIO()
     utterances = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(3)]
-    # 応答は届くが JSON として壊れている（課金済みだが判定確定できない）。
+    # 応答は届くが JSON として壊れている（それでも呼び出し前に予約済み）。
     monkeypatch.setattr(
         judge_runner, "call_haiku", lambda prompt, model="haiku": "not valid json {{{"
     )
@@ -727,17 +730,42 @@ def test_billed_attempts_surfaced_in_return_value_and_log(tmp_path, monkeypatch)
         run=True, utterances=utterances, judged_path=tmp_path / "correction_judged.jsonl",
         weak_signals_path=tmp_path / "weak_signals.jsonl", out=out, batch_size=30,
     )
-    assert res["billed_attempts"] == 1
-    assert "billed_attempts=1" in out.getvalue()
+    assert res["reserved_batches"] == 1
+    assert "reserved_batches=1" in out.getvalue()
 
 
-def test_billed_but_unconfirmed_attempt_closes_infinite_same_day_retry_loop(tmp_path, monkeypatch):
-    """#410 round3 [Must]2 の核心受け入れ基準: 課金済み未確定の試行を当日累積に計上し、
-    同じ日に無限に無料で再送信できる抜け穴を塞ぐ。1回目 run=True（応答が壊れて判定
-    未確定・課金だけ発生）の実コストちょうどを2回目の daily_token_limit に設定すると、
-    2回目は残り予算0で選定できないことを確認する（test_daily_cap_token_budget_across_runs_
-    includes_batch_fixed_cost と同じ「exact_cost 一致」方式 — billed_attempt を記録しない
-    巻き戻しだと est_tokens=0 のままで残り予算が満額残り、2回目も選定されてしまう）。
+def test_reservation_persists_even_when_call_haiku_raises_exception(tmp_path, monkeypatch):
+    """#410 round4 [Must]2 の核心: round3 は「call_haiku が例外送出 = 未課金」とみなして
+    予算を計上しなかったが、この前提は成立しない（API 到達後のタイムアウト・応答受信後の
+    異常終了・プロセス中断は課金済みでありうる）。round4 は呼び出し**前**に無条件で予約する
+    ため、call_haiku が例外を送出しても予約は既に書き込まれている（保守側に倒す設計）。
+    """
+    judged_path = tmp_path / "correction_judged.jsonl"
+    utterances = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
+
+    def _boom(prompt, model="haiku"):
+        raise RuntimeError("timeout after reaching API")
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _boom)
+
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=utterances, judged_path=judged_path,
+        daily_utterance_limit=200, daily_token_limit=100_000, batch_size=1,
+    )
+    assert res["call_failed"] == 1
+    assert res["reserved_batches"] == 1  # 例外でも予約は残る（round3 は 0 だった）
+    from correction_semantic.store import count_judged_today
+
+    assert count_judged_today(path=judged_path)["est_tokens"] > 0
+    assert read_judged_keys(judged_path) == set()  # 判定は未確定のまま
+
+
+def test_reservation_closes_infinite_same_day_retry_loop(tmp_path, monkeypatch):
+    """#410 [Must]1+2 の核心受け入れ基準: 課金される可能性のある試行を予約し、同じ日に
+    無限に無料で再送信できる抜け穴を塞ぐ。1回目 run=True（応答が壊れて判定未確定・
+    それでも呼び出し前に予約済み）の実コストちょうどを2回目の daily_token_limit に設定
+    すると、2回目は残り予算0で選定できないことを確認する（test_daily_cap_token_budget_
+    across_runs_includes_batch_fixed_cost と同じ「exact_cost 一致」方式）。
     """
     from correction_semantic.batch import _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens
     from correction_semantic.store import count_judged_today
@@ -756,7 +784,7 @@ def test_billed_but_unconfirmed_attempt_closes_infinite_same_day_retry_loop(tmp_
         run=True, utterances=first, judged_path=judged_path,
         daily_utterance_limit=200, daily_token_limit=exact_cost * 2, batch_size=1,
     )
-    assert res1["billed_attempts"] == 1
+    assert res1["reserved_batches"] == 1
     assert read_judged_keys(judged_path) == set()  # 判定は確定していない（未判定のまま）
     today = count_judged_today(path=judged_path)
     assert today["est_tokens"] == exact_cost

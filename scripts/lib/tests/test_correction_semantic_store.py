@@ -250,12 +250,30 @@ def test_record_billed_attempts_not_treated_as_judged(tmp_path: Path) -> None:
 
 
 def test_record_billed_attempts_counted_in_count_judged_today(tmp_path: Path) -> None:
-    """billed_attempt record は当日累積コストに合算される（同日の予算を正しく消費する）。"""
+    """billed_attempt（"key" 無し）record は est_tokens には合算されるが、count（判定件数
+    上限用）には数えない（#410 round4 [Must]1+2 是正: 発話レコードと試行レコードを同じ単位で
+    合算していると件数上限が保守側にずれる。件数は "key" を持つレコードのみ・トークンは
+    全レコード合算に分離した）。
+    """
     prog = tmp_path / "correction_judged.jsonl"
     cs_store.record_billed_attempts([100, 50], path=prog)
     out = cs_store.count_judged_today(path=prog)
-    assert out["count"] == 2
-    assert out["est_tokens"] == 150
+    assert out["count"] == 0  # "key" を持たないため件数上限には数えない
+    assert out["est_tokens"] == 150  # トークン上限には計上される
+
+
+def test_count_judged_today_separates_count_from_tokens_with_mixed_records(
+    tmp_path: Path,
+) -> None:
+    """"key" 付き（確定判定）と "key" 無し（予約/billed_attempt）が混在する当日実績を、
+    count は前者のみ・est_tokens は両方合算で正しく分離する（#410 round4 [Must]1+2）。
+    """
+    prog = tmp_path / "correction_judged.jsonl"
+    cs_store.record_judged(["/a.jsonl:1", "/a.jsonl:2"], path=prog, est_tokens_by_key=None)
+    cs_store.record_billed_attempts([300], path=prog)
+    out = cs_store.count_judged_today(path=prog)
+    assert out["count"] == 2  # key 付きレコードのみ
+    assert out["est_tokens"] == 300  # billed_attempt（key 無し）分のみ計上（key 付きは0）
 
 
 def test_record_billed_attempts_empty_list_writes_nothing(tmp_path: Path) -> None:
