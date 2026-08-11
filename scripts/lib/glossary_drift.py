@@ -30,7 +30,7 @@ SEED_MIN_CANDIDATES = 3
 # この表は「1 行サマリのみ」が運用ルールだが、設計経緯まで書き込まれ肥大化する
 # （実測: fleet_queue セル ≈3,285 字）。上限を超えるセルは詳細を spec/components.md（SoT）
 # へ移すべき兆候として検出し、spec-keeper update の drift 検出経路で advisory surface する。
-# 対象は 2 列目のみ（#415 codex round2）。1 列目（名前）・3 列目（実体パス）は対象外 — 実体
+# 対象は 2 列目のみ（#415 codex round1）。1 列目（名前）・3 列目（実体パス）は対象外 — 実体
 # パスが長いことは正当（依存ファイル数が多いだけ）で、remedy も「cold へ移す」ではなく
 # 「パッケージディレクトリへの集約」であり、本 lint の案内文と噛み合わないため。
 # 閾値 130 の根拠（#415）: 旧閾値 400 は #116 当時の最長セル（当時は列を区別していなかった）
@@ -303,17 +303,56 @@ class GlossaryReport:
 
 
 # Markdown テーブルのセル内リテラル `|` はエスケープ（`\|`）される。素の `|` で split すると
-# エスケープ済みセルが途中で切れ、セル数がずれ・長さ計測も過小評価する（#415 codex round2）。
-_UNESCAPED_PIPE_RE = re.compile(r"(?<!\\)\|")
+# エスケープ済みセルが途中で切れ、セル数がずれ・長さ計測も過小評価する（#415 codex round1）。
+# 判定は直前の連続バックスラッシュ数の**偶奇**で行う（`(?<!\\)\|` 等の後読み1文字だけの正規表現
+# は `\\|`（バックスラッシュ2個＝エスケープされたバックスラッシュ+区切りの `|`）を誤って
+# escaped pipe と判定し、Windows パスや正規表現を含む正当な行を malformed にする・#415 codex
+# round2）。奇数個なら直前のバックスラッシュ1個が `|` をエスケープしている＝セル内リテラル、
+# 偶数個（0 含む）ならバックスラッシュ自体が自己エスケープ済みで `|` は区切りのまま。
+
+
+def _count_trailing_backslashes(s: str) -> int:
+    """文字列末尾の連続バックスラッシュ数を数える。"""
+    n = 0
+    for ch in reversed(s):
+        if ch != "\\":
+            break
+        n += 1
+    return n
 
 
 def _split_row(line: str) -> list[str]:
     stripped = line.strip()
     if stripped.startswith("|"):
         stripped = stripped[1:]
-    if stripped.endswith("|") and not stripped.endswith("\\|"):
-        stripped = stripped[:-1]
-    return [c.strip() for c in _UNESCAPED_PIPE_RE.split(stripped)]
+    if stripped.endswith("|"):
+        # 末尾の区切りパイプは、直前のバックスラッシュが偶数個（=エスケープされていない）
+        # のときだけ除去する。
+        body_before_pipe = stripped[:-1]
+        if _count_trailing_backslashes(body_before_pipe) % 2 == 0:
+            stripped = body_before_pipe
+
+    cells: list[str] = []
+    current: list[str] = []
+    bs_run = 0  # 直前の連続バックスラッシュ数（1文字読むたびに更新）
+    for ch in stripped:
+        if ch == "\\":
+            bs_run += 1
+            current.append(ch)
+            continue
+        if ch == "|":
+            if bs_run % 2 == 1:
+                # 直前のバックスラッシュが奇数個 = このパイプはエスケープされたリテラル
+                current.append(ch)
+            else:
+                cells.append("".join(current))
+                current = []
+            bs_run = 0
+            continue
+        bs_run = 0
+        current.append(ch)
+    cells.append("".join(current))
+    return [c.strip() for c in cells]
 
 
 def parse_glossary(path: str) -> tuple[list[GlossaryEntry], list[tuple[int, str]]]:
@@ -484,7 +523,7 @@ def check_component_table_cells(
     ヘッダ行（コンポーネント/実体）と区切り行（---）はスキップする。
     ファイル不在・表なしなら空リスト。返り値は行番号昇順。
 
-    **対象は 2 列目（サマリ）のみ**（#415 codex round2）。1 列目（名前）・3 列目（実体パス）は
+    **対象は 2 列目（サマリ）のみ**（#415 codex round1）。1 列目（名前）・3 列目（実体パス）は
     意図的に対象外: 実体パスが長い（依存ファイル数が多い）ことは正当で、その remedy は
     「spec/components.md へ移す」ではなく「パッケージディレクトリへの集約」であり、本 lint の
     案内文と噛み合わない。1・3 列目に別上限を設ける場合は別の lint として新設する。
