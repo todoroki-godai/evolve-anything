@@ -299,6 +299,18 @@ def test_extract_global_groups_carries_all_representatives():
     assert global_groups[0]["all_representatives"] == ["代表文A", "代表文B"]
 
 
+def test_extract_global_groups_carries_reps_by_pj():
+    """#413: 代表文を PJ 別（``reps_by_pj``）にも保持し、部分処理後の既読差し引きで
+    ``keys_by_pj`` と一緒に絞れるようにする。
+    """
+    per_pj = {
+        "pj-a": [_slim(["ka"], rep="代表文A", idiom=ELIGIBLE_IDIOM_TEXT)],
+        "pj-b": [_slim(["kb"], rep="代表文B", idiom=ELIGIBLE_IDIOM_TEXT)],
+    }
+    global_groups, _remaining = pd._extract_global_groups(per_pj)
+    assert global_groups[0]["reps_by_pj"] == {"pj-a": ["代表文A"], "pj-b": ["代表文B"]}
+
+
 # ─────────────────────────────────────────────────────────────────
 # build_session_proposals
 # ─────────────────────────────────────────────────────────────────
@@ -402,6 +414,35 @@ def test_build_session_proposals_subtracts_seen_keys_in_keys_by_pj():
     assert len(out) == 1
     assert out[0]["signal_keys"] == ["kb"]
     assert out[0]["keys_by_pj"] == {"pj-b": ["kb"]}
+
+
+def test_build_session_proposals_subtracts_reps_by_pj_for_partial_promotion():
+    """#413: global group を部分処理（一部 PJ だけ昇格成功）した後、既読 PJ の代表文が
+    表示（``reps_by_pj`` / ``all_representatives``）から除外されること。実行コマンドの
+    絞り込み（``keys_by_pj``）と一致させ、「もう答えた案がまた出た」という誤認を防ぐ。
+    """
+    group = {
+        "signal_keys": ["ka", "kb"],
+        "representative": "代表文A",
+        "idiom": None,
+        "confirmable_idiom": None,
+        "channel": "llm_judge",
+        "count": 2,
+        "evidence_text": "代表文A",
+        "prev_action": "",
+        "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
+        "origin_pjs": ["pj-a", "pj-b"],
+        "reps_by_pj": {"pj-a": ["代表文A"], "pj-b": ["代表文B"]},
+        "all_representatives": ["代表文A", "代表文B"],
+    }
+    queue_data = {"proposals": {"per_pj": {}, "global": [group]}}
+    # pj-a のキー(ka)は既読 = pj-a 側は昇格成功済みとして扱う
+    out = pd.build_session_proposals(queue_data, "pj-a", seen_keys={"ka"})
+    assert len(out) == 1
+    assert out[0]["signal_keys"] == ["kb"]
+    assert out[0]["reps_by_pj"] == {"pj-b": ["代表文B"]}
+    assert out[0]["all_representatives"] == ["代表文B"]
+    assert "代表文A" not in out[0]["all_representatives"]
 
 
 def test_build_session_proposals_respects_limit():
