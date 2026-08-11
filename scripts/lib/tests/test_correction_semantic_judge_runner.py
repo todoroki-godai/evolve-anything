@@ -555,3 +555,29 @@ def test_main_limit_flag_overrides_daily_utterance_limit(monkeypatch):
     judge_runner.main(["--run", "--limit", "60"])
     assert captured["daily_utterance_limit"] == 60
     assert captured["run"] is True
+
+
+def test_main_run_survives_cli_nonzero_returncode_end_to_end(monkeypatch, tmp_path, capsys):
+    """#410 [Should] CLI 非ゼロ終了の回帰: run_daily_judge を mock せず、claude CLI 相当
+    subprocess の非ゼロ終了だけを仕込んだ main(["--run"]) 実行が exit 0（graceful）で
+    完了し、未判定のまま残る（silent false negative にならない）ことを end-to-end で確認する。
+    """
+    u = _utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))
+
+    import utterance_archive.query as _uq
+    monkeypatch.setattr(_uq, "query_utterances_all_projects", lambda: [u])
+
+    class _FakeCompleted:
+        stdout = ""
+        returncode = 1
+        stderr = "boom"
+
+    monkeypatch.setattr(
+        judge_runner._safe_llm_call.subprocess, "run", lambda cmd, **kw: _FakeCompleted()
+    )
+
+    rc = judge_runner.main(["--run", "--limit", "10"])
+    # main() は CLI 引数から judged_path を受け取らない（production 既定パスを使う）ため、
+    # ここでは exit code とログのみを検証する（store I/O の hermetic 検証は他テストが担う）。
+    assert rc == 0
+    assert "呼び出し失敗" in capsys.readouterr().err

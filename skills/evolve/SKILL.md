@@ -260,6 +260,8 @@ reflect は独立フェーズではなく discover に統合済み。discover �
 → 実行コードは **[references/auto-memory-drain.md](references/auto-memory-drain.md)**。
 
 ### Step 6.6: correction_semantic 意味判定（2相 Phase A→B, #431/#339）
+> **実行経路の SoT（#408/#410）**: Phase B（LLM 判定）の主経路は `correction_semantic.judge_runner.run_daily_judge` による daily runner の**無人日次実行**（毎朝・1日の件数/トークン上限あり・`bin/evolve-daily-run` から直接呼ばれる）。以前は本 Step 6.6（対話 y/n 承認時のインライン判定）が唯一の実体で、対話フローの奥にあるため2ヶ月供給が止まっていた（#408 根因）。本 Step は**フォールバック**（daily runner を待たずに今すぐ判定したい・バックログを手動で消化したい場合の対話経路）として残す。
+
 `result.correction_semantic.unjudged` が未判定発話数（Phase A は `phases_capture` が既に emit 済みだが、requests 本体は result に載らないため本ステップで `emit_judgement_requests` を再実行して取得する）。`unjudged == 0` なら「correction_semantic 意味判定: 0件 ✓」で終了。`unjudged > 0` のときは **llm-batch-guard**（MUST）: 件数・概算トークン（`estimate_tokens`）を提示して AskUserQuestion で y/n 確認 → 承認時のみ Phase B（各 prompt をインラインで Haiku 相当の判定に回答・`claude -p` は呼ばない）を行い、`responses` を `/tmp/rl_correction_responses_<slug>.json` に保存する。**Phase C（ingest・weak_signals 記録）はここでは呼ばない** — Step 7.8 の `evolve --drain --correction-responses <path>` が apply 境界で実行する（#339）。
 → 実行コードは **[references/correction-semantic-drain.md](references/correction-semantic-drain.md)**。
 

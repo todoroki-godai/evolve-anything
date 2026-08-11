@@ -14,13 +14,18 @@ hot hook（CORRECTION_PATTERNS）は語彙依存で文中の修正を構造的�
 - フェーズ昇格カウント（growth_engine の corrections>=10）は **human-source のみ**で駆動。
   機械ノイズ（Stop hook 等）で状態が動かないようにする（provenance_weight）。
 
-LLM 呼び出しは llm_broker の 3 相（build_requests / parse_responses）に乗せるため、
-Python は claude -p を一切呼ばない（no-llm-in-tests と完全整合）。
+``batch`` の Phase A（emit）/ Phase C（ingest）は llm_broker の 3 相（build_requests /
+parse_responses）に乗せるため Python から claude -p を一切呼ばない。Phase B（LLM 判定）は
+``judge_runner`` が daily runner から非対話で肩代わりする（#408・#410 で SoT を是正）。
+``judge_runner.call_haiku`` は唯一の呼び出し集約点で ``safe_llm_call.call_claude_headless``
+（無人実行でツールを一切実行させない安全化済み）を経由する。単体テストは
+``call_haiku``/Phase A/C いずれも mock するため no-llm-in-tests と完全整合。
 
 サブモジュール:
 - ``store``            — correction_idioms.jsonl（個人辞書）+ 判定進捗の append/read（dry-run ゼロ書込）
 - ``prompt``           — 30 件バッチプロンプトの組み立て + JSON verdict のパース
 - ``batch``            — 判定オーケストレーション（emit / ingest 2 相・weak_signals 隔離記録）
+- ``judge_runner``     — Phase B（LLM 判定）を daily runner から非対話実行する runner（#408）
 - ``provenance_weight``— corrections の human-source 判定（フェーズ昇格カウント用）
 """
 from __future__ import annotations

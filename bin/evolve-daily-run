@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """bin/evolve-daily-run — launchd が毎朝呼ぶ daily runner（#80 Phase 1b, #194）。
 
-`fleet ingest`（全 PJ 発話取込・ゼロ LLM）→ `fleet queue --json`（待ち判定）を順に実行し、
-queue の JSON を `$CLAUDE_PLUGIN_DATA/evolve-queue.json` に保存する。決定論パイプラインのみ
-（LLM 非依存）。SessionStart hook（restore_state）が保存結果を読んで通知する。
+`fleet ingest`（全 PJ 発話取込・ゼロ LLM）→ `fleet detect`（決定論 weak_signals 検出）→
+`correction_semantic.judge_runner.run_daily_judge`（llm_judge Phase B・意味判定・#408）→
+`fleet queue --json`（待ち判定）を順に実行し、queue の JSON を
+`$CLAUDE_PLUGIN_DATA/evolve-queue.json` に保存する。SessionStart hook（restore_state）が
+保存結果を読んで通知する。
+
+**LLM 呼び出しについて（#410 で旧記述を是正）**: 本 runner の大半は決定論パイプラインだが、
+llm_judge ステップだけは Haiku を無人で呼ぶ（`safe_llm_call.call_claude_headless` 経由・
+判定対象の生ログに prompt injection が混入していてもツールを一切実行させない安全化済み。
+1日の件数/トークン上限は userConfig で制御）。他の全ステップ（ingest/detect/queue/icebox系）
+はゼロ LLM のまま。
 
 加えて `gh issue list --label icebox --state closed`（read-only）で icebox 棚卸しの
 気づきトリガー用の集計（件数・最古経過日数）を `$CLAUDE_PLUGIN_DATA/icebox-status.json` に
