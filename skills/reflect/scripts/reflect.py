@@ -765,6 +765,12 @@ def main():
                         help="--context: 関連度ゲートの閾値（既定は校正済み 0.5・#565）")
     parser.add_argument("--promote-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）の weak_signal を corrections へ昇格")
+    parser.add_argument("--reject-weak", type=str, default=None,
+                        help="指定 signal_key（カンマ区切り）を『いいえ』として既読化する"
+                             "（#409・weak_signal 自体は昇格しない）")
+    parser.add_argument("--pj", type=str, default=None,
+                        help="--promote-weak/--reject-weak: 既読記録の pj_slug（未指定は"
+                             "現在の PJ を pj_slug.resolve_pj_slug で解決）")
     parser.add_argument("--weak-signals-file", type=str, default=None,
                         help="weak_signals.jsonl のパス（テスト用）")
     parser.add_argument("--revoke-idiom", type=str, default=None,
@@ -775,6 +781,12 @@ def main():
                         help="対象プロジェクトディレクトリ（明示指定。優先順位: 本フラグ > "
                              "env CLAUDE_PROJECT_DIR > cwd。単一 cwd から他 PJ の project_dir を"
                              "渡すバッチ経路 — evolve-fleet propose 等 — で project_path の混入を防ぐ・#400）")
+    parser.add_argument("--project-path", type=str, default=None,
+                        help="--promote-weak: 昇格レコードの project_path を明示指定（未指定は"
+                             "従来どおり現在 PJ = --project-dir/env CLAUDE_PROJECT_DIR/cwd）。"
+                             "SessionStart の global 改善案（複数 PJ 由来の signal を束ねた提案）は"
+                             "単一 cwd から他 PJ の signal_key を昇格するため、現在 PJ への"
+                             "固定帰属を避けて origin PJ の絶対パスを渡す用途（#412 [Must]4）")
     args = parser.parse_args()
 
     corrections_file = Path(args.corrections_file) if args.corrections_file else CORRECTIONS_FILE
@@ -840,17 +852,26 @@ def main():
     if args.promote_weak:
         from correction_semantic import promote as _cs_promote
         from correction_semantic import store as _cs_store
+        from correction_semantic.daily_review import record_reviewed as _record_reviewed
+        from pj_slug import resolve_pj_slug as _resolve_pj_slug
         keys = [k.strip() for k in args.promote_weak.split(",") if k.strip()]
+        # #412 [Must]4: --project-path が明示されればそれを優先する。global 改善案（複数 PJ
+        # 由来の signal を束ねた提案）は単一 cwd（現在 PJ）から他PJの signal_key を昇格するため、
+        # --project-dir/env/cwd による現在 PJ への固定帰属をここだけ迂回できるようにする。
+        promote_project_path = args.project_path or current_project or str(project_root)
         res = _cs_promote.promote_signals(
             keys,
             weak_signals_path=weak_signals_file,
             corrections_path=corrections_file if args.corrections_file else None,
-            project_path=current_project or str(project_root),
+            project_path=promote_project_path,
             dry_run=args.dry_run,
         )
         # 承認したシグナルに対応する idiom を confirmed 化（signal→idiom は provenance 突合）。
+        # #412 round2 [Must]B: 渡すのは実際に昇格できた key（res["promoted_keys"]）だけに
+        # 限定する。要求 keys 全件を渡すと expired 等で昇格に失敗した key の idiom まで
+        # confirmed 化され、idiom_autopromote（ADR-047）の発火ゲートを誤って開いてしまう。
         idiom_key_map = _cs_promote.resolve_idiom_keys_for_signals(
-            keys, weak_signals_path=weak_signals_file, idioms_path=idioms_file,
+            res["promoted_keys"], weak_signals_path=weak_signals_file, idioms_path=idioms_file,
         )
         confirm_res = _cs_store.confirm_idioms(
             list(set(idiom_key_map.values())),
@@ -858,6 +879,16 @@ def main():
             confirmed_by="reflect_promote_weak",
             dry_run=args.dry_run,
         )
+        # #409: 「はい」を既読ストアへ記録する。SessionStart の改善案提示
+        # （daily.proposal_digest.build_session_proposals）はこの既読集合を見て再提示を止める
+        # （promoted フラグだけでは同日中の digest 再提示を防げない — digest は日次生成のスナップ
+        # ショットで再生成まで promoted 反映を待つため）。
+        # #412 [Must]5: 既読化するのは実際に昇格できた key（res["promoted_keys"]）だけにする。
+        # 従来は要求 keys 全件を既読化していたため、日次スナップショットの stale・キー不在・
+        # TTL 失効等で promoted=0 になっても既読化され、以後の digest から永久に外れる
+        # silent failure だった（「採用したつもりが何も昇格せず二度と出ない」）。
+        pj_slug_value = args.pj or _resolve_pj_slug(current_project or str(project_root))
+        _record_reviewed(res["promoted_keys"], pj_slug_value, decision="promoted", dry_run=args.dry_run)
         # #476-4: 昇格後の corrections_human_allpj を返す（growth_report の promoted_today は対話前
         # スナップショットで固定されるため、CLI が更新後カウントを返し assistant が最新値を
         # 表示できるようにする）。dry_run は corrections に書かないため pre-promotion 値のまま。
@@ -877,6 +908,23 @@ def main():
             **res,
             "confirmed_idioms": confirm_res.get("confirmed", 0),
             "corrections_human_allpj": _human,  # 全PJ集計値（per-PJの growth_report.corrections_human とは別物 — #557）
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # --reject-weak: 指定 signal_key を「いいえ」として既読化する（#409）。weak_signal 自体は
+    # promoted にしない（却下＝昇格しない、が正しい仕様）。record_reviewed が
+    # correction_review_seen.jsonl へ decision="rejected" を追記し、以後 daily_review /
+    # SessionStart 提示（exclude_reviewed・#185 と同じ predicate）から除外する。
+    if args.reject_weak is not None:
+        from correction_semantic.daily_review import record_reviewed as _record_reviewed
+        from pj_slug import resolve_pj_slug as _resolve_pj_slug
+        keys = [k.strip() for k in args.reject_weak.split(",") if k.strip()]
+        pj_slug_value = args.pj or _resolve_pj_slug(current_project or str(project_root))
+        res = _record_reviewed(keys, pj_slug_value, decision="rejected", dry_run=args.dry_run)
+        print(json.dumps({
+            "status": "rejected_weak",
+            "pj_slug": pj_slug_value,
+            **res,
         }, ensure_ascii=False, indent=2))
         return
 

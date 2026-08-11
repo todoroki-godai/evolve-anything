@@ -1,0 +1,208 @@
+"""restore_state の改善案 SessionStart 提示（#409, #412）。
+
+毎朝の digest（``evolve-queue.json`` の ``proposals`` フィールド）から、当該 PJ 向け改善案
+（per_pj[pj_slug] + global の既読フィルタ後）を **2 チャネル同時出力**する（#412 [Must]1）:
+
+- ``systemMessage``（user 可視）: 代表テキストを提示件数分並べ、「応答のあとで採否をお聞き
+  します。表示されなかった場合は未処理のまま次回また出ます」と伝える（#412 round2 [Should]E:
+  additionalContext 側の prompt instruction 遵守に依存する文言を機械的に保証できる範囲へ修正）
+- ``hookSpecificOutput.additionalContext``（Claude 可視・ADR-038）: 「最初の応答を終えた直後に
+  AskUserQuestion で y/n 提示せよ」という行動指示
+
+``_build_session_proposal_output()`` は **純関数**（print しない）で dict|None を返す
+（#412 [Must]2: SessionStart hook の stdout は 1 行の有効な JSON 応答であるべきで、checkpoint の
+``hookSpecificOutput``（sessionTitle）と別行に分かれると片方が黙って捨てられうる）。実際の print
+は ``handle_session_start`` が checkpoint の有無を見てから 1 回だけ行う。
+
+- 提示あり → 返り値の hookSpecificOutput.additionalContext に代表テキスト + はい/いいえコマンド
+- 提示なし（該当 PJ の group が無い / 全既読）→ None（stdout を汚さない）
+- 他 PJ 向けの group は混入しない
+- env ガード・read-only 契約は evolve-queue notice と同型
+"""
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+_HOOKS = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_HOOKS))
+sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
+
+import data_dir_migration as ddm  # noqa: E402
+import restore_state  # noqa: E402
+
+
+def _fresh_generated_at() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _group(keys, rep="git statusじゃなくてgit diffを使って") -> dict:
+    return {
+        "signal_keys": list(keys),
+        "representative": rep,
+        "idiom": None,
+        "confirmable_idiom": None,
+        "channel": "llm_judge",
+        "count": 1,
+        "evidence_text": rep,
+        "prev_action": "",
+    }
+
+
+def _write_queue(data_dir: Path, proposals: dict) -> None:
+    payload = {
+        "generated_at": _fresh_generated_at(),
+        "threshold": 3,
+        "tracked_total": 1,
+        "queue": [],
+        "proposals": proposals,
+    }
+    (data_dir / "evolve-queue.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _install_env(tmp_path, monkeypatch):
+    source = tmp_path / "plugins" / "data" / "evolve-anything-evolve-anything"
+    source.mkdir(parents=True)
+    monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: Path(p) == source)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(source))
+    return source
+
+
+def _set_project_dir(tmp_path, monkeypatch, name="myproj") -> str:
+    """非 git の素 dir を CLAUDE_PROJECT_DIR にする（resolve_pj_slug は basename を返す）。"""
+    proj = tmp_path / name
+    proj.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(proj))
+    return proj.name  # = 期待される pj_slug
+
+
+def test_build_fires_with_proposals_for_this_pj(tmp_path, monkeypatch):
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    # ADR-038 スキーマ: hookEventName 無しだと additionalContext が解釈されず無言で死ぬ
+    assert output["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    msg = output["hookSpecificOutput"]["additionalContext"]
+    assert "git diff" in msg
+    assert "AskUserQuestion" in msg
+    # 回答コマンドは絶対パス（提示先は他 PJ の cwd なので相対だと No such file になる）
+    expected_cmd = str(_HOOKS.parent / "bin" / "evolve-reflect")
+    assert expected_cmd.startswith("/")
+    assert f"{expected_cmd} --promote-weak k1" in msg
+    assert f"{expected_cmd} --reject-weak k1 --pj {slug}" in msg
+    # #412 [Must]1: systemMessage（user 可視）も同時に出る
+    assert "git diff" in output["systemMessage"]
+
+
+def test_build_returns_none_when_no_proposals_for_this_pj(tmp_path, monkeypatch):
+    source = _install_env(tmp_path, monkeypatch)
+    _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {"other-pj": [_group(["k1"])]}, "global": []})
+
+    assert restore_state._build_session_proposal_output() is None
+
+
+def test_build_returns_none_when_all_signal_keys_seen(tmp_path, monkeypatch):
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+    (source / "correction_review_seen.jsonl").write_text(
+        json.dumps({"key": "k1", "pj_slug": slug, "decision": "promoted",
+                    "reviewed_at": _fresh_generated_at()}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert restore_state._build_session_proposal_output() is None
+
+
+def test_build_returns_none_when_no_queue_file(tmp_path, monkeypatch):
+    _install_env(tmp_path, monkeypatch)
+    _set_project_dir(tmp_path, monkeypatch)
+    assert restore_state._build_session_proposal_output() is None
+
+
+def test_build_returns_none_outside_install_layout(tmp_path, monkeypatch):
+    monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: False)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "isolated"))
+    _set_project_dir(tmp_path, monkeypatch)
+    assert restore_state._build_session_proposal_output() is None
+
+
+def test_build_returns_none_without_env(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
+    assert restore_state._build_session_proposal_output() is None
+
+
+def test_build_returns_none_without_project_dir(tmp_path, monkeypatch):
+    source = _install_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    _write_queue(source, {"per_pj": {"whatever": [_group(["k1"])]}, "global": []})
+    assert restore_state._build_session_proposal_output() is None
+
+
+def test_build_does_not_write(tmp_path, monkeypatch):
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+    before = {p.name for p in source.iterdir()}
+    restore_state._build_session_proposal_output()
+    after = {p.name for p in source.iterdir()}
+    assert before == after  # read-only
+
+
+def test_handle_session_start_invokes_session_proposals(tmp_path, monkeypatch, capsys):
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+    restore_state.handle_session_start({})
+    out = capsys.readouterr().out
+    assert "AskUserQuestion" in out
+
+
+# --- #412 [Must]2: SessionStart stdout は単一の有効な JSON 応答であること ---
+
+class TestSingleJsonResponse:
+    """checkpoint（sessionTitle）と改善案提示（additionalContext）が同時に発生しても、
+    hookSpecificOutput を含む行は高々 1 つで、その中に両方が同居すること。
+    """
+
+    def test_proposal_and_checkpoint_merge_into_one_line(self, tmp_path, monkeypatch, capsys):
+        source = _install_env(tmp_path, monkeypatch)
+        slug = _set_project_dir(tmp_path, monkeypatch)
+        _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+        monkeypatch.setattr(
+            "common.find_latest_checkpoint",
+            lambda _: {"work_context": {"git_branch": "main"}},
+        )
+
+        restore_state.handle_session_start({})
+        out = capsys.readouterr().out
+        # handle_session_start は他の deliver（DATA_DIR migration reminder 等）が非 JSON の
+        # 平文行を出しうる。ここで検証したいのは「hookSpecificOutput を名乗る行」だけが
+        # 単一の valid JSON であること（プレーンテキスト行の存在自体は対象外）。
+        lines = [ln for ln in out.strip().splitlines() if "hookSpecificOutput" in ln]
+
+        hook_specific_lines = [json.loads(ln) for ln in lines]  # 各行は単独で valid JSON
+
+        assert len(hook_specific_lines) == 1  # hookSpecificOutput を含む行は高々1つ
+        hs = hook_specific_lines[0]["hookSpecificOutput"]
+        assert hs["hookEventName"] == "SessionStart"
+        assert "AskUserQuestion" in hs["additionalContext"]
+        assert hs["sessionTitle"] == f"{(tmp_path / 'myproj').name} | main"
+
+    def test_proposal_alone_when_no_checkpoint(self, tmp_path, monkeypatch, capsys):
+        source = _install_env(tmp_path, monkeypatch)
+        slug = _set_project_dir(tmp_path, monkeypatch)
+        _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+        monkeypatch.setattr("common.find_latest_checkpoint", lambda _: None)
+
+        restore_state.handle_session_start({})
+        out = capsys.readouterr().out
+        lines = [ln for ln in out.strip().splitlines() if ln.strip()]
+        hook_specific_lines = [json.loads(ln) for ln in lines if "hookSpecificOutput" in ln]
+        assert len(hook_specific_lines) == 1
+        hs = hook_specific_lines[0]["hookSpecificOutput"]
+        assert "AskUserQuestion" in hs["additionalContext"]

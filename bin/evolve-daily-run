@@ -41,6 +41,7 @@ import icebox_reconcile  # noqa: E402
 import rl_common  # noqa: E402
 from correction_semantic import judge_runner  # noqa: E402
 from daily import plist as plist_mod  # noqa: E402
+from daily import proposal_digest as _proposal_digest  # noqa: E402
 from daily import queue_notice as _queue_notice  # noqa: E402
 from rl_common.config import load_user_config  # noqa: E402
 from rl_common.file_lock import atomic_write_text  # noqa: E402
@@ -170,14 +171,25 @@ def main() -> int:
         )
     else:
         out_text = result.stdout
-        if judge_summary is not None:
+        try:
+            payload = json.loads(result.stdout)
+        except (json.JSONDecodeError, ValueError):
+            payload = None
+        if isinstance(payload, dict):
+            if judge_summary is not None:
+                payload["llm_judge"] = judge_summary
+            # 1e) 改善案 digest（決定論・ゼロ LLM・#409）を待ち PJ から生成し埋め込む。
+            # 新しい group 化ロジックは発明せず既存 daily_review.build_review をそのまま使う
+            # （proposal_digest.build_proposal_digest 内部）。失敗しても daily-run 全体は
+            # 落とさない（fail-open、llm_judge ステップと同型）。
+            print(f"[evolve-daily-run] proposal digest …", flush=True)
             try:
-                payload = json.loads(result.stdout)
-                if isinstance(payload, dict):
-                    payload["llm_judge"] = judge_summary
-                    out_text = json.dumps(payload, ensure_ascii=False)
-            except (json.JSONDecodeError, ValueError):
-                pass  # queue 出力が想定外形式でも従来どおり生の stdout を書く（continue）
+                payload["proposals"] = _proposal_digest.build_proposal_digest(
+                    payload.get("queue") or [], data_dir=data_dir,
+                )
+            except Exception as e:  # noqa: BLE001 - fail-open（他ステップと同型）
+                print(f"[evolve-daily-run] proposal digest error: {e}（continue）", file=sys.stderr, flush=True)
+            out_text = json.dumps(payload, ensure_ascii=False)
         out_path.write_text(out_text, encoding="utf-8")
         print(f"[evolve-daily-run] wrote {out_path} ({len(out_text)} bytes)", flush=True)
 
