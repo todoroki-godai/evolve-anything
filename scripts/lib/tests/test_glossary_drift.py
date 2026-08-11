@@ -21,6 +21,7 @@ from glossary_drift import (  # noqa: E402
     STDLIB_SYMBOLS,
     ComponentCellIssue,
     GlossaryEntry,
+    _split_row,
     check_component_table_cells,
     find_undefined_terms,
     load_common_english_words,
@@ -494,6 +495,24 @@ def _write_claude_md(tmp_path: Path, cell_body: str, name: str = "CLAUDE.md") ->
     return str(p)
 
 
+def _write_claude_md_row(
+    tmp_path: Path, *, name_cell: str = "`foo`", summary_cell: str, entity_cell: str
+) -> str:
+    """3 列すべてを個別指定できる版（#415 codex round2: サマリ列 vs 実体列の scope 検証用）。"""
+    content = (
+        "# Plugin\n\n"
+        "## コンポーネント\n\n"
+        "各コンポーネントの詳細は spec/components.md（SoT）。\n\n"
+        "| コンポーネント | 一言サマリ | 実体 |\n"
+        "|----------------|-----------|------|\n"
+        f"| {name_cell} | {summary_cell} | {entity_cell} |\n\n"
+        "## クイックスタート\n\nsome text\n"
+    )
+    p = tmp_path / "CLAUDE.md"
+    p.write_text(content, encoding="utf-8")
+    return str(p)
+
+
 class TestComponentTableCellLint:
     """issue #116 — CLAUDE.md コンポーネント表のセルが上限超過なら検出する。"""
 
@@ -571,6 +590,69 @@ class TestComponentTableCellLint:
             "CLAUDE.md コンポーネント表に上限超過セル: "
             f"{[(i.name, i.length) for i in issues]} — 詳細は spec/components.md へ移す"
         )
+
+    def test_oversized_summary_column_detected(self, tmp_path: Path):
+        """#415 codex round2 (a): サマリ列（2列目）が上限超過なら検出する。"""
+        long_summary = "あ" * (MAX_COMPONENT_CELL_LEN + 1)
+        path = _write_claude_md_row(
+            tmp_path,
+            summary_cell=long_summary,
+            entity_cell="`foo.py`",
+        )
+        issues = check_component_table_cells(path)
+        assert len(issues) == 1
+        assert issues[0].length == len(long_summary)
+
+    def test_oversized_entity_column_not_detected(self, tmp_path: Path):
+        """#415 codex round2 (b): 実体列（3列目）が上限超過でもサマリ列が短ければ検出しない。
+
+        実体パスが長いのは依存ファイル数が多いだけで正当。remedy は
+        「spec/components.md へ移す」でなく「パッケージディレクトリへの集約」であり、
+        本 lint（サマリ列専用）の案内文とは噛み合わないため対象外にする。
+        """
+        long_entity = " + ".join(f"`pkg/mod_{i}.py`" for i in range(20))
+        assert len(long_entity) > MAX_COMPONENT_CELL_LEN
+        path = _write_claude_md_row(
+            tmp_path,
+            summary_cell="短いサマリ（#1）",
+            entity_cell=long_entity,
+        )
+        assert check_component_table_cells(path) == []
+
+    def test_escaped_pipe_in_summary_not_truncated(self, tmp_path: Path):
+        """#415 codex round2: セル内エスケープ `\\|` を区切りと誤認せず長さを過小評価しない。
+
+        素の `|` split だと `runtime=claude\\|codex` のようなセルが途中で切れ、
+        本来 130 字超のサマリが短い断片として見逃されうる。
+        """
+        summary = (
+            "usage/sessions/errors の hook record に `runtime=claude\\|codex` を較正追加。"
+            "Codex hook 配線は保留" + "あ" * MAX_COMPONENT_CELL_LEN
+        )
+        path = _write_claude_md_row(
+            tmp_path,
+            summary_cell=summary,
+            entity_cell="`hooks/common.py`",
+        )
+        issues = check_component_table_cells(path)
+        assert len(issues) == 1
+        # split で断片化していれば length はもっと小さい値になる
+        assert issues[0].length == len(summary)
+
+
+class TestSplitRowEscapedPipe:
+    """#415 codex round2: `_split_row` がエスケープ `\\|` をセル区切りと誤認しないこと。"""
+
+    def test_escaped_pipe_kept_within_single_cell(self):
+        row = r"| `foo` | runtime=claude\|codex を較正追加 | `foo.py` |"
+        cells = _split_row(row)
+        assert len(cells) == 3
+        assert cells[1] == r"runtime=claude\|codex を較正追加"
+
+    def test_unescaped_pipe_still_splits(self):
+        row = "| `foo` | 短いサマリ | bar | `foo.py` |"
+        cells = _split_row(row)
+        assert len(cells) == 4
 
 
 class TestComponentCellLintCLIWiring:
