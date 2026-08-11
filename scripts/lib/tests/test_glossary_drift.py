@@ -719,6 +719,41 @@ class TestSplitRowBackslashParity:
         assert entries[0].meaning == r"正規表現 `a\|b` を使う機能"
 
 
+class TestSplitRowBoundaryConditions:
+    """#415 codex round3 [Should]: `_split_row` の境界条件を固定する回帰テスト。
+
+    実装は既に正しく処理しているが、テストで固定されていなかった3条件。
+    """
+
+    def test_row_without_outer_pipes(self):
+        """外枠 pipe（先頭・末尾）が無い行でも、内部の区切り pipe で正しく split する。"""
+        row = "foo | bar | baz"
+        cells = _split_row(row)
+        assert cells == ["foo", "bar", "baz"]
+
+    def test_consecutive_empty_cells(self):
+        """連続する区切り pipe（空セル）を空文字列のセルとして保持する。"""
+        row = "| a || b |"
+        cells = _split_row(row)
+        assert cells == ["a", "", "b"]
+
+    def test_cell_ending_with_escaped_backslash_before_closing_pipe(self):
+        """行末の閉じ pipe 直前が偶数個のバックスラッシュ（自己エスケープ済み）なら、
+        閉じ pipe は区切りとして正しく除去される（セル内容の末尾バックスラッシュは保持）。
+        """
+        row = r"| a | b\\|"
+        cells = _split_row(row)
+        assert cells == ["a", r"b\\"]
+
+    def test_cell_ending_with_odd_backslash_keeps_closing_pipe_literal(self):
+        """閉じ pipe 直前が奇数個のバックスラッシュならエスケープされ、閉じ pipe は
+        区切りとして除去されず末尾セルの一部として残る（閉じ側境界判定も偶奇を使う）。
+        """
+        row = r"| a | b\|"
+        cells = _split_row(row)
+        assert cells == ["a", r"b\|"]
+
+
 class TestComponentCellLintCLIWiring:
     """issue #116 — CLI（spec-keeper update 経路）がセル長警告を surface する。"""
 
