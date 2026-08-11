@@ -46,7 +46,7 @@
 
 各コンポーネントの設計経緯・根拠・issue/ADR 参照を含む詳細は **[spec/components.md](spec/components.md)**（SoT）。
 ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する（サマリは「何をするか1文 + 契約フラグ」で構成し目安 ≤130 字。`凍結`/`reject`/`dry-run`/`fail-open`/`人間承認`/`単一ソース`等の動作を縛る語は要約時も必ず残す）。**
-**契約フラグを省略してよいかの判断基準**（cold に書いてあるかは基準にしない）: **独立した強制境界があり、全 write/遷移入口が必ず経由し、違反時に失敗または明示 surface する場合のみ省略可**（例: store_write barrier の未登録ストア reject）。**通常ロジック・テストのみで守られている契約・warn/fail-open・意図的な例外口があるものは、その入口を素通りされると静かに破れるため hot に必ず残す**（例: 関数の単一ソース・TTL の read 時導出・dry-run 純度）。
+**契約フラグを省略してよいかの判断基準**（cold に書いてあるかは基準にしない。**コンポーネント単位でなく不変条件単位**で判定する）: **その不変条件を全 write/遷移入口が必ず経由し、例外モード（warn 降格・fail-open・例外口）を含め常に reject する場合のみ、その条件は省略可**（例: `shrink_freeze` の凍結中新設 reject。抜け道なし）。**抜け道が1つでもある不変条件・通常ロジックやテストのみで守られている契約は hot に必ず残す**（例: `store_write` barrier 自身の未登録ストア reject も env `EVOLVE_WRITE_GUARD=warn` で降格できるため対象外／関数の単一ソース・TTL の read 時導出・dry-run 純度）。
 
 | コンポーネント | 一言サマリ | 実体 |
 |----------------|-----------|------|
@@ -68,9 +68,9 @@
 | `second-opinion` | cold-read セカンドオピニオン（3モード）。codex 検出時は外部ルートBも選択可 | skill + agent |
 | `growth-level` | env_score → Lv.1-10 + 日英称号マッピング | `growth_level.py` |
 | `optimize_history_store` | accept/reject 履歴の正準ストア（PJ スコープ・worktree 安全 slug） | `optimize_history_store.py` |
-| `evolve_decisions` | run envelope で emit→drain の並行 run を分離。未判断は deferred 保持、失敗は `marker_error` で surface。marker supersede は対象パス単位・`result_path` は一意時のみ | `evolve_decisions.py` |
+| `evolve_decisions` | run envelope で並行 run を分離し未判断は deferred 保持。marker 書込失敗は `marker_error` で surface。supersede は対象パス単位、flat `result_path` は run 1件時のみ | `evolve_decisions.py` |
 | `file_lock` | ファイル単位排他ロックと atomic write の単一ソース。ロック下からは `_locked` 版を使い自己 deadlock を回避 | `rl_common/file_lock.py` |
-| `evolve_decision_ids` | 提案 identity と判断イベント identity を隣接定義する純関数 module（取り違え防止） | `evolve_decision_ids.py` |
+| `evolve_decision_ids` | 提案 identity `(skill_path, before_sha)` と判断イベント identity を隣接定義する純関数 module（取り違え防止） | `evolve_decision_ids.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格 | `evolve_reconcile.py` |
 | `token_usage_store/ingest/query` | PJ 別 LLM トークン消費の DuckDB SoR / 取り込み / 集計 | `token_usage_*.py` |
 | `auto_memory_runner/broker` | auto-memory の enqueue（ゼロ LLM）+ 2相生成・書込。project スコープ4層防御で他PJ混入を reject、purge ツールは dry-run 既定 | `auto_memory_*.py` |
