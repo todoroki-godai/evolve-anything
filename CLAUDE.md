@@ -166,7 +166,7 @@
 | `fleet_pr` | 承認済み evolve 提案を repo 外 worktree で commit→push→PR 化。path allowlist・push account guard で強制、マージは人間 | `fleet/pr.py` + `fleet/cli_pr.py` |
 | `agent_coordination` | Claude Code primary／Codex opt-in の top-level executor lane 管理 | `agent_coordination/` + `bin/evolve-agent-task` + `docs/agent-contract/` |
 | `codex_config_cleanup` | 既知4カテゴリの Codex 設定残骸を検出し復元先が一意な指紋だけ plan/apply | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
-| `runtime_telemetry` | usage/sessions/errors の hook record に `runtime=claude|codex` を較正追加 | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
+| `runtime_telemetry` | usage/sessions/errors の hook record に `runtime=claude\|codex` を較正追加 | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
 | `codex_usage` | codex CLI 利用状況を advisory 表示（fail-open）。CC 側 token_usage とは合算しない | `fleet/codex_usage.py` + `fleet/formatters.py` |
 
 ## クイックスタート
