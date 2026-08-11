@@ -38,9 +38,10 @@ Phase B（LLM 判定）は docstring どおり「SKILL.md Step 6.6 の対話 y/n
 空文字列に穴埋めする。``ingest_judgement_results`` は空文字列を「応答欠損」として
 judged にせずスキップする（#273）ので、``call_haiku`` が例外を送出したリクエストは
 ``responses`` dict に一切書かず（キーごと省略）、この既存経路にそのまま合流させる。
-バッチ内の verdict 個別欠落（応答全体は解釈できたが特定 index だけ無い）は
-``ingest_judgement_results`` 側の既存契約どおり「非修正」として確定する（本 runner は
-その契約を変更しない）。
+バッチ内の verdict 個別欠落（応答全体は解釈できたが特定 index だけ無い＝部分応答）は
+``ingest_judgement_results`` が欠落 index の発話だけ judged に積まず次回 drain へ残す
+（#410 [Must]D）。``verdicts=[]`` を明示的に返した「正当な全件非修正」だけがバッチ全体を
+確定させる（#273 の既存契約）。本 runner はどちらの契約も変更しない。
 """
 from __future__ import annotations
 
