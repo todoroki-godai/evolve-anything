@@ -150,6 +150,18 @@
           "type": "number",
           "description": "icebox issue の最古経過日数がこの値以上で SessionStart 気づき通知を発火する (default: 30・#194)。audit_interval_days と同じ周期に揃えたデフォルト。",
           "sensitive": false
+        },
+        "judge_daily_utterance_limit": {
+          "title": "llm_judge Daily Utterance Limit",
+          "type": "number",
+          "description": "llm_judge Phase B（意味判定）の daily runner が1日に処理する発話数の上限 (default: 200・#408 ユーザー承認済み標準値)。上限超過分は次回 run に持ち越す。",
+          "sensitive": false
+        },
+        "judge_daily_token_limit": {
+          "title": "llm_judge Daily Token Limit",
+          "type": "number",
+          "description": "llm_judge Phase B（意味判定）の daily runner が1日に消費する推定トークンの上限 (default: 150000・#408 ユーザー承認済み標準値)。",
+          "sensitive": false
         }
       }
     }

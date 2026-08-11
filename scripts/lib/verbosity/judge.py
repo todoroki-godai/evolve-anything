@@ -4,8 +4,10 @@ standalone ``~/.claude/verbosity/judge.py`` を移植し、evolve-anything の�
 
 - **dry-run 既定**（llm-batch-guard 準拠）: 未判定件数 + 推定 Haiku 呼び出し回数 + 推定
   トークンを print して終わる。**実 LLM を呼ばない・1 バイトも書かない**。
-- ``--run`` で実判定。subprocess.run(["claude",...]) は **call_haiku 1 箇所に集約**
-  （単体テストはここを mock する。no-llm-in-tests 完全整合）。
+- ``--run`` で実判定。LLM 呼び出しは **call_haiku 1 箇所に集約**（単体テストはここを mock
+  する。no-llm-in-tests 完全整合）。実体は ``safe_llm_call``（#410 [Must]A: 判定対象の生ログに
+  prompt injection が混入していてもツールを一切実行させない無人セーフガード。
+  ``correction_semantic.judge_runner.call_haiku`` と共有）。
 - 判定結果を verbosity_verdicts.jsonl（store_write barrier 経由）に永続化。
 - verbose=True を weak_signals に ``channel="verbosity"`` で emit（append_signals・
   reflect 昇格フローに相乗り）。
@@ -22,7 +24,6 @@ import collections
 import datetime
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -30,6 +31,8 @@ from typing import Dict, List, Optional
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
+
+import safe_llm_call as _safe_llm_call
 
 # 絶対 import: スクリプト直起動（__main__・audit が案内する `judge.py --run`）でも、
 # パッケージ import（verbosity.judge）でも解決する。相対 import は __main__ で壊れる。
@@ -74,14 +77,16 @@ _RULES_FOR = {
 
 
 def call_haiku(prompt: str, model: str = "haiku") -> str:
-    """Haiku を 1 回呼ぶ（subprocess の唯一の集約点・単体テストはここを mock する）。"""
-    out = subprocess.run(
-        ["claude", "-p", prompt, "--model", model],
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    return out.stdout.strip()
+    """Haiku を 1 回呼ぶ（呼び出しの唯一の集約点・単体テストはここを mock する）。
+
+    実体は ``safe_llm_call.call_claude_headless`` — 判定対象の生ログ（回答冗長性判定候補の
+    アシスタント応答本文）に prompt injection が混入していても無人実行でツールを一切
+    実行させない安全な呼び出し（#410 [Must]A）。``correction_semantic.judge_runner.call_haiku``
+    と同じ実装を共有する（片方だけ直す partial fix を避けるため）。非ゼロ終了は
+    ``safe_llm_call.ClaudeCallError`` を送出し（#410 [Must]F）、呼び出し側の既存の
+    「呼び出し失敗 → 次バッチへ継続」経路に合流させる。
+    """
+    return _safe_llm_call.call_claude_headless(prompt, model=model)
 
 
 def _validate_item(v: object) -> Optional[dict]:

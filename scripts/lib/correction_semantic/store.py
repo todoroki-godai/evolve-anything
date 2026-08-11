@@ -4,7 +4,10 @@
 - ``correction_idioms.jsonl`` — 検出した修正言い回し（イディオム）の個人辞書。
   provenance（元発話の物理キー・判定理由）付き。dedup キー = idiom + 元発話の物理キー。
 - ``correction_judged.jsonl`` — LLM 判定済み発話の物理キー進捗。再判定（無駄な LLM call）を
-  防ぐために utterance の物理 PK（source_path:line_no）で突合する。
+  防ぐために utterance の物理 PK（source_path:line_no）で突合する。"key" フィールドを持たない
+  record（``billed_attempt``: True）も同居する（#410 round3 [Must]2）— 課金済みだが判定を
+  確定できなかった試行のコストのみを当日累積に計上する keyless record。
+  ``read_judged_keys`` は "key" の有無だけを見るためこの record には一切反応しない。
 
 dry-run ゼロ書込（pitfall_dryrun_stateful_store_write）: append 系は ``dry_run`` を受け、
 True なら **一切ファイルに触れない**（ディレクトリ作成も append も行わない）。
@@ -17,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -433,8 +437,14 @@ def record_judged(
     keys: List[str],
     path: Optional[Path] = None,
     dry_run: bool = False,
+    *,
+    est_tokens_by_key: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """判定済み発話の物理キーを追記する（dedup + dry-run ゲート）。
+
+    各行に ``judged_at``（ISO8601 UTC）を自動付与する（#410 [Must]B: daily runner が
+    ``count_judged_today`` で当日累積を read 時導出する際の基準時刻）。``est_tokens_by_key``
+    を渡すと該当キーの行に ``est_tokens`` も付与する（未指定キーは付けない・後方互換）。
 
     Returns:
         {"written": int, "dry_run": bool}
@@ -454,16 +464,146 @@ def record_judged(
         return {"written": len(to_write), "dry_run": True}
 
     if to_write:
+        from weak_signals.store import now_iso
+
         from rl_common import store_write, store_write_raw
 
         store.parent.mkdir(parents=True, exist_ok=True)
+        judged_at = now_iso()
         for k in to_write:
+            rec: Dict[str, Any] = {"key": k, "judged_at": judged_at}
+            if est_tokens_by_key and k in est_tokens_by_key:
+                rec["est_tokens"] = est_tokens_by_key[k]
             if path is None:
-                store_write(JUDGED_STORE_NAME, {"key": k})
+                store_write(JUDGED_STORE_NAME, rec)
             else:
-                store_write_raw(store, {"key": k})
+                store_write_raw(store, rec)
 
     return {"written": len(to_write), "dry_run": False}
+
+
+def record_billed_attempts(
+    tokens_list: List[int],
+    path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """LLM を呼び出す（呼び出そうとする）バッチの推定コストを予約記録する（#410 round4
+    [Must]1+2 是正: 事前予約方式）。
+
+    **round3 との設計変更点**: round3 は「呼び出し後に課金が確定したと判明した試行だけ
+    事後記録する」方式だったが、これは構造的に穴が塞ぎきれなかった（codex round4 指摘）:
+      - 範囲内 verdict が1件でもあれば billed_attempt を作らないため、未返却 index の
+        本文コスト（同じプロンプトで送信・課金済み）が丸ごと未計上になる
+      - CLI 例外を「未課金」とみなす前提が成立しない（API 到達後のタイムアウト・応答受信後の
+        異常終了・プロセス中断は課金済みでありうる）
+      - 全呼び出し後にまとめて記録するため、Phase B 中のプロセス終了で当日分が全損する
+
+    round4 は ``judge_runner`` の Phase B ループが **各 ``call_haiku`` 呼び出しの直前**に
+    そのバッチ全体の見積トークン（本文合計 + バッチ固定費）を本関数で **1バッチずつ即時に**
+    予約記録する（呼び出し後にまとめて書かない）。これにより「課金されたか否か」の事後判別が
+    一切不要になる（呼ぶ前に必ず記録されるため、例外・タイムアウト・プロセス中断のいずれでも
+    予約は残る）。過大計上（実際には無課金だった呼び出し分も予約される）に倒れるが、予算の
+    歯止めとしては保守側が正しい設計判断（このコストは当日累積の**唯一のソース**になる —
+    ``ingest_judgement_results``（Phase C）側の per-key est_tokens 記録は round4 で廃止した。
+    二重計上を避けるため）。
+
+    #379 新設凍結中のため新ストアは作らず、既存 ``correction_judged.jsonl`` に **"key"
+    フィールドを持たない** record を追記する。``read_judged_keys`` は "key" の有無だけを
+    見るためこの record には一切反応せず（＝対象発話は未判定のまま残り次回 drain で
+    再試行できる）。``count_judged_today`` は "key" の有無で ``count``/``est_tokens`` を
+    分離しており、この record は ``est_tokens`` にのみ計上される（``count`` には数えない
+    — 予約段階では判定はまだ確定していないため）。
+
+    各要素は 1 バッチ試行分の概算トークン（本文合計 + バッチ固定費）。個々のキーへ
+    按分しない（round4 で per-key 按分ロジック自体を廃止した。確定した発話の判定記録
+    ``record_judged`` とはコスト記録を完全に分離する設計にした）。
+
+    dry-run ゼロ書込: dry_run=True なら一切ファイルに触れず「書くはずだった件数」を返す。
+
+    Returns:
+        {"written": int, "dry_run": bool}
+    """
+    store = path if path is not None else default_judged_path()
+    if not tokens_list:
+        return {"written": 0, "dry_run": dry_run}
+
+    if dry_run:
+        return {"written": len(tokens_list), "dry_run": True}
+
+    from weak_signals.store import now_iso
+
+    from rl_common import store_write, store_write_raw
+
+    store.parent.mkdir(parents=True, exist_ok=True)
+    judged_at = now_iso()
+    for tokens in tokens_list:
+        rec: Dict[str, Any] = {
+            "billed_attempt": True,
+            "judged_at": judged_at,
+            "est_tokens": int(tokens),
+        }
+        if path is None:
+            store_write(JUDGED_STORE_NAME, rec)
+        else:
+            store_write_raw(store, rec)
+
+    return {"written": len(tokens_list), "dry_run": False}
+
+
+def count_judged_today(
+    path: Optional[Path] = None, now: Optional[datetime] = None,
+) -> Dict[str, int]:
+    """当日（UTC 暦日）に判定済みとして記録された件数・推定トークン累計を返す（#410 [Must]B）。
+
+    daily runner の複数回実行（cron の再実行・手動 --run の重ね掛け）で「日次上限」が
+    実質「1 回の呼び出し上限」になっていた欠陥の是正。1 プロセスの記憶に頼らず、
+    ``correction_judged.jsonl`` の ``judged_at`` から read 時に導出する
+    （``weak_signals.is_effectively_expired`` と同じ「forward write に頼らない」流儀）。
+
+    ``judged_at`` 欠落（#410 以前の旧レコード）は「今日」と誤カウントしない安全側で除外する。
+    ``est_tokens`` 欠落は 0 として合算する（旧レコード・見積もり未提供キーとの後方互換）。
+
+    ``count`` と ``est_tokens`` は単位が異なる（#410 round4 [Must]1+2 是正）: ``count`` は
+    **"key" を持つレコードのみ**（＝実際に判定が確定した発話数・``daily_utterance_limit`` の
+    分母）。``est_tokens`` は "key" の有無を問わず**全レコード**を合算する（``billed_attempts``
+    経由の予約 record は "key" を持たないが実際に課金が発生しているため・``daily_token_limit``
+    の分母）。以前は両方とも「judged_at を持つ全レコード」を同じ単位で数えており、
+    ``record_billed_attempts`` の予約 record（判定未確定）まで件数上限に計上され保守側に
+    ずれていた（例: 予約 record 2件で件数上限を2件消費したことになるが、実際にはまだ
+    1件も判定は確定していない）。
+
+    Returns:
+        {"count": int, "est_tokens": int}
+    """
+    now = now or datetime.now(timezone.utc)
+    now = now.astimezone(timezone.utc) if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    today = now.date()
+
+    store = path if path is not None else default_judged_path()
+    count = 0
+    est_tokens = 0
+    for rec in _read_jsonl(store):
+        judged_at = rec.get("judged_at")
+        if not isinstance(judged_at, str) or not judged_at:
+            continue
+        try:
+            dt = datetime.fromisoformat(judged_at)
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        # #410 round2 [Should]①: dt.date() を offset のまま比較すると、UTC の「今日」に
+        # 属するレコードでも他 offset の wall-clock 日付が別日になる境界で誤判定する
+        # （例: JST 01:00 は UTC では前日16:00）。UTC 暦日へ正規化してから比較する。
+        if dt.astimezone(timezone.utc).date() != today:
+            continue
+        if "key" in rec:
+            count += 1
+        tokens = rec.get("est_tokens")
+        if isinstance(tokens, (int, float)) and not isinstance(tokens, bool):
+            est_tokens += int(tokens)
+
+    return {"count": count, "est_tokens": est_tokens}
 
 
 def filter_unjudged(

@@ -342,3 +342,238 @@ def test_systemmessage_output_dict():
 def test_systemmessage_output_silent_when_empty():
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     assert qn.queue_notice_output(EMPTY_QUEUE, now=now) is None
+
+
+# ===== llm_judge 日次上限到達通知（#408・evolve-queue.json の llm_judge フィールドを再利用）=====
+CAPPED_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 250,
+        "selected": 200,
+        "capped": True,
+        "corrections": 5,
+        "call_failed": 0,
+    },
+}
+
+NOT_CAPPED_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 3,
+        "selected": 3,
+        "capped": False,
+        "corrections": 1,
+        "call_failed": 0,
+    },
+}
+
+
+def test_judge_cap_notice_fires_when_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(CAPPED_QUEUE, now=now)
+    assert msg is not None
+    assert "200" in msg
+    assert "50" in msg  # 残り件数 = 250 - 200
+
+
+def test_judge_cap_notice_silent_when_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(NOT_CAPPED_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_silent_when_llm_judge_key_missing():
+    """llm_judge フィールドが無い（旧世代の evolve-queue.json）→ 沈黙。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(SAMPLE_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_silent_when_none_input():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(None, now=now) is None
+
+
+def test_judge_cap_notice_silent_when_stale():
+    """freshness gate は evolve-queue.json 全体の generated_at を共有する（二重通知しない
+    — health notice は build_queue_notice 側が既に出すため、こちらは沈黙する）。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    stale = dict(CAPPED_QUEUE, generated_at="2026-06-01T00:00:00Z")
+    assert qn.build_judge_cap_notice(stale, now=now, stale_days=2) is None
+
+
+def test_judge_cap_notice_output_dict():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    out = qn.judge_cap_notice_output(CAPPED_QUEUE, now=now)
+    assert out is not None
+    assert "systemMessage" in out
+
+
+def test_judge_cap_notice_output_silent_when_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.judge_cap_notice_output(NOT_CAPPED_QUEUE, now=now) is None
+
+
+# ── #410 [Must]E: 発話ソース DB/schema 障害は capped=False でも沈黙させない ──────
+SOURCE_FAILED_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 0,
+        "selected": 0,
+        "capped": False,
+        "corrections": 0,
+        "call_failed": 0,
+        "source_failed": True,
+        "source_error": "RuntimeError: duckdb schema mismatch",
+    },
+}
+
+
+def test_judge_cap_notice_fires_when_source_failed_even_if_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(SOURCE_FAILED_QUEUE, now=now)
+    assert msg is not None
+    assert "duckdb schema mismatch" in msg
+
+
+def test_judge_cap_notice_silent_when_source_failed_false_and_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(NOT_CAPPED_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_source_failed_takes_priority_over_capped_message():
+    """source_failed=True かつ capped=True でも障害の方を優先して伝える（原因の方が重要）。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    both = dict(CAPPED_QUEUE)
+    both["llm_judge"] = dict(CAPPED_QUEUE["llm_judge"], source_failed=True, source_error="boom")
+    msg = qn.build_judge_cap_notice(both, now=now)
+    assert "boom" in msg
+
+
+# ── #410 round3 [Should]4: skipped_locked（別プロセスが lock 保持中で non-blocking skip
+# した）は source_failed / capped と並んで surface すべきなのに、build_judge_cap_notice は
+# この2つしか見ていなかった。skip が連日続く（供給停止）のに沈黙するのを防ぐ。
+SKIPPED_LOCKED_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 0,
+        "selected": 0,
+        "capped": False,
+        "corrections": 0,
+        "call_failed": 0,
+        "source_failed": False,
+        "source_error": None,
+        "skipped_locked": True,
+    },
+}
+
+
+def test_judge_cap_notice_fires_when_skipped_locked_even_if_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(SKIPPED_LOCKED_QUEUE, now=now)
+    assert msg is not None
+    assert "別プロセス" in msg
+
+
+def test_judge_cap_notice_silent_when_skipped_locked_false_and_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(NOT_CAPPED_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_source_failed_takes_priority_over_skipped_locked_message():
+    """source_failed=True かつ skipped_locked=True でも障害の方を優先して伝える。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    both = dict(SKIPPED_LOCKED_QUEUE)
+    both["llm_judge"] = dict(
+        SKIPPED_LOCKED_QUEUE["llm_judge"], source_failed=True, source_error="boom",
+    )
+    msg = qn.build_judge_cap_notice(both, now=now)
+    assert "boom" in msg
+
+
+# ── #410 round4 [Should]4: out_of_range_verdicts / reserved_batches が queue.json の
+# llm_judge へ転記されず SessionStart から観測できなかった（judge_runner の戻り値と daily
+# ログには出るが、evolve-daily-run の judge_summary 転記に含まれていなかった）。
+# build_judge_summary（転記の単一ソース）でこれを埋め、build_judge_cap_notice にも
+# out_of_range_verdicts>0 の通知を追加する（skipped_locked と同様の伝播）。
+
+
+def test_build_judge_summary_includes_out_of_range_verdicts_and_reserved_batches():
+    judge_result = {
+        "unjudged_total": 10, "selected": 5, "capped": False, "corrections": 1,
+        "call_failed": 0, "source_failed": False, "source_error": None,
+        "skipped_locked": False, "out_of_range_verdicts": 2, "reserved_batches": 3,
+    }
+    summary = qn.build_judge_summary(judge_result)
+    assert summary["out_of_range_verdicts"] == 2
+    assert summary["reserved_batches"] == 3
+
+
+def test_build_judge_summary_defaults_missing_fields_to_zero():
+    """judge_result に欠けているキーがあっても KeyError にせず既定値で埋める
+    （run_daily_judge の早期 return dict は将来キーが増減しても壊れないようにする）。
+    """
+    summary = qn.build_judge_summary({})
+    assert summary["out_of_range_verdicts"] == 0
+    assert summary["reserved_batches"] == 0
+    assert summary["capped"] is False
+    assert summary["source_failed"] is False
+
+
+def test_build_judge_summary_none_input_returns_all_defaults():
+    summary = qn.build_judge_summary(None)
+    assert summary["unjudged_before"] == 0
+    assert summary["out_of_range_verdicts"] == 0
+
+
+OUT_OF_RANGE_QUEUE = {
+    "generated_at": "2026-06-25T09:00:00Z",
+    "threshold": 3,
+    "tracked_total": 10,
+    "queue": [],
+    "llm_judge": {
+        "unjudged_before": 5,
+        "selected": 5,
+        "capped": False,
+        "corrections": 1,
+        "call_failed": 0,
+        "source_failed": False,
+        "source_error": None,
+        "skipped_locked": False,
+        "out_of_range_verdicts": 3,
+        "reserved_batches": 2,
+    },
+}
+
+
+def test_judge_cap_notice_fires_when_out_of_range_verdicts_even_if_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(OUT_OF_RANGE_QUEUE, now=now)
+    assert msg is not None
+    assert "3" in msg
+
+
+def test_judge_cap_notice_silent_when_out_of_range_verdicts_zero_and_not_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    assert qn.build_judge_cap_notice(NOT_CAPPED_QUEUE, now=now) is None
+
+
+def test_judge_cap_notice_capped_takes_priority_over_out_of_range_verdicts_message():
+    """capped=True の方が運用上の優先度が高い（供給が上限で止まっている）ため、
+    out_of_range_verdicts と同時発生時は capped メッセージを優先する。
+    """
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    both = dict(CAPPED_QUEUE)
+    both["llm_judge"] = dict(CAPPED_QUEUE["llm_judge"], out_of_range_verdicts=3)
+    msg = qn.build_judge_cap_notice(both, now=now)
+    assert "200" in msg  # capped メッセージ（selected 件数）が出る

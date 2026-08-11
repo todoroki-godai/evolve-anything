@@ -174,3 +174,29 @@ class TestLoadUserConfig:
         with mock.patch.dict(os.environ, env, clear=False):
             config = common.load_user_config()
         assert config["icebox_review_threshold_days"] == 14
+
+    def test_judge_daily_utterance_limit_default(self):
+        """judge_daily_utterance_limit のデフォルトは 200（#408 ユーザー承認済み標準値）。"""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = common.load_user_config()
+        assert config["judge_daily_utterance_limit"] == 200
+
+    def test_judge_daily_utterance_limit_override(self):
+        """judge_daily_utterance_limit は環境変数で上書き可能（パイロット時の60件等）。"""
+        env = {"CLAUDE_PLUGIN_OPTION_judge_daily_utterance_limit": "60"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            config = common.load_user_config()
+        assert config["judge_daily_utterance_limit"] == 60
+
+    def test_judge_daily_token_limit_default(self):
+        """judge_daily_token_limit のデフォルトは 150000（#408 ユーザー承認済み標準値）。"""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = common.load_user_config()
+        assert config["judge_daily_token_limit"] == 150_000
+
+    def test_judge_daily_token_limit_override(self):
+        """judge_daily_token_limit は環境変数で上書き可能。"""
+        env = {"CLAUDE_PLUGIN_OPTION_judge_daily_token_limit": "50000"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            config = common.load_user_config()
+        assert config["judge_daily_token_limit"] == 50000

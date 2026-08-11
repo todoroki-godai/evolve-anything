@@ -40,6 +40,26 @@ def test_build_prompt_asks_for_json() -> None:
     assert "idiom" in p
 
 
+# ── #410 [Must]C: 極端に長い本文を切り詰める（青天井のトークン消費を防ぐ）──────
+
+
+def test_build_prompt_truncates_long_utterance_text() -> None:
+    from correction_semantic import MAX_CHARS_PER_UTTERANCE
+
+    # "X" は雛形文（日本語の指示文・記号のみ）に出現しないマーカー文字として使う
+    # （「あ」等の日本語文字だと雛形自身の地の文に紛れてカウントがずれる）。
+    huge = [{"source_path": "/a.jsonl", "line_no": 1,
+             "text": "X" * (MAX_CHARS_PER_UTTERANCE * 3), "prev_action": None}]
+    p = cs_prompt.build_batch_prompt(huge)
+    assert p.count("X") <= MAX_CHARS_PER_UTTERANCE
+
+
+def test_build_prompt_short_utterance_unaffected_by_truncation() -> None:
+    p = cs_prompt.build_batch_prompt(_utts())
+    assert "四国めたん" in p
+    assert "ありがとう" in p
+
+
 # ── verdict パース ────────────────────────────────────────────────
 
 
@@ -168,3 +188,61 @@ def test_parse_verdicts_result_ok_true_when_all_valid() -> None:
     result = cs_prompt.parse_verdicts_result(raw)
     assert result["ok"] is True
     assert len(result["verdicts"]) == 2
+
+
+# ── #410 round2/round3 [Should]③⑤: 範囲外 index の扱い ──────────────────────
+# round2: parser に応答対象の件数を渡し範囲外 index を検出する（黙って捨てない）。
+# round3: 有効な全 index に加えて余分な1件を返しただけでバッチ全体を失格にするのは
+# 過剰（[Must]2 の billed-but-unconfirmed 予算漏れと組み合わさると「無限再試行×予算漏れ」
+# になる）との指摘を受け、**範囲外の要素だけを無視**し件数を surface する方式に変更した
+# （round2 時点の「全体失格にする」という設計をこの節で上書きする）。
+
+
+def test_parse_verdicts_result_ignores_out_of_range_index_but_keeps_valid_ones() -> None:
+    """#410 round3 [Should]⑤: 範囲外 index は無視するだけで、範囲内の要素は通常どおり
+    処理する（バッチ全体を失格にしない）。
+    """
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True},
+        {"index": 99, "is_correction": True},  # バッチ対象外
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw, expected_len=3)
+    assert result["ok"] is True
+    assert [v["index"] for v in result["verdicts"]] == [0]
+    assert result["out_of_range"] == 1
+
+
+def test_parse_verdicts_result_negative_index_is_ignored_not_failed() -> None:
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True},
+        {"index": -1, "is_correction": True},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw, expected_len=3)
+    assert result["ok"] is True
+    assert [v["index"] for v in result["verdicts"]] == [0]
+    assert result["out_of_range"] == 1
+
+
+def test_parse_verdicts_result_in_range_index_ok_with_expected_len() -> None:
+    raw = json.dumps({"verdicts": [{"index": 2, "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw, expected_len=3)
+    assert result["ok"] is True
+    assert len(result["verdicts"]) == 1
+    assert result["out_of_range"] == 0
+
+
+def test_parse_verdicts_result_no_range_check_when_expected_len_omitted() -> None:
+    """expected_len 未指定（既定 None）は後方互換のため範囲検証しない。"""
+    raw = json.dumps({"verdicts": [{"index": 99, "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert result["out_of_range"] == 0
+
+
+def test_parse_verdicts_result_all_out_of_range_is_still_ok_with_empty_verdicts() -> None:
+    """全件が範囲外なら verdicts=[] だが ok=True のまま（型不正・重複とは異なる軸）。"""
+    raw = json.dumps({"verdicts": [{"index": 99, "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw, expected_len=3)
+    assert result["ok"] is True
+    assert result["verdicts"] == []
+    assert result["out_of_range"] == 1

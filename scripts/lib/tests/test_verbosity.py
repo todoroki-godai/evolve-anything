@@ -498,3 +498,41 @@ def test_build_suggestion_timestamp_is_tz_aware():
     assert m is not None, out
     parsed = _dt.datetime.fromisoformat(m.group(1))
     assert parsed.tzinfo is not None, f"naive timestamp: {m.group(1)}"
+
+
+# ──────────────────── call_haiku: safe_llm_call 経由（#410 [Must]A/[Must]F）─────────────
+
+def test_call_haiku_delegates_to_safe_llm_call(monkeypatch):
+    """#410 [Must]A: call_haiku の実体は safe_llm_call.call_claude_headless（低レベルの
+    subprocess 呼び出し・ツール封じフラグ組み立ての契約は test_safe_llm_call.py が担う。
+    correction_semantic.judge_runner.call_haiku と同じ実装を共有する）。
+    """
+    captured = {}
+
+    def _fake(prompt, *, model="haiku", **kwargs):
+        captured["prompt"] = prompt
+        captured["model"] = model
+        return "ok"
+
+    monkeypatch.setattr(_judge._safe_llm_call, "call_claude_headless", _fake)
+    out = _judge.call_haiku("prompt text", model="haiku")
+    assert out == "ok"
+    assert captured["prompt"] == "prompt text"
+    assert captured["model"] == "haiku"
+
+
+def test_judge_run_claude_call_error_batch_skipped_not_crashed(data_dir, capsys):
+    """#410 [Must]F: safe_llm_call.ClaudeCallError（非ゼロ終了）は既存の「呼び出し失敗 →
+    次バッチへ継続」経路に合流し、run_judge 全体をクラッシュさせない。
+    """
+    import safe_llm_call
+
+    _write_candidates(data_dir, [_cand("h1")])
+
+    def _raise(prompt, model="haiku"):
+        raise safe_llm_call.ClaudeCallError("claude -p exited 1: boom")
+
+    with mock.patch.object(_judge, "call_haiku", side_effect=_raise):
+        res = _judge.run_judge(SLUG, run=True, data_dir=data_dir)
+    assert res["judged_now"] == 0
+    assert "呼び出し失敗" in capsys.readouterr().err

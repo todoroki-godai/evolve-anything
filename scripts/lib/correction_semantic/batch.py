@@ -29,6 +29,7 @@ weak_signals / 個人辞書 / 判定進捗のどれにも一切書かない（�
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -39,15 +40,25 @@ if str(_lib_dir) not in sys.path:
 
 from llm_broker import build_requests, parse_responses, passthrough  # noqa: E402
 
-from . import DEFAULT_BATCH_SIZE, LLM_JUDGE_CHANNEL
+from . import DEFAULT_BATCH_SIZE, LLM_JUDGE_CHANNEL, MAX_CHARS_PER_UTTERANCE
 from . import idiom_filter as _idiom_filter
 from . import prompt as _prompt
 from . import representative as _representative
 from . import store as _store
 
-# 1 発話あたりの概算トークン（プロンプト雛形 + 発話本文）。est 用の粗い係数。
-# 日本語は 1 字 ≈ 1 トークン超だが、入力 + 出力 + 雛形オーバーヘッドを丸めた係数で十分。
-_TOKENS_PER_UTTERANCE = 80
+# #410 [Must]C 是正: 旧実装は「件数 × 80 + バッチ数 × 400」の固定係数で本文長を一切見て
+# おらず、長文1件を短文1件と同じ 80 トークンに見積もっていた（15万トークン上限が実質
+# 無効化しうる）。実入力の文字数に連動する保守的な見積もりに変える。
+#
+# 日本語は概ね 1〜2 文字 ≈ 1 トークン（英数字混在では 4 字弱/トークンになることも多いが、
+# 判定対象は日本語ユーザー発話が主）。安全側（過大に出す）に倒すため 2 文字/トークンで
+# 見積もる。``prompt.build_batch_prompt`` と同じ ``MAX_CHARS_PER_UTTERANCE`` で本文長を
+# 頭打ちし、見積もりと実送信の乖離を防ぐ（単一ソース）。
+_CHARS_PER_TOKEN = 2.0
+# #410 round2 [Must]C: per-utterance の固定オーバーヘッド係数は廃止した。
+# estimate_utterance_tokens が実際に組み立てるプロンプト行（prompt.format_utterance_line、
+# ラベル文言 + prev_action + text）の長さをそのまま測るため、別途の固定加算が不要になった。
+# プロンプト雛形（PROMPT_HEAD 相当の指示文・出力形式説明）の固定オーバーヘッド（バッチ単位）。
 _PROMPT_OVERHEAD_TOKENS = 400
 
 
@@ -106,6 +117,54 @@ def emit_judgement_requests(
 # ─────────────────────────────────────────────────────────────────
 # Phase C: ingest
 # ─────────────────────────────────────────────────────────────────
+def _batch_cost_tokens(group: List[Dict[str, Any]]) -> int:
+    """1 バッチ試行分の概算トークン（本文合計 + バッチ固定費）。
+
+    #410 round4 [Must]1+2: ``reserve_batch_cost`` が呼び出し直前の予約記録に使う唯一の
+    コスト算出関数（誰にも確定的に帰属しない試行なのでバッチ丸ごと 1 件のコストとして扱う。
+    round3 の per-key 按分方式は round4 で廃止した）。
+    """
+    return (
+        sum(estimate_utterance_tokens(u, index=i) for i, u in enumerate(group))
+        + _PROMPT_OVERHEAD_TOKENS
+    )
+
+
+def reserve_batch_cost(
+    group: List[Dict[str, Any]],
+    *,
+    judged_path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """1 バッチの見積コストを、LLM を呼ぶ**前**に予約記録する（#410 round4 [Must]1+2）。
+
+    **設計変更（round3→round4）**: round3 は「呼び出し後に課金が確定したと判明した試行だけ
+    事後記録する」方式だったが、codex round4 レビューで構造的な穴を指摘された:
+      - 範囲内 verdict が1件でもあれば billed_attempt を作らないため、未返却 index の
+        本文コスト（同じプロンプトで送信・課金済み）が丸ごと未計上になっていた
+      - CLI 例外を「未課金」とみなす前提が成立しない（API 到達後のタイムアウト・応答受信後の
+        異常終了・プロセス中断は課金済みでありうる）
+      - 全呼び出し後にまとめて記録するため、Phase B 中のプロセス終了で当日分が全損する
+
+    round4 は ``judge_runner`` の Phase B ループが本関数を **各 call_haiku 呼び出しの直前に
+    1バッチずつ即時に** 呼ぶ。呼んだ時点で「課金される可能性がある」とみなし無条件に予約
+    するため、事後の「課金されたか否か」判別が一切不要になる（例外・タイムアウト・プロセス
+    中断のいずれでも予約は残る）。過大計上（実際には無課金だった呼び出し分も予約される）に
+    倒れるが、予算の歯止めとしては保守側が正しい。
+
+    このコストが当日累積の**唯一のソース**になる（``ingest_judgement_results``（Phase C）
+    側の per-key est_tokens 記録・バッチ固定費按分は round4 で完全に廃止した。二重計上を
+    避けるため）。実体は ``_store.record_billed_attempts``（"key" を持たない keyless
+    record・#379 新設凍結中のため新ストアは作らず既存 ``correction_judged.jsonl`` を再利用）。
+
+    Returns:
+        {"written": int, "dry_run": bool}
+    """
+    return _store.record_billed_attempts(
+        [_batch_cost_tokens(group)], path=judged_path, dry_run=dry_run,
+    )
+
+
 def ingest_judgement_results(
     emitted: Dict[str, Any],
     responses: Dict[str, Any],
@@ -123,22 +182,33 @@ def ingest_judgement_results(
       3. prompt.parse_verdicts_result で JSON 解釈し ok=False（パース失敗）ならスキップ（#273:
          応答欠損と同じ「未判定のまま残す」経路に合流。verdict.index → 発話を引く（ok=True 時）
       4. is_correction=True → WeakSignal(channel=llm_judge) + CorrectionIdiom を蓄積
-      5. バッチ内の全発話の物理キーを judged に記録（修正/非修正どちらも。ok=False バッチは対象外）。
-         verdict が返らなかった発話は非修正として確定し、件数を omitted_verdicts に surface（#273）
+      5. バッチ内の発話の物理キーを judged に記録（修正/非修正どちらも。ok=False バッチは対象外）。
+         verdicts が正当に空配列（モデルが「該当なし」と明示判定）ならバッチ全体を非修正
+         として確定する（#273: 未判定に残すと再判定費用が際限なく積むため）。一部 index だけ
+         verdict が欠けた**部分応答**は、揃っている index だけ確定し、欠落した index の発話は
+         未判定のまま残す（judged に積まない・次回 drain で再試行。#410 [Must]D: バッチ全体を
+         戻すと head-of-line blocking になるため避ける）。件数は omitted_verdicts に surface
 
     過汎用 idiom guard（#527）: floor（8 文字未満）/ stopword（相槌・推量・否定のみ）/
     文脈固有トークン（日付・割合・序数）に該当する idiom は **個人辞書に入れない**
     （weak_signal は隔離記録するので reflect で人間が拾える）。弾いた件数は idioms_filtered。
 
+    **課金コストはここでは記録しない（#410 round4 [Must]1+2）**: round3 まではここで
+    per-key est_tokens・バッチ固定費按分・billed_attempt を記録していたが、応答の解釈結果
+    次第で課金の一部が計上漏れになる構造的な穴があった。round4 は判定結果に一切依存しない
+    「呼ぶ前に予約する」方式（``reserve_batch_cost``。呼び出し元 ``judge_runner`` の Phase B
+    ループが担う）に一本化し、この Phase C（decision-dependent）からは完全に切り離した。
+
     Returns:
         {"corrections", "non_corrections", "skipped_batches", "parse_failed_batches",
-         "omitted_verdicts", "weak_written", "idioms_written", "idioms_filtered",
-         "judged_written", "dry_run"}
+         "omitted_verdicts", "out_of_range_verdicts", "weak_written", "idioms_written",
+         "idioms_filtered", "judged_written", "dry_run"}
     """
     from weak_signals.store import WeakSignal, append_signals, now_iso
 
     requests = emitted.get("requests", [])
-    parsed = parse_responses(requests, responses or {}, parser=passthrough)
+    responses = responses or {}
+    parsed = parse_responses(requests, responses, parser=passthrough)
 
     signals: List[WeakSignal] = []
     idioms: List[_store.CorrectionIdiom] = []
@@ -149,6 +219,8 @@ def ingest_judgement_results(
     parse_failed_batches = 0  # #273: 応答は届いたが JSON が解釈不能だったバッチ数
     idioms_filtered = 0  # #527: 過汎用 idiom（floor/stopword/context token）で弾いた件数
     omitted_verdicts = 0  # #273: verdict が返らず非修正として確定した発話数（observability）
+    # #410 round3 [Should]⑤: バッチ対象外の index を無視した件数（黙って捨てない）。
+    out_of_range_verdicts = 0
 
     for req in requests:
         key = req.get("id")
@@ -158,34 +230,63 @@ def ingest_judgement_results(
         raw = parsed.get(key)
         text = raw.strip() if isinstance(raw, str) else ""
         if not text:
-            # 応答欠損: 判定済みにせず次 drain で再試行
+            # 応答欠損: 判定済みにせず次 drain で再試行。
+            # #410 round4 [Must]1+2: このバッチのコストは判定結果を問わず judge_runner の
+            # Phase B が呼び出し直前に既に予約済み（reserve_batch_cost）。ここでの billed
+            # 判別・追加記録は不要になった。
             skipped_batches += 1
             continue
 
         # 変数名は `parsed`（= parse_responses の応答マップ）と必ず分ける。
         # 同名にすると 2 バッチ目以降の `parsed.get(key)` が verdict dict を引いて
         # 全バッチ silent skip する（#273 レビューで検出した shadowing 回帰）。
-        parsed_verdicts = _prompt.parse_verdicts_result(text)
+        # #410 round3 [Should]⑤: expected_len=len(group) でバッチ対象外の index を検出する
+        # （round2 は検出時にバッチ全体を失格にしていたが、余分な1件で無限再試行になる
+        # 過剰さを避けるため round3 でパーサ側が個別に無視する方式へ変更。上の
+        # out_of_range_verdicts で件数を surface する）。
+        parsed_verdicts = _prompt.parse_verdicts_result(text, expected_len=len(group))
         if not parsed_verdicts["ok"]:
             # #273: JSON 解釈不能。応答欠損と同様、判定済みにせず次 drain で再試行する
             # （[] フォールバックを「該当なし」と誤読して judged_keys に積むと desync する）。
             parse_failed_batches += 1
             continue
+        # #410 round3 [Should]⑤: バッチ対象外の index はパーサ側で個別に無視され
+        # verdicts から除外済み（バッチ全体は失格にしない）。無視した件数だけ observability
+        # として積む（黙って捨てない）。
+        out_of_range_verdicts += parsed_verdicts.get("out_of_range", 0)
 
         by_index = {v["index"]: v for v in parsed_verdicts["verdicts"]}
+        # #410 [Must]D: 「正当な全件非修正」（verdicts=[] を明示的に返した・#273）と
+        # 「一部 index だけ欠落した部分応答」を区別する。前者はバッチ全体を確定させないと
+        # 正当なケースが毎 drain 再判定され費用が積む（既存契約・
+        # test_ingest_legitimate_empty_verdicts_still_marks_judged が固定）。後者は
+        # バッチ全体を戻すと head-of-line blocking になるため、欠落した index の発話だけ
+        # 未判定のまま残し、揃っている index は従来どおり確定する。
+        #
+        # #410 round4 [Must]3 是正: 「元々 verdicts=[]（モデルが明示的に該当なしと判定）」と
+        # 「範囲外 index を除去した結果 verdicts=[] に収束した」は意味が違う。後者は
+        # 「対象発話を判定していない」のであって「対象発話には修正が無い」のではない
+        # （round3 はこの区別をせず全件を非修正として誤確定させていた＝データ損失）。
+        # out_of_range が1件でも発生していれば legitimate_empty_batch にせず、対象発話は
+        # 未判定のまま残す（下の omitted_verdicts 経路に自然に合流する）。
+        legitimate_empty_batch = (
+            len(parsed_verdicts["verdicts"]) == 0
+            and parsed_verdicts.get("out_of_range", 0) == 0
+        )
 
         for local_i, utt in enumerate(group):
-            judged_keys.append(_store.utterance_key(utt))
+            key = _store.utterance_key(utt)
             v = by_index.get(local_i)
             if v is None:
-                # verdict 欠落は「非修正」として扱い判定済みにする（既存契約）。
-                # プロンプトは全 index を返すよう明示しているので欠落は本来起きないが、
-                # 欠落を未判定に残す設計にすると「全件非修正のバッチにモデルが
-                # `{"verdicts": []}` で答える」正当なケースが毎 drain 再判定され費用が
-                # 際限なく積む。件数だけ surface して silence にはしない（#273）。
+                if legitimate_empty_batch:
+                    judged_keys.append(key)
+                    non_corrections += 1
+                    continue
+                # 部分応答の欠落: judged_keys に積まない（未判定のまま次回 drain で再試行）。
+                # 件数だけ surface して silence にはしない（#273）。
                 omitted_verdicts += 1
-                non_corrections += 1
                 continue
+            judged_keys.append(key)
             if not v.get("is_correction"):
                 non_corrections += 1
                 continue
@@ -228,6 +329,8 @@ def ingest_judgement_results(
 
     ws_res = append_signals(signals, path=weak_signals_path, dry_run=dry_run)
     idiom_res = _store.append_idioms(idioms, path=idioms_path, dry_run=dry_run)
+    # #410 round4 [Must]1+2: est_tokens は渡さない（judge_runner の Phase B が呼び出し
+    # 直前に reserve_batch_cost で既に予約済み。ここで再度付与すると二重計上になる）。
     judged_res = _store.record_judged(judged_keys, path=judged_path, dry_run=dry_run)
 
     return {
@@ -239,6 +342,7 @@ def ingest_judgement_results(
         "idioms_written": idiom_res["written"],
         "idioms_filtered": idioms_filtered,  # #527: 過汎用で弾いた idiom 件数（observability）
         "omitted_verdicts": omitted_verdicts,  # #273: verdict 欠落で非修正確定した発話数
+        "out_of_range_verdicts": out_of_range_verdicts,  # #410 round3 [Should]⑤: 無視した範囲外件数
         "judged_written": judged_res["written"],
         "dry_run": bool(dry_run),
     }
@@ -247,14 +351,61 @@ def ingest_judgement_results(
 # ─────────────────────────────────────────────────────────────────
 # トークン見積もり（llm-batch-guard: 実走前にユーザーへ提示）
 # ─────────────────────────────────────────────────────────────────
+def estimate_utterance_tokens(
+    utterance: Dict[str, Any], *, index: int = 0, max_chars: int = MAX_CHARS_PER_UTTERANCE
+) -> int:
+    """1 発話あたりの概算トークン。
+
+    ``estimate_tokens``（バッチ集計）と ``ingest_judgement_results``（#410 [Must]B:
+    ``correction_judged.jsonl`` へ判定済みキーごとの推定コストを残し当日累積を導出する）が
+    同じ単価を共有する単一ソース。プロンプト雛形分（``_PROMPT_OVERHEAD_TOKENS``）は
+    バッチ単位のため含まない。
+
+    #410 round2 [Must]C 是正: 旧実装は本文（``text``）長のみを測り、prev_action
+    （実送信では最大300字）・ラベル文言（"[i] 直前のClaudeの操作: " 等）を固定係数
+    ``_PER_UTTERANCE_OVERHEAD_TOKENS`` で丸めていたため、長い日本語 prev_action が多い
+    バッチで大幅な過小評価になっていた。理想解として「実際に組み立てるプロンプト行
+    （``prompt.format_utterance_line``）の長さをそのまま測る」方式にした — ロジックを
+    2箇所（見積もりと実送信）に複製すると片方だけ切り詰め幅を変えたときに乖離が再発する
+    ため、行の組み立てそのものを単一ソース化した（固定の per-utterance オーバーヘッド
+    加算はもう不要 — ラベル文言も実測に含まれるため）。
+
+    ``index``（#410 round3 [Must]2 是正）: バッチ内での実位置（0 始まり）。呼び出し側が
+    常に ``index=0`` を渡していたため、"[10]" のように2桁以上になる発話ほど（"[0]" より
+    1文字長い）過小評価していた。既定 0 は単発の発話単価見積もり（呼び出し側がバッチ内
+    位置を持たない箇所）との後方互換のため維持する。
+    """
+    line = _prompt.format_utterance_line(index, utterance, max_chars=max_chars)
+    return math.ceil(len(line) / _CHARS_PER_TOKEN)
+
+
 def estimate_tokens(
     utterances: List[Dict[str, Any]],
     batch_size: int = DEFAULT_BATCH_SIZE,
+    *,
+    max_chars: int = MAX_CHARS_PER_UTTERANCE,
 ) -> Dict[str, Any]:
-    """判定対象発話の概算トークン消費を返す（llm-batch-guard 用・決定論）。"""
-    n = len(utterances or [])
-    batches = (n + max(1, batch_size) - 1) // max(1, batch_size)
-    est = n * _TOKENS_PER_UTTERANCE + batches * _PROMPT_OVERHEAD_TOKENS
+    """判定対象発話の概算トークン消費を返す（llm-batch-guard 用・決定論・#410 [Must]C）。
+
+    各発話の本文実長（``max_chars`` で頭打ち・``build_batch_prompt`` と同じ切り詰め）に
+    連動する。固定件数係数（旧実装）だと長文1件が短文1件と同じ見積もりになり、
+    トークン上限が実効性を持たなかった。
+
+    #410 round3 [Must]2 是正: 実際の emit（``_chunk`` で ``batch_size`` ごとに分割し、
+    各バッチ内で 0 始まりの index を振る）と同じ分割・index 付けで見積もる。旧実装は
+    件数から batches 数だけ算出し、各発話の index を意識せず一律 index=0 で見積もって
+    いたため、1バッチが大きく2桁 index が生じる構成ほど過小評価になっていた。
+    """
+    items = utterances or []
+    n = len(items)
+    groups = _chunk(items, batch_size)
+    batches = len(groups)
+    body_tokens = sum(
+        estimate_utterance_tokens(u, index=i, max_chars=max_chars)
+        for group in groups
+        for i, u in enumerate(group)
+    )
+    est = body_tokens + batches * _PROMPT_OVERHEAD_TOKENS
     return {
         "utterances": n,
         "batches": batches,

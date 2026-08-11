@@ -21,21 +21,46 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from . import MAX_CHARS_PER_UTTERANCE
+
 # 抽出する JSON object をテキストから拾うための緩い探索（code fence 等を剥がす）。
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# prev_action（直前 Claude 操作の1行要約）の切り詰め上限。text ほど長大化しない想定だが
+# 防御的に上限を設ける（#410 [Must]C）。
+_MAX_PREV_ACTION_CHARS = 300
 
-def build_batch_prompt(utterances: List[Dict[str, Any]]) -> str:
+
+def format_utterance_line(
+    index: int, u: Dict[str, Any], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
+) -> str:
+    """1 発話分のプロンプト行を組み立てる（決定論・IO なし）。
+
+    ``build_batch_prompt``（実送信）と ``batch.estimate_utterance_tokens``（見積もり）の
+    単一ソース（#410 round2 [Must]C）。見積もりが本文長のみを測り prev_action（最大
+    ``_MAX_PREV_ACTION_CHARS`` 字）・ラベル文言を固定オーバーヘッドで丸めていたため、
+    長い日本語 prev_action が多いバッチで大幅な過小評価になっていた。ロジックを2箇所に
+    複製すると片方だけ切り詰め幅を変えたときに乖離が再発するため、行の組み立てそのものを
+    共有し「実際に組み立てたプロンプトの長さをそのまま測る」方式にした。
+    """
+    prev = (u.get("prev_action") or "(なし)")[:_MAX_PREV_ACTION_CHARS]
+    text = (u.get("text") or "").replace("\n", " ").strip()[:max_chars]
+    return f"[{index}] 直前のClaudeの操作: {prev}\n    ユーザー発話: {text}"
+
+
+def build_batch_prompt(
+    utterances: List[Dict[str, Any]], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
+) -> str:
     """発話リストから 1 バッチ分の判定プロンプトを組み立てる（決定論・IO なし）。
 
     各発話に 0 始まりの index を振り、index でひも付けて判定を返させる。
     prev_action（直前の Claude のツール操作）を文脈として渡す（修正の判定材料）。
+
+    ``max_chars``（既定 ``MAX_CHARS_PER_UTTERANCE``・#410 [Must]C）: 本文が貼り付けられた
+    長文等で青天井に膨張しないよう切り詰める。``batch.estimate_tokens`` も同じ上限を参照し、
+    見積もりと実送信の文字数が乖離しないようにする（単一ソース）。
     """
-    lines: List[str] = []
-    for i, u in enumerate(utterances):
-        prev = u.get("prev_action") or "(なし)"
-        text = (u.get("text") or "").replace("\n", " ").strip()
-        lines.append(f"[{i}] 直前のClaudeの操作: {prev}\n    ユーザー発話: {text}")
+    lines = [format_utterance_line(i, u, max_chars=max_chars) for i, u in enumerate(utterances)]
     listing = "\n".join(lines)
 
     return (
@@ -99,7 +124,9 @@ def _validate_verdict(v: object) -> Optional[Dict[str, Any]]:
     }
 
 
-def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
+def parse_verdicts_result(
+    raw: Optional[Any], *, expected_len: Optional[int] = None
+) -> Dict[str, Any]:
     """モデル応答（JSON 文字列）から verdict のリストを取り出し、パース成否も返す（#273）。
 
     code fence・前後のノイズに頑健。「解釈できない」場合は ``ok=False`` を返す — 呼び出し側は
@@ -110,19 +137,28 @@ def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
       - 要素の型が不正（`_validate_verdict` 参照。1 要素でも不正ならバッチ全体を失格にする）
       - `index` の重複
 
+    ``expected_len`` を渡した場合、``0 <= index < expected_len`` の範囲外の要素は
+    **その要素だけを無視**し、バッチ全体は失格にしない（#410 round3 [Should]⑤ — round2 では
+    「範囲外 index があれば全体失格」だったが、有効な全 index に加えて余分な1件を返した
+    だけで再判定され続けるのは過剰、かつ [Must]2 の billed-but-unconfirmed 予算漏れと
+    組み合わさると「無限再試行 × 予算漏れ」になるため round3 で方針変更した）。無視した
+    件数は ``out_of_range`` に surface する（黙って捨てない）。範囲内の要素は通常どおり
+    処理される。
+
     index の**網羅性**（batch 内の全 index が揃っているか）はここでは検証しない
-    （verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称）。プロンプトで全 index を
-    返すよう明示したうえで、欠落は `batch.ingest_judgement_results` が非修正として確定し
-    件数を `omitted_verdicts` に surface する。欠落を未判定に残す設計は「全件非修正の
-    バッチにモデルが `{"verdicts": []}` で答える」正当なケースを毎 drain 再判定させ費用が
-    際限なく積むため採らない（この契約は
+    （verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称。範囲検証とは別軸）。
+    プロンプトで全 index を返すよう明示したうえで、欠落は `batch.ingest_judgement_results`
+    が非修正として確定し件数を `omitted_verdicts` に surface する。欠落を未判定に残す設計は
+    「全件非修正のバッチにモデルが `{"verdicts": []}` で答える」正当なケースを毎 drain
+    再判定させ費用が際限なく積むため採らない（この契約は
     `test_ingest_legitimate_empty_verdicts_still_marks_judged` が固定している）。
 
     Returns:
-        {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None, reason:str}]}
+        {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None, reason:str}],
+         "out_of_range": int}
     """
     if not raw or not isinstance(raw, str):
-        return {"ok": False, "verdicts": []}
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
     text = raw.strip()
     obj = None
     # まず素直に parse、ダメなら最初の {...} ブロックを拾う
@@ -134,24 +170,28 @@ def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
             try:
                 obj = json.loads(m.group(0))
             except (json.JSONDecodeError, ValueError):
-                return {"ok": False, "verdicts": []}
+                return {"ok": False, "verdicts": [], "out_of_range": 0}
         else:
-            return {"ok": False, "verdicts": []}
+            return {"ok": False, "verdicts": [], "out_of_range": 0}
     if not isinstance(obj, dict):
-        return {"ok": False, "verdicts": []}
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
     verdicts = obj.get("verdicts")
     if not isinstance(verdicts, list):
-        return {"ok": False, "verdicts": []}
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
 
     out: List[Dict[str, Any]] = []
     seen_idx: set = set()
+    out_of_range = 0
     for v in verdicts:
         item = _validate_verdict(v)
         if item is None or item["index"] in seen_idx:
-            return {"ok": False, "verdicts": []}
+            return {"ok": False, "verdicts": [], "out_of_range": 0}
+        if expected_len is not None and not (0 <= item["index"] < expected_len):
+            out_of_range += 1
+            continue
         seen_idx.add(item["index"])
         out.append(item)
-    return {"ok": True, "verdicts": out}
+    return {"ok": True, "verdicts": out, "out_of_range": out_of_range}
 
 
 def parse_verdicts(raw: Optional[Any]) -> List[Dict[str, Any]]:

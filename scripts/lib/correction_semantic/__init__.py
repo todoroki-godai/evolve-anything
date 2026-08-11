@@ -14,13 +14,18 @@ hot hook（CORRECTION_PATTERNS）は語彙依存で文中の修正を構造的�
 - フェーズ昇格カウント（growth_engine の corrections>=10）は **human-source のみ**で駆動。
   機械ノイズ（Stop hook 等）で状態が動かないようにする（provenance_weight）。
 
-LLM 呼び出しは llm_broker の 3 相（build_requests / parse_responses）に乗せるため、
-Python は claude -p を一切呼ばない（no-llm-in-tests と完全整合）。
+``batch`` の Phase A（emit）/ Phase C（ingest）は llm_broker の 3 相（build_requests /
+parse_responses）に乗せるため Python から claude -p を一切呼ばない。Phase B（LLM 判定）は
+``judge_runner`` が daily runner から非対話で肩代わりする（#408・#410 で SoT を是正）。
+``judge_runner.call_haiku`` は唯一の呼び出し集約点で ``safe_llm_call.call_claude_headless``
+（無人実行でツールを一切実行させない安全化済み）を経由する。単体テストは
+``call_haiku``/Phase A/C いずれも mock するため no-llm-in-tests と完全整合。
 
 サブモジュール:
 - ``store``            — correction_idioms.jsonl（個人辞書）+ 判定進捗の append/read（dry-run ゼロ書込）
 - ``prompt``           — 30 件バッチプロンプトの組み立て + JSON verdict のパース
 - ``batch``            — 判定オーケストレーション（emit / ingest 2 相・weak_signals 隔離記録）
+- ``judge_runner``     — Phase B（LLM 判定）を daily runner から非対話実行する runner（#408）
 - ``provenance_weight``— corrections の human-source 判定（フェーズ昇格カウント用）
 """
 from __future__ import annotations
@@ -37,3 +42,9 @@ LLM_JUDGE_CHANNEL = "llm_judge"
 
 # 1 LLM call にまとめる発話件数（#431: 30 件程度を 1 call）。
 DEFAULT_BATCH_SIZE = 30
+
+# 1 発話あたりプロンプトに含める本文の最大文字数（#410 [Must]C）。verbosity/judge.py の
+# max_chars（既定 4000）と同じ値・同じ思想（貼り付けられた長文で1発話が青天井に膨張する
+# のを防ぐ）。prompt.build_batch_prompt（実送信）と batch.estimate_tokens（見積もり）が
+# 同じ値を参照し、見積もりと実送信の乖離を防ぐ単一ソース。
+MAX_CHARS_PER_UTTERANCE = 4000

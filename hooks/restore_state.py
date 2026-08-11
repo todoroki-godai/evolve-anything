@@ -414,6 +414,36 @@ def _deliver_evolve_queue_notice() -> None:
         print(f"[evolve-anything:restore_state] evolve-queue notice error: {e}", file=sys.stderr)
 
 
+def _deliver_judge_cap_notice() -> None:
+    """llm_judge Phase B の日次上限到達を systemMessage で通知する（#408）。
+
+    daily runner（evolve-daily-run）が `judge_runner.run_daily_judge` の結果を
+    evolve-queue.json の `llm_judge` フィールドへ埋め込む（新ストアを作らず既存の
+    read 専用派生物を再利用）。上限に当たった日だけ 1 行通知し、当たらない日は沈黙する
+    （承認済み standing budget のため毎日 y/n は挟まない）。
+
+    実環境ガード・observe-first pre-flight は evolve-queue notice と同型
+    （DuckDB 接続なし・走査なし、pitfall_hot_hook_eager_import）。
+    """
+    if _queue_notice is None or _data_dir_migration is None:
+        return
+    try:
+        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+
+        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        if not env:
+            return  # hook 文脈でなければ判定しない（実環境を probe しない）
+        if not _data_dir_migration.is_cc_install_layout(Path(env)):
+            return  # テスト isolation / custom 環境
+        data_dir = rl_common.resolve_data_dir(env)
+        queue_data = _queue_notice.read_queue(data_dir)
+        output = _queue_notice.judge_cap_notice_output(queue_data)
+        if output:
+            print(json.dumps(output, ensure_ascii=False))
+    except Exception as e:
+        print(f"[evolve-anything:restore_state] llm_judge cap notice error: {e}", file=sys.stderr)
+
+
 def _deliver_icebox_notice() -> None:
     """icebox 棚卸しの気づきトリガーを systemMessage で通知する（#194, #352）。
 
@@ -551,6 +581,8 @@ def handle_session_start(event: dict) -> None:
     _deliver_utterance_staleness()
     # 毎朝の evolve-queue 待ち PJ 通知（#80・evolve-queue.json 読みのみ）
     _deliver_evolve_queue_notice()
+    # llm_judge 日次上限到達通知（#408・evolve-queue.json の llm_judge フィールド読みのみ）
+    _deliver_judge_cap_notice()
     # icebox 棚卸しの気づきトリガー（#194・evolve-anything 本体リポジトリのみ・icebox-status.json 読みのみ）
     _deliver_icebox_notice()
 

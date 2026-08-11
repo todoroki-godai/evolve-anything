@@ -144,6 +144,24 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(scratch_dir: P
     assert {r["idiom"] for r in idiom_lines} == {"四国めたんじゃなくて", "色が違うから赤にして"}
     # 判定進捗に 3 件（修正/非修正どちらも判定済みに記録）
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+    # #410 round4 [Must]1+2: est_tokens の記録は ingest（Phase C）の責務ではなくなった
+    # （judge_runner の Phase B が呼び出し直前に reserve_batch_cost で予約する事前予約方式へ
+    # 移行・二重計上を避けるため ingest 側は判定結果の確定のみを行い、コスト記録は一切しない）。
+    # count はキー付きレコードの件数のみを見るため 3 のまま、est_tokens は 0（このテストは
+    # 予約を呼んでいないため）。
+    today_count = cs_store.count_judged_today(path=judged)
+    assert today_count["count"] == 3
+    assert today_count["est_tokens"] == 0
+
+
+# ── #410 round4 [Must]1+2: バッチ固定費の記録は ingest から呼び出し前の予約へ移動 ─────
+# round2/round3 は record_judged への per-key 按分でバッチ固定費（_PROMPT_OVERHEAD_TOKENS）
+# を記録していたが、判定結果次第で計上漏れが生じる構造的な穴があった（codex round4 指摘）。
+# round4 は「LLM を呼ぶ前にそのバッチの見積コストを予約する」方式（reserve_batch_cost・
+# judge_runner の Phase B が担う）に一本化し、ingest（Phase C）からコスト記録を完全に
+# 除去した。予約方式の単体テストは test_correction_semantic_store.py
+# （record_billed_attempts）と test_correction_semantic_judge_runner.py（Phase B 配線）が
+# 担う。
 
 
 def test_ingest_then_reemit_excludes_judged_utterances(scratch_dir: Path) -> None:
@@ -350,6 +368,41 @@ def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(scratch_d
     assert cs_store.read_judged_keys(judged) == set()
 
 
+def test_ingest_all_out_of_range_index_is_not_treated_as_legitimate_empty(
+    scratch_dir: Path,
+) -> None:
+    """#410 round4 [Must]3 是正: round3 は「全件が範囲外で verdicts=[] に収束したケース」を
+    「モデルが明示的に該当なしと答えたケース（legitimate_empty_batch）」と区別せず、
+    バッチ全体を非修正確定していた。これはデータ損失（永久に再判定されない）— モデルが
+    実在しない index（99等）だけを返した応答は「対象発話を判定していない」ことを意味する
+    のであって「対象発話には修正が無い」ことを意味しない。両者は意味が違う。
+
+    round4 是正: verdicts が空でも ``out_of_range`` が1件でもあれば legitimate_empty_batch
+    にせず、対象発話は未判定のまま残す（次回 drain で再試行できる。#410 [Must]D の部分応答
+    欠落と同じ扱い）。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # _utts() は3件（index 0..2）。99 はバッチ対象外。
+    responses = {rid: json.dumps({"verdicts": [{"index": 99, "is_correction": True}]})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["parse_failed_batches"] == 0
+    assert res["out_of_range_verdicts"] == 1
+    assert res["corrections"] == 0
+    assert res["non_corrections"] == 0
+    assert res["omitted_verdicts"] == 3  # 全3発話とも未判定のまま残す（誤確定しない）
+    assert cs_store.read_judged_keys(judged) == set()
+
+
 def test_ingest_legitimate_empty_verdicts_still_marks_judged(scratch_dir: Path) -> None:
     """正しい JSON で verdicts が空配列（モデルが「該当なし」と判定）は従来どおり判定済みにする。
 
@@ -405,7 +458,11 @@ def test_ingest_processes_every_batch_not_just_the_first(scratch_dir: Path) -> N
 
 
 def test_ingest_counts_omitted_verdicts(scratch_dir: Path) -> None:
-    """#273: verdict が返らなかった発話は非修正として確定しつつ件数を surface する。"""
+    """#410 [Must]D 是正: 個別 index の verdict 欠落は「非修正」で恒久確定させず、その
+    index の発話だけ未判定のまま残す（次回 drain で再試行）。揃っている index は
+    従来どおり確定する（head-of-line blocking を避ける — バッチ全体は戻さない）。
+    欠落件数は omitted_verdicts に維持して observability を保つ（#273 由来）。
+    """
     ws_store = scratch_dir / "weak_signals.jsonl"
     idioms_store = scratch_dir / "idioms.jsonl"
     judged = scratch_dir / "judged.jsonl"
@@ -423,8 +480,69 @@ def test_ingest_counts_omitted_verdicts(scratch_dir: Path) -> None:
         weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
     )
     assert res["omitted_verdicts"] == 2
+    assert res["non_corrections"] == 1  # 揃っていた index 0 のみ確定
+    # index 0（/a.jsonl:1）だけ判定済み。1/2（欠落）は次回 drain で再試行できるよう未判定のまま。
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1"}
+
+
+def test_ingest_counts_out_of_range_verdicts_without_failing_batch(scratch_dir: Path) -> None:
+    """#410 round3 [Should]⑤: 範囲外 index はバッチ全体を失格にせず、その要素だけ無視して
+    件数を surface する（round2 は全体失格だったが range3 で方針変更）。範囲内の index は
+    通常どおり確定する。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # index 0/1/2 は正当（3発話バッチ）だが、範囲外の index 99 も混じって返る
+    responses = {rid: json.dumps({"verdicts": [
+        {"index": 0, "is_correction": False, "idiom": None, "reason": "r"},
+        {"index": 1, "is_correction": False, "idiom": None, "reason": "r"},
+        {"index": 2, "is_correction": False, "idiom": None, "reason": "r"},
+        {"index": 99, "is_correction": True, "idiom": "x", "reason": "y"},
+    ]})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["out_of_range_verdicts"] == 1
+    assert res["parse_failed_batches"] == 0  # 全体失格にはしない
     assert res["non_corrections"] == 3
-    assert len(cs_store.read_judged_keys(judged)) == 3
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
+
+
+def test_ingest_partial_omission_retries_only_missing_indices_on_reemit(scratch_dir: Path) -> None:
+    """#410 [Must]D E2E: 欠落した index の発話は次の emit で再度対象になり、確定済みの
+    発話は対象にならない（部分応答の欠落だけを retry する、というのが本修正の目的）。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # index 0 のみ返り、1/2 は欠落。
+    responses = {rid: json.dumps(
+        {"verdicts": [{"index": 0, "is_correction": False, "idiom": None, "reason": "r"}]}
+    )}
+    cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+
+    re_emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    assert re_emitted["unjudged"] == 2  # 欠落していた 1/2（/a.jsonl:2, /a.jsonl:3）だけ
+    re_group = re_emitted["requests"][0]["meta"]["utterances"]
+    re_keys = {cs_store.utterance_key(u) for u in re_group}
+    assert re_keys == {"/a.jsonl:2", "/a.jsonl:3"}
 
 
 def test_batch_prompt_requires_verdict_for_every_index() -> None:
@@ -439,3 +557,146 @@ def test_estimate_tokens() -> None:
     assert est["utterances"] == 3
     assert est["batches"] == 1
     assert est["est_total_tokens"] > 0
+
+
+# ── #410 [Must]C: 固定係数でなく実入力長に連動する見積もりに固定する ──────────
+
+
+def test_estimate_tokens_scales_with_actual_text_length() -> None:
+    """#410: 「件数×80」固定だと長文1件と短文1件が同じ扱いになる。実長差を反映すること。"""
+    short = [{"text": "短い", "prev_action": None}]
+    long_utt = [{"text": "あ" * 5000, "prev_action": None}]
+    est_short = cs_batch.estimate_tokens(short, batch_size=30)
+    est_long = cs_batch.estimate_tokens(long_utt, batch_size=30)
+    # 長文側が短文側より明確に高いこと（固定係数だと同数になっていた）。
+    assert est_long["est_total_tokens"] > est_short["est_total_tokens"] * 5
+
+
+def test_estimate_tokens_reflects_truncation_cap() -> None:
+    """本文が MAX_CHARS_PER_UTTERANCE を超えても、実送信されるプロンプトと同じ切り詰め後の
+    長さで見積もる（青天井にしない・#410）。
+    """
+    from correction_semantic import MAX_CHARS_PER_UTTERANCE
+
+    huge = [{"text": "あ" * (MAX_CHARS_PER_UTTERANCE * 10), "prev_action": None}]
+    capped = [{"text": "あ" * MAX_CHARS_PER_UTTERANCE, "prev_action": None}]
+    est_huge = cs_batch.estimate_tokens(huge, batch_size=30)
+    est_capped = cs_batch.estimate_tokens(capped, batch_size=30)
+    assert est_huge["est_total_tokens"] == est_capped["est_total_tokens"]
+
+
+def test_estimate_tokens_empty_text_is_small() -> None:
+    est = cs_batch.estimate_tokens([{"text": "", "prev_action": None}], batch_size=30)
+    assert est["est_total_tokens"] > 0  # per-batch/per-utterance overhead は残る
+    assert est["est_total_tokens"] < 500  # だが本文ゼロなら十分小さい
+
+
+def test_estimate_tokens_uses_real_batch_local_index_not_hardcoded_zero() -> None:
+    """#410 round3 [Must]2: 旧実装は estimate_tokens 内部でも index=0 固定のまま
+    estimate_utterance_tokens を呼んでおり、1バッチに詰め込まれる実際の index
+    （0..batch_size-1）を反映しない過小評価だった。batch_size=15 で15件を1バッチに
+    詰めると index 10〜14 が2桁化するため、全件 index=0 で見積もった場合より
+    大きくなるはずである。
+    """
+    u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
+    utts = [dict(u) for _ in range(15)]
+    est = cs_batch.estimate_tokens(utts, batch_size=15)
+    naive_all_index_zero = (
+        sum(cs_batch.estimate_utterance_tokens(x, index=0) for x in utts)
+        + cs_batch._PROMPT_OVERHEAD_TOKENS
+    )
+    assert est["est_total_tokens"] > naive_all_index_zero
+
+
+# ── #410 round2 codex [Must]C: 見積もりが実送信（prev_action 含む）と一致しない是正 ──
+# build_batch_prompt は prev_action を最大300字送るのに、旧見積もりは本文長のみを測り
+# prev_action・ラベル・出力形式を固定オーバーヘッドで丸めていた。長い日本語 prev_action が
+# 多いバッチで大幅な過小評価になりうる。
+
+
+def test_estimate_utterance_tokens_reflects_prev_action_length() -> None:
+    short_prev = {"text": "x", "prev_action": "a"}
+    long_prev = {"text": "x", "prev_action": "あ" * 300}
+    assert (
+        cs_batch.estimate_utterance_tokens(long_prev)
+        > cs_batch.estimate_utterance_tokens(short_prev) * 5
+    )
+
+
+def test_estimate_utterance_tokens_measures_actual_prompt_line(scratch_dir: Path) -> None:
+    """理想解: 実際に組み立てるプロンプト行（prompt.format_utterance_line）の長さを
+    そのまま測る。見積もりロジックを prompt.py 側の組み立てロジックと重複実装すると、
+    どちらかだけ切り詰め幅を変えたときに乖離が再発するため、単一ソースにする。
+    """
+    from correction_semantic import prompt as cs_prompt
+
+    u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
+    line = cs_prompt.format_utterance_line(0, u)
+    expected = -(-len(line) // 2)  # ceil(len(line) / _CHARS_PER_TOKEN=2.0)
+    assert cs_batch.estimate_utterance_tokens(u) == expected
+
+
+# ── #410 round3 [Must]2: バッチ内の実 index を使う（旧実装は index=0 固定で過小評価）───
+
+
+def test_estimate_utterance_tokens_index_param_matches_real_prompt_line() -> None:
+    """index を渡せば、その index で組み立てた実際のプロンプト行の長さで見積もる。
+    旧実装は呼び出し側で常に index=0 をハードコードしており、バッチ内で2桁以上の
+    位置になる発話ほど（"[10]" は "[0]" より1文字長い）過小評価していた。
+    """
+    from correction_semantic import prompt as cs_prompt
+
+    u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
+    line10 = cs_prompt.format_utterance_line(10, u)
+    expected10 = -(-len(line10) // 2)
+    assert cs_batch.estimate_utterance_tokens(u, index=10) == expected10
+    # 実測: この発話では index 2桁化で ceil 後のトークンが 24→25 と実際に増える
+    # （切り上げ境界に依存しない具体値でここに固定する）。
+    assert cs_batch.estimate_utterance_tokens(u, index=0) == 24
+    assert cs_batch.estimate_utterance_tokens(u, index=10) == 25
+
+
+def test_estimate_utterance_tokens_index_defaults_to_zero_for_backward_compat() -> None:
+    """index 省略時は従来どおり 0（既存呼び出し側との後方互換）。"""
+    u = {"text": "本文テキスト", "prev_action": "直前のツール操作の要約"}
+    assert cs_batch.estimate_utterance_tokens(u) == cs_batch.estimate_utterance_tokens(u, index=0)
+
+
+# ── #410 round4 [Must]1+2: reserve_batch_cost（呼び出し前の事前予約） ────────────────
+
+
+def test_reserve_batch_cost_writes_keyless_record_equal_to_batch_cost(scratch_dir: Path) -> None:
+    """reserve_batch_cost は _batch_cost_tokens（本文合計 + バッチ固定費）を "key" を持たない
+    record として予約する。count には数えないが est_tokens には計上される。
+    """
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()  # 3 発話
+    expected_cost = cs_batch._batch_cost_tokens(utts)
+
+    res = cs_batch.reserve_batch_cost(utts, judged_path=judged)
+    assert res == {"written": 1, "dry_run": False}
+
+    today = cs_store.count_judged_today(path=judged)
+    assert today["count"] == 0  # key 無しなので判定件数には数えない
+    assert today["est_tokens"] == expected_cost
+    assert cs_store.read_judged_keys(judged) == set()  # 未判定のまま
+
+
+def test_reserve_batch_cost_dry_run_writes_nothing(scratch_dir: Path) -> None:
+    judged = scratch_dir / "judged.jsonl"
+    res = cs_batch.reserve_batch_cost(_utts(), judged_path=judged, dry_run=True)
+    assert res == {"written": 1, "dry_run": True}
+    assert not judged.exists()
+
+
+def test_reserve_batch_cost_called_multiple_times_accumulates(scratch_dir: Path) -> None:
+    """1バッチごとに呼ぶ設計（まとめ書きしない）なので、複数回呼べば累積する。"""
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()
+    cost = cs_batch._batch_cost_tokens(utts)
+
+    cs_batch.reserve_batch_cost(utts, judged_path=judged)
+    cs_batch.reserve_batch_cost(utts, judged_path=judged)
+
+    today = cs_store.count_judged_today(path=judged)
+    assert today["est_tokens"] == cost * 2
