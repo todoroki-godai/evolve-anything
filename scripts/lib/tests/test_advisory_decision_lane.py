@@ -241,10 +241,13 @@ def test_full_pipeline_reaches_audit_section_with_surfaced_and_accept(isolated, 
     # slug は section 側の resolve_pj_slug と同じ値を使う（emit/drain 用に固定 "pj" を
     # 使うと section 側の slug と不一致になり読めない）。
     slug = ed.resolve_slug(project)
-    ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug=slug)
+    out = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug=slug)
     skill = project / ".claude" / "skills" / "broken-skill" / "SKILL.md"
     skill.write_text(_FIXED_SKILL, encoding="utf-8")
-    ed.drain_pending(slug=slug)
+    # accept は「明示 accept + 適用実績」の AND（#376 AC1）。ファイル修正だけでは
+    # accept にならないので、明示 accept の証跡も渡す。
+    pid = _advisory_entries(out["pending"])[0]["id"]
+    ed.drain_pending(slug=slug, accepted={pid})
 
     lines = build_advisory_decisions_section(project)
 

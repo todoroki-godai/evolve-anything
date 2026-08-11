@@ -318,7 +318,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="advisory_decisions.jsonl",
-        writer="scripts/lib/evolve_decisions.py の ingest_decisions（`evolve --drain` の "
+        writer="scripts/lib/evolve_decisions/_ingest.py の ingest_decisions（`evolve --drain` の "
         "apply 境界）が advisory 提案の surfaced/accept/reject/deferred を記録。"
         "hot path（hooks）からは書かない。",
         writer_locus="batch",
