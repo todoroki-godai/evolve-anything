@@ -21,10 +21,12 @@ from glossary_drift import (  # noqa: E402
     STDLIB_SYMBOLS,
     ComponentCellIssue,
     GlossaryEntry,
+    _split_row,
     check_component_table_cells,
     find_undefined_terms,
     load_common_english_words,
     main,
+    parse_glossary,
 )
 
 
@@ -494,6 +496,24 @@ def _write_claude_md(tmp_path: Path, cell_body: str, name: str = "CLAUDE.md") ->
     return str(p)
 
 
+def _write_claude_md_row(
+    tmp_path: Path, *, name_cell: str = "`foo`", summary_cell: str, entity_cell: str
+) -> str:
+    """3 列すべてを個別指定できる版（#415 codex round1: サマリ列 vs 実体列の scope 検証用）。"""
+    content = (
+        "# Plugin\n\n"
+        "## コンポーネント\n\n"
+        "各コンポーネントの詳細は spec/components.md（SoT）。\n\n"
+        "| コンポーネント | 一言サマリ | 実体 |\n"
+        "|----------------|-----------|------|\n"
+        f"| {name_cell} | {summary_cell} | {entity_cell} |\n\n"
+        "## クイックスタート\n\nsome text\n"
+    )
+    p = tmp_path / "CLAUDE.md"
+    p.write_text(content, encoding="utf-8")
+    return str(p)
+
+
 class TestComponentTableCellLint:
     """issue #116 — CLAUDE.md コンポーネント表のセルが上限超過なら検出する。"""
 
@@ -571,6 +591,167 @@ class TestComponentTableCellLint:
             "CLAUDE.md コンポーネント表に上限超過セル: "
             f"{[(i.name, i.length) for i in issues]} — 詳細は spec/components.md へ移す"
         )
+
+    def test_oversized_summary_column_detected(self, tmp_path: Path):
+        """#415 codex round1 (a): サマリ列（2列目）が上限超過なら検出する。"""
+        long_summary = "あ" * (MAX_COMPONENT_CELL_LEN + 1)
+        path = _write_claude_md_row(
+            tmp_path,
+            summary_cell=long_summary,
+            entity_cell="`foo.py`",
+        )
+        issues = check_component_table_cells(path)
+        assert len(issues) == 1
+        assert issues[0].length == len(long_summary)
+
+    def test_oversized_entity_column_not_detected(self, tmp_path: Path):
+        """#415 codex round1 (b): 実体列（3列目）が上限超過でもサマリ列が短ければ検出しない。
+
+        実体パスが長いのは依存ファイル数が多いだけで正当。remedy は
+        「spec/components.md へ移す」でなく「パッケージディレクトリへの集約」であり、
+        本 lint（サマリ列専用）の案内文とは噛み合わないため対象外にする。
+        """
+        long_entity = " + ".join(f"`pkg/mod_{i}.py`" for i in range(20))
+        assert len(long_entity) > MAX_COMPONENT_CELL_LEN
+        path = _write_claude_md_row(
+            tmp_path,
+            summary_cell="短いサマリ（#1）",
+            entity_cell=long_entity,
+        )
+        assert check_component_table_cells(path) == []
+
+    def test_escaped_pipe_in_summary_not_truncated(self, tmp_path: Path):
+        """#415 codex round1: セル内エスケープ `\\|` を区切りと誤認せず長さを過小評価しない。
+
+        素の `|` split だと `runtime=claude\\|codex` のようなセルが途中で切れ、
+        本来 130 字超のサマリが短い断片として見逃されうる。
+        """
+        summary = (
+            "usage/sessions/errors の hook record に `runtime=claude\\|codex` を較正追加。"
+            "Codex hook 配線は保留" + "あ" * MAX_COMPONENT_CELL_LEN
+        )
+        path = _write_claude_md_row(
+            tmp_path,
+            summary_cell=summary,
+            entity_cell="`hooks/common.py`",
+        )
+        issues = check_component_table_cells(path)
+        assert len(issues) == 1
+        # split で断片化していれば length はもっと小さい値になる
+        assert issues[0].length == len(summary)
+
+
+class TestSplitRowEscapedPipe:
+    """#415 codex round1: `_split_row` がエスケープ `\\|` をセル区切りと誤認しないこと。"""
+
+    def test_escaped_pipe_kept_within_single_cell(self):
+        row = r"| `foo` | runtime=claude\|codex を較正追加 | `foo.py` |"
+        cells = _split_row(row)
+        assert len(cells) == 3
+        assert cells[1] == r"runtime=claude\|codex を較正追加"
+
+    def test_unescaped_pipe_still_splits(self):
+        row = "| `foo` | 短いサマリ | bar | `foo.py` |"
+        cells = _split_row(row)
+        assert len(cells) == 4
+
+
+class TestSplitRowBackslashParity:
+    """#415 codex round2: 直前の連続バックスラッシュ数の偶奇で escaped pipe を判定する。
+
+    `(?<!\\\\)\\|` のような後読み1文字だけの正規表現は `\\\\|`（バックスラッシュ2個＝
+    エスケープされたバックスラッシュ + 区切りの `|`）を誤って escaped pipe と判定し、
+    Windows パスや正規表現を含む正当な行を malformed にしてしまう不備の回帰テスト。
+    """
+
+    @pytest.mark.parametrize(
+        "bs_count,expect_cells",
+        [
+            (0, 4),  # `|`（偶数=0個・区切りのまま split）
+            (1, 3),  # `\|`（奇数1個・エスケープされたリテラル pipe、1セルに同居）
+            (2, 4),  # `\\|`（偶数2個・エスケープされた bs + 区切りの |）
+            (3, 3),  # `\\\|`（奇数3個・エスケープされた bs + エスケープされた |）
+            (4, 4),  # `\\\\|`（偶数4個・エスケープされた bs 2個 + 区切りの |）
+        ],
+    )
+    def test_backslash_parity_determines_split(self, bs_count: int, expect_cells: int):
+        bs = "\\" * bs_count
+        # 行は `foo`（名前）/ "left"+bs+"|"+"right"（偶奇でsplit有無が変わる領域）/ `foo.py`（実体）
+        # の3領域。奇数個なら領域内 pipe が split されず全体で3セル、偶数個なら4セルになる。
+        row = f"| `foo` | left{bs}|right | `foo.py` |"
+        cells = _split_row(row)
+        assert len(cells) == expect_cells, (
+            f"bs_count={bs_count} 個で cells={cells!r}（期待 {expect_cells} 列）"
+        )
+
+    def test_windows_path_with_even_backslashes_not_treated_as_escaped(self):
+        """バックスラッシュ2個（偶数）が区切り `|` の直前に来ても escaped 扱いせず split する。
+
+        `(?<!\\\\)\\|` のような後読み1文字だけの判定は、直前の1文字が `\\` であることだけを
+        見て「\\\\|」も escaped pipe と誤判定するが、偶数個は自己エスケープ済みで `|` は
+        区切りのまま。Windows パス末尾の `C:\\\\`（表示上は `\\` 1個）のようなセルが次のセル
+        と誤結合しないことを確認する。
+        """
+        row = r"| `foo` | C:\\| short | `foo.py` |"
+        cells = _split_row(row)
+        assert len(cells) == 4
+        assert cells[1] == r"C:\\"
+        assert cells[2] == "short"
+
+    def test_glossary_table_call_site_handles_backslash_parity(self, tmp_path: Path):
+        """用語集テーブル（parse_glossary）側の呼び出しでも偶奇判定が効くこと。
+
+        意味欄に1個のバックスラッシュ（奇数＝エスケープ）で `|` を含む場合は
+        3列のまま正しくパースされ（malformed にならない）、行内の pipe は
+        セル内リテラルとして保持される。
+        """
+        ctx = tmp_path / "CONTEXT.md"
+        ctx.write_text(
+            "| 用語 | 意味 | 初出 |\n"
+            "|--|--|--|\n"
+            r"| Foo | 正規表現 `a\|b` を使う機能 | #1 |" + "\n",
+            encoding="utf-8",
+        )
+        entries, malformed = parse_glossary(str(ctx))
+        assert malformed == []
+        assert len(entries) == 1
+        assert entries[0].term == "Foo"
+        assert entries[0].meaning == r"正規表現 `a\|b` を使う機能"
+
+
+class TestSplitRowBoundaryConditions:
+    """#415 codex round3 [Should]: `_split_row` の境界条件を固定する回帰テスト。
+
+    実装は既に正しく処理しているが、テストで固定されていなかった3条件。
+    """
+
+    def test_row_without_outer_pipes(self):
+        """外枠 pipe（先頭・末尾）が無い行でも、内部の区切り pipe で正しく split する。"""
+        row = "foo | bar | baz"
+        cells = _split_row(row)
+        assert cells == ["foo", "bar", "baz"]
+
+    def test_consecutive_empty_cells(self):
+        """連続する区切り pipe（空セル）を空文字列のセルとして保持する。"""
+        row = "| a || b |"
+        cells = _split_row(row)
+        assert cells == ["a", "", "b"]
+
+    def test_cell_ending_with_escaped_backslash_before_closing_pipe(self):
+        """行末の閉じ pipe 直前が偶数個のバックスラッシュ（自己エスケープ済み）なら、
+        閉じ pipe は区切りとして正しく除去される（セル内容の末尾バックスラッシュは保持）。
+        """
+        row = r"| a | b\\|"
+        cells = _split_row(row)
+        assert cells == ["a", r"b\\"]
+
+    def test_cell_ending_with_odd_backslash_keeps_closing_pipe_literal(self):
+        """閉じ pipe 直前が奇数個のバックスラッシュならエスケープされ、閉じ pipe は
+        区切りとして除去されず末尾セルの一部として残る（閉じ側境界判定も偶奇を使う）。
+        """
+        row = r"| a | b\|"
+        cells = _split_row(row)
+        assert cells == ["a", r"b\|"]
 
 
 class TestComponentCellLintCLIWiring:

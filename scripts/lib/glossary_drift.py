@@ -26,13 +26,19 @@ from pathlib import Path
 # （jargon の薄い PJ に空の用語集を作らない）。
 SEED_MIN_CANDIDATES = 3
 
-# CLAUDE.md「## コンポーネント」表の 1 セルあたり文字数上限（#116）。
+# CLAUDE.md「## コンポーネント」表の**サマリ列（2列目）**1セルあたり文字数上限（#116, #415）。
 # この表は「1 行サマリのみ」が運用ルールだが、設計経緯まで書き込まれ肥大化する
 # （実測: fleet_queue セル ≈3,285 字）。上限を超えるセルは詳細を spec/components.md（SoT）
 # へ移すべき兆候として検出し、spec-keeper update の drift 検出経路で advisory surface する。
-# 閾値 400 の根拠: #116 で長大 9 セルを切り詰めた後の最長セル（evolve-release-sync ≈368 字）が
-# 収まり、かつ再肥大（400 字超）を早期に捕捉できる値。1 行サマリとしては十分広い。
-MAX_COMPONENT_CELL_LEN = 400
+# 対象は 2 列目のみ（#415 codex round1）。1 列目（名前）・3 列目（実体パス）は対象外 — 実体
+# パスが長いことは正当（依存ファイル数が多いだけ）で、remedy も「cold へ移す」ではなく
+# 「パッケージディレクトリへの集約」であり、本 lint の案内文と噛み合わないため。
+# 閾値 130 の根拠（#415）: 旧閾値 400 は #116 当時の最長セル（当時は列を区別していなかった）
+# に合わせた値で、CLAUDE.md が doc_budget MUST 閾値の 98% まで肥大した事実（#415）が、
+# advisory だけでは creep-back を止められないことを実証した。サマリ列を「1文 + 契約フラグ」
+# 規約へ圧縮した後の実測最大サマリ列長（`memory_guard` 行 111 字）を上回るキリの良い値として
+# 設定。行を書き足すその場で効く gate にするため、旧閾値のような大きな余白は持たせない。
+MAX_COMPONENT_CELL_LEN = 130
 
 # jargon 候補: ALLCAPS 頭字語(2-6文字) または 内部に大文字を持つ CamelCase。
 # 例: BES, RRF, BM25, MemTrace, DuckDB。先頭小文字の通常語は拾わない。
@@ -259,10 +265,10 @@ class GlossaryEntry:
 
 @dataclass
 class ComponentCellIssue:
-    """CLAUDE.md コンポーネント表で上限超過したセルの位置と長さ（#116）。"""
+    """CLAUDE.md コンポーネント表で上限超過したサマリ列の位置と長さ（#116, #415）。"""
 
     name: str      # コンポーネント名（表の 1 列目・生テキスト）
-    length: int    # 超過したセルの文字数（そのセルの最大長）
+    length: int    # 超過したサマリ列（2 列目）の文字数
     lineno: int    # CLAUDE.md 内の行番号（1 始まり）
 
 
@@ -296,8 +302,57 @@ class GlossaryReport:
         return bool(self.unverified_terms)
 
 
+# Markdown テーブルのセル内リテラル `|` はエスケープ（`\|`）される。素の `|` で split すると
+# エスケープ済みセルが途中で切れ、セル数がずれ・長さ計測も過小評価する（#415 codex round1）。
+# 判定は直前の連続バックスラッシュ数の**偶奇**で行う（`(?<!\\)\|` 等の後読み1文字だけの正規表現
+# は `\\|`（バックスラッシュ2個＝エスケープされたバックスラッシュ+区切りの `|`）を誤って
+# escaped pipe と判定し、Windows パスや正規表現を含む正当な行を malformed にする・#415 codex
+# round2）。奇数個なら直前のバックスラッシュ1個が `|` をエスケープしている＝セル内リテラル、
+# 偶数個（0 含む）ならバックスラッシュ自体が自己エスケープ済みで `|` は区切りのまま。
+
+
+def _count_trailing_backslashes(s: str) -> int:
+    """文字列末尾の連続バックスラッシュ数を数える。"""
+    n = 0
+    for ch in reversed(s):
+        if ch != "\\":
+            break
+        n += 1
+    return n
+
+
 def _split_row(line: str) -> list[str]:
-    return [c.strip() for c in line.strip().strip("|").split("|")]
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        # 末尾の区切りパイプは、直前のバックスラッシュが偶数個（=エスケープされていない）
+        # のときだけ除去する。
+        body_before_pipe = stripped[:-1]
+        if _count_trailing_backslashes(body_before_pipe) % 2 == 0:
+            stripped = body_before_pipe
+
+    cells: list[str] = []
+    current: list[str] = []
+    bs_run = 0  # 直前の連続バックスラッシュ数（1文字読むたびに更新）
+    for ch in stripped:
+        if ch == "\\":
+            bs_run += 1
+            current.append(ch)
+            continue
+        if ch == "|":
+            if bs_run % 2 == 1:
+                # 直前のバックスラッシュが奇数個 = このパイプはエスケープされたリテラル
+                current.append(ch)
+            else:
+                cells.append("".join(current))
+                current = []
+            bs_run = 0
+            continue
+        bs_run = 0
+        current.append(ch)
+    cells.append("".join(current))
+    return [c.strip() for c in cells]
 
 
 def parse_glossary(path: str) -> tuple[list[GlossaryEntry], list[tuple[int, str]]]:
@@ -460,13 +515,18 @@ def check_component_table_cells(
     *,
     max_len: int = MAX_COMPONENT_CELL_LEN,
 ) -> list[ComponentCellIssue]:
-    """CLAUDE.md の「## コンポーネント」表で、いずれかのセルが max_len を超える行を返す。
+    """CLAUDE.md の「## コンポーネント」表で、**サマリ列（2列目）**が max_len を超える行を返す。
 
     肥大化した 1 行サマリ（設計経緯まで書き込まれた行）を検出し、詳細を
-    spec/components.md（SoT）へ移すよう促すための決定論・LLM 非依存 lint（#116）。
+    spec/components.md（SoT）へ移すよう促すための決定論・LLM 非依存 lint（#116, #415）。
     節スコープを「## コンポーネント」見出し〜次の「## 」見出しに限定し、他の表は見ない。
     ヘッダ行（コンポーネント/実体）と区切り行（---）はスキップする。
     ファイル不在・表なしなら空リスト。返り値は行番号昇順。
+
+    **対象は 2 列目（サマリ）のみ**（#415 codex round1）。1 列目（名前）・3 列目（実体パス）は
+    意図的に対象外: 実体パスが長い（依存ファイル数が多い）ことは正当で、その remedy は
+    「spec/components.md へ移す」ではなく「パッケージディレクトリへの集約」であり、本 lint の
+    案内文と噛み合わない。1・3 列目に別上限を設ける場合は別の lint として新設する。
     """
     try:
         with open(claude_md_path, encoding="utf-8") as f:
@@ -492,10 +552,12 @@ def check_component_table_cells(
             continue
         if not cells or not cells[0]:
             continue
-        longest = max(len(c) for c in cells)
-        if longest > max_len:
+        if len(cells) < 2:
+            continue
+        summary = cells[1]
+        if len(summary) > max_len:
             issues.append(
-                ComponentCellIssue(name=cells[0], length=longest, lineno=lineno)
+                ComponentCellIssue(name=cells[0], length=len(summary), lineno=lineno)
             )
     return issues
 
@@ -503,12 +565,12 @@ def check_component_table_cells(
 def _format_component_cell_issues(
     issues: list[ComponentCellIssue], *, max_len: int = MAX_COMPONENT_CELL_LEN
 ) -> str:
-    """コンポーネント表セル長 lint の結果を人間可読に整形する（#116・advisory）。"""
+    """コンポーネント表サマリ列長 lint の結果を人間可読に整形する（#116, #415・advisory）。"""
     if not issues:
-        return f"  ✓ コンポーネント表セル長 OK（上限 {max_len} 字）"
+        return f"  ✓ コンポーネント表セル長 OK（サマリ列上限 {max_len} 字）"
     lines = [
-        f"  ⚠ コンポーネント表に上限超過セル ({len(issues)}) "
-        f"— 詳細を spec/components.md（SoT）へ移し 1 行サマリに戻す（上限 {max_len} 字）:"
+        f"  ⚠ コンポーネント表に上限超過サマリ ({len(issues)}) "
+        f"— 詳細を spec/components.md（SoT）へ移し 1 行サマリに戻す（サマリ列上限 {max_len} 字）:"
     ]
     for it in issues:
         lines.append(f"      L{it.lineno}: {it.name} — {it.length} 字")
