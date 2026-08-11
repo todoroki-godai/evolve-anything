@@ -188,3 +188,34 @@ def test_parse_verdicts_result_ok_true_when_all_valid() -> None:
     result = cs_prompt.parse_verdicts_result(raw)
     assert result["ok"] is True
     assert len(result["verdicts"]) == 2
+
+
+# ── #410 round2 [Should]③: 範囲外 index の検証（parser に応答対象の件数を渡す）──
+
+
+def test_parse_verdicts_result_ok_false_on_out_of_range_index_with_expected_len() -> None:
+    """expected_len を渡すと、範囲外 index（バッチ対象外）は黙って捨てず失格にする。"""
+    raw = json.dumps({"verdicts": [{"index": 99, "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw, expected_len=3)
+    assert result["ok"] is False
+    assert result["verdicts"] == []
+
+
+def test_parse_verdicts_result_ok_false_on_negative_index_with_expected_len() -> None:
+    raw = json.dumps({"verdicts": [{"index": -1, "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw, expected_len=3)
+    assert result["ok"] is False
+
+
+def test_parse_verdicts_result_in_range_index_ok_with_expected_len() -> None:
+    raw = json.dumps({"verdicts": [{"index": 2, "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw, expected_len=3)
+    assert result["ok"] is True
+    assert len(result["verdicts"]) == 1
+
+
+def test_parse_verdicts_result_no_range_check_when_expected_len_omitted() -> None:
+    """expected_len 未指定（既定 None）は後方互換のため範囲検証しない。"""
+    raw = json.dumps({"verdicts": [{"index": 99, "is_correction": True}]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True

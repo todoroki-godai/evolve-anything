@@ -393,6 +393,29 @@ def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(scratch_d
     assert cs_store.read_judged_keys(judged) == set()
 
 
+def test_ingest_out_of_range_index_does_not_mark_judged(scratch_dir: Path) -> None:
+    """#410 round2 [Should]③: バッチ対象外の index（応答の信頼性が疑わしい）は黙って
+    捨てず parse_failed として扱い、未判定のまま残す。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # _utts() は3件（index 0..2）。99 はバッチ対象外。
+    responses = {rid: json.dumps({"verdicts": [{"index": 99, "is_correction": True}]})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["parse_failed_batches"] == 1
+    assert res["corrections"] == 0
+    assert cs_store.read_judged_keys(judged) == set()
+
+
 def test_ingest_legitimate_empty_verdicts_still_marks_judged(scratch_dir: Path) -> None:
     """正しい JSON で verdicts が空配列（モデルが「該当なし」と判定）は従来どおり判定済みにする。
 

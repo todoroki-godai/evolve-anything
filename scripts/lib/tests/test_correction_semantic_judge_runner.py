@@ -616,6 +616,26 @@ def test_phase_transition_log_lines_are_distinguishable(tmp_path, monkeypatch):
     assert "永続化" in log
 
 
+def test_omitted_verdicts_surfaced_in_return_value_and_log(tmp_path, monkeypatch):
+    """#410 round2 [Should]③: omitted_verdicts（部分応答の欠落件数）が戻り値・フェーズ
+    遷移ログの両方に伝播する（「同じ欠落が毎日続く無限再試行」を運用で検知できるように）。
+    """
+    import io
+
+    out = io.StringIO()
+    utterances = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(3)]
+    # index 0 だけ返し 1/2 は欠落（部分応答）。
+    monkeypatch.setattr(
+        judge_runner, "call_haiku", lambda prompt, model="haiku": _ok_verdict_response([(0, False)])
+    )
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=utterances, judged_path=tmp_path / "correction_judged.jsonl",
+        weak_signals_path=tmp_path / "weak_signals.jsonl", out=out, batch_size=30,
+    )
+    assert res["omitted_verdicts"] == 2
+    assert "omitted_verdicts=2" in out.getvalue()
+
+
 # ─────────────────────────────────────────────────────────────────
 # call_haiku: subprocess の唯一の集約点
 # ─────────────────────────────────────────────────────────────────

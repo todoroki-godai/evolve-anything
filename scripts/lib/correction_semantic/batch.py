@@ -183,7 +183,9 @@ def ingest_judgement_results(
         # 変数名は `parsed`（= parse_responses の応答マップ）と必ず分ける。
         # 同名にすると 2 バッチ目以降の `parsed.get(key)` が verdict dict を引いて
         # 全バッチ silent skip する（#273 レビューで検出した shadowing 回帰）。
-        parsed_verdicts = _prompt.parse_verdicts_result(text)
+        # #410 round2 [Should]③: expected_len=len(group) でバッチ対象外の index（応答の
+        # 信頼性が疑わしいシグナル）を黙って捨てず失格にする。
+        parsed_verdicts = _prompt.parse_verdicts_result(text, expected_len=len(group))
         if not parsed_verdicts["ok"]:
             # #273: JSON 解釈不能。応答欠損と同様、判定済みにせず次 drain で再試行する
             # （[] フォールバックを「該当なし」と誤読して judged_keys に積むと desync する）。

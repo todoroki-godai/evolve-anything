@@ -124,7 +124,9 @@ def _validate_verdict(v: object) -> Optional[Dict[str, Any]]:
     }
 
 
-def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
+def parse_verdicts_result(
+    raw: Optional[Any], *, expected_len: Optional[int] = None
+) -> Dict[str, Any]:
     """モデル応答（JSON 文字列）から verdict のリストを取り出し、パース成否も返す（#273）。
 
     code fence・前後のノイズに頑健。「解釈できない」場合は ``ok=False`` を返す — 呼び出し側は
@@ -134,13 +136,16 @@ def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
       - 応答欠損・壊れた JSON・期待した `{"verdicts": [...]}` 形でない
       - 要素の型が不正（`_validate_verdict` 参照。1 要素でも不正ならバッチ全体を失格にする）
       - `index` の重複
+      - ``expected_len`` を渡した場合、``0 <= index < expected_len`` の範囲外
+        （#410 round2 [Should]③: バッチ対象外の index を黙って捨てず、応答自体が
+        信頼できないシグナルとして失格にする）
 
     index の**網羅性**（batch 内の全 index が揃っているか）はここでは検証しない
-    （verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称）。プロンプトで全 index を
-    返すよう明示したうえで、欠落は `batch.ingest_judgement_results` が非修正として確定し
-    件数を `omitted_verdicts` に surface する。欠落を未判定に残す設計は「全件非修正の
-    バッチにモデルが `{"verdicts": []}` で答える」正当なケースを毎 drain 再判定させ費用が
-    際限なく積むため採らない（この契約は
+    （verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称。範囲検証とは別軸）。
+    プロンプトで全 index を返すよう明示したうえで、欠落は `batch.ingest_judgement_results`
+    が非修正として確定し件数を `omitted_verdicts` に surface する。欠落を未判定に残す設計は
+    「全件非修正のバッチにモデルが `{"verdicts": []}` で答える」正当なケースを毎 drain
+    再判定させ費用が際限なく積むため採らない（この契約は
     `test_ingest_legitimate_empty_verdicts_still_marks_judged` が固定している）。
 
     Returns:
@@ -173,6 +178,8 @@ def parse_verdicts_result(raw: Optional[Any]) -> Dict[str, Any]:
     for v in verdicts:
         item = _validate_verdict(v)
         if item is None or item["index"] in seen_idx:
+            return {"ok": False, "verdicts": []}
+        if expected_len is not None and not (0 <= item["index"] < expected_len):
             return {"ok": False, "verdicts": []}
         seen_idx.add(item["index"])
         out.append(item)

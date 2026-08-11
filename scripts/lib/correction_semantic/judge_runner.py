@@ -195,7 +195,7 @@ def run_daily_judge(
                    "source_failed", "source_error", "skipped_locked"}
         run:     {"dry_run": False, "requested", "responded", "call_failed",
                    "corrections", "non_corrections", "skipped_batches",
-                   "parse_failed_batches", "weak_written", "idioms_written",
+                   "parse_failed_batches", "omitted_verdicts", "weak_written", "idioms_written",
                    "judged_written", "unjudged_total", "selected", "capped",
                    "source_failed", "source_error", "skipped_locked"}
 
@@ -298,6 +298,7 @@ def run_daily_judge(
                 "non_corrections": 0,
                 "skipped_batches": 0,
                 "parse_failed_batches": 0,
+                "omitted_verdicts": 0,
                 "weak_written": 0,
                 "idioms_written": 0,
                 "judged_written": 0,
@@ -328,6 +329,7 @@ def run_daily_judge(
                 "non_corrections": 0,
                 "skipped_batches": 0,
                 "parse_failed_batches": 0,
+                "omitted_verdicts": 0,
                 "weak_written": 0,
                 "idioms_written": 0,
                 "judged_written": 0,
@@ -383,6 +385,10 @@ def run_daily_judge(
             f"non_corrections={result['non_corrections']} "
             f"skipped_batches={result['skipped_batches']} "
             f"parse_failed_batches={result['parse_failed_batches']} "
+            # #410 round2 [Should]③: omitted_verdicts（部分応答の欠落件数）を戻り値だけで
+            # なくログにも出す。「同じ欠落が毎日続く無限再試行」を運用で検知できるように
+            # する（欠落は日々のログ差分・戻り値の推移で気づける必要がある）。
+            f"omitted_verdicts={result['omitted_verdicts']} "
             f"weak_written={result['weak_written']} judged_written={result['judged_written']}",
             file=out,
         )
@@ -396,6 +402,7 @@ def run_daily_judge(
             "non_corrections": result["non_corrections"],
             "skipped_batches": result["skipped_batches"],
             "parse_failed_batches": result["parse_failed_batches"],
+            "omitted_verdicts": result["omitted_verdicts"],
             "weak_written": result["weak_written"],
             "idioms_written": result["idioms_written"],
             "judged_written": result["judged_written"],
