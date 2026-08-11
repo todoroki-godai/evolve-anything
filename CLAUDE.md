@@ -45,7 +45,7 @@
 ## コンポーネント
 
 各コンポーネントの設計経緯・根拠・issue/ADR 参照を含む詳細は **[spec/components.md](spec/components.md)**（SoT）。
-ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する（サマリは「何をするか1文 + 契約フラグ」で構成し目安 ≤130 バイト。`凍結`/`reject`/`dry-run`/`fail-open`/`人間承認`/`単一ソース`等の動作を縛る語は要約時も必ず残す）。**
+ここは 1 行サマリのみ。**新コンポーネント追加・変更時は spec/components.md に詳細を書き、この表には 1 行だけ追記する（サマリは「何をするか1文 + 契約フラグ」で構成し目安 ≤130 字。`凍結`/`reject`/`dry-run`/`fail-open`/`人間承認`/`単一ソース`等の動作を縛る語は要約時も必ず残す）。**
 
 | コンポーネント | 一言サマリ | 実体 |
 |----------------|-----------|------|
@@ -159,7 +159,7 @@
 | `memory_stale_refs` | Memory Health の stale reference 誤検知（スラッシュ列挙の誤読）を修正 | `path_extractor.py` + `audit/memory.py` |
 | `invalid_frontmatter` | 壊れた frontmatter で発火不能なスキルを直接 surface（auto-fix せず人手修正提案） | `frontmatter.py` + `effort_detector.py` + `audit/sections_invalid_frontmatter.py` |
 | `self_contamination` | 自己汚染ハルシネーション指紋を transcript 走査で恒久計測（ゼロLLM・read-only） | `self_contamination_scan.py` + `audit/sections_self_contamination.py` |
-| `evolve-tier` | モデルティア正典を一元化する CLI — set/sync[--apply]/drift の3コマンド | `bin/evolve-tier` + `tier_policy.py` + `tier_policy_sync.py` + `tier_policy_drift.py` + `tier_policy_cli.py` |
+| `evolve-tier` | モデルティア正典を一元化する CLI — set/sync[--apply]/drift の3コマンド。sync は既定 dry-run、`--apply` のみ書込 | `bin/evolve-tier` + `tier_policy.py` + `tier_policy_sync.py` + `tier_policy_drift.py` + `tier_policy_cli.py` |
 | `evaluation_provenance` | 評価スコアに紐づく実行条件（model/effort/tool policy）の記録契約。不明値は推測せず None | `scripts/lib/evaluation_provenance.py` |
 | `skill_reachability` | SKILL.md 宣言 callable が production コードから到達不能かを AST 静的解析で検出 | `skill_declaration_reachability.py` + `audit/sections_skill_reachability.py` + `dogfood/cli.py` |
 | `fleet_propose` | queue 待ち PJ に `evolve --dry-run` を順次実行し提案を集約レポート化。承認ゲート付き、reject 済み提案は再提示しない | `fleet/propose.py` + `fleet/cli_propose.py` |
