@@ -118,6 +118,29 @@ def test_command_includes_strict_mcp_config_and_no_session_persistence(monkeypat
     assert "--no-session-persistence" in captured["cmd"]
 
 
+def test_command_includes_safe_mode(monkeypatch):
+    """#410 round3 [Must]1: --tools "" / --strict-mcp-config は built-in ツールと MCP を
+    塞ぐが、hooks・plugins・CLAUDE.md 等の customization 経路は素通しだった（生ログを
+    受けた UserPromptSubmit hook が外部コマンドを実行しうる）。--safe-mode
+    （CLAUDE.md/skills/plugins/hooks/MCP servers/custom commands・agents/output styles/
+    workflows 等の customization を全無効化。built-in tools・permissions・auth・model
+    選択は normal に動作＝claude --help 実測）を追加し、この経路も塞ぐ。実測: 無害な
+    UserPromptSubmit hook を settings 経由で仕込み、--safe-mode 無しでは発火（marker
+    ファイル書込）、--safe-mode 有りでは発火しないことを確認済み（モジュール docstring
+    参照）。
+    """
+    captured = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeCompleted(stdout="ok")
+
+    monkeypatch.setattr(sc.subprocess, "run", _fake_run)
+    sc.call_claude_headless("prompt")
+
+    assert "--safe-mode" in captured["cmd"]
+
+
 def test_command_passes_prompt_and_model(monkeypatch):
     captured = {}
 

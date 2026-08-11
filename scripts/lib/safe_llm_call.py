@@ -52,6 +52,30 @@ round1 では ``--tools <tools...>``（"" で built-in セット全体を無効�
 ``--bare`` は ``ANTHROPIC_API_KEY`` 直書き専用（OAuth/subscription 認証非対応）でこの PJ の
 想定運用と非互換のため使わない。
 
+**実測結果（#410 codex round3 レビュー・2026-08-11、``--safe-mode`` を追加）**:
+``--tools ""`` と ``--strict-mcp-config`` は built-in ツールと MCP サーバを塞ぐが、
+**hooks・plugins・CLAUDE.md 等の customization は素通し**だった（``--settings`` は既存設定
+への additional settings であり hooks を無効化しない）。生ログを受けた ``UserPromptSubmit``
+hook が外部コマンドを実行する経路が三重防御の外に残っていた。
+
+``claude --help`` 実測: ``--safe-mode`` は "Start with all customizations (CLAUDE.md,
+skills, plugins, hooks, MCP servers, custom commands and agents, output styles,
+workflows, custom themes, keybindings, and more) disabled ... Admin-managed (policy)
+settings still apply. Auth, model selection, built-in tools, and permissions work
+normally. Sets CLAUDE_CODE_SAFE_MODE=1." — built-in tools・permissions・auth・model 選択は
+normal に動作するため、``--tools ""`` / ``--settings`` deny とは独立に積み上げられる。
+
+  - hook 経路が実際に止まることを実測: 無害な ``UserPromptSubmit`` hook
+    （マーカーファイルへ1行 echo するだけ）を ``--settings`` 経由で仕込み、
+    ``--safe-mode`` 無しでは発火（マーカー生成）・``--safe-mode`` 有りでは発火しない
+    （マーカー未生成）ことを確認した
+  - 全防御（``--tools ""`` + ``--safe-mode`` + ``--strict-mcp-config`` +
+    ``--settings`` deny）を組み合わせた状態でも decisive test（秘密ファイル非漏洩・
+    プロンプトインジェクション風の指示への耐性）を再実測し通過を確認した
+  - judge が壊れないことも実測: 実際のバッチ判定プロンプト（1発話・修正判定を促す形式）を
+    全防御込みで送り、期待どおりの厳格 JSON verdict（``{"verdicts": [{"index": 0, ...}]}``）
+    が返ることを確認した（``parse_verdicts_result`` が既に対応する code fence 付き応答）
+
 [Must]F: ``returncode`` を検査する。非ゼロ終了時に ``stdout``（valid/partial な JSON を含み
 うる）をそのまま呼び出し側へ渡すと誤って永続化されうるため、``ClaudeCallError`` を送出し
 呼び出し側の既存の「呼び出し失敗 → 未判定のまま次回に残す」経路（try/except）に合流させる。
@@ -136,6 +160,10 @@ def call_claude_headless(
             # --tools "" は built-in セットのみが対象で MCP サーバ由来のツールは塞がないため
             # 必須（モジュール docstring 参照）。
             "--strict-mcp-config",
+            # #410 round3 [Must]1: hooks/plugins/CLAUDE.md 等の customization 経路を塞ぐ
+            # （--tools ""/--strict-mcp-config/--settings deny のどれも hooks は無効化
+            # しない。実測で hook 発火の阻止を確認済み・モジュール docstring 参照）。
+            "--safe-mode",
             "--no-session-persistence",
         ],
         capture_output=True,
