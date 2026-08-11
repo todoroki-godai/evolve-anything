@@ -136,9 +136,14 @@ def parse_verdicts_result(
       - 応答欠損・壊れた JSON・期待した `{"verdicts": [...]}` 形でない
       - 要素の型が不正（`_validate_verdict` 参照。1 要素でも不正ならバッチ全体を失格にする）
       - `index` の重複
-      - ``expected_len`` を渡した場合、``0 <= index < expected_len`` の範囲外
-        （#410 round2 [Should]③: バッチ対象外の index を黙って捨てず、応答自体が
-        信頼できないシグナルとして失格にする）
+
+    ``expected_len`` を渡した場合、``0 <= index < expected_len`` の範囲外の要素は
+    **その要素だけを無視**し、バッチ全体は失格にしない（#410 round3 [Should]⑤ — round2 では
+    「範囲外 index があれば全体失格」だったが、有効な全 index に加えて余分な1件を返した
+    だけで再判定され続けるのは過剰、かつ [Must]2 の billed-but-unconfirmed 予算漏れと
+    組み合わさると「無限再試行 × 予算漏れ」になるため round3 で方針変更した）。無視した
+    件数は ``out_of_range`` に surface する（黙って捨てない）。範囲内の要素は通常どおり
+    処理される。
 
     index の**網羅性**（batch 内の全 index が揃っているか）はここでは検証しない
     （verbosity 側の網羅性検証・#273 P1-2 とは意図的に非対称。範囲検証とは別軸）。
@@ -149,10 +154,11 @@ def parse_verdicts_result(
     `test_ingest_legitimate_empty_verdicts_still_marks_judged` が固定している）。
 
     Returns:
-        {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None, reason:str}]}
+        {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None, reason:str}],
+         "out_of_range": int}
     """
     if not raw or not isinstance(raw, str):
-        return {"ok": False, "verdicts": []}
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
     text = raw.strip()
     obj = None
     # まず素直に parse、ダメなら最初の {...} ブロックを拾う
@@ -164,26 +170,28 @@ def parse_verdicts_result(
             try:
                 obj = json.loads(m.group(0))
             except (json.JSONDecodeError, ValueError):
-                return {"ok": False, "verdicts": []}
+                return {"ok": False, "verdicts": [], "out_of_range": 0}
         else:
-            return {"ok": False, "verdicts": []}
+            return {"ok": False, "verdicts": [], "out_of_range": 0}
     if not isinstance(obj, dict):
-        return {"ok": False, "verdicts": []}
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
     verdicts = obj.get("verdicts")
     if not isinstance(verdicts, list):
-        return {"ok": False, "verdicts": []}
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
 
     out: List[Dict[str, Any]] = []
     seen_idx: set = set()
+    out_of_range = 0
     for v in verdicts:
         item = _validate_verdict(v)
         if item is None or item["index"] in seen_idx:
-            return {"ok": False, "verdicts": []}
+            return {"ok": False, "verdicts": [], "out_of_range": 0}
         if expected_len is not None and not (0 <= item["index"] < expected_len):
-            return {"ok": False, "verdicts": []}
+            out_of_range += 1
+            continue
         seen_idx.add(item["index"])
         out.append(item)
-    return {"ok": True, "verdicts": out}
+    return {"ok": True, "verdicts": out, "out_of_range": out_of_range}
 
 
 def parse_verdicts(raw: Optional[Any]) -> List[Dict[str, Any]]:

@@ -147,8 +147,8 @@ def ingest_judgement_results(
 
     Returns:
         {"corrections", "non_corrections", "skipped_batches", "parse_failed_batches",
-         "omitted_verdicts", "weak_written", "idioms_written", "idioms_filtered",
-         "judged_written", "dry_run"}
+         "omitted_verdicts", "out_of_range_verdicts", "weak_written", "idioms_written",
+         "idioms_filtered", "judged_written", "dry_run"}
     """
     from weak_signals.store import WeakSignal, append_signals, now_iso
 
@@ -167,6 +167,8 @@ def ingest_judgement_results(
     parse_failed_batches = 0  # #273: 応答は届いたが JSON が解釈不能だったバッチ数
     idioms_filtered = 0  # #527: 過汎用 idiom（floor/stopword/context token）で弾いた件数
     omitted_verdicts = 0  # #273: verdict が返らず非修正として確定した発話数（observability）
+    # #410 round3 [Should]⑤: バッチ対象外の index を無視した件数（黙って捨てない）。
+    out_of_range_verdicts = 0
 
     for req in requests:
         key = req.get("id")
@@ -183,14 +185,20 @@ def ingest_judgement_results(
         # 変数名は `parsed`（= parse_responses の応答マップ）と必ず分ける。
         # 同名にすると 2 バッチ目以降の `parsed.get(key)` が verdict dict を引いて
         # 全バッチ silent skip する（#273 レビューで検出した shadowing 回帰）。
-        # #410 round2 [Should]③: expected_len=len(group) でバッチ対象外の index（応答の
-        # 信頼性が疑わしいシグナル）を黙って捨てず失格にする。
+        # #410 round3 [Should]⑤: expected_len=len(group) でバッチ対象外の index を検出する
+        # （round2 は検出時にバッチ全体を失格にしていたが、余分な1件で無限再試行になる
+        # 過剰さを避けるため round3 でパーサ側が個別に無視する方式へ変更。上の
+        # out_of_range_verdicts で件数を surface する）。
         parsed_verdicts = _prompt.parse_verdicts_result(text, expected_len=len(group))
         if not parsed_verdicts["ok"]:
             # #273: JSON 解釈不能。応答欠損と同様、判定済みにせず次 drain で再試行する
             # （[] フォールバックを「該当なし」と誤読して judged_keys に積むと desync する）。
             parse_failed_batches += 1
             continue
+        # #410 round3 [Should]⑤: バッチ対象外の index はパーサ側で個別に無視され
+        # verdicts から除外済み（バッチ全体は失格にしない）。無視した件数だけ observability
+        # として積む（黙って捨てない）。
+        out_of_range_verdicts += parsed_verdicts.get("out_of_range", 0)
 
         by_index = {v["index"]: v for v in parsed_verdicts["verdicts"]}
         # #410 [Must]D: 「正当な全件非修正」（verdicts=[] を明示的に返した・#273）と
@@ -290,6 +298,7 @@ def ingest_judgement_results(
         "idioms_written": idiom_res["written"],
         "idioms_filtered": idioms_filtered,  # #527: 過汎用で弾いた idiom 件数（observability）
         "omitted_verdicts": omitted_verdicts,  # #273: verdict 欠落で非修正確定した発話数
+        "out_of_range_verdicts": out_of_range_verdicts,  # #410 round3 [Should]⑤: 無視した範囲外件数
         "judged_written": judged_res["written"],
         "dry_run": bool(dry_run),
     }

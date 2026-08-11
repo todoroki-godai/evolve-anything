@@ -636,6 +636,29 @@ def test_omitted_verdicts_surfaced_in_return_value_and_log(tmp_path, monkeypatch
     assert "omitted_verdicts=2" in out.getvalue()
 
 
+def test_out_of_range_verdicts_surfaced_in_return_value_and_log(tmp_path, monkeypatch):
+    """#410 round3 [Should]⑤: バッチ対象外の index を無視した件数（out_of_range_verdicts）が
+    戻り値・フェーズ遷移ログの両方に伝播する（omitted_verdicts と同型の observability）。
+    """
+    import io
+
+    out = io.StringIO()
+    utterances = [_utt("/a.jsonl", i, f"text{i}", "pj-a", ts=_ts(1)) for i in range(3)]
+    # 3件のバッチに範囲外 index 99 を混ぜて返す。
+    monkeypatch.setattr(
+        judge_runner, "call_haiku",
+        lambda prompt, model="haiku": _ok_verdict_response(
+            [(0, False), (1, False), (2, False), (99, True)]
+        ),
+    )
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=utterances, judged_path=tmp_path / "correction_judged.jsonl",
+        weak_signals_path=tmp_path / "weak_signals.jsonl", out=out, batch_size=30,
+    )
+    assert res["out_of_range_verdicts"] == 1
+    assert "out_of_range_verdicts=1" in out.getvalue()
+
+
 # ─────────────────────────────────────────────────────────────────
 # call_haiku: subprocess の唯一の集約点
 # ─────────────────────────────────────────────────────────────────

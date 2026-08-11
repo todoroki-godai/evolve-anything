@@ -393,9 +393,13 @@ def test_ingest_bool_coerced_is_correction_string_does_not_mark_judged(scratch_d
     assert cs_store.read_judged_keys(judged) == set()
 
 
-def test_ingest_out_of_range_index_does_not_mark_judged(scratch_dir: Path) -> None:
-    """#410 round2 [Should]③: バッチ対象外の index（応答の信頼性が疑わしい）は黙って
-    捨てず parse_failed として扱い、未判定のまま残す。
+def test_ingest_all_out_of_range_index_treated_as_legitimate_empty(scratch_dir: Path) -> None:
+    """#410 round3 [Should]⑤ 是正: バッチ対象外の index はその要素だけ無視し、件数を
+    out_of_range_verdicts に surface する（round2 の「バッチ全体を parse_failed にして
+    無限再試行させる」設計は過剰だったため方針変更・詳細は prompt.parse_verdicts_result の
+    docstring 参照）。全件が範囲外だと verdicts=[] に収束するため、モデルが明示的に
+    「該当なし」と答えた場合（legitimate_empty_batch）と同様にバッチ全体を非修正確定する
+    （無限再試行を避けるための既定の挙動・#273 契約と同型）。
     """
     ws_store = scratch_dir / "weak_signals.jsonl"
     idioms_store = scratch_dir / "idioms.jsonl"
@@ -411,9 +415,11 @@ def test_ingest_out_of_range_index_does_not_mark_judged(scratch_dir: Path) -> No
         emitted, responses,
         weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
     )
-    assert res["parse_failed_batches"] == 1
+    assert res["parse_failed_batches"] == 0
+    assert res["out_of_range_verdicts"] == 1
     assert res["corrections"] == 0
-    assert cs_store.read_judged_keys(judged) == set()
+    assert res["non_corrections"] == 3
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
 
 
 def test_ingest_legitimate_empty_verdicts_still_marks_judged(scratch_dir: Path) -> None:
@@ -496,6 +502,36 @@ def test_ingest_counts_omitted_verdicts(scratch_dir: Path) -> None:
     assert res["non_corrections"] == 1  # 揃っていた index 0 のみ確定
     # index 0（/a.jsonl:1）だけ判定済み。1/2（欠落）は次回 drain で再試行できるよう未判定のまま。
     assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1"}
+
+
+def test_ingest_counts_out_of_range_verdicts_without_failing_batch(scratch_dir: Path) -> None:
+    """#410 round3 [Should]⑤: 範囲外 index はバッチ全体を失格にせず、その要素だけ無視して
+    件数を surface する（round2 は全体失格だったが range3 で方針変更）。範囲内の index は
+    通常どおり確定する。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    # index 0/1/2 は正当（3発話バッチ）だが、範囲外の index 99 も混じって返る
+    responses = {rid: json.dumps({"verdicts": [
+        {"index": 0, "is_correction": False, "idiom": None, "reason": "r"},
+        {"index": 1, "is_correction": False, "idiom": None, "reason": "r"},
+        {"index": 2, "is_correction": False, "idiom": None, "reason": "r"},
+        {"index": 99, "is_correction": True, "idiom": "x", "reason": "y"},
+    ]})}
+
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    assert res["out_of_range_verdicts"] == 1
+    assert res["parse_failed_batches"] == 0  # 全体失格にはしない
+    assert res["non_corrections"] == 3
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2", "/a.jsonl:3"}
 
 
 def test_ingest_partial_omission_retries_only_missing_indices_on_reemit(scratch_dir: Path) -> None:
