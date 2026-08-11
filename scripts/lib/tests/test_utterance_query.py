@@ -94,3 +94,38 @@ def test_all_projects_crosses_pj(tmp_path: Path) -> None:
 def test_query_missing_db_returns_empty(tmp_path: Path) -> None:
     rows = uquery.query_utterances("evolve-anything", db_path=tmp_path / "nope.db")
     assert rows == []
+
+
+# ── #410 round3 [Must]3 / pitfall_duckdb_read_opens_readwrite（#65）再発防止 ──────
+# 旧実装は read 経路（query_utterances / query_utterances_all_projects）が
+# ``_store.connection(db_path, repair=False)`` 経由で開いていたが、``repair=False`` は
+# 自己修復（DDL の追加実行）を止めるだけで、接続自体は read-write のままだった
+# （``_duckdb.connect(str(db_path))`` に ``read_only`` kwarg が無い）。DB が既に存在する
+# 状態で読むだけでも ``con.execute(_SCHEMA_SQL)``（CREATE TABLE IF NOT EXISTS 等）が
+# write transaction として走りファイル byte を書き換える（dry-run byte 契約違反・
+# judge_runner の dry-run 実本番経路 utterances=None → query_utterances_all_projects
+# 経由で発火する）。db を chmod 444 にすると read-write open は失敗するが read_only open
+# は成功する — この違いで判別する（episodic_store.test_read_does_not_require_write_access
+# と同型の判別法）。
+
+
+def test_query_utterances_read_only_does_not_require_write_access(tmp_path: Path) -> None:
+    db = tmp_path / "u.db"
+    _seed(db)
+    db.chmod(0o444)
+    try:
+        rows = uquery.query_utterances("evolve-anything", db_path=db)
+        assert len(rows) >= 1, "read_only でない（444 db を読めず例外/空返し＝write 権限要求）"
+    finally:
+        db.chmod(0o644)
+
+
+def test_query_utterances_all_projects_read_only_does_not_require_write_access(tmp_path: Path) -> None:
+    db = tmp_path / "u.db"
+    _seed(db)
+    db.chmod(0o444)
+    try:
+        rows = uquery.query_utterances_all_projects(db_path=db)
+        assert len(rows) >= 1, "read_only でない（444 db を読めず例外/空返し＝write 権限要求）"
+    finally:
+        db.chmod(0o644)

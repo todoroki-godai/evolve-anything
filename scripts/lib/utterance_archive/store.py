@@ -104,23 +104,48 @@ def _repair_schema(con: Any) -> None:
 
 
 @contextmanager
-def connection(db_path: Path, repair: bool = True) -> Iterator[Any]:
+def connection(
+    db_path: Path, repair: bool = True, *, read_only: bool = False
+) -> Iterator[Any]:
     """utterances.db への 1 connection を with-block 全体で共有する。
 
     file ごとに connect/close を繰り返さず checkpoint を 1 回に集約する
     （DuckDB checkpoint pitfall, #28）。DuckDB 未インストールなら None を yield。
 
     ``repair``: True（既定・write 経路 = ingest）なら制約欠落を自己修復する（#156）。
-    read 経路（query.py）は ``repair=False`` を渡し、読み取りで書き込みを発火させない。
+
+    ``read_only``（#410 round3 [Must]3 / pitfall_duckdb_read_opens_readwrite・#65 と同型の
+    再発防止）: True なら真の DuckDB read_only 接続を使う。旧実装は read 経路（query.py）が
+    ``repair=False`` を渡すだけで、接続自体は read-write のままだった
+    （``_duckdb.connect(str(db_path))`` に ``read_only`` kwarg が無い）。DB が既に存在する
+    状態で読むだけでも ``con.execute(_SCHEMA_SQL)``（CREATE TABLE IF NOT EXISTS 等）が write
+    transaction として走りファイル byte を書き換える（dry-run byte 契約違反 — judge_runner
+    の dry-run 実本番経路 utterances=None → query_utterances_all_projects 経由で発火する）。
+    ``read_only=True`` のときは mkdir・スキーマ DDL・修復を一切実行せず、DB ファイルが
+    存在しなければ None を yield する（token_usage_store._connect_ro / episodic_store の
+    既存パターンに揃える）。
     """
     if not HAS_DUCKDB:
         yield None
         return
     db_path = Path(db_path)
+    if read_only:
+        if not db_path.exists():
+            yield None
+            return
+        con = _duckdb.connect(str(db_path), read_only=True)
+        try:
+            yield con
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+        return
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = _duckdb.connect(str(db_path))
     # 修復は _SCHEMA_SQL の前: 破損テーブルに論理重複があると _SCHEMA_SQL の
-    # CREATE UNIQUE INDEX が重複で即死する（#156 の実発火経路）。read 経路は repair=False。
+    # CREATE UNIQUE INDEX が重複で即死する（#156 の実発火経路）。
     if repair:
         _repair_schema(con)
     con.execute(_SCHEMA_SQL)

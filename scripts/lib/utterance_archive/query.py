@@ -98,7 +98,10 @@ def query_utterances(
         pj_slug=pj_slug, since=since, keyword=keyword,
         session_id=session_id, source_kinds=tuple(source_kinds), limit=limit,
     )
-    with _store.connection(db_path, repair=False) as con:
+    # #410 round3 [Must]3: repair=False は自己修復を止めるだけで read-write open のまま
+    # だった（pitfall_duckdb_read_opens_readwrite・#65 と同型）。read_only=True で真の
+    # read_only 接続にする（モジュール docstring 参照）。
+    with _store.connection(db_path, read_only=True) as con:
         if con is None:
             return []
         rows = con.execute(sql, params).fetchall()
@@ -124,7 +127,10 @@ def query_utterances_all_projects(
         pj_slug=None, since=since, keyword=keyword,
         session_id=None, source_kinds=tuple(source_kinds), limit=limit,
     )
-    with _store.connection(db_path, repair=False) as con:
+    # #410 round3 [Must]3: repair=False は自己修復を止めるだけで read-write open のまま
+    # だった（pitfall_duckdb_read_opens_readwrite・#65 と同型）。read_only=True で真の
+    # read_only 接続にする（モジュール docstring 参照）。
+    with _store.connection(db_path, read_only=True) as con:
         if con is None:
             return []
         rows = con.execute(sql, params).fetchall()

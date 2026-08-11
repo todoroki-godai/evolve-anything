@@ -595,6 +595,47 @@ def test_no_source_exception_source_failed_is_false(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────
+# #410 round3 [Must]3: dry-run の実本番経路が DuckDB を read-write で開く再発
+# （pitfall_duckdb_read_opens_readwrite・#65 と同型）
+# ─────────────────────────────────────────────────────────────────
+def test_dry_run_real_production_path_uses_true_read_only_duckdb_connection(tmp_path):
+    """utterances=None（DI を経由しない実本番経路）で dry-run すると、
+    query_utterances_all_projects → utterance_archive.store.connection が実際に呼ばれる。
+    旧実装はこの接続が read-write のままだったため、utterances.db が既に存在する状態で
+    dry-run するだけでもファイル byte を書き換えていた。db を chmod 444 にして実本番経路を
+    通し、read_only 接続なら（Permission denied にならず）実データを正しく返す
+    （source_failed=False・unjudged_total>=1）ことを確認する。旧実装だと read-write open が
+    例外送出し、judge_runner の fail-open 経路で source_failed=True・0件に化ける。
+    """
+    from utterance_archive import store as ustore
+    from utterance_archive.extractor import Utterance
+    from utterance_archive.ingest import default_db_path
+
+    if not ustore.HAS_DUCKDB:
+        import pytest
+
+        pytest.skip("DuckDB 未インストール")
+
+    db_path = default_db_path()  # #119 root conftest の autouse 隔離で tmp_path 配下に解決される
+    rows = [
+        Utterance(
+            "/p/a.jsonl", 1, "pj-a", "s1", _ts(1), "本文", "h1", None, "dialogue", 1,
+        ),
+    ]
+    with ustore.connection(db_path) as con:
+        ustore.insert_utterances(con, rows)
+    db_path.chmod(0o444)
+    try:
+        res = judge_runner.run_daily_judge(
+            run=False, judged_path=tmp_path / "correction_judged.jsonl",
+        )
+        assert res["source_failed"] is False, res.get("source_error")
+        assert res["unjudged_total"] >= 1
+    finally:
+        db_path.chmod(0o644)
+
+
+# ─────────────────────────────────────────────────────────────────
 # フェーズ遷移ログ（提示された/実行された/判定が返った/永続化された、を区別可能にする）
 # ─────────────────────────────────────────────────────────────────
 def test_phase_transition_log_lines_are_distinguishable(tmp_path, monkeypatch):
