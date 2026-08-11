@@ -147,7 +147,7 @@
 | `skill_vuln_scan` | 取り込みスキルの静的脆弱性スキャン — remote_exec/secret_exfil 等を combo 必須で検出 | `skill_vuln_scan.py` + `audit/sections_skill_vuln.py` |
 | `fanout_cost` | fan-out 費用対効果の advisory section。advantage は各群≥5件の floor ゲート付き | `scripts/lib/fanout_cost.py` + `audit/sections_fanout.py` |
 | `memory_contagion` | 評価源バイアスの記憶伝播を audit advisory で検出 | `audit/memory_contagion.py` |
-| `memory_guard` | auto-memory 書込境界の runtime 記憶汚染検出。prompt_injection/secret_exfil を fail-open で reject。同名エントリの上書きは決定論遷移検証でゲート | `memory_guard.py` + `auto_memory_broker.py` + `memory_capability.py` + `audit/sections_memory.py` |
+| `memory_guard` | auto-memory 書込境界の runtime 記憶汚染検出。prompt_injection/secret_exfil を reject（検査失敗は fail-open）。同名エントリの上書きは決定論遷移検証でゲート | `memory_guard.py` + `auto_memory_broker.py` + `memory_capability.py` + `audit/sections_memory.py` |
 | `fleet_queue` | 学習素材ベースの evolve 待ち PJ を決定論・ゼロ LLM で列挙 | `fleet/queue.py` + `fleet/queue_state.py` + `fleet/cli.py` + `fleet/collectors.py` + `fleet/formatters.py` |
 | `queue_verify` | queue の verify 待ちを read 時純粋導出。新ストアは作らない | `fleet/queue_verify.py` |
 | `fleet_detect` | 全 PJ 横断の決定論 weak_signals 検出。daily runner が毎朝蓄積 | `fleet/detect.py` + `bin/evolve-daily-run` |
@@ -166,7 +166,7 @@
 | `fleet_pr` | 承認済み evolve 提案を repo 外 worktree で commit→push→PR 化。path allowlist・push account guard で強制、マージは人間 | `fleet/pr.py` + `fleet/cli_pr.py` |
 | `agent_coordination` | Claude Code primary／Codex opt-in の top-level executor lane 管理 | `agent_coordination/` + `bin/evolve-agent-task` + `docs/agent-contract/` |
 | `codex_config_cleanup` | 既知4カテゴリの Codex 設定残骸を検出し復元先が一意な指紋だけ plan/apply | `agent_coordination/codex_cleanup.py` + `bin/evolve-codex-config-cleanup` |
-| `runtime_telemetry` | usage/sessions/errors の hook record に `runtime=claude\|codex` を較正追加 | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
+| `runtime_telemetry` | usage/sessions/errors の hook record に `runtime=claude\|codex` を較正追加。**Codex hook 配線は保留** | `hooks/common.py` + 5 writer + `agent_coordination/runtime_summary.py` |
 | `codex_usage` | codex CLI 利用状況を advisory 表示（fail-open）。CC 側 token_usage とは合算しない | `fleet/codex_usage.py` + `fleet/formatters.py` |
 
 ## クイックスタート
