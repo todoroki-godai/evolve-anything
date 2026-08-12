@@ -274,6 +274,66 @@ class TestNewPatterns:
         assert result[0] == "I-meant"
 
 
+class TestA0CaptureRepairPatterns:
+    """ADR-054 A0（#379）: capture_rate census 実測（precision 87.5%）で確認された
+    低リスク・低recallの追加語彙（naoshite-request / yamete-request）。
+    """
+
+    def test_naoshite_bare(self):
+        result = common.detect_correction("直して")
+        assert result is not None
+        assert result[0] == "naoshite-request"
+        assert result[1] == 0.75
+
+    def test_shusei_shite(self):
+        result = common.detect_correction("修正して再配信して。")
+        assert result is not None
+        assert result[0] == "naoshite-request"
+
+    def test_naoshite_hon_pr(self):
+        result = common.detect_correction("本PRで直しておいて")
+        assert result is not None
+        assert result[0] == "naoshite-request"
+
+    def test_naoshite_mitsuketa(self):
+        result = common.detect_correction("見つけた2件も直して")
+        assert result is not None
+        assert result[0] == "naoshite-request"
+
+    def test_teisei_shite_oite(self):
+        result = common.detect_correction("訂正しておいて")
+        assert result is not None
+        assert result[0] == "naoshite-request"
+
+    def test_yamete_hoshii_headline(self):
+        """ADR headline 実例（なんで、matsukaze-mindenでコメントしちゃったの、、、やめてほしい）。"""
+        result = common.detect_correction(
+            "なんで、matsukaze-mindenでコメントしちゃったの、、、やめてほしい"
+        )
+        assert result is not None
+        assert result[0] == "yamete-request"
+        assert result[1] == 0.75
+
+    def test_yamete_kudasai(self):
+        result = common.detect_correction("それはやめてください")
+        assert result is not None
+        assert result[0] == "yamete-request"
+
+    def test_yamete_kure(self):
+        result = common.detect_correction("もうやめてくれ")
+        assert result is not None
+        assert result[0] == "yamete-request"
+
+    def test_compound_verbs_not_matched(self):
+        """複合動詞は naoshite-request 対象外（#9.2・実コーパスでは0件だが将来のFPを構造で防ぐ）。"""
+        for verb in ["作り直して", "書き直して", "考え直して", "やり直して"]:
+            assert common.detect_correction(verb) is None, verb
+
+    def test_minaoshite_not_matched(self):
+        """既知FP回帰防止: 「見直して」は naoshite-request にマッチしない。"""
+        assert common.detect_correction("評価ロジックも見直して") is None
+
+
 class TestFalsePositiveFilters:
     """偽陽性フィルタのテスト。"""
 
@@ -376,6 +436,13 @@ class TestShouldIncludeMessage:
     def test_real_correction_not_excluded_by_machinery_filter(self):
         """機構判定は本物のユーザー発話を誤って除外しない。"""
         assert common.should_include_message("いや、そうじゃなくて、そっちのアプローチにして") is True
+
+    def test_background_agents_stopped_marker_excluded(self):
+        """harness の停止通知本文（ADR-054 A0 census #8）は機構ターン（_MACHINERY_MARKERS 追加）。"""
+        text = (
+            '4 background agents were stopped by the user: "worker-a: ...修正してください。"'
+        )
+        assert common.should_include_message(text) is False
 
 
 class TestCalculateConfidence:
@@ -638,6 +705,18 @@ class TestCorrectionDetectHook:
         correction_detect.handle_user_prompt_submit(event)
         corrections_file = patch_data_dir / "corrections.jsonl"
         assert not corrections_file.exists()
+
+    def test_pattern_version_recorded(self, patch_data_dir):
+        """record に pattern_version が付与される（ADR-054 A0・capture_rate の層分離に使う）。"""
+        event = {
+            "session_id": "sess-cd-pv",
+            "message": {"content": "いや、そうじゃなくて"},
+        }
+        correction_detect.handle_user_prompt_submit(event)
+
+        corrections_file = patch_data_dir / "corrections.jsonl"
+        record = json.loads(corrections_file.read_text().strip())
+        assert record["pattern_version"] == 1
 
     def test_content_as_list(self, patch_data_dir):
         """content がリスト形式でも処理できる。"""

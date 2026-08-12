@@ -81,6 +81,17 @@ CORRECTION_PATTERNS = {
     # 「出力そのものへの異議」＝「勘違いしている？／していない？」。過去形「勘違いだったかも」
     # （自己の勘違いの撤回）とは区別するため、現在形 + 疑問符終端に限定する。
     "kanchigai-question": {"pattern": r"勘違い(して)?(い)?(る|ない)[？?]", "confidence": 0.75, "type": "correction", "decay_days": 90},
+    # ADR-054 A0（#379）: census 実測（precision 87.5%、_MACHINERY_MARKERS 追加後）で確認済みの
+    # 低リスク・低recall語彙。複合動詞（見直して/作り直して/書き直して/考え直して/やり直して）は
+    # lookbehind で除外（対象は「直して」単独のみ。修正して/訂正してには適用しない）。
+    "naoshite-request": {
+        "pattern": r"(?<!見)(?<!作り)(?<!書き)(?<!考え)(?<!やり)直して|修正して|訂正して",
+        "confidence": 0.75, "type": "correction", "decay_days": 90,
+    },
+    "yamete-request": {
+        "pattern": r"やめて(ほしい|ください|くれ)",
+        "confidence": 0.75, "type": "correction", "decay_days": 90,
+    },
     "perfect": {"pattern": r"(?i)perfect!|exactly right|that's exactly", "confidence": 0.70, "type": "positive", "decay_days": 90},
     "great-approach": {"pattern": r"(?i)that's what I wanted|great approach", "confidence": 0.70, "type": "positive", "decay_days": 90},
     "keep-doing": {"pattern": r"(?i)keep doing this|love it|excellent|nailed it", "confidence": 0.70, "type": "positive", "decay_days": 90},
@@ -190,6 +201,9 @@ _MACHINERY_MARKERS = (
     "base directory for this skill:",
     "stop hook feedback:",
     "caveat: the messages below were generated",
+    # ADR-054 A0（#379）: background agent 停止通知の本文（"...修正してください。"等）を
+    # naoshite-request が誤って拾わないよう機構ターンとして除外（census #8 実測）。
+    "background agents were stopped by the user",
 )
 """lstrip+lower 後、先頭付近にこの語を含むテキストは機構ターン。"""
 
