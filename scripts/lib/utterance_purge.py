@@ -23,15 +23,27 @@ extractor.py 側も `is_machinery_prompt` を追加適用し新規取り込み�
   - 削除（write）は `utterance_archive.store.connection()` 経由。物理 PK
     (source_path, line_no) で 1 行ずつ DELETE する。
 
-判定の厳格化（PR #377 codex レビュー Must1）:
+判定の厳格化（PR #377 codex レビュー Must1・2巡目で疑問符ヒューリスティックを撤回し構造判定に置換）:
   - `is_machinery_prompt` は correction 検出等の除外用途では「先頭300文字以内に
     marker を含む」広い再現率が正しい設計だが、purge は破壊的操作のため
-    「本文が機構出力そのもの」であることを追加要求する。人間が機構出力を
-    引用しつつ質問する発話（例:「Stop hook feedback: という出力は何？」）を
-    誤って削除しないよう、`_is_confirmed_machinery` で marker/prefix が文頭
-    （lstrip 直後オフセット0）にあることと、prefix 型は末尾が疑問符でないこと
-    を追加検証する。独自マーカーリストは持たず `rl_common.detection` の
-    `_MACHINERY_PREFIXES` / `_MACHINERY_MARKERS` をそのまま再利用する。
+    「本文が機構出力そのもの」であることを追加要求する。`_is_confirmed_machinery`
+    で marker/prefix が文頭（lstrip 直後オフセット0）にあることをまず要求した上で、
+    型ごとに以下の**構造**を追加検証する（句読点ではなく形で判定する）:
+      - tag 型 prefix（`<system-reminder>` 等の完結タグ + `<local-command` のように
+        タグ名が動的なもの）: 開始タグから始まり、**対応する閉じタグで終わり、
+        閉じタグの後に何も続かない**こと。閉じタグが本文に無ければ安全側で対象外。
+      - bracket 型 prefix（`[request interrupted`）: 本文全体が `[...]` の
+        ブレース構造そのもので終わること（閉じ `]` の後に何も続かない）。
+      - marker 型（4件）: 文頭一致に加え、本文に**改行を含む**こと（機構ターンは
+        必ず複数行のブロックであり、1行の人間の質問と構造で区別できる）。
+    初回実装は「末尾6文字以内の疑問符」で除外する非対称なヒューリスティックだったが、
+    codex 2巡目レビューで反例（marker 型は疑問符除外が未適用・prefix 型も疑問符が
+    末尾6文字より前だと見逃す）が実測され、データ上の根拠も安全上の根拠もないため
+    撤回した。本判定は**意図的に under-deletion 側に倒している**（取りこぼしは無害・
+    誤削除は永久アーカイブの破壊）ため、単一行の正規機構ターン（改行を含まない実際の
+    machinery 出力）は理論上取りこぼしうる。独自マーカー文字列は追加せず
+    `rl_common.detection` の `MACHINERY_PREFIXES` / `MACHINERY_MARKERS`
+    （public 昇格・PR #377 2巡目 Should）をそのまま再利用する。
 
 削除の安全性（PR #377 codex レビュー Must2/Should3）:
   - Must2: 複数行の DELETE は `con.begin()`/`commit()`/`rollback()` で単一
@@ -53,12 +65,13 @@ matched_count=0 になるのはこのためで、本ツールの実装不備で�
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
 from rl_common.detection import (
-    _MACHINERY_MARKERS,
-    _MACHINERY_PREFIXES,
+    MACHINERY_MARKERS,
+    MACHINERY_PREFIXES,
     is_machinery_prompt,
 )
 from utterance_archive import store as _store
@@ -87,32 +100,63 @@ _DELETE_ROW_RETURNING_SQL = (
     "DELETE FROM utterances WHERE source_path = ? AND line_no = ? RETURNING source_path"
 )
 
-# prefix型（<system-reminder> 等）で「末尾が疑問符」なら引用+質問とみなし除外する。
-_TRAILING_QUESTION_MARKS = ("？", "?")
-_TRAILING_WINDOW = 6
+# tag型 prefix（開始タグから始まり `>` で閉じるもの。<local-command は動的タグ名なので
+# ここには含めず個別に扱う）。
+_CLOSED_TAG_PREFIXES = tuple(p for p in MACHINERY_PREFIXES if p.startswith("<") and p.endswith(">"))
+# <local-command のようにタグ名が動的な prefix（末尾 `>` を持たない）。
+_DYNAMIC_TAG_PREFIXES = tuple(p for p in MACHINERY_PREFIXES if p.startswith("<") and not p.endswith(">"))
+# bracket型 prefix（`[request interrupted` 等。本文全体がブラケット構造で完結する）。
+_BRACKET_PREFIXES = tuple(p for p in MACHINERY_PREFIXES if p.startswith("["))
+
+# 開始タグのタグ名を抽出する正規表現（例: "<local-command-stdout>" → "local-command-stdout"）。
+_TAG_NAME_RE = re.compile(r"^<([a-zA-Z][a-zA-Z0-9_-]*)>")
+
+
+def _closed_tag_body(stripped: str) -> bool:
+    """strip 済みテキストが `<tag>...</tag>` の形（開始タグから始まり、対応する閉じタグで
+    終わり、閉じタグの後に何も続かない）かを判定する（codex 2巡目 Must1）。
+
+    閉じタグの後に人間の文が続く（引用+質問/依頼）場合は False。対応する閉じタグが
+    本文に存在しない場合も安全側で False（under-deletion）。
+    """
+    m = _TAG_NAME_RE.match(stripped)
+    if not m:
+        return False
+    closing = f"</{m.group(1)}>"
+    return stripped.lower().endswith(closing.lower())
 
 
 def _is_confirmed_machinery(text: str) -> bool:
-    """purge 専用の厳格判定（PR #377 Must1）。
+    """purge 専用の厳格判定（PR #377 Must1・2巡目で構造判定に置換）。
 
     `is_machinery_prompt` を必要条件としつつ、marker/prefix が文頭
-    （lstrip 直後オフセット0）にあることを追加要求する。`is_machinery_prompt`
-    自体は「先頭300文字以内に含む」広い一致なので、そのままでは人間が機構出力を
-    引用しつつ質問する発話（例:「Stop hook feedback: とは何？」）まで拾ってしまう。
+    （lstrip 直後オフセット0）にあることに加え、型ごとの**構造**を追加要求する
+    （句読点でなく形で判定。疑問符ヒューリスティックは非対称かつデータ上の根拠が
+    なく撤回した）。意図的に under-deletion 側に倒しており、単一行の正規機構
+    ターンを取りこぼしうる（誤削除より安全）。
     """
     if not is_machinery_prompt(text):
         return False
-    low = text.lstrip().lower()
-    if low.startswith(_MACHINERY_PREFIXES):
-        # <system-reminder> 等は文頭一致だが、閉じタグの後に人間の質問文（末尾が
-        # 疑問符）が続くケースは「引用して質問している」だけなので除外する。
-        tail = text.rstrip()[-_TRAILING_WINDOW:]
-        if any(mark in tail for mark in _TRAILING_QUESTION_MARKS):
-            return False
-        return True
-    # marker型（`in head` 判定）は文中どこでも一致しうるため、purge では
-    # lstrip 直後にマーカーが来る（文頭一致）場合のみ許容する。
-    return low.startswith(_MACHINERY_MARKERS)
+    stripped = text.strip()
+    low = stripped.lower()
+
+    if low.startswith(tuple(p.lower() for p in _CLOSED_TAG_PREFIXES)):
+        return _closed_tag_body(stripped)
+
+    if low.startswith(tuple(p.lower() for p in _DYNAMIC_TAG_PREFIXES)):
+        return _closed_tag_body(stripped)
+
+    if low.startswith(tuple(p.lower() for p in _BRACKET_PREFIXES)):
+        # ブラケット構造そのもので完結（末尾が `]`）していること。閉じ括弧の後に
+        # 人間の文が続く場合は対象外。
+        return stripped.endswith("]")
+
+    # marker型（4件）: 文頭一致に加え、改行を含む（複数行ブロック）ことを要求する。
+    # 機構ターンは必ず複数行のブロックであり、1行の人間の質問と構造で区別できる。
+    if low.startswith(tuple(m.lower() for m in MACHINERY_MARKERS)):
+        return "\n" in stripped
+
+    return False
 
 
 def find_machinery_rows(db_path: Path) -> List[Dict[str, Any]]:

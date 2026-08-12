@@ -171,7 +171,10 @@ _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 # reader 側（`skill_extractor.trajectory_sampler._is_machinery_prompt`）とはこの関数を
 # 単一ソースとして共有する（片側だけ直すと desync する、pitfall_copied_parse_convention_
 # partial_fix）。
-_MACHINERY_PREFIXES = (
+#
+# public（PR #377 codex レビュー Should）: `scripts/lib/utterance_purge.py` が判定意味まで
+# 共有するモジュール間契約として直接 import するため、private のままにしない。
+MACHINERY_PREFIXES = (
     "<system-reminder>",
     "<task-notification>",
     "<local-command",
@@ -185,7 +188,7 @@ _MACHINERY_PREFIXES = (
 マーカー（weak_signals の ``_INTERRUPT_MARKER`` と同じ判定対象、#322）。turn 単体では
 ``isMeta`` が付かないため content の prefix で判定する。"""
 
-_MACHINERY_MARKERS = (
+MACHINERY_MARKERS = (
     "this session is being continued from a previous conversation",
     "base directory for this skill:",
     "stop hook feedback:",
@@ -205,10 +208,10 @@ def is_machinery_prompt(content: str) -> bool:
     correction 検出・routing キーワード採掘の両方から除くための単一ソース述語。
     """
     low = content.lstrip().lower()
-    if low.startswith(_MACHINERY_PREFIXES):
+    if low.startswith(MACHINERY_PREFIXES):
         return True
     head = low[:_MACHINERY_MARKER_WINDOW]
-    return any(marker in head for marker in _MACHINERY_MARKERS)
+    return any(marker in head for marker in MACHINERY_MARKERS)
 
 
 def sanitize_message(text: str, max_length: int = 500) -> str:
