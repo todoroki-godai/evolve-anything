@@ -20,7 +20,9 @@
   （次の正規書込で sidecar が再作成される旨）を surface して続行する（data dir 移送・バックアップ
   復元という良性シナリオが無人経路の dry-run を毎朝黙って殺すのを避けるため）。設計は
   `design_402_pr2_v2.md` §0（決定8 を実装レベルへ降ろした段階1・§6 の4段階中の段階1。
-  段階2〜4 は別 PR）。
+  段階2〜4 は別 PR）。`dry_run_snapshot_warning` は `marker_error`（#287-5）と同じ配線で
+  `skills/evolve/scripts/evolve/cli.py` の1行サマリにも surface する（envelope だけでは
+  reader が居ない書きっぱなしフィールドになるため）。
 
 - **feat(revert): 採用パッチ revert 用の記録拡張（PR-1・#402）** — `evolve_decisions` の emit が
   スキル diff 候補（discover の matched_skills / skill_evolve の high・medium。advisory は対象外）
