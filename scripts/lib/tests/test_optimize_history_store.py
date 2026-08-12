@@ -581,3 +581,88 @@ class TestAliasAggregationAndEffectiveView:
         monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
         assert store.load_effective_history("nope") == []
         assert store.load_revert_events("nope") == []
+
+
+class TestLoadRawHistoryWithAliases:
+    """#402 段階3 M-A: revert の entry 検索専用の公開 API。
+
+    revert 済み entry は ``load_effective_history`` から消えるため、冪等判定
+    （同じ entry_id で再実行）には raw が要る。``_aliased_raw_records`` の公開版。
+    """
+
+    @staticmethod
+    def _write(dir_: Path, slug: str, records: list) -> None:
+        oh = dir_ / "optimize_history"
+        oh.mkdir(parents=True, exist_ok=True)
+        (oh / f"{slug}.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+        )
+
+    def test_matches_aliased_raw_records(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "proj", [{"id": "x1", "human_accepted": True}])
+        assert store.load_raw_history_with_aliases("proj") == store._aliased_raw_records("proj")
+
+    def test_includes_revert_events_unlike_effective_view(self, tmp_path, monkeypatch):
+        """revert 済み entry は raw では消えない（冪等判定に raw が必要な理由そのもの）。"""
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(
+            canonical,
+            "proj",
+            [
+                {"id": "x1", "human_accepted": True},
+                {
+                    "event_type": "revert",
+                    "reverted_entry_id": "x1",
+                    "revert_event_id": "rev1",
+                    "revert_generation": 1,
+                    "scope": "project",
+                    "repo_id": "r",
+                    "relative_path": "p",
+                },
+            ],
+        )
+        records = store.load_raw_history_with_aliases("proj")
+        # raw は accept entry も revert イベントも両方保持する（フィルタしない）。
+        assert any(r.get("id") == "x1" for r in records)
+        assert any(store.is_revert_event(r) for r in records)
+        assert store.load_effective_history("proj") == []  # 対比: effective からは消える
+
+    def test_duplicate_ids_out_param_flags_multi_source_id(self, tmp_path, monkeypatch):
+        """#402 段階3 C1: 同一 id が複数 source（data-dir × alias）に存在する不整合を明示する。"""
+        import pj_slug
+
+        monkeypatch.setattr(pj_slug, "PJ_SLUG_ALIASES", {"old-proj": "new-proj"})
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "new-proj", [{"id": "x1", "value": "canonical_wins"}])
+        self._write(canonical, "old-proj", [{"id": "x1", "value": "alias_loses"}])
+
+        dup_ids: set = set()
+        records = store.load_raw_history_with_aliases("new-proj", duplicate_ids=dup_ids)
+
+        assert [r["value"] for r in records if r.get("id") == "x1"] == ["canonical_wins"]
+        assert dup_ids == {"x1"}
+
+    def test_duplicate_ids_out_param_empty_when_no_conflict(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "proj", [{"id": "x1"}])
+
+        dup_ids: set = set()
+        store.load_raw_history_with_aliases("proj", duplicate_ids=dup_ids)
+        assert dup_ids == set()
+
+    def test_duplicate_ids_default_none_does_not_change_behavior(self, tmp_path, monkeypatch):
+        """既存呼び出し元（duplicate_ids 未指定）は挙動不変（後方互換）。"""
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "proj", [{"id": "x1"}])
+        assert store.load_raw_history_with_aliases("proj") == [{"id": "x1"}]

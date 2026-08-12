@@ -61,6 +61,23 @@ def test_detects_load_raw_history_variant(tmp_path: Path) -> None:
     assert report.violations[0].called == "load_raw_history"
 
 
+def test_detects_load_raw_history_with_aliases_variant(tmp_path: Path) -> None:
+    """#402 段階3 M-B: entry 検索用に新設した raw reader も gate の射程に入っている
+    （新規 reader が allowlist 未整備のまま素通りする＝§5 の S2 が防ごうとした失敗
+    モードをこの PR 自身が作らないことの回帰防止）。
+    """
+    root = _make_repo(tmp_path)
+    _write(
+        root / "scripts/lib/reader.py",
+        "from optimize_history_store import load_raw_history_with_aliases\n\n"
+        "def foo(entry_id, slug):\n"
+        "    return load_raw_history_with_aliases(slug)\n",
+    )
+    report = gate.check_raw_history_reads(root)
+    assert len(report.violations) == 1
+    assert report.violations[0].called == "load_raw_history_with_aliases"
+
+
 def test_detects_import_alias_of_function(tmp_path: Path) -> None:
     """``from optimize_history_store import load_history as _lh`` の後 ``_lh(...)`` 呼出し。"""
     root = _make_repo(tmp_path)

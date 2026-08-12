@@ -22,7 +22,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
@@ -82,13 +82,20 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return records
 
 
-def _merge_dedup(batches: Iterable[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+def _merge_dedup(
+    batches: Iterable[List[Dict[str, Any]]], duplicate_ids: Optional[Set[Any]] = None
+) -> List[Dict[str, Any]]:
     """複数バッチ（候補 dir/slug 順に読んだレコード列）を id dedup（先勝ち）しつつ結合する。
 
     ``id`` を持たないレコードは安全に dedup できないため無条件で全件保持する。
     ``load_raw_history`` / ``_aliased_raw_records`` の共有 chokepoint（#402 段階2）:
     2つの集約経路が別々に dedup ロジックを持つと desync するため単一化する
     （pitfall_copied_parse_convention_partial_fix と同じ理由）。
+
+    ``duplicate_ids``（#402 段階3 M-A / C1）: 指定すると、同一 ``id`` が複数バッチに
+    存在した場合にその ``id`` を追加する（採用されなかった側の値が違っても同じでも、
+    「複数 source に存在した」事実そのものを明示する診断用）。省略時（``None``）は
+    従来どおり何も記録しない（後方互換・既存呼び出し元は挙動不変）。
     """
     by_id: Dict[Any, Dict[str, Any]] = {}
     out: List[Dict[str, Any]] = []
@@ -97,6 +104,8 @@ def _merge_dedup(batches: Iterable[List[Dict[str, Any]]]) -> List[Dict[str, Any]
             rid = rec.get("id")
             if rid is not None:
                 if rid in by_id:
+                    if duplicate_ids is not None:
+                        duplicate_ids.add(rid)
                     continue  # 候補列は先頭ほど優先 → 先勝ち
                 by_id[rid] = rec
             out.append(rec)
@@ -263,7 +272,9 @@ def fold_effective(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ]
 
 
-def _aliased_raw_records(slug: str) -> List[Dict[str, Any]]:
+def _aliased_raw_records(
+    slug: str, duplicate_ids: Optional[Set[Any]] = None
+) -> List[Dict[str, Any]]:
     """slug の canonical family（PJ rename alias 全体）を data-dir × alias 全順序で集約する。
 
     ``load_effective_history`` / ``load_revert_events`` の入力生成専用（内部 helper）。
@@ -295,9 +306,12 @@ def _aliased_raw_records(slug: str) -> List[Dict[str, Any]]:
     ordered_aliases = [canonical_slug] + sorted(aliases - {canonical_slug})
 
     return _merge_dedup(
-        _read_jsonl(d / "optimize_history" / f"{_sanitize_slug(a)}.jsonl")
-        for d in iter_read_data_dirs(HISTORY_ROOT.parent)
-        for a in ordered_aliases
+        (
+            _read_jsonl(d / "optimize_history" / f"{_sanitize_slug(a)}.jsonl")
+            for d in iter_read_data_dirs(HISTORY_ROOT.parent)
+            for a in ordered_aliases
+        ),
+        duplicate_ids=duplicate_ids,
     )
 
 
@@ -317,3 +331,24 @@ def load_revert_events(slug: str) -> List[Dict[str, Any]]:
     alias 6段階集約から抽出するため、集約結果に矛盾は生じない。
     """
     return [rec for rec in _aliased_raw_records(slug) if is_revert_event(rec)]
+
+
+def load_raw_history_with_aliases(
+    slug: str, *, duplicate_ids: Optional[Set[Any]] = None
+) -> List[Dict[str, Any]]:
+    """slug の canonical family（rename alias 込み）の raw 履歴（#402 段階3 M-A）。
+
+    ``_aliased_raw_records`` の公開版。**revert の entry_id 検索専用**——業務読取には
+    使わない（通常の判断母集団が必要な reader は ``load_effective_history`` を使う）。
+    revert 済み entry は ``load_effective_history`` の出力から除外されるため、冪等判定
+    （同じ entry_id で revert を再実行したときに前回のイベントが既に記録済みかの判定）
+    には raw が要る。
+
+    ``duplicate_ids``: 指定すると、同一 entry ``id`` が複数 source（data-dir × alias）に
+    存在した場合にその id をここへ追加する（§1 手順4 の優先順位で1件を採るが、複数
+    source への重複そのものは正当な理由でも起こりうるため——同一内容の accept/revert/
+    再accept のループ等——拒否はせず、呼び出し元（revert の entry 検索）へ不整合の
+    可能性を明示するために使う・design 正典 §2 手順1 C1）。省略時は診断しない
+    （後方互換）。
+    """
+    return _aliased_raw_records(slug, duplicate_ids=duplicate_ids)

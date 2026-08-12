@@ -40,7 +40,11 @@ from typing import Dict, Iterable, List, Optional, Set
 
 # 判定対象モジュールと関数名（optimize_history_store の raw view API）。
 _TARGET_MODULE = "optimize_history_store"
-_TARGET_FUNCS = ("load_history", "load_raw_history")
+# ``load_raw_history_with_aliases``（#402 段階3 M-A/M-B）: revert の entry 検索専用に
+# 新設した raw reader。新規 raw reader を追加したら**必ずここにも追加する**——さもないと
+# 「新規 reader が allowlist 未整備のまま素通りする」という §5 の S2 が防ごうとした失敗
+# モードを、追加した当の PR 自身が再生産することになる。
+_TARGET_FUNCS = ("load_history", "load_raw_history", "load_raw_history_with_aliases")
 
 
 def _iter_py_files(repo_root: Path) -> List[Path]:
