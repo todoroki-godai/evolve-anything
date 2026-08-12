@@ -158,14 +158,40 @@ def summarize_by_detector(
     """detector 別の surfaced / accept / reject / deferred 件数（#267 Sprint 1）。
 
     採用率の分母（surfaced）を分子（accept）と同じ表で見られるようにする土台。
+
+    **移行期間の cohort 分離**: `surfaced` の記録は本 PR から始まるので、それ以前に
+    accept された提案には対応する surfaced が存在しない。両者を素朴に合算すると
+    「accept 10 / surfaced 1 → 採用率 1000%」のような嘘の数字が出る。そこで
+    ``accept_in_cohort`` を別に数える — **同じ proposal_id に surfaced 記録がある
+    accept だけ**を採用率の分子に使う。差分は ``legacy_accept``（surfaced 記録前の
+    accept）として残し、数字が突き合うようにする。
     """
+    surfaced_ids: Dict[str, set] = {}
+    for rec in records:
+        if rec.get("decision") != "surfaced":
+            continue
+        detector_id = str(rec.get("detector_id") or "unknown")
+        surfaced_ids.setdefault(detector_id, set()).add(str(rec.get("proposal_id") or ""))
+
     summary: Dict[str, Dict[str, int]] = {}
     for rec in records:
         detector_id = str(rec.get("detector_id") or "unknown")
         bucket = summary.setdefault(
-            detector_id, {"surfaced": 0, "accept": 0, "reject": 0, "deferred": 0}
+            detector_id,
+            {
+                "surfaced": 0,
+                "accept": 0,
+                "reject": 0,
+                "deferred": 0,
+                "accept_in_cohort": 0,
+                "legacy_accept": 0,
+            },
         )
         decision = rec.get("decision")
-        if decision in bucket:
+        if decision in ("surfaced", "accept", "reject", "deferred"):
             bucket[decision] += 1
+        if decision == "accept":
+            known = surfaced_ids.get(detector_id, set())
+            key = "accept_in_cohort" if str(rec.get("proposal_id") or "") in known else "legacy_accept"
+            bucket[key] += 1
     return summary

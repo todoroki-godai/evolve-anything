@@ -304,9 +304,11 @@ def test_summarize_by_detector_counts_decisions(isolated):
 
     assert summary["testpaths_coverage"] == {
         "surfaced": 0, "accept": 2, "reject": 1, "deferred": 0,
+        "accept_in_cohort": 0, "legacy_accept": 2,
     }
     assert summary["invalid_frontmatter"] == {
         "surfaced": 0, "accept": 1, "reject": 0, "deferred": 0,
+        "accept_in_cohort": 0, "legacy_accept": 1,
     }
 
 

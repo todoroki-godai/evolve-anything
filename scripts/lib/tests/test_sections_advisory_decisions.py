@@ -92,6 +92,34 @@ def test_section_shows_dashed_rate_for_legacy_accept_without_surfaced(isolated, 
     assert "| invalid_frontmatter | 0 | 1 | 0 | 0 | - |" in lines
 
 
+def test_rate_excludes_accepts_recorded_before_surfaced_existed(isolated, tmp_path):
+    """移行期間: surfaced 記録開始**前**の accept を分子に混ぜると採用率が 100% を超える。
+
+    surfaced=1 に対し legacy accept が 2 件あっても採用率は 0%（cohort 内 accept ゼロ）で、
+    除外した件数は注記として surface する。
+    """
+    slug = resolve_slug(tmp_path)
+    _record(slug, "invalid_frontmatter", "accept", "legacy_1")
+    _record(slug, "invalid_frontmatter", "accept", "legacy_2")
+    _record(slug, "invalid_frontmatter", "surfaced", "adv_new")
+
+    lines = build_advisory_decisions_section(tmp_path)
+
+    assert "| invalid_frontmatter | 1 | 2 | 0 | 0 | 0% |" in lines
+    assert any("surfaced 記録開始前の accept が 2 件" in line for line in lines)
+
+
+def test_rate_counts_accept_that_has_surfaced(isolated, tmp_path):
+    """cohort 内（surfaced 記録がある提案）の accept は分子に入る。"""
+    slug = resolve_slug(tmp_path)
+    _record(slug, "invalid_frontmatter", "surfaced", "adv_1")
+    _record(slug, "invalid_frontmatter", "accept", "adv_1")
+
+    lines = build_advisory_decisions_section(tmp_path)
+
+    assert "| invalid_frontmatter | 1 | 1 | 0 | 0 | 100% |" in lines
+
+
 def test_section_ignores_other_projects(isolated, tmp_path):
     _record("some-other-pj", "invalid_frontmatter", "accept", "adv_1")
 

@@ -39,9 +39,10 @@ def _render(data: Dict[str, Any]) -> List[str]:
     lines = [
         f"ℹ advisory 提案の記録を {data['total']} 件保持（detector 別）",
         "",
-        "| detector | surfaced | accept | reject | deferred | 採用率 |",
+        "| detector | surfaced | accept | reject | ever deferred | 採用率 |",
         "|---|---:|---:|---:|---:|---:|",
     ]
+    legacy_total = 0
     for detector_id in sorted(summary):
         counts = summary[detector_id]
         surfaced = counts.get("surfaced", 0)
@@ -51,9 +52,24 @@ def _render(data: Dict[str, Any]) -> List[str]:
         # 採用率の分母は surfaced（提示された数）。accept/reject 判断された数ではない
         # （#267 実測: 従来は accept+reject を分母にしており、freeze 解除条件の
         # 「surfaced/accepted 集計」が成立していなかった）。
-        rate = f"{accept / surfaced:.0%}" if surfaced else "-"
+        # 分子は surfaced 記録がある提案の accept だけ（accept_in_cohort）。surfaced
+        # 記録開始前の accept を混ぜると採用率が 100% を超える（移行期間の嘘）。
+        in_cohort = counts.get("accept_in_cohort", accept)
+        legacy_total += counts.get("legacy_accept", 0)
+        rate = f"{in_cohort / surfaced:.0%}" if surfaced else "-"
         lines.append(
             f"| {detector_id} | {surfaced} | {accept} | {reject} | {deferred} | {rate} |"
+        )
+    # 「ever deferred」は現在の未判断数ではない: 一度 deferred になった提案が後日
+    # accept されても記録は残るので、accept と同時に立ちうる（非排他）。
+    lines.append("")
+    lines.append(
+        "※ `ever deferred` は「一度でも未判断で drain された」件数（現在の未判断数ではない・"
+        "accept と非排他）。採用率の分子は surfaced 記録がある提案の accept のみ。"
+    )
+    if legacy_total:
+        lines.append(
+            f"※ surfaced 記録開始前の accept が {legacy_total} 件あり、採用率の分子から除外している。"
         )
 
     zero = sorted(d for d, c in summary.items() if c.get("accept", 0) == 0)

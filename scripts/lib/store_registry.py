@@ -324,7 +324,8 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer_locus="batch",
         reader="audit の Advisory Decisions section（sections_advisory_decisions）が "
         "read_advisory_decisions / summarize_by_detector で detector 別 "
-        "surfaced/accept/reject/deferred を advisory surface。",
+        "surfaced/accept/reject/deferred を advisory surface。加えて fleet/queue_verify.py が "
+        "read_advisory_decisions で accept の verify 待ち（exposure セッション数）を算出する。",
         retention="permanent",
         classification="workflow_state",
         note="#284（#267 Sprint 1）: advisory detector を emit→drain の decision lane に "
