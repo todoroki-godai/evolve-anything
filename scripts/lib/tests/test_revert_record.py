@@ -404,6 +404,32 @@ def test_ingest_accept_carries_revert_fields_into_history(project_repo, monkeypa
     )
 
 
+def test_ingest_accept_carries_after_sha_into_history(project_repo, monkeypatch, tmp_path):
+    """#402 段階3: apply engine の3分岐判定（== after_sha / == before_sha / conflict）に
+    ``after_sha`` が要る。PR-1 は ``before_sha``（decompress 可能）しか運ばず accept
+    entry に after 内容の sha を永続化していなかった schema gap を埋める（段階3追加）。
+    """
+    repo, skill = project_repo
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
+    result = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill), "pattern": "p"}
+        ]}}
+    }
+    out = ed.emit_decisions(result, dry_run=False, slug="proj")
+    pid = out["pending"][0]["id"]
+    after_content = "# my-skill\n\n改善。\n"
+    skill.write_text(after_content, encoding="utf-8")
+
+    hist = tmp_path / "hist.jsonl"
+    ed.ingest_decisions("proj", accepted={pid}, dry_run=False, history_file=hist)
+
+    recs = [json.loads(l) for l in hist.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(recs) == 1
+    assert recs[0]["after_sha"] == ids._sha256(after_content)
+
+
 def test_ingest_reject_does_not_carry_revert_body(project_repo, monkeypatch, tmp_path):
     """決定2: reject/skip の本文は queue purge とともに捨てる（恒久保存しない）。"""
     repo, skill = project_repo

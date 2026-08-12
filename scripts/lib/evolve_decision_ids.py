@@ -248,6 +248,13 @@ REVERT_FIELD_KEYS: Tuple[str, ...] = (
     "scope",
     "worktree_root",
     "resolved_path",
+    # #402 段階3 追加: apply engine の3分岐判定（== after_sha / == before_sha / conflict）
+    # に必須（design_402_pr2_v2.md §2 手順3・決定6）。PR-1 は before_sha（revert_before_b64
+    # を decompress+sha256 すれば復元可能）しか運ばず、after 内容の sha を永続化していな
+    # かった schema gap（drain 時にローカル変数として計算はしているが entry へ渡していな
+    # かった・``evolve_decisions/_ingest.py`` 参照）。純加算契約（既存 entry キーと非衝突）
+    # は他の revert フィールドと同型。
+    "after_sha",
 )
 
 
