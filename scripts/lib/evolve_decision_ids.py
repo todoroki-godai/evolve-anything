@@ -412,6 +412,18 @@ def _revert_generation_for_target(
     return generation
 
 
+def _revert_event_id(entry_id: str) -> str:
+    """revert イベントの deterministic ID（#402 決定6 の冪等再実行判定キー・段階3）。
+
+    accept 済み optimize_history レコードの一意 ``id``（``_decision_event_id`` 由来。
+    revert_generation を含むため同一内容の accept→revert→再accept サイクルでも
+    衝突しない）だけから決定論的に導出する。同じ entry を複数回 revert しようとしても
+    （中断からの再試行・手動で before 内容へ戻した後の再実行）常に同じ ID になるため、
+    履歴にこの ID を持つイベントが既にあるかどうかで完全冪等判定ができる（S7）。
+    """
+    return "evrevert_" + hashlib.sha1(entry_id.encode("utf-8")).hexdigest()[:12]
+
+
 def _generation_of(entry: Dict[str, Any]) -> int:
     """entry の ``revert_generation``（未設定は 0 として扱う・decision4 の互換規約）。"""
     value = entry.get("revert_generation")
