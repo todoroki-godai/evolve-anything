@@ -10,11 +10,14 @@ module 定数を持たない純関数だけを置く（`evolve_decisions` 側の
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import os
 import subprocess
 import uuid
+import zlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def _sha256(text: str) -> str:
@@ -147,8 +150,10 @@ def is_orphaned_worktree(entry: Dict[str, Any]) -> bool:
     return not Path(root).is_dir()
 
 
-def _decision_event_id(proposal_id: str, kind: str, after_content: str) -> str:
-    """**判断イベント**の identity = (提案, 判断種別, 判断時点の内容)（#290）。
+def _decision_event_id(
+    proposal_id: str, kind: str, after_content: str, revert_generation: int = 0
+) -> str:
+    """**判断イベント**の identity = (提案, 判断種別, 判断時点の内容, revert 世代)（#290, #402 決定4）。
 
     ``record_evolve_diff_decision`` の冪等 dedup キー。提案 ID と分離することで、
 
@@ -157,8 +162,18 @@ def _decision_event_id(proposal_id: str, kind: str, after_content: str) -> str:
 
     の両方が成り立つ。提案 ID 側の identity 設計を変えても、この分離がある限り
     判断イベントの冪等性は巻き添えにならない。
+
+    ``revert_generation``（#402 決定4 Must2 のバージョン互換規約）: A→B accept → B→A
+    revert → 再び同じ A→B accept という循環では after_content だけでは同一キーになり
+    2 回目の accept が dedup で消える（#286 の再発）。世代成分を足せば別キーになるが、
+    **``revert_generation == 0``（または未設定）のときは現行式と bit 同一の ID を返す**
+    ――拡張前に作られた pending / result JSON を拡張後のコードで再 drain しても、記録済み
+    accept が別 ID になって二重記録されない（#279 の N 重記録が version 境界で再発しない）。
     """
-    return f"{proposal_id}_{kind}_{_sha256(after_content)[:12]}"
+    base = f"{proposal_id}_{kind}_{_sha256(after_content)[:12]}"
+    if not revert_generation:
+        return base
+    return f"{base}_rg{revert_generation}"
 
 
 def _tracked_path(entry: Dict[str, Any]) -> Optional[str]:
@@ -194,3 +209,236 @@ def _entry_generation(entry: Dict[str, Any]) -> tuple:
     purge すると新世代を巻き込むので、世代一致するものだけを消す。
     """
     return (entry.get("run_id"), entry.get("id"), entry.get("before_sha"))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #402 PR-1: revert 用「記録拡張」（決定1/2/4/5/8）。
+# 実際の復元・戦果ボード導線（decision3/6/7）は PR-2 の対象で、ここには含めない。
+# ═══════════════════════════════════════════════════════════════════════════
+
+REVERT_SCHEMA_VERSION = 1
+REVERT_ENCODING = "zlib+base64"
+
+# 決定2 Should3: result JSON（run ごとに全候補の本文を載せる）に埋め込む**圧縮本文
+# （zlib bytes・base64 化前）**の1候補あたりの上限。実測（#402 PR-1・本リポジトリの
+# SKILL.md n=23）: 圧縮後 平均 6.17 KB / 最大 20.28 KB（raw 平均 10.9 KB / 最大 39.7 KB）。
+# round2 codex レビューで実測: `~/.claude/skills/*/SKILL.md` 106件中 base64 化後の最大
+# 63,272 bytes（当時の上限=base64 後 65,536 と比較すると余裕 3.5%しかなく境界に接して
+# いた）。**比較は zlib 圧縮直後のバイト長で行う**（base64 は 4/3 に膨張するため、
+# base64 後の文字数で比較すると実効の zlib 上限が名目の 3/4＝約48 KiB に縮む食い違いが
+# あった・round2 Should）。64 KiB は zlib 圧縮バイト数の上限（base64 化後は概ね
+# 4/3 倍＝約87 KiB まで許容）。
+REVERT_BEFORE_MAX_COMPRESSED_BYTES = 64 * 1024
+
+REVERT_REASON_BEFORE_TOO_LARGE = "before_too_large"
+
+# 決定2: 恒久保存は accept された entry のみへ純加算するフィールドの許可リスト（単一
+# ソース）。``evolve_decisions._ingest``（pending → recorder への受け渡し）と
+# ``fitness_evolution.record_evolve_diff_decision``（recorder 自身の受け口）の両方が
+# この tuple を共有する。2箇所が別々に同じキー集合を書くと片方だけ更新されて desync
+# する（pitfall_copied_parse_convention_partial_fix と同型）ため、単一ソースに集約する。
+REVERT_FIELD_KEYS: Tuple[str, ...] = (
+    "revert_before_b64",
+    "revert_schema_version",
+    "revert_encoding",
+    "revert_generation",
+    "revert_unavailable_reason",
+    "repo_id",
+    "relative_path",
+    "scope",
+    "worktree_root",
+    "resolved_path",
+)
+
+
+def _compress_before_content(text: str) -> str:
+    """決定1: before 全文を zlib 圧縮 + base64 化する（diff でなく全文保存を選んだ理由は
+    design_402_v6.md 決定1）。"""
+    return base64.b64encode(zlib.compress(text.encode("utf-8"))).decode("ascii")
+
+
+def _decompress_before_content(b64: str) -> str:
+    """``_compress_before_content`` の逆変換。
+
+    完了条件(a) の復旧導線（CHANGELOG のワンライナー）が使うのと同じ変換で、標準
+    ライブラリの ``zlib.decompress(base64.b64decode(b64))`` と等価（プロジェクトコード
+    無しでも手動 decode できることの根拠）。
+    """
+    return zlib.decompress(base64.b64decode(b64.encode("ascii"))).decode("utf-8")
+
+
+def _compress_before_for_revert(
+    text: str, max_bytes: Optional[int] = None
+) -> Tuple[Optional[str], Optional[str]]:
+    """決定2 Should3: 圧縮後サイズが上限を超えたら本文を落とし理由コードを返す。
+
+    比較は **zlib 圧縮直後のバイト長**（base64 化前）で行い、通過したものだけ base64
+    化する。base64 化後の文字数で比較すると 4/3 倍の膨張分だけ実効上限が縮む食い違いが
+    生じる（round2 codex レビュー Should）。
+
+    ``max_bytes`` 未指定時は呼び出し時点の ``REVERT_BEFORE_MAX_COMPRESSED_BYTES`` を読む
+    （デフォルト引数の def 時点固定を避ける。monkeypatch でのテスト差し替えに追従する
+    ため）。
+
+    Returns:
+        (revert_before_b64, revert_unavailable_reason) — 上限内なら (b64, None)、
+        超過なら (None, REVERT_REASON_BEFORE_TOO_LARGE)。
+    """
+    if max_bytes is None:
+        max_bytes = REVERT_BEFORE_MAX_COMPRESSED_BYTES
+    compressed = zlib.compress(text.encode("utf-8"))
+    if len(compressed) > max_bytes:
+        return None, REVERT_REASON_BEFORE_TOO_LARGE
+    return base64.b64encode(compressed).decode("ascii"), None
+
+
+def _global_skills_root() -> Path:
+    """global skill の正準 root。``skill_origin.classify_skill_origin`` と同一ソース
+    （#402 決定5）。"""
+    return Path.home() / ".claude" / "skills"
+
+
+def _lexical_absolute(path: Any) -> str:
+    """symlink を辿らず絶対化する（``Path.resolve()`` は symlink を辿ってしまうため
+    scope 判定には使えない・round2 codex レビュー Must）。
+
+    ``os.path.abspath`` は内部で ``os.path.normpath`` を呼ぶため、``..``/``.`` は
+    ファイルシステムに触れずに字句的に正規化される。これにより ``..`` を使って
+    global root の外へ抜けようとする経路も、正規化後の絶対パスが root 配下に無ければ
+    ``_path_scope_identity`` の ``relative_to`` が ``ValueError`` になり global 対象外
+    として拒否される。
+    """
+    return os.path.abspath(os.path.expanduser(str(path)))
+
+
+def _path_scope_identity(path: str) -> Dict[str, Optional[str]]:
+    """revert の path 契約（#402 決定5）: scope（project/global）+ repo_id/relative_path/
+    worktree_root + emit 時 resolved 絶対パスを返す。
+
+    - ``project``: git repo 内 → repo root 相対パス（``_repo_identity`` と同じ解決）
+    - ``global``: 正準 global skills root（``~/.claude/skills``）配下 → root 相対パス
+      （``~/.claude`` は git 管理外なので git 非依存で判定する）
+    - どちらでもない: ``scope=None``（apply/revert の対象外。判定不能ではなく「対象外」）
+
+    **scope/relative_path の判定は symlink を辿らない字句的な絶対パス
+    （``_lexical_absolute``）で行う**（round2 codex レビュー Must）。``resolve()`` 後の
+    パスで判定すると、global root 配下の symlink（実体が git 管理外の別ディレクトリを
+    指す。例: ``~/.claude/skills/agent-browser -> ~/.agents/skills/agent-browser``）が
+    symlink の実体側で判定されて ``scope=None``・``relative_path`` に絶対パスが入る
+    誤りが実環境（``~/.claude/skills`` 配下の symlink 7件）で実測された。global 判定に
+    該当しない場合だけ ``_repo_identity``（git 経由・symlink 実体の repo を見る）へ進む。
+
+    symlink の実体が global root 外であることの拒否・regular-file 判定・解決後
+    containment の検証は **設計どおり PR-2 の apply 側**で行う（決定6）。この PR
+    （記録拡張のみ）では行わない。
+
+    ``_repo_identity``（提案 identity 用）とは独立の関数。提案 ID の計算式には影響しない
+    （decision5 のフィールドは entry への純加算）。**resolved_path は表示・診断専用**
+    （apply の解決には使わない・決定5。symlink を辿った実体を保持する）。
+    """
+    p = Path(path).expanduser()
+    resolved = str(p.resolve())
+
+    lexical = _lexical_absolute(p)
+    global_root_lexical = _lexical_absolute(_global_skills_root())
+    try:
+        rel_to_global = Path(lexical).relative_to(global_root_lexical)
+    except ValueError:
+        rel_to_global = None
+    if rel_to_global is not None:
+        return {
+            "scope": "global",
+            "repo_id": None,
+            "relative_path": str(rel_to_global),
+            "worktree_root": None,
+            "resolved_path": resolved,
+        }
+
+    identity = _repo_identity(path)
+    if identity.get("repo_id"):
+        return {
+            "scope": "project",
+            "repo_id": identity["repo_id"],
+            "relative_path": identity["relative_path"],
+            "worktree_root": identity["worktree_root"],
+            "resolved_path": resolved,
+        }
+
+    return {
+        "scope": None,
+        "repo_id": None,
+        "relative_path": identity["relative_path"],
+        "worktree_root": None,
+        "resolved_path": resolved,
+    }
+
+
+def _revert_generation_for_target(
+    history: List[Dict[str, Any]],
+    scope: Optional[str],
+    repo_id: Optional[str],
+    relative_path: Optional[str],
+) -> int:
+    """対象（scope, repo_id, relative_path）の現在の revert 世代（#402 決定4）。
+
+    optimize_history の revert イベント（``event_type == "revert"``・PR-2 で追加）から
+    対象に一致する最新の ``revert_generation`` を読む。一致するイベントが無ければ 0
+    （旧 entry / revert 未経験の対象と同じ扱い＝``_decision_event_id`` の ID 互換規約と
+    噛み合う）。PR-1 時点では revert イベントの writer が存在しないため、実運用では
+    常に 0 を返す（PR-2 で writer が入ってから非ゼロが現れる）。
+    """
+    if relative_path is None:
+        return 0
+    generation = 0
+    for rec in history:
+        if rec.get("event_type") != "revert":
+            continue
+        if (
+            rec.get("scope") != scope
+            or rec.get("repo_id") != repo_id
+            or rec.get("relative_path") != relative_path
+        ):
+            continue
+        candidate = rec.get("revert_generation")
+        if isinstance(candidate, int) and candidate > generation:
+            generation = candidate
+    return generation
+
+
+def _generation_of(entry: Dict[str, Any]) -> int:
+    """entry の ``revert_generation``（未設定は 0 として扱う・decision4 の互換規約）。"""
+    value = entry.get("revert_generation")
+    return value if isinstance(value, int) else 0
+
+
+def _filter_monotonic_pending(
+    existing: List[Dict[str, Any]], pending: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], int]:
+    """#402 決定8 round4: monotonic supersede ガード。
+
+    同一対象パスについて、新規 pending の generation が既存より小さければ**公開せずに
+    捨てる**（emit の公開順序が入れ替わり、新しい世代が古い世代の pending に消される
+    事故を防ぐ）。``existing`` は「今そのパスに公開されている」entries（queue の現行
+    queue 全体 / marker の現行 runs 群）。
+
+    Returns:
+        (公開してよい pending, 捨てた件数)
+    """
+    existing_gen_by_path: Dict[str, int] = {}
+    for e in existing:
+        path = _tracked_path(e)
+        if not path:
+            continue
+        gen = _generation_of(e)
+        if path not in existing_gen_by_path or gen > existing_gen_by_path[path]:
+            existing_gen_by_path[path] = gen
+
+    kept: List[Dict[str, Any]] = []
+    discarded = 0
+    for entry in pending:
+        path = _tracked_path(entry)
+        if path and _generation_of(entry) < existing_gen_by_path.get(path, -1):
+            discarded += 1
+            continue
+        kept.append(entry)
+    return kept, discarded

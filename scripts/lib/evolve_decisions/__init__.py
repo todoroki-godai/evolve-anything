@@ -76,6 +76,25 @@ from evolve_decision_ids import (  # noqa: E402,F401
     is_orphaned_worktree,
 )
 
+# #402 PR-1: revert 用「記録拡張」の識別/圧縮 helper（決定1/2/4/5/8）。名前を re-export し
+# 他 sub-module・テストから `evolve_decisions.X` で参照できるようにする。
+from evolve_decision_ids import (  # noqa: E402,F401
+    REVERT_BEFORE_MAX_COMPRESSED_BYTES,
+    REVERT_ENCODING,
+    REVERT_FIELD_KEYS,
+    REVERT_REASON_BEFORE_TOO_LARGE,
+    REVERT_SCHEMA_VERSION,
+    _compress_before_content,
+    _compress_before_for_revert,
+    _decompress_before_content,
+    _filter_monotonic_pending,
+    _generation_of,
+    _global_skills_root,
+    _lexical_absolute,
+    _path_scope_identity,
+    _revert_generation_for_target,
+)
+
 DATA_DIR = _store.DATA_DIR
 QUEUE_ROOT = DATA_DIR / "evolve_decisions"
 
