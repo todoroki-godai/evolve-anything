@@ -1,8 +1,9 @@
 """calibration drift observability builder のテスト（#286・決定論）。
 
 accept/reject 履歴の有無・件数・相関 drift で section が
-None / データ不足 / ✓ / ⚠ を返すことを検証する。load_history と
-analyze_correlations を monkeypatch し、builder のルーティングのみを検証する。
+None / データ不足 / ✓ / ⚠ を返すことを検証する。load_effective_history（#402 段階4:
+calibration は revert 反映済みの effective view を読む）と analyze_correlations を
+monkeypatch し、builder のルーティングのみを検証する。
 """
 import sys
 from pathlib import Path
@@ -32,13 +33,13 @@ def _records(n: int):
 
 def test_none_when_no_history(monkeypatch, tmp_path):
     """accept/reject 履歴が無ければ対象外（None）。"""
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: [])
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: [])
     assert build_calibration_drift_section(tmp_path) is None
 
 
 def test_data_insufficient_line(monkeypatch, tmp_path):
     """30 件未満なら『データ不足 N/30』を評価済として残す。"""
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(10))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(10))
     section = build_calibration_drift_section(tmp_path)
     combined = "\n".join(section)
     assert "Fitness Calibration Drift" in combined
@@ -52,7 +53,7 @@ def test_data_insufficient_structural_caveat(monkeypatch, tmp_path):
     fitness_evolution の next_action（「fitness は使わない設計。対応不要」）と
     calibration_drift の「あと N 件」が同一 run で矛盾していた問題を解消する。
     """
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(2))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(2))
     section = build_calibration_drift_section(tmp_path)
     combined = "\n".join(section)
     assert "データ不足 2/30" in combined
@@ -71,7 +72,7 @@ def test_bootstrap_structural_caveat(monkeypatch, tmp_path):
     skill_evolve 未採点 PJ では optimize/evolve-loop 由来の少数 accept/reject が
     history に残ると bootstrap 経路に入り、従来は「あと N 件」が出ていた。
     """
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(10))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(10))
     section = build_calibration_drift_section(tmp_path)
     combined = "\n".join(section)
     assert "データ不足 10/30" in combined
@@ -88,7 +89,7 @@ def test_count_when_not_structural(monkeypatch, tmp_path):
     run_fitness_evolution の status が insufficient_data でも bootstrap でもない（例外的に
     structural_reason を持たない他ステータス）場合は構造シグナル無しと見なし件数を残す。
     """
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(10))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(10))
     monkeypatch.setattr(
         fitness_evolution,
         "run_fitness_evolution",
@@ -103,7 +104,7 @@ def test_count_when_not_structural(monkeypatch, tmp_path):
 
 def test_clean_when_no_drift(monkeypatch, tmp_path):
     """十分なデータで drift（warning）が無ければ ✓ 行を残す。"""
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(30))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(30))
     monkeypatch.setattr(
         fitness_evolution,
         "analyze_correlations",
@@ -117,7 +118,7 @@ def test_clean_when_no_drift(monkeypatch, tmp_path):
 
 def test_warn_when_drift(monkeypatch, tmp_path):
     """相関低下（warning あり）の fitness_func を ⚠ で advisory 提示する。"""
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(30))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(30))
     monkeypatch.setattr(
         fitness_evolution,
         "analyze_correlations",
@@ -146,18 +147,18 @@ def test_registered_in_observability_contract():
     assert "calibration_drift" in keys
 
 
-# --- #400 codex レビュー是正: project_dir が load_history/run_fitness_evolution に
-# 貫通すること（従来は受け取った project_dir を無視して cwd フォールバックに落ちていた）。
+# --- #400 codex レビュー是正: project_dir が load_effective_history/run_fitness_evolution
+# に貫通すること（従来は受け取った project_dir を無視して cwd フォールバックに落ちていた）。
 
-def test_project_dir_threaded_into_load_history(monkeypatch, tmp_path):
+def test_project_dir_threaded_into_load_effective_history(monkeypatch, tmp_path):
     received = {}
 
-    def _fake_load_history(*a, **k):
+    def _fake_load_effective_history(*a, **k):
         received["kwargs"] = k
         received["args"] = a
         return []
 
-    monkeypatch.setattr(fitness_evolution, "load_history", _fake_load_history)
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", _fake_load_effective_history)
     build_calibration_drift_section(tmp_path)
 
     assert received["kwargs"].get("project_dir") == tmp_path
@@ -172,7 +173,7 @@ def test_project_dir_threaded_into_run_fitness_evolution(monkeypatch, tmp_path):
         received["args"] = a
         return {"status": "insufficient_data", "structural_reason": True}
 
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(2))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(2))
     monkeypatch.setattr(fitness_evolution, "run_fitness_evolution", _fake_run_fitness_evolution)
     build_calibration_drift_section(tmp_path)
 

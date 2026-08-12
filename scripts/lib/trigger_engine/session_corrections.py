@@ -50,7 +50,8 @@ def _detect_calibration_drift() -> list[str] | None:
         except Exception:
             return None
     try:
-        history = fitness_evolution.load_history()
+        # #402 段階4 §1: calibration（drift 判定）は revert 反映済みの effective view を使う。
+        history = fitness_evolution.load_effective_history()
         drift = fitness_evolution.detect_drifted_funcs(history)
     except Exception:
         return None

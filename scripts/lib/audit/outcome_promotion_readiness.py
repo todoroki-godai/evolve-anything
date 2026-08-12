@@ -269,14 +269,22 @@ def _load_apply_anchors(base: Path) -> Dict[str, List[str]]:
     フルパス痕跡 stem が混じると幻PJ として cross-PJ anchor 統計を汚す。読み取り時にも
     ``_normalize_pj``（= corrections/sessions の PJ キー正規化と同一関数）で stem を畳んで
     二重防御する。clean な slug は normalize しても同値なので無害。
+
+    #402 段階4 §1(S5): 本関数は任意 root を全 slug glob する独自実装で
+    ``load_effective_history(slug)`` への単純置換にはならない（新しい「任意 root を
+    受ける effective reader」は新設しない・S5 の裁定）。代わりに fold ロジック本体
+    （``optimize_history_store.fold_effective`` の純粋関数）をファイル単位で適用し、
+    revert 済み accept が方向判定（条件3）の anchor に残らないようにする。
     """
     hist_dir = base / "optimize_history"
     if not hist_dir.is_dir():
         return {}
+    from optimize_history_store import fold_effective
+
     anchors: Dict[str, List[str]] = {}
     for path in sorted(hist_dir.glob("*.jsonl")):
         slug = _om._normalize_pj(path.stem) or path.stem
-        for rec in _om._read_jsonl(path):
+        for rec in fold_effective(_om._read_jsonl(path)):
             if rec.get("human_accepted") is True:
                 ts = _om._ts_of(rec, "timestamp")
                 if ts:

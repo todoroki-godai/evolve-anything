@@ -338,7 +338,8 @@ class TestRunProposeBatch:
         assert out[0]["status"] == "error"
 
     def test_filters_rejected_candidates_using_history_from_optimize_history(self, tmp_path, monkeypatch):
-        """デフォルト（history 未注入）は optimize_history_store.load_history を通す。"""
+        """デフォルト（history 未注入）は optimize_history_store.load_effective_history を通す
+        （#402 段階4）。"""
         import optimize_history_store as ohs
 
         monkeypatch.setattr(ohs, "DATA_DIR", tmp_path / "data")

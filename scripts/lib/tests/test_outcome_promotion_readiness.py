@@ -1092,6 +1092,36 @@ class TestApplyAnchorNormalization:
         # 少なくとも例外なく読め、何らかのキーで拾える（回帰防止）。
         assert anchors  # 空でない
 
+    def test_reverted_accept_excluded_from_anchors(self, tmp_path, monkeypatch):
+        """#402 段階4 §1(S5): fold_effective(records) を適用し、revert 済み accept は
+        apply イベント anchor（条件3の方向判定）から除外する。任意 root を glob する
+        独自実装のため load_effective_history(slug) には置換できないが、fold ロジック
+        （純粋関数）は同じものを使う——新しい「任意 root を受ける effective reader」は
+        新設しない。"""
+        monkeypatch.setattr(opr, "DATA_DIR", tmp_path)
+        now = _now()
+        hist = tmp_path / "optimize_history"
+        hist.mkdir(parents=True, exist_ok=True)
+        (hist / "proj.jsonl").write_text(
+            "".join(
+                json.dumps(r) + "\n"
+                for r in [
+                    {"id": "e1", "human_accepted": True, "timestamp": _iso(now)},
+                    {
+                        "event_type": "revert", "reverted_entry_id": "e1",
+                        "revert_event_id": "rev1", "revert_generation": 1,
+                        "scope": "project", "repo_id": "r", "relative_path": "p",
+                    },
+                    {"id": "e2", "human_accepted": True, "timestamp": _iso(now)},
+                ]
+            )
+        )
+
+        anchors = opr._load_apply_anchors(tmp_path)
+
+        # e1 の revert 済み accept は畳まれ、e2 の1件分の timestamp だけが残る。
+        assert anchors["proj"] == [_iso(now)]
+
 
 class TestDetectWorktreeNameSlugs:
     """#24: optimize_history に worktree ディレクトリ名 stem の slug ファイルが混じったら

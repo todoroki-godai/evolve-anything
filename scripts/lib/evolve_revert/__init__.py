@@ -16,6 +16,7 @@
 | `_apply.py` | apply engine 本体: entry 検索 → 対象解決 → 3分岐（正常系/冪等/conflict）→ 復元 → 再検証 → revert イベント追記（§2 手順3-5） |
 | `_dump.py` | `--dump-before`（atomic no-clobber publish・§2 手順3） |
 | `_render.py` | 利用者に見えるメッセージの生成（conflict 次アクション・hardlink 拒否・メタデータ拒否・diff 向きラベル・N1 の apply 完了メッセージ） |
+| `_availability.py` | 段階4: board 表示用の listing 時点 revert 可否判定（§3・理由コード3種 + 日本語ラベル） |
 
 決定論・LLM 非依存。
 """
@@ -50,3 +51,10 @@ from ._render import (  # noqa: E402,F401
 )
 from ._dump import DumpResult, dump_before  # noqa: E402,F401
 from ._apply import ApplyResult, apply_revert  # noqa: E402,F401
+from ._availability import (  # noqa: E402,F401
+    REASON_BEFORE_TOO_LARGE,
+    REASON_LABELS,
+    REASON_LANE_UNSUPPORTED,
+    REASON_PRE_EXTENSION,
+    compute_revert_availability,
+)

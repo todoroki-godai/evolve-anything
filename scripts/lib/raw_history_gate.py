@@ -1,4 +1,7 @@
-"""raw_history_gate.py — optimize_history_store の raw read allowlist gate（#402 PR-2 段階2 §5）。
+"""raw_history_gate.py — optimize_history_store の raw read allowlist gate（#402 PR-2 §5）。
+
+checker 本体は段階2 で実装、production tree への実際の gate 有効化は段階4（本ファイル末尾の
+``PRODUCTION_ALLOWLIST`` + ``tests/test_raw_history_gate_production.py``）。
 
 決定論・LLM 非依存。`optimize_history_store.load_history` / `load_raw_history`（raw view）を
 呼んでよい箇所を**閉じた許可リスト**として固定し、それ以外の production 呼び出しを一律
@@ -20,13 +23,15 @@ violation として検出する。新規コードは既定で `load_effective_hi
     関数外のモジュールレベル呼び出しは `<module>`）。
   - **allowlist entry が消失した場合も fail** させる（`stale_allowlist`）。古い許可が
     野放しにならないように、実際に対応する呼び出しが無くなった entry も violation 扱いにする。
-  - **段階2 のスコープ**: checker 本体 + 期待違反 fixture のテストまで。production ツリー
-    全体（本リポジトリの `scripts/lib` / `skills/*/scripts`）へ実際に gate を有効化するのは
-    reader migration（`results_board` / `fleet/queue_verify` / `fleet/propose` /
-    `aggregate_runs` 等）が完了する段階4。それまでは既存 reader が raw のままなので
-    allowlist 未整備で必ず落ちる。本モジュールは repo_root / allowlist を引数で受け取る
-    汎用関数として実装し、production tree への適用はしない（デフォルト allowlist も
-    ここでは持たない — 段階4 の wiring 側で定義する）。
+  - **段階4 で production gate を有効化**: reader migration（`results_board` /
+    `fleet/queue_verify` / `fleet/propose` / `aggregate_runs` 等）が完了した時点で、
+    本モジュールが持つ `PRODUCTION_ALLOWLIST`（下記）を使い実 repo_root への適用を
+    契約テスト化する（`tests/test_raw_history_gate_production.py`）。allowlist は
+    production 側の本モジュールに置く——テスト側に置くと「どの raw 呼び出しが意図的か」
+    という設計判断がテストコードに埋もれ、他の production コード（将来 CI script 等）が
+    同じ判断基準を再利用できない。`store_registry.py` の `status`（active/legacy/dead）や
+    `shrink_freeze.CULLED_OBSERVABILITY_SECTIONS` と同様、「意図的な例外」の SoT は
+    production 側の定数に置く既存パターンに揃える。
   - **AST の限界**: 任意の `_read_jsonl()` / `Path.read_text()` が「raw history 読取」かは
     AST では判定できない。`outcome_promotion_readiness` の glob 直読み等の既知の history
     direct reader は本 gate の対象外（別の明示的な契約テスト / 棚卸し対象・段階4）。
@@ -36,7 +41,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 # 判定対象モジュールと関数名（optimize_history_store の raw view API）。
 _TARGET_MODULE = "optimize_history_store"
@@ -45,6 +50,25 @@ _TARGET_MODULE = "optimize_history_store"
 # 「新規 reader が allowlist 未整備のまま素通りする」という §5 の S2 が防ごうとした失敗
 # モードを、追加した当の PR 自身が再生産することになる。
 _TARGET_FUNCS = ("load_history", "load_raw_history", "load_raw_history_with_aliases")
+
+# 段階4: production tree で raw read を許可する閉じた許可リスト（設計正典 §5・§1）。
+# 3件のみ——いずれも「revert 自体の実装」または「generation スナップショット」で raw が
+# 正しい（業務判断の母集団ではない）。新規 raw reader を追加したら、上の
+# ``_TARGET_FUNCS`` と同様に**ここにも明示的に追加する**（さもないと allowlist 未整備の
+# まま fail するので黙って素通りはしない——stale_allowlist と対称に、未許可の新規呼出しは
+# 必ず検出される）。
+PRODUCTION_ALLOWLIST: Tuple[str, ...] = (
+    # emit 時の generation スナップショット（決定8）。revert の中間状態を観測しない
+    # ための raw 読み——業務判断（accept/reject の母集団）ではない。
+    "scripts/lib/evolve_decisions/_emit.py:_read_disk_and_history",
+    # apply engine 本体: 冪等パス（== before_sha）で revert_event_id の重複記録を防ぐ
+    # ための raw 読み（M-A）。revert 済み entry は load_effective_history から除外される
+    # ため、この判定には raw が必須。
+    "scripts/lib/evolve_revert/_apply.py:apply_revert._do",
+    # entry 検索（§2 手順1）。旧 slug にしか無い entry_id・revert 済み entry の再検索
+    # （冪等パス）に raw が必要（M-A）。
+    "scripts/lib/evolve_revert/_entry.py:find_entry",
+)
 
 
 def _iter_py_files(repo_root: Path) -> List[Path]:

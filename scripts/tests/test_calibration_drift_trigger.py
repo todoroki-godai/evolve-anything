@@ -34,7 +34,7 @@ def _records(n: int, accepted: bool = True):
 
 def test_detect_returns_funcs_when_drift(monkeypatch):
     """30件以上 かつ drift で func 名リストを返す。"""
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(30))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(30))
     monkeypatch.setattr(
         fitness_evolution,
         "detect_drifted_funcs",
@@ -46,7 +46,7 @@ def test_detect_returns_funcs_when_drift(monkeypatch):
 
 def test_detect_none_when_insufficient(monkeypatch):
     """30件未満では None（発火しない）。"""
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(10))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(10))
     monkeypatch.setattr(
         fitness_evolution,
         "detect_drifted_funcs",
@@ -57,7 +57,7 @@ def test_detect_none_when_insufficient(monkeypatch):
 
 def test_detect_none_when_no_drift(monkeypatch):
     """十分なデータでも drift が無ければ None。"""
-    monkeypatch.setattr(fitness_evolution, "load_history", lambda *a, **k: _records(30))
+    monkeypatch.setattr(fitness_evolution, "load_effective_history", lambda *a, **k: _records(30))
     monkeypatch.setattr(
         fitness_evolution,
         "detect_drifted_funcs",
