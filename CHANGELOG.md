@@ -3,6 +3,57 @@
 ## [Unreleased]
 
 ### Added
+- **feat(revert): 採用パッチ revert 用の記録拡張（PR-1・#402）** — `evolve_decisions` の emit が
+  スキル diff 候補（discover の matched_skills / skill_evolve の high・medium。advisory は対象外）
+  の before 全文を `zlib` 圧縮 + base64 化した `revert_before_b64` を計算し、`revert_schema_version`
+  （現在 `1`）・`revert_encoding`（`"zlib+base64"`）・`revert_generation`（対象パスごとの revert
+  累積回数。PR-1 時点では revert writer が無いため常に `0`）・path 契約フィールド（`repo_id` /
+  `relative_path` / `scope`（`"project"`/`"global"`/`None`）/ `resolved_path`）とともに queue
+  （`evolve_decisions/<slug>.jsonl`）・marker（`--dry-run` 経路の result 同梱 pending も含む）へ
+  純加算した。drain（`ingest_decisions`）は accept された entry だけこれらのフィールドを
+  `optimize_history/<slug>.jsonl` の accept レコードへ運ぶ（reject/skip の本文は queue purge と
+  ともに捨てる）。判断イベント ID（`_decision_event_id`）は `revert_generation` を成分に加えたが、
+  `revert_generation == 0`（または未設定）のときは**拡張前と bit 同一の ID** を返す互換規約とし、
+  拡張前の pending / result JSON を拡張後のコードで再 drain しても記録済み accept が二重記録され
+  ない契約テストを追加した（#279 の N 重記録が version 境界で再発しない）。emit は同じ history
+  lock 内で「対象の disk 内容読み」と「generation 読み」の両方を行い、queue/marker への書込は
+  lock 解放後に行う。加えて **monotonic supersede ガード**（同一対象パスについて
+  `new.revert_generation < existing.revert_generation` の新規 pending は公開せず捨てる）を queue
+  と marker の両方に追加し、emit の queue 更新と marker 更新が独立 lock 区間であることに起因する
+  公開順序の逆転（古い世代の pending が新しい世代を消す事故）を遮断した（捨てた件数は
+  `emit_decisions` の返り値 `revert_generation_discarded` に残す。新しい observability section は
+  作らない）。
+
+  **完了条件(a) 復旧導線**: `revert_before_b64` は `zlib`+base64 なので `gunzip` では開けない。
+  手動 revert のための decode 手順を以下の通り明記する（`optimize_history/<slug>.jsonl` の
+  該当 `id` の accept 行から、プロジェクトコードを import せず標準ライブラリだけで復元できる）。
+
+  ```
+  python3 -c "
+  import json, base64, zlib, sys
+  jsonl_path, target_id, out_path = sys.argv[1:4]
+  rows = [json.loads(l) for l in open(jsonl_path, encoding='utf-8') if l.strip()]
+  row = next(r for r in rows if r.get('id') == target_id)
+  text = zlib.decompress(base64.b64decode(row['revert_before_b64'])).decode('utf-8')
+  open(out_path, 'w', encoding='utf-8').write(text)
+  " optimize_history/<slug>.jsonl <entry_id> /tmp/restored_SKILL.md
+  ```
+
+  復元先パスは accept 行の `relative_path`（`scope="project"` なら repo root 相対 / `"global"` なら
+  `~/.claude/skills` 相対）を人間が確認して手動でコピーする（**apply の自動化・conflict 検知・
+  atomic replace は PR-2 の `bin/evolve-revert`（決定6）の対象**であり、本 PR は記録拡張のみ）。
+
+  **完了条件(b) result JSON 肥大化**: 実測（このリポジトリの SKILL.md、`skills/*/SKILL.md`
+  n=23）— 圧縮後サイズは平均 6.17 KB・最大 20.28 KB（raw 平均 10.9 KB・最大 39.7 KB）。この
+  project の全候補が同時に1 run の result JSON に載る最悪ケースでも圧縮後 sum ≈ 142 KB。global
+  スキル（`skill_origin.classify_skill_origin` の `"global"` 分類・`~/.claude/skills` 配下）は
+  裾が重く raw 最大 180 KB（実測は decision1 時点）というアウトライヤーが存在するため、
+  **1候補あたりの上限方式**（`revert_before_b64` の圧縮後サイズが `REVERT_BEFORE_MAX_COMPRESSED_BYTES`
+  = 64 KiB を超えたら本文を載せず `revert_unavailable_reason="before_too_large"` のみを残す）を
+  採用した。queue と result JSON（`--dry-run` の `evolve_decisions.pending` 同梱）は同一 dict を
+  共有するため上限は両方に同時適用される（result JSON は `/tmp/rl_evolve_<slug>.json` へ都度上書き
+  で書かれ蓄積しないため、保持方針でなく上限方式のみで完結する）。
+
 - **feat(daily): SessionStart で改善案を AskUserQuestion 提示（#409）** — 毎朝の daily runner が新モジュール `daily/proposal_digest.py`（新しい group 化ロジックは発明せず既存 `correction_semantic.daily_review.build_review(dry_run=True)` の group をそのまま提示用に slim 化・read-only）で改善案 digest を生成し `evolve-queue.json` の新キー `proposals` へ埋め込む。同一テキストで繋がる group は連結成分（union-find）で global レーンへマージ（1 度答えたら他 PJ でも再提示されない）。SessionStart hook `restore_state._build_session_proposal_output`（純関数・checkpoint の `hookSpecificOutput` とマージしてから1回で出力）が既読ストア（`correction_review_seen.jsonl`）でフィルタ後の改善案を最大 `MAX_SESSION_PROPOSALS=2` 件、`systemMessage`（user 向け・代表テキストの可視化）+ `hookSpecificOutput.additionalContext`（Claude 向け・「最初の応答を終えた直後に必ず AskUserQuestion で y/n 提示せよ」）の2チャネル同時出力で回答コマンド付きで渡す（作業への割り込みなし・案が無い日は完全沈黙）。`reflect.py` に `--reject-weak`/`--pj`/`--project-path` を新設し、`--promote-weak` にも既読記録（`daily_review.record_reviewed`・実際に昇格できた key だけ）を追加して採用・却下どちらも次セッションで再提示されないようにした。
 
   外部レビュー（#412）で以下を是正した。**(1) 発火不能の解消**: additionalContext だけの旧文言「ユーザーの依頼が無いときだけ提示」はユーザーが何か打つまで評価されず永久に発火しなかった。systemMessage 同時出力 + 「最初の応答直後に必ず提示」への文言変更で解消。**(2) 単一 JSON 応答化**: SessionStart hook の stdout で `hookSpecificOutput` を含む行が checkpoint（sessionTitle）と改善案提示（additionalContext）の2行に分かれ、片方が黙って捨てられうる不具合を修正 — `_build_session_proposal_output` を print しない純関数化し `handle_session_start` が1つの dict にマージしてから1回だけ print する。**(3) global マージの連結成分化**: 旧実装は「消費前」distinct_slugs>=2 の判定だけで text ごとに独立判定していたため、チェーン（A-B が text1、B-C が text2 で一致）で B が text1 側に先に消費され、C 単独の group が誤って global 扱いされていた。union-find による連結成分マージに置き換え。**(4) global 提案の誤帰属修正**: global group は `keys_by_pj`（origin PJ ごとの signal_key）と `project_paths`（queue エントリの絶対パス）を保持し、`build_proposal_prompt` が origin PJ ごとに `--project-path`/`--pj` を明示したコマンド行を出す。`reflect.py` の `--project-path`（`--project-dir` とは独立）で `promote_signals(project_path=...)` を上書きし、他PJ由来の signal が現在 PJ の実績として誤帰属されないようにした。**(5) promote 失敗時の誤既読化防止**: `--promote-weak` が既読化するキーを `promote_signals` の戻り値 `promoted_keys`（実際に昇格できた key）だけに限定 — 従来は要求 key 全件を既読化していたため、日次スナップショットの stale・キー不在・TTL 失効等で promoted=0 でも既読化され、以後の digest から永久に外れる silent failure だった。**(6) evolve-queue.json の読み込み一元化**: `_deliver_evolve_queue_notice`/`_build_session_proposal_output`/`_deliver_judge_cap_notice` が個別に行っていた env ガード+read を `_resolve_queue_data()` に集約し1回で共有する。

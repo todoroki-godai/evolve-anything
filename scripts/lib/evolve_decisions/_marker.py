@@ -21,7 +21,13 @@ from typing import Any, Dict, Iterator, List, Optional, Set
 import optimize_history_store as _store
 from rl_common.file_lock import atomic_write_text, file_lock
 
-from evolve_decision_ids import _entry_generation, _legacy_run_id, _sha256, _tracked_path
+from evolve_decision_ids import (
+    _entry_generation,
+    _filter_monotonic_pending,
+    _legacy_run_id,
+    _sha256,
+    _tracked_path,
+)
 
 
 def marker_path(slug: str) -> Path:
@@ -142,7 +148,7 @@ def write_pending_marker(
     *,
     run_id: Optional[str] = None,
     result_path: Optional[str] = None,
-) -> None:
+) -> int:
     """slug の「未 drain 提案」マーカーへ run 単位で追記する（emit が dry-run でも書く）。
 
     マーカーは store/queue とは別の運用状態。SessionStart の drain リマインドと
@@ -157,18 +163,33 @@ def write_pending_marker(
     ＝1回の apply が N 件記録される（#279 が潰した N 重記録の別経路再導入）。
     1ファイルの未 drain 提案は最新1件だけが有効なので、パスで置換するのが正しい。
     別 worktree は skill_path が絶対パスで異なるので並行 run の提案は潰さない。
+
+    **monotonic supersede ガード**（#402 決定8 round4）: 同一対象パスについて、
+    ``pending`` の ``revert_generation`` が既存 entry より小さければ公開せず捨てる
+    （emit の queue 更新と marker 更新が独立 lock 区間なので、公開順序が入れ替わると
+    古い世代の pending が新しい世代を消しうる。ここでその逆転を遮断する）。
+
+    Returns:
+        monotonic ガードで捨てた件数（#402 決定8 round4。emit の返り値 meta に使う）。
     """
     run_id = run_id or _legacy_run_id(pending)
-    superseded_ids = {entry.get("id") for entry in pending if entry.get("id")}
-    # パス単位 supersede は #279 のパス単独 ID で書かれた移行期 entry も自然に片付ける
-    # （旧 ID は新 ID と一致しないが対象パスは同じ）。判定は accept 判定と同じ
-    # `_tracked_path` を使う（advisory は対象が pytest.ini 等で skill_path を持たない。
-    # ここだけ skill_path 直読みにすると advisory の residue が素通りする）。
-    superseded_paths = {
-        path for path in (_tracked_path(entry) for entry in pending) if path
-    }
     with _marker_lock(slug):
         current = _read_pending_marker_file(slug) or {}
+        existing_entries = [
+            entry
+            for run in current.get("runs", [])
+            for entry in (run.get("pending") or [])
+        ]
+        pending, discarded = _filter_monotonic_pending(existing_entries, pending)
+
+        superseded_ids = {entry.get("id") for entry in pending if entry.get("id")}
+        # パス単位 supersede は #279 のパス単独 ID で書かれた移行期 entry も自然に片付ける
+        # （旧 ID は新 ID と一致しないが対象パスは同じ）。判定は accept 判定と同じ
+        # `_tracked_path` を使う（advisory は対象が pytest.ini 等で skill_path を持たない。
+        # ここだけ skill_path 直読みにすると advisory の residue が素通りする）。
+        superseded_paths = {
+            path for path in (_tracked_path(entry) for entry in pending) if path
+        }
         runs: List[Dict[str, Any]] = []
         for run in current.get("runs", []):
             if run.get("run_id") == run_id:
@@ -194,7 +215,7 @@ def write_pending_marker(
             path = marker_path(slug)
             if path.exists():
                 path.unlink()
-            return
+            return discarded
         runs.sort(key=lambda run: str(run.get("run_id", "")))
         flattened = [entry for run in runs for entry in (run.get("pending") or [])]
         _write_marker_file(
@@ -208,6 +229,7 @@ def write_pending_marker(
                 "result_path": _flat_result_path(runs),
             },
         )
+    return discarded
 
 
 def read_pending_marker(slug: str) -> Optional[Dict[str, Any]]:

@@ -44,6 +44,7 @@ evolve_decisions.marker_error
 evolve_decisions.marker_written
 evolve_decisions.pending
 evolve_decisions.persisted
+evolve_decisions.revert_generation_discarded
 evolve_decisions.run_id
 evolve_decisions.slug
 generated_at

@@ -152,6 +152,7 @@ def record_evolve_diff_decision(
     entry_id: Optional[str] = None,
     run_id: Optional[str] = None,
     decision_source: Optional[str] = None,
+    revert_fields: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """evolve の Compile/remediation でスキル diff を accept/reject した時点で、
     after content を skill_quality で採点し history.jsonl に正規記録する（issue #223）。
@@ -171,6 +172,14 @@ def record_evolve_diff_decision(
     （既存 entry との後方互換フィールド）。移行スクリプト（legacy_accept_migration.py）が
     「このフィールドを持たない accept 済み entry」＝旧 hash-proxy 単独判定で記録された
     legacy レコードの判別条件として使う。
+
+    ``revert_fields``（#402 決定2）: revert 復旧用の記録拡張フィールド（
+    ``revert_before_b64`` / ``revert_schema_version`` / ``revert_encoding`` /
+    ``revert_generation`` / ``repo_id`` / ``relative_path`` / ``scope`` /
+    ``worktree_root`` / ``resolved_path`` / ``revert_unavailable_reason``）を持つ
+    dict。**呼び出し側（``evolve_decisions.ingest_decisions``）が kind=="accept" の
+    ときだけ渡す規約**（reject/skip の本文は恒久保存しない・決定2）。None のキーは
+    書き込まず既存 entry との後方互換を保つ（entry への純加算）。
     """
     if history_file is None:
         history_file = _default_history_file()
@@ -196,6 +205,11 @@ def record_evolve_diff_decision(
         "run_id": run_id,
         "decision_source": decision_source,
     }
+    if revert_fields:
+        # #402 決定2: 値が None のキーは書かない（既存 entry との後方互換を壊さない
+        # 純加算）。before_too_large 等で本文を落とした場合は revert_before_b64 の
+        # キー自体を省略し、revert_unavailable_reason だけが残る。
+        entry.update({k: v for k, v in revert_fields.items() if v is not None})
     _attach_provenance(entry)
 
     # 冪等 ingest: 同一 id が既にあれば書き込まない。
