@@ -48,3 +48,4 @@ from ._render import (  # noqa: E402,F401
     render_hardlink_rejection,
     render_metadata_loss_rejection,
 )
+from ._dump import DumpResult, dump_before  # noqa: E402,F401
