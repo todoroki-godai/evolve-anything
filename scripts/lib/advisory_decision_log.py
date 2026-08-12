@@ -223,3 +223,23 @@ def summarize_by_detector(
             surfaced_ids.get(detector_id, set()) - terminal_ids.get(detector_id, set())
         )
     return summary
+
+
+def record_period(records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """記録の最古／最新 ``recorded_at`` を read 時導出する（新ストアは作らない・#381 D）。
+
+    freeze 解除条件（「3ヶ月分揃ったら」）の判定材料として、observability の読者が
+    「この表がどの期間の記録か」を判別できるようにする。``recorded_at`` の解析は
+    本モジュールの責務（``_recorded_at``）であるため、この関数もここに置く
+    （呼び出し側に private helper を跨いで注入させない・#381 tacchi レビュー round3）。
+    ``recorded_at`` を持たないレコードは無視する。
+    """
+    stamps = [_recorded_at(rec) for rec in records if rec.get("recorded_at")]
+    if not stamps:
+        return None
+    earliest, latest = min(stamps).date(), max(stamps).date()
+    return {
+        "earliest": earliest.isoformat(),
+        "latest": latest.isoformat(),
+        "days": (latest - earliest).days,
+    }

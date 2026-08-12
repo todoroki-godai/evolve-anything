@@ -15,6 +15,7 @@ advisory detector（audit の observability section）は「ファイルが変�
 """
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -312,6 +313,33 @@ def test_summarize_by_detector_counts_decisions(isolated):
         "accept_in_cohort": 0, "legacy_accept": 1,
         "reject_in_cohort": 0, "legacy_reject": 0, "open": 0,
     }
+
+
+def test_record_period_returns_earliest_and_latest_dates(isolated):
+    """``record_period``（#381 D・round3 で public 昇格）は最古／最新 recorded_at を返す。"""
+    adl.record_advisory_decision(
+        slug="pj", proposal_id="adv_1", detector_id="invalid_frontmatter",
+        target_path="pytest.ini", decision="surfaced",
+        now=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    adl.record_advisory_decision(
+        slug="pj", proposal_id="adv_1", detector_id="invalid_frontmatter",
+        target_path="pytest.ini", decision="accept",
+        now=datetime(2026, 8, 12, tzinfo=timezone.utc),
+    )
+
+    period = adl.record_period(adl.read_advisory_decisions(slug="pj"))
+
+    assert period == {"earliest": "2026-05-01", "latest": "2026-08-12", "days": 103}
+
+
+def test_record_period_returns_none_when_no_records(isolated):
+    assert adl.record_period([]) is None
+
+
+def test_record_period_ignores_records_without_recorded_at(isolated):
+    """``recorded_at`` 欠損レコードは無視する（例外を出さない・防御的）。"""
+    assert adl.record_period([{"decision": "surfaced", "proposal_id": "adv_1"}]) is None
 
 
 def test_summarize_open_is_surfaced_without_terminal(isolated):

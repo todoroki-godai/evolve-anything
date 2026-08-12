@@ -33,8 +33,8 @@ MIN_DECIDED_FOR_WARNING = 5
 def _compute(project_dir: Path) -> Optional[Dict[str, Any]]:
     try:
         from advisory_decision_log import (
-            _recorded_at,
             read_advisory_decisions,
+            record_period,
             summarize_by_detector,
         )
         from pj_slug import resolve_pj_slug
@@ -44,28 +44,14 @@ def _compute(project_dir: Path) -> Optional[Dict[str, Any]]:
     # slug は optimize_history / advisory ストアの書込側と同じ単一ソースで解決する
     # （evolve_decisions.resolve_slug も同関数の thin wrapper・#492）。observability 供給
     # モジュールに ~/.claude 由来の module 定数を持ち込まないため直接 import する。
+    # recorded_at のパース（record_period）は advisory_decision_log 側の責務。private
+    # helper（_recorded_at）を跨いで注入させない（#381 tacchi レビュー round3・並行 PR
+    # #377 の codex 指摘と同基準）。
     records = read_advisory_decisions(slug=resolve_pj_slug(project_dir))
     return {
         "summary": summarize_by_detector(records),
         "total": len(records),
-        "period": _record_period(records, _recorded_at),
-    }
-
-
-def _record_period(records: List[Dict[str, Any]], recorded_at_fn) -> Optional[Dict[str, Any]]:
-    """記録の最古／最新 ``recorded_at`` を read 時導出する（新ストアは作らない・#381 D）。
-
-    freeze 解除条件（「3ヶ月分揃ったら」）の判定材料として、表がどの期間の記録かを
-    読者が判別できるようにする。``recorded_at`` を持たないレコードは無視する。
-    """
-    stamps = [recorded_at_fn(rec) for rec in records if rec.get("recorded_at")]
-    if not stamps:
-        return None
-    earliest, latest = min(stamps).date(), max(stamps).date()
-    return {
-        "earliest": earliest.isoformat(),
-        "latest": latest.isoformat(),
-        "days": (latest - earliest).days,
+        "period": record_period(records),
     }
 
 
@@ -129,8 +115,8 @@ def _render(data: Dict[str, Any]) -> List[str]:
     )
     lines.append(
         "※ `未判断` は surfaced 済かつ accept/reject 未記録の**現在**の件数。`ever deferred` "
-        "はレーン健全性の参考指標（初回 drain で判断されなかった**ユニーク提案数**・回数では"
-        "ない。accept と非排他）。"
+        "はレーン健全性の参考指標（**一度でも**未判断で drain された**ユニーク提案数**・"
+        "回数ではない。accept と非排他）。"
     )
     if legacy_accept_total or legacy_reject_total:
         lines.append(
