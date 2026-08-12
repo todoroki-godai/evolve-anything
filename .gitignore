@@ -19,3 +19,9 @@ prompt-optimizer-bench/
 docs/slides/
 .coverage
 .gstack/
+# A0 capture リプレイの実コーパス成果物（他PJの生発話・業務内容を含むため commit しない。
+# 再現性は設計文書の sha256 台帳で担保する。ADR-054 / drafts/054-a0-capture-repair.md）
+scripts/bench/a0_eval_set.jsonl
+scripts/bench/a0_full_census.json
+scripts/bench/a0_sample_dump.json
+scripts/bench/a0_population_fingerprint.jsonl
