@@ -19,6 +19,7 @@ from rl_common.file_lock import (  # noqa: E402
     atomic_write_text,
     file_lock,
     read_only_file_lock,
+    seqlock_read,
     try_file_lock,
 )
 
@@ -226,3 +227,106 @@ def test_read_only_file_lock_releases_fd_when_flock_wait_is_interrupted(tmp_path
     for _ in range(5):
         with read_only_file_lock(lock) as acquired:
             assert acquired is True
+
+
+# ── seqlock_read（#402 段階3: read_only_file_lock の check-after retry loop を共有 ──
+# ── primitive として抽出。emit(`_emit.py::_dry_run_snapshot`) と apply（段階3の ──
+# ── dry-run）が同じ「sidecar 不在時プロトコル」を必要とするため、2つ目の呼び出し元
+# ── が現れた時点で design-before-fanout に従い共通化する。emit 側は committed/tested
+# ── コードなので移行はしない（後方互換・別途 follow-up）───────────────────────
+
+
+def test_seqlock_read_uses_locked_path_when_sidecar_exists(tmp_path):
+    lock = tmp_path / "history.jsonl.lock"
+    lock.write_text("", encoding="utf-8")
+    calls: list = []
+
+    def read_fn():
+        calls.append(1)
+        return "value"
+
+    value, acquired = seqlock_read(lock, read_fn)
+
+    assert value == "value"
+    assert acquired is True
+    assert len(calls) == 1
+
+
+def test_seqlock_read_uses_unlocked_path_when_sidecar_absent_and_writes_nothing(tmp_path):
+    lock = tmp_path / "history.jsonl.lock"
+
+    value, acquired = seqlock_read(lock, lambda: "value")
+
+    assert value == "value"
+    assert acquired is False
+    assert not lock.exists()  # dry-run 純度契約: sidecar を作らない
+
+
+def test_seqlock_read_retries_when_sidecar_appears_during_unlocked_read(tmp_path):
+    """§0.2 手順3: 読了後に sidecar が出現していたら破棄して locked 経路で読み直す。"""
+    lock = tmp_path / "history.jsonl.lock"
+    state = {"n": 0}
+
+    def read_fn():
+        state["n"] += 1
+        if state["n"] == 1:
+            # 1回目の読み中に他プロセス（revert writer）が sidecar を作った、を模擬。
+            lock.write_text("", encoding="utf-8")
+        return f"value{state['n']}"
+
+    value, acquired = seqlock_read(lock, read_fn)
+
+    assert state["n"] == 2  # 1回目は破棄され、2回目（locked 経路）が採用される
+    assert value == "value2"
+    assert acquired is True
+
+
+def test_seqlock_read_raises_timeout_error_after_max_retries_exhausted(tmp_path, monkeypatch):
+    """§0.2: 何度も再試行が必要な状態（単調性違反等）は上限超過で失敗させる。"""
+    import rl_common.file_lock as fl
+    from contextlib import contextmanager
+
+    lock = tmp_path / "history.jsonl.lock"
+    lock.write_text("", encoding="utf-8")  # 実在させ続ける（削除しない＝常に「出現済み」）
+
+    @contextmanager
+    def _always_unlocked(_path):
+        yield False  # locked 経路には決して移らない病的ケースを模擬
+
+    monkeypatch.setattr(fl, "read_only_file_lock", _always_unlocked)
+    calls = {"n": 0}
+
+    def read_fn():
+        calls["n"] += 1
+        return "v"
+
+    with pytest.raises(TimeoutError):
+        fl.seqlock_read(lock, read_fn, max_retries=3)
+
+    assert calls["n"] == 3
+
+
+def test_seqlock_read_default_max_retries_matches_emit_convention(tmp_path, monkeypatch):
+    """既定値の変更が気づかれず emit と乖離しないための固定（値そのものより「上限は
+    ある」契約が重要・設計 §0.2）。"""
+    import rl_common.file_lock as fl
+    from contextlib import contextmanager
+
+    lock = tmp_path / "history.jsonl.lock"
+    lock.write_text("", encoding="utf-8")
+
+    @contextmanager
+    def _always_unlocked(_path):
+        yield False
+
+    monkeypatch.setattr(fl, "read_only_file_lock", _always_unlocked)
+    calls = {"n": 0}
+
+    def read_fn():
+        calls["n"] += 1
+        return "v"
+
+    with pytest.raises(TimeoutError):
+        fl.seqlock_read(lock, read_fn)
+
+    assert calls["n"] == 5
