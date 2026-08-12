@@ -133,7 +133,7 @@ def compute_verify_pending(
 
     advisory_records は ``advisory_decision_log.read_advisory_decisions`` の形
     （``decision`` / ``run_id`` / ``recorded_at``）、optimize_records は
-    ``optimize_history_store.load_history`` の形（``human_accepted`` / ``run_id`` /
+    ``optimize_history_store.load_effective_history`` の形（``human_accepted`` / ``run_id`` /
     ``timestamp``）を想定する。
 
     accept 記録（advisory は ``decision == "accept"``、optimize は
@@ -221,40 +221,29 @@ def _exposure_sessions_since_latest_accept(
 
 
 def _load_optimize_history_with_aliases(pj_slug: str) -> List[Dict[str, Any]]:
-    """optimize_history を rename alias 込みで union read する（#267 I2）。
+    """optimize_history の判断母集団を rename alias 込み・revert 反映済みで読む
+    （#402 段階4: ``load_effective_history`` への移行。旧名は残す——呼び出し元
+    ``verify_pending_by_pj`` からの後方互換）。
 
-    advisory 側は ``pj_slug_match`` で alias（rename 旧 slug）対応済みだが、
-    ``optimize_history_store.load_history(slug)`` は ``HISTORY_ROOT/<slug>.jsonl`` の
-    完全一致のみで、2レーンの rename 耐性が非対称だった（rename 済 PJ の skill lane accept が
-    queue の verify_pending に反映されない）。``fleet.queue._equivalence_slugs``（現 slug +
-    canonical + 双方の旧名別名の合算・既存 SoT）を再利用し、alias 分の履歴を entry の ``id``
-    で dedup しつつ union read する（``id`` の無い entry は安全に dedup できないため全件保持。
-    ``optimize_history_store.load_history`` 自身の dedup 方針と同じ）。
+    旧実装（#267 I2）は ``fleet.queue._equivalence_slugs`` + 自前の id dedup ループで
+    alias union read を独自実装していた。``load_effective_history`` は同じ alias 集合
+    （``pj_slug.pj_slug_aliases_for``）で同等の union + dedup を内包しているため、ここに
+    ローカルの alias ループを残すと**二重集約**になる（設計正典 §1 の落とし穴）。薄い
+    ラッパーにする。
 
-    ``fleet.queue`` は既に本モジュール（``queue_verify``）を呼ぶため、モジュールレベルの
-    逆 import は循環になる。関数スコープの遅延 import に留める（``attach_verify_pending`` の
-    ``canonicalize`` 注入と同じ設計判断）。import/属性解決に失敗したら自身のみで安全側に倒す
-    （cross-PJ 副作用なし）。
+    挙動差分（#402 段階4 で新たに乗る効果）:
+      - **revert 反映**: revert 済み accept は effective view から除外される（旧 raw 実装は
+        永久に accepted として数え続けていた・S1 と同型の判断母集団汚染防止）
+      - **dedup 順序**: 旧実装は slug-major・``sorted()``、新実装は data-dir-major・
+        canonical slug 先頭（``optimize_history_store._aliased_raw_records`` 参照・
+        codex R4 [Should] で固定された順序）。slug 集合自体は等価（``_equivalence_slugs``
+        と ``pj_slug_aliases_for(canonical)`` は3ケースで完全一致・実測）なので
+        レコード欠落は起きないが、同一 id が複数 source に重複したときの勝者が
+        入れ替わりうる
     """
-    from optimize_history_store import load_history
+    from optimize_history_store import load_effective_history
 
-    try:
-        from .queue import _equivalence_slugs
-        aliases = sorted(_equivalence_slugs(pj_slug))
-    except Exception:
-        aliases = [pj_slug]
-
-    seen_ids: set = set()
-    out: List[Dict[str, Any]] = []
-    for alias in aliases:
-        for rec in load_history(alias):
-            rid = rec.get("id")
-            if rid is not None:
-                if rid in seen_ids:
-                    continue
-                seen_ids.add(rid)
-            out.append(rec)
-    return out
+    return load_effective_history(pj_slug)
 
 
 def verify_pending_by_pj(

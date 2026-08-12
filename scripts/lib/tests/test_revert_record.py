@@ -404,6 +404,32 @@ def test_ingest_accept_carries_revert_fields_into_history(project_repo, monkeypa
     )
 
 
+def test_ingest_accept_carries_after_sha_into_history(project_repo, monkeypatch, tmp_path):
+    """#402 段階3: apply engine の3分岐判定（== after_sha / == before_sha / conflict）に
+    ``after_sha`` が要る。PR-1 は ``before_sha``（decompress 可能）しか運ばず accept
+    entry に after 内容の sha を永続化していなかった schema gap を埋める（段階3追加）。
+    """
+    repo, skill = project_repo
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
+    result = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill), "pattern": "p"}
+        ]}}
+    }
+    out = ed.emit_decisions(result, dry_run=False, slug="proj")
+    pid = out["pending"][0]["id"]
+    after_content = "# my-skill\n\n改善。\n"
+    skill.write_text(after_content, encoding="utf-8")
+
+    hist = tmp_path / "hist.jsonl"
+    ed.ingest_decisions("proj", accepted={pid}, dry_run=False, history_file=hist)
+
+    recs = [json.loads(l) for l in hist.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(recs) == 1
+    assert recs[0]["after_sha"] == ids._sha256(after_content)
+
+
 def test_ingest_reject_does_not_carry_revert_body(project_repo, monkeypatch, tmp_path):
     """決定2: reject/skip の本文は queue purge とともに捨てる（恒久保存しない）。"""
     repo, skill = project_repo
@@ -788,3 +814,307 @@ def test_changelog_dump_before_recipe_restores_fixture_jsonl(tmp_path):
     )
 
     assert out_path.read_text(encoding="utf-8") == original_text
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# #402 PR-2 段階1（lock protocol）: design_402_pr2_v2.md §0 の契約テスト10本
+# ══════════════════════════════════════════════════════════════════════════
+#
+# §0.1（read_only_file_lock の inode/内容不変・不在時の非作成・ENOTSUP/ENOLCK 例外・
+# 割込み時の fd 解放）は rl_common/tests/test_file_lock.py（契約テスト1/2/8/9）で
+# カバーする。ここでは emit の seqlock check-after（§0.2）と単調性異常検出（§0.3）を
+# 統合レベルで固定する（契約テスト3/4/5/6/7/10）。
+
+
+def test_dry_run_emit_writes_zero_bytes_except_marker(project_repo, monkeypatch, tmp_path):
+    """契約テスト3: dry-run emit は対象ファイル/history lock sidecar/temp/history に
+    書込ゼロ。pending marker だけ意図された dry-run 書込（#505→#513）として対象外。
+    """
+    repo, skill = project_repo
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    history_dir = tmp_path / "optimize_history"
+    monkeypatch.setattr(ohs, "HISTORY_ROOT", history_dir)
+    result = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill), "pattern": "p"}
+        ]}}
+    }
+    history_file = ohs.history_path("proj")
+    lock_path = history_file.with_name(history_file.name + ".lock")
+    skill_before = skill.read_bytes()
+    assert not history_file.exists()
+    assert not lock_path.exists()
+
+    out = ed.emit_decisions(result, dry_run=True, slug="proj")
+
+    assert out["count"] == 1
+    assert skill.read_bytes() == skill_before  # 対象ファイル: 書込ゼロ
+    assert not history_file.exists()  # history: 書込ゼロ
+    assert not lock_path.exists()  # history lock sidecar: 書込ゼロ
+    # temp（sibling tmp 等）も含めゼロ。history_dir 自体すら作られない想定。
+    assert not history_dir.exists() or list(history_dir.rglob("*")) == []
+    assert ed.marker_path("proj").exists()  # marker は対象外（意図された dry-run 書込）
+
+
+def test_dry_run_emit_blocks_while_history_lock_sidecar_held(project_repo, monkeypatch, tmp_path):
+    """契約テスト4: revert（想定）が sidecar を保持中は dry-run emit の disk/generation
+    読みが進めない（ロック保持中に相手が進めないことの確認 + daemon thread で hang→fail
+    変換・learning_concurrency_test_by_lock_holding）。
+    """
+    from rl_common.file_lock import file_lock
+
+    repo, skill = project_repo
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
+    result = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill), "pattern": "p"}
+        ]}}
+    }
+    hist_file = ohs.history_path("proj")
+    lock_path = hist_file.with_name(hist_file.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("", encoding="utf-8")  # revert writer が保持する sidecar を実在させる
+
+    done = threading.Event()
+
+    def _emit():
+        ed.emit_decisions(result, dry_run=True, slug="proj")
+        done.set()
+
+    with file_lock(lock_path):
+        thread = threading.Thread(target=_emit, daemon=True)
+        thread.start()
+        assert not done.wait(1.0), "sidecar を保持している間に dry-run emit が完走した"
+
+    assert done.wait(30), "ロック解放後も完走しなかった"
+
+
+def test_dry_run_emit_discards_snapshot_when_sidecar_appears_mid_read(
+    project_repo, monkeypatch, tmp_path
+):
+    """契約テスト5: sidecar 不在判定の直後に writer が作成・保持した場合（first-writer
+    race）、check-after が暫定 snapshot を破棄して locked 経路で読み直す。
+    """
+    repo, skill = project_repo
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
+    result = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill), "pattern": "p"}
+        ]}}
+    }
+    history_file = ohs.history_path("proj")
+    lock_path = history_file.with_name(history_file.name + ".lock")
+    path_identity = ids._path_scope_identity(str(skill))
+
+    fresh_history = [{
+        "event_type": "revert",
+        "scope": path_identity["scope"],
+        "repo_id": path_identity["repo_id"],
+        "relative_path": path_identity["relative_path"],
+        "revert_generation": 3,
+    }]
+
+    calls = {"n": 0}
+
+    def fake_load_history(slug):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # 不在判定直後に writer が sidecar を作成・保持したのを模す。
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path.write_text("", encoding="utf-8")
+            return []  # 暫定 snapshot（破棄されるべき）
+        return fresh_history
+
+    monkeypatch.setattr(ohs, "load_history", fake_load_history)
+
+    out = ed.emit_decisions(result, dry_run=True, slug="proj")
+
+    assert calls["n"] == 2  # 1回破棄して読み直した
+    assert out["pending"][0]["revert_generation"] == 3
+
+
+def test_dry_run_emit_warns_without_short_circuiting_when_sidecar_missing_after_revert(
+    project_repo, monkeypatch, tmp_path
+):
+    """契約テスト6: history に revert イベントがあるのに sidecar が外部要因で不在の状態
+    でも generation=0 に短絡せず history の実 generation で続行し、警告 + 回復手順を
+    surface する（fail させない。data dir 移送・バックアップ復元という良性シナリオで
+    起き、dry-run は daily runner の無人経路でもあるため）。
+    """
+    repo, skill = project_repo
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
+    result = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill), "pattern": "p"}
+        ]}}
+    }
+    path_identity = ids._path_scope_identity(str(skill))
+    history_with_revert = [{
+        "event_type": "revert",
+        "scope": path_identity["scope"],
+        "repo_id": path_identity["repo_id"],
+        "relative_path": path_identity["relative_path"],
+        "revert_generation": 5,
+    }]
+    monkeypatch.setattr(ohs, "load_history", lambda slug: history_with_revert)
+
+    history_file = ohs.history_path("proj")
+    lock_path = history_file.with_name(history_file.name + ".lock")
+    assert not lock_path.exists()  # 外部削除された状態を模す（作らない）
+
+    out = ed.emit_decisions(result, dry_run=True, slug="proj")
+
+    assert out["pending"][0]["revert_generation"] == 5  # 0 に短絡していない
+    warning = out["dry_run_snapshot_warning"]
+    assert warning is not None
+    assert "revert" in warning
+    assert "file_lock" in warning  # 回復手順（次の正規書込で sidecar が再作成される旨）
+
+
+def test_dry_run_emit_raises_and_publishes_nothing_when_snapshot_retries_exhausted(
+    project_repo, monkeypatch, tmp_path
+):
+    """§0.2 リトライ上限超過時の契約: emit 全体を失敗させ、新しい pending を
+    queue/marker/result のいずれにも公開しない。既存 pending も変更しない。10本の契約
+    テストには含まれないが、§0.2 末尾の契約（値そのものより公開しない順序が重要）を
+    固定する補足テスト。
+    """
+    from contextlib import contextmanager
+
+    import evolve_decisions._emit as _emit_mod
+
+    repo, skill = project_repo
+    monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
+    monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
+    monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
+    result = {
+        "phases": {"discover": {"matched_skills": [
+            {"matched_skill": "my-skill", "skill_path": str(skill), "pattern": "p"}
+        ]}}
+    }
+    existing_entry = {"id": "pre_existing", "skill_path": str(skill), "revert_generation": 0}
+    ed.write_pending_marker("proj", [existing_entry], run_id="evrun_pre")
+
+    calls = {"n": 0}
+
+    @contextmanager
+    def always_reappearing_lock(target_lock_path):
+        calls["n"] += 1
+        yield False
+        # check-after（lock_path.exists()）が常に「出現していた」を観測する状態を模す
+        # （単調性違反 / path 不安定化のシミュレーション。本物の production writer は
+        # こんな動きをしない — それが§0.3の契約）。
+        target_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        target_lock_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(_emit_mod, "read_only_file_lock", always_reappearing_lock)
+
+    with pytest.raises(_emit_mod.EmitSnapshotRetriesExhausted):
+        ed.emit_decisions(result, dry_run=True, slug="proj")
+
+    assert calls["n"] == _emit_mod._DRY_RUN_SNAPSHOT_MAX_RETRIES
+
+    marker = ed.read_pending_marker("proj")
+    assert marker is not None
+    assert [e["id"] for e in marker["pending"]] == ["pre_existing"]  # 既存 pending は不変
+    assert ed.read_queue("proj") == []  # 新しい pending は queue にも公開されない
+
+
+def test_record_evolve_diff_decision_creates_sidecar_via_file_lock_before_history_write(
+    tmp_path, monkeypatch
+):
+    """契約テスト10: revert writer が必ず sidecar を作る経路（通常の file_lock）を通る
+    ―― history へ書く前に sidecar が存在することを assert する。段階3 で revert writer
+    本体が入るまでは、現時点で唯一 file_lock 経由で history に書く writer である
+    ``record_evolve_diff_decision`` で検証する。
+    """
+    fe = _import_fitness_evolution()
+    hist = tmp_path / "history.jsonl"
+    lock_path = hist.with_name(hist.name + ".lock")
+
+    probe_result = {}
+    real_load_history = fe.load_history
+
+    def probe(history_file=None, *, project_dir=None):
+        # record_evolve_diff_decision は file_lock 下でまずこの load_history（既存 id
+        # 確認・#287-2）を呼んでから append する。この時点で sidecar が既に存在すれば、
+        # sidecar 作成（file_lock の read-modify-write open）が history への書込より
+        # 前に起きている証拠になる。
+        probe_result["sidecar_exists_before_history_write"] = lock_path.exists()
+        return real_load_history(history_file=history_file, project_dir=project_dir)
+
+    monkeypatch.setattr(fe, "load_history", probe)
+
+    fe.record_evolve_diff_decision(
+        skill_name="s",
+        after_content="# s\n\n本文\n",
+        diff_summary="d",
+        human_accepted=True,
+        history_file=hist,
+        entry_id="sidecar_order_check",
+    )
+
+    assert probe_result["sidecar_exists_before_history_write"] is True
+    assert lock_path.exists()  # 通常の file_lock 経由で作成されたまま残る（削除しない）
+
+
+def _iter_production_python_files():
+    """production コード（tests/ 配下・test_*.py・conftest.py を除く）を列挙する。"""
+    repo_root = _LIB.parent.parent
+    for path in repo_root.rglob("*.py"):
+        rel = path.relative_to(repo_root)
+        parts = rel.parts
+        if any(part.startswith(".") or part in ("__pycache__", "node_modules") for part in parts):
+            continue
+        if any(part == "tests" for part in parts):
+            continue
+        if rel.name.startswith("test_") or rel.name == "conftest.py":
+            continue
+        yield path
+
+
+def test_no_production_code_unlinks_lock_path_sidecar():
+    """契約テスト7: production コードに sidecar 削除経路が存在しないことの静的検査。
+
+    §0.3 の単調性契約（sidecar は一度作られたら削除されない）は、production コードが
+    lock sidecar パス（このリポジトリの規約で変数名 ``lock_path``。
+    ``<target>.with_name(<target>.name + ".lock")`` で構築 — ``_emit.py`` /
+    ``judge_runner.py`` / ``restore_state.py`` と揃える）に対して ``unlink()`` /
+    ``shutil.rmtree()`` を呼ぶ箇所が無いことで固定する。本文で「unlink→再作成は対応
+    保証外」と非対応を決めているので、テスト名も「検出 or 非対応化」の二択にしない
+    （検出したらこの test を赤くする）。
+    """
+    import ast
+
+    offenders = []
+    for path in _iter_production_python_files():
+        text = path.read_text(encoding="utf-8")
+        if "lock_path" not in text:
+            continue
+        tree = ast.parse(text, filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "unlink":
+                if isinstance(func.value, ast.Name) and func.value.id == "lock_path":
+                    offenders.append(f"{path}:{node.lineno} lock_path.unlink(...)")
+                continue
+            target_name = None
+            if isinstance(func, ast.Attribute) and func.attr == "rmtree":
+                target_name = "rmtree"
+            elif isinstance(func, ast.Name) and func.id == "rmtree":
+                target_name = "rmtree"
+            if target_name:
+                for arg in node.args:
+                    if isinstance(arg, ast.Name) and arg.id == "lock_path":
+                        offenders.append(f"{path}:{node.lineno} rmtree(lock_path)")
+
+    assert offenders == [], f"lock_path sidecar を削除しうる production コード: {offenders}"

@@ -43,9 +43,14 @@ def load_generation_data() -> List[Dict[str, Any]]:
 
 
 def load_history() -> List[Dict[str, Any]]:
-    """accept/reject 履歴を store から読み込む（ADR-031: current project slug）。"""
+    """accept/reject 履歴を store から読み込む（ADR-031: current project slug）。
+
+    #402 段階4 §1(S1): effective view（revert 反映済み）を読む。raw のままだと revert
+    イベントが ``history[-10:]``（Score Trend）に混入して本物の decision を押し出し、
+    revert 済み accept は accept/reject 比率に永久に残り続ける（判断母集団の汚染）。
+    """
     import optimize_history_store as store
-    return store.load_history(store.resolve_slug())
+    return store.load_effective_history(store.resolve_slug())
 
 
 def aggregate(records: List[Dict[str, Any]], history: List[Dict[str, Any]]) -> str:

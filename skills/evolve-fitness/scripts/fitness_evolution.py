@@ -87,6 +87,26 @@ def load_history(
     return records
 
 
+def load_effective_history(
+    history_file: Optional[Path] = None,
+    *,
+    project_dir: Optional[Union[str, Path]] = None,
+) -> List[Dict[str, Any]]:
+    """業務読取（calibration の母集団）用の effective view（#402 段階4 §1 M4）。
+
+    ``load_history`` は ``record_evolve_diff_decision`` の raw ID dedup（冪等性維持）と
+    calibration の業務読取の**両方**から呼ばれる別実装（``optimize_history_store`` の
+    wrapper ではない）ため、import 置換だけでは raw/effective を分離できない。本関数は
+    ``load_history`` の結果に ``optimize_history_store.fold_effective``（純粋関数）を
+    適用し、revert 済み accept と revert イベント自体を判断母集団から除外する。
+
+    raw 経路（``record_evolve_diff_decision`` の ID dedup・:236）はそのまま
+    ``load_history`` を使い続ける——revert 済みでも同一 id の再書込みは防がねばならない
+    （冪等性は revert 有無と無関係）。
+    """
+    return _history_store.fold_effective(load_history(history_file, project_dir=project_dir))
+
+
 def _score_skill_content(after_content: str, skill_name: str) -> Optional[float]:
     """after_content を skill_quality fitness で採点する。
 
@@ -481,16 +501,18 @@ def run_fitness_evolution(
 ) -> Dict[str, Any]:
     """評価関数の改善レポートを生成する。
 
-    history 明示指定が最優先。未指定時は project_dir（単一 cwd から他 PJ の project_dir を
-    渡すバッチ経路で対象 PJ を正しく解決するため・#400）を load_history に貫通させる。
-    project_dir が未指定（None）のときは load_history に project_dir キーワードを渡さず
-    従来と同じ引数形で呼ぶ（1引数の monkeypatch/wrapper を壊さないため）。
+    history 明示指定が最優先（呼び出し側の責務・effective 変換は行わない）。未指定時は
+    project_dir（単一 cwd から他 PJ の project_dir を渡すバッチ経路で対象 PJ を正しく
+    解決するため・#400）を ``load_effective_history`` に貫通させる（#402 段階4 M4:
+    calibration の業務読取は revert 反映済みの母集団を使う）。project_dir が未指定
+    （None）のときは project_dir キーワードを渡さず従来と同じ引数形で呼ぶ（1引数の
+    monkeypatch/wrapper を壊さないため）。
     """
     if history is None:
         if project_dir is not None:
-            history = load_history(project_dir=project_dir)
+            history = load_effective_history(project_dir=project_dir)
         else:
-            history = load_history()
+            history = load_effective_history()
 
     # データ十分性チェック。fitness_eligible=False（#376 の legacy hash-proxy 誤 accept
     # migration で無効化された entry）は母集団から除外する。キー欠落は既存 entry との

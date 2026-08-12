@@ -228,7 +228,8 @@ def build_calibration_drift_section(project_dir: Path) -> Optional[List[str]]:
         return None
 
     try:
-        history = fe.load_history(project_dir=project_dir)
+        # #402 段階4 §1: calibration（drift 判定）は revert 反映済みの effective view を使う。
+        history = fe.load_effective_history(project_dir=project_dir)
     except Exception:
         return None
     if not history:

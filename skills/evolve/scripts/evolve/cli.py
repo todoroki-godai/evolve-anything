@@ -398,6 +398,12 @@ def _summarize_result(result: dict, output_path: Path) -> dict:
     _ed = result.get("evolve_decisions")
     if isinstance(_ed, dict) and _ed.get("marker_error"):
         summary["marker_error"] = _ed["marker_error"]
+    # #402 PR-2 §0.3: sidecar 単調性契約違反の痕跡（warn + 続行）を 1 行サマリにも出す。
+    # marker_error（#287-5）と同じ理由: envelope に入れるだけでは reader が居ない
+    # 書きっぱなしフィールドになり、警告が実質無音になる（orphan_store / advisory
+    # 書きっぱなしとしてこの repo が継続的に潰してきた型）。
+    if isinstance(_ed, dict) and _ed.get("dry_run_snapshot_warning"):
+        summary["dry_run_snapshot_warning"] = _ed["dry_run_snapshot_warning"]
     if result.get("observe_first"):
         summary["observe_first"] = True
         observe = result.get("phases", {}).get("observe", {})

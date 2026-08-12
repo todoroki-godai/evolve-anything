@@ -153,11 +153,12 @@ def filter_previously_rejected_candidates(
     """discover matched_skills + skill_evolve high/medium のうち、直近判定が reject の候補を除外する。
 
     候補抽出は ``evolve_decisions._extract_candidates``（既存 API）を再利用する。各候補の
-    skill_name について ``optimize_history_store.load_history(slug)``（``source=evolve_diff``）から
-    timestamp 最大のレコードを引き、``human_accepted is False``（最新判定が reject）なら
-    ``suppressed`` に分離する（silent に消さない — 件数を報告側で transparency として出す）。
+    skill_name について ``optimize_history_store.load_effective_history(slug)``（#402 段階4:
+    revert 済み accept を除いた判断母集団・``source=evolve_diff``）から timestamp 最大の
+    レコードを引き、``human_accepted is False``（最新判定が reject）なら ``suppressed``
+    に分離する（silent に消さない — 件数を報告側で transparency として出す）。
 
-    ``history`` を明示渡しするとテスト用に hermetic（load_history を呼ばない）。
+    ``history`` を明示渡しするとテスト用に hermetic（load_effective_history を呼ばない）。
 
     Returns:
         ``{"kept": [...], "suppressed": [...]}``。要素は ``_extract_candidates`` と同じ
@@ -173,7 +174,7 @@ def filter_previously_rejected_candidates(
     if history is None:
         import optimize_history_store as _store
 
-        history = _store.load_history(slug)
+        history = _store.load_effective_history(slug)
 
     latest_by_name: Dict[str, Dict[str, Any]] = {}
     for rec in history:

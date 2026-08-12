@@ -117,6 +117,14 @@ def ingest_decisions(
                 import evolve_decisions as _ed
 
                 recorder = _ed._load_recorder()
+            # #402 段階3: revert_fields のうち after_sha は pending entry（emit 時に
+            # スナップショットされる before_sha 等）でなく、drain 時にここで計算した
+            # ローカル変数から来る（apply engine の3分岐判定に必須。REVERT_FIELD_KEYS
+            # docstring 参照）。
+            _revert_fields = None
+            if kind == "accept":
+                _revert_fields = {k: entry.get(k) for k in REVERT_FIELD_KEYS}
+                _revert_fields["after_sha"] = after_sha
             recorder(
                 skill_name=entry["skill_name"],
                 after_content=after_content,
@@ -136,9 +144,7 @@ def ingest_decisions(
                 decision_source=f"explicit_{kind}",
                 # #402 決定2: 恒久保存は accept された entry のみ（reject/skip は本文を
                 # queue purge とともに捨てる）。
-                revert_fields=(
-                    {k: entry.get(k) for k in REVERT_FIELD_KEYS} if kind == "accept" else None
-                ),
+                revert_fields=_revert_fields,
             )
         (accepted_out if kind == "accept" else rejected_out).append(pid)
 

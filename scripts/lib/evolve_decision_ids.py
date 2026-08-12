@@ -248,6 +248,13 @@ REVERT_FIELD_KEYS: Tuple[str, ...] = (
     "scope",
     "worktree_root",
     "resolved_path",
+    # #402 段階3 追加: apply engine の3分岐判定（== after_sha / == before_sha / conflict）
+    # に必須（design_402_pr2_v2.md §2 手順3・決定6）。PR-1 は before_sha（revert_before_b64
+    # を decompress+sha256 すれば復元可能）しか運ばず、after 内容の sha を永続化していな
+    # かった schema gap（drain 時にローカル変数として計算はしているが entry へ渡していな
+    # かった・``evolve_decisions/_ingest.py`` 参照）。純加算契約（既存 entry キーと非衝突）
+    # は他の revert フィールドと同型。
+    "after_sha",
 )
 
 
@@ -403,6 +410,18 @@ def _revert_generation_for_target(
         if isinstance(candidate, int) and candidate > generation:
             generation = candidate
     return generation
+
+
+def _revert_event_id(entry_id: str) -> str:
+    """revert イベントの deterministic ID（#402 決定6 の冪等再実行判定キー・段階3）。
+
+    accept 済み optimize_history レコードの一意 ``id``（``_decision_event_id`` 由来。
+    revert_generation を含むため同一内容の accept→revert→再accept サイクルでも
+    衝突しない）だけから決定論的に導出する。同じ entry を複数回 revert しようとしても
+    （中断からの再試行・手動で before 内容へ戻した後の再実行）常に同じ ID になるため、
+    履歴にこの ID を持つイベントが既にあるかどうかで完全冪等判定ができる（S7）。
+    """
+    return "evrevert_" + hashlib.sha1(entry_id.encode("utf-8")).hexdigest()[:12]
 
 
 def _generation_of(entry: Dict[str, Any]) -> int:

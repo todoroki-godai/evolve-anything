@@ -3,6 +3,67 @@
 ## [Unreleased]
 
 ### Added
+- **feat(revert): reader migration + 戦果ボード導線 + `bin/evolve-revert` CLI + AST gate 本番有効化（PR-2 段階4・#402）** —
+  PR-2 の最終段階。業務 reader 7箇所を実測し、判断母集団を読む4箇所（`results_board.build_results_board` /
+  `fleet/propose.filter_previously_rejected_candidates` /
+  `fleet/queue_verify._load_optimize_history_with_aliases` / `aggregate_runs.load_history`）を
+  `optimize_history_store.load_effective_history`（revert 反映済み）へ移行した。
+  `queue_verify._load_optimize_history_with_aliases` は自前の alias 集約（`fleet.queue._equivalence_slugs`
+  + dedup ループ）を持っていたため、`load_effective_history` 内蔵の集約と二重集約になっていた
+  ローカルループを削除し薄いラッパー化（dedup 順序は data-dir-major・canonical 先頭へ変更。
+  slug 集合は等価なのでレコード欠落は起きない）。`evolve_revert/_apply.py` と `_entry.py` は
+  revert の entry 検索・冪等判定に raw が必須のためそのまま（allowlist へ）。
+  AST gate の射程外だった2箇所も個別に手当てした:
+  `fitness_evolution.py`（`optimize_history_store` を呼ばない同名別実装）に業務読取専用の
+  `load_effective_history()` を新設し、raw の `load_history()`（writer の ID dedup 用）とは
+  モジュール内で経路を明示的に分離。間接 consumer（`trigger_engine/session_corrections.py` の
+  calibration drift 検出・`audit/sections_meta.py` の calibration drift section）もこちらへ
+  切替。`audit/outcome_promotion_readiness.py`（任意 root を全 slug glob する独自実装）は
+  新しい effective reader を新設せず、`optimize_history_store.fold_effective(records)`
+  純粋関数をファイル単位で適用する形に留めた（設計正典 §1 S5 の裁定）。
+  戦果ボードの `withdrawal_candidates` に `entry_id` / `revert_available` /
+  `revert_unavailable_reason` / `reverted` を運び、`revert_available=true` の行には
+  `bin/evolve-revert <entry_id>`（既定 dry-run）/ `--apply`（実行）の2段コマンドをそのまま
+  印字する（PR-1 の「導線ゼロ」敗因の再演を防ぐ）。理由コードは新モジュール
+  `evolve_revert/_availability.py`（`compute_revert_availability`）が
+  `pre_extension`（記録拡張前 or 非対応 writer）/ `lane_unsupported`（skill 以外の
+  lane。ADR-041 により remediation は `optimize_history` に書き込まれないため現行データでは
+  到達しない予約コード）/ `before_too_large`（emit 時の圧縮後サイズ超過）の3種で判定し、
+  コード（機械用）と日本語1行（人間用・`REASON_LABELS`）を組で持つ——board 表示には日本語を出す。
+  CLI は `bin/evolve-tier` を雛形にした薄いラッパー（実体 `scripts/lib/evolve_revert_cli.py`）で、
+  段階3 の apply engine（`apply_revert` / `dump_before`）を呼ぶだけ。`--apply`（既定は dry-run）・
+  `--dump-before PATH`（`--apply` と排他）・`--allow-metadata-loss` の3 flag。
+  AST allowlist gate（`raw_history_gate.PRODUCTION_ALLOWLIST`）を production tree に対して
+  初めて有効化し、`scripts/lib/evolve_decisions/_emit.py:_read_disk_and_history` /
+  `scripts/lib/evolve_revert/_apply.py:apply_revert._do` /
+  `scripts/lib/evolve_revert/_entry.py:find_entry` の3件のみを許可リストとして固定する契約
+  テストを追加（allowlist は production 側の定数に置く——`store_registry.py` の `status` や
+  `shrink_freeze.CULLED_OBSERVABILITY_SECTIONS` と同じ「意図的な例外は production 定数」の
+  既存パターンに揃える）。あわせて CLAUDE.md の体験4「採用は1コマンドで戻せる」を
+  「**skill** 採用は1コマンドで戻せる」に是正（remediation の rules/hooks 採用は ADR-041 の
+  意図的スコープ外で戻せないため、設計だけ正直で hot が過剰約束のまま残る直し残しを解消）。
+
+- **feat(revert): 1コマンド revert の lock protocol（PR-2 段階1・#402）** — `rl_common/file_lock.py`
+  に `read_only_file_lock` を追加した。既存の history lock sidecar を**書込ゼロ**（読み取り open +
+  `flock(LOCK_EX)`。`parent.mkdir` も追記 open もしない）で排他取得し、sidecar 不在時は取得せず
+  `False` を yield する。`flock` が `ENOTSUP`/`ENOLCK` 等で失敗した場合は unlocked read へ暗黙
+  フォールバックせず例外を送出する（対応環境は macOS ローカル filesystem / 通常の Linux
+  filesystem。NFS/SMB 等のネットワーク filesystem は非対応）。`emit_decisions` の dry-run 経路は
+  この lock を使う **seqlock 型 check-after** に置き換えた: sidecar 不在なら lock 無しで disk 内容
+  + history（generation）を読み、読了後に sidecar の不在を再確認する。まだ不在なら暫定
+  snapshot を採用し、出現していれば破棄して locked 経路（`read_only_file_lock` 再取得）で
+  読み直す。この再試行には上限（5回）を設け、超過時は emit 全体を例外で失敗させ、新しい
+  pending を queue / marker / result のいずれにも公開せず既存 pending も変更しない
+  （`EmitSnapshotRetriesExhausted`）。sidecar は一度作られたら削除されない単調性契約に依拠する
+  ため、「history に revert イベントがあるのに sidecar が不在」を単調性契約違反の痕跡として
+  検出するが、fail はさせず `emit_decisions` の返り値 `dry_run_snapshot_warning` に警告 + 回復手順
+  （次の正規書込で sidecar が再作成される旨）を surface して続行する（data dir 移送・バックアップ
+  復元という良性シナリオが無人経路の dry-run を毎朝黙って殺すのを避けるため）。設計は
+  `design_402_pr2_v2.md` §0（決定8 を実装レベルへ降ろした段階1・§6 の4段階中の段階1。
+  段階2〜4 は別 PR）。`dry_run_snapshot_warning` は `marker_error`（#287-5）と同じ配線で
+  `skills/evolve/scripts/evolve/cli.py` の1行サマリにも surface する（envelope だけでは
+  reader が居ない書きっぱなしフィールドになるため）。
+
 - **feat(revert): 採用パッチ revert 用の記録拡張（PR-1・#402）** — `evolve_decisions` の emit が
   スキル diff 候補（discover の matched_skills / skill_evolve の high・medium。advisory は対象外）
   の before 全文を `zlib` 圧縮 + base64 化した `revert_before_b64` を計算し、`revert_schema_version`

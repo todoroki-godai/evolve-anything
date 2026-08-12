@@ -508,7 +508,8 @@ class TestAttachVerifyPending:
         from fleet import collectors as fcol
 
         monkeypatch.setattr(advisory_decision_log, "read_advisory_decisions", _fake_read)
-        monkeypatch.setattr(optimize_history_store, "load_history", lambda slug: [])
+        # #402 段階4: _load_optimize_history_with_aliases は load_effective_history へ移行。
+        monkeypatch.setattr(optimize_history_store, "load_effective_history", lambda slug: [])
         # #267 C2: exposure は accept 記録時刻以降の session 数から算出する（since 窓クエリ）。
         # alpha=露出あり(verifiable) / beta=露出なし(awaiting_exposure) を再現する。
         monkeypatch.setattr(
@@ -548,7 +549,7 @@ class TestAttachVerifyPending:
         from fleet import collectors as fcol
 
         monkeypatch.setattr(advisory_decision_log, "read_advisory_decisions", _fake_read)
-        monkeypatch.setattr(optimize_history_store, "load_history", lambda slug: [])
+        monkeypatch.setattr(optimize_history_store, "load_effective_history", lambda slug: [])
         monkeypatch.setattr(
             fcol,
             "aggregate_sessions_by_project",
@@ -565,101 +566,114 @@ class TestAttachVerifyPending:
         assert materials[0]["verify_pending"]["accepted"] == 1
 
 
-# --- optimize_history の rename alias union read（#267 I2）--------------------
+# --- optimize_history の rename alias union read（#402 段階4: load_effective_history 移行）---
+#
+# 旧実装は自前で fleet.queue._equivalence_slugs + id dedup ループを持っていた（#267 I2）。
+# load_effective_history は同じ alias 集合（pj_slug.pj_slug_aliases_for）で同等の union+dedup
+# を行うため、自前ループを残すと二重集約になる（設計正典 §1 の落とし穴）。dedup 順序自体
+# （data-dir-major・canonical 先頭）と alias 集合の等価性は optimize_history_store 側の
+# TestAliasAggregationAndEffectiveView で契約テスト済みなので、ここでは「薄いラッパーに
+# なっていること」と「revert 反映が queue_verify まで届くこと」（旧 raw 実装には無かった
+# 挙動変化）を確認する。
 
 
 class TestLoadOptimizeHistoryWithAliases:
-    """advisory は pj_slug_match で alias 対応済みだが optimize_history_store.load_history は
-    完全一致のみ ⇒ 2レーンの rename 耐性が非対称だった。alias 分を union read + id dedup する。
-    """
+    """_load_optimize_history_with_aliases は load_effective_history の薄いラッパー
+    （#402 段階4）。"""
 
-    def test_unions_records_across_aliases(self, monkeypatch):
-        from fleet import queue as fq
-
-        monkeypatch.setattr(
-            fq, "_equivalence_slugs", lambda slug: {"evolve-anything", "rl-anything"}
-        )
-
+    def test_delegates_to_load_effective_history(self, monkeypatch):
         import optimize_history_store
 
-        def _fake_load_history(slug):
-            if slug == "evolve-anything":
-                return [{"id": "e1", "human_accepted": True, "run_id": "r1", "timestamp": "t1"}]
-            if slug == "rl-anything":
-                return [{"id": "r1", "human_accepted": True, "run_id": "r2", "timestamp": "t2"}]
-            return []
+        calls = []
 
-        monkeypatch.setattr(optimize_history_store, "load_history", _fake_load_history)
+        def _fake(slug):
+            calls.append(slug)
+            return [{"id": "e1", "human_accepted": True, "run_id": "r1", "timestamp": "t1"}]
+
+        monkeypatch.setattr(optimize_history_store, "load_effective_history", _fake)
 
         out = qv._load_optimize_history_with_aliases("evolve-anything")
-        ids = sorted(rec["id"] for rec in out)
-        assert ids == ["e1", "r1"]
 
-    def test_dedups_by_id_canonical_first(self, monkeypatch):
-        """canonical 側の entry を優先して dedup する（候補列先頭優先、他ストアと同じ流儀）。"""
+        assert calls == ["evolve-anything"]
+        assert out == [{"id": "e1", "human_accepted": True, "run_id": "r1", "timestamp": "t1"}]
+
+    def test_no_longer_touches_fleet_queue_equivalence_slugs(self, monkeypatch):
+        """二重集約解消の確認: fleet.queue._equivalence_slugs が無くても（import できなくても）
+        動く——ローカルの alias ループを削除した証拠（残っていれば ImportError で落ちる）。"""
         from fleet import queue as fq
-
-        monkeypatch.setattr(
-            fq, "_equivalence_slugs", lambda slug: {"evolve-anything", "rl-anything"}
-        )
-
         import optimize_history_store
-
-        def _fake_load_history(slug):
-            if slug == "evolve-anything":
-                return [{"id": "dup", "human_accepted": True, "run_id": "canon", "timestamp": "t1"}]
-            if slug == "rl-anything":
-                return [{"id": "dup", "human_accepted": True, "run_id": "legacy", "timestamp": "t2"}]
-            return []
-
-        monkeypatch.setattr(optimize_history_store, "load_history", _fake_load_history)
-
-        out = qv._load_optimize_history_with_aliases("evolve-anything")
-        assert len(out) == 1
-        assert out[0]["run_id"] == "canon"
-
-    def test_records_without_id_are_all_kept(self, monkeypatch):
-        """id 欠落 entry は安全に dedup できないため全件保持する。"""
-        from fleet import queue as fq
-
-        monkeypatch.setattr(fq, "_equivalence_slugs", lambda slug: {"a", "b"})
-
-        import optimize_history_store
-
-        def _fake_load_history(slug):
-            return [{"human_accepted": True, "run_id": f"run_{slug}", "timestamp": "t"}]
-
-        monkeypatch.setattr(optimize_history_store, "load_history", _fake_load_history)
-
-        out = qv._load_optimize_history_with_aliases("a")
-        assert len(out) == 2
-
-    def test_import_failure_falls_back_to_bare_slug(self, monkeypatch):
-        """fleet.queue._equivalence_slugs が import できない環境では自身のみで安全側に倒す。"""
-        from fleet import queue as fq
 
         monkeypatch.delattr(fq, "_equivalence_slugs", raising=True)
-
-        import optimize_history_store
-
         monkeypatch.setattr(
             optimize_history_store,
-            "load_history",
+            "load_effective_history",
             lambda slug: [{"id": "x", "human_accepted": True, "run_id": "r", "timestamp": "t"}],
         )
 
         out = qv._load_optimize_history_with_aliases("alpha")
         assert len(out) == 1
 
+
+class TestLoadOptimizeHistoryWithAliasesRealStore:
+    """実ファイル経由（tmp_path・pj_slug alias）で union + revert 反映を確認する。"""
+
+    def _write(self, dir_: Path, slug: str, records: list) -> None:
+        oh = dir_ / "optimize_history"
+        oh.mkdir(parents=True, exist_ok=True)
+        with (oh / f"{slug}.jsonl").open("a", encoding="utf-8") as f:
+            for r in records:
+                f.write(__import__("json").dumps(r) + "\n")
+
+    def test_unions_records_across_pj_rename_alias(self, tmp_path, monkeypatch):
+        import optimize_history_store as store
+        import pj_slug
+
+        monkeypatch.setattr(pj_slug, "PJ_SLUG_ALIASES", {"rl-anything": "evolve-anything"})
+        canonical = tmp_path / "evolve-anything"
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(
+            canonical, "evolve-anything",
+            [{"id": "e1", "human_accepted": True, "run_id": "r1", "timestamp": "t1"}],
+        )
+        self._write(
+            canonical, "rl-anything",
+            [{"id": "r1", "human_accepted": True, "run_id": "r2", "timestamp": "t2"}],
+        )
+
+        out = qv._load_optimize_history_with_aliases("evolve-anything")
+
+        ids = sorted(rec["id"] for rec in out)
+        assert ids == ["e1", "r1"]
+
+    def test_reverted_accept_excluded_end_to_end(self, tmp_path, monkeypatch):
+        """#402 段階4: raw のままだった旧実装には無かった挙動——revert 済み accept は
+        verify_pending の accepted 集計から除外される（S1 と同型の判断母集団汚染防止）。"""
+        import optimize_history_store as store
+
+        canonical = tmp_path / "evolve-anything"
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        recent = datetime.now(timezone.utc).isoformat()
+        self._write(
+            canonical, "evolve-anything",
+            [
+                {"id": "e1", "human_accepted": True, "run_id": "r1", "timestamp": recent},
+                {
+                    "event_type": "revert", "reverted_entry_id": "e1",
+                    "revert_event_id": "rev1", "revert_generation": 1,
+                    "scope": "project", "repo_id": "r", "relative_path": "p",
+                },
+            ],
+        )
+
+        out = qv._load_optimize_history_with_aliases("evolve-anything")
+
+        assert out == []  # revert イベント自体も accept も除外される
+
+
+class TestVerifyPendingByPjUsesEffectiveHistory:
     def test_verify_pending_by_pj_uses_alias_union(self, monkeypatch):
         """verify_pending_by_pj は optimize_history を alias union で読む（E2E 配線確認）。"""
         recent = datetime.now(timezone.utc).isoformat()
-
-        from fleet import queue as fq
-
-        monkeypatch.setattr(
-            fq, "_equivalence_slugs", lambda slug: {"evolve-anything", "rl-anything"}
-        )
 
         import advisory_decision_log
         import optimize_history_store
@@ -670,19 +684,19 @@ class TestLoadOptimizeHistoryWithAliases:
         )
         monkeypatch.setattr(fcol, "aggregate_sessions_by_project", lambda **kwargs: {})
 
-        def _fake_load_history(slug):
-            if slug == "rl-anything":  # 旧 slug 名義の legacy accept
-                return [
-                    {
-                        "id": "legacy1",
-                        "human_accepted": True,
-                        "run_id": "r1",
-                        "timestamp": recent,
-                    }
-                ]
-            return []
+        def _fake_load_effective_history(slug):
+            return [
+                {
+                    "id": "legacy1",
+                    "human_accepted": True,
+                    "run_id": "r1",
+                    "timestamp": recent,
+                }
+            ]
 
-        monkeypatch.setattr(optimize_history_store, "load_history", _fake_load_history)
+        monkeypatch.setattr(
+            optimize_history_store, "load_effective_history", _fake_load_effective_history
+        )
 
         out = qv.verify_pending_by_pj("evolve-anything")
         assert out["accepted"] == 1

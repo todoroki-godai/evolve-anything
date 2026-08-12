@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""bin/evolve-revert — 採用した skill diff を1コマンドで戻す CLI（#402 PR-2 段階4）。
+
+実体は scripts/lib/evolve_revert_cli.py（``bin/evolve-tier`` が雛形の薄いラッパー）。
+
+使用例:
+    bin/evolve-revert <entry_id>            # 何が起きるか確認（既定 dry-run）
+    bin/evolve-revert <entry_id> --apply    # 実際に戻す
+"""
+import sys
+from pathlib import Path
+
+_lib = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_lib))
+
+from evolve_revert_cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

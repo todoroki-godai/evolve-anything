@@ -325,3 +325,344 @@ class TestLoadHistoryUnion:
         store.append_entry({"id": "new"}, "proj")
         assert (canonical / "optimize_history" / "proj.jsonl").exists()
         assert not (legacy / "optimize_history" / "proj.jsonl").exists()
+
+
+class TestLoadRawHistoryAndBackCompat:
+    """#402 PR-2 段階2 §5: 正準名は ``load_raw_history``。``load_history`` は後方互換 wrapper。
+
+    ``load_raw_history`` は旧 ``load_history`` の実装そのもの（挙動不変・単なる rename）。
+    """
+
+    def test_load_raw_history_matches_load_history_output(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        store.append_entry({"id": "a"}, "proj")
+        store.append_entry({"id": "b"}, "proj")
+        assert store.load_raw_history("proj") == store.load_history("proj")
+
+    def test_load_history_delegates_to_load_raw_history(self, tmp_path, monkeypatch):
+        """``load_history`` は単なる別名（代入）でなく ``load_raw_history`` を呼ぶ wrapper。"""
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        store.append_entry({"id": "a"}, "proj")
+        calls = []
+        original = store.load_raw_history
+
+        def spy(slug):
+            calls.append(slug)
+            return original(slug)
+
+        monkeypatch.setattr(store, "load_raw_history", spy)
+        result = store.load_history("proj")
+        assert calls == ["proj"]
+        assert [r["id"] for r in result] == ["a"]
+
+    def test_load_history_and_load_raw_history_are_distinct_functions(self):
+        """単なる別名（``load_history = load_raw_history``）にしない契約。"""
+        assert store.load_history is not store.load_raw_history
+        assert store.load_history.__doc__ != store.load_raw_history.__doc__
+
+
+class TestRevertEventSchema:
+    """#402 PR-2 段階2 §1: revert イベントの必須フィールド契約。"""
+
+    def test_is_revert_event_true_for_revert_type(self):
+        assert store.is_revert_event({"event_type": "revert"}) is True
+
+    def test_is_revert_event_false_for_accept_entry(self):
+        assert store.is_revert_event({"id": "x", "human_accepted": True}) is False
+
+    def test_is_revert_event_false_for_missing_event_type(self):
+        assert store.is_revert_event({}) is False
+
+    def test_missing_fields_lists_all_when_record_empty(self):
+        missing = store.missing_revert_event_fields({})
+        assert set(missing) == set(store.REVERT_EVENT_REQUIRED_FIELDS)
+
+    def test_missing_fields_empty_when_record_complete(self):
+        rec = {field: "x" for field in store.REVERT_EVENT_REQUIRED_FIELDS}
+        rec["revert_generation"] = 1  # int 契約（他は文字列でも形式検査はしない）
+        assert store.missing_revert_event_fields(rec) == []
+
+    def test_required_fields_match_pr1_field_names(self):
+        """PR-1（_revert_generation_for_target）が判定に使う3フィールドと食い違わない。"""
+        required = set(store.REVERT_EVENT_REQUIRED_FIELDS)
+        assert {"scope", "repo_id", "relative_path"} <= required
+        assert "reverted_entry_id" in required
+        assert "revert_generation" in required
+        assert "revert_event_id" in required
+        assert "event_type" in required
+
+
+class TestFoldEffective:
+    """#402 PR-2 段階2 §1: 出力契約（純粋関数・副作用ゼロ・I/O ゼロ）。"""
+
+    def test_excludes_reverted_accept_entry(self):
+        records = [
+            {"id": "x1", "human_accepted": True},
+            {
+                "event_type": "revert",
+                "reverted_entry_id": "x1",
+                "revert_event_id": "r1",
+                "revert_generation": 1,
+                "scope": "project",
+                "repo_id": "r",
+                "relative_path": "p",
+            },
+        ]
+        assert store.fold_effective(records) == []
+
+    def test_revert_event_itself_excluded_even_without_matching_accept(self):
+        records = [{"event_type": "revert", "reverted_entry_id": "missing"}]
+        assert store.fold_effective(records) == []
+
+    def test_non_reverted_entries_pass_through_unchanged(self):
+        records = [
+            {"id": "a1", "human_accepted": True},
+            {"id": "a2", "human_accepted": False},
+        ]
+        assert store.fold_effective(records) == records
+
+    def test_order_preserved_stable_filter(self):
+        records = [{"id": "b"}, {"id": "a"}]
+        assert store.fold_effective(records) == records
+
+    def test_only_reverted_entry_removed_survivor_kept(self):
+        records = [
+            {"id": "a1", "human_accepted": True},
+            {"id": "a2", "human_accepted": True},
+            {"event_type": "revert", "reverted_entry_id": "a1"},
+        ]
+        out = store.fold_effective(records)
+        assert [r["id"] for r in out] == ["a2"]
+
+    def test_records_without_id_never_matched_as_reverted(self):
+        """``reverted_entry_id`` が None の revert（壊れたレコード）が id 無しレコードを
+        誤って畳まないことを保証する（``rec.get("id") not in reverted_ids`` の False Positive 防止）。
+        """
+        records = [{"human_accepted": True}, {"event_type": "revert"}]
+        out = store.fold_effective(records)
+        assert out == [{"human_accepted": True}]
+
+    def test_no_io_pure_function(self, tmp_path, monkeypatch):
+        """I/O ゼロ: HISTORY_ROOT を存在しないパスにしても動く（ファイルシステムに触れない）。"""
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "does-not-exist")
+        records = [{"id": "a1"}]
+        assert store.fold_effective(records) == records
+
+
+class TestAliasAggregationAndEffectiveView:
+    """#402 PR-2 段階2 §1: alias 6段階集約 + fold_effective の1回適用。
+
+    - data-dir（major）: canonical → iter_read_data_dirs の順
+    - slug（minor）    : canonical_slug → sorted(aliases - {canonical_slug})
+    - 異なる canonical slug 間では畳まない
+    """
+
+    @staticmethod
+    def _write(dir_: Path, slug: str, records: list) -> None:
+        oh = dir_ / "optimize_history"
+        oh.mkdir(parents=True, exist_ok=True)
+        (oh / f"{slug}.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+        )
+
+    def test_fold_crosses_data_dir_boundary(self, tmp_path, monkeypatch):
+        """accept entry が legacy 側、revert イベントが canonical 側でも fold が両者を見つける。"""
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        legacy = tmp_path / "rl-anything"
+        self._write(
+            canonical,
+            "proj",
+            [
+                {
+                    "event_type": "revert",
+                    "reverted_entry_id": "x1",
+                    "revert_event_id": "rev1",
+                    "revert_generation": 1,
+                    "scope": "project",
+                    "repo_id": "r",
+                    "relative_path": "p",
+                }
+            ],
+        )
+        self._write(legacy, "proj", [{"id": "x1", "human_accepted": True}])
+        assert store.load_effective_history("proj") == []
+        events = store.load_revert_events("proj")
+        assert len(events) == 1
+        assert events[0]["reverted_entry_id"] == "x1"
+
+    def test_fold_crosses_pj_rename_slug_alias(self, tmp_path, monkeypatch):
+        """PJ rename alias（旧 slug↔現 slug）をまたいでも fold が両者を見つける（単一 data-dir）。"""
+        import pj_slug
+
+        monkeypatch.setattr(pj_slug, "PJ_SLUG_ALIASES", {"old-proj": "new-proj"})
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        # revert イベントは現 slug（new-proj）側、accept entry は旧 slug（old-proj）側。
+        self._write(
+            canonical,
+            "new-proj",
+            [
+                {
+                    "event_type": "revert",
+                    "reverted_entry_id": "x1",
+                    "revert_event_id": "rev1",
+                    "revert_generation": 1,
+                    "scope": "project",
+                    "repo_id": "r",
+                    "relative_path": "p",
+                }
+            ],
+        )
+        self._write(canonical, "old-proj", [{"id": "x1", "human_accepted": True}])
+        assert store.load_effective_history("new-proj") == []
+        # 旧 slug を指定して呼んでも同じ canonical family に解決され結果は同じ。
+        assert store.load_effective_history("old-proj") == []
+
+    def test_does_not_fold_across_different_canonical_slugs(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(
+            canonical,
+            "proj-a",
+            [
+                {
+                    "event_type": "revert",
+                    "reverted_entry_id": "x1",
+                    "scope": "project",
+                    "repo_id": "r",
+                    "relative_path": "p",
+                }
+            ],
+        )
+        self._write(canonical, "proj-b", [{"id": "x1", "human_accepted": True}])
+        # proj-a と proj-b は別 canonical slug なので proj-b の x1 は畳まれない。
+        out = store.load_effective_history("proj-b")
+        assert [r["id"] for r in out] == ["x1"]
+
+    def test_dedup_priority_is_datadir_major_slug_minor(self, tmp_path, monkeypatch):
+        """全順序: data-dir が優先軸、slug は劣後軸（将来 rename で slug 辞書順が逆でも壊れない）。"""
+        import pj_slug
+
+        monkeypatch.setattr(pj_slug, "PJ_SLUG_ALIASES", {"old-proj": "new-proj"})
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        legacy_dd = tmp_path / "rl-anything"
+        # canonical data-dir + alias slug（劣後 slug 軸）
+        self._write(canonical, "old-proj", [{"id": "x1", "value": "canonical_dd_alias_slug"}])
+        # legacy data-dir + canonical slug（優先 slug 軸だが data-dir で劣後）
+        self._write(legacy_dd, "new-proj", [{"id": "x1", "value": "legacy_dd_canonical_slug"}])
+        out = store._aliased_raw_records("new-proj")
+        assert len(out) == 1
+        assert out[0]["value"] == "canonical_dd_alias_slug"
+
+    def test_load_revert_events_excludes_non_revert_records(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(
+            canonical,
+            "proj",
+            [
+                {"id": "a1", "human_accepted": True},
+                {"event_type": "revert", "reverted_entry_id": "a1"},
+            ],
+        )
+        events = store.load_revert_events("proj")
+        assert [e.get("reverted_entry_id") for e in events] == ["a1"]
+
+    def test_load_effective_history_empty_when_no_data(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        assert store.load_effective_history("nope") == []
+        assert store.load_revert_events("nope") == []
+
+
+class TestLoadRawHistoryWithAliases:
+    """#402 段階3 M-A: revert の entry 検索専用の公開 API。
+
+    revert 済み entry は ``load_effective_history`` から消えるため、冪等判定
+    （同じ entry_id で再実行）には raw が要る。``_aliased_raw_records`` の公開版。
+    """
+
+    @staticmethod
+    def _write(dir_: Path, slug: str, records: list) -> None:
+        oh = dir_ / "optimize_history"
+        oh.mkdir(parents=True, exist_ok=True)
+        (oh / f"{slug}.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+        )
+
+    def test_matches_aliased_raw_records(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "proj", [{"id": "x1", "human_accepted": True}])
+        assert store.load_raw_history_with_aliases("proj") == store._aliased_raw_records("proj")
+
+    def test_includes_revert_events_unlike_effective_view(self, tmp_path, monkeypatch):
+        """revert 済み entry は raw では消えない（冪等判定に raw が必要な理由そのもの）。"""
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(
+            canonical,
+            "proj",
+            [
+                {"id": "x1", "human_accepted": True},
+                {
+                    "event_type": "revert",
+                    "reverted_entry_id": "x1",
+                    "revert_event_id": "rev1",
+                    "revert_generation": 1,
+                    "scope": "project",
+                    "repo_id": "r",
+                    "relative_path": "p",
+                },
+            ],
+        )
+        records = store.load_raw_history_with_aliases("proj")
+        # raw は accept entry も revert イベントも両方保持する（フィルタしない）。
+        assert any(r.get("id") == "x1" for r in records)
+        assert any(store.is_revert_event(r) for r in records)
+        assert store.load_effective_history("proj") == []  # 対比: effective からは消える
+
+    def test_duplicate_ids_out_param_flags_multi_source_id(self, tmp_path, monkeypatch):
+        """#402 段階3 C1: 同一 id が複数 source（data-dir × alias）に存在する不整合を明示する。"""
+        import pj_slug
+
+        monkeypatch.setattr(pj_slug, "PJ_SLUG_ALIASES", {"old-proj": "new-proj"})
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "new-proj", [{"id": "x1", "value": "canonical_wins"}])
+        self._write(canonical, "old-proj", [{"id": "x1", "value": "alias_loses"}])
+
+        dup_ids: set = set()
+        records = store.load_raw_history_with_aliases("new-proj", duplicate_ids=dup_ids)
+
+        assert [r["value"] for r in records if r.get("id") == "x1"] == ["canonical_wins"]
+        assert dup_ids == {"x1"}
+
+    def test_duplicate_ids_out_param_empty_when_no_conflict(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "proj", [{"id": "x1"}])
+
+        dup_ids: set = set()
+        store.load_raw_history_with_aliases("proj", duplicate_ids=dup_ids)
+        assert dup_ids == set()
+
+    def test_duplicate_ids_default_none_does_not_change_behavior(self, tmp_path, monkeypatch):
+        """既存呼び出し元（duplicate_ids 未指定）は挙動不変（後方互換）。"""
+        canonical = tmp_path / "evolve-anything"
+        (canonical / "optimize_history").mkdir(parents=True)
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+        self._write(canonical, "proj", [{"id": "x1"}])
+        assert store.load_raw_history_with_aliases("proj") == [{"id": "x1"}]

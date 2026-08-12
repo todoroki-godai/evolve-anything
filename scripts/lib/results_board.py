@@ -16,9 +16,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from optimize_history_store import load_history
+from optimize_history_store import load_effective_history, load_revert_events
 from telemetry_query import query_corrections
 from correction_semantic.provenance_weight import count_human_corrections
+from evolve_revert import REASON_LABELS, compute_revert_availability
 
 _WINDOW_DAYS = 30
 
@@ -169,10 +170,26 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     prev_rework = count_human_corrections(prev_corrections)
 
     # ── 採用した改善: 直近30日の optimize_history ─────────────────
+    # #402 段階4: revert 済み accept を判断母集団から除外した effective view を読む
+    # （raw のままだと revert イベントが history[-10:] に混入し本物の decision を
+    # 押し出す・S1）。
     try:
-        history = load_history(slug) or []
+        history = load_effective_history(slug) or []
     except Exception:
         history = []
+
+    # withdrawal candidate の「戻し済み」表示用（S4）。effective view は revert 済み
+    # accept を既に除外しているため、このボードで reverted=True になることは構造上
+    # 無いが、fold の内部実装に依存せず load_revert_events 経由で判定する契約にする
+    # （results_board で individual fold 実装をしない・設計正典 §3）。
+    try:
+        reverted_ids = {
+            e.get("reverted_entry_id")
+            for e in (load_revert_events(slug) or [])
+            if e.get("reverted_entry_id") is not None
+        }
+    except Exception:
+        reverted_ids = set()
 
     recent_history = [
         h for h in history if _in_window(h, window_start, _now, inclusive_end=True)
@@ -204,11 +221,23 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     )[:10]
 
     # ── 取り下げ候補: accepted のうち verdict == REGRESSED ──────────
-    withdrawal_candidates = [
-        {"skill_name": _label(e), "timestamp": e.get("timestamp"), "verdict": e.get("verdict")}
-        for e in buckets["accepted"]
-        if e.get("verdict") == "REGRESSED"
-    ]
+    # #402 段階4 §3(S4): entry_id/revert_available/revert_unavailable_reason/reverted
+    # を構造化結果まで運ぶ（PR-1 の敗因「導線ゼロ」の再演を防ぐ）。
+    withdrawal_candidates = []
+    for e in buckets["accepted"]:
+        if e.get("verdict") != "REGRESSED":
+            continue
+        entry_id = e.get("id")
+        available, reason = compute_revert_availability(e)
+        withdrawal_candidates.append({
+            "skill_name": _label(e),
+            "timestamp": e.get("timestamp"),
+            "verdict": e.get("verdict"),
+            "entry_id": entry_id,
+            "revert_available": available,
+            "revert_unavailable_reason": reason,
+            "reverted": entry_id is not None and entry_id in reverted_ids,
+        })
 
     return {
         "slug": slug,
@@ -265,6 +294,20 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
         for item in board["withdrawal_candidates"]:
             ts = (item.get("timestamp") or "")[:10]
             lines.append(f"- {ts}: {item['skill_name']} — verdict={item['verdict']}")
+            entry_id = item.get("entry_id")
+            if item.get("reverted"):
+                lines.append("  戻し済みです。")
+            elif item.get("revert_available") and entry_id:
+                # #402 段階4 §3(S4): revert_available=true の行には実行コマンド
+                # そのものを印字する（既定 dry-run のため2段案内）。
+                lines.append(f"  bin/evolve-revert {entry_id}            # 何が起きるか確認（既定 dry-run）")
+                lines.append(f"  bin/evolve-revert {entry_id} --apply    # 実際に戻す")
+            elif not item.get("revert_available"):
+                # コード（機械用）でなく日本語1行（人間用）を表示する（§3 理由コード2層）。
+                reason = item.get("revert_unavailable_reason")
+                label = REASON_LABELS.get(reason, reason) if reason else None
+                if label:
+                    lines.append(f"  {label}")
         lines.append("")
 
     return lines

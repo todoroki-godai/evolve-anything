@@ -22,7 +22,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
@@ -82,34 +82,75 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return records
 
 
-def load_history(slug: str) -> List[Dict[str, Any]]:
+def _merge_dedup(
+    batches: Iterable[List[Dict[str, Any]]], duplicate_ids: Optional[Set[Any]] = None
+) -> List[Dict[str, Any]]:
+    """複数バッチ（候補 dir/slug 順に読んだレコード列）を id dedup（先勝ち）しつつ結合する。
+
+    ``id`` を持たないレコードは安全に dedup できないため無条件で全件保持する。
+    ``load_raw_history`` / ``_aliased_raw_records`` の共有 chokepoint（#402 段階2）:
+    2つの集約経路が別々に dedup ロジックを持つと desync するため単一化する
+    （pitfall_copied_parse_convention_partial_fix と同じ理由）。
+
+    ``duplicate_ids``（#402 段階3 M-A / C1）: 指定すると、同一 ``id`` が複数バッチに
+    存在した場合にその ``id`` を追加する（採用されなかった側の値が違っても同じでも、
+    「複数 source に存在した」事実そのものを明示する診断用）。省略時（``None``）は
+    従来どおり何も記録しない（後方互換・既存呼び出し元は挙動不変）。
+    """
+    by_id: Dict[Any, Dict[str, Any]] = {}
+    out: List[Dict[str, Any]] = []
+    for batch in batches:
+        for rec in batch:
+            rid = rec.get("id")
+            if rid is not None:
+                if rid in by_id:
+                    if duplicate_ids is not None:
+                        duplicate_ids.add(rid)
+                    continue  # 候補列は先頭ほど優先 → 先勝ち
+                by_id[rid] = rec
+            out.append(rec)
+    return out
+
+
+def load_raw_history(slug: str) -> List[Dict[str, Any]]:
     """slug の履歴を canonical + legacy/plugins-data から cross-dir union read する（#45）。
 
-    DATA_DIR 断片化（rename rl-anything→evolve-anything / plugins-data hook split）の移行期、
-    canonical だけ読むと legacy にのみ残った accept/reject 履歴（fitness calibration の母集団）
-    を取り逃す。``rl_common.iter_read_data_dirs`` が ``HISTORY_ROOT.parent``（= DATA_DIR）の親
-    から候補 dir を導出し、各候補の ``optimize_history/<slug>.jsonl`` を読んで合算する。
-    候補は **canonical 先頭**なので、同一 ``id`` は canonical を優先して dedup する
-    （``id`` を持たないレコードは安全に dedup できないため全件保持）。
+    **正準名（#402 段階2 §5）**。DATA_DIR 断片化（rename rl-anything→evolve-anything /
+    plugins-data hook split）の移行期、canonical だけ読むと legacy にのみ残った accept/reject
+    履歴（fitness calibration の母集団）を取り逃す。``rl_common.iter_read_data_dirs`` が
+    ``HISTORY_ROOT.parent``（= DATA_DIR）の親から候補 dir を導出し、各候補の
+    ``optimize_history/<slug>.jsonl`` を読んで合算する。候補は **canonical 先頭**なので、
+    同一 ``id`` は canonical を優先して dedup する。
 
     **読み取り専用**: ``append_entry``（write）は canonical 固定のまま（ADR-049: write 側
     self-resolver は意図的に維持）。本関数は read 側だけを union 化する。tmp canonical を
     渡すテストでは兄弟 dir が存在せず canonical のみを読む（hermetic）。
+
+    **PJ rename slug alias は適用しない**（``evolve-anything``/``rl-anything`` のような単一
+    slug の cross-dir union のみ）。alias をまたいだ集約が要るのは判断母集団を作る
+    ``load_effective_history`` / ``load_revert_events``（``_aliased_raw_records`` 経由）で、
+    本関数の既存呼び出し元（未移行 reader）の挙動は変えない（#402 段階2・段階4で移行）。
     """
     from rl_common import iter_read_data_dirs
 
     safe = _sanitize_slug(slug)
-    by_id: Dict[Any, Dict[str, Any]] = {}
-    out: List[Dict[str, Any]] = []
-    for d in iter_read_data_dirs(HISTORY_ROOT.parent):
-        for rec in _read_jsonl(d / "optimize_history" / f"{safe}.jsonl"):
-            rid = rec.get("id")
-            if rid is not None:
-                if rid in by_id:
-                    continue  # 候補列は canonical 先頭 → 先勝ち（canonical 優先）
-                by_id[rid] = rec
-            out.append(rec)
-    return out
+    return _merge_dedup(
+        _read_jsonl(d / "optimize_history" / f"{safe}.jsonl")
+        for d in iter_read_data_dirs(HISTORY_ROOT.parent)
+    )
+
+
+def load_history(slug: str) -> List[Dict[str, Any]]:
+    """[後方互換] ``load_raw_history`` の thin wrapper（#402 段階2 §5）。
+
+    正準名は ``load_raw_history``。本関数は既存呼び出し元の一斉書き換えを避けるための
+    後方互換名として残す。**単なる別名（``load_history = load_raw_history``）にはしない** —
+    docstring・型注釈・将来の非推奨化（deprecation warning 等）を ``load_raw_history`` と
+    独立に管理できるようにするため。新規コードは raw が必要なら ``load_raw_history``、
+    通常の業務読取は ``load_effective_history`` を使うこと（raw を読んでよい箇所は
+    ``raw_history_gate`` の allowlist で明示管理する）。
+    """
+    return load_raw_history(slug)
 
 
 def normalize_entry_timestamp(entry: Dict[str, Any]) -> None:
@@ -168,3 +209,146 @@ def append_entry(entry: Dict[str, Any], slug: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+# ─── revert イベントと effective view（#402 PR-2 段階2・§1） ───────────────
+
+# revert イベント（apply 実行の記録）は accept/reject entry とは別のレコード型。
+# ``event_type`` で判別する。writer（apply engine）は段階3 で追加する — 本モジュールは
+# schema 契約 + 純粋 fold ロジックのみを持つ。
+REVERT_EVENT_TYPE = "revert"
+
+# revert イベントの必須フィールド（設計正典 §1）。``scope``/``repo_id``/``relative_path`` は
+# PR-1 の ``evolve_decision_ids._revert_generation_for_target`` が対象一致の判定に使う3つと
+# フィールド名を揃えている（食い違わせないこと）。
+REVERT_EVENT_REQUIRED_FIELDS: Tuple[str, ...] = (
+    "event_type",  # 固定値 "revert"
+    "reverted_entry_id",  # 畳む対象の accept entry ID
+    "revert_event_id",  # deterministic（決定6 の冪等再実行の判定キー）
+    "revert_generation",  # この revert 実行後の世代
+    "scope",  # project/global（対象一致判定に必須）
+    "repo_id",  # 対象一致判定に必須
+    "relative_path",  # 対象一致判定に必須
+    "timestamp",  # 表示・診断用
+    "skill_name",  # 表示・診断用
+)
+
+
+def is_revert_event(rec: Dict[str, Any]) -> bool:
+    """レコードが revert イベントか（``event_type == "revert"``）。"""
+    return rec.get("event_type") == REVERT_EVENT_TYPE
+
+
+def missing_revert_event_fields(rec: Dict[str, Any]) -> List[str]:
+    """revert イベントの必須フィールドのうち record に無いものを返す（空なら完全）。
+
+    段階3 の writer 実装時の契約テスト・診断用。値の型検査はしない（キーの有無のみ）。
+    """
+    return [field for field in REVERT_EVENT_REQUIRED_FIELDS if field not in rec]
+
+
+def fold_effective(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """revert イベントを反映した effective view を計算する純粋関数（副作用ゼロ・I/O ゼロ）。
+
+    出力契約（設計正典 §1・確定済み）:
+      - revert イベントで畳まれた accept entry は出力から**除外**する（フラグを立てない）
+      - revert イベント自体も出力に**含めない**（判断母集団ではない。revert の事実が要る
+        reader は ``load_revert_events`` を使う）
+      - 入力の並びを保った安定フィルタ（並び替えはしない）
+
+    呼び出し側の責務: fold は集約済みレコード集合へ**1回だけ**適用すること
+    （ファイル単位で個別に fold すると、accept が legacy 側・revert が canonical 側に
+    分かれるケースで両者が出会わない。``_aliased_raw_records`` 参照）。
+    """
+    reverted_ids = {
+        rec.get("reverted_entry_id")
+        for rec in records
+        if is_revert_event(rec) and rec.get("reverted_entry_id") is not None
+    }
+    return [
+        rec
+        for rec in records
+        if not is_revert_event(rec) and rec.get("id") not in reverted_ids
+    ]
+
+
+def _aliased_raw_records(
+    slug: str, duplicate_ids: Optional[Set[Any]] = None
+) -> List[Dict[str, Any]]:
+    """slug の canonical family（PJ rename alias 全体）を data-dir × alias 全順序で集約する。
+
+    ``load_effective_history`` / ``load_revert_events`` の入力生成専用（内部 helper）。
+    集約順序は設計正典 §1「集約順序を以下に固定する」の全順序（将来 rename で slug 辞書順が
+    崩れても壊れない）:
+
+      1. ``pj_slug.canonical_pj_slug(slug)`` で canonical 化する
+      2. ``pj_slug.pj_slug_aliases_for(canonical_slug)`` で同値 slug 集合を得る
+      3. 各 alias × 全 data-dir のレコードを集約する
+      4. dedup 優先順位は **data-dir が major・slug が minor** の全順序（先勝ち）:
+         data-dir = canonical → ``iter_read_data_dirs`` の順、
+         slug = canonical_slug → ``sorted(aliases - {canonical_slug})``
+         （既存 ``load_raw_history`` の「候補列 canonical 先頭・先勝ち」契約を data-dir 軸で
+         保つため。alias 表の SoT は ``pj_slug`` — 自前で alias 表を持たない）
+
+    **worktree basename 由来 slug**（``detect_worktree_name_slugs`` が検出する ``agent-*`` /
+    ``worktree-*`` 系）は alias 対象に含めない（``pj_slug.PJ_SLUG_ALIASES`` に元々含まれない
+    ため何もしなくても除外される・診断のみ・revert 非対応）。
+
+    **異なる canonical slug 間では畳まない**: ``pj_slug_aliases_for(canonical_slug)`` は
+    その canonical slug に畳まれる旧名だけを返すため、他 PJ の canonical family を
+    構造的に取り込まない。
+    """
+    from pj_slug import canonical_pj_slug, pj_slug_aliases_for
+    from rl_common import iter_read_data_dirs
+
+    canonical_slug = canonical_pj_slug(slug) or slug
+    aliases = pj_slug_aliases_for(canonical_slug) or {canonical_slug}
+    ordered_aliases = [canonical_slug] + sorted(aliases - {canonical_slug})
+
+    return _merge_dedup(
+        (
+            _read_jsonl(d / "optimize_history" / f"{_sanitize_slug(a)}.jsonl")
+            for d in iter_read_data_dirs(HISTORY_ROOT.parent)
+            for a in ordered_aliases
+        ),
+        duplicate_ids=duplicate_ids,
+    )
+
+
+def load_effective_history(slug: str) -> List[Dict[str, Any]]:
+    """slug の canonical family（rename alias 込み）の effective view（判断母集団）。
+
+    ``_aliased_raw_records``（alias 6段階集約）→ ``fold_effective``（1回適用）。
+    revert 済み accept entry・revert イベント自体は出力に含まれない（§1 出力契約）。
+    """
+    return fold_effective(_aliased_raw_records(slug))
+
+
+def load_revert_events(slug: str) -> List[Dict[str, Any]]:
+    """slug の canonical family（rename alias 込み）の revert イベント（診断用）。
+
+    revert の事実そのものが必要な reader が使う。``load_effective_history`` と同じ
+    alias 6段階集約から抽出するため、集約結果に矛盾は生じない。
+    """
+    return [rec for rec in _aliased_raw_records(slug) if is_revert_event(rec)]
+
+
+def load_raw_history_with_aliases(
+    slug: str, *, duplicate_ids: Optional[Set[Any]] = None
+) -> List[Dict[str, Any]]:
+    """slug の canonical family（rename alias 込み）の raw 履歴（#402 段階3 M-A）。
+
+    ``_aliased_raw_records`` の公開版。**revert の entry_id 検索専用**——業務読取には
+    使わない（通常の判断母集団が必要な reader は ``load_effective_history`` を使う）。
+    revert 済み entry は ``load_effective_history`` の出力から除外されるため、冪等判定
+    （同じ entry_id で revert を再実行したときに前回のイベントが既に記録済みかの判定）
+    には raw が要る。
+
+    ``duplicate_ids``: 指定すると、同一 entry ``id`` が複数 source（data-dir × alias）に
+    存在した場合にその id をここへ追加する（§1 手順4 の優先順位で1件を採るが、複数
+    source への重複そのものは正当な理由でも起こりうるため——同一内容の accept/revert/
+    再accept のループ等——拒否はせず、呼び出し元（revert の entry 検索）へ不整合の
+    可能性を明示するために使う・design 正典 §2 手順1 C1）。省略時は診断しない
+    （後方互換）。
+    """
+    return _aliased_raw_records(slug, duplicate_ids=duplicate_ids)

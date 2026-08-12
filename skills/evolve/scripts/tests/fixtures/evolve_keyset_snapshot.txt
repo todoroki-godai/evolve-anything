@@ -39,6 +39,7 @@ env_tier_reason.thresholds.large
 env_tier_reason.thresholds.medium
 evolve_decisions
 evolve_decisions.count
+evolve_decisions.dry_run_snapshot_warning
 evolve_decisions.marker_cleared
 evolve_decisions.marker_error
 evolve_decisions.marker_written

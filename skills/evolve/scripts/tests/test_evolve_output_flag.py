@@ -103,6 +103,31 @@ def test_summary_surfaces_marker_write_failure():
     assert "marker_error" not in evolve._summarize_result(ok, Path("/tmp/out.json"))
 
 
+def test_summary_surfaces_dry_run_snapshot_warning():
+    """#402 PR-2 §0.3: sidecar 単調性契約違反の警告 + 回復手順を 1 行サマリにも出す。
+
+    envelope（`result["evolve_decisions"]["dry_run_snapshot_warning"]`）だけでは
+    reader が居ない書きっぱなしフィールドになる。`marker_error`（#287-5）と同じ配線
+    パターンで stdout の1行サマリにも出し、None のときは summary に現れないことを
+    固定する（`marker_error` と同じ条件分岐）。
+    """
+    from pathlib import Path
+
+    warned = dict(_FAKE_RESULT)
+    warned["evolve_decisions"] = {
+        "count": 1,
+        "dry_run_snapshot_warning": (
+            "#402: history に revert イベントが存在するのに lock sidecar が不在です"
+        ),
+    }
+    summary = evolve._summarize_result(warned, Path("/tmp/out.json"))
+    assert summary["dry_run_snapshot_warning"].startswith("#402:")
+
+    ok = dict(_FAKE_RESULT)
+    ok["evolve_decisions"] = {"count": 1, "dry_run_snapshot_warning": None}
+    assert "dry_run_snapshot_warning" not in evolve._summarize_result(ok, Path("/tmp/out.json"))
+
+
 def test_no_output_flag_keeps_full_json_on_stdout(patched_run, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["evolve.py", "--dry-run"])
 

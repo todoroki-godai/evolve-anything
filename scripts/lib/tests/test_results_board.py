@@ -279,9 +279,17 @@ def _iso(days_ago: float) -> str:
 
 @pytest.fixture
 def stub_history(monkeypatch):
-    """optimize_history_store.load_history をスタブに差し替える。"""
+    """optimize_history_store.load_effective_history をスタブに差し替える（#402 段階4）。"""
     def _set(entries):
-        monkeypatch.setattr(results_board, "load_history", lambda slug: entries)
+        monkeypatch.setattr(results_board, "load_effective_history", lambda slug: entries)
+    return _set
+
+
+@pytest.fixture
+def stub_revert_events(monkeypatch):
+    """optimize_history_store.load_revert_events をスタブに差し替える（#402 段階4 §3）。"""
+    def _set(events):
+        monkeypatch.setattr(results_board, "load_revert_events", lambda slug: events)
     return _set
 
 
@@ -395,7 +403,7 @@ class TestBuildResultsBoardDecisions:
         def _boom(slug):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(results_board, "load_history", _boom)
+        monkeypatch.setattr(results_board, "load_effective_history", _boom)
 
         board = results_board.build_results_board("evolve-anything", now=_NOW)
 
@@ -490,6 +498,97 @@ class TestBuildResultsBoardWithdrawalCandidates:
         assert board["withdrawal_candidates"] == []
 
 
+class TestBuildResultsBoardWithdrawalRevertFields(object):
+    """#402 段階4 §3: withdrawal candidate に entry_id/revert_available/
+    revert_unavailable_reason/reverted を構造化結果まで運ぶ。"""
+
+    def test_pre_extension_entry_is_not_revert_available(
+        self, stub_history, stub_corrections, stub_revert_events
+    ):
+        """revert_schema_version の無い entry（記録拡張前・非対応 writer）は
+        pre_extension として revert_available=False になる。"""
+        stub_corrections([])
+        stub_revert_events([])
+        stub_history([
+            {
+                "id": "p1", "source": None, "approved": True, "verdict": "REGRESSED",
+                "skill_name": "bad-apply", "timestamp": _iso(1),
+            },
+        ])
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+
+        c = board["withdrawal_candidates"][0]
+        assert c["entry_id"] == "p1"
+        assert c["revert_available"] is False
+        assert c["revert_unavailable_reason"] == "pre_extension"
+        assert c["reverted"] is False
+
+    def test_full_revert_fields_entry_is_revert_available(
+        self, stub_history, stub_corrections, stub_revert_events
+    ):
+        stub_corrections([])
+        stub_revert_events([])
+        stub_history([
+            {
+                "id": "p2", "source": None, "approved": True, "verdict": "REGRESSED",
+                "skill_name": "bad-apply2", "timestamp": _iso(1),
+                "revert_schema_version": 1, "revert_before_b64": "eJw...",
+                "revert_unavailable_reason": None, "scope": "project",
+                "repo_id": "/repo", "relative_path": "skills/x/SKILL.md",
+                "after_sha": "deadbeef",
+            },
+        ])
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+
+        c = board["withdrawal_candidates"][0]
+        assert c["entry_id"] == "p2"
+        assert c["revert_available"] is True
+        assert c["revert_unavailable_reason"] is None
+        assert c["reverted"] is False
+
+    def test_before_too_large_entry(self, stub_history, stub_corrections, stub_revert_events):
+        stub_corrections([])
+        stub_revert_events([])
+        stub_history([
+            {
+                "id": "p3", "source": None, "approved": True, "verdict": "REGRESSED",
+                "skill_name": "big-skill", "timestamp": _iso(1),
+                "revert_schema_version": 1, "revert_before_b64": None,
+                "revert_unavailable_reason": "before_too_large", "scope": "project",
+                "repo_id": "/repo", "relative_path": "skills/big/SKILL.md",
+            },
+        ])
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+
+        c = board["withdrawal_candidates"][0]
+        assert c["revert_available"] is False
+        assert c["revert_unavailable_reason"] == "before_too_large"
+
+    def test_revert_events_load_failure_is_graceful(
+        self, stub_history, stub_corrections, monkeypatch
+    ):
+        """load_revert_events が例外を投げても reverted=False にフォールバックする。"""
+        stub_corrections([])
+        stub_history([
+            {
+                "id": "p1", "source": None, "approved": True, "verdict": "REGRESSED",
+                "skill_name": "bad-apply", "timestamp": _iso(1),
+            },
+        ])
+
+        def _boom(slug):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(results_board, "load_revert_events", _boom)
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+
+        assert board["withdrawal_candidates"][0]["reverted"] is False
+
+
 # ── render_results_board ────────────────────────────────────────────
 
 
@@ -545,6 +644,48 @@ class TestRenderResultsBoard:
         text = "\n".join(lines)
         assert "取り下げ候補" in text
         assert "bad-apply" in text
+
+    def test_revert_available_prints_two_step_command(self):
+        """#402 段階4 §3(S4): revert_available=true の行には実行コマンドそのものを
+        印字する（既定 dry-run なので2段案内）。"""
+        board = self._board(withdrawal_candidates=[
+            {
+                "skill_name": "bad-apply", "timestamp": _iso(1), "verdict": "REGRESSED",
+                "entry_id": "p1", "revert_available": True,
+                "revert_unavailable_reason": None, "reverted": False,
+            },
+        ])
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "bin/evolve-revert p1" in text
+        assert "bin/evolve-revert p1 --apply" in text
+
+    def test_revert_unavailable_prints_japanese_reason(self):
+        """コード（機械用）でなく日本語1行（人間用）を表示する。"""
+        board = self._board(withdrawal_candidates=[
+            {
+                "skill_name": "old-apply", "timestamp": _iso(1), "verdict": "REGRESSED",
+                "entry_id": "p2", "revert_available": False,
+                "revert_unavailable_reason": "pre_extension", "reverted": False,
+            },
+        ])
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "pre_extension" not in text
+        assert "戻す機能の導入前に採用されたため" in text
+
+    def test_reverted_entry_shows_reverted_note_not_command(self):
+        board = self._board(withdrawal_candidates=[
+            {
+                "skill_name": "already-reverted", "timestamp": _iso(1), "verdict": "REGRESSED",
+                "entry_id": "p3", "revert_available": True,
+                "revert_unavailable_reason": None, "reverted": True,
+            },
+        ])
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "bin/evolve-revert p3" not in text
+        assert "戻し済み" in text
 
     def test_is_read_only_no_disk_write(self, tmp_path):
         before = set(tmp_path.rglob("*"))
