@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **feat(detection): correction capture の修理 A0（ADR-054 §5-A0, #379）** —
+  実コーパス census（precision 87.5%、`_MACHINERY_MARKERS` 追加後）で確認済みの低リスク・
+  低recall語彙2件（`naoshite-request` = `直して`/`修正して`/`訂正して`。複合動詞
+  `見直して`/`作り直して`/`書き直して`/`考え直して`/`やり直して` は lookbehind で除外、
+  `yamete-request` = `やめて(ほしい|ください|くれ)`）を `CORRECTION_PATTERNS` に追加。
+  harness の background agent 停止通知本文（`background agents were stopped by the user`）を
+  `_MACHINERY_MARKERS` に追加し機構ターンとして除外。`hooks/correction_detect.py` の record に
+  `pattern_version` を付与し、`capture_rate.compute_capture_rate()` を `source="hook"` で
+  フィルタするよう修正（ADR §2.6-5「hook N件」表示が実際は `reflect_confirmed` 等の全チャネルを
+  合算していたバグの根治と同一箇所）。返り値に `hook_pattern_version_counts`（表示配線は本PRの
+  スコープ外）を追加。
 - **docs(adr): ADR-054「4本柱（#379 目標体験）完成設計」を追加（#379 #400 #401）** —
   「記録は全自動・判断は朝の30秒・効果は週1の数字で実感」の4本柱について、実測に基づく到達度診断と
   完成までの Phase 設計を確定。tacchi（体験・過剰約束）と codex（設計の正しさ）のレビューを各1巡入れた。

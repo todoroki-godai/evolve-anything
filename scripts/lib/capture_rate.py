@@ -122,6 +122,7 @@ def compute_capture_rate(
     # **read 時に導出して除外**する（ストアを遡及改変しない・#89 と同じ方針）。
     # 除外件数は silence != evaluated のため戻り値に surface する。
     corrected_sessions: set = set()
+    hook_pattern_version_counts: Dict[str, int] = {}
     machinery_excluded = 0
     for rec in _load_jsonl(Path(corrections_file)):
         if project is not None and not _project_match(rec, project):
@@ -132,9 +133,21 @@ def compute_capture_rate(
         if is_machinery_prompt(str(rec.get("message") or "")):
             machinery_excluded += 1
             continue
+        # ADR-054 A0（#379）/ ADR §2.6-5: source を見ずに全チャネル（reflect_confirmed 等含む）
+        # を合算していた「hook N件」表示の嘘つき数字バグをここで根治する。呼び出し元
+        # sections_capture.py の「hook {captured}件」ラベルが実際に source="hook" のレコード
+        # だけを指すようにする（呼び出し元は grep で1箇所のみと確認済み）。
+        src = rec.get("source") or "unknown"
+        if src != "hook":
+            continue
         sid = rec.get("session_id") or ""
         if sid:
             corrected_sessions.add(sid)
+            # A0 で hooks/correction_detect.py が新規追加したフィールド。追加前の既存レコードは
+            # 欠落するため "pre_pattern_version" に畳む（source×pattern_version の層分離）。
+            pv = rec.get("pattern_version")
+            pv_key = str(pv) if pv is not None else "pre_pattern_version"
+            hook_pattern_version_counts[pv_key] = hook_pattern_version_counts.get(pv_key, 0) + 1
 
     captured = len(active & corrected_sessions)
     rate = round(captured / active_count, 4) if active_count > 0 else 0.0
@@ -147,6 +160,7 @@ def compute_capture_rate(
         "min_turns": min_turns,
         "days": days,
         "machinery_excluded": machinery_excluded,
+        "hook_pattern_version_counts": hook_pattern_version_counts,
     }
 
 

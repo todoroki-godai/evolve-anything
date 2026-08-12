@@ -67,7 +67,7 @@ def test_capture_rate_scoped_to_current_pj(tmp_path, monkeypatch):
     _setup_stores(
         tmp_path, monkeypatch,
         usage_rows=usage,
-        corr_rows=[{"session_id": "mine1", "timestamp": _now_iso(), "project_path": "/work/mine"}],
+        corr_rows=[{"session_id": "mine1", "timestamp": _now_iso(), "project_path": "/work/mine", "source": "hook"}],
     )
     section = build_capture_rate_section(tmp_path / "mine")
     assert section is not None
@@ -83,7 +83,7 @@ def test_evaluated_line_when_full_capture(tmp_path, monkeypatch):
         tmp_path,
         monkeypatch,
         usage_rows=_usage("s1", 30),
-        corr_rows=[{"session_id": "s1", "timestamp": _now_iso()}],
+        corr_rows=[{"session_id": "s1", "timestamp": _now_iso(), "source": "hook"}],
     )
     section = build_capture_rate_section(tmp_path)
     assert section is not None
