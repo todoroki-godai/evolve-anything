@@ -62,6 +62,41 @@ def try_file_lock(lock_path: Path) -> Iterator[bool]:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def read_only_file_lock(lock_path: Path) -> Iterator[bool]:
+    """既存 sidecar を**書込ゼロ**で排他取得する（#402 PR-2 §0.1）。
+
+    取得できたら ``True``、sidecar 不在なら ``False`` を yield する（取得しない）。
+    ``file_lock`` と違い ``lock_path.parent.mkdir(...)`` も ``open(path, "a")``（不在
+    なら作成する追記 open）もしない — 読み取り専用 open（``"r"``）は不在ファイルを
+    作らないため、dry-run 純度契約（1バイトも書かない）を破らない。
+
+    ``flock`` が ``ENOTSUP`` / ``ENOLCK`` 等で失敗した場合は**例外を送出する**（unlocked
+    read へ暗黙フォールバックしない）。呼び出し元が黙って古い/不整合な状態を採用しない
+    ための安全側の失敗。
+
+    ⚠️ ``flock`` は **advisory lock** であり、この関数を経由しない非協調 writer（直接
+    ``open(..., "w")`` する等）を排除しない。対応環境は macOS のローカル filesystem /
+    通常の Linux filesystem。NFS / SMB 等のネットワーク filesystem は非対応（exclusive
+    lock に書込 open を要する実装があり、書込ゼロが成立しない）。
+
+    既存の ``file_lock`` / ``try_file_lock`` は一切変更しない（後方互換）。
+    """
+    try:
+        fh = open(lock_path, "r", encoding="utf-8")
+    except FileNotFoundError:
+        yield False
+        return
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     """reader が部分内容を見ないよう sibling tmp から atomic replace する。"""
     path.parent.mkdir(parents=True, exist_ok=True)

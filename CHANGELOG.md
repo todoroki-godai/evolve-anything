@@ -3,6 +3,25 @@
 ## [Unreleased]
 
 ### Added
+- **feat(revert): 1コマンド revert の lock protocol（PR-2 段階1・#402）** — `rl_common/file_lock.py`
+  に `read_only_file_lock` を追加した。既存の history lock sidecar を**書込ゼロ**（読み取り open +
+  `flock(LOCK_EX)`。`parent.mkdir` も追記 open もしない）で排他取得し、sidecar 不在時は取得せず
+  `False` を yield する。`flock` が `ENOTSUP`/`ENOLCK` 等で失敗した場合は unlocked read へ暗黙
+  フォールバックせず例外を送出する（対応環境は macOS ローカル filesystem / 通常の Linux
+  filesystem。NFS/SMB 等のネットワーク filesystem は非対応）。`emit_decisions` の dry-run 経路は
+  この lock を使う **seqlock 型 check-after** に置き換えた: sidecar 不在なら lock 無しで disk 内容
+  + history（generation）を読み、読了後に sidecar の不在を再確認する。まだ不在なら暫定
+  snapshot を採用し、出現していれば破棄して locked 経路（`read_only_file_lock` 再取得）で
+  読み直す。この再試行には上限（5回）を設け、超過時は emit 全体を例外で失敗させ、新しい
+  pending を queue / marker / result のいずれにも公開せず既存 pending も変更しない
+  （`EmitSnapshotRetriesExhausted`）。sidecar は一度作られたら削除されない単調性契約に依拠する
+  ため、「history に revert イベントがあるのに sidecar が不在」を単調性契約違反の痕跡として
+  検出するが、fail はさせず `emit_decisions` の返り値 `dry_run_snapshot_warning` に警告 + 回復手順
+  （次の正規書込で sidecar が再作成される旨）を surface して続行する（data dir 移送・バックアップ
+  復元という良性シナリオが無人経路の dry-run を毎朝黙って殺すのを避けるため）。設計は
+  `design_402_pr2_v2.md` §0（決定8 を実装レベルへ降ろした段階1・§6 の4段階中の段階1。
+  段階2〜4 は別 PR）。
+
 - **feat(revert): 採用パッチ revert 用の記録拡張（PR-1・#402）** — `evolve_decisions` の emit が
   スキル diff 候補（discover の matched_skills / skill_evolve の high・medium。advisory は対象外）
   の before 全文を `zlib` 圧縮 + base64 化した `revert_before_b64` を計算し、`revert_schema_version`
