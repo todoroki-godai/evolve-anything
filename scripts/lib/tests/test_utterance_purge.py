@@ -163,6 +163,175 @@ def test_sample_is_truncated_to_sample_size(tmp_path):
     assert len(result["sample"]) == 2
 
 
+def test_quoted_marker_in_question_is_not_deleted(tmp_path):
+    """機構マーカーを引用しつつ質問する人間の発話は削除しない（Must1・codex PR #377）。
+
+    is_machinery_prompt は先頭300文字以内に marker を「含む」だけで判定するため、
+    人間が機構出力を引用して質問する発話（marker が文頭でない）を誤検出していた。
+    """
+    db = tmp_path / "utterances.db"
+    _seed(
+        db,
+        [_row(1, "evolve-anything", "「Stop hook feedback:」という出力はどこで生成されますか？")],
+    )
+
+    result = up.purge_machinery_utterances(db, apply=True)
+
+    assert result["matched_count"] == 0
+    assert result["deleted_count"] == 0
+
+
+def test_machinery_output_quoted_in_code_block_is_not_deleted(tmp_path):
+    """機構出力をコードブロックに引用して解析依頼する発話は削除しない（Must1）。"""
+    db = tmp_path / "utterances.db"
+    text = "このログを解析して:\n```\nStop hook feedback:\n先送り表現を検出しました\n```"
+    _seed(db, [_row(1, "evolve-anything", text)])
+
+    result = up.purge_machinery_utterances(db, apply=True)
+
+    assert result["matched_count"] == 0
+    assert result["deleted_count"] == 0
+
+
+def test_skill_md_fragment_quote_is_not_deleted(tmp_path):
+    """SKILL.md断片（Base directory for this skill: を含む）を引用した質問は削除しない（Must1）。"""
+    db = tmp_path / "utterances.db"
+    text = "SKILL.mdのこの断片を説明して:\nBase directory for this skill: /path/to/skill"
+    _seed(db, [_row(1, "evolve-anything", text)])
+
+    result = up.purge_machinery_utterances(db, apply=True)
+
+    assert result["matched_count"] == 0
+    assert result["deleted_count"] == 0
+
+
+def test_question_about_system_reminder_tag_is_not_deleted(tmp_path):
+    """<system-reminder> タグそのものについて質問する発話は削除しない（Must1）。
+
+    is_machinery_prompt の prefix 判定は startswith のみなので、人間が
+    <system-reminder> を書き出しに引用してから質問する発話も誤って先頭一致してしまう。
+    purge では末尾が疑問符（引用+質問のシグナル）の場合は追加で除外する。
+    """
+    db = tmp_path / "utterances.db"
+    text = "<system-reminder>この中身は何ですか？</system-reminder> は何ですか？"
+    _seed(db, [_row(1, "evolve-anything", text)])
+
+    result = up.purge_machinery_utterances(db, apply=True)
+
+    assert result["matched_count"] == 0
+    assert result["deleted_count"] == 0
+
+
+def test_system_reminder_prefix_without_trailing_question_is_still_deleted(tmp_path):
+    """疑問符で終わらない正規の system-reminder 注入は引き続き削除対象（回帰防止）。"""
+    db = tmp_path / "utterances.db"
+    text = "<system-reminder>harness が注入した本物のリマインダー本文です。</system-reminder>"
+    _seed(db, [_row(1, "evolve-anything", text)])
+
+    result = up.purge_machinery_utterances(db, apply=True)
+
+    assert result["matched_count"] == 1
+    assert result["deleted_count"] == 1
+
+
+def test_apply_is_transactional_all_or_nothing_on_failure(tmp_path, monkeypatch):
+    """削除処理の途中で例外が起きたら1行も削除されず全件ロールバックする（Must2）。"""
+    db = tmp_path / "utterances.db"
+    _seed(
+        db,
+        [
+            _row(1, "evolve-anything", "Stop hook feedback:\n1件目"),
+            _row(2, "evolve-anything", "Stop hook feedback:\n2件目"),
+            _row(3, "evolve-anything", "これは普通のユーザー発話です"),
+        ],
+    )
+
+    real_delete = up._delete_confirmed_row
+    call_count = {"n": 0}
+
+    def _flaky_delete(con, row):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure on 2nd delete")
+        return real_delete(con, row)
+
+    monkeypatch.setattr(up, "_delete_confirmed_row", _flaky_delete)
+
+    with pytest.raises(RuntimeError):
+        up.purge_machinery_utterances(db, apply=True)
+
+    with ustore.connection(db, repair=False) as con:
+        remaining = con.execute("SELECT COUNT(*) FROM utterances").fetchone()[0]
+    assert remaining == 3  # 1件目が消えた後に失敗しても全件ロールバックされている
+
+
+def test_apply_skips_row_if_content_changed_since_detection(tmp_path, monkeypatch):
+    """detection後にDBが変化（text_hash不一致）した行は削除せずスキップする（Should3）。
+
+    検出（read_only接続）と削除（write接続）が別 snapshot のため、間に同一PKの
+    行が別内容へ置換されると検出時と異なる内容を削除しうる。text_hash を
+    削除直前に再検証することで防ぐ。
+    """
+    db = tmp_path / "utterances.db"
+    _seed(db, [_row(1, "evolve-anything", "Stop hook feedback:\n本物の機構出力")])
+
+    real_matched = up.find_machinery_rows(db)
+    assert len(real_matched) == 1
+    stale_row = dict(real_matched[0])
+    stale_row["text_hash"] = "stale-hash-does-not-match-current-row"
+    monkeypatch.setattr(up, "find_machinery_rows", lambda _db: [stale_row])
+
+    result = up.purge_machinery_utterances(db, apply=True)
+
+    assert result["matched_count"] == 1
+    assert result["deleted_count"] == 0  # 再検証で不一致→削除されない
+    with ustore.connection(db, repair=False) as con:
+        remaining = con.execute("SELECT COUNT(*) FROM utterances").fetchone()[0]
+    assert remaining == 1
+
+
+def test_apply_skips_row_already_deleted_since_detection(tmp_path, monkeypatch):
+    """detection後に別経路で既に削除された行（PK不在）は例外を投げずスキップする（Should3）。"""
+    db = tmp_path / "utterances.db"
+    _seed(db, [_row(1, "evolve-anything", "Stop hook feedback:\n本物の機構出力")])
+
+    phantom_row = {
+        "source_path": "/does/not/exist/a.jsonl",
+        "line_no": 999,
+        "pj_slug": "evolve-anything",
+        "session_id": "s-phantom",
+        "timestamp": "2026-08-01T00:00:00Z",
+        "text": "Stop hook feedback:\nphantom",
+        "text_hash": "whatever",
+    }
+    monkeypatch.setattr(up, "find_machinery_rows", lambda _db: [phantom_row])
+
+    result = up.purge_machinery_utterances(db, apply=True)
+
+    assert result["matched_count"] == 1
+    assert result["deleted_count"] == 0
+    with ustore.connection(db, repair=False) as con:
+        remaining = con.execute("SELECT COUNT(*) FROM utterances").fetchone()[0]
+    assert remaining == 1
+
+
+def test_deleted_count_reflects_actual_deletion_not_candidate_count(tmp_path):
+    """deleted_count は実際に削除された件数（候補数と乖離しうる）を返す（Should3）。"""
+    db = tmp_path / "utterances.db"
+    _seed(
+        db,
+        [
+            _row(1, "evolve-anything", "Stop hook feedback:\n1件目"),
+            _row(2, "evolve-anything", "Stop hook feedback:\n2件目"),
+        ],
+    )
+
+    result = up.purge_machinery_utterances(db, apply=True)
+
+    assert result["matched_count"] == 2
+    assert result["deleted_count"] == 2  # 通常経路では候補数と一致することも確認
+
+
 def test_dry_run_works_on_read_only_db(tmp_path):
     """dry-run の検出は read_only 接続を使うため、DB が read-only（chmod 444）でも動く。
 

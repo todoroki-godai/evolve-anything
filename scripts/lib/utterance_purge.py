@@ -23,7 +23,32 @@ extractor.py 側も `is_machinery_prompt` を追加適用し新規取り込み�
   - 削除（write）は `utterance_archive.store.connection()` 経由。物理 PK
     (source_path, line_no) で 1 行ずつ DELETE する。
 
+判定の厳格化（PR #377 codex レビュー Must1）:
+  - `is_machinery_prompt` は correction 検出等の除外用途では「先頭300文字以内に
+    marker を含む」広い再現率が正しい設計だが、purge は破壊的操作のため
+    「本文が機構出力そのもの」であることを追加要求する。人間が機構出力を
+    引用しつつ質問する発話（例:「Stop hook feedback: という出力は何？」）を
+    誤って削除しないよう、`_is_confirmed_machinery` で marker/prefix が文頭
+    （lstrip 直後オフセット0）にあることと、prefix 型は末尾が疑問符でないこと
+    を追加検証する。独自マーカーリストは持たず `rl_common.detection` の
+    `_MACHINERY_PREFIXES` / `_MACHINERY_MARKERS` をそのまま再利用する。
+
+削除の安全性（PR #377 codex レビュー Must2/Should3）:
+  - Must2: 複数行の DELETE は `con.begin()`/`commit()`/`rollback()` で単一
+    トランザクションに包む。途中で例外が起きても部分削除が残らない。
+  - Should3: 検出（read_only 接続）と削除（write 接続）は別 connection・別
+    snapshot のため、間に同一 PK の行が置換/削除されうる（TOCTOU）。削除直前に
+    `text_hash` と `_is_confirmed_machinery` を再検証し、実際に削除できた行数を
+    `deleted_count` として返す（候補数 `matched_count` とは独立して真の実績値）。
+
 決定論・LLM 非依存・subprocess なし。
+
+補足（2026-08-12 実測）: 起票時点（#369）は実 DB で 26 件混入していたが、その後 extractor 側の
+再分類で該当行の `source_kind` が `dialogue` から `long_paste` 等へ変わり、本ツールのスキャン
+対象（`source_kind='dialogue'`）から自然に外れた。現時点で実 DB に対し dry-run すると
+matched_count=0 になるのはこのためで、本ツールの実装不備ではない（`is_machinery_prompt` 単体
+でも0件と確認済み）。**本ツールは「今まさに26件消すもの」ではなく、同種の混入が再発した際に
+効く検証・掃除ツールとして残す。**
 """
 from __future__ import annotations
 
@@ -31,7 +56,11 @@ import argparse
 from pathlib import Path
 from typing import Any, Dict, List
 
-from rl_common.detection import is_machinery_prompt
+from rl_common.detection import (
+    _MACHINERY_MARKERS,
+    _MACHINERY_PREFIXES,
+    is_machinery_prompt,
+)
 from utterance_archive import store as _store
 
 try:
@@ -45,16 +74,49 @@ except ImportError:  # pragma: no cover
 DEFAULT_SAMPLE_SIZE = 5
 
 _SELECT_DIALOGUE_SQL = """
-SELECT source_path, line_no, pj_slug, session_id, timestamp, text
+SELECT source_path, line_no, pj_slug, session_id, timestamp, text, text_hash
 FROM utterances
 WHERE source_kind = 'dialogue'
 """
 
-_DELETE_ROW_SQL = "DELETE FROM utterances WHERE source_path = ? AND line_no = ?"
+_SELECT_CURRENT_ROW_SQL = (
+    "SELECT text, text_hash FROM utterances WHERE source_path = ? AND line_no = ?"
+)
+
+_DELETE_ROW_RETURNING_SQL = (
+    "DELETE FROM utterances WHERE source_path = ? AND line_no = ? RETURNING source_path"
+)
+
+# prefix型（<system-reminder> 等）で「末尾が疑問符」なら引用+質問とみなし除外する。
+_TRAILING_QUESTION_MARKS = ("？", "?")
+_TRAILING_WINDOW = 6
+
+
+def _is_confirmed_machinery(text: str) -> bool:
+    """purge 専用の厳格判定（PR #377 Must1）。
+
+    `is_machinery_prompt` を必要条件としつつ、marker/prefix が文頭
+    （lstrip 直後オフセット0）にあることを追加要求する。`is_machinery_prompt`
+    自体は「先頭300文字以内に含む」広い一致なので、そのままでは人間が機構出力を
+    引用しつつ質問する発話（例:「Stop hook feedback: とは何？」）まで拾ってしまう。
+    """
+    if not is_machinery_prompt(text):
+        return False
+    low = text.lstrip().lower()
+    if low.startswith(_MACHINERY_PREFIXES):
+        # <system-reminder> 等は文頭一致だが、閉じタグの後に人間の質問文（末尾が
+        # 疑問符）が続くケースは「引用して質問している」だけなので除外する。
+        tail = text.rstrip()[-_TRAILING_WINDOW:]
+        if any(mark in tail for mark in _TRAILING_QUESTION_MARKS):
+            return False
+        return True
+    # marker型（`in head` 判定）は文中どこでも一致しうるため、purge では
+    # lstrip 直後にマーカーが来る（文頭一致）場合のみ許容する。
+    return low.startswith(_MACHINERY_MARKERS)
 
 
 def find_machinery_rows(db_path: Path) -> List[Dict[str, Any]]:
-    """`source_kind='dialogue'` のうち `is_machinery_prompt` に該当する行を検出する。
+    """`source_kind='dialogue'` のうち `_is_confirmed_machinery` に該当する行を検出する。
 
     read_only 接続で開くため DB には一切書き込まない。DB 不在 / DuckDB 未インストール
     なら空リストを返す。
@@ -69,8 +131,8 @@ def find_machinery_rows(db_path: Path) -> List[Dict[str, Any]]:
         con.close()
 
     matched: List[Dict[str, Any]] = []
-    for source_path, line_no, pj_slug, session_id, timestamp, text in rows:
-        if is_machinery_prompt(text):
+    for source_path, line_no, pj_slug, session_id, timestamp, text, text_hash in rows:
+        if _is_confirmed_machinery(text):
             matched.append(
                 {
                     "source_path": source_path,
@@ -79,9 +141,33 @@ def find_machinery_rows(db_path: Path) -> List[Dict[str, Any]]:
                     "session_id": session_id,
                     "timestamp": timestamp,
                     "text": text,
+                    "text_hash": text_hash,
                 }
             )
     return matched
+
+
+def _delete_confirmed_row(con: Any, row: Dict[str, Any]) -> bool:
+    """1行を削除直前に再検証してから削除する（PR #377 Should3・TOCTOU 対策）。
+
+    検出（read_only 接続）と削除（write 接続）は別 snapshot のため、間に同一 PK の
+    行が置換/削除されうる。`text_hash` 一致と `_is_confirmed_machinery` を再確認し、
+    実際に削除できた場合のみ True を返す。
+    """
+    current = con.execute(
+        _SELECT_CURRENT_ROW_SQL, [row["source_path"], row["line_no"]]
+    ).fetchone()
+    if current is None:
+        return False  # detection後に既に削除済み
+    current_text, current_hash = current
+    if current_hash != row["text_hash"]:
+        return False  # detection後に内容が変わった行は削除しない
+    if not _is_confirmed_machinery(current_text):
+        return False
+    deleted = con.execute(
+        _DELETE_ROW_RETURNING_SQL, [row["source_path"], row["line_no"]]
+    ).fetchall()
+    return len(deleted) > 0
 
 
 def purge_machinery_utterances(
@@ -130,13 +216,21 @@ def purge_machinery_utterances(
     if not apply or not matched:
         return result
 
+    deleted_count = 0
     with _store.connection(Path(db_path), repair=False) as con:
         if con is None:
             return result
-        for row in matched:
-            con.execute(_DELETE_ROW_SQL, [row["source_path"], row["line_no"]])
-        result["deleted_count"] = len(matched)
+        con.begin()
+        try:
+            for row in matched:
+                if _delete_confirmed_row(con, row):
+                    deleted_count += 1
+        except Exception:
+            con.rollback()
+            raise
+        con.commit()
 
+    result["deleted_count"] = deleted_count
     return result
 
 
