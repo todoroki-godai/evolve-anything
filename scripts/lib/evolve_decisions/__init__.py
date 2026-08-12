@@ -27,7 +27,7 @@ optimize_history へ冪等記録）。母集団は「混合でなく増量」を
 | `__init__.py`（本ファイル） | 定数（`DATA_DIR` / `QUEUE_ROOT` / `MARKER_ROOT` / `PENDING_TTL_DAYS`）+ 全 sub-module の re-export |
 | `_queue.py` | pending キュー（emit/ingest 共有）: `resolve_slug` / `queue_path_for` / `read_queue` / `_write_queue` / `_queue_lock` |
 | `_marker.py` | 「未 drain 提案」マーカー（#402）: `marker_path` / `write_pending_marker` / `read_pending_marker` / purge 系 / `undrained_applied` |
-| `_candidates.py` | 提案候補抽出: `_extract_candidates`（discover/skill_evolve）/ `_advisory_pending`（advisory detector, #284）/ `_load_recorder` |
+| `_candidates.py` | 提案候補抽出: `_extract_candidates`（discover/skill_evolve）/ `_advisory_pending`（advisory detector, #284）/ `_record_advisory_event`（advisory の surfaced/accept/reject/deferred 記録, #267 Sprint 1）/ `_load_recorder` |
 | `_emit.py` | Phase A: `emit_decisions` |
 | `_ingest.py` | Phase C: `ingest_decisions` |
 | `_drain.py` | `evolve --drain` の実体: `drain_pending` / `_partition_orphaned`（#402, #376 AC5） |
@@ -127,6 +127,7 @@ from ._candidates import (  # noqa: E402
     _collect_advisory_proposals,
     _extract_candidates,
     _load_recorder,
+    _record_advisory_event,
 )
 
 # ─── Phase A: emit（#383 で _emit.py へ抽出）───────────────────────────────

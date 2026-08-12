@@ -15,6 +15,7 @@ advisory detector（audit の observability section）は「ファイルが変�
 """
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -126,6 +127,16 @@ def test_emit_survives_detector_failure(isolated, project, monkeypatch):
 # ─── drain: accept / reject の行き先 ────────────────────────────────────────
 
 
+def test_ingest_dry_run_does_not_write_surfaced_or_deferred(isolated, project):
+    """dry_run=True では surfaced/deferred も含め advisory_decisions.jsonl に一切書かない
+    （#308 / ADR-041: 書込は apply 境界のみ）。"""
+    out = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
+
+    ed.ingest_decisions("pj", dry_run=True, pending=out["pending"])
+
+    assert adl.read_advisory_decisions(slug="pj") == []
+
+
 def test_advisory_accept_goes_to_advisory_store_not_optimize_history(isolated, project):
     out = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
     skill = project / ".claude" / "skills" / "broken-skill" / "SKILL.md"
@@ -135,10 +146,10 @@ def test_advisory_accept_goes_to_advisory_store_not_optimize_history(isolated, p
     summary = ed.drain_pending(slug="pj", accepted={pid})
 
     assert len(summary["accepted"]) == 1
-    records = adl.read_advisory_decisions(slug="pj")
-    assert len(records) == 1
-    assert records[0]["decision"] == "accept"
-    assert records[0]["detector_id"] == "invalid_frontmatter"
+    records = {r["decision"]: r for r in adl.read_advisory_decisions(slug="pj")}
+    # accept（terminal）と surfaced（fact）は独立に記録される（#267 Sprint 1）。
+    assert set(records) == {"accept", "surfaced"}
+    assert records["accept"]["detector_id"] == "invalid_frontmatter"
     # fitness 母集団は汚さない。
     assert not ohs.history_path("pj").exists()
 
@@ -150,11 +161,23 @@ def test_advisory_reject_records_reason(isolated, project):
     summary = ed.drain_pending(slug="pj", rejected={pid: "後で直す"})
 
     assert summary["rejected"] == [pid]
-    records = adl.read_advisory_decisions(slug="pj")
-    assert len(records) == 1
-    assert records[0]["decision"] == "reject"
-    assert records[0]["reason"] == "後で直す"
+    records = {r["decision"]: r for r in adl.read_advisory_decisions(slug="pj")}
+    assert set(records) == {"reject", "surfaced"}
+    assert records["reject"]["reason"] == "後で直す"
     assert not ohs.history_path("pj").exists()
+
+
+def test_drain_records_surfaced_and_deferred_for_unresolved_proposal(isolated, project):
+    """人間が未着手（未修正・未却下）なら deferred として記録される（#267 Sprint 1）。"""
+    out = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug="pj")
+    pid = _advisory_entries(out["pending"])[0]["id"]
+
+    summary = ed.drain_pending(slug="pj")
+
+    assert summary["deferred"] == [pid]
+    records = {r["decision"]: r for r in adl.read_advisory_decisions(slug="pj")}
+    assert set(records) == {"surfaced", "deferred"}
+    assert records["deferred"]["detector_id"] == "invalid_frontmatter"
 
 
 def test_advisory_decision_is_recorded_once_across_repeated_drains(isolated, project):
@@ -172,7 +195,8 @@ def test_advisory_decision_is_recorded_once_across_repeated_drains(isolated, pro
     ed.drain_pending(slug="pj", accepted=({pid2} if pid2 else None))
 
     records = adl.read_advisory_decisions(slug="pj")
-    assert len(records) == 1
+    assert {r["decision"] for r in records} == {"accept", "surfaced"}
+    assert len(records) == 2
 
 
 def test_skill_proposal_still_recorded_in_optimize_history(isolated, tmp_path, project):
@@ -201,6 +225,47 @@ def test_skill_proposal_still_recorded_in_optimize_history(isolated, tmp_path, p
     assert history.exists()
     rows = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines() if line]
     assert [r.get("skill_name") for r in rows] == ["my-skill"]
+
+
+# ─── audit reader への到達確認（#267 Sprint 1） ─────────────────────────────
+
+
+def test_full_pipeline_reaches_audit_section_with_surfaced_and_accept(isolated, project):
+    """emit→drain（実 pipeline）の結果が audit の Advisory Decisions section まで届く。
+
+    writer だけ見て「動いている」と誤読しない（#339 と同型の罠）ため、adl の直接呼び出し
+    でなく実際の emit_decisions/drain_pending を経由した記録が reader まで到達することを
+    固定する。
+    """
+    from audit.sections_advisory_decisions import build_advisory_decisions_section
+
+    # slug は section 側の resolve_pj_slug と同じ値を使う（emit/drain 用に固定 "pj" を
+    # 使うと section 側の slug と不一致になり読めない）。
+    slug = ed.resolve_slug(project)
+    out = ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug=slug)
+    skill = project / ".claude" / "skills" / "broken-skill" / "SKILL.md"
+    skill.write_text(_FIXED_SKILL, encoding="utf-8")
+    # accept は「明示 accept + 適用実績」の AND（#376 AC1）。ファイル修正だけでは
+    # accept にならないので、明示 accept の証跡も渡す。
+    pid = _advisory_entries(out["pending"])[0]["id"]
+    ed.drain_pending(slug=slug, accepted={pid})
+
+    lines = build_advisory_decisions_section(project)
+
+    assert "| invalid_frontmatter | 1 | 1 | 0 | 0 | 0 | 100% |" in lines
+
+
+def test_full_pipeline_reaches_audit_section_with_deferred(isolated, project):
+    """未着手（deferred）も accept と同様に reader まで届く。"""
+    from audit.sections_advisory_decisions import build_advisory_decisions_section
+
+    slug = ed.resolve_slug(project)
+    ed.emit_decisions({}, project_dir=str(project), dry_run=True, slug=slug)
+    ed.drain_pending(slug=slug)
+
+    lines = build_advisory_decisions_section(project)
+
+    assert "| invalid_frontmatter | 1 | 0 | 0 | 1 | 1 | 0% |" in lines
 
 
 # ─── SessionStart リマインド ────────────────────────────────────────────────
@@ -238,8 +303,120 @@ def test_summarize_by_detector_counts_decisions(isolated):
 
     summary = adl.summarize_by_detector(adl.read_advisory_decisions(slug="pj"))
 
-    assert summary["testpaths_coverage"] == {"accept": 2, "reject": 1}
-    assert summary["invalid_frontmatter"] == {"accept": 1, "reject": 0}
+    assert summary["testpaths_coverage"] == {
+        "surfaced": 0, "accept": 2, "reject": 1, "deferred": 0,
+        "accept_in_cohort": 0, "legacy_accept": 2,
+        "reject_in_cohort": 0, "legacy_reject": 1, "open": 0,
+    }
+    assert summary["invalid_frontmatter"] == {
+        "surfaced": 0, "accept": 1, "reject": 0, "deferred": 0,
+        "accept_in_cohort": 0, "legacy_accept": 1,
+        "reject_in_cohort": 0, "legacy_reject": 0, "open": 0,
+    }
+
+
+def test_record_period_returns_earliest_and_latest_dates(isolated):
+    """``record_period``（#381 D・round3 で public 昇格）は最古／最新 recorded_at を返す。"""
+    adl.record_advisory_decision(
+        slug="pj", proposal_id="adv_1", detector_id="invalid_frontmatter",
+        target_path="pytest.ini", decision="surfaced",
+        now=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    adl.record_advisory_decision(
+        slug="pj", proposal_id="adv_1", detector_id="invalid_frontmatter",
+        target_path="pytest.ini", decision="accept",
+        now=datetime(2026, 8, 12, tzinfo=timezone.utc),
+    )
+
+    period = adl.record_period(adl.read_advisory_decisions(slug="pj"))
+
+    assert period == {"earliest": "2026-05-01", "latest": "2026-08-12", "days": 103}
+
+
+def test_record_period_returns_none_when_no_records(isolated):
+    assert adl.record_period([]) is None
+
+
+def test_record_period_ignores_records_without_recorded_at(isolated):
+    """``recorded_at`` 欠損レコードは無視する（例外を出さない・防御的）。"""
+    assert adl.record_period([{"decision": "surfaced", "proposal_id": "adv_1"}]) is None
+
+
+def test_record_period_ignores_unparsable_recorded_at(isolated):
+    """パース不能な ``recorded_at`` を期間に混ぜない（#381 codex 2巡目 [Should]）。
+
+    ``_recorded_at`` は collapse の順序付け用に不正値を ``_EPOCH``（西暦1年）へ倒すため、
+    そのまま採ると壊れた1行で「記録期間: 0001-01-01 〜 …」になり 3ヶ月蓄積の判断材料が
+    嘘になる。正常な記録が1件でもあればその期間だけを返し、全件不正なら None を返す。
+    """
+    broken = {"decision": "surfaced", "proposal_id": "adv_x", "recorded_at": "not-a-date"}
+    valid = {
+        "decision": "surfaced",
+        "proposal_id": "adv_1",
+        "recorded_at": "2026-08-12T00:00:00+00:00",
+    }
+
+    assert adl.record_period([broken, valid]) == {
+        "earliest": "2026-08-12",
+        "latest": "2026-08-12",
+        "days": 0,
+    }
+    assert adl.record_period([broken]) is None
+
+
+def test_summarize_open_is_surfaced_without_terminal(isolated):
+    """``open``（未判断）= surfaced 記録あり ∧ accept/reject 記録なし（proposal_id 単位・#381 B）。"""
+    for pid in ("adv_decided", "adv_open"):
+        adl.record_advisory_decision(
+            slug="pj", proposal_id=pid, detector_id="testpaths_coverage",
+            target_path="pytest.ini", decision="surfaced",
+        )
+    adl.record_advisory_decision(
+        slug="pj", proposal_id="adv_decided", detector_id="testpaths_coverage",
+        target_path="pytest.ini", decision="accept",
+    )
+
+    summary = adl.summarize_by_detector(adl.read_advisory_decisions(slug="pj"))
+
+    assert summary["testpaths_coverage"]["open"] == 1
+
+
+def test_surfaced_and_terminal_decision_coexist_for_same_proposal(isolated):
+    """surfaced/deferred は accept/reject と別バケツで collapse される（#267 Sprint 1）。
+
+    同じ提案が「deferred のまま後日 accept された」場合、両方の事実が残ることで
+    「一度は見送られたが後で採用された」という経緯が読み取れる。
+    """
+    for decision in ("surfaced", "deferred", "accept"):
+        adl.record_advisory_decision(
+            slug="pj",
+            proposal_id="adv_1",
+            detector_id="invalid_frontmatter",
+            target_path="a/SKILL.md",
+            decision=decision,
+        )
+
+    records = adl.read_advisory_decisions(slug="pj")
+
+    assert {r["decision"] for r in records} == {"surfaced", "deferred", "accept"}
+    assert len(records) == 3
+
+
+def test_repeated_surfaced_events_collapse_to_one(isolated):
+    """同じ提案を複数回 drain しても surfaced は1件に畳む（水増ししない）。"""
+    for _ in range(3):
+        adl.record_advisory_decision(
+            slug="pj",
+            proposal_id="adv_1",
+            detector_id="invalid_frontmatter",
+            target_path="a/SKILL.md",
+            decision="surfaced",
+        )
+
+    records = adl.read_advisory_decisions(slug="pj")
+
+    assert len(records) == 1
+    assert records[0]["decision"] == "surfaced"
 
 
 def test_read_is_scoped_to_project_slug(isolated):
@@ -279,7 +456,7 @@ def test_later_decision_supersedes_earlier_for_same_proposal(isolated):
 
 
 def test_reemit_with_changed_evidence_records_single_accept(isolated, project):
-    """evidence が変わって advisory ID が変わっても、1回の修正は accept 1件（#290-3）。
+    """evidence が変わって advisory ID が変わっても、1回の修正は accept 1件（+ surfaced 1件）（#290-3）。
 
     advisory の提案 ID は evidence 込みなので、同じ対象でも evidence（未収集 dir の集合等）が
     変わると別 ID になる。marker supersede が ID 一致だけだと同じ target の pending が
@@ -303,7 +480,9 @@ def test_reemit_with_changed_evidence_records_single_accept(isolated, project):
     skill.write_text(_FIXED_SKILL, encoding="utf-8")
     ed.drain_pending(slug="pj", accepted={pid})
 
-    assert len(adl.read_advisory_decisions(slug="pj")) == 1
+    records = adl.read_advisory_decisions(slug="pj")
+    assert {r["decision"] for r in records} == {"accept", "surfaced"}
+    assert len(records) == 2
 
 
 def test_legacy_store_does_not_override_newer_canonical_decision(isolated, tmp_path, monkeypatch):

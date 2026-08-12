@@ -318,20 +318,29 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="advisory_decisions.jsonl",
-        writer="scripts/lib/evolve_decisions.py の ingest_decisions（`evolve --drain` の "
-        "apply 境界）が advisory 提案の accept/reject を記録。hot path（hooks）からは書かない。",
+        writer="scripts/lib/evolve_decisions/_ingest.py の ingest_decisions（`evolve --drain` の "
+        "apply 境界）が advisory 提案の surfaced/accept/reject/deferred を記録。"
+        "hot path（hooks）からは書かない。",
         writer_locus="batch",
         reader="audit の Advisory Decisions section（sections_advisory_decisions）が "
-        "read_advisory_decisions / summarize_by_detector で detector 別 accept/reject を "
-        "advisory surface。",
+        "read_advisory_decisions / summarize_by_detector で detector 別 "
+        "surfaced/accept/reject/deferred を advisory surface。加えて fleet/queue_verify.py が "
+        "read_advisory_decisions で accept の verify 待ち（exposure セッション数）を算出する。",
         retention="permanent",
         classification="workflow_state",
         note="#284（#267 Sprint 1）: advisory detector を emit→drain の decision lane に "
         "載せた際の判断記録先。optimize_history（fitness_func=skill_quality）と**分ける**のが "
         "設計の核 — advisory の対象は pytest.ini / rules / SKILL.md と異種で、skill_quality の "
         "母集団に混ぜると『混合でなく増量』の不変条件が壊れる（_extract_candidates が "
-        "remediation を除外しているのと同じ理由）。冪等性は read 時 collapse "
-        "（(pj_slug, proposal_id) last-write-wins）で担保し、二重 drain でも1件。",
+        "remediation を除外しているのと同じ理由）。冪等性は read 時 collapse で担保するが単位が "
+        "2系統ある: accept/reject は排他的な最終状態として (pj_slug, proposal_id) 単位、"
+        "surfaced/deferred は最終状態と独立な事実として (pj_slug, proposal_id, decision) 単位 "
+        "（同一提案が surfaced かつ accept のように複数事実を同時に持てる。#267 Sprint 1: "
+        "採用率の分母＝surfaced を分子＝accept と同じレーンに記録し freeze 解除条件の "
+        "計測を可能にする）。**surfaced の実体は「提示された数」ではなく "
+        "``ingest_decisions`` が drain（not dry_run）に到達した数**（dry-run のまま放置された "
+        "提案は分母に入らず、無視され続ける detector ほど採用率が上振れする逆バイアスがある。"
+        "#381 tacchi レビュー）。",
     ),
     StoreDeclaration(
         name="subagent_traces.jsonl",

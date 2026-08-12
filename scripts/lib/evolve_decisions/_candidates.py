@@ -125,6 +125,23 @@ def _extract_candidates(result: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
+def _record_advisory_event(
+    slug: str, entry: Dict[str, Any], tracked: Optional[str], decision: str, *, reason: Optional[str] = None,
+) -> None:
+    """advisory pending 1件の terminal/fact を記録する（#267）。呼び側で not dry_run を確認済み前提。"""
+    from advisory_decision_log import record_advisory_decision
+
+    record_advisory_decision(
+        slug=slug,
+        proposal_id=entry["id"],
+        detector_id=str(entry.get("detector_id") or "unknown"),
+        target_path=str(tracked or ""),
+        decision=decision,
+        run_id=entry.get("run_id"),
+        reason=reason,
+    )
+
+
 def _load_recorder():
     """fitness_evolution.record_evolve_diff_decision を遅延 import（lib 外モジュール）。"""
     import evolve_decisions as _ed
