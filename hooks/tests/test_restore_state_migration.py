@@ -37,9 +37,13 @@ def env(tmp_path, monkeypatch):
 def test_reminder_fires_when_split_unresolved(env, capsys):
     _, source = env
     (source / "usage.jsonl").write_text("{}\n")
-    restore_state._deliver_data_dir_migration_reminder()
-    out = capsys.readouterr().out
-    assert "evolve-fleet migrate-data" in out
+    item = restore_state._build_data_dir_migration_output()
+    assert item is not None
+    assert item.tier == 1
+    assert "evolve-fleet migrate-data" in item.text
+    assert item.digest == "DATA_DIR分裂（要migrate-data）"
+    assert item.tail_link is False
+    assert capsys.readouterr().out == ""  # 収集関数は印字しない
 
 
 def test_reminder_fires_on_resplit_when_marker_exists(env, capsys):
@@ -52,23 +56,21 @@ def test_reminder_fires_on_resplit_when_marker_exists(env, capsys):
     canonical, source = env
     (source / "usage.jsonl").write_text("{}\n")
     (canonical / ddm._marker_name()).write_text("{}")
-    restore_state._deliver_data_dir_migration_reminder()
-    out = capsys.readouterr().out
-    assert "evolve-fleet migrate-data" in out
-    assert "#137" in out, "再分裂の案内は #137 を参照する"
+    item = restore_state._build_data_dir_migration_output()
+    assert item is not None
+    assert "evolve-fleet migrate-data" in item.text
+    assert "#137" in item.text, "再分裂の案内は #137 を参照する"
 
 
 def test_reminder_silent_when_marker_exists_and_source_clean(env, capsys):
     """#137: marker 済み × source に未マージストアなし（migrate 完了の定常状態）は沈黙。"""
     canonical, _ = env
     (canonical / ddm._marker_name()).write_text("{}")
-    restore_state._deliver_data_dir_migration_reminder()
-    assert capsys.readouterr().out == ""
+    assert restore_state._build_data_dir_migration_output() is None
 
 
 def test_reminder_silent_when_source_empty(env, capsys):
-    restore_state._deliver_data_dir_migration_reminder()
-    assert capsys.readouterr().out == ""
+    assert restore_state._build_data_dir_migration_output() is None
 
 
 def test_reminder_silent_outside_install_layout(env, capsys, monkeypatch, tmp_path):
@@ -76,13 +78,11 @@ def test_reminder_silent_outside_install_layout(env, capsys, monkeypatch, tmp_pa
     _, source = env
     (source / "usage.jsonl").write_text("{}\n")
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "isolated"))
-    restore_state._deliver_data_dir_migration_reminder()
-    assert capsys.readouterr().out == ""
+    assert restore_state._build_data_dir_migration_output() is None
 
 
 def test_reminder_silent_without_env(env, capsys, monkeypatch):
     _, source = env
     (source / "usage.jsonl").write_text("{}\n")
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA")
-    restore_state._deliver_data_dir_migration_reminder()
-    assert capsys.readouterr().out == ""
+    assert restore_state._build_data_dir_migration_output() is None

@@ -23,7 +23,7 @@ import data_dir_migration as ddm  # noqa: E402
 import restore_state  # noqa: E402
 
 
-# #351: _deliver_evolve_queue_notice() は now を省略して呼ぶため実際の現在時刻と
+# #351: _build_evolve_queue_output() は now を省略して呼ぶため実際の現在時刻と
 # 比較される（freshness gate）。固定の過去日付だと実行日が進むにつれ real now との
 # 差が stale_days を越え、これらの配線テストが「業務値を検証する」意図から外れて
 # 「stale 判定を検証する」テストに化けてしまう。生成時に毎回 fresh な generated_at を
@@ -81,6 +81,12 @@ def _install_env(tmp_path, monkeypatch):
     source.mkdir(parents=True)
     monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: Path(p) == source)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(source))
+    # ADR-054 Phase 0: is_cc_install_layout を source にマッチさせると、この test file の
+    # 関心事でない他系統（data_dir_migration・utterance_staleness）も同じ env ガードで
+    # 一緒に発火し、handle_session_start 経由のテストで2件以上＝digest 化してしまう
+    # （フル文の PJ 名等が消える）。ここで明示的に無効化する。
+    monkeypatch.setattr(restore_state, "_build_data_dir_migration_output", lambda: None)
+    monkeypatch.setattr(restore_state, "_build_utterance_staleness_output", lambda: None)
     # rl_common.resolve_data_dir は env をそのまま返す（marker 無し）。
     return source
 
@@ -88,46 +94,43 @@ def _install_env(tmp_path, monkeypatch):
 def test_deliver_fires_with_waiting_queue(tmp_path, monkeypatch, capsys):
     source = _install_env(tmp_path, monkeypatch)
     _write_queue(source, _sample_queue())
-    restore_state._deliver_evolve_queue_notice()
-    out = capsys.readouterr().out
-    assert out  # 非空
-    payload = json.loads(out.strip())
-    assert "systemMessage" in payload
-    assert "figma-to-code" in payload["systemMessage"]
-    assert "sys-bots" in payload["systemMessage"]
+    item = restore_state._build_evolve_queue_output()
+    assert item is not None
+    assert item.tier == 2
+    assert "figma-to-code" in item.text
+    assert "sys-bots" in item.text
+    assert item.digest == "evolve待ち2PJ"
+    assert item.tail_link is True
+    assert capsys.readouterr().out == ""  # 収集関数は印字しない
 
 
 def test_deliver_silent_on_empty_queue(tmp_path, monkeypatch, capsys):
     source = _install_env(tmp_path, monkeypatch)
     _write_queue(source, _empty_queue())
-    restore_state._deliver_evolve_queue_notice()
-    assert capsys.readouterr().out == ""
+    assert restore_state._build_evolve_queue_output() is None
 
 
 def test_deliver_silent_when_no_queue_file(tmp_path, monkeypatch, capsys):
     _install_env(tmp_path, monkeypatch)
-    restore_state._deliver_evolve_queue_notice()
-    assert capsys.readouterr().out == ""
+    assert restore_state._build_evolve_queue_output() is None
 
 
 def test_deliver_silent_outside_install_layout(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: False)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "isolated"))
-    restore_state._deliver_evolve_queue_notice()
-    assert capsys.readouterr().out == ""
+    assert restore_state._build_evolve_queue_output() is None
 
 
 def test_deliver_silent_without_env(monkeypatch, capsys):
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-    restore_state._deliver_evolve_queue_notice()
-    assert capsys.readouterr().out == ""
+    assert restore_state._build_evolve_queue_output() is None
 
 
 def test_deliver_does_not_write(tmp_path, monkeypatch):
     source = _install_env(tmp_path, monkeypatch)
     _write_queue(source, _sample_queue())
     before = {p.name for p in source.iterdir()}
-    restore_state._deliver_evolve_queue_notice()
+    restore_state._build_evolve_queue_output()
     after = {p.name for p in source.iterdir()}
     assert before == after  # queue 通知は read-only
 

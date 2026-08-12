@@ -69,7 +69,9 @@ from .self_evolution import (  # noqa: E402, F401
 from .pending import (  # noqa: E402, F401
     _is_snoozed,
     clear_snooze,
+    delete_pending_trigger,
     detect_skill_changes,
+    peek_pending_trigger,
     read_and_delete_pending_trigger,
     snooze_trigger,
     write_pending_trigger,

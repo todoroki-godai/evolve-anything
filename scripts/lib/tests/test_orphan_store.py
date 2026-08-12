@@ -99,6 +99,32 @@ def test_writers_only_count_registered_hooks(tmp_path: Path) -> None:
     assert "beta.jsonl" not in writers
 
 
+def test_writers_do_not_follow_import_delegation(tmp_path: Path) -> None:
+    """hook 本体が scripts/lib パッケージへ処理委譲しても、単純走査は追跡しない。
+
+    ADR-054 Phase 0（file-size-budget 800行分割）で hook 本体が scripts/lib/<pkg>/ へ
+    分割されるケースが実在する（hooks/restore_state.py → scripts/lib/session_notify/ →
+    scripts/lib/icebox_verdict_seen.py。#379 #400 stale 誤検知の回帰）が、汎用的な import
+    追跡は無関係な共有ライブラリまで芋づる式に writer 扱いする誤検出を実測したため不採用。
+    このケースは `StoreDeclaration.writer_module` + reachability で個別救済する
+    （`test_module_reachable_from_hooks_*` 参照）。
+    """
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"h.py": "from mypkg import do_thing\ndo_thing()"},
+        registered=["h.py"],
+        scripts_files={
+            "lib/mypkg/__init__.py": "",
+            "lib/mypkg/collectors.py": "import inner\ninner.write()",
+            "lib/inner.py": (
+                'def write():\n    append_jsonl(DATA_DIR / "delegated.jsonl", r)'
+            ),
+        },
+    )
+    writers = orphan_store.find_store_writers(root)
+    assert "delegated.jsonl" not in writers
+
+
 # --- find_store_readers -----------------------------------------------------
 
 def test_readers_scan_scripts_and_skills_excluding_tests(tmp_path: Path) -> None:
@@ -318,6 +344,117 @@ def test_drift_flags_stale_declaration(tmp_path: Path, monkeypatch) -> None:
     drift = orphan_store.detect_store_contract_drift()
     assert "ghost.jsonl" in drift.stale
     assert drift.undeclared == []
+
+
+# --- _module_reachable_from_hooks / writer_module reachability 救済 ---------
+
+def test_module_reachable_from_hooks_direct_import(tmp_path: Path) -> None:
+    """hook が直接 import するモジュールは reachable。"""
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"h.py": "import target"},
+        registered=["h.py"],
+        scripts_files={"lib/target.py": "# noop"},
+    )
+    module_files = orphan_store._local_lib_modules(root)
+    assert orphan_store._module_reachable_from_hooks(
+        root, "target", ["h.py"], module_files
+    )
+
+
+def test_module_reachable_from_hooks_indirect_import(tmp_path: Path) -> None:
+    """hook から2 hop（他モジュール経由）でも reachable（純粋 reachability・exclusivity 不問）。"""
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"h.py": "import mid"},
+        registered=["h.py"],
+        scripts_files={
+            "lib/mid.py": "import target",
+            "lib/target.py": "# noop",
+        },
+    )
+    module_files = orphan_store._local_lib_modules(root)
+    assert orphan_store._module_reachable_from_hooks(
+        root, "target", ["h.py"], module_files
+    )
+
+
+def test_module_reachable_from_hooks_unreachable(tmp_path: Path) -> None:
+    """どの hook からも import されないモジュールは reachable でない。"""
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"h.py": "# nothing"},
+        registered=["h.py"],
+        scripts_files={"lib/target.py": "# noop"},
+    )
+    module_files = orphan_store._local_lib_modules(root)
+    assert not orphan_store._module_reachable_from_hooks(
+        root, "target", ["h.py"], module_files
+    )
+
+
+def test_drift_writer_module_reachable_exempts_stale(tmp_path: Path, monkeypatch) -> None:
+    """writer_module 宣言のモジュールが hook から reachable なら stale から除外する。
+
+    #379 #400 回帰: ADR-054 Phase 0 の hook 本体分割で writer が hooks/*.py の直接テキストに
+    現れなくなったストア（icebox_verdict_seen.jsonl 相当）を stale 誤検知しないための救済経路。
+    """
+    import store_registry
+
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"h.py": "from mypkg import do_thing"},
+        registered=["h.py"],
+        scripts_files={
+            "lib/mypkg/__init__.py": "",
+            "lib/mypkg/collectors.py": "import target\ntarget.write()",
+            "lib/target.py": (
+                'def write():\n    append_jsonl(DATA_DIR / "delegated.jsonl", r)'
+            ),
+        },
+    )
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: root)
+    decl = store_registry.StoreDeclaration(
+        name="delegated.jsonl",
+        writer="h.py 経由で target.write が書く（テスト用）",
+        reader="テスト用",
+        retention="permanent",
+        classification="workflow_state",
+        writer_module="target",
+    )
+    monkeypatch.setattr(store_registry, "declared_store_names", lambda: ["delegated.jsonl"])
+    monkeypatch.setattr(store_registry, "declarations_by_name", lambda: {"delegated.jsonl": decl})
+    monkeypatch.setattr(store_registry, "validate_declarations", lambda decls=None: [])
+
+    drift = orphan_store.detect_store_contract_drift()
+    assert "delegated.jsonl" not in drift.stale
+
+
+def test_drift_writer_module_unreachable_stays_stale(tmp_path: Path, monkeypatch) -> None:
+    """writer_module 宣言のモジュールがどの hook からも reachable でなければ stale のまま。"""
+    import store_registry
+
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"h.py": "# 何も import しない"},
+        registered=["h.py"],
+        scripts_files={"lib/target.py": "# noop"},
+    )
+    monkeypatch.setattr(orphan_store, "_default_plugin_root", lambda: root)
+    decl = store_registry.StoreDeclaration(
+        name="ghost.jsonl",
+        writer="どの hook からも到達不能（テスト用）",
+        reader="テスト用",
+        retention="permanent",
+        classification="workflow_state",
+        writer_module="target",
+    )
+    monkeypatch.setattr(store_registry, "declared_store_names", lambda: ["ghost.jsonl"])
+    monkeypatch.setattr(store_registry, "declarations_by_name", lambda: {"ghost.jsonl": decl})
+    monkeypatch.setattr(store_registry, "validate_declarations", lambda decls=None: [])
+
+    drift = orphan_store.detect_store_contract_drift()
+    assert "ghost.jsonl" in drift.stale
 
 
 # --- build_store_contract_section (regression: 宣言なし新 writer を audit が検出) -

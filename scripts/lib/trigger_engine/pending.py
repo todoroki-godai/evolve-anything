@@ -33,7 +33,12 @@ def write_pending_trigger(result: TriggerResult) -> None:
 
 
 def read_and_delete_pending_trigger() -> dict[str, Any] | None:
-    """pending-trigger.json を読み取り、削除する。スヌーズ中は配信しない。"""
+    """pending-trigger.json を読み取り、削除する。スヌーズ中は配信しない。
+
+    後方互換のため残す（#054 Phase 0 以降、``restore_state`` は ack 方式の
+    ``peek_pending_trigger`` / ``delete_pending_trigger`` を使う。他の呼び出し元は
+    grep で確認済みで無い）。
+    """
     from . import PENDING_TRIGGER_FILE
     if not PENDING_TRIGGER_FILE.exists():
         return None
@@ -49,6 +54,33 @@ def read_and_delete_pending_trigger() -> dict[str, Any] | None:
         except OSError:
             pass
         return None
+
+
+def peek_pending_trigger() -> dict[str, Any] | None:
+    """pending-trigger.json を読むが削除しない（ADR-054 Phase 0 §5.5 ack 方式）。
+
+    スヌーズ中/不在/破損は None。破損ファイルもここでは削除しない（削除は
+    ``delete_pending_trigger`` に一元化し、commit タイミング＝print 成功後まで
+    副作用を確定させない ack 契約を守る）。
+    """
+    from . import PENDING_TRIGGER_FILE
+    if not PENDING_TRIGGER_FILE.exists():
+        return None
+    if _is_snoozed():
+        return None
+    try:
+        return json.loads(PENDING_TRIGGER_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def delete_pending_trigger() -> None:
+    """pending-trigger.json を削除する（既に無ければ no-op）。ack の commit 実体。"""
+    from . import PENDING_TRIGGER_FILE
+    try:
+        PENDING_TRIGGER_FILE.unlink()
+    except OSError:
+        pass
 
 
 def snooze_trigger(hours: float = 24) -> None:
