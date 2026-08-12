@@ -199,20 +199,32 @@ advisory の decision lane は開通以来 **1件も書かれていない**（`a
 ### 3.3 依存の全体像
 
 **（2026-08-12 A0 実測を受けて訂正済み。旧図は「A0 が (a) 系の数字を作る」と読めたが、実際は作らない）**
+**（2026-08-13 再訂正: C(a)/C(b) を分離し、G1 計測ゲートを挿入した。codex [Must]4 / tacchi [Must]2）**
 
 ```
-capture の修理（A0）── 「hook レーンが死んでいる」を止める（precision 77.8%・recall 約4.5%）
-       │              ※ (a) 系の数字を A0 単独では作れない（§5-A0）
-       ├──→ 意味判定の底上げ（A5 + correction_semantic）── ここが (a) 系の分子の主力
+capture の修理（A0・完了）── 「hook レーンが死んでいる」を止める（precision 87.5%・recall 約4.5%）
+       │                     ※ (a) 系の数字を A0 単独では作れない（§5-A0）
        ↓
-sidechain 除去（A1/A2）── 提案の質・llm_judge 滞留
+sidechain 除去（A2 → A1）── 提案の質・llm_judge 滞留
        ↓
-朝の提示（B）
-       ↓
+   ┌── G1 計測ゲート ──────────────────────────────────────────────┐
+   │ correction_semantic（llm_judge）レーンの recall/precision を   │
+   │ 固定実コーパスで実測する。**通らなければ C(a) は作らない**     │
+   └───────────────┬──────────────────────────────────────────────┘
+                   │ 通過                        │ 不通過
+                   ↓                             ↓
+        A5（分類語彙）→ C(a) 週1の数字     C(a) は捨てる。柱3(a) の headline は
+                                            first_try_success 一本に絞る（§7.4）
+
+朝の提示（B）── A2 後。G1 とは独立
+C1/C2（数字の正直さ・欠測表示）── **E にも G1 にも非依存**。A/B と並行して先に出す
 correction → accept の変換経路（E）── これが無いと (b) 系が永久にゼロ
        ↓
-週1の数字（C）
+C(b)（採用の効果・取り下げ候補・C4）
 ```
+
+**G1 のコスト**: 新規ラベリング不要。A0 が作った正解ラベル（`a0_eval_set.jsonl` の TP 10件 +
+census TP 7件）が weak_signals の llm_judge レーンに何件現れるかを突合するだけ。
 
 ---
 
@@ -330,8 +342,29 @@ sidechain 除外は user 行だけでなく `prev_action` の境界にも影響�
 
 | ID | 内容 |
 |---|---|
-| D1 | `pre_extension` 残存2経路（`optimize.py::save_history_entry` / `run_loop.py`）を emit→drain lane に寄せる |
+| D1 | `pre_extension` 残存2経路（`optimize.py::save_history_entry` / `run_loop.py`）を emit→drain lane に寄せる → **PR2/PR3 は凍結（下記）** |
 | D2 | entry_id の導線拡充（`bin/evolve-revert --list` 相当） |
+
+**D1 の PR2/PR3 凍結裁定（2026-08-13・ユーザー判断）**
+
+実測（`~/.claude/evolve-anything/optimize_history/` 全 41 entry を writer 別に分解）:
+
+| レーン | writer | 記録数 | accept | 備考 |
+|---|---|---|---|---|
+| A | evolve drain（`evolve_decisions/_ingest.py`） | 10 | 10 | 全て #376 で無効化。**PR1 で修理済み＝今後の accept は revert 可能** |
+| B | `optimize.py::save_history_entry`（**PR3 の対象**） | 13 | **0**（史上ゼロ） | 全 entry が `human_accepted=None` |
+| C | `run_loop.py`（**PR2 の対象**） | 18 | 2 | うち1件は pytest tmpdir 汚染＝**実質1件** |
+
+→ **PR2・PR3 は作らない**。採用実績がほぼ無いレーンに、本設計中で最も複雑な仕組み
+（append-only decision chain + `supersedes_id` + 2段検索）を入れるのは #379 の縮小方針に反する。
+代わりに **両経路に「この経路の採用は revert 対象外」と1行明記**し、CLAUDE.md 柱4の「1コマンドで
+戻せる」にも適用範囲を書く。**実際に使われ始めたら解凍する**（解凍条件: どちらかのレーンで
+テスト由来でない accept が3件以上）。
+**PR4（`--list`）は実施する**（A レーンの新規 accept は今日から revert 可能で、PR2/PR3 に非依存）。
+
+> tacchi は当初「PR3（optimize.py）は accept 2件だから後回し」としたが、実測では 2件だったのは
+> PR2 側（run_loop）で、PR3 側は 0件だった。方向は正しく対象が入れ替わっていたため、頭が実測して
+> 両方の凍結に確定した。
 
 ### Phase E — correction → accept の変換経路【柱3(b) の前提・**作ると決定**】
 
@@ -344,6 +377,25 @@ sidechain 除外は user 行だけでなく `prev_action` の境界にも影響�
 通常の `--drain` 単体では accept を記録しない（`skills/evolve/SKILL.md:195-197,288-303`）。
 
 **完了条件**: correction → skill diff → accept が **synthetic E2E で1周する**。
+
+**着手前ゲート（2026-08-13・tacchi [Must]5 / codex [Must]5）**
+
+§3.1 は「変換経路が存在しない」と断定しているが、部品（Diagnose の入力 / Step 3 の提案 /
+Step 7.8 の drain）は全て既存で、過去に `human_accepted=True` が10件生まれてもいる（#376 で無効化）。
+**「経路が無い」のか「経路はあるが correction が提案に反映されない・起動されない」のかで作るものが
+全く違う**（後者なら配線と起動導線の修理で済み、新設凍結にも収まる）。
+
+→ **E の設計着手前に、実 repo で手動1周実験を行う**（1日）。実 correction を積んだ状態で evolve を
+回し、correction 由来の提案が出るか → y → drain → `optimize_history` に revert 可能な accept が
+載るか、を実測する。**この結果が E 設計書の §1 になる**。synthetic E2E はその後。
+
+加えて、E の設計では以下を先に確定する（codex）:
+- 朝の y/n は「correction として採用」か「生成された patch の適用承認」か（後者を暗黙に兼ねさせるのは柱4違反。patch を見た後の明示承認が別途必要）
+- 状態遷移に使う既存 artifact（`corrections.jsonl` / 既存 pending proposal / 既存 optimize history。**新 store は不可**）
+- correction identity ↔ diff proposal identity の対応（1→N・N→1・重複の定義）
+- 起動点（既存 SessionStart / evolve / queue のどこか。last-shown 状態を新設せず既存 timestamp から read 時導出）
+- 状態機械の各境界と再実行時の冪等性、stale/conflict・生成失敗・history 書込失敗の補償動作
+- 「価値ある diff が生成される率」の評価（配線が一周するだけでは E の効果を証明しない）
 
 ### Phase C — 週1の数字【柱3】
 
@@ -384,21 +436,51 @@ accept は「適用した改善**数**」であって効果ではない。**acce
 
 ## 6. 実施順
 
+**（2026-08-13 改訂。旧 `A1,A3,A5` 並列は誤り＝A3 の汚染 cleanup が A1 の再取り込みと衝突する。
+codex [Must]3。実施済み Phase は完了印を付けた）**
+
 ```
-Phase 0 (B1) ──────── 独立・最速 ──────────────────────────→
-Phase A: A0 ──→ A2 ──→ A1,A3,A5 ──→ Phase B (B2,B3) ──→ Phase C(a): C1,C2
-Phase D (D1→D2) ──── A/B と並行可 ────┐
-                                      └→ Phase E ──→ Phase C(b): C3,C4
+Phase 0 (B1) ✅完了 / A0 ✅完了 / Phase D PR1 ✅完了
+
+A2 ──┐
+C1 ──┘ 並行可（C1 は表示層のみ・A/B/E/G1 の全てに非依存）
+  ↓
+A1（forward 修正 → 実測 → migration は費用確定後）
+  ↓ 実データ再計測
+A3（汚染 cleanup）
+  ↓
+G1 計測ゲート ──不通過──→ C(a) は作らない（§7.4）
+  ↓ 通過
+A5 → C(a): C2
+  ↓
+B2/B3 ──→ E（手動1周 → 設計 → 実装）──→ C(b): C3,C4
+Phase D PR4（--list）──── 独立・いつでも可
+Phase D PR2/PR3 ──── **凍結**（§5 Phase D の裁定）
 ```
 
-- **Phase 0 / A0 / Phase D(PR1) は並行可**（着手時点で互いに独立）
-- **A0 は Phase A 内で最優先**（hook レーンの死を止める。ただし (a) 系の数字は A0 単独では作れない・§5-A0）
+- **A2 が次の最優先**（朝の提案の 50% が委譲プロンプト＝体験毀損の最大要因。安く効く）
+- **C1 を前倒しする**（§2.6 の8件は**今日も嘘をつき続けている**。表示層の修正で他に依存しない。
+  柱4は「将来直す」でなく「今止血」・tacchi [Should]3）
 - **A0 → A2 の順序は固定**。A0 が `_MACHINERY_MARKERS` に構造除外を1行足すため、
   A2（`_DISPATCH_MARKERS` の文字列 allowlist 廃止 → `is_machinery_prompt` へ統合）は A0 の除外を前提に設計する
-- **Phase D は PR1→PR2→PR3→PR4 固定**（PR1 の共有 helper 契約が確定するまで PR2/PR3 は着手不可）
-- **Phase B は Phase A 後**（A2 の効果を測ってから B2 を決める）
-- **C1/C2 は Phase E に依存しない**
+- **A1 は二段階**（codex [Should]）。forward 修正と read 時 sidechain 除外で新規・表示の正しさを先に確保し、
+  全履歴 migration は限定 corpus のベンチと既判定キー再利用率を見てから。
+  **着手前に llm-batch-guard の費用見積もり（最悪 3,604件の再判定）を確定する**
+- **A3 は縮小**（tacchi [Should]）。corrections 汚染2件の invalidate だけ即時実施し、
+  残り 49件は TTL 45日の自然失効に任せる。フルの後始末フェーズは作らない
+- **A5 / C(a) は G1 の結果に従属**（A5 単独の `distinct_types >= 5` は語彙を増やせば達成できる
+  vanity gate なので成果指標から降格・codex [Should]）
+- **B3（llm_judge 上限引き上げ）は A1/A2 後に流入量を再計測してから**。
+  10,225件を処理すること自体は価値でなく、古い低品質候補に LLM 費用を払う危険がある（codex [Should]）
 - **C4 は D1 と Phase E の両方が前提**
+
+**worker の衝突回避**: A2（`detectors.py`）と A1（`extractor.py` + migration）は同ファイル群なので**順次**。
+E（drain 周辺）と Phase D の書込境界も重なるので並行させない。並行してよいのは A2 ∥ C1 まで。
+
+**実データ検証の挿入点（合成 fixture での完了を禁止・P8）**:
+①A2 後＝同じ 12 group サンプルを再抽出し「委譲プロンプト0件」を実測 ②A1 後＝再抽出時間・行数差・
+`prev_action` 充填率・既判定キー再利用率 ③G1＝固定 corpus の recall/precision・channel 間重複
+④E 後＝実 correction から有用 diff が生成され、明示承認・accept・revert まで到達すること
 
 ---
 
