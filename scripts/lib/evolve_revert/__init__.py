@@ -30,3 +30,12 @@ if str(_LIB) not in sys.path:
 
 from ._entry import EntryLookup, find_entry  # noqa: E402,F401
 from ._target import TargetResolution, resolve_target  # noqa: E402,F401
+from ._metadata import (  # noqa: E402,F401
+    LossReport,
+    MetadataSnapshot,
+    XattrProbe,
+    classify_losses,
+    detect_drift,
+    snapshot_from_fd,
+    snapshot_from_path,
+)
