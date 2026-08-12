@@ -20,6 +20,7 @@ sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
 import evolve_decisions as ed  # noqa: E402
 import optimize_history_store as ohs  # noqa: E402
 import restore_state  # noqa: E402
+from session_notify import collectors as _sn_collectors  # noqa: E402
 
 
 _BEFORE = "# s\n\n旧。\n"
@@ -33,9 +34,12 @@ def skill_and_marker(tmp_path, monkeypatch):
     monkeypatch.setattr(ed, "resolve_slug", lambda cwd=None: "testslug")
     # optimize_history を tmp に隔離（実環境 ~/.claude/evolve-anything へ書かない）。
     monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
-    # restore_state が canonical history_file を解決する経路も tmp に固定する。
+    # canonical history_file を解決する経路を tmp に固定する。実装は
+    # scripts/lib/session_notify/collectors.py に分割済み（ADR-054 Phase 0）で
+    # _build_evolve_drain_output はそのモジュールの globals で bare name 解決するため、
+    # patch 対象もそちらにする（import パス追従）。
     monkeypatch.setattr(
-        restore_state, "_resolve_canonical_history_file",
+        _sn_collectors, "_resolve_canonical_history_file",
         lambda slug: tmp_path / "optimize_history" / f"{slug}.jsonl",
     )
     sf = tmp_path / "skills" / "s" / "SKILL.md"

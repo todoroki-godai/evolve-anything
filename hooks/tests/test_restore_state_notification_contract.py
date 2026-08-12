@@ -172,7 +172,9 @@ def spec_repo(tmp_path: Path, monkeypatch) -> Path:
 
 class TestSpecDriftTwoPhase:
     def test_build_returns_none_before_first_run_marker_set(self, spec_repo, capsys):
-        """初回セットアップ分岐: message は無いが marker は persist=False でも保存される。"""
+        """初回セットアップ分岐: message は無いが、表示に紐づかない副作用のみの分岐なので
+        restore_state 側が明示的に save_marker() を呼び即時保存する（spec_trigger 自体は
+        persist=False で書き込みゼロ・dry-run 純度契約）。"""
         item = restore_state._build_spec_drift_output()
         assert item is None
         slug = spec_trigger.resolve_slug(spec_repo)

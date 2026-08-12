@@ -246,12 +246,15 @@ class TestPendingTriggerAckFlow:
         _silence_other_notifications(monkeypatch)
         self._write_pending(data_dir)
 
-        import trigger_engine as _te
-
         def _boom():
             raise RuntimeError("boom in peek")
 
-        monkeypatch.setattr(restore_state, "peek_pending_trigger", _boom)
+        # 実装は scripts/lib/session_notify/collectors.py に分割済み（ADR-054 Phase 0）。
+        # _build_pending_trigger_output は peek_pending_trigger をそのモジュールの
+        # globals で bare name 解決するため、patch 対象もそちらにする（import パス追従）。
+        from session_notify import collectors as _sn_collectors
+
+        monkeypatch.setattr(_sn_collectors, "peek_pending_trigger", _boom)
 
         restore_state.handle_session_start({})
 

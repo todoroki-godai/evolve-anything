@@ -238,6 +238,35 @@ def test_dry_run_writes_nothing(repo: Path):
     res = spec_trigger.detect(cwd=repo, now=2000.0, persist=False)
     assert res["fires"]  # 判定は走る
     assert marker_file.read_text() == before  # 書き込みゼロ
+    assert res["first_run"] is False
+
+
+def test_dry_run_first_run_writes_nothing(repo: Path):
+    """dry-run 純度契約（pitfall_dryrun_stateful_store_write）: persist=False は初回
+    セットアップ分岐でも1バイトも書かない。呼び出し元が defer するかどうかを判断できる
+    よう ``first_run=True`` と計算済み ``marker`` を返すだけに留める。"""
+    slug = spec_trigger.resolve_slug(repo)
+    marker_file = spec_trigger.MARKER_ROOT / f"{slug}.json"
+    assert not marker_file.exists()
+
+    res = spec_trigger.detect(cwd=repo, now=1000.0, persist=False)
+
+    assert res["first_run"] is True
+    assert res["message"] is None
+    assert res["marker"] == {"last_sha": _git(repo, "rev-parse", "HEAD"), "pending": []}
+    assert not marker_file.exists()  # 書き込みゼロ
+
+
+def test_first_run_persist_true_writes_marker(repo: Path):
+    """persist=True（デフォルト）の初回セットアップは従来どおり即時保存する。"""
+    slug = spec_trigger.resolve_slug(repo)
+    marker_file = spec_trigger.MARKER_ROOT / f"{slug}.json"
+
+    res = spec_trigger.detect(cwd=repo, now=1000.0)
+
+    assert res["first_run"] is True
+    assert marker_file.exists()
+    assert json.loads(marker_file.read_text())["last_sha"] == _git(repo, "rev-parse", "HEAD")
 
 
 def test_breaking_change_suggests_adr(repo: Path):
