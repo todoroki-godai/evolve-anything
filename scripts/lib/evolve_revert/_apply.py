@@ -25,10 +25,10 @@ from typing import Any, Dict, Optional, Tuple
 
 import optimize_history_store as _store
 from evolve_decision_ids import (
-    _decompress_before_content,
-    _generation_of,
-    _revert_event_id,
-    _sha256,
+    decompress_before_content,
+    generation_of,
+    revert_event_id,
+    sha256,
 )
 from rl_common.file_lock import file_lock, seqlock_read
 
@@ -86,7 +86,7 @@ def _sha256_bytes(data: bytes) -> str:
 
 def _read_current(path: Path) -> Tuple[Optional[str], str, bytes]:
     """現ディスク内容を読む（path 経由。§2 手順4 の fd 保持契約は identity/owner/mode/
-    xattr/flags のスナップショットに適用し、内容読みは既存の ``_sha256`` 慣習に揃える）。
+    xattr/flags のスナップショットに適用し、内容読みは既存の ``sha256`` 慣習に揃える）。
 
     decode 不能（binary 等）なら ``text=None`` を返す。この場合 ``sha`` は
     ``before_sha``/``after_sha``（いずれも有効な UTF-8 由来の sha256 hex）と構造的に
@@ -104,7 +104,7 @@ def _read_current(path: Path) -> Tuple[Optional[str], str, bytes]:
     # Path.read_text() 相当の universal newline 変換（既存の before_sha/after_sha は
     # read_text 経由で計算されているため、比較対象を同じ変換規約に揃える）。
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    return normalized, _sha256(normalized), raw
+    return normalized, sha256(normalized), raw
 
 
 def _append_revert_event(
@@ -151,7 +151,7 @@ def _restore_normal(
     try:
         tmp_path.write_text(before_content, encoding="utf-8")
         # 復元後 sha が before_sha と一致することを再検証（自分の書込の自己検証）。
-        restored_sha = _sha256(tmp_path.read_text(encoding="utf-8"))
+        restored_sha = sha256(tmp_path.read_text(encoding="utf-8"))
         if restored_sha != before_sha:
             return ApplyResult(
                 ok=False, dry_run=False, entry_id=entry_id, slug=slug,
@@ -281,12 +281,12 @@ def apply_revert(
         )
 
     target_path = resolution.path
-    before_content = _decompress_before_content(before_b64)
-    before_sha = _sha256(before_content)
+    before_content = decompress_before_content(before_b64)
+    before_sha = sha256(before_content)
     history_file = _store.history_path(result_slug)
     lock_path = history_file.with_name(history_file.name + ".lock")
-    event_id = _revert_event_id(entry_id)
-    next_generation = _generation_of(entry) + 1
+    event_id = revert_event_id(entry_id)
+    next_generation = generation_of(entry) + 1
 
     def _do() -> ApplyResult:
         """§2 手順3-5 本体。history lock（real or seqlock）の内側から呼ばれる。"""

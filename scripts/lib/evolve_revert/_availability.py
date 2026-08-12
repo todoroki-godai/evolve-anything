@@ -73,4 +73,13 @@ def compute_revert_availability(entry: Dict[str, Any]) -> Tuple[bool, Optional[s
         # スキーマはあるが本文が無く理由コードも付いていない（防御的フォールバック。
         # 通常は before_too_large で reason が付くはずだが、欠落時は安全側に倒す）。
         return False, REASON_PRE_EXTENSION
+    # #402-D PR1 §2.7（team-lead 裁定）: apply_revert の必須検査（_apply.py の
+    # after_sha/id 必須チェック）と同じ2条件を listing 時点でも検査する。schema は
+    # あるが id/after_sha が無い entry は「戻すのに必要なデータが揃っていない」と
+    # いう意味で pre_extension に相乗りさせる（新しい理由コードは作らない）。
+    # D1 の新規 entry（A/B/C 全経路）は本設計により id/after_sha を常に伴って書か
+    # れるため今この時点では実害は無いが、将来別の writer が増えたときの再発を
+    # 構造で防ぐ（§0 の「read 側不変」制約の唯一の例外）。
+    if not entry.get("id") or not entry.get("after_sha"):
+        return False, REASON_PRE_EXTENSION
     return True, None

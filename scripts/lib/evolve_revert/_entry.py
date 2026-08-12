@@ -36,7 +36,7 @@ def find_entry(entry_id: str, slug: Optional[str] = None) -> EntryLookup:
 
     同一 id が複数 source に存在した場合は優先順位（canonical 優先）で1件を採用しつつ、
     ``duplicate=True`` で不整合の可能性を明示する。これは必ずしも異常ではない——同一
-    内容の accept → revert → 再 accept のループでも同じ id（``_proposal_id`` は
+    内容の accept → revert → 再 accept のループでも同じ id（``proposal_id`` は
     repo_id/relative_path/before_sha 由来で revert_generation を含まない）が複数
     source に現れうる——ため、拒否はしない。
     """

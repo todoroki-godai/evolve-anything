@@ -46,7 +46,7 @@ def _make_target(tmp_path, content: str) -> Path:
 
 
 def _accept_entry(entry_id: str, before_text: str, after_text: str, target: Path, **overrides):
-    b64, _ = ids._compress_before_for_revert(before_text)
+    b64, _ = ids.compress_before_for_revert(before_text)
     base = {
         "id": entry_id,
         "human_accepted": True,
@@ -58,7 +58,7 @@ def _accept_entry(entry_id: str, before_text: str, after_text: str, target: Path
         "scope": "project",
         "repo_id": str(target.parent),
         "relative_path": target.name,
-        "after_sha": ids._sha256(after_text),
+        "after_sha": ids.sha256(after_text),
     }
     base.update(overrides)
     return base
@@ -155,7 +155,7 @@ def test_idempotent_branch_is_true_noop_when_event_already_recorded(tmp_path, mo
     canonical = _setup(tmp_path, monkeypatch)
     target = _make_target(tmp_path, "before-content\n")
     entry = _accept_entry("x1", "before-content\n", "after-content\n", target)
-    event_id = ids._revert_event_id("x1")
+    event_id = ids.revert_event_id("x1")
     revert_event = {
         "event_type": "revert",
         "reverted_entry_id": "x1",

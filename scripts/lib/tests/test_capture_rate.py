@@ -65,7 +65,7 @@ def test_capture_rate_half(tmp_path):
     _write_usage(usage, rows)
     corr = tmp_path / "corrections.jsonl"
     corr.write_text(
-        json.dumps({"session_id": "s1", "timestamp": _now_iso()}) + "\n",
+        json.dumps({"session_id": "s1", "timestamp": _now_iso(), "source": "hook"}) + "\n",
         encoding="utf-8",
     )
     result = capture_rate.compute_capture_rate(
@@ -82,7 +82,7 @@ def test_capture_rate_full(tmp_path):
     _write_usage(usage, _usage_rows("s1", 30))
     corr = tmp_path / "corrections.jsonl"
     corr.write_text(
-        json.dumps({"session_id": "s1", "timestamp": _now_iso()}) + "\n",
+        json.dumps({"session_id": "s1", "timestamp": _now_iso(), "source": "hook"}) + "\n",
         encoding="utf-8",
     )
     result = capture_rate.compute_capture_rate(
@@ -110,7 +110,7 @@ def test_correction_for_non_active_session_does_not_count(tmp_path):
     _write_usage(usage, _usage_rows("active", 25) + _usage_rows("short", 3))
     corr = tmp_path / "corrections.jsonl"
     corr.write_text(
-        json.dumps({"session_id": "short", "timestamp": _now_iso()}) + "\n",
+        json.dumps({"session_id": "short", "timestamp": _now_iso(), "source": "hook"}) + "\n",
         encoding="utf-8",
     )
     result = capture_rate.compute_capture_rate(
@@ -149,8 +149,8 @@ def test_project_filter_scopes_usage_and_corrections(tmp_path):
     )
     corr = tmp_path / "corrections.jsonl"
     corr.write_text(
-        json.dumps({"session_id": "m1", "timestamp": _now_iso(), "project_path": "/work/mine"}) + "\n"
-        + json.dumps({"session_id": "o1", "timestamp": _now_iso(), "project_path": "/work/other"}) + "\n",
+        json.dumps({"session_id": "m1", "timestamp": _now_iso(), "project_path": "/work/mine", "source": "hook"}) + "\n"
+        + json.dumps({"session_id": "o1", "timestamp": _now_iso(), "project_path": "/work/other", "source": "hook"}) + "\n",
         encoding="utf-8",
     )
     result = capture_rate.compute_capture_rate(
@@ -178,7 +178,8 @@ def test_project_filter_normalizes_worktree_paths(tmp_path):
     corr.write_text(
         # worktree セッションの correction（project_path に /.claude/worktrees/）
         json.dumps({"session_id": "m1", "timestamp": _now_iso(),
-                    "project_path": "/x/evolve-anything/.claude/worktrees/feedback"}) + "\n",
+                    "project_path": "/x/evolve-anything/.claude/worktrees/feedback",
+                    "source": "hook"}) + "\n",
         encoding="utf-8",
     )
     # project_dir 自体が worktree パスでも本体 slug に正規化される
@@ -242,6 +243,7 @@ def test_machinery_corrections_excluded_from_numerator(tmp_path):
             "session_id": "s2",
             "timestamp": _now_iso(),
             "message": "いや、そうじゃなくて web 検索してほしい",
+            "source": "hook",
         }) + "\n")
 
     result = capture_rate.compute_capture_rate(
@@ -261,6 +263,7 @@ def test_machinery_excluded_is_zero_without_self_injection(tmp_path):
     with open(corr, "w", encoding="utf-8") as f:
         f.write(json.dumps({
             "session_id": "s1", "timestamp": _now_iso(), "message": "ちがう、そっちじゃない",
+            "source": "hook",
         }) + "\n")
 
     result = capture_rate.compute_capture_rate(
@@ -269,3 +272,63 @@ def test_machinery_excluded_is_zero_without_self_injection(tmp_path):
 
     assert result["captured_sessions"] == 1
     assert result["machinery_excluded"] == 0
+
+
+# ── ADR-054 A0（#379）: source×pattern_version 層分離（capture_rate.py §8） ──
+
+def test_non_hook_source_excluded_from_captured(tmp_path):
+    """source!="hook"（reflect_confirmed 等）は「hook N件」の分子に混入しない（ADR §2.6-5）。
+
+    従来は source を見ずに machinery 以外の全レコードを合算しており、「hook N件」という
+    ラベルが実態（reflect_confirmed 由来を含む）と食い違っていた。A0 でこの根治と
+    同一ループを直す。
+    """
+    usage = tmp_path / "usage.jsonl"
+    _write_usage(usage, _usage_rows("s1", 25))
+    corr = tmp_path / "corr.jsonl"
+    corr.write_text(
+        json.dumps({"session_id": "s1", "timestamp": _now_iso(), "source": "reflect_confirmed"}) + "\n",
+        encoding="utf-8",
+    )
+    result = capture_rate.compute_capture_rate(
+        usage_file=usage, corrections_file=corr, min_turns=20,
+    )
+    assert result["captured_sessions"] == 0
+    assert result["capture_rate"] == 0.0
+
+
+def test_missing_source_treated_as_not_hook(tmp_path):
+    """source フィールド自体が無いレコードも "hook" 扱いしない（未知チャネル同然）。"""
+    usage = tmp_path / "usage.jsonl"
+    _write_usage(usage, _usage_rows("s1", 25))
+    corr = tmp_path / "corr.jsonl"
+    corr.write_text(
+        json.dumps({"session_id": "s1", "timestamp": _now_iso()}) + "\n",
+        encoding="utf-8",
+    )
+    result = capture_rate.compute_capture_rate(
+        usage_file=usage, corrections_file=corr, min_turns=20,
+    )
+    assert result["captured_sessions"] == 0
+
+
+def test_hook_pattern_version_counts_layers_by_version(tmp_path):
+    """hook_pattern_version_counts が pattern_version 別に内訳を持つ（A0導入前/後の段差を無言で連続系列にしない）。"""
+    usage = tmp_path / "usage.jsonl"
+    _write_usage(usage, _usage_rows("s1", 25) + _usage_rows("s2", 25))
+    corr = tmp_path / "corr.jsonl"
+    with open(corr, "w", encoding="utf-8") as f:
+        # s1: A0 導入後（pattern_version=1 が付与済み）
+        f.write(json.dumps({
+            "session_id": "s1", "timestamp": _now_iso(), "source": "hook", "pattern_version": 1,
+        }) + "\n")
+        # s2: A0 導入前の既存レコード（pattern_version フィールド自体が無い）
+        f.write(json.dumps({
+            "session_id": "s2", "timestamp": _now_iso(), "source": "hook",
+        }) + "\n")
+
+    result = capture_rate.compute_capture_rate(
+        usage_file=usage, corrections_file=corr, min_turns=20,
+    )
+
+    assert result["hook_pattern_version_counts"] == {"1": 1, "pre_pattern_version": 1}

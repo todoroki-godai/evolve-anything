@@ -341,7 +341,7 @@ def test_legacy_path_only_id_entry_is_superseded(result_with_match, skill_file, 
                 "id": legacy_id,
                 "skill_name": "my-skill",
                 "skill_path": str(skill_file),
-                "before_sha": ed._sha256(_BEFORE),
+                "before_sha": ed.sha256(_BEFORE),
             }
         ],
         run_id="legacy_run",

@@ -24,7 +24,7 @@ _LIB_DIR = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "l
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 import optimize_history_store as _history_store  # noqa: E402
-from evolve_decision_ids import REVERT_FIELD_KEYS  # noqa: E402
+from evolve_decision_ids import merge_revert_fields  # noqa: E402
 from rl_common.file_lock import file_lock  # noqa: E402
 
 
@@ -199,10 +199,12 @@ def record_evolve_diff_decision(
     （``evolve_decisions.ingest_decisions``）が kind=="accept" のときだけ渡す規約**
     （reject/skip の本文は恒久保存しない・決定2）。
 
-    本関数（callee 側）が「entry への純加算」契約を自身で保証する（round2 codex レビュー
-    Should）: ``REVERT_FIELD_KEYS`` 外のキー・値が None のキーは無視し、残ったキーが
-    既存 ``entry``（``id``/``skill_name``/``timestamp`` 等）と衝突する場合は
-    ``ValueError`` を送出して拒否する（呼び出し側の allowlist だけに依存しない多層防御）。
+    「entry への純加算」契約（許可リスト外のキー・値が None のキーは無視し、残ったキーが
+    既存 ``entry`` と衝突する場合は ``ValueError``）は ``evolve_decision_ids.merge_revert_fields``
+    が単一ソースとして保証する（#402-D PR1 §2.1 item1 — B/C（optimize.py/run_loop.py）と
+    共有する契約を、この callee 自身が呼び出すだけで満たす形に抽出した。round2 codex
+    レビュー Should の「callee 側が純加算を自己保証する」という要件はこの共有関数の内部で
+    引き続き満たされる）。
     """
     if history_file is None:
         history_file = _default_history_file()
@@ -228,41 +230,21 @@ def record_evolve_diff_decision(
         "run_id": run_id,
         "decision_source": decision_source,
     }
-    if revert_fields:
-        # #402 決定2: 許可リスト外のキー・値が None のキーは書かない（既存 entry との
-        # 後方互換を壊さない純加算）。before_too_large 等で本文を落とした場合は
-        # revert_before_b64 のキー自体を省略し、revert_unavailable_reason だけが残る。
-        _filtered_revert_fields = {
-            k: v for k, v in revert_fields.items() if k in REVERT_FIELD_KEYS and v is not None
-        }
-        # round2 codex レビュー Should: callee 自身が「純加算」契約を保証する。呼び出し側
-        # の allowlist だけに依存すると、将来 REVERT_FIELD_KEYS に既存 entry キーと同名の
-        # ものが増えたときに気づかず上書きしうる。
-        _collisions = set(_filtered_revert_fields) & set(entry)
-        if _collisions:
-            raise ValueError(
-                "revert_fields collides with existing entry keys "
-                f"(純加算契約違反): {sorted(_collisions)}"
-            )
-        entry.update(_filtered_revert_fields)
+    merge_revert_fields(entry, revert_fields)
     _attach_provenance(entry)
 
     # 冪等 ingest: 同一 id が既にあれば書き込まない。
     # #287-2: 「既存確認 → append」をロック下で原子化する。非ロックだと2プロセスが同時に
-    # 確認を抜けて2行入り、accept 率・outcome_attribution・ADR-046 昇格判定に非独立証拠が
+    # 確認を抜けて2行入り、accept 率・outcome_attribution・ADR-046 の昇格判定に非独立証拠が
     # 流入する（#279 の N 重記録と同じ汚染）。逐次2回の冪等テストでは検出できない。
-    history_file.parent.mkdir(parents=True, exist_ok=True)
+    # #402-D PR1 §2.1 item3: 3 writer（A/B/C）共有の
+    # ``optimize_history_store._append_history_entry_deduped_locked`` を使う（自分で
+    # lock を取ってから ``_locked`` 版を呼ぶ二段構成——公開版
+    # ``append_history_entry_deduped`` を lock 内から呼ぶと二重 lock で自己 deadlock する）。
+    # timestamp の tz 正規化（#297）・書込直前の既存確認は共有 helper 側の責務。
     with file_lock(history_file.with_name(history_file.name + ".lock")):
-        if any(rec.get("id") == entry_id for rec in load_history(history_file)):
-            return entry
-        # #297: この writer は optimize_history_store.append_entry を経由しない直接書込
-        # 経路（optimize.py の save_history_entry と同型）。timestamp の tz 正規化は
-        # 単一ソース関数を writer 側から明示的に呼んで append_entry と同じ規約に揃える
-        # （normalize_entry_timestamp は純関数なのでロック下で呼んでよい）。
-        _history_store.normalize_entry_timestamp(entry)
-        with open(history_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    return entry
+        result, _written = _history_store._append_history_entry_deduped_locked(entry, history_file)
+    return result
 
 
 def compute_correlation(

@@ -47,8 +47,8 @@ def _init_repo(path: Path) -> None:
 
 def test_compress_before_content_round_trips():
     text = "# my-skill\n\n日本語を含む本文。\n"
-    b64 = ids._compress_before_content(text)
-    assert ids._decompress_before_content(b64) == text
+    b64 = ids.compress_before_content(text)
+    assert ids.decompress_before_content(b64) == text
 
 
 def test_compress_before_content_is_stdlib_decodable_without_project_code():
@@ -58,13 +58,13 @@ def test_compress_before_content_is_stdlib_decodable_without_project_code():
     decode できることを固定する（decode 手順の正しさの回帰防止）。
     """
     text = "# skill\n\n復旧できる。\n"
-    b64 = ids._compress_before_content(text)
+    b64 = ids.compress_before_content(text)
     restored = zlib.decompress(base64.b64decode(b64)).decode("utf-8")
     assert restored == text
 
 
 def test_compress_before_for_revert_returns_body_under_cap():
-    b64, reason = ids._compress_before_for_revert("short text")
+    b64, reason = ids.compress_before_for_revert("short text")
     assert b64 is not None
     assert reason is None
 
@@ -72,7 +72,7 @@ def test_compress_before_for_revert_returns_body_under_cap():
 def test_compress_before_for_revert_drops_body_over_cap():
     """決定2 Should3: 圧縮後サイズが上限を超えたら本文を落とし理由コードを返す。"""
     huge = "x" * (ids.REVERT_BEFORE_MAX_COMPRESSED_BYTES * 10)  # 高圧縮率でも上限超過させる
-    b64, reason = ids._compress_before_for_revert(huge, max_bytes=16)
+    b64, reason = ids.compress_before_for_revert(huge, max_bytes=16)
     assert b64 is None
     assert reason == ids.REVERT_REASON_BEFORE_TOO_LARGE
 
@@ -91,13 +91,13 @@ def test_compress_before_for_revert_compares_zlib_bytes_not_base64_length():
     compressed_len = len(zlib.compress(text.encode("utf-8")))
     assert compressed_len < len(base64.b64encode(zlib.compress(text.encode("utf-8"))))
 
-    b64_at_boundary, reason_at_boundary = ids._compress_before_for_revert(
+    b64_at_boundary, reason_at_boundary = ids.compress_before_for_revert(
         text, max_bytes=compressed_len
     )
     assert b64_at_boundary is not None
     assert reason_at_boundary is None
 
-    b64_over, reason_over = ids._compress_before_for_revert(
+    b64_over, reason_over = ids.compress_before_for_revert(
         text, max_bytes=compressed_len - 1
     )
     assert b64_over is None
@@ -114,7 +114,7 @@ def test_path_scope_identity_project_scope_in_git_repo(tmp_path):
     skill.parent.mkdir(parents=True)
     skill.write_text("x", encoding="utf-8")
 
-    identity = ids._path_scope_identity(str(skill))
+    identity = ids.path_scope_identity(str(skill))
 
     assert identity["scope"] == "project"
     assert identity["relative_path"] == "skills/my-skill/SKILL.md"
@@ -129,7 +129,7 @@ def test_path_scope_identity_global_scope_under_claude_skills(tmp_path, monkeypa
     global_skill.parent.mkdir(parents=True)
     global_skill.write_text("x", encoding="utf-8")
 
-    identity = ids._path_scope_identity(str(global_skill))
+    identity = ids.path_scope_identity(str(global_skill))
 
     assert identity["scope"] == "global"
     assert identity["repo_id"] is None
@@ -158,7 +158,7 @@ def test_path_scope_identity_global_scope_symlink_to_non_git_target(tmp_path, mo
     link_dir.parent.mkdir(parents=True, exist_ok=True)
     link_dir.symlink_to(target_dir, target_is_directory=True)
 
-    identity = ids._path_scope_identity(str(link_dir / "SKILL.md"))
+    identity = ids.path_scope_identity(str(link_dir / "SKILL.md"))
 
     assert identity["scope"] == "global"
     assert identity["repo_id"] is None
@@ -177,7 +177,7 @@ def test_path_scope_identity_rejects_lexical_dotdot_escape_from_global_root(tmp_
     outside.write_text("x", encoding="utf-8")
     escaping_path = str(tmp_path / ".claude" / "skills" / ".." / ".." / "outside" / "SKILL.md")
 
-    identity = ids._path_scope_identity(escaping_path)
+    identity = ids.path_scope_identity(escaping_path)
 
     assert identity["scope"] != "global"
 
@@ -187,7 +187,7 @@ def test_path_scope_identity_falls_back_when_neither_project_nor_global(tmp_path
     plain.parent.mkdir(parents=True)
     plain.write_text("x", encoding="utf-8")
 
-    identity = ids._path_scope_identity(str(plain))
+    identity = ids.path_scope_identity(str(plain))
 
     assert identity["scope"] is None
     assert identity["repo_id"] is None
@@ -198,7 +198,7 @@ def test_path_scope_identity_falls_back_when_neither_project_nor_global(tmp_path
 
 
 def test_revert_generation_for_target_defaults_to_zero_without_revert_events():
-    assert ids._revert_generation_for_target([], "project", "r1", "skills/x/SKILL.md") == 0
+    assert ids.revert_generation_for_target([], "project", "r1", "skills/x/SKILL.md") == 0
 
 
 def test_revert_generation_for_target_reads_matching_revert_event():
@@ -208,12 +208,12 @@ def test_revert_generation_for_target_reads_matching_revert_event():
         {"event_type": "revert", "scope": "project", "repo_id": "r1",
          "relative_path": "skills/other/SKILL.md", "revert_generation": 9},
     ]
-    assert ids._revert_generation_for_target(history, "project", "r1", "skills/x/SKILL.md") == 2
+    assert ids.revert_generation_for_target(history, "project", "r1", "skills/x/SKILL.md") == 2
 
 
 def test_revert_generation_for_target_ignores_non_revert_events():
     history = [{"event_type": "accept", "repo_id": "r1", "relative_path": "skills/x/SKILL.md"}]
-    assert ids._revert_generation_for_target(history, "project", "r1", "skills/x/SKILL.md") == 0
+    assert ids.revert_generation_for_target(history, "project", "r1", "skills/x/SKILL.md") == 0
 
 
 # ─── 決定4 Must2: ID バージョン互換規約 ─────────────────────────────────────
@@ -222,7 +222,7 @@ def test_revert_generation_for_target_ignores_non_revert_events():
 def test_decision_event_id_generation_zero_is_bit_identical_to_legacy_call():
     """拡張前 pending（revert_generation 未設定）を拡張後コードで drain しても ID が変わらない。
 
-    期待値は ``_decision_event_id`` を呼ばず、拡張前の実装
+    期待値は ``decision_event_id`` を呼ばず、拡張前の実装
     （``f"{proposal_id}_{kind}_{sha256(after)[:12]}"``）を標準ライブラリの hashlib だけで
     テスト内に独立して再現する（round2 codex レビュー Should: 関数を呼んで期待値を作ると
     将来 gen=0 の式ごと壊れてもテストが追従して緑のままになる循環を防ぐ）。
@@ -231,8 +231,8 @@ def test_decision_event_id_generation_zero_is_bit_identical_to_legacy_call():
     digest12 = hashlib.sha256(after_content.encode("utf-8")).hexdigest()[:12]
     pre_extension_id = f"{proposal_id}_{kind}_{digest12}"
 
-    assert ids._decision_event_id(proposal_id, kind, after_content) == pre_extension_id
-    assert ids._decision_event_id(proposal_id, kind, after_content, 0) == pre_extension_id
+    assert ids.decision_event_id(proposal_id, kind, after_content) == pre_extension_id
+    assert ids.decision_event_id(proposal_id, kind, after_content, 0) == pre_extension_id
 
 
 def test_decision_event_id_generation_none_and_zero_are_equivalent_to_omission():
@@ -241,13 +241,13 @@ def test_decision_event_id_generation_none_and_zero_are_equivalent_to_omission()
     digest12 = hashlib.sha256(after_content.encode("utf-8")).hexdigest()[:12]
     pre_extension_id = f"{proposal_id}_{kind}_{digest12}"
 
-    assert ids._decision_event_id(proposal_id, kind, after_content, 0) == pre_extension_id
+    assert ids.decision_event_id(proposal_id, kind, after_content, 0) == pre_extension_id
 
 
 def test_decision_event_id_generation_one_or_more_differs():
-    base_id = ids._decision_event_id("evdiff_x", "accept", "after content", 0)
-    gen1_id = ids._decision_event_id("evdiff_x", "accept", "after content", 1)
-    gen2_id = ids._decision_event_id("evdiff_x", "accept", "after content", 2)
+    base_id = ids.decision_event_id("evdiff_x", "accept", "after content", 0)
+    gen1_id = ids.decision_event_id("evdiff_x", "accept", "after content", 1)
+    gen2_id = ids.decision_event_id("evdiff_x", "accept", "after content", 2)
     assert len({base_id, gen1_id, gen2_id}) == 3
 
 
@@ -257,7 +257,7 @@ def test_decision_event_id_generation_one_or_more_differs():
 def test_filter_monotonic_pending_keeps_higher_or_equal_generation():
     existing = [{"skill_path": "/a/SKILL.md", "revert_generation": 1}]
     pending = [{"skill_path": "/a/SKILL.md", "revert_generation": 1}]
-    kept, discarded = ids._filter_monotonic_pending(existing, pending)
+    kept, discarded = ids.filter_monotonic_pending(existing, pending)
     assert kept == pending
     assert discarded == 0
 
@@ -265,7 +265,7 @@ def test_filter_monotonic_pending_keeps_higher_or_equal_generation():
 def test_filter_monotonic_pending_discards_lower_generation():
     existing = [{"skill_path": "/a/SKILL.md", "revert_generation": 1}]
     pending = [{"skill_path": "/a/SKILL.md", "revert_generation": 0}]
-    kept, discarded = ids._filter_monotonic_pending(existing, pending)
+    kept, discarded = ids.filter_monotonic_pending(existing, pending)
     assert kept == []
     assert discarded == 1
 
@@ -273,7 +273,7 @@ def test_filter_monotonic_pending_discards_lower_generation():
 def test_filter_monotonic_pending_unrelated_path_is_unaffected():
     existing = [{"skill_path": "/a/SKILL.md", "revert_generation": 5}]
     pending = [{"skill_path": "/b/SKILL.md", "revert_generation": 0}]
-    kept, discarded = ids._filter_monotonic_pending(existing, pending)
+    kept, discarded = ids.filter_monotonic_pending(existing, pending)
     assert kept == pending
     assert discarded == 0
 
@@ -281,7 +281,7 @@ def test_filter_monotonic_pending_unrelated_path_is_unaffected():
 def test_filter_monotonic_pending_treats_missing_generation_as_zero():
     existing = [{"skill_path": "/a/SKILL.md", "revert_generation": 1}]
     pending = [{"skill_path": "/a/SKILL.md"}]  # revert_generation 未設定 = 0
-    kept, discarded = ids._filter_monotonic_pending(existing, pending)
+    kept, discarded = ids.filter_monotonic_pending(existing, pending)
     assert kept == []
     assert discarded == 1
 
@@ -427,7 +427,7 @@ def test_ingest_accept_carries_after_sha_into_history(project_repo, monkeypatch,
 
     recs = [json.loads(l) for l in hist.read_text(encoding="utf-8").splitlines() if l.strip()]
     assert len(recs) == 1
-    assert recs[0]["after_sha"] == ids._sha256(after_content)
+    assert recs[0]["after_sha"] == ids.sha256(after_content)
 
 
 def test_ingest_reject_does_not_carry_revert_body(project_repo, monkeypatch, tmp_path):
@@ -457,8 +457,8 @@ def test_ingest_pre_extension_pending_produces_bit_identical_id(project_repo, mo
     しても ID が拡張前と bit 一致する（#279 の N 重記録が version 境界で再発しない）。"""
     repo, skill = project_repo
     monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
-    before_sha = ids._sha256(skill.read_text(encoding="utf-8"))
-    pid = ids._proposal_id(str(skill), before_sha)
+    before_sha = ids.sha256(skill.read_text(encoding="utf-8"))
+    pid = ids.proposal_id(str(skill), before_sha)
     # revert_generation キーを持たない旧 pending（拡張前に emit された marker residue を模す）。
     legacy_pending = [{
         "id": pid, "run_id": "evrun_legacy", "skill_name": "my-skill",
@@ -474,7 +474,7 @@ def test_ingest_pre_extension_pending_produces_bit_identical_id(project_repo, mo
 
     recs = [json.loads(l) for l in hist.read_text(encoding="utf-8").splitlines() if l.strip()]
     assert len(recs) == 1
-    # 期待値は _decision_event_id を呼ばず、拡張前の実装を hashlib だけで独立に再現する
+    # 期待値は decision_event_id を呼ばず、拡張前の実装を hashlib だけで独立に再現する
     # （round2 codex レビュー Should: 循環テスト防止）。
     digest12 = hashlib.sha256("# my-skill\n\n改善。\n".encode("utf-8")).hexdigest()[:12]
     expected_id = f"{pid}_accept_{digest12}"
@@ -489,8 +489,8 @@ def test_ingest_pre_extension_pending_redrain_with_existing_history_stays_one_ro
     #279 の N 重記録が version 境界で再発しない）。"""
     repo, skill = project_repo
     monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
-    before_sha = ids._sha256(skill.read_text(encoding="utf-8"))
-    pid = ids._proposal_id(str(skill), before_sha)
+    before_sha = ids.sha256(skill.read_text(encoding="utf-8"))
+    pid = ids.proposal_id(str(skill), before_sha)
     legacy_pending = [{
         "id": pid, "run_id": "evrun_legacy", "skill_name": "my-skill",
         "skill_path": str(skill), "before_sha": before_sha, "fitness_func": "skill_quality",
@@ -634,9 +634,9 @@ def test_emit_queue_write_does_not_let_stale_generation_supersede_newer(
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
     monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
     monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
-    before_sha = ids._sha256(skill.read_text(encoding="utf-8"))
+    before_sha = ids.sha256(skill.read_text(encoding="utf-8"))
     newer_entry = {
-        "id": ids._proposal_id(str(skill), before_sha), "run_id": "evrun_newer",
+        "id": ids.proposal_id(str(skill), before_sha), "run_id": "evrun_newer",
         "skill_name": "my-skill", "skill_path": str(skill), "before_sha": before_sha,
         "fitness_func": "skill_quality", "pattern": "p", "revert_generation": 1,
     }
@@ -663,9 +663,9 @@ def test_emit_marker_write_does_not_let_stale_generation_supersede_newer(
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
     monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
     monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
-    before_sha = ids._sha256(skill.read_text(encoding="utf-8"))
+    before_sha = ids.sha256(skill.read_text(encoding="utf-8"))
     newer_entry = {
-        "id": ids._proposal_id(str(skill), before_sha), "run_id": "evrun_newer",
+        "id": ids.proposal_id(str(skill), before_sha), "run_id": "evrun_newer",
         "skill_name": "my-skill", "skill_path": str(skill), "before_sha": before_sha,
         "fitness_func": "skill_quality", "pattern": "p", "revert_generation": 1,
     }
@@ -730,7 +730,13 @@ def test_record_evolve_diff_decision_filters_non_allowlisted_revert_fields(tmp_p
 
 def test_record_evolve_diff_decision_rejects_revert_fields_colliding_with_entry_keys(tmp_path):
     """許可リストのキーが既存 entry キーと衝突したら ValueError で拒否する（純加算契約
-    違反の早期検知・round2 codex レビュー Should）。"""
+    違反の早期検知・round2 codex レビュー Should）。
+
+    #402-D PR1 で許可リストフィルタ+衝突検査は ``evolve_decision_ids.merge_revert_fields``
+    へ抽出された（3 writer 共有の単一ソース）ため、許可リストの monkeypatch 対象も
+    ``evolve_decision_ids.REVERT_FIELD_KEYS``（``fe.REVERT_FIELD_KEYS`` ではない）に
+    変わっている。
+    """
     fe = _import_fitness_evolution()
     hist = tmp_path / "hist.jsonl"
 
@@ -739,7 +745,7 @@ def test_record_evolve_diff_decision_rejects_revert_fields_colliding_with_entry_
     import evolve_decision_ids as ids
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(fe, "REVERT_FIELD_KEYS", ("id",))
+        mp.setattr(ids, "REVERT_FIELD_KEYS", ("id",))
         with pytest.raises(ValueError):
             fe.record_evolve_diff_decision(
                 skill_name="s",
@@ -772,6 +778,77 @@ def test_record_evolve_diff_decision_omits_none_valued_revert_fields(tmp_path):
     assert entry["revert_generation"] == 0
 
 
+# ─── #402-D PR1 §5.3 完了条件①: byte-equivalent entry の契約テスト ───────────
+
+
+def test_record_evolve_diff_decision_persisted_entry_is_byte_equivalent_after_refactor(
+    tmp_path,
+):
+    """A writer（``record_evolve_diff_decision``）を共有 helper 経由へリファクタしても、
+    disk へ永続化される entry のキー集合・値が変わらないことを固定する（#402-D PR1
+    §5.3 PR1 完了条件①）。base フィールド + revert_fields 全種 + provenance の3層を
+    1本のテストで束ねて、リファクタ前の手書きロジック（許可リストフィルタ+純加算+
+    ロック下 dedup append）と等価な出力になることを確認する。
+    """
+    fe = _import_fitness_evolution()
+    hist = tmp_path / "hist.jsonl"
+
+    revert_fields = {
+        "revert_before_b64": "b64content",
+        "revert_schema_version": 1,
+        "revert_encoding": "zlib+base64",
+        "revert_generation": 2,
+        "revert_unavailable_reason": None,  # None は書かれない
+        "repo_id": "/repo",
+        "relative_path": "skills/x/SKILL.md",
+        "scope": "project",
+        "worktree_root": "/repo",
+        "resolved_path": "/repo/skills/x/SKILL.md",
+        "after_sha": "deadbeef",
+    }
+
+    entry = fe.record_evolve_diff_decision(
+        skill_name="s",
+        after_content="# s\n\n本文\n",
+        diff_summary="d",
+        human_accepted=True,
+        rejection_reason=None,
+        history_file=hist,
+        entry_id="byte-eq-1",
+        run_id="run-1",
+        decision_source="explicit_accept",
+        revert_fields=revert_fields,
+    )
+
+    # base フィールド（純加算対象外）
+    assert entry["id"] == "byte-eq-1"
+    assert entry["source"] == fe.EVOLVE_DIFF_SOURCE
+    assert entry["skill_name"] == "s"
+    assert entry["diff_summary"] == "d"
+    assert entry["fitness_func"] == fe.EVOLVE_DIFF_FITNESS_FUNC
+    assert entry["human_accepted"] is True
+    assert entry["rejection_reason"] is None
+    assert entry["run_id"] == "run-1"
+    assert entry["decision_source"] == "explicit_accept"
+    assert isinstance(entry["timestamp"], str)
+    assert isinstance(entry["best_fitness"], (float, type(None)))
+
+    # revert フィールド（None 以外が純加算される）
+    for k, v in revert_fields.items():
+        if v is None:
+            assert k not in entry
+        else:
+            assert entry[k] == v
+
+    # provenance（決定論・deterministic kind）
+    assert entry["provenance"]["evaluation_kind"] == "deterministic"
+
+    # 実際にディスクへ永続化された1行と、戻り値の entry が完全一致する
+    # （書込直前に何かが追加/欠落していないことの固定）。
+    persisted = json.loads(hist.read_text(encoding="utf-8").splitlines()[0])
+    assert persisted == entry
+
+
 # ─── round2 codex レビュー Should: CHANGELOG の decode 導線が drift しないことを固定 ──
 
 _CHANGELOG_PATH = _LIB.parent.parent / "CHANGELOG.md"
@@ -802,7 +879,7 @@ def test_changelog_dump_before_recipe_restores_fixture_jsonl(tmp_path):
     jsonl_path = tmp_path / "optimize_history" / "proj.jsonl"
     jsonl_path.parent.mkdir(parents=True)
     jsonl_path.write_text(
-        json.dumps({"id": "evolve_diff_xyz", "revert_before_b64": ids._compress_before_content(original_text)})
+        json.dumps({"id": "evolve_diff_xyz", "revert_before_b64": ids.compress_before_content(original_text)})
         + "\n",
         encoding="utf-8",
     )
@@ -909,7 +986,7 @@ def test_dry_run_emit_discards_snapshot_when_sidecar_appears_mid_read(
     }
     history_file = ohs.history_path("proj")
     lock_path = history_file.with_name(history_file.name + ".lock")
-    path_identity = ids._path_scope_identity(str(skill))
+    path_identity = ids.path_scope_identity(str(skill))
 
     fresh_history = [{
         "event_type": "revert",
@@ -955,7 +1032,7 @@ def test_dry_run_emit_warns_without_short_circuiting_when_sidecar_missing_after_
             {"matched_skill": "my-skill", "skill_path": str(skill), "pattern": "p"}
         ]}}
     }
-    path_identity = ids._path_scope_identity(str(skill))
+    path_identity = ids.path_scope_identity(str(skill))
     history_with_revert = [{
         "event_type": "revert",
         "scope": path_identity["scope"],
@@ -1034,23 +1111,29 @@ def test_record_evolve_diff_decision_creates_sidecar_via_file_lock_before_histor
     ―― history へ書く前に sidecar が存在することを assert する。段階3 で revert writer
     本体が入るまでは、現時点で唯一 file_lock 経由で history に書く writer である
     ``record_evolve_diff_decision`` で検証する。
+
+    #402-D PR1: 既存確認→append は
+    ``optimize_history_store._append_history_entry_deduped_locked``（3 writer 共有）
+    へ抽出された。この関数が内部で読む ``_read_jsonl`` をプローブして、file_lock 下で
+    呼ばれる時点で既に sidecar が存在することを確認する（探索対象が
+    ``fe.load_history`` から移った点以外は元の契約と同じ）。
     """
     fe = _import_fitness_evolution()
     hist = tmp_path / "history.jsonl"
     lock_path = hist.with_name(hist.name + ".lock")
 
     probe_result = {}
-    real_load_history = fe.load_history
+    real_read_jsonl = fe._history_store._read_jsonl
 
-    def probe(history_file=None, *, project_dir=None):
-        # record_evolve_diff_decision は file_lock 下でまずこの load_history（既存 id
-        # 確認・#287-2）を呼んでから append する。この時点で sidecar が既に存在すれば、
-        # sidecar 作成（file_lock の read-modify-write open）が history への書込より
-        # 前に起きている証拠になる。
+    def probe(path):
+        # record_evolve_diff_decision は file_lock 下で
+        # _append_history_entry_deduped_locked（既存 id 確認・#287-2）を呼んでから
+        # append する。この時点で sidecar が既に存在すれば、sidecar 作成（file_lock の
+        # read-modify-write open）が history への書込より前に起きている証拠になる。
         probe_result["sidecar_exists_before_history_write"] = lock_path.exists()
-        return real_load_history(history_file=history_file, project_dir=project_dir)
+        return real_read_jsonl(path)
 
-    monkeypatch.setattr(fe, "load_history", probe)
+    monkeypatch.setattr(fe._history_store, "_read_jsonl", probe)
 
     fe.record_evolve_diff_decision(
         skill_name="s",

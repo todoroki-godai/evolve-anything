@@ -736,6 +736,56 @@ class TestRegressedPitfalls:
             ]
             assert len(regression_calls) == 0
 
+    def test_auto_dry_run_does_not_mark_approved(self, tmp_path):
+        """#402-D PR1: `--auto --dry-run` では approved=True の entry を記録しない。
+
+        修正前は ``elif auto:``（``not dry_run`` 非条件）だったため、dry-run でも
+        自動承認扱いになり、実際には何も適用していないのに ``approved=True`` の entry
+        が history へ書かれていた（#402-D §6-4・§2.3「``not dry_run`` ゲートの必要性」）。
+        本テストは ``elif auto and not dry_run:`` への修正を固定する。
+        """
+        skill_file = tmp_path / "test-skill.md"
+        skill_file.write_text("---\ndescription: test\n---\n# Test\n内容\n", encoding="utf-8")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        baseline = {
+            "integrated_score": 0.60,
+            "scores": {
+                "technical": {"total": 0.60},
+                "domain_quality": {"total": 0.60},
+                "structure": {"total": 0.60},
+            },
+        }
+
+        def _uniform_axes(v):
+            return {"technical": v, "domain": v, "structure": v, "integrated": v}
+
+        with patch.object(run_loop_mod, "generate_variants") as mock_gen, \
+             patch.object(
+                 run_loop_mod, "_score_variant_axes", return_value=_uniform_axes(0.85)
+             ), \
+             patch.object(run_loop_mod, "get_baseline_score", return_value=baseline):
+            mock_gen.return_value = {"candidates": [{"id": "v0", "content": "# V0\n内容"}]}
+
+            results = run_loop_mod.run_loop(
+                target_path=str(skill_file),
+                loops=1,
+                population=1,
+                auto=True,
+                dry_run=True,
+                selection_reeval_enabled=False,
+                output_dir=str(output_dir),
+            )
+
+        r = results[0]
+        # IMPROVED 判定自体（ノイズ閾値との比較）は dry_run に非依存で成立する。
+        assert r["verdict"] == "IMPROVED"
+        # だが dry-run なので承認扱いにしない（本修正の核心）。
+        assert r["approved"] is False
+        # 対象ファイルへの書込ゼロ契約も維持される。
+        assert "# V0" not in skill_file.read_text(encoding="utf-8")
+
 
 class TestSelectionReeval:
     """採用前再評価（selection re-eval, winner's curse 補正 #234 PR2）のテスト。

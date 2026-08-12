@@ -25,16 +25,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import optimize_history_store as _store
 from evolve_decision_ids import (
-    _compress_before_for_revert,
-    _filter_monotonic_pending,
-    _is_superseded,
-    _new_run_id,
-    _path_scope_identity,
-    _proposal_id_from_identity,
-    _repo_identity,
-    _revert_generation_for_target,
-    _sha256,
-    _supersede_keys,
+    compress_before_for_revert,
+    filter_monotonic_pending,
+    is_superseded,
+    new_run_id,
+    path_scope_identity,
+    proposal_id_from_identity,
+    repo_identity,
+    revert_generation_for_target,
+    sha256,
+    supersede_keys,
     REVERT_ENCODING,
     REVERT_SCHEMA_VERSION,
 )
@@ -145,7 +145,7 @@ def emit_decisions(
         import evolve_decisions as _ed
 
         slug = _ed.resolve_slug(Path(project_dir) if project_dir else None)
-    run_id = run_id or _new_run_id()
+    run_id = run_id or new_run_id()
 
     # #402 決定8: emit は同じ history lock 内で「対象の disk 内容読み」と「generation
     # 読み」の両方を行う（revert の [復元→revert イベント追記] が1区間に閉じている
@@ -172,16 +172,16 @@ def emit_decisions(
     for c, before in reads:
         if before is None:
             continue  # 読めないスキルは対象外
-        before_sha = _sha256(before)
+        before_sha = sha256(before)
         # identity は1回だけ解決し、id 計算（repo 相対パス基準・#376 AC4）と
         # worktree_root（orphan 判定用・#376 AC5）の両方に使い回す。
-        identity = _repo_identity(c["skill_path"])
+        identity = repo_identity(c["skill_path"])
         # #402 決定5: path 契約（project/global scope・提案 identity とは独立）。
-        path_identity = _path_scope_identity(c["skill_path"])
+        path_identity = path_scope_identity(c["skill_path"])
         # #402 決定2 Should3: 圧縮後サイズが上限を超えたら本文を落とす。
-        before_b64, unavailable_reason = _compress_before_for_revert(before)
+        before_b64, unavailable_reason = compress_before_for_revert(before)
         # #402 決定4: 対象パス単位の revert 累積回数を emit 時にスナップショット。
-        revert_generation = _revert_generation_for_target(
+        revert_generation = revert_generation_for_target(
             history,
             path_identity["scope"],
             path_identity["repo_id"],
@@ -189,7 +189,7 @@ def emit_decisions(
         )
         pending.append(
             {
-                "id": _proposal_id_from_identity(identity, before_sha),
+                "id": proposal_id_from_identity(identity, before_sha),
                 "run_id": run_id,
                 "skill_name": c["skill_name"],
                 "skill_path": c["skill_path"],
@@ -238,14 +238,14 @@ def emit_decisions(
         # 既存 entry まで巻き込んで消してしまう）。
         with _queue_lock(slug):
             existing = [entry for entry in read_queue(slug) if entry.get("run_id")]
-            kept_pending, queue_discarded = _filter_monotonic_pending(existing, pending)
+            kept_pending, queue_discarded = filter_monotonic_pending(existing, pending)
             revert_generation_discarded += queue_discarded
             # supersede は marker と同じ対象パス単位（ID 一致だけだと世代が queue に residue
             # し 1回の apply が全世代 accept 判定になる＝#290 の queue 経路・#287-1）。
-            ids, paths = _supersede_keys(kept_pending)
+            ids, paths = supersede_keys(kept_pending)
             _write_queue(
                 slug,
-                [e for e in existing if not _is_superseded(e, ids, paths)] + kept_pending,
+                [e for e in existing if not is_superseded(e, ids, paths)] + kept_pending,
             )
         persisted = True
 
