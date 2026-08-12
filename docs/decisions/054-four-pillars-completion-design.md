@@ -198,8 +198,12 @@ advisory の decision lane は開通以来 **1件も書かれていない**（`a
 
 ### 3.3 依存の全体像
 
+**（2026-08-12 A0 実測を受けて訂正済み。旧図は「A0 が (a) 系の数字を作る」と読めたが、実際は作らない）**
+
 ```
-capture の修理（A0）── これが無いと (a) 系の数字が永久に嘘になる
+capture の修理（A0）── 「hook レーンが死んでいる」を止める（precision 77.8%・recall 約4.5%）
+       │              ※ (a) 系の数字を A0 単独では作れない（§5-A0）
+       ├──→ 意味判定の底上げ（A5 + correction_semantic）── ここが (a) 系の分子の主力
        ↓
 sidechain 除去（A1/A2）── 提案の質・llm_judge 滞留
        ↓
@@ -253,13 +257,35 @@ correction → accept の変換経路（E）── これが無いと (b) 系が
 
 **A0 — correction capture の修理【新設・最優先】**
 現状: 3か月で hook 由来1件。実コーパス 2,841発話でマッチ0件。修正語を含む31件（フィルタ通過後）にも0ヒット。
-方針:
-1. **28 パターンの行頭アンカーを外す**。実発話は「なんで〜しちゃったの、、、やめてほしい」のように文中に修正意図が出る
-2. **500字超の一律除外（1,503件）を見直す**。長文でも末尾に指摘があるケースを拾う
-3. **完了条件は実コーパスリプレイ**（P8）: 修正語を含む108件のうち何件を拾えるか、
-   および FP（指摘でない発話の誤検出）を実データで測る。**合成 fixture の緑では完了としない**
-4. **凍結との関係**: 既存 hook → corrections.jsonl の直接書込を改善する範囲なら**新 channel でないので非抵触**。
+
+**⚠ 2026-08-12 実コーパスリプレイで本 ADR の当初方針1・2は否定された**（設計 `drafts/054-a0-capture-repair.md`）。
+固定窓（2026-07-27 〜 08-12・両端固定）で本番 `detect_correction` をそのまま回した結果:
+
+| 当初方針 | 実測結果 |
+|---|---|
+| 1. 行頭アンカーを外す | **効果ゼロ**（新規検出0件）。アンカーは主因ではなかった |
+| 2. 500字超の一律除外を見直す | **効果ゼロ**（新規検出8件が**全件 FP**）。除外は妥当だった |
+
+**真因は語彙の欠落**（`直して` / `修正して` / `訂正して` / `やめてほしい` が28パターンのどれにも無い）。
+確定方針:
+
+1. **`CORRECTION_PATTERNS` に2件だけ追加する**（`naoshite-request` / `yamete-request`）。
+   複合動詞（作り直して・書き直して等）は lookbehind 拡張で構造的に除外する（P2）
+2. `_MACHINERY_MARKERS` に1行追加し、harness 生成の停止通知本文（`N background agents were stopped by the user: ...`）を構造的に除外する
+3. `pattern_version` フィールドを追加し、**`capture_rate.py` を source × pattern_version で層分離**する。
+   これにより §2.6-5 の「channel 決め打ち」も同時に解消する（A0 に同梱・別 PR にしない）
+4. **凍結との関係**: 既存 hook → corrections.jsonl の直接書込を改善する範囲＝**新 channel でないので非抵触**。
    weak_signals 経由に作り替える案は新 channel になりうるので採らない
+
+**A0 の効果は小さい（誠実な見積もり）**: 新規検出9件・真陽性7件＝**precision 77.8%**（Wilson 95% CI 45.3〜93.7%。
+`_MACHINERY_MARKERS` 追加後は 7/8 = 87.5%）。一方 **recall は低いまま**で、母集団の真の修正発話 ≈155件に対し
+点推定 **約4.5%**。すなわち:
+
+> **A0 単独では柱3(a) の分子は作れない。** A0 は「hook レーンが実質死んでいる（3か月1件）」状態を
+> 低コスト・高 precision で終わらせるものであり、recall の底上げは `correction_semantic`（llm_judge 意味判定）の役割。
+
+したがって §3.3 の「A0 が無いと (a) 系の数字が永久に嘘」は**半分だけ正しい**（A0 は嘘を止めるが、
+真の数を作るのは A5 + `correction_semantic` 側）。§7.2 の分子の最終形もこれを前提に決める。
 
 **A1 — 記録層で根治（ユーザー判断 2026-08-12）。必須の付随設計**
 `EXTRACTOR_VERSION` は記録するだけで consumer が無い（`extractor.py:26-31`）＝**再 ingest 機構は未実装**。
@@ -270,6 +296,9 @@ ingest は mtime/offset の増分判定で既処理ファイルをスキップ�
 3. wall time 実測（PJ rule `transcript-store-bench`: 9,925 jsonl / 1.9GB で 75分暴走の前科）
 4. `correction_judged.jsonl` の既判定キー（`f"{source_path}:{line_no}"`）が再 ingest 後と突合できるか。
    **できなければ 3,604件の再判定＝LLM 費用**（`llm-batch-guard` 該当・事前にユーザー確認）
+5. **`prev_action` が `extractor_version=2` の行で全件 null**（A0 の実測窓 1,124件すべてで確認・2026-08-12）。
+   correction の文脈判定に使えない既存データ欠損であり、**A1 の再抽出設計にこの列の充填を含める**
+   （A0 スコープ外として A1 へ申し送り）。充填しない場合、B の提示品質は「発話単独」の情報しか使えない
 
 **A1 — 完了条件の定義**
 「sidechain 由来 0件」は**消失 transcript 2,728件があるため定義不足**。
@@ -357,13 +386,16 @@ accept は「適用した改善**数**」であって効果ではない。**acce
 
 ```
 Phase 0 (B1) ──────── 独立・最速 ──────────────────────────→
-Phase A (A0,A1,A2,A3,A5) ──→ Phase B (B2,B3) ──→ Phase C(a): C1,C2
-Phase D (D1,D2) ──── A/B と並行可 ────┐
+Phase A: A0 ──→ A2 ──→ A1,A3,A5 ──→ Phase B (B2,B3) ──→ Phase C(a): C1,C2
+Phase D (D1→D2) ──── A/B と並行可 ────┐
                                       └→ Phase E ──→ Phase C(b): C3,C4
 ```
 
-- **Phase 0 / Phase A / Phase D は並行可**
-- **A0 は Phase A 内で最優先**（これが無いと (a) 系の数字が永久に嘘）
+- **Phase 0 / A0 / Phase D(PR1) は並行可**（着手時点で互いに独立）
+- **A0 は Phase A 内で最優先**（hook レーンの死を止める。ただし (a) 系の数字は A0 単独では作れない・§5-A0）
+- **A0 → A2 の順序は固定**。A0 が `_MACHINERY_MARKERS` に構造除外を1行足すため、
+  A2（`_DISPATCH_MARKERS` の文字列 allowlist 廃止 → `is_machinery_prompt` へ統合）は A0 の除外を前提に設計する
+- **Phase D は PR1→PR2→PR3→PR4 固定**（PR1 の共有 helper 契約が確定するまで PR2/PR3 は着手不可）
 - **Phase B は Phase A 後**（A2 の効果を測ってから B2 を決める）
 - **C1/C2 は Phase E に依存しない**
 - **C4 は D1 と Phase E の両方が前提**
@@ -389,7 +421,9 @@ Phase D (D1,D2) ──── A/B と並行可 ────┐
   `results_board` が既にこの数え方を rework 表示に使っているが、**これ自体が §2.6-2 の「嘘をつく数字」の一部**
 
 **方針**: まず **A0 で capture を直す**。直った後に、
-- 分子: corrections（capture 修理後）+ weak_signals（esc_interrupt / rephrase / manual_edit_after_ai）の併用を検討
+- 分子: corrections（capture 修理後）+ weak_signals（esc_interrupt / rephrase / manual_edit_after_ai）の併用を検討。
+  **A0 実測（§5-A0）により「corrections 単独」案は消える**（recall 約4.5%＝分子として桁が足りない）。
+  併用、または `correction_semantic` の意味判定を主分子に据える形が前提
 - 分母: **`utterances.db` の dialogue 発話数**（2026-05-13 以降・会話ターンに最も近い唯一の分母）
 - `sessions.jsonl` の生行数は Stop 発火数で約5倍過大なので**分母に使わない**（使うなら unique session_id で数え直す）
 
@@ -402,7 +436,11 @@ tool_use **平均21回/セッション**（最大284）。全体 ~51,000行相�
 - A3 の既存 FP（rephrase 16 / llm_judge 33 / **corrections 昇格済み2**）の扱い
 - B3 の llm_judge 上限 200件/日を上げるか、対象を絞るか
 - 再 ingest に伴う LLM 再判定費用（最悪 3,604件・`llm-batch-guard` 該当）の事前見積もり
-- A0 修理後の「手直し」分子の最終形（corrections 単独か weak_signals 併用か）
+- ~~A0 修理後の「手直し」分子の最終形（corrections 単独か weak_signals 併用か）~~
+  → **A0 実測により「corrections 単独」は却下**（recall 約4.5%）。残る選択は
+  「weak_signals 併用」か「`correction_semantic` の意味判定を主分子に据える」かで、**C1 の設計時に決める**
+- `run_id` の秒精度（`optimize.py:97` の `strftime("%Y%m%d_%H%M%S")`）を UUID 化するか
+  → **Phase D スコープ外・別 issue**（D1 は複数一致エラー検出で正しさを担保済み）
 
 ---
 
@@ -440,8 +478,19 @@ tool_use **平均21回/セッション**（最大284）。全体 ~51,000行相�
   - [Must] C3 の凍結裁定の精緻化 → §5-C3
   - [Nit] pytest 件数を合否契約にしない → §8
 
-**capture 調査（§2.1）は codex/tacchi のレビュー後に実施したため未レビュー。**
-A0 の具体設計を書く段階で、あらためて codex を1巡入れる。
+~~**capture 調査（§2.1）は codex/tacchi のレビュー後に実施したため未レビュー。**~~
+→ **2026-08-12 実施済み**。Phase 0 / A0 / Phase D の3設計をそれぞれ **codex 2巡**（round1 で全て `設計修正要`
+→ 指摘反映 → round2 で差分のみ再レビュー）、Phase 0 は **tacchi も併走**（利用者に見える面のため）。
+設計文書は `docs/decisions/drafts/054-{phase0-notification-routing,a0-capture-repair,phaseD-revert-lane}.md`。
+
+**このレビューで ADR 本体の記述が覆った箇所**（本 rev で訂正済み）:
+
+| 覆った記述 | 訂正先 |
+|---|---|
+| A0 の方針1（行頭アンカー）・方針2（500字除外の見直し）が主因 | §5-A0（両方とも実測で効果ゼロ。真因は語彙欠落） |
+| A0 が (a) 系の数字を作る（§3.3 の依存図） | §3.3・§5-A0（recall 約4.5%＝A0 単独では作れない） |
+| Phase 0 は「平常時 0〜1件発火」前提 | 実測は4系統・フル文連結412字＝**2件以上の結合が常用経路**（`drafts/054-phase0-notification-routing.md` §4.1） |
+| `optimize.py` の accept 記録は健全 | `--auto --dry-run` が `approved=True` の entry を書く＝**柱3(b) の分母汚染**。Phase D PR1 で修正 |
 
 ---
 
