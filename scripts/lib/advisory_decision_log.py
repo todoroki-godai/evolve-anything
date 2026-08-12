@@ -26,6 +26,12 @@ fact を複数回書いても1件に畳む・件数を水増ししない）。�
 のであって読み出し順ではない（#290-4）。union read は canonical 先頭で legacy が後に来るため、
 単純な後勝ちにすると legacy の**古い** reject が canonical の**新しい** accept を上書きする。
 
+**surfaced の実際の意味（#381 tacchi レビュー）**: ``surfaced`` は「提示された数」ではなく
+``ingest_decisions`` が **drain（``not dry_run``）に到達した数**。dry-run レポートに出た
+だけで drain されず放置され続けた提案は分母に一切入らない。無視され続ける detector ほど
+分母が小さくなり続け、**採用率は上振れ側に偏る**（淘汰したい detector ほど良い数字が出る
+逆バイアス）。``summarize_by_detector`` の docstring 参照。
+
 決定論・LLM 非依存。
 """
 from __future__ import annotations
@@ -157,21 +163,34 @@ def summarize_by_detector(
 ) -> Dict[str, Dict[str, int]]:
     """detector 別の surfaced / accept / reject / deferred 件数（#267 Sprint 1）。
 
-    採用率の分母（surfaced）を分子（accept）と同じ表で見られるようにする土台。
+    採用率の分母（surfaced＝drain 到達数。「提示された数」ではない — 上の module
+    docstring 参照）を分子（accept）と同じ表で見られるようにする土台。
 
     **移行期間の cohort 分離**: `surfaced` の記録は本 PR から始まるので、それ以前に
-    accept された提案には対応する surfaced が存在しない。両者を素朴に合算すると
+    accept/reject された提案には対応する surfaced が存在しない。両者を素朴に合算すると
     「accept 10 / surfaced 1 → 採用率 1000%」のような嘘の数字が出る。そこで
-    ``accept_in_cohort`` を別に数える — **同じ proposal_id に surfaced 記録がある
-    accept だけ**を採用率の分子に使う。差分は ``legacy_accept``（surfaced 記録前の
-    accept）として残し、数字が突き合うようにする。
+    ``accept_in_cohort`` / ``reject_in_cohort`` を別に数える — **同じ proposal_id に
+    surfaced 記録がある accept/reject だけ**を採用率の計算に使う。差分は
+    ``legacy_accept`` / ``legacy_reject``（surfaced 記録前の accept/reject）として残し、
+    表側で行内内訳として検算できるようにする（#381 tacchi レビュー: accept 列だけ
+    cohort 分離すると reject 込みの検算で 100% 超が再発するため対称にした）。
+
+    ``open``（現在の未判断数）は「surfaced 記録がある ∧ terminal（accept/reject）記録が
+    無い」proposal_id の数。``deferred``（=「ever deferred」表示に使う）は fact の
+    collapse 単位が ``(pj_slug, proposal_id, decision)`` のため、同じ提案が何度 drain で
+    deferred になっても1件にしか数えない＝もともとユニーク提案数で「現在の未判断数」の
+    代理指標にはならない（#381 tacchi レビュー）。
     """
     surfaced_ids: Dict[str, set] = {}
+    terminal_ids: Dict[str, set] = {}
     for rec in records:
-        if rec.get("decision") != "surfaced":
-            continue
         detector_id = str(rec.get("detector_id") or "unknown")
-        surfaced_ids.setdefault(detector_id, set()).add(str(rec.get("proposal_id") or ""))
+        decision = rec.get("decision")
+        pid = str(rec.get("proposal_id") or "")
+        if decision == "surfaced":
+            surfaced_ids.setdefault(detector_id, set()).add(pid)
+        elif decision in ("accept", "reject"):
+            terminal_ids.setdefault(detector_id, set()).add(pid)
 
     summary: Dict[str, Dict[str, int]] = {}
     for rec in records:
@@ -185,13 +204,22 @@ def summarize_by_detector(
                 "deferred": 0,
                 "accept_in_cohort": 0,
                 "legacy_accept": 0,
+                "reject_in_cohort": 0,
+                "legacy_reject": 0,
+                "open": 0,
             },
         )
         decision = rec.get("decision")
         if decision in ("surfaced", "accept", "reject", "deferred"):
             bucket[decision] += 1
-        if decision == "accept":
-            known = surfaced_ids.get(detector_id, set())
-            key = "accept_in_cohort" if str(rec.get("proposal_id") or "") in known else "legacy_accept"
+        if decision in ("accept", "reject"):
+            pid = str(rec.get("proposal_id") or "")
+            in_cohort = pid in surfaced_ids.get(detector_id, set())
+            key = f"{decision}_in_cohort" if in_cohort else f"legacy_{decision}"
             bucket[key] += 1
+
+    for detector_id, bucket in summary.items():
+        bucket["open"] = len(
+            surfaced_ids.get(detector_id, set()) - terminal_ids.get(detector_id, set())
+        )
     return summary

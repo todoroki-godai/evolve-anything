@@ -337,7 +337,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "surfaced/deferred は最終状態と独立な事実として (pj_slug, proposal_id, decision) 単位 "
         "（同一提案が surfaced かつ accept のように複数事実を同時に持てる。#267 Sprint 1: "
         "採用率の分母＝surfaced を分子＝accept と同じレーンに記録し freeze 解除条件の "
-        "計測を可能にする）。",
+        "計測を可能にする）。**surfaced の実体は「提示された数」ではなく "
+        "``ingest_decisions`` が drain（not dry_run）に到達した数**（dry-run のまま放置された "
+        "提案は分母に入らず、無視され続ける detector ほど採用率が上振れする逆バイアスがある。"
+        "#381 tacchi レビュー）。",
     ),
     StoreDeclaration(
         name="subagent_traces.jsonl",

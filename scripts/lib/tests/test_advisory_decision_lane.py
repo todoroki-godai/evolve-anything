@@ -251,7 +251,7 @@ def test_full_pipeline_reaches_audit_section_with_surfaced_and_accept(isolated, 
 
     lines = build_advisory_decisions_section(project)
 
-    assert "| invalid_frontmatter | 1 | 1 | 0 | 0 | 100% |" in lines
+    assert "| invalid_frontmatter | 1 | 1 | 0 | 0 | 0 | 100% |" in lines
 
 
 def test_full_pipeline_reaches_audit_section_with_deferred(isolated, project):
@@ -264,7 +264,7 @@ def test_full_pipeline_reaches_audit_section_with_deferred(isolated, project):
 
     lines = build_advisory_decisions_section(project)
 
-    assert "| invalid_frontmatter | 1 | 0 | 0 | 1 | 0% |" in lines
+    assert "| invalid_frontmatter | 1 | 0 | 0 | 1 | 1 | 0% |" in lines
 
 
 # ─── SessionStart リマインド ────────────────────────────────────────────────
@@ -305,11 +305,30 @@ def test_summarize_by_detector_counts_decisions(isolated):
     assert summary["testpaths_coverage"] == {
         "surfaced": 0, "accept": 2, "reject": 1, "deferred": 0,
         "accept_in_cohort": 0, "legacy_accept": 2,
+        "reject_in_cohort": 0, "legacy_reject": 1, "open": 0,
     }
     assert summary["invalid_frontmatter"] == {
         "surfaced": 0, "accept": 1, "reject": 0, "deferred": 0,
         "accept_in_cohort": 0, "legacy_accept": 1,
+        "reject_in_cohort": 0, "legacy_reject": 0, "open": 0,
     }
+
+
+def test_summarize_open_is_surfaced_without_terminal(isolated):
+    """``open``（未判断）= surfaced 記録あり ∧ accept/reject 記録なし（proposal_id 単位・#381 B）。"""
+    for pid in ("adv_decided", "adv_open"):
+        adl.record_advisory_decision(
+            slug="pj", proposal_id=pid, detector_id="testpaths_coverage",
+            target_path="pytest.ini", decision="surfaced",
+        )
+    adl.record_advisory_decision(
+        slug="pj", proposal_id="adv_decided", detector_id="testpaths_coverage",
+        target_path="pytest.ini", decision="accept",
+    )
+
+    summary = adl.summarize_by_detector(adl.read_advisory_decisions(slug="pj"))
+
+    assert summary["testpaths_coverage"]["open"] == 1
 
 
 def test_surfaced_and_terminal_decision_coexist_for_same_proposal(isolated):
