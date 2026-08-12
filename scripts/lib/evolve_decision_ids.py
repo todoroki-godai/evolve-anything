@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import subprocess
 import uuid
 import zlib
@@ -218,14 +219,36 @@ def _entry_generation(entry: Dict[str, Any]) -> tuple:
 REVERT_SCHEMA_VERSION = 1
 REVERT_ENCODING = "zlib+base64"
 
-# 決定2 Should3: result JSON（run ごとに全候補の本文を載せる）に埋め込む圧縮本文の
-# 1候補あたりの上限。実測（#402 PR-1・本リポジトリの SKILL.md n=23）: 圧縮後
-# 平均 6.17 KB / 最大 20.28 KB（raw 平均 10.9 KB / 最大 39.7 KB）。global スキル
-# （skill_origin 分類・n=654・raw 最大 180 KB）は project より裾が重いため、正常系の
-# 実測最大値に3倍強の余裕を持たせつつ極端な外れ値を弾く 64 KiB を上限にする。
+# 決定2 Should3: result JSON（run ごとに全候補の本文を載せる）に埋め込む**圧縮本文
+# （zlib bytes・base64 化前）**の1候補あたりの上限。実測（#402 PR-1・本リポジトリの
+# SKILL.md n=23）: 圧縮後 平均 6.17 KB / 最大 20.28 KB（raw 平均 10.9 KB / 最大 39.7 KB）。
+# round2 codex レビューで実測: `~/.claude/skills/*/SKILL.md` 106件中 base64 化後の最大
+# 63,272 bytes（当時の上限=base64 後 65,536 と比較すると余裕 3.5%しかなく境界に接して
+# いた）。**比較は zlib 圧縮直後のバイト長で行う**（base64 は 4/3 に膨張するため、
+# base64 後の文字数で比較すると実効の zlib 上限が名目の 3/4＝約48 KiB に縮む食い違いが
+# あった・round2 Should）。64 KiB は zlib 圧縮バイト数の上限（base64 化後は概ね
+# 4/3 倍＝約87 KiB まで許容）。
 REVERT_BEFORE_MAX_COMPRESSED_BYTES = 64 * 1024
 
 REVERT_REASON_BEFORE_TOO_LARGE = "before_too_large"
+
+# 決定2: 恒久保存は accept された entry のみへ純加算するフィールドの許可リスト（単一
+# ソース）。``evolve_decisions._ingest``（pending → recorder への受け渡し）と
+# ``fitness_evolution.record_evolve_diff_decision``（recorder 自身の受け口）の両方が
+# この tuple を共有する。2箇所が別々に同じキー集合を書くと片方だけ更新されて desync
+# する（pitfall_copied_parse_convention_partial_fix と同型）ため、単一ソースに集約する。
+REVERT_FIELD_KEYS: Tuple[str, ...] = (
+    "revert_before_b64",
+    "revert_schema_version",
+    "revert_encoding",
+    "revert_generation",
+    "revert_unavailable_reason",
+    "repo_id",
+    "relative_path",
+    "scope",
+    "worktree_root",
+    "resolved_path",
+)
 
 
 def _compress_before_content(text: str) -> str:
@@ -249,6 +272,10 @@ def _compress_before_for_revert(
 ) -> Tuple[Optional[str], Optional[str]]:
     """決定2 Should3: 圧縮後サイズが上限を超えたら本文を落とし理由コードを返す。
 
+    比較は **zlib 圧縮直後のバイト長**（base64 化前）で行い、通過したものだけ base64
+    化する。base64 化後の文字数で比較すると 4/3 倍の膨張分だけ実効上限が縮む食い違いが
+    生じる（round2 codex レビュー Should）。
+
     ``max_bytes`` 未指定時は呼び出し時点の ``REVERT_BEFORE_MAX_COMPRESSED_BYTES`` を読む
     （デフォルト引数の def 時点固定を避ける。monkeypatch でのテスト差し替えに追従する
     ため）。
@@ -259,16 +286,29 @@ def _compress_before_for_revert(
     """
     if max_bytes is None:
         max_bytes = REVERT_BEFORE_MAX_COMPRESSED_BYTES
-    b64 = _compress_before_content(text)
-    if len(b64.encode("ascii")) > max_bytes:
+    compressed = zlib.compress(text.encode("utf-8"))
+    if len(compressed) > max_bytes:
         return None, REVERT_REASON_BEFORE_TOO_LARGE
-    return b64, None
+    return base64.b64encode(compressed).decode("ascii"), None
 
 
 def _global_skills_root() -> Path:
     """global skill の正準 root。``skill_origin.classify_skill_origin`` と同一ソース
     （#402 決定5）。"""
     return Path.home() / ".claude" / "skills"
+
+
+def _lexical_absolute(path: Any) -> str:
+    """symlink を辿らず絶対化する（``Path.resolve()`` は symlink を辿ってしまうため
+    scope 判定には使えない・round2 codex レビュー Must）。
+
+    ``os.path.abspath`` は内部で ``os.path.normpath`` を呼ぶため、``..``/``.`` は
+    ファイルシステムに触れずに字句的に正規化される。これにより ``..`` を使って
+    global root の外へ抜けようとする経路も、正規化後の絶対パスが root 配下に無ければ
+    ``_path_scope_identity`` の ``relative_to`` が ``ValueError`` になり global 対象外
+    として拒否される。
+    """
+    return os.path.abspath(os.path.expanduser(str(path)))
 
 
 def _path_scope_identity(path: str) -> Dict[str, Optional[str]]:
@@ -280,16 +320,29 @@ def _path_scope_identity(path: str) -> Dict[str, Optional[str]]:
       （``~/.claude`` は git 管理外なので git 非依存で判定する）
     - どちらでもない: ``scope=None``（apply/revert の対象外。判定不能ではなく「対象外」）
 
+    **scope/relative_path の判定は symlink を辿らない字句的な絶対パス
+    （``_lexical_absolute``）で行う**（round2 codex レビュー Must）。``resolve()`` 後の
+    パスで判定すると、global root 配下の symlink（実体が git 管理外の別ディレクトリを
+    指す。例: ``~/.claude/skills/agent-browser -> ~/.agents/skills/agent-browser``）が
+    symlink の実体側で判定されて ``scope=None``・``relative_path`` に絶対パスが入る
+    誤りが実環境（``~/.claude/skills`` 配下の symlink 7件）で実測された。global 判定に
+    該当しない場合だけ ``_repo_identity``（git 経由・symlink 実体の repo を見る）へ進む。
+
+    symlink の実体が global root 外であることの拒否・regular-file 判定・解決後
+    containment の検証は **設計どおり PR-2 の apply 側**で行う（決定6）。この PR
+    （記録拡張のみ）では行わない。
+
     ``_repo_identity``（提案 identity 用）とは独立の関数。提案 ID の計算式には影響しない
     （decision5 のフィールドは entry への純加算）。**resolved_path は表示・診断専用**
-    （apply の解決には使わない・決定5）。
+    （apply の解決には使わない・決定5。symlink を辿った実体を保持する）。
     """
     p = Path(path).expanduser()
     resolved = str(p.resolve())
 
-    global_root = _global_skills_root().resolve()
+    lexical = _lexical_absolute(p)
+    global_root_lexical = _lexical_absolute(_global_skills_root())
     try:
-        rel_to_global = Path(resolved).relative_to(global_root)
+        rel_to_global = Path(lexical).relative_to(global_root_lexical)
     except ValueError:
         rel_to_global = None
     if rel_to_global is not None:

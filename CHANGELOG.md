@@ -27,6 +27,10 @@
   **完了条件(a) 復旧導線**: `revert_before_b64` は `zlib`+base64 なので `gunzip` では開けない。
   手動 revert のための decode 手順を以下の通り明記する（`optimize_history/<slug>.jsonl` の
   該当 `id` の accept 行から、プロジェクトコードを import せず標準ライブラリだけで復元できる）。
+  jsonl の**データルート**は `$CLAUDE_PLUGIN_DATA`（未設定時 `~/.claude/evolve-anything/`
+  が正・`optimize_history_store.DATA_DIR`）配下なので、任意 cwd からは次の1行でパスを求める:
+  `python3 -c "import os,pathlib; print((pathlib.Path(os.environ.get('CLAUDE_PLUGIN_DATA') or (pathlib.Path.home()/'.claude'/'evolve-anything'))/'optimize_history'/'<slug>.jsonl'))"`
+  （`<slug>` は対象 PJ の worktree 安全 slug。`pj_slug.resolve_pj_slug()` が正典）。
 
   ```
   python3 -c "
@@ -36,20 +40,26 @@
   row = next(r for r in rows if r.get('id') == target_id)
   text = zlib.decompress(base64.b64decode(row['revert_before_b64'])).decode('utf-8')
   open(out_path, 'w', encoding='utf-8').write(text)
-  " optimize_history/<slug>.jsonl <entry_id> /tmp/restored_SKILL.md
+  " <データルート>/optimize_history/<slug>.jsonl <entry_id> /tmp/restored_SKILL.md
   ```
 
   復元先パスは accept 行の `relative_path`（`scope="project"` なら repo root 相対 / `"global"` なら
   `~/.claude/skills` 相対）を人間が確認して手動でコピーする（**apply の自動化・conflict 検知・
   atomic replace は PR-2 の `bin/evolve-revert`（決定6）の対象**であり、本 PR は記録拡張のみ）。
+  このコマンド全体は `test_revert_record.py` の
+  `test_changelog_dump_before_recipe_restores_fixture_jsonl` が fixture jsonl に対して実行し、
+  文面の drift（変数名・キー名のずれ）を検出する。
 
   **完了条件(b) result JSON 肥大化**: 実測（このリポジトリの SKILL.md、`skills/*/SKILL.md`
-  n=23）— 圧縮後サイズは平均 6.17 KB・最大 20.28 KB（raw 平均 10.9 KB・最大 39.7 KB）。この
-  project の全候補が同時に1 run の result JSON に載る最悪ケースでも圧縮後 sum ≈ 142 KB。global
-  スキル（`skill_origin.classify_skill_origin` の `"global"` 分類・`~/.claude/skills` 配下）は
-  裾が重く raw 最大 180 KB（実測は decision1 時点）というアウトライヤーが存在するため、
-  **1候補あたりの上限方式**（`revert_before_b64` の圧縮後サイズが `REVERT_BEFORE_MAX_COMPRESSED_BYTES`
-  = 64 KiB を超えたら本文を載せず `revert_unavailable_reason="before_too_large"` のみを残す）を
+  n=23）— **zlib 圧縮直後のバイト長**（base64 化前。上限の比較単位と同じ）は平均 6.17 KB・
+  最大 20.28 KB（raw 平均 10.9 KB・最大 39.7 KB）。この project の全候補が同時に1 run の
+  result JSON に載る最悪ケースでも圧縮後 sum ≈ 142 KB。global スキル
+  （`skill_origin.classify_skill_origin` の `"global"` 分類・`~/.claude/skills` 配下・実環境
+  106件中 base64 化後最大 63,272 bytes を round2 レビューで実測）は project より裾が重く raw
+  最大 180 KB（実測は decision1 時点）というアウトライヤーが存在するため、
+  **1候補あたりの上限方式**（`revert_before_b64` 生成前の **zlib 圧縮バイト長**（base64 化前）が
+  `REVERT_BEFORE_MAX_COMPRESSED_BYTES` = 64 KiB（base64 化後は概ね 4/3 倍＝約87 KiB まで許容）を
+  超えたら本文を載せず `revert_unavailable_reason="before_too_large"` のみを残す）を
   採用した。queue と result JSON（`--dry-run` の `evolve_decisions.pending` 同梱）は同一 dict を
   共有するため上限は両方に同時適用される（result JSON は `/tmp/rl_evolve_<slug>.json` へ都度上書き
   で書かれ蓄積しないため、保持方針でなく上限方式のみで完結する）。

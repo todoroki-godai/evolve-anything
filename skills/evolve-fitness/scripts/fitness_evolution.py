@@ -24,6 +24,7 @@ _LIB_DIR = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "l
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 import optimize_history_store as _history_store  # noqa: E402
+from evolve_decision_ids import REVERT_FIELD_KEYS  # noqa: E402
 from rl_common.file_lock import file_lock  # noqa: E402
 
 
@@ -173,13 +174,15 @@ def record_evolve_diff_decision(
     「このフィールドを持たない accept 済み entry」＝旧 hash-proxy 単独判定で記録された
     legacy レコードの判別条件として使う。
 
-    ``revert_fields``（#402 決定2）: revert 復旧用の記録拡張フィールド（
-    ``revert_before_b64`` / ``revert_schema_version`` / ``revert_encoding`` /
-    ``revert_generation`` / ``repo_id`` / ``relative_path`` / ``scope`` /
-    ``worktree_root`` / ``resolved_path`` / ``revert_unavailable_reason``）を持つ
-    dict。**呼び出し側（``evolve_decisions.ingest_decisions``）が kind=="accept" の
-    ときだけ渡す規約**（reject/skip の本文は恒久保存しない・決定2）。None のキーは
-    書き込まず既存 entry との後方互換を保つ（entry への純加算）。
+    ``revert_fields``（#402 決定2）: revert 復旧用の記録拡張フィールド（許可リストは
+    ``evolve_decision_ids.REVERT_FIELD_KEYS`` が単一ソース）を持つ dict。**呼び出し側
+    （``evolve_decisions.ingest_decisions``）が kind=="accept" のときだけ渡す規約**
+    （reject/skip の本文は恒久保存しない・決定2）。
+
+    本関数（callee 側）が「entry への純加算」契約を自身で保証する（round2 codex レビュー
+    Should）: ``REVERT_FIELD_KEYS`` 外のキー・値が None のキーは無視し、残ったキーが
+    既存 ``entry``（``id``/``skill_name``/``timestamp`` 等）と衝突する場合は
+    ``ValueError`` を送出して拒否する（呼び出し側の allowlist だけに依存しない多層防御）。
     """
     if history_file is None:
         history_file = _default_history_file()
@@ -206,10 +209,22 @@ def record_evolve_diff_decision(
         "decision_source": decision_source,
     }
     if revert_fields:
-        # #402 決定2: 値が None のキーは書かない（既存 entry との後方互換を壊さない
-        # 純加算）。before_too_large 等で本文を落とした場合は revert_before_b64 の
-        # キー自体を省略し、revert_unavailable_reason だけが残る。
-        entry.update({k: v for k, v in revert_fields.items() if v is not None})
+        # #402 決定2: 許可リスト外のキー・値が None のキーは書かない（既存 entry との
+        # 後方互換を壊さない純加算）。before_too_large 等で本文を落とした場合は
+        # revert_before_b64 のキー自体を省略し、revert_unavailable_reason だけが残る。
+        _filtered_revert_fields = {
+            k: v for k, v in revert_fields.items() if k in REVERT_FIELD_KEYS and v is not None
+        }
+        # round2 codex レビュー Should: callee 自身が「純加算」契約を保証する。呼び出し側
+        # の allowlist だけに依存すると、将来 REVERT_FIELD_KEYS に既存 entry キーと同名の
+        # ものが増えたときに気づかず上書きしうる。
+        _collisions = set(_filtered_revert_fields) & set(entry)
+        if _collisions:
+            raise ValueError(
+                "revert_fields collides with existing entry keys "
+                f"(純加算契約違反): {sorted(_collisions)}"
+            )
+        entry.update(_filtered_revert_fields)
     _attach_provenance(entry)
 
     # 冪等 ingest: 同一 id が既にあれば書き込まない。

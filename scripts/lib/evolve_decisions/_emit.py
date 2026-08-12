@@ -72,8 +72,16 @@ def emit_decisions(
     # （emit/drain/revert のどの2つを同時に走らせても deadlock しない・決定8）。
     # dry_run 時はロックを取らない（`file_lock` は open(path, "a") で sidecar を必ず
     # 作るため、無条件に取ると dry-run 純度契約「1バイトも書かない」を破る。queue lock
-    # と同じく実書込が起きる時だけ取る。dry-run の generation 読みは分析用途で他プロセス
-    # との排他は不要 — 結果は同一プロセスの apply→drain サイクル内でのみ使われる）。
+    # と同じく実書込が起きる時だけ取る）。
+    # ⚠️ dry-run の generation 読みは非ロックのスナップショットであり、その結果（marker /
+    # result 同梱 pending）は**同一プロセス内で完結する保証が無い** — marker は後から
+    # 別プロセス・別セッションの `evolve --drain` で読まれうる（#402）。つまり round4 の
+    # monotonic supersede ガードが守るのは「queue/marker への公開順序」のみで、この
+    # dry-run 読み取り自体が古い generation を later-drain まで持ち越すレースは PR-1 の
+    # 対象外（PR-1 時点は revert writer 不在で generation は常に 0 のため実害なし）。
+    # PR-2 で revert writer を入れる前に、(a) 書込なしで既存 sidecar のロックだけ取得する
+    # 仕組み、または (b) apply 直前に history lock を取り直す locked re-snapshot の
+    # いずれかを設計し、契約テストで固定する必要がある。
     history_file = _store.history_path(slug)
     pending: List[Dict[str, Any]] = []
     lock_cm = (

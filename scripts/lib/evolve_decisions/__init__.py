@@ -81,6 +81,7 @@ from evolve_decision_ids import (  # noqa: E402,F401
 from evolve_decision_ids import (  # noqa: E402,F401
     REVERT_BEFORE_MAX_COMPRESSED_BYTES,
     REVERT_ENCODING,
+    REVERT_FIELD_KEYS,
     REVERT_REASON_BEFORE_TOO_LARGE,
     REVERT_SCHEMA_VERSION,
     _compress_before_content,
@@ -89,6 +90,7 @@ from evolve_decision_ids import (  # noqa: E402,F401
     _filter_monotonic_pending,
     _generation_of,
     _global_skills_root,
+    _lexical_absolute,
     _path_scope_identity,
     _revert_generation_for_target,
 )

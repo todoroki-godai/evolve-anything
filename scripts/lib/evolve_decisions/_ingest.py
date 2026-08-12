@@ -15,26 +15,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 import optimize_history_store as _store
-from evolve_decision_ids import _decision_event_id, _generation_of, _sha256, _tracked_path
+from evolve_decision_ids import (
+    REVERT_FIELD_KEYS,
+    _decision_event_id,
+    _generation_of,
+    _sha256,
+    _tracked_path,
+)
 
 from ._candidates import _record_advisory_event
 from ._queue import _queue_lock, _write_queue, read_queue
-
-# #402 決定2: 恒久保存は accept された entry のみ（reject/skip の本文は queue purge と
-# ともに捨てる）。ingest が pending entry からこのキー集合だけを拾って
-# ``record_evolve_diff_decision`` の ``revert_fields`` に渡す（entry への純加算）。
-_REVERT_FIELD_KEYS = (
-    "revert_before_b64",
-    "revert_schema_version",
-    "revert_encoding",
-    "revert_generation",
-    "revert_unavailable_reason",
-    "repo_id",
-    "relative_path",
-    "scope",
-    "worktree_root",
-    "resolved_path",
-)
 
 
 def ingest_decisions(
@@ -147,7 +137,7 @@ def ingest_decisions(
                 # #402 決定2: 恒久保存は accept された entry のみ（reject/skip は本文を
                 # queue purge とともに捨てる）。
                 revert_fields=(
-                    {k: entry.get(k) for k in _REVERT_FIELD_KEYS} if kind == "accept" else None
+                    {k: entry.get(k) for k in REVERT_FIELD_KEYS} if kind == "accept" else None
                 ),
             )
         (accepted_out if kind == "accept" else rejected_out).append(pid)
