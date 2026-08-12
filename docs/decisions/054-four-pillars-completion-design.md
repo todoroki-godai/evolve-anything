@@ -486,13 +486,16 @@ E（drain 周辺）と Phase D の書込境界も重なるので並行させな�
 
 ## 7. 判断の記録
 
-### 7.1 決定済み（2026-08-12 ユーザー判断）
+### 7.1 決定済み（2026-08-12 / 2026-08-13 ユーザー判断）
 
 | 論点 | 決定 | 影響 |
 |---|---|---|
 | sidechain 除外の層 | **記録層（extractor）で根治** | 再 ingest migration の新規開発が Phase A に入る。llm_judge 滞留も 23% 減 |
 | 柱3(b)（採用効果・取り下げ候補） | **Phase E を作って完成させる** | v1 案の「4週の計測ゲート」は撤回 |
 | A4「手直し」の定義 | **capture 調査の結果、corrections を分子に使う案（A4-ii）は却下** | 下記 7.2 |
+| A3 の既存 FP（rephrase 16 / llm_judge 33 / corrections 昇格済み2）の扱い | **縮小**（2026-08-13）。corrections 昇格済み2件は即時 invalidate、残り49件は TTL 45日の自然失効に任せる。フルの後始末フェーズは作らない | Phase A3 のスコープ縮小。§6 実施順に反映済み |
+| B3（llm_judge 上限200件/日）を上げるか対象を絞るか | **即決しない**（2026-08-13）。A1/A2 後に流入量を再計測してから判断する（10,225件処理自体は価値でなく古い低品質候補に LLM 費用を払う危険） | B3 着手を A1/A2 完了後に後ろ倒し。§6 実施順に反映済み |
+| 再 ingest（A1）に伴う LLM 再判定費用の事前見積もり | **A1 を二段階に分割**（2026-08-13）。forward 修正 + read 時 sidechain 除外を先に実施し、全履歴 migration は費用見積もり（最悪3,604件）とベンチの後に着手判断する | A1 の完了条件が二段階化。§5-A1・§6 に反映済み |
 
 ### 7.2 A4 の結論 — corrections を「手直し回数」に使わない
 
@@ -515,14 +518,28 @@ tool_use **平均21回/セッション**（最大284）。全体 ~51,000行相�
 
 ### 7.3 未決
 
-- A3 の既存 FP（rephrase 16 / llm_judge 33 / **corrections 昇格済み2**）の扱い
-- B3 の llm_judge 上限 200件/日を上げるか、対象を絞るか
-- 再 ingest に伴う LLM 再判定費用（最悪 3,604件・`llm-batch-guard` 該当）の事前見積もり
+- ~~A3 の既存 FP（rephrase 16 / llm_judge 33 / **corrections 昇格済み2**）の扱い~~
+  → **決定済み（2026-08-13・§7.1）**。縮小方針で決着
+- ~~B3 の llm_judge 上限 200件/日を上げるか、対象を絞るか~~
+  → **決定済み（2026-08-13・§7.1）**。「A1/A2 後に再計測してから判断する」まで決着。
+  上げる/絞るの結論そのものは再計測後に確定する
+- ~~再 ingest に伴う LLM 再判定費用（最悪 3,604件・`llm-batch-guard` 該当）の事前見積もり~~
+  → **決定済み（2026-08-13・§7.1）**。A1 の二段階化により、全履歴 migration 着手前に確定する運びで決着
 - ~~A0 修理後の「手直し」分子の最終形（corrections 単独か weak_signals 併用か）~~
   → **A0 実測により「corrections 単独」は却下**（recall 約4.5%）。残る選択は
   「weak_signals 併用」か「`correction_semantic` の意味判定を主分子に据える」かで、**C1 の設計時に決める**
 - `run_id` の秒精度（`optimize.py:97` の `strftime("%Y%m%d_%H%M%S")`）を UUID 化するか
   → **Phase D スコープ外・別 issue**（D1 は複数一致エラー検出で正しさを担保済み）
+
+### 7.4 G1 が通らなかった場合の柱3(a) の扱い
+
+**G1（correction_semantic/llm_judge レーンの recall/precision 実測ゲート・§3.3）が閾値未達の場合**:
+C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の headline は **`first_try_success`
+（唯一動いている軸・実測 0.9403）一本に絞り**、`rework_rate` / `correction_recurrence` 系列は
+**表示しない**（`not_measured` 表示すら出さない＝そもそも系列を作らない）。
+
+分母が信頼できない状態で無理に系列を出すより、出さない方が #376「数字が嘘をつかない」に忠実。
+半端に測った rework 系列は §2.6-2 の「分母1桁の断定表示」と同じ失敗を再生産する。
 
 ---
 
@@ -534,9 +551,10 @@ tool_use **平均21回/セッション**（最大284）。全体 ~51,000行相�
 | A0 | **実コーパスリプレイ**で修正語を含む発話の検出率と FP 率を実測。合成 fixture の緑では完了としない |
 | A1〜A5 | **新規記録**で sidechain 由来0件（既存行の扱いは §5-A1 の方針どおり）。`prev_action` 持ち越しのテスト。`correction_recurrence` が None を脱する |
 | B | **固定 corpus + 複数 PJ/global group のテスト**で「sidechain 0 / machinery 0 / content-rich 供給あり / 既読差引き後も順位規則を満たす」（単日目視では不十分） |
-| D | 新規 accept が `revert_available=true` で記録され、`bin/evolve-revert` が dry-run で復元内容を印字 |
+| G1 | `a0_eval_set.jsonl` の正解ラベル（TP 10件 + census TP 7件）が weak_signals の llm_judge レーンで検出される件数を突合し、recall/precision と channel 間重複を固定実コーパスで実測する。閾値未達なら C(a) は作らず、柱3(a) の headline を `first_try_success` 一本に絞る（§7.4） |
+| D（PR4 のみ） | 新規 accept（A レーン＝evolve drain 経由）が `revert_available=true` で記録され、`bin/evolve-revert` が dry-run で復元内容を印字。**PR2/PR3 は 2026-08-13 凍結中につき対象外**（`optimize.py::save_history_entry` / `run_loop.py` 経由の採用は revert 対象外のまま。§5 Phase D） |
 | E | correction → skill diff → accept が **synthetic E2E で1周する** |
-| C | `not_measured` と `no_data` が表示上区別される。欠測週が「改善」に化けない。C4 は synthetic E2E |
+| C | `not_measured` と `no_data` が表示上区別される。欠測週が「改善」に化けない（**欠測の定義に分母側 `utterances.db` の ingest 停止週も含める**——#351 の16日沈黙の前科を踏まえる）。C2/C4 は因果を断定せず「適用後に指標が改善／悪化した**関連**」として表示し、最低分母・観測窓・複数 accept が重なる場合の `unattributed` を明示する。C4 は synthetic E2E |
 
 共通: `python3 -m pytest` **exit 0**（件数は契約にしない）+ `bin/evolve-dogfood-gate --layer light` exit 0 + `claude plugin validate`。
 
@@ -573,6 +591,20 @@ tool_use **平均21回/セッション**（最大284）。全体 ~51,000行相�
 | A0 が (a) 系の数字を作る（§3.3 の依存図） | §3.3・§5-A0（recall 約4.5%＝A0 単独では作れない） |
 | Phase 0 は「平常時 0〜1件発火」前提 | 実測は4系統・フル文連結412字＝**2件以上の結合が常用経路**（`drafts/054-phase0-notification-routing.md` §4.1） |
 | `optimize.py` の accept 記録は健全 | `--auto --dry-run` が `approved=True` の entry を書く＝**柱3(b) の分母汚染**。Phase D PR1 で修正 |
+
+### 9.1 2026-08-13 rev（tacchi / codex 各1巡 + 頭の実測）
+
+| レビュアー | 指摘 | 反映先 |
+|---|---|---|
+| tacchi [Must]2 / codex [Must]4 | C(a)/C(b) を分離し、correction_semantic（llm_judge）の recall/precision を実測してから C(a) を作るべき | §3.3（G1 計測ゲート新設）/ §7.4（不通過時は柱3(a) headline を `first_try_success` に絞る） |
+| tacchi [Must]5 / codex [Must]5 | Phase E は「経路が無い」のか「経路はあるが起動しない」のかを実測せず設計すると誤設計になる | §5 Phase E（着手前ゲート：実 repo で手動1周を先に実施し、その結果を E 設計書 §1 とする） |
+| codex [Must]3 | A1・A3・A5 を並列と表記していたが、A3 の汚染 cleanup は A1 の再取り込みと衝突する | §6 実施順（A2∥C1 → A1 → A3 → G1 → A5 の直列化） |
+| tacchi [Should]3 | §2.6 の8件は「いま現在」嘘をつき続けている。C1 は他 Phase に非依存なので前倒しできる | §6（C1 を A2 と並行の最優先へ前倒し） |
+| codex [Should] | A1 の全履歴 migration は費用（最悪3,604件の再判定）を見積もる前に着手すべきでない | §6（A1 二段階化）/ §7.1（2026-08-13 決定） |
+| tacchi [Should] | A3 のフル後始末フェーズは過剰。corrections 昇格済み2件だけ即時対応すれば足りる | §6（A3 縮小）/ §7.1（2026-08-13 決定） |
+| codex [Should] | A5 単独の `distinct_types >= 5` は語彙を増やすだけで達成できる vanity gate | §6（成果指標から降格） |
+| codex [Should] | B3 の上限引き上げは流入量再計測を経ずに判断すべきでない | §6（B3 は A1/A2 後）/ §7.1（2026-08-13 決定） |
+| 頭の実測（`optimize_history` 全41 entry の writer 別分解） | D1 の PR2/PR3 対象レーンの accept 実績を確認したところ、**tacchi は当初「PR3（optimize.py）は accept 2件だから後回し」としたが、実測では2件だったのは PR2 側（run_loop）で、PR3 側は0件だった**。「後回し（凍結）」という方向自体は正しく、対象レーンが入れ替わっていたため、頭が実測して両方の凍結に確定した | §5 Phase D（D1 の PR2/PR3 凍結裁定） |
 
 ---
 

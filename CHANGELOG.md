@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- **docs(adr): ADR-054 実施計画を tacchi/codex レビューと実測で改訂（#379 #400 #402）** —
+  2026-08-13 の tacchi・codex 各1巡と頭の実測を反映。§3.3 に C(a)/C(b) 分離と G1 計測ゲート
+  （correction_semantic/llm_judge レーンの recall/precision を固定実コーパスで実測。不通過なら
+  柱3(a) の headline を `first_try_success` 一本に絞る・§7.4 新設）を挿入。Phase D は
+  `optimize.py::save_history_entry`（PR3）/ `run_loop.py`（PR2）経路の accept 実績が
+  それぞれ0件・実質1件だったため凍結（PR1/PR4 のみ実施）。両経路の docstring と
+  `bin/evolve-revert` の利用者向け文言に「revert 対象外」を明記。§6 実施順を修正
+  （A3 は A1 の後・A2∥C1 を最優先に前倒し）。
 - **feat(detection): correction capture の修理 A0（ADR-054 §5-A0, #379）** —
   実コーパス census（precision 87.5%、`_MACHINERY_MARKERS` 追加後）で確認済みの低リスク・
   低recall語彙2件（`naoshite-request` = `直して`/`修正して`/`訂正して`。複合動詞

@@ -1,7 +1,8 @@
 # ADR-054 Phase D 設計 — 残存2経路の revert lane 統合（D1）+ entry_id 導線拡充（D2）
 
 - Status: **Confirmed（設計確定・実装着手可）**。codex round1/round2 の [Must] は全解消。
-  round3 以降の codex 巡は行わない——残る未決8点は 2026-08-12 に頭（team-lead）が直接裁定し確定した（§7）
+  round3 以降の codex 巡は行わない——残る未決8点は 2026-08-12 に頭（team-lead）が直接裁定し確定した（§7）。
+  **PR2/PR3 は 2026-08-13 に追加裁定で凍結**（実装しない。解凍条件は上記凍結裁定を参照。PR1/PR4 は対象外）
 - Date: 2026-08-12（初版）/ 改訂1（codex round1 反映）/ 改訂2（codex round2 反映——B の pending→accept
   契約を単一の表に一本化）/ 改訂3（team-lead 裁定反映——未決8点の確定・PR 構成の最終化・decision entry
   の append-only 化）
@@ -15,16 +16,26 @@
 > 修正を重ねたことで記述が競合していた反省（round2 Must1/Must3/Must4/Must-new×2）を踏まえ、他の節から
 > はこの表を参照する形にする。
 
-## PR 構成（最終確定・team-lead 裁定 2026-08-12）
+> **凍結裁定（2026-08-13・ユーザー判断）**: 実測（`~/.claude/evolve-anything/optimize_history/` 全41
+> entry の writer 別分解）の結果、**PR2（`run_loop.py` 経路）・PR3（`optimize.py` 経路）は凍結する**。
+> B の accept は史上0件、C の accept は実質1件（2件のうち1件は pytest tmpdir 汚染）。採用実績が
+> ほぼ無いレーンに append-only decision chain + `supersedes_id` + 2段検索という本設計中最も複雑な
+> 仕組みを入れるのは #379 の縮小方針に反する。**実施するのは PR1（実装済み）・PR4（`--list` 導線）のみ**。
+> **本文書 §2〜§5 の PR2/PR3 設計本文は削除しない**（解凍時にそのまま使うため保持する。以下は
+> 「凍結中」の設計として読むこと）。解凍条件: どちらかのレーンで**テスト由来でない accept が3件以上**
+> に達した時点。裁定の正典は
+> [ADR-054 §5 Phase D](../054-four-pillars-completion-design.md)（D1 の PR2/PR3 凍結裁定の節）。
+
+## PR 構成（最終確定・team-lead 裁定 2026-08-12 → PR2/PR3 凍結は 2026-08-13 追加裁定）
 
 4 PR に分割する（順序固定。各 PR の完了条件は §5.3 に PR 単位で記載）:
 
 | PR | 内容 |
 |---|---|
-| **PR1（共有 helper 契約）** | `merge_revert_fields`/`_decision_event_id_from_sha`/`append_history_entry_deduped`+`_locked` 版の新設、A writer（`record_evolve_diff_decision`）のリファクタ（byte-equivalent）、**`evolve_decision_ids.py` の private 関数群の public rename**、**`run_loop.py` の `--auto --dry-run` approved 汚染修正**、**`evolve_revert/_availability.py` の after_sha/id schema 一貫性検査追加** |
-| **PR2** | C（`run_loop.py`）経路を revert lane へ寄せる |
-| **PR3** | B（`optimize.py`）経路を revert lane へ寄せる（複雑さが集中するため単独 PR。decision entry の append-only 化を含む） |
-| **PR4** | D2（`bin/evolve-revert --list`/`--all` 導線）+ `.backup`/`--restore` と entry_id revert の使い分けドキュメント化 |
+| **PR1（共有 helper 契約）** | `merge_revert_fields`/`_decision_event_id_from_sha`/`append_history_entry_deduped`+`_locked` 版の新設、A writer（`record_evolve_diff_decision`）のリファクタ（byte-equivalent）、**`evolve_decision_ids.py` の private 関数群の public rename**、**`run_loop.py` の `--auto --dry-run` approved 汚染修正**、**`evolve_revert/_availability.py` の after_sha/id schema 一貫性検査追加** — **✅ 実装済み** |
+| **PR2** | C（`run_loop.py`）経路を revert lane へ寄せる — **🧊 2026-08-13 凍結・実施しない（設計は保持、解凍条件は上記）** |
+| **PR3** | B（`optimize.py`）経路を revert lane へ寄せる（複雑さが集中するため単独 PR。decision entry の append-only 化を含む） — **🧊 2026-08-13 凍結・実施しない（設計は保持、解凍条件は上記）** |
+| **PR4** | D2（`bin/evolve-revert --list`/`--all` 導線）+ `.backup`/`--restore` と entry_id revert の使い分けドキュメント化 — **実施する（PR2/PR3 に非依存）** |
 
 ---
 

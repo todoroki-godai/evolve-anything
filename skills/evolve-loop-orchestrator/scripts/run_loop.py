@@ -445,7 +445,10 @@ def run_loop(
     selection_reeval_enabled: bool = True,
     selection_reeval_n: int = 3,
 ) -> List[Dict[str, Any]]:
-    """メインループを実行"""
+    """メインループを実行。
+
+    この経路の accept は `bin/evolve-revert` の対象外（ADR-054 Phase D PR2 は凍結中・#402）。
+    """
     results = []
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = _get_output_dir(output_dir)

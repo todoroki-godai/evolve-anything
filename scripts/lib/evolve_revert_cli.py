@@ -26,7 +26,11 @@ from evolve_revert import ApplyResult, DumpResult, apply_revert, dump_before
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="evolve-revert",
-        description="採用した skill diff を1コマンドで戻す（#402 PR-2）。既定は dry-run。",
+        description=(
+            "採用した skill diff を1コマンドで戻す（#402 PR-2）。既定は dry-run。"
+            "revert できるのは evolve drain 経由の採用のみ"
+            "（optimize.py/run_loop.py 経由の採用は対象外・ADR-054 Phase D PR2/PR3 凍結中）。"
+        ),
     )
     parser.add_argument("entry_id", help="戻す対象の accept entry ID（戦果ボードの entry_id）")
     parser.add_argument(
