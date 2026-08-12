@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from evolve_decision_ids import _global_skills_root
+from evolve_decision_ids import global_skills_root
 
 REASON_UNSUPPORTED_SCOPE = "unsupported_scope"
 REASON_MISSING_REPO_ID = "missing_repo_id"
@@ -48,7 +48,7 @@ def resolve_target(entry: Dict[str, Any]) -> TargetResolution:
     """entry の scope/repo_id/relative_path から apply 対象パスを解決し安全検査する。
 
     - ``scope == "global"``: 正準 global skills root（``~/.claude/skills``・
-      ``evolve_decision_ids._global_skills_root`` と同一ソース）+ root 相対パス
+      ``evolve_decision_ids.global_skills_root`` と同一ソース）+ root 相対パス
     - ``scope == "project"``: entry の ``repo_id``（git-common-dir の親 = 本体 repo
       root）+ root 相対パス
     - それ以外（``None`` 等）: ``REASON_UNSUPPORTED_SCOPE``
@@ -57,7 +57,7 @@ def resolve_target(entry: Dict[str, Any]) -> TargetResolution:
     relative_path = entry.get("relative_path")
 
     if scope == "global":
-        root = _global_skills_root()
+        root = global_skills_root()
     elif scope == "project":
         repo_id = entry.get("repo_id")
         if not repo_id:
@@ -83,7 +83,7 @@ def resolve_target(entry: Dict[str, Any]) -> TargetResolution:
 
     # 解決後の実体が root 配下であることを別検査で確認（親ディレクトリ symlink 経由の
     # 脱出を防ぐ）。``resolve()`` は symlink を辿るため、字句的パス判定（PR-1 の
-    # ``_lexical_absolute``）とは役割が異なる——ここは「実体がどこにあるか」を見る。
+    # ``lexical_absolute``）とは役割が異なる——ここは「実体がどこにあるか」を見る。
     try:
         real_root = root.resolve()
         real_target = target.resolve()

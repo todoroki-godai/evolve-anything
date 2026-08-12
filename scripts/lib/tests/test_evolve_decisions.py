@@ -176,7 +176,7 @@ def test_emit_marker_error_is_none_on_success(result_with_match, monkeypatch, tm
 
 
 def _marker_entry(path: str, sha: str = "before") -> dict:
-    return {"id": ed._proposal_id(path, sha), "skill_path": path, "before_sha": sha}
+    return {"id": ed.proposal_id(path, sha), "skill_path": path, "before_sha": sha}
 
 
 def test_flat_result_path_kept_when_single_run(monkeypatch, tmp_path):
@@ -523,7 +523,7 @@ def test_drain_moves_orphaned_entry_out_of_pending_without_recording(monkeypatch
     monkeypatch.setattr(ed, "MARKER_ROOT", tmp_path / "evolve_pending")
     gone_root = tmp_path / "worktrees" / "deleted-wt"  # 作らない（削除済みを模す）
     entry = {
-        "id": ed._proposal_id(str(gone_root / "skills" / "s" / "SKILL.md"), "before"),
+        "id": ed.proposal_id(str(gone_root / "skills" / "s" / "SKILL.md"), "before"),
         "run_id": "evrun_x",
         "skill_name": "s",
         "skill_path": str(gone_root / "skills" / "s" / "SKILL.md"),
@@ -550,9 +550,9 @@ def test_drain_keeps_pending_entry_when_worktree_still_exists(monkeypatch, tmp_p
     (live_root / "skills" / "s").mkdir(parents=True)
     skill_path = live_root / "skills" / "s" / "SKILL.md"
     skill_path.write_text("# s\n\n旧。\n", encoding="utf-8")
-    before_sha = ed._sha256(skill_path.read_text(encoding="utf-8"))
+    before_sha = ed.sha256(skill_path.read_text(encoding="utf-8"))
     entry = {
-        "id": ed._proposal_id(str(skill_path), before_sha),
+        "id": ed.proposal_id(str(skill_path), before_sha),
         "run_id": "evrun_x",
         "skill_name": "s",
         "skill_path": str(skill_path),

@@ -62,17 +62,17 @@ import optimize_history_store as _store  # noqa: E402
 
 # identity 関数は別 module（#287）。名前を re-export し既存参照をそのまま動かす。
 from evolve_decision_ids import (  # noqa: E402,F401
-    _decision_event_id,
-    _entry_generation,
-    _is_superseded,
-    _legacy_run_id,
-    _new_run_id,
-    _proposal_id,
-    _proposal_id_from_identity,
-    _repo_identity,
-    _sha256,
-    _supersede_keys,
-    _tracked_path,
+    decision_event_id,
+    entry_generation,
+    is_superseded,
+    legacy_run_id,
+    new_run_id,
+    proposal_id,
+    proposal_id_from_identity,
+    repo_identity,
+    sha256,
+    supersede_keys,
+    tracked_path,
     is_orphaned_worktree,
 )
 
@@ -84,15 +84,15 @@ from evolve_decision_ids import (  # noqa: E402,F401
     REVERT_FIELD_KEYS,
     REVERT_REASON_BEFORE_TOO_LARGE,
     REVERT_SCHEMA_VERSION,
-    _compress_before_content,
-    _compress_before_for_revert,
-    _decompress_before_content,
-    _filter_monotonic_pending,
-    _generation_of,
-    _global_skills_root,
-    _lexical_absolute,
-    _path_scope_identity,
-    _revert_generation_for_target,
+    compress_before_content,
+    compress_before_for_revert,
+    decompress_before_content,
+    filter_monotonic_pending,
+    generation_of,
+    global_skills_root,
+    lexical_absolute,
+    path_scope_identity,
+    revert_generation_for_target,
 )
 
 DATA_DIR = _store.DATA_DIR

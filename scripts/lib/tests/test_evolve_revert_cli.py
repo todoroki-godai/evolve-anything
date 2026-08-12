@@ -134,7 +134,7 @@ class TestEndToEndDryRunNoWrite:
     def test_dry_run_zero_writes(self, tmp_path, monkeypatch, capsys):
         import optimize_history_store as store
         from evolve_decision_ids import (
-            REVERT_ENCODING, REVERT_SCHEMA_VERSION, _compress_before_content, _sha256,
+            REVERT_ENCODING, REVERT_SCHEMA_VERSION, compress_before_content, sha256,
         )
 
         canonical = tmp_path / "evolve-anything"
@@ -147,9 +147,9 @@ class TestEndToEndDryRunNoWrite:
         store.append_entry(
             {
                 "id": "e1", "human_accepted": True, "skill_name": "x",
-                "before_sha": _sha256(before_text),
-                "after_sha": _sha256(target.read_text(encoding="utf-8")),
-                "revert_before_b64": _compress_before_content(before_text),
+                "before_sha": sha256(before_text),
+                "after_sha": sha256(target.read_text(encoding="utf-8")),
+                "revert_before_b64": compress_before_content(before_text),
                 "revert_schema_version": REVERT_SCHEMA_VERSION,
                 "revert_encoding": REVERT_ENCODING,
                 "scope": "project", "repo_id": str(tmp_path), "relative_path": "SKILL.md",

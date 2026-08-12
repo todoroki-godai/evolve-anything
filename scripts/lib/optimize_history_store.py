@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from rl_common.file_lock import file_lock
+
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
 HISTORY_ROOT = DATA_DIR / "optimize_history"
@@ -211,6 +213,46 @@ def append_entry(entry: Dict[str, Any], slug: str) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def append_history_entry_deduped(
+    entry: Dict[str, Any], slug: str, history_file: Optional[Path] = None
+) -> Tuple[Dict[str, Any], bool]:
+    """``entry['id']`` が既存なら書かずに既存 entry を返す（``written=False``）。
+    無ければ ``file_lock`` を自分で取得し、``_append_history_entry_deduped_locked`` を
+    呼ぶ（``written=True``）。3 writer（A/B/C）共有の冪等 append 単一ソース（#402-D PR1
+    §2.1 item3・``fitness_evolution.record_evolve_diff_decision`` の #287-2 実装から抽出）。
+
+    ``entry['id']`` が None/空文字なら ``ValueError``（冪等判定キーが無いと dedup できない）。
+    """
+    if not entry.get("id"):
+        raise ValueError("append_history_entry_deduped requires entry['id']")
+    if history_file is None:
+        history_file = history_path(slug)
+    from rl_common.file_lock import file_lock
+
+    with file_lock(history_file.with_name(history_file.name + ".lock")):
+        return _append_history_entry_deduped_locked(entry, history_file)
+
+
+def _append_history_entry_deduped_locked(
+    entry: Dict[str, Any], history_file: Path
+) -> Tuple[Dict[str, Any], bool]:
+    """呼び出し側が既に ``history_file`` の lock を保持している前提（自己 deadlock を
+    避ける ``_locked`` 版・``rl_common/file_lock.py`` の既存慣習）。
+
+    ``_read_jsonl(history_file)`` で単一ファイルを直接読む——``load_raw_history`` の
+    ような cross-dir alias union はしない（本関数の write 先も常に canonical 単一
+    ファイルのため、read/write の対象を一致させる。#402-D round2 Must-new#2 対応）。
+    """
+    existing = next((r for r in _read_jsonl(history_file) if r.get("id") == entry["id"]), None)
+    if existing is not None:
+        return existing, False
+    normalize_entry_timestamp(entry)
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(history_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry, True
+
+
 # ─── revert イベントと effective view（#402 PR-2 段階2・§1） ───────────────
 
 # revert イベント（apply 実行の記録）は accept/reject entry とは別のレコード型。
@@ -219,7 +261,7 @@ def append_entry(entry: Dict[str, Any], slug: str) -> None:
 REVERT_EVENT_TYPE = "revert"
 
 # revert イベントの必須フィールド（設計正典 §1）。``scope``/``repo_id``/``relative_path`` は
-# PR-1 の ``evolve_decision_ids._revert_generation_for_target`` が対象一致の判定に使う3つと
+# PR-1 の ``evolve_decision_ids.revert_generation_for_target`` が対象一致の判定に使う3つと
 # フィールド名を揃えている（食い違わせないこと）。
 REVERT_EVENT_REQUIRED_FIELDS: Tuple[str, ...] = (
     "event_type",  # 固定値 "revert"

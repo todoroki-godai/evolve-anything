@@ -28,7 +28,7 @@ def _write(dir_: Path, slug: str, records: list) -> None:
 
 
 def _accept_entry(before_text: str, **overrides):
-    b64, _ = ids._compress_before_for_revert(before_text)
+    b64, _ = ids.compress_before_for_revert(before_text)
     base = {
         "id": "x1",
         "human_accepted": True,

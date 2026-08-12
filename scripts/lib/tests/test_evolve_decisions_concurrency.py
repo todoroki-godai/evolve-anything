@@ -60,7 +60,7 @@ def _no_hang(fn, seconds: float = 30):
 
 def _entry(path: str, sha: str) -> dict:
     return {
-        "id": ed._proposal_id(path, sha),
+        "id": ed.proposal_id(path, sha),
         "run_id": "evrun_test",
         "skill_name": "my-skill",
         "skill_path": path,
@@ -124,7 +124,7 @@ def test_ingest_rereads_queue_before_write_so_concurrent_adds_survive(
     していたため、判断中に入った追加が最後の上書きで消えた。判断はロック外・書き込み
     直前にロック下で読み直す方式なら生き残る。
     """
-    before = ed._sha256(skill_file.read_text(encoding="utf-8"))
+    before = ed.sha256(skill_file.read_text(encoding="utf-8"))
     entry = _entry(str(skill_file), before)
     ed._write_queue("s", [entry])
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")  # accept 相当
@@ -286,7 +286,7 @@ def test_drain_holds_one_lock_and_does_not_self_deadlock(roots, skill_file, tmp_
     flock が open file description 単位ゆえ自分自身と deadlock する。deadlock すると
     テストは失敗でなく**ハング**するので、daemon thread + join(timeout) で検出する。
     """
-    before = ed._sha256(skill_file.read_text(encoding="utf-8"))
+    before = ed.sha256(skill_file.read_text(encoding="utf-8"))
     entry = _entry(str(skill_file), before)
     ed.write_pending_marker("s", [entry], run_id="evrun_test")
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")
@@ -308,7 +308,7 @@ def test_drain_releases_marker_lock_during_ingest(roots, skill_file, monkeypatch
     ingest 中に marker ロックを取ってみて、取れれば解放されている。取れなければ**ハング**
     するので daemon thread + join(timeout) で検出する。
     """
-    before = ed._sha256(skill_file.read_text(encoding="utf-8"))
+    before = ed.sha256(skill_file.read_text(encoding="utf-8"))
     entry = _entry(str(skill_file), before)
     ed.write_pending_marker("s", [entry], run_id="evrun_test")
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")
@@ -334,7 +334,7 @@ def test_drain_purge_does_not_swallow_a_newer_generation(roots, skill_file, monk
     purge が ID だけで消すと、drain がスナップショットを取った後に emit された提案まで
     巻き込む（TOCTOU）。世代キー（run_id + id + before_sha）一致を条件にして防ぐ。
     """
-    before = ed._sha256(skill_file.read_text(encoding="utf-8"))
+    before = ed.sha256(skill_file.read_text(encoding="utf-8"))
     entry = _entry(str(skill_file), before)
     ed.write_pending_marker("s", [entry], run_id="evrun_old")
     skill_file.write_text("# my-skill\n\n適用済み\n", encoding="utf-8")

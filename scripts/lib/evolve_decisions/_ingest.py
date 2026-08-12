@@ -17,10 +17,10 @@ from typing import Any, Dict, List, Optional, Set
 import optimize_history_store as _store
 from evolve_decision_ids import (
     REVERT_FIELD_KEYS,
-    _decision_event_id,
-    _generation_of,
-    _sha256,
-    _tracked_path,
+    decision_event_id,
+    generation_of,
+    sha256,
+    tracked_path,
 )
 
 from ._candidates import _record_advisory_event
@@ -82,13 +82,13 @@ def ingest_decisions(
 
     for entry in pending:
         pid = entry["id"]
-        tracked = _tracked_path(entry)
+        tracked = tracked_path(entry)
         is_advisory = entry.get("proposal_type") == "advisory"
         try:
             after = Path(tracked).read_text(encoding="utf-8") if tracked else None
         except OSError:
             after = None
-        after_sha = _sha256(after) if after is not None else None
+        after_sha = sha256(after) if after is not None else None
         applied = after_sha is not None and after_sha != entry.get("before_sha")
 
         # #267: 判断結果と独立に surfaced（分母）を記録する。
@@ -133,8 +133,8 @@ def ingest_decisions(
                 rejection_reason=reason,
                 history_file=history_file,
                 # #402 決定4: revert_generation を ID 成分に含める（Must2 の互換規約は
-                # `_decision_event_id` 内部に閉じている。gen=0/未設定は現行式と bit 同一）。
-                entry_id=_decision_event_id(pid, kind, after_content, _generation_of(entry)),
+                # `decision_event_id` 内部に閉じている。gen=0/未設定は現行式と bit 同一）。
+                entry_id=decision_event_id(pid, kind, after_content, generation_of(entry)),
                 # #267 Sprint 1: pending entry の run_id（emit 時の run envelope）を
                 # optimize_history へ純加算する。queue の verify_pending が読む。
                 run_id=entry.get("run_id"),

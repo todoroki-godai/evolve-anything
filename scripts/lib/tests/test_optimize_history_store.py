@@ -20,6 +20,7 @@ _lib_dir = _test_dir.parent
 sys.path.insert(0, str(_lib_dir))
 
 import optimize_history_store as store
+from rl_common.file_lock import file_lock
 
 
 @pytest.fixture
@@ -162,6 +163,78 @@ class TestAppendAndLoad:
         assert "timestamp" in loaded[0]
         dt = datetime.fromisoformat(loaded[0]["timestamp"])
         assert dt.tzinfo is not None
+
+
+class TestAppendHistoryEntryDeduped:
+    """append_history_entry_deduped / _append_history_entry_deduped_locked
+    （#402-D PR1 §2.1 item3・3 writer 共有の冪等 append）。"""
+
+    def test_writes_new_entry_and_returns_written_true(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        entry = {"id": "a", "human_accepted": True}
+        result, written = store.append_history_entry_deduped(entry, "proj")
+        assert written is True
+        assert result["id"] == "a"
+        assert [r["id"] for r in store.load_history("proj")] == ["a"]
+
+    def test_duplicate_id_not_written_returns_existing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        first = {"id": "a", "human_accepted": True}
+        store.append_history_entry_deduped(first, "proj")
+        second = {"id": "a", "human_accepted": False}  # 内容が違っても id 一致なら書かない
+        result, written = store.append_history_entry_deduped(second, "proj")
+        assert written is False
+        assert result["human_accepted"] is True  # 既存 entry がそのまま返る
+        assert len(store.load_history("proj")) == 1
+
+    def test_missing_id_raises_value_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        with pytest.raises(ValueError):
+            store.append_history_entry_deduped({"human_accepted": True}, "proj")
+        with pytest.raises(ValueError):
+            store.append_history_entry_deduped({"id": ""}, "proj")
+
+    def test_normalizes_timestamp_on_write(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        entry = {"id": "a", "timestamp": "2026-07-31T09:00:00"}
+        store.append_history_entry_deduped(entry, "proj")
+        loaded = store.load_history("proj")
+        dt = datetime.fromisoformat(loaded[0]["timestamp"])
+        assert dt.tzinfo is not None
+
+    def test_explicit_history_file_used_for_both_read_and_write(self, tmp_path, monkeypatch):
+        """明示 history_file は read/write ともその物理ファイルを直接使う
+        （round2 Must-new#2 の直接対応・HISTORY_ROOT 経由の別解決をしない）。"""
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "unrelated")
+        explicit = tmp_path / "explicit" / "custom.jsonl"
+        result, written = store.append_history_entry_deduped({"id": "a"}, "proj", explicit)
+        assert written is True
+        assert explicit.exists()
+        assert not (tmp_path / "unrelated").exists()
+
+    def test_locked_variant_does_not_take_lock_itself(self, tmp_path):
+        """``_append_history_entry_deduped_locked`` はロックを取らない（呼び出し側が
+        既に保持している前提）——公開版が lock を取り、内部で `_locked` 版を1回だけ
+        呼ぶ二段構成であることの回帰テスト（二重 lock による自己 deadlock 防止）。"""
+        history_file = tmp_path / "history.jsonl"
+        result, written = store._append_history_entry_deduped_locked({"id": "a"}, history_file)
+        assert written is True
+        # 直後に外側で lock を取っても deadlock しない（_locked 版が内部で lock を
+        # 取っていないことの間接証明）。
+        with file_lock(history_file.with_name(history_file.name + ".lock")):
+            existing, written2 = store._append_history_entry_deduped_locked(
+                {"id": "a"}, history_file
+            )
+            assert written2 is False
+            assert existing["id"] == "a"
+
+    def test_atomicity_under_lock_no_double_write(self, tmp_path, monkeypatch):
+        """既存確認→append をロック下で原子化する（#287-2 と同型の冪等契約）。
+        逐次2回呼んでも1行しか書かれないことを確認する。"""
+        monkeypatch.setattr(store, "HISTORY_ROOT", tmp_path / "optimize_history")
+        for _ in range(3):
+            store.append_history_entry_deduped({"id": "a"}, "proj")
+        assert len(store.load_history("proj")) == 1
 
 
 class TestNormalizeEntryTimestamp:

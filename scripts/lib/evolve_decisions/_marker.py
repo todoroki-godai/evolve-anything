@@ -22,11 +22,11 @@ import optimize_history_store as _store
 from rl_common.file_lock import atomic_write_text, file_lock
 
 from evolve_decision_ids import (
-    _entry_generation,
-    _filter_monotonic_pending,
-    _legacy_run_id,
-    _sha256,
-    _tracked_path,
+    entry_generation,
+    filter_monotonic_pending,
+    legacy_run_id,
+    sha256,
+    tracked_path,
 )
 
 
@@ -103,7 +103,7 @@ def _read_pending_marker_file(slug: str) -> Optional[Dict[str, Any]]:
         pending = pending if isinstance(pending, list) else []
         data["runs"] = [
             {
-                "run_id": _legacy_run_id([e for e in pending if isinstance(e, dict)]),
+                "run_id": legacy_run_id([e for e in pending if isinstance(e, dict)]),
                 "pending": pending,
                 "result_path": data.get("result_path"),
             }
@@ -172,7 +172,7 @@ def write_pending_marker(
     Returns:
         monotonic ガードで捨てた件数（#402 決定8 round4。emit の返り値 meta に使う）。
     """
-    run_id = run_id or _legacy_run_id(pending)
+    run_id = run_id or legacy_run_id(pending)
     with _marker_lock(slug):
         current = _read_pending_marker_file(slug) or {}
         existing_entries = [
@@ -180,15 +180,15 @@ def write_pending_marker(
             for run in current.get("runs", [])
             for entry in (run.get("pending") or [])
         ]
-        pending, discarded = _filter_monotonic_pending(existing_entries, pending)
+        pending, discarded = filter_monotonic_pending(existing_entries, pending)
 
         superseded_ids = {entry.get("id") for entry in pending if entry.get("id")}
         # パス単位 supersede は #279 のパス単独 ID で書かれた移行期 entry も自然に片付ける
         # （旧 ID は新 ID と一致しないが対象パスは同じ）。判定は accept 判定と同じ
-        # `_tracked_path` を使う（advisory は対象が pytest.ini 等で skill_path を持たない。
+        # `tracked_path` を使う（advisory は対象が pytest.ini 等で skill_path を持たない。
         # ここだけ skill_path 直読みにすると advisory の residue が素通りする）。
         superseded_paths = {
-            path for path in (_tracked_path(entry) for entry in pending) if path
+            path for path in (tracked_path(entry) for entry in pending) if path
         }
         runs: List[Dict[str, Any]] = []
         for run in current.get("runs", []):
@@ -198,7 +198,7 @@ def write_pending_marker(
                 entry
                 for entry in (run.get("pending") or [])
                 if entry.get("id") not in superseded_ids
-                and _tracked_path(entry) not in superseded_paths
+                and tracked_path(entry) not in superseded_paths
             ]
             if kept:
                 runs.append({**run, "pending": kept})
@@ -291,7 +291,7 @@ def _purge_marker_entries_locked(
     def _drop(entry: Dict[str, Any]) -> bool:
         if entry.get("id") not in consumed:
             return False
-        return generations is None or _entry_generation(entry) in generations
+        return generations is None or entry_generation(entry) in generations
 
     runs: List[Dict[str, Any]] = []
     for run in marker.get("runs", []):
@@ -328,12 +328,12 @@ def undrained_applied(slug: str) -> List[Dict[str, Any]]:
         return []
     out: List[Dict[str, Any]] = []
     for p in marker.get("pending", []) or []:
-        sp = _tracked_path(p)
+        sp = tracked_path(p)
         before = p.get("before_sha")
         if not sp or not before:
             continue
         try:
-            current = _sha256(Path(sp).read_text(encoding="utf-8"))
+            current = sha256(Path(sp).read_text(encoding="utf-8"))
         except OSError:
             continue
         if current != before:

@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from evolve_decision_ids import _entry_generation, is_orphaned_worktree
+from evolve_decision_ids import entry_generation, is_orphaned_worktree
 
 from ._ingest import ingest_decisions
 from ._marker import _marker_lock, _purge_marker_entries_locked, _read_pending_marker_file
@@ -53,7 +53,7 @@ def drain_pending(
     **単一コマンド `evolve --drain` を呼ぶだけ**にして縮める。drain は CLI＝**tool 文脈**で
     走るため optimize_history を reader と同一 DATA_DIR に書く＝#358（DATA_DIR split）を踏まない。
 
-    冪等: ingest が `_decision_event_id`（提案 ID + 判断種別 + 判断時点の内容）で dedup するので、
+    冪等: ingest が `decision_event_id`（提案 ID + 判断種別 + 判断時点の内容）で dedup するので、
     未 apply で空振り→後で apply→再 drain でも accept は一度だけ記録される（apply タイミング非依存）。
 
     Args:
@@ -72,7 +72,7 @@ def drain_pending(
 
     # #287-3: スナップショットと purge をそれぞれロック下で行い、**ingest はロック外**に置く
     # （ingest は skill_quality 採点で秒オーダーになりうるので、握ると同一 slug の emit と
-    # SessionStart hook を飢餓させる）。TOCTOU は世代キー（`_entry_generation`）で防ぐ。
+    # SessionStart hook を飢餓させる）。TOCTOU は世代キー（`entry_generation`）で防ぐ。
     # ロック下では公開版でなく `_locked` / `_read_pending_marker_file` を使う（自己 deadlock）。
     orphaned_entries: List[Dict[str, Any]] = []
     with _marker_lock(slug):
@@ -97,8 +97,8 @@ def drain_pending(
     summary["deferred"] = [entry.get("id") for entry in remaining]
     summary["orphaned"] = [entry.get("id") for entry in orphaned_entries]
     generations = {
-        _entry_generation(entry) for entry in pending if entry.get("id") in consumed
-    } | {_entry_generation(entry) for entry in orphaned_entries}
+        entry_generation(entry) for entry in pending if entry.get("id") in consumed
+    } | {entry_generation(entry) for entry in orphaned_entries}
     with _marker_lock(slug):
         _purge_marker_entries_locked(
             slug, consumed | set(summary["orphaned"]), generations=generations

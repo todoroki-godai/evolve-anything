@@ -97,6 +97,47 @@ class TestComputeRevertAvailabilityLaneUnsupported:
         assert reason == REASON_LANE_UNSUPPORTED
 
 
+class TestComputeRevertAvailabilitySchemaConsistency:
+    """#402-D PR1 §2.7（team-lead 裁定）: schema はあるが ``id``/``after_sha`` が
+    欠けている entry は、``apply_revert`` の必須検査（``_apply.py`` の
+    ``after_sha``/``id`` 必須チェック）と揃えて listing 時点でも ``pre_extension`` に
+    相乗りさせる（新しい理由コードは増やさない——「available=true と表示したのに
+    apply が失敗する」という柱4「信頼」を壊す隙間を塞ぐ）。
+    """
+
+    def test_missing_id_with_full_schema(self):
+        entry = _full_entry()
+        del entry["id"]
+        available, reason = compute_revert_availability(entry)
+        assert available is False
+        assert reason == REASON_PRE_EXTENSION
+
+    def test_empty_id_treated_as_missing(self):
+        entry = _full_entry(id="")
+        available, reason = compute_revert_availability(entry)
+        assert available is False
+        assert reason == REASON_PRE_EXTENSION
+
+    def test_missing_after_sha_with_full_schema(self):
+        entry = _full_entry()
+        del entry["after_sha"]
+        available, reason = compute_revert_availability(entry)
+        assert available is False
+        assert reason == REASON_PRE_EXTENSION
+
+    def test_empty_after_sha_treated_as_missing(self):
+        entry = _full_entry(after_sha="")
+        available, reason = compute_revert_availability(entry)
+        assert available is False
+        assert reason == REASON_PRE_EXTENSION
+
+    def test_id_and_after_sha_present_with_full_schema_is_available(self):
+        """回帰防止: 本チェックが正常系（id/after_sha 両方あり）を誤って弾かないこと。"""
+        available, reason = compute_revert_availability(_full_entry())
+        assert available is True
+        assert reason is None
+
+
 class TestReasonLabels:
     def test_all_three_reason_codes_have_japanese_labels(self):
         assert set(REASON_LABELS) == {
