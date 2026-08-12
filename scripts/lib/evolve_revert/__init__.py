@@ -36,6 +36,15 @@ from ._metadata import (  # noqa: E402,F401
     XattrProbe,
     classify_losses,
     detect_drift,
+    preview_losses,
     snapshot_from_fd,
     snapshot_from_path,
+)
+from ._render import (  # noqa: E402,F401
+    build_diff_summary,
+    render_apply_success,
+    render_conflict_message,
+    render_dry_run_preview,
+    render_hardlink_rejection,
+    render_metadata_loss_rejection,
 )

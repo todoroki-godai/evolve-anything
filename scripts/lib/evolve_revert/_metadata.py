@@ -202,6 +202,24 @@ class LossReport:
         return self.owner or self.xattr or self.flags
 
 
+def preview_losses(source: MetadataSnapshot) -> LossReport:
+    """dry-run 用の**近似** loss preview（C25）。
+
+    正確な判定（``classify_losses``）は実際に temp を作って fstat 突合しないと出せない
+    ——temp の group は親ディレクトリの setgid 等の影響を受けるため「元ファイルの
+    uid/gid が実行ユーザーと同じか」だけでは replace 後の所有権保持を保証できない
+    （§2 手順4）。dry-run は temp へゼロ書込の契約（C28）のため、ここでは実行ユーザーの
+    euid/egid との比較という**近似ヒューリスティック**で代用する。xattr は「何が
+    OS 自動付与か」を temp 無しには特定できないため、存在する xattr を保守的に
+    全て「失われる可能性あり」として報告する（過小評価より過大評価を選ぶ）。
+    """
+    owner = (source.uid, source.gid) != (os.geteuid(), os.getegid())
+    xattr_not_checked = not source.xattr.capable
+    xattr = bool(source.xattr.capable and source.xattr.names)
+    flags = bool(source.flags) if source.flags_supported else False
+    return LossReport(owner=owner, xattr=xattr, flags=flags, xattr_not_checked=xattr_not_checked)
+
+
 def classify_losses(source: MetadataSnapshot, temp: MetadataSnapshot) -> LossReport:
     """``source``（drift 検証済み・手順2の観測と不変であることが確認済み）と、
     実際に作った ``temp`` を突合して apply が失うメタデータを分類する（C16-C21）。

@@ -275,3 +275,34 @@ def test_classify_losses_flags_nonzero_on_source_is_loss():
 def test_classify_losses_acl_always_marked_not_checked():
     report = md.classify_losses(_snap(), _snap())
     assert report.acl_not_checked is True
+
+
+# ─── dry-run 近似 preview（C25: temp を作らず source 単体から推定） ──────────
+
+
+def test_preview_losses_owner_mismatch_vs_process_euid_egid():
+    source = _snap(uid=os.geteuid() + 1, gid=os.getegid())
+    report = md.preview_losses(source)
+    assert report.owner is True
+
+
+def test_preview_losses_owner_match_is_not_a_loss():
+    source = _snap(uid=os.geteuid(), gid=os.getegid())
+    report = md.preview_losses(source)
+    assert report.owner is False
+
+
+def test_preview_losses_any_xattr_present_is_conservatively_a_loss():
+    source = _snap(
+        uid=os.geteuid(), gid=os.getegid(),
+        xattr=md.XattrProbe(True, frozenset({"com.apple.provenance"}), False),
+    )
+    report = md.preview_losses(source)
+    assert report.xattr is True
+
+
+def test_preview_losses_xattr_incapable_is_not_blocking():
+    source = _snap(uid=os.geteuid(), gid=os.getegid(), xattr=md.XattrProbe(False, None, False))
+    report = md.preview_losses(source)
+    assert report.xattr is False
+    assert report.xattr_not_checked is True
