@@ -232,9 +232,18 @@ def record_period(records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     「この表がどの期間の記録か」を判別できるようにする。``recorded_at`` の解析は
     本モジュールの責務（``_recorded_at``）であるため、この関数もここに置く
     （呼び出し側に private helper を跨いで注入させない・#381 tacchi レビュー round3）。
-    ``recorded_at`` を持たないレコードは無視する。
+    ``recorded_at`` を持たない／パースできないレコードは無視する。
+
+    ``_recorded_at`` は collapse の順序付け用に欠損・不正を ``_EPOCH``（西暦1年）へ
+    倒すが、期間表示でそれを採ると壊れた1行で「記録期間: 0001-01-01 〜 …」になり、
+    freeze 解除条件（3ヶ月蓄積）の判断材料が嘘になる。この関数は sentinel を除外する
+    （#381 codex レビュー2巡目 [Should]）。
     """
-    stamps = [_recorded_at(rec) for rec in records if rec.get("recorded_at")]
+    stamps = [
+        stamp
+        for stamp in (_recorded_at(rec) for rec in records if rec.get("recorded_at"))
+        if stamp != _EPOCH
+    ]
     if not stamps:
         return None
     earliest, latest = min(stamps).date(), max(stamps).date()

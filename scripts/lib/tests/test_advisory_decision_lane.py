@@ -342,6 +342,28 @@ def test_record_period_ignores_records_without_recorded_at(isolated):
     assert adl.record_period([{"decision": "surfaced", "proposal_id": "adv_1"}]) is None
 
 
+def test_record_period_ignores_unparsable_recorded_at(isolated):
+    """パース不能な ``recorded_at`` を期間に混ぜない（#381 codex 2巡目 [Should]）。
+
+    ``_recorded_at`` は collapse の順序付け用に不正値を ``_EPOCH``（西暦1年）へ倒すため、
+    そのまま採ると壊れた1行で「記録期間: 0001-01-01 〜 …」になり 3ヶ月蓄積の判断材料が
+    嘘になる。正常な記録が1件でもあればその期間だけを返し、全件不正なら None を返す。
+    """
+    broken = {"decision": "surfaced", "proposal_id": "adv_x", "recorded_at": "not-a-date"}
+    valid = {
+        "decision": "surfaced",
+        "proposal_id": "adv_1",
+        "recorded_at": "2026-08-12T00:00:00+00:00",
+    }
+
+    assert adl.record_period([broken, valid]) == {
+        "earliest": "2026-08-12",
+        "latest": "2026-08-12",
+        "days": 0,
+    }
+    assert adl.record_period([broken]) is None
+
+
 def test_summarize_open_is_surfaced_without_terminal(isolated):
     """``open``（未判断）= surfaced 記録あり ∧ accept/reject 記録なし（proposal_id 単位・#381 B）。"""
     for pid in ("adv_decided", "adv_open"):
