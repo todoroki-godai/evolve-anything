@@ -51,27 +51,44 @@ def test_advisory_does_not_write(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-# --- _deliver_utterance_staleness の env ガード -------------------------------
+# --- _build_utterance_staleness_output の env ガード ---------------------------
 
 def test_deliver_fires_in_install_layout(tmp_path, monkeypatch, capsys):
-    """install レイアウト env では advisory を stdout に出す。"""
+    """install レイアウト env では advisory を収集する（Tier1・印字しない）。"""
     source = tmp_path / "plugins" / "data" / "evolve-anything-evolve-anything"
     source.mkdir(parents=True)
     monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: Path(p) == source)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(source))
-    restore_state._deliver_utterance_staleness()
-    assert "evolve-fleet ingest" in capsys.readouterr().out
+    item = restore_state._build_utterance_staleness_output()
+    assert item is not None
+    assert item.tier == 1
+    assert "evolve-fleet ingest" in item.text
+    assert item.digest == "発話取込停止（要ingest）"  # marker 不在（未 ingest）は日数無し
+    assert capsys.readouterr().out == ""  # 収集関数は印字しない
+
+
+def test_deliver_digest_includes_age_days_when_stale(tmp_path, monkeypatch, capsys):
+    """marker があり stale な場合、digest に経過日数が入る。"""
+    source = tmp_path / "plugins" / "data" / "evolve-anything-evolve-anything"
+    source.mkdir(parents=True)
+    monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: Path(p) == source)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(source))
+    old = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+    (source / ustore.MARKER_NAME).write_text(old, encoding="utf-8")
+    item = restore_state._build_utterance_staleness_output()
+    assert item is not None
+    assert item.digest == "発話取込20日停止（要ingest）"
 
 
 def test_deliver_silent_outside_install_layout(tmp_path, monkeypatch, capsys):
     """テスト isolation の tmp env では発火せず JSON stdout を汚さない。"""
     monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: False)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "isolated"))
-    restore_state._deliver_utterance_staleness()
+    assert restore_state._build_utterance_staleness_output() is None
     assert capsys.readouterr().out == ""
 
 
 def test_deliver_silent_without_env(monkeypatch, capsys):
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-    restore_state._deliver_utterance_staleness()
+    assert restore_state._build_utterance_staleness_output() is None
     assert capsys.readouterr().out == ""

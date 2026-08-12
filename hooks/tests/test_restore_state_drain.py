@@ -53,7 +53,8 @@ def skill_and_marker(tmp_path, monkeypatch):
 def test_autodrain_leaves_applied_pending_without_explicit_decision(skill_and_marker, capsys):
     """#376: SessionStart には対話チャネルが無く明示 accept を渡せないため、ディスク diff
     だけでは何も記録されない（証跡なし＝pending のまま）。marker も温存され、リマインドのみ
-    surface される（#421 が導入した無人 auto-accept の是正）。
+    surface される（#421 が導入した無人 auto-accept の是正）。ADR-054 Phase 0: 収集関数化に
+    伴い印字せず ``NotificationItem`` を返す（Tier1・commit なし・§5.1）。
     """
     sf, tmp_path = skill_and_marker
     sf.write_text(_AFTER, encoding="utf-8")  # apply（apply 境界をまたぐ）
@@ -61,7 +62,7 @@ def test_autodrain_leaves_applied_pending_without_explicit_decision(skill_and_ma
     history_file = tmp_path / "optimize_history" / "testslug.jsonl"
     assert not history_file.exists()  # before: store 空
 
-    restore_state._deliver_evolve_drain()
+    item = restore_state._build_evolve_drain_output()
 
     # after: 明示 decision イベントが無いので store には何も記録されない。
     assert not history_file.exists()
@@ -70,20 +71,26 @@ def test_autodrain_leaves_applied_pending_without_explicit_decision(skill_and_ma
     assert marker is not None
     assert marker["pending"][0]["id"] == "evdiff_x"
     # リマインド文言が surface される（「記録した」と偽らない）。
-    out = capsys.readouterr().out
-    assert "適用済みの evolve 提案が 1 件" in out
-    assert "evolve --drain" in out
-    assert "記録しました" not in out
+    assert item is not None
+    assert item.tier == 1
+    assert item.commit is None
+    assert "適用済みの evolve 提案が 1 件" in item.text
+    assert "evolve --drain" in item.text
+    assert "記録しました" not in item.text
+    assert item.digest == "記録待ち提案1件（evolve --drain）"
+    assert item.tail_link is True
+    assert capsys.readouterr().out == ""  # 収集関数は印字しない
 
 
 def test_silent_and_no_store_write_when_not_applied(skill_and_marker, capsys):
     """未 apply → drain しない。store に書かず marker も残す（将来の apply を取り逃さない）。"""
     sf, tmp_path = skill_and_marker
     # apply しない（before のまま）。
-    restore_state._deliver_evolve_drain()
+    item = restore_state._build_evolve_drain_output()
     history_file = tmp_path / "optimize_history" / "testslug.jsonl"
     assert not history_file.exists()  # store 書き込みなし
-    assert capsys.readouterr().out == ""  # 沈黙
+    assert item is None  # 沈黙
+    assert capsys.readouterr().out == ""
     assert ed.read_pending_marker("testslug") is not None  # marker 温存
 
 
@@ -97,7 +104,7 @@ def test_early_return_when_no_marker(tmp_path, monkeypatch):
         raise AssertionError("drain_pending must not be called when no marker exists")
 
     monkeypatch.setattr(ed, "drain_pending", _boom)
-    restore_state._deliver_evolve_drain()  # 例外なく早期 return すること
+    assert restore_state._build_evolve_drain_output() is None  # 例外なく早期 return すること
 
 
 def test_early_return_when_marker_root_missing(tmp_path, monkeypatch):
@@ -108,7 +115,7 @@ def test_early_return_when_marker_root_missing(tmp_path, monkeypatch):
         raise AssertionError("resolve_slug must not be called when MARKER_ROOT is absent")
 
     monkeypatch.setattr(ed, "resolve_slug", _boom_slug)
-    restore_state._deliver_evolve_drain()
+    assert restore_state._build_evolve_drain_output() is None
 
 
 def test_silent_after_drain_clears_marker(skill_and_marker, capsys):
@@ -122,8 +129,9 @@ def test_silent_after_drain_clears_marker(skill_and_marker, capsys):
     )
     assert ed.read_pending_marker("testslug") is None  # 前提: marker は消えている
 
-    restore_state._deliver_evolve_drain()
-    assert capsys.readouterr().out == ""  # marker 消えた → 沈黙
+    item = restore_state._build_evolve_drain_output()
+    assert item is None  # marker 消えた → 沈黙
+    assert capsys.readouterr().out == ""
 
 
 def test_does_not_crash_hook_on_error(skill_and_marker, monkeypatch, capsys):
@@ -135,6 +143,7 @@ def test_does_not_crash_hook_on_error(skill_and_marker, monkeypatch, capsys):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(ed, "drain_pending", _boom)
-    restore_state._deliver_evolve_drain()  # 例外を投げない
+    item = restore_state._build_evolve_drain_output()  # 例外を投げない
+    assert item is None
     err = capsys.readouterr().err
     assert "drain" in err.lower()

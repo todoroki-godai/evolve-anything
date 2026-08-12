@@ -307,8 +307,11 @@ def detect(
     # 初回: マーカーをセットするだけで過去分を flood しない
     if not last:
         marker = {"last_sha": head, "pending": []}
-        if persist:
-            save_marker(slug, marker)
+        # ADR-054 Phase 0 §5.2: この分岐は表示すべき message を持たない（副作用のみ）ため
+        # defer する理由が無い。persist の値に関わらず常に保存する — defer すると次回
+        # セッションでも「初回扱い」が繰り返され、spec_drift が永久に発火しなくなる。
+        save_marker(slug, marker)
+        result["marker"] = marker
         return result
 
     new_commits = list_commits(cwd_path, last, head)
@@ -358,6 +361,9 @@ def detect(
 
     result["fires"] = [s for s in surfaced if not s.get("reminder")]
     result["reminders"] = [s for s in surfaced if s.get("reminder")]
+    # ADR-054 Phase 0 §5.2: persist=False の呼び出し元（restore_state）が「実際に表示
+    # できたときだけ」保存できるよう、計算済み・未保存の marker を常に返す。
+    result["marker"] = marker
     if surfaced:
         result["message"] = format_message(surfaced)
     return result

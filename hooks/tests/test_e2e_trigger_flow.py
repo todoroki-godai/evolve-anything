@@ -14,6 +14,7 @@ sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
 
 import trigger_engine
 import session_store
+import restore_state
 
 
 @pytest.fixture
@@ -28,6 +29,22 @@ def data_dir(tmp_path):
         session_store, "_DATA_DIR_OVERRIDE", tmp_path
     ):
         yield tmp_path
+
+
+def _silence_other_notifications(monkeypatch):
+    """pending_trigger 以外の収集関数を無効化し、E2E テストのノイズを排除する
+    （ADR-054 Phase 0）。ambient な実環境状態（marker root 等）に依存させない。"""
+    for name in (
+        "_build_spec_drift_output",
+        "_build_evolve_drain_output",
+        "_build_data_dir_migration_output",
+        "_build_utterance_staleness_output",
+        "_build_evolve_queue_output",
+        "_build_session_proposal_output",
+        "_build_judge_cap_output",
+        "_build_icebox_output",
+    ):
+        monkeypatch.setattr(restore_state, name, lambda *a, **k: None)
 
 
 class TestE2ETriggerFlow:
@@ -192,3 +209,80 @@ class TestE2ETriggerFlow:
         # Second trigger is blocked by cooldown
         r2 = trigger_engine.evaluate_session_end()
         assert r2.triggered is False
+
+
+class TestPendingTriggerAckFlow:
+    """ADR-054 Phase 0 §5.5/§7.1-8: pending_trigger を ack 方式（collect→print→commit）で
+    restore_state.handle_session_start 経由で検証する。read_and_delete と違い、
+    print が成功するまでファイルは削除されない。
+    """
+
+    def _write_pending(self, data_dir: Path) -> dict:
+        pending = {
+            "triggered": True,
+            "reason": "days_elapsed",
+            "action": "/evolve-anything:evolve",
+            "message": "前回 evolve から 15.6 日経過",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        (data_dir / "pending-trigger.json").write_text(json.dumps(pending), encoding="utf-8")
+        return pending
+
+    def test_normal_path_prints_and_deletes(self, data_dir, monkeypatch, capsys):
+        """正常経路: メッセージが最終1行に含まれ、ファイルが削除される。"""
+        _silence_other_notifications(monkeypatch)
+        self._write_pending(data_dir)
+
+        restore_state.handle_session_start({})
+
+        out = capsys.readouterr().out
+        lines = out.strip().splitlines()
+        assert len(lines) == 1
+        assert "前回 evolve から 15.6 日経過" in lines[0]
+        assert not (data_dir / "pending-trigger.json").exists()
+
+    def test_failure_path_builder_exception_keeps_file(self, data_dir, monkeypatch, capsys):
+        """失敗経路①: 収集関数自身の例外 → ファイルは削除されない（次回セッションで再候補）。"""
+        _silence_other_notifications(monkeypatch)
+        self._write_pending(data_dir)
+
+        import trigger_engine as _te
+
+        def _boom():
+            raise RuntimeError("boom in peek")
+
+        monkeypatch.setattr(restore_state, "peek_pending_trigger", _boom)
+
+        restore_state.handle_session_start({})
+
+        assert (data_dir / "pending-trigger.json").exists()
+
+    def test_failure_path_merge_exception_keeps_file(self, data_dir, monkeypatch, capsys):
+        """失敗経路②: merge 関数の例外 → commit されず、ファイルは削除されない。"""
+        _silence_other_notifications(monkeypatch)
+        self._write_pending(data_dir)
+
+        def _boom(items):
+            raise RuntimeError("boom in merge")
+
+        monkeypatch.setattr(restore_state, "_merge_notification_text", _boom)
+
+        restore_state.handle_session_start({})
+
+        assert (data_dir / "pending-trigger.json").exists()
+        err = capsys.readouterr().err
+        assert "merge/print failed" in err
+
+    def test_failure_path_print_exception_keeps_file(self, data_dir, monkeypatch, capsys):
+        """失敗経路③: print/json.dumps 自体の失敗 → commit されず、ファイルは削除されない。"""
+        _silence_other_notifications(monkeypatch)
+        self._write_pending(data_dir)
+
+        def _boom(*a, **k):
+            raise TypeError("not serializable")
+
+        monkeypatch.setattr(restore_state.json, "dumps", _boom)
+
+        restore_state.handle_session_start({})
+
+        assert (data_dir / "pending-trigger.json").exists()

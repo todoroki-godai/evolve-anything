@@ -3,6 +3,25 @@
 ## [Unreleased]
 
 ### Added
+- **feat(restore_state): ADR-054 Phase 0（B1）— SessionStart 通知の1行化（#379 #400）** —
+  `hooks/restore_state.py:handle_session_start` が発火する9系統の通知（pending_trigger /
+  spec_drift / evolve_drain / data_dir_migration / utterance_staleness / evolve_queue_notice /
+  session_proposal / judge_cap / icebox）+ work_context summary を、単一の
+  `NotificationItem`（tier/text/digest/commit）契約に統一した。発火系統が1件のみならフル文、
+  2件以上なら digest（短縮形）で結合し、Tier1（pending_trigger・judge_cap 全分岐・icebox
+  レーン1等）は予算に関係なく必ず全量結合、Tier2 は残り予算（既定400字）内でのみ追加し
+  超過分は「（ほか: 系統名）」で畳む。stdout は「0行」か「厳密に1行の JSON dict」の二値に
+  統一（work_context summary・session_proposal の指示は `hookSpecificOutput.additionalContext`
+  へ統合）。副作用（spec_drift の marker 保存・pending_trigger のファイル削除・icebox レーン1
+  の既読化）は ack 方式（`contextlib.ExitStack` で lock を保持し、print 成功後にのみ
+  commit）へ変更し、収集〜print〜副作用確定のいずれで失敗しても情報が消失しないことを保証した。
+  `scripts/lib/trigger_engine/pending.py` に非破壊 `peek_pending_trigger()`/
+  `delete_pending_trigger()` を追加、`scripts/lib/spec_trigger.py` の `detect()` は計算済み
+  marker を返すよう拡張（persist=False でも defer 可能に）、
+  `scripts/lib/daily/icebox_notice.py` は `build_met_notice()` から issue 列挙部分を
+  `build_met_body()` として切り出した。設計は
+  `docs/decisions/drafts/054-phase0-notification-routing.md`（codex 2巡 + tacchi 2巡レビュー
+  済み・rev7）。
 - **docs(adr): ADR-054「4本柱（#379 目標体験）完成設計」を追加（#379 #400 #401）** —
   「記録は全自動・判断は朝の30秒・効果は週1の数字で実感」の4本柱について、実測に基づく到達度診断と
   完成までの Phase 設計を確定。tacchi（体験・過剰約束）と codex（設計の正しさ）のレビューを各1巡入れた。

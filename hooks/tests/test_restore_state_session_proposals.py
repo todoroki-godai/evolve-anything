@@ -65,6 +65,11 @@ def _install_env(tmp_path, monkeypatch):
     source.mkdir(parents=True)
     monkeypatch.setattr(ddm, "is_cc_install_layout", lambda p: Path(p) == source)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(source))
+    # ADR-054 Phase 0: この test file の関心事でない他系統（data_dir_migration・
+    # utterance_staleness）が同じ env ガードで一緒に発火し、systemMessage が digest 化
+    # するのを防ぐ（additionalContext 側は影響を受けないが、他テストとの一貫性のため）。
+    monkeypatch.setattr(restore_state, "_build_data_dir_migration_output", lambda: None)
+    monkeypatch.setattr(restore_state, "_build_utterance_staleness_output", lambda: None)
     return source
 
 
@@ -95,6 +100,8 @@ def test_build_fires_with_proposals_for_this_pj(tmp_path, monkeypatch):
     assert f"{expected_cmd} --reject-weak k1 --pj {slug}" in msg
     # #412 [Must]1: systemMessage（user 可視）も同時に出る
     assert "git diff" in output["systemMessage"]
+    # ADR-054 Phase 0 §4.2: digest（2件以上発火時用の短縮形）も同時に返す
+    assert output["digest"] == "改善案1件"
 
 
 def test_build_returns_none_when_no_proposals_for_this_pj(tmp_path, monkeypatch):
@@ -180,15 +187,12 @@ class TestSingleJsonResponse:
 
         restore_state.handle_session_start({})
         out = capsys.readouterr().out
-        # handle_session_start は他の deliver（DATA_DIR migration reminder 等）が非 JSON の
-        # 平文行を出しうる。ここで検証したいのは「hookSpecificOutput を名乗る行」だけが
-        # 単一の valid JSON であること（プレーンテキスト行の存在自体は対象外）。
-        lines = [ln for ln in out.strip().splitlines() if "hookSpecificOutput" in ln]
+        # ADR-054 Phase 0 §4.1/§7.1-1: stdout は「0行」か「厳密に1行の JSON dict」の二値。
+        lines = out.strip().splitlines()
+        assert len(lines) == 1
+        payload = json.loads(lines[0])
 
-        hook_specific_lines = [json.loads(ln) for ln in lines]  # 各行は単独で valid JSON
-
-        assert len(hook_specific_lines) == 1  # hookSpecificOutput を含む行は高々1つ
-        hs = hook_specific_lines[0]["hookSpecificOutput"]
+        hs = payload["hookSpecificOutput"]
         assert hs["hookEventName"] == "SessionStart"
         assert "AskUserQuestion" in hs["additionalContext"]
         assert hs["sessionTitle"] == f"{(tmp_path / 'myproj').name} | main"
@@ -201,8 +205,8 @@ class TestSingleJsonResponse:
 
         restore_state.handle_session_start({})
         out = capsys.readouterr().out
-        lines = [ln for ln in out.strip().splitlines() if ln.strip()]
-        hook_specific_lines = [json.loads(ln) for ln in lines if "hookSpecificOutput" in ln]
-        assert len(hook_specific_lines) == 1
-        hs = hook_specific_lines[0]["hookSpecificOutput"]
+        lines = out.strip().splitlines()
+        assert len(lines) == 1
+        payload = json.loads(lines[0])
+        hs = payload["hookSpecificOutput"]
         assert "AskUserQuestion" in hs["additionalContext"]
