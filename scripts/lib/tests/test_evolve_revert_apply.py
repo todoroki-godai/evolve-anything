@@ -280,6 +280,21 @@ def test_hardlink_target_is_rejected(tmp_path, monkeypatch):
     assert "--allow-metadata-loss でも解除不可" in result.message
 
 
+def test_hardlink_rejection_is_not_overridable(tmp_path, monkeypatch):
+    """C3/C24: --allow-metadata-loss でも hardlink 拒否は解除できない（整合性破壊）。"""
+    canonical = _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after\n")
+    os.link(target, tmp_path / "other-link.md")
+    entry = _accept_entry("x1", "before\n", "after\n", target)
+    _write_history(canonical, "proj", [entry])
+
+    result = apply_revert("x1", slug="proj", dry_run=False, allow_metadata_loss=True)
+
+    assert result.ok is False
+    assert result.reason == "hardlink"
+    assert target.read_text(encoding="utf-8") == "after\n"
+
+
 # ─── メタデータ損失の拒否/override（C24）───────────────────────────────────
 
 
@@ -338,6 +353,113 @@ def test_metadata_loss_override_allows_apply(tmp_path, monkeypatch):
     assert result.ok is True
     assert target.read_text(encoding="utf-8") == "before\n"
     assert len(store.load_revert_events("proj")) == 1
+
+
+def test_drift_between_initial_observation_and_reverify_is_not_overridable(tmp_path, monkeypatch):
+    """C24: 「観測後の変化」は --allow-metadata-loss でも解除不可（初回検査で既に
+    存在していた損失とは別分類）。初回スナップショットと再検証スナップショットの間で
+    owner が変わるケースを1回目/2回目で異なる値を返す fake で模擬する。"""
+    canonical = _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after\n")
+    entry = _accept_entry("x1", "before\n", "after\n", target)
+    _write_history(canonical, "proj", [entry])
+
+    import evolve_revert._apply as apply_module
+    from evolve_revert._metadata import snapshot_from_fd as real_snapshot_from_fd
+
+    call_state = {"n": 0}
+
+    def _drifting_snapshot_from_fd(fd):
+        call_state["n"] += 1
+        snap = real_snapshot_from_fd(fd)
+        if call_state["n"] == 1:
+            return snap  # 手順2 の観測: 変化なし
+        # replace 直前の再検証: owner が変わっている（観測後の drift）。
+        return snap.__class__(
+            dev=snap.dev, ino=snap.ino, mode=snap.mode, is_regular=snap.is_regular,
+            uid=snap.uid + 1, gid=snap.gid, nlink=snap.nlink, xattr=snap.xattr,
+            flags=snap.flags, flags_supported=snap.flags_supported,
+        )
+
+    monkeypatch.setattr(apply_module, "snapshot_from_fd", _drifting_snapshot_from_fd)
+
+    result = apply_revert("x1", slug="proj", dry_run=False, allow_metadata_loss=True)
+
+    assert result.ok is False
+    assert result.reason == "drift"
+    assert target.read_text(encoding="utf-8") == "after\n"
+    assert store.load_revert_events("proj") == []
+
+
+def test_xattr_detection_failure_is_not_overridable(tmp_path, monkeypatch):
+    """C19/C24: 検出手段はあるが実行が失敗（fail-closed）は --allow-metadata-loss でも
+    解除不可（「検出不能（環境に手段が無い）」とは別分類）。"""
+    canonical = _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after\n")
+    entry = _accept_entry("x1", "before\n", "after\n", target)
+    _write_history(canonical, "proj", [entry])
+
+    import evolve_revert._apply as apply_module
+    from evolve_revert._metadata import XattrProbe, snapshot_from_fd as real_snapshot_from_fd
+
+    def _fake_snapshot_from_fd(fd):
+        snap = real_snapshot_from_fd(fd)
+        return snap.__class__(
+            dev=snap.dev, ino=snap.ino, mode=snap.mode, is_regular=snap.is_regular,
+            uid=snap.uid, gid=snap.gid, nlink=snap.nlink,
+            xattr=XattrProbe(capable=True, names=None, failed=True),
+            flags=snap.flags, flags_supported=snap.flags_supported,
+        )
+
+    monkeypatch.setattr(apply_module, "snapshot_from_fd", _fake_snapshot_from_fd)
+
+    result = apply_revert("x1", slug="proj", dry_run=False, allow_metadata_loss=True)
+
+    assert result.ok is False
+    assert result.reason == "drift"
+    assert target.read_text(encoding="utf-8") == "after\n"
+
+
+def test_same_source_fd_used_for_initial_and_reverify_snapshots(tmp_path, monkeypatch):
+    """C23: source は検査中ずっと fd を保持し、比較にも同じ fd を使う（パス経由で
+    stat し直さない）。"""
+    canonical = _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after\n")
+    entry = _accept_entry("x1", "before\n", "after\n", target)
+    _write_history(canonical, "proj", [entry])
+
+    import evolve_revert._apply as apply_module
+    from evolve_revert._metadata import snapshot_from_fd as real_snapshot_from_fd
+
+    seen_fds: list = []
+
+    def _spy_snapshot_from_fd(fd):
+        seen_fds.append(fd)
+        return real_snapshot_from_fd(fd)
+
+    monkeypatch.setattr(apply_module, "snapshot_from_fd", _spy_snapshot_from_fd)
+
+    apply_revert("x1", slug="proj", dry_run=False)
+
+    assert len(seen_fds) == 2
+    assert seen_fds[0] == seen_fds[1]
+
+
+# ─── revert イベントは学習系に流さない（§8 N2・C30）─────────────────────────
+
+
+def test_revert_event_does_not_write_to_weak_signals(tmp_path, monkeypatch):
+    """#379 Step1 新設凍結中: revert イベントは optimize_history のみに append され、
+    weak_signals 等の学習系チャネルには一切書き込まない（黙って流す実装を作らない）。"""
+    canonical = _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after\n")
+    entry = _accept_entry("x1", "before\n", "after\n", target)
+    _write_history(canonical, "proj", [entry])
+
+    apply_revert("x1", slug="proj", dry_run=False)
+
+    weak_signals_dir = store.DATA_DIR / "weak_signals"
+    assert not weak_signals_dir.exists() or list(weak_signals_dir.iterdir()) == []
 
 
 # ─── N1 apply 完了メッセージ ────────────────────────────────────────────────
