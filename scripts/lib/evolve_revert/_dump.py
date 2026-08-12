@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
-from evolve_decision_ids import _decompress_before_content
+from evolve_decision_ids import decompress_before_content
 
 from ._entry import find_entry
 from ._target import resolve_target
@@ -65,7 +65,7 @@ def dump_before(
     if dest_path.exists():
         return DumpResult(ok=False, reason=REASON_DEST_EXISTS)
 
-    before_content = _decompress_before_content(before_b64)
+    before_content = decompress_before_content(before_b64)
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest_path.with_name(f".{dest_path.name}.{uuid.uuid4().hex}.tmp")

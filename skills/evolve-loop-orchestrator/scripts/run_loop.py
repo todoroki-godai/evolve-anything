@@ -602,7 +602,7 @@ def run_loop(
                     f"regressed variant {best['id']} (improvement={improvement:+.2f})",
                     best["score"],
                 )
-        elif auto:
+        elif auto and not dry_run:
             print("\n  [自動承認] バリエーションを適用します。")
             approved = True
         elif not dry_run:

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from evolve_decision_ids import _repo_identity, _sha256
+from evolve_decision_ids import repo_identity, sha256
 
 
 def _collect_advisory_proposals(project_dir: Path) -> List[Any]:
@@ -61,10 +61,10 @@ def _advisory_pending(project_dir: Optional[str], run_id: str) -> List[Dict[str,
                 "action": proposal.action,
                 "target_path": str(path),
                 # advisory の id は既に detector+相対targets ベースで worktree 非依存
-                # （advisory_proposals._proposal_id）。worktree_root は orphan 判定
+                # （advisory_proposals.proposal_id）。worktree_root は orphan 判定
                 # （#376 AC5）専用に別途付与する。
-                "worktree_root": _repo_identity(str(path)).get("worktree_root"),
-                "before_sha": _sha256(before),
+                "worktree_root": repo_identity(str(path)).get("worktree_root"),
+                "before_sha": sha256(before),
                 "pattern": f"advisory:{proposal.detector_id}",
                 "proposal_type": "advisory",
             }
