@@ -285,10 +285,18 @@ def detect(
 ) -> Dict[str, Any]:
     """SessionStart 時に呼ばれ、仕様未追従マージを検出して提案 message を返す。
 
-    返り値: {"message": str|None, "fires": [...], "reminders": [...]}
+    返り値: {"message": str|None, "fires": [...], "reminders": [...], "marker": dict|None,
+             "first_run": bool}
     すべて fail-safe（git/IO 例外でも message=None を返し、SessionStart を壊さない）。
+
+    ``persist=False`` では **1バイトも書かない**（``pitfall_dryrun_stateful_store_write``
+    準拠・dry-run 純度契約）。計算結果は ``marker`` に入れて返すので、defer が必要な
+    呼び出し元（ADR-054 Phase 0 の restore_state 等）は自分の ack タイミングで
+    ``save_marker(slug, result["marker"])`` を明示的に呼ぶこと。ただし ``first_run=True``
+    の分岐（初回セットアップ）は表示する message を持たない副作用のみの処理のため、
+    defer せず ``persist`` の値どおりに即時 save/skip する。
     """
-    result: Dict[str, Any] = {"message": None, "fires": [], "reminders": []}
+    result: Dict[str, Any] = {"message": None, "fires": [], "reminders": [], "first_run": False}
     if not _is_enabled():
         return result
 
@@ -307,8 +315,15 @@ def detect(
     # 初回: マーカーをセットするだけで過去分を flood しない
     if not last:
         marker = {"last_sha": head, "pending": []}
+        # dry-run 純度契約（37行目・pitfall_dryrun_stateful_store_write）を守り、
+        # persist=False では1バイトも書かない。defer が必要な呼び出し元
+        # （restore_state）は "first_run" フラグを見て、自分の ack タイミングで
+        # 明示的に save_marker() を呼ぶこと（この分岐は表示する message を
+        # 持たないため、通常の commit と違い defer せず即時保存してよい）。
         if persist:
             save_marker(slug, marker)
+        result["marker"] = marker
+        result["first_run"] = True
         return result
 
     new_commits = list_commits(cwd_path, last, head)
@@ -358,6 +373,9 @@ def detect(
 
     result["fires"] = [s for s in surfaced if not s.get("reminder")]
     result["reminders"] = [s for s in surfaced if s.get("reminder")]
+    # ADR-054 Phase 0 §5.2: persist=False の呼び出し元（restore_state）が「実際に表示
+    # できたときだけ」保存できるよう、計算済み・未保存の marker を常に返す。
+    result["marker"] = marker
     if surfaced:
         result["message"] = format_message(surfaced)
     return result

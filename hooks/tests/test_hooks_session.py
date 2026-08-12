@@ -400,7 +400,8 @@ class TestRestoreState:
         assert captured.out.strip() == ""
 
     def test_work_context_restored_with_summary(self, patch_data_dir, capsys):
-        """work_context 付き checkpoint の復元でサマリーが出力される。"""
+        """work_context 付き checkpoint の復元で圧縮サマリーが additionalContext に載る
+        （ADR-054 Phase 0 §4.1/§4.5: 別行の非 JSON plain text から単一 JSON dict へ統合）。"""
         checkpoint = {
             "session_id": "sess-040",
             "project_dir": "/proj/test",
@@ -419,12 +420,15 @@ class TestRestoreState:
 
         captured = capsys.readouterr()
         lines = captured.out.strip().split("\n")
+        assert len(lines) == 1  # stdout は厳密に1行（§4.1）
         result = json.loads(lines[0])
         assert result["restored"] is True
-        summary = "\n".join(lines[1:])
-        assert "[evolve-anything:restore_state] 作業コンテキスト復元:" in summary
+        summary = result["hookSpecificOutput"]["additionalContext"]
+        assert "作業コンテキスト復元:" in summary
         assert "ブランチ: feature/x" in summary
+        assert "直近コミット1件" in summary
         assert "abc1234 fix: something" in summary
+        assert "未コミット1件" in summary
         assert "path/to/file1" in summary
 
     def test_work_context_missing_backward_compat(self, patch_data_dir, capsys):
@@ -444,6 +448,33 @@ class TestRestoreState:
         result = json.loads(captured.out.strip())
         assert result["restored"] is True
         assert "作業コンテキスト復元" not in captured.out
+
+    def test_work_context_summary_compressed_for_large_context(self, patch_data_dir, capsys):
+        """§7.1-11: 6件のcommit・35件のuncommittedでも圧縮形（件数+先頭1件／件数のみ）になる
+        （ADR-054 Phase 0 §4.5・tacchi [Should-t4]）。"""
+        checkpoint = {
+            "session_id": "sess-060",
+            "project_dir": "/proj/test",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "evolve_state": {},
+            "work_context": {
+                "git_branch": "feature/big",
+                "recent_commits": [f"{i:07x} commit {i}" for i in range(6)],
+                "uncommitted_files": [f"path/to/file{i}.py" for i in range(35)],
+            },
+        }
+        self._write_checkpoint(patch_data_dir, checkpoint)
+
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/proj/test"}):
+            restore_state.handle_session_start({})
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out.strip())
+        summary = result["hookSpecificOutput"]["additionalContext"]
+        assert "直近コミット6件（先頭: 0000000 commit 0）" in summary
+        assert "未コミット35件" in summary
+        # 件数のみに圧縮（個別ファイル名は列挙されない）
+        assert "file0.py" not in summary
 
 
 class TestRestoreStateSnapshotCap:

@@ -29,6 +29,12 @@ from typing import Dict, List, Optional, Set
 _JSONL_RE = re.compile(r"([A-Za-z0-9_\-]+\.jsonl)")
 # hooks.json の command から hook ファイル名（xxx.py）を取り出す。
 _HOOK_PY_RE = re.compile(r"hooks/([A-Za-z0-9_\-]+\.py)")
+# ローカル import 名を拾う（stdlib/third-party も拾うが、後段で scripts/lib 配下の実体と
+# 突合するため無害）。関数内 lazy import（インデント有り）にも対応するため行頭空白を許容する。
+_LOCAL_IMPORT_RE = re.compile(
+    r"^[ \t]*(?:from ([A-Za-z_][A-Za-z0-9_]*) import|import ([A-Za-z_][A-Za-z0-9_]*)\b)",
+    re.MULTILINE,
+)
 
 
 def _default_plugin_root() -> Path:
@@ -94,11 +100,93 @@ def _jsonl_names_in_text(text: str) -> Set[str]:
     return set(_JSONL_RE.findall(text))
 
 
+def _local_lib_modules(plugin_root: Path) -> Dict[str, List[Path]]:
+    """scripts/lib 直下のローカル top-level import 名 → 実体ソースファイル群。
+
+    単一ファイルモジュール（``foo.py``）は ``[foo.py]``、パッケージ（``foo/__init__.py``
+    あり）は tests を除く配下 ``*.py`` 全部を返す。
+    """
+    lib_dir = plugin_root / "scripts" / "lib"
+    mapping: Dict[str, List[Path]] = {}
+    if not lib_dir.is_dir():
+        return mapping
+    for entry in sorted(lib_dir.iterdir()):
+        if entry.is_dir():
+            if entry.name == "tests" or not (entry / "__init__.py").exists():
+                continue
+            files = [
+                f
+                for f in sorted(entry.rglob("*.py"))
+                if "tests" not in f.parts and not f.name.startswith("test_")
+            ]
+            if files:
+                mapping[entry.name] = files
+        elif entry.suffix == ".py" and not entry.name.startswith("test_"):
+            mapping[entry.stem] = [entry]
+    return mapping
+
+
+def _local_import_names(text: str, known: Set[str]) -> Set[str]:
+    """ソーステキストから、``known``（ローカルモジュール名集合）に含まれる import 名を抽出する。"""
+    names: Set[str] = set()
+    for group1, group2 in _LOCAL_IMPORT_RE.findall(text):
+        name = group1 or group2
+        if name in known:
+            names.add(name)
+    return names
+
+
+def _module_reachable_from_hooks(
+    plugin_root: Path,
+    module_name: str,
+    hook_files: List[str],
+    module_files: Dict[str, List[Path]],
+) -> bool:
+    """``module_name``（scripts/lib 直下の basename）が登録 hook のいずれかから import
+    チェーンを辿って到達可能かを判定する（純粋な reachability。exclusivity は問わない）。
+
+    ``StoreDeclaration.writer_module`` 宣言の検証専用、狭くスコープされたチェック。
+    find_store_writers の単純走査と違い汎用ライブラリも辿るが、宣言側で明示 opt-in された
+    モジュール名 1 件の存否を判定するだけなので writer 集合の自動展開（誤検出のリスク）
+    には繋がらない。
+    """
+    if module_name not in module_files:
+        return False
+    known = set(module_files)
+    hooks_dir = plugin_root / "hooks"
+    visited_modules: Set[str] = set()
+    seen_files: Set[Path] = {hooks_dir / f for f in hook_files}
+    frontier: List[Path] = list(seen_files)
+    while frontier:
+        current = frontier.pop()
+        try:
+            text = current.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for name in _local_import_names(text, known):
+            if name == module_name:
+                return True
+            if name in visited_modules:
+                continue
+            visited_modules.add(name)
+            for f in module_files.get(name, []):
+                if f not in seen_files:
+                    seen_files.add(f)
+                    frontier.append(f)
+    return False
+
+
 def find_store_writers(plugin_root: Optional[Path] = None) -> Dict[str, List[str]]:
     """登録済み hook が書く jsonl ストア名 → 書いている hook ファイル名のリスト。
 
     hooks.json に登録された hook の本体ソースだけを走査する。未登録 hook は発火しないため
-    対象外（orphan の false positive を避ける）。
+    対象外（orphan の false positive を避ける）。ADR-054 Phase 0（file-size-budget 800行分割）
+    以降、hook 本体が scripts/lib/<pkg>/ へ分割され、この単純走査では writer を検出できない
+    ケースがある（例: hooks/restore_state.py → scripts/lib/session_notify/ →
+    scripts/lib/icebox_verdict_seen.py）。汎用的な import 追跡（芋づる式に無関係な共有
+    ライブラリまで writer 扱いしてしまう誤検出を実測）は採用せず、該当ストアは
+    ``StoreDeclaration.writer_module`` の明示宣言 + ``detect_store_contract_drift`` の
+    reachability チェックで個別に救済する。
     """
     root = plugin_root if plugin_root is not None else _default_plugin_root()
     hooks_dir = root / "hooks"
@@ -188,9 +276,30 @@ def detect_store_contract_drift(
             exempt = set()
 
     undeclared = sorted(name for name in writers if name not in declared)
-    stale = sorted(
+    stale_candidates = sorted(
         name for name in declared if name not in writers and name not in exempt
     )
+
+    # writer_module 宣言（find_store_writers の単純走査では追跡できない hook 委譲。
+    # ADR-054 Phase 0・#379 #400）があるストアは、宣言モジュールが実際に hook から
+    # 到達可能なら stale から除外する。stale 候補のみ（少数）を対象にする狭いチェック
+    # なので、全 writer 展開のような誤検出リスクは生まない。
+    try:
+        by_name = store_registry.declarations_by_name()
+    except AttributeError:  # 古い store_registry 互換
+        by_name = {}
+    module_files = _local_lib_modules(root)
+    hook_files = _registered_hook_files(root)
+    stale = []
+    for name in stale_candidates:
+        decl = by_name.get(name)
+        writer_module = getattr(decl, "writer_module", None) if decl else None
+        if writer_module and _module_reachable_from_hooks(
+            root, writer_module, hook_files, module_files
+        ):
+            continue
+        stale.append(name)
+
     return StoreContractDriftReport(
         undeclared=undeclared,
         declared_writer_files={name: sorted(writers[name]) for name in undeclared},

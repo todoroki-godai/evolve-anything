@@ -186,6 +186,25 @@ def stale_advisory(generated_at: "str | None", now: "datetime | None") -> str:
     return f"（verdicts データ生成から{age_days}日経過 — daily runner の実行を確認してください）"
 
 
+def build_met_body(verdicts: "list[dict]") -> str:
+    """レーン1「成立」verdict 群から issue 列挙部分（body）だけを組み立てる（ADR-054 Phase 0 rev7）。
+
+    ``build_met_notice()`` から抽出。敬体プレフィックス（「icebox 再開条件が成立しました:」）
+    や staleness advisory は含まない — SessionStart digest の混在時短縮形
+    ``icebox成立: {body}``（restore_state 側）が body 単独を必要とするため切り出した。
+    `MAX_MET_ISSUES` 件を超える分は「...他 N 件」に畳む（#352 B4・audit 側
+    MAX_LISTED_ISSUES と対称）。verdicts が空でも空文字列を返す（None にしない — 呼び出し
+    元の ``build_met_notice`` が空チェックを担う）。
+    """
+    shown = verdicts[:MAX_MET_ISSUES]
+    segments = [f"#{v.get('number')}（{v.get('reason', '')}）" for v in shown]
+    remaining = len(verdicts) - len(shown)
+    body = " / ".join(segments)
+    if remaining > 0:
+        body = f"{body} ...他 {remaining} 件"
+    return body
+
+
 def build_met_notice(
     verdicts: "list[dict]",
     *,
@@ -195,18 +214,12 @@ def build_met_notice(
     """レーン1「成立」verdict 群から SessionStart 通知メッセージを組み立てる。
 
     verdicts が空なら None（沈黙）。1件以上あれば該当 issue を名指しし、根拠
-    （verdict["reason"]）を添える（件数集約通知とは異なり個別列挙が仕様）。`MAX_MET_ISSUES`
-    件を超える分は「...他 N 件」に畳む（#352 B4・audit 側 MAX_LISTED_ISSUES と対称）。
+    （verdict["reason"]）を添える（件数集約通知とは異なり個別列挙が仕様）。
     generated_at が古ければ末尾に staleness advisory を付す。
     """
     if not verdicts:
         return None
-    shown = verdicts[:MAX_MET_ISSUES]
-    segments = [f"#{v.get('number')}（{v.get('reason', '')}）" for v in shown]
-    remaining = len(verdicts) - len(shown)
-    body = " / ".join(segments)
-    if remaining > 0:
-        body = f"{body} ...他 {remaining} 件"
+    body = build_met_body(verdicts)
     msg = f"[evolve-anything] icebox 再開条件が成立しました: {body}"
     stale = stale_advisory(generated_at, now)
     if stale:

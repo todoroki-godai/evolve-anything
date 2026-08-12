@@ -3,13 +3,47 @@
 
 保存済み checkpoint.json が存在する場合、前回の進化状態を復元して
 stdout に JSON で出力する。
+
+ADR-054 Phase 0（B1・SessionStart 通知の1行化）: 9系統の通知（+work_context summary）は
+それぞれ「印字を行わない収集関数」（``_build_*_output``）が ``NotificationItem`` を返し、
+``handle_session_start`` が1箇所で merge・print・commit（副作用の確定）を行う。収集関数・
+``NotificationItem``・digest/merge ロジックの実体は ``scripts/lib/session_notify/``
+パッケージにあり（file-size-budget.md の 800行 hard limit 対応・純粋な移動で振る舞いは
+不変）、本ファイルは「収集を呼ぶ → merge → print → commit」の薄いオーケストレーションのみを
+持つ。詳細設計は ``docs/decisions/drafts/054-phase0-notification-routing.md``。
 """
 import json
 import os
 import sys
+from contextlib import ExitStack
 from pathlib import Path
+from typing import Callable
 
 import common
+
+_plugin_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+
+from session_notify import (  # noqa: E402
+    NotificationItem,
+    peek_pending_trigger,
+    delete_pending_trigger,
+    _build_pending_trigger_output,
+    _build_spec_drift_output,
+    _build_evolve_drain_output,
+    _build_data_dir_migration_output,
+    utterance_staleness_advisory,
+    _build_utterance_staleness_output,
+    _resolve_queue_data,
+    _build_evolve_queue_output,
+    _build_session_proposal_output,
+    _build_judge_cap_output,
+    _build_icebox_output,
+    _merge_notification_text,
+    _build_additional_context,
+    _pj_slug,
+    _queue_notice,
+)
 
 # SessionStart で Claude に注入する corrections_snapshot の上限（セキュリティ監査）。
 # restore_state は checkpoint 全体を print するため、corrections.jsonl 全件を含む
@@ -19,79 +53,6 @@ import common
 # 参照）ため、直近 N 件 + 合計文字数上限に truncate し真の総数は別フィールドで保持する。
 MAX_SNAPSHOT_ITEMS = 20
 MAX_SNAPSHOT_CHARS = 8000
-
-# trigger_engine import (optional)
-_trigger_engine = None
-try:
-    _plugin_root = Path(__file__).resolve().parent.parent
-    sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
-    from trigger_engine import read_and_delete_pending_trigger
-    _trigger_engine = True
-except ImportError:
-    pass
-
-# spec_trigger import (optional) — main 着地の仕様未追従変更を検出（ADR-044）
-_spec_trigger = None
-try:
-    import spec_trigger as _spec_trigger
-except ImportError:
-    pass
-
-# evolve_decisions import (optional) — 未 drain の適用済み提案を検出（#402）
-_evolve_decisions = None
-try:
-    import evolve_decisions as _evolve_decisions
-except ImportError:
-    pass
-
-# data_dir_migration import (optional) — DATA_DIR 分裂の未解消を検出（#364）
-_data_dir_migration = None
-try:
-    import data_dir_migration as _data_dir_migration
-except ImportError:
-    pass
-
-# utterance_archive.store import (optional) — staleness marker のみ読む（#430）
-_utterance_store = None
-try:
-    from utterance_archive import store as _utterance_store
-except ImportError:
-    pass
-
-# pj_slug import (optional) — SessionStart で sibling-dir worktree の slug を cache（#29/#593）
-_pj_slug = None
-try:
-    import pj_slug as _pj_slug
-except ImportError:
-    pass
-
-# daily.queue_notice import (optional) — 毎朝の evolve-queue を SessionStart で通知（#80）
-_queue_notice = None
-try:
-    from daily import queue_notice as _queue_notice
-except ImportError:
-    pass
-
-# daily.icebox_notice import (optional) — icebox 棚卸しの気づきトリガー（#194, #352）
-_icebox_notice = None
-try:
-    from daily import icebox_notice as _icebox_notice
-except ImportError:
-    pass
-
-# daily.proposal_digest import (optional) — 改善案 digest の SessionStart 提示（#409）
-_proposal_digest = None
-try:
-    from daily import proposal_digest as _proposal_digest
-except ImportError:
-    pass
-
-# icebox_verdict_seen import (optional) — icebox 3レーン棚卸しレーン1「成立」の既読管理（#352）
-_icebox_verdict_seen = None
-try:
-    import icebox_verdict_seen as _icebox_verdict_seen
-except ImportError:
-    pass
 
 
 def _summarize_checkpoint_for_output(checkpoint: dict) -> dict:
@@ -140,539 +101,34 @@ def _make_session_title(checkpoint: dict) -> str:
 
 
 def _format_work_context_summary(work_context: dict) -> str:
-    """work_context から人間可読なサマリーを生成する。"""
-    parts = ["[evolve-anything:restore_state] 作業コンテキスト復元:"]
+    """work_context から人間可読な圧縮サマリーを生成する（ADR-054 Phase 0 §4.5/§6.4）。
+
+    直近コミットは件数 + 先頭1件（50字超は truncate）。未コミットファイルは3件以下なら
+    列挙、4件以上なら件数のみ。``save_state.py`` 側の保存（5件/30件キャップ）は変更しない
+    — ここは SessionStart 表示専用の圧縮であり、Claude はいつでも git log/status で詳細を
+    取得できる（要約であって隠蔽ではない）。additionalContext へ統合するため、旧実装の
+    `[evolve-anything:restore_state]` prefix・複数行整形は廃止する（§4.1）。
+    """
+    parts = []
 
     branch = work_context.get("git_branch", "")
     if branch:
-        parts.append(f"  ブランチ: {branch}")
+        parts.append(f"ブランチ: {branch}")
 
     commits = work_context.get("recent_commits", [])
     if commits:
-        parts.append(f"  完了: {', '.join(commits)}")
+        first = commits[0]
+        first = first if len(first) <= 50 else first[:50] + "..."
+        parts.append(f"直近コミット{len(commits)}件（先頭: {first}）")
 
     files = work_context.get("uncommitted_files", [])
     if files:
-        parts.append(f"  作業中: {', '.join(files)}")
-
-    if len(parts) == 1:
-        return ""
-    return "\n".join(parts)
-
-
-def _deliver_pending_trigger() -> None:
-    """pending-trigger.json があれば読み取り、提案メッセージを stdout に出力する。"""
-    if _trigger_engine is None:
-        return
-    try:
-        data = read_and_delete_pending_trigger()
-        if data is None:
-            return
-        message = data.get("message", "")
-        if message:
-            print(f"[evolve-anything:auto-trigger] {message}")
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] trigger delivery error: {e}", file=sys.stderr)
-
-
-def _deliver_spec_drift() -> None:
-    """main に着地した仕様未追従の変更があれば spec-keeper 提案を stdout に出す（ADR-044）。
-
-    fail-safe: spec_trigger 内部で git/IO 例外は握られるが、念のため全体を保護する。
-    """
-    if _spec_trigger is None:
-        return
-    try:
-        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
-        cwd = Path(project_dir) if project_dir else None
-        result = _spec_trigger.detect(cwd=cwd)
-        message = result.get("message")
-        if message:
-            print(message)
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] spec-trigger error: {e}", file=sys.stderr)
-
-
-def _resolve_canonical_history_file(slug: str):
-    """drain の書き込み先 optimize_history を **tool 文脈の正準 DATA_DIR** に解決する（#421）。
-
-    `optimize_history_store.DATA_DIR`/`HISTORY_ROOT` は import 時に raw `CLAUDE_PLUGIN_DATA`
-    から確定するため、hook 文脈（CC が env=plugin-data を設定）でそのまま drain すると
-    plugin-data dir へ書き、tool 文脈の `evolve --drain`（env 無 → fallback/正準）と
-    書き込み先が割れる（pitfall_datadir_hook_tool_split, #358/#364）。
-
-    そこで marker ゲート付きの `rl_common.resolve_data_dir` で tool reader と同じ正準 dir を
-    解決し、`<canonical>/optimize_history/<sanitized_slug>.jsonl` を返して drain_pending に
-    history_file として渡す。これで hook 文脈でも drain は tool reader と同一ファイルに書く。
-    """
-    import rl_common
-    import optimize_history_store as _ohs
-
-    env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-    canonical = rl_common.resolve_data_dir(env)
-    return canonical / "optimize_history" / f"{_ohs._sanitize_slug(slug)}.jsonl"
-
-
-def _deliver_evolve_drain() -> None:
-    """前回 evolve で emit→apply 済みの提案を SessionStart で検出し drain を試みる（#421, #376）。
-
-    #402 はリマインド表示のみだったが、#421 で「apply 済み提案を自動で optimize_history
-    （fitness 母集団）へ accept 記録する」処理へ昇格した。しかし SessionStart hook には
-    対話チャネルが無く、ユーザーが実際にその提案を承認したかを確認できない。#421 はこの
-    区別をせず「ディスク sha が変わっていれば accept」で記録していたため、evolve 提案とは
-    無関係な通常 commit（別作業でのファイル変更）まで accept と誤記録していた（#376）。
-
-    本関数は #376 の是正後の契約（明示的な decision イベント AND diff の両方が無いと
-    accept にならない、``evolve_decisions.ingest_decisions``）に合わせ、**明示 accept を
-    渡さずに** drain を呼ぶ。この hook からは常に「証跡なし」経路を通るため、実際には
-    optimize_history に何も記録されない（安全側のデフォルト）。marker は温存され、
-    次回の対話 drain（SKILL.md Step 7.8・``ed.drain_pending(accepted=...)``）でユーザーが
-    明示的に accept/reject するまでリマインドし続ける。orphan（削除済み worktree）だけは
-    ここで pending から取り除かれる（#376 AC5）。
-
-    レイテンシ予算（pitfall_hot_hook_eager_import）:
-      - pending marker が無いケースは MARKER_ROOT のディレクトリ存在チェック → slug 解決 →
-        marker ファイル存在チェックの軽い判定で early-return し、重い経路（drain_pending）に
-        入らない。duckdb 等の eager import もしない。
-    DATA_DIR split（#364）:
-      - drain の書き込み先は `_resolve_canonical_history_file` で tool reader と同一の正準
-        DATA_DIR に固定する。
-    fail-safe:
-      - drain 中の例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
-    冪等: drain_pending（ingest）が `{pid}_{kind}` entry_id で dedup するため再発火しても二重記録なし。
-    """
-    if _evolve_decisions is None:
-        return
-    try:
-        # 軽量 early-return: marker root が無ければ未 drain 提案は存在しない。
-        if not _evolve_decisions.MARKER_ROOT.exists():
-            return
-        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
-        cwd = Path(project_dir) if project_dir else None
-        slug = _evolve_decisions.resolve_slug(cwd)
-        if not _evolve_decisions.marker_path(slug).exists():
-            return  # この slug に未 drain marker なし → 沈黙（重い drain に入らない）
-        # apply 済み（ディスク sha が before と異なる）entry が無ければ drain しない。
-        # undrained_applied は optimize_history を読まず marker の sha 突合だけ（#358 を踏まない）。
-        # 「未 apply のまま marker をクリア」して将来の apply を取り逃すのを防ぐため、ここを
-        # ゲートにする（apply されるまで marker は残し、次 SessionStart で再評価する）。
-        applied = _evolve_decisions.undrained_applied(slug)
-        if not applied:
-            return
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] evolve-drain pre-check error: {e}", file=sys.stderr)
-        return
-
-    try:
-        history_file = _resolve_canonical_history_file(slug)
-        # #376: accepted を渡さない — SessionStart には対話チャネルが無く、この hook が
-        # 人間の承認を代弁することはできない。orphan 除去だけは行われる。
-        summary = _evolve_decisions.drain_pending(slug=slug, history_file=history_file)
-        accepted = summary.get("accepted") or []
-        rejected = summary.get("rejected") or []
-        if accepted or rejected:
-            print(
-                f"[evolve-anything] evolve 提案を自動 drain しました: "
-                f"accept {len(accepted)} 件 / reject {len(rejected)} 件を "
-                f"fitness 母集団（optimize_history）に記録（#421）。"
-            )
+        if len(files) <= 3:
+            parts.append(f"未コミット{len(files)}件（{', '.join(files)}）")
         else:
-            # #376: 明示 decision イベントが無いので何も記録されない（正しい挙動）。
-            # 「記録した」と偽らず、対話 drain（Step 7.8）を促すリマインドに徹する。
-            print(
-                f"[evolve-anything] 適用済みの evolve 提案が {len(applied)} 件あります。"
-                f"次回セッションの `evolve --drain`（Step 7.8）で accept/reject を"
-                f"明示的に記録してください（#376）。"
-            )
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] evolve-drain error: {e}", file=sys.stderr)
+            parts.append(f"未コミット{len(files)}件")
 
-
-def _deliver_data_dir_migration_reminder() -> None:
-    """DATA_DIR 分裂が未解消なら `evolve-fleet migrate-data` を1行案内する（#364/#137）。
-
-    判定の要は「source（plugin-data dir）に未マージのストアが残っているか」
-    （``needs_migration``）であり、**marker の有無ではない**。marker は「一度 migrate
-    した」事実しか意味しないため、marker 済みでも旧版 hook の書込等で分裂が再発した
-    場合に案内し続ける必要がある（#137: 旧実装は ``if marker.exists(): return`` で
-    再分裂を恒久沈黙させていた split-brain の根因）。
-
-    - source に未マージストアなし → 沈黙（migrate 完了の定常状態。marker 有無を問わない）
-    - source に未マージストアあり:
-        - marker 無し → 初回分裂の案内（#364）
-        - marker 有り → 再分裂（recurrence）の案内（#137）。旧版プラグインを掴んだ
-          セッションが plugin-data に書き続けている等が原因。migrate-data 再実行で回収
-
-    レイテンシ: ``needs_migration`` は source を1回 ``iterdir()`` するだけ（deep walk /
-    DuckDB import なし）。SessionStart hot path に重い走査を足さない（#hot_hook_eager_import）。
-    install ≠ enforcement 対策の検出層（#402 の drain リマインドと同型）。
-    """
-    if _data_dir_migration is None:
-        return
-    try:
-        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-        if not env:
-            return  # hook 文脈でなければ判定しない（probe で実環境を読まない）
-        source = Path(env)
-        if not _data_dir_migration.is_cc_install_layout(source):
-            return  # テスト isolation / custom 環境
-        # marker の有無に関わらず「未マージストアが残っているか」を毎回評価する（#137）。
-        if not _data_dir_migration.needs_migration(source=source):
-            return  # 定常状態（source は空 / marker のみ）→ 沈黙
-        canonical = _data_dir_migration.default_canonical()
-        marker = canonical / _data_dir_migration._marker_name()
-        if marker.exists():
-            # marker 済みなのに未マージストアが再蓄積 = 分裂の再発（recurrence）。
-            print(
-                "[evolve-anything] DATA_DIR 分裂が再発しています（#137）。marker は設置済みですが"
-                " plugin-data 側に未マージのストアが再蓄積しています（旧版 hook が書き続けている"
-                "可能性）。`evolve-fleet migrate-data --dry-run` で内容確認後、"
-                "`evolve-fleet migrate-data` で再度一元化してください。"
-            )
-        else:
-            print(
-                "[evolve-anything] DATA_DIR が hook/tool 文脈で分裂しています（#364）。"
-                "`evolve-fleet migrate-data --dry-run` で内容確認後、"
-                "`evolve-fleet migrate-data` で一元化してください。"
-            )
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] data-dir migration reminder error: {e}", file=sys.stderr)
-
-
-def utterance_staleness_advisory(data_dir) -> str | None:
-    """data_dir の utterance アーカイブが stale なら advisory メッセージを返す（純関数・#430）。
-
-    observe-first pre-flight: staleness marker（last_ingest_at ファイル）を読むだけで
-    DuckDB 接続も transcript 走査もしない（0.1 秒以下、pitfall_hot_hook_eager_import）。
-    marker 不在 = 「未 ingest」と解釈して advisory を返す（∞ 扱い・0日でない）。
-    閾値は最終 ingest > 14 日。fresh なら None。
-    """
-    if _utterance_store is None:
-        return None
-    if not _utterance_store.is_stale(data_dir, threshold_days=14):
-        return None
-    last = _utterance_store.read_last_ingest_at(data_dir)
-    detail = "未 ingest（marker なし）" if last is None else f"最終 ingest {last}"
-    return (
-        "[evolve-anything] utterance アーカイブが 14 日以上 ingest されていません"
-        f"（{detail}, #430）。`evolve-fleet ingest` で取り込むか、`evolve`/`audit` を回すと"
-        "自動取り込みされます。"
-    )
-
-
-def _deliver_utterance_staleness() -> None:
-    """utterance アーカイブの staleness advisory を SessionStart に出す（#430・安全弁）。
-
-    実環境ガード: `CLAUDE_PLUGIN_DATA` が CC install レイアウト配下のときだけ判定する
-    （migration リマインドと同型）。テスト isolation の tmp env / 非 hook 文脈では実環境を
-    一切 probe せず沈黙し、JSON stdout を汚さない。advisory は強制でなく安全弁
-    （本線は evolve/audit 同居、install ≠ enforcement）。
-    """
-    if _utterance_store is None or _data_dir_migration is None:
-        return
-    try:
-        import os as _os
-        import rl_common  # 遅延 import（patch 追従）
-
-        env = _os.environ.get("CLAUDE_PLUGIN_DATA", "")
-        if not env:
-            return  # hook 文脈でなければ判定しない（実環境を probe しない）
-        if not _data_dir_migration.is_cc_install_layout(Path(env)):
-            return  # テスト isolation / custom 環境
-        data_dir = rl_common.resolve_data_dir(env)
-        message = utterance_staleness_advisory(data_dir)
-        if message:
-            print(message)
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] utterance staleness check error: {e}", file=sys.stderr)
-
-
-def _resolve_queue_data() -> "tuple":
-    """evolve-queue.json の env ガード + read を1回だけ行う（#412 [Should]6）。
-
-    `_deliver_evolve_queue_notice` / `_build_session_proposal_output` / `_deliver_judge_cap_notice`
-    が個別に env ガード〜read_queue を行っていた（同じ内容を1セッション開始ごとに3回パース）。
-    ``handle_session_start`` がここで1回だけ解決し、3箇所へ ``(data_dir, queue_data)`` を配る。
-
-    実測: evolve-queue.json は queue エントリ + proposals（per_pj/global の group 群）を含めても
-    通常運用規模（数PJ〜十数PJ、group はPJあたり数件）で数十KB程度。DuckDB 接続や transcript
-    走査を伴わない単純 JSON パースなので、3回読んでも SessionStart のレイテンシ予算
-    （pitfall_hot_hook_eager_import）を脅かすほど重くはない。本関数の意図は「同じ値を3回
-    計算する」重複コードの整理であり、性能問題の解消が主目的ではない。
-
-    Returns: ``(None, None)`` — hook 文脈でない/install レイアウト外/モジュール未解決のいずれか
-             （呼び出し側は data_dir が None なら判定不能として早期 return する）。
-    """
-    if _queue_notice is None or _data_dir_migration is None:
-        return None, None
-    try:
-        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
-
-        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-        if not env:
-            return None, None  # hook 文脈でなければ判定しない（実環境を probe しない）
-        if not _data_dir_migration.is_cc_install_layout(Path(env)):
-            return None, None  # テスト isolation / custom 環境
-        data_dir = rl_common.resolve_data_dir(env)
-        queue_data = _queue_notice.read_queue(data_dir)
-        return data_dir, queue_data
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] evolve-queue resolve error: {e}", file=sys.stderr)
-        return None, None
-
-
-def _deliver_evolve_queue_notice(shared: "tuple | None" = None) -> None:
-    """毎朝の `fleet queue` が保存した evolve-queue.json の待ち PJ を systemMessage で通知する（#80）。
-
-    無人で回せる決定論パイプライン（ingest→queue）の結果を、対話セッション開始時にユーザーが
-    気づける形で surface する（適用＝evolve 自体は対話セッションで人間が承認）。
-
-    実環境ガード: `CLAUDE_PLUGIN_DATA` が CC install レイアウト配下のときだけ判定する
-    （utterance staleness と同型）。テスト isolation の tmp env / 非 hook 文脈では実環境を
-    一切 probe せず沈黙し、JSON stdout を汚さない。
-
-    observe-first pre-flight: evolve-queue.json を読むだけ（DuckDB 接続なし・走査なし、
-    pitfall_hot_hook_eager_import）。queue が空 or ファイル無し → 沈黙。
-    出力は `systemMessage` を含む 1 行 JSON（ADR-038 = user 向けチャネル）。
-    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
-
-    ``shared``: ``_resolve_queue_data()`` の戻り値（#412 [Should]6）。None（省略）なら本関数が
-    自前で env ガード〜read_queue を行う（直接呼び出す単体テストとの後方互換）。
-    """
-    if _queue_notice is None or _data_dir_migration is None:
-        return
-    try:
-        if shared is not None:
-            data_dir, queue_data = shared
-            if data_dir is None:
-                return
-        else:
-            import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
-
-            env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-            if not env:
-                return  # hook 文脈でなければ判定しない（実環境を probe しない）
-            if not _data_dir_migration.is_cc_install_layout(Path(env)):
-                return  # テスト isolation / custom 環境
-            data_dir = rl_common.resolve_data_dir(env)
-            queue_data = _queue_notice.read_queue(data_dir)
-        output = _queue_notice.queue_notice_output(queue_data)
-        if output:
-            print(json.dumps(output, ensure_ascii=False))
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] evolve-queue notice error: {e}", file=sys.stderr)
-
-
-def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | None":
-    """毎朝の改善案 digest（evolve-queue.json の proposals フィールド）から SessionStart 提示用の
-    出力 dict を組み立てる（#409, #412）。**print しない純関数**（#412 [Must]2）— SessionStart
-    hook の stdout は「hookSpecificOutput を含む行が高々1つ」でなければならず（複数行に分かれると
-    片方が黙って捨てられうる）、checkpoint 側の hookSpecificOutput（sessionTitle）と本関数の
-    additionalContext は同一行へマージする必要がある。マージの実際は ``handle_session_start`` が
-    checkpoint の有無を見てから行い、本関数はマージ対象の dict を返すだけに徹する。
-
-    出力は 2 チャネル同時（#412 [Must]1・ADR-038 代替案C と同型）:
-    - ``systemMessage``（user 向け）: 代表テキストの可視化。additionalContext は Claude にしか
-      届かず、ユーザーが何か打つまで中身を確認する手段が無いため
-    - ``hookSpecificOutput.additionalContext``（Claude 向け）: 「ユーザーの最初の応答を終えた
-      直後に必ず AskUserQuestion で y/n 提示せよ」という行動指示。旧文言「依頼が無い場合のみ
-      提示」は次のユーザー入力まで評価されず永久に発火しなかった不具合の修正
-
-    実環境ガード・observe-first pre-flight（evolve-queue.json 読み込みのみ・DuckDB 接続や
-    transcript 走査なし）は他 deliver 関数と同型。既読フィルタ（correction_review_seen.jsonl）
-    は 1 回の read_reviewed_keys 呼び出しのみで、書き込みは一切しない（read-only）。
-    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行、None を返す）。
-
-    ``shared``: ``_resolve_queue_data()`` が返す ``(data_dir, queue_data)`` タプル（#412 [Should]6:
-    evolve-queue.json の3重読みを1回に集約）。None（省略）なら本関数が自前で env ガード〜
-    read_queue を行う（直接呼び出す単体テストとの後方互換）。
-    """
-    if _proposal_digest is None or _queue_notice is None or _data_dir_migration is None:
-        return None
-    try:
-        if shared is not None:
-            data_dir, queue_data = shared
-            if data_dir is None:
-                return None  # env ガード不通過（呼び出し元が既に判定済み）
-        else:
-            import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
-
-            env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-            if not env:
-                return None  # hook 文脈でなければ判定しない（実環境を probe しない）
-            if not _data_dir_migration.is_cc_install_layout(Path(env)):
-                return None  # テスト isolation / custom 環境
-            data_dir = rl_common.resolve_data_dir(env)
-            queue_data = _queue_notice.read_queue(data_dir)
-
-        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
-        if not project_dir or _pj_slug is None:
-            return None  # cwd 不明 / pj_slug モジュール不在なら判定不能
-        slug = _pj_slug.resolve_pj_slug(project_dir)
-        if not slug or slug == _pj_slug.UNATTRIBUTED_SLUG:
-            return None  # 帰属不能な PJ は判定しない
-
-        if not isinstance(queue_data, dict):
-            return None
-
-        from correction_semantic import daily_review as _daily_review
-
-        # 既読ストアは digest 生成（bin/evolve-daily-run）と同じ data_dir を明示指定して読む。
-        # daily_review.read_reviewed_keys() の既定（path 省略）は rl_common.DATA_DIR という
-        # import 時固定のモジュール global を経由する union read であり、ここで解決した
-        # data_dir（env 由来・call-time）とは別物になりうる。明示 path で一致させる。
-        seen_path = _daily_review.default_seen_path(base=data_dir)
-        seen_keys = _daily_review.read_reviewed_keys(path=seen_path)
-        groups = _proposal_digest.build_session_proposals(queue_data, slug, seen_keys=seen_keys)
-        if not groups:
-            return None
-        # 回答コマンドは**絶対パス**で埋め込む。提示先は他 PJ の cwd であり、相対
-        # `bin/evolve-reflect` は "No such file" になる（pitfall_skill_md_plugin_root と同型）。
-        reflect_cmd = str(Path(__file__).resolve().parent.parent / "bin" / "evolve-reflect")
-        # #412 [Must]4: global レーンの group を PJ ごとの --project-path で正しく帰属させる。
-        proposals = queue_data.get("proposals")
-        project_paths = proposals.get("project_paths") if isinstance(proposals, dict) else None
-        message = _proposal_digest.build_proposal_prompt(
-            groups, slug, reflect_cmd=reflect_cmd, project_paths=project_paths,
-        )
-        system_message = _proposal_digest.build_proposal_systemmessage(groups)
-        # hookEventName は ADR-038 のスキーマ必須項目（subagent_observe.py と同型）。
-        # 省略すると additionalContext が解釈されず機能が無言で死ぬ。
-        return {
-            "systemMessage": system_message,
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": message,
-            },
-        }
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] session proposals error: {e}", file=sys.stderr)
-        return None
-
-
-def _deliver_judge_cap_notice(shared: "tuple | None" = None) -> None:
-    """llm_judge Phase B の日次上限到達を systemMessage で通知する（#408）。
-
-    daily runner（evolve-daily-run）が `judge_runner.run_daily_judge` の結果を
-    evolve-queue.json の `llm_judge` フィールドへ埋め込む（新ストアを作らず既存の
-    read 専用派生物を再利用）。上限に当たった日だけ 1 行通知し、当たらない日は沈黙する
-    （承認済み standing budget のため毎日 y/n は挟まない）。
-
-    実環境ガード・observe-first pre-flight は evolve-queue notice と同型
-    （DuckDB 接続なし・走査なし、pitfall_hot_hook_eager_import）。
-
-    ``shared``: ``_resolve_queue_data()`` の戻り値（#412 [Should]6）。None（省略）なら本関数が
-    自前で env ガード〜read_queue を行う（直接呼び出す単体テストとの後方互換）。
-    """
-    if _queue_notice is None or _data_dir_migration is None:
-        return
-    try:
-        if shared is not None:
-            data_dir, queue_data = shared
-            if data_dir is None:
-                return
-        else:
-            import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
-
-            env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-            if not env:
-                return  # hook 文脈でなければ判定しない（実環境を probe しない）
-            if not _data_dir_migration.is_cc_install_layout(Path(env)):
-                return  # テスト isolation / custom 環境
-            data_dir = rl_common.resolve_data_dir(env)
-            queue_data = _queue_notice.read_queue(data_dir)
-        output = _queue_notice.judge_cap_notice_output(queue_data)
-        if output:
-            print(json.dumps(output, ensure_ascii=False))
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] llm_judge cap notice error: {e}", file=sys.stderr)
-
-
-def _deliver_icebox_notice() -> None:
-    """icebox 棚卸しの気づきトリガーを systemMessage で通知する（#194, #352）。
-
-    #352: daily runner の icebox 3レーン棚卸しステップが書いた icebox-verdicts.json に
-    レーン1「成立」（未既読）があれば、それを**該当 issue だけ名指し + 根拠1行**で優先通知し、
-    表示した verdict を icebox_verdict_seen.jsonl（既読ストア）に記録する。成立が無ければ
-    （またはモジュール未解決なら）従来どおり icebox-status.json ベースの件数集約通知
-    （#194）にフォールバックする。
-
-    icebox は evolve-anything 自身の GitHub issue backlog なので、**本体リポジトリ
-    （`.claude-plugin/plugin.json` を持つ repo）で作業しているときだけ**判定する。他 PJ で
-    作業中は plugin_self 判定で即 return し、何も print しない（沈黙）。
-
-    実環境ガード: `CLAUDE_PLUGIN_DATA` が CC install レイアウト配下のときだけ判定する
-    （evolve-queue notice と同型）。テスト isolation の tmp env / 非 hook 文脈では実環境を
-    一切 probe せず沈黙し、JSON stdout を汚さない。
-
-    observe-first pre-flight: icebox-verdicts.json / icebox-status.json を読むだけ
-    （DuckDB 接続なし・走査なし）。閾値未満 or ファイル無し → 沈黙。出力は `systemMessage`
-    を含む 1 行 JSON（ADR-038 = user 向けチャネル）。
-    fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
-    """
-    if _icebox_notice is None or _data_dir_migration is None:
-        return
-    try:
-        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
-        if not project_dir:
-            return  # cwd 不明なら plugin_self 判定不能 = 沈黙
-        if not (Path(project_dir) / ".claude-plugin" / "plugin.json").exists():
-            return  # evolve-anything 本体以外の PJ では沈黙
-
-        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
-
-        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-        if not env:
-            return  # hook 文脈でなければ判定しない（実環境を probe しない）
-        if not _data_dir_migration.is_cc_install_layout(Path(env)):
-            return  # テスト isolation / custom 環境
-        data_dir = rl_common.resolve_data_dir(env)
-
-        # #352 レーン1「成立」: 未既読の成立 verdict があれば名指しで優先通知する。
-        if _icebox_verdict_seen is not None:
-            verdicts_payload = _icebox_notice.read_icebox_verdicts(data_dir)
-            output = None
-            # icebox-verdicts.json 自体が無い（daily runner 未実行 or #352 未対応期）場合は
-            # ロックファイルすら作らず read-only を維持する（icebox 通知は read-only という
-            # 既存契約・`test_deliver_does_not_write` を壊さない）。
-            if verdicts_payload is not None:
-                seen_path = _icebox_verdict_seen.default_seen_path(data_dir)
-
-                # #352 P1: read（seen_keys）→ decide（未既読判定）→ print（通知）→
-                # write（既読化）を file_lock で1トランザクション化する。同時に複数
-                # SessionStart（同一 PJ の並行セッション起動）が走ると、ロック無しでは両方が
-                # 「まだ未既読」を読んだ直後に両方通知・両方 record_seen する二重通知が起きうる。
-                # `rl_common.file_lock` は open file description 単位のロックなので、対象
-                # ファイルそのものでなく sidecar（`<store>.lock`）に取る（evolve_decisions と
-                # 同型）。
-                from rl_common.file_lock import file_lock as _file_lock  # 遅延 import
-
-                lock_path = seen_path.with_name(seen_path.name + ".lock")
-                with _file_lock(lock_path):
-                    seen_keys = _icebox_verdict_seen.read_seen_keys(seen_path)
-                    output, shown = _icebox_notice.icebox_verdicts_notice_output(
-                        verdicts_payload, seen_keys
-                    )
-                    if output:
-                        print(json.dumps(output, ensure_ascii=False))
-                        # icebox_verdict_seen.jsonl（既読ストア・hook writer・低頻度: 新規
-                        # 成立時のみ）へ表示済み verdict を記録する。lane/closed_at が変わる
-                        # まで再提示しない（#352 B5）。
-                        # #352 P8: read（上の seen_path）と write のパス解決を明示的に一致
-                        # させる（write 側が path 未指定で暗黙に env から再解決すると、
-                        # hook/tool の DATA_DIR 分裂時に read/write が別ファイルを見る既知
-                        # pitfall と同型になる）。
-                        _icebox_verdict_seen.record_seen(shown, path=seen_path)
-            if output:
-                return
-
-        status = _icebox_notice.read_icebox_status(data_dir)
-        threshold_days = rl_common.load_user_config().get("icebox_review_threshold_days", 30)
-        output = _icebox_notice.icebox_notice_output(status, threshold_days=threshold_days)
-        if output:
-            print(json.dumps(output, ensure_ascii=False))
-    except Exception as e:
-        print(f"[evolve-anything:restore_state] icebox notice error: {e}", file=sys.stderr)
+    return "作業コンテキスト復元: " + " / ".join(parts) if parts else ""
 
 
 def _persist_pj_slug_cache() -> None:
@@ -688,13 +144,13 @@ def _persist_pj_slug_cache() -> None:
     （subprocess なし＝hot-path 安全を維持）。read/write 同一 slug の原則（#492）を sibling
     worktree にも拡張する。
 
-    DATA_DIR は他 deliver 関数と同じく ``rl_common.resolve_data_dir``（env 優先・#364）で解決する。
+    DATA_DIR は他 build 関数と同じく ``rl_common.resolve_data_dir``（env 優先・#364）で解決する。
     fail-safe: 例外で hook を落とさない（try/except で degrade、stderr に 1 行）。
     """
     if _pj_slug is None:
         return
     try:
-        import rl_common  # 遅延 import（patch 追従・他 deliver と同型）
+        import rl_common  # 遅延 import（patch 追従・他 build 関数と同型）
 
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
         if not project_dir:
@@ -709,77 +165,153 @@ def _persist_pj_slug_cache() -> None:
         print(f"[evolve-anything:restore_state] pj_slug cache error: {e}", file=sys.stderr)
 
 
+# ─────────────────────────────────────────────────────────────────
+# 収集 → merge → print → commit（ADR-054 Phase 0 §6.2/§6.3）
+# ─────────────────────────────────────────────────────────────────
+def _call_builder(builder: "Callable", *args):
+    """収集関数を個別 try/except で保護して呼ぶ（§5: 1系統の例外が他系統を巻き込まない）。
+
+    各 ``_build_*_output`` は内部で既に自前の try/except を持つが、ここでも独立に
+    包むことで「呼び出し規約そのもの」を構造的に保証する（内部 guard の有無に依存しない
+    defense-in-depth）。例外は stderr へ 1 行出し、収集結果は None 扱いにする。
+    """
+    try:
+        return builder(*args)
+    except Exception as e:
+        name = getattr(builder, "__name__", repr(builder))
+        print(f"[evolve-anything:restore_state] {name} error: {e}", file=sys.stderr)
+        return None
+
+
+def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem], dict | None]":
+    """9系統＋corrupt判定を順に呼び、``(items, proposal_output)`` を返す。
+
+    各系統呼び出しは ``_call_builder`` で個別に保護されるため、1系統の例外が他系統の
+    収集結果を巻き込まない。pending_trigger・icebox レーン1 は ``stack`` に lock を
+    登録するが、この関数を抜けても解放しない（呼び出し元の ``with ExitStack()`` が
+    抜けるまで保持される）。
+    """
+    items: "list[NotificationItem]" = []
+
+    for item in (
+        _call_builder(_build_pending_trigger_output, stack),
+        _call_builder(_build_spec_drift_output),
+        _call_builder(_build_evolve_drain_output),
+        _call_builder(_build_data_dir_migration_output),
+        _call_builder(_build_utterance_staleness_output),
+    ):
+        if item is not None:
+            items.append(item)
+
+    # evolve-queue.json の env ガード + read を1回だけ行い、以下3箇所に使い回す（#412 [Should]6）。
+    shared_queue = _call_builder(_resolve_queue_data) or (None, None, "absent")
+
+    queue_item = _call_builder(_build_evolve_queue_output, shared_queue)
+    if queue_item is not None:
+        items.append(queue_item)
+
+    proposal_output = _call_builder(_build_session_proposal_output, shared_queue)
+    if proposal_output and proposal_output.get("systemMessage"):
+        items.append(NotificationItem(
+            label="proposal", tier=2,
+            text=proposal_output["systemMessage"],
+            digest=proposal_output.get("digest") or proposal_output["systemMessage"],
+        ))
+
+    judge_item = _call_builder(_build_judge_cap_output, shared_queue)
+    if judge_item is not None:
+        items.append(judge_item)
+
+    icebox_item = _call_builder(_build_icebox_output, stack)
+    if icebox_item is not None:
+        items.append(icebox_item)
+
+    return items, proposal_output
+
+
+def _commit_all(items: "list[NotificationItem]") -> None:
+    """print 成功後にのみ呼ぶ。実際に結合文字列へ含めた item の commit を実行する（ack）。
+
+    1系統の commit 失敗が他系統の commit を止めない（spec_drift/pending_trigger/icebox の
+    いずれかで ``save_marker``/``delete_pending_trigger``/``record_seen`` が例外を出しても、
+    print は既に成功しているため今回はユーザーに表示される。次回also再表示されうる
+    ことは許容する — 情報消失より優先、§7.1）。
+    """
+    for item in items:
+        if item.commit is None:
+            continue
+        try:
+            item.commit()
+        except Exception as e:
+            print(
+                f"[evolve-anything:restore_state] commit failed for {item.label}: {e}",
+                file=sys.stderr,
+            )
+
+
 def handle_session_start(event: dict) -> None:
-    """SessionStart イベントを処理する。"""
+    """SessionStart イベントを処理する（ADR-054 Phase 0 §6.3）。
+
+    stdout は「0行」か「厳密に1行の JSON dict」の二値。commit（副作用の確定）は必ず
+    print 成功の後に来る — collect フェーズ中に取得した lock（pending_trigger・icebox
+    レーン1）は ``with ExitStack()`` を抜けるまで保持され、成功時は commit 済みの状態で、
+    失敗時は commit されないまま、必ず解放される。
+    """
     # sibling-dir worktree の write 時 slug 解決用 cache を更新（#29/#593）
     _persist_pj_slug_cache()
-    # Deliver pending trigger messages first
-    _deliver_pending_trigger()
-    # 仕様未追従マージの提案
-    _deliver_spec_drift()
-    # apply 済み evolve 提案の SessionStart 自動 drain（#421, #402 リマインドからの昇格）
-    _deliver_evolve_drain()
-    # DATA_DIR 分裂の未解消検出（#364）
-    _deliver_data_dir_migration_reminder()
-    # utterance アーカイブの staleness advisory（#430・marker 読みのみ）
-    _deliver_utterance_staleness()
-    # evolve-queue.json の env ガード + read を1回だけ行い、以下3箇所に使い回す（#412 [Should]6）。
-    shared_queue = _resolve_queue_data()
-    # 毎朝の evolve-queue 待ち PJ 通知（#80）
-    _deliver_evolve_queue_notice(shared=shared_queue)
-    # 毎朝の改善案 digest を AskUserQuestion 指示として提示（#409・既読ストア読みのみ追加）。
-    # print はせず、checkpoint の hookSpecificOutput（sessionTitle）とマージしてから1回で出す
-    # （#412 [Must]2: hookSpecificOutput を含む行が複数に分かれると片方が黙って捨てられうる）。
-    proposal_output = _build_session_proposal_output(shared=shared_queue)
-    # llm_judge 日次上限到達通知（#408・evolve-queue.json の llm_judge フィールド読みのみ）
-    _deliver_judge_cap_notice(shared=shared_queue)
-    # icebox 棚卸しの気づきトリガー（#194・evolve-anything 本体リポジトリのみ・icebox-status.json 読みのみ）
-    _deliver_icebox_notice()
 
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
-    checkpoint = common.find_latest_checkpoint(project_dir)
+    with ExitStack() as stack:
+        items, proposal_output = _collect_notifications(stack)
+        try:
+            system_message = _merge_notification_text(items)
 
-    if not checkpoint:
-        # checkpoint が無くても改善案提示は出す（#412 [Must]2 回帰: 従来は checkpoint 節の
-        # print だけがここで return して終わっており、実際には proposal_output は checkpoint
-        # 節の外＝上の _deliver_session_proposals() 呼び出し時点で既に print 済みだったため
-        # 消えてはいなかった。純関数化した今、ここで明示的に出す必要がある）。
-        if proposal_output:
-            print(json.dumps(proposal_output, ensure_ascii=False))
-        return
+            proposal_context = None
+            if proposal_output:
+                proposal_context = (proposal_output.get("hookSpecificOutput") or {}).get(
+                    "additionalContext"
+                )
 
-    try:
-        # 復元した状態を stdout に出力（Claude Code が利用可能）
-        session_title = _make_session_title(checkpoint)
-        # corrections_snapshot を上限内に要約してから print する（保存と表示の分離・監査対応）
-        output: dict = {
-            "restored": True,
-            "checkpoint": _summarize_checkpoint_for_output(checkpoint),
-        }
-        # #412 [Must]2: 改善案提示（systemMessage + hookSpecificOutput.additionalContext）と
-        # checkpoint 側（hookSpecificOutput.sessionTitle）を**同一 JSON 行**にマージする。
-        # 別行に分けると hookSpecificOutput を名乗る行が2つになり、片方が黙って捨てられうる
-        # （subagent_observe.py の precedent と同型: 1 dict に統合してから1回 print する）。
-        hook_specific: dict = {}
-        if proposal_output:
-            if proposal_output.get("systemMessage"):
-                output["systemMessage"] = proposal_output["systemMessage"]
-            hook_specific.update(proposal_output.get("hookSpecificOutput") or {})
-        if session_title:
-            hook_specific["hookEventName"] = "SessionStart"
-            hook_specific["sessionTitle"] = session_title
-        if hook_specific:
-            output["hookSpecificOutput"] = hook_specific
-        print(json.dumps(output, ensure_ascii=False))
+            project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "") or None
+            checkpoint = common.find_latest_checkpoint(project_dir)
 
-        # work_context がある場合はサマリーも出力
-        work_context = checkpoint.get("work_context")
-        if work_context:
-            summary = _format_work_context_summary(work_context)
-            if summary:
-                print(summary)
-    except (json.JSONDecodeError, OSError) as e:
-        print(f"[evolve-anything:restore_state] restore failed: {e}", file=sys.stderr)
+            work_context_summary = None
+            if checkpoint:
+                work_context = checkpoint.get("work_context")
+                if work_context:
+                    work_context_summary = _format_work_context_summary(work_context) or None
+
+            additional_context = _build_additional_context(work_context_summary, proposal_context)
+
+            output: dict = {}
+            if system_message:
+                output["systemMessage"] = system_message
+
+            hook_specific: dict = {}
+            if additional_context:
+                hook_specific["additionalContext"] = additional_context
+            if checkpoint:
+                session_title = _make_session_title(checkpoint)
+                if session_title:
+                    hook_specific["sessionTitle"] = session_title
+            if hook_specific:
+                hook_specific["hookEventName"] = "SessionStart"
+                output["hookSpecificOutput"] = hook_specific
+
+            if checkpoint:
+                output["restored"] = True
+                output["checkpoint"] = _summarize_checkpoint_for_output(checkpoint)
+
+            if output:
+                print(json.dumps(output, ensure_ascii=False))
+
+            # ── ここに到達 = print 成功 ── 副作用を確定してよい
+            _commit_all(items)
+        except Exception as e:
+            print(f"[evolve-anything:restore_state] merge/print failed: {e}", file=sys.stderr)
+            # commit を一切呼ばない。pending_trigger は未削除、icebox は未既読、
+            # spec_drift は marker 未保存のまま → 次回セッションで再度候補になる
+    # `with ExitStack()` を抜けた時点で pending_trigger / icebox の lock は
+    # 成功時は commit 済みの状態で、失敗時は commit されないまま、必ず解放される。
 
 
 def main() -> None:
