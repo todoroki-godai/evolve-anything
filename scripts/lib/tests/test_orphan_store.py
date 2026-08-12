@@ -99,6 +99,53 @@ def test_writers_only_count_registered_hooks(tmp_path: Path) -> None:
     assert "beta.jsonl" not in writers
 
 
+def test_writers_follow_exclusive_hook_delegate_package(tmp_path: Path) -> None:
+    """hook 本体が唯一の importer である scripts/lib パッケージへ処理委譲した場合、
+    そのパッケージ（さらに排他的に import する下位モジュールも含む）が書く jsonl 名を
+    writer として検出する。
+
+    ADR-054 Phase 0（file-size-budget 800行分割）で hook 本体が scripts/lib/<pkg>/ へ
+    分割されるケースが実在する（hooks/restore_state.py → scripts/lib/session_notify/ →
+    scripts/lib/icebox_verdict_seen.py。#434 stale 誤検知の回帰）。
+    """
+    root = _make_plugin(
+        tmp_path,
+        hook_files={"h.py": "from mypkg import do_thing\ndo_thing()"},
+        registered=["h.py"],
+        scripts_files={
+            "lib/mypkg/__init__.py": "",
+            "lib/mypkg/collectors.py": "import inner\ninner.write()",
+            "lib/inner.py": (
+                'def write():\n    append_jsonl(DATA_DIR / "delegated.jsonl", r)'
+            ),
+        },
+    )
+    writers = orphan_store.find_store_writers(root)
+    assert "delegated.jsonl" in writers
+    assert "h.py" in writers["delegated.jsonl"]
+
+
+def test_writers_do_not_follow_shared_package(tmp_path: Path) -> None:
+    """複数 hook から import される共有モジュール（rl_common 相当）は委譲扱いにしない。
+
+    exclusivity（PJ 全体で唯一の importer）を満たさないため展開を止める歯止め。
+    無関係な共有ライブラリ内の jsonl 名を誤って writer 扱いしないための回帰テスト。
+    """
+    root = _make_plugin(
+        tmp_path,
+        hook_files={
+            "h1.py": "import shared",
+            "h2.py": "import shared",
+        },
+        registered=["h1.py", "h2.py"],
+        scripts_files={
+            "lib/shared.py": 'append_jsonl(DATA_DIR / "shared_store.jsonl", r)',
+        },
+    )
+    writers = orphan_store.find_store_writers(root)
+    assert "shared_store.jsonl" not in writers
+
+
 # --- find_store_readers -----------------------------------------------------
 
 def test_readers_scan_scripts_and_skills_excluding_tests(tmp_path: Path) -> None:

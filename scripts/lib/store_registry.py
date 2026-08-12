@@ -87,6 +87,14 @@ class StoreDeclaration:
     disposition:  reader 不在（orphan）ストアの処遇。reader がある通常ストアは None
     status:       生死（active 既定 / legacy / dead）。write barrier の write 許可は active のみ
     classification: 役割 4 分類（raw_event / workflow_state / derived_cache / dead）。#379 Step 3
+    writer_module: writer_locus="hook" だが、実際の write 呼び出しが hooks/*.py の直接テキストに
+                   現れない（scripts/lib/<pkg>/ へ 2 hop 以上委譲された）場合の実体モジュール名
+                   （scripts/lib 直下の basename、拡張子なし）。orphan_store の
+                   find_store_writers は「1 hop の排他的委譲」までしか自動追跡しないため
+                   （汎用ライブラリの芋づる式誤検出を避ける安全側の制限・#434）、それを超える
+                   委譲は本フィールドで明示宣言し、detect_store_contract_drift が
+                   reachability（hook からこのモジュールへ到達可能か）だけを確認して stale
+                   誤検知を防ぐ。通常は None（hooks/*.py 本体か 1 hop 委譲で自動検出できる）。
     note:         補足（任意）
     """
 
@@ -101,6 +109,7 @@ class StoreDeclaration:
     compaction: Optional[str] = None
     disposition: Optional[DispositionKind] = None
     status: StoreStatus = "active"
+    writer_module: Optional[str] = None
     note: Optional[str] = None
 
 
@@ -432,8 +441,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="icebox_verdict_seen.jsonl",
-        writer="hooks/restore_state.py の _deliver_icebox_notice（SessionStart が icebox "
-        "レーン1「成立」通知を名指しで表示した直後に icebox_verdict_seen.record_seen を呼ぶ）。"
+        writer="hooks/restore_state.py → scripts/lib/session_notify/collectors.py の "
+        "_build_icebox_output（SessionStart が icebox レーン1「成立」通知を名指しで表示した"
+        "直後に icebox_verdict_seen.record_seen を呼ぶ。ADR-054 Phase 0 の 800行分割で "
+        "_deliver_icebox_notice の実体が session_notify パッケージへ移設された）。"
         "hot path（hook）書き込みだが低頻度（当PJで作業しているセッションの新規成立時のみ）。",
         reader="icebox_verdict_seen.read_seen_keys / filter_unseen が次回表示判定に参照"
         "（自己消費）。lane または closed_at（再凍結）が変わるまで再提示しない"
@@ -441,8 +452,13 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "毎日再通知される事故になるため）。",
         retention="permanent",
         classification="workflow_state",
+        writer_module="icebox_verdict_seen",
         note="#352 icebox 3レーン棚卸しの既読集合（issue番号+lane/closed_atハッシュの物理キー）。"
-        "correction_review_seen.jsonl と同型。低書込レート・肥大化しない。",
+        "correction_review_seen.jsonl と同型。低書込レート・肥大化しない。"
+        "#434 追記: icebox_verdict_seen.py は session_notify/collectors.py（hook 委譲先）"
+        "と daily/icebox_notice.py（batch 側の read-only 消費）の2箇所から import されるため "
+        "find_store_writers の1 hop 排他委譲追跡では拾えない。writer_module で reachability "
+        "救済する（詳細は StoreDeclaration.writer_module docstring）。",
     ),
     StoreDeclaration(
         name="evolve-queue-state.jsonl",

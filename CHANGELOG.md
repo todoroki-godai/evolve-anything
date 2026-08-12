@@ -21,7 +21,17 @@
   `scripts/lib/daily/icebox_notice.py` は `build_met_notice()` から issue 列挙部分を
   `build_met_body()` として切り出した。設計は
   `docs/decisions/drafts/054-phase0-notification-routing.md`（codex 2巡 + tacchi 2巡レビュー
-  済み・rev7）。
+  済み・rev7）。main合流後のフォローアップ: `evolve_decisions._sha256` は #427 で `sha256` に
+  リネーム済みのため参照側テストを追従。`trigger_engine` API snapshot fixture に Phase 0 で
+  追加した `peek_pending_trigger()` / `delete_pending_trigger()` を反映。`orphan_store` の
+  hook-writer 突合が Phase 0 の hook 本体分割（`hooks/restore_state.py` →
+  `scripts/lib/session_notify/`）を追跡できず `icebox_verdict_seen.jsonl` を stale 誤検知して
+  いた問題を修正: `find_store_writers` に「PJ全体で唯一の importer」な scripts/lib
+  パッケージ/モジュールへの1 hop 排他委譲追跡を追加（`rl_common` 等の汎用共有ライブラリは
+  複数箇所から import されるため展開しない歯止め付き）。2 hop 以上の委譲
+  （`session_notify` → `icebox_verdict_seen`、後者は batch 側からも read-only 消費される
+  ため exclusivity を満たさない）は `StoreDeclaration.writer_module` の明示宣言 +
+  reachability チェックで個別救済する。
 - **feat(detection): correction capture の修理 A0（ADR-054 §5-A0, #379）** —
   実コーパス census（precision 87.5%、`_MACHINERY_MARKERS` 追加後）で確認済みの低リスク・
   低recall語彙2件（`naoshite-request` = `直して`/`修正して`/`訂正して`。複合動詞

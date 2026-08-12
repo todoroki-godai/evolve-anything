@@ -48,7 +48,7 @@ def skill_and_marker(tmp_path, monkeypatch):
     ed.write_pending_marker(
         "testslug",
         [{"id": "evdiff_x", "skill_name": "s", "skill_path": str(sf),
-          "before_sha": ed._sha256(_BEFORE), "pattern": "p", "fitness_func": "skill_quality"}],
+          "before_sha": ed.sha256(_BEFORE), "pattern": "p", "fitness_func": "skill_quality"}],
     )
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     return sf, tmp_path
