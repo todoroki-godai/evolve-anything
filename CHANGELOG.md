@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **docs(adr): ADR-054「4本柱（#379 目標体験）完成設計」を追加（#379 #400 #401）** —
+  「記録は全自動・判断は朝の30秒・効果は週1の数字で実感」の4本柱について、実測に基づく到達度診断と
+  完成までの Phase 設計を確定。tacchi（体験・過剰約束）と codex（設計の正しさ）のレビューを各1巡入れた。
+  主な発見: ①**correction capture が壊れている**（hook 由来の correction は3か月で1件・実コーパス
+  2,841発話に検出器をリプレイしてマッチ0件。28パターンが行頭アンカー中心で実発話に当たらない）
+  ②記録の 23.2% が subagent 由来（`isSidechain` の判定が extractor / detectors のどちらにも存在しない）
+  ③**朝の y/n（weak_signals 昇格）と週1の accept（optimize_history）は別レーン**で、その間を繋ぐ
+  変換経路が存在しない（＝柱3後半が一度も発火していない真因）。
+  これを受けて Phase 0（通知の1行化）/ A（記録の質・A0 capture 修理が最優先）/ B（提示の質）/
+  D（revert 経路）/ E（correction→accept の変換経路）/ C（週1の数字）に分割し、依存順を確定した。
+  本 ADR は #379 の「新設凍結解除の条件＝#400-#402 の実装方針確定」を満たす文書。
 - **feat(revert): reader migration + 戦果ボード導線 + `bin/evolve-revert` CLI + AST gate 本番有効化（PR-2 段階4・#402）** —
   PR-2 の最終段階。業務 reader 7箇所を実測し、判断母集団を読む4箇所（`results_board.build_results_board` /
   `fleet/propose.filter_previously_rejected_candidates` /
