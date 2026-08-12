@@ -13,7 +13,8 @@ Observe hooks, Auto Trigger, userConfig, genetic-prompt-optimizer, evolve-loop-o
 variant_generation, selection_reeval, loop_ablation, evolve-scorer, skill-triage,
 tool_usage_analyzer, trigger-eval-generator, evolve-skill, agent-brushup,
 critical-instruction-compliance, second-opinion, growth-level, optimize_history_store,
-evolve_decisions, evolve_reconcile, token_usage_store, token_usage_ingest, token_usage_query,
+evolve_decisions, evolve_revert, raw_history_gate, evolve_reconcile,
+token_usage_store, token_usage_ingest, token_usage_query,
 auto_memory_runner, auto_memory_broker, meta_quality, triage_ledger, constraint_decay,
 negative_transfer, eval_saturation, subgoal_scorer, evolution_operators, memory_trace,
 slop_detector, skill_extractor, skill_rm, evaluation_provenance
