@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""results_board — 戦果ボード（#379 Step 4）。
+"""results_board — 戦果ボード（#379 Step 4・ADR-054 §7.2.1 柱3(a)）。
 
-optimize_history（accept/reject 決定ログ）と corrections（手直し）を直読みし、
-「手直し回数の減少」「採用した改善」「取り下げ候補」を決定論で1画面表示する。
+optimize_history（accept/reject 決定ログ）・correction_rate（3ストア read 時 join の
+「指摘率」・#379 #400）を直読みし、「指摘率」「採用した改善」「取り下げ候補」を決定論で
+1画面表示する。
 
 growth-journal harness（crystallization イベント記録・growth_narrative の成長ストーリー）
 削除の置換成果物。「記録は全自動・判断は朝の30秒・効果は週1の数字で実感」の3本目
 （週1の戦果を数字で見せる）を、新規 write-only ストアを作らず既存ストア
-（optimize_history / corrections）の直読みだけで実現する（#379 の新設凍結方針にも整合）。
+（optimize_history / correction_rate 経由の utterances.db・correction_judged.jsonl・
+weak_signals.jsonl）の直読みだけで実現する（#379 の新設凍結方針にも整合）。
+
+**旧「手直し件数」表示（``count_human_corrections`` ベース）は置換した。併存させない**
+（「手直し」を名乗る数字が2つ並ぶのは #376 の再演になるため・設計正典 §2.7）。
 
 決定論・LLM 非依存・read-only（ファイル書き込みなし）。
 """
@@ -18,16 +23,25 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from optimize_history_store import load_effective_history, load_revert_events
-from telemetry_query import query_corrections
-from correction_semantic.provenance_weight import count_human_corrections
+from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
 from evolve_revert import REASON_LABELS, compute_revert_availability
 
 _WINDOW_DAYS = 30
 
-# ADR-054 §2.6-2: 直近30日/その前30日の rework 件数がどちらも小さいと（例: previous_30d=1）
-# 「増加」「減少」の断定表示が誤った確信を与える。outcome_metrics の
-# MIN_EDIT_SESSIONS_FLOOR/MIN_DISTINCT_TYPES_FLOOR と同じ floor=5 に揃える。
-_MIN_REWORK_SAMPLE_FLOOR = 5
+# ADR-054 §7.2.1 柱3(a): correction_rate.build_correction_rate_summary が返す schema と
+# 同型のフォールバック（read 失敗時に render 側を壊さないための安全な既定値）。
+_EMPTY_CORRECTION_RATE: Dict[str, Any] = {
+    "gate": {
+        "gate_open": False,
+        "display_start_week": None,
+        "required": GATE_CONSECUTIVE_WEEKS,
+        "best_run_length": 0,
+    },
+    "displayed_weeks": [],
+    "latest_coverage": None,
+    "diagnostics": {},
+    "generated_at": None,
+}
 
 # ADR-054 §2.6-7: excluded の理由（テスト汚染 / legacy 無効化）を画面に出す。
 # classify_decision の判定優先順位（fitness_eligible=False → テスト汚染）と同じ順序。
@@ -172,7 +186,8 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
         now: 基準時刻（省略時は現在の UTC）。テストの決定論性のため注入可能にする。
 
     Returns:
-        rework（手直し件数の直近30日/その前30日/増減）・decisions（accepted/rejected/
+        correction_rate（ADR-054 §7.2.1 柱3(a)「指摘率」の gate 状態 + 表示対象週 +
+        直近確定週のカバレッジ + diagnostics）・decisions（accepted/rejected/
         pending/excluded の直近30日件数・excluded も常時 key を出す=silence≠evaluated）・
         accepted_list（直近30日 accepted の skill_name+日付、最大10件・新しい順）・
         withdrawal_candidates（accepted のうち verdict==REGRESSED のもの）。
@@ -181,20 +196,12 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     window_start = _now - timedelta(days=_WINDOW_DAYS)
     prev_window_start = _now - timedelta(days=_WINDOW_DAYS * 2)
 
-    # ── 手直し回数（human corrections）: 直近30日 vs その前30日 ──────────
+    # ── 指摘率（ADR-054 §7.2.1 柱3(a)）: 3ストア read 時 join の週次集計 ──────
     try:
-        corrections = query_corrections(project=slug) or []
+        correction_rate = build_correction_rate_summary(now=_now)
     except Exception:
-        corrections = []
-
-    recent_corrections = [
-        c for c in corrections if _in_window(c, window_start, _now, inclusive_end=True)
-    ]
-    prev_corrections = [
-        c for c in corrections if _in_window(c, prev_window_start, window_start)
-    ]
-    recent_rework = count_human_corrections(recent_corrections)
-    prev_rework = count_human_corrections(prev_corrections)
+        correction_rate = dict(_EMPTY_CORRECTION_RATE)
+        correction_rate["generated_at"] = _now.isoformat()
 
     # ── 採用した改善: 直近30日の optimize_history ─────────────────
     # #402 段階4: revert 済み accept を判断母集団から除外した effective view を読む
@@ -272,11 +279,7 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     return {
         "slug": slug,
         "generated_at": _now.isoformat(),
-        "rework": {
-            "recent_30d": recent_rework,
-            "previous_30d": prev_rework,
-            "delta": recent_rework - prev_rework,
-        },
+        "correction_rate": correction_rate,
         "decisions": {
             "accepted": len(buckets["accepted"]),
             "rejected": len(buckets["rejected"]),
@@ -289,34 +292,73 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     }
 
 
+def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
+    """指摘率セクション（ADR-054 §7.2.1 柱3(a)）の markdown ブロックを生成する。
+
+    表示開始ゲート（§2.9・k=``GATE_CONSECUTIVE_WEEKS`` 週連続で全量判定確定週が揃うまで
+    非表示）が閉じている間は「未測定（判定カバレッジ X/Y）」1行のみ。開いていれば
+    表示対象週を新しい順に列挙し、PJ別内訳（Simpson 防御・必須 evidence）と、
+    悪化週のみ TP 実発話 TOP3（朝レビューへの導線）を添える。
+    """
+    gate = correction_rate.get("gate") or {}
+    required = gate.get("required", GATE_CONSECUTIVE_WEEKS)
+    lines: List[str] = []
+
+    if not gate.get("gate_open"):
+        latest = correction_rate.get("latest_coverage")
+        if latest:
+            headline = (
+                f"指摘率: 未測定（判定カバレッジ {latest['judged']}/{latest['total']}・"
+                f"{latest['week_id']}）"
+            )
+        else:
+            headline = "指摘率: 未測定（確定週データなし）"
+        lines.append(f"**{headline}**")
+        lines.append(f"全量判定の確定週が {required} 週連続で揃うまで系列は表示しません。")
+        lines.append("")
+        return lines
+
+    displayed = correction_rate.get("displayed_weeks") or []
+    lines.append("**指摘率**（判定カバレッジ100%の確定週のみ・新しい順）")
+    lines.append(
+        "分子は LLM judge の意味判定です（実測 precision 80% ＝ 分子の2割は誤りを含む前提で読んでください）。"
+    )
+    lines.append("")
+    for w in reversed(displayed):
+        rate = w.get("rate")
+        rate_label = f"{rate * 100:.1f}%" if rate is not None else "?"
+        lines.append(
+            f"- {w['week_id']}: {rate_label}"
+            f"（判定 {w['judged_count']} 件中 TP {w['tp_count']} 件・カバレッジ100%）"
+        )
+        pj_parts = []
+        for pj_slug, stats in sorted((w.get("pj_breakdown") or {}).items()):
+            if stats.get("rate") is not None:
+                pj_parts.append(
+                    f"{pj_slug} {stats['tp']}/{stats['judged']}（{stats['rate'] * 100:.1f}%）"
+                )
+            else:
+                pj_parts.append(f"{pj_slug} {stats['tp']}/{stats['judged']}（件数のみ・分母不足）")
+        if pj_parts:
+            lines.append(f"  PJ別: {', '.join(pj_parts)}")
+        if w.get("is_worsening") and w.get("top3_examples"):
+            lines.append("  悪化週です。気になった直近の指摘:")
+            for ex in w["top3_examples"]:
+                text = (ex.get("text") or "").strip()
+                reason = (ex.get("reason") or "").strip()
+                suffix = f"（{reason}）" if reason else ""
+                lines.append(f"    - {text}{suffix}")
+    lines.append("")
+    return lines
+
+
 def render_results_board(board: Dict[str, Any]) -> List[str]:
     """戦果ボードの markdown ブロックを生成する（判定+行動を最上部・証拠は直下）。"""
-    rework = board["rework"]
     decisions = board["decisions"]
 
     lines = ["## 🏆 戦果ボード", ""]
 
-    delta = rework["delta"]
-    recent = rework["recent_30d"]
-    previous = rework["previous_30d"]
-    # ADR-054 §2.6-2: 分母（recent/previous のいずれか大きい方）が最小分母未満で
-    # 増減方向を主張すると「previous_30d の raw は1件」のような分母1桁の比較を
-    # 断定形で出してしまう。floor 未満のときは方向を主張せず参考値として出す。
-    # 「横ばい」（delta==0）は増減の方向を主張しないため floor 対象外。
-    if delta != 0 and max(recent, previous) < _MIN_REWORK_SAMPLE_FLOOR:
-        headline = (
-            f"手直し {previous}→{recent} 件（直近30日・参考値）— "
-            f"件数が少なく（最大 {max(recent, previous)} 件 < 最小分母 "
-            f"{_MIN_REWORK_SAMPLE_FLOOR} 件）サンプル不足のため増減は判定しません"
-        )
-    elif delta < 0:
-        headline = f"手直しが {previous}→{recent} 件に減少（直近30日）"
-    elif delta > 0:
-        headline = f"手直しが {previous}→{recent} 件に増加（直近30日）"
-    else:
-        headline = f"手直しは {recent} 件で横ばい（直近30日）"
-    lines.append(f"**{headline}**")
-    lines.append("")
+    lines.extend(_render_correction_rate(board.get("correction_rate") or _EMPTY_CORRECTION_RATE))
 
     lines.append(
         f"採用した改善（直近30日）: accepted {decisions['accepted']} 件 / "
