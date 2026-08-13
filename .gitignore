@@ -25,3 +25,6 @@ scripts/bench/a0_eval_set.jsonl
 scripts/bench/a0_full_census.json
 scripts/bench/a0_sample_dump.json
 scripts/bench/a0_population_fingerprint.jsonl
+# A2 dispatch-marker リプレイの実コーパス成果物（同様に他PJの生発話を含むため commit しない。
+# ADR-054 / #379）
+scripts/bench/a2_dispatch_replay_result.json

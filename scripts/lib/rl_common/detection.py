@@ -204,6 +204,19 @@ _MACHINERY_MARKERS = (
     # ADR-054 A0（#379）: background agent 停止通知の本文（"...修正してください。"等）を
     # naoshite-request が誤って拾わないよう機構ターンとして除外（census #8 実測）。
     "background agents were stopped by the user",
+    # ADR-054 A2（#379）: weak_signals._DISPATCH_MARKERS（rephrase 検出の委譲プロンプト
+    # 除外）を単一ソース化。ここに昇格するのは「人間の自然文にまず出現しない構造マーカー」
+    # のみ（低リスク）。「あなたは」「エージェントです」「experiment 」のような一般語は
+    # is_dispatch_template_marker 側に残す（本関数は should_include_message / extractor の
+    # 単独メッセージ判定にも使われるため、広い語を混ぜると correction 検出の recall を壊す。
+    # 例:「あなたは間違ったことを言った」は正規の correction 発話であり除外してはいけない）。
+    "<tool-use-id>",
+    "<summary>",
+    "<task-notification>",
+    "<teammate-message",
+    "作業ディレクトリ:",
+    "比較実験パターン",
+    "idle_notification",
 )
 """lstrip+lower 後、先頭付近にこの語を含むテキストは機構ターン。"""
 
@@ -223,6 +236,30 @@ def is_machinery_prompt(content: str) -> bool:
         return True
     head = low[:_MACHINERY_MARKER_WINDOW]
     return any(marker in head for marker in _MACHINERY_MARKERS)
+
+
+# ADR-054 A2（#379）: 並列 agent 派遣テンプレの広い語彙判定。is_machinery_prompt に
+# 統合しない理由は _MACHINERY_MARKERS のコメント参照（correction 検出の recall を壊すため）。
+# 呼び出し側（weak_signals.detectors.detect_rephrase）は隣接する高類似ペアの両方が一致して
+# 初めて機構ターンとして扱う構造的に安全な文脈でのみ使う。単独メッセージ判定
+# （should_include_message / utterance_archive.extractor）には適用しない。
+_DISPATCH_TEMPLATE_MARKERS = (
+    "あなたは",
+    "エージェントです",
+    "experiment ",
+)
+"""この語を含む（先頭付近に限定しない・全文検索）テキストは派遣テンプレ疑い。"""
+
+
+def is_dispatch_template_marker(content: str) -> bool:
+    """並列 agent 派遣テンプレの広い語彙判定（rephrase の近接高類似ペア専用、#379）。
+
+    is_machinery_prompt とは独立した述語。単独では使わず、呼び出し側が
+    「隣接する2発話がどちらも高 jaccard 類似」という構造的な安全条件と AND で
+    組み合わせて初めて誤検出リスクが許容水準に収まる（weak_signals.detectors.detect_rephrase
+    のみが呼び出す設計。単独メッセージの correction 検出には使わない）。
+    """
+    return any(m in content for m in _DISPATCH_TEMPLATE_MARKERS)
 
 
 def sanitize_message(text: str, max_length: int = 500) -> str:

@@ -14,6 +14,7 @@ _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
+import weak_signals.detectors as detectors_module  # noqa: E402
 from weak_signals.detectors import (  # noqa: E402
     REPHRASE_JACCARD_THRESHOLD,
     detect_permission_deny,
@@ -155,6 +156,28 @@ def test_rephrase_skips_short_utterances() -> None:
     utts = [
         _utt("s1", 1, "はい"),
         _utt("s1", 2, "はい"),
+    ]
+    assert detect_rephrase(utts, "evolve-anything") == []
+
+
+def test_dispatch_marker_allowlist_removed() -> None:
+    """ADR-054 A2（#379）: 独自の文字列 allowlist を廃止し rl_common.detection へ委譲。
+
+    _DISPATCH_MARKERS が module から消えたことを直接固定する（委譲漏れの再発防止）。
+    """
+    assert not hasattr(detectors_module, "_DISPATCH_MARKERS")
+
+
+def test_rephrase_excludes_machinery_prompt_via_shared_detection() -> None:
+    """is_machinery_prompt が既にカバーするマーカー（例: Stop hook feedback）も rephrase から
+    除外される（ADR-054 A2）。旧 _DISPATCH_MARKERS には無かったが is_machinery_prompt への
+    委譲で新たに拾えるようになった委譲プロンプト形状（機構ターン除外は他に3実装ある、という
+    ADR の指摘どおり単一ソース化の恩恵）。
+    """
+    base = "Stop hook feedback:\n先送り表現を検出しました。即座に着手してください。"
+    utts = [
+        _utt("s1", 1, base + " その1"),
+        _utt("s1", 2, base + " その2"),  # near-identical
     ]
     assert detect_rephrase(utts, "evolve-anything") == []
 

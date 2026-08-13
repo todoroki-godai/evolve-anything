@@ -444,6 +444,41 @@ class TestShouldIncludeMessage:
         )
         assert common.should_include_message(text) is False
 
+    def test_dispatch_working_directory_marker_excluded(self):
+        """委譲プロンプトの「作業ディレクトリ:」は機構ターン（ADR-054 A2・#379）。
+
+        weak_signals._DISPATCH_MARKERS から _MACHINERY_MARKERS へ昇格。委譲プロンプトが
+        correction 検出（should_include_message）にも紛れ込まないようにする。
+        """
+        text = (
+            "作業ディレクトリ: /Users/x/worktrees/foo\n"
+            "ブランチ: `feat/123-foo`\n\n# タスク: 直して欲しい"
+        )
+        assert common.should_include_message(text) is False
+
+    def test_dispatch_teammate_message_marker_excluded(self):
+        """<teammate-message> ラップの idle_notification は機構ターン（ADR-054 A2・#379）。"""
+        text = (
+            "Another Claude session sent a message:\n"
+            '<teammate-message teammate_id="collector-b" color="green">\n'
+            '{"type":"idle_notification","agent":"collector-b"}'
+        )
+        assert common.should_include_message(text) is False
+
+    def test_dispatch_experiment_pattern_marker_excluded(self):
+        """「比較実験パターン」は機構ターン（ADR-054 A2・#379）。"""
+        text = "比較実験パターンA: subagent として動作確認して"
+        assert common.should_include_message(text) is False
+
+    def test_agent_wording_not_excluded(self):
+        """『あなたは』『エージェントです』は _MACHINERY_MARKERS に昇格しない（ADR-054 A2・#379）。
+
+        rephrase 検出（隣接する高類似ペアの両方一致でのみ除外する構造的に安全な文脈）専用
+        の判定であり、単独メッセージ判定（should_include_message）に混ぜると正規の
+        correction 発話（例: 「あなたは間違ったことを言った」）を誤って除外してしまう。
+        """
+        assert common.should_include_message("あなたは間違ったことを言った") is True
+
 
 class TestCalculateConfidence:
     """calculate_confidence() のテスト。"""
