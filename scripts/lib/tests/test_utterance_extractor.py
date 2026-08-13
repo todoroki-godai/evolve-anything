@@ -49,6 +49,51 @@ def _assistant_tooluse_line(names, ts="2026-06-01T00:00:00Z", sid="s1", uuid="a1
     )
 
 
+def _tool_result_line(ts="2026-06-01T00:00:00Z", sid="s1", uuid="tr1"):
+    """assistant の tool_use に直後で続く tool_result の user 行（発話でない）。
+
+    実 transcript では tool_use の直後に必ずこの形の行が来る。#379 root cause 再現に必要。
+    """
+    content = [{"type": "tool_result", "tool_use_id": "t1", "content": "結果"}]
+    return json.dumps(
+        {
+            "type": "user",
+            "uuid": uuid,
+            "sessionId": sid,
+            "timestamp": ts,
+            "toolUseResult": {"stdout": "..."},
+            "message": {"role": "user", "content": content},
+        }
+    )
+
+
+def _sidechain_user_line(text, ts="2026-06-01T00:00:00Z", sid="s1", uuid="su1"):
+    return json.dumps(
+        {
+            "type": "user",
+            "uuid": uuid,
+            "sessionId": sid,
+            "timestamp": ts,
+            "isSidechain": True,
+            "message": {"role": "user", "content": text},
+        }
+    )
+
+
+def _sidechain_assistant_tooluse_line(names, ts="2026-06-01T00:00:00Z", sid="s1", uuid="sa1"):
+    blocks = [{"type": "tool_use", "name": n, "id": f"st{i}"} for i, n in enumerate(names)]
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": sid,
+            "timestamp": ts,
+            "isSidechain": True,
+            "message": {"role": "assistant", "content": blocks},
+        }
+    )
+
+
 # --- pj_slug derivation: cwd 由来（encoded dir 名のデコードは諦める）-----------
 
 def test_pj_slug_from_cwd_main_repo() -> None:
@@ -218,6 +263,39 @@ def test_real_correction_not_excluded_by_shared_machinery_filter(tmp_path: Path)
     assert len(utts) == 1
 
 
+def test_sidechain_rows_excluded_from_utterances(tmp_path: Path) -> None:
+    """isSidechain:true の user 行は human 発話として拾われない（#379 ADR-054 §5-A1）。"""
+    f = tmp_path / "s1.jsonl"
+    f.write_text(_sidechain_user_line("サブエージェントへの内部プロンプト") + "\n", encoding="utf-8")
+    assert list(extract_utterances(f, pj_slug="x")) == []
+
+
+def test_sidechain_tool_use_does_not_leak_into_prev_action(tmp_path: Path) -> None:
+    """sidechain 内 assistant の tool_use は次の main human 発話の prev_action へ
+    持ち越されない（#379 ADR-054 §5-A1 完了条件「除外の粒度」）。
+    """
+    lines = [
+        _user_line("main の質問", uuid="u1", ts="2026-06-01T00:00:00Z"),
+        _assistant_tooluse_line(["Read"], uuid="a1", ts="2026-06-01T00:00:01Z"),
+        _tool_result_line(uuid="tr1", ts="2026-06-01T00:00:02Z"),
+        _sidechain_user_line("サブエージェントへの内部プロンプト", uuid="su1", ts="2026-06-01T00:00:03Z"),
+        _sidechain_assistant_tooluse_line(["Grep", "Bash"], uuid="sa1", ts="2026-06-01T00:00:04Z"),
+        _user_line("main の次の質問", uuid="u2", ts="2026-06-01T00:00:05Z"),
+    ]
+    f = tmp_path / "s1.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    utts = list(extract_utterances(f, pj_slug="x"))
+    # sidechain user 行は発話として拾われない（main 2件のみ）。
+    assert [u.text for u in utts] == ["main の質問", "main の次の質問"]
+    # sidechain 内の Grep/Bash は次の main 発話の prev_action に混ざらない。
+    assert utts[1].prev_action == "Read"
+
+
+def test_extractor_version_is_3() -> None:
+    """#379 A1 で v2→v3（isSidechain 除外 + prev_action null バグ修正）。"""
+    assert extractor.EXTRACTOR_VERSION == 3
+
+
 def test_skips_assistant_lines(tmp_path: Path) -> None:
     f = tmp_path / "s1.jsonl"
     f.write_text(_assistant_tooluse_line(["Bash"]) + "\n", encoding="utf-8")
@@ -283,6 +361,30 @@ def test_prev_action_caps_at_ten(tmp_path: Path) -> None:
     # 10 tool 名 + 末尾 … 。それ以上の名前は切られる。
     assert pa.split(",")[:10] == [f"T{i}" for i in range(10)]
     assert "T10" not in pa and "T11" not in pa
+
+
+def test_prev_action_survives_tool_result_rows(tmp_path: Path) -> None:
+    """assistant tool_use の直後に必ず続く tool_result 行があっても prev_action は
+    消えない（#379 root cause 修正）。
+
+    以前は tool_result 行到達時に pending_tool_names を誤ってリセットしており、実
+    transcript では tool_use の直後に必ず tool_result 行が来るため、extractor_version=2
+    の行は実測窓 1,124 件全件で prev_action=null になっていた（test_prev_action_joins_tool_names
+    は tool_result 行を含まない非現実的な fixture だったため検出できていなかった）。
+    """
+    lines = [
+        _user_line("最初の質問", uuid="u1", ts="2026-06-01T00:00:00Z"),
+        _assistant_tooluse_line(["Read"], uuid="a1", ts="2026-06-01T00:00:01Z"),
+        _tool_result_line(uuid="tr1", ts="2026-06-01T00:00:02Z"),
+        _assistant_tooluse_line(["Bash"], uuid="a2", ts="2026-06-01T00:00:03Z"),
+        _tool_result_line(uuid="tr2", ts="2026-06-01T00:00:04Z"),
+        _user_line("次の質問", uuid="u2", ts="2026-06-01T00:00:05Z"),
+    ]
+    f = tmp_path / "s1.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    utts = list(extract_utterances(f, pj_slug="x"))
+    assert len(utts) == 2
+    assert utts[1].prev_action == "Read,Bash"
 
 
 # --- offset (incremental) ----------------------------------------------------

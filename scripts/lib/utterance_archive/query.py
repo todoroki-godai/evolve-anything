@@ -6,6 +6,10 @@
 - 横断検索は別関数 ``query_utterances_all_projects()`` を明示的に呼ぶ。
 - ``source_kind`` のデフォルトは ``('dialogue',)``。long_paste / excluded_pj を
   含めるには明示 opt-in。下流（#431 個人辞書）の分母汚染を API デフォルトで防ぐ。
+- sidechain 由来行（``source_path`` に ``/subagents/`` を含む）は常時除外（opt-in 不可）。
+  #379 ADR-054 A1: ingest.py のファイル単位除外より前に取り込まれた既存 DB 行
+  （sidechain 由来）が表示・判定に混ざらないようにする read 側の防御。新規ストアは
+  作らず、``_build_query`` の WHERE 条件に一元化する（新設凍結 #379 準拠）。
 """
 from __future__ import annotations
 
@@ -37,6 +41,9 @@ def _build_query(
     cols = ", ".join(_COLUMNS)
     where: List[str] = []
     params: List[Any] = []
+    # sidechain 由来行は常時除外（#379 ADR-054 A1、モジュール docstring 参照）。
+    # opt-in 引数は無い＝呼び出し側の source_kinds 指定に関わらず必ず効く。
+    where.append("source_path NOT LIKE '%/subagents/%'")
     if pj_slug is not None:
         where.append("pj_slug = ?")
         params.append(pj_slug)

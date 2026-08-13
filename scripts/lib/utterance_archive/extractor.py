@@ -5,6 +5,10 @@
 抽出規則:
 - human 発話のみ: ``type=user`` かつ ``message.role=user``。
   ``isMeta`` / ``toolUseResult`` / ``tool_result`` content block を除外。
+- sidechain 除外（#379 ADR-054 §5-A1）: ``isSidechain: true`` の行は行単位で丸ごと除外
+  （human 発話にも prev_action にも寄与しない）。実データでは main-level transcript に
+  isSidechain:true は現れず、専ら ``*/subagents/*.jsonl``（ingest.py 側でファイル単位
+  除外済み）に限られる。本チェックは第二防御。
 - harness 注入除外（learning_trajectory_mining_machinery_turns 準拠）:
   ``<system-reminder`` / ``<command-name`` / ``<local-command`` / ``Caveat:`` /
   ``[Request interrupted`` / ``This session is being continued``。
@@ -25,10 +29,14 @@ from typing import Iterator, List, Optional
 
 # extractor のバージョン。抽出ロジックを変えたら +1（再 ingest で source_kind 等を更新可能に）。
 # v2: #323 で harness 注入判定に rl_common.detection.is_machinery_prompt を追加適用
+# v3: #379 ADR-054 A1。(a) isSidechain 行単位除外を追加 (b) pending_tool_names を
+#     tool_result 行で誤ってリセットしていたバグを修正（prev_action が全件 null だった
+#     root cause）。両方とも新規 ingest 行にのみ効き、既存の v2 行は再 ingest migration
+#     （次PR）まで prev_action=null のまま残る。
 # （既存の書込済み行は増分 ingest（mtime 判定）では再走査されないため遡及修正されない。
 # EXTRACTOR_VERSION は将来 version 差分ベースの再抽出/purge を実装する際の準備として
 # 記録するのみで、本 PR 時点でそれを読む consumer はまだ無い）。
-EXTRACTOR_VERSION = 2
+EXTRACTOR_VERSION = 3
 
 # 長文ペーストの閾値（字数）。これを超えると source_kind='long_paste'。
 LONG_PASTE_THRESHOLD = 2000
@@ -237,6 +245,19 @@ def extract_utterances(
                     if from_cwd:
                         resolved_slug = from_cwd
 
+                # sidechain（Task サブエージェント内部会話）の行は human 発話でも main の
+                # tool 使用でもないため丸ごと除外する（#379 ADR-054 §5-A1「除外の粒度」）。
+                # 実データ検証（2026-08-13）: main-level transcript（``<pj>/*.jsonl``）は
+                # 2464 ファイル全数走査で isSidechain:true = 0 件、``*/subagents/*.jsonl``
+                # 側は 30 ファイルサンプルで 7323/7323 行が true。一次防御は ingest.py 側の
+                # ファイル走査除外（``*/subagents/*.jsonl`` を候補から外す）。ここでの行単位
+                # チェックは extract_utterances が sidechain 混在ファイルへ直接呼ばれた場合
+                # （将来の harness 変更・別呼び出し元）の第二防御。continue のみで
+                # pending_tool_names には一切触れない（sidechain 内 assistant の tool_use を
+                # main の prev_action に混ぜない＝持ち越し禁止）。
+                if obj.get("isSidechain") is True:
+                    continue
+
                 otype = obj.get("type")
                 message = obj.get("message")
                 role = message.get("role") if isinstance(message, dict) else None
@@ -249,9 +270,13 @@ def extract_utterances(
                 if otype != "user" or role != "user":
                     continue
 
-                # tool 結果の user 行は発話でない
+                # tool 結果の user 行は発話でない。pending_tool_names は保持する。
+                # #379 実測で判明した root cause: 以前はここで pending_tool_names を
+                # リセットしており、tool_use の直後に必ず続く tool_result 行で毎回蓄積が
+                # 消えるため、extractor_version=2 の行は 100%（実測窓 1,124件全件）
+                # prev_action=null になっていた。直前の行コメントは「リセットしない」と
+                # 書かれていたが実装が逆だった＝コメント通りに直す。
                 if obj.get("toolUseResult") is not None:
-                    pending_tool_names = []  # human ターン境界はリセットしない（tool 結果なので）
                     continue
                 if obj.get("isMeta"):
                     continue
