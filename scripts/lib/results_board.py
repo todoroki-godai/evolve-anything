@@ -13,6 +13,7 @@ growth-journal harness（crystallization イベント記録・growth_narrative �
 """
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +23,18 @@ from correction_semantic.provenance_weight import count_human_corrections
 from evolve_revert import REASON_LABELS, compute_revert_availability
 
 _WINDOW_DAYS = 30
+
+# ADR-054 §2.6-2: 直近30日/その前30日の rework 件数がどちらも小さいと（例: previous_30d=1）
+# 「増加」「減少」の断定表示が誤った確信を与える。outcome_metrics の
+# MIN_EDIT_SESSIONS_FLOOR/MIN_DISTINCT_TYPES_FLOOR と同じ floor=5 に揃える。
+_MIN_REWORK_SAMPLE_FLOOR = 5
+
+# ADR-054 §2.6-7: excluded の理由（テスト汚染 / legacy 無効化）を画面に出す。
+# classify_decision の判定優先順位（fitness_eligible=False → テスト汚染）と同じ順序。
+_EXCLUSION_REASON_LABELS = {
+    "fitness_ineligible": "legacy無効化",
+    "test_polluted": "テスト汚染",
+}
 
 # #379 Step 4 実データ較正（~/.claude/evolve-anything/optimize_history/evolve-anything.jsonl・
 # 38件・2026-08-10 読み取り時点）: pytest 実行由来の一時パス汚染は "pytest-of-" だけでなく
@@ -96,6 +109,20 @@ def classify_decision(entry: Dict[str, Any]) -> str:
     if decided is False:
         return "rejected"
     return "pending"
+
+
+def _exclusion_reason(entry: Dict[str, Any]) -> str:
+    """excluded と分類された entry の理由を返す（ADR-054 §2.6-7）。
+
+    classify_decision と同じ優先順位（fitness_eligible=False 最優先 → テスト汚染）で
+    判定する。classify_decision が "excluded" を返さない entry への呼び出しは呼び出し側
+    の契約違反だが、防御的に "unknown" を返す。
+    """
+    if entry.get("fitness_eligible") is False:
+        return "fitness_ineligible"
+    if _is_test_polluted(entry):
+        return "test_polluted"
+    return "unknown"
 
 
 def _parse_timestamp(raw: Any) -> Optional[datetime]:
@@ -201,6 +228,9 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     for entry in recent_history:
         buckets[classify_decision(entry)].append(entry)
 
+    # ADR-054 §2.6-7: excluded の理由（テスト汚染 / legacy 無効化）内訳。
+    excluded_reasons = dict(Counter(_exclusion_reason(e) for e in buckets["excluded"]))
+
     def _label(entry: Dict[str, Any]) -> str:
         return entry.get("skill_name") or entry.get("target") or "(unknown)"
 
@@ -253,6 +283,7 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
             "pending": len(buckets["pending"]),
             "excluded": len(buckets["excluded"]),
         },
+        "excluded_reasons": excluded_reasons,
         "accepted_list": accepted_list,
         "withdrawal_candidates": withdrawal_candidates,
     }
@@ -266,12 +297,24 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
     lines = ["## 🏆 戦果ボード", ""]
 
     delta = rework["delta"]
-    if delta < 0:
-        headline = f"手直しが {rework['previous_30d']}→{rework['recent_30d']} 件に減少（直近30日）"
+    recent = rework["recent_30d"]
+    previous = rework["previous_30d"]
+    # ADR-054 §2.6-2: 分母（recent/previous のいずれか大きい方）が最小分母未満で
+    # 増減方向を主張すると「previous_30d の raw は1件」のような分母1桁の比較を
+    # 断定形で出してしまう。floor 未満のときは方向を主張せず参考値として出す。
+    # 「横ばい」（delta==0）は増減の方向を主張しないため floor 対象外。
+    if delta != 0 and max(recent, previous) < _MIN_REWORK_SAMPLE_FLOOR:
+        headline = (
+            f"手直し {previous}→{recent} 件（直近30日・参考値）— "
+            f"件数が少なく（最大 {max(recent, previous)} 件 < 最小分母 "
+            f"{_MIN_REWORK_SAMPLE_FLOOR} 件）サンプル不足のため増減は判定しません"
+        )
+    elif delta < 0:
+        headline = f"手直しが {previous}→{recent} 件に減少（直近30日）"
     elif delta > 0:
-        headline = f"手直しが {rework['previous_30d']}→{rework['recent_30d']} 件に増加（直近30日）"
+        headline = f"手直しが {previous}→{recent} 件に増加（直近30日）"
     else:
-        headline = f"手直しは {rework['recent_30d']} 件で横ばい（直近30日）"
+        headline = f"手直しは {recent} 件で横ばい（直近30日）"
     lines.append(f"**{headline}**")
     lines.append("")
 
@@ -280,6 +323,15 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
         f"rejected {decisions['rejected']} 件 / pending {decisions['pending']} 件 / "
         f"excluded {decisions['excluded']} 件"
     )
+    # ADR-054 §2.6-7: excluded の理由内訳を画面に出す（テスト汚染/legacy無効化が
+    # どちらもどこにも見えない状態を解消する）。
+    excluded_reasons = board.get("excluded_reasons") or {}
+    if decisions["excluded"] and excluded_reasons:
+        reason_parts = ", ".join(
+            f"{_EXCLUSION_REASON_LABELS.get(k, k)} {v} 件"
+            for k, v in sorted(excluded_reasons.items(), key=lambda kv: -kv[1])
+        )
+        lines.append(f"  excluded 内訳: {reason_parts}")
     lines.append("")
 
     if board["accepted_list"]:

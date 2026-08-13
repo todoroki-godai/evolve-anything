@@ -14,6 +14,12 @@ from typing import List, Optional, Tuple
 # capture 率が「枯渇」とみなされる閾値（advisory のしきい値で、スコアには影響しない）。
 _STARVATION_THRESHOLD = 0.10
 
+# ADR-054 §2.6-4: active session が最小分母未満のとき「✓ 評価したが枯渇兆候なし」と
+# 断言しない（分母 n=2 での確信表示は誤った安心感を与える）。
+# outcome_metrics の MIN_EDIT_SESSIONS_FLOOR / MIN_DISTINCT_TYPES_FLOOR と同じ floor=5
+# に揃える（1 セッションの振れで結論が変わらない最小分母、#529-2/#563 と同方針）。
+_MIN_ACTIVE_SESSIONS_FLOOR = 5
+
 
 def _llm_judge_count(project_dir: Optional[Path] = None) -> int:
     """**当 PJ slug の** weak_signals llm_judge channel 件数を返す（#476-1 / #476 fixup）。
@@ -196,7 +202,26 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
             "（Stop hook feedback 由来・read 時除外・ストアは不変, #305）"
         )
 
+    # ADR-054 §2.6-5: A0 が compute_capture_rate に追加した hook_pattern_version_counts
+    # （source×pattern_version の層分離）の表示配線が未接続だったので接続する
+    # （新しい計算を足すのではなく既存の返り値を使う）。
+    hook_pattern_version_counts = result.get("hook_pattern_version_counts") or {}
+    if hook_pattern_version_counts:
+        version_detail = ", ".join(
+            f"{k}:{v}" for k, v in sorted(hook_pattern_version_counts.items())
+        )
+        channel_line += f" / hook pattern_version 内訳: {version_detail}"
+
     if rate >= _STARVATION_THRESHOLD:
+        # ADR-054 §2.6-4: active session が最小分母未満では「✓」で断言しない。
+        if active < _MIN_ACTIVE_SESSIONS_FLOOR:
+            return header + [
+                f"ℹ サンプル不足（active session {active} 件 < 最小分母 "
+                f"{_MIN_ACTIVE_SESSIONS_FLOOR}）のため枯渇兆候の有無は判定しません: "
+                f"capture 率 {rate:.0%} {detail}",
+                channel_line,
+                "",
+            ]
         return header + [
             f"✓ 評価したが枯渇兆候なし: capture 率 {rate:.0%} {detail}",
             channel_line,

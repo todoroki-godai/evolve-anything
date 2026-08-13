@@ -33,6 +33,16 @@ def _format_axis(key: str, axis: Dict[str, Any]) -> List[str]:
     if value is None:
         reason = ev.get("reason", "no_data")
         store = ev.get("store", "")
+        # ADR-054 §2.6-1/§8: 「測っていない」（not_measured）と「データが無い」（no_data）を
+        # 表示上はっきり区別する（P4: silence != evaluated）。sessions は存在するが
+        # tool_sequence を持つレコードが 0 件（writer が集計値しか書かない）の状態がこれ。
+        if reason == "not_measured":
+            return [
+                f"  ・{label}: 未測定"
+                f"（sessions {ev.get('total_sessions', 0)} 件はあるが"
+                f" 測定可能（tool_sequence 保有）な session が"
+                f" {ev.get('measured_sessions', 0)} 件 — writer が記録していないため計測不能）"
+            ]
         # #529-2 / #563: 最小分母 floor 未満は「データ不足」でなく「サンプル不足」と
         # 区別して表示する（ストアはあるが率を出すには分母が小さい状態）。
         # correction_recurrence は distinct_types、rework は edit_sessions を分母とする。
@@ -43,11 +53,15 @@ def _format_axis(key: str, axis: Dict[str, Any]) -> List[str]:
                 sample_detail = f"edit sessions {ev['edit_sessions']}"
             else:
                 sample_detail = "n/a"
-            return [
+            line = (
                 f"  ・{label}: サンプル不足"
                 f"（{sample_detail}"
                 f" < floor {ev.get('floor', '?')}）— 率は非表示"
-            ]
+            )
+            unattributed = ev.get("unattributed")
+            if unattributed:
+                line += f"（うち project 未帰属 {unattributed} 件）"
+            return [line]
         return [f"  ・{label}: データ不足（{reason} / {store}）"]
 
     lines = [f"  ・{label}: {value:.2f} — {direction}"]
@@ -57,6 +71,15 @@ def _format_axis(key: str, axis: Dict[str, Any]) -> List[str]:
             f"distinct type {ev.get('distinct_types', 0)} / "
             f"再発 type {ev.get('recurring_types', 0)}"
         )
+        # ADR-054 §2.6-6: project_path が空のレコードは「未帰属」として寛容に include
+        # される（他PJ混入と誤判定しない）ため、全PJ合計と PJ別合計は一致しない。
+        # その不一致がどこにも surface されない「嘘」を解消する。
+        unattributed = ev.get("unattributed")
+        if unattributed:
+            lines.append(
+                f"      注意: うち project 未帰属（project_path 空）{unattributed} 件を含む"
+                "（全PJ合計とPJ別合計は一致しません）"
+            )
         examples = ev.get("examples") or {}
         if examples:
             sample = ", ".join(f"{t}×{c}sess" for t, c in examples.items())
@@ -90,6 +113,9 @@ def build_outcome_metrics_section(project_dir: Path) -> Optional[List[str]]:
       orphan_store / hook_drift と同じ「評価対象が無ければ沈黙」の境界（silence != evaluated は
       評価対象がある場合にのみ適用）
     - いずれかの軸にデータがあれば 3 軸を出力（データ不足の軸は「データ不足」と明示）
+    - ADR-054 §8: reason が not_measured / insufficient_sample（＝ストアにレコードは
+      あるが測定不能・分母不足）の軸が 1 つでもあれば、たとえ 3 軸とも value=None でも
+      沈黙しない（「測っていない」を「データが無い」と同じ沈黙に畳まない、P4）。
     """
     def compute(proj: Path) -> Optional[Dict[str, Any]]:
         try:
@@ -103,11 +129,16 @@ def build_outcome_metrics_section(project_dir: Path) -> Optional[List[str]]:
         )
 
     def applicable(metrics: Dict[str, Any]) -> bool:
-        # 評価対象（該当ストア）が 1 つも無い環境は沈黙する。
-        return not all(
-            metrics[k].get("value") is None
-            for k in ("correction_recurrence", "first_try_success", "rework")
-        )
+        # 評価対象（該当ストア）が 1 つも無い環境（= 全軸 reason=no_data）は沈黙する。
+        # not_measured / insufficient_sample はレコード自体は存在する状態なので沈黙しない
+        # （§2.6: not_measured を足すだけでは画面に出ない、を解消する）。
+        for k in ("correction_recurrence", "first_try_success", "rework"):
+            axis = metrics[k]
+            if axis.get("value") is not None:
+                return True
+            if axis.get("evidence", {}).get("reason") != "no_data":
+                return True
+        return False
 
     def render(metrics: Dict[str, Any]) -> List[str]:
         body: List[str] = []

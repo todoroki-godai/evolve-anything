@@ -211,6 +211,12 @@ def correction_recurrence_rate(
 
     project（PJ basename）指定時は当PJ分のみを対象にする（#489）。None なら全PJ集計
     （cross-PJ 用途の後方互換）。
+
+    ADR-054 §2.6-6: corrections.jsonl には project 識別フィールド（project_path）が
+    空のレコードが存在する。``_project_match`` はこれを寛容に include するため
+    （属性欠落を他PJ混入と誤判定しない）、「全PJ合計」と「Σ(PJ別合計)」は原理的に
+    一致しない。evidence の ``unattributed`` に件数を surface し、この不一致がどこにも
+    出ない状態（#2.6-6 の「嘘」）を解消する。
     """
     base = data_dir if data_dir is not None else DATA_DIR
     since = _iso_days_ago(days)
@@ -220,6 +226,10 @@ def correction_recurrence_rate(
     ]
     if not records:
         return None, {"reason": "no_data", "store": "corrections.jsonl", "window_days": days}
+
+    from pj_slug import record_project_attribution
+
+    unattributed = sum(1 for r in records if not record_project_attribution(r))
 
     sessions_by_type: Dict[str, set] = {}
     for r in records:
@@ -242,6 +252,7 @@ def correction_recurrence_rate(
             "records": len(records),
             "distinct_types": distinct_types,
             "floor": MIN_DISTINCT_TYPES_FLOOR,
+            "unattributed": unattributed,
             "window_days": days,
         }
     recurring = {t: len(s) for t, s in sessions_by_type.items() if len(s) >= 2}
@@ -252,6 +263,7 @@ def correction_recurrence_rate(
         "distinct_types": distinct_types,
         "recurring_types": len(recurring),
         "examples": examples,  # {correction_type: distinct_session_count}
+        "unattributed": unattributed,
         "window_days": days,
     }
 
@@ -362,6 +374,17 @@ def rework_rate(
     N ターン内再編集」は算出不能。tool_sequence 上の編集バーストを proxy とする。
 
     project（PJ basename）指定時は当PJ分のみを対象にする（#489）。None なら全PJ集計。
+
+    ADR-054 §2.6-1: sessions.jsonl は writer が集計値（error_count 等）のみを書き
+    tool_sequence を書かないため、実運用ではレコードは存在するのに測定に使える
+    tool_sequence を持つレコードが 0 件という状態が常態化している。これを「データが無い」
+    （no_data）でなく「（レコードはあるが）測定していない」（not_measured）として区別する
+    （P4: silence != evaluated）。evidence に measured_sessions/total_sessions を持たせる。
+
+    ADR-054 §2.6-3: sessions.jsonl は Stop hook が発火するたびに 1 行追記されるため、
+    同一 session に対して複数行が存在しうる（W32 実測: 1,543 行 / unique session 298 件、
+    約5倍の過大計上）。session_id 単位に畳み込んでから分母/分子を数える
+    （first_try_success_rate の #138 折り畳みと同方針）。
     """
     base = data_dir if data_dir is not None else DATA_DIR
     since = _iso_days_ago(days)
@@ -373,40 +396,60 @@ def rework_rate(
     if not records:
         return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
 
-    edit_sessions: List[str] = []
-    rework_sessions: List[str] = []
+    total_session_ids: set = set()
+    measured_session_ids: set = set()
+    edit_session_ids: set = set()
+    rework_session_ids: set = set()
+    edit_session_order: List[str] = []
+    rework_session_order: List[str] = []
     for r in records:
+        sid = r.get("session_id") or ""
+        if sid:
+            total_session_ids.add(sid)
         seq = r.get("tool_sequence")
         if not isinstance(seq, list) or not seq:
             continue
+        if sid:
+            measured_session_ids.add(sid)
         if not any(t in _EDIT_TOOLS for t in seq):
             continue
-        sid = r.get("session_id") or ""
-        edit_sessions.append(sid)
-        if _has_edit_burst(seq, min_consecutive):
-            rework_sessions.append(sid)
+        if sid and sid not in edit_session_ids:
+            edit_session_ids.add(sid)
+            edit_session_order.append(sid)
+        if _has_edit_burst(seq, min_consecutive) and sid and sid not in rework_session_ids:
+            rework_session_ids.add(sid)
+            rework_session_order.append(sid)
 
-    if not edit_sessions:
+    if not measured_session_ids:
+        return None, {
+            "reason": "not_measured",
+            "store": "sessions.jsonl",
+            "measured_sessions": 0,
+            "total_sessions": len(total_session_ids),
+            "window_days": days,
+        }
+
+    if not edit_session_ids:
         return None, {"reason": "no_data", "store": "sessions.jsonl", "window_days": days}
 
     # #563: 最小分母 floor 未満では率を出さず「サンプル不足」を明示する。
     # edit_sessions が少ないと 1 セッションの振れで率が 1.0 に張り付き誤シグナルになる
     # （correction_recurrence の MIN_DISTINCT_TYPES_FLOOR=5 と同方針, #529-2）。
-    if len(edit_sessions) < MIN_EDIT_SESSIONS_FLOOR:
+    if len(edit_session_ids) < MIN_EDIT_SESSIONS_FLOOR:
         return None, {
             "reason": "insufficient_sample",
             "store": "sessions.jsonl",
-            "edit_sessions": len(edit_sessions),
+            "edit_sessions": len(edit_session_ids),
             "floor": MIN_EDIT_SESSIONS_FLOOR,
             "window_days": days,
         }
 
-    rate = round(len(rework_sessions) / len(edit_sessions), 4)
+    rate = round(len(rework_session_ids) / len(edit_session_ids), 4)
     return rate, {
-        "total_sessions": len(edit_sessions),  # 編集ありセッションのみが母集団
-        "rework_sessions": len(rework_sessions),
+        "total_sessions": len(edit_session_ids),  # 編集ありセッションのみが母集団（unique）
+        "rework_sessions": len(rework_session_ids),
         "min_consecutive": min_consecutive,
-        "examples": _dedup(rework_sessions),
+        "examples": _dedup(rework_session_order),
         "window_days": days,
     }
 

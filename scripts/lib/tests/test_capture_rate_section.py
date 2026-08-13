@@ -120,6 +120,71 @@ def test_advisory_only_no_score_field(tmp_path, monkeypatch):
     assert all(isinstance(line, str) for line in section)
 
 
+# ── ADR-054 §2.6-4: 分母1桁で「枯渇兆候なし ✓」と断言しない ──────────────
+
+
+def test_low_active_sessions_does_not_confidently_claim_clean(tmp_path, monkeypatch):
+    """active session が最小分母未満（既定 floor=5）なら、capture 率が閾値以上でも
+    「✓ 評価したが枯渇兆候なし」と断言せず、サンプル不足を明示する（ADR-054 §2.6-4）。
+    """
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),  # active=2 < floor
+        corr_rows=[
+            {"session_id": "s1", "timestamp": _now_iso(), "source": "hook"},
+            {"session_id": "s2", "timestamp": _now_iso(), "source": "hook"},
+        ],
+    )
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "100%" in combined
+    assert "サンプル不足" in combined
+    assert "✓ 評価したが枯渇兆候なし" not in combined
+
+
+def test_active_sessions_at_floor_confidently_claims_clean(tmp_path, monkeypatch):
+    """active session が floor 以上なら従来通り確信を持って「✓」を出す（回帰防止）。"""
+    from audit import sections_capture as _sc
+
+    floor = _sc._MIN_ACTIVE_SESSIONS_FLOOR
+    usage_rows = []
+    corr_rows = []
+    for i in range(floor):
+        sid = f"s{i}"
+        usage_rows += _usage(sid, 30)
+        corr_rows.append({"session_id": sid, "timestamp": _now_iso(), "source": "hook"})
+    _setup_stores(tmp_path, monkeypatch, usage_rows=usage_rows, corr_rows=corr_rows)
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "✓ 評価したが枯渇兆候なし" in combined
+    assert "サンプル不足" not in combined
+
+
+# ── ADR-054 §2.6-5: hook_pattern_version_counts の表示配線 ─────────────
+
+
+def test_hook_pattern_version_breakdown_is_displayed(tmp_path, monkeypatch):
+    """capture_rate.compute_capture_rate が返す hook_pattern_version_counts（A0 で追加済み）
+    を表示に配線する（未接続だった、ADR-054 §2.6-5）。
+    """
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 30),
+        corr_rows=[
+            {"session_id": "s1", "timestamp": _now_iso(), "source": "hook", "pattern_version": "v2"},
+            {"session_id": "s2", "timestamp": _now_iso(), "source": "hook"},  # pattern_version 無し
+        ],
+    )
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "pattern_version" in combined
+    assert "v2" in combined
+    assert "pre_pattern_version" in combined
+
+
 # ── #476-1: channel 別表示で llm_judge 大量捕捉時の誤「枯渇」警告を解消 ──────
 
 _OTHER_SLUG = "other-pj"
