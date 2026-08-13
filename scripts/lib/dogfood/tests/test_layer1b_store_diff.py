@@ -47,6 +47,43 @@ def _seed_result(tmp_path: Path, pending=None) -> Path:
 
 
 # ─────────────────────────────────────────────────────────────
+# _run_drain — 既知の非対話 call site（#444）: --accepted/--rejected を渡さない
+# ─────────────────────────────────────────────────────────────
+
+
+def test_run_drain_never_passes_accepted_or_rejected(monkeypatch, tmp_path):
+    """#444: dogfood gate Layer1b（`_run_drain`）は既知の非対話 call site。
+
+    このプロセスには人間の承認を代弁する対話チャネルが無いため、`--accepted`/`--rejected` を
+    組み立てて渡すことは設計上あってはならない。他 fake との二重 mock を避けるため、ここでは
+    `_run_drain` 自体は mock せず `subprocess.run` だけを差し替えて実引数を検証する（他テストは
+    `_run_drain` を丸ごと mock しており、実際に組み立てられる argv を一度も検査していなかった）。
+    """
+    result_json = tmp_path / "result.json"
+    result_json.write_text("{}", encoding="utf-8")
+
+    captured = {}
+
+    class _FakeCompleted:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    def _fake_run(argv, **kw):
+        captured["argv"] = argv
+        return _FakeCompleted()
+
+    monkeypatch.setattr(layer1.subprocess, "run", _fake_run)
+
+    layer1._run_drain(tmp_path / "repo", result_json)
+
+    assert "argv" in captured, "subprocess.run が呼ばれなかった"
+    assert "--drain" in captured["argv"]
+    assert "--accepted" not in captured["argv"]
+    assert "--rejected" not in captured["argv"]
+
+
+# ─────────────────────────────────────────────────────────────
 # check_store_diff_1b — 隔離 drain で store が書かれる方向を検査
 # ─────────────────────────────────────────────────────────────
 

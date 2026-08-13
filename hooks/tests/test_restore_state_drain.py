@@ -151,3 +151,29 @@ def test_does_not_crash_hook_on_error(skill_and_marker, monkeypatch, capsys):
     assert item is None
     err = capsys.readouterr().err
     assert "drain" in err.lower()
+
+
+def test_known_noninteractive_call_site_never_passes_decision_args(skill_and_marker, monkeypatch):
+    """#444: SessionStart hook（既知の非対話 call site）は drain_pending に
+    accepted/rejected を一切渡さないことを固定する。
+
+    SessionStart には対話チャネルが無く人間の承認を代弁できないため（#376）、この call site が
+    decision 引数を渡すことは設計上あってはならない。CLI は呼出元を認証できない（#444 codex
+    [Must]4 で「機械的に保証」は撤回済み）ため、本テストは「既知の call site が現状渡していない」
+    ことを固定する回帰防止であり、偽造防止の保証ではない。
+    """
+    sf, tmp_path = skill_and_marker
+    sf.write_text(_AFTER, encoding="utf-8")
+
+    captured = {}
+
+    def _capture(**kw):
+        captured.update(kw)
+        return {"accepted": [], "rejected": [], "skipped": []}
+
+    monkeypatch.setattr(ed, "drain_pending", _capture)
+    restore_state._build_evolve_drain_output()
+
+    assert captured, "drain_pending が呼ばれなかった（前提が崩れている）"
+    assert "accepted" not in captured
+    assert "rejected" not in captured
