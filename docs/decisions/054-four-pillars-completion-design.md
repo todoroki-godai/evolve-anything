@@ -361,6 +361,56 @@ sidechain 除外は user 行だけでなく `prev_action` の境界にも影響�
   `prev_action` へ持ち越さないテストを追加（`test_utterance_extractor.py::
   test_sidechain_tool_use_does_not_leak_into_prev_action`）。
 
+**A1 第二段階（全履歴 migration）— 保留の裁定（2026-08-13）**
+
+**決定: 全履歴 re-ingest migration は実装しない（保留）。G1 の測定は本番 DB を書き換えず一時 DB で行う。**
+
+判断の根拠（実測 + codex / tacchi 両レビュー）:
+
+1. **前提は成立していた**（やれないから止めるのではない）
+   - v3 extractor + 現行 store の end-to-end で `prev_action` は実際に埋まる（一時 DB へ実走・非 null **67.55%**）
+   - null は全件「構造的に正しい null」（セッション冒頭 69.8% / 直前 assistant が tool 未使用 30.2% /
+     **バグ候補 0件**）。`_INSERT_SQL` と `_utt_params()` の対応も突合済みで store 側の別バグは無い
+   - wall time 約 50〜125秒（`transcript-store-bench` の 75分暴走の前科は杞憂）、ディスクも 442GiB 空きで余裕
+2. **便益が薄い（決定要因）**
+   - migration が埋めるのは既存 15,371件の `prev_action`。しかし `judge_runner` は
+     **newest-first + 日次上限200件**（`judge_runner.py:109-126`）で、未判定在庫 10,419件の後ろにいる
+     古い発話には**到達しない**
+   - `prev_action` が実際に効くのは新規発話であり、それは第一段階（PR #432）で**達成済み**
+   - 残る実効便益は「**G1 を実運用と同じ条件で測ること**」だけ
+3. **コストが重い（codex [Must] 6件 + tacchi [Must] 1件）**
+   - DuckDB は複数プロセス同時 write 非サポート。旧 DB を開いた writer は rename 後も**旧 inode に書き続ける**
+     → 全 writer 共有の application-level flock を**新設**する必要がある
+   - `close()` では file handle が解放されない場合がある（DuckDB Python は DB instance が保持）
+   - **WAL を置き去りにする rename は禁止**（`CHECKPOINT` → close → `.wal` 不在確認 → 同一 FS 内 rename → 親 dir fsync）
+   - **orphan の定義が狭すぎた**: 引き継ぐべきは「ファイル消失 3,542件」でなく `old PK − rebuilt PK` の
+     **全 residual**（走査対象外になった subagents 由来 2,955件を含む）。狭い定義のままだと
+     ADR が決めた「既存行は purge しない・read 時除外」契約に反する
+   - 完了条件は**集合包含 + `text_hash` 一致**まで検証しないと、既判定 3,052件の silent 誤帰属を見逃す
+     （件数一致では入れ替わりを検出できない／`new >= old` は別の新規行で欠落を相殺できる）
+   - transcript が抽出中に追記される競合（「未抽出なのに処理済み」の永久欠落）
+4. **#379 は縮小が方針**。上記の機構を新設して得るものが「judge が届かない過去データの充填」では釣り合わない
+
+**解凍条件**（いずれかが成立したら再検討する）:
+- **B3**（judge の日次上限見直し / 対象の絞り込み）で**古い発話が judge の到達範囲に入る**ようになった
+- **G1 の測定で「`prev_action` の有無が recall/precision を有意に変える」ことが実証された**
+  （＝過去データの充填に実利が生まれた）
+
+**保留に伴う既知の副作用**（silence != evaluated なので明記する）:
+- 既存 18,913件の `prev_action` は null のまま残る（v1 で 99.1% / v2 で 100%）
+- orphan のうち未判定分は「未判定 N 件」の表示を恒久に水増しし続ける（newest-first cap で消化されない在庫）。
+  対策機構は新設しない（#379）が、**この数字を読むときは偏りを前提にする**
+
+**設計文書の誤りの訂正**: レビュー依頼時に「observe hook がセッション中に随時 `utterances.db` へ書く可能性がある」
+と書いたが**誤り**。`hooks/` に `utterances.db` の writer は存在しない（テストのみ）。実際の書き手は ingest 経路
+（対話 evolve の capture / `evolve-fleet ingest` / daily runner）。codex / tacchi 双方が実装で確認して指摘した。
+
+**G1 の測定方式（本裁定により確定）**: 本番 `utterances.db` を書き換えず、A0 の人手ラベル 86件が載る
+**41 transcript ファイル**を v3 extractor で一時 DB へ再抽出し、その上で judge を走らせて recall/precision を測る。
+**破壊的操作はゼロ**。ラベル 86件のうち **6件（すべて not_TP）は transcript 消失で再抽出できない**ため、
+**分母から黙って外すのでなく `not_measured` として明示する**（TP 10件はすべて現存ファイル上なので recall の
+分子・分母は無傷。影響を受けるのは precision の分母のみ）。
+
 **A3 — 判定基準**
 決定論基準は **`provenance.source_path` に `/subagents/` を含む**こと。
 扱い: 放置 / TTL 45日の自然失効 / 対象を絞った一括 expired 化。
@@ -480,14 +530,17 @@ codex [Must]3。実施済み Phase は完了印を付けた）**
 ```
 Phase 0 (B1) ✅完了 / A0 ✅完了 / Phase D PR1 ✅完了
 
-A2 ──┐
-C1 ──┘ 並行可（C1 は表示層のみ・A/B/E/G1 の全てに非依存）
+A2 ✅完了 ──┐
+C1 ✅完了 ──┘ 並行可（C1 は表示層のみ・A/B/E/G1 の全てに非依存）
   ↓
-A1（forward 修正 → 実測 → migration は費用確定後）
-  ↓ 実データ再計測
+A1 第一段階（forward 修正）✅完了（PR #432）
+  ↓
+A1 第二段階（全履歴 migration）── **保留**（2026-08-13・§5-A1「migration 保留の裁定」）
+  ↓
 A3（汚染 cleanup）
   ↓
-G1 計測ゲート ──不通過──→ C(a) は作らない（§7.4）
+G1 計測ゲート ── **一時 DB 方式**（本番 DB を書き換えず A0 ラベルの 41 ファイルを再抽出）
+  └─不通過──→ C(a) は作らない（§7.4）
   ↓ 通過
 A5 → C(a): C2
   ↓
@@ -643,6 +696,19 @@ C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の
 | codex [Should] | A5 単独の `distinct_types >= 5` は語彙を増やすだけで達成できる vanity gate | §6（成果指標から降格） |
 | codex [Should] | B3 の上限引き上げは流入量再計測を経ずに判断すべきでない | §6（B3 は A1/A2 後）/ §7.1（2026-08-13 決定） |
 | 頭の実測（`optimize_history` 全41 entry の writer 別分解） | D1 の PR2/PR3 対象レーンの accept 実績を確認したところ、**tacchi は当初「PR3（optimize.py）は accept 2件だから後回し」としたが、実測では2件だったのは PR2 側（run_loop）で、PR3 側は0件だった**。「後回し（凍結）」という方向自体は正しく、対象レーンが入れ替わっていたため、頭が実測して両方の凍結に確定した | §5 Phase D（D1 の PR2/PR3 凍結裁定） |
+
+### 9.2 2026-08-13 rev2（A1 第二段階 migration の設計レビュー・tacchi / codex 各1巡 + 頭の実測）
+
+| レビュアー | 指摘 | 反映先 |
+|---|---|---|
+| tacchi [Must]① | `extractor_version=3` が本番 DB に0件＝**`prev_action` 修正が実環境で効く証拠がゼロ**のまま 18,913件を作り直そうとしている | 頭が一時 DB で end-to-end 実走を実測（非 null 67.55% / バグ候補0件）。§5-A1「migration 保留の裁定」1 に記録 |
+| tacchi [Must]② / codex [Must]5 | 完了条件「キーが突合する」は不十分。件数一致では**入れ替わりを検出できず**、transcript 書き換え時は同じ `(source_path, line_no)` が別発話を指したまま通る＝既判定 3,052件の silent 誤帰属 | §5-A1「migration 保留の裁定」3（集合包含 + `text_hash` 一致。migration 自体は保留につき将来の解凍時の要件として保存） |
+| codex [Must]1・2・3 | atomic rename 単体では安全でない（DuckDB は複数プロセス同時 write 非サポート・旧 inode への書き続け・`close()` で file handle が解放されない・WAL 置き去り禁止） | 同上3。**全 writer 共有 flock の新設が必要**＝コストが重いという裁定の根拠 |
+| codex [Must]4 | orphan を「ファイル消失行」に限ると、走査対象外になった subagents 由来 2,955件が消え、ADR の「既存行は purge しない」契約に反する。引き継ぐべきは `old PK − rebuilt PK` の全 residual | 同上3 |
+| codex [Must]6 / tacchi | transcript が抽出中に追記される競合で「未抽出なのに処理済み」の永久欠落が起こりうる | 同上3 |
+| tacchi [Should] / codex [Should] | 新 CLI を `bin/` に足すな（既に一度きり migration CLI の残骸が2本ある / `scripts/migrations/` の一回性スクリプトが適切） | migration 保留により CLI 自体が不要になり解消 |
+| tacchi [Should] / codex（実装確認） | 設計文書の「observe hook が随時 `utterances.db` へ書く」は**事実誤り**（hooks に writer なし） | §5-A1「設計文書の誤りの訂正」。頭も grep で実測確認 |
+| **頭の裁定**（tacchi 実測 `judge_runner.py:109-126` から導出） | judge は newest-first + 日次上限200件で、未判定在庫 10,419件の後ろの古い発話に**到達しない**。よって既存行の `prev_action` を埋めても judge は使わない＝**全履歴 migration の実効便益は G1 の測定条件を揃えることだけ**。それは本番 DB を触らず一時 DB で達成できる | §5-A1「migration 保留の裁定」2 / §6（A1 第二段階を保留・G1 は一時 DB 方式） |
 
 ---
 
