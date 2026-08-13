@@ -128,7 +128,8 @@
 | `idiom_autopromote` | confirmed idiom の再発 weak_signal を機械昇格。**#379 Step1 で凍結中、`autopromote()` は no-op** | `correction_semantic/idiom_autopromote.py` |
 | `measurement_bug` | 複数 PJ の非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface | `audit/measurement_bug.py` |
 | `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ。閾値は growth_engine が単一ソース | `growth_report.py` |
-| `results_board`（戦果ボード） | growth-journal harness 削除の置換成果物。optimize_history/corrections を直読みし戦果を決定論表示 | `results_board.py` |
+| `results_board`（戦果ボード） | growth-journal harness 削除の置換成果物。optimize_history/correction_rate を直読みし戦果を決定論表示 | `results_board.py` |
+| `correction_rate` | ADR-054 §7.2.1 柱3(a)「指摘率」。3ストア read 時 join・freeze cutoff・カバレッジ100%確定週のみ表示・k週連続ゲート | `correction_rate.py` |
 | `outcome_promotion_readiness` | 重み昇格レディネスの4条件決定論判定。全 ✓ で「重み昇格を提案」 | `audit/outcome_promotion_readiness.py` |
 | `predictive_validity` | 重み昇格レディネス第4条件 — in/out-of-sample の順位相関で予測妥当性を判定 | `audit/predictive_validity.py` |
 | `reward_ema` | バッチ跨ぎ符号付き advantage の EMA 累積で通時の安定効果を判定 | `audit/reward_ema.py` |

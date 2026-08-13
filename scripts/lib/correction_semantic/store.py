@@ -433,6 +433,22 @@ def read_judged_keys(path: Optional[Path] = None) -> Set[str]:
     return out
 
 
+def read_judged_records(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """判定進捗の生レコード全件を返す（``judged_at`` 込み。"key" を持たない
+    ``billed_attempt`` レコードも含む）。
+
+    ``read_judged_keys`` は dedup 済みの key 集合のみを返すため、freeze cutoff
+    （``judged_at <= cutoff``）を評価したい読者（``correction_rate``・ADR-054 §7.2.1）は
+    生レコードが要る。union read の方針は ``read_judged_keys`` と同一（#46 read 層拡張）。
+    dedup はしない（同一 key の複数レコードの競合解決は呼び出し側の責務）。
+    """
+    paths = [Path(path)] if path is not None else _iter_read_store_paths(JUDGED_STORE_NAME)
+    out: List[Dict[str, Any]] = []
+    for p in paths:
+        out.extend(_read_jsonl(p))
+    return out
+
+
 def record_judged(
     keys: List[str],
     path: Optional[Path] = None,

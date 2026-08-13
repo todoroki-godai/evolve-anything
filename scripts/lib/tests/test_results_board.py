@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""results_board のテスト — 戦果ボード（#379 Step 4・growth-journal harness 削除の置換成果物）。
+"""results_board のテスト — 戦果ボード（#379 Step 4・ADR-054 §7.2.1 柱3(a)）。
 
 classify_decision（optimize_history 1エントリ→accepted/rejected/pending/excluded の純粋関数）と
-build_results_board（optimize_history + corrections の直読み集計）を検証する。
+build_results_board（optimize_history + correction_rate の直読み集計配線）を検証する。
+correction_rate 自体の集計ロジック（週次 join / freeze / gate）は test_correction_rate.py が
+別途担う。ここでは build_results_board がその summary を正しく配線し read 失敗を握りつぶさない
+こと、render_results_board が summary を正しく markdown 化することだけを検証する。
 
 実データ較正（~/.claude/evolve-anything/optimize_history/evolve-anything.jsonl・38件・
 2026-08-10 読み取り時点）と canonical writer 3種の実コード確認で判明した事実:
@@ -294,86 +297,68 @@ def stub_revert_events(monkeypatch):
 
 
 @pytest.fixture
-def stub_corrections(monkeypatch):
-    """telemetry_query.query_corrections をスタブに差し替える。"""
-    def _set(records):
-        monkeypatch.setattr(results_board, "query_corrections", lambda **kw: records)
+def stub_correction_rate(monkeypatch):
+    """correction_rate.build_correction_rate_summary をスタブに差し替える（ADR-054 §7.2.1）。"""
+    def _set(summary):
+        monkeypatch.setattr(results_board, "build_correction_rate_summary", lambda **kw: summary)
     return _set
 
 
-class TestBuildResultsBoardRework:
-    def test_rework_delta_negative_when_decreasing(self, stub_history, stub_corrections):
-        """直近30日3件・その前30日5件 → delta=-2（手直しが減少）。"""
+def _closed_gate_summary():
+    return {
+        "gate": {"gate_open": False, "display_start_week": None, "required": 4, "best_run_length": 0},
+        "displayed_weeks": [],
+        "latest_coverage": None,
+        "diagnostics": {},
+        "generated_at": None,
+    }
+
+
+class TestBuildResultsBoardCorrectionRate:
+    """ADR-054 §7.2.1 柱3(a)「指摘率」の統合（旧 rework 表示の置換先）。
+
+    集計ロジック自体（週次 join / freeze / gate）は test_correction_rate.py が担う。
+    ここは build_results_board が build_correction_rate_summary を正しく配線し、
+    read 失敗を握りつぶさず安全な既定値へフォールバックすることだけを検証する。
+    """
+
+    def test_summary_is_passed_through_verbatim(self, stub_history, stub_correction_rate):
         stub_history([])
-        corrections = (
-            [{"source": "reflect_confirmed", "timestamp": _iso(5)} for _ in range(3)]
-            + [{"source": "reflect_confirmed", "timestamp": _iso(45)} for _ in range(5)]
-        )
-        stub_corrections(corrections)
+        summary = {
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": []},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        }
+        stub_correction_rate(summary)
 
         board = results_board.build_results_board("evolve-anything", now=_NOW)
 
-        assert board["rework"]["recent_30d"] == 3
-        assert board["rework"]["previous_30d"] == 5
-        assert board["rework"]["delta"] == -2
+        assert board["correction_rate"] == summary
 
-    def test_machine_corrections_not_counted_as_rework(self, stub_history, stub_corrections):
-        """source=hook（機械生成）は human corrections カウントに含まれない。"""
-        stub_history([])
-        stub_corrections([{"source": "hook", "timestamp": _iso(1)} for _ in range(4)])
-
-        board = results_board.build_results_board("evolve-anything", now=_NOW)
-
-        assert board["rework"]["recent_30d"] == 0
-
-    def test_window_boundary_60_days_ago_excluded_from_previous(
-        self, stub_history, stub_corrections
-    ):
-        """60日超前の correction はどちらの window にも入らない。"""
-        stub_history([])
-        stub_corrections([{"source": "reflect_confirmed", "timestamp": _iso(61)}])
-
-        board = results_board.build_results_board("evolve-anything", now=_NOW)
-
-        assert board["rework"]["recent_30d"] == 0
-        assert board["rework"]["previous_30d"] == 0
-
-    def test_low_sample_delta_does_not_claim_direction(self, stub_history, stub_corrections):
-        """ADR-054 §2.6-2: previous_30d/recent_30d の最大値が最小分母（既定 floor=5）未満なら
-        「増加」「減少」を断定しない（分母1桁の比較を断定形で出さない）。
-        """
-        stub_history([])
-        corrections = [{"source": "reflect_confirmed", "timestamp": _iso(45)}]  # previous=1
-        stub_corrections(corrections)
-
-        board = results_board.build_results_board("evolve-anything", now=_NOW)
-
-        assert board["rework"]["recent_30d"] == 0
-        assert board["rework"]["previous_30d"] == 1
-        lines = results_board.render_results_board(board)
-        text = "\n".join(lines)
-        assert "増加" not in text
-        assert "減少" not in text
-        assert "0" in text and "1" in text
-
-    def test_query_failure_is_graceful(self, stub_history, monkeypatch):
-        """query_corrections が例外を投げても KeyError にならず 0 扱い。"""
+    def test_read_failure_falls_back_to_closed_gate(self, stub_history, monkeypatch):
+        """build_correction_rate_summary が例外を投げても KeyError にならず安全側（gate閉）に倒れる。"""
         stub_history([])
 
         def _boom(**kw):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(results_board, "query_corrections", _boom)
+        monkeypatch.setattr(results_board, "build_correction_rate_summary", _boom)
 
         board = results_board.build_results_board("evolve-anything", now=_NOW)
 
-        assert board["rework"]["recent_30d"] == 0
-        assert board["rework"]["previous_30d"] == 0
+        assert board["correction_rate"]["gate"]["gate_open"] is False
+        assert board["correction_rate"]["displayed_weeks"] == []
 
 
 class TestBuildResultsBoardDecisions:
-    def test_counts_by_bucket_within_window(self, stub_history, stub_corrections):
-        stub_corrections([])
+    def test_counts_by_bucket_within_window(self, stub_history, stub_correction_rate):
+        stub_correction_rate(_closed_gate_summary())
         stub_history([
             {"source": None, "approved": True, "skill_name": "a", "timestamp": _iso(1)},
             {"source": None, "approved": False, "skill_name": "b", "timestamp": _iso(2)},
@@ -396,8 +381,8 @@ class TestBuildResultsBoardDecisions:
             "excluded": 1,
         }
 
-    def test_entries_outside_window_not_counted(self, stub_history, stub_corrections):
-        stub_corrections([])
+    def test_entries_outside_window_not_counted(self, stub_history, stub_correction_rate):
+        stub_correction_rate(_closed_gate_summary())
         stub_history([
             {"source": None, "approved": True, "skill_name": "old", "timestamp": _iso(40)},
         ])
@@ -406,18 +391,18 @@ class TestBuildResultsBoardDecisions:
 
         assert board["decisions"]["accepted"] == 0
 
-    def test_excluded_always_present_even_when_zero(self, stub_history, stub_corrections):
+    def test_excluded_always_present_even_when_zero(self, stub_history, stub_correction_rate):
         """silence != evaluated — excluded=0 でもキー自体は必ず出す。"""
-        stub_corrections([])
+        stub_correction_rate(_closed_gate_summary())
         stub_history([{"source": None, "approved": True, "skill_name": "a", "timestamp": _iso(1)}])
 
         board = results_board.build_results_board("evolve-anything", now=_NOW)
 
         assert board["decisions"]["excluded"] == 0
 
-    def test_excluded_reasons_breakdown_computed(self, stub_history, stub_corrections):
+    def test_excluded_reasons_breakdown_computed(self, stub_history, stub_correction_rate):
         """ADR-054 §2.6-7: excluded の理由（fitness 無効化 / テスト汚染）を内訳として計算する。"""
-        stub_corrections([])
+        stub_correction_rate(_closed_gate_summary())
         stub_history([
             {
                 "source": "evolve_remediation", "human_accepted": True,
@@ -434,8 +419,8 @@ class TestBuildResultsBoardDecisions:
 
         assert board["excluded_reasons"] == {"fitness_ineligible": 1, "test_polluted": 1}
 
-    def test_history_load_failure_is_graceful(self, stub_corrections, monkeypatch):
-        stub_corrections([])
+    def test_history_load_failure_is_graceful(self, stub_correction_rate, monkeypatch):
+        stub_correction_rate(_closed_gate_summary())
 
         def _boom(slug):
             raise RuntimeError("boom")
@@ -448,8 +433,8 @@ class TestBuildResultsBoardDecisions:
 
 
 class TestBuildResultsBoardAcceptedList:
-    def test_capped_at_ten_sorted_newest_first(self, stub_history, stub_corrections):
-        stub_corrections([])
+    def test_capped_at_ten_sorted_newest_first(self, stub_history, stub_correction_rate):
+        stub_correction_rate(_closed_gate_summary())
         entries = [
             {"source": None, "approved": True, "skill_name": f"s{i}", "timestamp": _iso(i)}
             for i in range(15)
@@ -461,8 +446,8 @@ class TestBuildResultsBoardAcceptedList:
         assert len(board["accepted_list"]) == 10
         assert board["accepted_list"][0]["skill_name"] == "s0"  # 最新（days_ago=0）が先頭
 
-    def test_falls_back_to_target_when_skill_name_missing(self, stub_history, stub_corrections):
-        stub_corrections([])
+    def test_falls_back_to_target_when_skill_name_missing(self, stub_history, stub_correction_rate):
+        stub_correction_rate(_closed_gate_summary())
         stub_history([
             {"source": None, "approved": True, "target": "skills/foo/SKILL.md", "timestamp": _iso(1)},
         ])
@@ -471,7 +456,7 @@ class TestBuildResultsBoardAcceptedList:
 
         assert board["accepted_list"][0]["skill_name"] == "skills/foo/SKILL.md"
 
-    def test_sort_uses_parsed_datetime_not_raw_string(self, stub_history, stub_corrections):
+    def test_sort_uses_parsed_datetime_not_raw_string(self, stub_history, stub_correction_rate):
         """#398 Should 3: 生文字列の辞書順比較は tz offset 混在で誤順序になる
         （ISO8601 辞書順比較の既知 pitfall と同型）。
 
@@ -481,7 +466,7 @@ class TestBuildResultsBoardAcceptedList:
         s_late の方が新しい。_parse_timestamp でパースした aware datetime を比較すれば
         正しく s_late が先頭に来る。
         """
-        stub_corrections([])
+        stub_correction_rate(_closed_gate_summary())
         stub_history([
             {
                 "source": None, "approved": True, "skill_name": "s_early",
@@ -500,8 +485,8 @@ class TestBuildResultsBoardAcceptedList:
 
 
 class TestBuildResultsBoardWithdrawalCandidates:
-    def test_accepted_and_regressed_is_withdrawal_candidate(self, stub_history, stub_corrections):
-        stub_corrections([])
+    def test_accepted_and_regressed_is_withdrawal_candidate(self, stub_history, stub_correction_rate):
+        stub_correction_rate(_closed_gate_summary())
         stub_history([
             {
                 "source": None, "approved": True, "verdict": "REGRESSED",
@@ -519,10 +504,10 @@ class TestBuildResultsBoardWithdrawalCandidates:
         assert names == ["bad-apply"]
 
     def test_rejected_and_regressed_is_not_a_withdrawal_candidate(
-        self, stub_history, stub_corrections
+        self, stub_history, stub_correction_rate
     ):
         """withdrawal candidate は accepted のみが対象（rejected は最初から不採用）。"""
-        stub_corrections([])
+        stub_correction_rate(_closed_gate_summary())
         stub_history([
             {
                 "source": None, "approved": False, "verdict": "REGRESSED",
@@ -540,11 +525,11 @@ class TestBuildResultsBoardWithdrawalRevertFields(object):
     revert_unavailable_reason/reverted を構造化結果まで運ぶ。"""
 
     def test_pre_extension_entry_is_not_revert_available(
-        self, stub_history, stub_corrections, stub_revert_events
+        self, stub_history, stub_correction_rate, stub_revert_events
     ):
         """revert_schema_version の無い entry（記録拡張前・非対応 writer）は
         pre_extension として revert_available=False になる。"""
-        stub_corrections([])
+        stub_correction_rate(_closed_gate_summary())
         stub_revert_events([])
         stub_history([
             {
@@ -562,9 +547,9 @@ class TestBuildResultsBoardWithdrawalRevertFields(object):
         assert c["reverted"] is False
 
     def test_full_revert_fields_entry_is_revert_available(
-        self, stub_history, stub_corrections, stub_revert_events
+        self, stub_history, stub_correction_rate, stub_revert_events
     ):
-        stub_corrections([])
+        stub_correction_rate(_closed_gate_summary())
         stub_revert_events([])
         stub_history([
             {
@@ -585,8 +570,8 @@ class TestBuildResultsBoardWithdrawalRevertFields(object):
         assert c["revert_unavailable_reason"] is None
         assert c["reverted"] is False
 
-    def test_before_too_large_entry(self, stub_history, stub_corrections, stub_revert_events):
-        stub_corrections([])
+    def test_before_too_large_entry(self, stub_history, stub_correction_rate, stub_revert_events):
+        stub_correction_rate(_closed_gate_summary())
         stub_revert_events([])
         stub_history([
             {
@@ -605,10 +590,10 @@ class TestBuildResultsBoardWithdrawalRevertFields(object):
         assert c["revert_unavailable_reason"] == "before_too_large"
 
     def test_revert_events_load_failure_is_graceful(
-        self, stub_history, stub_corrections, monkeypatch
+        self, stub_history, stub_correction_rate, monkeypatch
     ):
         """load_revert_events が例外を投げても reverted=False にフォールバックする。"""
-        stub_corrections([])
+        stub_correction_rate(_closed_gate_summary())
         stub_history([
             {
                 "id": "p1", "source": None, "approved": True, "verdict": "REGRESSED",
@@ -634,7 +619,7 @@ class TestRenderResultsBoard:
         base = {
             "slug": "evolve-anything",
             "generated_at": _NOW.isoformat(),
-            "rework": {"recent_30d": 3, "previous_30d": 5, "delta": -2},
+            "correction_rate": _closed_gate_summary(),
             "decisions": {"accepted": 1, "rejected": 2, "pending": 1, "excluded": 4},
             "accepted_list": [{"skill_name": "queue", "timestamp": _iso(1)}],
             "withdrawal_candidates": [],
@@ -646,39 +631,100 @@ class TestRenderResultsBoard:
         lines = results_board.render_results_board(self._board())
         assert lines[0] == "## 🏆 戦果ボード"
 
-    def test_headline_shows_decrease(self):
-        lines = results_board.render_results_board(self._board())
-        text = "\n".join(lines)
-        assert "5" in text and "3" in text
-        assert "減少" in text
-
-    def test_headline_shows_increase(self):
-        board = self._board(rework={"recent_30d": 8, "previous_30d": 3, "delta": 5})
-        lines = results_board.render_results_board(board)
-        assert "増加" in "\n".join(lines)
-
-    def test_headline_shows_flat(self):
-        board = self._board(rework={"recent_30d": 3, "previous_30d": 3, "delta": 0})
-        lines = results_board.render_results_board(board)
-        assert "横ばい" in "\n".join(lines)
-
-    def test_headline_low_sample_does_not_assert_increase_or_decrease(self):
-        """ADR-054 §2.6-2: 分母1桁（例: previous_30d=1）での増減断定を避ける。"""
-        board = self._board(rework={"recent_30d": 0, "previous_30d": 1, "delta": -1})
-        lines = results_board.render_results_board(board)
-        text = "\n".join(lines)
-        assert "増加" not in text
-        assert "減少" not in text
-        assert "サンプル不足" in text or "参考値" in text
-
-    def test_headline_at_floor_still_asserts_direction(self):
-        """分母が floor（既定5）以上なら従来通り断定形を出す（回帰防止）。"""
-        floor = results_board._MIN_REWORK_SAMPLE_FLOOR
-        board = self._board(rework={
-            "recent_30d": floor - 2, "previous_30d": floor, "delta": -2,
+    def test_gate_closed_shows_not_measured_with_coverage(self):
+        board = self._board(correction_rate={
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 82, "total": 90},
         })
         lines = results_board.render_results_board(board)
-        assert "減少" in "\n".join(lines)
+        text = "\n".join(lines)
+        assert "未測定" in text
+        assert "82/90" in text
+        assert "2026-W34" in text
+
+    def test_gate_closed_no_finalized_week_shows_generic_message(self):
+        board = self._board(correction_rate=_closed_gate_summary())
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "未測定" in text
+        assert "確定週データなし" in text
+
+    def test_gate_open_lists_weeks_newest_first_with_rate(self):
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": []},
+                {"week_id": "2026-W11", "rate": 0.2, "judged_count": 10, "tp_count": 2,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": True,
+                 "top3_examples": [{"text": "四国めたんじゃなくて", "reason": "呼称の訂正", "idiom": ""}]},
+            ],
+            "latest_coverage": {"week_id": "2026-W11", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        # 新しい週（W11）が先頭に来る
+        assert text.index("2026-W11") < text.index("2026-W10")
+        assert "10.0%" in text
+        assert "20.0%" in text
+
+    def test_worsening_week_shows_top3_examples(self):
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.2, "judged_count": 10, "tp_count": 2,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": True,
+                 "top3_examples": [{"text": "四国めたんじゃなくて", "reason": "呼称の訂正", "idiom": ""}]},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "四国めたんじゃなくて" in text
+        assert "呼称の訂正" in text
+
+    def test_improving_week_does_not_show_top3(self):
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": []},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "気になった直近の指摘" not in text
+
+    def test_pj_breakdown_below_floor_shows_counts_only(self):
+        """1桁分母の PJ 別 rate は非表示（件数のみ・Simpson 防御）。"""
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True,
+                 "pj_breakdown": {
+                     "big-pj": {"total": 10, "judged": 10, "tp": 1, "coverage": 1.0, "rate": 0.1},
+                     "tiny-pj": {"total": 2, "judged": 2, "tp": 1, "coverage": 1.0, "rate": None},
+                 },
+                 "is_worsening": False, "top3_examples": []},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "big-pj 1/10（10.0%）" in text
+        assert "tiny-pj 1/2（件数のみ・分母不足）" in text
 
     def test_excluded_count_always_shown_even_when_zero(self):
         board = self._board(decisions={"accepted": 1, "rejected": 0, "pending": 0, "excluded": 0})
