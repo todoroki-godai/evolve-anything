@@ -161,6 +161,64 @@ def test_filter_actionable_keeps_genuinely_actionable() -> None:
     assert {r.get("signal_key") for r in out} == {sig.signal_key}
 
 
+# ─────────────────────────────────────────────────────────────────
+# machinery（委譲メッセージ等の harness 注入）read 時除外（#443 PR2-a）
+# ─────────────────────────────────────────────────────────────────
+def test_filter_actionable_excludes_machinery() -> None:
+    fresh = _fresh_detected_at()
+    kept = _sig("残る", 1, fresh)
+    machinery = _sig(
+        "<teammate-message>委譲メッセージ本文</teammate-message>", 2, fresh,
+    )
+    out = cs_promote.filter_actionable([kept.to_record(), machinery.to_record()], SLUG)
+    keys = {r.get("signal_key") for r in out}
+    assert keys == {kept.signal_key}
+
+
+def test_filter_actionable_keeps_non_machinery_text() -> None:
+    # 誤検出しないこと: machinery マーカーを含まない通常の発話は落ちない。
+    fresh = _fresh_detected_at()
+    sig = _sig("委譲じゃなくて自分でやって欲しい", 1, fresh)
+    out = cs_promote.filter_actionable([sig.to_record()], SLUG)
+    assert {r.get("signal_key") for r in out} == {sig.signal_key}
+
+
+def test_is_machinery_signal_false_when_text_absent() -> None:
+    # text を持たない決定論チャネル（permission_deny 等）は機構ターンでない（False）。
+    rec = {"channel": "permission_deny", "provenance": {"tool_name": "Bash"}}
+    assert cs_promote.is_machinery_signal(rec) is False
+
+
+def test_machinery_exclusion_stats_counts_by_channel() -> None:
+    fresh = _fresh_detected_at()
+    kept = _sig("残る", 1, fresh)
+    machinery = _sig(
+        "<teammate-message>委譲メッセージ本文</teammate-message>", 2, fresh,
+    )
+    stats = cs_promote.machinery_exclusion_stats(
+        [kept.to_record(), machinery.to_record()], SLUG,
+    )
+    assert stats == {"total": 1, "by_channel": {"llm_judge": 1}}
+
+
+def test_machinery_exclusion_stats_zero_when_none_machinery() -> None:
+    fresh = _fresh_detected_at()
+    kept = _sig("残る", 1, fresh)
+    stats = cs_promote.machinery_exclusion_stats([kept.to_record()], SLUG)
+    assert stats == {"total": 0, "by_channel": {}}
+
+
+def test_machinery_exclusion_stats_excludes_already_promoted() -> None:
+    # promoted 済みの machinery は「actionable だったはずの母集団」に含まれないので
+    # 二重計上しない（machinery_exclusion_stats は would-be-actionable のみを数える）。
+    fresh = _fresh_detected_at()
+    machinery = _sig(
+        "<teammate-message>委譲メッセージ本文</teammate-message>", 1, fresh, promoted=True,
+    )
+    stats = cs_promote.machinery_exclusion_stats([machinery.to_record()], SLUG)
+    assert stats == {"total": 0, "by_channel": {}}
+
+
 def test_filter_actionable_pj_slug_none_skips_bootstrap_but_keeps_other_axes(
     tmp_path: Path,
 ) -> None:
