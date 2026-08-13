@@ -15,6 +15,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
@@ -22,6 +24,28 @@ if str(_lib_dir) not in sys.path:
 from correction_semantic import judge_runner  # noqa: E402
 from correction_semantic.store import read_judged_keys  # noqa: E402
 from weak_signals.store import read_signals  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_tracked_projects(monkeypatch):
+    """#442 で導入した tracked filter の production 既定（fleet_config.load_config）を
+    このテストモジュール全体で ``pj-a`` / ``pj-b`` に固定する。
+
+    既存テストは大半が「tracked filter が存在しない」前提で書かれている（#442 以前）。
+    フィルタそのものを検証するテストだけが個別に ``monkeypatch.setattr(fleet_config,
+    "load_config", ...)`` で上書きする（後勝ちで有効）。
+    """
+    import fleet_config
+
+    monkeypatch.setattr(
+        fleet_config,
+        "load_config",
+        lambda: {
+            "tracked_projects": ["/x/pj-a", "/x/pj-b"],
+            "ignored_projects": [],
+            "last_discovery": None,
+        },
+    )
 
 
 def _utt(source_path: str, line_no: int, text: str, pj_slug: str, *, ts: str, prev_action: str = "") -> dict:
@@ -903,3 +927,235 @@ def test_main_run_survives_cli_nonzero_returncode_end_to_end(monkeypatch, tmp_pa
     # ここでは exit code とログのみを検証する（store I/O の hermetic 検証は他テストが担う）。
     assert rc == 0
     assert "呼び出し失敗" in capsys.readouterr().err
+
+
+# ─────────────────────────────────────────────────────────────────
+# #442: judge 母集団の是正（tracked 絞り込み + alias fold + cutoff 宣言 + 除外可視化）
+# ─────────────────────────────────────────────────────────────────
+def _set_tracked(monkeypatch, paths: list) -> None:
+    import fleet_config
+
+    monkeypatch.setattr(
+        fleet_config,
+        "load_config",
+        lambda: {"tracked_projects": paths, "ignored_projects": [], "last_discovery": None},
+    )
+
+
+def test_untracked_pj_excluded_from_selection_and_unjudged_total(tmp_path, monkeypatch):
+    """tracked_projects に無い PJ の発話は選定対象にも unjudged_total にも入らない
+    （契約1・2: tracked filter → judged key 除外 → unjudged_total 算出、の順）。
+    """
+    _set_tracked(monkeypatch, ["/x/pj-a"])
+    tracked = _utt("/a.jsonl", 1, "tracked", "pj-a", ts=_ts(1))
+    untracked = _utt("/b.jsonl", 1, "untracked", "matsukaze-takashi", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[tracked, untracked],
+        judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["unjudged_total"] == 1
+    assert res["selected"] == 1
+    assert res["excluded_untracked_total"] == 1
+    assert res["excluded_untracked_by_pj"] == {"matsukaze-takashi": 1}
+
+
+def test_untracked_by_pj_breaks_down_multiple_projects(tmp_path, monkeypatch):
+    _set_tracked(monkeypatch, ["/x/pj-a"])
+    u1 = _utt("/b.jsonl", 1, "u1", "garbage-slug-1", ts=_ts(1))
+    u2 = _utt("/c.jsonl", 1, "u2", "garbage-slug-1", ts=_ts(1))
+    u3 = _utt("/d.jsonl", 1, "u3", "garbage-slug-2", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[u1, u2, u3],
+        judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["excluded_untracked_total"] == 3
+    assert res["excluded_untracked_by_pj"] == {"garbage-slug-1": 2, "garbage-slug-2": 1}
+
+
+def test_alias_fold_rl_anything_counts_as_tracked_evolve_anything(tmp_path, monkeypatch):
+    """rl-anything（旧 slug）は tracked_projects の evolve-anything に畳んで対象に含める
+    （契約1: 既存 pj_slug.canonical_pj_slug を使う。新実装しない）。
+    """
+    _set_tracked(monkeypatch, ["/x/evolve-anything"])
+    legacy = _utt("/a.jsonl", 1, "legacy slug", "rl-anything", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[legacy], judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["unjudged_total"] == 1
+    assert res["excluded_untracked_total"] == 0
+
+
+def test_excluded_untracked_utterance_not_written_to_judged_store(tmp_path, monkeypatch):
+    """除外 PJ の発話は correction_judged.jsonl に一切書かれない（契約3）。将来 tracked に
+    追加されたとき通常の未判定として復帰できる。
+    """
+    _set_tracked(monkeypatch, ["/x/pj-a"])
+    untracked = _utt("/b.jsonl", 1, "untracked", "matsukaze-takashi", ts=_ts(1))
+    judged = tmp_path / "correction_judged.jsonl"
+
+    def _boom(*a, **kw):
+        raise AssertionError("除外された PJ の発話が Haiku へ送られた")
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _boom)
+    res = judge_runner.run_daily_judge(run=True, utterances=[untracked], judged_path=judged)
+    assert res["selected"] == 0
+    assert res["excluded_untracked_total"] == 1
+    assert not judged.exists()
+    assert read_judged_keys(judged) == set()
+
+
+def test_tracked_projects_di_param_overrides_fleet_config(tmp_path, monkeypatch):
+    """tracked_projects を明示注入すると fleet_config.load_config は呼ばれない（DI 優先・
+    utterances 引数と同型の契約）。
+    """
+    import fleet_config
+
+    def _boom():
+        raise AssertionError("fleet_config.load_config が呼ばれた（DI が効いていない）")
+
+    monkeypatch.setattr(fleet_config, "load_config", _boom)
+    utt = _utt("/a.jsonl", 1, "text", "only-tracked", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[utt], judged_path=tmp_path / "correction_judged.jsonl",
+        tracked_projects=["/x/only-tracked"],
+    )
+    assert res["unjudged_total"] == 1
+    assert res["excluded_untracked_total"] == 0
+
+
+# ── 契約4: 除外の可視化（dry-run / run / lock-skip / source-failure の全分岐で返す） ──
+def test_excluded_totals_present_in_dry_run_branch(tmp_path, monkeypatch):
+    _set_tracked(monkeypatch, ["/x/pj-a"])
+    untracked = _utt("/b.jsonl", 1, "untracked", "matsukaze-takashi", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[untracked], judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["dry_run"] is True
+    assert res["excluded_untracked_total"] == 1
+    assert res["excluded_untracked_by_pj"] == {"matsukaze-takashi": 1}
+    assert res["excluded_before_cutoff_total"] == 0
+
+
+def test_excluded_totals_present_in_run_no_selected_branch(tmp_path, monkeypatch):
+    _set_tracked(monkeypatch, ["/x/pj-a"])
+    untracked = _utt("/b.jsonl", 1, "untracked", "matsukaze-takashi", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=[untracked], judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["dry_run"] is False
+    assert res["selected"] == 0
+    assert res["excluded_untracked_total"] == 1
+    assert res["excluded_untracked_by_pj"] == {"matsukaze-takashi": 1}
+
+
+def test_excluded_totals_present_in_lock_skip_branch(tmp_path, monkeypatch):
+    from rl_common.file_lock import file_lock
+
+    _set_tracked(monkeypatch, ["/x/pj-a"])
+    judged = tmp_path / "correction_judged.jsonl"
+    lock_path = judged.with_name(judged.name + ".lock")
+    untracked = _utt("/b.jsonl", 1, "untracked", "matsukaze-takashi", ts=_ts(1))
+
+    def _boom(*a, **kw):
+        raise AssertionError("ロック未取得なのに call_haiku が呼ばれた")
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _boom)
+    with file_lock(lock_path):
+        res = judge_runner.run_daily_judge(run=True, utterances=[untracked], judged_path=judged)
+
+    assert res["skipped_locked"] is True
+    assert res["excluded_untracked_total"] == 1
+    assert res["excluded_untracked_by_pj"] == {"matsukaze-takashi": 1}
+    assert res["excluded_before_cutoff_total"] == 0
+
+
+def test_excluded_totals_present_in_source_failure_branch(monkeypatch, tmp_path):
+    def _raise(*a, **kw):
+        raise RuntimeError("duckdb schema mismatch")
+
+    import utterance_archive.query as _uq
+    monkeypatch.setattr(_uq, "query_utterances_all_projects", _raise)
+
+    res = judge_runner.run_daily_judge(run=False, judged_path=tmp_path / "correction_judged.jsonl")
+    assert res["source_failed"] is True
+    assert res["excluded_untracked_total"] == 0
+    assert res["excluded_untracked_by_pj"] == {}
+    assert res["excluded_before_cutoff_total"] == 0
+
+
+# ── 契約5/6: cutoff 90日（既定・userConfig judge_utterance_max_age_days で override 可） ──
+def test_cutoff_excludes_utterances_older_than_default_90_days(tmp_path):
+    old = _utt("/a.jsonl", 1, "old", "pj-a", ts=_ts(days_ago=91))
+    fresh = _utt("/a.jsonl", 2, "fresh", "pj-a", ts=_ts(days_ago=1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[old, fresh], judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["unjudged_total"] == 1
+    assert res["excluded_before_cutoff_total"] == 1
+
+
+def test_cutoff_boundary_exactly_max_age_days_is_included(tmp_path):
+    """境界 == は対象に含める（TTL の < と揃える）。"""
+    now = datetime.now(timezone.utc)
+    boundary = _utt(
+        "/a.jsonl", 1, "boundary", "pj-a", ts=(now - timedelta(days=90)).isoformat(),
+    )
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[boundary], now=now,
+        judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["unjudged_total"] == 1
+    assert res["excluded_before_cutoff_total"] == 0
+
+
+def test_cutoff_one_second_past_boundary_is_excluded(tmp_path):
+    now = datetime.now(timezone.utc)
+    just_old = _utt(
+        "/a.jsonl", 1, "just-old", "pj-a",
+        ts=(now - timedelta(days=90, seconds=1)).isoformat(),
+    )
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[just_old], now=now,
+        judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["unjudged_total"] == 0
+    assert res["excluded_before_cutoff_total"] == 1
+
+
+def test_cutoff_configurable_via_max_age_days_param(tmp_path):
+    utt = _utt("/a.jsonl", 1, "10 days old", "pj-a", ts=_ts(days_ago=10))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[utt], judged_path=tmp_path / "correction_judged.jsonl",
+        judge_utterance_max_age_days=5,
+    )
+    assert res["unjudged_total"] == 0
+    assert res["excluded_before_cutoff_total"] == 1
+
+
+def test_cutoff_missing_timestamp_not_excluded(tmp_path):
+    """timestamp 欠損/パース不能は安全側で cutoff 対象外にしない（age 不明のレコードを
+    誤って落とさない・weak_signals.ttl.is_effectively_expired と同型の安全側判断）。
+    """
+    bad = _utt("/a.jsonl", 1, "no ts", "pj-a", ts="not-a-date")
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[bad], judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["unjudged_total"] == 1
+    assert res["excluded_before_cutoff_total"] == 0
+
+
+def test_cutoff_excluded_utterance_not_written_to_judged_store(tmp_path, monkeypatch):
+    """cutoff 除外も judged store には書かれない（在庫を古い順に無駄処理しないのと同様、
+    未判定のまま次回以降の cutoff 変更で復帰できる）。
+    """
+    judged = tmp_path / "correction_judged.jsonl"
+    old = _utt("/a.jsonl", 1, "old", "pj-a", ts=_ts(days_ago=91))
+
+    def _boom(*a, **kw):
+        raise AssertionError("cutoff 除外された発話が Haiku へ送られた")
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _boom)
+    res = judge_runner.run_daily_judge(run=True, utterances=[old], judged_path=judged)
+    assert res["selected"] == 0
+    assert res["excluded_before_cutoff_total"] == 1
+    assert not judged.exists()
