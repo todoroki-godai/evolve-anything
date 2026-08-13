@@ -338,6 +338,24 @@ class TestBuildResultsBoardRework:
         assert board["rework"]["recent_30d"] == 0
         assert board["rework"]["previous_30d"] == 0
 
+    def test_low_sample_delta_does_not_claim_direction(self, stub_history, stub_corrections):
+        """ADR-054 §2.6-2: previous_30d/recent_30d の最大値が最小分母（既定 floor=5）未満なら
+        「増加」「減少」を断定しない（分母1桁の比較を断定形で出さない）。
+        """
+        stub_history([])
+        corrections = [{"source": "reflect_confirmed", "timestamp": _iso(45)}]  # previous=1
+        stub_corrections(corrections)
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+
+        assert board["rework"]["recent_30d"] == 0
+        assert board["rework"]["previous_30d"] == 1
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "増加" not in text
+        assert "減少" not in text
+        assert "0" in text and "1" in text
+
     def test_query_failure_is_graceful(self, stub_history, monkeypatch):
         """query_corrections が例外を投げても KeyError にならず 0 扱い。"""
         stub_history([])
@@ -396,6 +414,25 @@ class TestBuildResultsBoardDecisions:
         board = results_board.build_results_board("evolve-anything", now=_NOW)
 
         assert board["decisions"]["excluded"] == 0
+
+    def test_excluded_reasons_breakdown_computed(self, stub_history, stub_corrections):
+        """ADR-054 §2.6-7: excluded の理由（fitness 無効化 / テスト汚染）を内訳として計算する。"""
+        stub_corrections([])
+        stub_history([
+            {
+                "source": "evolve_remediation", "human_accepted": True,
+                "fitness_eligible": False, "skill_name": "d", "timestamp": _iso(1),
+            },
+            {
+                "source": None, "approved": True,
+                "target": "/private/var/folders/gg/x/T/pytest-of-user/pytest-1/x.md",
+                "timestamp": _iso(2),
+            },
+        ])
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+
+        assert board["excluded_reasons"] == {"fitness_ineligible": 1, "test_polluted": 1}
 
     def test_history_load_failure_is_graceful(self, stub_corrections, monkeypatch):
         stub_corrections([])
@@ -625,11 +662,49 @@ class TestRenderResultsBoard:
         lines = results_board.render_results_board(board)
         assert "横ばい" in "\n".join(lines)
 
+    def test_headline_low_sample_does_not_assert_increase_or_decrease(self):
+        """ADR-054 §2.6-2: 分母1桁（例: previous_30d=1）での増減断定を避ける。"""
+        board = self._board(rework={"recent_30d": 0, "previous_30d": 1, "delta": -1})
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "増加" not in text
+        assert "減少" not in text
+        assert "サンプル不足" in text or "参考値" in text
+
+    def test_headline_at_floor_still_asserts_direction(self):
+        """分母が floor（既定5）以上なら従来通り断定形を出す（回帰防止）。"""
+        floor = results_board._MIN_REWORK_SAMPLE_FLOOR
+        board = self._board(rework={
+            "recent_30d": floor - 2, "previous_30d": floor, "delta": -2,
+        })
+        lines = results_board.render_results_board(board)
+        assert "減少" in "\n".join(lines)
+
     def test_excluded_count_always_shown_even_when_zero(self):
         board = self._board(decisions={"accepted": 1, "rejected": 0, "pending": 0, "excluded": 0})
         lines = results_board.render_results_board(board)
         text = "\n".join(lines)
         assert "excluded" in text and "0" in text
+
+    def test_excluded_reason_breakdown_shown_when_present(self):
+        """ADR-054 §2.6-7: excluded の理由内訳（テスト汚染/legacy無効化）を画面に出す。"""
+        board = self._board(
+            decisions={"accepted": 0, "rejected": 0, "pending": 0, "excluded": 4},
+            excluded_reasons={"fitness_ineligible": 3, "test_polluted": 1},
+        )
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "legacy無効化 3 件" in text
+        assert "テスト汚染 1 件" in text
+
+    def test_no_excluded_reason_line_when_excluded_zero(self):
+        board = self._board(
+            decisions={"accepted": 1, "rejected": 0, "pending": 0, "excluded": 0},
+            excluded_reasons={},
+        )
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "内訳" not in text
 
     def test_no_withdrawal_section_when_empty(self):
         lines = results_board.render_results_board(self._board())

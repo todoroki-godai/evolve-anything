@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- **feat(outcome/capture/results-board): ADR-054 Phase C1 — 数字の正直さ（#376 #379 #400）** —
+  §2.6 の嘘つき数字7件を是正。① `outcome_metrics.rework_rate` に `not_measured`（レコードは
+  あるが tool_sequence 未記録で測定不能）を新設し `no_data`（データ自体が無い）と区別
+  （`sections_outcome.py` の `applicable` も not_measured/insufficient_sample で沈黙しない
+  よう修正）。③ 同軸を session_id 単位に畳み込み、Stop hook 複数発火行の重複計上
+  （実測 約5倍）を解消。④ Correction Capture の「枯渇兆候なし ✓」に最小分母 floor（5）を
+  追加し、分母1桁での断定を避ける。⑤ A0 で追加済みだった `hook_pattern_version_counts` の
+  表示配線を接続。⑥ `correction_recurrence_rate` の evidence に project 未帰属レコード数
+  （`unattributed`）を追加。⑦ 戦果ボードの excluded 件数にテスト汚染/legacy無効化の内訳を
+  追加。② 戦果ボードの rework headline は最大値が最小分母（5）未満の増減を断定表示しない。
 - **docs(adr): ADR-054 実施計画を tacchi/codex レビューと実測で改訂（#379 #400 #402）** —
   2026-08-13 の tacchi・codex 各1巡と頭の実測を反映。§3.3 に C(a)/C(b) 分離と G1 計測ゲート
   （correction_semantic/llm_judge レーンの recall/precision を固定実コーパスで実測。不通過なら

@@ -106,6 +106,38 @@ class TestCorrectionRecurrence:
         assert value is None
         assert evidence["reason"] == "no_data"
 
+    def test_unattributed_records_are_counted(self, tmp_path, monkeypatch):
+        """ADR-054 §2.6-6: project_path が空のレコードを ``unattributed`` として evidence に
+        surface する（全PJ合計と PJ別合計が一致しない事実をどこにも出さない、を解消）。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"correction_type": f"t{i}", "session_id": f"s{i}", "timestamp": ts}
+            for i in range(4)
+        ] + [
+            # project 識別フィールドが 1 つも無い（未帰属）レコード。
+            {"correction_type": "t4", "session_id": "s4", "timestamp": ts},
+        ]
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        value, evidence = outcome_metrics.correction_recurrence_rate(days=30)
+        assert value is not None
+        assert evidence["unattributed"] == 5  # このテストのレコードは全件 project 未帰属
+
+    def test_no_unattributed_when_all_records_scoped(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"correction_type": f"t{i}", "session_id": f"s{i}", "timestamp": ts,
+             "project_path": "/work/mine"}
+            for i in range(5)
+        ]
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        value, evidence = outcome_metrics.correction_recurrence_rate(days=30)
+        assert evidence["unattributed"] == 0
+
 
 # ---------- 一発成功率 ----------
 
@@ -230,6 +262,69 @@ class TestReworkRate:
         value, evidence = outcome_metrics.rework_rate(days=30, min_consecutive=3)
         assert value is not None
         assert evidence["total_sessions"] == floor
+
+    def test_records_without_tool_sequence_are_not_measured(self, tmp_path, monkeypatch):
+        """ADR-054 §2.6-1: sessions は存在するが tool_sequence を持つ session が 0 件のとき
+        reason=not_measured（no_data と区別する）。実運用の常態（writer が集計値しか
+        書かず tool_sequence を書かない）を再現する。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = [
+            {"session_id": f"s{i}", "error_count": 0, "timestamp": ts, "first_timestamp": ts}
+            for i in range(3)
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.rework_rate(days=30)
+        assert value is None
+        assert evidence["reason"] == "not_measured"
+        assert evidence["measured_sessions"] == 0
+        assert evidence["total_sessions"] == 3
+
+    def test_some_measured_some_not_still_computes(self, tmp_path, monkeypatch):
+        """一部の session だけ tool_sequence を持つ場合は測定できる分だけで算出する。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        floor = outcome_metrics.MIN_EDIT_SESSIONS_FLOOR
+        records = [
+            {"session_id": f"s{i}", "error_count": 0, "tool_sequence": ["Edit", "Bash"],
+             "timestamp": ts, "first_timestamp": ts}
+            for i in range(floor)
+        ] + [
+            # tool_sequence を持たない（未測定）レコード
+            {"session_id": "x1", "error_count": 0, "timestamp": ts, "first_timestamp": ts},
+        ]
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.rework_rate(days=30)
+        assert value is not None
+        assert evidence["total_sessions"] == floor
+
+    def test_duplicate_session_rows_deduped_for_rework(self, tmp_path, monkeypatch):
+        """ADR-054 §2.6-3: 同一 session に対する複数行（Stop hook 複数発火）は
+        session_id 単位に畳んでから数える（行数分母の約5倍過大計上を防ぐ）。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        floor = outcome_metrics.MIN_EDIT_SESSIONS_FLOOR
+        records = []
+        # s0 は Stop hook が3回発火し、同一 session に3行残る（行数分母なら3件と誤計上）。
+        for i in range(3):
+            records.append({
+                "session_id": "s0", "tool_sequence": ["Edit", "Edit", "Edit"],
+                "timestamp": _iso(now - timedelta(minutes=i)), "first_timestamp": _iso(now),
+            })
+        for i in range(1, floor):
+            records.append({
+                "session_id": f"s{i}", "tool_sequence": ["Edit", "Bash"],
+                "timestamp": _iso(now), "first_timestamp": _iso(now),
+            })
+        _write_jsonl(tmp_path / "sessions.jsonl", records)
+        value, evidence = outcome_metrics.rework_rate(days=30, min_consecutive=3)
+        # unique session は floor 件（s0〜s{floor-1}）。s0 の重複行は1セッションとして畳む。
+        assert evidence["total_sessions"] == floor
+        assert evidence["rework_sessions"] == 1
 
     def test_above_floor_computes_rate_correctly(self, tmp_path, monkeypatch):
         """floor を超えたら従来通り率を出す（回帰テスト）。"""
@@ -500,6 +595,27 @@ class TestSectionBuilder:
         assert "distinct 2 type" in joined
         # 誤シグナルの率（0.50）が表示されていないこと
         assert "0.50" not in joined
+
+    def test_not_measured_is_shown_not_silenced(self, tmp_path, monkeypatch):
+        """ADR-054 §2.6-1/§8: 3 軸とも value=None でも reason=not_measured が含まれれば
+        沈黙しない（sessions レコードはあるが tool_sequence 未記録の実運用状態を再現）。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        # error_count も tool_sequence も持たないレコード（instructions_loaded 型相当）
+        # → first_try_success も no_data になるが、rework は not_measured を出させたいので
+        # session_id はあるが error_count/tool_sequence 無しのレコードを用意する。
+        _write_jsonl(tmp_path / "sessions.jsonl", [
+            {"session_id": "s1", "timestamp": ts, "first_timestamp": ts},
+            {"session_id": "s2", "timestamp": ts, "first_timestamp": ts},
+        ])
+        from audit.sections_outcome import build_outcome_metrics_section
+
+        lines = build_outcome_metrics_section(tmp_path)
+        assert lines is not None
+        joined = "\n".join(lines)
+        assert "未測定" in joined
 
     def test_rework_insufficient_sample_shows_sample_shortage(self, tmp_path, monkeypatch):
         """#563: edit_sessions < MIN_EDIT_SESSIONS_FLOOR では rework 率を出さず「サンプル不足」を表示する。
