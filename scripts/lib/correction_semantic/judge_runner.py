@@ -116,6 +116,13 @@ def _resolve_tracked_slugs(tracked_projects: Optional[List[str]]) -> Set[str]:
     （``utterances`` 引数と同型の DI 契約）。パス→slug 変換は ``fleet/cli.py`` の
     tracked PJ 列挙と同じ ``rl_common.project_name_from_dir``（worktree 安全な basename
     解決）を使う（変換規約を二重実装しない）。
+
+    codex cold review（PR #449 [Must]）: 解決した slug には **必ず** ``pj_slug.canonical_pj_slug``
+    を通す。tracked 側だけ fold を素通しにすると、tracked config が旧 slug（例:
+    ``rl-anything``）や sibling-dir worktree パス（``project_name_from_dir`` は subprocess を
+    使わない ``pj_slug_fast`` 経由のため本体 repo 名へ正規化できない・既知 pitfall）を含む場合に
+    utterance 側（常に fold 済み）とだけ非対称になり、tracked PJ の学習素材を「tracked 外」と
+    誤認して黙って供給停止させる（この PJ が最も嫌う挙動）。
     """
     if tracked_projects is None:
         import fleet_config as _fleet_config
@@ -124,7 +131,14 @@ def _resolve_tracked_slugs(tracked_projects: Optional[List[str]]) -> Set[str]:
 
     from rl_common import project_name_from_dir as _project_name_from_dir
 
-    return {_project_name_from_dir(str(p)) for p in (tracked_projects or []) if p}
+    out: Set[str] = set()
+    for p in tracked_projects or []:
+        if not p:
+            continue
+        slug = _canonical_pj_slug(_project_name_from_dir(str(p)))
+        if slug:
+            out.add(slug)
+    return out
 
 
 def _apply_population_filters(

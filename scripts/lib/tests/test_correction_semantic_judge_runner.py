@@ -985,6 +985,40 @@ def test_alias_fold_rl_anything_counts_as_tracked_evolve_anything(tmp_path, monk
     assert res["excluded_untracked_total"] == 0
 
 
+def test_alias_fold_tracked_side_legacy_slug_matches_current_utterance(tmp_path, monkeypatch):
+    """tracked config 側が旧 slug（rl-anything）でも、発話側の現行 slug（evolve-anything）と
+    一致する（PR #449 codex cold review [Must]: 発話側だけでなく tracked 側にも
+    ``canonical_pj_slug`` を適用して対称にする）。上のテストは「tracked=現 slug / 発話=旧
+    slug」の片方向だけだったので、逆方向（tracked=旧 slug / 発話=現 slug）を固定する。
+    """
+    _set_tracked(monkeypatch, ["/x/rl-anything"])
+    current = _utt("/a.jsonl", 1, "current slug", "evolve-anything", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[current], judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["unjudged_total"] == 1
+    assert res["excluded_untracked_total"] == 0
+
+
+def test_alias_fold_sibling_dir_worktree_path_known_limitation(tmp_path, monkeypatch):
+    """既知の限界（pitfall_pj_slug_fast_sibling_worktree・PR #449 codex cold review
+    [Should]）: tracked_projects に sibling-dir worktree の絶対パス（``/.claude/worktrees/``
+    マーカーを含まない）が登録されていると、``project_name_from_dir``（subprocess を使わない
+    ``pj_slug_fast``）は worktree 名（例: ``wt-054-pr1``）をそのまま basename として返し、
+    本体 repo slug（``evolve-anything``）へ正規化できない。``canonical_pj_slug`` は
+    ``PJ_SLUG_ALIASES`` に登録された名前しか畳まないため、この不一致は本 PR の fold では
+    解消しない。黙って起きるのを防ぐため、現状の挙動（tracked 外への誤判定）をテストで
+    固定する（恒久解は tracked path 解決を ``resolve_pj_slug`` へ寄せる別スコープ）。
+    """
+    _set_tracked(monkeypatch, ["/Users/x/evolve-anything-wt/wt-054-pr1"])
+    main_repo = _utt("/a.jsonl", 1, "main repo slug", "evolve-anything", ts=_ts(1))
+    res = judge_runner.run_daily_judge(
+        run=False, utterances=[main_repo], judged_path=tmp_path / "correction_judged.jsonl",
+    )
+    assert res["excluded_untracked_total"] == 1
+    assert res["excluded_untracked_by_pj"] == {"evolve-anything": 1}
+
+
 def test_excluded_untracked_utterance_not_written_to_judged_store(tmp_path, monkeypatch):
     """除外 PJ の発話は correction_judged.jsonl に一切書かれない（契約3）。将来 tracked に
     追加されたとき通常の未判定として復帰できる。
@@ -1002,6 +1036,34 @@ def test_excluded_untracked_utterance_not_written_to_judged_store(tmp_path, monk
     assert res["excluded_untracked_total"] == 1
     assert not judged.exists()
     assert read_judged_keys(judged) == set()
+
+
+def test_mixed_tracked_and_untracked_batch_only_tracked_key_written_to_judged_store(
+    tmp_path, monkeypatch,
+):
+    """契約3の混在ケース（PR #449 codex cold review [Should]）: tracked/untracked が同一
+    バッチに混在しても、judged store には tracked の物理キーだけが書かれる（untracked の
+    キーは一切残らない）。全件除外のケースしか無かった従来テストの穴を塞ぎ、後続配線の
+    回帰を検出できるようにする。
+    """
+    from correction_semantic.store import utterance_key
+
+    _set_tracked(monkeypatch, ["/x/pj-a"])
+    tracked = _utt("/a.jsonl", 1, "tracked", "pj-a", ts=_ts(1))
+    untracked = _utt("/b.jsonl", 1, "untracked", "matsukaze-takashi", ts=_ts(1))
+    judged = tmp_path / "correction_judged.jsonl"
+
+    monkeypatch.setattr(
+        judge_runner, "call_haiku",
+        lambda prompt, model="haiku": _ok_verdict_response([(0, False)]),
+    )
+    res = judge_runner.run_daily_judge(run=True, utterances=[tracked, untracked], judged_path=judged)
+    assert res["selected"] == 1
+    assert res["excluded_untracked_total"] == 1
+
+    judged_keys = read_judged_keys(judged)
+    assert judged_keys == {utterance_key(tracked)}
+    assert utterance_key(untracked) not in judged_keys
 
 
 def test_tracked_projects_di_param_overrides_fleet_config(tmp_path, monkeypatch):
