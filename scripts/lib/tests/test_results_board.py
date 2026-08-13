@@ -726,6 +726,80 @@ class TestRenderResultsBoard:
         assert "big-pj 1/10（10.0%）" in text
         assert "tiny-pj 1/2（件数のみ・分母不足）" in text
 
+    # ── #400 A5: カテゴリ内訳（設計 §2.6「表示の形」）────────────────────
+
+    def test_category_breakdown_shows_composition_and_top_example(self):
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 3,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": [],
+                 "category_breakdown": {
+                     "measured": True,
+                     "counts": {"presentation": 2, "factual": 1},
+                     "unclassified_count": 0,
+                     "conflict_keys": 0,
+                     "top_category": "presentation",
+                     "top_category_example": {
+                         "text": "P6のデザインが違うんだけど", "reason": "見た目の指摘",
+                         "idiom": "", "pj_slug": "evolve-anything",
+                     },
+                 }},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "presentation" in text and "2件" in text
+        assert "factual" in text and "1件" in text
+        assert "P6のデザインが違うんだけど" in text
+        assert "見た目の指摘" in text
+        # task-mix 交絡の注記が出る
+        assert "その週に何をやったか" in text
+
+    def test_category_breakdown_hidden_when_not_measured(self):
+        """conflict 等で当該週のカテゴリ内訳が未測定なら、counts が空なので表示しない
+        （§3: 内訳は「あれば出す」optional・category を持たない週で壊れない）。
+        """
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": [],
+                 "category_breakdown": {
+                     "measured": False, "counts": {}, "unclassified_count": 0,
+                     "conflict_keys": 1, "top_category": None, "top_category_example": None,
+                 }},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "カテゴリ構成" not in text
+
+    def test_category_breakdown_absent_key_does_not_break_rendering(self):
+        """category_breakdown キー自体が無い週（旧 summary・A5 以前）でも壊れない。"""
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": []},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        })
+        lines = results_board.render_results_board(board)  # 例外を投げない
+        text = "\n".join(lines)
+        assert "カテゴリ構成" not in text
+
     def test_excluded_count_always_shown_even_when_zero(self):
         board = self._board(decisions={"accepted": 1, "rejected": 0, "pending": 0, "excluded": 0})
         lines = results_board.render_results_board(board)

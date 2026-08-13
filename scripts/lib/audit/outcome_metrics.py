@@ -217,6 +217,15 @@ def correction_recurrence_rate(
     （属性欠落を他PJ混入と誤判定しない）、「全PJ合計」と「Σ(PJ別合計)」は原理的に
     一致しない。evidence の ``unattributed`` に件数を surface し、この不一致がどこにも
     出ない状態（#2.6-6 の「嘘」）を解消する。
+
+    ADR-054 §2.0（A5 の裁定・tacchi [Must]1）: `correction_type` の語彙は実質1種
+    （semantic_idiom）で、この軸自体が意味のある再発測定を作れない構造的な欠陥を持つ
+    （設計正典 docs/decisions/drafts/054-a5-correction-category.md §2.0）。floor（distinct
+    >= ``MIN_DISTINCT_TYPES_FLOOR``）を超えても、窓内の全 type がほぼ確実に2セッション
+    以上出現する（語彙が粗いほどそうなる）ため、素朴に rate を出すと構造的に 1.0 付近へ
+    張り付く。**全 type が recurring（`recurring == distinct_types`）かつ rate>=0.9 の
+    ときは raw 値を返さず ``reason="saturated"`` として値なしで surface する**
+    （`insufficient_sample` と同じ「値を出さない + 理由を出す」パターン）。
     """
     base = data_dir if data_dir is not None else DATA_DIR
     since = _iso_days_ago(days)
@@ -257,6 +266,24 @@ def correction_recurrence_rate(
         }
     recurring = {t: len(s) for t, s in sessions_by_type.items() if len(s) >= 2}
     rate = round(len(recurring) / distinct_types, 4)
+
+    # ADR-054 §2.0（tacchi [Must]1）: 全 type が recurring かつ rate>=0.9 なら raw 値を
+    # 返さず reason="saturated" として値なしで surface する。floor（distinct>=5）到達だけを
+    # 見る上のガードは「粗い語彙のせいで再発率1.0に張り付く」構造的な劣化を防げない
+    # （語彙が粗いほど窓内の全 type がほぼ確実に2セッション以上出現するため）。ここで
+    # 構造的に止め、「floor 到達後に人間が実測して判断する」という記憶頼みの TODO に
+    # しない（#376 の同型再発を防ぐ）。
+    if len(recurring) == distinct_types and rate >= 0.9:
+        return None, {
+            "reason": "saturated",
+            "store": "corrections.jsonl",
+            "records": len(records),
+            "distinct_types": distinct_types,
+            "recurring_types": len(recurring),
+            "unattributed": unattributed,
+            "window_days": days,
+        }
+
     examples = dict(sorted(recurring.items(), key=lambda kv: kv[1], reverse=True)[:_MAX_EXAMPLES])
     return rate, {
         "records": len(records),

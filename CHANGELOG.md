@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- **feat(correction-semantic/results-board): ADR-054 A5 — 指摘カテゴリ（#379 #400）** —
+  `correction_type` は変更せず（`correction_recurrence` も復活させない・§2.0）、judge 判定時に
+  `category`（対象軸8値 enum: presentation/explanation/factual/approach/omission/excess/
+  process/other）を1つ付け、`weak_signal.provenance` に `model`/`prompt_fingerprint`/
+  `category_schema_version` と共に producer 時点で保存する。`correction_rate.py` が C(a)
+  の TP を同一 physical key 単位でカテゴリ内訳集計（同一 key に複数 category が付いたら
+  当該週を未測定にする）し、戦果ボードに今週の構成比 + 最大カテゴリの実発話1件 +
+  task-mix 交絡の注記を表示する（週次 delta は雑音のため比較は表示しない）。
+  `correction_semantic/batch.py` の `estimate_tokens` は固定費をハードコード400から
+  `build_batch_prompt([])` の実長導出に変更し、出力（verdict JSON）の token 予算も
+  加算するよう是正。`outcome_metrics.correction_recurrence_rate` に決定論の飽和ゲート
+  （`recurring==distinct_types` かつ `rate>=0.9` → `reason="saturated"`）を追加し、
+  floor 到達後に粗い語彙で再発率1.0に張り付く構造劣化を構造で止める。
 - **feat(outcome/capture/results-board): ADR-054 Phase C1 — 数字の正直さ（#376 #379 #400）** —
   §2.6 の嘘つき数字7件を是正。① `outcome_metrics.rework_rate` に `not_measured`（レコードは
   あるが tool_sequence 未記録で測定不能）を新設し `no_data`（データ自体が無い）と区別

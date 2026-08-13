@@ -11,6 +11,11 @@
 指標: 「指摘率」= その週の発話のうち judge が判定した件数を分母、そのうち TP と判定された
 件数を分子とする割合。**カバレッジ 100%（未判定 0 件）の確定週のみ**値を出す。
 
+#400 ADR-054 A5: 上記の TP を ``weak_signal.provenance.category``（対象軸 8値 enum）で
+内訳集計する（設計正典 docs/decisions/drafts/054-a5-correction-category.md §2.6）。母集団は
+指摘率の分子と完全に同一。同一 physical key に複数 category が付いたら黙って多数決・
+最新値を採らず、その週の内訳を未測定にする（`correction_type` 自体は変更しない）。
+
 freeze（§2.2）: 週 W の cutoff = 週終了 + ``FREEZE_DELAY_DAYS`` 日。3ストア全てにこの
 cutoff を課す（``ingested_at`` / ``judged_at`` / ``detected_at`` がいずれも cutoff 以前の
 レコードのみ採用）。確定後に対象行を更新・削除しない契約（backlog drain や migration の
@@ -26,6 +31,10 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+# #400 A5: enum は単一ソース（correction_semantic.prompt が語彙表・優先順の正典）。
+# 純関数のみを import する（I/O なし・collect_raw_data の遅延 import 方針とは無関係）。
+from correction_semantic.prompt import CATEGORY_ENUM  # noqa: E402
 
 # D の値（§2.2）: 実測（週最大1,566件 > 週上限1,400件）から初期値として設定した**仮の運用値**。
 # 100%表示ゲートがあるため D の誤差は誤った率でなく「未測定週の増加」として現れる（安全側）。
@@ -141,6 +150,8 @@ def compute_weekly_correction_rate(
         "utterance_unparseable_timestamp": 0,
         "utterance_unparseable_ingested_at": 0,
         "conflict_keys": 0,
+        # #400 A5: 同一 physical key に複数 category が付いた件数（週横断の合計）。
+        "category_conflict_keys": 0,
     }
 
     # ── judged_at_by_key（最古の有効判定を採用・§2.2 競合解決） ──────
@@ -271,6 +282,8 @@ def compute_weekly_correction_rate(
         )
 
         pj_breakdown = _pj_breakdown(population_keys, judged_key_set, set(tp_keys), utterances_by_key)
+        category_breakdown = _category_breakdown(tp_keys, tp_records_by_key, cutoff)
+        diagnostics["category_conflict_keys"] += category_breakdown["conflict_keys"]
 
         top3_source.sort(key=lambda t: t["detected_at"], reverse=True)
         top3_examples = [
@@ -297,6 +310,7 @@ def compute_weekly_correction_rate(
             "failure_reasons": sorted(set(failure_reasons)),
             "pj_breakdown": pj_breakdown,
             "top3_examples": top3_examples,
+            "category_breakdown": category_breakdown,
         })
 
     return {
@@ -338,6 +352,88 @@ def _pj_breakdown(
             "rate": (tp[slug] / j) if j >= MIN_PJ_RATE_DENOM else None,
         }
     return out
+
+
+# ─────────────────────────────────────────────────────────────────
+# カテゴリ内訳（#400 ADR-054 A5・設計正典 drafts/054-a5-correction-category.md §2.6）
+# ─────────────────────────────────────────────────────────────────
+def _category_breakdown(
+    tp_keys: List[str],
+    tp_records_by_key: Dict[str, List[Dict[str, Any]]],
+    cutoff: datetime,
+) -> Dict[str, Any]:
+    """その週の TP を category（対象軸 8値 enum）で内訳集計する（§2.6）。
+
+    母集団は指摘率の分子と完全に同一 —— 呼び出し元が既に確定した ``tp_keys``
+    （physical key 単位・重複や session_id 競合を除去済み）をそのまま使う。
+
+    - **物理キー単位で数える**（同一 key に同一 category の重複記録があっても 1 件）
+    - **同一物理キーに複数の異なる category が付いたら黙って多数決・最新値を採らず、
+      その週のカテゴリ内訳を丸ごと未測定にする**（§2.4/§2.6）。分母（指摘率本体）には
+      影響しない —— 内訳固有の追加制約
+    - category を持たない TP（A5 以前の legacy・schema 不整合）は ``unclassified_count``
+      に計上し、conflict とは区別する（黙って多数決に混ぜない・エラーにもしない）
+    """
+    counts: Dict[str, int] = defaultdict(int)
+    unclassified_count = 0
+    conflict_key_count = 0
+    examples_by_category: Dict[str, Dict[str, Any]] = {}
+
+    for key in tp_keys:
+        recs = tp_records_by_key.get(key, [])
+        valid_recs = [r for r in recs if r["detected_at"] <= cutoff]
+        categories = {
+            r["provenance"].get("category")
+            for r in valid_recs
+            if r["provenance"].get("category") is not None
+        }
+        if len(categories) > 1:
+            conflict_key_count += 1
+            continue
+        if not categories:
+            unclassified_count += 1
+            continue
+        cat = next(iter(categories))
+        if cat not in CATEGORY_ENUM:
+            # producer が既知の enum を書く契約（prompt._validate_verdict）だが、
+            # 過去データ・別 producer の混入に備えて防御的に unclassified 扱いにする。
+            unclassified_count += 1
+            continue
+        counts[cat] += 1
+        # 代表例は同一カテゴリ内で detected_at が最も新しい記録を採用（top3_examples と同方針）。
+        latest = max((r for r in valid_recs if r["provenance"].get("category") == cat),
+                     key=lambda r: r["detected_at"])
+        existing = examples_by_category.get(cat)
+        if existing is None or latest["detected_at"] > existing["detected_at"]:
+            examples_by_category[cat] = latest
+
+    measured = conflict_key_count == 0
+
+    top_category: Optional[str] = None
+    top_example: Optional[Dict[str, Any]] = None
+    if measured and counts:
+        top_category = max(
+            counts.items(),
+            key=lambda kv: (kv[1], -CATEGORY_ENUM.index(kv[0])),
+        )[0]
+        rec = examples_by_category.get(top_category)
+        if rec is not None:
+            prov = rec["provenance"]
+            top_example = {
+                "text": prov.get("text", ""),
+                "reason": prov.get("reason", ""),
+                "idiom": prov.get("idiom", ""),
+                "pj_slug": rec.get("pj_slug"),
+            }
+
+    return {
+        "measured": measured,
+        "counts": dict(counts) if measured else {},
+        "unclassified_count": unclassified_count if measured else 0,
+        "conflict_keys": conflict_key_count,
+        "top_category": top_category,
+        "top_category_example": top_example,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────

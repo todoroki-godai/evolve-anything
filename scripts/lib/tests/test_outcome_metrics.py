@@ -94,6 +94,43 @@ class TestCorrectionRecurrence:
         assert value is not None
         assert evidence["distinct_types"] == 5
 
+    # ── ADR-054 §2.0 A5 裁定: 決定論の飽和ゲート ────────────────────────
+
+    def test_saturated_all_types_recurring_returns_none(self, tmp_path, monkeypatch):
+        """設計 §2.0 tacchi [Must]1: 全 type が recurring かつ rate>=0.9 なら raw 値を
+        隠し reason=saturated として値なしで surface する（floor 到達後に「再発率1.0」が
+        無警戒に表示される経路を構造で塞ぐ）。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = []
+        for i in range(5):
+            records.append({"correction_type": f"t{i}", "session_id": f"s{i}a", "timestamp": ts})
+            records.append({"correction_type": f"t{i}", "session_id": f"s{i}b", "timestamp": ts})
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        value, evidence = outcome_metrics.correction_recurrence_rate(days=30)
+        assert value is None
+        assert evidence["reason"] == "saturated"
+        assert evidence["distinct_types"] == 5
+        assert evidence["recurring_types"] == 5
+        assert evidence["records"] == 10
+
+    def test_not_saturated_when_not_all_types_recurring(self, tmp_path, monkeypatch):
+        """4/5 recurring（rate=0.8）は飽和ゲートに引っかからず raw 値を返す（回帰防止）。"""
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        now = _now()
+        ts = _iso(now)
+        records = []
+        for i in range(4):
+            records.append({"correction_type": f"t{i}", "session_id": f"s{i}a", "timestamp": ts})
+            records.append({"correction_type": f"t{i}", "session_id": f"s{i}b", "timestamp": ts})
+        records.append({"correction_type": "t4", "session_id": "s4a", "timestamp": ts})
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        value, evidence = outcome_metrics.correction_recurrence_rate(days=30)
+        assert value == pytest.approx(0.8)
+        assert evidence.get("reason") != "saturated"
+
     def test_window_filters_old(self, tmp_path, monkeypatch):
         monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
         now = _now()

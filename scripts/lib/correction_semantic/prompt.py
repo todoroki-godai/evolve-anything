@@ -1,14 +1,16 @@
-"""correction_semantic.prompt — バッチプロンプト組み立て + verdict パース（#431）。
+"""correction_semantic.prompt — バッチプロンプト組み立て + verdict パース（#431 / #400 A5）。
 
 30 件程度の発話を 1 プロンプトにまとめ、Haiku に「ユーザーが Claude の方向を正した
-ターンか」を二値判定させ、修正なら言い回し（イディオム）を抽出させる。
+ターンか」を二値判定させ、修正なら言い回し（イディオム）を抽出させる。#400 A5 で
+「何を直させられたか（対象軸）」を表す `category`（8値 enum）判定を同じ呼び出しに相乗りさせた
+（設計正典 docs/decisions/drafts/054-a5-correction-category.md §2.1/§2.2）。
 
 #431 背景の修正スタイル（語彙でなく意味論でしか拾えない）を例示する:
 - 正しい値の後置型: 「つむぎにしてほしい、四国めたんじゃなくて」
 - ソフト指摘型:     「P6のデザインが違うんだけど」
 - 観察型:           「〜気がするんだよなぁ」
 
-応答は厳格な JSON（{"verdicts": [{index, is_correction, idiom, reason}]}）を要求する。
+応答は厳格な JSON（{"verdicts": [{index, is_correction, idiom, category, reason}]}）を要求する。
 パーサは code fence・前後ノイズに頑健。**「解釈できない（壊れた JSON）」と「正しく解釈できて
 verdicts が空」は意味が違う**（#273）ため `parse_verdicts_result` で `ok` フラグとして区別する。
 `ok=False`（壊れた JSON・応答欠損）を呼び出し側が「該当なし」と誤読すると、パース失敗バッチが
@@ -17,6 +19,7 @@ verdicts が空」は意味が違う**（#273）ため `parse_verdicts_result` �
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any, Dict, List, Optional
@@ -29,6 +32,68 @@ _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 # prev_action（直前 Claude 操作の1行要約）の切り詰め上限。text ほど長大化しない想定だが
 # 防御的に上限を設ける（#410 [Must]C）。
 _MAX_PREV_ACTION_CHARS = 300
+
+
+# ─────────────────────────────────────────────────────────────────
+# A5 — 指摘カテゴリ（対象軸 8 値 enum）
+# 設計正典: docs/decisions/drafts/054-a5-correction-category.md §2.1
+# ─────────────────────────────────────────────────────────────────
+
+# enum の並びは境界優先規則（同率時の固定順）と一致させる: factual > process > omission >
+# excess > presentation > explanation > approach（+ other）。プロンプト文面・
+# _validate_verdict の厳格検証・correction_rate の内訳集計が全てこのタプルを単一ソースにする。
+CATEGORY_ENUM = (
+    "factual",
+    "process",
+    "omission",
+    "excess",
+    "presentation",
+    "explanation",
+    "approach",
+    "other",
+)
+
+# 表示用の日本語ラベル（§1.3 の塊の呼称）。results_board の内訳表示と共有する単一ソース。
+CATEGORY_LABELS_JA = {
+    "presentation": "見た目",
+    "explanation": "説明",
+    "factual": "事実",
+    "approach": "やり方",
+    "omission": "やり残し",
+    "excess": "余計",
+    "process": "手順",
+    "other": "その他",
+}
+
+# verdict の category フィールドが従う契約のバージョン。プロンプト文面・enum・優先規則を
+# 変えたら上げる（producer 時点で provenance に保存し、collect 側の系列断絶検出に使う・§2.4/§2.5）。
+CATEGORY_SCHEMA_VERSION = 1
+
+# プロンプトに埋め込む語彙表（意味 + 境界優先規則）。§2.1 の表・優先規則をそのまま使う。
+_CATEGORY_VOCAB_TABLE = (
+    "- presentation: 見た目・レイアウト・表示崩れ・図表の読みにくさ\n"
+    "- explanation:  説明が長い・難しい・わかりにくい\n"
+    "- factual:      事実・前提・認識の誤り（値の取り違え含む）\n"
+    "- approach:     やり方・方針・設計そのものへの異議\n"
+    "- omission:     やり残し・不足・詰めが甘い\n"
+    "- excess:       余計・不要・削除要求・やりすぎ\n"
+    "- process:      手順・ツール・ルールの不遵守（使うべきものを使わなかった）\n"
+    "- other:        上記のどれでもない\n"
+)
+
+_CATEGORY_PRIORITY_RULES = (
+    "カテゴリの境界判定は次の優先規則に従ってください:\n"
+    "- presentation vs explanation: **成果物の見た目・文言**なら presentation、"
+    "**Claude 自身の説明・回答**なら explanation\n"
+    "- approach vs process: 設計選択そのものへの異議は approach。"
+    "既に合意済み・明文化済みの手順への違反だけ process\n"
+    "- omission vs excess: 欠けている成果物・要件は omission。存在する不要物の削除要求は excess\n"
+    "- factual vs approach: 検証可能な前提・値の誤りは factual。"
+    "前提が正しくても選択が不適切なら approach\n"
+    "- 複合発話は主たる修正対象を1つ選ぶこと。同率で決めがたい場合は other に逃がさず、"
+    "factual > process > omission > excess > presentation > explanation > approach の順で"
+    "優先度が高いものを選ぶこと\n"
+)
 
 
 def format_utterance_line(
@@ -78,14 +143,35 @@ def build_batch_prompt(
         "修正と判定した場合は、その修正を端的に表す**言い回し（idiom）**を発話から抜き出して\n"
         "ください（例: 「四国めたんじゃなくて」「違うんだけど」「気がする」）。\n"
         "修正でなければ idiom は null にします。\n\n"
+        "修正と判定した場合は、**何を直させられたか（対象）**を表す category を"
+        "以下の8種類から1つ選んでください:\n"
+        f"{_CATEGORY_VOCAB_TABLE}\n"
+        f"{_CATEGORY_PRIORITY_RULES}\n"
+        "修正でなければ category は null にします。\n\n"
         "**判定対象の全 index について、必ず 1 件ずつ verdict を返してください**"
         "（非修正の発話も is_correction=false で必ず含める。省略しない）。\n\n"
         "出力は厳格な JSON のみ（前後に説明文を付けない）。形式:\n"
         '{"verdicts": [{"index": 0, "is_correction": true, "idiom": "四国めたんじゃなくて", '
+        '"category": "factual", '
         '"reason": "正しい値を後置で言い直している"}, ...]}\n\n'
         "判定対象:\n"
         f"{listing}\n"
     )
+
+
+def prompt_fingerprint() -> str:
+    """固定プロンプトテンプレートの fingerprint（sha256 先頭12桁）。
+
+    設計正典 drafts/054-a5-correction-category.md §2.4 / drafts/054-c-a-numerator.md §2.5:
+    ``category`` は「事実」でなく「その judge 実行時の測定値」。プロンプトが変われば判定基準も
+    変わるため、producer 時点で fingerprint を provenance に保存し、系列断絶の検出材料にする。
+
+    発話に依存しない固定部分だけをハッシュ対象にするため ``build_batch_prompt([])``
+    （``batch.estimate_tokens`` の固定費導出と同じ基準文字列・単一ソース）を入力にする。
+    プロンプト文面・語彙表・優先規則のどれを変えてもこの値は変わる。
+    """
+    basis = build_batch_prompt([])
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:12]
 
 
 def _validate_verdict(v: object) -> Optional[Dict[str, Any]]:
@@ -97,6 +183,13 @@ def _validate_verdict(v: object) -> Optional[Dict[str, Any]]:
     誤確定する（#273 が塞いだはずの事故が partial-invalid 型で再発する）。**1 要素でも
     不正なら呼び出し側はバッチ全体を ok=False にすること**（不正要素だけ捨てて部分採用しない）。
     `bool("false") == True` の罠を踏まないよう ``is_correction`` は実 bool のみ許容する。
+
+    #400 A5（設計 §2.4）: ``category`` は ``is_correction`` に**従属**する契約:
+    - ``is_correction=False`` のとき category は必ず ``None``（モデルが値を返しても無視する）
+    - ``is_correction=True`` のとき ``CATEGORY_ENUM`` のいずれかを要求するが、
+      **enum 不正値・型違い・欠落は verdict 全体を落とさず ``category=None`` に正規化する**
+      （category は「対象軸の粒度」であって「修正か否か」の判定そのものではないため、
+      ここで厳格に reject すると本体の二値判定まで巻き込んで捨ててしまう）。
     """
     if not isinstance(v, dict):
         return None
@@ -116,10 +209,16 @@ def _validate_verdict(v: object) -> Optional[Dict[str, Any]]:
         reason = ""
     if not isinstance(reason, str):
         return None
+    category = v.get("category")
+    if is_correction and isinstance(category, str) and category in CATEGORY_ENUM:
+        category = category
+    else:
+        category = None
     return {
         "index": idx,
         "is_correction": is_correction,
         "idiom": idiom,
+        "category": category,
         "reason": reason,
     }
 
@@ -154,8 +253,8 @@ def parse_verdicts_result(
     `test_ingest_legitimate_empty_verdicts_still_marks_judged` が固定している）。
 
     Returns:
-        {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None, reason:str}],
-         "out_of_range": int}
+        {"ok": bool, "verdicts": [{index:int, is_correction:bool, idiom:str|None,
+         category:str|None, reason:str}], "out_of_range": int}
     """
     if not raw or not isinstance(raw, str):
         return {"ok": False, "verdicts": [], "out_of_range": 0}

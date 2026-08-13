@@ -352,6 +352,36 @@ def test_run_not_locked_proceeds_normally(tmp_path, monkeypatch):
     assert judged.exists()
 
 
+# ── #400 A5: Phase B が実際に使った model が weak_signal provenance まで伝わる ─────
+
+
+def test_run_threads_model_into_weak_signal_provenance(tmp_path, monkeypatch):
+    """call_haiku へ渡した model がそのまま provenance.model として記録される
+    （設計 §2.4: category は producer 時点の測定値。model も同じ producer 時点で保存する）。
+    """
+    judged = tmp_path / "correction_judged.jsonl"
+    ws = tmp_path / "weak_signals.jsonl"
+    utterances = [_utt("/a.jsonl", 1, "つむぎにしてほしい、四国めたんじゃなくて", "pj-a", ts=_ts(1))]
+
+    def _fake_call_haiku(prompt, model="haiku"):
+        return json.dumps({"verdicts": [
+            {"index": 0, "is_correction": True, "idiom": "四国めたんじゃなくて",
+             "category": "factual", "reason": "後置型"},
+        ]}, ensure_ascii=False)
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _fake_call_haiku)
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=utterances, judged_path=judged, weak_signals_path=ws,
+        model="haiku",
+    )
+    assert res["corrections"] == 1
+    ws_lines = [json.loads(l) for l in ws.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert ws_lines[0]["provenance"]["model"] == "haiku"
+    assert ws_lines[0]["provenance"]["category"] == "factual"
+    assert ws_lines[0]["provenance"]["prompt_fingerprint"]
+    assert ws_lines[0]["provenance"]["category_schema_version"] == 1
+
+
 def test_dry_run_does_not_acquire_lock_and_proceeds_while_lock_held(tmp_path):
     """#410 round2 [Must]dry-run: dry-run は排他不要（read-only）なので、外部でロックを
     保持していても即座に完了する（run=True と対照的な振る舞いを固定する）。

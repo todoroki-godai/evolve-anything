@@ -58,8 +58,19 @@ _CHARS_PER_TOKEN = 2.0
 # #410 round2 [Must]C: per-utterance の固定オーバーヘッド係数は廃止した。
 # estimate_utterance_tokens が実際に組み立てるプロンプト行（prompt.format_utterance_line、
 # ラベル文言 + prev_action + text）の長さをそのまま測るため、別途の固定加算が不要になった。
-# プロンプト雛形（PROMPT_HEAD 相当の指示文・出力形式説明）の固定オーバーヘッド（バッチ単位）。
-_PROMPT_OVERHEAD_TOKENS = 400
+#
+# プロンプト雛形（指示文・カテゴリ語彙表・出力形式説明）の固定オーバーヘッド（バッチ単位）。
+# #400 A5（設計 §2.2 codex [Should]）是正: 旧実装は 400 のハードコード定数で、カテゴリ語彙表
+# 追加のようなプロンプト伸長で見積もりが実態から乖離した。``prompt.build_batch_prompt([])``
+# （発話ゼロ件＝固定部分のみ）の実長から導出し、テンプレート変更に自動追従させる
+# （estimate_tokens の固定費と reserve_batch_cost の予約額の両方がこの1定数を共有する単一ソース）。
+_PROMPT_OVERHEAD_TOKENS = math.ceil(len(_prompt.build_batch_prompt([])) / _CHARS_PER_TOKEN)
+
+# #400 A5（設計 §2.2）: 出力（verdict JSON 1件分）の概算トークン。旧実装は入力のみを見積もり、
+# 出力 token を一切計上していなかった（プロンプト伸長で入力は直るが出力の見落としは別問題）。
+# {"index": N, "is_correction": true, "idiom": "...", "category": "...", "reason": "..."} の
+# JSON 1件は日本語 idiom/reason を含め概ね 40〜80字。安全側に倒し 60 字相当（30 token）を見積もる。
+_OUTPUT_TOKENS_PER_VERDICT = 30
 
 
 def _batch_id(pj_slug: str, group: List[Dict[str, Any]]) -> str:
@@ -173,6 +184,7 @@ def ingest_judgement_results(
     weak_signals_path: Optional[Path] = None,
     idioms_path: Optional[Path] = None,
     judged_path: Optional[Path] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """LLM 応答を回収し weak_signals 隔離記録 + 個人辞書蓄積する（決定論・LLM 非依存）。
 
@@ -192,6 +204,15 @@ def ingest_judgement_results(
     過汎用 idiom guard（#527）: floor（8 文字未満）/ stopword（相槌・推量・否定のみ）/
     文脈固有トークン（日付・割合・序数）に該当する idiom は **個人辞書に入れない**
     （weak_signal は隔離記録するので reflect で人間が拾える）。弾いた件数は idioms_filtered。
+
+    ``model``（#400 A5・設計 §2.4）: 呼び出し元が実際に使ったモデル alias（例 "haiku"）を
+    渡す。修正と判定された verdict の provenance に category（判定した対象軸）と一緒に
+    ``model`` / ``prompt_fingerprint`` / ``category_schema_version`` を **producer 時点**
+    （この ingest 呼び出し時点）で保存する。category は「事実」でなく「その judge 実行時の
+    測定値」であり（同一物理発話が応答欠損・部分応答で再判定される経路が実在する・
+    設計 §2.4）、集計時に現在値を付けるのではなく判定時の条件を記録することで系列断絶
+    （プロンプト変更）を後から検出できるようにする。省略時（None）は「呼び出し元が
+    model を渡さなかった」ことを表し、そのまま None が provenance に残る（推測しない）。
 
     **課金コストはここでは記録しない（#410 round4 [Must]1+2）**: round3 まではここで
     per-key est_tokens・バッチ固定費按分・billed_attempt を記録していたが、応答の解釈結果
@@ -221,6 +242,9 @@ def ingest_judgement_results(
     omitted_verdicts = 0  # #273: verdict が返らず非修正として確定した発話数（observability）
     # #410 round3 [Should]⑤: バッチ対象外の index を無視した件数（黙って捨てない）。
     out_of_range_verdicts = 0
+    # #400 A5（設計 §2.4）: fingerprint は utterances に依存しない固定テンプレート部分の
+    # ハッシュなので、この ingest 呼び出し内で 1 回だけ計算すれば足りる（バッチ間で不変）。
+    _fingerprint = _prompt.prompt_fingerprint()
 
     for req in requests:
         key = req.get("id")
@@ -306,6 +330,14 @@ def ingest_judgement_results(
                 # 独立に保存する（トリム目的では eligibility を問わない）。
                 "idiom": idiom_text or "",
                 "judge": "llm_haiku",
+                # #400 A5（設計 §2.1/§2.4）: 対象軸カテゴリ（8値 enum・非修正時は None）。
+                # producer 時点の測定条件（model / prompt fingerprint / schema version）を
+                # 同時に保存する。事実でなく「その judge 実行時の測定値」として扱うため、
+                # 集計時に現在値を付けず、この時点の値をそのまま固定する。
+                "category": v.get("category"),
+                "model": model,
+                "prompt_fingerprint": _fingerprint,
+                "category_schema_version": _prompt.CATEGORY_SCHEMA_VERSION,
             }
             detected_at = now_iso()
             signals.append(WeakSignal(
@@ -395,6 +427,12 @@ def estimate_tokens(
     各バッチ内で 0 始まりの index を振る）と同じ分割・index 付けで見積もる。旧実装は
     件数から batches 数だけ算出し、各発話の index を意識せず一律 index=0 で見積もって
     いたため、1バッチが大きく2桁 index が生じる構成ほど過小評価になっていた。
+
+    #400 A5（設計 §2.2）是正: 出力（verdict JSON）の token も加算する。旧実装は入力
+    （プロンプト本文＝発話 + 固定雛形）しか見ておらず、判定結果として返ってくる出力
+    token が見積もりから完全に欠落していた。出力は発話 1 件につき verdict 1 件が
+    対応するため ``_OUTPUT_TOKENS_PER_VERDICT × 発話件数`` で加算する
+    （バッチ数でなく発話数に連動する点が固定費 ``_PROMPT_OVERHEAD_TOKENS`` と異なる）。
     """
     items = utterances or []
     n = len(items)
@@ -405,7 +443,8 @@ def estimate_tokens(
         for group in groups
         for i, u in enumerate(group)
     )
-    est = body_tokens + batches * _PROMPT_OVERHEAD_TOKENS
+    output_tokens = n * _OUTPUT_TOKENS_PER_VERDICT
+    est = body_tokens + batches * _PROMPT_OVERHEAD_TOKENS + output_tokens
     return {
         "utterances": n,
         "batches": batches,

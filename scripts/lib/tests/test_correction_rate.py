@@ -110,7 +110,7 @@ def _judged(u, *, judged_at=None):
     return {"key": _key(u), "judged_at": (judged_at or _BEFORE_CUTOFF).isoformat()}
 
 
-def _tp(u, *, detected_at=None, session_id=None, pj_slug=None, reason="test"):
+def _tp(u, *, detected_at=None, session_id=None, pj_slug=None, reason="test", category=None):
     return {
         "channel": "llm_judge",
         "provenance": {
@@ -119,6 +119,7 @@ def _tp(u, *, detected_at=None, session_id=None, pj_slug=None, reason="test"):
             "text": u["text"],
             "reason": reason,
             "idiom": "",
+            "category": category,
         },
         "detected_at": (detected_at or _BEFORE_CUTOFF).isoformat(),
         "session_id": session_id if session_id is not None else u["session_id"],
@@ -286,6 +287,105 @@ class TestPjBreakdown:
         pj = w["pj_breakdown"]["big-pj"]
         assert pj["judged"] == 10
         assert pj["rate"] == pytest.approx(0.1)
+
+
+# ── #400 A5: カテゴリ内訳（設計 §2.6） ─────────────────────────────
+
+
+class TestCategoryBreakdown:
+    def test_counts_by_category_physical_key_unit(self):
+        u1, u2 = _utt("a"), _utt("b")
+        raw = _raw(
+            [u1, u2],
+            [_judged(u1), _judged(u2)],
+            [_tp(u1, category="factual"), _tp(u2, category="presentation")],
+        )
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        cb = w["category_breakdown"]
+        assert cb["measured"] is True
+        assert cb["counts"] == {"factual": 1, "presentation": 1}
+        assert cb["unclassified_count"] == 0
+        assert cb["conflict_keys"] == 0
+
+    def test_same_key_same_category_counted_once(self):
+        """同一 physical key に同一カテゴリの重複 TP 記録があっても1件として数える
+        （§2.6 末尾: 内訳も physical key 単位で数える。3重昇格の実測を踏まえた回帰防止）。
+        """
+        u1 = _utt("a")
+        raw = _raw(
+            [u1],
+            [_judged(u1)],
+            [
+                _tp(u1, category="factual", detected_at=_BEFORE_CUTOFF - timedelta(hours=1)),
+                _tp(u1, category="factual", detected_at=_BEFORE_CUTOFF),
+            ],
+        )
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        assert w["category_breakdown"]["counts"] == {"factual": 1}
+
+    def test_unclassified_when_category_missing(self):
+        """category を持たない（旧プロンプト・A5 以前の）TP 記録は unclassified に計上し、
+        conflict 扱いにはしない。
+        """
+        u1 = _utt("a")
+        raw = _raw([u1], [_judged(u1)], [_tp(u1, category=None)])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        cb = w["category_breakdown"]
+        assert cb["measured"] is True
+        assert cb["counts"] == {}
+        assert cb["unclassified_count"] == 1
+
+    def test_conflicting_categories_excludes_key_and_marks_unmeasured(self):
+        """設計 §2.4/§2.6: 同一 physical key に複数 category が付いたら、黙って多数決・
+        最新値を採らず当該週を未測定にする。
+        """
+        u1 = _utt("a")
+        raw = _raw(
+            [u1],
+            [_judged(u1)],
+            [
+                _tp(u1, category="factual", detected_at=_BEFORE_CUTOFF - timedelta(hours=1)),
+                _tp(u1, category="presentation", detected_at=_BEFORE_CUTOFF),
+            ],
+        )
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        cb = w["category_breakdown"]
+        assert cb["measured"] is False
+        assert cb["conflict_keys"] == 1
+        assert cb["counts"] == {}
+
+    def test_top_category_and_example_surfaced(self):
+        u1, u2, u3 = _utt("a"), _utt("b"), _utt("c")
+        raw = _raw(
+            [u1, u2, u3],
+            [_judged(u1), _judged(u2), _judged(u3)],
+            [
+                _tp(u1, category="presentation", reason="見た目の指摘"),
+                _tp(u2, category="presentation", reason="別の見た目指摘",
+                    detected_at=_BEFORE_CUTOFF - timedelta(hours=1)),
+                _tp(u3, category="factual"),
+            ],
+        )
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        cb = w["category_breakdown"]
+        assert cb["counts"] == {"presentation": 2, "factual": 1}
+        assert cb["top_category"] == "presentation"
+        assert cb["top_category_example"]["reason"] == "見た目の指摘"  # 最新（detected_at が新しい方）
+
+    def test_no_tp_yields_empty_measured_breakdown(self):
+        u1 = _utt("a")
+        raw = _raw([u1], [_judged(u1)], [])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        cb = w["category_breakdown"]
+        assert cb["measured"] is True
+        assert cb["counts"] == {}
+        assert cb["top_category"] is None
 
 
 class TestSourceKindAndSidechainExclusion:
