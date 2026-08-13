@@ -584,7 +584,7 @@ E（drain 周辺）と Phase D の書込境界も重なるので並行させな�
 | sidechain 除外の層 | **記録層（extractor）で根治** | 再 ingest migration の新規開発が Phase A に入る。llm_judge 滞留も 23% 減 |
 | 柱3(b)（採用効果・取り下げ候補） | **Phase E を作って完成させる** | v1 案の「4週の計測ゲート」は撤回 |
 | A4「手直し」の定義 | **capture 調査の結果、corrections を分子に使う案（A4-ii）は却下** | 下記 7.2 |
-| A3 の既存 FP（rephrase 16 / llm_judge 33 / corrections 昇格済み2）の扱い | **縮小**（2026-08-13）。corrections 昇格済み2件は即時 invalidate、残り49件は TTL 45日の自然失効に任せる。フルの後始末フェーズは作らない | Phase A3 のスコープ縮小。§6 実施順に反映済み |
+| A3 の既存 FP（rephrase 16 / llm_judge 33 / corrections 昇格済み2）の扱い | **縮小**（2026-08-13）。corrections 昇格済み2件は即時 invalidate、残り49件は TTL 45日の自然失効に任せる。フルの後始末フェーズは作らない。**機構実装済み（2026-08-13）**: `scripts/lib/corrections_subagent_invalidation.py`（dry-run 既定・`--apply` で書込）を追加。llm_judge channel かつ `weak_signal_provenance.source_path` に `/subagents/` を含む corrections 2件（`weak_signal_key=836826fb11c47e48,65deb6a40830d9f4`）を対象と実データ dry-run で確認済み（既存の `invalidated` フラグを流用し論理無効化。物理削除しない）。実データへの `--apply` 実行は実環境ストア書込のため頭側が行う。rephrase channel の同種汚染（6件・A2 適用前後に新規promotedと推定）は本 migration の対象外のまま据え置き | Phase A3 のスコープ縮小。§6 実施順に反映済み |
 | B3（llm_judge 上限200件/日）を上げるか対象を絞るか | **即決しない**（2026-08-13）。A1/A2 後に流入量を再計測してから判断する（10,225件処理自体は価値でなく古い低品質候補に LLM 費用を払う危険） | B3 着手を A1/A2 完了後に後ろ倒し。§6 実施順に反映済み |
 | 再 ingest（A1）に伴う LLM 再判定費用の事前見積もり | **A1 を二段階に分割**（2026-08-13）。forward 修正 + read 時 sidechain 除外を先に実施し、全履歴 migration は費用見積もり（最悪3,604件）とベンチの後に着手判断する | A1 の完了条件が二段階化。§5-A1・§6 に反映済み |
 
