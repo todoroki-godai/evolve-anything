@@ -3,15 +3,16 @@
 ADR-054 §2.2 実測（2026-08-12）: llm_judge channel の weak_signals 336件中33件が
 `weak_signal_provenance.source_path` に `/subagents/` を含み（`isSidechain` 未判定による
 subagent 出力の誤検出）、うち2件が `promoted=True` で corrections.jsonl まで到達していた。
-§414 の決定論基準（source_path に `/subagents/` を含む）を llm_judge channel の corrections
-レコードに適用し、既存の `invalidated` フラグ（安全弁③・ADR-047。
-`correction_semantic.provenance_weight.is_human_correction` /
+§414 の決定論基準（source_path に `/subagents/` を含む）を corrections レコードに適用し、
+既存の `invalidated` フラグ（安全弁③・ADR-047。`correction_semantic.provenance_weight.is_human_correction` /
 `growth_report` が既に除外条件として読む）で論理無効化する。物理削除はしない。
 
-**scope**: llm_judge channel のみが対象（ADR §5/§7.1「corrections 昇格済み2件」の出所）。
-rephrase channel の同種汚染は A2（`weak_signals/detectors.py` の委譲プロンプト構造除外統合）
-適用後の残存分であり、本 migration の対象外＝TTL 45日の自然失効に委ねる
-（A3 は縮小・フルの後始末フェーズは作らない・#379）。
+**scope（2026-08-13 頭の判断で拡大）**: 決定論基準は channel を問わず「corrections まで
+昇格済み・source_path に /subagents/ を含む」全レコード（llm_judge 2件 + rephrase 6件 = 8件）。
+ADR の「残り49件は TTL 自然失効に任せる」の"49件"は**まだ corrections に到達していない
+weak_signal** を指しており、既に corrections まで到達した8件は同一の後始末対象（当初の
+2件限定は llm_judge の実測記述に引きずられたスコープの取り違え。channel でなく
+"corrections 到達済みか" が本来の境界）。
 
 無効化は既存フィールドを消さず3フィールドを更新するだけ（非破壊、legacy_accept_migration.py
 と同型）:
@@ -39,25 +40,26 @@ if str(_LIB) not in sys.path:
 
 from rl_common.file_lock import atomic_write_text  # noqa: E402
 
-_TARGET_CHANNEL = "llm_judge"
 _SOURCE_PATH_MARKER = "/subagents/"
 _INVALIDATION_REASON = "adr054_a3_subagent_contamination"
 
 
-def _is_subagent_llm_judge_candidate(rec: Dict[str, Any]) -> bool:
+def _is_subagent_contaminated_candidate(rec: Dict[str, Any]) -> bool:
+    """channel を問わず「corrections 昇格済み・source_path に /subagents/ を含む」を判定する。
+
+    ADR-054 §414 の決定論基準そのもの（channel 限定はしない・2026-08-13 頭の判断で拡大）。
+    """
     if rec.get("invalidated"):
         return False  # 既に無効化済み（冪等）
-    if rec.get("weak_signal_channel") != _TARGET_CHANNEL:
-        return False
     prov = rec.get("weak_signal_provenance") or {}
     source_path = prov.get("source_path") or ""
     return _SOURCE_PATH_MARKER in source_path
 
 
-def invalidate_subagent_llm_judge_corrections(
+def invalidate_subagent_contaminated_corrections(
     corrections_file: Path, *, dry_run: bool = True
 ) -> Dict[str, Any]:
-    """corrections_file 内の subagent 汚染 llm_judge レコードを無効化する（既定 dry-run）。
+    """corrections_file 内の subagent 汚染レコード（channel 不問）を無効化する（既定 dry-run）。
 
     Returns:
         {"corrections_file", "dry_run", "candidates": [weak_signal_key...], "invalidated": int}
@@ -88,7 +90,7 @@ def invalidate_subagent_llm_judge_corrections(
             lines.append(raw_line)
             continue
 
-        if _is_subagent_llm_judge_candidate(rec):
+        if _is_subagent_contaminated_candidate(rec):
             candidates.append(str(rec.get("weak_signal_key")))
             if not dry_run:
                 rec["invalidated"] = True
@@ -115,7 +117,7 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="ADR-054 A3（縮小版）: subagent 汚染 llm_judge corrections を"
+        description="ADR-054 A3（縮小版）: subagent 汚染 corrections（channel 不問）を"
         "invalidated=True で無効化する（既定 dry-run）"
     )
     parser.add_argument(
@@ -135,7 +137,7 @@ def main() -> int:
 
         corrections_file = Path(_rc.DATA_DIR) / "corrections.jsonl"
 
-    report = invalidate_subagent_llm_judge_corrections(
+    report = invalidate_subagent_contaminated_corrections(
         corrections_file, dry_run=not args.apply
     )
     mode = "dry-run" if report["dry_run"] else "適用済み"
