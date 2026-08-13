@@ -539,8 +539,8 @@ A1 第二段階（全履歴 migration）── **保留**（2026-08-13・§5-A1�
   ↓
 A3（汚染 cleanup）
   ↓
-G1 計測ゲート ── **一時 DB 方式**（本番 DB を書き換えず A0 ラベルの 41 ファイルを再抽出）
-  └─不通過──→ C(a) は作らない（§7.4）
+G1 計測ゲート ✅ **PASS**（2026-08-13・一時 DB 方式で本番 DB 非汚染。recall 80.0% / §7.4）
+  └─不通過なら C(a) は作らない（今回は発動せず）
   ↓ 通過
 A5 → C(a): C2
   ↓
@@ -622,7 +622,53 @@ tool_use **平均21回/セッション**（最大284）。全体 ~51,000行相�
 - `run_id` の秒精度（`optimize.py:97` の `strftime("%Y%m%d_%H%M%S")`）を UUID 化するか
   → **Phase D スコープ外・別 issue**（D1 は複数一致エラー検出で正しさを担保済み）
 
-### 7.4 G1 が通らなかった場合の柱3(a) の扱い
+### 7.4 G1 の実施結果（2026-08-13・**PASS**）と、通らなかった場合の扱い
+
+**G1 は 2026-08-13 に実施し PASS した。** 以下は実測値。
+
+**判定基準は測定前に宣言した**（測ってから閾値を決めると恣意的になり #376 に反するため）:
+> recall の Wilson 95% 信頼区間の**下限が 4.5%（hook レーンの recall）を上回る**こと。
+> TP 10件という小標本では点推定で「50%を超えた」等を断定できないため、
+> **CI 下限で「hook レーンより明確に良い」と言えるか**を判定に使う。
+
+| 指標 | 点推定 | Wilson 95% CI | 事前基準との突合 |
+|---|---|---|---|
+| **recall** | **8/10 = 80.0%** | **[49.0%, 94.3%]** | CI 下限 49.0% > 4.5% → **成立（大差）** |
+| precision | 8/10 = 80.0% | [49.0%, 94.3%] | A0（hook レーン）の 87.5% を CI 内に含む＝**有意差なし**（劣ってもいない） |
+
+**測定条件**: 本番 `utterances.db` を書き換えず、A0 ラベル 86件が載る transcript を v3 extractor で
+一時 DB へ再抽出し、実運用と同一の実装（`emit_judgement_requests` → `judge_runner.call_haiku` →
+`prompt.parse_verdicts_result` → `ingest_judgement_results`）で判定した。プロンプトの自作なし。
+本番の `correction_judged.jsonl` / `weak_signals.jsonl` は非汚染（mtime で確認済み）。
+
+- 突合できた **74/86 件**（**A0 の TP 10件はすべて含む**＝recall の分子・分母は無傷）
+- 欠落12件は**すべて not_TP**: transcript 消失 6件 + machinery 除外 6件
+  （後者は `_is_harness` が harness 注入行を正しく弾いた**仕様通りの動作**であり取りこぼしではない）
+- 測定時の `prev_action` 非 null 率 **59.5%**（74件中44件）
+- LLM 呼び出し 3バッチ（30/30/14）すべて成功（`call_failed=0` / `parse_failed=0` / `omitted_verdicts=0`）
+- **実課金トークン・費用は未実測**（`safe_llm_call.call_claude_headless` は stdout テキストのみを返し
+  usage を返さないため測定手段が無い）。事前見積もりは入力 約5,212 tokens
+
+**誤判定の内訳（4件）— すべて A0 の人手ラベル自身が「境界例・保守的判定」と注記したケース**:
+
+| 種別 | 件数 | 分類 |
+|---|---|---|
+| FN（A0=TP, judge=非修正） | 2 | 依頼文型（明示的な修正語彙がなく新規依頼と誤読・A0 も「弱い TP」と注記）1件 / 文脈依存型（直前の完了報告との矛盾でしか修正と分からず、`prev_action` の tool 名列では文脈不足）1件 |
+| FP（A0=not_TP, judge=修正） | 2 | 暗黙批判型（質問形の暗黙批判。A0 も「意図は読めるが保守的に not_TP」と注記）1件 / 文断片型（引用が途中で切れ A0 も「判定不能で保守的に not_TP」と注記）1件 |
+
+**明確な TP / not_TP での誤判定は 0件。**
+
+**この結果の限界（断定しないこと）**:
+- **n=10 の極小標本**で CI 幅が広い（49〜94%）。「hook レーンの N 倍良い」といった倍率の主張はできない
+- precision は hook レーンと**統計的に区別できない**。「llm_judge の方が正確」とは言えない
+- **`prev_action` の有無が recall を変えるかは未検証**（今回は非 null 59.5% の条件で1回測っただけで、
+  prev_action なしとの対照は取っていない）。したがって §5-A1 の migration 解凍条件のうち
+  「G1 で prev_action の有無が有意差を生むと実証された」は**依然として未成立**
+
+---
+
+**（以下は G1 が通らなかった場合の扱い。今回は PASS したため発動しないが、
+将来の再測定で閾値未達になった場合に備えて残す）**
 
 **G1（correction_semantic/llm_judge レーンの recall/precision 実測ゲート・§3.3）が閾値未達の場合**:
 C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の headline は **`first_try_success`
@@ -642,7 +688,7 @@ C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の
 | A0 | **実コーパスリプレイ**で修正語を含む発話の検出率と FP 率を実測。合成 fixture の緑では完了としない |
 | A1〜A5 | **新規記録**で sidechain 由来0件（既存行の扱いは §5-A1 の方針どおり）。`prev_action` 持ち越しのテスト。`correction_recurrence` が None を脱する |
 | B | **固定 corpus + 複数 PJ/global group のテスト**で「sidechain 0 / machinery 0 / content-rich 供給あり / 既読差引き後も順位規則を満たす」（単日目視では不十分） |
-| G1 | `a0_eval_set.jsonl` の正解ラベル（TP 10件 + census TP 7件）が weak_signals の llm_judge レーンで検出される件数を突合し、recall/precision と channel 間重複を固定実コーパスで実測する。閾値未達なら C(a) は作らず、柱3(a) の headline を `first_try_success` 一本に絞る（§7.4） |
+| G1 | ✅ **2026-08-13 PASS**。`a0_eval_set.jsonl` の正解ラベルと llm_judge レーンの判定を固定実コーパス（本番 DB 非汚染の一時 DB）で突合。**recall 80.0%（Wilson 95% CI [49.0%, 94.3%]）で CI 下限が hook レーンの 4.5% を大差で上回る**。precision 80.0% は hook レーンの 87.5% と有意差なし。詳細・限界は §7.4 |
 | D（PR4 のみ） | 新規 accept（A レーン＝evolve drain 経由）が `revert_available=true` で記録され、`bin/evolve-revert` が dry-run で復元内容を印字。**PR2/PR3 は 2026-08-13 凍結中につき対象外**（`optimize.py::save_history_entry` / `run_loop.py` 経由の採用は revert 対象外のまま。§5 Phase D） |
 | E | correction → skill diff → accept が **synthetic E2E で1周する** |
 | C | `not_measured` と `no_data` が表示上区別される。欠測週が「改善」に化けない（**欠測の定義に分母側 `utterances.db` の ingest 停止週も含める**——#351 の16日沈黙の前科を踏まえる）。C2/C4 は因果を断定せず「適用後に指標が改善／悪化した**関連**」として表示し、最低分母・観測窓・複数 accept が重なる場合の `unattributed` を明示する。C4 は synthetic E2E |
