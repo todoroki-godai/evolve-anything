@@ -251,7 +251,9 @@ def test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost(tmp_path, 
     test_ingest_distributes_batch_fixed_cost_evenly_not_concentrated_on_one_key``
     （複数キーのバッチで個々のキーの est_tokens を比較する）が担う。
     """
-    from correction_semantic.batch import _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens
+    from correction_semantic.batch import (
+        _OUTPUT_TOKENS_PER_VERDICT, _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens,
+    )
     from correction_semantic.store import count_judged_today
 
     monkeypatch.setattr(
@@ -261,9 +263,9 @@ def test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost(tmp_path, 
     judged = tmp_path / "correction_judged.jsonl"
     first = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
     per_utt = estimate_utterance_tokens(first[0])
-    # batch_size=1 なので今回の 1 バッチの固定費（400トークン）は全額この1キーに乗る
-    # （按分の分母が1件のため丸め誤差なし）。
-    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS
+    # batch_size=1 なので今回の 1 バッチの固定費は全額この1キーに乗る
+    # （按分の分母が1件のため丸め誤差なし）。#400 A5: 出力予算（verdict 1件分）も含む。
+    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS + _OUTPUT_TOKENS_PER_VERDICT
 
     judge_runner.run_daily_judge(
         run=True, utterances=first, judged_path=judged,
@@ -797,7 +799,9 @@ def test_reservation_closes_infinite_same_day_retry_loop(tmp_path, monkeypatch):
     すると、2回目は残り予算0で選定できないことを確認する（test_daily_cap_token_budget_
     across_runs_includes_batch_fixed_cost と同じ「exact_cost 一致」方式）。
     """
-    from correction_semantic.batch import _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens
+    from correction_semantic.batch import (
+        _OUTPUT_TOKENS_PER_VERDICT, _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens,
+    )
     from correction_semantic.store import count_judged_today
 
     monkeypatch.setattr(
@@ -808,7 +812,7 @@ def test_reservation_closes_infinite_same_day_retry_loop(tmp_path, monkeypatch):
     first = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
     per_utt = estimate_utterance_tokens(first[0])
     # batch_size=1 の1バッチ分の丸ごとコスト（按分ではなく _batch_cost_tokens と同型）。
-    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS
+    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS + _OUTPUT_TOKENS_PER_VERDICT
 
     res1 = judge_runner.run_daily_judge(
         run=True, utterances=first, judged_path=judged_path,

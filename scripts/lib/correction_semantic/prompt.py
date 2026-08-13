@@ -209,11 +209,12 @@ def _validate_verdict(v: object) -> Optional[Dict[str, Any]]:
         reason = ""
     if not isinstance(reason, str):
         return None
-    category = v.get("category")
-    if is_correction and isinstance(category, str) and category in CATEGORY_ENUM:
-        category = category
-    else:
-        category = None
+    raw_category = v.get("category")
+    category = (
+        raw_category
+        if is_correction and isinstance(raw_category, str) and raw_category in CATEGORY_ENUM
+        else None
+    )
     return {
         "index": idx,
         "is_correction": is_correction,

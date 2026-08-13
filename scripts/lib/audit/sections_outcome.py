@@ -62,6 +62,17 @@ def _format_axis(key: str, axis: Dict[str, Any]) -> List[str]:
             if unattributed:
                 line += f"（うち project 未帰属 {unattributed} 件）"
             return [line]
+        # ADR-054 §2.0（A5 の裁定）: 飽和は「データ不足」ではない —— レコードは潤沢で、
+        # 語彙が粗いために全 type が recurring になり率が構造的に 1.0 へ張り付いた状態。
+        # 汎用フォールバックの「データ不足」に流すと原因を取り違えさせる（#376: 数字が
+        # 嘘をつかない は表示文言にも適用する）。何をすれば直るかまで書く。
+        if reason == "saturated":
+            return [
+                f"  ・{label}: 飽和のため非表示"
+                f"（distinct {ev.get('distinct_types', '?')} type が全て再発"
+                f" ＝率が構造的に 1.0 に張り付く / records {ev.get('records', '?')} 件）"
+                " — 語彙の粗さが原因で、レコード不足ではありません"
+            ]
         return [f"  ・{label}: データ不足（{reason} / {store}）"]
 
     lines = [f"  ・{label}: {value:.2f} — {direction}"]

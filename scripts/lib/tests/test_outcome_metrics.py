@@ -633,6 +633,31 @@ class TestSectionBuilder:
         # 誤シグナルの率（0.50）が表示されていないこと
         assert "0.50" not in joined
 
+    def test_saturated_is_not_rendered_as_data_shortage(self, tmp_path, monkeypatch):
+        """ADR-054 §2.0（A5 の裁定）: 飽和は「データ不足」と別物として表示する。
+
+        汎用フォールバック（「データ不足（<reason> / <store>）」）に流れると、レコードが
+        潤沢にあるのに「データが足りない」と読ませてしまい原因を取り違えさせる
+        （#376「数字が嘘をつかない」を表示文言にも適用する）。
+        """
+        monkeypatch.setattr(outcome_metrics, "DATA_DIR", tmp_path)
+        ts = _iso(_now())
+        records = []
+        for i in range(5):
+            records.append({"correction_type": f"t{i}", "session_id": f"s{i}a", "timestamp": ts})
+            records.append({"correction_type": f"t{i}", "session_id": f"s{i}b", "timestamp": ts})
+        _write_jsonl(tmp_path / "corrections.jsonl", records)
+        from audit.sections_outcome import build_outcome_metrics_section
+
+        lines = build_outcome_metrics_section(tmp_path)
+        assert lines is not None
+        joined = "\n".join(lines)
+        assert "飽和のため非表示" in joined
+        assert "distinct 5 type" in joined
+        assert "データ不足（saturated" not in joined
+        # 飽和した raw 値（1.0 / 100%）そのものは出さない
+        assert "1.00" not in joined
+
     def test_not_measured_is_shown_not_silenced(self, tmp_path, monkeypatch):
         """ADR-054 §2.6-1/§8: 3 軸とも value=None でも reason=not_measured が含まれれば
         沈黙しない（sessions レコードはあるが tool_sequence 未記録の実運用状態を再現）。

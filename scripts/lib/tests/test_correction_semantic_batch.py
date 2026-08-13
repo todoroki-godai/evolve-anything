@@ -641,6 +641,27 @@ def test_estimate_tokens_includes_output_budget_per_verdict() -> None:
     assert delta == input_line_tokens + cs_batch._OUTPUT_TOKENS_PER_VERDICT
 
 
+def test_estimate_tokens_equals_sum_of_reserved_batch_costs() -> None:
+    """見積もり（llm-batch-guard の表示）と予算ガード（reserve_batch_cost の予約額）は
+    **同一の式**でなければならない（#400 A5）。
+
+    A5 の初版は estimate_tokens 側にだけ出力予算を足し、実際に予算を守る
+    ``_batch_cost_tokens`` は入力のみのままだった＝同じ量に式が2つある状態
+    （pitfall: 片側だけの partial fix）。estimate_tokens を ``_batch_cost_tokens`` の
+    総和として定義したことをこのテストが固定し、片側だけの再分岐を赤にする。
+    """
+    utts = [
+        {"text": "短い", "prev_action": None},
+        {"text": "やや長めの発話テキスト" * 5, "prev_action": "Edit"},
+        {"text": "中くらいの長さ" * 2, "prev_action": None},
+    ]
+    for batch_size in (1, 2, 30):
+        est = cs_batch.estimate_tokens(utts, batch_size=batch_size)
+        groups = cs_batch._chunk(utts, batch_size)
+        expected = sum(cs_batch._batch_cost_tokens(g) for g in groups)
+        assert est["est_total_tokens"] == expected, f"batch_size={batch_size}"
+
+
 def test_reserve_batch_cost_reflects_larger_prompt_overhead(scratch_dir: Path) -> None:
     """固定費が template 由来の定数に切り替わっても reserve_batch_cost（billing 予約）は
     同じ ``_PROMPT_OVERHEAD_TOKENS`` を共有する（単一ソース・partial fix を避ける）。

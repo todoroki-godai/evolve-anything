@@ -128,16 +128,25 @@ def emit_judgement_requests(
 # ─────────────────────────────────────────────────────────────────
 # Phase C: ingest
 # ─────────────────────────────────────────────────────────────────
-def _batch_cost_tokens(group: List[Dict[str, Any]]) -> int:
-    """1 バッチ試行分の概算トークン（本文合計 + バッチ固定費）。
+def _batch_cost_tokens(
+    group: List[Dict[str, Any]], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
+) -> int:
+    """1 バッチ試行分の概算トークン（本文合計 + バッチ固定費 + 出力予算）。
 
     #410 round4 [Must]1+2: ``reserve_batch_cost`` が呼び出し直前の予約記録に使う唯一の
     コスト算出関数（誰にも確定的に帰属しない試行なのでバッチ丸ごと 1 件のコストとして扱う。
     round3 の per-key 按分方式は round4 で廃止した）。
+
+    #400 A5: **``estimate_tokens`` と同一の式でなければならない**（``estimate_tokens`` は
+    この関数を全バッチに適用した総和として定義される）。同じ量に式が2つあると、片方だけ
+    直したときに「見積もりは出力込み・予算ガードは入力のみ」という desync が生まれる
+    （実際 A5 の初版がその状態だった）。予算を実際に守るのは**こちら**なので、出力予算
+    （``_OUTPUT_TOKENS_PER_VERDICT`` × バッチ内発話数）はここに含める。
     """
     return (
-        sum(estimate_utterance_tokens(u, index=i) for i, u in enumerate(group))
+        sum(estimate_utterance_tokens(u, index=i, max_chars=max_chars) for i, u in enumerate(group))
         + _PROMPT_OVERHEAD_TOKENS
+        + len(group) * _OUTPUT_TOKENS_PER_VERDICT
     )
 
 
@@ -433,18 +442,16 @@ def estimate_tokens(
     token が見積もりから完全に欠落していた。出力は発話 1 件につき verdict 1 件が
     対応するため ``_OUTPUT_TOKENS_PER_VERDICT × 発話件数`` で加算する
     （バッチ数でなく発話数に連動する点が固定費 ``_PROMPT_OVERHEAD_TOKENS`` と異なる）。
+
+    式は ``_batch_cost_tokens``（``reserve_batch_cost`` が実際の予算ガードに使う関数）を
+    全バッチに適用した総和として定義する。**同じ量を2箇所で別々に足し上げない**
+    （A5 初版は estimate 側だけ出力予算を足し、予算ガード側が入力のみのまま desync していた）。
     """
     items = utterances or []
     n = len(items)
     groups = _chunk(items, batch_size)
     batches = len(groups)
-    body_tokens = sum(
-        estimate_utterance_tokens(u, index=i, max_chars=max_chars)
-        for group in groups
-        for i, u in enumerate(group)
-    )
-    output_tokens = n * _OUTPUT_TOKENS_PER_VERDICT
-    est = body_tokens + batches * _PROMPT_OVERHEAD_TOKENS + output_tokens
+    est = sum(_batch_cost_tokens(group, max_chars=max_chars) for group in groups)
     return {
         "utterances": n,
         "batches": batches,

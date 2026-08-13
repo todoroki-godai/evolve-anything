@@ -761,8 +761,11 @@ class TestRenderResultsBoard:
         assert "その週に何をやったか" in text
 
     def test_category_breakdown_hidden_when_not_measured(self):
-        """conflict 等で当該週のカテゴリ内訳が未測定なら、counts が空なので表示しない
-        （§3: 内訳は「あれば出す」optional・category を持たない週で壊れない）。
+        """conflict で当該週のカテゴリ内訳が未測定なら構成比は表示しない。
+
+        ただし**痕跡なく消しはしない**（P4: silence != evaluated）。構成比の代わりに
+        「測定不能 + 衝突件数」を出し、判定の重複記録という測定バグの手がかりを残す
+        （下の test_category_breakdown_conflict_surfaces_reason が固定）。
         """
         board = self._board(correction_rate={
             "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
@@ -782,6 +785,31 @@ class TestRenderResultsBoard:
         lines = results_board.render_results_board(board)
         text = "\n".join(lines)
         assert "カテゴリ構成" not in text
+
+    def test_category_breakdown_conflict_surfaces_reason(self):
+        """衝突で内訳を落とした週は理由を surface する（P4: silence != evaluated）。
+
+        内訳行が痕跡なく消えると「category を持たない週」と区別が付かず、同一発話への
+        複数カテゴリ付与＝判定の重複記録という測定バグの手がかりを失う。
+        """
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": [],
+                 "category_breakdown": {
+                     "measured": False, "counts": {}, "unclassified_count": 0,
+                     "conflict_keys": 3, "top_category": None, "top_category_example": None,
+                 }},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        })
+        text = "\n".join(results_board.render_results_board(board))
+        assert "カテゴリ内訳: 測定不能" in text
+        assert "3 件" in text
 
     def test_category_breakdown_absent_key_does_not_break_rendering(self):
         """category_breakdown キー自体が無い週（旧 summary・A5 以前）でも壊れない。"""

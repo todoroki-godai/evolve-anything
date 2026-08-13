@@ -304,7 +304,18 @@ def _category_breakdown_lines(category_breakdown: Optional[Dict[str, Any]]) -> L
     """
     cb = category_breakdown or {}
     counts: Dict[str, int] = cb.get("counts") or {}
-    if not cb.get("measured") or not counts:
+    # 衝突（同一 physical key に複数 category）で内訳を落としたときは、**黙って消さない**。
+    # 内訳行が痕跡なく消えると「カテゴリが無い週」と見分けが付かず、判定の重複記録という
+    # 測定バグの手がかりを失う（P4: silence != evaluated）。内訳は出さないが理由は出す。
+    conflict_keys = cb.get("conflict_keys") or 0
+    if not cb.get("measured"):
+        if conflict_keys:
+            return [
+                f"  カテゴリ内訳: 測定不能"
+                f"（同一発話に複数カテゴリ {conflict_keys} 件 — 判定の重複記録が疑われます）"
+            ]
+        return []
+    if not counts:
         return []
 
     total = sum(counts.values())
@@ -372,7 +383,13 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
         w["week_id"]: _category_breakdown_lines(w.get("category_breakdown"))
         for w in displayed
     }
-    if any(category_lines_by_week.values()):
+    # task-mix 交絡の注記は**構成比を実際に表示する週がある場合だけ**出す。
+    # 「測定不能」行しか無い週で注記だけ出すと、読者が存在しない構成比を探すことになる。
+    if any(
+        (w.get("category_breakdown") or {}).get("measured")
+        and (w.get("category_breakdown") or {}).get("counts")
+        for w in displayed
+    ):
         lines.append(
             "カテゴリ構成は**その週に何をやったか**に強く依存します（task-mix 交絡）。"
             "週次の増減比較には使わず、今週の内訳として読んでください。"
