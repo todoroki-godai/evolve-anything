@@ -53,9 +53,9 @@ reject、未変更かつ未却下（保留）は母集団に入れない。
 > 無関係な通常 commit（別作業でのファイル変更）でも対象ファイルの sha はたまたま変わりうる。
 > SessionStart 自動 drain（#421・対話チャネルを持たない）がこの判定をトリガーし、無関係な
 > commit を accept と誤記録する実測事故が発生した。是正後は「ディスク差分」に加えて
-> `ed.drain_pending(accepted={id, ...})` で渡す**明示的な decision イベント**の両方が揃わないと
-> accept にならない（下記参照）。ディスク差分は整合性ガードとして残る（明示 accept があっても
-> 未適用なら pending のまま）。
+> `evolve --drain --accepted <id...>`（#444。CLI 経由で `drain_pending(accepted={id, ...})` へ渡る）で
+> 渡す**明示的な decision イベント**の両方が揃わないと accept にならない（下記参照）。ディスク差分は
+> 整合性ガードとして残る（明示 accept があっても未適用なら pending のまま）。
 
 > **#400 バグ#1 根治**: 旧版は「`--dry-run` の場合は未記録でスキップ」していたが、evolve の
 > 標準フローは `evolve --dry-run` で分析 → assistant が Step 3 で対話適用、である。この運用だと
@@ -83,13 +83,13 @@ evolve --project-dir "$PJ" --drain --result-json "$OUT"
 ```
 
 - `evolve --drain` は marker（`emit_decisions` が `--dry-run` でも記録した `before_sha` 付き
-  pending）を読み、明示 decision イベント（下記の inline `accepted=`/`rejected=`）と突き合わせて
+  pending）を読み、明示 decision イベント（下記の `--accepted`/`--rejected`）と突き合わせて
   optimize_history へ記録し、marker をクリアする。**tool 文脈（CLI）で走る**ため reader と同一
-  DATA_DIR に書く＝hook/tool の DATA_DIR split（#358）を踏まない。**この単一コマンド単体では
-  evolve_decisions の accept/reject は記録しない**（#376）— weak_signals / calibration state /
-  tool_usage_snapshot / remediation marker / correction_semantic Phase C は
+  DATA_DIR に書く＝hook/tool の DATA_DIR split（#358）を踏まない。**`--accepted`/`--rejected` を
+  渡さない単一コマンドでは evolve_decisions の accept/reject は記録しない**（#376）— weak_signals /
+  calibration state / tool_usage_snapshot / remediation marker / correction_semantic Phase C は
   この呼び出しだけで確定するが、fitness 母集団（optimize_history）への記録は下記の
-  `accepted=`/`rejected=` 付き inline 呼び出しが必要。
+  `--accepted`/`--rejected` 付き呼び出しが必要（#444）。
 - **`--result-json "$OUT"` で result 依存2項目も同居確定（#146/ADR-051）**: 標準フローは
   `evolve --dry-run` 分析 → 対話適用 → drain で完結し `run_evolve(dry_run=False)` に到達しない
   ため、phases_capture の `if not dry_run:` 配下（calibration state / tool_usage_snapshot）が
@@ -100,18 +100,23 @@ evolve --project-dir "$PJ" --drain --result-json "$OUT"
   （growth crystallization emit・`growth_crystallized` キーは #379 Step 4 で削除済み）。
   **`$OUT` を渡し忘れ / 消えた場合は2項目のみ graceful skip**
   （`{"skipped": "no_result_json"}` 等）し、他 persist は無傷で完走する。
-- **承認して適用した提案がある場合、または明示却下がある場合**は inline で
-  `ed.drain_pending(accepted={id, ...}, rejected={id: 理由, ...})` を**追加で**使う（MUST・#376）
-  — `--drain` CLI 単体では accept/reject を渡す手段が無いため、`accepted`/`rejected` はこの
-  inline 呼び出しでのみ渡せる。`id` は `result.evolve_decisions.pending[].id`（`skill_path` で
-  Step 3 の対象提案と対応づける）。承認も却下も無ければこの追加呼び出しは不要（pending のまま
-  次回に持ち越される）。
+- **承認して適用した提案がある場合、または明示却下がある場合**は同じ `evolve --drain` 呼び出しに
+  `--accepted <id...>` / `--rejected <id> <理由>`（却下1件につき1回繰り返す）を**追加する**（MUST・
+  #376/#444）— `--drain` CLI は `--accepted`/`--rejected` を渡さない限り accept/reject を一切
+  記録しない。`id` は `result.evolve_decisions.pending[].id`（`skill_path` で Step 3 の対象提案と
+  対応づける）。承認も却下も無ければこれらのフラグは不要（pending のまま次回に持ち越される）。
+  **CLI は重複指定（`--accepted`/`--rejected` 間・各フラグ内）・未知 ID（現在 pending に存在しない
+  ID）・理由なし reject（空/空白のみ）を明確なエラーで拒否し、drain_pending を一切呼ばずに中断する**
+  （部分書込防止）。引数名は既存の `genetic-prompt-optimizer --accept`/`--reject`（直近結果を丸ごと
+  受理/却下する単数フラグ）とは別物なので混同しない。
 - **enforcement の保険（#402、#376 で範囲縮小）**: drain を忘れても、適用済みで未 drain な提案が
   あれば**次回 SessionStart で `restore_state` が `evolve --drain` を促すリマインド**を出す
   （`undrained_applied` が marker の before_sha と現ディスク sha を突合、store 非依存で #358 回避）。
-  ただし SessionStart hook には対話チャネルが無く明示 accept を代弁できないため、**この保険は
-  リマインド表示のみで optimize_history への記録は行わない**（#421 が導入した無人 auto-accept は
-  #376 で撤回）。記録は Step 3 の対話 → Step 7.8 の明示 `accepted=`/`rejected=` 呼び出しでのみ成立する。
+  ただし SessionStart hook には対話チャネルが無く `--accepted`/`--rejected` を代弁できないため、
+  **この保険はリマインド表示のみで optimize_history への記録は行わない**（#421 が導入した無人
+  auto-accept は #376 で撤回。hook 側の呼び出しは `drain_pending(slug=..., history_file=...)` のみで
+  decision 引数を一切渡さない — `scripts/lib/session_notify/collectors.py` 参照）。記録は Step 3 の
+  対話 → Step 7.8 の明示 `--accepted`/`--rejected` 呼び出しでのみ成立する。
 
 - 何も適用せず（純粋プレビュー）何も却下しなければ、全件が skip に落ち記録されない（self-correcting）
 - accept/reject は `record_evolve_diff_decision` 経由で optimize_history（ADR-031）へ冪等記録され、
