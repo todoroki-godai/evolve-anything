@@ -55,6 +55,10 @@ USER_CONFIG_DEFAULTS: dict[str, object] = {
     # コードに埋め込まず設定値として持つ（idiom_autopromote_daily_cap と同型の安全弁）。
     "judge_daily_utterance_limit": 200,
     "judge_daily_token_limit": 150_000,
+    # correction_semantic.judge_runner（#442）: 未判定 utterance を judge に「入れるか」の
+    # cutoff（発話時刻基準）。TTL 45日（判定後に生成された weak_signal を「提示するか」）とは
+    # 別段階・別時計。既定90日はユーザー承認済み標準値（judge_runner.py 参照）。
+    "judge_utterance_max_age_days": 90,
 }
 
 

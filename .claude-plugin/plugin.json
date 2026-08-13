@@ -153,6 +153,12 @@
       "type": "number",
       "description": "llm_judge Phase B（意味判定）の daily runner が1日に消費する推定トークンの上限 (default: 150000・#408 ユーザー承認済み標準値)。",
       "sensitive": false
+    },
+    "judge_utterance_max_age_days": {
+      "title": "llm_judge Utterance Max Age (days)",
+      "type": "number",
+      "description": "未判定 utterance を llm_judge に入れる cutoff（発話時刻基準・default: 90・#442）。判定後に生成された weak_signal の提示可否を決める TTL 45日とは別段階・別時計。",
+      "sensitive": false
     }
   }
 }
