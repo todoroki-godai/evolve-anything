@@ -431,7 +431,7 @@ sidechain 除外は user 行だけでなく `prev_action` の境界にも影響�
 | ID | 内容 |
 |---|---|
 | D1 | `pre_extension` 残存2経路（`optimize.py::save_history_entry` / `run_loop.py`）を emit→drain lane に寄せる → **PR2/PR3 は凍結（下記）** |
-| D2 | entry_id の導線拡充（`bin/evolve-revert --list` 相当） |
+| D2 | entry_id の導線拡充（`bin/evolve-revert --list` 相当） → **実施済み（2026-08-13）**。`bin/evolve-revert --list`（`--json` 対応）が accepted entry を revert 可否つきで新しい順に列挙。PR2/PR3 対象外レーンの entry も `pre_extension` 理由つきで一覧に残す（黙って落とさない・#376） |
 
 **D1 の PR2/PR3 凍結裁定（2026-08-13・ユーザー判断）**
 
@@ -689,7 +689,7 @@ C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の
 | A1〜A5 | **新規記録**で sidechain 由来0件（既存行の扱いは §5-A1 の方針どおり）。`prev_action` 持ち越しのテスト。`correction_recurrence` が None を脱する |
 | B | **固定 corpus + 複数 PJ/global group のテスト**で「sidechain 0 / machinery 0 / content-rich 供給あり / 既読差引き後も順位規則を満たす」（単日目視では不十分） |
 | G1 | ✅ **2026-08-13 PASS**。`a0_eval_set.jsonl` の正解ラベルと llm_judge レーンの判定を固定実コーパス（本番 DB 非汚染の一時 DB）で突合。**recall 80.0%（Wilson 95% CI [49.0%, 94.3%]）で CI 下限が hook レーンの 4.5% を大差で上回る**。precision 80.0% は hook レーンの 87.5% と有意差なし。詳細・限界は §7.4 |
-| D（PR4 のみ） | 新規 accept（A レーン＝evolve drain 経由）が `revert_available=true` で記録され、`bin/evolve-revert` が dry-run で復元内容を印字。**PR2/PR3 は 2026-08-13 凍結中につき対象外**（`optimize.py::save_history_entry` / `run_loop.py` 経由の採用は revert 対象外のまま。§5 Phase D） |
+| D（PR4 のみ） | ✅ **2026-08-13 実施済み**。新規 accept（A レーン＝evolve drain 経由）が `revert_available=true` で記録され、`bin/evolve-revert` が dry-run で復元内容を印字。`bin/evolve-revert --list` が entry_id 一覧を出す（read-only・書込ゼロを実測確認）。**PR2/PR3 は 2026-08-13 凍結中につき対象外**（`optimize.py::save_history_entry` / `run_loop.py` 経由の採用は revert 対象外のまま。§5 Phase D） |
 | E | correction → skill diff → accept が **synthetic E2E で1周する** |
 | C | `not_measured` と `no_data` が表示上区別される。欠測週が「改善」に化けない（**欠測の定義に分母側 `utterances.db` の ingest 停止週も含める**——#351 の16日沈黙の前科を踏まえる）。C2/C4 は因果を断定せず「適用後に指標が改善／悪化した**関連**」として表示し、最低分母・観測窓・複数 accept が重なる場合の `unattributed` を明示する。C4 は synthetic E2E |
 

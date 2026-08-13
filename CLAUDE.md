@@ -83,7 +83,7 @@
 | `evolve_decisions` | run envelope で並行 run を分離し未判断は deferred 保持。marker 書込失敗は `marker_error` で surface。supersede は対象パス単位、flat `result_path` は run 1件時のみ | `evolve_decisions.py` |
 | `file_lock` | ファイル単位排他ロックと atomic write の単一ソース。ロック下からは `_locked` 版を使い自己 deadlock を回避 | `rl_common/file_lock.py` |
 | `evolve_decision_ids` | 提案 identity `(repo_id, repo相対path, before_sha)` と判断イベント identity を隣接定義する純関数 module（取り違え防止） | `evolve_decision_ids.py` |
-| `evolve_revert` | 採用した skill diff を戻す apply engine。3分岐（normal/冪等/conflict）で conflict は上書きせず中止、CLI は既定 dry-run・`--apply` のみ実書込 | `evolve_revert/` + `bin/evolve-revert` + `evolve_revert_cli.py`（ADR-053） |
+| `evolve_revert` | 採用した skill diff を戻す apply engine。3分岐（normal/冪等/conflict）で conflict は上書きせず中止、CLI は既定 dry-run・`--apply` のみ実書込。`--list` で一覧 | `evolve_revert/` + `evolve_revert_listing.py` + `bin/evolve-revert` + `evolve_revert_cli.py`（ADR-053/ADR-054） |
 | optimize_history の effective view | revert 済み accept を判断母集団から畳む `fold_effective` が単一ソース。業務 reader は `load_effective_history`、raw は allowlist 3件のみ | `optimize_history_store.py` |
 | `raw_history_gate` | raw history read を AST で閉じた allowlist に固定。未許可の新規呼出しも allowlist の消失（`stale_allowlist`）も fail。許可の単一ソースは production 定数 | `raw_history_gate.py` |
 | `evolve_reconcile` | skill_evolve↔archive 矛盾の reconcile + batch_skip の observability 昇格 | `evolve_reconcile.py` |
@@ -238,7 +238,8 @@ bin/evolve-daily-install --uninstall
 bin/evolve-scaffold-advisory my_check                 # dry-run（stub + checklist 表示）
 bin/evolve-scaffold-advisory my_check --with-store --write
 
-# 採用した skill diff を戻す（#402・既定 dry-run。entry_id は戦果ボードが印字する）
+# 採用した skill diff を戻す（#402・既定 dry-run。entry_id は戦果ボードか --list が印字する）
+bin/evolve-revert --list                  # 戻せる採用の一覧（entry_id つき・read-only・#402 D2）
 bin/evolve-revert <entry_id>              # 何が起きるか確認（書込ゼロ）
 bin/evolve-revert <entry_id> --apply      # 実際に戻す
 bin/evolve-revert <entry_id> --dump-before /tmp/before.md   # 戻さず変更前の本文だけ取り出す

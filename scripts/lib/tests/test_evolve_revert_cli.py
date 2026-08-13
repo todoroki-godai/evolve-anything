@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _LIB = Path(__file__).resolve().parent.parent
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
@@ -126,6 +128,76 @@ class TestDumpBeforeDelegation:
 
         assert rc == 1
         assert "dest_exists" in capsys.readouterr().err
+
+
+class TestListFlag:
+    """``--list``（ADR-054 Phase D PR4/D2）: read-only の entry_id 一覧導線。"""
+
+    def test_list_calls_build_revert_listing_not_apply(self, monkeypatch, capsys):
+        calls = {}
+
+        def _fake_build(*a, **kw):
+            calls["called"] = True
+            return []
+
+        def _boom_apply(*a, **kw):
+            raise AssertionError("apply_revert must not be called for --list")
+
+        monkeypatch.setattr(cli, "build_revert_listing", _fake_build)
+        monkeypatch.setattr(cli, "apply_revert", _boom_apply)
+
+        rc = cli.main(["--list"])
+
+        assert rc == 0
+        assert calls == {"called": True}
+        assert "0件" in capsys.readouterr().out
+
+    def test_list_renders_items_via_render_revert_listing(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli, "build_revert_listing",
+            lambda *a, **kw: [{
+                "entry_id": "p1", "skill_name": "queue", "timestamp": "2026-08-01T00:00:00+00:00",
+                "scope": "project", "revert_available": True, "revert_unavailable_reason": None,
+            }],
+        )
+
+        rc = cli.main(["--list"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "p1" in out
+        assert "bin/evolve-revert p1" in out
+
+    def test_list_json_output(self, monkeypatch, capsys):
+        items = [{
+            "entry_id": "p1", "skill_name": "queue", "timestamp": "2026-08-01T00:00:00+00:00",
+            "scope": "project", "revert_available": True, "revert_unavailable_reason": None,
+        }]
+        monkeypatch.setattr(cli, "build_revert_listing", lambda *a, **kw: items)
+
+        rc = cli.main(["--list", "--json"])
+
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["total"] == 1
+        assert payload["items"] == items
+
+    def test_list_with_entry_id_is_argument_error(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["e1", "--list"])
+        assert exc.value.code == 2
+        assert "併用できません" in capsys.readouterr().err
+
+    def test_list_with_apply_is_argument_error(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["--list", "--apply"])
+        assert exc.value.code == 2
+
+    def test_json_without_list_is_argument_error(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["e1", "--json"])
+        assert exc.value.code == 2
+        assert "--list とのみ" in capsys.readouterr().err
 
 
 class TestEndToEndDryRunNoWrite:
