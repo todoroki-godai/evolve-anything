@@ -13,6 +13,7 @@ ingest（assistant 応答を受け取る・Phase C）。テストは responses d
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -218,6 +219,60 @@ def test_ingest_stores_idiom_in_weak_signal_provenance(scratch_dir: Path) -> Non
     )
     ws_lines = [json.loads(l) for l in ws_store.read_text(encoding="utf-8").splitlines() if l.strip()]
     assert ws_lines[0]["provenance"]["idiom"] == "四国めたんじゃなくて"
+
+
+# ── #400 A5: category / model / prompt fingerprint / schema version の provenance 透過 ──
+
+
+def test_ingest_stores_category_and_producer_provenance(scratch_dir: Path) -> None:
+    """設計 §2.4: category は producer 時点の測定値。model / prompt_fingerprint /
+    category_schema_version を同時に provenance へ保存する。
+    """
+    from correction_semantic import prompt as cs_prompt
+
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = _responses_for(emitted, {
+        (rid, 0): {"is_correction": True, "idiom": "四国めたんじゃなくて",
+                    "category": "factual", "reason": "後置型"},
+    })
+    cs_batch.ingest_judgement_results(
+        emitted, responses, model="haiku",
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    ws_lines = [json.loads(l) for l in ws_store.read_text(encoding="utf-8").splitlines() if l.strip()]
+    prov = ws_lines[0]["provenance"]
+    assert prov["category"] == "factual"
+    assert prov["model"] == "haiku"
+    assert prov["prompt_fingerprint"] == cs_prompt.prompt_fingerprint()
+    assert prov["category_schema_version"] == cs_prompt.CATEGORY_SCHEMA_VERSION
+
+
+def test_ingest_stores_none_model_when_not_provided(scratch_dir: Path) -> None:
+    """呼び出し元が model を渡さなければ推測せず None のまま保存する（factual-claims）。"""
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = _responses_for(emitted, {
+        (rid, 0): {"is_correction": True, "idiom": "x", "category": "factual", "reason": "y"},
+    })
+    cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    ws_lines = [json.loads(l) for l in ws_store.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert ws_lines[0]["provenance"]["model"] is None
 
 
 def test_ingest_filters_overbroad_idioms_from_dictionary(scratch_dir: Path) -> None:
@@ -559,17 +614,84 @@ def test_estimate_tokens() -> None:
     assert est["est_total_tokens"] > 0
 
 
+# ── #400 A5（設計 §2.2 codex [Should]）: 固定費の template 導出 + 出力予算加算 ─────
+
+
+def test_prompt_overhead_tokens_derived_from_template() -> None:
+    """固定費は ``build_batch_prompt([])``（発話ゼロ件＝固定部分のみ）の実長から導出する。
+    旧実装は 400 のハードコード定数で、カテゴリ語彙表追加のようなプロンプト伸長で
+    見積もりが実態から乖離していた。
+    """
+    from correction_semantic import prompt as cs_prompt
+
+    expected = math.ceil(len(cs_prompt.build_batch_prompt([])) / cs_batch._CHARS_PER_TOKEN)
+    assert cs_batch._PROMPT_OVERHEAD_TOKENS == expected
+
+
+def test_estimate_tokens_includes_output_budget_per_verdict() -> None:
+    """出力（verdict JSON）の token も見積もりに含める（従来は入力のみ）。
+
+    出力予算は verdict 数（＝発話数）に連動する。バッチ数に連動する固定費とは軸が違う。
+    """
+    u = {"text": "x", "prev_action": None}
+    est_1 = cs_batch.estimate_tokens([dict(u)], batch_size=30)
+    est_2 = cs_batch.estimate_tokens([dict(u), dict(u)], batch_size=30)
+    delta = est_2["est_total_tokens"] - est_1["est_total_tokens"]
+    input_line_tokens = cs_batch.estimate_utterance_tokens(u, index=1)
+    assert delta == input_line_tokens + cs_batch._OUTPUT_TOKENS_PER_VERDICT
+
+
+def test_estimate_tokens_equals_sum_of_reserved_batch_costs() -> None:
+    """見積もり（llm-batch-guard の表示）と予算ガード（reserve_batch_cost の予約額）は
+    **同一の式**でなければならない（#400 A5）。
+
+    A5 の初版は estimate_tokens 側にだけ出力予算を足し、実際に予算を守る
+    ``_batch_cost_tokens`` は入力のみのままだった＝同じ量に式が2つある状態
+    （pitfall: 片側だけの partial fix）。estimate_tokens を ``_batch_cost_tokens`` の
+    総和として定義したことをこのテストが固定し、片側だけの再分岐を赤にする。
+    """
+    utts = [
+        {"text": "短い", "prev_action": None},
+        {"text": "やや長めの発話テキスト" * 5, "prev_action": "Edit"},
+        {"text": "中くらいの長さ" * 2, "prev_action": None},
+    ]
+    for batch_size in (1, 2, 30):
+        est = cs_batch.estimate_tokens(utts, batch_size=batch_size)
+        groups = cs_batch._chunk(utts, batch_size)
+        expected = sum(cs_batch._batch_cost_tokens(g) for g in groups)
+        assert est["est_total_tokens"] == expected, f"batch_size={batch_size}"
+
+
+def test_reserve_batch_cost_reflects_larger_prompt_overhead(scratch_dir: Path) -> None:
+    """固定費が template 由来の定数に切り替わっても reserve_batch_cost（billing 予約）は
+    同じ ``_PROMPT_OVERHEAD_TOKENS`` を共有する（単一ソース・partial fix を避ける）。
+    """
+    judged = scratch_dir / "judged.jsonl"
+    utts = _utts()
+    cost = cs_batch._batch_cost_tokens(utts)
+    cs_batch.reserve_batch_cost(utts, judged_path=judged)
+    today = cs_store.count_judged_today(path=judged)
+    assert today["est_tokens"] == cost
+    assert cost >= cs_batch._PROMPT_OVERHEAD_TOKENS
+
+
 # ── #410 [Must]C: 固定係数でなく実入力長に連動する見積もりに固定する ──────────
 
 
 def test_estimate_tokens_scales_with_actual_text_length() -> None:
-    """#410: 「件数×80」固定だと長文1件と短文1件が同じ扱いになる。実長差を反映すること。"""
+    """#410: 「件数×80」固定だと長文1件と短文1件が同じ扱いになる。実長差を反映すること。
+
+    #400 A5 でカテゴリ語彙表が加わり固定費（overhead + 出力予算）自体が大きくなったため、
+    両者に共通するその固定費を差し引いた「本文由来の増分」だけを比較する
+    （固定費は長短どちらの発話にも同額乗るので、生の総量比較は本文長の効きを薄めてしまう）。
+    """
     short = [{"text": "短い", "prev_action": None}]
     long_utt = [{"text": "あ" * 5000, "prev_action": None}]
     est_short = cs_batch.estimate_tokens(short, batch_size=30)
     est_long = cs_batch.estimate_tokens(long_utt, batch_size=30)
+    fixed = cs_batch._PROMPT_OVERHEAD_TOKENS + cs_batch._OUTPUT_TOKENS_PER_VERDICT
     # 長文側が短文側より明確に高いこと（固定係数だと同数になっていた）。
-    assert est_long["est_total_tokens"] > est_short["est_total_tokens"] * 5
+    assert est_long["est_total_tokens"] - fixed > (est_short["est_total_tokens"] - fixed) * 5
 
 
 def test_estimate_tokens_reflects_truncation_cap() -> None:
@@ -586,9 +708,13 @@ def test_estimate_tokens_reflects_truncation_cap() -> None:
 
 
 def test_estimate_tokens_empty_text_is_small() -> None:
+    """本文ゼロの1発話なら、固定費 + 出力予算1件分に近い小さな値になる
+    （#400 A5 でカテゴリ語彙表が加わり固定費自体は伸びたが、本文起因の増分は無いはず）。
+    """
     est = cs_batch.estimate_tokens([{"text": "", "prev_action": None}], batch_size=30)
-    assert est["est_total_tokens"] > 0  # per-batch/per-utterance overhead は残る
-    assert est["est_total_tokens"] < 500  # だが本文ゼロなら十分小さい
+    assert est["est_total_tokens"] > 0
+    ceiling = cs_batch._PROMPT_OVERHEAD_TOKENS + cs_batch._OUTPUT_TOKENS_PER_VERDICT + 100
+    assert est["est_total_tokens"] < ceiling
 
 
 def test_estimate_tokens_uses_real_batch_local_index_not_hardcoded_zero() -> None:

@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from optimize_history_store import load_effective_history, load_revert_events
 from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
+from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
 from evolve_revert import REASON_LABELS, compute_revert_availability
 
 _WINDOW_DAYS = 30
@@ -292,6 +293,54 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     }
 
 
+def _category_breakdown_lines(category_breakdown: Optional[Dict[str, Any]]) -> List[str]:
+    """1週分のカテゴリ内訳（#400 A5・設計 §2.6「表示の形」）を markdown 行にする。
+
+    ``measured=False``（同一物理キーへの conflicting category 検出）・counts が空
+    （legacy 週で category を持つ TP が1件も無い）のいずれでも空リストを返す
+    （§3: 内訳は「あれば出す」optional・category を持たない週で壊れない）。
+    週次 delta は雑音（設計 §2.6 実測）なので**比較は表示しない** — 今週の構成比 +
+    最大カテゴリの実発話1件のみ。
+    """
+    cb = category_breakdown or {}
+    counts: Dict[str, int] = cb.get("counts") or {}
+    # 衝突（同一 physical key に複数 category）で内訳を落としたときは、**黙って消さない**。
+    # 内訳行が痕跡なく消えると「カテゴリが無い週」と見分けが付かず、判定の重複記録という
+    # 測定バグの手がかりを失う（P4: silence != evaluated）。内訳は出さないが理由は出す。
+    conflict_keys = cb.get("conflict_keys") or 0
+    if not cb.get("measured"):
+        if conflict_keys:
+            return [
+                f"  カテゴリ内訳: 測定不能"
+                f"（同一発話に複数カテゴリ {conflict_keys} 件 — 判定の重複記録が疑われます）"
+            ]
+        return []
+    if not counts:
+        return []
+
+    total = sum(counts.values())
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], CATEGORY_ENUM.index(kv[0])))
+    parts = []
+    for cat, cnt in ordered:
+        pct = (cnt / total * 100) if total else 0.0
+        label = CATEGORY_LABELS_JA.get(cat, cat)
+        parts.append(f"{label}（{cat}）{cnt}件（{pct:.0f}%）")
+    unclassified = cb.get("unclassified_count") or 0
+    if unclassified:
+        parts.append(f"unclassified {unclassified}件")
+
+    lines = [f"  カテゴリ構成: {', '.join(parts)}"]
+    example = cb.get("top_category_example")
+    top_category = cb.get("top_category")
+    if example and top_category:
+        top_label = CATEGORY_LABELS_JA.get(top_category, top_category)
+        text = (example.get("text") or "").strip()
+        reason = (example.get("reason") or "").strip()
+        suffix = f"（{reason}）" if reason else ""
+        lines.append(f"  最大カテゴリ（{top_label}）の実発話: {text}{suffix}")
+    return lines
+
+
 def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
     """指摘率セクション（ADR-054 §7.2.1 柱3(a)）の markdown ブロックを生成する。
 
@@ -299,6 +348,12 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
     非表示）が閉じている間は「未測定（判定カバレッジ X/Y）」1行のみ。開いていれば
     表示対象週を新しい順に列挙し、PJ別内訳（Simpson 防御・必須 evidence）と、
     悪化週のみ TP 実発話 TOP3（朝レビューへの導線）を添える。
+
+    #400 A5（設計 §2.6「表示の形」）: 各週の TP をカテゴリ（対象軸）で内訳分解した行も
+    添える。**週次 delta の比較は表示しない**（週次 TP ≈10〜20件を8分割すると各セル
+    0〜5件で雑音・PJ 構成比の変化＝task-mix 交絡が支配的なため）。表示は今週の構成比 +
+    最大カテゴリの実発話1件 + task-mix 交絡の注記の3点に絞る。category を持つ週が
+    1つも無ければ注記自体を出さない（silence でなく、内訳が単に無いだけ）。
     """
     gate = correction_rate.get("gate") or {}
     required = gate.get("required", GATE_CONSECUTIVE_WEEKS)
@@ -324,6 +379,22 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
         "分子は LLM judge の意味判定です（実測 precision 80% ＝ 分子の2割は誤りを含む前提で読んでください）。"
     )
     lines.append("")
+    category_lines_by_week = {
+        w["week_id"]: _category_breakdown_lines(w.get("category_breakdown"))
+        for w in displayed
+    }
+    # task-mix 交絡の注記は**構成比を実際に表示する週がある場合だけ**出す。
+    # 「測定不能」行しか無い週で注記だけ出すと、読者が存在しない構成比を探すことになる。
+    if any(
+        (w.get("category_breakdown") or {}).get("measured")
+        and (w.get("category_breakdown") or {}).get("counts")
+        for w in displayed
+    ):
+        lines.append(
+            "カテゴリ構成は**その週に何をやったか**に強く依存します（task-mix 交絡）。"
+            "週次の増減比較には使わず、今週の内訳として読んでください。"
+        )
+        lines.append("")
     for w in reversed(displayed):
         rate = w.get("rate")
         rate_label = f"{rate * 100:.1f}%" if rate is not None else "?"
@@ -341,6 +412,7 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
                 pj_parts.append(f"{pj_slug} {stats['tp']}/{stats['judged']}（件数のみ・分母不足）")
         if pj_parts:
             lines.append(f"  PJ別: {', '.join(pj_parts)}")
+        lines.extend(category_lines_by_week.get(w["week_id"], []))
         if w.get("is_worsening") and w.get("top3_examples"):
             lines.append("  悪化週です。気になった直近の指摘:")
             for ex in w["top3_examples"]:

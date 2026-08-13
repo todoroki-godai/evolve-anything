@@ -115,7 +115,7 @@ rephrase は「同一の長文を複数回投げる」ため構造的に count �
 | 軸 | 状態 | 理由 |
 |---|---|---|
 | `rework_rate` | **測定不能** | `sessions.jsonl` 全2,487件に `tool_sequence` が0件（writer が集計値しか書かない） |
-| `correction_recurrence` | **測定不能** | `correction_type` の語彙が実質1種（distinct_types=1 < floor 5） |
+| `correction_recurrence` | **測定不能（恒久・A5 で裁定済み）** | `correction_type` の語彙が実質1種（distinct_types=1 < floor 5）。**A5（drafts/054-a5-correction-category.md §2.0）で `correction_type` は変更しない・`correction_recurrence` は復活させないと確定**。floor 到達後の「粗い語彙で再発率1.0に張り付く」構造劣化は `outcome_metrics.correction_recurrence_rate` の決定論飽和ゲート（`recurring==distinct_types` かつ `rate>=0.9` → `reason="saturated"`）で恒久防止 |
 | `first_try_success` | 0.9403 | **唯一動いている軸** |
 
 per-skill 帰属: 147 skill 中 first_try_success non-null 46 / rework 0 / recurrence 0 / degraded 101（69%）。
@@ -265,7 +265,7 @@ census TP 7件）が weak_signals の llm_judge レーンに何件現れるか�
 | A1 | `isSidechain` 除外を**記録層で根治** | `utterance_archive/extractor.py` + 再 ingest migration |
 | A2 | `_DISPATCH_MARKERS` 文字列 allowlist を廃止し構造フラグ + `is_machinery_prompt` 委譲へ統合 | `weak_signals/detectors.py` |
 | A3 | 既存 FP の後始末（rephrase 16 / llm_judge 33 / **corrections 昇格済み2**） | — |
-| A5 | `correction_type` の語彙を増やす（distinct_types=1 → floor 5） | `correction_semantic/` |
+| A5 | **rev2/rev3 でスコープ縮小（§2.0）**: `correction_type` は変更しない・`correction_recurrence` は復活させない。judge 判定時に `provenance.category`（対象軸8値 enum）を1つ付け、C(a) の TP をカテゴリで分解して見せるだけにする | `correction_semantic/` + `correction_rate.py` |
 
 **A0 — correction capture の修理【新設・最優先】**
 現状: 3か月で hook 由来1件。実コーパス 2,841発話でマッチ0件。修正語を含む31件（フィルタ通過後）にも0ヒット。
@@ -713,7 +713,7 @@ C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の
 |---|---|
 | 0 (B1) | SessionStart の出力が**単一 JSON dict**。平常時1行。異常系 fixture で必要情報が消えないこと |
 | A0 | **実コーパスリプレイ**で修正語を含む発話の検出率と FP 率を実測。合成 fixture の緑では完了としない |
-| A1〜A5 | **新規記録**で sidechain 由来0件（既存行の扱いは §5-A1 の方針どおり）。`prev_action` 持ち越しのテスト。`correction_recurrence` が None を脱する |
+| A1〜A5 | **新規記録**で sidechain 由来0件（既存行の扱いは §5-A1 の方針どおり）。`prev_action` 持ち越しのテスト。**A5 は rev2/rev3 で `correction_type` を触らない方針に確定した（§2.0）ため `correction_recurrence` は恒久的に None のまま**（saturated ゲート含め決定論テストで固定）。A5 の完了条件は `provenance.category` の内訳が C(a) の TP と同一母集団で表示されること |
 | B | **固定 corpus + 複数 PJ/global group のテスト**で「sidechain 0 / machinery 0 / content-rich 供給あり / 既読差引き後も順位規則を満たす」（単日目視では不十分） |
 | G1 | ✅ **2026-08-13 PASS**。`a0_eval_set.jsonl` の正解ラベルと llm_judge レーンの判定を固定実コーパス（本番 DB 非汚染の一時 DB）で突合。**recall 80.0%（Wilson 95% CI [49.0%, 94.3%]）で CI 下限が hook レーンの 4.5% を大差で上回る**。precision 80.0% は hook レーンの 87.5% と有意差なし。詳細・限界は §7.4 |
 | D（PR4 のみ） | ✅ **2026-08-13 実施済み**。新規 accept（A レーン＝evolve drain 経由）が `revert_available=true` で記録され、`bin/evolve-revert` が dry-run で復元内容を印字。`bin/evolve-revert --list` が entry_id 一覧を出す（read-only・書込ゼロを実測確認）。**PR2/PR3 は 2026-08-13 凍結中につき対象外**（`optimize.py::save_history_entry` / `run_loop.py` 経由の採用は revert 対象外のまま。§5 Phase D） |

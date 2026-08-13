@@ -40,6 +40,86 @@ def test_build_prompt_asks_for_json() -> None:
     assert "idiom" in p
 
 
+# ── #400 A5: category（対象軸 8値 enum）────────────────────────────
+
+
+def test_build_prompt_contains_category_vocabulary_and_priority_rules() -> None:
+    """設計 §2.1: 8カテゴリの語彙表 + 境界優先規則をプロンプトに明記する。"""
+    p = cs_prompt.build_batch_prompt(_utts())
+    for label in cs_prompt.CATEGORY_ENUM:
+        assert label in p
+    assert "category" in p
+    # 境界優先規則（最頻の揺れとして名指しされた presentation/explanation）
+    assert "presentation" in p and "explanation" in p
+
+
+def test_category_enum_has_eight_labels() -> None:
+    assert len(cs_prompt.CATEGORY_ENUM) == 8
+    assert set(cs_prompt.CATEGORY_ENUM) == {
+        "presentation", "explanation", "factual", "approach",
+        "omission", "excess", "process", "other",
+    }
+
+
+def test_prompt_fingerprint_changes_with_template() -> None:
+    """設計 §2.4/§2.5: category は producer 時点の測定値。プロンプトが変われば
+    fingerprint も変わり、系列断絶を検出できる（utterances 依存部分は対象外）。
+    """
+    fp1 = cs_prompt.prompt_fingerprint()
+    fp2 = cs_prompt.prompt_fingerprint()
+    assert fp1 == fp2  # 決定論（同一プロセス内で安定）
+    # 発話内容を変えても fingerprint は変わらない（固定テンプレート部分のみ対象）
+    assert cs_prompt.prompt_fingerprint() == fp1
+
+
+def test_parse_verdict_captures_valid_category() -> None:
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "x", "category": "factual", "reason": "y"},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert result["verdicts"][0]["category"] == "factual"
+
+
+def test_parse_verdict_forces_category_none_when_not_correction() -> None:
+    """設計 §2.4: is_correction=false のとき category は必ず None（モデルが値を返しても無視）。"""
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": False, "idiom": None, "category": "factual", "reason": ""},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert result["verdicts"][0]["category"] is None
+
+
+def test_parse_verdict_normalizes_unknown_category_to_none_without_failing_batch() -> None:
+    """設計 §2.4: enum 不正値は verdict 全体を落とさず category=None に正規化する。"""
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "x", "category": "not_a_real_category", "reason": "y"},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert result["verdicts"][0]["category"] is None
+
+
+def test_parse_verdict_normalizes_missing_category_to_none() -> None:
+    """category キー自体が無い応答（旧プロンプト互換）でもバッチを失格にしない。"""
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "x", "reason": "y"},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert result["verdicts"][0]["category"] is None
+
+
+def test_parse_verdict_normalizes_wrong_type_category_to_none() -> None:
+    raw = json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "x", "category": 123, "reason": "y"},
+    ]})
+    result = cs_prompt.parse_verdicts_result(raw)
+    assert result["ok"] is True
+    assert result["verdicts"][0]["category"] is None
+
+
 # ── #410 [Must]C: 極端に長い本文を切り詰める（青天井のトークン消費を防ぐ）──────
 
 

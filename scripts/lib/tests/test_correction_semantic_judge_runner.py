@@ -251,7 +251,9 @@ def test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost(tmp_path, 
     test_ingest_distributes_batch_fixed_cost_evenly_not_concentrated_on_one_key``
     （複数キーのバッチで個々のキーの est_tokens を比較する）が担う。
     """
-    from correction_semantic.batch import _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens
+    from correction_semantic.batch import (
+        _OUTPUT_TOKENS_PER_VERDICT, _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens,
+    )
     from correction_semantic.store import count_judged_today
 
     monkeypatch.setattr(
@@ -261,9 +263,9 @@ def test_daily_cap_token_budget_across_runs_includes_batch_fixed_cost(tmp_path, 
     judged = tmp_path / "correction_judged.jsonl"
     first = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
     per_utt = estimate_utterance_tokens(first[0])
-    # batch_size=1 なので今回の 1 バッチの固定費（400トークン）は全額この1キーに乗る
-    # （按分の分母が1件のため丸め誤差なし）。
-    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS
+    # batch_size=1 なので今回の 1 バッチの固定費は全額この1キーに乗る
+    # （按分の分母が1件のため丸め誤差なし）。#400 A5: 出力予算（verdict 1件分）も含む。
+    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS + _OUTPUT_TOKENS_PER_VERDICT
 
     judge_runner.run_daily_judge(
         run=True, utterances=first, judged_path=judged,
@@ -350,6 +352,36 @@ def test_run_not_locked_proceeds_normally(tmp_path, monkeypatch):
     assert res["skipped_locked"] is False
     assert res["selected"] == 1
     assert judged.exists()
+
+
+# ── #400 A5: Phase B が実際に使った model が weak_signal provenance まで伝わる ─────
+
+
+def test_run_threads_model_into_weak_signal_provenance(tmp_path, monkeypatch):
+    """call_haiku へ渡した model がそのまま provenance.model として記録される
+    （設計 §2.4: category は producer 時点の測定値。model も同じ producer 時点で保存する）。
+    """
+    judged = tmp_path / "correction_judged.jsonl"
+    ws = tmp_path / "weak_signals.jsonl"
+    utterances = [_utt("/a.jsonl", 1, "つむぎにしてほしい、四国めたんじゃなくて", "pj-a", ts=_ts(1))]
+
+    def _fake_call_haiku(prompt, model="haiku"):
+        return json.dumps({"verdicts": [
+            {"index": 0, "is_correction": True, "idiom": "四国めたんじゃなくて",
+             "category": "factual", "reason": "後置型"},
+        ]}, ensure_ascii=False)
+
+    monkeypatch.setattr(judge_runner, "call_haiku", _fake_call_haiku)
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=utterances, judged_path=judged, weak_signals_path=ws,
+        model="haiku",
+    )
+    assert res["corrections"] == 1
+    ws_lines = [json.loads(l) for l in ws.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert ws_lines[0]["provenance"]["model"] == "haiku"
+    assert ws_lines[0]["provenance"]["category"] == "factual"
+    assert ws_lines[0]["provenance"]["prompt_fingerprint"]
+    assert ws_lines[0]["provenance"]["category_schema_version"] == 1
 
 
 def test_dry_run_does_not_acquire_lock_and_proceeds_while_lock_held(tmp_path):
@@ -767,7 +799,9 @@ def test_reservation_closes_infinite_same_day_retry_loop(tmp_path, monkeypatch):
     すると、2回目は残り予算0で選定できないことを確認する（test_daily_cap_token_budget_
     across_runs_includes_batch_fixed_cost と同じ「exact_cost 一致」方式）。
     """
-    from correction_semantic.batch import _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens
+    from correction_semantic.batch import (
+        _OUTPUT_TOKENS_PER_VERDICT, _PROMPT_OVERHEAD_TOKENS, estimate_utterance_tokens,
+    )
     from correction_semantic.store import count_judged_today
 
     monkeypatch.setattr(
@@ -778,7 +812,7 @@ def test_reservation_closes_infinite_same_day_retry_loop(tmp_path, monkeypatch):
     first = [_utt("/a.jsonl", 1, "text", "pj-a", ts=_ts(1))]
     per_utt = estimate_utterance_tokens(first[0])
     # batch_size=1 の1バッチ分の丸ごとコスト（按分ではなく _batch_cost_tokens と同型）。
-    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS
+    exact_cost = per_utt + _PROMPT_OVERHEAD_TOKENS + _OUTPUT_TOKENS_PER_VERDICT
 
     res1 = judge_runner.run_daily_judge(
         run=True, utterances=first, judged_path=judged_path,

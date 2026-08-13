@@ -116,11 +116,11 @@
 | `orphan_store` | writer あり reader なしの jsonl ストアを決定論検出 | `orphan_store.py` |
 | `store_registry` | ストア新設の事前契約ゲート — writer/reader/retention 宣言の機械可読 SoT。`status`（active/legacy/dead）が write 許可を制御 | `store_registry.py` |
 | `store_write` write barrier | 全ストア書込の単一ゲート。store_registry の active 登録外は既定 reject、registry 不在は fail-open（例外口 `store_write_raw`） | `rl_common/store_write.py` |
-| `outcome_metrics` | 行動アウトカム3軸（correction 再発率/一発成功率/rework率）を advisory 表示 | `audit/outcome_metrics.py` |
+| `outcome_metrics` | 行動アウトカム3軸（correction 再発率/一発成功率/rework率）を advisory 表示。再発率はA5で飽和ゲート追加（全type recurring+rate>=0.9→saturated） | `audit/outcome_metrics.py` |
 | `utterance_archive` | 全PJ human 発話の恒久アーカイブ utterances.db（extractor/store/ingest/query） | `utterance_archive/` |
 | `outcome_attribution` | outcome 3軸を per-skill 帰属し evolve ターゲットランキングへ自動入力。負の転移は末尾 rollback、dry-run に before/after 順位差分を surface | `audit/outcome_attribution.py` |
 | `weak_signals` | 暗黙修正シグナルの決定論検出→weak_signals.jsonl レーン。reflect 確認後に corrections へ昇格。45日 TTL は read 時 age 導出で writer-death 非依存 | `weak_signals/` |
-| `correction_semantic` | correction capture の二層化。utterances.db の発話を Haiku がバッチ意味判定し weak_signals へ隔離。フェーズ昇格は human-source のみ駆動 | `correction_semantic/` |
+| `correction_semantic` | correction capture の二層化。utterances.db の発話を Haiku がバッチ意味判定（A5でcategory8値も同時付与）し weak_signals へ隔離。フェーズ昇格は human-source のみ駆動 | `correction_semantic/` |
 | `bootstrap_backlog` | 初回 evolve で weak_signals バックログの消化方式を AskUserQuestion 3択で選ぶ bootstrap phase | `correction_semantic/bootstrap_backlog.py` |
 | `judge_runner` / `safe_llm_call` | llm_judge の意味判定を daily runner の非対話実行へ移設。無人呼び出しは `safe_llm_call` に一点集約し4重防御、費用は呼び出し直前に事前予約 | `correction_semantic/judge_runner.py` + `safe_llm_call.py` |
 | `daily_review` | evolve の「今日の修正確認」phase — 新規 weak_signal を最大5件 y/n 確認し promote 成功後のみ既読追記（部分失敗は対象外） | `correction_semantic/daily_review.py` |
@@ -129,7 +129,7 @@
 | `measurement_bug` | 複数 PJ の非自明な集計値が bit-exact 一致したら測定バグ候補として advisory surface | `audit/measurement_bug.py` |
 | `growth_report` | evolve レポート末尾に成長状態を決定論表示 — あと N 件で次フェーズ。閾値は growth_engine が単一ソース | `growth_report.py` |
 | `results_board`（戦果ボード） | growth-journal harness 削除の置換成果物。optimize_history/correction_rate を直読みし戦果を決定論表示 | `results_board.py` |
-| `correction_rate` | ADR-054 §7.2.1 柱3(a)「指摘率」。3ストア read 時 join・freeze cutoff・カバレッジ100%確定週のみ表示・k週連続ゲート | `correction_rate.py` |
+| `correction_rate` | ADR-054 §7.2.1 柱3(a)「指摘率」+A5カテゴリ内訳。3ストア read 時 join・freeze cutoff・カバレッジ100%確定週のみ表示・k週連続ゲート | `correction_rate.py` |
 | `outcome_promotion_readiness` | 重み昇格レディネスの4条件決定論判定。全 ✓ で「重み昇格を提案」 | `audit/outcome_promotion_readiness.py` |
 | `predictive_validity` | 重み昇格レディネス第4条件 — in/out-of-sample の順位相関で予測妥当性を判定 | `audit/predictive_validity.py` |
 | `reward_ema` | バッチ跨ぎ符号付き advantage の EMA 累積で通時の安定効果を判定 | `audit/reward_ema.py` |

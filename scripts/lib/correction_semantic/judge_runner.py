@@ -399,10 +399,12 @@ def run_daily_judge(
             file=out,
         )
 
-        # Phase C（決定論）。
+        # Phase C（決定論）。#400 A5: category の provenance に producer 時点の model を
+        # 保存するため、Phase B が実際に call_haiku へ渡した model をそのまま渡す。
         result = _batch.ingest_judgement_results(
             emitted, responses, dry_run=False,
             weak_signals_path=weak_signals_path, idioms_path=idioms_path, judged_path=judged_path,
+            model=model,
         )
         print(
             f"[judge_runner] 永続化: corrections={result['corrections']} "
