@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-12
-- **関連**: #379（CLOSED）/ #400（OPEN）/ #401（OPEN）/ #402（マージ済み）/ ADR-041 / ADR-053
+- **関連**: #379（CLOSED）/ #400（OPEN）/ #401（OPEN）/ #402（マージ済み）/ #442 / #443 / #444 / #445 / #446 / #447 / ADR-041 / ADR-053
 
 > **この文書は単体で完結している。**会話文脈なしで再開できるよう、実測値・判断の根拠・却下した案を全て含む。
 > レビュー: tacchi（体験・過剰約束）+ codex（設計の正しさ）を各1巡。指摘は §9 に反映箇所を記載。
@@ -176,7 +176,7 @@ advisory の decision lane は開通以来 **1件も書かれていない**（`a
                 → evolve-reflect --promote-weak / --reject-weak
                 → corrections.jsonl（human-confirmed correction）
                                           ↓
-                              ★ ここに変換経路が無い ★
+              ★ emit→drain の skill-diff candidate lane には入らない ★
                                           ↓
 レーン2（週1）: evolve 実行中の pending proposal
                 → 対象ファイルの実変更 AND 明示 accepted ID
@@ -188,6 +188,18 @@ advisory の decision lane は開通以来 **1件も書かれていない**（`a
 
 **Phase A/B が直接増やすのは human-confirmed correction であって accepted decision ではない。**
 真のボトルネックは記録量ではなく、**correction → 適用可能な skill diff → 明示 drain の変換・起動経路が存在しないこと**。
+
+**2026-08-14 訂正（設計正典: plan `drafts/054-phase-be-design.md` §1.2(1)。codex [Should]1）**:
+「★ ここに変換経路が無い ★」は不正確だった。**レーンごとに答えが違う**:
+
+| レーン | 判定 | 根拠 |
+|---|---|---|
+| corrections → evolve の **emit→drain skill-diff candidate lane** | **経路が無い** | `_candidates.py:79-125` の入力は discover の `matched_skills` と skill_evolve の `assessments` だけ。discover 側の入力は `usage.jsonl` / `errors.jsonl` / `optimize_history.rejection_reason`（`runner.py:186-200` 他） |
+| corrections → genetic optimizer / evolve-loop の `collect_corrections` | **入力としては存在するが実質空** | writer（`correction_semantic/promote.py:277-288`）が consumer の2フィルタ（`reflect_status != "applied"` かつ `last_skill` 部分一致）両方に落ちる値をハードコードしており、実データ162件の `last_skill` は全件 `None` |
+| corrections → pitfall / hook candidate / instruction violation | 経路はあるが `matched_skills` に合流しない | `runner.py:365-455` |
+| 過去10件の accept | **corrections 由来ではない** | 全件 `skill_evolve:medium`・`decision_source` 無し＝#376 以前の hash-proxy 誤検出。全件 invalidated |
+
+**この厳密化を踏まえた Phase E の設計は §5 Phase E（2026-08-14 rev）を参照。**
 
 ### 3.2 柱3は2つの数字の合成で、依存先が違う
 
@@ -418,13 +430,76 @@ sidechain 除外は user 行だけでなく `prev_action` の境界にも影響�
 
 ### Phase B — 朝の提示の質【柱2】※ Phase A 後
 
-| ID | 内容 |
+| ID | 内容|
 |---|---|
-| B2 | 提案の並び順を見直す（**A2 適用後の実データを測ってから方式を決める**） |
-| B3 | llm_judge 滞留の解消（A1 で -23%、上限見直し、非PJ `matsukaze-takashi` 1,017件の扱い） |
+| B2 | ~~提案の並び順を見直す（A2 適用後の実データを測ってから方式を決める）~~ → **2026-08-14 訂正: machinery の read 時除外 + 順位と打ち切りの分離**（issue #443。詳細は下記） |
+| B3 | ~~llm_judge 滞留の解消（A1 で -23%、上限見直し、非PJ `matsukaze-takashi` 1,017件の扱い）~~ → **2026-08-14 訂正: 母集団の是正・上限据え置き・cutoff 宣言**（issue #442。詳細は下記） |
 
-**B2 の未決事項**: 公平性を入れるなら ①cross-PJ confirmed 優先との順位 ②channel 内順位
-③候補が1 channel だけの場合 ④SessionStart 上限2件との整合 を決める。**現時点で方式を確定しない**（P5/P7）。
+**B2 の未決事項（2026-08-13 時点。下記の実測で解消済み）**: 公平性を入れるなら ①cross-PJ confirmed 優先との順位 ②channel 内順位
+③候補が1 channel だけの場合 ④SessionStart 上限2件との整合 を決める。~~現時点で方式を確定しない（P5/P7）。~~
+
+#### B2・B3 の実測と設計（2026-08-14 追加。設計正典: plan `drafts/054-phase-be-design.md` §1.1/§2。実測は全て2026-08-13・read-only）
+
+朝の提示は5点の構造欠陥が実測で判明した:
+
+| # | 発見 | 根拠 |
+|---|---|---|
+| B-a | **朝の候補の 15.7% が委譲メッセージ**。`REVIEW_CHANNELS` の未昇格300件のうち **47件** が `<teammate-message` を含む（rephrase 25 / llm_judge 22）。`is_machinery_prompt` は **47/47 を捕捉できる** | 実測 |
+| B-b | **A2（PR #431）は書込側の修理**なので、既に検出済みの在庫はそのまま残っている | 同上 |
+| B-c | 順位を直しても届かない候補がある。digest 生成時に `build_review(max_groups=3)` で PJ ごと3件に切ってから global 化・既読差し引きをするため、**4件目以降は順位規則の適用対象に入らない** | `proposal_digest.py:262,290` / `daily_review.py:332` |
+| B-d | **global レーンが構造的に死んでいる**。per_pj を先に連結するため per_pj に未既読が2件あれば global は永久に出ない | `proposal_digest.py:343-347,388-389` |
+| B-e | **judge 未判定 10,419件のうち 2,942件（28.2%）が tracked 外 PJ**。tracked 外は判定枠を消費するが `proposals` に到達する経路が無い（2026-08-13 ユーザー裁定後は 1,157件（11.1%）に縮小。下記参照） | `ingest.py:137,145` / `proposal_digest.py:283` / `fleet/cli.py:454-460` |
+
+**順位キーの識別力が実データでほぼ無い**（tacchi 実測。設計の前提を覆した）: `evidence.count` はほぼ全 group で1（「再発回数」キーが実質機能しない）、`cross_pj_confirmed` は今朝の全 group で空（confirmed idiom は131件あるが正規化完全一致という照合の粗さで一致0）。結果、旧設計の合成キーは実質「新しさ」だけで並び、そこに B-a の委譲メッセージが乗っていた。
+
+**B3-1（issue #442）— judge の母集団を tracked に絞る**
+
+judge の需給実測（ADR §6 が要求していた「A1/A2 後の流入量再計測」への回答）:
+
+| | 全 PJ | tracked のみ |
+|---|---|---|
+| 週次流入（W27〜W32 平均） | 約1,200件 | 約1,030件 |
+| 日次上限 200 × 7日 | 1,400件 | 1,400件 |
+| 週あたりの余剰 | 約+200 | 約+370 |
+
+→ **上限200/日は既に流入を上回っている。B3 の解は「上限引き上げ」ではなく「母集団の是正」に確定した。**
+**日次上限は引き上げない。** `zundamon-explainer`（714件）と `ai-office`（271件）を `tracked_projects` に
+追加するユーザー裁定（§7.1）を経て、実際に対象から外れるのは `matsukaze-takashi`（home起動セッション
+1,017件）とゴミ slug 13個（140件）のみに縮小し、余剰は **+232/週**（実測。当初見積り+370/週から縮小）。
+
+契約: ①**alias fold**（`rl-anything → evolve-anything` は既存の `pj_slug_match` 系の正規化関数を使う。
+新実装しない） ②**処理順の固定**（tracked filter → judged key 除外 → unjudged_total 算出 → daily cap 選定）
+③**除外 PJ の発話は `correction_judged.jsonl` に書かない**（tracked 復帰時に通常の未判定として復帰できる）
+④**除外の可視化**（`excluded_untracked_total` / `excluded_untracked_by_pj` を dry-run/run/lock-skip/
+source-failure の全分岐で返す。silence != evaluated） ⑤**古い在庫の cutoff 宣言**（発話時刻
+`utterances.timestamp` が `now - 90日` 以降なら対象、境界 `==` は含める。既定90日は userConfig
+`judge_utterance_max_age_days` で変更可。**TTL 45日とは別段階・別時計**——cutoff は「未判定 utterance を
+judge に入れるか」、TTL は「判定後の weak_signal を提示するか」。正直な効果の見積り: utterances.db の
+保持は現時点で約3ヶ月なので、90日 cutoff は現在の在庫をほとんど減らさない。将来 DB が長期化したときの
+予防措置）。
+
+**B2（issue #443）— 朝の提示（machinery 除去 → 順位と打ち切りの分離 → 表示）**
+
+- **machinery の read 時除外**（最優先・tacchi [Must]1）: 既存5 reader の単一 predicate である
+  `filter_actionable`（`correction_semantic/promote.py:125`）に `is_machinery_prompt` を適用し、
+  独自 reader の `_read_backlog`（`bootstrap_backlog.py:351`）にも**同じ述語**を通す（`_read_new` だけに
+  入れると母集団が分裂する・codex 2巡目 [Must]1）。除外件数は `excluded_machinery_total` /
+  `excluded_machinery_by_channel` として digest・queue・observability の返り値に載せる。新設ゼロ（既存
+  dict へのキー追加のみ）・判定は `is_machinery_prompt` を単一ソースとする（文字列 allowlist を新設しない）
+- **順位と打ち切りの分離**（codex [Must]2）: 現行は PJ ごとに3件へ切ってから global 化・既読差し引きを
+  するため4件目以降が順位規則の対象外だった。`build_review(max_groups: Optional[int] = 5)` として
+  `None` で無制限化し、**digest 側だけ `max_groups=None` で呼ぶ**（既定5のまま既存呼び出しは非影響。
+  新関数は増やさない）
+- **composite sort のキー**（実データの識別力に合わせて再定義）:
+  ①PJ横断で見えているか（`cross_pj_confirmed` が非空 **または** global レーン所属。両者は別物。
+  tacchi [Must]2） ②再発回数（`evidence.count`。実データでは大半1のため実質 tie-break）
+  ③鮮度（**発話時刻**。`detected_at` は判定時刻であって発話時刻ではないため `utterances.db` を
+  `source_path:line_no` で read 時 join。既読差し引き後も再計算できるよう group に
+  `signal_meta_by_key`（各 `signal_key` の `uttered_at`/`detected_at`/`cross_pj`）を保持する契約に
+  する——`_slim_group` は集約後の `count` しか持たず個別 key 情報を失うため・codex 2巡目 [Must]3）
+  ④決定論の担保（`min(signal_keys)`）
+- **提示文**: 発話の実時刻（相対表記）と観測ベースの cross-PJ（`reps_by_pj`）を出す。confirmed 一致
+  より遥かに発火しやすい。channel 名（`llm_judge`/`rephrase`）は出さない（ジャーゴンで判断材料にならない）
 
 ### Phase D — 信頼【柱4】※ Phase A/B と**並行可**・C4 の前提
 
@@ -454,7 +529,7 @@ sidechain 除外は user 行だけでなく `prev_action` の境界にも影響�
 > PR2 側（run_loop）で、PR3 側は 0件だった。方向は正しく対象が入れ替わっていたため、頭が実測して
 > 両方の凍結に確定した。
 
-### Phase E — correction → accept の変換経路【柱3(b) の前提・**作ると決定**】
+### Phase E — correction → accept の変換経路【柱3(b) の前提・**E1 は実施 / E2・E3 は凍結（解凍条件つき）**】
 
 §3.1 のとおり柱3(b) の真のボトルネック。設計すべき最低3点（codex [Must]）:
 1. 昇格した correction が**どの処理で具体的な skill diff 候補になるか**
@@ -464,7 +539,9 @@ sidechain 除外は user 行だけでなく `prev_action` の境界にも影響�
 現行 accept は evolve の Step 3（matched skill の提案・適用）と Step 7.8（inline drain）に依存し、
 通常の `--drain` 単体では accept を記録しない（`skills/evolve/SKILL.md:195-197,288-303`）。
 
-**完了条件**: correction → skill diff → accept が **synthetic E2E で1周する**。
+**完了条件**: ~~correction → skill diff → accept が synthetic E2E で1周する~~ →
+**2026-08-14 訂正**: E1（accept 記録の CLI 化）が synthetic E2E で1周する。correction → skill diff の
+変換（E2/E3）は凍結。下記参照。
 
 **着手前ゲート（2026-08-13・tacchi [Must]5 / codex [Must]5）**
 
@@ -473,17 +550,112 @@ Step 7.8 の drain）は全て既存で、過去に `human_accepted=True` が10�
 **「経路が無い」のか「経路はあるが correction が提案に反映されない・起動されない」のかで作るものが
 全く違う**（後者なら配線と起動導線の修理で済み、新設凍結にも収まる）。
 
-→ **E の設計着手前に、実 repo で手動1周実験を行う**（1日）。実 correction を積んだ状態で evolve を
+~~→ E の設計着手前に、実 repo で手動1周実験を行う（1日）。実 correction を積んだ状態で evolve を
 回し、correction 由来の提案が出るか → y → drain → `optimize_history` に revert 可能な accept が
-載るか、を実測する。**この結果が E 設計書の §1 になる**。synthetic E2E はその後。
+載るか、を実測する。この結果が E 設計書の §1 になる。synthetic E2E はその後。~~
 
-加えて、E の設計では以下を先に確定する（codex）:
-- 朝の y/n は「correction として採用」か「生成された patch の適用承認」か（後者を暗黙に兼ねさせるのは柱4違反。patch を見た後の明示承認が別途必要）
-- 状態遷移に使う既存 artifact（`corrections.jsonl` / 既存 pending proposal / 既存 optimize history。**新 store は不可**）
-- correction identity ↔ diff proposal identity の対応（1→N・N→1・重複の定義）
-- 起動点（既存 SessionStart / evolve / queue のどこか。last-shown 状態を新設せず既存 timestamp から read 時導出）
-- 状態機械の各境界と再実行時の冪等性、stale/conflict・生成失敗・history 書込失敗の補償動作
-- 「価値ある diff が生成される率」の評価（配線が一周するだけでは E の効果を証明しない）
+**2026-08-14 訂正: 手動1周は実施せず、静的解析 + 実コーパス実測で代替した**（設計正典: plan
+`drafts/054-phase-be-design.md` §1.2。codex [Should]1 のとおり、ADR のゲート変更として明示裁定する）。
+理由: `_candidates.py:79-125` を読んだ時点で、emit→drain の skill-diff candidate lane の入力は
+discover の `matched_skills` と skill_evolve の `assessments` だけであり、corrections はどちらの
+入力経路にも含まれないことがコードで確定した。この条件下で手動で evolve を1周回しても、correction
+由来の提案は構造的に出ないことが事前に分かっており、「経路が無いのか起動しないのかを見極める」という
+実験の目的を果たさない（実験しても結果は自明）。代わりに、実データでの Jaccard 通過率実測（下記
+E0 実測結果）という、より直接的で再現性の高い方法で着手前ゲートを判定した。
+
+**E0 実測結果（2026-08-13・着手前ゲート）— 通過条件 10件に対して 0件**
+
+有効 corrections **155件**の `message` を pattern text として `skills/*/SKILL.md` **23件**に当てた結果、
+`JACCARD_THRESHOLD = 0.15` を超えたものは **0件**（最大 **0.0721**）。
+
+**理由は2つあり、両者は独立している**（tacchi 観点4）:
+- **①照合器が日本語を読めない（技術的欠陥・issue #447）** — `similarity.tokenize` は
+  `re.split(r"[\s\W_]+")` で、日本語は `\w` に含まれるため分割されない（実測: 平均トークン長8.5文字）。
+  **この欠陥がある限り、内容が何であれ Jaccard は構造的に閾値を超えない。**
+- **②材料が skill diff ではない（本質的欠陥）** — corrections の中身は「PRじゃないの？」
+  「もっとわかりやすく整理して確認して」等の**行動規範**。`correction_type` は
+  `semantic_idiom 145 / stop 8 / iya 1 / naoshite-request 1`。さらに `[Image` 始まり37件（23.9%）、
+  `Stop hook feedback:` 8件、**assistant 自身の出力が semantic_idiom として登録されている行**もある
+  （corrections ストアの入力衛生の問題。issue #445）。
+
+**したがって E0 は「①と②を区別できない実験」だった。** ただし②は message を直接読めば判定でき、
+**②単独で E2 を止める理由として十分**なので、①を直してから再実験する必要はない。
+
+**(4) 既存の設計思想と正面衝突する**: `_candidates.py:79-90` の docstring は「remediation の fix は
+target が rules/hooks/構造と異種で skill_quality 母集団の均質性を壊すため対象外（ADR-041 follow-up
+の意図的スコープ）」と明記している。
+
+#### 頭の裁定: E1（accept 記録の CLI 化）は実施する
+
+**ここは codex と tacchi が正面から食い違った唯一の点**なので、根拠を明記する。
+
+- **codex [Must]5**: `evolve --drain --accepted <id>` を agent が任意に実行できると、その CLI 呼出し
+  自体が「人間が y を押した」根拠になる。現行の inline python MUST と**同じ信頼境界**を、より呼びやすい
+  CLI に移しただけ → 見送るべき
+- **tacchi 観点6**: `learning_skill_md_must_not_enforcement` の既知欠陥類型の**根治**であり、
+  E0 の結果と無関係に価値がある → やるべき
+
+**裁定: やる。両者の指摘は排他ではない。** 現行の inline python も**実行するのは Claude** なので、
+信頼境界は既に「Claude が対話の結果を受けて実行する」。CLI 化しても境界は**悪化しない**（codex の
+指摘は「E1 は承認 provenance の問題を解決しない」であって「E1 が問題を悪化させる」ではない）。一方で
+E1 は「実行され損ねて accept が記録されない」という**別の実害を確実に消す**。したがって実施し、
+**codex [Must]5 の要求を E1 の設計要件として全て取り込む**:
+
+1. accepted/rejected ID は**直前の対話結果からどう受け渡すか**を SKILL.md に明記する
+2. **既知の非対話 call site（hook / daily runner / `--auto` 系）が decision 引数を渡さないことを
+   テストで固定する**。※「機械的に保証する」は**過剰約束だったので撤回**（codex 2巡目 [Must]4）。
+   `collectors.py:234-235` の不変条件は「hook 自身が渡さない」という呼び出し規約にすぎず、
+   **CLI は呼出元を認証できない**（daily runner でも hook でも任意プロセスでも同じ引数を生成できる）。
+   偽造不能な承認 capability を対話ホストが発行する仕組みは現状存在しない。必要なら**承認 token の
+   発行・検証境界として別設計**にする（本 PR のスコープ外）
+3. `--accepted` と `--rejected` の**重複指定・未知 ID・理由なし reject を拒否**する
+4. synthetic E2E で「**applied だが accepted なしは deferred**」を固定する
+5. 引数名は既存 optimizer の `--accept`/`--reject`（単数・別意味）と紛らわしいので、
+   ヘルプに「proposal ID の複数指定」であることを明示する（codex [Nit]3）
+
+（issue #444 に対応。PR3。#401 / #402 に紐づく）
+
+#### E2/E3（correction → skill diff）は凍結する
+
+**理由は3つ**（tacchi 観点6 が最も明快なので採用）:
+
+1. **材料テストが不通過** — 0/155。内容は行動規範であって skill 本文の diff ではない（上記 E0 実測）
+2. **反映先の経路は既にある** — corrections → CLAUDE.md / rules は **reflect が既に持っている責務**。
+   E を rules 側へ「切り替える」のは **reflect の再発明**で、#379 が最も嫌う重複
+3. **柱3(b) の分母は E2 なしでも作れる可能性がある** — `_extract_candidates` には skill_evolve
+   assessments という既存の提案源が生きており（`skill_evolve/assessment.py:109` が未進化 skill に
+   high/medium を生成し、`_emit.py` が pending 化する経路をコードで確認）、E1 で accept が
+   機械記録可能になれば既存レーンだけで accept が積み始めうる。
+   **「柱3(b) は E が前提」という当初の前提は、E1 と E2 を束ねたことによる過大主張だった。**
+   ただし **「E1 導入後に必ず積み始める」とまでは言えない**（codex 2巡目 [Should]3 — 全 skill が
+   `already_evolved` / `skip_llm_evolve` / batch guard に当たれば0件）。
+   **PR3 の完了後に実データで pending 生成件数を実測して確かめる**（実測するまで数字を主張しない）
+
+**解凍条件**（凍結は永久ではない）: E1 導入後、**既存レーンで accept が積まれてもなお
+「correction 由来の提案が欲しい」という要求が実際に観測されたら**再検討する。
+
+#### E をやるとしたら何が必要か（将来の別 ADR 用に保存。全て未解決）
+
+1. **provenance が下流に伝わらない** — `_enrich_patterns` が運ぶのは `type` / `pattern` /
+   `matched_skill` / `skill_path` / `jaccard_score` だけ。correction identity は `_emit.py` に残らず
+   N↔N 追跡が成立しない
+2. **再提示の抑止が逆向き**（issue #446） — `proposal_id = (repo_id, relative_path, before_sha)` は
+   「対象ファイルの現在世代」を指すので、**reject 後は同じ ID が次回も emit され**（emit は reject
+   history を見ない）、**accept 後は before_sha が変わって新しい ID として再生成される**。これは
+   corrections 由来に限らず現行 A レーン全体の性質
+3. **correction → pattern の schema が未定義** — 何を `pattern` にするか、複数 correction の集約、
+   `count` / `type` / `suggestion`、invalidated 判定、PJ alias fold
+4. **合格判定は量だけでは弱い** — unique correction 数 / unique target skill 数 / pair 数 / score 分布 /
+   人手 precision / 同一 skill への集中度を分けて測る
+5. **`similarity.tokenize` が日本語を分割できない**（issue #447） — 照合方式そのものの変更が要る
+   （上記 E0 実測の理由①）
+
+朝の y/n は「correction として採用」か「生成された patch の適用承認」か（後者を暗黙に兼ねさせるのは
+柱4違反。patch を見た後の明示承認が別途必要）、状態遷移に使う既存 artifact（`corrections.jsonl` /
+既存 pending proposal / 既存 optimize history。**新 store は不可**）、correction identity ↔ diff
+proposal identity の対応（1→N・N→1・重複の定義）、起動点（既存 SessionStart / evolve / queue の
+どこか）、状態機械の各境界と再実行時の冪等性、「価値ある diff が生成される率」の評価は、いずれも
+E2/E3 解凍時に確定する。
 
 ### Phase C — 週1の数字【柱3】
 
@@ -492,7 +664,7 @@ Step 7.8 の drain）は全て既存で、過去に `human_accepted=True` が10�
 | C1 | 数字の正直さ（§2.6 の8件を潰す） | (a) | なし |
 | C2 | 週次系列（欠測週は「データなし」と明示） | (a) | なし |
 | C3 | 週1の起動導線 | 両方 | **要裁定（下記）** |
-| C4 | 取り下げ候補 → revert への接続 | (b) | なし（D1 + E が前提） |
+| C4 | 取り下げ候補 → revert への接続 | (b) | なし（D1 + E1 が前提。E2/E3 は凍結のため非依存・2026-08-14 訂正） |
 
 **C1 の影響範囲（codex [Must]）**
 `rework` の分岐: `outcome_metrics.py:366-390` で「対象 session 件数あり・測定可能 session 0件」なら
@@ -544,7 +716,11 @@ G1 計測ゲート ✅ **PASS**（2026-08-13・一時 DB 方式で本番 DB 非�
   ↓ 通過
 A5 → C(a): C2
   ↓
-B2/B3 ──→ E（手動1周 → 設計 → 実装）──→ C(b): C3,C4
+B3-1 ∥ B2 ∥ E1 ──→ C(b): C3,C4
+　（2026-08-14 訂正・plan `drafts/054-phase-be-design.md` §4。旧
+　`B2/B3 → E（手動1周 → 設計 → 実装）→ C(b)` を置換。owned paths が重ならないため3本は並行可）
+E2/E3（correction → skill diff の変換経路）── **凍結**（解凍条件: E1 導入後もなお correction 由来
+提案の要求が実際に観測されたら再検討。§5 Phase E）
 Phase D PR4（--list）──── 独立・いつでも可
 Phase D PR2/PR3 ──── **凍結**（§5 Phase D の裁定）
 ```
@@ -561,17 +737,26 @@ Phase D PR2/PR3 ──── **凍結**（§5 Phase D の裁定）
   残り 49件は TTL 45日の自然失効に任せる。フルの後始末フェーズは作らない
 - **A5 / C(a) は G1 の結果に従属**（A5 単独の `distinct_types >= 5` は語彙を増やせば達成できる
   vanity gate なので成果指標から降格・codex [Should]）
-- **B3（llm_judge 上限引き上げ）は A1/A2 後に流入量を再計測してから**。
-  10,225件を処理すること自体は価値でなく、古い低品質候補に LLM 費用を払う危険がある（codex [Should]）
-- **C4 は D1 と Phase E の両方が前提**
+- ~~**B3（llm_judge 上限引き上げ）は A1/A2 後に流入量を再計測してから**。
+  10,225件を処理すること自体は価値でなく、古い低品質候補に LLM 費用を払う危険がある（codex [Should]）~~
+  → **2026-08-14 訂正**: 再計測の結果、**B3 は「上限引き上げ」ではなく「母集団の是正（B3-1）」**に
+  決定した。日次上限200/日は据え置く（詳細は §5 Phase B）
+- **C4 は D1 と E1（Phase E のうち実施するのは E1 のみ。E2/E3 は凍結）が前提**
 
 **worker の衝突回避**: A2（`detectors.py`）と A1（`extractor.py` + migration）は同ファイル群なので**順次**。
 E（drain 周辺）と Phase D の書込境界も重なるので並行させない。並行してよいのは A2 ∥ C1 まで。
 
+**2026-08-14 追記（Phase B/E 実装フェーズ）**: PR1（judge 母集団の是正=B3-1）/ PR2（朝の提示=B2）/
+PR3（E1: accept 記録の機械化）は owned paths が重ならないため**並行可**（plan
+`drafts/054-phase-be-design.md` §4）。上記「worker の衝突回避」段落は Phase A/G1 段階の記述であり、
+Phase B/E 段階には非適用。
+
 **実データ検証の挿入点（合成 fixture での完了を禁止・P8）**:
 ①A2 後＝同じ 12 group サンプルを再抽出し「委譲プロンプト0件」を実測 ②A1 後＝再抽出時間・行数差・
 `prev_action` 充填率・既判定キー再利用率 ③G1＝固定 corpus の recall/precision・channel 間重複
-④E 後＝実 correction から有用 diff が生成され、明示承認・accept・revert まで到達すること
+④**2026-08-14 訂正**: ~~E 後＝実 correction から有用 diff が生成され、明示承認・accept・revert まで
+到達すること~~ → **E1 後**＝synthetic E2E で emit → 適用 → `--accepted` → optimize_history の accept
+→ `bin/evolve-revert` で戻せることを実測（E2/E3 は凍結のため「有用 diff が生成される」検証は対象外）
 
 ---
 
@@ -585,8 +770,9 @@ E（drain 周辺）と Phase D の書込境界も重なるので並行させな�
 | 柱3(b)（採用効果・取り下げ候補） | **Phase E を作って完成させる** | v1 案の「4週の計測ゲート」は撤回 |
 | A4「手直し」の定義 | **capture 調査の結果、corrections を分子に使う案（A4-ii）は却下** | 下記 7.2 |
 | A3 の既存 FP（rephrase 16 / llm_judge 33 / corrections 昇格済み2）の扱い | **縮小**（2026-08-13）。corrections 昇格済み分は即時 invalidate、まだ corrections に到達していない weak_signal（残り分）は TTL 45日の自然失効に任せる。フルの後始末フェーズは作らない。**scope 訂正（2026-08-13 頭の実測）**: 当初 llm_judge の2件のみを対象としたが、決定論基準（`weak_signal_provenance.source_path` に `/subagents/` を含む）は channel を問わない。既に corrections まで昇格済みの rephrase channel 6件も llm_judge の2件と同じ状態（＝「残り49件」に含まれる未昇格 weak_signal ではない）と判断し、対象を**計8件**へ拡大。**機構実装済み（2026-08-13）**: `scripts/lib/corrections_subagent_invalidation.py`（dry-run 既定・`--apply` で書込、channel 不問）を追加。対象8件（`weak_signal_key`: llm_judge=836826fb11c47e48,65deb6a40830d9f4／rephrase=1c22c8ecabb3bf7a,a62cc27b9c3b8baf,22afaa00b84a51a5,f758ac0dd4f4776f,bfea72bb5163cb1d,86bfd7340c1c30b5）を実データ dry-run で確認済み（既存の `invalidated` フラグを流用し論理無効化。物理削除しない）。実データへの `--apply` 実行は実環境ストア書込のため頭側が行う。rephrase 6件の `detected_at` は全て **2026-07-30T23:13**（A2 マージ=2026-08-13T00:40 UTC の2週間前）で検出済みだった weak_signal — **A2 の穴ではない**（promote 時刻が 08-12〜08-13 なのは検出時刻でなく人間確認のタイミングの問題）。**残課題（この PR では未対処・記録のみ）**: A2 は検出側の forward 修正であり、A2 マージ以前に検出済みの subagent 由来 weak_signal は TTL 45日（detected_at 起点＝2026-09-13 頃まで生存）の間、朝の y/n 提示に出続け昇格し得る構造的な穴が残る。実際 6件中4件は A2 マージの21分後（2026-08-13T01:01）に昇格した。weak_signals 側の read 時除外（A1 で `query.py` に入れた `source_path NOT LIKE '%/subagents/%'` と同型のフィルタ）が要るかは別途判断 | Phase A3 のスコープ縮小・2026-08-13 に対象8件へ訂正。§6 実施順に反映済み |
-| B3（llm_judge 上限200件/日）を上げるか対象を絞るか | **即決しない**（2026-08-13）。A1/A2 後に流入量を再計測してから判断する（10,225件処理自体は価値でなく古い低品質候補に LLM 費用を払う危険） | B3 着手を A1/A2 完了後に後ろ倒し。§6 実施順に反映済み |
+| B3（llm_judge 上限200件/日）を上げるか対象を絞るか | ~~**即決しない**（2026-08-13）。A1/A2 後に流入量を再計測してから判断する（10,225件処理自体は価値でなく古い低品質候補に LLM 費用を払う危険）~~ → **決定済み（2026-08-14）**。再計測の結果、**「母集団の是正（B3-1）」に確定**。日次上限は引き上げない | B3 着手を A1/A2 完了後に後ろ倒し。§6 実施順・§5 Phase B に反映済み |
 | 再 ingest（A1）に伴う LLM 再判定費用の事前見積もり | **A1 を二段階に分割**（2026-08-13）。forward 修正 + read 時 sidechain 除外を先に実施し、全履歴 migration は費用見積もり（最悪3,604件）とベンチの後に着手判断する | A1 の完了条件が二段階化。§5-A1・§6 に反映済み |
+| tracked 外の実在 PJ の扱い（B3-1 の対象確定） | **`zundamon-explainer`（714件）と `ai-office`（271件）を `tracked_projects` に追加する**（ユーザー選択・2026-08-13）。現役 PJ の学習素材を捨てる理由がなく、追加しても週次流入は約+170件で判定枠の余剰+370/週に収まる。結果、B3-1 で実際に対象から外れるのは `matsukaze-takashi`（1,017件・home起動セッション）とゴミ slug 13個（140件）のみに縮小し、余剰は当初見積り+370/週から**+232/週**に縮小 | §5 Phase B の B3-1 に反映済み |
 
 ### 7.2 A4 の結論 — corrections を「手直し回数」に使わない
 
@@ -714,10 +900,10 @@ C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の
 | 0 (B1) | SessionStart の出力が**単一 JSON dict**。平常時1行。異常系 fixture で必要情報が消えないこと |
 | A0 | **実コーパスリプレイ**で修正語を含む発話の検出率と FP 率を実測。合成 fixture の緑では完了としない |
 | A1〜A5 | **新規記録**で sidechain 由来0件（既存行の扱いは §5-A1 の方針どおり）。`prev_action` 持ち越しのテスト。**A5 は rev2/rev3 で `correction_type` を触らない方針に確定した（§2.0）ため `correction_recurrence` は恒久的に None のまま**（saturated ゲート含め決定論テストで固定）。A5 の完了条件は `provenance.category` の内訳が C(a) の TP と同一母集団で表示されること |
-| B | **固定 corpus + 複数 PJ/global group のテスト**で「sidechain 0 / machinery 0 / content-rich 供給あり / 既読差引き後も順位規則を満たす」（単日目視では不十分） |
+| B | **固定 corpus + 複数 PJ/global group のテスト**で「sidechain 0 / machinery 0 / content-rich 供給あり / 既読差引き後も順位規則を満たす」（単日目視では不十分）。**2026-08-14 追記**: machinery 0 の確認は合成 fixture に加え、**実ストアに対する dry-run を1本必須**とする（合成 fixture だけでは §5 Phase B の実測を再現できないため。tacchi 追加要求） |
 | G1 | ✅ **2026-08-13 PASS**。`a0_eval_set.jsonl` の正解ラベルと llm_judge レーンの判定を固定実コーパス（本番 DB 非汚染の一時 DB）で突合。**recall 80.0%（Wilson 95% CI [49.0%, 94.3%]）で CI 下限が hook レーンの 4.5% を大差で上回る**。precision 80.0% は hook レーンの 87.5% と有意差なし。詳細・限界は §7.4 |
 | D（PR4 のみ） | ✅ **2026-08-13 実施済み**。新規 accept（A レーン＝evolve drain 経由）が `revert_available=true` で記録され、`bin/evolve-revert` が dry-run で復元内容を印字。`bin/evolve-revert --list` が entry_id 一覧を出す（read-only・書込ゼロを実測確認）。**PR2/PR3 は 2026-08-13 凍結中につき対象外**（`optimize.py::save_history_entry` / `run_loop.py` 経由の採用は revert 対象外のまま。§5 Phase D） |
-| E | correction → skill diff → accept が **synthetic E2E で1周する** |
+| E | ~~correction → skill diff → accept が synthetic E2E で1周する~~ → **2026-08-14 訂正**: **E1**: synthetic E2E で accept 1周（emit → 適用 → `--accepted` → optimize_history の accept → `bin/evolve-revert` で戻せる）+ 失敗系（applied だが accepted なし＝deferred / 未知 ID / 重複指定 / 非対話経路からの拒否）。**E2・E3**: 凍結（解凍条件は §5 Phase E を参照） |
 | C | `not_measured` と `no_data` が表示上区別される。欠測週が「改善」に化けない（**欠測の定義に分母側 `utterances.db` の ingest 停止週も含める**——#351 の16日沈黙の前科を踏まえる）。C2/C4 は因果を断定せず「適用後に指標が改善／悪化した**関連**」として表示し、最低分母・観測窓・複数 accept が重なる場合の `unattributed` を明示する。C4 は synthetic E2E |
 
 共通: `python3 -m pytest` **exit 0**（件数は契約にしない）+ `bin/evolve-dogfood-gate --layer light` exit 0 + `claude plugin validate`。
@@ -783,11 +969,80 @@ C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の
 | tacchi [Should] / codex（実装確認） | 設計文書の「observe hook が随時 `utterances.db` へ書く」は**事実誤り**（hooks に writer なし） | §5-A1「設計文書の誤りの訂正」。頭も grep で実測確認 |
 | **頭の裁定**（tacchi 実測 `judge_runner.py:109-126` から導出） | judge は newest-first + 日次上限200件で、未判定在庫 10,419件の後ろの古い発話に**到達しない**。よって既存行の `prev_action` を埋めても judge は使わない＝**全履歴 migration の実効便益は G1 の測定条件を揃えることだけ**。それは本番 DB を触らず一時 DB で達成できる | §5-A1「migration 保留の裁定」2 / §6（A1 第二段階を保留・G1 は一時 DB 方式） |
 
+### 9.3 2026-08-14 rev3（Phase B/E 設計レビュー・codex 2巡 + tacchi 1巡 + 頭の実測3件）
+
+設計正典: plan `drafts/054-phase-be-design.md`（v4）。実測は全て2026-08-13・read-only（DuckDB は
+`read_only=True`、ストアの sha256 不変を確認）。
+
+**codex 1巡目（`設計修正要`）**
+
+| 指摘 | 反映 |
+|---|---|
+| [Must]1 group に鮮度も単一 `signal_key` も無く順位キーが計算できない | §5 Phase B の代表値契約（`min(signal_keys)` / 既読差引き後の再計算） |
+| [Must]2 「二重ソートは冪等」は誤り。`max_groups=3` の早期打ち切りで4件目以降が候補外 | §5 Phase B で**順位と打ち切りの分離**に設計変更。主張を撤回 |
+| [Must]3 `source_correction_keys` は enrich を通らず provenance が伝播しない | §5 Phase E「E をやるとしたら」1 に保存（E2 凍結） |
+| [Must]4 再提示抑止が逆（reject 後は同 ID 再 emit、accept 後は新 ID 再生成） | 新2として起票（**issue #446**） |
+| [Must]5 E1 は承認 provenance を機械強制せず信頼境界が変わらない | 頭が裁定（実施するが要件を取り込む。下記「頭の裁定」参照） |
+| [Must]6 correction → pattern の schema が未定義 | §5 Phase E「E をやるとしたら」3 に保存 |
+| [Should]1〜6 | tracked/alias fold の処理順・除外内訳の返却 schema・PR3/PR5 の書込境界衝突は誤り（撤回）・E0 の合格判定・E0 不通過時の扱いを設計者が決める、等。全て反映済み |
+| [Nit]1〜4 | `cross_pj_confirmed` の型・契約テスト追加・`--accepted`/`--accept` 名前衝突・shrink-freeze 検証計画明示。全て反映済み |
+
+**tacchi 1巡目（`設計修正要` — 条件付き着手可）**
+
+| 指摘 | 反映 |
+|---|---|
+| [Must] 順位規則の前に read 時 machinery 除外が要る（朝の候補300件中47件が委譲メッセージ・上位10件中6件） | §5 Phase B の PR2-a を新設し最優先に。`is_machinery_prompt` が47/47捕捉することを実測で裏取り |
+| [Must] 規則1が global レーンを持ち上げない（confirmed と global observed は別物） | §5 Phase B のキー1を「confirmed **または** global 所属」に再定義 |
+| [Must] E0 は「実施予定」でなく「実測済み・不通過」として扱い、この設計書で裁定せよ | §5 Phase E へ実測結果を記録 + 頭が凍結を裁定 |
+| [Should] `detected_at` は判定時刻であって発話時刻ではない | §5 Phase B のキー3を発話時刻（read 時 join）に変更 |
+| [Should] `cross_pj_confirmed` は発火0件＝実質no-op。発話の実時刻と観測ベースcross-PJを出せ | §5 Phase B の提示文を全面改訂 |
+| [Should] 「52週→20週」は三重の但し書きが要る | §5 Phase B の B3-1 効能を「余剰+370/週」に書き換え（さらにユーザー裁定で+232/週に確定・§7.1） |
+| [Must] 「配線するだけで下流は改造不要」は形式的に真だが実質空 | E2凍結。当該表現を削除 |
+| 観点6 柱3(b)はE2なしで作れる（skill_evolveレーンが生きている）。「Eが前提」は過大主張 | 「E1導入後に積み始めうる」に訂正（過大主張は撤回） |
+| 追加指摘 | corrections ストアの入力衛生（**issue #445**）／実ストア dry-run テスト（§8 B の完了条件）／A1保留との相互作用 |
+
+**codex 2巡目（差分レビュー・`設計修正要` → 全て反映）**
+
+| 指摘 | 反映 |
+|---|---|
+| [Must]1 PR2-aの除外位置が誤り（`_read_new` だけでは `bootstrap_backlog._read_backlog` に machinery が残り母集団分裂） | `filter_actionable` に集約 + `_read_backlog` も同述語 + `excluded_machinery_*` の surface 契約 |
+| [Must]2 「順位付けと limit を分離した呼び出し口」は既存 API に存在しない | signature を明記（`max_groups: Optional[int] = 5`・既定5のまま） |
+| [Must]3 既読差引き後の再計算が現データ形で実装不能（`_slim_group` が個別 key 情報を失う） | `signal_meta_by_key` の保持契約を追加 |
+| [Must]4 「非対話経路から accepted を渡せないことを機械的に保証」は実現不能（CLI は呼出元を認証できない） | E1要件2を「既知 call site をテストで固定」に弱め、承認 token は別設計と明記（過剰約束を撤回） |
+| [Should]1 join は PJ ごと・group ごとの query だと全DB走査の反復 | O(U+S) の一括 map 方式 + 失敗4種の区別 |
+| [Should]2 cutoff は TTL と重複しないが日付・境界・設定場所・返却分岐が未定義 | §5 Phase B の cutoff 契約に仕様表を追加（90日／境界規則／userConfig／全分岐返却）+ 正直な効果の見積り |
+| [Should]3 skill_evolveレーンの主張はコード上正しいが「必ず積み始める」は保証できない | 表現を「積み始めうる」に弱め、PR3後に実測する条件を追加 |
+| [Nit] キー4のfixture定義が不十分 | §8 B の契約テストにキー1〜3同値+既読差引きで順序が変わるケースを追加 |
+
+**レビューは2巡で打ち切った**（rules/design-review-gate: レビュアーの指摘が全て具体的な修正指示の形で
+解釈の余地がないため、3巡目は手続きのための手続きになる）。
+
+**codex と tacchi が食い違った1点（E1 の可否）を頭が裁定した**
+
+- **codex [Must]5**: `evolve --drain --accepted <id>` を agent が任意に実行できると、その CLI 呼出し
+  自体が「人間が y を押した」根拠になる。現行の inline python MUST と同じ信頼境界を、より呼びやすい
+  CLI に移しただけ → 見送るべき
+- **tacchi 観点6**: `learning_skill_md_must_not_enforcement` の既知欠陥類型の根治であり、
+  E0 の結果と無関係に価値がある → やるべき
+- **頭の裁定: 実施する**。両者の指摘は排他ではない。現行の inline python も実行するのは Claude なので
+  信頼境界は既に「Claude が対話の結果を受けて実行する」。CLI化しても境界は悪化しない（codexの指摘は
+  「E1は承認provenanceの問題を解決しない」であって「E1が問題を悪化させる」ではない）。一方でE1は
+  「実行され損ねてacceptが記録されない」という別の実害を確実に消す。したがって実施し、
+  codex [Must]5 の要求をE1の設計要件として全て取り込む（詳細は §5 Phase E）。
+
+**頭の実測3件**（設計判断の裏取り）:
+1. `is_machinery_prompt` が朝の候補47件を47/47捕捉すること（§5 Phase B の machinery 除外の根拠）
+2. judge需給表（週次流入・上限・余剰。tracked外PJの扱いのユーザー裁定を経て+200→+232/週に確定・§7.1）
+3. E0（corrections→SKILL.md のJaccard通過率）: 有効corrections 155件×SKILL.md 23件で通過0件・最大0.0721
+
 ---
 
 ## 10. 参照
 
 - 設計対象 repo: `/Users/matsukaze-takashi/matsukaze-utils/evolve-anything`
 - 関連 issue: **#400**（全PJ一括の対話 evolve 入口・OPEN）/ **#401**（戦果ボードの週1導線・OPEN）/ #402（1コマンド revert・2026-08-12 マージ済み）/ #379（縮小・CLOSED）
+- Phase B/E（2026-08-14 rev3）起票 issue: **#442**（judge 母集団の是正＝B3-1）/ **#443**（朝の提示の是正＝B2）/
+  **#444**（accept 記録の機械化＝E1）/ **#445**（corrections ストアの入力衛生）/
+  **#446**（reject された提案が次回 emit で再提示される）/ **#447**（`similarity.tokenize` が日本語を分割できない）
 - 凍結の単一ソース: `scripts/lib/shrink_freeze.py`（`SHRINK_FREEZE_ACTIVE = True`）
 - codex レビュー全文: `<session scratchpad>/codex_review.log`（**clear 後は消える可能性があるため、本文書の §9 が要点の正典**）
