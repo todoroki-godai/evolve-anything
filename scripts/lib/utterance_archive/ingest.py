@@ -1,6 +1,10 @@
 """utterance_archive.ingest — transcript jsonl → utterances.db の増分取り込み（#430）。
 
-データソース: ``~/.claude/projects/<pj_dir>/*.jsonl``（+ ``*/subagents/*.jsonl``）。
+データソース: ``~/.claude/projects/<pj_dir>/*.jsonl`` のみ。``*/subagents/*.jsonl``
+（Task サブエージェントの内部会話 transcript）は #379 ADR-054 A1 で走査対象から除外した
+（実データ検証 2026-08-13: 30 ファイルサンプルで isSidechain:true が 7323/7323 = 100%。
+human 発話が混ざることはない。main-level transcript 側は isSidechain:true が 0 件なので
+このファイル単位除外だけで sidechain 由来の新規記録は 0 件になる）。
 最上位 1 connection（DuckDB checkpoint pitfall 準拠）。
 
 増分 ingest:
@@ -70,7 +74,9 @@ def ingest_pj_dir(
     if days is not None and days >= 0:
         cutoff = time.time() - days * 86400
 
-    candidates = sorted(pj_dir.glob("*.jsonl")) + sorted(pj_dir.glob("*/subagents/*.jsonl"))
+    # `*/subagents/*.jsonl`（sidechain 専用ファイル）は #379 ADR-054 A1 で除外（モジュール
+    # docstring 参照）。
+    candidates = sorted(pj_dir.glob("*.jsonl"))
     for jsonl in candidates:
         if max_files is not None and files_processed >= max_files:
             break

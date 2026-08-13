@@ -91,6 +91,36 @@ def test_ingest_writes_staleness_marker(tmp_path: Path) -> None:
     assert ustore.is_stale(tmp_path, threshold_days=14) is False
 
 
+def test_ingest_skips_subagents_files(tmp_path: Path) -> None:
+    """`*/subagents/*.jsonl`（sidechain 専用ファイル）は走査候補から除外される
+    （#379 ADR-054 A1。実データ検証で main-level transcript には isSidechain:true が
+    現れず、subagents/ 側は 100% true と確認済み）。
+    """
+    root = _make_projects_root(tmp_path)
+    pj = root / "-Users-x-tools-evolve-anything"
+    sub = pj / "s1" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-xyz.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "user", "uuid": "su1", "sessionId": "ssub",
+                "timestamp": "2026-06-01T00:03:00Z", "isSidechain": True,
+                "cwd": _CWD,
+                "message": {"role": "user", "content": "サブエージェント内部プロンプト"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    db = tmp_path / "utterances.db"
+    res = uingest.ingest_all_projects(projects_root=root, db_path=db, progress=False)
+    # subagents/ 配下のファイルはファイル数にも insert 件数にも寄与しない。
+    assert res["inserted"] == 2  # s1.jsonl の2件のみ（subagents ファイルは除外）
+    assert res["files_processed"] == 1  # s1.jsonl のみ処理（subagents ファイルは候補外）
+    rows = uquery.query_utterances("evolve-anything", db_path=db)
+    assert {r["text"] for r in rows} == {"最初の発話", "二番目の発話"}
+
+
 def test_resume_duplicate_no_violation(tmp_path: Path) -> None:
     """同 session_id が複数ファイルに分かれ同一発話が複製されても重複ゼロ・例外なし。"""
     root = tmp_path / "projects"

@@ -96,6 +96,37 @@ def test_query_missing_db_returns_empty(tmp_path: Path) -> None:
     assert rows == []
 
 
+# ── #379 ADR-054 A1: read 時の sidechain 除外 ─────────────────────────────────
+# ingest.py のファイル単位除外より前に取り込まれた既存 DB 行（sidechain 由来）が
+# 表示・判定に混ざらないことを確認する（新規ストアは作らず既存 query の WHERE で解決）。
+
+def _seed_with_sidechain(db: Path) -> None:
+    rows = [
+        Utterance("/p/a.jsonl", 1, "evolve-anything", "s1", "2026-06-09T00:00:00Z",
+                  "main の発話", "h1", None, "dialogue", 2),
+        Utterance(
+            "/p/session/subagents/agent-xyz.jsonl", 1, "evolve-anything", "s1",
+            "2026-06-09T00:00:01Z", "sidechain 由来の発話", "h2", None, "dialogue", 2,
+        ),
+    ]
+    with ustore.connection(db) as con:
+        ustore.insert_utterances(con, rows)
+
+
+def test_query_utterances_excludes_sidechain_source_path(tmp_path: Path) -> None:
+    db = tmp_path / "u.db"
+    _seed_with_sidechain(db)
+    rows = uquery.query_utterances("evolve-anything", db_path=db)
+    assert {r["text"] for r in rows} == {"main の発話"}
+
+
+def test_query_utterances_all_projects_excludes_sidechain_source_path(tmp_path: Path) -> None:
+    db = tmp_path / "u.db"
+    _seed_with_sidechain(db)
+    rows = uquery.query_utterances_all_projects(db_path=db)
+    assert {r["text"] for r in rows} == {"main の発話"}
+
+
 # ── #410 round3 [Must]3 / pitfall_duckdb_read_opens_readwrite（#65）再発防止 ──────
 # 旧実装は read 経路（query_utterances / query_utterances_all_projects）が
 # ``_store.connection(db_path, repair=False)`` 経由で開いていたが、``repair=False`` は

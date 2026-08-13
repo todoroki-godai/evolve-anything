@@ -307,21 +307,59 @@ ingest は mtime/offset の増分判定で既処理ファイルをスキップ�
 2. 失敗時 rollback と再実行冪等性
 3. wall time 実測（PJ rule `transcript-store-bench`: 9,925 jsonl / 1.9GB で 75分暴走の前科）
 4. `correction_judged.jsonl` の既判定キー（`f"{source_path}:{line_no}"`）が再 ingest 後と突合できるか。
-   **できなければ 3,604件の再判定＝LLM 費用**（`llm-batch-guard` 該当・事前にユーザー確認）
+   **2026-08-13 実測（`a1-cost-estimate`）: 「最悪 3,604件の再判定」は実データで再現できなかった。**
+   `line_no` の採番方式（`enumerate(f)` 由来の物理行番号）を変更しなければ既判定キーは再 ingest 後も
+   突合できる。実測内訳: 既判定 3,052件 / 未判定 10,419件（**A1 と無関係の既存バックログ** —
+   sidechain 除外や prev_action 充填とは独立に、A1 着手前から未判定だった発話） / 孤児キー
+   （transcript ファイル消失等で突合先が無いキー）750件。
+   費用実測（worst case = キー突合に失敗し**既判定 3,052件**を再判定する場合）: 入力 587,157 tokens・
+   Haiku 4.5・**概算 $1.27**。未判定 10,419件は A1 と無関係の既存バックログであり、A1 の着手判断には
+   含めない（参考値: 入力 2,736,846 tokens・概算 $5.08。daily runner の 200件/日上限で流れる通常コスト）。
+   出力トークンは未実測の目算を含み、単価は 2026-06-24 時点の cache 由来（**未実測の
+   部分は未実測と明示する**・#376「数字が嘘をつかない」）。
+   **新規制約: `line_no` の採番方式（物理行番号）を変更しない。** 変更すると既判定キーが全て
+   ずれ、既判定 3,052件も再判定対象に落ちる（当初懸念していた worst case が現実化する）。
+   extractor.py v3（本 PR）はこの制約を遵守し、`line_no = idx + 1`（`enumerate(f)` 由来）を
+   一切変更していない
 5. **`prev_action` が `extractor_version=2` の行で全件 null**（A0 の実測窓 1,124件すべてで確認・2026-08-12）。
    correction の文脈判定に使えない既存データ欠損であり、**A1 の再抽出設計にこの列の充填を含める**
-   （A0 スコープ外として A1 へ申し送り）。充填しない場合、B の提示品質は「発話単独」の情報しか使えない
+   （A0 スコープ外として A1 へ申し送り）。充填しない場合、B の提示品質は「発話単独」の情報しか使えない。
+   **2026-08-13 root cause 特定・修正済み**: `extractor.py` の tool_result 行到達時に
+   `pending_tool_names = []` で誤ってリセットしていた（コメントは「リセットしない」と書かれて
+   いたが実装が逆）。実 transcript では assistant の tool_use 直後に必ず tool_result 行が続くため、
+   蓄積した tool 名が human 発話に届く前に毎回消えていた。該当行を削除して修正（extractor.py v3）。
+   新規 ingest 行は `prev_action` が正しく充填される（`test_prev_action_survives_tool_result_rows`
+   で検証）。既存 v2 行の遡及充填は次PRの全履歴 migration に含める
 
-**A1 — 完了条件の定義**
-「sidechain 由来 0件」は**消失 transcript 2,728件があるため定義不足**。
-ingest は現存する `*.jsonl` と `*/subagents/*.jsonl` だけを走査する（`ingest.py:73-99`）。
-→ **削除済み `source_path` の既存 DB 行を残すか purge するか**を決め、完了条件を
-「**新規記録**で sidechain 由来0件」＋「既存行は◯◯として扱う」の形にする。
+**A1 — 完了条件の定義（2026-08-13 forward 修正で確定）**
+「sidechain 由来 0件」は**消失 transcript 2,728件があるため定義不足**だったため、
+新規記録と既存行を分けて完了条件を確定した:
 
-**A1 — 除外の粒度**
+- **新規記録**: `ingest.py` が走査候補から `*/subagents/*.jsonl` を除外（実データ検証
+  2026-08-13: main-level transcript 2464 ファイル全数走査で isSidechain:true = 0 件、
+  subagents/ 側は 30 ファイルサンプルで 7323/7323 = 100% true）+ `extractor.py` の行単位
+  `isSidechain` チェック（extract_utterances が sidechain 混在ファイルへ直接呼ばれた
+  場合の第二防御）。→ **新規 ingest で sidechain 由来 0件を達成（完了）**。
+- **既存 DB 行（sidechain 由来 2,955件・削除済み transcript 2,728件を含む）**: **purge しない**。
+  `query.py` の `_build_query` に `source_path NOT LIKE '%/subagents/%'` を常時（opt-in
+  不可で）追加し、**read 時に恒久的に除外**する。新設凍結（#379）のため新ストアは作らず
+  既存 query の WHERE 条件に一元化した。DB 行自体は残るが表示・判定には一切混ざらない。
+- 旧 `ingest_state` に残る subagents ファイルのエントリの掃除、および削除済み transcript
+  由来行の物理 purge は**本 PR のスコープ外**（次 PR の全履歴 migration へ申し送り）。
+
+**A1 — 除外の粒度（2026-08-13 実装確定）**
 sidechain 除外は user 行だけでなく `prev_action` の境界にも影響する（`extractor.py:217-269`）。
-**ファイル単位か各行の `isSidechain` か**を明記し、sidechain user 行を飛ばした際に
-**tool 名を次の main user 発話へ持ち越さない**テストを書く。
+実データ検証の結果、**両方採用**した:
+- **ファイル単位（一次防御）**: `ingest.py` が `*/subagents/*.jsonl` を走査候補から除外。
+  main-level transcript は isSidechain:true が実測 0 件なのでこれだけで新規 sidechain 混入は
+  塞がる（コスト面でも subagents/ 配下ファイルを読まずに済み効率的）。
+- **行単位（第二防御）**: `extractor.py` が各行の `isSidechain: true` を無条件 continue で
+  スキップ（`pending_tool_names` に一切触れない）。extract_utterances が将来別経路
+  （harness 変更・別呼び出し元）で sidechain 混在ファイルへ直接呼ばれても正しく振る舞う
+  ことを保証する防御的実装。
+- sidechain user 行を飛ばした際に sidechain 内 assistant の tool 名を次の main user 発話の
+  `prev_action` へ持ち越さないテストを追加（`test_utterance_extractor.py::
+  test_sidechain_tool_use_does_not_leak_into_prev_action`）。
 
 **A3 — 判定基準**
 決定論基準は **`provenance.source_path` に `/subagents/` を含む**こと。
