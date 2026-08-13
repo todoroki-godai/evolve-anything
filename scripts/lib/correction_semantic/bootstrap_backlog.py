@@ -346,16 +346,17 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────────────────────────
-# backlog 読み取り（slug スコープ + 未昇格 + TTL 除外）
+# backlog 読み取り（slug スコープ + 未昇格 + TTL 除外 + machinery 除外）
 # ─────────────────────────────────────────────────────────────────
-def _read_backlog(
+def _scope_backlog_candidates(
     pj_slug: str,
     weak_signals_path: Optional[Path],
 ) -> List[Dict[str, Any]]:
-    """当該 PJ slug の未昇格 content-rich backlog を返す（TTL 失効は read 時導出で除外）。
+    """当該 PJ slug の未昇格 content-rich backlog 候補を返す（machinery 適用**前**）。
 
-    #99: 対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
-    チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ bootstrap でも除外。
+    ``_read_backlog``（machinery 除外後の最終候補）と ``build()`` の machinery 除外件数
+    集計（#443 PR2-a・silence != evaluated）が同じ read+scope パスを共有するための単一
+    ソース（重複実装を避ける・pitfall_copied_parse_convention_partial_fix）。
     """
     recs = read_signals(weak_signals_path)
     out: List[Dict[str, Any]] = []
@@ -373,6 +374,48 @@ def _read_backlog(
             continue
         out.append(r)
     return out
+
+
+def _read_backlog(
+    pj_slug: str,
+    weak_signals_path: Optional[Path],
+) -> List[Dict[str, Any]]:
+    """当該 PJ slug の未昇格 content-rich backlog を返す（TTL 失効・machinery は除外）。
+
+    #99: 対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
+    チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ bootstrap でも除外。
+
+    #443 PR2-a: machinery（委譲メッセージ等の harness 注入）は
+    ``correction_semantic.promote.is_machinery_signal``（既存5 reader の単一 predicate
+    ``filter_actionable`` と同じ述語）で除外する。ここを落とすと Step 6.1（bootstrap）と
+    Step 6.2（daily_review）で母集団が分裂する。
+    """
+    from correction_semantic.promote import is_machinery_signal
+
+    candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
+    return [r for r in candidates if not is_machinery_signal(r)]
+
+
+def _machinery_backlog_stats(
+    pj_slug: str,
+    weak_signals_path: Optional[Path],
+) -> Dict[str, Any]:
+    """当該 PJ backlog 候補のうち machinery で除外した件数を channel 別に集計する（#443）。
+
+    除外は黙って減らさない（silence != evaluated）。``build()`` が返り値に
+    ``excluded_machinery_total`` / ``excluded_machinery_by_channel`` として載せる。
+    """
+    from correction_semantic.promote import is_machinery_signal
+
+    candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
+    total = 0
+    by_channel: Dict[str, int] = {}
+    for r in candidates:
+        if is_machinery_signal(r):
+            total += 1
+            ch = r.get("channel") or "(unknown)"
+            by_channel[ch] = by_channel.get(ch, 0) + 1
+    return {"total": total, "by_channel": by_channel}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -510,6 +553,8 @@ def build(
                                #   ときだけ TF-IDF テーマ別バケット
                                #   [{theme_label, group_indices, groups}]。閾値以下は None
                                #   （従来 per-group フロー・挙動不変）
+       "excluded_machinery_total": int,       # #443 PR2-a: machinery で除外した件数
+       "excluded_machinery_by_channel": dict, #   （silence != evaluated・黙って減らさない）
        "slug": str,
        "dry_run": bool}
 
@@ -529,11 +574,14 @@ def build(
             "groups_total": 0,
             "groups": [],
             "theme_buckets": None,
+            "excluded_machinery_total": 0,
+            "excluded_machinery_by_channel": {},
             "slug": pj_slug,
             "dry_run": dry_run,
         }
 
     backlog = _read_backlog(pj_slug, weak_signals_path)
+    machinery_stats = _machinery_backlog_stats(pj_slug, weak_signals_path)
     groups = group_signals(backlog)
     # 他 PJ confirmed 一致 group を先頭へ + cross_pj_confirmed 付与（#462・read 専用）。
     from correction_semantic.cross_pj_priority import prioritize as _prioritize
@@ -550,6 +598,8 @@ def build(
         "groups_total": len(groups),
         "groups": groups,
         "theme_buckets": theme_buckets,
+        "excluded_machinery_total": machinery_stats["total"],
+        "excluded_machinery_by_channel": machinery_stats["by_channel"],
         "slug": pj_slug,
         "dry_run": dry_run,
     }
