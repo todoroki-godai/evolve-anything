@@ -16,8 +16,15 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+_LIB_DIR = Path(__file__).resolve().parent.parent
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+from rl_common.detection import is_dispatch_template_marker, is_machinery_prompt  # noqa: E402
 
 from .store import WeakSignal, now_iso
 
@@ -35,18 +42,11 @@ REPHRASE_MIN_TOKENS = 2
 # 機構ターン（並列 agent 派遣テンプレ・採点ジョブ等）のマーカー。utterance extractor の
 # _HARNESS_MARKERS をすり抜けて dialogue として保存されるが、言い直しではない。
 # 「除外理由 = 機構生成テンプレ」で直交分離する（個別文字列の allowlist ではない）。
-_DISPATCH_MARKERS = (
-    "<task-notification>",
-    "<tool-use-id>",
-    "<summary>",
-    "作業ディレクトリ:",
-    "あなたは",
-    "エージェントです",
-    "比較実験パターン",
-    "experiment ",
-    "<teammate-message",
-    "idle_notification",
-)
+#
+# ADR-054 A2（#379/#454）: 独自の文字列 allowlist（旧 _DISPATCH_MARKERS）はここで廃止し、
+# rl_common.detection の単一ソース（is_machinery_prompt / is_dispatch_template_marker）へ
+# 委譲する。機構ターン除外はこれで rephrase 検出も含めて全実装が同じ述語を共有する
+# （委譲前は weak_signals/detectors.py だけが独自リストを持ち、他 3 実装と desync していた）。
 
 # ① 直後手編集の transcript シグナル（CC が Edit/Write 試行時に出す tool_use_error）。
 # 「user or linter」のどちらかなので provenance に両方の可能性を残す（捏造しない）。
@@ -57,7 +57,15 @@ _INTERRUPT_MARKER = "[Request interrupted"
 
 
 def _is_dispatch(text: str) -> bool:
-    return any(m in text for m in _DISPATCH_MARKERS)
+    """機構ターン（is_machinery_prompt）+ 派遣テンプレ（is_dispatch_template_marker）判定。
+
+    後者（「あなたは」「エージェントです」「experiment 」等の広い語彙）は
+    is_machinery_prompt には統合しない（rl_common/detection.py の該当コメント参照:
+    should_include_message / extractor の単独メッセージ判定に混ぜると correction 検出の
+    recall を壊すため）。rephrase 検出は隣接する高類似ペアの両方が一致して初めて除外する
+    構造的に安全な文脈なので、ここでのみ両者を OR 結合する。
+    """
+    return is_machinery_prompt(text) or is_dispatch_template_marker(text)
 
 
 # ── ② permission deny ──────────────────────────────────────────

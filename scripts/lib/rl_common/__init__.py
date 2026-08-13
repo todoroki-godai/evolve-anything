@@ -186,6 +186,7 @@ from .detection import (  # noqa: F401, E402
     detect_all_patterns,
     detect_correction,
     detect_takeoff_divergence,
+    is_dispatch_template_marker,
     is_machinery_prompt,
     is_noise_agent_type,
     noise_agent_type_kind,

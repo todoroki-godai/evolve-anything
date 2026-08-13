@@ -28,6 +28,7 @@ find_latest_checkpoint(project_dir: str | None = None) -> dict | None
 get_preceding_tool_calls(session_id: str, n: int = 5, *, projects_dir: pathlib.Path | None = None) -> List[dict]
 hook_store_dir(base: 'Optional[Path]' = None) -> 'Path'
 hook_store_path(filename: 'str', base: 'Optional[Path]' = None) -> 'Path'
+is_dispatch_template_marker(content: str) -> bool
 is_machinery_prompt(content: str) -> bool
 is_noise_agent_type(agent_type) -> bool
 is_user_config_explicit(key: str) -> bool
