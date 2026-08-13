@@ -309,6 +309,8 @@ class DirectPatchOptimizer:
         ADR-031: 保存先は plugin 内 generations から DATA_DIR/optimize_history/<slug> へ集約。
         history_file 未指定時は store 経由で current project slug を解決する。
         run 成果物（run_dir 配下）とは分離する。
+
+        この経路の accept は `bin/evolve-revert` の対象外（ADR-054 Phase D PR3 は凍結中・#402）。
         """
         import optimize_history_store as _store
         if history_file is None:
