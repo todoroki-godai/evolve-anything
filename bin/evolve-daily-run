@@ -148,6 +148,12 @@ def main() -> int:
             daily_token_limit=int(user_config.get(
                 "judge_daily_token_limit", judge_runner.DEFAULT_DAILY_TOKEN_LIMIT
             )),
+            # #442: judge 母集団の是正（tracked filter は既定の fleet_config.load_config
+            # 経由で production 配線される・DI 引数は付けない）。cutoff は userConfig 経由。
+            judge_utterance_max_age_days=int(user_config.get(
+                "judge_utterance_max_age_days",
+                judge_runner.DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS,
+            )),
         )
         # #410 round4 [Should]4: queue.json への転記は build_judge_summary に集約する
         # （転記漏れの単一ソース対策 — out_of_range_verdicts / reserved_batches が従来

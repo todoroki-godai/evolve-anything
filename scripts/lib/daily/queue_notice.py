@@ -132,7 +132,35 @@ def build_judge_summary(judge_result: "dict | None") -> dict:
         # #410 round4 [Should]4: 従来は転記漏れで queue.json に含まれていなかった。
         "out_of_range_verdicts": judge_result.get("out_of_range_verdicts", 0),
         "reserved_batches": judge_result.get("reserved_batches", 0),
+        # #442 契約4・5: judge 母集団を tracked_projects + cutoff に絞った際の除外件数。
+        # silence != evaluated — dry-run / run / lock-skip / source-failure の全分岐で
+        # run_daily_judge が返すので、転記漏れなく queue.json へ載せる。
+        "excluded_untracked_total": judge_result.get("excluded_untracked_total", 0),
+        "excluded_untracked_by_pj": judge_result.get("excluded_untracked_by_pj", {}),
+        "excluded_before_cutoff_total": judge_result.get("excluded_before_cutoff_total", 0),
     }
+
+
+def _exclusion_suffix(judge: dict) -> str:
+    """除外内訳を通知に付け足す1文（#442 契約4・5: silence != evaluated）。
+
+    新しい通知系統は作らず、``build_judge_cap_notice`` が既に生成した判定サマリ行の
+    末尾に足すだけ（除外が 0 件なら空文字＝何も足さない・ノイズにしない）。
+    """
+    untracked = judge.get("excluded_untracked_total")
+    before_cutoff = judge.get("excluded_before_cutoff_total")
+    parts = []
+    if isinstance(untracked, (int, float)) and not isinstance(untracked, bool) and untracked > 0:
+        parts.append(f"tracked外{int(untracked)}件")
+    if (
+        isinstance(before_cutoff, (int, float))
+        and not isinstance(before_cutoff, bool)
+        and before_cutoff > 0
+    ):
+        parts.append(f"cutoff外{int(before_cutoff)}件")
+    if not parts:
+        return ""
+    return f"（除外: {' / '.join(parts)}）"
 
 
 def build_judge_cap_notice(
@@ -176,14 +204,18 @@ def build_judge_cap_notice(
     if not isinstance(judge, dict):
         return None
 
+    # #442 契約4・5: 除外内訳（tracked外 / cutoff外）を、どの分岐でメッセージが生成
+    # されても末尾に1文足す（新しい通知系統は作らない・既存サマリ行への追記のみ）。
+    suffix = _exclusion_suffix(judge)
+
     if judge.get("source_failed"):
         error = judge.get("source_error") or "詳細は daily runner のログを確認してください"
-        return f"[evolve-anything] llm_judge の発話ソース取得に失敗しました: {error}"
+        return f"[evolve-anything] llm_judge の発話ソース取得に失敗しました: {error}{suffix}"
 
     if judge.get("skipped_locked"):
         return (
             "[evolve-anything] llm_judge は別プロセスが実行中のためスキップしました"
-            "（翌日以降に再試行）。"
+            f"（翌日以降に再試行）。{suffix}"
         )
 
     if not judge.get("capped"):
@@ -195,7 +227,7 @@ def build_judge_cap_notice(
         ):
             return (
                 f"[evolve-anything] llm_judge が範囲外の verdict index を"
-                f"{int(out_of_range)}件無視しました（モデル応答の質を確認してください）。"
+                f"{int(out_of_range)}件無視しました（モデル応答の質を確認してください）。{suffix}"
             )
         return None
 
@@ -209,7 +241,7 @@ def build_judge_cap_notice(
     remaining = int(unjudged_before) - int(selected)
     return (
         f"[evolve-anything] llm_judge 日次上限に到達（{int(selected)}件処理・"
-        f"残り{remaining}件は翌日以降に持ち越し）。"
+        f"残り{remaining}件は翌日以降に持ち越し）。{suffix}"
     )
 
 

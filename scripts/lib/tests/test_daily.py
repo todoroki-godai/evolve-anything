@@ -577,3 +577,94 @@ def test_judge_cap_notice_capped_takes_priority_over_out_of_range_verdicts_messa
     both["llm_judge"] = dict(CAPPED_QUEUE["llm_judge"], out_of_range_verdicts=3)
     msg = qn.build_judge_cap_notice(both, now=now)
     assert "200" in msg  # capped メッセージ（selected 件数）が出る
+
+
+# ── #442 契約4・5: 除外内訳（tracked外 / cutoff外）を既存サマリ行に1文足す ─────────
+# 新しい通知系統は作らず、build_judge_summary への転記 + build_judge_cap_notice の既存
+# メッセージへの追記だけで surface する（silence != evaluated）。
+
+
+def test_build_judge_summary_includes_exclusion_fields():
+    judge_result = {
+        "unjudged_total": 10, "selected": 5, "capped": False, "corrections": 1,
+        "call_failed": 0, "source_failed": False, "source_error": None,
+        "skipped_locked": False, "out_of_range_verdicts": 0, "reserved_batches": 0,
+        "excluded_untracked_total": 3,
+        "excluded_untracked_by_pj": {"matsukaze-takashi": 2, "garbage-slug": 1},
+        "excluded_before_cutoff_total": 4,
+    }
+    summary = qn.build_judge_summary(judge_result)
+    assert summary["excluded_untracked_total"] == 3
+    assert summary["excluded_untracked_by_pj"] == {"matsukaze-takashi": 2, "garbage-slug": 1}
+    assert summary["excluded_before_cutoff_total"] == 4
+
+
+def test_build_judge_summary_exclusion_fields_default_when_missing():
+    """#442 以前の judge_result（早期 return dict が将来キー増減しても壊れない）。"""
+    summary = qn.build_judge_summary({})
+    assert summary["excluded_untracked_total"] == 0
+    assert summary["excluded_untracked_by_pj"] == {}
+    assert summary["excluded_before_cutoff_total"] == 0
+
+
+def test_judge_cap_notice_appends_exclusion_suffix_when_capped():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    with_excl = dict(CAPPED_QUEUE)
+    with_excl["llm_judge"] = dict(
+        CAPPED_QUEUE["llm_judge"],
+        excluded_untracked_total=5, excluded_before_cutoff_total=2,
+    )
+    msg = qn.build_judge_cap_notice(with_excl, now=now)
+    assert msg is not None
+    assert "tracked外5件" in msg
+    assert "cutoff外2件" in msg
+
+
+def test_judge_cap_notice_appends_exclusion_suffix_when_source_failed():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    with_excl = dict(SOURCE_FAILED_QUEUE)
+    with_excl["llm_judge"] = dict(
+        SOURCE_FAILED_QUEUE["llm_judge"], excluded_untracked_total=1,
+    )
+    msg = qn.build_judge_cap_notice(with_excl, now=now)
+    assert "tracked外1件" in msg
+
+
+def test_judge_cap_notice_appends_exclusion_suffix_when_skipped_locked():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    with_excl = dict(SKIPPED_LOCKED_QUEUE)
+    with_excl["llm_judge"] = dict(
+        SKIPPED_LOCKED_QUEUE["llm_judge"], excluded_before_cutoff_total=7,
+    )
+    msg = qn.build_judge_cap_notice(with_excl, now=now)
+    assert "cutoff外7件" in msg
+
+
+def test_judge_cap_notice_appends_exclusion_suffix_when_out_of_range():
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    with_excl = dict(OUT_OF_RANGE_QUEUE)
+    with_excl["llm_judge"] = dict(
+        OUT_OF_RANGE_QUEUE["llm_judge"], excluded_untracked_total=9,
+    )
+    msg = qn.build_judge_cap_notice(with_excl, now=now)
+    assert "tracked外9件" in msg
+
+
+def test_judge_cap_notice_no_exclusion_suffix_when_exclusions_are_zero():
+    """除外が 0 件ならメッセージにノイズを足さない（既存メッセージのままの回帰防止）。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    msg = qn.build_judge_cap_notice(CAPPED_QUEUE, now=now)
+    assert msg is not None
+    assert "除外" not in msg
+
+
+def test_judge_cap_notice_still_silent_when_not_capped_and_exclusions_present():
+    """新しい通知系統は作らない契約: 既存メッセージが出ない（not capped・障害なし）局面
+    では除外があっても沈黙のまま（既存サマリ行に足すだけで単独発火はしない）。
+    """
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    with_excl = dict(NOT_CAPPED_QUEUE)
+    with_excl["llm_judge"] = dict(
+        NOT_CAPPED_QUEUE["llm_judge"], excluded_untracked_total=5,
+    )
+    assert qn.build_judge_cap_notice(with_excl, now=now) is None

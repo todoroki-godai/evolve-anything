@@ -103,6 +103,40 @@ def test_judge_called_with_run_true_and_user_config_limits(monkeypatch):
     assert captured["daily_token_limit"] == 40000
 
 
+def test_judge_called_with_user_config_max_age_days(monkeypatch):
+    """#442: userConfig judge_utterance_max_age_days が run_daily_judge へ渡る。"""
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_judge_utterance_max_age_days", "30")
+
+    captured = {}
+
+    def fake_judge(**kwargs):
+        captured.update(kwargs)
+        return {"unjudged_total": 0, "selected": 0, "capped": False, "corrections": 0, "call_failed": 0}
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    assert captured["judge_utterance_max_age_days"] == 30
+
+
+def test_judge_max_age_days_defaults_when_user_config_unset(monkeypatch):
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+
+    captured = {}
+
+    def fake_judge(**kwargs):
+        captured.update(kwargs)
+        return {"unjudged_total": 0, "selected": 0, "capped": False, "corrections": 0, "call_failed": 0}
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    assert captured["judge_utterance_max_age_days"] == mod.judge_runner.DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS
+
+
 def test_judge_result_embedded_in_evolve_queue_json(monkeypatch, tmp_path):
     mod = _load_module()
     _install_fake_run(mod, monkeypatch, queue_stdout='{"queue": [], "generated_at": "2026-08-10T00:00:00+00:00"}')
@@ -132,6 +166,10 @@ def test_judge_result_embedded_in_evolve_queue_json(monkeypatch, tmp_path):
         # #410 round4 [Should]4: 従来はここに含まれず SessionStart から観測できなかった。
         "out_of_range_verdicts": 0,
         "reserved_batches": 0,
+        # #442: judge 母集団の是正（tracked filter + cutoff）の除外内訳。
+        "excluded_untracked_total": 0,
+        "excluded_untracked_by_pj": {},
+        "excluded_before_cutoff_total": 0,
     }
     # queue 本体の既存フィールドは維持される（上書きでなく追加）。
     assert payload["queue"] == []
@@ -275,3 +313,30 @@ def test_judge_skipped_locked_false_when_not_provided(monkeypatch, tmp_path):
     assert rc == 0
     payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
     assert payload["llm_judge"]["skipped_locked"] is False
+
+
+def test_judge_exclusion_fields_propagate_to_evolve_queue_json(monkeypatch, tmp_path):
+    """#442: excluded_untracked_total / excluded_untracked_by_pj / excluded_before_cutoff_total
+    が evolve-queue.json の llm_judge へ伝播する（SessionStart 通知の材料）。
+    """
+    mod = _load_module()
+    _install_fake_run(mod, monkeypatch)
+
+    def fake_judge(**kwargs):
+        return {
+            "unjudged_total": 5, "selected": 5, "capped": False,
+            "corrections": 0, "call_failed": 0,
+            "excluded_untracked_total": 3,
+            "excluded_untracked_by_pj": {"matsukaze-takashi": 2, "garbage-slug": 1},
+            "excluded_before_cutoff_total": 4,
+        }
+
+    monkeypatch.setattr(mod.judge_runner, "run_daily_judge", fake_judge)
+    rc = mod.main()
+    assert rc == 0
+    payload = json.loads((tmp_path / "evolve-queue.json").read_text(encoding="utf-8"))
+    assert payload["llm_judge"]["excluded_untracked_total"] == 3
+    assert payload["llm_judge"]["excluded_untracked_by_pj"] == {
+        "matsukaze-takashi": 2, "garbage-slug": 1,
+    }
+    assert payload["llm_judge"]["excluded_before_cutoff_total"] == 4

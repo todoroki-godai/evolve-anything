@@ -47,15 +47,16 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import safe_llm_call as _safe_llm_call  # noqa: E402
+from pj_slug import canonical_pj_slug as _canonical_pj_slug  # noqa: E402
 from rl_common.file_lock import try_file_lock as _try_file_lock  # noqa: E402
 from weak_signals.ttl import _parse_iso  # noqa: E402
 
@@ -69,6 +70,13 @@ from . import store as _store  # noqa: E402
 # フォールバックに留まる（icebox_notice.DEFAULT_THRESHOLD_DAYS と同型）。
 DEFAULT_DAILY_UTTERANCE_LIMIT = 200
 DEFAULT_DAILY_TOKEN_LIMIT = 150_000
+
+# #442: judge 母集団の是正 — 未判定 utterance を judge に「入れるか」の cutoff（発話時刻
+# 基準）。weak_signals.ttl.TTL_DAYS（45日・判定後に生成された weak_signal を「提示するか」）
+# とは別段階・別時計（同モジュール docstring 参照）。userConfig
+# judge_utterance_max_age_days で override 可能（icebox_notice.DEFAULT_THRESHOLD_DAYS と
+# 同型のフォールバック）。
+DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS = 90
 
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
@@ -97,6 +105,85 @@ def _sort_key(u: Dict[str, Any]):
     if dt is None:
         return (0, _EPOCH)
     return (1, dt)
+
+
+def _resolve_tracked_slugs(tracked_projects: Optional[List[str]]) -> Set[str]:
+    """tracked_projects（fleet-config.json 形式の絶対パスのリスト）を pj_slug の集合へ変換する
+    （#442 契約1・2）。
+
+    ``tracked_projects`` が None（production 既定）なら ``fleet_config.load_config()`` から
+    読む。DI で明示リストを渡せば呼び出し側テストは実 fleet-config.json に触れずに済む
+    （``utterances`` 引数と同型の DI 契約）。パス→slug 変換は ``fleet/cli.py`` の
+    tracked PJ 列挙と同じ ``rl_common.project_name_from_dir``（worktree 安全な basename
+    解決）を使う（変換規約を二重実装しない）。
+
+    codex cold review（PR #449 [Must]）: 解決した slug には **必ず** ``pj_slug.canonical_pj_slug``
+    を通す。tracked 側だけ fold を素通しにすると、tracked config が旧 slug（例:
+    ``rl-anything``）や sibling-dir worktree パス（``project_name_from_dir`` は subprocess を
+    使わない ``pj_slug_fast`` 経由のため本体 repo 名へ正規化できない・既知 pitfall）を含む場合に
+    utterance 側（常に fold 済み）とだけ非対称になり、tracked PJ の学習素材を「tracked 外」と
+    誤認して黙って供給停止させる（この PJ が最も嫌う挙動）。
+    """
+    if tracked_projects is None:
+        import fleet_config as _fleet_config
+
+        tracked_projects = _fleet_config.load_config().get("tracked_projects", [])
+
+    from rl_common import project_name_from_dir as _project_name_from_dir
+
+    out: Set[str] = set()
+    for p in tracked_projects or []:
+        if not p:
+            continue
+        slug = _canonical_pj_slug(_project_name_from_dir(str(p)))
+        if slug:
+            out.add(slug)
+    return out
+
+
+def _apply_population_filters(
+    utterances: List[Dict[str, Any]],
+    tracked_slugs: Set[str],
+    cutoff_dt: Optional[datetime],
+) -> "tuple[List[Dict[str, Any]], int, Dict[str, int], int]":
+    """judge の母集団を tracked filter → cutoff filter の順で絞る（#442 契約1・2・5）。
+
+    ``query_utterances_all_projects`` から受け取った直後（呼び出し側）で本関数を通す
+    契約なので、同関数自身（「pj 照合をスキップする横断検索」という既存契約）は変えない。
+
+    alias fold（契約1）: tracked config は現行 slug のみを持つ前提のため、utterance 側の
+    ``pj_slug`` を ``pj_slug.canonical_pj_slug``（既存の同一正規化関数・新実装しない）で
+    畳んでから突合する（例: ``rl-anything`` → ``evolve-anything``）。
+
+    処理順（契約2）: tracked filter が先。tracked 外は cutoff 判定そのものを行わない
+    （どちらの除外理由か曖昧にしない・untracked と cutoff の集計を排他にする）。
+
+    cutoff 判定（契約5）: 発話時刻（``timestamp``）が ``cutoff_dt`` **以降**なら対象。
+    境界 ``==`` は対象に含める（``weak_signals.ttl.is_effectively_expired`` の ``<`` と
+    同じ安全側の比較に揃える）。timestamp が欠損/パース不能なら cutoff では除外しない
+    （age 不明のレコードを誤って落とさない・同モジュールの安全側方針と同型）。
+
+    Returns:
+        (filtered, excluded_untracked_total, excluded_untracked_by_pj, excluded_before_cutoff_total)
+    """
+    filtered: List[Dict[str, Any]] = []
+    excluded_untracked_total = 0
+    excluded_untracked_by_pj: Dict[str, int] = {}
+    excluded_before_cutoff_total = 0
+    for u in utterances or []:
+        slug = _canonical_pj_slug(u.get("pj_slug"))
+        if not slug or slug not in tracked_slugs:
+            excluded_untracked_total += 1
+            key = slug or ""
+            excluded_untracked_by_pj[key] = excluded_untracked_by_pj.get(key, 0) + 1
+            continue
+        if cutoff_dt is not None:
+            dt = _parse_iso(u.get("timestamp"))
+            if dt is not None and dt < cutoff_dt:
+                excluded_before_cutoff_total += 1
+                continue
+        filtered.append(u)
+    return filtered, excluded_untracked_total, excluded_untracked_by_pj, excluded_before_cutoff_total
 
 
 def select_daily_batch(
@@ -177,6 +264,9 @@ def run_daily_judge(
     batch_size: int = DEFAULT_BATCH_SIZE,
     model: str = "haiku",
     utterances: Optional[List[Dict[str, Any]]] = None,
+    tracked_projects: Optional[List[str]] = None,
+    judge_utterance_max_age_days: int = DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS,
+    now: Optional[datetime] = None,
     judged_path: Optional[Path] = None,
     weak_signals_path: Optional[Path] = None,
     idioms_path: Optional[Path] = None,
@@ -188,17 +278,33 @@ def run_daily_judge(
         run:    True で実判定。False（既定）は dry-run（コスト先出しのみ・LLM 非呼出・非書込）。
         utterances: DI 用。None なら ``utterance_archive.query.query_utterances_all_projects``
                     から dialogue 発話を取得する（production 既定）。
+        tracked_projects: DI 用（#442）。None なら ``fleet_config.load_config()`` の
+                    ``tracked_projects``（絶対パスのリスト）を production 既定として使う。
+                    judge の母集団をこの PJ 集合に絞る（tracked filter・契約1・2）。
+        judge_utterance_max_age_days: 未判定 utterance を judge に入れる cutoff（発話時刻
+                    基準・契約5）。既定 90 日。``<= 0`` 等の非正値は「制限なし」ではなく
+                    呼び出し側の意図的な override として扱う（0 は「今日より古い全件除外」）。
+        now:    cutoff 計算の基準時刻（DI 用・既定 ``datetime.now(timezone.utc)``）。
         out:    出力先（既定 stdout）。フェーズ遷移ログ（提示/実行/応答/永続化）をここに書く。
 
     Returns:
         dry-run: {"dry_run": True, "unjudged_total", "selected", "capped", "cost",
-                   "source_failed", "source_error", "skipped_locked"}
+                   "source_failed", "source_error", "skipped_locked",
+                   "excluded_untracked_total", "excluded_untracked_by_pj",
+                   "excluded_before_cutoff_total"}
         run:     {"dry_run": False, "requested", "responded", "call_failed",
                    "corrections", "non_corrections", "skipped_batches",
                    "parse_failed_batches", "omitted_verdicts", "out_of_range_verdicts",
                    "reserved_batches", "weak_written", "idioms_written", "judged_written",
                    "unjudged_total", "selected", "capped", "source_failed", "source_error",
-                   "skipped_locked"}
+                   "skipped_locked", "excluded_untracked_total", "excluded_untracked_by_pj",
+                   "excluded_before_cutoff_total"}
+
+        ``excluded_untracked_total`` / ``excluded_untracked_by_pj`` / ``excluded_before_cutoff_total``
+        （#442 契約4・5）: judge の母集団を tracked_projects + cutoff に絞った際の除外件数
+        （silence != evaluated）。dry-run / run / lock-skip / source-failure の**全分岐**で
+        返る。tracked 外の発話は ``correction_judged.jsonl`` に一切書かない（契約3・将来
+        tracked に追加されたとき通常の未判定として復帰できる）。
 
         ``reserved_batches``（#410 round4 [Must]1+2・事前予約方式）: Phase B ループが
         call_haiku を呼ぶ**前**に見積コストを予約記録したバッチ数。判定結果（応答欠損・
@@ -242,6 +348,21 @@ def run_daily_judge(
             )
             utterances = []
 
+    # #442: judge の母集団を tracked_projects + cutoff に絞る。
+    # query_utterances_all_projects 自体（「pj 照合をスキップする横断検索」契約）は変えず、
+    # 受け取った直後のここで絞る（契約: 実装位置）。
+    tracked_slugs = _resolve_tracked_slugs(tracked_projects)
+    cutoff_dt: Optional[datetime] = None
+    if judge_utterance_max_age_days is not None:
+        _now = now or datetime.now(timezone.utc)
+        cutoff_dt = _now - timedelta(days=judge_utterance_max_age_days)
+    (
+        utterances,
+        excluded_untracked_total,
+        excluded_untracked_by_pj,
+        excluded_before_cutoff_total,
+    ) = _apply_population_filters(utterances, tracked_slugs, cutoff_dt)
+
     # #410 round2 [Must]dry-run: dry-run は read のみで排他不要（pitfall_dryrun_stateful_store_write
     # と同型の再発防止 — 以前は run 判定より前に file_lock へ入っており、dry-run でも sidecar
     # `.lock` を生成し「1バイトも書かない」契約に違反していた）。file_lock は run=True の
@@ -276,6 +397,9 @@ def run_daily_judge(
             "source_failed": source_failed,
             "source_error": source_error,
             "skipped_locked": False,
+            "excluded_untracked_total": excluded_untracked_total,
+            "excluded_untracked_by_pj": excluded_untracked_by_pj,
+            "excluded_before_cutoff_total": excluded_before_cutoff_total,
         }
 
     # #410 [Must]B: 選定〜記録（判定済み記録の read-modify-write）を排他する。日次上限は
@@ -321,6 +445,9 @@ def run_daily_judge(
                 "source_failed": source_failed,
                 "source_error": source_error,
                 "skipped_locked": True,
+                "excluded_untracked_total": excluded_untracked_total,
+                "excluded_untracked_by_pj": excluded_untracked_by_pj,
+                "excluded_before_cutoff_total": excluded_before_cutoff_total,
             }
 
         unjudged_all, selected, capped = _select_for_today(
@@ -354,6 +481,9 @@ def run_daily_judge(
                 "source_failed": source_failed,
                 "source_error": source_error,
                 "skipped_locked": False,
+                "excluded_untracked_total": excluded_untracked_total,
+                "excluded_untracked_by_pj": excluded_untracked_by_pj,
+                "excluded_before_cutoff_total": excluded_before_cutoff_total,
             }
 
         # Phase A（決定論）: "daily" はラベルに過ぎない（batch_id 構成のみに使われ、
@@ -448,6 +578,9 @@ def run_daily_judge(
             "source_failed": source_failed,
             "source_error": source_error,
             "skipped_locked": False,
+            "excluded_untracked_total": excluded_untracked_total,
+            "excluded_untracked_by_pj": excluded_untracked_by_pj,
+            "excluded_before_cutoff_total": excluded_before_cutoff_total,
         }
 
 
@@ -466,6 +599,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     ap.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     ap.add_argument("--model", default="haiku")
+    ap.add_argument(
+        "--max-age-days", type=int, default=DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS,
+        help="未判定 utterance を judge に入れる cutoff（発話時刻基準・既定90日・#442）",
+    )
     args = ap.parse_args(argv)
 
     run_daily_judge(
@@ -474,6 +611,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         daily_token_limit=args.token_limit,
         batch_size=args.batch_size,
         model=args.model,
+        judge_utterance_max_age_days=args.max_age_days,
     )
     return 0
 
