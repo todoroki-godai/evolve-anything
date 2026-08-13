@@ -43,7 +43,7 @@ REPHRASE_MIN_TOKENS = 2
 # _HARNESS_MARKERS をすり抜けて dialogue として保存されるが、言い直しではない。
 # 「除外理由 = 機構生成テンプレ」で直交分離する（個別文字列の allowlist ではない）。
 #
-# ADR-054 A2（#379/#454）: 独自の文字列 allowlist（旧 _DISPATCH_MARKERS）はここで廃止し、
+# ADR-054 A2（#379）: 独自の文字列 allowlist（旧 _DISPATCH_MARKERS）はここで廃止し、
 # rl_common.detection の単一ソース（is_machinery_prompt / is_dispatch_template_marker）へ
 # 委譲する。機構ターン除外はこれで rephrase 検出も含めて全実装が同じ述語を共有する
 # （委譲前は weak_signals/detectors.py だけが独自リストを持ち、他 3 実装と desync していた）。

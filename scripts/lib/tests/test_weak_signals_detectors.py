@@ -161,7 +161,7 @@ def test_rephrase_skips_short_utterances() -> None:
 
 
 def test_dispatch_marker_allowlist_removed() -> None:
-    """ADR-054 A2（#379/#454）: 独自の文字列 allowlist を廃止し rl_common.detection へ委譲。
+    """ADR-054 A2（#379）: 独自の文字列 allowlist を廃止し rl_common.detection へ委譲。
 
     _DISPATCH_MARKERS が module から消えたことを直接固定する（委譲漏れの再発防止）。
     """
