@@ -543,7 +543,7 @@ def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | Non
             groups, slug, reflect_cmd=reflect_cmd, project_paths=project_paths,
         )
         system_message = _proposal_digest.build_proposal_systemmessage(
-            groups, excluded_machinery=excluded_machinery,
+            groups, excluded_machinery=excluded_machinery, pj_slug=slug,
         )
         # hookEventName は ADR-038 のスキーマ必須項目（subagent_observe.py と同型）。
         # 省略すると additionalContext が解釈されず機能が無言で死ぬ。

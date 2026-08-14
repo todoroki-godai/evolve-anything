@@ -262,6 +262,24 @@ def _prev_action(rec: Dict[str, Any]) -> str:
     return prev_action_summary(prov.get("prev_action") or "")
 
 
+def _member_meta(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """group 集約前の個別レコードの物理キー・判定時刻を保持する（ADR-054 PR2-c）。
+
+    ``_slim_group``（``daily.proposal_digest``）が ``signal_meta_by_key`` を組み立てる元
+    データ。group 集約は複数レコードを 1 つの ``evidence`` に畳んでしまうため、既読差し引き
+    後に個々の signal_key 単位で発話時刻・判定時刻を再計算できるよう、集約前の物理キー
+    （``source_path``/``line_no`` — utterances.db の物理 PK と同一）と ``detected_at``
+    （judge の判定時刻。発話時刻ではない）を group ごとの member リストに残す。
+    """
+    prov = rec.get("provenance") or {}
+    return {
+        "signal_key": rec.get("signal_key", ""),
+        "source_path": prov.get("source_path"),
+        "line_no": prov.get("line_no"),
+        "detected_at": rec.get("detected_at"),
+    }
+
+
 def _group_new(
     records: List[Dict[str, Any]],
     phys_to_idiom: Dict[str, str],
@@ -320,6 +338,9 @@ def _group_new(
                     "session_id": rec.get("session_id", ""),
                     "count": 1,
                 },
+                # ADR-054 PR2-c: 個別レコードの物理キー・判定時刻（既読差し引き後の
+                # composite sort 再計算に使う。daily.proposal_digest._slim_group が消費）。
+                "members": [_member_meta(rec)],
             }
             groups.append(new)
             group_kws.append(kws)
@@ -328,6 +349,7 @@ def _group_new(
         else:
             groups[gi]["signal_keys"].append(key)
             groups[gi]["evidence"]["count"] += 1
+            groups[gi]["members"].append(_member_meta(rec))
 
     return groups
 
@@ -349,17 +371,23 @@ def build_review(
     weak_signals_path: Optional[Path] = None,
     idioms_path: Optional[Path] = None,
     seen_path: Optional[Path] = None,
-    max_groups: int = 5,
+    max_groups: Optional[int] = 5,
     exclude_signal_keys: Optional[Set[str]] = None,
     dry_run: bool = False,
     marker_base: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """前回 evolve 以降の新規 unpromoted weak_signal を idiom 単位 group 化して返す。
 
+    ``max_groups``（ADR-054 PR2-b）: ``None`` を渡すと打ち切らず全件返す（``remaining=0``）。
+    既定は従来どおり 5（evolve Step 6.2 の既存呼び出しへの影響なし）。**順位と打ち切りの分離**
+    のため、daily digest（``daily.proposal_digest.build_proposal_digest``）は必ず
+    ``max_groups=None`` で呼ぶ — PJ ごとに切ってから global 化・既読差し引きをすると、
+    順位規則をどう変えても打ち切り後の group が候補に入らない（issue #443 B-c）。
+
     Returns（常時 emit。eligible でなくても groups=[] で返す）:
       {
         "eligible": bool,                 # groups が 1 件以上あるか
-        "groups": [                       # 最大 max_groups 件（頻度降順）
+        "groups": [                       # max_groups 件（頻度降順。None なら全件）
           {"idiom": str | None,           # 代表 idiom（個人辞書から照合・無ければ None）
            "representative": str,         # 代表発話断片（user 発話のみ・assistant 引用除去・#528-3）
            "confirmable_idiom": str|None, # 「はい」確定で confirmed になる idiom（eligible 時のみ・#527-4）
@@ -427,7 +455,8 @@ def build_review(
 
     groups = _prioritize(groups, pj_slug, idioms_path=idioms_path)
 
-    top = groups[:max_groups]
+    # ADR-054 PR2-b: max_groups=None は打ち切らない（全件 = 順位と打ち切りの分離）。
+    top = groups if max_groups is None else groups[:max_groups]
     remaining = max(0, len(groups) - len(top))
 
     return {

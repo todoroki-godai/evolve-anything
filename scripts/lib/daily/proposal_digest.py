@@ -31,13 +31,8 @@ from correction_semantic import daily_review as _daily_review
 from correction_semantic import store as _cs_store
 from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.store import normalize_idiom_text
+from daily import proposal_ranking as _ranking
 from weak_signals.store import default_store_path as _default_weak_signals_path
-
-# 1 PJ あたり digest に載せる group の上限（build_review にそのまま渡す・SKILL.md の
-# 「今日の修正確認」既定 max_groups=5 より絞る — セッション開始時提示は既読フィルタ後に
-# さらに MAX_SESSION_PROPOSALS で絞られるため、digest 段階では複数セッション分の候補を
-# 持たせる程度で十分）。
-DEFAULT_MAX_PER_PJ = 3
 
 # 1 セッションで提示する改善案の上限（受け入れ条件「1セッションの提示件数が上限を超えない」）。
 MAX_SESSION_PROPOSALS = 2
@@ -90,12 +85,53 @@ def _pj_project_paths(queue_entries: Optional[List[Dict[str, Any]]]) -> Dict[str
     return out
 
 
-def _slim_group(g: Dict[str, Any]) -> Dict[str, Any]:
-    """daily_review group を提示に必要な最小限へ縮める。"""
+def _slim_group(
+    g: Dict[str, Any],
+    *,
+    uttered_at_map: Optional[Dict[tuple, str]] = None,
+    map_available: bool = False,
+    freshness_stats: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
+    """daily_review group を提示に必要な最小限へ縮める。
+
+    ADR-054 PR2-c: ``signal_meta_by_key``（signal_key ごとの発話時刻・判定時刻・cross_pj）と
+    ``cross_pj_confirmed`` を追加で保持する。既読差し引き後に ``composite_sort_key`` が
+    残存 signal_keys だけから順位キーを再計算できるようにするため（group 集約後の
+    ``count`` だけでは個々の signal_key の情報が失われる）。
+
+    ``uttered_at_map``/``map_available``/``freshness_stats`` は
+    ``daily.proposal_ranking.build_uttered_at_map`` の結果をそのまま渡す（省略時は
+    join を行わず全件 detected_at フォールバック扱い＝呼び出し側が失敗を集計しない場合の
+    後方互換フォールバック）。
+    """
     evidence = g.get("evidence") or {}
     count = evidence.get("count")
     if not isinstance(count, int):
         count = len(g.get("signal_keys") or [])
+    cross_pj_confirmed = list(g.get("cross_pj_confirmed") or [])
+
+    signal_meta_by_key: Dict[str, Dict[str, Any]] = {}
+    for m in g.get("members") or []:
+        key = m.get("signal_key")
+        if not key:
+            continue
+        uttered_at = None
+        if map_available and uttered_at_map is not None:
+            uttered_at = _ranking.lookup_uttered_at(
+                uttered_at_map, m.get("source_path"), m.get("line_no"),
+            )
+        if not uttered_at and freshness_stats is not None:
+            freshness_stats["fallback_to_detected_at"] = (
+                freshness_stats.get("fallback_to_detected_at", 0) + 1
+            )
+            if map_available:
+                freshness_stats["key_mismatch"] = freshness_stats.get("key_mismatch", 0) + 1
+        signal_meta_by_key[key] = {
+            "uttered_at": uttered_at,
+            "detected_at": m.get("detected_at"),
+            "cross_pj": cross_pj_confirmed,
+        }
+
     return {
         "signal_keys": list(g.get("signal_keys") or []),
         "representative": g.get("representative", ""),
@@ -105,6 +141,8 @@ def _slim_group(g: Dict[str, Any]) -> Dict[str, Any]:
         "count": count,
         "evidence_text": _truncate(evidence.get("text", ""), _EVIDENCE_TEXT_TRUNC),
         "prev_action": _truncate(evidence.get("prev_action", ""), _PREV_ACTION_TRUNC),
+        "cross_pj_confirmed": cross_pj_confirmed,
+        "signal_meta_by_key": signal_meta_by_key,
     }
 
 
@@ -204,6 +242,10 @@ def _extract_global_groups(
         merged: Optional[Dict[str, Any]] = None
         total_count = 0
         all_representatives: List[str] = []
+        # ADR-054 PR2-c: 成分内の全 group の signal_meta_by_key を union する
+        # （composite sort が merge 後の group でも残存 signal_keys から順位キーを
+        # 計算できるようにするため）。signal_key は record 単位で一意なので衝突しない。
+        merged_meta_by_key: Dict[str, Dict[str, Any]] = {}
         # #413: 代表文を PJ 別にも保持する。all_representatives は成分全体のフラット表示用、
         # reps_by_pj は「既読差し引き」用の帰属情報 — keys_by_pj と同じ粒度（origin PJ）で
         # 持たせておき、部分処理後は build_session_proposals で keys_by_pj と一緒に絞る。
@@ -231,6 +273,7 @@ def _extract_global_groups(
                 pj_reps = reps_by_pj.setdefault(slug, [])
                 if rep not in pj_reps:
                     pj_reps.append(rep)
+            merged_meta_by_key.update(g.get("signal_meta_by_key") or {})
 
         if not merged_keys or merged is None:
             continue
@@ -242,6 +285,7 @@ def _extract_global_groups(
         merged["keys_by_pj"] = keys_by_pj
         merged["all_representatives"] = all_representatives
         merged["reps_by_pj"] = reps_by_pj
+        merged["signal_meta_by_key"] = merged_meta_by_key
         global_groups.append(merged)
 
     filtered_per_pj: Dict[str, List[Dict[str, Any]]] = {}
@@ -259,12 +303,12 @@ def build_proposal_digest(
     queue_entries: Optional[List[Dict[str, Any]]],
     *,
     data_dir: Optional[Path] = None,
-    max_per_pj: int = DEFAULT_MAX_PER_PJ,
 ) -> Dict[str, Any]:
     """queue の待ち PJ から改善案 digest を生成する（決定論・read-only・LLM 非依存）。
 
     Returns: {"generated_at": iso, "per_pj": {slug: [group, ...]}, "global": [group, ...],
-              "project_paths": {slug: path}, "excluded_machinery_by_pj": {slug: {...}}}
+              "project_paths": {slug: path}, "excluded_machinery_by_pj": {slug: {...}},
+              "freshness_join_stats": {...}}
 
     1 PJ の digest 生成が例外を投げても他 PJ の digest 生成は継続する（fail-open）。
     ``data_dir`` 未指定時は各ストアの本番既定パス（DATA_DIR 環境変数解決）を使う。
@@ -273,12 +317,25 @@ def build_proposal_digest(
     idioms_path = None
     seen_path = None
     marker_base = None
+    utterances_db_path: Optional[Path] = None
     if data_dir is not None:
         data_dir = Path(data_dir)
         weak_signals_path = _default_weak_signals_path(base=data_dir)
         idioms_path = _cs_store.default_idioms_path(base=data_dir)
         seen_path = _daily_review.default_seen_path(base=data_dir)
         marker_base = data_dir
+        utterances_db_path = data_dir / "utterances.db"
+
+    # ADR-054 PR2-c: 発話時刻 join は全 PJ を一度だけ read する O(U+S) 一括方式
+    # （PJ ごと・group ごとに query すると全 DB 走査の反復になる）。失敗4種のうち
+    # db_missing/duckdb_missing/query_error は build_uttered_at_map が判定し、
+    # key_mismatch/fallback_to_detected_at は _slim_group が signal_key 単位で集計する。
+    uttered_at_map, freshness_stats = _ranking.build_uttered_at_map(utterances_db_path)
+    map_available = not any(
+        freshness_stats.get(k) for k in ("db_missing", "duckdb_missing", "query_error")
+    )
+    freshness_stats.setdefault("key_mismatch", 0)
+    freshness_stats.setdefault("fallback_to_detected_at", 0)
 
     per_pj: Dict[str, List[Dict[str, Any]]] = {}
     # codex [Must]1 是正: build_review() が返す excluded_machinery_total/by_channel
@@ -288,18 +345,31 @@ def build_proposal_digest(
     excluded_machinery_by_pj: Dict[str, Dict[str, Any]] = {}
     for slug in _pj_slugs(queue_entries):
         try:
+            # ADR-054 PR2-b: 順位と打ち切りを分離するため、digest 生成は必ず max_groups=None
+            # （無制限）で呼ぶ。PJ ごとに切ってから global 化・既読差し引きをすると、
+            # 打ち切り後の group は順位規則をどう変えても候補に入らない（issue #443 B-c）。
+            # 打ち切り（表示件数の上限）は composite sort 適用後に build_session_proposals
+            # 側で行う。
             review = _daily_review.build_review(
                 slug,
                 weak_signals_path=weak_signals_path,
                 idioms_path=idioms_path,
                 seen_path=seen_path,
-                max_groups=max_per_pj,
+                max_groups=None,
                 dry_run=True,
                 marker_base=marker_base,
             )
         except Exception:
             continue  # 他 PJ の digest を巻き添えにしない（fail-open）
-        groups = [_slim_group(g) for g in (review.get("groups") or [])]
+        groups = [
+            _slim_group(
+                g,
+                uttered_at_map=uttered_at_map,
+                map_available=map_available,
+                freshness_stats=freshness_stats,
+            )
+            for g in (review.get("groups") or [])
+        ]
         if groups:
             per_pj[slug] = groups
         machinery_total = review.get("excluded_machinery_total") or 0
@@ -321,6 +391,11 @@ def build_proposal_digest(
         # codex [Must]1（#443 PR2-a）: machinery 除外件数を slug 別に透明化する
         # （silence != evaluated）。0 件の slug はキーを持たない（他の {slug: ...} 辞書と同じ流儀）。
         "excluded_machinery_by_pj": excluded_machinery_by_pj,
+        # ADR-054 PR2-c: 発話時刻 join の失敗内訳（silence != evaluated）。
+        # db_missing/duckdb_missing/query_error は 0/1（今回の digest 生成1回に対する
+        # 全体障害）、key_mismatch は map 構築成功後の個別 signal_key 不一致件数、
+        # fallback_to_detected_at は理由を問わない detected_at フォールバック総数。
+        "freshness_join_stats": freshness_stats,
     }
 
 
@@ -334,8 +409,9 @@ def build_session_proposals(
     """SessionStart で提示する改善案 group を返す（read-only・既読フィルタ済み）。
 
     per_pj[pj_slug] + global を結合し、group から既読 signal_key を差し引く（group ごと
-    除外はしない）。残り key が 0 件になった group だけを除外し、先頭 ``limit`` 件を返す。
-    該当なしなら空リスト（呼び出し側が完全沈黙する）。
+    除外はしない）。残り key が 0 件になった group だけを除外し、**composite sort
+    （``daily.proposal_ranking.composite_sort_key``）を一度だけ適用してから**先頭 ``limit``
+    件を返す（ADR-054 PR2-b/PR2-c）。該当なしなら空リスト（呼び出し側が完全沈黙する）。
 
     #412 round2 [Must]A: 「group 内に既読キーが1つでもあれば group 全体を除外」だと、
     ``--promote-weak`` が成功キーだけ既読化する（round1 是正済み）ため、
@@ -345,7 +421,13 @@ def build_session_proposals(
     #413: global group の ``keys_by_pj``（実行コマンドの絞り込み）に加え ``reps_by_pj``
     （PJ 別代表文）も同じ既読差し引きを適用する。処理済み PJ の代表文が ``all_representatives``
     に再掲されると「もう答えた案がまた出た」という誤認を招くため、表示（代表文）と実体
-    （実行コマンド）を同じ既読集合で絞る。
+    （実行コマンド）を同じ既読集合で絞る。``signal_meta_by_key`` も同じ集合で絞り、
+    composite sort が既読差し引き後の残存キーだけから順位キーを計算できるようにする。
+
+    ADR-054 PR2-b（B-d 回帰防止）: 旧実装は ``per_pj`` を先に concat し、``len(out) >= limit``
+    で早期 break していたため、``per_pj`` に未既読が ``limit`` 件あると global group には
+    永久に到達できなかった（global レーンが構造的に死んでいた）。**全候補を集めてから sort し、
+    最後に slice する**ことで解消する（早期 break は行わない）。
     """
     if not isinstance(queue_data, dict):
         return []
@@ -361,7 +443,8 @@ def build_session_proposals(
     if isinstance(global_groups, list):
         candidates.extend(global_groups)
 
-    out: List[Dict[str, Any]] = []
+    # ADR-054 PR2-b: per_pj/global の全候補をまず集め切る（早期 break しない・B-d 回帰防止）。
+    survivors: List[Dict[str, Any]] = []
     for g in candidates:
         if not isinstance(g, dict):
             continue
@@ -373,6 +456,16 @@ def build_session_proposals(
             continue
         g = dict(g)
         g["signal_keys"] = remaining_keys
+        # ADR-054 PR2-c: 残存キーだけの signal_meta_by_key に絞る。composite sort（キー2/3）
+        # が既読差し引き後の残存キーから再計算できるようにする。
+        meta_by_key = g.get("signal_meta_by_key")
+        if isinstance(meta_by_key, dict):
+            # set は内包表記の外で1回だけ作る（旧実装は反復ごとに再生成しており
+            # group 内キー数に対して O(n^2)。PR2-b の全件化でキー数の上限も無くなった）。
+            remaining_set = set(remaining_keys)
+            g["signal_meta_by_key"] = {
+                k: v for k, v in meta_by_key.items() if k in remaining_set
+            }
         keys_by_pj = g.get("keys_by_pj")
         new_keys_by_pj: Optional[Dict[str, List[str]]] = None
         if isinstance(keys_by_pj, dict):
@@ -399,10 +492,34 @@ def build_session_proposals(
                     if r and r not in flattened_reps:
                         flattened_reps.append(r)
             g["all_representatives"] = flattened_reps
-        out.append(g)
-        if len(out) >= limit:
-            break
-    return out
+        survivors.append(g)
+
+    # ADR-054 PR2-b/PR2-c: 既読差し引き後の最終集合に composite sort を一度だけ適用してから
+    # limit で切る（順位と打ち切りの分離）。
+    survivors.sort(key=_ranking.composite_sort_key)
+    return survivors[:limit]
+
+
+def _context_suffix(g: Dict[str, Any], pj_slug: str) -> str:
+    """ADR-054 PR2-d: 発話の実時刻（相対表記）+ 観測/confirmed cross-PJ を1行にまとめる。
+
+    `cross_pj_confirmed` だけを足す旧案は実データで発火0件＝実質 no-op だったため、
+    観測ベース cross-PJ（global レーン）・発話の実時刻という実際に朝の y/n に欠けていた
+    判断材料を出す（判断材料が無ければ空文字＝ノイズを足さない）。channel 名
+    （llm_judge/rephrase 等のジャーゴン）は出さない。
+    """
+    parts: List[str] = []
+    freshness_iso = _ranking.group_freshness_iso(g)
+    if freshness_iso:
+        label = _ranking.relative_time_label(freshness_iso)
+        if label:
+            parts.append(label)
+    note = _ranking.cross_pj_note(g, pj_slug)
+    if note:
+        parts.append(note)
+    if not parts:
+        return ""
+    return "（" + " ・ ".join(parts) + "）"
 
 
 def build_proposal_prompt(
@@ -453,6 +570,10 @@ def build_proposal_prompt(
         else:
             rep = g.get("representative") or g.get("evidence_text") or ""
             lines.append(f"- 案: {rep}")
+        # ADR-054 PR2-d: 発話の実時刻・観測/confirmed cross-PJ を判断材料として添える。
+        context = _context_suffix(g, pj_slug)
+        if context:
+            lines.append(f"  {context}")
         keys_by_pj = g.get("keys_by_pj")
         if isinstance(keys_by_pj, dict) and keys_by_pj:
             for origin_slug, origin_keys in keys_by_pj.items():
@@ -477,7 +598,10 @@ def build_proposal_prompt(
 
 
 def build_proposal_systemmessage(
-    groups: List[Dict[str, Any]], *, excluded_machinery: int = 0,
+    groups: List[Dict[str, Any]],
+    *,
+    excluded_machinery: int = 0,
+    pj_slug: Optional[str] = None,
 ) -> str:
     """改善案の代表テキストを systemMessage（user 可視チャネル）本文として組み立てる（#412 [Must]1）。
 
@@ -493,6 +617,11 @@ def build_proposal_systemmessage(
     ``excluded_machinery``（codex [Must]1・#443 PR2-a）: この PJ の digest 生成時に machinery
     （委譲メッセージ等の harness 注入）を理由に候補から除外した件数。>0 のときだけ末尾に
     1行添える（silence != evaluated）。0 のときは従来どおりノイズを足さない。
+
+    ``pj_slug``（ADR-054 PR2-d）: 渡すと先頭 group（``groups`` は呼び出し側で composite sort
+    済みの前提＝最優先の1件）の発話の実時刻・cross-PJ 判断材料を末尾に添える。省略時
+    （後方互換）は従来どおり付けない。additionalContext（``build_proposal_prompt``）側は
+    全 group に付くのに対し、systemMessage は概要チャネルなので先頭1件だけに絞る。
     """
     reps: List[str] = []
     for g in groups[:MAX_SESSION_PROPOSALS]:
@@ -519,6 +648,11 @@ def build_proposal_systemmessage(
             f"[evolve-anything] 改善案があります: {joined}。応答のあとで採否をお聞きします。"
             "表示されなかった場合は未処理のまま次回また出ます。"
         )
+    if pj_slug is not None and groups:
+        # ADR-054 PR2-d: 先頭（最優先）group の判断材料だけ添える。
+        context = _context_suffix(groups[0], pj_slug)
+        if context:
+            base += f" {context}"
     if excluded_machinery > 0:
         base += (
             f" （machinery 除外 {excluded_machinery} 件は委譲メッセージ等の harness 注入のため"

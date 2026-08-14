@@ -16,8 +16,10 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
@@ -44,6 +46,18 @@ def _sig(text: str, line_no: int, pj_slug: str, session_id: str = "s1") -> WeakS
         channel="llm_judge",
         provenance=prov,
         detected_at=datetime.now(timezone.utc).isoformat(),
+        session_id=session_id,
+        pj_slug=pj_slug,
+    )
+
+
+def _sig_at(text: str, line_no: int, pj_slug: str, days_ago: float, session_id: str = "s1") -> WeakSignal:
+    """detected_at を明示指定できる版（composite sort の鮮度キー検証用）。"""
+    prov = {"source_path": f"/{pj_slug}.jsonl", "line_no": line_no, "text": text, "reason": "r"}
+    return WeakSignal(
+        channel="llm_judge",
+        provenance=prov,
+        detected_at=(datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat(),
         session_id=session_id,
         pj_slug=pj_slug,
     )
@@ -103,7 +117,13 @@ def test_single_pj_group_is_slimmed(tmp_path: Path):
     assert "confirmable_idiom" in g
 
 
-def test_max_per_pj_limits_group_count(tmp_path: Path):
+def test_digest_does_not_truncate_per_pj_groups(tmp_path: Path):
+    """ADR-054 PR2-b（B-c 回帰防止）: digest 生成は PJ ごとに切らず全 group を集める。
+
+    旧実装は ``build_review(max_groups=DEFAULT_MAX_PER_PJ=3)`` で PJ ごとに3件へ切って
+    いたため、4件目以降は順位規則をどう変えても候補に入れなかった。digest 側は必ず
+    ``max_groups=None`` で呼ぶことを固定する。
+    """
     ws = tmp_path / "weak_signals.jsonl"
     # jaccard 分離のため keyword が重ならない題材を使う（extract_keywords は数字を落とすため
     # 「別々の指摘そのN」のような templated 文字列は N によらず同一 group に collapse する）。
@@ -117,8 +137,9 @@ def test_max_per_pj_limits_group_count(tmp_path: Path):
     sigs = [_sig(t, i, "pj-a") for i, t in enumerate(texts)]
     append_signals(sigs, path=ws)
 
-    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path, max_per_pj=2)
-    assert len(out["per_pj"]["pj-a"]) == 2
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    # 旧実装なら DEFAULT_MAX_PER_PJ=3 で切られていた。5件全てが digest に載る。
+    assert len(out["per_pj"]["pj-a"]) == 5
 
 
 def test_build_proposal_digest_is_read_only(tmp_path: Path):
@@ -147,6 +168,138 @@ def test_pj_failure_does_not_abort_other_pjs(tmp_path: Path, monkeypatch):
     out = pd.build_proposal_digest(_queue("pj-bad", "pj-ok"), data_dir=tmp_path)
     assert "pj-bad" not in out["per_pj"]
     assert "pj-ok" in out["per_pj"]
+
+
+# ─────────────────────────────────────────────────────────────────
+# freshness_join_stats（ADR-054 PR2-c: 発話時刻 join 失敗4種の区別・silence != evaluated）
+# ─────────────────────────────────────────────────────────────────
+def test_freshness_join_stats_db_missing(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("金額がきれてる", 1, "pj-a")], path=ws)
+    # data_dir に utterances.db を置かない → db_missing。
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    stats = out["freshness_join_stats"]
+    assert stats["db_missing"] == 1
+    assert stats["duckdb_missing"] == 0
+    assert stats["query_error"] == 0
+    # map が丸ごと失敗した場合、全 signal_key が detected_at にフォールバックする。
+    assert stats["fallback_to_detected_at"] == 1
+    assert stats["key_mismatch"] == 0  # 個別不一致ではなく全体障害
+
+
+def test_freshness_join_stats_duckdb_missing(tmp_path: Path, monkeypatch):
+    from daily import proposal_ranking as _ranking
+    from utterance_archive import store as ustore
+
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("金額がきれてる", 1, "pj-a")], path=ws)
+    monkeypatch.setattr(ustore, "HAS_DUCKDB", False)
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    stats = out["freshness_join_stats"]
+    assert stats["duckdb_missing"] == 1
+    assert stats["db_missing"] == 0
+    assert stats["fallback_to_detected_at"] == 1
+
+
+def test_freshness_join_stats_query_error(tmp_path: Path, monkeypatch):
+    from utterance_archive import query as uquery
+    from utterance_archive import store as ustore
+
+    if not ustore.HAS_DUCKDB:
+        pytest.skip("DuckDB 未インストール")
+
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("金額がきれてる", 1, "pj-a")], path=ws)
+    (tmp_path / "utterances.db").write_bytes(b"")  # exists() だけ真にする
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(uquery, "query_utterances_all_projects", _boom)
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    stats = out["freshness_join_stats"]
+    assert stats["query_error"] == 1
+    assert stats["fallback_to_detected_at"] == 1
+
+
+def test_freshness_join_stats_key_mismatch_and_uses_uttered_at(tmp_path: Path):
+    from utterance_archive import store as ustore
+    from utterance_archive.extractor import Utterance
+
+    if not ustore.HAS_DUCKDB:
+        pytest.skip("DuckDB 未インストール")
+
+    ws = tmp_path / "weak_signals.jsonl"
+    hit = _sig("金額がきれてる", 1, "pj-a")  # source_path=/pj-a.jsonl line_no=1
+    miss = _sig("カテゴリの並び", 2, "pj-a")  # DB に対応行なし
+    append_signals([hit, miss], path=ws)
+
+    db = tmp_path / "utterances.db"
+    with ustore.connection(db) as con:
+        ustore.insert_utterances(con, [
+            Utterance("/pj-a.jsonl", 1, "pj-a", "s1", "2026-05-01T00:00:00+00:00",
+                      "金額がきれてる", "h1", None, "dialogue", 1),
+        ])
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    stats = out["freshness_join_stats"]
+    assert stats == {
+        "db_missing": 0, "duckdb_missing": 0, "query_error": 0,
+        "key_mismatch": 1, "fallback_to_detected_at": 1,
+    }
+    # hit 側は uttered_at が join で埋まる。
+    hit_group = out["per_pj"]["pj-a"][0] if out["per_pj"]["pj-a"][0]["signal_keys"] == [hit.signal_key] else out["per_pj"]["pj-a"][1]
+    assert hit_group["signal_meta_by_key"][hit.signal_key]["uttered_at"] == "2026-05-01T00:00:00+00:00"
+
+
+# ─────────────────────────────────────────────────────────────────
+# 実ストア dry-run（PR2-e P8・tacchi 追加要求）
+# ─────────────────────────────────────────────────────────────────
+@pytest.mark.real_home
+def test_real_corpus_top_proposals_have_no_machinery():
+    """実ストア dry-run で上位提示に machinery が混入していないことを検査する。
+
+    合成 fixture だけでは §1.1 の発見（朝の候補 300件中 47件=15.7%が委譲メッセージ）を
+    再現できない（tacchi 指摘）。read-only（一切書き込まない）。root conftest の autouse
+    HOME 隔離は import 時に ``CLAUDE_PLUGIN_DATA`` を tmp dir へ固定する（#420）ため、
+    ``real_home`` マーカーだけでは env 経由の DATA_DIR 解決は実 home に戻らない。
+    本テストは ``data_dir`` に実 ``~/.claude/evolve-anything`` を**明示**渡すことで env
+    解決を経由せず実ストアを読む。実ストアにデータが無い環境ではスキップする。
+    """
+    from correction_semantic.review_channels import REVIEW_CHANNELS
+    from rl_common.detection import is_machinery_prompt
+    from weak_signals.store import default_store_path, read_signals
+
+    real_data_dir = Path.home() / ".claude" / "evolve-anything"
+    real_weak_signals_path = default_store_path(base=real_data_dir)
+    if not real_weak_signals_path.exists():
+        pytest.skip("実ストア（weak_signals.jsonl）が存在しない環境")
+
+    recs = read_signals(real_weak_signals_path)  # 明示 path（hermetic・union read しない）
+    slugs = sorted({
+        r.get("pj_slug") for r in recs
+        if r.get("pj_slug") and r.get("channel") in REVIEW_CHANNELS
+    })
+    if not slugs:
+        pytest.skip("実ストアに content-rich weak_signal が無い環境")
+
+    queue_entries = [{"pj_slug": s} for s in slugs]
+    digest = pd.build_proposal_digest(queue_entries, data_dir=real_data_dir)
+
+    checked_any = False
+    for slug in slugs:
+        proposals = pd.build_session_proposals({"proposals": digest}, slug, seen_keys=set())
+        for g in proposals:
+            checked_any = True
+            for text_field in ("representative", "evidence_text"):
+                text = g.get(text_field) or ""
+                assert not is_machinery_prompt(text), (
+                    f"{slug}: machinery leaked into top proposals: {text[:80]!r}"
+                )
+            for rep in g.get("all_representatives") or []:
+                assert not is_machinery_prompt(rep or "")
+    if not checked_any:
+        pytest.skip("実ストアに未既読の提案候補が無い環境（全既読/全 promoted 済み等）")
 
 
 def test_global_lane_merges_same_idiom_text_across_two_pjs(tmp_path: Path):
@@ -344,6 +497,83 @@ def test_extract_global_groups_carries_reps_by_pj():
 # ─────────────────────────────────────────────────────────────────
 # build_session_proposals
 # ─────────────────────────────────────────────────────────────────
+# ADR-054 PR2-b/PR2-c 契約テスト（実パイプライン E2E: build_proposal_digest →
+# build_session_proposals）
+# ─────────────────────────────────────────────────────────────────
+def test_global_lane_reachable_when_per_pj_already_has_limit_unread(tmp_path: Path):
+    """B-d 回帰防止: per_pj に既に limit 件（既定2件）の未読 group がある状態でも、
+    global group（2 PJ 以上で observed）が early break で握り潰されず提示に到達すること。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    idioms_path = tmp_path / "correction_idioms.jsonl"
+    sig_a1 = _sig("cdを使わずgitのCオプションで実行して", 1, "pj-a")
+    sig_a2 = _sig("コミットメッセージに共著者表記を付けないで", 2, "pj-a")
+    sig_g_a, idiom_g_a = _sig_and_idiom(ELIGIBLE_IDIOM_TEXT, 3, "pj-a")
+    sig_g_b, idiom_g_b = _sig_and_idiom(ELIGIBLE_IDIOM_TEXT, 1, "pj-b")
+    append_signals([sig_a1, sig_a2, sig_g_a, sig_g_b], path=ws)
+    append_idioms([idiom_g_a, idiom_g_b], path=idioms_path)
+
+    out = pd.build_proposal_digest(_queue("pj-a", "pj-b"), data_dir=tmp_path)
+    assert len(out["per_pj"]["pj-a"]) == 2  # per_pj に既に limit 件（2件）ある
+    assert len(out["global"]) == 1          # global group が別途存在する
+
+    proposals = pd.build_session_proposals({"proposals": out}, "pj-a", seen_keys=set())
+    all_keys = {k for g in proposals for k in g["signal_keys"]}
+    assert sig_g_a.signal_key in all_keys or sig_g_b.signal_key in all_keys
+
+
+def test_priority_group_reaches_display_even_when_inserted_last(tmp_path: Path):
+    """B-c 回帰防止 + composite sort: 挿入順で4番目（最後）でも最も新しい発話なら、
+    limit=2 の表示に到達すること（旧実装は max_per_pj=3 で切ってから挿入順の先頭2件しか
+    出さなかった）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig_at("cdを使わずgitのCオプションで実行して", 1, "pj-a", days_ago=4),
+            _sig_at("コミットメッセージに共著者表記を付けないで", 2, "pj-a", days_ago=3),
+            _sig_at("テストは先に書いて失敗を確認して", 3, "pj-a", days_ago=2),
+            _sig_at("変数名は英語表記に統一して", 4, "pj-a", days_ago=0.01),  # 最新
+        ],
+        path=ws,
+    )
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    assert len(out["per_pj"]["pj-a"]) == 4  # PR2-b: 打ち切られず全件 digest に載る
+
+    proposals = pd.build_session_proposals({"proposals": out}, "pj-a", seen_keys=set())
+    assert len(proposals) == 2
+    reps = {g["representative"] for g in proposals}
+    assert "変数名は英語表記に統一して" in reps  # 最新の発話が limit=2 に含まれる
+
+
+def test_seen_key_subtraction_changes_order(tmp_path: Path):
+    """codex 2巡目 [Nit]: 既読差し引き後の残存キーによって composite sort の順序が変わる
+    ケースを固定する。group の代表 count（再発回数）は既読差し引き前後で変わりうるので、
+    既読を1件差し引いたことで count タイが崩れ順位が入れ替わることを確認する。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    now = datetime.now(timezone.utc)
+    # group A: 2件（同一発話が2回検出＝再発回数2）
+    sig_a1 = _sig_at("エラーは握りつぶさずログに出力して", 1, "pj-a", days_ago=1)
+    sig_a2 = _sig_at("エラーは握りつぶさずログに出力しろ", 2, "pj-a", days_ago=1)
+    # group B: 1件（再発回数1）だが group A より新しい
+    sig_b1 = _sig_at("変数名は英語表記に統一して", 3, "pj-a", days_ago=0.01)
+    append_signals([sig_a1, sig_a2, sig_b1], path=ws)
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+
+    # 既読差し引き前: group A（count=2）がキー2で group B（count=1）より優先される。
+    before = pd.build_session_proposals({"proposals": out}, "pj-a", seen_keys=set(), limit=1)
+    assert before[0]["count"] == 2 or len(before[0]["signal_keys"]) == 2
+
+    # group A の signal_key を1件既読にすると count=1 に落ち、group B（より新しい・count=1）
+    # とタイになりキー3（鮮度）で group B が優先される。
+    after = pd.build_session_proposals(
+        {"proposals": out}, "pj-a", seen_keys={sig_a1.signal_key}, limit=1,
+    )
+    assert after[0]["signal_keys"] == [sig_b1.signal_key]
+
+
 def _group(keys, rep="rep") -> dict:
     return {
         "signal_keys": list(keys),
@@ -616,6 +846,71 @@ def test_build_proposal_prompt_quotes_shell_metacharacter_pj_slug():
 
 
 # ─────────────────────────────────────────────────────────────────
+# build_proposal_prompt / build_proposal_systemmessage（ADR-054 PR2-d: 判断材料）
+# ─────────────────────────────────────────────────────────────────
+def _group_with_meta(keys, rep="rep", *, uttered_at=None, detected_at=None,
+                      origin_pjs=None, cross_pj_confirmed=None) -> dict:
+    g = _group(keys, rep=rep)
+    g["signal_meta_by_key"] = {
+        k: {"uttered_at": uttered_at, "detected_at": detected_at, "cross_pj": cross_pj_confirmed or []}
+        for k in keys
+    }
+    if origin_pjs is not None:
+        g["origin_pjs"] = origin_pjs
+    if cross_pj_confirmed is not None:
+        g["cross_pj_confirmed"] = cross_pj_confirmed
+    return g
+
+
+def test_build_proposal_prompt_includes_relative_time_and_cross_pj():
+    now = datetime.now(timezone.utc)
+    ts = (now - timedelta(days=21)).isoformat()
+    g = _group_with_meta(
+        ["k1"], rep="案X", uttered_at=ts, origin_pjs=["pj-a", "amamo", "figma-to-code"],
+    )
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "週間前の発話" in msg
+    assert "他2PJでも同種の指摘" in msg
+    assert "amamo" in msg and "figma-to-code" in msg
+    # channel 名（ジャーゴン）は出さない
+    assert "llm_judge" not in msg
+    assert "rephrase" not in msg
+
+
+def test_build_proposal_prompt_confirmed_uses_stronger_wording():
+    g = _group_with_meta(["k1"], rep="案Y", detected_at=(datetime.now(timezone.utc)).isoformat(),
+                          cross_pj_confirmed=["amamo"])
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "確認済み" in msg
+    assert "amamo" in msg
+
+
+def test_build_proposal_prompt_silent_when_no_context():
+    g = _group(["k1"], rep="案Z")  # signal_meta_by_key 無し・cross_pj/origin_pjs 無し
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "週間前" not in msg
+    assert "PJでも" not in msg
+    assert "確認済み" not in msg
+
+
+def test_build_proposal_systemmessage_includes_top_group_context():
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="rep1", detected_at=ts, cross_pj_confirmed=["amamo"])
+    msg = pd.build_proposal_systemmessage([g], pj_slug="pj-a")
+    assert "日前の発話" in msg
+    assert "確認済み" in msg
+
+
+def test_build_proposal_systemmessage_silent_when_pj_slug_omitted():
+    """後方互換: pj_slug 省略時は従来どおり判断材料を付けない。"""
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="rep1", detected_at=ts, cross_pj_confirmed=["amamo"])
+    msg = pd.build_proposal_systemmessage([g])
+    assert "日前の発話" not in msg
+    assert "確認済み" not in msg
+
+
+# ─────────────────────────────────────────────────────────────────
 # build_proposal_systemmessage（#412 [Must]1: 2チャネル同時出力）
 # ─────────────────────────────────────────────────────────────────
 def test_build_proposal_systemmessage_lists_representatives():
@@ -677,3 +972,71 @@ def test_build_proposal_systemmessage_lists_all_representatives_for_merged_group
     msg = pd.build_proposal_systemmessage([group])
     assert "代表文A" in msg
     assert "代表文B" in msg
+
+
+# ─────────────────────────────────────────────────────────────────
+# #443 codex cold review: global merge 後の signal_meta_by_key union と
+# 既読差し引き後の cross_pj 再計算（union 処理を消すと落ちること）
+# ─────────────────────────────────────────────────────────────────
+def _slim_with_meta(keys, meta, *, cross_pj=None, rep=None, idiom=None) -> dict:
+    g = _slim(keys, rep=rep, idiom=idiom)
+    g["signal_meta_by_key"] = meta
+    g["cross_pj_confirmed"] = list(cross_pj or [])
+    return g
+
+
+def test_extract_global_groups_unions_signal_meta_from_all_pjs():
+    """merge 後の group が**両 PJ 由来**の signal_meta_by_key を保持する。
+
+    union を消して「先頭 group の meta だけ」にすると、片方の PJ のキーの発話時刻・
+    cross_pj が失われ、既読差し引き後の順位キー再計算ができなくなる（このテストが落ちる）。
+    """
+    meta_a = {"ka": {"uttered_at": "2026-08-01T00:00:00+00:00", "detected_at": None, "cross_pj": []}}
+    meta_b = {"kb": {"uttered_at": "2026-08-10T00:00:00+00:00", "detected_at": None, "cross_pj": ["pj-c"]}}
+    per_pj = {
+        "pj-a": [_slim_with_meta(["ka"], meta_a, idiom=ELIGIBLE_IDIOM_TEXT)],
+        "pj-b": [_slim_with_meta(["kb"], meta_b, cross_pj=["pj-c"], idiom=ELIGIBLE_IDIOM_TEXT)],
+    }
+    global_groups, _remaining = pd._extract_global_groups(per_pj)
+
+    assert len(global_groups) == 1
+    merged_meta = global_groups[0]["signal_meta_by_key"]
+    # 両 PJ 由来のキーが残っている（union が効いている）。
+    assert set(merged_meta) == {"ka", "kb"}
+    assert merged_meta["ka"]["uttered_at"] == "2026-08-01T00:00:00+00:00"
+    assert merged_meta["kb"]["cross_pj"] == ["pj-c"]
+
+
+def test_seen_filter_drops_cross_pj_when_only_confirmed_key_is_read():
+    """confirmed 情報を持つキーだけが既読になったら、その group は tier 1 に居座らない。
+
+    codex cold review [Must]: `composite_sort_key` が top-level の `cross_pj_confirmed` を
+    見ていると、confirmed 由来キーが既読で落ちた後も tier 1 のままになる。残存キーの
+    `cross_pj` の和から再計算していれば、このテストで順位が入れ替わる。
+    """
+    from daily import proposal_ranking as pr
+
+    # group X: 2キー。confirmed 情報は "kx-confirmed" だけが持つ。
+    meta_x = {
+        "kx-confirmed": {"uttered_at": "2026-08-01T00:00:00+00:00", "detected_at": None, "cross_pj": ["pj-c"]},
+        "kx-plain": {"uttered_at": "2026-08-01T00:00:00+00:00", "detected_at": None, "cross_pj": []},
+    }
+    group_x = _slim_with_meta(["kx-confirmed", "kx-plain"], meta_x, cross_pj=["pj-c"])
+    # group Y: confirmed 無し・より新しい発話。
+    meta_y = {"ky": {"uttered_at": "2026-08-12T00:00:00+00:00", "detected_at": None, "cross_pj": []}}
+    group_y = _slim_with_meta(["ky"], meta_y)
+
+    queue_data = {"proposals": {"per_pj": {"pj-a": [group_x, group_y]}, "global": []}}
+
+    # 既読なし: X が confirmed 由来で tier 1 → 先頭。
+    before = pd.build_session_proposals(queue_data, "pj-a", seen_keys=set())
+    assert before[0]["signal_keys"] == ["kx-confirmed", "kx-plain"]
+
+    # confirmed を持つキーだけ既読化: X は tier 1 を失い、より新しい Y が先頭になる。
+    after = pd.build_session_proposals(queue_data, "pj-a", seen_keys={"kx-confirmed"})
+    assert after[0]["signal_keys"] == ["ky"]
+    # X は消えず、残存キーだけで後ろに残る（group ごと除外しない既存契約）。
+    assert ["kx-plain"] in [g["signal_keys"] for g in after]
+    # 残存キーからは cross_pj が消えている。
+    x_after = [g for g in after if g["signal_keys"] == ["kx-plain"]][0]
+    assert pr._remaining_cross_pj(x_after) == []
