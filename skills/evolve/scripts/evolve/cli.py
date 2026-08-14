@@ -34,6 +34,16 @@ def _known_pending_ids(project_dir, result_json):
     `drain_pending` と同じソース優先順位（result_json > marker）を使うが、ロックを取らず
     marker/queue を一切変更しない。実際の drain 実行までの間に marker が変化していれば、
     その時点の判定（deferred 化等）は `drain_pending` 側の通常ロジックに従う。
+
+    marker 経路の母集団は `drain_pending` が実際に ingest 対象にする集合と**一致させる**
+    （#450 codex cold review [Must]3）。`drain_pending`（`_drain.py`）は marker 経路でのみ
+    orphan worktree（既に消えた worktree に属する pending）を `_partition_orphaned` で
+    ingest 対象から除外する。ここで同じ除外をしないと、orphan の ID へ明示 reject を渡した
+    ときに「検証は通過するが実際には記録されず marker だけ削除されて終わる」サイレント消失が
+    起きる。除外条件は `evolve_decisions._partition_orphaned`（`is_orphaned_worktree` が単一
+    ソース）を呼ぶだけにし、CLI 側で判定ロジックを再実装しない。result_json 経路は
+    `drain_pending` 自身も orphan 判定をしない（result_json はその場で渡された snapshot で
+    marker のような永続 residue ではないため）ので、ここでも除外しない。
     """
     if result_json:
         data = json.loads(Path(result_json).read_text(encoding="utf-8"))
@@ -43,7 +53,8 @@ def _known_pending_ids(project_dir, result_json):
 
         slug = _ed.resolve_slug(Path(project_dir) if project_dir else None)
         marker = _ed.read_pending_marker(slug)
-        pending = (marker.get("pending") if marker else None) or []
+        all_pending = (marker.get("pending") if marker else None) or []
+        pending, _orphaned = _ed._partition_orphaned(all_pending)
     return {entry.get("id") for entry in pending if entry.get("id")}
 
 
@@ -196,6 +207,19 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # #450 codex cold review [Should]1: --drain 無しで --accepted/--rejected を受理すると、
+    # 通常の evolve（drain を経由しない）が走って明示 decision が黙って捨てられる。
+    # --accepted/--rejected は --drain 必須とし、無ければ他の判定より先にエラーで中断する。
+    if (args.accepted or args.rejected) and not args.drain:
+        print(json.dumps(
+            {
+                "error": "invalid_decision_args",
+                "details": ["--accepted/--rejected は --drain と併用必須です（--drain 無しでは判断が記録されません）"],
+            },
+            ensure_ascii=False,
+        ))
+        sys.exit(1)
 
     # #525-3: OUT パスだけ印字する軽量モード（評価本体は回さない）。
     # slug 解決 + /tmp パス組み立てのみで DATA_DIR resolver には触れない（#517 と非競合）。
