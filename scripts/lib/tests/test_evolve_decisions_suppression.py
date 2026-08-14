@@ -41,6 +41,38 @@ class TestIssueFor:
         b = sup._issue_for(_entry(id_="evdiff_1", repo_id="r2", relative_path="b/SKILL.md"))
         assert a["file"] == b["file"]  # repo_id/relative_path が違っても file は同じ
 
+    @pytest.mark.parametrize("bad_id", [None, "", 123, {"a": 1}])
+    def test_missing_or_non_string_id_raises_instead_of_collapsing_keys(self, bad_id):
+        """id が使えない entry は ValueError。**None を素通しさせない**。
+
+        `dedup_key()` は detail の値が str/int/float でなければその成分を落とすため、
+        `target=None` のまま渡すと **id を持たない entry が全部「type + file だけ」の
+        同一キーに潰れる**。その状態で1件 reject を記録すると、同じ lane の id 無し
+        entry が丸ごと巻き添えで抑制される（codex 1巡目 [Must]6 の failure mode）。
+        """
+        entry = {"proposal_type": "skill_diff"}
+        if bad_id is not None:
+            entry["id"] = bad_id
+        with pytest.raises(ValueError):
+            sup._issue_for(entry)
+
+    def test_id_less_entries_are_not_suppressed_and_do_not_collapse(self):
+        """id 無し entry は fail-open で通し、互いに巻き添えにしない（統合レベルの回帰防止）。
+
+        「1件を reject 記録 → もう1件まで抑制される」が起きないことを、キー計算でなく
+        `filter_rejected` / `record_pending_rejection` の外形で固定する。
+        """
+        a = {"proposal_type": "skill_diff"}
+        b = {"proposal_type": "skill_diff"}
+        # 記録は失敗（エラー文字列が返るだけで例外は出ない）＝ ledger を汚さない。
+        err = sup.record_pending_rejection(a, slug="proj")
+        assert err is not None and "ValueError" in err
+        # どちらも抑制されず、候補単位のエラーとして surface される。
+        kept, stats = sup.filter_rejected([a, b], slug="proj")
+        assert kept == [a, b]
+        assert stats["suppressed_total"] == 0
+        assert len(stats["candidate_errors"]) == 2
+
     def test_same_proposal_id_yields_same_dedup_key_despite_differing_fields(self):
         """[Must]1 の核心: proposal_id が同じなら、他のフィールドが違っても dedup_key は一致する。"""
         a = sup._issue_for(_entry(id_="evdiff_1", repo_id="r1", relative_path="a/SKILL.md"))

@@ -30,13 +30,23 @@ def _issue_for(entry: Dict[str, Any]) -> Dict[str, Any]:
     file は entry 由来にせず lane 固定のリテラル文字列にする（codex round2 [Must]1:
     dedup_key() は type + file + detail を丸ごとハッシュするため、file が entry ごとに
     変わると同じ proposal_id でも dedup_key が変わり抑制が成立しなくなる）。
+
+    **id が空/欠落なら ValueError を送出する**（黙って None を渡さない）。`dedup_key()` は
+    detail の値が str/int/float でなければその成分を落とすため、``target=None`` のまま
+    渡すと **id を持たない entry が全部「type + file だけ」の同一キーに潰れる**。その状態で
+    1件でも reject を記録すると、同じ lane の id 無し entry が丸ごと巻き添えで抑制される
+    （codex 1巡目 [Must]6 が「空値を記録すると別候補を巻き込む」と警告した failure mode
+    そのもの）。呼び出し側は本例外を fail-open 経路で受け、**抑制もせず記録もしない**。
     """
+    proposal_id = entry.get("id")
+    if not isinstance(proposal_id, str) or not proposal_id:
+        raise ValueError(f"pending entry has no usable id: {proposal_id!r}")
     proposal_type = entry.get("proposal_type") or "unknown"
     issue_type = "advisory" if proposal_type == "advisory" else "evolve_diff"
     return {
         "type": issue_type,
         "file": "evolve_decisions",  # lane 固定リテラル。entry 由来の値を混ぜない。
-        "detail": {"target": entry.get("id")},
+        "detail": {"target": proposal_id},
     }
 
 
@@ -82,7 +92,7 @@ def filter_rejected(
         try:
             issue = _issue_for(entry)
             record = ledger.get(dedup_key(issue))
-        except (AttributeError, KeyError, TypeError) as e:
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
             stats["candidate_errors"].append(
                 {"id": entry.get("id"), "error": f"{type(e).__name__}: {e}"}
             )
