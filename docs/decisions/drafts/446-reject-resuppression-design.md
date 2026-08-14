@@ -23,9 +23,15 @@ emit→drain lane（skill_diff / skill_evolve / advisory 提案）。#446 本文
 使われていない。`scripts/lib/evolve_decisions/_candidates.py` の `_extract_candidates` /
 `_advisory_pending` にも reject 参照は無い（grep で `reject`/`history` の語が1件もヒットしない）。
 
-**差し込み位置（単一ソース）**: `_emit.py:217`（`seen_ids = {entry["id"] for entry in pending}`の
-直後、`pending` が確定した直後）が全 emit 経路（skill_diff・skill_evolve・advisory）を1回で通る
-唯一の chokepoint。ここで `pending` をサプレッションフィルタに通せば、キュー書込
+**差し込み位置（単一ソース。2026-08-14 round2 訂正: `_emit.py:217` ではなく `:224`
+直後——codex round2 [Nit]1）**: `seen_ids = {entry["id"] for entry in pending}`
+（`_emit.py:217`）の直後は advisory 候補のマージ（`_advisory_pending()` の
+`try/except Exception: pass`、`_emit.py:218-224`）が**まだ終わっていない**ため、
+そこで `pending` を確定扱いするのは誤り（advisory 候補を suppression フィルタに
+通し損なう）。正しい chokepoint は advisory マージ完了後の `_emit.py:224`
+（`except Exception: pass` の直後）——ここで初めて `pending`（skill_diff・
+skill_evolve・advisory の全件）が確定し、全 emit 経路を1回で通る唯一の
+chokepoint になる。ここで `pending` をサプレッションフィルタに通せば、キュー書込
 （`_emit.py:239-250`）とマーカー書込（`_emit.py:257-269`）の両方に自動的に反映される
 （1箇所の filter で二重 writer 問題が起きない）。
 
@@ -70,13 +76,25 @@ worktree 非依存"）は **`before_sha` を含まない**。`_ingest.py:112-114
 **帰結**: #446 の修正対象は reject 側のみでよく、accept 側の ID 再生成ロジックには一切手を
 入れない。
 
-**解釈B（当初案）は独立の仕組みとして不要と判明した**（codex [Must]1・[Must]4 を反映。
+**解釈B（当初案）は独立の仕組みとして不要と判明した**（codex round1 [Must]1・[Must]4 を反映。
 初版で示した「`(repo_id, relative_path)` の粗い抑制キー + accept を検知して早期解除する」
 という2段構えの設計は撤回する）。抑制キーを `proposal_id`（= `(repo_id, relative_path,
-before_sha)`、§3.1）に訂正した結果、**解釈Bが達成したかったこと（内容が実質的に変わったら
-抑制を解く）は before_sha の変化それ自体で自動的に起きる**: reject 後に accept（＝ファイル
-内容の変化）が起きれば `before_sha` が変わり、次回 emit は別の `proposal_id` を生成する。
-その新しい ID は ledger に reject 記録が無いので抑制されない。
+before_sha)`、§3.1）に訂正した結果、reject 後にファイル内容が変わる（typically は accept
+による適用）と `before_sha` が変わり、次回 emit は別の `proposal_id` を生成する——その
+新しい ID は ledger に reject 記録が無いので抑制されない。
+
+**ただし before_sha ベースの解除は「実質的な変化」の完全な代理指標ではない**（2026-08-14
+round2 [Should]3 訂正: 旧稿の「自動的に起きる」は before_sha 変化＝解釈Bの要件充足、と
+言い切っていたが正確ではない）。`before_sha` はファイルの**バイト単位の全内容ハッシュ**
+なので、コメント修正・空白調整・無関係な別編集など、人間が「意味のある変化」と見なさない
+差分でも解除される（過剰解除側の誤差）。逆に、ファイルが一切変わらないまま指摘内容の
+解釈だけが変わるようなケース（discover pattern の変化等・§3.1 参照）は本来は「別内容」
+だが `before_sha` は不変のままなので抑制が続く（過小解除側の誤差）。したがって
+before_sha の変化は「解釈Bが本来意図した“実質的な変化”検知」の**粗い近似**であり、
+完全な代替ではない。それでも: ① 実装が単純（既存の identity 計算をそのまま使い回す）
+② 誤差の方向（過剰解除・過小解除）はどちらも致命的ではない（過剰解除＝抑制が早く解ける
+＝最悪でも余分な y/n 提示が1回増えるだけ、過小解除＝TTL 45日で結局解ける）ため、
+専用の早期解除ロジックを別途持つコストに見合わないと判断する（§2.3 末尾・§3.2 参照）。
 
 `optimize_history` を読んで「reject より新しい accept があるか」を照合する専用ロジックは
 持たない（削除）。理由は3点: ① before_sha の変化と accept 検知という**二重の解除経路**を
@@ -142,29 +160,54 @@ entry（§2.4 実測: `repo_id`/`relative_path` を持たない entry）にも�
 （codex [Must]6 が懸念した「reject 記録時の `repo_identity()` 再導出」は構造的に不要になる
 ——旧スキーマ問題は §3.1-b の「表示用ラベル」にのみ残る非機能要件）。
 
-**レーン間の意味差（codex [Should] への回答）**: advisory の `proposal_id` は
-detector+target ベースで**内容世代非依存**（同じ検出結果である限り ID は変わらない）のに対し、
-skill_diff/skill_evolve の `proposal_id` は **内容世代単位**（before_sha が変われば別 ID）。
-この結果、reject 抑制の効き方に非対称が生じる: skill レーンは対象ファイルの内容が変われば
-自動的に抑制が解ける一方、advisory レーンは検出条件（対象ファイルの該当箇所）が変わらない
-限り TTL（45日）まで抑制され続ける。**この非対称は許容する**（advisory 側に別途 accept/
-対象消滅/内容変更ベースの早期解除を追加しない。§5 論点1で判断根拠を示す）。
+**レーン間の意味差（codex round1 [Should] / round2 [Should]2 への回答。
+2026-08-14 round2 訂正: advisory ID の内容依存性についての記述を修正）**:
+skill_diff/skill_evolve の `proposal_id` は対象ファイルの **`before_sha`**（バイト単位の
+全内容ハッシュ）を含むため、ファイルへのどんな変更も新しい ID を生む——**内容世代単位**。
+一方 advisory の `proposal_id`（`AdvisoryProposal.id` = `_proposal_id(detector_id,
+target_paths, evidence)`、`advisory_proposals.py:40-54`）は **detector_id + target_paths +
+evidence のハッシュ**であり、旧稿が書いた「内容世代非依存」は不正確だった——`evidence` は
+各 detector が選んだ構造化フィールド（例: `invalid_frontmatter` は `{"skill_name",
+"error"}`、`testpaths_coverage` は `{"declared_testpaths", "uncovered_test_dirs"}`、
+`advisory_proposals.py:72-99`）であり、これらの値が変われば `proposal_id` も変わる。
+つまり advisory レーンにも「内容が変われば ID が変わり抑制が自然に解ける」経路は**部分的に
+存在する**。
+
+**それでも非対称は残る（ここが reject 抑制上の実害）**: `evidence` は detector が選んだ
+**代表フィールドのみ**であり、ファイルの全内容とは無関係に決まる粗い信号である。
+対象の問題が実質的に変化しても evidence の値（例えば `error` メッセージの文言、
+`uncovered_test_dirs` の集合）が**たまたま変わらない**限り `proposal_id` は変わらず、
+reject 抑制は TTL（45日）まで解除されない。skill レーンは「ファイルの任意の変更」で
+確実に解除されるのに対し、advisory レーンは「detector が拾う特定フィールドの変更」でしか
+解除されないという**確率的な非対称**が残る。**この非対称は許容する**（advisory 側に
+別途 accept/対象消滅ベースの早期解除を追加しない。§5 論点1で判断根拠と harm を明示する）。
 
 #### 3.1-a データフロー（2箇所への挿入。単一の filter chokepoint）
 
 ```
 emit 側（_emit.py）:
-  pending 確定（_emit.py:217 の seen_ids 構築直後）
+  pending 確定（advisory マージの try/except ブロック完了直後 = _emit.py:224 の
+  `pass` の後、`persisted = False`（_emit.py:226）より前。codex round2 [Nit]1 で
+  `:217` から訂正——§2.1 参照）
     → suppression.filter_rejected(pending, slug=slug) を呼ぶ
     → 戻り値 kept を後続のキュー書込（_emit.py:239-250）・マーカー書込（_emit.py:257-269）
       の両方に使う（元の pending でなく kept を使うことで二重 writer 問題を避ける・§2.1 と同じ
       chokepoint 設計）
     → 戻り値 stats を emit_decisions() の返り値へ meta キーとして追加（§3.3）
 
-ingest 側（_ingest.py の reject 分岐、_ingest.py:104-148 のループ内）:
-  kind=="reject" で record_evolve_diff_decision を呼んだ直後（既存呼び出しは変更しない）
+ingest 側（_ingest.py の判断ループ、_ingest.py:83-149）:
+  **両レーンの合流点**（_ingest.py:149 の
+  `(accepted_out if kind == "accept" else rejected_out).append(pid)` の直前。
+  codex round2 [Must]3 で訂正——advisory 分岐は `_record_advisory_event(...)`
+  （_ingest.py:112-114）のみを呼び `record_evolve_diff_decision` を呼ばないため、
+  旧稿の「`record_evolve_diff_decision` を呼んだ直後」という挿入位置は skill レーン
+  にしか到達せず、advisory の reject が記録漏れになる。`kind` の判定
+  （accept/reject/skip の分岐、_ingest.py:102-110）そのものは両レーン共通で
+  行われているので、その結果を使った後・両レーンの分岐（_ingest.py:112-148）が
+  完全に終わった直後が唯一の共通到達点）:
+  `kind == "reject"` のときだけ
     → suppression.record_pending_rejection(entry, slug=slug) を呼ぶ
-    → 失敗（例外）しても pid を rejected_out へ積む処理・キュー消化は続行する（§3.1-c）
+    → 失敗（戻り値が非 None）でも pid を rejected_out へ積む処理・キュー消化は続行する（§3.1-c）
     → 失敗はリストに集め、ingest_decisions() の返り値へ meta キーとして追加
 ```
 
@@ -193,25 +236,26 @@ def _issue_for(entry: Dict[str, Any]) -> Dict[str, Any]:
     """pending entry から dedup_key() 用の issue dict を組み立てる（副作用なし）。
 
     detail.target = entry["id"]（= proposal_id）がキーの一意性を担保する唯一の成分
-    （codex [Should]「dedup_key の衝突」への対応。dedup_key() は detail の "target" キーを
-    採用する既存契約・suppression_ledger.py:90 の allowlist に含まれる）。
-    file はデバッグ用の表示ラベルに過ぎず一意性に寄与しない。repo_id/relative_path が
-    無い旧スキーマ entry では skill_path/target_path、それも無ければ entry["id"] へ
-    フォールバックする（"None::..." は書かない・codex [Must]6 の明示禁止）。
+    （dedup_key() は detail の "target" キーを採用する既存契約・
+    suppression_ledger.py:90 の allowlist に含まれる）。
+
+    **file は entry 由来にせず lane 固定のリテラル文字列にする**（codex round2
+    [Must]1: `dedup_key()` は `type + file + detail` を**丸ごとハッシュ**する
+    （`suppression_ledger.py:78-96`）ため、file が entry ごとに変わると同じ
+    `proposal_id`（= detail.target）でも dedup_key が変わってしまい、抑制が
+    成立しなくなる。旧稿の「file はデバッグ用の表示ラベルに過ぎず一意性に
+    寄与しない」は誤りだった——dedup_key() の実装は file もハッシュ入力に
+    含めるため、file の変動は一意性に**直接**寄与する。`record_rejection` が
+    永続化するのは `{dedup_key, type, file, decided_at, ttl_days}` のみで
+    元の entry 情報（repo_id/relative_path/skill_path 等）は保存されないため、
+    file を固定値にしても失う情報は無い（旧スキーマ entry の repo_id/
+    relative_path 欠落を fallback で埋める必要自体が消える）。
     """
     proposal_type = entry.get("proposal_type") or "unknown"
     issue_type = "advisory" if proposal_type == "advisory" else "evolve_diff"
-    repo_id = entry.get("repo_id")
-    relative_path = entry.get("relative_path")
-    if repo_id and relative_path:
-        file_label = f"{repo_id}::{relative_path}"
-    else:
-        file_label = (
-            entry.get("skill_path") or entry.get("target_path") or entry["id"]
-        )
     return {
         "type": issue_type,
-        "file": file_label,
+        "file": "evolve_decisions",  # lane 固定リテラル。entry 由来の値を混ぜない（[Must]1）
         "detail": {"target": entry["id"]},
     }
 
@@ -221,31 +265,55 @@ def filter_rejected(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """reject 抑制中の候補を pending から除外する（順序保存・fail-open）。
 
-    ledger 読み込みに失敗したら**全件そのまま通す**（lane 全体を抑制しない）。
-    個別レコードの decided_at/ttl_days が壊れていたら**その候補だけ**抑制しない
-    （他候補の判定に影響させない）。
+    fail-open の境界を**3段に分離**する（codex round2 [Must]2:
+    「ledger 全体が読めない」と「個別候補のキー計算が壊れる」は原因も影響範囲も
+    別物なので、同じ except 節に混ぜず独立させる）:
+      ① ledger 読み込み（`load_ledger()`）失敗 → **全件そのまま通す**（lane 全体は
+         落とさない。読めない以上どの候補が抑制対象か判定できないため）
+      ② 個別候補のキー計算（`_issue_for()`/`dedup_key()`）失敗 → **その候補だけ**
+         抑制しない（他候補の判定は継続する。①とは try のスコープが違うので、
+         ある候補の entry 形不正が他候補やレコード全体の読み込みを巻き込まない）
+      ③ 個別レコードの `decided_at`/`ttl_days` が不正値 → **その候補だけ**抑制しない
+         （既存どおり。②とはさらに別スコープ——②は「キーが引けるか」、③は
+         「引けたレコードの値が正しいか」で失敗の意味が異なる）
 
     Returns: (kept_pending, stats)
       stats = {
         "suppressed_total": int,
         "suppressed": [{"id": str, "file": str}, ...],  # silence != evaluated 用
-        "ledger_read_error": str | None,  # 読み込み自体が失敗した場合のみ非 None
+        "ledger_read_error": str | None,  # ① の失敗時のみ非 None
+        "candidate_errors": [{"id": str, "error": str}, ...],  # ② の失敗一覧（空なら []）
       }
     """
     from remediation.suppression_ledger import DAY_SECONDS, DEFAULT_TTL_DAYS, dedup_key, load_ledger
 
-    stats = {"suppressed_total": 0, "suppressed": [], "ledger_read_error": None}
+    stats: Dict[str, Any] = {
+        "suppressed_total": 0,
+        "suppressed": [],
+        "ledger_read_error": None,
+        "candidate_errors": [],
+    }
     try:
         ledger = load_ledger(slug)
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
+        # ①: ledger 自体が読めない。抑制判定の材料が無いので全件そのまま通す。
         stats["ledger_read_error"] = f"{type(e).__name__}: {e}"
-        return list(pending), stats  # fail-open: 読めなければ何も抑制しない
+        return list(pending), stats
 
     now = now if now is not None else time.time()
     kept: List[Dict[str, Any]] = []
     for entry in pending:
-        issue = _issue_for(entry)
-        record = ledger.get(dedup_key(issue))
+        try:
+            issue = _issue_for(entry)
+            record = ledger.get(dedup_key(issue))
+        except (AttributeError, KeyError, TypeError) as e:
+            # ②: この候補のキー計算だけが失敗。他候補の判定には影響させず、
+            # この候補は抑制しない側に倒す（過剰抑制＝指摘が黙って消える、を避ける）。
+            stats["candidate_errors"].append(
+                {"id": entry.get("id"), "error": f"{type(e).__name__}: {e}"}
+            )
+            kept.append(entry)
+            continue
         if record is None:
             kept.append(entry)
             continue
@@ -254,7 +322,8 @@ def filter_rejected(
             ttl_days = int(record.get("ttl_days", DEFAULT_TTL_DAYS))
             suppressed = now <= decided_at + ttl_days * DAY_SECONDS
         except (TypeError, ValueError):
-            suppressed = False  # 壊れたレコードは「抑制しない」側に倒す（候補単位）
+            # ③: レコードの値が壊れている。候補単位で「抑制しない」に倒す。
+            suppressed = False
         if suppressed:
             stats["suppressed_total"] += 1
             stats["suppressed"].append({"id": entry["id"], "file": issue["file"]})
@@ -263,47 +332,71 @@ def filter_rejected(
     return kept, stats
 
 
-def record_pending_rejection(entry: Dict[str, Any], *, slug: str) -> Optional[str]:
+def record_pending_rejection(
+    entry: Dict[str, Any], *, slug: str, now: Optional[float] = None,
+) -> Optional[str]:
     """reject された pending entry を suppression ledger に記録する。
 
-    例外を投げない契約（呼び出し側 _ingest.py の主フロー — record_evolve_diff_decision と
-    キュー消化 — を絶対に止めない・§3.1-c）。戻り値は失敗時のみエラーメッセージ文字列、
-    成功時 None。
+    例外を投げない契約（呼び出し側 _ingest.py の主フロー — 判断記録とキュー消化を
+    絶対に止めない・§3.1-c）。**`_issue_for()` の呼び出し自体も try に含める**
+    （codex round2 [Must]2: 旧稿は `_issue_for()` を try の外で呼んでおり、entry の
+    形が想定外だとここで未捕捉例外が上がって `_ingest.py` の reject 処理全体を
+    落としかねなかった）。`now` は本関数自体では未使用（`record_rejection` が
+    内部で `decided_at` を決める）だが、契約テストで `decided_at` を決定論に
+    固定するための注入経路として公開する（codex round2 [Should]1）。
+    戻り値は失敗時のみエラーメッセージ文字列、成功時 None。
     """
     from remediation.suppression_ledger import DEFAULT_TTL_DAYS, record_rejection
 
-    issue = _issue_for(entry)
     try:
-        record_rejection(issue, slug=slug, ttl_days=DEFAULT_TTL_DAYS, persist=True)
+        issue = _issue_for(entry)
+        record_rejection(
+            issue, slug=slug, now=now, ttl_days=DEFAULT_TTL_DAYS, persist=True,
+        )
         return None
-    except OSError as e:
+    except (
+        OSError,
+        UnicodeDecodeError,
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as e:
         return f"{type(e).__name__}: {e}"
 ```
 
-**fail-open の全経路（codex [Must]5 への対応・網羅表）**:
+**fail-open の全経路（codex round1 [Must]5 / round2 [Must]2 への対応・網羅表。
+3つの try スコープを独立させた結果が下表）**:
 
-| 失敗箇所 | 契約 |
-|---|---|
-| `load_ledger()` の `read_text()` が `OSError` | `filter_rejected` 全体が fail-open（**全件そのまま通す**）。`stats.ledger_read_error` に記録 |
-| 個別レコードの `decided_at`/`ttl_days` が不正値 | その**候補だけ**抑制しない（他候補は通常判定を続行）。lane 全体は落とさない |
-| `_issue_for()` 内の `repo_id`/`relative_path` 欠落 | キーの一意性に影響しない（`entry["id"]` が主成分）。`file` 表示ラベルだけ fallback（§3.1-b 冒頭） |
-| `record_pending_rejection()` の書込失敗 | 例外を外に投げない。呼び出し元（`_ingest.py`）は reject 処理（`record_evolve_diff_decision`・`rejected_out` への追加・キュー消化）を**続行**する（§3.1-c） |
+| 失敗箇所 | 境界 | 契約 |
+|---|---|---|
+| `load_ledger()` の `read_text()` が `OSError`/`UnicodeDecodeError` | ① lane 全体 | `filter_rejected` 全体が fail-open（**全件そのまま通す**）。`stats.ledger_read_error` に記録 |
+| `_issue_for()`/`dedup_key()` が `AttributeError`/`KeyError`/`TypeError` | ② 候補単位 | その**候補だけ**抑制しない。`stats.candidate_errors` に記録。他候補・ledger 読み込み自体には影響しない |
+| 個別レコードの `decided_at`/`ttl_days` が不正値 | ③ 候補単位 | その**候補だけ**抑制しない（他候補は通常判定を続行）。lane 全体は落とさない |
+| `record_pending_rejection()` 内（`_issue_for()` 呼び出し込み）の失敗 | 候補単位（ingest 側） | 例外を外に投げない（[Must]2: `_issue_for()` も try の内側）。呼び出し元（`_ingest.py`）は reject 処理（判断記録・`rejected_out` への追加・キュー消化）を**続行**する（§3.1-c） |
 
-**明示的に禁止する実装（codex [Must]5 後段）**: `filter_rejected` の呼び出しを、advisory
-収集の既存 `try: ... except Exception: pass`（`_emit.py:218-224`）の**内側に混ぜない**。
-これをやると suppression フィルタの失敗が advisory 候補収集の失敗と同じ扱いになり、
-advisory 候補が**全件**（抑制対象でないものまで）消える。`filter_rejected` は advisory
-収集が完了した**後**、それ自身の fail-open 契約（上表）の下で独立に呼ぶ。
+**明示的に禁止する実装（codex round1 [Must]5 後段）**: `filter_rejected` の呼び出しを、
+advisory 収集の既存 `try: ... except Exception: pass`（`_emit.py:218-224`）の
+**内側に混ぜない**。これをやると suppression フィルタの失敗が advisory 候補収集の
+失敗と同じ扱いになり、advisory 候補が**全件**（抑制対象でないものまで）消える。
+`filter_rejected` は advisory 収集ブロックが完了した**後**（`_emit.py:224` の `pass`
+より後、`persisted = False`（`_emit.py:226`）より前）、それ自身の fail-open 契約
+（上表）の下で独立に呼ぶ（挿入位置の確定は §3.1-a・codex round2 [Nit]1）。
 
-#### 3.1-c reject 記録とキュー消化の順序（codex [Should] への対応）
+#### 3.1-c reject 記録とキュー消化の順序（codex round1 [Should] / round2 [Must]3 への対応）
 
 `_ingest.py` の現行フロー（`_ingest.py:83-149` のループ→`_ingest.py:151-159` のキュー消化）は
 「各 entry の判断記録 → ループ完走後にキュー消化」の順で、判断記録とキュー消化は**既に別
-フェーズ**になっている。`record_pending_rejection` は既存の `recorder(...)` 呼び出し
-（reject 分岐）の**直後**（＝ループ内・キュー消化より前）に置く。これにより:
+フェーズ**になっている。`record_pending_rejection` は §3.1-a で確定した**両レーンの
+合流点**（`_ingest.py:149` の `.append(pid)` 直前。advisory/skill いずれの分岐を
+通った entry でも到達する）に置く（＝ループ内・キュー消化より前。旧稿の「`recorder(...)`
+呼び出しの直後」は skill レーンの分岐内部にしかなく、advisory レーンの reject を
+取りこぼす誤りだった——codex round2 [Must]3）。これにより:
 
-- ledger 書込が失敗しても `record_evolve_diff_decision`（source of truth）は既に成功済み
-  （reject の記録自体は失われない）
+- ledger 書込が失敗しても、各レーンの source of truth（skill: `record_evolve_diff_decision`
+  ／advisory: `_record_advisory_event`）は合流点に到達する時点で既に成功済み（reject の
+  記録自体は失われない。suppression ledger はあくまで派生キャッシュで、source of truth
+  とは別物という位置づけは両レーンで共通）
 - キュー消化（`rejected_out` に積まれた pid の除去）は ledger 書込の成否に関わらず実行する
   （ledger はあくまで「抑制のための派生キャッシュ」であり、キュー消化を止める理由にしない —
   止めると reject 済みの entry がキューに残留し続け、別の欠陥を生む）
@@ -331,8 +424,10 @@ DEFAULT_TTL_DAYS` と同値。プロジェクト全体の TTL 慣習——weak_s
   last-write-wins）、そこから改めて45日抑制される
 
 **早期解除の専用ロジックは持たない**（§2.3 参照。抑制キーが `proposal_id`（before_sha 込み）
-である以上、内容が実際に変われば新しい ID になり自然に解除される。`optimize_history` を
-読んで accept を検知する複雑な照合は不要・削除）。
+である以上、ファイル内容が変われば新しい ID になり抑制は解除される——ただし §2.3 末尾で
+訂正したとおりこれは「実質的な変化」の粗い近似であって完全な代替ではない。`optimize_history`
+を読んで accept を検知する複雑な照合は、その近似を精緻化するコストに見合わないため不要・
+削除する）。
 
 ### 3.3 silence != evaluated の担保（2026-08-14 改訂: §3.1 の stats 契約と一致させる）
 
@@ -389,18 +484,32 @@ codex [Must]1/[Must]4 により**論点ではなく確定事項になった**（
 ため、選ぶ余地がなくなった）。案(A) vs 案(B)（旧論点1）・TTL 45日（旧論点4）は
 オーケストレーターが既に裁定済み（§6）。残る未解決の論点は以下の1件のみ。
 
-**論点1（新規・codex [Should]由来）: advisory レーンの「内容変更後も抑制が続く」非対称を
-許容するか**
-→ §3.1 で述べたとおり、advisory の `proposal_id` は検出条件（detector+target）ベースで
-内容世代非依存なので、reject 後に対象ファイルの中身が変わっても `proposal_id` は変わらず、
-最大45日間抑制され続ける（skill レーンは内容が変わればID自体が変わり自動解除される）。
+**論点1（codex round1 [Should] / round2 [Should]2 由来）: advisory レーンの
+「evidence が変わらない限り抑制が続く」非対称を許容するか**
+→ §3.1 で訂正したとおり、advisory の `proposal_id` は detector_id + target_paths +
+evidence のハッシュであり内容依存ではあるが、evidence は detector が選んだ**粗い代表
+フィールドのみ**（`advisory_proposals.py:40-54`, `:72-99`）なので、対象の実質的な状態が
+変わっても evidence 値が変わらなければ `proposal_id` は変わらず、reject 後は最大45日間
+抑制され続ける（skill レーンはファイル全体の `before_sha` を ID に含むため、どんな変更でも
+確実に ID が変わり自動解除される）。
+
+**harm（round2 [Should]2 で追加）**: この非対称の実害は「対象が実際には直っていない
+のに evidence だけたまたま変わって再提示される」誤検知ではなく、逆に**「evidence が
+変わらない再発・regression が最大45日間サイレントに握り潰される」**方向である。
+例えば `testpaths_coverage` の advisory が一度 reject された後、別の tests/ ディレクトリが
+新たに未収集になっても `uncovered_test_dirs` の**集合が偶然一致**すれば evidence は
+変わらず、新しい問題であっても抑制対象として消える。#376「数字が嘘をつかない」・
+「silence != evaluated」の原則からは、この遅延は`stats.suppressed`（§3.3）で機械可読には
+残るため完全な silence ではないが、**y/n 提示という人間が見る経路からは最大45日消える**
+という非対称の性質は明示しておく必要がある。
 
 - **選択肢A（推奨）: 現状のまま許容する**。理由: ① advisory の検出対象
   （`invalid_frontmatter`/`testpaths_coverage` 等・`_candidates.py:33-34` のコメント参照）は
-  性質上「直しても構造的に同じ種類の指摘が再検出されやすい」ものが多く、内容が変わった程度で
-  安易に再提示すると reject の意図（「この指摘は要らない」）を裏切りやすい。② 45日という
-  TTL 自体が「いずれ再評価の機会を与える」ための安全弁として既に機能する。③ 実装が単純
-  （advisory 側の判定ロジックを一切変えない）
+  性質上「直しても構造的に同じ種類の指摘が再検出されやすい」ものが多く、evidence が
+  たまたま変わった程度で安易に再提示すると reject の意図（「この指摘は要らない」）を
+  裏切りやすい。② 45日という TTL 自体が「いずれ再評価の機会を与える」ための安全弁として
+  既に機能し、しかも `stats.suppressed`（§3.3）で機械可読な記録は残るため genuinely
+  silent ではない。③ 実装が単純（advisory 側の判定ロジックを一切変えない）
 - **選択肢B: advisory にも「対象ファイルの sha が変わったら解除」を追加する**（`_advisory_pending`
   が既に `before_sha`（対象ファイルのsha256）を候補に持っている・`_candidates.py:67`）。
   ただし advisory の `proposal_id` 自体は before_sha を含まないため、抑制キー
@@ -418,9 +527,13 @@ codex [Must]1/[Must]4 により**論点ではなく確定事項になった**（
 
 §5（初版）の未解決4件を裁定した。いずれも**後戻りコストが小さい**ので暫定採用で着手し、
 運用後に覆ったら差し替える方針だった（`~/.claude/rules/provisional-over-blocker.md`）。
-その後 codex の着手前ゲート（`~/.claude/rules/design-review-gate.md`）で `設計修正要`
-（[Must]6件）となり、下表のうち**2件を撤回**した（codex [Nit] のパス指摘を受け、本節の
-rules 参照もグローバル `~/.claude/rules/` 配下の実在パスへ修正した）。
+その後 codex の着手前ゲート（`~/.claude/rules/design-review-gate.md`）で round1 が
+`設計修正要`（[Must]6件）となり、下表のうち**2件を撤回**した（codex [Nit] のパス指摘を受け、
+本節の rules 参照もグローバル `~/.claude/rules/` 配下の実在パスへ修正した）。round1 反映後の
+差分レビュー（round2）も `設計修正要`（[Must]3件/[Should]3件/[Nit]2件）となり、下部の
+「codex round2 の解消対応表」のとおり全件反映した。round2 反映後は
+`~/.claude/rules/design-review-gate.md` の「レビュアーが条件を明示したら着手後にさらに
+巡を重ねない」の運用に従い、3巡目のレビューは行わず実装へ進む。
 
 | 論点 | 裁定 | 状態 |
 |---|---|---|
@@ -442,10 +555,18 @@ rules 参照もグローバル `~/.claude/rules/` 配下の実在パスへ修正
 
 §2.4 で発見された **現 queue の旧スキーマ残留（`repo_id` キー欠落）** は、§3.1 で述べたとおり
 **抑制キー（`entry["id"]`）の計算には一切影響しない**（旧スキーマでも `id` は必ず存在する）。
-影響が残るのは §3.1-b の「表示用ラベル（`file`）」のみで、そちらも `None::...` を書かない
-フォールバック契約になっている。**この fail-open 契約（§3.1-b の表）を契約テストで固定
-すること**（過剰抑制は「ユーザーの指摘が黙って消える」＝この PJ が最も嫌う挙動なので、
-判定不能なら必ず出す側に倒す）。
+round2 [Must]1 反映後は `file` も entry 由来でなく lane 固定リテラルになったため、
+旧スキーマの repo_id/relative_path 欠落は `_issue_for()` に一切影響しない（§3.1-b 冒頭）。
+**この fail-open 契約（§3.1-b の表）を契約テストで固定すること**（過剰抑制は「ユーザーの
+指摘が黙って消える」＝この PJ が最も嫌う挙動なので、判定不能なら必ず出す側に倒す）。
+
+**実装時に併せて直すこと（codex round2 [Nit]2）**: `scripts/lib/remediation/
+suppression_ledger.py` のモジュール docstring（9行目付近）と `DEFAULT_TTL_DAYS` の
+コメント（48行目付近）に「TTL 経過後は1回だけ再 surface する」という**誤った**記述が
+残っている（実装（`is_suppressed`、183行目付近）は §3.2 で確認したとおり「TTL 経過後は
+毎回提示、再rejectで45日更新」が正しい）。この design doc 自体の §3.2 記述は round1
+改訂で既に正しい記述になっている（変更不要）ので、直すのは `suppression_ledger.py`
+側の2箇所のソースコードコメントのみ。ロジック自体は変更しない（コメントのみの修正）。
 
 ### codex [Must] 6件の解消対応表（2026-08-14 改訂で追加）
 
@@ -463,3 +584,19 @@ rules 参照もグローバル `~/.claude/rules/` 配下の実在パスへ修正
 | [Should] `filter_suppressed` でなく薄い adapter を置く | §3.1-b（採用・`_suppression.py` 新設） |
 | [Nit] #379 非抵触の確認 | §3.4 に codex 確認済みの旨を追記 |
 | [Nit] rules 参照パスの実在確認 | 本節冒頭を `~/.claude/rules/` 配下の実在パスへ修正 |
+
+### codex round2（2巡目）[Must]3件 / [Should]3件 / [Nit]2件 の解消対応表（2026-08-14 追加）
+
+ログ: `codex_446_r2.log`。3件の [Must] はいずれもオーケストレーターが実コード
+（`_emit.py`/`_ingest.py`/`suppression_ledger.py`/`advisory_proposals.py`）で裏取り済み。
+
+| codex round2 指摘 | 解消箇所 |
+|---|---|
+| [Must]1 `_issue_for()` の `file` が entry 由来（repo_id/relative_path 等）で、`dedup_key()` は `type+file+detail` を丸ごとハッシュするため file の変動が一意性に直接影響する（旧稿の「file は表示ラベルに過ぎない」は誤り） | §3.1-b `_issue_for()` を書き換え、`file` を lane 固定リテラル `"evolve_decisions"` に変更。旧稿の誤った主張を削除 |
+| [Must]2 `filter_rejected`/`record_pending_rejection` の fail-open 境界が「ledger 読み込み」と「個別候補のキー計算」を区別しておらず、`_issue_for()` が `record_pending_rejection` の try の外にあった | §3.1-b: `filter_rejected` を①ledger読込／②候補ごとのキー計算／③レコード値の3境界に分離し例外型を広げた（`UnicodeDecodeError`/`AttributeError`/`KeyError`/`TypeError`/`ValueError` を追加）。`record_pending_rejection` は `_issue_for()` 呼び出しを try 内側へ移動。fail-open 網羅表を3境界対応に更新 |
+| [Must]3 reject 記録の挿入位置が `record_evolve_diff_decision`（skill レーンのみが呼ぶ）の直後になっており、advisory レーンの reject を取りこぼす | §3.1-a・§3.1-c: 挿入位置を両レーンの合流点（`_ingest.py:149` の `.append(pid)` 直前）へ訂正し、`kind == "reject"` ガードで両レーン共通に効くようにした |
+| [Should]1 `now` 注入経路が `filter_rejected` にしかなく `record_pending_rejection` に無い（契約テストで `decided_at` を決定論固定できない） | §3.1-b: `record_pending_rejection(entry, *, slug, now=None)` を追加し `record_rejection(..., now=now, ...)` へ渡す |
+| [Should]2 advisory の `proposal_id` は「内容世代非依存」ではなく `evidence` 込みでハッシュされる（`advisory_proposals.py:40-54`）。非対称の harm（regression のサイレント抑制）が未記載 | §3.1「レーン間の意味差」を訂正（evidence 込みの部分的内容依存を明記）+ §5 論点1に harm 段落を追加（evidence 不変な regression が最大45日 y/n 提示から消える） |
+| [Should]3 「before_sha の変化が early-release を完全代替する」という言い切りが過剰主張 | §2.3 末尾・§3.2: before_sha は「実質的な変化」の粗い近似（過剰解除・過小解除の両誤差がある）であり完全代替ではない、と訂正。それでも専用ロジックを持たない判断根拠（誤差の方向がどちらも致命的でない）を追記 |
+| [Nit]1 差し込み位置の行番号が `_emit.py:217` は誤り（advisory マージがまだ完了していない） | §2.1・§3.1-a: `_emit.py:224`（advisory マージの `except Exception: pass` 直後）に訂正 |
+| [Nit]2 `suppression_ledger.py` のソースコードコメント2箇所（9行目・48行目付近）に旧稿と同じ「TTL経過後は1回だけ再提示」の誤記述が残っている | §6「実装前に必ずやること」に実装時修正タスクとして明記（design doc 自体の §3.2 記述は round1 で既に正しいので変更不要。直すのは `suppression_ledger.py` 側のコメントのみ） |
