@@ -40,11 +40,66 @@ _FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 _TRUNC = 120
 
 
+# ``⏺``/``⎿``（Claude Code CLI の assistant メッセージ先頭/詳細行マーカー）専用の判定
+# （#445 codex round1 [Must]1）。**表示用の広い ``_QUOTE_LINE_RE`` とは別に定義する**:
+# ``_QUOTE_LINE_RE`` には ``>``/``→``/``—``/``×``/code fence 等、human も自然に書きうる
+# 記号が含まれており、これをブロック判定の起点に使うと「`→` この方向で」のような正当な
+# human correction まで assistant ブロックの一部と誤判定するリスクがある。ブロック判定の
+# 起点（マーカー行かどうか）は CLI 固有の ``⏺``/``⎿`` だけに絞る。
+_ASSISTANT_MARKER_LINE_RE = re.compile(r"^\s*(?:⏺|⎿)")
+
+
+def _is_assistant_marker_line(line: str) -> bool:
+    return bool(_ASSISTANT_MARKER_LINE_RE.match(line))
+
+
+def _assistant_marker_block_flags(lines: List[str]) -> List[bool]:
+    """各行が ``⏺``/``⎿`` ブロック（マーカー行 + 直後のインデント折り返し継続行）に
+    属するかの真偽リストを返す（#445 codex round2 [Must]）。
+
+    **単一ソース**: 表示用 ``_strip_assistant_lines``（``user_only_text`` が使う）と
+    書込ゲート ``is_assistant_only_text`` の両方が本関数を経由する。round1 では
+    ブロック判定を書込ゲートにしか入れず、表示側（``_strip_assistant_lines``）は
+    行単位のままだったため、mixed（assistant ブロック + human 発言が同居する）発話が
+    書込ゲートは通過した（human 行があるので正しく False）ものの、``user_only_text``
+    が継続行を除去できず assistant 出力の断片が corrections.jsonl の provenance.text に
+    残ってしまっていた（codex round2 実指摘・pitfall_copied_parse_convention_partial_fix
+    と同型: 片側だけ直すと desync する）。判定規則:
+    マーカー行（``⏺``/``⎿`` で始まる）→ ブロック開始。直後に続くインデント行（行頭に
+    空白文字を持つ非マーカー・非空行）→ 同じブロックの継続行。空行→ ブロック終端
+    （次の非インデント行は human 発言候補として扱う）。
+    """
+    in_block = False
+    flags: List[bool] = []
+    for line in lines:
+        if _is_assistant_marker_line(line):
+            in_block = True
+            flags.append(True)
+            continue
+        if not line.strip():
+            in_block = False
+            flags.append(False)
+            continue
+        if in_block and line != line.lstrip():
+            flags.append(True)
+            continue
+        in_block = False
+        flags.append(False)
+    return flags
+
+
 def _strip_assistant_lines(text: str) -> str:
-    """assistant 引用行（quote / fence ブロック / 絵文字プレフィックス）を除去する。"""
+    """assistant 引用行（quote / fence ブロック / 絵文字プレフィックス / ⏺⎿ ブロックの
+    継続行）を除去する。
+    """
+    lines = text.split("\n")
+    block_flags = _assistant_marker_block_flags(lines)
     out_lines = []
     in_fence = False
-    for line in text.split("\n"):
+    for line, is_block_line in zip(lines, block_flags):
+        if is_block_line:
+            # ⏺/⎿ ブロック本体（マーカー行そのもの・折り返し継続行の両方）。
+            continue
         if _FENCE_RE.match(line):
             # fence の開始/終了行はそれ自体も捨て、内部行も in_fence で捨てる
             in_fence = not in_fence
@@ -67,7 +122,10 @@ def user_only_text(text: Optional[str]) -> str:
     corrections 書込ゲート（``is_assistant_only_text``）とは目的が逆（表示は情報保持
     優先・書込は誤登録防止優先）なので **統合しない**。1関数に畳むと fallback の分岐で
     「全行 assistant なら True/False どちらを返すか」が呼び出し文脈依存になり、
-    どちらの用途にも使いにくくなる。
+    どちらの用途にも使いにくくなる。ただし ``⏺``/``⎿`` ブロックの継続行判定ロジック
+    自体は ``is_assistant_only_text`` と ``_assistant_marker_block_flags`` を共有する
+    （fallback の有無という「入口/出口」の違いだけを分離し、ブロックの中身が何かという
+    判定を二重実装しない）。
     """
     if not text:
         return ""
@@ -78,62 +136,31 @@ def user_only_text(text: Optional[str]) -> str:
     return text.strip()
 
 
-# corrections 書込ゲート（``is_assistant_only_text``）専用のマーカー判定（#445 codex
-# round1 [Must]1）。**表示用 ``_QUOTE_LINE_RE`` を流用しない**（意図的に別定義）:
-# ``_QUOTE_LINE_RE`` には ``>``/``→``/``—``/``×``/code fence 等、human も自然に書きうる
-# 記号が含まれる。書込ゲートでそれを使うと「`→` この方向で」のような正当な human
-# correction まで assistant-only と誤判定し、しかも batch.py 側は判定後 judged 済みに
-# するため再判定されず、誤除外されたレコードを永久に失う（codex 実指摘）。書込ゲートは
-# 今回実コーパスで観測した Claude Code CLI 固有マーカー ``⏺``（assistant メッセージ先頭）
-# / ``⎿``（詳細行）**だけ**に限定する。
-_ASSISTANT_MARKER_LINE_RE = re.compile(r"^\s*(?:⏺|⎿)")
-
-
-def _is_assistant_marker_line(line: str) -> bool:
-    return bool(_ASSISTANT_MARKER_LINE_RE.match(line))
-
-
 def is_assistant_only_text(text: Optional[str]) -> bool:
     """発話が全行 assistant の CLI 出力ブロック（人間の発言が1行も残らない）か判定する
     （#445。round1 codex レビューで round0 実装の2つの欠陥を修正）。
 
-    **corrections 書込ゲート専用**。``user_only_text``（表示用）とは判定対象・fallback
-    の有無ともに意図的に異なり、**統合しない**（後から「重複してるから畳もう」と
-    しないこと）:
-    - 対象マーカー: ``user_only_text`` は表示上ノイズになりうる記号を広く拾う
-      （``>``/``→``/``ℹ️`` 等）。書込ゲートは ``⏺``/``⎿`` のみ（round1 [Must]1、上記参照）。
-    - fallback: ``user_only_text`` は全 strip 時に元テキストへ fallback する（表示は
-      情報保持優先）。書込ゲートは fallback しない（fallback すると assistant 発話のみの
-      レコードが人間発話に偽装されて corrections に書かれてしまうため、書込は誤登録
-      防止優先）。
-
-    **ブロック単位判定**（round1 [Must]2）: ``⏺``/``⎿`` で始まる行だけでなく、その直後に
-    続く**インデントされた折り返し継続行**（CLI が長い出力を折り返した行。行頭にマーカーが
-    付かない）も同じ assistant ブロックとして扱う。行単位（マーカー行かどうかだけ）で
-    判定すると、折り返し継続行が human 発言として扱われ、全行 assistant のブロックが
-    ゲートを通過してしまう（round0 の実欠陥・実コーパスの
-    ``⏺ Ran 3 stop hooks...\n  ⎿ ...\n  を即座に起動して...`` で確認）。空行はブロックの
-    終端として扱う（空行の後に非インデントの実テキストが続けば human 発言と判定する）。
+    **corrections 書込ゲート専用**。``user_only_text``（表示用）とは fallback の有無が
+    意図的に異なり、**統合しない**（後から「重複してるから畳もう」としないこと）:
+    ``user_only_text`` は全 strip 時に元テキストへ fallback する（表示は情報保持優先）。
+    書込ゲートは fallback しない（fallback すると assistant 発話のみのレコードが人間発話に
+    偽装されて corrections に書かれてしまうため、書込は誤登録防止優先）。
+    ブロック判定そのもの（``⏺``/``⎿`` マーカー行 + 継続行）は ``_assistant_marker_block_flags``
+    を単一ソースとして共有する（round2 codex 指摘: 片側だけ直すと desync するため）。
 
     空/None は「assistant 発話」ではなく単なる無内容として False を返す（呼び出し側の
     空文字ガードと責務を分けない・#99と同じ判断）。
     """
     if not text:
         return False
-    in_block = False
+    lines = text.split("\n")
+    block_flags = _assistant_marker_block_flags(lines)
     saw_any_content = False
-    for line in text.split("\n"):
-        if _is_assistant_marker_line(line):
-            in_block = True
+    for line, is_block_line in zip(lines, block_flags):
+        if is_block_line:
             saw_any_content = True
             continue
         if not line.strip():
-            # 空行はブロックの区切り（次に human 行が来ても継続行とみなさない）。
-            in_block = False
-            continue
-        if in_block and line != line.lstrip():
-            # マーカー行に直接続くインデント行 = CLI 出力の折り返し継続行。
-            saw_any_content = True
             continue
         # 非インデント・非マーカーの実テキスト行が1つでもあれば human 発言が含まれる。
         return False

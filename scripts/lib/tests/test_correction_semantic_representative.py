@@ -77,18 +77,18 @@ def test_mixed_assistant_quote_and_human_comment():
     assert "⏺" not in out and "⎿" not in out
 
 
-def test_mixed_assistant_quote_wrapped_continuation_line_survives():
-    # #445 実コーパス実測（1件）: ⎿ 行の折り返し継続行はマーカーを持たないため、
-    # 行単位 strip では残る（既知の限界。⏺/⎿ 自体の行と human の実指摘は正しく分離できる）。
+def test_mixed_assistant_quote_wrapped_continuation_line_is_removed():
+    # #445 codex round2 [Must]: round1 では ⎿ 行の折り返し継続行（マーカーを持たない
+    # インデント行）が行単位 strip で残っていた。ブロック単位判定（
+    # _assistant_marker_block_flags、is_assistant_only_text と単一ソース）により
+    # 継続行も除去され、出力が human の実指摘だけになる（完全一致で固定）。
     text = (
         "⏺ Ran 3 stop hooks (ctrl+o to expand)\n"
         "  ⎿ Stop hook error: 先送り表現を検出しました\n"
         "  を即座に起動して並行処理してください。\n\n"
         "これよく勝手に進んじゃうので、削除したい"
     )
-    out = r.user_only_text(text)
-    assert "⏺" not in out and "⎿" not in out
-    assert "これよく勝手に進んじゃうので、削除したい" in out
+    assert r.user_only_text(text) == "これよく勝手に進んじゃうので、削除したい"
 
 
 # ── is_assistant_only_text: 全行が assistant 発話由来か（#445 書込ゲート用） ──
