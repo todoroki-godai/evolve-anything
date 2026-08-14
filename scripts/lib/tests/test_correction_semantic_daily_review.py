@@ -417,6 +417,54 @@ def test_build_review_orders_by_frequency_and_caps(tmp_path: Path):
     assert len(top["signal_keys"]) == 3
 
 
+def test_build_review_group_carries_members_physical_keys(tmp_path: Path):
+    """ADR-054 PR2-c: group は集約前レコードの物理キー・detected_at を members に保持する。
+
+    signal_meta_by_key（daily.proposal_digest._slim_group）の元データ。既読差し引き後に
+    signal_key 単位で発話時刻・判定時刻を再計算できるようにするため、group 集約で失われる
+    個別レコード情報をここで残す。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("金額がきれてる", 1),
+            _sig("金額の表示がきれてる", 2),
+        ],
+        path=ws,
+    )
+    res = dr.build_review(
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path),
+    )
+    assert len(res["groups"]) == 1
+    g = res["groups"][0]
+    members = g["members"]
+    assert len(members) == 2
+    assert {m["signal_key"] for m in members} == set(g["signal_keys"])
+    for m in members:
+        assert m["source_path"] == "/a.jsonl"
+        assert m["line_no"] in (1, 2)
+        assert m["detected_at"]  # ISO8601 判定時刻が個別に残る
+
+
+def test_build_review_max_groups_none_returns_all(tmp_path: Path):
+    """ADR-054 PR2-b: max_groups=None は打ち切らず全件返す（remaining=0）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("金額がきれてる", 1),
+            _sig("カテゴリの並び", 2),
+            _sig("検索結果の順序", 3),
+            _sig("通知の遅延", 4),
+        ],
+        path=ws,
+    )
+    res = dr.build_review(
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path), max_groups=None,
+    )
+    assert len(res["groups"]) == 4
+    assert res["remaining"] == 0
+
+
 def test_build_review_uses_idiom_dict_representative(tmp_path: Path):
     # 個人辞書（correction_idioms）の idiom と物理キーで突合し代表 idiom を付ける
     ws = tmp_path / "weak_signals.jsonl"
