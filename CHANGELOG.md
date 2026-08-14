@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **fix(fleet/audit): machinery（harness 注入の委譲メッセージ等）除外を fleet queue /
+  audit observability にも透明化（ADR-054 PR2-a・#379 #400 #443）** — `filter_actionable`
+  の machinery 軸（read 時除外）が `fleet.queue_materials` / `audit.sections_weak_signals` /
+  `audit.sections_capture` の3箇所で黙って件数を減らしていた（silence != evaluated 契約の
+  適用漏れ）。新設 `weak_machinery_by_pj`（`correction_semantic.promote.machinery_exclusion_stats`
+  を単一ソースに使用・REVIEW_CHANNELS 内のみ計上し content-poor 側と二重計上しない）を
+  `weak_content_poor_by_pj` と同型で追加し、queue の `--json`/footer に `weak_machinery` を
+  surface。既存 section（Weak Signals / Correction Capture）にも machinery 除外件数を1行
+  追記（#379 新設凍結に抵触しない既存キー/既存行への追記のみ）。TDD 15件・決定論・LLM 非依存。
 - **feat(correction-semantic/results-board): ADR-054 A5 — 指摘カテゴリ（#379 #400）** —
   `correction_type` は変更せず（`correction_recurrence` も復活させない・§2.0）、judge 判定時に
   `category`（対象軸8値 enum: presentation/explanation/factual/approach/omission/excess/

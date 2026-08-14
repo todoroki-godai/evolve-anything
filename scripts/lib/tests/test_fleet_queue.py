@@ -509,6 +509,7 @@ class TestBuildQueueResult:
             "skipped_phantom",
             "bootstrap_consumed",
             "weak_content_poor",
+            "weak_machinery",
             "unattributed_corrections",
         }
         assert result["unattributed_corrections"] == {"total": 0, "by_source": {}}

@@ -314,6 +314,24 @@ def _append_weak_content_poor(lines: list, result: dict) -> None:
     )
 
 
+def _append_weak_machinery(lines: list, result: dict) -> None:
+    """machinery（委譲メッセージ等の harness 注入）で material から除外した weak を透明化する（#443 PR2-a）。
+
+    silent truncation 禁止: content-rich channel（``REVIEW_CHANNELS``）の中に
+    `<teammate-message>` 等の harness 注入テキストが混入していると、除外しないと朝の提示に
+    委譲メッセージがそのまま漏れ出るが、黙って除外すると「なぜ WEAK が減ったか」が不明になる。
+    ``weak_machinery`` が空なら何も出さない。
+    """
+    wm = result.get("weak_machinery") or []
+    if not wm:
+        return
+    parts = [f"{e.get('pj_slug')} {e.get('machinery')}件" for e in wm]
+    lines.append(
+        f"（machinery（委譲メッセージ等の harness 注入）を material から除外: {', '.join(parts)}"
+        f" — read 時除外・#443）"
+    )
+
+
 def _append_weak_semantics(lines: list, result: dict) -> None:
     """WEAK 列が「content-rich 未処理のみ」である意味を明示し、生検出数との乖離の誤読を防ぐ（②/#113）。
 
@@ -369,6 +387,7 @@ def format_queue_table(result: dict) -> str:
         lines.append(f"（0 projects waiting / {tracked} tracked (config)）")
         _append_bootstrap_consumed(lines, result)
         _append_weak_content_poor(lines, result)
+        _append_weak_machinery(lines, result)
         _append_skipped_dead(lines, result)
         _append_untracked(lines, result)
         _append_skipped_phantom(lines, result)
@@ -406,6 +425,7 @@ def format_queue_table(result: dict) -> str:
     _append_weak_semantics(lines, result)
     _append_bootstrap_consumed(lines, result)
     _append_weak_content_poor(lines, result)
+    _append_weak_machinery(lines, result)
     _append_skipped_dead(lines, result)
     _append_untracked(lines, result)
     _append_skipped_phantom(lines, result)

@@ -264,7 +264,12 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
     # の仕様が変わった際にこの独自適用だけ追随せず取り残されるリスクがあるため撤去し、
     # filter_actionable 側の pj_slug=None 契約（promoted/TTL/reviewed は適用・bootstrap
     # 消化除外のみスキップ）に委譲する。呼び出し側は分岐せず常に1回だけ呼ぶ。
-    from correction_semantic.promote import filter_actionable
+    # #443 PR2-a: machinery（委譲メッセージ等の harness 注入）除外件数を、filter_actionable
+    # で上書きされる前の would-be-actionable 母集団から取る（silence != evaluated の透明化）。
+    from correction_semantic.promote import filter_actionable, machinery_exclusion_stats
+    machinery_stats = machinery_exclusion_stats(
+        cur_candidates, current_slug, exclude_reviewed=False,
+    )
     cur_candidates = filter_actionable(
         cur_candidates, current_slug, exclude_reviewed=False,
     )
@@ -332,6 +337,15 @@ def build_weak_signals_section(project_dir: Path) -> Optional[List[str]]:
                 "（Esc 中断 / 直後手編集）は detector が周辺文脈を保存しないため個別昇格の対象外"
                 "（昇格しても channel 名だけの空 correction になる・件数のみ観測・#99）。"
             )
+
+    # #443 PR2-a: machinery（委譲メッセージ等の harness 注入）除外件数を透明化する
+    # （silence != evaluated）。unpromoted が machinery 除外だけで 0 になるケースも
+    # 拾えるよう、unpromoted>0 ブロックの外で独立に判定する。
+    if machinery_stats["total"] > 0:
+        trailer.append(
+            f"うち machinery（委譲メッセージ等の harness 注入）除外 {machinery_stats['total']} 件"
+            "（read 時除外・実際に確認可能な件数には含めていません, #443）。"
+        )
 
     # 安全弁②（ADR-047）: idiom_dict 自動昇格を毎回 surface（黙って進まない）。
     return (

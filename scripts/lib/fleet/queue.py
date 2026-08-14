@@ -35,6 +35,7 @@ from .queue_materials import (  # noqa: F401 (再エクスポート含む)
     count_unattributed_corrections,
     new_corrections_by_pj,
     weak_content_poor_by_pj,
+    weak_machinery_by_pj,
     weak_unprocessed_by_pj,
 )
 
@@ -331,6 +332,15 @@ def build_queue_result(
         if p > 0:
             weak_content_poor.append({"pj_slug": s, "content_poor": p})
 
+    # #443 PR2-a: machinery（委譲メッセージ等の harness 注入）を理由に material から除外した
+    # weak を透明化する（silence != evaluated）。REVIEW_CHANNELS 内のみ計上し content-poor
+    # 側と二重計上しない（weak_machinery_by_pj が単一ソース）。machinery>0 の PJ のみ。
+    weak_machinery: List[Dict[str, Any]] = []
+    for s in consumed_slugs:
+        m = weak_machinery_by_pj(s, weak_signals_path=weak_signals_path)
+        if m > 0:
+            weak_machinery.append({"pj_slug": s, "machinery": m})
+
     # #267 C5: 未帰属 corrections は帰属先 PJ が無く自然失効しないため、時刻窓なしで全件数える
     # と1件の古いレコードが SETUP_REQUIRED を永久ラッチさせる。直近 30 日窓に絞る。
     unattributed_since = (
@@ -366,6 +376,9 @@ def build_queue_result(
         "bootstrap_consumed": bootstrap_consumed,
         # #113: content-poor channel（昇格不能）で material から除外した weak の透明化。
         "weak_content_poor": weak_content_poor,
+        # #443 PR2-a: machinery（harness 注入の委譲メッセージ等）で material から除外した
+        # weak の透明化（REVIEW_CHANNELS 内のみ・silence != evaluated）。
+        "weak_machinery": weak_machinery,
         # #91: project_path 欠落で PJ 帰属不能な corrections（どの母数にも入らず不可視）を透明化。
         "unattributed_corrections": unattributed_corrections,
     }

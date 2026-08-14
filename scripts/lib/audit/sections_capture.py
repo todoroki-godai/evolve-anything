@@ -114,6 +114,39 @@ def _llm_judge_actionable_count(project_dir: Optional[Path] = None) -> int:
     return len(candidates)
 
 
+def _llm_judge_machinery_excluded_count(project_dir: Optional[Path] = None) -> int:
+    """当PJ slug の llm_judge channel のうち machinery を理由に actionable から除外された件数（#443 PR2-a）。
+
+    ``_llm_judge_actionable_count`` と同じ scope（channel=llm_judge・当PJ slug・
+    would-be-actionable 母集団）で machinery（委譲メッセージ等の harness 注入）軸だけの
+    除外件数を返す。表示専用の透明化（silence != evaluated）で、案内の分岐条件には使わない
+    （raw／actionable の使い分けは ``_llm_judge_count`` の docstring 参照）。
+
+    store / slug 未解決 / 読込失敗は 0（防御的フォールバック）。
+    """
+    try:
+        from pj_slug import pj_slug_fast
+        slug = pj_slug_fast(project_dir if project_dir is not None else Path.cwd())
+    except Exception:
+        slug = None
+    if not slug:
+        return 0
+    try:
+        from weak_signals.store import read_signals
+        from store_read_union import pj_slug_match
+        from correction_semantic.promote import machinery_exclusion_stats
+
+        records = [
+            r
+            for r in read_signals()
+            if r.get("channel") == "llm_judge" and pj_slug_match(r.get("pj_slug"), slug)
+        ]
+        stats = machinery_exclusion_stats(records, slug)
+    except Exception:
+        return 0
+    return stats["total"]
+
+
 def _resolve_store_files() -> Tuple[Path, Path]:
     """usage.jsonl / corrections.jsonl の正準パスを解決する（#358 hook-writer 系）。
 
@@ -183,6 +216,7 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
     # （#94 codex round2 [Must]・raw 値を actionable な案内の分岐条件に使わない）。
     llm_judge = _llm_judge_count(project_dir)
     llm_judge_actionable = _llm_judge_actionable_count(project_dir)
+    llm_judge_machinery_excluded = _llm_judge_machinery_excluded_count(project_dir)
 
     header = ["## Correction Capture (報酬入力の捕捉率)", ""]
     detail = (
@@ -211,6 +245,15 @@ def build_capture_rate_section(project_dir: Path) -> Optional[List[str]]:
             f"{k}:{v}" for k, v in sorted(hook_pattern_version_counts.items())
         )
         channel_line += f" / hook pattern_version 内訳: {version_detail}"
+
+    # #443 PR2-a: weak_signals（llm_judge channel）側の machinery 除外を透明化する
+    # （silence != evaluated）。corrections.jsonl 側の自己注入除外（machinery_excluded /
+    # #305）とはストア・判定関数が別のため、混同を避け別ラベルで併記する。
+    if llm_judge_machinery_excluded:
+        channel_line += (
+            f" / llm_judge machinery 除外 {llm_judge_machinery_excluded} 件"
+            "（委譲メッセージ等の harness 注入・weak_signals read 時除外, #443）"
+        )
 
     if rate >= _STARVATION_THRESHOLD:
         # ADR-054 §2.6-4: active session が最小分母未満では「✓」で断言しない。
