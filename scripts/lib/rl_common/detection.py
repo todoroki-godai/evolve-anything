@@ -272,6 +272,53 @@ def sanitize_message(text: str, max_length: int = 500) -> str:
     return result
 
 
+# #445: Claude Code CLI が画像添付時に text block へ自動挿入する位置マーカー。
+# 実コーパス実測（corrections.jsonl の `[Image` 開始 37 件全件）: bare（画像だけ・実
+# テキスト無し）のケースは 0 件、全件が同じ text block 内に human の実指摘を伴う
+# （例:「[Image #1] Codeタブってないよ」）。そのため全文除外ではなく、マーカーだけを
+# strip し周辺の human 実テキストは残す。`#\d+` に一致しない文言（「[Image processing
+# failed]」「[Image で始まる行を除外して」のように "#数字]" が続かないもの）は誤って
+# 壊さない。
+#
+# **判定不能な既知のトレードオフ**（#445 codex round1 [Should]1）: transcript には
+# 「CLI 自動挿入の添付マーカー」と「そのマーカー文字列への human の意図的な言及」
+# （例:「[Image #3] のスクショの話だけど」）を区別する構造情報が無い。どちらも同じ
+# text block 内の文字列としてしか観測できないため、``#\d+`` パターンに一致する限り
+# 後者も strip される（意図的な設計判断）。実コーパス実測（37件全件目視）では該当形式が
+# 全件 CLI 自動挿入のマーカーで意図的な言及は 0 件だったため、区別不能な場合は strip
+# 側に倒した。逆に「実コーパスで確認した位置・区切りだけに絞る」設計（例: 先頭のみ・
+# 特定の空白パターンのみ）は採用しない — 現在のコーパスへの過学習になり、CLI が
+# マーカー形式を変えた瞬間に黙って取りこぼす（`learning_synthetic_fixture_false_
+# confidence` と同型のリスク）。任意桁数の # 番号・空白の有無を問わず一致する。
+_IMAGE_PLACEHOLDER_RE = re.compile(r"\[Image\s*#\d+\]")
+
+
+def has_image_placeholder(text: str) -> bool:
+    """テキストが ``[Image #N]`` 添付プレースホルダを含むか判定する（#445）。
+
+    ``strip_image_placeholders`` の適用対象かどうかを事前に知りたい呼び出し側
+    （strip 前後で件数を分けて集計したい observability 用途）向け。判定は
+    ``strip_image_placeholders`` と同じ正規表現を単一ソースとして共有する。
+    """
+    if not text:
+        return False
+    return bool(_IMAGE_PLACEHOLDER_RE.search(text))
+
+
+def strip_image_placeholders(text: str) -> str:
+    """テキストから ``[Image #N]`` 添付プレースホルダを除去する（#445）。
+
+    utterance_archive.extractor（utterances.db への取り込み前・upstream）と
+    corrections 書込パスの両方が本関数を単一ソースとして共有する（pitfall_copied_
+    parse_convention_partial_fix: 弱いパース式の片側だけ直すと desync する）。
+    全行が marker のみ（bare な画像添付）なら strip 後に空文字を返す
+    （呼び出し側で「発話でない」として扱う）。
+    """
+    if not text:
+        return text
+    return _IMAGE_PLACEHOLDER_RE.sub("", text).strip()
+
+
 def should_include_message(text: str) -> bool:
     """メッセージが correction 検出対象かどうかを判定する。"""
     if not text.strip():

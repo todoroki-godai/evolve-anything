@@ -361,6 +361,15 @@ def _run_ingest(args: argparse.Namespace) -> int:
         f"projects={res.get('projects', 0)} "
         f"elapsed={res.get('elapsed_s', 0.0):.1f}s"
     )
+    # #445: [Image #N] プレースホルダの扱いを黙って減らさず surface する。
+    # stripped=marker除去で救済（inserted に含まれる）/ only_excluded=strip後ゼロで除外。
+    stripped = res.get("image_placeholder_stripped", 0)
+    only_excluded = res.get("image_placeholder_only_excluded", 0)
+    if stripped or only_excluded:
+        print(
+            f"[fleet:ingest] image_placeholder_stripped={stripped} "
+            f"image_placeholder_only_excluded={only_excluded}"
+        )
     return 0
 
 

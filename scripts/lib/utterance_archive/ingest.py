@@ -69,6 +69,8 @@ def ingest_pj_dir(
     inserted = 0
     files_processed = 0
     skipped_files = 0
+    # #445: [Image #N] プレースホルダの扱いを黙って減らさず surface する（2種を混ぜない）。
+    stats: Dict[str, int] = {}
 
     cutoff = None
     if days is not None and days >= 0:
@@ -96,7 +98,9 @@ def ingest_pj_dir(
             continue
 
         start_line = prev_offset if prev_mtime is not None else 0
-        utts = list(extract_utterances(jsonl, pj_slug=pj_slug, start_line=start_line))
+        utts = list(
+            extract_utterances(jsonl, pj_slug=pj_slug, start_line=start_line, stats=stats)
+        )
         if utts:
             inserted += _store.insert_utterances(con, utts)
 
@@ -116,6 +120,9 @@ def ingest_pj_dir(
         "files_processed": files_processed,
         "skipped_files": skipped_files,
         "pj_slug": pj_slug,
+        # #445: 黙って減らさない。前者=marker除去で救済、後者=strip後ゼロで除外（別物）。
+        "image_placeholder_stripped": stats.get("image_placeholder_stripped", 0),
+        "image_placeholder_only_excluded": stats.get("image_placeholder_only_excluded", 0),
     }
 
 
@@ -146,6 +153,8 @@ def ingest_all_projects(
     agg = {
         "inserted": 0, "files_processed": 0, "skipped_files": 0,
         "projects": len(pj_dirs),
+        # #445
+        "image_placeholder_stripped": 0, "image_placeholder_only_excluded": 0,
     }
     t0 = time.perf_counter()
     with _store.connection(db_path) as con:
@@ -159,6 +168,8 @@ def ingest_all_projects(
             agg["inserted"] += res["inserted"]
             agg["files_processed"] += res["files_processed"]
             agg["skipped_files"] += res["skipped_files"]
+            agg["image_placeholder_stripped"] += res["image_placeholder_stripped"]
+            agg["image_placeholder_only_excluded"] += res["image_placeholder_only_excluded"]
             if progress:
                 sys.stderr.write(
                     f"[{i}/{len(pj_dirs)}] {res['pj_slug']}: "

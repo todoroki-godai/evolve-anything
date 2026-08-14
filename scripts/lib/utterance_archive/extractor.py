@@ -25,7 +25,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 # extractor のバージョン。抽出ロジックを変えたら +1（再 ingest で source_kind 等を更新可能に）。
 # v2: #323 で harness 注入判定に rl_common.detection.is_machinery_prompt を追加適用
@@ -33,10 +33,13 @@ from typing import Iterator, List, Optional
 #     tool_result 行で誤ってリセットしていたバグを修正（prev_action が全件 null だった
 #     root cause）。両方とも新規 ingest 行にのみ効き、既存の v2 行は再 ingest migration
 #     （次PR）まで prev_action=null のまま残る。
+# v4: #445。``[Image #N]`` 画像添付プレースホルダを strip（実コーパス実測: bare 添付
+#     0件・全件が同じ text block 内に人間の実テキストを伴う。全文除外でなく strip）。
+#     マーカーのみ（strip 後に空）の行は非発話として除外する。
 # （既存の書込済み行は増分 ingest（mtime 判定）では再走査されないため遡及修正されない。
 # EXTRACTOR_VERSION は将来 version 差分ベースの再抽出/purge を実装する際の準備として
 # 記録するのみで、本 PR 時点でそれを読む consumer はまだ無い）。
-EXTRACTOR_VERSION = 3
+EXTRACTOR_VERSION = 4
 
 # 長文ペーストの閾値（字数）。これを超えると source_kind='long_paste'。
 LONG_PASTE_THRESHOLD = 2000
@@ -118,12 +121,51 @@ def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _strip_image_placeholders(text: str) -> str:
+    """rl_common.detection.strip_image_placeholders への遅延 import 委譲（#445）。
+
+    ``[Image #N]`` 添付プレースホルダの strip ロジックは単一ソース
+    （rl_common.detection）。extractor 側で正規表現を複製すると片側だけ改修して
+    desync する（pitfall_copied_parse_convention_partial_fix と同型）ため、ここでは
+    委譲するだけに留める（`_is_machinery_prompt_shared` と同じパターン）。
+    """
+    import sys as _sys
+
+    _lib = str(Path(__file__).resolve().parent.parent)
+    if _lib not in _sys.path:
+        _sys.path.insert(0, _lib)
+    from rl_common.detection import strip_image_placeholders
+
+    return strip_image_placeholders(text)
+
+
+def _has_image_placeholder(text: str) -> bool:
+    """rl_common.detection.has_image_placeholder への遅延 import 委譲（#445）。
+
+    strip 前に判定することで、呼び出し側（``extract_utterances``）が「strip して
+    人間の実テキストが残った件数」と「strip したら空になった（bare 添付）件数」を
+    別カウンタで observability に surface できるようにする（黙って減らさない）。
+    """
+    import sys as _sys
+
+    _lib = str(Path(__file__).resolve().parent.parent)
+    if _lib not in _sys.path:
+        _sys.path.insert(0, _lib)
+    from rl_common.detection import has_image_placeholder
+
+    return has_image_placeholder(text)
+
+
 def _extract_text(content) -> Optional[str]:
-    """user message.content から human テキストを取り出す。
+    """user message.content から human テキストを取り出す（raw・strip 前）。
 
     - str: そのまま human テキスト
     - list: text block のみ結合。tool_result block が 1 つでもあれば None（発話でない）
     - それ以外: None
+
+    ``[Image #N]`` プレースホルダの strip は呼び出し側（``extract_utterances``）が
+    行う（strip 前後の件数を別カウンタで observability に出すため、ここでは raw の
+    まま返す）。
     """
     if isinstance(content, str):
         return content
@@ -203,6 +245,7 @@ def extract_utterances(
     jsonl_path: Path,
     pj_slug: str,
     start_line: int = 0,
+    stats: Optional[Dict[str, int]] = None,
 ) -> Iterator[Utterance]:
     """1 つの transcript jsonl から human 発話を抽出して yield する。
 
@@ -212,6 +255,14 @@ def extract_utterances(
                     各行に cwd があれば ``pj_slug_from_cwd`` 由来が優先される（#430）。
         start_line: これ未満（0-index）の行はスキップ（増分 ingest 用）。
                     スキップしても assistant の prev_action 文脈は維持される。
+        stats:      呼び出し側が渡す任意の観測カウンタ dict（in-place 加算・#445）。
+                    渡された場合、``[Image #N]`` プレースホルダの扱いを2種の別カウンタで
+                    黙って減らさず surface する:
+                      - ``image_placeholder_stripped``: marker を除去し人間の実テキストが
+                        残った件数（救済＝発話として抽出される）
+                      - ``image_placeholder_only_excluded``: marker だけで strip 後に空
+                        （bare な画像添付のみ）になり非発話として除外した件数
+                    2つは意味が違うため混ぜない（前者は救済、後者は除外）。
 
     line_no は 1-index の実ファイル行番号（物理 PK に使う）。
     pj_slug の確定は EXCLUDED_PJ_SLUGS 判定（source_kind）にも効く。
@@ -284,8 +335,29 @@ def extract_utterances(
                 text = _extract_text(message.get("content") if isinstance(message, dict) else None)
                 if text is None:
                     continue
-                text = text.strip()
+                # #445: [Image #N] プレースホルダの strip は marker の有無を先に判定して
+                # から行う。strip したら空（bare な画像添付のみ）か、実テキストが残った
+                # かで別カウンタに分ける（前者は除外・後者は救済。混ぜない）。
+                # stats への加算は below の ``idx < start_line`` 判定より**後**でのみ行う
+                # （codex round1 [Must]3）: 増分 ingest は prev_action 文脈復元のため
+                # 既処理行（offset 以前）も再走査するので、加算をここで行うと追記のたびに
+                # 過去分の画像プレースホルダを再計上してしまう。判定結果（had_image_placeholder
+                # / text の空非空）はここで確定するが、``stats`` への書込は保留する。
+                had_image_placeholder = _has_image_placeholder(text)
+                if had_image_placeholder:
+                    text = _strip_image_placeholders(text)
+                else:
+                    text = text.strip()
+                is_pre_offset = idx < start_line  # 判定のみ先出し（continue はまだしない）
+
                 if not text:
+                    # bare な画像添付のみ（strip 後ゼロ）は非発話として扱う。既存の空
+                    # テキスト除外と同じ経路（prev_action 文脈は更新しない）。stats は
+                    # post-offset のみ加算する（bare marker はここで continue するため、
+                    # start_line 判定を通過する一般経路とは別に判定する・codex round1 [Must]3）。
+                    if had_image_placeholder and stats is not None and not is_pre_offset:
+                        key = "image_placeholder_only_excluded"
+                        stats[key] = stats.get(key, 0) + 1
                     continue
                 if _is_harness(text):
                     continue
@@ -294,8 +366,12 @@ def extract_utterances(
                 prev_action = _format_prev_action(pending_tool_names)
                 pending_tool_names = []
 
-                if idx < start_line:
+                if is_pre_offset:
                     continue  # 既処理（offset 以前）。文脈は更新済みなのでスキップのみ。
+
+                if had_image_placeholder and stats is not None:
+                    key = "image_placeholder_stripped"
+                    stats[key] = stats.get(key, 0) + 1
 
                 effective_slug = resolved_slug if resolved_slug is not None else pj_slug
                 if effective_slug in EXCLUDED_PJ_SLUGS:

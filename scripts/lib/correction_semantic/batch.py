@@ -202,7 +202,9 @@ def ingest_judgement_results(
       2. 空/missing はスキップ（判定済みにせずキューに残す＝再判定可能）
       3. prompt.parse_verdicts_result で JSON 解釈し ok=False（パース失敗）ならスキップ（#273:
          応答欠損と同じ「未判定のまま残す」経路に合流。verdict.index → 発話を引く（ok=True 時）
-      4. is_correction=True → WeakSignal(channel=llm_judge) + CorrectionIdiom を蓄積
+      4. is_correction=True → WeakSignal(channel=llm_judge) + CorrectionIdiom を蓄積。
+         ただし発話が全行 assistant 引用（human 発言が0行）なら書き込まず
+         assistant_only_skipped に計上する（#445: representative.is_assistant_only_text）
       5. バッチ内の発話の物理キーを judged に記録（修正/非修正どちらも。ok=False バッチは対象外）。
          verdicts が正当に空配列（モデルが「該当なし」と明示判定）ならバッチ全体を非修正
          として確定する（#273: 未判定に残すと再判定費用が際限なく積むため）。一部 index だけ
@@ -230,9 +232,9 @@ def ingest_judgement_results(
     ループが担う）に一本化し、この Phase C（decision-dependent）からは完全に切り離した。
 
     Returns:
-        {"corrections", "non_corrections", "skipped_batches", "parse_failed_batches",
-         "omitted_verdicts", "out_of_range_verdicts", "weak_written", "idioms_written",
-         "idioms_filtered", "judged_written", "dry_run"}
+        {"corrections", "non_corrections", "assistant_only_skipped", "skipped_batches",
+         "parse_failed_batches", "omitted_verdicts", "out_of_range_verdicts", "weak_written",
+         "idioms_written", "idioms_filtered", "judged_written", "dry_run"}
     """
     from weak_signals.store import WeakSignal, append_signals, now_iso
 
@@ -245,6 +247,7 @@ def ingest_judgement_results(
     judged_keys: List[str] = []
     corrections = 0
     non_corrections = 0
+    assistant_only_skipped = 0  # #445: 全行 assistant 引用のため書込を見送った件数
     skipped_batches = 0
     parse_failed_batches = 0  # #273: 応答は届いたが JSON が解釈不能だったバッチ数
     idioms_filtered = 0  # #527: 過汎用 idiom（floor/stopword/context token）で弾いた件数
@@ -323,6 +326,13 @@ def ingest_judgement_results(
             if not v.get("is_correction"):
                 non_corrections += 1
                 continue
+            # #445: 発話が全行 assistant 引用（human 発言が1行も無い）なら、LLM が
+            # is_correction=True と判定していても書き込まない。人間発話のみという既存方針
+            # （user_only_text / #528-3）を書込境界でも徹底する。judged には積んで再判定
+            # ループを防ぎつつ、黙って減らさず専用カウンタに計上する（silence != evaluated）。
+            if _representative.is_assistant_only_text(utt.get("text") or ""):
+                assistant_only_skipped += 1
+                continue
             corrections += 1
             idiom_text = v.get("idiom")
             prov = {
@@ -377,6 +387,7 @@ def ingest_judgement_results(
     return {
         "corrections": corrections,
         "non_corrections": non_corrections,
+        "assistant_only_skipped": assistant_only_skipped,  # #445: 全行 assistant 引用で書込を見送った件数
         "skipped_batches": skipped_batches,
         "parse_failed_batches": parse_failed_batches,
         "weak_written": ws_res["written"],

@@ -293,7 +293,8 @@ def run_daily_judge(
                    "excluded_untracked_total", "excluded_untracked_by_pj",
                    "excluded_before_cutoff_total"}
         run:     {"dry_run": False, "requested", "responded", "call_failed",
-                   "corrections", "non_corrections", "skipped_batches",
+                   "corrections", "non_corrections", "assistant_only_skipped",
+                   "skipped_batches",
                    "parse_failed_batches", "omitted_verdicts", "out_of_range_verdicts",
                    "reserved_batches", "weak_written", "idioms_written", "judged_written",
                    "unjudged_total", "selected", "capped", "source_failed", "source_error",
@@ -431,6 +432,7 @@ def run_daily_judge(
                 "call_failed": 0,
                 "corrections": 0,
                 "non_corrections": 0,
+                "assistant_only_skipped": 0,
                 "skipped_batches": 0,
                 "parse_failed_batches": 0,
                 "omitted_verdicts": 0,
@@ -467,6 +469,7 @@ def run_daily_judge(
                 "call_failed": 0,
                 "corrections": 0,
                 "non_corrections": 0,
+                "assistant_only_skipped": 0,
                 "skipped_batches": 0,
                 "parse_failed_batches": 0,
                 "omitted_verdicts": 0,
@@ -539,6 +542,9 @@ def run_daily_judge(
         print(
             f"[judge_runner] 永続化: corrections={result['corrections']} "
             f"non_corrections={result['non_corrections']} "
+            # #445: 全行 assistant 引用（human 発言 0 行）で書込を見送った件数。黙って
+            # 減らさず運用ログで気づけるようにする（silence != evaluated）。
+            f"assistant_only_skipped={result['assistant_only_skipped']} "
             f"skipped_batches={result['skipped_batches']} "
             f"parse_failed_batches={result['parse_failed_batches']} "
             # #410 round2 [Should]③: omitted_verdicts（部分応答の欠落件数）を戻り値だけで
@@ -564,6 +570,7 @@ def run_daily_judge(
             "call_failed": call_failed,
             "corrections": result["corrections"],
             "non_corrections": result["non_corrections"],
+            "assistant_only_skipped": result["assistant_only_skipped"],
             "skipped_batches": result["skipped_batches"],
             "parse_failed_batches": result["parse_failed_batches"],
             "omitted_verdicts": result["omitted_verdicts"],
