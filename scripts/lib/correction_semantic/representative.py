@@ -78,21 +78,66 @@ def user_only_text(text: Optional[str]) -> str:
     return text.strip()
 
 
-def is_assistant_only_text(text: Optional[str]) -> bool:
-    """発話が全行 assistant 引用（人間の発言が1行も残らない）か判定する（#445）。
+# corrections 書込ゲート（``is_assistant_only_text``）専用のマーカー判定（#445 codex
+# round1 [Must]1）。**表示用 ``_QUOTE_LINE_RE`` を流用しない**（意図的に別定義）:
+# ``_QUOTE_LINE_RE`` には ``>``/``→``/``—``/``×``/code fence 等、human も自然に書きうる
+# 記号が含まれる。書込ゲートでそれを使うと「`→` この方向で」のような正当な human
+# correction まで assistant-only と誤判定し、しかも batch.py 側は判定後 judged 済みに
+# するため再判定されず、誤除外されたレコードを永久に失う（codex 実指摘）。書込ゲートは
+# 今回実コーパスで観測した Claude Code CLI 固有マーカー ``⏺``（assistant メッセージ先頭）
+# / ``⎿``（詳細行）**だけ**に限定する。
+_ASSISTANT_MARKER_LINE_RE = re.compile(r"^\s*(?:⏺|⎿)")
 
-    **corrections 書込ゲート専用**。``user_only_text`` は表示用途で情報喪失を避けるため
-    全行 strip 時に元テキストへ fallback するが、書込ゲートでは逆に「人間の指摘が
-    実際に含まれるか」を知りたい（fallback すると assistant 発話のみのレコードが
-    人間発話に偽装されて corrections に書かれてしまう）。**この非対称性ゆえに
-    ``user_only_text`` と統合しない**（後から「重複してるから畳もう」としないこと。
-    fallback の有無が両関数の存在理由そのもの）。空/None は「assistant 発話」ではなく
-    単なる無内容として False を返す（呼び出し側の空文字ガードと責務を分けない・#99と
-    同じ判断）。
+
+def _is_assistant_marker_line(line: str) -> bool:
+    return bool(_ASSISTANT_MARKER_LINE_RE.match(line))
+
+
+def is_assistant_only_text(text: Optional[str]) -> bool:
+    """発話が全行 assistant の CLI 出力ブロック（人間の発言が1行も残らない）か判定する
+    （#445。round1 codex レビューで round0 実装の2つの欠陥を修正）。
+
+    **corrections 書込ゲート専用**。``user_only_text``（表示用）とは判定対象・fallback
+    の有無ともに意図的に異なり、**統合しない**（後から「重複してるから畳もう」と
+    しないこと）:
+    - 対象マーカー: ``user_only_text`` は表示上ノイズになりうる記号を広く拾う
+      （``>``/``→``/``ℹ️`` 等）。書込ゲートは ``⏺``/``⎿`` のみ（round1 [Must]1、上記参照）。
+    - fallback: ``user_only_text`` は全 strip 時に元テキストへ fallback する（表示は
+      情報保持優先）。書込ゲートは fallback しない（fallback すると assistant 発話のみの
+      レコードが人間発話に偽装されて corrections に書かれてしまうため、書込は誤登録
+      防止優先）。
+
+    **ブロック単位判定**（round1 [Must]2）: ``⏺``/``⎿`` で始まる行だけでなく、その直後に
+    続く**インデントされた折り返し継続行**（CLI が長い出力を折り返した行。行頭にマーカーが
+    付かない）も同じ assistant ブロックとして扱う。行単位（マーカー行かどうかだけ）で
+    判定すると、折り返し継続行が human 発言として扱われ、全行 assistant のブロックが
+    ゲートを通過してしまう（round0 の実欠陥・実コーパスの
+    ``⏺ Ran 3 stop hooks...\n  ⎿ ...\n  を即座に起動して...`` で確認）。空行はブロックの
+    終端として扱う（空行の後に非インデントの実テキストが続けば human 発言と判定する）。
+
+    空/None は「assistant 発話」ではなく単なる無内容として False を返す（呼び出し側の
+    空文字ガードと責務を分けない・#99と同じ判断）。
     """
     if not text:
         return False
-    return not _strip_assistant_lines(text)
+    in_block = False
+    saw_any_content = False
+    for line in text.split("\n"):
+        if _is_assistant_marker_line(line):
+            in_block = True
+            saw_any_content = True
+            continue
+        if not line.strip():
+            # 空行はブロックの区切り（次に human 行が来ても継続行とみなさない）。
+            in_block = False
+            continue
+        if in_block and line != line.lstrip():
+            # マーカー行に直接続くインデント行 = CLI 出力の折り返し継続行。
+            saw_any_content = True
+            continue
+        # 非インデント・非マーカーの実テキスト行が1つでもあれば human 発言が含まれる。
+        return False
+    return saw_any_content
 
 
 def prev_action_summary(prev_action: Optional[str]) -> str:

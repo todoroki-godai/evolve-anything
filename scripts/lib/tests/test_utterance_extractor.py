@@ -344,6 +344,46 @@ def test_stats_untouched_when_no_placeholder_present(tmp_path: Path) -> None:
     assert stats == {}
 
 
+def test_stats_not_double_counted_on_incremental_rescan(tmp_path: Path) -> None:
+    """#445 codex round1 [Must]3: 増分 ingest は offset 以前の行も prev_action 文脈復元の
+    ために再走査するが、stats はそのたびに再計上してはいけない（複数 PJ 合算でも誤加算が
+    積み上がるため）。
+    """
+    f = tmp_path / "s1.jsonl"
+    f.write_text(
+        _user_line("[Image #1] 最初の指摘", uuid="u1") + "\n"
+        + _user_line("[Image #2] 二番目の指摘", uuid="u2") + "\n",
+        encoding="utf-8",
+    )
+    # 初回 ingest: 全行走査（start_line=0）。
+    stats1: dict = {}
+    utts1 = list(extract_utterances(f, pj_slug="x", stats=stats1))
+    assert len(utts1) == 2
+    assert stats1 == {"image_placeholder_stripped": 2}
+
+    # 増分 ingest: 1行目（idx=0）は既処理として再走査だけされる。再計上しないこと。
+    stats2: dict = {}
+    utts2 = list(extract_utterances(f, pj_slug="x", start_line=1, stats=stats2))
+    assert len(utts2) == 1  # 2行目のみ yield
+    assert stats2 == {"image_placeholder_stripped": 1}
+
+
+def test_stats_bare_marker_not_double_counted_on_incremental_rescan(tmp_path: Path) -> None:
+    """bare marker（strip 後ゼロで除外）経路も同様に post-offset のみ加算する。"""
+    f = tmp_path / "s1.jsonl"
+    f.write_text(
+        _user_line("[Image #1]", uuid="u1") + "\n"
+        + _user_line("普通の発話", uuid="u2") + "\n"
+        + _user_line("[Image #2]", uuid="u3") + "\n",
+        encoding="utf-8",
+    )
+    stats2: dict = {}
+    # 1行目（bare marker・idx=0）は既処理扱い。3行目（idx=2）だけが新規。
+    utts2 = list(extract_utterances(f, pj_slug="x", start_line=1, stats=stats2))
+    assert len(utts2) == 1  # 2行目のみ発話として yield
+    assert stats2 == {"image_placeholder_only_excluded": 1}
+
+
 def test_stats_none_is_safe_default(tmp_path: Path) -> None:
     # stats を渡さない既存呼び出し元（ingest.py 更新前の互換性）はそのまま動く。
     f = tmp_path / "s1.jsonl"

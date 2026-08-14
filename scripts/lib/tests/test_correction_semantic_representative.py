@@ -111,6 +111,66 @@ def test_is_assistant_only_text_false_for_empty():
     assert r.is_assistant_only_text(None) is False
 
 
+# ── #445 codex round1 [Must]1: 書込ゲートは ⏺/⎿ のみ。表示用 _QUOTE_LINE_RE の広い
+# 記号セット（>/→/—/×/code fence 等）を human が自然に使っても誤って assistant-only
+# と判定してはいけない（round0 は _strip_assistant_lines を流用しておりこれが起きた）。
+def test_is_assistant_only_text_does_not_flag_arrow_only_human_text():
+    assert r.is_assistant_only_text("→ この方向でお願いします") is False
+
+
+def test_is_assistant_only_text_does_not_flag_emdash_only_human_text():
+    assert r.is_assistant_only_text("— それは違うと思う") is False
+
+
+def test_is_assistant_only_text_does_not_flag_cross_mark_only_human_text():
+    assert r.is_assistant_only_text("× これはやめてほしい") is False
+
+
+def test_is_assistant_only_text_does_not_flag_blockquote_only_human_text():
+    # human が引用形式でコメントするケース（> はゲート対象マーカーに含めない）。
+    assert r.is_assistant_only_text("> この案には反対です") is False
+
+
+def test_is_assistant_only_text_does_not_flag_code_fence_only_human_text():
+    text = "```\nこのコードでは動かない\n```"
+    assert r.is_assistant_only_text(text) is False
+
+
+# ── #445 codex round1 [Must]2: ⏺/⎿ 行に続くインデント折り返し継続行はブロック扱い ──
+def test_is_assistant_only_text_true_for_marker_with_wrapped_continuation_line():
+    # マーカー行を持たない折り返し継続行（インデントのみ）も同じブロックとして扱う。
+    text = "⏺ assistant行\n  折り返し行"
+    assert r.is_assistant_only_text(text) is True
+
+
+def test_is_assistant_only_text_true_for_real_corpus_mixed_case_after_blank_line_removed():
+    # 実コーパス実測（#445 発見3）の assistant ブロック部分のみ（human 追加コメント無し）。
+    text = (
+        "⏺ Ran 3 stop hooks (ctrl+o to expand)\n"
+        "  ⎿ Stop hook error: 先送り表現を検出しました\n"
+        "  を即座に起動して並行処理してください。"
+    )
+    assert r.is_assistant_only_text(text) is True
+
+
+def test_is_assistant_only_text_false_for_real_corpus_mixed_case_with_human_comment():
+    # 実コーパス実測そのもの: assistant ブロック + 空行 + human の実指摘。
+    # human 発言が含まれるため assistant-only ではない（invalidate/skip 対象にしない）。
+    text = (
+        "⏺ Ran 3 stop hooks (ctrl+o to expand)\n"
+        "  ⎿ Stop hook error: 先送り表現を検出しました\n"
+        "  を即座に起動して並行処理してください。\n\n"
+        "これよく勝手に進んじゃうので、削除したい"
+    )
+    assert r.is_assistant_only_text(text) is False
+
+
+def test_is_assistant_only_text_indented_human_line_without_preceding_marker_is_not_block():
+    # マーカー行の直後でないインデント行は「継続行」扱いしない（human の字下げペースト等）。
+    text = "  インデントされた human 発言"
+    assert r.is_assistant_only_text(text) is False
+
+
 # ── prev_action_summary: 直前 AI 行動の 1 行要約 ──────────────────────
 def test_prev_action_summary_passthrough():
     assert r.prev_action_summary("Edit foo.py") == "Edit foo.py"

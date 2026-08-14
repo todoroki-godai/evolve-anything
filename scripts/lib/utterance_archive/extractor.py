@@ -338,18 +338,26 @@ def extract_utterances(
                 # #445: [Image #N] プレースホルダの strip は marker の有無を先に判定して
                 # から行う。strip したら空（bare な画像添付のみ）か、実テキストが残った
                 # かで別カウンタに分ける（前者は除外・後者は救済。混ぜない）。
+                # stats への加算は below の ``idx < start_line`` 判定より**後**でのみ行う
+                # （codex round1 [Must]3）: 増分 ingest は prev_action 文脈復元のため
+                # 既処理行（offset 以前）も再走査するので、加算をここで行うと追記のたびに
+                # 過去分の画像プレースホルダを再計上してしまう。判定結果（had_image_placeholder
+                # / text の空非空）はここで確定するが、``stats`` への書込は保留する。
                 had_image_placeholder = _has_image_placeholder(text)
                 if had_image_placeholder:
                     text = _strip_image_placeholders(text)
-                    if stats is not None:
-                        key = (
-                            "image_placeholder_stripped" if text
-                            else "image_placeholder_only_excluded"
-                        )
-                        stats[key] = stats.get(key, 0) + 1
                 else:
                     text = text.strip()
+                is_pre_offset = idx < start_line  # 判定のみ先出し（continue はまだしない）
+
                 if not text:
+                    # bare な画像添付のみ（strip 後ゼロ）は非発話として扱う。既存の空
+                    # テキスト除外と同じ経路（prev_action 文脈は更新しない）。stats は
+                    # post-offset のみ加算する（bare marker はここで continue するため、
+                    # start_line 判定を通過する一般経路とは別に判定する・codex round1 [Must]3）。
+                    if had_image_placeholder and stats is not None and not is_pre_offset:
+                        key = "image_placeholder_only_excluded"
+                        stats[key] = stats.get(key, 0) + 1
                     continue
                 if _is_harness(text):
                     continue
@@ -358,8 +366,12 @@ def extract_utterances(
                 prev_action = _format_prev_action(pending_tool_names)
                 pending_tool_names = []
 
-                if idx < start_line:
+                if is_pre_offset:
                     continue  # 既処理（offset 以前）。文脈は更新済みなのでスキップのみ。
+
+                if had_image_placeholder and stats is not None:
+                    key = "image_placeholder_stripped"
+                    stats[key] = stats.get(key, 0) + 1
 
                 effective_slug = resolved_slug if resolved_slug is not None else pj_slug
                 if effective_slug in EXCLUDED_PJ_SLUGS:
