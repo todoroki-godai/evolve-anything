@@ -31,7 +31,12 @@ def _iso(days_ago: float) -> str:
 
 
 def _meta(uttered_at=None, detected_at=None, cross_pj=None) -> dict:
-    return {"uttered_at": uttered_at, "detected_at": detected_at, "cross_pj": cross_pj or []}
+    """``cross_pj`` の ``None`` と ``[]`` は意味が違う。
+
+    - ``None``（既定）= **未指定**。`_group` が `cross_pj_confirmed` を伝播する
+    - ``[]`` = **明示的に空**。伝播しない（キー単位で confirmed を持たない状態を検査したいとき）
+    """
+    return {"uttered_at": uttered_at, "detected_at": detected_at, "cross_pj": cross_pj}
 
 
 def _group(
@@ -44,13 +49,16 @@ def _group(
     全 signal_key の meta へ書く）と一致させるため。composite_sort_key は残存キーの
     meta から tier1 を再計算するので、fixture がこの不変条件を破っていると
     「実装では起きない状態」を検査してしまう（#443 codex cold review [Must]）。
-    キー個別の cross_pj を検査したい場合は ``_meta(cross_pj=...)`` で明示的に上書きする。
+    伝播するのは ``cross_pj`` が **未指定（None）** のキーだけ。``_meta(cross_pj=[])`` で
+    明示した空値は上書きしない（キー単位で confirmed を持たない状態を検査できるように
+    するため・2巡目 [Should]）。
     """
-    meta = dict(meta_by_key)
-    if cross_pj_confirmed:
-        for key, m in list(meta.items()):
-            if not (m.get("cross_pj") or []):
-                meta[key] = {**m, "cross_pj": list(cross_pj_confirmed)}
+    meta = {}
+    for key, m in meta_by_key.items():
+        cross = m.get("cross_pj")
+        if cross is None:
+            cross = list(cross_pj_confirmed or [])
+        meta[key] = {**m, "cross_pj": list(cross)}
     g = {
         "signal_keys": list(signal_keys),
         "signal_meta_by_key": meta,
@@ -145,6 +153,39 @@ def test_composite_key_order_preserved_when_subtraction_does_not_affect_priority
     group_b_after = _group(["b1"], {"b1": _meta(detected_at=_iso(30))})
     after = sorted([group_b_after, group_a], key=pr.composite_sort_key)
     assert after[0] is group_a
+
+
+def test_empty_meta_map_does_not_fall_back_to_top_level_cross_pj():
+    """既読差し引きで `signal_meta_by_key` が空 dict になっても top-level に戻らない。
+
+    フォールバックは「キー自体が無い」旧形式に限る。空 dict でフォールバックすると、
+    confirmed 情報を持つキーだけが既読で落ちた group が top-level 経由で tier 1 に
+    復帰する（2巡目 codex cold review [Must]）。
+    """
+    pruned = {
+        "signal_keys": ["plain"],
+        "signal_meta_by_key": {},          # 既読差し引きで空になった
+        "cross_pj_confirmed": ["other-pj"],  # 落ちたキーが持っていた残骸
+    }
+    assert pr._remaining_cross_pj(pruned) == []
+    assert pr.composite_sort_key(pruned)[0] == 1   # tier 2
+    assert pr.cross_pj_note(pruned, "pj-a") is None
+
+    # 旧形式（キー自体が無い）だけは従来どおり top-level にフォールバックする。
+    legacy = {"signal_keys": ["plain"], "cross_pj_confirmed": ["other-pj"]}
+    assert pr._remaining_cross_pj(legacy) == ["other-pj"]
+    assert pr.composite_sort_key(legacy)[0] == 0   # tier 1
+
+
+def test_group_fixture_keeps_explicit_empty_cross_pj():
+    """`_meta(cross_pj=[])` の明示的な空は `_group` が上書きしない（2巡目 [Should]）。"""
+    g = _group(
+        ["with", "without"],
+        {"with": _meta(), "without": _meta(cross_pj=[])},
+        cross_pj_confirmed=["other-pj"],
+    )
+    assert g["signal_meta_by_key"]["with"]["cross_pj"] == ["other-pj"]
+    assert g["signal_meta_by_key"]["without"]["cross_pj"] == []
 
 
 def test_composite_key_missing_freshness_sorts_last_within_tier():

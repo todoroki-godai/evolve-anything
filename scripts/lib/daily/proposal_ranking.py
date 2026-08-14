@@ -85,13 +85,14 @@ def _group_freshness_epoch(group: Dict[str, Any]) -> float:
 def _remaining_cross_pj(group: Dict[str, Any]) -> list:
     """残存 signal_keys が持つ ``cross_pj`` の和を返す（重複除去・順序は安定）。
 
-    ``signal_meta_by_key`` を持たない group（旧形式・直接構築された fixture）は
-    top-level の ``cross_pj_confirmed`` にフォールバックする。**残存キーのメタが1つも
-    無い場合にだけ**フォールバックするので、既読差し引きで confirmed 由来キーが全部
-    落ちた group が top-level 経由で tier 1 に戻ることはない。
+    フォールバックは ``signal_meta_by_key`` という **キー自体が存在しない**（旧形式の
+    group・直接構築された fixture）ときに限る。**空 dict はフォールバックしない**:
+    既読差し引きで confirmed 由来のキーだけが落ちて meta が空になった group が、
+    top-level の ``cross_pj_confirmed`` 経由で tier 1 に復帰するのを塞ぐため
+    （#443 codex cold review 2巡目 [Must]）。
     """
     meta_map = group.get("signal_meta_by_key")
-    if not isinstance(meta_map, dict) or not meta_map:
+    if not isinstance(meta_map, dict):
         return list(group.get("cross_pj_confirmed") or [])
     out: list = []
     seen = set()
@@ -277,7 +278,10 @@ def cross_pj_note(group: Dict[str, Any], pj_slug: str) -> Optional[str]:
         if others:
             listed = ", ".join(others)
             return f"他{len(others)}PJでも同種の指摘（{listed}）"
-    cross_pj_confirmed = group.get("cross_pj_confirmed")
+    # tier1 の判定（composite_sort_key）と同じ `_remaining_cross_pj` を使う。top-level を
+    # 直接読むと、既読差し引きで confirmed 由来キーが落ちた group に「確認済み」と表示され、
+    # 順位（tier 2）と提示文（確認済み）が食い違う。
+    cross_pj_confirmed = _remaining_cross_pj(group)
     if cross_pj_confirmed:
         listed = ", ".join(cross_pj_confirmed)
         return f"他PJ（{listed}）で確認済み"
