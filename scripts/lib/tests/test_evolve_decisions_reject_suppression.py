@@ -134,6 +134,27 @@ class TestEmitAppliesSuppression:
         assert out["reject_suppressed_total"] == 0
         assert out["reject_suppressed"] == []
         assert out["suppression_ledger_read_error"] is None
+        assert out["suppression_candidate_errors"] == []
+
+    def test_emit_surfaces_candidate_key_errors(self, result_with_match, monkeypatch):
+        """[Must]2(b): filter_rejected の候補単位キー計算失敗（境界②/③）が emit の
+        返り値 suppression_candidate_errors まで届く（候補計算失敗と ledger 読込失敗は
+        別の meta キーで区別する）。"""
+        import evolve_decisions._suppression as sup
+
+        original = sup._issue_for
+
+        def _flaky(entry):
+            if entry.get("proposal_type") == "skill_diff":
+                raise AttributeError("boom")
+            return original(entry)
+
+        monkeypatch.setattr(sup, "_issue_for", _flaky)
+        out = ed.emit_decisions(result_with_match, dry_run=False, slug="testslug")
+        assert out["count"] == 1  # キー計算失敗は「抑制しない」= 通常どおり pending に残る
+        assert out["suppression_candidate_errors"] == [
+            {"id": out["pending"][0]["id"], "boundary": "candidate_key", "error": "AttributeError: boom"}
+        ]
 
     def test_emit_fail_open_when_ledger_read_fails(
         self, result_with_match, monkeypatch

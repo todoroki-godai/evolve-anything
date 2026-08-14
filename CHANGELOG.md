@@ -13,7 +13,12 @@
   2 chokepoint に配線し、advisory レーンの reject も同じ ledger で抑制される。fail-open は
   ledger 読込/候補単位キー計算/レコード値の3境界に分離し、どの失敗でも「抑制しない」側に
   倒す。新規ストア・新規 observability section は無し（#379 非抵触・既存 emit/ingest 結果
-  dict へのキー追加のみ）。TDD 33件・決定論・LLM 非依存。
+  dict へのキー追加のみ）。**追記（codex 実装後レビュー round3）**: fail-open の except
+  節を全境界で `Exception` に広げ（列挙型では `load_ledger()` の非object JSON行由来
+  `AttributeError` 等が貫通しうるため）、候補単位の失敗（境界②/③）を
+  `suppression_candidate_errors` として `boundary` 付きで emit 結果に surface、
+  `marker_error`/`dry_run_snapshot_warning` と同じ `cli.py:_summarize_result` に
+  reject 抑制の meta を1行サマリとして配線した。TDD 41件・決定論・LLM 非依存。
 - **fix(fleet/audit): machinery（harness 注入の委譲メッセージ等）除外を fleet queue /
   audit observability にも透明化（ADR-054 PR2-a・#379 #400 #443）** — `filter_actionable`
   の machinery 軸（read 時除外）が `fleet.queue_materials` / `audit.sections_weak_signals` /

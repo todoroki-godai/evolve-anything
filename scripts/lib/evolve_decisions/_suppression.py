@@ -82,7 +82,12 @@ def filter_rejected(
     }
     try:
         ledger = load_ledger(slug)
-    except (OSError, UnicodeDecodeError) as e:
+    except Exception as e:  # noqa: BLE001 — 境界①の契約は「ledger が読めない＝抑制しない」。
+        # 例外の種類ごとに挙動を分ける理由が無い。load_ledger() は壊れた行で
+        # AttributeError（非 object の有効 JSON、例: `[]`/`"x"`/`3` は json.loads を
+        # 通過し rec.get(...) で落ちる）を出しうるほか、権限・エンコーディング等の
+        # OS 起因例外も想定される。列挙は原理的に不完全なので広く受けて全件通す
+        # （codex round3 [Must]1）。
         stats["ledger_read_error"] = f"{type(e).__name__}: {e}"
         return list(pending), stats
 
@@ -94,7 +99,7 @@ def filter_rejected(
             record = ledger.get(dedup_key(issue))
         except (AttributeError, KeyError, TypeError, ValueError) as e:
             stats["candidate_errors"].append(
-                {"id": entry.get("id"), "error": f"{type(e).__name__}: {e}"}
+                {"id": entry.get("id"), "boundary": "candidate_key", "error": f"{type(e).__name__}: {e}"}
             )
             kept.append(entry)
             continue
@@ -105,8 +110,13 @@ def filter_rejected(
             decided_at = float(record.get("decided_at", 0.0))
             ttl_days = int(record.get("ttl_days", DEFAULT_TTL_DAYS))
             suppressed = now <= decided_at + ttl_days * DAY_SECONDS
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            # 境界③: レコードの値が壊れている。候補単位で「抑制しない」に倒しつつ
+            # 呼び出し元まで届く meta にも記録する（codex round3 [Must]2(a)）。
             suppressed = False
+            stats["candidate_errors"].append(
+                {"id": entry.get("id"), "boundary": "record_value", "error": f"{type(e).__name__}: {e}"}
+            )
         if suppressed:
             stats["suppressed_total"] += 1
             stats["suppressed"].append({"id": entry.get("id"), "file": issue["file"]})
@@ -139,12 +149,8 @@ def record_pending_rejection(
             persist=True,
         )
         return None
-    except (
-        OSError,
-        UnicodeDecodeError,
-        AttributeError,
-        KeyError,
-        TypeError,
-        ValueError,
-    ) as e:
+    except Exception as e:  # noqa: BLE001 — 「例外を外に出さない」契約そのものが目的の
+        # 境界なので、列挙では原理的に不十分（codex round3 [Must]3）。record_rejection の
+        # 先には pj_slug 解決（subprocess）や store barrier があり、そこから列挙外の
+        # 例外（RuntimeError 等）が出ても ingest の判断記録・キュー消化を止めてはならない。
         return f"{type(e).__name__}: {e}"

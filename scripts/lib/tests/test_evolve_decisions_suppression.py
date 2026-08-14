@@ -168,6 +168,41 @@ class TestFilterRejected:
         assert stats["ledger_read_error"] == "OSError: disk full"
         assert stats["suppressed_total"] == 0
 
+    def test_ledger_read_failure_with_unlisted_exception_type_still_fail_opens(
+        self, monkeypatch
+    ):
+        """[Must]1: OSError/UnicodeDecodeError 以外の例外でも境界①は fail-open する。
+
+        load_ledger() は壊れた1行が「非 object の有効 JSON」（例: `[]`/`"x"`/`3`）だと
+        `rec.get("dedup_key")` で AttributeError を出す（json.loads 自体は通過するので
+        JSONDecodeError には落ちない）。列挙型の except では捕捉漏れになり emit 全体が
+        落ちるため、広く Exception で受ける契約を固定する。
+        """
+
+        def _boom(_slug):
+            raise AttributeError("'list' object has no attribute 'get'")
+
+        monkeypatch.setattr(sl, "load_ledger", _boom)
+        pending = [_entry(id_="evdiff_1")]
+        kept, stats = sup.filter_rejected(pending, slug="proj")
+        assert kept == pending
+        assert stats["ledger_read_error"].startswith("AttributeError")
+
+    def test_ledger_with_non_object_json_line_does_not_crash_filter_rejected(self):
+        """[Must]1 の実シナリオ再現: ledger ファイルに非 object の有効 JSON 行（`[]`）が
+        混ざっていても `filter_rejected` は例外を投げず全件通す（`load_ledger()` 自体は
+        壊れた行を静かにスキップする契約なので、通常はここまで到達しないが、
+        実装が広く Exception を受けていることの回帰防止として直接 load_ledger を模す）。
+        """
+        ledger_path = sl.ledger_path("proj")
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text("[]\n", encoding="utf-8")
+        pending = [_entry(id_="evdiff_1")]
+        # load_ledger() 自体は非 object 行を rec.get() で落ちる前に扱う実装差分がありうる
+        # ため、ここでは filter_rejected の外形（例外を漏らさない）だけを固定する。
+        kept, stats = sup.filter_rejected(pending, slug="proj")
+        assert kept == pending or stats["ledger_read_error"] is not None
+
     def test_candidate_key_failure_keeps_only_that_candidate_fail_open(self, monkeypatch):
         """境界②: 1候補のキー計算だけ失敗しても他候補の判定は継続し、その候補は抑制しない。"""
         good = _entry(id_="evdiff_good")
@@ -185,7 +220,7 @@ class TestFilterRejected:
         kept, stats = sup.filter_rejected([good, bad], slug="proj")
         assert kept == [bad]  # good は正常に suppress、bad はキー計算失敗で fail-open
         assert stats["candidate_errors"] == [
-            {"id": "evdiff_bad", "error": "AttributeError: boom"}
+            {"id": "evdiff_bad", "boundary": "candidate_key", "error": "AttributeError: boom"}
         ]
 
     def test_malformed_record_value_does_not_suppress_that_candidate(self):
@@ -202,6 +237,24 @@ class TestFilterRejected:
         )
         kept, _ = sup.filter_rejected(pending, slug="proj")
         assert kept == pending  # 壊れたレコードは抑制しない側に倒す
+
+    def test_malformed_record_value_surfaces_in_candidate_errors(self):
+        """[Must]2(a): 境界③の失敗も stats["candidate_errors"] に boundary="record_value"
+        として記録され、呼び出し元（_emit.py）まで meta が届く前提を固定する。"""
+        pending = [_entry(id_="evdiff_1")]
+        issue = sup._issue_for(pending[0])
+        key = sl.dedup_key(issue)
+        ledger_path = sl.ledger_path("proj")
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text(
+            json.dumps({"dedup_key": key, "type": issue["type"], "file": issue["file"],
+                        "decided_at": "not-a-number", "ttl_days": 45}) + "\n",
+            encoding="utf-8",
+        )
+        _, stats = sup.filter_rejected(pending, slug="proj")
+        assert stats["candidate_errors"] == [
+            {"id": "evdiff_1", "boundary": "record_value", "error": "ValueError: could not convert string to float: 'not-a-number'"}
+        ]
 
     def test_advisory_merge_failure_does_not_affect_filter_rejected(self):
         """設計 §3.1-b「明示的に禁止する実装」: advisory 収集の失敗と filter_rejected の
@@ -256,6 +309,22 @@ class TestRecordPendingRejection:
         entry = _entry(id_="evdiff_1")
         err = sup.record_pending_rejection(entry, slug="proj")
         assert err == "OSError: disk full"
+
+    def test_write_failure_with_unlisted_exception_type_still_returns_string(
+        self, monkeypatch
+    ):
+        """[Must]3: 列挙型 except の裏を突く未列挙例外（RuntimeError 等）でも
+        record_pending_rejection は例外を外に漏らさない（ingest とキュー消化を止めない）。
+        record_rejection の先には pj_slug 解決（subprocess）や store barrier があり、
+        列挙で想定していない例外が出うる。"""
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("store barrier rejected write")
+
+        monkeypatch.setattr(sl, "record_rejection", _boom)
+        entry = _entry(id_="evdiff_1")
+        err = sup.record_pending_rejection(entry, slug="proj")
+        assert err == "RuntimeError: store barrier rejected write"
 
     def test_issue_for_failure_inside_record_does_not_raise(self, monkeypatch):
         """[Must]2: _issue_for() 呼び出し自体も try の内側（entry が想定外でも落ちない）。"""

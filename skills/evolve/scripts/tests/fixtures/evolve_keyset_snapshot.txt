@@ -54,6 +54,7 @@ evolve_decisions.reject_suppressed_total
 evolve_decisions.revert_generation_discarded
 evolve_decisions.run_id
 evolve_decisions.slug
+evolve_decisions.suppression_candidate_errors
 evolve_decisions.suppression_ledger_read_error
 generated_at
 growth_report

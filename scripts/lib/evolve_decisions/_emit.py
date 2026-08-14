@@ -302,4 +302,7 @@ def emit_decisions(
         "reject_suppressed_total": suppression_stats["suppressed_total"],
         "reject_suppressed": suppression_stats["suppressed"],
         "suppression_ledger_read_error": suppression_stats["ledger_read_error"],
+        # #446 codex round3 [Must]2(b): 候補単位のキー計算/レコード値失敗（境界②③）も
+        # 呼び出し元まで届ける。0件でもキーは出す。
+        "suppression_candidate_errors": suppression_stats["candidate_errors"],
     }

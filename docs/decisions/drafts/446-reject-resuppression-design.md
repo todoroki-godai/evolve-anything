@@ -402,7 +402,7 @@ advisory 収集の既存 `try: ... except Exception: pass`（`_emit.py:218-224`�
   止めると reject 済みの entry がキューに残留し続け、別の欠陥を生む）
 - ledger 書込失敗時は該当 entry を `ingest_decisions()` の返り値の新キー
   `suppression_ledger_errors: [{"id":..., "error":...}, ...]`（新セクション禁止・既存
-  dict へのキー追加のみ）に積み、`bin/evolve-daily-run` の既存サマリ行に1文足す（§3.3）
+  dict へのキー追加のみ）に積む（表示層は §3.3 参照）
 
 ### 3.2 TTL / 解除条件（2026-08-14 改訂: codex [Must]3 を反映）
 
@@ -429,7 +429,8 @@ DEFAULT_TTL_DAYS` と同値。プロジェクト全体の TTL 慣習——weak_s
 を読んで accept を検知する複雑な照合は、その近似を精緻化するコストに見合わないため不要・
 削除する）。
 
-### 3.3 silence != evaluated の担保（2026-08-14 改訂: §3.1 の stats 契約と一致させる）
+### 3.3 silence != evaluated の担保（2026-08-14 round2 改訂 / 2026-08-14 round3 訂正:
+表示層の宛先を修正）
 
 新しい observability section は作らない（#379 抵触）。**既存 emit/ingest 結果 dict への
 キー追加のみ**:
@@ -437,15 +438,29 @@ DEFAULT_TTL_DAYS` と同値。プロジェクト全体の TTL 慣習——weak_s
 - `emit_decisions()` の返り値（`_emit.py:277-292`）に `filter_rejected` の `stats`
   （§3.1-b）をそのまま展開する: `reject_suppressed_total: int` /
   `reject_suppressed: [{"id":..., "file":...}, ...]`（0件でもキーは出す・空リスト） /
-  `suppression_ledger_read_error: str | None`。既存の `revert_generation_discarded` と
-  同じ「新セクションでなく meta 返却」パターン。advisory/skill 両レーンの抑制が同じリストに
-  混在するが、`id` の prefix（advisory は `advisory_` 系、skill は `evdiff_` 系・既存の
-  ID 採番規約のまま）でレーンを判別できるため、追加のレーン別内訳フィールドは持たない
+  `suppression_ledger_read_error: str | None` /
+  `suppression_candidate_errors: [{"id":..., "boundary":..., "error":...}, ...]`
+  （codex round3 [Must]2(b) 追加。境界②`candidate_key`／境界③`record_value` を
+  `boundary` で区別する）。既存の `revert_generation_discarded` と同じ「新セクションでなく
+  meta 返却」パターン。advisory/skill 両レーンの抑制が同じリストに混在するが、`id` の
+  prefix（advisory は `advisory_` 系、skill は `evdiff_` 系・既存の ID 採番規約のまま）で
+  レーンを判別できるため、追加のレーン別内訳フィールドは持たない
 - `ingest_decisions()` の返り値（`_ingest.py:161`）に `suppression_ledger_errors:
   [{"id":..., "error":...}, ...]`（§3.1-c）を追加する
-- 表示は `bin/evolve-daily-run` の既存サマリ行（`revert_generation_discarded` を出している
-  行の近傍）に1文足すだけ（新規セクション禁止・既存行への追記）。0件のときは追記しない
-  （既存の「0件ならノイズを足さない」流儀に合わせる）
+- ~~表示は `bin/evolve-daily-run` の既存サマリ行（`revert_generation_discarded` を出している
+  行の近傍）に1文足すだけ~~ **【round3 訂正】この記述は誤りだった。codex round3 [Must]4 の
+  裏取りで、`revert_generation_discarded` は `_emit.py` 内の生成・返却4箇所にしか現れず
+  `bin/evolve-daily-run` には存在しない（grep で確認済み・読み手ゼロの書きっぱなし
+  フィールドだった）ことが判明した。正しい宛先は `marker_error`（#287-5）/
+  `dry_run_snapshot_warning`（#402 PR-2 §0.3）が実際に転記されている
+  `skills/evolve/scripts/evolve/cli.py:_summarize_result`（`--output` 時の1行サマリ）
+  であり、実装はそちらへ同じ条件分岐パターン（`isinstance(_ed, dict) and _ed.get(...)`）
+  で配線した。`reject_suppressed_total`/`suppression_ledger_read_error`/
+  `suppression_candidate_errors` の3キーを転記し、0件/None のときは追記しない（既存の
+  「0件ならノイズを足さない」流儀に合わせる）。`ingest_decisions()`（drain 経路）の
+  `suppression_ledger_errors` は `evolve --drain` の CLI が summary dict を JSON 全文で
+  stdout に出す（`cli.py` の drain 分岐、curated 1行サマリを経由しない）ため追加の配線は
+  不要。
 
 ### 3.4 #379 非抵触の確認
 
@@ -600,3 +615,17 @@ suppression_ledger.py` のモジュール docstring（9行目付近）と `DEFAU
 | [Should]3 「before_sha の変化が early-release を完全代替する」という言い切りが過剰主張 | §2.3 末尾・§3.2: before_sha は「実質的な変化」の粗い近似（過剰解除・過小解除の両誤差がある）であり完全代替ではない、と訂正。それでも専用ロジックを持たない判断根拠（誤差の方向がどちらも致命的でない）を追記 |
 | [Nit]1 差し込み位置の行番号が `_emit.py:217` は誤り（advisory マージがまだ完了していない） | §2.1・§3.1-a: `_emit.py:224`（advisory マージの `except Exception: pass` 直後）に訂正 |
 | [Nit]2 `suppression_ledger.py` のソースコードコメント2箇所（9行目・48行目付近）に旧稿と同じ「TTL経過後は1回だけ再提示」の誤記述が残っている | §6「実装前に必ずやること」に実装時修正タスクとして明記（design doc 自体の §3.2 記述は round1 で既に正しいので変更不要。直すのは `suppression_ledger.py` 側のコメントのみ） |
+
+### codex round3（実装後レビュー）[Must]4件の解消対応表（2026-08-14 追加）
+
+PR #456 への実装レビュー。オーケストレーターが実コードで裏取り済み。設計 §3.3 自体の
+誤りが1件見つかった（round3 [Must]4）ため、該当節を訂正した。
+
+| codex round3 指摘 | 解消箇所 |
+|---|---|
+| [Must]1 `filter_rejected` の ledger 読込 fail-open が `(OSError, UnicodeDecodeError)` に限定され、`load_ledger()` が壊れた非object JSON行で出す `AttributeError` 等が貫通しうる | `_suppression.py`: `except Exception` に広げる（コメントで境界の契約と列挙が不完全な理由を明記） |
+| [Must]2(a) レコード値失敗（`decided_at`/`ttl_days` 不正）が `stats["candidate_errors"]` に記録されていない | `_suppression.py`: 境界②/③ 双方を `candidate_errors` に `boundary: "candidate_key"`/`"record_value"` 付きで記録 |
+| [Must]2(b) `stats["candidate_errors"]` が `_emit.py` の返り値に含まれていない | `_emit.py`: `suppression_candidate_errors` キーを追加（0件でも空リスト） |
+| [Must]3 `record_pending_rejection` の except が列挙型で、`record_rejection` 先（pj_slug 解決・store barrier）由来の未列挙例外（`RuntimeError` 等）が貫通しうる | `_suppression.py`: `except Exception` に広げる |
+| [Must]4 設計 §3.3 が「`bin/evolve-daily-run` の既存サマリ行」を宛先としていたが、`revert_generation_discarded` は `bin/evolve-daily-run` に存在せず読み手ゼロの書きっぱなしフィールドだった | §3.3 を訂正（打ち消し線 + round3 訂正注記）。表示層を `marker_error`/`dry_run_snapshot_warning` と同じ `cli.py:_summarize_result` に変更。実装配線・テスト（`test_summary_surfaces_reject_suppression_meta`）を追加 |
+| [Should] ledger 非object JSON行/未列挙例外/レコード値失敗のsurface/`_summarize_result`転記のテスト4種 | 各修正ごとに「戻すと落ちる」ことを確認したテストを追加（報告参照） |
