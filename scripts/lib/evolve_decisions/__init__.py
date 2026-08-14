@@ -28,6 +28,7 @@ optimize_history へ冪等記録）。母集団は「混合でなく増量」を
 | `_queue.py` | pending キュー（emit/ingest 共有）: `resolve_slug` / `queue_path_for` / `read_queue` / `_write_queue` / `_queue_lock` |
 | `_marker.py` | 「未 drain 提案」マーカー（#402）: `marker_path` / `write_pending_marker` / `read_pending_marker` / purge 系 / `undrained_applied` |
 | `_candidates.py` | 提案候補抽出: `_extract_candidates`（discover/skill_evolve）/ `_advisory_pending`（advisory detector, #284）/ `_record_advisory_event`（advisory の surfaced/accept/reject/deferred 記録, #267 Sprint 1）/ `_load_recorder` |
+| `_suppression.py` | reject 抑制（#446）: `filter_rejected`（emit 側）/ `record_pending_rejection`（ingest 側）。`remediation.suppression_ledger` を薄い adapter 経由で流用 |
 | `_emit.py` | Phase A: `emit_decisions` |
 | `_ingest.py` | Phase C: `ingest_decisions` |
 | `_drain.py` | `evolve --drain` の実体: `drain_pending` / `_partition_orphaned`（#402, #376 AC5） |
@@ -148,6 +149,9 @@ from ._candidates import (  # noqa: E402
     _load_recorder,
     _record_advisory_event,
 )
+
+# ─── reject 抑制（#446, _suppression.py）───────────────────────────────────
+from ._suppression import filter_rejected, record_pending_rejection  # noqa: E402
 
 # ─── Phase A: emit（#383 で _emit.py へ抽出）───────────────────────────────
 from ._emit import emit_decisions  # noqa: E402

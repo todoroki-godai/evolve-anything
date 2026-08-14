@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **fix(evolve_decisions): reject された提案が次回 emit で再提示される不具合を修正
+  （#446）** — `proposal_id = f(repo_id, relative_path, before_sha)` は emit 側で reject
+  history を一切参照せず、reject 後も before_sha 不変なら無条件に再提示されていた。既存
+  `remediation.suppression_ledger`（TTL 既定45日・store_registry 登録済み）を薄い adapter
+  （`evolve_decisions/_suppression.py`: `filter_rejected` / `record_pending_rejection`）で
+  流用し、抑制キーは `proposal_id` そのもの（before_sha が変われば別 ID になり自動解除）。
+  `_emit.py` の advisory マージ完了直後・`_ingest.py` の advisory/skill 両レーン合流点の
+  2 chokepoint に配線し、advisory レーンの reject も同じ ledger で抑制される。fail-open は
+  ledger 読込/候補単位キー計算/レコード値の3境界に分離し、どの失敗でも「抑制しない」側に
+  倒す。新規ストア・新規 observability section は無し（#379 非抵触・既存 emit/ingest 結果
+  dict へのキー追加のみ）。TDD 33件・決定論・LLM 非依存。
 - **fix(fleet/audit): machinery（harness 注入の委譲メッセージ等）除外を fleet queue /
   audit observability にも透明化（ADR-054 PR2-a・#379 #400 #443）** — `filter_actionable`
   の machinery 軸（read 時除外）が `fleet.queue_materials` / `audit.sections_weak_signals` /

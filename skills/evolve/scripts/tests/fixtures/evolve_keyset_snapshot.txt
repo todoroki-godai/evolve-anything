@@ -49,9 +49,12 @@ evolve_decisions.marker_error
 evolve_decisions.marker_written
 evolve_decisions.pending
 evolve_decisions.persisted
+evolve_decisions.reject_suppressed
+evolve_decisions.reject_suppressed_total
 evolve_decisions.revert_generation_discarded
 evolve_decisions.run_id
 evolve_decisions.slug
+evolve_decisions.suppression_ledger_read_error
 generated_at
 growth_report
 growth_report.autopromoted_this_run
