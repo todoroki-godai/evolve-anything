@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, List, Optional
@@ -33,10 +34,13 @@ from typing import Iterator, List, Optional
 #     tool_result 行で誤ってリセットしていたバグを修正（prev_action が全件 null だった
 #     root cause）。両方とも新規 ingest 行にのみ効き、既存の v2 行は再 ingest migration
 #     （次PR）まで prev_action=null のまま残る。
+# v4: #445。``[Image #N]`` 画像添付プレースホルダを strip（実コーパス実測: bare 添付
+#     0件・全件が同じ text block 内に人間の実テキストを伴う。全文除外でなく strip）。
+#     マーカーのみ（strip 後に空）の行は非発話として除外する。
 # （既存の書込済み行は増分 ingest（mtime 判定）では再走査されないため遡及修正されない。
 # EXTRACTOR_VERSION は将来 version 差分ベースの再抽出/purge を実装する際の準備として
 # 記録するのみで、本 PR 時点でそれを読む consumer はまだ無い）。
-EXTRACTOR_VERSION = 3
+EXTRACTOR_VERSION = 4
 
 # 長文ペーストの閾値（字数）。これを超えると source_kind='long_paste'。
 LONG_PASTE_THRESHOLD = 2000
@@ -118,15 +122,36 @@ def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+# #445: Claude Code CLI が画像添付時に text block へ自動挿入する位置マーカー
+# （実コーパス実測: corrections.jsonl 37件全件が bare でなく、同じ text block 内に
+# 人間の実指摘が続く。例「[Image #1] Codeタブってないよ」）。マーカーだけを除去し、
+# 周辺の人間の実テキストは残す（全文除外ではなく strip。#N 形式に厳密一致させ
+# 「[Image processing failed]」のような偶然似た文言を誤って触らない）。
+_IMAGE_PLACEHOLDER_RE = re.compile(r"\[Image\s*#\d+\]")
+
+
+def _strip_image_placeholders(text: str) -> str:
+    """テキストから ``[Image #N]`` プレースホルダを除去する（#445）。
+
+    全行が marker のみ（bare な画像添付）なら空文字を返す（呼び出し側で
+    「発話でない」として扱う）。
+    """
+    if not text:
+        return text
+    return _IMAGE_PLACEHOLDER_RE.sub("", text).strip()
+
+
 def _extract_text(content) -> Optional[str]:
     """user message.content から human テキストを取り出す。
 
     - str: そのまま human テキスト
     - list: text block のみ結合。tool_result block が 1 つでもあれば None（発話でない）
     - それ以外: None
+
+    いずれの経路でも ``[Image #N]`` プレースホルダ（#445）を strip する。
     """
     if isinstance(content, str):
-        return content
+        return _strip_image_placeholders(content)
     if isinstance(content, list):
         parts: List[str] = []
         for block in content:
@@ -141,7 +166,7 @@ def _extract_text(content) -> Optional[str]:
                     parts.append(t)
         if not parts:
             return None
-        return "\n".join(parts)
+        return _strip_image_placeholders("\n".join(parts))
     return None
 
 
