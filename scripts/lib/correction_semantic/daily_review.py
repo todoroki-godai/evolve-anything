@@ -167,9 +167,10 @@ def record_reviewed(
 def _read_new(
     pj_slug: str,
     *,
-    weak_signals_path: Optional[Path],
+    weak_signals_path: Optional[Path] = None,
     seen_keys: Set[str],
     marker_base: Optional[Path] = None,
+    scoped: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """当該 PJ slug の「新規」未昇格 content-rich weak_signal を返す（#99）。
 
@@ -190,10 +191,15 @@ def _read_new(
     であること。channel は filter_actionable の関知しない軸なので、promoted/TTL/reviewed/
     bootstrap/machinery の判定と独立に先に絞ってよい）。呼び出し元 ``build_review`` が既に
     読んだ ``seen_keys`` を ``seen_keys=`` でそのまま渡し、既読ストアの二重 read を避ける。
+
+    ``scoped``（codex [Should]1 是正）: ``build_review`` が ``machinery_exclusion_stats`` と
+    同じスナップショットを渡すための注入口。省略時（既存呼び出し互換）は従来どおり
+    ``_scoped_review_candidates`` で ``weak_signals_path`` から自前に読み直す。
     """
     from correction_semantic.promote import filter_actionable
 
-    scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
+    if scoped is None:
+        scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
     return filter_actionable(
         scoped, pj_slug, seen_keys=seen_keys, marker_base=marker_base,
     )
@@ -386,17 +392,19 @@ def build_review(
     同一の挙動になる。marker が存在しない PJ は素通し（除外なし・挙動不変）。
     """
     seen_keys = read_reviewed_keys(seen_path)
+    # codex [Should]1 是正: scoped 母集団は一度だけ読み、_read_new と
+    # machinery_exclusion_stats に同じスナップショットを渡す（読みの間に store が
+    # 更新されると surface した除外件数と実候補数が食い違う race を防ぐ）。
+    scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
     new_records = _read_new(
         pj_slug,
-        weak_signals_path=weak_signals_path,
         seen_keys=seen_keys,
         marker_base=marker_base,
+        scoped=scoped,
     )
-    # #443 PR2-a: 除外は黙って減らさない（silence != evaluated）。scoped 母集団は
-    # _read_new と同じ単一ソース（_scoped_review_candidates）から取り直す。
+    # #443 PR2-a: 除外は黙って減らさない（silence != evaluated）。
     from correction_semantic.promote import machinery_exclusion_stats
 
-    scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
     machinery_stats = machinery_exclusion_stats(
         scoped, pj_slug, seen_keys=seen_keys, marker_base=marker_base,
     )

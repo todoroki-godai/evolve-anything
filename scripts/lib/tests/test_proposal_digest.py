@@ -175,6 +175,36 @@ def test_single_pj_occurrence_stays_in_per_pj_not_global(tmp_path: Path):
     assert len(out["per_pj"]["pj-a"]) == 1
 
 
+# ─────────────────────────────────────────────────────────────────
+# excluded_machinery_by_pj（codex [Must]1・#443 PR2-a）
+# ─────────────────────────────────────────────────────────────────
+def test_build_proposal_digest_surfaces_excluded_machinery_by_pj(tmp_path: Path):
+    """build_review の excluded_machinery_total/by_channel を per_pj と同じ持ち方
+    （{slug: {...}}）で digest 側にも集約する（従来は捨てられ利用者に見えなかった）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("生きてる指摘", 1, "pj-a"),
+            _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 2, "pj-a"),
+        ],
+        path=ws,
+    )
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    assert out["excluded_machinery_by_pj"] == {
+        "pj-a": {"total": 1, "by_channel": {"llm_judge": 1}},
+    }
+    # 除外対象は groups に載らない（machinery は build_review 側で既に除外済み）。
+    assert len(out["per_pj"]["pj-a"]) == 1
+
+
+def test_build_proposal_digest_no_machinery_key_when_none_excluded(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("生きてる指摘", 1, "pj-a")], path=ws)
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    assert "pj-a" not in out["excluded_machinery_by_pj"]
+
+
 def test_global_group_carries_project_paths_from_queue_entries(tmp_path: Path):
     """#412 [Must]4: digest は各 PJ の project_path（queue エントリの絶対パス）を保持する。"""
     ws = tmp_path / "weak_signals.jsonl"
@@ -613,6 +643,20 @@ def test_build_proposal_systemmessage_caps_at_max_session_proposals():
     assert "rep0" in msg
     assert "rep1" in msg
     assert "rep2" not in msg
+
+
+def test_build_proposal_systemmessage_appends_machinery_note_when_excluded():
+    """codex [Must]1: formatter が excluded_machinery を受け取ったら透明化する（silence != evaluated）。"""
+    groups = [_group(["k1"], rep="rep1")]
+    msg = pd.build_proposal_systemmessage(groups, excluded_machinery=3)
+    assert "machinery" in msg
+    assert "3" in msg
+
+
+def test_build_proposal_systemmessage_silent_when_no_machinery_excluded():
+    groups = [_group(["k1"], rep="rep1")]
+    msg = pd.build_proposal_systemmessage(groups, excluded_machinery=0)
+    assert "machinery" not in msg
 
 
 def test_build_proposal_systemmessage_lists_all_representatives_for_merged_group():

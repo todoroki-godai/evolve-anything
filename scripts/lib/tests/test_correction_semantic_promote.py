@@ -219,6 +219,72 @@ def test_machinery_exclusion_stats_excludes_already_promoted() -> None:
     assert stats == {"total": 0, "by_channel": {}}
 
 
+def test_machinery_exclusion_stats_matches_actionable_diff_across_axes(
+    tmp_path: Path,
+) -> None:
+    """codex [Should]2: 最重要契約を固定する ——
+
+    ``_filter_actionable_without_machinery(...) - filter_actionable(...)``
+    （machinery を理由に落ちたレコードの実差分）が常に ``machinery_exclusion_stats(...)``
+    の件数・channel 内訳と一致すること。TTL 失効 / reviewed / bootstrap 消化済み /
+    ``pj_slug=None`` を横断して固定する（今回のような軸追加で machinery_exclusion_stats
+    だけが取り残されて再びズレたら、この契約が壊れて検知できる）。
+    """
+    from collections import Counter
+
+    now = datetime.now(timezone.utc)
+    fresh = _fresh_detected_at()
+    stale = (now - timedelta(days=46)).isoformat()
+    before_marker = (now - timedelta(days=3)).isoformat()
+
+    kept = _sig("残る", 1, fresh)
+    machinery_kept = _sig(
+        "<teammate-message>残る候補群の machinery</teammate-message>", 2, fresh,
+    )
+    ttl_expired = _sig("TTL失効・非machinery", 3, stale)
+    ttl_expired_machinery = _sig(
+        "<teammate-message>TTL失効かつmachinery</teammate-message>", 4, stale,
+    )
+    reviewed = _sig("既読・非machinery", 5, fresh)
+    reviewed_machinery = _sig(
+        "<teammate-message>既読かつmachinery</teammate-message>", 6, fresh,
+    )
+    promoted = _sig("昇格済み", 7, fresh, promoted=True)
+    pre_marker = _sig("marker前・非machinery", 8, before_marker)
+    pre_marker_machinery = _sig(
+        "<teammate-message>marker前かつmachinery</teammate-message>", 9, before_marker,
+    )
+
+    marker = tmp_path / f"bootstrap_done-{SLUG}.marker"
+    marker.write_text((now - timedelta(days=1)).isoformat(), encoding="utf-8")
+
+    all_sigs = [
+        kept, machinery_kept, ttl_expired, ttl_expired_machinery,
+        reviewed, reviewed_machinery, promoted, pre_marker, pre_marker_machinery,
+    ]
+    records = [s.to_record() for s in all_sigs]
+    seen_keys = {reviewed.signal_key, reviewed_machinery.signal_key}
+
+    for pj_slug in (SLUG, None):
+        without_machinery = cs_promote._filter_actionable_without_machinery(
+            records, pj_slug, seen_keys=seen_keys, marker_base=tmp_path,
+        )
+        actionable = cs_promote.filter_actionable(
+            records, pj_slug, seen_keys=seen_keys, marker_base=tmp_path,
+        )
+        stats = cs_promote.machinery_exclusion_stats(
+            records, pj_slug, seen_keys=seen_keys, marker_base=tmp_path,
+        )
+
+        actionable_keys = {r.get("signal_key") for r in actionable}
+        diff_records = [
+            r for r in without_machinery if r.get("signal_key") not in actionable_keys
+        ]
+        assert len(diff_records) == stats["total"], pj_slug
+        diff_by_channel = Counter(r.get("channel", "unknown") for r in diff_records)
+        assert dict(diff_by_channel) == stats["by_channel"], pj_slug
+
+
 def test_filter_actionable_pj_slug_none_skips_bootstrap_but_keeps_other_axes(
     tmp_path: Path,
 ) -> None:

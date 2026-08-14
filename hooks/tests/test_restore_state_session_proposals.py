@@ -104,6 +104,38 @@ def test_build_fires_with_proposals_for_this_pj(tmp_path, monkeypatch):
     assert output["digest"] == "改善案1件"
 
 
+def test_build_surfaces_excluded_machinery_for_this_pj(tmp_path, monkeypatch):
+    """codex [Must]1（#443 PR2-a）: digest の excluded_machinery_by_pj[slug] を systemMessage
+    に表示する（formatter/consumer まで表示を通す）。"""
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {
+        "per_pj": {slug: [_group(["k1"])]},
+        "global": [],
+        "excluded_machinery_by_pj": {slug: {"total": 2, "by_channel": {"llm_judge": 2}}},
+    })
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    assert "machinery" in output["systemMessage"]
+    assert "2" in output["systemMessage"]
+
+
+def test_build_silent_on_machinery_when_other_pj_excluded(tmp_path, monkeypatch):
+    """他 PJ 分の machinery 除外は当該 PJ の systemMessage に混入しない（slug スコープ）。"""
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {
+        "per_pj": {slug: [_group(["k1"])]},
+        "global": [],
+        "excluded_machinery_by_pj": {"other-pj": {"total": 9, "by_channel": {"llm_judge": 9}}},
+    })
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    assert "machinery" not in output["systemMessage"]
+
+
 def test_build_returns_none_when_no_proposals_for_this_pj(tmp_path, monkeypatch):
     source = _install_env(tmp_path, monkeypatch)
     _set_project_dir(tmp_path, monkeypatch)

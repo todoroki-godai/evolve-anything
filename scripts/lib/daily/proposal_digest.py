@@ -263,7 +263,8 @@ def build_proposal_digest(
 ) -> Dict[str, Any]:
     """queue の待ち PJ から改善案 digest を生成する（決定論・read-only・LLM 非依存）。
 
-    Returns: {"generated_at": iso, "per_pj": {slug: [group, ...]}, "global": [group, ...]}
+    Returns: {"generated_at": iso, "per_pj": {slug: [group, ...]}, "global": [group, ...],
+              "project_paths": {slug: path}, "excluded_machinery_by_pj": {slug: {...}}}
 
     1 PJ の digest 生成が例外を投げても他 PJ の digest 生成は継続する（fail-open）。
     ``data_dir`` 未指定時は各ストアの本番既定パス（DATA_DIR 環境変数解決）を使う。
@@ -280,6 +281,11 @@ def build_proposal_digest(
         marker_base = data_dir
 
     per_pj: Dict[str, List[Dict[str, Any]]] = {}
+    # codex [Must]1 是正: build_review() が返す excluded_machinery_total/by_channel
+    # （#443 PR2-a・silence != evaluated）を per_pj/project_paths と同じ持ち方
+    # （{slug: ...} の辞書）で digest 側にも集約する。捨てると朝の digest 経路だけ
+    # 候補数が減るのに除外件数が利用者に見えなくなる。
+    excluded_machinery_by_pj: Dict[str, Dict[str, Any]] = {}
     for slug in _pj_slugs(queue_entries):
         try:
             review = _daily_review.build_review(
@@ -296,6 +302,12 @@ def build_proposal_digest(
         groups = [_slim_group(g) for g in (review.get("groups") or [])]
         if groups:
             per_pj[slug] = groups
+        machinery_total = review.get("excluded_machinery_total") or 0
+        if machinery_total:
+            excluded_machinery_by_pj[slug] = {
+                "total": machinery_total,
+                "by_channel": review.get("excluded_machinery_by_channel") or {},
+            }
 
     global_groups, per_pj = _extract_global_groups(per_pj)
 
@@ -306,6 +318,9 @@ def build_proposal_digest(
         # #412 [Must]4: global group を PJ ごとの --project-path で正しく帰属させるための
         # 絶対パス表（queue エントリが既に持つ project_path をそのまま転記・新しい解決経路は作らない）。
         "project_paths": _pj_project_paths(queue_entries),
+        # codex [Must]1（#443 PR2-a）: machinery 除外件数を slug 別に透明化する
+        # （silence != evaluated）。0 件の slug はキーを持たない（他の {slug: ...} 辞書と同じ流儀）。
+        "excluded_machinery_by_pj": excluded_machinery_by_pj,
     }
 
 
@@ -461,7 +476,9 @@ def build_proposal_prompt(
     return "\n".join(lines)
 
 
-def build_proposal_systemmessage(groups: List[Dict[str, Any]]) -> str:
+def build_proposal_systemmessage(
+    groups: List[Dict[str, Any]], *, excluded_machinery: int = 0,
+) -> str:
     """改善案の代表テキストを systemMessage（user 可視チャネル）本文として組み立てる（#412 [Must]1）。
 
     additionalContext（Claude 可視）だけでは、ユーザーがコマンドを打つまで中身が見えない。
@@ -472,6 +489,10 @@ def build_proposal_systemmessage(groups: List[Dict[str, Any]]) -> str:
     instruction 遵守に依存しており機械的に保証できない。実際に保証できるのは「応答の後で
     採否を聞く」という意図の伝達までで、聞き逃された場合は次回また出る（表示されなかった
     場合に何が起きるかを正確に書く）。
+
+    ``excluded_machinery``（codex [Must]1・#443 PR2-a）: この PJ の digest 生成時に machinery
+    （委譲メッセージ等の harness 注入）を理由に候補から除外した件数。>0 のときだけ末尾に
+    1行添える（silence != evaluated）。0 のときは従来どおりノイズを足さない。
     """
     reps: List[str] = []
     for g in groups[:MAX_SESSION_PROPOSALS]:
@@ -488,12 +509,19 @@ def build_proposal_systemmessage(groups: List[Dict[str, Any]]) -> str:
             if rep and rep not in reps:
                 reps.append(rep)
     if not reps:
-        return (
+        base = (
             "[evolve-anything] 改善案があります。応答のあとで採否をお聞きします。"
             "表示されなかった場合は未処理のまま次回また出ます。"
         )
-    joined = " / ".join(f"「{r}」" for r in reps)
-    return (
-        f"[evolve-anything] 改善案があります: {joined}。応答のあとで採否をお聞きします。"
-        "表示されなかった場合は未処理のまま次回また出ます。"
-    )
+    else:
+        joined = " / ".join(f"「{r}」" for r in reps)
+        base = (
+            f"[evolve-anything] 改善案があります: {joined}。応答のあとで採否をお聞きします。"
+            "表示されなかった場合は未処理のまま次回また出ます。"
+        )
+    if excluded_machinery > 0:
+        base += (
+            f" （machinery 除外 {excluded_machinery} 件は委譲メッセージ等の harness 注入のため"
+            "候補に含まれていません・実際に確認可能な件数には含まれていません・#443）"
+        )
+    return base

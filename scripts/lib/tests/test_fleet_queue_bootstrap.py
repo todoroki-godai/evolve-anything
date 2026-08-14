@@ -35,6 +35,21 @@ def _sig(text: str, line_no: int, detected_at: str, pj_slug: str = SLUG) -> Weak
     )
 
 
+def _machinery_sig(line_no: int, detected_at: str, pj_slug: str = SLUG) -> WeakSignal:
+    """harness 注入テキスト（委譲メッセージ）を持つ machinery signal（#443 PR2-a codex [Should]2）。"""
+    return WeakSignal(
+        channel="llm_judge",
+        provenance={
+            "source_path": "/a.jsonl",
+            "line_no": line_no,
+            "text": "<teammate-message>委譲メッセージ本文</teammate-message>",
+        },
+        detected_at=detected_at,
+        session_id="s1",
+        pj_slug=pj_slug,
+    )
+
+
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
@@ -210,3 +225,27 @@ def test_format_queue_table_weak_semantics_absent_when_empty():
 
     out = format_queue_table({"queue": [], "tracked_total": 5, "threshold": 5})
     assert "WEAK は content-rich 未処理のみ" not in out
+
+
+def test_bootstrap_consumed_by_pj_unaffected_by_machinery(tmp_path):
+    """codex [Should]2 回帰テスト: machinery（委譲メッセージ等の harness 注入）が混在しても
+    bootstrap_consumed_by_pj は bootstrap 軸だけを反映する（machinery は二重計上されない）。
+
+    machinery は ``filter_actionable(scoped, None)`` の時点で（bootstrap 消化除外の前に）
+    落ちるため、marker 前後どちらの machinery レコードも consumed 集計に混ざらない
+    （codex が「壊れていない」と確認した契約を固定する）。
+    """
+    now = datetime.now(timezone.utc)
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("old", 1, _iso(now - timedelta(days=3))),        # marker 前・非machinery → consumed
+            _sig("new", 2, _iso(now - timedelta(hours=1))),       # marker 後・非machinery → 残る
+            _machinery_sig(3, _iso(now - timedelta(days=3))),     # marker 前・machinery → 集計対象外
+            _machinery_sig(4, _iso(now - timedelta(hours=1))),    # marker 後・machinery → 集計対象外
+        ],
+        path=ws,
+    )
+    _write_marker(tmp_path, SLUG, _iso(now - timedelta(days=1)))
+    # machinery 2件の有無に関わらず、consumed は非machinery の marker 前1件のみ。
+    assert bootstrap_consumed_by_pj(SLUG, weak_signals_path=ws, marker_base=tmp_path) == 1

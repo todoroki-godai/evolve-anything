@@ -512,10 +512,23 @@ def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | Non
         # #412 [Must]4: global レーンの group を PJ ごとの --project-path で正しく帰属させる。
         proposals = queue_data.get("proposals")
         project_paths = proposals.get("project_paths") if isinstance(proposals, dict) else None
+        # codex [Must]1（#443 PR2-a）: digest 生成時に machinery（委譲メッセージ等の harness
+        # 注入）を理由に除外した件数を当該 slug 分だけ取り出し、systemMessage に表示する
+        # （build_proposal_digest が捨てていたキーを formatter/consumer まで通す）。
+        excluded_machinery = 0
+        machinery_by_pj = (
+            proposals.get("excluded_machinery_by_pj") if isinstance(proposals, dict) else None
+        )
+        if isinstance(machinery_by_pj, dict):
+            entry = machinery_by_pj.get(slug)
+            if isinstance(entry, dict):
+                excluded_machinery = entry.get("total") or 0
         message = _proposal_digest.build_proposal_prompt(
             groups, slug, reflect_cmd=reflect_cmd, project_paths=project_paths,
         )
-        system_message = _proposal_digest.build_proposal_systemmessage(groups)
+        system_message = _proposal_digest.build_proposal_systemmessage(
+            groups, excluded_machinery=excluded_machinery,
+        )
         # hookEventName は ADR-038 のスキーマ必須項目（subagent_observe.py と同型）。
         # 省略すると additionalContext が解釈されず機能が無言で死ぬ。
         return {

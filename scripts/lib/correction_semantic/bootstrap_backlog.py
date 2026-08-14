@@ -379,6 +379,8 @@ def _scope_backlog_candidates(
 def _read_backlog(
     pj_slug: str,
     weak_signals_path: Optional[Path],
+    *,
+    candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """当該 PJ slug の未昇格 content-rich backlog を返す（TTL 失効・machinery は除外）。
 
@@ -389,25 +391,36 @@ def _read_backlog(
     ``correction_semantic.promote.is_machinery_signal``（既存5 reader の単一 predicate
     ``filter_actionable`` と同じ述語）で除外する。ここを落とすと Step 6.1（bootstrap）と
     Step 6.2（daily_review）で母集団が分裂する。
+
+    ``candidates``（codex [Should]1 是正）: ``build()`` が ``_machinery_backlog_stats`` と
+    同じスナップショットを渡すための注入口。省略時（既存呼び出し互換）は従来どおり
+    ``_scope_backlog_candidates`` で自前に読み直す。
     """
     from correction_semantic.promote import is_machinery_signal
 
-    candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
+    if candidates is None:
+        candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
     return [r for r in candidates if not is_machinery_signal(r)]
 
 
 def _machinery_backlog_stats(
     pj_slug: str,
     weak_signals_path: Optional[Path],
+    *,
+    candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """当該 PJ backlog 候補のうち machinery で除外した件数を channel 別に集計する（#443）。
 
     除外は黙って減らさない（silence != evaluated）。``build()`` が返り値に
     ``excluded_machinery_total`` / ``excluded_machinery_by_channel`` として載せる。
+
+    ``candidates``（codex [Should]1 是正）: ``_read_backlog`` と同じスナップショットを
+    渡すための注入口。省略時は従来どおり自前に読み直す（後方互換）。
     """
     from correction_semantic.promote import is_machinery_signal
 
-    candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
+    if candidates is None:
+        candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
     total = 0
     by_channel: Dict[str, int] = {}
     for r in candidates:
@@ -580,8 +593,14 @@ def build(
             "dry_run": dry_run,
         }
 
-    backlog = _read_backlog(pj_slug, weak_signals_path)
-    machinery_stats = _machinery_backlog_stats(pj_slug, weak_signals_path)
+    # codex [Should]1 是正: scope 母集団は一度だけ読み、_read_backlog と
+    # _machinery_backlog_stats に同じスナップショットを渡す（読みの間に store が
+    # 更新されると surface した除外件数と実候補数が食い違う race を防ぐ）。
+    scope_candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
+    backlog = _read_backlog(pj_slug, weak_signals_path, candidates=scope_candidates)
+    machinery_stats = _machinery_backlog_stats(
+        pj_slug, weak_signals_path, candidates=scope_candidates,
+    )
     groups = group_signals(backlog)
     # 他 PJ confirmed 一致 group を先頭へ + cross_pj_confirmed 付与（#462・read 専用）。
     from correction_semantic.cross_pj_priority import prioritize as _prioritize
