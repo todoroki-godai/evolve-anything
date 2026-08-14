@@ -61,24 +61,34 @@ worktree 非依存"）は **`before_sha` を含まない**。`_ingest.py:112-114
 
 → §3.1 で両案を比較。
 
-### 2.3 accept 後の再生成 — 両方の解釈
+### 2.3 accept 後の再生成 — 解釈の整理（2026-08-14 改訂: 早期解除の専用機構は削除）
 
-**解釈A（現状維持でよい）**: 「別の提案」。accept は実際にファイル内容を変えた行為であり、
-新しい `before_sha` はその新しい世代に対する正当な新規識別子である。抑制すべきは
-「同じ内容に対する同じ判断の繰り返し」であって、「内容が変わった後の再提案」まで抑制すると
-「1回 accept したら二度とそのファイルへ提案が来ない」という別の欠陥を生む。
+**解釈A（採用）**: 「別の提案」。accept は実際にファイル内容を変えた行為であり、新しい
+`before_sha`（＝新しい `proposal_id`）はその新しい世代に対する正当な新規識別子である。
+抑制すべきは「同じ内容に対する同じ判断の繰り返し」であって、「内容が変わった後の再提案」まで
+抑制すると「1回 accept したら二度とそのファイルへ提案が来ない」という別の欠陥を生む。
 **帰結**: #446 の修正対象は reject 側のみでよく、accept 側の ID 再生成ロジックには一切手を
 入れない。
 
-**解釈B（accept を抑制解除のトリガーにする）**: reject 抑制を `(repo_id, relative_path)` 単位
-（before_sha 非依存）で行う場合、同じ path に対する **accept** は「その path の状態が実質的に
-進んだ」ことを意味するので、**その path に残っている reject 抑制レコードを早期に無効化してよい**
-（TTL 満了を待たずに）。これは accept 側のコードを変えるのではなく、抑制側（reject 判定ロジック）
-に「対象 path の最新 optimize_history イベントが reject より新しい accept なら抑制しない」という
-1条件を足すだけで実現できる。
+**解釈B（当初案）は独立の仕組みとして不要と判明した**（codex [Must]1・[Must]4 を反映。
+初版で示した「`(repo_id, relative_path)` の粗い抑制キー + accept を検知して早期解除する」
+という2段構えの設計は撤回する）。抑制キーを `proposal_id`（= `(repo_id, relative_path,
+before_sha)`、§3.1）に訂正した結果、**解釈Bが達成したかったこと（内容が実質的に変わったら
+抑制を解く）は before_sha の変化それ自体で自動的に起きる**: reject 後に accept（＝ファイル
+内容の変化）が起きれば `before_sha` が変わり、次回 emit は別の `proposal_id` を生成する。
+その新しい ID は ledger に reject 記録が無いので抑制されない。
 
-**両者は排他ではない**: 解釈Aは「ID 計算方式は変えない」という結論、解釈Bは「抑制判定に
-accept を考慮する」という結論で、**両方採用可能**（推奨）。詳細は §5 未解決の論点2。
+`optimize_history` を読んで「reject より新しい accept があるか」を照合する専用ロジックは
+持たない（削除）。理由は3点: ① before_sha の変化と accept 検知という**二重の解除経路**を
+持つと、実際にどちらが効いたか判別しにくくなる ② `load_effective_history()` は「その
+path の最新イベント種別」を直接返す形になっておらず、reject entry には path 自体が無く・
+revert イベント自体や revert 済み accept は `fold_effective()` で除外される
+（`optimize_history_store.py:292-314`）ため「path 単位の最新状態」を安全に再構成する専用
+ロジックが別途必要になる ③ ①②のコストに見合う効果が無い（before_sha 変化だけで同じ結果が
+得られる）。
+
+**帰結**: #446 の修正は reject 側の抑制ロジック追加のみで完結する。accept 側・`before_sha`
+の計算ロジック・`optimize_history` の読み方には一切手を入れない。
 
 ### 2.4 実データでの規模（read-only 実測・`~/.claude/evolve-anything/`）
 
@@ -111,147 +121,313 @@ $ evolve_decisions/*.jsonl（現在の pending 件数）
 
 ## 3. 設計
 
-### 3.1 抑制の単位（レーン別）
+### 3.1 抑制の単位 と emit/ingest 側の実装契約（2026-08-14 改訂: codex [Must]1/[Must]2/[Must]5/[Must]6 を反映）
 
-| レーン | 抑制キー | 実装 |
-|---|---|---|
-| advisory | `proposal_id`（そのまま） | `advisory_decision_log.read_advisory_decisions(slug)` を emit 直前に1回読み、`proposal_id` ごとに直近の terminal decision を求める（`recorded_at` 最大）。`reject` かつ §3.2 の TTL 内なら emit から除外 |
-| skill_diff / skill_evolve | `(repo_id, relative_path)`。**`before_sha` は含めない**（#446 の結論どおり。含めると reject 抑制として機能しない） | §3.1-b（下記）で新設が要るため2案を提示 |
+**抑制キー = `proposal_id`（`entry["id"]`）そのもの**（レーン共通。codex [Must]1 を反映し、
+旧稿の `(repo_id, relative_path)` への粗粒度化は撤回する）。
 
-`repo_id`/`relative_path` が entry に無い（§2.4 の旧スキーマ実測）場合のフォールバック:
-`skill_path`（旧フィールド）から `evolve_decision_ids.repo_identity()` を呼び直して
-`(repo_id, relative_path)` を導出する（`_emit.py` が候補ごとに毎回計算しているのと同じ関数。
-新しい解決経路は作らない）。それでも解決できない（非 git など）場合は
-**抑制しない（fail-open）** — 誤って過剰抑制するより、稀に再提示される方が安全側
-（`is_orphaned_worktree` の「判定不能なら保守的に残す」と同じ設計判断）。
+**なぜ粗粒度化を撤回したか**: `_extract_candidates()` が同一 `skill_path` を1件に畳むのは
+**同一 run 内**だけである（`_candidates.py:90,100-102`）。reject 後に手動編集・discover
+pattern の変化・別 run の再検出が起きれば、同じ path に**別内容**の提案が実在しうる。
+`before_sha` を含む既存の `proposal_id` をそのまま抑制キーに使えば、reject 後に内容が
+不変なら次回も同じ ID になり抑制が効く（#446 の本旨どおり）一方、内容が変われば別 ID に
+なり自然に抑制対象から外れる（§2.3 で述べたとおり、解釈Bが求めていた「実質的な変化での
+解除」を専用ロジック無しで実現する）。
 
-**skill_diff/skill_evolve の実装2案**（§2.2 の棚卸しに基づく）:
+`entry["id"]` は emit の最も早い段階で計算され（skill_diff/skill_evolve: `_emit.py:192`
+の `proposal_id_from_identity(identity, before_sha)`。advisory: `_candidates.py:57` の
+`proposal.id`、detector+相対targets ベースで before_sha 非依存）、**旧スキーマの pending
+entry（§2.4 実測: `repo_id`/`relative_path` を持たない entry）にも必ず存在する**。
+したがって抑制キーの計算に `repo_id`/`relative_path` の解決可否は一切影響しない
+（codex [Must]6 が懸念した「reject 記録時の `repo_identity()` 再導出」は構造的に不要になる
+——旧スキーマ問題は §3.1-b の「表示用ラベル」にのみ残る非機能要件）。
 
-**案(A) — `optimize_history` の reject entry を拡張する**
+**レーン間の意味差（codex [Should] への回答）**: advisory の `proposal_id` は
+detector+target ベースで**内容世代非依存**（同じ検出結果である限り ID は変わらない）のに対し、
+skill_diff/skill_evolve の `proposal_id` は **内容世代単位**（before_sha が変われば別 ID）。
+この結果、reject 抑制の効き方に非対称が生じる: skill レーンは対象ファイルの内容が変われば
+自動的に抑制が解ける一方、advisory レーンは検出条件（対象ファイルの該当箇所）が変わらない
+限り TTL（45日）まで抑制され続ける。**この非対称は許容する**（advisory 側に別途 accept/
+対象消滅/内容変更ベースの早期解除を追加しない。§5 論点1で判断根拠を示す）。
 
-`fitness_evolution.record_evolve_diff_decision` の `entry` 構築（`fitness_evolution.py:220-232`）
-に `repo_id`/`relative_path` を無条件で追加する（現状 `revert_fields` は accept 限定だが、
-この2フィールドは軽量な識別子であり `revert_before_b64`（本文・decision2 が本文を持たせない
-理由）とは別物として扱う）。`_ingest.py:104-105` の reject 分岐でも
-`entry.get("repo_id")`/`entry.get("relative_path")` を渡すよう1行追加する。emit 側は
-`optimize_history_store.load_effective_history(slug)` を読み、`human_accepted is False` かつ
-`(repo_id, relative_path)` が候補と一致する最新レコードを見る。
+#### 3.1-a データフロー（2箇所への挿入。単一の filter chokepoint）
 
-- 長所: 新規ストアもフィールド追加も**既存の唯一の判断台帳**に集約される。読み手が1箇所で済む
-- 短所: `optimize_history` は fitness calibration の母集団（母集団の均質性が既存の設計原則）。
-  抑制目的のフィールドを混ぜると「何のための行か」を汚す懸念。`record_evolve_diff_decision` は
-  optimize.py/run_loop.py とも共有される関数（`_emit.py` 外の2 writer）なので、影響範囲が
-  `evolve_decisions` だけに閉じない
+```
+emit 側（_emit.py）:
+  pending 確定（_emit.py:217 の seen_ids 構築直後）
+    → suppression.filter_rejected(pending, slug=slug) を呼ぶ
+    → 戻り値 kept を後続のキュー書込（_emit.py:239-250）・マーカー書込（_emit.py:257-269）
+      の両方に使う（元の pending でなく kept を使うことで二重 writer 問題を避ける・§2.1 と同じ
+      chokepoint 設計）
+    → 戻り値 stats を emit_decisions() の返り値へ meta キーとして追加（§3.3）
 
-**案(B) — `remediation.suppression_ledger` を流用する（推奨）**
+ingest 側（_ingest.py の reject 分岐、_ingest.py:104-148 のループ内）:
+  kind=="reject" で record_evolve_diff_decision を呼んだ直後（既存呼び出しは変更しない）
+    → suppression.record_pending_rejection(entry, slug=slug) を呼ぶ
+    → 失敗（例外）しても pid を rejected_out へ積む処理・キュー消化は続行する（§3.1-c）
+    → 失敗はリストに集め、ingest_decisions() の返り値へ meta キーとして追加
+```
 
-`_ingest.py` の reject 分岐（`_ingest.py:104-105` 付近）で、`record_evolve_diff_decision` 呼び出しに
-加えて `remediation.suppression_ledger.record_rejection(issue, slug=slug, ttl_days=45)` を呼ぶ。
-`issue` は `{"type": "evolve_diff", "file": f"{repo_id}::{relative_path}", "detail": {"path": relative_path}}`
-のように組み立てる（`dedup_key` が `type` を hash 入力に含む＝remediation 本来の dedup_key と
-衝突しない）。emit 側は `remediation.suppression_ledger.filter_suppressed(candidates_as_issues, slug=slug)`
-で `suppressed` を除外する。
+#### 3.1-b 新設する薄い adapter（`remediation.suppression_ledger` は無改造のまま呼ぶだけ）
 
-- 長所: **新規ストア・新規フィールドとも不要**（`remediation_suppression/<slug>.jsonl` は
-  既に `shrink_freeze.py:89` で登録済み）。TTL・再評価は実装済み・テスト済みのコードをそのまま
-  使う。`optimize_history` の母集団を一切汚さない
-- 短所: 「remediation」という名前の store に evolve_diff/skill_evolve 由来の抑制が混在する
-  （命名が示す意味と実際の用途がズレる）。ただし `dedup_key` に `type` が入るため**実害
-  （キー衝突）は無い**。将来 store を汎用名へ rename するなら別 issue
+codex [Should]「`filter_suppressed()` は既存 remediation 用の汎用関数なので、evolve固有の
+早期解除やmetadata取得を無理に載せるより、ledgerの `load_ledger()` と `dedup_key()` を使う
+薄い evolve adapter を既存 `evolve_decisions` 内に置く方が契約が明瞭」を第一候補として採用する。
 
-**推奨: 案(B)**。理由は上記に加え、#379 の「新設凍結」の趣旨（機能を増やさない）に最も忠実
-（案Aも新規ストアではないが `record_evolve_diff_decision` という共有関数のスキーマを触る分、
-影響範囲が広い）。命名の違和感は軽微な doc コメントで緩和できる。
+**なぜ `filter_suppressed()` をそのまま呼べないか（codex [Must]2）**: `filter_suppressed()`
+は **issue dict を受け取り issue dict を返す**契約（`suppression_ledger.py:202-228`）。
+pending entry ↔ issue の対応を呼び出し側で復元する処理が別途要り、順序・重複の保持を保証
+する仕組みも既存関数には無い。`load_ledger()`（生の dict 読み取り・副作用なし）と
+`dedup_key()`（キー計算・副作用なし）という**2つのプリミティブだけ**を借り、pending entry の
+形のまま evolve 側で判定する adapter を書く方が対応関係が明瞭になる。
 
-### 3.2 TTL / 解除条件
+新設場所: `scripts/lib/evolve_decisions/_suppression.py`（`_emit.py`/`_ingest.py`/
+`_candidates.py` と同じ private submodule 規約。#379 が禁止するのは新 store/section/
+advisory adapter/weak_signal channel であり、新しい `.py` モジュールの追加そのものは対象外・
+codex [Nit] で非抵触が確認済み）。
 
-**TTL = 45日**（`triage_ledger.DEFAULT_TTL_DAYS` / `remediation.suppression_ledger.DEFAULT_TTL_DAYS`
-と同値。プロジェクト全体の TTL 慣習——weak_signals・judge cutoff 案——と揃える。新しい定数を
-発明しない）。TTL 経過後は1回だけ再提示する（`remediation.suppression_ledger` の既存契約
-そのまま。「強制的な TTL 経過後の1回だけの再評価」は追加実装不要）。
+契約（実装時のための擬似コード。型注釈・import 位置は実装時に整える）:
 
-**早期解除条件（解釈Bの採用）**: emit 時、抑制判定の直前に対象 `(repo_id, relative_path)` の
-`optimize_history` 最新イベントを見て、**reject より新しい accept があれば抑制しない**
-（ファイルが実質的に進んだので新しい提案は正当）。この判定には `optimize_history_store.
-load_effective_history(slug)` を「その path に対する最新イベントの種別と時刻」だけ見るために
-使う（reject の本文は見ない・案Aの本文拡張は不要）。
+```python
+def _issue_for(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """pending entry から dedup_key() 用の issue dict を組み立てる（副作用なし）。
 
-### 3.3 silence != evaluated の担保
+    detail.target = entry["id"]（= proposal_id）がキーの一意性を担保する唯一の成分
+    （codex [Should]「dedup_key の衝突」への対応。dedup_key() は detail の "target" キーを
+    採用する既存契約・suppression_ledger.py:90 の allowlist に含まれる）。
+    file はデバッグ用の表示ラベルに過ぎず一意性に寄与しない。repo_id/relative_path が
+    無い旧スキーマ entry では skill_path/target_path、それも無ければ entry["id"] へ
+    フォールバックする（"None::..." は書かない・codex [Must]6 の明示禁止）。
+    """
+    proposal_type = entry.get("proposal_type") or "unknown"
+    issue_type = "advisory" if proposal_type == "advisory" else "evolve_diff"
+    repo_id = entry.get("repo_id")
+    relative_path = entry.get("relative_path")
+    if repo_id and relative_path:
+        file_label = f"{repo_id}::{relative_path}"
+    else:
+        file_label = (
+            entry.get("skill_path") or entry.get("target_path") or entry["id"]
+        )
+    return {
+        "type": issue_type,
+        "file": file_label,
+        "detail": {"target": entry["id"]},
+    }
 
-新しい observability section は作らない（#379 抵触）。**既存 emit 結果 dict への
-キー追加のみ**: `emit_decisions` の返り値（`_emit.py:277-292`）に
-`reject_suppressed_total: int` / `reject_suppressed_by_path: [{"repo_id":..,"relative_path":..,
-"suppressed_until":..}]`（0件ならキーは出すが空リスト。既存の `revert_generation_discarded`
-と同じ「新セクションでなく meta 返却」パターン）を追加する。表示は `bin/evolve-daily-run` の
-既存サマリ行（`revert_generation_discarded` を出している行の近傍）に1文足すだけ（新規セクション
-禁止・既存行への追記）。advisory レーンの抑制件数も同じキーに合算する（レーン別内訳は
-`by_path` の `type` フィールドで判別可能にする）。
+
+def filter_rejected(
+    pending: List[Dict[str, Any]], *, slug: str, now: Optional[float] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """reject 抑制中の候補を pending から除外する（順序保存・fail-open）。
+
+    ledger 読み込みに失敗したら**全件そのまま通す**（lane 全体を抑制しない）。
+    個別レコードの decided_at/ttl_days が壊れていたら**その候補だけ**抑制しない
+    （他候補の判定に影響させない）。
+
+    Returns: (kept_pending, stats)
+      stats = {
+        "suppressed_total": int,
+        "suppressed": [{"id": str, "file": str}, ...],  # silence != evaluated 用
+        "ledger_read_error": str | None,  # 読み込み自体が失敗した場合のみ非 None
+      }
+    """
+    from remediation.suppression_ledger import DAY_SECONDS, DEFAULT_TTL_DAYS, dedup_key, load_ledger
+
+    stats = {"suppressed_total": 0, "suppressed": [], "ledger_read_error": None}
+    try:
+        ledger = load_ledger(slug)
+    except OSError as e:
+        stats["ledger_read_error"] = f"{type(e).__name__}: {e}"
+        return list(pending), stats  # fail-open: 読めなければ何も抑制しない
+
+    now = now if now is not None else time.time()
+    kept: List[Dict[str, Any]] = []
+    for entry in pending:
+        issue = _issue_for(entry)
+        record = ledger.get(dedup_key(issue))
+        if record is None:
+            kept.append(entry)
+            continue
+        try:
+            decided_at = float(record.get("decided_at", 0.0))
+            ttl_days = int(record.get("ttl_days", DEFAULT_TTL_DAYS))
+            suppressed = now <= decided_at + ttl_days * DAY_SECONDS
+        except (TypeError, ValueError):
+            suppressed = False  # 壊れたレコードは「抑制しない」側に倒す（候補単位）
+        if suppressed:
+            stats["suppressed_total"] += 1
+            stats["suppressed"].append({"id": entry["id"], "file": issue["file"]})
+        else:
+            kept.append(entry)
+    return kept, stats
+
+
+def record_pending_rejection(entry: Dict[str, Any], *, slug: str) -> Optional[str]:
+    """reject された pending entry を suppression ledger に記録する。
+
+    例外を投げない契約（呼び出し側 _ingest.py の主フロー — record_evolve_diff_decision と
+    キュー消化 — を絶対に止めない・§3.1-c）。戻り値は失敗時のみエラーメッセージ文字列、
+    成功時 None。
+    """
+    from remediation.suppression_ledger import DEFAULT_TTL_DAYS, record_rejection
+
+    issue = _issue_for(entry)
+    try:
+        record_rejection(issue, slug=slug, ttl_days=DEFAULT_TTL_DAYS, persist=True)
+        return None
+    except OSError as e:
+        return f"{type(e).__name__}: {e}"
+```
+
+**fail-open の全経路（codex [Must]5 への対応・網羅表）**:
+
+| 失敗箇所 | 契約 |
+|---|---|
+| `load_ledger()` の `read_text()` が `OSError` | `filter_rejected` 全体が fail-open（**全件そのまま通す**）。`stats.ledger_read_error` に記録 |
+| 個別レコードの `decided_at`/`ttl_days` が不正値 | その**候補だけ**抑制しない（他候補は通常判定を続行）。lane 全体は落とさない |
+| `_issue_for()` 内の `repo_id`/`relative_path` 欠落 | キーの一意性に影響しない（`entry["id"]` が主成分）。`file` 表示ラベルだけ fallback（§3.1-b 冒頭） |
+| `record_pending_rejection()` の書込失敗 | 例外を外に投げない。呼び出し元（`_ingest.py`）は reject 処理（`record_evolve_diff_decision`・`rejected_out` への追加・キュー消化）を**続行**する（§3.1-c） |
+
+**明示的に禁止する実装（codex [Must]5 後段）**: `filter_rejected` の呼び出しを、advisory
+収集の既存 `try: ... except Exception: pass`（`_emit.py:218-224`）の**内側に混ぜない**。
+これをやると suppression フィルタの失敗が advisory 候補収集の失敗と同じ扱いになり、
+advisory 候補が**全件**（抑制対象でないものまで）消える。`filter_rejected` は advisory
+収集が完了した**後**、それ自身の fail-open 契約（上表）の下で独立に呼ぶ。
+
+#### 3.1-c reject 記録とキュー消化の順序（codex [Should] への対応）
+
+`_ingest.py` の現行フロー（`_ingest.py:83-149` のループ→`_ingest.py:151-159` のキュー消化）は
+「各 entry の判断記録 → ループ完走後にキュー消化」の順で、判断記録とキュー消化は**既に別
+フェーズ**になっている。`record_pending_rejection` は既存の `recorder(...)` 呼び出し
+（reject 分岐）の**直後**（＝ループ内・キュー消化より前）に置く。これにより:
+
+- ledger 書込が失敗しても `record_evolve_diff_decision`（source of truth）は既に成功済み
+  （reject の記録自体は失われない）
+- キュー消化（`rejected_out` に積まれた pid の除去）は ledger 書込の成否に関わらず実行する
+  （ledger はあくまで「抑制のための派生キャッシュ」であり、キュー消化を止める理由にしない —
+  止めると reject 済みの entry がキューに残留し続け、別の欠陥を生む）
+- ledger 書込失敗時は該当 entry を `ingest_decisions()` の返り値の新キー
+  `suppression_ledger_errors: [{"id":..., "error":...}, ...]`（新セクション禁止・既存
+  dict へのキー追加のみ）に積み、`bin/evolve-daily-run` の既存サマリ行に1文足す（§3.3）
+
+### 3.2 TTL / 解除条件（2026-08-14 改訂: codex [Must]3 を反映）
+
+**TTL = 45日**（`triage_ledger.DEFAULT_TTL_DAYS` / `remediation.suppression_ledger.
+DEFAULT_TTL_DAYS` と同値。プロジェクト全体の TTL 慣習——weak_signals・judge cutoff 案——と
+揃える。新しい定数を発明しない）。
+
+**TTL 経過後の挙動を訂正する（旧稿の誤りを削除）**: `load_ledger()`/`filter_rejected` は
+**読み取り専用**であり、TTL 判定は「今の時刻が `decided_at + ttl_days` を超えているか」を
+毎回計算するだけである（`remediation.suppression_ledger.is_suppressed`/`filter_suppressed`
+と同じ判定式・§3.1-b の擬似コード参照）。TTL を超えたレコードは ledger 上に残ったままだが
+「抑制しない」と判定されるだけで、**そのレコードを消したり「1回だけ再提示してから再度
+抑制する」ような状態遷移は一切起きない**（旧稿の「TTL 経過後は1回だけ再提示する」
+「追加実装不要」は実装と異なる誤った記述だったため削除する）。正しい仕様:
+
+- TTL 経過後は**毎回**（再び reject されるまで）提示される
+- 再び reject されれば `record_pending_rejection` が同じキーで新しい `decided_at` を
+  upsert し（`suppression_ledger.py:130-134` の `_upsert` は append-only・読み取り時
+  last-write-wins）、そこから改めて45日抑制される
+
+**早期解除の専用ロジックは持たない**（§2.3 参照。抑制キーが `proposal_id`（before_sha 込み）
+である以上、内容が実際に変われば新しい ID になり自然に解除される。`optimize_history` を
+読んで accept を検知する複雑な照合は不要・削除）。
+
+### 3.3 silence != evaluated の担保（2026-08-14 改訂: §3.1 の stats 契約と一致させる）
+
+新しい observability section は作らない（#379 抵触）。**既存 emit/ingest 結果 dict への
+キー追加のみ**:
+
+- `emit_decisions()` の返り値（`_emit.py:277-292`）に `filter_rejected` の `stats`
+  （§3.1-b）をそのまま展開する: `reject_suppressed_total: int` /
+  `reject_suppressed: [{"id":..., "file":...}, ...]`（0件でもキーは出す・空リスト） /
+  `suppression_ledger_read_error: str | None`。既存の `revert_generation_discarded` と
+  同じ「新セクションでなく meta 返却」パターン。advisory/skill 両レーンの抑制が同じリストに
+  混在するが、`id` の prefix（advisory は `advisory_` 系、skill は `evdiff_` 系・既存の
+  ID 採番規約のまま）でレーンを判別できるため、追加のレーン別内訳フィールドは持たない
+- `ingest_decisions()` の返り値（`_ingest.py:161`）に `suppression_ledger_errors:
+  [{"id":..., "error":...}, ...]`（§3.1-c）を追加する
+- 表示は `bin/evolve-daily-run` の既存サマリ行（`revert_generation_discarded` を出している
+  行の近傍）に1文足すだけ（新規セクション禁止・既存行への追記）。0件のときは追記しない
+  （既存の「0件ならノイズを足さない」流儀に合わせる）
 
 ### 3.4 #379 非抵触の確認
 
 - 新 store: **0**（案B採用時。既存 `remediation_suppression/<slug>.jsonl` を再利用）
-- 新 observability section: **0**（既存 emit 結果 dict へのキー追加のみ・§3.3）
+- 新 observability section: **0**（既存 emit/ingest 結果 dict へのキー追加のみ・§3.3）
 - 新 advisory adapter: **0**
 - 新 weak_signal channel: **0**（本 issue は weak_signals と無関係）
 - `shrink_freeze.assert_no_new_keys` へは抵触しない（`store_registry`/observability builder/
-  advisory adapter/weak_signal channel のいずれの live 集合にも新規キーを増やさない）
+  advisory adapter/weak_signal channel のいずれの live 集合にも新規キーを増やさない）。
+  codex レビューでも「案B自体は新 store・observability section・advisory adapter・
+  weak_signal channel を増やさず、`shrink_freeze.py` の frozen 集合上は非抵触」と確認済み
+  （codex [Nit]）。`scripts/lib/evolve_decisions/_suppression.py` という新規 `.py` モジュール
+  の追加自体は #379 の対象外（禁止対象は store/section/adapter/channel の4種のみ）
 
 ## 4. やらないこと（スコープ外）
 
 - **`triage_ledger` の store 未登録問題の是正**（§2.2 で見つかった別の欠陥。本 issue とは
   無関係の pre-existing gap。別 issue で記録のみ推奨）
 - **`before_sha` を含む識別子体系そのものの見直し**（#417 の identity 定義自体は変えない。
-  抑制は identity とは別レイヤーで行う）
-- **reject 理由（`rejection_reason`）に基づく意味的な再提示判定**（「内容が変わったら
-  再提示してよい」という粒度の細かい判定は行わない。§3.1 案Bの粗い path 単位が採用スコープ）
+  抑制キーは既存の `proposal_id` をそのまま使い、新しい識別子は発明しない・§3.1）
+- **`optimize_history` の reject entry スキーマ拡張**（§3.1 の案A。§6 裁定1のとおり案Bを
+  採用したため実施しない）
+- **advisory レーンへの早期解除機構の追加**（accept・対象消滅・内容変更を検知して抑制を
+  解く仕組み。§3.1 で述べた非対称を許容する裁定・§5 論点1）
 - **remediation レーン自体の抑制ロジック変更**（`suppression_ledger.py` の中身は無改造で
   そのまま呼ぶだけ）
 - **advisory レーンの新規フィールド追加**（§2.2 の発見どおり不要）
+- **`(repo_id, relative_path)` 単位の粗い抑制**（初版で検討したが codex [Must]1 により撤回。
+  §3.1 参照）
 
 ## 5. 未解決の論点
 
-**論点1: skill_diff/skill_evolve の抑制実装は案(A)か案(B)か**
-→ 推奨は案(B)（§3.1）。案(A)の「単一台帳に寄せる」思想も一理あり、`optimize_history` の
-読み手が増えることを厭わないなら妥当。**ユーザー判断を仰ぐ**。
+初版にあった論点のうち、抑制キーの粒度（旧論点3）・早期解除機構の要否（旧論点2）は
+codex [Must]1/[Must]4 により**論点ではなく確定事項になった**（§2.3・§3.1・§3.2 参照。
+「粗い抑制＋早期解除」の2段構え自体が撤回され、`proposal_id` 単位の抑制に一本化された
+ため、選ぶ余地がなくなった）。案(A) vs 案(B)（旧論点1）・TTL 45日（旧論点4）は
+オーケストレーターが既に裁定済み（§6）。残る未解決の論点は以下の1件のみ。
 
-**論点2: 早期解除条件（解釈B・§3.2）を初期実装に含めるか**
-→ 含めない場合は実装がシンプルになる代わり、「reject 後すぐ手動で似た変更を accept した」
-ケースで TTL 満了まで新しい提案が出ない（軽微な不便）。含める場合は emit 時に
-`optimize_history` を1回余分に読む必要がある（性能影響は軽微・PJ 単位で高々数十行）。
-**推奨: 含める**（実装コストが低く、ユーザー体験の悪化を防ぐ）が、初回実装をシンプルに保ちたい
-なら見送って follow-up issue にしてもよい。
+**論点1（新規・codex [Should]由来）: advisory レーンの「内容変更後も抑制が続く」非対称を
+許容するか**
+→ §3.1 で述べたとおり、advisory の `proposal_id` は検出条件（detector+target）ベースで
+内容世代非依存なので、reject 後に対象ファイルの中身が変わっても `proposal_id` は変わらず、
+最大45日間抑制され続ける（skill レーンは内容が変わればID自体が変わり自動解除される）。
 
-**論点3: 抑制単位の粒度（`(repo_id, relative_path)` だけでよいか）**
-→ 同じ path に将来 **複数の異なる pattern**（例: skill_evolve 由来と discover 由来）が別々に
-提案されうる。path 単位で一括抑制すると、reject したのと無関係な種類の新提案まで一緒に
-抑制してしまう可能性がある。`dedup_key` の `detail` に `pattern` の先頭数十文字 or
-`proposal_type` を足せば緩和できるが、粒度を細かくするほど「本当に同じ提案か」の判定が
-曖昧になる（`pattern` の表記ゆれで別提案と誤認されるリスク）。**推奨: 初期実装は
-path 単位の粗い抑制**（実装単純・実測 §2.4 で `pattern` は "skill_evolve:medium" のような
-短い定型文字列であり、同一 path に複数 proposal_type が同時に競合するケースは現状の
-`_extract_candidates`（同一 skill_path は discover 優先で1件に畳む・`_candidates.py:90,100-102`）
-では起きない設計になっている）。将来 `proposal_type` が増えて粒度不足が顕在化したら
-`detail` へ足す。
+- **選択肢A（推奨）: 現状のまま許容する**。理由: ① advisory の検出対象
+  （`invalid_frontmatter`/`testpaths_coverage` 等・`_candidates.py:33-34` のコメント参照）は
+  性質上「直しても構造的に同じ種類の指摘が再検出されやすい」ものが多く、内容が変わった程度で
+  安易に再提示すると reject の意図（「この指摘は要らない」）を裏切りやすい。② 45日という
+  TTL 自体が「いずれ再評価の機会を与える」ための安全弁として既に機能する。③ 実装が単純
+  （advisory 側の判定ロジックを一切変えない）
+- **選択肢B: advisory にも「対象ファイルの sha が変わったら解除」を追加する**（`_advisory_pending`
+  が既に `before_sha`（対象ファイルのsha256）を候補に持っている・`_candidates.py:67`）。
+  ただし advisory の `proposal_id` 自体は before_sha を含まないため、抑制キー
+  （`entry["id"]`）とは別に「対象ファイルの現在 sha」を ledger 側へ追加で持たせる必要があり、
+  スコープが `remediation.suppression_ledger` の既存契約（issue の type/file/detail のみ）を
+  超える。skill レーンと同様の複雑さを advisory 側にも持ち込むことになり、§3.1/§3.2 で削除した
+  「早期解除ロジック」を advisory 版として復活させるに等しい
 
-**論点4: TTL 45日は妥当か**
-→ 他の3機構との横並びで45日を採用したが、evolve_diff の提案頻度（週次流入等）は
-weak_signals/judge cutoff と桁が異なる可能性がある。**実測**: 本環境の evolve_diff pending は
-現状5件・過去 reject 0件のため頻度実測ができていない（§2.4）。**ユーザー判断待ち**
-（45日で開始し、運用後に短すぎる/長すぎるが分かれば調整する前提でよいか）。
+**ユーザー判断を仰ぐ**（初期実装は選択肢Aで進めることを推奨するが、選択肢Bのニーズが
+明確なら follow-up issue で扱う）。
 
 ---
 
-## 6. オーケストレーターの裁定（2026-08-14）
+## 6. オーケストレーターの裁定（2026-08-14 制定 / 2026-08-14 codex レビュー反映で一部改訂）
 
-§5 の未解決4件を裁定した。いずれも**後戻りコストが小さい**ので暫定採用で着手し、
-運用後に覆ったら差し替える（`rules/provisional-over-blocker.md`）。
+§5（初版）の未解決4件を裁定した。いずれも**後戻りコストが小さい**ので暫定採用で着手し、
+運用後に覆ったら差し替える方針だった（`~/.claude/rules/provisional-over-blocker.md`）。
+その後 codex の着手前ゲート（`~/.claude/rules/design-review-gate.md`）で `設計修正要`
+（[Must]6件）となり、下表のうち**2件を撤回**した（codex [Nit] のパス指摘を受け、本節の
+rules 参照もグローバル `~/.claude/rules/` 配下の実在パスへ修正した）。
 
-| 論点 | 裁定 | 理由 |
+| 論点 | 裁定 | 状態 |
 |---|---|---|
-| 1. 案(A) vs 案(B) | **案(B)（`remediation.suppression_ledger` 流用）** | `optimize_history` は fitness calibration の**母集団**であり、その均質性は既存の設計原則。抑制目的のフィールドを混ぜると「何のための行か」が濁る。加えて案(A) が触る `record_evolve_diff_decision` は `optimize.py` / `run_loop.py` とも共有され、影響が `evolve_decisions` に閉じない。命名の違和感（remediation という名の store に evolve_diff が入る）は `dedup_key` に `type` が入るため**実害が無く**、doc コメントで足りる |
-| 2. 早期解除条件 | **含める** | 実装コストが低く（emit 時に `load_effective_history` を1回読むだけ）、「reject 直後に手動で似た変更を accept したのに TTL 満了まで新提案が出ない」という体験の悪化を防ぐ |
-| 3. 抑制の粒度 | **`(repo_id, relative_path)` の粗い抑制で開始** | `_extract_candidates` が同一 `skill_path` を1件に畳む（`_candidates.py:90,100-102`）ので、同一 path に複数 `proposal_type` が同時競合する状態は現設計では起きない。粒度を細かくすると `pattern` の表記ゆれで「別提案」と誤認するリスクの方が大きい。将来 `proposal_type` が増えて粒度不足が顕在化したら `detail` へ足す |
-| 4. TTL 45日 | **45日で開始** | 他3機構と横並び。新しい定数を発明しない。頻度の実測ができていない（reject 実績 0件）ので、運用後に調整する前提 |
+| 1. 案(A) vs 案(B) | **案(B)（`remediation.suppression_ledger` 流用）** | **維持**。理由: `optimize_history` は fitness calibration の**母集団**であり、その均質性は既存の設計原則。抑制目的のフィールドを混ぜると「何のための行か」が濁る。加えて案(A) が触る `record_evolve_diff_decision` は `optimize.py` / `run_loop.py` とも共有され、影響が `evolve_decisions` に閉じない。命名の違和感（remediation という名の store に evolve_diff が入る）は `dedup_key` の一意性を `detail.target = proposal_id` が担保するため実害が無い（§3.1-b で確定） |
+| 2. 早期解除条件 | ~~含める~~ → **撤回・機構自体を削除** | codex [Must]1/[Must]4 により、抑制キーを `proposal_id`（before_sha 込み）に訂正した結果、早期解除は before_sha の変化で自動的に達成されると判明した。`optimize_history` を読んで accept を検知する専用ロジックは不要（§2.3・§3.2） |
+| 3. 抑制の粒度 | ~~`(repo_id, relative_path)` の粗い抑制~~ → **撤回・`proposal_id`（＝既存の内容世代単位識別子）に訂正** | codex [Must]1: `_extract_candidates` の「同一 path を1件に畳む」は**同一 run 内限定**であり、reject 後の手動編集・別 run の discover pattern 変化で同じ path に別内容の提案が実在しうる。粗い抑制はそれを45日間黙って握り潰す。`before_sha` を含めても reject 後に内容不変なら次回も同じ ID になるため抑制は成立する（§3.1） |
+| 4. TTL 45日 | **45日で開始** | **維持**。他3機構と横並び。新しい定数を発明しない。頻度の実測ができていない（reject 実績 0件）ので、運用後に調整する前提。ただし TTL 経過後の**挙動の記述**は誤りだったため訂正した（§3.2: 「1回だけ再提示」ではなく「毎回提示、再rejectで45日更新」） |
 
 ### 実装の優先度についての注記
 
@@ -264,7 +440,26 @@ weak_signals/judge cutoff と桁が異なる可能性がある。**実測**: 本
 
 ### 実装前に必ずやること
 
-§2.4 で発見された **現 queue の旧スキーマ残留（`repo_id` キー欠落）** は、§3.1 のフォールバック
-（`skill_path` から `repo_identity()` を再導出・それも無理なら **fail-open で抑制しない**）で
-吸収する設計になっている。**この fail-open を契約テストで固定すること**（過剰抑制は
-「ユーザーの指摘が黙って消える」＝この PJ が最も嫌う挙動なので、判定不能なら必ず出す側に倒す）。
+§2.4 で発見された **現 queue の旧スキーマ残留（`repo_id` キー欠落）** は、§3.1 で述べたとおり
+**抑制キー（`entry["id"]`）の計算には一切影響しない**（旧スキーマでも `id` は必ず存在する）。
+影響が残るのは §3.1-b の「表示用ラベル（`file`）」のみで、そちらも `None::...` を書かない
+フォールバック契約になっている。**この fail-open 契約（§3.1-b の表）を契約テストで固定
+すること**（過剰抑制は「ユーザーの指摘が黙って消える」＝この PJ が最も嫌う挙動なので、
+判定不能なら必ず出す側に倒す）。
+
+### codex [Must] 6件の解消対応表（2026-08-14 改訂で追加）
+
+| codex 指摘 | 解消箇所 |
+|---|---|
+| [Must]1 抑制キーの粗粒度化を撤回し `proposal_id` にする | §3.1 冒頭「抑制キー = `proposal_id`」+ 本節の裁定3 |
+| [Must]2 案Bは「そのまま流用」不可。pending↔issue adapter 契約が必要 | §3.1-b（`_issue_for`/`filter_rejected`/`record_pending_rejection` の擬似コード契約） |
+| [Must]3 TTL契約の記述訂正（「1回だけ再提示」は誤り） | §3.2（「TTL 経過後の挙動を訂正する」の節） |
+| [Must]4 早期解除判定を実装可能な契約へ、または削除 | §2.3・§3.2（`optimize_history` 参照ロジックを削除し理由を明記） |
+| [Must]5 fail-open が全経路で保証されていない | §3.1-b「fail-open の全経路（網羅表）」+「明示的に禁止する実装」段落 |
+| [Must]6 旧schema fallback は reject 記録時にも必要 | §3.1 冒頭（`entry["id"]` が旧スキーマでも必ず存在するため構造的に不要と判明）+ §3.1-b（`_issue_for` の `file` フォールバック） |
+| [Should] advisory/skill レーンの意味差を明示 | §3.1「レーン間の意味差」+ §5 論点1 |
+| [Should] reject記録とqueue消化の失敗順序 | §3.1-c |
+| [Should] `dedup_key` 衝突（type だけでは不十分） | §3.1-b（`detail.target = entry["id"]` で一意性を担保） |
+| [Should] `filter_suppressed` でなく薄い adapter を置く | §3.1-b（採用・`_suppression.py` 新設） |
+| [Nit] #379 非抵触の確認 | §3.4 に codex 確認済みの旨を追記 |
+| [Nit] rules 参照パスの実在確認 | 本節冒頭を `~/.claude/rules/` 配下の実在パスへ修正 |
