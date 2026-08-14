@@ -193,7 +193,7 @@ evolve.py の出力に含まれる `fitness` フェーズを確認する。
 ## Stage 1: Diagnose（パターン検出 + 問題診断）
 
 ### Step 3: Discover フェーズ（enrich 統合済み）
-discover のパターン検出（`repeating_patterns` / `tool_usage_patterns` / `rule_violation_observed`）と enrich 結果（Jaccard 照合による `matched_skills` / `unmatched_patterns`）を確認する。`matched_skills` は改善提案を diff で提示し AskUserQuestion で承認/スキップ（MUST）— **承認して実際に適用した提案の `id`、却下した提案の `id` と理由を控えておく（MUST・#444）**。`id` は `result.evolve_decisions.pending[].id`（`skill_path` で対象提案と対応づける）。この記録は Step 7.8 の drain へ `--accepted`/`--rejected` として渡し、optimize_history への accept/reject 記録に使う（drain は自動では記録しない — 明示 ID が必須）。`rule_violation_observed`（rule installed だが実行が止まっていない違反観測）は別レーンで surface する（MUST）。
+discover のパターン検出（`repeating_patterns` / `tool_usage_patterns` / `rule_violation_observed`）と enrich 結果（Jaccard 照合による `matched_skills` / `unmatched_patterns`）を確認する。`matched_skills` は **`skill_path` 単位にグループ化してから**（1 SKILL.md = 1 提案 = 1 判断・#444）改善提案を diff で提示し AskUserQuestion で承認/スキップ（MUST）— **承認して実際に適用した提案の `id`、却下した提案の `id` と理由を控えておく（MUST・#444）**。`id` は `result.evolve_decisions.pending[].id`（グループ化済みなので `skill_path` で一意に対応づく）。この記録は Step 7.8 の drain へ `--accepted`/`--rejected` として渡し、optimize_history への accept/reject 記録に使う（drain は自動では記録しない — 明示 ID が必須）。`rule_violation_observed`（rule installed だが実行が止まっていない違反観測）は別レーンで surface する（MUST）。
 → 表示テンプレ・分岐の詳細は **[references/diagnose.md](references/diagnose.md)**。
 > 一言メモ: [references/report-narration.md](references/report-narration.md)
 
@@ -294,7 +294,7 @@ OUT="$(evolve --project-dir "$PJ" --print-out-path)"
 evolve --project-dir "$PJ" --drain --result-json "$OUT"
 ```
 
-**ID の受け渡し方（#444）**: Step 3 で `matched_skills` を1件ずつ AskUserQuestion にかけたとき、承認して実際にファイルを適用した提案の `id`（`result.evolve_decisions.pending[].id`。`skill_path` で対象提案と対応づける）を貯めておき、却下した提案は `id` と却下理由をペアで貯めておく（Step 3 の MUST）。承認/却下があれば、上のコマンドの末尾に `--accepted`/`--rejected` を足す（`--accepted` は承認 ID をスペース区切りで並べる。`--rejected ID REASON` は却下1件につき1回繰り返す — 理由は必須で、空文字は CLI が拒否する）。responses ファイルもあるならさらに `--correction-responses <path>` を足す。例:
+**ID の受け渡し方（#444）**: Step 3 で `matched_skills` を **`skill_path` 単位にグループ化して**（1 SKILL.md = 1 提案 = 1 判断。提案 identity がファイル単位なので、マッチ単位に割ると複数の提示が同じ `id` を共有して判断が成立しない）AskUserQuestion にかけたとき、承認して実際にファイルを適用した提案の `id`（`result.evolve_decisions.pending[].id`。グループ化済みなので `skill_path` で一意に対応づく）を貯めておき、却下した提案は `id` と却下理由をペアで貯めておく（Step 3 の MUST）。承認/却下があれば、上のコマンドの末尾に `--accepted`/`--rejected` を足す（`--accepted` は承認 ID をスペース区切りで並べる。`--rejected ID REASON` は却下1件につき1回繰り返す — 理由は必須で、空文字は CLI が拒否する）。responses ファイルもあるならさらに `--correction-responses <path>` を足す。例:
 
 ```bash
 PJ="${PJ:-$(pwd)}"  # 別ブロックなので再束縛する（bash は呼び出しごとに独立プロセス）

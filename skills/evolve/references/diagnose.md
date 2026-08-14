@@ -58,9 +58,18 @@ discover の出力に含まれる enrich 結果（Jaccard 照合）を確認す�
 discover.py は Discover のパターン（error/rejection/behavior）を既存スキルと Jaccard 係数で照合し、`matched_skills` と `unmatched_patterns` を出力する（型A パターン: LLM 呼び出しなし）。
 
 - `matched_skills` が存在する場合（最大3件）:
-  - 各マッチについて、パターンとスキルの組を表示。**提案ごとに `id`（`result.evolve_decisions.pending[].id`。`skill_path` で対応するマッチと突き合わせる）を併記する（MUST・#444）** — 例: `[id: evdiff_abc123] my-skill: パターン「...」への改善提案`。ユーザーがこの `id` を見て、Step 7.8 で `--accepted`/`--rejected` に渡す
-  - 各ペアに対して、Claude が改善提案（diff 形式）を生成し、ユーザーに対話的に提示する（MUST）
-  - AskUserQuestion で「適用する」「スキップ」を選択させる（MUST）
+  - **`skill_path` 単位にグループ化してから提示する（MUST・#444）。1 SKILL.md = 1 提案 = 1 判断。**
+    同じスキルに複数パターンがマッチしていても提案を分割しない — 提案 identity は
+    `(repo_id, repo相対path, before_sha)` すなわち**ファイル単位**であり、`_extract_candidates` は
+    同一 `skill_path` を1件へ畳む（`test_emit_dedups_by_skill_path` が固定）。マッチ単位で提示すると
+    複数の提示が同じ1個の `id` を共有し、提案単位の accept/reject が成立しない
+  - グループごとに、束ねた全パターンとスキルの組を表示し、**`id`（`result.evolve_decisions.pending[].id`
+    を `skill_path` で対応づける — グループ化済みなので一意）を併記する（MUST・#444）** — 例:
+    `[id: evdiff_abc123] my-skill: パターン「...」「...」への改善提案`。ユーザーはこの `id` を見て
+    Step 7.8 で `--accepted`/`--rejected` に渡す
+  - グループごとに、Claude が改善提案（diff 形式）を1本生成し、ユーザーに対話的に提示する（MUST）。
+    束ねたパターンが複数あるなら、それらをまとめて反映した1本の diff にする
+  - AskUserQuestion で「適用する」「スキップ」を選択させる（MUST。グループ単位で1回）
   - ユーザーが承認した場合のみ、スキルファイルに変更を適用する
   - **採点記録（決定論キャプチャ, #360-A [ADR-041]。#444 で CLI 化）**: accept/reject の optimize_history
     記録は**自動では行われない**。**Step 7.8 の `evolve --drain --accepted <id...> --rejected <id> <理由>`
