@@ -28,6 +28,92 @@ _plugin_root = PLUGIN_ROOT
 from ._env import _resolve_pj_slug, build_reconcile_tracked
 
 
+def _known_pending_ids(project_dir, result_json):
+    """現在 pending の提案 id 集合を返す（read-only。#444 の未知 ID 検査専用）。
+
+    `drain_pending` と同じソース優先順位（result_json > marker）を使うが、ロックを取らず
+    marker/queue を一切変更しない。実際の drain 実行までの間に marker が変化していれば、
+    その時点の判定（deferred 化等）は `drain_pending` 側の通常ロジックに従う。
+
+    marker 経路の母集団は `drain_pending` が実際に ingest 対象にする集合と**一致させる**
+    （#450 codex cold review [Must]3）。`drain_pending`（`_drain.py`）は marker 経路でのみ
+    orphan worktree（既に消えた worktree に属する pending）を `_partition_orphaned` で
+    ingest 対象から除外する。ここで同じ除外をしないと、orphan の ID へ明示 reject を渡した
+    ときに「検証は通過するが実際には記録されず marker だけ削除されて終わる」サイレント消失が
+    起きる。除外条件は `evolve_decisions._partition_orphaned`（`is_orphaned_worktree` が単一
+    ソース）を呼ぶだけにし、CLI 側で判定ロジックを再実装しない。result_json 経路は
+    `drain_pending` 自身も orphan 判定をしない（result_json はその場で渡された snapshot で
+    marker のような永続 residue ではないため）ので、ここでも除外しない。
+    """
+    if result_json:
+        data = json.loads(Path(result_json).read_text(encoding="utf-8"))
+        pending = (data.get("evolve_decisions") or {}).get("pending") or []
+    else:
+        import evolve_decisions as _ed
+
+        slug = _ed.resolve_slug(Path(project_dir) if project_dir else None)
+        marker = _ed.read_pending_marker(slug)
+        all_pending = (marker.get("pending") if marker else None) or []
+        pending, _orphaned = _ed._partition_orphaned(all_pending)
+    return {entry.get("id") for entry in pending if entry.get("id")}
+
+
+def _validate_decision_args(accepted_arg, rejected_arg, *, project_dir, result_json):
+    """`--accepted`/`--rejected` を検証し `(accepted_ids, rejected_map, errors)` を返す（#444）。
+
+    エラーがあれば呼び出し側は `drain_pending` を呼ばずに中断する（部分書込を防ぐ）。
+    検証内容（issue #444 設計要件3）:
+      - `--accepted` 内の重複 ID
+      - `--rejected` 内の重複 ID
+      - `--accepted` と `--rejected` の両方に同じ ID が指定された場合
+      - 理由が空/空白のみの `--rejected`
+      - 現在 pending に存在しない未知 ID（`--accepted`/`--rejected` 双方）
+
+    `--accepted`/`--rejected` のどちらも未指定なら検証も pending 解決も一切行わず
+    `(None, None, [])` を返す（既存の decision 引数無し呼び出しと完全同一の挙動を保つ）。
+    """
+    errors = []
+
+    accepted_list = list(accepted_arg) if accepted_arg else []
+    accepted_dupes = sorted({pid for pid in accepted_list if accepted_list.count(pid) > 1})
+    if accepted_dupes:
+        errors.append(f"--accepted に重複 ID があります: {accepted_dupes}")
+    accepted_ids = set(accepted_list)
+
+    rejected_pairs = rejected_arg or []
+    rejected_map = {}
+    rejected_dupes = set()
+    for pid, reason in rejected_pairs:
+        if not reason or not reason.strip():
+            errors.append(f"--rejected {pid} の理由が空です（reason は必須）")
+            continue
+        if pid in rejected_map:
+            rejected_dupes.add(pid)
+            continue
+        rejected_map[pid] = reason
+    if rejected_dupes:
+        errors.append(f"--rejected に重複 ID があります: {sorted(rejected_dupes)}")
+
+    overlap = accepted_ids & set(rejected_map)
+    if overlap:
+        errors.append(f"--accepted と --rejected の両方に指定された ID があります: {sorted(overlap)}")
+
+    if not errors and (accepted_ids or rejected_map):
+        try:
+            known_ids = _known_pending_ids(project_dir, result_json)
+        except Exception as e:
+            errors.append(f"pending 提案の解決に失敗しました: {e}")
+            known_ids = None
+        if known_ids is not None:
+            unknown = sorted((accepted_ids | set(rejected_map)) - known_ids)
+            if unknown:
+                errors.append(f"pending に存在しない未知 ID が指定されました: {unknown}")
+
+    if errors:
+        return None, None, errors
+    return (accepted_ids or None), (rejected_map or None), []
+
+
 def main() -> None:
     import argparse
 
@@ -66,6 +152,31 @@ def main() -> None:
         help="--drain 時の pending ソース result JSON（未指定なら marker を使う）",
     )
     parser.add_argument(
+        "--accepted",
+        nargs="+",
+        default=None,
+        metavar="ID",
+        help=(
+            "--drain 時に明示 accept する提案 ID の複数指定（空白区切りで複数可、例: "
+            "--accepted ID1 ID2）。直前の対話（Step 3 の承認）で確定した proposal ID を渡す。"
+            "重複指定・未知 ID は拒否する。既存の genetic-prompt-optimizer --accept"
+            "（直近結果を丸ごと受理する単数フラグ・別コマンド）とは別物 (#444)。"
+        ),
+    )
+    parser.add_argument(
+        "--rejected",
+        nargs=2,
+        action="append",
+        default=None,
+        metavar=("ID", "REASON"),
+        help=(
+            "--drain 時に明示 reject する提案 ID の複数指定（ID と理由のペア。複数指定は "
+            "--rejected ID1 REASON1 --rejected ID2 REASON2 のように繰り返す）。理由は必須で、"
+            "空/空白のみは拒否する。既存の genetic-prompt-optimizer --reject"
+            "（直近結果を丸ごと却下する単数フラグ・別コマンド）とは別物 (#444)。"
+        ),
+    )
+    parser.add_argument(
         "--correction-responses",
         default=None,
         help=(
@@ -97,6 +208,19 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # #450 codex cold review [Should]1: --drain 無しで --accepted/--rejected を受理すると、
+    # 通常の evolve（drain を経由しない）が走って明示 decision が黙って捨てられる。
+    # --accepted/--rejected は --drain 必須とし、無ければ他の判定より先にエラーで中断する。
+    if (args.accepted or args.rejected) and not args.drain:
+        print(json.dumps(
+            {
+                "error": "invalid_decision_args",
+                "details": ["--accepted/--rejected は --drain と併用必須です（--drain 無しでは判断が記録されません）"],
+            },
+            ensure_ascii=False,
+        ))
+        sys.exit(1)
+
     # #525-3: OUT パスだけ印字する軽量モード（評価本体は回さない）。
     # slug 解決 + /tmp パス組み立てのみで DATA_DIR resolver には触れない（#517 と非競合）。
     if args.print_out_path:
@@ -111,7 +235,23 @@ def main() -> None:
         sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
         from evolve_decisions import drain_pending
 
-        summary = drain_pending(project_dir=args.project_dir, result_json=args.result_json)
+        # #444: accepted/rejected ID は直前の対話結果からここへ明示的に渡す。検証に失敗したら
+        # drain_pending を一切呼ばず中断する（重複指定・未知 ID・理由なし reject の部分書込防止）。
+        accepted_ids, rejected_map, decision_errors = _validate_decision_args(
+            args.accepted, args.rejected,
+            project_dir=args.project_dir, result_json=args.result_json,
+        )
+        if decision_errors:
+            print(json.dumps(
+                {"error": "invalid_decision_args", "details": decision_errors},
+                ensure_ascii=False,
+            ))
+            sys.exit(1)
+
+        summary = drain_pending(
+            project_dir=args.project_dir, result_json=args.result_json,
+            accepted=accepted_ids, rejected=rejected_map,
+        )
 
         # #484: 決定論 weak_signals を apply 境界で永続化する。
         # 標準フローは `evolve --dry-run` 分析 → 対話適用なので、run_evolve 内の

@@ -57,7 +57,7 @@ evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-
 | 7.8 | correction_semantic Phase C（weak_signals 隔離記録 + 個人辞書 + 判定進捗） | `evolve --drain --correction-responses <path>`（`ingest_judgement_results`） | **書く**（drain の apply 境界・Step 6.6 で responses ファイルが作られた場合のみ実行される。無ければ `{"skipped": ...}` で graceful skip・#339） | 書く |
 | run 末尾 | evolve_decisions queue 書込（before_sha スナップショット） | `emit_decisions(...)` の `_write_queue` | **書かない** | 書く |
 | run 末尾 | drain 検出用 **pending marker** | `emit_decisions(...)` の `write_pending_marker` | **書く**（#402/ADR-041・文書化された意図的 dry-run 書込・#513） | 書く |
-| 7.8 | optimize_history へ accept/reject 記録 | `evolve --drain`（`drain_pending`） | **書く**（drain は dry-run 分析後でも必ず実行） | 書く |
+| 7.8 | optimize_history へ accept/reject 記録 | `evolve --drain --accepted <id...> --rejected <id> <理由>`（`drain_pending`） | **書く**（`--accepted`/`--rejected` を渡した場合のみ。drain 自体は dry-run 分析後でも必ず実行するが、ID 無しでは記録しない・#444） | 書く |
 | 7.8 | 決定論 weak_signals の永続化（manual_edit / esc / rephrase / permission_deny） | `evolve --drain`（`persist_weak_signals_drain`）／`evolve-fleet detect`（全 PJ・daily runner step 1c・#304） | **書く**（drain の apply 境界・#484/#513。detect 側は evolve 非依存で毎朝書く。両者とも `signal_key` dedup で冪等） | 書く |
 | 7.8 | calibration state + tool_usage_snapshot 確定（result 依存） | `evolve --drain --result-json "$OUT"`（`persist_result_dependent_state`） | **書く**（drain の apply 境界・result 由来値を運搬・#146/ADR-051） | 書く |
 | 3.5 | remediation 連続提示 count marker 更新＋閾値到達で自動却下 | phases_remediate の `reconcile_surfaced(persist=not dry_run)` | **書かない**（persist=False は marker を読むだけの表示用判定） | 書く |
@@ -193,7 +193,7 @@ evolve.py の出力に含まれる `fitness` フェーズを確認する。
 ## Stage 1: Diagnose（パターン検出 + 問題診断）
 
 ### Step 3: Discover フェーズ（enrich 統合済み）
-discover のパターン検出（`repeating_patterns` / `tool_usage_patterns` / `rule_violation_observed`）と enrich 結果（Jaccard 照合による `matched_skills` / `unmatched_patterns`）を確認する。`matched_skills` は改善提案を diff で提示し AskUserQuestion で承認/スキップ（MUST）— **accept/reject の optimize_history 記録は Step 7.8 の drain が自動で行う**ので、明示却下時のみ `proposal_id` と理由を控えておけばよい。`rule_violation_observed`（rule installed だが実行が止まっていない違反観測）は別レーンで surface する（MUST）。
+discover のパターン検出（`repeating_patterns` / `tool_usage_patterns` / `rule_violation_observed`）と enrich 結果（Jaccard 照合による `matched_skills` / `unmatched_patterns`）を確認する。`matched_skills` は **`skill_path` 単位にグループ化してから**（1 SKILL.md = 1 提案 = 1 判断・#444）改善提案を diff で提示し AskUserQuestion で承認/スキップ（MUST）— **承認して実際に適用した提案の `id`、却下した提案の `id` と理由を控えておく（MUST・#444）**。`id` は `result.evolve_decisions.pending[].id`（グループ化済みなので `skill_path` で一意に対応づく）。この記録は Step 7.8 の drain へ `--accepted`/`--rejected` として渡し、optimize_history への accept/reject 記録に使う（drain は自動では記録しない — 明示 ID が必須）。`rule_violation_observed`（rule installed だが実行が止まっていない違反観測）は別レーンで surface する（MUST）。
 → 表示テンプレ・分岐の詳細は **[references/diagnose.md](references/diagnose.md)**。
 > 一言メモ: [references/report-narration.md](references/report-narration.md)
 
@@ -286,22 +286,30 @@ Step 3.8 で surface した `observability.glossary_drift` の `用語集未作�
 → 詳細: **[references/glossary-seed.md](references/glossary-seed.md)**。
 
 ### Step 7.8: evolve 提案 accept/reject drain（決定論キャプチャ, #360-A [ADR-041]）
-fitness calibration の母集団 `optimize_history` を日次 evolve ループで育てるステップ。Step 3 の承認・適用フロー完了後、分析が `--dry-run` だったか否かに関わらず**必ず**以下の単一コマンドを実行する（MUST）。**Step 6.6 で responses ファイルを保存した場合は `--correction-responses <path>` も付ける（MUST）**:
+fitness calibration の母集団 `optimize_history` を日次 evolve ループで育てるステップ。Step 3 の承認・適用フロー完了後、分析が `--dry-run` だったか否かに関わらず**必ず**以下の単一コマンドを実行する（MUST）。**Step 6.6 で responses ファイルを保存した場合は `--correction-responses <path>` も、Step 3 で承認して適用した提案・却下した提案がある場合は `--accepted`/`--rejected` も同じコマンドに足す（MUST）**:
 
 ```bash
 PJ="${PJ:-$(pwd)}"  # Step 1 と同一の束縛（bash は呼び出しごとに独立プロセスのため各ブロックで再束縛する）
 OUT="$(evolve --project-dir "$PJ" --print-out-path)"
 evolve --project-dir "$PJ" --drain --result-json "$OUT"
-# Step 6.6 で /tmp/rl_correction_responses_<slug>.json を保存した場合のみ追加:
-evolve --project-dir "$PJ" --drain --result-json "$OUT" --correction-responses /tmp/rl_correction_responses_<slug>.json
 ```
 
-（上の2行は排他 — responses ファイルが無ければ1行目だけを1回実行する。両方実行して二重 drain する必要はない。）
+**ID の受け渡し方（#444）**: Step 3 で `matched_skills` を **`skill_path` 単位にグループ化して**（1 SKILL.md = 1 提案 = 1 判断。提案 identity がファイル単位なので、マッチ単位に割ると複数の提示が同じ `id` を共有して判断が成立しない）AskUserQuestion にかけたとき、承認して実際にファイルを適用した提案の `id`（`result.evolve_decisions.pending[].id`。グループ化済みなので `skill_path` で一意に対応づく）を貯めておき、却下した提案は `id` と却下理由をペアで貯めておく（Step 3 の MUST）。承認/却下があれば、上のコマンドの末尾に `--accepted`/`--rejected` を足す（`--accepted` は承認 ID をスペース区切りで並べる。`--rejected ID REASON` は却下1件につき1回繰り返す — 理由は必須で、空文字は CLI が拒否する）。responses ファイルもあるならさらに `--correction-responses <path>` を足す。例:
 
-上のコマンドは、決定論 weak_signals（manual_edit/esc/rephrase/permission_deny）・calibration state・tool_usage_snapshot・remediation 連続提示 marker・correction_semantic Phase C（#339・responses ファイルがあるときのみ）を同じ apply 境界で確定する（`--result-json "$OUT"` が result 依存2項目（calibration state / tool_usage_snapshot）を運搬・#146/ADR-051。growth crystallization emit は #379 Step 4 で growth-journal harness ごと削除済み）。**これ単体では evolve 提案の accept/reject は記録しない**（#376 是正）。
+```bash
+PJ="${PJ:-$(pwd)}"  # 別ブロックなので再束縛する（bash は呼び出しごとに独立プロセス）
+OUT="$(evolve --project-dir "$PJ" --print-out-path)"
+evolve --project-dir "$PJ" --drain --result-json "$OUT" \
+  --accepted evdiff_abc123 evdiff_def456 \
+  --rejected evdiff_ghi789 "ドメイン不一致"
+```
 
-**accept = 明示 accept イベント AND 適用実績 / reject = 明示却下 / skip = 記録しない**（ADR-041 是正版, #376）。ディスク sha が変わっただけ（＝提案とは無関係な通常 commit の可能性がある）では accept にならない。Step 3 で承認して実際に適用した提案がある場合、その `id`（`result.evolve_decisions.pending[].id`、`skill_path` で対応する提案と突き合わせる）を集めて **inline で `ed.drain_pending(accepted={id, ...})` を追加実行する（MUST）** — これを省略すると diff が実際に適用されていても fitness 母集団に記録されない。却下がある場合は同じ呼び出しに `rejected={id: 理由, ...}` も併せて渡す（`ed.drain_pending(accepted={...}, rejected={id: 理由})`）。承認も却下も無ければこの追加呼び出しは不要（pending のまま次回 evolve に持ち越される）。drain を忘れても次回 SessionStart のリマインドが保険になる（#402、ただし SessionStart hook は対話チャネルを持たず明示 accept を渡せないため記録はされない — リマインド表示のみ）。`accepted >= 1` なら「fitness 母集団に +N 件記録 ✓」と1行 surface する。
-→ 設計根拠（#400/#484/#494）・drain サマリの読み方・result-json 運搬の詳細は **[references/housekeeping.md](references/housekeeping.md)**。
+（承認も却下も無ければ `--accepted`/`--rejected` は省略する — pending のまま次回 evolve に持ち越される。1回の Step 7.8 で複数コマンドを実行して二重 drain する必要はない — 該当する引数だけを足した**単一コマンド**にまとめる。）
+
+上のコマンドは、決定論 weak_signals（manual_edit/esc/rephrase/permission_deny）・calibration state・tool_usage_snapshot・remediation 連続提示 marker・correction_semantic Phase C（#339・responses ファイルがあるときのみ）を同じ apply 境界で確定する（`--result-json "$OUT"` が result 依存2項目（calibration state / tool_usage_snapshot）を運搬・#146/ADR-051。growth crystallization emit は #379 Step 4 で growth-journal harness ごと削除済み）。**`--accepted`/`--rejected` を渡さなければ evolve 提案の accept/reject は記録しない**（#376 是正）。
+
+**accept = 明示 accept イベント AND 適用実績 / reject = 明示却下 / skip = 記録しない**（ADR-041 是正版, #376）。ディスク sha が変わっただけ（＝提案とは無関係な通常 commit の可能性がある）では accept にならない。`--accepted`/`--rejected` を省略すると diff が実際に適用されていても fitness 母集団に記録されない（承認も却下も無ければ省略でよい — pending のまま次回 evolve に持ち越される）。`--accepted`/`--rejected` に**存在しない ID・重複 ID・理由なし reject を渡すと CLI がエラーを返し何も記録しない**（#444。既存の `genetic-prompt-optimizer --accept`/`--reject`——直近結果を丸ごと受理/却下する単数フラグ・別コマンド——とは別物）。drain を忘れても次回 SessionStart のリマインドが保険になる（#402、ただし SessionStart hook は対話チャネルを持たず `--accepted`/`--rejected` を渡せないため記録はされない — リマインド表示のみ）。`accepted >= 1` なら「fitness 母集団に +N 件記録 ✓」と1行 surface する。
+→ 設計根拠（#400/#484/#494/#444）・drain サマリの読み方・result-json 運搬の詳細は **[references/housekeeping.md](references/housekeeping.md)**。
 
 ### Step 8: Fitness Evolution — 評価関数の改善チェック
 evolve.py の出力に含まれる `fitness_evolution` フェーズを確認する。`status: "insufficient_data"` は **`one_liner` を1行そのまま出すのが結論**。件数（`N/30`）や長文 `details.message` は既定で出さない（開示はユーザーが尋ねたときのみ・#559 で契約圧縮済み）。`status: "bootstrap"` は簡易統計（承認率・平均スコア・分布）のみ表示し相関分析は行わない。`status: "ready"` は score-acceptance 相関（<0.50 で警告）と頻出 rejection_reason を表示し、提案があれば AskUserQuestion で承認を求める（MUST）。
