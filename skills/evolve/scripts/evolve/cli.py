@@ -556,6 +556,16 @@ def _summarize_result(result: dict, output_path: Path) -> dict:
         summary["suppression_ledger_read_error"] = _ed["suppression_ledger_read_error"]
     if isinstance(_ed, dict) and _ed.get("suppression_candidate_errors"):
         summary["suppression_candidate_errors"] = _ed["suppression_candidate_errors"]
+    # #458: auto trigger の発火状況を 1 行サマリに出す。envelope の trigger_summary は
+    # `_state.py:_build_trigger_summary` が生成して `phases_capture.py` が result へ入れる
+    # だけで、production/test どちらからも読まれない **読み手ゼロ** のフィールドだった
+    # （#457 の棚卸しで D 判定）。trigger_engine が corrections 蓄積・セッション終了で
+    # evolve/audit を自動提案する仕組みの稼働状況を、ユーザーも Claude も知る手段が
+    # 無かった。marker_error（#287-5）/ reject_suppressed_total（#446）と同じ配線。
+    # 未発火（total_fires=0）は既存の「0件ならノイズを足さない」流儀でスキップする。
+    _tsum = result.get("trigger_summary")
+    if isinstance(_tsum, dict) and _tsum.get("total_fires"):
+        summary["trigger_summary"] = _tsum
     if result.get("observe_first"):
         summary["observe_first"] = True
         observe = result.get("phases", {}).get("observe", {})
