@@ -110,6 +110,53 @@ def test_build_review_eligible_true_with_new_signals(tmp_path: Path):
 
 
 # ─────────────────────────────────────────────────────────────────
+# build_review: machinery（委譲メッセージ等の harness 注入）read 時除外（#443 PR2-a）
+# ─────────────────────────────────────────────────────────────────
+def test_build_review_excludes_machinery(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("残る", 1),
+            _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 2),
+        ],
+        path=ws,
+    )
+    res = dr.build_review(
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+    )
+    total_keys = {k for g in res["groups"] for k in g["signal_keys"]}
+    assert len(total_keys) == 1
+    assert res["groups"][0]["evidence"]["text"] == "残る"
+
+
+def test_build_review_surfaces_excluded_machinery_counts(tmp_path: Path):
+    # 除外件数を surface する（黙って減らさない・silence != evaluated）。
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("残る", 1),
+            _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 2),
+        ],
+        path=ws,
+    )
+    res = dr.build_review(
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+    )
+    assert res["excluded_machinery_total"] == 1
+    assert res["excluded_machinery_by_channel"] == {"llm_judge": 1}
+
+
+def test_build_review_excluded_machinery_zero_when_none(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("残る", 1)], path=ws)
+    res = dr.build_review(
+        "evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path)
+    )
+    assert res["excluded_machinery_total"] == 0
+    assert res["excluded_machinery_by_channel"] == {}
+
+
+# ─────────────────────────────────────────────────────────────────
 # build_review: 既読集合に含まれる signal_key は除外（= 新規のみ）
 # ─────────────────────────────────────────────────────────────────
 def test_build_review_excludes_seen_keys(tmp_path: Path):

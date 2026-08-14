@@ -22,6 +22,7 @@ if str(_lib_dir) not in sys.path:
 from fleet.queue import (  # noqa: E402
     build_queue_result,
     weak_content_poor_by_pj,
+    weak_machinery_by_pj,
     weak_unprocessed_by_pj,
 )
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
@@ -36,6 +37,23 @@ def _sig(channel: str, line_no: int, detected_at: str, pj_slug: str = SLUG) -> W
             "source_path": "/a.jsonl",
             "line_no": line_no,
             "text": "some correction text",
+        },
+        detected_at=detected_at,
+        session_id="s1",
+        pj_slug=pj_slug,
+    )
+
+
+def _machinery_sig(
+    channel: str, line_no: int, detected_at: str, pj_slug: str = SLUG
+) -> WeakSignal:
+    """harness 注入テキスト（委譲メッセージ）を持つ machinery signal（#443 PR2-a）。"""
+    return WeakSignal(
+        channel=channel,
+        provenance={
+            "source_path": "/a.jsonl",
+            "line_no": line_no,
+            "text": "<teammate-message>委譲メッセージ本文</teammate-message>",
         },
         detected_at=detected_at,
         session_id="s1",
@@ -195,3 +213,114 @@ def test_footer_silent_when_no_content_poor():
 
     out = format_queue_table({"queue": [], "tracked_total": 5, "threshold": 5})
     assert "content-poor" not in out
+
+
+# --- weak_machinery_by_pj: machinery（harness 注入）除外の透明化（#443 PR2-a） -----
+
+
+def test_weak_machinery_by_pj_counts_review_channel_machinery(tmp_path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("llm_judge", 1, _recent()),
+            _machinery_sig("llm_judge", 2, _recent()),
+        ],
+        path=ws,
+    )
+    # machinery は weak_unprocessed から除外され、weak_machinery に計上される。
+    assert weak_unprocessed_by_pj(SLUG, weak_signals_path=ws, marker_base=tmp_path) == 1
+    assert weak_machinery_by_pj(SLUG, weak_signals_path=ws, marker_base=tmp_path) == 1
+
+
+def test_weak_machinery_by_pj_zero_when_none_machinery(tmp_path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("llm_judge", 1, _recent())], path=ws)
+    assert weak_machinery_by_pj(SLUG, weak_signals_path=ws, marker_base=tmp_path) == 0
+
+
+def test_weak_machinery_by_pj_excludes_content_poor_channel(tmp_path):
+    # content-poor（REVIEW_CHANNELS 外）の machinery は weak_content_poor_by_pj 側の集計対象で
+    # あり、weak_machinery_by_pj（REVIEW_CHANNELS 内のみ）には二重計上しない。
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_machinery_sig("esc_interrupt", 1, _recent())], path=ws)
+    assert weak_machinery_by_pj(SLUG, weak_signals_path=ws, marker_base=tmp_path) == 0
+
+
+def test_weak_machinery_by_pj_scoped_to_pj(tmp_path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _machinery_sig("llm_judge", 1, _recent(), pj_slug=SLUG),
+            _machinery_sig("llm_judge", 2, _recent(), pj_slug="other-pj"),
+        ],
+        path=ws,
+    )
+    assert weak_machinery_by_pj(SLUG, weak_signals_path=ws, marker_base=tmp_path) == 1
+
+
+def test_build_queue_result_surfaces_weak_machinery_key(tmp_path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [_sig("llm_judge", i, _recent(), pj_slug="alpha") for i in range(3)]
+        + [
+            _machinery_sig("llm_judge", 100 + i, _recent(), pj_slug="alpha")
+            for i in range(2)
+        ],
+        path=ws,
+    )
+    corr = _corr(tmp_path / "corrections.jsonl")
+    result = build_queue_result(
+        pj_slugs=["alpha"],
+        threshold=3,
+        weak_signals_path=ws,
+        corrections_path=corr,
+        last_evolve_map={},
+        activity_map={},
+        generated_at="2026-07-02T09:00:00Z",
+    )
+    assert "weak_machinery" in result
+    assert result["weak_machinery"] == [{"pj_slug": "alpha", "machinery": 2}]
+    # material は machinery を含まない content-rich 3 のみ。
+    item = result["queue"][0]
+    assert item["weak_unprocessed"] == 3
+    assert item["material_count"] == 3
+
+
+def test_build_queue_result_no_weak_machinery_key_when_none(tmp_path):
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [_sig("llm_judge", i, _recent(), pj_slug="alpha") for i in range(3)],
+        path=ws,
+    )
+    corr = _corr(tmp_path / "corrections.jsonl")
+    result = build_queue_result(
+        pj_slugs=["alpha"],
+        threshold=3,
+        weak_signals_path=ws,
+        corrections_path=corr,
+        last_evolve_map={},
+        activity_map={},
+        generated_at="2026-07-02T09:00:00Z",
+    )
+    assert result["weak_machinery"] == []
+
+
+def test_footer_shows_weak_machinery_excluded():
+    from fleet.formatters import format_queue_table
+
+    result = {
+        "queue": [],
+        "tracked_total": 5,
+        "threshold": 5,
+        "weak_machinery": [{"pj_slug": "figma-to-code", "machinery": 7}],
+    }
+    out = format_queue_table(result)
+    assert "machinery" in out
+    assert "figma-to-code 7件" in out
+
+
+def test_footer_silent_when_no_weak_machinery():
+    from fleet.formatters import format_queue_table
+
+    out = format_queue_table({"queue": [], "tracked_total": 5, "threshold": 5})
+    assert "machinery" not in out

@@ -122,6 +122,88 @@ def read_unpromoted(
     return out
 
 
+def is_machinery_signal(rec: Dict[str, Any]) -> bool:
+    """weak_signal の provenance.text が harness 注入の機構ターンか判定する（#443 PR2-a）。
+
+    朝の提示に委譲メッセージ等の machinery（`<teammate-message` 等）が混入する問題
+    （ADR-054 B-a・実測で朝の候補 300 件中 47 件が該当）を read 時に塞ぐ単一述語。判定は
+    ``rl_common.detection.is_machinery_prompt`` を単一ソースとする（文字列 allowlist を
+    新設しない）。text を持たない決定論チャネル（permission_deny 等）は機構ターンではない
+    （False・空文字は判定対象にしない）。
+    """
+    from rl_common.detection import is_machinery_prompt
+
+    prov = rec.get("provenance") or {}
+    text = prov.get("text") or ""
+    return bool(text) and is_machinery_prompt(text)
+
+
+def _filter_actionable_without_machinery(
+    records: List[Dict[str, Any]],
+    pj_slug: Optional[str],
+    *,
+    exclude_reviewed: bool = True,
+    seen_path: Optional[Path] = None,
+    seen_keys: Optional[Set[str]] = None,
+    marker_base: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """``filter_actionable`` から machinery 除外だけを抜いたパイプライン（内部共有 helper）。
+
+    ``filter_actionable`` 本体と ``machinery_exclusion_stats``（除外件数の集計）が同じ
+    「machinery を除く前の would-be-actionable 母集団」を必要とするため、read+scope の
+    パスを1箇所に集約する（コピー慣習の partial fix を避ける）。
+    """
+    out = _filter_unpromoted(
+        records,
+        exclude_expired=True,
+        exclude_reviewed=exclude_reviewed,
+        seen_path=seen_path,
+        seen_keys=seen_keys,
+    )
+    if pj_slug is None:
+        return out
+    from correction_semantic.bootstrap_backlog import _exclude_bootstrap_consumed
+
+    return _exclude_bootstrap_consumed(out, pj_slug, marker_base=marker_base)
+
+
+def machinery_exclusion_stats(
+    records: List[Dict[str, Any]],
+    pj_slug: Optional[str],
+    *,
+    exclude_reviewed: bool = True,
+    seen_path: Optional[Path] = None,
+    seen_keys: Optional[Set[str]] = None,
+    marker_base: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """``filter_actionable`` が machinery のみを理由に除外した件数を channel 別に集計する（#443）。
+
+    対象は「machinery でなければ actionable だったはずのレコード」（promoted/TTL/reviewed/
+    bootstrap 消化の軸は通過済みだが machinery である集合）。除外は黙って減らさない
+    （silence != evaluated）ため、呼び出し側（digest/queue/observability 等）は本関数で
+    件数を取り、既存の返り値 dict にキーとして載せる。新しい store は作らない（read-only・
+    純関数）。
+
+    Returns: ``{"total": int, "by_channel": {channel: count, ...}}``
+    """
+    would_be = _filter_actionable_without_machinery(
+        records,
+        pj_slug,
+        exclude_reviewed=exclude_reviewed,
+        seen_path=seen_path,
+        seen_keys=seen_keys,
+        marker_base=marker_base,
+    )
+    total = 0
+    by_channel: Dict[str, int] = {}
+    for r in would_be:
+        if is_machinery_signal(r):
+            total += 1
+            ch = r.get("channel") or "(unknown)"
+            by_channel[ch] = by_channel.get(ch, 0) + 1
+    return {"total": total, "by_channel": by_channel}
+
+
 def filter_actionable(
     records: List[Dict[str, Any]],
     pj_slug: Optional[str],
@@ -157,6 +239,8 @@ def filter_actionable(
       - TTL 失効（#89 ``is_effectively_expired``・read 時導出）
       - （``exclude_reviewed=True`` のときのみ）既読・却下済み（#185）
       - bootstrap で判断済み（#94・marker 設置以前に detected した weak）
+      - machinery（#443 PR2-a・``is_machinery_signal``。harness 注入の委譲メッセージ等。
+        書込側修理（A2, #431）済みの既存在庫にも効く read 時除外）
 
     ``exclude_reviewed`` の既定は True（安全側＝厳密な actionable）。呼び出し側が既読を
     独立軸として別途集計する場合（例: 「未昇格 N 件（うち未読 M 件）」表示）は False を渡す。
@@ -168,20 +252,20 @@ def filter_actionable(
     向けに、promoted / TTL / reviewed の3軸は通常どおり適用しつつ **bootstrap 消化除外だけを
     スキップ**する。これにより、呼び出し側が「slug 解決可否で分岐し、片方だけ TTL を独自適用
     する」回避策（TTL predicate の仕様変更に追随しない独自実装の温床）を作らずに済み、常に
-    本関数を単一の呼び出し口にできる。
+    本関数を単一の呼び出し口にできる。machinery 軸は pj_slug の有無に関わらず常時適用する。
+
+    除外件数の可視化は ``machinery_exclusion_stats``（本モジュール）を別途呼ぶ（silence !=
+    evaluated・#443）。
     """
-    out = _filter_unpromoted(
+    out = _filter_actionable_without_machinery(
         records,
-        exclude_expired=True,
+        pj_slug,
         exclude_reviewed=exclude_reviewed,
         seen_path=seen_path,
         seen_keys=seen_keys,
+        marker_base=marker_base,
     )
-    if pj_slug is None:
-        return out
-    from correction_semantic.bootstrap_backlog import _exclude_bootstrap_consumed
-
-    return _exclude_bootstrap_consumed(out, pj_slug, marker_base=marker_base)
+    return [r for r in out if not is_machinery_signal(r)]
 
 
 def _match_key(pj_slug: Any, provenance: Optional[Dict[str, Any]]) -> tuple:

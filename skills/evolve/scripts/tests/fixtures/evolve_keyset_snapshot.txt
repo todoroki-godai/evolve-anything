@@ -1,6 +1,8 @@
 correction_review
 correction_review.bootstrap
 correction_review.bootstrap.dry_run
+correction_review.bootstrap.excluded_machinery_by_channel
+correction_review.bootstrap.excluded_machinery_total
 correction_review.bootstrap.groups
 correction_review.bootstrap.groups_total
 correction_review.bootstrap.is_bootstrap
@@ -10,6 +12,8 @@ correction_review.bootstrap.theme_buckets
 correction_review.daily
 correction_review.daily.dry_run
 correction_review.daily.eligible
+correction_review.daily.excluded_machinery_by_channel
+correction_review.daily.excluded_machinery_total
 correction_review.daily.groups
 correction_review.daily.remaining
 correction_review.daily.reviewed_keys_count

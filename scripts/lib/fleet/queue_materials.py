@@ -10,8 +10,8 @@ evolve.py 1739→156行+7 sub-module と同じ手法・ADR-048）。
 
 含む関数:
   - ``_aliases_for``: alias fold の primitive（``queue.py`` の ``_equivalence_slugs`` が使用）
-  - ``weak_unprocessed_by_pj`` / ``weak_content_poor_by_pj`` / ``bootstrap_consumed_by_pj``:
-    weak_signals.jsonl の PJ 別未処理件数 reader
+  - ``weak_unprocessed_by_pj`` / ``weak_content_poor_by_pj`` / ``weak_machinery_by_pj`` /
+    ``bootstrap_consumed_by_pj``: weak_signals.jsonl の PJ 別未処理件数 reader
   - ``new_corrections_by_pj`` / ``count_unattributed_corrections``: corrections.jsonl の
     PJ 別新規件数 reader
   - ``collect_untracked_materials`` / ``collect_phantom_materials``: tracked 母集団外の
@@ -130,6 +130,34 @@ def weak_content_poor_by_pj(
         pj_slug, weak_signals_path=weak_signals_path, marker_base=marker_base
     )
     return sum(1 for r in kept if r.get("channel") not in REVIEW_CHANNELS)
+
+
+def weak_machinery_by_pj(
+    pj_slug: str,
+    *,
+    weak_signals_path: Optional[Path] = None,
+    marker_base: Optional[Path] = None,
+) -> int:
+    """machinery（委譲メッセージ等の harness 注入）を理由に material から除外した weak 件数（#443 PR2-a）。
+
+    queue footer / ``--json`` の透明化用（silent truncation 禁止）。``weak_unprocessed_by_pj``
+    と同じ pj_slug scope（alias fold）を通した would-be-actionable 母集団のうち machinery
+    だった件数を、``REVIEW_CHANNELS``（content-rich）に絞って返す（content-poor channel の
+    machinery は元々 ``weak_unprocessed_by_pj`` の母集団に含まれないため二重計上しない）。
+    判定は ``correction_semantic.promote.machinery_exclusion_stats``（単一ソース）を使い、
+    新しい判定式は書かない。
+    """
+    from correction_semantic.promote import machinery_exclusion_stats
+    from correction_semantic.review_channels import REVIEW_CHANNELS
+    from weak_signals.store import read_signals
+
+    recs = read_signals(weak_signals_path)
+    aliases = _aliases_for(pj_slug)
+    scoped = [r for r in recs if r.get("pj_slug") in aliases]
+    stats = machinery_exclusion_stats(scoped, pj_slug, marker_base=marker_base)
+    return sum(
+        count for channel, count in stats["by_channel"].items() if channel in REVIEW_CHANNELS
+    )
 
 
 def bootstrap_consumed_by_pj(

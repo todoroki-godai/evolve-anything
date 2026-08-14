@@ -167,9 +167,10 @@ def record_reviewed(
 def _read_new(
     pj_slug: str,
     *,
-    weak_signals_path: Optional[Path],
+    weak_signals_path: Optional[Path] = None,
     seen_keys: Set[str],
     marker_base: Optional[Path] = None,
+    scoped: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """当該 PJ slug の「新規」未昇格 content-rich weak_signal を返す（#99）。
 
@@ -182,17 +183,38 @@ def _read_new(
     さもないと queue は待ち 0 と表示するのに daily_review だけが古い weak を延々確認に
     出し続ける split-brain になる（learning_consumption_state_split と同型）。
 
-    #405 round5 [Must]2 是正: promoted/TTL失効/既読・却下済み/bootstrap消化済みの4軸を
-    ``correction_semantic.promote.filter_actionable``（全 actionable reader の単一
-    predicate）経由で適用する。read（``read_signals``）・pj_slug スコープ（alias fold）・
-    channel フィルタ（REVIEW_CHANNELS）は従来どおりこの関数の責務のまま維持する
-    （filter_actionable の契約：レコードは呼び出し側が既にスコープ済みであること。channel
-    は filter_actionable の関知しない軸なので、promoted/TTL/reviewed/bootstrap の判定と
-    独立に先に絞ってよい）。呼び出し元 ``build_review`` が既に読んだ ``seen_keys`` を
-    ``seen_keys=`` でそのまま渡し、既読ストアの二重 read を避ける。
+    #405 round5 [Must]2 是正: promoted/TTL失効/既読・却下済み/bootstrap消化済み/machinery の
+    5軸を ``correction_semantic.promote.filter_actionable``（全 actionable reader の単一
+    predicate。machinery は #443 PR2-a で追加）経由で適用する。read（``read_signals``）・
+    pj_slug スコープ（alias fold）・channel フィルタ（REVIEW_CHANNELS）は従来どおりこの関数の
+    責務のまま維持する（filter_actionable の契約：レコードは呼び出し側が既にスコープ済み
+    であること。channel は filter_actionable の関知しない軸なので、promoted/TTL/reviewed/
+    bootstrap/machinery の判定と独立に先に絞ってよい）。呼び出し元 ``build_review`` が既に
+    読んだ ``seen_keys`` を ``seen_keys=`` でそのまま渡し、既読ストアの二重 read を避ける。
+
+    ``scoped``（codex [Should]1 是正）: ``build_review`` が ``machinery_exclusion_stats`` と
+    同じスナップショットを渡すための注入口。省略時（既存呼び出し互換）は従来どおり
+    ``_scoped_review_candidates`` で ``weak_signals_path`` から自前に読み直す。
     """
     from correction_semantic.promote import filter_actionable
 
+    if scoped is None:
+        scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
+    return filter_actionable(
+        scoped, pj_slug, seen_keys=seen_keys, marker_base=marker_base,
+    )
+
+
+def _scoped_review_candidates(
+    pj_slug: str,
+    weak_signals_path: Optional[Path],
+) -> List[Dict[str, Any]]:
+    """当該 PJ slug + REVIEW_CHANNELS にスコープした weak_signal（filter_actionable 適用前）。
+
+    ``_read_new``（filter_actionable 適用後の新規候補）と machinery 除外件数集計
+    （``build_review`` が返す ``excluded_machinery_*``・#443 PR2-a）が同じ read+scope
+    パスを共有するための単一ソース（重複実装を避ける）。
+    """
     recs = read_signals(weak_signals_path)
     scoped: List[Dict[str, Any]] = []
     for r in recs:
@@ -202,9 +224,7 @@ def _read_new(
         if r.get("channel") not in REVIEW_CHANNELS:
             continue
         scoped.append(r)
-    return filter_actionable(
-        scoped, pj_slug, seen_keys=seen_keys, marker_base=marker_base,
-    )
+    return scoped
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -351,6 +371,8 @@ def build_review(
         ],
         "remaining": int,                 # max_groups を超えて未提示の group 数
         "reviewed_keys_count": int,       # 既読集合（correction_review_seen）の現在サイズ
+        "excluded_machinery_total": int,       # #443 PR2-a: machinery で除外した件数
+        "excluded_machinery_by_channel": dict, #   （silence != evaluated・黙って減らさない）
         "slug": str,
         "dry_run": bool,
       }
@@ -370,11 +392,21 @@ def build_review(
     同一の挙動になる。marker が存在しない PJ は素通し（除外なし・挙動不変）。
     """
     seen_keys = read_reviewed_keys(seen_path)
+    # codex [Should]1 是正: scoped 母集団は一度だけ読み、_read_new と
+    # machinery_exclusion_stats に同じスナップショットを渡す（読みの間に store が
+    # 更新されると surface した除外件数と実候補数が食い違う race を防ぐ）。
+    scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
     new_records = _read_new(
         pj_slug,
-        weak_signals_path=weak_signals_path,
         seen_keys=seen_keys,
         marker_base=marker_base,
+        scoped=scoped,
+    )
+    # #443 PR2-a: 除外は黙って減らさない（silence != evaluated）。
+    from correction_semantic.promote import machinery_exclusion_stats
+
+    machinery_stats = machinery_exclusion_stats(
+        scoped, pj_slug, seen_keys=seen_keys, marker_base=marker_base,
     )
     # #476-3: bootstrap-pending の signal_key を daily から除外し二重提示を防ぐ。
     if exclude_signal_keys:
@@ -403,6 +435,8 @@ def build_review(
         "groups": top,
         "remaining": remaining,
         "reviewed_keys_count": len(seen_keys),
+        "excluded_machinery_total": machinery_stats["total"],
+        "excluded_machinery_by_channel": machinery_stats["by_channel"],
         "slug": pj_slug,
         "dry_run": dry_run,
     }

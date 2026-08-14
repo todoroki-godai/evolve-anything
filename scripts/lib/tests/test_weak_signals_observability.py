@@ -783,3 +783,69 @@ def test_backlog_lane_absent_when_daily_covers_all(
     body = "\n".join(section)
     assert "今日の修正確認" in body
     assert "--show-weak-signals" not in body
+
+
+# ── #443 PR2-a: machinery（委譲メッセージ等の harness 注入）除外の透明化 ──────
+
+
+def test_trailer_shows_machinery_excluded(tmp_path: Path, monkeypatch) -> None:
+    """machinery を理由に actionable から除外した件数を trailer に surface する。"""
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {
+            "channel": "llm_judge", "promoted": False, "pj_slug": current_slug,
+            "signal_key": "k1",
+            "provenance": {
+                "source_path": "/a.jsonl", "line_no": 1,
+                "text": "残る修正指示", "reason": "r",
+            },
+        },
+        {
+            "channel": "llm_judge", "promoted": False, "pj_slug": current_slug,
+            "signal_key": "k2",
+            "provenance": {
+                "source_path": "/a.jsonl", "line_no": 2,
+                "text": "<teammate-message>委譲メッセージ本文</teammate-message>",
+            },
+        },
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "machinery" in body
+    assert "除外 1 件" in body
+
+
+def test_trailer_silent_when_no_machinery(tmp_path: Path, monkeypatch) -> None:
+    """machinery が無ければ機械 exclusion 行を出さない（ノイズを足さない）。"""
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {"channel": "llm_judge", "promoted": False, "pj_slug": current_slug, "signal_key": "k1"},
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    assert "machinery" not in body
+
+
+def test_trailer_shows_machinery_even_when_all_excluded(tmp_path: Path, monkeypatch) -> None:
+    """当PJ未昇格が machinery 除外だけで 0 になっても、機械 exclusion 行は出す
+    （unpromoted>0 ブロックの外で独立判定・silence != evaluated）。"""
+    current_slug = tmp_path.name
+    _seed_multi_pj(tmp_path, monkeypatch, [
+        {
+            "channel": "llm_judge", "promoted": False, "pj_slug": current_slug,
+            "signal_key": "k1",
+            "provenance": {
+                "source_path": "/a.jsonl", "line_no": 1,
+                "text": "<teammate-message>委譲メッセージ本文</teammate-message>",
+            },
+        },
+    ])
+    section = build_weak_signals_section(tmp_path)
+    assert section is not None
+    body = "\n".join(section)
+    # 当PJ未昇格の導線文（unpromoted>0 ブロック）は出ない（matrix の「当PJ未昇格 0」は別行）。
+    assert "件（うち未読" not in body
+    assert "machinery" in body
+    assert "除外 1 件" in body

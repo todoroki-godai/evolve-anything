@@ -519,3 +519,55 @@ def test_other_pj_llm_judge_not_counted(tmp_path, monkeypatch):
     assert "枯渇している可能性" in combined
     # 当PJ の llm_judge は 0 件として表示される
     assert "llm_judge 0 件" in combined
+
+
+# ── #443 PR2-a: weak_signals（llm_judge channel）machinery 除外の透明化 ──────
+
+
+def test_channel_line_shows_llm_judge_machinery_excluded(tmp_path, monkeypatch):
+    """llm_judge の machinery（委譲メッセージ等）除外件数を channel_line に透明化する。"""
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    from pj_slug import pj_slug_fast
+    import weak_signals.store as ws_store
+
+    this_slug = pj_slug_fast(tmp_path)
+    store = tmp_path / "weak_signals.jsonl"
+    with open(store, "w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "channel": "llm_judge", "promoted": False, "pj_slug": this_slug,
+            "signal_key": "k1",
+            "provenance": {"source_path": "/a.jsonl", "line_no": 1,
+                           "text": "残る修正指示", "reason": "r"},
+        }) + "\n")
+        f.write(json.dumps({
+            "channel": "llm_judge", "promoted": False, "pj_slug": this_slug,
+            "signal_key": "k2",
+            "provenance": {"source_path": "/a.jsonl", "line_no": 2,
+                           "text": "<teammate-message>委譲メッセージ本文</teammate-message>"},
+        }) + "\n")
+    monkeypatch.setattr(ws_store, "default_store_path", lambda base=None: store)
+
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "llm_judge machinery 除外 1 件" in combined
+    # raw 表示（llm_judge 2 件）は影響を受けない
+    assert "llm_judge 2 件" in combined
+
+
+def test_channel_line_silent_when_no_llm_judge_machinery(tmp_path, monkeypatch):
+    """machinery が無ければ machinery 除外行を出さない（ノイズを足さない）。"""
+    _setup_stores(
+        tmp_path, monkeypatch,
+        usage_rows=_usage("s1", 30) + _usage("s2", 40),
+        corr_rows=[],
+    )
+    _seed_weak_signals(tmp_path, monkeypatch, this_pj=3)
+    section = build_capture_rate_section(tmp_path)
+    assert section is not None
+    combined = "\n".join(section)
+    assert "machinery 除外" not in combined

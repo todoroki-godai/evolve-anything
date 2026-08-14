@@ -299,7 +299,88 @@ def test_build_excludes_ttl_expired_signal_without_flag(tmp_path: Path):
     assert res["pj_total"] == 1
     all_keys = {k for g in res["groups"] for k in g["signal_keys"]}
     assert old.signal_key not in all_keys
-    assert fresh.signal_key in all_keys
+
+
+# ─────────────────────────────────────────────────────────────────
+# machinery（委譲メッセージ等の harness 注入）read 時除外（#443 PR2-a）
+# ─────────────────────────────────────────────────────────────────
+def test_read_backlog_excludes_machinery(tmp_path: Path):
+    # 既存5 reader の単一 predicate（is_machinery_signal）を _read_backlog にも通す。
+    # ここを落とすと Step 6.1（bootstrap）と Step 6.2（daily_review）で母集団が分裂する。
+    ws = tmp_path / "weak_signals.jsonl"
+    kept = _sig("残る", 1)
+    machinery = _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 2)
+    append_signals([kept, machinery], path=ws)
+
+    from correction_semantic.bootstrap_backlog import _read_backlog
+
+    backlog = _read_backlog("evolve-anything", ws)
+    keys = {r.get("signal_key") for r in backlog}
+    assert keys == {kept.signal_key}
+
+
+def test_build_excludes_machinery_from_pj_total(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    kept = _sig("残る", 1)
+    machinery = _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 2)
+    append_signals([kept, machinery], path=ws)
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    assert res["pj_total"] == 1
+    all_keys = {k for g in res["groups"] for k in g["signal_keys"]}
+    assert machinery.signal_key not in all_keys
+    assert kept.signal_key in all_keys
+
+
+def test_build_surfaces_excluded_machinery_counts(tmp_path: Path):
+    # 除外件数を surface する（黙って減らさない・silence != evaluated）。
+    ws = tmp_path / "weak_signals.jsonl"
+    kept = _sig("残る", 1)
+    machinery = _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 2)
+    append_signals([kept, machinery], path=ws)
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path))
+    assert res["excluded_machinery_total"] == 1
+    assert res["excluded_machinery_by_channel"] == {"llm_judge": 1}
+
+
+def test_build_surfaces_excluded_machinery_even_when_marker_present(tmp_path: Path):
+    """codex 2巡目 [Must]2 回帰テスト: marker 済み早期 return でも machinery 除外件数は
+    実値を返す（0 固定にしない）。
+
+    早期 return が回避しているのは group_signals の重い group 化であって jsonl の read
+    ではない。0 固定のままだと correction-review.md Step 6.1 の「スキップ／
+    AskUserQuestion どちらの分岐でも machinery 除外を必ず1行添える」という MUST がスキップ
+    分岐側で常に不成立になり、marker 設置以前検出の machinery は daily 側（bootstrap 消化
+    除外済み）にも見えないためどちらのレーンからも観測できない死角になっていた。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    kept = _sig("残る", 1)
+    machinery = _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 2)
+    append_signals([kept, machinery], path=ws)
+    marker = _marker(tmp_path)
+    marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=marker)
+    # 早期 return の本来の意図（重い group 化のスキップ）は維持する。
+    assert res["is_bootstrap"] is False
+    assert res["pj_total"] == 0
+    assert res["groups_total"] == 0
+    assert res["groups"] == []
+    # machinery 除外だけは実値（0 固定は codex が指摘した死角）。
+    assert res["excluded_machinery_total"] == 1
+    assert res["excluded_machinery_by_channel"] == {"llm_judge": 1}
+
+
+def test_build_excluded_machinery_zero_when_marker_present_and_none_machinery(
+    tmp_path: Path,
+) -> None:
+    # marker 済みで machinery が無ければ従来どおり 0（ノイズを足さない）。
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("残る", 1)], path=ws)
+    marker = _marker(tmp_path)
+    marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=marker)
+    assert res["is_bootstrap"] is False
+    assert res["excluded_machinery_total"] == 0
+    assert res["excluded_machinery_by_channel"] == {}
 
 
 # ─────────────────────────────────────────────────────────────────

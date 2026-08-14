@@ -346,16 +346,17 @@ def cluster_groups(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────────────────────────
-# backlog 読み取り（slug スコープ + 未昇格 + TTL 除外）
+# backlog 読み取り（slug スコープ + 未昇格 + TTL 除外 + machinery 除外）
 # ─────────────────────────────────────────────────────────────────
-def _read_backlog(
+def _scope_backlog_candidates(
     pj_slug: str,
     weak_signals_path: Optional[Path],
 ) -> List[Dict[str, Any]]:
-    """当該 PJ slug の未昇格 content-rich backlog を返す（TTL 失効は read 時導出で除外）。
+    """当該 PJ slug の未昇格 content-rich backlog 候補を返す（machinery 適用**前**）。
 
-    #99: 対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
-    チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ bootstrap でも除外。
+    ``_read_backlog``（machinery 除外後の最終候補）と ``build()`` の machinery 除外件数
+    集計（#443 PR2-a・silence != evaluated）が同じ read+scope パスを共有するための単一
+    ソース（重複実装を避ける・pitfall_copied_parse_convention_partial_fix）。
     """
     recs = read_signals(weak_signals_path)
     out: List[Dict[str, Any]] = []
@@ -373,6 +374,61 @@ def _read_backlog(
             continue
         out.append(r)
     return out
+
+
+def _read_backlog(
+    pj_slug: str,
+    weak_signals_path: Optional[Path],
+    *,
+    candidates: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """当該 PJ slug の未昇格 content-rich backlog を返す（TTL 失効・machinery は除外）。
+
+    #99: 対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
+    チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ bootstrap でも除外。
+
+    #443 PR2-a: machinery（委譲メッセージ等の harness 注入）は
+    ``correction_semantic.promote.is_machinery_signal``（既存5 reader の単一 predicate
+    ``filter_actionable`` と同じ述語）で除外する。ここを落とすと Step 6.1（bootstrap）と
+    Step 6.2（daily_review）で母集団が分裂する。
+
+    ``candidates``（codex [Should]1 是正）: ``build()`` が ``_machinery_backlog_stats`` と
+    同じスナップショットを渡すための注入口。省略時（既存呼び出し互換）は従来どおり
+    ``_scope_backlog_candidates`` で自前に読み直す。
+    """
+    from correction_semantic.promote import is_machinery_signal
+
+    if candidates is None:
+        candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
+    return [r for r in candidates if not is_machinery_signal(r)]
+
+
+def _machinery_backlog_stats(
+    pj_slug: str,
+    weak_signals_path: Optional[Path],
+    *,
+    candidates: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """当該 PJ backlog 候補のうち machinery で除外した件数を channel 別に集計する（#443）。
+
+    除外は黙って減らさない（silence != evaluated）。``build()`` が返り値に
+    ``excluded_machinery_total`` / ``excluded_machinery_by_channel`` として載せる。
+
+    ``candidates``（codex [Should]1 是正）: ``_read_backlog`` と同じスナップショットを
+    渡すための注入口。省略時は従来どおり自前に読み直す（後方互換）。
+    """
+    from correction_semantic.promote import is_machinery_signal
+
+    if candidates is None:
+        candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
+    total = 0
+    by_channel: Dict[str, int] = {}
+    for r in candidates:
+        if is_machinery_signal(r):
+            total += 1
+            ch = r.get("channel") or "(unknown)"
+            by_channel[ch] = by_channel.get(ch, 0) + 1
+    return {"total": total, "by_channel": by_channel}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -510,6 +566,8 @@ def build(
                                #   ときだけ TF-IDF テーマ別バケット
                                #   [{theme_label, group_indices, groups}]。閾値以下は None
                                #   （従来 per-group フロー・挙動不変）
+       "excluded_machinery_total": int,       # #443 PR2-a: machinery で除外した件数
+       "excluded_machinery_by_channel": dict, #   （silence != evaluated・黙って減らさない）
        "slug": str,
        "dry_run": bool}
 
@@ -522,18 +580,36 @@ def build(
     marker = marker_path if marker_path is not None else default_marker_path(pj_slug)
 
     if marker.exists():
-        # 早期 return: 既消化。pj_total/groups は計算しない（重い group 化を回避）。
+        # 早期 return: 既消化。pj_total/groups は計算しない（重い group_signals を回避）。
+        # codex 2巡目 [Must]2 是正: この早期 return が回避しているのは group_signals の
+        # 重い group 化であって jsonl の read ではない。machinery 除外件数は
+        # _machinery_backlog_stats（_scope_backlog_candidates の軽い read のみ・group 化
+        # 無し）で実値を返す — 0 固定のままだと correction-review.md Step 6.1 の
+        # 「スキップ／AskUserQuestion どちらの分岐でも machinery 除外を必ず1行添える」
+        # という MUST がスキップ分岐側で実行不能になり、marker 設置以前に検出された
+        # machinery レコードは daily 側（bootstrap 消化除外済み）にも見えないため、
+        # どちらのレーンからも観測できない死角になる。
+        machinery_stats = _machinery_backlog_stats(pj_slug, weak_signals_path)
         return {
             "is_bootstrap": False,
             "pj_total": 0,
             "groups_total": 0,
             "groups": [],
             "theme_buckets": None,
+            "excluded_machinery_total": machinery_stats["total"],
+            "excluded_machinery_by_channel": machinery_stats["by_channel"],
             "slug": pj_slug,
             "dry_run": dry_run,
         }
 
-    backlog = _read_backlog(pj_slug, weak_signals_path)
+    # codex [Should]1 是正: scope 母集団は一度だけ読み、_read_backlog と
+    # _machinery_backlog_stats に同じスナップショットを渡す（読みの間に store が
+    # 更新されると surface した除外件数と実候補数が食い違う race を防ぐ）。
+    scope_candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
+    backlog = _read_backlog(pj_slug, weak_signals_path, candidates=scope_candidates)
+    machinery_stats = _machinery_backlog_stats(
+        pj_slug, weak_signals_path, candidates=scope_candidates,
+    )
     groups = group_signals(backlog)
     # 他 PJ confirmed 一致 group を先頭へ + cross_pj_confirmed 付与（#462・read 専用）。
     from correction_semantic.cross_pj_priority import prioritize as _prioritize
@@ -550,6 +626,8 @@ def build(
         "groups_total": len(groups),
         "groups": groups,
         "theme_buckets": theme_buckets,
+        "excluded_machinery_total": machinery_stats["total"],
+        "excluded_machinery_by_channel": machinery_stats["by_channel"],
         "slug": pj_slug,
         "dry_run": dry_run,
     }

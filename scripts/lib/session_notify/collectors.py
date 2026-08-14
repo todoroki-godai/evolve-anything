@@ -504,18 +504,47 @@ def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | Non
         seen_path = _daily_review.default_seen_path(base=data_dir)
         seen_keys = _daily_review.read_reviewed_keys(path=seen_path)
         groups = _proposal_digest.build_session_proposals(queue_data, slug, seen_keys=seen_keys)
-        if not groups:
-            return None
-        # 回答コマンドは**絶対パス**で埋め込む。提示先は他 PJ の cwd であり、相対
-        # `bin/evolve-reflect` は "No such file" になる（pitfall_skill_md_plugin_root と同型）。
-        reflect_cmd = str(Path(__file__).resolve().parent.parent.parent.parent / "bin" / "evolve-reflect")
         # #412 [Must]4: global レーンの group を PJ ごとの --project-path で正しく帰属させる。
         proposals = queue_data.get("proposals")
         project_paths = proposals.get("project_paths") if isinstance(proposals, dict) else None
+        # codex 2巡目 [Must]1（#443 PR2-a）: machinery 除外件数は `groups` の有無に関わらず
+        # 先に取り出す。旧実装は `if not groups: return None` の**後**でこの値を計算しており、
+        # 「候補が全件 machinery で groups が空になる」最悪ケース（除外が最も効いた瞬間）で
+        # 早期 return に阻まれ、除外件数を読む行自体に到達しなかった（1巡目 [Must]2 と同型の
+        # 欠陥が別レイヤーに残っていた）。
+        excluded_machinery = 0
+        machinery_by_pj = (
+            proposals.get("excluded_machinery_by_pj") if isinstance(proposals, dict) else None
+        )
+        if isinstance(machinery_by_pj, dict):
+            entry = machinery_by_pj.get(slug)
+            if isinstance(entry, dict):
+                excluded_machinery = entry.get("total") or 0
+
+        if not groups:
+            if excluded_machinery <= 0:
+                return None  # 提案も除外もゼロ → 完全な無音（従来どおり）
+            # 提案は無いが machinery 除外は非ゼロ（silence != evaluated）。通常の「改善案が
+            # あります」文面は使わず、提案が無い事実を明示する専用の短い1行だけを返す。
+            # hookSpecificOutput は付けない（AskUserQuestion で確認すべき提案が無いため）。
+            notice = (
+                "[evolve-anything] 今日の新規提案はありません（machinery 除外 "
+                f"{excluded_machinery} 件 — 委譲メッセージ等の harness 注入のため"
+                "候補に含まれていません）。"
+            )
+            return {
+                "systemMessage": notice,
+                "digest": f"machinery除外{excluded_machinery}件",
+            }
+        # 回答コマンドは**絶対パス**で埋め込む。提示先は他 PJ の cwd であり、相対
+        # `bin/evolve-reflect` は "No such file" になる（pitfall_skill_md_plugin_root と同型）。
+        reflect_cmd = str(Path(__file__).resolve().parent.parent.parent.parent / "bin" / "evolve-reflect")
         message = _proposal_digest.build_proposal_prompt(
             groups, slug, reflect_cmd=reflect_cmd, project_paths=project_paths,
         )
-        system_message = _proposal_digest.build_proposal_systemmessage(groups)
+        system_message = _proposal_digest.build_proposal_systemmessage(
+            groups, excluded_machinery=excluded_machinery,
+        )
         # hookEventName は ADR-038 のスキーマ必須項目（subagent_observe.py と同型）。
         # 省略すると additionalContext が解釈されず機能が無言で死ぬ。
         return {
