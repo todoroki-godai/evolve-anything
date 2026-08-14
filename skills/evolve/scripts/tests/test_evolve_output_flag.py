@@ -187,6 +187,50 @@ def test_summary_surfaces_reject_suppression_meta():
     assert "suppression_candidate_errors" not in summary4
 
 
+def test_summary_surfaces_trigger_summary():
+    """#458: trigger_summary は生成されるだけで production/test どちらからも読まれない
+    **読み手ゼロ**のフィールドだった（#457 の棚卸しで D 判定）。auto trigger の発火回数と
+    最終発火日時が完全に不可視で、trigger_engine の稼働状況を知る手段が無かった。
+
+    marker_error（#287-5）/ reject_suppressed_total（#446）と同じ配線パターンで
+    1 行サマリに出す。`total_fires` が 0 のときは既存の「0件ならノイズを足さない」流儀で
+    スキップする（HOME 隔離下のテスト・初回実行では常に 0 になるため、ここを surface すると
+    サマリが毎回無意味に膨らむ）。
+    """
+    from pathlib import Path
+
+    fired = dict(_FAKE_RESULT)
+    fired["trigger_summary"] = {
+        "total_fires": 3,
+        "last_fired": "2026-08-14T09:00:00Z",
+        "recent_reasons": ["corrections_threshold", "session_end"],
+    }
+    summary = evolve._summarize_result(fired, Path("/tmp/out.json"))
+    assert summary["trigger_summary"]["total_fires"] == 3
+    assert summary["trigger_summary"]["last_fired"] == "2026-08-14T09:00:00Z"
+    # 発火理由まで出す（「何回」だけでは次の行動に繋がらない）。
+    assert summary["trigger_summary"]["recent_reasons"] == [
+        "corrections_threshold",
+        "session_end",
+    ]
+
+    # 0 件はノイズを足さない（_build_trigger_summary の early-return 形と同じ dict）。
+    never = dict(_FAKE_RESULT)
+    never["trigger_summary"] = {"total_fires": 0, "last_fired": None}
+    assert "trigger_summary" not in evolve._summarize_result(never, Path("/tmp/out.json"))
+
+    # キー自体が無い result（旧形式・phases_capture を通らない経路）でも落ちない。
+    absent = dict(_FAKE_RESULT)
+    absent.pop("trigger_summary", None)
+    assert "trigger_summary" not in evolve._summarize_result(absent, Path("/tmp/out.json"))
+
+    # 型が壊れていても落ちない（envelope は外部生成物ではないが、他の転記と同じく
+    # isinstance ガードを通す — marker_error 等と同じ防御水準に揃える）。
+    broken = dict(_FAKE_RESULT)
+    broken["trigger_summary"] = "not-a-dict"
+    assert "trigger_summary" not in evolve._summarize_result(broken, Path("/tmp/out.json"))
+
+
 def test_no_output_flag_keeps_full_json_on_stdout(patched_run, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["evolve.py", "--dry-run"])
 

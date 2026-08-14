@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- **fix(evolve): auto trigger の発火状況（trigger_summary）を1行サマリに surface（#458 /
+  #457）** — `trigger_summary.{total_fires, last_fired}` は `_state.py:_build_trigger_summary`
+  が生成し `phases_capture.py` が result へ入れるだけで、production/test どちらからも
+  読まれない読み手ゼロのフィールドだった（#457 の envelope 棚卸しで D 判定）。
+  corrections 蓄積・セッション終了で evolve/audit を自動提案する trigger_engine の稼働
+  状況を知る手段が無かった。`marker_error`（#287-5）/ `reject_suppressed_total`（#446）と
+  同じ配線パターンで `cli.py:_summarize_result` に転記する（`total_fires` が0のときは
+  既存の「0件ならノイズを足さない」流儀でスキップ）。TDD 4件。
 - **fix(evolve_decisions): reject された提案が次回 emit で再提示される不具合を修正
   （#446）** — `proposal_id = f(repo_id, relative_path, before_sha)` は emit 側で reject
   history を一切参照せず、reject 後も before_sha 不変なら無条件に再提示されていた。既存
