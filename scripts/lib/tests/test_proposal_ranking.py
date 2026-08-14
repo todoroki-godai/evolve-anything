@@ -219,3 +219,52 @@ def test_relative_time_label_months_ago():
 def test_relative_time_label_none_when_unparsable():
     assert pr.relative_time_label(None) is None
     assert pr.relative_time_label("not-a-date") is None
+
+
+# ─────────────────────────────────────────────────────────────────
+# group_freshness_iso / cross_pj_note（PR2-d 提示文の判断材料）
+# ─────────────────────────────────────────────────────────────────
+def test_group_freshness_iso_prefers_uttered_at():
+    ts = _iso(21)
+    g = _group(["k1"], {"k1": _meta(uttered_at=ts, detected_at=_iso(1))})
+    assert pr.group_freshness_iso(g) == ts
+
+
+def test_group_freshness_iso_falls_back_to_detected_at():
+    ts = _iso(5)
+    g = _group(["k1"], {"k1": _meta(detected_at=ts)})
+    assert pr.group_freshness_iso(g) == ts
+
+
+def test_group_freshness_iso_none_when_unparsable():
+    g = _group(["k1"], {"k1": _meta()})
+    assert pr.group_freshness_iso(g) is None
+
+
+def test_cross_pj_note_observed_global_lane():
+    g = _group(["k1"], {"k1": _meta()}, origin_pjs=["pj-a", "amamo", "figma-to-code"])
+    note = pr.cross_pj_note(g, "pj-a")
+    assert "他2PJ" in note
+    assert "amamo" in note and "figma-to-code" in note
+
+
+def test_cross_pj_note_confirmed_stronger_wording_when_not_global():
+    g = _group(["k1"], {"k1": _meta()}, cross_pj_confirmed=["amamo"])
+    note = pr.cross_pj_note(g, "pj-a")
+    assert "確認済み" in note
+    assert "amamo" in note
+
+
+def test_cross_pj_note_none_when_neither():
+    g = _group(["k1"], {"k1": _meta()})
+    assert pr.cross_pj_note(g, "pj-a") is None
+
+
+def test_cross_pj_note_global_takes_priority_over_confirmed():
+    g = _group(
+        ["k1"], {"k1": _meta()},
+        origin_pjs=["pj-a", "amamo"], cross_pj_confirmed=["figma-to-code"],
+    )
+    note = pr.cross_pj_note(g, "pj-a")
+    assert "amamo" in note
+    assert "確認済み" not in note

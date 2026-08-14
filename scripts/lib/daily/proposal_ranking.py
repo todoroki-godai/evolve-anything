@@ -209,3 +209,48 @@ def relative_time_label(
         return f"{int(delta_days // 7)}週間前の発話"
     return f"{max(1, int(delta_days // 30))}ヶ月前の発話"
 
+
+def group_freshness_iso(group: Dict[str, Any]) -> Optional[str]:
+    """group の残存 signal_keys から鮮度（uttered_at 優先・detected_at フォールバック）の
+    代表 ISO8601 文字列を返す（表示用。順位計算そのものは ``composite_sort_key`` の
+    epoch 版を使うので、この関数は ``relative_time_label`` に渡す文字列を作るためだけの
+    薄いラッパー）。時刻が1件も parse できなければ None。
+    """
+    meta_map = group.get("signal_meta_by_key") or {}
+    keys = group.get("signal_keys") or []
+    best_epoch: Optional[float] = None
+    best_iso: Optional[str] = None
+    for key in keys:
+        meta = meta_map.get(key) or {}
+        ts = meta.get("uttered_at") or meta.get("detected_at")
+        epoch = _parse_iso_epoch(ts)
+        if epoch is not None and (best_epoch is None or epoch > best_epoch):
+            best_epoch = epoch
+            best_iso = ts
+    return best_iso
+
+
+def cross_pj_note(group: Dict[str, Any], pj_slug: str) -> Optional[str]:
+    """観測ベース cross-PJ（global レーン）または confirmed cross-PJ の提示文を返す（PR2-d）。
+
+    `cross_pj_confirmed` だけを足す旧案は実データで発火0件（今朝の実測で confirmed idiom は
+    131件あるが正規化完全一致という照合の粗さで一致0）＝実質 no-op だったため、
+    global レーン（idiom テキストが2 PJ 以上で**観測**された連結成分。``origin_pjs`` で判定）
+    を優先し、こちらの方が遥かに発火しやすい「観測ベース」の弱い文言を出す。
+    confirmed（他 PJ で human が y を押した idiom と正規化テキスト一致）は判断材料として
+    より強いエビデンスなので、observed とは異なるより強い文言にする（設計要求）。
+    両方に該当する group は稀だが、observed（global）を優先する（confirmed は
+    ``cross_pj_confirmed`` として signal_meta_by_key にも残っているので情報は失われない）。
+    """
+    origin_pjs = group.get("origin_pjs")
+    if origin_pjs:
+        others = [p for p in origin_pjs if p != pj_slug]
+        if others:
+            listed = ", ".join(others)
+            return f"他{len(others)}PJでも同種の指摘（{listed}）"
+    cross_pj_confirmed = group.get("cross_pj_confirmed")
+    if cross_pj_confirmed:
+        listed = ", ".join(cross_pj_confirmed)
+        return f"他PJ（{listed}）で確認済み"
+    return None
+

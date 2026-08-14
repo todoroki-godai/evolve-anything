@@ -497,6 +497,28 @@ def build_session_proposals(
     return survivors[:limit]
 
 
+def _context_suffix(g: Dict[str, Any], pj_slug: str) -> str:
+    """ADR-054 PR2-d: 発話の実時刻（相対表記）+ 観測/confirmed cross-PJ を1行にまとめる。
+
+    `cross_pj_confirmed` だけを足す旧案は実データで発火0件＝実質 no-op だったため、
+    観測ベース cross-PJ（global レーン）・発話の実時刻という実際に朝の y/n に欠けていた
+    判断材料を出す（判断材料が無ければ空文字＝ノイズを足さない）。channel 名
+    （llm_judge/rephrase 等のジャーゴン）は出さない。
+    """
+    parts: List[str] = []
+    freshness_iso = _ranking.group_freshness_iso(g)
+    if freshness_iso:
+        label = _ranking.relative_time_label(freshness_iso)
+        if label:
+            parts.append(label)
+    note = _ranking.cross_pj_note(g, pj_slug)
+    if note:
+        parts.append(note)
+    if not parts:
+        return ""
+    return "（" + " ・ ".join(parts) + "）"
+
+
 def build_proposal_prompt(
     groups: List[Dict[str, Any]],
     pj_slug: str,
@@ -545,6 +567,10 @@ def build_proposal_prompt(
         else:
             rep = g.get("representative") or g.get("evidence_text") or ""
             lines.append(f"- 案: {rep}")
+        # ADR-054 PR2-d: 発話の実時刻・観測/confirmed cross-PJ を判断材料として添える。
+        context = _context_suffix(g, pj_slug)
+        if context:
+            lines.append(f"  {context}")
         keys_by_pj = g.get("keys_by_pj")
         if isinstance(keys_by_pj, dict) and keys_by_pj:
             for origin_slug, origin_keys in keys_by_pj.items():
@@ -569,7 +595,10 @@ def build_proposal_prompt(
 
 
 def build_proposal_systemmessage(
-    groups: List[Dict[str, Any]], *, excluded_machinery: int = 0,
+    groups: List[Dict[str, Any]],
+    *,
+    excluded_machinery: int = 0,
+    pj_slug: Optional[str] = None,
 ) -> str:
     """改善案の代表テキストを systemMessage（user 可視チャネル）本文として組み立てる（#412 [Must]1）。
 
@@ -585,6 +614,11 @@ def build_proposal_systemmessage(
     ``excluded_machinery``（codex [Must]1・#443 PR2-a）: この PJ の digest 生成時に machinery
     （委譲メッセージ等の harness 注入）を理由に候補から除外した件数。>0 のときだけ末尾に
     1行添える（silence != evaluated）。0 のときは従来どおりノイズを足さない。
+
+    ``pj_slug``（ADR-054 PR2-d）: 渡すと先頭 group（``groups`` は呼び出し側で composite sort
+    済みの前提＝最優先の1件）の発話の実時刻・cross-PJ 判断材料を末尾に添える。省略時
+    （後方互換）は従来どおり付けない。additionalContext（``build_proposal_prompt``）側は
+    全 group に付くのに対し、systemMessage は概要チャネルなので先頭1件だけに絞る。
     """
     reps: List[str] = []
     for g in groups[:MAX_SESSION_PROPOSALS]:
@@ -611,6 +645,11 @@ def build_proposal_systemmessage(
             f"[evolve-anything] 改善案があります: {joined}。応答のあとで採否をお聞きします。"
             "表示されなかった場合は未処理のまま次回また出ます。"
         )
+    if pj_slug is not None and groups:
+        # ADR-054 PR2-d: 先頭（最優先）group の判断材料だけ添える。
+        context = _context_suffix(groups[0], pj_slug)
+        if context:
+            base += f" {context}"
     if excluded_machinery > 0:
         base += (
             f" （machinery 除外 {excluded_machinery} 件は委譲メッセージ等の harness 注入のため"

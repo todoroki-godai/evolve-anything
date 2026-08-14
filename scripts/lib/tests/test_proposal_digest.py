@@ -846,6 +846,71 @@ def test_build_proposal_prompt_quotes_shell_metacharacter_pj_slug():
 
 
 # ─────────────────────────────────────────────────────────────────
+# build_proposal_prompt / build_proposal_systemmessage（ADR-054 PR2-d: 判断材料）
+# ─────────────────────────────────────────────────────────────────
+def _group_with_meta(keys, rep="rep", *, uttered_at=None, detected_at=None,
+                      origin_pjs=None, cross_pj_confirmed=None) -> dict:
+    g = _group(keys, rep=rep)
+    g["signal_meta_by_key"] = {
+        k: {"uttered_at": uttered_at, "detected_at": detected_at, "cross_pj": cross_pj_confirmed or []}
+        for k in keys
+    }
+    if origin_pjs is not None:
+        g["origin_pjs"] = origin_pjs
+    if cross_pj_confirmed is not None:
+        g["cross_pj_confirmed"] = cross_pj_confirmed
+    return g
+
+
+def test_build_proposal_prompt_includes_relative_time_and_cross_pj():
+    now = datetime.now(timezone.utc)
+    ts = (now - timedelta(days=21)).isoformat()
+    g = _group_with_meta(
+        ["k1"], rep="案X", uttered_at=ts, origin_pjs=["pj-a", "amamo", "figma-to-code"],
+    )
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "週間前の発話" in msg
+    assert "他2PJでも同種の指摘" in msg
+    assert "amamo" in msg and "figma-to-code" in msg
+    # channel 名（ジャーゴン）は出さない
+    assert "llm_judge" not in msg
+    assert "rephrase" not in msg
+
+
+def test_build_proposal_prompt_confirmed_uses_stronger_wording():
+    g = _group_with_meta(["k1"], rep="案Y", detected_at=(datetime.now(timezone.utc)).isoformat(),
+                          cross_pj_confirmed=["amamo"])
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "確認済み" in msg
+    assert "amamo" in msg
+
+
+def test_build_proposal_prompt_silent_when_no_context():
+    g = _group(["k1"], rep="案Z")  # signal_meta_by_key 無し・cross_pj/origin_pjs 無し
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "週間前" not in msg
+    assert "PJでも" not in msg
+    assert "確認済み" not in msg
+
+
+def test_build_proposal_systemmessage_includes_top_group_context():
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="rep1", detected_at=ts, cross_pj_confirmed=["amamo"])
+    msg = pd.build_proposal_systemmessage([g], pj_slug="pj-a")
+    assert "日前の発話" in msg
+    assert "確認済み" in msg
+
+
+def test_build_proposal_systemmessage_silent_when_pj_slug_omitted():
+    """後方互換: pj_slug 省略時は従来どおり判断材料を付けない。"""
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="rep1", detected_at=ts, cross_pj_confirmed=["amamo"])
+    msg = pd.build_proposal_systemmessage([g])
+    assert "日前の発話" not in msg
+    assert "確認済み" not in msg
+
+
+# ─────────────────────────────────────────────────────────────────
 # build_proposal_systemmessage（#412 [Must]1: 2チャネル同時出力）
 # ─────────────────────────────────────────────────────────────────
 def test_build_proposal_systemmessage_lists_representatives():
