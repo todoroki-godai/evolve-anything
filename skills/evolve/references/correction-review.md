@@ -20,7 +20,7 @@ reflect は独立フェーズではなく discover に統合済み。**`phases.d
 既存の weak_signals バックログ（channel ∈ content-rich = llm_judge / rephrase / permission_deny・未昇格・#99）を初回 evolve でまとめて確認する入口。**判定は phase 出力 `result.correction_review.bootstrap` を読むだけで行う（散文ステップで判定しない）。** 機械は「アクティブ PJ」を判定しない — 件数は人間の判断材料として表示するだけ。content-poor チャネル（esc_interrupt / manual_edit_after_ai）は detector 文脈未保存ゆえ対象外（#99）。
 
 - `bootstrap.is_bootstrap != True`（marker 立ち済み or backlog 0 / error）→ **スキップ**（沈黙≠評価のため `bootstrap.is_bootstrap=False` のときのみ「bootstrap: 消化済み ✓」を1行表示）
-- **`bootstrap.excluded_machinery_total > 0`（machinery＝委譲メッセージ等の harness 注入除外・#443 PR2-a）→ 上記スキップ／下記 AskUserQuestion のどちらの分岐でも「除外: machinery {excluded_machinery_total} 件（委譲メッセージ等の harness 注入。実際に確認可能な件数には含まれていません）」を必ず1行添える（MUST — silence != evaluated）。** 候補が全件 machinery で `bootstrap.is_bootstrap` が `False`（backlog 0 相当）になったケースこそ、この1行が無いと利用者には「bootstrap: 消化済み ✓」しか見えず除外の事実が完全に隠れる（最重要ケース）。
+- **`bootstrap.excluded_machinery_total > 0`（machinery＝委譲メッセージ等の harness 注入除外・#443 PR2-a）→ 上記スキップ／下記 AskUserQuestion のどちらの分岐でも「除外: machinery {excluded_machinery_total} 件（委譲メッセージ等の harness 注入。実際に確認可能な件数には含まれていません）」を必ず1行添える（MUST — silence != evaluated）。** 候補が全件 machinery だと `pj_total` / `groups_total` が 0 になり、3択も「消化するものが無い」空提示になる。この1行が無いと利用者には除外の事実が完全に隠れる（最重要ケース）。なお `is_bootstrap` は marker の有無だけで決まる（backlog 0 でも marker 未設定なら `True`）。
 - `bootstrap.is_bootstrap == True` → **AskUserQuestion で 3 択を人間に選ばせる（MUST — テキスト表示だけで済ませない）**。question に `bootstrap.pj_total` 件・`bootstrap.groups_total` グループを判断材料として提示する。**各 option の `detail` に下記の副作用1行を必ず添える（MUST）** — 3択は「marker を立てるか立てないか」で以後の再表示挙動が非対称になり、取り違えると bootstrap が永久に消える / 永久に再提示される（#51 MEDIUM）:
   - question: 「この PJ の未昇格バックログ {pj_total} 件（{groups_total} グループ）を初回 bootstrap で消化しますか？」
   - options（`detail` に副作用を明示する）:
