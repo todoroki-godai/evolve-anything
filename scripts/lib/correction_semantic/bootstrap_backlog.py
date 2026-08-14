@@ -580,15 +580,24 @@ def build(
     marker = marker_path if marker_path is not None else default_marker_path(pj_slug)
 
     if marker.exists():
-        # 早期 return: 既消化。pj_total/groups は計算しない（重い group 化を回避）。
+        # 早期 return: 既消化。pj_total/groups は計算しない（重い group_signals を回避）。
+        # codex 2巡目 [Must]2 是正: この早期 return が回避しているのは group_signals の
+        # 重い group 化であって jsonl の read ではない。machinery 除外件数は
+        # _machinery_backlog_stats（_scope_backlog_candidates の軽い read のみ・group 化
+        # 無し）で実値を返す — 0 固定のままだと correction-review.md Step 6.1 の
+        # 「スキップ／AskUserQuestion どちらの分岐でも machinery 除外を必ず1行添える」
+        # という MUST がスキップ分岐側で実行不能になり、marker 設置以前に検出された
+        # machinery レコードは daily 側（bootstrap 消化除外済み）にも見えないため、
+        # どちらのレーンからも観測できない死角になる。
+        machinery_stats = _machinery_backlog_stats(pj_slug, weak_signals_path)
         return {
             "is_bootstrap": False,
             "pj_total": 0,
             "groups_total": 0,
             "groups": [],
             "theme_buckets": None,
-            "excluded_machinery_total": 0,
-            "excluded_machinery_by_channel": {},
+            "excluded_machinery_total": machinery_stats["total"],
+            "excluded_machinery_by_channel": machinery_stats["by_channel"],
             "slug": pj_slug,
             "dry_run": dry_run,
         }

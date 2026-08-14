@@ -342,11 +342,39 @@ def test_build_surfaces_excluded_machinery_counts(tmp_path: Path):
     assert res["excluded_machinery_by_channel"] == {"llm_judge": 1}
 
 
-def test_build_excluded_machinery_zero_when_marker_present(tmp_path: Path):
-    # marker 済みの早期 return でも黙って未計算にせず 0 を明示する。
+def test_build_surfaces_excluded_machinery_even_when_marker_present(tmp_path: Path):
+    """codex 2巡目 [Must]2 回帰テスト: marker 済み早期 return でも machinery 除外件数は
+    実値を返す（0 固定にしない）。
+
+    早期 return が回避しているのは group_signals の重い group 化であって jsonl の read
+    ではない。0 固定のままだと correction-review.md Step 6.1 の「スキップ／
+    AskUserQuestion どちらの分岐でも machinery 除外を必ず1行添える」という MUST がスキップ
+    分岐側で常に不成立になり、marker 設置以前検出の machinery は daily 側（bootstrap 消化
+    除外済み）にも見えないためどちらのレーンからも観測できない死角になっていた。
+    """
     ws = tmp_path / "weak_signals.jsonl"
-    machinery = _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 1)
-    append_signals([machinery], path=ws)
+    kept = _sig("残る", 1)
+    machinery = _sig("<teammate-message>委譲メッセージ本文</teammate-message>", 2)
+    append_signals([kept, machinery], path=ws)
+    marker = _marker(tmp_path)
+    marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=marker)
+    # 早期 return の本来の意図（重い group 化のスキップ）は維持する。
+    assert res["is_bootstrap"] is False
+    assert res["pj_total"] == 0
+    assert res["groups_total"] == 0
+    assert res["groups"] == []
+    # machinery 除外だけは実値（0 固定は codex が指摘した死角）。
+    assert res["excluded_machinery_total"] == 1
+    assert res["excluded_machinery_by_channel"] == {"llm_judge": 1}
+
+
+def test_build_excluded_machinery_zero_when_marker_present_and_none_machinery(
+    tmp_path: Path,
+) -> None:
+    # marker 済みで machinery が無ければ従来どおり 0（ノイズを足さない）。
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("残る", 1)], path=ws)
     marker = _marker(tmp_path)
     marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
     res = bb.build("evolve-anything", weak_signals_path=ws, marker_path=marker)

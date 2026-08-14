@@ -136,6 +136,43 @@ def test_build_silent_on_machinery_when_other_pj_excluded(tmp_path, monkeypatch)
     assert "machinery" not in output["systemMessage"]
 
 
+def test_build_fires_machinery_only_notice_when_groups_empty(tmp_path, monkeypatch):
+    """codex 2巡目 [Must]1: 提案候補が全件 machinery で groups が空でも、除外件数が非ゼロなら
+    通知を返す（silence != evaluated）。旧実装は `if not groups: return None` が machinery
+    件数を読む前に発火し、除外が最も効いた瞬間にだけ完全に沈黙していた。
+    """
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    # per_pj に当該 slug のエントリが無い（＝候補が全件 machinery で digest 側から落ちた想定）。
+    _write_queue(source, {
+        "per_pj": {},
+        "global": [],
+        "excluded_machinery_by_pj": {slug: {"total": 4, "by_channel": {"llm_judge": 4}}},
+    })
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    assert "machinery" in output["systemMessage"]
+    assert "4" in output["systemMessage"]
+    # 通常の「改善案があります」文面（AskUserQuestion 誘導）は使わない — 提案が無い事実を示す。
+    assert "改善案があります" not in output["systemMessage"]
+    # AskUserQuestion で確認すべき提案が無いため additionalContext は付けない。
+    assert "hookSpecificOutput" not in output
+
+
+def test_build_returns_none_when_groups_and_machinery_both_empty(tmp_path, monkeypatch):
+    """codex 2巡目 [Must]1: groups 空 かつ machinery 除外 0 なら従来どおり完全な無音（None）。"""
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {
+        "per_pj": {},
+        "global": [],
+        "excluded_machinery_by_pj": {slug: {"total": 0, "by_channel": {}}},
+    })
+
+    assert restore_state._build_session_proposal_output() is None
+
+
 def test_build_returns_none_when_no_proposals_for_this_pj(tmp_path, monkeypatch):
     source = _install_env(tmp_path, monkeypatch)
     _set_project_dir(tmp_path, monkeypatch)
