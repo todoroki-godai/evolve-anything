@@ -25,6 +25,7 @@ from evolve_decision_ids import (
 
 from ._candidates import _record_advisory_event
 from ._queue import _queue_lock, _write_queue, read_queue
+from ._suppression import record_pending_rejection
 
 
 def ingest_decisions(
@@ -78,6 +79,7 @@ def ingest_decisions(
     accepted_out: List[str] = []
     rejected_out: List[str] = []
     skipped: List[str] = []
+    suppression_ledger_errors: List[Dict[str, str]] = []
     recorder = None
 
     for entry in pending:
@@ -146,6 +148,16 @@ def ingest_decisions(
                 # queue purge とともに捨てる）。
                 revert_fields=_revert_fields,
             )
+        # #446: 両レーン（advisory/skill）の合流点。advisory 分岐は _record_advisory_event
+        # のみを呼び record_evolve_diff_decision を呼ばないため、reject 抑制の記録は
+        # レーン別の呼び出し直後ではなくここに置く（advisory/skill どちらの entry でも
+        # 必ず到達する）。fail-open: 失敗しても pid を rejected_out へ積む処理・キュー消化
+        # （下の from_queue ブロック）は続行する。dry_run 時は判断記録自体をスキップして
+        # いるのと同じ扱いで呼ばない（dry-run 純度）。
+        if not dry_run and kind == "reject":
+            err = record_pending_rejection(entry, slug=slug)
+            if err is not None:
+                suppression_ledger_errors.append({"id": pid, "error": err})
         (accepted_out if kind == "accept" else rejected_out).append(pid)
 
     if not dry_run and from_queue:
@@ -158,4 +170,11 @@ def ingest_decisions(
         with _queue_lock(slug):
             _write_queue(slug, [e for e in read_queue(slug) if e.get("id") not in consumed])
 
-    return {"accepted": accepted_out, "rejected": rejected_out, "skipped": skipped}
+    return {
+        "accepted": accepted_out,
+        "rejected": rejected_out,
+        "skipped": skipped,
+        # #446: reject 抑制 ledger への書込失敗一覧（新 observability section は作らない・
+        # 既存 dict へのキー追加のみ）。0件でもキーは出す。
+        "suppression_ledger_errors": suppression_ledger_errors,
+    }

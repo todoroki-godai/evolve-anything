@@ -544,6 +544,18 @@ def _summarize_result(result: dict, output_path: Path) -> dict:
     # 書きっぱなしとしてこの repo が継続的に潰してきた型）。
     if isinstance(_ed, dict) and _ed.get("dry_run_snapshot_warning"):
         summary["dry_run_snapshot_warning"] = _ed["dry_run_snapshot_warning"]
+    # #446: reject 抑制の meta を 1 行サマリにも出す。marker_error（#287-5）/
+    # dry_run_snapshot_warning（#402 PR-2 §0.3）と同じ理由 — envelope に入れるだけでは
+    # reader が居ない書きっぱなしフィールドになる（設計 §3.3 が当初想定した daily-run
+    # 近傍への追記は、そのフィールド自体が daily-run に存在せず宛先が無かったため、
+    # marker_error と同じこの配線に codex round3 [Must]4 で訂正した）。0件/None は
+    # 既存の「ノイズを足さない」流儀でスキップする。
+    if isinstance(_ed, dict) and _ed.get("reject_suppressed_total"):
+        summary["reject_suppressed_total"] = _ed["reject_suppressed_total"]
+    if isinstance(_ed, dict) and _ed.get("suppression_ledger_read_error"):
+        summary["suppression_ledger_read_error"] = _ed["suppression_ledger_read_error"]
+    if isinstance(_ed, dict) and _ed.get("suppression_candidate_errors"):
+        summary["suppression_candidate_errors"] = _ed["suppression_candidate_errors"]
     if result.get("observe_first"):
         summary["observe_first"] = True
         observe = result.get("phases", {}).get("observe", {})

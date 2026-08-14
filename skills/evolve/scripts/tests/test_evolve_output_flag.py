@@ -128,6 +128,65 @@ def test_summary_surfaces_dry_run_snapshot_warning():
     assert "dry_run_snapshot_warning" not in evolve._summarize_result(ok, Path("/tmp/out.json"))
 
 
+def test_summary_surfaces_reject_suppression_meta():
+    """#446 codex round3 [Must]4: reject 抑制の meta が envelope に入るだけでは reader が
+    居ない書きっぱなしフィールドになる（marker_error / dry_run_snapshot_warning と同型の
+    failure mode。設計 §3.3 が当初想定した daily-run 近傍への追記は宛先が実在しなかった
+    ため、marker_error と同じ `cli.py:_summarize_result` の配線に訂正）。0件/None は
+    既存の「ノイズを足さない」流儀でスキップする（marker_error と同じ条件分岐）。
+    """
+    from pathlib import Path
+
+    suppressed = dict(_FAKE_RESULT)
+    suppressed["evolve_decisions"] = {
+        "count": 1,
+        "reject_suppressed_total": 2,
+        "suppression_ledger_read_error": None,
+        "suppression_candidate_errors": [],
+    }
+    summary = evolve._summarize_result(suppressed, Path("/tmp/out.json"))
+    assert summary["reject_suppressed_total"] == 2
+    assert "suppression_ledger_read_error" not in summary
+    assert "suppression_candidate_errors" not in summary
+
+    read_error = dict(_FAKE_RESULT)
+    read_error["evolve_decisions"] = {
+        "count": 1,
+        "reject_suppressed_total": 0,
+        "suppression_ledger_read_error": "OSError: disk full",
+        "suppression_candidate_errors": [],
+    }
+    summary2 = evolve._summarize_result(read_error, Path("/tmp/out.json"))
+    assert summary2["suppression_ledger_read_error"] == "OSError: disk full"
+    assert "reject_suppressed_total" not in summary2  # 0件はノイズを足さない
+
+    candidate_err = dict(_FAKE_RESULT)
+    candidate_err["evolve_decisions"] = {
+        "count": 1,
+        "reject_suppressed_total": 0,
+        "suppression_ledger_read_error": None,
+        "suppression_candidate_errors": [
+            {"id": "evdiff_1", "boundary": "candidate_key", "error": "AttributeError: boom"}
+        ],
+    }
+    summary3 = evolve._summarize_result(candidate_err, Path("/tmp/out.json"))
+    assert summary3["suppression_candidate_errors"] == [
+        {"id": "evdiff_1", "boundary": "candidate_key", "error": "AttributeError: boom"}
+    ]
+
+    ok = dict(_FAKE_RESULT)
+    ok["evolve_decisions"] = {
+        "count": 1,
+        "reject_suppressed_total": 0,
+        "suppression_ledger_read_error": None,
+        "suppression_candidate_errors": [],
+    }
+    summary4 = evolve._summarize_result(ok, Path("/tmp/out.json"))
+    assert "reject_suppressed_total" not in summary4
+    assert "suppression_ledger_read_error" not in summary4
+    assert "suppression_candidate_errors" not in summary4
+
+
 def test_no_output_flag_keeps_full_json_on_stdout(patched_run, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["evolve.py", "--dry-run"])
 

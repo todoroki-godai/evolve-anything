@@ -6,8 +6,10 @@
 （重複した提案を行ってはならない MUST NOT）に反し、次回 evolve で同じ提案が再出していた。
 
 本モジュールは却下を `LEDGER_ROOT/<slug>.jsonl` に dedup_key 単位で永続化し、TTL（既定45日）
-内であれば同じ提案を抑制する。TTL を過ぎたら 1 回だけ再 surface する（環境が変わって
-妥当になった可能性があるため再評価の機会を与える）。
+内であれば同じ提案を抑制する。TTL は read 時に「今の時刻が decided_at + ttl_days を超えて
+いるか」を毎回計算するだけの純粋な判定で、超過後は毎回再 surface する（1回だけでなく
+恒久的に抑制解除。再び却下されれば新しい decided_at で改めて TTL 分だけ抑制される。
+環境が変わって妥当になった可能性があるため再評価の機会を与える設計）。
 
 設計は triage_ledger.py（#308）を範に踏襲する:
   - per-slug 分離 + worktree 安全 slug（`git rev-parse --git-common-dir` の親 basename。
@@ -45,7 +47,9 @@ UNATTRIBUTED_SLUG = "_unattributed"
 _SLUG_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 DAY_SECONDS = 86400.0
-# TTL: この日数を過ぎたら却下を1回だけ再 surface（再評価の機会）。triage_ledger と同値。
+# TTL: この日数を過ぎたら却下を毎回再 surface する（1回だけでなく恒久的に解除。
+# 再び却下されれば新しい decided_at で改めて TTL 分だけ抑制される。再評価の機会を
+# 与える設計・is_suppressed 参照）。triage_ledger と同値。
 DEFAULT_TTL_DAYS = 45
 
 

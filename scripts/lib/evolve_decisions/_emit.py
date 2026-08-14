@@ -223,6 +223,14 @@ def emit_decisions(
     except Exception:
         pass
 
+    # #446: reject 抑制フィルタは advisory マージ完了後、それ自身の fail-open 契約の下で
+    # 独立に呼ぶ（advisory 収集の try/except に混ぜない・上の except Exception: pass とは
+    # 別スコープ）。kept を後続のキュー書込・マーカー書込の両方に使い、二重 writer 問題を
+    # 避ける（filter_rejected は読み取り専用で dry_run 有無に関わらず同じ契約）。
+    from ._suppression import filter_rejected
+
+    pending, suppression_stats = filter_rejected(pending, slug=slug)
+
     persisted = False
     marker_written = False
     marker_cleared = False
@@ -289,4 +297,12 @@ def emit_decisions(
         # #402 PR-2 §0.3: sidecar 単調性契約違反の痕跡（warn + 続行）。異常なしなら None。
         # dry_run のみ検出対象（非 dry_run は file_lock が sidecar を必ず作るため不在なし）。
         "dry_run_snapshot_warning": snapshot_warning,
+        # #446: reject 抑制フィルタの meta（新 observability section は作らない・既存 dict
+        # へのキー追加のみ）。0件でもキーは出す（silence != evaluated）。
+        "reject_suppressed_total": suppression_stats["suppressed_total"],
+        "reject_suppressed": suppression_stats["suppressed"],
+        "suppression_ledger_read_error": suppression_stats["ledger_read_error"],
+        # #446 codex round3 [Must]2(b): 候補単位のキー計算/レコード値失敗（境界②③）も
+        # 呼び出し元まで届ける。0件でもキーは出す。
+        "suppression_candidate_errors": suppression_stats["candidate_errors"],
     }
