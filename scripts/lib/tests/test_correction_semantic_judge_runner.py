@@ -763,6 +763,29 @@ def test_out_of_range_verdicts_surfaced_in_return_value_and_log(tmp_path, monkey
     assert "out_of_range_verdicts=1" in out.getvalue()
 
 
+def test_assistant_only_skipped_surfaced_in_return_value_and_log(tmp_path, monkeypatch):
+    """#445: 全行 assistant 引用（human 発言 0 行）の発話は is_correction=True でも
+    weak_signals に書かれず、戻り値・フェーズ遷移ログの両方に件数が伝播する。
+    """
+    import io
+
+    out = io.StringIO()
+    utterances = [
+        _utt("/a.jsonl", 0, "⏺ はい、両方とも main にマージ済みです。", "pj-a", ts=_ts(1)),
+    ]
+    monkeypatch.setattr(
+        judge_runner, "call_haiku", lambda prompt, model="haiku": _ok_verdict_response([(0, True)])
+    )
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=utterances, judged_path=tmp_path / "correction_judged.jsonl",
+        weak_signals_path=tmp_path / "weak_signals.jsonl", out=out, batch_size=30,
+    )
+    assert res["assistant_only_skipped"] == 1
+    assert res["corrections"] == 0
+    assert "assistant_only_skipped=1" in out.getvalue()
+    assert read_signals(tmp_path / "weak_signals.jsonl") == []
+
+
 # ── #410 round4 [Must]1+2: 費用の事前予約方式（call_haiku 呼び出し直前に予約） ────────
 # round3 は「呼び出し後に課金が確定したと判明した試行だけ事後記録する」方式だったが、
 # (a) 範囲内 verdict が1件でもあれば billed_attempt を作らないため未返却 index の本文

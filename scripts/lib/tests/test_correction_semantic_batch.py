@@ -304,6 +304,49 @@ def test_ingest_filters_overbroad_idioms_from_dictionary(scratch_dir: Path) -> N
     assert {r["idiom"] for r in idiom_lines} == {"つむぎにしてほしいんだけど"}
 
 
+def test_ingest_skips_assistant_only_utterance(scratch_dir: Path) -> None:
+    """#445: 発話が全行 assistant 引用（⏺/⎿ マーカーのみ・human 発言 0 行）なら、
+    LLM が is_correction=True と判定していても weak_signal/個人辞書に書かない。
+
+    judged には積む（再判定ループを防ぐ）が corrections/weak_written は増やさず、
+    専用カウンタ assistant_only_skipped に計上する（silence != evaluated）。
+    """
+    ws_store = scratch_dir / "weak_signals.jsonl"
+    idioms_store = scratch_dir / "idioms.jsonl"
+    judged = scratch_dir / "judged.jsonl"
+
+    utts = [
+        {"source_path": "/a.jsonl", "line_no": 1, "session_id": "s1",
+         "text": "⏺ はい、両方とも main にマージ済みです。\n  ⎿ 詳細",
+         "prev_action": None, "pj_slug": "evolve-anything",
+         "timestamp": "2026-06-01T00:00:00+00:00"},
+        {"source_path": "/a.jsonl", "line_no": 2, "session_id": "s1",
+         "text": "P6のデザインが違うんだけど", "prev_action": None,
+         "pj_slug": "evolve-anything", "timestamp": "2026-06-01T00:01:00+00:00"},
+    ]
+    emitted = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=utts, batch_size=30, judged_path=judged,
+    )
+    rid = emitted["requests"][0]["id"]
+    responses = _responses_for(emitted, {
+        (rid, 0): {"is_correction": True, "idiom": "マージ済み", "reason": "誤判定"},
+        (rid, 1): {"is_correction": True, "idiom": "デザインが違うから直して", "reason": "正当な指摘"},
+    })
+    res = cs_batch.ingest_judgement_results(
+        emitted, responses,
+        weak_signals_path=ws_store, idioms_path=idioms_store, judged_path=judged,
+    )
+    # assistant-only の 1 件は書込から除外、human 発話の 1 件だけ記録される
+    assert res["corrections"] == 1
+    assert res["assistant_only_skipped"] == 1
+    ws_lines = [json.loads(l) for l in ws_store.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(ws_lines) == 1
+    idiom_lines = [json.loads(l) for l in idioms_store.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert {r["idiom"] for r in idiom_lines} == {"デザインが違うから直して"}
+    # 再判定ループを防ぐため両方 judged には積む
+    assert cs_store.read_judged_keys(judged) == {"/a.jsonl:1", "/a.jsonl:2"}
+
+
 def test_ingest_dry_run_writes_nothing(scratch_dir: Path) -> None:
     ws_store = scratch_dir / "weak_signals.jsonl"
     idioms_store = scratch_dir / "idioms.jsonl"

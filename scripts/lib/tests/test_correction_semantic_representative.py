@@ -55,6 +55,62 @@ def test_empty_or_none():
     assert r.user_only_text(None) == ""
 
 
+# ── #445: Claude Code の tool 実行結果マーカー（⏺/⎿）を assistant 引用として扱う ──
+def test_strips_bullet_marker_line():
+    # ⏺（U+2B24）は Claude Code CLI の assistant メッセージ先頭マーカー。
+    text = "⏺ Ran 3 stop hooks (ctrl+o to expand)\nこれ削除したい"
+    assert r.user_only_text(text) == "これ削除したい"
+
+
+def test_strips_corner_marker_line():
+    # ⎿ は ⏺ に続く detail 行のマーカー。
+    text = "⏺ 実行結果です\n  ⎿ 詳細行\nそれ違う"
+    assert r.user_only_text(text) == "それ違う"
+
+
+def test_mixed_assistant_quote_and_human_comment():
+    # ⏺/⎿ で始まる行はそれぞれ strip される（行頭マーカーでの判定のため、マーカー行の
+    # 折り返し継続行はこの実装では残る＝既存の quote-line 判定と同じ限界）。
+    text = "⏺ 実行結果です\n⎿ 詳細行\nこれよく勝手に進んじゃうので、削除したい"
+    out = r.user_only_text(text)
+    assert out == "これよく勝手に進んじゃうので、削除したい"
+    assert "⏺" not in out and "⎿" not in out
+
+
+def test_mixed_assistant_quote_wrapped_continuation_line_survives():
+    # #445 実コーパス実測（1件）: ⎿ 行の折り返し継続行はマーカーを持たないため、
+    # 行単位 strip では残る（既知の限界。⏺/⎿ 自体の行と human の実指摘は正しく分離できる）。
+    text = (
+        "⏺ Ran 3 stop hooks (ctrl+o to expand)\n"
+        "  ⎿ Stop hook error: 先送り表現を検出しました\n"
+        "  を即座に起動して並行処理してください。\n\n"
+        "これよく勝手に進んじゃうので、削除したい"
+    )
+    out = r.user_only_text(text)
+    assert "⏺" not in out and "⎿" not in out
+    assert "これよく勝手に進んじゃうので、削除したい" in out
+
+
+# ── is_assistant_only_text: 全行が assistant 発話由来か（#445 書込ゲート用） ──
+def test_is_assistant_only_text_true_when_all_lines_are_assistant_markers():
+    text = "⏺ はい、両方とも main にマージ済みです。\n  ⎿ 詳細"
+    assert r.is_assistant_only_text(text) is True
+
+
+def test_is_assistant_only_text_false_when_human_line_present():
+    text = "⏺ 実行結果です\nそれ違う"
+    assert r.is_assistant_only_text(text) is False
+
+
+def test_is_assistant_only_text_false_for_pure_human_text():
+    assert r.is_assistant_only_text("四国めたんじゃなくてつむぎにして") is False
+
+
+def test_is_assistant_only_text_false_for_empty():
+    assert r.is_assistant_only_text("") is False
+    assert r.is_assistant_only_text(None) is False
+
+
 # ── prev_action_summary: 直前 AI 行動の 1 行要約 ──────────────────────
 def test_prev_action_summary_passthrough():
     assert r.prev_action_summary("Edit foo.py") == "Edit foo.py"

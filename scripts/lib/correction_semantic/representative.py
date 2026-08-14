@@ -27,8 +27,11 @@ from typing import List, Optional
 # assistant 出力の引用と判定する行頭マーカー:
 # - markdown blockquote（"> " / "＞"）
 # - ステータス/通知の絵文字プレフィックス（ℹ️ ✓ ✗ ⚠️ ✅ ❌ 🔹 ➜ など assistant の構造化出力）
+# - Claude Code CLI の tool 実行結果マーカー（⏺ = assistant メッセージ先頭 / ⎿ = 詳細行。
+#   #445: 実コーパスで assistant のツール出力（stop hook 結果・PR ステータス表）がこの
+#   マーカー未対応のため strip されず corrections に混入していた）
 _QUOTE_LINE_RE = re.compile(
-    r"^\s*(?:>|＞|ℹ️?|✓|✔|✗|✘|×|⚠️?|✅|❌|🔹|🔸|➜|→|—|・\s*(?:ℹ️|✓|✗))"
+    r"^\s*(?:>|＞|ℹ️?|✓|✔|✗|✘|×|⚠️?|✅|❌|🔹|🔸|➜|→|—|⏺|⎿|・\s*(?:ℹ️|✓|✗))"
 )
 
 # code fence（``` … ``` / ~~~ … ~~~）の開始・終了行。
@@ -66,6 +69,19 @@ def user_only_text(text: Optional[str]) -> str:
         return stripped
     # fallback: 全行が引用判定された場合は元テキスト（trim）を返す
     return text.strip()
+
+
+def is_assistant_only_text(text: Optional[str]) -> bool:
+    """発話が全行 assistant 引用（人間の発言が1行も残らない）か判定する（#445）。
+
+    ``user_only_text`` は表示用途で情報喪失を避けるため全行 strip 時に元テキストへ
+    fallback するが、corrections 書込ゲートでは逆に「人間の指摘が実際に含まれるか」を
+    知りたい。空/None は「assistant 発話」ではなく単なる無内容として False を返す
+    （呼び出し側の空文字ガードと責務を分けない・#99 と同じ判断）。
+    """
+    if not text:
+        return False
+    return not _strip_assistant_lines(text)
 
 
 def prev_action_summary(prev_action: Optional[str]) -> str:
