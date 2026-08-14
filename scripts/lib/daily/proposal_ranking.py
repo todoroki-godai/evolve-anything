@@ -1,11 +1,13 @@
 """daily.proposal_ranking — 朝の提示の順位付け（ADR-054 PR2-c）。
 
-``daily.proposal_digest`` から composite sort・utterances.db 発話時刻 join のロジックを
-切り出した**純リファクタ分割**（振る舞い不変・#379 新設凍結に非抵触）。``proposal_digest.py``
-が 500 行を超えつつあり（``line_limit.MAX_PYTHON_SOURCE_LINES``）、これ以上ランキングロジックを
-足すと 800 行の分割必須ラインに触れるため、``fleet/queue_materials.py`` / `evolve/__init__.py`
-と同じ手法で先に切り出す。新しい store / observability section / advisory adapter /
-weak_signal channel は増やさない。
+``daily.proposal_digest`` の並び替えを担う module。**振る舞いは変わる**（composite sort・
+utterances.db 発話時刻 join・提示文の判断材料は本 PR の新規実装であり、既存ロジックの
+移設ではない）。別 module に置くのは、``proposal_digest.py`` が既に 500 行を超えており
+（``line_limit.MAX_PYTHON_SOURCE_LINES``）、ここにランキングを足すと 800 行の分割必須
+ラインに触れるため — ``fleet/queue_materials.py`` / ``evolve/__init__.py`` と同じ手法。
+
+**#379 の新設凍結には非抵触**（凍結対象は新 store / 新 observability section /
+新 advisory adapter / 新 weak_signal channel の4種。module 分割はどれにも当たらない）。
 
 ## composite sort の4キー（この順序で厳密に。設計 docs/decisions/drafts/054-phase-be-design.md）
 
@@ -80,6 +82,28 @@ def _group_freshness_epoch(group: Dict[str, Any]) -> float:
     return best
 
 
+def _remaining_cross_pj(group: Dict[str, Any]) -> list:
+    """残存 signal_keys が持つ ``cross_pj`` の和を返す（重複除去・順序は安定）。
+
+    ``signal_meta_by_key`` を持たない group（旧形式・直接構築された fixture）は
+    top-level の ``cross_pj_confirmed`` にフォールバックする。**残存キーのメタが1つも
+    無い場合にだけ**フォールバックするので、既読差し引きで confirmed 由来キーが全部
+    落ちた group が top-level 経由で tier 1 に戻ることはない。
+    """
+    meta_map = group.get("signal_meta_by_key")
+    if not isinstance(meta_map, dict) or not meta_map:
+        return list(group.get("cross_pj_confirmed") or [])
+    out: list = []
+    seen = set()
+    for key in group.get("signal_keys") or []:
+        meta = meta_map.get(key) or {}
+        for slug in meta.get("cross_pj") or []:
+            if slug not in seen:
+                seen.add(slug)
+                out.append(slug)
+    return out
+
+
 def composite_sort_key(group: Dict[str, Any]) -> Tuple[int, int, float, str]:
     """4キーの composite sort key を返す（昇順 sort でそのまま優先順位順になる）。
 
@@ -88,9 +112,14 @@ def composite_sort_key(group: Dict[str, Any]) -> Tuple[int, int, float, str]:
     既読差し引き後に別途「再計算」する必要はない。
     """
     keys = group.get("signal_keys") or []
-    cross_pj_confirmed = group.get("cross_pj_confirmed") or []
     # キー1: confirmed（cross_pj_confirmed 非空）または global 所属（別物なので or）。
-    tier1 = bool(cross_pj_confirmed) or is_global_group(group)
+    # confirmed 判定は**残存キーの cross_pj の和**から取る（top-level の
+    # `cross_pj_confirmed` を直接見ない）。global merge 後の group は複数 PJ 由来の
+    # signal_key を持ち、`_slim_group` は各キーに**その由来 group の** cross_pj を
+    # 載せている。top-level だけを見ると「confirmed 情報を持っていたキーが既読で
+    # 落ちた後も tier 1 に居座る」ことになり、既読差し引き後の再計算という設計要件を
+    # 満たさない（#443 codex cold review [Must]）。
+    tier1 = bool(_remaining_cross_pj(group)) or is_global_group(group)
     # キー2: 再発回数（残存 signal_keys 件数）。
     count = len(keys)
     # キー3: 鮮度（発話時刻優先・detected_at フォールバック）。

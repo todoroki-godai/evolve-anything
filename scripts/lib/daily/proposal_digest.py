@@ -460,8 +460,11 @@ def build_session_proposals(
         # が既読差し引き後の残存キーから再計算できるようにする。
         meta_by_key = g.get("signal_meta_by_key")
         if isinstance(meta_by_key, dict):
+            # set は内包表記の外で1回だけ作る（旧実装は反復ごとに再生成しており
+            # group 内キー数に対して O(n^2)。PR2-b の全件化でキー数の上限も無くなった）。
+            remaining_set = set(remaining_keys)
             g["signal_meta_by_key"] = {
-                k: v for k, v in meta_by_key.items() if k in set(remaining_keys)
+                k: v for k, v in meta_by_key.items() if k in remaining_set
             }
         keys_by_pj = g.get("keys_by_pj")
         new_keys_by_pj: Optional[Dict[str, List[str]]] = None

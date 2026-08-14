@@ -972,3 +972,71 @@ def test_build_proposal_systemmessage_lists_all_representatives_for_merged_group
     msg = pd.build_proposal_systemmessage([group])
     assert "代表文A" in msg
     assert "代表文B" in msg
+
+
+# ─────────────────────────────────────────────────────────────────
+# #443 codex cold review: global merge 後の signal_meta_by_key union と
+# 既読差し引き後の cross_pj 再計算（union 処理を消すと落ちること）
+# ─────────────────────────────────────────────────────────────────
+def _slim_with_meta(keys, meta, *, cross_pj=None, rep=None, idiom=None) -> dict:
+    g = _slim(keys, rep=rep, idiom=idiom)
+    g["signal_meta_by_key"] = meta
+    g["cross_pj_confirmed"] = list(cross_pj or [])
+    return g
+
+
+def test_extract_global_groups_unions_signal_meta_from_all_pjs():
+    """merge 後の group が**両 PJ 由来**の signal_meta_by_key を保持する。
+
+    union を消して「先頭 group の meta だけ」にすると、片方の PJ のキーの発話時刻・
+    cross_pj が失われ、既読差し引き後の順位キー再計算ができなくなる（このテストが落ちる）。
+    """
+    meta_a = {"ka": {"uttered_at": "2026-08-01T00:00:00+00:00", "detected_at": None, "cross_pj": []}}
+    meta_b = {"kb": {"uttered_at": "2026-08-10T00:00:00+00:00", "detected_at": None, "cross_pj": ["pj-c"]}}
+    per_pj = {
+        "pj-a": [_slim_with_meta(["ka"], meta_a, idiom=ELIGIBLE_IDIOM_TEXT)],
+        "pj-b": [_slim_with_meta(["kb"], meta_b, cross_pj=["pj-c"], idiom=ELIGIBLE_IDIOM_TEXT)],
+    }
+    global_groups, _remaining = pd._extract_global_groups(per_pj)
+
+    assert len(global_groups) == 1
+    merged_meta = global_groups[0]["signal_meta_by_key"]
+    # 両 PJ 由来のキーが残っている（union が効いている）。
+    assert set(merged_meta) == {"ka", "kb"}
+    assert merged_meta["ka"]["uttered_at"] == "2026-08-01T00:00:00+00:00"
+    assert merged_meta["kb"]["cross_pj"] == ["pj-c"]
+
+
+def test_seen_filter_drops_cross_pj_when_only_confirmed_key_is_read():
+    """confirmed 情報を持つキーだけが既読になったら、その group は tier 1 に居座らない。
+
+    codex cold review [Must]: `composite_sort_key` が top-level の `cross_pj_confirmed` を
+    見ていると、confirmed 由来キーが既読で落ちた後も tier 1 のままになる。残存キーの
+    `cross_pj` の和から再計算していれば、このテストで順位が入れ替わる。
+    """
+    from daily import proposal_ranking as pr
+
+    # group X: 2キー。confirmed 情報は "kx-confirmed" だけが持つ。
+    meta_x = {
+        "kx-confirmed": {"uttered_at": "2026-08-01T00:00:00+00:00", "detected_at": None, "cross_pj": ["pj-c"]},
+        "kx-plain": {"uttered_at": "2026-08-01T00:00:00+00:00", "detected_at": None, "cross_pj": []},
+    }
+    group_x = _slim_with_meta(["kx-confirmed", "kx-plain"], meta_x, cross_pj=["pj-c"])
+    # group Y: confirmed 無し・より新しい発話。
+    meta_y = {"ky": {"uttered_at": "2026-08-12T00:00:00+00:00", "detected_at": None, "cross_pj": []}}
+    group_y = _slim_with_meta(["ky"], meta_y)
+
+    queue_data = {"proposals": {"per_pj": {"pj-a": [group_x, group_y]}, "global": []}}
+
+    # 既読なし: X が confirmed 由来で tier 1 → 先頭。
+    before = pd.build_session_proposals(queue_data, "pj-a", seen_keys=set())
+    assert before[0]["signal_keys"] == ["kx-confirmed", "kx-plain"]
+
+    # confirmed を持つキーだけ既読化: X は tier 1 を失い、より新しい Y が先頭になる。
+    after = pd.build_session_proposals(queue_data, "pj-a", seen_keys={"kx-confirmed"})
+    assert after[0]["signal_keys"] == ["ky"]
+    # X は消えず、残存キーだけで後ろに残る（group ごと除外しない既存契約）。
+    assert ["kx-plain"] in [g["signal_keys"] for g in after]
+    # 残存キーからは cross_pj が消えている。
+    x_after = [g for g in after if g["signal_keys"] == ["kx-plain"]][0]
+    assert pr._remaining_cross_pj(x_after) == []

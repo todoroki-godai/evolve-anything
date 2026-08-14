@@ -37,9 +37,23 @@ def _meta(uttered_at=None, detected_at=None, cross_pj=None) -> dict:
 def _group(
     signal_keys, meta_by_key, *, cross_pj_confirmed=None, origin_pjs=None,
 ) -> dict:
+    """production の group 形を再現する。
+
+    ``cross_pj_confirmed`` を渡したら**各キーの meta にも同じ値を載せる**。これは
+    `daily.proposal_digest._slim_group` の不変条件（group の cross_pj_confirmed を
+    全 signal_key の meta へ書く）と一致させるため。composite_sort_key は残存キーの
+    meta から tier1 を再計算するので、fixture がこの不変条件を破っていると
+    「実装では起きない状態」を検査してしまう（#443 codex cold review [Must]）。
+    キー個別の cross_pj を検査したい場合は ``_meta(cross_pj=...)`` で明示的に上書きする。
+    """
+    meta = dict(meta_by_key)
+    if cross_pj_confirmed:
+        for key, m in list(meta.items()):
+            if not (m.get("cross_pj") or []):
+                meta[key] = {**m, "cross_pj": list(cross_pj_confirmed)}
     g = {
         "signal_keys": list(signal_keys),
-        "signal_meta_by_key": dict(meta_by_key),
+        "signal_meta_by_key": meta,
         "cross_pj_confirmed": cross_pj_confirmed or [],
     }
     if origin_pjs is not None:
