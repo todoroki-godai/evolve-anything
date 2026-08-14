@@ -1035,6 +1035,33 @@ C(a)（週1の「手直しの減少」系列）は**作らない**。柱3(a) の
 2. judge需給表（週次流入・上限・余剰。tracked外PJの扱いのユーザー裁定を経て+200→+232/週に確定・§7.1）
 3. E0（corrections→SKILL.md のJaccard通過率）: 有効corrections 155件×SKILL.md 23件で通過0件・最大0.0721
 
+### 9.4 2026-08-14 Phase B/E 実装時に3 PR 連続で出た同一の型（codex cold review）
+
+**型: 「返り値にキーを足しても、それを読む側が旧契約 / 早期 return のままなら画面に出ない」。**
+実装は毎回正しく、毎回 **目的を達成していない**。`learning_skill_md_must_not_enforcement`
+（MUST と書いても手動 python は実行され損ねる）の裏返しで、**こちらは「機械は正しく値を出しているのに、
+それを読む層が受け取っていない」**side。
+
+| PR | 現れ方 | 層 |
+|---|---|---|
+| #450（E1）1巡目 | `--accepted` を実装したのに `references/diagnose.md` が旧契約（「drain が自動 accept する」「reject ID だけ控えろ」）のまま。**その文書に従うと accept 0件問題がそのまま再発する** | 手順書 |
+| #450（E1）2巡目 | 1巡目の修正で「提案ごとに `id` を併記せよ」と書いたが、提案 identity は `(repo_id, repo相対path, before_sha)` ＝**ファイル単位**で `_extract_candidates` が同一 `skill_path` を1件に畳む。マッチ単位で提示すると**複数の提示が同じ1個の `id` を共有**し提案単位の判断が成立しない → `skill_path` 単位のグループ化（1 SKILL.md = 1 提案 = 1 判断）に統一 | 手順書（前巡の修正が生んだ新欠陥） |
+| #452（B2）1巡目 | `build_review()` が `excluded_machinery_*` を返すのに `daily/proposal_digest.py` が捨てていた／`references/correction-review.md` に表示指示が無く、**全件 machinery のとき「新規なし ✓」とだけ出て除外が完全に隠れる** | consumer + 手順書 |
+| #452（B2）2巡目 | 1巡目の修正後も `session_notify/collectors.py` の `if not groups: return None` により**全件 machinery のとき除外件数を読む前に return**（修正が実経路から到達不能）／`bootstrap_backlog.build` の marker 済み早期 return が `excluded_machinery_total: 0` を固定し手順書の MUST が実行不能 | hook consumer + phase 出力 |
+
+**得られた運用規則**（以後の advisory / observability 追加に適用する）:
+
+1. **キーを足したら、そのキーを読む層を全列挙して1つずつ潰す**（producer だけ直して完了にしない）。
+   最低でも: phase 出力 → digest → hook consumer → SKILL.md/references の4層
+2. **「他に出すものがあるときだけ添える」設計にしない。** その機能が存在する理由が最悪ケース
+   （＝除外が全件に効いたケース）なら、**最悪ケースでこそ黙る**設計になっていないかを必ず確認する。
+   ノイズ懸念は**表示条件でなく文面**で解く
+3. **早期 return を持つ関数にキーを足すときは、早期 return 側の固定値が嘘にならないか確認する。**
+   `bootstrap_backlog` の marker 済み分岐は `0` を固定しており、daily 側は
+   `_exclude_bootstrap_consumed` で marker 前の検出を落とすため、**どちらのレーンからも見えない死角**が生まれていた
+4. **差分レビューを省略しない。** #450 2巡目の [Must] は **1巡目の修正が生んだ新しい欠陥**で、
+   1巡で打ち切っていたら実行不能な手順書がそのままマージされていた
+
 ---
 
 ## 10. 参照
