@@ -58,16 +58,18 @@ discover の出力に含まれる enrich 結果（Jaccard 照合）を確認す�
 discover.py は Discover のパターン（error/rejection/behavior）を既存スキルと Jaccard 係数で照合し、`matched_skills` と `unmatched_patterns` を出力する（型A パターン: LLM 呼び出しなし）。
 
 - `matched_skills` が存在する場合（最大3件）:
-  - 各マッチについて、パターンとスキルの組を表示
+  - 各マッチについて、パターンとスキルの組を表示。**提案ごとに `id`（`result.evolve_decisions.pending[].id`。`skill_path` で対応するマッチと突き合わせる）を併記する（MUST・#444）** — 例: `[id: evdiff_abc123] my-skill: パターン「...」への改善提案`。ユーザーがこの `id` を見て、Step 7.8 で `--accepted`/`--rejected` に渡す
   - 各ペアに対して、Claude が改善提案（diff 形式）を生成し、ユーザーに対話的に提示する（MUST）
   - AskUserQuestion で「適用する」「スキップ」を選択させる（MUST）
   - ユーザーが承認した場合のみ、スキルファイルに変更を適用する
-  - **採点記録（決定論化済み, #360-A [ADR-041]）**: accept/reject の optimize_history 記録は
-    **Step 7.8 の drain が自動で行う**（手で `record_evolve_diff_decision` を叩かない）。run_evolve が
-    候補スキルの before_sha を emit 済みで、Step 7.8 が「適用された diff = accept」を決定論で記録する。
-    - ここで assistant がやるのは1つだけ: ユーザーが**明示的に却下した**提案があれば、その
-      `proposal_id`（`result.evolve_decisions.pending[].id`）と理由を控えておき、Step 7.8 の
-      `rejected={id: 理由}` に渡す。適用したものは何もしなくて良い（差分から自動 accept）。
+  - **採点記録（決定論キャプチャ, #360-A [ADR-041]。#444 で CLI 化）**: accept/reject の optimize_history
+    記録は**自動では行われない**。**Step 7.8 の `evolve --drain --accepted <id...> --rejected <id> <理由>`
+    に明示 `id` を渡して初めて記録される**（`--drain` 単体・ディスク差分だけでは記録しない・#376/#444）。
+    - assistant がここでやること: 承認して実際に適用した提案の `id` を貯めておく（accept は「明示
+      decision イベント」AND「適用実績」の両方が揃って初めて成立する — ディスク差分だけでは
+      accept にならない）。ユーザーが**明示的に却下した**提案があれば、その `id` と理由を貯めておく。
+      いずれも Step 3 では CLI を呼ばず控えるだけで、Step 7.8 でまとめて `--accepted`/`--rejected`
+      に渡す。承認も却下も無ければ何も控えなくてよい（pending のまま次回に持ち越される）。
     - 対象は skill diff（`matched_skills`）と skill_evolve の high/medium 適性提案（どちらも SKILL.md
       content を変えるので skill_quality で均質に採点）。構造修正・rule/hook candidate・reorganize/prune・
       remediation fix は target 異種で均質性を壊すため対象外（ADR-041）。
