@@ -59,6 +59,43 @@ def test_ingest_extracts_human_only(tmp_path: Path) -> None:
     assert {r["text"] for r in rows} == {"最初の発話", "二番目の発話"}
 
 
+# --- #445: [Image #N] プレースホルダの stats を ingest 経由でも surface ------------
+
+
+def _make_image_projects_root(tmp_path: Path) -> Path:
+    root = tmp_path / "projects"
+    pj = root / "-Users-x-tools-evolve-anything"
+    pj.mkdir(parents=True)
+    (pj / "s1.jsonl").write_text(
+        _user_line("[Image #1] Codeタブってないよ", "2026-06-01T00:00:00Z", "s1", "u1") + "\n"
+        + _user_line("[Image #2]", "2026-06-01T00:01:00Z", "s1", "u2") + "\n"
+        + _user_line("普通の発話", "2026-06-01T00:02:00Z", "s1", "u3") + "\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_ingest_pj_dir_surfaces_image_placeholder_stats(tmp_path: Path) -> None:
+    root = _make_image_projects_root(tmp_path)
+    pj_dir = root / "-Users-x-tools-evolve-anything"
+    db = tmp_path / "utterances.db"
+    with ustore.connection(db) as con:
+        state = ustore.get_ingest_state(con)
+        res = uingest.ingest_pj_dir(pj_dir, con, state, progress=False)
+    # 2件抽出（bare な画像添付1件は除外）。
+    assert res["inserted"] == 2
+    assert res["image_placeholder_stripped"] == 1
+    assert res["image_placeholder_only_excluded"] == 1
+
+
+def test_ingest_all_projects_aggregates_image_placeholder_stats(tmp_path: Path) -> None:
+    root = _make_image_projects_root(tmp_path)
+    db = tmp_path / "utterances.db"
+    res = uingest.ingest_all_projects(projects_root=root, db_path=db, progress=False)
+    assert res["image_placeholder_stripped"] == 1
+    assert res["image_placeholder_only_excluded"] == 1
+
+
 def test_ingest_idempotent(tmp_path: Path) -> None:
     root = _make_projects_root(tmp_path)
     db = tmp_path / "utterances.db"

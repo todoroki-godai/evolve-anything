@@ -192,6 +192,7 @@ from .detection import (  # noqa: F401, E402
     noise_agent_type_kind,
     sanitize_message,
     should_include_message,
+    strip_image_placeholders,
 )
 
 # project 識別子 / JSONL 追記 — Slice 4

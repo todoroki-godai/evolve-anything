@@ -315,6 +315,44 @@ def test_image_like_literal_text_not_mangled() -> None:
     assert extractor._strip_image_placeholders(content) == content
 
 
+# --- #445: stats カウンタ（strip で救済 vs strip 後ゼロで除外を別々に集計） -----------
+
+
+def test_stats_counts_stripped_when_real_text_survives(tmp_path: Path) -> None:
+    f = tmp_path / "s1.jsonl"
+    f.write_text(_user_line("[Image #1] Codeタブってないよ") + "\n", encoding="utf-8")
+    stats: dict = {}
+    utts = list(extract_utterances(f, pj_slug="x", stats=stats))
+    assert len(utts) == 1
+    assert stats == {"image_placeholder_stripped": 1}
+
+
+def test_stats_counts_only_excluded_when_strip_leaves_nothing(tmp_path: Path) -> None:
+    f = tmp_path / "s1.jsonl"
+    f.write_text(_user_line("[Image #1]") + "\n", encoding="utf-8")
+    stats: dict = {}
+    utts = list(extract_utterances(f, pj_slug="x", stats=stats))
+    assert utts == []
+    assert stats == {"image_placeholder_only_excluded": 1}
+
+
+def test_stats_untouched_when_no_placeholder_present(tmp_path: Path) -> None:
+    f = tmp_path / "s1.jsonl"
+    f.write_text(_user_line("普通の発話") + "\n", encoding="utf-8")
+    stats: dict = {}
+    list(extract_utterances(f, pj_slug="x", stats=stats))
+    assert stats == {}
+
+
+def test_stats_none_is_safe_default(tmp_path: Path) -> None:
+    # stats を渡さない既存呼び出し元（ingest.py 更新前の互換性）はそのまま動く。
+    f = tmp_path / "s1.jsonl"
+    f.write_text(_user_line("[Image #1] 実指摘") + "\n", encoding="utf-8")
+    utts = list(extract_utterances(f, pj_slug="x"))
+    assert len(utts) == 1
+    assert utts[0].text == "実指摘"
+
+
 def test_sidechain_rows_excluded_from_utterances(tmp_path: Path) -> None:
     """isSidechain:true の user 行は human 発話として拾われない（#379 ADR-054 §5-A1）。"""
     f = tmp_path / "s1.jsonl"

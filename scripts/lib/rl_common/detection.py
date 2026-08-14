@@ -272,6 +272,42 @@ def sanitize_message(text: str, max_length: int = 500) -> str:
     return result
 
 
+# #445: Claude Code CLI が画像添付時に text block へ自動挿入する位置マーカー。
+# 実コーパス実測（corrections.jsonl の `[Image` 開始 37 件全件）: bare（画像だけ・実
+# テキスト無し）のケースは 0 件、全件が同じ text block 内に human の実指摘を伴う
+# （例:「[Image #1] Codeタブってないよ」）。そのため全文除外ではなく、マーカーだけを
+# strip し周辺の human 実テキストは残す。`#\d+` に厳密一致させ、「[Image processing
+# failed]」のような偶然似た文言や「[Image で始まる行を除外して」のようなメタな言及を
+# 誤って壊さない（1〜2桁に限らず任意桁数の # 番号にマッチする）。
+_IMAGE_PLACEHOLDER_RE = re.compile(r"\[Image\s*#\d+\]")
+
+
+def has_image_placeholder(text: str) -> bool:
+    """テキストが ``[Image #N]`` 添付プレースホルダを含むか判定する（#445）。
+
+    ``strip_image_placeholders`` の適用対象かどうかを事前に知りたい呼び出し側
+    （strip 前後で件数を分けて集計したい observability 用途）向け。判定は
+    ``strip_image_placeholders`` と同じ正規表現を単一ソースとして共有する。
+    """
+    if not text:
+        return False
+    return bool(_IMAGE_PLACEHOLDER_RE.search(text))
+
+
+def strip_image_placeholders(text: str) -> str:
+    """テキストから ``[Image #N]`` 添付プレースホルダを除去する（#445）。
+
+    utterance_archive.extractor（utterances.db への取り込み前・upstream）と
+    corrections 書込パスの両方が本関数を単一ソースとして共有する（pitfall_copied_
+    parse_convention_partial_fix: 弱いパース式の片側だけ直すと desync する）。
+    全行が marker のみ（bare な画像添付）なら strip 後に空文字を返す
+    （呼び出し側で「発話でない」として扱う）。
+    """
+    if not text:
+        return text
+    return _IMAGE_PLACEHOLDER_RE.sub("", text).strip()
+
+
 def should_include_message(text: str) -> bool:
     """メッセージが correction 検出対象かどうかを判定する。"""
     if not text.strip():

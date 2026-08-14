@@ -61,6 +61,13 @@ def user_only_text(text: Optional[str]) -> str:
     """発話テキストから assistant 引用ブロックを除き user 発話のみを返す（決定論）。
 
     全行が assistant 引用なら情報喪失を避けるため元テキストの strip を返す（fallback）。
+
+    **表示専用**（#445）: bootstrap/daily の representative 表示は「何も見せないより
+    assistant 引用でも見せた方が良い」という判断で全 strip 時に fallback する。
+    corrections 書込ゲート（``is_assistant_only_text``）とは目的が逆（表示は情報保持
+    優先・書込は誤登録防止優先）なので **統合しない**。1関数に畳むと fallback の分岐で
+    「全行 assistant なら True/False どちらを返すか」が呼び出し文脈依存になり、
+    どちらの用途にも使いにくくなる。
     """
     if not text:
         return ""
@@ -74,10 +81,14 @@ def user_only_text(text: Optional[str]) -> str:
 def is_assistant_only_text(text: Optional[str]) -> bool:
     """発話が全行 assistant 引用（人間の発言が1行も残らない）か判定する（#445）。
 
-    ``user_only_text`` は表示用途で情報喪失を避けるため全行 strip 時に元テキストへ
-    fallback するが、corrections 書込ゲートでは逆に「人間の指摘が実際に含まれるか」を
-    知りたい。空/None は「assistant 発話」ではなく単なる無内容として False を返す
-    （呼び出し側の空文字ガードと責務を分けない・#99 と同じ判断）。
+    **corrections 書込ゲート専用**。``user_only_text`` は表示用途で情報喪失を避けるため
+    全行 strip 時に元テキストへ fallback するが、書込ゲートでは逆に「人間の指摘が
+    実際に含まれるか」を知りたい（fallback すると assistant 発話のみのレコードが
+    人間発話に偽装されて corrections に書かれてしまう）。**この非対称性ゆえに
+    ``user_only_text`` と統合しない**（後から「重複してるから畳もう」としないこと。
+    fallback の有無が両関数の存在理由そのもの）。空/None は「assistant 発話」ではなく
+    単なる無内容として False を返す（呼び出し側の空文字ガードと責務を分けない・#99と
+    同じ判断）。
     """
     if not text:
         return False

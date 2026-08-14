@@ -23,10 +23,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 # extractor のバージョン。抽出ロジックを変えたら +1（再 ingest で source_kind 等を更新可能に）。
 # v2: #323 で harness 注入判定に rl_common.detection.is_machinery_prompt を追加適用
@@ -122,36 +121,54 @@ def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-# #445: Claude Code CLI が画像添付時に text block へ自動挿入する位置マーカー
-# （実コーパス実測: corrections.jsonl 37件全件が bare でなく、同じ text block 内に
-# 人間の実指摘が続く。例「[Image #1] Codeタブってないよ」）。マーカーだけを除去し、
-# 周辺の人間の実テキストは残す（全文除外ではなく strip。#N 形式に厳密一致させ
-# 「[Image processing failed]」のような偶然似た文言を誤って触らない）。
-_IMAGE_PLACEHOLDER_RE = re.compile(r"\[Image\s*#\d+\]")
-
-
 def _strip_image_placeholders(text: str) -> str:
-    """テキストから ``[Image #N]`` プレースホルダを除去する（#445）。
+    """rl_common.detection.strip_image_placeholders への遅延 import 委譲（#445）。
 
-    全行が marker のみ（bare な画像添付）なら空文字を返す（呼び出し側で
-    「発話でない」として扱う）。
+    ``[Image #N]`` 添付プレースホルダの strip ロジックは単一ソース
+    （rl_common.detection）。extractor 側で正規表現を複製すると片側だけ改修して
+    desync する（pitfall_copied_parse_convention_partial_fix と同型）ため、ここでは
+    委譲するだけに留める（`_is_machinery_prompt_shared` と同じパターン）。
     """
-    if not text:
-        return text
-    return _IMAGE_PLACEHOLDER_RE.sub("", text).strip()
+    import sys as _sys
+
+    _lib = str(Path(__file__).resolve().parent.parent)
+    if _lib not in _sys.path:
+        _sys.path.insert(0, _lib)
+    from rl_common.detection import strip_image_placeholders
+
+    return strip_image_placeholders(text)
+
+
+def _has_image_placeholder(text: str) -> bool:
+    """rl_common.detection.has_image_placeholder への遅延 import 委譲（#445）。
+
+    strip 前に判定することで、呼び出し側（``extract_utterances``）が「strip して
+    人間の実テキストが残った件数」と「strip したら空になった（bare 添付）件数」を
+    別カウンタで observability に surface できるようにする（黙って減らさない）。
+    """
+    import sys as _sys
+
+    _lib = str(Path(__file__).resolve().parent.parent)
+    if _lib not in _sys.path:
+        _sys.path.insert(0, _lib)
+    from rl_common.detection import has_image_placeholder
+
+    return has_image_placeholder(text)
 
 
 def _extract_text(content) -> Optional[str]:
-    """user message.content から human テキストを取り出す。
+    """user message.content から human テキストを取り出す（raw・strip 前）。
 
     - str: そのまま human テキスト
     - list: text block のみ結合。tool_result block が 1 つでもあれば None（発話でない）
     - それ以外: None
 
-    いずれの経路でも ``[Image #N]`` プレースホルダ（#445）を strip する。
+    ``[Image #N]`` プレースホルダの strip は呼び出し側（``extract_utterances``）が
+    行う（strip 前後の件数を別カウンタで observability に出すため、ここでは raw の
+    まま返す）。
     """
     if isinstance(content, str):
-        return _strip_image_placeholders(content)
+        return content
     if isinstance(content, list):
         parts: List[str] = []
         for block in content:
@@ -166,7 +183,7 @@ def _extract_text(content) -> Optional[str]:
                     parts.append(t)
         if not parts:
             return None
-        return _strip_image_placeholders("\n".join(parts))
+        return "\n".join(parts)
     return None
 
 
@@ -228,6 +245,7 @@ def extract_utterances(
     jsonl_path: Path,
     pj_slug: str,
     start_line: int = 0,
+    stats: Optional[Dict[str, int]] = None,
 ) -> Iterator[Utterance]:
     """1 つの transcript jsonl から human 発話を抽出して yield する。
 
@@ -237,6 +255,14 @@ def extract_utterances(
                     各行に cwd があれば ``pj_slug_from_cwd`` 由来が優先される（#430）。
         start_line: これ未満（0-index）の行はスキップ（増分 ingest 用）。
                     スキップしても assistant の prev_action 文脈は維持される。
+        stats:      呼び出し側が渡す任意の観測カウンタ dict（in-place 加算・#445）。
+                    渡された場合、``[Image #N]`` プレースホルダの扱いを2種の別カウンタで
+                    黙って減らさず surface する:
+                      - ``image_placeholder_stripped``: marker を除去し人間の実テキストが
+                        残った件数（救済＝発話として抽出される）
+                      - ``image_placeholder_only_excluded``: marker だけで strip 後に空
+                        （bare な画像添付のみ）になり非発話として除外した件数
+                    2つは意味が違うため混ぜない（前者は救済、後者は除外）。
 
     line_no は 1-index の実ファイル行番号（物理 PK に使う）。
     pj_slug の確定は EXCLUDED_PJ_SLUGS 判定（source_kind）にも効く。
@@ -309,7 +335,20 @@ def extract_utterances(
                 text = _extract_text(message.get("content") if isinstance(message, dict) else None)
                 if text is None:
                     continue
-                text = text.strip()
+                # #445: [Image #N] プレースホルダの strip は marker の有無を先に判定して
+                # から行う。strip したら空（bare な画像添付のみ）か、実テキストが残った
+                # かで別カウンタに分ける（前者は除外・後者は救済。混ぜない）。
+                had_image_placeholder = _has_image_placeholder(text)
+                if had_image_placeholder:
+                    text = _strip_image_placeholders(text)
+                    if stats is not None:
+                        key = (
+                            "image_placeholder_stripped" if text
+                            else "image_placeholder_only_excluded"
+                        )
+                        stats[key] = stats.get(key, 0) + 1
+                else:
+                    text = text.strip()
                 if not text:
                     continue
                 if _is_harness(text):
