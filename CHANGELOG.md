@@ -23,6 +23,15 @@
   対応検査を件数・集合比較から kind 単位の ablation 検査
   （`test_each_connected_kind_maps_individually_to_extract_candidates_output`）へ強化し、
   `lane_connected` の入れ替え（例: `matched_skills`↔`pitfall_candidates`）も検出できることを実測。
+  **追記2（codex cold review 2巡目是正・2026-08-15）**: [Must] allowlist 化した24キーを
+  全件再分類。「名前が `*_error` でない」という粗い基準で non-candidate 扱いされていた
+  `missed_skill_opportunities` / `verification_needs` / `recommended_artifacts` /
+  `stall_recovery_patterns` / `workflow_checkpoint_gaps` / `constraint_decay_warnings` /
+  `constraint_decay_findings` の7種は、実際は下流で issue 化・別 SKILL.md の y/n 提示に
+  繋がる（または読み手ゼロの孤児データ）候補種別だったため `PROPOSAL_KINDS` へ昇格し
+  baseline に追加（宣言種別 8→15、baseline 6→13行）。allowlist に残してよい基準を
+  「①`*_error`エラー記録 ②件数・集計値そのもの ③下位モジュールの生データの構造ラッパー」
+  の3種に厳格化し docstring に明記した。
 - **fix(evolve): auto trigger の発火状況（trigger_summary）を1行サマリに surface（#458 /
   #457）** — `trigger_summary.{total_fires, last_fired}` は `_state.py:_build_trigger_summary`
   が生成し `phases_capture.py` が result へ入れるだけで、production/test どちらからも

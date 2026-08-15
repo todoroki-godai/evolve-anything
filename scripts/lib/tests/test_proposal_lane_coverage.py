@@ -34,6 +34,25 @@ _ELEMENT_BY_KIND = {
         "type": "instruction_violation_candidate", "file": "f", "detail": {},
     },
     "trajectory_skill_candidate": {"skill_name": "bar", "session_count": 3},
+    "missed_skill_opportunities": {
+        "skill": "review", "triggers_matched": ["review this"], "session_count": 2,
+    },
+    "verification_needs": {
+        "id": "v1", "description": "d", "evidence": [],
+        "detection_result": {"applicable": True, "evidence": [], "confidence": 1.0},
+    },
+    "recommended_artifacts": {"recommendation_id": "r1", "type": "rule", "evidence": {}},
+    "stall_recovery_patterns": {
+        "command_pattern": "git status", "session_count": 3,
+        "recovery_actions": [], "confidence": 0.6,
+    },
+    "workflow_checkpoint_gaps": {"skill_name": "foo", "gaps": [{"gap": "g"}]},
+    "constraint_decay_warnings": {
+        "type": "constraint_decay", "session_id": "s1", "decay_rate": 0.4,
+    },
+    "constraint_decay_findings": {
+        "type": "constraint_decay", "session_id": "s1", "decay_rate": 0.1,
+    },
 }
 
 

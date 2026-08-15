@@ -1,13 +1,18 @@
 """提案種別 → decision lane 到達性の宣言表と機械検査（#467 Stage 0）。
 
 実測（`docs/decisions/drafts/467-all-proposal-types-to-morning-yn.md` §1.1・2026-08-15）:
-discover が result に書く提案種別は 8 種（`matched_skills` / `skill_evolve` /
+discover が result に書く提案種別は当初 8 種（`matched_skills` / `skill_evolve` /
 `repeating_patterns` / `rule_violation_observed` / `pitfall_candidates` /
-`hook_candidates` / `instruction_violation` / `trajectory_skill_candidate`）。うち
-朝の y/n（decision lane）`evolve_decisions._candidates._extract_candidates` が実際に
-読むのは `matched_skills` と `skill_evolve` の 2 種のみ（`_candidates.py:97,109`）。
+`hook_candidates` / `instruction_violation` / `trajectory_skill_candidate`）としていたが、
+codex cold review 2巡目 [Must] 是正（2026-08-15）で `_RUNNER_NON_CANDIDATE_RESULT_KEYS`
+allowlist の再分類を行い、実際は候補データ（下流で issue 化・別 SKILL.md の y/n 提示に
+繋がる）だった 7 種を追加した: `missed_skill_opportunities` / `verification_needs` /
+`recommended_artifacts` / `stall_recovery_patterns` / `workflow_checkpoint_gaps` /
+`constraint_decay_warnings` / `constraint_decay_findings`。計 15 種のうち、朝の y/n
+（decision lane）`evolve_decisions._candidates._extract_candidates` が実際に読むのは
+`matched_skills` と `skill_evolve` の 2 種のみ（`_candidates.py:97,109`）。
 （設計ドラフト本文は「7種」と書いているが §1.1 の表自体は8行あり本文側の数え間違い。
-baseline も6行に訂正済み・レビュー指摘で判明・2026-08-15）
+レビュー指摘で判明・2026-08-15）
 
 種別ごとに result 上の格納階層・構造が異なる（`repeating_patterns` は
 `phases.discover.tool_usage_patterns` という dict の内側にネストされる等）ため、
@@ -27,10 +32,30 @@ AST 検査（2026-08-15 codex cold review 是正・[Must]1/[Should]3）: 設計 
 全ソース走査を前提に「best-effort・赤にしない」としていたが、それは全ソース走査だと
 無関係な subscript 代入まで拾い誤検知が多いための判断だった。走査対象を discover の
 提案生成元 `discover/runner.py` 1ファイルに絞ることで、既知の非候補キー
-（`_error` 診断・件数・下位ラッパー等、`_RUNNER_NON_CANDIDATE_RESULT_KEYS`）を明示
-allowlist 化でき、誤検知ゼロで blocking 化できる（`find_undeclared_runner_result_keys`）。
+（`_RUNNER_NON_CANDIDATE_RESULT_KEYS`）を明示 allowlist 化でき、誤検知ゼロで
+blocking 化できる（`find_undeclared_runner_result_keys`）。
 それでも塞がらない残余: helper 関数の戻り値経由で書かれるキー・動的キー生成は静的に
 追えない（実測では runner.py にこのパターンは無いが将来混入し得る）。
+
+**allowlist に入れてよい基準（2026-08-15 codex cold review 2巡目 [Must] 是正で厳格化）**:
+1回目の是正では `_error` 接尾辞のみを基準にしており、`verification_needs` /
+`stall_recovery_patterns` / `workflow_checkpoint_gaps` / `recommended_artifacts` /
+`missed_skill_opportunities` 等、実際は下流で issue 化・提案提示に繋がる候補データが
+「名前が xxx_error でないから allowlist」という粗い基準で紛れ込み、検査が骨抜きになった
+（codex 実測: `phases_remediate.py:144,153`・`skills/discover/SKILL.md:57-67` 等で確認）。
+allowlist に残してよいのは以下 3 種のみに限定する。**判断に迷ったら allowlist に入れず
+`PROPOSAL_KINDS` 側へ倒す**（見落としより過剰宣言のほうが安全）:
+
+1. 例外時のエラー記録（`*_error`、値は `str(e)`）
+2. 件数・集計値そのもの（int。リストではなく個別レビュー対象になり得ない）
+3. 下位モジュールの生データをそのまま格納しただけの構造ラッパーで、それ自体が
+   独立した読み手を持たないもの（例: `tool_usage_patterns` — 中身は `repeating_patterns`
+   等の個別キーとして別途宣言され、ラッパー自体を読む処理は sub-key 抽出のみ）
+
+上記に該当しない list-of-dict 値は、たとえ現在どこからも読まれていなくても
+（例: `constraint_decay_warnings`/`constraint_decay_findings` は実測でゼロ読み手だった）
+`PROPOSAL_KINDS` に `lane_connected=False` で宣言し baseline に加える。「読み手がゼロ」
+こそ Stage 0 が可視化すべき対象である。
 
 **`lane_connected=True` の意味を誤読しないこと（Stage 0 の担保範囲）**: 本モジュールと
 契約テストが機械検査するのは、設計 §1.3「接続済みの4点セット」のうち **#1 候補抽出
@@ -63,7 +88,7 @@ class ProposalKind:
     lane_connected: bool = False  # §1.3 の4点セットを満たすか（現状 True は2種のみ）
 
 
-# 実測（設計 §1.1・runner.py 実コード確認済み）。全 8 種はいずれも result 上で
+# 実測（設計 §1.1・runner.py 実コード確認済み）。全 15 種はいずれも result 上で
 # list of dict として格納されている（構造裏取り結果は各行のコメント参照）。
 #
 # `rule_violation_observed_error`（runner.py:340）は宣言しない — これは例外発生時の
@@ -122,6 +147,75 @@ PROPOSAL_KINDS: Tuple[ProposalKind, ...] = (
         source_path="phases.discover.trajectory_skill_candidates",
         selector="list_of_dict",
         lane_connected=False,  # runner.py:272
+    ),
+    # 以下7種は 2026-08-15 codex cold review 2巡目 [Must] 是正で allowlist から昇格。
+    # 「名前が *_error でない」以外の実測根拠（下流 reader）を個別に確認済み。
+    ProposalKind(
+        kind="missed_skill_opportunities",
+        # detect_missed_skills が返す {"missed": [...]}` の "missed"（patterns.py:318-319、
+        # 要素は {skill, triggers_matched, session_count}）。runner.py:240 で result 直下へ。
+        # phases_diagnose.py:149 で triage_all_skills(missed_skills=...) に渡され、
+        # skill_triage CREATE/UPDATE 判定 → phases_remediate.py:120 make_skill_triage_issue
+        # を経由して人間の判断に繋がる（未接続＝_extract_candidates は読まない）。
+        source_path="phases.discover.missed_skill_opportunities",
+        selector="list_of_dict",
+        lane_connected=False,
+    ),
+    ProposalKind(
+        kind="verification_needs",
+        # verification_catalog/runner.py:120 detect_verification_needs が List[Dict] を返す
+        # （runner.py:305-307）。phases_remediate.py:144-151 で make_verification_rule_issue
+        # に変換され issue 化。加えて skills/discover/SKILL.md:69-74（Step 5.5）で個別に
+        # description/evidence を表示する独自の y/n 提示経路も持つ（evolve の朝の y/n とは別）。
+        source_path="phases.discover.verification_needs",
+        selector="list_of_dict",
+        lane_connected=False,
+    ),
+    ProposalKind(
+        kind="recommended_artifacts",
+        # discover/artifacts.py:170-178 detect_recommended_artifacts が List[Dict] を返す
+        # （runner.py:343-347）。skills/discover/SKILL.md:57-67（Step 5）で「導入する/しない」の
+        # y/n を提示し、却下時は add_artifact_suppression を呼ぶ独自の承認フローを持つ
+        # （evolve の朝の y/n とは別レーン）。
+        source_path="phases.discover.recommended_artifacts",
+        selector="list_of_dict",
+        lane_connected=False,
+    ),
+    ProposalKind(
+        kind="stall_recovery_patterns",
+        # tool_usage_analyzer/stall.py:81-92 detect_stall_recovery_patterns が List[Dict] を
+        # 返す（runner.py:474-475）。phases_remediate.py:153-156 で
+        # make_stall_recovery_issue に変換され issue 化。
+        source_path="phases.discover.stall_recovery_patterns",
+        selector="list_of_dict",
+        lane_connected=False,
+    ),
+    ProposalKind(
+        kind="workflow_checkpoint_gaps",
+        # runner.py:485-501 が {skill_name, gaps} の list を組み立てる。
+        # phases_remediate.py:158-167 で make_workflow_checkpoint_issue に変換され issue 化。
+        source_path="phases.discover.workflow_checkpoint_gaps",
+        selector="list_of_dict",
+        lane_connected=False,
+    ),
+    ProposalKind(
+        kind="constraint_decay_warnings",
+        # discover/patterns.py:25-117 detect_constraint_decay が返す List[Dict]
+        # （{"type": "constraint_decay", "session_id", "decay_rate", ...}）のうち
+        # decay_rate > 0.3 の WARNING のみ（runner.py:449-457）。実測（2026-08-15 repo 全文
+        # grep）: runner.py 以外に読み手が存在しない孤児データ — allowlist へ「名前で
+        # 非候補と誤認」せず、読み手ゼロという事実そのものを PROPOSAL_KINDS で可視化する。
+        source_path="phases.discover.constraint_decay_warnings",
+        selector="list_of_dict",
+        lane_connected=False,
+    ),
+    ProposalKind(
+        kind="constraint_decay_findings",
+        # 上記と同じ detect_constraint_decay の全件（WARNING 未満も含む・runner.py:459）。
+        # 読み手ゼロは constraint_decay_warnings と同じ実測結果。
+        source_path="phases.discover.constraint_decay_findings",
+        selector="list_of_dict",
+        lane_connected=False,
     ),
 )
 
@@ -207,38 +301,41 @@ def _const_str(node: ast.AST) -> Optional[str]:
 
 
 # discover/runner.py の `result[...]` / `result.setdefault(...)` に実在するが提案候補
-# **ではない**既知キー（診断エラー・件数・下位ラッパー等）。実測（2026-08-15、runner.py 全文
-# `result[` / `result.setdefault(` grep）で確定した完全列挙。ここに無い新規キーは
-# `find_undeclared_runner_result_keys` が「未宣言の提案候補かもしれない」として検出する。
-# 新しい非候補キーを runner.py に足す場合はここへの追記が必要（新候補キーを足す場合は
-# PROPOSAL_KINDS への追記が必要 — どちらのケースも黙って通さない）。
+# **ではない**既知キー。実測（2026-08-15、runner.py 全文 `result[` / `result.setdefault(`
+# grep）で確定した完全列挙。ここに無い新規キーは `find_undeclared_runner_result_keys` が
+# 「未宣言の提案候補かもしれない」として検出する。新しい非候補キーを runner.py に足す場合は
+# ここへの追記が必要（新候補キーを足す場合は PROPOSAL_KINDS への追記が必要 — どちらの
+# ケースも黙って通さない）。**各エントリの分類根拠は上記 docstring の3基準のいずれかを
+# 満たすことをコメントで明示する（2026-08-15 codex cold review 2巡目 [Must] 是正）**。
 _RUNNER_NON_CANDIDATE_RESULT_KEYS: FrozenSet[str] = frozenset(
     {
-        "reflect_data_count",
-        "reflect_data_count_error",
-        "missed_skill_opportunities",
-        "missed_skill_opportunities_error",
+        "reflect_data_count",  # 基準2: reflect データ件数（int）。SKILL.md が `>=5` 閾値比較のみ
+        "reflect_data_count_error",  # 基準1: *_error
+        "missed_skill_opportunities_error",  # 基準1: *_error
+        # 基準3寄りだが list ではなく str（missed_result.get("message")）。個別レビュー対象になり
+        # 得ない単一メッセージ。実測: runner.py 以外に読み手なし（2026-08-15 grep）
         "missed_skill_message",
-        "trajectory_skill_candidates_error",
-        "scope_error",
-        "total_candidates",
-        "matched_skills_error",
+        "trajectory_skill_candidates_error",  # 基準1: *_error
+        "scope_error",  # 基準1: *_error
+        "total_candidates",  # 基準2: len(all_patterns) の int 件数
+        "matched_skills_error",  # 基準1: *_error
+        # 基準3: enrich.py の unmatched_patterns はそのまま phases.enrich へ転記され
+        # total_unmatched（件数）/skipped_reason の算出にのみ使われる（phases_diagnose.py:135-138）。
+        # 個別 issue 化・y/n 提示への変換は実測（2026-08-15 repo 全文 grep）で確認できず。
         "unmatched_patterns",
-        "verification_needs",
-        "verification_needs_error",
-        "tool_usage_patterns",  # repeating_patterns の下位ラッパー本体（宣言表は nested path で参照）
-        "rule_violation_observed_error",
-        "recommended_artifacts",
+        "verification_needs_error",  # 基準1: *_error
+        "tool_usage_patterns",  # 基準3: repeating_patterns 等の下位ラッパー本体（宣言表は nested path で参照）
+        "rule_violation_observed_error",  # 基準1: *_error
+        # 基準3: 既に導入済み artifact の状態表示のみに使われる（対策済み/未対策の表示切替、
+        # skills/evolve/references/recommended-actions.md:36-39）。導入候補そのものは別キー
+        # recommended_artifacts（PROPOSAL_KINDS 側へ分類済み）。installed 済みは個別 y/n の
+        # 対象ではない（すでに導入されているため）。
         "installed_artifacts",
-        "pitfall_candidates_error",
-        "instruction_violations_error",
-        "constraint_decay_warnings",
-        "constraint_decay_findings",
-        "constraint_decay_error",
-        "stall_recovery_patterns",
-        "stall_recovery_error",
-        "workflow_checkpoint_gaps",
-        "workflow_checkpoint_gaps_error",
+        "pitfall_candidates_error",  # 基準1: *_error
+        "instruction_violations_error",  # 基準1: *_error
+        "constraint_decay_error",  # 基準1: *_error
+        "stall_recovery_error",  # 基準1: *_error
+        "workflow_checkpoint_gaps_error",  # 基準1: *_error
     }
 )
 

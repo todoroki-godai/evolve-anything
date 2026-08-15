@@ -4,3 +4,10 @@ pitfall_candidates
 hook_candidates
 instruction_violation
 trajectory_skill_candidate
+missed_skill_opportunities
+verification_needs
+recommended_artifacts
+stall_recovery_patterns
+workflow_checkpoint_gaps
+constraint_decay_warnings
+constraint_decay_findings
