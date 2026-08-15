@@ -279,6 +279,17 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(evolve_revert): dry-run の出力が3行のメタ情報のみで「何が起きるか」判断できない不具合を修正（#469）** —
+  `bin/evolve-revert <entry_id>`（既定 dry-run）の出力が「保持: mode / 失う可能性: xattr /
+  ACL: ...」の3行のみで、対象ファイル・判定分岐・変更行数のいずれも分からなかった。
+  apply engine（`ApplyResult`）が既に持っている `target_path` / `branch` を CLI 層で表示に
+  流し（新規計算なし）、entry の `relative_path`（read-only 再照会）を添えて「対象:
+  絶対パス」「repo 相対パス」「判定: normal/idempotent/conflict の日本語説明」を dry-run
+  出力の先頭に追加した。加えて normal 分岐では revert 後の差分行数を conflict 分岐と
+  同じ `build_diff_summary`（+N/-M の内訳を新設）で計算し「変更行数: +N / -M 行」として
+  既存3行の前に表示する。既存3行はそのまま末尾に残る（後方互換）。`--apply`（実行）時は
+  従来どおりの完了メッセージのみで、このヘッダは付けない。書込みは追加していない
+  （dry-run はゼロ書込のまま・E2E テストで確認）。
 - **fix(skill_evolve): 提案適用時の `.pre-evolve-backup` が gitignore されずコミットに混入しうる不具合を修正（#470）** —
   `apply_evolve_proposal` は適用前に `<SKILL.md>.pre-evolve-backup` を作るが `.gitignore` に
   記載が無く、適用後の自動削除も無かったため、提案を採用した PR に作業用の中間ファイルが

@@ -42,9 +42,11 @@ from ._metadata import (  # noqa: E402,F401
     snapshot_from_path,
 )
 from ._render import (  # noqa: E402,F401
+    BRANCH_LABELS,
     build_diff_summary,
     render_apply_success,
     render_conflict_message,
+    render_dry_run_header,
     render_dry_run_preview,
     render_hardlink_rejection,
     render_metadata_loss_rejection,

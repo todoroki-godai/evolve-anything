@@ -25,7 +25,14 @@ import json
 import sys
 from typing import List, Optional
 
-from evolve_revert import ApplyResult, DumpResult, apply_revert, dump_before
+from evolve_revert import (
+    ApplyResult,
+    DumpResult,
+    apply_revert,
+    dump_before,
+    find_entry,
+    render_dry_run_header,
+)
 from evolve_revert_listing import build_revert_listing, render_revert_listing
 
 
@@ -115,6 +122,21 @@ def _run_apply(args: argparse.Namespace) -> int:
         dry_run=not args.apply,
         allow_metadata_loss=args.allow_metadata_loss,
     )
+    # #469: 既定 dry-run の出力が result.message の3行程度に留まり「何が起きるか」が
+    # 分からなかった。対象パス（絶対 + repo 相対）と判定分岐を、apply engine が既に
+    # 持っている情報（result.target_path/branch + entry の relative_path）から組み立て
+    # てヘッダとして先頭に足す。新たな書込みは発生しない（read-only の再照会のみ）。
+    if result.dry_run and result.target_path:
+        relative_path = None
+        lookup = find_entry(args.entry_id, result.slug)
+        if lookup.entry is not None:
+            relative_path = lookup.entry.get("relative_path")
+        print(render_dry_run_header(
+            target_path=result.target_path,
+            relative_path=relative_path,
+            branch=result.branch,
+        ))
+        print()
     print(result.message)
     return 0 if result.ok else 1
 

@@ -64,6 +64,92 @@ def test_dry_run_preview_notes_xattr_not_checked_when_incapable():
     assert "検査していません" in message or "検出" in message
 
 
+# ─── dry-run preview + diff summary（#469）────────────────────────────────
+
+
+def test_dry_run_preview_without_diff_is_unchanged():
+    """diff 未指定時は従来どおり3行のみ（後方互換）。"""
+    losses = LossReport(owner=False, xattr=False, flags=False)
+    message = render.render_dry_run_preview(losses)
+    assert message.count("\n") == 1  # 「保持: mode」「ACL: ...」の2行
+    assert "変更行数" not in message
+
+
+def test_dry_run_preview_prepends_diff_summary_before_existing_three_lines():
+    """#469: diff を渡すと「変更行数: +N / -M 行」が先頭に付き、既存3行は末尾に残る。"""
+    losses = LossReport(owner=False, xattr=False, flags=False)
+    diff = render.build_diff_summary(
+        before_text="a\nb\n", current_text="a\nb\nc\n", current_bytes=b"a\nb\nc\n",
+        before_sha="b", current_sha="c",
+    )
+    message = render.render_dry_run_preview(losses, diff=diff)
+    lines = message.split("\n")
+    assert lines[0].startswith("変更行数:")
+    assert "+1" in lines[0] and "-0" in lines[0]
+    # 既存3行は最後に残る
+    assert "保持: mode" in message
+    assert "ACL: 保持されない・検出もしていません" in message
+
+
+def test_dry_run_preview_diff_binary_shows_placeholder_not_counts():
+    losses = LossReport(owner=False, xattr=False, flags=False)
+    diff = render.build_diff_summary(
+        before_text="secret\n", current_text=None, current_bytes=b"\xff\xfe",
+        before_sha="b", current_sha="c",
+    )
+    message = render.render_dry_run_preview(losses, diff=diff)
+    assert "判定不能" in message
+    assert "binary" in message
+
+
+# ─── build_diff_summary の追加/削除行数（#469）─────────────────────────────
+
+
+def test_build_diff_summary_reports_added_and_removed_line_counts():
+    diff = render.build_diff_summary(
+        before_text="a\nb\nc\n", current_text="a\nx\nc\nd\n", current_bytes=b"a\nx\nc\nd\n",
+        before_sha="b", current_sha="c",
+    )
+    # b→x(変更=削除+追加) + d追加 → removed=1(b), added=2(x, d)
+    assert diff["removed_lines"] == 1
+    assert diff["added_lines"] == 2
+
+
+def test_build_diff_summary_binary_has_no_added_removed_counts():
+    diff = render.build_diff_summary(
+        before_text="a\n", current_text=None, current_bytes=b"\xff",
+        before_sha="b", current_sha="c",
+    )
+    assert diff["added_lines"] is None
+    assert diff["removed_lines"] is None
+
+
+# ─── dry-run ヘッダ（対象パス + 分岐ラベル・#469）───────────────────────────
+
+
+def test_render_dry_run_header_includes_absolute_and_relative_path():
+    header = render.render_dry_run_header(
+        target_path="/repo/skills/x/SKILL.md", relative_path="skills/x/SKILL.md",
+        branch="normal",
+    )
+    assert "/repo/skills/x/SKILL.md" in header
+    assert "skills/x/SKILL.md" in header
+
+
+def test_render_dry_run_header_branch_labels_are_distinct_for_three_branches():
+    labels = {
+        b: render.render_dry_run_header(target_path="/t", relative_path="t", branch=b)
+        for b in ("normal", "idempotent", "conflict")
+    }
+    assert len({v for v in labels.values()}) == 3
+
+
+def test_render_dry_run_header_omits_relative_path_when_absent():
+    header = render.render_dry_run_header(target_path="/t", relative_path=None, branch="normal")
+    assert "/t" in header
+    assert "repo 相対パス" not in header
+
+
 # ─── conflict メッセージ（C8-C11）───────────────────────────────────────────
 
 

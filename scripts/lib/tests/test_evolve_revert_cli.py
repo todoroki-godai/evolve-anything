@@ -237,3 +237,91 @@ class TestEndToEndDryRunNoWrite:
         assert rc == 0
         assert before_snapshot == after_snapshot
         assert target.read_text(encoding="utf-8") == "after content\n"
+
+    def _setup_entry(self, tmp_path, monkeypatch, *, target_content, before_text):
+        """#469 テスト共通セットアップ（normal/idempotent/conflict 共有）。"""
+        import optimize_history_store as store
+        from evolve_decision_ids import (
+            REVERT_ENCODING, REVERT_SCHEMA_VERSION, compress_before_content, sha256,
+        )
+
+        canonical = tmp_path / "evolve-anything"
+        monkeypatch.setattr(store, "HISTORY_ROOT", canonical / "optimize_history")
+
+        target = tmp_path / "SKILL.md"
+        target.write_text(target_content, encoding="utf-8")
+
+        store.append_entry(
+            {
+                "id": "e1", "human_accepted": True, "skill_name": "x",
+                "before_sha": sha256(before_text),
+                "after_sha": sha256("after content\n"),
+                "revert_before_b64": compress_before_content(before_text),
+                "revert_schema_version": REVERT_SCHEMA_VERSION,
+                "revert_encoding": REVERT_ENCODING,
+                "scope": "project", "repo_id": str(tmp_path), "relative_path": "SKILL.md",
+            },
+            "proj",
+        )
+        monkeypatch.setattr(store, "resolve_slug", lambda cwd=None: "proj")
+        return target
+
+    def test_dry_run_normal_branch_prints_path_and_branch_header(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#469: 通常分岐の dry-run 出力に対象パス・repo相対パス・判定・変更行数が含まれる。"""
+        target = self._setup_entry(
+            tmp_path, monkeypatch,
+            target_content="after content\n", before_text="before content\n",
+        )
+
+        rc = cli.main(["e1"])
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert str(target) in out
+        assert "SKILL.md" in out  # repo 相対パス
+        assert "判定" in out and "通常" in out
+        assert "変更行数" in out
+        # 書込みゼロ（既存契約の維持）
+        assert target.read_text(encoding="utf-8") == "after content\n"
+
+    def test_dry_run_idempotent_branch_prints_header(self, tmp_path, monkeypatch, capsys):
+        target = self._setup_entry(
+            tmp_path, monkeypatch,
+            target_content="before content\n", before_text="before content\n",
+        )
+
+        rc = cli.main(["e1"])
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert str(target) in out
+        assert "冪等" in out
+
+    def test_dry_run_conflict_branch_prints_header(self, tmp_path, monkeypatch, capsys):
+        target = self._setup_entry(
+            tmp_path, monkeypatch,
+            target_content="someone-else-changed-this\n", before_text="before content\n",
+        )
+
+        rc = cli.main(["e1"])
+        out = capsys.readouterr().out
+
+        assert rc == 1  # conflict は失敗扱い
+        assert str(target) in out
+        assert "衝突" in out
+
+    def test_apply_real_run_does_not_print_dry_run_header(self, tmp_path, monkeypatch, capsys):
+        """--apply（dry_run=False）では #469 のヘッダを付けない（既存の完了メッセージのみ）。"""
+        target = self._setup_entry(
+            tmp_path, monkeypatch,
+            target_content="after content\n", before_text="before content\n",
+        )
+
+        rc = cli.main(["e1", "--apply"])
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        assert "判定:" not in out
+        assert target.read_text(encoding="utf-8") == "before content\n"
