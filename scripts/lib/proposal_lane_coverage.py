@@ -31,6 +31,15 @@ AST 検査（2026-08-15 codex cold review 是正・[Must]1/[Should]3）: 設計 
 allowlist 化でき、誤検知ゼロで blocking 化できる（`find_undeclared_runner_result_keys`）。
 それでも塞がらない残余: helper 関数の戻り値経由で書かれるキー・動的キー生成は静的に
 追えない（実測では runner.py にこのパターンは無いが将来混入し得る）。
+
+**`lane_connected=True` の意味を誤読しないこと（Stage 0 の担保範囲）**: 本モジュールと
+契約テストが機械検査するのは、設計 §1.3「接続済みの4点セット」のうち **#1 候補抽出
+（`_extract_candidates` が当該種別を返す）だけ**である。#2 運搬（pending payload が判断材料を
+落とさず運ぶ）・#3 表示/承認（`skills/evolve/SKILL.md` Step 3 / Step 7.8 の手順が扱う）・
+#4 固定（契約テストの CI 登録）は本検査の対象外で、Stage 1 以降で別途担保する。
+したがって `lane_connected=True` は「**朝の y/n に実際に出る**ことの証明ではなく、
+`_extract_candidates` が読むことの宣言」である。この2つを同一視すると、抽出だけ通って
+表示されない種別を「接続済み」と誤って数えることになる。
 """
 from __future__ import annotations
 
