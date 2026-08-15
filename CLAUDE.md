@@ -20,8 +20,8 @@
 根拠にする（2026-08-15 codex レビュー）。
 
 ```bash
-bin/evolve-audit          # 戦果ボード = 柱3（指摘率の測定可否・採用件数・除外内訳）
-bin/evolve-revert --list  # 柱4（採用のうち戻せる件数）
+bin/evolve-audit --growth  # 戦果ボード = 柱3（指摘率の測定可否・採用件数・除外内訳）
+bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 ```
 
 1. **普段**: ユーザーは各PJで普通にチャットするだけ。プラグインの存在を忘れている（observe は全自動・無音）
@@ -31,7 +31,7 @@ bin/evolve-revert --list  # 柱4（採用のうち戻せる件数）
    項目だけ表示し、揃うまで `not_measured` と明示する**。効いていないものの自動取り下げも (b) が
    計測可能になって初めて発火する。**表示条件**: (a) は全量判定した週が4週連続（`correction_rate`）、
    (b) の分母は revert 済みを畳んだ有効 accept 件数（`results_board`）。**どちらも現在値は
-   `bin/evolve-audit` で確認する**（ADR-054 §5・§7.2）
+   `bin/evolve-audit --growth` で確認する**（ADR-054 §5・§7.2）
 4. **信頼**: 表示する数字が嘘をつかない（#376）/ 適用は必ず人間の y/n（無人適用しない）/
    skill 採用は1コマンドで戻せる（**適用範囲: evolve drain 経由の新規採用のみ**。optimize.py 経路と
    evolve-loop 経路は revert 対象外＝ADR-054 Phase D PR2/PR3 を凍結した。採用実績が乏しく
