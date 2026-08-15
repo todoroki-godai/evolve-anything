@@ -1,4 +1,5 @@
 repeating_patterns
+rule_violation_observed
 pitfall_candidates
 hook_candidates
 instruction_violation

@@ -1,11 +1,13 @@
 """提案種別 → decision lane 到達性の宣言表と機械検査（#467 Stage 0）。
 
 実測（`docs/decisions/drafts/467-all-proposal-types-to-morning-yn.md` §1.1・2026-08-15）:
-discover が result に書く提案種別は 7 種（`matched_skills` / `skill_evolve` /
-`repeating_patterns` / `pitfall_candidates` / `hook_candidates` /
-`instruction_violation` / `trajectory_skill_candidate`）。うち朝の y/n（decision lane）
-`evolve_decisions._candidates._extract_candidates` が実際に読むのは `matched_skills` と
-`skill_evolve` の 2 種のみ（`_candidates.py:97,109`）。
+discover が result に書く提案種別は 8 種（`matched_skills` / `skill_evolve` /
+`repeating_patterns` / `rule_violation_observed` / `pitfall_candidates` /
+`hook_candidates` / `instruction_violation` / `trajectory_skill_candidate`）。うち
+朝の y/n（decision lane）`evolve_decisions._candidates._extract_candidates` が実際に
+読むのは `matched_skills` と `skill_evolve` の 2 種のみ（`_candidates.py:97,109`）。
+（設計ドラフト本文は「7種」と書いているが §1.1 の表自体は8行あり本文側の数え間違い。
+baseline も6行に訂正済み・レビュー指摘で判明・2026-08-15）
 
 種別ごとに result 上の格納階層・構造が異なる（`repeating_patterns` は
 `phases.discover.tool_usage_patterns` という dict の内側にネストされる等）ため、
@@ -43,8 +45,12 @@ class ProposalKind:
     lane_connected: bool = False  # §1.3 の4点セットを満たすか（現状 True は2種のみ）
 
 
-# 実測（設計 §1.1・runner.py 実コード確認済み）。全 7 種はいずれも result 上で
+# 実測（設計 §1.1・runner.py 実コード確認済み）。全 8 種はいずれも result 上で
 # list of dict として格納されている（構造裏取り結果は各行のコメント参照）。
+#
+# `rule_violation_observed_error`（runner.py:340）は宣言しない — これは例外発生時の
+# エラーメッセージ記録であって提案種別ではない（他の *_error キーと同様、result_schema
+# の CANONICAL 対象外の診断用フィールド）。
 PROPOSAL_KINDS: Tuple[ProposalKind, ...] = (
     ProposalKind(
         kind="matched_skills",
@@ -63,6 +69,15 @@ PROPOSAL_KINDS: Tuple[ProposalKind, ...] = (
         # tool_usage_analyzer が書く "repeating_patterns" は tool_result 直下ではなく
         # phases.discover.tool_usage_patterns という dict の内側（runner.py:317-336）。
         source_path="phases.discover.tool_usage_patterns.repeating_patterns",
+        selector="list_of_dict",
+        lane_connected=False,
+    ),
+    ProposalKind(
+        kind="rule_violation_observed",
+        # rule_violation_lane.partition_rule_violations が result 直下に書く
+        # （runner.py:337-338）。要素は `{pattern, count, examples, violated_command, ...}`
+        # の dict（rule_violation_lane.py:265, :417 のコメントで確認）。
+        source_path="phases.discover.rule_violation_observed",
         selector="list_of_dict",
         lane_connected=False,
     ),

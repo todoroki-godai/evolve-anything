@@ -32,6 +32,9 @@ def _synthetic_envelope() -> dict:
                         {"type": "hook_candidate", "pattern": "git status", "count": 5},
                     ],
                 },
+                "rule_violation_observed": [
+                    {"pattern": "cd X", "count": 3, "examples": [], "violated_command": "cd"},
+                ],
                 "pitfall_candidates": [
                     {"title": "t", "root_cause": "rc", "skill_name": "foo", "source": "s"},
                 ],
