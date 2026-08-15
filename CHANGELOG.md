@@ -15,8 +15,14 @@
   同型）に限定し、新種の未接続追加・接続済みなのに baseline 残存の両方向を契約テスト4本で
   検出する。`test_proposal_lane_coverage.py` を CI portable suite（blocking）に追加。
   store / observability section / advisory proposal adapter / weak_signal channel は追加なし
-  （#379 新設凍結非抵触・`test_shrink_freeze.py` 緑で確認）。AST best-effort 補助検出
-  （`find_undeclared_result_keys`）は宣言漏れの警告のみで非 blocking。
+  （#379 新設凍結非抵触・`test_shrink_freeze.py` 緑で確認）。
+  **追記（codex cold review 是正・2026-08-15）**: [Must]1/[Should]3 — AST 検出の走査対象を
+  discover/runner.py 1ファイルに絞り誤検知ゼロの allowlist を明示することで、非 blocking の
+  警告（`find_undeclared_result_keys`）から blocking の契約（`find_undeclared_runner_result_keys`）
+  へ格上げした。[Must]2 — 接続宣言（`lane_connected=True`）と `_extract_candidates` 実装の
+  対応検査を件数・集合比較から kind 単位の ablation 検査
+  （`test_each_connected_kind_maps_individually_to_extract_candidates_output`）へ強化し、
+  `lane_connected` の入れ替え（例: `matched_skills`↔`pitfall_candidates`）も検出できることを実測。
 - **fix(evolve): auto trigger の発火状況（trigger_summary）を1行サマリに surface（#458 /
   #457）** — `trigger_summary.{total_fires, last_fired}` は `_state.py:_build_trigger_summary`
   が生成し `phases_capture.py` が result へ入れるだけで、production/test どちらからも

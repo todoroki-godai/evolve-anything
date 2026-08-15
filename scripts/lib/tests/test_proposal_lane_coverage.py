@@ -19,46 +19,51 @@ import proposal_lane_coverage as plc  # noqa: E402
 from evolve_decisions._candidates import _extract_candidates  # noqa: E402
 
 
+# kind ごとの代表要素1件（selector=list_of_dict 前提）。_synthetic_envelope（全種込み）と
+# _envelope_with_only（ablation・1種のみ）の両方がこれを共有する。
+_ELEMENT_BY_KIND = {
+    "matched_skills": {"skill_path": "skills/foo/SKILL.md", "matched_skill": "foo", "pattern": "p"},
+    "skill_evolve": {"skill_name": "baz", "skill_dir": "skills/baz", "suitability": "high"},
+    "repeating_patterns": {"type": "hook_candidate", "pattern": "git status", "count": 5},
+    "rule_violation_observed": {
+        "pattern": "cd X", "count": 3, "examples": [], "violated_command": "cd",
+    },
+    "pitfall_candidates": {"title": "t", "root_cause": "rc", "skill_name": "foo", "source": "s"},
+    "hook_candidates": {"type": "hook_candidate", "pattern": "p", "count": 5},
+    "instruction_violation": {
+        "type": "instruction_violation_candidate", "file": "f", "detail": {},
+    },
+    "trajectory_skill_candidate": {"skill_name": "bar", "session_count": 3},
+}
+
+
+def _set_by_dotted_path(tree: dict, dotted_path: str, value) -> None:
+    """dotted path を辿って dict を掘り、末端に value を設定する（無ければ都度 dict を作る）。"""
+    parts = dotted_path.split(".")
+    cursor = tree
+    for part in parts[:-1]:
+        cursor = cursor.setdefault(part, {})
+    cursor[parts[-1]] = value
+
+
 def _synthetic_envelope() -> dict:
     """PROPOSAL_KINDS 全種を1件ずつ含む合成 envelope（run_discover を実行せず手組み）。"""
-    return {
-        "phases": {
-            "discover": {
-                "matched_skills": [
-                    {"skill_path": "skills/foo/SKILL.md", "matched_skill": "foo", "pattern": "p"},
-                ],
-                "tool_usage_patterns": {
-                    "repeating_patterns": [
-                        {"type": "hook_candidate", "pattern": "git status", "count": 5},
-                    ],
-                },
-                "rule_violation_observed": [
-                    {"pattern": "cd X", "count": 3, "examples": [], "violated_command": "cd"},
-                ],
-                "pitfall_candidates": [
-                    {"title": "t", "root_cause": "rc", "skill_name": "foo", "source": "s"},
-                ],
-                "hook_candidates": [
-                    {"type": "hook_candidate", "pattern": "p", "count": 5},
-                ],
-                "instruction_violations": [
-                    {"type": "instruction_violation_candidate", "file": "f", "detail": {}},
-                ],
-                "trajectory_skill_candidates": [
-                    {"skill_name": "bar", "session_count": 3},
-                ],
-            },
-            "skill_evolve": {
-                "assessments": [
-                    {
-                        "skill_name": "baz",
-                        "skill_dir": "skills/baz",
-                        "suitability": "high",
-                    },
-                ],
-            },
-        },
-    }
+    envelope: dict = {}
+    for pk in plc.PROPOSAL_KINDS:
+        _set_by_dotted_path(envelope, pk.source_path, [_ELEMENT_BY_KIND[pk.kind]])
+    return envelope
+
+
+def _envelope_with_only(kind: str) -> dict:
+    """指定した1 kind のデータのみを含む envelope（他の種別のデータは一切含めない）。
+
+    lane_connected の入れ替え（例: skill_evolve=False かつ pitfall_candidates=True）を
+    検出するための ablation 用 helper（codex round review [Must]2）。
+    """
+    pk = next(p for p in plc.PROPOSAL_KINDS if p.kind == kind)
+    envelope: dict = {}
+    _set_by_dotted_path(envelope, pk.source_path, [_ELEMENT_BY_KIND[kind]])
+    return envelope
 
 
 # --- 契約テスト 1: 宣言と実装の乖離検出 -------------------------------------
@@ -73,34 +78,51 @@ def test_all_declared_paths_extract_from_synthetic_envelope() -> None:
         assert all(isinstance(e, dict) for e in elements), pk.kind
 
 
-# --- 契約テスト 2: 接続宣言と実装の一致 -------------------------------------
+# --- 契約テスト 2: 接続宣言と実装の kind 単位の対応検査 ----------------------
+#
+# 件数比較・proposal_type 集合比較だけでは lane_connected の入れ替え
+# （例: skill_evolve=False かつ pitfall_candidates=True）を検出できない — 接続数が
+# 変わらなければ両方の assertion が素通りしてしまう（codex cold review [Must]2）。
+# ここでは connected_kinds() の各 kind を「その kind のデータだけを含む envelope」で
+# ablate し、_extract_candidates の出力が個別に対応する proposal_type を返すことを
+# 1 kind ずつ検証する。
 
 
-def test_connected_kinds_appear_in_extract_candidates_output() -> None:
-    """lane_connected=True の種別が _extract_candidates の実出力に現れる。"""
-    envelope = _synthetic_envelope()
-    out = _extract_candidates(envelope)
-
+def test_each_connected_kind_maps_individually_to_extract_candidates_output() -> None:
+    """lane_connected=True の各 kind が、単独 envelope で個別に正しい proposal_type を返す。"""
     connected = plc.connected_kinds()
-    assert len(out) == len(connected)
+    assert connected, "lane_connected=True の種別が無い（契約テストが自明に緑になる）"
 
-    proposal_types = {c["proposal_type"] for c in out}
-    # matched_skills -> "skill_diff", skill_evolve -> "skill_evolve"（_candidates.py の実装）。
-    assert proposal_types == {"skill_diff", "skill_evolve"}
+    for pk in connected:
+        envelope = _envelope_with_only(pk.kind)
+        out = _extract_candidates(envelope)
+        proposal_types = {c["proposal_type"] for c in out}
+
+        expected = plc.CONNECTED_KIND_EXPECTED_PROPOSAL_TYPE.get(pk.kind)
+        assert expected is not None, (
+            f"{pk.kind}: lane_connected=True だが CONNECTED_KIND_EXPECTED_PROPOSAL_TYPE に"
+            "期待値が無い（未知の kind が誤って接続宣言された可能性）"
+        )
+        assert proposal_types == {expected}, (
+            f"{pk.kind} 単独の envelope で _extract_candidates を呼んだ結果が "
+            f"proposal_type={expected!r} にならない（実際: {proposal_types}）。"
+            "宣言（lane_connected=True）と実装（_extract_candidates が実際に読む種別）が"
+            "食い違っている"
+        )
 
 
-def test_connecting_a_kind_without_wiring_would_be_caught() -> None:
-    """接続したと宣言(lane_connected=True)して _extract_candidates 実装を忘れたら検出できる。
+def test_unconnected_kind_produces_no_extract_candidates_output() -> None:
+    """lane_connected=False の各 kind は、単独 envelope でも _extract_candidates が空を返す。
 
-    ここでは pitfall_candidates を仮に接続宣言した ProposalKind を作り、実際の
-    _extract_candidates が拾わないこと（＝宣言だけでは通らない）を確認する。
+    接続していない種別のデータだけを与えても候補が出ないことを確認する
+    （誤って読まれてしまっていないかの逆方向チェック）。
     """
-    # 宣言上は pitfall_candidates を「接続済み」にしても、実際の _extract_candidates が
-    # 拾う種別（matched_skills / skill_evolve）は変わらない＝宣言だけでは実装は動かない。
-    envelope = _synthetic_envelope()
-    out = _extract_candidates(envelope)
-    proposal_types = {c["proposal_type"] for c in out}
-    assert "pitfall_candidates" not in proposal_types
+    for pk in plc.PROPOSAL_KINDS:
+        if pk.lane_connected:
+            continue
+        envelope = _envelope_with_only(pk.kind)
+        out = _extract_candidates(envelope)
+        assert out == [], f"{pk.kind}: 未接続のはずだが _extract_candidates が拾っている: {out}"
 
 
 # --- 契約テスト 3: 新種を未接続で足したら赤 ----------------------------------
@@ -173,43 +195,51 @@ def test_extract_elements_rejects_unknown_selector() -> None:
         plc.extract_elements(pk, {"phases": {"discover": {"x": []}}})
 
 
-# --- 補助テスト: AST best-effort 検出（誤検知許容・非 blocking） -------------------
+# --- 補助テスト（blocking）: runner.py スコープの AST 検出 ------------------------
+#
+# 2026-08-15 codex cold review 是正（[Must]1/[Should]3）: 走査対象を discover/runner.py
+# 1ファイルに絞ることで誤検知ゼロを狙い、非 blocking の警告から blocking の契約に格上げした。
 
 
-def test_find_undeclared_result_keys_flags_new_and_ignores_declared(tmp_path: Path) -> None:
-    """result[...] = / setdefault / update の3パターンを拾い、宣言済みは除外する。"""
-    src_dir = tmp_path / "scripts" / "lib"
-    src_dir.mkdir(parents=True)
-    (src_dir / "fake_runner.py").write_text(
-        "def run():\n"
+def test_find_undeclared_runner_result_keys_flags_new_and_ignores_known(tmp_path: Path) -> None:
+    """result[...] = / result.setdefault(...) を拾い、宣言済み・既知非候補は除外する。"""
+    fake = tmp_path / "fake_runner.py"
+    fake.write_text(
+        "def run_discover():\n"
         "    result = {}\n"
-        "    result['known_kind'] = []\n"
-        "    result['mystery_kind'] = []\n"
-        "    result.setdefault('another_kind', [])\n"
-        "    result.update({'third_kind': [], 'known_kind': []})\n"
+        "    result['matched_skills'] = []\n"  # 宣言済み（PROPOSAL_KINDS）
+        "    result['reflect_data_count'] = 0\n"  # 既知非候補（allowlist）
+        "    result['dummy_candidates'] = []\n"  # 未宣言・未知＝赤にすべき
+        "    result.setdefault('another_dummy', [])\n"  # 同上（setdefault 経路）
+        "    tool_result = {}\n"
+        "    tool_result['repeating_patterns'] = []\n"  # result 以外の変数は対象外
         "    return result\n",
         encoding="utf-8",
     )
 
-    found = plc.find_undeclared_result_keys(tmp_path, declared_kinds={"known_kind"})
+    found = plc.find_undeclared_runner_result_keys(fake)
 
-    assert found == ["another_kind", "mystery_kind", "third_kind"]
-
-
-def test_find_undeclared_result_keys_handles_empty_tree(tmp_path: Path) -> None:
-    assert plc.find_undeclared_result_keys(tmp_path, declared_kinds=set()) == []
+    assert found == ["another_dummy", "dummy_candidates"]
 
 
-def test_find_undeclared_result_keys_runs_over_real_repo_source_without_crashing() -> None:
-    """best-effort 検出器を実リポジトリの source AST に対して実走させる（結果は非 assert）。
+def test_find_undeclared_runner_result_keys_empty_when_all_known(tmp_path: Path) -> None:
+    fake = tmp_path / "fake_runner.py"
+    fake.write_text(
+        "def run_discover():\n"
+        "    result = {}\n"
+        "    result['matched_skills'] = []\n"
+        "    result['reflect_data_count'] = 0\n"
+        "    return result\n",
+        encoding="utf-8",
+    )
+    assert plc.find_undeclared_runner_result_keys(fake) == []
+
+
+def test_find_undeclared_runner_result_keys_is_empty_for_real_runner() -> None:
+    """discover/runner.py 実ファイルに対して実走し、未宣言キーがゼロであることを blocking で検証する。
 
     これは source の AST のみを読む（実行はしない・~/.claude や実データは参照しない）ため
-    hermetic 受入条件を満たす。正確な件数は将来のコード変更で自然に増減しうるため、
-    型と非負性のみ検証し、具体的な件数は契約にしない（狼少年防止・§3.3）。
+    hermetic 受入条件を満たす。ここが赤くなる＝runner.py に新しい result キーが追加され
+    宣言表（PROPOSAL_KINDS）にも既知非候補 allowlist にも反映されていない状態。
     """
-    from plugin_root import PLUGIN_ROOT
-
-    declared = {pk.kind for pk in plc.PROPOSAL_KINDS}
-    found = plc.find_undeclared_result_keys(PLUGIN_ROOT, declared_kinds=declared)
-    assert isinstance(found, list)
-    assert all(isinstance(k, str) for k in found)
+    assert plc.find_undeclared_runner_result_keys() == []

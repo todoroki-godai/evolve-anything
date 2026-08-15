@@ -22,13 +22,22 @@ observability section も advisory proposal adapter も weak_signal channel も
 （`fixtures/proposal_lane_unconnected_baseline.txt`）。baseline は実装から独立した
 git 追跡ファイルに置く（`shrink_freeze.FROZEN_*` と同型）ため、緩めた事実は必ず
 PR diff の1行として現れる。
+
+AST 検査（2026-08-15 codex cold review 是正・[Must]1/[Should]3）: 設計 §3.3 は
+全ソース走査を前提に「best-effort・赤にしない」としていたが、それは全ソース走査だと
+無関係な subscript 代入まで拾い誤検知が多いための判断だった。走査対象を discover の
+提案生成元 `discover/runner.py` 1ファイルに絞ることで、既知の非候補キー
+（`_error` 診断・件数・下位ラッパー等、`_RUNNER_NON_CANDIDATE_RESULT_KEYS`）を明示
+allowlist 化でき、誤検知ゼロで blocking 化できる（`find_undeclared_runner_result_keys`）。
+それでも塞がらない残余: helper 関数の戻り値経由で書かれるキー・動的キー生成は静的に
+追えない（実測では runner.py にこのパターンは無いが将来混入し得る）。
 """
 from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 # selector の取り得る値。他の値は extract_elements が ValueError で拒否する。
 SELECTORS: Tuple[str, ...] = ("list_of_dict", "dict_of_list", "scalar")
@@ -118,6 +127,18 @@ def unconnected_kind_names() -> frozenset:
     return frozenset(pk.kind for pk in PROPOSAL_KINDS if not pk.lane_connected)
 
 
+# lane_connected=True の各 kind が `_extract_candidates`（evolve_decisions/_candidates.py）の
+# 出力でどの proposal_type として現れるかの対応（実装の単一ソースは _candidates.py 自身。
+# ここはテスト用の期待値ミラーであり、kind 単位の対応検査（テスト側）が実装との乖離を検出する
+# ため存在する。2026-08-15 codex cold review [Must]2 是正: 件数・集合比較だけでは
+# lane_connected の入れ替え（例: skill_evolve=False かつ pitfall_candidates=True）を検出
+# できないため、kind ごとに ablate した envelope で個別対応を確認する契約テストを追加した）。
+CONNECTED_KIND_EXPECTED_PROPOSAL_TYPE: Dict[str, str] = {
+    "matched_skills": "skill_diff",  # _candidates.py:105
+    "skill_evolve": "skill_evolve",  # _candidates.py:122
+}
+
+
 # baseline は実装から独立した git 追跡ファイルに置く（shrink_freeze.FROZEN_* と同型）。
 # 緩めた事実（未接続を許す種別の追加）が必ず PR diff の1行として現れるようにするため。
 _BASELINE_FIXTURE_PATH = (
@@ -176,53 +197,105 @@ def _const_str(node: ast.AST) -> Optional[str]:
     return None
 
 
-def find_undeclared_result_keys(
-    repo_root: Path, declared_kinds: Iterable[str],
-) -> List[str]:
-    """宣言表に無い result 代入キーを AST best-effort で警告として列挙する（設計 §3.3）。
+# discover/runner.py の `result[...]` / `result.setdefault(...)` に実在するが提案候補
+# **ではない**既知キー（診断エラー・件数・下位ラッパー等）。実測（2026-08-15、runner.py 全文
+# `result[` / `result.setdefault(` grep）で確定した完全列挙。ここに無い新規キーは
+# `find_undeclared_runner_result_keys` が「未宣言の提案候補かもしれない」として検出する。
+# 新しい非候補キーを runner.py に足す場合はここへの追記が必要（新候補キーを足す場合は
+# PROPOSAL_KINDS への追記が必要 — どちらのケースも黙って通さない）。
+_RUNNER_NON_CANDIDATE_RESULT_KEYS: FrozenSet[str] = frozenset(
+    {
+        "reflect_data_count",
+        "reflect_data_count_error",
+        "missed_skill_opportunities",
+        "missed_skill_opportunities_error",
+        "missed_skill_message",
+        "trajectory_skill_candidates_error",
+        "scope_error",
+        "total_candidates",
+        "matched_skills_error",
+        "unmatched_patterns",
+        "verification_needs",
+        "verification_needs_error",
+        "tool_usage_patterns",  # repeating_patterns の下位ラッパー本体（宣言表は nested path で参照）
+        "rule_violation_observed_error",
+        "recommended_artifacts",
+        "installed_artifacts",
+        "pitfall_candidates_error",
+        "instruction_violations_error",
+        "constraint_decay_warnings",
+        "constraint_decay_findings",
+        "constraint_decay_error",
+        "stall_recovery_patterns",
+        "stall_recovery_error",
+        "workflow_checkpoint_gaps",
+        "workflow_checkpoint_gaps_error",
+    }
+)
 
-    正典は `PROPOSAL_KINDS`（人が書く宣言表）。本関数はそれを補助するだけで、
-    ここで見つからない・逆に無関係なキーを拾う偽陽性/偽陰性の両方があり得る
-    （helper 関数の戻り値経由・動的キーは静的に追えない）。呼び出し側は結果を
-    **警告表示のみ**に使い、テストを赤くする根拠にしない（狼少年防止）。
+_DEFAULT_RUNNER_PATH = Path(__file__).resolve().parent / "discover" / "runner.py"
 
-    走査パターンは `skill_declaration_reachability._iter_py_files` を流用する
-    （scripts/**.py + skills/**/scripts/**.py、`.claude` 配下除外）。
+
+def _discover_declared_result_keys() -> FrozenSet[str]:
+    """PROPOSAL_KINDS のうち `phases.discover.<key>` 直下（ネスト無し）の種別が
+    runner.py の `result` へ書く literal key 名の集合。
+
+    source_path の**末尾セグメント**を使う（`kind` は概念上の識別子であり literal key
+    と異なることがある — `instruction_violation`/`trajectory_skill_candidate` は kind が
+    単数形だが実際の result 上の key は複数形 `instruction_violations`/
+    `trajectory_skill_candidates`）。`repeating_patterns` のようにネストされる種別
+    （`phases.discover.tool_usage_patterns.repeating_patterns`）は runner.py の
+    `result[...]` に直接現れない（`tool_result[...]` 経由）ため対象外。
     """
-    from skill_declaration_reachability import _iter_py_files  # noqa: PLC0415
+    out = set()
+    for pk in PROPOSAL_KINDS:
+        parts = pk.source_path.split(".")
+        if len(parts) == 3 and parts[0] == "phases" and parts[1] == "discover":
+            out.add(parts[-1])
+    return frozenset(out)
 
-    declared = set(declared_kinds)
+
+def find_undeclared_runner_result_keys(runner_path: Optional[Path] = None) -> List[str]:
+    """discover/runner.py の result 代入キーのうち宣言表にも既知非候補にも無いものを検出する。
+
+    2026-08-15 codex cold review 是正（[Must]1/[Should]3）。走査対象を単一ファイルに絞り
+    `_RUNNER_NON_CANDIDATE_RESULT_KEYS` で既知の非候補キーを明示除外することで、誤検知
+    ゼロを狙って blocking 化した（設計 §3.3 の「best-effort・非 blocking」からの変更）。
+
+    走査は「`result` という名前の変数への代入」のみに限定する（`tool_result` /
+    `partitioned` / `missed_result` 等の同ファイル内の無関係な変数を拾わないため）。
+    対応するのは `result[<文字列リテラル>] = ...` と `result.setdefault(<文字列リテラル>, ...)`
+    （実測: runner.py の `result` に対する `.update(` 呼び出しは無い・2026-08-15）。
+
+    残余（それでも塞がらないもの）: helper 関数の戻り値経由で動的に構築されるキー・
+    文字列以外から計算されるキー名は静的に追えない。
+    """
+    target = Path(runner_path) if runner_path is not None else _DEFAULT_RUNNER_PATH
+    tree = ast.parse(target.read_text(encoding="utf-8"), filename=str(target))
+
     found: set = set()
-
-    for f in _iter_py_files(Path(repo_root)):
-        try:
-            tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
-        except (SyntaxError, UnicodeDecodeError, OSError):
-            continue
-
-        for node in ast.walk(tree):
-            # `result[...] = ...` / `<name>[<str>] = ...`
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Subscript):
-                        key = _const_str(target.slice)
-                        if key is not None:
-                            found.add(key)
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                # `<name>.setdefault(<str>, ...)`
-                if node.func.attr == "setdefault" and node.args:
-                    key = _const_str(node.args[0])
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if (
+                    isinstance(t, ast.Subscript)
+                    and isinstance(t.value, ast.Name)
+                    and t.value.id == "result"
+                ):
+                    key = _const_str(t.slice)
                     if key is not None:
                         found.add(key)
-                # `<name>.update({<str>: ..., ...})`
-                elif node.func.attr == "update" and node.args:
-                    arg0 = node.args[0]
-                    if isinstance(arg0, ast.Dict):
-                        for k in arg0.keys:
-                            if k is None:  # `**other` 展開は対象外
-                                continue
-                            key = _const_str(k)
-                            if key is not None:
-                                found.add(key)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "result"
+            and node.func.attr == "setdefault"
+            and node.args
+        ):
+            key = _const_str(node.args[0])
+            if key is not None:
+                found.add(key)
 
-    return sorted(found - declared)
+    expected = _discover_declared_result_keys() | _RUNNER_NON_CANDIDATE_RESULT_KEYS
+    return sorted(found - expected)
