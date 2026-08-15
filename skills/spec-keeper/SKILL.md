@@ -274,21 +274,36 @@ evolve パイプラインで SPEC.md の品質チェック（カバレッジ、�
 
 ## Pre-flight Check
 
-**実行前に `references/pitfalls.md` を読み、Active かつ Pre-flight対応=Yes の項目を確認してください。**
+**空のうちは `references/pitfalls.md` を読み込まない。** 読むかどうかは次の決定論的判定で決める
+（空テンプレートを毎回読むのは「Progressive Disclosure レイヤー」節の Context rot 回避方針に反する）。
 
-該当する pitfall がある場合は、その回避策を適用してから本タスクを実行してください。
+```bash
+grep -c '^### ' "${CLAUDE_PLUGIN_ROOT}/skills/spec-keeper/references/pitfalls.md" 2>/dev/null || echo 0
+```
+
+- **0**: 読み込みも Pre-flight もスキップする（記録が1件も無い間はこちら）
+- **1以上**: pitfalls.md を読み、Status が Active かつ Pre-flight対応=Yes の項目の回避策を適用してから本タスクを実行する
 
 ## Self-Update Rules
 
-| 更新対象 | 判断基準 |
-|----------|---------|
-| `references/pitfalls.md` | エラー発生・リトライ・ユーザー訂正・再発時 |
-| `## Success Patterns` | 特に効果的だったアプローチの発見時（最大2件） |
-| Pitfall ステータス | ワークフローへの統合完了時に Graduated へ |
+| 更新対象 | 判断基準 | 更新方法 |
+|----------|---------|---------|
+| `references/pitfalls.md` | エラー発生・リトライ・ユーザー訂正・再発時 | **`/evolve-anything:pitfall-curate` 経由**（手で markdown を編集しない） |
+| `## Success Patterns` | 特に効果的だったアプローチの発見時（最大2件） | このファイルを直接 Edit |
+| Pitfall ステータス | ワークフローへの統合完了時に Graduated へ | pitfall-curate 経由 |
 
 ## Failure-triggered Learning
 
-以下のトリガーで `references/pitfalls.md` に記録してください。
+**`references/pitfalls.md` を手で編集しない。** 記録は `/evolve-anything:pitfall-curate` に委譲する
+（`skills/pitfall-curate/SKILL.md` が正典。parse / 類似度による dedup / フィールド書込みは
+`scripts/pitfall_curate.py` が決定論的に担う）。
+
+**記録対象の範囲（MUST）**: この pitfalls.md は全 PJ 共通の spec-keeper が参照する。
+記録してよいのは **spec-keeper の手順そのものに起因し、PJ を変えても再発する失敗**だけ。
+次は記録しない — 対象 PJ 固有の事情 / 一時的な環境障害 / 単発の打ち間違い。
+
+**書込みは人間承認を経る（MUST）**: 記録候補が出たらユーザーに1行で提示し、承認を得てから
+pitfall-curate を起動する。ユーザー本来の依頼に無断で割り込まない。
 
 | トリガー | アクション | ステータス |
 |----------|-----------|-----------|
@@ -313,15 +328,17 @@ Candidate → New → Active → Graduated → Pruned
     └─ 初回エラー     └─ ユーザー訂正（ゲートスキップ）
 ```
 
-- **Candidate**: 初回エラー。Pre-flight 対象外。同一根本原因が2回目で New に昇格
-- **New**: 正式 pitfall。Pre-flight 対象外。再発 or ユーザー承認で Active に昇格
-- **Active**: Pre-flight 対象（Pre-flight対応=Yes の場合）。Hot 層は上位5件
-- **Graduated**: ワークフローに統合済み。Pre-flight 対象外
-- **Pruned**: N回連続回避で削除候補
+- **Candidate**: 初回エラー。Pre-flight 対象外。同一根本原因が2回目で New に昇格。保存先は `## Candidate Pitfalls` 節
+- **New**: 正式 pitfall。Pre-flight 対象外。再発 or ユーザー承認で Active に昇格。保存先は `## Active Pitfalls` 節（Warm 層）
+- **Active**: Pre-flight 対象（Pre-flight対応=Yes の場合）。Hot 層は上位5件。保存先は `## Active Pitfalls` 節
+- **Graduated**: ワークフローに統合済み。Pre-flight 対象外。保存先は `## Graduated Pitfalls` 節
+- **Pruned**: Avoidance-count が **5** に達したら削除候補としてユーザーに提示する（自動削除しない）
+
+**遷移を実行する主体は pitfall-curate**（昇格・Avoidance-count 更新・Pruned 判定を含む）。
+このスキル単独でステータスを書き換えない。
 
 ## Success Patterns
 
 <!-- 特に効果的だったアプローチを1-2件記録 -->
 
 _まだ記録がありません。成功パターンを発見したら追記してください。_
-
