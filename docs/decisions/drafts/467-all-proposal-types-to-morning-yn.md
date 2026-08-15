@@ -2,8 +2,10 @@
 
 - 対象 issue: #467（Epic）
 - 関連: #459（reader ゼロの blocking 検出・一般形）/ #379（新設凍結）/ #402・ADR-053（revert）/ ADR-054 §9.4
-- 状態: **rev4 — codex 3巡目で「これを直せば着手可」の条件を提示され、その [Must]1件を反映済み。実装着手可**
-- 前提コミット: `493c3173`（main）
+- 状態: **rev5 — Stage 0 は実装・マージ済み（PR #476 / `cfa77249`）。Stage 1 は 2026-08-16 の実測で
+  設計前提が2つとも崩れたため着手を取り消し、設計に差し戻し中。§1.5 が実測、§10 が再設計で
+  答えるべき問い**
+- 前提コミット: `cfa77249`（main・Stage 0 マージ後）
 
 ---
 
@@ -77,6 +79,107 @@ codex [Must]1 の指摘どおり、**実際に人間の目に出るかを決め�
 | `_restore_normal` は `os.replace(tmp, target)` のみ＝**復元＝上書き** | `_apply.py:131-222`（:211） |
 | before payload 必須検査 / `--dump-before` も本文前提 | `_apply.py:248`, `_dump.py:52` |
 | before_content は文字列前提。「不在」sentinel と schema version が無い | `evolve_decision_ids.py:258,279,300-313` |
+
+### 1.5 実測（2026-08-16）— rev4 の前提を2つ崩した観測結果
+
+Stage 1 着手前に「§4.4 が MUST にしている実データ較正」を実行した結果、**較正どころか
+パイロット選定そのものが成り立たない**ことが判明した。以下はすべて実測値であり推定を含まない。
+
+#### 1.5.1 パイロット `instruction_violations` は本番で 0 件（前提崩壊①）
+
+| 観測 | 値 | 根拠 |
+|---|---|---|
+| `corrections.jsonl` 総数 | 171 | 実ストア（全PJ共通・2026-05-15〜2026-08-15） |
+| うち `last_skill` が truthy | **0 / 171** | 同上 |
+| 生成の足切り条件 | `c.get("last_skill")` が truthy な correction のみ | `discover/runner.py:392-393` |
+
+**根本原因は検出器ではなく入力側**。corrections の書き手は2系統あり、支配的な方が
+`last_skill` を **None 固定**で書いている:
+
+| writer | 件数 | `last_skill` |
+|---|---|---|
+| `correction_semantic/promote.py:563`（朝の y/n で採用 → `source="reflect_confirmed"`） | 161 | `promote.py:365` で **`None` ハードコード** |
+| `hooks/correction_detect.py:163`（`source="hook"`） | 2 | `read_last_skill(session_id)` 経由・実測 None |
+| backfill | 8 | キー無し |
+
+`hooks/observe.py:87` の `write_last_skill` は正常に動作している（`$TMPDIR` に実ファイルが存在し
+`{"skill_name": ..., "timestamp": ...}` を保持。`usage.jsonl` は 5,574 件の Skill 呼び出しを記録）。
+壊れているのは**採用経路が session→skill の対応を運ばないこと**であり、
+一時ファイルの TTL（24h・`rl_common/workflow.py:16`）でも書込み側でもない。
+
+修理した場合の上限も実測した: **同一セッション内で correction より前に Skill 呼び出しがあった
+correction は 28 / 171（16%）**。1 correction = 最大1 violation（`runner.py:440` の無条件 `break`）
+なので、violation の上限は 28 件。そこから対立動詞マッチに当たったものだけが提案になる。
+
+同じ入力欠落が **`pitfall_candidates` も殺している**（`pitfall_manager/detection.py:165-167` が
+同一条件で足切り）。**1箇所の修理で2種別が 0 → 稼働に変わる**。
+
+#### 1.5.2 §4.4「confidence を実データで較正」は実装不能（前提崩壊②）
+
+production の `confidence` は**連続値ではなく2値固定**である:
+
+| 経路 | confidence | needs_review | file:line |
+|---|---|---|---|
+| Stage1 対立動詞 | **0.95 固定** | 既定 False | `critical_instruction_extractor.py:355-363` |
+| Stage2 keyword overlap ≥3 | **0.50 固定** | **True 固定** | `critical_instruction_extractor.py:366-375` |
+
+LLM Judge 経路（`emit_violation_judge_requests` / `ingest_violation_judges`・:397-508）は
+**production から一度も呼ばれていない**（caller は自己参照とテストのみ。ADR-037 Phase 1d-i で
+2相 API 化したが SKILL.md への配線が入っていない）。
+`needs_review=True` を除外した時点で残るのは 0.95 のみなので、閾値は
+0.5〜0.95 のどこに置いても結果が変わらない。**「実データで較正する」という MUST は
+現行コードに対して意味を持たない。**
+
+#### 1.5.3 未接続13種の実産出量（全数実測・LLM 呼び出しゼロ）
+
+`PROPOSAL_KINDS` の `lane_connected=False` 全13種を、生成関数を個別 import して直接呼んで計測
+（`run_discover()` 全体は未実行）。対象は本リポジトリ。
+
+| 種別 | 産出件数 | 束ね後の y/n 回数 | 0件の理由（file:line） |
+|---|---|---|---|
+| `repeating_patterns` | 124 | 124（**束ねキー無し**） | — |
+| `rule_violation_observed` | 25 | `violated_command` 単位なら **1** | — |
+| `recommended_artifacts` | 12 | 12 | — |
+| `trajectory_skill_candidate` | 1 | 1 | — |
+| `missed_skill_opportunities` | 1 | 1（上記由来） | — |
+| `pitfall_candidates` | 0 | — | `pitfall_manager/detection.py:165-167`（§1.5.1 と同一原因） |
+| `hook_candidates` | 0 | — | `discover/errors.py:15` 閾値3に未達 |
+| `instruction_violation` | 0 | — | `runner.py:392-393`（§1.5.1） |
+| `verification_needs` | 0 | — | `verification_catalog/runner.py:80-100` 全件導入済み判定 |
+| `stall_recovery_patterns` | 0 | — | `tool_usage_analyzer/stall.py:47` 2セッション跨ぎ未達 |
+| `workflow_checkpoint_gaps` | 0 | — | `runner.py:489-490` `<repo>/.claude/skills/` 不在 |
+| `constraint_decay_warnings` | 0 | — | `discover/patterns.py:115` `decay_rate > 0.3` 該当なし |
+| `constraint_decay_findings` | 0 | — | 同上 |
+
+**中身の質（人間が判断するための実サンプル）**:
+
+- `repeating_patterns` 上位は `git`(1606) / `grep`(1228) / `gh auth`(1060) — 日常コマンドの
+  使用頻度そのもの。「スキル化しますか」に落ちる質ではない＝**y/n 不適**
+- `rule_violation_observed` は内容が具体的で行動に直結する
+  （例: `cd` 禁止ルールが導入済みなのに 522 回観測 → `reason="rule_installed_but_not_enforced"`、
+  推奨は hook enforce）。ただし 25 件すべて `violated_command="cd"` の**1指摘が
+  ディレクトリ差で分裂したもの**
+- `recommended_artifacts` は `skills/discover/SKILL.md:57-67` に**既に専用の y/n フロー**を持つ
+
+#### 1.5.4 rev4 が見落としていた構造的事実（最重要）
+
+**中身が出る3種はいずれも「新しいファイルを作る」提案**であり、
+§1.4 の「revert lane は既存ファイルの書き換えしか表現できない」に直撃する。
+
+一方 §4 がパイロットに選んだ `instruction_violation` は、**唯一「既存 SKILL.md の書き換え」型
+だったが産出が 0**（§1.5.1）。
+
+> **つまり「産出がある種別」と「既存 lane に乗る種別」の積集合が空である。**
+> rev4 は §5（新規ファイル作成の accept/revert）を *Stage 2 の前提* として先送りしたが、
+> 実測はこれを **Stage 1 の前提**へ格上げする。
+
+なお `rule_violation_observed` は孤児ではない。`phases_remediate.py:99-102` が
+`make_hook_candidate_issues_from_rule_violations` を呼び、
+`RULE_VIOLATION_HOOK_THRESHOLD=20` 以上の違反 head を**1つの hook scaffold に束ねて**
+issue 化している（`rule_violation_lane.py:344-388`）。
+未接続なのは「朝の y/n レーン（`_extract_candidates`）」に対してのみである。
+**束ねの実装は既に存在するので、rev4 が §4.2 で新設しようとした集約契約は
+この関数の再利用で足りる可能性がある**（要検証）。
 
 ---
 
@@ -199,7 +302,18 @@ dogfood Layer 2（`invariants.py:183-188` の `_CHECKS`）への追加はロー�
 
 ---
 
-## 4. 判断2: Stage 1 のパイロットは `instruction_violations`（rev1 の結論を維持・ただし「そのまま乗る」は撤回）
+## 4. 判断2: Stage 1 のパイロットは `instruction_violations` — **rev5 で撤回**
+
+> **⚠ 本節（§4 全体）は rev5 で撤回した。** §1.5.1 の実測により、この種別は本番で 0 件しか
+> 産出しない。パイロットとして採用すると「配管は通ったが1件も人間に届かない」状態で
+> 完了扱いになり、**#467 が潰そうとしている欠陥そのものを再生産する**。
+>
+> §4.1（運搬契約）・§4.1b（suppression identity 分離）・§4.2（集約契約）の**設計内容自体は
+> 実測と矛盾しておらず、種別非依存の契約として再利用できる**（`_emit.py:190-213` の pending entry に
+> `detail` 相当が無いこと、`_suppression.py:23-50` が `entry["id"]` のみを一意性成分にしていることは
+> 2026-08-16 に再確認済み）。撤回するのは**パイロットの選定**と §4.4 である。
+>
+> 以下は撤回前の記述として保存する。
 
 issue 本文は `hook_candidates` を最有力としていたが、対象が**存在しないファイル**であるため
 accept 判定（`_ingest.py:85-120` が `read_text()` と `after_sha != before_sha` を要求）にも
@@ -292,14 +406,29 @@ rev2 の tie-breaker「correction の時刻」は `make_instruction_violation_is
 - **SKILL.md の記述を契約テストで固定する**（`test_report_feedback_contract.py` と同型。
   SKILL.md の MUST は強制力を持たない＝`learning_skill_md_must_not_enforcement`）
 
-### 4.4 品質ゲート
+### 4.4 品質ゲート — **rev5 で撤回**
+
+> **⚠ 実装不能。** §1.5.2 のとおり production の `confidence` は 0.95 / 0.50 の2値固定で、
+> 0.50 は常に `needs_review=True` とセット。`needs_review` を除外した時点で 0.95 だけが残るため、
+> **閾値をどこに置いても結果が変わらない**。「実データで較正する」という MUST は
+> 現行コードに対して空文である。
+>
+> 再設計で決めるべきは「閾値をいくつにするか」ではなく
+> **「LLM Judge 経路（`critical_instruction_extractor.py:397-508`）を配線するか、
+> 品質ゲートを confidence 以外の軸で定義するか」**（§10-Q4）。
+
+以下は撤回前の記述として保存する。
 
 `detail.needs_review=True` または `confidence` が閾値未満の violation は y/n に出さない。
 閾値は**実データで較正**する（合成 fixture で決めない＝`learning_synthetic_fixture_false_confidence`）。
 
 ---
 
-## 5. 新規ファイル作成の accept / revert（Stage 2 の前提・方針のみ）
+## 5. 新規ファイル作成の accept / revert（**rev5 で Stage 1 の前提へ格上げ**・方針のみ）
+
+> **rev5 の変更**: rev4 は本節を「Stage 2 の前提」として先送りしたが、§1.5.4 の実測により
+> **産出のある種別はすべてここに依存する**ことが判明した。したがって本節は Stage 1 の
+> クリティカルパスであり、先送りできない。独立 ADR の起票が再設計の第一歩になる（§10-Q2）。
 
 **scope ではなく操作種別で表現する**（codex [Should] 反映）。`_SUPPORTED_SCOPES` の第三の値は作らない
 — `project` / `global` 配下に作る限り scope は同じで、必要なのは `op: modify | create` の区別。
@@ -354,13 +483,77 @@ rev1 は「#459 を先に入れると `hook_candidates` は grandfathering で�
 ## 8. 未決定・ユーザー判断が要る点
 
 1. `trajectory_skill_candidates`（新規スキル作成）を朝の y/n に出すか。1件あたりの人間コストが他種別より明確に高い
+   （rev5 追記: 実産出 **1件**。コストは高いが量は問題にならない）
 2. `repeating_patterns` は `rule_violation_lane.py` 経由の経路がある（到達可否未検証）。Stage 2 の対象に含めるか
+   （rev5 追記: 実産出 **124件で束ねキー無し**。上位は `git`/`grep`/`gh auth` の使用頻度でノイズ。
+   **接続対象から外す判断が妥当**と実測は示唆する → §10-Q3）
 3. 朝の y/n の**1日あたり上限**。5種類が全て到達すると件数が跳ねる（現状 `daily_review` は weak_signal を最大5件）
+   （rev5 追記: **必須化**。§10-Q5）
 
 ---
 
 ## 9. 未確認事項（この設計で埋めていないもの）
 
 - `discover/enrich.py` の `matched_skills` 完全スキーマ（`_candidates.py` からの逆引きのみ）
-- `repeating_patterns` 要素の dict 構造（tool_usage_analyzer 側 未読）
-- `evolve_decisions/_emit.py` 全体（読んだのは pending payload 構築 :180-200 と dry-run 例外の行番号のみ）
+- ~~`repeating_patterns` 要素の dict 構造~~ → §1.5.3 で実測（`{pattern, count, subcategory, examples}`）
+- `evolve_decisions/_emit.py` 全体（読んだのは pending payload 構築 :180-213 と dry-run 例外の行番号のみ）
+- `_ingest.py:85-120` の accept 判定が「不在 → 存在」遷移をどう扱うか（§5-4 の裏取りは未実施）
+
+---
+
+## 10. rev5 の再設計で答えるべき問い（実装着手はこれらが埋まるまで凍結）
+
+実測（§1.5）が rev4 の前提を崩したため、Stage 1 は**パイロット選定からやり直す**。
+以下 Q1〜Q5 に決着がつくまで実装コードを書かない。
+
+### Q1. パイロットをどう選び直すか
+
+制約は「産出がある」∩「既存 lane に乗る」が**空集合**であること（§1.5.4）。取りうる形は3つ:
+
+| 案 | 内容 | 前提になる工事 | 実測に基づく見込み |
+|---|---|---|---|
+| A | 入力欠落（`last_skill`）を先に直し `instruction_violation` を復活させる | 採用経路が session→skill を運ぶ（または read 時に `usage.jsonl` から join） | 上限 28 correction。実際の提案数は**未知（0 の可能性あり）** |
+| B | `rule_violation_observed` を `violated_command` で束ねて出す | 新規ファイル作成の accept（§5） | y/n **1件**。内容は具体的（`cd` 522回） |
+| C | §5 を先に完成させてから3種を一斉接続 | §5 の12点すべて + 独立 ADR | y/n は最大 12〜25件／日。上限設計（§8-3）が必須 |
+
+**A の注意**: 「修理すれば動く」は仮説であって実測ではない。A を採るなら
+**修理後に実際に何件出るかを測ってからパイロット確定**とし、0 件なら A を破棄する
+（`learning_dryrun_verification_blind_spot`: 適用後にしか出ない効果を完了基準にしない）。
+
+### Q2. §5（新規ファイル作成の accept / revert）を独立 ADR として先に起票するか
+
+§1.5.4 より、B と C はどちらもここに依存する。A を採る場合でも、
+`instruction_violation` の修正提案が「既存 SKILL.md への追記」で表現できるかは要確認。
+
+### Q3. 束ねキーの正典をどこに置くか
+
+`rule_violation_observed` は `violated_command` で束ねると 25 → 1 になる（§1.5.3）。
+`repeating_patterns` は**束ねキーが存在しない**（124件が 124 の y/n になる）。
+`proposal_lane_coverage.py::ProposalKind` に `bundle_key` を追加して宣言表に載せるのが
+Stage 0 の資産と整合するが、**束ねキーを持てない種別を接続対象から外す判断**が先に要る。
+
+なお `rule_violation_lane.py:344-388` に**既存の束ね実装がある**（`violated_command` の集合を
+1 hook scaffold にまとめる）。rev4 §4.2 の集約契約を新設する前に、この関数を
+`_extract_candidates` から再利用できるかを確認すること（再発明の回避）。
+
+### Q4. 品質ゲートを何の軸で定義するか
+
+§4.4 は撤回済み。選択肢は (a) LLM Judge 経路（`critical_instruction_extractor.py:397-508`）を
+SKILL.md に配線して confidence を連続値に戻す / (b) confidence を捨て
+`match_type` のホワイトリスト（`opposing_verb` のみ）で定義し、**それが実質的に
+固定ホワイトリストであることを設計に明記する** / (c) 品質ゲート自体を Stage 1 では持たない。
+
+(b) を選ぶ場合、`OPPOSING_VERBS`（`critical_instruction_extractor.py:44-52`）は
+7ペアの固定辞書なので、**検出能力の上限がこの辞書で決まる**ことを受入条件に書くこと。
+
+### Q5. 朝の y/n の1日あたり上限（§8-3 の再掲・rev5 で必須化）
+
+C を採ると最大 25件／日になり、`daily_review` の既存上限（weak_signal 最大5件・
+`daily_review.py:374`）と桁が合わない。**上限と溢れた分の扱い（翌日繰越 / 破棄 / 優先度順）を
+決めずに接続しない。**
+
+### 再設計のレビュー要件
+
+本 rev5 は**実測の記録と問いの整理**であり、Q1〜Q5 の**答えを含まない**。
+答えを書いた rev6 に対して `design-review-gate` に従い codex 1巡を通し、
+`[Must]` が残る間は実装に着手しない。
