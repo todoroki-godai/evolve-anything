@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 *.backup
+*.pre-evolve-backup
 *.swp
 generations/
 .evolve-loop/

@@ -382,6 +382,14 @@ def apply_evolve_proposal(proposal: Dict[str, Any]) -> Dict[str, Any]:
         if not pitfalls_path.exists():
             pitfalls_path.write_text(proposal["pitfalls_template"], encoding="utf-8")
 
+        # #470: 適用が成功したらバックアップを削除する。変更前の内容は採用記録
+        # （revert_before_b64）に既に保存済みで保持理由がなく、.gitignore されない
+        # 中間ファイルとして提案採用 PR に混入していた。ここまで到達していれば
+        # 全ての書込みが成功しているので削除してよい。適用が失敗した場合（except
+        # 節）はこの行に到達しないため、復旧手段としてバックアップは残る。
+        if backup_path.exists():
+            backup_path.unlink()
+
         result = {
             "applied": True,
             "backup_path": str(backup_path),

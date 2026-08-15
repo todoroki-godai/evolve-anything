@@ -362,7 +362,10 @@ def _try_evolve_skill(
     apply_result = apply_evolve_proposal(proposal)
     result["evolve_applied"] = apply_result["applied"]
     if apply_result["applied"]:
-        print(f"  自己進化パターン組み込み完了。バックアップ: {apply_result['backup_path']}")
+        # #470: 適用成功時 apply_evolve_proposal は変更前バックアップを削除する
+        # （変更前の内容は採用記録に保存済みのため）。backup_path はもう存在しない
+        # ので案内文には出さない。
+        print("  自己進化パターン組み込み完了。")
     else:
         print(f"  組み込み失敗: {apply_result['error']}")
 

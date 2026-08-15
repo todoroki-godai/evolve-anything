@@ -216,7 +216,14 @@ def skill_evolve_assessment(
         from . import _load_cache
         _cache = _load_cache()
         _groups: List[Dict[str, Any]] = []
-        for _origin in ("custom", "global"):
+        # #465: 対象 origin を ("custom", "global") にハードコード列挙していたため、
+        # 母集団が全件 plugin_self の場合に _groups が空になり、guard が
+        # 「母集団が空」と「全件 cache-fresh（課金ゼロ確定）」を取り違えて自動進行して
+        # いた。_effective_targets に実在する origin を動的に導出すれば、
+        # _all_llm_targets のフィルタ条件（custom / plugin_self / allowlist 済み global）
+        # と対称になり、新しい origin が増えても group 化から漏れなくなる。
+        _origins_present = sorted({classify_artifact_origin(p) for p in _effective_targets})
+        for _origin in _origins_present:
             _group_skills = [p for p in _effective_targets if classify_artifact_origin(p) == _origin]
             if _group_skills:
                 _refresh_needed = [

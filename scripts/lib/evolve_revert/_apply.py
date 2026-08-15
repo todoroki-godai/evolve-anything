@@ -78,6 +78,7 @@ class ApplyResult:
     revert_event_id: Optional[str] = None
     revert_generation: Optional[int] = None
     nlink: Optional[int] = None
+    diff: Optional[Dict[str, Any]] = None
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -351,10 +352,17 @@ def apply_revert(
             initial = snapshot_from_fd(source_fd)  # 手順2 の観測（C22 の比較基準）
             if dry_run:
                 losses = preview_losses(initial)
+                # #469: revert すると何行変わるかを既存の diff 要約ロジック
+                # （conflict と同じ build_diff_summary）で計算し、dry-run 出力に含める。
+                diff = build_diff_summary(
+                    before_text=before_content, current_text=current_text,
+                    current_bytes=current_raw, before_sha=before_sha,
+                    current_sha=current_sha,
+                )
                 return ApplyResult(
                     ok=True, dry_run=dry_run, entry_id=entry_id, slug=result_slug,
-                    branch=branch, message=render_dry_run_preview(losses),
-                    target_path=str(target_path), losses=losses,
+                    branch=branch, message=render_dry_run_preview(losses, diff=diff),
+                    target_path=str(target_path), losses=losses, diff=diff,
                     revert_event_id=event_id, revert_generation=next_generation,
                 )
             return _restore_normal(

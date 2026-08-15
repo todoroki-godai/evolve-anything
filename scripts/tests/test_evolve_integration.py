@@ -90,9 +90,9 @@ def test_assess_then_apply(mock_telemetry, mock_llm, tmp_path):
     # pitfalls.md が作成されている
     assert (skill_dir / "references" / "pitfalls.md").exists()
 
-    # バックアップが存在する
+    # #470: 適用成功後はバックアップを削除する（採用記録に変更前の内容が残るため）。
     backup = skill_dir / "SKILL.md.pre-evolve-backup"
-    assert backup.exists()
+    assert not backup.exists()
 
 
 # --- _try_evolve_skill テスト ---

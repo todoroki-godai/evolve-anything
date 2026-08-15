@@ -131,6 +131,27 @@ def test_normal_branch_dry_run_writes_nothing(tmp_path, monkeypatch):
     assert leftovers == []
 
 
+def test_normal_branch_dry_run_includes_diff_summary(tmp_path, monkeypatch):
+    """#469: dry-run の結果に revert 後の差分要約（+N/-M行）が含まれる。"""
+    canonical = _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after1\nafter2\n")
+    entry = _accept_entry("x1", "before1\n", "after1\nafter2\n", target)
+    _write_history(canonical, "proj", [entry])
+
+    result = apply_revert("x1", slug="proj", dry_run=True)
+
+    assert result.ok is True
+    assert result.branch == "normal"
+    assert result.diff is not None
+    assert result.diff["binary_or_undecodable"] is False
+    assert result.diff["removed_lines"] == 1  # before1 が消える
+    assert result.diff["added_lines"] == 2    # after1, after2 が追加される
+    assert "変更行数" in result.message
+    # 対象ファイル・history: 引き続きゼロ書込
+    assert target.read_text(encoding="utf-8") == "after1\nafter2\n"
+    assert store.load_revert_events("proj") == []
+
+
 # ─── 冪等パス（== before_sha）─────────────────────────────────────────────
 
 

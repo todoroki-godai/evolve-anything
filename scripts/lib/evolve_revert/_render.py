@@ -52,13 +52,58 @@ def render_metadata_loss_rejection(entry_id: str, losses: LossReport) -> str:
     return "\n".join(lines)
 
 
-def render_dry_run_preview(losses: LossReport) -> str:
+# #469: dry-run 出力が「保持: mode」等の3行のみで、実行前に何が起きるか判断できな
+# かった。分岐（normal/idempotent/conflict）ごとの日本語説明を単一ソース化する。
+BRANCH_LABELS = {
+    "normal": (
+        "通常（対象は最後に提案が適用された内容のままです。revert すると"
+        "差分の内容に戻ります）"
+    ),
+    "idempotent": (
+        "冪等（対象は既に revert 後の内容と同じです。実質的な変更はありません）"
+    ),
+    "conflict": (
+        "衝突（対象は採用後にさらに変更されています。このまま revert すると"
+        "その後の変更も失われます）"
+    ),
+}
+
+
+def render_dry_run_header(
+    *, target_path: str, relative_path: Optional[str], branch: Optional[str]
+) -> str:
+    """dry-run 出力の先頭に付ける「何に対して何をするか」のヘッダ（#469）。
+
+    対象ファイルの絶対パス + repo 相対パス（分かる場合）+ 判定分岐の日本語説明。
+    """
+    lines = [f"対象: {target_path}"]
+    if relative_path:
+        lines.append(f"repo 相対パス: {relative_path}")
+    if branch:
+        lines.append(f"判定: {BRANCH_LABELS.get(branch, branch)}")
+    return "\n".join(lines)
+
+
+def render_dry_run_preview(
+    losses: LossReport, diff: Optional[Dict[str, Any]] = None
+) -> str:
     """dry-run の「何が変わる予定か」表示（C25）。保持: mode / 失う可能性: 各属性。
 
     ACL は常に「検出もしていない」旨を明示表示する（検出できないものを理由に拒否は
     しない・C21）。xattr が検出不能な環境でも同様に明示表示する（C19）。
+
+    ``diff``（#469・``build_diff_summary`` の返り値）を渡すと「変更行数: +N / -M 行」
+    を既存3行の前に追加する。省略時は従来どおり（後方互換）。
     """
-    lines = ["保持: mode"]
+    lines = []
+    if diff is not None:
+        if diff.get("binary_or_undecodable"):
+            lines.append("変更行数: 判定不能（binary または decode 不能）")
+        else:
+            lines.append(
+                f"変更行数: +{diff['added_lines']} / -{diff['removed_lines']} 行"
+            )
+    lines.append("保持: mode")
     lost = [_LOSS_LABELS[name] for name in ("owner", "xattr", "flags") if getattr(losses, name)]
     if lost:
         lines.append(f"失う可能性: {', '.join(lost)}")
@@ -91,6 +136,10 @@ def build_diff_summary(
             "before_bytes": before_bytes_len,
             "current_bytes": current_bytes_len,
             "changed_lines": None,
+            # #469: dry-run ヘッダの「+N / -M 行」表示用。binary/decode 不能では
+            # 行差分自体が定義できないため None（0 と混同しない）。
+            "added_lines": None,
+            "removed_lines": None,
             "hunk": None,
             "hunk_truncated": False,
             "binary_or_undecodable": True,
@@ -104,6 +153,14 @@ def build_diff_summary(
         for line in diff_lines
         if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
     )
+    # #469: dry-run ヘッダで「+N / -M 行」を分けて出すための内訳（changed_lines は
+    # 既存の conflict メッセージが使う合算値のため互換のため残す）。
+    added_lines = sum(
+        1 for line in diff_lines if line.startswith("+") and not line.startswith("+++")
+    )
+    removed_lines = sum(
+        1 for line in diff_lines if line.startswith("-") and not line.startswith("---")
+    )
     truncated = len(diff_lines) > max_hunk_lines
     return {
         "before_sha": before_sha,
@@ -111,6 +168,8 @@ def build_diff_summary(
         "before_bytes": before_bytes_len,
         "current_bytes": current_bytes_len,
         "changed_lines": changed_lines,
+        "added_lines": added_lines,
+        "removed_lines": removed_lines,
         "hunk": diff_lines[:max_hunk_lines],
         "hunk_truncated": truncated,
         "binary_or_undecodable": False,
