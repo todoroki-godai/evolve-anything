@@ -2,7 +2,7 @@
 
 - 対象 issue: #467（Epic）
 - 関連: #459（reader ゼロの blocking 検出・一般形）/ #379（新設凍結）/ #402・ADR-053（revert）/ ADR-054 §9.4
-- 状態: **draft rev2（codex 1巡目 `設計修正要`・[Must]6 / [Should]5 を反映済み。着手前）**
+- 状態: **draft rev3（codex 2巡目 `設計修正要`・[Must]4 / [Should]1 を反映済み。着手前）**
 - 前提コミット: `493c3173`（main）
 
 ---
@@ -106,39 +106,63 @@ CI が比較する live 集合はこの4つだけ（`test_shrink_freeze.py:62,70
 class ProposalKind:
     kind: str            # "instruction_violation"
     source_path: str     # "phases.discover.instruction_violations"（dotted path）
+    selector: str        # "list_of_dict" | "dict_of_list" | "scalar" — 要素の取り出し方
+    element_key: str | None  # selector が dict_of_list のときの内側キー
     lane_connected: bool # §1.3 の4点セットを満たすか
 PROPOSAL_KINDS: tuple[ProposalKind, ...] = (...)
 ```
 
+`selector` が必要な理由（rev3・codex round2 [Must]1）: 種別ごとに格納形が違う。
+`repeating_patterns` は `phases.discover.tool_usage_patterns` という **dict の内側**にあり
+（`runner.py:317,332` で `tool_result["repeating_patterns"]` に再代入される）、
+dotted path だけでは「そこから要素をどう取り出すか」を表せない。
+
 配置: `scripts/lib/proposal_lane_coverage.py`（純関数モジュール。store も observability section も作らない）。
 
-### 3.2 抜け道を塞ぐ契約（codex [Must]4 反映）
+### 3.2 抜け道をどこまで塞ぐか（codex 1巡目 [Must]4 / 2巡目 [Must]1 反映）
 
-rev1 の3本では「新種を `PROPOSAL_KINDS` に足しつつ `lane_connected=False` にすれば全部通る」。
-**未接続を許す対象を、Stage 0 時点で固定した baseline に限定する**（`assert_no_new_keys` と同型）:
+**未接続を許す対象を、Stage 0 時点で固定した baseline に限定する。**
+baseline は**実装から独立した git 追跡ファイル**に置く（`shrink_freeze` の凍結定数と同型）:
 
-```python
-UNCONNECTED_BASELINE = frozenset({
-    "repeating_patterns", "pitfall_candidates", "hook_candidates",
-    "instruction_violation", "trajectory_skill_candidate",
-})  # Stage 0 で凍結。追加不可。Stage 1-2 で接続するたび減る
+```
+scripts/lib/fixtures/proposal_lane_unconnected_baseline.txt
+  repeating_patterns
+  pitfall_candidates
+  hook_candidates
+  instruction_violation
+  trajectory_skill_candidate
 ```
 
 契約テスト（`scripts/lib/tests/test_proposal_lane_coverage.py`）:
 
-1. `PROPOSAL_KINDS` の各 `source_path` が実 result envelope に到達可能（**宣言と実装の乖離を検出**）
-2. `lane_connected=True` の種別が `_extract_candidates` の実出力に現れる（**接続したと宣言して実装を忘れたら赤**）
-3. **`lane_connected=False` の種別が `UNCONNECTED_BASELINE` の部分集合**（**新種を未接続で足したら赤**）
-4. `UNCONNECTED_BASELINE` は単調減少のみ（増やす差分は赤）
+1. `PROPOSAL_KINDS` の各 `(source_path, selector)` が**合成 envelope** から要素を取り出せる（宣言と実装の乖離を検出）
+2. `lane_connected=True` の種別が `_extract_candidates` の実出力に現れる（接続したと宣言して実装を忘れたら赤）
+3. `lane_connected=False` の種別が baseline ファイルの部分集合（**新種を未接続で足したら赤**）
+4. baseline ファイルの各行が `PROPOSAL_KINDS` に実在する（**接続済みなのに baseline に残っていたら赤**＝単調減少の強制）
 
-Stage 3 の完了条件は `UNCONNECTED_BASELINE == frozenset()`。テスト3が自動的に「全種接続」を要求する形になる。
+Stage 3 の完了条件は baseline ファイルが空。テスト3が自動的に「全種接続」を要求する形になる。
 
-### 3.3 生成側の網羅をどう担保するか
+**機械では塞げない残余を明示する（rev3）**: baseline ファイル自体に1行足せばテスト3は通る。
+これは `shrink_freeze` の `FROZEN_*` 定数が持つ性質と同じで、**機械契約では原理的に塞げない**。
+採る対処は次の2つで、「完全に機械強制できる」とは書かない:
 
-テスト1 は「宣言済みの種別が実在するか」しか見ない。**runner が新キーを書いたのに宣言しない**ケースは
-別途必要。`discover/runner.py` の `result[...] = ` 代入を AST で列挙し、宣言表と突合する
-（`skill_declaration_reachability.py:192 build_call_graph_index` / `:169 _iter_py_files` の走査パターンを流用）。
-golden snapshot は条件付きキーを構造的に取りこぼすため使わない（#458 の実測・#459 コメント）。
+- baseline は**独立ファイル**なので、緩めた事実は必ず PR diff の1行として現れる（コード変更に紛れない）
+- baseline への追加を許すのは **Stage 2 完了まで**の期限付きとし、Stage 3 でファイルごと削除する
+
+### 3.3 生成側の網羅（AST は補助・正典は宣言表）
+
+テスト1〜4 は「宣言済みの種別」しか見ない。**runner が新キーを書いたのに宣言しない**ケースを
+完全に機械検出することはできない（helper 関数の戻り値経由・動的キーは静的に追えない）。
+rev1/rev2 の「AST で `result[...] =` を列挙して突合」は、`tool_result["repeating_patterns"] = ...`
+（`runner.py:332`）のようなネスト更新を取りこぼす（codex round2 [Must]1）。
+
+したがって位置づけを下げる:
+
+- **正典は `PROPOSAL_KINDS` の宣言表**（人が書く）
+- AST 走査は **best-effort の補助検出**とし、`result[...]` / `<name>[<str>] =` / `.setdefault(` / `.update(`
+  を拾って「宣言表に無い候補キー」を**警告として列挙**する（赤にはしない＝誤検知で狼少年にしない）
+- 走査パターンは `skill_declaration_reachability.py:169 _iter_py_files` / `:192 build_call_graph_index` を流用
+- golden snapshot は条件付きキーを構造的に取りこぼすため使わない（#458 の実測・#459 コメント）
 
 ### 3.4 enforcement の置き場所は dogfood ではなく CI portable suite（codex [Should] を実測で強化）
 
@@ -152,6 +176,15 @@ codex の指摘「CI が当該 Layer 2 を blocking で実行する証拠がな�
 
 → **`test_proposal_lane_coverage.py` を `ci.yml` の portable suite に追加することが blocking の実体**。
 dogfood Layer 2（`invariants.py:183-188` の `_CHECKS`）への追加はローカル早期警告として任意で行う。
+
+**hermetic 受入条件（MUST・rev3 / codex round2 [Should]）**: portable suite は
+「ホスト依存テストを除く」契約（`ci.yml:64-69`）なので、新テストは次を満たすこと。
+満たせない検査は portable suite に入れず dogfood 側へ回す。
+
+- `~/.claude` / 実 PJ データ / DuckDB 実ストア / LLM / ネットワークを一切参照しない
+- 検証入力は **source の AST** と **`tmp_path` 内に組み立てた合成 envelope** のみ
+- `run_discover()` の実行はしない（実行すると HOME 依存と実データ依存が入る）
+- テスト2（`_extract_candidates` の実出力）は合成 envelope を渡した純関数呼び出しで行う
 
 **副次の指摘（本 Epic のスコープ外だが記録）**: #459 が「Layer 2 blocking で止める」と書いているのも
 同じ理由で CI では止まらない。#459 側の設計も CI 配線の再確認が要る。
@@ -178,13 +211,42 @@ pending entry に**表示専用の `detail` フィールド**を追加する:
 - `detail` は種別ごとのスキーマを `proposal_lane_coverage.py` に宣言し、契約テストで固定する
 - `instruction_violation` の `detail`: `{violations: [{instruction_text, correction_message, match_type, confidence, reason, needs_review}], skill_name}`
 
+### 4.1b 再提示契約 — reject 抑制の identity を分離する（rev3・codex round2 [Must]3）
+
+`detail` を identity から外すだけでは足りない。reject 抑制（#446）は
+`_suppression.py::_issue_for`（:23-56）が `detail.target = entry["id"]`（＝`proposal_id`）**だけ**を
+一意性の成分にしている。`proposal_id` は `(repo_id, path, before_sha)` なので、
+**同じ SKILL.md・同じ before_sha に後日まったく別の violation が出ても同じ ID になり、
+新しい判断材料が既定 45 日間まるごと抑制される**。
+
+**採る設計**: proposal identity / 判断イベント identity は現行のまま維持し、
+**suppression identity だけを分離**する。
+
+```
+suppression_target = proposal_id                      # skill_diff / skill_evolve（現行と同一）
+suppression_target = f"{proposal_id}:{fingerprint}"   # instruction_violation
+  fingerprint = sha256( 正規化した violations 集合 )[:12]
+```
+
+- **後方互換 MUST**: 既存 2 種別の `suppression_target` は現行と**バイト等価**にする
+  （fingerprint を付けない）。付けると既存 ledger の抑制記録が全て失効し、
+  一度却下した提案が再提示される
+- fingerprint は種別ごとに `proposal_lane_coverage.py` へ宣言し、契約テストで固定する
+- 「同じ内容が再検出されたら抑制、内容が変わったら再提示」が満たすべき不変条件。
+  回帰テスト2本（同一内容→抑制 / 1件追加→再提示）を必須にする
+
 ### 4.2 集約契約（[Must]3）
 
 提案 identity がパス単位である以上、**同一 `skill_path` の複数 violation は 1 提案に束ねる**
 （`_candidates.py:93` の `seen` による1件畳み込みと整合。1 SKILL.md = 1 提案 = 1 判断・#444）。
 
 - `detail.violations` に**全件**を入れる（順序依存の情報欠落を作らない）
-- 表示順は `confidence` 降順 → 同値は `correction` の時刻昇順で**決定論固定**（契約テストで固定）
+- **表示順（rev3 で実装可能な形に訂正）**: `confidence` 降順 →
+  同値は `(instruction_text, correction_message)` の**辞書順**。
+  rev2 は tie-breaker に「correction の時刻」を使ったが、
+  `make_instruction_violation_issue`（`issue_schema.py:418-442`）は timestamp を運んでおらず**実装不能**だった
+  （codex round2 [Must]2）。運搬契約を増やさず現行フィールドだけで一意な順序を定義する
+- 同一 `(instruction_text, correction_message)` は同一 violation とみなし dedup する（順序の一意性を保証）
 - y/n は 1 回。部分承認はしない（部分承認は identity 単位と矛盾する）
 
 ### 4.3 表示・承認手順（[Must]1）
@@ -210,7 +272,7 @@ pending entry に**表示専用の `detail` フィールド**を追加する:
 **scope ではなく操作種別で表現する**（codex [Should] 反映）。`_SUPPORTED_SCOPES` の第三の値は作らない
 — `project` / `global` 配下に作る限り scope は同じで、必要なのは `op: modify | create` の区別。
 
-不足点（rev1 の6点 → codex [Must]6 を統合して 11 点）:
+不足点（rev1 の6点 → codex 1巡目 [Must]6 で 11 点 → 2巡目 [Must]4 で **12 点**）:
 
 | # | 不足 | 根拠 |
 |---|---|---|
@@ -225,6 +287,7 @@ pending entry に**表示専用の `detail` フィールド**を追加する:
 | 9 | `--dump-before` の意味定義（create の before は空。空出力と失敗を区別する） | `_dump.py:52` |
 | 10 | 削除時の containment 検証（repo 外・シンボリックリンク経由の削除を拒否）と再検証順序 | `_target.py` / `_apply.py` |
 | 11 | 表示文言（「戻す＝ファイルを削除します」と明示。上書きと同じ文言にしない） | `evolve_revert_cli.py` |
+| 12 | **未存在 target の identity 解決**。`repo_identity` は親ディレクトリが存在しないと repo 情報を捨て絶対パスへ縮退するため、新規スキル用ディレクトリごと未存在だと **worktree ごとに proposal identity が分裂する**。最寄りの存在する祖先から repo/worktree と相対パスを解決する変更 + 回帰テスト（同一 repo の別 worktree で同一 identity になること） | `evolve_decision_ids.py:51-55` |
 
 **独立 ADR にする**（ADR-053 の改訂ではなく後継）。accept と revert の両側にまたがるため。
 
