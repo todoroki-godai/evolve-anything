@@ -18,7 +18,12 @@
 
 ## 1. 実測した現状（file:line 付き・2026-08-15）
 
-### 1.1 生成側は7種、decision lane が読むのは2種だけ
+### 1.1 生成側は8種、decision lane が読むのは2種だけ
+
+（訂正・2026-08-15 Stage 0 実装レビュー: 本節見出しは当初「7種」としていたが、下表は
+当初から8行あり本文側の数え間違いだった。`rule_violation_observed` も他7種と同様の
+result 直下キーであり、生成元 `rule_violation_lane.py` 以外に読み手がいない＝未接続の
+提案種別として §3 の宣言表・baseline に含める）
 
 `scripts/lib/discover/runner.py` が result に書く提案種別。**格納位置は同一階層ではない**
 （rev2 訂正: `repeating_patterns` は result 直下ではなく `tool_usage_patterns` 配下）:
@@ -127,11 +132,14 @@ baseline は**実装から独立した git 追跡ファイル**に置く（`shri
 ```
 scripts/lib/fixtures/proposal_lane_unconnected_baseline.txt
   repeating_patterns
+  rule_violation_observed
   pitfall_candidates
   hook_candidates
   instruction_violation
   trajectory_skill_candidate
 ```
+
+（訂正・2026-08-15: 当初5行から `rule_violation_observed` を追加し6行に。§1.1 の訂正と同時）
 
 契約テスト（`scripts/lib/tests/test_proposal_lane_coverage.py`）:
 
