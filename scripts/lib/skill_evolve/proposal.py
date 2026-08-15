@@ -106,6 +106,38 @@ def _parse_customization_response(
     return output
 
 
+def _render_pitfalls_gate_path(skill_dir: Path, skill_name: str) -> str:
+    """Pre-flight ゲートが参照する pitfalls.md パスを origin 別に機械非依存の形で描画する。
+
+    #471 追加是正: `${CLAUDE_PLUGIN_ROOT}/skills/<name>/...` はプラグイン所有スキル
+    （plugin / plugin_self）専用の前提で、`skill_origin.classify_skill_origin()` が
+    返す global（`~/.claude/skills/`）・custom（PJ ローカル `.claude/skills/` 等）の
+    スキルにはこのパスが存在しない。grep は `2>/dev/null || echo 0` で握り潰すため
+    常に 0 を返し、Pre-flight が恒久的に無言でスキップされる（#471 本体の欠陥と同型）。
+    origin ごとにパス表現を切り替え、絶対パス（個人ディレクトリ名）は焼き込まない。
+    """
+    from skill_origin import classify_skill_origin
+
+    origin = classify_skill_origin(Path(skill_dir) / "SKILL.md")
+    if origin in ("plugin", "plugin_self"):
+        return f"${{CLAUDE_PLUGIN_ROOT}}/skills/{skill_name}/references/pitfalls.md"
+    if origin == "global":
+        return f"$HOME/.claude/skills/{skill_name}/references/pitfalls.md"
+    # custom（PJ ローカル .claude/skills/ 等）: PJ ルート相対
+    return f".claude/skills/{skill_name}/references/pitfalls.md"
+
+
+def _render_skill_name(content: str, skill_name: str, skill_dir: Path) -> str:
+    """テンプレート中のプレースホルダを実スキル名・origin別パスへ決定論的に置換する。
+
+    #471: テンプレートはスキル固有の記述（スキル名等）を焼き込まない共通骨格として
+    保つ。LLM カスタマイズ（Phase B）を経ない決定論フォールバック経路でも正しい
+    パスが生成されるよう、テンプレ読込直後・カスタマイズ前に置換する。
+    """
+    content = content.replace("{{PITFALLS_GATE_PATH}}", _render_pitfalls_gate_path(skill_dir, skill_name))
+    return content.replace("{{SKILL_NAME}}", skill_name)
+
+
 def _customize_template(
     skill_name: str,
     skill_content: str,
@@ -218,6 +250,7 @@ def evolve_skill_proposal(
     sections_content, pitfalls_content, error = _load_templates(_plugin_root)
     if error:
         return {"skill_name": skill_name, "error": error}
+    sections_content = _render_skill_name(sections_content, skill_name, skill_dir)
 
     skill_md = skill_dir / "SKILL.md"
     skill_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else ""
@@ -247,6 +280,7 @@ def emit_customize_request(
     sections_content, _pitfalls, error = _load_templates(_plugin_root)
     if error:
         return {"requests": [], "error": error}
+    sections_content = _render_skill_name(sections_content, skill_name, skill_dir)
 
     skill_md = skill_dir / "SKILL.md"
     skill_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else ""
@@ -294,6 +328,7 @@ def ingest_customized_proposal(
     sections_content, pitfalls_content, error = _load_templates(_plugin_root)
     if error:
         return {"skill_name": skill_name, "error": error}
+    sections_content = _render_skill_name(sections_content, skill_name, skill_dir)
 
     parsed = parse_responses(
         requests,
