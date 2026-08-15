@@ -2,7 +2,7 @@
 
 - 対象 issue: #467（Epic）
 - 関連: #459（reader ゼロの blocking 検出・一般形）/ #379（新設凍結）/ #402・ADR-053（revert）/ ADR-054 §9.4
-- 状態: **draft rev3（codex 2巡目 `設計修正要`・[Must]4 / [Should]1 を反映済み。着手前）**
+- 状態: **rev4 — codex 3巡目で「これを直せば着手可」の条件を提示され、その [Must]1件を反映済み。実装着手可**
 - 前提コミット: `493c3173`（main）
 
 ---
@@ -225,8 +225,12 @@ pending entry に**表示専用の `detail` フィールド**を追加する:
 ```
 suppression_target = proposal_id                      # skill_diff / skill_evolve（現行と同一）
 suppression_target = f"{proposal_id}:{fingerprint}"   # instruction_violation
-  fingerprint = sha256( 正規化した violations 集合 )[:12]
+  fingerprint = sha256( canonical_json(正規化済み violations) )[:12]
 ```
+
+`正規化済み violations` の定義は **§4.2 の ④ を通過した集合**（dedup → 統合 → 整列 → 品質ゲート）。
+`canonical_json` は キー昇順・区切り固定（`separators=(",", ":")`）・`ensure_ascii=False`・
+文字列は NFC 正規化とする（プラットフォーム間で fingerprint がぶれないため）。
 
 - **後方互換 MUST**: 既存 2 種別の `suppression_target` は現行と**バイト等価**にする
   （fingerprint を付けない）。付けると既存 ledger の抑制記録が全て失効し、
@@ -241,13 +245,33 @@ suppression_target = f"{proposal_id}:{fingerprint}"   # instruction_violation
 （`_candidates.py:93` の `seen` による1件畳み込みと整合。1 SKILL.md = 1 提案 = 1 判断・#444）。
 
 - `detail.violations` に**全件**を入れる（順序依存の情報欠落を作らない）
-- **表示順（rev3 で実装可能な形に訂正）**: `confidence` 降順 →
-  同値は `(instruction_text, correction_message)` の**辞書順**。
-  rev2 は tie-breaker に「correction の時刻」を使ったが、
-  `make_instruction_violation_issue`（`issue_schema.py:418-442`）は timestamp を運んでおらず**実装不能**だった
-  （codex round2 [Must]2）。運搬契約を増やさず現行フィールドだけで一意な順序を定義する
-- 同一 `(instruction_text, correction_message)` は同一 violation とみなし dedup する（順序の一意性を保証）
 - y/n は 1 回。部分承認はしない（部分承認は identity 単位と矛盾する）
+
+**正規化パイプライン（rev4・codex round3 [Must] 反映）**。入力順に依存しないことを保証するため、
+次の 4 段を**この順に**適用する。各段は契約テストで固定する。
+
+**① dedup キー**: `(instruction_text, correction_message, match_type)`
+（rev3 の 2 要素キーでは `match_type` が異なる別種の検出を1件に潰してしまうため 3 要素に訂正）
+
+**② 重複レコードの統合規則**（同一 dedup キーの複数レコードを 1 件へ畳む・全フィールドを明示）:
+
+| フィールド | 統合規則 |
+|---|---|
+| `confidence` | **max** |
+| `needs_review` | **OR**（1件でも True なら True＝安全側） |
+| `reason` | `confidence` が最大のレコードのもの。同値が複数なら `reason` の**昇順で最小** |
+| `instruction_text` / `correction_message` / `match_type` | dedup キーなので全レコードで同一 |
+
+**③ 全順序**（②の後は次の 4 タプルで**一意**に定まる）:
+`(-confidence, instruction_text, correction_message, match_type)` の昇順。
+rev2 の tie-breaker「correction の時刻」は `make_instruction_violation_issue`
+（`issue_schema.py:418-442`）が timestamp を運ばず実装不能だった（codex round2 [Must]2）。
+運搬契約を増やさず現行フィールドだけで全順序を定義する。
+
+**④ 品質ゲート適用**（§4.4）: `needs_review=True` と `confidence` 閾値未満を除外する。
+**suppression fingerprint（§4.1b）は、この④を通過した後の集合から計算する**
+（表示される集合と抑制判定の集合を一致させる。ゲート前後で不一致だと
+「表示されていない violation の変化で再提示される」不整合が起きる）。
 
 ### 4.3 表示・承認手順（[Must]1）
 
