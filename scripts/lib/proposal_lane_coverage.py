@@ -65,6 +65,21 @@ allowlist に残してよいのは以下 3 種のみに限定する。**判断�
 したがって `lane_connected=True` は「**朝の y/n に実際に出る**ことの証明ではなく、
 `_extract_candidates` が読むことの宣言」である。この2つを同一視すると、抽出だけ通って
 表示されない種別を「接続済み」と誤って数えることになる。
+
+**allowlist 方式が原理的に残す非対称性（2026-08-15 実測）**: `find_undeclared_runner_result_keys`
+は allowlist 登録キーを走査対象から除外するため、**候補データを allowlist に入れて検査を回避する
+経路は blocking テストでは検出できない**（実測: `verification_needs` を `PROPOSAL_KINDS` から外し
+allowlist に戻すと、AST 検査は緑のまま baseline 整合性テストだけが赤くなる。baseline も同時に
+削れば全緑で通る）。これは `shrink_freeze.FROZEN_*` が持つ性質と同型で、allowlist という
+「検査されないリスト」を持つ限り機械では塞げない。現状の対処は3つ:
+
+1. allowlist は根拠コメント必須で、緩めた事実が PR diff に現れる
+2. 残してよい基準を上記3種に狭く限定し、迷ったら `PROPOSAL_KINDS` 側へ倒す
+3. baseline 整合性テストが部分的な安全網になる（`PROPOSAL_KINDS` から外すだけでは赤）
+
+**将来案**: allowlist を廃し、全 result キーを単一の宣言表に載せて `is_proposal: bool` で分類すれば
+「検査されないリスト」自体が消え、分類変更が1つの表の1行 diff として並列にレビューできる。
+Stage 0 のスコープを超えるため本 PR では採らない。
 """
 from __future__ import annotations
 
