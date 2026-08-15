@@ -8,6 +8,7 @@
 このテストは実テンプレートファイル + `evolve_skill_proposal()`（決定論フォールバック経路）の
 生成物を対象にする（fixture 自作テンプレではなく実ファイルを読む — verify-data-contract）。
 """
+import os
 import sys
 from pathlib import Path
 
@@ -112,3 +113,75 @@ def test_evolve_skill_proposal_substitutes_skill_name(tmp_path):
     sections = proposal["sections_to_add"]
     assert "{{SKILL_NAME}}" not in sections, "プレースホルダが置換されず残っている"
     assert "demo-skill" in sections, "実スキル名に置換されていない"
+
+
+# --- #471 追加是正: Pre-flight ゲートパスが origin 別に正しく描画される ---
+# `${CLAUDE_PLUGIN_ROOT}/skills/<name>/...` はプラグイン所有スキル前提で、
+# global（~/.claude/skills/）・custom（PJ ローカル .claude/skills/）には存在しない。
+# grep が 2>/dev/null || echo 0 で握り潰すため恒久的に無言スキップする欠陥と同型。
+
+
+def test_gate_path_placeholder_present_in_template():
+    text = _template_text()
+    assert "{{PITFALLS_GATE_PATH}}" in text
+
+
+def test_gate_path_plugin_self_uses_plugin_root_var(tmp_path):
+    """plugin_self origin（本体リポジトリ直下 skills/）は ${CLAUDE_PLUGIN_ROOT} を使う。"""
+    from skill_evolve.proposal import _render_pitfalls_gate_path
+
+    repo = tmp_path / "some-plugin-repo"
+    (repo / ".claude-plugin").mkdir(parents=True)
+    (repo / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    skill_dir = repo / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+
+    path = _render_pitfalls_gate_path(skill_dir, "demo-skill")
+    assert path == "${CLAUDE_PLUGIN_ROOT}/skills/demo-skill/references/pitfalls.md"
+    assert str(tmp_path) not in path, "絶対パスが焼き込まれている"
+
+
+def test_gate_path_global_uses_home_var(tmp_path, monkeypatch):
+    """global origin（~/.claude/skills/）は $HOME を使い絶対パスを焼き込まない。"""
+    from skill_evolve.proposal import _render_pitfalls_gate_path
+
+    home = Path(os.environ["HOME"])  # autouse isolate_home 後の HOME
+    skill_dir = home / ".claude" / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+
+    path = _render_pitfalls_gate_path(skill_dir, "demo-skill")
+    assert path == "$HOME/.claude/skills/demo-skill/references/pitfalls.md"
+    assert str(home) not in path, "絶対パスが焼き込まれている"
+    assert "/Users/" not in path
+
+
+def test_gate_path_custom_uses_project_relative_path(tmp_path):
+    """custom origin（PJ ローカル .claude/skills/ 等）は PJ ルート相対パスを使う。"""
+    from skill_evolve.proposal import _render_pitfalls_gate_path
+
+    skill_dir = tmp_path / "my-project" / ".claude" / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+
+    path = _render_pitfalls_gate_path(skill_dir, "demo-skill")
+    assert path == ".claude/skills/demo-skill/references/pitfalls.md"
+    assert str(tmp_path) not in path, "絶対パスが焼き込まれている"
+
+
+def test_evolve_skill_proposal_gate_path_no_absolute_path_leak(tmp_path):
+    """決定論フォールバック経路の生成物に絶対パス（個人ディレクトリ名）が残らない（custom origin）。"""
+    from skill_evolve import evolve_skill_proposal
+
+    skill_dir = tmp_path / "demo-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Demo Skill\n", encoding="utf-8")
+
+    proposal = evolve_skill_proposal("demo-skill", skill_dir)
+
+    assert proposal["error"] is None
+    sections = proposal["sections_to_add"]
+    assert "{{PITFALLS_GATE_PATH}}" not in sections, "ゲートパスのプレースホルダが置換されていない"
+    assert str(tmp_path) not in sections, "絶対パス（個人ディレクトリ名）が焼き込まれている"
+    assert ".claude/skills/demo-skill/references/pitfalls.md" in sections

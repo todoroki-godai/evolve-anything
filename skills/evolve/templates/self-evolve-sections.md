@@ -4,7 +4,7 @@
 （空テンプレートを毎回読むのは Progressive Disclosure（Context rot 回避）方針に反する）。
 
 ```bash
-grep -c '^### ' "${CLAUDE_PLUGIN_ROOT}/skills/{{SKILL_NAME}}/references/pitfalls.md" 2>/dev/null || echo 0
+grep -c '^### ' "{{PITFALLS_GATE_PATH}}" 2>/dev/null || echo 0
 ```
 
 - **0**: 読み込みも Pre-flight もスキップする（記録が1件も無い間はこちら）

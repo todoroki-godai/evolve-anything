@@ -291,6 +291,15 @@
   焼き込まず、`{{SKILL_NAME}}` プレースホルダを新設し `skill_evolve.proposal._render_skill_name()`
   で決定論フォールバック経路（LLM 非依存）でも実スキル名へ置換されるようにした。契約テスト
   `test_skill_evolve_template_contract.py` を新設（生成元テンプレートの欠陥復活防止）。
+  **追加是正**: レビュー指摘により、Pre-flight ゲートの pitfalls.md パスが
+  `${CLAUDE_PLUGIN_ROOT}/skills/<name>/...`（プラグイン所有スキル前提）で固定されており、
+  `skill_origin.classify_skill_origin()` が返す global（`~/.claude/skills/`）・custom
+  （PJ ローカル `.claude/skills/` 等）由来のスキルには存在しないパスとなって grep が常に 0 を返し
+  Pre-flight が恒久的に無言でスキップされる欠陥（本 issue と同型）を追加是正。origin を
+  `classify_skill_origin()` で判定し、`{{PITFALLS_GATE_PATH}}` プレースホルダを origin 別
+  （plugin/plugin_self=`${CLAUDE_PLUGIN_ROOT}`／global=`$HOME`／custom=PJ ルート相対）に
+  機械非依存の表現で描画する `_render_pitfalls_gate_path()` を追加し、絶対パス（個人ディレクトリ名）
+  を成果物に焼き込まないことを契約テストで担保した。
   横展開（残23スキルへの適用）は本 PR のスコープ外。
 - **fix(revert): B/C writer 統合の共有 helper 契約 + `--auto --dry-run` の approved 汚染修正（ADR-054 Phase D PR1・#402 #379）** —
   optimize.py（B）/ run_loop.py（C）を revert lane へ寄せる後続 PR（PR2/PR3）の土台となる契約 PR。
