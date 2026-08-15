@@ -279,6 +279,15 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(skill_evolve): 提案適用時の `.pre-evolve-backup` が gitignore されずコミットに混入しうる不具合を修正（#470）** —
+  `apply_evolve_proposal` は適用前に `<SKILL.md>.pre-evolve-backup` を作るが `.gitignore` に
+  記載が無く、適用後の自動削除も無かったため、提案を採用した PR に作業用の中間ファイルが
+  混入していた。`.gitignore` に `*.pre-evolve-backup` を追加し、加えて**適用が成功した場合の
+  みバックアップを削除**するようにした（変更前の内容は採用記録 `revert_before_b64` に既に
+  保存済みで保持理由がない）。**適用が失敗した場合は削除処理に到達しないため復旧手段として
+  バックアップが残る**。`run_loop.py` の完了メッセージ・`evolve-skill/SKILL.md` の案内文言も
+  削除後の実態に合わせて更新した。既存2件のバックアップ存在アサーションを反転 + 失敗時保持
+  の回帰テストを新設。
 - **fix(skill_evolve): batch guard が plugin_self を母集団から落とし LLM 一括評価が無承認で走る不具合を修正（#465）** —
   `skill_evolve_assessment` の group 構築ループが `("custom", "global")` にハードコード
   列挙されており、母集団が全件 `plugin_self`（プラグイン本体リポジトリ自身のスキル）の

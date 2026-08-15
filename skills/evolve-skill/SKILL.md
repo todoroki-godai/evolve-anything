@@ -155,7 +155,9 @@ result = apply_evolve_proposal(proposal)
 承認された場合のみ実行し、結果サマリーを表示:
 - 追加されたセクション一覧
 - `references/pitfalls.md` の作成（**既存ファイルがある場合は上書きしない** — SKILL.md への追記のみ行う）
-- バックアップパス（`.md.pre-evolve-backup`）
+- 適用成功時、変更前の内容は一時バックアップ（`.pre-evolve-backup`）に保存されるが、
+  適用完了後は自動削除される（#470。変更前の内容は採用記録に残るため保持不要）。
+  適用失敗時のみ復旧手段としてバックアップが残る。
 
 > **#350 ガード**: `apply_evolve_proposal()` は `references/pitfalls.md` が既に存在する場合、
 > テンプレートで上書きしない。既存の実エントリを保護するため、存在ガードが実装済み。

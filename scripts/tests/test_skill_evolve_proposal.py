@@ -109,10 +109,11 @@ def test_apply_evolve_proposal_success(tmp_path, monkeypatch):
     assert pitfalls.exists()
     assert "Active Pitfalls" in pitfalls.read_text()
 
-    # バックアップが作成されている
+    # #470: 適用成功後はバックアップを削除する（変更前の内容は採用記録
+    # revert_before_b64 に保存済みで、gitignore されない中間ファイルとして
+    # コミットに混入する問題があったため）。
     backup = skill_dir / "SKILL.md.pre-evolve-backup"
-    assert backup.exists()
-    assert backup.read_text() == original_content
+    assert not backup.exists()
 
 
 def test_apply_evolve_proposal_creates_references_dir(tmp_path):
@@ -166,6 +167,35 @@ def test_apply_evolve_proposal_backup_path_in_result(tmp_path):
     result = apply_evolve_proposal(proposal)
     assert "backup_path" in result
     assert result["backup_path"].endswith(".pre-evolve-backup")
+
+
+def test_apply_evolve_proposal_keeps_backup_on_failure(tmp_path):
+    """#470: 適用が失敗した場合はバックアップを残す（復旧手段が消えるため）。"""
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    original_content = "# My Skill\n\nOriginal content.\n"
+    (skill_dir / "SKILL.md").write_text(original_content)
+    # references を「ディレクトリでないパス」として先に作っておき、
+    # pitfalls_path.parent.mkdir(parents=True, exist_ok=True) を失敗させる。
+    (skill_dir / "references").write_text("not a directory")
+
+    proposal = {
+        "skill_name": "my-skill",
+        "sections_to_add": "## Failure-triggered Learning\n",
+        "pitfalls_template": "## Active Pitfalls\n",
+        "skill_md_path": str(skill_dir / "SKILL.md"),
+        "pitfalls_path": str(skill_dir / "references" / "pitfalls.md"),
+        "error": None,
+    }
+
+    result = apply_evolve_proposal(proposal)
+    assert result["applied"] is False
+    assert result["error"] is not None
+
+    # バックアップは削除されず残る（復旧手段として必要）
+    backup = skill_dir / "SKILL.md.pre-evolve-backup"
+    assert backup.exists()
+    assert backup.read_text() == original_content
 
 
 # --- reason_refs in apply_evolve_proposal (#201) ---
