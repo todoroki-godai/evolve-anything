@@ -279,6 +279,15 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(skill_evolve): batch guard が plugin_self を母集団から落とし LLM 一括評価が無承認で走る不具合を修正（#465）** —
+  `skill_evolve_assessment` の group 構築ループが `("custom", "global")` にハードコード
+  列挙されており、母集団が全件 `plugin_self`（プラグイン本体リポジトリ自身のスキル）の
+  場合に `_groups` が空となり `_total_refresh == 0` になって「全件 cache-fresh（課金
+  ゼロ確定）」と誤判定され、`.claude/rules/llm-batch-guard.md` の承認ゲートが無承認で
+  バイパスされていた。対象 origin を `_effective_targets` から動的に導出する方式に変更し、
+  `_all_llm_targets` のフィルタ条件（custom / plugin_self / allowlist 済み global）と
+  対称にした。これにより「母集団が非空なのに group 化から漏れる」構造的な穴自体が
+  無くなるため、個別の空チェックを追加する対症療法でなく根治とした。回帰テストを追加。
 - **fix(skill_evolve): 自己進化ひな型の空 pitfalls 無条件読込と直接書込み指示を是正（#471）** —
   `spec-keeper` に自己進化パターンを適用した #468 で codex cold review が `マージ不可`
   （[Must]2件）を出し是正したが、生成元テンプレート（`skills/evolve/templates/self-evolve-sections.md`）

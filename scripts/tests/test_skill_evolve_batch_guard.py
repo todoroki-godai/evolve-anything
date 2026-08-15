@@ -233,6 +233,41 @@ class TestBatchGuardAssessment:
         sentinel = next((r for r in result if r.get("_meta") == "batch_guard_trigger"), None)
         assert sentinel is None, "1件 denied で effective=10 → guard トリガーしないはず"
 
+    def test_batch_guard_fires_for_plugin_self_only_population(self, monkeypatch, tmp_path):
+        """#465: 母集団が全件 plugin_self でも batch_guard_trigger sentinel が発火する。
+
+        group 構築ループが ("custom", "global") のみを回していたため、全対象が
+        plugin_self の場合は _groups が空になり、_total_refresh==0 と「全件
+        cache-fresh（課金ゼロ確定）」が区別できず guard が無承認でバイパスされていた。
+        """
+        import importlib
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        import skill_evolve.denylist as dl_mod
+        importlib.reload(dl_mod)
+
+        skill_paths = [_make_skill_path(tmp_path, f"skill-{i}") for i in range(11)]
+        cfg_mock = mock.MagicMock()
+        cfg_mock.get.return_value = ""
+        _tel = {"frequency": 1, "diversity": 1, "evaluability": 1,
+                "error_count": 0, "usage_count": 1, "error_categories": {}}
+
+        with mock.patch("skill_evolve.assessment.find_artifacts", return_value={"skills": skill_paths}), \
+             mock.patch("skill_evolve.assessment.classify_artifact_origin", return_value="plugin_self"), \
+             mock.patch("skill_evolve.assessment.load_user_config", return_value=cfg_mock), \
+             mock.patch("skill_evolve.compute_telemetry_scores", return_value=_tel), \
+             mock.patch("skill_evolve.denylist.DATA_DIR", tmp_path):
+            from skill_evolve.assessment import skill_evolve_assessment
+            result = skill_evolve_assessment(tmp_path)
+
+        sentinel = next((r for r in result if r.get("_meta") == "batch_guard_trigger"), None)
+        assert sentinel is not None, "#465: plugin_self のみの母集団でも guard が発火すべき"
+        assert sentinel["total_effective"] == 11
+        group_origins = {g["origin"] for g in sentinel["groups"]}
+        assert group_origins == {"plugin_self"}
+        g = sentinel["groups"][0]
+        assert g["skill_count"] == 11
+        assert g["refresh_needed_count"] == 11
+
     def test_confirmed_batch_bypasses_guard_in_assessment(self, monkeypatch, tmp_path):
         """confirmed_batch=True のとき assessment.py の guard 条件が実際にスキップされる。"""
         import importlib
