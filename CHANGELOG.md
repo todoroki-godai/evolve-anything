@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- **feat(proposal_lane_coverage): 提案種別の decision lane 到達性を機械検査し CI blocking 化
+  （#467 Stage 0）** — discover が生成する提案種別7種（`matched_skills` / `skill_evolve` /
+  `repeating_patterns` / `pitfall_candidates` / `hook_candidates` / `instruction_violation` /
+  `trajectory_skill_candidate`）のうち、朝の y/n（`_extract_candidates`）が実際に読むのは
+  2種のみという棚卸し結果（`docs/decisions/drafts/467-all-proposal-types-to-morning-yn.md`
+  §1.1）を dotted path + selector の宣言表（`scripts/lib/proposal_lane_coverage.py`）として
+  固定。未接続を許す残り5種は実装から独立した baseline ファイル
+  （`scripts/lib/fixtures/proposal_lane_unconnected_baseline.txt`、`shrink_freeze.FROZEN_*` と
+  同型）に限定し、新種の未接続追加・接続済みなのに baseline 残存の両方向を契約テスト4本で
+  検出する。`test_proposal_lane_coverage.py` を CI portable suite（blocking）に追加。
+  store / observability section / advisory proposal adapter / weak_signal channel は追加なし
+  （#379 新設凍結非抵触・`test_shrink_freeze.py` 緑で確認）。AST best-effort 補助検出
+  （`find_undeclared_result_keys`）は宣言漏れの警告のみで非 blocking。
 - **fix(evolve): auto trigger の発火状況（trigger_summary）を1行サマリに surface（#458 /
   #457）** — `trigger_summary.{total_fires, last_fired}` は `_state.py:_build_trigger_summary`
   が生成し `phases_capture.py` が result へ入れるだけで、production/test どちらからも
