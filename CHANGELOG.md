@@ -279,6 +279,19 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(skill_evolve): 自己進化ひな型の空 pitfalls 無条件読込と直接書込み指示を是正（#471）** —
+  `spec-keeper` に自己進化パターンを適用した #468 で codex cold review が `マージ不可`
+  （[Must]2件）を出し是正したが、生成元テンプレート（`skills/evolve/templates/self-evolve-sections.md`）
+  自体は直っておらず、残り23スキルへ横展開すると同じ欠陥が23倍になる状態だった。
+  #468 是正後の形に合わせて生成元を更新: ① Pre-flight Check を `grep -c '^### '` による決定論ゲート
+  に変更し空 pitfalls.md の無条件読込を廃止 ② Failure-triggered Learning の直接書込み指示を
+  `/evolve-anything:pitfall-curate` への委譲＋人間承認 MUST に変更（`pitfall-curate/SKILL.md` の
+  正典経路との矛盾を解消）③ ライフサイクル表に保存先・Pruned 閾値（Avoidance-count 5）・実行主体
+  （pitfall-curate）を明記。テンプレートは全スキル共通の骨格を維持するため spec-keeper 固有の記述は
+  焼き込まず、`{{SKILL_NAME}}` プレースホルダを新設し `skill_evolve.proposal._render_skill_name()`
+  で決定論フォールバック経路（LLM 非依存）でも実スキル名へ置換されるようにした。契約テスト
+  `test_skill_evolve_template_contract.py` を新設（生成元テンプレートの欠陥復活防止）。
+  横展開（残23スキルへの適用）は本 PR のスコープ外。
 - **fix(revert): B/C writer 統合の共有 helper 契約 + `--auto --dry-run` の approved 汚染修正（ADR-054 Phase D PR1・#402 #379）** —
   optimize.py（B）/ run_loop.py（C）を revert lane へ寄せる後続 PR（PR2/PR3）の土台となる契約 PR。
   `evolve_decision_ids.py` に `merge_revert_fields`（revert フィールドの許可リストフィルタ+純加算契約の衝突検査）/

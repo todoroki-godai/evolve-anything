@@ -106,6 +106,16 @@ def _parse_customization_response(
     return output
 
 
+def _render_skill_name(content: str, skill_name: str) -> str:
+    """テンプレート中の `{{SKILL_NAME}}` プレースホルダを実スキル名へ決定論的に置換する。
+
+    #471: テンプレートはスキル固有の記述（スキル名等）を焼き込まない共通骨格として
+    保つ。LLM カスタマイズ（Phase B）を経ない決定論フォールバック経路でも正しい
+    パスが生成されるよう、テンプレ読込直後・カスタマイズ前に置換する。
+    """
+    return content.replace("{{SKILL_NAME}}", skill_name)
+
+
 def _customize_template(
     skill_name: str,
     skill_content: str,
@@ -218,6 +228,7 @@ def evolve_skill_proposal(
     sections_content, pitfalls_content, error = _load_templates(_plugin_root)
     if error:
         return {"skill_name": skill_name, "error": error}
+    sections_content = _render_skill_name(sections_content, skill_name)
 
     skill_md = skill_dir / "SKILL.md"
     skill_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else ""
@@ -247,6 +258,7 @@ def emit_customize_request(
     sections_content, _pitfalls, error = _load_templates(_plugin_root)
     if error:
         return {"requests": [], "error": error}
+    sections_content = _render_skill_name(sections_content, skill_name)
 
     skill_md = skill_dir / "SKILL.md"
     skill_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else ""
@@ -294,6 +306,7 @@ def ingest_customized_proposal(
     sections_content, pitfalls_content, error = _load_templates(_plugin_root)
     if error:
         return {"skill_name": skill_name, "error": error}
+    sections_content = _render_skill_name(sections_content, skill_name)
 
     parsed = parse_responses(
         requests,
