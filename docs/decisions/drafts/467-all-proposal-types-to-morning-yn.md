@@ -2,9 +2,11 @@
 
 - 対象 issue: #467（Epic）
 - 関連: #459（reader ゼロの blocking 検出・一般形）/ #379（新設凍結）/ #402・ADR-053（revert）/ ADR-054 §9.4
-- 状態: **rev5 — Stage 0 は実装・マージ済み（PR #476 / `cfa77249`）。Stage 1 は 2026-08-16 の実測で
-  設計前提が2つとも崩れたため着手を取り消し、設計に差し戻し中。§1.5 が実測、§10 が再設計で
-  答えるべき問い**
+- 状態: **rev5（codex / tacchi レビュー反映済み）— Stage 0 は実装・マージ済み（PR #476 / `cfa77249`）。
+  Stage 1 は 2026-08-16 の実測で設計前提が2つとも崩れたため着手を取り消し、設計に差し戻し中。
+  §1.5 が実測（等級は §1.5.0）、§10 が再設計で答えるべき問い、§11 がレビュー記録**
+- **読む順序**: §1.5.0（証拠の等級）→ §1.5（実測）→ §10（次に何をするか）。
+  §2〜§7 は rev4 の記述で、撤回・保留のマークが付いた節がある
 - 前提コミット: `cfa77249`（main・Stage 0 マージ後）
 
 ---
@@ -83,7 +85,32 @@ codex [Must]1 の指摘どおり、**実際に人間の目に出るかを決め�
 ### 1.5 実測（2026-08-16）— rev4 の前提を2つ崩した観測結果
 
 Stage 1 着手前に「§4.4 が MUST にしている実データ較正」を実行した結果、**較正どころか
-パイロット選定そのものが成り立たない**ことが判明した。以下はすべて実測値であり推定を含まない。
+パイロット選定そのものが成り立たない**ことが判明した。
+
+#### 1.5.0 証拠の等級（codex [Must]3 / tacchi [Nit]5 反映・rev5 レビュー後に追加）
+
+本節は**性質の違う2種類の根拠**を含む。混ぜて読むと「全部が同じ強さで確定している」と
+誤読されるため、等級を分ける。
+
+| 等級 | 内容 | 誰が再検証できるか |
+|---|---|---|
+| **[コード]** | 本リポジトリのソースから読み取れる事実（閾値・条件分岐・caller の有無） | 誰でも。file:line で追える |
+| **[実測]** | このマシンの実ストア（`~/.claude/evolve-anything/*.jsonl`）を読んだ観測値 | **本人の環境でのみ**。他環境では再現しない |
+
+以下、各主張の冒頭に等級を付す。**[実測] は他者の環境では検証できない**。
+codex cold review（2026-08-16）も [実測] 群を「未検証」と判定しており、これは正しい。
+
+**[実測] の再現手順**（取得日 2026-08-16 / 対象 commit `cfa77249` / 入力は取得時点の実ストア全量）:
+
+- corrections 系の集計: `~/.claude/evolve-anything/corrections.jsonl` を全行 JSON パースし
+  `last_skill` / `correction_type` / `source` を数える
+- 「直前スキル」の復元: 同 `session_id` で `usage.jsonl` の `ts` が correction の `timestamp` より
+  前にある最新レコードの `skill_name` を引く（tz suffix の混在があるため辞書順比較は使わず
+  `datetime` にパースして比較する＝`pitfall_iso8601_lexical_compare_tz_suffix`）
+- 産出量の計測: 各種別の生成関数を個別 import して直接呼ぶ（`run_discover()` 全体は回さない）
+
+**この手順は現時点でリポジトリ内にスクリプトとして存在しない。** 再現可能な artifact に
+落とすことは §10-Q0 の受入条件に含める。
 
 #### 1.5.1 パイロット `instruction_violations` は本番で 0 件（前提崩壊①）
 
@@ -102,17 +129,48 @@ Stage 1 着手前に「§4.4 が MUST にしている実データ較正」を実
 | `hooks/correction_detect.py:163`（`source="hook"`） | 2 | `read_last_skill(session_id)` 経由・実測 None |
 | backfill | 8 | キー無し |
 
-`hooks/observe.py:87` の `write_last_skill` は正常に動作している（`$TMPDIR` に実ファイルが存在し
-`{"skill_name": ..., "timestamp": ...}` を保持。`usage.jsonl` は 5,574 件の Skill 呼び出しを記録）。
-壊れているのは**採用経路が session→skill の対応を運ばないこと**であり、
-一時ファイルの TTL（24h・`rl_common/workflow.py:16`）でも書込み側でもない。
+**[コード]** `hooks/observe.py:84-87` は `tool_name == "Skill"` のとき `write_last_skill` を呼ぶ。
+**[実測]** `$TMPDIR` に当該一時ファイルが実在し `{"skill_name": ..., "timestamp": ...}` を保持、
+`usage.jsonl` は 5,574 件の Skill 呼び出しを記録。この2つから**書込み側が機能していると
+観測される**（codex [Should] 反映: 「正常に動作」と断定していたのを観測表現に限定した。
+TTL 内読取り・session_id 一致まで通した再現は行っていない）。
 
-修理した場合の上限も実測した: **同一セッション内で correction より前に Skill 呼び出しがあった
-correction は 28 / 171（16%）**。1 correction = 最大1 violation（`runner.py:440` の無条件 `break`）
-なので、violation の上限は 28 件。そこから対立動詞マッチに当たったものだけが提案になる。
+支配的な欠落は**採用経路が session→skill の対応を運ばないこと**であり、
+一時ファイルの TTL（24h・`rl_common/workflow.py:16`）が主因である証拠は無い。
 
-同じ入力欠落が **`pitfall_candidates` も殺している**（`pitfall_manager/detection.py:165-167` が
-同一条件で足切り）。**1箇所の修理で2種別が 0 → 稼働に変わる**。
+**[実測]** 修理した場合の上限: 同一セッション内で correction より前に Skill 呼び出しがあった
+correction は **28 / 171（16%）**。1 correction = 最大1 violation（**[コード]** `runner.py:440` の
+無条件 `break`）なので violation の上限も 28 件。
+なお **[コード]** `runner.py:398` の `_MAX_CORRECTION_CHECKS = 20` により、
+**1回の discover が検査するのは最新 20 件まで**（28 はコーパス上限であって1 run の上限ではない
+・tacchi [Nit]6）。
+
+##### 訂正: 「1箇所の修理で2種別が稼働する」は誤り（tacchi [Must]1・2026-08-16 追加実測）
+
+rev5 初版はここに「**1箇所の修理で2種別が 0 → 稼働に変わる**」と書いたが、**これは誤り**である。
+追加実測により、`last_skill` を直しても**両種別とも 0 のまま**であることが判明した。
+
+**`pitfall_candidates` — 型フィルタで落ちる**
+
+**[コード]** `pitfall_manager/detection.py:162-166` は `last_skill` の前に
+`correction_type in ("stop", "iya")` を要求する。
+**[実測]** `correction_type` の内訳は `semantic_idiom` 161 / `stop` 8 / `iya` 1 / `naoshite-request` 1。
+支配的 writer の `promote.py:362` は `correction_type` を **`"semantic_idiom"` 固定**で書くため、
+`last_skill` を直しても 161 件すべてが型フィルタで落ちる。**通過しうるのは 9 件のみ。**
+
+**`instruction_violation` — スキル名の名前空間が解決できない**
+
+**[コード]** `runner.py:417` は `Path.home().glob(f".claude/skills/{skill_name}/SKILL.md")` で
+**bare 名 + global dir** を前提に SKILL.md を探す。
+**[実測]** 上記 28 件の直前スキル名を復元して同じ解決を試すと、**28 件すべてが解決不能（0/28）**。
+内訳は `evolve-anything:spec-keeper` / `rl-anything:spec-keeper` / `evolve-anything:docs-refresh` 等の
+**プラグイン名前空間付き**が多数を占め、残りは PJ ローカル・廃止済みスキル名。
+これは既知 pitfall **#577/#578（bare vs `plugin:skill` の join キー名前空間不一致）**の再演である。
+
+→ **修理単独の見込みは 0。** 稼働させるには最低でも
+(i) スキル名の名前空間正規化 + プラグインスキルのパス解決
+(ii) `correction_type` フィルタの見直し
+が追加で要る。§10-Q1 の A 案はこの前提で評価すること。
 
 #### 1.5.2 §4.4「confidence を実データで較正」は実装不能（前提崩壊②）
 
@@ -126,9 +184,10 @@ production の `confidence` は**連続値ではなく2値固定**である:
 LLM Judge 経路（`emit_violation_judge_requests` / `ingest_violation_judges`・:397-508）は
 **production から一度も呼ばれていない**（caller は自己参照とテストのみ。ADR-037 Phase 1d-i で
 2相 API 化したが SKILL.md への配線が入っていない）。
-`needs_review=True` を除外した時点で残るのは 0.95 のみなので、閾値は
-0.5〜0.95 のどこに置いても結果が変わらない。**「実データで較正する」という MUST は
-現行コードに対して意味を持たない。**
+`needs_review=True` を除外した時点で残るのは 0.95 のみなので、**閾値を
+`0.50 < t <= 0.95` の範囲のどこに置いても結果が変わらない**（codex [Should] 反映:
+「どこに置いても」は境界外＝`t > 0.95` なら全件落ちるので誤り。範囲を限定した）。
+**「実データで較正する」という MUST は、この範囲内では現行コードに対して意味を持たない。**
 
 #### 1.5.3 未接続13種の実産出量（全数実測・LLM 呼び出しゼロ）
 
@@ -142,11 +201,11 @@ LLM Judge 経路（`emit_violation_judge_requests` / `ingest_violation_judges`�
 | `recommended_artifacts` | 12 | 12 | — |
 | `trajectory_skill_candidate` | 1 | 1 | — |
 | `missed_skill_opportunities` | 1 | 1（上記由来） | — |
-| `pitfall_candidates` | 0 | — | `pitfall_manager/detection.py:165-167`（§1.5.1 と同一原因） |
+| `pitfall_candidates` | 0 | — | `pitfall_manager/detection.py:162-166`（§1.5.1。**足切りは2段** = 型フィルタ + `last_skill`） |
 | `hook_candidates` | 0 | — | `discover/errors.py:15` 閾値3に未達 |
 | `instruction_violation` | 0 | — | `runner.py:392-393`（§1.5.1） |
 | `verification_needs` | 0 | — | `verification_catalog/runner.py:80-100` 全件導入済み判定 |
-| `stall_recovery_patterns` | 0 | — | `tool_usage_analyzer/stall.py:47` 2セッション跨ぎ未達 |
+| `stall_recovery_patterns` | 0 | — | 閾値 `STALL_RECOVERY_MIN_SESSIONS=2` は `tool_usage_analyzer/__init__.py:47`、フィルタは `stall.py:110-113`（codex [Should] 反映: 旧記載 `stall.py:47` は単一セッション内走査の行で誤り） |
 | `workflow_checkpoint_gaps` | 0 | — | `runner.py:489-490` `<repo>/.claude/skills/` 不在 |
 | `constraint_decay_warnings` | 0 | — | `discover/patterns.py:115` `decay_rate > 0.3` 該当なし |
 | `constraint_decay_findings` | 0 | — | 同上 |
@@ -161,25 +220,58 @@ LLM Judge 経路（`emit_violation_judge_requests` / `ingest_violation_judges`�
   ディレクトリ差で分裂したもの**
 - `recommended_artifacts` は `skills/discover/SKILL.md:57-67` に**既に専用の y/n フロー**を持つ
 
-#### 1.5.4 rev4 が見落としていた構造的事実（最重要）
+#### 1.5.4 rev4 が見落としていた構造的事実（**rev5 レビューで結論を訂正**）
 
-**中身が出る3種はいずれも「新しいファイルを作る」提案**であり、
-§1.4 の「revert lane は既存ファイルの書き換えしか表現できない」に直撃する。
+##### 訂正前（rev5 初版）の主張 — 誤り
 
-一方 §4 がパイロットに選んだ `instruction_violation` は、**唯一「既存 SKILL.md の書き換え」型
-だったが産出が 0**（§1.5.1）。
+> 中身が出る3種はいずれも「新しいファイルを作る」提案なので §1.4 に直撃する。
+> `instruction_violation` は唯一の「既存ファイル書き換え」型だが産出 0。
+> ゆえに**「産出がある種別」と「既存 lane に乗る種別」の積集合が空**であり、
+> §5 は Stage 1 の前提へ格上げされる。
 
-> **つまり「産出がある種別」と「既存 lane に乗る種別」の積集合が空である。**
-> rev4 は §5（新規ファイル作成の accept/revert）を *Stage 2 の前提* として先送りしたが、
-> 実測はこれを **Stage 1 の前提**へ格上げする。
+codex [Must]1 と tacchi [Must]2 が独立に否定した。**「積集合が空」は成り立たない。**
 
-なお `rule_violation_observed` は孤児ではない。`phases_remediate.py:99-102` が
-`make_hook_candidate_issues_from_rule_violations` を呼び、
-`RULE_VIOLATION_HOOK_THRESHOLD=20` 以上の違反 head を**1つの hook scaffold に束ねて**
-issue 化している（`rule_violation_lane.py:344-388`）。
-未接続なのは「朝の y/n レーン（`_extract_candidates`）」に対してのみである。
-**束ねの実装は既に存在するので、rev4 が §4.2 で新設しようとした集約契約は
-この関数の再利用で足りる可能性がある**（要検証）。
+##### 訂正後 — `rule_violation_observed` は既存ファイルの書き換えである
+
+**[コード]** `rule_violation_lane.py:339-341` の `_enforcement_hook_script_path()` は
+出力先を `~/.claude/hooks/enforce-prohibited-commands.py` に固定している。
+**[実測]** このファイルは **2026-07-31 に既に導入済みで実在する**（グローバル rules にも
+「PreToolUse hook で機械 enforce 済み」と記載がある）。
+
+したがってこの提案は **op = modify（既存ファイルの書き換え）** であり、
+§1.4 / §5 の「新規ファイル作成」制約に**当たらない**。
+`instruction_violation` の産出が 0 であっても、積集合は空にならない。
+
+##### ただし別の欠陥がある — detector が「もう直っている」ことを見ていない
+
+**[コード]** `rule_violation_lane.py` に `_enforcement_hook_script_path()` の
+**`.exists()` チェックは1箇所も無い**（`grep` で `exists()` の出現は当該関数定義と
+`script_path` への代入のみ）。`partition_rule_violations`（:240-262）も
+hook 実在を条件に含めず、`reason="rule_installed_but_not_enforced"` を無条件に付ける。
+
+**[実測]** 観測された `cd` 522 回は**hook 導入（7/31）より前の履歴を含む**。
+つまり現状この提案を朝の y/n に出すと「**もう終わっている対処**を承認するか聞く」ノイズになる。
+
+→ 塞ぐべきは §5 ではなく、**(i) enforcement hook の実在チェック
+(ii) 観測の時間窓を hook 導入後に限定**の2点（tacchi [Must]2）。これは §5 より遥かに小さい。
+この欠陥は #467 と独立に存在するので単独 issue として扱う。
+
+##### 確定していること／していないこと
+
+| | |
+|---|---|
+| **確定** | rev4 が選んだパイロット `instruction_violation` は、そのままでは実施できない（§1.5.1） |
+| **確定** | §4.4 の閾値較正は現行コードに対して空文（§1.5.2） |
+| **否定された** | 「積集合が空」「§5 は Stage 1 の前提」 |
+| **未確定** | §5 が必要になるかは**パイロット選定の結果に依存する条件分岐**であり、事前に断定できない（§10-Q1 / Q2） |
+
+##### 副次: 束ねの実装は既に存在する
+
+`phases_remediate.py:96-103` が `make_hook_candidate_issues_from_rule_violations` を呼び、
+**[コード]** `RULE_VIOLATION_HOOK_THRESHOLD=20`（`rule_violation_lane.py:28`）以上の違反 head を
+**1つの hook scaffold に束ねて** issue 化している（同 :344-388）。
+未接続なのは「朝の y/n レーン（`_extract_candidates`）」に対してのみ。
+**rev4 が §4.2 で新設しようとした集約契約は、この関数の再利用で足りる可能性がある**（要検証・§10-Q3）。
 
 ---
 
@@ -302,18 +394,23 @@ dogfood Layer 2（`invariants.py:183-188` の `_CHECKS`）への追加はロー�
 
 ---
 
-## 4. 判断2: Stage 1 のパイロットは `instruction_violations` — **rev5 で撤回**
+## 4. パイロット選定 — **[撤回]**（契約設計 §4.1〜§4.3 は **[存置]**）
 
-> **⚠ 本節（§4 全体）は rev5 で撤回した。** §1.5.1 の実測により、この種別は本番で 0 件しか
-> 産出しない。パイロットとして採用すると「配管は通ったが1件も人間に届かない」状態で
-> 完了扱いになり、**#467 が潰そうとしている欠陥そのものを再生産する**。
+> **小節ごとの状態**（codex [Should] / tacchi [Should]3 反映。
+> 「§4 全体を撤回」と書きながら一部を再利用可と述べていた矛盾を解消する）:
 >
-> §4.1（運搬契約）・§4.1b（suppression identity 分離）・§4.2（集約契約）の**設計内容自体は
-> 実測と矛盾しておらず、種別非依存の契約として再利用できる**（`_emit.py:190-213` の pending entry に
-> `detail` 相当が無いこと、`_suppression.py:23-50` が `entry["id"]` のみを一意性成分にしていることは
-> 2026-08-16 に再確認済み）。撤回するのは**パイロットの選定**と §4.4 である。
+> | 小節 | 状態 | 理由 |
+> |---|---|---|
+> | §4 前文（パイロット = `instruction_violations`） | **[撤回]** | §1.5.1 の実測により本番 0 件。修理しても 0 が濃厚 |
+> | §4.1 運搬契約（pending に `detail`） | **[存置]** | 種別非依存。`_emit.py:190-213` に `detail` 相当が無いことは 2026-08-16 に再確認 |
+> | §4.1b suppression identity 分離 | **[存置]** | 種別非依存。`_suppression.py:23-50` が `entry["id"]` のみを一意性成分にすることは再確認済み |
+> | §4.2 集約契約 | **[保留・再検証]** | 設計内容は妥当だが、`rule_violation_lane.py:344-388` に既存の束ね実装があるため**新設せず再利用**の可能性を先に潰す（§10-Q3） |
+> | §4.3 表示・承認手順の種別非依存化 | **[存置]** | どのパイロットを選んでも必要 |
+> | §4.4 品質ゲート | **[撤回]** | §1.5.2 のとおり実装不能 |
 >
-> 以下は撤回前の記述として保存する。
+> **⚠ 以下の本文は撤回前の原文である。** §4.2 の本文が §4.4（撤回済み）を「④品質ゲート適用」として
+> 必須段に組み込んでいる点に注意 — §4.2 を再利用する場合は④を差し替える必要がある。
+> パイロットを選び直すまで、この本文の記述をそのまま実装根拠にしないこと。
 
 issue 本文は `hook_candidates` を最有力としていたが、対象が**存在しないファイル**であるため
 accept 判定（`_ingest.py:85-120` が `read_text()` と `after_sha != before_sha` を要求）にも
@@ -424,11 +521,23 @@ rev2 の tie-breaker「correction の時刻」は `make_instruction_violation_is
 
 ---
 
-## 5. 新規ファイル作成の accept / revert（**rev5 で Stage 1 の前提へ格上げ**・方針のみ）
+## 5. 新規ファイル作成の accept / revert（**パイロット選定に依存する条件分岐**・方針のみ）
 
-> **rev5 の変更**: rev4 は本節を「Stage 2 の前提」として先送りしたが、§1.5.4 の実測により
-> **産出のある種別はすべてここに依存する**ことが判明した。したがって本節は Stage 1 の
-> クリティカルパスであり、先送りできない。独立 ADR の起票が再設計の第一歩になる（§10-Q2）。
+> **rev5 の変更（レビュー後に再訂正）**: rev5 初版は本節を「Stage 1 の前提へ格上げ」と
+> **断定**したが、codex [Must]1 / tacchi [Must]2 が否定した。§1.5.4 のとおり
+> `rule_violation_observed` は既存ファイルの書き換え（op=modify）なので本節に依存しない。
+>
+> **正しい位置づけ**: 本節が Stage 1 のクリティカルパスになるかは
+> **どのパイロットを選ぶかに依存する条件分岐**である。
+>
+> | パイロット | §5 が必要か |
+> |---|---|
+> | A `instruction_violation`（既存 SKILL.md 更新） | **不要**。ただし §1.5.1 の2つの追加修理が要る |
+> | B `rule_violation_observed`（既存 hook の書き換え） | **不要**。代わりに実在チェック + 時間窓が要る |
+> | C 3種一斉接続 / 新規スキル・新規 rule 作成を含む | **必要** |
+> | D scoped-C（rules/hook の create に限定し revert=削除で定義） | **一部必要**（§5 の12点のうち削除で自明になる分を除く。tacchi 提案） |
+>
+> したがって独立 ADR を起票するかは §10-Q1 の決着後に決める（§10-Q2）。
 
 **scope ではなく操作種別で表現する**（codex [Should] 反映）。`_SUPPORTED_SCOPES` の第三の値は作らない
 — `project` / `global` 配下に作る限り scope は同じで、必要なのは `op: modify | create` の区別。
@@ -504,26 +613,59 @@ rev1 は「#459 を先に入れると `hook_candidates` は grandfathering で�
 ## 10. rev5 の再設計で答えるべき問い（実装着手はこれらが埋まるまで凍結）
 
 実測（§1.5）が rev4 の前提を崩したため、Stage 1 は**パイロット選定からやり直す**。
-以下 Q1〜Q5 に決着がつくまで実装コードを書かない。
+以下 Q0〜Q5 に決着がつくまで実装コードを書かない。
+
+**着手順**（tacchi 指摘: Q1〜Q5 が並列に見えるが実際には順序がある）:
+**Q0（機構化）→ Q1（パイロット確定）→ Q1 の結果に応じて Q2 / Q3 / Q4 → Q5（上限）**。
+Q0 を先に置くのは、Q1 の答えを出す作業そのものが Q0 の受入条件を満たす必要があるため。
+
+### Q0. 同じ失敗（設計4巡・実測ゼロ）を機構で防ぐ — **最優先**（codex [Must]2 / tacchi [Should]4）
+
+今回の失敗の本質は「rev1〜rev4 で codex を3巡通したのに、**実データを1度も測らなかった**」こと。
+構造要因は **§4.4 が実測を MUST と書きながら、その実行時期を設計レビューの*後*（Stage 1 着手前）に
+置いた**ことである。文書1本の反省文で終わらせず機構にする。
+
+決めるべきこと:
+
+1. **設計文書の各前提に evidence 行を必須化するか。**
+   形式案: 前提ごとに `値 / 取得コマンド / 取得日 / 対象 commit` の4点を書く。
+   **evidence 欄が空の前提が1つでもあれば `design-review-gate` のレビュー開始条件を満たさない**とする
+2. **パイロット候補の受入条件を「production と同じ入口からの dry-run 実測」にするか。**
+   測るのは 産出数 / 朝の y/n への到達 / accept / reject / revert の5点。
+   合成 fixture での確認では受入としない（`learning_synthetic_fixture_false_confidence`）
+3. **測定を再現可能な artifact にするか。** §1.5.0 のとおり、今回の [実測] は
+   リポジトリ内にスクリプトが無く他者が再現できない。
+   `scripts/bench/` 等に置いて対象 commit と取得日を残す形にするか
+4. **上記を本 draft 限りにせず、`docs/decisions/drafts/` のテンプレートと
+   `design-review-gate` ルール本体に反映するか**（tacchi 提案）
+
+> **注**: Q1-A に個別の再計測注意を書いてあるが、それは今回の事例の再発防止にすぎず、
+> B / C / D や将来の種別に一般化されない（codex [Must]2）。一般化するのが Q0 の役目。
 
 ### Q1. パイロットをどう選び直すか
 
-制約は「産出がある」∩「既存 lane に乗る」が**空集合**であること（§1.5.4）。取りうる形は3つ:
+**rev5 初版の「産出がある ∩ 既存 lane に乗る = 空集合」は誤り**（§1.5.4 訂正済み）。
+実測を反映した4案:
 
 | 案 | 内容 | 前提になる工事 | 実測に基づく見込み |
 |---|---|---|---|
-| A | 入力欠落（`last_skill`）を先に直し `instruction_violation` を復活させる | 採用経路が session→skill を運ぶ（または read 時に `usage.jsonl` から join） | 上限 28 correction。実際の提案数は**未知（0 の可能性あり）** |
-| B | `rule_violation_observed` を `violated_command` で束ねて出す | 新規ファイル作成の accept（§5） | y/n **1件**。内容は具体的（`cd` 522回） |
-| C | §5 を先に完成させてから3種を一斉接続 | §5 の12点すべて + 独立 ADR | y/n は最大 12〜25件／日。上限設計（§8-3）が必須 |
+| A | `instruction_violation` を復活させる | ①`last_skill` の運搬（#478）②**スキル名の名前空間正規化 + プラグインパス解決**（#577/#578 の再演）③`correction_type` フィルタの見直し | **0 が濃厚**。28件の直前スキルは**全件 SKILL.md 解決不能**（§1.5.1 訂正）。①だけでは動かない |
+| B | `rule_violation_observed` を `violated_command` で束ねて出す | ①enforcement hook の**実在チェック** ②観測の**時間窓を hook 導入後に限定** ③束ねの再利用（§10-Q3） | y/n **1件**。§5 は**不要**（op=modify）。ただし①②なしでは「もう終わった対処」を聞くノイズになる |
+| C | 3種を一斉接続 | §5 の12点すべて + 独立 ADR | y/n 最大 12〜25件／日。上限設計（Q5）が必須 |
+| D | **scoped-C**: rules / hook ファイルの create に限定し、**revert = ファイル削除**で定義（tacchi 提案） | §5 の12点のうち削除で自明になる分を除いた最小契約 | 冪等 revert が自明（削除）なので ADR が薄く済む。C への段階的な入口になる |
 
-**A の注意**: 「修理すれば動く」は仮説であって実測ではない。A を採るなら
-**修理後に実際に何件出るかを測ってからパイロット確定**とし、0 件なら A を破棄する
-（`learning_dryrun_verification_blind_spot`: 適用後にしか出ない効果を完了基準にしない）。
+**A を採る場合の必須条件**: 「修理すれば動く」は**仮説であって実測ではない**。
+①②③をすべて入れた後に**実際に何件出るかを測ってからパイロット確定**とし、
+0 件なら A を破棄する（`learning_dryrun_verification_blind_spot`）。
+
+**B を採る場合の必須条件**: 実在チェックと時間窓を入れた**後**に、
+`cd` 以外に提案が残るかを測る。残らなければ B も 0 件になる。
 
 ### Q2. §5（新規ファイル作成の accept / revert）を独立 ADR として先に起票するか
 
-§1.5.4 より、B と C はどちらもここに依存する。A を採る場合でも、
-`instruction_violation` の修正提案が「既存 SKILL.md への追記」で表現できるかは要確認。
+**Q1 の結果に依存する条件分岐**（§5 冒頭の表を参照）。
+A / B を選ぶなら §5 は不要、C なら必須、D なら一部必要。
+**Q1 を決めずに §5 の ADR を起票しない**（rev5 初版はこれを断定していた・codex [Must]1）。
 
 ### Q3. 束ねキーの正典をどこに置くか
 
@@ -554,6 +696,27 @@ C を採ると最大 25件／日になり、`daily_review` の既存上限（wea
 
 ### 再設計のレビュー要件
 
-本 rev5 は**実測の記録と問いの整理**であり、Q1〜Q5 の**答えを含まない**。
+本 rev5 は**実測の記録と問いの整理**であり、Q0〜Q5 の**答えを含まない**。
 答えを書いた rev6 に対して `design-review-gate` に従い codex 1巡を通し、
 `[Must]` が残る間は実装に着手しない。
+
+**rev6 の追加要件（Q0 の先取り）**: rev6 の各前提には
+`値 / 取得コマンド / 取得日 / 対象 commit` の evidence 行を付ける。
+evidence の無い前提を根拠に判断を書かない。
+
+---
+
+## 11. rev5 のレビュー記録（2026-08-16）
+
+| レビュアー | 判定 | 主要指摘 | 反映 |
+|---|---|---|---|
+| codex（cold review） | `マージ不可`（[Must]3 / [Should]4） | ①§5 格上げは導けない ②再発防止の検証契約が無い ③[実測] 群に再現証跡が無い | ①→§5 冒頭を条件分岐に ②→Q0 新設 ③→§1.5.0 新設 |
+| tacchi（実態突合） | 直してからマージ | ①「1箇所の修理で2種別稼働」は実測に反する ②`rule_violation_observed` は既に対処済み対象で op=modify | ①→§1.5.1 に訂正節 ②→§1.5.4 の結論を訂正 |
+
+**両者が独立に否定した点**: 「積集合が空 → §5 は Stage 1 の前提」。
+**tacchi の追加実測が rev5 初版より状況を悪化させた点**: A 案は 28件全件 SKILL.md 解決不能で
+「0 の可能性あり」ではなく「0 が濃厚」。
+**tacchi が追加した選択肢**: Q1-D（scoped-C）。
+
+この節を残す理由: rev5 初版が「実測を称える文書自身が、実測していない太字の約束を2つ置いていた」
+という失敗を記録するため。同種の失敗の再発防止は Q0 で機構化する。
