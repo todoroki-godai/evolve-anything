@@ -229,6 +229,12 @@ phases.skill_evolve
 phases.skill_evolve.already_evolved
 phases.skill_evolve.assessments
 phases.skill_evolve.batch_guard_trigger
+phases.skill_evolve.batch_guard_trigger._meta
+phases.skill_evolve.batch_guard_trigger.already_denied
+phases.skill_evolve.batch_guard_trigger.estimate_meaning
+phases.skill_evolve.batch_guard_trigger.groups
+phases.skill_evolve.batch_guard_trigger.rerun_llm_free
+phases.skill_evolve.batch_guard_trigger.total_effective
 phases.skill_evolve.evolve_suppressed_by_archive
 phases.skill_evolve.excluded_global_count
 phases.skill_evolve.excluded_global_hint
