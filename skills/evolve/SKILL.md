@@ -251,9 +251,9 @@ reflect は独立フェーズではなく discover に統合済み。discover �
 `result.correction_review.bootstrap.is_bootstrap == True` のとき、AskUserQuestion で3択（まとめて確認 / 日次5件ずつ / TTL失効に任せる）を人間に選ばせる（MUST — テキスト表示だけで済ませない）。**各 option の `detail` に副作用（marker を立てるか否か＝以後の再表示挙動）を必ず添える（#51）**。group 数が閾値（12）超のときは theme_buckets 単位の multiSelect 1問に畳む（#558）。
 → 3択の副作用詳細・multiSelect/per-group フロー・`mark_done` コードは **[references/correction-review.md](references/correction-review.md)**。
 
-### Step 6.2: 今日の修正確認（daily_review・#446）
-`result.correction_review.daily.eligible == True` のとき、前回以降の新規 weak_signal（最大5件）を AskUserQuestion で y/n 確認する（MUST — 最大5問を1バッチで）。「はい」→ `PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --promote-weak` で昇格 + `record_reviewed(decision="promoted")`、「いいえ」→ `record_reviewed(decision="rejected")`。Step 6.1 の bootstrap 対象は自動的に除外されるため二重提示しない（#476-3）。
-→ 判定条件・AskUserQuestion テンプレ・コードは **[references/correction-review.md](references/correction-review.md)**。
+### Step 6.2: 今日の修正確認（daily_review・#446・#475）
+`result.correction_review.daily.eligible == True` のとき、前回以降の新規 weak_signal（最大5件）を反映先つき4択で確認する（MUST — #475。最大5問を1バッチで）。「共通ルール」「このPJのルール」→ `--promote-weak` で昇格 → agent が Edit/Write → `evolve-reflect --apply` で実在確認してから `record_reviewed(decision="promoted")`。「いまは反映しない」→ 昇格のみ行い `record_reviewed(decision="deferred")`（記録は残り reflect で再浮上）。「いいえ」→ 昇格せず `record_reviewed(decision="rejected")`。Step 6.1 の bootstrap 対象は自動的に除外されるため二重提示しない（#476-3）。
+→ 判定条件・4択のテンプレ・コードは **[references/correction-review.md](references/correction-review.md)**。
 
 ### Step 6.5: auto-memory キュー drain（2相, [ADR-037] Phase 2）
 `DATA_DIR/auto_memory_queue/<slug>.jsonl`（Stop hook がゼロ LLM で enqueue 済み）を Phase A（emit・LLM ゼロ）→ Phase B/C（インライン生成→ingest）の2相で消化する。ingest は生成後ゲート（belief_entropy）を内蔵し、ソースを落とした要約は書込なしで `belief_blocks.jsonl` に記録（blocked カウント）。空応答（skipped）はキューに残り次回再試行。空キューなら「0件 ✓」で終了。結果（stored/blocked/skipped）を Report に報告する。

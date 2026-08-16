@@ -61,15 +61,72 @@ res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)
 
 - `daily.eligible != True`（新規 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。`daily.eligible == False` のときのみ「今日の修正確認: 新規なし ✓」を1行表示）
 - **`daily.excluded_machinery_total > 0`（machinery＝委譲メッセージ等の harness 注入除外・#443 PR2-a）→ 上記スキップ／下記 AskUserQuestion のどちらの分岐でも「除外: machinery {excluded_machinery_total} 件（委譲メッセージ等の harness 注入。実際に確認可能な件数には含まれていません）」を必ず1行添える（MUST — silence != evaluated）。** 候補が全件 machinery で `daily.eligible` が `False` になったケースこそ、この1行が無いと利用者には「今日の修正確認: 新規なし ✓」しか見えず除外の事実が完全に隠れる（最重要ケース）。
-- `daily.eligible == True` → `daily.groups`（最大5件・cross-PJ 承認済み一致が先頭、続いて頻度降順 — #462）を **AskUserQuestion で y/n 確認（MUST — 最大5問を1バッチで）**。各 question に group の `idiom`（無ければ `representative`）と `evidence.count`（再発回数）を提示し、`confirmable_idiom` が非 None なら「『はい』で確定すると以後この表現の再発を自動昇格する idiom『{confirmable_idiom}』も confirmed 化される」を添える（None＝過汎用 FP guard #527 で除外済み・この group の昇格は今回限りで standing auto-promote rule にならない・#527-4）。`cross_pj_confirmed` が非空なら「他 PJ（{slug一覧}）で承認済み」も添える（判断材料の提示のみで自動承認はしない）:
-  - **はい（昇格）** → 同 group の `signal_keys` を `PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --promote-weak <signal_keys カンマ区切り>` で昇格（CLI が promote と同時に対応 idiom を confirmed=True 化し、以後の同テキスト再発は idiom_autopromote が機械昇格する — #463。出力の `confirmed_idioms` 件数で確認可。出力の `corrections_human_allpj` は昇格後の全PJ集計 human-confirmed 件数（**per-PJ の growth_report.corrections_human とは別物 — #557**。Step 9 の成長状態表示には使わない — [report-narration.md](report-narration.md) の対話前スナップショット問題補正を参照）→ **promote 成功を signal_key 単位で確認してから既読追記する（MUST・#326）**: 出力の `promoted_keys`（実際に昇格された signal_key 一覧）と `skipped`（昇格されなかった signal_key + 理由。`reason` ∈ `not_found` / `already_promoted` / `expired` / `already_reviewed`）を読み、`daily_review.record_reviewed(...)` には **`promoted_keys` のみ**を渡す（`requested` と `promoted` の件数差＝`skipped` が空でないときが部分失敗）。`skipped` の signal_key は既読追記しない（取りこぼし防止 — 次回再提示される。`reason=expired` は理論上ほぼ出ない — daily/bootstrap の候補提示自体が TTL 失効を read 時導出で除外するため）
-  - **いいえ（却下）** → `daily_review.record_reviewed(signal_keys, slug, decision="rejected", dry_run=dry_run)` で既読追記（次回から再提示しない）
-  - **Skip / Other / 中断** → 既読追記しない（次回再提示）。evolve 全体は完走する
+- `daily.eligible == True` → `daily.groups`（最大5件・cross-PJ 承認済み一致が先頭、続いて頻度降順 — #462）を1件ずつ**反映先つき4択で確認する（MUST — #475。最大5問を1バッチで）**。手順は下記「反映先つき4択（#475 §4）」を参照。
 - `daily.remaining > 0` なら「ほか {remaining} グループは次回以降に提示」を1行表示する
 
-`record_reviewed` は `dry_run=True`（ドライラン実行時）なら既読集合に書かない（最下層まで dry-run ゲートを貫通）。dry-run では確認の表示のみ行い、promote / 既読追記は行わない。
+### 反映先つき4択（#475 §4）
 
-`daily_review` も `correction_semantic` パッケージ配下なので、パッケージから import する（`import daily_review` 直 import は ModuleNotFoundError になる）。`decision` はキーワード専用引数:
+各 group について、**AskUserQuestion を呼ぶ前に agent が反映候補の起草行（`draft_line`）を作る**（§4.3。誰が書くかは常に agent の Edit/Write なので、順番を「選ばせた後」から「選ばせる前」に変えるだけ）。
+
+**0. 重複チェック（§4.5・設問枠を消費しない）**: `draft_line` を起草したら、既存の書き込み規約（[reflect/SKILL.md](../../reflect/SKILL.md) の「書き込み時のルール」）と同じ判断で候補ファイル（既存 rule ファイルのうち内容が近いもの）を1つ選び、`reflect_apply_match.check_line_applied` で正規化後一致を確認する:
+
+```python
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+from reflect_apply_match import check_line_applied
+result = check_line_applied(Path(candidate_file), draft_line)  # candidate_file は agent が選ぶ
+```
+
+一致すれば（`result["matched"] is True`）AskUserQuestion を出さず「この指摘は既に `{candidate_file}` に反映済みでした」と1行報告し、`PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --promote-weak <signal_keys> && evolve-reflect --apply <source_correction_id> --target-path <candidate_file> --draft-line-file <draft_line を書いたファイル>` を実行して `reflect_status` を直接 `applied` に更新する（§6.1 の同じゲートを通す）。一致しなければ下記の設問へ進む。
+
+**1. 設問**（`{idiom または representative}` は group の `idiom`（無ければ `representative`）、`{count}` は `evidence.count`。`cross_pj_confirmed` が非空なら「他PJ（{slug一覧}）で承認済み」を1文追加する）:
+
+```
+「{idiom または representative}」（{count}回{、他PJ（slug…）で承認済み}）
+
+書く文面（案）: {draft_line}
+
+この指摘を、どこに反映しますか？
+メモや落とし穴集に残したい場合は Other に記入してください。
+```
+
+**options（固定4択・順番を機械に決めさせない。label/detail はそのまま出す — § 番号・file:line・内部語を出さない）**:
+
+| # | label | detail |
+|---|---|---|
+| 1 | 共通ルールに書く（全PJで効く） | 次のセッションから全プロジェクトで効きます。あとで1コマンドで取り消せます（条件は反映時に表示）。 |
+| 2 | このPJのルールに書く | 次のセッションからこのプロジェクトだけで効きます。取り消しも同様です。 |
+| 3 | いまは反映しない（記録は残す） | 動作は変わりません。記録は消えず、5件たまったら見直しをまとめて案内します。 |
+| 4 | いいえ（この指摘は不要） | 記録も反映もしません。次回から出しません。 |
+
+Other は tool が自動付与する自由記述欄（`options` には含めない）。
+
+**2. 選択後の処理**:
+
+- **1（共通ルール）/ 2（PJルール）**:
+  1. `PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --promote-weak <group の signal_keys カンマ区切り>` で昇格する（従来どおり。出力は `promoted_keys`/`skipped`/`confirmed_idioms` を含む — 部分失敗時の扱いは下記「既読化」参照）。
+  2. 反映先ファイルを agent が判断する（既存の書き込み規約を流用・新しい選定ロジックは作らない）。**選んだ scope（共通=`~/.claude/rules/` / PJ=`<repo>/.claude/rules/`）の中に適切な既存ファイルが無く新規作成が必要と判明したら**、Edit/Write の**直前**に3択の追加確認を出す（§4.3.2）:
+
+     | # | label | detail |
+     |---|---|---|
+     | 1 | 新しく作る | このファイルは無いので新規作成します。**取り消せません**。 |
+     | 2 | 既存の `<候補ファイル>` に追記する（推奨） | 取り消せます。テーマが近い既存ファイルに1行追記します |
+     | 3 | やめる（記録だけ残す） | 反映しません。選択肢3と同じ扱いになります |
+
+     既存ファイルへの追記なら（1/2いずれの結果でも）この追加確認はスキップしてそのまま書く。3を選んだ場合は下の「3（いまは反映しない）」と同じ処理に切り替える。
+  3. Edit（既存ファイル末尾に1行追記）または Write（新規ファイル）で `draft_line` を書き込む。**Edit 前に対象ファイルの現在の全文を読み、一時ファイルに保存しておく**（取り消し記録に使う。ファイルが存在しない＝新規作成の場合は空文字列を保存する）。
+  4. `evolve-reflect --apply <source_correction_id> --target-path <書き込んだファイル> --draft-line-file <draft_line を書いたファイル> --before-content-file <手順3で保存した全文>` を呼び、実在確認を通過したことを確認する（`status == "applied"`）。`source_correction_id` は `--promote-weak` の出力に対応する correction の `session_id`/`timestamp` から `make_source_correction_id` で作る（`--view` 出力の `source_correction_id` と同一形式）。`apply_unverified` が返ったら書き込みに失敗している可能性があるため対象ファイルを再確認する。
+  5. 反映が完了したら「反映しました: `{target}`（1行追記）／取り消す場合: `bin/evolve-revert <entry_id>`／※このファイルをこの後さらに変更すると、この取り消しはできなくなります」を1行表示する（§4.3.1。新規作成のときは「取り消せません」に置き換える）。
+  6. 既読化: 出力の `promoted_keys`（実際に昇格された signal_key）のみを `daily_review.record_reviewed(promoted_keys, slug, decision="promoted", dry_run=dry_run)` に渡す（`skipped` が空でなければ部分失敗＝#326 と同じ扱いで既読追記しない）。
+- **3（いまは反映しない）**: `--promote-weak` で昇格するところまでは同じ（`reflect_status` は `promoted` のまま反映先ファイルへは書かない）。`daily_review.record_reviewed(promoted_keys, slug, decision="deferred", dry_run=dry_run)` で既読追記する（**次回の evolve では再提示しない**。保留は reflect のバッチレビューへ再浮上する — §5.1 / [reflect/SKILL.md](../../reflect/SKILL.md)）。
+- **4（いいえ）**: `--promote-weak` を呼ばない。`daily_review.record_reviewed(signal_keys, slug, decision="rejected", dry_run=dry_run)` で既読追記する（次回から再提示しない）。
+- **Other（skill / hook を書かれた場合の応答・§4.4）**: 自由記述の内容で分岐する。memory 関連→ 既存の memory 反映フロー（Step 7）へ。pitfall 関連 → 既存の pitfall-curate フロー（#471）へ。**skill 関連** → 「この場では反映されません。skill を直す場合は `/evolve-anything:evolve-skill <名前>` を実行してください」と案内する（既読追記しない・次回再提示）。**hook 関連** → 「hook への反映は自動化されていません。必要なら `hooks/` を手で編集してください」と案内する（既読追記しない）。**判断が付かない** → 「memory と pitfall のどちらに書きますか？」等、その場で1回だけ聞き返す（黙って対象外にしない）。
+- **Skip / 中断** → 既読追記しない（次回再提示）。evolve 全体は完走する。
+
+`record_reviewed` は `dry_run=True`（ドライラン実行時）なら既読集合に書かない（最下層まで dry-run ゲートを貫通）。`--dry-run` 実行では確認の表示のみ行い、promote / Edit・Write / 既読追記のいずれも行わない。
+
+`daily_review` / `reflect_apply_match` はいずれも `scripts/lib` 配下の module なので sys.path を通してから import する（直 import は ModuleNotFoundError になる）。`decision` はキーワード専用引数:
 
 ```python
 import os, sys
@@ -80,12 +137,15 @@ from correction_semantic import daily_review
 # resolve_slug() の再導出は read/write split-brain（既読除外不発）の原因になる。
 slug = result["correction_review"]["daily"]["slug"]
 
-# はい＝昇格の場合: --promote-weak の出力 promote_res の promoted_keys のみ既読追記する（#326）。
-# promote_res["skipped"]（{"signal_key": ..., "reason": ...}）が非空なら部分失敗＝その
-# signal_key は既読追記しない（次回再提示。requested と promoted の件数差がそのまま skipped 件数）。
+# 1/2（反映した）場合: promote_res の promoted_keys のみ既読追記する（#326）。
 res = daily_review.record_reviewed(
     promote_res["promoted_keys"], slug, decision="promoted", dry_run=dry_run
 )
-# 却下時（いいえ）は promote を呼ばず signal_keys 全件を decision="rejected" で既読追記する。
+# 3（いまは反映しない）の場合: decision="deferred" で既読化するが reflect_status は
+# promoted のまま反映先へは書かない（#475 §5.1）。
+res = daily_review.record_reviewed(
+    promote_res["promoted_keys"], slug, decision="deferred", dry_run=dry_run
+)
+# 4（いいえ）の場合は promote を呼ばず signal_keys 全件を decision="rejected" で既読追記する。
 # res == {"written": int, "dry_run": bool}
 ```

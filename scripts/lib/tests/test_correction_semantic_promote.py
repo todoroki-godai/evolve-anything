@@ -353,7 +353,9 @@ def test_promote_writes_human_source_correction(tmp_path: Path) -> None:
     assert len(corr_recs) == 2
     # human-source で書かれる（フェーズ昇格カウント対象）
     assert all(r["source"] == "reflect_confirmed" for r in corr_recs)
-    assert all(r["reflect_status"] == "applied" for r in corr_recs)
+    # #475 §6: 昇格直後は「反映先未定」の promoted。applied は反映先ファイルへの
+    # 実在確認を通過してから reflect.py の update_reflect_status が付ける。
+    assert all(r["reflect_status"] == "promoted" for r in corr_recs)
     # #593: project_path は書込時に worktree 安全 slug へ正規化される
     # （/Users/x/evolve-anything → basename evolve-anything）。
     assert all(r.get("project_path") == "evolve-anything" for r in corr_recs)

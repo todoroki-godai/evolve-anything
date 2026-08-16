@@ -27,6 +27,7 @@ def _make_correction(
     project_path=None,
     timestamp=None,
     extracted_learning=None,
+    session_id=None,
 ):
     """テスト用 correction レコードを生成する。"""
     record = {
@@ -39,6 +40,8 @@ def _make_correction(
     }
     if extracted_learning:
         record["extracted_learning"] = extracted_learning
+    if session_id:
+        record["session_id"] = session_id
     return record
 
 
@@ -58,17 +61,22 @@ def _fresh_detected_at() -> str:
 # --- Test: extract_pending ---
 
 class TestExtractPending:
-    def test_pending_only(self):
-        """pending のみ返す。"""
+    def test_pending_and_promoted_only(self):
+        """#475 §5.1: pending と promoted（昇格済み・反映先未定）を返す。
+
+        applied/skipped は拾わない。promoted を落とすと「いまは反映しない」を選んだ
+        保留が reflect のバッチレビューから永久に消える（§5.1 の穴の再発）。
+        """
         records = [
             _make_correction(reflect_status="pending"),
             _make_correction(reflect_status="applied"),
             _make_correction(reflect_status="skipped"),
             _make_correction(reflect_status="pending"),
+            _make_correction(reflect_status="promoted"),
         ]
         result = reflect.extract_pending(records)
-        assert len(result) == 2
-        assert all(r["reflect_status"] == "pending" for r in result)
+        assert len(result) == 3
+        assert {r["reflect_status"] for r in result} == {"pending", "promoted"}
 
     def test_missing_status_treated_as_pending(self):
         """reflect_status がないレコードは pending として扱う。"""
@@ -284,6 +292,23 @@ class TestSkipAllMode:
         assert updated[1]["reflect_status"] == "applied"
         assert updated[2]["reflect_status"] == "skipped"
 
+    def test_skip_all_includes_promoted(self, tmp_path):
+        """#475 §5.1: --skip-all の対象は pending だけでなく promoted も含めて畳める。"""
+        corrections = [
+            _make_correction(reflect_status="pending"),
+            _make_correction(reflect_status="promoted"),
+            _make_correction(reflect_status="applied"),
+        ]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        with mock.patch("sys.argv", ["reflect.py", "--skip-all", "--corrections-file", str(filepath)]):
+            reflect.main()
+
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "skipped"
+        assert updated[1]["reflect_status"] == "skipped"
+        assert updated[2]["reflect_status"] == "applied"
+
     def test_skip_all_empty(self, tmp_path):
         """pending が空なら更新しない。"""
         filepath = tmp_path / "corrections.jsonl"
@@ -449,19 +474,88 @@ class TestLoadCorrections:
 
 class TestUpdateReflectStatus:
     def test_update_specific_indices(self, tmp_path):
-        """指定インデックスのみ更新する。"""
+        """指定インデックスのみ更新する（"applied" 以外の status には target_path/draft_line 不要）。"""
         corrections = [
             _make_correction(message="msg0"),
             _make_correction(message="msg1"),
             _make_correction(message="msg2"),
         ]
         filepath = _write_corrections(tmp_path, corrections)
-        reflect.update_reflect_status(filepath, [0, 2], "applied")
+        reflect.update_reflect_status(filepath, [0, 2], "skipped")
 
         updated = reflect.load_corrections(filepath)
-        assert updated[0]["reflect_status"] == "applied"
+        assert updated[0]["reflect_status"] == "skipped"
         assert updated[1]["reflect_status"] == "pending"
-        assert updated[2]["reflect_status"] == "applied"
+        assert updated[2]["reflect_status"] == "skipped"
+
+    def test_skip_all_signature_unchanged(self, tmp_path):
+        """既存 --skip-all 呼び出し（target_path/draft_line 省略）が無改修で動く（MUST）。"""
+        corrections = [_make_correction(message="msg0")]
+        filepath = _write_corrections(tmp_path, corrections)
+        result = reflect.update_reflect_status(filepath, [0], "skipped")
+        assert result["status"] == "skipped"
+
+    def test_applied_without_target_path_raises(self, tmp_path):
+        """#475 §6.1 関数契約: status="applied" は target_path/draft_line が必須。"""
+        corrections = [_make_correction(message="msg0")]
+        filepath = _write_corrections(tmp_path, corrections)
+        with pytest.raises(ValueError):
+            reflect.update_reflect_status(filepath, [0], "applied")
+
+    def test_applied_without_draft_line_raises(self, tmp_path):
+        corrections = [_make_correction(message="msg0")]
+        filepath = _write_corrections(tmp_path, corrections)
+        with pytest.raises(ValueError):
+            reflect.update_reflect_status(
+                filepath, [0], "applied", target_path=str(tmp_path / "rule.md"),
+            )
+
+    def test_applied_when_line_matches_target_file(self, tmp_path):
+        """#475 §6.1: 反映先ファイルに該当行が実在すれば applied を書く。"""
+        corrections = [_make_correction(message="msg0")]
+        filepath = _write_corrections(tmp_path, corrections)
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行そのもの\n", encoding="utf-8")
+
+        result = reflect.update_reflect_status(
+            filepath, [0], "applied",
+            target_path=str(target), draft_line="起草した行そのもの",
+        )
+
+        assert result["status"] == "applied"
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "applied"
+
+    def test_apply_unverified_when_line_absent(self, tmp_path):
+        """#475 §6.1: 反映先ファイルに該当行が無ければ applied を書かず promoted のまま残す。"""
+        corrections = [_make_correction(message="msg0", reflect_status="promoted")]
+        filepath = _write_corrections(tmp_path, corrections)
+        target = tmp_path / "rule.md"
+        target.write_text("- 別の行\n", encoding="utf-8")
+
+        result = reflect.update_reflect_status(
+            filepath, [0], "applied",
+            target_path=str(target), draft_line="書いていない行",
+        )
+
+        assert result["status"] == "apply_unverified"
+        updated = reflect.load_corrections(filepath)
+        # 黙って成功にしない: reflect_status は変更されない
+        assert updated[0]["reflect_status"] == "promoted"
+
+    def test_apply_unverified_when_target_missing(self, tmp_path):
+        corrections = [_make_correction(message="msg0", reflect_status="promoted")]
+        filepath = _write_corrections(tmp_path, corrections)
+        target = tmp_path / "does-not-exist.md"
+
+        result = reflect.update_reflect_status(
+            filepath, [0], "applied",
+            target_path=str(target), draft_line="何かの行",
+        )
+
+        assert result["status"] == "apply_unverified"
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "promoted"
 
 
 # --- Test: build_output ---
@@ -530,6 +624,208 @@ class TestCLI:
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["status"] == "empty"
+
+
+# --- Test: --apply CLI (#475 §6.1) ---
+
+class TestApplyCLI:
+    def test_apply_marks_applied_when_line_matches(self, tmp_path, capsys):
+        """反映先ファイルに該当行が実在すれば applied を書く。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "applied"
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "applied"
+
+    def test_apply_unverified_when_line_missing(self, tmp_path, capsys):
+        """反映先ファイルに該当行が無ければ apply_unverified を返し promoted のまま残す。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        target = tmp_path / "rule.md"
+        target.write_text("- 別の行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("書いていない行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "apply_unverified"
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "promoted"
+
+    def test_apply_not_found(self, tmp_path, capsys):
+        """source_correction_id に一致する correction が無ければ not_found。"""
+        filepath = _write_corrections(tmp_path, [_make_correction(session_id="sess1", timestamp="2026-08-17T00:00:00Z")])
+        target = tmp_path / "rule.md"
+        target.write_text("- x\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("x", encoding="utf-8")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", "no-such-id",
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+
+    def test_apply_missing_target_path_errors(self, tmp_path, capsys):
+        """--target-path/--draft-line-file を欠くと error で終了する。"""
+        filepath = _write_corrections(tmp_path, [_make_correction()])
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", "some-id", "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+
+    def test_apply_dry_run_writes_nothing(self, tmp_path, capsys):
+        """--dry-run では一切書かない（既存 dry-run ゲート貫通規約）。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        before_bytes = filepath.read_bytes()
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--dry-run", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "dry_run"
+        assert filepath.read_bytes() == before_bytes
+
+
+# --- Test: 取り消し記録（#475 §8.2） ---
+
+class TestRuleRevertRecording:
+    def test_global_rule_scope_detected(self, tmp_path):
+        """~/.claude/rules 配下は global_rule scope になる。"""
+        target = Path.home() / ".claude" / "rules" / "some-rule.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 行\n", encoding="utf-8")
+        identity = reflect._rule_scope_identity(str(target))
+        assert identity["scope"] == "global_rule"
+        assert identity["relative_path"] == "some-rule.md"
+
+    def test_non_rule_path_returns_none(self, tmp_path):
+        """rules 配下でないファイルは記録対象外（None）。"""
+        target = tmp_path / "not-a-rule.md"
+        target.write_text("x\n", encoding="utf-8")
+        identity = reflect._rule_scope_identity(str(target))
+        assert identity is None
+
+    def test_record_rule_revert_entry_writes_optimize_history(self, tmp_path):
+        """revert 記録が optimize_history の既存フォーマットで1件 append される。"""
+        target = Path.home() / ".claude" / "rules" / "some-rule.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+
+        result = reflect.record_rule_revert_entry(
+            str(target),
+            before_content="- 既存行\n",
+            after_content=target.read_text(encoding="utf-8"),
+            pj_slug="test-slug",
+        )
+        assert result is not None
+        assert result["written"] is True
+
+        from optimize_history_store import history_path
+        entries = [
+            json.loads(l) for l in history_path("test-slug").read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["scope"] == "global_rule"
+        assert entry["relative_path"] == "some-rule.md"
+        assert "revert_before_b64" in entry
+        assert "revert_schema_version" in entry
+
+    def test_record_rule_revert_entry_none_for_non_rule_target(self, tmp_path):
+        target = tmp_path / "not-a-rule.md"
+        target.write_text("x\n", encoding="utf-8")
+        result = reflect.record_rule_revert_entry(
+            str(target), before_content="", after_content="x\n", pj_slug="test-slug",
+        )
+        assert result is None
+
+    def test_apply_cli_records_revert_when_before_content_file_given(self, tmp_path, capsys):
+        """--apply に --before-content-file を渡すと revert_recorded=True になる。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        target = Path.home() / ".claude" / "rules" / "apply-record.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        before_content_file = tmp_path / "before.txt"
+        before_content_file.write_text("- 既存行\n", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--before-content-file", str(before_content_file),
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "applied"
+        assert output["revert_recorded"] is True
+
+    def test_apply_cli_without_before_content_file_skips_recording(self, tmp_path, capsys):
+        """--before-content-file 省略時は applied 判定のみで revert_recorded キーを持たない。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "applied"
+        assert "revert_recorded" not in output
 
 
 # --- Test: weak_signals レーンは view-only 診断・昇格は evolve へ委譲（#117） ---

@@ -368,7 +368,10 @@ def _build_correction_record(
         "sentiment": "correction",
         "routing_hint": None,
         "guardrail": False,
-        "reflect_status": "applied",
+        # #475 §6: "applied" は反映先ファイルに該当行が実在すると確認できたときだけ
+        # reflect.py の update_reflect_status が付ける。ここは「昇格済み・反映先未定」の
+        # "promoted" を書く（旧 "applied" 直書きは §6.1 が塞ぐ迂回口だった）。
+        "reflect_status": "promoted",
         "extracted_learning": None,
         # #593: 書込境界で worktree 安全 slug に正規化（幻PJ slug 混入防止）。
         "project_path": _normalize_project_path(project_path),

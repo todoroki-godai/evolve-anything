@@ -20,6 +20,7 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
 from memory_temporal import make_source_correction_id
+from reflect_apply_match import check_line_applied
 from reflect_utils import (
     read_all_memory_entries,
     read_auto_memory,
@@ -124,10 +125,15 @@ def load_corrections(filepath: Path = CORRECTIONS_FILE) -> list[dict]:
 
 
 def extract_pending(records: list[dict]) -> list[dict]:
-    """reflect_status が pending のレコードのみ抽出する。"""
+    """reflect_status が pending / promoted のレコードを抽出する。
+
+    #475 §5.1: promoted（昇格済み・反映先未定＝「いまは反映しない」を選んだ保留）を
+    落とすと、朝の設問からも reflect のバッチレビューからも永久に消える（P3/P4 の
+    穴が形を変えて再発する）。
+    """
     return [
         r for r in records
-        if r.get("reflect_status", "pending") == "pending"
+        if r.get("reflect_status", "pending") in ("pending", "promoted")
     ]
 
 
@@ -467,20 +473,133 @@ def apply_semantic_validation(
     return validated
 
 
+def _rule_scope_identity(target_path: str) -> dict | None:
+    """反映先ファイルの scope（"global_rule" / "project_rule"）を判定する（#475 §8.2）。
+
+    `~/.claude/rules/` 配下 → "global_rule"、`<repo>/.claude/rules/` 配下 → "project_rule"。
+    どちらでもなければ None（revert 記録の対象外 — 新規スキル/hook 等は既存 §8.2 の
+    スコープ外）。`repo_id`/`relative_path` の解決は skill revert と同じ
+    `evolve_decision_ids.repo_identity` を再利用する（新しい git 解決ロジックを増やさない）。
+    """
+    p = Path(target_path).expanduser()
+    try:
+        rel_to_global = p.resolve().relative_to((Path.home() / ".claude" / "rules").resolve())
+        return {"scope": "global_rule", "repo_id": None, "relative_path": str(rel_to_global)}
+    except (ValueError, OSError):
+        pass
+
+    from evolve_decision_ids import repo_identity as _repo_identity
+
+    identity = _repo_identity(str(p))
+    rel = identity.get("relative_path") or ""
+    if identity.get("repo_id") and rel.replace("\\", "/").startswith(".claude/rules/"):
+        return {
+            "scope": "project_rule",
+            "repo_id": identity["repo_id"],
+            "relative_path": rel,
+        }
+    return None
+
+
+def record_rule_revert_entry(
+    target_path: str,
+    before_content: str,
+    after_content: str,
+    *,
+    pj_slug: str | None = None,
+) -> dict | None:
+    """既存 rule ファイルへの追記を optimize_history へ記録する（#475 §8.2・決定4）。
+
+    `bin/evolve-revert`（B レーン）が読む既存フォーマット（`revert_schema_version` /
+    `revert_before_b64` / `relative_path` / `scope`）に合わせて1件 append する。scope が
+    "global_rule"/"project_rule" と判定できない対象（新規スキル/hook 等）は記録しない。
+    冪等性（同一 id の二重記録防止）は `append_history_entry_deduped` に委譲する。
+    """
+    identity = _rule_scope_identity(target_path)
+    if identity is None:
+        return None
+
+    from evolve_decision_ids import (
+        REVERT_ENCODING,
+        REVERT_SCHEMA_VERSION,
+        compress_before_for_revert,
+        sha256 as _sha256,
+    )
+    from optimize_history_store import append_history_entry_deduped
+    from pj_slug import resolve_pj_slug as _resolve_pj_slug
+
+    before_sha = _sha256(before_content)
+    after_sha = _sha256(after_content)
+    before_b64, unavailable_reason = compress_before_for_revert(before_content)
+
+    entry_id = "rule_apply_" + _sha256(
+        f"{identity['scope']}\n{identity['relative_path']}\n{before_sha}"
+    )[:16]
+    entry = {
+        "id": entry_id,
+        "skill_name": identity["relative_path"],
+        "scope": identity["scope"],
+        "relative_path": identity["relative_path"],
+        "repo_id": identity["repo_id"],
+        "after_sha": after_sha,
+        "revert_schema_version": REVERT_SCHEMA_VERSION,
+        "revert_encoding": REVERT_ENCODING,
+        "revert_generation": 0,
+    }
+    if before_b64 is not None:
+        entry["revert_before_b64"] = before_b64
+    else:
+        entry["revert_unavailable_reason"] = unavailable_reason
+
+    slug = pj_slug or _resolve_pj_slug(str(Path.cwd()))
+    written_entry, written = append_history_entry_deduped(entry, slug)
+    return {"id": written_entry.get("id", entry_id), "written": written}
+
+
 def update_reflect_status(
     filepath: Path,
     indices: list[int],
     status: str,
-) -> None:
+    *,
+    target_path: str | None = None,
+    draft_line: str | None = None,
+) -> dict:
     """corrections.jsonl の指定行の reflect_status を更新する。
+
+    status="applied" のときのみ target_path/draft_line が必須（無ければ ValueError）。
+    §6.2 の正規化規則（reflect_apply_match.check_line_applied）で target_path を読み、
+    draft_line の完全一致を確認してから書く。不一致なら reflect_status は変更せず
+    {"status": "apply_unverified", ...} を返す（#475 §6.1 — 黙って成功にしない）。
+    status="skipped" 等は従来どおり target_path/draft_line 不要（既存 --skip-all は
+    無改修で動く）。
 
     Args:
         filepath: corrections.jsonl のパス。
         indices: 更新対象の行インデックス（0始まり、全レコード中の位置）。
         status: 新しい reflect_status 値。
+        target_path: status="applied" のときのみ必須。反映先ファイルのパス。
+        draft_line: status="applied" のときのみ必須。起草行の全文（照合用）。
+
+    Returns:
+        {"status": "applied" | "apply_unverified" | <status>, "target": str | None,
+         "reason": str | None}
     """
+    if status == "applied":
+        if target_path is None or draft_line is None:
+            raise ValueError(
+                "update_reflect_status(status='applied') には target_path と "
+                "draft_line が必須です（#475 §6.1）"
+            )
+        match = check_line_applied(Path(target_path), draft_line)
+        if not match["matched"]:
+            return {
+                "status": "apply_unverified",
+                "target": target_path,
+                "reason": match["reason"],
+            }
+
     if not filepath.exists() or not indices:
-        return
+        return {"status": status, "target": target_path, "reason": None}
 
     lines = filepath.read_text(encoding="utf-8").splitlines()
     index_set = set(indices)
@@ -498,6 +617,7 @@ def update_reflect_status(
             updated_lines.append(line)
 
     filepath.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+    return {"status": status, "target": target_path, "reason": None}
 
 
 def load_recent_error_classes(
@@ -753,6 +873,19 @@ def main():
     parser.add_argument("--promote-episodic", action="store_true", help="指定 correction を episodic 層に昇格")
     parser.add_argument("--session-id", type=str, default=None, help="--promote-episodic: 昇格する correction の session_id")
     parser.add_argument("--timestamp", type=str, default=None, help="--promote-episodic: 昇格する correction の timestamp")
+    parser.add_argument("--apply", type=str, default=None, metavar="SOURCE_CORRECTION_ID",
+                        help="#475 §6.1: 指定 correction（make_source_correction_id 形式の"
+                             "source_correction_id）を、--target-path に該当行が実在するか"
+                             "確認してから applied にする。1呼び出し=1 correction 固定")
+    parser.add_argument("--target-path", type=str, default=None,
+                        help="--apply: 反映先ファイル（絶対 or リポジトリ相対）")
+    parser.add_argument("--draft-line-file", type=str, default=None,
+                        help="--apply: 起草行の全文を含む一時ファイルのパス（シェル引数の"
+                             "クォート/エスケープ事故を避けるため、テキストを直接渡さない）")
+    parser.add_argument("--before-content-file", type=str, default=None,
+                        help="--apply: Edit 前に読んだ --target-path の全文を含むファイル"
+                             "（任意）。渡すと #475 §8.2 の取り消し記録（optimize_history）を"
+                             "残す。省略時は applied 判定のみ行い記録は残さない")
     parser.add_argument("--show-weak-signals", action="store_true",
                         help="weak_signals レーンの未昇格レコードを view-only 表示（診断・#431/#432 二層化。"
                              "確認/昇格は evolve の今日の修正確認 phase へ・#117）")
@@ -957,6 +1090,72 @@ def main():
         }, ensure_ascii=False, indent=2))
         return
 
+    # --apply: 指定 correction を反映先ファイルへの実在確認後に applied にする（#475 §6.1）。
+    # promote.py / SKILL.md 手順が直接 "applied" を書く迂回口を塞ぐ唯一の入口。
+    if args.apply:
+        if not args.target_path or not args.draft_line_file:
+            print(json.dumps({
+                "status": "error",
+                "message": "--target-path と --draft-line-file が必要です",
+            }, ensure_ascii=False))
+            sys.exit(1)
+        draft_line_path = Path(args.draft_line_file)
+        if not draft_line_path.exists():
+            print(json.dumps({
+                "status": "error",
+                "message": f"--draft-line-file が見つかりません: {draft_line_path}",
+            }, ensure_ascii=False))
+            sys.exit(1)
+        draft_line = draft_line_path.read_text(encoding="utf-8").rstrip("\n")
+
+        all_records = load_corrections(corrections_file)
+        target_index = None
+        for i, r in enumerate(all_records):
+            sid = r.get("session_id", "")
+            ts = r.get("timestamp", "")
+            if sid and ts and make_source_correction_id(sid, ts) == args.apply:
+                target_index = i
+                break
+        if target_index is None:
+            print(json.dumps({
+                "status": "not_found",
+                "message": "対象 correction が見つかりません",
+            }, ensure_ascii=False))
+            sys.exit(1)
+
+        if args.dry_run:
+            # --dry-run では一切書かない（既存 dry-run ゲート貫通規約）。
+            print(json.dumps({
+                "status": "dry_run",
+                "target": args.target_path,
+                "source_correction_id": args.apply,
+            }, ensure_ascii=False, indent=2))
+            return
+
+        result = update_reflect_status(
+            corrections_file, [target_index], "applied",
+            target_path=args.target_path, draft_line=draft_line,
+        )
+        # #475 §8.2: --before-content-file が渡され、かつ実際に applied になったときのみ
+        # revert 記録を残す（任意入力・省略時は記録なし。呼び出し側は agent の Edit 前に
+        # 読んだ全文をファイルに保存して渡す）。
+        if result.get("status") == "applied" and args.before_content_file:
+            before_path = Path(args.before_content_file)
+            if before_path.exists():
+                before_content = before_path.read_text(encoding="utf-8")
+                after_content = Path(args.target_path).read_text(encoding="utf-8")
+                from pj_slug import resolve_pj_slug as _resolve_pj_slug_cli
+                revert_res = record_rule_revert_entry(
+                    args.target_path, before_content, after_content,
+                    pj_slug=_resolve_pj_slug_cli(current_project or str(project_root)),
+                )
+                result["revert_recorded"] = revert_res is not None
+        print(json.dumps({
+            "source_correction_id": args.apply,
+            **result,
+        }, ensure_ascii=False, indent=2))
+        return
+
     # --promote-episodic: 指定 session_id + timestamp の correction を episodic に昇格
     if args.promote_episodic:
         if not args.session_id or not args.timestamp:
@@ -1000,10 +1199,10 @@ def main():
         if not pending:
             print(json.dumps({"status": "empty", "message": "未処理の修正はありません"}, ensure_ascii=False, indent=2))
             return
-        # pending のインデックスを特定（全レコード中の位置）
+        # pending + promoted のインデックスを特定（全レコード中の位置。#475 §5.1）
         pending_indices = [
             i for i, r in enumerate(all_records)
-            if r.get("reflect_status", "pending") == "pending"
+            if r.get("reflect_status", "pending") in ("pending", "promoted")
         ]
         if not args.dry_run:
             update_reflect_status(corrections_file, pending_indices, "skipped")
