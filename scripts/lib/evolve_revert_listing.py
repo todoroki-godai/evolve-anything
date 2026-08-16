@@ -25,16 +25,22 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from optimize_history_store import load_effective_history, resolve_slug
-from evolve_revert import REASON_LABELS, compute_revert_availability
+from evolve_revert import REASON_LABELS, compute_revert_availability, detect_subsequent_change
 from results_board import classify_decision
 
 
 def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
     """slug の accepted entry を revert 可否つきで新しい順に列挙する。
 
+    #475 §8.2: revert 可能（``revert_available=True``）な entry に限り、対象ファイルへの
+    後続変更（採用直後の内容からも変更前の内容からも既に変わっている状態）を
+    ``evolve_revert.detect_subsequent_change`` で read-only 判定する
+    （``compute_revert_availability`` 自体は変更しない・別レイヤーとして追加）。
+
     Returns:
         各要素 ``{entry_id, skill_name, target, scope, timestamp, revert_available,
-        revert_unavailable_reason}``。
+        revert_unavailable_reason, subsequent_change}``。``subsequent_change`` は
+        ``revert_available=False`` の entry では判定対象外のため常に ``None``。
     """
     if slug is None:
         slug = resolve_slug()
@@ -49,6 +55,7 @@ def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
         if classify_decision(entry) != "accepted":
             continue
         available, reason = compute_revert_availability(entry)
+        subsequent_change = detect_subsequent_change(entry) if available else None
         items.append({
             "entry_id": entry.get("id"),
             "skill_name": entry.get("skill_name") or entry.get("target") or "(unknown)",
@@ -57,6 +64,7 @@ def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
             "timestamp": entry.get("timestamp"),
             "revert_available": available,
             "revert_unavailable_reason": reason,
+            "subsequent_change": subsequent_change,
         })
 
     # timestamp 欠落は最古扱い（末尾）にする。新しい順（reverse=True）と組合わせ、
@@ -70,18 +78,27 @@ def render_revert_listing(items: List[Dict[str, Any]]) -> List[str]:
     if not items:
         return ["採用の記録はありません（0件）"]
 
-    available_count = sum(1 for it in items if it["revert_available"])
-    unavailable_count = len(items) - available_count
+    # 「戻せる」件数は後続変更ありの entry を除く（§8.2: 同ファイルへの後続変更が
+    # あると conflict で戻せなくなるため、集計もそれを反映する）。
+    revertible_count = sum(
+        1 for it in items if it["revert_available"] and not it.get("subsequent_change")
+    )
+    unavailable_count = len(items) - revertible_count
 
     lines = [
-        f"採用 {len(items)} 件（戻せる {available_count} 件 / 戻せない {unavailable_count} 件）",
+        f"採用 {len(items)} 件（戻せる {revertible_count} 件 / 戻せない {unavailable_count} 件）",
         "",
     ]
     for it in items:
         ts = (it.get("timestamp") or "")[:10] or "(日時不明)"
         entry_id = it.get("entry_id") or "(id不明)"
         skill = it.get("skill_name")
-        if it["revert_available"]:
+        if it["revert_available"] and it.get("subsequent_change"):
+            lines.append(
+                f"[戻せません] {entry_id}  {ts}  {skill} — "
+                "このファイルはその後さらに変更されたため後続変更ありで戻せません"
+            )
+        elif it["revert_available"]:
             lines.append(f"[戻せる] {entry_id}  {ts}  {skill}")
             lines.append(
                 f"    bin/evolve-revert {entry_id}            # 何が起きるか確認（既定 dry-run）"

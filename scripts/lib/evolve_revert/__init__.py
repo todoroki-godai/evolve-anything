@@ -52,7 +52,7 @@ from ._render import (  # noqa: E402,F401
     render_metadata_loss_rejection,
 )
 from ._dump import DumpResult, dump_before  # noqa: E402,F401
-from ._apply import ApplyResult, apply_revert  # noqa: E402,F401
+from ._apply import ApplyResult, apply_revert, detect_subsequent_change  # noqa: E402,F401
 from ._availability import (  # noqa: E402,F401
     REASON_BEFORE_TOO_LARGE,
     REASON_LABELS,

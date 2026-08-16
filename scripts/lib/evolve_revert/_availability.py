@@ -15,13 +15,16 @@ listing 時点（apply 前）に、accept entry がそもそも revert 可能な
                            ``optimize.py`` の ``save_history_entry`` / ``run_loop.py``）
                            による entry。revert フィールド（``revert_schema_version`` 等）
                            が一切無い。**恒久的に戻せない**（今後もデータは増えない）。
-  - ``lane_unsupported``:  skill lane 以外の採用（rules / hooks 等）。**現行データでは
-                           到達しない予約コード** — ADR-041 により remediation（rules/
-                           hooks の採用）は ``optimize_history`` へ一切書き込まれない
-                           （``evolve_decisions/_candidates.py::_extract_candidates`` の
-                           docstring・``_ingest.py`` の advisory 分離を実測確認）ため、
-                           現行の ``optimize_history`` は構造的に skill lane のみで
-                           構成される。scope の取りうる値が将来増えた場合に備える。
+  - ``lane_unsupported``:  skill / rule lane 以外の採用（hooks 等）。ADR-041 により
+                           remediation 経由の rules/hooks 採用は ``optimize_history``
+                           へ一切書き込まれない（``evolve_decisions/_candidates.py::
+                           _extract_candidates`` の docstring・``_ingest.py`` の
+                           advisory 分離を実測確認）。#475 §8.2 で朝の設問の反映先
+                           （rule 反映）が別経路で ``optimize_history`` へ
+                           ``scope="global_rule"``/``"project_rule"`` entry を append
+                           するようになったため、``_SUPPORTED_SCOPES`` は
+                           ``("global", "project", "global_rule", "project_rule")``。
+                           それ以外の scope（hooks 等・将来値）は本コードに落ちる。
   - ``before_too_large``:  emit 時の圧縮後サイズが上限を超え本文を保存できなかった
                            （``evolve_decision_ids.REVERT_REASON_BEFORE_TOO_LARGE`` と
                            同一コード。二重定義を避けるためそこから import する）。
@@ -38,7 +41,8 @@ REASON_BEFORE_TOO_LARGE = REVERT_REASON_BEFORE_TOO_LARGE
 
 # apply engine（_target.resolve_target）が受け付ける scope と同じ集合。ここでの
 # 判定は listing 時点の静的チェックなので、apply 側の root 解決は行わない。
-_SUPPORTED_SCOPES = ("global", "project")
+# global_rule/project_rule（#475 §8.2: 既存 rule ファイルへの追記のみ revert 対応）を追加。
+_SUPPORTED_SCOPES = ("global", "project", "global_rule", "project_rule")
 
 REASON_LABELS: Dict[str, str] = {
     REASON_PRE_EXTENSION: (

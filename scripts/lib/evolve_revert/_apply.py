@@ -222,6 +222,38 @@ def _restore_normal(
             tmp_path.unlink()
 
 
+def detect_subsequent_change(entry: Dict[str, Any]) -> bool:
+    """#475 §8.2 後続変更検知（read-only・``--list`` 表示用）。
+
+    対象ファイルの**現在の内容**が、採用直後の内容（``after_sha``）とも変更前の内容
+    （``revert_before_b64`` から復元した ``before_sha``）とも一致しない場合に True を返す
+    （= ``bin/evolve-revert`` を実行すると ``BRANCH_CONFLICT`` になり戻せない）。
+
+    ``apply_revert._do()`` の3分岐判定（本モジュール ``BRANCH_NORMAL``/``BRANCH_IDEMPOTENT``/
+    ``BRANCH_CONFLICT``・手順294-301相当）と**同一ロジックを再実装せず流用する**（単一ソース）。
+    apply と違い、対象ファイル・history lock・temp のいずれにも一切書込まない（read-only）。
+
+    判定材料が揃わない場合（対象パス解決失敗・``after_sha``/``revert_before_b64`` 欠落）は
+    安全側（戻せない扱い＝True）に倒す。
+    """
+    before_b64 = entry.get("revert_before_b64")
+    after_sha = entry.get("after_sha")
+    if not before_b64 or not after_sha:
+        return True
+
+    resolution = resolve_target(entry)
+    if not resolution.ok or resolution.path is None:
+        return True
+
+    _current_text, current_sha, _current_raw = _read_current(resolution.path)
+    if current_sha == after_sha:
+        return False
+
+    before_content = decompress_before_content(before_b64)
+    before_sha = sha256(before_content)
+    return current_sha != before_sha
+
+
 def apply_revert(
     entry_id: str,
     *,

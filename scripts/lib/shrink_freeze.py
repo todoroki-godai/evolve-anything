@@ -49,7 +49,8 @@ SHRINK_FREEZE_ACTIVE: bool = True
 # fleet-config.json / agent-brushup-state.json / skill-evolve-denylist.json /
 # pj_slug_cache.json / skill-evolve-cache.json）。round2（#399 codex Must 2）で
 # さらに4件追加（evolve-queue.json / icebox-status.json / icebox-verdicts.json /
-# evolve-proposals-<date>.json）。これらは Step 1 凍結より前から実際に書き込まれ
+# evolve-proposals-<date>.json）。#475 §12 決定4 でさらに1件追加
+# （optimize_history/<slug>.jsonl）。これらは Step 1 凍結より前から実際に書き込まれ
 # 続けていた live store で、store_registry への宣言が単に漏れていただけ（#121 の
 # legacy backfill と同型）。round2 の4件はかつて「read 専用派生物のため
 # store_registry には登録しない」と各所に明記していたが、これは事前契約ゲート
@@ -83,6 +84,7 @@ FROZEN_STORES: FrozenSet[str] = frozenset(
         "icebox-verdicts.json",
         "icebox_verdict_seen.jsonl",
         "memory_transition_checks.jsonl",
+        "optimize_history/<slug>.jsonl",
         "pj_slug_cache.json",
         "quality-baselines.jsonl",
         "remediation-outcomes.jsonl",

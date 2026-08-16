@@ -19,7 +19,7 @@ import pytest  # noqa: E402
 
 import evolve_decision_ids as ids  # noqa: E402
 import optimize_history_store as store  # noqa: E402
-from evolve_revert._apply import apply_revert  # noqa: E402
+from evolve_revert._apply import apply_revert, detect_subsequent_change  # noqa: E402
 
 
 def _write_history(dir_: Path, slug: str, records: list) -> None:
@@ -496,6 +496,91 @@ def test_apply_success_message_includes_n1_notice(tmp_path, monkeypatch):
 
     assert "戻しました" in result.message
     assert "また提案されることがあります" in result.message
+
+
+# ─── detect_subsequent_change（§8.2 後続変更検知・--list 表示用・read-only）─────
+#
+# _apply.py:294-301 の3分岐判定（== after_sha / == before_sha / どちらでもない）を
+# apply（書込）せず listing 時点で流用する。単一ソース: 新しい判定ロジックを
+# 再実装しない。
+
+
+def test_detect_subsequent_change_false_when_current_matches_after_sha(tmp_path, monkeypatch):
+    """current == after_sha（採用直後から変わっていない）→ 戻せる（False）。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after-content\n")
+    entry = _accept_entry("x1", "before-content\n", "after-content\n", target)
+
+    assert detect_subsequent_change(entry) is False
+
+
+def test_detect_subsequent_change_false_when_current_matches_before_sha(tmp_path, monkeypatch):
+    """current == before_sha（既に手動で戻っている＝冪等）→ 戻せる（False）。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "before-content\n")
+    entry = _accept_entry("x1", "before-content\n", "after-content\n", target)
+
+    assert detect_subsequent_change(entry) is False
+
+
+def test_detect_subsequent_change_true_when_current_matches_neither(tmp_path, monkeypatch):
+    """current がどちらとも一致しない（後続で別の変更が入った）→ 戻せない（True）。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "someone-else-changed-this\n")
+    entry = _accept_entry("x1", "before-content\n", "after-content\n", target)
+
+    assert detect_subsequent_change(entry) is True
+
+
+def test_detect_subsequent_change_is_read_only(tmp_path, monkeypatch):
+    """判定は対象ファイル・history のいずれにも書込まない。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "someone-else-changed-this\n")
+    entry = _accept_entry("x1", "before-content\n", "after-content\n", target)
+    before_bytes = target.read_bytes()
+    before_mtime = target.stat().st_mtime
+
+    detect_subsequent_change(entry)
+
+    assert target.read_bytes() == before_bytes
+    assert target.stat().st_mtime == before_mtime
+    leftovers = [p for p in target.parent.iterdir() if p.name.startswith(".SKILL.md.")]
+    assert leftovers == []
+
+
+def test_detect_subsequent_change_true_when_target_unresolvable(tmp_path, monkeypatch):
+    """対象パスを解決できない場合は安全側（戻せない扱い）に倒す。"""
+    _setup(tmp_path, monkeypatch)
+    entry = {
+        "id": "x1",
+        "revert_before_b64": "eJw...",
+        "after_sha": "deadbeef",
+        "scope": "project",
+        "repo_id": str(tmp_path / "repo"),
+        "relative_path": "nope.md",
+    }
+
+    assert detect_subsequent_change(entry) is True
+
+
+def test_detect_subsequent_change_true_when_after_sha_missing(tmp_path, monkeypatch):
+    """判定材料（after_sha）が欠けている場合も安全側に倒す。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after-content\n")
+    entry = _accept_entry("x1", "before-content\n", "after-content\n", target)
+    del entry["after_sha"]
+
+    assert detect_subsequent_change(entry) is True
+
+
+def test_detect_subsequent_change_true_when_before_b64_missing(tmp_path, monkeypatch):
+    """判定材料（revert_before_b64）が欠けている場合も安全側に倒す。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "someone-else-changed-this\n")
+    entry = _accept_entry("x1", "before-content\n", "after-content\n", target)
+    del entry["revert_before_b64"]
+
+    assert detect_subsequent_change(entry) is True
 
 
 # ─── ロック（C4/C26: 手順3〜5 は同一 history lock 内）───────────────────────

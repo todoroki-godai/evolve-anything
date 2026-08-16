@@ -50,6 +50,17 @@ class TestComputeRevertAvailabilityAvailable:
         assert available is True
         assert reason is None
 
+    def test_global_rule_scope_is_supported(self):
+        """#475 §8.2: rule 反映の revert 対応（既存 rule ファイルへの追記）。"""
+        available, reason = compute_revert_availability(_full_entry(scope="global_rule"))
+        assert available is True
+        assert reason is None
+
+    def test_project_rule_scope_is_supported(self):
+        available, reason = compute_revert_availability(_full_entry(scope="project_rule"))
+        assert available is True
+        assert reason is None
+
 
 class TestComputeRevertAvailabilityBeforeTooLarge:
     def test_explicit_reason_wins(self):

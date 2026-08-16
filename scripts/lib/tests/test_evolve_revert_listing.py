@@ -109,6 +109,74 @@ class TestBuildRevertListingFiltering:
         assert listing.build_revert_listing("evolve-anything") == []
 
 
+class TestBuildRevertListingSubsequentChange:
+    """§8.2 後続変更検知。判定ロジック自体は再実装せず ``evolve_revert.detect_subsequent_change``
+    （_apply.py の conflict 判定と同一ソース）を listing 時点で呼ぶだけ。ここではその呼び出しの
+    配線だけを検証する（判定ロジック自体の分岐網羅は test_evolve_revert_apply.py 側）。
+    """
+
+    def test_available_entry_without_subsequent_change_is_marked_revertible(
+        self, stub_history, monkeypatch
+    ):
+        stub_history([_full_entry()])
+        monkeypatch.setattr(listing, "detect_subsequent_change", lambda entry: False)
+
+        items = listing.build_revert_listing("evolve-anything")
+
+        assert items[0]["revert_available"] is True
+        assert items[0]["subsequent_change"] is False
+
+    def test_available_entry_with_subsequent_change_is_marked(self, stub_history, monkeypatch):
+        stub_history([_full_entry()])
+        monkeypatch.setattr(listing, "detect_subsequent_change", lambda entry: True)
+
+        items = listing.build_revert_listing("evolve-anything")
+
+        assert items[0]["revert_available"] is True
+        assert items[0]["subsequent_change"] is True
+
+    def test_unavailable_entry_does_not_call_subsequent_change_check(self, stub_history, monkeypatch):
+        """revert_available=False の entry は後続変更検知の対象外（判定材料が
+        揃っていない・そもそも戻せない理由が別にある）。呼ばれたら壊す。"""
+        stub_history([
+            {"id": "old1", "human_accepted": True, "skill_name": "legacy", "timestamp": _iso(5)},
+        ])
+
+        def _boom(entry):
+            raise AssertionError("unavailable entry で呼ばれるべきでない")
+
+        monkeypatch.setattr(listing, "detect_subsequent_change", _boom)
+
+        items = listing.build_revert_listing("evolve-anything")
+
+        assert items[0]["revert_available"] is False
+        assert items[0]["subsequent_change"] is None
+
+
+class TestRenderRevertListingSubsequentChange:
+    def test_subsequent_change_shown_as_not_revertible(self):
+        items = [{
+            "entry_id": "p1", "skill_name": "queue", "timestamp": _iso(1),
+            "scope": "project", "revert_available": True, "revert_unavailable_reason": None,
+            "subsequent_change": True,
+        }]
+        lines = listing.render_revert_listing(items)
+        text = "\n".join(lines)
+        assert "p1" in text
+        assert "後続変更" in text
+        assert "戻せません" in text or "戻せない" in text
+
+    def test_subsequent_change_false_still_shows_revertible_command(self):
+        items = [{
+            "entry_id": "p1", "skill_name": "queue", "timestamp": _iso(1),
+            "scope": "project", "revert_available": True, "revert_unavailable_reason": None,
+            "subsequent_change": False,
+        }]
+        lines = listing.render_revert_listing(items)
+        text = "\n".join(lines)
+        assert "bin/evolve-revert p1" in text
+
+
 class TestBuildRevertListingFields:
     def test_falls_back_to_target_when_skill_name_missing(self, stub_history):
         stub_history([_full_entry(skill_name=None, target="skills/foo/SKILL.md")])
