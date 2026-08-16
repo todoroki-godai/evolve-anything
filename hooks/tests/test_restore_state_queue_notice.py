@@ -12,7 +12,7 @@ env ガード: install レイアウト env のときだけ実環境 DATA_DIR を
 """
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _HOOKS = Path(__file__).resolve().parent.parent
@@ -133,6 +133,19 @@ def test_deliver_does_not_write(tmp_path, monkeypatch):
     restore_state._build_evolve_queue_output()
     after = {p.name for p in source.iterdir()}
     assert before == after  # queue 通知は read-only
+
+
+def test_deliver_stale_at_30_hours_shows_health_notice(tmp_path, monkeypatch, capsys):
+    """#466: 既定 stale_hours=30 が末端の restore_state 配線まで貫通していること。"""
+    source = _install_env(tmp_path, monkeypatch)
+    stale_generated_at = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+    _write_queue(source, dict(_sample_queue(), generated_at=stale_generated_at))
+    item = restore_state._build_evolve_queue_output()
+    assert item is not None
+    assert item.tier == 1
+    assert "figma-to-code" not in item.text
+    assert "毎朝の自動記録" in item.text
+    assert item.digest == "毎朝の記録が停止"
 
 
 def test_handle_session_start_invokes_queue_notice(tmp_path, monkeypatch, capsys):

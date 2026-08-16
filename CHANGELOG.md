@@ -328,6 +328,16 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(daily): 毎朝の自動記録の停止検知を「その日のうち」に気づける粒度に緩和（#466）** —
+  `freshness.classify_freshness` に時間単位の閾値 `stale_hours`（既定 `None`=従来の日単位を維持）を
+  追加し、`queue_notice.DEFAULT_STALE_HOURS=30` を `build_queue_notice`/`build_judge_cap_notice` が
+  内部で強制するようにした。従来は日単位（既定3日=72時間）でしか停止に気づけず、`correction_rate.py`
+  の週次判定（週末+3日で確定）が1日でも欠測すると当週が不合格のまま確定し修復不能になっていた
+  （実測: 2026-W32 は 129/842=15.3% で確定）。72時間後の通知では手遅れなので、翌朝08:00（23時間・
+  正常沈黙）は黙らせ、翌日15:00（30時間）で「今日中に `bin/evolve-daily-run` を1回実行すれば当日分
+  は取り返せる」タイミングで発火させる。表示側は `age_in_hours` を新設し、48時間未満は「N時間前」・
+  以上は従来どおり「N日前」を表示。通知の label/digest から内部名（`evolve queue`）を排し「毎朝の
+  自動記録」に統一。icebox 側（`icebox_notice.STALE_STATUS_DAYS`）は時間的緊急度が異なるため対象外。
 - **fix(evolve_revert): dry-run の出力が3行のメタ情報のみで「何が起きるか」判断できない不具合を修正（#469）** —
   `bin/evolve-revert <entry_id>`（既定 dry-run）の出力が「保持: mode / 失う可能性: xattr /
   ACL: ...」の3行のみで、対象ファイル・判定分岐・変更行数のいずれも分からなかった。

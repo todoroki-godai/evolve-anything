@@ -130,6 +130,117 @@ def test_health_notice_unknown_has_no_day_count():
     assert "日前" not in msg
 
 
+# ===== stale_hours（#466: 日単位だと最大72時間気づけないため時間単位を追加） =====
+def test_stale_hours_none_preserves_days_behavior():
+    """stale_hours=None（既定）なら従来どおり stale_days で判定する（後方互換）。"""
+    generated_at = (NOW - timedelta(days=1, hours=1)).isoformat()
+    result, age_days = fr.classify_freshness(generated_at, now=NOW, stale_days=1)
+    assert result == fr.Freshness.STALE
+    assert age_days == 1
+
+
+def test_stale_hours_overrides_stale_days_when_given():
+    """stale_hours が指定されたら stale_days は無視される。"""
+    generated_at = (NOW - timedelta(hours=40)).isoformat()
+    # stale_days=100 (満たさない) でも stale_hours=30 が優先されて STALE になる
+    result, _age = fr.classify_freshness(
+        generated_at, now=NOW, stale_days=100, stale_hours=30
+    )
+    assert result == fr.Freshness.STALE
+
+
+def test_stale_hours_boundary_just_under_is_fresh():
+    """29 時間経過（30 時間閾値未満）は FRESH のまま。"""
+    generated_at = (NOW - timedelta(hours=29)).isoformat()
+    result, _age = fr.classify_freshness(generated_at, now=NOW, stale_hours=30)
+    assert result == fr.Freshness.FRESH
+
+
+def test_stale_hours_boundary_exactly_at_is_stale():
+    """30 時間ちょうどで STALE（>= 判定）。"""
+    generated_at = (NOW - timedelta(hours=30)).isoformat()
+    result, _age = fr.classify_freshness(generated_at, now=NOW, stale_hours=30)
+    assert result == fr.Freshness.STALE
+
+
+def test_stale_hours_normal_overnight_gap_is_fresh():
+    """09:00 実行 → 翌朝 08:00 のセッションは 23 時間経過。正常な沈黙で FRESH のまま。"""
+    generated_at = (NOW - timedelta(hours=23)).isoformat()
+    result, _age = fr.classify_freshness(generated_at, now=NOW, stale_hours=30)
+    assert result == fr.Freshness.FRESH
+
+
+def test_stale_hours_age_days_field_unchanged_type():
+    """stale_hours 指定時も戻り値2要素目は age_days（互換のため型を変えない）。"""
+    generated_at = (NOW - timedelta(hours=40)).isoformat()
+    result, age_days = fr.classify_freshness(generated_at, now=NOW, stale_hours=30)
+    assert result == fr.Freshness.STALE
+    assert age_days == 1  # 40時間 = 1日と16時間 → .days は1
+
+
+# ===== age_in_hours =====
+def test_age_in_hours_computes_elapsed_hours():
+    generated_at = (NOW - timedelta(hours=47)).isoformat()
+    assert fr.age_in_hours(generated_at, now=NOW) == 47
+
+
+def test_age_in_hours_truncates_partial_hour():
+    generated_at = (NOW - timedelta(hours=47, minutes=59)).isoformat()
+    assert fr.age_in_hours(generated_at, now=NOW) == 47
+
+
+def test_age_in_hours_unparseable_is_none():
+    assert fr.age_in_hours("not-a-timestamp", now=NOW) is None
+
+
+def test_age_in_hours_naive_datetime_is_none():
+    assert fr.age_in_hours("2026-08-04T08:00:00", now=NOW) is None
+
+
+def test_age_in_hours_future_is_none():
+    generated_at = (NOW + timedelta(hours=1)).isoformat()
+    assert fr.age_in_hours(generated_at, now=NOW) is None
+
+
+# ===== health_notice の age_hours 分岐（#466） =====
+def test_health_notice_uses_hours_when_under_48():
+    """47 時間なら「N時間前」表示（日数だと「1日前」に潰れて緊急度が消える）。"""
+    msg = fr.health_notice(
+        label="毎朝の自動記録",
+        freshness=fr.Freshness.STALE,
+        age_days=1,
+        age_hours=47,
+        remediation="bin/evolve-daily-run",
+    )
+    assert "47時間前" in msg
+    assert "日前" not in msg
+
+
+def test_health_notice_uses_days_when_49_hours_or_more():
+    """49 時間（48時間以上）なら日数表示に戻る。"""
+    msg = fr.health_notice(
+        label="毎朝の自動記録",
+        freshness=fr.Freshness.STALE,
+        age_days=2,
+        age_hours=49,
+        remediation="bin/evolve-daily-run",
+    )
+    assert "2日前" in msg
+    assert "時間前" not in msg
+
+
+def test_health_notice_without_age_hours_falls_back_to_days():
+    """age_hours 省略時（既定 None）は従来どおり日数表示。"""
+    msg = fr.health_notice(
+        label="毎朝の自動記録",
+        freshness=fr.Freshness.STALE,
+        age_days=5,
+        remediation="bin/evolve-daily-run",
+    )
+    assert "5日前" in msg
+    assert "時間前" not in msg
+
+
 # ===== 既定閾値の意図（#351 レビュー時に 2→3 日へ緩和） =====
 def test_default_stale_days_tolerates_a_closed_weekend():
     """金曜朝に生成 → 月曜朝のセッションで FRESH（通知本体が消えない）。

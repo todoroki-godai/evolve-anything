@@ -442,9 +442,10 @@ def _build_evolve_queue_output(shared: "tuple | None" = None) -> "NotificationIt
             state, _age = _daily_freshness.classify_freshness(
                 (queue_data or {}).get("generated_at"),
                 stale_days=_queue_notice.DEFAULT_STALE_DAYS,
+                stale_hours=_queue_notice.DEFAULT_STALE_HOURS,
             )
             if state != _daily_freshness.Freshness.FRESH:
-                return NotificationItem(label="queue", tier=1, text=text, digest="evolve-queue更新停止")
+                return NotificationItem(label="queue", tier=1, text=text, digest="毎朝の記録が停止")
 
         count = len((queue_data or {}).get("queue") or [])
         return NotificationItem(

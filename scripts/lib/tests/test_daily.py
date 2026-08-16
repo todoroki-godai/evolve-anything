@@ -344,6 +344,80 @@ def test_systemmessage_output_silent_when_empty():
     assert qn.queue_notice_output(EMPTY_QUEUE, now=now) is None
 
 
+# ===== #466: 既定は DEFAULT_STALE_HOURS（30時間）— build_queue_notice の stale_days 引数
+# に関わらず内部で stale_hours を強制する。停止に「その日のうち」に気づけるようにする。
+GENERATED_AT_0900 = "2026-06-25T09:00:00Z"
+
+
+def test_default_build_queue_notice_fresh_at_23_hours():
+    """09:00 実行 → 翌朝 08:00（23時間後）は正常な沈黙域として FRESH のまま。"""
+    now = datetime(2026, 6, 26, 8, 0, 0, tzinfo=timezone.utc)
+    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_queue_notice(queue, now=now)
+    assert msg is not None
+    assert "figma-to-code" in msg  # health notice でなく通常の待ち一覧
+
+
+def test_default_build_queue_notice_fresh_at_29_hours():
+    now = datetime(2026, 6, 26, 14, 0, 0, tzinfo=timezone.utc)  # +29h
+    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_queue_notice(queue, now=now)
+    assert msg is not None
+    assert "figma-to-code" in msg
+
+
+def test_default_build_queue_notice_stale_at_30_hours():
+    """30時間ちょうどで STALE（当日中に気づける粒度・#466）。"""
+    now = datetime(2026, 6, 26, 15, 0, 0, tzinfo=timezone.utc)  # +30h
+    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_queue_notice(queue, now=now)
+    assert msg is not None
+    assert "figma-to-code" not in msg
+    assert "毎朝の自動記録" in msg
+    assert "30時間前" in msg
+
+
+def test_default_build_queue_notice_stale_message_uses_new_remediation_text():
+    now = datetime(2026, 6, 26, 15, 0, 0, tzinfo=timezone.utc)
+    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_queue_notice(queue, now=now)
+    assert msg is not None
+    assert "bin/evolve-daily-run" in msg
+    assert "その週の集計は不合格として確定" in msg
+    assert "launchctl list | grep com.evolve-anything.daily" in msg
+
+
+def test_default_build_queue_notice_stale_at_47_hours_shows_hours():
+    now = datetime(2026, 6, 27, 8, 0, 0, tzinfo=timezone.utc)  # +47h
+    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_queue_notice(queue, now=now)
+    assert msg is not None
+    assert "47時間前" in msg
+
+
+def test_default_build_queue_notice_stale_at_49_hours_shows_days():
+    now = datetime(2026, 6, 27, 10, 0, 0, tzinfo=timezone.utc)  # +49h
+    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_queue_notice(queue, now=now)
+    assert msg is not None
+    assert "2日前" in msg
+    assert "時間前" not in msg
+
+
+def test_default_build_judge_cap_notice_silent_at_30_hours_stale():
+    """build_queue_notice 同様、既定 30 時間閾値を judge cap notice も共有する（二重通知防止）。"""
+    now = datetime(2026, 6, 26, 15, 0, 0, tzinfo=timezone.utc)  # +30h
+    stale = dict(CAPPED_QUEUE, generated_at=GENERATED_AT_0900)
+    assert qn.build_judge_cap_notice(stale, now=now) is None
+
+
+def test_default_build_judge_cap_notice_fires_at_29_hours_fresh():
+    now = datetime(2026, 6, 26, 14, 0, 0, tzinfo=timezone.utc)  # +29h
+    fresh = dict(CAPPED_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_judge_cap_notice(fresh, now=now)
+    assert msg is not None
+
+
 # ===== llm_judge 日次上限到達通知（#408・evolve-queue.json の llm_judge フィールドを再利用）=====
 CAPPED_QUEUE = {
     "generated_at": "2026-06-25T09:00:00Z",

@@ -21,9 +21,25 @@ QUEUE_FILE_NAME = "evolve-queue.json"
 # gate 化で **通知本体（待ち PJ 一覧）が消える**ようになったため誤検知コストが上がった。
 # 週末に PC を閉じて launchd が2日走らないケースを FRESH に保つため 3 日に緩めている。
 # 恒久障害（#351 の16日沈黙）の検出力は 3 日でも変わらない。
+# #466 で queue 系の既定判定は下記 DEFAULT_STALE_HOURS（時間単位）へ切り替えた。この定数は
+# 他モジュール（fleet/cli_propose.py 等）が独立に参照しているため互換のため残す。
 DEFAULT_STALE_DAYS = 3
 
-REMEDIATION_HINT = "bin/evolve-daily-install で日次更新が回っているか確認してください"
+# generated_at がこの時間数以上古ければ stale（#466: 日単位の 3 日 = 72 時間だと停止に
+# 気づけるのが最大 72 時間後になり手遅れ。当日中に気づければ手動で
+# `bin/evolve-daily-run` を回して取り返せるため、時間単位に緩和する）。
+# 30 時間の根拠: 09:00 実行が正常な運用サイクルで、
+#   - 翌日 08:00 のセッションは前回実行から 23 時間 → 正常な沈黙（まだ発火させない）
+#   - 翌日 15:00 のセッションで前日分しか無ければ 30 時間 → 当日中にまだ手動実行で
+#     取り返せるタイミングで発火させる
+DEFAULT_STALE_HOURS = 30
+
+REMEDIATION_HINT = (
+    "今日中に `bin/evolve-daily-run` を1回実行すれば、その日の分は取り返せます。"
+    "止まったまま日をまたぐと、その週の集計は不合格として確定し、週次の数字が出るのが"
+    "さらに1週間先送りになります。繰り返すなら "
+    "`launchctl list | grep com.evolve-anything.daily` で毎朝の登録状況を確認してください。"
+)
 
 
 def read_queue(data_dir) -> "dict | None":
@@ -59,13 +75,18 @@ def build_queue_notice(
 
     now = now or datetime.now(timezone.utc)
     state, age_days = _freshness.classify_freshness(
-        queue_data.get("generated_at"), now=now, stale_days=stale_days
+        queue_data.get("generated_at"),
+        now=now,
+        stale_days=stale_days,
+        stale_hours=DEFAULT_STALE_HOURS,
     )
     if state != _freshness.Freshness.FRESH:
+        age_hours = _freshness.age_in_hours(queue_data.get("generated_at"), now=now)
         return _freshness.health_notice(
-            label="evolve queue",
+            label="毎朝の自動記録",
             freshness=state,
             age_days=age_days,
+            age_hours=age_hours,
             remediation=REMEDIATION_HINT,
         )
 
@@ -195,7 +216,10 @@ def build_judge_cap_notice(
 
     now = now or datetime.now(timezone.utc)
     state, _age_days = _freshness.classify_freshness(
-        queue_data.get("generated_at"), now=now, stale_days=stale_days
+        queue_data.get("generated_at"),
+        now=now,
+        stale_days=stale_days,
+        stale_hours=DEFAULT_STALE_HOURS,
     )
     if state != _freshness.Freshness.FRESH:
         return None
