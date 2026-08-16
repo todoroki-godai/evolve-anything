@@ -171,10 +171,12 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
         #            順位は変えない）。書込は evolve --drain の apply 境界で行う。
         try:
             from pj_slug import resolve_pj_slug
-            from audit.reward_ema import read_reward_ema
-            _ema_map = read_reward_ema(resolve_pj_slug(proj))
+            from audit.reward_ema import read_reward_ema_with_exclusions
+            # #480: 旧経路が書いた Agent 由来汚染（skill が Agent: prefix）を read 時に除外。
+            # 除外件数は黙って捨てず apply_outcome_ranking に渡し outcome_ranking へ記録する。
+            _ema_map, _ema_excluded = read_reward_ema_with_exclusions(resolve_pj_slug(proj))
         except Exception:
-            _ema_map = {}
+            _ema_map, _ema_excluded = {}, 0
         triage_result = apply_outcome_ranking(
             triage_result,
             usage=usage_data,
@@ -182,6 +184,7 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
             corrections=corrections_data,
             negative_transfer=neg_transfer,
             reward_ema=_ema_map,
+            reward_ema_excluded_agent_records=_ema_excluded,
         )
         result["phases"]["skill_triage"] = triage_result
     except Exception as e:

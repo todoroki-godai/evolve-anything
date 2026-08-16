@@ -282,6 +282,7 @@ def apply_outcome_ranking(
     corrections: Optional[List[Dict[str, Any]]] = None,
     negative_transfer: Optional[List[Dict[str, Any]]] = None,
     reward_ema: Optional[Dict[str, dict]] = None,
+    reward_ema_excluded_agent_records: int = 0,
 ) -> Dict[str, Any]:
     """triage 候補の各 action リストを outcome priority 降順で再配置する（純粋関数）。
 
@@ -302,6 +303,13 @@ def apply_outcome_ranking(
     の通時安定ラベルを記録する。この関数は in-memory 純粋契約を保つため DATA_DIR を読まず、
     prior EMA は呼び出し側が読んで渡す（read のみ＝dry-run 安全）。**順位は変えない**
     （advisory のみ）。``reward_ema=None`` のときは完全に従来挙動。
+
+    #480: ``reward_ema_excluded_agent_records`` は呼び出し側が
+    ``reward_ema.read_reward_ema_with_exclusions`` で読んだ「reward_ema.jsonl から除外した
+    Agent 由来レコード件数」をそのまま渡す（既定 0）。``outcome_ranking[action]`` の既存
+    advisory dict（suppressed/high_reward_variance と同じ場所）に
+    ``reward_ema_excluded_agent_records`` として記録し、黙って捨てない
+    （silence != evaluated。#379 新設凍結中のため新規 section は作らず既存 dict に追記する）。
 
     dry-run observability（#393-#396 準拠: 数字に意味を添える）のため、action ごとの
     before/after スキル順と changed フラグ、suppress されたスキルを ``outcome_ranking`` に
@@ -402,6 +410,9 @@ def apply_outcome_ranking(
                 for c in ordered
                 if (c["outcome"].get("reward_variance") or {}).get("pass")
             ],
+            # #480: reward_ema.jsonl の read 側で除外した Agent 由来レコード件数
+            # （黙って捨てない・#379 凍結中は既存 dict への追記に留める）。
+            "reward_ema_excluded_agent_records": reward_ema_excluded_agent_records,
             # #64 MAA: skill 別の通時安定ラベル（バッチ跨ぎ EMA・advisory）。
             "reward_ema": {
                 c.get("skill", ""): _ema_stability_label((reward_ema or {}).get(c.get("skill", "")))

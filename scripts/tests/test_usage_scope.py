@@ -157,17 +157,24 @@ class TestAggregateUsage:
         assert "openspec-propose" not in result
         assert "openspec-refine" not in result
 
-    def test_skill_field_fallback(self, tmp_path):
-        """skill_name が無く skill フィールドのみ（implement 自己報告）でも集計される。None キーを作らない。"""
+    def test_skill_field_fallback_excluded_as_workflow_conformance_schema(self, tmp_path):
+        """skill_name が無く skill フィールドのみのレコードは workflow-conformance 別スキーマ
+        であり、実 Skill 呼び出し（skill_name あり）とは合算しない（#480）。
+
+        旧実装はここを「implement の自己報告フォールバック」として合算していたため、
+        実データで "implement" の集計が 22 → 59 件（conformance レコード分だけ水増し）に
+        膨張していた（2026-08-16 実測・issue #480）。conformance レコードは None キーにも
+        ならない（単に集計対象外）。
+        """
         records = [
-            {"skill": "implement", "outcome": "success"},
-            {"skill": "implement", "outcome": "success"},
-            {"skill_name": "implement"},
+            {"skill": "implement", "outcome": "success"},  # conformance レコード（除外）
+            {"skill": "implement", "outcome": "success"},  # conformance レコード（除外）
+            {"skill_name": "implement"},  # 実 Skill 呼び出し（数える）
         ]
         with _setup_fake_plugins(tmp_path):
             result = audit.aggregate_usage(records, exclude_plugins=False)
         assert None not in result
-        assert result.get("implement") == 3
+        assert result.get("implement") == 1
 
     def test_aggregate_plugin_usage(self, tmp_path):
         with _setup_fake_plugins(tmp_path):
