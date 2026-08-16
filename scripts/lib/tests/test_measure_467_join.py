@@ -12,6 +12,7 @@ from measure_467_join import (
     load_jsonl,
     parse_iso8601,
     resolve_preceding_skills,
+    resolve_skill_md,
     skill_md_resolves,
     summarize_corrections,
 )
@@ -224,7 +225,12 @@ def test_skill_md_resolves_project_local_when_absent_from_global(tmp_path):
 
 def test_skill_md_resolves_prefers_global_over_project(tmp_path):
     """global と project の両方に同名スキルがある場合、global 側が先に解決される
-    （runner.py:419 の順序 `skill_dirs + [... not in skill_dirs]` の再現）。"""
+    （runner.py:419 の順序 `skill_dirs + [... not in skill_dirs]` の再現）。
+
+    2026-08-16 codex cold review 4巡目 [Must]1: bool の `True` だけを見ても探索順の逆転
+    （project→global）を検出できない（両方存在すれば順序に関係なく True になるため）。
+    `resolve_skill_md` が返す**実際のパス**が global 側であることまで固定する。
+    """
     home = tmp_path / "home"
     project_root = tmp_path / "project"
     (home / ".claude" / "skills" / "shared").mkdir(parents=True)
@@ -232,6 +238,9 @@ def test_skill_md_resolves_prefers_global_over_project(tmp_path):
     (project_root / ".claude" / "skills" / "shared").mkdir(parents=True)
     (project_root / ".claude" / "skills" / "shared" / "SKILL.md").write_text("pj", encoding="utf-8")
 
+    resolved = resolve_skill_md("shared", home, project_root=project_root)
+    assert resolved == home / ".claude" / "skills" / "shared" / "SKILL.md"
+    assert resolved.read_text(encoding="utf-8") == "global"
     assert skill_md_resolves("shared", home, project_root=project_root) is True
 
 

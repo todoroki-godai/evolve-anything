@@ -1,9 +1,9 @@
 {
-  "commit_sha": "556d846d58a5365c66f47f7f3d0ce70315404812",
+  "commit_sha": "144a1c27bc3dbca838c877205e7af0b479d9592d",
   "data_dir": "~/.claude/evolve-anything",
-  "elapsed_seconds": 4.59,
+  "elapsed_seconds": 4.01,
   "llm_calls": "none, verified at execution time via guard_no_network (socket.socket blocked for the duration of the measurement; see safety_verification.network_guard). Static audit (2026-08-16): no anthropic/openai/subprocess-claude calls in any of the 13 generation functions or their dependencies; critical_instruction_extractor.detect_instruction_violation is LLM-free by contract.",
-  "measured_at": "2026-08-16T04:40:17Z",
+  "measured_at": "2026-08-16T05:06:53Z",
   "project_root": "/Users/matsukaze-takashi/matsukaze-utils/evolve-anything",
   "referenced_input_paths": [
     {
@@ -13,7 +13,9 @@
         "section_1_5_1",
         "pitfall_candidates",
         "hook_candidates",
-        "instruction_violation"
+        "instruction_violation",
+        "workflow_checkpoint_gaps (via workflow_checkpoint.DATA_DIR patch)",
+        "verification_needs (via telemetry_query.DATA_DIR patch)"
       ]
     },
     {
@@ -28,7 +30,8 @@
       "overridable_via_data_dir": true,
       "path": "~/.claude/evolve-anything/errors.jsonl",
       "used_by": [
-        "pitfall_candidates"
+        "pitfall_candidates",
+        "workflow_checkpoint_gaps (via workflow_checkpoint.DATA_DIR patch)"
       ]
     },
     {
@@ -95,6 +98,14 @@
       "used_by": [
         "section_1_5_1 (skill_md_resolves)"
       ]
+    },
+    {
+      "note": "detect_data_contract_verification/detect_side_effect_verification/detect_happy_path_test_gap/detect_cross_layer_consistency 等の条件付き verification エントリと主要言語判定（verification_catalog/helpers.py _iter_source_files/_detect_primary_language）。--project-root に紐づく設計どおりの対象外（2026-08-16 codex cold review 4巡目 [Must]2 是正 —従来未列挙だった）",
+      "overridable_via_data_dir": false,
+      "path": "/Users/matsukaze-takashi/matsukaze-utils/evolve-anything 配下の全 *.py/*.ts/*.tsx（rglob）",
+      "used_by": [
+        "verification_needs"
+      ]
     }
   ],
   "safety_verification": {
@@ -104,29 +115,31 @@
       "removed": []
     },
     "home_claude_manifest_diff_note": "diff_total=0",
-    "home_claude_manifest_file_count_after": 52400,
-    "home_claude_manifest_file_count_before": 52400,
+    "home_claude_manifest_file_count_after": 52407,
+    "home_claude_manifest_file_count_before": 52407,
     "home_claude_manifest_scope": "full ~/.claude/ (not narrowed)",
     "network_guard": "passed",
-    "network_guard_method": "execution-time monkeypatch of socket.socket; raises immediately on any socket instantiation",
+    "network_guard_known_limitations": "os.posix_spawn, os.fork + raw syscalls, and C-extension code that forks/execs without going through the patched Python-level functions are not covered.",
+    "network_guard_method": "execution-time monkeypatch of socket.socket, subprocess.Popen, os.system, os.execv, os.execve (os.execl*/os.execvp* delegate to these); raises immediately on any instantiation/call. Guard violations propagate through per-kind error isolation (not swallowed).",
     "write_guard": "passed",
-    "write_guard_method": "execution-time monkeypatch of builtins.open/os.open; raises immediately on any write-mode open() under ~/.claude/"
+    "write_guard_known_limitations": "C-extension code that issues write syscalls without going through the patched Python-level functions (e.g. duckdb's C++ internals) is not covered. The pre/post ~/.claude/ manifest diff is the compensating control for this gap (a zero diff is evidence no write happened even via that path, not a proof of coverage).",
+    "write_guard_method": "execution-time monkeypatch of builtins.open/io.open/os.open (write-mode) and os.rename/os.replace/os.unlink/os.remove/os.mkdir/os.makedirs/os.rmdir; raises immediately on any write-mode/mutating call under ~/.claude/. Guard violations propagate through per-kind error isolation (not swallowed)."
   },
   "script": "scripts/bench/measure_467_proposal_kinds.py",
   "section_1_5_1": {
     "corrections_correction_type_counts": {
       "iya": 1,
       "naoshite-request": 1,
-      "semantic_idiom": 163,
+      "semantic_idiom": 165,
       "stop": 8
     },
     "corrections_last_skill_truthy": 0,
     "corrections_source_counts": {
       "backfill": 8,
       "hook": 2,
-      "reflect_confirmed": 163
+      "reflect_confirmed": 165
     },
-    "corrections_total": 173,
+    "corrections_total": 175,
     "corrections_with_preceding_skill_call": 30,
     "preceding_skill_calls_with_resolvable_skill_md": 0,
     "usage_skill_call_total": 888

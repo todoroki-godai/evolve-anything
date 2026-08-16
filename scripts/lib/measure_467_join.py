@@ -163,13 +163,13 @@ def resolve_preceding_skills(
     return [find_preceding_skill(c, idx) for c in corrections]
 
 
-def skill_md_resolves(
+def resolve_skill_md(
     skill_name: Optional[str],
     home_dir: Path,
     project_root: Optional[Path] = None,
-) -> bool:
+) -> Optional[Path]:
     """`discover/runner.py:417-419` と同じ解決規則（global → project の順・bare 名）で
-    `SKILL.md` が見つかるかを判定する。
+    `SKILL.md` を解決し、見つかった実パスを返す（無ければ None）。
 
     本番コードの再現（探索対象・順序・マッチ規則を一致させる。2026-08-16 codex cold review
     [Must]1 是正 — 従来は global のみを探索し project 側 `<project>/.claude/skills/...` を
@@ -182,14 +182,30 @@ def skill_md_resolves(
 
     プラグイン namespaced 名（``plugin:skill``）はディレクトリ名に `:` を含むケースが無いため、
     どちらの規則でも原理的に解決しない（§1.5.1 の実測結果と一致する）。
+
+    パスを返す純関数として切り出したのは、探索順（global が project より優先される）を
+    テストで固定するため（2026-08-16 codex cold review 4巡目 [Must]1: bool 版だけでは
+    global/project 両方に同名 SKILL.md がある場合に探索順を逆転しても ``True`` のまま通ってしまい、
+    「global 優先」を検証できていなかった）。
     """
     if not skill_name:
-        return False
-    if list(home_dir.glob(f".claude/skills/{skill_name}/SKILL.md")):
-        return True
+        return None
+    global_matches = list(home_dir.glob(f".claude/skills/{skill_name}/SKILL.md"))
+    if global_matches:
+        return global_matches[0]
     if project_root is None:
-        return False
+        return None
     pj_skill_dir = Path(project_root) / ".claude" / "skills" / skill_name
     if not pj_skill_dir.exists():
-        return False
-    return len(list(pj_skill_dir.glob("SKILL.md"))) > 0
+        return None
+    pj_matches = list(pj_skill_dir.glob("SKILL.md"))
+    return pj_matches[0] if pj_matches else None
+
+
+def skill_md_resolves(
+    skill_name: Optional[str],
+    home_dir: Path,
+    project_root: Optional[Path] = None,
+) -> bool:
+    """`resolve_skill_md` が何か見つけたかどうかの bool 版（既存呼び出し元向け）。"""
+    return resolve_skill_md(skill_name, home_dir, project_root=project_root) is not None

@@ -17,27 +17,41 @@
 
 read-only 保証（2026-08-16 codex cold review [Must]3 是正: grep 監査だけでなく実行時に証明する）:
 - 測定本体（§1.5.1 + §1.5.3）は ``guard_no_home_claude_writes`` で包む。``builtins.open`` /
-  ``os.open`` を実行時に差し替え、``~/.claude/`` 配下への書込みモード open を検出したら
-  **その場で例外を送出**する（後付けの diff サンプリングでなく execution-time proof）。
-  加えて実行前後で ``~/.claude/`` 全体（narrow しない）の (相対パス, size, mtime_ns) メタデータ
-  マニフェストを取り差分を artifact に記録する（内容ハッシュ無し。2026-08-16 実測: 約52,000
-  ファイルの stat 走査が約1.6秒）。ライブ環境では他プロセス（hooks 等）が並行して
-  ``~/.claude/`` に書くため diff が非ゼロになることがあるが、write-guard がゼロ違反で完走した
-  という execution-time proof のほうが強い証拠であり、diff はその補強材料として扱う。
+  ``io.open``（``pathlib.Path.write_text``/``write_bytes`` の実体）/ ``os.open`` /
+  ``os.rename``/``os.replace``/``os.unlink``/``os.remove``/``os.mkdir``/``os.makedirs``/
+  ``os.rmdir`` を実行時に差し替え、``~/.claude/`` 配下への書込み系操作を検出したら**その場で
+  例外を送出**する（後付けの diff サンプリングでなく execution-time proof。2026-08-16 codex cold
+  review 4巡目 [Must]3 是正 — 従来は ``builtins.open``/``os.open`` のみで ``Path.write_text``
+  等が素通りしていたことを実測で確認し対象を拡張）。加えて実行前後で ``~/.claude/`` 全体
+  （narrow しない）の (相対パス, size, mtime_ns) メタデータマニフェストを取り差分を artifact に
+  記録する（内容ハッシュ無し。2026-08-16 実測: 約52,000ファイルの stat 走査が約1.6秒）。
+  ライブ環境では他プロセス（hooks 等）が並行して ``~/.claude/`` に書くため diff が非ゼロになる
+  ことがあるが、write-guard がゼロ違反で完走したという execution-time proof のほうが強い証拠
+  であり、diff はその補強材料として扱う。**既知の限界**: C 拡張が Python レベルの関数を経由せず
+  直接 syscall する経路はこの guard の対象外（詳細は ``guard_no_home_claude_writes`` の
+  docstring）。
 - DuckDB 経由の読み取り（``telemetry_query``）は ``duckdb.connect()``（メモリ内接続）から
   ``read_json_auto`` で jsonl を SELECT するのみで、永続 DB ファイルを開かない
   （write-guard 配下で実行して確認済み＝ソース監査でなく実行時証跡）。
-- ``discover.DATA_DIR`` / ``session_store._DATA_DIR_OVERRIDE`` を一時的に ``--data-dir`` へ
-  差し替える箇所（``detect_missed_skills`` 用）は必ず ``finally`` で元に戻す。
+- ``discover.DATA_DIR`` / ``session_store._DATA_DIR_OVERRIDE`` / ``workflow_checkpoint.DATA_DIR``
+  / ``telemetry_query.DATA_DIR`` を一時的に ``--data-dir`` へ差し替える箇所は必ず ``finally``
+  で元に戻す。
+- 個別 kind の測定失敗は kind ごとに ``errors`` へ隔離するが、guard 違反
+  （``WriteGuardViolation``/``NetworkGuardViolation``）はこの隔離の対象外で、常に測定本体まで
+  伝播させる（2026-08-16 codex cold review 4巡目 [Must]4 是正。個別 kind の包括 except に飲まれて
+  ``safety_verification`` が偽の "passed" を報告することを防ぐ）。
 
-LLM 呼び出し: なし。測定本体を ``guard_no_network`` で包み、``socket.socket()`` の
-インスタンス化を検出したら即座に例外送出する状態で実行し、正常終了することを確認する
-（socket を使う限りローカル DuckDB / ファイル IO も含めて何であれ落ちる。2026-08-16 実行時に
-ゼロ違反で完走を確認済み。静的監査としても §1.5.3 の対象13種の生成関数はいずれも
-LLM/subprocess を呼ばない — ``critical_instruction_extractor.detect_instruction_violation`` は
-docstring に「LLM・subprocess を一切呼ばない」と明記。LLM Judge 経路
-``emit_violation_judge_requests``/``ingest_violation_judges`` は別関数で本スクリプトからは
-呼ばない）。スキップした種別は無い。
+LLM 呼び出し: なし。測定本体を ``guard_no_network`` で包み、``socket.socket()``・
+``subprocess.Popen()``・``os.system()``・``os.execv()``/``os.execve()``（``os.execl*``/
+``os.execvp*`` は内部でこの2つに委譲するため exec ファミリ全体を捕捉）のいずれかが呼ばれたら
+即座に例外送出する状態で実行し、正常終了することを確認する（2026-08-16 codex cold review
+4巡目 [Must]3 是正 — 従来は socket.socket のみで subprocess 経由の LLM CLI 呼び出しが素通り
+していた。2026-08-16 実行時にゼロ違反で完走を確認済み。**既知の限界**: ``os.posix_spawn``・
+``os.fork``+生 syscall・C 拡張の直接 fork+exec はこの guard の対象外。静的監査としても §1.5.3
+の対象13種の生成関数はいずれも LLM/subprocess を呼ばない —
+``critical_instruction_extractor.detect_instruction_violation`` は docstring に「LLM・subprocess
+を一切呼ばない」と明記。LLM Judge 経路 ``emit_violation_judge_requests``/
+``ingest_violation_judges`` は別関数で本スクリプトからは呼ばない）。スキップした種別は無い。
 
 ``--data-dir`` が全入力を差し替えるわけではない（2026-08-16 codex cold review [Must]2 是正）。
 実際に参照する全入力パスと差し替え可否は実行のたびに ``referenced_input_paths()`` が
@@ -58,6 +72,7 @@ from __future__ import annotations
 import argparse
 import builtins
 import contextlib
+import io
 import json
 import os
 import socket
@@ -103,16 +118,36 @@ class NetworkGuardViolation(RuntimeError):
 
 @contextlib.contextmanager
 def guard_no_home_claude_writes(home_claude: Path):
-    """`~/.claude/` 配下への書込みモード ``open()`` を検出したら即座に例外送出する。
+    """`~/.claude/` 配下への書込み系ファイル操作を検出したら即座に例外送出する。
 
-    ``builtins.open`` と ``os.open``（write フラグ）の両方を差し替える。``pathlib.Path.open``
-    は内部で ``io.open``（= ``builtins.open`` と同一オブジェクト）を呼ぶためこれで捕捉できる。
-    本スクリプトが使う DuckDB 経路（``telemetry_query``）は ``duckdb.connect()``（メモリ内接続、
-    永続ファイル未オープン）のみだが、それも含めて「Python レベルの書込み open が一切起きない」
-    ことを動的に証明する（grep 監査でなく実行時証跡）。
+    2026-08-16 codex cold review 4巡目 [Must]3 是正: 従来は ``builtins.open`` と ``os.open``
+    のみを差し替えていたが、``pathlib.Path.write_text()``/``Path.write_bytes()`` は内部で
+    ``io.open`` を呼ぶ（``io.open`` は ``builtins.open`` と初期状態こそ同一オブジェクトを指すが、
+    片方の名前を再代入してももう一方の名前は追従しない別々の属性なので、``builtins.open`` だけの
+    差し替えでは Path 経由の書込みが素通りする — 実測で確認: 2026-08-16）。よって ``io.open``
+    自体も差し替える。加えて ``os.rename``/``os.replace``（Path.rename/replace の実体）、
+    ``os.unlink``/``os.remove``（Path.unlink の実体）、``os.mkdir``/``os.makedirs``/``os.rmdir``
+    も対象にする。
+
+    **既知の限界（隠さず明記する）**: C 拡張が libc の書込み syscall を直接呼ぶ経路（Python
+    レベルの関数を経由しない）や、``os.open`` を経由しない低レベル syscall (mmap 経由の書込み等)
+    はこの guard の対象外。本スクリプトが使う DuckDB 経路（``telemetry_query``）は
+    ``duckdb.connect()``（メモリ内接続、永続ファイル未オープン）のみで C 拡張が直接
+    ``~/.claude/`` へ書くパスは無い、という前提はこの guard では証明できない（duckdb は C++
+    拡張であり Python レベルの monkeypatch の外側で syscall しうる）。この穴は
+    実行前後の ``~/.claude/`` 全体マニフェスト diff（`home_claude_manifest_diff`）が補強材料
+    として埋める（diff がゼロなら C 拡張経由でも実際には書かれなかったことの傍証になる）。
     """
     real_open = builtins.open
+    real_io_open = io.open
     real_os_open = os.open
+    real_os_rename = os.rename
+    real_os_replace = os.replace
+    real_os_unlink = os.unlink
+    real_os_remove = os.remove
+    real_os_mkdir = os.mkdir
+    real_os_makedirs = os.makedirs
+    real_os_rmdir = os.rmdir
     home_resolved = home_claude.resolve()
     write_mode_chars = ("w", "a", "x", "+")
 
@@ -127,13 +162,15 @@ def guard_no_home_claude_writes(home_claude: Path):
             return False
         return True
 
-    def guarded_open(file, mode="r", *args, **kwargs):
-        if isinstance(mode, str) and any(c in mode for c in write_mode_chars):
-            if _under_home_claude(file):
-                raise WriteGuardViolation(
-                    f"blocked write-mode open() under ~/.claude/: {file!r} (mode={mode!r})"
-                )
-        return real_open(file, mode, *args, **kwargs)
+    def _guarded_open_factory(real_fn, label):
+        def guarded_open(file, mode="r", *args, **kwargs):
+            if isinstance(mode, str) and any(c in mode for c in write_mode_chars):
+                if _under_home_claude(file):
+                    raise WriteGuardViolation(
+                        f"blocked write-mode {label}() under ~/.claude/: {file!r} (mode={mode!r})"
+                    )
+            return real_fn(file, mode, *args, **kwargs)
+        return guarded_open
 
     def guarded_os_open(path, flags, *args, **kwargs):
         write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
@@ -144,23 +181,77 @@ def guard_no_home_claude_writes(home_claude: Path):
                 )
         return real_os_open(path, flags, *args, **kwargs)
 
-    builtins.open = guarded_open
+    def _guarded_path_op_factory(real_fn, label, *, two_paths=False):
+        if two_paths:
+            def guarded(src, dst, *args, **kwargs):
+                if _under_home_claude(src) or _under_home_claude(dst):
+                    raise WriteGuardViolation(
+                        f"blocked {label}() under ~/.claude/: {src!r} -> {dst!r}"
+                    )
+                return real_fn(src, dst, *args, **kwargs)
+        else:
+            def guarded(path, *args, **kwargs):
+                if _under_home_claude(path):
+                    raise WriteGuardViolation(
+                        f"blocked {label}() under ~/.claude/: {path!r}"
+                    )
+                return real_fn(path, *args, **kwargs)
+        return guarded
+
+    builtins.open = _guarded_open_factory(real_open, "builtins.open")
+    io.open = _guarded_open_factory(real_io_open, "io.open")
     os.open = guarded_os_open
+    os.rename = _guarded_path_op_factory(real_os_rename, "os.rename", two_paths=True)
+    os.replace = _guarded_path_op_factory(real_os_replace, "os.replace", two_paths=True)
+    os.unlink = _guarded_path_op_factory(real_os_unlink, "os.unlink")
+    os.remove = _guarded_path_op_factory(real_os_remove, "os.remove")
+    os.mkdir = _guarded_path_op_factory(real_os_mkdir, "os.mkdir")
+    os.makedirs = _guarded_path_op_factory(real_os_makedirs, "os.makedirs")
+    os.rmdir = _guarded_path_op_factory(real_os_rmdir, "os.rmdir")
     try:
         yield
     finally:
         builtins.open = real_open
+        io.open = real_io_open
         os.open = real_os_open
+        os.rename = real_os_rename
+        os.replace = real_os_replace
+        os.unlink = real_os_unlink
+        os.remove = real_os_remove
+        os.mkdir = real_os_mkdir
+        os.makedirs = real_os_makedirs
+        os.rmdir = real_os_rmdir
 
 
 @contextlib.contextmanager
 def guard_no_network():
-    """``socket.socket()`` のインスタンス化を検出したら即座に例外送出する。
+    """アウトバウンド通信・外部プロセス起動（LLM 呼び出しの主経路）を検出したら即座に例外送出する。
 
-    ローカル DuckDB 接続・ファイル IO は socket を使わないため影響しない想定（未検証の前提を
-    ここに書かない — 実行してこの guard 配下で完走することそのものが検証結果になる）。
+    2026-08-16 codex cold review 4巡目 [Must]3 是正: 従来は ``socket.socket()`` のみを
+    差し替えており、``subprocess``/``os.system``/``os.exec*`` 系（LLM CLI 呼び出しの
+    典型経路）は素通りだった。``subprocess.Popen``（``subprocess.run``/``check_call``/
+    ``check_output`` はすべて内部で ``Popen`` をインスタンス化するため、これ1点で fork+exec
+    系の高レベル API を捕捉できる）・``os.system``・``os.execv``/``os.execve``
+    （``os.execl*``/``os.execvp*`` は os モジュール内部でこの2つに委譲するためこれで
+    exec ファミリ全体を捕捉できる）を追加で差し替える。
+
+    ``subprocess.Popen`` は **属性そのもの（クラス自体）を差し替える**。実測で確認（2026-08-16）:
+    このリポジトリの root ``conftest.py`` の LLM guard（``no-llm-in-tests``）が pytest 実行中
+    ``subprocess.Popen`` を独自の guard 関数へ既に差し替えているため、``Popen.__init__`` だけを
+    差し替える実装は「クラスでなく関数の `__init__` を触る」ことになり効かない（関数呼び出しは
+    `__init__` を経由しない）。属性そのものを差し替えれば、その時点の実体が実クラスであれ
+    他 guard の代替関数であれ確実に横取りでき、``finally`` で元の実体（何であれ）に正しく戻る。
+
+    **既知の限界（隠さず明記する）**: ``os.posix_spawn`` / ``os.fork`` + 生の syscall直呼び出し
+    / C 拡張が直接 fork+exec する経路はこの guard の対象外。ローカル DuckDB 接続・ファイル IO は
+    socket を使わないため影響しない想定（未検証の前提をここに書かない — 実行してこの guard
+    配下で完走することそのものが検証結果になる）。
     """
     real_socket_cls = socket.socket
+    real_popen = subprocess.Popen
+    real_os_system = os.system
+    real_os_execv = os.execv
+    real_os_execve = os.execve
 
     class _BlockedSocket:
         def __init__(self, *a, **kw):
@@ -169,11 +260,35 @@ def guard_no_network():
                 "(outbound network / LLM call attempted)"
             )
 
+    def _guarded_popen(*a, **kw):
+        raise NetworkGuardViolation(
+            "blocked subprocess.Popen() during measurement (subprocess / LLM CLI call attempted)"
+        )
+
+    def _guarded_os_system(command):
+        raise NetworkGuardViolation(
+            f"blocked os.system() during measurement: {command!r}"
+        )
+
+    def _guarded_os_execv(path, args):
+        raise NetworkGuardViolation(f"blocked os.execv() during measurement: {path!r}")
+
+    def _guarded_os_execve(path, args, env):
+        raise NetworkGuardViolation(f"blocked os.execve() during measurement: {path!r}")
+
     socket.socket = _BlockedSocket  # type: ignore[assignment]
+    subprocess.Popen = _guarded_popen  # type: ignore[assignment,misc]
+    os.system = _guarded_os_system
+    os.execv = _guarded_os_execv
+    os.execve = _guarded_os_execve
     try:
         yield
     finally:
         socket.socket = real_socket_cls
+        subprocess.Popen = real_popen
+        os.system = real_os_system
+        os.execv = real_os_execv
+        os.execve = real_os_execve
 
 
 def claude_home_manifest(home_claude: Path) -> Dict[str, Tuple[int, int]]:
@@ -408,11 +523,25 @@ def _measure_missed_and_trajectory(project_root: Path, data_dir: Path) -> Dict[s
     }
 
 
-def _measure_verification_needs(project_root: Path) -> Dict[str, int]:
-    """`verification_needs`（discover/runner.py:302-309 と同じ経路）。"""
+def _measure_verification_needs(project_root: Path, data_dir: Path) -> Dict[str, int]:
+    """`verification_needs`（discover/runner.py:302-309 と同じ経路）。
+
+    条件付きエントリの1つ（``detect_evidence_verification``）は
+    ``telemetry_query.query_corrections(project=...)`` を ``corrections_file`` 引数無しで呼ぶため、
+    telemetry_query パッケージの module-level ``DATA_DIR`` を経由する。call-time で setattr し
+    ``--data-dir`` を反映する（2026-08-16 codex cold review 4巡目 [Must]2 是正）。
+    プロジェクト全体の ``*.py``/``*.ts``/``*.tsx`` 走査（他の条件付きエントリ・主要言語判定用）は
+    ``--project-root`` に紐づく設計どおりの対象外（``referenced_input_paths()`` に明記）。
+    """
+    import telemetry_query  # noqa: PLC0415
     from verification_catalog import detect_verification_needs  # noqa: PLC0415
 
-    needs = detect_verification_needs(project_root)
+    original_data_dir = telemetry_query.DATA_DIR
+    telemetry_query.DATA_DIR = data_dir
+    try:
+        needs = detect_verification_needs(project_root)
+    finally:
+        telemetry_query.DATA_DIR = original_data_dir
     return {"verification_needs": len(needs)}
 
 
@@ -441,21 +570,35 @@ def _measure_stall_recovery(project_root: Path) -> Dict[str, int]:
     return {"stall_recovery_patterns": len(patterns)}
 
 
-def _measure_workflow_checkpoint_gaps(project_root: Path) -> Dict[str, int]:
-    """`workflow_checkpoint_gaps`（discover/runner.py:480-505 と同じ経路）。"""
+def _measure_workflow_checkpoint_gaps(project_root: Path, data_dir: Path) -> Dict[str, int]:
+    """`workflow_checkpoint_gaps`（discover/runner.py:480-505 と同じ経路）。
+
+    ``workflow_checkpoint._detect_gaps_impl`` は module-level ``DATA_DIR`` を直接参照して
+    ``corrections.jsonl`` / ``errors.jsonl`` を読む（``*_file`` 引数は無い）。呼び出し時に
+    module 属性を setattr で差し替えることで ``--data-dir`` を反映する（2026-08-16 codex
+    cold review 4巡目 [Must]2 是正。call-time attribute 参照なので効く — copy import
+    `from workflow_checkpoint import DATA_DIR` のような import-time コピーだと env/patch に
+    追従しない、という pitfall_module_level_datadir_import_copy と同型）。
+    """
+    import workflow_checkpoint  # noqa: PLC0415
     from workflow_checkpoint import detect_checkpoint_gaps, is_workflow_skill  # noqa: PLC0415
 
-    skills_dir = project_root / ".claude" / "skills"
-    workflow_gaps = []
-    if skills_dir.is_dir():
-        for skill_dir in sorted(skills_dir.iterdir()):
-            if not skill_dir.is_dir():
-                continue
-            if not is_workflow_skill(skill_dir):
-                continue
-            gaps = detect_checkpoint_gaps(skill_dir.name, skill_dir, project_root)
-            if gaps:
-                workflow_gaps.append({"skill_name": skill_dir.name, "gaps": gaps})
+    original_data_dir = workflow_checkpoint.DATA_DIR
+    workflow_checkpoint.DATA_DIR = data_dir
+    try:
+        skills_dir = project_root / ".claude" / "skills"
+        workflow_gaps = []
+        if skills_dir.is_dir():
+            for skill_dir in sorted(skills_dir.iterdir()):
+                if not skill_dir.is_dir():
+                    continue
+                if not is_workflow_skill(skill_dir):
+                    continue
+                gaps = detect_checkpoint_gaps(skill_dir.name, skill_dir, project_root)
+                if gaps:
+                    workflow_gaps.append({"skill_name": skill_dir.name, "gaps": gaps})
+    finally:
+        workflow_checkpoint.DATA_DIR = original_data_dir
     return {"workflow_checkpoint_gaps": len(workflow_gaps)}
 
 
@@ -516,10 +659,10 @@ def measure_1_5_3(project_root: Path, data_dir: Path) -> Dict[str, Any]:
         _measure_pitfall_and_hook: (project_root, data_dir),
         _measure_instruction_violation: (project_root, data_dir),
         _measure_missed_and_trajectory: (project_root, data_dir),
-        _measure_verification_needs: (project_root,),
+        _measure_verification_needs: (project_root, data_dir),
         _measure_recommended_artifacts: (project_root,),
         _measure_stall_recovery: (project_root,),
-        _measure_workflow_checkpoint_gaps: (project_root,),
+        _measure_workflow_checkpoint_gaps: (project_root, data_dir),
         _measure_constraint_decay: (data_dir,),
     }
 
@@ -540,6 +683,13 @@ def measure_1_5_3(project_root: Path, data_dir: Path) -> Dict[str, Any]:
                 f"[467-measure]   {fn.__name__}: {result} ({time.monotonic() - t0:.2f}s)",
                 flush=True,
             )
+        except (WriteGuardViolation, NetworkGuardViolation):
+            # guard 違反は個別 kind のエラーとして握り潰さず、そのまま外側の guard
+            # コンテキストへ伝播させる（2026-08-16 codex cold review 4巡目 [Must]4 是正 —
+            # 従来の包括 except Exception がこれも通常のエラーとして捕捉していたため、
+            # 違反があっても safety_verification.write_guard/network_guard が "passed" の
+            # まま artifact に出力されうる欠陥があった）。
+            raise
         except Exception as e:  # noqa: BLE001 individual-kind isolation（他 kind を道連れにしない）
             errors[kind] = f"{type(e).__name__}: {e}"
             print(f"[467-measure]   {fn.__name__} FAILED: {errors[kind]}", flush=True)
@@ -593,7 +743,11 @@ def referenced_input_paths(data_dir: Path, project_root: Path) -> List[Dict[str,
         {
             "path": _redact_home(data_dir / "corrections.jsonl"),
             "overridable_via_data_dir": True,
-            "used_by": ["section_1_5_1", "pitfall_candidates", "hook_candidates", "instruction_violation"],
+            "used_by": [
+                "section_1_5_1", "pitfall_candidates", "hook_candidates", "instruction_violation",
+                "workflow_checkpoint_gaps (via workflow_checkpoint.DATA_DIR patch)",
+                "verification_needs (via telemetry_query.DATA_DIR patch)",
+            ],
         },
         {
             "path": _redact_home(data_dir / "usage.jsonl"),
@@ -603,7 +757,10 @@ def referenced_input_paths(data_dir: Path, project_root: Path) -> List[Dict[str,
         {
             "path": _redact_home(data_dir / "errors.jsonl"),
             "overridable_via_data_dir": True,
-            "used_by": ["pitfall_candidates"],
+            "used_by": [
+                "pitfall_candidates",
+                "workflow_checkpoint_gaps (via workflow_checkpoint.DATA_DIR patch)",
+            ],
         },
         {
             "path": _redact_home(data_dir / "sessions.jsonl"),
@@ -651,7 +808,50 @@ def referenced_input_paths(data_dir: Path, project_root: Path) -> List[Dict[str,
             "note": "SKILL.md 解決（§1.5.1）。runner.py:417-419 と同じ規則で global を必ず先に見る",
             "used_by": ["section_1_5_1 (skill_md_resolves)"],
         },
+        {
+            "path": f"{project_root} 配下の全 *.py/*.ts/*.tsx（rglob）",
+            "overridable_via_data_dir": False,
+            "note": "detect_data_contract_verification/detect_side_effect_verification/"
+                     "detect_happy_path_test_gap/detect_cross_layer_consistency 等の条件付き "
+                     "verification エントリと主要言語判定（verification_catalog/helpers.py "
+                     "_iter_source_files/_detect_primary_language）。--project-root に紐づく"
+                     "設計どおりの対象外（2026-08-16 codex cold review 4巡目 [Must]2 是正 —"
+                     "従来未列挙だった）",
+            "used_by": ["verification_needs"],
+        },
     ]
+
+
+def run_guarded_measurement(
+    data_dir: Path, project_root: Path, home_claude: Path,
+) -> Tuple[Dict[str, Any], Dict[str, Any], str, str]:
+    """guard 配下で §1.5.1 + §1.5.3 本体を実行する。
+
+    戻り値: ``(result_1_5_1, result_1_5_3, write_guard_result, network_guard_result)``。
+
+    ``main()`` から切り出したのはテストのため（2026-08-16 codex cold review 4巡目 [Must]5:
+    guard 違反が artifact の ``safety_verification`` を偽の "passed" にしないことを検証するには、
+    この関数が例外を **投げて完了しないこと** — つまり呼び出し元が戻り値を受け取れず、
+    "passed"/"VIOLATED" いずれの文字列を含む artifact も書けないこと — を直接確認できる必要が
+    ある）。guard 違反時は ``write_guard_result``/``network_guard_result`` を "VIOLATED: ..." に
+    セットしてから re-raise する。呼び出し元（``main()``）はこの re-raise を握り潰さない
+    （握り潰すと違反があっても出力 JSON が書かれてしまう）。
+    """
+    write_guard_result = "passed"
+    network_guard_result = "passed"
+    try:
+        with guard_no_home_claude_writes(home_claude), guard_no_network():
+            result_1_5_1 = measure_1_5_1(data_dir, project_root)
+            result_1_5_3 = measure_1_5_3(project_root, data_dir)
+    except WriteGuardViolation as e:
+        write_guard_result = f"VIOLATED: {e}"
+        print(f"[467-measure] SAFETY VIOLATION (write): {e}", flush=True)
+        raise
+    except NetworkGuardViolation as e:
+        network_guard_result = f"VIOLATED: {e}"
+        print(f"[467-measure] SAFETY VIOLATION (network): {e}", flush=True)
+        raise
+    return result_1_5_1, result_1_5_3, write_guard_result, network_guard_result
 
 
 def main() -> None:
@@ -690,21 +890,12 @@ def main() -> None:
         flush=True,
     )
 
-    write_guard_result = "passed"
-    network_guard_result = "passed"
     t_start = time.monotonic()
-    try:
-        with guard_no_home_claude_writes(home_claude), guard_no_network():
-            result_1_5_1 = measure_1_5_1(data_dir, project_root)
-            result_1_5_3 = measure_1_5_3(project_root, data_dir)
-    except WriteGuardViolation as e:
-        write_guard_result = f"VIOLATED: {e}"
-        print(f"[467-measure] SAFETY VIOLATION (write): {e}", flush=True)
-        raise
-    except NetworkGuardViolation as e:
-        network_guard_result = f"VIOLATED: {e}"
-        print(f"[467-measure] SAFETY VIOLATION (network): {e}", flush=True)
-        raise
+    # 例外時（guard 違反）はここで re-raise され、main() は戻り値を受け取れないまま終了する
+    # ＝ safety_verification を含む出力 JSON は一切書かれない（Must-5 の回帰テスト対象）。
+    result_1_5_1, result_1_5_3, write_guard_result, network_guard_result = run_guarded_measurement(
+        data_dir, project_root, home_claude,
+    )
     elapsed = time.monotonic() - t_start
     print(
         f"[467-measure] safety: write_guard={write_guard_result} network_guard={network_guard_result}",
@@ -741,11 +932,28 @@ def main() -> None:
         "referenced_input_paths": referenced_input_paths(data_dir, project_root),
         "safety_verification": {
             "write_guard": write_guard_result,
-            "write_guard_method": "execution-time monkeypatch of builtins.open/os.open; raises "
-                                   "immediately on any write-mode open() under ~/.claude/",
+            "write_guard_method": "execution-time monkeypatch of builtins.open/io.open/os.open "
+                                   "(write-mode) and os.rename/os.replace/os.unlink/os.remove/"
+                                   "os.mkdir/os.makedirs/os.rmdir; raises immediately on any "
+                                   "write-mode/mutating call under ~/.claude/. Guard violations "
+                                   "propagate through per-kind error isolation (not swallowed).",
+            "write_guard_known_limitations": "C-extension code that issues write syscalls without "
+                                              "going through the patched Python-level functions "
+                                              "(e.g. duckdb's C++ internals) is not covered. The "
+                                              "pre/post ~/.claude/ manifest diff is the compensating "
+                                              "control for this gap (a zero diff is evidence no "
+                                              "write happened even via that path, not a proof of "
+                                              "coverage).",
             "network_guard": network_guard_result,
-            "network_guard_method": "execution-time monkeypatch of socket.socket; raises immediately "
-                                     "on any socket instantiation",
+            "network_guard_method": "execution-time monkeypatch of socket.socket, "
+                                     "subprocess.Popen, os.system, os.execv, os.execve "
+                                     "(os.execl*/os.execvp* delegate to these); raises immediately "
+                                     "on any instantiation/call. Guard violations propagate through "
+                                     "per-kind error isolation (not swallowed).",
+            "network_guard_known_limitations": "os.posix_spawn, os.fork + raw syscalls, and "
+                                                "C-extension code that forks/execs without going "
+                                                "through the patched Python-level functions are not "
+                                                "covered.",
             "home_claude_manifest_scope": "full ~/.claude/ (not narrowed)",
             "home_claude_manifest_file_count_before": len(manifest_before),
             "home_claude_manifest_file_count_after": len(manifest_after),
