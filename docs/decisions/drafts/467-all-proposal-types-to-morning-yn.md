@@ -109,8 +109,21 @@ codex cold review（2026-08-16）も [実測] 群を「未検証」と判定し�
   `datetime` にパースして比較する＝`pitfall_iso8601_lexical_compare_tz_suffix`）
 - 産出量の計測: 各種別の生成関数を個別 import して直接呼ぶ（`run_discover()` 全体は回さない）
 
-**この手順は現時点でリポジトリ内にスクリプトとして存在しない。** 再現可能な artifact に
-落とすことは §10-Q0 の受入条件に含める。
+**実行可能な再現スクリプト**: `scripts/bench/measure_467_proposal_kinds.py`
+（join ロジックの単体テストは `scripts/lib/tests/test_measure_467_join.py`）。
+
+```
+python3 scripts/bench/measure_467_proposal_kinds.py \
+  --output docs/decisions/drafts/artifacts/467-measurements-2026-08-16.json
+```
+
+出力 artifact（2026-08-16 に本スクリプトで再実行した結果と台帳との差分の説明つき）:
+[`docs/decisions/drafts/artifacts/467-measurements-2026-08-16.md`](artifacts/467-measurements-2026-08-16.md)
+/ [`.json`](artifacts/467-measurements-2026-08-16.json)。
+`usage.jsonl` の「Skill 呼び出し総数」のみ台帳値（5,574）と実測値（888）が大きく乖離した
+（Agent 呼び出しを除外する定義に精緻化した結果。artifact 側に詳細を記録）。
+§1.5.1/§1.5.3 の結論（SKILL.md 解決 0 件・型フィルタで型不一致・未接続13種の産出件数）は
+この差分では変わらない。
 
 #### 1.5.1 パイロット `instruction_violations` は本番で 0 件（前提崩壊①）
 

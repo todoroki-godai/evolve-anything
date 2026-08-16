@@ -1,0 +1,61 @@
+{
+  "commit_sha": "004fbd38ca5dd2276a6271048d13aa91e4c59650",
+  "data_dir": "~/.claude/evolve-anything",
+  "elapsed_seconds": 4.34,
+  "llm_calls": "none (audited 2026-08-16: no anthropic/openai/subprocess-claude calls in any of the 13 generation functions or their dependencies; critical_instruction_extractor.detect_instruction_violation is LLM-free by contract)",
+  "measured_at": "2026-08-16T04:12:31Z",
+  "project_root": "/Users/matsukaze-takashi/matsukaze-utils/evolve-anything",
+  "script": "scripts/bench/measure_467_proposal_kinds.py",
+  "section_1_5_1": {
+    "corrections_correction_type_counts": {
+      "iya": 1,
+      "naoshite-request": 1,
+      "semantic_idiom": 162,
+      "stop": 8
+    },
+    "corrections_last_skill_truthy": 0,
+    "corrections_source_counts": {
+      "backfill": 8,
+      "hook": 2,
+      "reflect_confirmed": 162
+    },
+    "corrections_total": 172,
+    "corrections_with_preceding_skill_call": 30,
+    "preceding_skill_calls_with_resolvable_skill_md": 0,
+    "usage_skill_call_total": 888
+  },
+  "section_1_5_3": {
+    "counts": {
+      "constraint_decay_findings": 0,
+      "constraint_decay_warnings": 0,
+      "hook_candidates": 0,
+      "instruction_violation": 0,
+      "missed_skill_opportunities": 1,
+      "pitfall_candidates": 0,
+      "recommended_artifacts": 12,
+      "repeating_patterns": 124,
+      "rule_violation_observed": 25,
+      "stall_recovery_patterns": 0,
+      "trajectory_skill_candidate": 1,
+      "verification_needs": 0,
+      "workflow_checkpoint_gaps": 0
+    },
+    "errors": {},
+    "skipped": {},
+    "target_kinds": [
+      "repeating_patterns",
+      "rule_violation_observed",
+      "pitfall_candidates",
+      "hook_candidates",
+      "instruction_violation",
+      "trajectory_skill_candidate",
+      "missed_skill_opportunities",
+      "verification_needs",
+      "recommended_artifacts",
+      "stall_recovery_patterns",
+      "workflow_checkpoint_gaps",
+      "constraint_decay_warnings",
+      "constraint_decay_findings"
+    ]
+  }
+}
