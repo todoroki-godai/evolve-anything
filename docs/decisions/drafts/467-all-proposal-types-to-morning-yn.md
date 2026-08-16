@@ -117,20 +117,31 @@ python3 scripts/bench/measure_467_proposal_kinds.py \
   --output docs/decisions/drafts/artifacts/467-measurements-2026-08-16.json
 ```
 
-出力 artifact（2026-08-16 に本スクリプトで再実行した結果と台帳との差分の説明つき）:
+出力 artifact（2026-08-16 に本スクリプトで再実行した結果。rev5 初版記載値との差分の説明つき）:
 [`docs/decisions/drafts/artifacts/467-measurements-2026-08-16.md`](artifacts/467-measurements-2026-08-16.md)
 / [`.json`](artifacts/467-measurements-2026-08-16.json)。
-`usage.jsonl` の「Skill 呼び出し総数」のみ台帳値（5,574）と実測値（888）が大きく乖離した
-（Agent 呼び出しを除外する定義に精緻化した結果。artifact 側に詳細を記録）。
+
+**以後、§1.5.1/§1.5.3 の [実測] 値は artifact を正典とし、本文はそれに合わせて更新済み。**
+スクリプト化で rev5 初版の記載に**2つの誤りが見つかった**（どちらも本節の結論は変えない）:
+
+| 項目 | 初版 | 訂正後 | 誤りの内容 |
+|---|---|---|---|
+| `usage.jsonl` の Skill 呼び出し総数 | 5,574 | **888** | 総行数を数えており Agent 呼び出し 4,651 件を除外していなかった |
+| correction に先行する Skill 呼び出し | 28 / 171 | **30 / 172** | `usage.jsonl` の旧スキーマ行（`timestamp` キー）を拾い漏れていた |
+
 §1.5.1/§1.5.3 の結論（SKILL.md 解決 0 件・型フィルタで型不一致・未接続13種の産出件数）は
-この差分では変わらない。
+この訂正では変わらない。
 
 #### 1.5.1 パイロット `instruction_violations` は本番で 0 件（前提崩壊①）
 
+以下の **[実測]** の値は §1.5.0 の再現スクリプトの出力（artifact）を正典とする。
+実ストアは追記され続けるため総数は取得時刻で増える。rev5 初版執筆時の値と差がある行には
+初版値を併記した。
+
 | 観測 | 値 | 根拠 |
 |---|---|---|
-| `corrections.jsonl` 総数 | 171 | 実ストア（全PJ共通・2026-05-15〜2026-08-15） |
-| うち `last_skill` が truthy | **0 / 171** | 同上 |
+| `corrections.jsonl` 総数 | 172（rev5 初版 171） | 実ストア（全PJ共通・2026-05-15〜2026-08-16） |
+| うち `last_skill` が truthy | **0 / 172** | 同上。初版 0 / 171 から結論不変 |
 | 生成の足切り条件 | `c.get("last_skill")` が truthy な correction のみ | `discover/runner.py:392-393` |
 
 **根本原因は検出器ではなく入力側**。corrections の書き手は2系統あり、支配的な方が
@@ -138,24 +149,32 @@ python3 scripts/bench/measure_467_proposal_kinds.py \
 
 | writer | 件数 | `last_skill` |
 |---|---|---|
-| `correction_semantic/promote.py:563`（朝の y/n で採用 → `source="reflect_confirmed"`） | 161 | `promote.py:365` で **`None` ハードコード** |
+| `correction_semantic/promote.py:563`（朝の y/n で採用 → `source="reflect_confirmed"`） | 162 | `promote.py:365` で **`None` ハードコード** |
 | `hooks/correction_detect.py:163`（`source="hook"`） | 2 | `read_last_skill(session_id)` 経由・実測 None |
 | backfill | 8 | キー無し |
 
 **[コード]** `hooks/observe.py:84-87` は `tool_name == "Skill"` のとき `write_last_skill` を呼ぶ。
 **[実測]** `$TMPDIR` に当該一時ファイルが実在し `{"skill_name": ..., "timestamp": ...}` を保持、
-`usage.jsonl` は 5,574 件の Skill 呼び出しを記録。この2つから**書込み側が機能していると
+`usage.jsonl` は **888 件**の Skill 呼び出しを記録。この2つから**書込み側が機能していると
 観測される**（codex [Should] 反映: 「正常に動作」と断定していたのを観測表現に限定した。
 TTL 内読取り・session_id 一致まで通した再現は行っていない）。
+
+> **訂正（再現スクリプト化で判明）**: rev5 初版はここを **5,574 件**と書いていたが、これは
+> `usage.jsonl` の**総行数**（5,576）であり、Agent 呼び出し 4,651 件と別スキーマ 37 件を
+> 除外していなかった。Skill 呼び出しのみを数えると **888 件**である
+> （判別規則は `scripts/lib/measure_467_join.py::is_skill_usage_record`、内訳は artifact 参照）。
+> この訂正は本節の結論（先行 Skill 呼び出しは少数・SKILL.md 解決は 0 件）を変えない。
 
 支配的な欠落は**採用経路が session→skill の対応を運ばないこと**であり、
 一時ファイルの TTL（24h・`rl_common/workflow.py:16`）が主因である証拠は無い。
 
 **[実測]** 修理した場合の上限: 同一セッション内で correction より前に Skill 呼び出しがあった
-correction は **28 / 171（16%）**。1 correction = 最大1 violation（**[コード]** `runner.py:440` の
-無条件 `break`）なので violation の上限も 28 件。
+correction は **30 / 172（17%）**（rev5 初版は 28 / 171。差の +2 は corrections の追記分ではなく、
+再現スクリプト化の際に `usage.jsonl` の**旧スキーマ行**（`ts` でなく `timestamp` キーを使う Skill 行）を
+拾い漏れていたのを修正した分）。1 correction = 最大1 violation（**[コード]** `runner.py:440` の
+無条件 `break`）なので violation の上限も 30 件。
 なお **[コード]** `runner.py:398` の `_MAX_CORRECTION_CHECKS = 20` により、
-**1回の discover が検査するのは最新 20 件まで**（28 はコーパス上限であって1 run の上限ではない
+**1回の discover が検査するのは最新 20 件まで**（30 はコーパス上限であって1 run の上限ではない
 ・tacchi [Nit]6）。
 
 ##### 訂正: 「1箇所の修理で2種別が稼働する」は誤り（tacchi [Must]1・2026-08-16 追加実測）
@@ -167,15 +186,15 @@ rev5 初版はここに「**1箇所の修理で2種別が 0 → 稼働に変わ�
 
 **[コード]** `pitfall_manager/detection.py:162-166` は `last_skill` の前に
 `correction_type in ("stop", "iya")` を要求する。
-**[実測]** `correction_type` の内訳は `semantic_idiom` 161 / `stop` 8 / `iya` 1 / `naoshite-request` 1。
+**[実測]** `correction_type` の内訳は `semantic_idiom` 162 / `stop` 8 / `iya` 1 / `naoshite-request` 1。
 支配的 writer の `promote.py:362` は `correction_type` を **`"semantic_idiom"` 固定**で書くため、
-`last_skill` を直しても 161 件すべてが型フィルタで落ちる。**通過しうるのは 9 件のみ。**
+`last_skill` を直しても 162 件すべてが型フィルタで落ちる。**通過しうるのは 9 件のみ。**
 
 **`instruction_violation` — スキル名の名前空間が解決できない**
 
 **[コード]** `runner.py:417` は `Path.home().glob(f".claude/skills/{skill_name}/SKILL.md")` で
 **bare 名 + global dir** を前提に SKILL.md を探す。
-**[実測]** 上記 28 件の直前スキル名を復元して同じ解決を試すと、**28 件すべてが解決不能（0/28）**。
+**[実測]** 上記 30 件の直前スキル名を復元して同じ解決を試すと、**30 件すべてが解決不能（0/30）**。
 内訳は `evolve-anything:spec-keeper` / `rl-anything:spec-keeper` / `evolve-anything:docs-refresh` 等の
 **プラグイン名前空間付き**が多数を占め、残りは PJ ローカル・廃止済みスキル名。
 これは既知 pitfall **#577/#578（bare vs `plugin:skill` の join キー名前空間不一致）**の再演である。
@@ -682,7 +701,7 @@ Q0 を先に置くのは、Q1 の答えを出す作業そのものが Q0 の受�
 
 | 案 | 内容 | 前提になる工事 | 実測に基づく見込み |
 |---|---|---|---|
-| A | `instruction_violation` を復活させる | ①`last_skill` の運搬（#478）②**スキル名の名前空間正規化 + プラグインパス解決**（#577/#578 の再演）— **この2つだけ**（型フィルタは `pitfall_candidates` 側の工事なので A に不要・§1.5.1 の帰属表） | **0 が濃厚**。28件の直前スキルは**全件 SKILL.md 解決不能**（§1.5.1 訂正）。①だけでは動かない |
+| A | `instruction_violation` を復活させる | ①`last_skill` の運搬（#478）②**スキル名の名前空間正規化 + プラグインパス解決**（#577/#578 の再演）— **この2つだけ**（型フィルタは `pitfall_candidates` 側の工事なので A に不要・§1.5.1 の帰属表） | **0 が濃厚**。30件の直前スキルは**全件 SKILL.md 解決不能**（§1.5.1 訂正）。①だけでは動かない |
 | B | `rule_violation_observed` を `violated_command` で束ねて出す | ①enforcement hook の**実在チェック** ②観測の**時間窓を hook 導入後に限定** ③束ねの再利用（§10-Q3） | y/n **1件**。§5 は**原則不要**（hook 実在環境では op=modify。**hook 不在環境では create に戻り §5 に依存**・§1.5.4 の限定表）。①②なしでは「もう終わった対処」を聞くノイズになる |
 | C | 3種を一斉接続 | §5 の12点すべて + 独立 ADR | y/n 最大 12〜25件／日。上限設計（Q5）が必須 |
 | D | **scoped-C**: rules / hook ファイルの create に限定し、**revert = ファイル削除**で定義（tacchi 提案） | §5 の12点のうち削除で自明になる分を除いた最小契約 | 冪等 revert が自明（削除）なので ADR が薄く済む。C への段階的な入口になる |
@@ -758,7 +777,7 @@ tacchi の [Should]2 件と [Nit]2 件は本 commit で反映済み（§1.5.1 �
 codex [Must]C は §1.5 の実測を再現するスクリプトと出力 artifact の追加で解消する。
 
 **両者が独立に否定した点**: 「積集合が空 → §5 は Stage 1 の前提」。
-**tacchi の追加実測が rev5 初版より状況を悪化させた点**: A 案は 28件全件 SKILL.md 解決不能で
+**tacchi の追加実測が rev5 初版より状況を悪化させた点**: A 案は 30件全件 SKILL.md 解決不能で
 「0 の可能性あり」ではなく「0 が濃厚」。
 **tacchi が追加した選択肢**: Q1-D（scoped-C）。
 
