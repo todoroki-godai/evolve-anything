@@ -41,6 +41,8 @@ _RAW_EVENT = {
     "utterances.db",
     "verbosity_candidates.jsonl",
     "remediation-outcomes.jsonl",
+    # #475 §12 決定4: 未登録だった live store の宣言バックフィル（採用イベントの一次記録）。
+    "optimize_history/<slug>.jsonl",
 }
 
 _WORKFLOW_STATE = {
@@ -142,7 +144,7 @@ def test_classification_golden_counts_and_names() -> None:
     assert by_classification.get("derived_cache", set()) == _DERIVED_CACHE
     assert by_classification.get("dead", set()) == _DEAD
 
-    assert len(_RAW_EVENT) == 11
+    assert len(_RAW_EVENT) == 12
     assert len(_WORKFLOW_STATE) == 18
     assert len(_DERIVED_CACHE) == 15
     assert len(_DEAD) == 0
