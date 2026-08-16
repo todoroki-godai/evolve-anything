@@ -10,6 +10,8 @@ _lib_dir = _root / "scripts" / "lib"
 sys.path.insert(0, str(_lib_dir))
 sys.path.insert(0, str(_root / "skills" / "audit" / "scripts"))
 
+from similarity import tokenize
+
 from pitfall_manager import (
     _compute_line_guard,
     detect_archive_candidates,
@@ -346,7 +348,13 @@ def test_extract_root_cause_keywords():
     keywords = extract_root_cause_keywords("action — CDK deploy パラメータ不足")
     assert "cdk" in keywords
     assert "deploy" in keywords
-    assert "パラメータ不足" in keywords or "パラメータ" in keywords
+    # #447: 日本語は形態素解析器を使わず bigram に分割される。この集合の唯一の
+    # 読み手は detection.py:91 で、そこでは tokenize(section_text) と**対称に**
+    # jaccard 比較されるだけ（人間可読な単語として表示する読み手はいない）。
+    # よって「読める単語が残るか」ではなく「同じ日本語句を含む文と実際に重なるか」
+    # 「無関係な文とは重ならないか」を検査する。
+    assert keywords & tokenize("パラメータ不足の対処")
+    assert not (keywords & tokenize("まったく無関係な文章"))
 
 
 def test_extract_root_cause_keywords_no_dash():
