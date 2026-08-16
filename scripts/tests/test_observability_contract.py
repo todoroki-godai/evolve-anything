@@ -320,6 +320,41 @@ def test_triage_counts_lines_instruction_free():
     assert "せよ" not in combined
 
 
+def test_triage_counts_lines_omits_reward_ema_line_when_not_passed():
+    """#480: reward_ema_excluded_agent_records 未指定（None）なら従来どおり行を追加しない。"""
+    from audit.sections_triage import build_skill_triage_counts_lines
+
+    lines = build_skill_triage_counts_lines(_triage_result(CREATE=1))
+    assert not any("reward_ema" in line for line in lines)
+
+
+def test_triage_counts_lines_reward_ema_zero_still_shown():
+    """#480: 除外0件でも「フィルタは走ったが0件」を明示する行を必ず出す
+    （silence != evaluated。フィルタ自体が走っていない None と区別する）。
+    """
+    from audit.sections_triage import build_skill_triage_counts_lines
+
+    lines = build_skill_triage_counts_lines(
+        _triage_result(CREATE=1), reward_ema_excluded_agent_records=0,
+    )
+    combined = "\n".join(lines)
+    assert "reward_ema" in combined
+    assert "0" in combined
+    assert "Agent" in combined
+
+
+def test_triage_counts_lines_reward_ema_nonzero_shown_with_count():
+    """#480: 除外件数が実際の数値としてそのまま出る。"""
+    from audit.sections_triage import build_skill_triage_counts_lines
+
+    lines = build_skill_triage_counts_lines(
+        _triage_result(CREATE=1), reward_ema_excluded_agent_records=71,
+    )
+    combined = "\n".join(lines)
+    assert "71" in combined
+    assert "reward_ema" in combined
+
+
 def test_production_default_culls_without_env(tmp_path, monkeypatch):
     """production default（EVOLVE_SHOW_CULLED 未設定）で実際に表示淘汰が効くこと（#379 P2）。
 

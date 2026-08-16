@@ -23,7 +23,7 @@ _surface_constitutional_status）は sub-module から直接 import してよい
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
@@ -137,6 +137,12 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
         "total_unmatched": len(discover_data.get("unmatched_patterns", [])),
         "skipped_reason": "no_patterns_available" if not discover_data.get("matched_skills") and not discover_data.get("unmatched_patterns") else None,
     }
+
+    # #480: reward_ema.jsonl から除外した Agent 由来レコード件数。Phase 2.6 の try 内で
+    # 代入するが、より下流（observability.skill_triage への件数行追記）でも参照するため
+    # 関数スコープで先に None 初期化しておく（Phase 2.6 が代入前に例外で落ちても NameError
+    # にしない。None は「reward_ema を読めなかった」を表し、行を追記しない従来挙動に畳む）。
+    _ema_excluded: Optional[int] = None
 
     # Phase 2.6: Skill Triage（trigger eval + CREATE/UPDATE/SPLIT/MERGE/OK 判定）
     try:
@@ -282,8 +288,12 @@ def run_diagnose_phases(result: Dict[str, Any], ctx, observe_first: bool = False
 
         _obs = result.get("observability")
         if isinstance(_obs, dict) and isinstance(_obs.get("skill_triage"), list):
+            # #480: reward_ema.jsonl から除外した Agent 由来レコード件数を、既存の
+            # skill_triage 実件数行と同じ observability レーンへ追記する（新規 section
+            # を作らず既存行に足す・#379）。0件でも必ず表示する（silence != evaluated）。
             _count_lines = build_skill_triage_counts_lines(
-                result["phases"].get("skill_triage")
+                result["phases"].get("skill_triage"),
+                reward_ema_excluded_agent_records=_ema_excluded,
             )
             if _count_lines:
                 _obs["skill_triage"] = _obs["skill_triage"] + _count_lines
