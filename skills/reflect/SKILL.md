@@ -80,9 +80,9 @@ evolve-reflect [オプション]
 ### Step 5: --apply-all の場合
 
 corrections の `apply: true` のものを確認なしで適用する:
-- Edit（既存ファイル）または Write（新規ファイル）ツールで `suggested_file` に学習内容を書き込む。
-  Edit 前に対象ファイルの現在の全文を読み、一時ファイルに保存する（無ければ空文字列を保存する）
-- `evolve-reflect --apply <source_correction_id> --target-path <suggested_file> --draft-line-file <書き込んだ内容を保存したファイル> --before-content-file <上記の保存ファイル>` を呼んで実在確認を通し `reflect_status` を更新する（**corrections.jsonl を直接 Edit しない — #475 §6.1。この CLI が反映先ファイルに該当行が実在するか確認してから `applied` を書く。不一致なら `apply_unverified` を返し `reflect_status` は変えない**）。`source_correction_id` は当該 correction の `source_correction_id` フィールド（出力 JSON にあれば）または `make_source_correction_id(session_id, timestamp)` と同じ形式で組み立てる
+- **Edit/Write の前に、対象ファイルの現在の全文を読み一時ファイルに保存すること（MUST）**（無ければ空文字列を保存する — 新規作成の合図になる）
+- Edit（既存ファイル）または Write（新規ファイル）ツールで `suggested_file` に学習内容を書き込む
+- `evolve-reflect --apply <source_correction_id> --target-path <suggested_file> --draft-line-file <書き込んだ内容を保存したファイル> --before-content-file <上記の保存ファイル>` を呼んで実在確認を通し `reflect_status` を更新する（**corrections.jsonl を直接 Edit しない — #475 §6.1。この CLI が反映先ファイルに該当行が実在するか確認してから `applied` を書く。不一致なら `apply_unverified` を返し `reflect_status` は変えない**）。`source_correction_id` は当該 correction の `source_correction_id` フィールド（出力 JSON にあれば）または `make_source_correction_id(session_id, timestamp)` と同じ形式で組み立てる。**反映先が `~/.claude/rules/` または `<repo>/.claude/rules/` 配下のときは `--before-content-file` が必須**（省略すると CLI がエラーで停止する）。新規作成（空ファイルを渡した）のときは `status == "applied"` でも `revert_recorded: false`（新規ファイル作成は取り消し非対応・§8.2「やらないこと」）が正常
 
 `apply: false` の corrections（閾値未満）は Step 6 の対話レビューに進む。
 
@@ -150,8 +150,8 @@ confidence × max(0, 1 - elapsed_days / decay_days)
 3. 上記いずれでもない → 新規修正として通常レビューに進む
 
 各 correction について AskUserQuestion で以下の選択肢を提供する:
-- **approve**: suggested_file に書き込み（Edit 前に現在の全文を保存） → `evolve-reflect --apply <source_correction_id> --target-path <suggested_file> --draft-line-file <書き込んだ内容> --before-content-file <Edit前の全文>` で実在確認してから reflect_status を更新（**corrections.jsonl を直接 Edit しない — #475 §6.1 の実在確認ゲートを経由する**） → **episodic 昇格 (後述)**
-- **edit**: ユーザーの編集内容で書き込み（Edit 前に現在の全文を保存） → 同様に `evolve-reflect --apply ...` で実在確認してから reflect_status を更新 → episodic 昇格
+- **approve**: **Edit 前に現在の全文を保存すること（MUST）** → suggested_file に書き込み → `evolve-reflect --apply <source_correction_id> --target-path <suggested_file> --draft-line-file <書き込んだ内容> --before-content-file <Edit前の全文>` で実在確認してから reflect_status を更新（**corrections.jsonl を直接 Edit しない — #475 §6.1 の実在確認ゲートを経由する。反映先が rules 配下なら `--before-content-file` は必須**） → **episodic 昇格 (後述)**
+- **edit**: **Edit 前に現在の全文を保存すること（MUST）** → ユーザーの編集内容で書き込み → 同様に `evolve-reflect --apply ...` で実在確認してから reflect_status を更新 → episodic 昇格
 - **false-positive**: 偽陽性として報告 → `false_positives.jsonl` に SHA-256 ハッシュを追記し、reflect_status を "skipped" に更新（"skipped" は §6.1 の実在確認ゲートの対象外 — 迂回口は "applied" を直接書く経路だけなので、直接 Edit のままでよい）
 - **skip**: reflect_status を "skipped" に更新
 

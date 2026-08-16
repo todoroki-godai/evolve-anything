@@ -478,12 +478,23 @@ def _rule_scope_identity(target_path: str) -> dict | None:
 
     `~/.claude/rules/` 配下 → "global_rule"、`<repo>/.claude/rules/` 配下 → "project_rule"。
     どちらでもなければ None（revert 記録の対象外 — 新規スキル/hook 等は既存 §8.2 の
-    スコープ外）。`repo_id`/`relative_path` の解決は skill revert と同じ
-    `evolve_decision_ids.repo_identity` を再利用する（新しい git 解決ロジックを増やさない）。
+    スコープ外）。
+
+    **root 解決は B レーンの `evolve_revert._target.resolve_target` と同じ単一ソースを使う**
+    （`global_rules_root()` を直接 import）。`relative_path` は両 scope とも **rules root
+    からの相対パス**で持つ（`resolve_target` は `root / relative_path` で解決するため — かつて
+    project_rule 側だけ誤ってリポジトリルート相対の `.claude/rules/foo.md` を入れており、
+    resolve 時に `<repo>/.claude/rules/.claude/rules/foo.md` という二重パスになって
+    `REASON_NOT_FOUND` で必ず失敗していた。#475 rev2 で是正）。
+    `repo_id` の解決は skill revert と同じ `evolve_decision_ids.repo_identity` を再利用する
+    （新しい git 解決ロジックを増やさない）。
     """
+    from evolve_revert._target import global_rules_root as _global_rules_root
+
     p = Path(target_path).expanduser()
+    global_root = _global_rules_root()
     try:
-        rel_to_global = p.resolve().relative_to((Path.home() / ".claude" / "rules").resolve())
+        rel_to_global = p.resolve().relative_to(global_root.resolve())
         return {"scope": "global_rule", "repo_id": None, "relative_path": str(rel_to_global)}
     except (ValueError, OSError):
         pass
@@ -491,12 +502,17 @@ def _rule_scope_identity(target_path: str) -> dict | None:
     from evolve_decision_ids import repo_identity as _repo_identity
 
     identity = _repo_identity(str(p))
+    repo_id = identity.get("repo_id")
     rel = identity.get("relative_path") or ""
-    if identity.get("repo_id") and rel.replace("\\", "/").startswith(".claude/rules/"):
+    rel_posix = rel.replace("\\", "/")
+    prefix = ".claude/rules/"
+    if repo_id and rel_posix.startswith(prefix):
         return {
             "scope": "project_rule",
-            "repo_id": identity["repo_id"],
-            "relative_path": rel,
+            "repo_id": repo_id,
+            # resolve_target 側は root=<repo_id>/.claude/rules として root/relative_path
+            # で解決するため、prefix を落として rules root からの相対にする。
+            "relative_path": rel_posix[len(prefix):],
         }
     return None
 
@@ -507,17 +523,33 @@ def record_rule_revert_entry(
     after_content: str,
     *,
     pj_slug: str | None = None,
-) -> dict | None:
+) -> dict:
     """既存 rule ファイルへの追記を optimize_history へ記録する（#475 §8.2・決定4）。
 
     `bin/evolve-revert`（B レーン）が読む既存フォーマット（`revert_schema_version` /
     `revert_before_b64` / `relative_path` / `scope`）に合わせて1件 append する。scope が
     "global_rule"/"project_rule" と判定できない対象（新規スキル/hook 等）は記録しない。
     冪等性（同一 id の二重記録防止）は `append_history_entry_deduped` に委譲する。
+
+    `before_content == ""` は新規ファイル作成として扱う（§8.2「やらないこと」— 新規ファイル
+    作成の revert は実装しない。before 本文が存在しないため「不在」sentinel + schema version 2
+    が要り、#467 §1.4 と同じ穴を開けることになる）。この場合 optimize_history へは書かず、
+    **黙らせず** `{"recorded": False, "reason": "new_file_not_revertible"}` を返す。
+
+    Returns:
+        {"recorded": bool, "reason": str | None, "id": str | None, "written": bool | None}
     """
     identity = _rule_scope_identity(target_path)
     if identity is None:
-        return None
+        return {"recorded": False, "reason": "not_rule_scope", "id": None, "written": None}
+
+    if before_content == "":
+        return {
+            "recorded": False,
+            "reason": "new_file_not_revertible",
+            "id": None,
+            "written": None,
+        }
 
     from evolve_decision_ids import (
         REVERT_ENCODING,
@@ -553,7 +585,12 @@ def record_rule_revert_entry(
 
     slug = pj_slug or _resolve_pj_slug(str(Path.cwd()))
     written_entry, written = append_history_entry_deduped(entry, slug)
-    return {"id": written_entry.get("id", entry_id), "written": written}
+    return {
+        "recorded": True,
+        "reason": None,
+        "id": written_entry.get("id", entry_id),
+        "written": written,
+    }
 
 
 def update_reflect_status(
@@ -1099,6 +1136,21 @@ def main():
                 "message": "--target-path と --draft-line-file が必要です",
             }, ensure_ascii=False))
             sys.exit(1)
+        # #475 rev2: 反映先が rules 配下（global_rule/project_rule）なら
+        # --before-content-file を必須にする。省略を許すと revert 記録が黙って
+        # スキップされ、「1コマンドで戻せる」という約束が画面上は成功したまま破られる
+        # （§6.1 が塞ごうとしている失敗そのもの）。rules 配下でない target（skill 等）は
+        # revert 記録の対象外なので従来どおり不要。
+        rule_identity = _rule_scope_identity(args.target_path)
+        if rule_identity is not None and not args.before_content_file:
+            print(json.dumps({
+                "status": "error",
+                "message": (
+                    "--before-content-file が必要です（反映先が rules 配下のため"
+                    "取り消し記録に必須・#475 §8.2）"
+                ),
+            }, ensure_ascii=False))
+            sys.exit(1)
         draft_line_path = Path(args.draft_line_file)
         if not draft_line_path.exists():
             print(json.dumps({
@@ -1136,20 +1188,28 @@ def main():
             corrections_file, [target_index], "applied",
             target_path=args.target_path, draft_line=draft_line,
         )
-        # #475 §8.2: --before-content-file が渡され、かつ実際に applied になったときのみ
-        # revert 記録を残す（任意入力・省略時は記録なし。呼び出し側は agent の Edit 前に
-        # 読んだ全文をファイルに保存して渡す）。
-        if result.get("status") == "applied" and args.before_content_file:
+        # #475 §8.2/rev2: 反映先が rules 配下（= rule_identity is not None）で applied に
+        # なったときは、必ず revert 記録を試みる（--before-content-file は上で必須化済み）。
+        # 新規ファイル作成（before が空）は §8.2「やらないこと」どおり revert 未対応を
+        # 黙らせず明示する。rules 配下でない target は revert 記録の対象外。
+        if result.get("status") == "applied" and rule_identity is not None:
             before_path = Path(args.before_content_file)
-            if before_path.exists():
-                before_content = before_path.read_text(encoding="utf-8")
-                after_content = Path(args.target_path).read_text(encoding="utf-8")
-                from pj_slug import resolve_pj_slug as _resolve_pj_slug_cli
-                revert_res = record_rule_revert_entry(
-                    args.target_path, before_content, after_content,
-                    pj_slug=_resolve_pj_slug_cli(current_project or str(project_root)),
-                )
-                result["revert_recorded"] = revert_res is not None
+            if not before_path.exists():
+                print(json.dumps({
+                    "status": "error",
+                    "message": f"--before-content-file が見つかりません: {before_path}",
+                }, ensure_ascii=False))
+                sys.exit(1)
+            before_content = before_path.read_text(encoding="utf-8")
+            after_content = Path(args.target_path).read_text(encoding="utf-8")
+            from pj_slug import resolve_pj_slug as _resolve_pj_slug_cli
+            revert_res = record_rule_revert_entry(
+                args.target_path, before_content, after_content,
+                pj_slug=_resolve_pj_slug_cli(current_project or str(project_root)),
+            )
+            result["revert_recorded"] = revert_res["recorded"]
+            if not revert_res["recorded"]:
+                result["revert_reason"] = revert_res["reason"]
         print(json.dumps({
             "source_correction_id": args.apply,
             **result,

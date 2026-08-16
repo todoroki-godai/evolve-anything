@@ -737,6 +737,25 @@ class TestRuleRevertRecording:
         assert identity["scope"] == "global_rule"
         assert identity["relative_path"] == "some-rule.md"
 
+    def test_project_rule_scope_relative_path_excludes_claude_rules_prefix(self, tmp_path, monkeypatch):
+        """#475 rev2: project_rule の relative_path は `.claude/rules/` を含まない
+        （rules root からの相対）。B レーンの resolve_target が
+        `<repo_id>/.claude/rules/<relative_path>` で解決するため、含めると二重パスになる。
+        """
+        repo = tmp_path / "repo"
+        rules_dir = repo / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        target = rules_dir / "some-rule.md"
+        target.write_text("- 行\n", encoding="utf-8")
+        subprocess_run = __import__("subprocess").run
+        subprocess_run(["git", "init", "-q"], cwd=str(repo), check=True)
+
+        identity = reflect._rule_scope_identity(str(target))
+
+        assert identity["scope"] == "project_rule"
+        assert identity["relative_path"] == "some-rule.md"
+        assert "/.claude/rules/" not in identity["relative_path"]
+
     def test_non_rule_path_returns_none(self, tmp_path):
         """rules 配下でないファイルは記録対象外（None）。"""
         target = tmp_path / "not-a-rule.md"
@@ -756,7 +775,7 @@ class TestRuleRevertRecording:
             after_content=target.read_text(encoding="utf-8"),
             pj_slug="test-slug",
         )
-        assert result is not None
+        assert result["recorded"] is True
         assert result["written"] is True
 
         from optimize_history_store import history_path
@@ -771,13 +790,93 @@ class TestRuleRevertRecording:
         assert "revert_before_b64" in entry
         assert "revert_schema_version" in entry
 
-    def test_record_rule_revert_entry_none_for_non_rule_target(self, tmp_path):
+    def test_record_rule_revert_entry_roundtrips_through_target_resolve_global(self, tmp_path):
+        """#475 rev2 修正2: A が書いた entry を B の resolve_target が実際に解決できる
+        （global_rule）。片側だけの検査では今回の食い違いを検出できなかったため往復させる。
+        """
+        target = Path.home() / ".claude" / "rules" / "roundtrip-global.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+
+        result = reflect.record_rule_revert_entry(
+            str(target),
+            before_content="- 既存行\n",
+            after_content=target.read_text(encoding="utf-8"),
+            pj_slug="test-slug",
+        )
+        assert result["recorded"] is True
+
+        from optimize_history_store import history_path
+        entries = [
+            json.loads(l) for l in history_path("test-slug").read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
+        entry = entries[0]
+
+        from evolve_revert._target import resolve_target
+        resolution = resolve_target(entry)
+
+        assert resolution.ok is True
+        assert resolution.path == target.resolve()
+
+    def test_record_rule_revert_entry_roundtrips_through_target_resolve_project(self, tmp_path):
+        """#475 rev2 修正2: 往復テスト（project_rule）。global 側だけでなく project 側も
+        resolve_target が同じファイルを解決できることを確認する（今回 project 側だけ壊れていた）。
+        """
+        repo = tmp_path / "repo"
+        rules_dir = repo / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        target = rules_dir / "roundtrip-project.md"
+        target.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+        import subprocess
+        subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True)
+
+        result = reflect.record_rule_revert_entry(
+            str(target),
+            before_content="- 既存行\n",
+            after_content=target.read_text(encoding="utf-8"),
+            pj_slug="test-slug",
+        )
+        assert result["recorded"] is True
+
+        from optimize_history_store import history_path
+        entries = [
+            json.loads(l) for l in history_path("test-slug").read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
+        entry = entries[0]
+
+        from evolve_revert._target import resolve_target
+        resolution = resolve_target(entry)
+
+        assert resolution.ok is True
+        assert resolution.path == target.resolve()
+
+    def test_record_rule_revert_entry_not_recorded_for_non_rule_target(self, tmp_path):
         target = tmp_path / "not-a-rule.md"
         target.write_text("x\n", encoding="utf-8")
         result = reflect.record_rule_revert_entry(
-            str(target), before_content="", after_content="x\n", pj_slug="test-slug",
+            str(target), before_content="x\n", after_content="x\n", pj_slug="test-slug",
         )
-        assert result is None
+        assert result["recorded"] is False
+        assert result["reason"] == "not_rule_scope"
+
+    def test_record_rule_revert_entry_new_file_not_revertible(self, tmp_path):
+        """#475 rev2 修正3: before が空（新規ファイル作成）は revert 未対応を明示する
+        （黙って revert_recorded=False を返すだけでなく reason を残す・optimize_history は書かない）。
+        """
+        target = Path.home() / ".claude" / "rules" / "brand-new.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 起草した行\n", encoding="utf-8")
+
+        result = reflect.record_rule_revert_entry(
+            str(target), before_content="", after_content="- 起草した行\n", pj_slug="test-slug",
+        )
+
+        assert result["recorded"] is False
+        assert result["reason"] == "new_file_not_revertible"
+        from optimize_history_store import history_path
+        assert not history_path("test-slug").exists()
 
     def test_apply_cli_records_revert_when_before_content_file_given(self, tmp_path, capsys):
         """--apply に --before-content-file を渡すと revert_recorded=True になる。"""
@@ -805,8 +904,8 @@ class TestRuleRevertRecording:
         assert output["status"] == "applied"
         assert output["revert_recorded"] is True
 
-    def test_apply_cli_without_before_content_file_skips_recording(self, tmp_path, capsys):
-        """--before-content-file 省略時は applied 判定のみで revert_recorded キーを持たない。"""
+    def test_apply_cli_without_before_content_file_skips_recording_when_not_rule_scope(self, tmp_path, capsys):
+        """反映先が rules 配下でなければ --before-content-file は不要（従来どおり）。"""
         corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
         filepath = _write_corrections(tmp_path, [corr])
         target = tmp_path / "rule.md"
@@ -826,6 +925,57 @@ class TestRuleRevertRecording:
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "applied"
         assert "revert_recorded" not in output
+
+    def test_apply_cli_requires_before_content_file_when_rule_scope(self, tmp_path, capsys):
+        """#475 rev2 修正3: 反映先が rules 配下なのに --before-content-file を省略すると
+        error で落ちる（黙って revert 記録をスキップしない）。
+        """
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        target = Path.home() / ".claude" / "rules" / "requires-before.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+
+    def test_apply_cli_new_file_records_not_revertible(self, tmp_path, capsys):
+        """新規ファイル作成（--before-content-file が空ファイル）は applied にはなるが
+        revert_recorded=False・revert_reason=new_file_not_revertible を明示する。
+        """
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        target = Path.home() / ".claude" / "rules" / "brand-new-cli.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        before_content_file = tmp_path / "before-empty.txt"
+        before_content_file.write_text("", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--before-content-file", str(before_content_file),
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "applied"
+        assert output["revert_recorded"] is False
+        assert output["revert_reason"] == "new_file_not_revertible"
 
 
 # --- Test: weak_signals レーンは view-only 診断・昇格は evolve へ委譲（#117） ---
