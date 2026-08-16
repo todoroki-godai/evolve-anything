@@ -4,7 +4,7 @@
 - 関連: #467（Epic・入口側）/ #379（縮小方針・新設凍結）/ #402・ADR-053（revert lane）/ #99（昇格チャネルの非対称）
 - 状態: **設計ドラフト rev1（未レビュー）**。実装着手前。コードは1行も変更していない
 - 前提コミット: `556d846d`（`docs/467-rev5-design-rollback`）
-- 測定日: **2026-08-16**
+- 測定日: **2026-08-16**（初版）/ **2026-08-17**（codex cold review 2巡目の [Must] 反映・全実測値をこの時点に統一）
 
 ---
 
@@ -36,11 +36,20 @@
 **ストアへの書込みは一切行っていない**（読み取りのみ。DuckDB は開いていない。LLM バッチも実行していない）。
 以下はそのまま貼れば再実行できる。
 
-> **測定時点の固定（2026-08-16 codex cold review [Must]・T6 実測で判明）**
+> **測定時点の固定（2026-08-16 codex cold review 1巡目 [Must]・T6 実測で判明）**
 > `corrections.jsonl` は**同一日内でも増える**。初版の記載値（total 172 / applied 163 /
 > reflect_confirmed 162）は、同日の再測定で **175 / 166 / 165** になった（差分 +3 はいずれも
 > 2026-08-16 付の新規レコード。結論に影響する値ではない）。
 > **取得日だけでは時点を特定できない**ため、以後は下記 M0 のスナップショット指紋を併記する。
+>
+> **2026-08-17 codex cold review 2巡目 [Must]5 を受けた追加対応**: sha256 は「いつの時点の値か」の
+> 指紋にしかならず、**別マシン・別時点で同じコマンドを再実行しても同じ数字は出ない**（このストアは
+> 生きていて増え続ける）という指摘を受けた。`~/.claude/` 配下は書込み禁止で、かつ生ストアの
+> コピーは repo に置かない（各レコードの `project_path` に個人ホームディレクトリの絶対パス、
+> `message` に実際の会話引用を含み、将来 public 化しうる repo に永続コピーするリスクの方が大きいと
+> 判断した）。代わりに、**このマシンで実行したコマンドと verbatim 出力の完全な写し**を
+> [`artifacts/475-measurement-log-20260817.md`](artifacts/475-measurement-log-20260817.md) に固定した。
+> 本文書の [実測] 値はすべてこの1回の連続実行から取得しており、**全て同一時点（下記 M0）に揃っている**。
 >
 > **M0. 測定時点の指紋**
 >
@@ -54,7 +63,9 @@
 > PY
 > ```
 >
-> 本文書の [実測] 値の基準時点: **lines=175 / sha256=`2881e4b9965e92eb388c09a5d61ce983921ea7e117e35a36a7b023209e2e02b8`**（2026-08-16）
+> 本文書の [実測] 値の基準時点: **lines=177 / bytes=227870（223 KB）/
+> sha256=`895e905a6575376d7af91a867b24636c6bc431d788aa36e655ad2e0eb4926be0`**（2026-08-17・
+> 全出力は上記 artifact を参照）
 
 **M1. corrections.jsonl の分布（reflect_status / source / 交差）**
 
@@ -116,6 +127,46 @@ for r in recs:
 PY
 ```
 
+**M5. P23（`suggest_claude_file` の実データ dry-run）の再現手順**（codex cold review 2巡目 [Must]6:
+「P23 に実行コマンドが無い」を受けて追加。`project_root` は本リポジトリの cwd に固定する —
+reflect の実呼び出し `route_corrections(pending, project_root)`（`skills/reflect/scripts/reflect.py:1044`）
+が単一の `project_root` を全 pending に対して使うため、各レコードの `project_path` へ都度
+切り替える経路は実装に存在しない）。
+
+```bash
+python3 - <<'PY'
+import json, pathlib, collections, sys
+sys.path.insert(0, 'scripts')
+from lib.reflect_routing import suggest_claude_file
+
+p = pathlib.Path.home()/".claude/evolve-anything/corrections.jsonl"
+recs = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+rc = [r for r in recs if r.get("source") == "reflect_confirmed"]
+
+root = pathlib.Path.cwd()
+none_count, conf_counter, targets = 0, collections.Counter(), collections.Counter()
+for r in rc:
+    result = suggest_claude_file(r, project_root=root)
+    if result is None:
+        none_count += 1
+    else:
+        path, conf = result
+        conf_counter[conf] += 1
+        targets[path] += 1
+print("reflect_confirmed:", len(rc), "/ None:", none_count, f"({none_count/len(rc)*100:.1f}%)")
+print("confidence dist:", conf_counter.most_common())
+print("targets:", targets.most_common())
+PY
+```
+
+出力（verbatim・全文は artifact 参照）:
+
+```
+reflect_confirmed: 167 / None: 161 (96.4%)
+confidence dist: [(0.85, 6)]
+targets: [('<HOME>/.claude/CLAUDE.md', 3), ('<repo>/.claude/rules/project-specific.md', 3)]
+```
+
 **[コード] 側の再現**: 凍結定数の現況は下記1行で出る（読み取りのみ）。
 
 ```bash
@@ -126,8 +177,11 @@ python3 -c "import sys;sys.path.insert(0,'scripts/lib');import shrink_freeze as 
 
 ## 2. この設計が依拠する前提と evidence（空欄なし）
 
-計 **25 件**（[コード] 14 / [実測] 8 / 測定不能 3）。
-うち P21〜P25 は codex cold review 1巡目の [Must] を受けた追加実測（§2.6）。
+計 **28 件**（[コード] 20 / [実測] 5 / 測定不能 3）。P1〜P25 の25件 + 測定不能 U1〜U3 の3件。
+うち P21〜P25 は codex cold review 1巡目の [Must] を受けた追加実測（§2.6）。**内訳は2巡目の
+P21/P22 再格付け（[実測]→[コード]）を反映済み**（旧内訳は「14/8/3」で合計25件しかカウントして
+おらず、P21〜P25 追加後も更新されていなかった。P1〜P25 が実際には25件あるため、旧内訳の
+コード14+実測8=22件は当初から3件不足していた誤記でもあった）。
 
 ### 2.1 現状の経路に関する前提
 
@@ -164,17 +218,20 @@ python3 -c "import sys;sys.path.insert(0,'scripts/lib');import shrink_freeze as 
 
 | # | 前提 | 等級 | evidence（値 / コマンド / 取得日） |
 |---|---|---|---|
-| P17 | corrections は全 **172 件**。`reflect_status` は `applied 163 / skipped 8 / pending 1`。`source` は `reflect_confirmed 162 / backfill 8 / hook 2`。**`reflect_confirmed` は 162 件すべてが `applied`** | [実測] | M1 / 2026-08-16 |
-| P18 | `reflect_confirmed` の日付分布は 2026-06-12 の 41 件が最多。最古 **65 日前**・最新 0 日前。**90 日超は現在 0 件**（＝まだ1件も prune されていない） | [実測] | M2 / 2026-08-16 |
-| P19 | 2026-08-15 に朝の y/n で promote されたのは **3 件**。内容は ①「並行して作業できないの？」②「spec-keeper は codex レビューいらない」③「memory だとこの PJ だけじゃないの？ rule にした方がよくない？」。3件とも `routing_hint: None` / `extracted_learning: None` | [実測] | M1 の変形（`timestamp[:10] == "2026-08-15"` で絞る）/ 2026-08-16 |
-| P20 | fleet 全体の採用履歴は **42 件**、うち **戻せるもの（`revert_schema_version` あり）は 1 件だけ**（`skills/spec-keeper/SKILL.md`・scope=project・2026-08-15） | [実測] | M3 / 2026-08-16 |
+| P17 | corrections は全 **177 件**。`reflect_status` は `applied 168 / skipped 8 / pending 1`。`source` は `reflect_confirmed 167 / backfill 8 / hook 2`。**`reflect_confirmed` は 167 件すべてが `applied`** | [実測] | M1 / 2026-08-17（M0 指紋 lines=177） |
+| P18 | `reflect_confirmed` の日付分布は 2026-06-12 の 41 件が最多。最古 **65 日前**・最新 0 日前。**90 日超は現在 0 件**（＝まだ1件も prune されていない） | [実測] | M2 / 2026-08-17 |
+| P19 | 2026-08-15 に朝の y/n で promote されたのは **3 件**。内容は ①「並行して作業できないの？」②「spec-keeper は codex レビューいらない」③「memory だとこの PJ だけじゃないの？ rule にした方がよくない？」。3件とも `routing_hint: None` / `extracted_learning: None` | [実測] | M1 の変形（`timestamp[:10] == "2026-08-15"` で絞る）/ 2026-08-16 取得（2026-08-17 再取得でも同一 3 件・値は日付範囲固定のため store 増加の影響を受けない） |
+| P20 | fleet 全体の採用履歴は **42 件**、うち **戻せるもの（`revert_schema_version` あり）は 1 件だけ**（`skills/spec-keeper/SKILL.md`・scope=project・2026-08-15） | [実測] | M3 / 2026-08-17（2026-08-16 時点から件数不変） |
 
 ### 2.5 測定不能（空欄にしない）
 
-| # | 事項 | 理由 |
+**この表は rev1 時点のスナップショット。U1・U2 はその後解決/決定済み — 最新状態は §11 を参照**
+（この表を毎回更新すると二重管理になるため、ここでは初出時点の理由だけを残す）。
+
+| # | 事項 | 理由（rev1 時点） |
 |---|---|---|
-| U1 | `AskUserQuestion` の選択肢上限が 2〜4 であること | **測定不能（本セッション）**。当該 tool が本セッションに提供されておらず、実行して境界を確かめられない。issue #475 コメント（2026-08-15 ユーザー）の主張をそのまま前提に採る。実装時に1回叩いて確定させること |
-| U2 | 「Other」（自由記述）から残り4反映先へ確実に到達できること | **測定不能（本セッション）**。U1 と同じ理由。設計上は Other を唯一の逃げ道にしているので、実装時の実測が必須 |
+| U1 | `AskUserQuestion` の選択肢上限が 2〜4 であること | **測定不能（本セッション）**。当該 tool が本セッションに提供されておらず、実行して境界を確かめられない。issue #475 コメント（2026-08-15 ユーザー）の主張をそのまま前提に採る。→ **§11 で確定（2〜4個 + Other 自動付与）** |
+| U2 | 「Other」（自由記述）から残り反映先へ確実に到達できること | **測定不能（本セッション）**。U1 と同じ理由。→ **§11・§12 で決定（自由記述で受け、判断が付かない場合は黙って対象外にせずその場で1回聞き返す）** |
 | U3 | ルール文書に書いた指摘が実際に AI の振る舞いを変えたか | **測定不能（現時点）**。因果判定 (b) は revert 済みを畳んだ有効 accept 件数が分母で、`bin/evolve-audit --growth` が `not_measured` を返す段階（ADR-054 §5・§7.2）。**本設計はこれを解決しない**（届くようにするだけ） |
 
 ---
@@ -185,11 +242,22 @@ codex が「測れるのに測っていない」と指摘した前提を実測�
 
 | # | 前提 | 等級 | evidence（値 / 取得元 / 取得日） |
 |---|---|---|---|
-| P21 | **skill レーンに correction 単位の入力口は存在しない** | [実測] | 朝の y/n が読むのは `matched_skills` と `skill_evolve` の2種のみ（`scripts/lib/evolve_decisions/_candidates.py:97,109`）。`skill_evolve/proposal.py:230` の `evolve_skill_proposal(skill_name, skill_dir)` は「既存スキルに自己進化テンプレを入れるか」の判定用で、correction を渡す引数を持たない / 2026-08-16 |
-| P22 | **`hook_candidates` は読み手ゼロ。未接続として公式登録済み** | [実測] | 生成は `scripts/lib/discover/runner.py:372-374`、未接続登録は `scripts/lib/fixtures/proposal_lane_unconnected_baseline.txt:4` / 2026-08-16 |
-| P23 | **`suggest_claude_file` は 165 件中 159 件（96.4%）が `None`。返り値は候補1つ（リストでない）。`confidence` は全件 0.9 固定** | [実測] | `reflect_confirmed` 165 件に対する dry-run（LLM 不使用・読み取りのみ）。内訳は §4.2 の表 / 2026-08-16 |
+| P21 | **skill レーンに correction 単位の入力口は存在しない** | [コード]（codex cold review 2巡目 [Must]6 で訂正。実ストアの観測ではなく、生成箇所・関数シグネチャ・未接続 baseline を読んだ構造証明のため） | 朝の y/n が読むのは `matched_skills` と `skill_evolve` の2種のみ（`scripts/lib/evolve_decisions/_candidates.py:97,109`）。`skill_evolve/proposal.py:230` の `evolve_skill_proposal(skill_name, skill_dir)` は「既存スキルに自己進化テンプレを入れるか」の判定用で、correction を渡す引数を持たない / 2026-08-16 |
+| P22 | **`hook_candidates` は読み手ゼロ。未接続として公式登録済み** | [コード]（同上。理由は P21 と同じ） | 生成は `scripts/lib/discover/runner.py:372-374`、未接続登録は `scripts/lib/fixtures/proposal_lane_unconnected_baseline.txt:4` / 2026-08-16 |
+| P23 | **`suggest_claude_file` は 167 件中 161 件（96.4%）が `None`。返り値は候補1つ（リストでない）。`confidence` は6件とも `0.85`**（当初「confidence 全件 0.9 固定」は誤り。0.9 は correction レコードの**入力側**固定値であり、`suggest_claude_file` が**返す**マッチ confidence とは別物 — 詳細は本表下の訂正記録） | [実測] | `reflect_confirmed` 167 件・`project_root=cwd` 固定の dry-run（LLM 不使用・読み取りのみ）。**再現コマンドは §1.1 M5** / 2026-08-17（M0 指紋 lines=177） |
 | P24 | **`reflect_data_count`（`/reflect` 提案の駆動値）は `pending` のみを数える。閾値は 5 件で AskUserQuestion による提案が MUST** | [コード] | `discover/suppression.py:183-196` → `discover/runner.py:218-219` → `skills/evolve/references/correction-review.md:11-16` / 2026-08-16 |
 | P25 | **revert の conflict 判定はファイル全体の SHA256 比較。行単位ではない** | [コード] | `scripts/lib/evolve_revert/_apply.py:294-301` / 2026-08-16 |
+
+**P23 の訂正記録（codex cold review 2巡目 [Must]4）**: 初版は「`confidence` は全件 0.9 固定」と
+書いていたが、これは**correction レコード自身が持つ入力側の `confidence` フィールド**
+（`correction_semantic/promote.py:367` が昇格時に書き込む固定値 `0.9`）と、
+`suggest_claude_file` が返すマッチ結果の confidence（`scripts/lib/reflect_routing.py` の
+分岐ごとに 0.90 / 0.88 / 0.85 / 0.80 / 0.75 / 0.60 のいずれか）を**混同していた**。
+2026-08-17 に §1.1 M5 のコマンドで再実行した結果、167 件中 `None` にならなかった 6 件は
+**すべて `confidence: 0.85`**（`.claude/rules/project-specific.md` へのプロジェクト固有シグナル
+一致3件 + `~/.claude/CLAUDE.md` への `always/never/prefer` 一致3件）だった。この訂正は
+**「並べ替えという機能が実質存在しない」という結論には影響しない**（96.4% が `None`・返り値は
+候補1つのみという事実は変わらない）。
 
 ---
 
@@ -284,16 +352,18 @@ issue の必須要件 1b が指す「2026-08-15 にユーザーが誤解した�
 当初案は `suggest_claude_file`（`scripts/lib/reflect_routing.py:108`）で反映先候補を並べ替える
 方式だったが、**実測でこの前提が崩れた**（T1・§2.6-P23）:
 
-| 実測結果（`reflect_confirmed` 165件・2026-08-16） | 値 |
+| 実測結果（`reflect_confirmed` 167件・2026-08-17・再現コマンドは §1.1 M5） | 値 |
 |---|---|
-| 返り値が `None`（どの分岐にも当たらない） | **159 件（96.4%）** |
+| 返り値が `None`（どの分岐にも当たらない） | **161 件（96.4%）** |
 | `~/.claude/CLAUDE.md` | 3 件 |
 | `.claude/rules/project-specific.md` | 3 件 |
 | `~/.claude/rules/*.md`（グローバル rule） | **0 件**（P6 を再確認） |
 
 さらに同関数の返り値は `Optional[Tuple[path, confidence]]` ＝ **候補を1つしか返さない**。
 リストを返さないので、**「上位2件を並べる」という設計自体が実装上成立しない。**
-`confidence` も全 165 件が `0.9` 固定で、`<0.75` の分岐は実データで一度も発火しない。
+`confidence` は非 `None` の6件すべてが `0.85` だった（`<0.75` の分岐＝auto-memory フォールバックは
+実データで一度も発火しない）。**当初「confidence 全件 0.9 固定」としていたのは誤り**（0.9 は
+correction レコード入力側の固定値と、関数が返すマッチ confidence を混同していた。詳細は §2.6 P23 直下の訂正記録）。
 
 **採る方式（固定4択）**:
 
@@ -334,11 +404,27 @@ options（label / detail をそのまま出す）:
 
 | # | label | detail（必ず添える） |
 |---|---|---|
-| 1 | **共通ルールに書く（全PJで毎回効く）** | `~/.claude/rules/<file>.md` に追記します。次のセッションから**全プロジェクトで**指示として読まれます。全PJに効くので影響範囲は最大です。 |
-| 2 | **このPJのルールに書く（このPJだけ毎回効く）** | `<このリポジトリ>/.claude/rules/<file>.md` に追記します。次のセッションから**このプロジェクトでだけ**指示として読まれます。 |
-| 3 | **いまは反映しない（記録だけ残す）** | **AI の振る舞いは変わりません。** 記録は棚卸しの件数と他PJでの優先提示にしか使われず、**90日経つと自動削除されます**（§12 判断2 で「消さない」を選べば残ります）。あとで見直しの確認でまとめて出せます（5件たまると自動で案内します。朝の確認には再度出しません）。 |
+| 1 | **共通ルールに書く（全PJで毎回効く）** | `~/.claude/rules/<file>.md` に追記。次回から**全PJ**で効きます（影響範囲は最大）。**あとで戻せます**（同ファイルへの後続変更が無い場合。新規ファイルなら書く前に別途確認 — §8.2）。 |
+| 2 | **このPJのルールに書く（このPJだけ毎回効く）** | `<このリポジトリ>/.claude/rules/<file>.md` に追記。次回から**このPJだけ**で効きます。**あとで戻せます**（同ファイルへの後続変更が無い場合。新規ファイルなら書く前に別途確認 — §8.2）。 |
+| 3 | **いまは反映しない（記録だけ残す）** | **AI の振る舞いは変わりません。** 90日で自動削除されません（§12 決定2）。5件たまると `/reflect` でまとめて案内します（朝には再度出しません）。 |
 | 4 | **いいえ（この指摘は不要）** | 記録も反映もしません。次回から出しません。 |
-| — | Other（自動付与） | memory / pitfall に書きたいときはここに書いてください（例: 「pitfall に書く」「memory に残す」）。skill / hook と書いた場合は**この場では書かず**、既存の採用フローへ回した旨を表示します。 |
+| — | Other（自動付与） | memory / pitfall はここへ自由記述で（判断が付かない場合は聞き返します — §11 U2）。skill / hook は**対象外です**（別途 `/evolve-anything:evolve` の skill 提案で扱います。**回しません** — §4.2 T2）。 |
+
+**上記 detail 文言は §11-A の実測を受けて簡潔化済み**（tacchi Must-1 が要求する情報量 —
+何が起きるか・戻せるか・削除されるか — は保ったまま、冗長な言い回しだけを削った）。
+
+**「新規ファイルなら戻せません」の再確認をいつ行うか（codex cold review 2巡目 [Must]9）**:
+選択時点（AskUserQuestion の回答時点）では、選んだ scope（共通/PJ）の中の**どのファイルに書くか**
+がまだ決まっていない（P5・上表の「反映先の並べ替え」欄のとおり agent が Edit 前に判断する）ため、
+「既存ファイルへの追記か・新規ファイル作成か」もこの時点では未確定。よって:
+
+1. ユーザーは1・2を選ぶ時点では「戻せます（条件付き）」とだけ伝えられる（上表の detail）。
+2. agent が対象ファイルを決定した**直後・実際に Edit/Write する前**に、新規作成と判明した場合のみ
+   追加で1問「このファイルはまだ無いので新規作成します。戻せません。続けますか？」を確認する。
+   既存ファイルへの追記なら、この追加確認はスキップしてそのまま書く。
+3. 朝の設問数（P8・1 group = 1 問・最大5問）は変わらない。この追加確認は**稀なケース**
+   （§8.3: グローバル rules は既に 33 ファイルあり新規作成が必要な場面は多くない）に限った
+   例外的な2問目であり、通常フローの設問数には数えない。
 
 **1b への対応（保留であることが読み取れる文言）**: 3 の label から「記録のみ」という中立語を外し、
 **「いまは反映しない」**を先頭に置いた。detail の1文目を「AI の振る舞いは変わりません」にして、
@@ -347,7 +433,7 @@ options（label / detail をそのまま出す）:
 
 **4つとも位置固定**（tacchi Must-5 + T1）。指摘の内容にかかわらず同じ順番で出す。
 却下手段（4）が消えると不要な指摘が毎朝出続け、承認疲れが1日5件の上限（P8）を超える。
-§12 の判断1 はこれで**決定**とし、ユーザー判断からは外した。
+§12 の決定1 のとおり、ユーザー判断からは外している。
 
 ---
 
@@ -455,11 +541,52 @@ agent が手順を飛ばしても、`applied` は付く**。§6 で状態を3つ
 | 項目 | 内容 |
 |---|---|
 | 実装場所 | `reflect.py:470` の `update_reflect_status` に確認を内蔵する（呼び出し側に任せない。**新規 CLI サブコマンドは作らない**＝`feedback_evolve_single_entrypoint`。既存 `evolve-reflect` にフラグを1つ足す） |
-| 関数契約（codex [Must]） | 現行シグネチャ `update_reflect_status(filepath, indices, status)` には対象ファイルも起草行も渡らず、戻り値も無い。**引数に `target_path` と `draft_line` を足し、戻り値を `{"status": "applied" \| "apply_unverified", "target": …, "reason": …}` にする**。rule / memory / pitfall の対象ファイルは呼び出し側が確定して渡す（推測させない） |
 | 確認方法 | 反映先ファイルを読み、起草した行の**正規化後の完全一致**が存在するか（LLM 不要・決定論）。正規化規則は §6.2 |
 | 不一致のとき | `applied` を書かない。`promoted` のまま残し `apply_unverified` を返す。**黙って成功にしない** |
 | ストア追加 | **なし**。`reflect_status` の既存フィールド値だけで表現する（#379 凍結に非抵触・§7） |
 | 副作用 | §6 表のとおり `reflect.py:327` の再発回数が今より小さく出る（＝これまで水増しされていた） |
+
+#### 関数契約（codex cold review 2巡目 [Must]7・具体化）
+
+当初は「引数に `target_path` と `draft_line` を足す」としか書いておらず、**追加フラグ名 / 対象
+correction の指定方法 / 複数件更新時の対応 / `--apply-all` との呼出し形式**が未設計だった
+（[Must]）。既存呼び出し（`--skip-all` → `update_reflect_status(filepath, indices, "skipped")`、
+`reflect.py:1009`）と契約が壊れないよう、以下のとおり確定する。
+
+**関数シグネチャの変更**（後方互換を保つ。`target_path`/`draft_line` はキーワード専用引数で既定 `None`）:
+
+```python
+def update_reflect_status(
+    filepath: Path,
+    indices: list[int],
+    status: str,
+    *,
+    target_path: str | None = None,
+    draft_line: str | None = None,
+) -> dict:
+    """status="applied" のときのみ target_path/draft_line が必須（無ければ ValueError）。
+    §6.2 の正規化規則で target_path を読み、draft_line の完全一致を確認してから書く。
+    不一致なら reflect_status は変更せず {"status": "apply_unverified", ...} を返す。
+    status="skipped" 等は従来どおり target_path/draft_line 不要（--skip-all は無改修で動く）。
+    戻り値: {"status": "applied" | "apply_unverified" | "skipped", "target": str | None, "reason": str | None}
+    """
+```
+
+**新設 CLI フラグ**（既存 `evolve-reflect` に3つ追加。1呼び出し＝1 correction・1 target_path・
+1 draft_line の**1:1対応に固定**することで、codex が指摘した「複数件更新時の target_path と
+draft_line の対応」問題自体を発生させない — 朝の設問は1件処理するごとに Edit→CLI 呼び出しを
+行うので、そもそも1回のCLI呼び出しで複数件をまとめて処理する必要が無い）:
+
+| フラグ | 内容 |
+|---|---|
+| `--apply <source_correction_id>` | 対象 correction の識別子。**新しい識別子は作らない** — 既存の `make_source_correction_id(session_id, timestamp)`（`reflect.py`、`--view` 出力の `source_correction_id` フィールドと同一形式）を再利用する |
+| `--target-path <path>` | 反映先ファイル（絶対 or リポジトリ相対）。agent が Edit 直前に確定した値をそのまま渡す |
+| `--draft-line-file <path>` | 起草行の**全文**（§6.2 の表示用省略とは別の照合用全文）を含む一時ファイルのパス。シェル引数のクォート/エスケープ事故を避けるため、CLI 引数に直接テキストを渡さない（既存の `--corrections-file` 等ファイルパス系フラグと同じ規約） |
+
+**`--apply-all` との関係**: 既存 `--apply-all`（`reflect.py:645`）は pending フロー（Step 5）で
+`entry["apply"] = confidence >= min_confidence` を出力に付与する**表示専用フラグ**であり、
+それ自体は `update_reflect_status` を呼ばない（agent が出力を見て Edit → 新フラグ `--apply` を
+呼ぶ、という2段構成は変えない）。SKILL.md 側の手順変更は下表「迂回口を塞ぐ」参照。
 
 **迂回口を塞ぐ（codex [Must]・T4 実測）**: `applied` を書く経路は**3つ**あり、うち2つは
 Python を通らない。ゲートを1箇所に埋めるだけでは素通りする。
@@ -467,8 +594,8 @@ Python を通らない。ゲートを1箇所に埋めるだけでは素通りす
 | # | 経路 | 場所 | 対処 |
 |---|---|---|---|
 | 1 | Python writer（`promote()` 本体） | `correction_semantic/promote.py:371` | ゲート内蔵可。**ここから `applied` を直書きするのをやめ、`promoted` を書く**（反映は後段） |
-| 2 | **agent が JSONL を直接 Edit**（`--apply-all` 手順） | `skills/reflect/SKILL.md:83` | **不可（これが迂回口）**。手順を「agent が直接 Edit」から**「ゲート内蔵 CLI を呼ぶ」に書き換える** |
-| 3 | **agent が JSONL を直接 Edit**（approve / edit 手順） | `skills/reflect/SKILL.md:151-152` | 同上 |
+| 2 | **agent が JSONL を直接 Edit**（`--apply-all` 手順） | `skills/reflect/SKILL.md:83` | **不可（これが迂回口）**。手順を「agent が直接 Edit」から**「`evolve-reflect --apply <source_correction_id> --target-path <path> --draft-line-file <file>` を呼ぶ」に書き換える** |
+| 3 | **agent が JSONL を直接 Edit**（approve / edit 手順） | `skills/reflect/SKILL.md:151-152` | 同上（同じ `--apply` フラグ） |
 
 現状 `update_reflect_status()` は CLI からは `--skip-all`（`"skipped"` のみ）でしか呼ばれず、
 **`applied` を書く CLI 入口が存在しない**。よって「フラグを足す」は必須作業であって選択肢ではない。
@@ -566,6 +693,7 @@ Python を通らない。ゲートを1箇所に埋めるだけでは素通りす
 | root 解決 | `_target.resolve_target` に scope 2 種（`global_rule` → `~/.claude/rules` / `project_rule` → `<repo>/.claude/rules`）を追加 | 分岐2本。containment 検査・lstat・nlink 検査は既存のまま流用 |
 | availability | `_availability._SUPPORTED_SCOPES` に同2種を追加 | 定数1行 |
 | 記録 | 反映時に `optimize_history` へ既存形式の entry を append（`revert_schema_version` / `revert_before_b64` / `relative_path` / `scope`） | 既存 `append_history_entry_deduped` を呼ぶだけ |
+| **後続変更検知（`--list` 表示・codex cold review 2巡目 [Must]8）** | `bin/evolve-revert --list` の一覧表示に、対象ファイルの**現在の SHA256** を読み `after_sha` と比較する処理を追加し、「戻せる」/「後続変更ありで戻せない」を出す。**`compute_revert_availability`（`_availability.py:41-89`）自体は変更しない** — 同関数はメタデータのみを見る純粋関数（I/O ゼロ）と明記されており（同ファイル冒頭の docstring）、その設計は保つ。**追加するのは `--list` の出力整形レイヤー（新しい読み取り専用ステップ）** であり、既存の理由コード3種（`pre_extension`/`lane_unsupported`/`before_too_large`）とは別に、`available=True` の entry についてのみ「後続変更あり」の注記を追加する | 新しい read-only 関数1つ（対象ファイルを読んで SHA256 を計算し `after_sha` と比較するだけ）。`_apply.py:294-301` の conflict 判定と同じロジックを listing 時点で流用できる |
 | **やらないこと** | **新規ファイル作成の revert**（before 本文が存在しないため「不在」sentinel と schema version 2 が要る。#467 §1.4 が同じ穴を指摘済み） | ここは実装しない |
 
 **帰結**: 新規 rule ファイルを作る反映と、Other 経由の hook 反映は **戻せない**。
@@ -595,7 +723,7 @@ Python を通らない。ゲートを1箇所に埋めるだけでは素通りす
 - 朝の設問で反映先を選ぶ時点では「戻せます」と断定しない。文言は
   **「あとで戻せます（同じファイルをその後に変更していない場合）」**にする
 - 行単位 revert への拡張は**やらない**（`revert_schema_version` 2 相当の設計が要り、
-  #467 §1.4 と同じ穴を開けることになる）。§12 の判断3 にこの選択肢を追記した
+  #467 §1.4 と同じ穴を開けることになる）。§12 の決定3 にこの選択肢を追記した
 
 **運用上の含意**: 「既存ファイルに追記」を既定にすると、ほぼ全ての rule 反映が戻せる側に入る。
 グローバル rules は現在 **33 ファイル**あり（`ls ~/.claude/rules/*.md | wc -l` → 33・2026-08-16 [実測]）、
@@ -613,7 +741,7 @@ Python を通らない。ゲートを1箇所に埋めるだけでは素通りす
 | 朝の設問テンプレ | `skills/evolve/references/correction-review.md:64-68`（Step 6.2 の y/n 分岐） | ここを §4.3 の4択に差し替える。**このファイルが分岐条件・AskUserQuestion テンプレの正典**（同ファイル :3 に明記） |
 | SKILL.md の1行要約 | `skills/evolve/SKILL.md:255` | 「y/n 確認」→「反映先つき選択」に文言を合わせる（要約のみ・手順は上の references 側） |
 | 書き込み規約 | `skills/reflect/SKILL.md:168-174`（「書き込み時のルール」） | **再発明しない**。既存/新規の分岐・`routing_hint` の扱い・`line_limit_warning` の扱いをそのまま引く |
-| 反映先の並べ替え | `scripts/lib/reflect_routing.py:108`（`suggest_claude_file`） | 候補の**並べ替えにのみ**使う。返り値→反映先ラベルの写像は薄い対応表で足す（P6 の欠落を埋める） |
+| ~~反映先の並べ替え~~ | ~~`scripts/lib/reflect_routing.py:108`（`suggest_claude_file`）~~ | **削除（codex cold review 2巡目 [Must]1）**。§4.2 で並べ替えを廃止したため、この行は矛盾したまま残っていた誤り。`suggest_claude_file` はこの新設フロー（promoted の朝の設問）では**呼ばない**。従来どおり **既存の pending フロー（reflect Step 6・P5）でのみ**使われ続ける（本設計のスコープ外・変更しない）。**新設フローで、共通/PJルールのどのファイルに書くか**は、既存の書き込み規約（`skills/reflect/SKILL.md:172-178`）と同じ判断（agent が Edit/Write 前に既存ファイルの内容を見て決める）を流用する。新しい選定ロジックは作らない |
 | 昇格 CLI | `evolve-reflect --promote-weak`（`correction-review.md:65`） | そのまま使う。`reflect_status` の値だけ §6 に従って分岐させる |
 | 既読記録 | `correction_semantic/daily_review.py:111`（`record_reviewed`） | `decision` に反映先を入れて呼ぶ（自由文字列・P9）。**部分失敗時は `promoted_keys` のみ渡す既存 MUST を維持**（#326） |
 
@@ -647,61 +775,154 @@ reflect スキルが既に全部持っている（P5）。本設計がやるの�
 | # | 事項 | 状態 | 何が変わりうるか |
 |---|---|---|---|
 | ~~U1~~ | `AskUserQuestion` の選択肢上限 | **確定（2026-08-16）**: 選択肢は **2〜4個**、これに **Other が自動付与**される。tool の入力スキーマ（`options` の `minItems: 2` / `maxItems: 4`、および「ユーザーは常に Other を選んで自由記述できる」の記載）で確認 | §4.2 の固定4択 + Other はこの上限ちょうどに収まる。**変更不要** |
-| U2 | Other の自由記述から memory / pitfall へ確実に到達できるか | **半分確定**: Other が自由文字列を返すことは U1 で確定。残る不確実性は「その文字列を agent が memory / pitfall に一意に解釈できるか」だけ | **崩れても設計は壊れない**。解釈が不安定なら memory / pitfall も対象外に落とし、初期スコープを rule 2種に絞る（4択の 1・2 はそのまま）。実装の最初の1問で確認する |
+| ~~U2~~ | Other の自由記述から memory / pitfall へ確実に到達できるか | **決定済み（2026-08-17 ユーザー確定）**: Other は自由記述で受ける。**memory / pitfall を初期スコープから落とす案は採らない**（旧案の「対象外に落とす」フォールバックを撤回）。agent が自由記述を memory / pitfall のどちらに解釈すべきか判断が付かない場合は、**黙って対象外にせず、その場で1回だけ聞き返す**（例:「memory と pitfall のどちらに書きますか？」の追加1問）。聞き返しても不明なら初めて「対象外です」と表示する | 実装時の最初の数件で「聞き返し」がどのくらいの頻度で発生するかを観測し、頻発するようなら自由記述の解釈規則（キーワードマッチ等）を足す判断材料にする（本設計のスコープ外・別途観測） |
 | U3 | 反映したルールが行動を変えたか | **測定不能（現時点）** | ADR-054 の (b) が計測可能になるまで判定不能 |
-| ~~U4~~ | `suggest_claude_file` の並べ替え精度 | **論点ごと消滅（2026-08-16 実測）**。165 件中 159 件（96.4%）が `None` を返し、返り値は候補1つのみ（リストでない）。**並べ替えという機能が存在しない** | §4.2 を固定4択に変更した。**「上位2件に正解が入る率」は正解データ（人間が実際にどこへ書いたか）が corrections.jsonl に無いため、そもそも測定不能**でもある |
+| ~~U4~~ | `suggest_claude_file` の並べ替え精度 | **論点ごと消滅（2026-08-17 再実測でも同一結論）**。167 件中 161 件（96.4%）が `None` を返し、返り値は候補1つのみ（リストでない）。**並べ替えという機能が存在しない** | §4.2 を固定4択に変更した。**「上位2件に正解が入る率」は正解データ（人間が実際にどこへ書いたか）が corrections.jsonl に無いため、そもそも測定不能**でもある |
 | U5 | 他 PJ のストアでも同じ分布か | **未実測**。[実測] 値はすべてこのマシン 1 台 | 他環境では件数が違う。ただし §3.2 の「0 件」は構造証明なので環境に依存しない |
-| U6 | `optimize_history` が `store_registry` 未登録のまま rule writer を足してよいか | **本設計で決める（codex [Must]: スコープ外にはできない）** | §12 の判断4 として3点セットで提示した。§8.2 の revert 記録がこのストアに依存するため、先送りすると受入条件3が宙に浮く |
+| ~~U6~~ | `optimize_history` が `store_registry` 未登録のまま rule writer を足してよいか | **決定済み（2026-08-17 ユーザー確定）**: 先に登録する。§12 決定4 に登録内容（`name`/`writer`/`classification` 等）を具体化して記載した | — |
 | ~~U7~~ | Other で skill / hook を既存レーンへ受け渡せるか | **確定（2026-08-16 実測）: 受け渡し口は存在しない**。`hook_candidates` は `proposal_lane_unconnected_baseline.txt:4` に**未接続として公式登録済み**で読み手ゼロ。朝の y/n が読むのは `matched_skills` と `skill_evolve` の2種のみ（`evolve_decisions/_candidates.py:97,109`）。`skill_evolve` 側の関数は「既存スキルに自己進化テンプレを入れるか」の判定用で、correction を渡す口ではない | 「回す」と言わない設計に変更した（§4.2・§5）。**空約束が消えたので受入条件への影響なし** |
-| U8 | 起草1行の事前提示（tacchi Must-6）が朝の30秒を壊さないか | **測定条件を確定（値は初回実運用で取る）**。合格条件: **1問の表示が「指摘文 + 起草1行 + 選択肢4つ」で全角 400 字以内**、かつ 5 問で 30 秒以内に読み切れること。`draft_line` は**全角60字**で切る（切った全文は照合用に別保持・§6.2） | 400字を超えるなら起草行を出すのをやめ、選択後に確定文面を見せる方式へ落とす（§4.3 に代替として記載済み）。**設計の骨格は変わらない** |
+| U8 | 起草1行の事前提示（tacchi Must-6）が朝の30秒を壊さないか | **実測済み（2026-08-17・codex cold review 2巡目 [Should]12。§11-A に詳細）**。当初の想定「400字を超えたら起草行を削る」は**誤りだった**（起草行はコストの主因ではない）。実測結果に基づき「初回」と「定常」を分けて評価する方式に変更 | §11-A 参照。設計の骨格（起草1行の事前提示・固定4択）は変えない |
+
+### 11-A. U8 実測: 既存 correction 5件で表示サンプルを実際に作る（codex cold review 2巡目 [Should]12）
+
+**既存の `reflect_confirmed` correction 5件**（2026-08-14〜08-16 実データ・M0 と同一ストア）を使い、
+実際に4択の表示を組み立てて字数を測った。message は元レコードの引用（個人パス等は含まない短文のみ選定）、
+`draft_line` は agent 役として著者が起草した（§4.3 の設計どおり、選ばせる前に用意する想定の1行）。
+
+| # | 元 correction（`reflect_confirmed`・実データ） | 起草した反映先 | 選ばれると想定する選択肢 |
+|---|---|---|---|
+| 1 | 「spec-keeperはcodexレビューいらない」（2026-08-14） | `spec-keeper 等 docs-only の PR は codex レビュー不要（コード変更 PR のみ codex を標準挿入する）` | 1（共通ルール。実際 `~/.claude/rules/no-codex-review-for-spec-keeper.md` として既に採用済みの内容と一致 — `feedback_no_codex_review_for_spec_keeper.md`） |
+| 2 | 「フルスイートでなんで頭でまわしちゃったの？token無駄じゃん」（2026-08-16） | `並行 worker には python3 -m pytest -n 0（直列）を指示する。フルスイートを頭で回さない` | 2（PJルール。evolve-anything 固有の運用） |
+| 3 | 「選べる道のメリット、デメリット考えて材料がそろってから提案してほしい。codexにも相談してみて」（2026-08-14） | （既存の `explain-clearly.md` と重複のため追記不要） | 3（いまは反映しない・重複検出） |
+| 4 | 「自動でルール化を全部ユーザーにrule化するか確認すれば誤爆はふせげるよね…」（2026-08-16） | （本設計 #475 自体がこの指摘の実装なので pitfall として経緯のみ残す） | Other（pitfall） |
+| 5 | 「なんで、V5がOKっていってたの？純粋に未着手が５件もあるのに」（2026-08-14） | （特定タスクの一回性の指摘のため一般化しない） | 4（いいえ） |
+
+**字数実測**（Python `len()`。§4.3 の実際の label/detail 文言をそのまま使用。`message`/`draft_line` とも
+全角60字で切る前提。**1回目の実測では detail 文言が冗長すぎて平均793字だったため、tacchi Must-1 の
+情報量を保ったまま §4.3 の文言自体を簡潔化し、その簡潔化後の文言で再測定した**）:
+
+| 表示範囲 | 平均字数 | 最大字数 | 400字以内か |
+|---|---|---|---|
+| 指摘文 + 起草1行 + 質問文のみ（選択肢を含まない） | 118字 | 138字 | ✓ 余裕あり |
+| 上記 + 選択肢の label のみ（detail 抜き） | 191字 | 211字 | ✓ 余裕あり |
+| 上記 + 選択肢の detail 全文（簡潔化後の §4.3 実文言。Must-9 の revert 注記込み） | **635字** | **655字** | **✗ 超過（約59%）** |
+
+**分かったこと**: 400字を超える主因は**起草1行の長さではない**。起草1行を完全に省いても
+（label + detail の固定文言だけで）約 460字あり、既に超過していた。固定文言4択+Otherの
+detail テキスト自体（tacchi Must-1 が要求した「承認の中身」の説明文）が支配的コストで、
+これは correction ごとに変わらない**定額の固定費**である。**しかも detail 文言を簡潔化しても
+（当初793字 → 635字）400字には遠く届かない** — さらに削ると Must-1 が防ごうとした
+「何が起きるか分からないまま承認する」問題が再発するリスクが高まる。
+
+**当初の合格条件の誤り**: §4.3 に元々書いていた「400字を超えるなら起草行を出すのをやめる」という
+代替案は、この実測結果からは**ほぼ効果が無い**（起草行を削っても固定費約460字はほぼ変わらない）。
+
+**採る扱い（初回と定常を分けて評価する）**:
+
+- **定常（2日目以降）の実読コストは「指摘文 + 起草1行」の変動部分のみ**（平均118字・最大138字）。
+  理由: §4.2 で選択肢の位置を**固定**した設計判断そのもの（「毎朝同じ位置に同じ選択肢が出る」
+  「1番＝共通ルールを体で覚えられる」）が、2日目以降は label/detail の固定文言を読み飛ばして
+  変動部分だけ確認する運用を前提にしている。この前提のもとでは 400字ルールは**十分満たす**。
+- **初回（導入直後）は 400字を大きく超える**（平均635字・最大655字。約1.6倍）。これは
+  detail 文言を簡潔化してもなお解消しない（793字→635字止まり）。tacchi Must-1
+  （「承認の中身が空になる」防止）で要求された情報量を保つ以上、これ以上の圧縮は
+  「何が起きるか分からないまま承認する」問題の再発リスクの方が大きいと判断し、
+  情報を削るのではなく**初回コストが400字を超えることを正直に認めた上で受け入れる**。
+  ここは推測ではなく判断であることを明記する: 実装後の初回実運用で「初回だけ読みにくい」と
+  実際に不評なら、detail をさらに削る（例: 「あとで戻せます」の注記を省き §8.2 参照に留める）
+  余地は残っている。
+- **400字ルールは実装時に「変動部分（2日目以降の定常コスト）」に対する基準として運用する**
+  （固定文言込みの初回表示までは対象にしない）。この解釈変更は本設計の骨格
+  （起草1行の事前提示・固定4択・§4.3 の detail 文言）を変えない。
+
+**サンプルの再現方法**: 上記5件の message は `~/.claude/evolve-anything/corrections.jsonl` の
+`reflect_confirmed` レコードから `timestamp` で絞って抽出した（M0 と同一ストア・スクリプトは
+[artifacts/475-measurement-log-20260817.md](artifacts/475-measurement-log-20260817.md) の
+Should-12 節を参照）。draft_line・想定選択肢は著者による手作業の割当てで、実装が実際にこの
+5件をこう分類することを保証するものではない（U2/U8 とも実装時の実測が必要な点は変わらない）。
 
 ---
 
-## 12. ユーザー判断が要る点
+## 12. 決定事項（2026-08-17 ユーザー確定・codex cold review 2巡目 [Must]10・11 反映）
 
-### ~~判断1: 4つ目の選択肢を「いいえ」にするか~~ → **決定済み（tacchi Must-5）**
+**以下4点はすべてユーザー判断が確定した。「判断待ち」ではなく決定として扱う。**
+
+### 決定1: 4つ目の選択肢を「いいえ」にするか → tacchi Must-5 の時点で決定済み
 
 「いいえ」は**常設**する（反映先候補は2つ）。却下手段が無いと不要な指摘が毎朝出続け、
 承認疲れが1日5件の上限（P8）を超える。`record_reviewed(decision="rejected")` は既存機能（P9）。
-ユーザー判断としては提示しない。
 
-### 判断2: 「いまは反映しない」を選んだ記録を、90日で消すか残すか
+### 決定2: 「いまは反映しない」を選んだ記録を、90日で消すか残すか → **消さない**
 
-- **推奨: 消さない**（`prune/corrections.py:84` の削除対象集合に `promoted` を**入れない**）。
+`prune/corrections.py:84` の削除対象集合に `promoted` を**入れない**（実装は既存の
+`status not in ("applied","skipped")` 判定に `promoted` が自然に含まれる＝**変更不要**。
+既に `("applied","skipped")` の外にある値なので、何もしなければ保持される）。
+
 - 理由: 選択肢の文言で「あとで反映できます」と約束するのに、90日で黙って消えるのは
   issue 必須要件 1b（実態を偽らない）に反する。
-- 選ばなかった場合（消す）: `corrections.jsonl` は増えないが、
-  「あとで判断」が予告なく消える。**現状 2026-09-10 前後に 41 件が消える見込み**（§3.4(b)）。
-- 消さない場合の副作用: `corrections.jsonl` が単調増加する。現在 **172 行 / 220 KB**（[実測] 2026-08-16）
-  なので、当面（数年規模）問題にならない。
+- 選ばなかった場合（消す）に何が起きたか: 「あとで判断」が予告なく消える。
+  **2026-09-10 前後に 2026-06-12 分の 41 件が消える見込みだった**（§3.4(b)）。
+- 副作用（採用した「消さない」側）: `corrections.jsonl` が単調増加する。現在
+  **177 行 / 223 KB**（[実測] 2026-08-17・M0）なので、当面（数年規模）問題にならない。
 
-### 判断3: rule 反映の revert 対応をどこまでやるか
+### 決定3: rule 反映の revert 対応をどこまでやるか → **既存 rule ファイルへの追記のみ対応**
 
-- **推奨: 既存 rule ファイルへの追記のみ対応（§8.2）。新規ファイル作成は「戻せない」と明示する。**
+**新規ファイル作成は「戻せません」と画面に明示する（§4.3・§8.2）。行単位 revert は別 issue に切る。**
+
 - 理由: 既存ファイル追記なら before 本文が存在するので、現行 revert の3分岐
   （normal / 冪等 / conflict）がそのまま使える。追加は root 解決の分岐2本と定数1行だけ。
-- 選ばなかった場合（フル対応）: 「不在」sentinel + `revert_schema_version` 2 の導入が要る。
-  これは #467 §1.4 が hook 提案について指摘した穴と**同じ穴**なので、
-  #467 と合わせて1回で塞ぐ選択肢もある（その場合は本 issue のスコープを超える）。
-- 選ばなかった場合（revert 対応しない）: 受入条件3は「制約を明示する」で形式的には満たせるが、
-  **全PJに効く共通ルールを戻せない**のは影響範囲的に危うい（issue 必須要件2 の指摘どおり）。
-- **追加の選択肢（§8.3 の実測を受けて）: 行単位 revert にする。** ファイル全体 SHA でなく
-  「その1行が今もあるか」で判定すれば、同じファイルに2件目を反映しても1件目を戻せる。
-  ただし `evolve_revert` の判定契約そのものを変えることになり、**skill 採用の revert にも影響する**
-  ので影響範囲が大きい。**推奨しない**（別 issue に切る）。
+- 選ばなかった場合（フル対応）に何が起きたか: 「不在」sentinel + `revert_schema_version` 2 の
+  導入が要る。これは #467 §1.4 が hook 提案について指摘した穴と**同じ穴**であり、本 issue 単独で
+  塞ぐには影響範囲が大きすぎる。
+- 選ばなかった場合（revert 対応しない）に何が起きたか: 受入条件3は「制約を明示する」で
+  形式的には満たせるが、**全PJに効く共通ルールを戻せない**のは影響範囲的に危うい
+  （issue 必須要件2 の指摘どおり）。
+- 選ばなかった場合（行単位 revert）に何が起きたか: ファイル全体 SHA でなく「その1行が今もあるか」
+  で判定すれば、同じファイルに2件目を反映しても1件目を戻せる。ただし `evolve_revert` の判定契約
+  そのものを変えることになり、**skill 採用の revert にも影響する**ので影響範囲が大きい。別 issue。
 
-### 判断4: 採用履歴ストアが「登録なし」のまま、新しい書き手を足してよいか（codex [Must]）
+### 決定4: 採用履歴ストアが「登録なし」のまま、新しい書き手を足してよいか → **足す前に登録する**
 
-- **推奨: 足す前に登録する。**
-- 状況: 採用履歴（`optimize_history`）は、この repo が持つ「ストア新設の事前契約ゲート」に
-  **登録されていない**まま直接書き込まれている。§8.2 でここに rule 反映の記録を足すと、
-  **未登録のまま書き手が1つ増える**。
-- 理由: 「表示する数字が嘘をつかない」を掲げている以上、成果の記録先が契約の外にあるのは弱い。
-  登録自体は宣言（書き手 / 読み手 / 保持期間）を書くだけで、コード変更はほぼ無い。
-- 選ばなかった場合（登録せずに足す）: 動きはするが、**このストアだけ検査の対象外**という状態が続く。
-  #434 の議論が起きたときに、この設計が「前例」として引かれる。
-- 選ばなかった場合（登録もせず記録も足さない）: rule 反映が `bin/evolve-revert --list` に出ず、
-  **受入条件3（戻せる）が満たせない**。
+**codex cold review 2巡目 [Must]（頭の追加調査を反映）**: 当初「登録は宣言を書くだけでコード変更は
+ほぼ無い」と書いたが**不正確だった**。実際には次の2点が要る。
+
+1. `store_registry.py` の `_DECLARATIONS` に宣言を1件追加する（コード変更）。
+2. **`shrink_freeze.FROZEN_STORES`（44件・`scripts/lib/shrink_freeze.py:61-108`）にも同じ名前を
+   追加する必要がある**（`assert_no_new_keys` は `store_registry` の live 集合が `FROZEN_STORES` の
+   部分集合であることを検査するため、登録するだけで live 集合が1件増え、追加しないと**凍結違反として
+   reject される**）。
+
+**これは #379 新設凍結には抵触しない**。`shrink_freeze.py:55-60` に前例が明文化されている:
+
+> 「凍結の趣旨は『新しい書込経路・新しい機能を作らせない』ことであり、**既存の実ファイル・既存の
+> writer/reader コードを registry へ追認する本件は『新設』ではない**」
+
+`FROZEN_STORES` の round2（#399 codex Must 2）で `evolve-queue.json` 等 4 件が同じ理由で追加登録
+された実績があり（同ファイル 47-58 行目のコメント）、`optimize_history` も**採用時点から実際に
+書き込まれ続けていた既存ストアの登録漏れ**という点で同型。
+
+**登録する文字列（実測して確定）**: `optimize_history` は**ディレクトリ**であり
+（`~/.claude/evolve-anything/optimize_history/`）、中身は PJ ごとの `<repo-slug>.jsonl`
+（実際のファイル: `evolve-anything.jsonl` / `sys-bots.jsonl` / 他。`.lock` ファイルは対象外）。
+`FROZEN_STORES` には既に同じ「ディレクトリ + `<slug>`」形式の前例
+（`remediation_suppression/<slug>.jsonl` / `remediation_surfaced/<slug>.json`）があるため、
+**`optimize_history/<slug>.jsonl` として登録する**（単一ファイル名としては登録しない）。
+
+`StoreDeclaration` の主要フィールド（`scripts/lib/store_registry.py:74-112`）:
+
+| フィールド | 値 | 根拠 |
+|---|---|---|
+| `name` | `"optimize_history/<slug>.jsonl"` | 上記 |
+| `writer` | genetic-prompt-optimizer（`optimize.py`）/ evolve-loop-orchestrator（`run_loop.py:685`）/ evolve-fitness（`fitness_evolution.py:246`）/ evolve_revert（`_apply.py:129`、revert 実行時の追記） | 全4呼び出し元を `grep -rn append_history_entry_deduped\|append_entry(` で確認済み（tests 除く） |
+| `writer_locus` | `"batch"` | 全4箇所とも hooks/*.py 経由ではなくスキル/CLI から呼ばれる |
+| `classification` | `"raw_event"` | 採用イベントの一次記録（派生キャッシュではない） |
+| `retention` | `"permanent"` | prune 対象になっていない（#12 決定2 と同型の判断） |
+| `status` | `"active"` | write barrier の書込み許可対象にする |
+
+- 選ばなかった場合（登録せずに足す）に何が起きたか: 動きはするが、**このストアだけ検査の対象外**
+  という状態が続く。#434 の議論が起きたときに、この設計が「前例」として引かれる。
+- 選ばなかった場合（登録もせず記録も足さない）に何が起きたか: rule 反映が
+  `bin/evolve-revert --list` に出ず、**受入条件3（戻せる）が満たせない**。
 
 ---
 
@@ -731,7 +952,7 @@ reflect スキルが既に全部持っている（P5）。本設計がやるの�
 | Must-2 | `reflect_status` の読者を全洗い | **§6** | 再 grep で**漏れ3件を発見**（`reflect.py:327` の再発回数集計 / `reflect.py:1006` の `--skip-all` / `skills/reflect/SKILL.md:83,151-154` の手順書自体）。表に追加し、SKILL.md が手順として `applied` を直書きさせている点は §6.1 の CLI 側ゲートで担保する方針に |
 | Must-3 | 「記録のみ」の再浮上経路 | **§5.1（新設）** | 素案の「既読にしないので翌朝また出る」は**重複 append と `promoted` の消失**で成立しないことが判明。既読にした上で reflect の入力集合を `("pending","promoted")` に広げる案へ差し替え。§4.3 の文言も修正 |
 | Must-4 | skill / hook を初期スコープから除外（revert 迂回の防止） | **§4.2 / §5** | 反映先を rule 2種 + memory + pitfall の4種に限定。skill は `skill_evolve` レーンとの二重記録、hook は revert 経路不在が理由 |
-| Must-5 | 「いいえ」を常設 | **§4.3 / §12** | 選択肢3・4は並べ替え対象外の常設に。§12 判断1 を「決定済み」に格上げしユーザー判断から外した |
+| Must-5 | 「いいえ」を常設 | **§4.3 / §12** | 選択肢3・4は並べ替え対象外の常設に。§12 決定1 を「決定済み」に格上げしユーザー判断から外した |
 | Must-6 | 起草1行を事前提示 | **§4.3** | AskUserQuestion の question 本文に `draft_line` を入れる。agent はどのみち起草するので**作る順番を前に移すだけ**（新規生成器・LLM 追加呼び出しなし）。長さ制限は U8 |
 
 **この反映で増えた未確認**: U7（Other の skill / hook が既存レーンへ実際に渡るか）/ U8（起草1行の提示長）。
@@ -751,9 +972,54 @@ reflect スキルが既に全部持っている（P5）。本設計がやるの�
 | C7 | §10 の F1 / F3 / F4「気づける」に実際の検出器が無い | **§10** を訂正（手動監査のみ / 書込み前警告のみ / 気づけない） |
 | C8 | `promoted` を足すと `/reflect` 提案が発火しなくなる | **§5.1**。当初「suppression は変えない」としたのは誤り。`reflect_data_count` が5件閾値の提案 MUST を駆動していることを実測で確認（P24）し、変更対象に追加 |
 
-**「測れるのに測っていない」7件**: 全て実測し、**U1・U4・U7 は解決、U6 は §12 判断4 として提示、
-U2・U8 は「崩れても設計は壊れない」ことと測定条件を明記**（§11）。
+**「測れるのに測っていない」7件（1巡目時点）**: 全て実測し、**U1・U4・U7 は解決、U6 は §12 決定4
+として提示、U2・U8 は測定条件のみ明記**（この時点では両方とも未決定・未実測のまま次巡へ持ち越し。
+**2巡目で両方とも確定・実測済みに更新した** — 下記参照）（§11）。
 
 **最大の設計変更**: `suggest_claude_file` による**並べ替えを廃止し固定4択にした**。
 実測で同関数は 96.4% が `None` を返し、そもそも候補を1つしか返さない（リストでない）ため、
 「上位2件を並べる」が実装上成立しないことが分かった（P23）。**固定にしたことで設計はむしろ単純になった。**
+
+### codex（正しさの視点）— 2巡目 2026-08-17・判定 `設計修正要`・[Must]11件 + [Should]1件 → **反映済み**
+
+1巡目の反映が**部分的**だった（文書の一部に旧方針の文言が残ったまま、実測値も同日中の変動を
+拾い切れていなかった）ことを受けた再レビュー。指摘は大きく5カテゴリ。
+
+**A. 文書内の反映漏れ（3件）**:
+
+| # | 指摘 | 反映 |
+|---|---|---|
+| A1 | §9（旧・反映先の並べ替え行）が `suggest_claude_file` で「候補を並べ替える」としたまま残存 | **§9**。該当行を打ち消し線で無効化し、「この新設フローでは呼ばない」と明記。具体的なファイル選定は既存の書き込み規約（P5）を流用する旨を追加 |
+| A2 | §4.3 Other 欄が「既存の採用フローへ回した旨を表示」としたまま残存（§4.2/§5 の「回さない」と矛盾） | **§4.3**。「対象外です」表示に統一。§4.2 T2 の結論と一致させた |
+| A3 | P17〜P20・M0・§12 が旧 172行時点の値のまま、177行時点の値と同一文書内で競合 | **§1.1・§2.4・§12**。全実測値を 2026-08-17 の単一測定点（lines=177・M0 参照）に統一。全出力を artifact に固定 |
+
+**B. 実測の誤り・再現性（3件）**:
+
+| # | 指摘 | 反映 |
+|---|---|---|
+| B4 | P23「confidence 全件0.9固定」は correction 入力側の固定値と関数の返り値を混同した誤り | **§2.6 P23 直下**に訂正記録を追加。再測定で非 `None` の6件は全て `confidence: 0.85` と確定 |
+| B5 | §1.1 M0 が再現可能でない（測定時点のスナップショットが無い） | **§1.1**。全出力を [artifacts/475-measurement-log-20260817.md](artifacts/475-measurement-log-20260817.md) に固定。生ストアの生コピーは repo に置かない判断とその理由を明記（個人パス・会話引用を含むため） |
+| B6 | 証拠等級の不統一。P21/P22 は実ストア観測でなく構造証明なので `[コード]` が正しい | **§2.6**。P21/P22 を `[実測]` → `[コード]` に訂正。P23 に再現コマンド（§1.1 M5）を追加 |
+
+**C. 契約の未設計（3件）**:
+
+| # | 指摘 | 反映 |
+|---|---|---|
+| C7 | §6.1 の `applied` CLI 入口が未設計（フラグ名・識別方法・複数件対応・`--apply-all` との関係） | **§6.1**。`--apply`/`--target-path`/`--draft-line-file` の3フラグ + 関数シグネチャ変更を具体化。既存 `make_source_correction_id` を識別子に再利用し新識別子を作らない。1呼出し=1件に固定して複数件対応の曖昧さを消した |
+| C8 | §8.3 の「後続変更あり」表示が §8.2 の変更一覧に反映されていない | **§8.2**。「後続変更検知（`--list` 表示）」行を追加。`compute_revert_availability` 自体は変更せず、`--list` 出力整形レイヤーを別途追加する設計に |
+| C9 | revert の制約が実際の4択文言に反映されておらず、新規ファイル時の再確認タイミングも未定義 | **§4.3**。選択肢1・2の detail に「あとで戻せます（同ファイルへの後続変更が無い場合）」を追加。新規ファイル判明時は Edit 直前に別途1問追加確認する設計を明記（通常の朝の設問数には数えない） |
+
+**D. 判断の確定（2件）**:
+
+| # | 指摘 | 反映 |
+|---|---|---|
+| D10 | §12 判断2・3・4 が「ユーザー判断待ち」のまま | **§12**。ユーザー確定を反映し「決定事項」に格上げ。判断4は登録先文字列（`optimize_history/<slug>.jsonl`）・`StoreDeclaration` の主要フィールドまで具体化 |
+| D11 | §11 U2 が実装時確認に送られたまま | **§11**。「Other 自由記述で受け、判断が付かない場合は聞き返す。memory/pitfall を対象外に落とす案は不採用」に確定 |
+
+**E. [Should]1件**:
+
+| # | 指摘 | 反映 |
+|---|---|---|
+| E12 | U8（起草1行の事前提示）を初回実運用まで先送りせず、既存 correction 5件で表示サンプルを実際に作り事前評価する | **§11-A（新設）**。実データ5件でサンプルを作成し実測。当初の「400字超なら起草行を削る」という合格条件は誤りと判明（起草行はコストの主因でない・固定文言が主因）。§4.3 の detail 文言を tacchi Must-1 の情報量を保ったまま簡潔化（793字→635字）。それでも400字は超えるため、「定常（2日目以降）読み取りコストのみを400字基準の対象とする」という運用解釈に切り替えた |
+
+**この反映で増えた/変わった記録**: なし（新しい未確認事項は生まれていない。U2/U8 とも本巡で確定・実測済みに移行した）。
