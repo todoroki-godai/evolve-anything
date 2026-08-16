@@ -206,8 +206,11 @@ from .persistence import (  # noqa: F401, E402
 
 # usage.jsonl レコードパース単一ソース — #139
 # bare_skill_name（<plugin>:<skill> → bare 正規化の単一ソース）— #145
+# is_skill_usage_record / is_agent_usage_record（Skill/Agent 判別の単一ソース）— #480
 from .usage_schema import (  # noqa: F401, E402
     bare_skill_name,
+    is_agent_usage_record,
+    is_skill_usage_record,
     usage_skill_name,
     usage_timestamp,
 )

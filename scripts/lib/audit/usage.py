@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent_classifier import BUILTIN_AGENT_NAMES
-from rl_common import usage_skill_name, usage_timestamp
+from rl_common import is_skill_usage_record, usage_skill_name, usage_timestamp
 
 from .classification import classify_usage_skill
 from .gstack import _is_gstack_skill
@@ -112,7 +112,12 @@ def aggregate_usage(
     """
     counts: Dict[str, int] = {}
     for rec in records:
-        # implement 等は skill フィールドで自己報告するため skill_name → skill の順でフォールバック
+        # Skill 呼び出しのみを数える（Agent 呼び出し・workflow-conformance 別スキーマは除外・
+        # #480 単一ソース）。旧実装は skill_name/skill のどちらかがあれば数えていたため、
+        # Agent 呼び出しが _BUILTIN_TOOLS に載っていない custom agent 名で紛れ込み、
+        # かつ conformance レコード（skill="implement"）が実 Skill 呼び出しと二重計上されていた。
+        if not is_skill_usage_record(rec):
+            continue
         skill = usage_skill_name(rec) or "unknown"
         if skill in _BUILTIN_TOOLS:
             continue
@@ -196,9 +201,11 @@ def compute_negative_transfer(
     if not usage_data:
         return []
 
-    # タイムスタンプでソート（ts/timestamp 両対応は rl_common 単一ソース #139）
+    # タイムスタンプでソート（ts/timestamp 両対応は rl_common 単一ソース #139）。
+    # Agent 呼び出し・workflow-conformance 別スキーマは「スキル追加」対象から除外する
+    # （#480: Agent:general-purpose 等が最も早く登場しがちで baseline を汚染していた）。
     sorted_data = sorted(
-        [r for r in usage_data if usage_timestamp(r)],
+        [r for r in usage_data if usage_timestamp(r) and is_skill_usage_record(r)],
         key=usage_timestamp,
     )
 
@@ -320,8 +327,10 @@ def compute_component_transfer(
     if not usage_data:
         return []
 
+    # Agent 呼び出し・workflow-conformance 別スキーマは更新コンポーネント対象から除外
+    # （compute_negative_transfer と同じ理由・#480）。
     sorted_data = sorted(
-        [r for r in usage_data if usage_timestamp(r)],
+        [r for r in usage_data if usage_timestamp(r) and is_skill_usage_record(r)],
         key=usage_timestamp,
     )
     if not sorted_data:
@@ -452,6 +461,10 @@ def compute_paired_trajectory(
     # session_id → そのセッションで呼ばれたスキル集合。
     skills_by_session: Dict[str, set] = {}
     for rec in usage:
+        # Agent 呼び出し・workflow-conformance 別スキーマは task-type 文脈から除外
+        # （#480: 混入すると「対象スキル有/無」の文脈集合そのものが汚染される）。
+        if not is_skill_usage_record(rec):
+            continue
         skill = usage_skill_name(rec)
         sid = rec.get("session_id") or ""
         if not skill or sid_excluded(skill) or not sid:

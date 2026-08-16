@@ -113,11 +113,15 @@ def _duckdb_query_file(
     since: Optional[str] = None,
     until: Optional[str] = None,
     timestamp_field: str = "timestamp",
+    fallback_timestamp_field: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """DuckDB で JSONL ファイルをクエリする。
 
     project カラムが存在しない既存データとの後方互換性を保つため、
     project フィルタ指定時はカラム存在チェックを行う。
+
+    ``fallback_timestamp_field``: usage.jsonl の ``ts``/``timestamp`` 二重表記対応
+    （``_build_time_where`` の fallback_field へ渡す・#480）。
     """
     import duckdb
 
@@ -144,7 +148,11 @@ def _duckdb_query_file(
                     where_parts.append("project = $project")
 
         # 時間範囲フィルタ
-        time_clause = _build_time_where(since, until, params, timestamp_field=timestamp_field)
+        time_clause = _build_time_where(
+            since, until, params,
+            timestamp_field=timestamp_field,
+            fallback_field=fallback_timestamp_field,
+        )
         if time_clause:
             where_parts.append(time_clause)
 

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from rl_common import usage_skill_name
+from rl_common import is_agent_usage_record, usage_skill_name
 
 from .outcome_metrics import _EDIT_TOOLS, _has_edit_burst
 from .outcome_promotion_readiness import check_variance
@@ -82,8 +82,16 @@ def attribute_outcomes(
     含めない（既存2軸の degraded 契約を変えない — multiview_eval 互換）。
     """
     # スキル → そのスキルが呼ばれた distinct session_id 集合。
+    # Agent 呼び出しは除外する（#480: この関数が reward_ema.jsonl 永続化の唯一の入力元で、
+    # 混入するとストアに Agent 由来の advantage/EMA が書き込まれる。実測で 256 件中 117 件が
+    # Agent 由来だった）。workflow-conformance 別スキーマ（``skill`` キーのみ）は除外しない
+    # （`test_skill_field_fallback` が既存契約として明示: implement 等は conformance
+    # レコードだけを持つ場合があり、is_skill_usage_record の ``skill_name`` 要件だと
+    # 拾えなくなる。ここは Skill/Agent の二値判定でなく Agent だけを狙い撃ちで除く）。
     sessions_by_skill: Dict[str, set] = {}
     for rec in usage:
+        if is_agent_usage_record(rec):
+            continue
         skill = _skill_of(rec)
         sid = rec.get("session_id") or ""
         if not skill or not sid:

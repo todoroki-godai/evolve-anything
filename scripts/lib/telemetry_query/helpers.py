@@ -75,13 +75,24 @@ def _filter_by_time(
     since: Optional[str],
     until: Optional[str],
     timestamp_field: str = "timestamp",
+    fallback_field: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Python で時間範囲フィルタリングを適用する（フォールバック用）。"""
+    """Python で時間範囲フィルタリングを適用する（フォールバック用）。
+
+    ``fallback_field``: usage.jsonl は現行スキーマが ``ts``、旧スキーマ（backfill 由来）が
+    ``timestamp`` を使う二重表記（#480, rl_common.usage_schema の docstring 参照）。
+    ``timestamp_field`` 単独固定だと旧行が「タイムスタンプ無し」として黙って
+    since/until 窓の外へ落ちる（実データで 261 件確認）。呼び出し側が渡した場合のみ
+    ``rec.get(timestamp_field) or rec.get(fallback_field)`` で両対応する（未指定時は
+    従来どおり単一フィールドのみ＝他データ種別の既存挙動を変えない）。
+    """
     if since is None and until is None:
         return records
     result = []
     for rec in records:
         ts = rec.get(timestamp_field, "")
+        if not ts and fallback_field:
+            ts = rec.get(fallback_field, "")
         if not ts:
             continue
         if since and ts < since:
@@ -95,15 +106,26 @@ def _filter_by_time(
 def _build_time_where(
     since: Optional[str], until: Optional[str], params: Dict[str, Any],
     timestamp_field: str = "timestamp",
+    fallback_field: Optional[str] = None,
 ) -> str:
-    """since/until の WHERE 句断片を生成する。"""
+    """since/until の WHERE 句断片を生成する。
+
+    ``fallback_field`` 指定時は ``COALESCE(timestamp_field, fallback_field)`` で比較する
+    （usage.jsonl の ``ts``/``timestamp`` 二重表記対応。``_filter_by_time`` の
+    fallback_field と同じ契約・#480）。
+    """
+    field_expr = (
+        f'COALESCE("{timestamp_field}", "{fallback_field}")'
+        if fallback_field
+        else timestamp_field
+    )
     clauses = []
     if since:
         params["since"] = since
-        clauses.append(f"{timestamp_field} >= $since")
+        clauses.append(f"{field_expr} >= $since")
     if until:
         params["until"] = until
-        clauses.append(f"{timestamp_field} < $until")
+        clauses.append(f"{field_expr} < $until")
     return " AND ".join(clauses)
 
 

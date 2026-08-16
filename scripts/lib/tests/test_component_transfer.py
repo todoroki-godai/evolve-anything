@@ -163,3 +163,23 @@ class TestComputeComponentTransferEdgeCases:
         a = results[0]["affected"][0]
         assert a["before_score"] == pytest.approx(1.0)
         assert a["after_score"] == pytest.approx(0.0)
+
+    def test_agent_records_excluded_from_components(self):
+        """Agent 呼び出しレコードは更新コンポーネント候補から除外される（#480）。"""
+        usage_data = [
+            {
+                "skill_name": "Agent:impl-worker",
+                "subagent_type": "impl-worker",
+                "agent_id": "a1",
+                "timestamp": "2025-12-01T00:00:00Z",
+            },
+            {"skill_name": "ship", "ts": "2026-01-01T00:00:00Z", "outcome": "success"},
+            {"skill_name": "ship", "ts": "2026-01-01T01:00:00Z", "outcome": "success"},
+            {"skill_name": "review", "ts": "2026-01-02T00:00:00Z", "outcome": "success"},
+            {"skill_name": "ship", "ts": "2026-01-03T00:00:00Z", "outcome": "error"},
+            {"skill_name": "ship", "ts": "2026-01-03T01:00:00Z", "outcome": "error"},
+        ]
+        results = compute_component_transfer(usage_data)
+        components = {c["component"] for c in results}
+        assert "Agent:impl-worker" not in components
+        assert components == {"review"}

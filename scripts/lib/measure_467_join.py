@@ -12,10 +12,17 @@ tz suffix の混在（`Z` 終端と `+00:00` 終端が同一 instant を指す�
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+_lib_dir = Path(__file__).resolve().parent
+if str(_lib_dir) not in sys.path:
+    sys.path.insert(0, str(_lib_dir))
+
+from rl_common.usage_schema import is_skill_usage_record, usage_timestamp  # noqa: E402
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -75,24 +82,9 @@ def summarize_corrections(corrections: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def is_skill_usage_record(rec: Dict[str, Any]) -> bool:
-    """usage.jsonl のレコードが Skill 呼び出し（Agent 呼び出しではない）かを判定する。
-
-    書き手は `hooks/observe.py` の2箇所のみ（`tool_name == "Skill"` と
-    `tool_name == "Agent"`）だが、**実 usage.jsonl は単一スキーマではない**
-    （2026-08-16 実データ調査で確認: 現行スキーマ以外に旧スキーマ由来のキー集合が
-    複数残存し、`outcome` の有無だけでは判別できない。Skill 由来レコードでも
-    `ts` でなく `timestamp` を使う旧行が 261 件存在した）。Agent 呼び出しは常に
-    `subagent_type` / `agent_id` を持つため、こちらを判別に使うほうが世代を跨いで頑健
-    （Skill 呼び出しは `skill_name` を持ち `subagent_type` / `agent_id` を持たない）。
-    workflow-conformance 用の別スキーマ（`skill_name` を持たず `skill` を持つ）は
-    この条件で自然に除外される。
-    """
-    return (
-        "skill_name" in rec
-        and "subagent_type" not in rec
-        and "agent_id" not in rec
-    )
+# is_skill_usage_record は Skill/Agent 判別の単一ソース（rl_common.usage_schema・#480）を
+# そのまま re-export する。判別ロジック自体は production 6 箇所と共有し、ここに独自実装は
+# 置かない（design-before-fanout: 同型判別を bench 側で再発明しない）。
 
 
 def count_skill_usage(usage_records: List[Dict[str, Any]]) -> int:
@@ -101,12 +93,12 @@ def count_skill_usage(usage_records: List[Dict[str, Any]]) -> int:
 
 
 def _skill_usage_timestamp(rec: Dict[str, Any]) -> Any:
-    """Skill 呼び出しレコードのタイムスタンプ値を取り出す。
+    """Skill 呼び出しレコードのタイムスタンプ値を取り出す（``ts``/``timestamp`` 両対応）。
 
-    現行スキーマは `ts` を使うが、旧スキーマの一部行は `timestamp` を使う
-    （2026-08-16 実データ調査）。両対応で欠落を防ぐ。
+    rl_common.usage_timestamp（#139 単一ソース）への薄いラッパー。空文字列は
+    ``parse_iso8601`` が None として扱うため戻り値の型差は挙動に影響しない。
     """
-    return rec.get("ts") if "ts" in rec else rec.get("timestamp")
+    return usage_timestamp(rec)
 
 
 def index_skill_usage_by_session(

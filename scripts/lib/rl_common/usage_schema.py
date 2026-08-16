@@ -1,14 +1,28 @@
-"""usage.jsonl レコードの skill 名 / timestamp を解決する単一ソース（#139）。
+"""usage.jsonl レコードの skill 名 / timestamp / Skill・Agent 種別を解決する単一ソース
+（#139, #480）。
 
 usage.jsonl は 3 スキーマ混在:
-- ``skill_name`` + ``ts``        （通常スキル呼出）
-- ``skill``      + ``ts``        （implement スキル専用）
-- ``skill_name`` + ``timestamp`` （agent/subagent 呼出）
+- Skill 呼出（現行）        : ``skill_name`` + ``ts``
+- Skill 呼出（旧・backfill）: ``skill_name`` + ``timestamp``（``outcome`` 無し。261 件実在。
+  2026-08-16 実データ調査で確認。**旧 docstring の「skill_name + timestamp = agent」は
+  誤りだった**＝このキー組だけでは Skill/Agent を判別できない）
+- Agent 呼出                : ``skill_name`` (=``f"Agent:{subagent_type}"``) + ``ts``/``timestamp``
+  に加え ``subagent_type`` / ``agent_id`` のいずれかを必ず持つ（hooks/observe.py の
+  tool_name=="Agent" 分岐が両方書く）
+- workflow-conformance（implement 専用の別集計）: ``skill_name`` を持たず ``skill`` を持つ
 
 どのレコードも両フィールド名を同時に満たさないため、片側だけを見る弱いパース式は
 必ず取りこぼす（skill 欠落 → 空集合 / timestamp 欠落 → 例外 skip）。writer/reader が
 同じ解決規則を共有するための単一ソース（copied-parse-convention pitfall #40 の教訓・
 `is_noise_agent_type` と同方針）。usage.jsonl を読む全 call site はこの関数を呼ぶ。
+
+Skill/Agent の判別（``is_skill_usage_record`` / ``is_agent_usage_record``）は
+``timestamp`` の有無ではなく ``subagent_type`` / ``agent_id`` の有無で行う（#480）。
+旧実装は `scripts/lib/measure_467_join.py` の bench 専用関数にのみ存在し、production の
+6 箇所（audit/usage.py・audit/reward_ema.py 経由の永続化書込・
+telemetry_query/usage_errors.py 等）はこれを経由せず、各所が独自に
+``"subagent_type" in rec`` 相当のロジックを書くか、または書いていなかった
+（＝ Agent 呼び出しが Skill 集計・reward_ema.jsonl の永続化データに混入していた）。
 """
 from typing import Any, Dict, Optional
 
@@ -30,6 +44,26 @@ def usage_timestamp(record: Dict[str, Any]) -> str:
     どちらも無ければ ""。
     """
     return record.get("ts") or record.get("timestamp") or ""
+
+
+def is_agent_usage_record(record: Dict[str, Any]) -> bool:
+    """usage レコードが Agent（subagent）呼び出し由来かを判定する（#480）。
+
+    hooks/observe.py の tool_name=="Agent" 分岐は必ず ``subagent_type`` と ``agent_id``
+    の両方を書くが、判定はどちらか一方の有無で十分（将来 Agent 呼び出しの記録項目が
+    減っても壊れないよう、両方を要求しない・保守的に広く拾う）。
+    """
+    return "subagent_type" in record or "agent_id" in record
+
+
+def is_skill_usage_record(record: Dict[str, Any]) -> bool:
+    """usage レコードが Skill 呼び出し（Agent 呼び出しではない）由来かを判定する（#480）。
+
+    Skill 呼び出しは ``skill_name`` を持ち ``subagent_type`` / ``agent_id`` を持たない。
+    workflow-conformance 用の別スキーマ（``skill_name`` を持たず ``skill`` のみ）は
+    ``skill_name`` 要件で自然に除外される（Skill でも Agent でもない第3スキーマ）。
+    """
+    return "skill_name" in record and not is_agent_usage_record(record)
 
 
 def bare_skill_name(key: Optional[str]) -> Optional[str]:
