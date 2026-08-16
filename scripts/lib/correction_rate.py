@@ -3,6 +3,16 @@
 
 設計正典: docs/decisions/drafts/054-c-a-numerator.md（codex 2巡 + tacchi 1巡・全 [Must] 反映済み）。
 
+#466 分母修正: 従来の分母（週内の全 dialogue 発話）は判定器（judge_runner）の判定母集団
+（tracked PJ + 90日 cutoff に絞る）と非対称だった。tracked 外 PJ の発話は分母に入るのに
+judge が永久に判定しないため、カバレッジが 100% に到達せず表示ゲートが開かなかった。
+本モジュールは分母算出に judge_runner と**同一の**絞り込み述語（``_apply_population_filters`` /
+``_resolve_tracked_slugs``）を import して使う（両側にコピーを作らない・単一ソース）。
+加えて、ホームディレクトリ起動セッション（PJ の実体を持たない・fleet_config が discover
+候補からも除外する規約と同型）の発話を分母から除外する。除外は 3 種別（tracked外 /
+90日超 / ホーム起動）を diagnostics に集計し、呼び出し側（results_board）が常に件数を
+表示する契約（silence != evaluated）。
+
 3ストアを read 時に join する（新ストアを作らない・#379 新設凍結）:
   - ``utterances.db``（分母）— dialogue 発話の物理キー・timestamp・ingested_at
   - ``correction_judged.jsonl``（判定進捗）— judge が判定した物理キーと judged_at
@@ -30,11 +40,22 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 # #400 A5: enum は単一ソース（correction_semantic.prompt が語彙表・優先順の正典）。
 # 純関数のみを import する（I/O なし・collect_raw_data の遅延 import 方針とは無関係）。
 from correction_semantic.prompt import CATEGORY_ENUM  # noqa: E402
+
+# #466: judge の母集団フィルタ（tracked PJ + 90日 cutoff）を単一ソースとして共有する。
+# 新規実装しない（両側にコピーを作ると再発する drift の典型・pitfall_copied_parse_convention）。
+from correction_semantic.judge_runner import (  # noqa: E402
+    DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS as _JUDGE_MAX_AGE_DAYS_DEFAULT,
+    _apply_population_filters,
+    _resolve_tracked_slugs,
+)
+from pj_slug import canonical_pj_slug as _canonical_pj_slug  # noqa: E402
+from pj_slug import pj_slug_fast as _pj_slug_fast  # noqa: E402
 
 # D の値（§2.2）: 実測（週最大1,566件 > 週上限1,400件）から初期値として設定した**仮の運用値**。
 # 100%表示ゲートがあるため D の誤差は誤った率でなく「未測定週の増加」として現れる（安全側）。
@@ -109,6 +130,44 @@ def collect_raw_data() -> Dict[str, List[Dict[str, Any]]]:
     }
 
 
+# ─────────────────────────────────────────────────────────────────
+# ホームディレクトリ起動セッションの除外（#466・2026-08-16 ユーザー決定）
+# ─────────────────────────────────────────────────────────────────
+def _home_pj_slug() -> Optional[str]:
+    """ホームディレクトリ起動セッションの pj_slug を返す（writer 側と同一規約で導出）。
+
+    ``pj_slug_fast`` は worktree マーカー無し・cache 未指定のとき basename にフォールバックする
+    ため、``Path.home()`` に対しては home dir の basename（例: ``matsukaze-takashi``）を返す。
+    独自実装しない（#466 委譲メモの決定: PJ slug が ``matsukaze-takashi`` の発話を分母から外す
+    ＝この基準そのものを固定文字列で書かず、writer 規約から動的に導出する）。
+    """
+    return _canonical_pj_slug(_pj_slug_fast(str(Path.home())))
+
+
+def _split_home_dir_utterances(
+    utterances: List[Dict[str, Any]],
+) -> "tuple[List[Dict[str, Any]], int]":
+    """ホームディレクトリ起動セッションの発話を分母から除外する（#466）。
+
+    PJ の実体を持たないセッション（``fleet_config.filter_valid_projects`` が discover 候補
+    からも除外する規約と同型）であり、tracked 化されることも判定対象になることもない。
+    tracked フィルタより**先に**独立して適用する（tracked 化状態が将来変わっても除外が
+    tracked 判定の副作用として消えないようにするため。診断内訳も tracked外と混ぜない）。
+    """
+    home_slug = _home_pj_slug()
+    if not home_slug:
+        return utterances, 0
+    kept: List[Dict[str, Any]] = []
+    excluded = 0
+    for u in utterances:
+        slug = _canonical_pj_slug(u.get("pj_slug"))
+        if slug == home_slug:
+            excluded += 1
+        else:
+            kept.append(u)
+    return kept, excluded
+
+
 def _physical_key(source_path: Any, line_no: Any) -> str:
     """utterances.db の PK と同型の物理キーを構成する（既存 utterance_key と同一規則）。
 
@@ -122,9 +181,19 @@ def _physical_key(source_path: Any, line_no: Any) -> str:
 # 週次集計本体
 # ─────────────────────────────────────────────────────────────────
 def compute_weekly_correction_rate(
-    *, now: Optional[datetime] = None, raw: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    *,
+    now: Optional[datetime] = None,
+    raw: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    tracked_projects: Optional[List[str]] = None,
+    judge_utterance_max_age_days: int = _JUDGE_MAX_AGE_DAYS_DEFAULT,
 ) -> Dict[str, Any]:
     """3ストアを read 時 join し、週ごとの指摘率を決定論算出する。
+
+    Args:
+        tracked_projects: DI 用（``judge_runner._resolve_tracked_slugs`` と同型）。None なら
+                    production 既定として ``fleet_config.load_config()`` を読む。
+        judge_utterance_max_age_days: judge の 90日 cutoff と同一の値（#466）。既定は
+                    ``judge_runner.DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS`` を単一ソースとして使う。
 
     Returns:
         {"weeks": [週ごとの dict（下記）], "diagnostics": {...}, "generated_at": iso}
@@ -136,11 +205,38 @@ def compute_weekly_correction_rate(
     **進行中の週（cutoff 未到達）は候補にすら含めない**（§2.1）。cutoff 到達済みの週は
     カバレッジ100%未満・検証失敗でも "weeks" に含める（measured=False。表示ゲート判定・
     最新カバレッジ evidence の材料になるため）。
+
+    **#466 分母フィルタ**: 母集団（``raw["utterances"]``）に対し、判定器と同一の絞り込み
+    （tracked PJ + 90日 cutoff）とホームディレクトリ起動セッション除外を、週次集計より
+    **前**に一括で適用する。除外件数は ``diagnostics`` に必ず記録する（silence != evaluated）。
     """
     _now = now or datetime.now(timezone.utc)
     raw = raw if raw is not None else collect_raw_data()
 
-    diagnostics: Dict[str, int] = {
+    raw_utterances = raw.get("utterances", []) or []
+    utterances_no_home, excluded_home_dir_total = _split_home_dir_utterances(raw_utterances)
+    tracked_slugs: Set[str] = _resolve_tracked_slugs(tracked_projects)
+    cutoff_for_population: Optional[datetime] = None
+    if judge_utterance_max_age_days is not None:
+        cutoff_for_population = _now - timedelta(days=judge_utterance_max_age_days)
+    (
+        filtered_utterances,
+        excluded_untracked_total,
+        excluded_untracked_by_pj,
+        excluded_before_cutoff_total,
+    ) = _apply_population_filters(utterances_no_home, tracked_slugs, cutoff_for_population)
+    raw = dict(raw)
+    raw["utterances"] = filtered_utterances
+
+    diagnostics: Dict[str, Any] = {
+        # #466: 分母から除外した件数（judge の母集団と揃えるため・silence != evaluated）。
+        "excluded_home_dir_total": excluded_home_dir_total,
+        "excluded_untracked_total": excluded_untracked_total,
+        "excluded_untracked_by_pj": excluded_untracked_by_pj,
+        "excluded_before_cutoff_total": excluded_before_cutoff_total,
+        "excluded_total": (
+            excluded_home_dir_total + excluded_untracked_total + excluded_before_cutoff_total
+        ),
         "judged_missing_key": 0,
         "judged_unparseable_judged_at": 0,
         "judged_duplicate_keys": 0,
@@ -472,14 +568,23 @@ def compute_display_gate(
 # 表示用集約（results_board から呼ぶエントリポイント）
 # ─────────────────────────────────────────────────────────────────
 def build_correction_rate_summary(
-    *, now: Optional[datetime] = None, raw: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    *,
+    now: Optional[datetime] = None,
+    raw: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    tracked_projects: Optional[List[str]] = None,
+    judge_utterance_max_age_days: int = _JUDGE_MAX_AGE_DAYS_DEFAULT,
 ) -> Dict[str, Any]:
     """戦果ボード向けに指摘率を集約する（gate 判定 + 悪化週フラグ付き）。
 
     gate が閉じている間は ``displayed_weeks=[]`` で、直近の確定週のカバレッジのみ返す
     （§2.7「測定不能なら 指摘率: 未測定（判定カバレッジ X/Y）」の材料）。
     """
-    result = compute_weekly_correction_rate(now=now, raw=raw)
+    result = compute_weekly_correction_rate(
+        now=now,
+        raw=raw,
+        tracked_projects=tracked_projects,
+        judge_utterance_max_age_days=judge_utterance_max_age_days,
+    )
     weeks = result["weeks"]
     gate = compute_display_gate(weeks)
 

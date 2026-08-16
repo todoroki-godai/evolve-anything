@@ -25,6 +25,26 @@ if str(_lib_dir) not in sys.path:
 import correction_rate  # noqa: E402
 
 
+# ── #466: 分母フィルタの既定 tracked slug をテスト全体で固定する ──────────
+# 実 fleet-config.json（tracked_projects 未指定時の production 既定）を読ませないため、
+# tracked_projects を明示指定しない全既存テストの pj_slug（"evolve-anything" /
+# "tiny-pj" / "big-pj"）を常に tracked 扱いにする。個別テストが tracked_projects を
+# 明示すれば本フィクスチャを経由せず本来の解決（bare 文字列 → basename）が動く。
+_DEFAULT_TEST_TRACKED_SLUGS = {"evolve-anything", "tiny-pj", "big-pj"}
+
+
+@pytest.fixture(autouse=True)
+def _default_tracked_slugs(monkeypatch):
+    original = correction_rate._resolve_tracked_slugs
+
+    def _fake(tracked_projects):
+        if tracked_projects is None:
+            return set(_DEFAULT_TEST_TRACKED_SLUGS)
+        return original(tracked_projects)
+
+    monkeypatch.setattr(correction_rate, "_resolve_tracked_slugs", _fake)
+
+
 # ── 週境界ヘルパー ──────────────────────────────────────────────────
 
 
@@ -399,6 +419,78 @@ class TestSourceKindAndSidechainExclusion:
         assert w["total_population"] == 1  # フィルタしない＝呼び出し側の契約
 
 
+# ── #466: 分母フィルタ（tracked PJ + 90日 cutoff + ホーム起動除外） ─────────
+
+
+class TestDenominatorPopulationFilters:
+    """分母を judge_runner の判定母集団と揃える（tracked外 PJ の発話が永久に判定されず
+    カバレッジが 100% に到達しない問題の修正）。除外は3種別を排他的に集計し、0件でも
+    必ず diagnostics に出す（silence != evaluated）。
+    """
+
+    def test_untracked_pj_excluded_from_population_and_counted(self):
+        u_tracked = _utt("a", pj_slug="evolve-anything")
+        u_untracked = _utt("b", pj_slug="some-other-pj")
+        raw = _raw([u_tracked, u_untracked], [_judged(u_tracked), _judged(u_untracked)], [])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        assert w["total_population"] == 1
+        d = result["diagnostics"]
+        assert d["excluded_untracked_total"] == 1
+        assert d["excluded_before_cutoff_total"] == 0
+        assert d["excluded_home_dir_total"] == 0
+        assert d["excluded_total"] == 1
+
+    def test_utterance_older_than_max_age_excluded_and_counted(self):
+        old_ts = _AFTER_CUTOFF - timedelta(days=correction_rate._JUDGE_MAX_AGE_DAYS_DEFAULT + 10)
+        u_old = _utt("old", ts=old_ts, ingested_at=old_ts + timedelta(hours=1))
+        u_ok = _utt("ok")
+        raw = _raw([u_old, u_ok], [_judged(u_ok)], [])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        d = result["diagnostics"]
+        assert d["excluded_before_cutoff_total"] == 1
+        assert d["excluded_untracked_total"] == 0
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        assert w["total_population"] == 1
+
+    def test_home_dir_session_excluded_and_counted_separately_from_untracked(self):
+        home_slug = correction_rate._home_pj_slug()
+        assert home_slug  # 環境前提: Path.home() が basename を持つこと
+        u_home = _utt("home", pj_slug=home_slug)
+        u_ok = _utt("ok")
+        raw = _raw([u_home, u_ok], [_judged(u_ok)], [])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        d = result["diagnostics"]
+        assert d["excluded_home_dir_total"] == 1
+        # home は tracked外 とは別枠で数える（二重計上しない）。
+        assert d["excluded_untracked_total"] == 0
+        assert d["excluded_total"] == 1
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        assert w["total_population"] == 1
+
+    def test_zero_exclusions_reported_as_explicit_zero(self):
+        u1 = _utt("a")
+        raw = _raw([u1], [_judged(u1)], [])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        d = result["diagnostics"]
+        assert d["excluded_untracked_total"] == 0
+        assert d["excluded_before_cutoff_total"] == 0
+        assert d["excluded_home_dir_total"] == 0
+        assert d["excluded_total"] == 0
+
+    def test_explicit_tracked_projects_override_bypasses_default_fixture(self):
+        """tracked_projects を明示指定すれば、autouse フィクスチャの既定シードでなく
+        本来の解決（bare 文字列 → basename）が動く（DI 契約の確認）。"""
+        u1 = _utt("a", pj_slug="only-this-pj")
+        raw = _raw([u1], [_judged(u1)], [])
+        result = correction_rate.compute_weekly_correction_rate(
+            now=_AFTER_CUTOFF, raw=raw, tracked_projects=["only-this-pj"],
+        )
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        assert w["total_population"] == 1
+        assert result["diagnostics"]["excluded_untracked_total"] == 0
+
+
 # ── 表示ゲート（k=4週連続） ─────────────────────────────────────────
 
 
@@ -484,7 +576,7 @@ class TestBuildCorrectionRateSummary:
              "pj_breakdown": {}, "top3_examples": [], "failure_reasons": []},
         ]
 
-        def _fake_compute(*, now=None, raw=None):
+        def _fake_compute(*, now=None, raw=None, **_ignored):
             return {"weeks": weeks, "diagnostics": {}, "generated_at": now.isoformat()}
 
         orig = cr.compute_weekly_correction_rate

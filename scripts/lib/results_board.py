@@ -341,6 +341,24 @@ def _category_breakdown_lines(category_breakdown: Optional[Dict[str, Any]]) -> L
     return lines
 
 
+def _render_exclusion_diagnostics(diagnostics: Dict[str, Any]) -> List[str]:
+    """指摘率の分母から除外した件数を表示する（#466・0件でも必ず表示・silence != evaluated）。
+
+    3種別（tracked外 / 90日超 / ホーム起動）は ``correction_rate.py`` が排他的に集計する
+    （ホーム起動セッションを先に除外してから tracked 判定するため、tracked外の件数と
+    二重計上しない）。
+    """
+    untracked = diagnostics.get("excluded_untracked_total", 0)
+    cutoff = diagnostics.get("excluded_before_cutoff_total", 0)
+    home = diagnostics.get("excluded_home_dir_total", 0)
+    total = diagnostics.get("excluded_total", untracked + cutoff + home)
+    return [
+        f"分母から除外: {total} 件（tracked外 {untracked} 件・"
+        f"90日超 {cutoff} 件・ホーム起動 {home} 件）",
+        "",
+    ]
+
+
 def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
     """指摘率セクション（ADR-054 §7.2.1 柱3(a)）の markdown ブロックを生成する。
 
@@ -358,6 +376,9 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
     gate = correction_rate.get("gate") or {}
     required = gate.get("required", GATE_CONSECUTIVE_WEEKS)
     lines: List[str] = []
+
+    # #466: 分母から除外した件数は gate の開閉に関わらず常に表示する（silence != evaluated）。
+    lines.extend(_render_exclusion_diagnostics(correction_rate.get("diagnostics") or {}))
 
     if not gate.get("gate_open"):
         latest = correction_rate.get("latest_coverage")
