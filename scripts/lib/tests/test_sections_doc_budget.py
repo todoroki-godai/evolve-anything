@@ -64,6 +64,31 @@ def test_section_shows_pointer_findings(tmp_path: Path) -> None:
     assert "spec/ghost.md" in joined
 
 
+def test_section_shows_claude_md_contract_missing(tmp_path: Path) -> None:
+    """CLAUDE.md 契約不変条件の欠落（#415）が同一 doc_budget セクションに相乗り表示される。"""
+    root = tmp_path / "repo"
+    text = (
+        "# Title\n\n"
+        "## 目指すユーザー体験（全機能の判断基準）\n"
+        "到達状況の数値をこのファイルに書かない。\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    section = build_doc_budget_section(root)
+    assert section is not None
+    joined = "\n".join(section)
+    assert "CLAUDE.md 契約不変条件の欠落" in joined
+
+
+def test_section_shows_must_stay_section_missing(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _write(root / "CLAUDE.md", "# Title\n\nno agent contract header, no compaction section.\n")
+    section = build_doc_budget_section(root)
+    assert section is not None
+    joined = "\n".join(section)
+    assert "移設禁止セクション" in joined
+    assert "Compaction Instructions" in joined
+
+
 def test_section_shows_section_findings(tmp_path: Path) -> None:
     # セクション検査は healthy 超過ファイルを入口にするため、ファイル自体も healthy(20KB) を
     # 超えるサイズにする（#319 `_section_budget_scope`）。
