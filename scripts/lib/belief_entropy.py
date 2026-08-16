@@ -15,9 +15,12 @@ LLM 呼び出しなし。auto_memory_runner が _call_llm で生成した要約�
 - 過剰ブロックを避け「明確な情報欠落・幻覚」のみを弾く保守的な閾値。
 
 設計上の注意:
-- 粗いトークン化（日本語など空白/記号で分割されにくいテキスト）では
-  トークン信号が乏しく retention/drift が不正確になりやすい。十分なトークン数が
-  無ければ should_store=True（ブロックしない）に倒す（low_signal ガード）。
+- トークン数が少ないテキストでは retention/drift が不正確になりやすい。十分な
+  トークン数が無ければ should_store=True（ブロックしない）に倒す（low_signal ガード）。
+  **#447 以前は「日本語は空白/記号で分割されず 1〜2 トークンに潰れる」ため、この
+  ガードが事実上「日本語を丸ごと免除する」ワークアラウンドとして働いていた。**
+  similarity.tokenize が CJK bigram に対応した現在その前提は消えており、日本語も
+  通常どおり採点される。ガードは本来の目的（真に短い入力の判定保留）だけを担う。
 - 要約は frontmatter（name/description/...）を含む生テキストを渡す前提。
   frontmatter の構造トークンは drift を僅かに押し上げるが、保守的な
   DRIFT_THRESHOLD がそれを吸収する（通常の要約は frontmatter だけでは超えない）。

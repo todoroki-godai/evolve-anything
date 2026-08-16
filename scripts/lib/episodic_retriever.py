@@ -9,12 +9,16 @@ episodic_store に委譲し、reflect.py が 800 行上限を超えないよう�
 """
 from __future__ import annotations
 
-import re
 from typing import Any
+
+# tokenize は単一ソース（similarity.py, #447）。episodic_store と違い DuckDB 等の
+# 追加依存を持たない stdlib のみの関数であり、このモジュールと同じディレクトリに
+# 常設されているため、graceful degradation の対象にしない（フォールバック複製を持つと
+# 日本語対応などの改善が2箇所に分岐する）。
+from similarity import tokenize
 
 try:
     from episodic_store import HAS_DUCKDB, insert_event, prune_expired, query_relevant
-    from similarity import tokenize
 except ImportError:
     # フォールバック: episodic 機能なしで動作継続
     HAS_DUCKDB = False  # type: ignore[assignment]
@@ -27,9 +31,6 @@ except ImportError:
 
     def query_relevant(*_, **__) -> list:  # type: ignore[misc]
         return []
-
-    def tokenize(text: str) -> set:  # type: ignore[misc]
-        return set(re.split(r"[\s\W_]+", text.lower())) - {""}
 
 
 _MIN_KEYWORDS = 2  # キーワードが少なすぎると false positive が多い

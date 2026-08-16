@@ -87,11 +87,25 @@ def test_empty_summary_allows_store():
     assert score.low_signal is True
 
 
-def test_coarse_tokenization_japanese_not_blocked():
-    """日本語など粗いトークン化で信号が乏しい場合はブロックしない。"""
-    corrections = [_corr("認証 ルーティング")]  # tokenize で 2 トークン < MIN_SIGNAL_TOKENS
+def test_japanese_is_scored_not_auto_exempted():
+    """#447 で日本語が分割できるようになり、日本語というだけの免除は無くなった。
+
+    旧 test_coarse_tokenization_japanese_not_blocked は「日本語は tokenize で
+    2 トークンにしかならない」という #447 のバグを前提にした補償テストだった。
+    バグが直った今、同じ入力は 6 トークンに分割され通常どおり採点される
+    （＝ソースと無関係な要約は正しくブロックされる）。
+    """
+    corrections = [_corr("認証 ルーティング")]
     summary = "まったく無関係な要約テキスト"
     score = score_belief(summary, corrections)
+    assert score.low_signal is False
+    assert score.should_store is False
+
+
+def test_short_text_still_low_signal():
+    """MIN_SIGNAL_TOKENS ガード自体は残る（真に短い入力は判定を保留する）。"""
+    corrections = [_corr("認証")]  # 1 トークン < MIN_SIGNAL_TOKENS
+    score = score_belief("要約", corrections)
     assert score.low_signal is True
     assert score.should_store is True
 

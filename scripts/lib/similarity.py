@@ -4,7 +4,6 @@
 TF-IDF ベクトル化とコサイン類似度計算を提供する。
 reorganize / audit / prune / enrich など複数モジュールから利用される Single Source of Truth。
 """
-import re
 import sys
 from itertools import combinations
 from typing import Dict, FrozenSet, List, Set
@@ -182,10 +181,75 @@ def filter_merge_group_pairs(
 
 # --- Jaccard 類似度 ---
 
+# CJK（中国語・日本語・韓国語）の文字コードポイント範囲。
+# Python の \w はこれらを「単語文字」として扱うため、旧実装の
+# re.split(r"[\s\W_]+", ...) では日本語文の内部に区切りが入らず、
+# 文全体が1つの巨大トークンに潰れていた（#447）。
+_CJK_RANGES = (
+    (0x3040, 0x309F),  # ひらがな
+    (0x30A0, 0x30FF),  # カタカナ
+    (0x3400, 0x4DBF),  # CJK 統合漢字拡張A
+    (0x4E00, 0x9FFF),  # CJK 統合漢字
+    (0xF900, 0xFAFF),  # CJK 互換漢字
+    (0xAC00, 0xD7A3),  # ハングル音節
+    (0x3130, 0x318F),  # ハングル互換字母
+)
+
+
+def _is_cjk(ch: str) -> bool:
+    """1文字が CJK（漢字・かな・ハングル）かどうかを判定する。"""
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _CJK_RANGES)
+
 
 def tokenize(text: str) -> Set[str]:
-    """テキストを空白・句読点で分割し、小文字トークンの集合を返す。"""
-    return set(re.split(r"[\s\W_]+", text.lower())) - {""}
+    """テキストを分割し、小文字トークンの集合を返す。
+
+    - 英数字（ASCII 等の非 CJK 単語文字）は従来どおり空白・記号・アンダースコアを
+      区切りとした単語単位で分割する（例: ``file_path:12`` -> ``{"file","path","12"}``）。
+    - CJK 文字（漢字・かな・ハングル）は形態素解析器を使わずに語の重なりを検出できるよう、
+      隣接2文字の bigram に分割する。1文字だけの run はそのまま1トークンとして残す。
+    - 空白・記号（読点・句点を含む）は両方に共通する区切りで、CJK run と非CJK run の
+      橋渡し（文をまたいだ結合）はしない。
+
+    Returns:
+        トークンの集合（空文字列は含まない）。
+    """
+    text = text.lower()
+    tokens: Set[str] = set()
+    word_buf: List[str] = []
+    cjk_buf: List[str] = []
+
+    def flush_word() -> None:
+        if word_buf:
+            tokens.add("".join(word_buf))
+            word_buf.clear()
+
+    def flush_cjk() -> None:
+        if not cjk_buf:
+            return
+        if len(cjk_buf) == 1:
+            tokens.add(cjk_buf[0])
+        else:
+            for i in range(len(cjk_buf) - 1):
+                tokens.add(cjk_buf[i] + cjk_buf[i + 1])
+        cjk_buf.clear()
+
+    for ch in text:
+        if _is_cjk(ch):
+            flush_word()
+            cjk_buf.append(ch)
+        elif ch.isalnum():
+            flush_cjk()
+            word_buf.append(ch)
+        else:
+            # 空白・記号・アンダースコア: 両方の run を区切る
+            flush_word()
+            flush_cjk()
+
+    flush_word()
+    flush_cjk()
+    return tokens
 
 
 def jaccard_coefficient(set_a: Set[str], set_b: Set[str]) -> float:
