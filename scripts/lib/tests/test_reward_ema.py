@@ -171,6 +171,57 @@ class TestReadRewardEma:
         assert result["a"]["last_advantage"] == pytest.approx(0.4)
         assert result["a"]["ts"] == "2026-06-02T00:00:00+00:00"
 
+    def test_excludes_agent_contaminated_records_without_rewriting_file(self, data_dir):
+        """旧経路が書いた Agent 由来汚染（skill が Agent: prefix）は read 時に除外する（#480）。
+
+        ファイルには書き込まない（後続の永続化テストと同じ read-only 契約）。
+        """
+        self._write(
+            data_dir / "reward_ema.jsonl",
+            [
+                {"pj_slug": "s", "skill": "ship", "ema": 0.2, "n_batches": 1,
+                 "advantage": 0.2, "ts": "2026-06-01T00:00:00+00:00"},
+                {"pj_slug": "s", "skill": "Agent:impl-worker", "ema": 0.9, "n_batches": 3,
+                 "advantage": 0.9, "ts": "2026-06-01T00:00:00+00:00"},
+            ],
+        )
+        result = re.read_reward_ema("s", data_dir=data_dir)
+        assert set(result) == {"ship"}
+        assert "Agent:impl-worker" not in result
+        # ファイルは書き換えない（read-only 契約）
+        raw = (data_dir / "reward_ema.jsonl").read_text()
+        assert "Agent:impl-worker" in raw
+
+    def test_with_exclusions_reports_zero_when_no_contamination(self, data_dir):
+        self._write(
+            data_dir / "reward_ema.jsonl",
+            [
+                {"pj_slug": "s", "skill": "ship", "ema": 0.2, "n_batches": 1,
+                 "advantage": 0.2, "ts": "2026-06-01T00:00:00+00:00"},
+            ],
+        )
+        result, excluded = re.read_reward_ema_with_exclusions("s", data_dir=data_dir)
+        assert set(result) == {"ship"}
+        assert excluded == 0
+
+    def test_with_exclusions_reports_nonzero_count_and_matches_read_reward_ema(self, data_dir):
+        self._write(
+            data_dir / "reward_ema.jsonl",
+            [
+                {"pj_slug": "s", "skill": "ship", "ema": 0.2, "n_batches": 1,
+                 "advantage": 0.2, "ts": "2026-06-01T00:00:00+00:00"},
+                {"pj_slug": "s", "skill": "Agent:a1", "ema": 0.9, "n_batches": 1,
+                 "advantage": 0.9, "ts": "2026-06-01T00:00:00+00:00"},
+                {"pj_slug": "s", "skill": "Agent:a2", "ema": 0.5, "n_batches": 1,
+                 "advantage": 0.5, "ts": "2026-06-01T00:00:00+00:00"},
+            ],
+        )
+        result, excluded = re.read_reward_ema_with_exclusions("s", data_dir=data_dir)
+        assert set(result) == {"ship"}
+        assert excluded == 2
+        # read_reward_ema（件数を返さない版）と同じクリーンな dict になる。
+        assert re.read_reward_ema("s", data_dir=data_dir) == result
+
 
 # ---------- persist_reward_ema_batch ----------
 
@@ -377,3 +428,49 @@ class TestApplyOutcomeRankingRewardEma:
         bad = next(c for c in result["UPDATE"] if c["skill"] == "bad")
         # outcome は付くが reward_ema 列は None（未配線時の安全値）
         assert bad["outcome"]["reward_ema"] is None
+
+    def test_reward_ema_excluded_count_defaults_to_zero(self):
+        """#480: 引数省略時（既定 0）は「除外なし」を明示する（黙って省略しない）。"""
+        triage = self._triage()
+        usage, sessions = self._usage_sessions()
+        result = oa.apply_outcome_ranking(triage, usage=usage, sessions=sessions)
+        assert result["outcome_ranking"]["UPDATE"]["reward_ema_excluded_agent_records"] == 0
+
+    def test_reward_ema_excluded_count_surfaced_when_nonzero(self):
+        """#480: read 側で除外した Agent 由来件数が outcome_ranking の既存 advisory dict に出る。"""
+        triage = self._triage()
+        usage, sessions = self._usage_sessions()
+        result = oa.apply_outcome_ranking(
+            triage, usage=usage, sessions=sessions,
+            reward_ema={"bad": {"ema": 0.3, "n_batches": 4}},
+            reward_ema_excluded_agent_records=3,
+        )
+        assert result["outcome_ranking"]["UPDATE"]["reward_ema_excluded_agent_records"] == 3
+
+    def test_reward_ema_excluded_count_end_to_end_from_read_reward_ema(self, data_dir):
+        """read_reward_ema_with_exclusions → apply_outcome_ranking の end-to-end 配線確認。"""
+        self._write_reward_ema_file(
+            data_dir,
+            [
+                {"pj_slug": "s", "skill": "bad", "ema": 0.3, "n_batches": 4,
+                 "advantage": 0.1, "ts": "2026-06-01T00:00:00+00:00"},
+                {"pj_slug": "s", "skill": "Agent:impl-worker", "ema": 0.9, "n_batches": 1,
+                 "advantage": 0.9, "ts": "2026-06-01T00:00:00+00:00"},
+            ],
+        )
+        ema_map, excluded = re.read_reward_ema_with_exclusions("s", data_dir=data_dir)
+        triage = self._triage()
+        usage, sessions = self._usage_sessions()
+        result = oa.apply_outcome_ranking(
+            triage, usage=usage, sessions=sessions,
+            reward_ema=ema_map,
+            reward_ema_excluded_agent_records=excluded,
+        )
+        assert result["outcome_ranking"]["UPDATE"]["reward_ema_excluded_agent_records"] == 1
+        assert "Agent:impl-worker" not in ema_map
+
+    @staticmethod
+    def _write_reward_ema_file(data_dir: Path, records) -> None:
+        (data_dir / "reward_ema.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n"
+        )

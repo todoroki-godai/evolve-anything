@@ -214,3 +214,32 @@ class TestComputeNegativeTransferEdgeCases:
         assert r["before_score"] == pytest.approx(1.0)
         assert r["after_score"] == pytest.approx(0.0)
         assert r["negative_transfer"] is True
+
+    def test_agent_records_excluded_from_baseline(self):
+        """Agent 呼び出しレコードは「スキル追加」の baseline / 転移点判定から除外される（#480）。
+
+        Agent 呼び出しは通常 skill 呼び出しより高頻度で先に登場しがちで、混入すると
+        baseline（最も早い「スキル」の登場）そのものが Agent 由来になってしまう。
+        """
+        usage_data = [
+            # Agent 呼び出し（最も早く登場・混入すると baseline を汚染する）
+            {
+                "skill_name": "Agent:impl-worker",
+                "subagent_type": "impl-worker",
+                "agent_id": "a1",
+                "timestamp": "2025-12-01T00:00:00Z",
+                "session_id": "sa",
+            },
+            # 既存スキル ship
+            {"skill_name": "ship", "ts": "2026-01-01T00:00:00Z", "session_id": "s1", "outcome": "success"},
+            {"skill_name": "ship", "ts": "2026-01-01T01:00:00Z", "session_id": "s1", "outcome": "success"},
+            # 新規スキル review が追加される
+            {"skill_name": "review", "ts": "2026-01-02T00:00:00Z", "session_id": "s2", "outcome": "success"},
+            {"skill_name": "ship", "ts": "2026-01-03T00:00:00Z", "session_id": "s3", "outcome": "error"},
+            {"skill_name": "ship", "ts": "2026-01-03T01:00:00Z", "session_id": "s3", "outcome": "error"},
+        ]
+        results = compute_negative_transfer(usage_data)
+        assert len(results) == 1
+        assert results[0]["skill_name"] == "ship"
+        # Agent 呼び出しがそれ自体「既存スキル」として delta 算出対象になっていないこと。
+        assert all(r["skill_name"] != "Agent:impl-worker" for r in results)

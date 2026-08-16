@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from rl_common import hook_store_path
+from rl_common import hook_store_path, is_skill_usage_record
 
 from .helpers import (
     _warn_no_duckdb,
@@ -44,13 +44,20 @@ def query_usage(
     if not filepath.exists():
         return []
 
+    # usage.jsonl は現行スキーマ ``ts`` / 旧スキーマ ``timestamp`` の二重表記（#480）。
+    # since/until 窓フィルタが timestamp_field="ts" 固定だと旧行が黙って除外されるため
+    # fallback を渡す。
     if HAS_DUCKDB:
-        return _duckdb_query_file(filepath, project=project, include_unknown=include_unknown, since=since, until=until, timestamp_field="ts")
+        return _duckdb_query_file(
+            filepath, project=project, include_unknown=include_unknown,
+            since=since, until=until,
+            timestamp_field="ts", fallback_timestamp_field="timestamp",
+        )
 
     _warn_no_duckdb()
     records = _load_jsonl(filepath)
     records = _filter_by_project(records, project, include_unknown)
-    return _filter_by_time(records, since, until, timestamp_field="ts")
+    return _filter_by_time(records, since, until, timestamp_field="ts", fallback_field="timestamp")
 
 
 def query_errors(
@@ -213,9 +220,19 @@ def _aggregate_skill_sessions(
             key=lambda r: r.get("ts") or r.get("timestamp") or "",
         )
 
+        # #480 恒久 no-op 是正: usage.jsonl のレコードは "tool_name" キーを持たない
+        # （hooks/observe.py の書込は skill_name/subagent_type 系フィールドのみ）ため、
+        # `rec.get("tool_name") == "Skill"` は常に False で `skill_fires` が常に空になり、
+        # `query_usage_by_skill_session` は全 skill_name に対し常に `[]` を返す恒久 no-op
+        # だった（evolve Phase 3.3 の quality_traces が常に None になる根因）。
+        # Skill 発火の判定は is_skill_usage_record（#480 単一ソース）に置き換える。
+        # 残注意（範囲外・#480 スコープ外）: usage.jsonl は Skill/Agent の呼び出しレコードしか
+        # 持たず Read/Edit/Bash 等の粒度のツール呼び出しは記録されないため、発火後ウィンドウ内の
+        # `tool_calls`/`read_edit_cycles`/`errors` は依然として実質ゼロに近い値しか出ない
+        # （別スキーマ不整合。本 issue の是正対象外として報告する）。
         skill_fires = []
         for i, rec in enumerate(sorted_recs):
-            if rec.get("tool_name") == "Skill" and rec.get("skill_name") == skill_name:
+            if is_skill_usage_record(rec) and rec.get("skill_name") == skill_name:
                 skill_fires.append((i, rec))
 
         if not skill_fires:
@@ -228,7 +245,7 @@ def _aggregate_skill_sessions(
 
             next_skill_ts = None
             for j in range(pos + 1, len(sorted_recs)):
-                if sorted_recs[j].get("tool_name") == "Skill":
+                if is_skill_usage_record(sorted_recs[j]):
                     next_skill_ts = _parse_ts(sorted_recs[j].get("ts", sorted_recs[j].get("timestamp", "")))
                     break
 

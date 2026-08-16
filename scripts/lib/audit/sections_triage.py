@@ -77,6 +77,8 @@ def build_skill_triage_section(project_dir: Path) -> Optional[List[str]]:
 
 def build_skill_triage_counts_lines(
     triage_result: Optional[Dict[str, Any]],
+    *,
+    reward_ema_excluded_agent_records: Optional[int] = None,
 ) -> Optional[List[str]]:
     """triage_result（phases.skill_triage）から実件数の findings 行を生成する（#528-4）。
 
@@ -93,6 +95,13 @@ def build_skill_triage_counts_lines(
     Args:
         triage_result: `triage_all_skills` の返り値（CREATE/UPDATE/SPLIT/MERGE/OK の
             各キーがリスト）。`{"error": ...}` / `{"skipped": True}` の劣化形も受ける。
+        reward_ema_excluded_agent_records: #480 — `read_reward_ema_with_exclusions` が
+            返す「reward_ema.jsonl から除外した Agent 由来レコード件数」。呼び出し側
+            （phases_diagnose.py）が直接渡す（`triage_result["outcome_ranking"]` は
+            triage 候補が0件の action では作られず欠落しうるため、そちらには依存しない）。
+            渡された場合は**0件でも必ず**行を追記する（silence != evaluated。「フィルタが
+            走ったが0件」と「フィルタ自体が走っていない」を読者が区別できるようにする）。
+            未指定（None）のときは従来どおり行を追加しない。
 
     Returns:
         findings 行のリスト。triage が走らなかった場合は None（沈黙）。
@@ -110,6 +119,12 @@ def build_skill_triage_counts_lines(
         bucket = triage_result.get(action)
         count = len(bucket) if isinstance(bucket, list) else 0
         parts.append(f"{action} {count}")
-    return [
+    lines = [
         "実データ件数（findings）: " + " / ".join(parts) + "。",
     ]
+    if reward_ema_excluded_agent_records is not None:
+        lines.append(
+            f"- reward_ema: 集計対象外の記録を {reward_ema_excluded_agent_records} "
+            "件除外（Agent 実行の記録）"
+        )
+    return lines

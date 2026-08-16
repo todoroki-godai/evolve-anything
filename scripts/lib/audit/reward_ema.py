@@ -94,29 +94,33 @@ def fold_ema(
     return round(ema, 4), prev_n + 1
 
 
-def read_reward_ema(
+def _read_reward_ema_partitioned(
     slug: str, *, data_dir: Optional[Path] = None
-) -> Dict[str, dict]:
-    """slug スコープの reward_ema.jsonl を読み、skill 単位に最新 EMA を返す（読み取りのみ）。
+) -> Tuple[Dict[str, dict], int]:
+    """slug スコープの reward_ema.jsonl を1回読み、(クリーンな EMA dict, 除外件数) を返す。
 
-    ``_om._read_jsonl``（read-only・非作成）で読み、``pj_slug == slug`` で filter。append 順
-    ＝時系列なので skill 単位に **last-append-wins** で fold する。
-
-    Returns:
-        {skill: {"ema": float, "n_batches": int, "last_advantage": float, "ts": str}}。
-    ファイル不在 → {}（ファイルを作らない・書かない = dry-run 純度）。
+    ``read_reward_ema`` / ``read_reward_ema_with_exclusions`` の共有単一実装（#480）。
+    ``attribute_outcomes`` の write 側修正（#480）より前に書かれた旧レコードは
+    ``skill`` が ``f"Agent:{subagent_type}"`` 形式（Agent 呼び出し由来）のことがある
+    （実データ 256 件中 118 件・2026-08-16 実測）。ファイルは書き換えず、read 時に
+    ``is_agent_skill_label``（rl_common 単一ソース）で除外する。
     """
     # #112 read 層 alias fold: legacy 旧 slug タグも canonical へ畳んで当 PJ として拾う
     # （lazy import は memory_contagion と同じ audit-package idiom・alias は read 専用）。
     from store_read_union import pj_slug_match as _pj_slug_match
+    from rl_common import is_agent_skill_label
 
     base = _base(data_dir)
     out: Dict[str, dict] = {}
+    excluded_agent_records = 0
     for rec in _om._read_jsonl(base / _STORE_NAME):
         if not _pj_slug_match(rec.get("pj_slug"), slug):
             continue
         skill = rec.get("skill")
         if not skill:
+            continue
+        if is_agent_skill_label(skill):
+            excluded_agent_records += 1
             continue
         # append 順に上書き = 最後に見たもの（時系列で新しい）を採用。
         out[skill] = {
@@ -125,7 +129,37 @@ def read_reward_ema(
             "last_advantage": rec.get("advantage"),
             "ts": rec.get("ts"),
         }
+    return out, excluded_agent_records
+
+
+def read_reward_ema(
+    slug: str, *, data_dir: Optional[Path] = None
+) -> Dict[str, dict]:
+    """slug スコープの reward_ema.jsonl を読み、skill 単位に最新 EMA を返す（読み取りのみ）。
+
+    ``_om._read_jsonl``（read-only・非作成）で読み、``pj_slug == slug`` で filter。append 順
+    ＝時系列なので skill 単位に **last-append-wins** で fold する。Agent 呼び出し由来の
+    レコード（``skill`` が ``Agent:`` prefix）は除外する（#480。件数を知りたい呼び出し側は
+    ``read_reward_ema_with_exclusions`` を使う）。
+
+    Returns:
+        {skill: {"ema": float, "n_batches": int, "last_advantage": float, "ts": str}}。
+    ファイル不在 → {}（ファイルを作らない・書かない = dry-run 純度）。
+    """
+    out, _excluded = _read_reward_ema_partitioned(slug, data_dir=data_dir)
     return out
+
+
+def read_reward_ema_with_exclusions(
+    slug: str, *, data_dir: Optional[Path] = None
+) -> Tuple[Dict[str, dict], int]:
+    """``read_reward_ema`` と同じ EMA dict に加え、除外した Agent 由来レコード件数を返す。
+
+    #480: reward_ema.jsonl 永続化の旧経路が書いた Agent 由来汚染（117/256 件実測）を
+    read 側で黙って捨てず、呼び出し側（phases_diagnose.py 等）が advisory に件数を
+    surface できるようにする（silence != evaluated）。
+    """
+    return _read_reward_ema_partitioned(slug, data_dir=data_dir)
 
 
 def persist_reward_ema_batch(

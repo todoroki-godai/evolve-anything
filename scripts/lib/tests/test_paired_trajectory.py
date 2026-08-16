@@ -24,6 +24,15 @@ def _usage(skill, sid):
     return {"skill_name": skill, "session_id": sid}
 
 
+def _agent_usage(name, sid):
+    return {
+        "skill_name": f"Agent:{name}",
+        "subagent_type": name,
+        "agent_id": f"a-{sid}",
+        "session_id": sid,
+    }
+
+
 def _sess(sid, error_count, seq=None):
     return {"session_id": sid, "error_count": error_count, "tool_sequence": seq or []}
 
@@ -150,3 +159,34 @@ class TestPairedTrajectoryStratification:
         rec = {r["skill"]: r for r in results}
         # with 腕は s1 のみ有効（s2 は欠損で除外）→ n_with=1。
         assert rec["review"]["n_with"] == 1
+
+    def test_agent_records_excluded_from_task_type_context_and_targets(self):
+        """Agent 呼び出しは task-type 文脈にも target 候補にも混入しない（#480）。
+
+        同じ動作の paired ケース（review 有 vs 無）に Agent 呼び出しを1セッションだけ
+        混ぜる。Agent が context 集合に混入すると、そのセッションだけ task-type バケットが
+        分裂し review の paired 判定が壊れる。Agent 自身が target 候補（skill）として
+        results に出てくることもない。
+        """
+        usage = [
+            _usage("ship", "s1"), _usage("review", "s1"),
+            _usage("ship", "s2"), _usage("review", "s2"),
+            _agent_usage("impl-worker", "s2"),  # s2 に Agent 呼び出しが混入
+            _usage("ship", "s3"),
+            _usage("ship", "s4"),
+        ]
+        sessions = [
+            _sess("s1", 0), _sess("s2", 0),
+            _sess("s3", 1), _sess("s4", 2),
+        ]
+        results = compute_paired_trajectory(usage=usage, sessions=sessions)
+        rec = {r["skill"]: r for r in results}
+        assert "review" in rec
+        r = rec["review"]
+        # Agent 混入が無視されれば test_paired_delta_positive と同じ結果になるはず。
+        assert r["n_with"] == 2
+        assert r["n_without"] == 2
+        assert r["with_success"] == pytest.approx(1.0)
+        assert r["without_success"] == pytest.approx(0.0)
+        # Agent 自身が target 候補として結果に出てこないこと。
+        assert not any(skill.startswith("Agent:") for skill in rec)
