@@ -649,6 +649,63 @@ class TestRenderResultsBoard:
         assert "未測定" in text
         assert "確定週データなし" in text
 
+    def test_exclusion_diagnostics_shown_with_zero_counts(self):
+        """#466: 分母から除外した件数は0件でも必ず表示する（silence != evaluated）。"""
+        board = self._board(correction_rate={
+            **_closed_gate_summary(),
+            "diagnostics": {
+                "excluded_untracked_total": 0,
+                "excluded_before_cutoff_total": 0,
+                "excluded_home_dir_total": 0,
+                "excluded_total": 0,
+            },
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "分母から除外: 0 件" in text
+        assert "tracked外 0 件" in text
+        assert "90日超 0 件" in text
+        assert "ホーム起動 0 件" in text
+
+    def test_exclusion_diagnostics_shown_with_nonzero_counts(self):
+        board = self._board(correction_rate={
+            **_closed_gate_summary(),
+            "diagnostics": {
+                "excluded_untracked_total": 5,
+                "excluded_before_cutoff_total": 3,
+                "excluded_home_dir_total": 12,
+                "excluded_total": 20,
+            },
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "分母から除外: 20 件" in text
+        assert "tracked外 5 件" in text
+        assert "90日超 3 件" in text
+        assert "ホーム起動 12 件" in text
+
+    def test_exclusion_diagnostics_shown_when_gate_open_too(self):
+        """gate 開閉に関わらず常に表示する。"""
+        board = self._board(correction_rate={
+            "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": []},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {
+                "excluded_untracked_total": 1,
+                "excluded_before_cutoff_total": 0,
+                "excluded_home_dir_total": 0,
+                "excluded_total": 1,
+            },
+            "generated_at": _NOW.isoformat(),
+        })
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+        assert "分母から除外: 1 件" in text
+
     def test_gate_open_lists_weeks_newest_first_with_rate(self):
         board = self._board(correction_rate={
             "gate": {"gate_open": True, "display_start_week": "2026-W10", "required": 4, "best_run_length": 4},
