@@ -321,6 +321,8 @@ _EXPECTED_ACTIVE_STORES = [
     "icebox-verdicts.json",
     "icebox_verdict_seen.jsonl",
     "memory_transition_checks.jsonl",
+    # #475 §12 決定4: 未登録だった live store の宣言バックフィル。
+    "optimize_history/<slug>.jsonl",
     "pj_slug_cache.json",
     "remediation-outcomes.jsonl",
     "remediation_suppression/<slug>.jsonl",
