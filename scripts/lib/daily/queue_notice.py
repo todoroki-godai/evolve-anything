@@ -74,7 +74,7 @@ def build_queue_notice(
 
     now = now or datetime.now(timezone.utc)
     generated_at = queue_data.get("generated_at")
-    state, _age_days = _freshness.classify_freshness(
+    state, age_days = _freshness.classify_freshness(
         generated_at,
         now=now,
         stale_days=stale_days,
@@ -82,8 +82,14 @@ def build_queue_notice(
     )
     if state == _freshness.Freshness.STALE:
         age_hours = _freshness.age_in_hours(generated_at, now=now)
+        # 48時間未満は時間表示、以上は日数表示（health_notice と同じ切り替え。「1日前」は
+        # 25時間でも47時間でも同じ文字列になり緊急度が伝わらないため）。
+        if age_hours is not None and age_hours < 48:
+            elapsed = f"{age_hours}時間前"
+        else:
+            elapsed = f"{age_days}日前"
         return (
-            f"⚠ 学習データの自動取り込みが止まっています（最終実行: {age_hours}時間前）。"
+            f"⚠ 学習データの自動取り込みが止まっています（最終実行: {elapsed}）。"
             "`bin/evolve-daily-run` を1回実行すれば再開します。止まったまま週の締切"
             "（日曜の3日後）を過ぎると、その週は欠測として確定し、週次の数字を出すのに"
             "必要な「4週連続」が振り出しに戻ります。明日もこの警告が出る場合は "

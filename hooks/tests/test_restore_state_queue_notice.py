@@ -148,7 +148,7 @@ def test_deliver_stale_at_30_hours_shows_dedicated_message(tmp_path, monkeypatch
     assert "学習データの自動取り込みが止まっています" in item.text
     assert "30時間前" in item.text
     assert "現在値は不明です" not in item.text
-    assert item.digest == "毎朝の取り込みが30時間停止"
+    assert item.digest == "毎朝の取り込みが停止"
 
 
 def test_deliver_unknown_generated_at_shows_dedicated_message(tmp_path, monkeypatch, capsys):

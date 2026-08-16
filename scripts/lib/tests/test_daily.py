@@ -261,14 +261,14 @@ def test_notice_none_input_is_silent():
 
 def test_notice_stale_queue_replaces_business_content_with_health_notice():
     """#351: stale なら旧値（PJ 一覧）を併記せず、専用メッセージに差し替える（旧実装は
-    業務値の後ろに advisory を追記するだけだった）。#466: 経過時間は時間単位で表示し、
-    freshness.health_notice の汎用文（「現在値は不明です」）は使わない。"""
+    業務値の後ろに advisory を追記するだけだった）。#466: 48時間以上経過しているので
+    日数表示になり、freshness.health_notice の汎用文（「現在値は不明です」）は使わない。"""
     now = datetime(2026, 6, 30, 9, 0, 0, tzinfo=timezone.utc)  # generated_at から 5 日後
     msg = qn.build_queue_notice(SAMPLE_QUEUE, now=now, stale_days=2)
     assert msg is not None
     assert "figma-to-code" not in msg
     assert "sys-bots" not in msg
-    assert "120時間前" in msg
+    assert "5日前" in msg
     assert "現在値は不明です" not in msg
     assert "学習データの自動取り込みが止まっています" in msg
 
@@ -395,6 +395,24 @@ def test_default_build_queue_notice_stale_message_content():
     assert "週の締切" in msg
     assert "4週連続" in msg
     assert "launchctl list | grep com.evolve-anything.daily" in msg
+
+
+def test_default_build_queue_notice_stale_at_47_hours_shows_hours():
+    now = datetime(2026, 6, 27, 8, 0, 0, tzinfo=timezone.utc)  # +47h
+    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_queue_notice(queue, now=now)
+    assert msg is not None
+    assert "47時間前" in msg
+    assert "日前" not in msg
+
+
+def test_default_build_queue_notice_stale_at_49_hours_shows_days():
+    now = datetime(2026, 6, 27, 10, 0, 0, tzinfo=timezone.utc)  # +49h
+    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
+    msg = qn.build_queue_notice(queue, now=now)
+    assert msg is not None
+    assert "2日前" in msg
+    assert "時間前" not in msg
 
 
 def test_default_build_queue_notice_unknown_uses_dedicated_message_not_generic_health_notice():

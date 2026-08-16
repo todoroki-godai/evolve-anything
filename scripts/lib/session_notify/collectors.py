@@ -446,13 +446,9 @@ def _build_evolve_queue_output(shared: "tuple | None" = None) -> "NotificationIt
                 stale_hours=_queue_notice.DEFAULT_STALE_HOURS,
             )
             if state == _daily_freshness.Freshness.STALE:
-                age_hours = _daily_freshness.age_in_hours(generated_at)
-                digest = (
-                    f"毎朝の取り込みが{age_hours}時間停止"
-                    if age_hours is not None
-                    else "毎朝の取り込みが停止"
+                return NotificationItem(
+                    label="queue", tier=1, text=text, digest="毎朝の取り込みが停止",
                 )
-                return NotificationItem(label="queue", tier=1, text=text, digest=digest)
             if state == _daily_freshness.Freshness.UNKNOWN:
                 return NotificationItem(
                     label="queue", tier=1, text=text, digest="毎朝の取り込みが判定不能",
