@@ -262,6 +262,40 @@ def test_remediation_suppression_not_stale_drift() -> None:
     assert "remediation_suppression/<slug>.jsonl" in store_registry.stale_exempt_names()
 
 
+# --- optimize_history/<slug>.jsonl の宣言（#475 §12 決定4）--------------------
+
+
+def test_optimize_history_declared_as_active_batch_permanent_raw_event() -> None:
+    """optimize_history/<slug>.jsonl が active / batch-writer / permanent / raw_event で
+    宣言されている（#475 §12 決定4）。既存 4 writer（optimize.py・run_loop.py・
+    fitness_evolution.py・evolve_revert/_apply.py）が採用/revert イベントを書く既存
+    ストアの登録漏れ追認であり、宣言なしで書くと orphan_store が undeclared として
+    surface する（#434）。
+    """
+    decl = store_registry.declaration_for("optimize_history/<slug>.jsonl")
+    assert decl is not None
+    assert decl.status == "active"
+    assert decl.retention == "permanent"
+    assert decl.writer_locus == "batch"
+    assert decl.classification == "raw_event"
+    assert decl.writer, "writer 未記述"
+    assert decl.reader, "reader 未記述"
+
+
+def test_optimize_history_write_not_rejected_by_barrier() -> None:
+    """active 宣言なので store_write の runtime guard が write を弾かない（#475）。"""
+    assert store_registry.is_active_store("optimize_history/<slug>.jsonl") is True
+
+
+def test_optimize_history_not_stale_drift() -> None:
+    """batch-writer 宣言なので hook-writer 突合の stale に誤検知されない（#475）。"""
+    assert "optimize_history/<slug>.jsonl" in store_registry.stale_exempt_names()
+
+
+def test_optimize_history_included_in_active_store_names() -> None:
+    assert "optimize_history/<slug>.jsonl" in store_registry.active_store_names()
+
+
 # --- status フィールド（write barrier・ADR-049 / #55）------------------------
 
 def test_status_defaults_to_active() -> None:

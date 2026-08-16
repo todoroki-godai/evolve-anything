@@ -114,6 +114,78 @@ def test_parent_symlink_escape_is_rejected_by_containment_check_not_lstat(tmp_pa
     assert result.reason == REASON_ESCAPES_ROOT
 
 
+def test_resolves_global_rule_scope_target_under_home_claude_rules(tmp_path):
+    """#475 §8.2: scope='global_rule' は ``~/.claude/rules`` に解決される。"""
+    home_rules = Path.home() / ".claude" / "rules"
+    home_rules.mkdir(parents=True, exist_ok=True)
+    target = home_rules / "some-rule.md"
+    target.write_text("- x\n", encoding="utf-8")
+
+    result = resolve_target(_entry(scope="global_rule", relative_path="some-rule.md"))
+
+    assert result.ok is True
+    assert result.path == target
+
+
+def test_resolves_project_rule_scope_target_under_repo_claude_rules(tmp_path):
+    """#475 §8.2: scope='project_rule' は ``<repo>/.claude/rules`` に解決される。"""
+    repo = tmp_path / "repo"
+    rules_dir = repo / ".claude" / "rules"
+    rules_dir.mkdir(parents=True)
+    target = rules_dir / "some-rule.md"
+    target.write_text("- x\n", encoding="utf-8")
+
+    result = resolve_target(
+        _entry(scope="project_rule", repo_id=str(repo), relative_path="some-rule.md")
+    )
+
+    assert result.ok is True
+    assert result.path == target
+
+
+def test_missing_repo_id_for_project_rule_scope_is_rejected():
+    result = resolve_target(_entry(scope="project_rule", repo_id=None, relative_path="x.md"))
+    assert result.ok is False
+    assert result.reason == REASON_MISSING_REPO_ID
+
+
+def test_global_rule_scope_still_escapes_root_correctly(tmp_path):
+    """global_rule の containment 検査も project/global と同じロジックを流用する
+    （回帰防止: scope 追加が既存の containment 検査を緩めていないこと）。"""
+    home_rules = Path.home() / ".claude" / "rules"
+    home_rules.mkdir(parents=True, exist_ok=True)
+    outside = Path.home() / ".claude" / "outside-rules"
+    outside.mkdir(parents=True, exist_ok=True)
+    secret = outside / "secret.md"
+    secret.write_text("x", encoding="utf-8")
+    link_dir = home_rules / "link_dir"
+    if link_dir.exists() or link_dir.is_symlink():
+        link_dir.unlink()
+    link_dir.symlink_to(outside)
+
+    result = resolve_target(
+        _entry(scope="global_rule", relative_path="link_dir/secret.md")
+    )
+
+    assert result.ok is False
+    assert result.reason == REASON_ESCAPES_ROOT
+
+
+def test_scope_global_still_resolves_to_skills_root_not_rules(tmp_path):
+    """#475 §8.2: 既存の scope='global' は引き続き ``~/.claude/skills`` のまま
+    （global_rule 追加が既存挙動を壊していないこと）。"""
+    home_skills = Path.home() / ".claude" / "skills"
+    (home_skills / "my-skill2").mkdir(parents=True, exist_ok=True)
+    target = home_skills / "my-skill2" / "SKILL.md"
+    target.write_text("x", encoding="utf-8")
+
+    result = resolve_target(_entry(scope="global", relative_path="my-skill2/SKILL.md"))
+
+    assert result.ok is True
+    assert result.path == target
+    assert ".claude/rules" not in str(result.path)
+
+
 def test_hardlink_is_rejected_as_conflict(tmp_path):
     """M5: st_nlink != 1 は conflict として拒否（他リンク先との内容分岐を防ぐ）。"""
     root = tmp_path / "repo"

@@ -313,6 +313,29 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "TTL45日経過で 1 回だけ再 surface（環境変化での再評価機会）。",
     ),
     StoreDeclaration(
+        name="optimize_history/<slug>.jsonl",
+        writer="skills/genetic-prompt-optimizer/scripts/optimize.py の save_history_entry"
+        "（accept/reject 履歴の追記・history_file を直接 open('a') — append_entry 非経由の"
+        "3-writer 規約の1つ）/ skills/evolve-loop-orchestrator/scripts/run_loop.py:685"
+        "（loop 結果の append_entry）/ skills/evolve-fitness/scripts/fitness_evolution.py:246"
+        "（_append_history_entry_deduped_locked 経由の dedup 追記）/ "
+        "scripts/lib/evolve_revert/_apply.py:129（revert 実行時の revert イベント追記）。"
+        "hot path（hooks）からは書かない。",
+        writer_locus="batch",
+        reader="optimize_history_store.load_effective_history / results_board.classify_decision"
+        "（戦果ボード・採用/却下の集計）/ evolve_revert（entry 検索・apply・listing）が"
+        "revert 対象の SoR として参照。",
+        retention="permanent",
+        classification="raw_event",
+        note="#475 §12 決定4: 未登録だった live store の宣言バックフィル（#379 Step 4 PR E と"
+        "同型。既存の実ファイル・既存 writer/reader コードの追認であり新設ではない）。"
+        "採用（accept/reject）イベントの一次記録 SoR。PJ ごとの `<repo-slug>.jsonl`"
+        "（remediation_suppression/<slug>.jsonl と同じ「ディレクトリ + <slug>」形式）。"
+        "prune 対象になっていない（#12 決定2 と同型の判断）ため retention=permanent。"
+        "同時に shrink_freeze.FROZEN_STORES へも追加登録している"
+        "（両側同時追加の理由は shrink_freeze.py 側のコメント参照）。",
+    ),
+    StoreDeclaration(
         name="reward_ema.jsonl",
         writer="scripts/lib/audit/reward_ema.py（evolve --drain の apply 境界 "
         "persist_reward_ema_batch）。hot path（hooks）からは書かない。",

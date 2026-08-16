@@ -44,6 +44,11 @@ class TargetResolution:
     nlink: Optional[int] = None
 
 
+def global_rules_root() -> Path:
+    """global rule の正準 root（``~/.claude/rules``）。#475 §8.2。"""
+    return Path.home() / ".claude" / "rules"
+
+
 def resolve_target(entry: Dict[str, Any]) -> TargetResolution:
     """entry の scope/repo_id/relative_path から apply 対象パスを解決し安全検査する。
 
@@ -51,6 +56,10 @@ def resolve_target(entry: Dict[str, Any]) -> TargetResolution:
       ``evolve_decision_ids.global_skills_root`` と同一ソース）+ root 相対パス
     - ``scope == "project"``: entry の ``repo_id``（git-common-dir の親 = 本体 repo
       root）+ root 相対パス
+    - ``scope == "global_rule"``（#475 §8.2）: 正準 global rules root
+      （``~/.claude/rules``）+ root 相対パス
+    - ``scope == "project_rule"``（#475 §8.2）: entry の ``repo_id`` 配下の
+      ``.claude/rules`` + root 相対パス
     - それ以外（``None`` 等）: ``REASON_UNSUPPORTED_SCOPE``
     """
     scope = entry.get("scope")
@@ -58,11 +67,18 @@ def resolve_target(entry: Dict[str, Any]) -> TargetResolution:
 
     if scope == "global":
         root = global_skills_root()
+    elif scope == "global_rule":
+        root = global_rules_root()
     elif scope == "project":
         repo_id = entry.get("repo_id")
         if not repo_id:
             return TargetResolution(None, False, REASON_MISSING_REPO_ID)
         root = Path(repo_id)
+    elif scope == "project_rule":
+        repo_id = entry.get("repo_id")
+        if not repo_id:
+            return TargetResolution(None, False, REASON_MISSING_REPO_ID)
+        root = Path(repo_id) / ".claude" / "rules"
     else:
         return TargetResolution(None, False, REASON_UNSUPPORTED_SCOPE)
 
