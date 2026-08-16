@@ -181,10 +181,12 @@ def validate_rule_content(content: str) -> bool:
 
 
 def load_claude_reflect_data() -> List[Dict[str, Any]]:
-    """corrections.jsonl から pending の修正データのみ取り込む。未生成時はスキップ。
+    """corrections.jsonl から pending + promoted の修正データを取り込む。未生成時はスキップ。
 
-    reflect が処理するのは pending のみであるため、
-    evolve の reflect_data_count と reflect の認識を一致させる。
+    #475 §5.1: promoted（「いまは反映しない」を選んだ昇格済み・反映先未定）を含めないと
+    保留が何件たまっても evolve は `/reflect` 実行を提案しない（P3/P4 の穴の再発）。
+    reflect が処理するのも同じ2値であるため、evolve の reflect_data_count と reflect の
+    認識を一致させる。
     """
     from . import DATA_DIR
     corrections_file = DATA_DIR / "corrections.jsonl"
@@ -193,7 +195,7 @@ def load_claude_reflect_data() -> List[Dict[str, Any]]:
         return []
 
     records = load_jsonl(corrections_file)
-    return [r for r in records if r.get("reflect_status", "pending") == "pending"]
+    return [r for r in records if r.get("reflect_status", "pending") in ("pending", "promoted")]
 
 
 def _load_skill_tokens(skill_path: Path) -> Dict[str, Any]:

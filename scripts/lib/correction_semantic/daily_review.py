@@ -13,8 +13,11 @@ remaining。新規 0 件でも eligible=False / groups=[] を**常時 emit**す�
 決定論で判断材料を出すだけ（LLM 非依存）。
 
 既読ストア（correction_review_seen.jsonl・論点2）: correction_judged.jsonl と同方式の物理キー
-集合（append-only・1 行 ``{"key": signal_key, "pj_slug": ..., "decision": "promoted"|"rejected",
-"reviewed_at": ...}``）。detected_at 時刻 cursor 案は却下（同時刻シグナルの取りこぼし境界バグ）。
+集合（append-only・1 行 ``{"key": signal_key, "pj_slug": ..., "decision": "promoted"|"rejected"|
+"deferred"（#475 §5.1: 反映先つき4択で「いまは反映しない」を選んだ場合。既読にはするが
+weak_signal 側の ``promoted`` フラグは立てない — 昇格は corrections.jsonl 側の
+``reflect_status="promoted"`` として残る）, "reviewed_at": ...}``）。
+detected_at 時刻 cursor 案は却下（同時刻シグナルの取りこぼし境界バグ）。
 read 側で set 化するので重複追記は無害（冪等）。既読追記は **apply 時のみ**（dry_run は読むだけ）。
 
 PJ slug スコープ（DATA_DIR 全PJ共通 pitfall）: 当該 cwd の PJ slug の weak_signal のみ対象にし、
@@ -118,7 +121,9 @@ def record_reviewed(
 ) -> Dict[str, Any]:
     """確認済み signal_key を既読集合に追記する（dedup + dry-run ゲート貫通）。
 
-    decision は "promoted"（はい）/ "rejected"（いいえ）。「Skip」は呼ばない（再提示）。
+    decision は自由文字列（本関数は値を検証しない）。想定値: "promoted"（共通/PJルールに
+    反映）/ "rejected"（いいえ）/ "deferred"（#475 §5.1: いまは反映しない・記録は残す）。
+    「Skip」は呼ばない（再提示）。
     追記は apply 時のみ。dry_run=True なら **一切ファイルに触れない**（最下層 write ゲート）。
     重複追記は read 側 set 化で無害だが、ここでも既存キーは skip して肥大化を抑える。
 

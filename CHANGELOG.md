@@ -3,6 +3,26 @@
 ## [Unreleased]
 
 ### Added
+- **feat(reflect): 朝の y/n に反映先つき4択を導入し「昇格済み」と「反映済み」を分離（#475 A レーン）** —
+  `reflect_status` の値域に `promoted`（昇格済み・反映先未定）を追加し、`applied` は反映先ファイルに
+  該当行が実在すると確認できたときだけ付ける（`reflect_apply_match.check_line_applied` が §6.2 の
+  正規化規則で決定論判定・LLM 非依存）。`correction_semantic.promote.py` の旧 `applied` 直書きを
+  `promoted` に変更し、`evolve-reflect` に `--apply <source_correction_id> --target-path <path>
+  --draft-line-file <file>` を新設して実在確認ゲートの唯一の入口にした（`reflect`/`skills/reflect`
+  の SKILL.md 手順が直接 JSONL を Edit する迂回口を撤去）。`reflect.py`/`discover/suppression.py` の
+  入力集合を `pending` のみから `pending`+`promoted` に拡張し、「いまは反映しない」を選んだ保留が
+  reflect のバッチレビューと朝の `/reflect` 提案の両方から永久に消えないようにした。`daily_review`
+  の既読記録は `decision="deferred"` で「いまは反映しない」を既読化しつつ反映先へは書かない。
+  `skills/evolve/references/correction-review.md` の Step 6.2 を「共通ルール/PJルール/いまは反映しない/
+  いいえ」の固定4択に差し替え、重複チェック（既に反映済みの指摘は設問枠を消費しない）・新規ファイル
+  作成時の3択確認・Other（skill/hook）への次の一手案内を実装。既存 rule ファイルへの追記は
+  `optimize_history` へ revert 用エントリ（`revert_schema_version`/`revert_before_b64`/
+  `relative_path`/`scope`）を記録する経路を追加（`bin/evolve-revert` 側の root 解決・availability
+  拡張は別レーン）。過去の `reflect_confirmed`×`applied` レコード（実際には一度も反映先に書かれて
+  いない）を `promoted` へ一括移行する1回限りのスクリプト `scripts/migrate_reflect_promoted_status.py`
+  を追加（既定 dry-run・`--apply` でのみ実書込）。store / observability section / advisory adapter /
+  weak_signal channel の新設なし（#379 非抵触）。TDD +多数（8方向の mutation test で全ゲートが
+  赤くなることを確認）。
 - **feat(proposal_lane_coverage): 提案種別の decision lane 到達性を機械検査し CI blocking 化
   （#467 Stage 0）** — discover が生成する提案種別8種（`matched_skills` / `skill_evolve` /
   `repeating_patterns` / `rule_violation_observed` / `pitfall_candidates` / `hook_candidates` /
