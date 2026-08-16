@@ -136,11 +136,92 @@ target paths: [('<HOME>/.claude/CLAUDE.md', 3), ('<repo>/.claude/rules/project-s
 0.60）に到達する前に他の分岐へ収束せず None になるか、`.claude/rules/project-specific.md` /
 `~/.claude/CLAUDE.md` にマッチする（0.85）かのどちらかしか実際には発火しなかった。
 
-## Should-12（U8）: 5問分の表示サンプルの生成に使ったコマンド
+## Should-12（U8）: 5問分の表示サンプルの生成に使ったコマンド（codex 3巡目 [Must]B-3 で拡充）
 
-`docs/decisions/drafts/475-adoption-to-rule-routing.md` §11 U8 に転記した5問は、
+`docs/decisions/drafts/475-adoption-to-rule-routing.md` §11-A に転記した5問は、
 2026-08-14〜16 の実 `reflect_confirmed` レコードから message を引用し（個人パス等は
 含まない短い日本語の指摘文のみ）、`draft_line` は agent 役として著者が起草した。
-文字数カウントは Python `len()`（zenkaku/hankaku を区別しない素の文字数。壊れて赤くする
-検査は行っていない単純カウント）。実行コマンドと出力は §11 U8 の本文に文字数の表として転記済み
-（サンプル本文自体は個人特定情報を含まないため本ログには複製しない）。
+文字数カウントは Python `len()`（zenkaku/hankaku を区別しない素の文字数）。
+
+**当初版（B-3 指摘: 「実際のコマンド・入力・5件それぞれの出力が artifact に無い」）を受けて、
+実行したコマンドと5件個別の出力をそのまま以下に転記する。**
+
+```bash
+python3 - <<'PY'
+def trunc(s, n=60):
+    return s if len(s) <= n else s[:n] + "…"
+
+# message: reflect_confirmed の実レコードから短い引用のみ抽出（個人パス等は含まない）
+# draft_line: agent 役として著者が起草（実装が実際にこう分類する保証はない）
+samples = [
+    ("spec-keeperはcodexレビューいらない",
+     "spec-keeper 等 docs-only の PR は codex レビュー不要（コード変更 PR のみ codex を標準挿入する）"),
+    ("フルスイートでなんで頭でまわしちゃったの？token無駄じゃん",
+     "並行 worker には python3 -m pytest -n 0（直列）を指示する。フルスイートを頭で回さない"),
+    ("選べる道のメリット、デメリット考えて材料がそろってから提案してほしい。codexにも相談してみて",
+     "（既存の explain-clearly.md と重複のため追記不要）"),
+    ("自動でルール化を全部ユーザーにrule化するか確認すれば誤爆はふせげるよね。rule, skill, hookは"
+     "ユーザーがいまは全部確認すれば良いと思う。",
+     "（本設計 #475 自体がこの指摘の実装なので pitfall として経緯のみ残す）"),
+    ("なんで、V5がOKっていってたの？純粋に未着手が５件もあるのに",
+     "（特定タスクの一回性の指摘のため一般化しない）"),
+]
+
+# §4.3 の実際の label/detail 文言（tacchi 2巡目書き換え後）
+opts_labels = ["共通ルールに書く（全PJで効く）", "このPJのルールに書く",
+               "いまは反映しない（記録は残す）", "いいえ（この指摘は不要）"]
+opts_detail = [
+    "次のセッションから全プロジェクトで効きます。あとで1コマンドで取り消せます（条件は反映時に表示）。",
+    "次のセッションからこのプロジェクトだけで効きます。取り消しも同様です。",
+    "動作は変わりません。記録は消えず、5件たまったら見直しをまとめて案内します。",
+    "記録も反映もしません。次回から出しません。",
+]
+other_hint = "メモや落とし穴集に残したい場合は Other に記入してください。"
+
+for i, (m, dl) in enumerate(samples, 1):
+    mt, dlt = trunc(m), trunc(dl)
+    q_body = f"「{mt}」（1回）\n\n書く文面（案）: {dlt}\n\nこの指摘を、どこに反映しますか？\n{other_hint}"
+    labels_block = "\n".join(opts_labels)
+    full_block = "\n".join(opts_labels) + "\n" + "\n".join(opts_detail)
+    print(f"Q{i}: body_only={len(q_body)} "
+          f"body_labels={len(q_body + chr(10) + labels_block)} "
+          f"full={len(q_body + chr(10) + full_block)}")
+PY
+```
+
+出力（verbatim・2026-08-17）:
+
+```
+Q1: body_only=155 body_labels=213 full=360
+Q2: body_only=158 body_labels=216 full=363
+Q3: body_only=152 body_labels=210 full=357
+Q4: body_only=172 body_labels=230 full=377
+Q5: body_only=123 body_labels=181 full=328
+```
+
+平均・最大は本文（§11-A）のとおり: body_only 平均152/最大172、body_labels 平均210/最大230、
+full 平均357/最大377（いずれも400字以内）。
+
+**Q1（`full`）の実際のテキスト**（第三者が再計算できるよう1件だけそのまま転記する。
+他4件も上記スクリプトで同じ形式が再現できる）:
+
+```
+「spec-keeperはcodexレビューいらない」（1回）
+
+書く文面（案）: spec-keeper 等 docs-only の PR は codex レビュー不要（コード変更 PR のみ code…
+
+この指摘を、どこに反映しますか？
+メモや落とし穴集に残したい場合は Other に記入してください。
+共通ルールに書く（全PJで効く）
+このPJのルールに書く
+いまは反映しない（記録は残す）
+いいえ（この指摘は不要）
+次のセッションから全プロジェクトで効きます。あとで1コマンドで取り消せます（条件は反映時に表示）。
+次のセッションからこのプロジェクトだけで効きます。取り消しも同様です。
+動作は変わりません。記録は消えず、5件たまったら見直しをまとめて案内します。
+記録も反映もしません。次回から出しません。
+```
+
+（文字数360は上記テキスト全体の `len()`。実際の AskUserQuestion UI のレイアウト・改行・
+区切り記号の描画は tool 側の表示仕様次第で変わりうるため、この字数は「入力として渡すテキスト量」
+の proxy であり、画面上の見た目の行数そのものではない — この限界は §11 U9 の観測対象。）
