@@ -132,6 +132,21 @@ python3 scripts/bench/measure_467_proposal_kinds.py \
 §1.5.1/§1.5.3 の結論（SKILL.md 解決 0 件・型フィルタで型不一致・未接続13種の産出件数）は
 この訂正では変わらない。
 
+**2026-08-16 cold review 3巡目 [Must]1〜3 / [Should]1 の反映（本節・artifact 双方に適用済み）**:
+
+1. SKILL.md 解決規則が `discover/runner.py:417-419` と不一致だった（測定側は global のみ
+   探索・本番は global→project の両方）。同じ探索対象・順序に修正した。件数は 0/30 のまま不変
+2. `--data-dir` が §1.5.3 の全入力を差し替えるわけではない。差し替え可能／不能を実装確認のうえ
+   全件列挙し artifact 側に記録した（`session_store` union read は call-time override
+   `session_store._DATA_DIR_OVERRIDE` を追加配線し差し替え可能にした）
+3. 「LLM を呼ばない」「`~/.claude/` へ書かない」は grep 監査だけでなく実行時に証明するようにした。
+   測定本体を execution-time guard（`socket.socket` / 書込みモード `open()` を検出したら即例外送出）
+   で包んで実行し、結果を artifact の `safety_verification` に記録する（常時有効・フラグ不要）
+4. join テストに同時刻境界（`dt == corr_dt` は先行 Skill 呼び出し無しと判定）のケースを追加した
+
+再実行コマンドは同一（追加フラグ不要。上記1〜3 は常時有効化した挙動）。詳細は artifact の
+「入力パスの全件列挙」「安全性検証」節を参照。
+
 #### 1.5.1 パイロット `instruction_violations` は本番で 0 件（前提崩壊①）
 
 以下の **[実測]** の値は §1.5.0 の再現スクリプトの出力（artifact）を正典とする。

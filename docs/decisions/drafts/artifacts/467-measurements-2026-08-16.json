@@ -1,25 +1,132 @@
 {
-  "commit_sha": "004fbd38ca5dd2276a6271048d13aa91e4c59650",
+  "commit_sha": "556d846d58a5365c66f47f7f3d0ce70315404812",
   "data_dir": "~/.claude/evolve-anything",
-  "elapsed_seconds": 4.34,
-  "llm_calls": "none (audited 2026-08-16: no anthropic/openai/subprocess-claude calls in any of the 13 generation functions or their dependencies; critical_instruction_extractor.detect_instruction_violation is LLM-free by contract)",
-  "measured_at": "2026-08-16T04:12:31Z",
+  "elapsed_seconds": 4.59,
+  "llm_calls": "none, verified at execution time via guard_no_network (socket.socket blocked for the duration of the measurement; see safety_verification.network_guard). Static audit (2026-08-16): no anthropic/openai/subprocess-claude calls in any of the 13 generation functions or their dependencies; critical_instruction_extractor.detect_instruction_violation is LLM-free by contract.",
+  "measured_at": "2026-08-16T04:40:17Z",
   "project_root": "/Users/matsukaze-takashi/matsukaze-utils/evolve-anything",
+  "referenced_input_paths": [
+    {
+      "overridable_via_data_dir": true,
+      "path": "~/.claude/evolve-anything/corrections.jsonl",
+      "used_by": [
+        "section_1_5_1",
+        "pitfall_candidates",
+        "hook_candidates",
+        "instruction_violation"
+      ]
+    },
+    {
+      "overridable_via_data_dir": true,
+      "path": "~/.claude/evolve-anything/usage.jsonl",
+      "used_by": [
+        "section_1_5_1",
+        "missed_skill_opportunities (via discover.DATA_DIR patch)"
+      ]
+    },
+    {
+      "overridable_via_data_dir": true,
+      "path": "~/.claude/evolve-anything/errors.jsonl",
+      "used_by": [
+        "pitfall_candidates"
+      ]
+    },
+    {
+      "overridable_via_data_dir": true,
+      "path": "~/.claude/evolve-anything/sessions.jsonl",
+      "used_by": [
+        "constraint_decay_warnings",
+        "constraint_decay_findings"
+      ]
+    },
+    {
+      "note": "session_store._DATA_DIR_OVERRIDE を一時差し替え（2026-08-16 [Must]2 是正）",
+      "overridable_via_data_dir": true,
+      "path": "session_store union read (sessions.db + sessions.jsonl, resolved via session_store._data_dir())",
+      "used_by": [
+        "missed_skill_opportunities"
+      ]
+    },
+    {
+      "note": "--project-root に紐づく（discover/runner.py と同じ CC エンコード規則）。--data-dir の対象外は設計どおり（他環境では各自の --project-root で自動解決）",
+      "overridable_via_data_dir": false,
+      "path": "~/.claude/projects/<encoded evolve-anything>/*.jsonl (session transcripts)",
+      "used_by": [
+        "repeating_patterns",
+        "rule_violation_observed",
+        "recommended_artifacts",
+        "stall_recovery_patterns",
+        "trajectory_skill_candidate"
+      ]
+    },
+    {
+      "note": "スキル定義（config）。--project-root / 実 home に紐づく",
+      "overridable_via_data_dir": false,
+      "path": "/Users/matsukaze-takashi/matsukaze-utils/evolve-anything/.claude/skills/, ~/.claude/skills/",
+      "used_by": [
+        "instruction_violation",
+        "missed_skill_opportunities",
+        "workflow_checkpoint_gaps"
+      ]
+    },
+    {
+      "note": "rule 定義（config）。--project-root / 実 home に紐づく",
+      "overridable_via_data_dir": false,
+      "path": "/Users/matsukaze-takashi/matsukaze-utils/evolve-anything/.claude/rules/, ~/.claude/rules/",
+      "used_by": [
+        "repeating_patterns",
+        "rule_violation_observed"
+      ]
+    },
+    {
+      "note": "導入済み artifact 検出・skill trigger 抽出（config）。--project-root に紐づく",
+      "overridable_via_data_dir": false,
+      "path": "/Users/matsukaze-takashi/matsukaze-utils/evolve-anything/.claude/ (installed hooks/artifacts), /Users/matsukaze-takashi/matsukaze-utils/evolve-anything/CLAUDE.md",
+      "used_by": [
+        "recommended_artifacts",
+        "verification_needs",
+        "missed_skill_opportunities"
+      ]
+    },
+    {
+      "note": "SKILL.md 解決（§1.5.1）。runner.py:417-419 と同じ規則で global を必ず先に見る",
+      "overridable_via_data_dir": false,
+      "path": "/Users/matsukaze-takashi/.claude/skills",
+      "used_by": [
+        "section_1_5_1 (skill_md_resolves)"
+      ]
+    }
+  ],
+  "safety_verification": {
+    "home_claude_manifest_diff": {
+      "added": [],
+      "changed": [],
+      "removed": []
+    },
+    "home_claude_manifest_diff_note": "diff_total=0",
+    "home_claude_manifest_file_count_after": 52400,
+    "home_claude_manifest_file_count_before": 52400,
+    "home_claude_manifest_scope": "full ~/.claude/ (not narrowed)",
+    "network_guard": "passed",
+    "network_guard_method": "execution-time monkeypatch of socket.socket; raises immediately on any socket instantiation",
+    "write_guard": "passed",
+    "write_guard_method": "execution-time monkeypatch of builtins.open/os.open; raises immediately on any write-mode open() under ~/.claude/"
+  },
   "script": "scripts/bench/measure_467_proposal_kinds.py",
   "section_1_5_1": {
     "corrections_correction_type_counts": {
       "iya": 1,
       "naoshite-request": 1,
-      "semantic_idiom": 162,
+      "semantic_idiom": 163,
       "stop": 8
     },
     "corrections_last_skill_truthy": 0,
     "corrections_source_counts": {
       "backfill": 8,
       "hook": 2,
-      "reflect_confirmed": 162
+      "reflect_confirmed": 163
     },
-    "corrections_total": 172,
+    "corrections_total": 173,
     "corrections_with_preceding_skill_call": 30,
     "preceding_skill_calls_with_resolvable_skill_md": 0,
     "usage_skill_call_total": 888

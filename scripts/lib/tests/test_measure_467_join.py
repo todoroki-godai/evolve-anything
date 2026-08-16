@@ -87,6 +87,22 @@ def test_find_preceding_skill_no_session_match_or_no_preceding_call():
     assert find_preceding_skill({"session_id": "s1"}, idx) is None
 
 
+def test_find_preceding_skill_excludes_exact_same_instant():
+    """`dt < corr_dt` は境界で厳密に「前」のみを採用する（同時刻は除外）。
+
+    2026-08-16 codex cold review [Should]: 辞書順比較への回帰や `<` を `>` への反転は
+    既存ケースで検出できるが、同時刻の境界（`==`）は別途固定する必要がある。
+    Skill 呼び出しと correction が完全同一 instant（`Z` と `+00:00` の異表記でも同一）の
+    場合、先行 Skill 呼び出しは無し（None）と判定されること。
+    """
+    usage_records = [
+        {"skill_name": "same-instant", "session_id": "s1", "ts": "2026-08-15T15:00:00+00:00", "outcome": "success"},
+    ]
+    correction = {"session_id": "s1", "timestamp": "2026-08-15T15:00:00Z"}
+    idx = index_skill_usage_by_session(usage_records)
+    assert find_preceding_skill(correction, idx) is None
+
+
 def test_find_preceding_skill_finds_legacy_timestamp_keyed_skill_row():
     """旧スキーマ（`ts` でなく `timestamp` を使う Skill 行）も index に載ること。"""
     usage_records = [
@@ -188,6 +204,35 @@ def test_skill_md_resolves_plugin_namespaced_name_never_resolves(tmp_path):
     (home / ".claude" / "skills" / "spec-keeper" / "SKILL.md").write_text("x", encoding="utf-8")
 
     assert skill_md_resolves("evolve-anything:spec-keeper", home) is False
+
+
+def test_skill_md_resolves_project_local_when_absent_from_global(tmp_path):
+    """`discover/runner.py:417-419` は global に加えて project 側
+    （`<project_root>/.claude/skills/...`）も探索する。global に無く project にだけ
+    存在するケースを解決できること（2026-08-16 codex cold review [Must]1: 修正前は
+    global のみを見ており本番と契約不一致だった。project_root 未指定なら見つからず
+    False のままであることも併せて確認する）。"""
+    home = tmp_path / "home"
+    project_root = tmp_path / "project"
+    pj_skill_dir = project_root / ".claude" / "skills" / "pj-only-skill"
+    pj_skill_dir.mkdir(parents=True)
+    (pj_skill_dir / "SKILL.md").write_text("# pj-only-skill", encoding="utf-8")
+
+    assert skill_md_resolves("pj-only-skill", home) is False  # project_root 未指定
+    assert skill_md_resolves("pj-only-skill", home, project_root=project_root) is True
+
+
+def test_skill_md_resolves_prefers_global_over_project(tmp_path):
+    """global と project の両方に同名スキルがある場合、global 側が先に解決される
+    （runner.py:419 の順序 `skill_dirs + [... not in skill_dirs]` の再現）。"""
+    home = tmp_path / "home"
+    project_root = tmp_path / "project"
+    (home / ".claude" / "skills" / "shared").mkdir(parents=True)
+    (home / ".claude" / "skills" / "shared" / "SKILL.md").write_text("global", encoding="utf-8")
+    (project_root / ".claude" / "skills" / "shared").mkdir(parents=True)
+    (project_root / ".claude" / "skills" / "shared" / "SKILL.md").write_text("pj", encoding="utf-8")
+
+    assert skill_md_resolves("shared", home, project_root=project_root) is True
 
 
 def test_load_jsonl_skips_malformed_lines(tmp_path):
