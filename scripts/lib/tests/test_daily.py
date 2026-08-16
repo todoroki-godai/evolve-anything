@@ -260,15 +260,17 @@ def test_notice_none_input_is_silent():
 
 
 def test_notice_stale_queue_replaces_business_content_with_health_notice():
-    """#351: stale なら旧値（PJ 一覧）を併記せず、経過日数だけを伝える health notice に
-    差し替える（旧実装は業務値の後ろに advisory を追記するだけだった）。"""
+    """#351: stale なら旧値（PJ 一覧）を併記せず、専用メッセージに差し替える（旧実装は
+    業務値の後ろに advisory を追記するだけだった）。#466: 経過時間は時間単位で表示し、
+    freshness.health_notice の汎用文（「現在値は不明です」）は使わない。"""
     now = datetime(2026, 6, 30, 9, 0, 0, tzinfo=timezone.utc)  # generated_at から 5 日後
     msg = qn.build_queue_notice(SAMPLE_QUEUE, now=now, stale_days=2)
     assert msg is not None
     assert "figma-to-code" not in msg
     assert "sys-bots" not in msg
-    assert "5日" in msg
-    assert "現在値は不明です" in msg
+    assert "120時間前" in msg
+    assert "現在値は不明です" not in msg
+    assert "学習データの自動取り込みが止まっています" in msg
 
 
 def test_notice_fresh_queue_has_no_stale_advisory():
@@ -281,15 +283,16 @@ def test_notice_fresh_queue_has_no_stale_advisory():
 
 def test_notice_malformed_generated_at_is_unknown_and_does_not_leak_business_values():
     """#351: generated_at がパース不能なら freshness gate が先に働き、業務値（PJ 名等）を
-    一切解釈しない health notice を返す（判定不能でも通知は出すが、旧仕様のように
-    queue の中身をそのまま見せない）。"""
+    一切解釈しない専用メッセージを返す（判定不能でも通知は出すが、旧仕様のように
+    queue の中身をそのまま見せない）。#466: freshness.health_notice の汎用文は使わない。"""
     bad = json.loads(json.dumps(SAMPLE_QUEUE))
     bad["generated_at"] = "not-a-timestamp"
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     msg = qn.build_queue_notice(bad, now=now, stale_days=2)
     assert msg is not None
     assert "figma-to-code" not in msg
-    assert "現在値は不明です" in msg
+    assert "現在値は不明です" not in msg
+    assert "動いているか判定できません" in msg
 
 
 def test_notice_missing_generated_at_is_unknown():
@@ -298,7 +301,8 @@ def test_notice_missing_generated_at_is_unknown():
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     msg = qn.build_queue_notice(bad, now=now, stale_days=2)
     assert msg is not None
-    assert "現在値は不明です" in msg
+    assert "現在値は不明です" not in msg
+    assert "動いているか判定できません" in msg
 
 
 def test_notice_future_generated_at_is_unknown():
@@ -307,7 +311,8 @@ def test_notice_future_generated_at_is_unknown():
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     msg = qn.build_queue_notice(bad, now=now, stale_days=2)
     assert msg is not None
-    assert "現在値は不明です" in msg
+    assert "現在値は不明です" not in msg
+    assert "動いているか判定できません" in msg
 
 
 def test_notice_naive_generated_at_without_tz_is_unknown():
@@ -316,7 +321,8 @@ def test_notice_naive_generated_at_without_tz_is_unknown():
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     msg = qn.build_queue_notice(bad, now=now, stale_days=2)
     assert msg is not None
-    assert "現在値は不明です" in msg
+    assert "現在値は不明です" not in msg
+    assert "動いているか判定できません" in msg
 
 
 def test_notice_empty_queue_with_stale_generated_at_still_warns():
@@ -327,7 +333,7 @@ def test_notice_empty_queue_with_stale_generated_at_still_warns():
     now = datetime(2026, 7, 1, 9, 0, 0, tzinfo=timezone.utc)  # generated_at から 6 日後
     msg = qn.build_queue_notice(stale_empty, now=now, stale_days=2)
     assert msg is not None
-    assert "現在値は不明です" in msg
+    assert "学習データの自動取り込みが止まっています" in msg
 
 
 def test_systemmessage_output_dict():
@@ -367,41 +373,40 @@ def test_default_build_queue_notice_fresh_at_29_hours():
 
 
 def test_default_build_queue_notice_stale_at_30_hours():
-    """30時間ちょうどで STALE（当日中に気づける粒度・#466）。"""
+    """30時間ちょうどで STALE（当日中に気づける粒度・#466）。専用メッセージに切り替わり
+    health_notice の汎用文（「現在値は不明です」）は出ない。"""
     now = datetime(2026, 6, 26, 15, 0, 0, tzinfo=timezone.utc)  # +30h
     queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
     msg = qn.build_queue_notice(queue, now=now)
     assert msg is not None
     assert "figma-to-code" not in msg
-    assert "毎朝の自動記録" in msg
+    assert "学習データの自動取り込みが止まっています" in msg
     assert "30時間前" in msg
+    assert "現在値は不明です" not in msg
 
 
-def test_default_build_queue_notice_stale_message_uses_new_remediation_text():
-    now = datetime(2026, 6, 26, 15, 0, 0, tzinfo=timezone.utc)
+def test_default_build_queue_notice_stale_message_content():
+    """#466 是正: 「N時間で即・不合格確定」でなく「週の締切を過ぎると欠測確定」を伝える。"""
+    now = datetime(2026, 6, 26, 15, 0, 0, tzinfo=timezone.utc)  # +30h
     queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
     msg = qn.build_queue_notice(queue, now=now)
     assert msg is not None
     assert "bin/evolve-daily-run" in msg
-    assert "その週の集計は不合格として確定" in msg
+    assert "週の締切" in msg
+    assert "4週連続" in msg
     assert "launchctl list | grep com.evolve-anything.daily" in msg
 
 
-def test_default_build_queue_notice_stale_at_47_hours_shows_hours():
-    now = datetime(2026, 6, 27, 8, 0, 0, tzinfo=timezone.utc)  # +47h
-    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
-    msg = qn.build_queue_notice(queue, now=now)
+def test_default_build_queue_notice_unknown_uses_dedicated_message_not_generic_health_notice():
+    """UNKNOWN（generated_at 欠落等）でも health_notice の汎用文を使わない。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    bad = dict(SAMPLE_QUEUE, generated_at="not-a-timestamp")
+    msg = qn.build_queue_notice(bad, now=now)
     assert msg is not None
-    assert "47時間前" in msg
-
-
-def test_default_build_queue_notice_stale_at_49_hours_shows_days():
-    now = datetime(2026, 6, 27, 10, 0, 0, tzinfo=timezone.utc)  # +49h
-    queue = dict(SAMPLE_QUEUE, generated_at=GENERATED_AT_0900)
-    msg = qn.build_queue_notice(queue, now=now)
-    assert msg is not None
-    assert "2日前" in msg
-    assert "時間前" not in msg
+    assert "figma-to-code" not in msg
+    assert "現在値は不明です" not in msg
+    assert "動いているか判定できません" in msg
+    assert "bin/evolve-daily-run" in msg
 
 
 def test_default_build_judge_cap_notice_silent_at_30_hours_stale():

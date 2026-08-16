@@ -25,21 +25,15 @@ QUEUE_FILE_NAME = "evolve-queue.json"
 # 他モジュール（fleet/cli_propose.py 等）が独立に参照しているため互換のため残す。
 DEFAULT_STALE_DAYS = 3
 
-# generated_at がこの時間数以上古ければ stale（#466: 日単位の 3 日 = 72 時間だと停止に
-# 気づけるのが最大 72 時間後になり手遅れ。当日中に気づければ手動で
-# `bin/evolve-daily-run` を回して取り返せるため、時間単位に緩和する）。
-# 30 時間の根拠: 09:00 実行が正常な運用サイクルで、
-#   - 翌日 08:00 のセッションは前回実行から 23 時間 → 正常な沈黙（まだ発火させない）
-#   - 翌日 15:00 のセッションで前日分しか無ければ 30 時間 → 当日中にまだ手動実行で
-#     取り返せるタイミングで発火させる
+# generated_at がこの時間数以上古ければ stale（#466: 「その日のうち」に気づける粒度へ）。
+# 09:00 実行を前提に、翌日 08:00 のセッション（23時間経過）では沈黙し、翌日 15:00 に前日分
+# しか無い（30時間経過）時点で発火する。judge_runner の日次上限は 200 件
+# （correction_semantic.judge_runner.DEFAULT_DAILY_UTTERANCE_LIMIT）で、実発話量（1日
+# 84〜120件・2026-08 実測）に対し余剰があるため、数日の停止でも再開後に追いつく。永久に
+# 失われるのは correction_rate.FREEZE_DELAY_DAYS（=3）による**週の締切**（週末+3日）を
+# 止まったまま通過した場合だけであり、本閾値の目的は「その締切に間に合ううちに気づかせる」
+# ことにある（「N時間で停止すると即座に不合格が確定する」わけではない・2026-08-17 実測是正）。
 DEFAULT_STALE_HOURS = 30
-
-REMEDIATION_HINT = (
-    "今日中に `bin/evolve-daily-run` を1回実行すれば、その日の分は取り返せます。"
-    "止まったまま日をまたぐと、その週の集計は不合格として確定し、週次の数字が出るのが"
-    "さらに1週間先送りになります。繰り返すなら "
-    "`launchctl list | grep com.evolve-anything.daily` で毎朝の登録状況を確認してください。"
-)
 
 
 def read_queue(data_dir) -> "dict | None":
@@ -61,33 +55,46 @@ def build_queue_notice(
     """待ち PJ 一覧の通知メッセージを生成する。
 
     評価順序（#351 freshness gate）: (a) generated_at の鮮度を先に判定する →
-    (b) FRESH でなければ待ち PJ 一覧を一切解釈せず health notice を返す（queue が
+    (b) FRESH でなければ待ち PJ 一覧を一切解釈せず専用メッセージを返す（queue が
     空でも stale なら通知する＝producer 停止の見逃しを防ぐ回帰対応）→
     (c) FRESH のときだけ待ち PJ 一覧を評価し、空なら沈黙する。
 
     - queue_data が None → None（daily runner 未実行 = 壊れているのでなく単に未セットアップ）
     - FRESH かつ待ち PJ あり → 「evolve 待ち: <pj…>（N 件）」
     - FRESH かつ待ち PJ 無し → None（沈黙）
-    - STALE / UNKNOWN → 待ち PJ の中身に関わらず health notice（旧値は併記しない）
+    - STALE / UNKNOWN → 待ち PJ の中身に関わらず専用メッセージ（旧値は併記しない）
+
+    #466 是正（2026-08-17）: STALE/UNKNOWN のメッセージは ``freshness.health_notice`` の
+    汎用文（「現在値は不明です」）を使わない。この通知の対象は「値」でなく「取り込みが
+    動いているか」であり、汎用文では読者に意味が伝わらないため、queue 専用の説明文を
+    ここで直接組み立てる（``classify_freshness`` を先に評価する契約自体は維持）。
     """
     if not isinstance(queue_data, dict):
         return None
 
     now = now or datetime.now(timezone.utc)
-    state, age_days = _freshness.classify_freshness(
-        queue_data.get("generated_at"),
+    generated_at = queue_data.get("generated_at")
+    state, _age_days = _freshness.classify_freshness(
+        generated_at,
         now=now,
         stale_days=stale_days,
         stale_hours=DEFAULT_STALE_HOURS,
     )
-    if state != _freshness.Freshness.FRESH:
-        age_hours = _freshness.age_in_hours(queue_data.get("generated_at"), now=now)
-        return _freshness.health_notice(
-            label="毎朝の自動記録",
-            freshness=state,
-            age_days=age_days,
-            age_hours=age_hours,
-            remediation=REMEDIATION_HINT,
+    if state == _freshness.Freshness.STALE:
+        age_hours = _freshness.age_in_hours(generated_at, now=now)
+        return (
+            f"⚠ 学習データの自動取り込みが止まっています（最終実行: {age_hours}時間前）。"
+            "`bin/evolve-daily-run` を1回実行すれば再開します。止まったまま週の締切"
+            "（日曜の3日後）を過ぎると、その週は欠測として確定し、週次の数字を出すのに"
+            "必要な「4週連続」が振り出しに戻ります。明日もこの警告が出る場合は "
+            "`launchctl list | grep com.evolve-anything.daily` で毎朝の登録を確認してください。"
+        )
+    if state == _freshness.Freshness.UNKNOWN:
+        return (
+            "⚠ 学習データの自動取り込みが動いているか判定できません"
+            "（記録の生成時刻が欠落しているか壊れています）。"
+            "`bin/evolve-daily-run` を1回実行してください。"
+            "`launchctl list | grep com.evolve-anything.daily` で毎朝の登録も確認してください。"
         )
 
     queue = queue_data.get("queue") or []

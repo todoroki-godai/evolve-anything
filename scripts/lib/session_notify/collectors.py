@@ -439,13 +439,24 @@ def _build_evolve_queue_output(shared: "tuple | None" = None) -> "NotificationIt
         text = output["systemMessage"]
 
         if _daily_freshness is not None:
+            generated_at = (queue_data or {}).get("generated_at")
             state, _age = _daily_freshness.classify_freshness(
-                (queue_data or {}).get("generated_at"),
+                generated_at,
                 stale_days=_queue_notice.DEFAULT_STALE_DAYS,
                 stale_hours=_queue_notice.DEFAULT_STALE_HOURS,
             )
-            if state != _daily_freshness.Freshness.FRESH:
-                return NotificationItem(label="queue", tier=1, text=text, digest="毎朝の記録が停止")
+            if state == _daily_freshness.Freshness.STALE:
+                age_hours = _daily_freshness.age_in_hours(generated_at)
+                digest = (
+                    f"毎朝の取り込みが{age_hours}時間停止"
+                    if age_hours is not None
+                    else "毎朝の取り込みが停止"
+                )
+                return NotificationItem(label="queue", tier=1, text=text, digest=digest)
+            if state == _daily_freshness.Freshness.UNKNOWN:
+                return NotificationItem(
+                    label="queue", tier=1, text=text, digest="毎朝の取り込みが判定不能",
+                )
 
         count = len((queue_data or {}).get("queue") or [])
         return NotificationItem(
