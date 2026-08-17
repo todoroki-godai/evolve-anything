@@ -255,6 +255,106 @@ def test_declare_all_contracts_deprecated_and_dump_in_code_block(tmp_path: Path)
     assert len(section_findings) >= len(claude_md_contract.MUST_STAY_SECTIONS)
 
 
+def _dump_all_tokens_and_headings() -> str:
+    tokens = "\n".join(tok for inv in claude_md_contract.REQUIRED_INVARIANTS for tok in inv.all_of)
+    headings = "\n".join(claude_md_contract.MUST_STAY_SECTIONS)
+    return f"{tokens}\n{headings}"
+
+
+def _assert_all_invariants_and_sections_missing(root: Path) -> None:
+    contract_findings = claude_md_contract.check_claude_md_contracts(root)
+    section_findings = claude_md_contract.check_must_stay_sections(root)
+    assert len(contract_findings) == len(claude_md_contract.REQUIRED_INVARIANTS), contract_findings
+    assert len(section_findings) >= len(claude_md_contract.MUST_STAY_SECTIONS), section_findings
+
+
+# --- B7-B11: 2巡目（オーケストレーター指摘）で見つかった追加の隠し場所 -------------
+#
+# 初版（``` フェンスと <!-- --> のみ名指しで除外する構造的封じ込め）は、以下4種の隠し場所に
+# 無警告で通過することが実演された（2026-08-17 オーケストレーター実測）。除外リスト方式は
+# 「隠し場所を1つ思いつくたびに増やすモグラ叩き」になるため、`_extract_units` を肯定リスト
+# 方式（生きた契約と認めてよい形だけを単位化する）へ反転して対処した。
+# B10/B11 はワーカー自身がさらに考えて発見した追加2件（reference-link コメント記法 /
+# YAML frontmatter 風ブロック）。
+
+
+def test_indented_code_block_hides_tokens_flags_all(tmp_path: Path) -> None:
+    """B7: 4スペースインデントのコードブロック（新規段落として孤立している場合）へ退避。"""
+    root = tmp_path / "repo"
+    dumped = "\n".join("    " + line for line in _dump_all_tokens_and_headings().splitlines())
+    text = "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n" + dumped + "\n"
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_tilde_fence_hides_tokens_flags_all(tmp_path: Path) -> None:
+    """B8: ``` の代わりに `~~~` フェンスへ退避（フェンス文字の列挙漏れ攻撃）。"""
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
+        "~~~\n" + _dump_all_tokens_and_headings() + "\n~~~\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_html_details_block_hides_tokens_flags_all(tmp_path: Path) -> None:
+    """B9: `<details>` 等 raw HTML ブロックへ退避（`<!-- -->` 以外の HTML も除外対象）。"""
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
+        "<details>\n" + _dump_all_tokens_and_headings() + "\n</details>\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_reference_link_comment_hides_tokens_flags_all(tmp_path: Path) -> None:
+    """B10: `[//]: # (...)` 参照リンク定義コメント記法（GitHub 上は非表示レンダリング）へ退避。
+
+    ワーカー自身が追加で発見した隠し場所その1（2026-08-17）。
+    """
+    root = tmp_path / "repo"
+    lines = _dump_all_tokens_and_headings().splitlines()
+    text = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
+        + "\n".join(f"[//]: # ({line})" for line in lines)
+        + "\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_frontmatter_block_hides_tokens_flags_all(tmp_path: Path) -> None:
+    """B11: ファイル先頭の YAML frontmatter 風 `---`...`---` ブロックへ退避。
+
+    ワーカー自身が追加で発見した隠し場所その2（2026-08-17）。frontmatter は仕様上ファイル
+    絶対先頭でなければ成立しないため、宣言文なしで直接 `---` から始める。
+    """
+    root = tmp_path / "repo"
+    text = "---\n" + _dump_all_tokens_and_headings() + "\n---\n\n# CLAUDE.md\n"
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_backtick_fence_and_html_comment_still_flag_all_regression(tmp_path: Path) -> None:
+    """退行防止: B2/B3（``` フェンス・HTML コメント）が反転後の実装でも引き続き赤であること。"""
+    root = tmp_path / "repo"
+    text_fence = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
+        "```\n" + _dump_all_tokens_and_headings() + "\n```\n"
+    )
+    _write(root / "CLAUDE.md", text_fence)
+    _assert_all_invariants_and_sections_missing(root)
+
+    text_comment = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
+        "<!--\n" + _dump_all_tokens_and_headings() + "\n-->\n"
+    )
+    _write(root / "CLAUDE.md", text_comment)
+    _assert_all_invariants_and_sections_missing(root)
+
+
 # --- C系: 守衛そのものを殺す ------------------------------------------------------
 
 

@@ -7,18 +7,28 @@
 既存の `doc_budget.py` は byte 予算・セクション予算・リンク実在しか検査しておらず、契約
 文言が生き残ったかは一切見ない。したがって圧縮で契約が消えても doc_budget は緑のまま通る。
 
-## 検査モデル（PR #492 codex cold review [Must]1 を受けて全面設計変更）
+## 検査モデル（PR #492 codex cold review [Must]1 を受けて全面設計変更・2巡目で肯定リスト方式へ反転）
 
 初版は「全文 substring 一致」だったため、以下の攻撃で全検査を無警告で通過できた
 （2026-08-16 codex 実演）:
   - 契約語をコードブロック/HTMLコメントへ退避（本文では死んでいるが文字列としては残る）
   - 「単一ゲートではない。既定 reject しない。」のような否定形への書き換え
 
-これを塞ぐため、以下の**構造的封じ込め**へ変更した:
-  1. コードブロック（``` フェンス）・HTMLコメント（`<!-- -->`）は検査対象から**完全除外**
-     （中身がどうであれ、これらは CLAUDE.md 本文として実効しないため）。
-  2. 本文を「単位」（表の1行 / リスト項目（継続行込み）/ 段落 / 引用ブロック / 見出し行）に
-     分割する。`Invariant.all_of` の全語は**同一の単位内**で揃っていなければ満たしたことにならない
+2巡目（``` フェンスと `<!-- -->` だけを名指しで除外する構造的封じ込め）も、4スペース
+インデントのコードブロック・`~~~` フェンス・`<details>` 等の raw HTML ブロックには
+無警告で通過することが実演された（2026-08-17 オーケストレーター実測）。「隠し場所を1つ
+思いつくたびに除外リストへ足す」設計は原理的にモグラ叩きであり、rules/verify-checks-by-breaking.md
+の「allowlist / 除外リストは検査を骨抜きにする。迷ったら除外せず検査対象に倒す」に反する。
+
+そこで **除外リスト方式（何を隠すか列挙）から肯定リスト方式（何を生きた契約と認めるか列挙）へ
+反転**した:
+  1. 本文を走査し、**見出し行/表の1行/引用ブロック/リスト項目（継続行込み）/段落**という
+     肯定形にしか合致しない部分だけを「単位」として拾う（`_extract_units`）。それ以外
+     （``` / ~~~ フェンス内部・HTML コメント内部・`<`始まりの raw HTML ブロック内部・
+     字下げ4以上で始まる孤立インデントコードブロック）は単位を一切作らず、問答無用で
+     除外する。新しい隠し場所が増えても、肯定リストのどれにも合致しない限り自動的に
+     除外側へ倒れる（列挙漏れが安全側に効く）。
+  2. `Invariant.all_of` の全語は**同一の単位内**で揃っていなければ満たしたことにならない
      （語を別々の表行・別々の段落に分散させる攻撃を防ぐ）。
   3. 語の直後（空白・句読点等を挟んでよい）に活用形否定（`ではない`/`でない`/`しない`）が
      続く場合、または語の直前にラベル否定（`廃止`/`無効`/`やめた`/`旧仕様`）が置かれている
@@ -162,46 +172,6 @@ def _read_claude_md(repo_root: Path) -> str | None:
         return None
 
 
-def _strip_fenced_and_comments(text: str) -> str:
-    """フェンスドコードブロック（``` ）と HTML コメント（<!-- --> ）を完全除外する。
-
-    行単位の状態機械。除外した中身は検査に一切残らない（B2/B3 攻撃対策）。
-    """
-    lines = text.split("\n")
-    out: List[str] = []
-    in_fence = False
-    in_comment = False
-    for line in lines:
-        if in_comment:
-            if "-->" in line:
-                in_comment = False
-                after = line.split("-->", 1)[1]
-                if after.strip():
-                    out.append(after)
-            continue
-        if in_fence:
-            if line.strip().startswith("```"):
-                in_fence = False
-            continue
-        if line.strip().startswith("```"):
-            in_fence = True
-            continue
-        if "<!--" in line:
-            before, _, rest = line.partition("<!--")
-            if "-->" in rest:
-                after = rest.split("-->", 1)[1]
-                merged = before + after
-                if merged.strip():
-                    out.append(merged)
-            else:
-                in_comment = True
-                if before.strip():
-                    out.append(before)
-            continue
-        out.append(line)
-    return "\n".join(out)
-
-
 def _is_list_start(line: str) -> bool:
     s = line.lstrip()
     if s.startswith(("- ", "* ", "+ ")):
@@ -212,27 +182,165 @@ def _is_list_start(line: str) -> bool:
     return j > 0 and s[j : j + 2] == ". "
 
 
+def _indent_width(line: str) -> int:
+    """行頭の字下げ幅（タブは4として数える）。"""
+    width = 0
+    for ch in line:
+        if ch == " ":
+            width += 1
+        elif ch == "\t":
+            width += 4
+        else:
+            break
+    return width
+
+
+def _fence_marker(line: str) -> Tuple[str, int] | None:
+    """行が ``` / ~~~ フェンスの開始・終了として読めるなら (文字, 個数) を返す。"""
+    s = line.strip()
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            return ch, len(s) - len(s.lstrip(ch))
+    return None
+
+
+def _is_reference_definition(line: str) -> bool:
+    """`[label]: destination` 形式の参照リンク定義か。GitHub 上は非表示レンダリングされるため
+    `[//]: # (旧仕様のコメント)` のような「コメントとして悪用される」定型トリックがある。
+
+    インライン画像/リンク `[text](url)` と区別するため、`]` の直後が `:` である場合のみ該当と
+    する（`](` は不一致）。かつラベル内に `[`/`]` を含む場合は除外する（ネストした角括弧は
+    参照定義として不正）。
+    """
+    s = line.lstrip()
+    if not s.startswith("["):
+        return False
+    close = s.find("]:")
+    if close == -1:
+        return False
+    label = s[1:close]
+    return "[" not in label and "]" not in label
+
+
+def _strip_yaml_frontmatter(lines: List[str]) -> List[str]:
+    """ファイル先頭の `---` ... `---` ブロック（YAML frontmatter 風の隠し場所）を除外する。
+
+    YAML frontmatter は仕様上ファイルの絶対先頭でなければ成立しないため、先頭行が厳密に
+    `---` の場合のみ対象にする（本文中の区切り線用途の `---` には影響しない）。閉じ `---` が
+    見つからない場合は「安全側」に倒し、以降の本文を丸ごと除外する（迷ったら除外する
+    ＝rules/verify-checks-by-breaking.md）。
+    """
+    if not lines or lines[0].rstrip() != "---":
+        return lines
+    for j in range(1, len(lines)):
+        if lines[j].rstrip() == "---":
+            return lines[j + 1 :]
+    return []
+
+
+def _is_block_start(line: str) -> bool:
+    """リスト項目・段落の継続行として吸収してよいかどうかの境界判定。"""
+    if _indent_width(line) >= 4:
+        return True
+    s = line.lstrip()
+    return s.startswith(("#", "|", ">", "<")) or _is_list_start(line) or _is_reference_definition(line)
+
+
 def _extract_units(text: str) -> List[str]:
-    """本文を「単位」（表行/リスト項目/段落/引用ブロック/見出し行）へ分割する。
+    """本文を「生きた契約として認めてよい単位」（見出し行/表行/引用ブロック/リスト項目/段落）
+    へ分割する。
+
+    codex cold review [Must]1 再指摘（2026-08-17, PR #492 2巡目）を受けて **除外リスト方式から
+    肯定リスト方式へ反転**した: 初版は「``` フェンスと <!-- --> だけを名指しで除外」だったため、
+    4スペースインデントのコードブロック・`~~~` フェンス・`<details>` 等の raw HTML ブロックが
+    素通りした（オーケストレーター実演）。今版は逆に「本文として認めてよい形」だけを正として扱い、
+    それ以外（フェンス内部・HTML ブロック内部・段落として孤立したインデントコードブロック）は
+    **問答無用で単位を作らず捨てる**。新しい隠し場所が増えても、上記の肯定リストに合致しない
+    限り自動的に除外側へ倒れる（迷ったら赤、という rules/verify-checks-by-breaking.md の方針）。
 
     `all_of` は同一の単位内に揃っていることを要求する（語を別の表行・別の段落へ分散させる
-    攻撃＝ B5 対策）。リスト項目・段落は継続行（次のブロック開始まで）を1単位にまとめる。
+    攻撃＝ B5 対策）。リスト項目・段落は継続行（次のブロック開始まで、字下げ4以上は除く）を
+    1単位にまとめる。
+
+    real CLAUDE.md（着手時点 2026-08-17）に `<` 始まりの行・4スペース以上のインデント段落・
+    `~~~` フェンス・ファイル先頭 `---` frontmatter・`[label]:` 参照リンク定義は存在しないことを
+    grep で確認済み（この反転が実データを偽陽性化しない根拠）。
+
+    肯定リストに乗らない他の隠し場所として `[//]: # (...)` 参照リンク定義コメントと、ファイル
+    先頭の YAML frontmatter 風 `---`...`---` ブロックも同様に除外する
+    （オーケストレーター指摘の再現後、2巡目で追加実装。2026-08-17）。
     """
-    lines = text.split("\n")
+    lines = _strip_yaml_frontmatter(text.split("\n"))
     n = len(lines)
     units: List[str] = []
     i = 0
-
-    def is_block_start(line: str) -> bool:
-        s = line.lstrip()
-        return s.startswith(("#", "|", ">")) or _is_list_start(line)
+    in_fence = False
+    fence_char = ""
+    fence_min = 0
+    in_comment = False
+    in_html_block = False
 
     while i < n:
         line = lines[i]
+
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            i += 1
+            continue
+
+        if in_html_block:
+            if line.strip() == "":
+                in_html_block = False
+            i += 1
+            continue
+
+        if in_fence:
+            m = _fence_marker(line)
+            if m and m[0] == fence_char and m[1] >= fence_min:
+                in_fence = False
+            i += 1
+            continue
+
         if line.strip() == "":
             i += 1
             continue
+
+        m = _fence_marker(line)
+        if m:
+            in_fence = True
+            fence_char, fence_min = m
+            i += 1
+            continue
+
         stripped = line.lstrip()
+
+        if stripped.startswith("<!--"):
+            if "-->" not in line:
+                in_comment = True
+            i += 1
+            continue
+
+        if stripped.startswith("<"):
+            # raw HTML ブロック（<details> 等）。中身は markdown 本文として実効しないため
+            # 空行までまとめて除外する（CommonMark の HTML block 簡易版）。
+            in_html_block = True
+            i += 1
+            continue
+
+        if _is_reference_definition(line):
+            # `[//]: # (...)` 等の参照リンク定義（GitHub 上は非表示レンダリング）。単位化せず
+            # その行だけ捨てる。
+            i += 1
+            continue
+
+        if _indent_width(line) >= 4:
+            # 新規ブロックとしてのインデントコードブロック（アクティブなリスト項目の
+            # 継続行ではない — その場合は下のリスト分岐で個別に処理される）。
+            while i < n and (lines[i].strip() == "" or _indent_width(lines[i]) >= 4):
+                i += 1
+            continue
+
         if stripped.startswith("#") or stripped.startswith("|"):
             units.append(line)
             i += 1
@@ -244,10 +352,19 @@ def _extract_units(text: str) -> List[str]:
                 i += 1
             units.append(" ".join(buf))
             continue
-        # リスト項目・段落: 継続行（空行/新ブロック開始まで）を1単位にまとめる。
+        if _is_list_start(line):
+            buf = [line]
+            i += 1
+            while i < n and lines[i].strip() != "" and not _is_block_start(lines[i]):
+                buf.append(lines[i])
+                i += 1
+            units.append(" ".join(buf))
+            continue
+
+        # 段落: 継続行（空行/新ブロック開始/インデント4以上まで）を1単位にまとめる。
         buf = [line]
         i += 1
-        while i < n and lines[i].strip() != "" and not is_block_start(lines[i]):
+        while i < n and lines[i].strip() != "" and not _is_block_start(lines[i]):
             buf.append(lines[i])
             i += 1
         units.append(" ".join(buf))
@@ -285,7 +402,7 @@ def _invariant_satisfied(units: List[str], invariant: Invariant) -> bool:
 
 
 def _check_contracts_in_text(text: str) -> List[Dict[str, Any]]:
-    units = _extract_units(_strip_fenced_and_comments(text))
+    units = _extract_units(text)
     findings: List[Dict[str, Any]] = []
     for inv in REQUIRED_INVARIANTS:
         if _invariant_satisfied(units, inv):
@@ -299,7 +416,7 @@ def _check_contracts_in_text(text: str) -> List[Dict[str, Any]]:
 
 
 def _check_sections_in_text(text: str) -> List[Dict[str, str]]:
-    units = _extract_units(_strip_fenced_and_comments(text))
+    units = _extract_units(text)
     findings: List[Dict[str, str]] = []
     for heading in MUST_STAY_SECTIONS:
         if not _token_present_anywhere(units, heading):
