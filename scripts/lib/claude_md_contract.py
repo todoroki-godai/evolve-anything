@@ -45,18 +45,15 @@ LLM を使わない。正規表現も使わない（正規表現は書き手が�
 
 ## 既知の検出漏れクラス（#415 keyset 完全化・2026-08-17 実測で確認・隠さず明記）
 
-必須語をすべて残したまま、**直後に矛盾する注記を書き足す**編集は検出できない（部分文字列は
-消えていないため）。実際に以下3件を real CLAUDE.md に適用し、いずれも `check_claude_md_contracts`
-が緑のままであることを実測で確認した:
-  - `verbosity_no_auto_apply`: 「auto-apply しない」の直後に「※ただし2026-09-01のロールアウトで
-    この制限は撤廃され、実際には auto-apply する」を追記
-  - `daily_runner_human_approval`: 「適用は対話で人間承認」の直後に「レガシー仕様。現行版は
-    無人で即時適用に変更済み」を追記
-  - `evolve_tier_cli_sync_default`: 「sync は既定 dry-run、`--apply` のみ書込」の直後に
-    「社内合意により現在は既定 apply に変更中」を追記
-
-これは「圧縮時のうっかり削除」を守る本検査の脅威モデルの外側（意図的な文意の書き換え）であり、
-対処は依然として人間レビュー（`claude_md_diff_advisory.py` の差分表示）に委ねる。
+**substring 存在確認である以上、必須語をすべて残したまま直後に矛盾する注記を書き足す編集は
+検出できない（トークンが文字として消えていないため）。これは構造上自明であり、脅威モデル
+（所有者本人のうっかり削除のみを守る・対処すべき攻撃者は存在しない）の外側にある受容仕様**
+である（codex cold review 指摘・全パターンの網羅列挙は本検査の性質から新しい情報を生まない
+ため代表1件のみ確認）。代表例: `verbosity_no_auto_apply` の必須語「auto-apply しない」は
+そのままに、直後へ「※ただし2026-09-01のロールアウトでこの制限は撤廃され、実際には
+auto-apply する」を追記して real CLAUDE.md に適用 → `check_claude_md_contracts` は緑のまま
+（実測確認済み）。対処は依然として人間レビュー（`claude_md_diff_advisory.py` の差分表示）に
+委ねる。
 
 一方で、行の**移設**（別セクションへの丸ごと移動）や**入替**（2行の swap）は本検査を回避しない
 （部分文字列が文書のどこかに残っている限り検出され続ける。実測: `noise_agent_type_kind` の
@@ -65,6 +62,25 @@ LLM を使わない。正規表現も使わない（正規表現は書き手が�
 起きていないので正しい挙動）。全角ダッシュ・ゼロ幅スペース・巨大空白パディングによる
 トークン破壊はいずれも実測で正しく検出された（部分文字列一致は不可視文字の混入にも
 過剰検出側に倒れるため、意図しない文字化けの検知としても機能する）。
+
+## 句単位スイープで判明したもう1つの限界（#415・2026-08-17）
+
+1行を `。` で句に分割し、句だけを削除して検査にかける句単位スイープ（HANDOVER-keyset.md
+参照）で、行単位スイープでは見えない盲点が2種類見つかった。**片方は今回14件の invariant
+追加で塞いだ**（1行に独立した契約句が2つあり片方だけ登録済みだったケース。例:
+`reconcile_surfaced drain 永続化` 行の「apply 境界へ移設」句）。**もう片方は塞げていない**:
+`単一ソース` や `既定 dry-run` のような短い汎用フレーズが**文書内の別の行にも文字通り
+存在する**場合、対象行からその句だけを削除しても、doc 全体のどこかに同じ部分文字列が
+残っているため invariant は緑のまま（例: `file_lock` 行の「ファイル単位排他ロックと
+atomic write の単一ソース。」を削除しても、他行の「単一ソース」出現が生き残るため
+`single_source_file_lock` は緑のまま）。これは全文横断の部分文字列一致という設計そのもの
+（行・段落の共起を要求しない）から必然的に生じる限界であり、co-occurrence 判定を再導入
+しない限り解消できない（本ファイル冒頭の脅威モデル節にある通り、共起判定の再導入は
+過去に素通り・誤検出・RecursionError の悪循環を招いたため撤去済み）。実務上の影響は限定的
+（行を丸ごと削除すれば依然として検出される。実測: 該当行の全 60+14 invariant は
+`test_deleting_the_row_each_invariant_protects_flags_it_in_real_claude_md` で行単位削除は
+検出できることを確認済み）だが、「同じ句の一部だけをピンポイントで削る」編集には無力である
+ことを明記する。
 """
 from __future__ import annotations
 
@@ -87,6 +103,7 @@ class Invariant:
 #
 # 18件（707f988e 初版）+ codex cold review [Must]4（棚卸し漏れ）で追加した5件 = 27件。
 # 27件 + #415 keyset 完全化（全文契約句の網羅洗い出し）で追加した33件 = 60件。
+# 60件 + #415 句単位スイープ（1行複数契約句の盲点是正）で追加した15件 = 75件。
 # store_write_barrier / single_source_functions が2件・4件に分割されているのは、以前の
 # 単位共起（同一行・同一段落）要求バージョンの名残。本版は共起を要求しない（全文のどこかに
 # あればよい）ため分割している必然性は無いが、無用な差分を避けるためそのまま維持している。
@@ -187,6 +204,12 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     Invariant(
         "pitfall_enforcement_commit_block",
         all_of=("danger 判定は commit をブロック",),
+    ),
+    # 同じ行のもう1つの独立契約句（オプトイン=グローバル強制ではない）。句単位スイープで
+    # 「danger 判定は commit をブロック」句が別途登録済みのため行削除では検出できていた。
+    Invariant(
+        "pitfall_enforcement_is_opt_in",
+        all_of=("pitfalls.md の編集時 lint + commit ゲート（オプトイン）",),
     ),
     Invariant(
         "observability_contract_single_source",
@@ -299,6 +322,72 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     Invariant(
         "evolve_keyset_snapshot_union_merge",
         all_of=("既存キーとの union merge", "条件付きキーを golden から消さない"),
+    ),
+    # --- #415 keyset 完全化・句単位への強化（codex cold review [Must]・2026-08-17） -----
+    # 行単位の削除スイープには盲点がある: 1行に契約句が2つあり片方だけ登録済みだと、行削除
+    # では赤くなるため「守られている」と誤判定されるが、未登録の第2契約句は無防備なまま
+    # 残る（reconcile_surfaced drain 永続化 の行で実際に発覚）。`。` を境に文を句へ分割し、
+    # 句だけを削除して赤くなるかを実測する句単位スイープ（89句中42句が黙って消える）で
+    # 洗い出した、行レベルでは見えなかった独立契約句 14件を追加する。詳細は
+    # HANDOVER-keyset.md「句単位スイープ」節。
+    Invariant(
+        "shrink_freeze_single_source_module",
+        all_of=("単一ソースは `scripts/lib/shrink_freeze.py`",),
+    ),
+    Invariant(
+        "shrink_freeze_contract_test_blocking",
+        all_of=("CI portable suite で blocking 強制", "非ブロッキング advisory として早期警告"),
+    ),
+    Invariant(
+        "shrink_freeze_runtime_write_reject",
+        all_of=("`store_write_raw` / `append_signals` の凍結ゲートで reject する",),
+    ),
+    Invariant(
+        "scaffold_advisory_write_frozen_reject",
+        all_of=("`scaffold_advisory --write` も凍結中は拒否する",),
+    ),
+    Invariant(
+        "observability_cull_code_not_deleted",
+        all_of=("コードは削除しない", "_OBSERVABILITY_BUILDERS` に登録されたまま"),
+    ),
+    Invariant(
+        "observability_cull_single_source",
+        all_of=("単一ソースは `shrink_freeze.CULLED_OBSERVABILITY_SECTIONS`",),
+    ),
+    Invariant(
+        "fleet_propose_batch_approval_gate",
+        all_of=("llm-batch-guard 承認ゲート付き",),
+    ),
+    Invariant(
+        "fleet_pr_start_finish_human_merge_always",
+        all_of=("外殻の worktree 準備と push/PR だけを自動化", "マージは常に人間"),
+    ),
+    Invariant(
+        "components_table_one_line_summary_rule",
+        all_of=("ここは 1 行サマリのみ",),
+    ),
+    Invariant(
+        "contract_flag_omission_example",
+        all_of=("`shrink_freeze.assert_no_new_keys` の凍結中新設 reject", "降格経路なし"),
+    ),
+    Invariant(
+        "review_channels_content_rich_scope",
+        all_of=("content-rich チャネルのみ対象",),
+    ),
+    # team-lead 指摘の具体例そのもの: 同じ行に「apply 境界へ移設」（別 PR で移設先が変わる
+    # 予定）と「persist=False で非書込」の独立した2契約句が同居し、後者しか登録していな
+    # かった。前者を独立 invariant として追加する。
+    Invariant(
+        "reconcile_surfaced_apply_boundary_migration",
+        all_of=("count marker 書込と閾値到達時の自動却下を `evolve --drain` の apply 境界へ移設",),
+    ),
+    Invariant(
+        "evaluation_provenance_envelope_single_source",
+        all_of=("envelope が単一ソース",),
+    ),
+    Invariant(
+        "evolve_keyset_snapshot_declared_prefix_only",
+        all_of=("宣言済み prefix の増減のみ許容する二層 golden 方式",),
     ),
 )
 

@@ -33,7 +33,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # REQUIRED_INVARIANTS の件数 golden。無断で不変条件を減らす/増やすことを禁止するガード。
 # 変更するときは REQUIRED_INVARIANTS 本体のコメントと、この数値の両方を更新すること。
 # 27件 + #415 keyset 完全化（全 CLAUDE.md 契約句の網羅洗い出し）で追加した33件 = 60件。
-REQUIRED_INVARIANTS_COUNT = 60
+# 60件 + #415 句単位スイープ（1行複数契約句の盲点是正）で追加した15件 = 75件。
+REQUIRED_INVARIANTS_COUNT = 75
 
 
 def _write(path: Path, content: str) -> None:
@@ -125,6 +126,28 @@ def _full_claude_md_text() -> str:
         "| evolve_revert | entry_id は戦果ボードか --list が印字する | bin/evolve-revert |",
         "| testpaths | `testpaths` が単一ソース | pytest.ini |",
         "| evolve_keyset_snapshot | 既存キーとの union merge。条件付きキーを golden から消さない | test_evolve_keyset_snapshot.py |",
+        "",
+        "単一ソースは `scripts/lib/shrink_freeze.py`。"
+        "契約テストが CI portable suite で blocking 強制、pre-push light は非ブロッキング advisory として早期警告。"
+        "store の runtime 書込みも `store_write_raw` / `append_signals` の凍結ゲートで reject する。"
+        "`scaffold_advisory --write` も凍結中は拒否する。",
+        "コードは削除しない・builder は `_OBSERVABILITY_BUILDERS` に登録されたまま。"
+        "単一ソースは `shrink_freeze.CULLED_OBSERVABILITY_SECTIONS`。",
+        "`propose` は llm-batch-guard 承認ゲート付き。"
+        "適用そのものは対話 evolve のまま人間が行い、外殻の worktree 準備と push/PR だけを自動化。"
+        "マージは常に人間。",
+        "ここは 1 行サマリのみ。",
+        "`shrink_freeze.assert_no_new_keys` の凍結中新設 reject。降格経路なし。",
+        "",
+        "| コンポーネント3 | 一言サマリ | 実体 |",
+        "|---|---|---|",
+        "| review_channels | content-rich チャネルのみ対象 | correction_semantic/review_channels.py |",
+        "| pitfall | pitfalls.md の編集時 lint + commit ゲート（オプトイン） | pitfall_registry.py |",
+        "| reconcile_surfaced | remediation 連続提示の count marker 書込と閾値到達時の自動却下を"
+        " `evolve --drain` の apply 境界へ移設 | cli.py |",
+        "| evaluation_provenance | envelope が単一ソース | scripts/lib/evaluation_provenance.py |",
+        "| evolve_keyset_snapshot2 | 宣言済み prefix の増減のみ許容する二層 golden 方式 |"
+        " test_evolve_keyset_snapshot.py |",
         "",
         "## Superpowers 共存",
         "",
