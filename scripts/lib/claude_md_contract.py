@@ -71,29 +71,55 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
         "store_write_barrier_core",
         all_of=("単一ゲート", "既定 reject", "fail-open", "store_write_raw"),
     ),
+    # EVOLVE_WRITE_GUARD=warn は本文に1回のみ出現（一意）。追加不要。
     Invariant("store_write_barrier_downgrade", all_of=("EVOLVE_WRITE_GUARD=warn",)),
+    # dry-run 純度 は本文に1回のみ出現（一意）。追加不要。
     Invariant("dry_run_purity", all_of=("dry-run 純度",)),
     Invariant("ttl_read_time", all_of=("read 時 age", "writer-death")),
     Invariant("single_source_fold_effective", all_of=("fold_effective", "単一ソース")),
-    Invariant("single_source_pj_slug", all_of=("pj_slug", "単一ソース")),
+    # pj_slug は本文に3回出現（`pj_slug` 行 x2 + 別コンポーネントの
+    # `pj_slug.resolve_cc_memory_dir` 参照 x1）、単一ソースは16回出現。どちらも対象行
+    # （PJ slug 導出の単一ソース）だけを削除しても他出現が残り検出漏れる（2026-08-17
+    # オーケストレーター実測）。行に固有の語を追加して一意化。
+    Invariant(
+        "single_source_pj_slug",
+        all_of=("pj_slug", "単一ソース", "worktree slug 食い違いを防止"),
+    ),
     Invariant("single_source_file_lock", all_of=("file_lock", "単一ソース")),
     Invariant("single_source_review_channels", all_of=("review_channels", "単一ソース")),
     Invariant("raw_history_allowlist", all_of=("allowlist", "load_effective_history")),
-    Invariant("hook_fail_open", all_of=("fail-open",)),
+    # fail-open は本文に6回出現（汎用語）。単独では対象行を1つ消しても他5箇所が残り
+    # 検出漏れる（2026-08-17 オーケストレーター実測。team-lead 提示の再現例）。
+    # icebox_notice 行（fail-open の具体例）を対象に一意化。
+    Invariant("hook_fail_open", all_of=("fail-open", "icebox_notice")),
+    # 人間の y/n・無人適用しない はいずれも本文に1回のみ出現（一意）。追加不要。
     Invariant("human_approval", all_of=("人間の y/n", "無人適用しない")),
-    Invariant("cli_dry_run_default", all_of=("既定 dry-run",)),
-    Invariant("deterministic_zero_llm", all_of=("決定論", "LLM 非依存")),
+    # 既定 dry-run は本文に4回出現（複数コンポーネントで独立に再述される汎用語）。
+    # 単独では対象行を1つ消しても他3箇所が残り検出漏れる（2026-08-17 実測）。
+    # scaffold_advisory 行に固有の語を追加して一意化。
+    Invariant("cli_dry_run_default", all_of=("既定 dry-run", "builder stub 生成")),
+    # 決定論は本文に30回、LLM 非依存は3回出現（いずれも汎用語）。fleet 観測・介入 行を
+    # 単独で消しても両語とも他出現が残り検出漏れる（2026-08-17 実測）。行に固有の語を
+    # 追加して一意化。
+    Invariant(
+        "deterministic_zero_llm",
+        all_of=("決定論", "LLM 非依存", "env_score / 導入状況を一覧表示"),
+    ),
+    # evolve drain 経由の新規採用のみ は本文に1回のみ出現（一意）。追加不要。
     Invariant("revert_scope", all_of=("evolve drain 経由の新規採用のみ",)),
+    # 到達状況の数値をこのファイルに書かない は本文に1回のみ出現（一意）。追加不要。
     Invariant("no_status_numbers", all_of=("到達状況の数値をこのファイルに書かない",)),
     Invariant("display_cull_surface", all_of=("display_cull", "silence != evaluated")),
     Invariant("safe_llm_call", all_of=("safe_llm_call", "事前予約")),
     Invariant("memory_project_scope", all_of=("project スコープ", "他PJ混入を reject")),
     Invariant("idiom_autopromote_frozen", all_of=("autopromote", "no-op", "凍結中")),
+    # Codex hook 配線は保留 は本文に1回のみ出現（一意）。追加不要。
     Invariant("codex_hook_pending", all_of=("Codex hook 配線は保留",)),
     Invariant(
         "shrink_freeze",
         all_of=("新設凍結", "advisory proposal adapter", "weak_signal channel"),
     ),
+    # 不変条件単位 は本文に1回のみ出現（一意）。追加不要。
     Invariant("contract_flag_criterion", all_of=("不変条件単位",)),
     # --- ここから #492 codex cold review [Must]4（棚卸し漏れ5件）の反映 ---------------
     Invariant("revert_conflict_no_overwrite", all_of=("上書きせず中止", "のみ実書込")),

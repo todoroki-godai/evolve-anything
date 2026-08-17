@@ -69,6 +69,51 @@ def test_main_reports_contract_token_lines(tmp_path: Path, monkeypatch, capsys) 
     assert "store_write_raw" in out
 
 
+def test_contract_tokens_includes_agent_contract_header() -> None:
+    """欠陥3対策: blocking 検査（`check_must_stay_sections`）が保持対象にしている
+    Agent contract ヘッダ参照が advisory の語集合にも含まれること（単一ソースから導出）。
+    """
+    assert "docs/agent-contract/policy.md" in claude_md_diff_advisory._contract_tokens()
+
+
+def test_main_reports_agent_contract_header_removal(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Agent contract ヘッダ行を削除した差分が advisory ログに拾われること。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    header_line = "docs/agent-contract/policy.md を全文読むこと"
+    (root / "CLAUDE.md").write_text(f"# CLAUDE.md\n\n> {header_line}\n", encoding="utf-8")
+    _commit(root, "init")
+    subprocess.run(["git", "branch", "base"], cwd=root, check=True)
+
+    (root / "CLAUDE.md").write_text("# CLAUDE.md\n\n本文のみ\n", encoding="utf-8")
+    _commit(root, "remove header")
+
+    monkeypatch.setattr(claude_md_diff_advisory, "_repo_root", lambda: root)
+    rc = claude_md_diff_advisory.main(["base"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "docs/agent-contract/policy.md" in out
+
+
+def test_main_survives_git_raising_oserror(tmp_path: Path, monkeypatch, capsys) -> None:
+    """欠陥2対策: git 呼び出しが OSError（例: git バイナリ不在）を送出しても main() は
+    例外を伝播させず exit 0 で終わること（CI の distribution job を巻き添えにしない）。
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(claude_md_diff_advisory, "_repo_root", lambda: root)
+
+    def _raise_oserror(*args, **kwargs):
+        raise OSError("git binary not found")
+
+    monkeypatch.setattr(claude_md_diff_advisory.subprocess, "run", _raise_oserror)
+    rc = claude_md_diff_advisory.main(["origin/main"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "スキップ" in out
+
+
 def test_main_no_diff_stays_quiet(tmp_path: Path, monkeypatch, capsys) -> None:
     root = tmp_path / "repo"
     root.mkdir()

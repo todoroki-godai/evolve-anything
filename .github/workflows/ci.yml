@@ -38,8 +38,11 @@ jobs:
       - name: Check manifests, JSON, skill frontmatter, and CLI startup
         run: python scripts/check_distribution.py
       # advisory のみ・判定しない・fail しない（#415 脅威モデル訂正を受けた素朴な仕組み）。
+      # continue-on-error が無いと `if: always()` は「実行条件」でしかなく、advisory 自身が
+      # 例外終了すると distribution job ごと赤くなる（2026-08-17 外部レビュー指摘）。
       - name: CLAUDE.md diff advisory (non-blocking)
         if: always()
+        continue-on-error: true
         run: python scripts/lib/claude_md_diff_advisory.py origin/main
 
   pytest:
@@ -81,5 +84,6 @@ jobs:
           scripts/lib/tests/test_shrink_freeze.py
           scripts/lib/tests/test_proposal_lane_coverage.py
           scripts/lib/tests/test_claude_md_contract.py
+          scripts/lib/tests/test_claude_md_diff_advisory.py
           scripts/tests/test_dependency_metadata.py
           scripts/tests/test_readme_drift.py

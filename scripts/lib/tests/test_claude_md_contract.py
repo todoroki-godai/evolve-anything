@@ -68,13 +68,14 @@ def _full_claude_md_text() -> str:
         "| dry_run | dry-run 純度 |",
         "| `weak_signals` | 45日 TTL は read 時 age 導出で writer-death 非依存 |",
         "| optimize_history | fold_effective が単一ソース |",
-        "| slug | pj_slug が単一ソース |",
+        "| slug | pj_slug が単一ソース。worktree slug 食い違いを防止 |",
         "| lock | file_lock が単一ソース |",
         "| channels | review_channels が単一ソース |",
         "| raw_history | raw history read は allowlist に固定。業務 reader は"
         " `load_effective_history`。 |",
-        "| cli | CLI は既定 dry-run |",
-        "| general | 決定論・LLM 非依存 |",
+        "| icebox_notice | fail-open で既存ファイル非破壊 |",
+        "| cli | CLI は既定 dry-run。scaffold_advisory は builder stub 生成 |",
+        "| general | fleet 観測・介入は env_score / 導入状況を一覧表示。決定論・LLM 非依存 |",
         "| safe_llm | 無人呼び出しは safe_llm_call に一点集約し費用は事前予約 |",
         "| memory | project スコープ4層防御で他PJ混入を reject |",
         "| idiom | #379 Step1 で凍結中、autopromote() は no-op |",
@@ -119,6 +120,23 @@ def test_real_repo_claude_md_has_no_missing_contracts() -> None:
     assert findings == [], findings
 
 
+def test_row_anchored_invariants_do_not_false_positive_on_real_claude_md() -> None:
+    """完了条件3: 一意化のため語を追加した4件（single_source_pj_slug / hook_fail_open /
+    cli_dry_run_default / deterministic_zero_llm）が、正常な実 CLAUDE.md で誤検出しないこと
+    を明示的に確認する（`test_real_repo_claude_md_has_no_missing_contracts` の一部として
+    暗黙にカバーされているが、追加した語自体の誤検出耐性を独立して示すために分離）。
+    """
+    row_anchored = {
+        "single_source_pj_slug",
+        "hook_fail_open",
+        "cli_dry_run_default",
+        "deterministic_zero_llm",
+    }
+    findings = claude_md_contract.check_claude_md_contracts(_REPO_ROOT)
+    flagged = {f["invariant"] for f in findings}
+    assert not (row_anchored & flagged), flagged
+
+
 def test_removing_one_token_flags_only_that_invariant(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     text = _full_claude_md_text().replace("既定 reject", "既定 allow")
@@ -149,6 +167,38 @@ def test_each_invariant_flagged_independently_when_its_token_removed(tmp_path: P
 
 def test_required_invariants_count_golden() -> None:
     assert len(claude_md_contract.REQUIRED_INVARIANTS) == REQUIRED_INVARIANTS_COUNT
+
+
+def test_deleting_the_row_each_invariant_protects_flags_it_in_real_claude_md(
+    tmp_path: Path,
+) -> None:
+    """完了条件2（外部 cold review 欠陥1・行単位の変異）: REQUIRED_INVARIANTS 全27件について、
+    その不変条件を守っている行を**実 CLAUDE.md から丸ごと削除**したら赤くなることを検証する。
+
+    語を1つ壊す変異（`test_each_invariant_flagged_independently_...`）では検出できない欠陥
+    （汎用語 `fail-open` が6箇所に出現するため `hook_fail_open` 等が対象行1つの削除だけでは
+    検出漏れしていた。2026-08-17 外部レビュー + オーケストレーター実測）を塞ぐための追加検証。
+    合成 fixture では発生しない（実 CLAUDE.md 特有の語の重複具合に依存するため）ため、実
+    CLAUDE.md に対して直接実行する。
+    """
+    text = claude_md_contract._read_claude_md(_REPO_ROOT)
+    assert text is not None
+    lines = text.split("\n")
+
+    missed: list[str] = []
+    for inv in claude_md_contract.REQUIRED_INVARIANTS:
+        candidate_lines = [i for i, line in enumerate(lines) if all(tok in line for tok in inv.all_of)]
+        assert candidate_lines, f"{inv.name}: 全語が共起する行が実 CLAUDE.md に見つからない"
+        idx = candidate_lines[0]
+        mutated_lines = lines[:idx] + lines[idx + 1 :]
+        root = tmp_path / f"row_deleted_{inv.name}"
+        _write(root / "CLAUDE.md", "\n".join(mutated_lines))
+        findings = claude_md_contract.check_claude_md_contracts(root)
+        names = {f["invariant"] for f in findings}
+        if inv.name not in names:
+            missed.append(inv.name)
+
+    assert missed == [], f"行削除しても検出されなかった invariant: {missed}"
 
 
 def test_empty_required_invariants_makes_check_pass_trivially(

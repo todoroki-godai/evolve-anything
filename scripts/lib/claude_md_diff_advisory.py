@@ -25,8 +25,14 @@ def _repo_root() -> Path:
 
 
 def _contract_tokens() -> list[str]:
+    """blocking 検査（`claude_md_contract.check_claude_md_contracts` /
+    `check_must_stay_sections`）が保持対象にしている語を単一ソースから導出する。
+    ここで別に語を書き足すと二重管理でずれる（2026-08-17 外部レビュー指摘 — Agent contract
+    ヘッダ行を消してもレビュー用ログに出ない欠陥があった。単一ソース化で再発を防ぐ）。
+    """
     tokens = {tok for inv in _contract.REQUIRED_INVARIANTS for tok in inv.all_of}
     tokens.update(_contract.MUST_STAY_SECTIONS)
+    tokens.add(_contract._AGENT_CONTRACT_HEADER_TOKEN)
     return sorted(tokens)
 
 
