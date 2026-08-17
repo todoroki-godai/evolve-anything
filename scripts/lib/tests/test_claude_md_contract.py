@@ -353,6 +353,16 @@ _KNOWN_SAFE_UNDETECTED_CLAUSES: dict[tuple[int, str], str] = {
         180,
         " `scripts/lib/daily/icebox_notice.py` + `bin/evolve-daily-run` + `hooks/restore_state.py` ",
     ): "`icebox_notice` は同じ行のコンポーネント名セルに再出現",
+    # #415 圧縮（横断契約リストへの表→箇条書き変換）で `|` セル区切りが無くなった
+    # ため、コンポーネント名と説明文が同一の「。」区切り句に同居するようになった。
+    # 名前 `idiom_autopromote` に含まれる token「autopromote」がこの句を token-bearing
+    # 扱いにするが、実際の契約語（凍結中/autopromote()/no-op）は同じ行の第2句に別途
+    # 存在するため、この句の単独削除は契約内容の消失にならない（実測: 削除後も
+    # `idiom_autopromote_frozen` は green のまま）。
+    (
+        89,
+        "- `idiom_autopromote`: confirmed idiom の再発 weak_signal を機械昇格。",
+    ): "`autopromote` は同じ行の第2句（#379 Step1 で凍結中、`autopromote()` は no-op）に再出現",
 }
 
 
