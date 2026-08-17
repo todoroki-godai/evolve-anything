@@ -74,5 +74,6 @@ jobs:
           scripts/lib/tests/test_glossary_drift.py
           scripts/lib/tests/test_shrink_freeze.py
           scripts/lib/tests/test_proposal_lane_coverage.py
+          scripts/lib/tests/test_claude_md_contract.py
           scripts/tests/test_dependency_metadata.py
           scripts/tests/test_readme_drift.py
