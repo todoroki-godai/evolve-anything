@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -38,6 +39,34 @@ REPHRASE_JACCARD_THRESHOLD = 0.8
 
 # 言い直し判定の最小トークン数（短すぎる発話は jaccard が不安定で FP になりやすい）。
 REPHRASE_MIN_TOKENS = 2
+
+# 中身のない相槌の反復（#499）: 正規化（句読点・空白差の吸収）後に完全一致する短い発話は
+# 「言い直し」ではない（語が変わっていないので定義上 rephrase ではなく、単なる催促の反復）。
+# 実コーパス実測（weak_signals.jsonl rephrase チャネル 190 件、2026-08-18）:
+#   - 正規化後に完全一致するペアは 142/190（74.7%）
+#   - 完全一致ペアの正規化後文字数分布は 7 文字以下に相槌（続けて/お願い/推奨で/進めて/対応して/
+#     再開して/okでた/終わりそう？/P1対応かなぁ）が 100% 集中し、8・9 文字の実例は 0 件、
+#     10 文字（掃除＋リリースお願い/gstackのスキル？）を挟んで 12 文字以上は実質的な指示の
+#     再送・言い直し（例: 「prod まで動作確認して」「開発サーバー動かして。目視してみる。」）のみ
+# → 相槌クラスタの上限 7 文字に安全側の余裕を1文字足した 8 文字を境界に採用（8・9文字は
+#   観測ゼロで実コーパスに矛盾しない）。長い完全一致（未対応の指示再送等）は学習価値がありうる
+#   ため対象外のまま残す。
+_REPHRASE_PUNCT_WHITESPACE_RE = re.compile(
+    r"[\s。、．，,.!！?？「」『』()（）\-—:：;；'\"　]+"
+)
+REPHRASE_CONTENTLESS_MAX_CHARS = 8
+
+
+def _normalize_for_identity(text: str) -> str:
+    """句読点・空白の差を吸収した正規化文字列を返す（言い直しの同一性判定専用）。"""
+    return _REPHRASE_PUNCT_WHITESPACE_RE.sub("", text or "")
+
+
+def _is_contentless_repeat(prev_text: str, text: str) -> bool:
+    """正規化後に完全一致する短い反復（中身のない相槌）かどうかを判定する。"""
+    na = _normalize_for_identity(prev_text)
+    nb = _normalize_for_identity(text)
+    return na == nb and len(nb) <= REPHRASE_CONTENTLESS_MAX_CHARS
 
 # 機構ターン（並列 agent 派遣テンプレ・採点ジョブ等）のマーカー。utterance extractor の
 # _HARNESS_MARKERS をすり抜けて dialogue として保存されるが、言い直しではない。
@@ -229,9 +258,11 @@ def detect_rephrase(
     入力は #430 の utterances（query_utterances の返り値。session_id, timestamp,
     line_no 順にソート済みであることを前提）。同一セッション内の隣接ペアのみ比較する。
 
-    FP 除去（直交分離）: 機構ターン（dispatch テンプレ）が片方でも含まれるペアは除外。
-    並列 agent 派遣の near-identical プロンプトが言い直しに誤検知される最大の FP 源
-    （実コーパス dry-run で確認）。
+    FP 除去（直交分離）:
+    - 機構ターン（dispatch テンプレ）が片方でも含まれるペアは除外。並列 agent 派遣の
+      near-identical プロンプトが言い直しに誤検知される最大の FP 源（実コーパス dry-run で確認）。
+    - 正規化後に完全一致する短い反復（中身のない相槌）は除外（#499）。語が変わっていないので
+      定義上「言い直し」ではない。長い完全一致（指示の再送）は学習価値がありうるため対象外。
     """
     from collections import defaultdict
 
@@ -253,6 +284,8 @@ def detect_rephrase(
                 continue
             sim = jaccard_coefficient(ta, tb)
             if sim < threshold:
+                continue
+            if _is_contentless_repeat(ta_text, tb_text):
                 continue
             out.append(
                 WeakSignal(
