@@ -1,13 +1,20 @@
-"""claude_md_contract（CLAUDE.md 契約不変条件の決定論検査）のテスト（#415 / #492）。
+"""claude_md_contract（CLAUDE.md 契約不変条件の決定論検査）のテスト（#415）。
 
 決定論・LLM 非依存。合成 fixture に加え、実 repo の CLAUDE.md に対しても検査する
 （PR #416 の再発防止＝「圧縮で契約が hot から消えたら赤くなる」ことを保証するテストなので、
 実ファイルへの検査を外すと本来の目的を検証できない）。
 
-PR #492 codex cold review [Must]5 を受けて、以下を軸ごとに測定する:
-  A. 語を消す（既存） / B. 語を残して意味を壊す（否定・退避・分散・宣言攻撃）/
-  C. 守衛そのものを殺す（ファイル削除・読取不能）/ D. 追加した5契約の個別検出力 /
-  E. 正当な言い換えで緑のままであること（誤検知較正）。
+## 脅威モデル（2026-08-17 #415 で確定・重要）
+
+この検査は「CLAUDE.md 圧縮時のうっかり削除」だけを守る。**改ざん耐性は無い**（意図的に
+コードブロック・HTML コメント・字下げ等へ契約語を退避させれば簡単に通る。それは仕様）。
+一時期、単位共起・span 級構文除去・否定語検出などの「隠蔽対策」層を積んだが、外部 cold
+review の追試のたびに新しい素通りと新しい誤検出（可視の `<strong>` で囲んだ正当な契約文が
+false red になる等）と `RecursionError`（`>` の深い入れ子）が交互に発生し続けたため全て
+撤去した（詳細は `claude_md_contract.py` モジュール docstring）。したがってこのテストは
+**敵対的な回避手段を1つも検証しない**。検証するのは以下の2点だけ:
+  1. 契約語・必須見出しを（普通の編集で）うっかり消したら赤くなるか
+  2. 圧縮でありがちな正当な言い換え（空白/改行コード/可視装飾/深い引用）で誤検出しないか
 """
 from __future__ import annotations
 
@@ -33,54 +40,51 @@ def _write(path: Path, content: str) -> None:
 
 
 def _full_claude_md_text() -> str:
-    """REQUIRED_INVARIANTS 全27件 + MUST_STAY_SECTIONS + Agent contract header を、実 CLAUDE.md
-    と同じ構造単位（引用ブロック/リスト項目/段落/表行/見出し）で満たす合成本文を組み立てる。
-
-    各 invariant の all_of は、実 CLAUDE.md 本文と同様に**同一の単位内**へ意図的に配置する
-    （単位をまたいでは満たされないことを他のテストで検証する）。
+    """REQUIRED_INVARIANTS 全27件 + MUST_STAY_SECTIONS + Agent contract header を満たす
+    合成本文を組み立てる。本版は共起（同一行・同一単位）を要求しないため、各語がどこかに
+    含まれていればよい（構造は最小限）。
     """
     lines = [
         "# evolve-anything Plugin",
         "",
-        "> **Agent contract:** 作業開始前に",
-        "> [`docs/agent-contract/policy.md`](docs/agent-contract/policy.md) を全文読むこと。",
+        "> **Agent contract:** docs/agent-contract/policy.md を全文読むこと。",
         "",
         "## 目指すユーザー体験（全機能の判断基準）",
         "",
-        "**到達状況の数値をこのファイルに書かない**。日付付きスナップショットを正典に置くと必ず腐る。",
+        "到達状況の数値をこのファイルに書かない。",
+        "適用は必ず人間の y/n（無人適用しない）。",
+        "**適用範囲: evolve drain 経由の新規採用のみ**。",
+        "淘汰した事実は display_cull として必ず surface する（silence != evaluated）。",
         "",
-        "4. **信頼**: 適用は必ず人間の y/n（無人適用しない）/",
-        "   skill 採用は1コマンドで戻せる（**適用範囲: evolve drain 経由の新規採用のみ**。optimize.py 経路と",
-        "   evolve-loop 経路は revert 対象外。凍結した。",
-        "",
-        "**新設凍結**: 新 store / observability section / advisory proposal adapter /",
+        "**新設凍結**: 新 store / observability section / advisory proposal adapter /"
         " weak_signal channel の追加は停止する。",
         "",
-        "**表示淘汰**: 淘汰した事実は `display_cull` の 1 行 meta として必ず surface する（silence != evaluated）。",
+        "コンポーネント単位でなく不変条件単位で判定する。",
         "",
-        "**契約フラグを省略してよいかの判断基準**（コンポーネント単位でなく不変条件単位で判定する）:",
-        " 抜け道が1つでもある不変条件は hot に必ず残す（例: `store_write` barrier 自身の",
-        " 未登録ストア reject も env `EVOLVE_WRITE_GUARD=warn` で降格できるため対象外／",
-        " 関数の単一ソース・TTL の read 時導出・dry-run 純度）。",
-        "",
-        "| コンポーネント | 一言サマリ | 実体 |",
-        "|---|---|---|",
-        "| `store_write` write barrier | 全ストア書込の単一ゲート。既定 reject、registry 不在は fail-open（例外口 `store_write_raw`） | `rl_common/store_write.py` |",
-        "| `weak_signals` | 45日 TTL は read 時 age 導出で writer-death 非依存 | `weak_signals/` |",
-        "| optimize_history の effective view | revert 済み accept を判断母集団から畳む `fold_effective` が単一ソース。業務 reader は `load_effective_history`、raw は allowlist 3件のみ | `optimize_history_store.py` |",
-        "| `file_lock` | ファイル単位排他ロックと atomic write の単一ソース | `rl_common/file_lock.py` |",
-        "| `review_channels` | y/n 確認に出す weak チャネルの単一ソース | `correction_semantic/review_channels.py` |",
-        "| `pj_slug` | PJ slug 導出の単一ソース | `pj_slug.py` |",
-        "| `evolve_revert` | 3分岐（normal/冪等/conflict）で conflict は上書きせず中止、CLI は既定 dry-run・`--apply` のみ実書込 | `evolve_revert/` |",
-        "| **fleet 観測・介入** | 全 PJ 横断で env_score / 導入状況を一覧表示。決定論・LLM 非依存 | `bin/evolve-fleet` |",
-        "| 後片付け | cleanup | 候補提示→個別承認→実行。tmp dir default prefix は `evolve-anything-` のみに安全側限定 | `cleanup` |",
-        "| モデルティア変更 | tier | `sync` の dry-run diff を全件提示 → **明示承認後にのみ** `sync --apply` | `bin/evolve-tier` |",
-        "| `judge_runner` / `safe_llm_call` | 無人呼び出しは `safe_llm_call` に一点集約し費用は呼び出し直前に事前予約 | `correction_semantic/judge_runner.py` |",
-        "| `auto_memory_runner/broker` | project スコープ4層防御で他PJ混入を reject | `auto_memory_*.py` |",
-        "| `idiom_autopromote` | confirmed idiom の再発 weak_signal を機械昇格。**#379 Step1 で凍結中、`autopromote()` は no-op** | `correction_semantic/idiom_autopromote.py` |",
-        "| `runtime_telemetry` | usage/sessions/errors の hook record に runtime を較正追加。**Codex hook 配線は保留** | `hooks/common.py` |",
-        "| `memory_guard` | prompt_injection/secret_exfil を reject（検査失敗は fail-open）。同名エントリの上書きは決定論遷移検証でゲート | `memory_guard.py` |",
-        "| `fleet_pr` | 承認済み evolve 提案を repo 外 worktree で commit→push→PR 化。path allowlist・push account guard で強制、マージは人間 | `fleet/pr.py` |",
+        "| コンポーネント | 一言サマリ |",
+        "|---|---|",
+        "| `store_write` | 全ストア書込の単一ゲート。既定 reject、registry 不在は fail-open"
+        "（例外口 `store_write_raw`）。env `EVOLVE_WRITE_GUARD=warn` で降格できる。 |",
+        "| dry_run | dry-run 純度 |",
+        "| `weak_signals` | 45日 TTL は read 時 age 導出で writer-death 非依存 |",
+        "| optimize_history | fold_effective が単一ソース |",
+        "| slug | pj_slug が単一ソース |",
+        "| lock | file_lock が単一ソース |",
+        "| channels | review_channels が単一ソース |",
+        "| raw_history | raw history read は allowlist に固定。業務 reader は"
+        " `load_effective_history`。 |",
+        "| cli | CLI は既定 dry-run |",
+        "| general | 決定論・LLM 非依存 |",
+        "| safe_llm | 無人呼び出しは safe_llm_call に一点集約し費用は事前予約 |",
+        "| memory | project スコープ4層防御で他PJ混入を reject |",
+        "| idiom | #379 Step1 で凍結中、autopromote() は no-op |",
+        "| runtime | Codex hook 配線は保留 |",
+        "| revert | conflict は上書きせず中止、CLI は既定 dry-run・のみ実書込 |",
+        "| memory_guard | prompt_injection/secret_exfil を reject。"
+        "同名エントリの上書きは決定論遷移検証でゲート |",
+        "| fleet_pr | path allowlist・push account guard で強制、マージは人間 |",
+        "| cleanup | 候補提示→個別承認→実行。のみに安全側限定 |",
+        "| tier | dry-run diff を全件提示 → 明示承認後にのみ |",
         "",
         "## Superpowers 共存",
         "",
@@ -94,7 +98,7 @@ def _full_claude_md_text() -> str:
     return "\n".join(lines)
 
 
-# --- check_claude_md_contracts: A系（語を消す） -----------------------------------
+# --- check_claude_md_contracts -------------------------------------------------
 
 
 def test_no_claude_md_returns_empty(tmp_path: Path) -> None:
@@ -126,15 +130,15 @@ def test_removing_one_token_flags_only_that_invariant(tmp_path: Path) -> None:
 
 
 def test_each_invariant_flagged_independently_when_its_token_removed(tmp_path: Path) -> None:
-    """REQUIRED_INVARIANTS を1つずつ、必須語を1つ抜いて欠落させ、その不変条件が検出される
-    ことを確認する（#492 D系: 追加した5契約を含む全27件を1件ずつ検証）。
+    """完了条件2-①: REQUIRED_INVARIANTS 全27件を1つずつ、必須語を1つ抜いて欠落させ、
+    その不変条件だけが検出されることを確認する（他の不変条件が巻き添えで検出されないこと）。
     """
     base_text = _full_claude_md_text()
     for inv in claude_md_contract.REQUIRED_INVARIANTS:
         token = inv.all_of[0]
         assert token in base_text, f"fixture is missing required token {token!r} for {inv.name}"
-        # 出現が複数ある語（例: file_lock は cell1/cell3 双方に現れる）を確実に欠落させるため
-        # 全出現を除去する（先頭1件だけ抜くと別出現が残り検出できないケースがある）。
+        # 全出現を除去する（同名トークンが他の invariant の合成文にも偶然登場することがあり、
+        # 先頭1件だけ抜くと別出現が残って検出できないケースがある）。
         mutated = base_text.replace(token, "")
         root = tmp_path / f"repo_{inv.name}"
         _write(root / "CLAUDE.md", mutated)
@@ -147,472 +151,17 @@ def test_required_invariants_count_golden() -> None:
     assert len(claude_md_contract.REQUIRED_INVARIANTS) == REQUIRED_INVARIANTS_COUNT
 
 
-# --- B系: 語を残して意味を壊す（否定・退避・分散・宣言攻撃） -----------------------
-
-
-def test_negation_form_flags_invariant(tmp_path: Path) -> None:
-    """B1: 「単一ゲートではない。既定 reject しない。」のような直後否定は満たした扱いにしない
-    （codex cold review 実演の再現）。
-    """
+def test_empty_required_invariants_makes_check_pass_trivially(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """完了条件2-⑤: REQUIRED_INVARIANTS を空にすると、契約検査は（何も要求しないので）
+    常に緑になる。この事実そのものを明示的にテストし、golden（件数）テストだけが
+    「空にされたこと」を検出する仕組みであることを保証する。"""
+    monkeypatch.setattr(claude_md_contract, "REQUIRED_INVARIANTS", tuple())
     root = tmp_path / "repo"
-    text = _full_claude_md_text().replace(
-        "全ストア書込の単一ゲート。既定 reject、registry 不在は fail-open（例外口 `store_write_raw`）",
-        "全ストア書込の単一ゲートではない。既定 reject しない、registry 不在は fail-open（例外口 `store_write_raw`）",
-    )
-    _write(root / "CLAUDE.md", text)
-    findings = claude_md_contract.check_claude_md_contracts(root)
-    names = {f["invariant"] for f in findings}
-    assert "store_write_barrier_core" in names
-
-
-def test_token_hidden_in_code_block_flags_invariant(tmp_path: Path) -> None:
-    """B2: 語をコードブロックへ退避させても「本文に残っている」扱いにしない。"""
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace("display_cull", "")
-    text += "\n\n```\n旧仕様の参考: display_cull は silence != evaluated と組み合わせて使っていた\n```\n"
-    _write(root / "CLAUDE.md", text)
-    findings = claude_md_contract.check_claude_md_contracts(root)
-    names = {f["invariant"] for f in findings}
-    assert "display_cull_surface" in names
-
-
-def test_token_hidden_in_html_comment_flags_invariant(tmp_path: Path) -> None:
-    """B3: 語を HTML コメントへ退避させても「本文に残っている」扱いにしない。"""
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace("safe_llm_call", "")
-    text += "\n\n<!-- 旧仕様: 無人呼び出しは safe_llm_call に一点集約し事前予約していた -->\n"
-    _write(root / "CLAUDE.md", text)
-    findings = claude_md_contract.check_claude_md_contracts(root)
-    names = {f["invariant"] for f in findings}
-    assert "safe_llm_call" in names
-
-
-def test_negated_quote_block_flags_invariant(tmp_path: Path) -> None:
-    """B4: 語を引用ブロック内の「旧仕様」記述へ退避させても満たした扱いにしない。
-
-    引用ブロックは完全除外ではなく（Agent contract header が正規に引用ブロック内にあるため）、
-    同じ否定検出を適用する。
-    """
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace(
-        "project スコープ4層防御で他PJ混入を reject",
-        "auto-memory 書込境界のスコープ設計は別紙参照",
-    )
-    text += "\n\n> 旧仕様: project スコープ4層防御で他PJ混入を reject していた\n"
-    _write(root / "CLAUDE.md", text)
-    findings = claude_md_contract.check_claude_md_contracts(root)
-    names = {f["invariant"] for f in findings}
-    assert "memory_project_scope" in names
-
-
-def test_scattered_tokens_across_rows_flags_invariant(tmp_path: Path) -> None:
-    """B5: all_of の語を別々の表行・別々の段落へ分散させると（1つの単位に収まらないため）
-    満たした扱いにしない。
-    """
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace(
-        "| `store_write` write barrier | 全ストア書込の単一ゲート。既定 reject、registry 不在は fail-open（例外口 `store_write_raw`） | `rl_common/store_write.py` |",
-        "\n".join(
-            [
-                "| `store_write` write barrier A | 全ストア書込の単一ゲート | `rl_common/store_write.py` |",
-                "| `store_write` write barrier B | 既定 reject する | `rl_common/store_write.py` |",
-                "| `store_write` write barrier C | fail-open で降格 | `rl_common/store_write.py` |",
-                "| `store_write` write barrier D | 例外口は store_write_raw | `rl_common/store_write.py` |",
-            ]
-        ),
-    )
-    _write(root / "CLAUDE.md", text)
-    findings = claude_md_contract.check_claude_md_contracts(root)
-    names = {f["invariant"] for f in findings}
-    assert "store_write_barrier_core" in names
-    finding = next(f for f in findings if f["invariant"] == "store_write_barrier_core")
-    # 全4語はどこかに存在するので missing は空、reason は "同一単位に揃っていない"。
-    assert finding["missing"] == []
-    assert finding["reason"] == "not_colocated"
-
-
-def test_declare_all_contracts_deprecated_and_dump_in_code_block(tmp_path: Path) -> None:
-    """B6: 「以下の契約はすべて廃止。以下は無効な旧語」と宣言した上で、全 all_of と見出しを
-    コードブロックへ列挙する攻撃（codex cold review の実演そのもの）を再現する。
-    """
-    root = tmp_path / "repo"
-    dumped_tokens = "\n".join(
-        tok for inv in claude_md_contract.REQUIRED_INVARIANTS for tok in inv.all_of
-    )
-    dumped_headings = "\n".join(claude_md_contract.MUST_STAY_SECTIONS)
-    text = (
-        "# evolve-anything Plugin\n\n"
-        "以下の契約はすべて廃止。以下は無効な旧語:\n\n"
-        "```\n"
-        f"{dumped_tokens}\n{dumped_headings}\n"
-        "```\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    contract_findings = claude_md_contract.check_claude_md_contracts(root)
-    section_findings = claude_md_contract.check_must_stay_sections(root)
-    # 実演どおりであれば両方とも空（=検出漏れ）になるはずの攻撃。ここでは両方とも赤くなること。
-    assert len(contract_findings) == len(claude_md_contract.REQUIRED_INVARIANTS)
-    assert len(section_findings) >= len(claude_md_contract.MUST_STAY_SECTIONS)
-
-
-def _dump_all_tokens_and_headings() -> str:
-    tokens = "\n".join(tok for inv in claude_md_contract.REQUIRED_INVARIANTS for tok in inv.all_of)
-    headings = "\n".join(claude_md_contract.MUST_STAY_SECTIONS)
-    return f"{tokens}\n{headings}"
-
-
-def _assert_all_invariants_and_sections_missing(root: Path) -> None:
-    contract_findings = claude_md_contract.check_claude_md_contracts(root)
-    section_findings = claude_md_contract.check_must_stay_sections(root)
-    assert len(contract_findings) == len(claude_md_contract.REQUIRED_INVARIANTS), contract_findings
-    assert len(section_findings) >= len(claude_md_contract.MUST_STAY_SECTIONS), section_findings
-
-
-# --- B7-B11: 2巡目（オーケストレーター指摘）で見つかった追加の隠し場所 -------------
-#
-# 初版（``` フェンスと <!-- --> のみ名指しで除外する構造的封じ込め）は、以下4種の隠し場所に
-# 無警告で通過することが実演された（2026-08-17 オーケストレーター実測）。除外リスト方式は
-# 「隠し場所を1つ思いつくたびに増やすモグラ叩き」になるため、`_extract_units` を肯定リスト
-# 方式（生きた契約と認めてよい形だけを単位化する）へ反転して対処した。
-# B10/B11 はワーカー自身がさらに考えて発見した追加2件（reference-link コメント記法 /
-# YAML frontmatter 風ブロック）。
-
-
-def test_indented_code_block_hides_tokens_flags_all(tmp_path: Path) -> None:
-    """B7: 4スペースインデントのコードブロック（新規段落として孤立している場合）へ退避。"""
-    root = tmp_path / "repo"
-    dumped = "\n".join("    " + line for line in _dump_all_tokens_and_headings().splitlines())
-    text = "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n" + dumped + "\n"
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_tilde_fence_hides_tokens_flags_all(tmp_path: Path) -> None:
-    """B8: ``` の代わりに `~~~` フェンスへ退避（フェンス文字の列挙漏れ攻撃）。"""
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
-        "~~~\n" + _dump_all_tokens_and_headings() + "\n~~~\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_html_details_block_hides_tokens_flags_all(tmp_path: Path) -> None:
-    """B9: `<details>` 等 raw HTML ブロックへ退避（`<!-- -->` 以外の HTML も除外対象）。"""
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
-        "<details>\n" + _dump_all_tokens_and_headings() + "\n</details>\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_reference_link_comment_hides_tokens_flags_all(tmp_path: Path) -> None:
-    """B10: `[//]: # (...)` 参照リンク定義コメント記法（GitHub 上は非表示レンダリング）へ退避。
-
-    ワーカー自身が追加で発見した隠し場所その1（2026-08-17）。
-    """
-    root = tmp_path / "repo"
-    lines = _dump_all_tokens_and_headings().splitlines()
-    text = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
-        + "\n".join(f"[//]: # ({line})" for line in lines)
-        + "\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_frontmatter_block_hides_tokens_flags_all(tmp_path: Path) -> None:
-    """B11: ファイル先頭の YAML frontmatter 風 `---`...`---` ブロックへ退避。
-
-    ワーカー自身が追加で発見した隠し場所その2（2026-08-17）。frontmatter は仕様上ファイル
-    絶対先頭でなければ成立しないため、宣言文なしで直接 `---` から始める。
-    """
-    root = tmp_path / "repo"
-    text = "---\n" + _dump_all_tokens_and_headings() + "\n---\n\n# CLAUDE.md\n"
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_backtick_fence_and_html_comment_still_flag_all_regression(tmp_path: Path) -> None:
-    """退行防止: B2/B3（``` フェンス・HTML コメント）が反転後の実装でも引き続き赤であること。"""
-    root = tmp_path / "repo"
-    text_fence = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
-        "```\n" + _dump_all_tokens_and_headings() + "\n```\n"
-    )
-    _write(root / "CLAUDE.md", text_fence)
-    _assert_all_invariants_and_sections_missing(root)
-
-    text_comment = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。以下は無効な旧語の一覧です。\n\n"
-        "<!--\n" + _dump_all_tokens_and_headings() + "\n-->\n"
-    )
-    _write(root / "CLAUDE.md", text_comment)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-# --- 4巡目: 外部 cold review + オーケストレーター実測で見つかった欠陥1-3 -------------
-#
-# 3巡目までの肯定リストはブロック級（行がどのブロックに属するか）でしか働かず、以下3件が
-# 残存していた（2026-08-17 外部レビュー + オーケストレーター実測。各テストは修正前に
-# 再現確認を行った上で追加している）。
-
-
-def test_inline_html_comment_midline_flags_all(tmp_path: Path) -> None:
-    """欠陥1（最優先・素通り）: 地の文の行の途中（span 級）に置いた `<!-- ... -->` は、
-    行頭 `<!--` 判定（ブロック級）では捕捉できない。`_strip_inline_spans` による span 級の
-    除去が必要（修正前は欠落0件で完全に素通りしていたことを実測確認済み）。
-    """
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。 <!-- "
-        + _dump_all_tokens_and_headings()
-        + " -->\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_list_item_indented_continuation_stays_green(tmp_path: Path) -> None:
-    """欠陥2（誤検出・false red）: リスト項目の内側で字下げ4以上の継続行は、CommonMark の
-    レイジー継続では正当な本文であり、新規インデントコードブロックとして除外してはならない。
-    修正前は字下げ幅を継続境界の判定に使っていたため、この形の本文が実際には満たしている
-    契約まで「欠落」と誤検出していたことを実測確認済み。
-    """
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n"
-        "- 契約:\n"
-        "    人間の y/n 無人適用しない\n\n"
-        "ダミー段落。\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    findings = claude_md_contract.check_claude_md_contracts(root)
-    names = {f["invariant"] for f in findings}
-    assert "human_approval" not in names, findings
-
-
-def test_quoted_table_scattered_tokens_flags_invariant(tmp_path: Path) -> None:
-    """欠陥3（外部レビュー指摘・再現確認済み）: 引用ブロック内の連続する `>` 行を無条件に
-    1単位へ結合すると、引用の中に置かれた表（本来は1行=1単位）の別々の行に語を分散させる
-    B5 攻撃が引用の中でだけ無効化される。修正前は
-    `store_write_barrier_core` が誤って「満たされた」扱いになることを実測確認済み。
-    """
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n"
-        "> | `store_write` write barrier A | 全ストア書込の単一ゲート | x |\n"
-        "> | `store_write` write barrier B | 既定 reject | x |\n"
-        "> | `store_write` write barrier C | fail-open | x |\n"
-        "> | `store_write` write barrier D | store_write_raw | x |\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    findings = claude_md_contract.check_claude_md_contracts(root)
-    names = {f["invariant"] for f in findings}
-    assert "store_write_barrier_core" in names, findings
-
-
-# --- 4巡目: ワーカー自身が追加で発見した span 級の回避手段（2件・完了条件5） -----------
-#
-# 探索した入力クラス: (a) HTML コメント/タグ/リンク/画像/コードスパンの単純単体系（team-lead
-# 提示の4種、上記欠陥1のテストと既存 B2/B3/B9 でカバー） (b) コードスパンと他 span 構文の
-# 入れ子・相互作用（codespan の保護と comment 除去の優先順位） (c) 画像構文（本 repo は未使用
-# だが Markdown 一般には存在する隠し場所） (d) 段落継続をまたぐ span 構文（1つの inline
-# コメントが複数の物理行に分割される場合） (e) codespan 内にリンク URL を隠す入れ子。
-# (b)(c) は実際に緑のまま残る回避（バイパス）だったため修正した。(d)(e) は最初から赤だった
-# （念のため探索した結果を記録として残す）。
-
-
-def test_backtick_wrapped_html_comment_flags_all(tmp_path: Path) -> None:
-    """自己発見その1（探索クラス b）: `` `<!-- 旧仕様の全語 -->` `` のようにバッククォートで
-    HTML コメントを包むと、コードスパン保護が誤ってコメント除去をすり抜けさせていた
-    （修正前は欠落0件でバイパス成立を実測確認済み）。コードスパンの中身へ再帰的に span 級
-    除去を適用することで修正した。
-    """
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。 `<!-- "
-        + _dump_all_tokens_and_headings()
-        + " -->`\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_image_alt_text_flags_all(tmp_path: Path) -> None:
-    """自己発見その2（探索クラス c）: `![alt](url)` の alt テキストは、リンクの URL 側だけを
-    落とす既存ロジックでは対象にならず素通りしていた（修正前は欠落0件を実測確認済み）。本 repo
-    の CLAUDE.md は画像構文を一切使わないため、alt ごと丸ごと落としても baseline リスクはない。
-    """
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。 !["
-        + _dump_all_tokens_and_headings()
-        + "](x.png)\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_multiline_inline_comment_across_paragraph_continuation_flags_all(tmp_path: Path) -> None:
-    """探索クラス d（最初から赤・念のため記録）: 1つの行内コメントが段落の継続行をまたいで
-    複数の物理行に分割される場合でも、単位の組み立て（継続行の結合）が span 級除去より先に
-    走るため正しく除外される。
-    """
-    root = tmp_path / "repo"
-    lines = [tok for inv in claude_md_contract.REQUIRED_INVARIANTS for tok in inv.all_of] + list(
-        claude_md_contract.MUST_STAY_SECTIONS
-    )
-    text = "# CLAUDE.md\n\n契約はすべて廃止しました。 <!-- " + "\n".join(lines) + " -->\n"
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-def test_backtick_wrapped_link_url_flags_all(tmp_path: Path) -> None:
-    """探索クラス e（最初から赤・念のため記録）: コードスパンの中にリンク構文で語を並べても、
-    コードスパン内容への再帰適用がリンクの URL 側除去も及ぼすため素通りしない。
-    """
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n契約はすべて廃止しました。 `[旧仕様]("
-        + _dump_all_tokens_and_headings()
-        + ")`\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    _assert_all_invariants_and_sections_missing(root)
-
-
-# --- 4巡目: 陽性対照の拡充（誤検知較正・完了条件4） --------------------------------
-
-
-def test_positive_control_unmodified_stays_green() -> None:
-    """陽性対照: 無改変（既存 test_real_repo_claude_md_has_no_missing_contracts と同義だが、
-    4巡目の陽性対照セットとして明示的に置く）。"""
-    assert claude_md_contract.check_claude_md_contracts(_REPO_ROOT) == []
-
-
-def test_positive_control_trailing_whitespace_stays_green(tmp_path: Path) -> None:
-    """陽性対照: 各行末に半角スペースを付与しても（圧縮 PR の diff ノイズとして典型）緑のまま。"""
-    root = tmp_path / "repo"
-    text = "\n".join(line + "  " for line in _full_claude_md_text().split("\n"))
-    _write(root / "CLAUDE.md", text)
+    _write(root / "CLAUDE.md", "空の本文")
     assert claude_md_contract.check_claude_md_contracts(root) == []
-    assert claude_md_contract.check_must_stay_sections(root) == []
-
-
-def test_positive_control_crlf_stays_green(tmp_path: Path) -> None:
-    """陽性対照: 改行コードが CRLF（Windows 由来の圧縮 PR で起こりうる）でも緑のまま。"""
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace("\n", "\r\n")
-    _write(root / "CLAUDE.md", text)
-    assert claude_md_contract.check_claude_md_contracts(root) == []
-    assert claude_md_contract.check_must_stay_sections(root) == []
-
-
-def test_positive_control_table_row_continuation_stays_green(tmp_path: Path) -> None:
-    """陽性対照: 表の直後にさらに別の表行を追記しても、既存行の判定を巻き込まない
-    （表の各行が独立した単位として正しく扱われ続けること）。"""
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace(
-        "| `runtime_telemetry` | usage/sessions/errors の hook record に runtime を較正追加。**Codex hook 配線は保留** | `hooks/common.py` |",
-        "| `runtime_telemetry` | usage/sessions/errors の hook record に runtime を較正追加。**Codex hook 配線は保留** | `hooks/common.py` |\n"
-        "| `dummy_extra_row` | 無関係な追加行 | `dummy.py` |",
-    )
-    _write(root / "CLAUDE.md", text)
-    assert claude_md_contract.check_claude_md_contracts(root) == []
-
-
-def test_positive_control_legitimate_multiline_quote_stays_green(tmp_path: Path) -> None:
-    """陽性対照: 引用ブロック内の正当な地の文（表ではなく複数行にまたがる説明文。実 CLAUDE.md
-    の Agent contract ヘッダと同型）が、欠陥3 の修正（de-quote 後の再帰分割）によって不当に
-    分断されないこと。"""
-    root = tmp_path / "repo"
-    text = (
-        "# CLAUDE.md\n\n"
-        "> **Agent contract:** 作業開始前に\n"
-        "> [`docs/agent-contract/policy.md`](docs/agent-contract/policy.md) を全文読むこと。\n"
-        "\n"
-        "## 目指すユーザー体験（全機能の判断基準）\n\n"
-        "**到達状況の数値をこのファイルに書かない**。\n\n"
-        "## Superpowers 共存\n\nメタ操作時はスキルを発火させない。\n\n"
-        "## Compaction Instructions\n\n1. 完了済みタスクと未完了タスクの区別\n"
-    )
-    _write(root / "CLAUDE.md", text)
-    findings = claude_md_contract.check_must_stay_sections(root)
-    assert findings == [], findings
-
-
-# --- C系: 守衛そのものを殺す ------------------------------------------------------
-
-
-def test_layer2_check_missing_file_is_failure(tmp_path: Path) -> None:
-    """C1: CLAUDE.md がファイルごと削除されていたら Layer2 は失敗として扱う（非該当ではない）。"""
-    root = tmp_path / "repo"
-    root.mkdir()
-    result = claude_md_contract.layer2_check(root)
-    assert result["failures"], "CLAUDE.md 削除が失敗として検出されなかった"
-    assert any("存在しない" in f["detail"] for f in result["failures"])
-
-
-def test_layer2_check_unreadable_file_is_failure(tmp_path: Path) -> None:
-    """C2: CLAUDE.md が読取不能（不正バイト列）なら Layer2 は失敗として扱う。"""
-    root = tmp_path / "repo"
-    root.mkdir()
-    # UTF-8 として不正なバイト列を書き込み、read_text(encoding="utf-8") を失敗させる。
-    (root / "CLAUDE.md").write_bytes(b"\xff\xfe\x00\x01broken")
-    result = claude_md_contract.layer2_check(root)
-    assert result["failures"], "CLAUDE.md 読取不能が失敗として検出されなかった"
-    assert any("読み取れない" in f["detail"] for f in result["failures"])
-
-
-def test_check_claude_md_contracts_no_file_still_generic_empty(tmp_path: Path) -> None:
-    """汎用ライブラリ関数（`check_claude_md_contracts`）は CLAUDE.md を持たない他 PJ 向けに
-    非該当（空リスト）のまま。missing/unreadable の failure 化は `layer2_check`（この repo 専用の
-    blocking 経路）だけの責務。"""
-    root = tmp_path / "repo"
-    root.mkdir()
-    assert claude_md_contract.check_claude_md_contracts(root) == []
-
-
-# --- E系: 正当な言い換えは緑のまま（誤検知較正） -----------------------------------
-
-
-def test_legitimate_reorder_within_unit_stays_green(tmp_path: Path) -> None:
-    """E1: 同一単位内で語順を入れ替えるだけの言い換えは緑のまま。"""
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace(
-        "| `store_write` write barrier | 全ストア書込の単一ゲート。既定 reject、registry 不在は fail-open（例外口 `store_write_raw`） | `rl_common/store_write.py` |",
-        "| `store_write` write barrier | registry 不在は fail-open（例外口 `store_write_raw`）、全ストア書込の単一ゲート。既定 reject | `rl_common/store_write.py` |",
-    )
-    _write(root / "CLAUDE.md", text)
-    assert claude_md_contract.check_claude_md_contracts(root) == []
-
-
-def test_legitimate_trim_filler_text_stays_green(tmp_path: Path) -> None:
-    """E2: 契約語に触れない冗長な修飾の削除（圧縮の典型例）は緑のまま。"""
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace(
-        "**到達状況の数値をこのファイルに書かない**。日付付きスナップショットを正典に置くと必ず腐る。",
-        "**到達状況の数値をこのファイルに書かない**。",
-    )
-    _write(root / "CLAUDE.md", text)
-    assert claude_md_contract.check_claude_md_contracts(root) == []
-
-
-def test_legitimate_merge_wrapped_lines_stays_green(tmp_path: Path) -> None:
-    """E3: 折り返された2行を1行へ畳む（表現の重複を1つに畳む）圧縮は緑のまま。"""
-    root = tmp_path / "repo"
-    text = _full_claude_md_text().replace(
-        "**新設凍結**: 新 store / observability section / advisory proposal adapter /\n"
-        " weak_signal channel の追加は停止する。",
-        "**新設凍結**: 新 store / observability section / advisory proposal adapter / weak_signal channel の追加は停止する。",
-    )
-    _write(root / "CLAUDE.md", text)
-    assert claude_md_contract.check_claude_md_contracts(root) == []
+    # golden テスト（test_required_invariants_count_golden）は別途、この空化を検出する。
 
 
 # --- check_must_stay_sections ---------------------------------------------------
@@ -630,6 +179,7 @@ def test_real_repo_must_stay_sections_present() -> None:
 
 
 def test_missing_compaction_instructions_detected(tmp_path: Path) -> None:
+    """完了条件2-②: 必須見出しの削除は赤くなる。"""
     root = tmp_path / "repo"
     text = _full_claude_md_text().split("## Compaction Instructions")[0]
     _write(root / "CLAUDE.md", text)
@@ -676,3 +226,88 @@ def test_layer2_check_reports_failures(tmp_path: Path) -> None:
 def test_layer2_check_real_repo_clean() -> None:
     result = claude_md_contract.layer2_check(_REPO_ROOT)
     assert result == {"check": "claude_md_contract", "failures": []}
+
+
+def test_layer2_check_missing_file_is_failure(tmp_path: Path) -> None:
+    """完了条件2-③: CLAUDE.md がファイルごと削除されていたら Layer2 は失敗として扱う
+    （非該当ではない。fail-open バグの修正・敵対性とは無関係な純粋な正しさの修正なので維持）。
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    result = claude_md_contract.layer2_check(root)
+    assert result["failures"], "CLAUDE.md 削除が失敗として検出されなかった"
+    assert any("存在しない" in f["detail"] for f in result["failures"])
+
+
+def test_layer2_check_unreadable_file_is_failure(tmp_path: Path) -> None:
+    """完了条件2-④: CLAUDE.md が読取不能（不正バイト列）なら Layer2 は失敗として扱う。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    # UTF-8 として不正なバイト列を書き込み、read_text(encoding="utf-8") を失敗させる。
+    (root / "CLAUDE.md").write_bytes(b"\xff\xfe\x00\x01broken")
+    result = claude_md_contract.layer2_check(root)
+    assert result["failures"], "CLAUDE.md 読取不能が失敗として検出されなかった"
+    assert any("読み取れない" in f["detail"] for f in result["failures"])
+
+
+def test_check_claude_md_contracts_no_file_still_generic_empty(tmp_path: Path) -> None:
+    """汎用ライブラリ関数（`check_claude_md_contracts`）は CLAUDE.md を持たない他 PJ 向けに
+    非該当（空リスト）のまま。missing/unreadable の failure 化は `layer2_check`（この repo 専用の
+    blocking 経路）だけの責務。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    assert claude_md_contract.check_claude_md_contracts(root) == []
+
+
+# --- 完了条件3: 陽性対照（緑のまま） ------------------------------------------------
+
+
+def test_positive_control_unmodified_stays_green() -> None:
+    """①無改変。"""
+    assert claude_md_contract.check_claude_md_contracts(_REPO_ROOT) == []
+    assert claude_md_contract.check_must_stay_sections(_REPO_ROOT) == []
+
+
+def test_positive_control_trailing_whitespace_stays_green(tmp_path: Path) -> None:
+    """②各行末に半角スペースを付与しても（圧縮 PR の diff ノイズとして典型）緑のまま。"""
+    root = tmp_path / "repo"
+    text = "\n".join(line + "  " for line in _full_claude_md_text().split("\n"))
+    _write(root / "CLAUDE.md", text)
+    assert claude_md_contract.check_claude_md_contracts(root) == []
+    assert claude_md_contract.check_must_stay_sections(root) == []
+
+
+def test_positive_control_crlf_stays_green(tmp_path: Path) -> None:
+    """③改行コードが CRLF（Windows 由来の圧縮 PR で起こりうる）でも緑のまま。"""
+    root = tmp_path / "repo"
+    text = _full_claude_md_text().replace("\n", "\r\n")
+    _write(root / "CLAUDE.md", text)
+    assert claude_md_contract.check_claude_md_contracts(root) == []
+    assert claude_md_contract.check_must_stay_sections(root) == []
+
+
+def test_positive_control_visible_strong_emphasis_stays_green(tmp_path: Path) -> None:
+    """④可視の `<strong>`（Markdown の `**...**` 相当を HTML タグで書いた場合）で契約文を
+    囲んでも、単なる部分文字列一致なので誤検出しない（前巡で層を積んだ実装ではここが
+    false red になっていたことが撤去の決め手の1つだった）。
+    """
+    root = tmp_path / "repo"
+    text = _full_claude_md_text().replace(
+        "適用は必ず人間の y/n（無人適用しない）。",
+        "<strong>適用は必ず人間の y/n（無人適用しない）。</strong>",
+    )
+    _write(root / "CLAUDE.md", text)
+    assert claude_md_contract.check_claude_md_contracts(root) == []
+
+
+def test_positive_control_deeply_nested_quote_does_not_crash(tmp_path: Path) -> None:
+    """⑤`>` を1000回重ねた深い引用でもクラッシュしない（前巡の引用再帰実装は
+    `RecursionError` を起こしていた。本版は部分文字列一致のみなので構造的に発生しない）。
+    """
+    root = tmp_path / "repo"
+    deep_quote = ("> " * 1000) + "契約はここにあります。"
+    text = _full_claude_md_text() + "\n\n" + deep_quote + "\n"
+    _write(root / "CLAUDE.md", text)
+    # クラッシュしないことが主目的。契約は全て満たされているので緑のまま。
+    assert claude_md_contract.check_claude_md_contracts(root) == []
+    assert claude_md_contract.check_must_stay_sections(root) == []

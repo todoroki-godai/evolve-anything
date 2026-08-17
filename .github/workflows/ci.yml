@@ -27,6 +27,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -35,6 +37,10 @@ jobs:
         run: python -m pip install -e ".[core]"
       - name: Check manifests, JSON, skill frontmatter, and CLI startup
         run: python scripts/check_distribution.py
+      # advisory のみ・判定しない・fail しない（#415 脅威モデル訂正を受けた素朴な仕組み）。
+      - name: CLAUDE.md diff advisory (non-blocking)
+        if: always()
+        run: python scripts/lib/claude_md_diff_advisory.py origin/main
 
   pytest:
     name: Portable pytest (Python ${{ matrix.python-version }})
