@@ -7,6 +7,14 @@ CLAUDE.md のコンポーネント表の詳細版（SoT）。分量が大きい�
 CLAUDE.md のサマリ表には 1 行（名前 + 一言 + 参照）だけ追記する。新ドメインに該当しない
 場合は最も近いテーマのファイルに追記するか、ユーザーに新ファイル追加の要否を確認する。
 
+**#415 圧縮（2026-08-17）**: CLAUDE.md の 123 行フル表は `## コンポーネント` から撤去し、
+契約フラグ（凍結/reject/dry-run/fail-open/人間承認/単一ソース等の挙動を縛る語）を持つ
+約 40 行だけを「横断契約リスト」として hot に残した。契約フラグを持たない残り約 80 行は
+cold（本ファイル配下の4ドメインファイル）に既存記載があることを確認済みで、hot からの
+撤去のみで内容の追加移設は不要だった。同様に `## クイックスタート` は
+[quickstart.md](quickstart.md) へ、`## テスト` の経緯・数値部分は [testing.md](testing.md) へ
+全文移設した（hot にはコマンド2行+運用注意3項目のみ残る）。
+
 ## コア進化エンジン・ストア基盤 → [components-core.md](components-core.md)
 
 Observe hooks, Auto Trigger, userConfig, genetic-prompt-optimizer, evolve-loop-orchestrator,
