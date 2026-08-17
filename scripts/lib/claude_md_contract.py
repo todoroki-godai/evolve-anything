@@ -79,7 +79,14 @@ auto-apply する」を追記して real CLAUDE.md に適用 → `check_claude_m
    手法）。8件（`single_source_file_lock` / `raw_history_gate_single_source`（新規）/
    `single_source_review_channels` / `cli_dry_run_default` / `dogfood_gate_light_non_blocking`
    / `single_source_pj_slug` / `hook_fail_open` / `evolve_revert_cli_default_dry_run`）に
-   適用し、対象句削除で赤くなることを実測で確認した。
+   適用し、対象句削除で赤くなることを実測で確認した。**ただし最初の是正は「`。`区切りの
+   句全体」を削除するテストにしか耐えられず、より狭い「文中の1フレーズだけ」を削除する
+   変異には2件（`single_source_file_lock` の第2契約句「ロック下からは `_locked` 版を
+   使い自己 deadlock を回避」・`cli_dry_run_default` の「CLI は既定 dry-run」だけを
+   ピンポイントで消す変異）が耐えられていなかった（team-lead 実測で発覚・2026-08-17）。
+   前者は同じ行のもう1つの独立契約句に固有語を追加、後者は「既定 dry-run」自体が
+   文書内で一意でない（evolve_revert 行にも同一言い回しが1箇所ある）ため、`。` 境界を
+   またいで前の句と連結した一意な連続文字列に差し替えて是正した。**
 
 **副作用（意図された設計）**: 句固有トークンを要求するため、将来 CLAUDE.md 圧縮 PR で
 その句を意図的に別の言い回しへ書き換えた場合も赤くなる。これは「契約の変更を無意識に
@@ -139,9 +146,12 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     # write の単一ソース。"）だけを削除しても、"file_lock"/"単一ソース" とも文書の別行に
     # 生き残るため緑のままだった。その句にしか出現しない語を追加して一意化（count()==1 を
     # 実測で確認）。
+    # 同じ行にもう1つ独立した契約句がある: 「ロック下からは `_locked` 版を使い自己
+    # deadlock を回避」（ロック保持中に `_locked` 版を使わないと自己 deadlock するという
+    # 実在の契約）。句単位スイープ第3巡（team-lead 実測指摘・2026-08-17）で判明。
     Invariant(
         "single_source_file_lock",
-        all_of=("file_lock", "単一ソース", "ファイル単位排他ロック"),
+        all_of=("file_lock", "単一ソース", "ファイル単位排他ロック", "自己 deadlock"),
     ),
     Invariant(
         "single_source_review_channels",
@@ -172,10 +182,15 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     # scaffold_advisory 行に固有の語を追加して一意化。ただし「builder stub 生成」は
     # 同じ行の別の句（clause）に属するため、"CLI は既定 dry-run" 句自体が消えても
     # 検出できなかった（句単位スイープ第2巡で発覚）。句そのものにしか出現しない
-    # "scaffold_advisory.py"（count()==1）を追加して句単位でも検出できるようにした。
+    # "scaffold_advisory.py"（count()==1）を追加して句単位でも検出できるようにした
+    # …つもりだったが、team-lead 実測指摘（句単位スイープ第3巡）により、より狭い
+    # 句「CLI は既定 dry-run」だけを削除し「実体」列（scaffold_advisory.py）を残す
+    # 変異では依然検出できないことが判明（"CLI は既定 dry-run" 自体も L94 の
+    # evolve_revert 行に同一言い回しがあり一意でない）。「。」境界をまたいで前の句
+    # 「配線チェックリスト」と連結した一意な連続文字列に差し替えた。
     Invariant(
         "cli_dry_run_default",
-        all_of=("既定 dry-run", "builder stub 生成", "scaffold_advisory.py"),
+        all_of=("既定 dry-run", "builder stub 生成", "配線チェックリスト。CLI は既定 dry-run"),
     ),
     # 決定論は本文に30回、LLM 非依存は3回出現（いずれも汎用語）。fleet 観測・介入 行を
     # 単独で消しても両語とも他出現が残り検出漏れる（2026-08-17 実測）。行に固有の語を

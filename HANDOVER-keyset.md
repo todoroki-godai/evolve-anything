@@ -107,12 +107,58 @@ pitfall_enforcement_is_opt_in(L111 — pitfall_enforcement_commit_block と同�
 | `hook_fail_open`（widen） | 「既存ファイル非破壊」 | L180 |
 | `evolve_revert_cli_default_dry_run`（widen） | 「#402・既定 dry-run」（team-lead提示の「--dump-before」は別行=L254に属し対象句を保護しないため、実測で代替） | L250 |
 
+### 句単位スイープ・第3巡（team-lead 実測指摘の2件を是正・2026-08-17）
+
+第2巡の是正のうち2件は、**より狭い「文中の1フレーズだけ」を削除する変異**（第2巡で使った
+「`。`区切りの句全体」削除より厳しいテスト）に耐えられていなかった。team-lead の実測で発覚し、
+両方とも是正・実測確認済み。
+
+| 対象 | 未検出だった具体的な変異 | なぜ第2巡の是正で防げなかったか | 是正内容 |
+|---|---|---|---|
+| L92 `file_lock` | 「ロック下からは `_locked` 版を使い自己 deadlock を回避」だけを削除（第1契約句は無傷） | この行には**独立した契約句が2つ**あり、第2巡で足したトークン「ファイル単位排他ロック」は第1句にしかない。第2句は元々このスイープの vocab リスト（凍結/reject/dry-run 等24語）に該当語が無く、**候補としてすら検出されていなかった**（clause 単位の split はできていたが vocab フィルタで弾かれていた） | `single_source_file_lock` に「自己 deadlock」（count()==1・実測確認）を追加 |
+| L152 `scaffold_advisory` | 「CLI は既定 dry-run」だけを削除（前後の句・実体列は無傷） | 第2巡で足した「scaffold_advisory.py」は同じ行の**「実体」列**にあり、`。`区切りの句全体を消す私のテストではこの実体列も道連れに消えるため一見赤くなったが、team-lead のようにこの1フレーズだけを狭く削ると実体列は無傷のまま残り緑だった。加えて「CLI は既定 dry-run」自体も文書内で一意でない（L94 `evolve_revert` 行に同一言い回しが1箇所ある）ため単独では使えない | `cli_dry_run_default` のトークンを「scaffold_advisory.py」→「配線チェックリスト。CLI は既定 dry-run」（`。`境界をまたいで前の句と連結した一意な連続文字列・count()==1・実測確認）に差し替え |
+
 ## 陰性試験
 
 ### ① 句単位スイープ（行単位でなく句単位が完了判定）
-- 第1巡（60→75件時点）: 全89句中 赤62 / 未検出27（(a)誤検出17 + (b)省略可10）
-- **第2巡（75→76件時点・最終）: 全89句中 赤70 / 未検出19**（内訳: 上記(a)誤検出17 +
-  (b)省略可2＝L259/L260のみ。8件の是正がすべて句レベルで効いたことを実測で確認）
+- 第1巡（60→75件時点）: 全89句中 赤62 / 未検出27
+- 第2巡（75→76件時点）: 全89句中 赤70 / 未検出19（`。`区切りの句単位削除ベース）
+- **第3巡（最終・narrow-deletion 反映後）**: `。`区切りの句単位スイープの機械集計は
+  依然 **全89句中 赤70 / 未検出19**（この自動スイープの vocab リスト・分割粒度では
+  L92 第2契約句を候補として検出できない構造的限界がある。下記「未検出の全列挙」参照）。
+  team-lead 実測指摘の2件（L92 第2契約句・L152 の狭いフレーズ単位削除）は自動スイープの
+  検出網の外にあったが、個別に実測・是正・再確認済み（詳細は上記「句単位スイープ・第3巡」表）。
+
+**未検出の全列挙（19句・自動スイープの機械出力。1行1句・省略なし）**:
+```
+L52  「実データ dry-run 較正」 → a誤検出 / GEPAガードレールの技術説明。拘束ではない
+L63  「廃止リダイレクトのみ」 → a誤検出 / 移行済み機能の歴史的注記
+L77  「人間確認のループ統合」 → a誤検出 / 一般アーキテクチャ記述。pillar4一般契約と重複
+L90  「accept/reject 履歴の正準ストア」 → a誤検出 / rejectはストアに入るデータ種別の名前
+L116 「emit→drain laneでのaccept/reject」 → a誤検出 / 同上（データ種別の記述）
+L119 「型 drift のみ」 → a誤検出 / 検出器の対象範囲の記述
+L155 「--dry-run 対応」 → a誤検出 / CLIがオプションを持つ事実の記述
+L160 「user発話のみ抽出」 → a誤検出 / 入力ソース種類の記述
+L190 「queue待ちPJにevolve --dry-runを順次実行し提案を集約レポート化」 → a誤検出 / 通常動作の説明。承認ゲート等の拘束は別句(fleet_propose_batch_approval_gate)で捕捉済み
+L191 「承認済みevolve提案をrepo外worktreeでcommit→push→PR化」 → a誤検出 / 入力前提の記述。マージ人間ゲートは別句/別行(fleet_pr_start_finish_human_merge_always・L191自体のfleet_pr_human_merge_gate)で捕捉済み
+L237 「bin/evolve-fleet detect --pj amamo --dry-run」 → a誤検出 / bashコマンド例
+L240 「既定5」 → a誤検出 / --threshold で上書き可能な既定値のコメント
+L242 「既定09:00」 → a誤検出 / --time で上書き可能な既定値のコメント
+L247 「bin/evolve-scaffold-advisory my_check # dry-run」 → a誤検出 / bashコマンド例
+L259 「bin/evolve-tier sync # targets への反映をdry-run（diff表示のみ）」 → b省略可 / tier_sync_explicit_approval(L55)+evolve_tier_cli_sync_default(L187相当)が既に同一事実を保護。三重化
+L260 「bin/evolve-tier sync --apply # driftのみ実書込」 → b省略可 / 同上
+L263 「承認フロー付き」 → a誤検出 / 上位スキル説明。実体はL55/evolve_tier_cli_sync_defaultで保護済み
+L323 「dry-runするため、計測窓suppressの暦日境界等で...」 → a誤検出 / 背景説明（なぜflakyか）。対処法(二層golden方式)は別句(evolve_keyset_snapshot_declared_prefix_only)で捕捉済み
+L326 「SKILL.mdコードブロック」 → a誤検出 / 「ブロック」が「code block」の部分文字列で無関係
+```
+
+**自動スイープの構造的限界（team-lead 指摘で判明・隠さず明記）**: 上記19句は「`。`区切り
+かつ契約語彙24語のいずれかを含む」候補のみを対象にした機械集計であり、(i) 語彙に該当しない
+契約句（L92第2句のような「_locked版」「deadlock」等の語）、(ii) `。`より細かい文中の1
+フレーズ単位の毀損は、この自動スイープの検出網に入らない。今回 team-lead の手動レビューで
+2件発見・是正したが、**同種の未発見句が他にも残っている可能性を否定できない**（悉皆性の
+保証はできていない）。
+
 - 追加・widen した invariant すべてについて「その行を実 CLAUDE.md から削除すると red に
   なる」ことを `test_deleting_the_row_each_invariant_protects_flags_it_in_real_claude_md`
   （76件全件を自動で回す設計）で実測 → 全件 pass
