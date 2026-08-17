@@ -44,15 +44,22 @@ def classify_freshness(
     generated_at,
     now: "datetime | None" = None,
     stale_days: int = 2,
+    stale_hours: "int | None" = None,
 ) -> "tuple[Freshness, int | None]":
     """generated_at を (Freshness, age_days) に分類する。
 
     age_days は FRESH / STALE のときだけ整数（経過日数、0 以上）。UNKNOWN のときは
     「経過日数を語れない」状態そのものを表すため常に None（``oldest_days=0`` のような
-    正当な業務値の 0 と絶対に混同しない）。
+    正当な業務値の 0 と絶対に混同しない）。戻り値の型は ``stale_hours`` 指定時も互換の
+    ため ``age_days`` のまま変えない（時間単位が要る呼び出し側は ``age_in_hours`` を
+    別途使う）。
 
     UNKNOWN になる条件: generated_at が欠落・非文字列・空文字 / ISO8601 パース不能 /
     tz 情報なし（naive datetime）/ now より未来。
+
+    ``stale_hours`` が指定された場合は ``stale_days`` を無視し、経過時間（時間単位）で
+    STALE 判定する（#466: 日単位だと最大 72 時間気づけないため、当日中に気づける粒度に
+    緩和する用途）。``stale_hours=None``（既定）のときは従来どおり日単位で判定する。
     """
     now = now or datetime.now(timezone.utc)
     dt = parse_generated_at(generated_at)
@@ -61,9 +68,44 @@ def classify_freshness(
     if dt > now:
         return Freshness.UNKNOWN, None
     age_days = (now - dt).days
+    if stale_hours is not None:
+        elapsed_hours = (now - dt).total_seconds() / 3600
+        if elapsed_hours >= stale_hours:
+            return Freshness.STALE, age_days
+        return Freshness.FRESH, age_days
     if age_days >= stale_days:
         return Freshness.STALE, age_days
     return Freshness.FRESH, age_days
+
+
+def age_in_hours(generated_at, now: "datetime | None" = None) -> "int | None":
+    """generated_at から now までの経過時間を時間単位（整数、切り捨て）で返す。
+
+    ``classify_freshness`` の UNKNOWN 条件（パース不能・非文字列・空文字・naive
+    datetime・未来日時）と同じ場合は None を返す。表示側（``health_notice``）が
+    「N時間前」と「N日前」を切り替えるための補助関数（#466）。
+    """
+    now = now or datetime.now(timezone.utc)
+    dt = parse_generated_at(generated_at)
+    if dt is None or dt.tzinfo is None:
+        return None
+    if dt > now:
+        return None
+    return int((now - dt).total_seconds() // 3600)
+
+
+def format_elapsed(age_hours: "int | None", age_days: "int | None") -> str:
+    """経過時間の表示文字列を組み立てる（時間／日数の切替の単一ソース・#466）。
+
+    48 時間未満は「N時間前」、以上は「N日前」。「1日前」は 25 時間でも 47 時間でも
+    同じ文字列になり緊急度が伝わらないため、48 時間を境に切り替える。
+    どちらも判定できないときは "不明"（0 や 1 を捏造しない）。
+    """
+    if age_hours is not None and age_hours < 48:
+        return f"{age_hours}時間前"
+    if age_days is not None:
+        return f"{age_days}日前"
+    return "不明"
 
 
 def health_notice(
@@ -78,6 +120,10 @@ def health_notice(
     旧値を現在値らしく併記しない — 業務値（count / queue 内容等）には一切触れず、
     「更新が止まっている」または「判定不能」であること自体だけを伝える。
     STALE なら経過日数を明示し、UNKNOWN なら日数を語らない（age_days=None を捏造しない）。
+
+    時間単位の表示が要る呼び出し側は ``format_elapsed`` を使う（#490 codex [Should]:
+    かつて本関数が持っていた ``age_hours`` 分岐は production から到達不能な
+    dead code だったため削除した）。
     """
     if freshness == Freshness.STALE:
         return (
