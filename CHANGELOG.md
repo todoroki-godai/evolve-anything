@@ -328,6 +328,18 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(daily): 毎朝の自動記録の停止検知を「その日のうち」に気づける粒度に緩和（#466）** —
+  `freshness.classify_freshness` に時間単位の閾値 `stale_hours`（既定 `None`=従来の日単位を維持）を
+  追加し、`queue_notice.DEFAULT_STALE_HOURS=30` を `build_queue_notice`/`build_judge_cap_notice` が
+  内部で強制するようにした。従来は日単位（既定3日=72時間）でしか停止に気づけず手遅れになりやすかった
+  ため、翌朝08:00（23時間・正常沈黙）は黙らせ、翌日15:00（30時間）で「今日中に
+  `bin/evolve-daily-run` を1回実行すれば再開できる」タイミングで発火させる。実測（`correction_rate.py`
+  の週次判定コード + judge 処理ログ）に基づくと、1日程度の停止は日次処理の余剰枠で翌日以降に追いつき、
+  永久に欠測が確定するのは週の締切（週末+3日）を止まったまま通過した場合だけ。通知の文面は
+  `freshness.health_notice` の汎用文（「現在値は不明です」）を使わず、queue 専用の説明文
+  （「学習データの自動取り込みが止まっています」＋週の締切を過ぎた場合の影響）を直接組み立てる。
+  digest/label から内部名（`evolve queue`）を排し「毎朝の取り込み」に統一。icebox 側
+  （`icebox_notice.py`）は文言・閾値とも変更なし（回帰テストで固定）。
 - **fix(evolve_revert): dry-run の出力が3行のメタ情報のみで「何が起きるか」判断できない不具合を修正（#469）** —
   `bin/evolve-revert <entry_id>`（既定 dry-run）の出力が「保持: mode / 失う可能性: xattr /
   ACL: ...」の3行のみで、対象ファイル・判定分岐・変更行数のいずれも分からなかった。

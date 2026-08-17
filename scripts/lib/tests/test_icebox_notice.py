@@ -161,6 +161,17 @@ def test_build_icebox_notice_naive_generated_at_without_tz_is_unknown():
     assert "現在値は不明です" in msg
 
 
+def test_build_icebox_notice_stale_wording_unchanged_by_466():
+    """#466 回帰: queue 側は freshness.health_notice の汎用文をやめたが、icebox 側は
+    従来どおり health_notice を使い続けるため文言は変わらない（label="icebox 集計"・
+    「現在値は不明です」を維持）。"""
+    status = {"count": 12, "oldest_days": 200, "generated_at": "2026-06-25T09:00:00Z"}
+    now = datetime(2026, 7, 11, 9, 0, 0, tzinfo=timezone.utc)  # 16 日後 = stale
+    msg = ibn.build_icebox_notice(status, now=now, threshold_days=90)
+    assert msg is not None
+    assert msg == "⚠ icebox 集計は16日前から更新されていません。現在値は不明です。修復: bin/evolve-daily-install"
+
+
 def test_build_icebox_notice_fresh_below_threshold_stays_silent():
     """fresh + 閾値未満 → 従来通り無音（freshness gate 導入で沈黙側が崩れていないこと）。"""
     status = {"count": 3, "oldest_days": 10, "generated_at": "2026-07-11T09:00:00Z"}
