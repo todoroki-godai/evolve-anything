@@ -264,7 +264,7 @@ def test_notice_stale_queue_replaces_business_content_with_health_notice():
     業務値の後ろに advisory を追記するだけだった）。#466: 48時間以上経過しているので
     日数表示になり、freshness.health_notice の汎用文（「現在値は不明です」）は使わない。"""
     now = datetime(2026, 6, 30, 9, 0, 0, tzinfo=timezone.utc)  # generated_at から 5 日後
-    msg = qn.build_queue_notice(SAMPLE_QUEUE, now=now, stale_days=2)
+    msg = qn.build_queue_notice(SAMPLE_QUEUE, now=now, stale_hours=48)
     assert msg is not None
     assert "figma-to-code" not in msg
     assert "sys-bots" not in msg
@@ -275,7 +275,7 @@ def test_notice_stale_queue_replaces_business_content_with_health_notice():
 
 def test_notice_fresh_queue_has_no_stale_advisory():
     now = datetime(2026, 6, 25, 9, 0, 30, tzinfo=timezone.utc)
-    msg = qn.build_queue_notice(SAMPLE_QUEUE, now=now, stale_days=2)
+    msg = qn.build_queue_notice(SAMPLE_QUEUE, now=now, stale_hours=48)
     assert msg is not None
     # 直近生成なので「日前」は出ない
     assert "日前" not in msg
@@ -288,7 +288,7 @@ def test_notice_malformed_generated_at_is_unknown_and_does_not_leak_business_val
     bad = json.loads(json.dumps(SAMPLE_QUEUE))
     bad["generated_at"] = "not-a-timestamp"
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
-    msg = qn.build_queue_notice(bad, now=now, stale_days=2)
+    msg = qn.build_queue_notice(bad, now=now, stale_hours=48)
     assert msg is not None
     assert "figma-to-code" not in msg
     assert "現在値は不明です" not in msg
@@ -299,7 +299,7 @@ def test_notice_missing_generated_at_is_unknown():
     bad = json.loads(json.dumps(SAMPLE_QUEUE))
     del bad["generated_at"]
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
-    msg = qn.build_queue_notice(bad, now=now, stale_days=2)
+    msg = qn.build_queue_notice(bad, now=now, stale_hours=48)
     assert msg is not None
     assert "現在値は不明です" not in msg
     assert "動いているか判定できません" in msg
@@ -309,7 +309,7 @@ def test_notice_future_generated_at_is_unknown():
     bad = json.loads(json.dumps(SAMPLE_QUEUE))
     bad["generated_at"] = "2099-01-01T00:00:00Z"
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
-    msg = qn.build_queue_notice(bad, now=now, stale_days=2)
+    msg = qn.build_queue_notice(bad, now=now, stale_hours=48)
     assert msg is not None
     assert "現在値は不明です" not in msg
     assert "動いているか判定できません" in msg
@@ -319,7 +319,7 @@ def test_notice_naive_generated_at_without_tz_is_unknown():
     bad = json.loads(json.dumps(SAMPLE_QUEUE))
     bad["generated_at"] = "2026-06-25T09:00:00"
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
-    msg = qn.build_queue_notice(bad, now=now, stale_days=2)
+    msg = qn.build_queue_notice(bad, now=now, stale_hours=48)
     assert msg is not None
     assert "現在値は不明です" not in msg
     assert "動いているか判定できません" in msg
@@ -331,7 +331,7 @@ def test_notice_empty_queue_with_stale_generated_at_still_warns():
     stale なら stale 通知が出ること。"""
     stale_empty = json.loads(json.dumps(EMPTY_QUEUE))
     now = datetime(2026, 7, 1, 9, 0, 0, tzinfo=timezone.utc)  # generated_at から 6 日後
-    msg = qn.build_queue_notice(stale_empty, now=now, stale_days=2)
+    msg = qn.build_queue_notice(stale_empty, now=now, stale_hours=48)
     assert msg is not None
     assert "学習データの自動取り込みが止まっています" in msg
 
@@ -500,7 +500,7 @@ def test_judge_cap_notice_silent_when_stale():
     — health notice は build_queue_notice 側が既に出すため、こちらは沈黙する）。"""
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     stale = dict(CAPPED_QUEUE, generated_at="2026-06-01T00:00:00Z")
-    assert qn.build_judge_cap_notice(stale, now=now, stale_days=2) is None
+    assert qn.build_judge_cap_notice(stale, now=now, stale_hours=48) is None
 
 
 def test_judge_cap_notice_output_dict():

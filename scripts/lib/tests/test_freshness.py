@@ -202,35 +202,42 @@ def test_age_in_hours_future_is_none():
     assert fr.age_in_hours(generated_at, now=NOW) is None
 
 
-# ===== health_notice の age_hours 分岐（#466） =====
-def test_health_notice_uses_hours_when_under_48():
+# ===== format_elapsed: 時間／日数表示の切替（#466・#490 で health_notice から分離） =====
+# #490 codex [Should]: 旧 health_notice(age_hours=...) は production から到達不能な
+# dead code だったため削除し、切替ロジックを format_elapsed に単一ソース化した。
+def test_format_elapsed_uses_hours_when_under_48():
     """47 時間なら「N時間前」表示（日数だと「1日前」に潰れて緊急度が消える）。"""
-    msg = fr.health_notice(
-        label="毎朝の自動記録",
-        freshness=fr.Freshness.STALE,
-        age_days=1,
-        age_hours=47,
-        remediation="bin/evolve-daily-run",
-    )
-    assert "47時間前" in msg
-    assert "日前" not in msg
+    assert fr.format_elapsed(47, 1) == "47時間前"
 
 
-def test_health_notice_uses_days_when_49_hours_or_more():
+def test_format_elapsed_exactly_48_hours_uses_days():
+    """48 時間ちょうどは日数表示（実装は `< 48`・#490 codex [Should] で境界を明示）。"""
+    assert fr.format_elapsed(48, 2) == "2日前"
+
+
+def test_format_elapsed_uses_days_when_49_hours_or_more():
     """49 時間（48時間以上）なら日数表示に戻る。"""
-    msg = fr.health_notice(
-        label="毎朝の自動記録",
-        freshness=fr.Freshness.STALE,
-        age_days=2,
-        age_hours=49,
-        remediation="bin/evolve-daily-run",
-    )
-    assert "2日前" in msg
-    assert "時間前" not in msg
+    assert fr.format_elapsed(49, 2) == "2日前"
 
 
-def test_health_notice_without_age_hours_falls_back_to_days():
-    """age_hours 省略時（既定 None）は従来どおり日数表示。"""
+def test_format_elapsed_without_hours_falls_back_to_days():
+    """age_hours が None なら日数表示。"""
+    assert fr.format_elapsed(None, 5) == "5日前"
+
+
+def test_format_elapsed_unknown_when_both_none():
+    """どちらも判定できないときは 0 や 1 を捏造せず「不明」を返す。"""
+    assert fr.format_elapsed(None, None) == "不明"
+
+
+def test_health_notice_no_longer_accepts_age_hours():
+    """到達不能だった age_hours 引数は削除済み（再導入を検知する契約テスト）。"""
+    import inspect
+
+    assert "age_hours" not in inspect.signature(fr.health_notice).parameters
+
+
+def test_health_notice_falls_back_to_days():
     msg = fr.health_notice(
         label="毎朝の自動記録",
         freshness=fr.Freshness.STALE,
@@ -241,31 +248,51 @@ def test_health_notice_without_age_hours_falls_back_to_days():
     assert "時間前" not in msg
 
 
-# ===== 既定閾値の意図（#351 レビュー時に 2→3 日へ緩和） =====
-def test_default_stale_days_tolerates_a_closed_weekend():
-    """金曜朝に生成 → 月曜朝のセッションで FRESH（通知本体が消えない）。
+# ===== 既定閾値の意図（icebox は週末許容 / queue は #466 で意図的に非許容へ） =====
+FRIDAY_MORNING = datetime(2026, 7, 31, 9, 0, 0, tzinfo=timezone.utc)
+MONDAY_MORNING = datetime(2026, 8, 3, 8, 0, 0, tzinfo=timezone.utc)
+
+
+def test_icebox_default_still_tolerates_a_closed_weekend():
+    """icebox は従来どおり金曜朝→月曜朝を FRESH に保つ（通知本体が消えない）。
 
     #351 以前は stale 判定が「本来の通知に一文添える」だけだったので 2 日で足りたが、
-    gate 化で通知本体（待ち PJ 一覧 / icebox 件数）が差し替わるようになり誤検知コストが
-    上がった。PC を週末閉じて launchd が走らないだけで本体が消えるのを防ぐ既定値を固定する。
+    gate 化で通知本体（icebox 件数）が差し替わるようになり誤検知コストが上がった。
+    PC を週末閉じて launchd が走らないだけで本体が消えるのを防ぐ既定値を固定する。
     """
     from daily import icebox_notice as ic
+
+    state, _ = fr.classify_freshness(
+        FRIDAY_MORNING.isoformat(), now=MONDAY_MORNING, stale_days=ic.STALE_STATUS_DAYS
+    )
+    assert state == fr.Freshness.FRESH
+
+
+def test_queue_default_intentionally_fires_over_a_closed_weekend():
+    """queue は #466 で週末許容をやめた（意図的なトレードオフの固定）。
+
+    停止に「その日のうち」に気づくことを優先し、30 時間で発火する。週末に PC を閉じれば
+    月曜朝に警告が出るが、queue 側は通知本体が「待ち PJ 一覧」であり、消えても失うのは
+    一覧表示だけ。対して見逃したときに失うのは週の締切であり、非対称なので発火側に倒す。
+    """
     from daily import queue_notice as qn
 
-    friday_morning = datetime(2026, 7, 31, 9, 0, 0, tzinfo=timezone.utc)
-    monday_morning = datetime(2026, 8, 3, 8, 0, 0, tzinfo=timezone.utc)
+    state, _ = fr.classify_freshness(
+        FRIDAY_MORNING.isoformat(),
+        now=MONDAY_MORNING,
+        stale_hours=qn.DEFAULT_STALE_HOURS,
+    )
+    assert state == fr.Freshness.STALE
 
-    for stale_days in (qn.DEFAULT_STALE_DAYS, ic.STALE_STATUS_DAYS):
-        state, _ = fr.classify_freshness(
-            friday_morning.isoformat(), now=monday_morning, stale_days=stale_days
-        )
-        assert state == fr.Freshness.FRESH
 
-    # 一方、#351 の恒久障害（16 日沈黙）は依然として STALE として捕まる
+def test_permanent_outage_still_detected():
+    """#351 の恒久障害（16 日沈黙）は依然として STALE として捕まる。"""
+    from daily import queue_notice as qn
+
     state, age = fr.classify_freshness(
-        (monday_morning - timedelta(days=16)).isoformat(),
-        now=monday_morning,
-        stale_days=qn.DEFAULT_STALE_DAYS,
+        (MONDAY_MORNING - timedelta(days=16)).isoformat(),
+        now=MONDAY_MORNING,
+        stale_hours=qn.DEFAULT_STALE_HOURS,
     )
     assert state == fr.Freshness.STALE
     assert age == 16

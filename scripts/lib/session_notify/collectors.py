@@ -7,6 +7,7 @@
 
 設計: ``docs/decisions/drafts/054-phase0-notification-routing.md``
 """
+import datetime as _dt
 import os
 import sys
 from contextlib import ExitStack
@@ -433,7 +434,11 @@ def _build_evolve_queue_output(shared: "tuple | None" = None) -> "NotificationIt
             )
             return NotificationItem(label="queue", tier=1, text=text, digest="evolve-queue破損")
 
-        output = _queue_notice.queue_notice_output(queue_data)
+        # 本文と digest は**同じ now** で判定する（#490 codex [Should]: 別々に
+        # datetime.now() を取ると、ちょうど閾値をまたぐ瞬間に「本文は通常の待ち一覧なのに
+        # digest だけ停止」という食い違いが起こりうる）。
+        now = _dt.datetime.now(_dt.timezone.utc)
+        output = _queue_notice.queue_notice_output(queue_data, now=now)
         if not output:
             return None
         text = output["systemMessage"]
@@ -442,7 +447,7 @@ def _build_evolve_queue_output(shared: "tuple | None" = None) -> "NotificationIt
             generated_at = (queue_data or {}).get("generated_at")
             state, _age = _daily_freshness.classify_freshness(
                 generated_at,
-                stale_days=_queue_notice.DEFAULT_STALE_DAYS,
+                now=now,
                 stale_hours=_queue_notice.DEFAULT_STALE_HOURS,
             )
             if state == _daily_freshness.Freshness.STALE:

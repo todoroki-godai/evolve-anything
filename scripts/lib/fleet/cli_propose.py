@@ -25,17 +25,28 @@ def _queue_staleness_note(queue_data: dict) -> Optional[str]:
     未来日時）なら「古くない」と決めつけず UNKNOWN として警告する — 判定不能を沈黙に
     倒すと producer 停止が恒久的に気づかれない（#351 と同じ失敗モード）。
     """
-    from daily.freshness import Freshness, classify_freshness
-    from daily.queue_notice import DEFAULT_STALE_DAYS
+    from daily.freshness import (
+        Freshness,
+        age_in_hours,
+        classify_freshness,
+        format_elapsed,
+    )
+    from daily.queue_notice import DEFAULT_STALE_HOURS
 
-    freshness, age = classify_freshness(
-        queue_data.get("generated_at", ""),
-        datetime.now(timezone.utc),
-        stale_days=DEFAULT_STALE_DAYS,
+    now = datetime.now(timezone.utc)
+    generated_at = queue_data.get("generated_at", "")
+    # 閾値は queue_notice.DEFAULT_STALE_HOURS を単一ソースにする（#490 codex [Must]:
+    # ここだけ 72 時間判定のままだと、同じ evolve-queue.json が SessionStart では STALE、
+    # fleet propose では FRESH という食い違いを起こす）。
+    freshness, age_days = classify_freshness(
+        generated_at,
+        now,
+        stale_hours=DEFAULT_STALE_HOURS,
     )
     if freshness == Freshness.STALE:
+        elapsed = format_elapsed(age_in_hours(generated_at, now=now), age_days)
         return (
-            f"[fleet:propose] ⚠ evolve-queue.json が {age} 日前に生成されています"
+            f"[fleet:propose] ⚠ evolve-queue.json が {elapsed}に生成されています"
             f"（--live で最新化できます）。"
         )
     if freshness == Freshness.UNKNOWN:

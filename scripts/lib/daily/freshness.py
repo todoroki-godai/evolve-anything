@@ -94,13 +94,26 @@ def age_in_hours(generated_at, now: "datetime | None" = None) -> "int | None":
     return int((now - dt).total_seconds() // 3600)
 
 
+def format_elapsed(age_hours: "int | None", age_days: "int | None") -> str:
+    """経過時間の表示文字列を組み立てる（時間／日数の切替の単一ソース・#466）。
+
+    48 時間未満は「N時間前」、以上は「N日前」。「1日前」は 25 時間でも 47 時間でも
+    同じ文字列になり緊急度が伝わらないため、48 時間を境に切り替える。
+    どちらも判定できないときは "不明"（0 や 1 を捏造しない）。
+    """
+    if age_hours is not None and age_hours < 48:
+        return f"{age_hours}時間前"
+    if age_days is not None:
+        return f"{age_days}日前"
+    return "不明"
+
+
 def health_notice(
     *,
     label: str,
     freshness: Freshness,
     age_days: "int | None",
     remediation: str,
-    age_hours: "int | None" = None,
 ) -> str:
     """FRESH でないときの fail-safe 通知メッセージを組み立てる。
 
@@ -108,16 +121,11 @@ def health_notice(
     「更新が止まっている」または「判定不能」であること自体だけを伝える。
     STALE なら経過日数を明示し、UNKNOWN なら日数を語らない（age_days=None を捏造しない）。
 
-    ``age_hours`` が渡され、かつ 48 時間未満のときは「N時間前」と表示する（#466: 「1日前」
-    は 25 時間でも 47 時間でも同じ文字列になり緊急度が伝わらないため）。48 時間以上、または
-    ``age_hours`` 省略時は従来どおり日数表示。
+    時間単位の表示が要る呼び出し側は ``format_elapsed`` を使う（#490 codex [Should]:
+    かつて本関数が持っていた ``age_hours`` 分岐は production から到達不能な
+    dead code だったため削除した）。
     """
     if freshness == Freshness.STALE:
-        if age_hours is not None and age_hours < 48:
-            return (
-                f"⚠ {label}は{age_hours}時間前から更新されていません。"
-                f"現在値は不明です。修復: {remediation}"
-            )
         return (
             f"⚠ {label}は{age_days}日前から更新されていません。"
             f"現在値は不明です。修復: {remediation}"
