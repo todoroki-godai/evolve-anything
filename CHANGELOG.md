@@ -328,6 +328,15 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(weak_signals): rephrase チャネルが中身のない相槌の反復を「言い直し」として誤検出していた不具合を修正（#499）** —
+  実コーパス（`weak_signals.jsonl` rephrase 190件）を実測すると 142件（74.7%）が正規化後（句読点・空白の
+  差を吸収）完全一致で、朝の y/n に出た6件は全件「続けて」「お願い」「推奨で」のような1-2語の反復
+  （similarity=1.0）だった。語が変わっていないので定義上「言い直し」ではない。完全一致ペアの正規化後
+  文字数分布が7文字以下（相槌）と12文字以上（実質的な指示の再送）で明確な gap を持つことを確認し、
+  `detect_rephrase`（`weak_signals/detectors.py`、rephrase チャネルの唯一の producer）に
+  「正規化後に完全一致し、かつ8文字以下」の反復を除外するゲートを追加した。長い完全一致
+  （未対応の指示再送等）は学習価値がありうるため対象外のまま残す。TDD + 6方向の mutation test
+  （ゲート削除・比較反転・正規化の非対称化/無効化・配線無効化・境界値ずらし）で全て赤になることを確認。
 - **fix(daily): 毎朝の自動記録の停止検知を「その日のうち」に気づける粒度に緩和（#466）** —
   `freshness.classify_freshness` に時間単位の閾値 `stale_hours`（既定 `None`=従来の日単位を維持）を
   追加し、`queue_notice.DEFAULT_STALE_HOURS=30` を `build_queue_notice`/`build_judge_cap_notice` が

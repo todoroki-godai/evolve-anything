@@ -182,6 +182,58 @@ def test_rephrase_excludes_machinery_prompt_via_shared_detection() -> None:
     assert detect_rephrase(utts, "evolve-anything") == []
 
 
+def test_rephrase_excludes_contentless_short_repeat_exact() -> None:
+    """完全一致する短い相槌の反復（#499）は「言い直し」ではないので除外する。
+
+    実コーパス（weak_signals.jsonl）で朝の y/n に出た6件は全件この形状
+    （「続けて」「お願い」「推奨で」のような1-2語の反復、similarity=1.0）だった。
+    語が変わっていないので定義上『言い直し』ではない。
+    """
+    utts = [
+        _utt("s1", 1, "続けて"),
+        _utt("s1", 2, "続けて"),
+    ]
+    assert detect_rephrase(utts, "evolve-anything") == []
+
+
+def test_rephrase_excludes_contentless_short_repeat_with_punctuation_diff() -> None:
+    """句読点の有無だけが違う短い反復も同一とみなして除外する（#499 実例: お願い。→お願い）。"""
+    utts = [
+        _utt("s1", 1, "お願い。"),
+        _utt("s1", 2, "お願い"),
+    ]
+    assert detect_rephrase(utts, "evolve-anything") == []
+
+
+def test_rephrase_keeps_long_verbatim_repeat() -> None:
+    """完全一致でも十分に長い repeat は残す（陽性対照）。
+
+    未対応のまま同じ指示を再送した可能性があり、フィラーとは異なり学習価値がありうる
+    （実コーパスで正規化後 12 文字以上の完全一致に相槌以外の実例が現れることを実測して確認 #499）。
+    """
+    utts = [
+        _utt("s1", 1, "prod まで動作確認して"),
+        _utt("s1", 2, "prod まで動作確認して"),
+    ]
+    sigs = detect_rephrase(utts, "evolve-anything")
+    assert len(sigs) == 1
+    assert sigs[0].provenance["similarity"] == 1.0
+
+
+def test_rephrase_keeps_genuine_short_wording_change() -> None:
+    """短くても語が変化していれば言い直しとして残す（陽性対照）。
+
+    実コーパス実例: 「ok、それで進めて」→「それで進めて」(similarity=0.8333)。
+    正規化しても文字列が一致しないため、完全一致反復の除外条件には当たらない。
+    """
+    utts = [
+        _utt("s1", 1, "ok、それで進めて"),
+        _utt("s1", 2, "それで進めて"),
+    ]
+    sigs = detect_rephrase(utts, "evolve-anything")
+    assert len(sigs) == 1
+
+
 def test_rephrase_excludes_teammate_message(tmp_path: Path) -> None:
     """teammate-message / idle_notification は inter-agent 機械ノイズであり言い直しでない（#185 claim1）。
 
