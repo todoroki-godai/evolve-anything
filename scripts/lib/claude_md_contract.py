@@ -65,8 +65,8 @@ auto-apply する」を追記して real CLAUDE.md に適用 → `check_claude_m
 
 ## 句単位スイープで判明した盲点とその是正（#415・2026-08-17）
 
-1行を `。` で句に分割し、句だけを削除して検査にかける句単位スイープ（HANDOVER-keyset.md
-参照）で、行単位スイープでは見えない盲点が2種類見つかった。**どちらも修正済み**:
+1行を `。` で句に分割し、句だけを削除して検査にかける句単位スイープ（詳細は PR #495 の
+コメントに全文記録）で、行単位スイープでは見えない盲点が2種類見つかった。**どちらも修正済み**:
 1. 1行に独立した契約句が2つあり片方だけ登録済みだったケース（例: `reconcile_surfaced
    drain 永続化` 行の「apply 境界へ移設」句）→ 15件の invariant を新規追加。
 2. `単一ソース` や `既定 dry-run` のような短い汎用フレーズが**文書内の別の行にも文字通り
@@ -116,6 +116,8 @@ class Invariant:
 # 60件 + #415 句単位スイープ（1行複数契約句の盲点是正）で追加した15件 = 75件。
 # 75件 + #415 句単位スイープ第2巡（team-lead指摘: 汎用句重複8件を句固有トークンで是正。
 # raw_history_gate_single_source を新規追加+既存7件を widen）で新規追加1件 = 76件。
+# 76件 + PR #495 narrow-deletion 一般化テスト実装中に発覚した fleet 観測・介入行の無防備な
+# 句（plugins の versionless stale 検出方式）を追加した1件 = 77件。
 # store_write_barrier / single_source_functions が2件・4件に分割されているのは、以前の
 # 単位共起（同一行・同一段落）要求バージョンの名残。本版は共起を要求しない（全文のどこかに
 # あればよい）ため分割している必然性は無いが、無用な差分を避けるためそのまま維持している。
@@ -197,7 +199,11 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     # 追加して一意化。
     Invariant(
         "deterministic_zero_llm",
-        all_of=("決定論", "LLM 非依存", "env_score / 導入状況を一覧表示"),
+        # narrow-deletion 一般化テスト（PR #495）で発覚: 上記3トークンはいずれも本文の
+        # 別の場所（決定論は約30回・LLM 非依存は3回・env_score/導入状況を一覧表示は
+        # clause0 側）に生き残るため、この行の「plugins」句だけを単独で削除しても
+        # 検出できていなかった。句にしか出現しない語（test-guard status）を追加して是正。
+        all_of=("決定論", "LLM 非依存", "env_score / 導入状況を一覧表示", "test-guard status"),
     ),
     # evolve drain 経由の新規採用のみ は本文に1回のみ出現（一意）。追加不要。
     Invariant("revert_scope", all_of=("evolve drain 経由の新規採用のみ",)),
@@ -236,7 +242,7 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     # `shrink_freeze.assert_no_new_keys` と同じ「テスト時契約」で downgrade env が
     # 存在しない）と、evolve-tier sync の既定 dry-run をクイックスタートの bash コメント
     # （L259/L260 相当）で再述している2行は、上の `tier_sync_explicit_approval` が
-    # 既に別の言い回しで hot に保持しているため省略した（詳細は HANDOVER-keyset.md）。
+    # 既に別の言い回しで hot に保持しているため省略した（詳細は PR #495 のコメント）。
     # 残り 33 行は下記に追加する。
     Invariant(
         "revert_scope_freeze",
@@ -333,7 +339,15 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     ),
     Invariant(
         "memory_capability_single_source",
-        all_of=("resolve_cc_memory_dir", "単一ソース"),
+        # "resolve_cc_memory_dir" は同じ行の記述句と実体列の両方に出現し（count()==2）、
+        # "単一ソース" も全文16回出現する汎用語のため、この2トークンだけでは narrow-deletion
+        # 一般化テスト（PR #495 codex cold review 指摘）で唯一検出漏れが残った。行の記述句
+        # 全体を一意な連続文字列として追加し是正（count()==1・実測確認）。
+        all_of=(
+            "resolve_cc_memory_dir",
+            "単一ソース",
+            "memory dir 解決は `resolve_cc_memory_dir` が単一ソース",
+        ),
     ),
     Invariant(
         "skill_vuln_scan_combo_required",
@@ -389,7 +403,7 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     # 残る（reconcile_surfaced drain 永続化 の行で実際に発覚）。`。` を境に文を句へ分割し、
     # 句だけを削除して赤くなるかを実測する句単位スイープ（89句中42句が黙って消える）で
     # 洗い出した、行レベルでは見えなかった独立契約句 14件を追加する。詳細は
-    # HANDOVER-keyset.md「句単位スイープ」節。
+    # PR #495 のコメント「句単位スイープ」節。
     Invariant(
         "shrink_freeze_single_source_module",
         all_of=("単一ソースは `scripts/lib/shrink_freeze.py`",),
@@ -448,6 +462,16 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     Invariant(
         "evolve_keyset_snapshot_declared_prefix_only",
         all_of=("宣言済み prefix の増減のみ許容する二層 golden 方式",),
+    ),
+    # PR #495 codex cold review [Should]3（narrow-deletion の全 invariant 一般化テスト）
+    # を実装する過程で発覚: 「fleet 観測・介入」の巨大な列挙行（L53）のうち `plugins`
+    # サブコマンドの「version 無しプラグインの silent stale を cache↔marketplace source
+    # の差分で検出」という具体的な検出方式は、行のどこにも token が無く、この行にある
+    # 他3件の invariant（deterministic_zero_llm 等）のどれにも保護されていなかった。
+    # 他のどこにも同内容の記述が無いため独立した invariant として追加する。
+    Invariant(
+        "fleet_plugins_versionless_stale_diff_detection",
+        all_of=("version 無しプラグインの silent stale を cache↔marketplace source の差分で検出",),
     ),
 )
 
