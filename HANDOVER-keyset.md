@@ -1,7 +1,8 @@
 # #415 keyset 完全化 — 分類結果と検証記録（2026-08-17）
 
 対象: `scripts/lib/claude_md_contract.py`（`REQUIRED_INVARIANTS`）。CLAUDE.md 本体は無編集。
-27件 → 60件（行単位スイープ）→ **75件**（句単位スイープで追加是正・codex cold review 反映）。
+27件 → 60件（行単位スイープ）→ 75件（句単位スイープ第1巡・codex cold review 反映）→
+**76件**（句単位スイープ第2巡・team-lead 指摘: 汎用句重複8件を句固有トークンで是正）。
 
 ## 手法（2段階）
 
@@ -40,25 +41,23 @@ no-op/非書込/ブロック/消さない/再提示しない/auto-apply/auto-fix
 | L323 | 「dry-run するため、計測窓 suppress の暦日境界等で...」 | 背景説明（なぜ flaky か）。対処法（二層golden方式）は別句で捕捉済み |
 | L326 | 「SKILL.md コードブロック」 | 「ブロック」は「code block」の部分文字列で無関係（誤検出） |
 
-### (b) 省略可・意図的に無対応 — 11件（うち10件は句単位スイープで新規発覚した限界）
+### (b) 省略可・意図的に無対応 — 3件（句単位スイープ第2巡で8件→2件+既存三重化1件に縮小）
 
 | 分類 | 行/句 | 理由 |
 |---|---|---|
-| コード実測で降格経路なし | L96 `raw_history_gate` の stale_allowlist fail | `scripts/lib/raw_history_gate.py`（downgrade/env/WARN 該当0件）+ `test_raw_history_gate_production.py:1`（production tree AST走査のテスト時契約。`shrink_freeze.assert_no_new_keys` と同型） |
 | 既存invariantと三重化 | L259/L260 quickstart の evolve-tier sync 使用例 | `tier_sync_explicit_approval`（L55）+ 新規 `evolve_tier_cli_sync_default`（L187）が既に同一事実を保護 |
-| **文書横断の汎用句重複（句単位スイープで新規発覚・下記に詳述）** | L92/L135/L152/L153/L156/L180/L250 | 対象句を削除しても「単一ソース」「既定 dry-run」「fail-open」等の**同一部分文字列が別の行に生きているため**invariantが緑のまま。行を丸ごと削除すれば検出される（`test_deleting_the_row_...`で60+15件全件を実測確認済み）ので情報は完全には失われないが、句単位のピンポイント削除には無力。全文横断 substring 一致という設計そのものから必然的に生じる限界であり、共起判定を再導入しない限り解消不能（`claude_md_contract.py` docstring に明記済み。共起判定の再導入は過去にRecursionError等の悪循環を招いたため撤去済みという同ファイルの経緯を踏まえ、再導入しない判断） |
 
-「文書横断の汎用句重複」の内訳（対象句 → 生存している別出現）:
-- L92 `file_lock`「ファイル単位排他ロックと atomic write の単一ソース」→「単一ソース」が他16箇所に存在
-- L96 `raw_history_gate`「許可の単一ソースは production 定数」→ 同上（上記(b)の別枠と二重）
-- L135 `review_channels`「y/n 確認に出す weak チャネルの単一ソース」→ 同上
-- L152 `scaffold_advisory`「CLI は既定 dry-run」→「既定 dry-run」が L187/L250 等に存在
-- L153 `dogfood gate`「dry-run 不変/report invariants/コードブロック実行」→ レイヤー名の列挙（「ブロック」は誤検出、「dry-run」はレイヤー名でL152/L187等の既定値記述と重複）
-- L156 `pj_slug`「PJ slug 導出の単一ソース」→「単一ソース」他16箇所
-- L180 `icebox_notice`「fail-open で既存ファイル非破壊」→「fail-open」他5箇所
-- L250 `evolve-revert`「#402・既定 dry-run」→「既定 dry-run」他数箇所
+**訂正（句単位スイープ第2巡・team-lead 指摘）**: 当初「共起判定を再導入しない限り解消不能」と
+判定した8件（L92/L96/L135/L152/L153/L156/L180/L250）は**誤り**だった。必要なのは共起判定
+ではなく、**その句にしか出現しない部分文字列を `all_of` に追加するだけ**（#492 の
+`hook_fail_open`+`icebox_notice` と同じ手法）。8件すべてに句固有トークンを追加して是正した
+（1件は新規 invariant `raw_history_gate_single_source` として追加、7件は既存 invariant を
+widen）。是正後、句単位スイープでこれら8句が実際に赤くなることを実測確認した（詳細は下記
+「句単位スイープ・第2巡」節）。この訂正により (b) は「既存invariantと真に重複しているだけ」
+の1件（2行）に縮小した。
 
-### (c) 追加 — 48件（33件・行単位 + 15件・句単位）
+### (c) 追加 — 49件（33件・行単位 + 15件・句単位第1巡 + 1件・句単位第2巡新規）
+（+ 既存7件を widen・下記「句単位スイープ・第2巡」参照）
 
 **行単位スイープで追加した33件**（対象行）:
 revert_scope_freeze(L37) / contract_flag_preservation_rule(L68) /
@@ -92,15 +91,33 @@ evaluation_provenance_envelope_single_source(L188) /
 evolve_keyset_snapshot_declared_prefix_only(L323) /
 pitfall_enforcement_is_opt_in(L111 — pitfall_enforcement_commit_block と同じ行のもう1つの独立契約句)
 
+### 句単位スイープ・第2巡（team-lead 指摘の8件を句固有トークンで是正）
+
+新規 invariant 1件 + 既存 invariant 7件の widen（widen は「追加」でなく既存 all_of への
+トークン追加なので (c) の件数には数えない。詳細は各 invariant のコード上コメント参照）:
+
+| invariant | 追加した句固有トークン | 対象 |
+|---|---|---|
+| `raw_history_gate_single_source`（新規） | 「許可の単一ソースは production 定数」 | L96 |
+| `single_source_file_lock`（widen） | 「ファイル単位排他ロック」 | L92 |
+| `single_source_review_channels`（widen） | 「weak チャネルの単一ソース」 | L135 |
+| `cli_dry_run_default`（widen） | 「scaffold_advisory.py」（team-lead提示の「builder stub 生成」は既に登録済みかつ別の句に属し対象句を保護しないため、実測で代替） | L152 |
+| `dogfood_gate_light_non_blocking`（widen） | 「3層検査」 | L153 |
+| `single_source_pj_slug`（widen） | 「PJ slug 導出の単一ソース」 | L156 |
+| `hook_fail_open`（widen） | 「既存ファイル非破壊」 | L180 |
+| `evolve_revert_cli_default_dry_run`（widen） | 「#402・既定 dry-run」（team-lead提示の「--dump-before」は別行=L254に属し対象句を保護しないため、実測で代替） | L250 |
+
 ## 陰性試験
 
 ### ① 句単位スイープ（行単位でなく句単位が完了判定）
-- **全89句中 赤62 / 未検出27**（未検出27の内訳: 上記(a)誤検出17 + (b)省略可10。
-  いずれも根拠付きで invariant 追加を見送ったもので、放置ではない）
-- 追加した48件それぞれについて「その行を実 CLAUDE.md から削除すると red になる」ことを
-  `test_deleting_the_row_each_invariant_protects_flags_it_in_real_claude_md`（75件全件を
-  自動で回す設計）で実測 → 全件 pass
-- 参考値（行単位）: 50行 → 17行（句単位に含まれる情報のため完了判定には使わない）
+- 第1巡（60→75件時点）: 全89句中 赤62 / 未検出27（(a)誤検出17 + (b)省略可10）
+- **第2巡（75→76件時点・最終）: 全89句中 赤70 / 未検出19**（内訳: 上記(a)誤検出17 +
+  (b)省略可2＝L259/L260のみ。8件の是正がすべて句レベルで効いたことを実測で確認）
+- 追加・widen した invariant すべてについて「その行を実 CLAUDE.md から削除すると red に
+  なる」ことを `test_deleting_the_row_each_invariant_protects_flags_it_in_real_claude_md`
+  （76件全件を自動で回す設計）で実測 → 全件 pass
+- 参考値（行単位）: 50行 → 17行 → 0行相当（widen 後は句単位で赤くなるため行単位でも
+  当然赤くなる。行単位は完了判定には使わない）
 
 ### ② 語は残して意味を壊す（代表1件のみ・codex指摘反映）
 substring 存在確認である以上、必須語を残したまま矛盾する注記を追記する編集は**構造上検出
@@ -115,7 +132,7 @@ substring 存在確認である以上、必須語を残したまま矛盾する�
 どちらも部分文字列が文書のどこかに残るため事実は失われておらず、緑のままで正しい。
 
 ### ④ 検査を無効化する（変更なし・全部実施）
-1. `REQUIRED_INVARIANTS = ()` → golden テストが `len(())=0 != 75` で red
+1. `REQUIRED_INVARIANTS = ()` → golden テストが `len(())=0 != 76` で red
 2. `_missing_tokens` を常に `[]` を返すよう monkeypatch → 既存テストが期待した findings を
    得られず red（実測確認）
 3. `dogfood/cli.py` の `_run_layer2` から `checks.append(claude_md_contract.layer2_check(...))`
@@ -141,4 +158,4 @@ swap）/ 検査無効化（golden空・関数無効化・CI配線削除）/ Unic
 - 無改変の real CLAUDE.md（`test_real_repo_claude_md_has_no_missing_contracts` 他） → 緑
 - 全行末尾スペース付与 → 緑
 - CRLF 化 → 緑
-（75件化後も既存4件の陽性対照テストが全て green のまま pass することを確認済み）
+（76件化後も既存4件の陽性対照テストが全て green のまま pass することを確認済み）

@@ -63,24 +63,27 @@ auto-apply する」を追記して real CLAUDE.md に適用 → `check_claude_m
 トークン破壊はいずれも実測で正しく検出された（部分文字列一致は不可視文字の混入にも
 過剰検出側に倒れるため、意図しない文字化けの検知としても機能する）。
 
-## 句単位スイープで判明したもう1つの限界（#415・2026-08-17）
+## 句単位スイープで判明した盲点とその是正（#415・2026-08-17）
 
 1行を `。` で句に分割し、句だけを削除して検査にかける句単位スイープ（HANDOVER-keyset.md
-参照）で、行単位スイープでは見えない盲点が2種類見つかった。**片方は今回14件の invariant
-追加で塞いだ**（1行に独立した契約句が2つあり片方だけ登録済みだったケース。例:
-`reconcile_surfaced drain 永続化` 行の「apply 境界へ移設」句）。**もう片方は塞げていない**:
-`単一ソース` や `既定 dry-run` のような短い汎用フレーズが**文書内の別の行にも文字通り
-存在する**場合、対象行からその句だけを削除しても、doc 全体のどこかに同じ部分文字列が
-残っているため invariant は緑のまま（例: `file_lock` 行の「ファイル単位排他ロックと
-atomic write の単一ソース。」を削除しても、他行の「単一ソース」出現が生き残るため
-`single_source_file_lock` は緑のまま）。これは全文横断の部分文字列一致という設計そのもの
-（行・段落の共起を要求しない）から必然的に生じる限界であり、co-occurrence 判定を再導入
-しない限り解消できない（本ファイル冒頭の脅威モデル節にある通り、共起判定の再導入は
-過去に素通り・誤検出・RecursionError の悪循環を招いたため撤去済み）。実務上の影響は限定的
-（行を丸ごと削除すれば依然として検出される。実測: 該当行の全 60+14 invariant は
-`test_deleting_the_row_each_invariant_protects_flags_it_in_real_claude_md` で行単位削除は
-検出できることを確認済み）だが、「同じ句の一部だけをピンポイントで削る」編集には無力である
-ことを明記する。
+参照）で、行単位スイープでは見えない盲点が2種類見つかった。**どちらも修正済み**:
+1. 1行に独立した契約句が2つあり片方だけ登録済みだったケース（例: `reconcile_surfaced
+   drain 永続化` 行の「apply 境界へ移設」句）→ 15件の invariant を新規追加。
+2. `単一ソース` や `既定 dry-run` のような短い汎用フレーズが**文書内の別の行にも文字通り
+   存在する**ため、対象行からその句だけを削除しても doc 全体のどこかに同じ部分文字列が
+   残り invariant が緑のままだったケース（例: `file_lock` 行の「ファイル単位排他ロックと
+   atomic write の単一ソース。」を削除しても、他行の「単一ソース」出現が生き残るため
+   `single_source_file_lock` が緑のままだった）→ **共起判定は不要**。その句にしか出現
+   しない固有の部分文字列（例: `ファイル単位排他ロック`）を `all_of` に追加するだけで
+   句単位でも検出できる（#492 で `hook_fail_open` に `icebox_notice` を添えたのと同じ
+   手法）。8件（`single_source_file_lock` / `raw_history_gate_single_source`（新規）/
+   `single_source_review_channels` / `cli_dry_run_default` / `dogfood_gate_light_non_blocking`
+   / `single_source_pj_slug` / `hook_fail_open` / `evolve_revert_cli_default_dry_run`）に
+   適用し、対象句削除で赤くなることを実測で確認した。
+
+**副作用（意図された設計）**: 句固有トークンを要求するため、将来 CLAUDE.md 圧縮 PR で
+その句を意図的に別の言い回しへ書き換えた場合も赤くなる。これは「契約の変更を無意識に
+通さない」ゲートとして正しい挙動であり、トークンを緩める修正はしない。
 """
 from __future__ import annotations
 
@@ -104,6 +107,8 @@ class Invariant:
 # 18件（707f988e 初版）+ codex cold review [Must]4（棚卸し漏れ）で追加した5件 = 27件。
 # 27件 + #415 keyset 完全化（全文契約句の網羅洗い出し）で追加した33件 = 60件。
 # 60件 + #415 句単位スイープ（1行複数契約句の盲点是正）で追加した15件 = 75件。
+# 75件 + #415 句単位スイープ第2巡（team-lead指摘: 汎用句重複8件を句固有トークンで是正。
+# raw_history_gate_single_source を新規追加+既存7件を widen）で新規追加1件 = 76件。
 # store_write_barrier / single_source_functions が2件・4件に分割されているのは、以前の
 # 単位共起（同一行・同一段落）要求バージョンの名残。本版は共起を要求しない（全文のどこかに
 # あればよい）ため分割している必然性は無いが、無用な差分を避けるためそのまま維持している。
@@ -122,23 +127,56 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     # `pj_slug.resolve_cc_memory_dir` 参照 x1）、単一ソースは16回出現。どちらも対象行
     # （PJ slug 導出の単一ソース）だけを削除しても他出現が残り検出漏れる（2026-08-17
     # オーケストレーター実測）。行に固有の語を追加して一意化。
+    # 句単位スイープ第2巡で「| pj_slug | PJ slug 導出の単一ソース。」句だけの削除も
+    # 緑のままだったため（"worktree slug 食い違いを防止" は同じ行の別の句に属する）、
+    # 句固有語を追加。
     Invariant(
         "single_source_pj_slug",
-        all_of=("pj_slug", "単一ソース", "worktree slug 食い違いを防止"),
+        all_of=("pj_slug", "単一ソース", "worktree slug 食い違いを防止", "PJ slug 導出の単一ソース"),
     ),
-    Invariant("single_source_file_lock", all_of=("file_lock", "単一ソース")),
-    Invariant("single_source_review_channels", all_of=("review_channels", "単一ソース")),
+    # #415 句単位スイープ・第2巡（2026-08-17・team-lead 指摘 + オーケストレーター実測）:
+    # 行を「。」で分割した最初の句（"| `file_lock` | ファイル単位排他ロックと atomic
+    # write の単一ソース。"）だけを削除しても、"file_lock"/"単一ソース" とも文書の別行に
+    # 生き残るため緑のままだった。その句にしか出現しない語を追加して一意化（count()==1 を
+    # 実測で確認）。
+    Invariant(
+        "single_source_file_lock",
+        all_of=("file_lock", "単一ソース", "ファイル単位排他ロック"),
+    ),
+    Invariant(
+        "single_source_review_channels",
+        all_of=("review_channels", "単一ソース", "weak チャネルの単一ソース"),
+    ),
     Invariant("raw_history_allowlist", all_of=("allowlist", "load_effective_history")),
+    # raw_history_gate の stale_allowlist fail-fast 宣言自体（"許可の単一ソースは
+    # production 定数"）はこれまで未登録だった（コード側は test_raw_history_gate_production.py
+    # の production tree AST 走査で降格経路なく強制されているため当初は省略可と判断したが、
+    # team-lead 指摘によりドキュメント側にも明示的に登録する）。
+    Invariant(
+        "raw_history_gate_single_source",
+        all_of=("許可の単一ソースは production 定数",),
+    ),
     # fail-open は本文に6回出現（汎用語）。単独では対象行を1つ消しても他5箇所が残り
     # 検出漏れる（2026-08-17 オーケストレーター実測。team-lead 提示の再現例）。
-    # icebox_notice 行（fail-open の具体例）を対象に一意化。
-    Invariant("hook_fail_open", all_of=("fail-open", "icebox_notice")),
+    # icebox_notice 行（fail-open の具体例）を対象に一意化。さらに句単位スイープ第2巡で
+    # 「fail-open で既存ファイル非破壊、閾値未満は無音」句だけの削除も緑のままだったため
+    # 句固有語を追加。
+    Invariant(
+        "hook_fail_open",
+        all_of=("fail-open", "icebox_notice", "既存ファイル非破壊"),
+    ),
     # 人間の y/n・無人適用しない はいずれも本文に1回のみ出現（一意）。追加不要。
     Invariant("human_approval", all_of=("人間の y/n", "無人適用しない")),
     # 既定 dry-run は本文に4回出現（複数コンポーネントで独立に再述される汎用語）。
     # 単独では対象行を1つ消しても他3箇所が残り検出漏れる（2026-08-17 実測）。
-    # scaffold_advisory 行に固有の語を追加して一意化。
-    Invariant("cli_dry_run_default", all_of=("既定 dry-run", "builder stub 生成")),
+    # scaffold_advisory 行に固有の語を追加して一意化。ただし「builder stub 生成」は
+    # 同じ行の別の句（clause）に属するため、"CLI は既定 dry-run" 句自体が消えても
+    # 検出できなかった（句単位スイープ第2巡で発覚）。句そのものにしか出現しない
+    # "scaffold_advisory.py"（count()==1）を追加して句単位でも検出できるようにした。
+    Invariant(
+        "cli_dry_run_default",
+        all_of=("既定 dry-run", "builder stub 生成", "scaffold_advisory.py"),
+    ),
     # 決定論は本文に30回、LLM 非依存は3回出現（いずれも汎用語）。fleet 観測・介入 行を
     # 単独で消しても両語とも他出現が残り検出漏れる（2026-08-17 実測）。行に固有の語を
     # 追加して一意化。
@@ -253,7 +291,10 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     ),
     Invariant(
         "dogfood_gate_light_non_blocking",
-        all_of=("`--layer light` は pre-push で非ブロッキング自動実行",),
+        # 句単位スイープ第2巡: 「| dogfood gate | 通し評価ゲート — 3層検査（dry-run
+        # 不変/report invariants/コードブロック実行）。」句だけの削除は緑のままだった
+        # （非ブロッキング自動実行は同じ行の別の句）。句固有語「3層検査」を追加。
+        all_of=("`--layer light` は pre-push で非ブロッキング自動実行", "3層検査"),
     ),
     Invariant(
         "weak_signals_drain_pending_marker_intentional",
@@ -313,7 +354,11 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     ),
     Invariant(
         "evolve_revert_cli_default_dry_run",
-        all_of=("entry_id は戦果ボードか --list が印字する",),
+        # 句単位スイープ第2巡: 「# 採用した skill diff を戻す（#402・既定 dry-run。」句
+        # だけの削除は緑のままだった（"entry_id は..." は同じ行の別の句）。team-lead 提示の
+        # "--dump-before" は別行（quickstart の別コマンド例）に属し対象句を保護しないため、
+        # 実測で対象句自体に固有の "#402・既定 dry-run" を採用した。
+        all_of=("entry_id は戦果ボードか --list が印字する", "#402・既定 dry-run"),
     ),
     Invariant(
         "testpaths_single_source",

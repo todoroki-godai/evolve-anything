@@ -34,7 +34,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # 変更するときは REQUIRED_INVARIANTS 本体のコメントと、この数値の両方を更新すること。
 # 27件 + #415 keyset 完全化（全 CLAUDE.md 契約句の網羅洗い出し）で追加した33件 = 60件。
 # 60件 + #415 句単位スイープ（1行複数契約句の盲点是正）で追加した15件 = 75件。
-REQUIRED_INVARIANTS_COUNT = 75
+# 75件 + #415 句単位スイープ第2巡（汎用句重複8件を句固有トークンで是正・新規1件+既存7件widen）
+# = 76件。
+REQUIRED_INVARIANTS_COUNT = 76
 
 
 def _write(path: Path, content: str) -> None:
@@ -71,13 +73,14 @@ def _full_claude_md_text() -> str:
         "| dry_run | dry-run 純度 |",
         "| `weak_signals` | 45日 TTL は read 時 age 導出で writer-death 非依存 |",
         "| optimize_history | fold_effective が単一ソース |",
-        "| slug | pj_slug が単一ソース。worktree slug 食い違いを防止 |",
-        "| lock | file_lock が単一ソース |",
-        "| channels | review_channels が単一ソース |",
+        "| slug | pj_slug が単一ソース。worktree slug 食い違いを防止。PJ slug 導出の単一ソース |",
+        "| lock | file_lock が単一ソース。ファイル単位排他ロック |",
+        "| channels | review_channels が単一ソース。weak チャネルの単一ソース |",
+        "| raw_history_gate | 許可の単一ソースは production 定数 |",
         "| raw_history | raw history read は allowlist に固定。業務 reader は"
         " `load_effective_history`。 |",
         "| icebox_notice | fail-open で既存ファイル非破壊 |",
-        "| cli | CLI は既定 dry-run。scaffold_advisory は builder stub 生成 |",
+        "| cli | CLI は既定 dry-run。scaffold_advisory は builder stub 生成（scaffold_advisory.py） |",
         "| general | fleet 観測・介入は env_score / 導入状況を一覧表示。決定論・LLM 非依存 |",
         "| safe_llm | 無人呼び出しは safe_llm_call に一点集約し費用は事前予約 |",
         "| memory | project スコープ4層防御で他PJ混入を reject |",
@@ -108,7 +111,7 @@ def _full_claude_md_text() -> str:
         "| verbosity | weak_signals へ emit、auto-apply しない | verbosity/ |",
         "| cross_pj_priority | 提示のみ・自動承認しない | correction_semantic/cross_pj_priority.py |",
         "| plugin_self | auto-apply は人間承認必須に降格 | skill_origin.py |",
-        "| dogfood | `--layer light` は pre-push で非ブロッキング自動実行 | scripts/lib/dogfood/ |",
+        "| dogfood | 3層検査。`--layer light` は pre-push で非ブロッキング自動実行 | scripts/lib/dogfood/ |",
         "| weak_signals_drain | pending marker の dry-run 書込は意図された設計（消さない） | weak_signals/batch.py |",
         "| reconcile_surfaced | phases の dry-run は `persist=False` で非書込 | cli.py |",
         "| idiom_filter | idiom 単位拒否も可能 | correction_semantic/idiom_filter.py |",
@@ -123,7 +126,7 @@ def _full_claude_md_text() -> str:
         "| evaluation_provenance | 不明値は推測せず None | scripts/lib/evaluation_provenance.py |",
         "| fleet_propose | reject 済み提案は再提示しない | fleet/propose.py |",
         "| codex_usage | advisory 表示（fail-open）。CC 側 token_usage とは合算しない | fleet/codex_usage.py |",
-        "| evolve_revert | entry_id は戦果ボードか --list が印字する | bin/evolve-revert |",
+        "| evolve_revert | #402・既定 dry-run。entry_id は戦果ボードか --list が印字する | bin/evolve-revert |",
         "| testpaths | `testpaths` が単一ソース | pytest.ini |",
         "| evolve_keyset_snapshot | 既存キーとの union merge。条件付きキーを golden から消さない | test_evolve_keyset_snapshot.py |",
         "",
