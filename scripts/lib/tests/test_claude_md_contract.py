@@ -316,53 +316,28 @@ def _build_row_to_invariants() -> dict[int, frozenset[str]]:
 
 _ROW_TO_INVARIANTS = _build_row_to_invariants()
 
-# 句単位スイープ第3巡（narrow-deletion 一般化テスト・セル分割版）で「無防備」と判定されたが、
-# 実際には安全と判断した句。理由を1行で明記する（黙って除外しない・PR #495 codex cold
-# review 指摘）。いずれも「コンポーネント名セル」または「実体（ファイルパス）セルのみ」の
-# 単独削除で、そのセルが持つ識別子（コンポーネント名やモジュール名）が同じ行の**別のセル**
-# （実体列 or 説明文中の再言及）にも文字通り再出現するため、実質的な契約内容は失われない
-# （実測で確認: 各セルを削除した残りだけで、その行を守る invariant の token が引き続き
-# 全て揃う）。
-_KNOWN_SAFE_UNDETECTED_CLAUSES: dict[tuple[int, str], str] = {
-    (92, " `file_lock` "): "`file_lock` は同じ行の実体列（rl_common/file_lock.py）に再出現",
-    (92, " `rl_common/file_lock.py` "): "`file_lock` は同じ行のコンポーネント名セルに再出現",
-    (133, " `judge_runner` / `safe_llm_call` "): (
-        "`safe_llm_call` は同じ行の契約句・実体列に再出現"
-    ),
-    (133, " `correction_semantic/judge_runner.py` + `safe_llm_call.py` "): (
-        "`safe_llm_call` は同じ行のコンポーネント名セル・契約句に再出現"
-    ),
-    (135, " `review_channels` "): "`review_channels` は同じ行の実体列に再出現",
-    (135, " `correction_semantic/review_channels.py` "): (
-        "`review_channels` は同じ行のコンポーネント名セルに再出現"
-    ),
-    (136, " `idiom_autopromote` "): "`autopromote` は同じ行の契約句・実体列に再出現",
-    (136, " `correction_semantic/idiom_autopromote.py` "): (
-        "`autopromote` は同じ行のコンポーネント名セル・契約句に再出現"
-    ),
-    (156, " `pj_slug` "): "`pj_slug` は同じ行の実体列（pj_slug.py）に再出現",
-    (156, " `pj_slug.py` + `hooks/restore_state.py` "): (
-        "`pj_slug` は同じ行のコンポーネント名セルに再出現"
-    ),
-    (
-        171,
-        " `scripts/lib/memory_capability.py` + `audit/sections_memory.py` + `pj_slug.resolve_cc_memory_dir` ",
-    ): "`resolve_cc_memory_dir` は同じ行の契約句に再出現",
-    (180, " `icebox_notice` "): "`icebox_notice` は同じ行の実体列に再出現",
-    (
-        180,
-        " `scripts/lib/daily/icebox_notice.py` + `bin/evolve-daily-run` + `hooks/restore_state.py` ",
-    ): "`icebox_notice` は同じ行のコンポーネント名セルに再出現",
+# 句単位スイープ（narrow-deletion 一般化テスト）で「無防備」と判定されたが、実際には
+# 安全と判断した句。理由を1行で明記する（黙って除外しない・PR #495 codex cold review 指摘）。
+#
+# **キーは句の文言のみ**（行番号は持たない・#415 PR #496 codex [Should] 是正）。行番号を
+# キーに含めると、CLAUDE.md の前方を1行編集するだけで対象行がズレて例外が静かに外れ
+# （誤って赤くなる）、あるいは別の行の別の句に誤って適用され（誤って過剰除外する）、
+# どちらも気づかれにくい。文言そのものをキーにすることで、その句が現存する限り例外は
+# 追従し、句ごと消えれば `test_known_safe_undetected_clauses_are_not_stale` が検出する。
+#
+# 文言のみをキーにする以上、**同じ句が CLAUDE.md 内で複数回出現すると意図しない行にも
+# 適用されてしまう**ため `test_known_safe_undetected_clauses_are_unique` で一意性を強制する
+# （行番号を落とした分の担保）。
+_KNOWN_SAFE_UNDETECTED_CLAUSES: dict[str, str] = {
     # #415 圧縮（横断契約リストへの表→箇条書き変換）で `|` セル区切りが無くなった
     # ため、コンポーネント名と説明文が同一の「。」区切り句に同居するようになった。
     # 名前 `idiom_autopromote` に含まれる token「autopromote」がこの句を token-bearing
     # 扱いにするが、実際の契約語（凍結中/autopromote()/no-op）は同じ行の第2句に別途
     # 存在するため、この句の単独削除は契約内容の消失にならない（実測: 削除後も
     # `idiom_autopromote_frozen` は green のまま）。
-    (
-        89,
-        "- `idiom_autopromote`: confirmed idiom の再発 weak_signal を機械昇格。",
-    ): "`autopromote` は同じ行の第2句（#379 Step1 で凍結中、`autopromote()` は no-op）に再出現",
+    "- `idiom_autopromote`: confirmed idiom の再発 weak_signal を機械昇格。": (
+        "`autopromote` は同じ行の第2句（#379 Step1 で凍結中、`autopromote()` は no-op）に再出現"
+    ),
 }
 
 
@@ -430,8 +405,7 @@ def test_narrow_clause_deletion_flags_at_least_one_invariant_per_row(
 
     uncovered: list[str] = []
     for clause in token_bearing_clauses:
-        key = (row_idx + 1, clause)
-        if key in _KNOWN_SAFE_UNDETECTED_CLAUSES:
+        if clause in _KNOWN_SAFE_UNDETECTED_CLAUSES:
             continue
         mutated_row = row.replace(clause, "", 1)
         mutated_lines = lines[:row_idx] + [mutated_row] + lines[row_idx + 1 :]
@@ -447,6 +421,41 @@ def test_narrow_clause_deletion_flags_at_least_one_invariant_per_row(
         f"{sorted(expected_names)} が1つも反応しなかった（無防備な句。安全と判断済みなら"
         f" _KNOWN_SAFE_UNDETECTED_CLAUSES に理由付きで登録すること）:\n"
         + "\n".join(uncovered)
+    )
+
+
+def test_known_safe_undetected_clauses_are_not_stale() -> None:
+    """#415 PR #496 是正: `_KNOWN_SAFE_UNDETECTED_CLAUSES` のキー（句の文言）は実 CLAUDE.md
+    のどこかに文字通り出現していなければならない。CLAUDE.md 側の編集で句の文言が変わる/
+    消えると、対応する例外は「もう存在しない句を守っている」死んだエントリになり、静かに
+    腐る（#415 圧縮で13/14件がこの状態になっていたのが実例）。stale なら削除するか句を
+    現行の文言に更新することを促す。
+    """
+    text = claude_md_contract._read_claude_md(_REPO_ROOT)
+    assert text is not None
+    stale = [clause for clause in _KNOWN_SAFE_UNDETECTED_CLAUSES if clause not in text]
+    assert stale == [], (
+        "以下の _KNOWN_SAFE_UNDETECTED_CLAUSES エントリは実 CLAUDE.md に出現しない"
+        "（削除するか句を更新すること）:\n" + "\n".join(stale)
+    )
+
+
+def test_known_safe_undetected_clauses_are_unique() -> None:
+    """#415 PR #496 是正: キーを行番号から句の文言のみへ変更した代償を埋める検査。行番号を
+    持たないため、同じ句が CLAUDE.md 内で複数回出現すると例外が意図しない箇所にも適用され
+    （過剰除外）、本来検出すべき無防備な句を見逃す。各エントリの句が本文に厳密に1回だけ
+    出現することを強制する。
+    """
+    text = claude_md_contract._read_claude_md(_REPO_ROOT)
+    assert text is not None
+    non_unique = {
+        clause: text.count(clause)
+        for clause in _KNOWN_SAFE_UNDETECTED_CLAUSES
+        if text.count(clause) != 1
+    }
+    assert non_unique == {}, (
+        "以下の _KNOWN_SAFE_UNDETECTED_CLAUSES エントリは実 CLAUDE.md に複数回（または0回）"
+        f"出現し、句の一意性で行番号の代わりを担保できない: {non_unique}"
     )
 
 
