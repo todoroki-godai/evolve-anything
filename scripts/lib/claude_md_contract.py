@@ -37,8 +37,10 @@
 
 引用ブロック（`>`）は完全除外しない — 本 repo の Agent contract ヘッダ（冒頭の
 `docs/agent-contract/policy.md` 参照）自体が正規に `>` の中にあるため、除外すると本物の契約が
-偽陽性になる。代わりに上記(2)(3)の単位＋否定検査を引用ブロックにも同様に適用することで、
-「旧仕様をブロッククォートに隠す」攻撃は（3)の否定語検出で捕捉する。
+偽陽性になる。代わりに引用の中身を de-quote した上で `_extract_units` に再帰させ、引用の外と
+同じ単位分割規則（表行は表行として、地の文は段落として）を適用する。「旧仕様をブロック
+クォートに隠す」攻撃は上記(3)の否定語検出で、「引用内の表へ語を分散させる」攻撃は再帰による
+表行単位の分割で捕捉する。
 
 否定語リストに `対象外` は**含めない**。理由: 本 repo の CLAUDE.md 本文（コンポーネント表の
 直前の段落）に「`store_write` barrier 自身の... 対象外」という正当な用法が実在し
@@ -57,6 +59,50 @@ LLM を使わない。`all_of` の語自体は素の部分文字列一致（正�
 
 `MUST_STAY_SECTIONS` は圧縮時に別ファイルへ移設してはいけないセクション（例:
 `## Compaction Instructions` は harness が compaction 時に読むため、移した瞬間に機能死する）。
+
+## 3巡目（PR #492、外部 cold review + オーケストレーター実測）で見つかった残存の穴
+
+2巡目の肯定リストは**ブロック級**（行がどのブロックに属するか）でしか働いておらず、以下2種の
+欠陥が残っていた:
+  - **欠陥1（span 級の素通り）**: 行の途中に置いた `<!-- ... -->` は、その行自体が普通の段落と
+    して単位化されるためコメントの中身が検査対象に残っていた。`_strip_inline_spans` を単位の
+    後処理として追加し、行内 HTML コメント・対になる行内 HTML タグ・リンクの URL 側を落とすよう
+    にした（コードスパンの中身は保持する。理由は同関数の docstring 参照）。
+  - **欠陥2（リスト継続行の誤検出）**: 字下げ4以上を無条件にコードブロック扱いしていたため、
+    リスト項目の内側にある字下げ4以上の継続行（CommonMark のレイジー継続では正当な本文）が
+    誤って除外され、実際には満たしている契約が「欠落」と誤検出されていた。継続行の境界判定
+    （`_is_continuation_boundary`）から字下げチェックを外し、字下げ判定は「新規に単位を
+    始める瞬間」だけに限定した。
+  - **欠陥3（引用内テーブルの分散）**: 引用ブロック内の連続する `>` 行を無条件に1単位へ
+    結合していたため、引用の中に置かれた表（本来は1行=1単位）が丸ごと1単位に潰れ、B5
+    （語を別の表行へ分散させる攻撃）の防御が引用の中でだけ無効化されていた。de-quote した
+    中身を `_extract_units` に再帰させ、表行は表行として、地の文は段落として引用の外と
+    同じ規則で再分割するよう修正した。
+
+## この検査の位置づけ（重要な訂正）
+
+**この検査は「構造的に閉じた安全網」ではない。決定論トークン一致による補助 lint である。**
+前回報告に「構造側は CommonMark という閉じた形式文法なので数え上げれば原理的に網羅できる」と
+書いたが、これは誤りだった（外部レビュー指摘）。現実装は本物の Markdown パーサではなく行頭
+ヒューリスティックであり、setext heading・thematic break・リストの lazy continuation の全パターン・
+HTML block の CommonMark 7分類ごとの終了条件・引用内の子ブロック全種別を網羅していない。
+表構文自体も CommonMark 本体ではなく GFM 拡張であり、パーサではなく `|` 始まりの行という
+ヒューリスティックで代用している。
+
+したがって、決定論トークン一致を通り抜ける形は今後も残り得る。既知の残余リスクは主に3種:
+  - **span 級構文の未知の組み合わせ**: 今回 span 級の穴を1層塞いだが、Markdown/HTML の
+    span 構文は開いた集合であり、新しい組み合わせが見つかれば追加対応が要る。
+  - **遠隔した否定表現・語の言い換え**: `_NEGATION_SUFFIXES`/`_NEGATION_LABELS` は有限の
+    語彙リストである。「この契約は任意」「〜は不要」のようなリスト外の言い回しや、制約文を
+    別の趣旨の文へ書き換える攻撃はトークン一致である限り原理的に防げない（自然言語の否定は
+    閉じた文法ではないため）。
+  - **旧語の同義語**: 契約語そのものを類義語へ置き換える書き換え（意味は保たれるが本検査の
+    `all_of` 文字列とは一致しなくなる）は、そもそも substring 一致の設計上、検出対象外。
+
+**最終的な担保は、この検査そのものではなく CLAUDE.md 圧縮 PR の人間レビューである。** この
+検査の役割は「機械的に見落としやすい典型パターン（フェンス/コメント/HTML ブロック/否定形
+書き換え等）を早期に赤くして人間レビューの負担を減らすこと」であり、「圧縮 PR は本検査さえ
+緑なら安全」という誤った安心を与えるものではない。
 """
 from __future__ import annotations
 
@@ -204,6 +250,100 @@ def _fence_marker(line: str) -> Tuple[str, int] | None:
     return None
 
 
+def _strip_inline_spans(text: str) -> str:
+    """単位の文字列から span 級（行の内側）の隠し場所を落とす（欠陥1対策）。
+
+    `_extract_units` の肯定リストはブロック級（行がどのブロックに属するか）でしか働かない。
+    Markdown には行の内側にも構文があり（span 級）、そこは別層として素通しになっていた
+    — 例えば地の文の行末に mid-line で `<!-- ... -->` を置くと、その行自体は普通の段落として
+    単位化されるため、コメントの中身がそのまま検査対象に残る（2026-08-17 外部レビュー指摘・
+    オーケストレーター実測で再現確認）。
+
+    ここで落とすのは:
+      - 行内 HTML コメント `<!-- ... -->`（同一行で閉じるもの・閉じないもの両方。閉じない
+        場合は残り全部を安全側に落とす）
+      - 対になる行内 HTML タグ `<tag ...> ... </tag>`（同一単位内に閉じタグが見つかる場合、
+        タグごと中身を落とす。閉じタグが無い場合はタグ表記自体だけを落として続行する）
+      - リンク `[表示](URL)` の URL 側 — 表示テキストは残し URL 部分だけ落とす
+      - 画像 `![alt](URL)` は alt テキストごと丸ごと落とす（本 repo の CLAUDE.md は画像構文を
+        一切使わないため baseline リスクはゼロ。alt はレンダリング時に主表示されないため
+        隠し場所になり得る）
+
+    バッククォートのコードスパン（`` `...` ``）は**中身をそのまま消しはしないが、中身に対しても
+    同じ span 級除去を再帰適用する**。実 CLAUDE.md は `store_write_raw` / `pj_slug` /
+    `fold_effective` / `file_lock` / `review_channels` など契約語の大半をバッククォート付きの
+    識別子参照として書いており、コードスパンの中身を丸ごと落とすと baseline（実 CLAUDE.md）が
+    全面的に偽陽性化することを実測で確認済み（2026-08-17）。一方でコードスパンの中身を完全な
+    ブラックボックスとして素通しすると、``` `<!-- 旧仕様の全語 -->` ``` のように「HTML
+    コメントをバッククォートで包む」だけでコメント除去をすり抜けられることも実測で確認した
+    （2026-08-17 ワーカー自己発見）。したがって「識別子はそのまま残すが、その中に comment/
+    tag/link のような span 構文が現れたら同じ規則で落とす」という再帰適用が正しい設計になる。
+    """
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+
+        if ch == "`":
+            j = i
+            while j < n and text[j] == "`":
+                j += 1
+            run = j - i
+            close = text.find("`" * run, j)
+            if close == -1:
+                out.append(text[i:j])
+                i = j
+                continue
+            inner = text[j:close]
+            out.append(text[i:j])
+            out.append(_strip_inline_spans(inner))
+            out.append(text[close : close + run])
+            i = close + run
+            continue
+
+        if text.startswith("<!--", i):
+            end = text.find("-->", i)
+            i = n if end == -1 else end + 3
+            continue
+
+        if ch == "!" and i + 1 < n and text[i + 1] == "[":
+            close_bracket = text.find("]", i + 1)
+            if close_bracket != -1 and close_bracket + 1 < n and text[close_bracket + 1] == "(":
+                url_end = text.find(")", close_bracket + 2)
+                if url_end != -1:
+                    i = url_end + 1
+                    continue
+
+        if ch == "<" and i + 1 < n and text[i + 1].isalpha():
+            tag_end = text.find(">", i)
+            tag_name = ""
+            if tag_end != -1:
+                tag_content = text[i + 1 : tag_end]
+                head = tag_content.split()[0] if tag_content.split() else ""
+                tag_name = head.rstrip("/")
+            if tag_name:
+                close_idx = text.find(f"</{tag_name}>", tag_end)
+                if close_idx != -1:
+                    i = close_idx + len(f"</{tag_name}>")
+                    continue
+            i = tag_end + 1 if tag_end != -1 else i + 1
+            continue
+
+        if ch == "[":
+            close_bracket = text.find("]", i)
+            if close_bracket != -1 and close_bracket + 1 < n and text[close_bracket + 1] == "(":
+                url_end = text.find(")", close_bracket + 2)
+                if url_end != -1:
+                    out.append(text[i : close_bracket + 1])
+                    i = url_end + 1
+                    continue
+
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _is_reference_definition(line: str) -> bool:
     """`[label]: destination` 形式の参照リンク定義か。GitHub 上は非表示レンダリングされるため
     `[//]: # (旧仕様のコメント)` のような「コメントとして悪用される」定型トリックがある。
@@ -238,12 +378,68 @@ def _strip_yaml_frontmatter(lines: List[str]) -> List[str]:
     return []
 
 
-def _is_block_start(line: str) -> bool:
-    """リスト項目・段落の継続行として吸収してよいかどうかの境界判定。"""
-    if _indent_width(line) >= 4:
-        return True
+def _dequote_line(line: str) -> str:
+    """引用行の先頭 `>` マーカー（と続く1個の半角スペース）だけを剥がす。中身の構造
+    （表行の `|` 等）は保ったまま返す — 剥がした後で `_extract_units` に再帰させるため。
+    """
+    s = line.lstrip()
+    rest = s[1:]
+    if rest.startswith(" "):
+        rest = rest[1:]
+    return rest
+
+
+def _is_continuation_boundary(line: str) -> bool:
+    """既に開いているリスト項目・段落の継続行として吸収してよいかどうかの境界判定。
+
+    字下げ幅はここでは判定に使わない。CommonMark のレイジー継続と同じ理由で、既に開いている
+    ブロックの内部では字下げは新規コードブロックの開始を意味しない（字下げ判定は
+    `_extract_units` 側で「新規に単位を始める瞬間」だけに適用する）。字下げ幅を継続境界にも
+    使うと、リスト項目内でたまたま4スペース以上字下げされた継続行が誤ってコードブロック扱い
+    され、実際には満たしている契約が「欠落」と誤検出される（2026-08-17 オーケストレーター
+    実測の欠陥2）。
+    """
     s = line.lstrip()
     return s.startswith(("#", "|", ">", "<")) or _is_list_start(line) or _is_reference_definition(line)
+
+
+def _has_open_span(buf_text: str) -> bool:
+    """これまでに集めた継続行バッファが span 構文の途中（閉じられていないバッククォート/
+    HTML コメント/画像・リンクの開き括弧）で終わっているかを判定する。
+
+    span 構文（`` `...` `` / `<!-- ... -->` / `[...](...)`）が複数の物理行にまたがる場合、
+    その内部にたまたま見出し/表/引用/リスト風の行が含まれていると、通常の継続境界判定
+    （`_is_continuation_boundary`）がそこで単位を分断してしまう。分断された前半部分は
+    span 構文の閉じ側を持たない普通の段落単位として残り、`_strip_inline_spans` の対応する
+    span 検出（閉じ側必須）が働かず契約語が素通りする（2026-08-17 オーケストレーター実測。
+    テスト構築中の偶発的発見だが、見出し風の行を意図的に混ぜれば同じ手口を再現できるため
+    実際に悪用可能と判断し修正した）。span が閉じられるまでは通常の境界判定を無視し、
+    見出し/表/引用/リスト風の行であっても継続行として吸収し続ける。
+
+    既知のトレードオフ: `[` が対応する `]` を一度も持たない（閉じ忘れの角括弧が本文に残る）
+    場合、この判定は「span 構文の途中」を偽陽性判定し続け、ファイル末尾まで継続行として
+    吸収し続ける（安全側＝過剰統合であり、語を消して検出をすり抜ける攻撃は作れない。ただし
+    将来別の編集がこの巨大単位に巻き込まれ、本来は分散させたい語が偶然同一単位に入り
+    B5 の検出力が弱まる可能性はある）。real CLAUDE.md は `[`/`]` の出現数が一致することを
+    grep で確認済み（2026-08-17）。
+    """
+    if buf_text.count("`") % 2 == 1:
+        return True
+    last_comment_open = buf_text.rfind("<!--")
+    if last_comment_open != -1 and "-->" not in buf_text[last_comment_open:]:
+        return True
+    last_bracket = buf_text.rfind("[")
+    if last_bracket != -1:
+        tail = buf_text[last_bracket:]
+        close_bracket_idx = tail.find("]")
+        if close_bracket_idx == -1:
+            # 表示テキスト/alt テキストの途中（`]` にまだ到達していない）。
+            return True
+        after_bracket = tail[close_bracket_idx + 1 :]
+        if after_bracket.startswith("(") and ")" not in after_bracket[1:]:
+            # URL 側の途中（`(` は来たが `)` にまだ到達していない）。
+            return True
+    return False
 
 
 def _extract_units(text: str) -> List[str]:
@@ -346,29 +542,44 @@ def _extract_units(text: str) -> List[str]:
             i += 1
             continue
         if stripped.startswith(">"):
+            # 引用ブロックの中身を再帰的に単位分割する（欠陥3対策）。単純に全 `>` 行を
+            # 1単位へ結合すると、引用の中に置かれた表（1行=1トークン群に分割された表行）が
+            # 丸ごと1単位に潰れ、B5（語を別の表行へ分散させる攻撃）の防御が引用の中でだけ
+            # 無効化される（2026-08-17 外部レビュー指摘・オーケストレーター実測で再現確認）。
+            # de-quote した中身を `_extract_units` に再帰させれば、表行はそこでも表行として、
+            # 地の文（Agent contract ヘッダのような複数行にまたがる引用の説明文）は段落として
+            # 正しく分割される。
             buf: List[str] = []
             while i < n and lines[i].lstrip().startswith(">"):
-                buf.append(lines[i].lstrip()[1:].strip())
+                buf.append(_dequote_line(lines[i]))
                 i += 1
-            units.append(" ".join(buf))
+            units.extend(_extract_units("\n".join(buf)))
             continue
         if _is_list_start(line):
             buf = [line]
             i += 1
-            while i < n and lines[i].strip() != "" and not _is_block_start(lines[i]):
-                buf.append(lines[i])
-                i += 1
+            while i < n and lines[i].strip() != "":
+                if _has_open_span("\n".join(buf)) or not _is_continuation_boundary(lines[i]):
+                    buf.append(lines[i])
+                    i += 1
+                else:
+                    break
             units.append(" ".join(buf))
             continue
 
-        # 段落: 継続行（空行/新ブロック開始/インデント4以上まで）を1単位にまとめる。
+        # 段落: 継続行（空行/新ブロック開始まで、字下げ幅は境界判定に使わない）を1単位にまとめる。
+        # ただし span 構文が閉じられていない間は境界判定を無視して吸収し続ける（欠陥1派生の
+        # span 分断対策）。
         buf = [line]
         i += 1
-        while i < n and lines[i].strip() != "" and not _is_block_start(lines[i]):
-            buf.append(lines[i])
-            i += 1
+        while i < n and lines[i].strip() != "":
+            if _has_open_span("\n".join(buf)) or not _is_continuation_boundary(lines[i]):
+                buf.append(lines[i])
+                i += 1
+            else:
+                break
         units.append(" ".join(buf))
-    return units
+    return [_strip_inline_spans(u) for u in units]
 
 
 def _is_negated(unit: str, start_idx: int, end_idx: int) -> bool:

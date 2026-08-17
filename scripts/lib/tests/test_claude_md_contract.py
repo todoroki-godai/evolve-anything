@@ -355,6 +355,197 @@ def test_backtick_fence_and_html_comment_still_flag_all_regression(tmp_path: Pat
     _assert_all_invariants_and_sections_missing(root)
 
 
+# --- 4巡目: 外部 cold review + オーケストレーター実測で見つかった欠陥1-3 -------------
+#
+# 3巡目までの肯定リストはブロック級（行がどのブロックに属するか）でしか働かず、以下3件が
+# 残存していた（2026-08-17 外部レビュー + オーケストレーター実測。各テストは修正前に
+# 再現確認を行った上で追加している）。
+
+
+def test_inline_html_comment_midline_flags_all(tmp_path: Path) -> None:
+    """欠陥1（最優先・素通り）: 地の文の行の途中（span 級）に置いた `<!-- ... -->` は、
+    行頭 `<!--` 判定（ブロック級）では捕捉できない。`_strip_inline_spans` による span 級の
+    除去が必要（修正前は欠落0件で完全に素通りしていたことを実測確認済み）。
+    """
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。 <!-- "
+        + _dump_all_tokens_and_headings()
+        + " -->\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_list_item_indented_continuation_stays_green(tmp_path: Path) -> None:
+    """欠陥2（誤検出・false red）: リスト項目の内側で字下げ4以上の継続行は、CommonMark の
+    レイジー継続では正当な本文であり、新規インデントコードブロックとして除外してはならない。
+    修正前は字下げ幅を継続境界の判定に使っていたため、この形の本文が実際には満たしている
+    契約まで「欠落」と誤検出していたことを実測確認済み。
+    """
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n"
+        "- 契約:\n"
+        "    人間の y/n 無人適用しない\n\n"
+        "ダミー段落。\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    findings = claude_md_contract.check_claude_md_contracts(root)
+    names = {f["invariant"] for f in findings}
+    assert "human_approval" not in names, findings
+
+
+def test_quoted_table_scattered_tokens_flags_invariant(tmp_path: Path) -> None:
+    """欠陥3（外部レビュー指摘・再現確認済み）: 引用ブロック内の連続する `>` 行を無条件に
+    1単位へ結合すると、引用の中に置かれた表（本来は1行=1単位）の別々の行に語を分散させる
+    B5 攻撃が引用の中でだけ無効化される。修正前は
+    `store_write_barrier_core` が誤って「満たされた」扱いになることを実測確認済み。
+    """
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n"
+        "> | `store_write` write barrier A | 全ストア書込の単一ゲート | x |\n"
+        "> | `store_write` write barrier B | 既定 reject | x |\n"
+        "> | `store_write` write barrier C | fail-open | x |\n"
+        "> | `store_write` write barrier D | store_write_raw | x |\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    findings = claude_md_contract.check_claude_md_contracts(root)
+    names = {f["invariant"] for f in findings}
+    assert "store_write_barrier_core" in names, findings
+
+
+# --- 4巡目: ワーカー自身が追加で発見した span 級の回避手段（2件・完了条件5） -----------
+#
+# 探索した入力クラス: (a) HTML コメント/タグ/リンク/画像/コードスパンの単純単体系（team-lead
+# 提示の4種、上記欠陥1のテストと既存 B2/B3/B9 でカバー） (b) コードスパンと他 span 構文の
+# 入れ子・相互作用（codespan の保護と comment 除去の優先順位） (c) 画像構文（本 repo は未使用
+# だが Markdown 一般には存在する隠し場所） (d) 段落継続をまたぐ span 構文（1つの inline
+# コメントが複数の物理行に分割される場合） (e) codespan 内にリンク URL を隠す入れ子。
+# (b)(c) は実際に緑のまま残る回避（バイパス）だったため修正した。(d)(e) は最初から赤だった
+# （念のため探索した結果を記録として残す）。
+
+
+def test_backtick_wrapped_html_comment_flags_all(tmp_path: Path) -> None:
+    """自己発見その1（探索クラス b）: `` `<!-- 旧仕様の全語 -->` `` のようにバッククォートで
+    HTML コメントを包むと、コードスパン保護が誤ってコメント除去をすり抜けさせていた
+    （修正前は欠落0件でバイパス成立を実測確認済み）。コードスパンの中身へ再帰的に span 級
+    除去を適用することで修正した。
+    """
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。 `<!-- "
+        + _dump_all_tokens_and_headings()
+        + " -->`\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_image_alt_text_flags_all(tmp_path: Path) -> None:
+    """自己発見その2（探索クラス c）: `![alt](url)` の alt テキストは、リンクの URL 側だけを
+    落とす既存ロジックでは対象にならず素通りしていた（修正前は欠落0件を実測確認済み）。本 repo
+    の CLAUDE.md は画像構文を一切使わないため、alt ごと丸ごと落としても baseline リスクはない。
+    """
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。 !["
+        + _dump_all_tokens_and_headings()
+        + "](x.png)\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_multiline_inline_comment_across_paragraph_continuation_flags_all(tmp_path: Path) -> None:
+    """探索クラス d（最初から赤・念のため記録）: 1つの行内コメントが段落の継続行をまたいで
+    複数の物理行に分割される場合でも、単位の組み立て（継続行の結合）が span 級除去より先に
+    走るため正しく除外される。
+    """
+    root = tmp_path / "repo"
+    lines = [tok for inv in claude_md_contract.REQUIRED_INVARIANTS for tok in inv.all_of] + list(
+        claude_md_contract.MUST_STAY_SECTIONS
+    )
+    text = "# CLAUDE.md\n\n契約はすべて廃止しました。 <!-- " + "\n".join(lines) + " -->\n"
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+def test_backtick_wrapped_link_url_flags_all(tmp_path: Path) -> None:
+    """探索クラス e（最初から赤・念のため記録）: コードスパンの中にリンク構文で語を並べても、
+    コードスパン内容への再帰適用がリンクの URL 側除去も及ぼすため素通りしない。
+    """
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n契約はすべて廃止しました。 `[旧仕様]("
+        + _dump_all_tokens_and_headings()
+        + ")`\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    _assert_all_invariants_and_sections_missing(root)
+
+
+# --- 4巡目: 陽性対照の拡充（誤検知較正・完了条件4） --------------------------------
+
+
+def test_positive_control_unmodified_stays_green() -> None:
+    """陽性対照: 無改変（既存 test_real_repo_claude_md_has_no_missing_contracts と同義だが、
+    4巡目の陽性対照セットとして明示的に置く）。"""
+    assert claude_md_contract.check_claude_md_contracts(_REPO_ROOT) == []
+
+
+def test_positive_control_trailing_whitespace_stays_green(tmp_path: Path) -> None:
+    """陽性対照: 各行末に半角スペースを付与しても（圧縮 PR の diff ノイズとして典型）緑のまま。"""
+    root = tmp_path / "repo"
+    text = "\n".join(line + "  " for line in _full_claude_md_text().split("\n"))
+    _write(root / "CLAUDE.md", text)
+    assert claude_md_contract.check_claude_md_contracts(root) == []
+    assert claude_md_contract.check_must_stay_sections(root) == []
+
+
+def test_positive_control_crlf_stays_green(tmp_path: Path) -> None:
+    """陽性対照: 改行コードが CRLF（Windows 由来の圧縮 PR で起こりうる）でも緑のまま。"""
+    root = tmp_path / "repo"
+    text = _full_claude_md_text().replace("\n", "\r\n")
+    _write(root / "CLAUDE.md", text)
+    assert claude_md_contract.check_claude_md_contracts(root) == []
+    assert claude_md_contract.check_must_stay_sections(root) == []
+
+
+def test_positive_control_table_row_continuation_stays_green(tmp_path: Path) -> None:
+    """陽性対照: 表の直後にさらに別の表行を追記しても、既存行の判定を巻き込まない
+    （表の各行が独立した単位として正しく扱われ続けること）。"""
+    root = tmp_path / "repo"
+    text = _full_claude_md_text().replace(
+        "| `runtime_telemetry` | usage/sessions/errors の hook record に runtime を較正追加。**Codex hook 配線は保留** | `hooks/common.py` |",
+        "| `runtime_telemetry` | usage/sessions/errors の hook record に runtime を較正追加。**Codex hook 配線は保留** | `hooks/common.py` |\n"
+        "| `dummy_extra_row` | 無関係な追加行 | `dummy.py` |",
+    )
+    _write(root / "CLAUDE.md", text)
+    assert claude_md_contract.check_claude_md_contracts(root) == []
+
+
+def test_positive_control_legitimate_multiline_quote_stays_green(tmp_path: Path) -> None:
+    """陽性対照: 引用ブロック内の正当な地の文（表ではなく複数行にまたがる説明文。実 CLAUDE.md
+    の Agent contract ヘッダと同型）が、欠陥3 の修正（de-quote 後の再帰分割）によって不当に
+    分断されないこと。"""
+    root = tmp_path / "repo"
+    text = (
+        "# CLAUDE.md\n\n"
+        "> **Agent contract:** 作業開始前に\n"
+        "> [`docs/agent-contract/policy.md`](docs/agent-contract/policy.md) を全文読むこと。\n"
+        "\n"
+        "## 目指すユーザー体験（全機能の判断基準）\n\n"
+        "**到達状況の数値をこのファイルに書かない**。\n\n"
+        "## Superpowers 共存\n\nメタ操作時はスキルを発火させない。\n\n"
+        "## Compaction Instructions\n\n1. 完了済みタスクと未完了タスクの区別\n"
+    )
+    _write(root / "CLAUDE.md", text)
+    findings = claude_md_contract.check_must_stay_sections(root)
+    assert findings == [], findings
+
+
 # --- C系: 守衛そのものを殺す ------------------------------------------------------
 
 
