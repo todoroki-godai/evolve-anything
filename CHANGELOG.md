@@ -328,6 +328,19 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(daily): SessionStart の改善案提示に判断材料が無く、意味のある y/n を組み立てられなかった不具合を修正（#498）** —
+  `daily.proposal_digest._slim_group` に `reason`（判定理由）を配線し、`build_proposal_prompt` に
+  「何をしている時に（`prev_action`）・なぜ拾われたか（`reason`）・何回起きたか（`count`）」を判断材料と
+  して追加した。`llm_judge`/`rephrase` チャネルは representative が生の発話断片のみで、
+  `prev_action`/`reason` がどちらも無いと説明を組み立てられないため、その場合は y/n を強行せず保留にし、
+  除外件数を `excluded_context_missing_by_pj`（digest）→ systemMessage/additionalContext に必ず
+  surface する（silence != evaluated）。あわせて `evolve-reflect --promote-weak` の「はい」が記録のみで
+  反映済みではないことを明示し、#475 で裁定済みの「共通ルール/PJルール/いまは反映しない/いいえ」の
+  反映先つき4択を素の y/n に代えて提示するよう変更した（draft_line 起草・ファイル追記の実手順は
+  `skills/evolve/references/correction-review.md` を再発明せず絶対パスで参照）。channel 名や類似度の
+  数値等の内部ジャーゴンは出さない。store / observability section / advisory adapter / weak_signal
+  channel の新設なし（#379 非抵触）。TDD + 6方向の mutation test（要素削除・意味反転・検査無効化・
+  配線除去・フラグ入替・参照無効化）で全て赤になることを確認。
 - **fix(weak_signals): rephrase チャネルが中身のない相槌の反復を「言い直し」として誤検出していた不具合を修正（#499）** —
   実コーパス（`weak_signals.jsonl` rephrase 190件）を実測すると 142件（74.7%）が正規化後（句読点・空白の
   差を吸収）完全一致で、朝の y/n に出た6件は全件「続けて」「お願い」「推奨で」のような1-2語の反復

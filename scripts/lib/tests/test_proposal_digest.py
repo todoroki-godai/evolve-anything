@@ -115,6 +115,62 @@ def test_single_pj_group_is_slimmed(tmp_path: Path):
     assert "git diff" in g["representative"]
     assert "idiom" in g
     assert "confirmable_idiom" in g
+    # #498 要件1: reason（判定理由）も slim group に配線される。
+    assert g["reason"] == "r"
+
+
+def _sig_no_context(text: str, line_no: int, pj_slug: str, session_id: str = "s1") -> WeakSignal:
+    """#498 要件4: prev_action/reason のどちらも持たない llm_judge signal（説明不能な形）。"""
+    prov = {"source_path": f"/{pj_slug}.jsonl", "line_no": line_no, "text": text}
+    return WeakSignal(
+        channel="llm_judge",
+        provenance=prov,
+        detected_at=datetime.now(timezone.utc).isoformat(),
+        session_id=session_id,
+        pj_slug=pj_slug,
+    )
+
+
+def test_group_without_prev_action_or_reason_is_held_back(tmp_path: Path):
+    """#498 要件4: prev_action も reason も無い llm_judge group は y/n を強行せず保留にする。
+    黙って減らさず excluded_context_missing_by_pj に件数を surface する。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig_no_context("推奨で", 1, "pj-a")], path=ws)
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    assert out["per_pj"] == {}
+    assert out["excluded_context_missing_by_pj"] == {"pj-a": 1}
+
+
+def test_group_with_reason_but_no_prev_action_is_kept(tmp_path: Path):
+    """reason だけでも説明材料としては足りる（prev_action と reason は or 条件）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals([_sig("推奨でお願いします", 1, "pj-a")], path=ws)  # _sig は reason="r" を設定
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    assert len(out["per_pj"]["pj-a"]) == 1
+    assert out["excluded_context_missing_by_pj"] == {}
+
+
+def test_permission_deny_group_without_prev_action_or_reason_is_kept(tmp_path: Path):
+    """permission_deny は signal_text 自体が拒否コマンドを合成済みで、prev_action/reason
+    が無くても常に説明可能とみなす（llm_judge/rephrase とは異なる扱い・#498 要件4）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    prov = {
+        "source_path": "/pj-a.jsonl", "line_no": 1,
+        "tool_name": "Bash", "tool_input_summary": "rm -rf /",
+    }
+    sig = WeakSignal(
+        channel="permission_deny", provenance=prov,
+        detected_at=datetime.now(timezone.utc).isoformat(), session_id="s1", pj_slug="pj-a",
+    )
+    append_signals([sig], path=ws)
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    assert len(out["per_pj"]["pj-a"]) == 1
+    assert out["excluded_context_missing_by_pj"] == {}
 
 
 def test_digest_does_not_truncate_per_pj_groups(tmp_path: Path):
@@ -731,6 +787,87 @@ def test_build_proposal_prompt_contains_representative_and_commands():
     assert "bin/evolve-reflect --reject-weak k1,k2 --pj pj-a" in msg
 
 
+def test_build_proposal_prompt_offers_four_way_destination_choice():
+    """#498 要件5（#475 §4 の反映先つき4択を戻す）: 素の はい/いいえ ではなく、
+    共通ルール/PJルール/いまは反映しない/いいえ の4択を提示する。
+    """
+    groups = [_group(["k1"], rep="rep")]
+    msg = pd.build_proposal_prompt(groups, "pj-a")
+    assert "共通ルールに書く" in msg
+    assert "このPJのルールに書く" in msg
+    assert "いまは反映しない" in msg
+    assert "いいえ" in msg
+    assert "はい: " not in msg  # 旧・素の y/n 表記は出さない
+
+
+def test_build_proposal_prompt_does_not_overpromise_rule_reflection():
+    """#498 要件3: 「はい」で共通ルールを選んでも、この時点ではまだ反映されていないことを
+    明示する（promote は記録のみで反映先ファイルへの書込みは別工程・promote.py の
+    reflect_status="promoted" と整合）。
+    """
+    groups = [_group(["k1"], rep="rep")]
+    msg = pd.build_proposal_prompt(groups, "pj-a")
+    assert "まだルール文書には反映されていません" in msg
+    assert "記録のみ・ルールには反映されません" in msg  # 「いまは反映しない」選択時の説明
+
+
+def test_build_proposal_prompt_references_established_review_protocol():
+    """#498 要件5: draft_line 起草・ファイル追記の手順は再発明せず、既存の
+    「反映先つき4択」手順（correction-review.md）を絶対パスで参照する。
+    """
+    groups = [_group(["k1"], rep="rep")]
+    msg = pd.build_proposal_prompt(
+        groups, "pj-a", reflect_cmd="/abs/plugin/bin/evolve-reflect",
+    )
+    assert "/abs/plugin/skills/evolve/references/correction-review.md" in msg
+    assert "反映先つき4択" in msg
+
+
+def test_build_proposal_prompt_includes_prev_action_reason_and_count():
+    """#498 要件1: 「何をしている時に」「なぜ拾われたか」「何回起きたか」が読める。"""
+    g = _group(["k1", "k2"], rep="rep")
+    g["prev_action"] = "Edit foo.py"
+    g["reason"] = "正しい値を後置で言い直している"
+    g["count"] = 2
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "Edit foo.py" in msg
+    assert "正しい値を後置で言い直している" in msg
+    assert "2回検知" in msg
+
+
+def test_build_proposal_prompt_recorded_content_matches_correction_message_format():
+    """#498 要件5「反映されるちょうどの1行」: 記録される内容のプレビューは
+    ``correction_semantic.promote._correction_message`` と同じ text（reason）形式。
+    """
+    from correction_semantic.promote import _build_correction_record
+
+    g = _group(["k1"], rep="評価前にテストを書いて")
+    g["reason"] = "順序が逆になっている"
+    msg = pd.build_proposal_prompt([g], "pj-a")
+
+    # 実際に promote 時に corrections.jsonl へ書かれる message と完全一致することを検証する
+    # （自作の要約でなく実際の記録内容そのもの）。
+    rec = {
+        "provenance": {"text": "評価前にテストを書いて", "reason": "順序が逆になっている"},
+    }
+    expected_message = _build_correction_record(rec, "/pj-a")["message"]
+    assert f"記録される内容: 「{expected_message}」" in msg
+
+
+def test_build_proposal_prompt_does_not_leak_channel_jargon():
+    """#498 要件2: group の内部 channel 値（llm_judge 等のジャーゴン）をそのまま出さない
+    （group には channel="llm_judge" が乗っているが、プレビュー生成はそれを読まない）。
+    """
+    g = _group(["k1"], rep="rep")
+    g["prev_action"] = "Edit foo.py"
+    g["reason"] = "正しい値を後置で言い直している"
+    assert g["channel"] == "llm_judge"  # 前提: group には channel 値が乗っている
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "llm_judge" not in msg
+    assert "rephrase" not in msg
+    assert "permission_deny" not in msg
+
+
 def test_build_proposal_prompt_honors_absolute_reflect_cmd():
     """提示先は他 PJ の cwd なので、呼び出し元が渡す絶対パスを埋め込むこと。
 
@@ -952,6 +1089,20 @@ def test_build_proposal_systemmessage_silent_when_no_machinery_excluded():
     groups = [_group(["k1"], rep="rep1")]
     msg = pd.build_proposal_systemmessage(groups, excluded_machinery=0)
     assert "machinery" not in msg
+
+
+def test_build_proposal_systemmessage_appends_context_missing_note_when_excluded():
+    """#498 要件4: 保留にした件数を systemMessage にも透明化する（silence != evaluated）。"""
+    groups = [_group(["k1"], rep="rep1")]
+    msg = pd.build_proposal_systemmessage(groups, excluded_context_missing=2)
+    assert "保留" in msg
+    assert "2" in msg
+
+
+def test_build_proposal_systemmessage_silent_when_no_context_missing_excluded():
+    groups = [_group(["k1"], rep="rep1")]
+    msg = pd.build_proposal_systemmessage(groups, excluded_context_missing=0)
+    assert "保留" not in msg
 
 
 def test_build_proposal_systemmessage_lists_all_representatives_for_merged_group():

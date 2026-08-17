@@ -534,20 +534,37 @@ def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | Non
             if isinstance(entry, dict):
                 excluded_machinery = entry.get("total") or 0
 
+        # #498 要件4: 説明材料が無く保留した件数（silence != evaluated・machinery と同じ流儀）。
+        excluded_context_missing = 0
+        context_missing_by_pj = (
+            proposals.get("excluded_context_missing_by_pj") if isinstance(proposals, dict) else None
+        )
+        if isinstance(context_missing_by_pj, dict):
+            excluded_context_missing = context_missing_by_pj.get(slug) or 0
+
         if not groups:
-            if excluded_machinery <= 0:
+            if excluded_machinery <= 0 and excluded_context_missing <= 0:
                 return None  # 提案も除外もゼロ → 完全な無音（従来どおり）
-            # 提案は無いが machinery 除外は非ゼロ（silence != evaluated）。通常の「改善案が
+            # 提案は無いが除外は非ゼロ（silence != evaluated）。通常の「改善案が
             # あります」文面は使わず、提案が無い事実を明示する専用の短い1行だけを返す。
             # hookSpecificOutput は付けない（AskUserQuestion で確認すべき提案が無いため）。
-            notice = (
-                "[evolve-anything] 今日の新規提案はありません（machinery 除外 "
-                f"{excluded_machinery} 件 — 委譲メッセージ等の harness 注入のため"
-                "候補に含まれていません）。"
-            )
+            reasons = []
+            if excluded_machinery > 0:
+                reasons.append(
+                    f"machinery 除外 {excluded_machinery} 件 — 委譲メッセージ等の harness "
+                    "注入のため候補に含まれていません"
+                )
+            if excluded_context_missing > 0:
+                reasons.append(f"説明材料が無く保留 {excluded_context_missing} 件")
+            notice = f"[evolve-anything] 今日の新規提案はありません（{'・'.join(reasons)}）。"
+            digest_parts = []
+            if excluded_machinery > 0:
+                digest_parts.append(f"machinery除外{excluded_machinery}件")
+            if excluded_context_missing > 0:
+                digest_parts.append(f"説明材料不足{excluded_context_missing}件")
             return {
                 "systemMessage": notice,
-                "digest": f"machinery除外{excluded_machinery}件",
+                "digest": "・".join(digest_parts),
             }
         # 回答コマンドは**絶対パス**で埋め込む。提示先は他 PJ の cwd であり、相対
         # `bin/evolve-reflect` は "No such file" になる（pitfall_skill_md_plugin_root と同型）。
@@ -556,7 +573,8 @@ def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | Non
             groups, slug, reflect_cmd=reflect_cmd, project_paths=project_paths,
         )
         system_message = _proposal_digest.build_proposal_systemmessage(
-            groups, excluded_machinery=excluded_machinery, pj_slug=slug,
+            groups, excluded_machinery=excluded_machinery,
+            excluded_context_missing=excluded_context_missing, pj_slug=slug,
         )
         # hookEventName は ADR-038 のスキーマ必須項目（subagent_observe.py と同型）。
         # 省略すると additionalContext が解釈されず機能が無言で死ぬ。
