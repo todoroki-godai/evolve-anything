@@ -40,6 +40,9 @@ SPEC_MD_BUDGET = FileBudget(must_bytes=35 * 1024, healthy_bytes=20 * 1024)
 # CLAUDE.md: #319 で新規に決めた暫定値。CLAUDE.md は毎セッション自動注入されるため実コストは
 # per-session token。実測 2026-08-04 時点で 56,223 bytes（healthy 超過・MUST 未満）— いきなり
 # ⚠ にして恒久ノイズにせず、まず ℹ で気づける値を選んだ。実測を重ねて見直してよい。
+# TODO(#415 圧縮 PR 完了後): 60KB は圧縮前サイズで較正した値。CLAUDE.md 圧縮 PR がマージされたら
+# must=40*1024 / healthy=30*1024 へ下げる（本 PR は契約 keyset 守衛の追加のみで、これを下げると
+# 現行 42KB が must 超過になり赤くなるため据え置く）。
 CLAUDE_MD_BUDGET = FileBudget(must_bytes=60 * 1024, healthy_bytes=40 * 1024)
 
 # spec/**.md: 単一 md ファイルの一般則（spec-keeper SKILL.md line 36 が出典、同じく変えない）。

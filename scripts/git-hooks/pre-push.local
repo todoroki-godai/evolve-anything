@@ -22,6 +22,9 @@ if [ -z "${_root}" ] || [ ! -x "${_gate}" ]; then
   exit 0
 fi
 
+# この pre-push は非ブロッキング（赤でも push を止めない）。CLAUDE.md 契約守衛
+# （claude_md_contract.py、Layer2 に組込済み・#415/#492）を含め blocking 判定を担うのは
+# CI の portable pytest suite（.github/workflows/ci.yml）側。ここは早期警告のみ。
 echo "[pre-push] dogfood-gate light を実行中（Layer1a+2+3, 約十数秒）..." >&2
 python3 "${_gate}" --layer light >/tmp/rl-prepush-gate.log 2>&1
 _rc=$?

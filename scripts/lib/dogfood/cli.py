@@ -18,6 +18,11 @@ from typing import Any, Dict, List
 
 from . import invariants, layer1, layer3
 
+# claude_md_contract は scripts/lib 直下（dogfood パッケージの外）に置く（doc_budget.py と
+# 同じ配置慣習）。sys.path への scripts/lib 追加は root conftest.py / bin/evolve-dogfood-gate
+# が担うため、ここでは通常の絶対 import でよい（#415）。
+import claude_md_contract
+
 
 def _repo_root() -> Path:
     """このパッケージから plugin root を解決する（scripts/lib/dogfood → root）。"""
@@ -36,7 +41,12 @@ def _run_layer2(repo_root: Path, out_dir: Path, result_path: Path | None) -> Dic
     if not result_path or not Path(result_path).exists():
         return {"error": "result JSON を取得できず Layer 2 を実行不能", "checks": []}
     result = json.loads(Path(result_path).read_text(encoding="utf-8"))
-    return {"result_path": str(result_path), "checks": invariants.run_all(result)}
+    checks = invariants.run_all(result)
+    # CLAUDE.md 契約不変条件の検査（#415）。result JSON でなく repo_root の CLAUDE.md 本文を
+    # 直接検査する点が他 invariants と異なるが、shape は {"check", "failures"} で揃えてあり
+    # blocking 扱い（欠落があれば exit code が赤くなる）。
+    checks.append(claude_md_contract.layer2_check(repo_root))
+    return {"result_path": str(result_path), "checks": checks}
 
 
 def _layer1_has_red(l1: Dict[str, Any]) -> tuple[bool, bool]:

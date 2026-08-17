@@ -27,6 +27,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -35,6 +37,13 @@ jobs:
         run: python -m pip install -e ".[core]"
       - name: Check manifests, JSON, skill frontmatter, and CLI startup
         run: python scripts/check_distribution.py
+      # advisory のみ・判定しない・fail しない（#415 脅威モデル訂正を受けた素朴な仕組み）。
+      # continue-on-error が無いと `if: always()` は「実行条件」でしかなく、advisory 自身が
+      # 例外終了すると distribution job ごと赤くなる（2026-08-17 外部レビュー指摘）。
+      - name: CLAUDE.md diff advisory (non-blocking)
+        if: always()
+        continue-on-error: true
+        run: python scripts/lib/claude_md_diff_advisory.py origin/main
 
   pytest:
     name: Portable pytest (Python ${{ matrix.python-version }})
@@ -74,5 +83,7 @@ jobs:
           scripts/lib/tests/test_glossary_drift.py
           scripts/lib/tests/test_shrink_freeze.py
           scripts/lib/tests/test_proposal_lane_coverage.py
+          scripts/lib/tests/test_claude_md_contract.py
+          scripts/lib/tests/test_claude_md_diff_advisory.py
           scripts/tests/test_dependency_metadata.py
           scripts/tests/test_readme_drift.py
