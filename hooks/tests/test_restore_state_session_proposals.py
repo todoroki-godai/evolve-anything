@@ -160,6 +160,42 @@ def test_build_fires_machinery_only_notice_when_groups_empty(tmp_path, monkeypat
     assert "hookSpecificOutput" not in output
 
 
+def test_build_surfaces_excluded_context_missing_for_this_pj(tmp_path, monkeypatch):
+    """#498 要件4: digest の excluded_context_missing_by_pj[slug] を systemMessage に透明化する。"""
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {
+        "per_pj": {slug: [_group(["k1"])]},
+        "global": [],
+        "excluded_context_missing_by_pj": {slug: 2},
+    })
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    assert "保留" in output["systemMessage"]
+    assert "2" in output["systemMessage"]
+
+
+def test_build_fires_context_missing_only_notice_when_groups_empty(tmp_path, monkeypatch):
+    """#498 要件4: 提案候補が全件説明不能で groups が空でも、除外件数が非ゼロなら通知を返す
+    （silence != evaluated・machinery-only 通知と同じ流儀）。
+    """
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {
+        "per_pj": {},
+        "global": [],
+        "excluded_context_missing_by_pj": {slug: 3},
+    })
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    assert "保留" in output["systemMessage"]
+    assert "3" in output["systemMessage"]
+    assert "改善案があります" not in output["systemMessage"]
+    assert "hookSpecificOutput" not in output
+
+
 def test_build_returns_none_when_groups_and_machinery_both_empty(tmp_path, monkeypatch):
     """codex 2巡目 [Must]1: groups 空 かつ machinery 除外 0 なら従来どおり完全な無音（None）。"""
     source = _install_env(tmp_path, monkeypatch)

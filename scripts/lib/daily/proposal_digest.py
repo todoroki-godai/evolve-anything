@@ -44,6 +44,13 @@ MAX_GLOBAL_COMPONENT_GROUPS = 5
 
 _EVIDENCE_TEXT_TRUNC = 200
 _PREV_ACTION_TRUNC = 120
+_REASON_TRUNC = 200
+
+# #498: llm_judge/rephrase は representative が生の発話断片のみ（review_channels.signal_text
+# が user_only_text をそのまま返す・channel 別の合成をしない）。permission_deny/verbosity は
+# signal_text 自体が拒否コマンド・判定理由を合成済み（review_channels.py）で representative
+# だけで説明になる。前者だけ prev_action/reason の有無で説明可否を判定する。
+_BARE_UTTERANCE_CHANNELS = frozenset({"llm_judge", "rephrase"})
 
 
 def _truncate(text: Optional[str], limit: int) -> str:
@@ -141,9 +148,38 @@ def _slim_group(
         "count": count,
         "evidence_text": _truncate(evidence.get("text", ""), _EVIDENCE_TEXT_TRUNC),
         "prev_action": _truncate(evidence.get("prev_action", ""), _PREV_ACTION_TRUNC),
+        # #498: 何を根拠に改善候補と判断したか（llm_judge の Haiku 判定理由。自然文・
+        # channel名やスコア値は含まない — batch.py/prompt.py が生成する自由文）。
+        "reason": _truncate(evidence.get("reason", ""), _REASON_TRUNC),
         "cross_pj_confirmed": cross_pj_confirmed,
         "signal_meta_by_key": signal_meta_by_key,
     }
+
+
+def _group_has_explanation(g: Dict[str, Any]) -> bool:
+    """群を「何をしている時に・なぜ拾われたか」まで説明できるかを判定する（#498 要件4）。
+
+    ``llm_judge``/``rephrase`` は representative が生の発話断片のみなので、``prev_action``
+    または ``reason`` のどちらも無いと説明できない（保留にし、除外件数は
+    ``excluded_context_missing_by_pj`` に surface する — silence != evaluated）。
+    ``permission_deny``/``verbosity`` は representative 自体が拒否コマンド・判定理由を
+    合成済み（``review_channels.signal_text``）なので常に説明可能とみなす。
+    """
+    if g.get("channel") not in _BARE_UTTERANCE_CHANNELS:
+        return True
+    return bool((g.get("prev_action") or "").strip()) or bool((g.get("reason") or "").strip())
+
+
+def _recorded_message_preview(g: Dict[str, Any]) -> str:
+    """corrections.jsonl に記録される message 本文を ``promote._correction_message`` と
+    同一規則で再現する（text+reason があれば ``text（reason）``。新しい要約は作らない・
+    #498 要件5「反映されるちょうどの1行」）。
+    """
+    text = g.get("evidence_text") or g.get("representative") or ""
+    reason = g.get("reason") or ""
+    if text and reason:
+        return f"{text}（{reason}）"
+    return text or reason
 
 
 def _group_norm_texts(g: Dict[str, Any]) -> List[str]:
@@ -308,7 +344,7 @@ def build_proposal_digest(
 
     Returns: {"generated_at": iso, "per_pj": {slug: [group, ...]}, "global": [group, ...],
               "project_paths": {slug: path}, "excluded_machinery_by_pj": {slug: {...}},
-              "freshness_join_stats": {...}}
+              "excluded_context_missing_by_pj": {slug: int}, "freshness_join_stats": {...}}
 
     1 PJ の digest 生成が例外を投げても他 PJ の digest 生成は継続する（fail-open）。
     ``data_dir`` 未指定時は各ストアの本番既定パス（DATA_DIR 環境変数解決）を使う。
@@ -343,6 +379,10 @@ def build_proposal_digest(
     # （{slug: ...} の辞書）で digest 側にも集約する。捨てると朝の digest 経路だけ
     # 候補数が減るのに除外件数が利用者に見えなくなる。
     excluded_machinery_by_pj: Dict[str, Dict[str, Any]] = {}
+    # #498 要件4: 説明文を組み立てられない group（llm_judge/rephrase で prev_action/reason
+    # がどちらも無い）は y/n を強行せず保留にする。黙って減らさず件数を surface する
+    # （excluded_machinery_by_pj と同じ {slug: count} の流儀）。
+    excluded_context_missing_by_pj: Dict[str, int] = {}
     for slug in _pj_slugs(queue_entries):
         try:
             # ADR-054 PR2-b: 順位と打ち切りを分離するため、digest 生成は必ず max_groups=None
@@ -370,8 +410,12 @@ def build_proposal_digest(
             )
             for g in (review.get("groups") or [])
         ]
-        if groups:
-            per_pj[slug] = groups
+        explainable_groups = [g for g in groups if _group_has_explanation(g)]
+        context_missing = len(groups) - len(explainable_groups)
+        if context_missing:
+            excluded_context_missing_by_pj[slug] = context_missing
+        if explainable_groups:
+            per_pj[slug] = explainable_groups
         machinery_total = review.get("excluded_machinery_total") or 0
         if machinery_total:
             excluded_machinery_by_pj[slug] = {
@@ -391,6 +435,9 @@ def build_proposal_digest(
         # codex [Must]1（#443 PR2-a）: machinery 除外件数を slug 別に透明化する
         # （silence != evaluated）。0 件の slug はキーを持たない（他の {slug: ...} 辞書と同じ流儀）。
         "excluded_machinery_by_pj": excluded_machinery_by_pj,
+        # #498 要件4: 保留にした（説明不能な）group の件数を slug 別に透明化する
+        # （silence != evaluated）。0 件の slug はキーを持たない。
+        "excluded_context_missing_by_pj": excluded_context_missing_by_pj,
         # ADR-054 PR2-c: 発話時刻 join の失敗内訳（silence != evaluated）。
         # db_missing/duckdb_missing/query_error は 0/1（今回の digest 生成1回に対する
         # 全体障害）、key_mismatch は map 構築成功後の個別 signal_key 不一致件数、
@@ -522,6 +569,74 @@ def _context_suffix(g: Dict[str, Any], pj_slug: str) -> str:
     return "（" + " ・ ".join(parts) + "）"
 
 
+def _review_protocol_ref(reflect_cmd: str) -> str:
+    """反映先つき4択の詳細手順（#475 §4）への絶対パス参照を組み立てる。
+
+    ``reflect_cmd``（``.../bin/evolve-reflect``）からプラグインルートを逆算する（新しい
+    解決経路は作らない — pitfall: SKILL.md script は ``${CLAUDE_PLUGIN_ROOT}`` 起点で書く、
+    と同型）。逆算に失敗したら（テスト用の相対フォールバック値など）リポジトリ相対パスを返す。
+    """
+    try:
+        plugin_root = Path(reflect_cmd).resolve().parent.parent
+        candidate = plugin_root / "skills" / "evolve" / "references" / "correction-review.md"
+        return str(candidate)
+    except Exception:
+        return "skills/evolve/references/correction-review.md"
+
+
+def _material_lines(g: Dict[str, Any]) -> List[str]:
+    """#498 要件1: 「何をしている時に」「なぜ拾われたか」「何回起きたか」を判断材料として出す。
+
+    ``prev_action``/``reason``/``count`` を配線するだけで、新しい要約は作らない
+    （``build_review`` が既に持つ ``evidence`` フィールドをそのまま使う）。channel 名や
+    類似度の数値は出さない（#498 要件2・review_channels.py と同じジャーゴン禁止方針）。
+    """
+    lines: List[str] = []
+    preview = _recorded_message_preview(g)
+    if preview:
+        lines.append(f"  記録される内容: 「{preview}」")
+    detail_parts: List[str] = []
+    prev_action = g.get("prev_action") or ""
+    if prev_action:
+        detail_parts.append(f"直前の作業: {prev_action}")
+    count = g.get("count")
+    if isinstance(count, int) and count:
+        detail_parts.append(f"{count}回検知")
+    if detail_parts:
+        lines.append("  背景: " + "・".join(detail_parts))
+    return lines
+
+
+def _reflect_choice_lines(
+    q_reflect_cmd: str,
+    keys: str,
+    *,
+    promote_extra: str,
+    reject_pj_flag: str,
+    review_ref: str,
+) -> List[str]:
+    """#498 要件3/5・#475 §4: 反映先つき4択（共通ルール/PJルール/いまは反映しない/いいえ）を
+    はい/いいえの代わりに提示する。「はい」は記録することしか保証しない（＝反映済みではない）
+    ため、「共通ルールに書く」を選んでも実際にルール文書へ書くのはこのあと Claude 自身が行う
+    作業であることを明示する（過剰約束の禁止・#498 要件3）。
+    """
+    promote_cmd = f"{q_reflect_cmd} --promote-weak {keys}{promote_extra}"
+    reject_cmd = f"{q_reflect_cmd} --reject-weak {keys}{reject_pj_flag}"
+    return [
+        "  この指摘をどう扱いますか？（AskUserQuestion。Other に自由記述も可）",
+        "    1) 共通ルールに書く（全PJで効く・あとで1コマンドで取り消せます）",
+        "    2) このPJのルールに書く（このPJだけで効く・あとで1コマンドで取り消せます）",
+        "    3) いまは反映しない（記録のみ・AI の振る舞いは変わりません）",
+        "    4) いいえ（記録も反映もしません）",
+        f"  1/2 を選んだ場合: まず `{promote_cmd}` で記録する（この時点ではまだ"
+        "ルール文書には反映されていません）。次に書く文面を自分で起草し対象ファイルへ"
+        f"追記、`--apply` で反映を確認する。手順の詳細は {review_ref} の"
+        "「反映先つき4択」を参照",
+        f"  3 を選んだ場合: `{promote_cmd}`（記録のみ・ルールには反映されません）",
+        f"  4 を選んだ場合: `{reject_cmd}`",
+    ]
+
+
 def build_proposal_prompt(
     groups: List[Dict[str, Any]],
     pj_slug: str,
@@ -547,6 +662,10 @@ def build_proposal_prompt(
     project_path で昇格すると、昇格した correction が誤って現在 PJ の実績として記録される
     （project_paths が無い origin は ``--project-path`` を省略し、reflect 側の
     ``CLAUDE_PROJECT_DIR``/cwd フォールバックに委ねる）。
+
+    #498 要件5（#475 の反映先つき4択を戻す）: 素の「はい/いいえ」でなく共通ルール/PJルール/
+    いまは反映しない/いいえ の4択を提示する指示に変える。draft_line 起草・ファイル追記・
+    ``--apply`` は既存手順（``correction-review.md`` の「反映先つき4択」）に委ね再発明しない。
     """
     # #412 round2 [Must]C: 提示コマンドは実行ファイルパス・project_path・pj_slug・
     # signal_key を無 quoting で埋め込んでおり、空白を含む絶対パスで argparse が壊れ、
@@ -554,10 +673,12 @@ def build_proposal_prompt(
     # shlex.quote する（keys はカンマ区切りの1トークンとして shell に渡るため、
     # join 後の文字列をまるごと quote する）。
     q_reflect_cmd = shlex.quote(reflect_cmd)
+    review_ref = _review_protocol_ref(reflect_cmd)
     lines = [
         "[evolve-anything] 改善案があります。ユーザーの最初のメッセージへの応答を終えた"
-        "直後に、以下を AskUserQuestion で1件ずつ y/n 提示してください。ユーザーの依頼より"
-        "先に割り込まないこと。ユーザーが提示を断ったらその場では再提示しないこと。",
+        "直後に、以下を AskUserQuestion で1件ずつ確認してください（はい/いいえの二択ではなく"
+        "下記の4択）。ユーザーの依頼より先に割り込まないこと。ユーザーが提示を断ったら"
+        "その場では再提示しないこと。",
     ]
     for g in groups:
         # #412 round2 [Must]D-4: all_representatives（成分内の全 group の代表文）があれば
@@ -570,6 +691,8 @@ def build_proposal_prompt(
         else:
             rep = g.get("representative") or g.get("evidence_text") or ""
             lines.append(f"- 案: {rep}")
+        # #498 要件1: 何をしている時に・なぜ・何回、を判断材料として添える。
+        lines.extend(_material_lines(g))
         # ADR-054 PR2-d: 発話の実時刻・観測/confirmed cross-PJ を判断材料として添える。
         context = _context_suffix(g, pj_slug)
         if context:
@@ -581,19 +704,22 @@ def build_proposal_prompt(
                 q_origin_slug = shlex.quote(origin_slug)
                 origin_path = (project_paths or {}).get(origin_slug)
                 path_flag = f" --project-path {shlex.quote(origin_path)}" if origin_path else ""
-                lines.append(
-                    f"  はい({origin_slug}): {q_reflect_cmd} --promote-weak {keys}"
-                    f"{path_flag} --pj {q_origin_slug}"
-                )
-                lines.append(
-                    f"  いいえ({origin_slug}): {q_reflect_cmd} --reject-weak {keys}"
-                    f" --pj {q_origin_slug}"
-                )
+                lines.append(f"  対象PJ: {origin_slug}")
+                lines.extend(_reflect_choice_lines(
+                    q_reflect_cmd, keys,
+                    promote_extra=f"{path_flag} --pj {q_origin_slug}",
+                    reject_pj_flag=f" --pj {q_origin_slug}",
+                    review_ref=review_ref,
+                ))
         else:
             keys = shlex.quote(",".join(g.get("signal_keys") or []))
             q_pj_slug = shlex.quote(pj_slug)
-            lines.append(f"  はい: {q_reflect_cmd} --promote-weak {keys}")
-            lines.append(f"  いいえ: {q_reflect_cmd} --reject-weak {keys} --pj {q_pj_slug}")
+            lines.extend(_reflect_choice_lines(
+                q_reflect_cmd, keys,
+                promote_extra="",
+                reject_pj_flag=f" --pj {q_pj_slug}",
+                review_ref=review_ref,
+            ))
     return "\n".join(lines)
 
 
@@ -601,6 +727,7 @@ def build_proposal_systemmessage(
     groups: List[Dict[str, Any]],
     *,
     excluded_machinery: int = 0,
+    excluded_context_missing: int = 0,
     pj_slug: Optional[str] = None,
 ) -> str:
     """改善案の代表テキストを systemMessage（user 可視チャネル）本文として組み立てる（#412 [Must]1）。
@@ -617,6 +744,9 @@ def build_proposal_systemmessage(
     ``excluded_machinery``（codex [Must]1・#443 PR2-a）: この PJ の digest 生成時に machinery
     （委譲メッセージ等の harness 注入）を理由に候補から除外した件数。>0 のときだけ末尾に
     1行添える（silence != evaluated）。0 のときは従来どおりノイズを足さない。
+
+    ``excluded_context_missing``（#498 要件4）: 説明文を組み立てられず y/n を保留した件数。
+    >0 のときだけ末尾に1行添える（silence != evaluated）。0 のときはノイズを足さない。
 
     ``pj_slug``（ADR-054 PR2-d）: 渡すと先頭 group（``groups`` は呼び出し側で composite sort
     済みの前提＝最優先の1件）の発話の実時刻・cross-PJ 判断材料を末尾に添える。省略時
@@ -657,5 +787,10 @@ def build_proposal_systemmessage(
         base += (
             f" （machinery 除外 {excluded_machinery} 件は委譲メッセージ等の harness 注入のため"
             "候補に含まれていません・実際に確認可能な件数には含まれていません・#443）"
+        )
+    if excluded_context_missing > 0:
+        base += (
+            f" （説明材料が無く保留 {excluded_context_missing} 件は今回の確認対象に含まれて"
+            "いません・#498）"
         )
     return base
