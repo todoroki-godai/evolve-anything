@@ -42,6 +42,29 @@ LLM を使わない。正規表現も使わない（正規表現は書き手が�
 見落としやすい典型的な削除ミス」を早期に赤くするための補助であり、`claude_md_diff_advisory.py`
 （CLAUDE.md 変更時に契約語を含む差分行を CI ログへ出力する advisory・判定はしない）がその
 レビューを助ける。
+
+## 既知の検出漏れクラス（#415 keyset 完全化・2026-08-17 実測で確認・隠さず明記）
+
+必須語をすべて残したまま、**直後に矛盾する注記を書き足す**編集は検出できない（部分文字列は
+消えていないため）。実際に以下3件を real CLAUDE.md に適用し、いずれも `check_claude_md_contracts`
+が緑のままであることを実測で確認した:
+  - `verbosity_no_auto_apply`: 「auto-apply しない」の直後に「※ただし2026-09-01のロールアウトで
+    この制限は撤廃され、実際には auto-apply する」を追記
+  - `daily_runner_human_approval`: 「適用は対話で人間承認」の直後に「レガシー仕様。現行版は
+    無人で即時適用に変更済み」を追記
+  - `evolve_tier_cli_sync_default`: 「sync は既定 dry-run、`--apply` のみ書込」の直後に
+    「社内合意により現在は既定 apply に変更中」を追記
+
+これは「圧縮時のうっかり削除」を守る本検査の脅威モデルの外側（意図的な文意の書き換え）であり、
+対処は依然として人間レビュー（`claude_md_diff_advisory.py` の差分表示）に委ねる。
+
+一方で、行の**移設**（別セクションへの丸ごと移動）や**入替**（2行の swap）は本検査を回避しない
+（部分文字列が文書のどこかに残っている限り検出され続ける。実測: `noise_agent_type_kind` の
+行を `## Compaction Instructions` 直前へ移設・`subagent_noise_single_source` と
+`memory_capability_single_source` の行を丸ごと swap のいずれも緑のまま＝事実の消失が
+起きていないので正しい挙動）。全角ダッシュ・ゼロ幅スペース・巨大空白パディングによる
+トークン破壊はいずれも実測で正しく検出された（部分文字列一致は不可視文字の混入にも
+過剰検出側に倒れるため、意図しない文字化けの検知としても機能する）。
 """
 from __future__ import annotations
 
@@ -63,6 +86,7 @@ class Invariant:
 # 減らす/増やす場合はテスト側の golden も同時に更新すること。
 #
 # 18件（707f988e 初版）+ codex cold review [Must]4（棚卸し漏れ）で追加した5件 = 27件。
+# 27件 + #415 keyset 完全化（全文契約句の網羅洗い出し）で追加した33件 = 60件。
 # store_write_barrier / single_source_functions が2件・4件に分割されているのは、以前の
 # 単位共起（同一行・同一段落）要求バージョンの名残。本版は共起を要求しない（全文のどこかに
 # あればよい）ため分割している必然性は無いが、無用な差分を避けるためそのまま維持している。
@@ -133,6 +157,149 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     ),
     Invariant("cleanup_individual_approval", all_of=("候補提示→個別承認→実行", "のみに安全側限定")),
     Invariant("tier_sync_explicit_approval", all_of=("dry-run diff を全件提示", "明示承認後にのみ")),
+    # --- #415 keyset 完全化（全 CLAUDE.md 契約句の洗い出し・2026-08-17） -----------------
+    # 「## コンポーネント」表 123 行を1行ずつ削除し `check_claude_md_contracts` +
+    # `check_must_stay_sections` にかけた実測で「黙って消える + 契約語彙を含む」行が
+    # 表以外の節も含め 50 行見つかった。うち raw_history_gate の stale_allowlist fail
+    # （scripts/lib/raw_history_gate.py・降格経路なし。production tree AST テスト
+    # `scripts/lib/tests/test_raw_history_gate_production.py` が全呼出しを強制検査。
+    # `shrink_freeze.assert_no_new_keys` と同じ「テスト時契約」で downgrade env が
+    # 存在しない）と、evolve-tier sync の既定 dry-run をクイックスタートの bash コメント
+    # （L259/L260 相当）で再述している2行は、上の `tier_sync_explicit_approval` が
+    # 既に別の言い回しで hot に保持しているため省略した（詳細は HANDOVER-keyset.md）。
+    # 残り 33 行は下記に追加する。
+    Invariant(
+        "revert_scope_freeze",
+        all_of=("PR2/PR3 を凍結した", "採用実績が乏しく"),
+    ),
+    Invariant(
+        "contract_flag_preservation_rule",
+        all_of=("動作を縛る語は要約時も必ず残す",),
+    ),
+    Invariant(
+        "evolve_decisions_flat_result_path_scope",
+        all_of=("flat `result_path` は run 1件時のみ",),
+    ),
+    Invariant(
+        "triage_ledger_dry_run_no_write",
+        all_of=("SKIP 判断の状態管理", "dry-run 非書込"),
+    ),
+    Invariant(
+        "pitfall_enforcement_commit_block",
+        all_of=("danger 判定は commit をブロック",),
+    ),
+    Invariant(
+        "observability_contract_single_source",
+        all_of=("必ず surface すべき observability 行の単一ソース",),
+    ),
+    Invariant(
+        "outcome_attribution_dry_run_diff_surface",
+        all_of=("負の転移は末尾 rollback", "dry-run に before/after 順位差分を surface"),
+    ),
+    Invariant(
+        "correction_semantic_human_source_only_promotion",
+        all_of=("フェーズ昇格は human-source のみ駆動",),
+    ),
+    Invariant(
+        "daily_review_success_only_marking",
+        all_of=("promote 成功後のみ既読追記", "部分失敗は対象外"),
+    ),
+    Invariant(
+        "growth_report_single_source",
+        all_of=("閾値は growth_engine が単一ソース",),
+    ),
+    Invariant(
+        "correction_rate_full_coverage_only",
+        all_of=("カバレッジ100%確定週のみ表示",),
+    ),
+    Invariant(
+        "subagent_noise_single_source",
+        all_of=("noise_agent_type_kind", "単一ソース"),
+    ),
+    Invariant(
+        "verbosity_no_auto_apply",
+        all_of=("weak_signals へ emit", "auto-apply しない"),
+    ),
+    Invariant(
+        "cross_pj_priority_no_auto_approval",
+        all_of=("提示のみ・自動承認しない",),
+    ),
+    Invariant(
+        "plugin_self_auto_apply_downgrade",
+        all_of=("auto-apply は人間承認必須に降格",),
+    ),
+    Invariant(
+        "dogfood_gate_light_non_blocking",
+        all_of=("`--layer light` は pre-push で非ブロッキング自動実行",),
+    ),
+    Invariant(
+        "weak_signals_drain_pending_marker_intentional",
+        all_of=("pending marker の dry-run 書込は意図された設計（消さない）",),
+    ),
+    Invariant(
+        "reconcile_surfaced_drain_persist_false",
+        all_of=("phases の dry-run は `persist=False` で非書込",),
+    ),
+    Invariant(
+        "idiom_filter_manual_reject_option",
+        all_of=("idiom 単位拒否も可能",),
+    ),
+    Invariant(
+        "recall_validity_soft_downgrade",
+        all_of=("validity metadata で降格", "ハード除外はしない"),
+    ),
+    Invariant(
+        "subagents_errors_bugfix_single_source",
+        all_of=("is_noise_agent_type", "単一ソース"),
+    ),
+    Invariant(
+        "memory_capability_single_source",
+        all_of=("resolve_cc_memory_dir", "単一ソース"),
+    ),
+    Invariant(
+        "skill_vuln_scan_combo_required",
+        all_of=("combo 必須で検出",),
+    ),
+    Invariant(
+        "daily_runner_human_approval",
+        all_of=("適用は対話で人間承認",),
+    ),
+    Invariant(
+        "memory_hygiene_no_auto_apply",
+        all_of=("重複残骸は手順提案のみで auto-apply しない",),
+    ),
+    Invariant(
+        "invalid_frontmatter_no_auto_fix",
+        all_of=("auto-fix せず人手修正提案",),
+    ),
+    Invariant(
+        "evolve_tier_cli_sync_default",
+        all_of=("sync は既定 dry-run、`--apply` のみ書込",),
+    ),
+    Invariant(
+        "evaluation_provenance_no_guessing",
+        all_of=("不明値は推測せず None",),
+    ),
+    Invariant(
+        "fleet_propose_no_re_present_rejected",
+        all_of=("reject 済み提案は再提示しない",),
+    ),
+    Invariant(
+        "codex_usage_fail_open_no_merge",
+        all_of=("advisory 表示（fail-open）", "CC 側 token_usage とは合算しない"),
+    ),
+    Invariant(
+        "evolve_revert_cli_default_dry_run",
+        all_of=("entry_id は戦果ボードか --list が印字する",),
+    ),
+    Invariant(
+        "testpaths_single_source",
+        all_of=("`testpaths` が単一ソース",),
+    ),
+    Invariant(
+        "evolve_keyset_snapshot_union_merge",
+        all_of=("既存キーとの union merge", "条件付きキーを golden から消さない"),
+    ),
 )
 
 

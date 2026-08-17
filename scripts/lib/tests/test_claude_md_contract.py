@@ -26,12 +26,14 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import claude_md_contract  # noqa: E402
+from dogfood import cli as dogfood_cli  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # REQUIRED_INVARIANTS の件数 golden。無断で不変条件を減らす/増やすことを禁止するガード。
 # 変更するときは REQUIRED_INVARIANTS 本体のコメントと、この数値の両方を更新すること。
-REQUIRED_INVARIANTS_COUNT = 27
+# 27件 + #415 keyset 完全化（全 CLAUDE.md 契約句の網羅洗い出し）で追加した33件 = 60件。
+REQUIRED_INVARIANTS_COUNT = 60
 
 
 def _write(path: Path, content: str) -> None:
@@ -86,6 +88,43 @@ def _full_claude_md_text() -> str:
         "| fleet_pr | path allowlist・push account guard で強制、マージは人間 |",
         "| cleanup | 候補提示→個別承認→実行。のみに安全側限定 |",
         "| tier | dry-run diff を全件提示 → 明示承認後にのみ |",
+        "",
+        "PR2/PR3 を凍結した。採用実績が乏しく投資に見合わないため。",
+        "コンポーネント追加・変更時は spec/components.md に書き、動作を縛る語は要約時も必ず残す。",
+        "",
+        "| コンポーネント2 | 一言サマリ | 実体 |",
+        "|---|---|---|",
+        "| evolve_decisions | flat `result_path` は run 1件時のみ | evolve_decisions.py |",
+        "| triage_ledger | SKIP 判断の状態管理・dry-run 非書込 | triage_ledger.py |",
+        "| pitfall | danger 判定は commit をブロック | pitfall_registry.py |",
+        "| observability | 必ず surface すべき observability 行の単一ソース | audit/observability.py |",
+        "| outcome_attribution | 負の転移は末尾 rollback、dry-run に before/after 順位差分を surface | audit/outcome_attribution.py |",
+        "| correction_semantic | フェーズ昇格は human-source のみ駆動 | correction_semantic/ |",
+        "| daily_review | promote 成功後のみ既読追記（部分失敗は対象外） | correction_semantic/daily_review.py |",
+        "| growth_report | 閾値は growth_engine が単一ソース | growth_report.py |",
+        "| correction_rate | カバレッジ100%確定週のみ表示 | correction_rate.py |",
+        "| subagent_noise | noise_agent_type_kind が単一ソース | audit/sections_subagent_noise.py |",
+        "| verbosity | weak_signals へ emit、auto-apply しない | verbosity/ |",
+        "| cross_pj_priority | 提示のみ・自動承認しない | correction_semantic/cross_pj_priority.py |",
+        "| plugin_self | auto-apply は人間承認必須に降格 | skill_origin.py |",
+        "| dogfood | `--layer light` は pre-push で非ブロッキング自動実行 | scripts/lib/dogfood/ |",
+        "| weak_signals_drain | pending marker の dry-run 書込は意図された設計（消さない） | weak_signals/batch.py |",
+        "| reconcile_surfaced | phases の dry-run は `persist=False` で非書込 | cli.py |",
+        "| idiom_filter | idiom 単位拒否も可能 | correction_semantic/idiom_filter.py |",
+        "| recall_ranking | stale/superseded memory を validity metadata で降格（ハード除外はしない） | fleet/recall.py |",
+        "| subagents_errors | is_noise_agent_type が単一ソース | rl_common/detection.py |",
+        "| memory_capability | resolve_cc_memory_dir が単一ソース | scripts/lib/memory_capability.py |",
+        "| skill_vuln_scan | combo 必須で検出 | skill_vuln_scan.py |",
+        "| daily | 適用は対話で人間承認 | scripts/lib/daily/ |",
+        "| memory_hygiene | 重複残骸は手順提案のみで auto-apply しない | memory_dup_residue.py |",
+        "| invalid_frontmatter | auto-fix せず人手修正提案 | frontmatter.py |",
+        "| evolve_tier | sync は既定 dry-run、`--apply` のみ書込 | bin/evolve-tier |",
+        "| evaluation_provenance | 不明値は推測せず None | scripts/lib/evaluation_provenance.py |",
+        "| fleet_propose | reject 済み提案は再提示しない | fleet/propose.py |",
+        "| codex_usage | advisory 表示（fail-open）。CC 側 token_usage とは合算しない | fleet/codex_usage.py |",
+        "| evolve_revert | entry_id は戦果ボードか --list が印字する | bin/evolve-revert |",
+        "| testpaths | `testpaths` が単一ソース | pytest.ini |",
+        "| evolve_keyset_snapshot | 既存キーとの union merge。条件付きキーを golden から消さない | test_evolve_keyset_snapshot.py |",
         "",
         "## Superpowers 共存",
         "",
@@ -307,6 +346,23 @@ def test_check_claude_md_contracts_no_file_still_generic_empty(tmp_path: Path) -
     root = tmp_path / "repo"
     root.mkdir()
     assert claude_md_contract.check_claude_md_contracts(root) == []
+
+
+def test_dogfood_layer2_wires_claude_md_contract() -> None:
+    """#415 keyset 完全化・Step4④の実測で見つかった穴: `REQUIRED_INVARIANTS` を空にする/
+    `_missing_tokens` を無効化する、はいずれも既存テストで赤くなるが、`dogfood/cli.py` の
+    `_run_layer2` から `checks.append(claude_md_contract.layer2_check(repo_root))` を
+    削除しても検知するテストが1つも無かった（`checks.append(...)` 行を実際にコメントアウト
+    して `pytest -k dogfood` を実行 → 120件全緑のまま。#415 オーケストレーター実測）。
+    静的ソース検査で配線の消失を検出する（`_run_layer2` の実行を伴わない軽量ガード）。
+    """
+    import inspect
+
+    src = inspect.getsource(dogfood_cli._run_layer2)
+    assert "claude_md_contract.layer2_check(repo_root)" in src, (
+        "dogfood/cli.py の _run_layer2 から claude_md_contract.layer2_check の呼び出しが"
+        "消えている（CLAUDE.md 契約検査が dogfood gate から外れた）"
+    )
 
 
 # --- 完了条件3: 陽性対照（緑のまま） ------------------------------------------------
