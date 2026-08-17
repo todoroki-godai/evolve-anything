@@ -7,6 +7,7 @@
 
 設計: ``docs/decisions/drafts/054-phase0-notification-routing.md``
 """
+import datetime as _dt
 import os
 import sys
 from contextlib import ExitStack
@@ -433,18 +434,30 @@ def _build_evolve_queue_output(shared: "tuple | None" = None) -> "NotificationIt
             )
             return NotificationItem(label="queue", tier=1, text=text, digest="evolve-queue破損")
 
-        output = _queue_notice.queue_notice_output(queue_data)
+        # 本文と digest は**同じ now** で判定する（#490 codex [Should]: 別々に
+        # datetime.now() を取ると、ちょうど閾値をまたぐ瞬間に「本文は通常の待ち一覧なのに
+        # digest だけ停止」という食い違いが起こりうる）。
+        now = _dt.datetime.now(_dt.timezone.utc)
+        output = _queue_notice.queue_notice_output(queue_data, now=now)
         if not output:
             return None
         text = output["systemMessage"]
 
         if _daily_freshness is not None:
+            generated_at = (queue_data or {}).get("generated_at")
             state, _age = _daily_freshness.classify_freshness(
-                (queue_data or {}).get("generated_at"),
-                stale_days=_queue_notice.DEFAULT_STALE_DAYS,
+                generated_at,
+                now=now,
+                stale_hours=_queue_notice.DEFAULT_STALE_HOURS,
             )
-            if state != _daily_freshness.Freshness.FRESH:
-                return NotificationItem(label="queue", tier=1, text=text, digest="evolve-queue更新停止")
+            if state == _daily_freshness.Freshness.STALE:
+                return NotificationItem(
+                    label="queue", tier=1, text=text, digest="毎朝の取り込みが停止",
+                )
+            if state == _daily_freshness.Freshness.UNKNOWN:
+                return NotificationItem(
+                    label="queue", tier=1, text=text, digest="毎朝の取り込みが判定不能",
+                )
 
         count = len((queue_data or {}).get("queue") or [])
         return NotificationItem(

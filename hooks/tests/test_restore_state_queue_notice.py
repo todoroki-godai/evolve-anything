@@ -12,7 +12,7 @@ env ガード: install レイアウト env のときだけ実環境 DATA_DIR を
 """
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _HOOKS = Path(__file__).resolve().parent.parent
@@ -133,6 +133,35 @@ def test_deliver_does_not_write(tmp_path, monkeypatch):
     restore_state._build_evolve_queue_output()
     after = {p.name for p in source.iterdir()}
     assert before == after  # queue 通知は read-only
+
+
+def test_deliver_stale_at_30_hours_shows_dedicated_message(tmp_path, monkeypatch, capsys):
+    """#466: 既定 stale_hours=30 が末端の restore_state 配線まで貫通していること。
+    queue 専用メッセージに切り替わり、freshness.health_notice の汎用文は出ない。"""
+    source = _install_env(tmp_path, monkeypatch)
+    stale_generated_at = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+    _write_queue(source, dict(_sample_queue(), generated_at=stale_generated_at))
+    item = restore_state._build_evolve_queue_output()
+    assert item is not None
+    assert item.tier == 1
+    assert "figma-to-code" not in item.text
+    assert "学習データの自動取り込みが止まっています" in item.text
+    assert "30時間前" in item.text
+    assert "現在値は不明です" not in item.text
+    assert item.digest == "毎朝の取り込みが停止"
+
+
+def test_deliver_unknown_generated_at_shows_dedicated_message(tmp_path, monkeypatch, capsys):
+    """#466: generated_at が壊れている（UNKNOWN）場合も queue 専用メッセージ。"""
+    source = _install_env(tmp_path, monkeypatch)
+    _write_queue(source, dict(_sample_queue(), generated_at="not-a-timestamp"))
+    item = restore_state._build_evolve_queue_output()
+    assert item is not None
+    assert item.tier == 1
+    assert "figma-to-code" not in item.text
+    assert "動いているか判定できません" in item.text
+    assert "現在値は不明です" not in item.text
+    assert item.digest == "毎朝の取り込みが判定不能"
 
 
 def test_handle_session_start_invokes_queue_notice(tmp_path, monkeypatch, capsys):

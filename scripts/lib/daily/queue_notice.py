@@ -16,14 +16,25 @@ from . import freshness as _freshness
 
 QUEUE_FILE_NAME = "evolve-queue.json"
 
-# generated_at がこの日数以上古ければ stale（#351 freshness gate の共通閾値として使う）。
-# #351 以前は「本来の通知に stale 一文を添える」だけだったので 2 日で足りたが、
-# gate 化で **通知本体（待ち PJ 一覧）が消える**ようになったため誤検知コストが上がった。
-# 週末に PC を閉じて launchd が2日走らないケースを FRESH に保つため 3 日に緩めている。
-# 恒久障害（#351 の16日沈黙）の検出力は 3 日でも変わらない。
-DEFAULT_STALE_DAYS = 3
-
-REMEDIATION_HINT = "bin/evolve-daily-install で日次更新が回っているか確認してください"
+# generated_at がこの時間数以上古ければ stale（#466: 「その日のうち」に気づける粒度へ）。
+# 09:00 実行を前提に、翌日 08:00 のセッション（23時間経過）では沈黙し、翌日 15:00 に前日分
+# しか無い（30時間経過）時点で発火する。
+#
+# 本閾値の根拠は「週の締切に間に合ううちに気づかせる」ことだけに置く。永久に失われるのは
+# correction_rate.FREEZE_DELAY_DAYS（=3）による週の締切（週末+3日）を止まったまま通過した
+# 場合であり、「N時間で停止すると即座に不合格が確定する」わけではない。
+#
+# **未裏取り（#490 codex [Must]）**: 「日次上限 200 件
+# （correction_semantic.judge_runner.DEFAULT_DAILY_UTTERANCE_LIMIT）に対し実発話量が
+# 1日 84〜120 件だから、停止しても再開後に追いつく」とは**断定できない**。未判定 6,609 件が
+# 滞留した状態で毎日上限に張り付いた記録があり、追いつけるかは流入量ではなく
+# **backlog の純減量**（成功処理量 − 新規流入）を測らないと分からない（未測定）。
+# ゆえに「追いつけるから多少止まってよい」という前提をこの閾値の根拠に使わない。
+#
+# 旧 DEFAULT_STALE_DAYS（=3）は #490 で削除した。同じ queue が呼び出し側によって
+# 30 時間判定と 72 時間判定に分かれ、画面ごとに STALE / FRESH が食い違っていたため
+# （fleet propose と SessionStart で不一致）。閾値はこの1定数を単一ソースとする。
+DEFAULT_STALE_HOURS = 30
 
 
 def read_queue(data_dir) -> "dict | None":
@@ -40,33 +51,58 @@ def read_queue(data_dir) -> "dict | None":
 def build_queue_notice(
     queue_data: "dict | None",
     now: "datetime | None" = None,
-    stale_days: int = DEFAULT_STALE_DAYS,
+    stale_hours: int = DEFAULT_STALE_HOURS,
 ) -> "str | None":
     """待ち PJ 一覧の通知メッセージを生成する。
 
     評価順序（#351 freshness gate）: (a) generated_at の鮮度を先に判定する →
-    (b) FRESH でなければ待ち PJ 一覧を一切解釈せず health notice を返す（queue が
+    (b) FRESH でなければ待ち PJ 一覧を一切解釈せず専用メッセージを返す（queue が
     空でも stale なら通知する＝producer 停止の見逃しを防ぐ回帰対応）→
     (c) FRESH のときだけ待ち PJ 一覧を評価し、空なら沈黙する。
 
     - queue_data が None → None（daily runner 未実行 = 壊れているのでなく単に未セットアップ）
     - FRESH かつ待ち PJ あり → 「evolve 待ち: <pj…>（N 件）」
     - FRESH かつ待ち PJ 無し → None（沈黙）
-    - STALE / UNKNOWN → 待ち PJ の中身に関わらず health notice（旧値は併記しない）
+    - STALE / UNKNOWN → 待ち PJ の中身に関わらず専用メッセージ（旧値は併記しない）
+
+    #466 是正（2026-08-17）: STALE/UNKNOWN のメッセージは ``freshness.health_notice`` の
+    汎用文（「現在値は不明です」）を使わない。この通知の対象は「値」でなく「取り込みが
+    動いているか」であり、汎用文では読者に意味が伝わらないため、queue 専用の説明文を
+    ここで直接組み立てる（``classify_freshness`` を先に評価する契約自体は維持）。
+
+    #490 是正（2026-08-17・codex [Must]）: 文面から2つの過剰な断定を除いた。
+    (a) 手動実行は今回分を取り込むだけで、停止・未登録の launchd を修復しない
+    (b) 欠測で失われるのは「まだ達成していない連続」であって、既に 4 週連続を達成済みなら
+        ``correction_rate`` が最長連続記録（best_run）を保持するため gate は閉じない
     """
     if not isinstance(queue_data, dict):
         return None
 
     now = now or datetime.now(timezone.utc)
+    generated_at = queue_data.get("generated_at")
     state, age_days = _freshness.classify_freshness(
-        queue_data.get("generated_at"), now=now, stale_days=stale_days
+        generated_at,
+        now=now,
+        stale_hours=stale_hours,
     )
-    if state != _freshness.Freshness.FRESH:
-        return _freshness.health_notice(
-            label="evolve queue",
-            freshness=state,
-            age_days=age_days,
-            remediation=REMEDIATION_HINT,
+    if state == _freshness.Freshness.STALE:
+        elapsed = _freshness.format_elapsed(
+            _freshness.age_in_hours(generated_at, now=now), age_days
+        )
+        return (
+            f"⚠ 学習データの自動取り込みが止まっています（最終実行: {elapsed}）。"
+            "`bin/evolve-daily-run` を実行すればその場で今回分を取り込めます"
+            "（毎朝の自動実行が止まったままなら、それとは別に復旧が必要です）。"
+            "止まったまま週の締切（日曜の3日後）を過ぎると、その週は欠測として確定します。"
+            "週次の数字がまだ出ていない場合は、表示に必要な「4週連続」の連続がそこで途切れます。"
+            "`launchctl list | grep com.evolve-anything.daily` で毎朝の登録を確認してください。"
+        )
+    if state == _freshness.Freshness.UNKNOWN:
+        return (
+            "⚠ 学習データの自動取り込みが動いているか判定できません"
+            "（記録の生成時刻が欠落しているか壊れています）。"
+            "`bin/evolve-daily-run` を1回実行してください。"
+            "`launchctl list | grep com.evolve-anything.daily` で毎朝の登録も確認してください。"
         )
 
     queue = queue_data.get("queue") or []
@@ -83,10 +119,10 @@ def build_queue_notice(
 def queue_notice_output(
     queue_data: "dict | None",
     now: "datetime | None" = None,
-    stale_days: int = DEFAULT_STALE_DAYS,
+    stale_hours: int = DEFAULT_STALE_HOURS,
 ) -> "dict | None":
     """CC hook 出力用に systemMessage dict を返す。待ちが無ければ None。"""
-    msg = build_queue_notice(queue_data, now=now, stale_days=stale_days)
+    msg = build_queue_notice(queue_data, now=now, stale_hours=stale_hours)
     if msg is None:
         return None
     return {"systemMessage": msg}
@@ -166,7 +202,7 @@ def _exclusion_suffix(judge: dict) -> str:
 def build_judge_cap_notice(
     queue_data: "dict | None",
     now: "datetime | None" = None,
-    stale_days: int = DEFAULT_STALE_DAYS,
+    stale_hours: int = DEFAULT_STALE_HOURS,
 ) -> "str | None":
     """llm_judge の日次処理が上限到達 or 障害だった日だけ 1 行通知する。当たらない日は
     None（沈黙）。
@@ -195,7 +231,9 @@ def build_judge_cap_notice(
 
     now = now or datetime.now(timezone.utc)
     state, _age_days = _freshness.classify_freshness(
-        queue_data.get("generated_at"), now=now, stale_days=stale_days
+        queue_data.get("generated_at"),
+        now=now,
+        stale_hours=stale_hours,
     )
     if state != _freshness.Freshness.FRESH:
         return None
@@ -248,10 +286,10 @@ def build_judge_cap_notice(
 def judge_cap_notice_output(
     queue_data: "dict | None",
     now: "datetime | None" = None,
-    stale_days: int = DEFAULT_STALE_DAYS,
+    stale_hours: int = DEFAULT_STALE_HOURS,
 ) -> "dict | None":
     """CC hook 出力用に systemMessage dict を返す。上限未到達なら None。"""
-    msg = build_judge_cap_notice(queue_data, now=now, stale_days=stale_days)
+    msg = build_judge_cap_notice(queue_data, now=now, stale_hours=stale_hours)
     if msg is None:
         return None
     return {"systemMessage": msg}

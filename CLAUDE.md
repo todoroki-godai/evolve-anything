@@ -176,7 +176,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 | `fleet_queue` | 学習素材ベースの evolve 待ち PJ を決定論・ゼロ LLM で列挙 | `fleet/queue.py` + `fleet/queue_state.py` + `fleet/cli.py` + `fleet/collectors.py` + `fleet/formatters.py` |
 | `queue_verify` | queue の verify 待ちを read 時純粋導出。新ストアは作らない | `fleet/queue_verify.py` |
 | `fleet_detect` | 全 PJ 横断の決定論 weak_signals 検出。daily runner が毎朝蓄積 | `fleet/detect.py` + `bin/evolve-daily-run` |
-| `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知。適用は対話で人間承認 | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
+| `daily` | 毎朝の evolve queue 自動実行 + SessionStart 通知。停止検知は30時間閾値（当日中に気づける粒度）。適用は対話で人間承認 | `scripts/lib/daily/` + `bin/evolve-daily-install` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
 | `icebox_notice` | daily runner の icebox 棚卸し気づきトリガー。fail-open で既存ファイル非破壊、閾値未満は無音 | `scripts/lib/daily/icebox_notice.py` + `bin/evolve-daily-run` + `hooks/restore_state.py` |
 | `icebox_reconcile` | icebox 棚卸しを3レーン決定論分類（成立/観測器不在/失効候補） | `scripts/lib/icebox_reconcile.py` + `bin/evolve-daily-run` + `scripts/lib/audit/sections_icebox_reconcile.py` |
 | `artifacts_hygiene` | artifact 衛生5検出器を observability に surface（決定論・LLM 非依存） | `audit/sections_artifacts.py` |
