@@ -10,6 +10,8 @@ correction_review.bootstrap.pj_total
 correction_review.bootstrap.slug
 correction_review.bootstrap.theme_buckets
 correction_review.daily
+correction_review.daily.correction_backlog
+correction_review.daily.correction_backlog_remaining
 correction_review.daily.dry_run
 correction_review.daily.eligible
 correction_review.daily.excluded_machinery_by_channel

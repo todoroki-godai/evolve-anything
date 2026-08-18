@@ -53,16 +53,20 @@ res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)
 # res == {"written": bool, "dry_run": bool, "path": str}
 ```
 
-## Step 6.2: 今日の修正確認（daily_review・#446）
+## Step 6.2: 今日の修正確認（daily_review・#446・#514）
 
 前回 evolve 以降の**新規** weak_signal（channel ∈ content-rich = llm_judge / rephrase / permission_deny・未昇格・非expired・既読集合に無いもの・#99）を idiom 単位で確認する日次入口。reflect SKILL Step 7.7 の散文ステップからの移植（learning_skill_md_must_not_enforcement — 毎日叩かれる evolve の決定論 phase 出力を消費する）。**判定は phase 出力 `result.correction_review.daily` を読むだけで行う。** content-poor チャネル（esc_interrupt / manual_edit_after_ai）は detector が周辺文脈を保存せず y/n 確認の判断材料が無いため対象外で、observability の weak_signals matrix に件数として残る（#99）。
 
+**#514: 修正在庫（`daily.correction_backlog`）は `daily.eligible` と独立に判定する。** `eligible` は新規 weak_signal の有無だけを表すフィールドで、在庫（それ以前に `--promote-weak` 済みで反映先未定のまま溜まった記録）の有無を含まない。新規が 0 件でも在庫が非空なら在庫3択は出す（黙って両方スキップしない）。
+
 **二重提示の解消（#476-3）**: Step 6.1 で `bootstrap.is_bootstrap == True` の run では、daily phase は bootstrap groups が保持する signal_key を自動的に除外して emit する（evolve.py が `exclude_signal_keys` で配線済み）。そのため Step 6.1（まとめて確認）→ Step 6.2 を順に実行しても同じシグナルを 2 回質問しない。`daily.remaining` も bootstrap-pending を除いた「前回以降の新規」だけを数える。
 
-- `daily.eligible != True`（新規 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。`daily.eligible == False` のときのみ「今日の修正確認: 新規なし ✓」を1行表示）
+- `daily.eligible != True and not daily.correction_backlog`（新規 0 件・在庫 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。「今日の修正確認: 新規なし ✓」を1行表示）
 - **`daily.excluded_machinery_total > 0`（machinery＝委譲メッセージ等の harness 注入除外・#443 PR2-a）→ 上記スキップ／下記 AskUserQuestion のどちらの分岐でも「除外: machinery {excluded_machinery_total} 件（委譲メッセージ等の harness 注入。実際に確認可能な件数には含まれていません）」を必ず1行添える（MUST — silence != evaluated）。** 候補が全件 machinery で `daily.eligible` が `False` になったケースこそ、この1行が無いと利用者には「今日の修正確認: 新規なし ✓」しか見えず除外の事実が完全に隠れる（最重要ケース）。
-- `daily.eligible == True` → `daily.groups`（最大5件・cross-PJ 承認済み一致が先頭、続いて頻度降順 — #462）を1件ずつ**反映先つき4択で確認する（MUST — #475。最大5問を1バッチで）**。手順は下記「反映先つき4択（#475 §4）」を参照。
+- `daily.correction_backlog` が非空 → **在庫3択で確認する（MUST）**。手順は下記「修正在庫の3択（#514）」を参照（`daily.eligible` の真偽に関わらず実施する）。
+- `daily.eligible == True` → `daily.groups`（`correction_backlog` の件数分だけ枠を削った残り・cross-PJ 承認済み一致が先頭、続いて頻度降順 — #462）を1件ずつ**反映先つき4択で確認する（MUST — #475。在庫3択と合わせて最大5問を1バッチで）**。手順は下記「反映先つき4択（#475 §4）」を参照。
 - `daily.remaining > 0` なら「ほか {remaining} グループは次回以降に提示」を1行表示する
+- `daily.correction_backlog_remaining > 0` なら「ほか {correction_backlog_remaining} 件は在庫に残っています」を1行表示する
 
 ### 反映先つき4択（#475 §4）
 
@@ -149,3 +153,40 @@ res = daily_review.record_reviewed(
 # 4（いいえ）の場合は promote を呼ばず signal_keys 全件を decision="rejected" で既読追記する。
 # res == {"written": int, "dry_run": bool}
 ```
+
+### 修正在庫の3択（#514）
+
+`daily.correction_backlog` の各アイテム（`{source_correction_id, message, age_days, timestamp, session_id}`）を古い順に確認する。**新規4択と違い、これらは既に `reflect_status=promoted`（過去に承認済み・反映先だけが未定のまま溜まった記録）なので `--promote-weak` は呼ばない。**
+
+**1. 起草 → 重複チェック**（§4.5 と同じ手順を流用。新しい判定ロジックは作らない）: `message` を元に agent が反映候補の起草行（`draft_line`）を作り、既存の書き込み規約（[reflect/SKILL.md](../../reflect/SKILL.md) の「書き込み時のルール」）に沿って候補ファイルを1つ選び `reflect_apply_match.check_line_applied` で正規化後一致を確認する。一致すれば AskUserQuestion を出さず「この指摘は既に `{candidate_file}` に反映済みでした」と1行報告し、`PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --apply <source_correction_id> --target-path <candidate_file> --draft-line-file <draft_line を書いたファイル>` を実行して `reflect_status` を直接 `applied` に更新する。一致しなければ下記の設問へ進む。
+
+**2. 設問**（`{message}` は在庫アイテムの `message`、`{age_days}` は同 `age_days`）:
+
+```
+「{message}」（{age_days}日前から在庫）
+
+書く文面（案）: {draft_line}
+
+この指摘を、どこに反映しますか？
+```
+
+**options（固定3択・順番を機械に決めさせない）**:
+
+| # | label | detail |
+|---|---|---|
+| 1 | 共通ルールに書く（全PJで効く） | 次のセッションから全プロジェクトで効きます。あとで1コマンドで取り消せます（条件は反映時に表示）。 |
+| 2 | このPJのルールに書く | 次のセッションからこのプロジェクトだけで効きます。取り消しも同様です。 |
+| 3 | もう出さない | 記録は残りますが、以後この指摘は在庫からもう出てきません。 |
+
+**3. 選択後の処理**:
+
+- **1（共通ルール）/ 2（PJルール）**:
+  1. 反映先ファイルを agent が判断する（既存の書き込み規約を流用・新しい選定ロジックは作らない）。**選んだ scope（共通=`~/.claude/rules/` / PJ=`<repo>/.claude/rules/`）の中に適切な既存ファイルが無く新規作成が必要と判明したら**、Edit/Write の直前に §4.3.2 と同じ3択の追加確認を出す（新しく作る／既存の候補ファイルに追記する（推奨）／やめる＝下の「3（もう出さない）」と同じ処理に切り替える）。既存ファイルへの追記ならこの追加確認はスキップしてそのまま書く。
+  2. Edit（既存ファイル末尾に1行追記）または Write（新規ファイル）で `draft_line` を書き込む。**書き込みの前に、対象ファイルの現在の全文を読み一時ファイルに保存しておくこと（MUST）**（新規作成なら空ファイルを保存する）。反映先が `~/.claude/rules/` または `<repo>/.claude/rules/` 配下のときは次の手順で `--before-content-file` が**必須**になる（省略すると CLI がエラーで停止する）。
+  3. `PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --apply <source_correction_id> --target-path <書き込んだファイル> --draft-line-file <draft_line を書いたファイル> --before-content-file <手順2で保存した全文>` を呼び、`status == "applied"` を確認する。
+     - **`apply_unverified` が返ったとき（復旧手順・MUST — 無限再提示に対する唯一の歯止め）**: 書き込んだ内容と `--draft-line-file` の中身が一致していない可能性が高い。① 対象ファイルを再確認し、必要なら Edit で `draft_line` に一致させる → ② 同じ `source_correction_id` で `--apply` を再実行する。② の結果も `apply_unverified` なら、これ以上リトライせず選択肢3（もう出さない）の処理（`--skip <source_correction_id>`）に切り替える（`reconcile_surfaced` 相当の自動却下 marker は作らない — #379 Step1 新設凍結）。
+  4. 反映が完了したら「反映しました: `{target}`（1行追記）／取り消す場合: `bin/evolve-revert <entry_id>`／※このファイルをこの後さらに変更すると、この取り消しはできなくなります」を1行表示する（新規作成のときは「取り消せません」に置き換える）。
+- **3（もう出さない）**: `PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --skip <source_correction_id>` を呼ぶ（`--apply` と同じ `--dry-run` 規約 — ドライラン実行時のみ書かない）。既に `applied` 済みの記録には CLI がガードを掛けて上書きしない（`status == "already_applied"`）。
+- **Skip / 中断** → 何も呼ばない（次回の evolve でも同じ在庫が再提示される）。
+
+**在庫の中身についての注意（#514 実測 2026-08-18）**: 在庫の約10%は15文字以下の相槌（「推奨で」「お願い」等）、約8%は Claude 自身の出力の混入で、機械的な有用性判定はしていない（一括破棄もしない設計）。**最初の数日はこれらに「もう出さない」を選ぶ運用になる見込み** — 想定内の挙動であり、異常ではない。

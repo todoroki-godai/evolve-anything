@@ -725,6 +725,68 @@ class TestApplyCLI:
         assert filepath.read_bytes() == before_bytes
 
 
+# --- Test: --skip（#514 修正在庫の『もう出さない』） ---
+
+class TestSkipCLI:
+    def test_skip_marks_skipped_when_promoted(self, tmp_path, capsys):
+        """promoted の correction を skipped にする。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", source_id, "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "skipped"
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "skipped"
+
+    def test_skip_not_found(self, tmp_path, capsys):
+        """source_correction_id に一致する correction が無ければ not_found。"""
+        filepath = _write_corrections(tmp_path, [_make_correction(session_id="sess1", timestamp="2026-08-17T00:00:00Z")])
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", "no-such-id", "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+
+    def test_skip_does_not_overwrite_applied(self, tmp_path, capsys):
+        """既に applied 済みのレコードは --skip で上書きしない（安全弁）。"""
+        corr = _make_correction(reflect_status="applied", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", source_id, "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "already_applied"
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "applied"
+
+    def test_skip_dry_run_writes_nothing(self, tmp_path, capsys):
+        """--dry-run では一切書かない（--apply と同じゲート貫通規約）。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        before_bytes = filepath.read_bytes()
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--dry-run", "--skip", source_id, "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "dry_run"
+        assert filepath.read_bytes() == before_bytes
+
+
 # --- Test: 取り消し記録（#475 §8.2） ---
 
 class TestRuleRevertRecording:

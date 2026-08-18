@@ -32,6 +32,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from correction_semantic.bootstrap_backlog import BACKLOG_CHANNEL, JACCARD_THRESHOLD
+from correction_semantic.correction_backlog import (  # noqa: F401
+    backlog_with_remaining as _backlog_with_remaining,
+    build_correction_backlog,  # 再エクスポート: daily_review.build_correction_backlog(...)（#514 設計指定の呼び出し形）
+)
 from correction_semantic.idiom_filter import idiom_eligible
 from correction_semantic.review_channels import (
     REVIEW_CHANNELS,
@@ -368,6 +372,7 @@ def build_review(
     weak_signals_path: Optional[Path] = None,
     idioms_path: Optional[Path] = None,
     seen_path: Optional[Path] = None,
+    corrections_path: Optional[Path] = None,
     max_groups: Optional[int] = 5,
     exclude_signal_keys: Optional[Set[str]] = None,
     dry_run: bool = False,
@@ -398,6 +403,11 @@ def build_review(
         "reviewed_keys_count": int,       # 既読集合（correction_review_seen）の現在サイズ
         "excluded_machinery_total": int,       # #443 PR2-a: machinery で除外した件数
         "excluded_machinery_by_channel": dict, #   （silence != evaluated・黙って減らさない）
+        "correction_backlog": [           # #514: promoted 積み残しを古い順に最大3件
+          {"source_correction_id": str, "message": str, "age_days": int | None,
+           "timestamp": str, "session_id": str}, ...
+        ],
+        "correction_backlog_remaining": int,   # #514: backlog 母集団のうち未提示の件数
         "slug": str,
         "dry_run": bool,
       }
@@ -415,6 +425,15 @@ def build_review(
     detected した weak を落とす）の marker 探索起点。未指定（既定 None）は本番既定パス
     （``correction_semantic.bootstrap_backlog.default_marker_path`` の DATA_DIR 解決）と
     同一の挙動になる。marker が存在しない PJ は素通し（除外なし・挙動不変）。
+
+    correction_backlog（#514）: 前回 evolve 以降の新規 weak_signal だけでなく、
+    それ以前に ``reflect_status=promoted`` まで昇格済みの corrections.jsonl 積み残しにも
+    朝の確認導線を作る。``correction_semantic.correction_backlog.backlog_with_remaining``
+    が返す古い順 最大3件を ``correction_backlog`` として常時 emit し、``max_groups`` が
+    **数値のときのみ**新規枠をその件数分だけ削る（``max_groups=None`` の
+    ``daily.proposal_digest`` 経路は削減しない — ADR-054 PR2-b「順位と打ち切りの分離」と
+    同じ理由。打ち切り後は候補に入らないため）。``corrections_path``（テスト注入用）は
+    未指定なら ADR-042 resolver 既定パスを使う。
     """
     seen_keys = read_reviewed_keys(seen_path)
     # codex [Should]1 是正: scoped 母集団は一度だけ読み、_read_new と
@@ -452,8 +471,19 @@ def build_review(
 
     groups = _prioritize(groups, pj_slug, idioms_path=idioms_path)
 
+    # #514: 修正在庫（promoted 積み残し）を古い順に最大3件添える。1回の read で
+    # (backlog, remaining) を取る（read の間に store が更新される race を避ける）。
+    correction_backlog, correction_backlog_remaining = _backlog_with_remaining(
+        pj_slug, corrections_path=corrections_path,
+    )
+
     # ADR-054 PR2-b: max_groups=None は打ち切らない（全件 = 順位と打ち切りの分離）。
-    top = groups if max_groups is None else groups[:max_groups]
+    # #514: max_groups が数値のときのみ、在庫の件数分だけ新規枠を削る。
+    if max_groups is None:
+        top = groups
+    else:
+        reduced_max_groups = max(0, max_groups - len(correction_backlog))
+        top = groups[:reduced_max_groups]
     remaining = max(0, len(groups) - len(top))
 
     return {
@@ -463,6 +493,8 @@ def build_review(
         "reviewed_keys_count": len(seen_keys),
         "excluded_machinery_total": machinery_stats["total"],
         "excluded_machinery_by_channel": machinery_stats["by_channel"],
+        "correction_backlog": correction_backlog,
+        "correction_backlog_remaining": correction_backlog_remaining,
         "slug": pj_slug,
         "dry_run": dry_run,
     }

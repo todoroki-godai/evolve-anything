@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- **feat(evolve): 修正在庫（反映先未定の promoted 積み残し）を朝の確認に統合（#514）** —
+  `correction_semantic.correction_backlog.build_correction_backlog(pj_slug, corrections_path=None,
+  max_items=3)` を新設し、`reflect_status == "promoted"` かつ `invalidated` でない corrections を
+  古い順に最大3件返す（slug 突合は `store_read_union.pj_slug_match` + `fleet.queue_materials._correction_slug`
+  の既存単一ソースを再利用し旧名 PJ の alias を畳む・読み取り専用）。`daily_review.build_review` の
+  返り値に `correction_backlog`/`correction_backlog_remaining` を追加し、`max_groups` が数値指定の
+  ときのみ在庫件数分だけ新規枠を削減する（`max_groups=None` の `daily.proposal_digest` 経路は削減
+  しない・ADR-054 PR2-b）。`evolve-reflect` に `--skip <source_correction_id>`（`--apply` と対称・
+  既に `applied` の記録は上書きしない安全弁つき）を追加し、`skills/evolve/SKILL.md` Step 6.2 /
+  `references/correction-review.md` に在庫の3択（共通ルールに書く／このPJのルールに書く／もう出さ
+  ない）と `apply_unverified` の復旧手順を追記。新規 store/observability section/advisory
+  adapter/weak_signal channel は追加していない（#379 Step1 新設凍結の範囲外）。
 - **feat(reflect): 朝の y/n に反映先つき4択を導入し「昇格済み」と「反映済み」を分離（#475 A レーン）** —
   `reflect_status` の値域に `promoted`（昇格済み・反映先未定）を追加し、`applied` は反映先ファイルに
   該当行が実在すると確認できたときだけ付ける（`reflect_apply_match.check_line_applied` が §6.2 の
