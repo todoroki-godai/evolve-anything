@@ -138,6 +138,194 @@ class TestMergeNotificationText:
 
 
 # ─────────────────────────────────────────────────────────────────
+# #503 §3.0/§4/§5: decision_text は digest 化・予算・overflow の対象外。
+# I1（全体等値）/ I2（segment 等値）/ I3（prefix 一意）を守る。
+# ─────────────────────────────────────────────────────────────────
+class TestDecisionTextPriority:
+    # --- 陽性対照（緑のままであるべき。陰性試験と混ぜて数えない） ---
+
+    def test_positive_no_decision_text_items_result_byte_identical_to_legacy(self):
+        """陽性対照1: decision_text を持たない item だけの結合結果は現行と一字も変わらない
+        （§503 実装前の golden をそのまま literal で再現）。"""
+        drain = NotificationItem(
+            label="drain", tier=1, text="適用済みの evolve 提案が 1 件あります。",
+            digest="記録待ち提案1件（evolve --drain）", tail_link=True,
+        )
+        queue = NotificationItem(
+            label="queue", tier=2, text="evolve 待ち: figma-to-code（1 件）",
+            digest="evolve待ち1PJ", tail_link=True,
+        )
+        judge = NotificationItem(
+            label="judge", tier=1, text="llm_judge 日次上限に到達",
+            digest="judge持ち越し10311件（自動）",
+        )
+        icebox = NotificationItem(
+            label="icebox", tier=2, text="icebox 58件・最古31日",
+            digest="icebox58件・最古31日", tail_link=True,
+        )
+        text = restore_state._merge_notification_text([drain, queue, judge, icebox])
+        assert text == (
+            "[evolve-anything] 記録待ち提案1件（evolve --drain） / "
+            "judge持ち越し10311件（自動） / evolve待ち1PJ / icebox58件・最古31日"
+            " → /evolve-anything:queue で開始"
+        )
+
+    def test_positive_label_change_does_not_affect_merged_body(self):
+        """陽性対照2: item の label だけを変えても結合結果の本文は変わらない（意味を
+        変えない書き換えで誤検出しない）。"""
+        a = NotificationItem(label="datadir", tier=1, text="A full", digest="A digest")
+        b = NotificationItem(label="utterance", tier=1, text="B full", digest="B digest")
+        text_original = restore_state._merge_notification_text([a, b])
+
+        a2 = NotificationItem(label="renamed-a", tier=1, text="A full", digest="A digest")
+        b2 = NotificationItem(label="renamed-b", tier=1, text="B full", digest="B digest")
+        text_renamed = restore_state._merge_notification_text([a2, b2])
+        assert text_original == text_renamed
+
+    def test_positive_single_item_full_text_unaffected_by_decision_text_field(self):
+        """陽性対照3（§5 既存陽性対照の再確認）: 発火1件のときは decision_text の有無に
+        関係なく text がそのまま返る。"""
+        item = NotificationItem(
+            label="proposal", tier=2, text="フル文だよ", digest="改善案1件",
+            decision_text="フル文だよ",
+        )
+        assert restore_state._merge_notification_text([item]) == "フル文だよ"
+
+    # --- 陰性試験（設計 §5 指定7件。各件「壊す不変条件」「通したい検査経路」を明記） ---
+
+    def test_negative_1_missing_decision_text_key_reverts_to_digest(self):
+        """N1（要素を消す）: decision_text が渡らない（collectors.py がキーを落とした状態を
+        model 層で再現）と、結合結果は改善案の digest に戻る。壊す不変条件=I1／経路=本テスト。
+        本文長に依存せず赤くなることを、長い本文でも確認する。"""
+        tier1 = NotificationItem(label="drain", tier=1, text="T1full", digest="T1digest")
+        proposal = NotificationItem(
+            label="proposal", tier=2, text="長い本文" * 100, digest="改善案2件",
+            decision_text=None,
+        )
+        text = restore_state._merge_notification_text([tier1, proposal])
+        assert text == "[evolve-anything] T1digest / 改善案2件"
+        assert "長い本文" not in text
+
+    def test_negative_2_decision_text_excluded_from_tier2_budget(self):
+        """N2（意味を壊す・予算）: decision item は Tier2 予算計算に含まれない。Tier1 だけで
+        400字を超える fixture でも、decision item の digest は overflow に落ちず、
+        decision_text は全文がそのまま付く。壊す不変条件=I1（予算非依存）／経路=本テスト。"""
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="D" * 410)
+        proposal = NotificationItem(
+            label="proposal", tier=2, text="t", digest="改善案1件", decision_text="本文",
+        )
+        text = restore_state._merge_notification_text([tier1, proposal])
+        assert text == "[evolve-anything] " + ("D" * 410) + " 本文"
+        assert "（ほか:" not in text
+        assert "改善案1件" not in text
+
+    def test_negative_3_decision_text_not_truncated(self):
+        """N3（意味を壊す・切り詰め）: decision_text は文字数に関係なく完全な形で結合される
+        （`[:80] + "…"` のような部分切り詰めをしない）。壊す不変条件=I2／経路=本テスト。"""
+        long_text = "あ" * 150
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="D")
+        proposal = NotificationItem(
+            label="proposal", tier=2, text="t", digest="改善案1件", decision_text=long_text,
+        )
+        text = restore_state._merge_notification_text([tier1, proposal])
+        assert text == f"[evolve-anything] D {long_text}"
+        assert text.endswith(long_text)
+        assert "…" not in text
+
+    def test_negative_4_decision_text_excluded_from_digest_join_entirely(self):
+        """N4（配線を外す）: decision item は「digest で結合する」経路（従来の tier1/tier2
+        classification）から完全に除外される。digest 分岐へ戻す実装だと `改善案1件` が
+        本文中に混入する。壊す不変条件=I1／経路=本テスト。"""
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="Ddigest")
+        proposal = NotificationItem(
+            label="proposal", tier=2, text="t", digest="改善案1件", decision_text="本文です",
+        )
+        text = restore_state._merge_notification_text([tier1, proposal])
+        assert text == "[evolve-anything] Ddigest 本文です"
+        assert "改善案1件" not in text
+
+    def test_negative_5_multiple_decision_items_all_included_in_fire_order(self):
+        """N5（意味を壊す・複数件）: decision item を2件以上持つとき、先頭の1件だけでなく
+        全件が発火順で結合される。壊す不変条件=I1／経路=本テスト。"""
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="Ddigest")
+        d1 = NotificationItem(label="p1", tier=2, text="t", digest="改善案1件", decision_text="本文A")
+        d2 = NotificationItem(label="p2", tier=2, text="t", digest="改善案1件", decision_text="本文B")
+        text = restore_state._merge_notification_text([tier1, d1, d2])
+        assert text == "[evolve-anything] Ddigest 本文A 本文B"
+
+    def test_negative_6_prefix_removed_end_to_end(self, monkeypatch):
+        """N6（prefix 除去を外す）: collectors.py の removeprefix が外れて decision_text が
+        自分で "[evolve-anything] " を保持したまま返ってくると、最終文字列に prefix が
+        2回現れる。壊す不変条件=I3（および I1）／経路=本テスト。"""
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="Ddigest")
+        proposal_with_embedded_prefix = NotificationItem(
+            label="proposal", tier=2, text="t", digest="改善案1件",
+            decision_text="[evolve-anything] 改善案があります: 「rep1」。",
+        )
+        text = restore_state._merge_notification_text([tier1, proposal_with_embedded_prefix])
+        assert text.count("[evolve-anything] ") == 2  # removeprefix が効いていれば1回のはず
+
+    def test_negative_7_extra_wording_mixed_into_decision_text(self):
+        """N7（混入）: collectors.py が `decision_text = "【要確認】" + body` のような文言を
+        混入させると、機械可読な等値比較（I2）でしか検出できない。壊す不変条件=I2／
+        経路=本テスト（包含検査 `"本文" in text` だけなら緑のまま通ってしまう例も併記）。"""
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="Ddigest")
+        body = "本文です"
+        contaminated = NotificationItem(
+            label="proposal", tier=2, text="t", digest="改善案1件",
+            decision_text=f"【要確認】{body}",
+        )
+        text = restore_state._merge_notification_text([tier1, contaminated])
+        # 包含検査だけなら "混入あり" でも通ってしまう例（対照として明示）
+        assert body in text
+        # I2 相当（segment 等値）で検出する: 実装が意図した decision segment はこの exact
+        # 値のはず。混入があるとこの等値は成立しない。
+        assert text != f"[evolve-anything] Ddigest {body}"
+        assert text == f"[evolve-anything] Ddigest 【要確認】{body}"
+
+    # --- 追加の陰性試験（自分で選ぶ・上記7件と種類が異なる2件以上） ---
+
+    def test_extra_1_unicode_and_newline_preserved_exactly(self):
+        """追加1（表現差: Unicode・改行）: decision_text に絵文字・サロゲートペア外文字・
+        改行が含まれても、正規化や除去をせず境界込みで完全一致する。壊す不変条件=I2／
+        経路=本テスト。想定 mutation: `decision_texts` を `.replace("\\n", " ")` する実装。"""
+        tricky = "改行あり\n行2・絵文字🎉・特殊文字「」『』"
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="Ddigest")
+        proposal = NotificationItem(
+            label="proposal", tier=2, text="t", digest="改善案1件", decision_text=tricky,
+        )
+        text = restore_state._merge_notification_text([tier1, proposal])
+        assert text == f"[evolve-anything] Ddigest {tricky}"
+
+    def test_extra_2_huge_decision_text_not_capped_by_tier2_budget_constant(self):
+        """追加2（境界値: 巨大入力）: decision_text が TIER2_BUDGET_CHARS（400字）を大幅に
+        超えても切り詰められない。壊す不変条件=I1・I2／経路=本テスト。想定 mutation:
+        `decision_texts` の各要素を `t[:TIER2_BUDGET_CHARS]` する実装（N3 の固定 80 字切り詰め
+        とは別の、予算定数に連動した切り詰めミス）。"""
+        huge = "巨" * 5000
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="Ddigest")
+        proposal = NotificationItem(
+            label="proposal", tier=2, text="t", digest="改善案1件", decision_text=huge,
+        )
+        text = restore_state._merge_notification_text([tier1, proposal])
+        assert text == f"[evolve-anything] Ddigest {huge}"
+        assert len(huge) == 5000  # fixture 自体の前提確認
+
+    def test_extra_3_empty_string_decision_text_falls_back_to_digest_no_trailing_space(self):
+        """追加3（境界値: 空文字列）: decision_text が "" のとき（None ではない）は判断材料
+        無しとみなし digest item として扱う。末尾に余計な空白を残さない。壊す不変条件=I1／
+        経路=本テスト。想定 mutation: `it.decision_text is not None` で判定する実装（空文字列を
+        誤って decision item 扱いし、末尾に trailing space が残る）。"""
+        tier1 = NotificationItem(label="drain", tier=1, text="t1", digest="Ddigest")
+        proposal = NotificationItem(
+            label="proposal", tier=2, text="t", digest="改善案1件", decision_text="",
+        )
+        text = restore_state._merge_notification_text([tier1, proposal])
+        assert text == "[evolve-anything] Ddigest / 改善案1件"
+        assert not text.endswith(" ")
+
+
+# ─────────────────────────────────────────────────────────────────
 # spec_drift の two-phase 化（§5.2/§7.1-4）
 # ─────────────────────────────────────────────────────────────────
 def _git(repo: Path, *args: str) -> str:
@@ -323,3 +511,47 @@ def test_contract_single_json_dict_with_all_expected_keys(tmp_path, monkeypatch,
     assert payload["hookSpecificOutput"]["sessionTitle"]
     assert payload["restored"] is True
     assert "checkpoint" in payload
+
+
+# ─────────────────────────────────────────────────────────────────
+# #503: restore_state.py の NotificationItem 構築（decision_text 配線）を
+# collectors.py の実出力に近い形で通す E2E（2件以上発火で digest 化される経路）
+# ─────────────────────────────────────────────────────────────────
+def test_e2e_decision_text_survives_multi_system_merge_with_prefix_once(tmp_path, monkeypatch, capsys):
+    """§3.1-3 の配線（restore_state.py:213-219）を通した E2E。session_proposal の本文
+    （collectors.py の decision_text 形式を模した dict）が、他系統と同時発火する digest 化
+    経路でも一字も削られず・prefix 重複せずに最終 systemMessage に現れる。"""
+    monkeypatch.setattr(restore_state, "_build_pending_trigger_output", lambda stack: None)
+    monkeypatch.setattr(restore_state, "_build_spec_drift_output", lambda: None)
+    monkeypatch.setattr(
+        restore_state, "_build_evolve_drain_output",
+        lambda: NotificationItem(label="drain", tier=1, text="適用済み提案", digest="記録待ち1件"),
+    )
+    monkeypatch.setattr(restore_state, "_build_data_dir_migration_output", lambda: None)
+    monkeypatch.setattr(restore_state, "_build_utterance_staleness_output", lambda: None)
+    monkeypatch.setattr(restore_state, "_build_evolve_queue_output", lambda *a, **k: None)
+    monkeypatch.setattr(
+        restore_state, "_build_session_proposal_output",
+        lambda *a, **k: {
+            "systemMessage": "[evolve-anything] 改善案があります: 「rep1」。応答のあとで採否をお聞きします。",
+            "digest": "改善案1件",
+            "decision_text": "改善案があります: 「rep1」。応答のあとで採否をお聞きします。",
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": "AskUserQuestion で確認してください",
+            },
+        },
+    )
+    monkeypatch.setattr(restore_state, "_build_judge_cap_output", lambda *a, **k: None)
+    monkeypatch.setattr(restore_state, "_build_icebox_output", lambda stack: None)
+    monkeypatch.setattr("common.find_latest_checkpoint", lambda _: None)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+
+    restore_state.handle_session_start({})
+
+    out = capsys.readouterr().out
+    payload = json.loads(out.strip().splitlines()[0])
+    msg = payload["systemMessage"]
+    assert "改善案があります: 「rep1」。応答のあとで採否をお聞きします。" in msg
+    assert "記録待ち1件" in msg  # 他系統は digest のまま同居
+    assert msg.count("[evolve-anything] ") == 1  # I3

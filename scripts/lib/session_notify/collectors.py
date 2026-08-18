@@ -15,6 +15,9 @@ from pathlib import Path
 
 from .model import NotificationItem, _classify_daily_snapshot_file
 
+# #503 §3.1-3: decision_text の prefix 除去に使う。merge 側が付け直すため二重にしない。
+_PREFIX = "[evolve-anything] "
+
 # trigger_engine import (optional) — session_notify 自体が scripts/lib 配下の top-level
 # package なので、import 可能な時点で sys.path に scripts/lib は既に入っている
 # （sys.path 操作は不要）。
@@ -581,6 +584,9 @@ def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | Non
         return {
             "systemMessage": system_message,
             "digest": f"改善案{len(groups)}件",
+            # #503 §3.1-3: 判断を求める本文。removeprefix は prefix が無ければ原文を
+            # そのまま返す（fail-open・例外にしない）。merge 側が prefix を付け直す。
+            "decision_text": system_message.removeprefix(_PREFIX),
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": message,

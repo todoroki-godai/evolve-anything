@@ -328,6 +328,18 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(session_notify): 判断を求める通知（改善案提示）が他系統と同時発火すると本文が digest に畳まれ利用者から消える不具合を修正（#503）** —
+  `NotificationItem` に `decision_text` を追加し、これを持つ item は発火件数・Tier2 予算・overflow の
+  いずれにも従わず（ADR-054 §3 [Nit-t6] の Tier2 正当化撤回）、常に全文を結合末尾へ連結するよう
+  `_merge_notification_text` を変更した（`digest` フィールドの意味は不変）。`collectors.py` の
+  `_build_session_proposal_output` が `decision_text`（systemMessage から `[evolve-anything] ` を
+  除去した本文）を返し、`hooks/restore_state.py` の `NotificationItem` 構築側で配線した（変更は
+  2ファイルにまたがる）。提案0件の notice は判断を求めないため `decision_text` を返さない。
+  `build_proposal_systemmessage` に「聞かれなければ『改善案を教えて』と言ってください」という
+  pull 導線を追加（y/n が来なかったときに利用者が拾い直せる手段が無かった問題への対処）。
+  ADR-054 draft（`docs/decisions/drafts/054-phase0-notification-routing.md`）§3/§4.2/§4.4 を
+  この優先順位規則に合わせて改訂。TDD + 陰性試験10方向（要素削除・予算混入・切り詰め・配線除去・
+  複数件先頭のみ・prefix二重・文言混入・Unicode/改行・巨大入力・空文字列）で全て赤になることを確認。
 - **fix(daily): SessionStart の改善案提示に判断材料が無く、意味のある y/n を組み立てられなかった不具合を修正（#498）** —
   `daily.proposal_digest._slim_group` に `reason`（判定理由）を配線し、`build_proposal_prompt` に
   「何をしている時に（`prev_action`）・なぜ拾われたか（`reason`）・何回起きたか（`count`）」を判断材料と

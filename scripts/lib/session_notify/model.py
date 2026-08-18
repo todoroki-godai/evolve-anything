@@ -25,6 +25,9 @@ class NotificationItem:
       icebox レーン1 の3系統のみ。他は ``None``。
     - ``tail_link``: このアイテムが発火していれば digest 行末尾に `→ /evolve-anything:queue
       で開始` を付与する対象か（§4.2'）。
+    - ``decision_text``: 利用者に判断を求める通知の本文（#503 §3.0）。非 ``None`` の item は
+      発火件数・予算にかかわらず digest 化されない・overflow に落ちない（``digest`` の意味は
+      変えない・digest 集合からは外れる）。判断を求めない通知は ``None`` のまま。
     """
 
     label: str
@@ -33,6 +36,7 @@ class NotificationItem:
     digest: str
     commit: "Callable[[], None] | None" = None
     tail_link: bool = False
+    decision_text: "str | None" = None
 
 
 def _classify_daily_snapshot_file(path: Path) -> str:

@@ -216,6 +216,7 @@ def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem],
             label="proposal", tier=2,
             text=proposal_output["systemMessage"],
             digest=proposal_output.get("digest") or proposal_output["systemMessage"],
+            decision_text=proposal_output.get("decision_text"),
         ))
 
     judge_item = _call_builder(_build_judge_cap_output, shared_queue)
