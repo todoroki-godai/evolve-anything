@@ -20,6 +20,7 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
@@ -28,6 +29,33 @@ if str(_lib_dir) not in sys.path:
 from correction_semantic import daily_review as dr  # noqa: E402
 from correction_semantic.store import CorrectionIdiom, append_idioms  # noqa: E402
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
+
+
+def _correction(
+    message: str = "小田原は6000円にして",
+    reflect_status: str = "promoted",
+    project_path: str = "evolve-anything",
+    timestamp: Optional[str] = None,
+    session_id: str = "sess1",
+    invalidated: bool = False,
+) -> dict:
+    """#514 修正在庫テスト用の corrections.jsonl レコード（test_correction_semantic_
+    correction_backlog.py と同一形状）。"""
+    return {
+        "message": message,
+        "reflect_status": reflect_status,
+        "project_path": project_path,
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "invalidated": invalidated,
+    }
+
+
+def _write_corrections(tmp_path: Path, corrections: list) -> Path:
+    path = tmp_path / "corrections.jsonl"
+    lines = [json.dumps(c, ensure_ascii=False) for c in corrections]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
 
 
 def _sig(text: str, line_no: int, pj_slug: str = "evolve-anything", **prov_extra) -> WeakSignal:
@@ -680,3 +708,148 @@ def test_build_review_no_marker_keeps_all_weak(tmp_path: Path):
     )
     assert res["eligible"] is True
     assert len(res["groups"]) == 1
+
+
+# ─────────────────────────────────────────────────────────────────
+# build_review: 修正在庫の統合（#514）
+# ─────────────────────────────────────────────────────────────────
+def test_build_review_includes_correction_backlog(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    corr_path = _write_corrections(
+        tmp_path, [_correction(message="在庫1"), _correction(message="在庫2", session_id="sess2")]
+    )
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        corrections_path=corr_path,
+    )
+    assert [b["message"] for b in res["correction_backlog"]] == ["在庫1", "在庫2"]
+    assert res["correction_backlog_remaining"] == 0
+
+
+def test_build_review_numeric_max_groups_reduces_new_limit_by_backlog_size(tmp_path: Path):
+    """max_groups=5 が数値指定のときのみ在庫3件分だけ新規枠を削る（ADR-054 PR2-b）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        # jaccard 誤collapse を避けるため既存テスト同様の4トピックを使う（4 distinct group）。
+        [
+            _sig("金額がきれてる", 1),
+            _sig("カテゴリの並び", 2),
+            _sig("検索結果の順序", 3),
+            _sig("通知の遅延", 4),
+        ],
+        path=ws,
+    )
+    corr_path = _write_corrections(
+        tmp_path,
+        [_correction(message=f"在庫{i}", session_id=f"corr{i}") for i in range(3)],
+    )
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        corrections_path=corr_path,
+        max_groups=5,
+    )
+    assert len(res["correction_backlog"]) == 3
+    # 新規上限は 5 - 3 = 2 に削減される。
+    assert len(res["groups"]) == 2
+    assert res["remaining"] == 2  # 4件新規のうち2件のみ提示、残り2件
+
+
+def test_build_review_max_groups_none_does_not_reduce_new_groups(tmp_path: Path):
+    """max_groups=None（daily.proposal_digest 経路）では在庫があっても新規を打ち切らない。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    append_signals(
+        [
+            _sig("金額がきれてる", 1),
+            _sig("カテゴリの並び", 2),
+            _sig("検索結果の順序", 3),
+            _sig("通知の遅延", 4),
+        ],
+        path=ws,
+    )
+    corr_path = _write_corrections(
+        tmp_path,
+        [_correction(message=f"在庫{i}", session_id=f"corr{i}") for i in range(3)],
+    )
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        corrections_path=corr_path,
+        max_groups=None,
+    )
+    assert len(res["correction_backlog"]) == 3
+    assert len(res["groups"]) == 4  # 削減されず全件
+    assert res["remaining"] == 0
+
+
+def test_build_review_correction_backlog_remaining_beyond_max_items(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    corr_path = _write_corrections(
+        tmp_path,
+        [_correction(message=f"在庫{i}", session_id=f"corr{i}") for i in range(5)],
+    )
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        corrections_path=corr_path,
+    )
+    assert len(res["correction_backlog"]) == 3
+    assert res["correction_backlog_remaining"] == 2
+
+
+def test_build_review_correction_backlog_empty_list_when_no_corrections(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        corrections_path=tmp_path / "corrections.jsonl",
+    )
+    assert res["correction_backlog"] == []
+    assert res["correction_backlog_remaining"] == 0
+
+
+def test_build_review_writes_nothing_to_corrections_file(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    corr_path = _write_corrections(tmp_path, [_correction(message="不変であるべき")])
+    before_bytes = corr_path.read_bytes()
+
+    dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        corrections_path=corr_path,
+    )
+
+    assert corr_path.read_bytes() == before_bytes
+
+
+def test_build_review_correction_backlog_excludes_invalidated_and_other_pj(tmp_path: Path):
+    ws = tmp_path / "weak_signals.jsonl"
+    corr_path = _write_corrections(
+        tmp_path,
+        [
+            _correction(message="有効な在庫"),
+            _correction(message="revoke済み", invalidated=True, session_id="s-inv"),
+            _correction(message="他PJ", project_path="amamo", session_id="s-other"),
+        ],
+    )
+    res = dr.build_review(
+        "evolve-anything",
+        weak_signals_path=ws,
+        seen_path=_seen(tmp_path),
+        corrections_path=corr_path,
+    )
+    assert [b["message"] for b in res["correction_backlog"]] == ["有効な在庫"]
+
+
+def test_build_correction_backlog_reexported_from_daily_review(tmp_path: Path):
+    """設計指定の呼び出し形 daily_review.build_correction_backlog(...) が使える（#514）。"""
+    corr_path = _write_corrections(tmp_path, [_correction(message="直接呼び出し")])
+    backlog = dr.build_correction_backlog("evolve-anything", corrections_path=corr_path)
+    assert [b["message"] for b in backlog] == ["直接呼び出し"]

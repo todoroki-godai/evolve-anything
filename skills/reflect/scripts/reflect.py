@@ -920,6 +920,10 @@ def main():
                         help="#475 §6.1: 指定 correction（make_source_correction_id 形式の"
                              "source_correction_id）を、--target-path に該当行が実在するか"
                              "確認してから applied にする。1呼び出し=1 correction 固定")
+    parser.add_argument("--skip", type=str, default=None, metavar="SOURCE_CORRECTION_ID",
+                        help="#514: 指定 correction（make_source_correction_id 形式の"
+                             "source_correction_id）を skipped にする（修正在庫の『もう出さない』）。"
+                             "--apply と同じ --dry-run 規約。既に applied 済みのレコードは上書きしない")
     parser.add_argument("--target-path", type=str, default=None,
                         help="--apply: 反映先ファイル（絶対 or リポジトリ相対）")
     parser.add_argument("--draft-line-file", type=str, default=None,
@@ -1218,6 +1222,49 @@ def main():
                 result["revert_reason"] = revert_res["reason"]
         print(json.dumps({
             "source_correction_id": args.apply,
+            **result,
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # --skip: 指定 correction を skipped にする（#514・修正在庫の『もう出さない』）。
+    # --apply と対称の同定（make_source_correction_id）・--dry-run 規約に合わせる。
+    # 既に applied 済みのレコードは上書きしない（在庫UI経由で反映済みを誤って
+    # skipped に巻き戻さない安全弁）。
+    if args.skip:
+        all_records = load_corrections(corrections_file)
+        target_index = None
+        for i, r in enumerate(all_records):
+            sid = r.get("session_id", "")
+            ts = r.get("timestamp", "")
+            if sid and ts and make_source_correction_id(sid, ts) == args.skip:
+                target_index = i
+                break
+        if target_index is None:
+            print(json.dumps({
+                "status": "not_found",
+                "message": "対象 correction が見つかりません",
+            }, ensure_ascii=False))
+            sys.exit(1)
+
+        if all_records[target_index].get("reflect_status") == "applied":
+            print(json.dumps({
+                "status": "already_applied",
+                "source_correction_id": args.skip,
+                "message": "既に applied 済みのため skipped で上書きしません",
+            }, ensure_ascii=False, indent=2))
+            return
+
+        if args.dry_run:
+            # --dry-run では一切書かない（--apply と同じ dry-run ゲート貫通規約）。
+            print(json.dumps({
+                "status": "dry_run",
+                "source_correction_id": args.skip,
+            }, ensure_ascii=False, indent=2))
+            return
+
+        result = update_reflect_status(corrections_file, [target_index], "skipped")
+        print(json.dumps({
+            "source_correction_id": args.skip,
             **result,
         }, ensure_ascii=False, indent=2))
         return
