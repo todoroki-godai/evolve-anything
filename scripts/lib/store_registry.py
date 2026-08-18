@@ -319,8 +319,10 @@ _DECLARATIONS: List[StoreDeclaration] = [
         "3-writer 規約の1つ）/ skills/evolve-loop-orchestrator/scripts/run_loop.py:685"
         "（loop 結果の append_entry）/ skills/evolve-fitness/scripts/fitness_evolution.py:246"
         "（_append_history_entry_deduped_locked 経由の dedup 追記）/ "
-        "scripts/lib/evolve_revert/_apply.py:129（revert 実行時の revert イベント追記）。"
-        "hot path（hooks）からは書かない。",
+        "scripts/lib/evolve_revert/_apply.py:129（revert 実行時の revert イベント追記）/ "
+        "skills/reflect/scripts/reflect.py の record_rule_revert_entry"
+        "（#475 §8.2: rule 文書への追記を revert 対象として記録・"
+        "append_history_entry_deduped 経由）。hot path（hooks）からは書かない。",
         writer_locus="batch",
         reader="optimize_history_store.load_effective_history / results_board.classify_decision"
         "（戦果ボード・採用/却下の集計）/ evolve_revert（entry 検索・apply・listing）が"
