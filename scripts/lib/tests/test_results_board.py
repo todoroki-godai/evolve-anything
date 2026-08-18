@@ -306,11 +306,48 @@ def stub_correction_rate(monkeypatch):
 
 def _closed_gate_summary():
     return {
-        "gate": {"gate_open": False, "display_start_week": None, "required": 4, "best_run_length": 0},
+        "gate": {
+            "gate_open": False, "display_start_week": None, "required": 4, "best_run_length": 0,
+            "point_week": None, "current_run_length": 0,
+        },
         "displayed_weeks": [],
         "latest_coverage": None,
         "diagnostics": {},
         "generated_at": None,
+    }
+
+
+def _point_week(week_id="2026-W33", judged=629, tp=63, pj_breakdown=None):
+    """#508 状態(ii) の point_week fixture（compute_display_gate 出力と同型）。"""
+    rate = (tp / judged) if judged else None
+    return {
+        "week_id": week_id,
+        "judged_count": judged,
+        "tp_count": tp,
+        "coverage": 1.0,
+        "measured": True,
+        "rate": rate,
+        "failure_reasons": [],
+        "pj_breakdown": pj_breakdown if pj_breakdown is not None else {
+            "evolve-anything": {"total": judged, "judged": judged, "tp": tp, "coverage": 1.0, "rate": rate},
+        },
+    }
+
+
+def _point_gate_summary(point_week=None, current_run_length=1, latest_coverage=None):
+    pw = point_week if point_week is not None else _point_week()
+    return {
+        "gate": {
+            "gate_open": False, "display_start_week": None, "required": 4, "best_run_length": 1,
+            "point_week": pw, "current_run_length": current_run_length,
+        },
+        "displayed_weeks": [],
+        "latest_coverage": latest_coverage if latest_coverage is not None else {
+            "week_id": pw["week_id"], "judged": pw["judged_count"], "total": pw["judged_count"],
+            "failure_reasons": [],
+        },
+        "diagnostics": {},
+        "generated_at": _NOW.isoformat(),
     }
 
 
@@ -972,3 +1009,196 @@ class TestRenderResultsBoard:
         results_board.render_results_board(self._board())
         after = set(tmp_path.rglob("*"))
         assert before == after
+
+
+# ── #508: 状態(ii) 点表示（指摘率を「確定した1週分の点」として先に出す） ────
+#
+# 設計正典 docs/decisions/drafts/508-single-week-rate-point.md §4。
+# 「バイト等値」の範囲は指摘率ブロック全体（除外 diagnostics 行を含む・次の見出しまで）
+# なので、_render_correction_rate を直接呼んでブロック単体を検証する。
+
+
+class TestRenderCorrectionRatePointState:
+    # ── 陽性対照（緑のまま・P1〜P3。陰性試験と混ぜて数えない） ──────────
+
+    def test_p1_state_i_exact_match_unaffected(self):
+        """P1/I1: 確定週0件 → 変更前 golden と等値。"""
+        lines = results_board._render_correction_rate(_closed_gate_summary())
+        assert lines == [
+            "分母から除外: 0 件（tracked外 0 件・90日超 0 件・ホーム起動 0 件）",
+            "",
+            "**指摘率: 未測定（確定週データなし）**",
+            "全量判定の確定週が 4 週連続で揃うまで系列は表示しません。",
+            "",
+        ]
+
+    def test_p2_state_iii_exact_match_unaffected(self):
+        """P2/I5: 連続 run が k 以上（gate_open）→ 変更前 golden と等値。"""
+        summary = {
+            "gate": {
+                "gate_open": True, "display_start_week": "2026-W10",
+                "required": 4, "best_run_length": 4,
+            },
+            "displayed_weeks": [
+                {"week_id": "2026-W10", "rate": 0.1, "judged_count": 10, "tp_count": 1,
+                 "coverage": 1.0, "measured": True, "pj_breakdown": {}, "is_worsening": False,
+                 "top3_examples": []},
+            ],
+            "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        }
+        lines = results_board._render_correction_rate(summary)
+        assert lines == [
+            "分母から除外: 0 件（tracked外 0 件・90日超 0 件・ホーム起動 0 件）",
+            "",
+            "**指摘率**（判定カバレッジ100%の確定週のみ・新しい順）",
+            "分子は LLM judge の意味判定です"
+            "（実測 precision 80% ＝ 分子の2割は誤りを含む前提で読んでください）。",
+            "",
+            "- 2026-W10: 10.0%（判定 10 件中 TP 1 件・カバレッジ100%）",
+            "",
+        ]
+
+    def test_p3_point_state_pj_floor_boundary(self):
+        """P3/I7(c): 点表示でも PJ 別 floor（judged<MIN_PJ_RATE_DENOM=10 は rate 非表示）が
+        従来どおり効く。境界値 judged=9（非表示）と judged=10（表示）を突き合わせる。"""
+        pw = _point_week(week_id="2026-W20", judged=19, tp=2, pj_breakdown={
+            "small": {"total": 9, "judged": 9, "tp": 1, "coverage": 1.0, "rate": None},
+            "big": {"total": 10, "judged": 10, "tp": 1, "coverage": 1.0, "rate": 0.1},
+        })
+        summary = _point_gate_summary(point_week=pw, current_run_length=1)
+        text = "\n".join(results_board._render_correction_rate(summary))
+        assert "small 1/9（件数のみ・分母不足）" in text
+        assert "big 1/10（10.0%）" in text
+
+    # ── 陰性試験（赤くなるべき・I2/I6/I7/I8/I9） ──────────────────────
+
+    def test_i2_point_block_exact_match(self):
+        """I2/N5: (a)〜(f) がすべて含まれることを完全一致で固定する
+        （分子/分母の欠落・数値の入替を検出する）。"""
+        pw = _point_week(week_id="2026-W33", judged=100, tp=10, pj_breakdown={
+            "evolve-anything": {"total": 100, "judged": 100, "tp": 10, "coverage": 1.0, "rate": 0.1},
+        })
+        summary = _point_gate_summary(point_week=pw, current_run_length=1)
+        lines = results_board._render_correction_rate(summary)
+        assert lines == [
+            "分母から除外: 0 件（tracked外 0 件・90日超 0 件・ホーム起動 0 件）",
+            "",
+            "**指摘率（2026-W33）: 10.0%**（1週分。推移は 4 週連続で表示）",
+            "判定 100 件中 TP 10 件・カバレッジ100%",
+            "連続 run の進捗: 1/4 週連続",
+            "PJ別: evolve-anything 10/100（10.0%）",
+            "",
+        ]
+
+    def test_i4_unmeasured_only_weeks_stay_state_i(self):
+        """I4/N1: measured=False の週しか無ければ点表示の候補に入らず状態(i)に留まる。"""
+        summary = _closed_gate_summary()  # point_week=None（measured 週なし相当）
+        text = "\n".join(results_board._render_correction_rate(summary))
+        assert "指摘率（" not in text
+        assert "未測定" in text
+
+    def test_i6_newer_unmeasured_candidate_surfaced(self):
+        """I6/N3: 点の対象週より新しい確定候補週が未測定なら、week_id・カバレッジ・
+        未測定理由を隠さず添える。"""
+        pw = _point_week(week_id="2026-W33", judged=100, tp=10)
+        latest = {
+            "week_id": "2026-W34", "judged": 50, "total": 90,
+            "failure_reasons": ["tp_conflict"],
+        }
+        summary = _point_gate_summary(point_week=pw, current_run_length=1, latest_coverage=latest)
+        text = "\n".join(results_board._render_correction_rate(summary))
+        assert "最新候補週 2026-W34: 判定カバレッジ 50/90・未測定・理由: tp_conflict" in text
+
+    def test_i7ab_all_pj_listed_and_sums_match_total(self):
+        """I7(a)(b)/N6: judged>=1 の PJ を全件列挙し、PJ 別合計が全体分母/分子と一致する。"""
+        pj_breakdown = {
+            "pj-a": {"total": 60, "judged": 60, "tp": 6, "coverage": 1.0, "rate": 0.1},
+            "pj-b": {"total": 40, "judged": 40, "tp": 4, "coverage": 1.0, "rate": 0.1},
+        }
+        pw = _point_week(week_id="2026-W20", judged=100, tp=10, pj_breakdown=pj_breakdown)
+        assert sum(v["judged"] for v in pj_breakdown.values()) == pw["judged_count"]
+        assert sum(v["tp"] for v in pj_breakdown.values()) == pw["tp_count"]
+        summary = _point_gate_summary(point_week=pw, current_run_length=1)
+        text = "\n".join(results_board._render_correction_rate(summary))
+        assert "pj-a 6/60（10.0%）" in text
+        assert "pj-b 4/40（10.0%）" in text
+
+    def test_i7d_empty_pj_breakdown_falls_back_to_state_i(self):
+        """I7(d)/防御: PJ別内訳が空なら点表示そのものを行わず状態(i)に落ちる。"""
+        pw = _point_week(pj_breakdown={})
+        summary = _point_gate_summary(point_week=pw, current_run_length=1)
+        text = "\n".join(results_board._render_correction_rate(summary))
+        assert "未測定" in text
+        assert "PJ別" not in text
+        assert f"指摘率（{pw['week_id']}）" not in text
+
+    def test_i8_progress_reflects_current_run_length(self):
+        """I8/N4: n/k の n は現在の連続 run 長（表示専用・非連続な確定週の総数ではない）。"""
+        summary = _point_gate_summary(current_run_length=3)
+        text = "\n".join(results_board._render_correction_rate(summary))
+        assert "連続 run の進捗: 3/4 週連続" in text
+
+    def test_n7_state_i_never_shows_zero_percent(self):
+        """N7: 確定週0件のときに率 0% を出さない（未測定と 0 の混同防止）。"""
+        text = "\n".join(results_board._render_correction_rate(_closed_gate_summary()))
+        assert "0%" not in text
+        assert "0.0%" not in text
+
+    # ── I3（系列を騙らない） ────────────────────────────────────────
+
+    def test_i3_single_week_id_when_no_newer_candidate(self):
+        text = "\n".join(results_board._render_correction_rate(_point_gate_summary()))
+        assert text.count("2026-W") == 1
+
+    def test_i3_newer_candidate_line_carries_no_second_rate_value(self):
+        """I6 で最新候補週の week_id が追加で出ても、それは率を伴う第2のデータ点ではない
+        （%記号が付かない＝系列を騙らない）。"""
+        pw = _point_week(week_id="2026-W33", judged=100, tp=10)
+        latest = {"week_id": "2026-W34", "judged": 50, "total": 90, "failure_reasons": []}
+        summary = _point_gate_summary(point_week=pw, current_run_length=1, latest_coverage=latest)
+        lines = results_board._render_correction_rate(summary)
+        text = "\n".join(lines)
+        assert "→" not in text and "↑" not in text and "↓" not in text
+        candidate_line = next(line for line in lines if line.startswith("最新候補週"))
+        assert "%" not in candidate_line
+
+    # ── §2-1-(c) 実行文脈: gate 側で非ソート入力を正しく解決した後の配線確認 ──
+
+    def test_current_run_length_and_point_week_wired_from_gate(self):
+        """compute_display_gate が非ソート入力から正しく解決した point_week /
+        current_run_length を、results_board がそのまま表示に使うことを配線として確認する
+        （collect ロジック自体は test_correction_rate.py が担う）。"""
+        import correction_rate as cr
+
+        weeks = [
+            {"week_id": "2026-W12", "measured": True, "rate": 0.1, "judged_count": 12,
+             "tp_count": 1, "total_population": 12, "coverage": 1.0,
+             "pj_breakdown": {"evolve-anything": {"total": 12, "judged": 12, "tp": 1,
+                                                    "coverage": 1.0, "rate": None}},
+             "top3_examples": [], "failure_reasons": []},
+            {"week_id": "2026-W10", "measured": True, "rate": 0.2, "judged_count": 10,
+             "tp_count": 2, "total_population": 10, "coverage": 1.0,
+             "pj_breakdown": {"evolve-anything": {"total": 10, "judged": 10, "tp": 2,
+                                                    "coverage": 1.0, "rate": 0.2}},
+             "top3_examples": [], "failure_reasons": []},
+            {"week_id": "2026-W11", "measured": True, "rate": 0.15, "judged_count": 11,
+             "tp_count": 1, "total_population": 11, "coverage": 1.0,
+             "pj_breakdown": {"evolve-anything": {"total": 11, "judged": 11, "tp": 1,
+                                                    "coverage": 1.0, "rate": 0.09}},
+             "top3_examples": [], "failure_reasons": []},
+        ]  # わざと非ソートで渡す（§2-1-c）
+        gate = cr.compute_display_gate(weeks)
+        summary = {
+            "gate": gate,
+            "displayed_weeks": [],
+            "latest_coverage": {
+                "week_id": "2026-W12", "judged": 12, "total": 12, "failure_reasons": [],
+            },
+            "diagnostics": {},
+            "generated_at": _NOW.isoformat(),
+        }
+        text = "\n".join(results_board._render_correction_rate(summary))
+        assert "指摘率（2026-W12）" in text
+        assert "連続 run の進捗: 3/4 週連続" in text

@@ -542,6 +542,9 @@ def compute_display_gate(
 
     連続性は **暦週として隣接しているか**（week_id が1週分進んでいるか）で判定する。
     途中に候補週が存在しない（population=0）ギャップも「連続」を断ち切る。
+
+    #508: 系列ゲート（``gate_open``）とは独立に、点表示専用の追加フィールドを返す。
+    **``gate_open`` の判定式（``best_run >= k``）はこの拡張で一切変更しない**（round2 [Must]）。
     """
     best_run: List[Dict[str, Any]] = []
     current_run: List[Dict[str, Any]] = []
@@ -556,11 +559,37 @@ def compute_display_gate(
             best_run = list(current_run)
 
     gate_open = len(best_run) >= k
+
+    # #508 §2-1: point_week（点表示対象週）と current_run_length（点表示の進捗専用）。
+    # 呼出契約は昇順を仮定するだけで内部ソートしない既存関数だが、この2フィールドは
+    # §2-1-(c) のとおり明示的に week_id でソートしてから算出する（非ソート入力でも
+    # 正しい値になることをテストで固定する）。gate_open の判定には使わない。
+    sorted_weeks = sorted(weeks, key=lambda w: w["week_id"])
+    point_week: Optional[Dict[str, Any]] = None
+    current_run_length = 0
+    point_run: List[Dict[str, Any]] = []
+    for w in sorted_weeks:
+        if point_run and _next_week_id(point_run[-1]["week_id"]) != w["week_id"]:
+            point_run = []
+        if w.get("measured"):
+            point_run.append(w)
+            # I9: weeks 中で week_id が最大の measured=True 週を採用し続ける
+            # （最後まで走査した時点で最新の measured 週に確定する）。
+            point_week = w
+            # I8: current_run_length は point_week（最新の measured 週）で終わる
+            # 連続 run の長さ。point_week 確定と同時に更新するため、point_week より
+            # 後ろに未測定週が続いても current_run_length は動かない（表示専用）。
+            current_run_length = len(point_run)
+        else:
+            point_run = []
+
     return {
         "gate_open": gate_open,
         "display_start_week": best_run[0]["week_id"] if gate_open else None,
         "required": k,
         "best_run_length": len(best_run),
+        "point_week": point_week,
+        "current_run_length": current_run_length,
     }
 
 
@@ -604,7 +633,14 @@ def build_correction_rate_summary(
 
     latest = weeks[-1] if weeks else None
     latest_coverage = (
-        {"week_id": latest["week_id"], "judged": latest["judged_count"], "total": latest["total_population"]}
+        {
+            "week_id": latest["week_id"],
+            "judged": latest["judged_count"],
+            "total": latest["total_population"],
+            # #508 I6: 点表示（状態(ii)）が「最新候補週の未測定理由」を出せるよう、
+            # coverage<1.0 以外の未測定理由（分子⊆分母違反等）も一緒に運ぶ。
+            "failure_reasons": latest.get("failure_reasons", []),
+        }
         if latest else None
     )
 
