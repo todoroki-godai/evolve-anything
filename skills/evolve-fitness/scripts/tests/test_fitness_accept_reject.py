@@ -260,14 +260,22 @@ class TestLoadHistoryProjectDirParam:
             store, "resolve_slug",
             lambda cwd=None: Path(cwd).name if cwd else "cwd-slug",
         )
-        # cwd 側（project_dir 未指定時の既定）は BOOTSTRAP_MIN 未満の少数決定のみ
+        # cwd 側（project_dir 未指定時の既定）は BOOTSTRAP_MIN 未満の少数決定のみ。
+        # #512: 母集団は採点付き（best_fitness を持つ）entry に限るため、canonical writer が
+        # 実際に書く形（record_evolve_diff_decision は常に best_fitness を含む）に合わせる。
         for i in range(2):
-            store.append_entry({"human_accepted": True, "fitness_func": "cwd_func"}, "cwd-slug")
+            store.append_entry(
+                {"best_fitness": 0.5, "human_accepted": True, "fitness_func": "cwd_func"},
+                "cwd-slug",
+            )
         # 対象 PJ 側は insufficient_data を超える十分な件数
         pj_b = tmp_path / "pj-b"
         pj_b.mkdir()
         for i in range(10):
-            store.append_entry({"human_accepted": (i % 2 == 0), "fitness_func": "pj_b_func"}, "pj-b")
+            store.append_entry(
+                {"best_fitness": 0.5, "human_accepted": (i % 2 == 0), "fitness_func": "pj_b_func"},
+                "pj-b",
+            )
 
         result = fe.run_fitness_evolution(project_dir=pj_b)
         # cwd 側 2件だけなら insufficient_data になるはずだが、pj_b 側 10件が読まれていれば
@@ -429,3 +437,53 @@ class TestFitnessEligibleExclusion:
         ] * 5
         result = fe.run_fitness_evolution(history=history)
         assert result["data_count"] == 5
+
+
+class TestScoredOnlyPopulation:
+    """#512: 採点を持たない entry（rule 反映の記録）を fitness 母集団に入れない。
+
+    `record_rule_revert_entry` が `human_accepted: True` を書くようになったため、
+    `best_fitness` 条件が無いと rule 反映が data_count と approval_rate に混入する。
+    rule 反映は構造上ほぼ全件 accept なので approval_rate を上方に汚染する
+    （実ストア実測: 1 件混入で data_count 0→1 / approval_rate 0.000→1.000）。
+    """
+
+    def _rule_entry(self):
+        return {
+            "id": "rule_apply_bd2cf304dc0a3f6f",
+            "human_accepted": True,
+            "skill_name": "model-routing.md",
+            "scope": "global_rule",
+            "relative_path": "model-routing.md",
+            "revert_schema_version": 1,
+        }
+
+    def test_rule_apply_entry_is_not_counted(self):
+        result = fe.run_fitness_evolution(history=[self._rule_entry()])
+        assert result["data_count"] == 0
+
+    def test_rule_apply_entry_does_not_inflate_approval_rate(self):
+        """陽性対照つき: 採点付き reject 5 件に rule 反映を混ぜても承認率が動かない。"""
+        scored = [
+            {"best_fitness": 0.4, "human_accepted": False, "fitness_func": "skill_quality"}
+        ] * 5
+        baseline = fe.run_fitness_evolution(history=list(scored))
+        polluted = fe.run_fitness_evolution(history=list(scored) + [self._rule_entry()])
+
+        assert polluted["data_count"] == baseline["data_count"] == 5
+        assert polluted.get("approval_rate") == baseline.get("approval_rate")
+
+    def test_scored_entries_still_counted(self):
+        """陽性対照: canonical writer の採点付き entry は母集団に残る（過剰除外でない）。"""
+        history = [
+            {"best_fitness": 0.5, "human_accepted": True, "fitness_func": "skill_quality"},
+        ] * 5
+        assert fe.run_fitness_evolution(history=history)["data_count"] == 5
+
+    def test_best_fitness_none_is_still_counted(self):
+        """`best_fitness` が None でもキーがあれば canonical writer 由来なので残す
+        （キー欠落だけを除外条件にする — 実ストアで落ちる既存 entry 0 件を実測）。"""
+        history = [
+            {"best_fitness": None, "human_accepted": True, "fitness_func": "skill_quality"},
+        ] * 5
+        assert fe.run_fitness_evolution(history=history)["data_count"] == 5

@@ -499,9 +499,16 @@ def run_fitness_evolution(
     # データ十分性チェック。fitness_eligible=False（#376 の legacy hash-proxy 誤 accept
     # migration で無効化された entry）は母集団から除外する。キー欠落は既存 entry との
     # 後方互換のため既定 True（含める）。
+    # #512: 母集団は ADR-041 の定義どおり「採点付きの判断」に限る。`best_fitness` を
+    # 持たない entry（rule 反映の記録など）は score-acceptance 相関の材料にならないうえ、
+    # 構造上ほぼ全件 accept のため approval_rate を上方に汚染する（実測: rule 反映 1 件で
+    # data_count 0→1 / approval_rate 0.000→1.000）。canonical 3 writer は全件 `best_fitness`
+    # を持つため、実ストア全 slug で本条件により落ちる既存 entry は 0 件（2026-08-18 実測）。
     decisions = [
         r for r in history
-        if r.get("human_accepted") is not None and r.get("fitness_eligible", True)
+        if r.get("human_accepted") is not None
+        and r.get("fitness_eligible", True)
+        and "best_fitness" in r
     ]
 
     if len(decisions) < BOOTSTRAP_MIN:

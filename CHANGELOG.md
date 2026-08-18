@@ -339,6 +339,31 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(results_board): rule 反映として記録した採用が `pending` に落ち revert 一覧にも戦果ボードにも
+  出ない不具合を修正（#512）** — `classify_decision` は「フィールドの実在と bool 型を優先」する規則で
+  canonical writer 3 種を判定していたが、#475 §8.2 で追加された 4 番目の writer
+  （`skills/reflect/scripts/reflect.py` の `record_rule_revert_entry`）が `human_accepted` /
+  `approved` のどちらも書かないため `pending` に落ちていた。`build_revert_listing` は accepted 以外を
+  skip するため、`compute_revert_availability` が `(True, None)`（＝戻せる）と判定する entry が
+  `bin/evolve-revert --list`（entry_id を人間が知る唯一の導線）から脱落し、戦果ボードにも
+  「採用の記録はありません（0件）」と表示されていた（CLAUDE.md 体験4 と #376 への直接違反）。
+  writer 側に `human_accepted: True` を追加し（記録の存在自体が人間の明示承認を意味する）、
+  それ以前に書かれた legacy shape は `_is_legacy_rule_apply`（id prefix + rule scope +
+  `revert_schema_version` の 3 条件すべて）に限って accepted と見なす。優先順位（`fitness_eligible=False`
+  → テスト汚染 → 判定フラグ）は不変。実ストア 43 entry の read-only dry-run で分類が変わるのは
+  当該 1 件のみであることを確認（optimize.py 由来の決定フラグ無し entry を巻き込まない）。
+  writer→reader の往復テスト・FP guard 7 件を追加し、6 方向の mutation（分岐削除 / 条件を scope
+  だけに拡大 / `revert_schema_version` チェック無効化 / 優先順位の入替 / 判定を常に真 /
+  writer の flag 削除）で全て赤くなることを確認。
+  併せて `human_accepted` を直読みする reader 3 箇所の影響を実測し裁定した（cold review [Must]）:
+  ①`fitness_evolution.run_fitness_evolution` の母集団条件に `"best_fitness" in r` を追加
+  （ADR-041 の「採点付き記録」定義どおり。rule 反映は構造上ほぼ全件 accept のため、混ぜると
+  実測で data_count 0→1 / approval_rate 0.000→1.000 と上方汚染する。canonical 3 writer は
+  全件 `best_fitness` を持つため実ストア全 slug で落ちる既存 entry は 0 件）
+  ②`outcome_promotion_readiness` の anchor には**意図して含める**（rule 追記は前後比較したい
+  介入そのもので、anchor は時刻のみ使い score を参照しない）③`audit/aggregate_runs.py` の
+  Accept/Reject 比率は戦果ボードと同じ値になる（整合が取れる方向）。`queue_verify`（run_id 必須）/
+  `propose`（False のみ参照）/ `detect_drifted_funcs`（best_fitness ペア必須）は影響なしを実測。
 - **fix(daily): `prev_action`（直前 AI 行動のツール名連結）を朝の改善案提示・説明可否判定から外した（#504）** —
   仕様は「1行要約」だが実装は `tool_use.name` の連結で、実測（本番データ）では説明可否ゲートの
   通過/保留を1件も変えていなかった（`prev_action` のみで説明可になる group は0件）。

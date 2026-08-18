@@ -54,6 +54,12 @@ _EXCLUSION_REASON_LABELS = {
     "test_polluted": "テスト汚染",
 }
 
+# #512: `record_rule_revert_entry` が作る entry の id prefix と scope。
+# 単一ソースは writer 側（`skills/reflect/scripts/reflect.py`）だが、reader は writer を
+# import できない（skills/ 配下・循環参照）ため定数を持つ。値を変えるときは両側を直す。
+_LEGACY_RULE_APPLY_ID_PREFIX = "rule_apply_"
+_RULE_SCOPES = ("global_rule", "project_rule")
+
 # #379 Step 4 実データ較正（~/.claude/evolve-anything/optimize_history/evolve-anything.jsonl・
 # 38件・2026-08-10 読み取り時点）: pytest 実行由来の一時パス汚染は "pytest-of-" だけでなく
 # macOS tmpfile 規約（/T/tmp<random>/ 等）にも及ぶ。狭い "pytest-of-" 限定では 30 件中 13 件
@@ -85,16 +91,54 @@ def _is_test_polluted(entry: Dict[str, Any]) -> bool:
     return False
 
 
+def _is_legacy_rule_apply(entry: Dict[str, Any]) -> bool:
+    """#512: `human_accepted` を書く前の rule 反映 entry（legacy shape）か判定する。
+
+    4 番目の writer（`skills/reflect/scripts/reflect.py` の `record_rule_revert_entry`）は
+    #512 の修正で `human_accepted: True` を書くようになったが、それ以前に書かれた entry は
+    決定フラグを持たない。そのままだと `pending` に落ち `bin/evolve-revert --list`（entry_id を
+    人間が知る唯一の導線）から脱落するため、**この writer の形に限って** accepted と見なす。
+
+    条件は 3 つすべてを満たすときのみ（広げない）:
+      1. `id` が `rule_apply_` 始まり — 当該 writer だけが作る id prefix
+      2. `scope` が rule スコープ — 同 writer は他 scope を書かない
+      3. `revert_schema_version` を持つ — revert 記録として完成している
+
+    この writer は「利用者が 4 択で 1)/2) を選び、rule ファイルへの追記が実際に行われた後」に
+    のみ append されるため、記録の存在そのものが人間の明示承認を意味する。
+
+    **新規 entry はこの分岐を通らない**（`human_accepted` を持つため先に決着する）。
+    将来この分岐が不要になったら削除してよい。
+
+    store の in-place migration（`legacy_accept_migration.py` 同型）を採らなかった理由:
+    同形の legacy entry が他マシンの store にどれだけあるかは**このマシンからは測定不能**で、
+    migration は実行された環境でしか直らない。reader 側の狭い分岐なら配布した時点で全環境に
+    効く。代償は「reader が writer の形を知る」ことだが、3 条件すべてを要求して
+    `rule_apply_` 以外に波及しないようにし、`_apply.py` の revert イベント
+    （`revert_schema_version` を持たない）が accepted に化けないことをテストで固定した。
+    """
+    if not str(entry.get("id") or "").startswith(_LEGACY_RULE_APPLY_ID_PREFIX):
+        return False
+    if entry.get("scope") not in _RULE_SCOPES:
+        return False
+    return entry.get("revert_schema_version") is not None
+
+
 def classify_decision(entry: Dict[str, Any]) -> str:
     """optimize_history の1エントリを accepted/rejected/pending/excluded に正規化する。
 
-    canonical writer 3種の実 emit 形を read して判定フィールドを確認した結果（#398 Must 1）:
+    canonical writer 4種の実 emit 形を read して判定フィールドを確認した結果
+    （#398 Must 1、4 番目は #512 で追補。store_registry.py の writer 列挙と整合させること）:
       - `fitness_evolution.record_evolve_diff_decision`（source="evolve_remediation"）:
         `human_accepted`（bool）を持つ
       - `run_loop.py`（evolve-loop）: `approved`（bool）を持つ。`source`/`human_accepted`
         キー自体が無い
       - `optimize.py` の `save_history_entry`: `human_accepted`（bool | None）を持つ。
         `source`/`approved` キー自体が無い
+      - `skills/reflect/scripts/reflect.py` の `record_rule_revert_entry`（#475 §8.2 の
+        rule 反映記録）: #512 以降は `human_accepted`（常に True）を持つ。それ以前に
+        書かれた entry は決定フラグを持たない（→ `_is_legacy_rule_apply` で救済）。
+        `best_fitness` を持たないため fitness 母集団には入らない（#512・上方汚染の防止）
 
     **旧実装の誤り**: 「source=None → approved で判定」という survey 段階の前提は
     optimize.py の存在を見落としていた。optimize.py も source=None を書くため、
@@ -119,6 +163,8 @@ def classify_decision(entry: Dict[str, Any]) -> str:
         decided: Optional[bool] = human_accepted
     elif isinstance(approved, bool):
         decided = approved
+    elif _is_legacy_rule_apply(entry):
+        decided = True
     else:
         decided = None
 

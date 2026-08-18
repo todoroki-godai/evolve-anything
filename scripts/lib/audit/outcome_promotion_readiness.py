@@ -285,6 +285,10 @@ def _load_apply_anchors(base: Path) -> Dict[str, List[str]]:
     for path in sorted(hist_dir.glob("*.jsonl")):
         slug = _om._normalize_pj(path.stem) or path.stem
         for rec in fold_effective(_om._read_jsonl(path)):
+            # #512: rule 反映の記録（`record_rule_revert_entry`）も `human_accepted: True` を
+            # 持つため anchor に入る。これは**意図した挙動**——rule への追記は前後比較の対象に
+            # したい介入そのもの。fitness 母集団（採点付きに限定）とは別の判断で、
+            # anchor は「いつ介入したか」だけを使い score を参照しないため採点の有無を問わない。
             if rec.get("human_accepted") is True:
                 ts = _om._ts_of(rec, "timestamp")
                 if ts:

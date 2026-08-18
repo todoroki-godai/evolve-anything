@@ -569,6 +569,12 @@ def record_rule_revert_entry(
     )[:16]
     entry = {
         "id": entry_id,
+        # #512: `results_board.classify_decision` は「フィールドの実在と bool 型を優先」で
+        # 正規化する（source 文字列では判定しない）。この writer は「利用者が 4 択で 1)/2) を
+        # 選び、rule ファイルへの追記が実際に行われた後」にのみ 1 件 append されるため、
+        # 人間が明示承認した採用そのもの。キーを持たないと pending に落ち、
+        # `bin/evolve-revert --list`（entry_id を知る唯一の導線）から脱落する。
+        "human_accepted": True,
         "skill_name": identity["relative_path"],
         "scope": identity["scope"],
         "relative_path": identity["relative_path"],

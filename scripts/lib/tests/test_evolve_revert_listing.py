@@ -78,6 +78,46 @@ class TestBuildRevertListingFiltering:
         ])
         assert listing.build_revert_listing("evolve-anything") == []
 
+    def test_rule_apply_entry_is_listed(self, stub_history):
+        """#512: rule 反映として記録された採用が一覧に出る（戻せるのに脱落していた）。
+
+        `--list` は entry_id を人間が知る唯一の導線なので、ここから落ちると
+        「戻せると判定されるのに戻す手段が無い」状態になる。
+        """
+        stub_history([
+            _full_entry(
+                id="rule_apply_bd2cf304dc0a3f6f",
+                human_accepted=True,
+                skill_name="model-routing.md",
+                scope="global_rule",
+                repo_id=None,
+                relative_path="model-routing.md",
+            ),
+        ])
+
+        items = listing.build_revert_listing("evolve-anything")
+
+        assert len(items) == 1
+        assert items[0]["entry_id"] == "rule_apply_bd2cf304dc0a3f6f"
+        assert items[0]["revert_available"] is True
+
+    def test_legacy_rule_apply_entry_without_flag_is_listed(self, stub_history):
+        """#512: `human_accepted` を書く前に記録された rule 反映 entry も一覧に出る。"""
+        entry = _full_entry(
+            id="rule_apply_bd2cf304dc0a3f6f",
+            skill_name="model-routing.md",
+            scope="global_rule",
+            repo_id=None,
+            relative_path="model-routing.md",
+        )
+        del entry["human_accepted"]
+        stub_history([entry])
+
+        items = listing.build_revert_listing("evolve-anything")
+
+        assert len(items) == 1
+        assert items[0]["entry_id"] == "rule_apply_bd2cf304dc0a3f6f"
+
     def test_accepted_pre_extension_entry_is_listed_not_dropped(self, stub_history):
         """revert 不可（lane 対象外・記録拡張前）でも黙って落とさず reason つきで残す。"""
         stub_history([
