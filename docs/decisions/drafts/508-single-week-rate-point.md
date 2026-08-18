@@ -57,10 +57,13 @@ status: draft（実装着手前レビュー用・**rev3**）
 | M1 | 現時点で点表示に使える確定週は **存在しない** | `weeks` は `_now < cutoff` の週を除外する（`correction_rate.py:330-331`）ため、最後の確定週は W32（cutoff 08-13）で 129/842・`measured=False` | `compute_weekly_correction_rate` の実コード + 実データ |
 | M2 | W33（08-10〜08-16）は本日時点で **629/629 = 100%・measured=True** | freeze cutoff は **2026-08-20T00:00:00 UTC** | production と同じ母集団条件で dry-run 計算（書込ゼロ） |
 | M3 | 分母は cutoff まで増え続ける | 08-17 実測 589/589 → 08-18 実測 629/629。**cutoff 時点で 100% を維持する保証はない**（§5） | 2日分のスナップショット比較 |
-| M4 | 直近10日の新規流入（tracked 母集団・日別） | 8/08=13, 8/09=60, 8/10=78, 8/11=73, **8/12=234**, 8/13=103, 8/14=74, 8/15=27, 8/16=40, 8/17=25 | utterances 母集団の日別集計 |
-| M5 | judge の日次上限は 200 件（`judge_runner.py:71`）。実行実績は 8/11〜8/17 が 198〜200 件、**8/18 は 170 件で1バッチ失敗** | 上限 200 に対する**実効**処理量はバッチ失敗を含むため 200 ではない（§5） | `logs/evolve-daily.log` 直近8回 |
+| M4 | 実効処理量と新規流入（**08-11〜08-17 の7日・tracked 母集団**） | 判定 199.7 件/日（上限 200 にほぼ張り付き）/ 流入 **82.3 件/日**（日別 25〜234・8/12 のみ 234 の突発）/ **余剰 +117.4 件/日** | `read_judged_records` の日別集計 + `query_utterances_all_projects` に production と同じフィルタを適用（再現手順は #508 の調査記録） |
+| M5 | 失敗は常態ではないが 0 でもない | 8日中: 08-13 に部分損失1回（`omitted_verdicts=2`）、**08-18 に1バッチ丸ごとタイムアウト**（約30件相当・当日実効170件）。freeze 猶予3日で吸収できる範囲 | `logs/evolve-daily.log` 直近8回 |
 | M6 | 未判定在庫 | **6,183 件**（tracked 外 1,317 件・90日超 141 件を除外後） | dry-run 実測（書込ゼロ） |
 | M7 | 過去週の遡り補完は**構造的に不可能** | `judged_at <= cutoff`（`correction_rate.py:341-346`）の凍結契約。今日判定しても `judged_at` は今日になり W29〜W32 の cutoff を過ぎている | 実コード |
+| M8 | **`measured=True` の週は全期間で1件も無い**。したがって `best_run_length = 0` | production 既定で weeks に入る 12週（W21〜W32）は全て `measured=False`。`compute_display_gate` 実測 = `{'gate_open': False, 'display_start_week': None, 'required': 4, 'best_run_length': 0}` | production 関数を実データで実行（書込ゼロ） |
+| M9 | W33 の PJ 別内訳（先取り値・`pj_breakdown`） | 9 PJ。judged: 268 / 142 / 106 / 41 / 40 / 20 / 5 / 4 / 3。**うち3 PJ（33%）が floor（`MIN_PJ_RATE_DENOM=10`）で率を隠される**。件数自体は全 PJ 表示される（`correction_rate.py:419-450`） | 同上 |
+| M10 | 既存ドラフト2件に**誤った予測**が残っている | `054-a5-correction-category.md:180` と `054-c-a-numerator.md:218` が「W33 は daily runner 稼働前なので100%に届かず対象外」と書いているが、**実測では W33 は 100% 到達済み**。両者は W33 進行中に書かれた予測で実測ではない（ADR-054 本体に "W33" の語は無い） | 実測（M2）との突合 |
 
 **M1 の帰結**: 本変更を入れても**今日は何も表示されない**。初表示は W33 が freeze される
 **08-20 以降**で、かつ M3 のとおり cutoff 時点でも 100% を維持できた場合に限る。
@@ -165,11 +168,10 @@ status: draft（実装着手前レビュー用・**rev3**）
 - **1週分の点値が利用者の判断に役立つかは未測定**。本設計はこれを主張せず、ユーザー決定に従う
 - **W33 が cutoff（08-20）時点でも 100% を維持するかは未確定**（M3）。08-18 のスナップショットで
   100%。維持できなければ初表示は次の確定週まで延びる
-- **実効処理量は未測定**（M5）。日次上限は 200 だが 8/18 は 170 件・1バッチ失敗。
-  バッチ失敗率・token limit・newest-first の影響を織り込んだ実効値は測っていないため、
-  「上限200 − 流入147 = 余力53」という単純差は**根拠として使わない**
-- **点表示時の典型的な分母**（全体・PJ 別）は M2 の 629 以外に実測がない。floor で率が隠れる
-  PJ が何件になるかは未測定
+- ~~実効処理量は未測定~~ → **M4/M5 で実測済み**（199.7 件/日・余剰 +117.4 件/日・失敗は散発）。
+  当初 rev2 に書いた「流入 147 件/日・余力 53 件/日」は ADR の別測定期間・別母集団の値で、
+  **今回の実測と一致しないため撤回**した
+- ~~点表示時の分母分布と floor で隠れる PJ 数は未測定~~ → **M9 で実測済み**（9 PJ 中 3 PJ が floor）
 - **非ソート入力で `current_run_length` / `point_week` が正しく出るかは未測定**。現行
   `compute_display_gate`（`correction_rate.py:541`）は昇順を呼出契約として仮定するだけで
   内部ソートしない。§2-1-(c) のとおり**明示ソートを契約として決め、テストで固定する**
@@ -189,7 +191,9 @@ status: draft（実装着手前レビュー用・**rev3**）
 | `spec/components-feedback.md` の `correction_rate` 契約 | 同上 |
 | `scripts/lib/claude_md_contract.py` の invariant | CLAUDE.md の文言を守る守衛。**文言を変えるならここも同時に**（変えないと契約テストが赤くなる） |
 | `test_claude_md_contract.py` の期待行 | 同上 |
-| `docs/site/`（docs-refresh 生成物） | CLAUDE.md が SoT なので、改訂後に**公開 docs との差分を確認**する |
+| `docs/site/`（docs-refresh 生成物） | CLAUDE.md が SoT なので、改訂後に**公開 docs との差分を確認**する（再生成はしない） |
+| `docs/decisions/drafts/054-a5-correction-category.md:180` | 「W33 は 100% に届かず系列起点は W34」は**誤った予測**（M10）。実測 100% 到達に合わせて訂正 |
+| `docs/decisions/drafts/054-c-a-numerator.md:218` | 「W33 は daily runner 稼働前なので対象外」は同じく**誤った予測**（M10）。同上 |
 
 **consumer**（round1 [Should]）:
 - 直接 consumer は `results_board`、それを埋め込む audit の Growth Report。
