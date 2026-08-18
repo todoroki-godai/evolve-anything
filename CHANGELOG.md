@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.125.0] - 2026-08-18
+
 ### Added
 - **feat(evolve): 修正在庫（反映先未定の promoted 積み残し）を朝の確認に統合（#514）** —
   `correction_semantic.correction_backlog.build_correction_backlog(pj_slug, corrections_path=None,
