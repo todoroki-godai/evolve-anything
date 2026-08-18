@@ -7,9 +7,7 @@ bootstrap/daily の representative（確認 group の代表発話断片）に **
 1. ``user_only_text`` — 元発話テキストから assistant 出力の引用ブロック（``>`` markdown quote /
    code fence / ℹ️・✓・✗ 等のステータス絵文字プレフィックス行）を strip し、user 発話のみ残す。
    全行が assistant 引用なら情報喪失を避けるため元テキストの strip を返す（fallback）。
-2. ``prev_action_summary`` — 直前 AI 行動の 1 行要約（「やっぱり、高だけにして」のような
-   一行 representative が何に対する修正か不明な問題を、evidence に prev_action を添えて解消する）。
-3. ``trim_to_idiom_sentence`` — 1 発言が複数トピック（主要な指摘＋ついでの別要望）を含む場合、
+2. ``trim_to_idiom_sentence`` — 1 発言が複数トピック（主要な指摘＋ついでの別要望）を含む場合、
    Haiku が抽出した idiom（修正を端的に表す言い回し）が属するセグメントだけに evidence.text を
    トリムする（#253: 無関係な副次要望が evidence に同居する問題の解消）。トピック分割は
    話題転換語（あと/ついでに等）の直前でのみ行い、句点・疑問符だけの複数文（単一トピック）は
@@ -165,17 +163,6 @@ def is_assistant_only_text(text: Optional[str]) -> bool:
         # 非インデント・非マーカーの実テキスト行が1つでもあれば human 発言が含まれる。
         return False
     return saw_any_content
-
-
-def prev_action_summary(prev_action: Optional[str]) -> str:
-    """直前 AI 行動の 1 行要約（evidence 用・最大 120 文字に丸める）。
-
-    現状 prev_action は既に短い行（"Edit foo.py" 等）なので strip + 改行畳み + 切り詰めのみ。
-    """
-    if not prev_action:
-        return ""
-    one_line = " ".join(str(prev_action).split())
-    return one_line[:_TRUNC]
 
 
 # ── トピック分割（#253: 多トピック発言の evidence トリム） ──────────────────

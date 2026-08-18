@@ -505,15 +505,16 @@ def test_build_review_strips_assistant_quote_from_representative(tmp_path: Path)
     assert g["evidence"]["text"] == "やっぱり、高だけにして"
 
 
-def test_build_review_evidence_has_prev_action(tmp_path: Path):
-    # #528-3: 直前 AI 行動の 1 行要約を evidence に添える（一行 representative の判読補助）
+def test_build_review_evidence_has_no_prev_action_key(tmp_path: Path):
+    # #504: prev_action は判断材料にならない — evidence に含めない（provenance に
+    # prev_action があっても evidence スキーマから消える）。
     ws = tmp_path / "weak_signals.jsonl"
     append_signals(
         [_sig("やっぱり、高だけにして", 1, prev_action="Edit model-routing.md (effort 設定)")],
         path=ws,
     )
     res = dr.build_review("evolve-anything", weak_signals_path=ws, seen_path=_seen(tmp_path))
-    assert res["groups"][0]["evidence"]["prev_action"] == "Edit model-routing.md (effort 設定)"
+    assert "prev_action" not in res["groups"][0]["evidence"]
 
 
 def test_build_review_confirmable_idiom_eligible(tmp_path: Path):

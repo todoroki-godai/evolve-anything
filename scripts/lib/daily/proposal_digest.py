@@ -43,13 +43,12 @@ MAX_SESSION_PROPOSALS = 2
 MAX_GLOBAL_COMPONENT_GROUPS = 5
 
 _EVIDENCE_TEXT_TRUNC = 200
-_PREV_ACTION_TRUNC = 120
 _REASON_TRUNC = 200
 
 # #498: llm_judge/rephrase は representative が生の発話断片のみ（review_channels.signal_text
 # が user_only_text をそのまま返す・channel 別の合成をしない）。permission_deny/verbosity は
 # signal_text 自体が拒否コマンド・判定理由を合成済み（review_channels.py）で representative
-# だけで説明になる。前者だけ prev_action/reason の有無で説明可否を判定する。
+# だけで説明になる。前者だけ reason の有無で説明可否を判定する（#504: prev_action は外した）。
 _BARE_UTTERANCE_CHANNELS = frozenset({"llm_judge", "rephrase"})
 
 
@@ -147,7 +146,6 @@ def _slim_group(
         "channel": g.get("channel", ""),
         "count": count,
         "evidence_text": _truncate(evidence.get("text", ""), _EVIDENCE_TEXT_TRUNC),
-        "prev_action": _truncate(evidence.get("prev_action", ""), _PREV_ACTION_TRUNC),
         # #498: 何を根拠に改善候補と判断したか（llm_judge の Haiku 判定理由。自然文・
         # channel名やスコア値は含まない — batch.py/prompt.py が生成する自由文）。
         "reason": _truncate(evidence.get("reason", ""), _REASON_TRUNC),
@@ -159,15 +157,18 @@ def _slim_group(
 def _group_has_explanation(g: Dict[str, Any]) -> bool:
     """群を「何をしている時に・なぜ拾われたか」まで説明できるかを判定する（#498 要件4）。
 
-    ``llm_judge``/``rephrase`` は representative が生の発話断片のみなので、``prev_action``
-    または ``reason`` のどちらも無いと説明できない（保留にし、除外件数は
-    ``excluded_context_missing_by_pj`` に surface する — silence != evaluated）。
-    ``permission_deny``/``verbosity`` は representative 自体が拒否コマンド・判定理由を
-    合成済み（``review_channels.signal_text``）なので常に説明可能とみなす。
+    ``llm_judge``/``rephrase`` は representative が生の発話断片のみなので、``reason`` が
+    無いと説明できない（保留にし、除外件数は ``excluded_context_missing_by_pj`` に surface
+    する — silence != evaluated）。``permission_deny``/``verbosity`` は representative 自体が
+    拒否コマンド・判定理由を合成済み（``review_channels.signal_text``）なので常に説明可能
+    とみなす。
+
+    #504: ``prev_action``（ツール名の連結。仕様が謳う「1行要約」ではない・実測で
+    説明可否の判定結果を1件も変えないことを確認済み）は判定材料から外した。
     """
     if g.get("channel") not in _BARE_UTTERANCE_CHANNELS:
         return True
-    return bool((g.get("prev_action") or "").strip()) or bool((g.get("reason") or "").strip())
+    return bool((g.get("reason") or "").strip())
 
 
 def _recorded_message_preview(g: Dict[str, Any]) -> str:
@@ -379,9 +380,9 @@ def build_proposal_digest(
     # （{slug: ...} の辞書）で digest 側にも集約する。捨てると朝の digest 経路だけ
     # 候補数が減るのに除外件数が利用者に見えなくなる。
     excluded_machinery_by_pj: Dict[str, Dict[str, Any]] = {}
-    # #498 要件4: 説明文を組み立てられない group（llm_judge/rephrase で prev_action/reason
-    # がどちらも無い）は y/n を強行せず保留にする。黙って減らさず件数を surface する
-    # （excluded_machinery_by_pj と同じ {slug: count} の流儀）。
+    # #498 要件4: 説明文を組み立てられない group（llm_judge/rephrase で reason が無い・
+    # #504: prev_action は判定材料から外した）は y/n を強行せず保留にする。黙って減らさず
+    # 件数を surface する（excluded_machinery_by_pj と同じ {slug: count} の流儀）。
     excluded_context_missing_by_pj: Dict[str, int] = {}
     for slug in _pj_slugs(queue_entries):
         try:
@@ -585,20 +586,21 @@ def _review_protocol_ref(reflect_cmd: str) -> str:
 
 
 def _material_lines(g: Dict[str, Any]) -> List[str]:
-    """#498 要件1: 「何をしている時に」「なぜ拾われたか」「何回起きたか」を判断材料として出す。
+    """#498 要件1: 「なぜ拾われたか」「何回起きたか」を判断材料として出す。
 
-    ``prev_action``/``reason``/``count`` を配線するだけで、新しい要約は作らない
-    （``build_review`` が既に持つ ``evidence`` フィールドをそのまま使う）。channel 名や
-    類似度の数値は出さない（#498 要件2・review_channels.py と同じジャーゴン禁止方針）。
+    ``reason``/``count`` を配線するだけで、新しい要約は作らない（``build_review`` が既に持つ
+    ``evidence`` フィールドをそのまま使う）。channel 名や類似度の数値は出さない
+    （#498 要件2・review_channels.py と同じジャーゴン禁止方針）。
+
+    #504: ``prev_action``（ツール名の連結で仕様の「1行要約」ではない）は出さない。``g`` に
+    レガシー（本改修前に生成された digest snapshot 由来）の ``prev_action`` キーが残って
+    いても読まない（意図的に無視する）。
     """
     lines: List[str] = []
     preview = _recorded_message_preview(g)
     if preview:
         lines.append(f"  記録される内容: 「{preview}」")
     detail_parts: List[str] = []
-    prev_action = g.get("prev_action") or ""
-    if prev_action:
-        detail_parts.append(f"直前の作業: {prev_action}")
     count = g.get("count")
     if isinstance(count, int) and count:
         detail_parts.append(f"{count}回検知")

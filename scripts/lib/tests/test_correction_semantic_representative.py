@@ -171,20 +171,10 @@ def test_is_assistant_only_text_indented_human_line_without_preceding_marker_is_
     assert r.is_assistant_only_text(text) is False
 
 
-# ── prev_action_summary: 直前 AI 行動の 1 行要約 ──────────────────────
-def test_prev_action_summary_passthrough():
-    assert r.prev_action_summary("Edit foo.py") == "Edit foo.py"
-
-
-def test_prev_action_summary_truncates():
-    long = "x" * 200
-    out = r.prev_action_summary(long)
-    assert len(out) <= 120
-
-
-def test_prev_action_summary_none():
-    assert r.prev_action_summary(None) == ""
-    assert r.prev_action_summary("") == ""
+# ── prev_action_summary は #504 で削除済み（prev_action は判断材料にならない）。
+# 関数自体が存在しないため、``hasattr`` の否定形で削除を固定する。
+def test_prev_action_summary_is_removed():
+    assert not hasattr(r, "prev_action_summary")
 
 
 # ── trim_to_idiom_sentence: 複数トピック混在発言のトリム（#253） ──────────────
