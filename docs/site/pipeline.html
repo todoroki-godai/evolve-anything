@@ -105,16 +105,32 @@
       <h1>主要スキル</h1>
       <p class="lead">evolve-anything が提供するスキルの一覧です。すべて <code>/evolve-anything:&lt;skill&gt;</code> で呼び出せます。</p>
 
-      <h2>採点・進化系</h2>
+      <h2>自律進化系</h2>
       <div class="skills-list">
         <div class="skill-row">
-          <span class="skill-name">evolve-scorer</span>
-          <span class="skill-desc">オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点。CLAUDE.md からドメイン（ゲーム / API / Bot / ドキュメント）を自動判定して評価軸を切り替える。</span>
+          <span class="skill-name">evolve</span>
+          <span class="skill-desc">自律進化パイプライン（Observe → Diagnose → Compile → Housekeeping → Report）を通しで実行する。日次実行を想定した主入口。</span>
         </div>
         <div class="skill-row">
-          <span class="skill-name">skill-triage</span>
-          <span class="skill-desc">テレメトリ + trigger eval で CREATE / UPDATE / SPLIT / MERGE / OK の5択判定を行う。<code>scripts/lib/skill_triage.py</code> 実装。</span>
+          <span class="skill-name">audit</span>
+          <span class="skill-desc">環境の健康診断。スキル / ルール / memory を棚卸しし、行数上限・使用統計を集計して1画面のレポートを出す。</span>
         </div>
+        <div class="skill-row">
+          <span class="skill-name">discover</span>
+          <span class="skill-desc">観測データ（usage / errors / history）から繰り返しパターンを検出し、スキル・ルールの候補を生成する。</span>
+        </div>
+        <div class="skill-row">
+          <span class="skill-name">prune</span>
+          <span class="skill-desc">未使用の成果物（死んだ glob・呼び出しゼロ・重複）を検出してアーカイブを提案する。直接削除はせず、必ず人間の承認を要する。</span>
+        </div>
+        <div class="skill-row">
+          <span class="skill-name">evolve-loop-orchestrator</span>
+          <span class="skill-desc">実装者・採点者・進化者の3役分担で、スキル / ルールを自律的に改善するループを回す。</span>
+        </div>
+      </div>
+
+      <h2>採点・進化系</h2>
+      <div class="skills-list">
         <div class="skill-row">
           <span class="skill-name">evolve-skill</span>
           <span class="skill-desc">特定スキルに自己進化パターン（Pre-flight / pitfalls.md）をピンポイントで組み込む。適性判定 → テンプレート組み込み → 人間確認を1コマンドで実行。</span>
@@ -186,6 +202,19 @@
         <div class="skill-row">
           <span class="skill-name">tier</span>
           <span class="skill-desc">モデルティア（HEAD/HARD/NORMAL/MECH/REVIEW）変更の対話 UX ラッパー。現状表示→発話解釈→<code>set</code>→<code>sync</code> の dry-run diff 提示→明示承認後 <code>--apply</code>→<code>drift</code> advisory の順で安全に操作する（実体は <code>bin/evolve-tier</code>）。</span>
+        </div>
+      </div>
+
+      <h2>エージェント</h2>
+      <p>以下はスキルではなくエージェント定義で、Agent ツールから起動する（<code>/evolve-anything:&lt;name&gt;</code> では呼び出せない）。</p>
+      <div class="skills-list">
+        <div class="skill-row">
+          <span class="skill-name">evolve-scorer</span>
+          <span class="skill-desc">オーケストレーター (Haiku) + 3サブエージェント並列 (tech/struct=Haiku, domain=Sonnet) で3軸採点。CLAUDE.md からドメイン（ゲーム / API / Bot / ドキュメント）を自動判定して評価軸を切り替える。</span>
+        </div>
+        <div class="skill-row">
+          <span class="skill-name">second-opinion</span>
+          <span class="skill-desc">読み取り専用の cold-read セカンドオピニオン。会話履歴を持たず、渡されたコンテキストだけで独立見解を返す（同名スキルのルートA 実体）。</span>
         </div>
       </div>
     </section>
