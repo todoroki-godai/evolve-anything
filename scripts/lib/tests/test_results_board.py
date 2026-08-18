@@ -157,6 +157,98 @@ class TestClassifyDecisionOptimizeSource:
         assert results_board.classify_decision(entry) == "pending"
 
 
+class TestClassifyDecisionLegacyRuleApply:
+    """#512: `human_accepted` を書く前の rule 反映 entry（legacy shape）の救済。
+
+    実データ（2026-08-18・実ストア 43 entry）で該当したのは 1 件のみ。同じく決定フラグを
+    持たない optimize.py 由来 13 件（`human_accepted=None`）を巻き込まないことが要件。
+    """
+
+    def _legacy(self, **over):
+        entry = {
+            "id": "rule_apply_bd2cf304dc0a3f6f",
+            "skill_name": "model-routing.md",
+            "scope": "global_rule",
+            "relative_path": "model-routing.md",
+            "revert_schema_version": 1,
+            "revert_before_b64": "eJxLyy/KTQUABm4Ceg==",
+            "timestamp": "2026-08-18T01:24:31.298898+00:00",
+        }
+        entry.update(over)
+        return entry
+
+    def test_legacy_rule_apply_is_accepted(self):
+        assert results_board.classify_decision(self._legacy()) == "accepted"
+
+    def test_project_rule_scope_also_accepted(self):
+        entry = self._legacy(scope="project_rule")
+        assert results_board.classify_decision(entry) == "accepted"
+
+    def test_optimize_history_none_flag_stays_pending(self):
+        """陽性対照: 同じく決定フラグが bool でない optimize.py 形は pending のまま。"""
+        entry = {
+            "best_fitness": 0.82, "corrections_used": 3, "fitness_func": "default",
+            "human_accepted": None, "rejection_reason": None, "run_id": "r1",
+            "strategy": "direct", "target": "skills/foo/SKILL.md",
+            "timestamp": "2026-07-17T07:50:37.904158",
+        }
+        assert results_board.classify_decision(entry) == "pending"
+
+    def test_other_id_prefix_not_accepted(self):
+        """id prefix が違う entry を巻き込まない（条件を scope だけに広げない）。"""
+        entry = self._legacy(id="skill_diff_abc123")
+        assert results_board.classify_decision(entry) == "pending"
+
+    def test_non_rule_scope_not_accepted(self):
+        entry = self._legacy(scope="skill")
+        assert results_board.classify_decision(entry) == "pending"
+
+    def test_missing_revert_schema_version_not_accepted(self):
+        """revert 記録として未完成な entry は救済しない。"""
+        entry = self._legacy()
+        del entry["revert_schema_version"]
+        assert results_board.classify_decision(entry) == "pending"
+
+    def test_explicit_false_flag_wins_over_legacy_branch(self):
+        """明示的な判定がある entry では legacy 分岐を通さない（順序が壊れていない）。"""
+        entry = self._legacy(human_accepted=False)
+        assert results_board.classify_decision(entry) == "rejected"
+
+    def test_fitness_ineligible_still_excluded(self):
+        """#376 の無効化フラグは legacy 分岐より優先される。"""
+        entry = self._legacy(fitness_eligible=False)
+        assert results_board.classify_decision(entry) == "excluded"
+
+    def test_test_polluted_still_excluded(self):
+        entry = self._legacy(skill_name="/T/tmpabc123/test-rule.md")
+        assert results_board.classify_decision(entry) == "excluded"
+
+    def test_missing_id_does_not_crash(self):
+        entry = self._legacy()
+        del entry["id"]
+        assert results_board.classify_decision(entry) == "pending"
+
+    def test_revert_event_is_not_classified_accepted(self):
+        """陽性対照: revert イベント（`evolve_revert/_apply.py` が書く）を採用に化けさせない。
+
+        scope / relative_path / skill_name を持ち決定フラグを持たない点は legacy shape と
+        同じで、`revert_schema_version` と id prefix の 2 条件だけが両者を分ける。
+        ここが崩れると「戻した事実」が「採用」として数えられる。
+        """
+        event = {
+            "event_type": "revert",
+            "reverted_entry_id": "rule_apply_bd2cf304dc0a3f6f",
+            "revert_event_id": "rev_1",
+            "revert_generation": 1,
+            "scope": "global_rule",
+            "repo_id": None,
+            "relative_path": "model-routing.md",
+            "skill_name": "model-routing.md",
+            "timestamp": "2026-08-18T02:00:00+00:00",
+        }
+        assert results_board.classify_decision(event) == "pending"
+
+
 # ── canonical writer 契約テスト（codex #398 Must 1）─────────────────
 #
 # survey 段階の前提「source=None → approved で判定」は誤りだった。

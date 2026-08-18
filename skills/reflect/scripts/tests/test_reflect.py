@@ -878,6 +878,38 @@ class TestRuleRevertRecording:
         from optimize_history_store import history_path
         assert not history_path("test-slug").exists()
 
+    def test_record_rule_revert_entry_is_classified_accepted(self, tmp_path):
+        """#512: 書いた entry が reader 側（results_board.classify_decision）で accepted になる。
+
+        writer 単体の形だけを見る検査では #512 を検出できなかった（entry は正しく書けていたが
+        reader が pending に落としていた）ため、writer→reader を往復させる。
+        """
+        target = Path.home() / ".claude" / "rules" / "classify-roundtrip.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+
+        result = reflect.record_rule_revert_entry(
+            str(target),
+            before_content="- 既存行\n",
+            after_content=target.read_text(encoding="utf-8"),
+            pj_slug="test-slug",
+        )
+        assert result["recorded"] is True
+
+        from optimize_history_store import history_path
+        entries = [
+            json.loads(l) for l in history_path("test-slug").read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
+        assert len(entries) == 1
+
+        import results_board
+        from evolve_revert import compute_revert_availability
+
+        assert results_board.classify_decision(entries[0]) == "accepted"
+        # 「戻せると判定されるのに一覧から脱落する」状態を再発させない（#512 の症状そのもの）。
+        assert compute_revert_availability(entries[0]) == (True, None)
+
     def test_apply_cli_records_revert_when_before_content_file_given(self, tmp_path, capsys):
         """--apply に --before-content-file を渡すと revert_recorded=True になる。"""
         corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
