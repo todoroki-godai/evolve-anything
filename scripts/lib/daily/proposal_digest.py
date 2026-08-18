@@ -793,4 +793,7 @@ def build_proposal_systemmessage(
             f" （説明材料が無く保留 {excluded_context_missing} 件は今回の確認対象に含まれて"
             "いません・#498）"
         )
+    # #503 §3.1-5': y/n が来なかったときに利用者が取れる手段を明示する（pull 導線）。
+    # E8「提示が無かった」の再発時、利用者側から拾い直せるようにする。
+    base += " 聞かれなければ『改善案を教えて』と言ってください。"
     return base

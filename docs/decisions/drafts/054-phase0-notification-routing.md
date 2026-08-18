@@ -130,7 +130,7 @@ ADR の3分類（① `systemMessage`・1行に集約 / ② `additionalContext`�
 | 6a | evolve_queue_notice（STALE/UNKNOWN health notice） | ① Tier1 | producer 停止シグナル |
 | 6b | evolve_queue_notice（FRESH・待ちPJあり） | ① Tier2 | 待ち PJ リストは evolve されるまで残り続ける冪等な状態。間引いても翌日再現（§5.6） |
 | 6c | **evolve-queue.json 破損**（新規判定・§5.4） | ① Tier1 | producer が壊れた書き込みをした可能性。#351 と同じ理由でサイレントにしない |
-| 7 | session_proposal（systemMessage部分） | ① Tier2 | 副作用なし（`read_reviewed_keys` は read-only）。間引いても既読化されていないので消えない |
+| 7 | session_proposal（systemMessage部分） | ① Tier2 | 副作用なし（`read_reviewed_keys` は read-only）。間引いても既読化されていないので消えない。**[Nit-t6] の Tier2 正当化（「additionalContext が常時フルだから systemMessage の間引きは主機能に影響しない」）は 2026-08-18 に撤回（#503・E8）**: 実際には Claude 側の prompt instruction 遵守は機械的に保証できず、`systemMessage` が digest 化されると利用者から本文が消える事故が実測された。tier=2 の値自体は変えないが、`decision_text`（#503 §3.0）により digest 化そのものを回避する |
 | 7' | session_proposal（additionalContext） | ② 常時フル | 変更なし（既存契約） |
 | 8 | judge_cap（全分岐: capped/source_failed/skipped_locked/out_of_range） | ① **Tier1（全面）** | daily runner の一回性スナップショット。翌日上書きされると復元不能なため部分 Tier1 化ではなく全分岐を Tier1 化（§5.1） |
 | 9a | icebox（STALE/UNKNOWN health notice） | ① Tier1 | producer 停止シグナル |
@@ -190,6 +190,7 @@ tacchi 指摘の核心: 各系統の文言は「単独表示」前提のフル�
 - **① systemMessage に含める発火系統が2件以上** → **全件を digest（短縮形）に変換して結合する**。`[evolve-anything]` prefix は最終結合時に**1回だけ**先頭に付与し、各系統の個別 prefix は使わない。
   - **例外1: icebox レーン1「成立」**。既存契約（`icebox_notice.py:197-199`「個別列挙が仕様」）により、named issue のリストは digest 化せずフル文のまま結合する（Tier1 固定・§3 で確定済みと整合）。
   - **例外2: pending_trigger**（rev6・codex round2 [Must-new] 反映）。§5.5 のとおり pending_trigger は破壊的読み取り済みの本文であり、digest（`トリガー提案1件` 等）に置換すると**本文そのものが永久に失われる**（ファイルは既に削除されており、フル文以外に本文を保持する手段が無い）。したがって pending_trigger は**常にフル文のまま結合する**（digest 化しない）。icebox レーン1と同型の「digest 化免除」系統。
+  - **例外3: session_proposal（`decision_text` 保持時。2026-08-18・#503 追加）**。§3.0 の優先順位規則: `decision_text` を持つ item は発火件数にかかわらず digest 化されない（詳しさの軸に優先）。pending_trigger・icebox レーン1に続く**digest 免除の3件目**だが、免除理由は異なる: pending_trigger は「本文が物理的に消失する」ため、icebox レーン1は「個別 issue 列挙が既存契約」であるため免除されるのに対し、session_proposal は**利用者に判断を求める内容だから**免除される（[Nit-t6] の Tier2 正当化が破綻したため。§3 #7 参照）。`digest`（`改善案N件`）自体は引き続き計算されるが、digest 集合には加えず、専用フィールド `decision_text` として結合末尾に別枠で連結する（`scripts/lib/session_notify/merge.py:_merge_notification_text`）。
 - 区切り文字: `" / "`。
 - 例（rev7 確定文言・今朝の実データに近い構成。末尾導線つき）:
   `[evolve-anything] evolve待ち1PJ / 記録待ち提案1件（evolve --drain） / judge持ち越し10311件（自動） / icebox58件・最古31日 → /evolve-anything:queue で開始`
@@ -273,6 +274,8 @@ digest 行（2件以上発火時）の末尾に **` → /evolve-anything:queue �
   - **pending_trigger のフル文**: 元の trigger メッセージ長に依存（実測114字程度が典型）。上限なし（Tier1・digest免除のため）。
   - **icebox レーン1「成立」のフル文**: `MAX_MET_ISSUES=10`（`icebox_notice.py:37`）で named issue の**件数**は既に上限があるが、各 issue の `reason` 文字列自体は**現状無制限**（`icebox_notice.py:204-205` の `f"#{v.get('number')}（{v.get('reason', '')}）"`）。したがって「icebox レーン1 + 他8系統」の最悪ケースは reason の実際の長さ次第で数百字にも達しうる（rev5 で書いた「実測105字を根拠にした最悪ケース約273字」という見積もりは、reason が長い verdict では成立しない。**この見積もりは撤回する**）。
   - この可変長リスクへの対応は (a) のとおり「そのまま許容する」を正式な設計判断とする。reason 文字列を切り詰める追加ガード（例: `MAX_REASON_CHARS` の新設）は、digest 文言確定の議論と切り離した**将来の改善候補**として §10 に残し、Phase 0 では導入しない（頭裁定の rule1「情報消失より横長を選ぶ」の方針と、新設を増やさない P3 の両方に沿うため）。
+
+  (d) **`decision_text` は予算外・overflow 対象外（2026-08-18・#503 §3.0-2 追加）**: `NotificationItem.decision_text` が非 None の item は、Tier2 予算計算（`TIER2_BUDGET_CHARS=400`）に一切含めない。Tier1 合計が単独で400字を超えていても、`decision_text` はその超過とは無関係に必ず全文が結合される（「（ほか: 系統名）」による overflow 畳みの対象にもならない）。**tier2 の定義をこれに合わせて改める**: 「予算超過時に落としてよい」のは `decision_text` を持たない item に限る（`decision_text` を持つ item は tier の値（現状 session_proposal は tier=2 のまま）に関係なく常に全文結合される）。
 
   **根拠となる実測**（§4.1 参照。あくまで「典型的な Tier2 部分の目安」であり (b) の限定つき）:
   - 実測した今朝の4系統同時発火（最も典型的な「常用パス」、pending_trigger/iceboxレーン1は不発火）は、digest 化後で **79字**。400字の閾値は通常運用で**まず発動しない**（約5倍の余裕）。

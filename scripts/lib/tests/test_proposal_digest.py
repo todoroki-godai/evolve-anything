@@ -1069,6 +1069,14 @@ def test_build_proposal_systemmessage_wording_does_not_overpromise():
     assert "この後 y/n で確認します" not in msg
 
 
+def test_build_proposal_systemmessage_appends_pull_instruction():
+    """#503 §3.1-5': y/n が来なかったときに利用者が拾い直せる pull 導線を末尾に足す。"""
+    groups = [_group(["k1"], rep="rep1")]
+    msg = pd.build_proposal_systemmessage(groups)
+    assert "改善案を教えて" in msg
+    assert msg.endswith("聞かれなければ『改善案を教えて』と言ってください。")
+
+
 def test_build_proposal_systemmessage_caps_at_max_session_proposals():
     groups = [_group([f"k{i}"], rep=f"rep{i}") for i in range(5)]
     msg = pd.build_proposal_systemmessage(groups)

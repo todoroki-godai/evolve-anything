@@ -104,6 +104,48 @@ def test_build_fires_with_proposals_for_this_pj(tmp_path, monkeypatch):
     assert output["digest"] == "改善案1件"
 
 
+# --- #503: decision_text（判断を求める本文）の配線 ---
+
+def test_build_output_includes_decision_text_matching_systemmessage_body(tmp_path, monkeypatch):
+    """#503 §3.1-3: collectors.py は systemMessage の prefix を除去した decision_text を
+    返す。壊す不変条件=I2/I3／経路=このテスト自身（N1: キーを落とす、N7: 文言を混入する、
+    N6: prefix 除去を外す、いずれの mutation でもこの等値比較が崩れて赤くなる）。"""
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    assert "decision_text" in output
+    assert output["decision_text"] == output["systemMessage"].removeprefix("[evolve-anything] ")
+
+
+def test_build_decision_text_has_no_embedded_prefix(tmp_path, monkeypatch):
+    """N6: removeprefix が外れると decision_text の先頭に "[evolve-anything] " が二重に
+    残る。壊す不変条件=I3／経路=このテスト自身。"""
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+
+    output = restore_state._build_session_proposal_output()
+    assert not output["decision_text"].startswith("[evolve-anything] ")
+
+
+def test_build_machinery_only_notice_has_no_decision_text(tmp_path, monkeypatch):
+    """#503 §3.1-4: 提案0件の notice は判断を求めていないため decision_text を返さない。"""
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {
+        "per_pj": {},
+        "global": [],
+        "excluded_machinery_by_pj": {slug: {"total": 4, "by_channel": {"llm_judge": 4}}},
+    })
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    assert "decision_text" not in output
+
+
 def test_build_surfaces_excluded_machinery_for_this_pj(tmp_path, monkeypatch):
     """codex [Must]1（#443 PR2-a）: digest の excluded_machinery_by_pj[slug] を systemMessage
     に表示する（formatter/consumer まで表示を通す）。"""

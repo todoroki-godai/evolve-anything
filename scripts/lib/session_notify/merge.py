@@ -14,18 +14,27 @@ def _merge_notification_text(items: "list[NotificationItem]") -> "str | None":
 
     - 発火0件 → None
     - 発火1件 → その系統の ``text``（フル文）をそのまま使う
-    - 発火2件以上 → 全 item の ``digest`` を使う。Tier1 は無条件・全量で先に結合し
-      （絶対に truncate しない）、Tier2 は残り予算（``TIER2_BUDGET_CHARS`` − Tier1合計）に
-      入る分だけ発火順に追加する。あふれた分は「（ほか: 系統名）」で畳む（件数のみは禁止）。
-      切り詰めは digest 単位（文字列途中では切らない）。
+    - 発火2件以上 → ``decision_text`` を持たない item の ``digest`` を使う。Tier1 は
+      無条件・全量で先に結合し（絶対に truncate しない）、Tier2 は残り予算
+      （``TIER2_BUDGET_CHARS`` − Tier1合計）に入る分だけ発火順に追加する。あふれた分は
+      「（ほか: 系統名）」で畳む（件数のみは禁止）。切り詰めは digest 単位（文字列途中では
+      切らない）。
+
+    #503 §3.0: ``decision_text`` を持つ item は、利用者に判断を求める通知であり、
+    digest 化（詳しさの軸）にも予算・overflow（量の軸）にも従わない。両 suffix
+    （overflow 畳み・tail_link 導線）の**後**に、発火順で本文をそのまま連結する。
     """
     if not items:
         return None
     if len(items) == 1:
         return items[0].text
 
-    tier1 = [it for it in items if it.tier == 1]
-    tier2 = [it for it in items if it.tier == 2]
+    # 空文字列は「判断材料が無い」に等しいので digest item として扱う（fail-open）。
+    digest_items = [it for it in items if not it.decision_text]
+    decision_texts = [it.decision_text for it in items if it.decision_text]
+
+    tier1 = [it for it in digest_items if it.tier == 1]
+    tier2 = [it for it in digest_items if it.tier == 2]
 
     segments = [it.digest for it in tier1]
     included_tier2: "list[str]" = []
@@ -41,12 +50,19 @@ def _merge_notification_text(items: "list[NotificationItem]") -> "str | None":
     if overflow_labels:
         body = f"{body}（ほか: {'/'.join(overflow_labels)}）"
 
-    text = f"[evolve-anything] {body}"
-
+    # decision_text しか無い（digest_items が空で body=""）ケースでも二重スペースを
+    # 作らないよう、後続要素を trailing に集めてから 1 回だけ結合する。
+    trailing: "list[str]" = []
+    if body:
+        trailing.append(body)
     if any(it.tail_link for it in items):
-        text = f"{text} → /evolve-anything:queue で開始"
+        trailing.append("→ /evolve-anything:queue で開始")
+    if decision_texts:
+        trailing.append(" ".join(decision_texts))
 
-    return text
+    if not trailing:
+        return "[evolve-anything]"
+    return f"[evolve-anything] {' '.join(trailing)}"
 
 
 def _build_additional_context(
