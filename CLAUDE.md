@@ -29,7 +29,9 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 3. **週1**: 戦果ボードで事実を棚卸しする（採用件数・一発成功率・戻せる採用の一覧）。
    **効果の因果判定（「手直し回数の減少」＝(a) / 「採用した改善が効いたか」＝(b)）は分母が揃った
    項目だけ表示し、揃うまで `not_measured` と明示する**。効いていないものの自動取り下げも (b) が
-   計測可能になって初めて発火する。**表示条件**: (a) は全量判定した週が4週連続（`correction_rate`）、
+   計測可能になって初めて発火する。**表示条件**: (a) の**系列**表示は全量判定した週が4週連続
+   （`correction_rate`）。全量判定の確定週が1件でもあれば、その1週分の点（推移ではない）は
+   先に出す（#508）。
    (b) の分母は revert 済みを畳んだ有効 accept 件数（`results_board`）。**どちらも現在値は
    `bin/evolve-audit --growth` で確認する**（ADR-054 §5・§7.2）
 4. **信頼**: 表示する数字が嘘をつかない（#376）/ 適用は必ず人間の y/n（無人適用しない）/
@@ -88,7 +90,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 - `review_channels`: y/n 確認に出す weak チャネルの単一ソース。content-rich チャネルのみ対象
 - `idiom_autopromote`: confirmed idiom の再発 weak_signal を機械昇格。**#379 Step1 で凍結中、`autopromote()` は no-op**
 - `growth_report`: あと N 件で次フェーズ。閾値は growth_engine が単一ソース
-- `correction_rate`: 3ストア read 時 join・freeze cutoff・カバレッジ100%確定週のみ表示・k週連続ゲート
+- `correction_rate`: 3ストア read 時 join・freeze cutoff・カバレッジ100%確定週のみ表示・k週連続ゲート（**系列のみ**。1週分の点表示は確定週1件で出す・#508）
 - `subagent_noise`: subagents.jsonl の agent_type ノイズ内訳を advisory 分解表示。判定は `noise_agent_type_kind` が単一ソース
 - `verbosity`: Haiku バッチ判定が weak_signals へ emit、auto-apply しない
 - `cross_pj_priority`: confirmed idiom の PJ 横断優先提示（提示のみ・自動承認しない）

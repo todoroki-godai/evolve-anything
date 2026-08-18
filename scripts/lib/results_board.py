@@ -37,6 +37,9 @@ _EMPTY_CORRECTION_RATE: Dict[str, Any] = {
         "display_start_week": None,
         "required": GATE_CONSECUTIVE_WEEKS,
         "best_run_length": 0,
+        # #508: 点表示（状態(ii)）専用フィールド。フォールバック時は点表示対象なし＝状態(i)。
+        "point_week": None,
+        "current_run_length": 0,
     },
     "displayed_weeks": [],
     "latest_coverage": None,
@@ -359,6 +362,63 @@ def _render_exclusion_diagnostics(diagnostics: Dict[str, Any]) -> List[str]:
     ]
 
 
+def _render_point_pj_breakdown(pj_breakdown: Dict[str, Any]) -> List[str]:
+    """点表示（状態(ii)）専用の PJ 別内訳（#508 I7・全 PJ 列挙・floor 込み）。
+
+    状態(iii) の PJ 行構築ロジック（既存・不変）とは意図的に別関数にする（既存分岐を
+    一字も変えないため）。judged が ``MIN_PJ_RATE_DENOM`` 未満の PJ は件数のみ出す。
+    """
+    parts: List[str] = []
+    for pj_slug, stats in sorted(pj_breakdown.items()):
+        if stats.get("rate") is not None:
+            parts.append(f"{pj_slug} {stats['tp']}/{stats['judged']}（{stats['rate'] * 100:.1f}%）")
+        else:
+            parts.append(f"{pj_slug} {stats['tp']}/{stats['judged']}（件数のみ・分母不足）")
+    return parts
+
+
+def _render_correction_rate_point(gate: Dict[str, Any], correction_rate: Dict[str, Any]) -> List[str]:
+    """指摘率セクションの状態(ii)（点表示）ブロックを生成する（#508 §2-3 必須要素 (a)〜(f)）。
+
+    呼び出し側（``_render_correction_rate``）が ``point_week`` の存在と PJ 別内訳の
+    非空（I7(d)）を確認してから呼ぶ契約。
+    """
+    point_week = gate["point_week"]
+    required = gate.get("required", GATE_CONSECUTIVE_WEEKS)
+    n = gate.get("current_run_length", 0)
+
+    week_id = point_week["week_id"]
+    judged = point_week["judged_count"]
+    tp = point_week["tp_count"]
+    rate = point_week.get("rate")
+    rate_label = f"{rate * 100:.1f}%" if rate is not None else "?"
+
+    lines: List[str] = [
+        # (a)(b): 対象週の week_id と分子/分母の実数。(c): 1週分の但し書き。
+        f"**指摘率（{week_id}）: {rate_label}**（1週分。推移は {required} 週連続で表示）",
+        f"判定 {judged} 件中 TP {tp} 件・カバレッジ100%",
+        # (d): 連続 run の進捗。n は表示専用（I8）。
+        f"連続 run の進捗: {n}/{required} 週連続",
+    ]
+
+    # (e)/I6: 点の対象週より新しい確定候補週が未測定なら、欠測を隠さず明示する。
+    latest = correction_rate.get("latest_coverage")
+    if latest and latest.get("week_id") != week_id:
+        reasons = latest.get("failure_reasons") or []
+        reason_note = f"・理由: {'・'.join(reasons)}" if reasons else ""
+        lines.append(
+            f"最新候補週 {latest['week_id']}: 判定カバレッジ {latest['judged']}/{latest['total']}"
+            f"・未測定{reason_note}"
+        )
+
+    # (f)/I7: PJ 別内訳を必須 evidence として全件列挙する。
+    pj_lines = _render_point_pj_breakdown(point_week.get("pj_breakdown") or {})
+    lines.append(f"PJ別: {', '.join(pj_lines)}")
+
+    lines.append("")
+    return lines
+
+
 def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
     """指摘率セクション（ADR-054 §7.2.1 柱3(a)）の markdown ブロックを生成する。
 
@@ -379,6 +439,14 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
 
     # #466: 分母から除外した件数は gate の開閉に関わらず常に表示する（silence != evaluated）。
     lines.extend(_render_exclusion_diagnostics(correction_rate.get("diagnostics") or {}))
+
+    # #508 状態(ii): 系列ゲートが閉じていても、点表示できる確定週があれば1週分の点を出す。
+    # I7(d): PJ 別内訳が空なら点表示そのものを行わない（状態(i)へフォールバック）。
+    # 既存の閉ゲート分岐・開ゲート分岐はこの下で一字も変えない。
+    point_week = gate.get("point_week")
+    if not gate.get("gate_open") and point_week and (point_week.get("pj_breakdown") or {}):
+        lines.extend(_render_correction_rate_point(gate, correction_rate))
+        return lines
 
     if not gate.get("gate_open"):
         latest = correction_rate.get("latest_coverage")

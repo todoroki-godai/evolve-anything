@@ -313,6 +313,17 @@
 - **feat(icebox_reconcile): icebox 棚卸しの3レーン決定論分類を追加（#352）** — icebox（凍結 issue）本文 `## 再開条件` 配下の fenced YAML `reopen-when:`（source/metric/op/threshold）を daily runner が実ストア（weak_signals / subagent_traces / token_usage の最小 evaluator セット）と決定論突合し、成立（レーン1）/観測器不在（レーン2）/失効候補（レーン3・180日+未成立+本文未更新）に分類。daily runner の第5ステップが `gh issue list --json number,body,closedAt,updatedAt` を read-only で叩き `icebox-verdicts.json` に保存し、SessionStart hook が成立分のみ該当 issue を名指し + 根拠1行で通知（既読ストア `icebox_verdict_seen.jsonl` は lane/closed_at が変わるまで再提示しない）。audit は `icebox-verdicts.json` を読むだけ（gh 非呼び出し）の advisory section で観測器不在/失効候補を surface する。close は自動化しない（提示のみ）。issue 本文は untrusted 入力である前提で全経路を固めている: reopen-when ブロックの型/値域検証（非 str・NaN/inf・複数ブロックの ambiguous 判定）、source/metric の injection 耐性トークン検証、evaluator 例外の吸収、gh --limit 到達の可視化、read-write 単一トランザクション化（file_lock）等。
 
 ### Changed
+- **feat(correction_rate): 指摘率の表示開始ゲートを系列専用に限定し、確定週1件から1週分の点を先に出す（#508）** —
+  従来は全量判定の確定週が k=4 週連続で揃うまで「未測定」以外を一切出さなかったが（ADR-054 §2.9）、
+  ユーザー決定「9/9 まで待ちたくない。1週分から出す」を受け、系列ゲート（k=4 のまま変更なし）とは
+  独立に「確定週が1件でもあれば、その週の率を点として出す」状態を追加した。`compute_display_gate`
+  が既存の `gate_open` 判定（`best_run>=k`）を一切変えず `point_week`（最大 `week_id` の
+  `measured=True` 週）と `current_run_length`（点表示専用の進捗 `n/k`・状態分岐には使わない）を
+  追加で返し、`results_board` が閉ゲート分岐・開ゲート分岐を一字も変えずにその間へ点表示を挿入した。
+  点表示は複数週の並び・推移語を出さず、PJ 別内訳（floor 込み）を必須 evidence として全件列挙し、
+  対象週より新しい未測定候補週があればカバレッジと理由を隠さず添える（Simpson 対策・欠測隠し防止）。
+  ADR-054 §2.9・`drafts/054-c-a-numerator.md`・CLAUDE.md 体験3・`spec/components-feedback.md` の
+  表示条件を「系列のみ」に改訂。判定・集計・freeze 契約・`GATE_CONSECUTIVE_WEEKS=4` は変更しない。
 - **docs(spec): 提案 identity の表記を実装（repo_id + repo相対パス + before_sha）に合わせる（#417）** — 提案 identity（`_proposal_id`）の表記が hot（`CLAUDE.md`）/ cold（`spec/components-core.md`）ともに `(skill_path, before_sha)` のままで、`#376` の worktree 重複対策（絶対パスをやめ `repo_id`＋repo 相対パスへ変更）が表記から読み取れていなかった（実装 `scripts/lib/evolve_decision_ids.py` は既に `(repo_id, relative_path, before_sha)` の SHA1・git 管理外/git不可/親ディレクトリ不在は絶対パスへ自然縮退）。cold 3箇所・hot 1行を実装どおりに是正した（hot は `_split_row` 実測でセル長 90字・130字 gate 内）。
 - **refactor(evolve_decisions): `evolve_decisions.py`（836行）を機能クラスタでパッケージ分割 + re-export（#383）** — file-size-budget HARD 上限800行を超過していた単一ファイルを、audit.py 2046→178 / evolve.py 1739→156 と同じ「re-export + 既存テスト回帰フェンス」パターンで解消。`scripts/lib/evolve_decisions.py` を `evolve_decisions/` パッケージへ: `__init__.py`（139行・定数 `DATA_DIR`/`QUEUE_ROOT`/`MARKER_ROOT`/`PENDING_TTL_DAYS` + 全 re-export）/ `_queue.py`（66行・pending キュー）/ `_marker.py`（319行・未 drain 提案マーカー #402）/ `_candidates.py`（137行・提案候補抽出）/ `_emit.py`（141行・Phase A emit_decisions）/ `_ingest.py`（140行・Phase C ingest_decisions）/ `_drain.py`（106行・`evolve --drain` の実体）に分離。全 module 500行未満。**束縛フェンス**（`evolve/phases_diagnose.py` 由来の規約と同型）: `QUEUE_ROOT`/`MARKER_ROOT`/`resolve_slug`/`_collect_advisory_proposals`/`_load_recorder` は複数テストが `monkeypatch.setattr(evolve_decisions, "X", ...)` で直接差し替える対象のため、これらを別 sub-module から呼ぶ箇所は `import evolve_decisions as _ed; _ed.X` のパッケージ namespace 経由に統一（module-top での直接束縛は差し替えをすり抜ける）。`evolve_decision_ids.py` は既に分離済みのため無変更。後方互換: `__init__` が旧 public 名を全 re-export し、既存 importer（hooks/restore_state.py・evolve/phases_capture.py・evolve/cli.py・25本超の既存テスト）の `from evolve_decisions import X` / `import evolve_decisions as ed` の両形式を跨がせない。**振る舞い不変**（純粋なリファクタ）。決定論・LLM 非依存。
 

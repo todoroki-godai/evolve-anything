@@ -542,6 +542,114 @@ class TestDisplayGate:
         assert gate["gate_open"] is False
 
 
+# ── #508: point_week / current_run_length（点表示専用フィールド） ──────────
+#
+# gate_open の判定式（best_run>=k）は round2 [Must] により一切変更していない。
+# ここでは gate_open とは独立に、点表示に使う week と進捗 n/k が正しいことを固定する。
+
+
+class TestDisplayGatePointWeek:
+    def test_point_week_is_latest_measured_week(self):
+        """I9: point_week は weeks 中で week_id が最大の measured=True 週。"""
+        weeks = [
+            _measured_week("2026-W10"),
+            _measured_week("2026-W11"),
+        ]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["point_week"]["week_id"] == "2026-W11"
+
+    def test_point_week_none_when_no_measured_weeks(self):
+        weeks = [_unmeasured_week("2026-W10"), _unmeasured_week("2026-W11")]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["point_week"] is None
+        assert gate["current_run_length"] == 0
+
+    def test_point_week_ignores_trailing_unmeasured_week(self):
+        """最新候補週が未測定でも、より古い measured 週が point_week になる（I6 の材料）。"""
+        weeks = [
+            _measured_week("2026-W10"),
+            _measured_week("2026-W11"),
+            _unmeasured_week("2026-W12"),
+        ]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["point_week"]["week_id"] == "2026-W11"
+
+    def test_point_week_correct_with_unsorted_input(self):
+        """§2-1-(c): 呼出契約は昇順だが、非ソート入力でも week_id 最大の measured 週を選ぶ
+        （N2: 「最初に見つかった確定週」を選ぶバグを検出する）。"""
+        weeks = [
+            _measured_week("2026-W12"),
+            _measured_week("2026-W08"),
+            _measured_week("2026-W10"),
+        ]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["point_week"]["week_id"] == "2026-W12"
+
+    def test_current_run_length_counts_contiguous_run_ending_at_point_week(self):
+        """I8: n は point_week で終わる連続 run 長。"""
+        weeks = [
+            _measured_week("2026-W10"),
+            _measured_week("2026-W11"),
+            _measured_week("2026-W12"),
+        ]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["gate_open"] is False  # k=4 未満
+        assert gate["point_week"]["week_id"] == "2026-W12"
+        assert gate["current_run_length"] == 3
+
+    def test_current_run_length_resets_on_gap_before_point_week(self):
+        weeks = [
+            _measured_week("2026-W08"),
+            # W09/W10 が候補に無い → W11 は隣接しない
+            _measured_week("2026-W11"),
+            _measured_week("2026-W12"),
+        ]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["current_run_length"] == 2
+
+    def test_current_run_length_not_inflated_by_noncontiguous_total(self):
+        """I8: 非連続な確定週が k=4 件以上あっても n は run 長を超えない
+        （N4: n を「確定週の総数」で算出するバグを検出する）。"""
+        weeks = [
+            _measured_week("2026-W01"),
+            _measured_week("2026-W03"),
+            _measured_week("2026-W05"),
+            _measured_week("2026-W07"),
+            _measured_week("2026-W09"),
+        ]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["gate_open"] is False
+        assert gate["current_run_length"] == 1
+        assert gate["current_run_length"] <= gate["required"]
+
+    def test_current_run_length_boundary_k_minus_one(self):
+        """境界値: 確定週が k-1=3 件ちょうど連続 → gate は閉じたまま n=3。"""
+        weeks = [_measured_week(f"2026-W{n:02d}") for n in (20, 21, 22)]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["gate_open"] is False
+        assert gate["current_run_length"] == 3
+
+    def test_point_week_and_run_length_span_iso_year_boundary(self):
+        """表現差: week_id の年跨ぎ（2025-W52 → 2026-W01。2025年はISO週52週）でも連続と
+        判定する（_next_week_id の ISO 週年境界処理に依存。素朴な文字列 +1 だと壊れる。
+        test_next_week_id_year_boundary と同じ境界を使う）。"""
+        weeks = [_measured_week("2025-W52"), _measured_week("2026-W01")]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["point_week"]["week_id"] == "2026-W01"
+        assert gate["current_run_length"] == 2
+
+    def test_point_week_and_run_length_correct_with_unsorted_input(self):
+        """§2-1-(c): current_run_length も非ソート入力で正しく出る。"""
+        weeks = [
+            _measured_week("2026-W12"),
+            _measured_week("2026-W10"),
+            _measured_week("2026-W11"),
+        ]
+        gate = correction_rate.compute_display_gate(weeks)
+        assert gate["point_week"]["week_id"] == "2026-W12"
+        assert gate["current_run_length"] == 3
+
+
 # ── build_correction_rate_summary（表示用の集約） ───────────────────
 
 
@@ -553,7 +661,7 @@ class TestBuildCorrectionRateSummary:
         assert summary["gate"]["gate_open"] is False
         assert summary["displayed_weeks"] == []
         assert summary["latest_coverage"] == {
-            "week_id": "2026-W34", "judged": 1, "total": 2,
+            "week_id": "2026-W34", "judged": 1, "total": 2, "failure_reasons": [],
         }
 
     def test_gate_open_lists_measured_weeks_with_worsening_flag(self):
