@@ -57,6 +57,7 @@
 | E5' | Tier2 予算 | `TIER2_BUDGET_CHARS = 400`（`merge.py:9`）。Tier1 合計は**観測例**で約40字（E1）。ただし本設計は decision 本文を構造的に予算外へ置くため、**この観測値に正しさを依存させない** | `merge.py:9` | 2026-08-18 |
 | E6' | 提案 group の上限 | `MAX_SESSION_PROPOSALS = 2` が制限するのは **group 数のみ**。各 group の `all_representatives` は無上限（`proposal_digest.py:757-765`）。今日の実データは全 PJ で reps=2 だが、上限として使えない | `proposal_digest.py:38,757-765` | 2026-08-18 |
 | E7' | 現行の tier と**所在** | session_proposal は `tier=2`。`NotificationItem` の構築は **`hooks/restore_state.py:213-219`**、`collectors.py` 側（`_build_session_proposal_output`）は `systemMessage`/`digest`/`hookSpecificOutput` を持つ dict を返すだけ（`collectors.py:581-588`）。**変更は2ファイルにまたがる** | `hooks/restore_state.py:213-219` / `collectors.py:581-588`（頭が実コードで確認） | 2026-08-18 |
+| E9 | **縮約の実行時再現**（E2' の「頻度は測定不能」とは別に、挙動そのものを実測） | `handle_session_start({})` を、他系統の発火有無だけを変えて2回実行した差分。改善案のみ発火 → `[evolve-anything] 改善案があります: 「テスト代表文A」。応答のあとで採否をお聞きします。…`（フル文）／改善案 + evolve_queue 同時発火 → `[evolve-anything] evolve待ち3PJ / 改善案1件 → /evolve-anything:queue で開始`（**代表テキストが完全消失**） | 他系統を monkeypatch で制御した read-only 実行（#498 実装時の追加調査） | 2026-08-18 |
 | E8 | 「Claude が AskUserQuestion するから Tier2 でよい」（ADR-054 §3 [Nit-t6]）の成否 | **破綻を実測**。2026-08-18、利用者が「『案：続けて』っていう提示もなかったよ？」と報告。ADR 自身も「prompt instruction 遵守は機械的に保証できない」と自認（`proposal_digest.py:739-742`） | 本セッションの利用者発話 / 当該 docstring | 2026-08-18 |
 
 **測定不能と明示するもの**:
@@ -199,6 +200,6 @@ E2E は producer→最終 JSON を通す既存 E2E テスト群に追加する�
    改行入りの代表文が実在する。user 可視バナーが複数行に割れうる。
    ただし `build_proposal_prompt`（additionalContext）は生の代表文を使うため、
    **片側だけ整形すると両チャネルが不一致になる**（codex r2 [Must]）。両チャネル同時の設計が要る。
-   → #503 とは別 issue。
+   → **#505 として起票済み**（2026-08-18）。
 2. 既存文言の主語欠落（「応答のあとで採否をお聞きします」は誰の応答か）と、
    表示されている読者に「表示されなかった場合は…」の但し書きが常駐している違和感（tacchi [Nit]）。
