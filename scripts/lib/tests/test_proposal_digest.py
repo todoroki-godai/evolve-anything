@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -117,10 +118,12 @@ def test_single_pj_group_is_slimmed(tmp_path: Path):
     assert "confirmable_idiom" in g
     # #498 要件1: reason（判定理由）も slim group に配線される。
     assert g["reason"] == "r"
+    # #504 I4: slim group は prev_action キーを持たない。
+    assert "prev_action" not in g
 
 
 def _sig_no_context(text: str, line_no: int, pj_slug: str, session_id: str = "s1") -> WeakSignal:
-    """#498 要件4: prev_action/reason のどちらも持たない llm_judge signal（説明不能な形）。"""
+    """#498 要件4: reason を持たない llm_judge signal（説明不能な形）。"""
     prov = {"source_path": f"/{pj_slug}.jsonl", "line_no": line_no, "text": text}
     return WeakSignal(
         channel="llm_judge",
@@ -131,8 +134,8 @@ def _sig_no_context(text: str, line_no: int, pj_slug: str, session_id: str = "s1
     )
 
 
-def test_group_without_prev_action_or_reason_is_held_back(tmp_path: Path):
-    """#498 要件4: prev_action も reason も無い llm_judge group は y/n を強行せず保留にする。
+def test_group_without_reason_is_held_back(tmp_path: Path):
+    """#498 要件4: reason が無い llm_judge group は y/n を強行せず保留にする。
     黙って減らさず excluded_context_missing_by_pj に件数を surface する。
     """
     ws = tmp_path / "weak_signals.jsonl"
@@ -143,8 +146,26 @@ def test_group_without_prev_action_or_reason_is_held_back(tmp_path: Path):
     assert out["excluded_context_missing_by_pj"] == {"pj-a": 1}
 
 
-def test_group_with_reason_but_no_prev_action_is_kept(tmp_path: Path):
-    """reason だけでも説明材料としては足りる（prev_action と reason は or 条件）。"""
+# 境界試験（1件・陰性試験に数えない）: reason が空白のみは保留側に落ちる。
+@pytest.mark.parametrize(
+    "blank_reason", ["", " ", "　", "\n", "\t"], ids=["empty", "half", "full", "nl", "tab"],
+)
+def test_group_with_blank_reason_is_held_back(tmp_path: Path, blank_reason: str):
+    ws = tmp_path / "weak_signals.jsonl"
+    prov = {"source_path": "/pj-a.jsonl", "line_no": 1, "text": "推奨で", "reason": blank_reason}
+    sig = WeakSignal(
+        channel="llm_judge", provenance=prov,
+        detected_at=datetime.now(timezone.utc).isoformat(), session_id="s1", pj_slug="pj-a",
+    )
+    append_signals([sig], path=ws)
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    assert out["per_pj"] == {}
+    assert out["excluded_context_missing_by_pj"] == {"pj-a": 1}
+
+
+def test_group_with_reason_is_kept(tmp_path: Path):
+    """reason があれば説明材料として足りる。"""
     ws = tmp_path / "weak_signals.jsonl"
     append_signals([_sig("推奨でお願いします", 1, "pj-a")], path=ws)  # _sig は reason="r" を設定
 
@@ -153,9 +174,29 @@ def test_group_with_reason_but_no_prev_action_is_kept(tmp_path: Path):
     assert out["excluded_context_missing_by_pj"] == {}
 
 
-def test_permission_deny_group_without_prev_action_or_reason_is_kept(tmp_path: Path):
-    """permission_deny は signal_text 自体が拒否コマンドを合成済みで、prev_action/reason
-    が無くても常に説明可能とみなす（llm_judge/rephrase とは異なる扱い・#498 要件4）。
+def test_signal_with_prev_action_but_no_reason_is_still_held_back(tmp_path: Path):
+    """#504 I1: prev_action は判断材料にならない。provenance に prev_action があっても
+    reason が無ければ保留される（旧仕様は prev_action/reason の or 条件で救われていた）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    prov = {
+        "source_path": "/pj-a.jsonl", "line_no": 1, "text": "推奨で",
+        "prev_action": "Edit foo.py",
+    }
+    sig = WeakSignal(
+        channel="llm_judge", provenance=prov,
+        detected_at=datetime.now(timezone.utc).isoformat(), session_id="s1", pj_slug="pj-a",
+    )
+    append_signals([sig], path=ws)
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    assert out["per_pj"] == {}
+    assert out["excluded_context_missing_by_pj"] == {"pj-a": 1}
+
+
+def test_permission_deny_group_without_reason_is_kept(tmp_path: Path):
+    """permission_deny は signal_text 自体が拒否コマンドを合成済みで、reason が無くても
+    常に説明可能とみなす（llm_judge/rephrase とは異なる扱い・#498 要件4）。
     """
     ws = tmp_path / "weak_signals.jsonl"
     prov = {
@@ -171,6 +212,77 @@ def test_permission_deny_group_without_prev_action_or_reason_is_kept(tmp_path: P
     out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
     assert len(out["per_pj"]["pj-a"]) == 1
     assert out["excluded_context_missing_by_pj"] == {}
+
+
+# ─────────────────────────────────────────────────────────────────
+# #504: prev_action は判断材料にならない — 表示と説明可否判定から外す
+# 不変条件 I1（提示可否）/ I2（taint 不到達）/ I3（表示の等値）/ I4（schema）
+# ─────────────────────────────────────────────────────────────────
+def test_i1_provenance_prev_action_does_not_affect_session_proposal_bytes(tmp_path: Path):
+    """I1: 同一入力（signal_key 固定・provenance ハッシュ差の影響を排除）に
+    provenance.prev_action を足した版と足さない版で、build_session_proposals の出力が
+    バイト等値である（prev_action は提示可否に一切影響しない）。
+    """
+    def _proposals_json(has_prev_action: bool) -> str:
+        d = tmp_path / ("with_pa" if has_prev_action else "without_pa")
+        d.mkdir()
+        ws = d / "weak_signals.jsonl"
+        prov = {
+            "source_path": "/pj-a.jsonl", "line_no": 1,
+            "text": "設定ファイルのパスを直接指定してください", "reason": "r",
+        }
+        if has_prev_action:
+            prov["prev_action"] = "Edit foo.py"
+        sig = WeakSignal(
+            channel="llm_judge", provenance=prov,
+            detected_at="2026-08-18T00:00:00+00:00", session_id="s1", pj_slug="pj-a",
+            signal_key="fixed-signal-key-for-i1",
+        )
+        append_signals([sig], path=ws)
+        out = pd.build_proposal_digest(_queue("pj-a"), data_dir=d)
+        proposals = pd.build_session_proposals({"proposals": out}, "pj-a", seen_keys=set())
+        return json.dumps(proposals, ensure_ascii=False, sort_keys=True)
+
+    assert _proposals_json(False) == _proposals_json(True)
+
+
+def test_i2_sentinel_in_provenance_prev_action_does_not_leak_through_pipeline(tmp_path: Path):
+    """I2(a)(b)(c): provenance.prev_action に sentinel を入れて digest を組んでも、
+    build_session_proposals の返り値全体・build_proposal_systemmessage・build_proposal_prompt
+    のいずれにも sentinel が現れない（taint 不到達）。I2(d)（restore_state の hook JSON 全文）は
+    hooks/tests/test_restore_state_session_proposals.py 側で別途検証する。
+    """
+    sentinel = "ZZPREVACTIONSENTINELZZ"
+    ws = tmp_path / "weak_signals.jsonl"
+    prov = {
+        "source_path": "/pj-a.jsonl", "line_no": 1,
+        "text": "設定ファイルのパスを直接指定してください", "reason": "r",
+        "prev_action": sentinel,
+    }
+    sig = WeakSignal(
+        channel="llm_judge", provenance=prov,
+        detected_at=datetime.now(timezone.utc).isoformat(), session_id="s1", pj_slug="pj-a",
+    )
+    append_signals([sig], path=ws)
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+    proposals = pd.build_session_proposals({"proposals": out}, "pj-a", seen_keys=set())
+    assert sentinel not in json.dumps(proposals, ensure_ascii=False)  # I2(a)
+    assert sentinel not in pd.build_proposal_systemmessage(proposals)  # I2(b)
+    assert sentinel not in pd.build_proposal_prompt(proposals, "pj-a")  # I2(c)
+
+
+def test_i3_material_lines_golden_equality_ignores_stray_prev_action_key(tmp_path: Path):
+    """陽性対照3 + I3: count のみの group の背景行は ``  背景: 1回検知``（リスト等値）。
+    同じ group にレガシー（本改修前に生成された digest snapshot 由来の）``prev_action``
+    キーを足しても戻り値は変わらない。
+    """
+    g = {"reason": "", "count": 1}
+    assert pd._material_lines(g) == ["  背景: 1回検知"]
+
+    g_with_stray_key = dict(g)
+    g_with_stray_key["prev_action"] = "Edit foo.py"
+    assert pd._material_lines(g_with_stray_key) == pd._material_lines(g)
 
 
 def test_digest_does_not_truncate_per_pj_groups(tmp_path: Path):
@@ -447,7 +559,6 @@ def _slim(keys, rep=None, idiom=None) -> dict:
         "channel": "llm_judge",
         "count": len(keys),
         "evidence_text": rep or "",
-        "prev_action": "",
     }
 
 
@@ -639,7 +750,6 @@ def _group(keys, rep="rep") -> dict:
         "channel": "llm_judge",
         "count": 1,
         "evidence_text": rep,
-        "prev_action": "",
     }
 
 
@@ -721,7 +831,6 @@ def test_build_session_proposals_subtracts_seen_keys_in_keys_by_pj():
         "channel": "llm_judge",
         "count": 2,
         "evidence_text": "共通テキスト",
-        "prev_action": "",
         "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
         "origin_pjs": ["pj-a", "pj-b"],
     }
@@ -745,7 +854,6 @@ def test_build_session_proposals_subtracts_reps_by_pj_for_partial_promotion():
         "channel": "llm_judge",
         "count": 2,
         "evidence_text": "代表文A",
-        "prev_action": "",
         "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
         "origin_pjs": ["pj-a", "pj-b"],
         "reps_by_pj": {"pj-a": ["代表文A"], "pj-b": ["代表文B"]},
@@ -823,16 +931,23 @@ def test_build_proposal_prompt_references_established_review_protocol():
     assert "反映先つき4択" in msg
 
 
-def test_build_proposal_prompt_includes_prev_action_reason_and_count():
-    """#498 要件1: 「何をしている時に」「なぜ拾われたか」「何回起きたか」が読める。"""
+def test_build_proposal_prompt_includes_reason_and_count_not_prev_action():
+    """#498 要件1: 「なぜ拾われたか」「何回起きたか」が読める（陽性対照）。
+
+    #504 I2(b)(c)/I3: ``g`` に本改修前の digest snapshot 由来のレガシー ``prev_action``
+    キーが残っていても（鮮度: キャッシュされた古い成果物）、additionalContext・systemMessage
+    のどちらにもその内容が漏れないこと（stray key defense — I3/I2 の陰性試験4/5/6 の kill 対象）。
+    """
     g = _group(["k1", "k2"], rep="rep")
-    g["prev_action"] = "Edit foo.py"
+    g["prev_action"] = "Edit foo.py"  # レガシー snapshot を模した stray key
     g["reason"] = "正しい値を後置で言い直している"
     g["count"] = 2
     msg = pd.build_proposal_prompt([g], "pj-a")
-    assert "Edit foo.py" in msg
+    sysmsg = pd.build_proposal_systemmessage([g])
     assert "正しい値を後置で言い直している" in msg
     assert "2回検知" in msg
+    assert "Edit foo.py" not in msg
+    assert "Edit foo.py" not in sysmsg
 
 
 def test_build_proposal_prompt_recorded_content_matches_correction_message_format():
@@ -859,7 +974,6 @@ def test_build_proposal_prompt_does_not_leak_channel_jargon():
     （group には channel="llm_judge" が乗っているが、プレビュー生成はそれを読まない）。
     """
     g = _group(["k1"], rep="rep")
-    g["prev_action"] = "Edit foo.py"
     g["reason"] = "正しい値を後置で言い直している"
     assert g["channel"] == "llm_judge"  # 前提: group には channel 値が乗っている
     msg = pd.build_proposal_prompt([g], "pj-a")
@@ -904,7 +1018,6 @@ def test_build_proposal_prompt_global_group_emits_per_origin_pj_commands():
         "channel": "llm_judge",
         "count": 2,
         "evidence_text": "共通テキスト",
-        "prev_action": "",
         "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
         "origin_pjs": ["pj-a", "pj-b"],
     }
@@ -931,7 +1044,6 @@ def test_build_proposal_prompt_lists_all_representatives_for_merged_group():
         "channel": "llm_judge",
         "count": 2,
         "evidence_text": "代表文A",
-        "prev_action": "",
         "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
         "origin_pjs": ["pj-a", "pj-b"],
         "all_representatives": ["代表文A", "代表文B"],
@@ -962,7 +1074,6 @@ def test_build_proposal_prompt_quotes_project_path_with_spaces():
         "channel": "llm_judge",
         "count": 1,
         "evidence_text": "共通テキスト",
-        "prev_action": "",
         "keys_by_pj": {"pj-a": ["ka"]},
         "origin_pjs": ["pj-a"],
     }
@@ -1123,7 +1234,6 @@ def test_build_proposal_systemmessage_lists_all_representatives_for_merged_group
         "channel": "llm_judge",
         "count": 2,
         "evidence_text": "代表文A",
-        "prev_action": "",
         "keys_by_pj": {"pj-a": ["ka"], "pj-b": ["kb"]},
         "origin_pjs": ["pj-a", "pj-b"],
         "all_representatives": ["代表文A", "代表文B"],

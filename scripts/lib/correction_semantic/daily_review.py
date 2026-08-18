@@ -33,7 +33,6 @@ from typing import Any, Dict, List, Optional, Set
 
 from correction_semantic.bootstrap_backlog import BACKLOG_CHANNEL, JACCARD_THRESHOLD
 from correction_semantic.idiom_filter import idiom_eligible
-from correction_semantic.representative import prev_action_summary
 from correction_semantic.review_channels import (
     REVIEW_CHANNELS,
     grouping_keywords,
@@ -261,12 +260,6 @@ def _idiom_text(rec: Dict[str, Any]) -> str:
     return signal_text(rec)
 
 
-def _prev_action(rec: Dict[str, Any]) -> str:
-    # #528-3: 直前 AI 行動の 1 行要約（一行 representative の判読補助に evidence へ添える）。
-    prov = rec.get("provenance") or {}
-    return prev_action_summary(prov.get("prev_action") or "")
-
-
 def _member_meta(rec: Dict[str, Any]) -> Dict[str, Any]:
     """group 集約前の個別レコードの物理キー・判定時刻を保持する（ADR-054 PR2-c）。
 
@@ -338,7 +331,6 @@ def _group_new(
                 ),
                 "evidence": {
                     "text": text,
-                    "prev_action": _prev_action(rec),  # #528-3: 直前 AI 行動の 1 行要約
                     "reason": (rec.get("provenance") or {}).get("reason", ""),
                     "session_id": rec.get("session_id", ""),
                     "count": 1,
@@ -398,8 +390,8 @@ def build_review(
            "confirmable_idiom": str|None, # 「はい」確定で confirmed になる idiom（eligible 時のみ・#527-4）
            "channel": str,                # llm_judge / rephrase / permission_deny（#99）
            "signal_keys": [str, ...],     # この group に属する weak_signal の signal_key
-           "evidence": {"text": str, "prev_action": str,  # prev_action=直前 AI 行動の 1 行要約（#528-3）
-                        "reason": str, "session_id": str, "count": int},
+           "evidence": {"text": str, "reason": str, "session_id": str, "count": int},
+           # #504: evidence に prev_action は含まない（表示・説明可否判定から外した）。
           }, ...
         ],
         "remaining": int,                 # max_groups を超えて未提示の group 数

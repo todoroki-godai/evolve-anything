@@ -328,6 +328,13 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(daily): `prev_action`（直前 AI 行動のツール名連結）を朝の改善案提示・説明可否判定から外した（#504）** —
+  仕様は「1行要約」だが実装は `tool_use.name` の連結で、実測（本番データ）では説明可否ゲートの
+  通過/保留を1件も変えていなかった（`prev_action` のみで説明可になる group は0件）。
+  `daily/proposal_digest._group_has_explanation`/`_material_lines`/`_slim_group` から
+  `prev_action` を除去し、`correction_semantic/daily_review._prev_action` と
+  `evidence["prev_action"]`、`correction_semantic/representative.prev_action_summary` を削除した。
+  utterances.db の列・extractor・judge プロンプト（`prompt.py`/`batch.py`）は変更なし。
 - **fix(session_notify): 判断を求める通知（改善案提示）が他系統と同時発火すると本文が digest に畳まれ利用者から消える不具合を修正（#503）** —
   `NotificationItem` に `decision_text` を追加し、これを持つ item は発火件数・Tier2 予算・overflow の
   いずれにも従わず（ADR-054 §3 [Nit-t6] の Tier2 正当化撤回）、常に全文を結合末尾へ連結するよう

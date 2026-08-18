@@ -30,6 +30,7 @@ sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
 
 import data_dir_migration as ddm  # noqa: E402
 import restore_state  # noqa: E402
+from session_notify.model import NotificationItem  # noqa: E402
 
 
 def _fresh_generated_at() -> str:
@@ -45,7 +46,6 @@ def _group(keys, rep="git statusじゃなくてgit diffを使って") -> dict:
         "channel": "llm_judge",
         "count": 1,
         "evidence_text": rep,
-        "prev_action": "",
     }
 
 
@@ -314,6 +314,37 @@ def test_handle_session_start_invokes_session_proposals(tmp_path, monkeypatch, c
     restore_state.handle_session_start({})
     out = capsys.readouterr().out
     assert "AskUserQuestion" in out
+
+
+# --- #504 I2(d): 本改修前に生成された（キャッシュされた古い）evolve-queue.json snapshot の
+# group に 'prev_action' キーが残っていても、SessionStart hook の最終出力に漏れないこと ---
+
+def test_i2d_stale_prev_action_key_does_not_leak_into_hook_json(tmp_path, monkeypatch, capsys):
+    """evolve-queue.json は毎朝の daily runner が書く永続 snapshot。本改修前に生成された
+    ファイルがまだ更新されていない状態（鮮度: キャッシュされた古い成果物）で group dict に
+    'prev_action' キーが残っていても、handle_session_start が stdout に出す hook JSON 全文
+    （systemMessage + hookSpecificOutput.additionalContext + decision_text 由来の merge を
+    含む）のどこにもその内容が現れないこと。collectors.py の decision_text 経由の再注入
+    （round2 [Must]）もこの1本で捕まえる。
+    """
+    sentinel = "ZZPREVACTIONSENTINELZZ"
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    stale_group = _group(["k1"])
+    stale_group["prev_action"] = sentinel
+    _write_queue(source, {"per_pj": {slug: [stale_group]}, "global": []})
+    # decision_text は発火2件以上の merge 経路でのみ最終 systemMessage に連結される
+    # （発火1件は items[0].text をそのまま使い decision_text を経由しない・merge.py:29-30）。
+    # collectors.py の decision_text 経由の再注入（round2 [Must]）を通すため、もう1系統を
+    # 同時発火させる。
+    monkeypatch.setattr(
+        restore_state, "_build_evolve_drain_output",
+        lambda: NotificationItem(label="drain", tier=1, text="生きてる系統", digest="digest"),
+    )
+
+    restore_state.handle_session_start({})
+    out = capsys.readouterr().out
+    assert sentinel not in out
 
 
 # --- #412 [Must]2: SessionStart stdout は単一の有効な JSON 応答であること ---
