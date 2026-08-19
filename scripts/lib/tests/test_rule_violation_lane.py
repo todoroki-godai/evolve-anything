@@ -282,3 +282,106 @@ class TestApplyHookEnforcementStatus:
         hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
         out = apply_hook_enforcement_status([], hook_path=hook_path, project_root=tmp_path / "proj")
         assert out == []
+
+    def test_single_pass_scan_for_multiple_same_head_violations(self, tmp_path, monkeypatch):
+        """#479 Must1: 同一 head の複数エントリがあっても JSONL 再スキャンは1回だけ
+        （以前は violation ごとにフルスキャンしており、同一 head の distinct pattern が
+        多いほど O(N_violations) で再読込していた）。"""
+        import rule_violation_lane as rvl
+
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        project_root = tmp_path / "proj"
+        projects_dir = tmp_path / "projects"
+        from datetime import datetime, timedelta, timezone
+        after = (datetime.now(timezone.utc) + timedelta(seconds=10)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
+        _write_session(projects_dir, project_root, [("cd /tmp", after)])
+
+        call_count = {"n": 0}
+        orig_iter = rvl._iter_bash_commands_with_timestamps
+
+        def _spy(*args, **kwargs):
+            call_count["n"] += 1
+            yield from orig_iter(*args, **kwargs)
+
+        monkeypatch.setattr(rvl, "_iter_bash_commands_with_timestamps", _spy)
+
+        # 同一 head "cd" を持つ distinct pattern を10個（partition_rule_violations が
+        # 生成しうる実際の形を模す）。
+        violations = [
+            {**self._violation(count=100 + i), "pattern": f"cd /path{i}"} for i in range(10)
+        ]
+        out = apply_hook_enforcement_status(
+            violations, hook_path=hook_path,
+            project_root=project_root, projects_dir=projects_dir,
+        )
+        assert call_count["n"] == 1, f"expected 1 scan, got {call_count['n']}"
+        assert len(out) == 1  # Must3 の畳み込みも合わせて確認
+
+    def test_recommendation_uses_home_relative_path_not_absolute(self, tmp_path, monkeypatch):
+        """#479 Must2: recommendation に個人ホームディレクトリの絶対パスを埋め込まない
+        （phases_remediate.py 経由で GitHub issue 本文に載りうるため）。"""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        hook_path = fake_home / ".claude" / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        project_root = tmp_path / "proj"
+        projects_dir = tmp_path / "projects"
+        from datetime import datetime, timedelta, timezone
+        after = (datetime.now(timezone.utc) + timedelta(seconds=10)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
+        _write_session(projects_dir, project_root, [("cd /tmp", after)])
+
+        out = apply_hook_enforcement_status(
+            [self._violation()], hook_path=hook_path,
+            project_root=project_root, projects_dir=projects_dir,
+        )
+        assert len(out) == 1
+        assert str(fake_home) not in out[0]["recommendation"], out[0]["recommendation"]
+        assert "~/.claude/hooks/enforce-prohibited-commands.py" in out[0]["recommendation"]
+
+    def test_multiple_same_head_violations_merged_into_one_entry(self, tmp_path):
+        """#479 Must3: count が head 単位の値に変わったため、同一 head のエントリを
+        1件へ畳む（畳まないと同じ count が複数行に複製され合計に見える誤読を生む）。"""
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        project_root = tmp_path / "proj"
+        projects_dir = tmp_path / "projects"
+        from datetime import datetime, timedelta, timezone
+        after = (datetime.now(timezone.utc) + timedelta(seconds=10)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
+        _write_session(
+            projects_dir, project_root,
+            [("cd /tmp", after), ("cd /var", after)],
+        )
+
+        violations = [
+            {**self._violation(count=523), "pattern": "cd /a", "examples": ["cd /a ex1"]},
+            {**self._violation(count=169), "pattern": "cd /b", "examples": ["cd /b ex1"]},
+            {**self._violation(count=130), "pattern": "cd /c", "examples": ["cd /a ex1"]},  # 重複example
+        ]
+        out = apply_hook_enforcement_status(
+            violations, hook_path=hook_path,
+            project_root=project_root, projects_dir=projects_dir,
+        )
+        assert len(out) == 1
+        entry = out[0]
+        assert entry["violated_command"] == "cd"
+        assert entry["count"] == 2  # 合算(523+169+130)ではなく導入後の実観測数
+        # examples は重複除去され、複数エントリ由来のものがマージされる
+        assert "cd /a ex1" in entry["examples"]
+        assert "cd /b ex1" in entry["examples"]
+        assert entry["examples"].count("cd /a ex1") == 1  # dedup
+        assert len(entry["examples"]) <= 3

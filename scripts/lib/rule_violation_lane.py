@@ -448,22 +448,27 @@ def _iter_bash_commands_with_timestamps(
                     yield cmd, ts
 
 
-def _count_command_occurrences_since(
-    head: str,
+def _count_command_occurrences_since_bulk(
+    heads: Set[str],
     since_dt: datetime,
-    project_root: Optional[Path],
+    project_root: Path,
     *,
     projects_dir: Optional[Path] = None,
-) -> Optional[int]:
-    """head（禁止コマンド spec）が since_dt 以降に観測された回数を数える。
+) -> Dict[str, int]:
+    """複数 head の since_dt 以降の観測回数を **1 パスのスキャンで** まとめて数える（#479 性能修正）。
 
-    project_root が None、または timestamp を欠く/パース不能なレコードは
-    安全側（除外）に倒す。project_root 自体が None の場合は判定不能として
-    None を返す（呼び出し側は変更なしにフォールバックする）。
+    以前は violations のループ内で head ごとに `_iter_bash_commands_with_timestamps`
+    をフル実行しており、同一 head の distinct pattern が複数存在すると同じ
+    JSONL 群を何度も読み直す O(N_violations × セッションサイズ) になっていた
+    （実測: 164 files / 269.2 MiB のセッション群で 1 スキャン 1.32s、"cd" の
+    10 エントリで約13秒・2.7GB 相当の再読込）。呼び出し側は判定が必要な head
+    集合を一度に渡し、ここで単一パスに集約する。
+
+    timestamp を欠く/パース不能なレコードは安全側（除外）に倒す。
     """
-    if project_root is None:
-        return None
-    count = 0
+    counts: Dict[str, int] = {h: 0 for h in heads}
+    if not heads:
+        return counts
     for cmd, ts in _iter_bash_commands_with_timestamps(project_root, projects_dir=projects_dir):
         if not ts:
             continue
@@ -473,9 +478,71 @@ def _count_command_occurrences_since(
             continue
         if cmd_dt < since_dt:
             continue
-        if _match_prohibited_spec(cmd, {head}):
-            count += 1
-    return count
+        matched = _match_prohibited_spec(cmd, heads)
+        if matched:
+            counts[matched] += 1
+    return counts
+
+
+def _display_hook_path(hook_path: Path) -> str:
+    """recommendation 表示用に hook_path をホームディレクトリ相対（`~/...`）へ畳む（#479 Must2）。
+
+    絶対パスをそのまま recommendation に埋め込むと、この文字列が
+    `phases_remediate.py` 経由で GitHub issue 本文に載る際に個人特定可能な
+    ローカルパス（`/Users/<ユーザー名>/...`）が外部流出する
+    （グローバル rule `no-personal-dir-in-external-artifacts`）。
+    Path.home() 配下であれば `~/` 形式に、そうでなければ末尾のファイル名のみを返す
+    （絶対パスをそのまま出さない安全側）。
+    """
+    home = Path.home()
+    try:
+        rel = hook_path.relative_to(home)
+    except ValueError:
+        return hook_path.name
+    return f"~/{rel}"
+
+
+def _merge_still_violated_entries(
+    head: str,
+    entries: List[Dict[str, Any]],
+    post_count: int,
+    hook_path: Path,
+    since_dt: datetime,
+) -> Dict[str, Any]:
+    """同一 head の複数 violation エントリを 1 件に畳む（#479 Must3）。
+
+    count を head 単位の値（post_count）に更新したことで、count の意味が
+    pattern 単位 → head 単位に変わった。畳まずに複数エントリへ同じ count を
+    複製すると、読み手には合計値に見えてしまう誤読を作り込む。同一 head の
+    エントリは 1 件へマージし、examples は先着順・重複除去で最大 3 件まで残す
+    （partition_rule_violations の既存方針 `key_examples[key]) < 3` に合わせる）。
+    """
+    merged_examples: List[str] = []
+    cross_pj = False
+    for entry in entries:
+        for ex in entry.get("examples", []):
+            if ex not in merged_examples and len(merged_examples) < 3:
+                merged_examples.append(ex)
+        if entry.get("cross_pj"):
+            cross_pj = True
+
+    display_path = _display_hook_path(hook_path)
+    merged: Dict[str, Any] = {
+        "pattern": head,
+        "count": post_count,
+        "violated_command": head,
+        "reason": "enforced_but_still_violated",
+        "examples": merged_examples,
+        "recommendation": (
+            f"`{head}` は enforcement hook（{display_path}）導入済みだが、導入後も"
+            f" {post_count} 回観測。新しい hook を作るのではなく、既存 hook の"
+            "判定範囲（分割ロジック・パターン漏れ等）を点検すること。"
+        ),
+        "hook_enforced_since": since_dt.isoformat(),
+    }
+    if cross_pj:
+        merged["cross_pj"] = True
+    return merged
 
 
 def apply_hook_enforcement_status(
@@ -488,12 +555,18 @@ def apply_hook_enforcement_status(
     """既に導入済みの enforcement hook の状態に基づき violations を3分岐する（#479）。
 
     1. hook_path が実在しない → 変更なし（reason=rule_installed_but_not_enforced のまま）。
+       ※ この exists() チェックは、hook_path が実在しない場合に
+       `_parse_hook_prohibited_set` の `read_text()` が OSError で fail-open するのと
+       振る舞い上は同値（equivalent）だが、意図を明示するため明示的に残す。
     2. hook_path が実在し、violated_command が hook の PROHIBITED に含まれ、かつ
        hook 導入後（mtime 以降）の観測が 0 → 提案から除外する（対処済み）。
     3. hook_path が実在し PROHIBITED に含まれるが、hook 導入後も観測がある →
-       reason を "enforced_but_still_violated" に変更し、count を導入後の観測数に
-       更新、recommendation を「hook を作れ」でなく「導入済み hook の判定範囲を
-       点検せよ」に差し替える。
+       同一 head のエントリを 1 件に畳み、reason を "enforced_but_still_violated" に
+       変更し、count を導入後の観測数（head 単位）に更新、recommendation を
+       「hook を作れ」でなく「導入済み hook の判定範囲を点検せよ」に差し替える。
+
+    時間窓の判定は head ごとに個別スキャンせず、対象 head 集合を一括して
+    1 パスでスキャンする（`_count_command_occurrences_since_bulk`・#479 性能修正）。
 
     hook スクリプトのパース失敗・project_root 未指定（時間窓判定不能）の場合は
     fail-open（変更なし）で返す。入力リストは破壊しない。
@@ -519,31 +592,41 @@ def apply_hook_enforcement_status(
         return list(violations)
     since_dt = datetime.fromtimestamp(hook_mtime, tz=timezone.utc)
 
+    # violated_command が prohibited_set に含まれるものだけを対象に集約する。
+    candidates_by_head: Dict[str, List[Dict[str, Any]]] = {}
+    for viol in violations:
+        head = str(viol.get("violated_command", ""))
+        if head in prohibited_set:
+            candidates_by_head.setdefault(head, []).append(viol)
+
+    counts: Optional[Dict[str, int]] = None
+    if candidates_by_head and project_root is not None:
+        counts = _count_command_occurrences_since_bulk(
+            set(candidates_by_head.keys()), since_dt, project_root, projects_dir=projects_dir,
+        )
+
     out: List[Dict[str, Any]] = []
+    merged_heads: Set[str] = set()
     for viol in violations:
         head = str(viol.get("violated_command", ""))
         if head not in prohibited_set:
             out.append(viol)
             continue
-        post_count = _count_command_occurrences_since(
-            head, since_dt, project_root, projects_dir=projects_dir,
-        )
-        if post_count is None:
+        if counts is None:
             # 時間窓判定不能（project_root 未指定等）→ false negative を避け変更なし
             out.append(viol)
             continue
+        if head in merged_heads:
+            continue  # 同一 head は初出時に1件へ畳み済み
+        merged_heads.add(head)
+        post_count = counts.get(head, 0)
         if post_count == 0:
             continue  # 対処済み → 提案から除外
-        entry = dict(viol)
-        entry["count"] = post_count
-        entry["reason"] = "enforced_but_still_violated"
-        entry["recommendation"] = (
-            f"`{head}` は enforcement hook（{hook_path}）導入済みだが、導入後も"
-            f" {post_count} 回観測。新しい hook を作るのではなく、既存 hook の"
-            "判定範囲（分割ロジック・パターン漏れ等）を点検すること。"
+        out.append(
+            _merge_still_violated_entries(
+                head, candidates_by_head[head], post_count, hook_path, since_dt,
+            )
         )
-        entry["hook_enforced_since"] = since_dt.isoformat()
-        out.append(entry)
     return out
 
 
