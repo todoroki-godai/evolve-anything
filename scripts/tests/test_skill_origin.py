@@ -20,6 +20,7 @@ from skill_origin import (
     generate_protection_warning,
     format_pitfall_candidate,
     invalidate_cache,
+    resolve_plugin_skill_path,
 )
 
 
@@ -250,3 +251,233 @@ class TestGracefulDegradation:
                         return_value=tmp_path / "nonexistent.json"):
             result = _load_plugin_skill_map()
             assert result == {}
+
+
+# ---------- plugin-qualified skill 名の実体パス解決 (#467) ----------
+
+class TestResolvePluginSkillPath:
+    """resolve_plugin_skill_path のテスト。
+
+    corrections の last_skill は plugin:skill 形式で記録されるため、bare 名前提の
+    glob（旧実装）は常に外れていた（#467）。installed_plugins.json の installPath を
+    使った解決に切り替える。
+    """
+
+    def _write_installed_plugins(self, plugins_dir: Path, data: dict) -> Path:
+        plugins_dir.mkdir(parents=True, exist_ok=True)
+        path = plugins_dir / "installed_plugins.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def test_resolves_namespaced_plugin_skill_via_skills_dir(self, tmp_path):
+        """`plugin:skill` 形式が installPath/skills/<skill>/SKILL.md を解決する。"""
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        install_path = tmp_path / "cache" / "evolve-anything" / "1.125.0"
+        skill_md = install_path / "skills" / "report-feedback" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("# report-feedback", encoding="utf-8")
+
+        ip_path = self._write_installed_plugins(plugins_dir, {
+            "plugins": {
+                "evolve-anything@evolve-anything": [
+                    {"installPath": str(install_path)},
+                ],
+            },
+        })
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("evolve-anything:report-feedback")
+
+        assert resolved == skill_md
+        assert reason is None
+
+    def test_resolves_via_dotclaude_skills_dir(self, tmp_path):
+        """installPath/.claude/skills/<skill>/SKILL.md 配置でも解決する。"""
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        install_path = tmp_path / "cache" / "evolve-anything" / "1.125.0"
+        skill_md = install_path / ".claude" / "skills" / "docs-refresh" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("# docs-refresh", encoding="utf-8")
+
+        ip_path = self._write_installed_plugins(plugins_dir, {
+            "plugins": {
+                "evolve-anything@evolve-anything": [
+                    {"installPath": str(install_path)},
+                ],
+            },
+        })
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("evolve-anything:docs-refresh")
+
+        assert resolved == skill_md
+        assert reason is None
+
+    def test_unknown_plugin_prefix_returns_reason(self, tmp_path):
+        """名前空間のプラグインが installed_plugins.json に無ければ unknown_plugin。"""
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        ip_path = self._write_installed_plugins(plugins_dir, {"plugins": {}})
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("not-installed:foo")
+
+        assert resolved is None
+        assert reason == "unknown_plugin"
+
+    def test_known_plugin_missing_skill_returns_not_found(self, tmp_path):
+        """プラグインは既知だが SKILL.md が実在しなければ not_found。"""
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        install_path = tmp_path / "cache" / "evolve-anything" / "1.125.0"
+        (install_path / "skills").mkdir(parents=True)
+
+        ip_path = self._write_installed_plugins(plugins_dir, {
+            "plugins": {
+                "evolve-anything@evolve-anything": [
+                    {"installPath": str(install_path)},
+                ],
+            },
+        })
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("evolve-anything:does-not-exist")
+
+        assert resolved is None
+        assert reason == "not_found"
+
+    def test_agent_skill_label_excluded(self, tmp_path):
+        """`Agent:*` はスキルでないため agent_skill_label を返す（bare_skill_name の契約踏襲）。"""
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        ip_path = self._write_installed_plugins(plugins_dir, {"plugins": {}})
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("Agent:some-subagent")
+
+        assert resolved is None
+        assert reason == "agent_skill_label"
+
+    def test_bare_name_without_namespace_searches_all_plugins(self, tmp_path):
+        """名前空間なしの bare 名は全プラグインを横断検索する（従来の global glob 相当）。"""
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        install_path = tmp_path / "cache" / "some-other-plugin" / "1.0.0"
+        skill_md = install_path / "skills" / "cleanup" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("# cleanup", encoding="utf-8")
+
+        ip_path = self._write_installed_plugins(plugins_dir, {
+            "plugins": {
+                "some-other-plugin@marketplace": [
+                    {"installPath": str(install_path)},
+                ],
+            },
+        })
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("cleanup")
+
+        assert resolved == skill_md
+        assert reason is None
+
+    def test_multiple_colons_uses_last_segment_as_skill_name(self, tmp_path):
+        """`:` を複数含む名前は最後の `:` 以降を skill 名、それ以前を丸ごと plugin 名にする。"""
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        install_path = tmp_path / "cache" / "a-b" / "1.0.0"
+        skill_md = install_path / "skills" / "skill" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("# skill", encoding="utf-8")
+
+        ip_path = self._write_installed_plugins(plugins_dir, {
+            "plugins": {
+                "a:b@marketplace": [
+                    {"installPath": str(install_path)},
+                ],
+            },
+        })
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("a:b:skill")
+
+        assert resolved == skill_md
+        assert reason is None
+
+    def test_empty_string_returns_not_found(self, tmp_path):
+        """空文字は not_found（例外を投げない）。"""
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        ip_path = self._write_installed_plugins(plugins_dir, {"plugins": {}})
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("")
+
+        assert resolved is None
+        assert reason == "not_found"
+
+    def test_stale_older_version_cache_still_resolves(self, tmp_path):
+        """複数バージョンが並存していても installPath に登録されたものを解決する（鮮度探索）。
+
+        installed_plugins.json の installPath は harness が最新版に更新する前提だが、
+        本関数自身はバージョン選別をしない（installed_plugins.json が単一の正）。
+        ここでは古いバージョンのみが登録されているケースでも解決できることを確認する
+        （＝古いキャッシュを無条件に信頼するのでなく、登録された実体を見ている）。
+        """
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        old_install_path = tmp_path / "cache" / "evolve-anything" / "1.124.1"
+        skill_md = old_install_path / "skills" / "report-feedback" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("# report-feedback (old)", encoding="utf-8")
+
+        # 新しいバージョンのディレクトリも存在するが installed_plugins.json には未登録
+        new_install_path = tmp_path / "cache" / "evolve-anything" / "1.125.0"
+        (new_install_path / "skills" / "report-feedback").mkdir(parents=True)
+
+        ip_path = self._write_installed_plugins(plugins_dir, {
+            "plugins": {
+                "evolve-anything@evolve-anything": [
+                    {"installPath": str(old_install_path)},
+                ],
+            },
+        })
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            resolved, reason = resolve_plugin_skill_path("evolve-anything:report-feedback")
+
+        # 登録済み（=installed_plugins.json が指す）バージョンを解決する。
+        # 未登録の新バージョンを勝手に拾わない（installed_plugins.json が単一ソース）。
+        assert resolved == skill_md
+        assert reason is None
+
+    def test_installed_plugins_json_update_invalidates_cache(self, tmp_path):
+        """installed_plugins.json 更新後の再解決は新しい installPath を反映する（鮮度）。
+
+        mtime ベースのキャッシュ無効化が壊れると、旧 installPath を無条件に返し続け、
+        プラグイン更新（バージョン切り替え）後も古い SKILL.md を解決してしまう。
+        """
+        import time
+
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        ip_path = plugins_dir / "installed_plugins.json"
+
+        old_install_path = tmp_path / "cache" / "p" / "1.0.0"
+        old_skill_md = old_install_path / "skills" / "foo" / "SKILL.md"
+        old_skill_md.parent.mkdir(parents=True)
+        old_skill_md.write_text("# old", encoding="utf-8")
+        self._write_installed_plugins(plugins_dir, {
+            "plugins": {"p@m": [{"installPath": str(old_install_path)}]},
+        })
+
+        with mock.patch("skill_origin._installed_plugins_path", return_value=ip_path):
+            first, _ = resolve_plugin_skill_path("p:foo")
+            assert first == old_skill_md
+
+            # プラグインが新バージョンへ更新され、installed_plugins.json の installPath が
+            # 切り替わる（mtime も更新される）。
+            time.sleep(0.01)
+            new_install_path = tmp_path / "cache" / "p" / "2.0.0"
+            new_skill_md = new_install_path / "skills" / "foo" / "SKILL.md"
+            new_skill_md.parent.mkdir(parents=True)
+            new_skill_md.write_text("# new", encoding="utf-8")
+            self._write_installed_plugins(plugins_dir, {
+                "plugins": {"p@m": [{"installPath": str(new_install_path)}]},
+            })
+
+            second, _ = resolve_plugin_skill_path("p:foo")
+
+        assert second == new_skill_md

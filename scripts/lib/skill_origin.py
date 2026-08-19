@@ -25,6 +25,7 @@ CANDIDATE_TEMPLATE = """\
 
 _plugin_skill_map_cache: Optional[Dict[str, str]] = None
 _plugin_skill_map_mtime: Optional[float] = None
+_plugin_install_paths_cache: Optional[Dict[str, List[Path]]] = None
 
 
 def _installed_plugins_path() -> Path:
@@ -54,13 +55,17 @@ def _load_plugin_skill_map() -> Dict[str, str]:
     if _plugin_skill_map_cache is not None and _plugin_skill_map_mtime == current_mtime:
         return _plugin_skill_map_cache
 
+    global _plugin_install_paths_cache
+
     mapping: Dict[str, str] = {}
+    install_paths: Dict[str, List[Path]] = {}
     try:
         data = json.loads(ip_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         # 不正 JSON またはファイル読み取りエラー → パスベースフォールバック
         _plugin_skill_map_cache = {}
         _plugin_skill_map_mtime = current_mtime
+        _plugin_install_paths_cache = {}
         return _plugin_skill_map_cache
 
     # version チェック — 未知の形式は空 map を返却
@@ -71,10 +76,12 @@ def _load_plugin_skill_map() -> Dict[str, str]:
             if v >= 3.0:
                 _plugin_skill_map_cache = {}
                 _plugin_skill_map_mtime = current_mtime
+                _plugin_install_paths_cache = {}
                 return _plugin_skill_map_cache
         except (ValueError, TypeError):
             _plugin_skill_map_cache = {}
             _plugin_skill_map_mtime = current_mtime
+            _plugin_install_paths_cache = {}
             return _plugin_skill_map_cache
 
     try:
@@ -87,6 +94,7 @@ def _load_plugin_skill_map() -> Dict[str, str]:
                 install_path = entry.get("installPath")
                 if not install_path:
                     continue
+                install_paths.setdefault(plugin_name, []).append(Path(install_path))
                 for skills_dir in [
                     Path(install_path) / ".claude" / "skills",
                     Path(install_path) / "skills",
@@ -100,7 +108,18 @@ def _load_plugin_skill_map() -> Dict[str, str]:
 
     _plugin_skill_map_cache = mapping
     _plugin_skill_map_mtime = current_mtime
+    _plugin_install_paths_cache = install_paths
     return _plugin_skill_map_cache
+
+
+def _load_plugin_install_paths() -> Dict[str, List[Path]]:
+    """installed_plugins.json → {plugin_name: [installPath, ...]} マッピングを返す。
+
+    ``_load_plugin_skill_map()`` と同じ JSON パース・mtime キャッシュを共有する
+    （二重パースを避けるため、install path は skill map 構築時に副産物として集める）。
+    """
+    _load_plugin_skill_map()  # キャッシュを最新化する副作用のためだけに呼ぶ
+    return _plugin_install_paths_cache or {}
 
 
 def get_plugin_skill_map() -> Dict[str, str]:
@@ -364,6 +383,61 @@ def classify_usage_skill(skill_name: str) -> Optional[str]:
 def invalidate_cache() -> None:
     """テスト用にキャッシュをクリアする。"""
     global _plugin_skill_map_cache, _plugin_skill_map_mtime, _plugin_prefix_cache
+    global _plugin_install_paths_cache
     _plugin_skill_map_cache = None
     _plugin_skill_map_mtime = None
     _plugin_prefix_cache = None
+    _plugin_install_paths_cache = None
+
+
+# --- Plugin-qualified skill 名の実体パス解決 (#467) ---------------------------
+
+def resolve_plugin_skill_path(skill_name: str) -> Tuple[Optional[Path], Optional[str]]:
+    """``<plugin>:<skill>``（または bare）形式のスキル名から SKILL.md の実体パスを解決する。
+
+    corrections の ``last_skill`` はプラグイン由来スキルだと ``evolve-anything:report-feedback``
+    のような名前空間付き形式で記録される。dir 名に ``:`` は含まれないため、bare 名だけを
+    見る glob は必ず外れる（#467）。本関数は installed_plugins.json の installPath を
+    使い、プラグイン名から実ディレクトリを引いて解決する。
+
+    正規化は ``rl_common.usage_schema.bare_skill_name`` を単一ソースとして再利用する
+    （新しい正規化ロジックを発明しない。pitfall_join_key_namespace_mismatch 参照）。
+
+    Args:
+        skill_name: corrections の ``last_skill``。``plugin:skill`` または bare 名。
+
+    Returns:
+        ``(skill_md_path, unresolved_reason)``。解決できた場合は ``(Path, None)``。
+        解決できなかった場合は ``(None, reason)`` — silence != evaluated のため理由を返す。
+        reason は ``"agent_skill_label"``（Agent:* は対象外）/ ``"unknown_plugin"``
+        （名前空間のプラグインが installed_plugins.json に見つからない）/
+        ``"not_found"``（プラグインは既知だが該当スキルの SKILL.md が存在しない）のいずれか。
+    """
+    from rl_common.usage_schema import bare_skill_name  # noqa: PLC0415（循環 import 回避 + 単一ソース再利用）
+
+    if not skill_name:
+        return None, "not_found"
+
+    bare = bare_skill_name(skill_name)
+    if bare is None:
+        return None, "agent_skill_label"
+
+    plugin_prefix = skill_name.rsplit(":", 1)[0] if ":" in skill_name else None
+
+    install_paths_by_plugin = _load_plugin_install_paths()
+
+    if plugin_prefix is not None:
+        if plugin_prefix not in install_paths_by_plugin:
+            return None, "unknown_plugin"
+        candidate_paths = install_paths_by_plugin[plugin_prefix]
+    else:
+        # bare 名（名前空間なし）: 全プラグインを検索対象にする
+        candidate_paths = [p for paths in install_paths_by_plugin.values() for p in paths]
+
+    for install_path in candidate_paths:
+        for skills_dir in (install_path / "skills", install_path / ".claude" / "skills"):
+            skill_md = skills_dir / bare / "SKILL.md"
+            if skill_md.is_file():
+                return skill_md, None
+
+    return None, "not_found"
