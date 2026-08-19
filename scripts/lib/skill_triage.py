@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from audit.artifacts import find_project_skill_dirs  # (#325) 単一ソース化: skill_evolve と同じ実ディスク走査
-from discover.runner import (  # (#622) 既存スキル判定の単一ソース: discover と同じ predicate を再利用
+from discover.runner import (  # (#467) 既存スキル判定の単一ソース: discover と同じ predicate を再利用
     _existing_skill_names,
     _is_already_existing_skill,
 )
@@ -23,10 +23,11 @@ from trigger_eval_generator import (
     generate_eval_set,
 )
 
-# CREATE evidence の decomposition 軸（#622）が空のとき、黙って空リスト/空dictを
-# 出さず理由を明示する（silence != evaluated）。空欄の根本原因は user_prompt 依存
-# （スラッシュコマンドが引数のみで起動され直前の発話が無い）ため文言に明記する。
-_NO_MATERIAL_NOTE = "材料なし（コマンド起動のため発話が存在しない）"
+# CREATE evidence の decomposition 軸（#467）が空のとき、黙って空リスト/空dictを
+# 出さず観測事実として明示する（silence != evaluated）。空になる原因は複数ありうる
+# （スラッシュコマンドが引数のみで起動され直前の発話が無い／該当レコードが機構ターンとして
+# 除外された／軌跡が短い 等）ため、原因を断定せず「材料が記録されていない」事実のみ書く。
+_NO_MATERIAL_NOTE = "材料なし（発話が記録されていないため抽出不可）"
 _NO_FAILURE_MATERIAL_NOTE = "材料なし（失敗記録なし）"
 
 # ── discover の MISSED_SKILL_THRESHOLD を参照 ────────
@@ -95,7 +96,7 @@ def compute_confidence(
 
 
 def _describe_decomposition(missed_info: Dict[str, Any]) -> Dict[str, Any]:
-    """CREATE evidence に Workflow-to-Skill 4軸の判断材料を surface する（#622）。
+    """CREATE evidence に Workflow-to-Skill 4軸の判断材料を surface する（#467）。
 
     missed_info（`_trajectory_candidates_to_missed` が積む dict）には decomposition の
     `routing` / `attachments` / `failure_analysis` が同梱されるが、旧来検出経路
@@ -152,7 +153,7 @@ def triage_skill(
         dry_run: True の場合、台帳（triage_ledger）への書き込みを行わない。
             3層判定は計算するが永続化しない＝evolve --dry-run の「変更なし」契約を守る（#308）。
         known_skill_names: project + **global**（`~/.claude/skills/`）の既存スキル名集合
-            （#622）。None の場合は空集合扱い（呼び出し側が未計算＝CREATE 抑制なし、
+            （#467）。None の場合は空集合扱い（呼び出し側が未計算＝CREATE 抑制なし、
             既存呼び出しとの後方互換）。`existing_skills` は本 PJ の CLAUDE.md/project
             スコープのみで global を含まないため、CREATE ゲートには別途これを併用する。
 
@@ -189,7 +190,7 @@ def triage_skill(
 
     # CREATE 判定: missed_skill 高 + 既存スキルなし
     if missed_info and missed_session_count >= MISSED_SKILL_THRESHOLD and skill_name not in existing_skills:
-        # 既存スキルへの CREATE 提案を防ぐ (#622, #479 と同型): missed_info は本 PJ
+        # 既存スキルへの CREATE 提案を防ぐ (#467, #479 と同型): missed_info は本 PJ
         # 内で未宣言・未配置でも、グローバル/プラグイン namespaced スキルや CC 組み込み
         # コマンドとして既に存在する場合がある（例: tech-eval は project の CLAUDE.md
         # 未宣言・.claude/skills 未配置だが ~/.claude/skills/tech-eval に実在）。
@@ -242,7 +243,7 @@ def triage_skill(
                 "session_count": missed_session_count,
                 "triggers_matched": missed_info.get("triggers_matched", []),
                 "source": missed_info.get("source", ""),
-                # (1) 判断材料の完全 surface（#622）: 計算済みの Workflow-to-Skill
+                # (1) 判断材料の完全 surface（#467）: 計算済みの Workflow-to-Skill
                 # 4軸のうち routing/attachments/failure_analysis を人間の y/n 判断に出す。
                 # 空欄は黙って落とさず理由を明示する（silence != evaluated）。
                 "decomposition": _describe_decomposition(missed_info),
@@ -490,7 +491,7 @@ def triage_all_skills(
 
     existing_skills = {entry["skill"] for entry in skill_triggers_list}
 
-    # (2) CREATE ゲート用の既存スキル名集合を一度だけ解決（#622）。
+    # (2) CREATE ゲート用の既存スキル名集合を一度だけ解決（#467）。
     # existing_skills は本 PJ の CLAUDE.md 宣言 + project ディスクのみで global を含まない。
     # discover/runner.py と同じ predicate（_existing_skill_names）で project + global の
     # 両方を集め、各 triage_skill 呼び出しで FS 走査が重複しないよう1回だけ計算する。
