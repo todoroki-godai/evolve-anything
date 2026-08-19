@@ -94,6 +94,21 @@ class TestMakeHookCandidateIssuesFromRuleViolations:
         issues = make_hook_candidate_issues_from_rule_violations(violations)
         assert issues[0]["source"] == "rule_violation_observed"
 
+    def test_enforced_but_still_violated_not_reproposed(self):
+        """#479: 既に enforcement hook 導入済み（apply_hook_enforcement_status が
+        reason=enforced_but_still_violated を付与）の違反は、同じ hook をもう一度
+        作れという stale 提案を再発させないため昇格対象から除外する。"""
+        violations = [
+            {
+                "pattern": "cd a",
+                "count": 626,
+                "violated_command": "cd",
+                "reason": "enforced_but_still_violated",
+            },
+        ]
+        issues = make_hook_candidate_issues_from_rule_violations(violations)
+        assert issues == []
+
 
 class TestEnforcementHookScriptMultiwordMatching:
     """#222: 生成された enforcement hook 自体が複数語 prohibited を

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(rule_violation_lane): 導入済み enforcement hook を再度作れと提案し続けるのを止める（#479）** —
+  `apply_hook_enforcement_status` を新設し、`rule_violation_observed` の各違反を hook の実在有無で
+  3分岐する: ①hook 未導入は従来通り提案 ②hook 導入済み・PROHIBITED 含む・導入後（mtime 以降）の
+  観測 0 は提案から除外（対処済み） ③hook 導入済みだが導入後も観測ありは reason を
+  `enforced_but_still_violated` に変え「hook を作れ」でなく「hook の判定範囲を点検せよ」に
+  recommendation を差し替え、count を導入後の観測数に更新する。時間窓の判定は
+  `rule_violation_observed` 専用の JSONL 再スキャン（`_iter_bash_commands_with_timestamps`）で行い、
+  timestamp を破棄する汎用 `tool_usage_analyzer` パイプラインは変更していない（API surface 契約は
+  無傷）。`make_hook_candidate_issues_from_rule_violations`（#585 hook 昇格経路）も
+  `enforced_but_still_violated` を昇格対象から除外し、同じ stale 提案が別経路で再発しないようにした。
+
 ## [1.125.0] - 2026-08-18
 
 ### Added

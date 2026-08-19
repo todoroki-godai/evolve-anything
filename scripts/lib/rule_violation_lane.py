@@ -12,7 +12,9 @@ hook enforce 検討」）に分離し、スキル候補レーンから除外す�
 
 決定論・LLM 非依存。`learning_install_is_not_enforcement`（MEMORY）の思想を配線する。
 """
+import ast
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -341,6 +343,210 @@ def _enforcement_hook_script_path() -> Path:
     return Path.home() / ".claude" / "hooks" / "enforce-prohibited-commands.py"
 
 
+# ── hook 実在チェック・時間窓（#479） ──────────────────────────
+#
+# rule_violation_observed が「既に導入済みの enforcement hook をもう一度作れ」と
+# 提案し続ける問題への対処。_enforcement_hook_script_path() が実在する場合、
+# その hook の PROHIBITED 集合と mtime（導入日時の代理値）を使って violations を
+# 3分岐する（issue 本文の分岐1〜3）。
+#
+# 時間窓の実装可否について（feasibility メモ）:
+# tool_usage_analyzer.session_io.extract_tool_calls は Bash コマンド文字列のみを
+# 集約し、JSONL レコードが持つ timestamp フィールド（例:
+# "2026-08-16T00:09:33.280Z"）を破棄する（session_io.py の bash_commands.append(cmd)
+# 一箇所のみで timestamp は読み捨て）。detect_repeating_commands（classify.py）は
+# さらにコマンド文字列のみを集計するため、repeating_patterns には最初から timestamp
+# が乗らない。generic pipeline（extract_tool_calls の返り値型・detect_repeating_commands
+# の集計方式）を変更すると `test_tool_usage_analyzer_snapshot.py` が固定する API
+# surface 契約に影響し、rule_violation 以外の全パターン種別（builtin_replaceable /
+# sleep 等）にも波及するため、本 issue のスコープでは touch しない。
+# 代わりに rule_violation_observed 専用の再スキャン（_iter_bash_commands_with_timestamps）
+# を追加し、hook 実在が確認できた violated_command だけに限定して JSONL を
+# 再読込し timestamp 付きで数え直す。既存の集計パイプラインには影響しない。
+
+
+def _parse_hook_prohibited_set(hook_path: Path) -> Optional[Set[str]]:
+    """hook スクリプトから `PROHIBITED = {...}` の集合を静的パースする。
+
+    import して実行すると副作用（グローバル状態の変更）が起こりうるため、
+    正規表現で `PROHIBITED = {...}` 行を抜き出し `ast.literal_eval` で評価する
+    （import しない）。パースできない場合は None を返す（呼び出し側は fail-open）。
+    """
+    try:
+        text = hook_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"^PROHIBITED\s*=\s*(\{.*\})\s*$", text, re.MULTILINE)
+    if not m:
+        return None
+    try:
+        value = ast.literal_eval(m.group(1))
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(value, set):
+        return None
+    return {str(v) for v in value}
+
+
+def _parse_iso8601(ts: str) -> datetime:
+    """ISO8601 文字列（`Z` 終端含む）を tz-aware datetime にパースする。
+
+    `Z` 終端と `+00:00` 終端は同一 instant でも文字列としては不一致になる
+    （辞書順比較の罠）ため、必ず datetime へパースしてから比較する。
+    tz 情報が無い場合は UTC とみなす。
+    """
+    ts = ts.strip()
+    if ts.endswith("Z"):
+        ts = ts[:-1] + "+00:00"
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _iter_bash_commands_with_timestamps(
+    project_root: Path,
+    *,
+    projects_dir: Optional[Path] = None,
+):
+    """rule_violation_observed 専用の Bash コマンド再スキャン（timestamp 保持）。
+
+    tool_usage_analyzer.session_io.extract_tool_calls と同じ session dir 解決を
+    使うが、そちらは timestamp を破棄するため、この専用関数で `(command, timestamp)`
+    を yield する。generic pipeline は変更しない（feasibility メモ参照）。
+    """
+    import json
+
+    from tool_usage_analyzer.session_io import _resolve_session_dir
+
+    session_dir = _resolve_session_dir(project_root, projects_dir=projects_dir)
+    if session_dir is None:
+        return
+    for session_file in sorted(session_dir.glob("*.jsonl")):
+        try:
+            text = session_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") != "assistant":
+                continue
+            ts = rec.get("timestamp")
+            content = rec.get("message", {}).get("content", [])
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "tool_use":
+                    continue
+                if item.get("name") != "Bash":
+                    continue
+                cmd = item.get("input", {}).get("command", "")
+                if cmd:
+                    yield cmd, ts
+
+
+def _count_command_occurrences_since(
+    head: str,
+    since_dt: datetime,
+    project_root: Optional[Path],
+    *,
+    projects_dir: Optional[Path] = None,
+) -> Optional[int]:
+    """head（禁止コマンド spec）が since_dt 以降に観測された回数を数える。
+
+    project_root が None、または timestamp を欠く/パース不能なレコードは
+    安全側（除外）に倒す。project_root 自体が None の場合は判定不能として
+    None を返す（呼び出し側は変更なしにフォールバックする）。
+    """
+    if project_root is None:
+        return None
+    count = 0
+    for cmd, ts in _iter_bash_commands_with_timestamps(project_root, projects_dir=projects_dir):
+        if not ts:
+            continue
+        try:
+            cmd_dt = _parse_iso8601(ts)
+        except (ValueError, TypeError):
+            continue
+        if cmd_dt < since_dt:
+            continue
+        if _match_prohibited_spec(cmd, {head}):
+            count += 1
+    return count
+
+
+def apply_hook_enforcement_status(
+    violations: List[Dict[str, Any]],
+    *,
+    hook_path: Optional[Path] = None,
+    project_root: Optional[Path] = None,
+    projects_dir: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """既に導入済みの enforcement hook の状態に基づき violations を3分岐する（#479）。
+
+    1. hook_path が実在しない → 変更なし（reason=rule_installed_but_not_enforced のまま）。
+    2. hook_path が実在し、violated_command が hook の PROHIBITED に含まれ、かつ
+       hook 導入後（mtime 以降）の観測が 0 → 提案から除外する（対処済み）。
+    3. hook_path が実在し PROHIBITED に含まれるが、hook 導入後も観測がある →
+       reason を "enforced_but_still_violated" に変更し、count を導入後の観測数に
+       更新、recommendation を「hook を作れ」でなく「導入済み hook の判定範囲を
+       点検せよ」に差し替える。
+
+    hook スクリプトのパース失敗・project_root 未指定（時間窓判定不能）の場合は
+    fail-open（変更なし）で返す。入力リストは破壊しない。
+    """
+    if hook_path is None:
+        hook_path = _enforcement_hook_script_path()
+    if not violations:
+        return list(violations)
+    try:
+        hook_exists = hook_path.exists()
+    except OSError:
+        hook_exists = False
+    if not hook_exists:
+        return list(violations)
+
+    prohibited_set = _parse_hook_prohibited_set(hook_path)
+    if prohibited_set is None:
+        return list(violations)
+
+    try:
+        hook_mtime = hook_path.stat().st_mtime
+    except OSError:
+        return list(violations)
+    since_dt = datetime.fromtimestamp(hook_mtime, tz=timezone.utc)
+
+    out: List[Dict[str, Any]] = []
+    for viol in violations:
+        head = str(viol.get("violated_command", ""))
+        if head not in prohibited_set:
+            out.append(viol)
+            continue
+        post_count = _count_command_occurrences_since(
+            head, since_dt, project_root, projects_dir=projects_dir,
+        )
+        if post_count is None:
+            # 時間窓判定不能（project_root 未指定等）→ false negative を避け変更なし
+            out.append(viol)
+            continue
+        if post_count == 0:
+            continue  # 対処済み → 提案から除外
+        entry = dict(viol)
+        entry["count"] = post_count
+        entry["reason"] = "enforced_but_still_violated"
+        entry["recommendation"] = (
+            f"`{head}` は enforcement hook（{hook_path}）導入済みだが、導入後も"
+            f" {post_count} 回観測。新しい hook を作るのではなく、既存 hook の"
+            "判定範囲（分割ロジック・パターン漏れ等）を点検すること。"
+        )
+        entry["hook_enforced_since"] = since_dt.isoformat()
+        out.append(entry)
+    return out
+
+
 def make_hook_candidate_issues_from_rule_violations(
     rule_violations: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -356,6 +562,12 @@ def make_hook_candidate_issues_from_rule_violations(
     がそのまま再利用される。source のみ "rule_violation_observed" に上書きし、由来を
     トレース可能にする。
 
+    reason が "enforced_but_still_violated"（#479・apply_hook_enforcement_status が
+    付与）の違反は昇格対象から除外する。これは既に enforcement hook が導入済みで
+    その PROHIBITED に含まれる違反であり、ここで再度 scaffold すると同じ hook を
+    もう一度作れという stale 提案（#479 が直した症状そのもの）を、この昇格経路で
+    再発させてしまうため。
+
     入力は破壊しない。決定論・LLM 非依存。
 
     Returns:
@@ -366,6 +578,8 @@ def make_hook_candidate_issues_from_rule_violations(
 
     eligible: List[Dict[str, Any]] = []
     for viol in rule_violations or []:
+        if viol.get("reason") == "enforced_but_still_violated":
+            continue
         head = str(viol.get("violated_command", "")).strip()
         if not head:
             continue
