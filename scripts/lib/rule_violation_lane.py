@@ -12,7 +12,9 @@ hook enforce 検討」）に分離し、スキル候補レーンから除外す�
 
 決定論・LLM 非依存。`learning_install_is_not_enforcement`（MEMORY）の思想を配線する。
 """
+import ast
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -341,6 +343,293 @@ def _enforcement_hook_script_path() -> Path:
     return Path.home() / ".claude" / "hooks" / "enforce-prohibited-commands.py"
 
 
+# ── hook 実在チェック・時間窓（#479） ──────────────────────────
+#
+# rule_violation_observed が「既に導入済みの enforcement hook をもう一度作れ」と
+# 提案し続ける問題への対処。_enforcement_hook_script_path() が実在する場合、
+# その hook の PROHIBITED 集合と mtime（導入日時の代理値）を使って violations を
+# 3分岐する（issue 本文の分岐1〜3）。
+#
+# 時間窓の実装可否について（feasibility メモ）:
+# tool_usage_analyzer.session_io.extract_tool_calls は Bash コマンド文字列のみを
+# 集約し、JSONL レコードが持つ timestamp フィールド（例:
+# "2026-08-16T00:09:33.280Z"）を破棄する（session_io.py の bash_commands.append(cmd)
+# 一箇所のみで timestamp は読み捨て）。detect_repeating_commands（classify.py）は
+# さらにコマンド文字列のみを集計するため、repeating_patterns には最初から timestamp
+# が乗らない。generic pipeline（extract_tool_calls の返り値型・detect_repeating_commands
+# の集計方式）を変更すると `test_tool_usage_analyzer_snapshot.py` が固定する API
+# surface 契約に影響し、rule_violation 以外の全パターン種別（builtin_replaceable /
+# sleep 等）にも波及するため、本 issue のスコープでは touch しない。
+# 代わりに rule_violation_observed 専用の再スキャン（_iter_bash_commands_with_timestamps）
+# を追加し、hook 実在が確認できた violated_command だけに限定して JSONL を
+# 再読込し timestamp 付きで数え直す。既存の集計パイプラインには影響しない。
+
+
+def _parse_hook_prohibited_set(hook_path: Path) -> Optional[Set[str]]:
+    """hook スクリプトから `PROHIBITED = {...}` の集合を静的パースする。
+
+    import して実行すると副作用（グローバル状態の変更）が起こりうるため、
+    正規表現で `PROHIBITED = {...}` 行を抜き出し `ast.literal_eval` で評価する
+    （import しない）。パースできない場合は None を返す（呼び出し側は fail-open）。
+    """
+    try:
+        text = hook_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"^PROHIBITED\s*=\s*(\{.*\})\s*$", text, re.MULTILINE)
+    if not m:
+        return None
+    try:
+        value = ast.literal_eval(m.group(1))
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(value, set):
+        return None
+    return {str(v) for v in value}
+
+
+def _parse_iso8601(ts: str) -> datetime:
+    """ISO8601 文字列（`Z` 終端含む）を tz-aware datetime にパースする。
+
+    `Z` 終端と `+00:00` 終端は同一 instant でも文字列としては不一致になる
+    （辞書順比較の罠）ため、必ず datetime へパースしてから比較する。
+    tz 情報が無い場合は UTC とみなす。
+    """
+    ts = ts.strip()
+    if ts.endswith("Z"):
+        ts = ts[:-1] + "+00:00"
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _iter_bash_commands_with_timestamps(
+    project_root: Path,
+    *,
+    projects_dir: Optional[Path] = None,
+):
+    """rule_violation_observed 専用の Bash コマンド再スキャン（timestamp 保持）。
+
+    tool_usage_analyzer.session_io.extract_tool_calls と同じ session dir 解決を
+    使うが、そちらは timestamp を破棄するため、この専用関数で `(command, timestamp)`
+    を yield する。generic pipeline は変更しない（feasibility メモ参照）。
+    """
+    import json
+
+    from tool_usage_analyzer.session_io import _resolve_session_dir
+
+    session_dir = _resolve_session_dir(project_root, projects_dir=projects_dir)
+    if session_dir is None:
+        return
+    for session_file in sorted(session_dir.glob("*.jsonl")):
+        try:
+            text = session_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") != "assistant":
+                continue
+            ts = rec.get("timestamp")
+            content = rec.get("message", {}).get("content", [])
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "tool_use":
+                    continue
+                if item.get("name") != "Bash":
+                    continue
+                cmd = item.get("input", {}).get("command", "")
+                if cmd:
+                    yield cmd, ts
+
+
+def _count_command_occurrences_since_bulk(
+    heads: Set[str],
+    since_dt: datetime,
+    project_root: Path,
+    *,
+    projects_dir: Optional[Path] = None,
+) -> Dict[str, int]:
+    """複数 head の since_dt 以降の観測回数を **1 パスのスキャンで** まとめて数える（#479 性能修正）。
+
+    以前は violations のループ内で head ごとに `_iter_bash_commands_with_timestamps`
+    をフル実行しており、同一 head の distinct pattern が複数存在すると同じ
+    JSONL 群を何度も読み直す O(N_violations × セッションサイズ) になっていた
+    （実測: 164 files / 269.2 MiB のセッション群で 1 スキャン 1.32s、"cd" の
+    10 エントリで約13秒・2.7GB 相当の再読込）。呼び出し側は判定が必要な head
+    集合を一度に渡し、ここで単一パスに集約する。
+
+    timestamp を欠く/パース不能なレコードは安全側（除外）に倒す。
+    """
+    counts: Dict[str, int] = {h: 0 for h in heads}
+    if not heads:
+        return counts
+    for cmd, ts in _iter_bash_commands_with_timestamps(project_root, projects_dir=projects_dir):
+        if not ts:
+            continue
+        try:
+            cmd_dt = _parse_iso8601(ts)
+        except (ValueError, TypeError):
+            continue
+        if cmd_dt < since_dt:
+            continue
+        matched = _match_prohibited_spec(cmd, heads)
+        if matched:
+            counts[matched] += 1
+    return counts
+
+
+def _display_hook_path(hook_path: Path) -> str:
+    """recommendation 表示用に hook_path をホームディレクトリ相対（`~/...`）へ畳む（#479 Must2）。
+
+    絶対パスをそのまま recommendation に埋め込むと、この文字列が
+    `phases_remediate.py` 経由で GitHub issue 本文に載る際に個人特定可能な
+    ローカルパス（`/Users/<ユーザー名>/...`）が外部流出する
+    （グローバル rule `no-personal-dir-in-external-artifacts`）。
+    Path.home() 配下であれば `~/` 形式に、そうでなければ末尾のファイル名のみを返す
+    （絶対パスをそのまま出さない安全側）。
+    """
+    home = Path.home()
+    try:
+        rel = hook_path.relative_to(home)
+    except ValueError:
+        return hook_path.name
+    return f"~/{rel}"
+
+
+def _merge_still_violated_entries(
+    head: str,
+    entries: List[Dict[str, Any]],
+    post_count: int,
+    hook_path: Path,
+    since_dt: datetime,
+) -> Dict[str, Any]:
+    """同一 head の複数 violation エントリを 1 件に畳む（#479 Must3）。
+
+    count を head 単位の値（post_count）に更新したことで、count の意味が
+    pattern 単位 → head 単位に変わった。畳まずに複数エントリへ同じ count を
+    複製すると、読み手には合計値に見えてしまう誤読を作り込む。同一 head の
+    エントリは 1 件へマージし、examples は先着順・重複除去で最大 3 件まで残す
+    （partition_rule_violations の既存方針 `key_examples[key]) < 3` に合わせる）。
+    """
+    merged_examples: List[str] = []
+    cross_pj = False
+    for entry in entries:
+        for ex in entry.get("examples", []):
+            if ex not in merged_examples and len(merged_examples) < 3:
+                merged_examples.append(ex)
+        if entry.get("cross_pj"):
+            cross_pj = True
+
+    display_path = _display_hook_path(hook_path)
+    merged: Dict[str, Any] = {
+        "pattern": head,
+        "count": post_count,
+        "violated_command": head,
+        "reason": "enforced_but_still_violated",
+        "examples": merged_examples,
+        "recommendation": (
+            f"`{head}` は enforcement hook（{display_path}）導入済みだが、導入後も"
+            f" {post_count} 回観測。新しい hook を作るのではなく、既存 hook の"
+            "判定範囲（分割ロジック・パターン漏れ等）を点検すること。"
+        ),
+        "hook_enforced_since": since_dt.isoformat(),
+    }
+    if cross_pj:
+        merged["cross_pj"] = True
+    return merged
+
+
+def apply_hook_enforcement_status(
+    violations: List[Dict[str, Any]],
+    *,
+    hook_path: Optional[Path] = None,
+    project_root: Optional[Path] = None,
+    projects_dir: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """既に導入済みの enforcement hook の状態に基づき violations を3分岐する（#479）。
+
+    1. hook_path が実在しない → 変更なし（reason=rule_installed_but_not_enforced のまま）。
+       ※ この exists() チェックは、hook_path が実在しない場合に
+       `_parse_hook_prohibited_set` の `read_text()` が OSError で fail-open するのと
+       振る舞い上は同値（equivalent）だが、意図を明示するため明示的に残す。
+    2. hook_path が実在し、violated_command が hook の PROHIBITED に含まれ、かつ
+       hook 導入後（mtime 以降）の観測が 0 → 提案から除外する（対処済み）。
+    3. hook_path が実在し PROHIBITED に含まれるが、hook 導入後も観測がある →
+       同一 head のエントリを 1 件に畳み、reason を "enforced_but_still_violated" に
+       変更し、count を導入後の観測数（head 単位）に更新、recommendation を
+       「hook を作れ」でなく「導入済み hook の判定範囲を点検せよ」に差し替える。
+
+    時間窓の判定は head ごとに個別スキャンせず、対象 head 集合を一括して
+    1 パスでスキャンする（`_count_command_occurrences_since_bulk`・#479 性能修正）。
+
+    hook スクリプトのパース失敗・project_root 未指定（時間窓判定不能）の場合は
+    fail-open（変更なし）で返す。入力リストは破壊しない。
+    """
+    if hook_path is None:
+        hook_path = _enforcement_hook_script_path()
+    if not violations:
+        return list(violations)
+    try:
+        hook_exists = hook_path.exists()
+    except OSError:
+        hook_exists = False
+    if not hook_exists:
+        return list(violations)
+
+    prohibited_set = _parse_hook_prohibited_set(hook_path)
+    if prohibited_set is None:
+        return list(violations)
+
+    try:
+        hook_mtime = hook_path.stat().st_mtime
+    except OSError:
+        return list(violations)
+    since_dt = datetime.fromtimestamp(hook_mtime, tz=timezone.utc)
+
+    # violated_command が prohibited_set に含まれるものだけを対象に集約する。
+    candidates_by_head: Dict[str, List[Dict[str, Any]]] = {}
+    for viol in violations:
+        head = str(viol.get("violated_command", ""))
+        if head in prohibited_set:
+            candidates_by_head.setdefault(head, []).append(viol)
+
+    counts: Optional[Dict[str, int]] = None
+    if candidates_by_head and project_root is not None:
+        counts = _count_command_occurrences_since_bulk(
+            set(candidates_by_head.keys()), since_dt, project_root, projects_dir=projects_dir,
+        )
+
+    out: List[Dict[str, Any]] = []
+    merged_heads: Set[str] = set()
+    for viol in violations:
+        head = str(viol.get("violated_command", ""))
+        if head not in prohibited_set:
+            out.append(viol)
+            continue
+        if counts is None:
+            # 時間窓判定不能（project_root 未指定等）→ false negative を避け変更なし
+            out.append(viol)
+            continue
+        if head in merged_heads:
+            continue  # 同一 head は初出時に1件へ畳み済み
+        merged_heads.add(head)
+        post_count = counts.get(head, 0)
+        if post_count == 0:
+            continue  # 対処済み → 提案から除外
+        out.append(
+            _merge_still_violated_entries(
+                head, candidates_by_head[head], post_count, hook_path, since_dt,
+            )
+        )
+    return out
+
+
 def make_hook_candidate_issues_from_rule_violations(
     rule_violations: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -356,6 +645,12 @@ def make_hook_candidate_issues_from_rule_violations(
     がそのまま再利用される。source のみ "rule_violation_observed" に上書きし、由来を
     トレース可能にする。
 
+    reason が "enforced_but_still_violated"（#479・apply_hook_enforcement_status が
+    付与）の違反は昇格対象から除外する。これは既に enforcement hook が導入済みで
+    その PROHIBITED に含まれる違反であり、ここで再度 scaffold すると同じ hook を
+    もう一度作れという stale 提案（#479 が直した症状そのもの）を、この昇格経路で
+    再発させてしまうため。
+
     入力は破壊しない。決定論・LLM 非依存。
 
     Returns:
@@ -366,6 +661,8 @@ def make_hook_candidate_issues_from_rule_violations(
 
     eligible: List[Dict[str, Any]] = []
     for viol in rule_violations or []:
+        if viol.get("reason") == "enforced_but_still_violated":
+            continue
         head = str(viol.get("violated_command", "")).strip()
         if not head:
             continue

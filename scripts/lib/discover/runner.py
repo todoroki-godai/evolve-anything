@@ -322,6 +322,7 @@ def run_discover(
         # の違反観測は専用レーンに分離し、スキル候補から除外する。決定論・LLM 非依存。
         try:
             from rule_violation_lane import (
+                apply_hook_enforcement_status,
                 default_rule_dirs,
                 extract_prohibited_command_heads,
                 partition_rule_violations,
@@ -334,8 +335,15 @@ def run_discover(
                 project_root=_proj,
             )
             tool_result["repeating_patterns"] = partitioned["skill_candidates"]
-            if partitioned["rule_violation_observed"]:
-                result["rule_violation_observed"] = partitioned["rule_violation_observed"]
+            # 既に導入済みの enforcement hook を再度作れと提案し続けるのを防ぐ（#479）。
+            # hook が実在し違反が止まっていれば提案から除外、hook をすり抜けて
+            # 違反が続いていれば reason/recommendation を「hook 点検」へ差し替える。
+            violations = apply_hook_enforcement_status(
+                partitioned["rule_violation_observed"],
+                project_root=_proj,
+            )
+            if violations:
+                result["rule_violation_observed"] = violations
         except Exception as e:
             result["rule_violation_observed_error"] = str(e)
 

@@ -8,6 +8,7 @@ repeating_patterns で「スキル候補」提案されるのを防ぐ。ルー�
 
 決定論・LLM 非依存。
 """
+import json
 import sys
 from pathlib import Path
 
@@ -15,9 +16,45 @@ _lib = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_lib))
 
 from rule_violation_lane import (  # noqa: E402
+    apply_hook_enforcement_status,
     extract_prohibited_command_heads,
     partition_rule_violations,
 )
+
+
+def _write_hook_script(path, prohibited):
+    """テスト用の enforcement hook スクリプトを書く（本物の PROHIBITED = {...} 形式）。"""
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\nimport sys\n\n"
+        f"PROHIBITED = {prohibited!r}\n\n"
+        "def main():\n    pass\n",
+        encoding="utf-8",
+    )
+
+
+def _write_session(projects_dir, project_root, records):
+    """project_root 用のセッション jsonl を1本書く。records は (command, timestamp) の list。"""
+    slug_dir = projects_dir / f"-Users-someone-{project_root.name}"
+    slug_dir.mkdir(parents=True, exist_ok=True)
+    session_file = slug_dir / "session1.jsonl"
+    lines = []
+    for command, ts in records:
+        rec = {
+            "type": "assistant",
+            "timestamp": ts,
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {"command": command},
+                    }
+                ]
+            },
+        }
+        lines.append(json.dumps(rec))
+    session_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 class TestExtractProhibitedCommandHeads:
@@ -125,3 +162,226 @@ class TestPartitionRuleViolations:
         out = partition_rule_violations(patterns, prohibited_heads={"cd"})
         assert len(out["rule_violation_observed"]) == 1
         assert out["rule_violation_observed"][0]["violated_command"] == "cd"
+
+
+class TestApplyHookEnforcementStatus:
+    """#479: 既に導入済みの enforcement hook を再度作れと提案し続ける問題の修正。"""
+
+    def _violation(self, head="cd", count=25):
+        return {
+            "pattern": f"{head} somewhere",
+            "count": count,
+            "examples": [],
+            "violated_command": head,
+            "reason": "rule_installed_but_not_enforced",
+            "recommendation": f"既存 rules で `{head}` は禁止済みだが {count} 回観測。",
+        }
+
+    def test_hook_not_installed_keeps_proposal_unchanged(self, tmp_path):
+        """分岐1: hook が存在しない → 従来どおり提案を出す（逆方向固定）。"""
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"  # 実在させない
+        violations = [self._violation()]
+        out = apply_hook_enforcement_status(
+            violations, hook_path=hook_path, project_root=tmp_path / "proj",
+        )
+        assert out == violations
+        assert out[0]["reason"] == "rule_installed_but_not_enforced"
+
+    def test_hook_installed_and_no_post_install_occurrence_drops_proposal(self, tmp_path):
+        """分岐2: hook 実在 + PROHIBITED に含まれ + 導入後の観測が0 → 提案から除外（対処済み）。"""
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        project_root = tmp_path / "proj"
+        projects_dir = tmp_path / "projects"
+        # hook 導入前（未来の mtime にするため、後で hook の mtime を過去に固定する）の観測のみ
+        _write_session(
+            projects_dir, project_root,
+            [("cd /tmp", "2020-01-01T00:00:00.000Z")],
+        )
+        # hook の mtime をこの観測より後にする
+        import os
+        import time as time_mod
+        future = time_mod.time()
+        os.utime(hook_path, (future, future))
+
+        out = apply_hook_enforcement_status(
+            [self._violation()], hook_path=hook_path,
+            project_root=project_root, projects_dir=projects_dir,
+        )
+        assert out == []
+
+    def test_hook_installed_but_still_violated_after_install_changes_reason(self, tmp_path):
+        """分岐3: hook 実在 + PROHIBITED に含まれるが導入後も観測がある → reason 変更・件数を導入後観測数に更新。"""
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+        import os
+        import time as time_mod
+        past = time_mod.time() - 3600
+        os.utime(hook_path, (past, past))
+
+        project_root = tmp_path / "proj"
+        projects_dir = tmp_path / "projects"
+        from datetime import datetime, timedelta, timezone
+        after = (datetime.now(timezone.utc) + timedelta(seconds=10)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
+        before = "2020-01-01T00:00:00.000Z"
+        _write_session(
+            projects_dir, project_root,
+            [("cd /tmp", before), ("cd /tmp", after), ("cd /var", after)],
+        )
+
+        out = apply_hook_enforcement_status(
+            [self._violation(count=626)], hook_path=hook_path,
+            project_root=project_root, projects_dir=projects_dir,
+        )
+        assert len(out) == 1
+        assert out[0]["reason"] == "enforced_but_still_violated"
+        assert out[0]["count"] == 2  # 導入後の2回のみ
+        assert "hook" in out[0]["recommendation"]
+        assert "作れ" not in out[0]["recommendation"]
+
+    def test_head_not_in_prohibited_set_is_unaffected(self, tmp_path):
+        """hook は実在するが violated_command が PROHIBITED に含まれない → 変更なし。"""
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        violations = [self._violation(head="pkill", count=12)]
+        out = apply_hook_enforcement_status(
+            violations, hook_path=hook_path, project_root=tmp_path / "proj",
+        )
+        assert out == violations
+
+    def test_malformed_hook_script_fails_open(self, tmp_path):
+        """hook の PROHIBITED パースに失敗 → fail-open（従来どおり提案を出す）。"""
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        hook_path.write_text("this is not valid python for PROHIBITED extraction\n")
+
+        violations = [self._violation()]
+        out = apply_hook_enforcement_status(
+            violations, hook_path=hook_path, project_root=tmp_path / "proj",
+        )
+        assert out == violations
+
+    def test_project_root_none_time_window_undecidable_keeps_proposal(self, tmp_path):
+        """project_root が無く時間窓判定不能 → 安全側で変更なし（false negative を避ける）。"""
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        violations = [self._violation()]
+        out = apply_hook_enforcement_status(violations, hook_path=hook_path, project_root=None)
+        assert out == violations
+
+    def test_empty_violations_returns_empty(self, tmp_path):
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        out = apply_hook_enforcement_status([], hook_path=hook_path, project_root=tmp_path / "proj")
+        assert out == []
+
+    def test_single_pass_scan_for_multiple_same_head_violations(self, tmp_path, monkeypatch):
+        """#479 Must1: 同一 head の複数エントリがあっても JSONL 再スキャンは1回だけ
+        （以前は violation ごとにフルスキャンしており、同一 head の distinct pattern が
+        多いほど O(N_violations) で再読込していた）。"""
+        import rule_violation_lane as rvl
+
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        project_root = tmp_path / "proj"
+        projects_dir = tmp_path / "projects"
+        from datetime import datetime, timedelta, timezone
+        after = (datetime.now(timezone.utc) + timedelta(seconds=10)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
+        _write_session(projects_dir, project_root, [("cd /tmp", after)])
+
+        call_count = {"n": 0}
+        orig_iter = rvl._iter_bash_commands_with_timestamps
+
+        def _spy(*args, **kwargs):
+            call_count["n"] += 1
+            yield from orig_iter(*args, **kwargs)
+
+        monkeypatch.setattr(rvl, "_iter_bash_commands_with_timestamps", _spy)
+
+        # 同一 head "cd" を持つ distinct pattern を10個（partition_rule_violations が
+        # 生成しうる実際の形を模す）。
+        violations = [
+            {**self._violation(count=100 + i), "pattern": f"cd /path{i}"} for i in range(10)
+        ]
+        out = apply_hook_enforcement_status(
+            violations, hook_path=hook_path,
+            project_root=project_root, projects_dir=projects_dir,
+        )
+        assert call_count["n"] == 1, f"expected 1 scan, got {call_count['n']}"
+        assert len(out) == 1  # Must3 の畳み込みも合わせて確認
+
+    def test_recommendation_uses_home_relative_path_not_absolute(self, tmp_path, monkeypatch):
+        """#479 Must2: recommendation に個人ホームディレクトリの絶対パスを埋め込まない
+        （phases_remediate.py 経由で GitHub issue 本文に載りうるため）。"""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        hook_path = fake_home / ".claude" / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        project_root = tmp_path / "proj"
+        projects_dir = tmp_path / "projects"
+        from datetime import datetime, timedelta, timezone
+        after = (datetime.now(timezone.utc) + timedelta(seconds=10)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
+        _write_session(projects_dir, project_root, [("cd /tmp", after)])
+
+        out = apply_hook_enforcement_status(
+            [self._violation()], hook_path=hook_path,
+            project_root=project_root, projects_dir=projects_dir,
+        )
+        assert len(out) == 1
+        assert str(fake_home) not in out[0]["recommendation"], out[0]["recommendation"]
+        assert "~/.claude/hooks/enforce-prohibited-commands.py" in out[0]["recommendation"]
+
+    def test_multiple_same_head_violations_merged_into_one_entry(self, tmp_path):
+        """#479 Must3: count が head 単位の値に変わったため、同一 head のエントリを
+        1件へ畳む（畳まないと同じ count が複数行に複製され合計に見える誤読を生む）。"""
+        hook_path = tmp_path / "hooks" / "enforce-prohibited-commands.py"
+        hook_path.parent.mkdir(parents=True)
+        _write_hook_script(hook_path, {"cd"})
+
+        project_root = tmp_path / "proj"
+        projects_dir = tmp_path / "projects"
+        from datetime import datetime, timedelta, timezone
+        after = (datetime.now(timezone.utc) + timedelta(seconds=10)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
+        _write_session(
+            projects_dir, project_root,
+            [("cd /tmp", after), ("cd /var", after)],
+        )
+
+        violations = [
+            {**self._violation(count=523), "pattern": "cd /a", "examples": ["cd /a ex1"]},
+            {**self._violation(count=169), "pattern": "cd /b", "examples": ["cd /b ex1"]},
+            {**self._violation(count=130), "pattern": "cd /c", "examples": ["cd /a ex1"]},  # 重複example
+        ]
+        out = apply_hook_enforcement_status(
+            violations, hook_path=hook_path,
+            project_root=project_root, projects_dir=projects_dir,
+        )
+        assert len(out) == 1
+        entry = out[0]
+        assert entry["violated_command"] == "cd"
+        assert entry["count"] == 2  # 合算(523+169+130)ではなく導入後の実観測数
+        # examples は重複除去され、複数エントリ由来のものがマージされる
+        assert "cd /a ex1" in entry["examples"]
+        assert "cd /b ex1" in entry["examples"]
+        assert entry["examples"].count("cd /a ex1") == 1  # dedup
+        assert len(entry["examples"]) <= 3
