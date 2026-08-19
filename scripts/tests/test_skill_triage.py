@@ -255,8 +255,9 @@ class TestTriageSkill:
     def test_create_evidence_marks_empty_routing_material_explicitly(
         self, sessions, usage, skill_triggers_list,
     ):
-        """(1) routing が空（コマンド起動のため user_prompt が無い）場合、
-        黙って空リストを出さず「材料なし」と分かる文言を残す（silence != evaluated）。
+        """(1) routing が空の場合、黙って空リストを出さず「材料なし」と分かる
+        文言を残す（silence != evaluated）。空になる原因は個別事情によるため
+        ここでは断定せず、観測事実（材料が無い）だけを検証対象にする。
         """
         missed = [{
             "skill": "deploy-check",
