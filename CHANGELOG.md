@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(discover): `corrections.jsonl` の `last_skill` が全件 None で `instruction_violations` /
+  `pitfall_candidates` が本番 0 件だった（#478）** — 前向き write（`correction_semantic/promote.py`）は
+  一時ファイル方式（TTL 24h）に依存しており、朝の y/n による採用は検出から数日後に走るため原理的に
+  間に合わなかった（`learning_derive_state_from_logs_not_forward_write`）。read 時に `usage.jsonl` から
+  同一セッションの直前 Skill 呼び出しを join して `last_skill` を導出する `correction_skill_join.py`
+  （`attach_last_skill`）を新設し、`discover/runner.py` の両検出器（`_fetch_corrections_with_last_skill`
+  経由）が共通で使う単一ソースにした。実データで `last_skill` truthy が 0/210 → 61/210 に回復
+  （project スコープ限定では 0/33 → 2/33）。`pitfall_candidates` はこの join では回復しない別原因
+  （`correction_type not in ("stop", "iya")`・`pitfall_manager/detection.py:163`）が残る。
 - **fix(discover): `instruction_violations` が `plugin:skill` 形式の `last_skill` を解決できず提案 0 件だった（#467）** —
   `~/.claude/skills/<name>/SKILL.md` の bare glob だけを見ていたため、`evolve-anything:report-feedback` の
   ような namespace 付き名前が常に未解決で捨てられていた。`skill_origin.resolve_plugin_skill_path` を新設し

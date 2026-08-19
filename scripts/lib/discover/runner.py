@@ -11,6 +11,27 @@ from typing import Any, Dict, Optional
 from rl_common.detection import CC_BUILTIN_COMMANDS as _CC_BUILTIN_COMMANDS
 
 
+def _fetch_corrections_with_last_skill(proj_name: str) -> list:
+    """corrections.jsonl を project スコープで取得し、`last_skill` を usage.jsonl との
+    read-time join で補完して返す（#478）。
+
+    前向き write（`correction_semantic/promote.py`）の一時ファイル方式は TTL 24h で、
+    朝の y/n による採用は検出から数日後に走るため原理的に間に合わない
+    （`learning_derive_state_from_logs_not_forward_write`）。join 本体は
+    `correction_skill_join.attach_last_skill` が単一ソース。
+
+    pitfall_candidates 検出（`pitfall_manager.extract_pitfall_candidates` 経由）・
+    instruction_violation 検出の両方がこの関数を経由する（design-before-fanout: 同型の
+    join を2箇所で独立実装しない）。
+    """
+    from telemetry_query import query_corrections, query_usage
+    from correction_skill_join import attach_last_skill
+
+    corrections_data = query_corrections(project=proj_name)
+    usage_data = query_usage(project=proj_name)
+    return attach_last_skill(corrections_data, usage_data)
+
+
 def _project_transcript_dir(project_root: Path) -> Path:
     """project_root を CC のエンコード規則で ~/.claude/projects/<encoded> に変換する。
 
@@ -367,10 +388,10 @@ def run_discover(
         if str(_lib_path) not in sys.path:
             sys.path.insert(0, str(_lib_path))
         from pitfall_manager import extract_pitfall_candidates
-        from telemetry_query import query_corrections, query_errors
+        from telemetry_query import query_errors
         proj = project_root or Path.cwd()
         proj_name = proj.name
-        corrections_data = query_corrections(project=proj_name)
+        corrections_data = _fetch_corrections_with_last_skill(proj_name)
         errors_data = query_errors(project=proj_name)
         pitfall_result = extract_pitfall_candidates(corrections_data, errors=errors_data)
         if pitfall_result["candidates"]:
@@ -389,7 +410,6 @@ def run_discover(
             extract_critical_lines,
             detect_instruction_violation,
         )
-        from telemetry_query import query_corrections
         from issue_schema import make_instruction_violation_issue
         from skill_origin import resolve_plugin_skill_path
         from rl_common.usage_schema import bare_skill_name
@@ -397,7 +417,7 @@ def run_discover(
 
         proj = project_root or Path.cwd()
         proj_name = proj.name
-        corrections_data = query_corrections(project=proj_name)
+        corrections_data = _fetch_corrections_with_last_skill(proj_name)
 
         # last_skill が設定されている corrections のみ対象
         skill_corrections = [
