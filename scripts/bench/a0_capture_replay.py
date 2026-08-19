@@ -308,6 +308,39 @@ def fetch_prior_assistant_text(source_path: str, line_no: int, max_chars: int = 
 # CLI: dump-sample
 # ---------------------------------------------------------------------------
 
+def _keys_from_artifact(path: Path) -> set:
+    """既出サンプルの (source_path, line_no) 集合を成果物から読む。
+
+    受け付ける形式: ラベル JSONL（1行1レコード）と dump-sample の JSON
+    （``{"samples": [...]}``）。存在しない/壊れた行は黙って読み飛ばす（抽出の前段で
+    落とすためのもので、ここで落ちると拡充作業自体が止まるため）。
+    """
+    keys = set()
+    if not path.exists():
+        return keys
+    text = path.read_text(encoding="utf-8", errors="replace")
+    stripped = text.lstrip()
+    recs: List[Dict[str, Any]] = []
+    if stripped.startswith("{") and '"samples"' in stripped[:2000]:
+        try:
+            recs = json.loads(text).get("samples", [])
+        except (json.JSONDecodeError, ValueError):
+            recs = []
+    else:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                recs.append(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+    for r in recs:
+        if isinstance(r, dict):
+            keys.add((r.get("source_path"), r.get("line_no")))
+    return keys
+
+
 def cmd_dump_sample(args: argparse.Namespace) -> None:
     snap = snapshot_identity()
     print(f"[harness] snapshot: {json.dumps(snap, ensure_ascii=False)}", flush=True)
@@ -315,6 +348,18 @@ def cmd_dump_sample(args: argparse.Namespace) -> None:
     rows = load_window_rows()
     pop = eligible_population(rows)
     print(f"[harness] eligible (should_include_message 通過) population: {len(pop)}", flush=True)
+
+    # 評価セット拡充（柱1 G2・条件2）: 既にラベル済みの行を母集団から除いてから抽出する。
+    # 既存 86 件を引き直さないためであり、除外後の残余に対する単純無作為抽出は保たれる
+    # （既存分も同じ窓・同じ eligible 判定から無作為に引かれているため、和集合も同窓の標本）。
+    if getattr(args, "exclude_labeled", False):
+        labeled_keys = {(e.get("source_path"), e.get("line_no")) for e in load_eval_set()}
+        for extra in (getattr(args, "exclude_from", None) or []):
+            labeled_keys |= _keys_from_artifact(Path(extra))
+        before = len(pop)
+        pop = [r for r in pop if (r["source_path"], r["line_no"]) not in labeled_keys]
+        print(f"[harness] exclude-labeled: {before} -> {len(pop)} "
+              f"(既出 {len(labeled_keys)} 件を除外)", flush=True)
 
     random_sample, machinery_extra = sample_random_plus_machinery_oversample(pop, args.n, args.seed)
     print(f"[harness] random_sample={len(random_sample)}  machinery_oversample_extra={len(machinery_extra)} "
@@ -345,6 +390,7 @@ def cmd_dump_sample(args: argparse.Namespace) -> None:
         "population_size": len(pop),
         "sample_seed": args.seed,
         "sample_n_requested": args.n,
+        "exclude_labeled": bool(getattr(args, "exclude_labeled", False)),
         "random_sample_n": len(random_sample),
         "machinery_oversample_n": len(machinery_extra),
         "samples": dump,
@@ -394,32 +440,44 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
     for cand_name, patterns in candidates.items():
         print(f"\n=== 候補: {cand_name} ===", flush=True)
-        tp_caught = 0
-        gt_positive = 0
-        hits = 0
-        hits_and_gt_positive = 0
-        for ex in eval_set:
-            label = ex["label"]  # "TP" or "not_TP"
-            text = ex["text"]
-            result = run_production_detect(patterns, text)
-            hit = result is not None
-            if label == "TP":
-                gt_positive += 1
-                if hit:
-                    tp_caught += 1
-            if hit:
-                hits += 1
+        # gated=True が本番経路（should_include_message → detect_correction の2段）。
+        # gated=False は検出器単体。本番は前さばきで machinery 等を落としてから
+        # detect_correction を呼ぶため、単体だけを測ると「本番では到達しない行」を
+        # 誤検知に数えて precision を過小評価する（2026-08-18 実測: 唯一の FP が
+        # machinery 行で、本番経路では precision 1/1 なのに単体では 1/2 に見えた）。
+        for gated in (True, False):
+            tp_caught = 0
+            gt_positive = 0
+            hits = 0
+            hits_and_gt_positive = 0
+            for ex in eval_set:
+                label = ex["label"]  # "TP" or "not_TP"
+                text = ex["text"]
+                if gated and not det.should_include_message(text):
+                    continue  # 本番ではここで捨てられる＝検出器に到達しない
+                result = run_production_detect(patterns, text)
+                hit = result is not None
                 if label == "TP":
-                    hits_and_gt_positive += 1
+                    gt_positive += 1
+                    if hit:
+                        tp_caught += 1
+                if hit:
+                    hits += 1
+                    if label == "TP":
+                        hits_and_gt_positive += 1
 
-        recall = tp_caught / gt_positive if gt_positive else float("nan")
-        precision = hits_and_gt_positive / hits if hits else float("nan")
-        recall_ci = _wilson_interval(tp_caught, gt_positive) if gt_positive else (0.0, 0.0)
-        precision_ci = _wilson_interval(hits_and_gt_positive, hits) if hits else (0.0, 0.0)
+            recall = tp_caught / gt_positive if gt_positive else float("nan")
+            precision = hits_and_gt_positive / hits if hits else float("nan")
+            recall_ci = _wilson_interval(tp_caught, gt_positive) if gt_positive else (0.0, 0.0)
+            precision_ci = _wilson_interval(hits_and_gt_positive, hits) if hits else (0.0, 0.0)
 
-        print(f"  eval_set n={len(eval_set)}  ground-truth TP={gt_positive}", flush=True)
-        print(f"  recall = {tp_caught}/{gt_positive} = {recall:.3f}  Wilson95%={recall_ci}", flush=True)
-        print(f"  precision(on eval_set hits) = {hits_and_gt_positive}/{hits} = {precision:.3f}  Wilson95%={precision_ci}", flush=True)
+            tag = "本番経路(should_include_message→detect)" if gated else "検出器単体(参考)"
+            print(f"  [{tag}] eval_set n={len(eval_set)}  評価対象 TP={gt_positive}", flush=True)
+            print(f"    捕捉率 recall = {tp_caught}/{gt_positive} = {recall:.3f}  "
+                  f"Wilson95%=({recall_ci[0]:.3f}, {recall_ci[1]:.3f})  "
+                  f"[取りこぼし {1 - recall:.3f}]", flush=True)
+            print(f"    精度 precision = {hits_and_gt_positive}/{hits} = {precision:.3f}  "
+                  f"Wilson95%=({precision_ci[0]:.3f}, {precision_ci[1]:.3f})", flush=True)
 
     # machinery-suspect 層別内訳
     print("\n=== machinery_suspect 層別（eval_set 内） ===", flush=True)
@@ -507,6 +565,14 @@ def main() -> None:
     p_dump.add_argument("--n", type=int, default=80)
     p_dump.add_argument("--seed", type=int, default=20260812)
     p_dump.add_argument("--out", type=str, default=str(HERE / "a0_sample_dump.json"))
+    p_dump.add_argument(
+        "--exclude-labeled", action="store_true",
+        help="a0_eval_set.jsonl に既出の (source_path, line_no) を母集団から除いてから抽出する（評価セット拡充用）",
+    )
+    p_dump.add_argument(
+        "--exclude-from", action="append", default=None,
+        help="追加で除外する既出サンプルの成果物（ラベル JSONL / dump-sample の JSON）。複数指定可",
+    )
     p_dump.set_defaults(func=cmd_dump_sample)
 
     p_eval = sub.add_parser("evaluate")

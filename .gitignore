@@ -26,6 +26,12 @@ scripts/bench/a0_eval_set.jsonl
 scripts/bench/a0_full_census.json
 scripts/bench/a0_sample_dump.json
 scripts/bench/a0_population_fingerprint.jsonl
+scripts/bench/a0_sample_dump_r2.json
+scripts/bench/a0_sample_dump_r3.json
+scripts/bench/a0_eval_set.jsonl.bak-*
+# 評価セット拡充（2026-08-18・柱1 G2 条件2）の作業ディレクトリ。入力 dump・各担当の
+# ラベル・信頼性検証の生データを含む（同じく他PJの生発話を含むため commit しない）。
+scripts/bench/_labels_r2/
 # A2 dispatch-marker リプレイの実コーパス成果物（同様に他PJの生発話を含むため commit しない。
 # ADR-054 / #379）
 scripts/bench/a2_dispatch_replay_result.json
