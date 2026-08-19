@@ -491,15 +491,13 @@ def _display_hook_path(hook_path: Path) -> str:
     `phases_remediate.py` 経由で GitHub issue 本文に載る際に個人特定可能な
     ローカルパス（`/Users/<ユーザー名>/...`）が外部流出する
     （グローバル rule `no-personal-dir-in-external-artifacts`）。
-    Path.home() 配下であれば `~/` 形式に、そうでなければ末尾のファイル名のみを返す
-    （絶対パスをそのまま出さない安全側）。
+
+    実体は ``rl_common.path_display.home_relative_display`` に集約（#467
+    フォローアップで discover 側にも同じ需要が生じ、判定重複を避けるため単一ソース化）。
     """
-    home = Path.home()
-    try:
-        rel = hook_path.relative_to(home)
-    except ValueError:
-        return hook_path.name
-    return f"~/{rel}"
+    from rl_common.path_display import home_relative_display  # noqa: PLC0415
+
+    return home_relative_display(hook_path)
 
 
 def _merge_still_violated_entries(

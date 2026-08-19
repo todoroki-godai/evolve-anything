@@ -393,6 +393,7 @@ def run_discover(
         from issue_schema import make_instruction_violation_issue
         from skill_origin import resolve_plugin_skill_path
         from rl_common.usage_schema import bare_skill_name
+        from rl_common.path_display import home_relative_display
 
         proj = project_root or Path.cwd()
         proj_name = proj.name
@@ -459,7 +460,10 @@ def run_discover(
                     violations.append(
                         make_instruction_violation_issue(
                             skill_name=skill_name,
-                            skill_path=str(skill_md),
+                            # 個人特定可能な絶対パスを提案（GitHub issue 本文）に載せない。
+                            # プラグインキャッシュ配下は Path.home() 配下なので ~/... に畳む
+                            # （no-personal-dir-in-external-artifacts・#479 先例の単一ソース）。
+                            skill_path=home_relative_display(skill_md),
                             instruction_text=violation.instruction.original,
                             correction_message=violation.correction_message,
                             match_type=violation.match_type,

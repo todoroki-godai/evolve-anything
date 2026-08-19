@@ -59,8 +59,10 @@ def _correction(last_skill: str) -> dict:
 
 def test_namespaced_plugin_skill_resolves_and_detects_violation(tmp_path):
     """`plugin:skill` last_skill がプラグインの実体 SKILL.md を解決し違反を検出する。"""
-    plugins_dir = tmp_path / "home" / ".claude" / "plugins"
-    install_path = tmp_path / "cache" / "evolve-anything" / "1.125.0"
+    home = tmp_path / "home"
+    plugins_dir = home / ".claude" / "plugins"
+    # 実配置（~/.claude/plugins/cache/...）に合わせ、install_path を home 配下に置く
+    install_path = home / ".claude" / "plugins" / "cache" / "evolve-anything" / "1.125.0"
     skill_md = install_path / "skills" / "report-feedback" / "SKILL.md"
     skill_md.parent.mkdir(parents=True)
     skill_md.write_text(_SKILL_MD_CONTENT, encoding="utf-8")
@@ -75,14 +77,17 @@ def test_namespaced_plugin_skill_resolves_and_detects_violation(tmp_path):
 
     with mock.patch.object(skill_origin, "_installed_plugins_path", return_value=ip_path), \
          mock.patch.object(telemetry_query, "query_corrections", return_value=[corr]), \
-         mock.patch("discover.runner.Path.home", return_value=tmp_path / "home"):
+         mock.patch("discover.runner.Path.home", return_value=home):
         result = discover.run_discover(project_root=project_root)
 
     assert "instruction_violations_error" not in result
     assert "instruction_violations" in result
     violations = result["instruction_violations"]
     assert len(violations) == 1
-    assert violations[0]["file"] == str(skill_md)
+    # 個人特定可能な絶対パスを提案（issue の file フィールド）に生で出さない
+    # （no-personal-dir-in-external-artifacts）。ホーム相対 `~/...` に畳まれていること。
+    assert violations[0]["file"] == "~/.claude/plugins/cache/evolve-anything/1.125.0/skills/report-feedback/SKILL.md"
+    assert str(home) not in violations[0]["file"]
     assert "instruction_violations_unresolved" not in result
 
 
@@ -128,7 +133,8 @@ def test_bare_skill_name_still_resolves_via_global_skills_dir(tmp_path):
 
     assert "instruction_violations_error" not in result
     assert "instruction_violations" in result
-    assert result["instruction_violations"][0]["file"] == str(skill_md)
+    assert result["instruction_violations"][0]["file"] == "~/.claude/skills/commit/SKILL.md"
+    assert str(home) not in result["instruction_violations"][0]["file"]
 
 
 if __name__ == "__main__":
