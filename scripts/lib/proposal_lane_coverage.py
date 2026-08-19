@@ -348,6 +348,9 @@ _RUNNER_NON_CANDIDATE_RESULT_KEYS: FrozenSet[str] = frozenset(
         "installed_artifacts",
         "pitfall_candidates_error",  # 基準1: *_error
         "instruction_violations_error",  # 基準1: *_error
+        "instruction_violations_unresolved",  # 基準2: last_skill を解決できなかった件数（int）。
+        # silence != evaluated のため runner.py が明示的に書く可観測性フィールドで、
+        # リストでなく個別レビュー対象になり得ない（#467 plugin:skill 名前空間解決）
         "constraint_decay_error",  # 基準1: *_error
         "stall_recovery_error",  # 基準1: *_error
         "workflow_checkpoint_gaps_error",  # 基準1: *_error

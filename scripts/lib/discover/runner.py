@@ -391,6 +391,9 @@ def run_discover(
         )
         from telemetry_query import query_corrections
         from issue_schema import make_instruction_violation_issue
+        from skill_origin import resolve_plugin_skill_path
+        from rl_common.usage_schema import bare_skill_name
+        from rl_common.path_display import home_relative_display
 
         proj = project_root or Path.cwd()
         proj_name = proj.name
@@ -419,12 +422,33 @@ def run_discover(
             skill_corrections = skill_corrections[:_MAX_CORRECTION_CHECKS]
 
         violations = []
+        unresolved_count = 0
         for corr in skill_corrections:
             skill_name = corr["last_skill"]
-            # スキルの SKILL.md を探す
-            skill_dirs = list(Path.home().glob(f".claude/skills/{skill_name}/SKILL.md"))
-            pj_skill_dirs = list((proj / ".claude" / "skills" / skill_name / "SKILL.md").parent.glob("SKILL.md")) if (proj / ".claude" / "skills" / skill_name).exists() else []
-            all_skill_mds = skill_dirs + [d for d in pj_skill_dirs if d not in skill_dirs]
+
+            # スキルの SKILL.md を探す。
+            # last_skill はプラグイン由来だと `plugin:skill` 形式で記録される（dir 名に
+            # `:` は含まれないため bare glob だけでは絶対に一致しない・#467）。まず
+            # installed_plugins.json 経由でプラグインスキルの実体を解決し、続けて
+            # bare 名（正規化は rl_common.usage_schema.bare_skill_name を単一ソースとして
+            # 再利用）で global / project ローカルのスキルも探す。
+            plugin_skill_md, _unresolved_reason = resolve_plugin_skill_path(skill_name)
+
+            bare = bare_skill_name(skill_name) or skill_name
+            skill_dirs = list(Path.home().glob(f".claude/skills/{bare}/SKILL.md"))
+            pj_skill_dir = proj / ".claude" / "skills" / bare
+            pj_skill_dirs = list(pj_skill_dir.glob("SKILL.md")) if pj_skill_dir.exists() else []
+
+            all_skill_mds: list = []
+            if plugin_skill_md is not None:
+                all_skill_mds.append(plugin_skill_md)
+            all_skill_mds += [d for d in skill_dirs if d not in all_skill_mds]
+            all_skill_mds += [d for d in pj_skill_dirs if d not in all_skill_mds]
+
+            if not all_skill_mds:
+                # silence != evaluated: 解決できなかった件数を無音で捨てない
+                unresolved_count += 1
+                continue
 
             for skill_md in all_skill_mds:
                 content = skill_md.read_text(encoding="utf-8")
@@ -436,7 +460,10 @@ def run_discover(
                     violations.append(
                         make_instruction_violation_issue(
                             skill_name=skill_name,
-                            skill_path=str(skill_md),
+                            # 個人特定可能な絶対パスを提案（GitHub issue 本文）に載せない。
+                            # プラグインキャッシュ配下は Path.home() 配下なので ~/... に畳む
+                            # （no-personal-dir-in-external-artifacts・#479 先例の単一ソース）。
+                            skill_path=home_relative_display(skill_md),
                             instruction_text=violation.instruction.original,
                             correction_message=violation.correction_message,
                             match_type=violation.match_type,
@@ -449,6 +476,8 @@ def run_discover(
 
         if violations:
             result["instruction_violations"] = violations
+        if unresolved_count:
+            result["instruction_violations_unresolved"] = unresolved_count
     except Exception as e:
         result["instruction_violations_error"] = str(e)
 

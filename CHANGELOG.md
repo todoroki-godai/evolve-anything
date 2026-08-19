@@ -3,6 +3,20 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(discover): `instruction_violations` が `plugin:skill` 形式の `last_skill` を解決できず提案 0 件だった（#467）** —
+  `~/.claude/skills/<name>/SKILL.md` の bare glob だけを見ていたため、`evolve-anything:report-feedback` の
+  ような namespace 付き名前が常に未解決で捨てられていた。`skill_origin.resolve_plugin_skill_path` を新設し
+  `installed_plugins.json` の `installPath` からプラグイン実体を解決、bare 名は
+  `rl_common.usage_schema.bare_skill_name`（既存の単一ソース）で正規化する。解決できなかった件数は
+  無音で捨てず `instruction_violations_unresolved` として surface する（silence != evaluated）。
+  あわせて提案に載せる `skill_path` を `~/...` 形式へ畳み、個人特定可能な絶対パスが GitHub issue 本文へ
+  流出するのを止めた（#479 で入れた同型の防御を `rl_common/path_display.home_relative_display` へ抽出し
+  `rule_violation_lane` と共有・重複実装なし）。**この修正だけで提案が増えるわけではない**: 実測で
+  corrections 208 件中 `last_skill` を持つのは 2 件（1%）で、上流の記録不足（#478 / #480）が真の制約。
+- **fix(skill_triage): スキル提案に判断材料を出し、既存スキルへの誤提案を止める（#467）** —
+  `_describe_decomposition` が `routing` / `attachments` / `failure_analysis` の算出済み内訳を提示し、
+  材料が無い場合は空リストでなく「材料なし」と明示する。CREATE 提案はグローバル/プラグイン/CC 組み込みに
+  同名スキルが実在する場合に抑止する（判定は `discover.runner` の既存関数を再利用）。
 - **fix(rule_violation_lane): 導入済み enforcement hook を再度作れと提案し続けるのを止める（#479）** —
   `apply_hook_enforcement_status` を新設し、`rule_violation_observed` の各違反を hook の実在有無で
   3分岐する: ①hook 未導入は従来通り提案 ②hook 導入済み・PROHIBITED 含む・導入後（mtime 以降）の
