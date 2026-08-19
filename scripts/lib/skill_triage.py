@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from audit.artifacts import find_project_skill_dirs  # (#325) 単一ソース化: skill_evolve と同じ実ディスク走査
+from discover.runner import (  # (#467) 既存スキル判定の単一ソース: discover と同じ predicate を再利用
+    _existing_skill_names,
+    _is_already_existing_skill,
+)
 from meta_quality import meta_quality_check  # noqa: E402  # (#203)
 import triage_ledger  # noqa: E402  # (#308) SKIP 判断の TTL・再発カウンタ
 from similarity import jaccard_coefficient, tokenize
@@ -18,6 +22,13 @@ from trigger_eval_generator import (
     MIN_EVAL_QUERIES,
     generate_eval_set,
 )
+
+# CREATE evidence の decomposition 軸（#467）が空のとき、黙って空リスト/空dictを
+# 出さず観測事実として明示する（silence != evaluated）。空になる原因は複数ありうる
+# （スラッシュコマンドが引数のみで起動され直前の発話が無い／該当レコードが機構ターンとして
+# 除外された／軌跡が短い 等）ため、原因を断定せず「材料が記録されていない」事実のみ書く。
+_NO_MATERIAL_NOTE = "材料なし（発話が記録されていないため抽出不可）"
+_NO_FAILURE_MATERIAL_NOTE = "材料なし（失敗記録なし）"
 
 # ── discover の MISSED_SKILL_THRESHOLD を参照 ────────
 MISSED_SKILL_THRESHOLD = 2
@@ -84,6 +95,33 @@ def compute_confidence(
     return max(0.0, min(1.0, confidence))
 
 
+def _describe_decomposition(missed_info: Dict[str, Any]) -> Dict[str, Any]:
+    """CREATE evidence に Workflow-to-Skill 4軸の判断材料を surface する（#467）。
+
+    missed_info（`_trajectory_candidates_to_missed` が積む dict）には decomposition の
+    `routing` / `attachments` / `failure_analysis` が同梱されるが、旧来検出経路
+    （`detect_missed_skills`）由来の missed_info にはキー自体が無い。いずれの場合も
+    KeyError せず、値が空/欠落なら理由を明示した文言に置き換える（黙って落とさない）。
+    """
+    routing = missed_info.get("routing") or {}
+    trigger_keywords = routing.get("trigger_keywords") or []
+    sample_triggers = routing.get("sample_triggers") or []
+    attachments = missed_info.get("attachments") or {}
+    failure_analysis = missed_info.get("failure_analysis") or {}
+    return {
+        "routing": {
+            "trigger_keywords": trigger_keywords if trigger_keywords else _NO_MATERIAL_NOTE,
+            "sample_triggers": sample_triggers if sample_triggers else _NO_MATERIAL_NOTE,
+        },
+        "attachments": {
+            "session_count": attachments.get("session_count", 0),
+            "session_bound": attachments.get("session_bound"),
+            "projects": attachments.get("projects") or [],
+        },
+        "failure_analysis": failure_analysis if failure_analysis else _NO_FAILURE_MATERIAL_NOTE,
+    }
+
+
 def triage_skill(
     skill_name: str,
     *,
@@ -97,6 +135,7 @@ def triage_skill(
     ledger_slug: Optional[str] = None,
     ledger_now: Optional[float] = None,
     dry_run: bool = False,
+    known_skill_names: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """単一スキルの triage 判定を行う。
 
@@ -105,7 +144,7 @@ def triage_skill(
         sessions: sessions.jsonl レコード
         usage: usage.jsonl レコード
         missed_skills: discover の missed_skill 結果
-        existing_skills: 既存スキル名の集合
+        existing_skills: 既存スキル名の集合（この PJ の CLAUDE.md 宣言 + project ディスク走査）
         skill_triggers_list: スキルトリガー情報
         project_root: プロジェクトルート
         all_eval_sets: 事前生成済み eval set。None の場合は内部で生成。
@@ -113,6 +152,10 @@ def triage_skill(
         ledger_now: 台帳適用の基準時刻（テスト用、None なら現在時刻）。
         dry_run: True の場合、台帳（triage_ledger）への書き込みを行わない。
             3層判定は計算するが永続化しない＝evolve --dry-run の「変更なし」契約を守る（#308）。
+        known_skill_names: project + **global**（`~/.claude/skills/`）の既存スキル名集合
+            （#467）。None の場合は空集合扱い（呼び出し側が未計算＝CREATE 抑制なし、
+            既存呼び出しとの後方互換）。`existing_skills` は本 PJ の CLAUDE.md/project
+            スコープのみで global を含まないため、CREATE ゲートには別途これを併用する。
 
     Returns:
         {"action": str, "skill": str, "confidence": float, "evidence": dict, ...}
@@ -147,6 +190,23 @@ def triage_skill(
 
     # CREATE 判定: missed_skill 高 + 既存スキルなし
     if missed_info and missed_session_count >= MISSED_SKILL_THRESHOLD and skill_name not in existing_skills:
+        # 既存スキルへの CREATE 提案を防ぐ (#467, #479 と同型): missed_info は本 PJ
+        # 内で未宣言・未配置でも、グローバル/プラグイン namespaced スキルや CC 組み込み
+        # コマンドとして既に存在する場合がある（例: tech-eval は project の CLAUDE.md
+        # 未宣言・.claude/skills 未配置だが ~/.claude/skills/tech-eval に実在）。
+        # discover/runner.py の _is_already_existing_skill と同じ単一ソースの判定を
+        # ここでも適用する（判定ロジックの重複実装を避ける）。
+        if _is_already_existing_skill(skill_name, known_skill_names or set()):
+            return {
+                "action": "OK",
+                "skill": skill_name,
+                "confidence": 0.90,
+                "eval_set_path": eval_set_path,
+                "evidence": {
+                    "already_exists": True,
+                    "note": "既存スキル（グローバル/プラグイン/CC組み込み）のため CREATE 提案なし",
+                },
+            }
         # generalizability_score は skill_extractor 由来の候補にのみ同梱される
         # （#221）。無い場合は None のままにし compute_confidence 側で減点しない。
         generalizability_score = missed_info.get("generalizability_score")
@@ -180,7 +240,13 @@ def triage_skill(
             ),
             "evidence": {
                 "missed_sessions": missed_session_count,
+                "session_count": missed_session_count,
                 "triggers_matched": missed_info.get("triggers_matched", []),
+                "source": missed_info.get("source", ""),
+                # (1) 判断材料の完全 surface（#467）: 計算済みの Workflow-to-Skill
+                # 4軸のうち routing/attachments/failure_analysis を人間の y/n 判断に出す。
+                # 空欄は黙って落とさず理由を明示する（silence != evaluated）。
+                "decomposition": _describe_decomposition(missed_info),
             },
             "eval_set_path": eval_set_path,
             "meta_quality": meta,
@@ -425,6 +491,12 @@ def triage_all_skills(
 
     existing_skills = {entry["skill"] for entry in skill_triggers_list}
 
+    # (2) CREATE ゲート用の既存スキル名集合を一度だけ解決（#467）。
+    # existing_skills は本 PJ の CLAUDE.md 宣言 + project ディスクのみで global を含まない。
+    # discover/runner.py と同じ predicate（_existing_skill_names）で project + global の
+    # 両方を集め、各 triage_skill 呼び出しで FS 走査が重複しないよう1回だけ計算する。
+    known_skill_names = _existing_skill_names(proj_for_discovery)
+
     # 台帳 slug を一度だけ解決 (#308): triage_skill ごとに git を叩くのを避ける。
     ledger_slug = triage_ledger.resolve_slug(cwd=project_root)
 
@@ -475,6 +547,7 @@ def triage_all_skills(
             all_eval_sets=all_eval_sets,
             ledger_slug=ledger_slug,
             dry_run=dry_run,
+            known_skill_names=known_skill_names,
         )
         # ① 抑制 (#308): クールダウン内の再発 SKIP は個別 bucket に積まず畳む。
         if triage.get("suppressed"):

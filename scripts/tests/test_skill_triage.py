@@ -21,6 +21,8 @@ from skill_triage import (
     detect_split_candidates,
     detect_merge_candidates,
     generate_skill_creator_suggestion,
+    _NO_MATERIAL_NOTE,
+    _NO_FAILURE_MATERIAL_NOTE,
 )
 
 
@@ -212,6 +214,195 @@ class TestTriageSkill:
         )
         assert result["action"] == "OK"
 
+    def test_create_evidence_surfaces_decomposition_axes(self, sessions, usage, skill_triggers_list):
+        """(1) CREATE evidence に session_count / routing / attachments / failure_analysis を surface する。
+
+        値が実在する場合はそのまま反映される（陽性対照）。
+        """
+        missed = [{
+            "skill": "deploy-check",
+            "triggers_matched": ["deploy"],
+            "session_count": 4,
+            "generalizability_score": 0.6,
+            "source": "codeskill_extraction",
+            "routing": {
+                "trigger_keywords": ["deploy", "check"],
+                "sample_triggers": ["デプロイ前にチェックして"],
+            },
+            "attachments": {"projects": ["proj-a"], "session_count": 3, "session_bound": False},
+            "failure_analysis": {"failure_count": 1, "failure_rate": 0.25},
+        }]
+        result = triage_skill(
+            "deploy-check",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills={"aws-cdk-deploy", "channel-routing", "commit"},
+            skill_triggers_list=skill_triggers_list,
+        )
+        assert result["action"] == "CREATE"
+        evidence = result["evidence"]
+        assert evidence["session_count"] == 4
+        assert evidence["source"] == "codeskill_extraction"
+        decomposition = evidence["decomposition"]
+        assert decomposition["routing"]["trigger_keywords"] == ["deploy", "check"]
+        assert decomposition["routing"]["sample_triggers"] == ["デプロイ前にチェックして"]
+        assert decomposition["attachments"]["session_count"] == 3
+        assert decomposition["attachments"]["session_bound"] is False
+        assert decomposition["attachments"]["projects"] == ["proj-a"]
+        assert decomposition["failure_analysis"] == {"failure_count": 1, "failure_rate": 0.25}
+
+    def test_create_evidence_marks_empty_routing_material_explicitly(
+        self, sessions, usage, skill_triggers_list,
+    ):
+        """(1) routing が空の場合、黙って空リストを出さず「材料なし」と分かる
+        文言を残す（silence != evaluated）。空になる原因は個別事情によるため
+        ここでは断定せず、観測事実（材料が無い）だけを検証対象にする。
+        """
+        missed = [{
+            "skill": "deploy-check",
+            "triggers_matched": [],
+            "session_count": 4,
+            "source": "codeskill_extraction",
+            "routing": {"trigger_keywords": [], "sample_triggers": []},
+            "attachments": {"projects": [], "session_count": 0, "session_bound": True},
+            "failure_analysis": {},
+        }]
+        result = triage_skill(
+            "deploy-check",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills={"aws-cdk-deploy", "channel-routing", "commit"},
+            skill_triggers_list=skill_triggers_list,
+        )
+        assert result["action"] == "CREATE"
+        decomposition = result["evidence"]["decomposition"]
+        assert decomposition["routing"]["trigger_keywords"] == _NO_MATERIAL_NOTE
+        assert decomposition["routing"]["sample_triggers"] == _NO_MATERIAL_NOTE
+        assert decomposition["failure_analysis"] == _NO_FAILURE_MATERIAL_NOTE
+        # routing/failure_analysis が無くても評価不能ではないため CREATE 自体は落ちない
+        assert result["confidence"] > 0
+
+    def test_create_evidence_missing_decomposition_key_marks_no_material(
+        self, sessions, usage, skill_triggers_list,
+    ):
+        """(1) decomposition の各軸キー自体が missed_info に無い（旧来検出経路）場合も
+        KeyError せず「材料なし」を返す。
+        """
+        missed = [{"skill": "deploy-check", "triggers_matched": ["deploy"], "session_count": 4}]
+        result = triage_skill(
+            "deploy-check",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills={"aws-cdk-deploy", "channel-routing", "commit"},
+            skill_triggers_list=skill_triggers_list,
+        )
+        assert result["action"] == "CREATE"
+        decomposition = result["evidence"]["decomposition"]
+        assert decomposition["routing"]["trigger_keywords"] == _NO_MATERIAL_NOTE
+        assert decomposition["attachments"]["session_count"] == 0
+        assert decomposition["failure_analysis"] == _NO_FAILURE_MATERIAL_NOTE
+
+    def test_create_suppressed_for_globally_existing_skill(
+        self, sessions, usage, skill_triggers_list, tmp_path,
+    ):
+        """(2) missed_skill 候補が project 未宣言でもグローバルスキルとして
+        既に存在するなら CREATE を出さない（#479 と同型の欠陥をスキル提案側にも塞ぐ）。
+
+        ``known_skill_names`` は呼び出し側（triage_all_skills）が project + global を
+        1回だけ解決して渡す契約（perf のため triage_skill 内で毎回 FS 走査しない）。
+        """
+        missed = [{
+            "skill": "tech-eval",
+            "triggers_matched": [],
+            "session_count": 8,
+            "generalizability_score": 0.4662,
+            "source": "codeskill_extraction",
+        }]
+        result = triage_skill(
+            "tech-eval",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills=set(),  # project 側は tech-eval を知らない
+            skill_triggers_list=skill_triggers_list,
+            project_root=tmp_path / "proj",
+            known_skill_names={"tech-eval"},  # グローバルに実在
+        )
+        assert result["action"] != "CREATE"
+        assert result["evidence"]["already_exists"] is True
+
+    def test_create_not_suppressed_for_genuinely_new_skill(
+        self, sessions, usage, skill_triggers_list, tmp_path,
+    ):
+        """(2) 陽性対照: グローバル/プロジェクトどちらにも存在しない新規候補は
+        従来どおり CREATE のまま（誤検出しない）。"""
+        missed = [{
+            "skill": "brand-new-skill",
+            "triggers_matched": ["brand"],
+            "session_count": 4,
+            "generalizability_score": 0.5,
+        }]
+        result = triage_skill(
+            "brand-new-skill",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills=set(),
+            skill_triggers_list=skill_triggers_list,
+            project_root=tmp_path / "proj",
+            known_skill_names={"tech-eval", "review"},  # brand-new-skill は含まれない
+        )
+        assert result["action"] == "CREATE"
+
+    def test_create_suppressed_for_plugin_namespaced_skill(
+        self, sessions, usage, skill_triggers_list, tmp_path,
+    ):
+        """(2) 陰性試験・境界値: plugin:skill 形式（namespaced）は既存プラグイン
+        スキルとみなし CREATE を出さない（known_skill_names に無くても ":" だけで判定）。"""
+        missed = [{
+            "skill": "evolve-anything:evolve",
+            "triggers_matched": [],
+            "session_count": 8,
+            "generalizability_score": 0.5,
+        }]
+        result = triage_skill(
+            "evolve-anything:evolve",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills=set(),
+            skill_triggers_list=skill_triggers_list,
+            project_root=tmp_path / "proj",
+            known_skill_names=set(),
+        )
+        assert result["action"] != "CREATE"
+
+    def test_create_not_suppressed_when_known_skill_names_omitted(
+        self, sessions, usage, skill_triggers_list, tmp_path,
+    ):
+        """(2) 後方互換: known_skill_names 省略時（既存呼び出し）は CREATE 抑制なし。
+
+        既存呼び出し（本ファイルの他テスト・外部呼び出し元）が known_skill_names を
+        渡さないケースの挙動を固定する回帰ガード。
+        """
+        missed = [{
+            "skill": "deploy-check",
+            "triggers_matched": ["deploy"],
+            "session_count": 4,
+        }]
+        result = triage_skill(
+            "deploy-check",
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed,
+            existing_skills={"aws-cdk-deploy", "channel-routing", "commit"},
+            skill_triggers_list=skill_triggers_list,
+        )
+        assert result["action"] == "CREATE"
+
 
 class TestDetectSplitCandidates:
     def test_split_detected(self):
@@ -384,6 +575,42 @@ class TestTriageAllSkills:
         assert "REVIEW" in result and "SKIP" in result
         landed = result["REVIEW"] + result["SKIP"]
         assert len(landed) == 2  # 2 スキルが SKIP/REVIEW バケツに振り分けられた
+
+    def test_create_suppressed_end_to_end_for_globally_existing_skill(
+        self, sessions, usage, tmp_path, monkeypatch,
+    ):
+        """(2) triage_all_skills 経由でも、CLAUDE.md 未宣言・project 未配置だが
+        グローバルに存在するスキル（例: tech-eval）への CREATE 提案が出ない。
+        """
+        proj = tmp_path / "proj"
+        claude_md = proj / "CLAUDE.md"
+        claude_md.parent.mkdir(parents=True)
+        claude_md.write_text(
+            "## Skills\n"
+            "- /aws-cdk-deploy: CDK deploy. Trigger: CDK, デプロイ, deploy\n"
+        )
+        fake_home = tmp_path / "home"
+        gskill = fake_home / ".claude" / "skills" / "tech-eval"
+        gskill.mkdir(parents=True)
+        (gskill / "SKILL.md").write_text("# tech-eval\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        missed_skills = [{
+            "skill": "tech-eval",
+            "triggers_matched": [],
+            "session_count": 8,
+            "generalizability_score": 0.4662,
+            "source": "codeskill_extraction",
+        }]
+        result = triage_all_skills(
+            sessions=sessions,
+            usage=usage,
+            missed_skills=missed_skills,
+            project_root=proj,
+        )
+        assert not result["skipped"]
+        create_names = {r.get("skill") for r in result["CREATE"]}
+        assert "tech-eval" not in create_names
 
 
 class TestSkillCreatorSuggestion:
