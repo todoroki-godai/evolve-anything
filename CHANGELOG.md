@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(discover): `pitfall_candidates` の correction 判定を意味ベースへ拡張（#478）** —
+  `("stop", "iya")` の type 名 allowlist を廃止し、hot hook の単一 registry
+  `CORRECTION_PATTERNS` が `type="correction"` と分類する即時訂正を候補対象にした。
+  positive / prospective な explicit・guardrail、時系列帰属を保証できない retrospective な
+  `semantic_idiom`、backfill 等の機械生成 record は除外し、候補の洪水を防ぐ。
 - **fix(discover): `corrections.jsonl` の `last_skill` が全件 None で `instruction_violations` /
   `pitfall_candidates` が本番 0 件だった（#478）** — 前向き write（`correction_semantic/promote.py`）は
   一時ファイル方式（TTL 24h）に依存しており、朝の y/n による採用は検出から数日後に走るため原理的に

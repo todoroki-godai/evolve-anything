@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from frontmatter import find_frontmatter_close
+from rl_common import CORRECTION_PATTERNS
 from similarity import jaccard_coefficient, tokenize
 from skill_evolve import (
     CANDIDATE_PROMOTION_COUNT,
@@ -131,6 +132,26 @@ def detect_integration(
 # --- 自動検出 ---
 
 
+def is_pitfall_candidate_correction(record: Dict[str, Any]) -> bool:
+    """直前 skill の失敗を示す、即時の corrective signal かを返す。
+
+    correction_type の個別 allowlist ではなく、hot hook writer の単一 registry が持つ
+    semantic class を使う。``type=correction`` は既に起きた出力・行動への訂正であり、
+    positive や prospective な explicit/guardrail は pitfall の失敗根拠にしない。
+
+    retrospective な semantic_idiom は registry 外なので除外される。朝の確認時点では
+    元発話と直前 skill の因果を保証できず、実データの大半を無差別に帰属させるためである。
+    backfill 等の機械生成 record も同じ理由で除外する。source 欠落は旧 hot-hook record
+    との互換のため許容するが、未知 source は保守的に除外する。
+    """
+    if not isinstance(record, dict):
+        return False
+    if record.get("source") not in (None, "hook"):
+        return False
+    metadata = CORRECTION_PATTERNS.get(record.get("correction_type"))
+    return bool(metadata and metadata.get("type") == "correction")
+
+
 def extract_pitfall_candidates(
     corrections: List[Dict[str, Any]],
     errors: Optional[List[Dict[str, Any]]] = None,
@@ -159,9 +180,9 @@ def extract_pitfall_candidates(
             if not isinstance(rec, dict):
                 skipped += 1
                 continue
-            ct = rec.get("correction_type", "")
-            if ct not in ("stop", "iya"):
+            if not is_pitfall_candidate_correction(rec):
                 continue
+            ct = rec.get("correction_type", "")
             last_skill = rec.get("last_skill")
             if not last_skill:  # null or empty string
                 continue
