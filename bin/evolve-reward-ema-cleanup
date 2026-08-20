@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""reward_ema.jsonl の旧 Agent 帰属行を是正する CLI（#480）。
+
+使用例:
+    bin/evolve-reward-ema-cleanup             # 既定 dry-run
+    bin/evolve-reward-ema-cleanup --apply     # backup 後に実際に除去
+"""
+import sys
+from pathlib import Path
+
+_lib = Path(__file__).resolve().parent.parent / "scripts" / "lib"
+sys.path.insert(0, str(_lib))
+
+from reward_ema_cleanup_cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

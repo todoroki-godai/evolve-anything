@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(reward-ema): 旧 Agent 帰属レコードの可逆な物理是正 CLI を追加（#480）** —
+  `bin/evolve-reward-ema-cleanup` は既定 dry-run で除去件数・skill・単一ソース判定理由を表示し、
+  `--apply` 明示時だけ sidecar lock 下で原本をバックアップしてから atomic replace する。
+  実データへの適用は人間の明示承認を要する（コード変更そのものは何も書き換えない）。
 - **fix(discover): `pitfall_candidates` の correction 判定を意味ベースへ拡張（#478）** —
   `("stop", "iya")` の type 名 allowlist を廃止し、hot hook の単一 registry
   `CORRECTION_PATTERNS` が `type="correction"` と分類する即時訂正を候補対象にした。
