@@ -149,7 +149,21 @@ def is_pitfall_candidate_correction(record: Dict[str, Any]) -> bool:
     if record.get("source") not in (None, "hook"):
         return False
     metadata = CORRECTION_PATTERNS.get(record.get("correction_type"))
-    return bool(metadata and metadata.get("type") == "correction")
+    if not metadata or metadata.get("type") != "correction":
+        return False
+
+    # 引用した assistant 出力にだけ correction 語彙があり、ユーザー自身の本文には無い
+    # record は直前 skill への訂正ではない。type 個別除外ではなく発火位置の文脈で落とす。
+    message = record.get("message")
+    pattern = metadata.get("pattern")
+    if isinstance(message, str) and pattern and re.search(pattern, message):
+        unquoted = "\n".join(
+            line for line in message.splitlines()
+            if not line.lstrip().startswith(">")
+        )
+        if not re.search(pattern, unquoted):
+            return False
+    return True
 
 
 def extract_pitfall_candidates(

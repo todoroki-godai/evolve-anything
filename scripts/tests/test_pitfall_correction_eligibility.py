@@ -63,6 +63,25 @@ def test_rejects_machine_generated_records(source):
     assert is_pitfall_candidate_correction(_record("stop", source=source)) is False
 
 
+def test_rejects_correction_pattern_found_only_in_markdown_quote():
+    record = _record(
+        "naze-dekinakatta",
+        message=(
+            "> なぜ 842 件中 129 件しか判定できていないのかは未調査です\n\n"
+            "って提案してくれたけど、次は何からやるのがよいかな？"
+        ),
+    )
+    assert is_pitfall_candidate_correction(record) is False
+
+
+def test_accepts_same_correction_pattern_in_user_text_after_quote():
+    record = _record(
+        "naze-dekinakatta",
+        message="> 前回の回答です\n\nなぜ修正できなかったの？",
+    )
+    assert is_pitfall_candidate_correction(record) is True
+
+
 def test_legacy_record_without_source_keeps_direct_correction_compatibility():
     assert is_pitfall_candidate_correction(_record("naoshite-request", source=None)) is True
 
