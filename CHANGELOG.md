@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(reward-ema): 旧 Agent 帰属レコードの可逆な物理是正 CLI を追加（#480）** —
+  `bin/evolve-reward-ema-cleanup` は既定 dry-run で除去件数・skill・単一ソース判定理由を表示し、
+  `--apply` 明示時だけ sidecar lock 下で原本をバックアップしてから atomic replace する。
+  実データの適用は人間の明示承認事項であり、本変更では実行しない。
 - **fix(discover): `corrections.jsonl` の `last_skill` が全件 None で `instruction_violations` /
   `pitfall_candidates` が本番 0 件だった（#478）** — 前向き write（`correction_semantic/promote.py`）は
   一時ファイル方式（TTL 24h）に依存しており、朝の y/n による採用は検出から数日後に走るため原理的に

@@ -153,7 +153,7 @@ evolve-anything は **4つの独立した柱** で構成される。
 | `spec-keeper` | 仕様管理 | SPEC.md と ADR を維持 |
 | `tier` | モデルティア管理 | モデルティア方針を安全に表示・更新 |
 
-## bare CLI 一覧（26コマンド）
+## bare CLI 一覧（27コマンド）
 
 `bin/` が executable 名の単一ソース。bare CLI を使うときだけ `bin/` を `PATH` に追加し、通常のプラグイン操作には slash skill を使う。
 
@@ -166,8 +166,8 @@ evolve-anything は **4つの独立した柱** で構成される。
 | `evolve-loop` | `evolve-loop-ablation` | `evolve-migrate-legacy-accept` |
 | `evolve-optimize` | `evolve-prompt-compare` | `evolve-prune` |
 | `evolve-reflect` | `evolve-release-sync` | `evolve-reorganize` |
-| `evolve-revert` | `evolve-scaffold-advisory` | `evolve-score-noise` |
-| `evolve-tier` | `evolve-usage-log` | |
+| `evolve-revert` | `evolve-reward-ema-cleanup` | `evolve-scaffold-advisory` |
+| `evolve-score-noise` | `evolve-tier` | `evolve-usage-log` |
 
 ## Hooks（24件の登録、12イベント）
 
