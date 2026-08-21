@@ -20,11 +20,10 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from capture_recall import evaluate_capture_recall
+from capture_recall import CaptureEvalIntegrityError, evaluate_capture_recall, load_capture_eval_set
 from optimize_history_store import load_effective_history, load_revert_events
 from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
 from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
@@ -39,10 +38,14 @@ def _build_capture_recall() -> Dict[str, Any]:
     if not _CAPTURE_EVAL_PATH.exists():
         return {"measured": False, "reason": "評価セットなし"}
     try:
-        rows = [json.loads(line) for line in _CAPTURE_EVAL_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows = load_capture_eval_set(_CAPTURE_EVAL_PATH)
         result = evaluate_capture_recall(
-            rows, correction_detection.detect_correction, correction_detection.should_include_message,
+            rows,
+            lambda text: correction_detection._detect_correction(text, false_positive_hashes=()),
+            correction_detection.should_include_message,
         )
+    except CaptureEvalIntegrityError:
+        return {"measured": False, "reason": "評価セット不一致"}
     except Exception as exc:
         return {"measured": False, "reason": f"算出失敗: {type(exc).__name__}"}
     if not rows:

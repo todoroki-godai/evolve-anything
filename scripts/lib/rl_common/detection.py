@@ -457,7 +457,7 @@ def _has_unquoted_match(pattern: str, text: str) -> bool:
     return False
 
 
-def detect_correction(text: str):
+def _detect_correction(text: str, false_positive_hashes):
     """テキストから修正パターンを検出する（最初のマッチのみ）。"""
     text_stripped = text.strip()
     if not text_stripped:
@@ -466,7 +466,7 @@ def detect_correction(text: str):
         return None
     # FALSE_POSITIVES_FILE 系は __init__.py に残置のため動的 lookup
     import rl_common as _root
-    fp_hashes = _root.load_false_positives()
+    fp_hashes = false_positive_hashes
     if fp_hashes and _root.message_hash(text_stripped) in fp_hashes:
         return None
     for key, info in CORRECTION_PATTERNS.items():
@@ -474,6 +474,12 @@ def detect_correction(text: str):
         if _has_unquoted_match(pattern, text_stripped) or _has_unquoted_match(pattern, text_stripped.lower()):
             return (key, info["confidence"])
     return None
+
+
+def detect_correction(text: str):
+    """テキストから修正パターンを検出する（最初のマッチのみ）。"""
+    import rl_common as _root
+    return _detect_correction(text, _root.load_false_positives())
 
 
 def detect_all_patterns(text: str) -> list[str]:

@@ -1,4 +1,7 @@
-from capture_recall import evaluate_capture_recall, wilson_interval
+import hashlib
+
+import capture_recall
+from capture_recall import evaluate_capture_recall, load_capture_eval_set, wilson_interval
 import pytest
 
 
@@ -42,3 +45,39 @@ def test_wilson_interval_matches_known_value():
     low, high = wilson_interval(21, 47)
     assert low == pytest.approx(0.314, abs=0.001)
     assert high == pytest.approx(0.588, abs=0.001)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"text": "example", "label": "typo"},
+        {"text": "example"},
+        {"text": None, "label": "TP"},
+        {"label": "TP"},
+    ],
+)
+def test_invalid_corpus_rows_are_rejected(row):
+    with pytest.raises(ValueError):
+        evaluate_capture_recall([row], lambda _text: None)
+
+
+def test_load_capture_eval_set_validates_hash_and_row_count(monkeypatch, tmp_path):
+    path = tmp_path / "eval.jsonl"
+    raw = b'{"text":"example","label":"TP"}\n'
+    path.write_bytes(raw)
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_SHA256", hashlib.sha256(raw).hexdigest())
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_ROWS", 1)
+    assert load_capture_eval_set(path) == [{"text": "example", "label": "TP"}]
+    path.write_bytes(raw + raw)
+    with pytest.raises(ValueError, match="hash mismatch"):
+        load_capture_eval_set(path)
+
+
+def test_load_capture_eval_set_rejects_wrong_row_count(monkeypatch, tmp_path):
+    path = tmp_path / "eval.jsonl"
+    raw = b'{"text":"example","label":"TP"}\n'
+    path.write_bytes(raw)
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_SHA256", hashlib.sha256(raw).hexdigest())
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_ROWS", 2)
+    with pytest.raises(ValueError, match="row count mismatch"):
+        load_capture_eval_set(path)

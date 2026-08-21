@@ -54,7 +54,7 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 import duckdb  # noqa: E402
 
 import rl_common.detection as det  # noqa: E402
-from capture_recall import evaluate_capture_recall  # noqa: E402
+from capture_recall import evaluate_capture_recall, load_capture_eval_set  # noqa: E402
 
 import os  # noqa: E402
 
@@ -224,7 +224,7 @@ def run_production_detect(patterns: Dict[str, Any], text: str):
     original = det.CORRECTION_PATTERNS
     det.CORRECTION_PATTERNS = patterns
     try:
-        return det.detect_correction(text)
+        return det._detect_correction(text, false_positive_hashes=())
     finally:
         det.CORRECTION_PATTERNS = original
 
@@ -408,13 +408,7 @@ def cmd_dump_sample(args: argparse.Namespace) -> None:
 def load_eval_set() -> List[Dict[str, Any]]:
     if not EVAL_SET_PATH.exists():
         return []
-    out = []
-    with open(EVAL_SET_PATH, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                out.append(json.loads(line))
-    return out
+    return load_capture_eval_set(EVAL_SET_PATH)
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
