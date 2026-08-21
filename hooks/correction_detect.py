@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import common
+from rl_common.detection import CORRECTION_PATTERN_VERSION
 
 # sessionTitle を emit するパターン種別（v2.1.94+ の hookSpecificOutput.sessionTitle）
 _SESSION_TITLE_SENTIMENTS = {"explicit", "guardrail"}
@@ -22,7 +23,7 @@ _SESSION_TITLE_MAX_LEN = 80
 # ADR-054 A0（#379）: CORRECTION_PATTERNS の語彙追加ごとに手動で上げる版数。
 # capture_rate.py の source×pattern_version 層分離が「追加前/追加後」を区別するために使う
 # （追加前の既存レコードにはこのフィールドが無い＝欠落は capture_rate 側で別キーに畳む）。
-_PATTERN_VERSION = 2
+_PATTERN_VERSION = CORRECTION_PATTERN_VERSION
 
 # trigger_engine import (optional)
 _trigger_engine = None

@@ -20,14 +20,45 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from capture_recall import CaptureEvalIntegrityError, evaluate_capture_recall, load_capture_eval_set
 from optimize_history_store import load_effective_history, load_revert_events
 from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
 from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
 from evolve_revert import REASON_LABELS, compute_revert_availability
+import rl_common.detection as correction_detection
 
 _WINDOW_DAYS = 30
+_CAPTURE_EVAL_PATH = Path(__file__).resolve().parents[1] / "bench" / "a0_eval_set.jsonl"
+
+
+def _build_capture_recall() -> Dict[str, Any]:
+    if not _CAPTURE_EVAL_PATH.exists():
+        return {"measured": False, "reason": "評価セットなし"}
+    try:
+        rows = load_capture_eval_set(_CAPTURE_EVAL_PATH)
+        result = evaluate_capture_recall(
+            rows,
+            lambda text: correction_detection._detect_correction(text, false_positive_hashes=()),
+            correction_detection.should_include_message,
+        )
+    except CaptureEvalIntegrityError:
+        return {"measured": False, "reason": "評価セット不一致"}
+    except Exception as exc:
+        return {"measured": False, "reason": f"算出失敗: {type(exc).__name__}"}
+    if not rows:
+        return {"measured": False, "reason": "評価セットが空"}
+    if not result["positives"]:
+        return {"measured": False, "reason": "TPラベルなし"}
+    if not result["hits"]:
+        return {"measured": False, "reason": "検出ヒットなし"}
+    return {
+        "measured": True,
+        "pattern_version": correction_detection.CORRECTION_PATTERN_VERSION,
+        **result,
+    }
 
 # ADR-054 §7.2.1 柱3(a): correction_rate.build_correction_rate_summary が返す schema と
 # 同型のフォールバック（read 失敗時に render 側を壊さないための安全な既定値）。
@@ -252,6 +283,7 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     except Exception:
         correction_rate = dict(_EMPTY_CORRECTION_RATE)
         correction_rate["generated_at"] = _now.isoformat()
+    capture_recall = _build_capture_recall()
 
     # ── 採用した改善: 直近30日の optimize_history ─────────────────
     # #402 段階4: revert 済み accept を判断母集団から除外した effective view を読む
@@ -330,6 +362,7 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
         "slug": slug,
         "generated_at": _now.isoformat(),
         "correction_rate": correction_rate,
+        "capture_recall": capture_recall,
         "decisions": {
             "accepted": len(buckets["accepted"]),
             "rejected": len(buckets["rejected"]),
@@ -564,6 +597,22 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
     decisions = board["decisions"]
 
     lines = ["## 🏆 戦果ボード", ""]
+
+    capture = board.get("capture_recall") or {"measured": False, "reason": "評価セットなし"}
+    if capture.get("measured"):
+        recall_low, recall_high = capture["recall_ci"]
+        precision_low, precision_high = capture["precision_ci"]
+        lines.append(
+            f"**L1捕捉率: {capture['caught']}/{capture['positives']} = {capture['recall']:.1%}** "
+            f"（Wilson 95% CI {recall_low:.1%}–{recall_high:.1%}・pattern v{capture['pattern_version']}）"
+        )
+        lines.append(
+            f"精度: {capture['caught']}/{capture['hits']} = {capture['precision']:.1%} "
+            f"（Wilson 95% CI {precision_low:.1%}–{precision_high:.1%}）"
+        )
+    else:
+        lines.append(f"**L1捕捉率: 未測定（{capture.get('reason', '評価セットなし')}）**")
+    lines.append("")
 
     lines.extend(_render_correction_rate(board.get("correction_rate") or _EMPTY_CORRECTION_RATE))
 

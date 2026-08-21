@@ -25,6 +25,7 @@ HOME 隔離は root conftest.py の autouse（#119）が全テストへ効かせ
 """
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -749,6 +750,11 @@ class TestRenderResultsBoard:
             "slug": "evolve-anything",
             "generated_at": _NOW.isoformat(),
             "correction_rate": _closed_gate_summary(),
+            "capture_recall": {
+                "measured": True, "pattern_version": 2, "positives": 47, "caught": 21,
+                "hits": 23, "recall": 21 / 47, "precision": 21 / 23,
+                "recall_ci": (0.314, 0.588), "precision_ci": (0.732, 0.976),
+            },
             "decisions": {"accepted": 1, "rejected": 2, "pending": 1, "excluded": 4},
             "accepted_list": [{"skill_name": "queue", "timestamp": _iso(1)}],
             "withdrawal_candidates": [],
@@ -759,6 +765,84 @@ class TestRenderResultsBoard:
     def test_header_present(self):
         lines = results_board.render_results_board(self._board())
         assert lines[0] == "## 🏆 戦果ボード"
+
+    def test_capture_recall_shows_wilson_interval_and_pattern_version(self):
+        text = "\n".join(results_board.render_results_board(self._board()))
+        assert "L1捕捉率: 21/47 = 44.7%" in text
+        assert "Wilson 95% CI 31.4%–58.8%" in text
+        assert "精度: 21/23 = 91.3%" in text
+        assert "pattern v2" in text
+
+    def test_capture_recall_missing_eval_set_is_explicit(self):
+        text = "\n".join(results_board.render_results_board(
+            self._board(capture_recall={"measured": False, "reason": "評価セットなし"})
+        ))
+        assert "L1捕捉率: 未測定（評価セットなし）" in text
+
+    def test_capture_recall_builder_reports_current_pattern_version(self, monkeypatch, tmp_path):
+        eval_path = tmp_path / "eval.jsonl"
+        eval_path.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", eval_path)
+        monkeypatch.setattr(results_board, "load_capture_eval_set", lambda _path: [{"text": "違う、そこです。", "label": "TP"}])
+        result = results_board._build_capture_recall()
+        assert result["measured"] is True
+        assert result["pattern_version"] == results_board.correction_detection.CORRECTION_PATTERN_VERSION
+
+    @pytest.mark.parametrize(
+        ("content", "reason"),
+        [
+            ("", "評価セットが空"),
+            ('{"text":"通常文","label":"not_TP"}\n', "TPラベルなし"),
+            ('{"text":"通常文","label":"TP"}\n', "検出ヒットなし"),
+        ],
+    )
+    def test_capture_recall_undefined_denominator_is_unmeasured(
+        self, monkeypatch, tmp_path, content, reason
+    ):
+        eval_path = tmp_path / "eval.jsonl"
+        eval_path.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", eval_path)
+        rows = [json.loads(line) for line in content.splitlines() if line]
+        monkeypatch.setattr(results_board, "load_capture_eval_set", lambda _path: rows)
+        result = results_board._build_capture_recall()
+        assert result == {"measured": False, "reason": reason}
+        assert reason in "\n".join(results_board.render_results_board(self._board(capture_recall=result)))
+
+    def test_capture_recall_invalid_row_is_unmeasured(self, monkeypatch, tmp_path):
+        eval_path = tmp_path / "eval.jsonl"
+        eval_path.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", eval_path)
+        monkeypatch.setattr(results_board, "load_capture_eval_set", lambda _path: [{"text": "example", "label": "typo"}])
+        result = results_board._build_capture_recall()
+        assert result == {"measured": False, "reason": "算出失敗: ValueError"}
+
+    def test_capture_recall_integrity_mismatch_is_explicit(self, monkeypatch, tmp_path):
+        eval_path = tmp_path / "eval.jsonl"
+        eval_path.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", eval_path)
+        monkeypatch.setattr(
+            results_board,
+            "load_capture_eval_set",
+            lambda _path: (_ for _ in ()).throw(results_board.CaptureEvalIntegrityError("mismatch")),
+        )
+        assert results_board._build_capture_recall() == {
+            "measured": False,
+            "reason": "評価セット不一致",
+        }
+
+    def test_capture_recall_disables_machine_local_false_positives(self, monkeypatch, tmp_path):
+        eval_path = tmp_path / "eval.jsonl"
+        eval_path.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", eval_path)
+        monkeypatch.setattr(results_board, "load_capture_eval_set", lambda _path: [{"text": "違う、そこです。", "label": "TP"}])
+        seen = []
+        monkeypatch.setattr(
+            results_board.correction_detection,
+            "_detect_correction",
+            lambda _text, false_positive_hashes=None: seen.append(false_positive_hashes) or ("chigau", 0.85),
+        )
+        assert results_board._build_capture_recall()["measured"] is True
+        assert seen == [()]
 
     def test_gate_closed_shows_not_measured_with_coverage(self):
         board = self._board(correction_rate={
