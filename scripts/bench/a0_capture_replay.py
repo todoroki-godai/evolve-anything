@@ -54,6 +54,7 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 import duckdb  # noqa: E402
 
 import rl_common.detection as det  # noqa: E402
+from capture_recall import evaluate_capture_recall  # noqa: E402
 
 import os  # noqa: E402
 
@@ -404,16 +405,6 @@ def cmd_dump_sample(args: argparse.Namespace) -> None:
 # CLI: evaluate（ラベル済み a0_eval_set.jsonl を使って recall/precision を計算）
 # ---------------------------------------------------------------------------
 
-def _wilson_interval(successes: int, n: int, z: float = 1.96) -> Tuple[float, float]:
-    if n == 0:
-        return (0.0, 0.0)
-    p = successes / n
-    denom = 1 + z ** 2 / n
-    center = (p + z ** 2 / (2 * n)) / denom
-    half = (z * ((p * (1 - p) / n + z ** 2 / (4 * n ** 2)) ** 0.5)) / denom
-    return (max(0.0, center - half), min(1.0, center + half))
-
-
 def load_eval_set() -> List[Dict[str, Any]]:
     if not EVAL_SET_PATH.exists():
         return []
@@ -446,37 +437,22 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         # 誤検知に数えて precision を過小評価する（2026-08-18 実測: 唯一の FP が
         # machinery 行で、本番経路では precision 1/1 なのに単体では 1/2 に見えた）。
         for gated in (True, False):
-            tp_caught = 0
-            gt_positive = 0
-            hits = 0
-            hits_and_gt_positive = 0
-            for ex in eval_set:
-                label = ex["label"]  # "TP" or "not_TP"
-                text = ex["text"]
-                if gated and not det.should_include_message(text):
-                    continue  # 本番ではここで捨てられる＝検出器に到達しない
-                result = run_production_detect(patterns, text)
-                hit = result is not None
-                if label == "TP":
-                    gt_positive += 1
-                    if hit:
-                        tp_caught += 1
-                if hit:
-                    hits += 1
-                    if label == "TP":
-                        hits_and_gt_positive += 1
-
-            recall = tp_caught / gt_positive if gt_positive else float("nan")
-            precision = hits_and_gt_positive / hits if hits else float("nan")
-            recall_ci = _wilson_interval(tp_caught, gt_positive) if gt_positive else (0.0, 0.0)
-            precision_ci = _wilson_interval(hits_and_gt_positive, hits) if hits else (0.0, 0.0)
+            metrics = evaluate_capture_recall(
+                eval_set,
+                lambda text: run_production_detect(patterns, text),
+                det.should_include_message if gated else None,
+            )
+            tp_caught, gt_positive = metrics["caught"], metrics["positives"]
+            hits = metrics["hits"]
+            recall, precision = metrics["recall"], metrics["precision"]
+            recall_ci, precision_ci = metrics["recall_ci"], metrics["precision_ci"]
 
             tag = "本番経路(should_include_message→detect)" if gated else "検出器単体(参考)"
             print(f"  [{tag}] eval_set n={len(eval_set)}  評価対象 TP={gt_positive}", flush=True)
             print(f"    捕捉率 recall = {tp_caught}/{gt_positive} = {recall:.3f}  "
                   f"Wilson95%=({recall_ci[0]:.3f}, {recall_ci[1]:.3f})  "
                   f"[取りこぼし {1 - recall:.3f}]", flush=True)
-            print(f"    精度 precision = {hits_and_gt_positive}/{hits} = {precision:.3f}  "
+            print(f"    精度 precision = {tp_caught}/{hits} = {precision:.3f}  "
                   f"Wilson95%=({precision_ci[0]:.3f}, {precision_ci[1]:.3f})", flush=True)
 
     # machinery-suspect 層別内訳

@@ -749,6 +749,11 @@ class TestRenderResultsBoard:
             "slug": "evolve-anything",
             "generated_at": _NOW.isoformat(),
             "correction_rate": _closed_gate_summary(),
+            "capture_recall": {
+                "measured": True, "pattern_version": 2, "positives": 47, "caught": 21,
+                "hits": 23, "recall": 21 / 47, "precision": 21 / 23,
+                "recall_ci": (0.314, 0.588), "precision_ci": (0.732, 0.976),
+            },
             "decisions": {"accepted": 1, "rejected": 2, "pending": 1, "excluded": 4},
             "accepted_list": [{"skill_name": "queue", "timestamp": _iso(1)}],
             "withdrawal_candidates": [],
@@ -759,6 +764,27 @@ class TestRenderResultsBoard:
     def test_header_present(self):
         lines = results_board.render_results_board(self._board())
         assert lines[0] == "## 🏆 戦果ボード"
+
+    def test_capture_recall_shows_wilson_interval_and_pattern_version(self):
+        text = "\n".join(results_board.render_results_board(self._board()))
+        assert "L1捕捉率: 21/47 = 44.7%" in text
+        assert "Wilson 95% CI 31.4%–58.8%" in text
+        assert "精度: 21/23 = 91.3%" in text
+        assert "pattern v2" in text
+
+    def test_capture_recall_missing_eval_set_is_explicit(self):
+        text = "\n".join(results_board.render_results_board(
+            self._board(capture_recall={"measured": False, "reason": "評価セットなし"})
+        ))
+        assert "L1捕捉率: 未測定（評価セットなし）" in text
+
+    def test_capture_recall_builder_reports_current_pattern_version(self, monkeypatch, tmp_path):
+        eval_path = tmp_path / "eval.jsonl"
+        eval_path.write_text('{"text":"違う、そこです。","label":"TP"}\n', encoding="utf-8")
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", eval_path)
+        result = results_board._build_capture_recall()
+        assert result["measured"] is True
+        assert result["pattern_version"] == 2
 
     def test_gate_closed_shows_not_measured_with_coverage(self):
         board = self._board(correction_rate={
