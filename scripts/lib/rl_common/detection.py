@@ -63,13 +63,13 @@ CORRECTION_PATTERNS = {
     # 「引用マーカー（って/と）+ 言った/いった + のに/けど」＝ I-told-you の日本語相当。
     # 引用マーカーを要求することで「うまくいったのに」（行く＝行った）等の同形異義語との
     # 衝突を避ける（引用マーカー無しの「いった」は対象外）。
-    "itte-noni": {"pattern": r"(って|と)(言|い)った(のに|けど)", "confidence": 0.85, "type": "correction", "decay_days": 120, "strong": True},
+    "itte-noni": {"pattern": r"(って|と)(言|い)った(のに|けど)", "confidence": 0.85, "type": "correction", "decay_days": 120, "strong": True, "question_mark_override": True},
     # 「指摘した/あげた + のに/けど」＝ itte-noni と同系だが動詞が異なるため別パターン。
     # 「けど」は日本語では逆接だけでなく単なる話題転換の軽い接続にも使われるため、単独では
     # 過検出する（実測: 「何度も指摘したけど、その内容をスキルにまとめたい」という新規
     # タスク依頼を誤検出した）。「のに」は逆接の意味が強く単独で許容するが、「けど」は
     # 直後に不履行を示す語（何も/まだ/全然/一切 + 否定）を伴う場合のみ許容する。
-    "shiteki-noni": {"pattern": r"指摘(した|あげた)(のに|けど.{0,15}(何も|まだ|全然|一切))", "confidence": 0.85, "type": "correction", "decay_days": 120, "strong": True},
+    "shiteki-noni": {"pattern": r"指摘(した|あげた)(のに|けど.{0,15}(何も|まだ|全然|一切))", "confidence": 0.85, "type": "correction", "decay_days": 120, "strong": True, "question_mark_override": True},
     # 「依頼していないことへの訂正」＝「〜って言ってないんだよね」。
     "itte-nai-yone": {"pattern": r"(言って|いって)(い)?ない.{0,6}(んだ)?よ?ね", "confidence": 0.75, "type": "correction", "decay_days": 90},
     # 「品質ミスの追及」＝「なんで/なぜ + 失敗・見落としを示す語」（語順が逆の「〜できて
@@ -77,10 +77,10 @@ CORRECTION_PATTERNS = {
     # 含む無関係な語が偶然近くにある場合（実測: 設計テンプレの「各 fix に「なぜ」+
     # 見落としリスク」を誤検出）と区別するため、(a) なんで/なぜ と失敗語の間に文区切り
     # （。！？「」改行）を挟まない、(b) 具体的な失敗語を伴う、の2条件に限定する。
-    "naze-dekinakatta": {"pattern": r"(なんで|なぜ)[^。！？!?「」\n]{0,20}(でき(なかった|てない|ていない|てなかった)|くぐりぬけ|くぐり抜け|見落と|漏れ(て|た)|し(なかった|てない|ていない)|変(え|わ)って?(い)?ない|直って?(い)?ない)|(でき(なかった|てない|ていない|てなかった)|くぐりぬけ|くぐり抜け|見落と|漏れ(て|た)|し(なかった|てない|ていない)|変(え|わ)って?(い)?ない|直って?(い)?ない)[^。！？!?「」\n]{0,15}のは(なんで|なぜ)", "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True},
+    "naze-dekinakatta": {"pattern": r"(なんで|なぜ)[^。！？!?「」\n]{0,20}(でき(なかった|てない|ていない|てなかった)|くぐりぬけ|くぐり抜け|見落と|漏れ(て|た)|し(なかった|てない|ていない)|変(え|わ)って?(い)?ない|直って?(い)?ない)|(でき(なかった|てない|ていない|てなかった)|くぐりぬけ|くぐり抜け|見落と|漏れ(て|た)|し(なかった|てない|ていない)|変(え|わ)って?(い)?ない|直って?(い)?ない)[^。！？!?「」\n]{0,15}のは(なんで|なぜ)", "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True, "question_mark_override": True},
     # 「出力そのものへの異議」＝「勘違いしている？／していない？」。過去形「勘違いだったかも」
     # （自己の勘違いの撤回）とは区別するため、現在形 + 疑問符終端に限定する。
-    "kanchigai-question": {"pattern": r"勘違い(して)?(い)?(る|ない)[？?]", "confidence": 0.75, "type": "correction", "decay_days": 90},
+    "kanchigai-question": {"pattern": r"勘違い(して)?(い)?(る|ない)[？?]", "confidence": 0.75, "type": "correction", "decay_days": 90, "question_mark_override": True},
     # ADR-054 A0（#379）: census 実測（precision 87.5%、_MACHINERY_MARKERS 追加後）で確認済みの
     # 低リスク・低recall語彙。複合動詞（見直して/作り直して/書き直して/考え直して/やり直して）は
     # lookbehind で除外（対象は「直して」単独のみ。修正して/訂正してには適用しない）。
@@ -95,11 +95,11 @@ CORRECTION_PATTERNS = {
     # #527: 固定評価セットの偽陰性45件を意味別に分類し、文字列単体で既発生の欠陥と
     # 説明できる群だけを追加する。一般的な「〜してください」や中立な質問は含めない。
     "observed-defect": {
-        "pattern": r"表示されない|できて(い)?なかった|できてない|実バグ",
+        "pattern": r"表示されない(?=[。！!、,]|$)|できて(い)?なかった(し)?(?=[。！!、,]|$)|実バグ",
         "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
     },
     "readability-defect": {
-        "pattern": r"(わかり|分かり|み|見)(づら|ずら)い|改行(が)?なく.{0,12}(わかり|分かり|み|見)(づら|ずら)い",
+        "pattern": r"(わかり|分かり|み|見)(づら|ずら)い(から)?(?=[。！!、,]|$)",
         "confidence": 0.80, "type": "correction", "decay_days": 90,
     },
     "reconsider-request": {
@@ -107,18 +107,23 @@ CORRECTION_PATTERNS = {
         "confidence": 0.75, "type": "correction", "decay_days": 90,
     },
     "unnecessary-action": {
-        "pattern": r"(確認|version|バージョン).{0,12}(いらない|不要|しなくてよい)|"
-                   r"(聞か|確認し)なくても|ブロッカーにしない",
+        "pattern": r"(確認|version|バージョン).{0,12}(いらない|不要)(んだよね)?(?=[。！!？?、,]|$)|"
+                   r"聞かなくても(?=$)|聞かなくても.{0,20}完結しない[？?]|"
+                   r"確認しなくてよいんじゃない[？?]|ブロッカーにしない",
         "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+        "question_mark_override": True,
     },
     "contradiction-question": {
-        "pattern": r"これって本当[？?]|(前に|以前).{0,30}(話し|確認し)なかったっけ[？?]|"
-                   r"できるでしょ[？?]|かぶったりしない[？?]",
+        "pattern": r"(^|\n)これって本当[？?]|説明していたけど.{0,20}これって本当[？?]|"
+                   r"(前に|以前).{0,30}(話し|確認し)なかったっけ[？?]|"
+                   r"かぶったりしない[？?]",
         "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+        "question_mark_override": True,
     },
     "why-undesired-action": {
         "pattern": r"(なんで|なぜ)[^。！？!?「」\n]{0,30}(しちゃった|なのに[^。！？!?「」\n]{0,20}必要になって)",
         "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+        "question_mark_override": True,
     },
     "prospective-guardrail-ja": {
         "pattern": r"必ず.{0,30}(認識|確認)するようにして",
@@ -127,9 +132,14 @@ CORRECTION_PATTERNS = {
     "missing-required-capability": {
         "pattern": r"できる必要があるんじゃない[？?]",
         "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+        "question_mark_override": True,
     },
     "refinement-request": {
-        "pattern": r"もうちょっと.{0,30}目立たせたい",
+        "pattern": r"(よいかんじ|いい感じ|良い感じ).{0,80}もうちょっと.{0,30}目立たせたい",
+        "confidence": 0.75, "type": "correction", "decay_days": 90,
+    },
+    "only-said": {
+        "pattern": r"って(言|い)っただけ",
         "confidence": 0.75, "type": "correction", "decay_days": 90,
     },
     "perfect": {"pattern": r"(?i)perfect!|exactly right|that's exactly", "confidence": 0.70, "type": "positive", "decay_days": 90},
@@ -165,26 +175,18 @@ FALSE_POSITIVE_FILTERS = [
 # 「なんで/なぜ + 失敗語」「勘違いしている？」「〜って言ったのに/けど」のような**詰問形**
 # （既遂を前提に相手の理解・実行を問い詰める文）も疑問符で終わるため構造的に落ちる（issue
 # 本文の実測: 「〜勘違いしている？」「なんで〜できなかったの？」「何も変更していない？」は
-# いずれも疑問符終端）。この4パターンに限り疑問符終端フィルタをバイパスする。
+# いずれも疑問符終端）。該当パターンだけ metadata で疑問符終端フィルタをバイパスする。
 #
 # 対象を全 CORRECTION_PATTERNS に広げない（英語 "no, is that right?" 等、素朴な疑問文が
 # 既存パターンに偶然マッチするケースまでバイパスすると疑問符フィルタの本来の役目
 # ＝素朴な質問の除外が壊れる。test_question_mark_ascii 参照）。
 #
-# パターン本体は CORRECTION_PATTERNS を単一ソースにし、ここではキー一覧だけを持つ
-# （別の正規表現をここに複製すると drift する。pitfall_copied_parse_convention_partial_fix
-# / #40 と同型のリスク）。
-_REPROACH_OVERRIDE_KEYS = (
-    "naze-dekinakatta", "kanchigai-question", "itte-noni", "shiteki-noni",
-    "unnecessary-action", "contradiction-question", "why-undesired-action",
-    "missing-required-capability",
-)
-
-
 def _bypasses_question_mark_filter(text: str) -> bool:
     """詰問形パターンにマッチするか（疑問符終端フィルタの対象外か）を判定する（#336）。"""
-    for key in _REPROACH_OVERRIDE_KEYS:
-        pattern = CORRECTION_PATTERNS[key]["pattern"]
+    for info in CORRECTION_PATTERNS.values():
+        if not info.get("question_mark_override", False):
+            continue
+        pattern = info["pattern"]
         if re.search(pattern, text) or re.search(pattern, text.lower()):
             return True
     return False
@@ -428,6 +430,31 @@ def _fails_false_positive_filters(text_stripped: str) -> bool:
     return False
 
 
+def _has_unquoted_match(pattern: str, text: str) -> bool:
+    """日本語の括弧内に完全に収まる用例を除き、実発言だけを検出する。"""
+    quote_depth = 0
+    quoted = [False] * len(text)
+    pairs = {"「": "」", "『": "』"}
+    closing = set(pairs.values())
+    stack = []
+    for index, char in enumerate(text):
+        if char in pairs:
+            stack.append(pairs[char])
+            quote_depth += 1
+            quoted[index] = True
+        elif char in closing and stack and char == stack[-1]:
+            quoted[index] = True
+            stack.pop()
+            quote_depth -= 1
+        elif quote_depth:
+            quoted[index] = True
+
+    for match in re.finditer(pattern, text):
+        if not quoted[match.start()]:
+            return True
+    return False
+
+
 def detect_correction(text: str):
     """テキストから修正パターンを検出する（最初のマッチのみ）。"""
     text_stripped = text.strip()
@@ -442,7 +469,7 @@ def detect_correction(text: str):
         return None
     for key, info in CORRECTION_PATTERNS.items():
         pattern = info["pattern"]
-        if re.search(pattern, text_stripped) or re.search(pattern, text_stripped.lower()):
+        if _has_unquoted_match(pattern, text_stripped) or _has_unquoted_match(pattern, text_stripped.lower()):
             return (key, info["confidence"])
     return None
 
@@ -457,7 +484,7 @@ def detect_all_patterns(text: str) -> list[str]:
     matched = []
     for key, info in CORRECTION_PATTERNS.items():
         pattern = info["pattern"]
-        if re.search(pattern, text_stripped) or re.search(pattern, text_stripped.lower()):
+        if _has_unquoted_match(pattern, text_stripped) or _has_unquoted_match(pattern, text_stripped.lower()):
             matched.append(key)
     return matched
 

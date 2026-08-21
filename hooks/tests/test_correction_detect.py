@@ -346,13 +346,17 @@ class TestA0CaptureRecallPatterns:
             ("要点を絞って、もっと具体的に提案して。", "reconsider-request"),
             ("その確認はいらないんだよね。", "unnecessary-action"),
             ("そこは聞かなくてもこちらで完結しない？", "unnecessary-action"),
+            ("規約を調べれば完結するよね。聞かなくても", "unnecessary-action"),
+            ("この案内はわかりづらいから、文言を変えて。", "readability-defect"),
             ("できると説明していたけど、これって本当？", "contradiction-question"),
             ("この論点は前に話しなかったっけ？", "contradiction-question"),
             ("なんで削除しちゃった？", "why-undesired-action"),
             ("なんで社内向けなのに公開確認が必要になってるの？", "why-undesired-action"),
             ("週次を作る時は差分の起点を必ず認識するようにして。", "prospective-guardrail-ja"),
             ("エラーを手動でOKにできる必要があるんじゃない？", "missing-required-capability"),
-            ("このキャラクターをもうちょっと目立たせたい。", "refinement-request"),
+            ("よいかんじ。あと、このキャラクターをもうちょっと目立たせたい。", "refinement-request"),
+            ("APIって言っただけ。", "only-said"),
+            ("『正常表示の例』とは違い、右下のボタンが表示されない。", "observed-defect"),
         ],
     )
     def test_explicit_defect_or_reconsideration_is_captured(self, text, expected):
@@ -376,6 +380,26 @@ class TestA0CaptureRecallPatterns:
         ],
     )
     def test_new_work_and_neutral_questions_are_not_captured(self, text):
+        assert common.detect_correction(text) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "不具合報告書に『ボタンが表示されない』と記載してください。",
+            "ユーザーに聞かなくても済む設計案を作って。",
+            "文字が見づらい事例を一覧にしてください。",
+            "この仕様説明に『これって本当？』という質問を追加して。",
+            "まだ認証ができてないので、ログイン機能を実装して。",
+            "ロゴをもうちょっと目立たせたい。",
+            "本番前に確認しなくてもよい項目を一覧化して。",
+            "この画面ではPDFを表示できるでしょ？",
+            "不具合報告書に『ボタンが表示されない。』と記載してください。",
+            "FAQに『この案内は見づらい。』という例を追加して。",
+            "『APIって言っただけ』という発言を検索して。",
+            "テストケース名は『実バグを検出する』にしてください。",
+        ],
+    )
+    def test_trigger_phrases_in_new_work_or_neutral_questions_are_not_captured(self, text):
         assert common.detect_correction(text) is None
 
 
