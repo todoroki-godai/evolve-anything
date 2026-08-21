@@ -11,6 +11,8 @@
 """
 import re
 
+CORRECTION_PATTERN_VERSION = 2
+
 # Agent prompt を簡易分類するキーワードマップ
 PROMPT_CATEGORIES = {
     "spec-review": ["spec", "requirement", "MUST", "quality check", r"review.*spec", "仕様", "要件"],

@@ -45,7 +45,17 @@ def _build_capture_recall() -> Dict[str, Any]:
         )
     except Exception as exc:
         return {"measured": False, "reason": f"算出失敗: {type(exc).__name__}"}
-    return {"measured": True, "pattern_version": 2, **result}
+    if not rows:
+        return {"measured": False, "reason": "評価セットが空"}
+    if not result["positives"]:
+        return {"measured": False, "reason": "TPラベルなし"}
+    if not result["hits"]:
+        return {"measured": False, "reason": "検出ヒットなし"}
+    return {
+        "measured": True,
+        "pattern_version": correction_detection.CORRECTION_PATTERN_VERSION,
+        **result,
+    }
 
 # ADR-054 §7.2.1 柱3(a): correction_rate.build_correction_rate_summary が返す schema と
 # 同型のフォールバック（read 失敗時に render 側を壊さないための安全な既定値）。

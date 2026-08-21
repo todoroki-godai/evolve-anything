@@ -784,7 +784,25 @@ class TestRenderResultsBoard:
         monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", eval_path)
         result = results_board._build_capture_recall()
         assert result["measured"] is True
-        assert result["pattern_version"] == 2
+        assert result["pattern_version"] == results_board.correction_detection.CORRECTION_PATTERN_VERSION
+
+    @pytest.mark.parametrize(
+        ("content", "reason"),
+        [
+            ("", "評価セットが空"),
+            ('{"text":"通常文","label":"not_TP"}\n', "TPラベルなし"),
+            ('{"text":"通常文","label":"TP"}\n', "検出ヒットなし"),
+        ],
+    )
+    def test_capture_recall_undefined_denominator_is_unmeasured(
+        self, monkeypatch, tmp_path, content, reason
+    ):
+        eval_path = tmp_path / "eval.jsonl"
+        eval_path.write_text(content, encoding="utf-8")
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", eval_path)
+        result = results_board._build_capture_recall()
+        assert result == {"measured": False, "reason": reason}
+        assert reason in "\n".join(results_board.render_results_board(self._board(capture_recall=result)))
 
     def test_gate_closed_shows_not_measured_with_coverage(self):
         board = self._board(correction_rate={
