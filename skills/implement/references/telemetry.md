@@ -5,10 +5,11 @@
 ここは記録するレコードのフィールド定義とコード。
 
 ```python
-import json, os, datetime
+import datetime, os, pathlib, sys
 
-data_dir = os.environ.get("CLAUDE_PLUGIN_DATA", os.path.expanduser("~/.claude/evolve-anything"))
-os.makedirs(data_dir, exist_ok=True)
+plugin_root = pathlib.Path(os.environ["CLAUDE_PLUGIN_ROOT"])
+sys.path.insert(0, str(plugin_root / "scripts" / "lib"))
+from rl_common import store_write
 
 record = {
     "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -23,8 +24,7 @@ record = {
     "lanes": LANES,
     "outcome": OUTCOME,                  # "success" / "partial" / "blocked"
 }
-with open(os.path.join(data_dir, "usage.jsonl"), "a") as f:
-    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+store_write("usage.jsonl", record)
 ```
 
 （#379 Step 4: `growth-journal.jsonl` への記録は growth-journal harness 削除に伴い廃止した。）

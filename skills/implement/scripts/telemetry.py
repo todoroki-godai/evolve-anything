@@ -1,16 +1,14 @@
 """implement スキルのテレメトリ記録モジュール."""
 
-import json
-import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+_LIB_DIR = Path(__file__).resolve().parents[3] / "scripts" / "lib"
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
 
-def _data_dir() -> Path:
-    raw = os.environ.get("CLAUDE_PLUGIN_DATA", os.path.expanduser("~/.claude/evolve-anything"))
-    p = Path(raw)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+from rl_common import store_write  # noqa: E402
 
 
 def record_usage(
@@ -35,7 +33,5 @@ def record_usage(
         "lanes": lanes,
         "outcome": outcome,
     }
-    path = _data_dir() / "usage.jsonl"
-    with open(path, "a") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    store_write("usage.jsonl", record)
     return record

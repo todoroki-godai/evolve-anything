@@ -1,6 +1,8 @@
 """implement スキル テレメトリ記録のテスト."""
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,9 @@ import pytest
 @pytest.fixture()
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    import rl_common
+
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
     return tmp_path
 
 
@@ -17,6 +22,27 @@ def _load_jsonl(path: Path) -> list[dict]:
 
 
 class TestRecordUsage:
+    def test_routes_usage_through_store_write(self, data_dir, monkeypatch):
+        import telemetry
+
+        writes = []
+        monkeypatch.setattr(
+            telemetry,
+            "store_write",
+            lambda store_name, record: writes.append((store_name, record)),
+            raising=False,
+        )
+
+        record = telemetry.record_usage(
+            project="test-project",
+            tasks_total=1,
+            tasks_completed=1,
+            mode="standard",
+            conformance_rate=1.0,
+        )
+
+        assert writes == [("usage.jsonl", record)]
+
     def test_writes_usage_record(self, data_dir):
         from telemetry import record_usage
 
@@ -66,3 +92,20 @@ class TestRecordUsage:
         assert rec["outcome"] == "partial"
 
 
+def test_telemetry_reference_uses_write_barrier():
+    reference = Path(__file__).resolve().parents[2] / "references" / "telemetry.md"
+    content = reference.read_text()
+
+    assert 'store_write("usage.jsonl", record)' in content
+    assert 'open(os.path.join(data_dir, "usage.jsonl")' not in content
+
+
+def test_telemetry_module_loads_in_isolated_python():
+    module_path = Path(__file__).resolve().parents[1] / "telemetry.py"
+    code = (
+        "import importlib.util; "
+        f"s=importlib.util.spec_from_file_location('implement_telemetry', {str(module_path)!r}); "
+        "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+        "assert callable(m.record_usage)"
+    )
+    subprocess.run([sys.executable, "-I", "-c", code], check=True)
