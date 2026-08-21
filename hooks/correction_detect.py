@@ -22,7 +22,7 @@ _SESSION_TITLE_MAX_LEN = 80
 # ADR-054 A0（#379）: CORRECTION_PATTERNS の語彙追加ごとに手動で上げる版数。
 # capture_rate.py の source×pattern_version 層分離が「追加前/追加後」を区別するために使う
 # （追加前の既存レコードにはこのフィールドが無い＝欠落は capture_rate 側で別キーに畳む）。
-_PATTERN_VERSION = 1
+_PATTERN_VERSION = 2
 
 # trigger_engine import (optional)
 _trigger_engine = None
