@@ -334,6 +334,51 @@ class TestA0CaptureRepairPatterns:
         assert common.detect_correction("評価ロジックも見直して") is None
 
 
+class TestA0CaptureRecallPatterns:
+    """#527: 文字列単体で訂正と説明できる日本語の欠陥指摘を捕捉する。"""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("右下のボタンが表示されない。", "observed-defect"),
+            ("並び替えできてると思ったら、できてなかった。", "observed-defect"),
+            ("説明が改行なくてわかりづらい。", "readability-defect"),
+            ("要点を絞って、もっと具体的に提案して。", "reconsider-request"),
+            ("その確認はいらないんだよね。", "unnecessary-action"),
+            ("そこは聞かなくてもこちらで完結しない？", "unnecessary-action"),
+            ("できると説明していたけど、これって本当？", "contradiction-question"),
+            ("この論点は前に話しなかったっけ？", "contradiction-question"),
+            ("なんで削除しちゃった？", "why-undesired-action"),
+            ("なんで社内向けなのに公開確認が必要になってるの？", "why-undesired-action"),
+            ("週次を作る時は差分の起点を必ず認識するようにして。", "prospective-guardrail-ja"),
+            ("エラーを手動でOKにできる必要があるんじゃない？", "missing-required-capability"),
+            ("このキャラクターをもうちょっと目立たせたい。", "refinement-request"),
+        ],
+    )
+    def test_explicit_defect_or_reconsideration_is_captured(self, text, expected):
+        result = common.detect_correction(text)
+        assert result is not None
+        assert result[0] == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "この画面で未表示の項目を一覧にしてください。",
+            "初めて読む人にもわかりやすい説明を作って。",
+            "もっと具体的な利用例を新しく作って。",
+            "不要なファイルを調査して一覧にして。",
+            "このライブラリは本当に高速ですか？",
+            "先週どの論点を話したっけ？",
+            "なぜ削除機能が必要なのか教えて。",
+            "必ず認識される仕組みを設計して。",
+            "利用者に必要な機能があるか調査して。",
+            "目立たせたい要素を新しく作って。",
+        ],
+    )
+    def test_new_work_and_neutral_questions_are_not_captured(self, text):
+        assert common.detect_correction(text) is None
+
+
 class TestFalsePositiveFilters:
     """偽陽性フィルタのテスト。"""
 
@@ -751,7 +796,7 @@ class TestCorrectionDetectHook:
 
         corrections_file = patch_data_dir / "corrections.jsonl"
         record = json.loads(corrections_file.read_text().strip())
-        assert record["pattern_version"] == 1
+        assert record["pattern_version"] == 2
 
     def test_content_as_list(self, patch_data_dir):
         """content がリスト形式でも処理できる。"""

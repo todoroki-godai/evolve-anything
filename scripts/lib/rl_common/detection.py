@@ -92,6 +92,46 @@ CORRECTION_PATTERNS = {
         "pattern": r"やめて(ほしい|ください|くれ)",
         "confidence": 0.75, "type": "correction", "decay_days": 90,
     },
+    # #527: 固定評価セットの偽陰性45件を意味別に分類し、文字列単体で既発生の欠陥と
+    # 説明できる群だけを追加する。一般的な「〜してください」や中立な質問は含めない。
+    "observed-defect": {
+        "pattern": r"表示されない|できて(い)?なかった|できてない|実バグ",
+        "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+    },
+    "readability-defect": {
+        "pattern": r"(わかり|分かり|み|見)(づら|ずら)い|改行(が)?なく.{0,12}(わかり|分かり|み|見)(づら|ずら)い",
+        "confidence": 0.80, "type": "correction", "decay_days": 90,
+    },
+    "reconsider-request": {
+        "pattern": r"もっと具体的に提案して|もっと文章(を)?短く|設計しなお(す|して)",
+        "confidence": 0.75, "type": "correction", "decay_days": 90,
+    },
+    "unnecessary-action": {
+        "pattern": r"(確認|version|バージョン).{0,12}(いらない|不要|しなくてよい)|"
+                   r"(聞か|確認し)なくても|ブロッカーにしない",
+        "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+    },
+    "contradiction-question": {
+        "pattern": r"これって本当[？?]|(前に|以前).{0,30}(話し|確認し)なかったっけ[？?]|"
+                   r"できるでしょ[？?]|かぶったりしない[？?]",
+        "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+    },
+    "why-undesired-action": {
+        "pattern": r"(なんで|なぜ)[^。！？!?「」\n]{0,30}(しちゃった|なのに[^。！？!?「」\n]{0,20}必要になって)",
+        "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+    },
+    "prospective-guardrail-ja": {
+        "pattern": r"必ず.{0,30}(認識|確認)するようにして",
+        "confidence": 0.80, "type": "guardrail", "decay_days": 120, "strong": True,
+    },
+    "missing-required-capability": {
+        "pattern": r"できる必要があるんじゃない[？?]",
+        "confidence": 0.80, "type": "correction", "decay_days": 90, "strong": True,
+    },
+    "refinement-request": {
+        "pattern": r"もうちょっと.{0,30}目立たせたい",
+        "confidence": 0.75, "type": "correction", "decay_days": 90,
+    },
     "perfect": {"pattern": r"(?i)perfect!|exactly right|that's exactly", "confidence": 0.70, "type": "positive", "decay_days": 90},
     "great-approach": {"pattern": r"(?i)that's what I wanted|great approach", "confidence": 0.70, "type": "positive", "decay_days": 90},
     "keep-doing": {"pattern": r"(?i)keep doing this|love it|excellent|nailed it", "confidence": 0.70, "type": "positive", "decay_days": 90},
@@ -134,7 +174,11 @@ FALSE_POSITIVE_FILTERS = [
 # パターン本体は CORRECTION_PATTERNS を単一ソースにし、ここではキー一覧だけを持つ
 # （別の正規表現をここに複製すると drift する。pitfall_copied_parse_convention_partial_fix
 # / #40 と同型のリスク）。
-_REPROACH_OVERRIDE_KEYS = ("naze-dekinakatta", "kanchigai-question", "itte-noni", "shiteki-noni")
+_REPROACH_OVERRIDE_KEYS = (
+    "naze-dekinakatta", "kanchigai-question", "itte-noni", "shiteki-noni",
+    "unnecessary-action", "contradiction-question", "why-undesired-action",
+    "missing-required-capability",
+)
 
 
 def _bypasses_question_mark_filter(text: str) -> bool:
