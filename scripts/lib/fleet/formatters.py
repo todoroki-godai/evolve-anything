@@ -173,7 +173,7 @@ def format_status_json(rows: list[FleetRow]) -> str:
 
 # --- queue サブコマンド（#79）表示 -------------------------------------------
 
-_QUEUE_HEADERS = ["PROJECT", "MATERIAL", "WEAK", "CORR", "BACKLOG", "LAST_EVOLVE", "REASON"]
+_QUEUE_HEADERS = ["PROJECT", "MATERIAL", "WEAK", "NEW_CORR", "BACKLOG", "LAST_EVOLVE", "REASON"]
 
 
 def _append_skipped_dead(lines: list, result: dict) -> None:
@@ -185,7 +185,11 @@ def _append_skipped_dead(lines: list, result: dict) -> None:
     skipped = result.get("skipped_dead") or []
     if not skipped:
         return
-    slugs = [str(d.get("pj_slug", "")) for d in skipped]
+    slugs = []
+    for item in skipped:
+        slug = str(item.get("pj_slug", ""))
+        backlog = int(item.get("correction_backlog", 0) or 0)
+        slugs.append(f"{slug} (backlog {backlog})" if backlog else slug)
     shown = slugs[:5]
     suffix = ", …" if len(slugs) > 5 else ""
     lines.append(f"（skipped {len(slugs)} dead: {', '.join(shown)}{suffix}）")
@@ -203,9 +207,12 @@ def _append_untracked(lines: list, result: dict) -> None:
     if not untracked:
         return
     shown = untracked[:5]
-    parts = [
-        f"{u.get('pj_slug', '')} (material {u.get('material_count', 0)})" for u in shown
-    ]
+    parts = []
+    for u in shown:
+        detail = f"material {u.get('material_count', 0)}"
+        if int(u.get("correction_backlog") or 0) > 0:
+            detail += f", backlog {u['correction_backlog']}"
+        parts.append(f"{u.get('pj_slug', '')} ({detail})")
     suffix = ", …" if len(untracked) > 5 else ""
     lines.append(
         f"（未追跡だが学習素材あり: {', '.join(parts)}{suffix}"
@@ -224,9 +231,12 @@ def _append_skipped_phantom(lines: list, result: dict) -> None:
     if not phantom:
         return
     shown = phantom[:5]
-    parts = [
-        f"{p.get('pj_slug', '')} (material {p.get('material_count', 0)})" for p in shown
-    ]
+    parts = []
+    for p in shown:
+        detail = f"material {p.get('material_count', 0)}"
+        if int(p.get("correction_backlog") or 0) > 0:
+            detail += f", backlog {p['correction_backlog']}"
+        parts.append(f"{p.get('pj_slug', '')} ({detail})")
     suffix = ", …" if len(phantom) > 5 else ""
     lines.append(
         f"（skipped {len(phantom)} phantom: {', '.join(parts)}{suffix}"
@@ -366,7 +376,7 @@ def _append_queue_status(lines: list, result: dict) -> None:
 
 
 def format_queue_table(result: dict) -> str:
-    """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/CORR/LAST_EVOLVE/REASON`
+    """fleet queue の result dict を `PROJECT/MATERIAL/WEAK/NEW_CORR/BACKLOG/LAST_EVOLVE/REASON`
     テーブルに整形する（末尾に `（N projects waiting / M tracked）` を添える）。
 
     待ち 0 件でも tracked 総数は表示する（沈黙させない）。LAST_EVOLVE は ISO 文字列の

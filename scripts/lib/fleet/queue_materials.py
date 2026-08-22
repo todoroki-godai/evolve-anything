@@ -359,6 +359,7 @@ def collect_untracked_materials(
     weak_signals_path: Optional[Path],
     corrections_path: Path,
     dir_map: Dict[str, str],
+    correction_backlog_counts: Optional[Dict[str, int]] = None,
 ) -> List[Dict[str, Any]]:
     """material（weak/corr）を持つが queue 母集団（tracked）に居ない PJ を advisory 列挙する（#86）。
 
@@ -374,16 +375,18 @@ def collect_untracked_materials(
 
     対象 slug について ``weak_unprocessed_by_pj`` + ``new_corrections_by_pj``
     （untracked は last_evolve state 無し＝全件）を集計し、``material_count >= threshold``
-    のものを material_count 降順（同数は pj_slug 昇順）で返す。
+    または ``correction_backlog > 0`` のものを返す。在庫は material_count に加算しない。
 
     Returns:
-        ``[{pj_slug, project_path, material_count, weak_unprocessed, new_corrections}]``。
+        ``[{pj_slug, project_path, material_count, weak_unprocessed, new_corrections,
+        correction_backlog}]``。
         純関数（store I/O は既存 reader 経由・dir_map/material_slugs は呼び側が用意）。
     """
     tracked_canon = {_canonical_slug(s) for s in tracked_slugs}
     seen: set = set()
     candidates: List[str] = []
-    for raw in material_slugs:
+    backlog_counts = correction_backlog_counts or {}
+    for raw in list(material_slugs) + list(backlog_counts):
         slug = _canonical_slug(raw)
         if not slug or slug == _UNKNOWN_PROJECT_LABEL:
             continue
@@ -404,7 +407,8 @@ def collect_untracked_materials(
             slug, last_evolve_at=None, corrections_path=corrections_path
         )
         count = weak + corr
-        if count < threshold:
+        backlog = int(backlog_counts.get(slug, 0) or 0)
+        if count < threshold and backlog <= 0:
             continue
         out.append(
             {
@@ -413,6 +417,7 @@ def collect_untracked_materials(
                 "material_count": count,
                 "weak_unprocessed": weak,
                 "new_corrections": corr,
+                "correction_backlog": backlog,
             }
         )
     out.sort(key=lambda x: (-x["material_count"], x["pj_slug"]))
@@ -427,8 +432,9 @@ def collect_phantom_materials(
     weak_signals_path: Optional[Path],
     corrections_path: Path,
     dir_map: Dict[str, str],
+    correction_backlog_counts: Optional[Dict[str, int]] = None,
 ) -> List[Dict[str, Any]]:
-    """閾値以上 material を持つが実 dir に解決できない untracked slug を列挙する（#88）。
+    """閾値以上 material または修正在庫を持ち、実 dir に解決できない slug を列挙する（#88/#515）。
 
     ``collect_untracked_materials`` の ``is_dir()`` ゲートで黙って drop される slug
     （例: temp slug ``tmpdcm8avo8`` material=5）を透明化するための対称関数。
@@ -436,17 +442,19 @@ def collect_phantom_materials(
 
     対象 slug は: ① ``tracked_slugs``（canonical fold 後）に無い ② ``(unknown)`` でない
     ③ ``dir_map`` で実 dir に**解決できない**（``collect_untracked_materials`` の補集合）
-    ④ material_count（weak + corr・untracked は全件）が threshold 以上。material_count 降順
+    ④ material_count（weak + corr・untracked は全件）が threshold 以上、または
+    correction_backlog が1件以上。material_count 降順
     （同数は pj_slug 昇順）で返す。waiting には昇格させない（temp slug は意図的に除外）。
 
     Returns:
-        ``[{pj_slug, material_count, weak_unprocessed, new_corrections}]``（project_path は
+        ``[{pj_slug, material_count, weak_unprocessed, new_corrections, correction_backlog}]``（project_path は
         解決できないので付けない）。純関数（store I/O は既存 reader 経由）。
     """
     tracked_canon = {_canonical_slug(s) for s in tracked_slugs}
     seen: set = set()
     candidates: List[str] = []
-    for raw in material_slugs:
+    backlog_counts = correction_backlog_counts or {}
+    for raw in list(material_slugs) + list(backlog_counts):
         slug = _canonical_slug(raw)
         if not slug or slug == _UNKNOWN_PROJECT_LABEL:
             continue
@@ -467,7 +475,8 @@ def collect_phantom_materials(
             slug, last_evolve_at=None, corrections_path=corrections_path
         )
         count = weak + corr
-        if count < threshold:
+        backlog = int(backlog_counts.get(slug, 0) or 0)
+        if count < threshold and backlog <= 0:
             continue
         out.append(
             {
@@ -475,6 +484,7 @@ def collect_phantom_materials(
                 "material_count": count,
                 "weak_unprocessed": weak,
                 "new_corrections": corr,
+                "correction_backlog": backlog,
             }
         )
     out.sort(key=lambda x: (-x["material_count"], x["pj_slug"]))

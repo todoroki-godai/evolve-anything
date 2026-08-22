@@ -43,7 +43,7 @@ bin/evolve-fleet detect --backfill        # 過去チャットを遡って取り
 bin/evolve-fleet detect --pj amamo --dry-run
 
 # 学習素材ベースで「今 evolve すべき PJ」を列挙（決定論・ゼロ LLM）
-bin/evolve-fleet queue                    # weak 未処理 + 新規 corr >= 閾値（既定5）の PJ をテーブル表示
+bin/evolve-fleet queue                    # weak 未処理 + 新規 corr >= 閾値、または修正在庫1件以上の PJ を表示
 bin/evolve-fleet queue --json --threshold 3
 # 毎朝の evolve queue 自動実行を launchd に登録（#80・既定 09:00 / --time HH:MM / --uninstall）
 bin/evolve-daily-install

@@ -272,12 +272,14 @@ def build_queue_result(
                 last_evolve_at=last_evolve_map.get(slug),
                 corrections_path=corrections_path,
             )
+            d_backlog = correction_backlog_counts.get(_canonical_slug(slug), 0)
             skipped_dead.append(
                 {
                     "pj_slug": slug,
                     "project_path": path,
                     "weak_unprocessed": d_weak,
                     "new_corrections": d_corr,
+                    "correction_backlog": d_backlog,
                     "material_count": d_weak + d_corr,
                 }
             )
@@ -323,6 +325,7 @@ def build_queue_result(
             weak_signals_path=weak_signals_path,
             corrections_path=corrections_path,
             dir_map=untracked_dir_map,
+            correction_backlog_counts=correction_backlog_counts,
         )
         phantom = collect_phantom_materials(
             material_slugs=material_slugs,
@@ -331,6 +334,7 @@ def build_queue_result(
             weak_signals_path=weak_signals_path,
             corrections_path=corrections_path,
             dir_map=untracked_dir_map,
+            correction_backlog_counts=correction_backlog_counts,
         )
     else:
         untracked = []
