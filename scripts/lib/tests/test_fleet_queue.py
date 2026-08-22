@@ -30,7 +30,7 @@ from fleet import queue_state as qs  # noqa: E402
 # --- select_evolve_queue 純関数 ----------------------------------------------
 
 
-def _material(slug, weak=0, corr=0, last=None, subagents=0, sessions=0):
+def _material(slug, weak=0, corr=0, last=None, subagents=0, sessions=0, backlog=0):
     """テスト用の per-PJ material dict を組み立てる。"""
     return {
         "pj_slug": slug,
@@ -38,10 +38,30 @@ def _material(slug, weak=0, corr=0, last=None, subagents=0, sessions=0):
         "new_corrections": corr,
         "last_evolve_at": last,
         "activity_since": {"subagents": subagents, "sessions": sessions},
+        "correction_backlog": backlog,
     }
 
 
 class TestSelectEvolveQueue:
+    def test_below_threshold_with_correction_backlog_is_included(self):
+        """#515: 在庫は1件でも永久滞留させず queue へ載せる。"""
+        mats = [_material("dormant", weak=0, corr=0, backlog=1)]
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["dormant"]
+        assert out[0]["material_count"] == 0
+        assert out[0]["correction_backlog"] == 1
+        assert out[0]["reason"] == "反映待ち在庫 1 件 / material=0 < 5"
+
+    def test_correction_backlog_does_not_change_material_count_or_sort_order(self):
+        """在庫は既存 material_count に足さず、閾値以上の通常候補を先に保つ。"""
+        mats = [
+            _material("dormant", backlog=99),
+            _material("active", weak=5),
+        ]
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["active", "dormant"]
+        assert [m["material_count"] for m in out] == [5, 0]
+
     def test_threshold_boundary_includes_equal(self):
         """material_count == threshold は待ち（>= 比較）。"""
         mats = [_material("a", weak=3, corr=0)]
@@ -530,6 +550,7 @@ class TestBuildQueueResult:
             "last_evolve_at",
             "activity_since",
             "reason",
+            "correction_backlog",
         }
         assert item["pj_slug"] == "alpha"
         assert item["weak_unprocessed"] == 7
@@ -557,6 +578,27 @@ class TestBuildQueueResult:
         assert result["queue"] == []
         assert result["queue_status"] == "EMPTY"
         assert result["queue_status_reason"]
+
+    def test_promoted_backlog_bypasses_material_threshold(self, tmp_path):
+        """#515 E2E: 前回 evolve より古い promoted 在庫だけでも queue に出る。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        rec = _corr("dormant", "2026-06-01T00:00:00+00:00")
+        rec.update({"reflect_status": "promoted", "invalidated": False})
+        corr.write_text(json.dumps(rec) + "\n")
+        result = fq.build_queue_result(
+            pj_slugs=["dormant"],
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={"dormant": "2026-06-20T00:00:00+00:00"},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert result["queue_status"] == "READY"
+        assert result["queue"][0]["material_count"] == 0
+        assert result["queue"][0]["correction_backlog"] == 1
 
 
 # --- CLI --json 出力 ----------------------------------------------------------

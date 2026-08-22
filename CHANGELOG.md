@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- **queue が休眠 PJ の反映待ち correction 在庫を表示** — `reflect_status=promoted` の有効在庫を
+  PJ 別に read-time 集計し、通常 material が閾値未満でも在庫が1件以上あれば queue の末尾へ
+  含める。`material_count` の既存意味と順位は維持し、`BACKLOG` 列で別表示する（#515）。
 - **feat(capture): 戦果ボードに固定コーパスのL1捕捉率を表示（#527）** — A0評価ハーネスと
   戦果ボードが同じ計算関数を使い、recall・precision・Wilson 95% CI・検出パターン版を表示する。
   評価セットがない環境では数字を推測せず「未測定」と明示する。
