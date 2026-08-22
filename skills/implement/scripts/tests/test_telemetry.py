@@ -1,5 +1,6 @@
 """implement スキル テレメトリ記録のテスト."""
 
+import ast
 import json
 import subprocess
 import sys
@@ -95,9 +96,30 @@ class TestRecordUsage:
 def test_telemetry_reference_uses_write_barrier():
     reference = Path(__file__).resolve().parents[2] / "references" / "telemetry.md"
     content = reference.read_text()
+    code = content.split("```python", 1)[1].split("```", 1)[0]
+    tree = ast.parse(code)
 
-    assert 'store_write("usage.jsonl", record)' in content
-    assert 'open(os.path.join(data_dir, "usage.jsonl")' not in content
+    barrier_calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "store_write"
+    ]
+    assert len(barrier_calls) == 1
+    assert ast.literal_eval(barrier_calls[0].args[0]) == "usage.jsonl"
+    assert isinstance(barrier_calls[0].args[1], ast.Name)
+    assert barrier_calls[0].args[1].id == "record"
+
+    direct_writers = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            isinstance(node.func, ast.Name) and node.func.id == "open"
+            or isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"open", "write", "write_text", "write_bytes"}
+        )
+    ]
+    assert direct_writers == []
 
 
 def test_telemetry_module_loads_in_isolated_python():

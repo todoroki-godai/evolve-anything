@@ -65,6 +65,17 @@ def test_store_write_sets_600_perms_on_new_file(data_dir):
     assert mode == 0o600
 
 
+def test_store_write_creates_missing_canonical_data_dir(tmp_path, monkeypatch):
+    """fresh install の未作成 DATA_DIR でも書込みを黙って失わない。"""
+    missing = tmp_path / "nested" / "evolve-anything"
+    monkeypatch.setattr(rl_common, "DATA_DIR", missing)
+
+    store_write("usage.jsonl", {"x": 1})
+
+    assert _read_lines(missing / "usage.jsonl") == [{"x": 1}]
+    assert missing.stat().st_mode & 0o777 == 0o700
+
+
 def test_store_write_caller_cannot_choose_location(data_dir):
     """store_write は basename のみ受け、別 dir への path traversal を canonical 配下に閉じる。
 

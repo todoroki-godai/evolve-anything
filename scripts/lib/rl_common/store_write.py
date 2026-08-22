@@ -100,6 +100,7 @@ def store_write(
     import rl_common
     from rl_common import append_jsonl
 
+    rl_common.ensure_data_dir()
     append_jsonl(rl_common.DATA_DIR / store_name, record)
 
 
