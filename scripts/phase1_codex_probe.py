@@ -13,9 +13,11 @@ weak_signals.jsonl）には一切書き込まない**。実行前後で byte has
 本スクリプトが実装する Decision: D3（機構マーカー除外・9種）/ D4（子セッション
 ファイル単位除外）/ D5a（識別子とセグメント帰属・チャネル制約付き dedup）。
 
-Phase 1 の簡略化（意図的）: 現行 ``Utterance``（extractor.py）と同じキー構成の
-dict を出力するが、``prev_action``（tool 呼び出し名の集約）は Phase 1 のスコープ
-外の D2（parser/reducer 分離）に属するため常に ``None`` を出力する。
+``prev_action``（Must1・レビュー反映）: 判定プロンプトが実際に文脈として使う
+（correction_semantic/prompt.py）ため、Codex ログでも CC 側と同じ定義・同じ整形
+（``utterance_archive.extractor._format_prev_action``。上限10・超過時 "…"）で
+実データから集約する。D2（parser/reducer 分離。既存コードへの反映）自体は
+Phase 2 スコープのままだが、Phase 1 の使い捨てスクリプト内で同等の集約を行う。
 """
 from __future__ import annotations
 
@@ -52,6 +54,47 @@ MACHINERY_MARKERS = frozenset(
         "image",
     }
 )
+
+# Codex 側の「AI のツール操作」に該当する (type, payload.type) の単一ソース（Must1）。
+# CC 側の tool_use 名収集（extractor.py の _tool_use_names 相当）と同じ役割を果たす。
+# 実データ全数走査（X4 と同じ方法論）で列挙した組。name フィールドを持つ組と、
+# 固定名で表す組（apply_patch 等）に分ける。
+TOOL_CALL_NAME_FIELD_PAIRS = frozenset(
+    {
+        ("response_item", "function_call"),
+        ("response_item", "custom_tool_call"),
+    }
+)
+TOOL_CALL_FIXED_NAME_PAIRS = {
+    ("response_item", "tool_search_call"): "tool_search",
+    ("event_msg", "patch_apply_end"): "apply_patch",
+    ("event_msg", "web_search_end"): "web_search",
+}
+# 呼び出しの「結果」であり操作そのものではない組。prev_action には含めないが、
+# 既知の組として扱い X4 の unknown_type_pairs へは計上しない。
+TOOL_CALL_OUTPUT_TYPE_PAIRS = frozenset(
+    {
+        ("response_item", "function_call_output"),
+        ("response_item", "custom_tool_call_output"),
+        ("response_item", "tool_search_output"),
+    }
+)
+
+
+def extract_tool_name(rtype: Optional[str], ptype: Optional[str], payload: Dict[str, Any]) -> Optional[str]:
+    """ツール呼び出しレコードから tool 名を1つ取り出す。非対象なら None。"""
+    key = (rtype, ptype)
+    if key in TOOL_CALL_FIXED_NAME_PAIRS:
+        return TOOL_CALL_FIXED_NAME_PAIRS[key]
+    if key in TOOL_CALL_NAME_FIELD_PAIRS:
+        name = payload.get("name")
+        return name if isinstance(name, str) and name else None
+    if key == ("event_msg", "mcp_tool_call_end"):
+        invocation = payload.get("invocation") or {}
+        tool = invocation.get("tool") if isinstance(invocation, dict) else None
+        return f"mcp:{tool}" if isinstance(tool, str) and tool else "mcp_tool_call"
+    return None
+
 
 DEFAULT_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 DEFAULT_PJ_FILTER = "evolve-anything"
@@ -146,6 +189,7 @@ class RawCandidate:
     text: str
     cwd: Optional[str]
     session_id: Optional[str]  # D5a: レコード順で直前の session_meta.id（無ければ None）
+    prev_action: Optional[str]  # Must1: 直前 user 発話以降の tool 呼び出し名（CC extractor と同型整形）
 
 
 @dataclass
@@ -161,7 +205,18 @@ class ParsedFile:
 
 
 def parse_session_file(path: Path) -> ParsedFile:
-    """1ファイルを単一パスで走査し、D4/D5a/X4 に必要な情報を全て抽出する。"""
+    """1ファイルを単一パスで走査し、D4/D5a/X4/Must1(prev_action) に必要な情報を抽出する。
+
+    prev_action の集約（Must1）: CC 側（extractor.py の pending_tool_names）と同じ
+    「直前の human 発話より後・当該 human 発話より前」の tool 呼び出し名を集める。
+    Codex は同一の論理発話が response_item / event_msg の2チャネルに重複出現する
+    （X1・M2）ため、単純に「発話を emit するたびに pending をリセット」すると、
+    2チャネル目（dedup 前提で捨てられない方＝先着順が response_item とは限らない。
+    実測: event_msg が先に出現するケースが 2185/2772 件で多数派）が空の
+    prev_action を得てしまう。そこで「直前に emit した候補と同一 text_hash なら
+    同一論理発話の重複とみなし、pending をリセットせず同じ prev_action を再利用する」
+    方式で、どちらのチャネルが先着でも一致した prev_action を持たせる。
+    """
     first_id: Optional[str] = None
     first_cwd: Optional[str] = None
     current_session_id: Optional[str] = None
@@ -171,6 +226,25 @@ def parse_session_file(path: Path) -> ParsedFile:
     unattributed = 0
     unknown_type_pairs: Counter = Counter()
     parse_error_lines = 0
+
+    from utterance_archive.extractor import _format_prev_action  # 整形の単一ソースを再利用（自作しない）
+
+    pending_tool_names: List[str] = []
+    last_emitted_text_hash: Optional[str] = None
+    last_emitted_prev_action: Optional[str] = None
+
+    def _next_prev_action(text: str) -> Optional[str]:
+        nonlocal pending_tool_names, last_emitted_text_hash, last_emitted_prev_action
+        h = text_hash(text)
+        if h == last_emitted_text_hash:
+            # 直前に emit した候補と同一発話（チャネル重複）。pending は消費済みのまま
+            # 触らず、同じ prev_action を再利用する（上記 docstring 参照）。
+            return last_emitted_prev_action
+        action = _format_prev_action(pending_tool_names)
+        pending_tool_names = []
+        last_emitted_text_hash = h
+        last_emitted_prev_action = action
+        return action
 
     with path.open("r", encoding="utf-8") as fh:
         for line_no, raw_line in enumerate(fh, start=1):
@@ -212,10 +286,11 @@ def parse_session_file(path: Path) -> ParsedFile:
                 if current_session_id is None:
                     unattributed += 1
                     continue
+                prev_action = _next_prev_action(text)
                 candidates.append(
                     RawCandidate(
                         str(path), "response_item", line_no, ts, parse_iso_ms(ts),
-                        text, current_cwd, current_session_id,
+                        text, current_cwd, current_session_id, prev_action,
                     )
                 )
                 continue
@@ -231,10 +306,11 @@ def parse_session_file(path: Path) -> ParsedFile:
                 if current_session_id is None:
                     unattributed += 1
                     continue
+                prev_action = _next_prev_action(text)
                 candidates.append(
                     RawCandidate(
                         str(path), "event_msg", line_no, ts, parse_iso_ms(ts),
-                        text, current_cwd, current_session_id,
+                        text, current_cwd, current_session_id, prev_action,
                     )
                 )
                 continue
@@ -242,6 +318,16 @@ def parse_session_file(path: Path) -> ParsedFile:
             # 未知 role（response_item.message で role != user）は user 扱いしない
             # （D3 Should反映）。developer role も同経路で自然に除外される。
             if rtype == "response_item" and ptype == "message":
+                continue
+
+            # Must1: ツール呼び出し（AI のツール操作）を pending_tool_names へ集約する。
+            tool_name = extract_tool_name(rtype, ptype, payload)
+            if tool_name is not None:
+                pending_tool_names.append(tool_name)
+                continue
+
+            # 呼び出しの結果（*_output）は既知の組として扱い、unknown への計上から除く。
+            if (rtype, ptype) in TOOL_CALL_OUTPUT_TYPE_PAIRS:
                 continue
 
             # X4: 未知の (type, payload.type) 組は安全にスキップし件数を surface する。
@@ -435,7 +521,7 @@ def run_probe(
                 "timestamp": c.timestamp,
                 "text": c.text,
                 "text_hash": th,
-                "prev_action": None,  # Phase 1 簡略化（D2 は Phase 2 スコープ）
+                "prev_action": c.prev_action,  # Must1: 実データから集約（D2 の整形は _format_prev_action を再利用）
                 "source_kind": "dialogue",
                 "extractor_version": EXTRACTOR_VERSION,
             }
@@ -519,6 +605,72 @@ def verify_production_unchanged(
     return (not violations), violations
 
 
+def resolve_evolve_anything_data_dir() -> Path:
+    """evolve-anything DATA_DIR を解決する（Must2: 個別4ファイルだけでなくディレクトリ
+    全体の新規ファイル出現も検査するため）。"""
+    import rl_common  # 遅延 import
+
+    env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+    return Path(rl_common.resolve_data_dir(env))
+
+
+def snapshot_data_dir_listing(data_dir: Path) -> Dict[str, int]:
+    """DATA_DIR 配下の全ファイルの {相対パス: サイズ} を返す（不在なら空 dict）。
+
+    個別ファイル名を列挙する方式（4ファイルの hash だけ）だと、新種のファイルが
+    増えたときに素通りする（Must2 レビュー指摘）。ディレクトリ全体の一覧比較で
+    「ファイルが増えていないこと」まで検査する。
+    """
+    if not data_dir.exists():
+        return {}
+    out: Dict[str, int] = {}
+    for f in sorted(data_dir.rglob("*")):
+        if f.is_file():
+            out[str(f.relative_to(data_dir))] = f.stat().st_size
+    return out
+
+
+def verify_data_dir_unchanged(
+    before: Dict[str, int], after: Dict[str, int]
+) -> Tuple[bool, List[str]]:
+    """DATA_DIR 一覧の実行前後比較。新規ファイル・サイズ変化を違反として列挙する。"""
+    violations: List[str] = []
+    for name in sorted(set(before) | set(after)):
+        b, a = before.get(name), after.get(name)
+        if b != a:
+            violations.append(f"{name}: before_size={b!r} after_size={a!r}")
+    return (not violations), violations
+
+
+# ─────────────────────────────────────────────────────────────────
+# --out-dir 拒否ガード（Must2: 本番配下への書込を起動時に拒否する）
+# ─────────────────────────────────────────────────────────────────
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def forbidden_out_dir_roots() -> List[Path]:
+    """--out-dir が指してはいけないルート（Must2）。
+
+    ``~/.claude/``（``~/.claude/evolve-anything/`` を含む）/ ``~/.codex/`` /
+    本スクリプトのリポジトリ作業ディレクトリ配下。
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    return [Path.home() / ".claude", Path.home() / ".codex", repo_root]
+
+
+def validate_out_dir(out_dir: Path) -> Optional[str]:
+    """out_dir が禁止ルート配下なら理由文字列を返す。問題無ければ None。"""
+    for root in forbidden_out_dir_roots():
+        if _is_within(out_dir, root):
+            return f"--out-dir は本番/リポジトリ配下を指せません: {out_dir} は {root} 配下です"
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────
@@ -541,10 +693,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     base_date = date.fromisoformat(args.base_date) if args.base_date else None
     out_dir = args.out_dir or Path(tempfile.mkdtemp(prefix="phase1_codex_probe_"))
+
+    # Must2: 本番/リポジトリ配下への書込を、ディレクトリ作成より前に拒否する。
+    forbid_reason = validate_out_dir(out_dir)
+    if forbid_reason is not None:
+        print(f"[phase1_codex_probe] FATAL: {forbid_reason}", file=sys.stderr)
+        return 2
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     store_paths = production_store_paths()
-    before = snapshot_production_hashes(store_paths)
+    data_dir = resolve_evolve_anything_data_dir()
+    hashes_before = snapshot_production_hashes(store_paths)
+    listing_before = snapshot_data_dir_listing(data_dir)
 
     result = run_probe(
         sessions_root=args.sessions_root,
@@ -558,14 +719,23 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     token_estimate = estimate_tokens(result.utterances)
 
-    after = snapshot_production_hashes(store_paths)
-    ok, violations = verify_production_unchanged(before, after)
-
+    # 成果物の書込（out_dir は Must2 で本番配下でないことを検証済み）。
     _write_json(out_dir / "target_files.json", result.target_file_hashes)
     _write_json(out_dir / "normalized_events.json", result.normalized_events)
     _write_json(out_dir / "unique_keys.json", result.unique_keys)
     _write_json(out_dir / "utterances.json", result.utterances)
     _write_json(out_dir / "token_estimate.json", token_estimate)
+
+    # Must2: 最終 hash / 一覧検査は全ての書込が終わった後に行う
+    # （judge のコスト予約書込は run_probe 内では発生しないため C-0/C-1 と同じ
+    # 「LLM 呼び出し前の予約書込だけが漏れる」パターンは Phase 1 では起きないが、
+    # 契約として C-1 実行契約の順序に揃える）。
+    hashes_after = snapshot_production_hashes(store_paths)
+    listing_after = snapshot_data_dir_listing(data_dir)
+    hash_ok, hash_violations = verify_production_unchanged(hashes_before, hashes_after)
+    listing_ok, listing_violations = verify_data_dir_unchanged(listing_before, listing_after)
+    ok = hash_ok and listing_ok
+    violations = hash_violations + listing_violations
 
     report = {
         "counts": {
@@ -582,9 +752,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         "child_ref_scope_agreement": result.child_ref_scope_agreement,
         "child_ref_scope_detail": result.child_ref_scope_detail,
         "token_estimate": token_estimate,
-        "production_store_guard": {"ok": ok, "violations": violations, "before": before, "after": after},
+        "production_store_guard": {
+            "ok": ok,
+            "violations": violations,
+            "hashes_before": hashes_before,
+            "hashes_after": hashes_after,
+            "data_dir": str(data_dir),
+            "data_dir_file_count_before": len(listing_before),
+            "data_dir_file_count_after": len(listing_after),
+        },
         "out_dir": str(out_dir),
     }
+    # report.json 自体は out_dir（本番配下でないことを検証済み）への書込であり、
+    # 上の検査対象（本番ストア・DATA_DIR）には含まれない。
     _write_json(out_dir / "report.json", report)
 
     print(json.dumps(report, ensure_ascii=False, indent=2))

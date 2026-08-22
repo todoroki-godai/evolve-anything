@@ -66,7 +66,17 @@ def _inter_agent_marker(ts="2026-08-20T00:00:03.000Z") -> str:
 
 
 def _unknown_record(ts="2026-08-20T00:00:04.000Z") -> str:
-    return json.dumps({"timestamp": ts, "type": "response_item", "payload": {"type": "tool_search_call"}})
+    # tool_search_call は Must1 で既知のツール呼び出し組になったため、ここでは
+    # 未知組の代表として genuinely 未知の組を使う。
+    return json.dumps({"timestamp": ts, "type": "response_item", "payload": {"type": "totally_unknown_type"}})
+
+
+def _function_call(name: str, ts="2026-08-20T00:00:04.000Z") -> str:
+    return json.dumps({
+        "timestamp": ts,
+        "type": "response_item",
+        "payload": {"type": "function_call", "name": name, "call_id": "c1"},
+    })
 
 
 def _write(tmp_path: Path, name: str, lines) -> Path:
@@ -207,8 +217,8 @@ def test_dedup_merges_matching_pair_across_channels():
     変異#5（dedup を適用せず両チャネルをそのまま emit）を適用すると、
     このテストは2件のまま単独で落ちる。
     """
-    r1 = p.RawCandidate("f1", "response_item", 1, "2026-08-20T00:00:00.010Z", 1000.010 * 1000, "同じ発話", None, "s1")
-    e1 = p.RawCandidate("f1", "event_msg", 2, "2026-08-20T00:00:00.000Z", 1000.0 * 1000, "同じ発話", None, "s1")
+    r1 = p.RawCandidate("f1", "response_item", 1, "2026-08-20T00:00:00.010Z", 1000.010 * 1000, "同じ発話", None, "s1", None)
+    e1 = p.RawCandidate("f1", "event_msg", 2, "2026-08-20T00:00:00.000Z", 1000.0 * 1000, "同じ発話", None, "s1", None)
     out = p.dedup_channel_constrained([r1, e1], threshold_ms=100)
     assert len(out) == 1
     assert out[0].channel == "response_item"  # response_item 側を代表として残す
@@ -221,7 +231,7 @@ def test_dedup_keeps_event_msg_only_utterance_independent():
     実装レベルで適用すると（parse_session_file の event_msg 分岐を削除）、
     run_probe 経由の統合テストでこの発話が消え、後述の統合テストが単独で落ちる。
     """
-    e1 = p.RawCandidate("f1", "event_msg", 1, "2026-08-20T00:00:00.000Z", 1000.0, "event_msgだけの発話", None, "s1")
+    e1 = p.RawCandidate("f1", "event_msg", 1, "2026-08-20T00:00:00.000Z", 1000.0, "event_msgだけの発話", None, "s1", None)
     out = p.dedup_channel_constrained([e1], threshold_ms=100)
     assert len(out) == 1
     assert out[0].channel == "event_msg"
@@ -230,8 +240,8 @@ def test_dedup_keeps_event_msg_only_utterance_independent():
 def test_dedup_does_not_merge_beyond_threshold():
     """陽性対照: delta が閾値を超える候補は誤統合されない（意味を変えない差分ではなく
     正しい境界動作の確認）。"""
-    r1 = p.RawCandidate("f1", "response_item", 1, "2026-08-20T00:00:00.500Z", 500.0, "text", None, "s1")
-    e1 = p.RawCandidate("f1", "event_msg", 2, "2026-08-20T00:00:00.000Z", 0.0, "text", None, "s1")
+    r1 = p.RawCandidate("f1", "response_item", 1, "2026-08-20T00:00:00.500Z", 500.0, "text", None, "s1", None)
+    e1 = p.RawCandidate("f1", "event_msg", 2, "2026-08-20T00:00:00.000Z", 0.0, "text", None, "s1", None)
     out = p.dedup_channel_constrained([r1, e1], threshold_ms=100)
     assert len(out) == 2
 
@@ -258,7 +268,7 @@ def test_unknown_type_pair_is_skipped_and_surfaced(tmp_path):
     lines = [_session_meta("s1"), _unknown_record(), _response_user("正常な発話")]
     path = _write(tmp_path, "unknown.jsonl", lines)
     pf = p.parse_session_file(path)
-    assert pf.unknown_type_pairs[("response_item", "tool_search_call")] == 1
+    assert pf.unknown_type_pairs[("response_item", "totally_unknown_type")] == 1
     assert [c.text for c in pf.candidates] == ["正常な発話"]
 
 
@@ -363,3 +373,218 @@ def test_run_probe_does_not_touch_production_stores():
     after = p.snapshot_production_hashes(paths)
     ok, violations = p.verify_production_unchanged(before, after)
     assert ok is True, violations
+
+
+# ─────────────────────────────────────────────────────────────────
+# Must1: prev_action（ツール呼び出し名の集約）
+# ─────────────────────────────────────────────────────────────────
+def test_prev_action_collects_only_tool_calls_since_last_user_utterance(tmp_path):
+    """壊す不変条件: Must1（prev_action は「直前の human 発話より後・当該発話より前」の
+    tool 呼び出しのみを含む。CC 側 extractor.py の定義と同一）
+    ／通したい検査経路: parse_session_file の pending_tool_names 集約・リセット。
+
+    変異（直前の user 発話より前の tool 呼び出しまで含めてしまう＝リセットしない）を
+    適用すると、2番目の発話の prev_action に "toolA" が二重に混入し本テストが落ちる。
+    """
+    lines = [
+        _session_meta("s1", ts="2026-08-20T00:00:00.000Z"),
+        _response_user("最初の発話", ts="2026-08-20T00:00:01.000Z"),
+        _function_call("toolA", ts="2026-08-20T00:00:02.000Z"),
+        _function_call("toolB", ts="2026-08-20T00:00:03.000Z"),
+        _response_user("2番目の発話", ts="2026-08-20T00:00:04.000Z"),
+        # 3番目: 直前(2番目)以降に tool 呼び出しが無い。reset が効いていれば None、
+        # 効いていなければ toolA/toolB が漏れ出す（mutationA の検出点はここ）。
+        _response_user("3番目の発話", ts="2026-08-20T00:00:05.000Z"),
+    ]
+    path = _write(tmp_path, "prev_action.jsonl", lines)
+    pf = p.parse_session_file(path)
+    by_text = {c.text: c.prev_action for c in pf.candidates}
+    assert by_text["最初の発話"] is None
+    assert by_text["2番目の発話"] == "toolA,toolB"
+    assert by_text["3番目の発話"] is None
+
+
+def test_prev_action_caps_at_ten_with_ellipsis(tmp_path):
+    """壊す不変条件: Must1（上限10・超過時 "…"。CC 側 _format_prev_action と同一整形）
+    ／通したい検査経路: _format_prev_action（extractor.py から re-use、自作しない）。
+    変異（上限チェックを外し ",".join のみにする）を適用すると本テストが落ちる。
+    """
+    lines = [_session_meta("s1", ts="2026-08-20T00:00:00.000Z"),
+              _response_user("発話1", ts="2026-08-20T00:00:01.000Z")]
+    for i in range(12):
+        lines.append(_function_call(f"tool{i}", ts=f"2026-08-20T00:00:0{2 + i % 8}.000Z"))
+    lines.append(_response_user("発話2", ts="2026-08-20T00:01:00.000Z"))
+    path = _write(tmp_path, "prev_action_cap.jsonl", lines)
+    pf = p.parse_session_file(path)
+    by_text = {c.text: c.prev_action for c in pf.candidates}
+    expected = ",".join(f"tool{i}" for i in range(10)) + ",…"
+    assert by_text["発話2"] == expected
+
+
+def test_prev_action_duplicate_channel_reuses_same_snapshot(tmp_path):
+    """壊す不変条件: Must1（response_item/event_msg の重複表現は、どちらが先着でも
+    同じ prev_action を持つ。実測: event_msg が先着するケースが多数派 2185/2772）
+    ／通したい検査経路: parse_session_file の _next_prev_action の text_hash 判定。
+    """
+    dup_text = "重複発話"
+    lines = [
+        _session_meta("s1", ts="2026-08-20T00:00:00.000Z"),
+        _function_call("toolA", ts="2026-08-20T00:00:01.000Z"),
+        _event_user_message(dup_text, ts="2026-08-20T00:00:02.000Z"),  # 先着（多数派パターン）
+        _response_user(dup_text, ts="2026-08-20T00:00:02.010Z"),  # 直後の重複
+    ]
+    path = _write(tmp_path, "dup_channel_prev_action.jsonl", lines)
+    pf = p.parse_session_file(path)
+    assert len(pf.candidates) == 2
+    assert pf.candidates[0].prev_action == "toolA"
+    assert pf.candidates[1].prev_action == "toolA"
+
+
+@pytest.mark.real_home
+def test_prev_action_populated_end_to_end_against_real_data():
+    """陽性対照 + 統合検査: 実データで prev_action が非 None の発話が実在すること
+    （全件 None のまま構造的に歪んでいないこと・Must1 反映確認）。
+    """
+    result = p.run_probe(
+        sessions_root=Path.home() / ".codex" / "sessions",
+        base_date=date(2026, 8, 23),
+        days=14,
+    )
+    non_none = sum(1 for u in result.utterances if u["prev_action"] is not None)
+    assert non_none > 0
+
+
+# ─────────────────────────────────────────────────────────────────
+# Must2: --out-dir 拒否ガード
+# ─────────────────────────────────────────────────────────────────
+def test_validate_out_dir_rejects_claude_home(tmp_path):
+    """壊す不変条件: Must2（~/.claude/ 配下への出力を拒否する）
+    ／通したい検査経路: validate_out_dir。
+    """
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude" / "evolve-anything").mkdir(parents=True)
+    import unittest.mock as mock
+    with mock.patch.object(Path, "home", return_value=fake_home):
+        reason = p.validate_out_dir(fake_home / ".claude" / "evolve-anything" / "pwned")
+    assert reason is not None
+
+
+def test_validate_out_dir_rejects_codex_home(tmp_path):
+    """壊す不変条件: Must2（~/.codex/ 配下への出力を拒否する）。"""
+    fake_home = tmp_path / "home"
+    (fake_home / ".codex").mkdir(parents=True)
+    import unittest.mock as mock
+    with mock.patch.object(Path, "home", return_value=fake_home):
+        reason = p.validate_out_dir(fake_home / ".codex" / "pwned")
+    assert reason is not None
+
+
+def test_validate_out_dir_rejects_repo_root():
+    """壊す不変条件: Must2（リポジトリ作業ディレクトリ配下への出力を拒否する）。"""
+    repo_root = Path(p.__file__).resolve().parent.parent
+    reason = p.validate_out_dir(repo_root / "scripts" / "pwned")
+    assert reason is not None
+
+
+def test_validate_out_dir_accepts_isolated_tmp_dir(tmp_path):
+    """陽性対照: 隔離された一時ディレクトリは拒否されない。"""
+    reason = p.validate_out_dir(tmp_path / "phase1_out")
+    assert reason is None
+
+
+def test_main_exits_nonzero_and_creates_no_files_for_forbidden_out_dir(tmp_path):
+    """壊す不変条件: Must2（起動時に拒否し、禁止ディレクトリ配下へ何も作らない）
+    ／通したい検査経路: main() の validate_out_dir 呼び出し（mkdir より前）。
+    レビュアー提供の再現手順の pytest 版。変異（拒否チェックを外す）を適用すると、
+    exit code が 0 になり、かつ禁止ディレクトリ配下にファイルが生成され本テストが落ちる。
+    """
+    fake_home = tmp_path / "home"
+    sessions_root = fake_home / "sessions"
+    sessions_root.mkdir(parents=True)
+    forbidden = fake_home / ".codex"
+    import unittest.mock as mock
+    with mock.patch.object(Path, "home", return_value=fake_home):
+        rc = p.main([
+            "--sessions-root", str(sessions_root),
+            "--base-date", "2026-08-23",
+            "--out-dir", str(forbidden),
+        ])
+    assert rc != 0
+    assert not forbidden.exists() or list(forbidden.iterdir()) == []
+
+
+# ─────────────────────────────────────────────────────────────────
+# Should: dedup 6則（複数候補群のカバー）
+# ─────────────────────────────────────────────────────────────────
+def _cand(channel, line_no, ts_ms, text, session_id="s1"):
+    return p.RawCandidate("f1", channel, line_no, f"ts{ts_ms}", ts_ms, text, None, session_id, None)
+
+
+def test_dedup_multi_candidate_group_picks_min_delta_with_line_no_tiebreak():
+    """壊す不変条件: X1 マッチング6則（走査順・最小delta・同値時line_no・1:1消費）
+    ／通したい検査経路: dedup_channel_constrained。
+    実データに53群実在する「同一(file,text_hash)で複数候補を持つケース」を模した
+    fixture（複数response_item・複数event_msg・入力順を逆転）で6則を固定する。
+    """
+    # 2つの異なる発話（text_hash が異なる）それぞれに複数候補群を持たせる。
+    # 発話A: response_item(t=100) に対し event_msg 候補が [t=140(delta40,line10), t=90(delta10,line5)]
+    #        → 最小delta(10)の line_no=5 を選ぶ（規則2）
+    # 発話B: response_item(t=500) に対し event_msg 候補が [t=520(delta20,line20), t=480(delta20,line3)]
+    #        → delta 同値(20) → line_no が小さい方(line3)を選ぶ（規則3）
+    candidates = [
+        # 入力順をわざと逆転させる（response_item 側が先とは限らない現実を模す）
+        _cand("event_msg", 10, 140.0, "発話A"),
+        _cand("event_msg", 5, 90.0, "発話A"),
+        _cand("response_item", 1, 100.0, "発話A"),
+        _cand("event_msg", 20, 520.0, "発話B"),
+        _cand("event_msg", 3, 480.0, "発話B"),
+        _cand("response_item", 2, 500.0, "発話B"),
+    ]
+    out = p.dedup_channel_constrained(candidates, threshold_ms=100)
+    # 1:1消費: 発話A・発話Bとも response_item側1件ずつが残り、event_msg側の
+    # 未マッチ1件ずつ（マッチしなかった方）が独立して残る＝各3件中2件がdedupで1件に。
+    assert len(out) == 4  # response_item x2（代表） + 未マッチevent_msg x2
+    resp_out = [c for c in out if c.channel == "response_item"]
+    assert {c.text for c in resp_out} == {"発話A", "発話B"}
+
+    evm_unmatched = [c for c in out if c.channel == "event_msg"]
+    # 発話A: line_no=5(delta10)がマッチ済みで消費される→残るのはline_no=10(delta40)
+    # 発話B: line_no=3(delta20)がマッチ済みで消費される→残るのはline_no=20(delta20)
+    assert {c.line_no for c in evm_unmatched} == {10, 20}
+
+
+def test_dedup_scan_order_is_timestamp_then_line_no_ascending():
+    """壊す不変条件: X1規則1（response_item側は(timestamp,line_no)"昇順"で走査する）
+    ／通したい検査経路: dedup_channel_constrained 内の resp ソート。
+
+    昇順走査が貪欲法の結果に実際に影響する fixture（r1 は eA のみ到達可能・r2 は
+    eA/eB 両方に到達可能で eA を強く優先）を使う。昇順（r1が先着）なら r1 が eA を
+    確保し r2 は eB へフォールバックして両方消費される。降順（r2が先着）なら
+    r2 が eA を奪い r1 は行き場を失い、eB は誰にも消費されず生き残る。
+    """
+    threshold = 1000.0
+    r1 = _cand("response_item", 1, 0.0, "同文言")
+    r2 = _cand("response_item", 2, 100.0, "同文言")
+    eA = _cand("event_msg", 10, 50.0, "同文言")  # delta(r1,eA)=50 / delta(r2,eA)=50
+    eB = _cand("event_msg", 20, 1090.0, "同文言")  # delta(r1,eB)=1090(不可) / delta(r2,eB)=990(可・eAより悪い)
+
+    out = p.dedup_channel_constrained([r1, r2, eA, eB], threshold_ms=threshold)
+    # 昇順(r1→r2)なら r1がeAを確保・r2はeBへフォールバック=両方消費→残るのはresponse_item 2件のみ。
+    assert len(out) == 2
+    assert {c.channel for c in out} == {"response_item"}
+
+
+def test_dedup_one_to_one_consumption_not_shared():
+    """壊す不変条件: X1規則5（マッチした対は双方消費済み＝1:1。同じevent_msg候補を
+    複数のresponse_item候補が使い回さない）
+    ／通したい検査経路: dedup_channel_constrained の matched_evm_ids 消費。
+    """
+    # 同一text_hashのresponse_item候補が2件、event_msg候補は1件のみ。
+    # 1:1なら2件目のresponse_itemは誰にもマッチせず、それぞれ独立して残るため
+    # 最終的にresponse_item2件 + event_msg0件（1件はマッチ消費）= 2件のまま。
+    r1 = _cand("response_item", 1, 100.0, "同文言")
+    r2 = _cand("response_item", 2, 101.0, "同文言")
+    e1 = _cand("event_msg", 3, 100.0, "同文言")
+    out = p.dedup_channel_constrained([r1, r2, e1], threshold_ms=100)
+    assert len(out) == 2
+    assert {c.channel for c in out} == {"response_item"}
