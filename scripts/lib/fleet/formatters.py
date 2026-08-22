@@ -173,7 +173,7 @@ def format_status_json(rows: list[FleetRow]) -> str:
 
 # --- queue サブコマンド（#79）表示 -------------------------------------------
 
-_QUEUE_HEADERS = ["PROJECT", "MATERIAL", "WEAK", "CORR", "LAST_EVOLVE", "REASON"]
+_QUEUE_HEADERS = ["PROJECT", "MATERIAL", "WEAK", "CORR", "BACKLOG", "LAST_EVOLVE", "REASON"]
 
 
 def _append_skipped_dead(lines: list, result: dict) -> None:
@@ -403,6 +403,7 @@ def format_queue_table(result: dict) -> str:
             str(item.get("material_count", 0)),
             str(item.get("weak_unprocessed", 0)),
             str(item.get("new_corrections", 0)),
+            str(item.get("correction_backlog", 0)),
             last_str,
             str(item.get("reason", "")),
         ])

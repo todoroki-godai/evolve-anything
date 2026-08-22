@@ -225,6 +225,24 @@ def test_build_correction_backlog_writes_nothing(tmp_path: Path):
     assert sorted(p.name for p in tmp_path.iterdir()) == before_listing
 
 
+def test_correction_backlog_counts_by_pj_folds_alias_and_filters_invalidated(tmp_path: Path):
+    """#515: queue 用の一括集計も #514 と同じ母集団・alias 契約を使う。"""
+    path = _write_corrections(
+        tmp_path,
+        [
+            _correction(message="旧名", project_path="rl-anything"),
+            _correction(message="現名", project_path="evolve-anything"),
+            _correction(message="除外", project_path="evolve-anything", invalidated=True),
+            _correction(message="別PJ", project_path="amamo"),
+        ],
+    )
+
+    assert cb.correction_backlog_counts_by_pj(corrections_path=path) == {
+        "amamo": 1,
+        "evolve-anything": 2,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────
 # backlog_with_remaining: build_review 統合用（1 回の read で件数対を返す）
 # ─────────────────────────────────────────────────────────────────
