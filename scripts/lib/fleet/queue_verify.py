@@ -387,8 +387,8 @@ def compute_queue_status(
     ``queue_status_reason`` は常に非空の1行で根拠を添える（EMPTY と SETUP_REQUIRED が
     表示だけで見分けられない現状を直すのが目的）。
 
-    ``skipped_dead`` は ``material_count > 0`` のものだけを「処理できない学習素材」として
-    数える（#267 C4）。``build_queue_result`` の dead PJ 分岐は material がゼロでも
+    ``skipped_dead`` は ``material_count > 0`` または ``correction_backlog > 0`` のものだけを
+    「処理できない学習素材」として数える（#267 C4, #515）。``build_queue_result`` の dead PJ 分岐は両方ゼロでも
     ``skipped_dead`` に append するため、無条件で数えると素材ゼロの dead PJ だけで
     SETUP_REQUIRED が誤発火する（本当は EMPTY であるべきケース）。
     """
@@ -399,7 +399,10 @@ def compute_queue_status(
         }
 
     blocking_dead = [
-        d for d in skipped_dead if int(d.get("material_count") or 0) > 0
+        d
+        for d in skipped_dead
+        if int(d.get("material_count") or 0) > 0
+        or int(d.get("correction_backlog") or 0) > 0
     ]
 
     blocked: List[str] = []

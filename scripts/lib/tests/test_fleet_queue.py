@@ -30,7 +30,7 @@ from fleet import queue_state as qs  # noqa: E402
 # --- select_evolve_queue 純関数 ----------------------------------------------
 
 
-def _material(slug, weak=0, corr=0, last=None, subagents=0, sessions=0):
+def _material(slug, weak=0, corr=0, last=None, subagents=0, sessions=0, backlog=0):
     """テスト用の per-PJ material dict を組み立てる。"""
     return {
         "pj_slug": slug,
@@ -38,10 +38,30 @@ def _material(slug, weak=0, corr=0, last=None, subagents=0, sessions=0):
         "new_corrections": corr,
         "last_evolve_at": last,
         "activity_since": {"subagents": subagents, "sessions": sessions},
+        "correction_backlog": backlog,
     }
 
 
 class TestSelectEvolveQueue:
+    def test_below_threshold_with_correction_backlog_is_included(self):
+        """#515: 在庫は1件でも永久滞留させず queue へ載せる。"""
+        mats = [_material("dormant", weak=0, corr=0, backlog=1)]
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["dormant"]
+        assert out[0]["material_count"] == 0
+        assert out[0]["correction_backlog"] == 1
+        assert out[0]["reason"] == "反映待ち在庫 1 件 / material=0 < 5"
+
+    def test_correction_backlog_does_not_change_material_count_or_sort_order(self):
+        """在庫は既存 material_count に足さず、閾値以上の通常候補を先に保つ。"""
+        mats = [
+            _material("dormant", backlog=99),
+            _material("active", weak=5),
+        ]
+        out = fq.select_evolve_queue(mats, threshold=5)
+        assert [m["pj_slug"] for m in out] == ["active", "dormant"]
+        assert [m["material_count"] for m in out] == [5, 0]
+
     def test_threshold_boundary_includes_equal(self):
         """material_count == threshold は待ち（>= 比較）。"""
         mats = [_material("a", weak=3, corr=0)]
@@ -530,6 +550,7 @@ class TestBuildQueueResult:
             "last_evolve_at",
             "activity_since",
             "reason",
+            "correction_backlog",
         }
         assert item["pj_slug"] == "alpha"
         assert item["weak_unprocessed"] == 7
@@ -557,6 +578,27 @@ class TestBuildQueueResult:
         assert result["queue"] == []
         assert result["queue_status"] == "EMPTY"
         assert result["queue_status_reason"]
+
+    def test_promoted_backlog_bypasses_material_threshold(self, tmp_path):
+        """#515 E2E: 前回 evolve より古い promoted 在庫だけでも queue に出る。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        rec = _corr("dormant", "2026-06-01T00:00:00+00:00")
+        rec.update({"reflect_status": "promoted", "invalidated": False})
+        corr.write_text(json.dumps(rec) + "\n")
+        result = fq.build_queue_result(
+            pj_slugs=["dormant"],
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={"dormant": "2026-06-20T00:00:00+00:00"},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert result["queue_status"] == "READY"
+        assert result["queue"][0]["material_count"] == 0
+        assert result["queue"][0]["correction_backlog"] == 1
 
 
 # --- CLI --json 出力 ----------------------------------------------------------
@@ -622,6 +664,7 @@ class TestPjPathsDeadSkip:
                 "project_path": dead_path,
                 "weak_unprocessed": 7,
                 "new_corrections": 0,
+                "correction_backlog": 0,
                 "material_count": 7,
             }
         ]
@@ -719,13 +762,15 @@ class TestRenameRedirect:
             "".join(json.dumps(_ws("gone", key=f"g{i}")) + "\n" for i in range(4))
         )
         corr = tmp_path / "corrections.jsonl"
-        corr.write_text("")
+        backlog = _corr("gone", "2026-06-01T00:00:00+00:00")
+        backlog.update({"reflect_status": "promoted", "invalidated": False})
+        corr.write_text(json.dumps(backlog) + "\n")
         result = fq.build_queue_result(
             pj_slugs=["gone"],
             threshold=3,
             weak_signals_path=ws,
             corrections_path=corr,
-            last_evolve_map={},
+            last_evolve_map={"gone": "2026-06-20T00:00:00+00:00"},
             activity_map={},
             generated_at="2026-06-25T09:00:00Z",
             pj_paths={"gone": dead_path},
@@ -739,7 +784,11 @@ class TestRenameRedirect:
         # 透明化: dead でも material 数を可視化
         assert sd["weak_unprocessed"] == 4
         assert sd["new_corrections"] == 0
+        assert sd["correction_backlog"] == 1
         assert sd["material_count"] == 4
+        assert "gone (backlog 1)" in format_queue_table(
+            _result(skipped=result["skipped_dead"])
+        )
 
     def test_redirect_not_attempted_without_untracked_dir_map(self, tmp_path):
         """untracked_dir_map=None（後方互換）なら redirect せず従来通り skipped_dead。
@@ -1080,6 +1129,53 @@ class TestCollectUntrackedMaterials:
         )
         assert out == []
 
+    def test_promoted_backlog_surfaces_below_threshold_untracked(self, tmp_path):
+        """#515: tracked 外でも promoted 在庫1件なら閾値未満で沈黙しない。"""
+        live = tmp_path / "dormant"
+        live.mkdir()
+        ws, corr = self._stores(tmp_path, [], [])
+        out = fq.collect_untracked_materials(
+            material_slugs=[],
+            tracked_slugs=set(),
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={"dormant": str(live)},
+            correction_backlog_counts={"dormant": 1},
+        )
+        assert out == [
+            {
+                "pj_slug": "dormant",
+                "project_path": str(live),
+                "material_count": 0,
+                "weak_unprocessed": 0,
+                "new_corrections": 0,
+                "correction_backlog": 1,
+            }
+        ]
+
+    def test_promoted_backlog_surfaces_below_threshold_phantom(self, tmp_path):
+        """#515: 実 dir 未解決でも promoted 在庫1件を phantom として透明化する。"""
+        ws, corr = self._stores(tmp_path, [], [])
+        out = fq.collect_phantom_materials(
+            material_slugs=[],
+            tracked_slugs=set(),
+            threshold=5,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            dir_map={},
+            correction_backlog_counts={"ghost": 1},
+        )
+        assert out == [
+            {
+                "pj_slug": "ghost",
+                "material_count": 0,
+                "weak_unprocessed": 0,
+                "new_corrections": 0,
+                "correction_backlog": 1,
+            }
+        ]
+
     def test_legacy_slug_folds_into_tracked_and_excluded(self, tmp_path):
         """canonical fold で旧 slug rl-anything が現 slug evolve-anything の tracked に畳まれ除外。"""
         live = tmp_path / "evolve-anything"
@@ -1231,6 +1327,17 @@ class TestFormatQueueTableColdstart:
         assert "velocity" in out
         assert "増分のみ" in out
 
+    def test_backlog_header_and_cell_are_rendered(self):
+        """#515 review: JSON 配線だけでなく人間向け BACKLOG 列も固定する。"""
+        q = [self._q("dormant", "2026-06-01T00:00:00+00:00")]
+        q[0]["correction_backlog"] = 29
+        out = format_queue_table(_result(queue=q))
+        header, separator, row = out.splitlines()[:3]
+        assert "NEW_CORR" in header
+        assert "BACKLOG" in header
+        assert separator
+        assert "29" in row
+
     def test_coldstart_silent_when_any_drained(self):
         """1 件でも drain 済（last_evolve_at あり）なら混在ノイズなので出さない。"""
         q = [self._q("a", None), self._q("b", "2026-06-01T00:00:00+00:00")]
@@ -1275,6 +1382,18 @@ class TestFormatQueueTableUntracked:
         assert "amamo (material 64)" in out
         assert "foo (material 9)" in out
         assert "evolve-fleet discover" in out
+
+    def test_untracked_backlog_is_visible(self):
+        um = [
+            {
+                "pj_slug": "dormant",
+                "material_count": 0,
+                "correction_backlog": 1,
+                "project_path": "/p/dormant",
+            }
+        ]
+        out = format_queue_table(_result(queue=[], untracked=um))
+        assert "dormant (material 0, backlog 1)" in out
 
     def test_untracked_silent_when_empty(self):
         """untracked が空なら advisory 行を出さない。"""
@@ -1332,6 +1451,11 @@ class TestFormatQueueTableUnattributed:
 
 
 class TestFormatQueueTablePhantom:
+    def test_phantom_backlog_is_visible(self):
+        ph = [{"pj_slug": "ghost", "material_count": 0, "correction_backlog": 1}]
+        out = format_queue_table(_result(queue=[], phantom=ph))
+        assert "ghost (material 0, backlog 1)" in out
+
     def test_phantom_line_when_nonempty(self):
         """skipped_phantom が非空なら footer に phantom 透明化 1 行を出す（#88）。"""
         ph = [{"pj_slug": "tmpdcm8avo8", "material_count": 5}]
@@ -1630,10 +1754,34 @@ class TestBuildQueueResultVerifyIntegration:
                 "project_path": str(tmp_path / "does-not-exist"),
                 "weak_unprocessed": 0,
                 "new_corrections": 0,
+                "correction_backlog": 0,
                 "material_count": 0,
             }
         ]
         assert result["queue_status"] == "EMPTY"
+
+    def test_dead_pj_backlog_only_is_setup_required(self, tmp_path):
+        """#515: dead PJ の promoted 在庫だけでも朝通知対象の blocked 状態にする。"""
+        result = self._build(
+            tmp_path,
+            pj_slugs=["ghost"],
+            threshold=5,
+            pj_paths={"ghost": str(tmp_path / "does-not-exist")},
+            last_evolve_map={"ghost": "2026-08-02T00:00:00+00:00"},
+            corr=[
+                {
+                    "project_path": "ghost",
+                    "timestamp": "2026-08-01T00:00:00+00:00",
+                    "session_id": "s1",
+                    "reflect_status": "promoted",
+                    "invalidated": False,
+                }
+            ],
+        )
+        assert result["skipped_dead"][0]["material_count"] == 0
+        assert result["skipped_dead"][0]["correction_backlog"] == 1
+        assert result["queue_status"] == "SETUP_REQUIRED"
+        assert "skipped_dead 1 件" in result["queue_status_reason"]
 
     def test_unattributed_correction_31_days_old_does_not_trigger_setup_required(
         self, tmp_path

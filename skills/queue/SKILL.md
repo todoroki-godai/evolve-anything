@@ -38,6 +38,11 @@ evolve-fleet queue          # ユーザーが --threshold N を渡したら付�
 
 `material_count = weak_unprocessed`（未昇格・未 expired・content-rich channel の weak_signals）`+
 new_corrections`（前回 evolve 以降の新規 corrections）。これが threshold（既定 5）以上の PJ が「待ち」。
+加えて `correction_backlog`（昇格済み・反映先未定）が1件以上ある PJ は、material が閾値未満でも
+休眠在庫を永久滞留させないため「待ち」に含める（#515）。在庫は `material_count` に足さず、表の
+`BACKLOG` 列と `REASON` で別表示するため、既存の material 順位は変わらない。
+`NEW_CORR` と `BACKLOG` は重複し得る集合なので合算しない（`NEW_CORR` は前回 evolve 以降、
+`BACKLOG` は promoted かつ未反映という別軸の状態）。
 bootstrap phase で破棄/TTL 任せと判断済み（`bootstrap_done-<slug>.marker` 設置以前に検出）の weak は
 material から除外される（#94）。content-poor channel（esc/手編集＝昇格手段なし）も material に数えず
 footer + `--json` の `weak_content_poor` で透明化される（#113）。`WEAK` 列は content-rich 未処理のみ＝

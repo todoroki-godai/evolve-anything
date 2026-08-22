@@ -22,6 +22,7 @@ slug 突合は自作しない（設計指定・#514）: corrections の ``projec
 """
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -76,18 +77,11 @@ def _format_backlog_item(rec: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _eligible_backlog_records(
-    pj_slug: str,
+def _read_eligible_backlog_records(
     corrections_path: Optional[Path],
 ) -> List[Dict[str, Any]]:
-    """当該 PJ の有効な在庫（promoted かつ invalidated でない）を timestamp 昇順で返す。
-
-    ``build_correction_backlog`` / ``backlog_with_remaining`` 共通の読み取り本体
-    （フォーマット前・件数計算用に未整形のまま渡す）。
-    """
+    """全 PJ の有効な在庫を1回の store read で返す。"""
     import json
-
-    from fleet.queue_materials import _correction_slug
 
     path = Path(corrections_path) if corrections_path is not None else _default_corrections_path()
     if not path.exists():
@@ -112,15 +106,47 @@ def _eligible_backlog_records(
             continue
         if rec.get("invalidated"):
             continue
-        slug = _correction_slug(rec.get("project_path"))
-        if not _pj_slug_match(slug, pj_slug):
-            continue
         out.append(rec)
+
+    return out
+
+
+def _eligible_backlog_records(
+    pj_slug: str,
+    corrections_path: Optional[Path],
+) -> List[Dict[str, Any]]:
+    """当該 PJ の有効な在庫（promoted かつ invalidated でない）を timestamp 昇順で返す。
+
+    ``build_correction_backlog`` / ``backlog_with_remaining`` 共通の読み取り本体
+    （フォーマット前・件数計算用に未整形のまま渡す）。
+    """
+    from fleet.queue_materials import _correction_slug
+
+    out = [
+        rec
+        for rec in _read_eligible_backlog_records(corrections_path)
+        if _pj_slug_match(_correction_slug(rec.get("project_path")), pj_slug)
+    ]
 
     # timestamp 欠落/パース不能は末尾（epoch 扱い）に送る。全欠落でも例外にしない。
     epoch = datetime.min.replace(tzinfo=timezone.utc)
     out.sort(key=lambda r: _parse_ts(r.get("timestamp")) or epoch)
     return out
+
+
+def correction_backlog_counts_by_pj(
+    *, corrections_path: Optional[Path] = None
+) -> Dict[str, int]:
+    """有効な修正在庫を canonical PJ slug 別に1回の read で集計する（#515）。"""
+    from fleet.queue_materials import _correction_slug
+    from pj_slug import canonical_pj_slug
+
+    counts: Counter[str] = Counter()
+    for rec in _read_eligible_backlog_records(corrections_path):
+        slug = canonical_pj_slug(_correction_slug(rec.get("project_path")))
+        if slug:
+            counts[str(slug)] += 1
+    return dict(sorted(counts.items()))
 
 
 def build_correction_backlog(

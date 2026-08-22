@@ -254,6 +254,21 @@ def test_notice_empty_queue_is_silent():
     assert qn.build_queue_notice(EMPTY_QUEUE, now=now) is None
 
 
+def test_notice_setup_required_is_not_silent_when_queue_empty():
+    """#515: dead PJ の backlog-only blocked 状態も朝の導線へ載せる。"""
+    now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    blocked = {
+        **EMPTY_QUEUE,
+        "queue_status": "SETUP_REQUIRED",
+        "queue_status_reason": "待ち PJ は0件ですが処理できない学習素材があります: skipped_dead 1 件",
+    }
+    msg = qn.build_queue_notice(blocked, now=now)
+    assert msg is not None
+    assert "設定確認が必要" in msg
+    assert "skipped_dead 1 件" in msg
+    assert "bin/evolve-fleet queue" in msg
+
+
 def test_notice_none_input_is_silent():
     now = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
     assert qn.build_queue_notice(None, now=now) is None

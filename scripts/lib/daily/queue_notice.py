@@ -107,6 +107,12 @@ def build_queue_notice(
 
     queue = queue_data.get("queue") or []
     if not queue:
+        if queue_data.get("queue_status") == "SETUP_REQUIRED":
+            reason = str(queue_data.get("queue_status_reason") or "処理できない学習素材があります")
+            return (
+                f"[evolve-anything] evolve queue の設定確認が必要です: {reason}。"
+                "`bin/evolve-fleet queue` で詳細を確認してください。"
+            )
         return None
 
     slugs = [item.get("pj_slug", "?") for item in queue if isinstance(item, dict)]

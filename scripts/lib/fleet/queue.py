@@ -7,6 +7,8 @@
   material_count = weak_unprocessed（未昇格・未expired・**content-rich** channel の weak_signals）
                  + new_corrections（前回 evolve 以降の新規 corrections）
   material_count >= threshold の PJ を待ちとする。
+  ただし correction_backlog（昇格済み・反映先未定）が1件以上ある PJ は、閾値未満でも
+  待ちへ含める（#515）。在庫は material_count へ加算せず、既存の速度指標を保つ。
   content-poor channel（REVIEW_CHANNELS 外・昇格不能）は material に載せず footer で透明化（#113）。
 
 補助シグナル（フィルタには使わず列挙理由に併記）:
@@ -92,7 +94,7 @@ def select_evolve_queue(
     """per-PJ material リストから material_count >= threshold の待ち PJ を返す。
 
     各 material dict は ``{pj_slug, weak_unprocessed, new_corrections,
-    last_evolve_at, activity_since}`` を持つ。material_count = weak + corr を算出し、
+    correction_backlog, last_evolve_at, activity_since}`` を持つ。material_count = weak + corr を算出し、
     閾値以上のものを material_count 降順（同数は pj_slug 昇順）で返す。各要素に
     ``material_count`` / ``reason`` を付与する。純関数（store I/O なし・テスト容易）。
 
@@ -109,6 +111,10 @@ def select_evolve_queue(
     material_count 降順のまま変えない（verify 昇格 item は定義上 material_count が低いので
     自然に下位へ並ぶ — 「まだ実行してよい」の目印であり緊急度の逆転を意味しないため、
     特別扱いの並び替えはしない）。
+
+    #515: ``correction_backlog > 0`` も閾値未満からの昇格条件にする。在庫は既に promoted
+    なので新規 material ではなく、``material_count`` へ足さない。これにより通常候補の順位を
+    保ったまま休眠 PJ を末尾へ可視化する。
     """
     from .queue_verify import (
         STATUS_NONE,
@@ -121,16 +127,22 @@ def select_evolve_queue(
         weak = int(m.get("weak_unprocessed", 0) or 0)
         corr = int(m.get("new_corrections", 0) or 0)
         count = weak + corr
+        correction_backlog = int(m.get("correction_backlog", 0) or 0)
         verify_pending = m.get("verify_pending")
         vp_status = (verify_pending or {}).get("status", STATUS_NONE)
         verify_promoted = count < threshold and vp_status != STATUS_NONE
-        if count < threshold and not verify_promoted:
+        backlog_promoted = count < threshold and correction_backlog > 0
+        if count < threshold and not verify_promoted and not backlog_promoted:
             continue
         last_evolve = m.get("last_evolve_at")
         if verify_promoted:
             reason = format_verify_pending_promoted_reason(
                 verify_pending, material_count=count, threshold=threshold
             )
+            if correction_backlog:
+                reason += f" / 反映待ち在庫 {correction_backlog} 件"
+        elif backlog_promoted:
+            reason = f"反映待ち在庫 {correction_backlog} 件 / material={count} < {threshold}"
         else:
             # #92→A: 初回（last_evolve_at=None）は corr が「前回 evolve 以降の増分」でなく
             # 全件。『new corr』だと never と矛盾して見える。`未 drain` は emit→drain 2 相の
@@ -141,6 +153,8 @@ def select_evolve_queue(
             else:
                 reason = f"weak={weak} + new corr={corr} >= {threshold}"
             reason += format_verify_pending_suffix(verify_pending)
+            if correction_backlog:
+                reason += f" / 反映待ち在庫 {correction_backlog} 件"
         selected.append(
             {
                 "pj_slug": m["pj_slug"],
@@ -148,6 +162,7 @@ def select_evolve_queue(
                 "material_count": count,
                 "weak_unprocessed": weak,
                 "new_corrections": corr,
+                "correction_backlog": correction_backlog,
                 "last_evolve_at": last_evolve,
                 "activity_since": m.get("activity_since", {"subagents": 0, "sessions": 0}),
                 "reason": reason,
@@ -180,7 +195,8 @@ def build_queue_result(
       {generated_at, threshold, tracked_total, queue_status, queue_status_reason,
        skipped_dead, untracked_with_material,
        queue: [{pj_slug, project_path, material_count, weak_unprocessed,
-       new_corrections, last_evolve_at, activity_since, reason, verify_pending}]}
+       new_corrections, correction_backlog, last_evolve_at, activity_since, reason,
+       verify_pending}]}
 
     ``queue_status``（READY/SETUP_REQUIRED/EMPTY）+ ``queue_status_reason``（1行）は
     queue が空のとき「本当に素材が無い」か「素材はあるのに処理できていない」かを区別する
@@ -216,6 +232,11 @@ def build_queue_result(
     redirect_map = untracked_dir_map or {}
     materials: List[Dict[str, Any]] = []
     skipped_dead: List[Dict[str, Any]] = []
+    from correction_semantic.correction_backlog import correction_backlog_counts_by_pj
+
+    correction_backlog_counts = correction_backlog_counts_by_pj(
+        corrections_path=corrections_path
+    )
     for slug in pj_slugs:
         path = paths.get(slug)
         if path is not None and not Path(path).is_dir():
@@ -238,6 +259,7 @@ def build_queue_result(
                         "new_corrections": new_corrections_by_pj(
                             canon, last_evolve_at=last, corrections_path=corrections_path
                         ),
+                        "correction_backlog": correction_backlog_counts.get(canon, 0),
                         "last_evolve_at": last,
                         "activity_since": act,
                     }
@@ -250,12 +272,14 @@ def build_queue_result(
                 last_evolve_at=last_evolve_map.get(slug),
                 corrections_path=corrections_path,
             )
+            d_backlog = correction_backlog_counts.get(_canonical_slug(slug), 0)
             skipped_dead.append(
                 {
                     "pj_slug": slug,
                     "project_path": path,
                     "weak_unprocessed": d_weak,
                     "new_corrections": d_corr,
+                    "correction_backlog": d_backlog,
                     "material_count": d_weak + d_corr,
                 }
             )
@@ -270,6 +294,9 @@ def build_queue_result(
                 ),
                 "new_corrections": new_corrections_by_pj(
                     slug, last_evolve_at=last, corrections_path=corrections_path
+                ),
+                "correction_backlog": correction_backlog_counts.get(
+                    _canonical_slug(slug), 0
                 ),
                 "last_evolve_at": last,
                 "activity_since": activity_map.get(slug, {"subagents": 0, "sessions": 0}),
@@ -298,6 +325,7 @@ def build_queue_result(
             weak_signals_path=weak_signals_path,
             corrections_path=corrections_path,
             dir_map=untracked_dir_map,
+            correction_backlog_counts=correction_backlog_counts,
         )
         phantom = collect_phantom_materials(
             material_slugs=material_slugs,
@@ -306,6 +334,7 @@ def build_queue_result(
             weak_signals_path=weak_signals_path,
             corrections_path=corrections_path,
             dir_map=untracked_dir_map,
+            correction_backlog_counts=correction_backlog_counts,
         )
     else:
         untracked = []
