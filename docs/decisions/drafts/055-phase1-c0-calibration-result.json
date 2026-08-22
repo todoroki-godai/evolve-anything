@@ -1,0 +1,91 @@
+{
+  "adr": "055",
+  "denominator_semantics": {
+    "excluded_from_denominator": {
+      "assistant_only_skipped": 0,
+      "call_failed_batches": 0,
+      "excluded_before_cutoff_total": 0,
+      "excluded_untracked_total": 32,
+      "omitted_verdicts": 0,
+      "parse_failed_batches": 0,
+      "skipped_batches": 0
+    },
+    "input_utterances": 259,
+    "judged_denominator": 227
+  },
+  "execution": {
+    "daily_token_limit_used": 200000,
+    "daily_utterance_limit_used": 300,
+    "idioms_path": "/private/tmp/claude-501/-Users-matsukaze-takashi-matsukaze-utils-evolve-anything/edc46b5d-a0ae-4e3d-a7bf-414634744787/scratchpad/c0_work/correction_idioms.jsonl",
+    "judged_path": "/private/tmp/claude-501/-Users-matsukaze-takashi-matsukaze-utils-evolve-anything/edc46b5d-a0ae-4e3d-a7bf-414634744787/scratchpad/c0_work/correction_judged.jsonl",
+    "model": "haiku",
+    "pre_estimate_tokens": 174563,
+    "run": true,
+    "utterances_input": 259,
+    "weak_signals_path": "/private/tmp/claude-501/-Users-matsukaze-takashi-matsukaze-utils-evolve-anything/edc46b5d-a0ae-4e3d-a7bf-414634744787/scratchpad/c0_work/weak_signals.jsonl"
+  },
+  "measurement": {
+    "actual_reserved_tokens": 133933,
+    "actual_vs_estimate_note": "pre_estimate_tokens(174563)は259件全体の見積。実際に判定されたのはtracked filterで227件(worktree由来pj_slug 32件はuntrackedとして除外)。227件に対する実消費（reserve_batch_cost合計）は133933トークンで、推定を下回り2倍超過なし。",
+    "call_failed": 0,
+    "corrections": 0,
+    "denominator": 227,
+    "hit_rate": 0.0,
+    "non_corrections": 227,
+    "omitted_verdicts": 0,
+    "parse_failed_batches": 0,
+    "requested_batches": 227,
+    "reserved_batches": 8,
+    "responded_batches": 8,
+    "skipped_batches": 0
+  },
+  "note": "裁定Bにより本結果は移行前ベースラインの記録であり、Go/No-Goは確定させない",
+  "phase": "Phase1-C0",
+  "positives": [],
+  "production_store_guard": {
+    "data_dir_file_count_after": 693,
+    "data_dir_file_count_before": 693,
+    "ok": true,
+    "violations": []
+  },
+  "raw_result": {
+    "assistant_only_skipped": 0,
+    "call_failed": 0,
+    "capped": false,
+    "corrections": 0,
+    "dry_run": false,
+    "excluded_before_cutoff_total": 0,
+    "excluded_untracked_by_pj": {
+      "version-up": 3,
+      "wt-054-pr1": 1,
+      "wt-054-pr2": 3,
+      "wt-054-pr2b": 1,
+      "wt-054-pr3": 1,
+      "wt-267s": 1,
+      "wt-369": 2,
+      "wt-383": 1,
+      "wt-402a": 1,
+      "wt-415": 11,
+      "wt-445": 2,
+      "wt-446": 3,
+      "wt-467s0": 2
+    },
+    "excluded_untracked_total": 32,
+    "idioms_written": 0,
+    "judged_written": 227,
+    "non_corrections": 227,
+    "omitted_verdicts": 0,
+    "out_of_range_verdicts": 0,
+    "parse_failed_batches": 0,
+    "requested": 227,
+    "reserved_batches": 8,
+    "responded": 8,
+    "selected": 227,
+    "skipped_batches": 0,
+    "skipped_locked": false,
+    "source_error": null,
+    "source_failed": false,
+    "unjudged_total": 227,
+    "weak_written": 0
+  }
+}
