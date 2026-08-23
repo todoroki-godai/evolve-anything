@@ -147,6 +147,17 @@ _INDEPENDENT_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
     ("﻿  \n<skill>evolve</skill>", False),  # BOM・空白混入後の機構タグ
     ("", True),  # 空文字は機構でない
     ("<recommended_plugins", True),  # 閉じ `>` が無く head_tag 相当は不成立
+    # #536 round4 codex Must: 全角空白（U+3000）は strip_leading_noise の対象文字集合
+    # （"﻿ \t\n\r　"）に含まれる表現差クラス。ASCII 空白・BOM・改行だけの fixture
+    # では、全角空白 strip 対応を削る変異（変異1）を検出できない。
+    ("　<skill>evolve</skill>", False),  # 全角空白のみ先頭に混入した機構タグ
+    ("　\n<recommended_plugins>\n一覧です", False),  # 全角空白+改行の複合
+    # #536 round4 codex Must: head_tag は `<tag ...>` の inner を空白分割し先頭語を
+    # タグ名とする（属性付きタグにも対応する契約）。属性なしタグしか無い fixture
+    # では、この分割対応を削る変異（変異2）を検出できない。
+    ('<skill name="evolve">x</skill>', False),  # 属性付き機構タグ（9種のうち1つを代表）
+    ('<command-name value="ls">x</command-name>', False),  # 属性付き・両チャネル共通マーカー
+    ('<not_a_marker attr="x">本文</not_a_marker>', True),  # 属性付きだが機構マーカーでない（陽性対照）
 ]
 
 
@@ -194,6 +205,45 @@ def test_marker_like_text_not_at_head_is_not_excluded():
     """陽性対照: 先頭以外に marker 文字列を含む本文（意味を変えない差分）は除外されない。"""
     text = "普通の発話です。<recommended_plugins> という単語だけ本文中に出てくる。"
     assert p.is_machinery_text(text) is False
+
+
+# I4（#536 round4 codex Must）: 除外結果は入力チャネルに依存しない。
+# ADR（docs/decisions/drafts/055-codex-rollout-ingest.md:281-283）は
+# command-name / local-command-stdout / command-message の3種を
+# response_item / event_msg 両チャネル共通と実測している。人手ラベル済み
+# fixture が全件 channel="response_item" 固定だと、event_msg チャネルだけを
+# 無条件生存させる（あるいはその逆）配線の欠陥を検出できない。
+_CHANNEL_INDEPENDENT_FIXTURE: List[Tuple[str, str, bool]] = [
+    ("<command-name>ls</command-name>", "response_item", False),
+    ("<command-name>ls</command-name>", "event_msg", False),
+    ("<local-command-stdout>...</local-command-stdout>", "response_item", False),
+    ("<local-command-stdout>...</local-command-stdout>", "event_msg", False),
+    ("<command-message>...</command-message>", "response_item", False),
+    ("<command-message>...</command-message>", "event_msg", False),
+    ("普通の発話です。", "response_item", True),
+    ("普通の発話です。", "event_msg", True),
+]
+
+
+def test_filter_machinery_is_channel_independent():
+    """壊す不変条件: I4（除外結果は入力チャネルに依存しない）
+    ／通したい検査経路: filter_machinery（is_machinery_text はテキストのみを見て
+    判定し channel を参照しないという設計契約）。
+    変異（filter_machinery を channel=="event_msg" のときだけ無条件生存させる等）
+    を適用すると、同一マーカーが片方のチャネルでのみ生存し本テストが落ちる。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel=channel, line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, channel, _expected) in enumerate(_CHANNEL_INDEPENDENT_FIXTURE)
+    ]
+    expected_survivors = [
+        (text, channel) for text, channel, expected in _CHANNEL_INDEPENDENT_FIXTURE if expected
+    ]
+    actual_survivors = [(c.text, c.channel) for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
 
 
 # ─────────────────────────────────────────────────────────────────

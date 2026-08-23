@@ -28,6 +28,12 @@
   を一切参照しない独立実装（`_ORACLE_MACHINERY_MARKERS`／`_oracle_is_machinery_text`）を
   追加してオラクルをこちらへ切替え、テスト側にも実装定数から一切 import しないリテラル
   マーカー集合と、人手でラベル付けした「入力テキスト→期待生存可否」fixture を追加した。
+- **fix(probe): 機構マーカー除外の人手 fixture に不足していた入力クラスを追加（#536 round4）** —
+  round3 の独立オラクル自体は正しかったが、人手ラベル fixture が全角空白（U+3000）・属性付き
+  タグ（`<skill name="evolve">`）・`event_msg` チャネルを一切カバーしておらず、これらの表現差
+  に対応するコードを実装とオラクル双方から同時に削る変異が検出不能だった。fixture へ該当
+  入力クラスを追加し、チャネル非依存性（I4: `command-name`/`local-command-stdout`/
+  `command-message` は両チャネル共通というADR実測に基づく）を検査する新規テストを追加した。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの
