@@ -534,6 +534,12 @@ def _collect_material_slugs(
     ``queue._correction_slug``（per-PJ reader と同一正規化）で bare slug 化する。空文字は
     除外。dedup は呼び側（``collect_untracked_materials`` が canonical fold 後に行う）。
     読み取り専用・例外は握りつぶして空寄りに倒す（advisory のため落とさない）。
+
+    corrections 側の read は ``fleet.queue_materials.read_corrections_records_with_health``
+    （queue read health の単一ソース）経由にする（#538 round2 [Must]2 — 独自の
+    ``read_text``/``json.loads`` 直読みは ``OSError`` を空文字列に、壊れた行を無言 skip に
+    倒しており、``build_queue_result`` 側の read health probe と食い違う silent-fail 経路
+    だった。health 自体は advisory 集計のため呼び側では使わず、レコードのみ利用する）。
     """
     slugs: list[str] = []
     try:
@@ -547,24 +553,13 @@ def _collect_material_slugs(
                 slugs.append(s)
     except Exception:
         pass
-    if corrections_path.exists():
-        try:
-            text = corrections_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            text = ""
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = _json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(rec, dict):
-                continue
-            s = correction_slug(rec.get("project_path"))
-            if s:
-                slugs.append(s)
+    from .queue_materials import read_corrections_records_with_health
+
+    records, _health = read_corrections_records_with_health(corrections_path)
+    for rec in records:
+        s = correction_slug(rec.get("project_path"))
+        if s:
+            slugs.append(s)
     return slugs
 
 

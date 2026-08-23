@@ -11,6 +11,14 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(queue): corrections.jsonl の read health を probe と集計で同一スナップショットに統一（#533 round2）** —
+  `build_queue_result` が corrections.jsonl を1回だけ read し、`(records, health)` を
+  backlog counts / weak+corr（各 PJ） / unattributed corrections の全下流集計へ配線した
+  （従来は probe とそれぞれの集計が独立に re-read しており、health と集計結果が食い違う
+  スナップショット不一致を起こし得た）。`fleet.cli._collect_material_slugs` の独自
+  `read_text`/`json.loads` 直読みを共有 reader へ統一。不正 UTF-8 は `errors="replace"` による
+  静かな丸めをやめ、行単位で strict decode し malformed 行として計上。dangling symlink は
+  「正常な空在庫」でなく読取劣化として区別するようにした。
 - **fix(queue): corrections.jsonl の読取失敗を在庫ゼロと区別して可視化（#533）** —
   `correction_semantic.correction_backlog` / `fleet.queue_materials.new_corrections_by_pj` /
   `count_unattributed_corrections` が独立に行っていた「ファイル不在→空・`OSError`→空・

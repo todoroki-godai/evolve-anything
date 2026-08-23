@@ -467,7 +467,7 @@ class TestReadCorrectionsRecordsWithHealth:
         def _raise(*_args, **_kwargs):
             raise OSError("Permission denied")
 
-        monkeypatch.setattr(Path, "read_text", _raise)
+        monkeypatch.setattr(Path, "read_bytes", _raise)
         records, health = fq.read_corrections_records_with_health(store)
         assert records == []
         assert health["readable"] is False
@@ -495,6 +495,48 @@ class TestReadCorrectionsRecordsWithHealth:
             "error": None,
             "malformed_lines": 1,
         }
+
+    def test_invalid_utf8_bytes_counted_as_malformed_not_silently_replaced(self, tmp_path):
+        """#538 round2 [Must]3: 不正 UTF-8 は置換文字で偶然 JSON parse に成功させず malformed 扱いにする。
+
+        従来の ``errors="replace"`` decode だと不正バイトが U+FFFD へ丸められ、
+        ``alp\\xffha`` が ``alp�ha`` として JSON parse に成功し readable=true,
+        malformed_lines=0 の健全表示になっていた（issue #538 round2 レビュー指摘）。
+        """
+        store = tmp_path / "corrections.jsonl"
+        healthy_line = json.dumps(_corr("alpha", "2026-06-01T00:00:00+00:00")).encode("utf-8")
+        broken_line = b'{"project_path":"alp\xffha","timestamp":"t","message":"x"}'
+        store.write_bytes(healthy_line + b"\n" + broken_line + b"\n")
+
+        records, health = fq.read_corrections_records_with_health(store)
+
+        assert len(records) == 1
+        assert records[0]["project_path"] == "alpha"
+        assert health["readable"] is True
+        assert health["malformed_lines"] == 1
+
+    def test_dangling_symlink_is_degraded_not_normal_empty(self, tmp_path):
+        """#538 round2 [Must]4: リンク切れ symlink は「正常な空在庫」と区別する。
+
+        ``Path.exists()`` は dangling symlink に対して False を返すため、素通しすると
+        真の未作成（正常な空）と同じ扱いになり readable=true のまま EMPTY を返してしまう。
+        """
+        target = tmp_path / "does-not-exist.jsonl"
+        link = tmp_path / "corrections.jsonl"
+        link.symlink_to(target)
+
+        records, health = fq.read_corrections_records_with_health(link)
+
+        assert records == []
+        assert health["readable"] is False
+        assert health["error"]
+
+    def test_real_missing_file_stays_normal_empty(self, tmp_path):
+        """陽性対照: symlink でない真の未作成ファイルは従来通り正常な空在庫のまま。"""
+        store = tmp_path / "corrections.jsonl"  # 未作成・symlink でもない
+        records, health = fq.read_corrections_records_with_health(store)
+        assert records == []
+        assert health == {"readable": True, "error": None, "malformed_lines": 0}
 
 
 class TestQueueState:
@@ -743,6 +785,54 @@ class TestBuildQueueResult:
         assert result["corrections_read_health"]["readable"] is True
         assert result["corrections_read_health"]["malformed_lines"] == 0
 
+    def test_corrections_jsonl_read_exactly_once_across_multiple_pjs(self, tmp_path, monkeypatch):
+        """#538 round2 [Must]1: 複数 PJ・複数集計にまたがっても corrections.jsonl の read は1回だけ。
+
+        probe（health）と各集計（backlog counts / weak+corr ×N PJ / unattributed）が別読みだと、
+        probe 成功後に read が失敗する（逆も同様）ケースで health が「正常」なのに集計結果だけ
+        劣化を反映しない、または劣化が無いのに劣化扱いになる silent スナップショット不一致が
+        起きる。1回の read 結果を全下流へ配線したことを call 回数で証明する。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(
+            "".join(
+                json.dumps(_corr(slug, "2026-06-01T00:00:00+00:00")) + "\n"
+                for slug in ("alpha", "beta", "gamma")
+            )
+        )
+
+        # 各下流集計（new_corrections_by_pj / count_unattributed_corrections /
+        # correction_backlog_counts_by_pj）はいずれも読取本体を定義元 ``fleet.queue_materials``
+        # の module-level 名前として bare 呼び出しする一方、``build_queue_result`` 自身は
+        # re-export された ``fleet.queue`` 側の束縛を直接呼ぶ。どちらか片方だけ差し替えると
+        # もう片方の呼び出し回数を見落とすため、両方の属性を同じ spy へ差し替えて合算する。
+        from fleet import queue_materials as qm
+
+        real_reader = qm.read_corrections_records_with_health
+        calls = []
+
+        def _counting_reader(path):
+            calls.append(path)
+            return real_reader(path)
+
+        monkeypatch.setattr(qm, "read_corrections_records_with_health", _counting_reader)
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _counting_reader)
+
+        result = fq.build_queue_result(
+            pj_slugs=["alpha", "beta", "gamma"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+
+        assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
+        assert {item["pj_slug"] for item in result["queue"]} == {"alpha", "beta", "gamma"}
+
 
 # --- CLI --json 出力 ----------------------------------------------------------
 
@@ -776,6 +866,177 @@ class TestQueueCli:
         assert data["threshold"] == 3
         assert data["queue"][0]["pj_slug"] == "alpha"
         assert data["queue"][0]["material_count"] == 4
+        # #538 round2 [Must]5 変更1: corrections_read_health が JSON 出力前に落とされていないこと
+        # を検査する（旧テストは threshold と queue しか見ておらず、この key の欠落を検出できなかった）。
+        assert data["corrections_read_health"] == {
+            "readable": True,
+            "error": None,
+            "malformed_lines": 0,
+        }
+
+    def test_json_flag_surfaces_degraded_corrections_read_health(self, tmp_path, monkeypatch, capsys):
+        """#538 round2 [Must]5 変更1: 劣化状態でも corrections_read_health が JSON に残ること。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("{not valid json\n")
+
+        from fleet import cli as fcli
+
+        def _fake_gather(args):
+            return fq.build_queue_result(
+                pj_slugs=["quiet"],
+                threshold=args.threshold,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+            )
+
+        monkeypatch.setattr(fcli, "_gather_queue_result", _fake_gather)
+
+        rc = fcli.main(["queue", "--json", "--threshold", "3"])
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["corrections_read_health"]["readable"] is True
+        assert data["corrections_read_health"]["malformed_lines"] == 1
+        assert data["queue_status"] == "SETUP_REQUIRED"
+
+    def test_non_json_output_stays_silent_when_healthy(self, tmp_path, monkeypatch, capsys):
+        """#538 round2 [Must]5 変更2: 非 JSON（人間向けテーブル）E2E。健全時は corrections.jsonl 注記を出さない。
+
+        formatter 単体テスト（``TestFormatQueueTableCorrectionsReadHealth``）は
+        ``format_queue_table`` を直接呼ぶため、CLI 層（``_run_queue``）が formatter を経由せず
+        常時 health 行を追加するような配線ミスは検出できない。ここでは実際に
+        ``fcli.main(["queue"])`` を呼び、標準出力の実文字列で検査する（陽性対照）。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(_ws("alpha", key=f"a{i}")) + "\n" for i in range(4)))
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+
+        from fleet import cli as fcli
+
+        def _fake_gather(args):
+            return fq.build_queue_result(
+                pj_slugs=["alpha"],
+                threshold=args.threshold,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+            )
+
+        monkeypatch.setattr(fcli, "_gather_queue_result", _fake_gather)
+
+        rc = fcli.main(["queue", "--threshold", "3"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "corrections.jsonl" not in out
+
+    def test_non_json_output_surfaces_degraded_read_via_full_cli_path(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#538 round2 [Must]5 変更2 の陰性試験: 劣化時は CLI 経由の非 JSON 出力にも注記が出る。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("{not valid json\n")
+
+        from fleet import cli as fcli
+
+        def _fake_gather(args):
+            return fq.build_queue_result(
+                pj_slugs=["quiet"],
+                threshold=args.threshold,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+            )
+
+        monkeypatch.setattr(fcli, "_gather_queue_result", _fake_gather)
+
+        rc = fcli.main(["queue", "--threshold", "3"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "corrections.jsonl" in out
+
+
+# --- _collect_material_slugs: corrections 読取は共有 reader 経由（#538 round2 [Must]2）-------
+
+
+class TestCollectMaterialSlugsUsesSharedReader:
+    """``_collect_material_slugs`` の corrections 側 read が独自の silent-fail 実装でなく
+    ``queue_materials.read_corrections_records_with_health``（queue read health の単一ソース）
+    を経由することを検査する。
+    """
+
+    def test_delegates_to_shared_reader(self, tmp_path, monkeypatch):
+        from fleet import cli as fcli
+        from fleet.queue_materials import (
+            _correction_slug,
+            read_corrections_records_with_health,
+        )
+
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+
+        calls = []
+
+        def _spy(path):
+            calls.append(path)
+            return read_corrections_records_with_health(path)
+
+        monkeypatch.setattr(
+            "fleet.queue_materials.read_corrections_records_with_health", _spy
+        )
+
+        slugs = fcli._collect_material_slugs(
+            weak_signals_path=None,
+            corrections_path=corr,
+            correction_slug=_correction_slug,
+        )
+        assert calls == [corr], "corrections 側 read が共有 reader を経由していない"
+        assert "alpha" in slugs
+
+    def test_os_error_falls_back_to_empty_without_crashing(self, tmp_path, monkeypatch):
+        """旧実装は独自 try/except で空文字列へ倒していた。共有 reader 経由でも同じく落ちない。"""
+        from fleet import cli as fcli
+        from fleet.queue_materials import _correction_slug
+
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+
+        def _raise(*_args, **_kwargs):
+            raise OSError("Permission denied")
+
+        monkeypatch.setattr(Path, "read_bytes", _raise)
+
+        slugs = fcli._collect_material_slugs(
+            weak_signals_path=None,
+            corrections_path=corr,
+            correction_slug=_correction_slug,
+        )
+        assert slugs == []  # 例外を投げずに空へ倒す（advisory ゆえ落とさない）
+
+    def test_malformed_line_does_not_produce_phantom_slug(self, tmp_path, monkeypatch):
+        """壊れた行から slug を作らない（従来の独自 skip と同じ挙動を共有 reader 経由でも保つ）。"""
+        from fleet import cli as fcli
+        from fleet.queue_materials import _correction_slug
+
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("{not valid json\n" + json.dumps(_corr("beta", "t")) + "\n")
+
+        slugs = fcli._collect_material_slugs(
+            weak_signals_path=None,
+            corrections_path=corr,
+            correction_slug=_correction_slug,
+        )
+        assert slugs == ["beta"]
 
 
 # --- pj_paths: dead PJ skip + project_path 伝播（繋ぎ目バグ #79）--------------

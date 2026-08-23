@@ -59,7 +59,7 @@ format_status_table(rows: 'list[FleetRow]', now: 'datetime | None' = None) -> 's
 has_uncommitted_changes(worktree: 'Path', *, paths: 'Optional[List[str]]' = None, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'bool'
 load_proposals_report(path: 'Path') -> 'Dict[str, Any]'
 main(argv: 'list[str] | None' = None) -> 'int'
-new_corrections_by_pj(pj_slug: 'str', *, last_evolve_at: 'Optional[str]' = None, corrections_path: 'Path') -> 'int'
+new_corrections_by_pj(pj_slug: 'str', *, last_evolve_at: 'Optional[str]' = None, corrections_path: 'Optional[Path]' = None, records: 'Optional[List[Dict[str, Any]]]' = None) -> 'int'
 parse_active_gh_account(gh_auth_status_output: 'str') -> 'Optional[str]'
 parse_fact_file(path: 'Path') -> 'Fact'
 persist_last_evolve(pj_slug: 'str', *, ts: 'Optional[str]' = None, dry_run: 'bool' = False) -> 'Dict[str, Any]'

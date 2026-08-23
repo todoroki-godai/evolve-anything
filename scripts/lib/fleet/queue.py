@@ -236,12 +236,15 @@ def build_queue_result(
     skipped_dead: List[Dict[str, Any]] = []
     from correction_semantic.correction_backlog import correction_backlog_counts_by_pj
 
+    # #533/#538 round2 [Must]1: corrections.jsonl は本関数内で1回だけ read し、
+    # (records, health) を全ての下流集計（backlog counts / weak+corr / unattributed）へ
+    # 使い回す。probe と各集計が別読みだと、probe 成功後に read が失敗する（逆も同様）ケースで
+    # health が「正常」なのに集計結果だけ劣化を反映しない silent スナップショット不一致が起きる。
+    corr_records, corr_read_health = read_corrections_records_with_health(corrections_path)
+
     correction_backlog_counts = correction_backlog_counts_by_pj(
-        corrections_path=corrections_path
+        corrections_path=corrections_path, records=corr_records
     )
-    # #533: silence != evaluated — corrections.jsonl の read health を1回だけ probe し、
-    # 「正常な空在庫」と「読取不能・壊れた行あり」を区別して queue_status / result に surface する。
-    corr_read_health = corrections_read_health(corrections_path)
     for slug in pj_slugs:
         path = paths.get(slug)
         if path is not None and not Path(path).is_dir():
@@ -262,7 +265,7 @@ def build_queue_result(
                             canon, weak_signals_path=weak_signals_path
                         ),
                         "new_corrections": new_corrections_by_pj(
-                            canon, last_evolve_at=last, corrections_path=corrections_path
+                            canon, last_evolve_at=last, records=corr_records
                         ),
                         "correction_backlog": correction_backlog_counts.get(canon, 0),
                         "last_evolve_at": last,
@@ -275,7 +278,7 @@ def build_queue_result(
             d_corr = new_corrections_by_pj(
                 slug,
                 last_evolve_at=last_evolve_map.get(slug),
-                corrections_path=corrections_path,
+                records=corr_records,
             )
             d_backlog = correction_backlog_counts.get(_canonical_slug(slug), 0)
             skipped_dead.append(
@@ -298,7 +301,7 @@ def build_queue_result(
                     slug, weak_signals_path=weak_signals_path
                 ),
                 "new_corrections": new_corrections_by_pj(
-                    slug, last_evolve_at=last, corrections_path=corrections_path
+                    slug, last_evolve_at=last, records=corr_records
                 ),
                 "correction_backlog": correction_backlog_counts.get(
                     _canonical_slug(slug), 0
@@ -381,7 +384,7 @@ def build_queue_result(
         datetime.now(timezone.utc) - timedelta(days=_UNATTRIBUTED_WINDOW_DAYS)
     ).isoformat()
     unattributed_corrections = count_unattributed_corrections(
-        corrections_path, since=unattributed_since
+        records=corr_records, since=unattributed_since
     )
 
     # #267 Sprint 1: queue が空のとき「本当に素材が無い」(EMPTY) か「素材はあるのに処理

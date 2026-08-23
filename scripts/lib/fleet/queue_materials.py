@@ -20,6 +20,7 @@ evolve.py 1739→156行+7 sub-module と同じ手法・ADR-048）。
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -210,25 +211,49 @@ def read_corrections_records_with_health(
     health の契約:
       - ``readable``: ファイルを最後まで読めたか（``OSError`` で失敗すると False）
       - ``error``: ``readable=False`` のときの例外文字列（成功時は None）
-      - ``malformed_lines``: 空行以外で JSON decode に失敗した、または dict でなかった行数
+      - ``malformed_lines``: 空行以外で JSON decode に失敗した・dict でなかった・不正 UTF-8 で
+        decode できなかった行数
 
     ファイル不在は「劣化」ではなく「正常な空在庫」（``readable=True, malformed_lines=0``）。
+
+    #538 round2 [Must]3: 従来は ``errors="replace"`` で decode していたため、不正バイト列が
+    U+FFFD 置換文字へ静かに丸められ、置換後の文字列が偶然 JSON として parse に成功すると
+    （例: ``b'{"project_path":"alp\\xffha"}'`` → ``alp�ha``）``readable=true,
+    malformed_lines=0`` の健全扱いになり、当該レコードが誰にも気づかれず破損値のまま集計に
+    混入していた。行単位で ``strict`` decode し、``UnicodeDecodeError`` を JSON decode 失敗と
+    同じ「malformed 行」として数える（ファイル全体を unreadable にはしない — 1行の破損で
+    他の健全な行まで読み捨てるのは #533 が解消した「読取不能と壊れた行の混同」を UTF-8 単位で
+    再導入することになるため）。
     """
     health: Dict[str, Any] = {"readable": True, "error": None, "malformed_lines": 0}
     path = Path(corrections_path)
     if not path.exists():
+        # #538 round2 [Must]4: dangling symlink（リンク先が存在しない）も ``exists()`` は False
+        # を返すため、ここで区別しないと「正常な空在庫」と誤判定して readable=true のまま
+        # EMPTY を返してしまう。symlink 自体は存在する（``is_symlink()``）が実体が無い場合は
+        # 「正常な空」でなく劣化として surface する。symlink 自体が無い（真の未作成）ときは
+        # 従来通り正常な空在庫。
+        if path.is_symlink():
+            health["readable"] = False
+            health["error"] = f"dangling symlink: {path} -> {os.readlink(path)}"
+            return [], health
         return [], health
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        raw_bytes = path.read_bytes()
     except OSError as exc:
         health["readable"] = False
         health["error"] = str(exc)
         return [], health
 
     out: List[Dict[str, Any]] = []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
+    for raw_line in raw_bytes.split(b"\n"):
+        line_bytes = raw_line.strip()
+        if not line_bytes:
+            continue
+        try:
+            s = line_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            health["malformed_lines"] += 1
             continue
         try:
             rec = json.loads(s)
@@ -308,7 +333,8 @@ def new_corrections_by_pj(
     pj_slug: str,
     *,
     last_evolve_at: Optional[str] = None,
-    corrections_path: Path,
+    corrections_path: Optional[Path] = None,
+    records: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """pj_slug の corrections のうち ``last_evolve_at`` 以降の件数を返す。
 
@@ -317,8 +343,18 @@ def new_corrections_by_pj(
     scope する（実コーパスでフルパス / slug が混在するため）。timestamp は ``_ts_strictly_after``
     で datetime 比較する（`Z` / `+00:00` 終端混在を吸収・None 時は全件なので影響しない）。
     ファイル不在 → 0。読取不能・壊れた行の可視化は ``corrections_read_health``（#533）。
+
+    ``records``（``read_corrections_records_with_health`` が既に返した有効レコード列）を渡すと
+    再 read しない。同一 ``build_queue_result`` 呼び出し内で probe 時の health と集計対象の
+    records が同一スナップショットであることを保証するため（#538 round2 [Must]1 —
+    probe と各集計が別読みだと、probe 成功後に read が ``OSError`` になる/その逆で
+    「readable=true のまま在庫ゼロ」を返しうる）。未指定時は従来通り ``corrections_path`` から
+    自前で read する（後方互換）。
     """
-    records, _health = read_corrections_records_with_health(Path(corrections_path))
+    if records is None:
+        if corrections_path is None:
+            raise TypeError("new_corrections_by_pj には corrections_path か records のどちらかが必要")
+        records, _health = read_corrections_records_with_health(Path(corrections_path))
     count = 0
     for rec in records:
         if _correction_slug(rec.get("project_path")) not in _aliases_for(pj_slug):
@@ -332,7 +368,10 @@ def new_corrections_by_pj(
 
 
 def count_unattributed_corrections(
-    corrections_path: Path, *, since: Optional[str] = None
+    corrections_path: Optional[Path] = None,
+    *,
+    since: Optional[str] = None,
+    records: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """``project_path`` 欠落で PJ 帰属不能な corrections を source 別に数える（#91）。
 
@@ -350,10 +389,19 @@ def count_unattributed_corrections(
     返り値: ``{"total": int, "by_source": {source: count}}``。``source`` 欠落は ``(unknown)``。
     ファイル不在 / 読込失敗 → ``{"total": 0, "by_source": {}}``（advisory ゆえ落とさない）。
     読取不能・壊れた行の可視化は ``corrections_read_health``（#533）。
+
+    ``records``（既に read 済みのレコード列）を渡すと再 read しない（#538 round2 [Must]1・
+    ``new_corrections_by_pj`` と同じ理由）。未指定時は ``corrections_path`` から自前で read する
+    （後方互換）。
     """
     result: Dict[str, Any] = {"total": 0, "by_source": {}}
     by_source: Dict[str, int] = result["by_source"]
-    records, _health = read_corrections_records_with_health(Path(corrections_path))
+    if records is None:
+        if corrections_path is None:
+            raise TypeError(
+                "count_unattributed_corrections には corrections_path か records のどちらかが必要"
+            )
+        records, _health = read_corrections_records_with_health(Path(corrections_path))
     for rec in records:
         if _correction_slug(rec.get("project_path")):
             continue  # 帰属可能なものは対象外
