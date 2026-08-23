@@ -11,6 +11,13 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(queue): corrections.jsonl の読取失敗を在庫ゼロと区別して可視化（#533）** —
+  `correction_semantic.correction_backlog` / `fleet.queue_materials.new_corrections_by_pj` /
+  `count_unattributed_corrections` が独立に行っていた「ファイル不在→空・`OSError`→空・
+  壊れた行→無言 skip」を共有 reader へ統一し、`corrections_read_health`
+  （readable/error/malformed_lines）を `fleet queue` の result schema・queue_status・
+  人間向け出力の全経路へ surface した。読取が劣化しているときは `EMPTY` を主張せず
+  `SETUP_REQUIRED` へ昇格する。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの
