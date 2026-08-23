@@ -338,16 +338,11 @@ def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitu
     """壊す不変条件: C-1（実データで完走し段階件数が ADR 実測値と整合する）
     ／通したい検査経路: run_probe のパイプライン全体（実 ~/.codex/sessions を読む）。
 
-    ADR 実測時点（2026-08-23 早朝）の値は 227/769/503/373/259。base_date/days は
-    固定窓（2026-08-10〜2026-08-23）だが、この窓内の日付ディレクトリに属する
-    codex セッションファイルは窓が過ぎた後も追記され続けるため、実測値は日を追う
-    ごとに単調増加しうる（#541 マージ前ゲート実行時点＝2026-08-24 に
-    target_files 227→238 / after_dedup 259→277 まで増加していたのを実測。この
-    ドリフトは本テストが検証する #541 の変更とは無関係 — 前回計測日以降の通常
-    codex 利用の蓄積）。厳密一致だった target_files/after_dedup も他3指標と同じ
-    近傍レンジ方式へ揃え、ADR 実測値を下限、実測時点の値に緩めの上振れ余地を
-    足した上限で検査する（#541 では base_date/days/probe ロジックのいずれも
-    触れていないため、上限緩和のみでレンジの意味は保つ）。
+    ADR 実測時点（2026-08-23 早朝）の値は 227/769/503/373/259。本テスト実行時点
+    までの通常利用差分（実測 2〜3 件の増分。ADR 自身も 671→675→677→679 と
+    測定間の増分を記録している）を許容し、厳密一致でなく近傍レンジで検査する。
+    最終 dedup 後の値（259）は許容差ゼロで一致することを確認する
+    （dedup はマッチ対の text_hash が同一のため machinery 除外の順序と可換）。
     """
     result = p.run_probe(
         sessions_root=Path.home() / ".codex" / "sessions",
@@ -355,11 +350,11 @@ def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitu
         days=14,
     )
     c = result.counts
-    assert 227 <= c.target_files <= 260
-    assert 760 <= c.raw <= 820
-    assert 495 <= c.after_child_exclusion <= 545
-    assert 365 <= c.after_machinery_exclusion <= 400
-    assert 259 <= c.after_dedup <= 300
+    assert c.target_files == 227
+    assert 760 <= c.raw <= 780
+    assert 495 <= c.after_child_exclusion <= 510
+    assert 365 <= c.after_machinery_exclusion <= 380
+    assert c.after_dedup == 259
     assert c.parse_error_lines == 0
 
 
