@@ -354,12 +354,19 @@ _LIST_UNIT = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 # 通常の日本語プロースや NFC 合成済みアクセント文字（`café` の `é` は単一の
 # category "Ll"）は Mn/Me を含まないため誤検出は増えない。
 #
-# 対象外（意図的にスコープ外）: 全角/半角の記号 homoglyph（`｜`/`|` 等、
-# category "Sm"/"Po" のような可視の別記号への置換）。個別列挙／正規化テーブルの
-# どちらを取っても verify-checks-by-breaking.md の allowlist 節と同型の未解決
-# 課題になるため、`test_fullwidth_homoglyph_blockquote_is_a_known_undetected_gap`
-# と同じ扱いで規範化テストにより既知の未検出として固定し、修正は別 issue に
-# 切り出す（scope discipline）。
+# #537 round6 是正: 全角/半角の記号 homoglyph（`｜`/`|`・`＞`/`>`・全角英数 等）は
+# round4/round5 で「個別列挙／正規化テーブルのどちらも allowlist の骨抜き問題を
+# 再生産する」としてスコープ外にしていたが、**この判断は誤りだった**。第三の
+# 選択肢として Unicode 標準が定義する互換分解（NFKC 正規化）を照合前に適用すれば、
+# 個別列挙でも手書きテーブルでもなく一括で解決できる（`unicodedata.normalize
+# ("NFKC", s)` は `｜`→`|` / `＞`→`>` / 全角英数→ASCII 等を Unicode 標準の等価性
+# 定義に従って変換する。Cf/Mn/Me を「カテゴリで」扱ったのと同じ構造の解法）。
+# 適用は `_strip_invisible_chars` の**後**でなければならない: NFKC は正準結合
+# （canonical composition）も行うため、"u" + U+0301(結合アクセント) を先に
+# NFKC へ通すと単一の "ú"（category "Ll"）へ再結合されてしまい、Mn 除去で
+# 崩すはずだった `\bcurl\b` の連続一致が逆に復元されてしまう（実測確認済み）。
+# 先に Cf/Mn/Me を除去してから NFKC を適用すれば、結合文字は既に取り除かれて
+# いるため NFKC には再結合する対象が残らず、両対策は両立する。
 _INVISIBLE_MATCH_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
 
 
@@ -378,6 +385,24 @@ def _strip_invisible_chars(s: str) -> str:
     )
 
 
+def _normalize_for_matching(text: str) -> str:
+    """パターン照合専用の正規化: Cf/Mn/Me 除去 → NFKC 正規化、の順に適用する。
+
+    #537 round6: literal zone（フェンスコード内/frontmatter 内）か否かを問わず
+    常に適用する。不可視文字・結合文字・記号 homoglyph による偽装は「Markdown
+    装飾かどうか」と無関係な攻撃面（フェンス内の生コードにも同じ偽装が使える）
+    のため、literal zone では Markdown マーカー除去（`_strip_leading_decoration`
+    のループ部分）だけをスキップし、本関数は無条件で適用する。
+
+    順序は固定: 先に Cf/Mn/Me を除去し、その後に NFKC を適用する。逆順にすると
+    NFKC の正準結合（canonical composition）が "u" + U+0301(結合アクセント) を
+    単一の "ú" へ再結合してしまい、Mn 除去で崩したはずの `\\bcurl\\b` 連続一致が
+    復元されて検出をすり抜ける（実測確認済み）。
+    """
+    s = _strip_invisible_chars(text)
+    return unicodedata.normalize("NFKC", s)
+
+
 def _strip_leading_decoration(text: str) -> str:
     """行頭の Markdown 装飾（blockquote/リストマーカー）を除去した文字列を返す。
 
@@ -390,8 +415,13 @@ def _strip_leading_decoration(text: str) -> str:
     #537 round5: 不可視文字（Cf）除去は位置非依存のため最初に一括で行い、その後に
     Markdown マーカー除去を繰り返す（マーカーと内容の間に Cf が挟まっていても、
     先に取り除いておけばマーカー判定が素直に効く）。
+
+    #537 round6: Cf 除去に加え NFKC 正規化（`_normalize_for_matching`）も
+    マーカー除去より先に適用する。全角/半角の記号 homoglyph（`＞`/`｜` 等）を
+    ASCII へ畳み込んでから照合することで、装飾除去とパターン照合の両方に
+    一括で効く。
     """
-    s = _strip_invisible_chars(text)
+    s = _normalize_for_matching(text)
     while True:
         m = _BLOCKQUOTE_UNIT.match(s)
         if m:
@@ -566,9 +596,18 @@ def _iter_target_files(skills_dir: Path) -> List[Path]:
 def _scan_line(
     rel_path: str, lineno: int, text: str, in_literal_zone: bool = False
 ) -> List[Finding]:
-    # literal zone（フェンスコード内/frontmatter 内）では装飾除去を適用しない
-    # （#537 round3: そこでの `-`/`>` は Markdown 装飾でなく生のコード/データ）。
-    norm = text if in_literal_zone else _strip_leading_decoration(text)
+    # literal zone（フェンスコード内/frontmatter 内）では Markdown マーカー除去
+    # だけを適用しない（#537 round3: そこでの `-`/`>` は Markdown 装飾でなく
+    # 生のコード/データ）。Cf/Mn/Me 除去 + NFKC 正規化（`_normalize_for_matching`）
+    # は literal zone でも適用する（#537 round6: 不可視文字・homoglyph による
+    # 偽装は装飾か生コードかを問わない攻撃面のため。旧実装は literal zone を
+    # `norm = text` と無条件の生文字列にしており、フェンス内の Cf 中間挿入・
+    # 記号 homoglyph が正規化を一切受けず検出をすり抜けていた）。
+    norm = (
+        _normalize_for_matching(text)
+        if in_literal_zone
+        else _strip_leading_decoration(text)
+    )
     found: List[Finding] = []
     for pattern_id, category, severity, regex in _PATTERNS:
         if regex.search(norm):
@@ -722,10 +761,16 @@ def _detect_flows_in_scope(
         # 装飾（blockquote `>` / リストマーカー等）を剥がした版で照合する
         # （#537 round2: `> D=$(...)` が _FLOW_ASSIGN の `^` アンカーに一致せず
         # 素通りしていた。snippet 表示には元の text を使う＝装飾を消さない）。
-        # literal zone（フェンスコード内/frontmatter 内）では剥がさない
-        # （#537 round3: そこでの `-`/`>` は diff の削除行・YAML sequence・
-        # シェルのリダイレクトであり Markdown 装飾ではないため）。
-        norm = text if lineno in literal_zone else _strip_leading_decoration(text)
+        # literal zone（フェンスコード内/frontmatter 内）では Markdown マーカー
+        # 除去だけ剥がさない（#537 round3: そこでの `-`/`>` は diff の削除行・
+        # YAML sequence・シェルのリダイレクトであり Markdown 装飾ではないため）。
+        # Cf/Mn/Me 除去 + NFKC 正規化は literal zone でも適用する（#537 round6:
+        # フェンス内の不可視文字・homoglyph 偽装も同じ攻撃面のため）。
+        norm = (
+            _normalize_for_matching(text)
+            if lineno in literal_zone
+            else _strip_leading_decoration(text)
+        )
 
         # 1) consumer 判定は既登録 producer に対してのみ（＝producer 先行を強制）。
         for var, (pl, psnip) in fetch_vars.items():
