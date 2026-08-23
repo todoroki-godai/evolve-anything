@@ -66,13 +66,19 @@ _EXCLUDE_DIRS = {
     # git 内部のオブジェクト/参照ストア。git の管理領域そのものであり、skill 作者が
     # 意図的に著作する場所ではない（構造上の除外。上の再測定でも 0 件）。
     ".git",
-    # vendored npm 依存ツリー。上の再測定コマンドで実測 488 件、いずれもサードパーティ
-    # 製パッケージの CHANGELOG.md 等で skill 作者のコンテンツではないと確認した
-    # （例: ~/.claude/skills/gstack/node_modules/pkce-challenge/CHANGELOG.md）。
-    # 除外を撤廃して同一 67 roots 相当のコーパスで再走査すると 5 件の新規 FP
-    # （process.env や "disregard" を含む変更履歴文）が実測で発生することを確認済み
-    # （#537 round2）。ただし postinstall script 等の依存チェーン攻撃は本スキャナの
-    # スコープ外（.py 同様 follow-up）であり silent gap として残る。
+}
+
+# node_modules は拡張子限定で除外する（#537 round3 是正: 旧実装は node_modules を
+# 丸ごと `_EXCLUDE_DIRS` に入れており、`skills/foo/node_modules/payload.sh` が
+# 実行可能拡張子であっても確実に走査を回避できていた＝攻撃面を無条件に開けていた。
+# 除外を撤廃して 67 roots 相当のコーパスで再走査すると 5 件の新規 FP が実測されたが、
+# その全件が vendored パッケージの CHANGELOG.md 等 `.md` の人間可読な変更履歴文
+# （process.env や "disregard" を含む文）だった（#537 round2 実測）。実害（実行可能な
+# ペイロード）は `.sh`/`.bash` にしか無いため、**除外は `.md` のみに限定し `.sh`/
+# `.bash` は node_modules 配下でも走査する**。名前を騙るだけで走査を逃れられる経路を
+# 塞ぎつつ、実測 FP 5件を個別列挙せず構造的に抑制する（verify-checks-by-breaking.md:
+# allowlist は「残してよい基準」を狭く定義せよ＝ここでは拡張子で境界を引いた）。
+_EXCLUDE_DIRS_MD_ONLY = {
     "node_modules",
 }
 
@@ -265,16 +271,29 @@ def _snippet(line_text: str) -> str:
 # - `>`（blockquote、`>>` 等ネストも含む。1個以上の連続を1単位として扱う）
 # - `-` / `*` / `+`（箇条書きマーカー）
 # - `\d+.` / `\d+)`（番号付きリスト。例: `1. ` `2) `）
-# いずれも**直後に空白必須**（`-rf /` のような実コマンドのフラグ先頭 `-` を装飾と
-# 誤認しないため。`- ` は空白ありなのでリストのみ一致し `-rf` は一致しない）。
 # 非対象（意図的に装飾とみなさない）:
 # - 通常の字下げ（既存の `^\s*` 側で別途吸収される。装飾ではなく Markdown 上の
 #   フェンスコードブロックの意味を持つため本 helper の対象にしない）
 # - `#`（Markdown 見出し。意味を持つ記号であり除去すると見出し文自体が本文と誤認され
 #   うるため対象外）
-# ネスト（`> - D=...` のような blockquote 内リスト等）に対応するため最長一致まで
-# 繰り返し剥がす。
-_LEADING_DECORATION = re.compile(r"^(?:[ \t]*(?:>+|[-*+]|\d+[.)])[ \t]+)+")
+#
+# #537 round3 是正（剥がし漏れ）: 旧実装は `>` の直後にも空白を必須にしていたため
+# `>- D=...`（引用+箇条書きの混在・空白無し）/ `>> D=...`（ネスト引用・空白無し）/
+# `>\tD=...`（マーカー直後がタブでなく単なる空白でない）が素通りしていた。
+# blockquote マーカー（`>` の連続）は直後の空白を**任意**とし、リスト/番号付き
+# リストのマーカーは引き続き**直後の空白を必須**にする（`-rf /` のような実コマンドの
+# フラグ先頭 `-` を装飾と誤認しないため）。1回剥がして終わりにせず、剥がせなくなる
+# まで先頭から繰り返し照合する（`> - D=...` のようなネスト混在に対応するため）。
+_BLOCKQUOTE_UNIT = re.compile(r"^[ \t]*>+[ \t]*")
+_LIST_UNIT = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
+
+# ゼロ幅文字（U+200B/U+200C/U+200D/U+FEFF）は Python の `\s` に含まれないため、
+# 装飾除去後に `_FLOW_ASSIGN` 側の `^\s*` を素通りして残り、payload の識別子
+# アンカーを壊す（= 検出をすり抜ける）。round3 の探索的プローブで実測発見
+# （`>` の直後に U+200B を挟むと `remote_exec_flow` が非検出になることを確認済み）。
+# レビュー指定外の追加バリアントだが「緑のまま残さない」方針に沿い、装飾除去の
+# 一部として合わせて剥がす。
+_ZERO_WIDTH_UNIT = re.compile("^[​‌‍﻿]+")
 
 
 def _strip_leading_decoration(text: str) -> str:
@@ -282,8 +301,87 @@ def _strip_leading_decoration(text: str) -> str:
 
     パターン照合専用。snippet 表示や元 `text` の保持には使わない（除去前の原文を
     そのまま見せる方が、実際にファイルに書かれている内容として正確なため）。
+    呼び出し側は「この行が本当に Markdown プロース上の装飾か」（フェンスコード/
+    frontmatter の内側でないか）を先に判定してから呼ぶこと。本関数自体は文脈を
+    持たないため常に無条件で剥がす（`_compute_literal_zone_lines` 参照）。
     """
-    return _LEADING_DECORATION.sub("", text)
+    s = text
+    while True:
+        m = _BLOCKQUOTE_UNIT.match(s)
+        if m:
+            s = s[m.end():]
+            continue
+        m = _LIST_UNIT.match(s)
+        if m:
+            s = s[m.end():]
+            continue
+        m = _ZERO_WIDTH_UNIT.match(s)
+        if m:
+            s = s[m.end():]
+            continue
+        break
+    return s
+
+
+# フェンスコード（``` / ~~~）と YAML frontmatter（先頭 `---` 〜 次の `---`）の内側は
+# Markdown の構造記号（blockquote/リストマーカー）が意味を持たない「生のコード/データ」
+# として扱う（#537 round3 是正・剥がしすぎ）。旧実装は装飾除去をファイル全体へ無条件
+# 適用しており、fenced diff の削除行（`- D=...`）・YAML sequence（`- D=...`）・fenced
+# shell のリダイレクト（`> D=...`）を Markdown 装飾と誤認して
+# `remote_exec_flow.fetch_var_to_exec` を誤検出させていた（レビュアーが実際に構成して
+# 確認済み）。これは実際の Markdown レンダラの仕様と一致させる形の修正であり
+# （フェンス内・frontmatter 内では blockquote/リスト構文は解釈されない）、恣意的な
+# 例外を新設するものではない。
+#
+# 未対応（既知の残存ギャップ）: 4スペースインデントのコードブロックは本判定の対象外
+# （判定に空行の前後関係が要り複雑なため）。フェンス無しの生 diff/YAML 貼り付けも
+# 判定できない（Markdown の構文上、フェンス無しリストと表記が同一で構造的に区別
+# 不能なため）。レビュアーが挙げた3例（diff 削除行 / YAML sequence / shell
+# リダイレクト）はいずれも fenced code block or frontmatter 内が実際の使用パターン
+# であり、この2種のリテラルゾーン判定で実害を塞げる。
+_FENCE_BACKTICK = re.compile(r"^\s{0,3}`{3,}")
+_FENCE_TILDE = re.compile(r"^\s{0,3}~{3,}")
+
+
+def _compute_literal_zone_lines(lines: List[str]) -> set:
+    """行番号（1始まり）の集合を返す。フェンスコード内・YAML frontmatter 内の行は
+    「装飾ストリップを適用しない」literal zone として扱う（呼び出し側は
+    `lineno in literal_zone` のとき `_strip_leading_decoration` を呼ばず生の行を使う）。
+    """
+    literal: set = set()
+    in_backtick = False
+    in_tilde = False
+    in_frontmatter = False
+    for idx, raw in enumerate(lines, start=1):
+        stripped = raw.rstrip("\r\n")
+        if idx == 1 and stripped == "---":
+            in_frontmatter = True
+            literal.add(idx)
+            continue
+        if in_frontmatter:
+            literal.add(idx)
+            if stripped == "---":
+                in_frontmatter = False
+            continue
+        if in_backtick:
+            literal.add(idx)
+            if _FENCE_BACKTICK.match(stripped):
+                in_backtick = False
+            continue
+        if in_tilde:
+            literal.add(idx)
+            if _FENCE_TILDE.match(stripped):
+                in_tilde = False
+            continue
+        if _FENCE_BACKTICK.match(stripped):
+            in_backtick = True
+            literal.add(idx)
+            continue
+        if _FENCE_TILDE.match(stripped):
+            in_tilde = True
+            literal.add(idx)
+            continue
+    return literal
 
 
 def _iter_target_files(skills_dir: Path) -> List[Path]:
@@ -302,12 +400,18 @@ def _iter_target_files(skills_dir: Path) -> List[Path]:
         rel_parts = p.relative_to(skills_dir).parts
         if any(part in _EXCLUDE_DIRS for part in rel_parts):
             continue
+        if p.suffix == ".md" and any(part in _EXCLUDE_DIRS_MD_ONLY for part in rel_parts):
+            continue
         out.append(p)
     return out
 
 
-def _scan_line(rel_path: str, lineno: int, text: str) -> List[Finding]:
-    norm = _strip_leading_decoration(text)
+def _scan_line(
+    rel_path: str, lineno: int, text: str, in_literal_zone: bool = False
+) -> List[Finding]:
+    # literal zone（フェンスコード内/frontmatter 内）では装飾除去を適用しない
+    # （#537 round3: そこでの `-`/`>` は Markdown 装飾でなく生のコード/データ）。
+    norm = text if in_literal_zone else _strip_leading_decoration(text)
     found: List[Finding] = []
     for pattern_id, category, severity, regex in _PATTERNS:
         if regex.search(norm):
@@ -442,19 +546,29 @@ def _exec_file_regexes(fpath: str) -> List[Pattern[str]]:
 
 
 def _detect_flows_in_scope(
-    rel_path: str, scope_lines: List[Tuple[int, str]]
+    rel_path: str,
+    scope_lines: List[Tuple[int, str]],
+    literal_zone: "set | None" = None,
 ) -> List[FlowFinding]:
-    """1 スコープ内の fetch→exec / read→exfil 順序ペアを検出する（決定論）。"""
+    """1 スコープ内の fetch→exec / read→exfil 順序ペアを検出する（決定論）。
+
+    literal_zone: `_compute_literal_zone_lines` が返す行番号集合。含まれる行は
+    フェンスコード/frontmatter 内なので装飾除去を適用しない（#537 round3）。
+    """
     found: List[FlowFinding] = []
     fetch_vars: dict[str, Tuple[int, str]] = {}
     fetch_files: dict[str, Tuple[int, str]] = {}
     secret_vars: dict[str, Tuple[int, str]] = {}
+    literal_zone = literal_zone or set()
 
     for lineno, text in scope_lines:
         # 装飾（blockquote `>` / リストマーカー等）を剥がした版で照合する
         # （#537 round2: `> D=$(...)` が _FLOW_ASSIGN の `^` アンカーに一致せず
         # 素通りしていた。snippet 表示には元の text を使う＝装飾を消さない）。
-        norm = _strip_leading_decoration(text)
+        # literal zone（フェンスコード内/frontmatter 内）では剥がさない
+        # （#537 round3: そこでの `-`/`>` は diff の削除行・YAML sequence・
+        # シェルのリダイレクトであり Markdown 装飾ではないため）。
+        norm = text if lineno in literal_zone else _strip_leading_decoration(text)
 
         # 1) consumer 判定は既登録 producer に対してのみ（＝producer 先行を強制）。
         for var, (pl, psnip) in fetch_vars.items():
@@ -542,10 +656,12 @@ def scan_skills(root: Path) -> SkillVulnReport:
             scan_errors.append(f"{rel}: UTF-8 デコード失敗（{exc}）")
             continue
         scanned += 1
-        for idx, line in enumerate(text.splitlines(), start=1):
-            findings.extend(_scan_line(rel, idx, line))
+        lines = text.splitlines()
+        literal_zone = _compute_literal_zone_lines(lines)
+        for idx, line in enumerate(lines, start=1):
+            findings.extend(_scan_line(rel, idx, line, idx in literal_zone))
         for scope in _iter_scopes(path, text):
-            flow_findings.extend(_detect_flows_in_scope(rel, scope))
+            flow_findings.extend(_detect_flows_in_scope(rel, scope, literal_zone))
 
     findings.sort(key=lambda f: (f.rel_path, f.line, f.pattern_id))
     flow_findings.sort(
