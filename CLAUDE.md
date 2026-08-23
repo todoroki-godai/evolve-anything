@@ -43,7 +43,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 
 **新設凍結（#379 Step 1）**: 縮小完了まで新 store / observability section / advisory proposal adapter / weak_signal channel の追加は停止する（削除は許容）。単一ソースは `scripts/lib/shrink_freeze.py`。契約テスト（`test_shrink_freeze.py`）が CI portable suite で blocking 強制、pre-push light は同内容を非ブロッキング advisory として早期警告。store / weak_signal channel の runtime 書込みも `store_write_raw` / `append_signals` の凍結ゲートで reject する。`scaffold_advisory --write` も凍結中は拒否する。
 
-**表示淘汰（#379 Step 2）**: 人間の行動に繋がった実証のない observability section 33 件を audit の表示から外す（**コードは削除しない・builder は `_OBSERVABILITY_BUILDERS` に登録されたまま**）。単一ソースは `shrink_freeze.CULLED_OBSERVABILITY_SECTIONS`。淘汰した事実は `display_cull` の 1 行 meta として必ず surface する（silence != evaluated）。環境変数 `EVOLVE_SHOW_CULLED=1` で一時的に全表示へ戻せる。
+**表示淘汰（#379 Step 2）**: 人間の行動に繋がった実証のない observability section 32 件を audit の表示から外す（**コードは削除しない・builder は `_OBSERVABILITY_BUILDERS` に登録されたまま**）。単一ソースは `shrink_freeze.CULLED_OBSERVABILITY_SECTIONS`。淘汰した事実は `display_cull` の 1 行 meta として必ず surface する（silence != evaluated）。環境変数 `EVOLVE_SHOW_CULLED=1` で一時的に全表示へ戻せる。
 
 ## 4つの柱
 
