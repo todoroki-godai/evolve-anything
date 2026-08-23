@@ -328,13 +328,18 @@ def test_read_backlog_excludes_already_reviewed_signal(tmp_path: Path):
     assert keys == {kept.signal_key}
 
 
-def test_build_excludes_already_reviewed_from_pj_total(tmp_path: Path):
+def test_build_excludes_already_reviewed_from_pj_total(tmp_path: Path, tmp_path_factory):
+    """seen_path は production 既定の data_dir とは別の sibling dir に置く
+    （`build()` が ``seen_path`` を ``_read_backlog`` へ配線し損ねていても、
+    tmp_path が偶然 production 既定 data_dir と一致して見かけ上パスすることを防ぐ）。
+    """
     ws = tmp_path / "weak_signals.jsonl"
     kept = _sig("残る", 1)
     reviewed = _sig("既読済み", 2)
     append_signals([kept, reviewed], path=ws)
 
-    seen_path = tmp_path / "correction_review_seen.jsonl"
+    seen_dir = tmp_path_factory.mktemp("seen-store")
+    seen_path = seen_dir / "correction_review_seen.jsonl"
     from correction_semantic.daily_review import record_reviewed
     record_reviewed(
         [reviewed.signal_key], "evolve-anything",
@@ -351,13 +356,14 @@ def test_build_excludes_already_reviewed_from_pj_total(tmp_path: Path):
     assert kept.signal_key in all_keys
 
 
-def test_build_does_not_exclude_unreviewed_signal(tmp_path: Path):
+def test_build_does_not_exclude_unreviewed_signal(tmp_path: Path, tmp_path_factory):
     """陽性対照: 既読集合が空なら従来どおり両方候補に残る（誤検出しない）。"""
     ws = tmp_path / "weak_signals.jsonl"
     a = _sig("A", 1)
     b = _sig("B", 2)
     append_signals([a, b], path=ws)
-    seen_path = tmp_path / "correction_review_seen.jsonl"  # 存在しない = 空集合
+    seen_dir = tmp_path_factory.mktemp("seen-store-empty")
+    seen_path = seen_dir / "correction_review_seen.jsonl"  # 存在しない = 空集合
 
     res = bb.build(
         "evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path),
