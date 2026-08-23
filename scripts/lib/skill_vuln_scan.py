@@ -308,15 +308,12 @@ def _scan_line(rel_path: str, lineno: int, text: str) -> List[Finding]:
 #   直後（`bash FILE` / `./FILE` / `source FILE` / `chmod +x FILE`）のみ。
 # - producer は consumer より前の行に限る（同一行 self-loop は登録を後回しにして排除）。
 # - スコープはフェンス内外を問わず全行（#415 型再発の是正: 4スペース字下げ / `~~~` /
-#   `<details>` / フェンス無し本文が非検出だった）。フェンス境界で担保していた「近接性」
-#   は _FLOW_MAX_LINE_DISTANCE（行番号距離の上限）で代替する。
+#   `<details>` / フェンス無し本文が非検出だった）。行番号距離の上限は設けない
+#   （#415 追補: 距離キャップは「上限を超える行数だけ離せば検出を回避できる」新たな
+#   迂回経路そのものであり、allowlist/除外リストと同じ骨抜き構造になる。導入時に
+#   検出された FP の真因は _FLOW_FETCH_TO_FILE 側の `>` 誤認識バグであり、そちらを
+#   修正した結果、距離キャップ無しでも 67 roots 実コーパスで新規誤検出は0件だった）。
 # ============================================================================
-
-# producer→consumer の許容行番号距離（この値を超えたペアは連鎖させない）。実コーパス
-# 実測 (#415): 全行走査化した直後は真の combo が距離 8 行に対し、無関係な行が誤って
-# 64〜123 行離れて連鎖する事例（cloudflare/references/realtimekit/README.md 相当）を
-# 検出した。安全側に倒し、通常の script/fenced block の長さを十分にカバーする値とする。
-_FLOW_MAX_LINE_DISTANCE = 50
 
 # fetch 系ネットワーク取得コマンド（gh api を含む）。
 _FLOW_FETCH_CMD = re.compile(r"(?i)(\b(?:curl|wget|fetch)\b|\bgh\s+api\b)")
@@ -328,10 +325,29 @@ _FLOW_CMD_SUBST = re.compile(r"\$\(|`")
 _FLOW_ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 # fetch のダウンロード先ファイルを捕捉（-o/-O/--output/>/>>）。
+# `<account_id>` のような山括弧プレースホルダ全体を先に同じ長さの `#` へマスクしてから
+# マッチさせる（#415 追補2: 直前空白必須の lookbehind で誤認識を抑えた版は、
+# `curl url>file` や stderr redirect `curl url 2>file` のような、bash として正当かつ
+# 直前が空白でない redirect 記法を検出できなくする回帰を生んでいた実測がある — 変異
+# 試験で両方とも flow_findings=[] のまま素通りすることを確認済み。プレースホルダの
+# 識別は「直前が空白でないこと」ではなく「`<...>` に囲まれた語であること」で行う方が
+# 誤認識の真因に近く、redirect 記法の空白有無に依存しない）。
+_PLACEHOLDER_TOKEN = re.compile(r"<[A-Za-z0-9_.-]+>")
+
 _FLOW_FETCH_TO_FILE = re.compile(
     r"(?i)\b(?:curl|wget|fetch)\b[^\n]*?"
     r"(?:-o|-O|--output|>>?)\s*['\"]?([^\s'\"|;&><`]+)"
 )
+
+
+def _mask_placeholder_tokens(text: str) -> str:
+    """`<account_id>` 等の山括弧プレースホルダを同じ長さの `#` でマスクする。
+
+    `_FLOW_FETCH_TO_FILE` がプレースホルダ内の `>` を redirect と誤認しないための
+    前処理。キャプチャ位置・行文字列の長さを変えず、マスク後の文字列でのみ検索する
+    （元の `text` はスニペット表示や他 regex に引き続き使う）。
+    """
+    return _PLACEHOLDER_TOKEN.sub(lambda m: "#" * len(m.group(0)), text)
 
 # ダウンロード先として登録しない sink（/dev 系・stdout 記法）。
 _FLOW_FILE_IGNORE = {"-", "/dev/null", "/dev/stdout", "/dev/stderr"}
@@ -388,10 +404,7 @@ def _detect_flows_in_scope(
 
     for lineno, text in scope_lines:
         # 1) consumer 判定は既登録 producer に対してのみ（＝producer 先行を強制）。
-        #    行番号距離が _FLOW_MAX_LINE_DISTANCE を超えるペアは近接性喪失として除外。
         for var, (pl, psnip) in fetch_vars.items():
-            if lineno - pl > _FLOW_MAX_LINE_DISTANCE:
-                continue
             if any(rx.search(text) for rx in _exec_var_regexes(var)):
                 found.append(
                     FlowFinding(
@@ -400,8 +413,6 @@ def _detect_flows_in_scope(
                     )
                 )
         for fpath, (pl, psnip) in fetch_files.items():
-            if lineno - pl > _FLOW_MAX_LINE_DISTANCE:
-                continue
             if any(rx.search(text) for rx in _exec_file_regexes(fpath)):
                 found.append(
                     FlowFinding(
@@ -410,8 +421,6 @@ def _detect_flows_in_scope(
                     )
                 )
         for var, (pl, psnip) in secret_vars.items():
-            if lineno - pl > _FLOW_MAX_LINE_DISTANCE:
-                continue
             if re.search(_var_ref_pattern(var), text) and _NET_SINK.search(text):
                 found.append(
                     FlowFinding(
@@ -429,7 +438,7 @@ def _detect_flows_in_scope(
                     fetch_vars.setdefault(var, (lineno, _snippet(text)))
                 if _SECRET_SOURCE.search(rhs):
                     secret_vars.setdefault(var, (lineno, _snippet(text)))
-        fm = _FLOW_FETCH_TO_FILE.search(text)
+        fm = _FLOW_FETCH_TO_FILE.search(_mask_placeholder_tokens(text))
         if fm:
             fpath = fm.group(1)
             if fpath and fpath not in _FLOW_FILE_IGNORE:
@@ -444,9 +453,9 @@ def _iter_scopes(path: Path, text: str) -> List[List[Tuple[int, str]]]:
     拡張子・フェンス記法（``` / ~~~ / 4スペース字下げ / `<details>` / フェンス無し
     本文）を問わずファイル全体を 1 スコープとする（#415: フェンス限定 scope は
     4スペース字下げ・`~~~`・`<details>`・素の本文の combo を素通りさせていた）。
-    フェンス境界で担保していた「同一ブロック内の近接性」は行番号距離の上限
-    （_detect_flows_in_scope 側の _FLOW_MAX_LINE_DISTANCE）で代替する。行番号は
-    原文基準で保持。
+    行番号距離の上限は設けない（#415 追補: 距離キャップ自体が「超えれば回避できる」
+    迂回経路になるため撤廃。producer/consumer 誤連鎖の真因は _FLOW_FETCH_TO_FILE
+    側の regex を修正して解消した）。行番号は原文基準で保持。
     """
     lines = text.splitlines()
     return [list(enumerate(lines, start=1))]

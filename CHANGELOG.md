@@ -11,6 +11,21 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(skill_vuln_scan): SKILL.md 脆弱性スキャンのフェンス限定 scope・除外バグを是正（#415）** —
+  `_iter_scopes` が ``` フェンス内の行しか走査せず、4スペース字下げ・`~~~`・`<details>`・
+  フェンス無し本文の fetch→exec 系列を素通りさせていた欠陥を是正し、記法を問わず全行を
+  走査対象にした。`_iter_target_files` の除外判定が root からの絶対パス全体に掛かっており
+  `~/.claude/` 配下を渡すと `.claude` が常時一致して全件除外（scanned_files=0）になっていた
+  欠陥も是正し、skills_dir 相対の判定に変更。除外リストの各項目に実測込みの根拠を明記し、
+  根拠不十分だった `tests` を除外対象から外した。走査 0 件を observability セクションで
+  ⚠ として常時 surface するようにした（silence != evaluated）。系列フロー検出の
+  `_FLOW_FETCH_TO_FILE` regex が `<account_id>` のような山括弧プレースホルダ内の `>` を
+  redirect と誤認する欠陥も是正し、誤認識対策として一時導入していた行番号距離キャップ
+  （51行超えれば検出を回避できる新たな迂回経路になっていた）を撤廃した。プレースホルダ
+  判定は当初「直前が空白の `>` のみ redirect」に倒したが、これは `curl url>file` や
+  stderr redirect `curl url 2>file` のような直前空白無しの正当な redirect を検出できなく
+  する新規回帰だったため（変異試験で実測）、`<...>` 山括弧トークンを先にマスクしてから
+  マッチする方式に置き換えた。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの
