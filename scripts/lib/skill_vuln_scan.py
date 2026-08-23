@@ -29,17 +29,49 @@ from typing import List, Pattern, Tuple
 # 走査対象拡張子（.py は本 PR 対象外＝FP 抑制。follow-up で別途）。
 _SCAN_EXTENSIONS = {".md", ".sh", ".bash"}
 
-# 走査から除外するディレクトリ名（testpaths_coverage の _EXCLUDE_DIRS と同等の慣習）。
+# 走査から除外するディレクトリ名（skills_dir 相対で判定。#415 是正: 旧実装は
+# root からの絶対パス全体で判定しており ~/.claude/ 配下を渡すと ".claude" が
+# 常に一致して全件除外されていた＝skills 実在パスを1件も走査していなかった）。
+# 判定は _iter_target_files 側で `p.relative_to(skills_dir).parts` に対して行う。
+#
+# 各項目は「除外してよい根拠」を実測込みで書く。根拠を示せない項目は除外しない
+# （~/.claude/rules/verify-checks-by-breaking.md: allowlist/除外リストは検査を
+# 骨抜きにする。迷ったら除外せず検査対象に倒す）。旧リストにあった "tests" は
+# 実コーパスで実際のスキル同梱テスト文書（fetch/exec を含みうる本物の skill
+# 内容）を除外していたため根拠不十分と判断し外した
+# （実測: ~/.claude/skills/turnstile-spin/tests/validation.md）。
 _EXCLUDE_DIRS = {
+    # git 内部のオブジェクト/参照ストア。構造上 .md/.sh/.bash 拡張子のファイルを
+    # 含まない（skill 側が意図的に作者するコンテンツではなく git 自身の管理領域）。
     ".git",
+    # vendored Python virtualenv。activate スクリプトは拡張子無し/.csh/.fish が
+    # 標準で対象拡張子に一致しないため走査上は実質無害（node_modules と同種の
+    # 「インストール成果物であり skill が直接著作したコンテンツでない」区分）。
     ".venv",
     "venv",
+    # vendored npm 依存ツリー。実測 488 件はサードパーティ製パッケージの
+    # CHANGELOG.md 等で skill 作者のコンテンツではない
+    # （例: ~/.claude/skills/gstack/node_modules/pkce-challenge/CHANGELOG.md）。
+    # ただし postinstall script 等の依存チェーン攻撃は本スキャナのスコープ外
+    # （.py 同様 follow-up）であり silent gap として残る。
     "node_modules",
+    # Python バイトコードキャッシュ。.pyc のみを含み対象拡張子に一致しない
+    # （構造上マッチしえない＝実害なし）。
     "__pycache__",
+    # pytest の自動生成キャッシュ。実測 2 件は pytest 自身が生成する定型
+    # README.md（攻撃者が編集できる skill 内容ではない）。
     ".pytest_cache",
+    # mypy の自動生成キャッシュ。.pytest_cache と同種の自動生成物
+    # （実コーパスに該当ファイル無し。構造的類推による判断）。
     ".mypy_cache",
+    # ネストした Claude Code 実行時/開発状態ディレクトリ（worktree・plugin
+    # キャッシュの入れ子等）。実測 1690 件は本プラグイン自身のキャッシュ内に
+    # 混入した stray worktree アーティファクトで、skill として配布される
+    # コンテンツではなかった（例: ~/.claude/plugins/cache/evolve-anything/
+    # evolve-anything/1.125.0/.claude/worktrees/version-up/ 配下の丸ごとの
+    # 開発ツリー2重）。root からの絶対パスでなく skills_dir 相対で判定する
+    # ため、root 自身が ~/.claude 配下でも誤って全件除外はされない。
     ".claude",
-    "tests",
 }
 
 # snippet の最大長（マッチ行を strip して truncate）。
@@ -210,14 +242,20 @@ def _snippet(line_text: str) -> str:
 
 
 def _iter_target_files(skills_dir: Path) -> List[Path]:
-    """skills_dir 配下の対象拡張子ファイルを除外ディレクトリを除いて列挙する。"""
+    """skills_dir 配下の対象拡張子ファイルを除外ディレクトリを除いて列挙する。
+
+    除外判定は skills_dir **相対**の parts に対して行う（#415 是正: 絶対パス全体を
+    見ると skills_dir 自身の祖先パスに含まれる名前 — 例えば ~/.claude/skills を渡した
+    ときの ".claude" — が常に一致し全件除外されるバグがあった）。
+    """
     out: List[Path] = []
     for p in skills_dir.rglob("*"):
         if not p.is_file():
             continue
         if p.suffix not in _SCAN_EXTENSIONS:
             continue
-        if any(part in _EXCLUDE_DIRS for part in p.parts):
+        rel_parts = p.relative_to(skills_dir).parts
+        if any(part in _EXCLUDE_DIRS for part in rel_parts):
             continue
         out.append(p)
     return out

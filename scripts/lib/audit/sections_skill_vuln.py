@@ -37,6 +37,16 @@ def build_skill_vuln_section(project_dir: Path) -> Optional[List[str]]:
         static_n = len(static_findings)
         flow_n = len(flow_findings)
 
+        if report.scanned_files == 0:
+            # silence != evaluated（#415）: applicable=True なのに 0 ファイルは
+            # 「評価したが該当なし ✓」と区別できないと、除外設定のバグ等で
+            # 実質未評価のまま緑扱いされる事故を検出できない。⚠ で常に surface する。
+            return [
+                "⚠ skills/ 配下に走査対象ファイル（.md/.sh/.bash）が0件（未評価）。"
+                "拡張子フィルタや除外ディレクトリ設定で意図せず全除外されていないか"
+                "確認すること（#415）。",
+            ]
+
         if static_n == 0 and flow_n == 0:
             return [
                 f"✓ 評価したが該当なし（skills/ 配下 {report.scanned_files} ファイルを"
