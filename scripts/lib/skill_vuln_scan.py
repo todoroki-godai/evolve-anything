@@ -16,18 +16,30 @@ FP 較正の方針（このリポジトリの鉄則 = 偽陽性に極めて厳�
 - `rm -rf ./build` のような相対パス削除は非検出。`/`・`~`・`$HOME`・`*` を消す場合のみ destructive。
 - secret_exfil は「秘密ソース」と「ネット sink」が**同一行に共起**したときのみ。片方だけは非検出。
 
-対象拡張子は `.md` / `.sh` / `.bash` のみ（`.py` は FP 抑制のため本 PR 対象外。follow-up）。
+対象拡張子は `.md` / `.mdx` / `.markdown` / `.txt` / `.rst` / `.sh` / `.bash`
+（`.py` は FP 抑制のため本 PR 対象外。follow-up）。
 配線先は audit observability の "Skill Vulnerability" section（`audit/sections_skill_vuln.py`）。
 """
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Pattern, Tuple
+from typing import List, Optional, Pattern, Tuple
 
 # 走査対象拡張子（.py は本 PR 対象外＝FP 抑制。follow-up で別途）。
-_SCAN_EXTENSIONS = {".md", ".sh", ".bash"}
+# #537 round4 是正（レビュー I3）: `.mdx`/`.markdown`/`.txt`/`.rst` は `.md` と同じ
+# 人間可読文書でありながら旧実装では最初から拡張子フィルタで捨てられ、
+# node_modules 除外判定にすら到達しなかった（= 常時無条件除外）。実行可能な埋め込み
+# コード片を持ちうる `.mdx` を含め、文書系拡張子として走査対象へ倒す
+# （迷ったら除外せず検査対象に倒す＝verify-checks-by-breaking.md）。
+_SCAN_EXTENSIONS = {".md", ".mdx", ".markdown", ".txt", ".rst", ".sh", ".bash"}
+
+# node_modules 除外（_EXCLUDE_DIRS_DOC_ONLY）の対象となる「文書系」拡張子。
+# `.sh`/`.bash` のような実行可能拡張子はここに含めない（node_modules 配下でも
+# 走査を維持する＝実害のあるペイロードは名前を騙るだけで逃れられないようにする）。
+_DOC_EXTENSIONS = {".md", ".mdx", ".markdown", ".txt", ".rst"}
 
 # 走査から除外するディレクトリ名（skills_dir 相対で判定。#415 是正: 旧実装は
 # root からの絶対パス全体で判定しており ~/.claude/ 配下を渡すと ".claude" が
@@ -74,10 +86,14 @@ _EXCLUDE_DIRS = {
 # 除外を撤廃して 67 roots 相当のコーパスで再走査すると 5 件の新規 FP が実測されたが、
 # その全件が vendored パッケージの CHANGELOG.md 等 `.md` の人間可読な変更履歴文
 # （process.env や "disregard" を含む文）だった（#537 round2 実測）。実害（実行可能な
-# ペイロード）は `.sh`/`.bash` にしか無いため、**除外は `.md` のみに限定し `.sh`/
-# `.bash` は node_modules 配下でも走査する**。名前を騙るだけで走査を逃れられる経路を
-# 塞ぎつつ、実測 FP 5件を個別列挙せず構造的に抑制する（verify-checks-by-breaking.md:
-# allowlist は「残してよい基準」を狭く定義せよ＝ここでは拡張子で境界を引いた）。
+# ペイロード）は `.sh`/`.bash` にしか無いため、**除外は文書系拡張子（`_DOC_EXTENSIONS`）
+# のみに限定し `.sh`/`.bash` は node_modules 配下でも走査する**。名前を騙るだけで
+# 走査を逃れられる経路を塞ぎつつ、実測 FP 5件を個別列挙せず構造的に抑制する
+# （verify-checks-by-breaking.md: allowlist は「残してよい基準」を狭く定義せよ＝
+# ここでは拡張子で境界を引いた）。#537 round4: `.md` 単独から `.mdx`/`.markdown`/
+# `.txt`/`.rst` を含む `_DOC_EXTENSIONS` へ判定を拡張（変数名は既存テスト
+# `test_exclude_dirs_md_only_set_is_locked` の参照互換のため据え置き。中身の
+# {"node_modules"} という集合自体は変わらない）。
 _EXCLUDE_DIRS_MD_ONLY = {
     "node_modules",
 }
@@ -287,13 +303,23 @@ def _snippet(line_text: str) -> str:
 _BLOCKQUOTE_UNIT = re.compile(r"^[ \t]*>+[ \t]*")
 _LIST_UNIT = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
 
-# ゼロ幅文字（U+200B/U+200C/U+200D/U+FEFF）は Python の `\s` に含まれないため、
-# 装飾除去後に `_FLOW_ASSIGN` 側の `^\s*` を素通りして残り、payload の識別子
-# アンカーを壊す（= 検出をすり抜ける）。round3 の探索的プローブで実測発見
-# （`>` の直後に U+200B を挟むと `remote_exec_flow` が非検出になることを確認済み）。
-# レビュー指定外の追加バリアントだが「緑のまま残さない」方針に沿い、装飾除去の
-# 一部として合わせて剥がす。
-_ZERO_WIDTH_UNIT = re.compile("^[​‌‍﻿]+")
+# 不可視文字（Unicode format 制御文字。U+200B ZERO WIDTH SPACE / U+200C-200F
+# ZERO WIDTH NON-JOINER〜RIGHT-TO-LEFT MARK / U+2060 WORD JOINER / U+FEFF 等）は
+# Python の `\s` に含まれないため、装飾除去後に `_FLOW_ASSIGN` 側の `^\s*` を
+# 素通りして残り、payload の識別子アンカーを壊す（= 検出をすり抜ける）。
+# #537 round3 の探索的プローブで U+200B 挟み込みを実測発見したが、round4 レビュー
+# （I1）で U+200E 等の未列挙バリアントでも同様に崩れることが指摘された。
+# **個別の不可視文字を列挙する方式では網羅できない**ため、列挙をやめ
+# `unicodedata.category(ch) == "Cf"`（Format：Unicode が定義する「表示上見えない
+# 制御・書式文字」のクラス全体）でクラス判定する（verify-checks-by-breaking.md:
+# 「不可視文字を個別列挙する方式では I1 を満たせない」への対応）。
+def _strip_leading_invisible(s: str) -> str:
+    """先頭から連続する Unicode format 文字（category "Cf"）を剥がした文字列を返す。"""
+    i = 0
+    n = len(s)
+    while i < n and unicodedata.category(s[i]) == "Cf":
+        i += 1
+    return s[i:] if i else s
 
 
 def _strip_leading_decoration(text: str) -> str:
@@ -315,9 +341,9 @@ def _strip_leading_decoration(text: str) -> str:
         if m:
             s = s[m.end():]
             continue
-        m = _ZERO_WIDTH_UNIT.match(s)
-        if m:
-            s = s[m.end():]
+        stripped = _strip_leading_invisible(s)
+        if stripped is not s:
+            s = stripped
             continue
         break
     return s
@@ -339,48 +365,98 @@ def _strip_leading_decoration(text: str) -> str:
 # 不能なため）。レビュアーが挙げた3例（diff 削除行 / YAML sequence / shell
 # リダイレクト）はいずれも fenced code block or frontmatter 内が実際の使用パターン
 # であり、この2種のリテラルゾーン判定で実害を塞げる。
-_FENCE_BACKTICK = re.compile(r"^\s{0,3}`{3,}")
-_FENCE_TILDE = re.compile(r"^\s{0,3}~{3,}")
+#
+# #537 round4 是正（レビュー I2）: 旧実装は「opener の種類・長さを一切記録せず、
+# 同じ文字種の3連続さえあれば閉じたとみなす」「未閉じのまま EOF に達しても
+# literal のまま扱う」という2つの穴を持っていた。前者は入れ子フェンス
+# （4 backtick opener を内側の 3 backtick 行で誤って閉じたと判定）や、無効な
+# backtick fence（info string に backtick を含む opener）を有効と誤認する false
+# positive を生む。後者は「未閉じ zone を EOF まで信用し、検出を弱める」設計
+# そのものが回避経路になる（```diff で開いて閉じフェンスを書かない攻撃）。
+# 修正方針: **opener の文字種（backtick/tilde）と長さを保持し、同種かつ同じ長さ
+# 以上の closer が実際に見つかった場合のみ閉じたと判定する。見つからなければ
+# その fence は最初から「開いていない」ものとして扱う（=未閉じ zone を作らない・
+# 検出を弱めない）**。frontmatter も同じ原則: 先頭行が `---` でも、ファイル内に
+# 対応する closer `---` が見つからなければ frontmatter とみなさない。
+_FENCE_OPENER = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSER = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$")
+
+
+def _match_fence_opener(stripped: str) -> "Optional[Tuple[str, int]]":
+    """stripped 行が有効な fence opener なら (文字種, 長さ) を返す。無効なら None。
+
+    backtick fence は info string に backtick を含んではならない（CommonMark の
+    fence 文法。含む場合は有効な opener ではない＝レビュー I2「無効な opener でも
+    回避できる」の是正）。tilde fence の info string に制約はない。
+    """
+    m = _FENCE_OPENER.match(stripped)
+    if not m:
+        return None
+    marker, info = m.group(1), m.group(2)
+    ch = marker[0]
+    if ch == "`" and "`" in info:
+        return None
+    return (ch, len(marker))
+
+
+def _match_fence_closer(stripped: str, ch: str, min_len: int) -> bool:
+    """stripped 行が (ch, min_len) の opener を閉じる closer なら True。
+
+    closer は同じ文字種・**opener 以上の長さ**（CommonMark 準拠。短い closer は
+    閉じない＝レビュー I2「長い opener を短い fence で閉じるケース」の是正）。
+    """
+    m = _FENCE_CLOSER.match(stripped)
+    if not m:
+        return False
+    marker = m.group(1)
+    return marker[0] == ch and len(marker) >= min_len
 
 
 def _compute_literal_zone_lines(lines: List[str]) -> set:
     """行番号（1始まり）の集合を返す。フェンスコード内・YAML frontmatter 内の行は
     「装飾ストリップを適用しない」literal zone として扱う（呼び出し側は
     `lineno in literal_zone` のとき `_strip_leading_decoration` を呼ばず生の行を使う）。
+
+    **閉じている zone だけを信用する**（#537 round4）: 対応する closer が見つから
+    ない opener（未閉じフェンス・未閉じ frontmatter）は literal zone を作らない。
+    未閉じのまま EOF まで literal 扱いにすると、そこに書かれた装飾付き payload が
+    検査対象から漏れる（＝検出を弱める）設計上の穴になるため。
     """
     literal: set = set()
-    in_backtick = False
-    in_tilde = False
-    in_frontmatter = False
-    for idx, raw in enumerate(lines, start=1):
-        stripped = raw.rstrip("\r\n")
-        if idx == 1 and stripped == "---":
-            in_frontmatter = True
-            literal.add(idx)
-            continue
-        if in_frontmatter:
-            literal.add(idx)
-            if stripped == "---":
-                in_frontmatter = False
-            continue
-        if in_backtick:
-            literal.add(idx)
-            if _FENCE_BACKTICK.match(stripped):
-                in_backtick = False
-            continue
-        if in_tilde:
-            literal.add(idx)
-            if _FENCE_TILDE.match(stripped):
-                in_tilde = False
-            continue
-        if _FENCE_BACKTICK.match(stripped):
-            in_backtick = True
-            literal.add(idx)
-            continue
-        if _FENCE_TILDE.match(stripped):
-            in_tilde = True
-            literal.add(idx)
-            continue
+    n = len(lines)
+    stripped_lines = [raw.rstrip("\r\n") for raw in lines]
+
+    idx = 0  # 0始まりで走査。literal 追加は 1始まり (idx+1) で行う。
+    if n >= 1 and stripped_lines[0] == "---":
+        close_at = None
+        for j in range(1, n):
+            if stripped_lines[j] == "---":
+                close_at = j
+                break
+        if close_at is not None:
+            for k in range(0, close_at + 1):
+                literal.add(k + 1)
+            idx = close_at + 1
+        # close_at is None ＝未閉じ frontmatter。literal を作らず idx=0 のまま
+        # フェンス走査へフォールスルーする（1行目の "---" 自体は fence 記法に
+        # 一致しないので通常行として扱われる）。
+
+    while idx < n:
+        opener = _match_fence_opener(stripped_lines[idx])
+        if opener is not None:
+            ch, min_len = opener
+            close_at = None
+            for j in range(idx + 1, n):
+                if _match_fence_closer(stripped_lines[j], ch, min_len):
+                    close_at = j
+                    break
+            if close_at is not None:
+                for k in range(idx, close_at + 1):
+                    literal.add(k + 1)
+                idx = close_at + 1
+                continue
+            # 未閉じ: literal を作らずこの行を通常行として扱い、次行へ進む。
+        idx += 1
     return literal
 
 
@@ -400,7 +476,9 @@ def _iter_target_files(skills_dir: Path) -> List[Path]:
         rel_parts = p.relative_to(skills_dir).parts
         if any(part in _EXCLUDE_DIRS for part in rel_parts):
             continue
-        if p.suffix == ".md" and any(part in _EXCLUDE_DIRS_MD_ONLY for part in rel_parts):
+        if p.suffix in _DOC_EXTENSIONS and any(
+            part in _EXCLUDE_DIRS_MD_ONLY for part in rel_parts
+        ):
             continue
         out.append(p)
     return out
@@ -645,7 +723,12 @@ def scan_skills(root: Path) -> SkillVulnReport:
     for path in _iter_target_files(skills_dir):
         rel = path.relative_to(root).as_posix()
         try:
-            text = path.read_text(encoding="utf-8")
+            # #537 round4 是正（レビュー I4）: "utf-8-sig" は先頭 BOM（U+FEFF）が
+            # あれば除去し、無ければ通常の UTF-8 デコードと同じ結果を返す。BOM
+            # 付き先頭 "---" が `stripped == "---"` の完全一致判定から外れ
+            # frontmatter と認識されない誤検出（実測 literal=[], flows=[(3,4)]）
+            # を、装飾除去側（Cf カテゴリ剥がし）でなく読み込み時点で解消する。
+            text = path.read_text(encoding="utf-8-sig")
         except OSError as exc:
             # #537 round2: 無言 skip すると残りだけ数えて「危険パターン検出なし」に
             # 見えてしまう（silence != evaluated）。読取失敗は critical として surface
