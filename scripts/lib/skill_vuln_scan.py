@@ -269,7 +269,16 @@ def _scan_line(rel_path: str, lineno: int, text: str) -> List[Finding]:
 #   引数渡し（`bash local.sh "$V"`）は除外する。ダウンロードファイルは interpreter
 #   直後（`bash FILE` / `./FILE` / `source FILE` / `chmod +x FILE`）のみ。
 # - producer は consumer より前の行に限る（同一行 self-loop は登録を後回しにして排除）。
+# - スコープはフェンス内外を問わず全行（#415 型再発の是正: 4スペース字下げ / `~~~` /
+#   `<details>` / フェンス無し本文が非検出だった）。フェンス境界で担保していた「近接性」
+#   は _FLOW_MAX_LINE_DISTANCE（行番号距離の上限）で代替する。
 # ============================================================================
+
+# producer→consumer の許容行番号距離（この値を超えたペアは連鎖させない）。実コーパス
+# 実測 (#415): 全行走査化した直後は真の combo が距離 8 行に対し、無関係な行が誤って
+# 64〜123 行離れて連鎖する事例（cloudflare/references/realtimekit/README.md 相当）を
+# 検出した。安全側に倒し、通常の script/fenced block の長さを十分にカバーする値とする。
+_FLOW_MAX_LINE_DISTANCE = 50
 
 # fetch 系ネットワーク取得コマンド（gh api を含む）。
 _FLOW_FETCH_CMD = re.compile(r"(?i)(\b(?:curl|wget|fetch)\b|\bgh\s+api\b)")
@@ -341,7 +350,10 @@ def _detect_flows_in_scope(
 
     for lineno, text in scope_lines:
         # 1) consumer 判定は既登録 producer に対してのみ（＝producer 先行を強制）。
+        #    行番号距離が _FLOW_MAX_LINE_DISTANCE を超えるペアは近接性喪失として除外。
         for var, (pl, psnip) in fetch_vars.items():
+            if lineno - pl > _FLOW_MAX_LINE_DISTANCE:
+                continue
             if any(rx.search(text) for rx in _exec_var_regexes(var)):
                 found.append(
                     FlowFinding(
@@ -350,6 +362,8 @@ def _detect_flows_in_scope(
                     )
                 )
         for fpath, (pl, psnip) in fetch_files.items():
+            if lineno - pl > _FLOW_MAX_LINE_DISTANCE:
+                continue
             if any(rx.search(text) for rx in _exec_file_regexes(fpath)):
                 found.append(
                     FlowFinding(
@@ -358,6 +372,8 @@ def _detect_flows_in_scope(
                     )
                 )
         for var, (pl, psnip) in secret_vars.items():
+            if lineno - pl > _FLOW_MAX_LINE_DISTANCE:
+                continue
             if re.search(_var_ref_pattern(var), text) and _NET_SINK.search(text):
                 found.append(
                     FlowFinding(
@@ -387,31 +403,15 @@ def _detect_flows_in_scope(
 def _iter_scopes(path: Path, text: str) -> List[List[Tuple[int, str]]]:
     """フロー解析のスコープを列挙する。
 
-    .sh/.bash はファイル全体を 1 スコープ。SKILL.md 等 .md は fenced code block
-    （``` フェンス）ごとに独立スコープ（prose の跨ぎを排除）。行番号は原文基準で保持。
+    拡張子・フェンス記法（``` / ~~~ / 4スペース字下げ / `<details>` / フェンス無し
+    本文）を問わずファイル全体を 1 スコープとする（#415: フェンス限定 scope は
+    4スペース字下げ・`~~~`・`<details>`・素の本文の combo を素通りさせていた）。
+    フェンス境界で担保していた「同一ブロック内の近接性」は行番号距離の上限
+    （_detect_flows_in_scope 側の _FLOW_MAX_LINE_DISTANCE）で代替する。行番号は
+    原文基準で保持。
     """
     lines = text.splitlines()
-    if path.suffix in {".sh", ".bash"}:
-        return [list(enumerate(lines, start=1))]
-
-    scopes: List[List[Tuple[int, str]]] = []
-    cur: List[Tuple[int, str]] = []
-    in_block = False
-    for idx, line in enumerate(lines, start=1):
-        if re.match(r"^\s*```", line):
-            if in_block:
-                if cur:
-                    scopes.append(cur)
-                cur = []
-                in_block = False
-            else:
-                in_block = True
-            continue
-        if in_block:
-            cur.append((idx, line))
-    if in_block and cur:  # 未閉じフェンスも 1 スコープとして扱う
-        scopes.append(cur)
-    return scopes
+    return [list(enumerate(lines, start=1))]
 
 
 def scan_skills(root: Path) -> SkillVulnReport:
