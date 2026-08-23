@@ -35,7 +35,7 @@ v1 `設計修正要`（[Must]4件）→ v2 `条件付き着手可`（[Must]3件�
   **D-2 実体（v2 [Must]1 決着・`--promote-weak` は使わない）**
   - `--promote-weak` は seen 記録に加えて **correction を `reflect_status="promoted"` で新規作成**する（`promote.py:346-392`）。#514 の在庫レーンは `reflect_status == "promoted"` ∧ 非 invalidated を「反映先未定の積み残し」として出し続ける（`correction_backlog.py:106-110`）。**そのまま使うと weak レーンから消える代わりに在庫レーンで蒸し返される＝再提示バグの引っ越し**になる。
   - 正しい実体は **`record_reviewed(decision="already_reflected")` のみ（correction 非生成・promote 非実行）**。seen は C 反映後の全レーン（daily / digest / bootstrap / `filter_actionable`）で除外キーとして効く。`decision` は自由文字列で read 側は key 集合しか見ない（`daily_review._read_seen_one`）ため新値追加は安全。**新 store 不要**＝#379 の新設凍結をクリア。
-  - **計測（延期契約の代わり）**: この `decision="already_reflected"` を数えるだけで「反映済みなのに再提示された」実頻度が**今後ゼロコストで前向きに自動計測される**。別途の計測タスクを将来へ延期しない。
+  - **計測（延期契約の代わり・codex M6 是正で正確化）**: 集計器は無い（#379 凍結中につき新設しない）。ただし `decision="already_reflected"` が既読ストアに残り続けるため、必要になったときに**後から一意 signal_key 数として数えられる**（行数ではなく key の一意集合。`record_reviewed` はロック外で既存集合を read するため、並行実行では同一 key が複数行 append されうる — read 側は set 化で無害だが、行数をそのまま件数として数えると水増しになる）。「今後ゼロコストで前向きに自動計測される」は誤りで撤回する。別途の計測タスクを将来へ延期しない、という結論自体は変わらない（集計コマンド1本で後追い可能）。
 
   **D-3 変更箇所は3つ（v2 [Must]2。1つでも落とすと部分修正になる）**
   - `scripts/lib/daily/proposal_digest.py`（`_reflect_choice_lines`）— SessionStart digest レーン

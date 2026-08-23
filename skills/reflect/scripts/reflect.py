@@ -943,12 +943,20 @@ def main():
                              "過去経験を suppressed に分離し、関連度スコア付きで提示する（#565）")
     parser.add_argument("--relevance-threshold", type=float, default=None,
                         help="--context: 関連度ゲートの閾値（既定は校正済み 0.5・#565）")
-    parser.add_argument("--promote-weak", type=str, default=None,
+    # #541 codex M1: --promote-weak/--reject-weak/--already-reflected-weak は同一
+    # signal_key に対する三値択一の decision（promoted/rejected/already_reflected）であり、
+    # 同時指定は意味が矛盾する。旧実装は if 分岐順（promote が最優先）で decide していたため、
+    # `--promote-weak K --already-reflected-weak K` のように両方渡すと黙って promote が勝ち、
+    # 「既に反映済みは promote を呼ばない」という設計の中核を破っていた（corrections.jsonl に
+    # reflect_status=promoted のレコードが作られ、#514 在庫レーンへ再提示バグが引っ越す）。
+    # argparse の mutually exclusive group で同時指定自体を拒否する（分岐順に依存しない）。
+    _weak_decision_group = parser.add_mutually_exclusive_group()
+    _weak_decision_group.add_argument("--promote-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）の weak_signal を corrections へ昇格")
-    parser.add_argument("--reject-weak", type=str, default=None,
+    _weak_decision_group.add_argument("--reject-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）を『いいえ』として既読化する"
                              "（#409・weak_signal 自体は昇格しない）")
-    parser.add_argument("--already-reflected-weak", type=str, default=None,
+    _weak_decision_group.add_argument("--already-reflected-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）を『既に反映済み』として既読化する"
                              "（#541 D-2・weak_signal 自体は昇格しない。--promote-weak は"
                              "corrections.jsonl に reflect_status=promoted の新規レコードを"

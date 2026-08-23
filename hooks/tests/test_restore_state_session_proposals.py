@@ -461,3 +461,168 @@ class TestSeenStoreDataDirContract:
 
         output = restore_state._build_session_proposal_output()
         assert output is None  # 提示する group が無い（沈黙）
+
+
+# --- #541 codex M2: 別プロセスでの read/write data_dir 一致（恒真化を避ける） ---
+#
+# M2 是正: TestSeenStoreDataDirContract は _align_store_write_data_dir() で write 側の
+# rl_common.DATA_DIR を read 側の値へ強制的に揃えており、「両側が一致すること」自体を
+# テストが作ってしまっていた（恒真）。ここでは CLI（bin/evolve-reflect）と SessionStart
+# hook（hooks/restore_state.py）を実際に**別々の OS プロセス**として起動し、それぞれが
+# 自分の rl_common import から独立に解決した物理パスの整合を確認する。monkeypatch は
+# 一切使わない。
+import os
+import subprocess
+
+_REPO_ROOT = _HOOKS.parent
+
+
+def _subprocess_env(tmp_path: Path, proj_name: str = "myproj") -> "tuple[dict, Path, Path]":
+    """実 HOME から隔離した env を組み立てる（is_cc_install_layout は Path.home() 基準
+    のため、HOME 自体を tmp_path 配下へ差し替えて実環境を汚染しない）。
+
+    Returns: (env, plugin_data_dir, project_dir)
+    """
+    home = tmp_path / "home"
+    plugin_data = home / ".claude" / "plugins" / "data" / "marketplace-evolve-anything"
+    plugin_data.mkdir(parents=True)
+    proj = tmp_path / proj_name
+    proj.mkdir()
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    env["CLAUDE_PLUGIN_DATA"] = str(plugin_data)
+    env["CLAUDE_PROJECT_DIR"] = str(proj)
+    return env, plugin_data, proj
+
+
+def _write_resolver_script(path: Path, lib_dir: Path) -> None:
+    """store_write が実際に使う data_dir 解決（rl_common.DATA_DIR・call-time 属性参照）を
+    そのまま踏襲し、既読ストアの物理パスを1行 print するだけの最小スクリプト。
+    """
+    path.write_text(
+        "import sys, json\n"
+        f"sys.path.insert(0, {str(lib_dir)!r})\n"
+        "import rl_common\n"
+        "print(json.dumps(str((rl_common.DATA_DIR / 'correction_review_seen.jsonl').resolve())))\n",
+        encoding="utf-8",
+    )
+
+
+def _read_resolver_script(path: Path, lib_dir: Path) -> None:
+    """digest 読み取り側（daily_review.default_seen_path の path 省略＝本番既定解決）が
+    実際に使う物理パスを1行 print するだけの最小スクリプト。
+    """
+    path.write_text(
+        "import sys, json\n"
+        f"sys.path.insert(0, {str(lib_dir)!r})\n"
+        "from correction_semantic import daily_review\n"
+        "print(json.dumps(str(daily_review.default_seen_path().resolve())))\n",
+        encoding="utf-8",
+    )
+
+
+def test_seen_store_resolved_physical_path_matches_across_independent_resolvers(tmp_path):
+    """#541 codex M2: write 側（store_write が使う rl_common.DATA_DIR）と read 側
+    （daily_review.default_seen_path の本番既定解決）が、それぞれ**別プロセス**として
+    独立に計算した既読ストアの絶対物理パスが一致することを直接比較する。
+
+    monkeypatch は使わない。両プロセスとも同じ env を渡すだけで、各自のコード（実装）に
+    書かれた解決ロジックをそのまま実行させる。分裂していればここでパス文字列が食い違う。
+    """
+    env, _plugin_data, _proj = _subprocess_env(tmp_path)
+    lib_dir = _REPO_ROOT / "scripts" / "lib"
+
+    write_script = tmp_path / "resolve_write_path.py"
+    read_script = tmp_path / "resolve_read_path.py"
+    _write_resolver_script(write_script, lib_dir)
+    _read_resolver_script(read_script, lib_dir)
+
+    r_write = subprocess.run(
+        [sys.executable, str(write_script)], env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert r_write.returncode == 0, f"write resolver failed: {r_write.stderr}"
+    r_read = subprocess.run(
+        [sys.executable, str(read_script)], env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert r_read.returncode == 0, f"read resolver failed: {r_read.stderr}"
+
+    write_path = json.loads(r_write.stdout.strip())
+    read_path = json.loads(r_read.stdout.strip())
+    assert write_path == read_path, (
+        f"write側解決パス({write_path}) と read側解決パス({read_path}) が分裂している"
+        "（pitfall_module_level_datadir_import_copy と同型）"
+    )
+
+
+def test_seen_store_write_via_cli_is_visible_to_session_start_hook_in_separate_process(
+    tmp_path,
+):
+    """CLI（別プロセス）が既読化した signal_key を、SessionStart hook（別プロセス）が
+    実際に除外することを確認する（read/write data_dir 分裂が起きていれば、この往復が
+    失敗する＝pitfall_module_level_datadir_import_copy と同型の反例を実プロセスで再現）。
+    """
+    env, plugin_data, proj = _subprocess_env(tmp_path)
+    _write_queue(plugin_data, {"per_pj": {"myproj": [_group(["k1", "k2"])]}, "global": []})
+
+    reflect_bin = _REPO_ROOT / "bin" / "evolve-reflect"
+    r1 = subprocess.run(
+        [sys.executable, str(reflect_bin), "--already-reflected-weak", "k1", "--pj", "myproj"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert r1.returncode == 0, f"CLI failed: {r1.stderr}"
+    out1 = json.loads(r1.stdout)
+    assert out1["status"] == "already_reflected_weak"
+    assert out1["written"] == 1
+
+    restore_state_script = _HOOKS / "restore_state.py"
+    r2 = subprocess.run(
+        [sys.executable, str(restore_state_script)],
+        input="{}", env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert r2.returncode == 0, f"hook failed: {r2.stderr}"
+    stdout_lines = [l for l in r2.stdout.strip().splitlines() if l.strip()]
+    assert len(stdout_lines) == 1, f"expected exactly 1 stdout line, got: {r2.stdout!r}"
+    payload = json.loads(stdout_lines[0])
+    msg = payload["hookSpecificOutput"]["additionalContext"]
+    # k1 は CLI プロセスが既読化済み → hook プロセスが独立に読んでも除外されている。
+    assert "--promote-weak k2" in msg
+    assert "--promote-weak k1,k2" not in msg
+    assert "--promote-weak k1 " not in msg
+
+
+def test_seen_store_write_via_cli_suppresses_group_when_all_keys_reviewed(tmp_path):
+    """陽性対照込みの強反例: 全 key を既読化すれば group ごと SessionStart 提示から消える
+    （提示が 0 件になる=別プロセス間で物理ファイルが完全一致していないと成立しない）。
+    """
+    env, plugin_data, proj = _subprocess_env(tmp_path)
+    _write_queue(plugin_data, {"per_pj": {"myproj": [_group(["k1"])]}, "global": []})
+
+    reflect_bin = _REPO_ROOT / "bin" / "evolve-reflect"
+    r1 = subprocess.run(
+        [sys.executable, str(reflect_bin), "--already-reflected-weak", "k1", "--pj", "myproj"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert r1.returncode == 0, f"CLI failed: {r1.stderr}"
+
+    restore_state_script = _HOOKS / "restore_state.py"
+    r2 = subprocess.run(
+        [sys.executable, str(restore_state_script)],
+        input="{}", env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert r2.returncode == 0, f"hook failed: {r2.stderr}"
+    # 提示があれば全 signal_key が既読化された group が additionalContext に混入する。
+    # 他系統（DATA_DIR分裂・発話取込停止等・実 HOME 隔離テストでは無関係に発火しうる）の
+    # notice は本テストの関心事ではないため、stdout 全体の空検証ではなく
+    # 「改善案の AskUserQuestion 提示が出ていないこと」だけを見る。
+    stdout = r2.stdout.strip()
+    if stdout:
+        for line in stdout.splitlines():
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            hs = payload.get("hookSpecificOutput") or {}
+            ctx = hs.get("additionalContext") or ""
+            assert "改善案があります" not in ctx
+            assert "AskUserQuestion" not in ctx
+            assert "already-reflected-weak" not in ctx
+            assert "promote-weak" not in ctx

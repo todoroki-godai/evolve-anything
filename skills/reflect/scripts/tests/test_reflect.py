@@ -2134,6 +2134,36 @@ class TestWeakReviewRecording:
         assert recs
         assert recs[-1]["decision"] == "already_reflected"
 
+    def test_promote_weak_and_already_reflected_weak_are_mutually_exclusive(self, tmp_path, capsys):
+        """#541 codex M1: --promote-weak と --already-reflected-weak を同時指定すると、
+        分岐順（--promote-weak が先に判定される）で promote が勝ち、corrections.jsonl に
+        reflect_status="promoted" のレコードが作られてしまう（「既に反映済みは promote を
+        呼ばない」という設計の中核を破る）。argparse レベルで排他にし、SystemExit で拒否する。
+        """
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", "k1",
+                                     "--already-reflected-weak", "k1",
+                                     "--pj", "myproj", "--corrections-file", str(corr)]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+        # corrections.jsonl には何も書かれない（拒否されたので promote 側の副作用が発生しない）。
+        assert not corr.exists() or corr.read_text(encoding="utf-8").strip() == ""
+
+    def test_reject_weak_and_already_reflected_weak_are_mutually_exclusive(self, tmp_path, capsys):
+        """同様に --reject-weak / --already-reflected-weak も排他（3値択一の decision を
+        同時に2つ指定させない）。"""
+        with mock.patch("sys.argv", ["reflect", "--reject-weak", "k1",
+                                     "--already-reflected-weak", "k1", "--pj", "myproj"]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+
+    def test_promote_weak_and_reject_weak_are_mutually_exclusive(self, tmp_path, capsys):
+        """既存の2フラグ同士も排他にする（#541 M1 是正で3値とも同一グループに揃える）。"""
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", "k1",
+                                     "--reject-weak", "k1", "--pj", "myproj"]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+
     # --- #412 [Must]5: promote 失敗時に既読化しない ---
 
     def test_promote_weak_partial_failure_only_records_succeeded_key(self, tmp_path, capsys):
