@@ -41,6 +41,13 @@
   出現0件を実測したが、「迷ったら除外せず検査対象に倒す」方針に基づき実装・独立オラクル
   双方にタグ末尾スラッシュ除去+小文字化の正規化を追加し、fixture にも該当入力クラスを
   追加した。
+- **test(probe): real_home テストに実 Codex セッション不在時の skip ガードを追加（#536）** —
+  `test_phase1_codex_probe.py` の `@pytest.mark.real_home` 4件は `Path.home()/".codex"/"sessions"`
+  を直読みしており、対象ディレクトリが無い環境（実測: HOME を一時ディレクトリへ差し替えて
+  再現）では `target_files=0` のまま `_assert_stage_counts_plausible` 等が意味のない失敗を
+  起こしていた（4件中2件が実際に FAILED することを実測確認）。実データが無いことを理由付き
+  skip として明示するガードを追加し、実データがある環境（開発機）では引き続き実行され緑に
+  なることも実測で確認した。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの

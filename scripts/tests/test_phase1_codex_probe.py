@@ -24,6 +24,29 @@ import phase1_codex_probe as p  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────
+# real_home テスト用 skip ガード（#536 team-lead 追加確認）
+#
+# real_home マーカーは root conftest の HOME 隔離を opt-out するだけで、対象
+# ディレクトリ（実 ~/.codex/sessions）の実在は保証しない。実在チェックを
+# 怠ると、実 Codex セッションが無い環境（CI ランナー・別ユーザーの開発機等）
+# では target_files=0 のまま _assert_stage_counts_plausible の下限チェック
+# （227件）に引っかかり、意味のある失敗ではなく「環境にデータが無い」だけの
+# ことで赤くなる。実測（HOME を実 ~/.codex を含まない一時ディレクトリへ
+# 差し替えて実行）で target_files=0 → 2/4 の real_home テストが実際に FAILED
+# することを確認済み。
+#
+# skip 理由は必ず出す（silence != evaluated）。黙って skip して緑に見せない。
+_REAL_CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+_skip_if_no_real_codex_sessions = pytest.mark.skipif(
+    not _REAL_CODEX_SESSIONS_ROOT.exists(),
+    reason=(
+        f"{_REAL_CODEX_SESSIONS_ROOT} が存在しません。real_home テストは実 Codex "
+        "セッションが存在する環境でのみ意味を持つ検査のため skip します（#536）。"
+    ),
+)
+
+
+# ─────────────────────────────────────────────────────────────────
 # fixture helpers
 # ─────────────────────────────────────────────────────────────────
 def _session_meta(sid: str, cwd: str = "/Users/x/matsukaze-utils/evolve-anything", ts="2026-08-20T00:00:00.000Z") -> str:
@@ -294,6 +317,7 @@ def test_child_session_file_excluded_with_both_markers(tmp_path):
 
 
 @pytest.mark.real_home
+@_skip_if_no_real_codex_sessions
 def test_child_reference_scope_phase1_vs_full_agreement():
     """壊す不変条件: X2（Phase1限定走査と全走査が一致する）
     ／通したい検査経路: run_probe の child_ref_scope_agreement フラグ。
@@ -575,6 +599,7 @@ def test_assert_stage_counts_plausible_accepts_baseline_boundary():
 
 
 @pytest.mark.real_home
+@_skip_if_no_real_codex_sessions
 def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitude():
     """壊す不変条件: C-1（実データで完走し段階件数が ADR 実測値と整合する）
     ／通したい検査経路: run_probe のパイプライン全体（実 ~/.codex/sessions を読む）
@@ -593,6 +618,7 @@ def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitu
 
 
 @pytest.mark.real_home
+@_skip_if_no_real_codex_sessions
 def test_run_probe_does_not_touch_production_stores():
     """壊す不変条件: C-3（本番ストアに一切書かない）
     ／通したい検査経路: run_probe 実行前後で本番3ストア + utterances.db の byte hash 不変。
@@ -675,6 +701,7 @@ def test_prev_action_duplicate_channel_reuses_same_snapshot(tmp_path):
 
 
 @pytest.mark.real_home
+@_skip_if_no_real_codex_sessions
 def test_prev_action_populated_end_to_end_against_real_data():
     """陽性対照 + 統合検査: 実データで prev_action が非 None の発話が実在すること
     （全件 None のまま構造的に歪んでいないこと・Must1 反映確認）。
