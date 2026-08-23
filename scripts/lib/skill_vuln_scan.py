@@ -36,10 +36,22 @@ from typing import List, Optional, Pattern, Tuple
 # （迷ったら除外せず検査対象に倒す＝verify-checks-by-breaking.md）。
 _SCAN_EXTENSIONS = {".md", ".mdx", ".markdown", ".txt", ".rst", ".sh", ".bash"}
 
-# node_modules 除外（_EXCLUDE_DIRS_DOC_ONLY）の対象となる「文書系」拡張子。
-# `.sh`/`.bash` のような実行可能拡張子はここに含めない（node_modules 配下でも
-# 走査を維持する＝実害のあるペイロードは名前を騙るだけで逃れられないようにする）。
+# 「文書系」拡張子の分類集合（走査対象の分類にのみ使う。node_modules 除外の
+# ゲートには使わない — 下の `_NODE_MODULES_DOC_EXCLUDE_EXTENSIONS` を参照）。
 _DOC_EXTENSIONS = {".md", ".mdx", ".markdown", ".txt", ".rst"}
+
+# node_modules 除外ゲートの対象拡張子（#537 round5b 是正・レビュー R3）:
+# 旧実装は `_DOC_EXTENSIONS`（.md/.mdx/.markdown/.txt/.rst 全部）をそのまま
+# node_modules 除外ゲートへ渡していた。round4 は「`.mdx` は実行可能な埋め込み
+# コード片を持ちうるから走査対象へ追加する」という理由でこれらの拡張子を
+# `_SCAN_EXTENSIONS` に足したにもかかわらず、除外ゲート側は「文書系拡張子は
+# 一律 node_modules で除外してよい」という round3 時点の古い前提のままだった
+# ため、`skills/foo/node_modules/pkg/payload.mdx` のような実行可能ペイロードが
+# 追加した端から無条件除外される矛盾（要求と逆）を実測発見した。除外してよいのは
+# `.md`（node_modules の同梱 README/CHANGELOG 等、埋め込みコード実行の実害が
+# 無いと round3 で実測済みのケース）のみに縮小し、`.mdx`/`.markdown`/`.txt`/
+# `.rst` は `.sh`/`.bash` と同じく node_modules 配下でも走査を維持する。
+_NODE_MODULES_DOC_EXCLUDE_EXTENSIONS = {".md"}
 
 # 走査から除外するディレクトリ名（skills_dir 相対で判定。#415 是正: 旧実装は
 # root からの絶対パス全体で判定しており ~/.claude/ 配下を渡すと ".claude" が
@@ -465,6 +477,20 @@ def _compute_literal_zone_lines(lines: List[str]) -> set:
     ない opener（未閉じフェンス・未閉じ frontmatter）は literal zone を作らない。
     未閉じのまま EOF まで literal 扱いにすると、そこに書かれた装飾付き payload が
     検査対象から漏れる（＝検出を弱める）設計上の穴になるため。
+
+    **未閉じの opener 以降はフェンス走査自体を止める**（#537 round5b 是正・
+    レビュー R2）: round4 は未閉じ opener の行を「通常行」として扱い次の行から
+    フェンス走査を続けていたが、これは「未閉じの外側フェンスの内側に、閉じた
+    短い内側フェンスを置く」（```` ````diff ```` で開始し閉じないまま、内側に
+    ``` ```sh ... ``` ``` を置く）と、内側フェンスだけが独自に「閉じている
+    zone」として認識され、そこに含まれる装飾付き payload が再び literal 扱いで
+    隠れてしまう回避経路になっていた（レビュアーが実際に構成して確認済み）。
+    実際の Markdown レンダリングでも、外側フェンスが未閉じである以上ファイル末尾
+    まで一つの（未閉じの）コードブロックの内容であり、内側に見える ``` ``` ```
+    は独立したフェンスとして解釈されない。ゆえに未閉じ opener に到達したら、
+    その時点でフェンス走査を打ち切り（`break`）、残り全行は「通常行」として
+    装飾除去・パターン照合の対象に倒す（見えなくするより誤検出の方が安全側
+    ＝verify-checks-by-breaking.md）。
     """
     literal: set = set()
     n = len(lines)
@@ -499,7 +525,11 @@ def _compute_literal_zone_lines(lines: List[str]) -> set:
                     literal.add(k + 1)
                 idx = close_at + 1
                 continue
-            # 未閉じ: literal を作らずこの行を通常行として扱い、次行へ進む。
+            # 未閉じ: literal を作らず、以降のフェンス走査自体を打ち切る（#537
+            # round5b・レビュー R2）。内側に見える別のフェンス記法は独立した
+            # フェンスとして扱わない（未閉じの外側フェンスを内側の短いフェンスで
+            # 再び「閉じた」ことにできる回避経路を塞ぐ）。
+            break
         idx += 1
     return literal
 
@@ -510,17 +540,22 @@ def _iter_target_files(skills_dir: Path) -> List[Path]:
     除外判定は skills_dir **相対**の parts に対して行う（#415 是正: 絶対パス全体を
     見ると skills_dir 自身の祖先パスに含まれる名前 — 例えば ~/.claude/skills を渡した
     ときの ".claude" — が常に一致し全件除外されるバグがあった）。
+
+    #537 round5b 是正（レビュー R4）: `Path.suffix` は大文字小文字を保持したまま
+    返すため、`NOTES.MDX` のような大文字拡張子が `_SCAN_EXTENSIONS`（小文字集合）
+    と一致せず走査対象から漏れていた。拡張子の比較は小文字化してから行う。
     """
     out: List[Path] = []
     for p in skills_dir.rglob("*"):
         if not p.is_file():
             continue
-        if p.suffix not in _SCAN_EXTENSIONS:
+        suffix = p.suffix.lower()
+        if suffix not in _SCAN_EXTENSIONS:
             continue
         rel_parts = p.relative_to(skills_dir).parts
         if any(part in _EXCLUDE_DIRS for part in rel_parts):
             continue
-        if p.suffix in _DOC_EXTENSIONS and any(
+        if suffix in _NODE_MODULES_DOC_EXCLUDE_EXTENSIONS and any(
             part in _EXCLUDE_DIRS_MD_ONLY for part in rel_parts
         ):
             continue
