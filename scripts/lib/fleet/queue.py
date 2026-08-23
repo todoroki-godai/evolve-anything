@@ -34,8 +34,10 @@ from .queue_materials import (  # noqa: F401 (再エクスポート含む)
     bootstrap_consumed_by_pj,
     collect_phantom_materials,
     collect_untracked_materials,
+    corrections_read_health,
     count_unattributed_corrections,
     new_corrections_by_pj,
+    read_corrections_records_with_health,
     weak_content_poor_by_pj,
     weak_machinery_by_pj,
     weak_unprocessed_by_pj,
@@ -193,7 +195,7 @@ def build_queue_result(
 
     schema:
       {generated_at, threshold, tracked_total, queue_status, queue_status_reason,
-       skipped_dead, untracked_with_material,
+       skipped_dead, untracked_with_material, corrections_read_health,
        queue: [{pj_slug, project_path, material_count, weak_unprocessed,
        new_corrections, correction_backlog, last_evolve_at, activity_since, reason,
        verify_pending}]}
@@ -237,6 +239,9 @@ def build_queue_result(
     correction_backlog_counts = correction_backlog_counts_by_pj(
         corrections_path=corrections_path
     )
+    # #533: silence != evaluated — corrections.jsonl の read health を1回だけ probe し、
+    # 「正常な空在庫」と「読取不能・壊れた行あり」を区別して queue_status / result に surface する。
+    corr_read_health = corrections_read_health(corrections_path)
     for slug in pj_slugs:
         path = paths.get(slug)
         if path is not None and not Path(path).is_dir():
@@ -389,6 +394,7 @@ def build_queue_result(
         skipped_dead=skipped_dead,
         skipped_phantom=phantom,
         unattributed_total=unattributed_corrections.get("total", 0),
+        corrections_read_health=corr_read_health,
     )
 
     return {
@@ -401,6 +407,9 @@ def build_queue_result(
         "skipped_dead": skipped_dead,
         "untracked_with_material": untracked,
         "skipped_phantom": phantom,
+        # #533: corrections.jsonl の read health（正常な空在庫と読取不能・壊れた行の区別）。
+        # silence != evaluated — 在庫ゼロ表示が「本当に空」か「読めなかった」かを常時 surface する。
+        "corrections_read_health": corr_read_health,
         # #94: bootstrap 消化済み（破棄/TTL 任せ判断済み）で material から除外した weak の透明化。
         "bootstrap_consumed": bootstrap_consumed,
         # #113: content-poor channel（昇格不能）で material から除外した weak の透明化。

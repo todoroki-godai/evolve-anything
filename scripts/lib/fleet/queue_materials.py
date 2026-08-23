@@ -192,7 +192,64 @@ def bootstrap_consumed_by_pj(
     return len(without_bootstrap) - len(kept)
 
 
-# --- store reader: 前回 evolve 以降の corrections カウント（PJ 別）------------
+# --- store reader: corrections.jsonl 共有 raw read + read-health（#533）------
+
+
+def read_corrections_records_with_health(
+    corrections_path: Path,
+) -> "tuple[List[Dict[str, Any]], Dict[str, Any]]":
+    """corrections.jsonl を1回 read し、``(有効な dict レコード, read health)`` を返す。
+
+    ``new_corrections_by_pj`` / ``count_unattributed_corrections`` /
+    ``correction_semantic.correction_backlog`` の各 reader が独立に「ファイル不在→空リスト・
+    ``OSError``→空リスト・JSON decode 失敗→無言 skip」を行っていたため、読取不能（権限エラー等）
+    と壊れた行ありのケースが呼び側から区別できず、queue 側に「在庫ゼロ」として無音で伝播していた
+    （issue #533・``silence != evaluated``）。本関数を単一ソースにし、件数計算に使う従来通りの
+    レコードリストと、劣化を表す health dict の両方を同時に返す。
+
+    health の契約:
+      - ``readable``: ファイルを最後まで読めたか（``OSError`` で失敗すると False）
+      - ``error``: ``readable=False`` のときの例外文字列（成功時は None）
+      - ``malformed_lines``: 空行以外で JSON decode に失敗した、または dict でなかった行数
+
+    ファイル不在は「劣化」ではなく「正常な空在庫」（``readable=True, malformed_lines=0``）。
+    """
+    health: Dict[str, Any] = {"readable": True, "error": None, "malformed_lines": 0}
+    path = Path(corrections_path)
+    if not path.exists():
+        return [], health
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        health["readable"] = False
+        health["error"] = str(exc)
+        return [], health
+
+    out: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            rec = json.loads(s)
+        except (json.JSONDecodeError, ValueError):
+            health["malformed_lines"] += 1
+            continue
+        if not isinstance(rec, dict):
+            health["malformed_lines"] += 1
+            continue
+        out.append(rec)
+    return out, health
+
+
+def corrections_read_health(corrections_path: Path) -> Dict[str, Any]:
+    """corrections.jsonl の read health だけを返す（``build_queue_result`` 用の単発 probe）。
+
+    ``{"readable": bool, "error": Optional[str], "malformed_lines": int}``。
+    劣化していない（ファイル不在含む）なら ``readable=True and malformed_lines == 0``。
+    """
+    _, health = read_corrections_records_with_health(corrections_path)
+    return health
 
 
 def _correction_slug(project_path: Any) -> str:
@@ -259,26 +316,11 @@ def new_corrections_by_pj(
     corrections は ``project_path`` を bare slug に正規化（``_correction_slug``）してから
     scope する（実コーパスでフルパス / slug が混在するため）。timestamp は ``_ts_strictly_after``
     で datetime 比較する（`Z` / `+00:00` 終端混在を吸収・None 時は全件なので影響しない）。
-    ファイル不在 → 0。
+    ファイル不在 → 0。読取不能・壊れた行の可視化は ``corrections_read_health``（#533）。
     """
-    path = Path(corrections_path)
-    if not path.exists():
-        return 0
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return 0
+    records, _health = read_corrections_records_with_health(Path(corrections_path))
     count = 0
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        try:
-            rec = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(rec, dict):
-            continue
+    for rec in records:
         if _correction_slug(rec.get("project_path")) not in _aliases_for(pj_slug):
             continue
         if last_evolve_at is not None:
@@ -307,26 +349,12 @@ def count_unattributed_corrections(
 
     返り値: ``{"total": int, "by_source": {source: count}}``。``source`` 欠落は ``(unknown)``。
     ファイル不在 / 読込失敗 → ``{"total": 0, "by_source": {}}``（advisory ゆえ落とさない）。
+    読取不能・壊れた行の可視化は ``corrections_read_health``（#533）。
     """
     result: Dict[str, Any] = {"total": 0, "by_source": {}}
-    path = Path(corrections_path)
-    if not path.exists():
-        return result
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return result
     by_source: Dict[str, int] = result["by_source"]
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        try:
-            rec = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(rec, dict):
-            continue
+    records, _health = read_corrections_records_with_health(Path(corrections_path))
+    for rec in records:
         if _correction_slug(rec.get("project_path")):
             continue  # 帰属可能なものは対象外
         if since is not None and not _ts_strictly_after(rec.get("timestamp"), since):

@@ -440,6 +440,63 @@ class TestCountUnattributedCorrections:
         assert out == {"total": 1, "by_source": {"backfill": 1}}
 
 
+# --- corrections.jsonl 共有 read health（#533）--------------------------------
+
+
+class TestReadCorrectionsRecordsWithHealth:
+    """``silence != evaluated``: 正常な空在庫と読取不能・壊れた行を区別する（issue #533）。"""
+
+    def test_healthy_file_is_readable_with_no_malformed_lines(self, tmp_path):
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(json.dumps(_corr("alpha", "2026-06-01T00:00:00+00:00")) + "\n")
+        records, health = fq.read_corrections_records_with_health(store)
+        assert len(records) == 1
+        assert health == {"readable": True, "error": None, "malformed_lines": 0}
+
+    def test_missing_file_is_normal_empty_not_degraded(self, tmp_path):
+        """ファイル不在は「読めなかった」でなく「正常な空在庫」— evaluated 扱い。"""
+        store = tmp_path / "nope.jsonl"
+        records, health = fq.read_corrections_records_with_health(store)
+        assert records == []
+        assert health == {"readable": True, "error": None, "malformed_lines": 0}
+
+    def test_os_error_marks_unreadable_with_error_text(self, tmp_path, monkeypatch):
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+
+        def _raise(*_args, **_kwargs):
+            raise OSError("Permission denied")
+
+        monkeypatch.setattr(Path, "read_text", _raise)
+        records, health = fq.read_corrections_records_with_health(store)
+        assert records == []
+        assert health["readable"] is False
+        assert "Permission denied" in (health["error"] or "")
+        assert health["malformed_lines"] == 0
+
+    def test_malformed_lines_are_counted_not_silently_dropped(self, tmp_path):
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(
+            json.dumps(_corr("alpha", "t")) + "\n"
+            "{not valid json\n"
+            "[]\n"  # JSON として valid だが dict でない → malformed 扱い
+        )
+        records, health = fq.read_corrections_records_with_health(store)
+        assert len(records) == 1
+        assert health["readable"] is True
+        assert health["malformed_lines"] == 2
+
+    def test_corrections_read_health_standalone_probe(self, tmp_path):
+        """``corrections_read_health`` は records を捨てて health だけ返す薄いラッパー。"""
+        store = tmp_path / "corrections.jsonl"
+        store.write_text("{bad json\n")
+        assert fq.corrections_read_health(store) == {
+            "readable": True,
+            "error": None,
+            "malformed_lines": 1,
+        }
+
+
 class TestQueueState:
     def test_read_empty_when_missing(self, tmp_path):
         assert qs.read_last_evolve(data_dir=tmp_path) == {}
@@ -531,8 +588,14 @@ class TestBuildQueueResult:
             "weak_content_poor",
             "weak_machinery",
             "unattributed_corrections",
+            "corrections_read_health",
         }
         assert result["unattributed_corrections"] == {"total": 0, "by_source": {}}
+        assert result["corrections_read_health"] == {
+            "readable": True,
+            "error": None,
+            "malformed_lines": 0,
+        }
         assert result["generated_at"] == "2026-06-25T09:00:00Z"
         assert result["threshold"] == 3
         assert result["tracked_total"] == 1
@@ -599,6 +662,86 @@ class TestBuildQueueResult:
         assert result["queue_status"] == "READY"
         assert result["queue"][0]["material_count"] == 0
         assert result["queue"][0]["correction_backlog"] == 1
+
+    def test_degraded_corrections_read_does_not_claim_empty(self, tmp_path):
+        """#533: corrections.jsonl の壊れた行を、待ち0件の EMPTY 断定に紛れ込ませない。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("{not valid json\n")
+        result = fq.build_queue_result(
+            pj_slugs=["quiet"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert result["queue"] == []
+        # EMPTY のままでは「本当に0件」と読めてしまう。読取が劣化しているので断定しない。
+        assert result["queue_status"] == "SETUP_REQUIRED"
+        assert "corrections.jsonl" in result["queue_status_reason"]
+        assert result["corrections_read_health"]["malformed_lines"] == 1
+
+    def test_degraded_corrections_read_note_appended_when_queue_ready(self, tmp_path):
+        """#533: queue が非空（READY）でも劣化注記は reason に残る（無音にしない）。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("".join(json.dumps(_ws("alpha", key=f"a{i}")) + "\n" for i in range(4)))
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("{not valid json\n")
+        result = fq.build_queue_result(
+            pj_slugs=["alpha"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert result["queue_status"] == "READY"
+        assert "corrections.jsonl" in result["queue_status_reason"]
+        assert result["corrections_read_health"]["malformed_lines"] == 1
+
+    def test_healthy_corrections_read_stays_empty(self, tmp_path):
+        """陽性対照: 正常な空在庫（読取自体は健全）は従来通り EMPTY のまま。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+        result = fq.build_queue_result(
+            pj_slugs=["quiet"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert result["queue_status"] == "EMPTY"
+        assert result["corrections_read_health"] == {
+            "readable": True,
+            "error": None,
+            "malformed_lines": 0,
+        }
+
+    def test_missing_corrections_file_stays_empty(self, tmp_path):
+        """陽性対照その2: corrections.jsonl が存在しない（初回セットアップ等）も正常な空扱い。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"  # 未作成
+        result = fq.build_queue_result(
+            pj_slugs=["quiet"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert result["queue_status"] == "EMPTY"
+        assert result["corrections_read_health"]["readable"] is True
+        assert result["corrections_read_health"]["malformed_lines"] == 0
 
 
 # --- CLI --json 出力 ----------------------------------------------------------
@@ -1283,6 +1426,7 @@ def _result(
     unattributed=None,
     queue_status=None,
     queue_status_reason=None,
+    corrections_read_health=None,
 ):
     out = {
         "generated_at": "2026-06-25T09:00:00Z",
@@ -1297,6 +1441,8 @@ def _result(
     if queue_status is not None:
         out["queue_status"] = queue_status
         out["queue_status_reason"] = queue_status_reason
+    if corrections_read_health is not None:
+        out["corrections_read_health"] = corrections_read_health
     return out
 
 
@@ -1561,6 +1707,56 @@ class TestFormatQueueTableStatus:
             _result(queue=q, queue_status="READY", queue_status_reason="待ち PJ 1 件")
         )
         assert "verify 待ち 2 件（前回 accept・検証可能）" in out
+
+
+class TestFormatQueueTableCorrectionsReadHealth:
+    """corrections.jsonl の read health が劣化しているときだけ人間向け出力に詳細を出す（#533）。"""
+
+    def test_healthy_emits_no_footer(self):
+        out = format_queue_table(
+            _result(
+                queue=[],
+                queue_status="EMPTY",
+                queue_status_reason="待ち PJ 0件・処理できない学習素材もありません（閾値未満か素材なし）",
+                corrections_read_health={"readable": True, "error": None, "malformed_lines": 0},
+            )
+        )
+        assert "corrections.jsonl" not in out
+
+    def test_missing_key_emits_no_footer_back_compat(self):
+        """旧 schema（キー無し）の result dict は何も出さない（後方互換）。"""
+        out = format_queue_table(_result(queue=[]))
+        assert "corrections.jsonl" not in out
+
+    def test_unreadable_emits_error_footer(self):
+        out = format_queue_table(
+            _result(
+                queue=[],
+                queue_status="SETUP_REQUIRED",
+                queue_status_reason=(
+                    "待ち PJ は0件ですが処理できない学習素材があります: "
+                    "corrections.jsonl 読取失敗（Permission denied）— 反映待ち在庫が過小表示の可能性"
+                ),
+                corrections_read_health={
+                    "readable": False,
+                    "error": "Permission denied",
+                    "malformed_lines": 0,
+                },
+            )
+        )
+        assert "corrections.jsonl 読取失敗" in out
+        assert "Permission denied" in out
+
+    def test_malformed_lines_emits_footer_with_count(self):
+        out = format_queue_table(
+            _result(
+                queue=[],
+                queue_status="SETUP_REQUIRED",
+                queue_status_reason="待ち PJ は0件ですが処理できない学習素材があります: corrections.jsonl に壊れた行 4 件",
+                corrections_read_health={"readable": True, "error": None, "malformed_lines": 4},
+            )
+        )
+        assert "corrections.jsonl に壊れた行 4 件" in out
 
 
 # --- build_queue_result 統合テスト（#267 Phase 5・実ストア E2E）--------------

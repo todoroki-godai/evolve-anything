@@ -80,28 +80,20 @@ def _format_backlog_item(rec: Dict[str, Any]) -> Dict[str, Any]:
 def _read_eligible_backlog_records(
     corrections_path: Optional[Path],
 ) -> List[Dict[str, Any]]:
-    """全 PJ の有効な在庫を1回の store read で返す。"""
-    import json
+    """全 PJ の有効な在庫を1回の store read で返す。
+
+    raw read（ファイル不在→空・``OSError``→空・壊れた行→無言 skip）は
+    ``fleet.queue_materials.read_corrections_records_with_health`` を単一ソースとして再利用する
+    （新しい read 経路を発明しない・#533）。読取不能・壊れた行の可視化（read health）は
+    ``fleet.queue_materials.corrections_read_health`` が ``build_queue_result`` 経由で担う。
+    """
+    from fleet.queue_materials import read_corrections_records_with_health
 
     path = Path(corrections_path) if corrections_path is not None else _default_corrections_path()
-    if not path.exists():
-        return []
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    records, _health = read_corrections_records_with_health(path)
 
     out: List[Dict[str, Any]] = []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        try:
-            rec = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(rec, dict):
-            continue
+    for rec in records:
         if rec.get("reflect_status") != "promoted":
             continue
         if rec.get("invalidated"):
