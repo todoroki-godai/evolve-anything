@@ -381,8 +381,9 @@ def _read_backlog(
     weak_signals_path: Optional[Path],
     *,
     candidates: Optional[List[Dict[str, Any]]] = None,
+    seen_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
-    """当該 PJ slug の未昇格 content-rich backlog を返す（TTL 失効・machinery は除外）。
+    """当該 PJ slug の未昇格 content-rich backlog を返す（TTL 失効・machinery・既読は除外）。
 
     #99: 対象 channel は REVIEW_CHANNELS（llm_judge / rephrase / permission_deny）。content-poor
     チャネル（esc_interrupt / manual_edit_after_ai）は detector が文脈未保存ゆえ bootstrap でも除外。
@@ -392,15 +393,24 @@ def _read_backlog(
     ``filter_actionable`` と同じ述語）で除外する。ここを落とすと Step 6.1（bootstrap）と
     Step 6.2（daily_review）で母集団が分裂する。
 
+    #541 C: ``_scope_backlog_candidates`` は promoted/TTL/channel しか見ておらず既読
+    （correction_review_seen.jsonl）を見ない。日次4択で既に既読化した signal_key が
+    bootstrap の一括確認へ再噴出しないよう、``promote.filter_actionable`` の既読軸
+    （``exclude_reviewed``）を通す（新しい判定ロジックは作らない・単一 predicate 再利用）。
+    ``filter_actionable`` は bootstrap 消化除外も併せて適用するが、marker が未設定
+    （＝bootstrap 実行中）の間は no-op（``_exclude_bootstrap_consumed`` は marker 無しなら
+    素通し）なのでこの経路で二重フィルタにはならない。
+
     ``candidates``（codex [Should]1 是正）: ``build()`` が ``_machinery_backlog_stats`` と
     同じスナップショットを渡すための注入口。省略時（既存呼び出し互換）は従来どおり
     ``_scope_backlog_candidates`` で自前に読み直す。
     """
-    from correction_semantic.promote import is_machinery_signal
+    from correction_semantic.promote import filter_actionable, is_machinery_signal
 
     if candidates is None:
         candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
-    return [r for r in candidates if not is_machinery_signal(r)]
+    without_machinery = [r for r in candidates if not is_machinery_signal(r)]
+    return filter_actionable(without_machinery, pj_slug, seen_path=seen_path)
 
 
 def _machinery_backlog_stats(
@@ -552,9 +562,14 @@ def build(
     weak_signals_path: Optional[Path] = None,
     marker_path: Optional[Path] = None,
     idioms_path: Optional[Path] = None,
+    seen_path: Optional[Path] = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """初回（marker 未設定）のみ、当該 PJ の未昇格 backlog を group 化して返す。
+
+    ``seen_path``（#541 C・テスト isolation 用）: 既読集合（correction_review_seen.jsonl）
+    の明示パス。未指定は本番既定（union read）。日次4択で既に既読化した signal_key は
+    ここでも除外される（``_read_backlog`` 経由・単一 predicate `filter_actionable` 再利用）。
 
     Returns:
       {"is_bootstrap": bool,   # marker 未設定なら True
@@ -606,7 +621,9 @@ def build(
     # _machinery_backlog_stats に同じスナップショットを渡す（読みの間に store が
     # 更新されると surface した除外件数と実候補数が食い違う race を防ぐ）。
     scope_candidates = _scope_backlog_candidates(pj_slug, weak_signals_path)
-    backlog = _read_backlog(pj_slug, weak_signals_path, candidates=scope_candidates)
+    backlog = _read_backlog(
+        pj_slug, weak_signals_path, candidates=scope_candidates, seen_path=seen_path,
+    )
     machinery_stats = _machinery_backlog_stats(
         pj_slug, weak_signals_path, candidates=scope_candidates,
     )

@@ -388,3 +388,76 @@ class TestSingleJsonResponse:
         payload = json.loads(lines[0])
         hs = payload["hookSpecificOutput"]
         assert "AskUserQuestion" in hs["additionalContext"]
+
+
+# --- #541 S1: 既読ストアの read/write data_dir 同一性契約 ---
+#
+# collectors._build_session_proposal_output は digest 生成と同じ data_dir を
+# ``daily_review.default_seen_path(base=data_dir)`` で明示指定して読む一方、
+# reflect.py の --promote-weak/--reject-weak/--already-reflected-weak は
+# ``daily_review.record_reviewed`` を path 未指定（env CLAUDE_PLUGIN_DATA からの
+# production 既定解決）で呼ぶ。両者が同じ物理ファイルを指していないと、既読化した
+# はずの signal_key が翌朝また提示される（pitfall_datadir_hook_tool_split と同型）。
+def _align_store_write_data_dir(monkeypatch, source: Path) -> None:
+    """``store_write`` が使う ``rl_common.DATA_DIR`` を ``source`` に合わせる。
+
+    ``rl_common.DATA_DIR`` はモジュール import 時に一度だけ ``resolve_data_dir`` した
+    値のキャッシュ（本番プロセスは1プロセス=1回の起動なので env と常に一致する）。
+    root conftest の autouse ``_isolate_plugin_data`` はこの属性を **test 開始時点**の
+    ``tmp_path`` へ rebase 済みだが、本テストは ``_install_env`` で **test body 内**に
+    改めて ``CLAUDE_PLUGIN_DATA=source`` を設定するため、その後で属性を揃え直さないと
+    ``record_reviewed``（path 省略・本番経路）の書込先が digest 読み取り側（env から
+    都度再解決）とずれる。これは #541 が検査したい read/write 分裂そのものではなく、
+    2 段階の env シミュレーションを重ねる本テストファイル特有の前提合わせ。
+    """
+    sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
+    import rl_common
+    monkeypatch.setattr(rl_common, "DATA_DIR", source, raising=False)
+
+
+class TestSeenStoreDataDirContract:
+    def test_promoted_key_written_without_explicit_path_is_excluded_from_digest(
+        self, tmp_path, monkeypatch,
+    ):
+        """write 側（record_reviewed を path 省略で呼ぶ = CLI の本番経路）と read 側
+        （_build_session_proposal_output 内の seen_path）が同じ data_dir を指すことを、
+        実際に書いて読む往復で確認する（mock で片側だけ差し替えない）。
+        """
+        source = _install_env(tmp_path, monkeypatch)
+        slug = _set_project_dir(tmp_path, monkeypatch)
+        _write_queue(source, {"per_pj": {slug: [_group(["k1", "k2"])]}, "global": []})
+        _align_store_write_data_dir(monkeypatch, source)
+
+        sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
+        from correction_semantic.daily_review import record_reviewed
+
+        # CLI の本番経路と同じ呼び方（path 省略）で k1 のみ既読化する。
+        record_reviewed(["k1"], slug, decision="already_reflected")
+
+        output = restore_state._build_session_proposal_output()
+        assert output is not None
+        msg = output["hookSpecificOutput"]["additionalContext"]
+        # k1 は既読フィルタで落ち、k2 だけが残存 group として提示される。
+        assert "--promote-weak k2" in msg
+        assert "--promote-weak k1,k2" not in msg
+        assert "--promote-weak k1 " not in msg
+        assert "--promote-weak k1," not in msg
+
+    def test_all_keys_already_reflected_suppresses_the_group_entirely(
+        self, tmp_path, monkeypatch,
+    ):
+        """group 内の全 signal_key が既読化されていれば group ごと消える
+        （残存 0 件 = 既読ストアが read/write で同一ファイルを指している最も強い証拠）。
+        """
+        source = _install_env(tmp_path, monkeypatch)
+        slug = _set_project_dir(tmp_path, monkeypatch)
+        _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+        _align_store_write_data_dir(monkeypatch, source)
+
+        sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
+        from correction_semantic.daily_review import record_reviewed
+
+        record_reviewed(["k1"], slug, decision="already_reflected")
+
+        output = restore_state._build_session_proposal_output()
+        assert output is None  # 提示する group が無い（沈黙）
