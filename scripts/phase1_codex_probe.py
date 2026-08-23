@@ -132,8 +132,19 @@ def head_tag(text: str) -> Optional[str]:
 
 
 def is_machinery_text(text: str) -> bool:
-    """機構マーカー（D3・9種）で先頭タグ判定する。"""
-    return head_tag(text) in MACHINERY_MARKERS
+    """機構マーカー（D3・9種）で先頭タグ判定する。
+
+    #536 round4 追加対応: 自己閉じ形（``<image/>`` のようにスラッシュの前に
+    空白が無いもの。``inner.split()[0]`` がスラッシュを含んだまま返すため
+    正規化しないと不一致になる）とタグ名の大小文字ゆれ（``<SKILL>`` 等）は
+    表現差の範疇であり、判定に影響させない。ADR に自己閉じ・大小文字ゆれの
+    明記は無いが、迷ったら除外せず検査対象（＝機構扱い）に倒す方針を取る。
+    """
+    tag = head_tag(text)
+    if tag is None:
+        return False
+    normalized = tag.rstrip("/").lower()
+    return normalized in MACHINERY_MARKERS
 
 
 def filter_machinery(candidates: Sequence["RawCandidate"]) -> List["RawCandidate"]:
@@ -487,7 +498,12 @@ _ORACLE_MACHINERY_MARKERS = frozenset(
 
 
 def _oracle_is_machinery_text(text: str) -> bool:
-    """独立実装の機構判定（head_tag/strip_leading_noise/is_machinery_text 非依存）。"""
+    """独立実装の機構判定（head_tag/strip_leading_noise/is_machinery_text 非依存）。
+
+    #536 round4: is_machinery_text 側と同じ理由で自己閉じ形・大小文字ゆれを
+    正規化する。実装側と表現は変えるが（rstrip("/").lower() を tag 変数へ
+    inline で適用）、判定内容は独立に同じ結論へ至るよう記述する。
+    """
     if not text:
         return False
     stripped = text.lstrip("﻿ \t\n\r　")
@@ -500,7 +516,8 @@ def _oracle_is_machinery_text(text: str) -> bool:
     if not inner:
         return False
     tag = inner.split()[0]
-    return tag in _ORACLE_MACHINERY_MARKERS
+    normalized_tag = tag.rstrip("/").lower()
+    return normalized_tag in _ORACLE_MACHINERY_MARKERS
 
 
 def expected_machinery_survivors(normalized_events: Sequence[Dict[str, Any]]) -> List[str]:

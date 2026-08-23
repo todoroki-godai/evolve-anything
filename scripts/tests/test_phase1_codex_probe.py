@@ -158,6 +158,21 @@ _INDEPENDENT_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
     ('<skill name="evolve">x</skill>', False),  # 属性付き機構タグ（9種のうち1つを代表）
     ('<command-name value="ls">x</command-name>', False),  # 属性付き・両チャネル共通マーカー
     ('<not_a_marker attr="x">本文</not_a_marker>', True),  # 属性付きだが機構マーカーでない（陽性対照）
+    # #536 チームリード追加確認: 自己閉じ形（スラッシュの前に空白が無い）は
+    # `inner.split()[0]` が "image/" のようにスラッシュ込みで返るため、
+    # 正規化を怠ると不一致になる表現差クラス（実データ ~/.codex/sessions 726
+    # ファイル・実候補 6467 件を実測し出現数0件を確認済みだが、迷ったら除外
+    # せず検査対象に倒す方針で対応する）。
+    ("<image/>", False),  # 自己閉じ・スラッシュ直前に空白なし
+    ("<skill/>", False),  # 同上
+    ("<image />", False),  # 自己閉じ・スラッシュ直前に空白あり（元々検出できていた形）
+    ("<not_a_marker/>", True),  # 自己閉じだが機構マーカーでない（陽性対照）
+    # タグ名の大小文字ゆれ。実データでは出現0件を実測済みだが、同じ理由で
+    # 正規化する（Codex 側の出力ゆれで大文字化される可能性を排除できないため）。
+    ("<SKILL>evolve</SKILL>", False),  # 全大文字
+    ("<Skill>evolve</Skill>", False),  # 先頭大文字
+    ("<COMMAND-NAME>ls</COMMAND-NAME>", False),  # 全大文字・両チャネル共通マーカー
+    ("<Not_A_Marker>本文</Not_A_Marker>", True),  # 大文字だが機構マーカーでない（陽性対照）
 ]
 
 
