@@ -504,7 +504,8 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     # （queue 側の health/counts と食い違う）。
     from .queue_materials import read_corrections_records_with_health
 
-    corr_records, corr_read_health = read_corrections_records_with_health(corr_path)
+    corrections_snapshot = read_corrections_records_with_health(corr_path)
+    corr_records = corrections_snapshot.records
 
     material_slugs = _collect_material_slugs(
         weak_signals_path=weak_path if weak_path.exists() else None,
@@ -529,8 +530,7 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         pj_paths=pj_paths,
         material_slugs=material_slugs,
         untracked_dir_map=untracked_dir_map,
-        corr_records=corr_records,
-        corr_read_health=corr_read_health,
+        corrections_snapshot=corrections_snapshot,
     )
 
 

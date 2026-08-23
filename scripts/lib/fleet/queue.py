@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .queue_materials import (  # noqa: F401 (再エクスポート含む)
+    CorrectionsSnapshot,
     _aliases_for,
     _canonical_slug,
     _correction_slug,
@@ -190,8 +191,7 @@ def build_queue_result(
     pj_paths: Optional[Dict[str, str]] = None,
     material_slugs: Optional[List[str]] = None,
     untracked_dir_map: Optional[Dict[str, str]] = None,
-    corr_records: Optional[List[Dict[str, Any]]] = None,
-    corr_read_health: Optional[Dict[str, Any]] = None,
+    corrections_snapshot: Optional[CorrectionsSnapshot] = None,
 ) -> Dict[str, Any]:
     """各 PJ の学習素材を集計し、Phase 1b #80 契約の queue result dict を返す。
 
@@ -232,12 +232,19 @@ def build_queue_result(
     #88: 閾値以上 material を持つが実 dir に解決できない untracked slug（temp slug 等）は
     ``collect_phantom_materials`` で ``skipped_phantom`` に分離する（waiting には昇格しない）。
 
-    ``corr_records``/``corr_read_health``（``read_corrections_records_with_health`` が既に
-    返した snapshot）を**両方**渡すと本関数内での read をスキップし、呼び側が保持する snapshot
-    をそのまま使う（#538 round3 [Must]4 — CLI 層で ``_collect_material_slugs`` が material 母集団
-    用に別読みすると、その母集団と本関数の health/counts が異なる snapshot になりうる。呼び側
-    ``_gather_queue_result`` は1回だけ read し、その結果を両方へ渡す）。片方のみ・両方 None は
-    従来通り本関数内で自前 read する（後方互換）。
+    ``corrections_snapshot``（``read_corrections_records_with_health`` が既に返した
+    ``CorrectionsSnapshot(records, health)``）を渡すと本関数内での read をスキップし、呼び側が
+    保持する snapshot をそのまま使う（#538 round3 [Must]4 — CLI 層で ``_collect_material_slugs``
+    が material 母集団用に別読みすると、その母集団と本関数の health/counts が異なる snapshot に
+    なりうる。呼び側 ``_gather_queue_result`` は1回だけ read し、その結果を渡す）。未指定
+    （``None``）は従来通り本関数内で自前 read する（後方互換）。
+
+    #538 round4 [Must]1(I1/I4): records と health は同一 read から生まれた不可分の組であり、
+    片方だけを差し替えて渡すことを許さない。旧実装は ``corr_records`` / ``corr_read_health`` を
+    独立の任意引数にしていたため、片方だけ渡す呼び出しが ``or`` フォールバックで黙って握り
+    潰され、渡した値が捨てられて ``corrections_path`` から再 read されていた。単一の
+    ``CorrectionsSnapshot`` にまとめることで、片方だけの指定はキーワード引数自体が存在せず
+    ``TypeError`` になる（構造的に不可能にする。値レベルの分岐チェックは不要）。
     """
     paths = pj_paths or {}
     redirect_map = untracked_dir_map or {}
@@ -250,8 +257,10 @@ def build_queue_result(
     # （backlog counts / weak+corr / unattributed / untracked・phantom collectors）へ使い回す。
     # probe と各集計が別読みだと、probe 成功後に read が失敗する（逆も同様）ケースで health が
     # 「正常」なのに集計結果だけ劣化を反映しない silent スナップショット不一致が起きる。
-    if corr_records is None or corr_read_health is None:
+    if corrections_snapshot is None:
         corr_records, corr_read_health = read_corrections_records_with_health(corrections_path)
+    else:
+        corr_records, corr_read_health = corrections_snapshot
 
     correction_backlog_counts = correction_backlog_counts_by_pj(
         corrections_path=corrections_path, records=corr_records

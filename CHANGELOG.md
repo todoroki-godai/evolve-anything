@@ -19,6 +19,14 @@
   `Path.exists()`/`Path.is_symlink()` が `OSError` を握りつぶし正常な空在庫と誤判定していたため、
   `lstat()` で `FileNotFoundError`（真の未作成）とその他の `OSError`（権限エラー等）を区別するよう
   修正。
+- **fix(queue): read 直前の unlink 競合と records/health の片方指定を是正（#533 round4）** —
+  `lstat()` 成功直後（symlink 実体確認直後も同様）にファイルが unlink/rename される競合で、
+  続く `path.read_bytes()` の `FileNotFoundError` が他の `OSError` と一括処理され「真の不在
+  （正常な空在庫）」が誤って読取不能扱いになっていたのを分離。dangling symlink の劣化判定は
+  従来通り維持。また `build_queue_result` の `corr_records`/`corr_read_health` を独立の任意引数
+  にしていたため片方だけ渡す呼び出しが `or` フォールバックで黙って握り潰され、渡した値が
+  捨てられて再 read されていたのを、分離不能な単一 `CorrectionsSnapshot`（records+health の組）
+  にまとめて構造的に防止（片方だけの指定は kwarg 自体が存在せず `TypeError`）。
 - **fix(queue): corrections.jsonl の read health を probe と集計で同一スナップショットに統一（#533 round2）** —
   `build_queue_result` が corrections.jsonl を1回だけ read し、`(records, health)` を
   backlog counts / weak+corr（各 PJ） / unattributed corrections の全下流集計へ配線した

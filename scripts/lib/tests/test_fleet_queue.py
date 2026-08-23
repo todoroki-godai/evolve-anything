@@ -539,6 +539,61 @@ class TestReadCorrectionsRecordsWithHealth:
         assert records == []
         assert health == {"readable": True, "error": None, "malformed_lines": 0}
 
+    def test_race_delete_after_lstat_succeeds_is_true_absence_not_unreadable(
+        self, tmp_path, monkeypatch
+    ):
+        """#538 round4 [Must]2: lstat() 成功直後に unlink される競合（真の不在）を、
+        その他の読取不能 ``OSError`` と区別する。旧実装は ``path.read_bytes()`` が投げる
+        ``FileNotFoundError`` を他の ``OSError`` と一括処理していたため、この競合が
+        ``readable=false``（劣化）に化けていた。ここでは実プロセス並行での再現（競合窓が
+        µs で不安定）を避け、``lstat()`` は成功させたまま ``read_bytes()`` だけを
+        ``FileNotFoundError`` にする決定論的な monkeypatch で構成する。
+        """
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # lstat() は成功させる
+
+        def _raise_fnf(self):
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+
+        monkeypatch.setattr(Path, "read_bytes", _raise_fnf)
+
+        records, health = fq.read_corrections_records_with_health(store)
+
+        assert records == []
+        assert health == {"readable": True, "error": None, "malformed_lines": 0}
+
+    def test_non_fnf_oserror_at_read_bytes_still_marks_unreadable(self, tmp_path, monkeypatch):
+        """陽性対照: ``read_bytes()`` の非 ``FileNotFoundError`` 系 ``OSError``（権限変更等の
+        真の読取不能）は、上の真の不在分岐に巻き込まれず従来通り劣化として扱われる。
+        """
+        store = tmp_path / "corrections.jsonl"
+        store.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+
+        def _raise_permission(self):
+            raise PermissionError(13, "Permission denied", str(self))
+
+        monkeypatch.setattr(Path, "read_bytes", _raise_permission)
+
+        records, health = fq.read_corrections_records_with_health(store)
+
+        assert records == []
+        assert health["readable"] is False
+        assert "Permission denied" in (health["error"] or "")
+
+    def test_dangling_symlink_still_unreadable_after_race_fix(self, tmp_path):
+        """陽性対照: round4 の read_bytes() 例外分岐変更後も dangling symlink は
+        ``path.stat()`` 分岐で先に捕捉され、readable=false のまま（round2 [Must]4 挙動を壊さない）。
+        """
+        target = tmp_path / "does-not-exist.jsonl"
+        link = tmp_path / "corrections.jsonl"
+        link.symlink_to(target)
+
+        records, health = fq.read_corrections_records_with_health(link)
+
+        assert records == []
+        assert health["readable"] is False
+        assert health["error"]
+
 
 class TestQueueState:
     def test_read_empty_when_missing(self, tmp_path):
@@ -907,6 +962,107 @@ class TestBuildQueueResult:
         assert records == []
         assert health["readable"] is False
         assert health["error"]
+
+
+class TestBuildQueueResultCorrectionsSnapshot:
+    """#538 round4 [Must]1(I1/I4): ``corr_records``/``corr_read_health`` は分離不能な単一
+    ``CorrectionsSnapshot`` にまとめた。片方だけの指定が ``or`` フォールバックで黙って
+    握り潰され path から再 read される（渡した値が捨てられる）ことがもう構造的に起きない
+    ことを検査する。
+    """
+
+    def test_corrections_snapshot_param_bypasses_read_entirely(self, tmp_path, monkeypatch):
+        """snapshot を渡すと reader を一切呼ばず、渡した records/health だけを使う。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # 実ファイルは alpha のみ
+
+        def _fail_if_called(path):
+            raise AssertionError("read_corrections_records_with_health は呼ばれてはいけない")
+
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _fail_if_called)
+
+        snapshot = fq.CorrectionsSnapshot(
+            records=[
+                {"project_path": "sentinel-pj", "timestamp": "2026-06-01T00:00:00+00:00"}
+            ],
+            health={"readable": True, "error": None, "malformed_lines": 0},
+        )
+        result = fq.build_queue_result(
+            pj_slugs=["sentinel-pj"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            corrections_snapshot=snapshot,
+        )
+        assert result["corrections_read_health"] == snapshot.health
+        assert [item["pj_slug"] for item in result["queue"]] == ["sentinel-pj"]
+        assert result["queue"][0]["new_corrections"] == 1  # sentinel のみ・alpha は不使用
+
+    def test_passing_only_records_kwarg_raises_typeerror(self, tmp_path):
+        """旧 API（``corr_records`` 単独）は kwarg 自体が存在しないため即 ``TypeError``。
+
+        旧実装（round3 まで）はこの呼び出しを ``or`` フォールバックで受理し、渡した
+        sentinel を握り潰して ``corrections_path`` を再 read していた（欠陥そのもの）。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+
+        with pytest.raises(TypeError):
+            fq.build_queue_result(
+                pj_slugs=["alpha"],
+                threshold=1,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+                corr_records=[{"project_path": "sentinel-pj", "timestamp": "t"}],
+            )
+
+    def test_passing_only_health_kwarg_raises_typeerror(self, tmp_path):
+        """旧 API（``corr_read_health`` 単独）も同様に ``TypeError``。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+
+        with pytest.raises(TypeError):
+            fq.build_queue_result(
+                pj_slugs=["alpha"],
+                threshold=1,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+                corr_read_health={"readable": False, "error": "x", "malformed_lines": 0},
+            )
+
+    def test_no_snapshot_falls_back_to_reading_corrections_path(self, tmp_path):
+        """陽性対照: ``corrections_snapshot`` 未指定は従来通り ``corrections_path`` から自前 read。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "2026-06-01T00:00:00+00:00")) + "\n")
+
+        result = fq.build_queue_result(
+            pj_slugs=["alpha"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+        assert [item["pj_slug"] for item in result["queue"]] == ["alpha"]
+        assert result["queue"][0]["new_corrections"] == 1
 
 
 class TestGatherQueueResultSingleRead:

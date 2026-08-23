@@ -24,7 +24,7 @@ import os
 import stat as _stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 
 # --- alias fold primitive（queue.py._equivalence_slugs が使用）----------------
@@ -197,9 +197,25 @@ def bootstrap_consumed_by_pj(
 # --- store reader: corrections.jsonl 共有 raw read + read-health（#533）------
 
 
+class CorrectionsSnapshot(NamedTuple):
+    """``read_corrections_records_with_health`` が返す records と health の不可分な組。
+
+    #538 round4 [Must]2(I1/I4): ``build_queue_result`` がこれまで ``corr_records`` /
+    ``corr_read_health`` を独立の任意引数として受けていたため、片方だけを渡す呼び出しが
+    ``or`` フォールバック（当時の実装）で黙って握り潰され、渡した値が捨てられて
+    ``corrections_path`` から再 read されていた（snapshot 不一致の温床）。records と health は
+    必ず同じ1回の read から生まれた組として運ぶ契約にするため、tuple 互換の named type にまとめ
+    片方だけの受け渡しを構造的に不可能にする。``tuple`` 互換なので既存の
+    ``records, health = read_corrections_records_with_health(...)`` 形の呼び出しは変更不要。
+    """
+
+    records: List[Dict[str, Any]]
+    health: Dict[str, Any]
+
+
 def read_corrections_records_with_health(
     corrections_path: Path,
-) -> "tuple[List[Dict[str, Any]], Dict[str, Any]]":
+) -> CorrectionsSnapshot:
     """corrections.jsonl を1回 read し、``(有効な dict レコード, read health)`` を返す。
 
     ``new_corrections_by_pj`` / ``count_unattributed_corrections`` /
@@ -232,6 +248,15 @@ def read_corrections_records_with_health(
     権限エラーが「真の未作成」と区別できず ``readable=true`` の正常な空在庫に誤判定していた。
     ``exists()``/``is_symlink()`` に頼らず、まず ``lstat()`` を試みて ``FileNotFoundError``
     （真の未作成）と、その他の ``OSError``（権限エラー等）を区別する。
+
+    #538 round4 [Must]2: 上記 ``lstat()`` は「ファイルの存在確認」と「実際に読む」の間に
+    TOCTOU（time-of-check-to-time-of-use）の窓を作る。``lstat()`` 成功直後（symlink 実体
+    確認の直後も同様）にファイルが unlink/rename されると、以前は続く ``path.read_bytes()``
+    の ``FileNotFoundError`` を他の ``OSError`` と一括で「読取不能」扱いしていたため、
+    「真の不在（正常な空在庫）」であるべきケースが誤って劣化扱いになっていた。
+    ``read_bytes()`` 自身が投げる ``FileNotFoundError`` は（dangling symlink は直前の
+    ``path.stat()`` 分岐で既に捕捉済みなのでここには到達しない）常に「read 直前に消えた
+    ＝真の不在」を意味するため、他の ``OSError``（権限変更等）と分離して正常系として扱う。
     """
     health: Dict[str, Any] = {"readable": True, "error": None, "malformed_lines": 0}
     path = Path(corrections_path)
@@ -239,13 +264,13 @@ def read_corrections_records_with_health(
         st = path.lstat()
     except FileNotFoundError:
         # 真の未作成 = 正常な空在庫。
-        return [], health
+        return CorrectionsSnapshot([], health)
     except OSError as exc:
         # 親ディレクトリの権限エラー等。exists()/is_symlink() は同じ例外を握りつぶして
         # False を返すため、ここで先に区別する必要がある。
         health["readable"] = False
         health["error"] = str(exc)
-        return [], health
+        return CorrectionsSnapshot([], health)
 
     if _stat.S_ISLNK(st.st_mode):
         # symlink エントリ自体は存在する。リンク先の実体を辿って確認する。
@@ -256,18 +281,23 @@ def read_corrections_records_with_health(
             # と区別し、劣化として surface する。
             health["readable"] = False
             health["error"] = f"dangling symlink: {path} -> {os.readlink(path)}"
-            return [], health
+            return CorrectionsSnapshot([], health)
         except OSError as exc:
             health["readable"] = False
             health["error"] = str(exc)
-            return [], health
+            return CorrectionsSnapshot([], health)
 
     try:
         raw_bytes = path.read_bytes()
+    except FileNotFoundError:
+        # #538 round4 [Must]2: lstat()（symlink の場合は実体確認の stat()）成功直後に
+        # unlink/rename されたレース。他の OSError と違い「読取不能」ではなく「真の不在」
+        # ＝正常な空在庫として扱う（readable=True のまま）。
+        return CorrectionsSnapshot([], health)
     except OSError as exc:
         health["readable"] = False
         health["error"] = str(exc)
-        return [], health
+        return CorrectionsSnapshot([], health)
 
     out: List[Dict[str, Any]] = []
     for raw_line in raw_bytes.split(b"\n"):
@@ -288,7 +318,7 @@ def read_corrections_records_with_health(
             health["malformed_lines"] += 1
             continue
         out.append(rec)
-    return out, health
+    return CorrectionsSnapshot(out, health)
 
 
 def corrections_read_health(corrections_path: Path) -> Dict[str, Any]:
