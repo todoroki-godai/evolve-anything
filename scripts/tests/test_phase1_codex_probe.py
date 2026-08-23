@@ -588,3 +588,169 @@ def test_dedup_one_to_one_consumption_not_shared():
     out = p.dedup_channel_constrained([r1, r2, e1], threshold_ms=100)
     assert len(out) == 2
     assert {c.channel for c in out} == {"response_item"}
+
+
+# ─────────────────────────────────────────────────────────────────
+# 本番ストア保護ガードの欠陥修正（team-lead 指摘・#534）
+# 欠陥1: hashes_after が最後の書込み（report.json）より前に取られる
+# 欠陥2: out_dir 検査がディレクトリにしか掛からず、出力ファイル名の symlink 経由で
+#        本番ファイルへ書込める
+# ─────────────────────────────────────────────────────────────────
+def test_write_json_refuses_symlink_escaping_into_forbidden_root(tmp_path, monkeypatch):
+    """壊す不変条件: 欠陥2（out_dir 内の出力ファイル名 symlink が本番ファイルへ
+    書込むのを拒否する）
+    ／通したい検査経路: _write_json が書込み直前に実体パス（symlink 解決後）を
+    forbidden_out_dir_roots() と照合する。
+
+    修正前は _write_json が path.write_text をそのまま呼ぶだけで実体パスの検査が
+    無く、symlink を辿って victim（本番ファイル役）を上書きしてしまい本テストが
+    落ちる。
+    """
+    victim_dir = tmp_path / "forbidden_root"
+    victim_dir.mkdir()
+    victim = victim_dir / "utterances.db"
+    victim.write_bytes(b"PRISTINE")
+    monkeypatch.setattr(p, "forbidden_out_dir_roots", lambda: [victim_dir])
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    evil_link = out_dir / "report.json"
+    evil_link.symlink_to(victim)
+
+    with pytest.raises(p.ProductionPathWriteError):
+        p._write_json(evil_link, {"x": 1})
+
+    assert victim.read_bytes() == b"PRISTINE"
+
+
+def test_write_json_allows_normal_path_inside_out_dir(tmp_path):
+    """陽性対照: 禁止ルートに触れない通常の out_dir 書込みは成功する。"""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    p._write_json(out_dir / "report.json", {"x": 1})
+    assert json.loads((out_dir / "report.json").read_text(encoding="utf-8")) == {"x": 1}
+
+
+def test_main_after_hashes_taken_after_all_writes_including_report_json(tmp_path, monkeypatch):
+    """壊す不変条件: 欠陥1（hashes_after は全ての out_dir 書込み完了後、report.json
+    自体の書込みも含めて取る）
+    ／通したい検査経路: main() の hashes_after 取得順序。
+
+    production_store_paths を意図的に forbidden_out_dir_roots 外へ向け、欠陥2の
+    ガード（symlink 実体パス検査）が発火しない状況を作った上で、out_dir 内の
+    report.json という出力ファイル名を経由した symlink 書込みで victim
+    （本番ストア役）が上書きされることを利用する。hashes_after が report.json の
+    書込みより前に取られていれば、この汚染は検出できず ok=True のまま返る
+    （修正前は本テストが赤くならない＝検出漏れそのものを検査する）。
+    """
+    sessions_root = tmp_path / "sessions"
+    sessions_root.mkdir()
+
+    victim_dir = tmp_path / "victim_store"
+    victim_dir.mkdir()
+    victim = victim_dir / "utterances.db"
+    victim.write_bytes(b"PRISTINE")
+
+    monkeypatch.setattr(p, "production_store_paths", lambda: {"utterances_db": victim})
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: victim_dir)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "report.json").symlink_to(victim)
+
+    rc = p.main([
+        "--sessions-root", str(sessions_root),
+        "--base-date", "2026-08-23",
+        "--out-dir", str(out_dir),
+    ])
+
+    assert rc != 0
+    assert victim.read_bytes() != b"PRISTINE"
+    guard = json.loads((out_dir / "guard.json").read_text(encoding="utf-8"))
+    assert guard["ok"] is False
+
+
+def test_main_symlink_into_true_forbidden_root_leaves_victim_untouched(tmp_path, monkeypatch):
+    """壊す不変条件: 欠陥2（main() 実行の end-to-end 経路でも、out_dir 内の
+    出力ファイル名 symlink が forbidden_out_dir_roots() 配下の実ファイルを
+    上書きできない）
+    ／通したい検査経路: main() → _write_json の実体パス検査。
+
+    ``_write_json`` 単体テストと異なり、main() を通しで呼び、production_store_paths /
+    forbidden_out_dir_roots の双方を同じ偽ルート配下に揃えることで、実際の
+    CLI 経路（run_probe→複数ファイル書込→report.json→guard.json）で欠陥2の
+    ガードが機能することを検査する。仕様上「例外で止まる」ことも合格
+    （委譲プロンプトの (a) 要件）なので、例外送出・非0終了のどちらでも
+    victim が変化しないことのみを assert する。
+    """
+    forbidden_root = tmp_path / "forbidden_root"
+    forbidden_root.mkdir()
+    victim = forbidden_root / "utterances.db"
+    victim.write_bytes(b"PRISTINE")
+
+    monkeypatch.setattr(p, "forbidden_out_dir_roots", lambda: [forbidden_root])
+    monkeypatch.setattr(p, "production_store_paths", lambda: {"utterances_db": victim})
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: forbidden_root)
+
+    sessions_root = tmp_path / "sessions"
+    sessions_root.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "report.json").symlink_to(victim)
+
+    try:
+        rc = p.main([
+            "--sessions-root", str(sessions_root),
+            "--base-date", "2026-08-23",
+            "--out-dir", str(out_dir),
+        ])
+    except p.ProductionPathWriteError:
+        pass
+    else:
+        assert rc != 0
+
+    assert victim.read_bytes() == b"PRISTINE"
+
+
+def test_main_out_dir_rejection_still_effective(tmp_path):
+    """陽性対照 + 回帰検査: 既存の --out-dir 拒否ガード（禁止ルート直指定）が
+    欠陥1・欠陥2の修正後も引き続き効くこと。"""
+    sessions_root = tmp_path / "sessions"
+    sessions_root.mkdir()
+    repo_root = Path(p.__file__).resolve().parent.parent
+    rc = p.main([
+        "--sessions-root", str(sessions_root),
+        "--base-date", "2026-08-23",
+        "--out-dir", str(repo_root / "scripts" / "pwned_by_test"),
+    ])
+    assert rc != 0
+    assert not (repo_root / "scripts" / "pwned_by_test").exists()
+
+
+def test_main_production_store_guard_ok_true_on_clean_run(tmp_path, monkeypatch):
+    """陽性対照: symlink 攻撃や汚染の無い通常実行では production_store_guard.ok
+    が True のまま、report.json / guard.json の双方が生成されること。"""
+    sessions_root = tmp_path / "sessions"
+    sessions_root.mkdir()
+
+    isolated_store_dir = tmp_path / "isolated_store"
+    monkeypatch.setattr(
+        p, "production_store_paths",
+        lambda: {"utterances_db": isolated_store_dir / "utterances.db"},
+    )
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: isolated_store_dir)
+
+    out_dir = tmp_path / "out"
+    rc = p.main([
+        "--sessions-root", str(sessions_root),
+        "--base-date", "2026-08-23",
+        "--out-dir", str(out_dir),
+    ])
+
+    assert rc == 0
+    guard = json.loads((out_dir / "guard.json").read_text(encoding="utf-8"))
+    assert guard["ok"] is True
+    assert guard["violations"] == []
+    report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    assert "counts" in report
+    assert "production_store_guard" not in report

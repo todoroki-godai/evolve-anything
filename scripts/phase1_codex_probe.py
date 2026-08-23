@@ -645,6 +645,10 @@ def verify_data_dir_unchanged(
 # ─────────────────────────────────────────────────────────────────
 # --out-dir 拒否ガード（Must2: 本番配下への書込を起動時に拒否する）
 # ─────────────────────────────────────────────────────────────────
+class ProductionPathWriteError(RuntimeError):
+    """書込み先の実体パス（symlink 解決後）が禁止ルート配下だった場合に送出する。"""
+
+
 def _is_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -675,6 +679,22 @@ def validate_out_dir(out_dir: Path) -> Optional[str]:
 # CLI
 # ─────────────────────────────────────────────────────────────────
 def _write_json(path: Path, obj: Any) -> None:
+    """out_dir 配下の出力ファイルへ書込む。
+
+    欠陥2対応: validate_out_dir は out_dir 自体（ディレクトリ）にしか掛からず、
+    out_dir 内に出力ファイル名（例: report.json）で本番ファイルへの symlink を
+    置かれると、そのまま辿って本番ストアを上書きしてしまう。書込み直前に
+    ``path`` の実体パス（symlink 解決後）を forbidden_out_dir_roots() と照合し、
+    禁止ルート配下なら書かずに例外で停止する。呼び出し側が個別にチェックし
+    忘れないよう、本関数に内蔵する（呼び出し箇所を経由すれば必ず効く）。
+    """
+    real = Path(os.path.realpath(path))
+    for root in forbidden_out_dir_roots():
+        if _is_within(real, root):
+            raise ProductionPathWriteError(
+                f"書込み先が禁止ルート配下を指しています（symlink 経由の可能性）: "
+                f"{path} の実体は {real} で {root} 配下です"
+            )
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
@@ -719,23 +739,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     token_estimate = estimate_tokens(result.utterances)
 
-    # 成果物の書込（out_dir は Must2 で本番配下でないことを検証済み）。
+    # 成果物の書込（out_dir は Must2 で本番配下でないことを検証済み。個々の
+    # 出力ファイル名が symlink 経由で本番へ逃げていないかは _write_json が
+    # 書込み直前に実体パスで検査する＝欠陥2対応）。
+    # report.json は「検査結果（production_store_guard）」を含まない業務成果物
+    # として先に書く。hashes_after / listing_after は report.json を含む
+    # **全ての** out_dir 書込みが完了した後に取る（欠陥1対応）。検査結果自体は
+    # 別ファイル guard.json へ最後に書く（report.json の内容に検査結果を混ぜると
+    # 「検査結果が検査対象の後に決まる」循環になり、報告書自身の書込みを
+    # after スナップショットの観測範囲から外さざるを得なくなるため）。
     _write_json(out_dir / "target_files.json", result.target_file_hashes)
     _write_json(out_dir / "normalized_events.json", result.normalized_events)
     _write_json(out_dir / "unique_keys.json", result.unique_keys)
     _write_json(out_dir / "utterances.json", result.utterances)
     _write_json(out_dir / "token_estimate.json", token_estimate)
-
-    # Must2: 最終 hash / 一覧検査は全ての書込が終わった後に行う
-    # （judge のコスト予約書込は run_probe 内では発生しないため C-0/C-1 と同じ
-    # 「LLM 呼び出し前の予約書込だけが漏れる」パターンは Phase 1 では起きないが、
-    # 契約として C-1 実行契約の順序に揃える）。
-    hashes_after = snapshot_production_hashes(store_paths)
-    listing_after = snapshot_data_dir_listing(data_dir)
-    hash_ok, hash_violations = verify_production_unchanged(hashes_before, hashes_after)
-    listing_ok, listing_violations = verify_data_dir_unchanged(listing_before, listing_after)
-    ok = hash_ok and listing_ok
-    violations = hash_violations + listing_violations
 
     report = {
         "counts": {
@@ -752,22 +769,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         "child_ref_scope_agreement": result.child_ref_scope_agreement,
         "child_ref_scope_detail": result.child_ref_scope_detail,
         "token_estimate": token_estimate,
-        "production_store_guard": {
-            "ok": ok,
-            "violations": violations,
-            "hashes_before": hashes_before,
-            "hashes_after": hashes_after,
-            "data_dir": str(data_dir),
-            "data_dir_file_count_before": len(listing_before),
-            "data_dir_file_count_after": len(listing_after),
-        },
         "out_dir": str(out_dir),
     }
-    # report.json 自体は out_dir（本番配下でないことを検証済み）への書込であり、
-    # 上の検査対象（本番ストア・DATA_DIR）には含まれない。
     _write_json(out_dir / "report.json", report)
 
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    # 欠陥1対応: report.json を含む全ての out_dir 書込みが完了した後に after を
+    # 取る。ここより後に out_dir への書込みを追加しない（追加するなら guard.json
+    # の書込みも観測対象へ含める設計へ組み直すこと）。
+    hashes_after = snapshot_production_hashes(store_paths)
+    listing_after = snapshot_data_dir_listing(data_dir)
+    hash_ok, hash_violations = verify_production_unchanged(hashes_before, hashes_after)
+    listing_ok, listing_violations = verify_data_dir_unchanged(listing_before, listing_after)
+    ok = hash_ok and listing_ok
+    violations = hash_violations + listing_violations
+
+    guard = {
+        "ok": ok,
+        "violations": violations,
+        "hashes_before": hashes_before,
+        "hashes_after": hashes_after,
+        "data_dir": str(data_dir),
+        "data_dir_file_count_before": len(listing_before),
+        "data_dir_file_count_after": len(listing_after),
+    }
+    _write_json(out_dir / "guard.json", guard)
+
+    print(json.dumps({**report, "production_store_guard": guard}, ensure_ascii=False, indent=2))
     if not ok:
         print("[phase1_codex_probe] FATAL: 本番ストアが変更された", file=sys.stderr)
         return 1
