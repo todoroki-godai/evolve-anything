@@ -441,7 +441,8 @@ def test_assert_stage_counts_plausible_accepts_baseline_boundary():
 def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitude():
     """壊す不変条件: C-1（実データで完走し段階件数が ADR 実測値と整合する）
     ／通したい検査経路: run_probe のパイプライン全体（実 ~/.codex/sessions を読む）
-    + _assert_stage_counts_plausible（桁レンジ・段階間不変条件）。
+    + _assert_stage_counts_plausible（桁レンジ・段階間不変条件）
+    + assert_machinery_exclusion_matches_oracle（item5・実データでの独立オラクル突合）。
     """
     result = p.run_probe(
         sessions_root=Path.home() / ".codex" / "sessions",
@@ -451,6 +452,7 @@ def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitu
     c = result.counts
     _assert_stage_counts_plausible(c)
     assert c.parse_error_lines == 0
+    p.assert_machinery_exclusion_matches_oracle(result)
 
 
 @pytest.mark.real_home
@@ -581,8 +583,18 @@ def test_validate_out_dir_rejects_repo_root():
     assert reason is not None
 
 
-def test_validate_out_dir_accepts_isolated_tmp_dir(tmp_path):
-    """陽性対照: 隔離された一時ディレクトリは拒否されない。"""
+def test_validate_out_dir_accepts_isolated_tmp_dir(tmp_path, monkeypatch, tmp_path_factory):
+    """陽性対照: 隔離された一時ディレクトリは拒否されない。
+
+    root conftest.py の autouse HOME/DATA_DIR 隔離が全テストで
+    ``CLAUDE_PLUGIN_DATA=str(tmp_path)`` を設定するため、DATA_DIR が
+    item1 の禁止ルートに加わった今、素の ``tmp_path`` を out_dir に使うと
+    「DATA_DIR 配下の出力」として常に拒否されてしまう（本テストが検査したい
+    「無関係な隔離ディレクトリは拒否されない」という主張とは別の理由で赤くなる）。
+    DATA_DIR を tmp_path と無関係な場所へ明示的にずらして検査する。
+    """
+    unrelated_data_dir = tmp_path_factory.mktemp("unrelated_data_dir")
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: unrelated_data_dir)
     reason = p.validate_out_dir(tmp_path / "phase1_out")
     assert reason is None
 
@@ -713,30 +725,81 @@ def test_write_json_refuses_symlink_escaping_into_forbidden_root(tmp_path, monke
     evil_link.symlink_to(victim)
 
     with pytest.raises(p.ProductionPathWriteError):
-        p._write_json(evil_link, {"x": 1})
+        p._write_json(evil_link, {"x": 1}, out_dir=out_dir)
 
     assert victim.read_bytes() == b"PRISTINE"
 
 
-def test_write_json_allows_normal_path_inside_out_dir(tmp_path):
-    """陽性対照: 禁止ルートに触れない通常の out_dir 書込みは成功する。"""
+def test_write_json_allows_normal_path_inside_out_dir(tmp_path, monkeypatch, tmp_path_factory):
+    """陽性対照: 禁止ルートに触れない通常の out_dir 書込みは成功する。
+
+    root conftest.py の autouse 隔離が DATA_DIR=tmp_path を強制するため、
+    item1 導入後は素の tmp_path 配下の out_dir が DATA_DIR 配下と誤認され拒否
+    されてしまう。DATA_DIR を tmp_path と無関係な場所へずらして検査する
+    （test_validate_out_dir_accepts_isolated_tmp_dir と同じ理由）。
+    """
+    unrelated_data_dir = tmp_path_factory.mktemp("unrelated_data_dir")
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: unrelated_data_dir)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    p._write_json(out_dir / "report.json", {"x": 1})
+    p._write_json(out_dir / "report.json", {"x": 1}, out_dir=out_dir)
     assert json.loads((out_dir / "report.json").read_text(encoding="utf-8")) == {"x": 1}
 
 
-def test_main_after_hashes_taken_after_all_writes_including_report_json(tmp_path, monkeypatch):
-    """壊す不変条件: 欠陥1（hashes_after は全ての out_dir 書込み完了後、report.json
-    自体の書込みも含めて取る）
-    ／通したい検査経路: main() の hashes_after 取得順序。
+def test_write_json_refuses_escape_outside_out_dir_even_if_not_forbidden_root(tmp_path, monkeypatch):
+    """壊す不変条件: item2（out_dir 内の出力ファイル名が、禁止ルート
+    （~/.claude・~/.codex・repo・DATA_DIR）のいずれでもない out_dir 外の場所への
+    symlink でも拒否される）
+    ／通したい検査経路: _write_json の out_dir 包含チェック（relative_to）。
+    修正前（out_dir 引数が無く禁止ルート照合のみだった版）は、この escape先が
+    禁止ルート allowlist の外なので検査を素通りし本テストが落ちる。
 
-    production_store_paths を意図的に forbidden_out_dir_roots 外へ向け、欠陥2の
-    ガード（symlink 実体パス検査）が発火しない状況を作った上で、out_dir 内の
-    report.json という出力ファイル名を経由した symlink 書込みで victim
-    （本番ストア役）が上書きされることを利用する。hashes_after が report.json の
-    書込みより前に取られていれば、この汚染は検出できず ok=True のまま返る
-    （修正前は本テストが赤くならない＝検出漏れそのものを検査する）。
+    root conftest.py の autouse 隔離は DATA_DIR=tmp_path を強制するため、
+    ``elsewhere`` を素の tmp_path 配下に置くと（意図せず）禁止ルート照合
+    （item1 の DATA_DIR 検査）でも引っかかってしまい、item2 固有の効果を
+    検査できない。forbidden_out_dir_roots を無関係な場所に固定し、この escape
+    が「禁止ルート照合には掛からないが out_dir 包含チェックでは掛かる」ことを
+    確実にする。
+    """
+    unrelated_root = tmp_path / "unrelated_forbidden_root"
+    unrelated_root.mkdir()
+    monkeypatch.setattr(p, "forbidden_out_dir_roots", lambda: [unrelated_root])
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    victim = elsewhere / "victim.json"
+    victim.write_bytes(b"PRISTINE")
+    evil_link = out_dir / "report.json"
+    evil_link.symlink_to(victim)
+
+    with pytest.raises(p.ProductionPathWriteError):
+        p._write_json(evil_link, {"x": 1}, out_dir=out_dir)
+
+    assert victim.read_bytes() == b"PRISTINE"
+
+
+def test_main_write_json_containment_closes_the_defect1_escape_route(tmp_path, monkeypatch):
+    """壊す不変条件: 旧欠陥1（hashes_after が report.json 書込みより前に取られると、
+    symlink 経由の本番汚染が検出漏れになる）の攻撃面が、item2（out_dir 包含チェック）
+    導入により **report.json の書込み自体でブロックされ、そもそも hashes_after
+    取得順序に依存しなくなった** ことを検査する。
+
+    production_store_paths / resolve_evolve_anything_data_dir を意図的に
+    forbidden_out_dir_roots 外（out_dir とも victim とも非重複な第三の場所）へ
+    向け、旧テストが利用していた「禁止ルート照合だけでは symlink を検出でき
+    ない」状況を再現した上で、out_dir 内の report.json という出力ファイル名を
+    経由した symlink が victim（本番ストア役）を指していても、_write_json の
+    out_dir 包含チェックにより書込み前に例外で止まり victim が汚染されないこと
+    を確認する（victim を DATA_DIR 自体の配下に置かないのは、それだと item1 の
+    禁止ルート照合だけで検出できてしまい item2 固有の効果を切り分けられない
+    ため）。
+    ／通したい検査経路: main() 内 _write_json(report.json, out_dir=out_dir) の
+    relative_to(out_dir) 検査。
+    修正前（out_dir 引数の無い版）はこの escape を検出できず、hashes_after が
+    report.json 書込み前に取られていれば ok=True のまま victim が汚染されて
+    返っていた（旧テストが検出していた検出漏れそのもの）。
     """
     sessions_root = tmp_path / "sessions"
     sessions_root.mkdir()
@@ -746,23 +809,24 @@ def test_main_after_hashes_taken_after_all_writes_including_report_json(tmp_path
     victim = victim_dir / "utterances.db"
     victim.write_bytes(b"PRISTINE")
 
+    unrelated_data_dir = tmp_path / "unrelated_data_dir"
+    unrelated_data_dir.mkdir()
+
     monkeypatch.setattr(p, "production_store_paths", lambda: {"utterances_db": victim})
-    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: victim_dir)
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: unrelated_data_dir)
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "report.json").symlink_to(victim)
 
-    rc = p.main([
-        "--sessions-root", str(sessions_root),
-        "--base-date", "2026-08-23",
-        "--out-dir", str(out_dir),
-    ])
+    with pytest.raises(p.ProductionPathWriteError):
+        p.main([
+            "--sessions-root", str(sessions_root),
+            "--base-date", "2026-08-23",
+            "--out-dir", str(out_dir),
+        ])
 
-    assert rc != 0
-    assert victim.read_bytes() != b"PRISTINE"
-    guard = json.loads((out_dir / "guard.json").read_text(encoding="utf-8"))
-    assert guard["ok"] is False
+    assert victim.read_bytes() == b"PRISTINE"
 
 
 def test_main_symlink_into_true_forbidden_root_leaves_victim_untouched(tmp_path, monkeypatch):
@@ -849,3 +913,165 @@ def test_main_production_store_guard_ok_true_on_clean_run(tmp_path, monkeypatch)
     report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
     assert "counts" in report
     assert "production_store_guard" not in report
+
+
+# ─────────────────────────────────────────────────────────────────
+# team-lead 追加指摘（外部レビュー #536・item1〜5）
+# ─────────────────────────────────────────────────────────────────
+def test_validate_out_dir_rejects_dynamic_data_dir(tmp_path, monkeypatch):
+    """壊す不変条件: item1（DATA_DIR が CLAUDE_PLUGIN_DATA で ~/.claude 配下以外の
+    任意の場所を指す custom 構成でも、その配下への --out-dir は禁止される）
+    ／通したい検査経路: forbidden_out_dir_roots が resolve_evolve_anything_data_dir()
+    を含めること。
+    修正前（ハードコード3ルートのみ）は custom DATA_DIR がどの禁止ルートにも
+    一致せず reason が None になり本テストが落ちる。
+    """
+    custom_data_dir = tmp_path / "custom_data"
+    custom_data_dir.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(custom_data_dir))
+    reason = p.validate_out_dir(custom_data_dir / "phase1_out")
+    assert reason is not None
+
+
+def test_validate_out_dir_accepts_dir_outside_dynamic_data_dir(tmp_path, monkeypatch):
+    """陽性対照: custom DATA_DIR 構成でも、それと無関係な隔離ディレクトリは拒否
+    されない。"""
+    custom_data_dir = tmp_path / "custom_data"
+    custom_data_dir.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(custom_data_dir))
+    reason = p.validate_out_dir(tmp_path / "isolated_out")
+    assert reason is None
+
+
+def test_out_dir_cannot_be_nested_inside_data_dir_end_to_end(tmp_path, monkeypatch):
+    """壊す不変条件: item3（item1 のガードにより out_dir は DATA_DIR 配下になり
+    得ないため、guard.json を事後 hash 採取後に書いても DATA_DIR の観測範囲を
+    汚染しないという設計上の主張が、main() の実行経路でも実際に成立する）
+    ／通したい検査経路: main() 起動時の validate_out_dir（forbidden_out_dir_roots
+    経由で DATA_DIR を検査）。
+    修正前は DATA_DIR が禁止ルートに含まれないため、この --out-dir はそのまま
+    受理され、DATA_DIR 配下にファイル一式（guard.json 含む）が作成されてしまい
+    本テストが落ちる。
+    """
+    fake_home = tmp_path / "home"
+    sessions_root = fake_home / "sessions"
+    sessions_root.mkdir(parents=True)
+    data_dir = fake_home / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: data_dir)
+    nested_out = data_dir / "phase1_out"
+
+    rc = p.main([
+        "--sessions-root", str(sessions_root),
+        "--base-date", "2026-08-23",
+        "--out-dir", str(nested_out),
+    ])
+
+    assert rc != 0
+    assert not nested_out.exists()
+
+
+def test_snapshot_data_dir_listing_detects_same_size_content_change(tmp_path):
+    """壊す不変条件: item4（同一 byte 数のまま内容だけ書き換えられた変更を
+    size 比較では見逃すが hash 比較なら検出する）
+    ／通したい検査経路: snapshot_data_dir_listing + verify_data_dir_unchanged。
+    修正前（サイズのみ比較）は "AAAA"→"BBBB"（同じ4byte）を差分として検出できず
+    本テストが落ちる。
+    """
+    d = tmp_path / "data"
+    d.mkdir()
+    f = d / "utterances.db"
+    f.write_bytes(b"AAAA")
+    before = p.snapshot_data_dir_listing(d)
+    f.write_bytes(b"BBBB")
+    after = p.snapshot_data_dir_listing(d)
+    ok, violations = p.verify_data_dir_unchanged(before, after)
+    assert ok is False
+    assert "utterances.db" in violations[0]
+
+
+def test_snapshot_data_dir_listing_passes_when_unchanged(tmp_path):
+    """陽性対照: 内容が変化していなければ hash 比較でも合格する。"""
+    d = tmp_path / "data"
+    d.mkdir()
+    f = d / "x.jsonl"
+    f.write_bytes(b"same-content")
+    before = p.snapshot_data_dir_listing(d)
+    after = p.snapshot_data_dir_listing(d)
+    ok, violations = p.verify_data_dir_unchanged(before, after)
+    assert ok is True
+    assert violations == []
+
+
+# ─────────────────────────────────────────────────────────────────
+# item5: 機構除外の独立オラクル（範囲・単調性チェックだけでは検出できない
+# 「同数の別種入替」を検出する）
+# ─────────────────────────────────────────────────────────────────
+def _small_fixture_for_oracle(sessions_root: Path) -> Path:
+    lines = [
+        _session_meta("s1"),
+        _response_user("<recommended_plugins>\n機構発話", ts="2026-08-20T00:00:01.000Z"),
+        _response_user("普通の発話", ts="2026-08-20T00:00:02.000Z"),
+    ]
+    date_dir = sessions_root / "2026" / "08" / "20"
+    date_dir.mkdir(parents=True)
+    return _write(date_dir, "oracle.jsonl", lines)
+
+
+def test_machinery_exclusion_oracle_passes_on_correct_pipeline(tmp_path):
+    """陽性対照: filter_machinery が正しく配線されている通常実行では、独立
+    オラクルと実際の after_machinery_exclusion が一致し例外が出ない。"""
+    _small_fixture_for_oracle(tmp_path)
+    result = p.run_probe(sessions_root=tmp_path, base_date=date(2026, 8, 20), days=1)
+    p.assert_machinery_exclusion_matches_oracle(result)  # 例外が出ないこと自体が検査
+    assert result.counts.after_machinery_exclusion == 1
+
+
+def test_machinery_exclusion_oracle_detects_disabled_filter(tmp_path, monkeypatch):
+    """壊す不変条件: item5（機構除外ステージがパイプラインから外れる＝配線切れ。
+    段階間の非増加関係・絶対値レンジだけでは、除外対象が0件になっても
+    raw>=after_child_exclusion>=after_machinery_exclusion>=after_dedup と
+    レンジ自体は別途破れない限り検出できない）
+    ／通したい検査経路: assert_machinery_exclusion_matches_oracle が
+    normalized_events から独立に再計算した期待値との不一致を検出する。
+    変異④相当（filter_machinery を恒等関数化し検査を無効化する）を run_probe の
+    呼び出し点で直接適用する。
+    """
+    _small_fixture_for_oracle(tmp_path)
+    monkeypatch.setattr(p, "filter_machinery", lambda candidates: list(candidates))
+    result = p.run_probe(sessions_root=tmp_path, base_date=date(2026, 8, 20), days=1)
+    # 配線切れにより機構発話も残ってしまう（本来1件のはずが2件）。
+    assert result.counts.after_machinery_exclusion == 2
+    with pytest.raises(AssertionError):
+        p.assert_machinery_exclusion_matches_oracle(result)
+
+
+def test_machinery_exclusion_oracle_detects_swap_same_count_different_texts(tmp_path):
+    """壊す不変条件: item5 の分散・入替変異（変異③相当）。除外件数
+    （after_machinery_exclusion）はレンジ・非増加関係を満たしたまま、除外対象の
+    中身だけが入れ替わる（＝機構発話が残り、代わりに関係ない通常発話が誤って
+    落とされる）ケースを、独立オラクルの多重集合（Counter）完全一致で検出する
+    （件数だけの突合ではこの入替を見逃す）。
+    ここでは filter_machinery を「機構発話でなく末尾の候補を1件落とす」偽実装に
+    差し替え、除外後件数は正しい（1件）のに中身が入れ替わっていることを示す。
+    """
+    _small_fixture_for_oracle(tmp_path)
+
+    def _wrong_filter(candidates):
+        # 機構マーカーで除外する代わりに、末尾の候補（本来除外されるべきでない
+        # 普通の発話）を1件だけ落とす壊れた実装。
+        return list(candidates)[:-1]
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(p, "filter_machinery", _wrong_filter)
+        result = p.run_probe(sessions_root=tmp_path, base_date=date(2026, 8, 20), days=1)
+        # 件数だけ見ればレンジ・非増加関係は満たしうるが、中身は入れ替わっている
+        # （残った候補は「機構発話」であり「普通の発話」が誤って落ちている）。
+        assert result.counts.after_machinery_exclusion == 1
+        surviving_texts = {u["text"] for u in result.utterances}
+        assert "普通の発話" not in surviving_texts  # 壊れた実装の症状を確認
+        with pytest.raises(AssertionError):
+            p.assert_machinery_exclusion_matches_oracle(result)
+    finally:
+        monkeypatch.undo()

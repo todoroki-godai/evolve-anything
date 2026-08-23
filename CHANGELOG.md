@@ -11,6 +11,16 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(probe): 本番ストア保護ガードの残存欠陥5件を修正（#534）** — `scripts/phase1_codex_probe.py`
+  に対する外部レビュー指摘を反映。①`--out-dir` 禁止ルートに実行時解決した DATA_DIR を追加
+  （`CLAUDE_PLUGIN_DATA` で `~/.claude` 配下以外を指す custom 構成での取りこぼしを解消）
+  ②出力ファイルへの書込みを `out_dir` 実体パス包含検査で必須化（禁止ルート以外への
+  symlink escape も遮断） ③`guard.json` を事後 hash 採取後に書く設計を、①のガードにより
+  `out_dir` が DATA_DIR 配下になり得ないことを根拠に安全と明記（旧コメントの自己矛盾を解消）
+  ④DATA_DIR 一覧の不変検査をファイルサイズでなく sha256 hash に変更（同一 byte 数の別内容
+  書換えを検出可能に） ⑤機構マーカー除外ステージに独立オラクル（`assert_machinery_exclusion_matches_oracle`）
+  を追加し、除外ステージの配線切れ・入替を段階カウントのレンジ検査だけでは検出できない
+  ケースまで捕捉する。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの
