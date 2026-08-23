@@ -456,14 +456,62 @@ class ProbeResult:
     after_machinery_exclusion_texts: List[str] = field(default_factory=list)
 
 
+# ─────────────────────────────────────────────────────────────────
+# 独立オラクル（#536 round3・codex Must1 反映）
+#
+# 上の MACHINERY_MARKERS / is_machinery_text は実装の判定ロジックそのもの。
+# expected_machinery_survivors がこれらを再利用すると「実装が自分自身と
+# 突合する」トートロジーになり、MACHINERY_MARKERS からマーカーを1件削る・
+# 判定関数を弱体化する変異を検出できない（実装と期待値が同じ経路で誤り、
+# 完全一致検査が緑のまま通ってしまう）。
+#
+# そのため以下は MACHINERY_MARKERS / is_machinery_text / head_tag /
+# strip_leading_noise を一切参照しない別実装（意図的な重複）にする。
+# マーカー集合はこのモジュール内でリテラルとして再度書き下し、判定も
+# 独立に書く。実装側の定数・関数がどう変わっても、ここが変わらない限り
+# 独立に機構発話を判定し続ける。
+# ─────────────────────────────────────────────────────────────────
+_ORACLE_MACHINERY_MARKERS = frozenset(
+    {
+        "recommended_plugins",
+        "task-notification",
+        "command-name",
+        "local-command-stdout",
+        "command-message",
+        "skill",
+        "environment_context",
+        "user_action",
+        "image",
+    }
+)
+
+
+def _oracle_is_machinery_text(text: str) -> bool:
+    """独立実装の機構判定（head_tag/strip_leading_noise/is_machinery_text 非依存）。"""
+    if not text:
+        return False
+    stripped = text.lstrip("﻿ \t\n\r　")
+    if not stripped.startswith("<"):
+        return False
+    close = stripped.find(">")
+    if close == -1:
+        return False
+    inner = stripped[1:close].strip()
+    if not inner:
+        return False
+    tag = inner.split()[0]
+    return tag in _ORACLE_MACHINERY_MARKERS
+
+
 def expected_machinery_survivors(normalized_events: Sequence[Dict[str, Any]]) -> List[str]:
     """D3 除外の独立オラクル（#536 review item5）: 機構除外を通過すべき発話一覧。
 
     ``normalized_events`` は子除外後・機構除外前の中間表現（run_probe が生成する
     副産物で、機構除外ステージの成否に関係なく常に生成される）。ここから
-    ``is_machinery_text`` を直接再適用して期待される生存集合を求める。
+    実装の判定関数ではなく ``_oracle_is_machinery_text``（独立実装）を適用して
+    期待される生存集合を求める。
     """
-    return [e.get("text", "") for e in normalized_events if not is_machinery_text(e.get("text", ""))]
+    return [e.get("text", "") for e in normalized_events if not _oracle_is_machinery_text(e.get("text", ""))]
 
 
 def independent_machinery_exclusion_count(normalized_events: Sequence[Dict[str, Any]]) -> int:

@@ -21,6 +21,13 @@
   書換えを検出可能に） ⑤機構マーカー除外ステージに独立オラクル（`assert_machinery_exclusion_matches_oracle`）
   を追加し、除外ステージの配線切れ・入替を段階カウントのレンジ検査だけでは検出できない
   ケースまで捕捉する。
+- **fix(probe): 機構マーカー除外の独立オラクルを実装から真に独立させる（#536 round3）** —
+  従来の `expected_machinery_survivors` は実装定数 `MACHINERY_MARKERS`／判定関数
+  `is_machinery_text` をそのまま再利用しており、マーカー1件の削除・改変を実装とオラクル
+  の両方が同じ間違いで見逃すトートロジーだった。`MACHINERY_MARKERS`／`is_machinery_text`
+  を一切参照しない独立実装（`_ORACLE_MACHINERY_MARKERS`／`_oracle_is_machinery_text`）を
+  追加してオラクルをこちらへ切替え、テスト側にも実装定数から一切 import しないリテラル
+  マーカー集合と、人手でラベル付けした「入力テキスト→期待生存可否」fixture を追加した。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの

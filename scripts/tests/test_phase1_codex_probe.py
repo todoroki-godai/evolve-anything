@@ -12,6 +12,7 @@ import json
 import sys
 from datetime import date
 from pathlib import Path
+from typing import List, Tuple
 
 import pytest
 
@@ -93,6 +94,77 @@ def test_all_nine_machinery_markers_detected():
     for marker in sorted(p.MACHINERY_MARKERS):
         assert p.is_machinery_text(f"<{marker}>\nbody") is True
     assert p.is_machinery_text("<not_a_marker>\nbody") is False
+
+
+# 実装定数 (p.MACHINERY_MARKERS) からも独立オラクル定数 (p._ORACLE_MACHINERY_MARKERS)
+# からも一切 import・反復しない、テスト自身がリテラルで書き下した第三の集合
+# （#536 round3 codex Must1）。これと両定数を突合することで、どちらか片方だけ
+# マーカーが削除・改変されても検出できる（両方が同時に同じ変異を受けない限り）。
+_INDEPENDENT_LITERAL_MACHINERY_MARKERS = frozenset(
+    {
+        "recommended_plugins",
+        "task-notification",
+        "command-name",
+        "local-command-stdout",
+        "command-message",
+        "skill",
+        "environment_context",
+        "user_action",
+        "image",
+    }
+)
+
+
+def test_machinery_marker_set_matches_independent_literal():
+    """壊す不変条件: item5（MACHINERY_MARKERS からの要素削除・改変を検出）
+    ／通したい検査経路: 実装定数・独立オラクル定数それぞれと、テストが直書きした
+    リテラル集合との完全一致比較。
+    ``p.MACHINERY_MARKERS`` から要素を1件削っても is_machinery_text 自体は
+    変更されないため実装内テストは通ってしまうが、本テストはリテラル集合との
+    差分として検出する。
+    """
+    assert p.MACHINERY_MARKERS == _INDEPENDENT_LITERAL_MACHINERY_MARKERS
+    assert p._ORACLE_MACHINERY_MARKERS == _INDEPENDENT_LITERAL_MACHINERY_MARKERS
+
+
+# 入力テキスト → 期待生存可否 の fixture。ラベルは is_machinery_text /
+# _oracle_is_machinery_text のどちらも呼ばずに、人手でテキストを読んで判定した
+# 期待値（#536 round3 codex Must1「入力→期待生存発話の fixture を実装定数・
+# 判定関数から独立して定義する」）。
+_INDEPENDENT_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
+    ("<recommended_plugins>\n一覧です", False),  # 9種の先頭
+    ("<task-notification>\n通知", False),
+    ("<command-name>ls</command-name>", False),
+    ("<local-command-stdout>...</local-command-stdout>", False),
+    ("<command-message>...</command-message>", False),
+    ("<skill>evolve</skill>", False),
+    ("<environment_context>...</environment_context>", False),
+    ("<user_action>click</user_action>", False),
+    ("<image>base64...</image>", False),
+    ("普通の発話です。よろしくお願いします。", True),  # 通常発話
+    ("<not_a_marker>本文", True),  # タグはあるが機構マーカーでない
+    ("普通の発話に <recommended_plugins> という単語が混じるだけ", True),  # 先頭でない
+    ("﻿  \n<skill>evolve</skill>", False),  # BOM・空白混入後の機構タグ
+    ("", True),  # 空文字は機構でない
+    ("<recommended_plugins", True),  # 閉じ `>` が無く head_tag 相当は不成立
+]
+
+
+def test_filter_machinery_matches_independently_labeled_fixture():
+    """壊す不変条件: item5（マーカー文字列の改変・swap・判定弱体化を、実装からの
+    独立算出でなく人手ラベル済み fixture との突合で検出）
+    ／通したい検査経路: filter_machinery（run_probe の唯一の適用点と同じ関数）。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel="response_item", line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, _expected) in enumerate(_INDEPENDENT_SURVIVAL_FIXTURE)
+    ]
+    expected_survivors = [text for text, expected in _INDEPENDENT_SURVIVAL_FIXTURE if expected]
+    actual_survivors = [c.text for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
 
 
 def test_developer_role_excluded_by_reducer():
