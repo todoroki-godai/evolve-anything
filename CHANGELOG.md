@@ -11,6 +11,14 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(queue): corrections.jsonl の read health を全経路で単一スナップショットに統一（#533 round3）** —
+  `collect_untracked_materials`/`collect_phantom_materials` が独自に corrections.jsonl を再 read
+  していた経路を塞ぎ、`build_queue_result` が読んだ1回の snapshot（`corr_records`）を渡すよう配線。
+  `fleet.cli._gather_queue_result` も material 母集団収集（`_collect_material_slugs`）と
+  `build_queue_result` それぞれが別々に read していたのを1回に統一。親ディレクトリの権限エラーは
+  `Path.exists()`/`Path.is_symlink()` が `OSError` を握りつぶし正常な空在庫と誤判定していたため、
+  `lstat()` で `FileNotFoundError`（真の未作成）とその他の `OSError`（権限エラー等）を区別するよう
+  修正。
 - **fix(queue): corrections.jsonl の read health を probe と集計で同一スナップショットに統一（#533 round2）** —
   `build_queue_result` が corrections.jsonl を1回だけ read し、`(records, health)` を
   backlog counts / weak+corr（各 PJ） / unattributed corrections の全下流集計へ配線した

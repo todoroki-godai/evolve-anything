@@ -497,10 +497,20 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     # だが material 母集団の方が広く、material を持つ untracked PJ（例: amamo）が完全沈黙し
     # 真の evolve 候補を取りこぼす。weak は read_unpromoted（reader と同一ソース）、corr は
     # _correction_slug で per-PJ reader と同じ正規化に揃える（名前空間ズレ防止）。
+    # #538 round3 [Must]4: corrections.jsonl は本関数内で1回だけ read し、その snapshot を
+    # material 母集団の集計（``_collect_material_slugs``）と queue 本体の集計
+    # （``build_queue_result``）の両方へ渡す。別々に read すると、両呼び出しの間で
+    # untracked PJ の corrections が増減した場合に material 母集団だけ旧 snapshot になる
+    # （queue 側の health/counts と食い違う）。
+    from .queue_materials import read_corrections_records_with_health
+
+    corr_records, corr_read_health = read_corrections_records_with_health(corr_path)
+
     material_slugs = _collect_material_slugs(
         weak_signals_path=weak_path if weak_path.exists() else None,
         corrections_path=corr_path,
         correction_slug=_correction_slug,
+        corr_records=corr_records,
     )
     # 実 dir gate: CC が認識する実在 PJ dir（CLAUDE.md/.claude 有）に解決できる slug のみ
     # untracked surface する（phantom/temp slug 除外）。status の新候補検出と同じ discovery。
@@ -519,6 +529,8 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         pj_paths=pj_paths,
         material_slugs=material_slugs,
         untracked_dir_map=untracked_dir_map,
+        corr_records=corr_records,
+        corr_read_health=corr_read_health,
     )
 
 
@@ -527,6 +539,7 @@ def _collect_material_slugs(
     weak_signals_path: Path | None,
     corrections_path: Path,
     correction_slug,
+    corr_records: list[dict] | None = None,
 ) -> list[str]:
     """weak_signals + corrections に出現する全 pj_slug を集める（重複可・#86 O2）。
 
@@ -540,6 +553,12 @@ def _collect_material_slugs(
     ``read_text``/``json.loads`` 直読みは ``OSError`` を空文字列に、壊れた行を無言 skip に
     倒しており、``build_queue_result`` 側の read health probe と食い違う silent-fail 経路
     だった。health 自体は advisory 集計のため呼び側では使わず、レコードのみ利用する）。
+
+    ``corr_records``（``read_corrections_records_with_health`` が既に返した有効レコード列）を
+    渡すと corrections.jsonl を再 read しない（#538 round3 [Must]4 — ``_gather_queue_result``
+    が material 母集団収集と ``build_queue_result`` の2箇所で別々に read すると、両者の間で
+    ファイルが変化した場合に material 母集団だけ旧 snapshot になる）。未指定時は従来通り
+    ``corrections_path`` から自前で read する（後方互換）。
     """
     slugs: list[str] = []
     try:
@@ -553,9 +572,12 @@ def _collect_material_slugs(
                 slugs.append(s)
     except Exception:
         pass
-    from .queue_materials import read_corrections_records_with_health
+    if corr_records is not None:
+        records = corr_records
+    else:
+        from .queue_materials import read_corrections_records_with_health
 
-    records, _health = read_corrections_records_with_health(corrections_path)
+        records, _health = read_corrections_records_with_health(corrections_path)
     for rec in records:
         s = correction_slug(rec.get("project_path"))
         if s:

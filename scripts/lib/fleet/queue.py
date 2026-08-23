@@ -190,6 +190,8 @@ def build_queue_result(
     pj_paths: Optional[Dict[str, str]] = None,
     material_slugs: Optional[List[str]] = None,
     untracked_dir_map: Optional[Dict[str, str]] = None,
+    corr_records: Optional[List[Dict[str, Any]]] = None,
+    corr_read_health: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """各 PJ の学習素材を集計し、Phase 1b #80 契約の queue result dict を返す。
 
@@ -229,6 +231,13 @@ def build_queue_result(
 
     #88: 閾値以上 material を持つが実 dir に解決できない untracked slug（temp slug 等）は
     ``collect_phantom_materials`` で ``skipped_phantom`` に分離する（waiting には昇格しない）。
+
+    ``corr_records``/``corr_read_health``（``read_corrections_records_with_health`` が既に
+    返した snapshot）を**両方**渡すと本関数内での read をスキップし、呼び側が保持する snapshot
+    をそのまま使う（#538 round3 [Must]4 — CLI 層で ``_collect_material_slugs`` が material 母集団
+    用に別読みすると、その母集団と本関数の health/counts が異なる snapshot になりうる。呼び側
+    ``_gather_queue_result`` は1回だけ read し、その結果を両方へ渡す）。片方のみ・両方 None は
+    従来通り本関数内で自前 read する（後方互換）。
     """
     paths = pj_paths or {}
     redirect_map = untracked_dir_map or {}
@@ -236,11 +245,13 @@ def build_queue_result(
     skipped_dead: List[Dict[str, Any]] = []
     from correction_semantic.correction_backlog import correction_backlog_counts_by_pj
 
-    # #533/#538 round2 [Must]1: corrections.jsonl は本関数内で1回だけ read し、
-    # (records, health) を全ての下流集計（backlog counts / weak+corr / unattributed）へ
-    # 使い回す。probe と各集計が別読みだと、probe 成功後に read が失敗する（逆も同様）ケースで
-    # health が「正常」なのに集計結果だけ劣化を反映しない silent スナップショット不一致が起きる。
-    corr_records, corr_read_health = read_corrections_records_with_health(corrections_path)
+    # #533/#538 round2 [Must]1・round3 [Must]4: corrections.jsonl は本関数内で（呼び側から
+    # 既読の snapshot が来ていなければ）1回だけ read し、(records, health) を全ての下流集計
+    # （backlog counts / weak+corr / unattributed / untracked・phantom collectors）へ使い回す。
+    # probe と各集計が別読みだと、probe 成功後に read が失敗する（逆も同様）ケースで health が
+    # 「正常」なのに集計結果だけ劣化を反映しない silent スナップショット不一致が起きる。
+    if corr_records is None or corr_read_health is None:
+        corr_records, corr_read_health = read_corrections_records_with_health(corrections_path)
 
     correction_backlog_counts = correction_backlog_counts_by_pj(
         corrections_path=corrections_path, records=corr_records
@@ -334,6 +345,7 @@ def build_queue_result(
             corrections_path=corrections_path,
             dir_map=untracked_dir_map,
             correction_backlog_counts=correction_backlog_counts,
+            corr_records=corr_records,
         )
         phantom = collect_phantom_materials(
             material_slugs=material_slugs,
@@ -343,6 +355,7 @@ def build_queue_result(
             corrections_path=corrections_path,
             dir_map=untracked_dir_map,
             correction_backlog_counts=correction_backlog_counts,
+            corr_records=corr_records,
         )
     else:
         untracked = []

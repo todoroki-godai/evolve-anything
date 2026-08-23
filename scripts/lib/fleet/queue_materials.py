@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat as _stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -224,20 +225,43 @@ def read_corrections_records_with_health(
     同じ「malformed 行」として数える（ファイル全体を unreadable にはしない — 1行の破損で
     他の健全な行まで読み捨てるのは #533 が解消した「読取不能と壊れた行の混同」を UTF-8 単位で
     再導入することになるため）。
+
+    #538 round3 [Must]2: 親ディレクトリの検索(x)権限が無い場合、``Path.exists()`` /
+    ``Path.is_symlink()`` はいずれも内部で ``OSError`` を握りつぶし ``False`` を返す
+    （Python 3.8+ の pathlib 仕様）。従来はこの2つで存在判定してから read していたため、
+    権限エラーが「真の未作成」と区別できず ``readable=true`` の正常な空在庫に誤判定していた。
+    ``exists()``/``is_symlink()`` に頼らず、まず ``lstat()`` を試みて ``FileNotFoundError``
+    （真の未作成）と、その他の ``OSError``（権限エラー等）を区別する。
     """
     health: Dict[str, Any] = {"readable": True, "error": None, "malformed_lines": 0}
     path = Path(corrections_path)
-    if not path.exists():
-        # #538 round2 [Must]4: dangling symlink（リンク先が存在しない）も ``exists()`` は False
-        # を返すため、ここで区別しないと「正常な空在庫」と誤判定して readable=true のまま
-        # EMPTY を返してしまう。symlink 自体は存在する（``is_symlink()``）が実体が無い場合は
-        # 「正常な空」でなく劣化として surface する。symlink 自体が無い（真の未作成）ときは
-        # 従来通り正常な空在庫。
-        if path.is_symlink():
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        # 真の未作成 = 正常な空在庫。
+        return [], health
+    except OSError as exc:
+        # 親ディレクトリの権限エラー等。exists()/is_symlink() は同じ例外を握りつぶして
+        # False を返すため、ここで先に区別する必要がある。
+        health["readable"] = False
+        health["error"] = str(exc)
+        return [], health
+
+    if _stat.S_ISLNK(st.st_mode):
+        # symlink エントリ自体は存在する。リンク先の実体を辿って確認する。
+        try:
+            path.stat()
+        except FileNotFoundError:
+            # #538 round2 [Must]4: dangling symlink（リンク先が存在しない）は「正常な空在庫」
+            # と区別し、劣化として surface する。
             health["readable"] = False
             health["error"] = f"dangling symlink: {path} -> {os.readlink(path)}"
             return [], health
-        return [], health
+        except OSError as exc:
+            health["readable"] = False
+            health["error"] = str(exc)
+            return [], health
+
     try:
         raw_bytes = path.read_bytes()
     except OSError as exc:
@@ -436,6 +460,7 @@ def collect_untracked_materials(
     corrections_path: Path,
     dir_map: Dict[str, str],
     correction_backlog_counts: Optional[Dict[str, int]] = None,
+    corr_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """material（weak/corr）を持つが queue 母集団（tracked）に居ない PJ を advisory 列挙する（#86）。
 
@@ -452,6 +477,12 @@ def collect_untracked_materials(
     対象 slug について ``weak_unprocessed_by_pj`` + ``new_corrections_by_pj``
     （untracked は last_evolve state 無し＝全件）を集計し、``material_count >= threshold``
     または ``correction_backlog > 0`` のものを返す。在庫は material_count に加算しない。
+
+    ``corr_records``（``read_corrections_records_with_health`` が既に返した有効レコード列）を
+    渡すと corrections.jsonl を再 read しない（#538 round3 [Must]1 — ``build_queue_result`` が
+    先に読んだ1回の snapshot を使い回さないと、probe/backlog 集計とこの collector の間で別読みに
+    なり、read 結果が変化したときに snapshot 不一致が起きる）。未指定時は従来通り
+    ``corrections_path`` から自前で read する（後方互換）。
 
     Returns:
         ``[{pj_slug, project_path, material_count, weak_unprocessed, new_corrections,
@@ -479,9 +510,12 @@ def collect_untracked_materials(
     out: List[Dict[str, Any]] = []
     for slug in candidates:
         weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
-        corr = new_corrections_by_pj(
-            slug, last_evolve_at=None, corrections_path=corrections_path
-        )
+        if corr_records is not None:
+            corr = new_corrections_by_pj(slug, last_evolve_at=None, records=corr_records)
+        else:
+            corr = new_corrections_by_pj(
+                slug, last_evolve_at=None, corrections_path=corrections_path
+            )
         count = weak + corr
         backlog = int(backlog_counts.get(slug, 0) or 0)
         if count < threshold and backlog <= 0:
@@ -509,6 +543,7 @@ def collect_phantom_materials(
     corrections_path: Path,
     dir_map: Dict[str, str],
     correction_backlog_counts: Optional[Dict[str, int]] = None,
+    corr_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """閾値以上 material または修正在庫を持ち、実 dir に解決できない slug を列挙する（#88/#515）。
 
@@ -521,6 +556,9 @@ def collect_phantom_materials(
     ④ material_count（weak + corr・untracked は全件）が threshold 以上、または
     correction_backlog が1件以上。material_count 降順
     （同数は pj_slug 昇順）で返す。waiting には昇格させない（temp slug は意図的に除外）。
+
+    ``corr_records`` は ``collect_untracked_materials`` と同じ契約（渡すと再 read しない・
+    #538 round3 [Must]1）。
 
     Returns:
         ``[{pj_slug, material_count, weak_unprocessed, new_corrections, correction_backlog}]``（project_path は
@@ -547,9 +585,12 @@ def collect_phantom_materials(
     out: List[Dict[str, Any]] = []
     for slug in candidates:
         weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
-        corr = new_corrections_by_pj(
-            slug, last_evolve_at=None, corrections_path=corrections_path
-        )
+        if corr_records is not None:
+            corr = new_corrections_by_pj(slug, last_evolve_at=None, records=corr_records)
+        else:
+            corr = new_corrections_by_pj(
+                slug, last_evolve_at=None, corrections_path=corrections_path
+            )
         count = weak + corr
         backlog = int(backlog_counts.get(slug, 0) or 0)
         if count < threshold and backlog <= 0:

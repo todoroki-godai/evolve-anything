@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -833,6 +834,140 @@ class TestBuildQueueResult:
         assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
         assert {item["pj_slug"] for item in result["queue"]} == {"alpha", "beta", "gamma"}
 
+    def test_corrections_jsonl_read_exactly_once_including_untracked_and_phantom(
+        self, tmp_path, monkeypatch
+    ):
+        """#538 round3 [Must]1・[Must]3: untracked/phantom collectors も path から再 read しない。
+
+        round2 の同名テストは ``material_slugs``/``untracked_dir_map`` を渡していなかったため、
+        ``collect_untracked_materials``/``collect_phantom_materials`` が独自に
+        ``new_corrections_by_pj(..., corrections_path=...)`` で再 read する経路を通らず、
+        「read は1回」が実際には成立していなかった（call 回数が1のまま緑になっていた）。
+        ここでは untracked（実 dir あり）と phantom（実 dir なし）の両方を material_slugs に
+        含めて経路を強制的に通し、それでも読取回数が1回であることを検査する。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(
+            "".join(
+                json.dumps(_corr(slug, "2026-06-01T00:00:00+00:00")) + "\n"
+                for slug in ("alpha", "delta", "epsilon", "epsilon", "epsilon")
+            )
+        )
+        delta_dir = tmp_path / "delta"
+        delta_dir.mkdir()
+
+        from fleet import queue_materials as qm
+
+        real_reader = qm.read_corrections_records_with_health
+        calls = []
+
+        def _counting_reader(path):
+            calls.append(path)
+            return real_reader(path)
+
+        monkeypatch.setattr(qm, "read_corrections_records_with_health", _counting_reader)
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _counting_reader)
+
+        result = fq.build_queue_result(
+            pj_slugs=["alpha"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            material_slugs=["alpha", "delta", "epsilon"],
+            untracked_dir_map={"delta": str(delta_dir)},  # epsilon は実 dir 無し=phantom
+        )
+
+        assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
+        untracked = {u["pj_slug"]: u for u in result["untracked_with_material"]}
+        phantom = {p["pj_slug"]: p for p in result["skipped_phantom"]}
+        assert untracked["delta"]["new_corrections"] == 1
+        assert phantom["epsilon"]["new_corrections"] == 3
+
+    def test_permission_denied_parent_dir_marks_unreadable_not_empty(self, tmp_path):
+        """#538 round3 [Must]2: 親ディレクトリの検索権限が無いと ``exists()``/``is_symlink()`` は
+        揃って ``OSError`` を握りつぶし False を返すため、素通しすると「正常な空在庫」に
+        誤判定していた（旧実装の欠陥）。read を試みて権限エラーを区別する。
+        """
+        if os.geteuid() == 0:
+            pytest.skip("root では chmod 000 が effective でない")
+        parent = tmp_path / "locked"
+        parent.mkdir()
+        store = parent / "corrections.jsonl"
+        store.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+        os.chmod(parent, 0o000)
+        try:
+            records, health = fq.read_corrections_records_with_health(store)
+        finally:
+            os.chmod(parent, 0o755)
+        assert records == []
+        assert health["readable"] is False
+        assert health["error"]
+
+
+class TestGatherQueueResultSingleRead:
+    """#538 round3 [Must]4: 通常 CLI 経路（``_gather_queue_result``）でも corrections.jsonl の
+    read は1回だけ。material 母集団収集（``_collect_material_slugs``）と ``build_queue_result``
+    が別々に read すると、両呼び出しの間で untracked PJ の corrections が増減した場合に
+    material 母集団だけ旧 snapshot になる（health/counts と食い違う）。
+    """
+
+    def test_corrections_read_once_across_material_slugs_and_build_queue_result(
+        self, tmp_path, monkeypatch
+    ):
+        import argparse
+
+        import fleet
+        import fleet_config
+        from fleet import cli as fcli
+        from fleet import collectors as fcollectors
+        from fleet import queue_materials as qm
+        from fleet import queue_state as fqstate
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        ws = data_dir / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = data_dir / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "2026-06-01T00:00:00+00:00")) + "\n")
+
+        tracked_dir = tmp_path / "alpha"
+        tracked_dir.mkdir()
+
+        monkeypatch.setattr(fleet, "_current_data_dir", lambda: data_dir)
+        monkeypatch.setattr(
+            fleet_config, "load_config", lambda: {"tracked_projects": [str(tracked_dir)]}
+        )
+        monkeypatch.setattr(fleet_config, "discover_cc_projects", lambda: [])
+        monkeypatch.setattr(fleet_config, "filter_valid_projects", lambda paths: paths)
+        monkeypatch.setattr(fcollectors, "aggregate_subagents_by_project", lambda: {})
+        monkeypatch.setattr(fcollectors, "aggregate_sessions_by_project", lambda: {})
+        monkeypatch.setattr(fqstate, "read_last_evolve", lambda *, data_dir=None: {})
+
+        real_reader = qm.read_corrections_records_with_health
+        calls = []
+
+        def _counting_reader(path):
+            calls.append(path)
+            return real_reader(path)
+
+        monkeypatch.setattr(qm, "read_corrections_records_with_health", _counting_reader)
+        # ``build_queue_result``（fleet.queue）は queue_materials から re-export された
+        # module-level 束縛を bare 名で直接呼ぶため、qm 側だけの patch では拾えない
+        # （フォールバック経路のみを叩いて「読めていた」ことにする偽陰性を防ぐ）。
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _counting_reader)
+
+        args = argparse.Namespace(threshold=1, root=None)
+        result = fcli._gather_queue_result(args)
+
+        assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
+        assert [item["pj_slug"] for item in result["queue"]] == ["alpha"]
+        assert result["queue"][0]["new_corrections"] == 1
+
 
 # --- CLI --json 出力 ----------------------------------------------------------
 
@@ -1002,6 +1137,66 @@ class TestCollectMaterialSlugsUsesSharedReader:
         )
         assert calls == [corr], "corrections 側 read が共有 reader を経由していない"
         assert "alpha" in slugs
+
+    def test_spy_return_value_is_sole_input_not_real_file(self, tmp_path, monkeypatch):
+        """#538 round3 [Must]3: spy が返す値だけが結果へ反映されることを検査する。
+
+        旧版のテストは spy 内で本物の reader を1回呼んで返値を捨てても（＝別の独自 read を
+        復活させても）``calls == [corr]`` と ``"alpha" in slugs`` が両方通ってしまい、
+        「spy の返値を唯一の入力として使っている」ことを固定できていなかった。実ファイルには
+        存在しない sentinel record だけを spy から返し、その sentinel だけが slugs に出て
+        実ファイルの内容（alpha）は出ないことを検査する。
+        """
+        from fleet import cli as fcli
+        from fleet.queue_materials import _correction_slug
+
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # 実ファイルは alpha のみ
+
+        sentinel_records = [{"project_path": "sentinel-pj", "timestamp": "t"}]
+
+        def _spy(path):
+            return sentinel_records, {"readable": True, "error": None, "malformed_lines": 0}
+
+        monkeypatch.setattr(
+            "fleet.queue_materials.read_corrections_records_with_health", _spy
+        )
+
+        slugs = fcli._collect_material_slugs(
+            weak_signals_path=None,
+            corrections_path=corr,
+            correction_slug=_correction_slug,
+        )
+        assert "sentinel-pj" in slugs
+        assert "alpha" not in slugs
+
+    def test_corr_records_param_bypasses_read_entirely(self, tmp_path, monkeypatch):
+        """corr_records を渡すと reader そのものを一切呼ばず、渡した records だけを使う。"""
+        from fleet import cli as fcli
+        from fleet.queue_materials import _correction_slug
+
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # 実ファイルは alpha のみ
+
+        called = {"n": 0}
+
+        def _fail_if_called(path):
+            called["n"] += 1
+            raise AssertionError("read_corrections_records_with_health は呼ばれてはいけない")
+
+        monkeypatch.setattr(
+            "fleet.queue_materials.read_corrections_records_with_health", _fail_if_called
+        )
+
+        slugs = fcli._collect_material_slugs(
+            weak_signals_path=None,
+            corrections_path=corr,
+            correction_slug=_correction_slug,
+            corr_records=[{"project_path": "sentinel-pj", "timestamp": "t"}],
+        )
+        assert called["n"] == 0
+        assert "sentinel-pj" in slugs
+        assert "alpha" not in slugs
 
     def test_os_error_falls_back_to_empty_without_crashing(self, tmp_path, monkeypatch):
         """旧実装は独自 try/except で空文字列へ倒していた。共有 reader 経由でも同じく落ちない。"""
