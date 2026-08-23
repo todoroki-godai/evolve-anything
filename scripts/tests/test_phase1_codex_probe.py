@@ -333,16 +333,115 @@ def test_production_guard_passes_when_unchanged_present_file():
 # ─────────────────────────────────────────────────────────────────
 # 実データ E2E（C-1・実機ベンチ）
 # ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────
+# C-1: 実データ regression の桁チェック。
+#
+# 旧実装は ADR 実測値（2026-08-23 早朝）に対して厳密一致・狭いレンジで
+# assert していたため、実 ~/.codex/sessions が日々増える限り毎日落ちる作りに
+# なっていた（テスト名は order_of_magnitude＝桁が合っていることの検査のはず
+# なのに、実装は完全一致を要求していて名実が食い違っていた）。
+#
+# 下限は ADR 基準値（データは単調増加想定。削除運用は無い前提）。
+# 上限は基準値のおよそ2.2倍。根拠: 本修正当日（2026-08-23）の実測で
+# target_files が早朝227→同日昼231へ半日弱で +4 件増加した実ペースに対し、
+# 数ヶ月分の通常運用増加を吸収しつつ、重複カウント・暴走等の異常な増加は
+# 検出できる余裕として採用した（厳密な統計的根拠ではなく実測ペースからの
+# 経験的マージン。今後乖離が大きくなったら基準値ごと更新すること）。
+_ADR_BASELINE_LOWER_COUNTS = {
+    "target_files": 227,
+    "raw": 769,
+    "after_child_exclusion": 503,
+    "after_machinery_exclusion": 373,
+    "after_dedup": 259,
+}
+_ADR_BASELINE_UPPER_COUNTS = {
+    "target_files": 500,
+    "raw": 1700,
+    "after_child_exclusion": 1100,
+    "after_machinery_exclusion": 820,
+    "after_dedup": 570,
+}
+
+
+def _assert_stage_counts_plausible(c: "p.StageCounts") -> None:
+    """段階カウントが「桁が合っている」ことを検査する。
+
+    (1) 各段階が ADR 基準値の下限〜上限レンジ内であること（stale exact-match
+    対策。レンジは上のモジュール定数が単一ソース）。
+    (2) パイプライン構造上必ず成り立つ段階間の非増加関係
+    （raw >= after_child_exclusion >= after_machinery_exclusion >= after_dedup）。
+    これは実データの増減に関係なく常に成り立つべき不変条件で、絶対値レンジと
+    違って将来も陳腐化しない。
+    """
+    for name, lower in _ADR_BASELINE_LOWER_COUNTS.items():
+        value = getattr(c, name)
+        upper = _ADR_BASELINE_UPPER_COUNTS[name]
+        assert lower <= value <= upper, (
+            f"{name}={value} は想定レンジ [{lower}, {upper}] 外です"
+        )
+    assert c.raw >= c.after_child_exclusion >= c.after_machinery_exclusion >= c.after_dedup >= 0, (
+        "段階間の非増加関係が崩れています: "
+        f"raw={c.raw} after_child_exclusion={c.after_child_exclusion} "
+        f"after_machinery_exclusion={c.after_machinery_exclusion} after_dedup={c.after_dedup}"
+    )
+    assert c.target_files > 0
+
+
+def test_assert_stage_counts_plausible_rejects_below_lower_bound():
+    """陰性試験: 下限未満（データ欠落・収集退行を模す）は赤くなる。
+    ／通したい検査経路: _assert_stage_counts_plausible の下限チェック。
+    """
+    c = p.StageCounts(
+        target_files=1, raw=1, after_child_exclusion=1,
+        after_machinery_exclusion=1, after_dedup=1,
+        unattributed_dropped=0, child_files=0, parse_error_lines=0,
+    )
+    with pytest.raises(AssertionError):
+        _assert_stage_counts_plausible(c)
+
+
+def test_assert_stage_counts_plausible_rejects_above_upper_bound():
+    """陰性試験: 上限超過（重複カウント・暴走を模す）は赤くなる。
+    ／通したい検査経路: _assert_stage_counts_plausible の上限チェック。
+    """
+    c = p.StageCounts(
+        target_files=10_000, raw=10_000, after_child_exclusion=10_000,
+        after_machinery_exclusion=10_000, after_dedup=10_000,
+        unattributed_dropped=0, child_files=0, parse_error_lines=0,
+    )
+    with pytest.raises(AssertionError):
+        _assert_stage_counts_plausible(c)
+
+
+def test_assert_stage_counts_plausible_rejects_broken_stage_ordering():
+    """陰性試験: 段階間の非増加関係が崩れている（フィルタが効いていない等）
+    と、絶対値レンジ内でも赤くなる。
+    ／通したい検査経路: _assert_stage_counts_plausible の段階間不変条件チェック。
+    """
+    c = p.StageCounts(
+        target_files=300, raw=800, after_child_exclusion=900,  # raw を超える
+        after_machinery_exclusion=400, after_dedup=300,
+        unattributed_dropped=0, child_files=0, parse_error_lines=0,
+    )
+    with pytest.raises(AssertionError):
+        _assert_stage_counts_plausible(c)
+
+
+def test_assert_stage_counts_plausible_accepts_baseline_boundary():
+    """陽性対照: ADR 基準値そのもの（下限の境界値）は許容される。"""
+    c = p.StageCounts(
+        target_files=227, raw=769, after_child_exclusion=503,
+        after_machinery_exclusion=373, after_dedup=259,
+        unattributed_dropped=0, child_files=0, parse_error_lines=0,
+    )
+    _assert_stage_counts_plausible(c)  # 例外が出ないこと自体が検査
+
+
 @pytest.mark.real_home
 def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitude():
     """壊す不変条件: C-1（実データで完走し段階件数が ADR 実測値と整合する）
-    ／通したい検査経路: run_probe のパイプライン全体（実 ~/.codex/sessions を読む）。
-
-    ADR 実測時点（2026-08-23 早朝）の値は 227/769/503/373/259。本テスト実行時点
-    までの通常利用差分（実測 2〜3 件の増分。ADR 自身も 671→675→677→679 と
-    測定間の増分を記録している）を許容し、厳密一致でなく近傍レンジで検査する。
-    最終 dedup 後の値（259）は許容差ゼロで一致することを確認する
-    （dedup はマッチ対の text_hash が同一のため machinery 除外の順序と可換）。
+    ／通したい検査経路: run_probe のパイプライン全体（実 ~/.codex/sessions を読む）
+    + _assert_stage_counts_plausible（桁レンジ・段階間不変条件）。
     """
     result = p.run_probe(
         sessions_root=Path.home() / ".codex" / "sessions",
@@ -350,11 +449,7 @@ def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitu
         days=14,
     )
     c = result.counts
-    assert c.target_files == 227
-    assert 760 <= c.raw <= 780
-    assert 495 <= c.after_child_exclusion <= 510
-    assert 365 <= c.after_machinery_exclusion <= 380
-    assert c.after_dedup == 259
+    _assert_stage_counts_plausible(c)
     assert c.parse_error_lines == 0
 
 
