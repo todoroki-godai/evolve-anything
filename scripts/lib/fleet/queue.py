@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .queue_materials import (  # noqa: F401 (再エクスポート含む)
     CorrectionsSnapshot,
@@ -191,7 +191,7 @@ def build_queue_result(
     pj_paths: Optional[Dict[str, str]] = None,
     material_slugs: Optional[List[str]] = None,
     untracked_dir_map: Optional[Dict[str, str]] = None,
-    corrections_snapshot: Optional[CorrectionsSnapshot] = None,
+    corrections_reader: Callable[[Path], CorrectionsSnapshot] = read_corrections_records_with_health,
 ) -> Dict[str, Any]:
     """各 PJ の学習素材を集計し、Phase 1b #80 契約の queue result dict を返す。
 
@@ -232,19 +232,30 @@ def build_queue_result(
     #88: 閾値以上 material を持つが実 dir に解決できない untracked slug（temp slug 等）は
     ``collect_phantom_materials`` で ``skipped_phantom`` に分離する（waiting には昇格しない）。
 
-    ``corrections_snapshot``（``read_corrections_records_with_health`` が既に返した
-    ``CorrectionsSnapshot(records, health)``）を渡すと本関数内での read をスキップし、呼び側が
-    保持する snapshot をそのまま使う（#538 round3 [Must]4 — CLI 層で ``_collect_material_slugs``
-    が material 母集団用に別読みすると、その母集団と本関数の health/counts が異なる snapshot に
-    なりうる。呼び側 ``_gather_queue_result`` は1回だけ read し、その結果を渡す）。未指定
-    （``None``）は従来通り本関数内で自前 read する（後方互換）。
+    ``corrections_reader``（``Path -> CorrectionsSnapshot`` の呼び出し可能オブジェクト。既定は
+    本物の ``read_corrections_records_with_health``）を本関数内で **ちょうど1回** 呼び出し、
+    その戻り値の ``(records, health)`` を全ての下流集計（backlog counts / weak+corr（各 PJ）/
+    unattributed corrections / untracked・phantom collectors）へ使い回す。probe と各集計が
+    別々に read すると、read 結果が変化したときに health と集計結果が食い違うスナップショット
+    不一致が起きる（#533）。呼び出し口を1つに絞ることで、records と health は構造的に必ず
+    同じ1回の呼び出しから生まれる（片方だけ差し替えるコードが書けない）。
 
-    #538 round4 [Must]1(I1/I4): records と health は同一 read から生まれた不可分の組であり、
-    片方だけを差し替えて渡すことを許さない。旧実装は ``corr_records`` / ``corr_read_health`` を
-    独立の任意引数にしていたため、片方だけ渡す呼び出しが ``or`` フォールバックで黙って握り
-    潰され、渡した値が捨てられて ``corrections_path`` から再 read されていた。単一の
-    ``CorrectionsSnapshot`` にまとめることで、片方だけの指定はキーワード引数自体が存在せず
-    ``TypeError`` になる（構造的に不可能にする。値レベルの分岐チェックは不要）。
+    #538 round3 [Must]4: CLI 層（``_gather_queue_result``）は material 母集団収集
+    （``_collect_material_slugs``）でも corrections.jsonl の内容が要るため、本関数呼び出しより
+    前に実ディスク read が必要になる。その場合は「既に読んだ snapshot を返すだけの
+    reader」（クロージャ）を ``corrections_reader`` に渡す。ディスク read は依然 1 回のまま、
+    ``build_queue_result`` から見た「reader を1回呼ぶ」契約は変わらない。
+
+    #538 round4-5: 過去のラウンドでは ``corr_records``/``corr_read_health`` を独立の任意引数
+    にし（round4 `or` フォールバックで片方だけ渡す呼び出しが黙って握り潰される欠陥）、次に
+    ``CorrectionsSnapshot`` を「reader だけが生成できる opaque 型」にして防ごうとしたが
+    （round5）、``object.__setattr__`` 直叩き・``copy``/``pickle`` の ``__reduce_ex__`` 経由生成
+    など7通りの偽造経路が実測で成立し、型による防御は破られた。round6（team-lead 決定）で
+    方針転換: **偽装できない型を作るのをやめ、外部から records/health データを直接受け取る
+    引数自体を廃止**した。``corrections_reader`` は「データ」でなく「読む手段」を受け取るため、
+    渡された reader が何であれ、その1回の呼び出しの中で records と health は必ず対になる
+    （生タプルを返す reader を書いても、それは1回の呼び出しの中の話であり、注入された
+    データと本関数内の別集計が食い違うことは構造的に起こり得ない）。
     """
     paths = pj_paths or {}
     redirect_map = untracked_dir_map or {}
@@ -252,15 +263,11 @@ def build_queue_result(
     skipped_dead: List[Dict[str, Any]] = []
     from correction_semantic.correction_backlog import correction_backlog_counts_by_pj
 
-    # #533/#538 round2 [Must]1・round3 [Must]4: corrections.jsonl は本関数内で（呼び側から
-    # 既読の snapshot が来ていなければ）1回だけ read し、(records, health) を全ての下流集計
-    # （backlog counts / weak+corr / unattributed / untracked・phantom collectors）へ使い回す。
-    # probe と各集計が別読みだと、probe 成功後に read が失敗する（逆も同様）ケースで health が
-    # 「正常」なのに集計結果だけ劣化を反映しない silent スナップショット不一致が起きる。
-    if corrections_snapshot is None:
-        corr_records, corr_read_health = read_corrections_records_with_health(corrections_path)
-    else:
-        corr_records, corr_read_health = corrections_snapshot
+    # #533/#538 round6: corrections_reader を本関数内で **ちょうど1回** 呼び出し、
+    # (records, health) を全ての下流集計（backlog counts / weak+corr / unattributed /
+    # untracked・phantom collectors）へ使い回す。呼び出し口を1つに絞ることで、records と
+    # health が別々の read から来て食い違うスナップショット不一致は構造的に起こらない。
+    corr_records, corr_read_health = corrections_reader(corrections_path)
 
     correction_backlog_counts = correction_backlog_counts_by_pj(
         corrections_path=corrections_path, records=corr_records

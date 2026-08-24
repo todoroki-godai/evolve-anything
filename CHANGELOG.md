@@ -11,17 +11,22 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
-- **fix(queue): symlink target 消失レースの誤分類と CorrectionsSnapshot の偽装再構成を是正（#533 round5）** —
+- **fix(queue): symlink target 消失レースの誤分類を是正し、CorrectionsSnapshot の
+  データ注入点自体を廃止（#533 round5-6）** —
   symlink 実体確認（`path.stat()`）成功後に **target だけ** unlink/rename されるレースで
   `read_bytes()` の `FileNotFoundError` を一律「真の不在」扱いしていたため、実際は dangling
   symlink と同じ読取劣化のケースが正常な空在庫に誤分類されていた。symlink エントリ自体の
-  消失（真の不在）と target だけの消失（劣化）を再 `lstat()` で分離。また `CorrectionsSnapshot`
-  が公開 `NamedTuple`（tuple 互換）だったため `records, health = snapshot` で unpack 後
-  `CorrectionsSnapshot(records, stale_health)` と片方だけ差し替えて再構成でき、reader を
-  呼ばず任意の health を偽装注入できたのを、`read_corrections_records_with_health` だけが
-  生成できる opaque 型に変更して構造的に禁止（unpack による read 互換は維持）。
-  `CorrectionsSnapshot` を `fleet` 直下からも import 可能にし、API surface snapshot fixture も
-  追随させた。
+  消失（真の不在）と target だけの消失（劣化）を再 `lstat()` で分離（round5）。
+  `CorrectionsSnapshot`（records+health の組）を外部から片方だけ差し替えて再構成できる欠陥
+  について、round5 では「reader だけが生成できる opaque 型」で防ごうとしたが、
+  `object.__setattr__` 直叩き・`copy`/`pickle` の `__reduce_ex__` 経由生成・サブクラス化など
+  7通りの偽造経路が実測で成立したため撤回。round6 で方針転換し、
+  `build_queue_result` がデータ（`corrections_snapshot`）を受け取る引数自体を廃止、
+  `corrections_reader`（呼び出し可能オブジェクト。既定は本物の reader）だけを受け取る設計に
+  変更した。records/health は必ず同じ1回の呼び出しから生まれるため、型による防御に頼らず
+  「片方だけ差し替えた偽 snapshot を渡す経路」自体が存在しない。`CorrectionsSnapshot` は
+  素の `NamedTuple` に戻し、`fleet` 直下からも import 可能。API surface snapshot fixture は
+  公開サブモジュール・公開クラスの method まで走査範囲を広げた。
 - **fix(queue): corrections.jsonl の read health を全経路で単一スナップショットに統一（#533 round3）** —
   `collect_untracked_materials`/`collect_phantom_materials` が独自に corrections.jsonl を再 read
   していた経路を塞ぎ、`build_queue_result` が読んだ1回の snapshot（`corr_records`）を渡すよう配線。

@@ -497,11 +497,12 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     # だが material 母集団の方が広く、material を持つ untracked PJ（例: amamo）が完全沈黙し
     # 真の evolve 候補を取りこぼす。weak は read_unpromoted（reader と同一ソース）、corr は
     # _correction_slug で per-PJ reader と同じ正規化に揃える（名前空間ズレ防止）。
-    # #538 round3 [Must]4: corrections.jsonl は本関数内で1回だけ read し、その snapshot を
-    # material 母集団の集計（``_collect_material_slugs``）と queue 本体の集計
-    # （``build_queue_result``）の両方へ渡す。別々に read すると、両呼び出しの間で
-    # untracked PJ の corrections が増減した場合に material 母集団だけ旧 snapshot になる
-    # （queue 側の health/counts と食い違う）。
+    # #538 round3 [Must]4・round6: material 母集団の集計（``_collect_material_slugs``）が
+    # ``build_queue_result`` より前に corrections.jsonl の内容を必要とするため、ここで実
+    # ディスク read を1回だけ行う。``build_queue_result`` は「reader を1回呼ぶ」契約のまま
+    # （#538 round6 — データでなく reader を受け取る設計）にするため、既に読んだ snapshot を
+    # そのまま返すだけのクロージャを ``corrections_reader`` として渡す。ディスク read は
+    # 依然この関数全体で1回のまま。
     from .queue_materials import read_corrections_records_with_health
 
     corrections_snapshot = read_corrections_records_with_health(corr_path)
@@ -519,6 +520,9 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     for vp in fleet_config.filter_valid_projects(fleet_config.discover_cc_projects()):
         untracked_dir_map.setdefault(project_name_from_dir(str(vp)), str(vp))
 
+    def _reuse_already_read_snapshot(_corrections_path):
+        return corrections_snapshot
+
     return build_queue_result(
         pj_slugs=pj_slugs,
         threshold=args.threshold,
@@ -530,7 +534,7 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         pj_paths=pj_paths,
         material_slugs=material_slugs,
         untracked_dir_map=untracked_dir_map,
-        corrections_snapshot=corrections_snapshot,
+        corrections_reader=_reuse_already_read_snapshot,
     )
 
 

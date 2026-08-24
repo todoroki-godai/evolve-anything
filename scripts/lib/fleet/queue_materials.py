@@ -24,7 +24,7 @@ import os
 import stat as _stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 
 # --- alias fold primitive（queue.py._equivalence_slugs が使用）----------------
@@ -197,66 +197,34 @@ def bootstrap_consumed_by_pj(
 # --- store reader: corrections.jsonl 共有 raw read + read-health（#533）------
 
 
-# #538 round5 [Must]2(I2): CorrectionsSnapshot 生成を read_corrections_records_with_health
-# 経由に限定するための非公開トークン。queue.py の re-export list にも含めない（外部から
-# `from fleet.queue_materials import _READER_TOKEN` と明示的に private 名を辿らない限り
-# 到達できない）。
-_READER_TOKEN = object()
+class CorrectionsSnapshot(NamedTuple):
+    """``read_corrections_records_with_health`` が返す records と health の組。
 
-
-class CorrectionsSnapshot:
-    """``read_corrections_records_with_health`` が返す records と health の不可分な組。
-
-    #538 round4 [Must]2(I1/I4): ``build_queue_result`` がこれまで ``corr_records`` /
+    #538 round4 [Must]2(I1/I4): 当初 ``build_queue_result`` は ``corr_records`` /
     ``corr_read_health`` を独立の任意引数として受けていたため、片方だけを渡す呼び出しが
-    ``or`` フォールバック（当時の実装）で黙って握り潰され、渡した値が捨てられて
-    ``corrections_path`` から再 read されていた（snapshot 不一致の温床）。records と health は
-    必ず同じ1回の read から生まれた組として運ぶ契約にするため、単一の型にまとめ片方だけの
-    受け渡しを構造的に不可能にした。
+    ``or`` フォールバックで黙って握り潰され、渡した値が捨てられて ``corrections_path`` から
+    再 read されていた。records/health を1つの型にまとめ、片方だけの受け渡しを構造的に
+    不可能にした。
 
-    #538 round5 [Must]2(I2): 当初は ``NamedTuple``（tuple 互換）だったため、
-    ``records, health = snapshot`` で一度 unpack したあと ``CorrectionsSnapshot(records,
-    stale_health)`` と片方だけを差し替えて再構成でき、reader を一度も呼ばずに任意の health を
-    偽装した snapshot を ``build_queue_result`` へ注入できてしまっていた（forged snapshot）。
-    本クラスは ``read_corrections_records_with_health`` だけが握る非公開トークン
-    （``_READER_TOKEN``）を渡さない限り ``__init__`` が ``TypeError`` を投げる opaque 型にし、
-    外部からの再構成を構造的に禁止する。``records, health = snapshot`` の unpack（read 専用・
-    無害）は ``__iter__`` で維持し、既存呼び出し側（``queue.py`` の
-    ``corr_records, corr_read_health = ...``）の互換を保つ。
+    #538 round5 で「forge されない opaque 型」（``__init__`` トークンガード・immutable・
+    サブクラス禁止・pickle/copy 禁止）を試みたが、レビュー（round5 追加検証）で
+    ``object.__setattr__`` 直叩き・``copy``/``pickle`` の ``__reduce_ex__`` 経由生成など
+    7 通りの偽造経路が実際に成立することを実測で確認した。**Python でオブジェクトを
+    「外部から偽造不可能」にすることは原理的に難しく、投資しても勝てない防御だった。**
+
+    #538 round6（team-lead 決定・設計転換）: 「偽装できないようにする」のをやめ、
+    **この型を外部から受け取る箇所（``build_queue_result`` の引数）自体を無くした**。
+    ``build_queue_result`` は ``corrections_reader``（呼び出し可能オブジェクト。既定は本物の
+    ``read_corrections_records_with_health``）だけを受け取り、内部で1回呼び出して
+    ``(records, health)`` を得る。records と health は必ずその1回の呼び出しから生まれるため、
+    「片方だけ差し替えた偽 snapshot を外部から渡す」という攻撃面（注入点）自体が存在しない。
+    本クラスはもはや外部境界を越えないので、単純な ``NamedTuple``（tuple 互換 unpack）に
+    戻して良い（守るべき不変条件は「reader 呼び出し1回の中で records と health が組になる」
+    ことであり、それは呼び出し口を1つに絞ることで型の防御に頼らず達成される）。
     """
 
-    __slots__ = ("_records", "_health")
-
-    def __init__(
-        self,
-        records: List[Dict[str, Any]],
-        health: Dict[str, Any],
-        *,
-        _reader_token: object = None,
-    ) -> None:
-        if _reader_token is not _READER_TOKEN:
-            raise TypeError(
-                "CorrectionsSnapshot は read_corrections_records_with_health 経由でのみ"
-                "生成できます（#538 round5 [Must]2: 外部からの任意再構成を禁止）"
-            )
-        self._records = records
-        self._health = health
-
-    @property
-    def records(self) -> List[Dict[str, Any]]:
-        return self._records
-
-    @property
-    def health(self) -> Dict[str, Any]:
-        return self._health
-
-    def __iter__(self):
-        """``records, health = snapshot`` の unpack（read 専用）互換を維持する。"""
-        yield self._records
-        yield self._health
-
-    def __repr__(self) -> str:  # pragma: no cover - デバッグ表示のみ
-        return f"CorrectionsSnapshot(records=<{len(self._records)} items>, health={self._health!r})"
+    records: List[Dict[str, Any]]
+    health: Dict[str, Any]
 
 
 def read_corrections_records_with_health(
@@ -317,13 +285,13 @@ def read_corrections_records_with_health(
         st = path.lstat()
     except FileNotFoundError:
         # 真の未作成 = 正常な空在庫。
-        return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+        return CorrectionsSnapshot([], health)
     except OSError as exc:
         # 親ディレクトリの権限エラー等。exists()/is_symlink() は同じ例外を握りつぶして
         # False を返すため、ここで先に区別する必要がある。
         health["readable"] = False
         health["error"] = str(exc)
-        return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+        return CorrectionsSnapshot([], health)
 
     was_symlink = _stat.S_ISLNK(st.st_mode)
     if was_symlink:
@@ -335,11 +303,11 @@ def read_corrections_records_with_health(
             # と区別し、劣化として surface する。
             health["readable"] = False
             health["error"] = f"dangling symlink: {path} -> {os.readlink(path)}"
-            return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+            return CorrectionsSnapshot([], health)
         except OSError as exc:
             health["readable"] = False
             health["error"] = str(exc)
-            return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+            return CorrectionsSnapshot([], health)
 
     try:
         raw_bytes = path.read_bytes()
@@ -351,22 +319,22 @@ def read_corrections_records_with_health(
                 path.lstat()
             except FileNotFoundError:
                 # link エントリ自体も消えた＝通常ファイルと同じ「真の不在」。
-                return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+                return CorrectionsSnapshot([], health)
             except OSError as exc:
                 health["readable"] = False
                 health["error"] = str(exc)
-                return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+                return CorrectionsSnapshot([], health)
             # link は残っているのに read できない＝target だけが消えた dangling symlink。
             health["readable"] = False
             health["error"] = f"dangling symlink (target vanished after stat): {path}"
-            return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+            return CorrectionsSnapshot([], health)
         # 通常ファイルの ``FileNotFoundError`` は lstat() 成功直後に消えたレース。
         # 「読取不能」ではなく「真の不在」＝正常な空在庫として扱う（readable=True のまま）。
-        return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+        return CorrectionsSnapshot([], health)
     except OSError as exc:
         health["readable"] = False
         health["error"] = str(exc)
-        return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+        return CorrectionsSnapshot([], health)
 
     out: List[Dict[str, Any]] = []
     for raw_line in raw_bytes.split(b"\n"):
@@ -387,7 +355,7 @@ def read_corrections_records_with_health(
             health["malformed_lines"] += 1
             continue
         out.append(rec)
-    return CorrectionsSnapshot(out, health, _reader_token=_READER_TOKEN)
+    return CorrectionsSnapshot(out, health)
 
 
 def corrections_read_health(corrections_path: Path) -> Dict[str, Any]:

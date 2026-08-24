@@ -935,13 +935,20 @@ class TestBuildQueueResult:
         assert result["corrections_read_health"]["readable"] is True
         assert result["corrections_read_health"]["malformed_lines"] == 0
 
-    def test_corrections_jsonl_read_exactly_once_across_multiple_pjs(self, tmp_path, monkeypatch):
-        """#538 round2 [Must]1: 複数 PJ・複数集計にまたがっても corrections.jsonl の read は1回だけ。
+    def test_corrections_jsonl_read_exactly_once_across_multiple_pjs(self, tmp_path):
+        """#538 round2 [Must]1・round6: 複数 PJ・複数集計にまたがっても
+        ``corrections_reader`` の呼び出しは1回だけ。
 
         probe（health）と各集計（backlog counts / weak+corr ×N PJ / unattributed）が別読みだと、
         probe 成功後に read が失敗する（逆も同様）ケースで health が「正常」なのに集計結果だけ
         劣化を反映しない、または劣化が無いのに劣化扱いになる silent スナップショット不一致が
-        起きる。1回の read 結果を全下流へ配線したことを call 回数で証明する。
+        起きる。
+
+        #538 round6: reader を module-level 名の monkeypatch で差し替える旧手法は、
+        ``corrections_reader`` のデフォルト値が関数定義時に直接束縛される（毎回名前引きしない）
+        ため効かなくなった。これは意図した設計変化そのもの ―― ``build_queue_result`` は
+        「データ」でなく「読む手段」を受け取る契約になったため、テスト側もその手段
+        （``corrections_reader=`` 引数）を明示的に注入する。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
@@ -953,22 +960,12 @@ class TestBuildQueueResult:
             )
         )
 
-        # 各下流集計（new_corrections_by_pj / count_unattributed_corrections /
-        # correction_backlog_counts_by_pj）はいずれも読取本体を定義元 ``fleet.queue_materials``
-        # の module-level 名前として bare 呼び出しする一方、``build_queue_result`` 自身は
-        # re-export された ``fleet.queue`` 側の束縛を直接呼ぶ。どちらか片方だけ差し替えると
-        # もう片方の呼び出し回数を見落とすため、両方の属性を同じ spy へ差し替えて合算する。
-        from fleet import queue_materials as qm
-
-        real_reader = qm.read_corrections_records_with_health
+        real_reader = fq.read_corrections_records_with_health
         calls = []
 
         def _counting_reader(path):
             calls.append(path)
             return real_reader(path)
-
-        monkeypatch.setattr(qm, "read_corrections_records_with_health", _counting_reader)
-        monkeypatch.setattr(fq, "read_corrections_records_with_health", _counting_reader)
 
         result = fq.build_queue_result(
             pj_slugs=["alpha", "beta", "gamma"],
@@ -978,22 +975,25 @@ class TestBuildQueueResult:
             last_evolve_map={},
             activity_map={},
             generated_at="2026-06-25T09:00:00Z",
+            corrections_reader=_counting_reader,
         )
 
-        assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
+        assert len(calls) == 1, f"corrections_reader was called {len(calls)} times, expected 1"
         assert {item["pj_slug"] for item in result["queue"]} == {"alpha", "beta", "gamma"}
 
     def test_corrections_jsonl_read_exactly_once_including_untracked_and_phantom(
-        self, tmp_path, monkeypatch
+        self, tmp_path
     ):
-        """#538 round3 [Must]1・[Must]3: untracked/phantom collectors も path から再 read しない。
+        """#538 round3 [Must]1・[Must]3・round6: untracked/phantom collectors も
+        ``corrections_reader`` を再度呼ばない。
 
         round2 の同名テストは ``material_slugs``/``untracked_dir_map`` を渡していなかったため、
         ``collect_untracked_materials``/``collect_phantom_materials`` が独自に
         ``new_corrections_by_pj(..., corrections_path=...)`` で再 read する経路を通らず、
         「read は1回」が実際には成立していなかった（call 回数が1のまま緑になっていた）。
         ここでは untracked（実 dir あり）と phantom（実 dir なし）の両方を material_slugs に
-        含めて経路を強制的に通し、それでも読取回数が1回であることを検査する。
+        含めて経路を強制的に通し、それでも呼び出し回数が1回であることを検査する
+        （round6: ``corrections_reader=`` 引数で直接注入する）。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
@@ -1007,17 +1007,12 @@ class TestBuildQueueResult:
         delta_dir = tmp_path / "delta"
         delta_dir.mkdir()
 
-        from fleet import queue_materials as qm
-
-        real_reader = qm.read_corrections_records_with_health
+        real_reader = fq.read_corrections_records_with_health
         calls = []
 
         def _counting_reader(path):
             calls.append(path)
             return real_reader(path)
-
-        monkeypatch.setattr(qm, "read_corrections_records_with_health", _counting_reader)
-        monkeypatch.setattr(fq, "read_corrections_records_with_health", _counting_reader)
 
         result = fq.build_queue_result(
             pj_slugs=["alpha"],
@@ -1029,9 +1024,10 @@ class TestBuildQueueResult:
             generated_at="2026-06-25T09:00:00Z",
             material_slugs=["alpha", "delta", "epsilon"],
             untracked_dir_map={"delta": str(delta_dir)},  # epsilon は実 dir 無し=phantom
+            corrections_reader=_counting_reader,
         )
 
-        assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
+        assert len(calls) == 1, f"corrections_reader was called {len(calls)} times, expected 1"
         untracked = {u["pj_slug"]: u for u in result["untracked_with_material"]}
         phantom = {p["pj_slug"]: p for p in result["skipped_phantom"]}
         assert untracked["delta"]["new_corrections"] == 1
@@ -1058,59 +1054,65 @@ class TestBuildQueueResult:
         assert health["error"]
 
 
-class TestBuildQueueResultCorrectionsSnapshot:
-    """#538 round4 [Must]1(I1/I4): ``corr_records``/``corr_read_health`` は分離不能な単一
-    ``CorrectionsSnapshot`` にまとめた。片方だけの指定が ``or`` フォールバックで黙って
-    握り潰され path から再 read される（渡した値が捨てられる）ことがもう構造的に起きない
-    ことを検査する。
+class TestBuildQueueResultCorrectionsReaderDesign:
+    """#538 round6（team-lead 決定・設計転換）。
+
+    round5 は ``CorrectionsSnapshot`` を「reader だけが生成できる opaque 型」にすることで
+    forge を防ごうとしたが、round5 の追加レビューで ``object.__setattr__`` 直叩き・
+    ``copy``/``pickle`` の ``__reduce_ex__`` 経由生成・サブクラス化など **7通りの偽造経路**
+    が実際に成立することが実測された。Python でオブジェクトを外部から「偽造不可能」にする
+    のは原理的に難しく、そこへ投資しても勝てない防御だった。
+
+    round6 の方針転換: 偽装できない型を作るのをやめ、**外部から records/health データを
+    直接受け取る引数（``corrections_snapshot``）自体を廃止**した。
+    ``build_queue_result`` は ``corrections_reader``（呼び出し可能オブジェクト。既定は
+    本物の ``read_corrections_records_with_health``）だけを受け取り、内部で1回呼び出して
+    ``(records, health)`` を得る。records と health は必ずその1回の呼び出しから生まれるため、
+    「片方だけ差し替えた偽 snapshot を外部から渡す」という攻撃面（注入点）自体が存在しない。
+    ``CorrectionsSnapshot`` 自体は素の ``NamedTuple`` に戻し（もはや外部境界を越えないので
+    型による防御は不要）、偽造は再び自由にできるが、それを ``build_queue_result`` へ渡す
+    独立した経路が無いので無害になる。
     """
 
-    def test_corrections_snapshot_param_bypasses_read_entirely(self, tmp_path, monkeypatch):
-        """snapshot を渡すと reader を一切呼ばず、渡した records/health だけを使う。
+    def test_default_reader_is_the_real_reader_identity(self):
+        """設計契約の機械的固定: デフォルト ``corrections_reader`` は本物の
+        ``read_corrections_records_with_health`` そのもの（identity）である。変異試験④の
+        逆（``corrections_snapshot`` を復活させる変異）を検出するための signature 検査。
+        """
+        import inspect
 
-        #538 round5 [Must]2(I2) 対応後: ``CorrectionsSnapshot`` は reader（本物の
-        ``read_corrections_records_with_health``）経由でしか作れない opaque 型になったため、
-        テスト用 sentinel snapshot も別ファイルへの本物の read で正規に作る
-        （``build_queue_result`` に渡す ``corrections_path`` とは無関係の別ファイル＝
-        snapshot 優先が本当に効いていることを確認する構図は維持）。
+        sig = inspect.signature(fq.build_queue_result)
+        assert "corrections_reader" in sig.parameters
+        assert "corrections_snapshot" not in sig.parameters
+        assert sig.parameters["corrections_reader"].default is fq.read_corrections_records_with_health
+
+    def test_corrections_snapshot_kwarg_no_longer_exists_raises_typeerror(self, tmp_path):
+        """旧 API（round4-5 の ``corrections_snapshot=``）は kwarg 自体が存在しないため
+        ``TypeError``。データを直接受け取る引数が完全に無いことの検査。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
-        sentinel_store = tmp_path / "sentinel-corrections.jsonl"
-        sentinel_store.write_text(
-            json.dumps({"project_path": "sentinel-pj", "timestamp": "2026-06-01T00:00:00+00:00"})
-            + "\n"
-        )
-        snapshot = fq.read_corrections_records_with_health(sentinel_store)
-
         corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # 実ファイルは alpha のみ
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
 
-        def _fail_if_called(path):
-            raise AssertionError("read_corrections_records_with_health は呼ばれてはいけない")
-
-        monkeypatch.setattr(fq, "read_corrections_records_with_health", _fail_if_called)
-
-        result = fq.build_queue_result(
-            pj_slugs=["sentinel-pj"],
-            threshold=1,
-            weak_signals_path=ws,
-            corrections_path=corr,
-            last_evolve_map={},
-            activity_map={},
-            generated_at="2026-06-25T09:00:00Z",
-            corrections_snapshot=snapshot,
+        forged = fq.CorrectionsSnapshot(
+            [{"project_path": "forged-pj", "timestamp": "2026-01-01T00:00:00+00:00"}],
+            {"readable": True, "error": None, "malformed_lines": 0},
         )
-        assert result["corrections_read_health"] == snapshot.health
-        assert [item["pj_slug"] for item in result["queue"]] == ["sentinel-pj"]
-        assert result["queue"][0]["new_corrections"] == 1  # sentinel のみ・alpha は不使用
+        with pytest.raises(TypeError):
+            fq.build_queue_result(
+                pj_slugs=["alpha"],
+                threshold=1,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+                corrections_snapshot=forged,
+            )
 
     def test_passing_only_records_kwarg_raises_typeerror(self, tmp_path):
-        """旧 API（``corr_records`` 単独）は kwarg 自体が存在しないため即 ``TypeError``。
-
-        旧実装（round3 まで）はこの呼び出しを ``or`` フォールバックで受理し、渡した
-        sentinel を握り潰して ``corrections_path`` を再 read していた（欠陥そのもの）。
-        """
+        """旧 API（``corr_records`` 単独）は kwarg 自体が存在しないため即 ``TypeError``。"""
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
@@ -1147,8 +1149,9 @@ class TestBuildQueueResultCorrectionsSnapshot:
                 corr_read_health={"readable": False, "error": "x", "malformed_lines": 0},
             )
 
-    def test_no_snapshot_falls_back_to_reading_corrections_path(self, tmp_path):
-        """陽性対照: ``corrections_snapshot`` 未指定は従来通り ``corrections_path`` から自前 read。"""
+    def test_no_reader_override_falls_back_to_reading_corrections_path(self, tmp_path):
+        """陽性対照: ``corrections_reader`` 未指定は既定（本物の reader）で
+        ``corrections_path`` から自前 read する。"""
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
@@ -1166,61 +1169,175 @@ class TestBuildQueueResultCorrectionsSnapshot:
         assert [item["pj_slug"] for item in result["queue"]] == ["alpha"]
         assert result["queue"][0]["new_corrections"] == 1
 
-
-class TestCorrectionsSnapshotOpaque:
-    """#538 round5 [Must]2(I2): ``CorrectionsSnapshot`` は reader だけが生成できる opaque 型。
-
-    tuple 互換の公開コンストラクタだと ``records, health = snapshot`` で unpack した後
-    ``CorrectionsSnapshot(records, stale_health)`` と片方だけ差し替えて再構成でき、reader を
-    一切呼ばずに任意の（forged）health を注入できた。ここではその forge 経路が
-    ``TypeError`` で構造的に塞がれていることを検査する。
-    """
-
-    def test_direct_construction_without_reader_token_raises_typeerror(self):
-        """陰性試験④（検査を無効化する側の反例）: 公開コンストラクタへ直接 records/health を
-        渡すだけの素朴な再構成は ``TypeError``。壊す不変条件: 「snapshot は reader 経由でしか
-        作れない」。通したい検査経路: ``build_queue_result`` へ forged snapshot を注入する
-        攻撃面そのものを構築不能にする。
+    def test_custom_reader_overrides_default_and_used_exactly_once_consistently(self, tmp_path):
+        """テスト用の reader（本物のディスク read を一切行わないダミー）を注入すると、
+        その1回の呼び出しの戻り値だけが records/health 双方に一貫して使われる。
+        ``build_queue_result`` に渡す ``corrections_path`` 上の実ファイルは一切参照されない
+        （reader 注入が「データ」でなく「読む手段」の差し替えであることの検査）。
         """
-        with pytest.raises(TypeError):
-            fq.CorrectionsSnapshot(
-                [{"project_path": "forged-pj", "timestamp": "2026-01-01T00:00:00+00:00"}],
-                {"readable": True, "error": None, "malformed_lines": 0},
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # 実ファイルは alpha のみ
+
+        calls = []
+        sentinel = fq.CorrectionsSnapshot(
+            records=[{"project_path": "sentinel-pj", "timestamp": "2026-06-01T00:00:00+00:00"}],
+            health={"readable": True, "error": None, "malformed_lines": 0},
+        )
+
+        def _reader(path):
+            calls.append(path)
+            return sentinel
+
+        result = fq.build_queue_result(
+            pj_slugs=["sentinel-pj"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            corrections_reader=_reader,
+        )
+        assert len(calls) == 1
+        assert result["corrections_read_health"] == sentinel.health
+        assert [item["pj_slug"] for item in result["queue"]] == ["sentinel-pj"]
+        assert result["queue"][0]["new_corrections"] == 1  # sentinel のみ・alpha は不使用
+
+    def test_reader_returning_raw_tuple_is_accepted_by_design(self, tmp_path):
+        """設計上の仕様確認（回避策誘発の有無）: reader は ``CorrectionsSnapshot`` である
+        必要すら無く、``(records, health)`` の生タプルを返しても正しく動く。round5 では
+        「生タプルを渡せる」ことが I2 の欠陥（データ注入点の型未検査）として指摘されたが、
+        round6 設計ではデータを直接受け取る引数自体が無いため、reader の戻り値の型を問わず
+        安全（reader 呼び出しの外側に、別ソースの health を混入させる経路が無い）。これにより
+        正当な利用側（テスト）が opaque 型のボイラープレートを回避するために生タプルを
+        手組みする必要も無くなる。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+
+        raw_tuple = (
+            [{"project_path": "alpha", "timestamp": "2026-06-01T00:00:00+00:00"}],
+            {"readable": True, "error": None, "malformed_lines": 0},
+        )
+
+        result = fq.build_queue_result(
+            pj_slugs=["alpha"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            corrections_reader=lambda _path: raw_tuple,
+        )
+        assert result["corrections_read_health"] == raw_tuple[1]
+        assert result["queue"][0]["new_corrections"] == 1
+
+    def test_reader_exception_propagates_not_silently_swallowed(self, tmp_path):
+        """自主構成の破綻経路①（team-lead 指摘とは種類の異なるもの）: ``corrections_reader``
+        が例外を投げた場合、``build_queue_result`` はそれを握りつぶさず伝播させる。#533 の
+        原問題（読取失敗が silent に在庫ゼロへ丸められる）を reader 注入の層で再導入しない
+        ことを確認する。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+
+        def _boom(_path):
+            raise RuntimeError("simulated reader failure")
+
+        with pytest.raises(RuntimeError, match="simulated reader failure"):
+            fq.build_queue_result(
+                pj_slugs=["alpha"],
+                threshold=1,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+                corrections_reader=_boom,
             )
 
-    def test_unpack_then_reconstruct_with_forged_health_raises_typeerror(self, tmp_path):
-        """②語は残して意味を壊す変異の反例: 正規に得た snapshot を一度 unpack し、health だけ
-        「壊れていない」に偽装して再構成しようとする経路（レビュー指摘の forge 手口そのもの）が
-        ``TypeError`` で塞がれることを検査する。壊す不変条件:「records と health は同じ1回の
-        read から生まれた組以外、組み合わせ直せない」。通したい検査経路: 片方だけ差し替えた
-        forged snapshot が ``build_queue_result`` に到達する経路。
+    def test_reader_returning_wrong_arity_raises_naturally(self, tmp_path):
+        """自主構成の破綻経路②（team-lead 指摘とは種類の異なるもの）: reader が
+        ``(records, health)`` の2要素以外（3要素タプル等）を返すと、unpack が自然に
+        ``ValueError`` になる。誤って3要素目（例: 追加の metadata）が無言で drop されて
+        health が壊れた値のまま処理が続く、という silent 劣化経路が無いことを確認する。
         """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
-        real_snapshot = fq.read_corrections_records_with_health(corr)
-        records, _real_health = real_snapshot  # 公開互換の unpack（read）は許される
+        corr.write_text("")
 
-        stale_health = {"readable": False, "error": "forged: pretend disk is broken", "malformed_lines": 99}
-        with pytest.raises(TypeError):
-            fq.CorrectionsSnapshot(records, stale_health)
+        def _wrong_arity(_path):
+            return ([], {"readable": True, "error": None, "malformed_lines": 0}, "unexpected-extra")
 
-    def test_reader_constructed_snapshot_unpacks_and_exposes_properties(self, tmp_path):
-        """陽性対照: reader 経由の正規 snapshot は unpack もプロパティアクセスも従来通り動く
-        （opaque 化が read 側の互換を壊していないこと）。
+        with pytest.raises(ValueError):
+            fq.build_queue_result(
+                pj_slugs=["alpha"],
+                threshold=1,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+                corrections_reader=_wrong_arity,
+            )
+
+    def test_forged_snapshot_via_direct_construction_has_no_injection_path(self, tmp_path):
+        """team-lead 指摘の核心確認: round5 の7通りの偽造経路のうち代表（直接構築による
+        forge）を実際に構成し、それを ``build_queue_result`` に渡す **口が無い**ことを検査
+        する。``CorrectionsSnapshot`` は素の ``NamedTuple`` に戻ったため直接構築自体は
+        （round5 と異なり）成功するが、``build_queue_result`` にはそれを受け取るデータ引数が
+        無いため、``corrections_reader`` 経由（＝定義上1回の呼び出しに閉じる）以外に注入
+        できない。
         """
-        corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
-        snapshot = fq.read_corrections_records_with_health(corr)
+        forged = fq.CorrectionsSnapshot(
+            records=[{"project_path": "forged-pj", "timestamp": "2026-01-01T00:00:00+00:00"}],
+            health={"readable": False, "error": "forged: pretend disk is broken", "malformed_lines": 99},
+        )
+        # 直接構築は成功する（opaque guard は round6 で撤廃済み）。
+        assert forged.records[0]["project_path"] == "forged-pj"
 
-        records, health = snapshot  # unpack 互換
-        assert records == snapshot.records
-        assert health == snapshot.health
-        assert health["readable"] is True
-        assert health["malformed_lines"] == 0
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("")
+
+        # forged を build_queue_result に「データとして」渡す経路が存在しないことを確認
+        # （corrections_snapshot/corr_records/corr_read_health のいずれも kwarg 自体が無い）。
+        import inspect
+
+        sig = inspect.signature(fq.build_queue_result)
+        assert not {"corrections_snapshot", "corr_records", "corr_read_health"} & set(
+            sig.parameters
+        )
+
+        # 唯一の注入口は corrections_reader（呼び出し可能オブジェクト）。forged を渡す唯一の
+        # 方法は「forged を返す reader」を書くことだが、それは1回の呼び出しに閉じるため
+        # records/health が別々の source から混入することは構造的に起こらない。
+        result = fq.build_queue_result(
+            pj_slugs=["forged-pj"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            corrections_reader=lambda _path: forged,
+        )
+        # health は forged.health のまま一貫している（records と分離した別 health が
+        # 混入する余地が無い）。
+        assert result["corrections_read_health"] == forged.health
 
     def test_corrections_snapshot_reexported_from_top_level_fleet_package(self):
-        """#538 round5 [Should]1: 公開 signature（``build_queue_result``）に現れる型は同じ
-        公開 namespace（``from fleet import X``）から import 可能であること。
+        """公開 signature（``Callable[[Path], CorrectionsSnapshot]`` の戻り値型）に現れる
+        型は同じ公開 namespace（``from fleet import X``）から import 可能であること。
         """
         import fleet
 
