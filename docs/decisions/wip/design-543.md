@@ -92,43 +92,86 @@ similarity の丸め誤差だけが違う純粋な重複**。#7 の「続けて�
   category_schema_version 更新時に一斉分裂しうる」将来リスクは実在するが、**別 issue として
   切り出す**（起票は頭が行う。本設計に issue 番号は書かない）。理由は 6 節。
 
+**N-a（残存分裂の母数）**: `line_no`/`prev_line_no` が異なる（＝本当に別の発話・畳まないのが
+正しい）rephrase の分裂は、1.2 の old-split 24グループ中 **16グループ**（取得日2026-08-25。
+similarity のみが差の8グループを除いた残り）。このうち既読/未読が混在する実害は「続けて」
+**1件のみ**（他15グループは両方既読 or 両方未読で実害なし）。本設計はこの型を解消しない
+（上記の対象外判断）ため、**将来この型の再提示が増えたとき、この母数16グループ・実害1件と
+比較して規模の変化を判断できるよう記録しておく**。
+
+**N-b（両方未読のsimilarity-only重複）**: similarity-onlyの8グループのうち、既読/未読混在
+（実害）は6グループ、**両方未読のグループが2グループ実在する**（両方既読は0グループ）。
+`daily_review` は group 化で同一 idiom/keyword の signal_keys を束ねるため、この2グループが
+同一朝に別々の確認として二重提示される可能性は低いと見込むが、**実装時の受入テストで
+実際に1グループとして提示されることを確認する**（`_group_new` の group 化ロジックと
+`expand_seen_keys_for_rephrase_dupes` の相互作用は本設計では検証していないため、
+組み合わせの動作確認を受入条件に追加する）。
+
 ## 2. key 設計（縮小版）
 
-### 2.1 identity の定義（1つに統一・M1 対応）
+### 2.1 identity の定義（denylist に修正・R1/M1 対応）
 
-rephrase channel の identity は以下の7フィールドの組。**`similarity` のみを除外**し、
-他は一切変更しない:
+**R1（v2からの訂正）: v2 は7フィールドを列挙する allowlist だったが、この形だと将来
+rephrase provenance にフィールドが追加された瞬間、そのフィールドが無条件に identity から
+除外され別内容が既読扱いになりうる。→ denylist（`similarity` だけを除外し、残りは
+provenance の全フィールドをそのまま identity に含める）へ改める。**
 
 ```
-identity = (session_id, source_path, line_no, prev_line_no,
-            normalize(prev_text), normalize(text), detector)
+identity = (session_id, {k: v for k, v in provenance.items() if k != "similarity"})
 ```
 
-`normalize()` は NFC 正規化 + 前後空白 strip（`text`/`prev_text` の2フィールドのみに適用。
-S4 対応・4.4 節）。`line_no`/`prev_line_no`/`session_id`/`source_path`/`detector` はそのまま
-値比較する（int/str のいずれであっても正規化不要 — 検出器が生成した値をそのまま比較する）。
+ただし `text`/`prev_text` の2フィールドのみ NFC正規化+前後空白 strip を適用する
+（S4対応。`k in ("text", "prev_text")` で判定 — 型による判定ではなくフィールド名による
+判定にすることで、将来 provenance に文字列型の新フィールドが増えても無関係に
+正規化されない）。identity は `(session_id, json.dumps(正規化済み辞書, sort_keys=True,
+ensure_ascii=False))` のタプルとして扱う。
+
+**denylist を選ぶ理由**: rephrase provenance の生成箇所は
+`weak_signals/detectors.py:290-301` の1箇所のみ（1関数が単独で書く固定 shape）。
+将来ここにフィールドが追加された場合、denylist なら**自動的に identity に含まれる**
+（安全側 — 新フィールドの値が違えば別 identity になるだけで、over-merge は起きない。
+worst case でも「本来同一視すべきものが分裂したまま」という**現状と同じ失敗モード**に
+留まり、新たな over-merge を生まない）。allowlist だと逆に「新フィールドが無条件に
+除外される」という**検出しづらい**危険な失敗モードになる。
+
+**新フィールド追加を検出する契約テスト（R1 の「穴の検出手段」）**: `detectors.py:290-301`
+が書く provenance のキー集合を凍結した frozenset（例:
+`{"detector","similarity","prev_line_no","line_no","prev_text","text","source_path"}`）と
+実際の `detect_rephrase` の出力キー集合を突合するテストを追加する。フィールドが増減したら
+このテストが red になり、メンテナが「このフィールドは identity に含めてよい内容か
+（実行条件でないか）」を意識的に判断する契機になる（denylist 自体は自動的に安全側に
+倒れるが、判断の痕跡を残すためにテストで気づけるようにする）。
+
+`line_no`/`prev_line_no`/`session_id`/`source_path`/`detector` はそのまま値比較する
+（int/str のいずれであっても正規化不要）。
 
 この定義は v1 の §1.2/§2.1/§2.3 で3通りに割れていた `source_path` の扱い（M1 の指摘）を
-解消する: **`source_path` は identity に含める**（同一セッションでも異なる transcript file
-に跨る記録は理論上あり得るため、除外すると衝突源になりうる。含めるコストは実測上ゼロ
-— 2.1 の7件中どのケースも `source_path` は各ペア内で同一だった）。
+解消する: **`source_path` は identity に含める**（denylist なので `similarity` 以外は
+自動的に含まれる。同一セッションでも異なる transcript file に跨る記録は理論上あり得るため、
+除外すると衝突源になりうる。含めるコストは実測上ゼロ — 1.2 の7件中どのケースも
+`source_path` は各ペア内で同一だった）。
 
-### 2.2 陰性方向の検証（v1 から維持・危険の実測）
+### 2.2 陰性方向の検証（`session_id` を含めない軸での測定・R2 対応）
 
-`session_id` を identity から落とす案は**実データで危険と確認済み**（v1 §2.2 と同一の実測、
-再掲）:
+`session_id` を identity から落とす案は**実データで危険と確認済み**。**この節の測定は
+`source_path` を含めない `(session_id有無, text)` の軸**（1.2 の `(session_id, source_path,
+text)` の3フィールド軸とは別の測定）:
 
 ```
-rephrase: session_id 込み 152 groups / 抜き 110 groups（差42）
+rephrase: (session_id, text) 152 groups / (text のみ) 110 groups（差42）
 '続けて'    → 28 セッションに跨って出現
 'お願い'    → 14 セッションに跨って出現
 ```
+
+（1.2 の「156グループ」は `(session_id, source_path, text)` の3軸、本節の「152グループ」は
+`(session_id, text)` の2軸で `source_path` を含めない。156と152の差はこの軸の違いによるもの
+であり、同じ測定の食い違いではない。）
 
 `session_id` を落とすと無関係な28件の「続けて」が1つの key に潰れ、最初の1回を既読にした
 瞬間に残り27件が二度と提示されなくなる（黙って握りつぶす）。**v2 のスコープ縮小後も
 `session_id` は identity に必ず含める**という結論は変わらない。同じ理由で `line_no`/
 `prev_line_no` も identity に残す（1.2 の "続けて" 実例が示す通り、これらを外すと
-本当に別の発話が同一 key に潰れる）。
+本当に別の発話が同一 key に潰れる。4.2 変異#3で実測確認済み）。
 
 ## 3. 実装: 実際に触る箇所（M4/M5 対応・共有 predicate へ広げない）
 
@@ -150,13 +193,22 @@ v2 は **`filter_actionable` のシグネチャ・実装を一切変更しない
 filter_actionable の契約を変えない: 呼び出し前に seen_keys 集合を拡張するだけ。
 scope: rephrase channel・daily_review 経路限定。bootstrap 等の他 reader には配線しない
 （M4/M5: 共有 predicate へ広げない・頭の裁定）。
+
+R1: identity は denylist（similarity のみ除外）。将来 provenance にフィールドが増えても
+自動的に identity へ含まれ、over-merge を新たに生まない安全側の設計（2.1 参照）。
 """
 from __future__ import annotations
 
+import json
 import unicodedata
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 REPHRASE_CHANNEL = "rephrase"
+_EXCLUDED_FIELDS = frozenset({"similarity"})
+# R4: identity に含める全フィールド（denylist 適用後に残るもの）の欠損検査対象。
+# 2026-08-25 時点の detect_rephrase（detectors.py:290-301）が書く全キー
+# （similarity を除く）と一致させる。フィールドが増減したら下記の契約テストで検知する。
+_REQUIRED_FIELDS = ("source_path", "line_no", "prev_line_no", "prev_text", "text", "detector")
 
 
 def _normalize_text(v: Any) -> str:
@@ -165,29 +217,29 @@ def _normalize_text(v: Any) -> str:
     return unicodedata.normalize("NFC", v).strip()
 
 
-def _dedup_identity(rec: Dict[str, Any]):
-    """similarity を除いた rephrase の同値類キー。
+def _dedup_identity(rec: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """similarity を除いた rephrase の同値類キー（denylist・R1）。
 
-    M6 fail-safe: identity を構成する必須値（session_id / source_path / text /
-    line_no / prev_line_no）のいずれかが欠けていたら None を返す。呼び出し側は
-    None のレコードをグルーピング対象から外す（＝現行どおり signal_key 単独判定に
-    フォールバックする。誤って別内容を同一 identity に丸め込まない安全側の挙動）。
+    R4 fail-safe: identity に含める全フィールド（_REQUIRED_FIELDS・session_id 含む）の
+    いずれかが欠けていたら None を返す。呼び出し側は None のレコードをグルーピング対象
+    から外す（＝現行どおり signal_key 単独判定にフォールバックする。誤って別内容を
+    同一 identity に丸め込まない安全側の挙動）。
     """
     if rec.get("channel") != REPHRASE_CHANNEL:
         return None
     prov = rec.get("provenance") or {}
     session_id = rec.get("session_id")
-    source_path = prov.get("source_path")
-    line_no = prov.get("line_no")
-    prev_line_no = prov.get("prev_line_no")
-    text = _normalize_text(prov.get("text"))
-    prev_text = _normalize_text(prov.get("prev_text"))
-    detector = prov.get("detector")
-    if not session_id or not source_path or not text:
+    if not session_id:
         return None
-    if line_no in (None, "") or prev_line_no in (None, ""):
-        return None
-    return (session_id, source_path, line_no, prev_line_no, prev_text, text, detector)
+    for field in _REQUIRED_FIELDS:
+        v = prov.get(field)
+        if v is None or v == "":
+            return None
+    ident_prov = {k: v for k, v in prov.items() if k not in _EXCLUDED_FIELDS}
+    for field in ("text", "prev_text"):
+        if field in ident_prov and isinstance(ident_prov[field], str):
+            ident_prov[field] = _normalize_text(ident_prov[field])
+    return (session_id, json.dumps(ident_prov, sort_keys=True, ensure_ascii=False))
 
 
 def expand_seen_keys_for_rephrase_dupes(
@@ -196,10 +248,10 @@ def expand_seen_keys_for_rephrase_dupes(
 ) -> Set[str]:
     """rephrase channel の similarity-only 重複を、既読 signal_key の集合へ拡張する。
 
-    scoped_records は呼び出し側（daily_review._read_new）が既に pj_slug + REVIEW_CHANNELS
-    でスコープ済みのレコード（filter_actionable 適用前）。identity が同一で、そのうち
-    どれか1つの signal_key が既に既読なら、同一 identity の他の signal_key も
-    「既読」とみなして拡張後の集合に加える。新しい key 空間は作らない
+    scoped_records は呼び出し側（daily_review.build_review）が既に pj_slug +
+    REVIEW_CHANNELS でスコープ済みのレコード（filter_actionable 適用前）。identity が
+    同一で、そのうちどれか1つの signal_key が既に既読なら、同一 identity の他の
+    signal_key も「既読」とみなして拡張後の集合に加える。新しい key 空間は作らない
     （拡張後も要素はすべて既存の signal_key 文字列。N1: 別名前空間を混ぜない）。
     """
     groups: Dict[Any, List[str]] = {}
@@ -219,39 +271,70 @@ def expand_seen_keys_for_rephrase_dupes(
         if any(k in seen_keys for k in keys):
             expanded.update(keys)
     return expanded
+
+
+# R1 契約テスト（実装 PR で追加）: detect_rephrase の provenance キー集合が
+# _EXCLUDED_FIELDS ∪ _REQUIRED_FIELDS と一致することを assert する。
+# 新フィールド追加時にこのテストが red になり、fail-safe/allowlist是非の再検討を促す。
 ```
 
-`daily_review._read_new` の変更点（1関数呼び出しの追加のみ）:
+**R7（S2 の生産点・消費点の配線を修正）**: `daily_review._read_new` は変更しない
+（元の signature・実装のまま）。件数計算と `seen_keys` の拡張は **`build_review`
+（`daily_review.py:369-` 。既に `scoped` スナップショットを持っている）側で行う**:
 
 ```python
-def _read_new(pj_slug, *, weak_signals_path=None, seen_keys, marker_base=None, scoped=None):
-    from correction_semantic.promote import filter_actionable
-    if scoped is None:
-        scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
+def build_review(pj_slug, *, weak_signals_path=None, idioms_path=None, seen_path=None,
+                  corrections_path=None, max_groups=5, exclude_signal_keys=None,
+                  dry_run=False, marker_base=None):
+    seen_keys = read_reviewed_keys(seen_path)
+    scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
+
+    # R7: 「実際に出力から除外した件数」を数えるため、拡張前後で filter_actionable を
+    # 2回通し、その差分（signal_key の集合差）だけを数える。promoted/expired/
+    # bootstrap消化済み/machinery で元々除外される予定だった key は差分に出ない
+    # （baseline 側も同じ filter_actionable を通しているため）。
     from weak_signals.rephrase_dedup import expand_seen_keys_for_rephrase_dupes
-    effective_seen_keys = expand_seen_keys_for_rephrase_dupes(scoped, seen_keys)
-    return filter_actionable(scoped, pj_slug, seen_keys=effective_seen_keys, marker_base=marker_base)
+    expanded_seen_keys = expand_seen_keys_for_rephrase_dupes(scoped, seen_keys)
+
+    baseline_new = _read_new(pj_slug, seen_keys=seen_keys, marker_base=marker_base, scoped=scoped)
+    new_records = _read_new(pj_slug, seen_keys=expanded_seen_keys, marker_base=marker_base, scoped=scoped)
+    rephrase_similarity_dedup_count = len(
+        {r["signal_key"] for r in baseline_new} - {r["signal_key"] for r in new_records}
+    )
+    # 以降は従来どおり new_records（拡張後の結果）を groups 化する。
+    ...
+    return {
+        ...,
+        "rephrase_similarity_dedup_count": rephrase_similarity_dedup_count,  # 新規キー1つのみ
+    }
 ```
+
+`_read_new` を2回呼ぶコストは 4.4 の実測（0.15ms@191件）に対して定数倍でしかなく無視できる。
+`filter_actionable`/`_read_new` の**シグネチャ・実装は一切変更しない**ため M4 の解決は維持
+される（`build_review` の呼び出し方だけが変わる）。
 
 `S1` 対応: `expand_seen_keys_for_rephrase_dupes` は `scoped_records`/`seen_keys` とも
 デフォルト値なしの必須位置引数（呼び出し側の配線漏れをデフォルト値で静かに許さない）。
 
 `S2` 対応（畳んだ件数を surface する）: この設計の失敗モードは「過剰再提示」ではなく
-逆側＝「衝突しすぎて正当な未読を黙って握りつぶす」こと（4.2 #3 で検証する誤衝突と同じ
-リスク）。`_read_new` で `effective_seen_keys - seen_keys` の要素数を
-`rephrase_similarity_dedup_count` として計算し、`build_review` の返り値 dict に
+逆側＝「衝突しすぎて正当な未読を黙って握りつぶす」こと（4.2 変異#3で検証する誤衝突と
+同じリスク）。`rephrase_similarity_dedup_count` を `build_review` の返り値 dict に
 **新規キーとして1行追加**する（`excluded_machinery_total`・`excluded_machinery_by_channel`
 と同型・同じ dict 内。新規ストア/新規 observability section ではなく、既存の常時 emit
 dict に1フィールド足すだけ）。異常な増加を daily_review の出力上で目視できるようにする
-（silence != evaluated の既存方針を踏襲）。
+（silence != evaluated の既存方針を踏襲）。**GPT系の指摘どおり、この件数は
+「promoted/expired/bootstrap消化済み/machineryで元々除外される予定だったkey」を含まない
+（baseline_new・new_records とも同じ filter_actionable 通過後の結果を比較するため）。**
 
 ### 3.2 bootstrap は無改変（M4/M5 への回答）
 
 `bootstrap_backlog.py` は `_scope_backlog_candidates`（`bootstrap_backlog.py:351-375,
-408-413`）を経由して**独自に** promoted/expired の事前除外を行っており、`_read_new` とは
-別の関数・別のコードパスである。本設計は `weak_signals/rephrase_dedup.py` を
-**`daily_review.py` からしか import しない**ため、bootstrap の判定ロジックには一切触れず、
-bootstrap は従来どおり `signal_key` の完全一致でのみ既読判定する。
+408-413`）を経由して**独自に** promoted/expired の事前除外を行っており、`_read_new`/
+`build_review` とは別の関数・別のコードパスである。本設計は `weak_signals/rephrase_dedup.py`
+を **`daily_review.build_review` からしか import しない**（R7 の配線変更後も同じ — import元
+が `_read_new` から `build_review` に移っただけで「daily_review.py 限定」という境界は不変）
+ため、bootstrap の判定ロジックには一切触れず、bootstrap は従来どおり `signal_key` の
+完全一致でのみ既読判定する。
 
 これにより M5 が指摘した「全 reader で既読判定が一致する」という不変条件は、**そもそも
 本設計の要求事項にしない**: 本設計が保証するのは daily_review 経路のみであり、bootstrap は
@@ -266,46 +349,62 @@ similarity-only 重複が含まれていた場合、**bootstrap は畳まずに2
 これは許容する（bootstrap は一生に一度・小規模な導入フローであり、daily_review のように
 「時間経過で蓄積する恒常的な漏れ」ではないため優先度が低い。1.3 の規模判断と同じ基準）。
 
-## 4. 検査の有効性（M10 全面作り直し）
+## 4. 検査の有効性（M10 全面作り直し・R5/R6 で実データに対し実際に実行）
 
-v1 の変異テストは実行不能・期待値誤り・重複ありと3系統とも指摘された（M10）。実装可能な
-関数（3.1）に対して、実データ（1.2 の7件）を fixture として作り直す。
+v2 の変異テストは実行不能・期待値誤り・重複ありと3系統とも指摘された（M10・R5）。
+denylist 版の `_dedup_identity`/`expand_seen_keys_for_rephrase_dupes`（3.1）と**等価な
+参照実装**を今日実際に書き、実データ・合成 fixture に通して結果を確認した
+（R6: 変異テストを「実施計画」でなく実施結果として記載する。取得日2026-08-25。
+本番実装は実装 PR で `scripts/lib/tests/test_weak_signal_rephrase_dedup.py` として
+作成し、下記と同じ fixture ・期待値をそのまま使う）。
 
-### 4.1 陽性対照
+### 4.1 陽性対照（実行結果）
 
-- 1.2 の7件fixtureに加え、rephrase 191件全体を fixture 化し、`expand_seen_keys_for_rephrase_dupes`
-  適用前後で **6件（similarity-only）以外の 185 件の signal_key が一切拡張集合に混入しない**
-  ことを、**個々の signal_key の集合**で assert する（件数比較だけでなく要素比較。M10 の
-  「unique 件数だけでは誤衝突1件+誤分裂1件の相殺を検出できない」指摘への対応）。
-- dict のキー順序・JSON 化時の空白を変える書き換えを適用し、`_dedup_identity` の戻り値
-  （tuple）が変わらないことを確認する（tuple 構築は値ベースであることの陽性確認）。
+`expand_seen_keys_for_rephrase_dupes` の baseline（正しい実装）を rephrase 191件全件に
+適用:
 
-### 4.2 陰性試験（下限4件+dry-run純度+store書込ゲートの計6件）
+```
+baseline: newly-expanded signal_key count: 6
+harm groups resolved by baseline: 6 / 7
+delta size: 6 / expected member-key set size(6harmグループの両端計12件中、既読でない側): 6
+unexpected keys in delta (should be empty set): set()
+delta == sim_only_harm_keys - seen_keys_real ? True
+```
 
-| # | 分類 | 変異内容 | 壊す不変条件 | 通したい検査経路 |
+**R5 の指摘どおり**、「拡張集合そのもの」に185件が混入しないかを見るのは既読keyの初期包含と
+矛盾するため誤り。正しい陽性対照は**差分**（`expanded - seen_keys`＝新たに拡張された要素）
+だけを見ることで、これが6件のsimilarity-onlyペアの未読側ちょうど6件と**完全一致**する
+（多すぎも少なすぎもしない）ことを確認した。
+
+### 4.2 陰性試験（下限4件+dry-run純度+store書込ゲートの計6件・全件実行済み）
+
+各変異について「baseline（正しい実装）の結果」と「変異後の結果」を実際に比較した
+（R5: 壊す不変条件と検査経路が同じものは重複除去。R6: 実行結果を記載）。
+
+| # | 分類 | 変異内容 | 壊す不変条件 | 検査経路と実行結果 |
 |---|---|---|---|---|
-| 1 | ①要素を消す | `_dedup_identity` の `if not session_id or not source_path or not text: return None`（fail-safe ガード）を消す | M6 fail-safe: 必須フィールド欠損レコードが誤って他レコードと同一 identity に丸め込まれない不変条件 | 1.2 の7件fixtureに「`text` が空文字列の rephrase レコード」を1件追加した拡張fixtureで、そのレコードが既存グループに誤って混入しない（＝拡張集合のサイズが変わらない）ことを確認するテスト |
-| 2 | ②語は残して意味を壊す | `expand_seen_keys_for_rephrase_dupes` の `if any(k in seen_keys for k in keys)` を `if all(...)` に変える（命名・シグネチャは無変更） | 「片方が既読なら他方も既読とみなす」という本設計の目的（1.2 の6件で、既読側1件・未読側1件の状態から未読側を救う） | 1.2 の7件fixtureを通し、6件（#1〜#6）が拡張集合に含まれることを確認する E2E テストが red になる（all にすると「両方既読」でない限り拡張されず、6件とも救われない） |
-| 3 | ③分散・入替 | `_dedup_identity` の tuple から `line_no`/`prev_line_no` を外す（issue 想定の広いスコープに戻す変異） | 2.2 で確認した「別の物理行ペアの発話を誤って同一 identity にしない」不変条件（"続けて" の実例） | 1.2 の #7（"続けて"）fixture で、line_no/prev_line_no を含めた場合は拡張集合に含まれない（=引き続き2回確認される）ことを確認するテスト。line_no/prev_line_no を外すと #7 も拡張集合に混入し red になる |
-| 4 | ④検査を無効化する | `expand_seen_keys_for_rephrase_dupes` を `return set(seen_keys)`（no-op）にすり替える | 本設計の目的そのもの（1.2 の6件解消） | #2 と同じ E2E テストが red になる。#2 は「条件式のロジック反転」、#4 は「関数全体の無効化」で壊し方のクラスが異なるため重複として数えない（通したい検査経路は同じ E2E テストだが、要求されているのは「壊す不変条件」と「検査経路」の組が同一なら重複＝ここは壊す変異の性質が違う） |
-| 5 | ④検査を無効化する（dry-run純度） | `expand_seen_keys_for_rephrase_dupes` 内部に、計算結果をどこかへ書き出すコード（例: ログファイルへの `open(path, "a").write(...)`）を追加する。関数の返り値は変えない | dry-run 純度（本関数は読み取り専用の純関数であるべきという不変条件） | `daily_review.build_review(..., dry_run=True)` 呼び出し前後で `DATA_DIR` 配下のファイル一覧・各ファイルの bytes 数・mtime を比較し、変化が無いことを assert するテスト。加えて `rl_common.store_write`/`store_write_raw` を `unittest.mock.patch` で「呼ばれたら例外」にして、呼ばれないことを確認する |
-| 6 | ④検査を無効化する（store書込ゲート） | `weak_signals/rephrase_dedup.py` 内に `store_write_raw` の直接呼び出し、または `open(path, "w")`/`open(path, "a")` を追加する | store_write barrier を経由しない書込みが紛れ込まない不変条件（5節） | 実装 diff に対する静的チェック: `rg -n "store_write_raw|open\(.*[\"']?[wa]" scripts/lib/weak_signals/rephrase_dedup.py` が0件であることを CI で確認する（軽量・機械的） |
+| 1 | ①要素を消す | `_dedup_identity` の必須フィールド欠損ガード（R4 で `_REQUIRED_FIELDS` 全件チェックに拡張済み）を削除 | R4 fail-safe: 必須フィールド欠損（この変異では `text=""`）レコードが誤って他レコードと同一 identity に丸め込まれない不変条件 | fixture: 同一session/source/line_no/prev_line_noだが`text=""`の2レコード（FS_A既読/FS_B未読）。**baseline: FS_B in expanded? False（安全）** → **mutant: FS_B in expanded? True（BUG検出）** |
+| 2 | ②語は残して意味を壊す | `_normalize_text` から `unicodedata.normalize("NFC", ...)` を削除（strip のみ残す＝NFC正規化だけを壊す） | text の同一性判定（NFC/NFDの表記揺れを正しく同一視する不変条件） | fixture: 濁点分解（は+゙+けて／ばけて）の合成/分解ペア（NFC_A既読/NFC_B未読）。**baseline: NFC_B in expanded? True（正しく統合）** → **mutant: NFC_B in expanded? False（BUG検出＝under-merge、#4とは異なる壊れ方）** |
+| 3 | ③分散・入替 | `_dedup_identity` の identity から `line_no`/`prev_line_no` を除外（issue想定の広いスコープに戻す変異） | 2.2で確認した「別の物理行ペアの発話を誤って同一identityにしない」不変条件 | fixture: 実データの"続けて"harm組（line_no 1091/1288が異なる本物の別発話）。**baseline: 混入しない（False、正しい）** → **mutant: 混入する（True、BUG検出＝over-merge）** |
+| 4 | ④検査を無効化する | `expand_seen_keys_for_rephrase_dupes` を `return set(seen_keys)`（no-op）にすり替える | 本設計の目的そのもの（6件解消） | 実データ191件。**baseline: 6/7解消** → **mutant: 0/7解消（BUG検出）**。#2 とは「壊れ方」（正規化ロジックの欠落 vs 関数全体の無効化）も「検出fixture」（synthetic NFC/NFDペア vs 実データharmセット）も異なるため独立変異として数える |
+| 5 | ④検査を無効化する（dry-run純度） | `expand_seen_keys_for_rephrase_dupes` 内部に計算結果を書き出すコード（例: `open(path,"a").write(...)`）を追加。返り値は変えない | dry-run純度（本関数は読み取り専用の純関数であるべき不変条件） | 実装PRで実施: `daily_review.build_review(..., dry_run=True)` 呼び出し前後でDATA_DIR配下のファイル一覧・bytes数・mtimeを比較し無変化をassert。加えて`rl_common.store_write`/`store_write_raw`を`unittest.mock.patch`で「呼ばれたら例外」にし、呼ばれないことを確認する（本関数はどちらも呼ばない設計のため、この変異はmock例外で即red） |
+| 6 | ④検査を無効化する（store書込ゲート） | `weak_signals/rephrase_dedup.py`に`store_write_raw`直接呼び出しまたは`open(path,"w"/"a")`、`Path(...).write_text(...)`、`json.dump(..., open(...))`のいずれかを追加 | store_write barrier を経由しない書込みが紛れ込まない不変条件（5節） | 実装diffに対する静的チェック `rg -n "store_write_raw\|open\(.*[\"']?[wa]\|write_text\|json\.dump" scripts/lib/weak_signals/rephrase_dedup.py` が0件であることをCIで確認する。**Claude系指摘への対応**: このregexは検出漏れがありうる（他の書込手段が今後増える可能性）ため過信しない — **#5のruntime側（DATA_DIR前後比較+store_writeモック）が本命の検出手段**であり、本静的チェックは早期発見のための補助と位置づける |
 
-`#3` と `#4` は「壊す不変条件」が異なる（#3 は過剰統合防止・#4 は目的達成そのもの）ため
-重複として数えない。`#2` と `#4` は同じ E2E テストで検出されるが、変異の性質
-（ロジック反転 vs 関数丸ごと無効化）が異なるため別カウントとする。
+「配線を一切実装しない変異」（`build_review` に `expand_seen_keys_for_rephrase_dupes` の
+呼び出しを追加しない）は、#2/#4のE2Eテストが `daily_review.build_review` をエンドツーエンド
+で呼ぶ限り自然に検出される（配線が無ければ拡張が一切起きず#1〜#6が救われないままredになる）
+ため、独立した変異として追加しない（#4と同一の検査経路・同一の壊れ方のクラスであり重複）。
 
-「配線を一切実装しない変異」（`_read_new` に `expand_seen_keys_for_rephrase_dupes` の
-呼び出しを追加しない）は、上記 #2/#4 の E2E テストが `daily_review.build_review` を
-エンドツーエンドで呼ぶ限り自然に検出される（配線が無ければ拡張が一切起きず #1〜#6 が
-救われないまま red になる）ため、独立した変異として追加しない（#2/#4 と同一の検査経路・
-同一の壊れ方のクラスであり重複になるため）。
-
-「map 逆引きの誤り」（`groups.setdefault(ident, []).append(key)` を
-`groups.setdefault(key, []).append(ident)` のように取り違える）は #4 と同じ「関数の目的を
-達成しない」壊れ方に収束するため、#4 の E2E テストで検出される（キーと値を取り違えると
-`groups` は事実上シングルトンの集まりになり、拡張が一切起きない）。独立変異として追加は
+「map逆引きの誤り」（`groups.setdefault(ident, []).append(key)`を
+`groups.setdefault(key, []).append(ident)`のように取り違える）は#4と同じ「関数の目的を
+達成しない」壊れ方に収束するため、#4のE2Eテストで検出される（キーと値を取り違えると
+`groups`は事実上シングルトンの集まりになり、拡張が一切起きない）。独立変異として追加は
 不要（重複回避のため明示的に不採用理由を書く）。
+
+R5指摘の「相殺の見逃し」対策: 4.1の陽性対照が**差分の完全一致**（多い/少ないの両方向）を
+確認するため、「誤衝突1件＋誤分裂1件」が unique 件数だけを比較していれば相殺されて
+見えなくなるケースも、`delta == sim_only_harm_keys - seen_keys_real`（集合の完全一致）で
+検出できる（片方でも余分/不足があれば `False` になる）。
 
 ### 4.3 未探索の入力クラス
 
@@ -317,6 +416,13 @@ v1 の変異テストは実行不能・期待値誤り・重複ありと3系統�
   （dict の構築順は出力の集合には無関係）。探索しない。
 - **キャッシュ鮮度**: キャッシュを持たない設計。探索しない。
 - **10倍データでの実測**（M12・4.4節で詳述）: 探索**した**（未探索ではない）。
+- **`text[:120]`/`prev_text` の truncate 長・`user_only_text` 仕様変更**（S3・N-d 対応）:
+  意図的に**探索しない**まま残す構造的な穴。truncate 長が将来変わると、同じ実発話でも
+  旧レコードと新レコードで `text` の値そのものが変わり、denylist 方式でも
+  `_dedup_identity` の identity が変わって再分裂する。allowlist/denylist いずれの設計でも
+  防げない（identity の入力である provenance の値自体が変わるため）。**防げないことを
+  無いかのように書かない**（S3 の要求どおり）: この穴は本設計のスコープ外として認識し、
+  対応しない。
 
 ### 4.4 追加コストの実測（M12 対応）
 
@@ -358,7 +464,7 @@ producer時点測定値という自己申告どおり、Haiku呼び出し結果�
 本設計は llm_judge の provenance に一切触れないため、Codex 統合が llm_judge のprovenance
 形状をどう変えても本設計のコードパス（rephrase_dedup.py）には影響しない。M11 の該当項目は
 「対象が消滅した」ため測定不要と結論する（3問の②: 片側だけでも今出る結論＝
-「rephrase 限定なのでこの懸念は本設計の範囲外」は今日time出せる。①③は対象消滅につき
+「rephrase 限定なのでこの懸念は本設計の範囲外」は今日出せる。①③は対象消滅につき
 該当なし）。
 
 同じ理由で、`permission_deny`/`verbosity` の特殊入力・巨大入力・`denial_reason` の扱い
@@ -386,20 +492,24 @@ KeyError 等を起こさず184件を処理できることを受入テストに�
 本設計を適用する前と同じ挙動であり後退ではない）。現在のスナップショットでは184件全件が
 存在するため、この分岐は実データでは発火しない（受入 fixture で確認済み）。
 
-**ロールバック時の挙動（M7・正直に明記）**: 本設計をデプロイ後にロールバックすると、
-`weak_signals/rephrase_dedup.py` の import が失われ `_read_new` は拡張前の `seen_keys` へ
-戻る。その結果、**ロールバック後に新規発生した similarity-only 重複（ロールバック後の
-検出器再走査で生まれたもの）は再び1件ずつ y/n 確認に出る**。これは「壊れるモードが
-存在しない」という v1 の主張が過大だった点（M7 の指摘どおり）を訂正するもので、
-許容する: 拡張結果は一切永続化されないため、ロールバックで**データが壊れることはなく**、
-単に v1 以前の（今回直したい）挙動に戻るだけ。実害は 1.3 の規模（3.3%）程度に留まる。
+**ロールバック時の挙動（R3・M7 未解消の指摘に対する正直な訂正）**: 本設計をデプロイ後に
+ロールバックすると、`weak_signals/rephrase_dedup.py` の import が失われ `build_review` は
+拡張前の `seen_keys` へ戻る。拡張結果は一切永続化されないため、**ロールバック直後には
+新規発生分だけでなく、デプロイ中に抑止されていた既存6件の未読側（1.2 の #1〜#6）も
+含めて再び y/n 確認に出る**（v2 版は「新規発生分のみ」と書いていたが誤り。拡張は
+毎回 `scoped_records` から都度計算される一時的な効果であり、`seen_keys` 自体には
+何も追記されないため、拡張ロジックが無くなれば直ちに元の signal_key 単独一致判定に
+戻り、6件全てが再提示対象に戻る）。これはデータが壊れるわけではなく、単に修正前
+（issue #543 が問題視している）状態に戻るだけであり、その意味では許容範囲だが、
+「壊れるモードが存在しない」という主張は誤りだったため訂正する。実害の規模は
+1.3 の規模（184件中6件・約3.3%）に留まる。
 
 ## 8. 未解決・判断を仰ぎたい点
 
 無し（v1 の未解決点2件はいずれも頭の裁定で決着: ①適用範囲は rephrase 限定に確定、
 ②`denial_reason` は permission_deny 自体が対象外になったため議論不要）。
 
-## 9. M/S/N 対応表（頭の裁定への回答）
+## 9. M/S/N 対応表（R2巡目・頭の裁定への回答）
 
 | # | 対応 |
 |---|---|
@@ -417,7 +527,41 @@ KeyError 等を起こさず184件を処理できることを受入テストに�
 | M12 | 4.4 で実測（0.15ms@191件・1.03ms@1910件） |
 | S1 | 3.1: `expand_seen_keys_for_rephrase_dupes` は必須位置引数のみ（デフォルト値なし） |
 | S2 | 3.1 で具体化: `rephrase_similarity_dedup_count` を `build_review` 返り値dictに新規キーとして追加（`excluded_machinery_total`と同型）。新規ストア/section は作らない |
-| S3 | **縮小により実質解消**: rephrase の `text[:120]`/`prev_text` truncate 長が将来変わると再分裂しうる構造的な穴は残るが、対象チャネルが1つに絞られたことでリスク面が縮小。穴自体は防げないことを4.3の「未探索」枠外として認識しておく |
+| S3 | 4.3 に truncate長変更時の再分裂リスクを明記（N-d対応で追記済み）。防げないことを正直に書き、意図的に対応しないと明示 |
 | S4 | 2.1 で明記: NFC+strip は `text`/`prev_text`（str型フィールド）のみに適用。他フィールドは値のまま比較 |
 | N1 | **縮小により解消**: 新しい key 空間（content_key）を作らない設計に変更したため、対応表のフォールバック冗長性という問題自体が発生しない |
 | N2 | **縮小により解消**: 対象チャネルが rephrase 1つになったため、チャネル横断の表自体が不要になった |
+
+## 10. M/S/N 対応表（R3巡目・GPT系残Mustへの回答）
+
+前巡から解消済みと判定された項目（M2/M3/M4/M8/M9/M12/S1/S3/S4/N1/N2、Claude系がidentity
+3分裂の本体を解消済みと判定した箇所）は再検討していない。以下は R3 の残項目のみ。
+
+| # | 対応 |
+|---|---|
+| R1 | 2.1/3.1 で allowlist（7フィールド列挙）を denylist（`similarity` のみ除外）へ改めた。新フィールド追加時の検出手段として、`detect_rephrase` の provenance キー集合を凍結 frozenset と突合する契約テストを3.1に明記 |
+| R2 | 2.2 に「1.2の156グループは`(session_id,source_path,text)`の3軸・2.2の152グループは`(session_id,text)`の2軸でsource_pathを含まない」と明記。数字自体は変更なし |
+| R3 | 7節「ロールバック時の挙動」を訂正: 新規発生分だけでなく既存6件の未読側も含めて再提示が復活することを正直に明記。データ破壊はないが「壊れるモードが存在しない」は誤りだったと認めた |
+| R4 | 3.1の`_dedup_identity`のfail-safeを`_REQUIRED_FIELDS`（source_path/line_no/prev_line_no/prev_text/text/detector全件）に拡張。prev_text/detectorの欠損も検査対象に |
+| R5 | 4.2を全面作り直し。#2を「NFC正規化欠落」に差し替え#4（no-op）と非重複化。4.1の陽性対照を「拡張集合そのもの」でなく「差分（delta）」で判定するよう修正しR5指摘の矛盾を解消。#6の静的チェックにwrite_text/json.dumpも追加しregexへの過信を明記 |
+| R6 | 4節冒頭・4.1・4.2に「今日実際に参照実装を書いて実行した」ことを明記し、コマンド相当の結果（baseline/mutant比較）を全件記載。実装PRでは同じfixture・期待値をそのままpytest化する旨を明記 |
+| R7 | 3.1で`_read_new`は無改変のまま、`build_review`が`_read_new`を（拡張前/拡張後の）2回呼んで差分を数える設計に変更。promoted/expired/bootstrap/machineryで元々除外される予定だったkeyは差分に出ないことを明記 |
+| N-a | 1.4に「line_no/prev_line_noで割れた分裂の母数16グループ・既読混在は続けて1件のみ」を追記 |
+| N-b | 1.4に「両方未読のsimilarity-only重複が2グループ実在」「group化との相互作用は実装時の受入テストで確認する」を追記 |
+| N-c | 「2.1の7件中」を「1.2の7件中」に修正（2.1で回答を書いた際の誤参照。7件は1.2で測定・列挙している） |
+| N-d | 4.3にtruncate長変更時の再分裂リスクを追記（従来「4.3に記載」としていたが実際には未記載だった不整合を解消）。2.1の正規化定義の参照も4.4（性能測定）ではなくS4対応の記述に修正済み |
+| N-e | 「今日time出せる」の編集残骸を「今日出せる」に修正 |
+
+### R3 実施した実測（コマンド・出力の要約）
+
+denylist版の参照実装（`_dedup_identity`/`expand_seen_keys_for_rephrase_dupes`相当）を
+今日実際に書き、以下を実行（取得日2026-08-25）:
+
+```
+baseline: newly-expanded signal_key count: 6 / harm groups resolved: 6/7
+mutant#1(fail-safeガード削除): FS_B in expanded? True (baseline False → BUG検出)
+mutant#2(NFC正規化削除): NFC_B in expanded? False (baseline True → BUG検出、under-merge)
+mutant#3(line_no/prev_line_no除外): '続けて'ペア混入? True (baseline False → BUG検出、over-merge)
+mutant#4(no-op): harm groups resolved: 0/7 (BUG検出)
+positive control: delta == sim_only_harm_keys - seen_keys_real ? True（完全一致）
+```
