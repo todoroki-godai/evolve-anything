@@ -18,6 +18,7 @@ correction_review.daily.excluded_machinery_by_channel
 correction_review.daily.excluded_machinery_total
 correction_review.daily.groups
 correction_review.daily.remaining
+correction_review.daily.rephrase_similarity_dedup_count
 correction_review.daily.reviewed_keys_count
 correction_review.daily.slug
 correction_semantic

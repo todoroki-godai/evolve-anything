@@ -526,6 +526,25 @@ def test_build_proposal_digest_no_machinery_key_when_none_excluded(tmp_path: Pat
     assert "pj-a" not in out["excluded_machinery_by_pj"]
 
 
+def test_build_proposal_digest_surfaces_rephrase_similarity_dedup_by_pj(
+    tmp_path: Path, monkeypatch,
+):
+    """daily review の rephrase dedup 件数を digest 経路でも失わない（#543）。"""
+    monkeypatch.setattr(
+        pd._daily_review,
+        "build_review",
+        lambda *_args, **_kwargs: {
+            "groups": [],
+            "excluded_machinery_total": 0,
+            "rephrase_similarity_dedup_count": 2,
+        },
+    )
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+
+    assert out["rephrase_similarity_dedup_by_pj"] == {"pj-a": 2}
+
+
 def test_global_group_carries_project_paths_from_queue_entries(tmp_path: Path):
     """#412 [Must]4: digest は各 PJ の project_path（queue エントリの絶対パス）を保持する。"""
     ws = tmp_path / "weak_signals.jsonl"

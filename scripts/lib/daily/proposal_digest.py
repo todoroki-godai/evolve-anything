@@ -345,6 +345,7 @@ def build_proposal_digest(
 
     Returns: {"generated_at": iso, "per_pj": {slug: [group, ...]}, "global": [group, ...],
               "project_paths": {slug: path}, "excluded_machinery_by_pj": {slug: {...}},
+              "rephrase_similarity_dedup_by_pj": {slug: int},
               "excluded_context_missing_by_pj": {slug: int}, "freshness_join_stats": {...}}
 
     1 PJ の digest 生成が例外を投げても他 PJ の digest 生成は継続する（fail-open）。
@@ -380,6 +381,7 @@ def build_proposal_digest(
     # （{slug: ...} の辞書）で digest 側にも集約する。捨てると朝の digest 経路だけ
     # 候補数が減るのに除外件数が利用者に見えなくなる。
     excluded_machinery_by_pj: Dict[str, Dict[str, Any]] = {}
+    rephrase_similarity_dedup_by_pj: Dict[str, int] = {}
     # #498 要件4: 説明文を組み立てられない group（llm_judge/rephrase で reason が無い・
     # #504: prev_action は判定材料から外した）は y/n を強行せず保留にする。黙って減らさず
     # 件数を surface する（excluded_machinery_by_pj と同じ {slug: count} の流儀）。
@@ -423,6 +425,9 @@ def build_proposal_digest(
                 "total": machinery_total,
                 "by_channel": review.get("excluded_machinery_by_channel") or {},
             }
+        rephrase_dedup_count = review.get("rephrase_similarity_dedup_count") or 0
+        if rephrase_dedup_count:
+            rephrase_similarity_dedup_by_pj[slug] = rephrase_dedup_count
 
     global_groups, per_pj = _extract_global_groups(per_pj)
 
@@ -436,6 +441,7 @@ def build_proposal_digest(
         # codex [Must]1（#443 PR2-a）: machinery 除外件数を slug 別に透明化する
         # （silence != evaluated）。0 件の slug はキーを持たない（他の {slug: ...} 辞書と同じ流儀）。
         "excluded_machinery_by_pj": excluded_machinery_by_pj,
+        "rephrase_similarity_dedup_by_pj": rephrase_similarity_dedup_by_pj,
         # #498 要件4: 保留にした（説明不能な）group の件数を slug 別に透明化する
         # （silence != evaluated）。0 件の slug はキーを持たない。
         "excluded_context_missing_by_pj": excluded_context_missing_by_pj,
