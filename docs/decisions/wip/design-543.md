@@ -30,8 +30,10 @@ issue 起票時は「provenance の Unicode 正規化差（NFC/NFD）や改行�
 - weak_signals.jsonl 全 1511 件の `provenance.text` をコードポイント単位で走査し NFC/NFD
   差を検出したが **0 件**（測定コマンド: `unicodedata.normalize('NFC', t) == t` を全件確認、
   下記 1.2 の再測定スクリプトに同梱。取得日 2026-08-25）。
-- 改行/CR混入は 315 件で確認したが、**分裂の原因にはなっていない**（分裂した group 内では
-  `provenance.text` の生値が完全一致していた。1.3 の測定で確認）。
+- 改行/CR混入は自己再測定（`'\n' in t or '\r' in t` で全件走査、取得日 2026-08-25）で
+  688件中246件確認したが、**分裂の原因にはなっていない**（分裂した group 内では
+  `provenance.text` の生値が完全一致していた。1.3 の測定で確認。引き継ぎ時点の数値「315件」
+  とは対象日時のデータ量差で異なるが、質的結論＝分裂原因ではない、は変わらない）。
 
 真因は正規化差ではなく、**provenance に「実行条件」フィールドが同居し、それらが hash 入力
 に無差別に混ざっている**こと。同一の実体験（同一発話・同一セッション）でも、検出された
@@ -106,7 +108,7 @@ allowlist**（迷ったら除外でなく含める側へ倒す・#379/CLAUDE.md 
 |---|---|---|
 | `llm_judge` | `session_id`, `source_path`, `provenance.text`（正規化後） | `line_no`（`batch.py:339-340` utterance の物理行 = 実行条件） / `prev_action`（`batch.py:345` 直前行動の記述 = 実行条件） / `reason`（`batch.py:346` Haiku 判定文 = LLM呼び出し結果で再現性なし） / `idiom`（`batch.py:350` 同上） / `judge`,`model`,`prompt_fingerprint`,`category_schema_version`（`batch.py:351,357-359` "producer 時点の測定条件"と自己申告済み。docstring `batch.py:353` 参照） / `category`（`batch.py:356` LLM判定結果） |
 | `rephrase` | `session_id`, `source_path`, `provenance.text`（正規化後） | `line_no`,`prev_line_no`（`detectors.py:296-297` 隣接ペアの物理位置） / `similarity`（`detectors.py:295` 計算値） / `prev_text`（`detectors.py:298` 直前発話。今回の分裂原因の1件だが、同一 `text` が複数の直前発話から生まれても指摘の実体は同じと判断） / `detector`（固定値 "rephrase" で無意味） |
-| `permission_deny` | `tool_name`, `tool_input_summary` | `timestamp`（実行条件） / `denial_reason`（実データで大半 "unknown"。実害0件のため保守的に**今回は変更を最小化し除外のみ**。値が有効なケースが増えたら再検討） |
+| `permission_deny` | `tool_name`, `tool_input_summary` | `timestamp`（実行条件） / `denial_reason`（実測: 6件中6件が "unknown"＝100%。取得日2026-08-25。実害0件のため保守的に**今回は変更を最小化し除外のみ**。値が有効なケースが増えたら再検討） |
 | `verbosity` | `provenance.hash`（`hooks/record_verbosity.py:96` — 応答テキストの sha256。**既に content-only の安定ハッシュ**） | `patterns`,`note`（Haiku 判定結果で再現性なし・llm_judge の reason/idiom と同種リスク） / `char_len`,`project`（実行条件） |
 | 未知 channel（例: 将来の Codex 由来・#534） | フォールバックとして `channel + provenance 全体`（＝**現行 `compute_signal_key` と同じ挙動**） | — （2.4 で詳述） |
 
@@ -257,8 +259,9 @@ CC 由来と異なる可能性がある。本設計では **`IDENTITY_FIELDS` �
 
 ### 4.1 陽性対照（誤検知しないことの確認）
 
-- 正常データ: 1.2 で使った実コーパスから、`llm_judge` の 495 件（未分裂）と `rephrase` の
-  128 件（未分裂）を fixture 化し、**変更前後で content_key のユニーク数が変わらない**
+- 正常データ: 1.2 で使った実コーパスから、`llm_judge` の 495 グループ（未分裂）と `rephrase` の
+  132 グループ（未分裂・156グループ中24分裂を除いた数。2026-08-25 実測）を fixture 化し、
+  **変更前後で content_key のユニーク数が変わらない**
   （grouping が壊れて別々の指摘まで潰れていないか）ことを snapshot で確認する。
 - 意味を変えない書き換え（全角/半角統一なし・casefold なしなので対象外だが）代わりに
   「同一発話の provenance dict のキー順序を変える」「JSON 化時の空白を変える」を適用し、
