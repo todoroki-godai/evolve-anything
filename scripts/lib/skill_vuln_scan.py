@@ -885,11 +885,45 @@ _TRAILING_PIPE_RE = re.compile(r"\|\s*$")
 _TRAILING_BACKSLASH_RE = re.compile(r"\\\s*$")
 
 
+def _effective_shell_text(stripped_line: str) -> str:
+    """行のうち shell comment（クォート外の `#` 以降）を除いた「実際に実行される
+    部分」を返す。**「どこでコマンドが切れるか」を判定する唯一の入口**（#537
+    round8 レビュー I7 是正）。継続判定（`_is_shell_continuation`）・結合
+    （`_join_logical_lines`）は必ずこの関数の出力に対して行い、コメント記号を
+    後付けで個別に足す実装にしない。
+
+    外部レビューが実測した2方向の欠陥:
+    - 未検出（comment がコマンドを隠す）: `curl url |` の次行が `# comment`
+      だけの場合、bash はこの行を無視してさらに次の `sh` 行へパイプを継続する
+      が、旧実装は物理行単位でしか継続判定しておらず、コメント行の存在で
+      「継続していない」と誤判定し検出できなかった。
+    - 誤検出（comment の中身を実コマンドと誤認）: `echo harmless # curl ... |`
+      は `#` 以降がコメントであり実際には pipe が存在しないのに、旧実装は
+      物理行の**末尾文字**だけを見て継続と誤判定し、次行の `sh` と結合して
+      誤検出していた。
+    どちらも「コメントを除いた実効テキストに対して判定する」という同じ1つの
+    規則で解消する。クォート（`'`/`"`）の内側の `#` はコメント開始と見なさない
+    （`echo "a # b"` は1つの引用文字列）。
+    """
+    in_single = False
+    in_double = False
+    for i, ch in enumerate(stripped_line):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double:
+            return stripped_line[:i]
+    return stripped_line
+
+
 def _is_shell_continuation(stripped_line: str) -> bool:
-    """行が次の物理行へ継続するシェル論理行の一部かどうか（末尾 `|` または `\\`）。"""
+    """行が次の物理行へ継続するシェル論理行の一部かどうか（末尾 `|` または `\\`）。
+    判定は comment を除いた実効テキスト（`_effective_shell_text`）に対して行う。
+    """
+    effective = _effective_shell_text(stripped_line)
     return bool(
-        _TRAILING_PIPE_RE.search(stripped_line)
-        or _TRAILING_BACKSLASH_RE.search(stripped_line)
+        _TRAILING_PIPE_RE.search(effective) or _TRAILING_BACKSLASH_RE.search(effective)
     )
 
 
@@ -938,6 +972,11 @@ def _join_logical_lines(
     （継続していない行は含めない — 呼び出し側は既存の物理行単位スキャンに
     **追加**して使う設計で、単独行スキャンを置き換えない）。
 
+    結合する内容は各行の `_effective_shell_text`（comment 除去後）を使う
+    （#537 round8 レビュー I7 是正）。comment だけ・空行になった中間行は
+    「透過的にスキップ」する（bash 上、コメント行はパイプ継続の状態を変えず
+    次の非コメント行へ読み進むため）。
+
     末尾 `|` は結合後の照合に `|` 自体が必要なため残したまま次行を連結する。
     末尾 `\\`（行継続）は記号自体を落として連結する（シェル上は改行が消えるだけで
     バックスラッシュはコマンドの一部ではないため）。
@@ -952,14 +991,18 @@ def _join_logical_lines(
             idx += 1
             continue
         start_lineno = lineno
-        buf = stripped
+        buf = _effective_shell_text(stripped)
         j = idx + 1
         while _is_shell_continuation(buf) and j < n and (j + 1) in scope_linenos:
-            nxt = lines[j].rstrip("\r\n")
+            nxt_effective = _effective_shell_text(lines[j].rstrip("\r\n"))
+            if not nxt_effective.strip():
+                # comment のみ・空行: 継続状態を保ったまま透過的にスキップする。
+                j += 1
+                continue
             if _TRAILING_BACKSLASH_RE.search(buf):
-                buf = _TRAILING_BACKSLASH_RE.sub("", buf).rstrip() + " " + nxt.strip()
+                buf = _TRAILING_BACKSLASH_RE.sub("", buf).rstrip() + " " + nxt_effective.strip()
             else:
-                buf = buf.rstrip() + " " + nxt.strip()
+                buf = buf.rstrip() + " " + nxt_effective.strip()
             j += 1
         out.append((start_lineno, buf))
         idx = j
