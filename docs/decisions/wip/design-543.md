@@ -1,337 +1,423 @@
-# #543 設計メモ v1（実装着手前レビュー待ち）
+# #543 設計メモ v2（頭の裁定でスコープ縮小・レビュー2巡目）
+
+v1 は Claude系/GPT系レビュー2系統とも「設計修正要」。頭の裁定によりスコープを縮小し、
+**rephrase チャネル限定・daily_review 層限定・identity から `similarity` のみ除外**の
+最小構成に作り直した。v1 の Must（両系統重複含む M1-M12）・Should（S1-S4）・Nit（N1-N2）に
+すべて対応する。対応表は文末（9節）。
 
 対象: `compute_signal_key`（`scripts/lib/weak_signals/store.py:57-68`）の dedup key が
-実行条件（line_no / similarity 等）を含むため、同一の指摘が別 key として朝の確認
-（daily_review・以下「y/n 確認」）に再提示される問題。
+実行条件を含むため、同一の指摘が別 key として朝の確認（daily_review・以下「y/n 確認」）に
+再提示される問題。
 
-## 0. 要約（5行）
+## 0. 要約（5行・v2）
 
-- 原因は「provenance の生 JSON を丸ごとハッシュしている」こと。line_no・similarity・model
-  等の**実行条件フィールド**が1つでも違うと別 key になり、既読が引き継がれない。
-- 実害は現状 **rephrase チャネルの再提示 7 件**（全既読 184 件中）。他チャネルは実質ゼロ。
-  想定していた Unicode 正規化差は**実データに0件**で、issue 起票時の想定は誤りだった。
-- 解決策は「provenance からハッシュ対象を絞った `content_key`」を**新たに計算する純関数**
-  として追加し、y/n 確認の既読判定に使う。**新しい永続フィールドは作らない** — 既存
-  `signal_key` は挙動を変えず、`content_key` は都度 provenance から再導出する。
-- この設計だと「移行」は存在しない: 古いレコードの `provenance` は削除されず永続保存され
-  ている（`weak_signals/ttl.py:108` 削除しない実測）ため、既読 184 件も新規レコードも
-  同じ関数で同じように content_key を導出でき、書き換え・バッチ移行が一切不要。
-- 除外フィールドは「実行条件（消しても content の実体が変わらない）」のみに絞った
-  allowlist。session_id を含めないと実害化する事例（"続けて" が28セッションに跨がる）を
-  実データで確認済み — 除外しすぎの危険を先に潰した。
+- 実害を再測定したところ、**7件中6件は同一の物理行ペア（line_no/prev_line_no 完全一致）を
+  再検出し `similarity` の浮動小数だけが変わった重複**。残り1件（"続けて"）は別の物理行
+  ペア＝本当に別の発話で、これは畳んではいけない（2.2 実測で確認済みの危険）。
+- **スコープを rephrase チャネル・daily_review 経路限定に縮小**し、identity から
+  **`similarity` だけ**を除外する。`line_no`/`prev_line_no`/`prev_text`/`text`/`session_id`/
+  `source_path`/`detector` は identity に残す。
+- 実装は **`filter_actionable`（共有 predicate）に触れず**、daily_review 側で呼び出し前に
+  `seen_keys` を拡張するだけ（signal_key はそのまま・新しい key 空間を作らない）。
+  bootstrap 等の他 reader は無改変。
+- 永続フィールド・新規ストアは無し（v1 から変更なし）。実害解消 6件・見送り1件（"続けて"）・
+  想定外リスク（llm_judge の model/prompt_fingerprint 分裂）は**別 issue へ切り出し**、
+  本設計では扱わない。
+- 追加コストは実測 0.15ms/call（実データ191件）・1.03ms/call（10倍相当の合成1910件）で
+  daily_review の他処理（jsonl 読み込み等）に対して無視できる規模。
 
-## 1. 問題の再定義（実測ベース・issue #543 想定との差分）
+## 1. 問題の再定義（実測ベース・再測定で訂正）
 
-### 1.1 想定と実データの食い違い（正直な訂正）
+### 1.1 issue 起票時の想定との差分（変更なし・v1 から維持）
 
-issue 起票時は「provenance の Unicode 正規化差（NFC/NFD）や改行混入で key が割れる」を
-主因と想定していた。**実測でこれは否定された**:
+issue 起票時は Unicode 正規化差（NFC/NFD）を主因と想定していたが、**実測で否定**:
+`weak_signals.jsonl` 全1511件の `provenance.text` を `unicodedata.normalize('NFC', t) == t`
+でコードポイント単位に走査し **NFC/NFD差0件**（取得日 2026-08-25、自己再測定）。
+改行/CR混入は688件中246件確認したが、分裂した group 内では `text` の生値が完全一致しており
+**分裂の原因にはなっていない**（1.3 で確認）。真因は「provenance に実行条件フィールドが
+同居し、hash 入力に無差別に混ざっている」こと。
 
-- weak_signals.jsonl 全 1511 件の `provenance.text` をコードポイント単位で走査し NFC/NFD
-  差を検出したが **0 件**（測定コマンド: `unicodedata.normalize('NFC', t) == t` を全件確認、
-  下記 1.2 の再測定スクリプトに同梱。取得日 2026-08-25）。
-- 改行/CR混入は自己再測定（`'\n' in t or '\r' in t` で全件走査、取得日 2026-08-25）で
-  688件中246件確認したが、**分裂の原因にはなっていない**（分裂した group 内では
-  `provenance.text` の生値が完全一致していた。1.3 の測定で確認。引き継ぎ時点の数値「315件」
-  とは対象日時のデータ量差で異なるが、質的結論＝分裂原因ではない、は変わらない）。
-
-真因は正規化差ではなく、**provenance に「実行条件」フィールドが同居し、それらが hash 入力
-に無差別に混ざっている**こと。同一の実体験（同一発話・同一セッション）でも、検出された
-物理位置（line_no）や類似度スコア（similarity）が違えば別 key になる。
-
-### 1.2 実測: 規模と実害（2026-08-25 時点で自分で再測定）
+### 1.2 実害の再定義（GPT系レビュー M2 反映・最重要の訂正）
 
 `~/.claude/evolve-anything/weak_signals.jsonl`（1511件）/
-`~/.claude/evolve-anything/correction_review_seen.jsonl`（184件）を実データとして使用。
-測定スクリプトと結果:
+`correction_review_seen.jsonl`（**184件**。`wc -l` で行数・unique key 数とも184で一致。
+取得日 2026-08-25 自己再測定）を実データに使用。
+
+rephrase channel（191件）を `(session_id, source_path, 正規化text)` でグルーピングすると
+156グループ・24グループが分裂・うち「既読/未読が混在」する実害は**7グループ**（v1 と同数、
+1日分のデータ増減の影響を除けば再現）。**この7グループの中身を個別に確認**した結果:
+
+| # | text（先頭20字） | 分裂原因フィールド | line_no（両側） | prev_line_no（両側） | 既読フラグ |
+|---|---|---|---|---|---|
+| 1 | `[Image#1]このrepositor` | `similarity` のみ | 59, 59（**同一**） | 52, 52（**同一**） | True, False |
+| 2 | `>正しいanchor（青バー／黒帯）で測` | `similarity` のみ | 11899, 11899 | 11897, 11897 | True, False |
+| 3 | `https://formulae.bre` | `similarity` のみ | 193, 193 | 170, 170 | True, False |
+| 4 | `docs/design/claim-ga` | `similarity` のみ | 11392, 11392 | 11389, 11389 | True, False |
+| 5 | `反映するなら次の3点です。1.報告資料:` | `similarity` のみ | 19847, 19847 | 19844, 19844 | True, False |
+| 6 | `https://doc.up-idx.t` | `similarity` のみ | 33820, 33820 | 33813, 33813 | True, False |
+| 7 | `続けて` | `line_no`, `prev_line_no` | **1091, 1288**（別） | **965, 1091**（別） | False, True |
+
+（取得日 2026-08-25。測定スクリプトはこの設計と同じ commit に含めないが、9節の変異表の
+fixture として同内容を固定化する。）
+
+**#1〜#6 は同一の物理行ペア（line_no/prev_line_no が完全一致）を検出器が2回検出し、
+similarity の丸め誤差だけが違う純粋な重複**。#7 の「続けて」は line_no/prev_line_no が
+どちらも異なる＝**別の発話**（`~/.claude/evolve-anything/weak_signals.jsonl:1272-1273`
+相当）で、これを畳むのは誤り（同じ短い相槌が別の文脈で28回起きても、内容が同じというだけで
+1回の確認に潰してよいわけではない — 2.2 の実測で確認済みの危険と同じ種類の問題）。
+
+→ **実害の定義を「rephrase の similarity 差 6 件」に訂正する。** "続けて" の再提示は
+本設計では解消しない（対象外として明記する。1.4 参照）。
+
+### 1.3 実害の規模判断（訂正後）
+
+- 分母 184 件中 **6 件（約 3.3%）** が「同一物理行の重複検出で similarity だけ違う」ために
+  再提示される。検出器（`weak_signals/detectors.py:251-307`）は日次の再ingestやセッション
+  再走査のたびに同じ隣接ペアを再評価しうる構造なので、**時間が経つほど蓄積する恒常的な
+  漏れ**（1.2 の6件はいずれも今日時点のスナップショットでの実害で、今後も同種の重複が
+  発生し続けると推定される）。
+- 修正コストは「daily_review 内の1関数追加＋既読判定の呼び出し前に seen_keys を拡張する
+  だけ」で、共有 predicate・他チャネル・他 reader に一切触れない。**低コストで直せる**
+  と判断し実装する。
+
+### 1.4 対象外にするもの（v1 からの後退・正直に明記）
+
+- **"続けて"型の再提示（1件）は解消しない。** 同一テキストが別の物理行ペアで検出された
+  ケースを畳むには「同じ物理行の重複検出」より強い「同じ会話上の同じ訂正」という判定が
+  要り、今回の実測（2.2）でその強い判定は危険（無関係な発話を握りつぶす）と分かっている。
+  本設計のスコープ外とし、代替の解決策は無い（issue #543 は"完全解決"ではなく"実害6件の
+  解消"として閉じる）。
+- **llm_judge / permission_deny / verbosity には一切適用しない。** 実害0件であり、
+  Claude系レビューが指摘した「llm_judge の model/prompt_fingerprint/reason が
+  category_schema_version 更新時に一斉分裂しうる」将来リスクは実在するが、**別 issue として
+  切り出す**（起票は頭が行う。本設計に issue 番号は書かない）。理由は 6 節。
+
+## 2. key 設計（縮小版）
+
+### 2.1 identity の定義（1つに統一・M1 対応）
+
+rephrase channel の identity は以下の7フィールドの組。**`similarity` のみを除外**し、
+他は一切変更しない:
 
 ```
-$ wc -l weak_signals.jsonl correction_review_seen.jsonl
-    1511 weak_signals.jsonl
-     184 correction_review_seen.jsonl
+identity = (session_id, source_path, line_no, prev_line_no,
+            normalize(prev_text), normalize(text), detector)
 ```
 
-channel 別件数（`json.loads` 全件走査）:
+`normalize()` は NFC 正規化 + 前後空白 strip（`text`/`prev_text` の2フィールドのみに適用。
+S4 対応・4.4 節）。`line_no`/`prev_line_no`/`session_id`/`source_path`/`detector` はそのまま
+値比較する（int/str のいずれであっても正規化不要 — 検出器が生成した値をそのまま比較する）。
+
+この定義は v1 の §1.2/§2.1/§2.3 で3通りに割れていた `source_path` の扱い（M1 の指摘）を
+解消する: **`source_path` は identity に含める**（同一セッションでも異なる transcript file
+に跨る記録は理論上あり得るため、除外すると衝突源になりうる。含めるコストは実測上ゼロ
+— 2.1 の7件中どのケースも `source_path` は各ペア内で同一だった）。
+
+### 2.2 陰性方向の検証（v1 から維持・危険の実測）
+
+`session_id` を identity から落とす案は**実データで危険と確認済み**（v1 §2.2 と同一の実測、
+再掲）:
 
 ```
-Counter({'esc_interrupt': 656, 'llm_judge': 497, 'rephrase': 191,
-          'manual_edit_after_ai': 153, 'verbosity': 8, 'permission_deny': 6})
+rephrase: session_id 込み 152 groups / 抜き 110 groups（差42）
+'続けて'    → 28 セッションに跨って出現
+'お願い'    → 14 セッションに跨って出現
 ```
 
-**「同一発話」の定義**を `(session_id, source_path, NFC正規化+空白除去済み provenance.text)`
-とし、この単位でグルーピング → 同一発話が複数の signal_key に分裂している件数と、その中で
-「一部だけ既読・一部が未読のまま残る」実害件数を測定（y/n 確認対象の4チャネルのみ）:
+`session_id` を落とすと無関係な28件の「続けて」が1つの key に潰れ、最初の1回を既読にした
+瞬間に残り27件が二度と提示されなくなる（黙って握りつぶす）。**v2 のスコープ縮小後も
+`session_id` は identity に必ず含める**という結論は変わらない。同じ理由で `line_no`/
+`prev_line_no` も identity に残す（1.2 の "続けて" 実例が示す通り、これらを外すと
+本当に別の発話が同一 key に潰れる）。
 
-| channel | 総件数 | 発話グループ数 | 分裂グループ数 | 実害（再提示）件数 |
-|---|---|---|---|---|
-| llm_judge | 497 | 496 | 1 | 0 |
-| rephrase | 191 | 156 | 24 | **7** |
-| permission_deny | 6 | 2 | 1 | 0 |
-| verbosity | 8 | 5 | 1 | 0 |
+## 3. 実装: 実際に触る箇所（M4/M5 対応・共有 predicate へ広げない）
 
-分裂原因フィールド（rephrase の24分裂グループ内で値が割れているフィールドの出現数）:
+### 3.1 配線点: `filter_actionable` を変更せず、呼び出し前に `seen_keys` を拡張する
 
-```
-prev_line_no 16 / line_no 16 / similarity 8 / prev_text 1
-```
+v1 は「`weak_signals.jsonl` 全件から signal_key→content_key の対応表を作り
+`filter_actionable` に content_key ベースの判定をさせる」設計だったが、これは
+`filter_actionable` の契約（呼出側でスコープ済みのレコードしか受け取らない・
+`correction_semantic/promote.py:207-235`）と衝突し、実装不能だった（M4）。
 
-（issue 引き継ぎメモの数値は similarity 10 / line_no 6 / prev_line_no 6 / prev_text 1 —
-1日の差分データが増えた影響で件数が動いているが、**割れているフィールドの種類は完全一致**。
-再現性を確認済み。測定スクリプトはこの設計文書と同じ commit に含めない使い捨てのため、
-`scripts/lib/tests/test_weak_signal_content_key.py`（後述）に実コーパス相当のケースとして
-固定化する。）
-
-### 1.3 実害の規模判断（やる価値の根拠）
-
-- **分母 184 件中 7 件（約 3.8%）** が実際に「一度既読にしたのに再提示される」状態。
-- rephrase チャネルは検出ロジック上、構造的に**同一の短い発話が複数箇所で検出されやすい**
-  （`weak_signals/detectors.py:251-307` — 隣接ペア単位で毎回別レコードを作る設計）。
-  つまり時間が経つほど分裂率は下がらず、**むしろ蓄積する**（フロー構造上の恒常的な漏れで
-  あって偶発的なノイズではない）。
-- 修正コストは「provenance から一部フィールドを除いたハッシュ関数を1つ追加し、
-  y/n 確認の既読チェックで使う」だけで、**新規ストア・書き換えマイグレーション・スキーマ
-  変更のいずれも不要**（後述2, 3）。低コスト・高確度で直る部類と判断し、**実装する**。
-- 代替案（やらない）を採るなら: 「rephrase チャネルを y/n 確認対象から外す」
-  （`REVIEW_CHANNELS` から削除・`correction_semantic/review_channels.py:37-39`）で実害は
-  0 になるが、rephrase 由来の正当な指摘も見えなくなり本末転倒。採用しない。
-
-## 2. key 設計
-
-### 2.1 何を identity として残すか（allowlist の根拠）
-
-**判定基準**: 「そのフィールドの値が変わっても、実世界で起きた"同じ訂正"という事実は
-変わらないか」で allowlist を決める。変わらない（＝実行条件・計測条件）なら除外、
-変わる（＝内容そのもの）なら含める。除外リスト方式ではなく**含めてよい側を明示する
-allowlist**（迷ったら除外でなく含める側へ倒す・#379/CLAUDE.md 方針）。
-
-| channel | identity に含める | 除外する（根拠 file:line） |
-|---|---|---|
-| `llm_judge` | `session_id`, `source_path`, `provenance.text`（正規化後） | `line_no`（`batch.py:339-340` utterance の物理行 = 実行条件） / `prev_action`（`batch.py:345` 直前行動の記述 = 実行条件） / `reason`（`batch.py:346` Haiku 判定文 = LLM呼び出し結果で再現性なし） / `idiom`（`batch.py:350` 同上） / `judge`,`model`,`prompt_fingerprint`,`category_schema_version`（`batch.py:351,357-359` "producer 時点の測定条件"と自己申告済み。docstring `batch.py:353` 参照） / `category`（`batch.py:356` LLM判定結果） |
-| `rephrase` | `session_id`, `source_path`, `provenance.text`（正規化後） | `line_no`,`prev_line_no`（`detectors.py:296-297` 隣接ペアの物理位置） / `similarity`（`detectors.py:295` 計算値） / `prev_text`（`detectors.py:298` 直前発話。今回の分裂原因の1件だが、同一 `text` が複数の直前発話から生まれても指摘の実体は同じと判断） / `detector`（固定値 "rephrase" で無意味） |
-| `permission_deny` | `tool_name`, `tool_input_summary` | `timestamp`（実行条件） / `denial_reason`（実測: 6件中6件が "unknown"＝100%。取得日2026-08-25。実害0件のため保守的に**今回は変更を最小化し除外のみ**。値が有効なケースが増えたら再検討） |
-| `verbosity` | `provenance.hash`（`hooks/record_verbosity.py:96` — 応答テキストの sha256。**既に content-only の安定ハッシュ**） | `patterns`,`note`（Haiku 判定結果で再現性なし・llm_judge の reason/idiom と同種リスク） / `char_len`,`project`（実行条件） |
-| 未知 channel（例: 将来の Codex 由来・#534） | フォールバックとして `channel + provenance 全体`（＝**現行 `compute_signal_key` と同じ挙動**） | — （2.4 で詳述） |
-
-`text` の正規化は「NFC 正規化 + 前後空白 strip」のみ（`correction_semantic/store.py:153-165`
-の `normalize_idiom_text` と同方針。全角半角統一・casefold は意図的に入れない — 同モジュール
-の既存コメント通り、日本語の短い断片は casefold で別意味を取り違えるリスクの方が大きい）。
-
-### 2.2 陰性方向の検証（衝突しないことの実測）
-
-**identity から `session_id` を落として良いか**を実データで検証した（落とせれば cross-セッション
-でも同じ指摘を1回に畳めるので理想的だが、危険がないか先に確認する）:
-
-```
-llm_judge: session_id 込み 496 groups / 抜き 495 groups（差1）
-rephrase : session_id 込み 152 groups / 抜き 110 groups（差42）
-```
-
-`session_id` を落とした場合の rephrase の衝突例（同一テキストが跨るセッション数）:
-
-```
-'続けて'    → 28 セッションに出現
-'お願い'    → 14 セッションに出現
-'終わりそう？' → 3 セッションに出現
-```
-
-**これは危険な衝突**: 「続けて」はどのセッションでも起きうる短い催促で、`REPHRASE_MIN_TOKENS=2`
-（`detectors.py:41`）を満たす最短級の発話。28個の無関係なセッションでの「続けて」の言い直しを
-1つの signal_key に潰すと、**最初の1回を既読にした瞬間に残り27件が問答無用で再提示不能になる
-（黙って握りつぶす）**。これは今回直したい「過剰再提示」の逆の欠陥（過少提示）であり、
-実装してはいけない変更だと判明した。→ **`session_id` は必ず identity に含める**（2.1 の表に反映済み）。
-
-この検証により、「除外するのは実行条件のみ・内容に関わる軸（session_id・text）は残す」という
-2.1 の判定基準が実データでも成立することを確認した。
-
-### 2.3 実装: 新しい純関数（永続フィールドではない）
-
-`scripts/lib/weak_signals/identity.py`（新規ファイル。**新規ストアではない** — 関数のみで
-永続化しない）:
+v2 は **`filter_actionable` のシグネチャ・実装を一切変更しない**。代わりに
+`daily_review._read_new`（`daily_review.py:187-225`）が `filter_actionable` を呼ぶ**前**に、
+渡す `seen_keys` 集合そのものを拡張する:
 
 ```python
-IDENTITY_FIELDS: Dict[str, Tuple[str, ...]] = {
-    "llm_judge": ("text",),
-    "rephrase": ("text",),
-    "permission_deny": ("tool_name", "tool_input_summary"),
-    "verbosity": ("hash",),
-}
+# scripts/lib/weak_signals/rephrase_dedup.py（新規ファイル・純関数のみ・新規ストアではない）
+"""rephrase channel の similarity-only 重複を daily_review の既読判定でのみ吸収する（#543）。
 
-def normalize_identity_text(text: str) -> str:
-    ...  # NFC + strip のみ
+filter_actionable の契約を変えない: 呼び出し前に seen_keys 集合を拡張するだけ。
+scope: rephrase channel・daily_review 経路限定。bootstrap 等の他 reader には配線しない
+（M4/M5: 共有 predicate へ広げない・頭の裁定）。
+"""
+from __future__ import annotations
 
-def compute_content_key(channel: str, provenance: dict, session_id: str = "") -> str:
-    """signal_key と別の、実行条件を除いた「同一指摘」判定用キー。
-    未知 channel は compute_signal_key と同じ全 provenance ハッシュにフォールバックする。
+import unicodedata
+from typing import Any, Dict, List, Set, Tuple
+
+REPHRASE_CHANNEL = "rephrase"
+
+
+def _normalize_text(v: Any) -> str:
+    if not isinstance(v, str) or not v:
+        return ""
+    return unicodedata.normalize("NFC", v).strip()
+
+
+def _dedup_identity(rec: Dict[str, Any]):
+    """similarity を除いた rephrase の同値類キー。
+
+    M6 fail-safe: identity を構成する必須値（session_id / source_path / text /
+    line_no / prev_line_no）のいずれかが欠けていたら None を返す。呼び出し側は
+    None のレコードをグルーピング対象から外す（＝現行どおり signal_key 単独判定に
+    フォールバックする。誤って別内容を同一 identity に丸め込まない安全側の挙動）。
     """
-    fields = IDENTITY_FIELDS.get(channel)
-    if fields is None:
-        # 2.4: 未知 channel は安全側（現行 compute_signal_key と同一ロジック）
-        payload = {"channel": channel, "provenance": provenance}
-    else:
-        vals = {}
-        for f in fields:
-            v = provenance.get(f, "")
-            vals[f] = normalize_identity_text(v) if isinstance(v, str) else v
-        payload = {"channel": channel, "session_id": session_id, "identity": vals}
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    ).hexdigest()[:16]
+    if rec.get("channel") != REPHRASE_CHANNEL:
+        return None
+    prov = rec.get("provenance") or {}
+    session_id = rec.get("session_id")
+    source_path = prov.get("source_path")
+    line_no = prov.get("line_no")
+    prev_line_no = prov.get("prev_line_no")
+    text = _normalize_text(prov.get("text"))
+    prev_text = _normalize_text(prov.get("prev_text"))
+    detector = prov.get("detector")
+    if not session_id or not source_path or not text:
+        return None
+    if line_no in (None, "") or prev_line_no in (None, ""):
+        return None
+    return (session_id, source_path, line_no, prev_line_no, prev_text, text, detector)
+
+
+def expand_seen_keys_for_rephrase_dupes(
+    scoped_records: List[Dict[str, Any]],
+    seen_keys: Set[str],
+) -> Set[str]:
+    """rephrase channel の similarity-only 重複を、既読 signal_key の集合へ拡張する。
+
+    scoped_records は呼び出し側（daily_review._read_new）が既に pj_slug + REVIEW_CHANNELS
+    でスコープ済みのレコード（filter_actionable 適用前）。identity が同一で、そのうち
+    どれか1つの signal_key が既に既読なら、同一 identity の他の signal_key も
+    「既読」とみなして拡張後の集合に加える。新しい key 空間は作らない
+    （拡張後も要素はすべて既存の signal_key 文字列。N1: 別名前空間を混ぜない）。
+    """
+    groups: Dict[Any, List[str]] = {}
+    for rec in scoped_records:
+        ident = _dedup_identity(rec)
+        if ident is None:
+            continue
+        key = rec.get("signal_key")
+        if not key:
+            continue
+        groups.setdefault(ident, []).append(key)
+
+    expanded = set(seen_keys)
+    for keys in groups.values():
+        if len(keys) < 2:
+            continue
+        if any(k in seen_keys for k in keys):
+            expanded.update(keys)
+    return expanded
 ```
 
-`compute_signal_key`（`store.py:57-68`）自体は**変更しない** — `signal_key` は
-append 時の物理 dedup キーとして現行どおり使い続ける（後方互換の要。3節）。
+`daily_review._read_new` の変更点（1関数呼び出しの追加のみ）:
 
-### 2.4 未知 provenance 形状への申し送り（#534 Codex ログ由来の将来統合）
+```python
+def _read_new(pj_slug, *, weak_signals_path=None, seen_keys, marker_base=None, scoped=None):
+    from correction_semantic.promote import filter_actionable
+    if scoped is None:
+        scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
+    from weak_signals.rephrase_dedup import expand_seen_keys_for_rephrase_dupes
+    effective_seen_keys = expand_seen_keys_for_rephrase_dupes(scoped, seen_keys)
+    return filter_actionable(scoped, pj_slug, seen_keys=effective_seen_keys, marker_base=marker_base)
+```
 
-`#534` の Codex セッションログ取り込みは実装未着手・時期未定で、provenance の形が
-CC 由来と異なる可能性がある。本設計では **`IDENTITY_FIELDS` に channel が無ければ、
-現行 `compute_signal_key` と同じ「全 provenance ハッシュ」にフォールバックする**
-（2.3 の `compute_content_key` 参照）。理由:
+`S1` 対応: `expand_seen_keys_for_rephrase_dupes` は `scoped_records`/`seen_keys` とも
+デフォルト値なしの必須位置引数（呼び出し側の配線漏れをデフォルト値で静かに許さない）。
 
-- 未知の形状に対して勝手にフィールドを選別すると、意図しない過剰結合（衝突）を生みうる
-  （2.2 の実測どおり、identity の絞り込みは慎重な検証が要る）。
-- フォールバックは「現状維持」なので、**新チャネル追加時に本設計が壊れることはない**
-  （新チャネルは compute_signal_key と同じ挙動から始まり、分裂が実際に問題化した時点で
-  同じ手順（1.2 のような実測）で allowlist を足せばよい）。
-- `#534` 側が provenance 形状を確定させた時点で `IDENTITY_FIELDS` に1行追記するだけで
-  対応できる設計にしてあるので、**いま合わせにいく必要はない**という要求を満たす。
+`S2` 対応（畳んだ件数を surface する）: この設計の失敗モードは「過剰再提示」ではなく
+逆側＝「衝突しすぎて正当な未読を黙って握りつぶす」こと（4.2 #3 で検証する誤衝突と同じ
+リスク）。`_read_new` で `effective_seen_keys - seen_keys` の要素数を
+`rephrase_similarity_dedup_count` として計算し、`build_review` の返り値 dict に
+**新規キーとして1行追加**する（`excluded_machinery_total`・`excluded_machinery_by_channel`
+と同型・同じ dict 内。新規ストア/新規 observability section ではなく、既存の常時 emit
+dict に1フィールド足すだけ）。異常な増加を daily_review の出力上で目視できるようにする
+（silence != evaluated の既存方針を踏襲）。
 
-## 3. 後方互換・移行（最重要）
+### 3.2 bootstrap は無改変（M4/M5 への回答）
 
-### 3.1 結論: 移行は不要（設計そのものが移行を要求しない）
+`bootstrap_backlog.py` は `_scope_backlog_candidates`（`bootstrap_backlog.py:351-375,
+408-413`）を経由して**独自に** promoted/expired の事前除外を行っており、`_read_new` とは
+別の関数・別のコードパスである。本設計は `weak_signals/rephrase_dedup.py` を
+**`daily_review.py` からしか import しない**ため、bootstrap の判定ロジックには一切触れず、
+bootstrap は従来どおり `signal_key` の完全一致でのみ既読判定する。
 
-既存の 184 件の既読レコード（`correction_review_seen.jsonl`）は `{"key": <signal_key>, ...}`
-という**物理 signal_key の集合**でしかない。本設計は:
+これにより M5 が指摘した「全 reader で既読判定が一致する」という不変条件は、**そもそも
+本設計の要求事項にしない**: 本設計が保証するのは daily_review 経路のみであり、bootstrap は
+意図的に対象外（縮小の一部）。これは新しい非一致を持ち込むわけではない — **v1 以前から
+bootstrap と daily_review は別の除外条件（machinery 除外・promoted 除外のタイミング等）を
+持つ別々の predicate**であり（`daily_review.py:206-217` のコメント参照）、本設計はその
+既存の非一致の集合に「similarity-only 重複の扱い」という軸を1つ追加するだけで、新しい
+種類の分裂を生まない。
 
-- `signal_key` の計算方法（`compute_signal_key`）を**一切変更しない**。
-- `content_key` は **provenance から都度計算する導出値であり、どこにも永続化しない**。
+残るリスク: bootstrap 実行時（初回導入・新PJ）に、bootstrap 対象のバックログ内に
+similarity-only 重複が含まれていた場合、**bootstrap は畳まずに2回 y/n 確認を出す**。
+これは許容する（bootstrap は一生に一度・小規模な導入フローであり、daily_review のように
+「時間経過で蓄積する恒常的な漏れ」ではないため優先度が低い。1.3 の規模判断と同じ基準）。
 
-したがって「新しい key 計算に合わせて既存データを書き換える」という操作自体が発生しない。
-これは根拠 A（読取時に旧 key でも照合）を一般化したもので、旧 key を「別途保持」する必要も
-ない — **旧レコードの `provenance` 自体は削除されず永続保存されている**
-（`weak_signals/ttl.py:108` の docstring「削除はしない」、実装上も `mark_expired` は
-`expired`/`expired_at` フィールドを立てるだけで record を消さない・`ttl.py:82-93` の
-`_rewrite` は「expired フラグを書き換えて全件を書き戻す」処理であって record を減らさない）
-ため、**古い record も新しい record も、まったく同じ `compute_content_key` 関数に通せば
-同じ content_key が出る**。
+## 4. 検査の有効性（M10 全面作り直し）
 
-### 3.2 既読判定の書き換え（実際に触る箇所）
+v1 の変異テストは実行不能・期待値誤り・重複ありと3系統とも指摘された（M10）。実装可能な
+関数（3.1）に対して、実データ（1.2 の7件）を fixture として作り直す。
 
-現状 `daily_review._read_new` → `promote.filter_actionable` は「候補レコードの
-`signal_key` が既読集合（`read_reviewed_keys()`）に含まれるか」だけを見ている
-（`daily_review.py:106-119` の `read_reviewed_keys` は文字通りの signal_key 集合）。
+### 4.1 陽性対照
 
-変更後は、既読集合の**意味を signal_key から content_key に拡張**する:
+- 1.2 の7件fixtureに加え、rephrase 191件全体を fixture 化し、`expand_seen_keys_for_rephrase_dupes`
+  適用前後で **6件（similarity-only）以外の 185 件の signal_key が一切拡張集合に混入しない**
+  ことを、**個々の signal_key の集合**で assert する（件数比較だけでなく要素比較。M10 の
+  「unique 件数だけでは誤衝突1件+誤分裂1件の相殺を検出できない」指摘への対応）。
+- dict のキー順序・JSON 化時の空白を変える書き換えを適用し、`_dedup_identity` の戻り値
+  （tuple）が変わらないことを確認する（tuple 構築は値ベースであることの陽性確認）。
 
-1. `read_reviewed_keys()` が返す signal_key 集合をそのまま使う（変更しない・後方互換）。
-2. `filter_actionable`（`correction_semantic/promote.py`）の判定直前に、
-   `weak_signals.jsonl` の全レコードから「signal_key → content_key」の対応表を作る
-   （`read_signals()` は既に全件読んでいるので追加コストは `compute_content_key` の
-   O(件数) 呼び出しのみ）。
-3. 既読の signal_key 集合を、この対応表を通して **「既読の content_key 集合」** に変換する
-   （対応表に無い signal_key＝当該レコードが `weak_signals.jsonl` から消えている場合は、
-   フォールバックとして signal_key そのものを既読 content_key 集合にも加える。安全側 —
-   見つからないケースは「今までどおり signal_key 一致でしか救えない」に留まるだけで、
-   新たな見落としを増やさない）。
-4. 候補レコードの判定は「`signal_key` が既読集合に**ある** OR `content_key` が既読
-   content_key 集合に**ある**」の OR 条件にする（**signal_key 一致は消さない** — 万一
-   content_key 側にバグがあっても、現行の一致判定は必ず効くフォールバックとして残す）。
-
-この設計により、既存の 7 件の実害（1.2）は**次回 daily_review 実行時に自動的に解消**する
-（コードをデプロイするだけで直る。マイグレーションスクリプトの実行や、その完了待ちは不要）。
-
-### 3.3 検討した他の移行方式とその失敗モード（不採用の理由）
-
-| 案 | 失敗モード | 中断時に何が起きるか |
-|---|---|---|
-| B. 書込時に新旧両方を記録（`signal_key` に加えて `content_key` を weak_signals.jsonl / correction_review_seen.jsonl の新フィールドとして書く） | 新フィールド追加は `store_registry` のスキーマ実質変更に当たり、レビューコストが増える。かつ**既存 184 件の過去レコードには新フィールドが無い**ため、結局 3.2 と同じ「provenance から都度導出するフォールバック」が要る＝二重に実装することになるだけで 3.2 に対する優位がない | 該当なし（forward-write のみなので中断しても新規書込が欠けるだけ。ただし過去データは救えないので結局 3.2 の read-time reconciliation を実装する必要が残る） |
-| C. 一度きりの移行スクリプト（`weak_signals.jsonl`・`correction_review_seen.jsonl` を新 key で書き換え） | ①書き換え中のプロセス中断で `_rewrite` 系ヘルパー（`ttl.py:82-93` と同型の tmpfile→os.replace）は atomic なので**片方のファイルは救えるが、2ファイルを跨ぐ移行は atomic にできない**（weak_signals だけ書き換わり seen が未書き換えの中間状態が起きうる）。②`store_write` barrier は 1レコード単位の追記契約（`rl_common/store_write.py`）で、全件書き換えは barrier の設計外（`store_write_raw` の例外口を使うことになり、単一ゲート経由の原則から外れる）。③そもそも 3.1 の通り provenance は消えていないので、書き換えなくても導出できる — **書き換えは差分ゼロの結果を得るために可逆性リスクだけを負う過剰な手段** | 中断すると weak_signals.jsonl だけ新 key・correction_review_seen.jsonl は旧 key のまま残り、**両者の対応が壊れて全既読が一時的に無効化**する（本 issue が「防ぎたい」と言っている 182 件同時再提示の事故そのものを引き起こしうる。中断時が最悪のケースになる設計は採らない） |
-| A'. 単純な「旧 key でも照合」（signal_key の新旧2種類を計算して両方を突き合わせる） | 「新 key 計算」を導入する前提が要るが、signal_key 自体は変更しない設計（3.1）なので新旧という概念が発生しない。3.2 の「content_key を additional に見る」設計に自然に収斂する | 該当なし |
-
-採用は **3.2（読取時 content_key 併用照合。B/A' の考え方を一般化したもの）**。中断・欠損に対して
-壊れるモードが存在しない（純関数の追加のみで、書込フローに変更がないため「移行が中断する」
-という状態そのものが起きない）。
-
-## 4. 検査の有効性（変異を実際に適用する）
-
-実装者は以下を**実際にコードへ適用してテストが赤くなることを確認**した上で元に戻し、
-その結果（どの変異がどのテストで検出されたか）を報告すること。①〜④は下限、上限ではない。
-
-### 4.1 陽性対照（誤検知しないことの確認）
-
-- 正常データ: 1.2 で使った実コーパスから、`llm_judge` の 495 グループ（未分裂）と `rephrase` の
-  132 グループ（未分裂・156グループ中24分裂を除いた数。2026-08-25 実測）を fixture 化し、
-  **変更前後で content_key のユニーク数が変わらない**
-  （grouping が壊れて別々の指摘まで潰れていないか）ことを snapshot で確認する。
-- 意味を変えない書き換え（全角/半角統一なし・casefold なしなので対象外だが）代わりに
-  「同一発話の provenance dict のキー順序を変える」「JSON 化時の空白を変える」を適用し、
-  content_key が変わらないことを確認する（`sort_keys=True` の効果を陽性側から確認）。
-
-### 4.2 陰性試験（下限4件。壊す不変条件と通したい検査経路を明記）
+### 4.2 陰性試験（下限4件+dry-run純度+store書込ゲートの計6件）
 
 | # | 分類 | 変異内容 | 壊す不変条件 | 通したい検査経路 |
 |---|---|---|---|---|
-| 1 | ①要素を消す | `IDENTITY_FIELDS["rephrase"]` から `session_id` を**外す**（2.2 で検証した危険な変更そのものを再現） | 「無関係な短い発話（'続けて' 等）が別セッションで衝突しない」という不変条件 | 実コーパス由来の fixture（28 セッションに跨る '続けて'）で content_key のユニーク数が 28→1 に潰れることを検出するテスト |
-| 2 | ②語は残して意味を壊す | `session_id` パラメータの型・名前は残すが、呼び出し側で常に空文字列 `""` を渡すようにする（`filter_actionable` 側の配線を壊す） | 同上（実質①と同じ不変条件だが、壊し方が「フィールド定義」でなく「呼び出し側の配線漏れ」という別クラス） | 同上の fixture で content_key が session 非依存になっていないかを確認するテスト。定義側だけでなく配線側の欠落も検出できることを示す |
-| 3 | ③分散・入替 | `IDENTITY_FIELDS["rephrase"]` に `line_no` を**追加で戻す**（除外したはずのフィールドを混入させる） | 「同一発話・同一セッションなら別 line_no でも同じ content_key になる」という不変条件（1.2 の 24 分裂グループの再現防止） | 1.2 の実コーパス由来 24 分裂グループを fixture 化し、`compute_content_key` を通すと 24 グループが 0 に減ることを確認する回帰テスト。line_no を混入させると再び 24 分裂に戻ることを確認する |
-| 4 | ④検査を無効化する | `compute_content_key` を `compute_signal_key` の単純な別名（同一実装）にすり替える（"変更した体で実は何もしていない"を模す） | 「rephrase の 24 分裂グループが 0 になる」という本設計の目的そのもの | 上記 #3 と同じ回帰テストが red になることを確認（テストがモックに対してではなく実装の中身に対して効いていることの確認） |
+| 1 | ①要素を消す | `_dedup_identity` の `if not session_id or not source_path or not text: return None`（fail-safe ガード）を消す | M6 fail-safe: 必須フィールド欠損レコードが誤って他レコードと同一 identity に丸め込まれない不変条件 | 1.2 の7件fixtureに「`text` が空文字列の rephrase レコード」を1件追加した拡張fixtureで、そのレコードが既存グループに誤って混入しない（＝拡張集合のサイズが変わらない）ことを確認するテスト |
+| 2 | ②語は残して意味を壊す | `expand_seen_keys_for_rephrase_dupes` の `if any(k in seen_keys for k in keys)` を `if all(...)` に変える（命名・シグネチャは無変更） | 「片方が既読なら他方も既読とみなす」という本設計の目的（1.2 の6件で、既読側1件・未読側1件の状態から未読側を救う） | 1.2 の7件fixtureを通し、6件（#1〜#6）が拡張集合に含まれることを確認する E2E テストが red になる（all にすると「両方既読」でない限り拡張されず、6件とも救われない） |
+| 3 | ③分散・入替 | `_dedup_identity` の tuple から `line_no`/`prev_line_no` を外す（issue 想定の広いスコープに戻す変異） | 2.2 で確認した「別の物理行ペアの発話を誤って同一 identity にしない」不変条件（"続けて" の実例） | 1.2 の #7（"続けて"）fixture で、line_no/prev_line_no を含めた場合は拡張集合に含まれない（=引き続き2回確認される）ことを確認するテスト。line_no/prev_line_no を外すと #7 も拡張集合に混入し red になる |
+| 4 | ④検査を無効化する | `expand_seen_keys_for_rephrase_dupes` を `return set(seen_keys)`（no-op）にすり替える | 本設計の目的そのもの（1.2 の6件解消） | #2 と同じ E2E テストが red になる。#2 は「条件式のロジック反転」、#4 は「関数全体の無効化」で壊し方のクラスが異なるため重複として数えない（通したい検査経路は同じ E2E テストだが、要求されているのは「壊す不変条件」と「検査経路」の組が同一なら重複＝ここは壊す変異の性質が違う） |
+| 5 | ④検査を無効化する（dry-run純度） | `expand_seen_keys_for_rephrase_dupes` 内部に、計算結果をどこかへ書き出すコード（例: ログファイルへの `open(path, "a").write(...)`）を追加する。関数の返り値は変えない | dry-run 純度（本関数は読み取り専用の純関数であるべきという不変条件） | `daily_review.build_review(..., dry_run=True)` 呼び出し前後で `DATA_DIR` 配下のファイル一覧・各ファイルの bytes 数・mtime を比較し、変化が無いことを assert するテスト。加えて `rl_common.store_write`/`store_write_raw` を `unittest.mock.patch` で「呼ばれたら例外」にして、呼ばれないことを確認する |
+| 6 | ④検査を無効化する（store書込ゲート） | `weak_signals/rephrase_dedup.py` 内に `store_write_raw` の直接呼び出し、または `open(path, "w")`/`open(path, "a")` を追加する | store_write barrier を経由しない書込みが紛れ込まない不変条件（5節） | 実装 diff に対する静的チェック: `rg -n "store_write_raw|open\(.*[\"']?[wa]" scripts/lib/weak_signals/rephrase_dedup.py` が0件であることを CI で確認する（軽量・機械的） |
 
-`#3`/`#4` は「通したい検査経路」が同一だが、壊す変異が異なる（フィールド allowlist の
-値を壊す vs 関数自体をすり替える）ため重複扱いにしない。
+`#3` と `#4` は「壊す不変条件」が異なる（#3 は過剰統合防止・#4 は目的達成そのもの）ため
+重複として数えない。`#2` と `#4` は同じ E2E テストで検出されるが、変異の性質
+（ロジック反転 vs 関数丸ごと無効化）が異なるため別カウントとする。
 
-### 4.3 未探索の入力クラス（明示的に対象外にする）
+「配線を一切実装しない変異」（`_read_new` に `expand_seen_keys_for_rephrase_dupes` の
+呼び出しを追加しない）は、上記 #2/#4 の E2E テストが `daily_review.build_review` を
+エンドツーエンドで呼ぶ限り自然に検出される（配線が無ければ拡張が一切起きず #1〜#6 が
+救われないまま red になる）ため、独立した変異として追加しない（#2/#4 と同一の検査経路・
+同一の壊れ方のクラスであり重複になるため）。
 
-- **巨大入力**: provenance.text は既に書込時点で 120〜200 文字に truncate されている
-  （`batch.py:344` `[:200]`、`detectors.py:298-299` `[:120]`）ため、content_key 計算での
-  巨大入力は構造的に発生しない。探索しない。
-- **並行実行**: `compute_content_key` は純関数で共有状態を持たないため競合状態が原理的に
-  存在しない。`filter_actionable` 側の read（`read_signals`/`read_reviewed_keys`）は
-  既存の union-read 契約（複数プロセスの追記に対して set 化で安全）をそのまま使うので
-  新たな並行性リスクを追加しない。探索しない。
-- **実行順序**: `weak_signals.jsonl` の読み込み順は content_key 計算に影響しない
-  （signal_key→content_key の対応表はレコードごとに独立に計算される）。探索しない。
-- **キャッシュ鮮度**: `compute_content_key` はキャッシュを持たない設計（都度 provenance
-  から計算）なので鮮度問題が構造的に発生しない。探索しない。
-- **未探索のまま残すもの**: `permission_deny` の `tool_input_summary` に極端に長い/特殊文字
-  混じりのコマンド文字列が来た場合の挙動（_DENY_SUMMARY_TRUNC=120 で表示側は truncate
-  されるが `provenance` 自体の生値は truncate されていない可能性がある）。実データは 6 件
-  のみで確認しきれていない。**測定不能・理由**: 実害が 0 件のチャネルであり、今回のスコープ
-  （rephrase の再提示解消）に対して優先度が低いため意図的に見送る。将来 permission_deny の
-  分裂が実害化したら 1.2 と同じ手順で再測定する。
+「map 逆引きの誤り」（`groups.setdefault(ident, []).append(key)` を
+`groups.setdefault(key, []).append(ident)` のように取り違える）は #4 と同じ「関数の目的を
+達成しない」壊れ方に収束するため、#4 の E2E テストで検出される（キーと値を取り違えると
+`groups` は事実上シングルトンの集まりになり、拡張が一切起きない）。独立変異として追加は
+不要（重複回避のため明示的に不採用理由を書く）。
 
-## 5. 制約の遵守（チェック済み）
+### 4.3 未探索の入力クラス
 
-- **新設凍結（#379 Step 1）**: `weak_signals/identity.py` は純関数のみ・新規ストア/
+- **巨大入力**: `text`/`prev_text` は書込時点で 120 文字に truncate 済み
+  （`weak_signals/detectors.py:298-299`）。探索しない。
+- **並行実行**: `_dedup_identity`/`expand_seen_keys_for_rephrase_dupes` は純関数で共有状態を
+  持たない。探索しない。
+- **実行順序**: `scoped_records` の走査順は identity の同値類判定に影響しない
+  （dict の構築順は出力の集合には無関係）。探索しない。
+- **キャッシュ鮮度**: キャッシュを持たない設計。探索しない。
+- **10倍データでの実測**（M12・4.4節で詳述）: 探索**した**（未探索ではない）。
+
+### 4.4 追加コストの実測（M12 対応）
+
+`expand_seen_keys_for_rephrase_dupes` と同等の計算（identity 構築 + グルーピング + 集合拡張）
+を実データ・合成データで実測（取得日 2026-08-25）:
+
+```
+N=191（実データ全件）:   0.1482 ms/call（100回平均）
+N=1910（10倍相当・合成）: 1.0283 ms/call（20回平均）
+```
+
+O(N) の線形増加が確認でき、10倍データでも1ミリ秒程度。daily_review 自体が
+`weak_signals.jsonl`（1511件）・`correction_review_seen.jsonl`（184件）の jsonl 読み込みを
+毎回行っている既存コストに対して無視できる規模と判断する。
+
+## 5. 制約の遵守（v1 から維持・スコープ縮小でむしろ余裕が増えた）
+
+- **新設凍結（#379 Step 1）**: `weak_signals/rephrase_dedup.py` は純関数のみ。新規ストア/
   observability section/advisory proposal adapter/weak_signal channel のいずれも追加しない。
-  `shrink_freeze.FROZEN_STORES`（`shrink_freeze.py:71,107`）に `weak_signals.jsonl` /
-  `correction_review_seen.jsonl` は既に登録済みで、本設計はどちらのスキーマも変更しない
-  （フィールド追加なし）ため凍結ゲートに抵触しない。
-- **store_write barrier**: 本設計は既存の書込経路（`append_signals`/`record_reviewed`）を
-  一切変更しない。`store_write_raw` の新規使用もない。
-- **dry-run 純度**: `compute_content_key` は読み取り専用の純関数であり、dry-run/非dry-run
-  の分岐すら不要（副作用が無いため）。
-- **file-size-budget**: `weak_signals/identity.py` は新規ファイルで数十行規模の見込み
-  （`IDENTITY_FIELDS` 定義 + `compute_content_key` + `normalize_identity_text`）。
-  500行に遠く及ばない。
+  既存2ストアのスキーマ変更もない（フィールド追加なし）。
+- **store_write barrier**: 本設計は既存の書込経路を一切変更しない。4.2 #6 の変異テストで
+  「新規ファイルが store_write barrier を経由しない書込みを持たないこと」を機械的に確認する。
+- **dry-run 純度**: 4.2 #5 の変異テストで実測ベースに確認する（v1 は「副作用が無いため
+  分岐不要」と書くだけだったが、それ自体を検査で担保する）。
+- **file-size-budget**: `weak_signals/rephrase_dedup.py` は新規ファイルで50行未満の見込み。
 
-## 6. 将来との整合（申し送り・再掲）
+## 6. 対象外にした将来リスク（Claude系レビュー指摘・別issueへ）
 
-2.4 で述べた通り、`IDENTITY_FIELDS` に channel が未登録の場合は `compute_signal_key` と
-同じ「全 provenance ハッシュ」にフォールバックする。`#534` Phase 1.5（Codex CLI セッション
-ログ由来の発話を既存パイプラインに流す設計、実装未着手）が具体化した時点で、新しい
-provenance 形状に対して 1.2 と同じ実測手順（同一発話グルーピング→分裂検出→allowlist 追記）
-を再実行すればよい。**いま両者を統合する設計判断はしない**（対象が存在しないため実測不能）。
+Claude系レビューが指摘した「llm_judge の provenance に `model`/`prompt_fingerprint`/`reason`
+という再現性のないフィールドが同居しており、`category_schema_version` が上がった瞬間に
+全既読が割れる」リスクは実在する（`correction_semantic/batch.py:351-359` の
+producer時点測定値という自己申告どおり、Haiku呼び出し結果や schema version は将来変わり
+うる）。**今回は適用しない**（頭の裁定・実害0件のため）。このリスクへの対応は**別issueとして
+切り出し**（起票は頭が行う）、本設計では扱わない。
 
-## 7. 未解決・判断を仰ぎたい点
+同様に、`#534` Phase 1.5（Codex CLI セッションログ由来の発話を既存パイプラインに流す設計、
+実装未着手）が持ち込みうる未知の provenance 形状への懸念（M11 で「今日代理測定せよ」と
+指摘された項目）も、**スコープが rephrase channel 限定になったことで対象外**になった:
+本設計は llm_judge の provenance に一切触れないため、Codex 統合が llm_judge のprovenance
+形状をどう変えても本設計のコードパス（rephrase_dedup.py）には影響しない。M11 の該当項目は
+「対象が消滅した」ため測定不要と結論する（3問の②: 片側だけでも今出る結論＝
+「rephrase 限定なのでこの懸念は本設計の範囲外」は今日time出せる。①③は対象消滅につき
+該当なし）。
 
-1. **rephrase 以外のチャネルへの適用範囲**: 実害 0 件の permission_deny/verbosity/llm_judge
-   にも allowlist を適用する設計にしている（2.1）。実害が無い分、リグレッションリスクに
-   見合うかは判断が分かれうる。**推奨: 適用する**（理由: 4.2 の検査で担保されるコストの
-   低い変更であり、`model`/`prompt_fingerprint`/`reason` 等 LLM 呼び出し由来フィールドを
-   identity に含めたままにするのは rephrase と同型の潜在リスクを放置することになるため）。
-   適用を見送り rephrase だけに絞る場合、`IDENTITY_FIELDS` から llm_judge/permission_deny/
-   verbosity のエントリを削除するだけで良く、設計・実装コストへの影響は小さい。
-2. **`denial_reason` を permission_deny の identity から外すか**（2.1 で「今回は変更を
-   最小化」として除外のみとしたが、含めるかは実データが薄く暫定判断）。実装着手後に
-   permission_deny の実データが増えたら再評価する（暫定採用・
-   `.claude/rules/provisional-over-blocker.md` 方針）。
+同じ理由で、`permission_deny`/`verbosity` の特殊入力・巨大入力・`denial_reason` の扱い
+（M11 の他3項目）も、**本設計がこれらのチャネルに一切触れないため対象外**。実害0件の
+まま現状維持であり、触れていないコードに対する検査は不要と判断する。
+
+## 7. 後方互換・移行（v1 から維持・スコープ縮小でさらにリスクが下がる）
+
+v1 §3 の結論は変わらない: `signal_key` の計算方法は変更せず、拡張は `seen_keys` という
+既存の literal signal_key 集合をランタイムで広げるだけで、新しい key 空間・永続フィールドを
+作らない。**移行という操作自体が発生しない。**
+
+**184/184 の受入 fixture（M8/M9 対応）**: `correction_review_seen.jsonl` の184件全ての
+`key` が、現在の `weak_signals.jsonl` に対応する record を持つことを確認済み
+（`wc -l` 一致・取得日2026-08-25）。この対応関係を凍結した fixture として固定し
+（1.2 の7件を含む実データサブセット）、`expand_seen_keys_for_rephrase_dupes` が
+KeyError 等を起こさず184件を処理できることを受入テストにする。
+
+**元レコードが欠落しているケース（M8）**: `expand_seen_keys_for_rephrase_dupes` は
+`scoped_records`（現在 `weak_signals.jsonl` に存在するレコードのみ）から identity 集合を
+構築するため、既読 signal_key に対応する元レコードが物理的に欠落していても、それは
+単に「グルーピング対象に含まれない」だけで例外にはならない。欠落した側を無視して
+残っているレコードだけで判定するため、**握りつぶし方向には倒れない**（安全側 —
+その signal_key は従来どおり `seen_keys` の literal 一致でしか救えないが、これは
+本設計を適用する前と同じ挙動であり後退ではない）。現在のスナップショットでは184件全件が
+存在するため、この分岐は実データでは発火しない（受入 fixture で確認済み）。
+
+**ロールバック時の挙動（M7・正直に明記）**: 本設計をデプロイ後にロールバックすると、
+`weak_signals/rephrase_dedup.py` の import が失われ `_read_new` は拡張前の `seen_keys` へ
+戻る。その結果、**ロールバック後に新規発生した similarity-only 重複（ロールバック後の
+検出器再走査で生まれたもの）は再び1件ずつ y/n 確認に出る**。これは「壊れるモードが
+存在しない」という v1 の主張が過大だった点（M7 の指摘どおり）を訂正するもので、
+許容する: 拡張結果は一切永続化されないため、ロールバックで**データが壊れることはなく**、
+単に v1 以前の（今回直したい）挙動に戻るだけ。実害は 1.3 の規模（3.3%）程度に留まる。
+
+## 8. 未解決・判断を仰ぎたい点
+
+無し（v1 の未解決点2件はいずれも頭の裁定で決着: ①適用範囲は rephrase 限定に確定、
+②`denial_reason` は permission_deny 自体が対象外になったため議論不要）。
+
+## 9. M/S/N 対応表（頭の裁定への回答）
+
+| # | 対応 |
+|---|---|
+| M1 | 2.1 で identity を1つに統一（`source_path` は含める）。3通りの食い違いを解消 |
+| M2 | 1.2 で実害を「similarity差6件」に訂正。"続けて"は別発話と確認し対象外に切り出し（1.4） |
+| M3 | 3.1/2.2 で回答: 縮小案は line_no/prev_line_no を identity に残すため反例（"続けて"）は発生しない。理由を明記 |
+| M4 | 3.1 で回答: `filter_actionable` は無改変。呼び出し前に `seen_keys` を拡張するだけの配線に変更し実装可能にした |
+| M5 | 3.2 で回答: bootstrap は無改変・意図的に対象外。全reader一致は本設計の要求事項にしない理由を明記 |
+| M6 | 3.1 の `_dedup_identity` に fail-safe（必須フィールド欠損で None→対象外）を実装。4.2 #1 で検査 |
+| M7 | 7節「ロールバック時の挙動」で正直に明記。データ破壊はないが再提示は復活することを認める |
+| M8 | 7節「元レコードが欠落しているケース」で回答。安全側に倒れることを説明し184/184を受入fixtureに固定 |
+| M9 | 184に統一（本文中の182表記は無し。旧v1にあった1箇所も本rewriteで解消） |
+| M10 | 4.2 で全面作り直し。実行可能な変異6件（陰性4件+dry-run純度+store書込ゲート）、期待値を実測値に修正、重複を明示的に不採用理由付きで除外 |
+| M11 | 6節で回答: 変異テストは実測済み（4.2/4.4）。permission_deny特殊入力・Codex provenance・denial_reasonはスコープ縮小により対象消滅、3問の②で説明 |
+| M12 | 4.4 で実測（0.15ms@191件・1.03ms@1910件） |
+| S1 | 3.1: `expand_seen_keys_for_rephrase_dupes` は必須位置引数のみ（デフォルト値なし） |
+| S2 | 3.1 で具体化: `rephrase_similarity_dedup_count` を `build_review` 返り値dictに新規キーとして追加（`excluded_machinery_total`と同型）。新規ストア/section は作らない |
+| S3 | **縮小により実質解消**: rephrase の `text[:120]`/`prev_text` truncate 長が将来変わると再分裂しうる構造的な穴は残るが、対象チャネルが1つに絞られたことでリスク面が縮小。穴自体は防げないことを4.3の「未探索」枠外として認識しておく |
+| S4 | 2.1 で明記: NFC+strip は `text`/`prev_text`（str型フィールド）のみに適用。他フィールドは値のまま比較 |
+| N1 | **縮小により解消**: 新しい key 空間（content_key）を作らない設計に変更したため、対応表のフォールバック冗長性という問題自体が発生しない |
+| N2 | **縮小により解消**: 対象チャネルが rephrase 1つになったため、チャネル横断の表自体が不要になった |
