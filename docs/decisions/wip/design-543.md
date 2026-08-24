@@ -659,3 +659,28 @@ count フィールドだけを見る検査ではこの変異を見逃す（0と�
 ## 12. 判断を仰ぎたい点（R4）
 
 無し。
+
+## 13. 実装時の裁定 — `proposal_digest.py` の行数バジェット（2026-08-25）
+
+実装着手時に、本設計が追記先として指定する `scripts/lib/daily/proposal_digest.py` が
+**816 行**であり、`.claude/rules/file-size-budget.md` の**分割必須ライン 800 行**
+（`scripts/lib/line_limit.py:40` `MAX_PYTHON_SOURCE_HARD = 800`）を既に超過していることが
+判明した（実測: `wc -l` = 816）。rule は「800 超で着手したら必ず分割計画を SPEC か design doc に
+書いてからコード追加」と定める。
+
+**裁定: 本 PR では分割せず、設計指定どおりの最小追記のみを行う。**
+
+理由:
+
+- 本設計は 2 系統 3 巡のレビューを通して確定している。**実装段階でスコープを広げると、
+  確定した設計の外側に未レビューの変更が入る**（`design-before-fanout` / `think-before-coding`
+  と同じ理由で、レビュー済みの範囲と実装範囲を一致させる）
+- 分割は振る舞い不変の担保（snapshot test + re-export）を伴う独立した作業であり、
+  過去実績（`audit.py` 2046→178 を 11 PR、`evolve.py` 1739→156+7module を 8 PR）から見て
+  本 issue に相乗りさせる規模ではない
+- 本 PR の追記は表示経路の数行であり、**分割の要否を左右しない**（816 が数行増えても
+  分割必要性は変わらず、分割時にまとめて解消される）
+
+**分割計画は別 issue に分離した**（rule が要求する「分割計画を書いてからコード追加」は、
+本節と当該 issue をもって満たす）。手法は `audit.py` / `evolve.py` と同じく
+snapshot test + re-export による段階分割とする。
