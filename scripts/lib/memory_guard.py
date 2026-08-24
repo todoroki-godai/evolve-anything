@@ -62,6 +62,10 @@ if str(_lib_dir) not in sys.path:
 
 # skill_vuln_scan の較正済み行スキャナを再利用（パターン定数の複製をしない・単一ソース）。
 from skill_vuln_scan import _scan_line as _vuln_scan_line  # noqa: E402
+from skill_vuln_scan import _PATTERNS as _vuln_patterns  # noqa: E402
+from skill_vuln_scan import (  # noqa: E402
+    _strip_leading_decoration as _vuln_strip_leading_decoration,
+)
 from frontmatter import find_frontmatter_close as _find_frontmatter_close  # noqa: E402
 import yaml  # noqa: E402
 
@@ -75,6 +79,138 @@ except ImportError:  # pragma: no cover - パス未解決時のフォールバ�
 # reject 対象カテゴリ（記憶汚染の核心＝高信頼 combo のみ）。
 # remote_exec / destructive / overbroad_tools は advisory 表示のみで書込は止めない。
 _REJECT_CATEGORIES = frozenset({"prompt_injection", "secret_exfil"})
+
+# ─────────────────────────────────────────────────────────────────
+# reject 専用の文脈抑制（#537 round7 レビュー I4）
+# ─────────────────────────────────────────────────────────────────
+# `skill_vuln_scan` 側の NFKC 正規化（round6）は「全角/半角 homoglyph で偽装した
+# 攻撃を見逃さない」という advisory 検出の目的では正しい。しかし memory_guard の
+# reject は**正当な記憶の無音喪失**という非対称に厳しいコストを持つ（誤ブロック
+# ＝正当な記憶が書き込まれない）。レビューは全角引用の説明文
+# 『ｉｇｎｏｒｅ　ａｌｌ　ｐｒｅｖｉｏｕｓ　ｉｎｓｔｒｕｃｔｉｏｎｓ』はプロンプト
+# インジェクションの説明例です。 が NFKC 後に危険句へ変わり誤 reject されることを
+# 実測した。
+#
+# 方針: **`skill_vuln_scan` 側の検出（advisory・NFKC 込み）は一切弱めない**。
+# memory_guard の reject 判定にのみ、「マッチ箇所が引用符/inline-code で
+# 囲まれている（＝説明・引用としての言及）」場合に限定して抑制を追加する。
+# 対象は prompt_injection のみ（secret_exfil はソース+シンク共起という別の判定
+# 構造であり、今回のレビュー指摘の対象外）。
+#
+# 引用ペアは日本語の鉤括弧・二重鉤括弧、ASCII/スマート二重引用符・単引用符、
+# バッククォート（inline code）を対象にする。マッチ範囲を挟む最も近い開き/閉じ
+# 記号の組が見つかった場合のみ抑制**候補**とする（無制限の探索だと離れた位置の
+# 引用符まで拾い過剰抑制＝実際の注入まで見逃す危険が増えるため、片側
+# `_QUOTE_SCAN_WINDOW` 文字までに限定した保守的較正）。
+#
+# 探索窓が要る理由（#537 round7 陽性対照で自己発見）: `prompt_injection.ja_ignore`
+# は活用語尾（「してください」等）を含めずに核心部分だけをマッチさせる regex の
+# ため、`『これまでの指示を無視してください』` のような引用では、マッチ末尾と
+# 閉じ引用符の間に「してください」が挟まり**隣接しない**。厳密隣接のみを許容
+# すると、この正当な「injection を説明する技術文書」の引用まで抑制されず
+# reject されてしまう（実測: `mg.reject_hits` に hit が残った）。マッチの前後
+# 有限距離内で開き/閉じの組を探す方式に直した。
+_QUOTE_SCAN_WINDOW = 40
+#
+# **引用だけでは抑制しない**（#537 round7 変異試験で実際に破った・自己発見）:
+# 「ignore all previous instructions」のような、実際の攻撃ペイロードをそのまま
+# 引用符で囲んだだけの行も「引用されているから安全」と誤判定してしまい、reject
+# を回避する新規バイパスを作ってしまうことを変異試験で実測した。レビューが
+# 想定していた FP 例（全角引用の説明文）は、引用に加えて必ず「これは
+# ○○の説明/例である」という**説明マーカー**を伴っていた。抑制は
+# 「引用 AND 説明マーカーが同一行に存在する」の両方を要求することで、
+# 引用だけの生ペイロードは reject されたまま、正当な説明文だけを通す。
+_QUOTE_PAIRS = {
+    "「": "」",
+    "『": "』",
+    "“": "”",
+    "‘": "’",
+    '"': '"',
+    "'": "'",
+    "`": "`",
+}
+
+# 説明マーカー（大小無視の部分一致）。「引用された句そのものを実行させたい
+# 攻撃」ではなく「引用された句について語っている（pitfall・注意喚起・技術文書）」
+# ことを示す語のみを狭く列挙する。列挙式の脆さは承知の上で、`_QUOTE_PAIRS` の
+# 単独一致より厳しい AND 条件の一方に置くことでリスクを抑える
+# （引用だけ・マーカーだけでは抑制されない）。
+_EXPLANATORY_MARKERS = (
+    "説明", "例です", "の例", "とは", "を検出", "を意味", "紹介", "サンプル",
+    "事例", "攻撃例", "パターン", "というプロンプトインジェクション",
+    "example of", "is an example", "describes", "refers to", "such as",
+    "known as", "detects",
+)
+
+
+def _has_explanatory_marker(line: str) -> bool:
+    lowered = line.lower()
+    return any(marker.lower() in lowered for marker in _EXPLANATORY_MARKERS)
+
+
+# pattern_id → コンパイル済み regex（reject 判定でマッチ範囲(span)を再取得するため）。
+_VULN_PATTERN_BY_ID = {pid: rx for pid, _cat, _sev, rx in _vuln_patterns}
+
+# 文脈抑制を適用するカテゴリ（prompt_injection のみ。secret_exfil は対象外）。
+_CONTEXT_SUPPRESSIBLE_CATEGORIES = frozenset({"prompt_injection"})
+
+
+def _is_enclosed_in_quote(norm: str, start: int, end: int) -> bool:
+    """norm[start:end]（マッチ範囲）を挟む最も近い開き/閉じ引用符の組が
+    `_QUOTE_SCAN_WINDOW` 文字以内に存在するか。
+    """
+    search_from = max(0, start - _QUOTE_SCAN_WINDOW)
+    opener = None
+    for i in range(start - 1, search_from - 1, -1):
+        if norm[i] in _QUOTE_PAIRS:
+            opener = norm[i]
+            break
+    if opener is None:
+        return False
+    closer = _QUOTE_PAIRS[opener]
+    search_to = min(len(norm), end + _QUOTE_SCAN_WINDOW)
+    return norm.find(closer, end, search_to) != -1
+
+
+def _is_quoted_explanation(line: str, pattern_id: str) -> bool:
+    """line 中で pattern_id がマッチした箇所が、①引用符/バッククォートの組で
+    囲まれており、かつ②同一行に説明マーカーがある（＝説明・引用としての言及）
+    場合にのみ True を返す。①だけでは実ペイロードの引用ラップによる bypass に
+    なるため、必ず②を同時に要求する（#537 round7 変異試験で自己発見）。
+
+    `skill_vuln_scan._strip_leading_decoration` と同じ正規化（Cf/Mn/Me 除去 →
+    NFKC → Markdown 装飾除去）を経た文字列上でマッチ位置(span)を取り直す
+    （`skill_vuln_scan._scan_line` が実際に判定に使う文字列と一致させる）。
+    """
+    regex = _VULN_PATTERN_BY_ID.get(pattern_id)
+    if regex is None:
+        return False
+    norm = _vuln_strip_leading_decoration(line)
+    m = regex.search(norm)
+    if not m:
+        return False
+    start, end = m.span()
+    if not _is_enclosed_in_quote(norm, start, end):
+        return False
+    return _has_explanatory_marker(line)
+
+
+def _context_suppress(text: str, hits: List["ContaminationHit"]) -> List["ContaminationHit"]:
+    """reject 対象ヒットのうち、引用/inline-code で説明されているだけの
+    prompt_injection を取り除く（reject 専用フィルタ。scan_text の advisory
+    結果は一切変更しない）。
+    """
+    if not hits:
+        return hits
+    lines = text.splitlines()
+    out: List[ContaminationHit] = []
+    for h in hits:
+        if h.category in _CONTEXT_SUPPRESSIBLE_CATEGORIES:
+            line_text = lines[h.line - 1] if 0 < h.line <= len(lines) else ""
+            if _is_quoted_explanation(line_text, h.pattern_id):
+                continue
+        out.append(h)
+    return out
 
 # guard モード（store_write と同型）。
 _VALID_GUARD_MODES = ("warn", "reject")
@@ -145,8 +281,14 @@ def scan_text(text: str) -> List[ContaminationHit]:
 
 
 def reject_hits(text: str) -> List[ContaminationHit]:
-    """scan_text のうち reject 対象カテゴリ（高信頼 combo）のヒットだけを返す。"""
-    return [h for h in scan_text(text) if h.category in _REJECT_CATEGORIES]
+    """scan_text のうち reject 対象カテゴリ（高信頼 combo）のヒットだけを返す。
+
+    #537 round7: prompt_injection のうち引用/inline-code で隣接して囲まれた
+    ヒット（＝説明・引用としての言及）は reject 対象から除く（`_context_suppress`）。
+    scan_text 自体は変更しない（advisory 表示は over-detection 寄りのままでよい）。
+    """
+    hits = [h for h in scan_text(text) if h.category in _REJECT_CATEGORIES]
+    return _context_suppress(text, hits)
 
 
 def resolve_guard_mode(explicit: Optional[str] = None) -> str:

