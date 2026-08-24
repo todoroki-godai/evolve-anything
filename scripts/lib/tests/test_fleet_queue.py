@@ -594,6 +594,100 @@ class TestReadCorrectionsRecordsWithHealth:
         assert health["readable"] is False
         assert health["error"]
 
+    def test_symlink_target_vanishes_after_stat_link_remains_is_degraded(
+        self, tmp_path, monkeypatch
+    ):
+        """#538 round5 [Must]1(I1): symlink 判定→``path.stat()``（実体確認）成功後、
+        ``read_bytes()`` 直前に **target だけ** が unlink される決定論レース。symlink
+        エントリ自体（``lstat()``）は残ったままなので、直前の ``path.stat()`` 分岐と同じ
+        「劣化」（readable=False）が正しい。round4 が入れた「``read_bytes()`` の
+        ``FileNotFoundError`` は常に真の不在」という一括扱いは、この経路では誤りだった
+        （壊す不変条件: dangling symlink は常に readable=False。通したい検査経路:
+        symlink 判定→stat 成功→target 消失→read_bytes FNF→lstat 成功、の順で到達する分岐）。
+        """
+        target = tmp_path / "real-target.jsonl"
+        target.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+        link = tmp_path / "corrections.jsonl"
+        link.symlink_to(target)
+
+        def _raise_fnf(self):
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+
+        monkeypatch.setattr(Path, "read_bytes", _raise_fnf)
+        # lstat() は素通し（symlink エントリ自体は実在するまま＝target だけが消えた想定）。
+
+        records, health = fq.read_corrections_records_with_health(link)
+
+        assert records == []
+        assert health["readable"] is False
+        assert health["error"]
+
+    def test_symlink_and_target_both_vanish_after_stat_is_true_absence(
+        self, tmp_path, monkeypatch
+    ):
+        """#538 round5 [Must]1(I1) 陽性対照側: symlink エントリ自体も target と一緒に消えた
+        場合（link ごと unlink/rename）は、通常ファイルと同じ「真の不在」（readable=True・
+        正常な空在庫）のまま。target だけの消失（上のテスト）と link ごとの消失を混同しない
+        ことを検査する（壊す不変条件: link 自体が無ければ真の不在。通したい検査経路:
+        read_bytes FNF 後の再 lstat() が FileNotFoundError を投げる分岐）。
+        """
+        target = tmp_path / "real-target.jsonl"
+        target.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+        link = tmp_path / "corrections.jsonl"
+        link.symlink_to(target)
+
+        real_lstat = Path.lstat
+        call_count = {"n": 0}
+
+        def _lstat_then_vanish(self):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                raise FileNotFoundError(2, "No such file or directory", str(self))
+            return real_lstat(self)
+
+        def _raise_fnf_read(self):
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+
+        monkeypatch.setattr(Path, "lstat", _lstat_then_vanish)
+        monkeypatch.setattr(Path, "read_bytes", _raise_fnf_read)
+
+        records, health = fq.read_corrections_records_with_health(link)
+
+        assert records == []
+        assert health == {"readable": True, "error": None, "malformed_lines": 0}
+
+    def test_symlink_pointing_to_directory_is_degraded(self, tmp_path):
+        """破綻経路の自主構成①: symlink の参照先が directory（IsADirectoryError）。
+        ``path.stat()`` は成功（dir stat）するが ``read_bytes()`` が
+        ``IsADirectoryError``（``OSError`` の非 FNF サブクラス）を投げ、既存の generic
+        ``OSError`` 分岐で readable=False になることを検査する（symlink 分離ロジックの
+        追加が、通常の非 FNF エラー経路を壊していないことの確認）。
+        """
+        target_dir = tmp_path / "a-directory"
+        target_dir.mkdir()
+        link = tmp_path / "corrections.jsonl"
+        link.symlink_to(target_dir)
+
+        records, health = fq.read_corrections_records_with_health(link)
+
+        assert records == []
+        assert health["readable"] is False
+        assert health["error"]
+
+    def test_symlink_loop_is_degraded_not_true_absence(self, tmp_path):
+        """破綻経路の自主構成②: symlink ループ（自己参照）。``path.stat()`` が ``OSError``
+        （``ELOOP``）を投げ、既存の generic ``OSError`` 分岐で readable=False になる
+        ことを検査する（真の不在＝readable=True に誤分類されないこと）。
+        """
+        link = tmp_path / "corrections.jsonl"
+        link.symlink_to(link)  # 自己参照ループ
+
+        records, health = fq.read_corrections_records_with_health(link)
+
+        assert records == []
+        assert health["readable"] is False
+        assert health["error"]
+
 
 class TestQueueState:
     def test_read_empty_when_missing(self, tmp_path):
@@ -972,9 +1066,23 @@ class TestBuildQueueResultCorrectionsSnapshot:
     """
 
     def test_corrections_snapshot_param_bypasses_read_entirely(self, tmp_path, monkeypatch):
-        """snapshot を渡すと reader を一切呼ばず、渡した records/health だけを使う。"""
+        """snapshot を渡すと reader を一切呼ばず、渡した records/health だけを使う。
+
+        #538 round5 [Must]2(I2) 対応後: ``CorrectionsSnapshot`` は reader（本物の
+        ``read_corrections_records_with_health``）経由でしか作れない opaque 型になったため、
+        テスト用 sentinel snapshot も別ファイルへの本物の read で正規に作る
+        （``build_queue_result`` に渡す ``corrections_path`` とは無関係の別ファイル＝
+        snapshot 優先が本当に効いていることを確認する構図は維持）。
+        """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
+        sentinel_store = tmp_path / "sentinel-corrections.jsonl"
+        sentinel_store.write_text(
+            json.dumps({"project_path": "sentinel-pj", "timestamp": "2026-06-01T00:00:00+00:00"})
+            + "\n"
+        )
+        snapshot = fq.read_corrections_records_with_health(sentinel_store)
+
         corr = tmp_path / "corrections.jsonl"
         corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # 実ファイルは alpha のみ
 
@@ -983,12 +1091,6 @@ class TestBuildQueueResultCorrectionsSnapshot:
 
         monkeypatch.setattr(fq, "read_corrections_records_with_health", _fail_if_called)
 
-        snapshot = fq.CorrectionsSnapshot(
-            records=[
-                {"project_path": "sentinel-pj", "timestamp": "2026-06-01T00:00:00+00:00"}
-            ],
-            health={"readable": True, "error": None, "malformed_lines": 0},
-        )
         result = fq.build_queue_result(
             pj_slugs=["sentinel-pj"],
             threshold=1,
@@ -1063,6 +1165,66 @@ class TestBuildQueueResultCorrectionsSnapshot:
         )
         assert [item["pj_slug"] for item in result["queue"]] == ["alpha"]
         assert result["queue"][0]["new_corrections"] == 1
+
+
+class TestCorrectionsSnapshotOpaque:
+    """#538 round5 [Must]2(I2): ``CorrectionsSnapshot`` は reader だけが生成できる opaque 型。
+
+    tuple 互換の公開コンストラクタだと ``records, health = snapshot`` で unpack した後
+    ``CorrectionsSnapshot(records, stale_health)`` と片方だけ差し替えて再構成でき、reader を
+    一切呼ばずに任意の（forged）health を注入できた。ここではその forge 経路が
+    ``TypeError`` で構造的に塞がれていることを検査する。
+    """
+
+    def test_direct_construction_without_reader_token_raises_typeerror(self):
+        """陰性試験④（検査を無効化する側の反例）: 公開コンストラクタへ直接 records/health を
+        渡すだけの素朴な再構成は ``TypeError``。壊す不変条件: 「snapshot は reader 経由でしか
+        作れない」。通したい検査経路: ``build_queue_result`` へ forged snapshot を注入する
+        攻撃面そのものを構築不能にする。
+        """
+        with pytest.raises(TypeError):
+            fq.CorrectionsSnapshot(
+                [{"project_path": "forged-pj", "timestamp": "2026-01-01T00:00:00+00:00"}],
+                {"readable": True, "error": None, "malformed_lines": 0},
+            )
+
+    def test_unpack_then_reconstruct_with_forged_health_raises_typeerror(self, tmp_path):
+        """②語は残して意味を壊す変異の反例: 正規に得た snapshot を一度 unpack し、health だけ
+        「壊れていない」に偽装して再構成しようとする経路（レビュー指摘の forge 手口そのもの）が
+        ``TypeError`` で塞がれることを検査する。壊す不変条件:「records と health は同じ1回の
+        read から生まれた組以外、組み合わせ直せない」。通したい検査経路: 片方だけ差し替えた
+        forged snapshot が ``build_queue_result`` に到達する経路。
+        """
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+        real_snapshot = fq.read_corrections_records_with_health(corr)
+        records, _real_health = real_snapshot  # 公開互換の unpack（read）は許される
+
+        stale_health = {"readable": False, "error": "forged: pretend disk is broken", "malformed_lines": 99}
+        with pytest.raises(TypeError):
+            fq.CorrectionsSnapshot(records, stale_health)
+
+    def test_reader_constructed_snapshot_unpacks_and_exposes_properties(self, tmp_path):
+        """陽性対照: reader 経由の正規 snapshot は unpack もプロパティアクセスも従来通り動く
+        （opaque 化が read 側の互換を壊していないこと）。
+        """
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+        snapshot = fq.read_corrections_records_with_health(corr)
+
+        records, health = snapshot  # unpack 互換
+        assert records == snapshot.records
+        assert health == snapshot.health
+        assert health["readable"] is True
+        assert health["malformed_lines"] == 0
+
+    def test_corrections_snapshot_reexported_from_top_level_fleet_package(self):
+        """#538 round5 [Should]1: 公開 signature（``build_queue_result``）に現れる型は同じ
+        公開 namespace（``from fleet import X``）から import 可能であること。
+        """
+        import fleet
+
+        assert fleet.CorrectionsSnapshot is fq.CorrectionsSnapshot
 
 
 class TestGatherQueueResultSingleRead:

@@ -15,6 +15,7 @@ STATUS_STALE = 'STALE'
 AccountMismatchError (no signature)
 AuditResult(status: 'str', env_score: 'float | None' = None, phase: 'str | None' = None, growth_level: 'int | None' = None, latest_audit: 'datetime | None' = None, message: 'str' = '', issues_summary: 'IssuesSummary | None' = None) -> None
 CodexUsageResult(by_project: 'dict[str, dict]' = <factory>, status: 'str' = 'ok', error: 'str | None' = None) -> None
+CorrectionsSnapshot(records: 'List[Dict[str, Any]]', health: 'Dict[str, Any]', *, _reader_token: 'object' = None) -> 'None'
 Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False, links: 'list[str]' = <factory>, is_stale: 'bool' = False, is_superseded: 'bool' = False) -> None
 FleetRow(pj_name: 'str', status: 'str', env_score: 'float | None' = None, growth_level: 'int | None' = None, phase: 'str | None' = None, latest_audit: 'datetime | None' = None, audit_status: 'str' = 'OK', message: 'str' = '', issues_summary: 'IssuesSummary | None' = None, subagents_30d: 'int' = 0, tokens_30d: 'int | None' = None, cache_hit_pct: 'float | None' = None, cache_reuse_factor: 'float | None' = None) -> None
 GitCommandError(cmd: 'List[str]', returncode: 'int', stderr: 'str')

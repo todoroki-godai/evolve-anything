@@ -11,6 +11,17 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(queue): symlink target 消失レースの誤分類と CorrectionsSnapshot の偽装再構成を是正（#533 round5）** —
+  symlink 実体確認（`path.stat()`）成功後に **target だけ** unlink/rename されるレースで
+  `read_bytes()` の `FileNotFoundError` を一律「真の不在」扱いしていたため、実際は dangling
+  symlink と同じ読取劣化のケースが正常な空在庫に誤分類されていた。symlink エントリ自体の
+  消失（真の不在）と target だけの消失（劣化）を再 `lstat()` で分離。また `CorrectionsSnapshot`
+  が公開 `NamedTuple`（tuple 互換）だったため `records, health = snapshot` で unpack 後
+  `CorrectionsSnapshot(records, stale_health)` と片方だけ差し替えて再構成でき、reader を
+  呼ばず任意の health を偽装注入できたのを、`read_corrections_records_with_health` だけが
+  生成できる opaque 型に変更して構造的に禁止（unpack による read 互換は維持）。
+  `CorrectionsSnapshot` を `fleet` 直下からも import 可能にし、API surface snapshot fixture も
+  追随させた。
 - **fix(queue): corrections.jsonl の read health を全経路で単一スナップショットに統一（#533 round3）** —
   `collect_untracked_materials`/`collect_phantom_materials` が独自に corrections.jsonl を再 read
   していた経路を塞ぎ、`build_queue_result` が読んだ1回の snapshot（`corr_records`）を渡すよう配線。

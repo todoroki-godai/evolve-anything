@@ -24,7 +24,7 @@ import os
 import stat as _stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, Optional
 
 
 # --- alias fold primitive（queue.py._equivalence_slugs が使用）----------------
@@ -197,20 +197,66 @@ def bootstrap_consumed_by_pj(
 # --- store reader: corrections.jsonl 共有 raw read + read-health（#533）------
 
 
-class CorrectionsSnapshot(NamedTuple):
+# #538 round5 [Must]2(I2): CorrectionsSnapshot 生成を read_corrections_records_with_health
+# 経由に限定するための非公開トークン。queue.py の re-export list にも含めない（外部から
+# `from fleet.queue_materials import _READER_TOKEN` と明示的に private 名を辿らない限り
+# 到達できない）。
+_READER_TOKEN = object()
+
+
+class CorrectionsSnapshot:
     """``read_corrections_records_with_health`` が返す records と health の不可分な組。
 
     #538 round4 [Must]2(I1/I4): ``build_queue_result`` がこれまで ``corr_records`` /
     ``corr_read_health`` を独立の任意引数として受けていたため、片方だけを渡す呼び出しが
     ``or`` フォールバック（当時の実装）で黙って握り潰され、渡した値が捨てられて
     ``corrections_path`` から再 read されていた（snapshot 不一致の温床）。records と health は
-    必ず同じ1回の read から生まれた組として運ぶ契約にするため、tuple 互換の named type にまとめ
-    片方だけの受け渡しを構造的に不可能にする。``tuple`` 互換なので既存の
-    ``records, health = read_corrections_records_with_health(...)`` 形の呼び出しは変更不要。
+    必ず同じ1回の read から生まれた組として運ぶ契約にするため、単一の型にまとめ片方だけの
+    受け渡しを構造的に不可能にした。
+
+    #538 round5 [Must]2(I2): 当初は ``NamedTuple``（tuple 互換）だったため、
+    ``records, health = snapshot`` で一度 unpack したあと ``CorrectionsSnapshot(records,
+    stale_health)`` と片方だけを差し替えて再構成でき、reader を一度も呼ばずに任意の health を
+    偽装した snapshot を ``build_queue_result`` へ注入できてしまっていた（forged snapshot）。
+    本クラスは ``read_corrections_records_with_health`` だけが握る非公開トークン
+    （``_READER_TOKEN``）を渡さない限り ``__init__`` が ``TypeError`` を投げる opaque 型にし、
+    外部からの再構成を構造的に禁止する。``records, health = snapshot`` の unpack（read 専用・
+    無害）は ``__iter__`` で維持し、既存呼び出し側（``queue.py`` の
+    ``corr_records, corr_read_health = ...``）の互換を保つ。
     """
 
-    records: List[Dict[str, Any]]
-    health: Dict[str, Any]
+    __slots__ = ("_records", "_health")
+
+    def __init__(
+        self,
+        records: List[Dict[str, Any]],
+        health: Dict[str, Any],
+        *,
+        _reader_token: object = None,
+    ) -> None:
+        if _reader_token is not _READER_TOKEN:
+            raise TypeError(
+                "CorrectionsSnapshot は read_corrections_records_with_health 経由でのみ"
+                "生成できます（#538 round5 [Must]2: 外部からの任意再構成を禁止）"
+            )
+        self._records = records
+        self._health = health
+
+    @property
+    def records(self) -> List[Dict[str, Any]]:
+        return self._records
+
+    @property
+    def health(self) -> Dict[str, Any]:
+        return self._health
+
+    def __iter__(self):
+        """``records, health = snapshot`` の unpack（read 専用）互換を維持する。"""
+        yield self._records
+        yield self._health
+
+    def __repr__(self) -> str:  # pragma: no cover - デバッグ表示のみ
+        return f"CorrectionsSnapshot(records=<{len(self._records)} items>, health={self._health!r})"
 
 
 def read_corrections_records_with_health(
@@ -254,9 +300,16 @@ def read_corrections_records_with_health(
     確認の直後も同様）にファイルが unlink/rename されると、以前は続く ``path.read_bytes()``
     の ``FileNotFoundError`` を他の ``OSError`` と一括で「読取不能」扱いしていたため、
     「真の不在（正常な空在庫）」であるべきケースが誤って劣化扱いになっていた。
-    ``read_bytes()`` 自身が投げる ``FileNotFoundError`` は（dangling symlink は直前の
-    ``path.stat()`` 分岐で既に捕捉済みなのでここには到達しない）常に「read 直前に消えた
-    ＝真の不在」を意味するため、他の ``OSError``（権限変更等）と分離して正常系として扱う。
+    ``read_bytes()`` 自身が投げる ``FileNotFoundError`` は常に「read 直前に消えた＝真の不在」
+    を意味する ―― ただし通常ファイルの場合に限る。
+
+    #538 round5 [Must]1(I1): symlink の場合はこの「真の不在」扱いが誤りうる。symlink 判定→
+    ``path.stat()``（実体確認）成功後、``read_bytes()`` 直前に **target だけ** が unlink/
+    rename されるレースでは、symlink エントリ自体は残ったまま参照先だけが消える＝dangling
+    symlink であり、直前の ``path.stat()`` 分岐と同じ「劣化」（``readable=False``）が正しい。
+    一方 symlink エントリ自体（link）ごと消えた場合は通常ファイルと同じ「真の不在」。
+    ``read_bytes()`` が ``FileNotFoundError`` を投げた時点で symlink だったなら、再度
+    ``lstat()`` して link 自体の消失か target だけの消失かを分離する。
     """
     health: Dict[str, Any] = {"readable": True, "error": None, "malformed_lines": 0}
     path = Path(corrections_path)
@@ -264,15 +317,16 @@ def read_corrections_records_with_health(
         st = path.lstat()
     except FileNotFoundError:
         # 真の未作成 = 正常な空在庫。
-        return CorrectionsSnapshot([], health)
+        return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
     except OSError as exc:
         # 親ディレクトリの権限エラー等。exists()/is_symlink() は同じ例外を握りつぶして
         # False を返すため、ここで先に区別する必要がある。
         health["readable"] = False
         health["error"] = str(exc)
-        return CorrectionsSnapshot([], health)
+        return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
 
-    if _stat.S_ISLNK(st.st_mode):
+    was_symlink = _stat.S_ISLNK(st.st_mode)
+    if was_symlink:
         # symlink エントリ自体は存在する。リンク先の実体を辿って確認する。
         try:
             path.stat()
@@ -281,23 +335,38 @@ def read_corrections_records_with_health(
             # と区別し、劣化として surface する。
             health["readable"] = False
             health["error"] = f"dangling symlink: {path} -> {os.readlink(path)}"
-            return CorrectionsSnapshot([], health)
+            return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
         except OSError as exc:
             health["readable"] = False
             health["error"] = str(exc)
-            return CorrectionsSnapshot([], health)
+            return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
 
     try:
         raw_bytes = path.read_bytes()
     except FileNotFoundError:
-        # #538 round4 [Must]2: lstat()（symlink の場合は実体確認の stat()）成功直後に
-        # unlink/rename されたレース。他の OSError と違い「読取不能」ではなく「真の不在」
-        # ＝正常な空在庫として扱う（readable=True のまま）。
-        return CorrectionsSnapshot([], health)
+        if was_symlink:
+            # #538 round5 [Must]1(I1): 直前の path.stat() 成功後に target だけが消えた
+            # レース。symlink エントリ自体がまだ在るかを再 lstat() で確認して切り分ける。
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                # link エントリ自体も消えた＝通常ファイルと同じ「真の不在」。
+                return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+            except OSError as exc:
+                health["readable"] = False
+                health["error"] = str(exc)
+                return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+            # link は残っているのに read できない＝target だけが消えた dangling symlink。
+            health["readable"] = False
+            health["error"] = f"dangling symlink (target vanished after stat): {path}"
+            return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
+        # 通常ファイルの ``FileNotFoundError`` は lstat() 成功直後に消えたレース。
+        # 「読取不能」ではなく「真の不在」＝正常な空在庫として扱う（readable=True のまま）。
+        return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
     except OSError as exc:
         health["readable"] = False
         health["error"] = str(exc)
-        return CorrectionsSnapshot([], health)
+        return CorrectionsSnapshot([], health, _reader_token=_READER_TOKEN)
 
     out: List[Dict[str, Any]] = []
     for raw_line in raw_bytes.split(b"\n"):
@@ -318,7 +387,7 @@ def read_corrections_records_with_health(
             health["malformed_lines"] += 1
             continue
         out.append(rec)
-    return CorrectionsSnapshot(out, health)
+    return CorrectionsSnapshot(out, health, _reader_token=_READER_TOKEN)
 
 
 def corrections_read_health(corrections_path: Path) -> Dict[str, Any]:
