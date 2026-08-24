@@ -198,29 +198,15 @@ def bootstrap_consumed_by_pj(
 
 
 class CorrectionsSnapshot(NamedTuple):
-    """``read_corrections_records_with_health`` が返す records と health の組。
+    """``read_corrections_records_with_health`` が返す records と health の組（#533）。
 
-    #538 round4 [Must]2(I1/I4): 当初 ``build_queue_result`` は ``corr_records`` /
-    ``corr_read_health`` を独立の任意引数として受けていたため、片方だけを渡す呼び出しが
-    ``or`` フォールバックで黙って握り潰され、渡した値が捨てられて ``corrections_path`` から
-    再 read されていた。records/health を1つの型にまとめ、片方だけの受け渡しを構造的に
-    不可能にした。
-
-    #538 round5 で「forge されない opaque 型」（``__init__`` トークンガード・immutable・
-    サブクラス禁止・pickle/copy 禁止）を試みたが、レビュー（round5 追加検証）で
-    ``object.__setattr__`` 直叩き・``copy``/``pickle`` の ``__reduce_ex__`` 経由生成など
-    7 通りの偽造経路が実際に成立することを実測で確認した。**Python でオブジェクトを
-    「外部から偽造不可能」にすることは原理的に難しく、投資しても勝てない防御だった。**
-
-    #538 round6（team-lead 決定・設計転換）: 「偽装できないようにする」のをやめ、
-    **この型を外部から受け取る箇所（``build_queue_result`` の引数）自体を無くした**。
-    ``build_queue_result`` は ``corrections_reader``（呼び出し可能オブジェクト。既定は本物の
-    ``read_corrections_records_with_health``）だけを受け取り、内部で1回呼び出して
-    ``(records, health)`` を得る。records と health は必ずその1回の呼び出しから生まれるため、
-    「片方だけ差し替えた偽 snapshot を外部から渡す」という攻撃面（注入点）自体が存在しない。
-    本クラスはもはや外部境界を越えないので、単純な ``NamedTuple``（tuple 互換 unpack）に
-    戻して良い（守るべき不変条件は「reader 呼び出し1回の中で records と health が組になる」
-    ことであり、それは呼び出し口を1つに絞ることで型の防御に頼らず達成される）。
+    records と health は必ず同じ1回の read から生まれる。呼び出し口は
+    ``fleet.cli._gather_queue_result``（CLI 経路の唯一の実 read）と
+    ``fleet.queue.build_queue_result``（公開 API の薄い wrapper）の2箇所のみで、
+    いずれも1回 read した組をそのまま ``fleet.queue._build_queue_result_from_snapshot``
+    （private・I/O なしの純集計関数）へ渡す。tuple 互換のため
+    ``records, health = snapshot`` の unpack も可能（設計経緯は #533/#538 の issue 履歴参照。
+    このコメントには現行の契約だけを書く）。
     """
 
     records: List[Dict[str, Any]]
@@ -423,9 +409,8 @@ def _ts_strictly_after(ts: Any, last: str) -> bool:
 def new_corrections_by_pj(
     pj_slug: str,
     *,
+    records: List[Dict[str, Any]],
     last_evolve_at: Optional[str] = None,
-    corrections_path: Optional[Path] = None,
-    records: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """pj_slug の corrections のうち ``last_evolve_at`` 以降の件数を返す。
 
@@ -433,19 +418,13 @@ def new_corrections_by_pj(
     corrections は ``project_path`` を bare slug に正規化（``_correction_slug``）してから
     scope する（実コーパスでフルパス / slug が混在するため）。timestamp は ``_ts_strictly_after``
     で datetime 比較する（`Z` / `+00:00` 終端混在を吸収・None 時は全件なので影響しない）。
-    ファイル不在 → 0。読取不能・壊れた行の可視化は ``corrections_read_health``（#533）。
 
-    ``records``（``read_corrections_records_with_health`` が既に返した有効レコード列）を渡すと
-    再 read しない。同一 ``build_queue_result`` 呼び出し内で probe 時の health と集計対象の
-    records が同一スナップショットであることを保証するため（#538 round2 [Must]1 —
-    probe と各集計が別読みだと、probe 成功後に read が ``OSError`` になる/その逆で
-    「readable=true のまま在庫ゼロ」を返しうる）。未指定時は従来通り ``corrections_path`` から
-    自前で read する（後方互換）。
+    ``records``（``read_corrections_records_with_health`` が既に返した有効レコード列）は
+    必須。呼び出し元は常に1回 read した snapshot をそのまま渡す（#533 — probe 時の health と
+    集計対象の records が別々の read から来ると食い違うスナップショット不一致が起きるため、
+    本関数自身が独立 read する経路は持たない）。読取不能・壊れた行の可視化は
+    ``corrections_read_health``（#533）。
     """
-    if records is None:
-        if corrections_path is None:
-            raise TypeError("new_corrections_by_pj には corrections_path か records のどちらかが必要")
-        records, _health = read_corrections_records_with_health(Path(corrections_path))
     count = 0
     for rec in records:
         if _correction_slug(rec.get("project_path")) not in _aliases_for(pj_slug):
@@ -574,15 +553,17 @@ def collect_untracked_materials(
         seen.add(slug)
         candidates.append(slug)
 
+    # #538 round8: corr_records 未指定時の self-read は1回だけ行い（ループ内で slug ごとに
+    # 再読みしない）、new_corrections_by_pj には常に records を渡す（同関数は records 必須の
+    # 純集計になった。独立 read 経路は本関数のこの1箇所に集約する）。
+    records = corr_records if corr_records is not None else read_corrections_records_with_health(
+        corrections_path
+    ).records
+
     out: List[Dict[str, Any]] = []
     for slug in candidates:
         weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
-        if corr_records is not None:
-            corr = new_corrections_by_pj(slug, last_evolve_at=None, records=corr_records)
-        else:
-            corr = new_corrections_by_pj(
-                slug, last_evolve_at=None, corrections_path=corrections_path
-            )
+        corr = new_corrections_by_pj(slug, last_evolve_at=None, records=records)
         count = weak + corr
         backlog = int(backlog_counts.get(slug, 0) or 0)
         if count < threshold and backlog <= 0:
@@ -649,15 +630,16 @@ def collect_phantom_materials(
         seen.add(slug)
         candidates.append(slug)
 
+    # #538 round8: corr_records 未指定時の self-read は1回だけ行う（new_corrections_by_pj は
+    # records 必須の純集計になったため、独立 read 経路は本関数のこの1箇所に集約する）。
+    records = corr_records if corr_records is not None else read_corrections_records_with_health(
+        corrections_path
+    ).records
+
     out: List[Dict[str, Any]] = []
     for slug in candidates:
         weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
-        if corr_records is not None:
-            corr = new_corrections_by_pj(slug, last_evolve_at=None, records=corr_records)
-        else:
-            corr = new_corrections_by_pj(
-                slug, last_evolve_at=None, corrections_path=corrections_path
-            )
+        corr = new_corrections_by_pj(slug, last_evolve_at=None, records=records)
         count = weak + corr
         backlog = int(backlog_counts.get(slug, 0) or 0)
         if count < threshold and backlog <= 0:

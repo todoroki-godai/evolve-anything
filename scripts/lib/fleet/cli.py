@@ -497,14 +497,10 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     # だが material 母集団の方が広く、material を持つ untracked PJ（例: amamo）が完全沈黙し
     # 真の evolve 候補を取りこぼす。weak は read_unpromoted（reader と同一ソース）、corr は
     # _correction_slug で per-PJ reader と同じ正規化に揃える（名前空間ズレ防止）。
-    # #538 round3 [Must]4・round7: material 母集団の集計（``_collect_material_slugs``）が
-    # queue 本体の集計より前に corrections.jsonl の内容を必要とするため、ここで実ディスク
-    # read を1回だけ行う。round6 までは公開 ``build_queue_result`` へ「既読 snapshot を返す
-    # だけの reader」を注入する設計だったが、round7 レビューでその注入口（callable 引数）
-    # 自体が forged データの受け口になりうることが実測されたため、公開 API 経由をやめ、
-    # private ``_build_queue_result_from_snapshot`` へ直接 ``corr_records``/``corr_read_health``
-    # を渡す（公開面に corrections 関連の引数は存在しない）。ディスク read はこの関数全体で
-    # 1回のまま。
+    # #533: material 母集団の集計（``_collect_material_slugs``）が queue 本体の集計より前に
+    # corrections.jsonl の内容を必要とするため、ここで実ディスク read を1回だけ行い、
+    # private ``_build_queue_result_from_snapshot`` へ ``corr_records``/``corr_read_health``
+    # をそのまま渡す。ディスク read はこの関数全体で1回のまま。
     from .queue_materials import read_corrections_records_with_health
 
     corrections_snapshot = read_corrections_records_with_health(corr_path)

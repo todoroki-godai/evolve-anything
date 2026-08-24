@@ -192,23 +192,13 @@ def build_queue_result(
     material_slugs: Optional[List[str]] = None,
     untracked_dir_map: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """公開 API。corrections.jsonl を本物の reader で **ちょうど1回** 読み、純集計 helper
-    ``_build_queue_result_from_snapshot`` へ委譲する（#538 round7）。
+    """公開 API。corrections.jsonl を本物の reader で1回読み、純集計 helper
+    ``_build_queue_result_from_snapshot`` へ委譲する（#533）。
 
-    #538 round6 では ``corrections_reader``（呼び出し可能オブジェクト）を公開引数として
-    受け取っていたが、round7 レビューで ``corrections_reader=lambda _: raw_tuple`` のように
-    zero-I/O のデータ thunk を渡せば型検査なしで任意の ``(records, health)`` を注入でき、
-    かつ reader が「呼出し1回」であっても内部で ``real_reader`` を2回呼んで records と
-    health を別々の物理 read から作る（``split_reader``）ことで、注入点としては round4-5 と
-    等価な穴が残ることが実測された。「callable を受け取る」設計は、その callable が本当に
-    「1回の read」を表すことを保証できない。
-
-    round7 の方針転換: **公開 API から corrections 関連の注入口（reader/snapshot 引数）を
-    完全に排除**する。本関数は corrections.jsonl の物理 read を関数内で1回だけ行い、
-    その結果を purely 集計する private helper へ渡す。呼び出し口を公開面から消すことで、
-    「forged な (records, health) を外部から渡す」という操作自体が公開 API から不可能になる
-    （内部の ``_build_queue_result_from_snapshot`` は private であり、その2引数受け渡しは
-    外部からアクセスできない実装詳細＝内部の整合性契約であって、セキュリティ境界ではない）。
+    脅威モデル: このモジュールが守るのは未改変の production 経路（CLI/公開 API が
+    corrections.jsonl を1回 read し、その1つの snapshot から records と health を組で
+    下流へ渡すこと）。テストが module 属性を monkeypatch で差し替える経路は対象外
+    （Python では原理的に防げないため設計の対象にしない）。
     """
     corr_records, corr_read_health = read_corrections_records_with_health(corrections_path)
     return _build_queue_result_from_snapshot(
@@ -245,16 +235,15 @@ def _build_queue_result_from_snapshot(
     """純集計 helper（**I/O を一切行わない**・private）。
 
     ``corr_records``/``corr_read_health`` は呼び出し側（``build_queue_result`` 本体、または
-    ``fleet.cli._gather_queue_result``）が **既に1回だけ実行した read** の結果をそのまま
-    渡す契約。本関数自身は corrections.jsonl を読まない。呼び出し元は常にこの2つを
-    ``read_corrections_records_with_health`` の同一呼び出しの戻り値からセットで渡す
-    （production 内の呼び出し箇所は ``build_queue_result`` と ``_gather_queue_result`` の
-    2箇所のみで、いずれも1回の read から生まれた組をそのまま渡す）。
+    ``fleet.cli._gather_queue_result``）が既に1回だけ実行した read の結果をそのまま渡す契約
+    （#533）。本関数自身は corrections.jsonl を読まない。テストがこの関数を直接呼ぶのは
+    「records/health が一貫して使われる」という内部の整合性契約を検査するためであり、
+    公開 API の契約検査ではない。
 
-    private のため公開 import path が存在せず、外部から任意の
-    ``(corr_records, corr_read_health)`` を注入する経路は無い（round7 [Must]I2/I4）。
-    テストがこの関数を直接呼ぶのは「内部の整合性契約」を検査するためであり、公開 API の
-    契約検査ではない。
+    ``corr_records`` は下流で複数回（backlog counts 集計 → PJ ごとの weak+corr 集計）
+    イテレートされるため、呼び出し側が list でなく一度しか iterate できない generator/
+    iterator を渡すと2回目以降が空になり集計が silent に欠落する。呼び出し口の入口で
+    ``list()`` に実体化して防ぐ。
 
     Phase 1b #80 契約の queue result dict を返す。schema:
       {generated_at, threshold, tracked_total, queue_status, queue_status_reason,
@@ -293,23 +282,14 @@ def _build_queue_result_from_snapshot(
     #88: 閾値以上 material を持つが実 dir に解決できない untracked slug（temp slug 等）は
     ``collect_phantom_materials`` で ``skipped_phantom`` に分離する（waiting には昇格しない）。
 
-    #538 round3 [Must]4・round7: CLI 層（``_gather_queue_result``）は material 母集団収集
-    （``_collect_material_slugs``）でも corrections.jsonl の内容が要るため、``build_queue_result``
-    呼び出しより前に実ディスク read が必要になる。CLI は自前で1回 read した
-    ``(corr_records, corr_read_health)`` を本関数へ直接渡す（``build_queue_result`` 経由の
-    再 read はしない）。
-
-    #538 round4-7 の設計変遷: round4 は ``corr_records``/``corr_read_health`` を独立の公開
-    任意引数にし（`or` フォールバックで片方だけ渡す呼び出しが黙って握り潰される欠陥）、
-    round5 は ``CorrectionsSnapshot`` を「reader だけが生成できる opaque 型」にして防ごうと
-    したが7通りの偽造経路が実測で成立、round6 は「reader（呼び出し可能オブジェクト）」を
-    公開引数にしたが、``corrections_reader=lambda _: raw_tuple`` で型検査なしに任意データを
-    注入できる（callable であることは「1回の read」を保証しない）ことが実測された。
-    round7（team-lead 決定）で方針転換: **公開 API から corrections 関連の注入口を完全に
-    排除**し、本関数を薄い public wrapper（実 read を1回行うだけ）にし、実際の集計は
-    private ``_build_queue_result_from_snapshot`` へ委譲する。records/health を外部から
-    直接注入する経路が公開面から消えるため、型による防御に頼る必要が無くなった。
+    ``_gather_queue_result``（CLI）は material 母集団収集（``_collect_material_slugs``）でも
+    corrections.jsonl の内容が要るため、本関数呼び出しより前に実ディスク read を1回行い、
+    その結果をそのまま本関数へ渡す（再 read しない）。
     """
+    # corr_records は下流で複数回イテレートされる（backlog counts → PJ ごとの集計）ため、
+    # list に実体化してから使う（一度しか iterate できない generator/iterator を渡されると
+    # 2回目以降が空になり集計が silent に欠落するため・#538 round8）。
+    corr_records = list(corr_records)
     paths = pj_paths or {}
     redirect_map = untracked_dir_map or {}
     materials: List[Dict[str, Any]] = []

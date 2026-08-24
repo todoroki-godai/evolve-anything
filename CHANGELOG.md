@@ -11,28 +11,19 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
-- **fix(queue): symlink target 消失レースの誤分類を是正し、CorrectionsSnapshot への
-  データ注入点を公開 API から完全に排除（#533 round5-7）** —
-  symlink 実体確認（`path.stat()`）成功後に **target だけ** unlink/rename されるレースで
-  `read_bytes()` の `FileNotFoundError` を一律「真の不在」扱いしていたため、実際は dangling
-  symlink と同じ読取劣化のケースが正常な空在庫に誤分類されていた。symlink エントリ自体の
-  消失（真の不在）と target だけの消失（劣化）を再 `lstat()` で分離（round5）。
-  `CorrectionsSnapshot`（records+health の組）を外部から片方だけ差し替えて再構成できる欠陥
-  について、round5 では「reader だけが生成できる opaque 型」で防ごうとしたが
-  `object.__setattr__` 直叩き・`copy`/`pickle` の `__reduce_ex__` 経由生成・サブクラス化など
-  7通りの偽造経路が実測で成立したため撤回。round6 は `corrections_reader`（呼び出し可能
-  オブジェクト）を公開引数にする設計へ転換したが、zero-I/O のデータ thunk を渡せば型検査
-  なしで任意データを注入できること（I2）、および callable の「呼出し1回」が corrections.jsonl
-  の「物理 read 1回」を保証しないこと（I4・reader 内部で本物の reader を2回叩く
-  `split_reader`）が round7 レビューで実測された。round7 で最終的に、**公開
-  `build_queue_result` から corrections 関連の引数を一切排除**し、本物の reader を
-  関数内で hardcode 1回だけ呼び出す薄い wrapper にし、純粋な集計は private
-  `_build_queue_result_from_snapshot`（I/O を一切行わない）へ委譲する設計にした。公開面に
-  「read を代替する」余地自体が無いため、型による防御に頼らずデータ注入が構造的に
-  不可能になる。`CorrectionsSnapshot` は素の `NamedTuple` のまま、`fleet` 直下からも
-  import 可能。API surface snapshot fixture は公開サブモジュール・公開クラスの method まで
-  `dir(cls)` ベースで走査範囲を広げ、NamedTuple の `_tuplegetter` field や継承 `__iter__`
-  の欠落・削除も検知できるようにした。
+- **fix(queue): corrections.jsonl 読取失敗の在庫ゼロ誤報告と symlink target 消失レースを
+  是正（#533）** — 脅威モデル: この修正が守るのは未改変の production 経路（CLI/公開 API が
+  corrections.jsonl を1回 read し、その1つの snapshot から records と health を組で下流へ
+  渡すこと）。`build_queue_result`（公開 API）は物理 read を内部で1回だけ行う薄い wrapper、
+  実際の集計は private `_build_queue_result_from_snapshot`（I/O を一切行わない）が担う。
+  symlink 実体確認（`path.stat()`）成功後に target だけ unlink/rename されるレースで
+  `FileNotFoundError` を一律「真の不在」扱いしていたのを、symlink エントリ自体の消失（真の
+  不在）と target だけの消失（劣化）に分離。`corr_records` に generator 等の一度しか
+  iterate できないオブジェクトを渡すと backlog 集計が先に消費し per-PJ 集計が silent に
+  0件へ落ちていたのを、private helper の入口で `list()` 実体化して解消。読取不能
+  （権限エラー等）は `queue_status=SETUP_REQUIRED` + `corrections_read_health.readable=False`
+  として区別し、「本当に空」（EMPTY）と誤報告しない。API surface snapshot fixture は
+  `dir(cls)` ベースで公開サブモジュール・公開クラスの method まで走査範囲を広げた。
 - **fix(queue): corrections.jsonl の read health を全経路で単一スナップショットに統一（#533 round3）** —
   `collect_untracked_materials`/`collect_phantom_materials` が独自に corrections.jsonl を再 read
   していた経路を塞ぎ、`build_queue_result` が読んだ1回の snapshot（`corr_records`）を渡すよう配線。

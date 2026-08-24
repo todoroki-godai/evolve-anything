@@ -312,6 +312,14 @@ def _corr(project_path, ts):
     return {"project_path": project_path, "timestamp": ts, "message": "x"}
 
 
+def _read_records(store):
+    """テスト用: corrections.jsonl を1回 read してレコード列だけを返す（#538 round8 —
+    ``new_corrections_by_pj`` は ``records`` 必須の純集計になったため、テストも production と
+    同じ1回 read 経路で snapshot を作ってから渡す）。
+    """
+    return fq.read_corrections_records_with_health(store).records
+
+
 class TestNewCorrectionsByPj:
     def test_counts_corrections_since_last_evolve(self, tmp_path):
         store = tmp_path / "corrections.jsonl"
@@ -323,7 +331,7 @@ class TestNewCorrectionsByPj:
         store.write_text("".join(json.dumps(r) + "\n" for r in recs))
         # last_evolve_at が 06-05 → 06-10, 06-20 の 2 件
         n = fq.new_corrections_by_pj(
-            "alpha", last_evolve_at="2026-06-05T00:00:00+00:00", corrections_path=store
+            "alpha", last_evolve_at="2026-06-05T00:00:00+00:00", records=_read_records(store)
         )
         assert n == 2
 
@@ -332,17 +340,22 @@ class TestNewCorrectionsByPj:
         store = tmp_path / "corrections.jsonl"
         recs = [_corr("alpha", "2026-06-01T00:00:00+00:00"), _corr("alpha", "2026-06-10T00:00:00+00:00")]
         store.write_text("".join(json.dumps(r) + "\n" for r in recs))
-        n = fq.new_corrections_by_pj("alpha", last_evolve_at=None, corrections_path=store)
+        n = fq.new_corrections_by_pj("alpha", last_evolve_at=None, records=_read_records(store))
         assert n == 2
 
     def test_scopes_by_project_path(self, tmp_path):
         store = tmp_path / "corrections.jsonl"
         recs = [_corr("alpha", "2026-06-10T00:00:00+00:00"), _corr("beta", "2026-06-10T00:00:00+00:00")]
         store.write_text("".join(json.dumps(r) + "\n" for r in recs))
-        assert fq.new_corrections_by_pj("alpha", last_evolve_at=None, corrections_path=store) == 1
+        assert fq.new_corrections_by_pj("alpha", last_evolve_at=None, records=_read_records(store)) == 1
 
     def test_missing_store_returns_zero(self, tmp_path):
-        assert fq.new_corrections_by_pj("alpha", last_evolve_at=None, corrections_path=tmp_path / "x.jsonl") == 0
+        assert (
+            fq.new_corrections_by_pj(
+                "alpha", last_evolve_at=None, records=_read_records(tmp_path / "x.jsonl")
+            )
+            == 0
+        )
 
     def test_mixed_tz_suffix_same_instant_excluded(self, tmp_path):
         """`Z` 終端 corr と `+00:00` 終端 last_evolve が同一 instant なら新規にカウントしない。
@@ -356,7 +369,7 @@ class TestNewCorrectionsByPj:
         store.write_text(json.dumps(_corr("alpha", "2026-06-23T10:00:00Z")) + "\n")
         # last_evolve とちょうど同一 instant（表記だけ +00:00）→ ts <= last → 除外（0 件）
         n = fq.new_corrections_by_pj(
-            "alpha", last_evolve_at="2026-06-23T10:00:00+00:00", corrections_path=store
+            "alpha", last_evolve_at="2026-06-23T10:00:00+00:00", records=_read_records(store)
         )
         assert n == 0
 
@@ -365,7 +378,7 @@ class TestNewCorrectionsByPj:
         store = tmp_path / "corrections.jsonl"
         store.write_text(json.dumps(_corr("alpha", "2026-06-23T10:00:01Z")) + "\n")
         n = fq.new_corrections_by_pj(
-            "alpha", last_evolve_at="2026-06-23T10:00:00+00:00", corrections_path=store
+            "alpha", last_evolve_at="2026-06-23T10:00:00+00:00", records=_read_records(store)
         )
         assert n == 1
 
@@ -687,6 +700,49 @@ class TestReadCorrectionsRecordsWithHealth:
         assert records == []
         assert health["readable"] is False
         assert health["error"]
+
+
+class TestCorrectionsSnapshotFieldIdentity:
+    """#538 round8 [Must](2)(b): API surface snapshot（``fleet_api_surface.txt``）は
+    ``CorrectionsSnapshot`` の ``records``/``health`` field の**存在**（signature の field 名・
+    ``_tuplegetter`` という型名）しか検査しておらず、**意味**（どちらの field がどちらの値を
+    持つか）は検査していない。``records`` と ``health`` を入れ替えるフィールド順の入れ替え
+    変異を適用しても、両方とも同じ ``_tuplegetter`` descriptor なので収集文字列が一切変わらず
+    snapshot テストは緑のまま通ってしまう（レビュー実測）。ここでは実際の値を使った振る舞い
+    テストで、field 名と値の対応・construction 順・unpack 順を検査する。
+    """
+
+    def test_records_and_health_are_the_exact_objects_passed_by_field_name(self):
+        records = [{"project_path": "alpha", "timestamp": "t"}]
+        health = {"readable": True, "error": None, "malformed_lines": 0}
+        snapshot = fq.CorrectionsSnapshot(records=records, health=health)
+
+        # 壊す不変条件: 「records field は records 引数の値、health field は health 引数の値」。
+        # ``records``/``health`` を入れ替える変異（`.records ↔ .health`）を適用すると、
+        # この identity 検査が直接壊れる（値の型が違うので equality でも検出できるが、
+        # identity（`is`）の方が「同じオブジェクトかどうか」までより厳密に見る）。
+        assert snapshot.records is records
+        assert snapshot.health is health
+        assert snapshot.records is not health
+        assert snapshot.health is not records
+
+    def test_tuple_unpack_order_matches_records_then_health(self):
+        """``records, health = snapshot`` の unpack 順序が ``(records, health)`` の
+        construction 順と一致すること（通したい検査経路: 呼び出し側の
+        ``corr_records, corr_read_health = read_corrections_records_with_health(...)`` の
+        ような位置依存 unpack が正しい変数に正しい値を束縛すること）。
+        """
+        records = [{"project_path": "alpha", "timestamp": "t"}]
+        health = {"readable": False, "error": "distinct-from-records", "malformed_lines": 3}
+        snapshot = fq.CorrectionsSnapshot(records=records, health=health)
+
+        unpacked_first, unpacked_second = snapshot
+        assert unpacked_first is records
+        assert unpacked_second is health
+        # records と health は型が明確に異なる（list vs dict）ので、入れ替わっていれば
+        # ここで即座に検出できる。
+        assert isinstance(unpacked_first, list)
+        assert isinstance(unpacked_second, dict)
 
 
 class TestQueueState:
@@ -1058,137 +1114,16 @@ class TestBuildQueueResult:
         assert health["error"]
 
 
-class TestBuildQueueResultPublicApiHasNoCorrectionsInjectionPoint:
-    """#538 round7（team-lead 決定・第2次設計転換）。
-
-    round6 は ``build_queue_result`` に ``corrections_reader``（呼び出し可能オブジェクト）を
-    公開引数として持たせ、「callable なら1回の呼び出しに records/health が閉じる」ことに
-    賭けたが、レビューで以下2点が実測で破られた:
-
-      - I2: ``corrections_reader=lambda _: raw_tuple`` のように zero-I/O のデータ thunk を
-        渡せば、型検査なしで任意の ``(records, health)`` を注入できた。callable であることは
-        「読む手段」であることを保証しない。
-      - I4: 「reader の呼出し回数が1回」と「corrections.jsonl の物理 read が1回」は同義でない。
-        reader 自身が内部で本物の reader を2回呼び、1回目の records と2回目の health を
-        混ぜて返す（``split_reader``）ことで、外側からは「1回呼ばれた」ように見えながら
-        records/health が別々の物理 read から来る状態を作れた。
-
-    round7 の方針転換: **公開 ``build_queue_result`` から corrections 関連の注入口（reader/
-    snapshot いずれの引数も）を完全に排除**する。本関数は corrections.jsonl の物理 read を
-    関数内で1回だけ行い（``read_corrections_records_with_health`` を bare name で直接呼ぶ・
-    差し替え不能な hardcode）、純粋な集計は private ``_build_queue_result_from_snapshot``
-    （I/O を一切行わない）へ委譲する。「callable を検査する」という筋の悪い防御をやめ、
-    そもそも公開面に「read を代替する」余地を残さない。
+class TestBuildQueueResultPublicApi:
+    """#538 round8。脅威モデル: このモジュールが守るのは未改変の production 経路
+    （公開 API/CLI が corrections.jsonl を1回 read し、その1つの snapshot から records と
+    health を組で下流へ渡すこと）。テストが module 属性を monkeypatch で差し替える経路は
+    対象外（Python では原理的に防げないため設計の対象にしない）。「差し替えれば偽装できる」
+    系のテストは資産にならないため round8 で削除した（設計経緯は issue 履歴参照）。
     """
 
-    def test_public_signature_has_no_corrections_injection_params(self):
-        """設計契約の機械的固定: 公開 ``build_queue_result`` の signature に
-        ``corrections_reader``/``corrections_snapshot``/``corr_records``/``corr_read_health``
-        のいずれも存在しないこと。復活させる変異（round6 への回帰）を検出する。
-        """
-        import inspect
-
-        sig = inspect.signature(fq.build_queue_result)
-        injection_names = {
-            "corrections_reader",
-            "corrections_snapshot",
-            "corr_records",
-            "corr_read_health",
-        }
-        assert not injection_names & set(sig.parameters)
-        assert "corrections_path" in sig.parameters  # 読む対象の path 自体は必須のまま
-
-    def test_corrections_reader_kwarg_no_longer_exists_raises_typeerror(self, tmp_path):
-        """round7 レビューが実際に成立させた forge 手口①: ``corrections_reader=`` に
-        zero-I/O のデータ thunk（``lambda _: raw_tuple``）を渡し、型検査なしで任意データを
-        注入する経路。round7 では ``corrections_reader`` kwarg 自体が存在しないため
-        ``TypeError`` になる（壊す不変条件: 「公開 API にデータ注入口が無い」。通したい検査
-        経路: forged tuple を公開 API 経由で注入しようとする呼び出し）。
-        """
-        ws = tmp_path / "weak_signals.jsonl"
-        ws.write_text("")
-        corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
-
-        raw_tuple = (
-            [{"project_path": "forged-pj", "timestamp": "2026-01-01T00:00:00+00:00"}],
-            {"readable": True, "error": None, "malformed_lines": 0},
-        )
-        with pytest.raises(TypeError):
-            fq.build_queue_result(
-                pj_slugs=["alpha"],
-                threshold=1,
-                weak_signals_path=ws,
-                corrections_path=corr,
-                last_evolve_map={},
-                activity_map={},
-                generated_at="2026-06-25T09:00:00Z",
-                corrections_reader=lambda _path: raw_tuple,
-            )
-
-    def test_corrections_snapshot_kwarg_no_longer_exists_raises_typeerror(self, tmp_path):
-        """旧 API（round4-5 の ``corrections_snapshot=``）も同様に kwarg 自体が存在しない。"""
-        ws = tmp_path / "weak_signals.jsonl"
-        ws.write_text("")
-        corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
-
-        forged = fq.CorrectionsSnapshot(
-            [{"project_path": "forged-pj", "timestamp": "2026-01-01T00:00:00+00:00"}],
-            {"readable": True, "error": None, "malformed_lines": 0},
-        )
-        with pytest.raises(TypeError):
-            fq.build_queue_result(
-                pj_slugs=["alpha"],
-                threshold=1,
-                weak_signals_path=ws,
-                corrections_path=corr,
-                last_evolve_map={},
-                activity_map={},
-                generated_at="2026-06-25T09:00:00Z",
-                corrections_snapshot=forged,
-            )
-
-    def test_passing_only_records_kwarg_raises_typeerror(self, tmp_path):
-        """旧 API（``corr_records`` 単独）も kwarg 自体が存在しないため即 ``TypeError``。"""
-        ws = tmp_path / "weak_signals.jsonl"
-        ws.write_text("")
-        corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
-
-        with pytest.raises(TypeError):
-            fq.build_queue_result(
-                pj_slugs=["alpha"],
-                threshold=1,
-                weak_signals_path=ws,
-                corrections_path=corr,
-                last_evolve_map={},
-                activity_map={},
-                generated_at="2026-06-25T09:00:00Z",
-                corr_records=[{"project_path": "sentinel-pj", "timestamp": "t"}],
-            )
-
-    def test_passing_only_health_kwarg_raises_typeerror(self, tmp_path):
-        """旧 API（``corr_read_health`` 単独）も同様に ``TypeError``。"""
-        ws = tmp_path / "weak_signals.jsonl"
-        ws.write_text("")
-        corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
-
-        with pytest.raises(TypeError):
-            fq.build_queue_result(
-                pj_slugs=["alpha"],
-                threshold=1,
-                weak_signals_path=ws,
-                corrections_path=corr,
-                last_evolve_map={},
-                activity_map={},
-                generated_at="2026-06-25T09:00:00Z",
-                corr_read_health={"readable": False, "error": "x", "malformed_lines": 0},
-            )
-
-    def test_public_api_always_reads_from_corrections_path(self, tmp_path):
-        """陽性対照: 公開 API は常に ``corrections_path`` から実 read する（唯一の経路）。"""
+    def test_public_api_reads_from_corrections_path(self, tmp_path):
+        """陽性対照: 公開 API は ``corrections_path`` から実 read して正しく集計する。"""
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
@@ -1206,52 +1141,40 @@ class TestBuildQueueResultPublicApiHasNoCorrectionsInjectionPoint:
         assert [item["pj_slug"] for item in result["queue"]] == ["alpha"]
         assert result["queue"][0]["new_corrections"] == 1
 
-    def test_split_reader_attack_is_structurally_impossible_at_public_layer(
-        self, tmp_path, monkeypatch
-    ):
-        """round7 レビューが実際に成立させた forge 手口②（I4）: round6 の reader 注入設計
-        では、reader が「呼出し1回」でも内部で本物の reader を2回叩き、1回目の records と
-        2回目の health を混ぜて返す ``split_reader`` により、records/health が別々の物理
-        read から来る状態を作れた。round7 では公開 API に reader を注入する引数が無いため、
-        この攻撃手口自体を構成する足場（"公開 API が受け取る callable" という前提）が
-        存在しない。ここでは公開 API が呼ぶ **唯一の物理 read** 関数
-        （``fq.read_corrections_records_with_health``）を監視し、``build_queue_result`` の
-        1回の呼び出しにつき物理 read も常に1回であることを確認する（壊す不変条件: 「公開
-        API 経由の物理 read が1回に固定される」。通したい検査経路: split_reader のような
-        「呼出し1回・物理2回」の乖離が発生しないこと）。
+    def test_permission_error_reports_setup_required_not_empty(self, tmp_path):
+        """#538 round8 (3): この PR 本来の目的（#533）が縮小後も維持されていることの実測。
+        corrections.jsonl の ``lstat()`` が ``PermissionError`` になったとき、
+        queue が「本当に空」（EMPTY・在庫ゼロ）と誤報告せず、「読めていない」
+        （SETUP_REQUIRED・``corrections_read_health.readable=False``）と区別して報告する。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "2026-06-01T00:00:00+00:00")) + "\n")
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
 
-        real_reader = fq.read_corrections_records_with_health
-        physical_reads = []
+        from unittest import mock
 
-        def _spy(path):
-            physical_reads.append(path)
-            return real_reader(path)
+        def _raise_permission(self):
+            raise PermissionError(13, "Permission denied", str(self))
 
-        monkeypatch.setattr(fq, "read_corrections_records_with_health", _spy)
+        with mock.patch.object(Path, "lstat", _raise_permission):
+            result = fq.build_queue_result(
+                pj_slugs=["alpha"],
+                threshold=1,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+            )
 
-        fq.build_queue_result(
-            pj_slugs=["alpha"],
-            threshold=1,
-            weak_signals_path=ws,
-            corrections_path=corr,
-            last_evolve_map={},
-            activity_map={},
-            generated_at="2026-06-25T09:00:00Z",
-        )
-        assert len(physical_reads) == 1, (
-            f"公開 API 経由の物理 read が {len(physical_reads)} 回。"
-            "round6 の split_reader 攻撃（呼出し1回・物理2回）が再現していないか確認"
-        )
+        assert result["queue"] == []
+        assert result["queue_status"] == "SETUP_REQUIRED"
+        assert result["corrections_read_health"]["readable"] is False
 
     def test_reader_exception_propagates_not_silently_swallowed(self, tmp_path, monkeypatch):
-        """自主構成の破綻経路①（レビュー指摘とは種類の異なるもの）: 実 read が例外を
-        投げた場合、``build_queue_result`` はそれを握りつぶさず伝播させる。#533 の原問題
-        （読取失敗が silent に在庫ゼロへ丸められる）を再導入しないことを確認する。
+        """実 read が例外を投げた場合、``build_queue_result`` はそれを握りつぶさず伝播させる。
+        #533 の原問題（読取失敗が silent に在庫ゼロへ丸められる）を再導入しないことを確認する。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
@@ -1396,15 +1319,18 @@ class TestBuildQueueResultFromSnapshotPrivateHelper:
     def test_private_helper_records_consumed_only_once_not_a_single_use_iterator(
         self, tmp_path
     ):
-        """自主構成の破綻経路②（team-lead 指摘とは種類の異なるもの）: ``corr_records`` に
-        list でなく一度しか iterate できない generator を渡すと、内部で ``corr_records`` を
-        複数回イテレートする下流集計（backlog counts / weak+corr ×N PJ / untracked・phantom
-        collectors）のうち2回目以降が「空」を返し、silent に集計が欠落する可能性がある。
-        壊す不変条件:「全下流が同じ corr_records を完全に見る」。通したい検査経路: material
-        母集団が2箇所以上（backlog counts と untracked collector）で同じ corr_records を
-        参照する経路。本テストは現状の実装が list を要求する契約（型ヒント通り）であることを
-        明示し、generator を渡すと2回目以降の集計が 0 に落ちる既知の限界を記録する
-        （production 呼び出し元は常に list を渡すため実害は無いが、契約を明示しておく）。
+        """自主構成の破綻経路②（team-lead 指摘とは種類の異なるもの・#538 round8 で修正）:
+        ``corr_records`` に list でなく一度しか iterate できない generator を渡しても、
+        下流集計（backlog counts / weak+corr ×N PJ / untracked・phantom collectors）が
+        全て正しい件数を見る。壊す不変条件:「全下流が同じ corr_records を完全に見る」。
+        通したい検査経路: material 母集団が2箇所以上（backlog counts と per-PJ 集計）で
+        同じ corr_records を参照する経路。
+
+        修正前は private helper が ``corr_records`` を list に実体化せずそのままイテレート
+        していたため、generator を渡すと1回目の消費（backlog counts）で使い果たされ、
+        後続の per-PJ 集計が silent に 0 件へ落ちていた（`records` が1件あるのに
+        ``queue == []`` になる欠陥）。private helper の入口で ``list(corr_records)`` に
+        実体化することで解消した。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
@@ -1423,12 +1349,8 @@ class TestBuildQueueResultFromSnapshotPrivateHelper:
             corr_records=_records_gen(),
             corr_read_health={"readable": True, "error": None, "malformed_lines": 0},
         )
-        # #533/#538 の原設計は「corr_records は list（複数回 iterate 前提）」。generator を
-        # 渡すと最初の呼び出し（backlog counts）で消費し尽くされ、後続の weak+corr 集計は
-        # 0 になる（silent な欠落）。これは production の呼び出し規約（常に list を渡す）を
-        # 守っている限り発生しないが、契約が list であることをここで固定する。
-        assert result["queue"] == []  # generator 消費済みで new_corrections=0 に落ちる
-        assert result["queue_status"] in ("EMPTY", "SETUP_REQUIRED")
+        assert [item["pj_slug"] for item in result["queue"]] == ["alpha"]
+        assert result["queue"][0]["new_corrections"] == 1
 
 
 class TestGatherQueueResultSingleRead:
@@ -2015,12 +1937,13 @@ class TestAliasFold:
             _corr("other-pj", "2026-06-10T00:00:00+00:00"),
         ]
         store.write_text("".join(json.dumps(r) + "\n" for r in recs))
+        records = _read_records(store)
         assert fq.new_corrections_by_pj(
-            "evolve-anything", last_evolve_at=None, corrections_path=store
+            "evolve-anything", last_evolve_at=None, records=records
         ) == 2
         # 無関係 slug は数えない
         assert fq.new_corrections_by_pj(
-            "other-pj", last_evolve_at=None, corrections_path=store
+            "other-pj", last_evolve_at=None, records=records
         ) == 1
 
 
