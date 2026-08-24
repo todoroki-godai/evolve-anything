@@ -278,9 +278,10 @@ def expand_seen_keys_for_rephrase_dupes(
 # 新フィールド追加時にこのテストが red になり、fail-safe/allowlist是非の再検討を促す。
 ```
 
-**R7（S2 の生産点・消費点の配線を修正）**: `daily_review._read_new` は変更しない
-（元の signature・実装のまま）。件数計算と `seen_keys` の拡張は **`build_review`
-（`daily_review.py:369-` 。既に `scoped` スナップショットを持っている）側で行う**:
+**R7（F4 で再修正: 件数の確定位置を「実際に出力から除外された数」に一致させ、表示までの
+経路を1本通す）**: `daily_review._read_new` は変更しない（元の signature・実装のまま）。
+件数計算と `seen_keys` の拡張は **`build_review`（`daily_review.py:369-`。既に `scoped`
+スナップショットを持っている）側で行う**:
 
 ```python
 def build_review(pj_slug, *, weak_signals_path=None, idioms_path=None, seen_path=None,
@@ -289,19 +290,31 @@ def build_review(pj_slug, *, weak_signals_path=None, idioms_path=None, seen_path
     seen_keys = read_reviewed_keys(seen_path)
     scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
 
-    # R7: 「実際に出力から除外した件数」を数えるため、拡張前後で filter_actionable を
-    # 2回通し、その差分（signal_key の集合差）だけを数える。promoted/expired/
-    # bootstrap消化済み/machinery で元々除外される予定だった key は差分に出ない
-    # （baseline 側も同じ filter_actionable を通しているため）。
     from weak_signals.rephrase_dedup import expand_seen_keys_for_rephrase_dupes
     expanded_seen_keys = expand_seen_keys_for_rephrase_dupes(scoped, seen_keys)
 
     baseline_new = _read_new(pj_slug, seen_keys=seen_keys, marker_base=marker_base, scoped=scoped)
     new_records = _read_new(pj_slug, seen_keys=expanded_seen_keys, marker_base=marker_base, scoped=scoped)
+
+    # F4是正: exclude_signal_keys（#476-3のbootstrap-pending除外・dedupとは無関係な別軸の
+    # 除外）を差分計算より前に baseline_new / new_records の両方へ同じ集合で適用する。
+    # 適用しないと、bootstrap側で先に消化された signal_key が差分に混入し「実際には
+    # 出力候補にすらならなかった key」を dedup 件数として過大計上してしまう。
+    if exclude_signal_keys:
+        baseline_new = [r for r in baseline_new if r.get("signal_key") not in exclude_signal_keys]
+        new_records = [r for r in new_records if r.get("signal_key") not in exclude_signal_keys]
+
+    # ここまでで baseline_new/new_records とも「promoted/expired/bootstrap消化済み/
+    # machinery/bootstrap-pending のいずれでも除外されない、出力候補になり得た record」
+    # の集合になっている。この時点の差分が「dedup によって実際に出力候補から除外された数」
+    # と一致する（意図的に max_groups 打ち切りより前で確定する — 打ち切りは他の提案との
+    # 兼ね合いで決まる表示上の事情であり、dedup 自体の効果とは別軸のため。打ち切り後まで
+    # 遅らせると、その日たまたま他の提案が多くて表示枠から溢れただけの record まで
+    # 「dedupで畳んだ」と誤って数えてしまう）。
     rephrase_similarity_dedup_count = len(
         {r["signal_key"] for r in baseline_new} - {r["signal_key"] for r in new_records}
     )
-    # 以降は従来どおり new_records（拡張後の結果）を groups 化する。
+    # 以降は従来どおり new_records（拡張後の結果）を groups 化・ソート・打ち切りする。
     ...
     return {
         ...,
@@ -313,6 +326,30 @@ def build_review(pj_slug, *, weak_signals_path=None, idioms_path=None, seen_path
 `filter_actionable`/`_read_new` の**シグネチャ・実装は一切変更しない**ため M4 の解決は維持
 される（`build_review` の呼び出し方だけが変わる）。
 
+**表示までの経路（F4・「数えても出口が無い」への回答）**: `excluded_machinery_total`と
+**全く同じ既存の配線パターン**を辿らせる。具体的な3点:
+
+1. `daily_review.py` の `build_review` docstring の返り値仕様（既存の
+   `"excluded_machinery_total": int, # ...` の並び）に
+   `"rephrase_similarity_dedup_count": int` を追記する（`daily_review.py:416-417`相当の
+   コメント行に1行追加）。
+2. `skills/evolve/references/correction-review.md`（daily review 節、既存の
+   `daily.excluded_machinery_total > 0` の MUST 記述・`correction-review.md:65` と同じ
+   場所）に、**同型の MUST 行を1つ追加する**:
+   「`daily.rephrase_similarity_dedup_count > 0` → 「rephraseのsimilarity重複により
+   自動的に畳んだ件数: N件（既に確認済みの指摘と同一内容と判定し再提示をスキップ
+   しました）」を1行添える（MUST — silence != evaluated。過剰統合の兆候に利用者が
+   気づけるようにする＝S2の目的そのもの）。」これにより evolve の SKILL.md が
+   AskUserQuestion 提示時にこの数値を実際にユーザーへ表示する。
+3. `daily/proposal_digest.py`（`proposal_digest.py:420,424` で
+   `review.get("excluded_machinery_total")`/`excluded_machinery_by_channel` を読んで
+   digest 出力へ運んでいるのと同じ箇所）に、`review.get("rephrase_similarity_dedup_count")`
+   を読んで digest 側にも運ぶ1行を追加する（daily digest 経路（`max_groups=None` で
+   `build_review` を呼ぶ側）でもこの数値が失われないようにする）。
+
+この3点で「computed→docstring契約→SKILL.mdでの実際の表示→digest経路への伝播」まで
+1本の経路が繋がる（数値を計算するだけで誰も読まない、という状態にしない）。
+
 `S1` 対応: `expand_seen_keys_for_rephrase_dupes` は `scoped_records`/`seen_keys` とも
 デフォルト値なしの必須位置引数（呼び出し側の配線漏れをデフォルト値で静かに許さない）。
 
@@ -322,9 +359,10 @@ def build_review(pj_slug, *, weak_signals_path=None, idioms_path=None, seen_path
 **新規キーとして1行追加**する（`excluded_machinery_total`・`excluded_machinery_by_channel`
 と同型・同じ dict 内。新規ストア/新規 observability section ではなく、既存の常時 emit
 dict に1フィールド足すだけ）。異常な増加を daily_review の出力上で目視できるようにする
-（silence != evaluated の既存方針を踏襲）。**GPT系の指摘どおり、この件数は
-「promoted/expired/bootstrap消化済み/machineryで元々除外される予定だったkey」を含まない
-（baseline_new・new_records とも同じ filter_actionable 通過後の結果を比較するため）。**
+（silence != evaluated の既存方針を踏襲）。この件数は
+「promoted/expired/bootstrap消化済み/machinery/bootstrap-pendingで元々除外される予定
+だったkey」を含まない（baseline_new・new_records とも同じ filter_actionable 通過後・
+exclude_signal_keys 適用後の結果を比較するため。F4是正済み）。
 
 ### 3.2 bootstrap は無改変（M4/M5 への回答）
 
@@ -349,14 +387,19 @@ similarity-only 重複が含まれていた場合、**bootstrap は畳まずに2
 これは許容する（bootstrap は一生に一度・小規模な導入フローであり、daily_review のように
 「時間経過で蓄積する恒常的な漏れ」ではないため優先度が低い。1.3 の規模判断と同じ基準）。
 
-## 4. 検査の有効性（M10 全面作り直し・R5/R6 で実データに対し実際に実行）
+## 4. 検査の有効性（M10 全面作り直し・R5/R6/F3 で実施状況を実態に合わせて明記）
 
 v2 の変異テストは実行不能・期待値誤り・重複ありと3系統とも指摘された（M10・R5）。
-denylist 版の `_dedup_identity`/`expand_seen_keys_for_rephrase_dupes`（3.1）と**等価な
-参照実装**を今日実際に書き、実データ・合成 fixture に通して結果を確認した
-（R6: 変異テストを「実施計画」でなく実施結果として記載する。取得日2026-08-25。
-本番実装は実装 PR で `scripts/lib/tests/test_weak_signal_rephrase_dedup.py` として
-作成し、下記と同じ fixture ・期待値をそのまま使う）。
+
+**F3（実施済みと未実施の区別を明記）**: 下記6変異のうち、**#1〜#4はdenylist版の
+`_dedup_identity`/`expand_seen_keys_for_rephrase_dupes`（3.1）と等価な参照実装を
+今日実際に書き、実データ・合成fixtureに通して実行し結果を得た**（R6: 「実施計画」でなく
+実施結果として記載する。取得日2026-08-25。コマンド相当の出力は各行に記載）。**#5
+（dry-run純度のruntimeチェック）と#6（store書込ゲートの静的チェック）は、`build_review`・
+`store_write`・実ファイルI/Oという既存コードベースの実物に対して検査するため、
+`rephrase_dedup.py`が実在しない設計段階では実行できず、実装PRで実施する**（4.2の該当行に
+明記）。本番実装では#1〜#4も含め全件を`scripts/lib/tests/test_weak_signal_rephrase_dedup.py`
+としてpytest化し、下記と同じfixture・期待値をそのまま使う。
 
 ### 4.1 陽性対照（実行結果）
 
@@ -386,20 +429,26 @@ delta == sim_only_harm_keys - seen_keys_real ? True
 | 1 | ①要素を消す | `_dedup_identity` の必須フィールド欠損ガード（R4 で `_REQUIRED_FIELDS` 全件チェックに拡張済み）を削除 | R4 fail-safe: 必須フィールド欠損（この変異では `text=""`）レコードが誤って他レコードと同一 identity に丸め込まれない不変条件 | fixture: 同一session/source/line_no/prev_line_noだが`text=""`の2レコード（FS_A既読/FS_B未読）。**baseline: FS_B in expanded? False（安全）** → **mutant: FS_B in expanded? True（BUG検出）** |
 | 2 | ②語は残して意味を壊す | `_normalize_text` から `unicodedata.normalize("NFC", ...)` を削除（strip のみ残す＝NFC正規化だけを壊す） | text の同一性判定（NFC/NFDの表記揺れを正しく同一視する不変条件） | fixture: 濁点分解（は+゙+けて／ばけて）の合成/分解ペア（NFC_A既読/NFC_B未読）。**baseline: NFC_B in expanded? True（正しく統合）** → **mutant: NFC_B in expanded? False（BUG検出＝under-merge、#4とは異なる壊れ方）** |
 | 3 | ③分散・入替 | `_dedup_identity` の identity から `line_no`/`prev_line_no` を除外（issue想定の広いスコープに戻す変異） | 2.2で確認した「別の物理行ペアの発話を誤って同一identityにしない」不変条件 | fixture: 実データの"続けて"harm組（line_no 1091/1288が異なる本物の別発話）。**baseline: 混入しない（False、正しい）** → **mutant: 混入する（True、BUG検出＝over-merge）** |
-| 4 | ④検査を無効化する | `expand_seen_keys_for_rephrase_dupes` を `return set(seen_keys)`（no-op）にすり替える | 本設計の目的そのもの（6件解消） | 実データ191件。**baseline: 6/7解消** → **mutant: 0/7解消（BUG検出）**。#2 とは「壊れ方」（正規化ロジックの欠落 vs 関数全体の無効化）も「検出fixture」（synthetic NFC/NFDペア vs 実データharmセット）も異なるため独立変異として数える |
+| 4 | 正しい値を返すが誤った位置で消費される（F2: no-op変異は必ず赤になるトートロジーのため差し替え） | `build_review`（R7）内で `baseline_new`/`new_records` に渡す `seen_keys` 引数を取り違える（`baseline_new` に拡張後 `expanded_seen_keys`、`new_records`（実際に groups 化・表示される方）に拡張前 `seen_keys` を渡す）。`expand_seen_keys_for_rephrase_dupes` 自体は正しく実装されたまま — 計算結果の**消費**（どちらの呼び出しに渡すか）を取り違えるコピペミスを模す | 「計算された拡張が、実際に表示される groups の元になる `new_records` に使われる」という配線の不変条件（計算の正しさとは別軸） | 実データ191件で実行。正しい配線: `rephrase_similarity_dedup_count=6`・**実際に表示される出力で未解決の harm は1/7**（"続けて"のみ、期待どおり）。**mutant: `rephrase_similarity_dedup_count=0`（もっともらしい値に見える。count だけを見る検査ではこの変異を見逃す）・実際に表示される出力での未解決harmは7/7（BUG検出）**。この結果は F3 が指摘した「件数だけの報告にしない」の根拠でもある: count フィールドの単純なテスト（0でないことだけ確認等）ではこの変異は緑のまま通り、**実際の groups/new_records の中身を検査して初めて赤になる** |
 | 5 | ④検査を無効化する（dry-run純度） | `expand_seen_keys_for_rephrase_dupes` 内部に計算結果を書き出すコード（例: `open(path,"a").write(...)`）を追加。返り値は変えない | dry-run純度（本関数は読み取り専用の純関数であるべき不変条件） | 実装PRで実施: `daily_review.build_review(..., dry_run=True)` 呼び出し前後でDATA_DIR配下のファイル一覧・bytes数・mtimeを比較し無変化をassert。加えて`rl_common.store_write`/`store_write_raw`を`unittest.mock.patch`で「呼ばれたら例外」にし、呼ばれないことを確認する（本関数はどちらも呼ばない設計のため、この変異はmock例外で即red） |
 | 6 | ④検査を無効化する（store書込ゲート） | `weak_signals/rephrase_dedup.py`に`store_write_raw`直接呼び出しまたは`open(path,"w"/"a")`、`Path(...).write_text(...)`、`json.dump(..., open(...))`のいずれかを追加 | store_write barrier を経由しない書込みが紛れ込まない不変条件（5節） | 実装diffに対する静的チェック `rg -n "store_write_raw\|open\(.*[\"']?[wa]\|write_text\|json\.dump" scripts/lib/weak_signals/rephrase_dedup.py` が0件であることをCIで確認する。**Claude系指摘への対応**: このregexは検出漏れがありうる（他の書込手段が今後増える可能性）ため過信しない — **#5のruntime側（DATA_DIR前後比較+store_writeモック）が本命の検出手段**であり、本静的チェックは早期発見のための補助と位置づける |
 
 「配線を一切実装しない変異」（`build_review` に `expand_seen_keys_for_rephrase_dupes` の
-呼び出しを追加しない）は、#2/#4のE2Eテストが `daily_review.build_review` をエンドツーエンド
-で呼ぶ限り自然に検出される（配線が無ければ拡張が一切起きず#1〜#6が救われないままredになる）
-ため、独立した変異として追加しない（#4と同一の検査経路・同一の壊れ方のクラスであり重複）。
+呼び出しを一切追加しない）は、`new_records` が常に未拡張の `seen_keys` を使う結果になる点で
+**新#4（消費の取り違え）と観測できる症状が完全に一致する**（どちらも「実際に表示される
+`new_records`が未拡張のseen_keysを使う」状態）。独立した変異として追加しない（#4と同一の
+検査経路・同一の観測結果であり重複）。
 
 「map逆引きの誤り」（`groups.setdefault(ident, []).append(key)`を
-`groups.setdefault(key, []).append(ident)`のように取り違える）は#4と同じ「関数の目的を
-達成しない」壊れ方に収束するため、#4のE2Eテストで検出される（キーと値を取り違えると
-`groups`は事実上シングルトンの集まりになり、拡張が一切起きない）。独立変異として追加は
-不要（重複回避のため明示的に不採用理由を書く）。
+`groups.setdefault(key, []).append(ident)`のように取り違える。signal_keyは1レコード1値の
+ため各グループが常にサイズ1になり`len(keys)<2`で毎回スキップされ拡張が一切起きない）は、
+新#1〜#4のどれとも異なる「`expand_seen_keys_for_rephrase_dupes`内部の計算そのものが壊れる」
+バグだが、**4.1の陽性対照（baseline: 実データ191件でdelta＝6件のsimilarity-onlyペアと
+完全一致する、というassertion）自体がこの変異を検出する**: map逆引きが起きると拡張が
+一切発生せず`delta`が空集合になり、4.1のbaseline assertion（`delta == sim_only_harm_keys -
+seen_keys_real` → `True`が期待値）が`False`でredになる。これは名前付きの独立変異ではなく、
+**baseline検証そのものが持つ検出力**として整理する（重複回避のため独立変異として追加は
+不要、ただし見逃されないことを明示する）。
 
 R5指摘の「相殺の見逃し」対策: 4.1の陽性対照が**差分の完全一致**（多い/少ないの両方向）を
 確認するため、「誤衝突1件＋誤分裂1件」が unique 件数だけを比較していれば相殺されて
@@ -504,6 +553,16 @@ KeyError 等を起こさず184件を処理できることを受入テストに�
 「壊れるモードが存在しない」という主張は誤りだったため訂正する。実害の規模は
 1.3 の規模（184件中6件・約3.3%）に留まる。
 
+**F1（旧版と同居中の再提示・未記載だった点を追記）**: 上記はロールバック（新版適用後に
+戻す）の話だが、**新版デプロイが完了するまでの一時的な期間**（プラグイン更新の反映待ち・
+別セッションが古いプラグインキャッシュのまま実行している間・段階的ロールアウトの途中）も
+同型のリスクを持つ: その実行では `weak_signals/rephrase_dedup.py` がまだ存在しない/
+import されないため拡張が一切効かず、その回の daily_review では6件が未解決のまま
+（旧版と同じ挙動で）再提示されうる。これはロールバックと**原因が同じ**（拡張結果を
+一切永続化しない設計の直接の帰結）であり、新たなリスクではなく上記と同一のリスクが
+「巻き戻し」だけでなく「新版未反映のあいだ」にも等しく及ぶ、という事実を追加で認める。
+許容する（実害規模は同じく184件中6件・約3.3%に留まり、デプロイ完了後は自然に解消する）。
+
 ## 8. 未解決・判断を仰ぎたい点
 
 無し（v1 の未解決点2件はいずれも頭の裁定で決着: ①適用範囲は rephrase 限定に確定、
@@ -565,3 +624,38 @@ mutant#3(line_no/prev_line_no除外): '続けて'ペア混入? True (baseline Fa
 mutant#4(no-op): harm groups resolved: 0/7 (BUG検出)
 positive control: delta == sim_only_harm_keys - seen_keys_real ? True（完全一致）
 ```
+
+## 11. M/S/N 対応表（R4巡目・最終修正4点への回答）
+
+前巡から解消と判定された項目（R1/R2/R4、およびそれ以前の M2/M3/M4/M8/M9/M12/S1/S3/S4/
+N1/N2）は再検討していない。以下は F1〜F4 のみ。
+
+| # | 対応 |
+|---|---|
+| F1 | 7節に追記: ロールバック（巻き戻し）だけでなく、**新版デプロイ完了までの一時的な期間**（プラグイン更新反映待ち・別セッションの古いキャッシュ実行・段階的ロールアウト中）も同じ原因（拡張結果を永続化しない設計）で同型のリスクが及ぶことを明記。許容する旨も明記 |
+| F2 | 4.2の#4を「no-op」から「`build_review`内で`baseline_new`/`new_records`に渡す`seen_keys`を取り違えるコピペミス」へ差し替え。実データで実行し、`rephrase_similarity_dedup_count=0`（もっともらしい値）なのに実際の表示出力は7/7未解決（BUG）という結果を確認。トートロジーでなくなった |
+| F3 | 4節冒頭に「#1〜#4は今日実際に実行した・#5/#6は`rephrase_dedup.py`が実在しない設計段階では実行不能なため実装PRで実施する」と明記し、実施済み/未実施を明確に分離 |
+| F4 | 3.1のR7実装案を修正: `exclude_signal_keys`を差分計算より前に`baseline_new`/`new_records`両方へ同一条件で適用（bootstrap-pending除外の混入を防止）。表示までの経路として①`build_review`docstring②`skills/evolve/references/correction-review.md`のMUST行③`daily/proposal_digest.py`の3箇所を具体的に指定 |
+
+### F2 で差し替えた変異の詳細
+
+**壊す不変条件**: 「`expand_seen_keys_for_rephrase_dupes`が計算した拡張結果が、実際に
+groups化・表示される`new_records`の`seen_keys`として使われる」という配線の不変条件
+（計算ロジックの正しさとは別軸 — 計算自体は正しいまま、消費側の配線だけが壊れる）。
+
+**通したい検査経路**: `rephrase_similarity_dedup_count`フィールドの単純な非ゼロ確認だけ
+ではなく、**実際にユーザーへ表示される`groups`/`new_records`の中身**（harm 6件が本当に
+解決されているか）を検査するE2Eテスト。実データ191件で実行した結果:
+
+```
+正しい配線: rephrase_similarity_dedup_count=6 / 実際の表示出力での未解決harm=1/7（"続けて"のみ、正しい）
+mutant(swap): rephrase_similarity_dedup_count=0（もっともらしい値） / 実際の表示出力での未解決harm=7/7（BUG）
+```
+
+count フィールドだけを見る検査ではこの変異を見逃す（0という値だけでは「元々dedup対象が
+無かった」のか「配線が壊れて機能していない」のか区別できない）ことを実データで確認した。
+これが F3 の「件数だけの報告にしない」という要求の裏付けでもある。
+
+## 12. 判断を仰ぎたい点（R4）
+
+無し。
