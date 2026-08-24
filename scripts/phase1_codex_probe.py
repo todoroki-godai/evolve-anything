@@ -142,28 +142,10 @@ def _strip_invisible_chars(s: str) -> str:
     return "".join(ch for ch in s if unicodedata.category(ch) not in _INVISIBLE_MATCH_CATEGORIES)
 
 
-def _normalize_for_matching(text: str) -> str:
-    """判定専用の正規化: Cf/Mn/Me 除去 → NFKC 正規化、の順に適用する（#536 round6）。
-
-    #537（fix/vuln-scan-scope）の `_normalize_for_matching` と同一設計・同一順序。
-    順序は固定: 先に Cf/Mn/Me を除去し、その後に NFKC を適用する。逆順にすると
-    NFKC の正準結合（canonical composition）が結合文字を再結合してしまい、Mn 除去
-    で崩したはずの一致が復元されて検出をすり抜ける（#537 で実測確認済みの設計
-    根拠を踏襲）。
-
-    NFKC は全角英数字（``ＳＫＩＬＬ`` → ``SKILL``）・NBSP（U+00A0 は互換分解で
-    半角スペース U+0020 になる）を含む「互換等価」な表記ゆれを一括で正規化する。
-    NBSP を個別に列挙して対応しない（列挙対応は次の1文字で破れる。round5 の
-    教訓と同じ設計原則）。
-    """
-    s = _strip_invisible_chars(text or "")
-    return unicodedata.normalize("NFKC", s)
-
-
 def strip_leading_noise(text: str) -> str:
-    """不可視文字除去＋NFKC 正規化した上で先頭の空白・改行を除去する
-    （D3 表現差変異対策・#536 round5→round6 で NFKC を追加）。"""
-    return _normalize_for_matching(text).lstrip()
+    """不可視文字（Cf/Mn/Me、位置不問）を除去した上で先頭の空白・改行を除去する
+    （D3 表現差変異対策・#536 round5 反映）。"""
+    return _strip_invisible_chars(text or "").lstrip()
 
 
 def head_tag(text: str) -> Optional[str]:
@@ -565,15 +547,6 @@ def _oracle_strip_invisible_chars(s: str) -> str:
     return "".join(out_chars)
 
 
-def _oracle_normalize_for_matching(s: str) -> str:
-    """独立実装の正規化（_normalize_for_matching 非依存・#536 round6）。
-
-    Cf/Mn/Me 除去 → NFKC の順序自体は実装側と同じ契約（同じ理由: 逆順だと
-    結合文字が NFKC の正準結合で復元される）だが、コードは独立に書き下す。
-    """
-    return unicodedata.normalize("NFKC", _oracle_strip_invisible_chars(s))
-
-
 def _oracle_is_machinery_text(text: str) -> bool:
     """独立実装の機構判定（head_tag/strip_leading_noise/is_machinery_text 非依存）。
 
@@ -581,11 +554,10 @@ def _oracle_is_machinery_text(text: str) -> bool:
     正規化する。実装側と表現は変えるが（rstrip("/").lower() を tag 変数へ
     inline で適用）、判定内容は独立に同じ結論へ至るよう記述する。
     #536 round5: 不可視文字（Cf/Mn/Me、位置不問）除去を独立実装で追加する。
-    #536 round6: NFKC 正規化（全角英数字・NBSP 等の互換等価表記ゆれ）を追加する。
     """
     if not text:
         return False
-    stripped = _oracle_normalize_for_matching(text).lstrip()
+    stripped = _oracle_strip_invisible_chars(text).lstrip()
     if not stripped.startswith("<"):
         return False
     close = stripped.find(">")

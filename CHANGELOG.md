@@ -11,24 +11,29 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
-- **fix(probe): 機構マーカー除外に NFKC 正規化を追加し、casing/skip配線/Me/codepoint検査を
-  強化（#536 round6）** — 外部レビュー[Must]6件+[Should]1件+[Nit]1件を反映。①NBSP・全角英数字
-  （`ＳＫＩＬＬ`等）を検出できていなかった（I1/I4）ため、`_strip_invisible_chars` の後に
-  `unicodedata.normalize("NFKC", ...)` を実装・独立オラクル双方へ追加した（PR #537
-  `fix/vuln-scan-scope` と同一設計・同一順序）②大小文字ゆれの正規化を「fixture に書かれた
-  特定表記だけを正規化する辞書」へ差し替える変異が生存していた（I2）ため、テスト実行時に
-  ソースへ存在しない casing をプログラム的に生成して検証するテストを追加した③skip 条件の
-  `pytest.mark.skipif` **decorator 配線そのもの**（`not _real_codex_sessions_available()` を
-  `True` に固定する変異）が未検査だった（I3/I6）ため、`pytester` fixture 経由の統合テストを
-  追加した④`Me`（Enclosing_Mark）カテゴリの実文字が fixture に1件も無く、カテゴリ集合から
-  `Me` を削る変異が生存していた（I5）ため実 Me 文字（U+20DD）を追加した⑤fixture の健全性検査を
-  「カテゴリ一致」から「厳密な codepoint 一致」へ強化した（I7。カテゴリ一致だけでは同カテゴリ
-  内での文字すり替えを見逃す）⑥skip 判定窓と実行窓が別々に直書きされ乖離しうる構造だった
-  （Should I8）ため、real_home 4テストと skip guard を同一の共有定数へ統一し、静的検査で
-  再直書きを検出できるようにした⑦PR #537 との**独立複製の乖離**を検出する手段が無かった
-  （Should）ため、`git show` で #537 のファイルを read-only 参照し共有入力ベクトルを両実装へ
-  通して結果を突合するテストを追加した（branch 未解決時は skip）⑧fixture コメントの stale な
-  記述を現行仕様（NFKC 追加後）に合わせて訂正した（Nit）。
+- **test(probe): 機構マーカー除外の casing/skip配線テストを強化し、正規化の複製と乖離検出を
+  撤回（#536 round6→7→縮小）** — round6/round7 で追加した NFKC 正規化（`_normalize_for_matching`/
+  `_oracle_normalize_for_matching`）と、PR #537 の実装を `git show`+`exec` で参照する乖離検出
+  テストは、設計レビューにより「#537（fix/vuln-scan-scope・未マージ）の正規化ロジックを独立
+  複製している」「乖離検出テストは branch/exec 失敗が全て skip 扱いになり CI で検査が常態的に
+  死にうる」「`exec` はプロセス環境を変更しうるため read-only でない」と判定され、本 PR から
+  撤回した（正規化の共通化は #537 マージ後に別 issue で扱う）。round5 由来の Cf/Mn/Me 除去
+  （NFKC は含まない）は維持している。維持した検査強化: ①casing 正規化を「fixture に書かれた
+  特定表記だけを正規化する辞書」へ差し替える narrow 化変異は、文字ごと独立ランダム選択
+  （固定 seed・9種×30サンプル）で検出できるようにした ②skip 条件の `pytest.mark.skipif`
+  decorator 配線そのものへの変異は、実ファイルを `HOME` 差し替えサブプロセスで実行し実テスト
+  関数の skip/実行結果を直接確認する統合テストで検出できるようにした ③`Me`
+  （Enclosing_Mark）カテゴリの実文字を fixture へ追加した ④fixture 健全性検査を
+  「codepoint の包含」から「Counter による多重集合完全一致」へ強化した ⑤skip 判定窓と
+  実行窓を同一の共有定数へ統一した。
+- **test(probe): `run_probe()` が読み取り専用契約を満たすことを書込みプリミティブの
+  フックで直接検査（#536 縮小版）** — 既存の本番ストア保護（固定4ストアの byte hash 比較 +
+  DATA_DIR 配下ファイル一覧の前後比較）は「知っている場所」しか見ないため、`run_probe()` が
+  **DATA_DIR 外**（未知の場所）へ書き込む変異を検出できない欠陥があった。列挙（allowlist）に
+  頼らず、`pathlib.Path.write_text`/`write_bytes`/`Path.open`（書込みモード）/組込み `open()`
+  （書込みモード）をフックし、`run_probe()` 実行全体で一度も呼ばれないことを直接検査する
+  テストを追加した。**検査範囲は `run_probe()` 単体**（本番ストアの選定・`out_dir` の禁止
+  ルート判定・symlink 経由の書込み検査は既存の別テストが対象。本テストはそれらを代替しない）。
 - **test(probe): round5 の自己構成回避手段（RTL mark・word joiner・単引用符属性・タグ内改行/
   タブ）を ad-hoc 確認から恒久 fixture 化（#536）** — round5 完了報告で「緑を確認したが恒久化
   していない」と申告した4件を `_INVISIBLE_CHAR_SURVIVAL_FIXTURE` / 新設
