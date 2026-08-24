@@ -14,7 +14,8 @@
 - **fix(evolve): rephrase の既読指摘が similarity 差だけで再提示される問題を修正（#543）** —
   daily review の read 時に限り、provenance から `similarity` だけを除いた identity が同じ
   signal_key を既読集合へ一時展開する。新しい key や永続データは作らず、他チャネルと
-  bootstrap の既読判定は変更しない。畳んだ件数は review と daily digest に表示する。
+  bootstrap の既読判定は変更しない。畳んだ件数は `build_review` の結果と daily digest の
+  JSON 経路へ伝播する（朝の通知本文への表示配線は本 PR のスコープ外・別 issue）。
 - **fix(evolve): 反映済み weak_signal の再提示に「既に反映済み」選択肢を追加（#541）** —
   日次の反映先つき4択に「既に反映済み」（`record_reviewed(decision="already_reflected")`
   のみ・`--promote-weak` を呼ばない）を追加し、旧①共通ルール／②PJルールは「ルールに書く」
